@@ -462,7 +462,7 @@ else
 fi
 
 if [ "${#SESSIONS[@]}" -eq 0 ]; then
-  log "no fleet sessions found (nothing to dispatch)"
+  log "no fleet sessions found (nothing to dispatch)$(fleet_wedged_note)"
   exit 0
 fi
 

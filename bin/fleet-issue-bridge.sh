@@ -748,7 +748,7 @@ poll() {
   command -v gh >/dev/null 2>&1 || { log "gh not on PATH — nothing to poll"; exit 0; }
   # Each fleet is its own tmux server now (issue #159) — "is tmux up" means "is any
   # fleet live", which fleet_sockets answers without a single shared server.
-  [ -n "$(fleet_sockets)" ] || { log "no live fleet — nothing to relay into"; exit 0; }
+  [ -n "$(fleet_sockets)" ] || { log "no live fleet — nothing to relay into$(fleet_wedged_note)"; exit 0; }
 
   # Repo set: every ENABLED fleet's repo, each with ITS OWN gate/revive knobs. A
   # fleet enables the bridge in its conf (FLEET_ISSUE_BRIDGE=1); mirror pr-refresh's

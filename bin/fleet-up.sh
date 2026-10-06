@@ -129,6 +129,10 @@ fi
 # SOCK is that socket label; every tmux call below names it explicitly because
 # fleet-up runs from a plain shell (no inherited $TMUX for THIS fleet's server).
 SOCK=$(fleet_socket "$NAME")
+# A socket left by a dying server drops every client — has-session and
+# new-session below would both fail with `server exited unexpectedly` (issue
+# #1729). Clear it first, and say so: this fleet's server just died.
+fleet_socket_heal "$SOCK" >&2 || true
 LIVE=0; tmux -L "$SOCK" has-session -t "$NAME" 2>/dev/null && LIVE=1
 
 # The fleet already exists (configured) and this is not its conf's own repo: bring
@@ -261,7 +265,7 @@ fleet_repo_trust_warn "$DIR" fleet-up
 # claude on a respawn (issue #1191, #1183; fleet_local_bin_path in fleet-lib.sh).
 PATH=$(fleet_local_bin_path); PATH=$(fleet_path_fill); export PATH
 workwin=$(tmux -L "$SOCK" new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
-  || die "tmux new-session failed for '$NAME'"
+  || die "tmux new-session failed for '$NAME'$(fleet_wedged_note)"
 # A fresh server recycles pane ids: drop the last server's unrun mod commands
 # before any pane exists to take them (issue #1538).
 fleet_mod_inbox_reset "$SOCK"

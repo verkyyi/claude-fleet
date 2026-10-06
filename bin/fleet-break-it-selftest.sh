@@ -17,6 +17,7 @@
 #   session-exit / session-ctrl-c / session-killed   bin/fleet-session-wrap.sh
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
+#   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
@@ -241,6 +242,37 @@ drill_disk_full() {
   auto                                            # space freed: the next tick
   until_ok "$CAP" nt has-session -t oc 2>/dev/null || { WHY="space freed, still not restored"; return 1; }
   SECS=$(since "$t0"); WHAT="盘满时只记 held 不拉起，腾出空间后下一拍拉起"
+}
+
+# wedged-socket (issue #1729): the server is told to exit while one client never
+# answers (an attach from a frozen ssh); it lives on, dropping every new client, so
+# every tmux call on the label says `server exited unexpectedly`. -L <label> under
+# a sandbox TMUX_TMPDIR, so fleet_socket_path resolves to this drill's socket.
+drill_wedged_socket() {
+  CAP=20; local tt="$WORK/tt" t0 out
+  mkdir -p "$tt/tmux-$(id -u)"; chmod 700 "$tt/tmux-$(id -u)"
+  BREAK_SOCK="$tt/tmux-$(id -u)/oc"
+  write_map
+  auto TMUX_TMPDIR="$tt"; nt has-session -t oc 2>/dev/null || { WHY="the sandbox fleet never came up"; return 1; }
+  python3 -c 'import socket, sys, time
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); time.sleep(120)' "$BREAK_SOCK" &
+  local pin=$!
+  sleep 0.3
+  write_map
+  nt kill-server                                  # the break: told to exit, pinned alive
+  sleep 0.3
+  out=$(nt list-sessions 2>&1)
+  case "$out" in *'server exited unexpectedly'*) ;; *) kill "$pin" 2>/dev/null; WHY="the break did not wedge the socket: [$out]"; return 1 ;; esac
+  rm -f "$WORK/claude-argv"
+  t0=$(now)
+  auto TMUX_TMPDIR="$tt"                          # one diskguard tick
+  until_ok "$CAP" nt has-session -t oc 2>/dev/null \
+    || { kill "$pin" 2>/dev/null; WHY="--auto did not bring it back: $(tail -3 "$WORK/econf/restore/restore.log" 2>/dev/null | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  kill "$pin" 2>/dev/null
+  grep -q 'cleared stale socket' "$WORK/econf/restore/restore.log" 2>/dev/null || { WHY="the clear left no restore.log line"; return 1; }
+  grep -q "	oc	fleet: cleared stale socket" "$WORK/econf/socket-heal.log" 2>/dev/null || { WHY="no socket-heal.log row for the doctor"; return 1; }
+  WHAT="下一拍清掉陈旧 socket 并拉起，restore.log 和 socket-heal.log 都记了一行"
 }
 
 drill_no_claude_on_path() {

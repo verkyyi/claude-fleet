@@ -1522,6 +1522,72 @@ fleet_repo_register() {
 #     per-fleet logic against each socket (writes stay on the same `-L` label).
 fleet_socket() { printf '%s' "$1"; }
 
+# ---- a wedged socket: a dying server that drops every client (issue #1729) ----
+# A tmux server told to exit (kill-server, SIGTERM, its last session gone) stays
+# alive until every connected client disconnects — and meanwhile accepts each NEW
+# connection and closes it at once. One client that never answers (an attach from
+# an ssh whose network froze, a hung control client) pins it there for good, and
+# every `tmux -L <label> …` — ls, has-session, new-session, fleet-up's — prints
+# `server exited unexpectedly` and fails. tmux never replaces a socket it can
+# connect to, so nothing recovers until the file is removed (2026-10-05, m4). A
+# socket NOBODY listens on is not this: tmux unlinks that one itself.
+#
+# fleet_socket_path <label> — the -L socket's path, as tmux builds it.
+fleet_socket_path() {
+  local tdir="${TMUX_TMPDIR:-/tmp}"
+  printf '%s/tmux-%s/%s' "${tdir%/}" "$(id -u)" "$1"
+}
+# fleet_socket_wedged <label> → rc 0 when the socket file is there and the server
+# on it drops every client (the condition above), 1 otherwise. One tmux call.
+fleet_socket_wedged() {
+  [ -S "$(fleet_socket_path "$1")" ] || return 1
+  case "$(tmux -L "$1" list-sessions 2>&1 >/dev/null)" in
+    *'server exited unexpectedly'*) return 0 ;;
+  esac
+  return 1
+}
+# fleet_socket_heal <label> → when wedged, remove the socket so the next tmux call
+# starts a fresh server, print ONE line saying so (the caller routes it: stderr or
+# its log) and append it to $FLEET_CONF_DIR/socket-heal.log (fleet-doctor's
+# `socket` row); rc 0. Not wedged → silent, rc 1. Never silent when it removes
+# anything: the operator needs to know this machine's fleet just died. The old
+# server is left alone — it has no sessions, it exits when its stuck client goes,
+# and that exit does not touch the new server's socket.
+fleet_socket_heal() {
+  local sp mt line
+  fleet_socket_wedged "$1" || return 1
+  sp=$(fleet_socket_path "$1")
+  mt=$(stat -f %m "$sp" 2>/dev/null || stat -c %Y "$sp" 2>/dev/null)
+  mt=$(date -r "$mt" '+%Y-%m-%d %H:%M' 2>/dev/null || date -d "@$mt" '+%Y-%m-%d %H:%M' 2>/dev/null)
+  rm -f "$sp" 2>/dev/null
+  if [ -e "$sp" ]; then
+    line="fleet: socket $sp is stale (its server is exiting and drops every client — tmux says \"server exited unexpectedly\") and could NOT be removed; rm it by hand"
+  else
+    line="fleet: cleared stale socket $sp (socket from ${mt:-?}; its server was exiting and dropped every client — tmux said \"server exited unexpectedly\"). This fleet's tmux server died; a fresh one starts now"
+  fi
+  printf '%s\n' "$line"
+  [ -n "${FLEET_CONF_DIR:-}" ] && [ -d "$FLEET_CONF_DIR" ] \
+    && printf '%s\t%s\t%s\n' "$(date +%s)" "$1" "$line" >> "$FLEET_CONF_DIR/socket-heal.log" 2>/dev/null
+  return 0
+}
+# fleet_wedged_note → when no fleet answers, why: " — WEDGED: <label> (…)" for
+# each configured fleet whose socket is wedged, nothing otherwise. A daemon's
+# «no fleet sessions found» appends it, so «nobody is using it» and «it cannot
+# start» stop reading the same.
+fleet_wedged_note() {
+  local sess conf tab w=''
+  [ -d "${FLEET_CONF_DIR:-}" ] || return 0
+  tab=$(printf '\t')
+  while IFS="$tab" read -r sess conf; do
+    [ -n "$sess" ] || continue
+    fleet_socket_wedged "$sess" && w="$w $sess"
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  [ -n "$w" ] || return 0
+  printf ' — WEDGED:%s (socket left by a dying tmux server; every client gets "server exited unexpectedly" — fleet-up.sh or the next fleet-restore --auto clears it)' "$w"
+}
+
 # ---- the first-login guide (issues #1169 / #1204 / #1215) --------------------
 # The guide is a pinned scratch window running /fleet-onboard. Two halves decide
 # whether it is ALIVE, and both must hold:

@@ -212,7 +212,7 @@ else
 fi
 
 if [ "${#SESSIONS[@]}" -eq 0 ]; then
-  log "no fleet sessions found (nothing to sync)"
+  log "no fleet sessions found (nothing to sync)$(fleet_wedged_note)"
   exit 0
 fi
 

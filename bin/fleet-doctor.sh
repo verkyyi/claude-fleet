@@ -838,6 +838,33 @@ case "$_tl_out" in
   *)       pass tools "$(printf '%s' "$_tl_out" | sed "s#$HOME#~#g")— found from a bare shell" ;;
 esac
 
+# --- socket (issue #1729): a fleet socket held by a dying tmux server ------------
+# A server that is exiting but pinned by a client that never answers drops every
+# new connection: each `tmux -L <fleet> …` says `server exited unexpectedly`, and
+# fleet-up / restore cannot start the fleet until the socket file goes. FAIL while
+# one is wedged; WARN for a week after fleet_socket_heal cleared one (that fleet's
+# server died — `fleet-lib.sh` writes socket-heal.log). Neither → nothing printed.
+# Inline copies of fleet_socket_path / fleet_socket_wedged — KEEP IN SYNC.
+_sk_wedged=''
+for _sk_cf in $(_fleet_confs "$conf_dir"); do
+  case "$_sk_cf" in */conf) _sk_s=$(basename "$(dirname "$_sk_cf")") ;; *) _sk_s=$(basename "$_sk_cf" .conf) ;; esac
+  _sk_td="${TMUX_TMPDIR:-/tmp}"; _sk_p="${_sk_td%/}/tmux-$(id -u)/$_sk_s"
+  [ -S "$_sk_p" ] || continue
+  case "$(tmux -L "$_sk_s" list-sessions 2>&1 >/dev/null)" in
+    *'server exited unexpectedly'*) _sk_wedged="$_sk_wedged $_sk_p" ;;
+  esac
+done
+if [ -n "$_sk_wedged" ]; then
+  fail socket "held by a dying tmux server (every client gets \"server exited unexpectedly\"):$_sk_wedged — fleet-up.sh clears it and brings the fleet back (or rm it by hand)"
+elif [ -f "$conf_dir/socket-heal.log" ]; then
+  _sk_last=$(tail -1 "$conf_dir/socket-heal.log" 2>/dev/null)
+  _sk_ts=${_sk_last%%"	"*}
+  case "$_sk_ts" in ''|*[!0-9]*) _sk_ts=0 ;; esac
+  if [ $(( $(date +%s) - _sk_ts )) -le 604800 ]; then
+    warn socket "$(date -r "$_sk_ts" '+%m-%d %H:%M' 2>/dev/null || date -d "@$_sk_ts" '+%m-%d %H:%M' 2>/dev/null) cleared a stale socket for fleet $(printf '%s' "$_sk_last" | cut -f2) — its tmux server died then; if it happens again, compare with install-sync's apply time ($conf_dir/socket-heal.log)"  # portable-ok: BSD date -r || GNU date -d fallback on one line
+  fi
+fi
+
 # --- hub-image (issue #1696): which commit the hub serves, vs the stable tag -----
 # The hub image is deployed by hand, and its commit used to live only in the
 # image tag (cluster access to read). bin/fleet-hub-image.sh reads the hub's
