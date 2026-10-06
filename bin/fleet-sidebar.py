@@ -1290,7 +1290,7 @@ def row_need(row, info=False):
     need += width_of(right) + 1 if right else 0
     need += tag_need(row[8] if len(row) > 8 else "")   # the @ mark (#1780)
     ctag = cfg_tag(row[12] if len(row) > 12 else "")    # 配置旧 (#1783)
-    rtag = reap_tag(row[13] if len(row) > 13 else "")   # 合并后回收 … (#1902)
+    rtag = reap_tag(row[14] if len(row) > 14 else "")   # 合并后回收 … (#1902)
     return need + (width_of(ctag) + 1 if ctag else 0) + (width_of(rtag) + 1 if rtag else 0)
 
 
@@ -2020,10 +2020,12 @@ def collect_rows(proc):
     return [row_fields(line) for line in text.split("\n") if line.count(US) >= 4]
 
 
-# wid state glyph name tree badge depth detail node issue pr ctx cfg reap (issues
-# #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `ok`, absent when
-# unknown; reap the @reap_policy, #1902 — absent when none)
-ROW_FIELDS = 14
+# wid state glyph name tree badge depth detail node issue pr ctx cfg title reap
+# (issues #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `ok`,
+# absent when unknown; #1921 — title is the session's issue title, absent when
+# none: a reader falls back to name; #1902 — reap is the @reap_policy, absent when
+# none)
+ROW_FIELDS = 15
 
 
 def row_fields(line):
@@ -2651,7 +2653,7 @@ def ui(screen, session, worker, lock):
             w = max(0, width - 1)
             # A stale configuration (issue #1783): a yellow 配置旧 left of the mark.
             cfg = row[12] if len(row) > 12 else ""
-            reap = row[13] if len(row) > 13 else ""   # the reap policy (#1902)
+            reap = row[14] if len(row) > 14 else ""   # the reap policy (#1902)
             text, tag = row_layout(marker, glyph, tree, label, badge, w,
                                    info_text(row) if wide else "", node, cfg, reap)
             put(y, text, attr, fill=raised)

@@ -113,7 +113,7 @@
 #       sessions there, last-seen the hub's newest observation of it. From the
 #       hub's `nodes` list; derived from the sessions on a hub older than #1475.
 # then one row per session:
-#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid  via  busy  born  cfg
+#   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid  via  busy  born  cfg  [title]
 # `origin` is already in the viewing fleet's terms: a parent in THIS fleet is its
 # bare key (`issue-1419`, exactly what a local @origin holds), a parent elsewhere is
 # its full worker_id; no @origin_wid ⇒ the issue's sub-issue parent (the collector's
@@ -138,7 +138,12 @@
 # last must name it too. `cfg` (#1783, rows only) is `stale` / `renew` (#1895) / `ok` — the session's
 # configuration against the one a fresh session gets on ITS machine now, judged
 # there (fleet-control-read.sh); empty when unknown or from an older node. A
-# `read` naming `born` last must name it too.
+# `read` naming `born` last must name it too. `title` (#1921, rows only) is the
+# session's issue title off its node's own issue cache (fleet-control-read.sh) —
+# what a sidebar row and a session's top bar (#1904) show instead of the window
+# name's slug. APPENDED only when there is one, so a row without (a scratch, an
+# older node) is byte for byte what it was; a `read` naming `cfg` last must name
+# it too.
 #
 # THE HUB SILENT, IN THE SHELL (issue #1488, EPIC #1479 R3) — client mode only.
 # The shell has no fleet of its own, so when the hub goes quiet its list has
@@ -620,7 +625,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -724,7 +729,11 @@ for f in local:
                     origin = (slug(r["repo"]) + ":" if f["multi"] else "") + "issue-" + p
         out.append("\x1f".join(clean(v) for v in ("wid:" + r["wid"], r["node"], r["av"], r["issue"], r["repo"],
                                                r["state"], r["agent"], r["name"], origin, r["needs"],
-                                               "1" if r["local"] else "0", r["lwid"], via, r["busy"], r["born"], r["cfg"], r["reap"])) + "\n")
+                                               "1" if r["local"] else "0", r["lwid"], via, r["busy"], r["born"], r["cfg"])
+                                              # 17 title, 18 reap (#1902): each only when there is one,
+                                              # an empty title kept when a reap follows it
+                                              + ((r["title"],) if r["title"] or r["reap"] else ())
+                                              + ((r["reap"],) if r["reap"] else ())) + "\n")
     path = os.path.join(gdir, "remote_" + f["sess"])
     if via == "node" and not (client and os.environ.get("FLEET_HUB_SESSIONS_LOCAL") == "1"):
         # The machines that did not answer over a connection keep their last

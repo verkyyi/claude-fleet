@@ -154,7 +154,7 @@ class Control:
             raise Fault("UNAVAILABLE", "Cannot read fleet windows" + (": " + detail[-1].strip()[-200:] if detail else ""))
         workers = []
         for line in output.decode("utf-8").splitlines():
-            # The adapter's columns — name, @origin_wid, needs, identity, busy —
+            # The adapter's columns — name, @origin_wid, needs, identity, busy … title —
             # through the one reader both inventories share (issue #1698).
             row = inventory_row(line.split("\t"))
             if row is None:

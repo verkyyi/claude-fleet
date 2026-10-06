@@ -145,8 +145,27 @@ case "$mode" in
     # gets on THIS machine now, on this machine's fleet version (@agent_ver,
     # `renew` = 待换新, #1895)? Judged here, where the expected file lives, so the
     # other machines' sidebars (the client's included) draw 配置旧 off the hub.
-    # Column 17 (issue #1902): `reap=<policy>` — when the fleet may close the
-    # session (@reap_policy); empty = its kind's default. Always present.
+    # Column 18 (issue #1902): `reap=<policy>` — when the fleet may close the
+    # session (@reap_policy, the cwds list's last field); empty = its kind's
+    # default. Always present.
+    # Column 17 (issue #1921): `title=<issue title>` — the bound issue's title off
+    # THIS machine's issue cache (fleets/<repo slug>/issues, `milestone\t#num\t
+    # assignee\ttitle`, what fleet-gh.sh's cache_issue reads), joined on (repo,
+    # issue) — never a bare number. The other machines' sidebars and the session's
+    # top bar (#1904) show it instead of the window name's slug; empty for a
+    # scratch, a no-repo window or an issue the cache does not hold (the reader
+    # falls back to the name). Tabs inside a title become spaces: it is a column.
+    ttl=$'\n'; drepo=''
+    while IFS= read -r _r; do
+      [ -n "$_r" ] || continue
+      [ -n "$drepo" ] || drepo=$_r
+      _f="$FLEET_C/fleets/$(fleet_slug "$_r")/issues"
+      [ -s "$_f" ] || continue
+      ttl+=$(FR="$_r" awk -F'\t' '$2 ~ /^#[0-9]+$/ {
+          t = $0; sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t); gsub(/[\t\r]/, " ", t)
+          print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
+    done < <(fleet_repos "$sess" 2>/dev/null)
+    fleet_multirepo "$sess" && drepo=''
     cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load
     while IFS= read -r row; do
@@ -182,9 +201,16 @@ case "$mode" in
           rest=${rest%$'\t'*}$'\t'$fi ;;
         esac
       fi
+      t=''
+      case "$c2" in ''|*[!0-9]*) ;; *)
+        rr=$(printf '%s' "$rest" | cut -f5); [ -n "$rr" ] || rr=$drepo   # column 9
+        case "$ttl" in *$'\n'"$rr"$'\t'"$c2"$'\t'*)
+          t=${ttl#*$'\n'"$rr"$'\t'"$c2"$'\t'}; t=${t%%$'\n'*} ;;
+        esac ;;
+      esac
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\treap=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$wreap"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap"
     done <<<"$rows"
     ;;
   ready)
@@ -278,10 +304,6 @@ case "$mode" in
     # adds nothing.
     acls="${7:-}"
     case "$acls" in local|pool) ;; *) acls='' ;; esac
-    # $9 = the reap policy the asker chose (issue #1902) — one word, held to its
-    # shape here and canonicalized (or refused, exit 2) by the spawner's --reap.
-    reap="${9:-}"
-    case "$reap" in *[!A-Za-z0-9:.+-]*) reap='' ;; esac
     if [ "${3:-}" = scratch ]; then
       # A raw scratch session the hub placed here (issue #1541): no issue, no
       # claim — dash-raw-session.sh in its headless form, with $8 (the name the
@@ -290,9 +312,9 @@ case "$mode" in
       # $7 is read like an issue's but not replayed: dash-raw-session.sh has no
       # --account yet, so a scratch runs on the opening fleet's pick.
       sname="${8:-}"
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${reap:+--reap "$reap"}
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"}
     fi
-    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${reap:+--reap "$reap"}
+    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"}
     ;;
   # --- worker lifecycle by DURABLE key (issue #834) ---------------------------
   # $3 is issue-<N> / scratch-<N>; the window is re-resolved on the fleet at

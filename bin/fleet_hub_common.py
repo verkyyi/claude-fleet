@@ -181,13 +181,20 @@ def inventory_row(parts):
     Column 16 (issue #1783): `cfg=<stale|renew|ok|unknown>`, whether the session's
     configuration is the one a fresh session gets on its machine now — the other
     machines' sidebars draw 配置旧 off it.
-    Column 17 (issue #1902): `reap=<policy>`, the session's @reap_policy (empty =
+    Column 17 (issue #1921): `title=<issue title>`, the bound issue's title off
+    the node's own issue cache — what the other machines' sidebars and a
+    session's top bar show instead of the window name's slug; empty = none (a
+    scratch, or a title the node's cache does not hold), and the reader falls
+    back to the name.
+    Column 18 (issue #1902): `reap=<policy>`, the session's @reap_policy (empty =
     its kind's default) — the other machines' sidebars draw 常驻 etc. off it."""
     parts = list(parts)
     extra = {}
-    if len(parts) >= 17 and parts[-1].startswith("reap="):
+    if len(parts) >= 18 and parts[-1].startswith("reap="):
         r = parts.pop()[5:]
         extra["reap"] = r if r and REAP_RE.fullmatch(r) else None
+    if len(parts) >= 17 and parts[-1].startswith("title="):
+        extra["title"] = parts.pop()[6:] or None
     if len(parts) >= 16 and parts[-1].startswith("cfg="):
         c = parts.pop()[4:]
         extra["cfg"] = c if c in ("stale", "renew", "ok") else None

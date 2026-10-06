@@ -74,7 +74,9 @@ R="${E}0m"; US=$'\x1f'
 # NOW (fleet_cfg_state, the file read once per frame below), so 配置旧 costs no fork.
 # Inside the same field (issue #1895), `/<@agent_ver>` when the window has one —
 # the fleet version it runs, so 待换新 costs no field and no fork either.
-WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@reap_policy}"
+# Last (issue #1902): an empty slot where a remote row carries its title
+# (#1921 — a local one is looked up below), then @reap_policy.
+WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}${US}#{@reap_policy}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -443,7 +445,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_reap; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap; do
     case "$r_wid" in
       '#ts'|'#me') continue ;;
       '#node') [ -n "$r_node" ] || continue
@@ -471,13 +473,13 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
       # about the row changes (its place, its nesting, its colour)
       r_node="$r_node~"
     fi
-    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_reap")
+    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
-    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_reap <<< "$_rr"
+    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap <<< "$_rr"
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
-    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_reap"$'\n'
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap"$'\n'
   done
   unset _rrows _rr _rexpd _rexp
   WLIST="$RLIST$WLIST"
@@ -528,6 +530,9 @@ fi
 # line of this fleet, taken off the first (panels included: a fleet whose only
 # windows are panels still draws its `(0)` headings, folded or not).
 KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
+# The issue titles this frame needs (issue #1921, --sidebar only): a local row's
+# (repo, #issue) key, looked up once below in its repo's issue cache.
+ITWANT=''; ISLUGS=' '
 while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn _; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
@@ -552,6 +557,17 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
       PRWANT+="$b1"$'\n'"$b3"$'\n'"$b2"$'\n'
     fi ;;
   esac
+  if [ "$SIDEBAR" = 1 ]; then
+    case "$rwid" in wid:*) ;; *) case "$iss" in ''|*[!0-9]*) ;; *)
+      if [ "$RMULTI" = 1 ]; then
+        rslug_v "$wrepo" "$wnorepo"
+        [ -n "$rslug" ] && { ITWANT+="$rslug"$'\t#'"$iss"$'\n'
+                             case "$ISLUGS" in *" $rslug "*) ;; *) ISLUGS+="$rslug " ;; esac; }
+      elif [ "$wnorepo" != 1 ]; then
+        ITWANT+="#$iss"$'\n'
+      fi ;; esac ;;
+    esac
+  fi
   okp_v "$wrepo" "$wnorepo"
   okey_v "$iss" "$wt" "$path"
   # A remote row: its worker_id (#1423). The row's id is `wid:<worker_id>`, its
@@ -597,6 +613,28 @@ elif [ -s "$_pf" ] && [ -n "$PRWANT" ]; then
   PRMAPN=$'\n'$(PRWANT="$PRWANT" awk -F'\t' '
     BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
     ($1 in want)' "$_pf" 2>/dev/null)
+fi
+
+# The issue-title haystack (issue #1921): one awk over the issue cache(s) — the
+# fleet's own (beside its prmap), or each on-screen repo's in a 2+ repo fleet —
+# narrowed to the keys pass A collected, `<key>\t<title>` a line. The cache line
+# is `milestone\t#num\tassignee\ttitle`. No issue row on screen ⇒ no fork.
+ITTL=$'\n'
+if [ -n "$ITWANT" ]; then
+  ITFILES=()
+  if [ "$RMULTI" = 1 ]; then
+    for _s in $ISLUGS; do [ -s "$FLEET_C/fleets/$_s/issues" ] && ITFILES+=("$FLEET_C/fleets/$_s/issues"); done
+  else
+    [ -s "$PRDIR/issues" ] && ITFILES+=("$PRDIR/issues")
+  fi
+  if [ "${#ITFILES[@]}" -gt 0 ]; then
+    ITTL=$'\n'$(ITWANT="$ITWANT" RM="$RMULTI" awk -F'\t' '
+      BEGIN { n = split(ENVIRON["ITWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
+      { k = $2; if (ENVIRON["RM"] == 1) { d = FILENAME; sub(/\/issues$/, "", d); sub(/.*\//, "", d); k = d "\t" $2 }
+        if (!(k in want)) next
+        t = $0; sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t); gsub(/[\t\r\037]/, " ", t)
+        if (t != "") print k "\t" t }' ${ITFILES[@]+"${ITFILES[@]}"} 2>/dev/null)$'\n'
+  fi
 fi
 
 # chain walk (issues #503/#623/#624, real depth since #1328): walk a parent KEY up
@@ -745,7 +783,7 @@ buf=""
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load
 CFG_STALE_T='' CFG_RENEW_T=''
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wreap; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap; do
   [ -z "$name" ] && continue
   # Is this session's configuration the one it would get now? A local row
   # compares its @agent_cfg (fleet_cfg_state); a row on another machine carries
@@ -758,10 +796,33 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
            fleet_cfg_state "$agent" "$wcfg" "$wver"; cfgst=$FCFG_STATE ;;
   esac
   cfgf=''; [ "$cfgst" = unknown ] || cfgf="$US$cfgst"
-  # field 14 (issue #1902): the session's @reap_policy, the view words it
-  # (合并后回收 · 做完就回收 · 常驻 …). Field 13 stays, empty, when cfg is unknown;
-  # no policy ⇒ no field, so an old window's row is byte for byte as before.
-  case "$wreap" in ''|*[!A-Za-z0-9:.+-]*) ;; *) cfgf="${cfgf:-$US}$US$wreap" ;; esac
+  # The session's issue title (issue #1921): a row on another machine carries its
+  # node's (the hub cache's `title`); a local one is looked up in ITTL above.
+  # Only the sidebar emits it — field 14, after cfg (an empty field 13 when cfg is
+  # unknown) — and only when there is one, so a row without is byte for byte as
+  # before.
+  if [ "$SIDEBAR" = 1 ]; then
+    case "$wid" in
+      wid:*) ;;
+      *) wittl=''
+         case "$iss" in ''|*[!0-9]*) ;; *)
+           _ik=''
+           if [ "$RMULTI" = 1 ]; then rslug_v "$wrepo" "$wnorepo"; [ -n "$rslug" ] && _ik="$rslug"$'\t#'"$iss"
+           elif [ "$wnorepo" != 1 ]; then _ik="#$iss"; fi
+           if [ -n "$_ik" ]; then
+             case "$ITTL" in *$'\n'"$_ik"$'\t'*) wittl=${ITTL#*$'\n'"$_ik"$'\t'}; wittl=${wittl%%$'\n'*} ;; esac
+           fi ;;
+         esac ;;
+    esac
+    [ -z "$wittl" ] || cfgf="$US${cfgf#"$US"}$US$wittl"
+    # field 15 (issue #1902): the session's @reap_policy, the view words it
+    # (合并后回收 · 做完就回收 · 常驻 …); fields 13/14 stay, empty, before it. No
+    # policy ⇒ no field, so an old window's row is byte for byte as before.
+    case "$wreap" in ''|*[!A-Za-z0-9:.+-]*) ;; *)
+      _c13=''; [ "$cfgst" = unknown ] || _c13=$cfgst
+      cfgf="$US$_c13$US$wittl$US$wreap" ;;
+    esac
+  fi
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue

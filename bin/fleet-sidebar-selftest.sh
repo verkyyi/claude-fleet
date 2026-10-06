@@ -102,7 +102,7 @@ assert sidebar.fold_now(frows, 'wid:m4/x', 'collapse', '@9', fcache)[1] is None
 # are the hub's issue · PR · ctx% cells; the info column (⌃i) draws them right-
 # aligned in fixed widths, and only on a session row.
 r12 = sidebar.row_fields('\x1f'.join(['@1', 'working', '·', 'issue-1532', ' ', '', '0', '', '', '#1532', '#1552✓', '45%']))
-assert len(r12) == sidebar.ROW_FIELDS == 14 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[12] == '' and r12[13] == '', r12   # field 13: cfg (#1783), 14: reap (#1902)
+assert len(r12) == sidebar.ROW_FIELDS == 15 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[12:] == ['', '', ''], r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902)
 assert sidebar.info_text(r12) == '#1532  #1552✓  45%', repr(sidebar.info_text(r12))
 assert sidebar.info_text(['hdr', 'o/a', '', 'a (1)', ' '] + [''] * 7) == ''
 assert sidebar.info_text(sidebar.row_fields('@2\x1fdone\x1f✓\x1fx\x1f \x1f\x1f0\x1f\x1f')) == '', 'an old 9-field row has no info'
@@ -554,9 +554,10 @@ try:
     check(bool(kid) and kid[0][4] == '└', 'parent-child tree cell was lost')
     check(bool(kid) and kid[0][3].startswith('修复侧栏'),
           'the label still carries the tree glyph — it belongs in its own field')
-    # (field 13, cfg, rides only a row whose configuration is known — #1783 —
-    # and field 14, reap, only a row with a @reap_policy — #1902)
-    check(all(len(r) == 5 if r[0] == 'hdr' else len(r) in (sidebar.ROW_FIELDS - 2, sidebar.ROW_FIELDS - 1, sidebar.ROW_FIELDS)
+    # (field 13, cfg, rides only a row whose configuration is known — #1783;
+    # field 14, title, only a row whose issue title is known — #1921; field
+    # 15, reap, only a row with a @reap_policy — #1902)
+    check(all(len(r) == 5 if r[0] == 'hdr' else len(r) in (sidebar.ROW_FIELDS - 3, sidebar.ROW_FIELDS - 2, sidebar.ROW_FIELDS - 1, sidebar.ROW_FIELDS)
               for r in row_data()),
           'sidebar rows must carry 9 fields (a heading 5)')
     root = [r for r in row_data() if r[0] == w1]
