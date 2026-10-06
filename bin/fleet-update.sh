@@ -20,8 +20,9 @@
 #        GitHub is not); with no hub it asks GitHub. Staged in the background, switched in place
 #        once nobody is typing (the previous batch's 「空闲时原地换」).
 #   承载 (a full install — a checkout of stable): fleet-install-sync.sh, the
-#        install-sync daemon's tick. Deferred while a session is busy and while
-#        an EPIC batch's heartbeat is fresh; rolled back on a new doctor FAIL.
+#        install-sync daemon's tick. Each version checked out beside the last
+#        and switched in one link move, busy sessions or not (issue #1894);
+#        rolled back on a new doctor FAIL.
 #
 # `tick` is the dispatch: a full install → fleet-install-sync.sh with the rest
 # of the arguments (the daemon's beat; --dry-run / --status pass through); an
@@ -94,7 +95,7 @@ cmd_status() {
       if [ -z "$st" ]; then printf 'stable 问不到'
       elif [ "$st" = "$v" ]; then printf '跟 stable 同版'
       else printf 'stable %.7s（上次：%s）' "$st" "${res:-还没跑过}"; fi
-      printf ' · 由 install-sync 每 30 分钟跟上（忙时、EPIC 跑批时推迟）\n' ;;
+      printf ' · 由 install-sync 每 30 分钟跟上（整版一次切换，有会话在忙也照样换）\n' ;;
     client)
       v=$(mark_get "$ROOT/.client-version" version)
       st=$(stable_sha) || st=''

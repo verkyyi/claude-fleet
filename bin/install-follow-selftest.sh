@@ -5,7 +5,8 @@
 # EPIC #1117 C7). No daemon runs; every state is written by hand.
 #
 # What is pinned:
-#   A. current      OK · doctor PASS names the stable sha and the tick age
+#   A. current      OK · doctor PASS names the stable sha and the tick age;
+#                   `switched` (issue #1894) OK · PASS names the move
 #   B. deferred     3h → OK (PASS, "deferred for 3h"); 26h → STUCK, doctor WARN
 #                   names the wait and the FLEET_INSTALL_SYNC=0 opt-out
 #   C. refused      STUCK · WARN carries the daemon's reason (which names the fix)
@@ -114,20 +115,25 @@ contains "A: doctor PASS" "$D" "PASS"
 contains "A: doctor names install-sync" "$D" "install-sync on — at stable $S7"
 contains "A: doctor names the tick age" "$D" "(last tick <1m ago)"
 not_contains "A: doctor no WARN" "$D" "WARN"
+mk_state "$CONF" switched "a -> b in one link switch (.prev a)"
+fself
+eq "A: switched is OK" OK "$(fv verdict)"
+contains "A: switched named" "$(fv why)" "switched "
+contains "A: …with the reason" "$(fv why)" "in one link switch"
 
 # ============================================================================
 # B. deferred: under a day is normal, over a day is stuck
 # ============================================================================
-mk_state "$CONF" deferred "busy window(s) on f1:2 — waiting for every session to go idle" "$((NOW - 3 * 3600))"
+mk_state "$CONF" deferred "disk gate closed (fleet-diskguard.sh --gate)" "$((NOW - 3 * 3600))"
 fself
 eq "B: 3h deferred is OK" OK "$(fv verdict)"
 contains "B: 3h named" "$(fv why)" "deferred for 3h"
-contains "B: says it follows when idle" "$(fv why)" "follows when every window is idle"
-mk_state "$CONF" deferred "busy window(s) on f1:2 — waiting for every session to go idle" "$((NOW - 26 * 3600))"
+contains "B: carries the daemon's reason" "$(fv why)" "disk gate closed"
+mk_state "$CONF" deferred "disk gate closed (fleet-diskguard.sh --gate)" "$((NOW - 26 * 3600))"
 fself
 eq "B: 26h deferred is STUCK" STUCK "$(fv verdict)"
 contains "B: 26h named" "$(fv why)" "deferred for 26h"
-contains "B: carries the daemon's reason" "$(fv why)" "busy window(s) on f1:2"
+contains "B: carries the daemon's reason (26h)" "$(fv why)" "disk gate closed"
 D=$(doc_sync)
 contains "B: doctor WARN" "$D" "WARN"
 contains "B: doctor says not following" "$D" "NOT following stable"

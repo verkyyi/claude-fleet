@@ -255,6 +255,8 @@ src_subject=$(gitq "$src" log -1 --format=%s HEAD 2>/dev/null)
 branch=''
 if [ "$togit" -eq 1 ]; then
   branch=$(gitq "$src" symbolic-ref --short HEAD 2>/dev/null); branch=${branch:-master}
+  # a versions-layout install (#1894) sits on its own fleet-live/<sha> branch
+  case "$branch" in fleet-live/*) branch=master ;; esac
   if [ -z "$origin" ]; then
     src_origin=$(gitq "$src" remote get-url origin 2>/dev/null)
     origin=$(to_https "$src_origin")
