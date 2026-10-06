@@ -215,17 +215,21 @@ class H(http.server.BaseHTTPRequestHandler):
         b = json.dumps({"version": 9, "prev": 8, "bundle": {"mcp": {"docs-ro": {"command": "npx"}}}}).encode()
         self.send_response(200); self.send_header("ETag", '"team-v9"'); self.end_headers(); self.wfile.write(b)
 s = http.server.HTTPServer(("127.0.0.1", 0), H)
-open(sys.argv[1], "w").write(str(s.server_address[1]))
+import os, time
+with open(sys.argv[1] + ".tmp", "w") as f:
+    f.write(str(s.server_address[1]))
+os.replace(sys.argv[1] + ".tmp", sys.argv[1])   # listening before the port is readable
 s.timeout = 0.5
-import time
-end = time.time() + 30
+end = time.time() + 120
 while time.time() < end:
     s.handle_request()
 PY2
 "$PY" "$WORK/stub.py" "$WORK/port" "$WORK/req.log" &
 STUB=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/port" ] && break; sleep 0.2; done
+# a slow runner (macOS CI) takes seconds to start python: wait up to 30s
+i=0; while [ ! -s "$WORK/port" ] && [ "$i" -lt 150 ]; do sleep 0.2; i=$((i + 1)); done
 PORT=$(cat "$WORK/port" 2>/dev/null)
+[ -n "$PORT" ] || bad "K the loopback stub never started"
 printf 'CCQUOTA_TOKEN=node-tok\nCCQUOTA_HUB_URL=http://127.0.0.1:%s\n' "$PORT" > "$CONF/node.env"
 out=$(SEAM='' team sync); rc=$?
 [ "$rc" = 0 ] && [ "$(j "$CONF/team-bundle.json" "d['version']")" = 9 ] && grep -q 'Bearer node-tok' "$WORK/req.log" \
