@@ -557,29 +557,27 @@ alternating with the hub relay `fleet connect --proxy` when one is configured;
 in the shell, `fleet connect` re-measures every route instead, #1628).
 The ssh host is the machine label unless `FLEET_REMOTE_SSH` (`m4=m4-lan`) maps it.
 
-**The machine's own list gets out of the way — by one rule** (issue #1485, EPIC
-#1479 rule 7, generalising #1475). Every proxy (`attach <wid> <view>`) and every
-shell (`attach --shell`, the `fleet` shell of EPIC #1479 C5 — over ssh, or nested
-on the machine itself in the shell's own tmux) registers its client tty under
-`$FLEET_CONF_DIR/remote-views/<id>` as `<tty> <session> <kind=view|shell> <since>
-<pid>`. The remote session's status line, prefix and sidebar are **hidden exactly
-while it has at least one client and every client is registered**: status off,
-prefix `None` (the session's own values saved in `@remote_view_saved`), and
-`@remote_view_solo 1`, which that machine's sidebar (`fleet-sidebar.py sync`)
-reads as "draw no list" — the proxy is drawn INSIDE the viewer's own sidebar
-(issue #1475), so two shells on one machine each see one list. Anyone who
-attaches at that machine without registering — a plain `tmux attach` (an ssh
-login opens the client instead, issue #1711) — brings status, prefix and sidebar back at once; when they leave and
-only shells remain, it hides again; when the last shell leaves, everything is
-back and the hooks are gone. `fleet-remote-view.sh reconcile <sess>` applies the
-rule; the server's **global** `client-attached[77]` / `client-detached[77]` hooks
-run it on every client change while a shell is registered — global, not on the
-session: a session-level hook array, even an emptied one, shadows the fleet's own
-`[71]`–`[73]` hooks for good (what #1475's session hook did). A registration
-whose attach shell is gone (SIGKILLed before its cleanup) never counts and is
-pruned at the next attach, so a tty the next login reuses is not mistaken for a
-shell; `restore <sess>` is the escape hatch that hands everything back now (the
-rule wins at the next client change). Never `resize-pane -Z`. The local sidebar
+**The machine has no list of its own to get out of the way** (issue #1713, EPIC
+#1710 C3 — #1475/#1485's make-way rule retired). The task list is the CLIENT's:
+`fleet-sidebar.sh` draws it only on the shell's server (`FLEET_SHELL=1`); a node's
+fleet session draws none, and its next sync reaps a list an older version drew.
+Every proxy (`attach <wid> <view>`) and every shell (`attach --shell`, the `fleet`
+shell of EPIC #1479 C5 — over ssh, or nested on the machine itself in the shell's
+own tmux) still registers its client tty under `$FLEET_CONF_DIR/remote-views/<id>`
+as `<tty> <session> <kind=view|shell> <since> <pid>` (fleet-open reads it), and
+attaches to a view session of its own with status line and prefix off — but a
+client arriving or leaving changes nothing on the node: no status line, prefix,
+marker or hook is touched, and no pane is added, removed or moved. The one thing
+a viewed window gives up is its own top header (#1549, `pane-border-status off`),
+ONE WAY: taken at the attach (and at `select` for a window born since), never
+given back, so the viewer's `m4 …` header is the one title line and no client
+change resizes a pane. The first attach after the upgrade undoes what the retired
+rule left (`@remote_view_saved` / `@remote_view_solo`, the hidden status line and
+prefix, the global `client-attached[77]` / `client-detached[77]` hooks, a
+session-level hook array that shadowed the fleet's `[71]`–`[73]`); `reconcile` /
+`restore <sess>` do the same, for one version. A registration whose attach shell
+is gone (SIGKILLed before its cleanup) never counts and is pruned at the next
+attach, so a tty the next login reuses is not mistaken for a shell. Never `resize-pane -Z`. The local sidebar
 treats a window with `@remote` as a task window, so Enter on a remote row lands
 in the proxy window with the list still on the left and the other machine's pane
 on the right, one list, never the whole window gone remote. ↑↓ in the list leave

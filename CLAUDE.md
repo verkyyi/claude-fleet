@@ -130,7 +130,11 @@ Do not install from memory: read the doc and work from it.
   is `home`, a plain shell the task list draws beside, and ⌂ / F9 / prefix g all
   end on that list, focused (`fleet-sidebar.sh home`). `FLEET_DASH_WINDOW=1`
   brings the old dash hub back for one batch; adding a panel name means adding
-  it everywhere `dash|plan|backlog` is spelled.
+  it everywhere `dash|plan|backlog` is spelled. **The task list is the CLIENT's
+  only** (issue #1713): `fleet-sidebar.sh` draws it on the shell's server
+  (`FLEET_SHELL=1`), never in a node's fleet session — so there is no make-way
+  rule, and a viewer arriving or leaving changes no pane on the node.
+  `FLEET_SIDEBAR_NODE=1` is the drawer's selftest seam, never a setting.
 - **A view session shares the fleet's windows; never scan or name them bare**
   (issue #1489). A shell or proxy client of this machine (`fleet-remote-view.sh
   attach --shell` / a view id) attaches to a GROUPED session of its own,

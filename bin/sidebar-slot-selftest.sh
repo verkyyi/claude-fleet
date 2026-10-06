@@ -22,6 +22,9 @@
 #                        (conf/tmux-shell.conf, conf/tmux-attention.conf)
 # Real tmux on an isolated socket via a PATH shim. Exit 0 = pass.
 set -uo pipefail
+# The list is drawn on a fleet socket here: on a real node it is the client's
+# only (issue #1713), so the drawer's tests take the seam fleet-sidebar.sh offers.
+export FLEET_SIDEBAR_NODE=1
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { echo 'selftest SKIP: tmux missing'; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo 'selftest SKIP: python3 missing'; exit 0; }

@@ -23,6 +23,9 @@
 # dash-raw-session-selftest.sh, dash-reap-selftest.sh,
 # dash-issue-new-spawn-selftest.sh. tmux or python3 absent → A/B SKIP.
 set -uo pipefail
+# The list is drawn on a fleet socket here: on a real node it is the client's
+# only (issue #1713), so the drawer's tests take the seam fleet-sidebar.sh offers.
+export FLEET_SIDEBAR_NODE=1
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
 LANGSH="$BIN/fleet-ui-lang.sh"
