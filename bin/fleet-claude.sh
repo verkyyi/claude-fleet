@@ -343,11 +343,12 @@ if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && comm
   case " $* " in *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) _fc_ca+=(--no-mcp) ;; esac
   case " $* " in *" --settings "*|*" --settings="*) _fc_ca+=(--no-settings) ;; esac
   if command -v fleet_mod_on >/dev/null 2>&1 && ! fleet_mod_on; then _fc_ca+=(--mod-off); fi
-  _fc_fp=''; _fc_src=''; _fc_modw=''; _fc_locks=''
+  _fc_fp=''; _fc_src=''; _fc_modw=''; _fc_locks=''; _fc_say=''
   while IFS=$'\t' read -r _fc_k _fc_v; do
     case "$_fc_k" in
       fp)       _fc_fp="$_fc_v" ;;
       src)      _fc_src="$_fc_v" ;;
+      say)      _fc_say="$_fc_v" ;;
       mod)      _fc_modw="$_fc_v" ;;
       mcp)      cfg_flag+=("--mcp-config=$_fc_v") ;;      # the =form: --mcp-config is variadic (see above)
       settings) cfg_flag+=("--settings=$_fc_v") ;;
@@ -360,12 +361,16 @@ if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && comm
     _fc_mod=$(fleet_mod_dir 2>/dev/null) && mod_flag=("--plugin-dir=$_fc_mod")
     unset _fc_mod
   fi
+  # where this session's configuration comes from, in the person's words (EPIC
+  # #1855 C6): the composer's `status --short` line, reprinted — only with a
+  # personal layer, so a login without one launches byte for byte as before
+  [ -n "$_fc_say" ] && printf 'fleet-claude: 配置 %s\n' "$_fc_say" >&2
   [ -n "$_fc_locks" ] && printf 'fleet-claude: locked agent config overridden on this login: %s (issue #1782)\n' "$_fc_locks" >&2
   if [ -n "$_fc_fp" ] && [ -n "${TMUX_PANE:-}" ]; then
     tmux set-option -w -t "$TMUX_PANE" @agent_cfg "$_fc_fp" 2>/dev/null || true
     tmux set-option -w -t "$TMUX_PANE" @agent_cfg_src "$_fc_src" 2>/dev/null || true
   fi
-  unset _fc_ca _fc_fp _fc_src _fc_modw _fc_locks _fc_k _fc_v
+  unset _fc_ca _fc_fp _fc_src _fc_modw _fc_locks _fc_say _fc_k _fc_v
 fi
 
 # The binary (issue #1774): $FLEET_CLAUDE_BIN, else `claude` when PATH has it (the

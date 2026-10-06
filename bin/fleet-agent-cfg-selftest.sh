@@ -25,6 +25,11 @@
 #      as `-c`; it equals `expected`'s codex line
 #   F  degenerate: FLEET_AGENT_CFG=0, or no composer beside bin/ → the argv is
 #      byte for byte the launch of before, and nothing is stamped
+#   G  the person's words (EPIC #1855 C6): with a personal layer, the Claude and
+#      Codex launches print `配置 <line>` where <line> is exactly `status
+#      --short`'s 「团队 vN · 个人 vM · 本机独有 K 项（…）」, the client doctor
+#      (fleet-agent-bundle.py) carries the same line, and K = the 本机 rows
+#      `fleet config show` lists; with none (A–F) no launch prints a 配置 line
 #
 # Hermetic: a temp install root (bin/ symlinks + the real conf/ + hooks/), a temp
 # HOME and FLEET_CONF_DIR, fake `claude` / `codex` / `tmux` on PATH.
@@ -32,7 +37,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
-for f in fleet-claude.sh fleet-codex.sh fleet-lib.sh fleet-agent-team.py fleet-agent-defaults.py fleet-hooks-merge.py; do
+for f in fleet-claude.sh fleet-codex.sh fleet-lib.sh fleet-agent-team.py fleet-agent-defaults.py fleet-hooks-merge.py fleet-config.py fleet-agent-bundle.py; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s missing\n' "$BIN/$f" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { echo 'selftest: SKIP — no python3'; exit 0; }
@@ -55,7 +60,7 @@ for box in new old; do
   for f in agent-defaults claude-settings.default.json agent-locked.list; do ln -s "$ROOT/conf/$f" "$WORK/$box/conf/$f"; done
   printf 'FLEET_MODEL="opus"\n' > "$WORK/$box/fleet.conf"
 done
-for f in fleet-agent-team.py fleet-agent-defaults.py fleet-hooks-merge.py; do ln -s "$BIN/$f" "$WORK/new/bin/$f"; done
+for f in fleet-agent-team.py fleet-agent-defaults.py fleet-hooks-merge.py fleet-config.py; do ln -s "$BIN/$f" "$WORK/new/bin/$f"; done
 TEAM="$WORK/new/bin/fleet-agent-team.py"
 
 mkdir -p "$WORK/fakebin" "$WORK/proj"
@@ -115,6 +120,7 @@ exp=$(team expected --write --root "$WORK/new")
 [ "$(printf '%s\n' "$exp" | awk '$1=="claude"{print $2}')" = "$fp1" ] || fail "A: expected ≠ the launch's fingerprint" "$exp / $fp1"
 [ "$(cat "$WORK/cfg/global/agent-cfg.expected")" = "$exp" ] || fail "A: expected --write did not cache what it printed"
 case "$src1" in "default:"*" team:none local:0 lock:warn") : ;; *) fail "A: @agent_cfg_src shape" "$src1" ;; esac
+grep -q '配置' "$WORK/err" && fail "A: no personal layer, yet the launch printed a 配置 line" "$(cat "$WORK/err")"
 ok "A same configuration → same @agent_cfg ($fp1), = expected, cached by --write"
 
 # --- B: a team change moves the fingerprint ------------------------------------
@@ -225,5 +231,31 @@ oldx=$(launch old fleet-codex.sh FLEET_AGENT=codex -- 'hello' | sed "s#/old/mod/
 offx=$(launch new fleet-codex.sh FLEET_AGENT=codex FLEET_AGENT_CFG=0 -- 'hello')
 [ "$oldx" = "$offx" ] || fail "F: FLEET_AGENT_CFG=0 changed the Codex argv" "$(printf 'old:\n%s\noff:\n%s' "$oldx" "$offx")"
 ok "F FLEET_AGENT_CFG=0 / no composer: argv byte for byte the old launch, nothing stamped (Claude + Codex)"
+
+# --- G: the person's words, one line everywhere (EPIC #1855 C6) -------------------------
+fresh_home
+printf '{"mcpServers":{"mine":{"command":"my-mcp"}}}\n' > "$WORK/home/.claude.json"
+printf '{"theme":"dark"}\n' > "$WORK/home/.claude/settings.json"
+printf '{"version":7,"bundle":{"mcp":{"shared":{"command":"team-shared"}}}}\n' > "$WORK/cfg/team-bundle.json"
+printf '{"version":3,"bundle":{"mcp":{"pm":{"command":"p-mcp"}}}}\n' > "$WORK/cfg/person-bundle.json"
+team apply --root "$WORK/new" >/dev/null 2>&1 || fail "G: apply with a personal layer failed" "$(team apply --root "$WORK/new" 2>&1)"
+line=$(team status --short --root "$WORK/new")
+case "$line" in "团队 v7 · 个人 v3 · 本机独有 "*" 项（fleet config promote 可带走）") : ;;
+  *) fail "G: status --short is not the person-facing line" "$line" ;; esac
+nloc=$(team status --short --root "$WORK/new" | sed -n 's/.*本机独有 \([0-9]*\) 项.*/\1/p')
+nshow=$( ( unset FLEET_AGENT_LOCK FLEET_MOD CLAUDE_CONFIG_DIR CODEX_HOME
+           cd "$WORK/proj" && HOME="$WORK/home" FLEET_CONF_DIR="$WORK/cfg" python3 "$WORK/new/bin/fleet-config.py" show ) \
+         | grep -c '^[a-z][^ ]*  *本机 ')
+[ -n "$nloc" ] && [ "$nloc" = "$nshow" ] && [ "$nloc" -ge 2 ] || fail "G: 本机独有 $nloc ≠ fleet config show's 本机 rows ($nshow)"
+launch new fleet-claude.sh -- '/fleet-claim' >/dev/null
+grep -qxF "fleet-claude: 配置 $line" "$WORK/err" || fail "G: the Claude launch did not reprint the line" "$(cat "$WORK/err")"
+launch new fleet-codex.sh FLEET_AGENT=codex -- 'hello' >/dev/null
+grep -qxF "fleet-codex: 配置 $line" "$WORK/err" || fail "G: the Codex launch did not reprint the line" "$(cat "$WORK/err")"
+cli=$( ( unset FLEET_AGENT_LOCK FLEET_MOD CLAUDE_CONFIG_DIR CODEX_HOME; HOME="$WORK/home" FLEET_CONF_DIR="$WORK/cfg" python3 -c '
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location("b", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+print(m.team_status(sys.argv[2]))' "$BIN/fleet-agent-bundle.py" "$WORK/new" ) )
+[ "$cli" = "$line" ] || fail "G: the client doctor's line differs" "$cli / $line"
+ok "G with a personal layer: launch (Claude + Codex), client doctor and status --short print one line; 本机独有 $nloc = show's 本机 rows"
 
 printf 'fleet-agent-cfg-selftest: %d passed\n' "$pass"
