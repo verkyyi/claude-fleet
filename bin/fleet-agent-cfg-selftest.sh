@@ -80,7 +80,7 @@ EOF
 chmod +x "$WORK/fakebin/claude" "$WORK/fakebin/codex" "$WORK/fakebin/tmux"
 
 fresh_home() {   # a login: empty HOME, empty FLEET_CONF_DIR
-  rm -rf "$WORK/home" "$WORK/cfg"; mkdir -p "$WORK/home/.claude" "$WORK/home/.codex" "$WORK/cfg"
+  rm -rf "${WORK:?}/home" "${WORK:?}/cfg"; mkdir -p "$WORK/home/.claude" "$WORK/home/.codex" "$WORK/cfg"
 }
 launch() {   # launch <box> <agent-script> [VAR=val …] -- [args …] → argv lines; stamps in $WORK/stamps
   local box="$1" sut="$2"; shift 2
