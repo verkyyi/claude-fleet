@@ -69,7 +69,7 @@ if [ "$PURGE" = 1 ]; then
   [ "$(dirname "$SDIR")" = "$FLEET_CONF_DIR/fleets" ] \
     || die "internal: refusing rm -rf '$SDIR' — not a direct child of $FLEET_CONF_DIR/fleets"
   [ -d "$SDIR" ] && { rm -rf "$SDIR" && echo "fleet-down: removed $SDIR"; }
-  rm -f "$FLEET_CONF_DIR/$NAME.conf" 2>/dev/null || true
+  fleet_conf_reserved "$NAME" || rm -f "$FLEET_CONF_DIR/$NAME.conf" 2>/dev/null || true   # fleet.conf is the machine's (#1887)
   if [ -n "$SLUG" ]; then
     # runtime cache: the fleet's own dir + any legacy flat slug-suffixed files. SLUG
     # is conf-derived + fleet_slug-sanitized (no '/'), but assert direct-child too.

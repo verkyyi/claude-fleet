@@ -65,10 +65,31 @@ move_one() {
 
 # --- 1. per-session conf: <sess>.conf → fleets/<sess>/conf --------------------
 # Glob only *.conf (never the *.conf.bak* backups fleet-up leaves behind).
+# fleet.conf / shell.conf / hub-defaults.conf are not fleets (fleet_conf_reserved):
+# before issue #1887 this loop filed the machine's fleet.conf away as the stale
+# duplicate of fleet `fleet` — deleted it — on every sync, and the conf pass then
+# rebuilt it from its template, losing every key a person had added.
+healed=0
 for cf in "$ROOT"/*.conf; do
   [ -f "$cf" ] || continue
   sess=$(basename "$cf" .conf)
+  fleet_conf_reserved "$sess" && continue
   move_one "$cf" "$ROOT/fleets/$sess/conf"
+done
+# …and what it moved before goes back: fleets/hub-defaults/conf (the hub's client
+# defaults, #1722, read only at $ROOT/hub-defaults.conf) and fleets/shell/conf
+# (shell.conf, #1484) made a phantom fleet that a real one then shared the login
+# with. Only a dir holding nothing but that conf, with no FLEET_REPO in it; a
+# fresh copy already back in place wins (the moved one is the older).
+for sess in hub-defaults shell; do
+  d="$ROOT/fleets/$sess"
+  [ -f "$d/conf" ] || continue
+  [ "$(ls -A "$d" 2>/dev/null)" = conf ] || continue
+  grep -Eq '^[[:space:]]*(export[[:space:]]+)?FLEET_REPO=' "$d/conf" && continue
+  if [ "$DRY" = 1 ]; then say "would put back: fleets/$sess/conf → $sess.conf"; continue; fi
+  if [ -e "$ROOT/$sess.conf" ]; then rm -f "$d/conf"; else mv "$d/conf" "$ROOT/$sess.conf"; fi
+  rmdir "$d" 2>/dev/null
+  healed=$((healed + 1))
 done
 
 # --- 2. restore maps: restore/<sess>.map → fleets/<sess>/restore.map ----------
@@ -136,5 +157,5 @@ if [ -d "$ROOT/sweep" ]; then
   done
 fi
 
-say "$([ "$DRY" = 1 ] && printf '(dry-run) ')done — ${moved} moved, ${skipped} already-migrated, ${orphan} orphan"
+say "$([ "$DRY" = 1 ] && printf '(dry-run) ')done — ${moved} moved, ${skipped} already-migrated, ${orphan} orphan$([ "$healed" -gt 0 ] && printf ', %s put back (#1887)' "$healed")"
 exit 0

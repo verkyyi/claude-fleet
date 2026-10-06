@@ -63,8 +63,9 @@ fcfg_fleet_conf() {
   if declare -F fleet_conf_file >/dev/null 2>&1; then fleet_conf_file "$sess"; return; fi
   root="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
   new="$root/fleets/$sess/conf"; old="$root/$sess.conf"
+  case "$sess" in fleet|shell|hub-defaults) old='' ;; esac   # not fleets — fleet_conf_reserved (#1887)
   if   [ -f "$new" ]; then printf '%s' "$new"
-  elif [ -f "$old" ]; then printf '%s' "$old"
+  elif [ -n "$old" ] && [ -f "$old" ]; then printf '%s' "$old"
   else                     printf '%s' "$new"; fi
 }
 

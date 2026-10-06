@@ -169,6 +169,14 @@ fleet_epic_running() {
   [ "$age" -lt "$ttl" ]
 }
 
+# fleet_conf_reserved <name> — rc 0 when $FLEET_CONF_DIR/<name>.conf is NOT a
+# fleet's legacy flat conf: fleet.conf is the MACHINE's config (#1623, and `fleet`
+# is the default session name), shell.conf the shell's (#1484), hub-defaults.conf
+# the hub's client defaults (#1722). Every reader or mover of a flat <sess>.conf
+# asks this first (issue #1887: the layout migrator once filed fleet.conf away as
+# fleet `fleet`'s stale duplicate and deleted it on every sync).
+fleet_conf_reserved() { case "${1:-}" in fleet|shell|hub-defaults) return 0 ;; esac; return 1; }
+
 # A session's conf path for READING, dual-layout: the new fleets/<sess>/conf if it
 # exists, else the legacy flat <sess>.conf, else the NEW path (so passing this to a
 # create still lands in the new layout). Never creates directories.
@@ -177,7 +185,7 @@ fleet_conf_file() {
   new="$FLEET_CONF_DIR/fleets/$sess/conf"; old="$FLEET_CONF_DIR/$sess.conf"
   # $FLEET_CONF_DIR/fleet.conf is the MACHINE's config (issue #1623), never the
   # legacy flat conf of a fleet named `fleet` — the default session name.
-  case "$sess" in fleet|shell|hub-defaults) old='' ;; esac     # …nor the shell's shell.conf, nor the hub's defaults (#1722)
+  fleet_conf_reserved "$sess" && old=''     # …nor the shell's shell.conf, nor the hub's defaults (#1722)
   if   [ -f "$new" ]; then printf '%s' "$new"
   elif [ -n "$old" ] && [ -f "$old" ]; then printf '%s' "$old"
   else                     printf '%s' "$new"; fi
@@ -208,7 +216,7 @@ fleet_each_conf() {
   for conf in "$FLEET_CONF_DIR"/*.conf; do
     [ -f "$conf" ] || continue
     sess=${conf##*/}; sess=${sess%.conf}          # basename … .conf, no fork (#888)
-    case "$sess" in fleet|shell|hub-defaults) continue ;; esac  # the machine's config + the shell's (#1623) + the hub's defaults (#1722), not fleets
+    fleet_conf_reserved "$sess" && continue   # the machine's config + the shell's (#1623) + the hub's defaults (#1722), not fleets
     # dedup only when the NEW-layout conf FILE exists — a fleets/<sess>/ dir that
     # holds just restore.map/bridge/watch (no conf yet) must NOT hide the legacy conf.
     [ -f "$FLEET_CONF_DIR/fleets/$sess/conf" ] && continue
@@ -4849,7 +4857,7 @@ fleet_is_operator_sender() {
 fleet_hub_on() {
   local sess="${1:-}" f line v='' hit=0
   if [ -n "$sess" ]; then
-    f="$FLEET_CONF_DIR/fleets/$sess/conf"; [ -f "$f" ] || f="$FLEET_CONF_DIR/$sess.conf"
+    f="$FLEET_CONF_DIR/fleets/$sess/conf"; [ -f "$f" ] || fleet_conf_reserved "$sess" || f="$FLEET_CONF_DIR/$sess.conf"
     if [ -f "$f" ]; then
       while IFS= read -r line || [ -n "$line" ]; do
         line="${line#"${line%%[![:space:]]*}"}"

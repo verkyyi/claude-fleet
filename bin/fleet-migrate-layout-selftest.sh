@@ -103,4 +103,22 @@ content 'FLEET_REPO="acme/widgets"
 FLEET_MAIN="/x/acme"' "$ROOT/fleets/fleet-acme/conf"     # new one preserved
 absent  "$ROOT/fleet-acme.conf"                          # stale legacy dropped
 
-printf 'selftest OK: fleet-migrate-layout (%s assertions — legacy→per-fleet move, content preserved, globals untouched, orphan parked, idempotent, no-clobber)\n' "$CHECKS"
+# --- not fleets (issue #1887): fleet.conf / shell.conf / hub-defaults.conf --------
+# fleet `fleet` (the default session name) exists in the new layout: the machine's
+# fleet.conf beside it is NOT its stale duplicate — never moved, never dropped. A
+# hub-defaults.conf an older migrator moved into fleets/ goes back.
+mkdir -p "$ROOT/fleets/fleet" "$ROOT/fleets/hub-defaults"
+printf 'FLEET_REPO="o/r"\n' > "$ROOT/fleets/fleet/conf"
+printf 'FLEET_HOST=0\nexport FLEET_UI_LANG=zh\n' > "$ROOT/fleet.conf"
+printf 'FLEET_SHELL_WIDTH=40\n' > "$ROOT/shell.conf"
+printf '# hub-defaults.conf — moved by the old migrator\n' > "$ROOT/fleets/hub-defaults/conf"
+FLEET_CONF_DIR="$ROOT" bash "$MIG" >/dev/null 2>&1 || fail "reserved re-run exited non-zero"
+content 'FLEET_HOST=0
+export FLEET_UI_LANG=zh' "$ROOT/fleet.conf"              # the machine's config, untouched
+content 'FLEET_REPO="o/r"' "$ROOT/fleets/fleet/conf"
+exists  "$ROOT/shell.conf"
+absent  "$ROOT/fleets/shell"
+content '# hub-defaults.conf — moved by the old migrator' "$ROOT/hub-defaults.conf"   # put back
+absent  "$ROOT/fleets/hub-defaults"
+
+printf 'selftest OK: fleet-migrate-layout (%s assertions — legacy→per-fleet move, content preserved, globals untouched, orphan parked, idempotent, no-clobber, reserved confs kept)\n' "$CHECKS"
