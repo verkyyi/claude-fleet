@@ -41,6 +41,14 @@
 #      transfer · where · show · open · handoff arm — refusals run nothing, each runs
 #      its script with exactly the documented argv, and handoff arm returns at once
 #      with the cycle helper DETACHED (it outlives the call)
+#   M  a new version, taken between calls (issue #1898): the install is a link to a
+#      version dir; switched while a call is in flight, that call finishes on the old
+#      code, then the server os.execv's the new file (same pid, the connection never
+#      drops), sends notifications/tools/list_changed, and tools/list carries the new
+#      tool; the queued request is served by the new version, the credential still
+#      holds (via=cred), nothing of the handover leaks to a script or $TMPDIR; a new
+#      version that fails its --probe is refused and the old one keeps serving; a
+#      quiet client is reloaded on the poll; FLEET_MCP_RELOAD=0 never reloads
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -793,5 +801,104 @@ WANT
 sed 's/ $//' "$LOG" > "$WORK/j.got"   # a no-argument run logs "<name> "
 diff "$WORK/j.want" "$WORK/j.got" > "$WORK/j.diff" || fail "L: a C9 tool ran the wrong argv" "$(cat "$WORK/j.diff")"
 ok "L brief · file_issue · gh · context · transfer · where · show · open · handoff arm: refusals run nothing, exact argv, arm detaches"
+
+# --- M: a new version, taken between calls (issue #1898) --------------------------
+M="$WORK/reload"; mkdir -p "$M/tmp"
+mkver() { # mkver <name> <children-script body> [python appended to fleet-mcp.py]
+  mkdir -p "$M/$1/logs"; cp -R "$WORK/bin" "$M/$1/bin"
+  printf '#!/bin/sh\n%s\n' "$2" > "$M/$1/bin/fleet-children.sh"; chmod +x "$M/$1/bin/fleet-children.sh"
+  [ -n "${3:-}" ] && python3 - "$M/$1/bin/fleet-mcp.py" "$3" <<'PYX'
+import sys
+p, extra = sys.argv[1], sys.argv[2]
+s = open(p).read()
+anchor = "\n# The pre-#1807 fleet-peer server"
+assert anchor in s
+open(p, "w").write(s.replace(anchor, "\n" + extra + "\n" + anchor, 1))
+PYX
+  return 0
+}
+mkver v1 'sleep 2; echo v1-children'
+mkver v2 'echo "v2-children exec=${FLEET_MCP_EXEC:-none}"' 'TOOLS["zz_new"] = (tool_context, dict(TOOLS["context"][1]))'
+mkver v3 'echo v3-children' 'this is not python ('
+mkver v4 'echo v4-children' 'TOOLS["zz_quiet"] = (tool_context, dict(TOOLS["context"][1]))'
+ln -s "$M/v1" "$M/home"
+CRED=$(CRED='' gcred mint) || fail "M: --cred mint failed"
+cat > "$M/drive.py" <<'PYX'
+import json, os, queue, subprocess, sys, threading, time
+M, cmd = sys.argv[1], sys.argv[2:]
+proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+inbox = queue.Queue()
+threading.Thread(target=lambda: [inbox.put(json.loads(l)) for l in proc.stdout], daemon=True).start()
+def send(obj):
+    proc.stdin.write((json.dumps(obj) + "\n").encode()); proc.stdin.flush()
+def req(i, method, params=None):
+    send({"jsonrpc": "2.0", "id": i, "method": method, "params": params or {}})
+def call(i, name):
+    req(i, "tools/call", {"name": name, "arguments": {}})
+def get(timeout=15):
+    try:
+        return inbox.get(timeout=timeout)
+    except queue.Empty:
+        sys.exit("M: no message within %ss (server pid %d alive=%s)" % (timeout, proc.pid, proc.poll() is None))
+def text(msg):
+    return msg["result"]["content"][0]["text"]
+def names(msg):
+    return sorted(t["name"] for t in msg["result"]["tools"])
+def switch(to):
+    tmp = M + "/home.tmp"; os.symlink(M + "/" + to, tmp); os.replace(tmp, M + "/home")
+def check(cond, why):
+    if not cond:
+        sys.exit("M: " + why)
+mode = os.environ.get("DRIVE", "main")
+req(1, "initialize", {"protocolVersion": "2025-06-18"})
+init = get()
+check(init["result"]["capabilities"]["tools"].get("listChanged") is True, "initialize does not declare tools.listChanged: %s" % init)
+req(2, "tools/list"); first = names(get())
+check("zz_new" not in first and "children" in first, "v1 lists %s" % first)
+if mode == "off":
+    switch("v2"); call(3, "children"); m = get()
+    check(m.get("id") == 3 and "v1-children" in text(m), "with FLEET_MCP_RELOAD=0 the call left v1: %s" % m)
+    req(4, "tools/list"); m = get(); check(names(m) == first, "with FLEET_MCP_RELOAD=0 the list changed: %s" % names(m))
+    print("off-ok"); sys.exit(0)
+# a call in flight when the link moves: it finishes on v1, the next request execs v2
+call(3, "children"); time.sleep(0.6); switch("v2"); call(4, "children")
+m = get(); check(m.get("id") == 3 and "v1-children" in text(m), "the in-flight call was not finished by v1: %s" % m)
+m = get(); check(m.get("method") == "notifications/tools/list_changed", "no list_changed after the switch: %s" % m)
+m = get(); check(m.get("id") == 4 and "v2-children exec=none" in text(m), "the queued call was not served by v2 (or the handover leaked): %s" % m)
+req(5, "tools/list"); m = get(); check("zz_new" in names(m), "v2's new tool is not listed: %s" % names(m))
+call(6, "zz_new"); m = get(); check(m.get("id") == 6 and not m["result"].get("isError"), "the new tool does not run: %s" % m)
+check(proc.poll() is None, "the server process ended")
+# a broken new version: refused, v2 keeps serving, no list_changed
+switch("v3"); call(7, "children"); m = get()
+check(m.get("id") == 7 and "v2-children" in text(m), "a broken version was not refused: %s" % m)
+# a quiet client: the poll takes the new version with nothing asked
+switch("v4"); m = get(10)
+check(m.get("method") == "notifications/tools/list_changed", "a quiet server did not reload on the poll: %s" % m)
+req(8, "tools/list"); m = get(); check("zz_quiet" in names(m) and "zz_new" not in names(m), "v4's list is wrong: %s" % names(m))
+call(9, "children"); m = get(); check("v4-children" in text(m), "v4 does not serve: %s" % m)
+print("pid=%d" % proc.pid)
+proc.stdin.close(); proc.wait(10)
+PYX
+mrun() { # mrun <log> — the driver, as a credentialed pane of fleet `tf`
+  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u FLEET_WORKER_CRED PATH="$G/sbin:$PATH" TMUX=1 TMUX_PANE=%1 \
+    FLEET_CONF_DIR="$G/conf" FLEET_MCP_LOG="$1" FAKE_FID="$FID" FLEET_WORKER_CRED="$CRED" TMPDIR="$M/tmp" \
+    FLEET_MCP_RELOAD_POLL_S=0.3 python3 "$M/drive.py" "$M" python3 "$M/home/bin/fleet-mcp.py" 2>&1
+}
+out=$(mrun "$M/calls.log") || fail "M: the reload session failed" "$out
+$(cat "$M/calls.log" 2>/dev/null)"
+pid=${out#pid=}
+grep -q "tool=(reload) via=- who=pid$pid verdict=exec " "$M/calls.log" \
+  && grep -q "tool=(reload) via=- who=pid$pid verdict=resumed " "$M/calls.log" \
+  || fail "M: the exec + resume are not logged under the server's one pid ($pid)" "$(cat "$M/calls.log")"
+grep -q "verdict=refused why=\"new version failed its probe" "$M/calls.log" \
+  || fail "M: the broken version's refusal is not logged" "$(cat "$M/calls.log")"
+[ "$(grep -c 'tool=children via=cred .*verdict=exit=0' "$M/calls.log")" = 4 ] && grep -q 'tool=zz_new via=cred .*verdict=exit=0' "$M/calls.log" \
+  || fail "M: the credential did not hold across the exec" "$(cat "$M/calls.log")"
+[ -z "$(ls -A "$M/tmp")" ] || fail "M: the carry file was left behind" "$(ls -la "$M/tmp")"
+grep -rqF "$CRED" "$M/calls.log" "$M/tmp" && fail "M: the credential leaked into the call log"
+rm -f "$M/home"; ln -s "$M/v1" "$M/home"
+out=$(DRIVE=off FLEET_MCP_RELOAD=0 mrun "$M/off.log") && [ "$out" = off-ok ] || fail "M: FLEET_MCP_RELOAD=0 still reloaded" "$out"
+grep -q 'tool=(reload)' "$M/off.log" && fail "M: FLEET_MCP_RELOAD=0 logged a reload" "$(cat "$M/off.log")"
+ok "M a new version between calls: in-flight call finishes on the old, exec keeps pid + connection + credential, list_changed, new tool listed; broken version refused; quiet poll; off switch"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

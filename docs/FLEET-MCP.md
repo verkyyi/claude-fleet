@@ -286,11 +286,36 @@ week's count is `grep -c $'\tlogged\t' logs/mcp-bypass.log`.
 `send_message`) is now a shim that execs `fleet-mcp.py --legacy-peer`, for a config
 that still mounts it — one version, then it goes.
 
+## A new version, taken between calls (issue #1898, EPIC #1906 C5)
+
+The install is a link to one version (`~/.claude/fleet → fleet.versions/<sha>/`,
+#1894). Before each request, and every `FLEET_MCP_RELOAD_POLL_S` (30 s) while the
+client is quiet, the server compares the file it was launched as (the link path,
+never resolved) with the one it runs — another real path, inode, size or mtime is a
+new version. Requests are served one at a time, so a call in flight always finishes
+on the old code first. The new file must answer `fleet-mcp.py --probe` (its tool
+names, exit 0); then the server `os.execv`s it: same pid, same stdin/stdout, so the
+MCP connection never drops, and the credential rides in the environment as it is
+(renewed in place). Request bytes already read but not served pass to the new
+process through a 0600 carry file it deletes at once. The new process sends
+`notifications/tools/list_changed`.
+
+| Client | On `list_changed` | So a running session… |
+|---|---|---|
+| Claude Code (2.1.292, tested) | re-lists at once — **only** when `initialize` declared `tools.listChanged` (it does since #1898) | gets the new tools on its next turn; a session that met an older server keeps its list until reopened |
+| Codex (0.160, `codex-rs/rmcp-client`) | logs it, keeps its first list | keeps its tool list; the exec still moves its tools' scripts onto the new version. New tools reach it through the C4 notice + C3 idle reopen |
+
+A version that fails its probe is refused (`tool=(reload) verdict=refused` in
+`logs/mcp-calls.log`) and the running one keeps serving; each exec logs
+`verdict=exec` and `verdict=resumed` under the one pid. `FLEET_MCP_RELOAD=0` turns
+it off. The legacy `fleet-peer` shim never reloads.
+
 ## Protocol
 
 Newline-delimited JSON-RPC 2.0 on stdin/stdout, stdlib only (macOS python 3.9):
-`initialize` (echoes the client's `protocolVersion`), `tools/list`, `tools/call`,
-`ping`; notifications get no answer.
+`initialize` (echoes the client's `protocolVersion`, declares `tools.listChanged`),
+`tools/list`, `tools/call`, `ping`; notifications get no answer. The server sends
+one notification of its own: `notifications/tools/list_changed`, after a reload.
 
 ## Tests
 
@@ -304,6 +329,9 @@ and `handoff arm` answering before its detached helper ends.
 script, and every `mcp__fleet__<tool>` a skill names is a real tool.
 `bin/fleet-mcp-selftest.sh` J — the credential: valid / expired / forged /
 tampered / another pane / another fleet / revoked, migration, renewal, no leak.
+`bin/fleet-mcp-selftest.sh` M — a new version between calls: the in-flight call
+finishes on the old code, exec keeps pid + connection + credential, `list_changed`,
+the new tool listed, a broken version refused, the quiet poll, `FLEET_MCP_RELOAD=0`.
 `bin/fleet-mcp-selftest.sh` K — the hub route: assertion only with hub + token +
 credential, its signature and claims, zero network with no hub, `fleet_hub_put`'s
 `worker`. Hub: `TestWorkerAssertion*` (`internal/api/fleet_worker_assert_test.go`)
