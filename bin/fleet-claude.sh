@@ -240,6 +240,38 @@ if [ -n "${FLEET_MCP_CONFIG:-}" ]; then
   esac
 fi
 
+# The fleet's own tool service (issue #1807, EPIC #1813 C5): every session mounts
+# bin/fleet-mcp.py as the MCP server `fleet` — the same tools bin/fleet-codex.sh
+# hands Codex — defined ONCE in conf/mcp-worker.json. Additive: it rides next to
+# whatever FLEET_MCP_CONFIG chose (an allowlist, `none`, or unset = every server),
+# and is not added twice when the allowlist IS that file. FLEET_MCP_BIN points the
+# server at THIS install's bin/; FLEET_MCP_SERVER=1 tells the mod not to register
+# its own three fallback tools under the same `fleet` name. FLEET_MCP=0, a
+# caller's own MCP flags, or no file beside bin/ adds nothing (byte for byte).
+unset FLEET_MCP_SERVER                                     # never inherit a parent's mount
+_fc_mw="$BIN/../conf/mcp-worker.json"
+if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ]; then
+  case " $* " in
+    *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) : ;;   # caller already chose
+    *)
+      export FLEET_MCP_BIN="$BIN" FLEET_MCP_SERVER=1
+      # An allowlist that already names a `fleet` server (this file, or a copy a
+      # repo extended — docs/INSTALL.md) mounts it; a second one would collide.
+      case "${FLEET_MCP_CONFIG:-}" in
+        ''|none) _fc_mwin='' ;;
+        '{'*)    _fc_mwin="$FLEET_MCP_CONFIG" ;;
+        *)       _fc_mwin=$(cat "${FLEET_MCP_CONFIG/#\~/$HOME}" 2>/dev/null) ;;
+      esac
+      case "$_fc_mwin" in
+        *'"fleet":'*|*'"fleet" :'*) : ;;
+        *) mcp_flag+=("--mcp-config=$_fc_mw") ;;               # the =form (#476, above)
+      esac
+      unset _fc_mwin
+      ;;
+  esac
+fi
+unset _fc_mw
+
 if [ -n "$label" ]; then                                 # (resolved above, with the model)
   tok=$("$BIN/fleet-account.sh" token "$label" 2>/dev/null)
   if [ -n "$tok" ]; then

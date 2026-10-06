@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "fleet-peer": {
+    "fleet": {
       "command": "bash",
       "args": [
-        "-lc",
-        "exec python3 \"$HOME/.claude/fleet/bin/fleet-peer-mcp.py\""
+        "-c",
+        "exec python3 \"${FLEET_MCP_BIN:-$HOME/.claude/fleet/bin}/fleet-mcp.py\""
       ]
     }
   }

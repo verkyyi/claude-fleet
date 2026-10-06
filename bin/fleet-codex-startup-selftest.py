@@ -71,7 +71,7 @@ else:
 
     def test_shipped_worker_set_inherited_by_codex(self):
         # issue #1078 + #1185: FLEET_MCP_CONFIG -> the shipped conf/mcp-worker.json,
-        # with no Codex-specific key, must trim a Codex worker to fleet-peer only:
+        # with no Codex-specific key, must trim a Codex worker to the fleet server only:
         # every other enumerated server disabled, apps + skill MCP installs closed.
         path = BIN.parent / 'conf' / 'mcp-worker.json'
         self.assertTrue(path.is_file(), path)
@@ -83,8 +83,8 @@ else:
         policy = next(x for x in args if x.startswith('mcp_servers='))
         self.assertIn('"legacy"={"command"="fixture-server","enabled"=false}', policy)
         self.assertIn('"other.server"={"url"="https://example.invalid/mcp","enabled"=false}', policy)
-        self.assertIn('"fleet-peer"={"command"="bash"', policy)
-        self.assertIn('"args"=["-lc","exec python3 \\"$HOME/.claude/fleet/bin/fleet-peer-mcp.py\\""]', policy)
+        self.assertIn('"fleet"={"command"="bash"', policy)                  # issue #1807
+        self.assertIn('fleet-mcp.py', policy)
         self.assertEqual(args[-1], 'seed'); self.assertNotIn('--mcp-config', args)
 
     def test_shared_allowlist_and_explicit_caller_override(self):

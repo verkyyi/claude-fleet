@@ -12,10 +12,13 @@ trap 'exit 130' INT TERM HUP
 
 mkdir -p "$WORK/bin"
 cp "$SUT" "$WORK/bin/fleet-peer-mcp.py"
+# The shim execs the one tool service beside it (issue #1807).
+cp "$BIN/fleet-mcp.py" "$WORK/bin/fleet-mcp.py"
 cat > "$WORK/bin/fleet-lib.sh" <<'SH'
 fleet_origin_key() { printf 'issue-1185'; }
 _fleet_hosts_many() { return 1; }
 fleet_win_for_key() { [ "$1" = issue-77 ] && printf '@77'; }
+fleet_origin_win() { printf '@77'; }
 SH
 cat > "$WORK/bin/fleet-children.sh" <<'SH'
 #!/bin/sh
@@ -74,5 +77,6 @@ assert child["is_child"]
 assert rows[3]["result"]["structuredContent"]["receipt"].startswith("sent -> issue:99")
 assert rows[4]["result"]["structuredContent"]["receipt"].startswith("sent -> @77")
 PY
+[ $? = 0 ] || { echo "fleet-peer-mcp-selftest FAIL" >&2; cat "$WORK/out" >&2; exit 1; }
 
 printf 'fleet-peer-mcp-selftest OK\n'
