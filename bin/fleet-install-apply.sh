@@ -905,12 +905,14 @@ touched bin/tmux-dashboard.sh || touched bin/tmux-dashboard-rows.sh && uiargs+=(
 beforeconf=''
 # The bar's two files are sourced BY tmux-attention.conf (issue #1534), so a
 # change to either reloads it the same way.
-if touched conf/tmux-attention.conf || touched conf/tmux-bar.conf || touched conf/fleet-palette.conf; then
+if touched conf/tmux-attention.conf || touched conf/tmux-bar.conf || touched conf/fleet-palette.conf || touched conf/tmux-fleet-server.conf; then
   # The pre-sync conf, straight from --from — never from a shell var a caller
   # might have lost (#295) or a zsh-mangled ref (#325).
   beforeconf=$(mktemp "${TMPDIR:-/tmp}/fleet-apply-conf.XXXXXX")
   git -C "$ROOT" show "${from}:conf/tmux-attention.conf" > "$beforeconf" 2>/dev/null || : > "$beforeconf"
-  uiargs+=(--conf "$beforeconf" "$ROOT/conf/tmux-attention.conf" "$HOME/.tmux.conf")
+  # Re-source what the fleet servers start from (issue #1845), not ~/.tmux.conf:
+  # an error in the person's file must not keep the new layer off every fleet.
+  uiargs+=(--conf "$beforeconf" "$ROOT/conf/tmux-attention.conf" "$ROOT/conf/tmux-fleet-server.conf")
 fi
 if [ "${#uiargs[@]}" -gt 0 ]; then
   if out=$(bash "$ROOT/bin/fleet-ui-refresh.sh" --all ${uiargs[@]+"${uiargs[@]}"} ${DRYFLAG:+"$DRYFLAG"} 2>&1); then

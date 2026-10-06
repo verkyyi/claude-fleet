@@ -21,6 +21,8 @@
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
+#   personal-tmux-conf                              conf/tmux-fleet-server.conf, fleet_server_new_session,
+#                                                   fleet_tmuxconf_check, reapply-tmux-attention.sh
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -378,6 +380,39 @@ drill_install_sync_killed() {
     || { WHY="the next tick did not follow stable: $(tail -2 "$d/tick2.out")"; return 1; }
   grep -q "holder pid=$pid is dead" "$d/tick2.out" || { WHY="the takeover left no log line naming pid=$pid"; return 1; }
   SECS=$(since "$t0"); WHAT="下一拍接管死掉那一跳（pid=${pid}）的锁，跟上 stable"
+}
+
+# personal-tmux-conf (issue #1845): the person's ~/.tmux.conf has a syntax error
+# (and the fleet's own source line in it is commented out). The fleet's server
+# starts from conf/tmux-fleet-server.conf the way fleet-up.sh starts it
+# (fleet_server_new_session): the fleet layer is on — the reap hook, the rename
+# guard, @fleet_conf_loaded — the person's lines before the error still apply,
+# fleet_tmuxconf_check (the doctor's tmuxconf row) says ok, and
+# reapply-tmux-attention.sh no longer takes the commented line for the real one.
+drill_personal_tmux_conf() {
+  CAP=5; BREAK_SOCK="$WORK/sock-pc"; local t0 h="$WORK/pchome" chk out
+  grep -q 'fleet_server_new_session "\$SOCK"' "$BIN/fleet-up.sh" \
+    || { WHY="fleet-up.sh does not start its server through fleet_server_new_session (-f conf/tmux-fleet-server.conf)"; return 1; }
+  mkdir -p "$h"
+  { printf 'set -g @personal_before 1\n'
+    printf "# if-shell '[ -f %s/conf/tmux-attention.conf ]' 'source-file %s/conf/tmux-attention.conf'\n" "$ROOT" "$ROOT"
+    printf 'set -g status-left "an unterminated quote\n'
+    printf 'set -g @personal_after 1\n'; } > "$h/.tmux.conf"
+  t0=$(now)
+  ( PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$WORK/pcconf"; export PATH HOME FLEET_CONF_DIR BREAK_SOCK
+    . "$BIN/fleet-lib.sh"; fleet_server_new_session pc -d -s pc -n home -x 100 -y 30 'exec sleep 600' ) >/dev/null 2>&1 \
+    || { WHY="the fleet server did not start beside a broken ~/.tmux.conf"; return 1; }
+  nt show-hooks -g window-unlinked 2>/dev/null | grep -q 'fleet-window-reap.sh' || { WHY="the reap hook (window-unlinked → fleet-window-reap.sh) is not on the server"; return 1; }
+  [ "$(nt show-options -gv allow-rename 2>/dev/null)" = off ] || { WHY="the rename guard (allow-rename off) is not on the server"; return 1; }
+  [ -n "$(nt show-options -gqv @fleet_conf_loaded 2>/dev/null)" ] || { WHY="@fleet_conf_loaded is not set on the server"; return 1; }
+  [ "$(nt show-options -gqv @personal_before 2>/dev/null)" = 1 ] || { WHY="the person's own settings were not loaded"; return 1; }
+  chk=$( PATH="$WORK/tbin:$PATH" BREAK_SOCK="$BREAK_SOCK"; export PATH BREAK_SOCK
+         . "$BIN/fleet-lib.sh"; fleet_tmuxconf_check pc )
+  case "$chk" in ok*) ;; *) WHY="fleet_tmuxconf_check (the doctor's tmuxconf row) says [$chk]"; return 1 ;; esac
+  out=$(PATH="$WORK/tbin:$PATH" HOME="$h" BREAK_SOCK="$BREAK_SOCK" sh "$BIN/reapply-tmux-attention.sh" 2>&1)
+  grep -q '^[[:space:]]*[^#[:space:]].*tmux-attention\.conf' "$h/.tmux.conf" \
+    || { WHY="reapply-tmux-attention.sh took the commented line for the real one: [$out]"; return 1; }
+  SECS=$(since "$t0"); WHAT="个人配置有语法错，fleet 层照常（回收 hook、改名保护、@fleet_conf_loaded），tmuxconf 核对 ok，reapply 补回 source 行"
 }
 
 # ===================================================== client: the sandbox =======

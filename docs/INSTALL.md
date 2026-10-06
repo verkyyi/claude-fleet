@@ -147,7 +147,12 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    [MCP servers on demand](#mcp-servers-on-demand).
 
 4. **Hook up tmux.** Run `sh ~/.claude/fleet/bin/reapply-tmux-attention.sh`
-   (idempotently appends one `source-file` line to `~/.tmux.conf`). Warn the
+   (idempotently appends one `source-file` line to `~/.tmux.conf`, for a plain
+   tmux; a FLEET server does not depend on it — `fleet-up.sh` starts it with
+   `-f conf/tmux-fleet-server.conf`, which loads the fleet layer first and then
+   the person's `~/.tmux.conf` with `-q`, so an error there skips only theirs;
+   `fleet doctor`'s `tmuxconf` row checks `@fleet_conf_loaded` on every fleet
+   server — issue #1845). Warn the
    user about the opinionated bits of `conf/tmux-attention.conf` — a **fleet
    baseline** block (issue #222) + prefix bindings on `a/g/b/n/R/A/u/c/r/?` and a
    status-bar restyle — and comment out anything they don't want. The **fleet

@@ -928,6 +928,31 @@ elif [ -f "$conf_dir/socket-heal.log" ]; then
   fi
 fi
 
+# --- tmuxconf (issue #1845): is the fleet layer live on every fleet server? -----
+# A fleet server starts from conf/tmux-fleet-server.conf (fleet-up.sh), which
+# loads the fleet layer before the person's ~/.tmux.conf and ends it with
+# @fleet_conf_loaded. fleet_tmuxconf_check reads that marker, the reap hook and
+# the rename guard off each live server: FAIL when the layer is not on one (a
+# server started before this, from a ~/.tmux.conf that broke — fleet-ui-refresh
+# or a restart loads it), WARN when one carries an older marker. No live fleet
+# server → nothing printed.
+if [ -f "$(dirname "$0")/fleet-lib.sh" ] && command -v bash >/dev/null 2>&1; then
+  _tc_out=$(FLEET_CONF_DIR="$conf_dir" bash -c '. "$1" >/dev/null 2>&1
+    for s in $(fleet_sockets); do printf "%s %s\n" "$s" "$(fleet_tmuxconf_check "$s")"; done' _ "$(dirname "$0")/fleet-lib.sh" 2>/dev/null)
+  if [ -n "$_tc_out" ]; then
+    _tc_bad=$(printf '%s\n' "$_tc_out" | awk '$2 == "missing"' | sed 's/ missing / 缺 /' | tr '\n' ';')
+    _tc_old=$(printf '%s\n' "$_tc_out" | awk '$2 == "stale"' | tr '\n' ';')
+    _tc_n=$(printf '%s\n' "$_tc_out" | grep -c .)
+    if [ -n "$_tc_bad" ]; then
+      fail tmuxconf "fleet 层没在服务器上生效：${_tc_bad%;} — 载入：bash $(cd "$(dirname "$0")" && pwd)/fleet-ui-refresh.sh --all --conf /dev/null $(cd "$(dirname "$0")/.." && pwd)/conf/tmux-attention.conf"
+    elif [ -n "$_tc_old" ]; then
+      warn tmuxconf "服务器载入的是旧版 fleet 配置：${_tc_old%;} — 同步后 fleet-ui-refresh 会重载"
+    else
+      pass tmuxconf "$_tc_n 个 fleet 服务器都载入了 fleet 层（$(printf '%s\n' "$_tc_out" | awk '{print $3; exit}')，回收 hook、改名保护在）"
+    fi
+  fi
+fi
+
 # --- hub-image (issue #1696): which commit the hub serves, vs the stable tag -----
 # The hub image is deployed by hand, and its commit used to live only in the
 # image tag (cluster access to read). bin/fleet-hub-image.sh reads the hub's

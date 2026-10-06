@@ -264,7 +264,10 @@ fleet_repo_trust_warn "$DIR" fleet-up
 # goes on it BEFORE the fork, or a login whose PATH lacked the dir never finds
 # claude on a respawn (issue #1191, #1183; fleet_local_bin_path in fleet-lib.sh).
 PATH=$(fleet_local_bin_path); PATH=$(fleet_path_fill); export PATH
-workwin=$(tmux -L "$SOCK" new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
+# The server starts from conf/tmux-fleet-server.conf, never bare: the fleet layer
+# loads first and the person's ~/.tmux.conf after it with -q, so an error in theirs
+# no longer drops the reaper hooks and the rename guard (issue #1845).
+workwin=$(fleet_server_new_session "$SOCK" -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
   || die "tmux new-session failed for '$NAME'$(fleet_wedged_note)"
 # A fresh server recycles pane ids: drop the last server's unrun mod commands
 # before any pane exists to take them (issue #1538).

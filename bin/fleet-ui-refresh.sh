@@ -31,7 +31,8 @@
 #                  (bin/tmux-dashboard.sh). Wire from step 7 (launcher changed).
 #   --conf B A [T] run tmux-conf-reload.sh --socket <label> B A [T] against each
 #                  server (unbind removed binds, then re-source). B/A are the
-#                  before/after conf; T defaults to ~/.tmux.conf. Wire from step 8
+#                  before/after conf; T defaults to conf/tmux-fleet-server.conf
+#                  (~/.tmux.conf without one). Wire from step 8
 #                  (conf changed). Passing the same before-conf to every server is
 #                  the best available approximation — a fleet may have sourced a
 #                  different vintage, but the live install is one checkout and the
@@ -61,7 +62,8 @@ CONF_RELOAD="$BIN/tmux-conf-reload.sh"
 
 # --- args ---------------------------------------------------------------------
 all=0 do_dash=0 do_conf=0 dry=0
-conf_before='' conf_after='' conf_tmux="$HOME/.tmux.conf"
+conf_before='' conf_after='' conf_tmux="$BIN/../conf/tmux-fleet-server.conf"   # what fleet servers start from (#1845)
+[ -f "$conf_tmux" ] || conf_tmux="$HOME/.tmux.conf"
 
 usage() {
   echo "usage: fleet-ui-refresh.sh --all [--dash] [--conf <before> <after> [<tmux-conf>]] [--dry-run]" >&2

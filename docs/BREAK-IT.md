@@ -24,6 +24,7 @@
 | 磁盘满 | 拉起 → 写满 → 再崩的循环 | `--auto` 先问磁盘门：低于下限只记一行不拉起；腾出空间后下一拍拉起 | `disk-full` |
 | 非交互 shell（ssh、守护进程）PATH 里没有 claude | 会话开出来停在 shell，`exec claude` 失败 | `fleet_find_tool` 依次找 `FLEET_CLAUDE_BIN` → PATH → `~/.local/bin` → `/opt/homebrew/bin` → `/usr/local/bin`（#1774/#1784） | `no-claude-on-path` |
 | install-sync 跟随中途被 kill -9（`launchctl kickstart -k`、OOM、重启、注销） | trap 不跑，锁目录留下；之后每一拍都 `another tick holds … skip`，这台登录停在旧版本，最多白等一小时（锁 TTL） | 下一拍读锁里的 `pid`，进程不在了就立即接管并记一行 `took over … holder pid=<n> is dead`；TTL 仍兜底（#1691） | `install-sync-killed` |
+| 个人 tmux 配置（`~/.tmux.conf`）写坏一行，或把 fleet 的 source 行注释掉 | fleet 层只经 `~/.tmux.conf` 的 source 行载入，文件一出语法错整份跳过：回收 hook、改名保护、窗口基线全悄悄失效；`reapply-tmux-attention.sh` 把注释掉的行当成「已引入」，补不回来 | fleet 服务器直接用 `-f conf/tmux-fleet-server.conf` 起：先载入 fleet 层（末尾打 `@fleet_conf_loaded`），再 `source-file -q` 你的个人配置——个人设置照常生效，出错只跳过它自己；`fleet doctor` 的 `tmuxconf` 行逐个 fleet 服务器核对标记和回收 hook；reapply 只认没注释的行（#1845） | `personal-tmux-conf` |
 | 客户端里 prefix x / prefix & / 右键菜单 Kill | 侧栏或右侧面板、甚至整个窗口和服务器被删 | 这些键和菜单在客户端里都不存在了（#1785） | `client-kill-keys` |
 | 客户端的侧栏 / 右侧进程被杀 | 一半屏幕空着，只能重开 | 侧栏 5 秒内重画，右侧窗格 5 秒内重开（#1785） | `client-pane-killed` |
 | 侧栏上按 Ctrl+C / Ctrl+\\ / Ctrl+Z | 侧栏进程退出或被挂起 | 侧栏忽略这三个键，还是同一个进程（#1785） | `sidebar-ctrl-c` |
