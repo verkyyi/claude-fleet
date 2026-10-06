@@ -105,11 +105,14 @@ row() { printf '%s\n' "$1" | awk -v p="$2" '$1 == p {print $2; exit}'; }
 out=$(HUB=0 cfg show); rc=$?
 [ $rc = 0 ] && [ "$(row "$out" claude.mcp.context7)" = fleet ] && [ "$(row "$out" claude.mcp.mine)" = 本机 ] \
   && ok "A show works with no hub (fleet + 本机 rows)" || bad "A show without a hub: rc=$rc $out"
-for c in "add --personal mcp x {\"command\":\"x\"}" "promote claude.mcp.mine" "history" "restore 1"; do
-  # shellcheck disable=SC2086
-  out=$(HUB=0 cfg $c); rc=$?
-  { [ $rc = 3 ] && printf '%s' "$out" | grep -q '没有入口'; } && ok "A $c → exit 3 没有入口" || bad "A $c: rc=$rc $out"
-done
+nohub() {
+  out=$(HUB=0 cfg "$@"); rc=$?
+  { [ $rc = 3 ] && printf '%s' "$out" | grep -q '没有入口'; } && ok "A $* → exit 3 没有入口" || bad "A $*: rc=$rc $out"
+}
+nohub add --personal mcp x '{"command": "x"}'
+nohub promote claude.mcp.mine
+nohub history
+nohub restore 1
 
 # sync the team layer in, so show has a 团队 row
 env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" CODEX_HOME="$H/.codex" FLEET_TEAM_BUNDLE_CMD="$TEAMCMD" \
