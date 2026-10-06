@@ -107,6 +107,8 @@ fleet_ui_t() {
     en:needs_restore)           printf 'restore' ;;
     zh:needs_failed)            printf '运行失败' ;;
     en:needs_failed)            printf 'failed' ;;
+    zh:needs_exited)            printf '已退出' ;;
+    en:needs_exited)            printf 'exited' ;;
     zh:needs_other)             printf '要你处理' ;;
     en:needs_other)             printf 'needs' ;;
     zh:repo_none_tag)           printf '⇢无' ;;

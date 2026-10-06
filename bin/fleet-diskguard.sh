@@ -727,6 +727,22 @@ mem_edge() {
   printf '%s\n' "$nowt" > "$sf.notified" 2>/dev/null || true
   notify "$msg"
 }
+# restore_watch — the --watch tick's share of «the fleet never stays down» (issue
+# #1784): fleet-restore.sh --auto rebuilds a fleet whose session vanished (a crash,
+# a kill-server, the last window closing) when the machine admits new sessions,
+# reopening only the sessions that were still running. Detached: a rebuild takes
+# longer than a tick, and the rest of the tick must not wait on it; --auto holds a
+# lock, so overlapping ticks never restore twice.
+restore_watch() {
+  [ "${FLEET_AUTO_RESTORE:-1}" = 0 ] && return 0
+  [ -x "$BIN/fleet-restore.sh" ] || return 0
+  # A busy machine is left alone: the same gate a new spawn passes. Asked HERE,
+  # not in fleet-restore.sh, which an operator runs to re-house running sessions.
+  command -v fleet_machine_admit >/dev/null 2>&1 && ! fleet_machine_admit --short >/dev/null && return 0
+  ( bash "$BIN/fleet-restore.sh" --auto >/dev/null 2>&1 & ) 2>/dev/null
+  return 0
+}
+
 # mem_watch — the --watch tick's share: one notice per edge, per kind.
 mem_watch() {
   local rows mem lvl av co sw top u m w word kind
@@ -844,6 +860,7 @@ EOF2
     crash_watch                                   # metrics row + reboot harvest (#1294)
     mem_watch                                     # memory / files / pty edges (#1293), notify-only
     transcript_watch                              # daily transcript archive (#1299), budgeted
+    restore_watch                                 # a fleet that went down: pull it back up (#1784)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy

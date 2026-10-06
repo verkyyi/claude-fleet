@@ -524,6 +524,9 @@ class Worker:
                     LOOP['sleep_suspend'](source.get('sleep_loop'),path)
                     if self.visible(): raise ValueError('user entered during preparation')
                     text = '\x1b[200~/exit\x1b[201~' if source['agent']=='codex' else '/exit'
+                    # The fleet's own exit: fleet-session-wrap.sh returns instead of
+                    # drawing its recovery page (issue #1784).
+                    self.stamp('@wrap_quiet','1')
                     # input-off suppresses send-keys too. A single server command
                     # queue enables only for this programmatic exit and closes
                     # the input gate again before processing another client.
@@ -1089,7 +1092,7 @@ def launch(w):
     env['FLEET_ACCOUNT_SELECTED']='1'
     if data['evidence'].get('accounts_dir'):
         env['FLEET_ACCOUNTS_DIR']=data['evidence']['accounts_dir']
-    argv=['bash',str(BIN/'fleet-claude.sh'),'--agent',source['agent'],'--resume',source['session_id']]
+    argv=['bash',str(BIN/'fleet-session-wrap.sh'),'--agent',source['agent'],'--resume',source['session_id']]
     options=data.get('options',[])
     if data['model']:
         # /model can change after launch; the live native model outranks argv.

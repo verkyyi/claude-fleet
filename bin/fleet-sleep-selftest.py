@@ -25,8 +25,10 @@ class SleepTest(unittest.TestCase):
         cls.root=Path(cls.tmp.name)
         cls.socket='sleep-test-'+str(os.getpid())
         cls.bin=cls.root/'bin'; cls.bin.mkdir()
-        for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py','fleet_sleep_park.py','fleet_loop_mark.py'):
+        for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py','fleet_sleep_park.py','fleet_loop_mark.py',
+                     'fleet-session-wrap.sh','fleet-session-page.py'):
             shutil.copyfile(BIN/name,cls.bin/name)
+        (cls.bin/'fleet-session-wrap.sh').chmod(0o755)   # a wake relaunches through it (issue #1784)
         cls.wt=cls.root/'scratch-1'; cls.wt.mkdir()
         cls.sid='11111111-1111-4111-8111-111111111111'
         cls.transcript=cls.root/'history.jsonl'; cls.transcript.write_text('{}\n')
@@ -65,9 +67,17 @@ import json,subprocess,sys
 a=sys.argv; session=a[a.index('--session')+1]; pane=a[a.index('--window')+1]
 def opt(f):return subprocess.check_output(['tmux','-L',session,'display-message','-p','-t',pane,'#{'+f+'}'],text=True).strip()
 if opt('pane_dead')=='1':sys.exit(1)
-pid=int(opt('pane_pid'))
-cmd=subprocess.check_output(['ps','-p',str(pid),'-o','command='],text=True)
-if 'agent.py' not in cmd:sys.exit(1)
+# The agent may sit under fleet-session-wrap.sh (issue #1784): walk the pane's tree.
+rows={}
+for line in subprocess.check_output(['ps','-axo','pid=,ppid=,command='],text=True).splitlines():
+    f=line.split(None,2)
+    if len(f)==3:rows[int(f[0])]=(int(f[1]),f[2])
+todo,pid=[int(opt('pane_pid'))],0
+while todo and not pid:
+    p=todo.pop()
+    if 'agent.py' in rows.get(p,(0,''))[1]:pid=p
+    todo+=[c for c,(pp,_) in rows.items() if pp==p]
+if not pid:sys.exit(1)
 print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIPT,home='',registry='',session=session,window=opt('window_id'),pane=pane,worktree=WT,state='done',previous=opt('@handoff_manifest'),label='',subscription={},codex_identity={})))
 '''.replace('SID',repr(cls.sid)).replace('TRANSCRIPT',repr(str(cls.transcript))).replace('WT',repr(str(cls.wt))))
         inspect.chmod(0o755)
@@ -119,6 +129,19 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         # tmux before 3.5 can lose SIGCHLD and leave the exited agent unreaped.
         self.assertIn(LIB['process_state'](pid)[0][:1],('','Z'))
     def opt(self,key):return self.tm('display-message','-p','-t',self.pane,'#{'+key+'}')
+    def agent_pid(self):
+        # A woken agent runs under fleet-session-wrap.sh (issue #1784): the pane's
+        # process is the wrapper, the agent one of its descendants.
+        rows={}
+        for line in subprocess.check_output(['ps','-axo','pid=,ppid=,command='],text=True).splitlines():
+            f=line.split(None,2)
+            if len(f)==3:rows[int(f[0])]=(int(f[1]),f[2])
+        todo=[int(self.opt('pane_pid'))]
+        while todo:
+            p=todo.pop()
+            if 'agent.py' in rows.get(p,(0,''))[1]:return p
+            todo+=[c for c,(pp,_) in rows.items() if pp==p]
+        return int(self.opt('pane_pid'))
     def stamp(self,key,value):self.tm('set-option','-w','-t',self.pane,key,str(value))
 
     def test_sleep_wake_exact_session_same_window(self):
@@ -821,7 +844,7 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.await_awake()
         # The next nap reads the wake it just measured.
         self.stamp('@claude_state','done')
-        self.stamp('@sleep_evidence',json.dumps(dict(self.evidence,pid=int(self.opt('pane_pid')),at=time.time()-60)))
+        self.stamp('@sleep_evidence',json.dumps(dict(self.evidence,pid=self.agent_pid(),at=time.time()-60)))
         self.cli('sleep',self.pane)
         self.capture(lambda s:'⏎ Wake' in s)
         self.assertNotIn('resumes',self.tm('capture-pane','-p','-t',self.pane))

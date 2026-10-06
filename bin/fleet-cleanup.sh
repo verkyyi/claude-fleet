@@ -351,7 +351,8 @@ scratch_head_gate() {
   fi
   # Anything but `done` — working, needs, or a window that never stamped a state
   # at all — means a session is still using this worktree; leave it alone.
-  if [ "$WIN_STATE" != "done" ]; then
+  # `exited` (issue #1784) is the agent gone, the pane on its recovery page: idle.
+  if [ "$WIN_STATE" != "done" ] && [ "$WIN_STATE" != "exited" ]; then
     note "  refusing $BRANCH: window $WIN is '${WIN_STATE:--}' (not done) — a session is still using $WT."
     done_token "skip:busy"; return 1
   fi
@@ -488,7 +489,7 @@ auto_cleanup_gate() {
     if [ -z "$why" ]; then
       if ! state=$(ftmux display-message -p -t "$WIN" '#{@claude_state}' 2>/dev/null); then
         why="cannot read window state"
-      elif [ "$state" != "done" ]; then
+      elif [ "$state" != "done" ] && [ "$state" != "exited" ]; then   # exited: #1784
         why="window state is '${state:-unset}', not done"
       else
         [ -n "${TMUX:-}" ] || socket_args=(--socket-name "$(fleet_socket "$FLEET_SESSION")")

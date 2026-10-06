@@ -378,7 +378,7 @@ if [ "$DRY" = 1 ]; then
 fi
 
 umask 077
-LAUNCH="$BIN/fleet-claude.sh"
+LAUNCH="$BIN/fleet-session-wrap.sh"
 if [ "$PREPARE" != 1 ]; then
   # Step one of any cutover or arming (issue #1667): the target must be able to
   # log in, or nothing below runs — the source is not even asked whether it is idle.
@@ -500,6 +500,7 @@ case "$EXIT_WAIT:$BOOT_WAIT" in *[!0-9:]*|:*|*:) die 'transfer timeouts must be 
 [ "$EXIT_WAIT" -gt 0 ] && [ "$BOOT_WAIT" -gt 0 ] && [ "$EXIT_WAIT" -le 60 ] && [ "$BOOT_WAIT" -le 30 ] \
   || die 'transfer timeout bounds: exit 1..60 seconds, boot 1..30 seconds'
 EXIT_SENT=1
+TM set-option -w -t "$PANE" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
 SK Escape || die 'cannot address source prompt'
 SK C-u || die 'cannot clear source prompt'
 if [ "$SOURCE_AGENT" = codex ]; then

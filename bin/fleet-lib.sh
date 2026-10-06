@@ -1691,6 +1691,69 @@ fleet_server_local_bin() {
   tmux -L "$sock" set-environment -g PATH "$HOME/.local/bin:$cur" 2>/dev/null
 }
 
+# Where claude and tmux live when PATH does not say (issue #1774, #1784). A shell
+# started by ssh or a daemon on m4 had neither ~/.local/bin (Claude Code's native
+# install) nor /opt/homebrew/bin (tmux) on PATH, so `exec claude` failed and a
+# restore parked at a shell twice. FLEET_TOOL_DIRS is the fixed search order after
+# PATH; a selftest points it at a sandbox.
+FLEET_TOOL_DIRS="${FLEET_TOOL_DIRS:-$HOME/.local/bin /opt/homebrew/bin /usr/local/bin}"
+
+# fleet_path_fill — PATH with every existing FLEET_TOOL_DIRS dir it lacks APPENDED:
+# the order PATH already has wins, so a PATH that finds both tools is unchanged.
+fleet_path_fill() {
+  local dir out=$PATH
+  for dir in $FLEET_TOOL_DIRS; do
+    [ -d "$dir" ] || continue
+    case ":$out:" in *":$dir:"*) ;; *) out="${out:+$out:}$dir" ;; esac
+  done
+  printf '%s' "$out"
+}
+
+# fleet_find_tool <claude|tmux> — the binary to run: $FLEET_CLAUDE_BIN /
+# $FLEET_TMUX_BIN when it is executable, else the bare name when PATH (or a
+# function) answers — byte for byte the old `exec claude` — else the first
+# FLEET_TOOL_DIRS hit. rc 1 + one stderr line naming every place tried.
+fleet_find_tool() {
+  local name="$1" pin='' dir tried=''
+  case "$name" in claude) pin=${FLEET_CLAUDE_BIN:-} ;; tmux) pin=${FLEET_TMUX_BIN:-} ;; esac
+  if [ -n "$pin" ]; then
+    [ -x "$pin" ] && { printf '%s\n' "$pin"; return 0; }
+    tried="$pin "
+  fi
+  command -v "$name" >/dev/null 2>&1 && { printf '%s\n' "$name"; return 0; }
+  tried="${tried}PATH"
+  for dir in $FLEET_TOOL_DIRS; do
+    [ -x "$dir/$name" ] && { printf '%s\n' "$dir/$name"; return 0; }
+    tried="$tried $dir/$name"
+  done
+  printf 'fleet: %s not found — tried %s\n' "$name" "$tried" >&2
+  return 1
+}
+
+# fleet_server_resident <socket> [session] — a fleet's server outlives its last session
+# (issue #1784): `exit-empty off`, so the last window closing never takes the
+# server — and with it every client view of this machine — down.
+fleet_server_resident() {
+  tmux -L "$1" set-option -s exit-empty off 2>/dev/null
+  [ -n "${2:-}" ] && fleet_home_resident "$1" "$2"
+  return 0
+}
+
+# fleet_home_resident <socket> <session> [window] — the fleet's `home` window never closes
+# (issue #1784): its shell exiting (a stray Ctrl+D, `exit`) leaves the pane in
+# place (`remain-on-exit`) and a window `pane-died` hook starts a fresh shell in
+# it, so the session always keeps one window however many tasks end. No home
+# window → nothing (a FLEET_DASH_WINDOW=1 fleet rests on its dash instead).
+fleet_home_resident() {
+  local sock="$1" sess="$2" win="${3:-}"
+  [ -n "$win" ] || win=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_id} #{window_name}' 2>/dev/null \
+                         | awk '$2=="home"{print $1; exit}')
+  [ -n "$win" ] || return 0
+  tmux -L "$sock" set-option -w -t "$win" remain-on-exit on 2>/dev/null
+  tmux -L "$sock" set-hook -w -t "$win" pane-died 'respawn-pane -k' 2>/dev/null
+  return 0
+}
+
 # fleet_bg [-L <socket>] <shell-command> — the shared "background this bind body"
 # helper (issue #304). Dispatch <shell-command> as a DETACHED, server-side
 # background job (via `tmux run-shell -b`) so the interactive fzf bind / popup that

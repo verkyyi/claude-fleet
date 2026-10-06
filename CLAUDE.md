@@ -159,6 +159,17 @@ Do not install from memory: read the doc and work from it.
   no view session every output is byte for byte what it was. A view session is
   never a fleet (`fleet_is_view_session`): restore and the collector skip it, and
   `fleet-window-reap.sh --hook` ignores the unlinks its going fires.
+- **Every session opens through `bin/fleet-session-wrap.sh`, and the fleet never
+  stays down** (issue #1784). Spawners, restore, migrate, move, transfer, the warm
+  pool and a sleeper's wake all launch the wrapper (never `fleet-claude.sh`
+  directly — `session-wrap-selftest.sh` A lints it; `# wrap-ok: <why>` excepts a
+  line). When the agent exits the window stays on a recovery page
+  (`@claude_state=exited`: ↵ resume the same id · r new · q recycle); a fleet-made
+  exit stamps `@wrap_quiet` before its `/exit`. A node server runs `exit-empty off`
+  with a resident `home` window, and the diskguard tick's `fleet-restore.sh --auto`
+  rebuilds a fleet whose session vanished — admit-gated, unfinished sessions only,
+  never one `fleet-down` took down (`restore.down`). claude / tmux are found off a
+  bare PATH by `fleet_find_tool` / `fleet_path_fill`; `fleet-doctor`'s `tools` row.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).

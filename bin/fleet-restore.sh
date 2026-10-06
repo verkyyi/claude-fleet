@@ -23,6 +23,16 @@
 #                     auto-restore is armed. This is what the launchd watcher runs,
 #                     so it never fights a healthy server or a deliberate shutdown.
 #   --arm / --disarm  enable/disable --if-down auto-restore (boot + crash watcher).
+#                     --disarm also stops --auto; --arm lets it run again.
+#   --auto            the diskguard tick's pull-up (issue #1784): a mapped fleet
+#                     whose session is gone — not one fleet-down took down on
+#                     purpose — is rebuilt when the disk gate passes (the tick asks
+#                     the machine-admission gate before calling), reopening ONLY
+#                     the windows that were still running (@claude_state not
+#                     done/exited). Only a fleet with a conf whose map is fresher
+#                     than FLEET_AUTO_RESTORE_MAX_AGE (default 86400s). No arm
+#                     needed; FLEET_AUTO_RESTORE=0 or --disarm turn it off. One
+#                     pass at a time (a lock), quiet, logged.
 #   --fresh <win> [--session <s>]
 #                     start a FRESH session in a window restore left `awaiting`
 #                     (no transcript) or `failed` (resume refused) — the only path
@@ -52,6 +62,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+# Launched by launchd / the diskguard tick / ssh with a bare PATH (issue #1774):
+# append the dirs tmux and claude install to, so the server this rebuilds and
+# every window it reopens can find both.
+PATH=$(fleet_path_fill); export PATH
 
 # One directory per fleet (issue #181): each fleet's restore map lives at
 # fleets/<sess>/restore.map. The global auto-restore ARM flag + log stay under the
@@ -381,6 +395,15 @@ restore() {
       # belongs to $HOME's project dir, so it resumes there whatever its cwd was.
       [ "${wrepo:-}" = - ] && wpath="$HOME"
       echo "$wname" | grep -qE "$PANEL_RE" && continue
+      # --auto reopens only what was still running (issue #1784): a finished turn
+      # or a session the operator exited stays closed — the ledger keeps both.
+      if [ -n "${RESTORE_UNFINISHED:-}" ]; then
+        case "$wstate" in done|exited)
+          say "    · $wname: $wstate last time — not reopened"
+          log "skip $sess/$wname state=$wstate (auto restores unfinished only)"
+          continue ;;
+        esac
+      fi
       # reconcile path: a window with this name is already live — don't duplicate.
       # In a fleet hosting 2+ repos (issue #789) a name is not an identity — A#12
       # and B#12 are both `issue-12` — so a live window counts only when it also
@@ -447,7 +470,7 @@ restore() {
       # restored worker launches under the active subscription account (multi-account
       # failover) + the fleet's default model — a bare `claude` would strand it on
       # an exhausted account. Transparent `exec claude` when no accounts registered.
-      local launch="'$BIN/fleet-claude.sh'"
+      local launch="'$BIN/fleet-session-wrap.sh'"
       local cmd
       local agent_label=claude resume_flag=--resume home_arg
       if [ "$wagent" = codex ]; then
@@ -724,11 +747,64 @@ fresh_window() {
   echo "fleet-restore: $name → fresh session started"
 }
 
+# ------------------------------------------------------------- auto_restore ---
+# The diskguard tick's pull-up (issue #1784). m4 went dark twice in one night on
+# «last window closed → server gone → nobody brings it back»: --if-down existed,
+# but only an armed launchd watcher ever ran it, and nothing armed it. This runs
+# every tick, unarmed, and is safe to: a fleet taken down on purpose carries
+# fleets/<sess>/restore.down (fleet-down.sh; fleet-up.sh clears it), a busy machine
+# is left alone (the tick's restore_watch asks the spawn admission gate first), and
+# only the sessions that were still running come back.
+auto_restore() {
+  [ "${FLEET_AUTO_RESTORE:-1}" = 0 ] && return 0
+  [ -f "$RDIR/autorestore.off" ] && return 0
+  local down='' _s mf s age now maxage="${FLEET_AUTO_RESTORE_MAX_AGE:-86400}"
+  case "$maxage" in ''|*[!0-9]*) maxage=86400 ;; esac
+  now=$(date +%s)
+  while IFS=$'\t' read -r _s mf; do
+    [ -f "$mf" ] || continue
+    s=$(awk -F'\t' '$1=="FLEET"{print $2; exit}' "$mf")
+    [ -n "$s" ] || continue
+    [ -f "$FLEET_CONF_DIR/fleets/$s/restore.down" ] && continue
+    # A fleet this login still has: a map left by a fleet folded away or retired
+    # (no conf) is history, not a crash to recover from.
+    [ -f "$(fleet_conf_file "$s")" ] || continue
+    # A crash, not an old outage: a live fleet's map is re-snapshotted every
+    # collector cycle, so one older than FLEET_AUTO_RESTORE_MAX_AGE (default a
+    # day) belongs to a fleet that has been down on purpose ever since.
+    age=$(stat -c %Y "$mf" 2>/dev/null || stat -f %m "$mf" 2>/dev/null || echo 0)
+    case "$age" in ''|*[!0-9]*) age=0 ;; esac
+    [ $(( now - age )) -le "$maxage" ] || continue
+    grep -q '^WIN' "$mf" || continue                  # nothing to bring back
+    tmux -L "$(fleet_socket "$s")" has-session -t "$s" 2>/dev/null && continue
+    down="$down $s"
+  done < <(each_restore_map)
+  [ -n "$down" ] || return 0
+  mkdir -p "$RDIR"
+  # The machine-busy hold is the CALLER's (fleet-diskguard.sh restore_watch asks
+  # the spawn admission gate before it runs this): a restore re-houses sessions
+  # that were running, so this script itself never passes that gate (#1090 E).
+  if [ -x "$BIN/fleet-diskguard.sh" ] && ! bash "$BIN/fleet-diskguard.sh" --gate 2>/dev/null; then
+    log "auto: fleet down ($down) — held: disk below floor"; return 0
+  fi
+  local lk="$RDIR/.auto.lock"
+  if ! mkdir "$lk" 2>/dev/null; then
+    local holder; holder=$(cat "$lk/pid" 2>/dev/null)
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then return 0; fi
+    rm -rf "$lk"; mkdir "$lk" 2>/dev/null || return 0
+  fi
+  printf '%s\n' "$$" > "$lk/pid"
+  log "auto: fleet down ($down) → restoring unfinished sessions"
+  RESTORE_UNFINISHED=1 QUIET=1 restore
+  rm -rf "$lk"
+}
+
 # ------------------------------------------------------------------- main -----
 case "${1:-}" in
   --snapshot) snapshot ;;
-  --arm)      mkdir -p "$RDIR"; : > "$ARM"; echo "fleet-restore: auto-restore ARMED ($ARM)";;
-  --disarm)   rm -f "$ARM"; echo "fleet-restore: auto-restore DISARMED";;
+  --arm)      mkdir -p "$RDIR"; : > "$ARM"; rm -f "$RDIR/autorestore.off"; echo "fleet-restore: auto-restore ARMED ($ARM)";;
+  --disarm)   rm -f "$ARM"; mkdir -p "$RDIR"; : > "$RDIR/autorestore.off"; echo "fleet-restore: auto-restore DISARMED";;
+  --auto)     auto_restore ;;
   --dry-run)  restore dry ;;
   --if-down)
     # launchd watcher: restore any MAPPED fleet whose tmux session is absent —
@@ -762,5 +838,5 @@ case "${1:-}" in
     done
     fresh_window "$fr_win" "$fr_sess"; exit $? ;;
   ""|--restore) restore ;;
-  *) echo "usage: fleet-restore.sh [--snapshot|--dry-run|--if-down|--arm|--disarm|--fresh <win> [--session <s>]]" >&2; exit 2;;
+  *) echo "usage: fleet-restore.sh [--snapshot|--dry-run|--if-down|--auto|--arm|--disarm|--fresh <win> [--session <s>]]" >&2; exit 2;;
 esac

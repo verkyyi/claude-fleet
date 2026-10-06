@@ -1679,16 +1679,17 @@ def xterm256(hexcolor):
 # comes from A_DIM, see `dim_attr`).
 PALETTE_BASIC = {"PAL_FG": -1, "PAL_DIM": -1, "PAL_SEL": curses.COLOR_BLUE,
                  "PAL_CYAN": curses.COLOR_CYAN, "PAL_RED": curses.COLOR_RED,
-                 "PAL_GREEN": curses.COLOR_GREEN, "PAL_MAGENTA": curses.COLOR_MAGENTA}
+                 "PAL_GREEN": curses.COLOR_GREEN, "PAL_MAGENTA": curses.COLOR_MAGENTA,
+                 "PAL_YELLOW": curses.COLOR_YELLOW}
 
 # The sidebar's colour pairs (issue #1622): a row's TEXT is one colour (PAL_FG,
 # or PAL_DIM for a dim one) and only its state glyph carries the state's colour
 # — the red 「等你」 dot is no longer drowned in rows painted whole. The current
 # row and the keyboard's row share one quiet PAL_SEL ground, told apart by ▶ / ›.
 # {pair: (fg, bg)}, None = the terminal's default.
-STATE_PAIR = {"working": 1, "needs": 2, "done": 3, "looping": 4}
+STATE_PAIR = {"working": 1, "needs": 2, "done": 3, "looping": 4, "exited": 18}   # 18: past PAIR_DIM_SEL (#1784)
 STATE_COLOR = {"working": "PAL_CYAN", "needs": "PAL_RED", "done": "PAL_GREEN",
-               "looping": "PAL_MAGENTA"}
+               "looping": "PAL_MAGENTA", "exited": "PAL_YELLOW"}
 PAIR_SEL, PAIR_HERE, PAIR_TOAST, PAIR_FG, PAIR_DIM, SEL_GLYPH = 5, 6, 7, 8, 9, 10
 # The @ mark (issue #1780): `@本机` magenta, any other machine's dim — on the
 # raised row's ground too (PAIR_HERE + SEL_GLYPH, PAIR_DIM_SEL).

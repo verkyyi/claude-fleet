@@ -54,7 +54,9 @@ class Cleaner:
 
     def eligible(self, window, snap):
         if (snap["@raw"] != "1" or snap["@issue"] or snap["@pin"] == "1"
-                or snap["@claude_state"] != "done"
+                # An exited session on its recovery page (issue #1784) is as idle
+                # as a finished turn: the same grace, the same resumable record.
+                or snap["@claude_state"] not in ("done", "exited")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")):
             return False
         # A no-repo session is never closed automatically (issue #791), and in a

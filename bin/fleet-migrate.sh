@@ -99,7 +99,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 PANEL_RE='^(plan|dash|backlog|home)$'
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-$FLEET_CONF_DIR/accounts}"
-LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-claude.sh}"   # selftest seam: a fake launcher
+LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-session-wrap.sh}"   # selftest seam: a fake launcher
 EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claude to exit
 CLOSE_WAIT="${FLEET_MIGRATE_CLOSE_WAIT:-15}"               # s to wait for the hook to close the window
 BOOT_WAIT="${FLEET_MIGRATE_BOOT_WAIT:-15}"                 # s to wait for the resumed Claude to appear
@@ -464,6 +464,7 @@ migrate_one_body() {
   # line — and fleet_limit_banner prefers the newest classic line when there is one.
   local wall; wall=$(TM capture-pane -p -S - -t "$wid" 2>/dev/null | fleet_limit_banner)
   # 2. exit: Escape (cancels the auto-continue wait / any menu), then /exit + Enter.
+  TM set-option -w -t "$wid" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
   SK -t "$wid" Escape 2>/dev/null; sleep 0.6
   SK -t "$wid" -l '/exit' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
   local i alive=1

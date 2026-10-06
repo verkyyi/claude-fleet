@@ -17,6 +17,9 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"     # also sources the sibling global fleet.conf
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"   # kept for a lib-less install
+# claude and tmux even from a PATH-less ssh / daemon shell (issue #1774): the dirs
+# they install to are appended to PATH when missing — an existing PATH order wins.
+command -v fleet_path_fill >/dev/null 2>&1 && { PATH=$(fleet_path_fill); export PATH; }
 _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" ] && . "$_fs/fleet.settings"; [ -f "$_fs/fleet.conf" ] && . "$_fs/fleet.conf"   # the login's settings win (#979); the machine's one file (#1623)
 
 # Per-fleet overlay (issue #472). Until now this script read the GLOBAL fleet.conf
@@ -333,7 +336,14 @@ if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && comm
   unset _fc_ca _fc_fp _fc_src _fc_modw _fc_locks _fc_k _fc_v
 fi
 
-if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
-  exec python3 "$BIN/fleet-loop.py" bridge -- claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+# The binary (issue #1774): $FLEET_CLAUDE_BIN, else `claude` when PATH has it (the
+# argv byte for byte as before), else ~/.local/bin → /opt/homebrew/bin →
+# /usr/local/bin. Nowhere → one line naming every place tried, and exit 127.
+_fc_claude=claude
+if command -v fleet_find_tool >/dev/null 2>&1; then
+  _fc_claude=$(fleet_find_tool claude) || exit 127
 fi
-exec claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
+  exec python3 "$BIN/fleet-loop.py" bridge -- "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+fi
+exec "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"

@@ -514,7 +514,7 @@ else
   # worker seed (tiny, and the path is the debug trail for "what did I seed?").
   # `--agent <a>` (issue #547) rides in the command when a caller chose one; the
   # launcher consumes it. Validated to claude|codex above, so bare is safe.
-  launch="'$BIN/fleet-claude.sh'${AGENT:+ --agent $AGENT}"
+  launch="'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}"
   # The window stamps its own repo identity BEFORE the launcher reads its conf
   # (issue #789 — see fleet_win_stamp_cmd). A one-repo repo scratch: unchanged.
   stamp=''; nsid=''

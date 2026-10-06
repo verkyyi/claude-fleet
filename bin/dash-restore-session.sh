@@ -196,7 +196,7 @@ case "$kind" in
     IFS=$'\t' read -r _ wt sid chome mode _ <<<"$verdict"
     [ -d "$wt" ] && [ -d "$chome" ] || { refuse "restore: Codex worktree or account home is missing for $key"; exit 1; }
     case "$mode" in resume|fork) ;; *) refuse 'restore: invalid Codex resume mode'; exit 1 ;; esac
-    printf -v codex_cmd '%q --agent codex --codex-home %q %q %q' "$BIN/fleet-claude.sh" "$chome" "$mode" "$sid"
+    printf -v codex_cmd '%q --agent codex --codex-home %q %q %q' "$BIN/fleet-session-wrap.sh" "$chome" "$mode" "$sid"
     name="$rname"; [ -n "$name" ] || name="resume-${key#\#}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" \
       "$stamp$codex_cmd; exec \$SHELL") || { refuse "restore: Codex new-window failed for $key"; exit 1; }
@@ -219,7 +219,7 @@ case "$kind" in
     # fall back to resume-<key> when the title is missing (issue #319).
     name="$rname"; [ -z "$name" ] && name="resume-${key#\#}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" \
-      "$stamp'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
+      "$stamp'$BIN/fleet-session-wrap.sh' $args; exec \$SHELL") \
       || { refuse "restore: new-window failed for $key"; exit 1; }
     # Mark the window from the ledger for EVERY resume — including #PR-keyed rows,
     # which resolve to their key via the ledger (issue #319) — so the row reads like
@@ -238,7 +238,7 @@ case "$kind" in
     # (issue #319); fall back to resume-pr<PR> when the ledger has no title.
     name="$rname"; [ -z "$name" ] && name="resume-pr${pr}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$MAIN" \
-      "$stamp'$BIN/fleet-claude.sh' $args; exec \$SHELL") \
+      "$stamp'$BIN/fleet-session-wrap.sh' $args; exec \$SHELL") \
       || { refuse "restore: new-window failed for PR $pr"; exit 1; }
     bind_marks "$win" ""
     TM set-window-option -t "$win" @restored 1 2>/dev/null

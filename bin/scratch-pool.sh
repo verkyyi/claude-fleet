@@ -352,7 +352,7 @@ spawn_one() {
   read -r _w _h <<EOF
 $(fleet_dims)
 EOF
-  printf -v launch 'env FLEET_LAUNCH_SESSION=%q %q --agent %q' "$SESS" "$BIN/fleet-claude.sh" "$AGENT"
+  printf -v launch 'env FLEET_LAUNCH_SESSION=%q %q --agent %q' "$SESS" "$BIN/fleet-session-wrap.sh" "$AGENT"
   if [ "$AGENT" = codex ]; then
     printf -v launch '%s --codex-home %q' "$launch" "${acct#codex:}"
   fi

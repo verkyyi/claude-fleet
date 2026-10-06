@@ -156,7 +156,7 @@ case "$cmd" in
     sess=$(resolve_fleet "$fleetw") || die 'no single configured fleet on this login (pass --fleet)'
     SOCK=$(fleet_socket "$sess")
     TM() { tmux -L "$SOCK" "$@"; }
-    LAUNCH="${FLEET_MOVE_LAUNCH:-$BIN/fleet-claude.sh}"
+    LAUNCH="${FLEET_MOVE_LAUNCH:-$BIN/fleet-session-wrap.sh}"
     boot="${FLEET_MOVE_BOOT_WAIT:-15}"
     cmdline="'$LAUNCH' --resume '$sid'; exec \$SHELL"
     nw=$(TM new-window -d -t "$sess:" -n "$name" -c "$wt" -P -F '#{window_id}' "$cmdline" 2>/dev/null)
