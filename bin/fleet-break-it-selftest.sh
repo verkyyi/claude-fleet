@@ -608,6 +608,7 @@ rv_env() {
 drill_static_forward() {
   CAP=5; local t0 n
   rv_shim; t0=$(now)
+  # shellcheck disable=SC2046  # rv_env is KEY=VALUE words on purpose (no spaces in $WORK)
   env $(rv_env) bash "$BIN/fleet-remote-view.sh" run --shell m9 "$RVWID" > "$WORK/rv/out" 2>&1 < /dev/null
   n=$(grep -c ' attach' "$WORK/rv/ssh.log")
   [ "$n" = 1 ] || { WHY="the attach on the warm master was refused and retried ($n attaches): $(tail -n 1 "$WORK/rv/out")"; return 1; }
