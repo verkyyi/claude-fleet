@@ -184,7 +184,10 @@ def check(root):
     blocked = overrides()
     missing = {c: [] for c in CATEGORIES}
     notes = {}
-    client = os.path.abspath(root) != node_root()
+    # the install line's base lives AT node_root() (#1804) — still the client's
+    # wiring until the part that runs sessions (fleet-up.sh) is there
+    client = (os.path.abspath(root) != node_root()
+              or not os.path.isfile(os.path.join(root, "bin", "fleet-up.sh")))
     plugin = any(os.path.isfile(os.path.join(cdir, "plugins", "cache", m, "fleet", v, "commands", "fleet-claim.md"))
                  for m in _ls(os.path.join(cdir, "plugins", "cache"))
                  for v in _ls(os.path.join(cdir, "plugins", "cache", m, "fleet")))

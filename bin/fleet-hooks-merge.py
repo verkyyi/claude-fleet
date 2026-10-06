@@ -117,11 +117,15 @@ _WIRED = re.compile(r"^(\S+)\s+((?:~|\$HOME)/\.claude/fleet/(?:hooks|bin)/\S+)(.
 def via_spelling(root):
     """<root> as the command spells it: $HOME/… under the home, else absolute."""
     root = os.path.abspath(os.path.expanduser(root))
+    home = os.path.abspath(os.path.expanduser("~"))
+    # The install line's base IS ~/.claude/fleet (#1804): spelled with a /./ so
+    # the identity rule above never takes the shim for the wired script
+    if root == os.path.join(home, ".claude", "fleet") and not any(c in root for c in "\"$`\\"):
+        return "$HOME/.claude/fleet/."
     if ".claude/fleet/" in root + "/" or any(c in root for c in "\"$`\\"):
         print("fleet-hooks-merge: --via %s cannot carry the hooks (a .claude/fleet path, "
               "or a quote / $ / backslash in it)" % root, file=sys.stderr)
         sys.exit(2)
-    home = os.path.abspath(os.path.expanduser("~"))
     if root == home or root.startswith(home + os.sep):
         return "$HOME" + root[len(home):]
     return root

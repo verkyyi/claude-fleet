@@ -149,7 +149,7 @@ unset FLEET_CONF_DIR FLEET_HUB_URL FLEET_INSTALL_BIN FLEET_INSTALL_HOME FLEET_IN
 install_in() {
   local h="$WORK/$1"; shift
   mkdir -p "$h"
-  HOME="$h" XDG_CONFIG_HOME="$h/.config" SHELL=/bin/sh FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 \
+  HOME="$h" XDG_CONFIG_HOME="$h/.config" SHELL=/bin/sh FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_ASK=0 \
     FLEET_INSTALL_RC="$h/.profile" FLEET_JOIN_POLL=1 FLEET_JOIN_SUDO="" \
     FLEET_NODE_JOIN_ARGS="--service detached --wait 15" FLEET_INSTALL_NODE_FORCE="${FORCE-1}" \
     FLEET_PROBE_CURL=false FLEET_PROBE_PMSET=false \
@@ -178,7 +178,7 @@ cp "$H1/.ssh/config" "$WORK/config.orig"
 # ── A. one line ─────────────────────────────────────────────────────────────
 install_in h1
 CONF="$H1/.config/claude-fleet"
-ROOT="$H1/.local/share/claude-fleet"
+ROOT="$H1/.claude/fleet"   # the one fleet directory (#1804)
 ENVF="$CONF/node.env"
 [ "$(cat "$WORK/rc")" = 0 ] && ok "A install exit 0" || bad "A install rc=$(cat "$WORK/rc"): $(cat "$WORK/out")"
 [ "$(hubstate starts)" = 1 ] && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if s["codes"]["dc1"]["purpose"]=="node" else 1)' "$WORK/state.json" \

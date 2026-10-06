@@ -350,6 +350,10 @@ if [ "$BUNDLE" = 1 ]; then
       exit 0
     fi
     CLIENT=1
+  elif [ ! -f "$ROOT/bin/fleet-up.sh" ]; then
+    # the install line's base IS ~/.claude/fleet (issue #1804): the part
+    # everyone has, no part that runs sessions — wired the client's way
+    CLIENT=1
   fi
   BFILES=$(python3 "$ROOT/bin/fleet-agent-bundle.py" files --root "$ROOT") \
     || { echo 'fleet-install-apply: --bundle: fleet-agent-bundle.py files failed' >&2; exit 2; }

@@ -43,6 +43,9 @@ bin/fleet-node-probe.sh
 # bin/fleet-host.sh is `fleet host on|off|status` (#1806): 承载 — the person's
 # word for the node steps above (join, compute on/off).
 bin/fleet-host.sh
+# bin/fleet-host-install.sh: `fleet host on` turns the base in ~/.claude/fleet
+# into the full install in place — the install line's 「2 承载」 (#1804).
+bin/fleet-host-install.sh
 # bin/fleet-node-sleepwatch.sh: a personal computer's agent runs it from here
 # to say when it sleeps and wakes (#1721).
 bin/fleet-node-sleepwatch.sh

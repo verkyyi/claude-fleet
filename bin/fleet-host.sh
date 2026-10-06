@@ -10,7 +10,11 @@
 # (docs/TERMS.md「承载 ↔ node」):
 #
 #   fleet host on [--yes] [--force] [--personal|--shared]
-#       Says what will happen, asks (y/N; --yes = already asked), then:
+#       Says what will happen, asks (y/N; --yes = already asked — and shown
+#       the plan: nothing is listed), then: with no part that runs sessions here
+#       (fleet-up.sh — a computer the install line set up with the part
+#       everyone has), fleet-host-install.sh turns ~/.claude/fleet into a
+#       checkout of stable in place and runs a new login's setup (#1804); then
 #       with a hub — `fleet node join` when this login is no node yet or has no
 #       fleet of its own here (deps, the agent, ~/.claude/fleet; a node whose
 #       pass still works is not scanned again), then `fleet node compute on`
@@ -107,19 +111,24 @@ cmd_on() {
   if [ "$(host_now)" = 1 ] && { [ -z "$h" ] || { is_node && [ "$(envval CCQUOTA_FLEET_COMPUTE)" != 0 ]; }; }; then
     echo "承载 已开 — 什么都不用做"; cap_line; return 0
   fi
-  if [ -z "$h" ] && ! runtime; then
-    echo "✗ 这台没有跑会话的那部分 fleet（~/.claude/fleet），也没接入口可以帮它装：按 docs/INSTALL.md 装上后再敲 fleet host on"
-    return 1
-  fi
-  echo "这会让这台电脑跑执行会话："
-  if [ -n "$h" ]; then
-    is_node && runtime || echo "  · 装 tmux、git 和跑会话的 fleet（已有就跳过）"
-    echo "  · 起后台进程：入口程序和 fleet 的后台程序，合盖前自动进维护"
-    echo "  · 入口开始往这台派会话（个人电脑只派你自己开的）"
-  else
-    echo "  · 这台的 fleet 跑会话，不接入口"
+  # --yes = someone already asked, and showed this plan (the install line, #1804)
+  if [ "$YES" != 1 ]; then
+    echo "这会让这台电脑跑执行会话："
+    runtime || echo "  · 装 tmux、git，把 ~/.claude/fleet 换成跟 stable 的完整安装（同一个目录），装后台程序"
+    if [ -n "$h" ]; then
+      echo "  · 起后台进程：入口程序和 fleet 的后台程序，合盖前自动进维护"
+      echo "  · 入口开始往这台派会话（个人电脑只派你自己开的）"
+    else
+      echo "  · 这台的 fleet 跑会话，不接入口"
+    fi
   fi
   ask on || return $?
+  # the part that runs sessions (issue #1804): ~/.claude/fleet in place → a
+  # checkout of stable + a new login's setup — with a hub or without
+  if ! runtime; then
+    "$here/fleet-host-install.sh" || { echo "✗ 跑会话的那部分没装上 — 重跑 fleet host on 即可"; return 1; }
+    here=$(cd "${FLEET_INSTALL_ROOT:-${FLEET_LIVE_DIR:-$HOME/.claude/fleet}}/bin" && pwd -P) || return 1
+  fi
   if [ -n "$h" ]; then
     is_node && was_node=1
     # the pass `off` put aside: back in place, and the join reruns (no scan —

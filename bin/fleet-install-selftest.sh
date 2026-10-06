@@ -14,8 +14,9 @@
 #                 copy holds exactly those files, byte for byte; the manifest
 #                 ships the shell (fleet-shell.sh, conf/tmux-shell.conf)
 #   B. install    `curl … | sh` style (the script on stdin, the hub URL filled
-#                 in): every manifest file lands under
-#                 ~/.local/share/claude-fleet/<path>, identical, bin/ executable;
+#                 in, nobody to ask): every manifest file lands under
+#                 ~/.claude/fleet/<path> (the one directory, #1804), identical,
+#                 bin/ executable;
 #                 ~/.local/bin/fleet is the two-line runner of the real one and
 #                 works; a stale copy (an older install's) is removed; the URL
 #                 lands in fleet.conf (FLEET_HUB_URL, FLEET_HOST=0 — the
@@ -37,11 +38,28 @@
 #                 `apt-get install tmux` once; no root / sudo → the hint only;
 #                 --no-deps → skipped. fleet-node-join.sh's copy of fc_tmux_ok is
 #                 byte-identical to fleet-client-lib.sh's
-#   G. no hub     (issue #1712) the stable copy (placeholder unfilled) with
-#                 --no-hub and FLEET_INSTALL_SRC=file://<repo>: every manifest
-#                 file installed, NO hub address written anywhere, the node step
-#                 runs the checkout's bootstrap, the account hint is printed;
-#                 without --no-hub it still refuses (exit 2), naming --no-hub
+#   G. no hub     (issues #1712, #1804) the stable copy (placeholder unfilled),
+#                 FLEET_INSTALL_SRC=file://<repo>, no terminal: every manifest
+#                 file installed, NO hub address written anywhere, no git, the
+#                 one line on adding 承载; the same with --no-hub (one version's
+#                 alias); FLEET_INSTALL_HUB=1 with no address → exit 2
+#   H. asked      (issue #1804) the two questions on a pseudo-terminal, against
+#                 a fake `stable` (a git repo of this tree with a stub bootstrap
+#                 and a fake fleet-node.sh): 只看只派 + 接 (Enter, Enter) →
+#                 the base, the address, FLEET_HOST=0, no git; again → no file
+#                 changes; the answer changed to 承载 → only the 承载 part:
+#                 ~/.claude/fleet becomes the checkout in place, the bootstrap
+#                 runs once, join + compute on, FLEET_HOST=1; again → nothing;
+#                 承载 + 不接 from the stable copy → the checkout, FLEET_HOST=1,
+#                 no address, the account hint; again → nothing; the same
+#                 answers given ahead (FLEET_INSTALL_HOST=1 FLEET_INSTALL_HUB=0,
+#                 no terminal) → the same computer
+#   I. two trees  (issue #1804) a computer with the client's
+#                 ~/.local/share/claude-fleet beside a ~/.claude/fleet checkout:
+#                 after the line only one remains (the old path a symlink to it),
+#                 a process running from the old path keeps running; an old
+#                 client-update layout (<old> → <old>.versions/<v>) in use is
+#                 kept until nothing runs from it, then goes on the next run
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-selftest.XXXXXX") || exit 2
@@ -136,8 +154,10 @@ grep -q "$HUB" "$WORK/install.sh" || { bad "placeholder __FLEET_HUB_URL__ missin
 
 export HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" SHELL=/bin/zsh
 export FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1   # leg F drives the tmux step
-unset FLEET_CONF_DIR FLEET_HUB_URL FLEET_INSTALL_BIN FLEET_INSTALL_HOME FLEET_INSTALL_RC XDG_DATA_HOME XDG_CACHE_HOME
-ROOT="$HOME/.local/share/claude-fleet"
+export FLEET_INSTALL_ASK=0     # never ask here, even run from a terminal; leg H asks on a pty
+unset FLEET_CONF_DIR FLEET_HUB_URL FLEET_INSTALL_BIN FLEET_INSTALL_HOME FLEET_INSTALL_ROOT FLEET_INSTALL_RC XDG_DATA_HOME XDG_CACHE_HOME \
+      FLEET_INSTALL_HOST FLEET_INSTALL_HUB FLEET_INSTALL_NO_HUB FLEET_INSTALL_NO_NODE FLEET_BOOTSTRAP_GIT_BASE
+ROOT="$HOME/.claude/fleet"
 mkdir -p "$HOME/.config/claude-fleet" "$ROOT/bin" "$HOME/.local/bin"
 echo '{"token": "keep-me"}' > "$HOME/.config/claude-fleet/hub.json"
 # leftovers an earlier version left: a copy the manifest no longer lists, and
@@ -183,7 +203,9 @@ grep -qx "export FLEET_HUB_URL=\"$HUB\"" "$HOME/.config/claude-fleet/fleet.conf"
   && ok "B fleet.conf: the hub URL + FLEET_HOST=0 (#1806)" || bad "B fleet.conf: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"
 [ "$(grep -c 'claude-fleet#1470' "$HOME/.zshrc")" = 1 ] && grep -q "$HOME/.local/bin" "$HOME/.zshrc" && ok "B one PATH line in ~/.zshrc" || bad "B zshrc: $(cat "$HOME/.zshrc" 2>&1)"
 echo "$out" | grep -q '已安装 fleet' && echo "$out" | grep -q '之后每次只敲：fleet' && ok "B says what to type next" || bad "B output: $out"
-echo "$out" | grep -q '能力: 基础 · 承载 未开 — 要在这台跑会话：fleet host on' && ok "B says 能力 in one line (#1806)" || bad "B no 能力 line: $out"
+echo "$out" | grep -q '能力: 基础 · 承载 未开 · 入口 接' && ok "B says 能力 in one line (#1806, #1804)" || bad "B no 能力 line: $out"
+echo "$out" | grep -q '要承载：再跑一次本命令，或 fleet host on' && ok "B no terminal → the base, and the one line on adding 承载" || bad "B no 承载 hint: $out"
+[ ! -e "$ROOT/.git" ] && [ ! -e "$HOME/.local/share/claude-fleet" ] && ok "B one directory, no git" || bad "B layout: $(ls -a "$ROOT" "$HOME/.local/share" 2>&1 | head -5)"
 # The installed dispatcher works from the sandbox through the runner.
 out2=$("$HOME/.local/bin/fleet" --help 2>&1); rc=$?
 [ "$rc" = 0 ] && echo "$out2" | grep -q 'fleet login renew' && ok "B installed fleet --help" || bad "B installed fleet: rc=$rc $out2"
@@ -321,17 +343,19 @@ out=$(env PATH="$F/brew:$FARM" FC_OS=darwin FC_BREW_DIRS= sh -s -- --no-deps < "
 [ "$rc" = 0 ] && [ ! -s "$F/brew.log" ] && echo "$out" | grep -q '^tmux: skipped (--no-deps)' \
   && ok "F sh -s -- --no-deps → skipped" || bad "F --no-deps: rc=$rc out=$out"
 
-# ── G — no hub (#1712): the same script from GitHub's stable, --no-hub ───────
+# ── G — no hub (#1712, #1804): the same script from GitHub's stable ──────────
 # The source is this repo over file:// (FLEET_INSTALL_SRC — the raw.githubusercontent
-# layout: the manifest at its repo path, each file at its own); the node is a
-# checkout already there with a stub bootstrap that says it ran.
-GH="$WORK/nohub"; mkdir -p "$GH/home/.claude/fleet/.git" "$GH/home/.claude/fleet/bin"
-printf '#!/bin/sh\necho bootstrap-ran >> "%s/boot.log"\n' "$GH" > "$GH/home/.claude/fleet/bin/fleet-login-bootstrap.sh"
-chmod +x "$GH/home/.claude/fleet/bin/fleet-login-bootstrap.sh"
-out=$(env -u FLEET_HUB_URL HOME="$GH/home" XDG_CONFIG_HOME="$GH/home/.config" PATH="/usr/bin:/bin:/usr/sbin:/sbin:$(dirname "$(command -v git)")" \
-      FLEET_INSTALL_SRC="file://$REPO" FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 sh -s -- --no-hub < "$BIN/fleet-install.sh" 2>&1); rc=$?
-[ "$rc" = 0 ] && ok "G --no-hub from the stable copy (placeholder unfilled) → exit 0" || bad "G rc=$rc: $out"
-GR="$GH/home/.local/share/claude-fleet"; gmiss=''
+# layout: the manifest at its repo path, each file at its own). Nobody to ask.
+SYSPATH="/usr/bin:/bin:/usr/sbin:/sbin:$(dirname "$(command -v git)")"
+ginstall() {  # <home> <args…> — the stable copy, no terminal; output in $out, rc in $rc
+  local h="$1"; shift
+  out=$(env -u FLEET_HUB_URL HOME="$h" XDG_CONFIG_HOME="$h/.config" PATH="$SYSPATH" \
+        FLEET_INSTALL_SRC="file://$REPO" FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 sh -s -- "$@" < "$BIN/fleet-install.sh" 2>&1); rc=$?
+}
+GH="$WORK/nohub/home"; mkdir -p "$GH"
+ginstall "$GH"
+[ "$rc" = 0 ] && ok "G the stable copy (placeholder unfilled), no terminal → exit 0" || bad "G rc=$rc: $out"
+GR="$GH/.claude/fleet"; gmiss=''
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   cmp -s "$GR/$f" "$REPO/$f" || gmiss="$gmiss $f"
@@ -339,16 +363,186 @@ done <<EOT
 $FILES
 EOT
 [ -z "$gmiss" ] && ok "G every manifest file installed from the source, identical" || bad "G files:$gmiss"
-gconf="$GH/home/.config/claude-fleet"
-if grep -rqs 'FLEET_HUB_URL\|"url"' "$gconf" "$GH/home/.local/bin/fleet"; then bad "G a hub address was written: $(grep -rs 'FLEET_HUB_URL\|url' "$gconf")"
+gconf="$GH/.config/claude-fleet"
+if grep -rqs 'FLEET_HUB_URL\|"url"' "$gconf"; then bad "G a hub address was written: $(grep -rs 'FLEET_HUB_URL\|url' "$gconf")"
 else ok "G no hub address anywhere (no fleet.conf FLEET_HUB_URL, no hub.json url)"; fi
-grep -q "file://$REPO" "$GH/home/.local/bin/fleet" && ok "G the runner names where it came from" || bad "G runner: $(cat "$GH/home/.local/bin/fleet")"
-[ "$(cat "$GH/boot.log" 2>/dev/null)" = bootstrap-ran ] && echo "$out" | grep -q '已经在了' \
-  && ok "G the node step: checkout left alone, its bootstrap run" || bad "G node step: $(cat "$GH/boot.log" 2>&1) $out"
-echo "$out" | grep -q '没有入口' && echo "$out" | grep -q 'claude setup-token' \
-  && ok "G says: no hub, and how to add a local account" || bad "G output: $out"
-out=$(env -u FLEET_HUB_URL HOME="$GH/home" sh < "$BIN/fleet-install.sh" 2>&1); rc=$?
-[ "$rc" = 2 ] && echo "$out" | grep -q -- '--no-hub' && ok "G no hub and no --no-hub → exit 2, naming --no-hub" || bad "G bare: rc=$rc $out"
+[ ! -e "$GR/.git" ] && [ ! -e "$GR/.client-version" ] && ok "G the base: no git, no client version (no hub to ask)" || bad "G layout: $(ls -a "$GR")"
+echo "$out" | grep -q '能力: 基础 · 承载 未开 · 入口 不接' && echo "$out" | grep -q '要承载：再跑一次本命令，或 fleet host on' \
+  && ok "G says: 能力 基础 · 入口 不接, and how to add 承载" || bad "G output: $out"
+GH2="$WORK/nohub2/home"; mkdir -p "$GH2"
+ginstall "$GH2" --no-hub
+[ "$rc" = 0 ] && [ -f "$GH2/.claude/fleet/bin/fleet" ] && ! grep -rqs FLEET_HUB_URL "$GH2/.config" \
+  && ok "G --no-hub (one version's alias of 「不接」) → the same install" || bad "G --no-hub rc=$rc: $out"
+GH3="$WORK/nohub3/home"; mkdir -p "$GH3"
+out=$(env -u FLEET_HUB_URL HOME="$GH3" XDG_CONFIG_HOME="$GH3/.config" PATH="$SYSPATH" FLEET_INSTALL_HUB=1 FLEET_INSTALL_NO_RUN=1 sh < "$BIN/fleet-install.sh" 2>&1); rc=$?
+[ "$rc" = 2 ] && echo "$out" | grep -q 'FLEET_HUB_URL' && [ ! -e "$GH3/.claude/fleet" ] \
+  && ok "G 接 asked ahead with no address → exit 2, naming FLEET_HUB_URL, nothing installed" || bad "G hub=1 no url: rc=$rc $out"
+
+# ── H — the two questions, on a pseudo-terminal ─────────────────────────────
+# A fake `stable`: this tree's manifest files + bin/fleet-up.sh (the part that
+# runs sessions), a bootstrap stub with its own done-marker (as the real one)
+# and a fake fleet-node.sh (join → node.env; compute on/off) — so `fleet host on`
+# runs for real, against nothing outside the sandbox.
+FS="$WORK/fakesrc"; mkdir -p "$FS"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue; mkdir -p "$FS/$(dirname "$f")"; cp -p "$REPO/$f" "$FS/$f"
+done <<EOT
+$FILES
+EOT
+printf '#!/bin/sh\n# the part that runs sessions (fake)\n' > "$FS/bin/fleet-up.sh"
+cat > "$FS/bin/fleet-login-bootstrap.sh" <<'EOF'
+#!/bin/sh
+# fake bootstrap: once, then its marker says so (as the real one's global/bootstrapped)
+g="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global"; mkdir -p "$g"
+if [ -f "$g/bootstrapped" ]; then echo "fleet-login-bootstrap: already bootstrapped — nothing to do"; exit 0; fi
+echo ran >> "$HOME/boot.log"; echo stub > "$g/bootstrapped"
+echo "fleet-login-bootstrap: apply: ok — 后台程序 6/6 (fake)"
+EOF
+cat > "$FS/bin/fleet-node.sh" <<'EOF'
+#!/bin/bash
+# fake `fleet node` — records each call; join = node.env
+CONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; ENVF="$CONF/node.env"
+echo "$*" >> "$HOME/node-calls"
+case "$1 ${2:-}" in
+  "join "*) printf 'CCQUOTA_HUB_URL=%s\nCCQUOTA_TOKEN=pass\nCCQUOTA_FLEET_COMPUTE=0\n' "$FAKE_HUB" > "$ENVF"; chmod 600 "$ENVF"; echo "✓ 已上线（fake）" ;;
+  "compute on") sed -i.x 's/^CCQUOTA_FLEET_COMPUTE=.*/CCQUOTA_FLEET_COMPUTE=1/' "$ENVF"; rm -f "$ENVF.x"; echo "✓ 已打开（fake）" ;;
+  "compute status") echo "已打开" ;;
+esac
+EOF
+chmod +x "$FS/bin/fleet-up.sh" "$FS/bin/fleet-login-bootstrap.sh" "$FS/bin/fleet-node.sh"
+GB="$WORK/gitbase/verkyyi"; mkdir -p "$GB"
+( cd "$FS" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm stable && git tag stable \
+  && git clone -q --bare "$FS" "$GB/claude-fleet.git" ) || bad "H the fake stable repo"
+# a tmux the host step finds (≥ 3.2), and nothing else faked
+FT="$WORK/faketmux"; mkdir -p "$FT"; printf '#!/bin/sh\necho "tmux 3.4"\n' > "$FT/tmux"; chmod +x "$FT/tmux"
+cat > "$WORK/ptydrive.py" <<'PYEOF'
+# ptydrive.py <answers> <script> [args…] — `cat <script> | sh -s -- args` with a
+# pseudo-terminal as its /dev/tty; each prompt (ends «› ») gets the next answer
+# ('' = Enter). Answers are comma-separated, '-' = none. A prompt with no answer
+# left fails the run. Prints the whole transcript; exits with the child's code.
+import os, pty, select, sys, time
+ans = [] if sys.argv[1] == "-" else sys.argv[1].split(",")
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("sh", ["sh", "-c", 'cat "$0" | sh -s -- "$@"'] + sys.argv[2:])
+buf, sent, end = b"", 0, time.time() + 180
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try:
+            d = os.read(fd, 4096)
+        except OSError:
+            break
+        if not d:
+            break
+        buf += d
+        n = buf.count("› ".encode())
+        while sent < n:
+            if sent >= len(ans):
+                sys.stdout.write(buf.decode("utf-8", "replace") + "\n[pty: a prompt with no answer left]\n")
+                os.kill(pid, 9); os.waitpid(pid, 0); sys.exit(99)
+            os.write(fd, (ans[sent] + "\r").encode()); sent += 1
+_, st = os.waitpid(pid, 0)
+sys.stdout.write(buf.decode("utf-8", "replace").replace("\r\n", "\n"))
+if sent < len(ans):
+    sys.stdout.write("\n[pty: %d answer(s) never asked for]\n" % (len(ans) - sent)); sys.exit(98)
+sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 97)
+PYEOF
+# hinstall <home> <answers> <script> [env…] — one install on the pty; $out, $rc
+hinstall() {
+  local h="$1" a="$2" sc="$3"; shift 3
+  out=$(env -i HOME="$h" PATH="$FT:$SYSPATH" SHELL=/bin/zsh TMPDIR="$WORK" FAKE_HUB="$HUB" \
+        FLEET_INSTALL_SRC="file://$REPO" FLEET_BOOTSTRAP_GIT_BASE="file://$WORK/gitbase" \
+        FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_NO_AGENTS=1 "$@" \
+        python3 -I "$WORK/ptydrive.py" "$a" "$sc" 2>&1); rc=$?
+}
+# hsnap <home> — every file but the git internals, with its checksum
+hsnap() { (cd "$1" && find . -path ./.claude/fleet/.git -prune -o -type f -print | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$(cksum < "$f")" "$f"; done); }
+hval() { sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$2=//p" "$1/.config/claude-fleet/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' "; }
+
+# H1 只看只派 + 接: Enter, Enter (the hub's copy: 接 is the default)
+H1="$WORK/h1/home"; mkdir -p "$H1"
+hinstall "$H1" "," "$WORK/install.sh" FLEET_INSTALL_NO_NODE=1
+[ "$rc" = 0 ] && ok "H1 view + hub on a pty → exit 0" || bad "H1 rc=$rc: $out"
+echo "$out" | grep -q '这台电脑要做什么？' && echo "$out" | grep -q '1 只看、只派 *推荐' && echo "$out" | grep -q '接入口吗？' \
+  && echo "$out" | grep -q "命令是从入口复制来的" && ok "H1 both questions asked, 只看只派 recommended, 接 because the line came from the hub" || bad "H1 prompts: $out"
+[ -f "$H1/.claude/fleet/bin/fleet" ] && [ ! -e "$H1/.claude/fleet/.git" ] && [ "$(hval "$H1" FLEET_HUB_URL)" = "$HUB" ] && [ "$(hval "$H1" FLEET_HOST)" = 0 ] \
+  && ok "H1 the base in ~/.claude/fleet, the address written, FLEET_HOST=0" || bad "H1 state: host=$(hval "$H1" FLEET_HOST) hub=$(hval "$H1" FLEET_HUB_URL) $(ls -a "$H1/.claude/fleet" | head -3)"
+before=$(hsnap "$H1"); hinstall "$H1" "," "$WORK/install.sh" FLEET_INSTALL_NO_NODE=1
+[ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H1")" ] && ok "H1 again (Enter, Enter) → not one file changes" \
+  || bad "H1 again rc=$rc: $(diff <(printf '%s\n' "$before") <(hsnap "$H1") | head -5) $out"
+# H2 the answer changed: 承载 (2, confirm, Enter = 接)
+hinstall "$H1" "2,," "$WORK/install.sh"
+[ "$rc" = 0 ] && ok "H2 view → 承载 on a pty → exit 0" || bad "H2 rc=$rc: $out"
+echo "$out" | grep -q '承载要多装这些' && echo "$out" | grep -q 'git、tmux' && echo "$out" | grep -q '后台程序' \
+  && ok "H2 承载 lists what it adds (git, tmux, 后台程序) and asks once more" || bad "H2 plan: $out"
+[ -d "$H1/.claude/fleet/.git" ] && [ -f "$H1/.claude/fleet/bin/fleet-up.sh" ] && [ ! -e "$H1/.local/share/claude-fleet" ] \
+  && [ -z "$(ls -d "$H1/.claude/fleet".* 2>/dev/null)" ] \
+  && ok "H2 ~/.claude/fleet became the stable checkout in place — still one directory" || bad "H2 layout: $(ls -a "$H1/.claude" "$H1/.local/share" 2>&1)"
+[ "$(cat "$H1/boot.log" 2>/dev/null)" = ran ] && [ "$(tr '\n' '|' < "$H1/node-calls" 2>/dev/null)" = "join|compute on|" ] \
+  && [ "$(hval "$H1" FLEET_HOST)" = 1 ] && [ "$(hval "$H1" FLEET_HUB_URL)" = "$HUB" ] \
+  && ok "H2 only the 承载 part: the setup once, join + compute on, FLEET_HOST=1, the address kept" \
+  || bad "H2 boot=$(cat "$H1/boot.log" 2>&1) calls=$(cat "$H1/node-calls" 2>&1) host=$(hval "$H1" FLEET_HOST): $out"
+echo "$out" | grep -q '去掉了' && bad "H2 something was removed: $out" || ok "H2 nothing removed"
+echo "$out" | grep -q '能力: 基础 · 承载 已开 · 入口 接' && ok "H2 says 能力 基础 · 承载 已开 · 入口 接" || bad "H2 能力: $out"
+before=$(hsnap "$H1"); hinstall "$H1" "," "$WORK/install.sh"
+[ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H1")" ] && echo "$out" | grep -q '承载: 已开，不重装' \
+  && ok "H2 again (Enter = what it answered) → nothing changes, no setup, no join" \
+  || bad "H2 again rc=$rc: $(diff <(printf '%s\n' "$before") <(hsnap "$H1") | head -5) $out"
+# H3 承载 + 不接, from the stable copy (no address: 不接 is the default)
+H3="$WORK/h3/home"; mkdir -p "$H3"
+hinstall "$H3" "2,2," "$BIN/fleet-install.sh"
+[ "$rc" = 0 ] && [ -d "$H3/.claude/fleet/.git" ] && [ "$(hval "$H3" FLEET_HOST)" = 1 ] && [ -z "$(hval "$H3" FLEET_HUB_URL)" ] \
+  && [ "$(cat "$H3/boot.log" 2>/dev/null)" = ran ] && [ ! -e "$H3/node-calls" ] \
+  && ok "H3 承载 + 不接 → the checkout, the setup once, FLEET_HOST=1, no address, no hub call" \
+  || bad "H3 rc=$rc host=$(hval "$H3" FLEET_HOST) hub=$(hval "$H3" FLEET_HUB_URL): $out"
+echo "$out" | grep -q '2 不接（单机） *推荐' && echo "$out" | grep -q 'claude setup-token' && echo "$out" | grep -q '能力: 基础 · 承载 已开 · 入口 不接' \
+  && ok "H3 不接 recommended with no address; the account hint; 能力 says so" || bad "H3 output: $out"
+before=$(hsnap "$H3"); hinstall "$H3" "," "$BIN/fleet-install.sh"
+[ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H3")" ] && ok "H3 again → nothing changes" \
+  || bad "H3 again rc=$rc: $(diff <(printf '%s\n' "$before") <(hsnap "$H3") | head -5) $out"
+# H4 the same answers given ahead, no terminal → the same computer
+H4="$WORK/h4/home"; mkdir -p "$H4"
+out=$(env -i HOME="$H4" PATH="$FT:$SYSPATH" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_INSTALL_SRC="file://$REPO" \
+      FLEET_BOOTSTRAP_GIT_BASE="file://$WORK/gitbase" FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_NO_AGENTS=1 \
+      FLEET_INSTALL_HOST=1 FLEET_INSTALL_HUB=0 sh < "$BIN/fleet-install.sh" 2>&1); rc=$?
+layout() { (cd "$1" && find . -path ./.claude/fleet/.git -prune -o -type f -print | grep -v -e '/host-install.log$' | LC_ALL=C sort); }
+[ "$rc" = 0 ] && [ "$(layout "$H4")" = "$(layout "$H3")" ] && [ "$(hval "$H4" FLEET_HOST)" = 1 ] && [ -z "$(hval "$H4" FLEET_HUB_URL)" ] \
+  && ok "H4 FLEET_INSTALL_HOST=1 FLEET_INSTALL_HUB=0 → the computer H3's answers made" \
+  || bad "H4 rc=$rc: $(diff <(layout "$H3") <(layout "$H4") | head -5) $out"
+
+# ── I — two trees on one computer → one ─────────────────────────────────────
+I1="$WORK/i1/home"; mkdir -p "$I1/.claude"
+git clone -q "$WORK/gitbase/verkyyi/claude-fleet.git" "$I1/.claude/fleet" 2>/dev/null || bad "I the checkout"
+OLDT="$I1/.local/share/claude-fleet"
+env -i HOME="$I1" PATH="$SYSPATH" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_INSTALL_HOME="$OLDT" FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_ASK=0 \
+  FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_NO_AGENTS=1 FLEET_INSTALL_NO_NODE=1 sh < "$WORK/install.sh" >/dev/null 2>&1 || bad "I the old client tree"
+# a client running from the old tree: a script there that keeps using a sibling by path
+printf '#!/bin/sh\nwhile :; do [ -f "%s/bin/fleet" ] || exit 1; sleep 0.1; done\n' "$OLDT" > "$OLDT/bin/zz-running.sh"
+sh "$OLDT/bin/zz-running.sh" & RUNPID=$!
+sleep 0.3
+out=$(env -i HOME="$I1" PATH="$SYSPATH" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 \
+      FLEET_INSTALL_NO_AGENTS=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_ASK=0 sh < "$WORK/install.sh" 2>&1); rc=$?
+sleep 0.5
+[ "$rc" = 0 ] && [ -L "$OLDT" ] && [ "$OLDT" -ef "$I1/.claude/fleet" ] && [ -z "$(ls -d "$OLDT".* 2>/dev/null)" ] \
+  && ok "I one tree left: the old path is a symlink to ~/.claude/fleet, its files gone" || bad "I rc=$rc: $(ls -la "$I1/.local/share" 2>&1) $out"
+kill -0 "$RUNPID" 2>/dev/null && ok "I a process running from the old path keeps running" || bad "I the running client died"
+kill "$RUNPID" 2>/dev/null; wait "$RUNPID" 2>/dev/null
+[ -d "$I1/.claude/fleet/.git" ] && echo "$out" | grep -q '已是完整安装' && ! echo "$out" | grep -q '去掉了' \
+  && ok "I the checkout is left as it is (nothing downloaded over it, nothing removed)" || bad "I checkout: $out"
+grep -q "exec '$I1/.claude/fleet/bin/fleet'" "$I1/.local/bin/fleet" && ok "I ~/.local/bin/fleet runs the one directory's" || bad "I runner: $(cat "$I1/.local/bin/fleet")"
+# the client-update layout: <old> → <old>.versions/<v>, still in use
+rm -f "$OLDT"; mkdir -p "$OLDT.versions/v1/bin"; cp "$REPO/bin/fleet" "$OLDT.versions/v1/bin/"; ln -s "$OLDT.versions/v1" "$OLDT"
+sh -c 'sleep 30; :' "$OLDT.versions/v1/bin/x" & RUNPID=$!   # `; :` — no exec: the path stays in its argv
+sleep 0.3
+out=$(env -i HOME="$I1" PATH="$SYSPATH" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 \
+      FLEET_INSTALL_NO_AGENTS=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_ASK=0 sh < "$WORK/install.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$OLDT" -ef "$I1/.claude/fleet" ] && [ -d "$OLDT.versions/v1" ] && echo "$out" | grep -q '还有程序在用' \
+  && ok "I old versions still in use → the link moves, the versions are kept and said" || bad "I versions in use rc=$rc: $out"
+kill "$RUNPID" 2>/dev/null; wait "$RUNPID" 2>/dev/null
+out=$(env -i HOME="$I1" PATH="$SYSPATH" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 \
+      FLEET_INSTALL_NO_AGENTS=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_ASK=0 sh < "$WORK/install.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ ! -e "$OLDT.versions" ] && ok "I …and go on the next run once nothing runs from them" || bad "I versions left: rc=$rc $(ls "$I1/.local/share") $out"
 
 [ "$fail" = 0 ] && echo "PASS fleet-install-selftest" || echo "FAIL fleet-install-selftest"
 exit "$fail"

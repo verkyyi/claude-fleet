@@ -584,8 +584,22 @@ fi
 # ── fleet ───────────────────────────────────────────────────────────────────
 FLEET_RC=0
 if [ "$FLEET" = 1 ]; then
+  HOSTED=0
   if [ -d "$ROOT/.git" ]; then
     say "fleet: $ROOT already there"
+  elif [ -e "$ROOT" ] && [ -x "$ROOT/bin/fleet-host-install.sh" ]; then
+    # the install line's base (issue #1804): the same directory, no git — made
+    # a checkout of stable in place, and its setup run, by the one script that
+    # does it for `fleet host on`
+    say "fleet: $ROOT is the base install — fleet-host-install.sh"
+    if [ "$UI" = 1 ]; then
+      FLEET_INSTALL_ROOT="$ROOT" "$ROOT/bin/fleet-host-install.sh" >>"${LOG:-/dev/null}" 2>&1
+      FLEET_RC=$?
+    else
+      FLEET_INSTALL_ROOT="$ROOT" "$ROOT/bin/fleet-host-install.sh" 2>&1 | sed 's/^/  │ /'
+      FLEET_RC=${PIPESTATUS[0]}
+    fi
+    HOSTED=1
   else
     mkdir -p "$(dirname "$ROOT")"
     if [ "$SRC_SET" = 1 ] && [ -z "$SRC_REF" ]; then
@@ -594,7 +608,13 @@ if [ "$FLEET" = 1 ]; then
       git clone -q -b "${SRC_REF:-stable}" "$SRC_REPO" "$ROOT" >"$WORK/clone.log" 2>&1
     fi || { say "fleet: FAIL — git clone $SRC_REPO: $(tail -n 2 "$WORK/clone.log" | tr '\n' ' ')"; FLEET_RC=1; }
   fi
-  if [ "$FLEET_RC" = 0 ]; then
+  if [ "$HOSTED" = 1 ]; then
+    if [ "$FLEET_RC" = 0 ]; then say "fleet: ok"; ui "✓ fleet 已装好：$ROOT"
+    else
+      say "fleet: WARN — fleet-host-install.sh exited $FLEET_RC; this machine is on the hub already. Rerun: fleet host on"
+      ui "! fleet 没装完（退出码 $FLEET_RC${LOG:+，见 $LOG}）：这台已在线；重跑同一条命令即可"
+    fi
+  elif [ "$FLEET_RC" = 0 ]; then
     say "fleet: running $ROOT/bin/fleet-login-bootstrap.sh"
     if [ "$UI" = 1 ]; then
       "$ROOT/bin/fleet-login-bootstrap.sh" >>"${LOG:-/dev/null}" 2>&1

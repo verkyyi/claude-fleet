@@ -603,10 +603,13 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    **The `fleet` client is the only way in** (issue #1628). From a computer of
    your own run `fleet` (`curl -fsSL <hub>/install | sh` installs it, tmux
    included): the hub's list, its bar and the machine's sessions in one tmux of
-   your own. **No hub** (one computer, only the tools — issue #1712): the same
-   installer from GitHub's `stable` with `--no-hub` installs the client AND this
-   machine's fleet, writes no hub address, and `fleet` then opens the same client
-   reading this machine — see [LOCAL-AND-HUB.md](LOCAL-AND-HUB.md#只要工具不要入口). There is no fallback to ssh-ing into a machine and using its own
+   your own. That line is THE install line (issue #1804): it asks whether this
+   computer only looks and dispatches (the default) or also hosts sessions
+   (承载), and whether it joins the hub; everything lands in `~/.claude/fleet`.
+   **No hub** (one computer, only the tools — issue #1712): the same file from
+   GitHub's `stable`, answer 「2 不接」 — no hub address is written, and `fleet`
+   then opens the same client reading this machine — see
+   [LOCAL-AND-HUB.md](LOCAL-AND-HUB.md#一条安装命令issue-1804). There is no fallback to ssh-ing into a machine and using its own
    list: with no tmux (or one older than 3.2) `fleet` says how to install it and
    exits non-zero; a client that cannot start says why and exits non-zero. An
    iPad / iPhone ssh's into any machine with the fleet installed and runs the
