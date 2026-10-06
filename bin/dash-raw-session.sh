@@ -160,7 +160,7 @@ while [ "$#" -gt 0 ]; do
     --origin-wid)  ORIGIN_WID="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --origin-wid=*) ORIGIN_WID="${1#--origin-wid=}"; shift ;;
     # --print (issue #1541): a headless caller's receipt — once the window
-    # exists, ONE stdout line `<window_id>\t<name>\t<worktree>`. Foreground pass
+    # exists, ONE stdout line `<window_id>\t<name>\t<worktree>\t<fleet_id>`. Foreground pass
     # only (the --bg pass's stdout is silenced, #446). The hub's node reads it.
     --print)       PRINT_WIN=1; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
@@ -550,7 +550,7 @@ else
 fi
 # The session's lifelong identity (issue #1646), warm or cold: a pool window was no
 # session until this claim. Minted once; restore / migrate / move carry it.
-fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
+fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
 # Every repo scratch carries its repo (issue #789), warm or cold.
 [ -n "$REPO_ARG" ] && TM set-window-option -t "$win" @repo "$REPO_ARG" 2>/dev/null
@@ -598,9 +598,12 @@ fi
 # run-shell -b because it is slow either way.
 TM run-shell -b "bash '$BIN/scratch-pool.sh' ensure '$SESS' --delay >/dev/null 2>&1" 2>/dev/null
 
-# The headless caller's receipt (issue #1541, --print): the window, its name and
-# its worktree — what the hub's node reads back as the start's window.
-[ "$PRINT_WIN" = 1 ] && printf '%s\t%s\t%s\n' "$win" "$name" "$wt"
+# The headless caller's receipt (issue #1541, --print): the window, its name, its
+# worktree — what the hub's node reads back as the start's window — and its
+# @fleet_id (issue #1873), the address `fleet-worker-stop.sh <sess> fid:<id>` stops
+# it by later (a no-repo session has no key). Readers split on the tab and take
+# the fields they know, so the 4th column is additive.
+[ "$PRINT_WIN" = 1 ] && printf '%s\t%s\t%s\t%s\n' "$win" "$name" "$wt" "$fid"
 
 if [ -z "$TARGET_SESS" ]; then
   # A spawn that worked draws nothing — the new window and its list row are the

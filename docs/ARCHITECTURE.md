@@ -647,6 +647,10 @@ A window names its repo with `@repo=<owner/name>`; `@norepo 1` marks a session
 that deliberately belongs to none. Resolution goes through `bin/fleet-lib.sh`
 only — `fleet_repos`, `fleet_window_repo`, `fleet_load_repo_conf` — never an
 ad-hoc `git remote` parse.
+A no-repo session has no key, so it is stopped by its identity:
+`fleet-worker-stop.sh <sess> fid:<@fleet_id>` (#1873) — the fid is the 4th column of
+`dash-raw-session.sh --print` — and dash ⌃x on a done/exited no-repo row runs the
+same graceful stop (a busy one is `skip:live`).
 `fleet_window_repo` reads `@repo`, else derives it once from `@worktree`'s git
 origin and stamps it, else takes the fleet's only repo, else answers **nothing**
 — and the consumer skips the window rather than guess.
