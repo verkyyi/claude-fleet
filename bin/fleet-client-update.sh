@@ -529,7 +529,7 @@ apply() {
   printf '%s\n' "$old" > "$VERS/.prev"
   rm -f "$VERS/.next"
   prune
-  set_state done "$from" "$to"
+  set_state "done" "$from" "$to"
   ulog "applied $to"
   return 4
 }
