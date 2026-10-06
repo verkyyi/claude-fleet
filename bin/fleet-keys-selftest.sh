@@ -425,12 +425,13 @@ if command -v tmux >/dev/null 2>&1; then
   ktm stock list-keys > "$KW/stock.keys"; ktm node list-keys > "$KW/node.keys"
   # Exactly tmux's stock keys — except the human layer (conf/tmux-node-human.conf,
   # issue #1840), which may only TAKE AWAY the stock deletes and swap the pane's
-  # right-click menus for a read-only one: no other key differs, and no key on the
-  # node deletes or respawns anything.
+  # right-click menus for a read-only one, and drop whatever else this tmux ships
+  # that deletes (its sweep): no other key differs, and no key on the node deletes
+  # or respawns anything.
   HUMAN_KEYS=' prefix:x prefix:& prefix:$ prefix:< prefix:> root:MouseDown3Pane root:M-MouseDown3Pane root:MouseDown3Status root:MouseDown3StatusLeft root:MouseDown3StatusRight root:M-MouseDown3Status root:M-MouseDown3StatusLeft root:M-MouseDown3StatusRight '
   # tmux pads the key column to the longest key, so a removed key re-pads every
   # line: compare whitespace-normalised.
-  hk() { awk -v hk="$HUMAN_KEYS" '{ k = $3 ":" $4; gsub(/\\/, "", k); if (index(hk, " " k " ") == 0) { $1 = $1; print } }' "$1"; }
+  hk() { awk -v hk="$HUMAN_KEYS" '/kill-(pane|window|session|server)|respawn-(pane|window)|rename-session/ { next } { k = $3 ":" $4; gsub(/\\/, "", k); if (index(hk, " " k " ") == 0) { $1 = $1; print } }' "$1"; }
   ndiff=$(diff <(hk "$KW/stock.keys") <(hk "$KW/node.keys"))
   [ -z "$ndiff" ] || { ktm stock kill-server; ktm node kill-server; ktm shell kill-server; fail "8: the node binds keys of its own (beyond the human layer it must list exactly tmux's stock keys):
 $ndiff"; }

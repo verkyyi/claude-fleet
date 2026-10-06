@@ -10,6 +10,9 @@
 #                      typed into the pane)
 #   issue <window-id>  the window's bound issue, opened on the person's own computer
 #                      (fleet-open.sh)
+#   sweep              (run once at conf load) unbind every root / prefix key whose
+#                      command deletes, respawns or renames the session — whatever
+#                      this tmux version ships, whatever a personal conf bound
 #
 # Nothing here closes, restarts or renames anything. Every outcome is one
 # display-message line; exit 0 unless the arguments are wrong.
@@ -17,6 +20,19 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 act="${1:-}"; t="${2:-}"
 say() { tmux display-message -d 4000 "$1" 2>/dev/null; return 0; }
+if [ "$act" = sweep ]; then
+  for tbl in root prefix; do
+    tmux list-keys -T "$tbl" 2>/dev/null \
+      | grep -E 'kill-(pane|window|session|server)|respawn-(pane|window)|rename-session' \
+      | awk '{ print $4 }' | while IFS= read -r k; do
+          # list-keys escapes a special key (\$, \#); a bare `;` on tmux's own
+          # command line is a separator, so that one keeps its backslash.
+          case "$k" in '\;') ;; *) k=${k#\\} ;; esac
+          tmux unbind-key -T "$tbl" -- "$k" 2>/dev/null
+        done
+  done
+  exit 0
+fi
 [ -n "$t" ] || { echo "usage: fleet-human-menu.sh copy <pane> | send <window> | issue <window>" >&2; exit 2; }
 case "$act" in
   copy)
