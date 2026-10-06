@@ -170,7 +170,7 @@ eq 'type FLEET_PROTECTED_RE'   "$(fcfg_type FLEET_PROTECTED_RE)"   str
 
 # --- DEFAULTS ---------------------------------------------------------------
 eq 'default FLEET_CTX_WINDOW'          "$(fcfg_default FLEET_CTX_WINDOW)"          200000
-eq 'default FLEET_GLOBAL_MAX_SESSIONS' "$(fcfg_default FLEET_GLOBAL_MAX_SESSIONS)" 8
+eq 'default FLEET_GLOBAL_MAX_SESSIONS' "$(fcfg_default FLEET_GLOBAL_MAX_SESSIONS)" 0   # off since #1831
 eq 'default FLEET_CLEANUP'            "$(fcfg_default FLEET_CLEANUP)"            1
 eq 'default FLEET_MODEL'               "$(fcfg_default FLEET_MODEL)"               opus
 eq 'default FLEET_DISK_FLOOR_GB'       "$(fcfg_default FLEET_DISK_FLOOR_GB)"       12
