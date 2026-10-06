@@ -15,6 +15,7 @@
 # Node half — an isolated tmux server (-S socket under $WORK, killed at exit), a
 # sandbox install, a fake agent and a fake claude:
 #   session-exit / session-ctrl-c / session-killed   bin/fleet-session-wrap.sh
+#   session-ctrl-z                                  bin/fleet-session-wrap.sh (the TSTP guard)
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
@@ -128,7 +129,13 @@ cat > "$WORK/fake-agent" <<'EOF'
 printf '%s\n' "$*" >> "$CTL/argv"
 tmux set-option -w -t "$TMUX_PANE" @cc_session_id SID-1
 tmux set-option -w -t "$TMUX_PANE" @cc_agent claude
-while [ ! -e "$CTL/go" ]; do sleep 0.05; done
+echo $$ > "$CTL/pid"
+while [ ! -e "$CTL/go" ]; do
+  # `z`: suspend the way Claude Code does on Ctrl+Z — tear the UI down, hook
+  # SIGCONT to bring it back, then SIGTSTP to the whole process group.
+  if [ -e "$CTL/z" ]; then rm -f "$CTL/z" "$CTL/cont"; trap ': > "$CTL/cont"' CONT; kill -TSTP 0; fi
+  sleep 0.05
+done
 rm -f "$CTL/go"
 case "$(cat "$CTL/mode")" in rc0) exit 0 ;; rc130) exit 130 ;; kill) kill -9 $$ ;; esac
 EOF
@@ -195,6 +202,32 @@ exit_drill() {
 drill_session_exit()    { CAP=5; exit_drill rc0 0 '会话已退出'; }
 drill_session_ctrl_c()  { CAP=5; exit_drill rc130 130 '会话已退出（按了 Ctrl+C）'; }
 drill_session_killed()  { CAP=5; exit_drill kill 137 '会话被结束（信号 9）'; }
+
+# Ctrl+Z (issue #1843). The pane's process group is orphaned (its leader, the
+# pane's shell, is a session leader whose parent is the tmux server), so the
+# kernel discards a SIGTSTP — nothing ever stops; but Claude Code / Codex suspend
+# THEMSELVES on Ctrl+Z (UI torn down, a SIGCONT handler armed, `kill(0, SIGTSTP)`)
+# and wait for a `fg` no shell will ever type. The drill does all three breaks: a
+# Ctrl+Z on the pane's tty, a `kill -TSTP` aimed at the agent, and the agent's own
+# suspend — within 1s it is running, resumed (its SIGCONT arrived), the window is
+# not marked exited, and the guard left its stamp.
+drill_session_ctrl_z() {
+  CAP=1; BREAK_SOCK="$WORK/sock-xz"; local c="$WORK/xz" t0 pid st
+  wrapped sz w "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
+  until_ok 10 test -s "$c/pid" || { WHY="the agent never started"; return 1; }
+  pid=$(cat "$c/pid")
+  nt send-keys -t sz:w C-z; kill -TSTP "$pid" 2>/dev/null
+  sleep 0.2
+  t0=$(now); : > "$c/z"
+  until_ok "$CAP" test -e "$c/cont" \
+    || { WHY="the agent suspended itself and nothing sent SIGCONT — it waits for an fg no shell will type"; return 1; }
+  SECS=$(since "$t0")
+  st=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ')
+  case "$st" in ''|T*) WHY="the agent is [${st:-gone}] after Ctrl+Z, not running"; return 1 ;; esac
+  [ "$(o sz:w @claude_state)" != exited ] || { WHY="the window went to exited"; return 1; }
+  [ -n "$(o sz:w @wrap_ctrl_z)" ] || { WHY="the guard left no @wrap_ctrl_z stamp"; return 1; }
+  WHAT="Ctrl+Z / kill -TSTP / 自挂起后 ${SECS}s 内收到 SIGCONT、照常运行"
+}
 
 # home_back <old pid> — home holds a live shell other than <old pid>
 home_back() {

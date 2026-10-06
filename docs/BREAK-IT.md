@@ -17,6 +17,7 @@
 | 会话里 `/exit`（或 Ctrl+D）退出 | 窗口跟着关，会话从列表消失 | 窗口留下画恢复页（#1784）：↵ 用同一对话 id 续上，r 新开，q 回收 | `session-exit` |
 | 会话里连按 Ctrl+C 退出 | 同上 | 同上，恢复页写「按了 Ctrl+C」 | `session-ctrl-c` |
 | 会话进程被杀（kill -9、OOM） | 同上 | 同上，恢复页写「被结束（信号 9）」 | `session-killed` |
+| 会话里按 Ctrl+Z（或对它 `kill -TSTP`） | Claude Code / Codex 撤掉界面、打印「已挂起，用 `fg` 回来」，再向整个进程组发 SIGTSTP；窗格的进程组是孤儿组，内核丢弃这个信号，没有 shell 会 `fg`：进程还在、界面没了、不再收输入，看起来在干活其实停住了 | 包装进程旁一个同组的小守护接住这个 SIGTSTP，立即给整组发 SIGCONT（Agent 自己的恢复处理器重画界面），记一行 `logs/session-ctrl-z.log`，正看着这个窗格的客户端提示「执行会话里 Ctrl+Z 不起作用」（#1843） | `session-ctrl-z` |
 | 最后一个窗口关闭（home 的 shell 退出、最后一个会话结束） | tmux 服务器随之退出，整台 fleet 停 | 服务器 `exit-empty off`，home 窗格死了立即重开 shell（#1784）；tmux ≤ 3.4 忙时会漏掉 shell 退出的信号、窗格停在死状态，diskguard 节拍的 `home_watch` 补救重开（#1801） | `last-window` |
 | 节点 tmux 服务器被关（`kill-server`、崩溃） | 整台 fleet 停，没人拉起 | diskguard 节拍跑 `fleet-restore.sh --auto`，只拉起没做完的会话（#1784） | `kill-server` |
 | 节点 tmux 服务器退出时被一个不回应的客户端（网络冻住的 ssh 里的 attach）拖住 | 服务器不死不活：每个新连接都被它接下就关，`tmux -L fleet` 的一切（含 `fleet-up.sh`）都报 `server exited unexpectedly`，只能手工 `rm` socket | `fleet_socket_heal` 认出这种 socket，清掉并记一行（restore.log、`socket-heal.log`），`fleet-restore.sh --auto` / `fleet-up.sh` 随即起新服务器；守护进程的「no fleet sessions found」带上 WEDGED，`fleet-doctor` 的 `socket` 行报出来（#1729） | `wedged-socket` |
