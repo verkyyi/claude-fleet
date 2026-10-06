@@ -28,6 +28,7 @@
 #   client-kill-server                              bin/fleet (run again)
 #   hub-unreachable                                 bin/fleet, fleet-client-badge.sh
 #   static-forward / proxy-orphan                   bin/fleet-remote-view.sh (run), fleet-shell.sh
+#   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
 #
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs).
@@ -45,7 +46,7 @@ CSESS="brk$$"                                    # the client's socket label
 cleanup() {
   local s
   for s in "$WORK"/sock-*; do [ -S "$s" ] && "$REAL_TMUX" -S "$s" kill-server 2>/dev/null; done
-  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
+  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}u" "${CSESS}u-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   pkill -f "fleet-shell.sh keeper $CSESS" 2>/dev/null
   pkill -f "$WORK/" 2>/dev/null
   [ -n "${BREAK_KEEP:-}" ] && { printf 'kept %s\n' "$WORK" >&2; return; }
@@ -655,6 +656,43 @@ drill_proxy_orphan() {
   until_ok "$CAP" sh -c "! kill -0 $run 2>/dev/null && ! kill -0 $att 2>/dev/null" \
     || { kill -KILL "$run" "$att" 2>/dev/null; WHY="the pane is gone, its run loop / attach still live after ${CAP}s"; return 1; }
   SECS=$(since "$t0"); WHAT="窗格关掉，run 循环和它的 ssh 一起退出"
+}
+
+# The client's files replaced under the running client with no reload (issue
+# #1829): a pre-#1781 `start` moved the whole home aside while the shell ran
+# (the person's laptop, 02:31), or the install line wrote it in place. The old
+# proxy loop kept running beside new code that opened a second connection —
+# #1775's refused 2226. The drill: an installed client (its own home, a
+# .client-version) running with its keeper on a 1 s beat; the break is new
+# files in that home; the recovery is the keeper reloading them into the
+# running servers — the stamp moves, the proxy pane is a new process.
+drill_client_files_swapped() {
+  CAP=15; local s="${CSESS}u" H="$WORK/uhome" t0 pp
+  client_setup
+  mkdir -p "$H/bin"
+  cp -P "$WORK"/sbin/* "$H/bin/"
+  for f in fleet-shell.sh fleet-client-update.sh; do rm -f "$H/bin/$f"; cp "$BIN/$f" "$H/bin/$f"; done
+  ln -s "$WORK/conf" "$H/conf"
+  printf 'version=v1\ncompat=1\ncommit=c0ffee1\nhub=https://hub.example\n' > "$H/.client-version"
+  ( client_env
+    export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/ucache" FLEET_CLIENT_LEASE_CMD=false \
+           FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_IDLE_SECS=0 FLEET_CLIENT_CHECK_SECS=999999
+    mkdir -p "$XDG_CACHE_HOME/claude-fleet/client"; date +%s > "$XDG_CACHE_HOME/claude-fleet/client/checked"
+    bash "$H/bin/fleet-shell.sh" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
+  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ] || { WHY="the installed client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
+  upid() { "$REAL_TMUX" -L "$s-stage" list-panes -s -F '#{pane_pid} #{pane_start_command}' 2>/dev/null | awk '/fleet-remote-view.sh/ { print $1; exit }'; }
+  until_ok 5 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s-stage list-panes -s -F '#{pane_start_command}' 2>/dev/null | grep fleet-remote-view.sh)\" ]" \
+    || { WHY="no proxy pane on the installed client's stage"; return 1; }
+  pp=$(upid)
+  t0=$(now)
+  printf 'version=v2\ncompat=1\ncommit=beef002\nhub=https://hub.example\n' > "$H/.client-version"   # the break
+  until_ok "$CAP" sh -c "[ \"\$(\"$REAL_TMUX\" -L $s show-options -gqv @client_version 2>/dev/null)\" = v2 ]" \
+    || { WHY="the running client still runs what it loaded (@client_version=$("$REAL_TMUX" -L "$s" show-options -gqv @client_version 2>/dev/null)) after ${CAP}s"; return 1; }
+  until_ok 5 sh -c "p=\$(\"$REAL_TMUX\" -L $s-stage list-panes -s -F '#{pane_pid} #{pane_start_command}' 2>/dev/null | awk '/fleet-remote-view.sh/ { print \$1; exit }'); [ -n \"\$p\" ] && [ \"\$p\" != $pp ]" \
+    || { WHY="the old proxy loop ($pp) was kept beside the new code"; return 1; }
+  SECS=$(since "$t0")
+  grep -q '"phase": "done"' "$WORK/ucache/update.state" 2>/dev/null || { WHY="no trace of the update: update.state is not done"; return 1; }
+  WHAT="新文件载入正在跑的客户端，旧代理换掉，留下「已更新到」"
 }
 
 # ================================================================ run ===========

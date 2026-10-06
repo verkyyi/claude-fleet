@@ -26,7 +26,21 @@
 # adopted on its first switch (moved to <home>.versions/<its version>/).
 # <home>.versions/.next names the staged one, .prev the one before the last
 # switch (kept, with the current one; older ones are pruned). Roll back by hand:
-# `ln -sfn <home>.versions/<prev> <home>`.
+# `ln -sfn <home>.versions/<prev> <home>`. A home that is still a plain dir is
+# adopted as soon as nothing runs from it — `start` with no client running, a
+# `tick` once idle — together with a pre-#1781 <home>.prev (issue #1829).
+# A hand edit in <home> is gone at the next switch, by design: a lasting local
+# patch belongs in ~/.ssh/config or fleet.conf, never in the client's files.
+#
+# DRIFT (issue #1829): the running servers carry the version they were loaded
+# from (@client_version, stamped by fleet-shell.sh). Files that moved under a
+# running client without a reload — a pre-#1781 `start` swapped the whole home
+# while the shell ran, or the install line wrote it in place — leave old proxy
+# loops beside new code opening connections of its own (the second connection
+# of #1775). `tick` (once idle) and `start` (before it attaches) see the stamp
+# differ from .client-version and run `fleet-shell.sh reload --all`: every proxy
+# pane respawned, every loop and the keeper restarted, update.state `done`, and
+# every attached client told 「fleet 客户端已更新到 <version>（入口 <commit>）」.
 #
 # `start`, at most once per FLEET_CLIENT_CHECK_SECS (3600; the stamp is in
 # ~/.cache/claude-fleet/client/), asks the hub two things, each with a short
@@ -70,7 +84,7 @@
 # What happened is ~/.cache/claude-fleet/shell/update.state —
 # {phase: applying|done|later|failed, from, to, commit, why, at} — which the
 # client's ⌂ badge (fleet-client-badge.sh) shows: ✓ 已更新到 … / the failure for
-# FLEET_CLIENT_UPDATE_SHOW seconds (4), 新版已就绪 · 下次打开生效 until then.
+# FLEET_CLIENT_UPDATE_SHOW seconds (60), 新版已就绪 · 下次打开生效 until then.
 #
 # STABLE (issue #1805, EPIC #1813 C3): the version every computer follows is
 # refs/tags/stable — the same one a 承载 machine's install-sync follows — so
@@ -240,7 +254,8 @@ set_state() {
   local f c
   f=$(ustate)
   mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
-  c=$(mark_get "$VERS/$3/.client-version" commit)
+  if [ -f "$VERS/$3/.client-version" ]; then c=$(mark_get "$VERS/$3/.client-version" commit)
+  else c=$(mark_get "$ROOT/.client-version" commit); fi
   python3 - "$f" "$1" "$2" "$3" "$c" "${4:-}" <<'PY' 2>/dev/null || :
 import json, os, sys, time
 f, phase, frm, to, commit, why = sys.argv[1:7]
@@ -261,19 +276,25 @@ except Exception:
 }
 ulog() { mkdir -p "$STATE" 2>/dev/null && printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >> "$STATE/update.log"; }
 
+# adopt_home [<key>] — a plain-dir <home> moved to <home>.versions/<its
+# version>/ and <home> made the link to it (never onto <key>, the one about to
+# be switched to). Sets ADOPTED. rc 1: nothing changed.
+adopt_home() {
+  local own
+  { [ -e "$ROOT" ] && [ ! -L "$ROOT" ]; } || return 0
+  own=$(vkey "$(mark_get "$ROOT/.client-version" version)")
+  [ -n "$own" ] || own=adopted
+  { [ "$own" != "${1:-}" ] && [ ! -e "$VERS/$own" ]; } || own="$own-$(date +%s)"
+  mkdir -p "$VERS" && mv "$ROOT" "$VERS/$own" || return 1
+  if ! ln -s "$VERS/$own" "$ROOT"; then mv "$VERS/$own" "$ROOT"; return 1; fi
+  ADOPTED=$own
+}
 # point <key> — <home> → <home>.versions/<key>, in ONE rename(2) of a link made
 # beside it (a plain-dir home is adopted first). rc 1: nothing changed.
 point() {
-  local k="$1" own
+  local k="$1"
   [ -d "$VERS/$k" ] || return 1
-  if [ -e "$ROOT" ] && [ ! -L "$ROOT" ]; then
-    own=$(vkey "$(mark_get "$ROOT/.client-version" version)")
-    [ -n "$own" ] || own=adopted
-    { [ "$own" != "$k" ] && [ ! -e "$VERS/$own" ]; } || own="$own-$(date +%s)"
-    mkdir -p "$VERS" && mv "$ROOT" "$VERS/$own" || return 1
-    if ! ln -s "$VERS/$own" "$ROOT"; then mv "$VERS/$own" "$ROOT"; return 1; fi
-    ADOPTED=$own
-  fi
+  adopt_home "$k" || return 1
   python3 -c 'import os, sys
 t, link = sys.argv[1], sys.argv[2]
 tmp = link + ".switch.%d" % os.getpid()
@@ -283,6 +304,31 @@ except OSError:
     pass
 os.symlink(t, tmp)
 os.replace(tmp, link)' "$VERS/$k" "$ROOT"
+}
+# adopt — the version dirs put in place on a home that has none yet (issue
+# #1829): #1781 adopted a plain-dir home only on its first switch, so a home a
+# pre-#1781 client had swapped whole (`mv <home> <home>.prev`, the new one in
+# its place) stayed a plain dir, and that <home>.prev was a rollback nobody
+# knew of. Now: <home> becomes <home>.versions/<its version>/ + the link, and a
+# legacy <home>.prev becomes the version .prev names. A checkout (承载) or a
+# home without .client-version is never touched.
+adopt() {
+  local k
+  [ -f "$ROOT/.client-version" ] || return 0
+  { [ -e "$ROOT/.git" ] || [ -f "$ROOT/bin/fleet-up.sh" ]; } && return 0
+  if [ ! -L "$ROOT" ]; then
+    ADOPTED=''
+    adopt_home || { ulog "adopt: $ROOT could not be moved into $VERS"; return 1; }
+    ulog "adopt: $ROOT → $VERS/$ADOPTED"
+  fi
+  if [ -d "$ROOT.prev" ] && [ ! -L "$ROOT.prev" ] && [ -f "$ROOT.prev/.client-version" ] && [ ! -s "$VERS/.prev" ]; then
+    k=$(vkey "$(mark_get "$ROOT.prev/.client-version" version)")
+    if [ -n "$k" ] && [ "$k" != "$(cur_key)" ] && [ ! -e "$VERS/$k" ] && mv "$ROOT.prev" "$VERS/$k"; then
+      printf '%s\n' "$k" > "$VERS/.prev"
+      ulog "adopt: $ROOT.prev → $VERS/$k (.prev)"
+    fi
+  fi
+  return 0
 }
 # prune — every version dir but the current one, .prev's and .next's
 prune() {
@@ -380,6 +426,7 @@ switch() {
   rm -f "$VERS/.next"
   prune
   rm -f "$(ustate)"
+  ulog "switch ${old:-?} → $k (start, no client running)"
   c=$(mark_get "$ROOT/.client-version" commit)
   [ -n "$c" ] || c=$(mark_get "$ROOT/.client-version" version)
   mkdir -p "$STATE" 2>/dev/null && printf '已更新到 %s\n' "${c:-新版}" > "$STATE/note"
@@ -395,6 +442,58 @@ idle_secs() {
   last=$(tmux -L "$1" list-clients -F '#{client_activity}' 2>/dev/null | sort -n | tail -n 1)
   now=$(date +%s)
   case "$last" in ''|*[!0-9]*) echo 999999 ;; *) echo $(( now - last )) ;; esac
+}
+
+# announce <sess> — every client attached to the shell is told, for 10 s, which
+# client it now runs (issue #1829: an update that left no trace read as "it
+# just hung"); the ⌂ badge keeps ✓ 已更新到 … for FLEET_CLIENT_UPDATE_SHOW, the
+# doctor's `client` row the last one for good.
+announce() {
+  local s="$1" v c m
+  v=$(mark_get "$ROOT/.client-version" version); c=$(mark_get "$ROOT/.client-version" commit)
+  m="fleet 客户端已更新到 ${v:-新版}${c:+（入口 ${c}）}"
+  tmux -L "$s" list-clients -F '#{client_name}' 2>/dev/null | while IFS= read -r cl; do
+    tmux -L "$s" display-message -c "$cl" -d 10000 "$m" 2>/dev/null
+  done
+  return 0
+}
+# running_ver <sess> — the client version the RUNNING servers were loaded from:
+# fleet-shell.sh stamps it on its server (@client_version) at start and on every
+# reload (issue #1829). Empty: a server started before the stamp existed.
+running_ver() { tmux -L "$1" show-options -gqv @client_version 2>/dev/null; }
+# drifted <sess> — the client is running, and its files are not the ones it
+# loaded: swapped under it by a client that could not reload it (a pre-#1781
+# `start` moved the whole home aside while the shell ran), or written in place
+# by the install line. Its proxies then run the old code beside new code that
+# opens connections of its own — the second connection of #1775.
+drifted() {
+  local v
+  v=$(mark_get "$ROOT/.client-version" version)
+  [ -n "$v" ] && shell_live "$1" && [ "$(running_ver "$1")" != "$v" ]
+}
+# reconcile <sess> [--in-keeper] — the files on disk into the running servers,
+# with EVERY proxy pane respawned and every loop restarted (`reload --all`):
+# nothing the old code opened is kept beside what the new code opens. The
+# keeper's own tick passes --in-keeper (it restarts itself, exit 4). Exit 4
+# reloaded · 1 failed (said in update.state; not retried for the same pair).
+reconcile() {
+  local s="$1" from to why
+  from=$(vkey "$(running_ver "$s")"); [ -n "$from" ] || from='?'
+  to=$(vkey "$(mark_get "$ROOT/.client-version" version)")
+  if [ "$(state_get phase)" = failed ] && [ "$(state_get from)" = "$from" ] && [ "$(state_get to)" = "$to" ]; then
+    return 1
+  fi
+  ulog "reconcile $from → $to ($s): the files moved under the running client"
+  if ! FLEET_SHELL_SESSION="$s" bash "$ROOT/bin/fleet-shell.sh" reload "$s" --all ${2:+"$2"} >>"$STATE/update.log" 2>&1; then
+    why="新版文件没能载入正在运行的客户端（重开 fleet 可恢复）"
+    ulog "$why"
+    set_state failed "$from" "$to" "$why"
+    return 1
+  fi
+  set_state "done" "$from" "$to"
+  ulog "reconciled $to"
+  announce "$s"
+  return 4
 }
 
 # check — the hourly ask: the team's defaults, then the version. Exit 0
@@ -460,6 +559,14 @@ cmd_start() {
   HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
   mkdir -p "$STATE" 2>/dev/null || return 0
   sess=$(shell_sess)
+  # 0. files that moved under the running client (issue #1829): into it now,
+  #    before this start attaches to it; a home without version dirs gets them
+  #    while nothing runs from it
+  if drifted "$sess"; then
+    reconcile "$sess"
+    [ $? -eq 4 ] && note "客户端已更新到 $(mark_get "$ROOT/.client-version" commit)（正在运行的连接已换成新版的）"
+  fi
+  shell_live "$sess" || adopt
   # 1. a client staged earlier: switch to it now — unless the client is
   #    running, whose keeper takes it in place (issue #1781). One a migration
   #    said needs a restart (later): a server nobody is attached to is closed,
@@ -552,7 +659,7 @@ apply() {
       3) ulog "migration $b: needs a restart"
          set_state later "$from" "$to" "$b"
          return 3 ;;
-      *) why="迁移 $b 失败（exit $rc），已退回旧版"
+      *) why="迁移 $b 失败（exit ${rc}），已退回旧版"
          ulog "$why"
          resource "$s" "$saved"
          set_state failed "$from" "$to" "$why"
@@ -562,7 +669,7 @@ apply() {
   # 2. the link, then the NEW client reloads itself into the running servers
   ADOPTED=''
   if ! point "$to"; then
-    set_state failed "$from" "$to" "切不过去（$ROOT）"
+    set_state failed "$from" "$to" "切不过去（${ROOT}）"
     return 1
   fi
   # a plain-dir home was just adopted: the old client now lives in its version dir
@@ -581,6 +688,7 @@ apply() {
   prune
   set_state "done" "$from" "$to"
   ulog "applied $to"
+  announce "$s"
   return 4
 }
 
@@ -590,8 +698,16 @@ cmd_tick() {
   local s="$1" k idle rc
   [ -f "$ROOT/.client-version" ] || return 0
   load_conf
-  HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
   mkdir -p "$STATE" 2>/dev/null || return 0
+  # files that moved under this running client (issue #1829) — hub or no hub,
+  # auto-update or not: what runs must be what is on disk. Once idle.
+  if drifted "$s"; then
+    [ "$(idle_secs "$s")" -ge "${FLEET_CLIENT_IDLE_SECS:-30}" ] || return 0
+    reconcile "$s" --in-keeper
+    return $?
+  fi
+  [ "$(idle_secs "$s")" -ge "${FLEET_CLIENT_IDLE_SECS:-30}" ] && adopt
+  HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
   check 2>/dev/null; rc=$?
   [ "${FLEET_CLIENT_AUTO_UPDATE:-1}" != 0 ] || return 0
   case "$rc" in 10|11) stage_bg ;; esac
@@ -610,7 +726,7 @@ cmd_tick() {
 }
 
 cmd_doctor() {
-  local mark lv lc commit hv hmin tv maj min cert lvl=PASS parts='' f
+  local mark lv lc commit hv hmin tv maj min cert lvl=PASS parts='' f up uph uto uat uwhy
   while [ $# -gt 0 ]; do
     case "$1" in --root) ROOT="$2"; shift 2 ;; *) shift ;; esac
   done
@@ -665,6 +781,25 @@ EOF
     fi
   else
     parts="$parts · tmux 没有"; lvl=WARN
+  fi
+  # the last update (issue #1829): when, to what — or why it did not
+  f=$(ustate)
+  if [ -s "$f" ]; then
+    up=$(python3 -c 'import json, sys, time
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+at = time.strftime("%m-%d %H:%M", time.localtime(int(d.get("at") or 0)))
+print("\t".join([str(d.get("phase") or ""), str(d.get("commit") or d.get("to") or ""), at, " ".join(str(d.get("why") or "").split())]))' "$f" 2>/dev/null)
+    IFS=$'\t' read -r uph uto uat uwhy <<EOF
+$up
+EOF
+    case "${uph:-}" in
+      done)   parts="$parts · 上次更新 ${uat} → ${uto}" ;;
+      failed) parts="$parts · 上次更新没成功（${uat}）：${uwhy}"; lvl=WARN ;;
+      later)  parts="$parts · 新版 ${uto} 下次打开生效" ;;
+    esac
   fi
   cert=''
   [ -f "$ROOT/bin/fleet-login.py" ] && cert=$(python3 "$ROOT/bin/fleet-login.py" check 2>/dev/null | head -n 1)

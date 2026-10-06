@@ -386,6 +386,17 @@ mirror() {
   [ -f "$f" ] && mkdir -p "$CACHE/conf" && ln -sf "$f" "$CACHE/conf/fleet-palette.conf"
   return 0
 }
+# stamp_ver — which client the running server was loaded from, on the server
+# (@client_version, the .client-version beside the real bin/; nothing for a
+# checkout): fleet-client-update.sh compares it with the files on disk, and
+# files that moved under a running client are reloaded into it (issue #1829).
+# Set at a new start and by `reload` — never on a re-attach, which loads nothing.
+stamp_ver() {
+  local v
+  v=$(sed -n 's/^version=//p' "$REAL_BIN/../.client-version" 2>/dev/null | head -n 1)
+  [ -n "$v" ] && T set-option -g @client_version "$v" 2>/dev/null
+  return 0
+}
 # write_conf — conf/tmux-shell.conf (the shell's server) and conf/tmux-shell-stage.conf
 # (the stage's, issue #1759) with the paths filled + the environment
 write_conf() {
@@ -703,10 +714,21 @@ viewer)
 # VIEW_VERSION moved; a proxy pane respawned only when fleet-remote-view.sh
 # itself changed (`--from <old home>` to compare with — no `--from`, none is);
 # the warm loop, the actions loop and the data loop restarted only when their
-# script changed. Exit non-zero = the caller rolls back.
+# script changed. `--all` (issue #1829: files that moved under the running
+# client, so what it runs is unknown) counts every script as changed — every
+# proxy pane respawned, every loop and the keeper restarted (`--in-keeper`: the
+# keeper is the caller and restarts itself). Exit non-zero = the caller rolls back.
 reload)
-  s="${2:-$SESS}"; from=''
-  [ "${3:-}" = --from ] && from="${4:-}"
+  s="${2:-$SESS}"; from='' all='' inkeeper=''
+  shift 2 2>/dev/null || shift $#
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) from="${2:-}"; shift 2 2>/dev/null || shift $# ;;
+      --all) all=1; shift ;;
+      --in-keeper) inkeeper=1; shift ;;
+      *) shift ;;
+    esac
+  done
   SESS=$s; STAGE="$s-stage"
   T has-session -t "=$SESS" 2>/dev/null || exit 0          # nothing running: nothing to reload
   mirror || exit 1
@@ -721,7 +743,7 @@ reload)
   export_env
   T run-shell -b -t "=$SESS:" "bash $(sq "$SHADOW/fleet-sidebar.sh") sync '#{session_id}' >/dev/null 2>&1 || :"
   # changed <file> — that script is not what the old client ran
-  changed() { [ -n "$from" ] && ! cmp -s "$from/bin/$1" "$REAL_BIN/$1"; }
+  changed() { [ -n "$all" ] || { [ -n "$from" ] && ! cmp -s "$from/bin/$1" "$REAL_BIN/$1"; }; }
   if changed fleet-remote-view.sh; then
     TS list-panes -s -t "=$STAGE" -F '#{pane_id} #{pane_start_command}' 2>/dev/null \
       | while read -r p c; do
@@ -744,6 +766,10 @@ reload)
     [ -n "$p" ] && kill "$p" 2>/dev/null
     bash "$SHADOW/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || :
   fi
+  # the keeper too, when what it runs is unknown — a new one takes over once the
+  # old one's pid is gone (one keeper per server)
+  [ -n "$all" ] && [ -z "$inkeeper" ] && restart_loop "$CL_DIR/keeper.pid" bash "$SHADOW/fleet-shell.sh" keeper "$SESS"
+  stamp_ver
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
@@ -868,6 +894,7 @@ w=$(tmux -L "$SESS" -f "$CACHE/tmux.conf" new-session -d -P -F '#{window_id}' -s
   || fail_start 'tmux 开不了会话'
 T set-window-option -t "$w" @shell_frame 1 \; set-window-option -t "$w" automatic-rename off \; \
   set-option -p -t "$w" @shell_viewer 1 \; set-option -p -t "$w" remain-on-exit on 2>/dev/null
+stamp_ver
 # the right pane outlives whatever ends it (issue #1785): kept dead, the hooks'
 # sync respawns it (fleet-sidebar.py heal_frame) — the window, so the server,
 # never closes under the person

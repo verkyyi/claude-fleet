@@ -17,7 +17,8 @@
 #   C. behind      compat ok → 0 at once, a background stage into
 #                  <home>.versions/<v> (.next names it); the next start switches
 #                  (exit 3, 「已更新到 <commit>」): <home> becomes a link to it, the
-#                  old plain-dir home adopted as <home>.versions/<old> (.prev),
+#                  old plain-dir home adopted as <home>.versions/<old> (.prev) —
+#                  at the first start that finds nothing running (#1829),
 #                  the bar's note written; tmux-status.sh shows it on a client
 #                  (FLEET_SHELL=1), not elsewhere; a running client's server
 #                  (issue #1781) is left to take it in place — the start does not
@@ -139,12 +140,15 @@ V="$ROOT.versions"
 for _ in $(seq 1 50); do [ -f "$V/v2/.staged" ] && break; sleep 0.2; done
 [ -f "$V/v2/.staged" ] && [ "$(cat "$V/.next" 2>/dev/null)" = v2 ] \
   && ok "C the background stage landed in <home>.versions/v2 (.next)" || bad "C no stage: $(cat "$STATE/stage.log" 2>&1) $(ls -a "$V" 2>&1)"
-grep -q OLD "$ROOT/bin/fleet" && [ ! -L "$ROOT" ] && ok "C this start still runs the old client" || bad "C switched too early"
+grep -q OLD "$ROOT/bin/fleet" && ok "C this start still runs the old client" || bad "C switched too early"
+# nothing running: the plain-dir home is adopted at once (issue #1829), not on its first switch
+[ -L "$ROOT" ] && [ "$(cd "$ROOT" && pwd -P)" = "$(cd "$V/v1" && pwd -P)" ] \
+  && ok "C the plain-dir home adopted as <home>.versions/v1 + the link" || bad "C not adopted: $(ls -la "$XDG_DATA_HOME") $(ls -a "$V")"
 # a running client (its server up): the start leaves the switch to it
 if command -v tmux >/dev/null 2>&1; then
   tmux -L "$FLEET_SHELL_SESSION" new-session -d -s "$FLEET_SHELL_SESSION" 'sleep 60' 2>/dev/null
   start; rc=$?
-  [ "$rc" = 0 ] && [ ! -L "$ROOT" ] && grep -q OLD "$ROOT/bin/fleet" \
+  [ "$rc" = 0 ] && [ "$(cd "$ROOT" && pwd -P)" = "$(cd "$V/v1" && pwd -P)" ] && grep -q OLD "$ROOT/bin/fleet" \
     && ok "C a running client's server: the start does not switch under it" || bad "C running: rc=$rc err=$(cat "$WORK/err")"
   tmux -L "$FLEET_SHELL_SESSION" kill-server 2>/dev/null
 fi
