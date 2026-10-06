@@ -9,7 +9,7 @@ skills) adds its tools here and in `bin/fleet-mcp.py`, nowhere else.
 ## The rule
 
 A tool only **checks** its arguments, then runs the existing script **unchanged**
-(EPIC #1813 decision 4 — the same rule as `mod/fleet/hooks/tools.ts`):
+(EPIC #1813 decision 4 — the rule the mod's retired `tools.ts` kept):
 
 - an unknown argument, a missing one, a wrong type, an out-of-range number, a
   malformed `repo`, a `repo` this fleet does not host, an unknown tool → refused
@@ -107,9 +107,9 @@ The definition lives once, in **`conf/mcp-worker.json`**:
   `FLEET_MCP_CONFIG` is unset, next to the allowlist when it is set (`none`
   included), and not added again when the allowlist already names a `fleet`
   server. It exports `FLEET_MCP_BIN=<install>/bin` (the server runs THIS
-  install's scripts) and `FLEET_MCP_SERVER=1` (the mod then skips registering its
-  own `fleet_status` / `fleet_spawn` / `fleet_await` — the same `fleet` name; they
-  stay one version as the fallback for a session without the server, decision 8).
+  install's scripts) and `FLEET_MCP_SERVER=1`. (The mod's own `fleet_status` /
+  `fleet_spawn` / `fleet_await` stayed one version as the fallback, decision 8, and
+  retired in mod 0.4.0 — issue #1812: the mod registers no tool.)
 - **Codex** — `bin/fleet-codex.sh` adds `-c "$(fleet-mcp.py --mount codex)"`:
   `mcp_servers.fleet={command, args, env_vars, tool_timeout_sec}` derived from the
   same file, after any allowlist policy and before the caller's `-c`. Codex hands a
@@ -245,6 +245,41 @@ Needs, to take effect: the hub deployed with this change, and on each node a
 `ccquota` (place) and agent (relay) built from it. An older `ccquota` / agent
 drops the assertion — the node's own call, exactly as before.
 
+## The old road — closed (issue #1812, EPIC #1813 C10)
+
+A **worker** seat reaches the fleet through these tools, not by running the
+script a tool wraps. `hooks/bash-guard.py` holds ONE table (`_DIRECT_TOOLS`,
+script → tool) and judges two roads with it: a Bash statement whose **command**
+is one of the scripts below (the live install's copy or a bare name — a `grep`
+of it, or a worktree's own `bin/` under test, is not a call), and a call to one
+of the mod's retired tools by its MCP name (`mcp__fleet__fleet_status|spawn|await`
+→ `status` / `spawn` / `await`; `hooks/settings-hooks.json` routes those names to
+the guard, Codex never had them).
+
+| script | tool |
+|---|---|
+| `fleet-children.sh` · `fleet-repo.sh list` | `children` · `repos` |
+| `dash-issue-session.sh` · `fleet-await.sh` · `fleet-peer-send.sh` | `spawn` · `await` · `send` |
+| `fleet-report-parent.sh` · `set-claude-state.sh blocked` · `fleet-comment.sh` | `report` · `ask` · `comment` |
+| `fleet-evidence.sh` · `fleet-handoff-file.sh` | `evidence` · `handoff` |
+| `fleet-pr-verdict.sh` · `fleet-pr-merge.sh` | `pr_verdict` · `pr_merge` |
+| `fleet-claim-brief.sh` · `fleet-issue-file.sh` · `fleet-gh.sh` | `brief` · `file_issue` · `gh` |
+
+`FLEET_DIRECT_SCRIPTS` (env, or `fleet.conf`) picks what happens:
+
+- `log` (the default — the week of record): allowed, one line appended to
+  `logs/mcp-bypass.log`: `<UTC>\tlogged\tissue=<N>\tscript=<s>\ttool=<t>` — never
+  the command line (a comment body is not a log's business);
+- `block` (after the week, once the log reads clean): refused, exit 2, naming the
+  tool to call; logged `blocked`;
+- `off`: neither.
+
+`FLEET_ALLOW_DIRECT_SCRIPTS=1` (env or inline) is the escape hatch: allowed and
+logged `hatch`. Only `fleet_seat` = `worker` counts: the operator's hub
+(`FLEET_HUB=1`), a scratch draft and a person's own shell are never logged or
+blocked, and a guard that cannot read the seat lets the call through. The
+week's count is `grep -c $'\tlogged\t' logs/mcp-bypass.log`.
+
 ## Compatibility
 
 `bin/fleet-peer-mcp.py` (the #1185 `fleet-peer` server: `list_agents` /
@@ -263,8 +298,10 @@ Newline-delimited JSON-RPC 2.0 on stdin/stdout, stdlib only (macOS python 3.9):
 against fake scripts, no-hub degenerate, the legacy shim, the Codex mount; for 报问记合
 (G–I) every new tool's refusals, its exact argv + stdin, and script ≡ tool through the
 REAL `fleet-comment.sh` (the byte-identical comment) and `fleet-report-parent.sh
-<<<<<<< HEAD
---dry-run` (the same envelope, on an isolated tmux server).
+--dry-run` (the same envelope, on an isolated tmux server); L the C9 tools the same way,
+and `handoff arm` answering before its detached helper ends.
+`bin/skill-tools-selftest.sh` — no worker-run skill step names a `~/.claude/fleet/bin`
+script, and every `mcp__fleet__<tool>` a skill names is a real tool.
 `bin/fleet-mcp-selftest.sh` J — the credential: valid / expired / forged /
 tampered / another pane / another fleet / revoked, migration, renewal, no leak.
 `bin/fleet-mcp-selftest.sh` K — the hub route: assertion only with hub + token +
@@ -273,12 +310,8 @@ credential, its signature and claims, zero network with no hub, `fleet_hub_put`'
 — valid → placed + audited + journalled, forged → 401, out of scope → 404, the
 relay; `TestPlaceCarriesWorkerAssertion` (`cmd/ccquota`).
 `bin/session-wrap-selftest.sh` B' — the wrapper mints per launch and revokes on exit.
-=======
---dry-run` (the same envelope, on an isolated tmux server); L the C9 tools the same way,
-and `handoff arm` answering before its detached helper ends.
-`bin/skill-tools-selftest.sh` — no worker-run skill step names a `~/.claude/fleet/bin`
-script, and every `mcp__fleet__<tool>` a skill names is a real tool.
->>>>>>> 82ad0e36 (技能只写「用哪个工具」 (#1811))
 `bin/fleet-claude-selftest.sh` #1807 and `bin/fleet-codex-selftest.sh` I — the
-launch command lines carry the server. `mod/fleet/tests/tools.test.ts` — the mod
-registers none of its own when the server is mounted.
+launch command lines carry the server. `mod/fleet/tests/lifecycle.test.ts`
+«retired tools» + `bin/fleet-mod-selftest.sh` E — the mod registers no tool.
+`bin/bash-guard-selftest.sh` «direct-script rail» — the old road (above): a worker
+seat logged / blocked, the operator seat and the hatch passing, the MCP road.

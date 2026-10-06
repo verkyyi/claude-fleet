@@ -24,6 +24,10 @@
 #      off session.measure, model + effort off turn.step, a /model off the model
 #      poll — all through conf/statusline.sh --from mod (tests/usage.test.ts,
 #      issues #1338 / #1459).
+#   E  the three old tools are retired (issue #1812, EPIC #1813 C10): no file
+#      under mod/fleet/hooks registers a tool or names fleet_status /
+#      fleet_spawn / fleet_await, and register.ts still wires every other
+#      feature — static, so it runs in CI where D cannot.
 #
 # Hermetic for A-C: a temp bin with the real launcher + lib symlinked, fake
 # `claude` / `tmux` / `fleet-account.sh` on PATH, no tmux server touched.
@@ -154,7 +158,17 @@ else
   case "$t" in *'AskUserQuestion'*) : ;; *) fail "D: the state tests (#1336) did not run" "$t" ;; esac
   case "$t" in *'feeds conf/statusline.sh --from mod'*) : ;; *) fail "D: the measurement-bus feed tests (#1338/#1459) did not run" "$t" ;; esac
   case "$t" in *'a /model lands within one poll'*) : ;; *) fail "D: the model-poll test (#1459) did not run" "$t" ;; esac
+  case "$t" in *'retired tools'*) : ;; *) fail "D: the retired-tools test (#1812) did not run" "$t" ;; esac
   ok "D claude plugin validate + test pass (out-of-range gate + command inbox + session state + bus feed covered)"
 fi
+
+# --- E: the mod's three tools are retired (issue #1812) ----------------------------
+[ -e "$MOD/hooks/tools.ts" ] && fail "E: mod/fleet/hooks/tools.ts is back — the fleet tools live in bin/fleet-mcp.py"
+hits=$(grep -rnE 'tool\.register|fleet_(status|spawn|await)' "$MOD/hooks" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//')
+[ -z "$hits" ] || fail "E: the mod registers or names a retired tool" "$hits"
+for f in Lifecycle Usage State Progress Where; do
+  grep -q "^  register$f(on)\$" "$MOD/hooks/register.ts" || fail "E: register.ts no longer wires register$f — the other features must stay"
+done
+ok "E the mod registers no tool (fleet_status/spawn/await retired); lifecycle/usage/state/progress/where still wired"
 
 printf 'fleet-mod-selftest: %d passed\n' "$pass"

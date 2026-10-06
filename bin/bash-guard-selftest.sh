@@ -422,6 +422,95 @@ assert_exit 0 "pkill inside a message"     "$GUARD" "$(bash_json "$(jstr 'git co
 assert_exit 0 "kill <pid>"                 "$GUARD" "$(bash_json "$(jstr 'kill 1234')")"
 assert_exit 0 "FLEET_ALLOW_BROAD_PKILL=1"  "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_BROAD_PKILL=1 pkill -f cat')")"
 
+# --- direct-script rail (issue #1812, EPIC #1813 C10) --------------------------
+# A WORKER seat that runs a script the fleet tool service wraps (or calls one of
+# the mod's retired tools) is logged — and, with FLEET_DIRECT_SCRIPTS=block,
+# refused with the tool to use. fleet-lib is a stub: fleet_seat answers $STUB_SEAT,
+# fleet_pane_fmt answers $STUB_ISSUE. The log goes to FLEET_MCP_BYPASS_LOG.
+mkdir -p "$TMP/direct-stub" "$TMP/direct-home/.claude/fleet/bin" "$TMP/direct-wt/bin" "$TMP/direct-conf"
+cat > "$TMP/direct-stub/fleet-lib.sh" <<'STUB'
+fleet_seat() { printf '%s' "${STUB_SEAT:-}"; }
+fleet_pane_fmt() { printf '%s' "${STUB_ISSUE:-}"; }
+STUB
+DLOG="$TMP/direct.log"
+# shellcheck disable=SC2088  # the literal ~ is the point: the guard expands it, as a worker types it
+LIVE='~/.claude/fleet/bin'
+mcp_json() { printf '{"tool_name":"%s","tool_input":{}}' "$1"; }
+direct() {   # direct <want-exit> <label> <json> [<mode>] — a worker seat unless STUB_SEAT is set
+  ( export HOME="$TMP/direct-home" FLEET_LIB="$TMP/direct-stub/fleet-lib.sh" \
+           FLEET_MCP_BYPASS_LOG="$DLOG" FLEET_CONF_DIR="$TMP/direct-conf" \
+           STUB_SEAT="${STUB_SEAT-worker}" STUB_ISSUE=1812
+    unset FLEET_HUB FLEET_ALLOW_DIRECT_SCRIPTS FLEET_DIRECT_SCRIPTS
+    [ -n "${4:-}" ] && export FLEET_DIRECT_SCRIPTS="$4"
+    # shellcheck disable=SC2163  # DIRECT_ENV holds NAME=value — export the assignment it carries
+    [ -n "${DIRECT_ENV:-}" ] && export "$DIRECT_ENV"
+    fails=0; assert_exit "$1" "direct: $2" "$GUARD" "$3"; exit "$fails" ) || fails=$((fails + 1))
+}
+logged() {   # logged <label> <want-lines> <grep-pattern>
+  local n; n=$(grep -c -- "$3" "$DLOG" 2>/dev/null); n=${n:-0}
+  [ "$n" = "$2" ] || { printf 'FAIL: direct: %s — %s log line(s) matching %s, want %s\n' "$1" "$n" "$3" "$2" >&2; fails=$((fails + 1)); }
+}
+CMT="$LIVE/fleet-comment.sh 1812 --note --body secret-body-text"
+# Log mode (the default): allowed, one line per call naming script + tool, never the command.
+: > "$DLOG"
+direct 0 "log mode: fleet-comment.sh allowed" "$(bash_json "$(jstr "$CMT")")"
+logged "log mode writes the line" 1 $'logged\tissue=1812\tscript=fleet-comment.sh\ttool=mcp__fleet__comment'
+logged "the log never carries the command text" 0 'secret-body'
+direct 0 "log mode: X=\$(fleet-gh.sh …)"  "$(bash_json "$(jstr "PR=\$($LIVE/fleet-gh.sh pr view 3 --json state)")")"
+logged "a \$(…) call is seen" 1 'script=fleet-gh.sh'
+direct 0 "log mode: bash \$HOME/…/set-claude-state.sh blocked" "$(bash_json "$(jstr 'bash $HOME/.claude/fleet/bin/set-claude-state.sh blocked')")"
+logged "set-claude-state.sh blocked → ask" 1 'tool=mcp__fleet__ask'
+# Block mode: refused, naming the tool.
+: > "$DLOG"
+for c in "$CMT" "$LIVE/fleet-pr-merge.sh 9" "cd /tmp && $LIVE/fleet-children.sh --json" "fleet-claim-brief.sh" \
+         "$LIVE/fleet-repo.sh list" "sh $LIVE/set-claude-state.sh blocked" "$LIVE/fleet-evidence.sh post"; do
+  direct 2 "block mode: $c" "$(bash_json "$(jstr "$c")")" block
+done
+logged "every refusal is logged" 7 $'\tblocked\t'
+out=$( printf '%s' "$(bash_json "$(jstr "$LIVE/fleet-pr-verdict.sh 9")")" | HOME="$TMP/direct-home" FLEET_LIB="$TMP/direct-stub/fleet-lib.sh" \
+       FLEET_MCP_BYPASS_LOG="$DLOG" FLEET_DIRECT_SCRIPTS=block STUB_SEAT=worker "$PY" "$GUARD" 2>&1 >/dev/null )
+case "$out" in *mcp__fleet__pr_verdict*FLEET_ALLOW_DIRECT_SCRIPTS=1*) : ;;
+  *) printf 'FAIL: direct: the refusal must name the tool + the hatch, got: %s\n' "$out" >&2; fails=$((fails + 1)) ;; esac
+# Block mode from the machine's fleet.conf (no env).
+printf 'FLEET_DIRECT_SCRIPTS=block   # C10 switched\n' > "$TMP/direct-conf/fleet.conf"
+direct 2 "block mode read from fleet.conf" "$(bash_json "$(jstr "$CMT")")"
+rm -f "$TMP/direct-conf/fleet.conf"
+# The escape hatch: inline or in the environment — allowed, logged as hatch.
+: > "$DLOG"
+direct 0 "hatch inline"  "$(bash_json "$(jstr "FLEET_ALLOW_DIRECT_SCRIPTS=1 $CMT")")" block
+DIRECT_ENV=FLEET_ALLOW_DIRECT_SCRIPTS=1 direct 0 "hatch in env" "$(bash_json "$(jstr "$CMT")")" block
+logged "both hatches logged as hatch" 2 $'\thatch\t'
+# Only the worker seat: the operator's hub, a scratch draft, a person's shell pass, unlogged.
+: > "$DLOG"
+STUB_SEAT='' direct 0 "operator/scratch seat passes" "$(bash_json "$(jstr "$CMT")")" block
+DIRECT_ENV=FLEET_HUB=1 direct 0 "hub pane (FLEET_HUB=1) passes" "$(bash_json "$(jstr "$CMT")")" block
+# Not a call: a read of the script, the worktree's own bin/, another subcommand, mode off.
+direct 0 "grep of the script"          "$(bash_json "$(jstr "grep -n x $LIVE/fleet-comment.sh")")" block
+direct 0 "a worktree's own bin/ (testing)" "$(bash_json "$(jstr "$TMP/direct-wt/bin/fleet-comment.sh 3")")" block
+direct 0 "set-claude-state.sh working" "$(bash_json "$(jstr "sh $LIVE/set-claude-state.sh working")")" block
+direct 0 "fleet-repo.sh add"           "$(bash_json "$(jstr "$LIVE/fleet-repo.sh add o/r")")" block
+direct 0 "a script in a commit message" "$(bash_json "$(jstr "git commit -m 'drop fleet-comment.sh 3'")")" block
+direct 0 "mode off"                    "$(bash_json "$(jstr "$CMT")")" off
+logged "nothing above is logged" 0 'script='
+# The MCP road — the same table: the mod's retired tools by their MCP name.
+: > "$DLOG"
+direct 0 "mcp: fleet_spawn, log mode"  "$(mcp_json mcp__fleet__fleet_spawn)"
+logged "mcp: logged against its new tool" 1 $'script=mcp__fleet__fleet_spawn\ttool=mcp__fleet__spawn'
+direct 2 "mcp: fleet_await, block mode" "$(mcp_json mcp__fleet__fleet_await)" block
+direct 2 "mcp: fleet_status, block mode" "$(mcp_json mcp__fleet__fleet_status)" block
+STUB_SEAT='' direct 0 "mcp: operator seat passes" "$(mcp_json mcp__fleet__fleet_spawn)" block
+DIRECT_ENV=FLEET_ALLOW_DIRECT_SCRIPTS=1 direct 0 "mcp: hatch in env" "$(mcp_json mcp__fleet__fleet_spawn)" block
+direct 0 "mcp: the service's own tool passes" "$(mcp_json mcp__fleet__spawn)" block
+# Wiring: the Claude hook table routes the retired names here; Codex drops the group.
+"$PY" - "$BIN/../hooks/settings-hooks.json" "$BIN/../hooks/codex-map.json" <<'PY' || fails=$((fails + 1))
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]
+m = "mcp__fleet__fleet_status|mcp__fleet__fleet_spawn|mcp__fleet__fleet_await"
+ok = any(g.get("matcher") == m and any("bash-guard.py" in h.get("command", "") for h in g["hooks"]) for g in d)
+ok = ok and json.load(open(sys.argv[2]))["matchers"].get(m, "absent") is None
+sys.exit(0 if ok else print("FAIL: direct: the retired-tool matcher is not wired to bash-guard.py (or not dropped for Codex)", file=sys.stderr) or 1)
+PY
+
 if [ "$fails" -ne 0 ]; then
   printf '\nbash-guard-selftest: %s case(s) FAILED\n' "$fails" >&2
   exit 1

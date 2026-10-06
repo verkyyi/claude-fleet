@@ -22,13 +22,15 @@
     "Edit|Write|MultiEdit|NotebookEdit": "apply_patch",
     "Artifact": null,
     "Agent": null,
-    "ScheduleWakeup|CronCreate|CronDelete": null
+    "ScheduleWakeup|CronCreate|CronDelete": null,
+    "mcp__fleet__fleet_status|mcp__fleet__fleet_spawn|mcp__fleet__fleet_await": null
   },
   "matcher_notes": {
     "Edit|Write|MultiEdit|NotebookEdit": "Codex edits through ONE tool: apply_patch, with the patch text in tool_input.command.",
     "Artifact": "Codex has no Artifact tool, so artifact-guard.py has nothing to guard.",
     "Agent": "Codex has no Agent (subagent) tool, so agent-guard.py has nothing to guard (issue #811).",
-    "ScheduleWakeup|CronCreate|CronDelete": "Codex has no ScheduleWakeup/Cron tools; its loops live in the fleet-loop.py ledger, which fleet_loop_mark.py reads directly (issue #1331)."
+    "ScheduleWakeup|CronCreate|CronDelete": "Codex has no ScheduleWakeup/Cron tools; its loops live in the fleet-loop.py ledger, which fleet_loop_mark.py reads directly (issue #1331).",
+    "mcp__fleet__fleet_status|mcp__fleet__fleet_spawn|mcp__fleet__fleet_await": "Codex never had the mod's three tools (retired in mod 0.4.0, issue #1812); its fleet tools come from bin/fleet-mcp.py, whose scripts bash-guard.py's direct-script rail already covers on the Bash road."
   },
   "drop_commands": {
     "handoff-latch-reset-hook.sh": "Claude-only reset hook; the Codex launcher owns the fresh-conversation latch.",

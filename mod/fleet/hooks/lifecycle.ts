@@ -31,7 +31,6 @@ import type { EngineInterface, On, Timer } from 'claude-code'
 
 import type { FleetModStatus } from '../types'
 import { isOpen, openGate } from './gate'
-import { TOOL_SPECS } from './tools'
 import { INBOX_MS, inboxDir, pollInbox } from './inbox'
 import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
@@ -134,18 +133,9 @@ async function pollOnce($: EngineInterface): Promise<void> {
 
 /** Start-up work of every feature, run once the gate is open. */
 async function onReady($: EngineInterface): Promise<void> {
-  // The fleet tools (tools.ts serves them): registered before the first prompt —
-  // unless the launcher mounted the fleet tool service (bin/fleet-mcp.py, issue
-  // #1807), which owns the `fleet` name and serves the same three (and more). The
-  // mod's copy stays one version as the fallback for a session without it.
-  const served = (await $.env.get('FLEET_MCP_SERVER')) === '1'
-  for (const spec of served ? [] : TOOL_SPECS) {
-    try {
-      await $.tool.register(spec)
-    } catch {
-      // One tool that will not register costs that tool, never the session.
-    }
-  }
+  // No tools here (issue #1812, EPIC #1813 C10): fleet_status / fleet_spawn /
+  // fleet_await retired — the fleet tool service (bin/fleet-mcp.py, issue #1807)
+  // serves status / spawn / await, and more, to Claude and Codex alike.
   await beat($)
   timer?.cancel()
   timer = $.clock.every(HEARTBEAT_MS, () => {
