@@ -355,7 +355,33 @@ if [ -n "$_codex_mcp$_codex_subagent${FLEET_CODEX_SUBAGENT_EFFORT:-}" ] && [ -f 
     [ -z "$_value" ] || flags+=(-c "$_value")
   done <<< "$_policy"
 fi
-unset _codex_mcp _codex_subagent _policy _value
+unset _codex_subagent _policy _value
+
+# The session's configuration, fixed at launch (issue #1782, EPIC #1776 C6) — the
+# Codex half of bin/fleet-claude.sh's block: fleet-agent-team.py composes fleet
+# default < team < local for THIS CODEX_HOME and hands what its config.toml lacks
+# as `-c` values (top-level keys, [mcp_servers.<name>] — none under an MCP policy,
+# which governs), ahead of the caller's own -c so a caller still wins. The hook
+# table is already inlined above. The mod is Claude's: recorded as `na`. The
+# fingerprint lands as @agent_cfg / @agent_cfg_src. FLEET_AGENT_CFG=0 or no
+# composer beside bin/ adds nothing.
+_cfg_fp=''; _cfg_src=''; _cfg_locks=''
+if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && command -v python3 >/dev/null 2>&1; then
+  _cfg_args=(--lock "${FLEET_AGENT_LOCK:-warn}" --codex-home "${CODEX_HOME:-$HOME/.codex}")
+  [ -n "$_codex_mcp" ] && _cfg_args+=(--no-mcp)
+  while IFS=$'\t' read -r _cfg_k _cfg_v; do
+    case "$_cfg_k" in
+      fp)   _cfg_fp="$_cfg_v" ;;
+      src)  _cfg_src="$_cfg_v" ;;
+      c)    flags+=(-c "$_cfg_v") ;;
+      lock) _cfg_locks="${_cfg_locks:+$_cfg_locks; }$_cfg_v" ;;
+    esac
+  done < <(FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" \
+             python3 "$BIN/fleet-agent-team.py" session codex ${_cfg_args[@]+"${_cfg_args[@]}"} 2>/dev/null)
+  [ -n "$_cfg_locks" ] && printf 'fleet-codex: locked agent config overridden on this login: %s (issue #1782)\n' "$_cfg_locks" >&2
+  unset _cfg_args _cfg_k _cfg_v _cfg_locks
+fi
+unset _codex_mcp
 
 # --- version drift: warn once per launch, never block (issue #1079) ------------
 # fleet reads context% from Codex's rollout file, a format verified only on the
@@ -394,7 +420,12 @@ if [ -n "${TMUX_PANE:-}" ]; then
     tmux set-option -wu -t "$TMUX_PANE" "$_opt" 2>/dev/null || true
   done
   [ -n "$launch_model" ] && tmux set-option -w -t "$TMUX_PANE" @cc_model "$launch_model" 2>/dev/null || true
+  if [ -n "$_cfg_fp" ]; then                 # issue #1782
+    tmux set-option -w -t "$TMUX_PANE" @agent_cfg "$_cfg_fp" 2>/dev/null || true
+    tmux set-option -w -t "$TMUX_PANE" @agent_cfg_src "$_cfg_src" 2>/dev/null || true
+  fi
 fi
+unset _cfg_fp _cfg_src
 
 # Codex's SessionEnd reason is always `other`, including thread lifecycle ends
 # that do NOT mean the operator quit this TUI. Wait for the CLI itself instead

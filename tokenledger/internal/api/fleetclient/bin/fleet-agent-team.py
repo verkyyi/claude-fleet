@@ -62,6 +62,18 @@ doctor` on a client print the version from it.
           --force. What install-sync's tick and the client's start run.
   status  [--short]  the applied version and the source counts (doctor).
 
+A session's configuration, fixed at launch (issue #1782 — see "the session's
+configuration" below):
+  session  claude|codex [--lock warn|enforce] [--mod-off] [--no-mcp] [--no-settings]
+           Compose fleet default < team < local NOW and print, TAB-separated, what
+           the launcher hands: `fp <12 hex>`, `src <each layer's version>`,
+           `mod on|off|na`, `mcp <file>` / `settings <file>` (Claude: only what the
+           login's files lack, in content-addressed files under global/agent-cfg/),
+           `c <key=toml>` (Codex -c values), `lock <path> used|ignored (…)`.
+  expected [--write]   the fingerprint a fresh session would get, per agent
+           (`<agent> <fp> <src>`); --write caches it in global/agent-cfg.expected.
+  check    the doctor's `agentcfg` row: exit 1 when a locked item is overridden here.
+
 The operator's side (a viewer token in CCQUOTA_VIEWER_TOKEN — read from the
 environment, never written down; a person's session or a node is refused 403):
   put <file.json> [--base N] [--note T]   a new version (the file is the bundle);
@@ -791,6 +803,10 @@ def apply(a):
             "team": {"version": version, "state": "off" if off else ("on" if cache else "none"),
                      "created": cache.get("created"), "actor": cache.get("actor"), "applied": int(time.time())},
             "counts": counts, "items": items})
+        try:                     # the layer moved: what a fresh session gets moved with it (#1782)
+            expected(argparse.Namespace(**dict(vars(a), write=True, quiet=True)))
+        except SystemExit:
+            pass
     word = "would change" if a.dry_run else "changed"
     state = "off (agent-overrides.json team: off)" if off else "v%d" % version
     print("team: %s — %s %d item(s)%s" % (state, word, c.changed, "" if a.dry_run else "; %s" % EFFECTIVE))
@@ -816,6 +832,365 @@ def status(a):
     else:
         print("%s · %s" % (head, " · ".join("%s %d" % (k, counts.get(k, 0)) for k in ("default", "team", "local"))))
     return 0
+
+
+# --- the session's configuration, fixed at launch (issue #1782, EPIC #1776 C6) -----
+#
+# The sync above FILLS files; what a session actually got was whatever those files
+# happened to hold when it started. `session` composes the same three layers —
+# fleet default < team < local — at the moment of the launch, hands the launcher
+# exactly what the files lack (a --settings / --mcp-config file for Claude, `-c`
+# values for Codex), and prints a FINGERPRINT of the composed result: the first
+# 12 hex of sha256 over the canonical JSON of every item's effective value. The
+# launcher stamps it on the window as @agent_cfg (+ @agent_cfg_src, each layer's
+# version); `expected` is the same computation with no session, cached for the
+# readers that compare (C7, #1783).
+#
+# Scope (the EPIC's 口径): only what the fleet hands an agent — the mod, the fleet
+# hook table (+ the team's hooks), the fleet's MCP servers (default ∪ team), the
+# settings / config keys the fleet manages. Never the agent's own version, never a
+# per-session thing (cwd, account, model), never a fleet's MCP allowlist — so two
+# sessions on one login fingerprint alike, and a stale one differs.
+#
+# Locks (conf/agent-locked.list): the items fleet itself runs on. A login's own
+# value for one — a different definition, or a shield in agent-overrides.json —
+# is used and LISTED under FLEET_AGENT_LOCK=warn (the default, the operator's
+# week of 先标出不强制), and ignored under enforce (the fleet's value is handed).
+# ⚠️ enforce on an MCP server hands the fleet's definition through --mcp-config;
+# Claude Code resolves a duplicate NAME by scope and does not document where
+# --mcp-config ranks against the user scope, so `check` names such a server — the
+# durable fix is to drop the login's own copy.
+
+LOCK_MODES = ("warn", "enforce")
+
+
+def locked_set(root):
+    out = set()
+    try:
+        with open(os.path.join(root, "conf", "agent-locked.list")) as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    out.add(line)
+    except OSError:
+        pass
+    return out
+
+
+def is_locked(path, locked):
+    parts = path.split(".")
+    return any(".".join(parts[:i]) in locked for i in range(1, len(parts) + 1))
+
+
+def conf_val(key):
+    """A global knob for a caller that sourced no conf (install-apply, a client):
+    the environment, else the login's files in the order the launcher sources them
+    (install fleet.conf < fleet.settings < $FLEET_CONF_DIR/fleet.conf, #979/#1623)."""
+    if os.environ.get(key) is not None:
+        return os.environ[key]
+    val = None
+    pat = re.compile(r"^\s*(?:export\s+)?%s=(.*)$" % re.escape(key))
+    for f in (os.path.join(DEFAULT_ROOT, "fleet.conf"), os.path.join(CONF_DIR, "fleet.settings"),
+              os.path.join(CONF_DIR, "fleet.conf")):
+        try:
+            with open(f) as fh:
+                for line in fh:
+                    m = pat.match(line)
+                    if m:
+                        val = m.group(1).split("#", 1)[0].strip().strip("'\"")
+        except OSError:
+            pass
+    return val
+
+
+def lock_mode(arg):
+    v = (arg or conf_val("FLEET_AGENT_LOCK") or "warn").strip().lower()
+    return v if v in LOCK_MODES else "warn"
+
+
+def leaves_of(v, prefix):
+    """{'permissions': {'defaultMode': x}} → {'permissions.defaultMode': x}."""
+    if isinstance(v, dict) and v:
+        out = {}
+        for k, x in v.items():
+            out.update(leaves_of(x, prefix + "." + k))
+        return out
+    return {prefix: v}
+
+
+def leaf_get(d, dotted):
+    for p in dotted.split("."):
+        if not isinstance(d, dict) or p not in d:
+            return None
+        d = d[p]
+    return d
+
+
+def leaf_set(d, dotted, v):
+    ps = dotted.split(".")
+    for p in ps[:-1]:
+        d = d.setdefault(p, {})
+    d[ps[-1]] = v
+
+
+def mod_version(root):
+    d = read_json_quiet(os.path.join(root, "mod", "fleet", ".claude-plugin", "plugin.json"))
+    return str(d.get("version") or "?") if isinstance(d, dict) else None
+
+
+def fleet_plugin_wires_hooks():
+    """The fleet plugin (#1335's sibling, .claude-plugin/) wires the hook table
+    itself — KEEP IN SYNC with fleet_plugin_installed / fleet-doctor's glob."""
+    import glob
+    cdir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    return bool(glob.glob(os.path.join(cdir, "plugins", "cache", "*", "fleet", "*", "commands", "fleet-claim.md")))
+
+
+class Session:
+    """One composition: rows {path: {value, source, locked}} + what to hand."""
+
+    def __init__(self, a, agent):
+        self.a, self.agent = a, agent
+        self.mode = lock_mode(a.lock)
+        self.locked = locked_set(a.root)
+        self.ad = load_mod("fleet_agent_defaults", "fleet-agent-defaults.py")
+        self.hm = load_mod("fleet_hooks_merge", "fleet-hooks-merge.py")
+        self.dfl = defaults_for(self.ad, a)
+        self.blocked = self.ad.override_paths(a.override, [])
+        self.blocked.discard("team")
+        cache = read_json_quiet(CACHE)
+        bundle = (cache or {}).get("bundle") if isinstance(cache, dict) else None
+        if team_off(a.override):
+            self.team, self.bundle = "off", {}
+        elif isinstance(bundle, dict) and not validate(bundle):
+            self.team, self.bundle = "v%s" % (cache.get("version") or 0), bundle
+        else:
+            self.team, self.bundle = "none", {}
+        self.rows, self.overrides, self.notes = {}, [], []
+        self.hand = {}          # path → value the launcher must pass
+
+    def item(self, path, local, team, default, present=None):
+        """Compose one item; returns nothing. `present` = the login has it at all
+        (for a value that can legitimately be None)."""
+        if team is not None:
+            fv, fsrc = team, "team"
+        elif default is not None:
+            fv, fsrc = default, "default"
+        else:
+            return
+        has = (local is not None) if present is None else present
+        lk = is_locked(path, self.locked)
+        shield = self.ad.shielded(path, self.blocked)
+        own = shield or (has and local != fv)
+        if not own:
+            self.rows[path] = {"value": fv, "source": fsrc, "locked": lk}
+            if not has:
+                self.hand[path] = fv
+            return
+        if lk and self.mode == "enforce":
+            self.rows[path] = {"value": fv, "source": fsrc, "locked": True}
+            self.hand[path] = fv
+            self.overrides.append((path, "ignored", "shielded" if shield and not has else "own value"))
+            return
+        if lk:
+            self.overrides.append((path, "used", "shielded" if shield and not has else "own value"))
+        if has:
+            self.rows[path] = {"value": local, "source": "local", "locked": lk}
+
+    def hook_table(self):
+        """The fleet table, canonical: [[event, matcher, command, timeout]] sorted."""
+        src = os.path.join(self.a.root, "hooks", "settings-hooks.json")
+        d = read_json_quiet(src)
+        out = []
+        for ev, groups in ((d or {}).get("hooks") or {}).items():
+            for g in groups or []:
+                for h in g.get("hooks") or []:
+                    out.append([ev, g.get("matcher", "") or "", h.get("command", ""), h.get("timeout")])
+        return sorted(out, key=lambda r: json.dumps(r))
+
+    def compose(self):
+        a, b = self.a, self.bundle
+        mv = mod_version(a.root)
+        if self.agent == "codex":
+            self.rows["mod"] = {"value": "na", "source": "default", "locked": False}
+        elif mv is not None:
+            self.item("mod", "off" if a.mod_off else None, None, mv)
+        table = self.hook_table()
+        if self.agent == "claude":
+            self.claude(table)
+        else:
+            self.codex(table)
+        return self
+
+    def claude(self, table):
+        a, b = self.a, self.bundle
+        settings = read_json_quiet(a.claude_settings)
+        settings = settings if isinstance(settings, dict) else {}
+        # the fleet hook table, as one item: what the login wires (settings.json
+        # by identity, or the plugin wholesale) against what the table says
+        if table:
+            if fleet_plugin_wires_hooks():
+                have = table
+            else:
+                idents = set()
+                for ev, groups in (settings.get("hooks") or {}).items():
+                    for g in groups if isinstance(groups, list) else []:
+                        for h in (g or {}).get("hooks") or []:
+                            i = self.hm.identity(ev, g, h) if isinstance(h, dict) else None
+                            if i:
+                                idents.add(i)
+                have = [r for r in table if (r[0], r[1], self.hm.script_of(r[2])) in idents]
+            self.item("claude.hooks", have if have else None, None, table)
+            if "claude.hooks" in self.hand:     # hand only the identities missing here
+                got = {json.dumps(r) for r in have}
+                self.hand["claude.hooks"] = [r for r in table if json.dumps(r) not in got]
+        for ev, lst in sorted((b.get("hooks") or {}).items()):
+            for h in lst:
+                want = {k: h[k] for k in ("matcher", "command", "timeout") if k in h and h[k] not in ("", None)}
+                f = hook_find(settings, ev, h["command"])
+                self.item("claude.hooks.%s.%s" % (ev, hook_key(h["command"])), f[2] if f else None, want, None)
+        cj = read_json_quiet(a.claude_config)
+        servers = (cj or {}).get("mcpServers") if isinstance(cj, dict) else None
+        servers = servers if isinstance(servers, dict) else {}
+        for n in sorted(set(self.dfl["mcp"]) | set(b.get("mcp") or {})):
+            self.item("claude.mcp." + n, servers.get(n), (b.get("mcp") or {}).get(n), self.dfl["mcp"].get(n))
+        team_keys = b.get("claude_settings") or {}
+        dleaves = {}
+        for k, v in self.dfl["settings"].items():
+            if k not in team_keys:
+                dleaves.update(leaves_of(v, k))
+        for k in sorted(set(dleaves) | set(team_keys)):
+            self.item("claude.settings." + k, leaf_get(settings, k), team_keys.get(k), dleaves.get(k))
+
+    def codex(self, table):
+        a, b = self.a, self.bundle
+        self.rows["codex.hooks"] = {"value": table, "source": "default", "locked": is_locked("codex.hooks", self.locked)}
+        home = os.path.abspath(os.path.expanduser(a.codex_home[0] if a.codex_home
+                                                  else os.environ.get("CODEX_HOME") or "~/.codex"))
+        cc = CodexConf(self.ad, home)
+        for k in sorted(set(self.dfl["codex"]) | set(b.get("codex_config") or {})):
+            self.item("codex." + k, cc.get_top(k), (b.get("codex_config") or {}).get(k), self.dfl["codex"].get(k))
+        if cc.scan().mcp_inline():
+            self.notes.append("codex mcp_servers is an inline table — servers not handed")
+            return
+        for n in sorted(set(self.dfl["codex_mcp"]) | set(b.get("mcp") or {})):
+            self.item("codex.mcp." + n, cc.get_server(n), (b.get("mcp") or {}).get(n), self.dfl["codex_mcp"].get(n))
+
+    def fingerprint(self):
+        vals = {p: r["value"] for p, r in self.rows.items()}
+        return hashlib.sha256(json.dumps({"agent": self.agent, "items": vals}, sort_keys=True,
+                                         ensure_ascii=False).encode()).hexdigest()[:12]
+
+    def src(self):
+        dv = {p: r["value"] for p, r in self.rows.items() if r["source"] == "default"}
+        lv = {p: r["value"] for p, r in self.rows.items() if r["source"] == "local"}
+        local = "local:%d" % len(lv) + ("@" + digest(lv)[:8] if lv else "")
+        return "default:%s team:%s %s lock:%s" % (digest(dv)[:8], self.team, local, self.mode)
+
+
+def project_has(cwd, dotted):
+    """A project's own settings (cwd's .claude/settings{,.local}.json) are local too:
+    --settings outranks them, so a fill never covers a key a project sets."""
+    for f in ("settings.json", "settings.local.json"):
+        d = read_json_quiet(os.path.join(cwd, ".claude", f))
+        if isinstance(d, dict) and leaf_get(d, dotted) is not None:
+            return True
+    return False
+
+
+def gen_file(kind, agent, data):
+    """Content-addressed, so concurrent launches share one file and never race."""
+    body = json.dumps(data, sort_keys=True, ensure_ascii=False, indent=1) + "\n"
+    d = os.path.join(CONF_DIR, "global", "agent-cfg")
+    path = os.path.join(d, "%s-%s-%s.json" % (agent, kind, hashlib.sha256(body.encode()).hexdigest()[:12]))
+    if not os.path.exists(path):
+        os.makedirs(d, exist_ok=True)
+        tmp = path + ".tmp.%d" % os.getpid()
+        with open(tmp, "w") as f:
+            f.write(body)
+        os.replace(tmp, path)
+    return path
+
+
+def session(a):
+    agent = a.arg or "claude"
+    if agent not in ("claude", "codex"):
+        die("session takes claude|codex")
+    s = Session(a, agent).compose()
+    print("fp\t%s" % s.fingerprint())
+    print("src\t%s" % s.src())
+    if agent == "claude":
+        mr = s.rows.get("mod")
+        print("mod\t%s" % ("on" if mr and mr["value"] != "off" else "off"))
+        mcp = {p.split(".", 2)[2]: v for p, v in s.hand.items() if p.startswith("claude.mcp.")}
+        if mcp and not a.no_mcp:
+            print("mcp\t%s" % gen_file("mcp", agent, {"mcpServers": mcp}))
+        st = {}
+        for p, v in s.hand.items():
+            if p.startswith("claude.settings."):
+                k = p[len("claude.settings."):]
+                if not project_has(os.getcwd(), k) or s.rows.get(p, {}).get("locked"):
+                    leaf_set(st, k, v)
+            elif p == "claude.hooks":
+                for ev, m, cmd, to in v:
+                    h = {"type": "command", "command": cmd}
+                    if to is not None:
+                        h["timeout"] = to
+                    g = {"matcher": m, "hooks": [h]} if m else {"hooks": [h]}
+                    st.setdefault("hooks", {}).setdefault(ev, []).append(g)
+            elif p.startswith("claude.hooks."):
+                hook_set(st, p.split(".")[2], v)
+        if st and not a.no_settings:
+            print("settings\t%s" % gen_file("settings", agent, st))
+    else:
+        print("mod\tna")
+        for p, v in sorted(s.hand.items()):
+            if p.startswith("codex.mcp."):
+                if not a.no_mcp:
+                    print("c\tmcp_servers.%s=%s" % (s.ad.toml_key(p[len("codex.mcp."):]), s.ad.toml_val(v)))
+            elif p.startswith("codex.") and p != "codex.hooks":
+                print("c\t%s=%s" % (s.ad.toml_key(p[len("codex."):]), s.ad.toml_val(v)))
+    for path, what, why in s.overrides:
+        print("lock\t%s %s (%s, FLEET_AGENT_LOCK=%s)" % (path, what, why, s.mode))
+    return 0
+
+
+def expected_lines(a):
+    out = []
+    for agent in ("claude", "codex"):
+        s = Session(a, agent).compose()
+        out.append("%s %s %s" % (agent, s.fingerprint(), s.src()))
+    return out
+
+
+def expected(a):
+    lines = expected_lines(a)
+    if a.write:
+        path = os.path.join(CONF_DIR, "global", "agent-cfg.expected")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp.%d" % os.getpid()
+        with open(tmp, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        os.replace(tmp, path)
+    if not getattr(a, "quiet", False):
+        print("\n".join(lines))
+    return 0
+
+
+def check(a):
+    """fleet-doctor's `agentcfg` row: exit 0 nothing locked is overridden here, 1 otherwise."""
+    rows, mode = [], lock_mode(a.lock)
+    for agent in ("claude", "codex"):
+        s = Session(a, agent).compose()
+        rows += ["%s (%s, %s)" % (p, why, what) for p, what, why in s.overrides]
+        if agent == "claude":
+            fp = s.fingerprint()
+    n = len(locked_set(a.root))
+    if not rows:
+        print("ok lock=%s · %d locked item(s), none overridden here · expected claude %s" % (mode, n, fp))
+        return 0
+    print("%d locked item(s) overridden on this login (lock=%s): %s" % (len(rows), mode, "; ".join(rows)))
+    return 1
 
 
 def operator(a):
@@ -865,7 +1240,8 @@ def operator(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("action", choices=("fetch", "apply", "sync", "status", "put", "restore", "history"))
+    ap.add_argument("action", choices=("fetch", "apply", "sync", "status", "put", "restore", "history",
+                                       "session", "expected", "check"))
     ap.add_argument("arg", nargs="?", default=None, help="put: the bundle file · restore: the version")
     ap.add_argument("--base", type=int, default=None)
     ap.add_argument("--note", default="")
@@ -883,7 +1259,18 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--short", action="store_true")
+    ap.add_argument("--lock", default="", help="session/expected/check: warn|enforce (default $FLEET_AGENT_LOCK, else warn)")
+    ap.add_argument("--mod-off", action="store_true", default=conf_val("FLEET_MOD") == "0", help="session/expected/check: this login runs FLEET_MOD=0")
+    ap.add_argument("--no-mcp", action="store_true", help="session: an MCP allowlist governs — hand no servers")
+    ap.add_argument("--no-settings", action="store_true", help="session: the caller passed its own --settings")
+    ap.add_argument("--write", action="store_true", help="expected: also cache it in global/agent-cfg.expected")
     a = ap.parse_args()
+    if a.action == "session":
+        return session(a)
+    if a.action == "expected":
+        return expected(a)
+    if a.action == "check":
+        return check(a)
     if a.action in ("put", "restore", "history"):
         return operator(a)
     if a.action == "status":

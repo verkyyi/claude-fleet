@@ -286,7 +286,54 @@ if command -v fleet_mod_on >/dev/null 2>&1 && fleet_mod_on; then
   unset _fc_mod
 fi
 
-if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
-  exec python3 "$BIN/fleet-loop.py" bridge -- claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} "$@"
+# The session's configuration, fixed at launch (issue #1782, EPIC #1776 C6).
+# bin/fleet-agent-team.py composes fleet default < team < local NOW — not whatever
+# the last sync happened to leave in the files — and hands exactly what the login's
+# files lack: a --settings file (missing fleet hooks by identity, missing
+# fleet-managed keys; --settings outranks user AND project settings, so a key a
+# project sets is never filled) and a --mcp-config file (missing fleet servers;
+# never under a FLEET_MCP_CONFIG allowlist or a caller's own MCP flags — the
+# allowlist governs). Locked items (conf/agent-locked.list: mod, fleet hooks, fleet
+# MCP) follow FLEET_AGENT_LOCK: warn (default) uses the login's own value and says
+# so on one stderr line; enforce hands the fleet's. The composed result's
+# fingerprint lands on the window as @agent_cfg (+ @agent_cfg_src: each layer's
+# version) — what C7 (#1783) compares against global/agent-cfg.expected. Both
+# files are content-addressed, so concurrent launches share them. FLEET_AGENT_CFG=0
+# or no composer beside bin/ (a lib-less install, a selftest sandbox) adds nothing:
+# the argv is byte for byte what it was.
+cfg_flag=()
+if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && command -v python3 >/dev/null 2>&1; then
+  _fc_ca=(--lock "${FLEET_AGENT_LOCK:-warn}")
+  [ -n "${FLEET_MCP_CONFIG:-}" ] && _fc_ca+=(--no-mcp)
+  case " $* " in *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) _fc_ca+=(--no-mcp) ;; esac
+  case " $* " in *" --settings "*|*" --settings="*) _fc_ca+=(--no-settings) ;; esac
+  if command -v fleet_mod_on >/dev/null 2>&1 && ! fleet_mod_on; then _fc_ca+=(--mod-off); fi
+  _fc_fp=''; _fc_src=''; _fc_modw=''; _fc_locks=''
+  while IFS=$'\t' read -r _fc_k _fc_v; do
+    case "$_fc_k" in
+      fp)       _fc_fp="$_fc_v" ;;
+      src)      _fc_src="$_fc_v" ;;
+      mod)      _fc_modw="$_fc_v" ;;
+      mcp)      cfg_flag+=("--mcp-config=$_fc_v") ;;      # the =form: --mcp-config is variadic (see above)
+      settings) cfg_flag+=("--settings=$_fc_v") ;;
+      lock)     _fc_locks="${_fc_locks:+$_fc_locks; }$_fc_v" ;;
+    esac
+  done < <(FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" \
+             python3 "$BIN/fleet-agent-team.py" session claude ${_fc_ca[@]+"${_fc_ca[@]}"} 2>/dev/null)
+  # enforce on a locked mod: FLEET_MOD=0 is ignored, the mod loads anyway
+  if [ "$_fc_modw" = on ] && [ "${#mod_flag[@]}" -eq 0 ] && command -v fleet_mod_dir >/dev/null 2>&1; then
+    _fc_mod=$(fleet_mod_dir 2>/dev/null) && mod_flag=("--plugin-dir=$_fc_mod")
+    unset _fc_mod
+  fi
+  [ -n "$_fc_locks" ] && printf 'fleet-claude: locked agent config overridden on this login: %s (issue #1782)\n' "$_fc_locks" >&2
+  if [ -n "$_fc_fp" ] && [ -n "${TMUX_PANE:-}" ]; then
+    tmux set-option -w -t "$TMUX_PANE" @agent_cfg "$_fc_fp" 2>/dev/null || true
+    tmux set-option -w -t "$TMUX_PANE" @agent_cfg_src "$_fc_src" 2>/dev/null || true
+  fi
+  unset _fc_ca _fc_fp _fc_src _fc_modw _fc_locks _fc_k _fc_v
 fi
-exec claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} "$@"
+
+if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
+  exec python3 "$BIN/fleet-loop.py" bridge -- claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+fi
+exec claude ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
