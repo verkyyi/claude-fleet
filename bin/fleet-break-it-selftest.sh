@@ -192,9 +192,25 @@ drill_session_exit()    { CAP=5; exit_drill rc0 0 '会话已退出'; }
 drill_session_ctrl_c()  { CAP=5; exit_drill rc130 130 '会话已退出（按了 Ctrl+C）'; }
 drill_session_killed()  { CAP=5; exit_drill kill 137 '会话被结束（信号 9）'; }
 
+# home_back <old pid> — home holds a live shell other than <old pid>
+home_back() {
+  local p; p=$(nt display-message -p -t lw:home '#{pane_pid} #{pane_dead}' 2>/dev/null)
+  [ -n "$p" ] && [ "${p% *}" != "$1" ] && [ "${p#* }" = 0 ]
+}
+# tmux ≤ 3.4 on a busy box can miss the exited shell's SIGCHLD: the pane reads
+# dead, the shell stays a zombie, pane-died never fires (issue #1801; 3.5a/3.6a
+# never did in 80 loaded runs). There the diskguard tick's fleet_home_heal is the
+# rail; from 3.5 on the hook alone must bring it back.
+tmux_lost_sigchld() {
+  local v; v=$("$REAL_TMUX" -V 2>/dev/null | sed -E 's/^[^0-9]*([0-9]+)\.([0-9]+).*/\1 \2/')
+  set -- $v
+  [ -n "${2:-}" ] && { [ "$1" -lt 3 ] || { [ "$1" -eq 3 ] && [ "$2" -le 4 ]; }; }
+}
 drill_last_window() {
-  CAP=5; BREAK_SOCK="$WORK/sock-lw"; local t0 hpid
+  CAP=5; BREAK_SOCK="$WORK/sock-lw"; local t0 hpid healed=''
   grep -q '^fleet_server_resident ' "$BIN/fleet-up.sh" || { WHY="fleet-up.sh no longer calls fleet_server_resident"; return 1; }
+  sed -n '/^  --watch)/,/;;/p' "$BIN/fleet-diskguard.sh" | grep -q '^ *home_watch ' \
+    || { WHY="the diskguard tick no longer runs home_watch (fleet_home_heal)"; return 1; }
   nt -f /dev/null new-session -d -s lw -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
   nt new-window -d -t lw: -n issue-9 'exec sleep 600'
   ( PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/lconf"; export PATH HOME FLEET_CONF_DIR BREAK_SOCK
@@ -203,12 +219,19 @@ drill_last_window() {
   nt kill-window -t lw:issue-9                    # the last task ends …
   hpid=$(o lw:home pane_pid)
   nt send-keys -t lw:home 'exit' Enter            # … and home's shell exits
-  until_ok 5 sh -c "p=\$('$REAL_TMUX' -S '$BREAK_SOCK' display-message -p -t lw:home '#{pane_pid} #{pane_dead}' 2>/dev/null); [ -n \"\$p\" ] && [ \"\${p% *}\" != '$hpid' ] && [ \"\${p#* }\" = 0 ]" \
-    || { WHY="home did not come back with a live shell (server: $(nt list-windows -t lw 2>&1 | head -1))"; return 1; }
+  if ! until_ok 5 home_back "$hpid"; then
+    tmux_lost_sigchld || { WHY="home did not come back with a live shell ($("$REAL_TMUX" -V); pane: $(nt display-message -p -t lw:home 'pid=#{pane_pid} dead=#{pane_dead} status=#{pane_dead_status}' 2>&1))"; return 1; }
+    # the missed SIGCHLD: one diskguard tick's home_watch, timed from the tick
+    t0=$(now)
+    healed=$( PATH="$WORK/tbin:$PATH" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$WORK/lconf"; export PATH BREAK_SOCK FLEET_CONF_DIR
+              . "$BIN/fleet-lib.sh"; fleet_home_heal lw lw )
+    until_ok 5 home_back "$hpid" \
+      || { WHY="home stayed dead, and the tick's fleet_home_heal did not respawn it [${healed}] (pane: $(nt display-message -p -t lw:home 'pid=#{pane_pid} dead=#{pane_dead}' 2>&1))"; return 1; }
+  fi
   SECS=$(since "$t0")
   nt kill-session -t lw                           # and even no session at all …
   nt show-options -sv exit-empty >/dev/null 2>&1 || { WHY="the server died with its last session"; return 1; }
-  WHAT="home 重开 shell，没有会话时服务器也还在"
+  WHAT="home 重开 shell，没有会话时服务器也还在${healed:+（tmux 漏了 SIGCHLD，节拍补救；节拍 60s 另计）}"
 }
 
 drill_kill_server() {

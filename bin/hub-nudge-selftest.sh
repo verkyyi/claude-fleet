@@ -322,7 +322,10 @@ eq  "F: …and the row is there"                 "working" "$(row_state)"
 : > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"
 FLEET_HUB_SESSIONS_LOOP_SECS=4 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null & LOOP_PID=$!
 sleep 1.5
-printf 'B needs\n' > "$WORK/hub2.mode"
+# One rename, never a rewrite in place (issue #1801): the held ask re-reads this
+# file every 20 ms, and a read between `>`'s truncate and its write found it
+# empty, killed the held ask, and left the change for the next 2 s beat.
+printf 'B needs\n' > "$WORK/hub2.mode.tmp" && mv "$WORK/hub2.mode.tmp" "$WORK/hub2.mode"
 t0=$(python3 -c 'import time; print(time.time())')
 for _ in $(seq 1 100); do [ "$(row_state)" = needs ] && break; sleep 0.02; done
 dt=$(python3 -c "import time; print(int((time.time() - $t0) * 1000))")
