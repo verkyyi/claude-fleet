@@ -6867,14 +6867,17 @@ fleet_cfg_restart_why() {
   o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
         '#{@cc_agent}|#{@agent_cfg}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@sleep_since}|#{@remote}|#{@hub}|#{window_name}' 2>/dev/null) \
     && [ -n "$o" ] || { echo gone; return 1; }
-  IFS='|' read -r ag fp st ts lp slp rem hub nm <<< "$o"
+  # parameter expansion, not a here-string: this lib is sourced by plain sh too
+  ag=${o%%|*}; o=${o#*|}; fp=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}
+  ts=${o%%|*}; o=${o#*|}; lp=${o%%|*}; o=${o#*|}; slp=${o%%|*}; o=${o#*|}
+  rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; nm=${o#*|}
   case "$nm" in dash|plan|backlog|home) echo panel; return 1 ;; esac
   [ -z "$rem" ] && [ "$hub" != 1 ] || { echo remote; return 1; }
   [ "$ag" != codex ] || { echo codex; return 1; }
   fleet_cfg_expected_load; fleet_cfg_state "$ag" "$fp"
   [ "$FCFG_STATE" = stale ] || { echo "$FCFG_STATE"; return 1; }
   [ -z "$slp" ] || { echo asleep; return 1; }
-  [ "$st" = done ] || { echo "state:${st:-none}"; return 1; }
+  [ "$st" = "done" ] || { echo "state:${st:-none}"; return 1; }
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
   [ $(( $(date +%s) - ts )) -ge "$idle" ] || { echo recent; return 1; }
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
