@@ -47,6 +47,11 @@ it wrote and nobody touched — a personal item the team also hands goes back to
 the team's value. `"personal": "off"` in agent-overrides.json leaves it. No
 person behind the login (404), or one who never wrote (version 0): no cache, and
 every output below is byte for byte what it is with no personal layer at all.
+A personal HOOK is add-only (issue #1858, EPIC #1855 C3): its item is
+`claude.hooks.personal.<Event>.<key>` — outside the `claude.hooks` lock — and
+settings.json carries it wrapped, `sh "<root>/bin/fleet-hook-personal.sh" <Event>
+-- '<command>'` (fleet-hooks-merge.py's personal_wrap), which drops any
+`updatedInput` and cuts it off at FLEET_PERSONAL_HOOK_TIMEOUT (default 10s).
 
 agent-effective.json is the composed picture: one row per item — MCP servers,
 Codex keys, settings keys, hooks, skills — with its source (default / team /
@@ -124,6 +129,7 @@ PERSON_SIG_NS = "fleet-person@claude-fleet"
 # personal > team > default). A row whose source is one of these is the
 # fleet's to follow while it still holds what that layer wrote.
 LAYERS = ("personal", "team")
+PERSONAL_HOOKS = "claude.hooks.personal"    # a personal hook's items (#1858): add-only, outside the hooks lock
 WHOSE = {"team": "team's", "personal": "personal layer's"}
 SKILL_MARK = "<!-- fleet team skill -->"
 
@@ -608,6 +614,37 @@ def hook_key(command):
     return hashlib.sha256(command.encode()).hexdigest()[:10]
 
 
+def hook_items(team, personal, hm, a):
+    """path → {layer: (event, hook)} for the layers' hooks. A team hook is
+    `claude.hooks.<Event>.<key>`, written as given. A personal hook (#1858, EPIC
+    #1855 C3) is `claude.hooks.personal.<Event>.<key>` (key = its own command's),
+    written through bin/fleet-hook-personal.sh (hm.personal_wrap): add-only — the
+    wrapper drops any `updatedInput`, cuts it off at FLEET_PERSONAL_HOOK_TIMEOUT —
+    and outside the `claude.hooks` lock (is_locked). One the team already hands
+    under the same event is the team's, not added twice."""
+    out = {}
+    for ev, lst in sorted((team.get("hooks") or {}).items()):
+        for h in lst:
+            out.setdefault("claude.hooks.%s.%s" % (ev, hook_key(h["command"])), {})["team"] = (ev, h)
+    if not personal.get("hooks"):
+        return out
+    spelled = hm_spelling(a)
+    for ev, lst in sorted(personal["hooks"].items()):
+        for h in lst:
+            if "claude.hooks.%s.%s" % (ev, hook_key(h["command"])) in out:
+                continue
+            w = dict(h, command=hm.personal_wrap(ev, h["command"], spelled))
+            out.setdefault("%s.%s.%s" % (PERSONAL_HOOKS, ev, hook_key(h["command"])), {})["personal"] = (ev, w)
+    return out
+
+
+def hm_spelling(a):
+    """The scripts root a wired command spells: the node install, or a client
+    package's --scripts-root (#1725) — the same spelling the MCP defaults get."""
+    ad = load_mod("fleet_agent_defaults", "fleet-agent-defaults.py")
+    return ad.scripts_spelling(a.scripts_root) if a.scripts_root else ad.FLEET_HOME_PREFIX
+
+
 def skill_get(d, name):
     try:
         with open(os.path.join(d, name, "SKILL.md"), encoding="utf-8") as f:
@@ -828,11 +865,7 @@ def apply(a):
                           dfl["settings"].get(k), prev_items.get(path), blocked, ad, w, dr)
             if row:
                 items[path] = row
-        want_hooks = {}         # path → {layer: (event, hook)}
-        for lsrc, b in (("personal", pbundle), ("team", bundle)):
-            for ev, lst in (b.get("hooks") or {}).items():
-                for h in lst:
-                    want_hooks.setdefault("claude.hooks.%s.%s" % (ev, hook_key(h["command"])), {})[lsrc] = (ev, h)
+        want_hooks = hook_items(bundle, pbundle, hm, a)   # path → {layer: (event, hook)}
         for path in sorted(set(want_hooks) | {k for k in prev_items if k.startswith("claude.hooks.")}):
             per = want_hooks.get(path, {})
             ev, h = per.get("personal") or per.get("team") or (None, None)
@@ -1040,8 +1073,13 @@ def locked_set(root):
 
 
 def is_locked(path, locked):
+    """`path` or an ancestor is in agent-locked.list — except that a personal hook
+    (claude.hooks.personal.*, #1858) never inherits the `claude.hooks` lock: that
+    lock is the fleet table + the team's hooks, and a personal hook is add-only
+    (its wrapper drops any rewrite), so enforce never throws it away."""
     parts = path.split(".")
-    return any(".".join(parts[:i]) in locked for i in range(1, len(parts) + 1))
+    lo = 3 if path == PERSONAL_HOOKS or path.startswith(PERSONAL_HOOKS + ".") else 1
+    return any(".".join(parts[:i]) in locked for i in range(lo, len(parts) + 1))
 
 
 def conf_val(key):
@@ -1212,14 +1250,11 @@ class Session:
                 got = {json.dumps(r) for r in have}
                 self.hand["claude.hooks"] = [r for r in table if json.dumps(r) not in got]
         pb = self.pbundle
-        hooks = {}              # path → [event, {layer: want}]
-        for lsrc, bb in (("personal", pb), ("team", b)):
-            for ev, lst in sorted((bb.get("hooks") or {}).items()):
-                for h in lst:
-                    want = {k: h[k] for k in ("matcher", "command", "timeout") if k in h and h[k] not in ("", None)}
-                    hooks.setdefault("claude.hooks.%s.%s" % (ev, hook_key(h["command"])), [ev, {}])[1][lsrc] = want
+        hooks = hook_items(b, pb, self.hm, a)
         for path in sorted(hooks):
-            ev, per = hooks[path]
+            per = {lsrc: {k: h[k] for k in ("matcher", "command", "timeout") if k in h and h[k] not in ("", None)}
+                   for lsrc, (ev, h) in hooks[path].items()}
+            ev = (hooks[path].get("personal") or hooks[path].get("team"))[0]
             f = hook_find(settings, ev, (per.get("personal") or per.get("team"))["command"])
             self.item(path, f[2] if f else None, per.get("personal"), per.get("team"), None)
         cj = read_json_quiet(a.claude_config)
@@ -1317,6 +1352,8 @@ def session(a):
                         h["timeout"] = to
                     g = {"matcher": m, "hooks": [h]} if m else {"hooks": [h]}
                     st.setdefault("hooks", {}).setdefault(ev, []).append(g)
+            elif p.startswith(PERSONAL_HOOKS + "."):
+                hook_set(st, p.split(".")[3], v)
             elif p.startswith("claude.hooks."):
                 hook_set(st, p.split(".")[2], v)
         if st and not a.no_settings:

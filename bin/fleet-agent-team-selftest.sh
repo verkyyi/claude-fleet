@@ -33,6 +33,7 @@
 #                  — sync, status, session, expected, agent-effective.json, the
 #                  files — byte for byte what it is with no personal read at all
 #   M. layers      personal over team (MCP, setting, Codex key, hook, skill);
+#                  a personal hook lands wrapped, under claude.hooks.personal (#1858);
 #                  this login's own value over the personal layer's
 #   N. rollback    a personal version that drops items takes back only what the
 #                  personal layer wrote and nobody touched: a team item returns
@@ -307,7 +308,10 @@ out=$(team sync); rc=$?
 [ "$(j "$H/.claude/settings.json" "d['includeCoAuthoredBy']")" = true ] && [ "$(src claude.settings.includeCoAuthoredBy)" = '"personal"' ] \
   && grep -q '^sandbox_mode = "read-only"' "$H/.codex/config.toml" && [ "$(src codex.sandbox_mode)" = '"personal"' ] \
   && ok "M a personal setting / Codex key wins over the team's" || bad "M keys: $(cat "$H/.codex/config.toml")"
-[ "$(j "$H/.claude/settings.json" "[h['command'] for g in d['hooks']['Stop'] for h in g['hooks']]")" = '["echo me-stop"]' ] \
+[ "$(j "$H/.claude/settings.json" "[h['command'] for g in d['hooks']['Stop'] for h in g['hooks']]")" = \
+    "[\"sh \\\"\$HOME/.claude/fleet/bin/fleet-hook-personal.sh\\\" Stop -- 'echo me-stop'\"]" ] \
+  && [ "$(j "$CONF/agent-effective.json" "[k for k in d['items'] if k.startswith('claude.hooks.')]")" = \
+    "[\"claude.hooks.personal.Stop.$("$PY" -c 'import hashlib;print(hashlib.sha256(b"echo me-stop").hexdigest()[:10])')\"]" ] \
   && [ -f "$H/.claude/skills/me-notes/SKILL.md" ] && [ "$(src claude.skills.me-notes)" = '"personal"' ] \
   && ok "M a personal hook + skill land, source personal" || bad "M hook/skill: $(cat "$H/.claude/settings.json")"
 [ "$(j "$CONF/agent-effective.json" "[d['personal']['version'], d['personal']['state'], d['personal_version']]")" = '[1, "on", 1]' ] \

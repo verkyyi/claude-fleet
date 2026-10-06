@@ -105,6 +105,7 @@ hooks/artifact-guard.py
 hooks/base-readonly-guard.py
 hooks/bash-guard.py
 bin/fleet-hook-run.sh
+bin/fleet-hook-personal.sh
 conf/claude-settings.default.json
 conf/agent-defaults/claude/CLAUDE.default.md
 conf/agent-defaults/claude/mcp.default.json

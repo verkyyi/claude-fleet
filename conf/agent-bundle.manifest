@@ -29,6 +29,7 @@ hooks/artifact-guard.py             hooks
 hooks/base-readonly-guard.py        hooks
 hooks/bash-guard.py                 hooks
 bin/fleet-hook-run.sh               hooks
+bin/fleet-hook-personal.sh          hooks
 
 # settings — the default Claude Code keys (#1558)
 conf/claude-settings.default.json   settings
