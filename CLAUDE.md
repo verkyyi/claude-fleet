@@ -170,6 +170,13 @@ Do not install from memory: read the doc and work from it.
   rebuilds a fleet whose session vanished — admit-gated, unfinished sessions only,
   never one `fleet-down` took down (`restore.down`). claude / tmux are found off a
   bare PATH by `fleet_find_tool` / `fleet_path_fill`; `fleet-doctor`'s `tools` row.
+- **A new way to break the fleet gets its row and its drill BEFORE its fix**
+  (issue #1786). `docs/BREAK-IT.md` lists every known way (方式 · 后果 · 自愈方式 ·
+  演练); `bin/fleet-break-it-selftest.sh` does each one for real on isolated
+  sockets and a sandbox HOME and prints `PASS <id> <secs>s ≤<cap>s`. One row ⇔
+  one `drill_<id>` (the test reds on either side missing); a way fixed in another
+  repo is `登记：<ticket>`, listed, never drilled. Found a new one: add the row
+  + drill, watch it go red, then fix.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).
