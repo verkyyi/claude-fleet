@@ -129,16 +129,17 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # --- Follow the stable mark automatically (issue #1120, EPIC #1117) --------------
 # ON by default, per LOGIN. Every 30 min com.claude-fleet.install-sync
 # (bin/fleet-install-sync.sh) fetches refs/tags/stable from the public repo (https,
-# no credentials) and, when this login's HEAD is behind it and no window on any of
-# this login's fleets is working / looping / waking, fast-forwards ~/.claude/fleet
-# to it, runs bin/fleet-install-apply.sh (daemons reloaded, hooks merged,
-# commands/skills installed) and bin/fleet-doctor.sh — a NEW doctor FAIL line
-# rolls the install back and that version is not retried until stable moves. It
-# never moves backward and never touches an install with tracked local changes,
-# and it waits while an EPIC batch is running on this login: /fleet-epic-run
-# stamps $FLEET_CONF_DIR/global/epic-running every tick (bin/fleet-epic-heartbeat.sh,
-# issue #953) and the tick defers while that mark is fresh (a 45-min lease, cleared
-# at the batch's closing tick).
+# no credentials) and, when this login's HEAD is behind it, checks the new
+# version out beside the old one (~/.claude/fleet.versions/<sha>/), checks it,
+# switches the ~/.claude/fleet LINK to it in one rename — busy sessions and a
+# running EPIC batch no longer hold it back (issue #1894): a running script keeps
+# its files, the next call reads the new ones — then runs
+# bin/fleet-install-apply.sh (daemons reloaded, hooks merged, commands/skills
+# installed) and bin/fleet-doctor.sh; a NEW doctor FAIL line switches the link
+# back and that version is not retried until stable moves. It never moves
+# backward, never touches an install with tracked local changes, and waits while
+# the disk gate is closed. A plain-directory install is moved into
+# ~/.claude/fleet.versions/ at its first switch.
 # When it gets STUCK — refused, rolled back, or deferred past
 # FLEET_INSTALL_FOLLOW_STUCK_SECS — the doctor's install row WARNs, and the tick
 # that turned stuck sends ONE FLEET_NOTIFY_CMD message (issue #1125), deduped on
@@ -169,19 +170,26 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # @label=Node agent retry after failure @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_NODE_FOLLOW_RETRY_SECS=21600
 # A /loop session parked between rounds (`looping`, waiting on nothing but its
-# Loop) defers the tick only while its next round — a ScheduleWakeup or a
+# Loop) defers the node-agent upgrade (the install switch no longer waits) only while its next round — a ScheduleWakeup or a
 # CronCreate job — may start within this many seconds (issue #1690); a cron
 # that fires tomorrow morning no longer pins the install overnight. A round
 # whose time is unknown (a mark written before #1690) still defers. GLOBAL.
 # @label=Install-sync loop margin @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_INSTALL_LOOP_MARGIN_SECS=600
-# How long a login may sit `deferred` (a session busy) — or go without any
+# How long a login may sit `deferred` (the disk gate) — or go without any
 # install-sync tick at all — before the doctor's install row and
 # fleet-install-follow.sh call it STUCK (WARN) instead of following normally.
 # A day: a session busy that long is usually a stuck one, and a daemon silent
 # that long is not ticking. GLOBAL; read as a plain seconds count.
 # @label=Install-follow stuck threshold @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_INSTALL_FOLLOW_STUCK_SECS=86400
+# How long a version the install switched away from stays in
+# ~/.claude/fleet.versions/ (issue #1894) — a long-running process started from
+# it (an MCP server that resolved its own path) keeps working until then. The
+# current version, .prev and the checkout holding the repository are never
+# removed. GLOBAL; seconds.
+# @label=Keep retired install versions @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
+#FLEET_INSTALL_VERSIONS_KEEP_SECS=604800
 # ← in a Claude pane opens the agents view (and its prompt hint says
 # "← for agents"); a stray press strands you there. The sync fills
 # leftArrowOpensAgents=false into this login's ~/.claude.json — Claude Code's
