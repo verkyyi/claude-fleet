@@ -1744,6 +1744,9 @@ def session(a):
     hlines = s.codex_hook_lines() if agent == "codex" else []
     print("fp\t%s" % s.fingerprint())
     print("src\t%s" % s.src())
+    ver = fleet_ver(a.root)
+    if ver:                         # stamped as @agent_ver (#1895)
+        print("ver\t%s" % ver)
     if s.personal:                  # the person-facing line (EPIC #1855 C6) — absent, as before
         say = human_line(a)
         if say:
@@ -1793,11 +1796,38 @@ def session(a):
     return 0
 
 
+def fleet_ver(root):
+    """The fleet version a session launched from <root> runs (issue #1895, EPIC
+    #1906 C2): the 12-hex short sha of the version directory <root> resolves to
+    under C1's layout (~/.claude/fleet → ~/.claude/fleet.versions/<sha>[-<stamp>]/),
+    else `git rev-parse HEAD` of <root> when <root> IS a checkout's top (a
+    plain-checkout install, a worktree — never a repo it merely sits inside);
+    "" when neither answers — then nothing is stamped and nothing is 待换新.
+    Kept apart from the fingerprint: @agent_cfg says the DEFINITION changed
+    (配置旧), @agent_ver only that the fleet moved (待换新)."""
+    real = os.path.realpath(root)
+    m = re.match(r"([0-9a-f]{12})[0-9a-f]*(-|$)", os.path.basename(real))
+    if m and os.path.dirname(real).endswith(".versions"):
+        return m.group(1)
+    try:
+        r = subprocess.run(["git", "-C", real, "rev-parse", "--show-toplevel", "HEAD"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    out = r.stdout.split("\n") if r.returncode == 0 else []
+    if len(out) < 2 or os.path.realpath(out[0]) != real or not re.fullmatch(r"[0-9a-f]{40}", out[1]):
+        return ""
+    return out[1][:12]
+
+
 def expected_lines(a):
     out = []
     for agent in ("claude", "codex"):
         s = Session(a, agent).compose()
         out.append("%s %s %s" % (agent, s.fingerprint(), s.src()))
+    ver = fleet_ver(a.root)
+    if ver:                 # the fleet version a fresh session gets (#1895); none, no line
+        out.append("ver %s" % ver)
     return out
 
 
@@ -1825,7 +1855,9 @@ def check(a):
             fp = s.fingerprint()
     n = len(locked_set(a.root))
     if not rows:
-        print("ok lock=%s · %d locked item(s), none overridden here · expected claude %s" % (mode, n, fp))
+        ver = fleet_ver(a.root)
+        print("ok lock=%s · %d locked item(s), none overridden here · expected claude %s%s"
+              % (mode, n, fp, " · fleet %s" % ver if ver else ""))
         return 0
     print("%d locked item(s) overridden on this login (lock=%s): %s" % (len(rows), mode, "; ".join(rows)))
     return 1

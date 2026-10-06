@@ -35,7 +35,7 @@
 # DRIFT (issue #1829): the running servers carry the version they were loaded
 # from (@client_version, stamped by fleet-shell.sh). Files that moved under a
 # running client without a reload — a pre-#1781 `start` swapped the whole home
-# while the shell ran, or the install line wrote it in place — leave old proxy
+# while the shell ran, or a pre-#1900 install line wrote it in place — leave old proxy
 # loops beside new code opening connections of its own (the second connection
 # of #1775). `tick` (once idle) and `start` (before it attaches) see the stamp
 # differ from .client-version and run `fleet-shell.sh reload --all`: every proxy
@@ -120,6 +120,10 @@ ROOT="${FLEET_CLIENT_ROOT:-$(cd "$BIN/.." && pwd -P)}"
 # the home is the one <home>.versions/ belongs to
 case "$ROOT" in *.versions/*) [ -n "${FLEET_CLIENT_ROOT:-}" ] || ROOT=${ROOT%.versions/*} ;; esac
 VERS="$ROOT.versions"
+# the one whole-version switch (fleet_versions_*); a copy of this script alone
+# (no client beside it) still answers start/doctor — it just cannot switch
+# shellcheck source=fleet-versions-lib.sh
+[ -f "$BIN/fleet-versions-lib.sh" ] && . "$BIN/fleet-versions-lib.sh"
 CONF_DIR="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 # GitHub's stable, for a client with no hub (issue #1805)
 RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"; RAW=${RAW%/}
@@ -290,20 +294,15 @@ adopt_home() {
   ADOPTED=$own
 }
 # point <key> — <home> → <home>.versions/<key>, in ONE rename(2) of a link made
-# beside it (a plain-dir home is adopted first). rc 1: nothing changed.
+# beside it (a plain-dir home is adopted first). rc 1: nothing changed. The
+# switch is fleet_versions_point — the one the install line and a 承载
+# machine's install-sync use too (bin/fleet-versions-lib.sh).
 point() {
   local k="$1"
   [ -d "$VERS/$k" ] || return 1
+  command -v fleet_versions_point >/dev/null 2>&1 || return 1
   adopt_home "$k" || return 1
-  python3 -c 'import os, sys
-t, link = sys.argv[1], sys.argv[2]
-tmp = link + ".switch.%d" % os.getpid()
-try:
-    os.unlink(tmp)
-except OSError:
-    pass
-os.symlink(t, tmp)
-os.replace(tmp, link)' "$VERS/$k" "$ROOT"
+  fleet_versions_point "$ROOT" "$VERS/$k"
 }
 # adopt — the version dirs put in place on a home that has none yet (issue
 # #1829): #1781 adopted a plain-dir home only on its first switch, so a home a
@@ -332,16 +331,11 @@ adopt() {
 }
 # prune — every version dir but the current one, .prev's and .next's
 prune() {
-  local cur prev='' next='' d n
-  cur=$(cur_key)
+  local prev='' next=''
   { read -r next < "$VERS/.next"; } 2>/dev/null
   { read -r prev < "$VERS/.prev"; } 2>/dev/null
-  for d in "$VERS"/*/; do
-    [ -d "$d" ] || continue
-    n=$(basename "$d")
-    case "$n" in "$cur"|"$prev"|"$next") continue ;; esac
-    rm -rf "$d"
-  done
+  command -v fleet_versions_prune >/dev/null 2>&1 || return 0
+  fleet_versions_prune "$ROOT" "$(cur_key)" "$prev" "$next"
 }
 
 # stage — the hub's client into <home>.versions/<version>, the way a person

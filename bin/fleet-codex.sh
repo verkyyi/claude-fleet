@@ -380,7 +380,7 @@ fi
 # table is already inlined above. The mod is Claude's: recorded as `na`. The
 # fingerprint lands as @agent_cfg / @agent_cfg_src. FLEET_AGENT_CFG=0 or no
 # composer beside bin/ adds nothing.
-_cfg_fp=''; _cfg_src=''; _cfg_locks=''; _cfg_say=''
+_cfg_fp=''; _cfg_src=''; _cfg_ver=''; _cfg_locks=''; _cfg_say=''
 if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && command -v python3 >/dev/null 2>&1; then
   _cfg_args=(--lock "${FLEET_AGENT_LOCK:-warn}" --codex-home "${CODEX_HOME:-$HOME/.codex}")
   [ -n "$_codex_mcp" ] && _cfg_args+=(--no-mcp)
@@ -388,6 +388,7 @@ if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && comm
     case "$_cfg_k" in
       fp)   _cfg_fp="$_cfg_v" ;;
       src)  _cfg_src="$_cfg_v" ;;
+      ver)  _cfg_ver="$_cfg_v" ;;
       say)  _cfg_say="$_cfg_v" ;;
       c)    flags+=(-c "$_cfg_v") ;;
       lock) _cfg_locks="${_cfg_locks:+$_cfg_locks; }$_cfg_v" ;;
@@ -443,9 +444,12 @@ if [ -n "${TMUX_PANE:-}" ]; then
   if [ -n "$_cfg_fp" ]; then                 # issue #1782
     tmux set-option -w -t "$TMUX_PANE" @agent_cfg "$_cfg_fp" 2>/dev/null || true
     tmux set-option -w -t "$TMUX_PANE" @agent_cfg_src "$_cfg_src" 2>/dev/null || true
+    # the fleet version it runs (issue #1895): differs from the expected ver ⇒ 待换新
+    if [ -n "$_cfg_ver" ]; then tmux set-option -w -t "$TMUX_PANE" @agent_ver "$_cfg_ver" 2>/dev/null || true
+    else tmux set-option -wu -t "$TMUX_PANE" @agent_ver 2>/dev/null || true; fi
   fi
 fi
-unset _cfg_fp _cfg_src
+unset _cfg_fp _cfg_src _cfg_ver
 
 # Codex's SessionEnd reason is always `other`, including thread lifecycle ends
 # that do NOT mean the operator quit this TUI. Wait for the CLI itself instead

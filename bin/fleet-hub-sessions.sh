@@ -135,7 +135,7 @@
 # one more. `born` (#1750, rows only) is the session's birth, epoch seconds (the
 # node's @born, else window_created; empty from a node older than it) — the order
 # tmux-dashboard-rows.sh draws every machine's rows in. A `read` naming `busy`
-# last must name it too. `cfg` (#1783, rows only) is `stale` / `ok` — the session's
+# last must name it too. `cfg` (#1783, rows only) is `stale` / `renew` (#1895) / `ok` — the session's
 # configuration against the one a fresh session gets on ITS machine now, judged
 # there (fleet-control-read.sh); empty when unknown or from an older node. A
 # `read` naming `born` last must name it too. `title` (#1921, rows only) is the
@@ -625,7 +625,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
