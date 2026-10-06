@@ -250,7 +250,7 @@ fi
 # that does not says why, once, through refuse.)
 
 # Session cap (issues #28, #70): refuse to spawn once the GLOBAL cap
-# (FLEET_GLOBAL_MAX_SESSIONS, default 8, across ALL fleets) OR this fleet's
+# (FLEET_GLOBAL_MAX_SESSIONS, default 0 = off, across ALL fleets) OR this fleet's
 # per-fleet cap (FLEET_MAX_SESSIONS, default 0 = unlimited) is reached. This is
 # the shared choke point for every spawn path — the new-session box, the backlog
 # Enter, AND any headless spawn (dash-issue-session.sh <n> <sess>) — so both caps

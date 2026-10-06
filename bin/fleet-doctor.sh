@@ -1546,7 +1546,7 @@ tcps=''
 #    #895). So this line only reports the numbers, and an unbounded box is a fact
 #    it names, not a finding it counts.
 gmax="${FLEET_GLOBAL_MAX_SESSIONS:-$(_gconf_val FLEET_GLOBAL_MAX_SESSIONS)}"
-case "$gmax" in ''|*[!0-9]*) gmax=8 ;; esac
+case "$gmax" in ''|*[!0-9]*) gmax=0 ;; esac   # 0 = off by default since #1831
 gfmax=$(_gconf_val FLEET_MAX_SESSIONS)
 csum=0; cn=0; cunl=0
 if [ -d "$conf_dir" ]; then
@@ -1608,6 +1608,46 @@ else
   msum=$(printf '%s' "$mrows" | awk 'NF { t += $2; s = $1 " " $2; if ($3 == "stale") s = s " (stale)"; o = (o == "") ? s : o " · " s; k++ }
     END { printf "%d across %d login(s): %s", t, k, o }')
   pass machine "sessions across logins: $msum — $mcap"
+fi
+
+# 5. Admission — the ONLY capacity gate by default (issue #1831). The count caps
+#    default to 0, so what a spawn meets is fleet_machine_admit: room for one more
+#    session's measured cost above the kept-back floor, after paying for sessions
+#    admitted but not yet in the memory reading. This row is that number, every
+#    time — the operator should not learn the machine is full by being refused.
+#    No gate at all (both counts off AND FLEET_ADMIT=0) is a WARN: nothing then
+#    stops a spawn storm before the memory reading moves.
+adm="${FLEET_ADMIT:-$(_gconf_val FLEET_ADMIT)}"; [ -n "$adm" ] || adm=1
+if [ "$adm" = 0 ]; then
+  if [ "$gmax" -eq 0 ] && [ "$mmax" -eq 0 ]; then
+    warn admit "no capacity gate at all: FLEET_GLOBAL_MAX_SESSIONS=0, FLEET_MACHINE_MAX_SESSIONS=0 and FLEET_ADMIT=0 — a burst of spawns can take the machine before memory moves (issue #1831); drop FLEET_ADMIT=0, or set a count cap"
+  else
+    info admit "FLEET_ADMIT=0 — only the count cap gates new sessions"
+  fi
+else
+  _ad_env=''
+  for _k in FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB \
+            FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS; do
+    eval "_v=\${$_k:-}"; [ -n "$_v" ] || _v=$(_gconf_val "$_k")
+    [ -n "$_v" ] && _ad_env="$_ad_env $_k=$_v"
+  done
+  # shellcheck disable=SC2086
+  _ad=$(env $_ad_env bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1
+    h=$(fleet_machine_headroom) || h=-; w=$(fleet_machine_admit --short) && w=ok; printf "%s|%s" "$h" "$w"' _ "$(dirname "$0")" 2>/dev/null)
+  _ad_h=${_ad%%|*}; _ad_w=${_ad#*|}
+  if [ -z "$_ad" ] || [ "$_ad_h" = - ]; then
+    info admit "admission on, but this machine's memory is unreadable here — it admits by load alone"
+  else
+    # <room> <cost> <avail> <floor> <reserved> <hyst> <median> <agents>
+    read -r _r _c _a _f _rs _hy _md _ag <<EOF
+$_ad_h
+EOF
+    _ad_txt="room for ~$_r more session(s) now at ~$_c MB each (median $_md MB × growth over $_ag live agent(s)) — $_a MB available, $_f MB kept back"
+    [ "$_hy" -gt 0 ] && _ad_txt="$_ad_txt + $_hy MB until it recovers"
+    [ "$_rs" -gt 0 ] && _ad_txt="$_ad_txt, $_rs admitted not yet counted"
+    if [ "$_ad_w" = ok ]; then pass admit "$_ad_txt"
+    else warn admit "$_ad_w — $_ad_txt; running sessions are untouched, new ones wait (FLEET_ADMIT=0 overrides)"; fi
+  fi
 fi
 
 # --- last crash + the record a crash would leave (issue #1294) -----------------

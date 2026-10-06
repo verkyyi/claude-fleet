@@ -225,11 +225,11 @@ case "$mode" in
     # This login's own session cap and the count its spawn gate reads (issue
     # #1587): the node's heartbeat carries both, and the hub never places a
     # start on a login at its cap. The same numbers fleet_session_cap_ok
-    # refuses on — FLEET_GLOBAL_MAX_SESSIONS (default 8, 0 = unlimited) against
+    # refuses on — FLEET_GLOBAL_MAX_SESSIONS (default 0 = unlimited since #1831) against
     # the awake session windows of every fleet (a sleeper holds no slot). The
     # in-flight spawns are left out: the asker's own spawn is one of them.
-    gmax="${FLEET_GLOBAL_MAX_SESSIONS:-8}"
-    case "$gmax" in ''|*[!0-9]*) gmax=8 ;; esac
+    gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}"
+    case "$gmax" in ''|*[!0-9]*) gmax=0 ;; esac
     printf '{"sessions":%d,"max_sessions":%d}\n' "$(fleet_session_count)" "$gmax"
     ;;
   config)
