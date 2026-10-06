@@ -35,7 +35,7 @@
 #   H. keys kept    — (issue #1887) a migration rewrite leaves fleet.conf.bak-<time>;
 #                     a migrated FLEET_HOST=1 on a machine that hosts nothing (a
 #                     leftover fleet conf, no node.env, no fleet running) goes to 0
-#                     ONCE — --dry-run only says so, a person's set-host is never
+#                     ONCE — --dry-run only says so, a later set-host 1 is not
 #                     undone; _carry moves every key a file that appeared mid-
 #                     rewrite set into the same section of the new one
 set -uo pipefail

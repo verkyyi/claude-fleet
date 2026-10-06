@@ -160,10 +160,14 @@ _host_now() {
   esac
   r=$(_role_file)
   if [ -n "$r" ]; then printf '%s\tFLEET_ROLE=%s（旧键）' "$(_host_of_role "$r")" "$r"; return 0; fi
-  local why
+  # Nothing written yet: a read, as it always was — a node with a fleet conf
+  # here, or one the hub may place on, hosts. What a migration WRITES is
+  # _hosts_here's stricter answer (issue #1887).
+  local why h1=0
   ri=$(_role_infer); r=${ri%%	*}; why=''
   case "${ri#*	}" in *node:*) why=" — ${ri#*node: }" ;; esac
-  printf '%s\tinferred%s' "$(_host_of_role "$r")" "$why"
+  if _role_has "$r" node && { [ -n "$(fleet_each_conf)" ] || [ "$(_fleet_node_env_val CCQUOTA_FLEET_COMPUTE 2>/dev/null)" != 0 ]; }; then h1=1; fi
+  printf '%s\tinferred%s' "$h1" "$why"
 }
 
 # _migrate_key — an old FLEET_ROLE line becomes FLEET_HOST, in place (the line's
@@ -202,9 +206,10 @@ _bak_mc() {
   printf '%s' "$b"
 }
 
-# _host_mark <why> — the one line under FLEET_HOST that says its value was decided
-# (a person's set-host, or the one-time correction below): a decided value is
-# never corrected again. Replaces an earlier mark.
+# _host_mark <why> — the one line under FLEET_HOST that says the correction below
+# has run: it never runs twice. (A person's `fleet host on` needs no mark — it
+# turns compute on or installs the session daemons, which _hosts_here reads as 1.)
+# Replaces an earlier mark.
 HOST_MARK='# FLEET_HOST checked'
 _host_mark() {
   local tmp="$MC.tmp.$$"
@@ -244,7 +249,6 @@ set_host() {   # $1 1|0
   else
     _set_common "$MC" FLEET_HOST "FLEET_HOST=$1" || die "cannot write $MC"
   fi
-  _host_mark "set to $1 by hand" || die "cannot write $MC"
 }
 
 # ---- editing the file -----------------------------------------------------------
