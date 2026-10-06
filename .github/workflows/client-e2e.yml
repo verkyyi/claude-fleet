@@ -1,0 +1,88 @@
+name: client-e2e
+
+# Every merge proves the installed client works (issue #1724, EPIC #1718 C6).
+#
+# The one way in is `curl -fsSL <hub>/install | sh`, then `fleet`. When that
+# breaks, nobody gets in — and before this ran, the breakage was found by the
+# next person who opened their client. bin/client-e2e.sh builds the whole road
+# from THIS checkout: a hub (`ccquota hub`, 127.0.0.1) serving this commit's
+# client files, a fake node whose real `ccquota agent` reports two sessions, the
+# install line into a fresh HOME (its tmux step included), `fleet` opened
+# headless on its own tmux socket, the node's sessions in its list, and one row
+# opened in the right pane. Any step red = this job red, with the logs.
+#
+# ubuntu on every PR and every push to master (a merge); macOS nightly (and on
+# demand) — the BSD / bash 3.2 / Homebrew-tmux half, on its own clock so it
+# never queues behind the selftests' macOS shards (18:17 UTC).
+
+on:
+  pull_request:
+    paths:
+      - 'bin/**'
+      - 'shell/**'
+      - 'conf/**'
+      - 'tokenledger/**'
+      - '.github/workflows/client-e2e.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'bin/**'
+      - 'shell/**'
+      - 'conf/**'
+      - 'tokenledger/**'
+      - '.github/workflows/client-e2e.yml'
+  schedule:
+    - cron: '7 19 * * *'   # 03:07 CST
+  workflow_dispatch:
+
+concurrency:
+  group: client-e2e-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ubuntu:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: tokenledger/go.sum
+      - name: Build ccquota from this checkout
+        working-directory: tokenledger
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/ccquota" ./cmd/ccquota
+      - name: Install from the hub, open, list, switch
+        run: bin/client-e2e.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/client-e2e.log"
+      - name: Summary
+        if: always()
+        run: |
+          { echo '### client-e2e (ubuntu)'; echo '```'; tail -n 20 "$RUNNER_TEMP/client-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  macos:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: tokenledger/go.sum
+      - name: Build ccquota from this checkout
+        working-directory: tokenledger
+        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/ccquota" ./cmd/ccquota
+      - name: Install from the hub, open, list, switch
+        # /bin/bash is 3.2 here: the script runs on the operator's own shell
+        run: /bin/bash bin/client-e2e.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/client-e2e.log"
+      - name: Summary
+        if: always()
+        run: |
+          { echo '### client-e2e (macOS)'; echo '```'; tail -n 20 "$RUNNER_TEMP/client-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
