@@ -2141,6 +2141,29 @@ if [ -f "$_ad" ] && [ -d "$(dirname "$0")/../conf/agent-defaults" ] && command -
   esac
 fi
 
+# --- agentcfg: the configuration a session is launched with (issue #1782) ---
+# bin/fleet-claude.sh / fleet-codex.sh compose fleet default < team < local at
+# every launch and stamp the fingerprint as @agent_cfg. A LOCKED item
+# (conf/agent-locked.list: the mod, the fleet hooks, the fleet's MCP servers) that
+# this login overrides is listed here: under FLEET_AGENT_LOCK=warn (the default)
+# the login's value is used, under enforce it is ignored at launch. Prints the
+# fingerprint a fresh Claude session gets, the one global/agent-cfg.expected holds.
+_at="$(dirname "$0")/fleet-agent-team.py"
+if [ -f "$_at" ] && command -v python3 >/dev/null 2>&1; then
+  _alock="${FLEET_AGENT_LOCK:-$(_gconf_val FLEET_AGENT_LOCK)}"
+  _amod="${FLEET_MOD:-$(_gconf_val FLEET_MOD)}"
+  _amodf=''; [ "$_amod" = 0 ] && _amodf=--mod-off
+  # shellcheck disable=SC2086  # $_amodf is one word or none
+  _cout="$(FLEET_CONF_DIR="$conf_dir" python3 "$_at" check --root "$(dirname "$0")/.." \
+             --claude-config "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" --claude-settings "$settings" \
+             --override "$conf_dir/agent-overrides.json" --lock "${_alock:-warn}" $_amodf 2>&1)"; _crc=$?
+  case "$_crc" in
+    0) pass agentcfg "${_cout#ok }" ;;
+    1) warn agentcfg "$_cout (fix: drop the login's own value, or remove it from $conf_dir/agent-overrides.json — these are what fleet itself runs on)" ;;
+    *) warn agentcfg "fleet-agent-team.py check: $(printf '%s\n' "$_cout" | tail -1)" ;;
+  esac
+fi
+
 # --- auto-handoff nudge: does the Stop hook SEE the threshold? (issue #561) ---
 # FLEET_AUTO_HANDOFF_PCT=60 sat in the global fleet.conf for weeks while the Stop
 # hook (bin/set-claude-state.sh) read the knob from its ENVIRONMENT — which nothing

@@ -1,0 +1,18 @@
+# conf/agent-locked.list — the agent configuration fleet itself runs on (issue
+# #1782, EPIC #1776 C6; the operator's 拍板 #3). Everything else stays local-first:
+# a login's own value wins over the team's and the fleet default's. For an item
+# matched here (a path, or any ancestor of one, as bin/fleet-agent-team.py names
+# items) a login's own value / shield is:
+#   FLEET_AGENT_LOCK=warn     used, and listed by fleet-doctor's `agentcfg` row
+#                             and on the session's launch line (the default —
+#                             先一周只标出不强制)
+#   FLEET_AGENT_LOCK=enforce  ignored: the launch hands the fleet's value
+# One path per line; `#` starts a comment.
+
+mod                 # the fleet mod (mod/fleet, --plugin-dir) — FLEET_MOD=0 is the override
+claude.hooks        # the fleet hook table (hooks/settings-hooks.json) + the team's hooks
+codex.hooks         # the same table, inlined into every Codex launch
+claude.mcp.github   # the fleet's own tool connections (bin/mcp-github.sh, bin/mcp-fetch.sh)
+claude.mcp.fetch
+codex.mcp.github
+codex.mcp.fetch

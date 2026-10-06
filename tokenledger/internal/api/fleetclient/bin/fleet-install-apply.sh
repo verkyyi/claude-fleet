@@ -861,6 +861,22 @@ if [ -f "$ROOT/bin/fleet-agent-team.py" ] && [ "$DRY" = 0 ]; then
   esac
 fi
 
+# --- agentcfg (issue #1782, EPIC #1776 C6) ---------------------------------------
+# What a fresh session would be launched with moved with this sync: refresh the
+# fingerprint cache ($FLEET_CONF_DIR/global/agent-cfg.expected, one line per agent)
+# that the stale-session readers (C7, #1783) compare each window's @agent_cfg to.
+# The team pass above refreshes it too when a layer applied; this covers a sync
+# that moved only the fleet defaults or the mod. FLEET_AGENT_LOCK / FLEET_MOD are
+# read from the login's conf files by the composer itself (nothing is sourced here).
+if [ -f "$ROOT/bin/fleet-agent-team.py" ] && [ "$DRY" = 0 ] && [ "$BUNDLE" != 1 ]; then
+  if out=$(python3 "$ROOT/bin/fleet-agent-team.py" expected --write --root "$ROOT" --claude-config "$GCONF" \
+             --claude-settings "$CDIR/settings.json" --override "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agent-overrides.json" 2>&1); then
+    say "agentcfg: ok — expected $(printf '%s\n' "$out" | awk '{printf "%s%s %s", (NR>1?" · ":""), $1, $2}')"
+  else
+    say "agentcfg: WARN — $(printf '%s\n' "$out" | tail -1)"
+  fi
+fi
+
 # --- mod + the package's record (--bundle, issue #1725) ---------------------------
 # The mod is files, not a merge: it sits in the package (mod/fleet/) and every
 # fleet-launched Claude loads it from there (fleet_mod_dir). The state file is
