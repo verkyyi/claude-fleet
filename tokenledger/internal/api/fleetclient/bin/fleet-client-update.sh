@@ -249,7 +249,7 @@ EOF
 }
 
 cmd_doctor() {
-  local mark lv lc commit hub hv hmin hc tv maj min cert lvl=PASS parts='' f
+  local mark lv lc commit hv hmin tv maj min cert lvl=PASS parts='' f
   while [ $# -gt 0 ]; do
     case "$1" in --root) ROOT="$2"; shift 2 ;; *) shift ;; esac
   done
@@ -267,7 +267,7 @@ cmd_doctor() {
   else
     f=$(mktemp "${TMPDIR:-/tmp}/fleet-client-doctor.XXXXXX")
     if curl -fsS --max-time "$TMO" "$HUB/version" -o "$f" 2>/dev/null; then
-      IFS=$'\t' read -r hv hc hmin _ <<EOF
+      IFS=$'\t' read -r hv _ hmin _ <<EOF
 $(ver_fields "$f")
 EOF
       case "${lc:-}" in ''|*[!0-9]*) lc=$FLEET_CLIENT_COMPAT ;; esac
