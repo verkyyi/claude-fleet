@@ -702,6 +702,11 @@ if [ "${FLEET_INSTALL_NO_RUN:-}" = 1 ]; then
 fi
 export PATH="$BIN:$PATH"
 if [ "$TTY" = 1 ]; then
+  # The terminal's own device, not /dev/tty (issue #1901): stdin opened as
+  # /dev/tty has ttyname() «/dev/tty», which tmux refuses — `open terminal
+  # failed: can't use /dev/tty` was the last line of every `curl | sh`. stderr
+  # is that terminal whenever there is one to show this on.
+  if [ -t 2 ]; then exec "$BIN/fleet" 0<&2; fi
   exec "$BIN/fleet" </dev/tty
 fi
 exec "$BIN/fleet"
