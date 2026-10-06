@@ -159,7 +159,7 @@ ok "F cost (median × growth, floor, pin) and room above the kept-back floor"
 
 # A burst against room for exactly 3: 10000 MB × 40% = 4000, floor 2048 → 1952 / 600 = 3.
 capf() { env PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/t" FLEET_LOAD_PROBE_CMD='echo 0.5' FLEET_MEM_TOTAL_MB=10000 \
-           FLEET_MEM_PROBE_CMD='echo 1 40 0 0' "$@" \
+           FLEET_MEM_PROBE_CMD='echo 1 40 0 0' \
            bash -c 'source "$1/fleet-lib.sh"; out=$(fleet_session_cap_ok testsess); printf "%s|%s" "$?" "$out"' _ "$BIN"; }
 rm -rf "$WORK/t"; mkdir -p "$WORK/t"; seq_rc=''
 for i in 1 2 3 4 5; do r=$(capf); seq_rc="$seq_rc${r%%|*}"; done

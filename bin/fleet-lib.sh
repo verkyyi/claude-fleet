@@ -6399,10 +6399,11 @@ fleet_machine_admit() {
     case "$lvl" in 4) pname=critical ;; 2) pname=warn ;; *) pname=normal ;; esac
     why=''
     if [ -n "$hr" ]; then   # `read`, not `set -- $hr`: zsh (a skill's shell) does not split
-      local h_room h_cost h_avail h_floor h_res h_hyst h_rest
-      read -r h_room h_cost h_avail h_floor h_res h_hyst h_rest <<EOF
+      local h_room h_cost h_avail h_floor h_res h_hyst h_more
+      read -r h_room h_cost h_avail h_floor h_res h_hyst h_more <<EOF
 $hr
 EOF
+      : "${h_more:-}"   # median + agents: the doctor's, not this line's
       why="; room for $h_room more at ~$h_cost MB each: $h_avail MB available, $h_floor MB kept back"
       [ "${h_hyst:-0}" -gt 0 ] && why="$why + $h_hyst MB until it recovers"
       why="$why, $h_res admitted not yet counted"
