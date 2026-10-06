@@ -29,6 +29,13 @@
 #      mint it, the bind sites and the cleanup tick heal.
 #   F  zsh: sourced into zsh (Claude Code's Bash tool on the operator's Mac),
 #      fleet_window_fid / fleet_worker_id / fleet_origin_key answer what bash does.
+#   G  the FLEET's identity is frozen (issue #1936): a fleet with no identity file
+#      gets, on its first fleet_uuid, exactly the old algorithm's value (uuid5 of
+#      machine id + session/repo/checkout), written to fleets/<sess>/identity
+#      0600; then FLEET_REPO / FLEET_MAIN changed — or gone — move neither
+#      fleet_uuid, nor the inventory's fleet_id, nor fleet_uuid_home; a name with
+#      no conf writes nothing; a damaged file is rewritten; install-apply's conf
+#      pass freezes before fleet-conf.sh migrate.
 # tmux / python3 / perl absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -229,6 +236,42 @@ if command -v zsh >/dev/null 2>&1; then
 else
   echo 'worker-identity selftest: zsh absent — F skipped'
 fi
+
+# --- G: the fleet's identity is frozen (issue #1936) ----------------------------------
+G="gfz1936$$"; GD="$FLEET_CONF_DIR/fleets/$G"; mkdir -p "$GD"
+printf 'FLEET_REPO=acme/first\nFLEET_MAIN=%s/first\n' "$WORK" > "$GD/conf"
+old_alg() { python3 - "$FLEET_CONF_DIR/control/state.sqlite3" "$@" <<'PY'
+import json, sqlite3, sys, uuid
+m = sqlite3.connect(sys.argv[1]).execute("SELECT value FROM metadata WHERE key='machine_id'").fetchone()[0]
+print(uuid.uuid5(uuid.UUID(m), json.dumps(sys.argv[2:5], ensure_ascii=False, sort_keys=True, separators=(",", ":"))))
+PY
+}
+inv_id() { (cd "$BIN" && python3 -c 'import sys, fleet_control as c
+print([x["fleet_id"] for x in c.Control(sys.argv[1]).inventory() if x["name"] == sys.argv[2]][0])' "$FLEET_CONF_DIR" "$1" 2>/dev/null); }
+OLD=$(old_alg "$G" acme/first "$WORK/first")
+ok; [ ! -e "$GD/identity" ] || fail "G: a new fleet starts with no identity file"
+GU=$(lib fleet_uuid "$G")
+ok; is_uuid "$GU" && [ "$GU" = "$OLD" ] || fail "G: the first fleet_uuid = the old algorithm's value" "got=$GU old=$OLD"
+ok; [ "$(cat "$GD/identity" 2>/dev/null)" = "$OLD" ] || fail "G: the first call writes fleets/<sess>/identity" "$(cat "$GD/identity" 2>&1)"
+ok; [ "$(ls -l "$GD/identity" 2>/dev/null | cut -c1-10)" = '-rw-------' ] || fail "G: the identity file is 0600" "$(ls -l "$GD/identity")"
+ok; [ "$(inv_id "$G")" = "$OLD" ] || fail "G: the inventory's fleet_id = the frozen value" "$(inv_id "$G")"
+printf 'FLEET_REPO=acme/second\nFLEET_MAIN=%s/second\n' "$WORK" > "$GD/conf"
+ok; [ "$(lib fleet_uuid "$G")" = "$OLD" ] || fail "G: FLEET_REPO / FLEET_MAIN changed → fleet_uuid unchanged" "$(lib fleet_uuid "$G")"
+ok; [ "$(inv_id "$G")" = "$OLD" ] || fail "G: …and the inventory's fleet_id unchanged" "$(inv_id "$G")"
+ok; [ "$(lib fleet_uuid_home "$OLD")" = "$G" ] || fail "G: …and fleet_uuid_home still finds the fleet" "$(lib fleet_uuid_home "$OLD")"
+ok; [ "$(old_alg "$G" acme/second "$WORK/second")" != "$OLD" ] || fail "G: (contrast) the old algorithm would have moved"
+printf 'FLEET_BASE_BRANCH=main\n' > "$GD/conf"
+ok; [ "$(lib fleet_uuid "$G")" = "$OLD" ] && [ "$(inv_id "$G")" = "$OLD" ] \
+  || fail "G: no FLEET_REPO at all → the same identity" "$(lib fleet_uuid "$G") $(inv_id "$G")"
+ok; [ "$(lib fleet_uuid "$L")" = "${U:-x}" ] && [ "$(cat "$FLEET_CONF_DIR/fleets/$L/identity" 2>/dev/null)" = "${U:-y}" ] \
+  || fail "G: the D fleet's value froze as it was minted"
+NC="nocf1936$$"
+ok; is_uuid "$(lib fleet_uuid "$NC")" && [ ! -e "$FLEET_CONF_DIR/fleets/$NC" ] || fail "G: a name with no conf answers but writes nothing"
+printf 'garbage\n' > "$GD/identity"
+printf 'FLEET_REPO=acme/first\nFLEET_MAIN=%s/first\n' "$WORK" > "$GD/conf"
+ok; [ "$(lib fleet_uuid "$G")" = "$OLD" ] && [ "$(cat "$GD/identity")" = "$OLD" ] || fail "G: a damaged file is recomputed and rewritten" "$(cat "$GD/identity")"
+ok; awk '/fleet_uuid "\$s"/ { f = NR } /fleet-conf.sh" migrate/ { m = NR } END { exit !(f && m && f < m) }' "$BIN/fleet-install-apply.sh" \
+  || fail "G: install-apply's conf pass freezes every fleet before fleet-conf.sh migrate"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'worker-identity selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

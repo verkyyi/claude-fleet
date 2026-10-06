@@ -404,6 +404,22 @@ fi
 # Folds the install's fleet.conf, fleet.settings, the fleet conf, shell.conf and
 # hub.json's url into $FLEET_CONF_DIR/fleet.conf, each old file kept as .bak.
 # Idempotent: a machine already on one file says so and changes nothing.
+# FIRST every fleet's identity is frozen (issue #1936): fleet_uuid writes
+# fleets/<sess>/identity from today's repo + checkout, so whatever this pass — or
+# a later one — does to FLEET_REPO / FLEET_MAIN, the fleet's UUID stays put.
+if [ -z "$DRYFLAG" ] && [ -f "$ROOT/bin/fleet-lib.sh" ]; then
+  frozen=$( . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1 || exit 0
+            n=0
+            while IFS=$'\t' read -r s _c; do
+              [ -n "$s" ] || continue
+              [ -f "$(fleet_identity_file "$s")" ] && continue
+              fleet_uuid "$s" >/dev/null 2>&1 && n=$((n + 1))
+            done <<EOF
+$(fleet_each_conf)
+EOF
+            printf '%s' "$n" )
+  [ "${frozen:-0}" = 0 ] || say "conf: froze the identity of $frozen fleet(s)"
+fi
 if [ -f "$ROOT/bin/fleet-conf.sh" ]; then
   if out=$(bash "$ROOT/bin/fleet-conf.sh" migrate ${DRYFLAG:+"$DRYFLAG"} 2>&1); then
     say "conf: ok — $(printf '%s\n' "$out" | grep -v '^  |' | tail -1 | sed 's/^fleet-conf: //')"

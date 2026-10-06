@@ -90,13 +90,24 @@ class Control:
         for i in range(0, len(parts), 6):
             session, repo, checkout, agent, config, hosted = parts[i:i + 6]
             name(session)
-            fleet_id = str(uuid.uuid5(uuid.UUID(self.machine_id), canonical([session, repo, checkout])))
+            fleet_id = self.frozen_identity(session) \
+                or str(uuid.uuid5(uuid.UUID(self.machine_id), canonical([session, repo, checkout])))
             # repos (issue #1512): every repo the fleet hosts, for the hub's
             # placement — its own repo alone in a one-repo fleet.
             repos = [r for r in hosted.split("\n") if r] or ([repo] if repo else [])
             fleets.append(dict(fleet_id=fleet_id, machine_id=self.machine_id, name=session,
                                repo=repo, repos=repos, checkout=checkout, agent=agent, config_path=config))
         return fleets
+
+    def frozen_identity(self, session):
+        """The fleet's UUID as fleet_uuid froze it (issue #1936): fleets/<sess>/identity,
+        written once from the same uuid5 the line above computes, then never derived
+        from a repo again. None when absent or damaged — the caller mints it."""
+        try:
+            value = (self.conf_dir / "fleets" / session / "identity").read_text().split()[0]
+            return str(uuid.UUID(value)) if len(value) == 36 else None
+        except (OSError, IndexError, ValueError):
+            return None
 
     def ready(self):
         """Can this login take a NEW session (issue #1475)? The adapter's `ready`
