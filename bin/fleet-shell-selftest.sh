@@ -16,24 +16,31 @@
 #                    connect`, never run; fleet-hub-sessions.sh without
 #                    FLEET_HUB_SESSIONS_CLIENT lists the conf dir's fleets, not a
 #                    pseudo-fleet
-#   B. up          — bare `fleet` (tmux present) starts the shell: the hub's pick
-#                    (m5) in the right pane as an `m5` window (`@remote=m5:`), the
-#                    LIST pane on its left, the far end asked for `attach --shell -`
-#                    through the ssh shim, the environment set on the server, the
-#                    conf-free mirror in place
+#   B. up          — bare `fleet` (tmux present) starts the shell: ONE window,
+#                    `home` (@shell_frame), its right pane a nested client of the
+#                    STAGE server (`<sess>-stage`, issue #1759) whose first window
+#                    is the hub's pick (m5, `@remote=m5:`); the LIST pane on the
+#                    left of `home`, the far end asked for `attach --shell -`
+#                    through the ssh shim, the environment set on both servers,
+#                    the conf-free mirror in place
 #   C. data        — the client-mode loop writes remote_<sess> with EVERY row remote
 #                    (local=0, #me empty, a #node line per machine, m5 included),
 #                    hub_ok fresh; the row producer in the shell's environment lists
 #                    the hub's rows and none of the shell's own windows
 #   D. same machine— `open` on an m5 row with the pane's control socket answering:
-#                    `select <wid>` goes over it, the window is retargeted
+#                    `select <wid>` goes over it, the stage window is retargeted
 #                    (`@remote=m5:<wid>`), NO respawn, the list pane's id unchanged
-#   E. other machine— `open` on an m4 row: a second window `m4 <name>` (no ⇄, #1621), current;
-#                    `jump` moves the SAME list pane into it; m5's window stays
+#   E. other machine— `open` on an m4 row: a second STAGE window `m4 <name>` (no ⇄,
+#                    #1621), current there; `jump` leaves the list where it is — the
+#                    shell's server still holds one window, the same two panes; m5's
+#                    stage window stays (shell-switch-repaint-selftest.sh measures
+#                    that the switch repaints only the right pane)
 #   F. bar         — tmux-status.sh with the shell's env and the m4 window's args
 #                    renders hub mode: the m4 chip (online, off the #node line —
 #                    no hub_nodes), ● 入口; the window list is blanked; `rr=relay`
-#                    (the window on the hub relay, #1628) → `m4 · 中转`
+#                    (the window on the hub relay, #1628) → `m4 · 中转`; the
+#                    stage's title (`part=title`, #1759) says only what follows
+#                    the machine's name: nothing when all is well, ` · 中转`
 #   G. lost        — hub_ok aged past FLEET_HUB_SESSIONS_STALE: the rows are still
 #                    listed (dimmed, `!`), the bar says ○ 入口 失联
 #   H. ssh mode    — `fleet-shell.sh ssh` turns a ControlMaster call into
@@ -87,6 +94,7 @@ eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 (want '$2')" "$3"; }
 has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 (want '$3')" "$2" ;; esac; }
 hasnt() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 (must not hold '$3')" "$2" ;; esac; }
 ts() { "$REAL_TMUX" -L "$SESS" "$@"; }
+tsg() { "$REAL_TMUX" -L "$SESS-stage" "$@"; }   # the shell's stage (issue #1759)
 tn() { "$REAL_TMUX" -L "$NODE" "$@"; }
 waitfor() {  # <secs> <cmd…> — until the command succeeds
   local n=$(( $1 * 10 )); shift
@@ -98,9 +106,11 @@ cleanup() {
   exec 7>&- 2>/dev/null
   [ -n "$CLIENT_PID" ] && kill "$CLIENT_PID" 2>/dev/null
   "$REAL_TMUX" -L "$SESS" kill-server 2>/dev/null
+  "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
   "$REAL_TMUX" -L "$NODE" kill-server 2>/dev/null
   pkill -f "fleet-shell.sh keeper $SESS" 2>/dev/null
   "$REAL_TMUX" -L "fshK$$" kill-server 2>/dev/null
+  "$REAL_TMUX" -L "fshK$$-stage" kill-server 2>/dev/null
   pkill -f "fleet-shell.sh keeper fshK$$" 2>/dev/null
   rm -rf "$WORK"
 }
@@ -111,6 +121,7 @@ SB="$WORK/sbin"; mkdir -p "$SB" "$WORK/conf"
 for f in "$BIN"/*; do [ -f "$f" ] && ln -s "$f" "$SB/${f##*/}"; done
 rm -f "$SB/fleet-connect.py"
 ln -s "$BIN/../conf/tmux-shell.conf" "$WORK/conf/tmux-shell.conf"
+ln -s "$BIN/../conf/tmux-shell-stage.conf" "$WORK/conf/tmux-shell-stage.conf"
 cat > "$SB/fleet-connect.py" <<EOF
 #!/usr/bin/env python3
 import json, os, sys
@@ -241,13 +252,23 @@ exec 7> "$WORK/client.fifo"
 # client attaching a beat after this line was a flaky red (#1620)
 attached() { [ "$(ts display-message -p -t "=$SESS:" '#{session_attached}')" != 0 ]; }
 CHECKS=$((CHECKS + 1)); waitfor 5 attached || fail 'B: a control client attached'
-w1=$(ts list-windows -t "=$SESS" -F '#{window_id}' | head -1)
-eq 'B: the first window is m5 (the pick)' 'm5' "$(ts display-message -p -t "$w1" '#{window_name}')"
-eq 'B: @remote = m5: (the machine, no worker)' 'm5:' "$(ts show-options -wqv -t "$w1" @remote)"
+wh=$(ts list-windows -t "=$SESS" -F '#{window_id}' | head -1)
+eq 'B: the shell holds ONE window' 1 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
+eq 'B: … home' 'home' "$(ts display-message -p -t "$wh" '#{window_name}')"
+eq 'B: … marked @shell_frame' 1 "$(ts show-options -wqv -t "$wh" @shell_frame)"
+CHECKS=$((CHECKS + 1)); waitfor 5 tsg has-session -t "=$SESS-stage" || fail 'B: the stage server is up'
+stageclient() { [ "$(tsg display-message -p -t "=$SESS-stage:" '#{session_attached}' 2>/dev/null)" = 1 ]; }
+CHECKS=$((CHECKS + 1)); waitfor 5 stageclient || fail 'B: home'"'"'s right pane is the stage'"'"'s client'
+w1=$(tsg list-windows -t "=$SESS-stage" -F '#{window_id}' | head -1)
+eq 'B: the stage'"'"'s first window is m5 (the pick)' 'm5' "$(tsg display-message -p -t "$w1" '#{window_name}')"
+eq 'B: @remote = m5: (the machine, no worker)' 'm5:' "$(tsg show-options -wqv -t "$w1" @remote)"
 CHECKS=$((CHECKS + 1)); waitfor 10 grep -q "attach --shell '-'" "$WORK/ssh.log" || fail 'B: the far end was asked for attach --shell -' "$(cat "$WORK/ssh.log" 2>/dev/null)"
 has 'B: the ssh went to m5' "$(head -1 "$WORK/ssh.log")" 'm5	'
 env_g=$(ts show-environment -g)
 has 'B: server env FLEET_SHELL=1' "$env_g" 'FLEET_SHELL=1'
+has 'B: server env names the stage' "$env_g" "FLEET_SHELL_STAGE=$SESS-stage"
+has 'B: the stage has the same env' "$(tsg show-environment -g)" 'FLEET_SHELL=1'
+has 'B: the stage'"'"'s title asks the bar for its words' "$(cat "$WORK/cache/tmux-stage.conf")" "tmux-status.sh part=title sess=$SESS"
 has 'B: server env client mode' "$env_g" "FLEET_HUB_SESSIONS_CLIENT=$SESS"
 has 'B: server env hub source' "$env_g" 'FLEET_SIDEBAR_SOURCE=hub'
 has 'B: server env TMPDIR under the cache' "$env_g" "TMPDIR=$WORK/cache/tmp"
@@ -257,15 +278,15 @@ CHECKS=$((CHECKS + 1)); [ -e "$WORK/cache/fleet.conf" ] && fail 'B: the mirror m
 has 'B: tmux.conf names the mirror' "$(cat "$WORK/cache/tmux.conf")" "$WORK/cache/bin/tmux-status.sh"
 # the list pane: sync (the hooks' call) puts the view left of the ssh pane
 ts set-option -g @popup_open 0 2>/dev/null
-ts resize-window -t "$w1" -x 200 -y 50 2>/dev/null
+ts resize-window -t "$wh" -x 200 -y 50 2>/dev/null
 view_of() { ts list-panes -t "$1" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }'; }
 sock=$(ts display-message -p '#{socket_path}')
 ( export TMUX="$sock,0,0" FLEET_SHELL=1 FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS"
-  bash "$WORK/cache/bin/fleet-sidebar.sh" sync "$w1" >/dev/null 2>&1 )
-CHECKS=$((CHECKS + 1)); waitfor 5 test -n "$(view_of "$w1")" || fail 'B: sync put a list pane in the m5 window' "$(ts list-panes -t "$w1" -F '#{pane_id} #{@sidebar} #{pane_current_command}')"
-view=$(view_of "$w1")
-eq 'B: the list pane is on the left' "$view" "$(ts list-panes -t "$w1" -F '#{pane_id} #{pane_left}' | awk '$2 == 0 { print $1; exit }')"
-eq 'B: two panes: list + ssh' 2 "$(ts list-panes -t "$w1" -F x | grep -c x)"
+  bash "$WORK/cache/bin/fleet-sidebar.sh" sync "$wh" >/dev/null 2>&1 )
+CHECKS=$((CHECKS + 1)); waitfor 5 test -n "$(view_of "$wh")" || fail 'B: sync put a list pane in home' "$(ts list-panes -t "$wh" -F '#{pane_id} #{@sidebar} #{pane_current_command}')"
+view=$(view_of "$wh")
+eq 'B: the list pane is on the left' "$view" "$(ts list-panes -t "$wh" -F '#{pane_id} #{pane_left}' | awk '$2 == 0 { print $1; exit }')"
+eq 'B: two panes: list + the stage'"'"'s client' 2 "$(ts list-panes -t "$wh" -F x | grep -c x)"
 
 # ================================================================================
 # C. data — the client-mode loop and the row producer
@@ -283,61 +304,64 @@ hasnt 'C: another login is not a row' "$cache" 'someone'
 hasnt 'C: another login is not a row (wid)' "$cache" '33333333'
 CHECKS=$((CHECKS + 1)); waitfor 5 test -s "$G/hub_ok" || fail 'C: hub_ok written'   # same round as the cache, a beat later
 CHECKS=$((CHECKS + 1)); [ -e "$FLEET_CONF_DIR/control/hub-workers.tsv" ] && fail 'C: client mode must not write the control locator cache'
-rows=$( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_SIDEBAR_CURRENT="$w1" \
+rows=$( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_SIDEBAR_CURRENT="$wh" \
         FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_HUB_SESSIONS_CLIENT="$SESS" \
         bash "$WORK/cache/bin/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | tr '\037' '|' )
 has 'C: the producer lists the m5 worker' "$rows" 'issue-7'
 has 'C: the producer lists the m4 worker' "$rows" 'issue-9'
 has 'C: the producer lists the scratch row' "$rows" 'notes'
-eq 'C: the shell window itself is not a row' '' "$(printf '%s\n' "$rows" | awk -F'|' -v w="$w1" '$1 == w || $4 == "m5"')"
+eq 'C: the shell window itself is not a row' '' "$(printf '%s\n' "$rows" | awk -F'|' -v w="$wh" '$1 == w || $4 == "m5" || $4 == "home"')"
 hasnt 'C: no row is tagged lost while the hub answers' "$rows" 'm5!'
 
 # ================================================================================
 # D. same machine — open an m5 row: select over the control socket, no respawn
 # ================================================================================
-CHECKS=$((CHECKS + 1)); waitfor 5 test -S "$(ts show-options -wqv -t "$w1" @remote_ctl)" || fail 'D: run stashed a live @remote_ctl on its window' "$(ts show-options -wqv -t "$w1" @remote_ctl)"
-pane_pid=$(ts list-panes -t "$w1" -F '#{pane_id} #{pane_pid} #{@sidebar}' | awk '$3 != 1 { print $2; exit }')
+CHECKS=$((CHECKS + 1)); waitfor 5 test -S "$(tsg show-options -wqv -t "$w1" @remote_ctl)" || fail 'D: run stashed a live @remote_ctl on its window' "$(tsg show-options -wqv -t "$w1" @remote_ctl)"
+pane_pid=$(tsg list-panes -t "$w1" -F '#{pane_pid}' | head -1)
 : > "$WORK/ssh.log"
-out=$( TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" \
-       bash "$WORK/cache/bin/fleet-remote-view.sh" open 'wid:11111111-1111-4111-8111-111111111111/issue-7' 2>&1 )
-eq 'D: open printed the SAME window' "$w1" "$out"
-eq 'D: @remote retargeted to the worker' 'm5:11111111-1111-4111-8111-111111111111/issue-7' "$(ts show-options -wqv -t "$w1" @remote)"
-eq 'D: the window is renamed after the row' 'm5 issue-7' "$(ts display-message -p -t "$w1" '#{window_name}')"
+# what the list's own pane runs `open` with: the shell's server environment
+openrow() {
+  TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SHELL_STAGE="$SESS-stage" FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 \
+    TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" bash "$WORK/cache/bin/fleet-remote-view.sh" open "$1" 2>&1
+}
+out=$(openrow 'wid:11111111-1111-4111-8111-111111111111/issue-7')
+eq 'D: open printed the SAME (stage) window' "$w1" "$out"
+eq 'D: @remote retargeted to the worker' 'm5:11111111-1111-4111-8111-111111111111/issue-7' "$(tsg show-options -wqv -t "$w1" @remote)"
+eq 'D: the window is renamed after the row' 'm5 issue-7' "$(tsg display-message -p -t "$w1" '#{window_name}')"
 has 'D: select went over the connection' "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh select '11111111-1111-4111-8111-111111111111/issue-7'"
 hasnt 'D: no second attach (no respawn)' "$(cat "$WORK/ssh.log")" 'attach'
-eq 'D: the ssh pane was NOT respawned (same pid)' "$pane_pid" "$(ts list-panes -t "$w1" -F '#{pane_id} #{pane_pid} #{@sidebar}' | awk '$3 != 1 { print $2; exit }')"
-eq 'D: the list pane is the same pane' "$view" "$(view_of "$w1")"
-eq 'D: still one window' 1 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
+eq 'D: the ssh pane was NOT respawned (same pid)' "$pane_pid" "$(tsg list-panes -t "$w1" -F '#{pane_pid}' | head -1)"
+eq 'D: the list pane is the same pane' "$view" "$(view_of "$wh")"
+eq 'D: still one stage window' 1 "$(tsg list-windows -t "=$SESS-stage" -F x | grep -c x)"
+eq 'D: still one shell window' 1 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
 
 # ================================================================================
 # E. other machine — open an m4 row: a second window, the list pane follows
 # ================================================================================
 : > "$WORK/ssh.log"
-out=$( TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" \
-       bash "$WORK/cache/bin/fleet-remote-view.sh" open 'wid:22222222-2222-4222-8222-222222222222/issue-9' 2>&1 )
-w2=$out
+w2=$(openrow 'wid:22222222-2222-4222-8222-222222222222/issue-9')
 CHECKS=$((CHECKS + 1)); case "$w2" in @*) [ "$w2" != "$w1" ] || fail 'E: a NEW window for m4' "$w2" ;; *) fail 'E: open printed a window id' "$w2" ;; esac
-eq 'E: two windows now' 2 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
-eq 'E: the m4 window is current' "$w2" "$(ts display-message -p -t "=$SESS:" '#{window_id}')"
-eq 'E: named m4 <name>, no ⇄ (#1621)' 'm4 issue-9' "$(ts display-message -p -t "$w2" '#{window_name}')"
-eq 'E: @remote = m4:<wid>' 'm4:22222222-2222-4222-8222-222222222222/issue-9' "$(ts show-options -wqv -t "$w2" @remote)"
+eq 'E: two stage windows now' 2 "$(tsg list-windows -t "=$SESS-stage" -F x | grep -c x)"
+eq 'E: the m4 window is current on the stage' "$w2" "$(tsg display-message -p -t "=$SESS-stage:" '#{window_id}')"
+eq 'E: named m4 <name>, no ⇄ (#1621)' 'm4 issue-9' "$(tsg display-message -p -t "$w2" '#{window_name}')"
+eq 'E: @remote = m4:<wid>' 'm4:22222222-2222-4222-8222-222222222222/issue-9' "$(tsg show-options -wqv -t "$w2" @remote)"
+eq 'E: the shell still holds ONE window' 1 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
 CHECKS=$((CHECKS + 1)); waitfor 10 grep -q "^m4	.*run\|^m4	" "$WORK/ssh.log" || fail 'E: the far end m4 was asked to attach' "$(cat "$WORK/ssh.log")"
 has 'E: run --shell → attach --shell on m4' "$(cat "$WORK/ssh.log")" "attach --shell '22222222-2222-4222-8222-222222222222/issue-9'"
-# the list pane follows: fleet-sidebar.py jump (what Enter does) moves the SAME pane
-ts resize-window -t "$w2" -x 200 -y 50 2>/dev/null
-( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" \
-  python3 - "$SESS" "$w2" "$view" "$WORK/cache/lock" <<'PY'
+# fleet-sidebar.py jump (what Enter does) on an m5 row: the stage switches back,
+# the list stays — no pane moved, no window made on the shell's server
+( cd "$WORK/cache/bin" && TMUX="$(ts display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SHELL_STAGE="$SESS-stage" FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" \
+  python3 - "$SESS" 'wid:11111111-1111-4111-8111-111111111111/issue-7' "$view" "$WORK/cache/lock" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", "fleet-sidebar.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.jump(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
 PY
 )
-eq 'E: the SAME list pane now sits in the m4 window' "$view" "$(view_of "$w2")"
-eq 'E: the list pane is on the left of m4' "$view" "$(ts list-panes -t "$w2" -F '#{pane_id} #{pane_left}' | awk '$2 == 0 { print $1; exit }')"
-eq 'E: the m5 window is still there' 'm5 issue-7' "$(ts display-message -p -t "$w1" '#{window_name}')"
-eq 'E: m5 window keeps its ssh pane' 1 "$(ts list-panes -t "$w1" -F '#{@sidebar_slot}' | grep -vc 1)"
-# …and a slot in the list's cell, so its ssh pane never widened back (#1702)
-eq 'E: m5 window keeps a slot where the list was' 1 "$(ts list-panes -t "$w1" -F '#{@sidebar_slot}' | grep -c 1)"
+eq 'E: jump: the m5 window is current on the stage again' "$w1" "$(tsg display-message -p -t "=$SESS-stage:" '#{window_id}')"
+eq 'E: jump: the list pane did not move' "$view" "$(view_of "$wh")"
+eq 'E: jump: home still has its two panes, no slot' 2 "$(ts list-panes -t "$wh" -F x | grep -c x)"
+eq 'E: jump: still one shell window' 1 "$(ts list-windows -t "=$SESS" -F x | grep -c x)"
+eq 'E: the m4 window is still there' 'm4 issue-9' "$(tsg display-message -p -t "$w2" '#{window_name}')"
 
 # ================================================================================
 # F. the bar — tmux-status.sh in the shell's environment, for the m4 window
@@ -346,7 +370,12 @@ bar() {  # <window> [k=v…] — the bar as the conf's status-right runs it
   local w=$1; shift
   ( cd "$WORK/cache/bin" && FLEET_SHELL=1 FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_NODE_ALIASES='macmini=m5 mini2=m4' \
     TMUX="$(ts display-message -p '#{socket_path}'),0,0" HOSTNAME=laptop \
-    bash "$WORK/cache/bin/tmux-status.sh" "sess=$SESS" "win=$w" "remote=$(ts show-options -wqv -t "$w" @remote)" acct= wsf=x wscf=y wsaved= "$@" 2>/dev/null )
+    bash "$WORK/cache/bin/tmux-status.sh" "sess=$SESS" "win=$w" "remote=$(tsg show-options -wqv -t "$w" @remote)" acct= wsf=x wscf=y wsaved= "$@" 2>/dev/null )
+}
+title() {  # <window> [k=v…] — the stage's title words, as its status-left runs them (#1759)
+  local w=$1; shift
+  ( cd "$WORK/cache/bin" && FLEET_SHELL=1 FLEET_SIDEBAR_SOURCE=hub CCQUOTA_FLEET=1 TMPDIR="$WORK/cache/tmp" FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_NODE_ALIASES='macmini=m5 mini2=m4' \
+    HOSTNAME=laptop bash "$WORK/cache/bin/tmux-status.sh" part=title "sess=$SESS" "remote=$(tsg show-options -wqv -t "$w" @remote)" "$@" 2>/dev/null )
 }
 b=$(bar "$w2")
 has 'F: the bar names m4 (the right pane machine)' "$b" 'm4 '
@@ -362,6 +391,8 @@ eq 'F: rr= / cr= empty → the bar byte for byte as without them' "$b" "$(bar "$
 b5=$(bar "$w1")
 has 'F: the m5 window says m5' "$b5" 'm5 '
 eq 'F: the window list was blanked (hub mode)' '1' "$(ts show-options -gqv @status_wlist_saved)"
+eq 'F: title: m4 online → nothing after its name' '' "$(title "$w2")"
+eq 'F: title: rr=relay → · 中转' ' · 中转' "$(title "$w2" rr=relay)"
 
 # ================================================================================
 # G. lost — the hub silent: rows stay (dimmed), the bar says 失联
@@ -541,9 +572,10 @@ out=$( unset FLEET_REMOTE_SSH_CMD FLEET_HUB_SESSIONS_CMD FLEET_HUB_SESSIONS_USER
 eq 'K: bare fleet with no hub → the client started (exit 0)' 0 "$rc"
 eq 'K: it printed its session' "$SESSK" "$out"
 hasnt 'K: no «no hub URL» line' "$(cat "$WORK/upK.err")" 'no hub URL'
-wk=$(tk list-windows -t "=$SESSK" -F '#{window_id}' 2>/dev/null | head -1)
-eq 'K: the first window is THIS computer' "$ME" "$(tk display-message -p -t "$wk" '#{window_name}' 2>/dev/null)"
-eq 'K: @remote = <this computer>:' "$ME:" "$(tk show-options -wqv -t "$wk" @remote 2>/dev/null)"
+tkg() { "$REAL_TMUX" -L "$SESSK-stage" "$@"; }
+wk=$(tkg list-windows -t "=$SESSK-stage" -F '#{window_id}' 2>/dev/null | head -1)
+eq 'K: the stage'"'"'s first window is THIS computer' "$ME" "$(tkg display-message -p -t "$wk" '#{window_name}' 2>/dev/null)"
+eq 'K: @remote = <this computer>:' "$ME:" "$(tkg show-options -wqv -t "$wk" @remote 2>/dev/null)"
 envk=$(tk show-environment -g 2>/dev/null)
 has 'K: server env local source' "$envk" 'FLEET_SIDEBAR_SOURCE=local'
 has 'K: server env: the loop reads this machine' "$envk" 'FLEET_HUB_SESSIONS_LOCAL=1'
@@ -551,7 +583,7 @@ hasnt 'K: no hub address in the env' "$envk" 'FLEET_HUB_URL='
 # the right pane: a real nested attach (fleet-shell.sh ssh → this_machine) — a
 # client of the node's server, no ssh anywhere
 nodeclient() { tn list-clients -F '#{client_tty}' 2>/dev/null | grep -q .; }
-CHECKS=$((CHECKS + 1)); waitfor 15 nodeclient || fail 'K: the right pane attached to this machine'"'"'s fleet' "$(tk capture-pane -p -t "$wk" 2>/dev/null | grep -v '^$' | tail -3)"
+CHECKS=$((CHECKS + 1)); waitfor 15 nodeclient || fail 'K: the right pane attached to this machine'"'"'s fleet' "$(tkg capture-pane -p -t "$wk" 2>/dev/null | grep -v '^$' | tail -3)"
 # the list: the loop wrote this machine's sessions, via=node, under the shell's cache
 GK="$WORK/cacheK/tmp/.claude-dash/global"
 CHECKS=$((CHECKS + 1)); waitfor 15 grep -q "issue-8" "$GK/remote_$SESSK" 2>/dev/null || fail 'K: the loop wrote this machine'"'"'s rows' "$(ls "$GK" 2>/dev/null)"
@@ -567,14 +599,15 @@ has 'K: the list has issue-7' "$rowsk" 'issue-7'
 has 'K: the list has issue-8' "$rowsk" 'issue-8'
 hasnt 'K: no row reads lost (there is no hub to be silent)' "$rowsk" "$ME!"
 # pick a row: the right pane switches to it on this machine
-okk=$( TMUX="$(tk display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESSK" CCQUOTA_FLEET=1 TMPDIR="$WORK/cacheK/tmp" \
+okk=$( TMUX="$(tk display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SHELL_STAGE="$SESSK-stage" FLEET_SESSION="$SESSK" CCQUOTA_FLEET=1 TMPDIR="$WORK/cacheK/tmp" \
        FLEET_HUB_SESSIONS_LOCAL=1 FLEET_REMOTE_SSH_CMD="$WORK/cacheK/bin/fleet-shell.sh ssh" \
        bash "$WORK/cacheK/bin/fleet-remote-view.sh" open "wid:$U/issue-8" 2>&1 )
 eq 'K: open answered the same window' "$wk" "$okk"
-eq 'K: @remote retargeted to issue-8' "$ME:$U/issue-8" "$(tk show-options -wqv -t "$wk" @remote 2>/dev/null)"
+eq 'K: @remote retargeted to issue-8' "$ME:$U/issue-8" "$(tkg show-options -wqv -t "$wk" @remote 2>/dev/null)"
 nodeon8() { tn list-clients -F '#{window_name}' 2>/dev/null | grep -qx issue-8; }
 CHECKS=$((CHECKS + 1)); waitfor 15 nodeon8 || fail 'K: the right pane now shows issue-8' "$(tn list-clients -F '#{client_session} #{window_name}' 2>/dev/null)"
 "$REAL_TMUX" -L "$SESSK" kill-server 2>/dev/null
+"$REAL_TMUX" -L "$SESSK-stage" kill-server 2>/dev/null
 pkill -f "fleet-shell.sh keeper $SESSK" 2>/dev/null
 # the degenerate: a hub address in fleet.conf → the hub source, byte for byte
 printf 'FLEET_HUB_URL=https://hub.example\n' > "$FLEET_CONF_DIR/fleet.conf"

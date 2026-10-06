@@ -29,6 +29,9 @@
 # run-shell -b in the background, like the real one). Exit 0 = pass; non-zero =
 # fail (prints the failing assertion). git/python3 absent is irrelevant here.
 set -uo pipefail
+# The rows' order asserted here is the status order (needs/done/working by rank):
+# pin it — the default born order (issue #1750) is dash-born-order-selftest.sh's.
+export FLEET_DASH_ORDER=status
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ENTER="$BIN/dash-enter.sh"
 LIB="$BIN/fleet-lib.sh"

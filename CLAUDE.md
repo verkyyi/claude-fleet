@@ -250,7 +250,7 @@ Do not install from memory: read the doc and work from it.
   a file it NAMES does — name the scripts you drive.
 - **CI SHARDS the gate; the tests themselves still run one at a time**
   (issue #681). `run-selftests.sh --shard K/N` takes every N-th test of the
-  sorted list, and `.github/workflows/selftests.yml` fans that over a 6-job
+  sorted list, and `.github/workflows/selftests.yml` fans that over an 8-job
   matrix — ~1-2 min a shard, where the whole suite was 9 minutes against a
   10-minute bound. Edit the `shard:` list to change the width and nothing else:
   the split reads `strategy.job-total`. The width is set by measured runner

@@ -446,6 +446,17 @@ done
 dpp=$(tmux -L "$LBL" display-message -p -t dash '#{pane_pid}' 2>/dev/null)
 ok; [ -z "$(fleet_pane_claude_pids "$dpp" 2>/dev/null)" ] || fail "a pane with no Claude must resolve to nothing, not to a neighbour"
 ok; [ -z "$(fleet_pane_claude_pids 2>/dev/null)" ] || fail "no pids in, nothing out"
+# A ZOMBIE is not a Claude (issue #1734): on Linux a just-/exit'ed claude keeps
+# comm=claude until its parent reaps it, and fleet-transfer read that as "another
+# Claude appeared". ps is shimmed so the leg is the same on macOS and Linux.
+zps() {
+  case "$*" in
+    *stat=,comm=*) printf '900 1 Ss zsh\n901 900 Z claude\n910 1 Ss zsh\n911 910 S+ claude\n' ;;
+    *command=*)    printf '900 -zsh\n901 claude\n910 -zsh\n911 claude\n' ;;
+  esac
+}
+zout=$(ps() { zps "$@"; }; fleet_pane_claude_pids 900 910 2>/dev/null)
+ok; [ "$zout" = "910 911" ] || fail "a zombie claude must not count; a live one must" "$zout"
 
 # --- the breadcrumb a tree-kill leaves behind (issue #706) -------------------
 # fleet-quotawatch runs this probe under fleet_timebox and kills the tree at the

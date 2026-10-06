@@ -487,12 +487,19 @@ same three things a fleet pane shows, without a fleet on that computer: LEFT the
 hub's list, BOTTOM the hub's bar, RIGHT a direct ssh into the session you look
 at. Nothing is rendered anew — the shell is a composition: its own tmux server
 `-L fleet-shell` (the socket label is the session name, as a fleet's is) holding
-ONE proxy window per machine (`m4 <name>`, `@remote=<node>:<wid>`,
-`fleet-remote-view.sh run --shell`, so the far end registers a shell client and
-hides its own list and bar, #1485); the list pane (`fleet-sidebar.py`) joins
-whichever window is current and the conf's hooks (`conf/tmux-shell.conf`) put it
-back after a close; the bar is `tmux-status.sh` in hub mode, passed the current
-window's `@remote`. The data is `fleet-hub-sessions.sh --loop` in **client mode**
+ONE window, `home`: the list pane (`fleet-sidebar.py`, drawn by the conf's hooks,
+`conf/tmux-shell.conf`) on the left, and on the right a nested client of the
+shell's STAGE — a second server, `-L fleet-shell-stage`
+(`conf/tmux-shell-stage.conf`), holding ONE proxy window per machine (`m4 <name>`,
+`@remote=<node>:<wid>`, `fleet-remote-view.sh run --shell`, so the far end
+registers a shell client and hides its own list and bar, #1485). Switching
+machines is a `select-window` on the stage (issue #1759): tmux repaints every
+client of the server a window op runs on, so only the right pane is redrawn —
+the list, the borders and the bar never are (#1702's window per machine on the
+shell's own server repainted the whole screen on every switch;
+`bin/shell-switch-repaint-selftest.sh` measures the bytes). The stage's own top
+line is the right pane's title — the session, and the machine's 中转 / 失联 / 旧
+(`tmux-status.sh part=title`); the bar is `tmux-status.sh` in hub mode. The data is `fleet-hub-sessions.sh --loop` in **client mode**
 (`FLEET_HUB_SESSIONS_CLIENT=<session>`): one pseudo-fleet, every row remote
 (`local`=0, `#me` empty — this computer is a node at most by coincidence, and
 the shell reaches even its own sessions through a nested attach), signed by the

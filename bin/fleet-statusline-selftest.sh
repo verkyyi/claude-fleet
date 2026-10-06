@@ -103,7 +103,8 @@ out=$(run status)
 has "A: fleet classified" "$out" 'statusLine: fleet — /Users/op/.claude/fleet/conf/statusline.sh'
 has "A: census counts both fleets" "$out" 'windows: 6 claude · 3 fed by the mod (v0.2.0+, beat fresh) · 3 stamped @ctx_src=mod · 3 not fed'
 has "A: no-mod window named" "$out" '! fleet-a:issue-3 — no mod'
-has "A: stale beat named" "$out" '! fleet-a:issue-4 — stale beat (300s)'
+# NOW was read before the setup above, so a slow runner reads 301s+ (issue #1757)
+has "A: stale beat named" "$out" '! fleet-a:issue-4 — stale beat (30'
 has "A: old mod named" "$out" '! fleet-a:scratch-1 — old mod v0.1.0 (< v0.2.0'
 has "A: verdict not yet" "$out" 'verdict: not yet — 3 window(s) would lose'
 has "A: status exits 0" "$out" 'rc=0'

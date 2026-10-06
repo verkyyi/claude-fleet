@@ -55,7 +55,7 @@ _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" 
 # The current window, as the conf's status-right passes it (issue #1482). Absent
 # (an older conf) → every value empty → never hub mode.
 STATUS_SESS='' STATUS_REMOTE='' STATUS_ACCT='' STATUS_WSF='' STATUS_WSCF='' STATUS_WSAVED=''
-STATUS_CW='' STATUS_RL5='' STATUS_RL7='' STATUS_RR='' STATUS_CR=''
+STATUS_CW='' STATUS_RL5='' STATUS_RL7='' STATUS_RR='' STATUS_CR='' STATUS_PART=''
 for _a in "$@"; do
     case "$_a" in
         sess=*)   STATUS_SESS=${_a#sess=} ;;
@@ -70,6 +70,7 @@ for _a in "$@"; do
         rl7=*)    STATUS_RL7=${_a#rl7=} ;;
         rr=*)     STATUS_RR=${_a#rr=} ;;
         cr=*)     STATUS_CR=${_a#cr=} ;;
+        part=*)   STATUS_PART=${_a#part=} ;;
     esac
 done
 
@@ -260,7 +261,10 @@ status_account() {
 SEGS=''
 status_seg() { [ -n "$1" ] && SEGS="${SEGS:+$SEGS  }$1"; return 0; }
 
-m_ctr=''
+m_ctr='' gh_seg=''
+# The right pane's title (`part=title`, issue #1759) draws the machine's words
+# alone: none of the bar's own readings below run for it.
+if [ "$STATUS_PART" != title ]; then
 status_ctr_cached
 
 # --- Alerts: COUNTS only (issue #1238), and only when not zero (issue #1616).
@@ -294,6 +298,7 @@ if [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh" && gh_until=$(fleet
         *) [ "$STATUS_NARROW" = 1 ] || gh_seg="${gh_seg}至 $(fleet_gh_hhmm "$gh_until")" ;;
     esac
 fi
+fi   # STATUS_PART != title
 
 # --- Hub mode (issue #1482): the machine of a proxy window and the hub's silence,
 # off the caches alone. Sets MACH_SEG and HUB_SEG ('' = nothing to say).
@@ -345,6 +350,22 @@ status_hub_render() {
     esac
     return 0
 }
+
+# --- The right pane's title (issue #1759): the shell's STAGE server
+# (conf/tmux-shell-stage.conf) draws `m4 <name>` itself and asks here for what
+# the bar used to say after the machine's name — ` · 中转`, `○ 失联 Nm`, `旧` —
+# in hub mode only, and nothing else.
+if [ "$STATUS_PART" = title ]; then
+    MACH_SEG='' HUB_SEG=''
+    if [ "$HUB_MODE" = 1 ]; then
+        status_hub_render
+        case "$MACH_SEG" in "${BLUE}${FSN_NODE}"*) MACH_SEG=${MACH_SEG#"${BLUE}${FSN_NODE}"} ;; esac
+        [ -n "$MACH_SEG" ] && printf '%s' "$MACH_SEG"
+    elif [ "$STATUS_RR" = relay ]; then
+        printf ' · 中转'
+    fi
+    exit 0
+fi
 
 # --- Where the client runs (issue #1628): this client's tty, the mark's tty.
 CR_SEG=''

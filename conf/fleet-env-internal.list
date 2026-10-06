@@ -375,6 +375,7 @@ FLEET_HUB_URL                      handoff: the hub URL `fleet connect` (fleet-c
 FLEET_HUB_SESSIONS_CLIENT          handoff: the shell's pseudo-fleet name — fleet-hub-sessions.sh serves that one name, every row remote, no control adapter (fleet-shell.sh, #1484)
 FLEET_SHELL                        handoff: 1 in the shell's tmux server environment — fleet-remote-view.sh open starts `run --shell`, fleet-sidebar.sh runs without a fleet conf; 0 in a person's environment keeps `fleet` on the direct way in (bin/fleet, fleet-shell.sh, #1484)
 FLEET_SHELL_SESSION                knob: the shell's tmux session + socket label (fleet-shell.sh, fleet-shell, #1484)
+FLEET_SHELL_STAGE                  handoff: the shell's STAGE server label (`<session>-stage`) in its tmux server environment — fleet-remote-view.sh open does every window op there and fleet-sidebar.py reads the current row off it, so a switch repaints only the right pane (fleet-shell.sh, #1759)
 FLEET_SHELL_CACHE                  path: the shell's own cache root — its bin/ mirror, tmux.conf and $TMPDIR (fleet-shell.sh, ~/.cache/claude-fleet/shell, #1484)
 FLEET_SHELL_PREFIX                 knob: the shell's tmux prefix (fleet-shell.sh, C-b, #1484)
 FLEET_SHELL_WIDTH                  knob: the shell's list width (fleet-shell.sh → FLEET_SIDEBAR_WIDTH, 30, #1484)

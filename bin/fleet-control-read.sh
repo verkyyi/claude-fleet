@@ -137,14 +137,19 @@ case "$mode" in
     #   raw scratch or a deliberately no-repo one (`@norepo 1`, what the local
     #   sidebar keeps, #1643) — any other keyless window (a hand-made `hub`, a
     #   panel) reports no identity, so it stays off every list as before.
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}' 2>/dev/null) || cwds=''
+    # Column 15 (issue #1750): `born=<epoch>` — the session's birth (@born, stamped
+    # at spawn and carried by move/migrate; else tmux's window_created), the one
+    # ruler every machine's list orders its rows by. Read off this same list.
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{?@born,#{@born},#{window_created}}' 2>/dev/null) || cwds=''
     while IFS= read -r row; do
       [ -n "$row" ] || continue
       wid=${row%%$'\t'*}; rest=${row#*$'\t'}
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4; exit }')
+      born=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      case "$born" in *[!0-9]*) born='' ;; esac
       if [ -z "$wt" ]; then
         cwd=${wrow%%$'\t'*}
         case "${cwd##*/}" in scratch-[1-9]*|*-scratch-[1-9]*)
@@ -165,7 +170,7 @@ case "$mode" in
       fi
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\n' "$row" "$b"
+      printf '%s\tbusy=%s\tborn=%s\n' "$row" "$b" "$born"
     done <<<"$rows"
     ;;
   ready)

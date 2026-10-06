@@ -1692,6 +1692,17 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # window list goes blank — back to today's bar, and the list restored, on `local`.
 # @label=Sidebar list source @group=status @tier=internal @scope=fleet @edit=str
 #FLEET_SIDEBAR_SOURCE=local
+# The list's ORDER (issue #1750). `born` (default): a row sits where its session
+# was born — repo group, then 置顶, then its parent's subtree, then birth time
+# (@born, stamped at spawn and kept across a move) — so a turn going working →
+# done, a `needs` coming and going, or a window closing in the middle moves no
+# row, and this machine's rows and the other machines' share one ruler. The rows
+# waiting on you stay in place, red; one line above the list counts them (`! 2 个
+# 在问你 · ⌃k 跳过去`) and the task list's ⌃k on an empty line walks onto them.
+# `status`: the old order — needs on top, then done, working, looping — byte for
+# byte, and no summary line.
+# @label=List order @group=status @tier=internal @scope=global @edit=str
+#FLEET_DASH_ORDER=born
 # @label=Rotate early at @group=accounts @tier=advanced @scope=global @edit=int @unit=%
 #FLEET_ACCOUNT_CEILING=85
 # @label=Warn sessions at @group=accounts @tier=advanced @scope=global @edit=int @unit=%

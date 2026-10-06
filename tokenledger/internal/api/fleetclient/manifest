@@ -84,6 +84,7 @@ bin/fleet-popup-lib.sh
 bin/dash-fold-toggle.sh
 bin/fleet-keys.sh
 conf/tmux-shell.conf
+conf/tmux-shell-stage.conf
 conf/fleet-palette.conf
 # --- agent bundle: generated from conf/agent-bundle.manifest by bin/fleet-client-mirror.sh — do not edit (#1725) ---
 conf/agent-bundle.manifest

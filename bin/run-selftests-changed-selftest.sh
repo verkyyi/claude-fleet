@@ -4,13 +4,14 @@
 #
 # CI runs only what --changed selects, so a selector that under-picks is a gate that
 # silently stops testing. Four kinds of change, each in a throwaway git repo whose
-# bin/ holds the REAL runner + shadow-root script and five one-line fake tests:
+# bin/ holds the REAL runner + shadow-root script and six one-line fake tests:
 #
 #   1. a plain script     → the test that names it + the lint group
 #   2. one fleet-lib.sh function → the test naming THAT function; not the one that
 #      only names the library file or a sibling function (rule c, not rule b)
 #   3. the selftests workflow → the full suite (the harness never vets its own edit)
 #   4. docs only          → the lint group alone
+#   5. bin/fleet (no extension) → only the test naming it as a path, `/fleet`
 #
 # plus: each pick prints `select: <test> ← <reason>`; a shard left empty under
 # --changed passes, while the same empty shard WITHOUT --changed still refuses
@@ -36,7 +37,9 @@ mk_test alpha       'drives tool-a.sh'
 mk_test beta        'calls fleet_foo from the lib'
 mk_test gamma       'nothing that changes below'
 mk_test delta       'sources fleet-lib.sh and calls fleet_bar'
+mk_test epsilon     'runs "$BIN/fleet" connect'
 printf '#!/bin/sh\necho a\n' > "$R/bin/tool-a.sh"
+printf '#!/bin/sh\necho f\n' > "$R/bin/fleet"
 cat > "$R/bin/fleet-lib.sh" <<'EOF'
 #!/bin/sh
 FLEET_X=1
@@ -92,9 +95,14 @@ scenario lib-function "sed -e 's/echo foo/echo FOO/' bin/fleet-lib.sh > x && mv 
   'beta-selftest.sh portability-selftest.sh '
 
 scenario workflow 'echo "# touch" >> .github/workflows/selftests.yml' \
-  'alpha-selftest.sh beta-selftest.sh delta-selftest.sh gamma-selftest.sh portability-selftest.sh '
+  'alpha-selftest.sh beta-selftest.sh delta-selftest.sh epsilon-selftest.sh gamma-selftest.sh portability-selftest.sh '
 printf '%s\n' "$out" | grep -q '^select: \* ← full suite (harness changed: .github/workflows/selftests.yml)$' \
   && ok "harness change says why it went full" || fail "full-suite select line missing"
+
+# An extensionless basename selects only a test naming it as a path (issue #1734):
+# beta (fleet_foo) and delta (fleet-lib.sh) say `fleet` too and must stay out.
+scenario extensionless 'echo g >> bin/fleet' \
+  'epsilon-selftest.sh portability-selftest.sh '
 
 scenario docs 'echo more >> docs/guide.md' 'portability-selftest.sh '
 
@@ -114,7 +122,7 @@ out=$(FLEET_HEAVY=0 sh "$R/bin/run-selftests.sh" --shard 6/6 portability </dev/n
 # An unresolvable base never under-selects: it runs everything.
 out=$(FLEET_HEAVY=0 sh "$R/bin/run-selftests.sh" --changed no-such-ref </dev/null 2>&1); rc=$?
 n=$(printf '%s\n' "$out" | grep -c '^PASS ')
-[ "$rc" -eq 0 ] && [ "$n" -eq 5 ] && ok "unresolvable base → full suite" \
+[ "$rc" -eq 0 ] && [ "$n" -eq 6 ] && ok "unresolvable base → full suite" \
   || fail "unresolvable base: rc=$rc ran=$n"
 
 # --changed with explicit names is refused.
