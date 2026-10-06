@@ -39,7 +39,10 @@
 #                  to the team's value, a hand-edited one stays
 #   O. off         agent-overrides.json `personal: off` leaves the layer
 #   P. session     `session claude` src names personal:vN; its fingerprint moves
-#                  with the personal layer's values; `expected` with it
+#                  with the personal layer's values; `expected` with it; its
+#                  `say` line is `status --short`'s person-facing line verbatim
+#                  (团队 vN · 个人 vM · 本机独有 K 项 — EPIC #1855 C6; L pins that
+#                  with no personal layer neither changes)
 #   Q. refused     a credential in the personal layer is refused (the cache is
 #                  kept); hook_scripts is personal-only
 set -uo pipefail
@@ -312,7 +315,8 @@ out=$(team sync); rc=$?
   && ok "M a personal hook + skill land, source personal" || bad "M hook/skill: $(cat "$H/.claude/settings.json")"
 [ "$(j "$CONF/agent-effective.json" "[d['personal']['version'], d['personal']['state'], d['personal_version']]")" = '[1, "on", 1]' ] \
   && ok "M agent-effective.json records personal v1" || bad "M record: $(cat "$CONF/agent-effective.json")"
-case "$(status --short)" in "team v10 · personal v1") ok "M status: team v10 · personal v1" ;; *) bad "M status: $(status --short)" ;; esac
+case "$(status --short)" in "团队 v10 · 个人 v1 · 本机独有 "[0-9]*" 项（fleet config promote 可带走）")
+  ok "M status --short: the person-facing line (团队 v10 · 个人 v1 · 本机独有 N 项)" ;; *) bad "M status: $(status --short)" ;; esac
 "$PY" - "$H/.claude.json" <<'PY'
 import json, sys
 p = sys.argv[1]; d = json.load(open(p)); d["mcpServers"]["pmine"]["command"] = "by-hand"; json.dump(d, open(p, "w"))
@@ -333,6 +337,8 @@ out=$(team sync)
 s1=$(team session claude)
 printf '%s\n' "$s1" | grep -q $'^src\tdefault:[0-9a-f]* team:v10 personal:v2 local:' \
   && ok "P session src names personal:v2" || bad "P src: $s1"
+printf '%s\n' "$s1" | grep -qxF "$(printf 'say\t%s' "$(status --short)")" \
+  && ok "P session's say line is status --short's, verbatim (EPIC #1855 C6)" || bad "P say: $s1 // $(status --short)"
 presp '{"version":3,"prev":2,"bundle":{
   "mcp":{"shared":{"command":"me-shared@3"},"pmine":{"command":"p-mcp@2"}},
   "hooks":{"Stop":[{"command":"echo me-stop"}]},
@@ -370,7 +376,7 @@ out=$(team sync)
   && [ "$(j "$H/.claude.json" "d['mcpServers']['shared']['command']")" = '"team-shared"' ] \
   && [ "$(j "$H/.claude.json" "d['mcpServers']['pmine']['command']")" = '"by-hand"' ] \
   && ok "O personal: off takes back what the personal layer wrote; the team's and this login's stay" || bad "O: $out"
-case "$(status --short)" in "team v10 · personal off") ok "O status: personal off" ;; *) bad "O status: $(status --short)" ;; esac
+case "$(status --short)" in "团队 v10 · 个人 已关 · 本机独有 "*) ok "O status: 个人 已关" ;; *) bad "O status: $(status --short)" ;; esac
 team session claude | grep -q 'personal:off' && ok "O session src: personal:off" || bad "O src"
 rm -f "$CONF/agent-overrides.json"
 out=$(team sync)

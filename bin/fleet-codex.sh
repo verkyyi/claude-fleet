@@ -380,7 +380,7 @@ fi
 # table is already inlined above. The mod is Claude's: recorded as `na`. The
 # fingerprint lands as @agent_cfg / @agent_cfg_src. FLEET_AGENT_CFG=0 or no
 # composer beside bin/ adds nothing.
-_cfg_fp=''; _cfg_src=''; _cfg_locks=''
+_cfg_fp=''; _cfg_src=''; _cfg_locks=''; _cfg_say=''
 if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && command -v python3 >/dev/null 2>&1; then
   _cfg_args=(--lock "${FLEET_AGENT_LOCK:-warn}" --codex-home "${CODEX_HOME:-$HOME/.codex}")
   [ -n "$_codex_mcp" ] && _cfg_args+=(--no-mcp)
@@ -388,13 +388,16 @@ if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && comm
     case "$_cfg_k" in
       fp)   _cfg_fp="$_cfg_v" ;;
       src)  _cfg_src="$_cfg_v" ;;
+      say)  _cfg_say="$_cfg_v" ;;
       c)    flags+=(-c "$_cfg_v") ;;
       lock) _cfg_locks="${_cfg_locks:+$_cfg_locks; }$_cfg_v" ;;
     esac
   done < <(FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" \
              python3 "$BIN/fleet-agent-team.py" session codex ${_cfg_args[@]+"${_cfg_args[@]}"} 2>/dev/null)
+  # the person-facing line (EPIC #1855 C6) — only with a personal layer
+  [ -n "$_cfg_say" ] && printf 'fleet-codex: 配置 %s\n' "$_cfg_say" >&2
   [ -n "$_cfg_locks" ] && printf 'fleet-codex: locked agent config overridden on this login: %s (issue #1782)\n' "$_cfg_locks" >&2
-  unset _cfg_args _cfg_k _cfg_v _cfg_locks
+  unset _cfg_args _cfg_k _cfg_v _cfg_locks _cfg_say
 fi
 unset _codex_mcp
 

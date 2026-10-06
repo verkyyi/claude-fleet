@@ -218,6 +218,21 @@ capability. When it matters, the docs say 承载.
   `~/.config/claude-fleet/`), one per fleet; it overlays the global `fleet.conf`
   for that session. Written by `fleet-up.sh`.
 
+- **Agent 配置的来源：团队 / 个人 / 本机** (EPIC #1855) — where an item an
+  agent gets (MCP server, setting, hook, skill, Codex key) comes from. A person
+  reads only these words; see [AGENT-CONFIG](AGENT-CONFIG.md).
+  - **团队配置 (team layer)** — one bundle for the whole team on the hub (#1726);
+    the operator's to change.
+  - **个人配置 (personal layer)** — your own bundle on the hub, per person, with
+    versions; it follows you to every machine you have a login on (#1856, #1857).
+    Only you write it; the operator can only roll it back to one of your versions.
+  - **本机 (local)** — this login's own files; it wins over 个人 and 团队.
+    「本机独有 N 项」 counts what only this machine has — `fleet config promote`
+    takes one into your personal layer.
+  - **fleet** — the default (`conf/agent-defaults/`) and the locked items
+    (`conf/agent-locked.list`). Machine-readable fields keep the English words
+    `default|team|personal|local` (`agent-effective.json`'s `source`).
+
 ## Fleet lifecycle commands
 
 - **`fleet-up.sh <owner/repo> [<dir>]`** — bring up a fleet: reuse-or-clone the

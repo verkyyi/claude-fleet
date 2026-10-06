@@ -73,7 +73,10 @@ doctor` on a client print the version from it.
   sync    fetch, then apply when the version moved, the record is missing, or
           --force. What install-sync's tick and the client's start run.
   status  [--short]  the applied version(s) and the source counts (doctor):
-          `team v<N>[ · personal v<M>|off]`.
+          `team v<N>`. With a personal layer (EPIC #1855 C6) --short prints the
+          ONE person-facing line instead — `团队 v<N> · 个人 v<M> · 本机独有 <K> 项
+          （fleet config promote 可带走）`, K = the 本机 rows `fleet config show`
+          lists; the doctor rows and the launch line only reprint it.
 
 A session's configuration, fixed at launch (issue #1782 — see "the session's
 configuration" below):
@@ -81,7 +84,8 @@ configuration" below):
            Compose fleet default < team < local NOW and print, TAB-separated, what
            the launcher hands: `fp <12 hex>`, `src <each layer's version>` (a
            `personal:v<N>|off` segment only when there is a personal layer),
-           `mod on|off|na`, `mcp <file>` / `settings <file>` (Claude: only what the
+           `mod on|off|na`, `say <the status --short line>` (only with a
+           personal layer: the launcher prints it), `mcp <file>` / `settings <file>` (Claude: only what the
            login's files lack, in content-addressed files under global/agent-cfg/),
            `c <key=toml>` (Codex -c values), `lock <path> used|ignored (…)`.
   expected [--write]   the fingerprint a fresh session would get, per agent
@@ -970,6 +974,49 @@ def apply(a):
     return 0
 
 
+def layer_word(state, version):
+    return {"off": "已关", "none": "无"}.get(state) or "v%s" % version
+
+
+def local_only(a):
+    """How many rows `fleet config show` lists as 本机 — counted BY that command's
+    own composition (fleet-config.py compose_rows), so the two never disagree.
+    None when it cannot be counted (no fleet-config.py beside this script)."""
+    try:
+        fc = load_mod("fleet_config", "fleet-config.py")
+        args = fc.team_args(["--root", a.root, "--claude-config", a.claude_config,
+                             "--claude-settings", a.claude_settings, "--claude-skills", a.claude_skills,
+                             "--override", a.override] + [x for h in a.codex_home for x in ("--codex-home", h)])
+        rows, _ = fc.compose_rows(args)
+    except (Exception, SystemExit):
+        return None
+    return sum(1 for r in rows.values() if r.get("source") == "local")
+
+
+def human_line(a):
+    """The ONE line that tells a person where their configuration comes from (EPIC
+    #1855 C6): `团队 vN · 个人 vM · 本机独有 K 项（fleet config promote 可带走）`.
+    The doctor rows (node + client) and the launch line reprint it, never spell
+    their own. None with no personal layer — every caller then prints byte for
+    byte what it did before."""
+    rec = read_json_quiet(EFFECTIVE)
+    p = rec.get("personal") if isinstance(rec, dict) else None
+    if not isinstance(p, dict):
+        return None
+    t = rec.get("team") or {}
+    team = layer_word(t.get("state"), t.get("version"))
+    cache = read_json_quiet(CACHE)
+    if isinstance(cache, dict) and cache.get("version") != t.get("version") and t.get("state") != "off":
+        team += "（已取到 v%s，未应用）" % cache.get("version")
+    line = "团队 %s · 个人 %s" % (team, layer_word(p.get("state"), p.get("version")))
+    n = local_only(a)
+    if n:
+        line += " · 本机独有 %d 项（fleet config promote 可带走）" % n
+    elif n == 0:
+        line += " · 本机独有 0 项"
+    return line
+
+
 def status(a):
     rec = read_json_quiet(EFFECTIVE)
     cache = read_json_quiet(CACHE)
@@ -989,7 +1036,7 @@ def status(a):
         ph = "personal off" if p.get("state") == "off" else "personal v%s" % p.get("version")
         head = ph if t.get("state") == "none" else "%s · %s" % (head, ph)
     if a.short:
-        print(head)
+        print(human_line(a) or head)
     else:
         kinds = ("default", "team", "personal", "local") if isinstance(p, dict) else ("default", "team", "local")
         print("%s · %s" % (head, " · ".join("%s %d" % (k, counts.get(k, 0)) for k in kinds)))
@@ -1298,6 +1345,10 @@ def session(a):
     s = Session(a, agent).compose()
     print("fp\t%s" % s.fingerprint())
     print("src\t%s" % s.src())
+    if s.personal:                  # the person-facing line (EPIC #1855 C6) — absent, as before
+        say = human_line(a)
+        if say:
+            print("say\t%s" % say)
     if agent == "claude":
         mr = s.rows.get("mod")
         print("mod\t%s" % ("on" if mr and mr["value"] != "off" else "off"))

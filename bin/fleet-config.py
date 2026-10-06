@@ -221,7 +221,9 @@ def show(a):
         print(json.dumps({"team": team, "personal": personal, "items": rows},
                          ensure_ascii=False, indent=2, sort_keys=True))
         return 0
-    print("团队 %s · 个人 %s" % (team, personal))
+    # with a personal layer the header IS the one line the doctor and the launch
+    # reprint (EPIC #1855 C6) — its 本机独有 count is the 本机 rows below
+    print((None if a.args else T.human_line(ta)) or "团队 %s · 个人 %s" % (team, personal))
     w = max([len(p) for p in rows] + [4])
     for p in sorted(rows):
         r = rows[p]
