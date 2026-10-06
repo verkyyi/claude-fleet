@@ -15,10 +15,17 @@
 # Asserted:
 #   • PARTITION      the N shards together cover every test exactly once (N=1..4,
 #                    over a count that divides evenly and one that does not).
-#   • STRIDE         adjacent names land in DIFFERENT shards. The list is sorted and
-#                    cost clusters by name — the eight `fleet-collect-*` tests are
-#                    neighbours AND among the slowest — so a contiguous split would
-#                    pile them into one shard and undo the balance.
+#   • STRIDE         with no cost table, adjacent names land in DIFFERENT shards —
+#                    every test costs the same and the greedy deal IS the old stride.
+#   • PACK (#1390)   with bin/selftest-durations.txt, slow tests whose positions all
+#                    differ by a multiple of N (the coincidence that put #1379's six
+#                    slowest into shard 1/6) are spread one per shard; the partition
+#                    still holds for every N, a test with no row is still scheduled,
+#                    each shard prints its predicted load, and a heaviest shard past
+#                    400s WARNs.
+#   • DURATIONS      bin/selftest-durations.sh rewrites the table from runner output:
+#                    median of a test's observations, unseen rows kept, rows for a
+#                    deleted test dropped, the header comment kept.
 #   • GROWTH         adding a test re-deals the shards by itself: no width to bump,
 #                    no timeout to raise (the issue's third acceptance criterion).
 #   • EMPTY SHARD    a shard with no tests is exit 2, never a silent all-green.
@@ -154,6 +161,84 @@ eq "a NEW selftest re-deals the shards by itself — nothing to bump, remainder 
 # No --shard at all = the whole suite, unchanged from before sharding existed.
 out=$(run) || fail "an unsharded run went red" "$out"
 eq "no --shard runs everything" "$ALL13" "$(ran "$out" | sort)"
+
+# ---------------------------------------------------------------------------
+# PACK — the recorded-cost deal (issue #1390)
+# ---------------------------------------------------------------------------
+# f01, f05, f09 and f13 sit at positions 1, 5, 9, 13 — all ≡ 1 (mod 4) — so the
+# stride hands every one of them to shard 1/4. That is #1379's coincidence in
+# miniature. With their cost on record they must land one per shard.
+TABLE="$WORK/bin/selftest-durations.txt"
+{ echo '# fixture table'
+  echo '100 f01-selftest.sh'; echo '100 f05-selftest.sh'; echo '100 f09-selftest.sh'; echo '100 f13-selftest.sh'
+  for n in 02 03 04 06 07 08 10 11 12; do echo "1 f$n-selftest.sh"; done
+  echo '1 gone-selftest.sh'   # a row for a test that no longer exists: ignored
+} > "$TABLE"
+slowin=''
+for k in 1 2 3 4; do
+  out=$(run --shard "$k/4") || fail "shard $k/4 went red with a cost table" "$out"
+  slowin="$slowin$(ran "$out" | grep -cE '^f(01|05|09|13)-')"
+  case "$out" in *"shard $k/4 — predicted ~"*"s (heaviest of 4"*) ;;
+    *) fail "shard $k/4 must print its predicted load when a table exists" "$out" ;; esac
+done
+eq "slow tests whose positions differ by a multiple of N are spread one per shard" 1111 "$slowin"
+
+for N in $WIDTHS; do
+  union=''
+  k=1
+  while [ "$k" -le "$N" ]; do
+    out=$(run --shard "$k/$N"); rc=$?
+    [ "$rc" = 0 ] || fail "shard $k/$N went red with a cost table" "$out"
+    union="$union$(ran "$out")
+"
+    k=$((k + 1))
+  done
+  eq "N=$N with a cost table — the shards still cover every test exactly once" \
+     "$ALL13" "$(printf '%s' "$union" | sed '/^$/d' | sort)"
+done
+
+# A test with NO row costs the table's median and is still dealt somewhere.
+mkfake f14
+union=''
+for k in 1 2 3 4; do union="$union$(ran "$(run --shard "$k/4")")
+"; done
+CHECKS=$((CHECKS + 1))
+printf '%s' "$union" | grep -qx 'f14-selftest.sh' || fail "a test with no row in the table was never scheduled" "$union"
+ok "a test with no row in the table is still scheduled (costed at the median)"
+rm -f "$WORK/bin/f14-selftest.sh"
+
+out=$(run --shard 1/4)
+case "$out" in *WARN*) fail "a ~100s shard must not WARN" "$out" ;; *) ok "a light shard does not WARN" ;; esac
+sed -i.bak 's/^100 f01/450 f01/' "$TABLE" && rm -f "$TABLE.bak"
+out=$(run --shard 2/4) || fail "a WARN must not turn the shard red" "$out"
+case "$out" in *"WARN heaviest shard predicted ~450s"*) ok "a heaviest shard past 400s WARNs — on every shard's log, not just its own" ;;
+  *) fail "a 450s shard must WARN" "$out" ;; esac
+rm -f "$TABLE"
+
+# ---------------------------------------------------------------------------
+# DURATIONS — the table's updater
+# ---------------------------------------------------------------------------
+UPD="$BIN/selftest-durations.sh"
+if [ ! -f "$UPD" ]; then
+  fail "$UPD missing"
+fi
+ln -s "$UPD" "$WORK/bin/selftest-durations.sh"
+{ echo '# header kept'; echo '7.0 f02-selftest.sh'; echo '9.0 f03-selftest.sh'; echo '5.0 gone-selftest.sh'; } > "$TABLE"
+log="$WORK/run.log"
+{ echo 'shard 1	Run	2026-10-06T03:42:16Z PASS  f02-selftest.sh                                   1.0s'
+  echo 'PASS  f02-selftest.sh    3.0s'
+  echo 'FAIL  f02-selftest.sh    20.0s (exit 1)'
+  echo 'TIMEOUT f04-selftest.sh  240.0s (limit 240s)'
+  echo 'PASS  gone-selftest.sh   2.0s'
+} > "$log"
+msg=$(sh "$WORK/bin/selftest-durations.sh" "$log") || fail "selftest-durations.sh failed" "$msg"
+eq "the updater reports what it did" "selftest-durations: 1 updated, 1 added, 1 kept, 1 dropped" "$msg"
+eq "the table: median of observations, unseen kept, deleted test dropped, header kept, sorted by name" \
+   "# header kept
+3.0 f02-selftest.sh
+9.0 f03-selftest.sh
+240.0 f04-selftest.sh" "$(cat "$TABLE")"
+rm -f "$TABLE" "$WORK/bin/selftest-durations.sh"
 
 # ---------------------------------------------------------------------------
 # REFUSALS — a shard that runs nothing must never read as green

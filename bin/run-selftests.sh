@@ -52,10 +52,11 @@
 #
 # Usage: run-selftests.sh [--shard K/N] [NAME ...]
 #   no args     every bin/*-selftest.sh — the CI gate.
-#   --shard K/N run only the K-th of N slices (1-based). The split is a stride
-#               over the sorted list, so the `fleet-collect-*` family — similar
-#               cost, adjacent names — lands one per shard instead of all in one,
-#               and a NEW test rebalances the slices by itself.
+#   --shard K/N run only the K-th of N slices (1-based). The slices are packed by
+#               each test's recorded cost (bin/selftest-durations.txt, issue #1390):
+#               longest first, each into the lightest slice, so no coincidence of
+#               names can stack the slow tests into one. A NEW test (no row) costs
+#               the table's median and rebalances the slices by itself.
 #   NAME        run only the named tests. The `-selftest.sh` suffix is optional, and a
 #               shell glob works (`run-selftests.sh 'dash-*'`), so chasing one red test
 #               still goes through the same hermetic prelude CI uses. A NAME that
@@ -404,20 +405,60 @@ else
   set -- *-selftest.sh
 fi
 
-# Settle the work list, applying the shard STRIDE. Striding (every N-th) rather than
-# slicing into contiguous blocks matters because the list is sorted and cost clusters
-# by name: the eight `fleet-collect-*` tests are adjacent AND among the slowest, so a
-# contiguous split would pile them into one shard. A stride deals them round-robin,
-# and a test landing anywhere in the list re-deals the rest for free — no table of
-# durations to keep in sync, which is the thing that always drifts.
-tests='' ntests=0 discovered=0
+# Settle the work list, then PACK the shards by recorded cost (issue #1390).
+#
+# The split used to be a stride (every N-th of the sorted list). That balances
+# NEIGHBOURS — the eight `fleet-collect-*` tests are adjacent and slow, and a stride
+# deals them round-robin — but it has no defense against a coincidence: #1379's six
+# slowest tests sat at positions that all differed by a multiple of 6, so all six
+# landed in shard 1/6 (458s against the 8-minute step bound, three timeouts in a
+# row, no test red), and #1722's full run put 509s into shard 5/6.
+#
+# So the shards are packed greedily now (longest-processing-time first): every test
+# is costed from bin/selftest-durations.txt, taken longest first, and dealt into
+# whichever shard is lightest so far (ties → the lowest K). Every shard computes the
+# same deal from the same list and keeps its own slice, so the N shards still
+# PARTITION the selection — a test in none of them would leave the gate green with
+# something untested. A test with no row costs the table's median, so a new selftest
+# needs no row to be scheduled. With NO table every test costs the same, and the deal
+# is then exactly the old stride, test for test (cost ties go in name order).
+# Within a shard the tests still run in name order. Refresh the table with
+# bin/selftest-durations.sh when a shard's predicted load (printed below) creeps up.
+dur_table="$script_dir/selftest-durations.txt"
+discovered=0 listed=''
 for t in "$@"; do
   # No matches → the glob stays literal; the -f guard drops that phantom entry.
   [ -f "$t" ] || continue
   discovered=$((discovered + 1))
-  [ $(( (discovered - 1) % shard_n + 1 )) -eq "$shard_k" ] || continue
-  tests="$tests $t"; ntests=$((ntests + 1))
+  listed="$listed$t
+"
 done
+# "<shard> <cost> <test>" per test, in the original (name) order, then "= <K> <load>"
+# for every shard.
+deal=$(printf '%s' "$listed" | awk -v n="$shard_n" -v tbl="$dur_table" '
+  BEGIN {
+    while ((getline l < tbl) > 0) {
+      if (l ~ /^[[:space:]]*(#|$)/) continue
+      split(l, f, /[ \t]+/); cost[f[2]] = f[1] + 0; v[++nv] = f[1] + 0
+    }
+    for (i = 2; i <= nv; i++) { x = v[i]; for (j = i - 1; j >= 1 && v[j] > x; j--) v[j + 1] = v[j]; v[j + 1] = x }
+    dflt = nv ? ((nv % 2) ? v[(nv + 1) / 2] : (v[nv / 2] + v[nv / 2 + 1]) / 2) : 1
+  }
+  { name[++m] = $0; c[m] = ($0 in cost) ? cost[$0] : dflt; ord[m] = m }
+  END {
+    # Longest first; equal costs keep name order (insertion sort is stable).
+    for (i = 2; i <= m; i++) { x = ord[i]; for (j = i - 1; j >= 1 && c[ord[j]] < c[x]; j--) ord[j + 1] = ord[j]; ord[j + 1] = x }
+    for (k = 1; k <= n; k++) load[k] = 0
+    for (i = 1; i <= m; i++) {
+      t = ord[i]; best = 1
+      for (k = 2; k <= n; k++) if (load[k] < load[best]) best = k
+      sh[t] = best; load[best] += c[t]
+    }
+    for (i = 1; i <= m; i++) printf "%d %s %s\n", sh[i], c[i], name[i]
+    for (k = 1; k <= n; k++) printf "= %d %.0f\n", k, load[k]
+  }')
+tests=$(printf '%s\n' "$deal" | awk -v k="$shard_k" '$1 == k { printf " %s", $3 }')
+ntests=$(printf '%s\n' "$deal" | awk -v k="$shard_k" '$1 == k { n++ } END { print n + 0 }')
 if [ "$discovered" -eq 0 ]; then
   echo "run-selftests: no *-selftest.sh found in $script_dir" >&2
   exit 2
@@ -434,8 +475,21 @@ if [ "$ntests" -eq 0 ]; then
   echo "run-selftests: shard $shard_k/$shard_n is empty — only $discovered test(s) to split" >&2
   exit 2
 fi
-[ "$shard_n" -eq 1 ] \
-  || printf 'run-selftests: shard %s/%s — %s of %s test(s)\n' "$shard_k" "$shard_n" "$ntests" "$discovered"
+if [ "$shard_n" -ne 1 ]; then
+  printf 'run-selftests: shard %s/%s — %s of %s test(s)\n' "$shard_k" "$shard_n" "$ntests" "$discovered"
+  # The predicted load, so a shard creeping toward the step bound (480s in
+  # selftests.yml) shows up on a green run, before it times out — WARN past 400s. Only with a table:
+  # without one the "seconds" are a count of tests.
+  if [ -f "$dur_table" ]; then
+    printf '%s\n' "$deal" | awk -v k="$shard_k" -v n="$shard_n" -v warn=400 '
+      $1 == "=" { if ($2 == k) mine = $3; if ($3 + 0 > max) { max = $3 + 0; at = $2 } }
+      END {
+        printf "run-selftests: shard %s/%s — predicted ~%ss (heaviest of %s: shard %s, ~%ss) by selftest-durations.txt\n", k, n, mine, n, at, max
+        if (max > warn)
+          printf "run-selftests: WARN heaviest shard predicted ~%ss > %ss — widen the shard: matrix, or refresh bin/selftest-durations.txt\n", max, warn
+      }'
+  fi
+fi
 
 # Milliseconds since the epoch. BSD `date` has no %N/%3N, so perl (already a fleet
 # dependency), then python3, then whole seconds ×1000 as a coarse last resort.
