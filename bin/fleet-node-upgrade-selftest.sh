@@ -17,6 +17,13 @@
 #   F  LOGINS   --logins a3 restarts only a3; an unknown login → exit 2
 #   G  NONE     no agent service → exit 1 before any target read (no network);
 #               non-macOS → exit 1
+#   I  DIST     --dist (issue #1723): the hub's binary (X-Ccquota-Sha256 checked,
+#               target version checked) is installed with no build; a hash
+#               mismatch, another version or a 404 each say why and fall to the
+#               local build; no node token → the same, and the token is never on
+#               curl's argv
+#   J  ROLLBACK --rollback: a login that never comes back on the target gets its
+#               path's .prev restored and is kickstarted again; exit 1 says so
 #   H  DOCTOR   `agent` WARN naming the behind logins → PASS once upgraded; no
 #               agent service → no `agent` line at all (the degenerate case)
 #
@@ -171,6 +178,66 @@ out=$(run -- "$FULL" --binary "$S/new/ccquota" --logins a3 --wait 5); rc=$?
 out=$(run -- "$FULL" --dry-run --logins nobody); rc=$?
 [ "$rc" = 2 ] || fail "F: unknown login exit $rc (want 2)" "$out"
 contains "F: unknown" "$out" "no agent for login 'nobody'"
+
+# ── I --dist ────────────────────────────────────────────────────────────────
+# The fake hub: serves $DIST_BIN with $DIST_SUM (default: its real hash).
+cat > "$W/distfake" <<'EOF'
+#!/bin/sh
+echo "$1" >> "$(dirname "$0")/../dist.log"
+[ -n "${DIST_BIN:-}" ] || { echo 404; exit 0; }
+cp "$DIST_BIN" "$2"
+sum=${DIST_SUM:-$(shasum -a 256 "$DIST_BIN" | awk '{print $1}')}
+printf 'HTTP/1.1 200 OK\r\nX-Ccquota-Sha256: %s\r\n\r\n' "$sum" > "$3"
+echo 200
+EOF
+chmod 755 "$W/distfake"
+setup; cp "$W/distfake" "$S/fake/dist"
+out=$(run DIST_BIN="$S/new/ccquota" FLEET_NODE_UPGRADE_DIST_CMD="$S/fake/dist" -- "$FULL" --dist --logins "$ME" --wait 5); rc=$?
+[ "$rc" = 0 ] || fail "I: --dist exit $rc" "$out"
+contains "I: from the hub" "$out" "dist: ccquota-"
+contains "I: hub version" "$out" "prod-bc4e8e1 from the hub (sha256"
+lacks "I: no build" "$out" "build: tokenledger"
+cmp -s "$S/usr/ccquota" "$S/new/ccquota" || fail "I: hub binary not installed" "$out"; ok
+case "$(cat "$S/dist.log")" in darwin-arm64|darwin-amd64|linux-arm64|linux-amd64) ok ;; *) fail "I: dist name" "$(cat "$S/dist.log")" ;; esac
+out=$(run -- "$FULL" --dist --dry-run)
+contains "I: dry-run says hub first" "$out" "would ask the hub for prod-bc4e8e1, else build"
+for c in "DIST_SUM=deadbeef|sha256" "DIST_BIN=$S/new/wrong|serves prod-1234567, not prod-bc4e8e1" "DIST_BIN=|HTTP 404"; do
+  setup; cp "$W/distfake" "$S/fake/dist"
+  var=${c%%|*} want=${c#*|}
+  out=$(run DIST_BIN="$S/new/ccquota" "$var" FLEET_NODE_UPGRADE_DIST_CMD="$S/fake/dist" -- "$FULL" --dist --logins "$ME"); rc=$?
+  [ "$rc" = 1 ] || fail "I: $var exit $rc (no tokenledger here: the fallback build must fail)" "$out"
+  contains "I: $var says why" "$out" "$want"
+  contains "I: $var falls to the build" "$out" "building locally"
+  grep -q prod-9b7e562 "$S/usr/ccquota" || fail "I: $var installed something" "$out"; ok
+done
+# No seam: the real curl path. No node token → says so, never calls curl.
+setup
+mkdir -p "$S/conf"
+printf '#!/bin/sh\necho "$*" >> "%s/curl.log"\nexit 7\n' "$S" > "$S/fake/curl"; chmod 755 "$S/fake/curl"
+out=$(run PATH="$S/fake:$PATH" FLEET_CONF_DIR="$S/conf" CCQUOTA_HUB_URL=http://127.0.0.1:9 -- "$FULL" --dist --logins "$ME"); rc=$?
+contains "I: no token" "$out" "dist: no node token ($S/conf/node.env) — building locally"
+[ ! -e "$S/curl.log" ] || fail "I: curl ran with no token" "$(cat "$S/curl.log")"; ok
+printf 'CCQUOTA_HUB_URL=http://127.0.0.1:9\nCCQUOTA_TOKEN=sekrit-node-token\n' > "$S/conf/node.env"
+out=$(run PATH="$S/fake:$PATH" FLEET_CONF_DIR="$S/conf" -- "$FULL" --dist --logins "$ME"); rc=$?
+contains "I: curl miss" "$out" "(HTTP 000) — building locally"
+contains "I: url from node.env" "$(cat "$S/curl.log")" "http://127.0.0.1:9/v1/node/dist/"
+lacks "I: token not on argv" "$(cat "$S/curl.log")" "sekrit"
+lacks "I: token not printed" "$out" "sekrit"
+
+# ── J --rollback ────────────────────────────────────────────────────────────
+setup
+out=$(run STUCK="$ME" -- "$FULL" --binary "$S/new/ccquota" --logins "$ME" --rollback --wait 2); rc=$?
+[ "$rc" = 1 ] || fail "J: rollback exit $rc (want 1)" "$out"
+contains "J: names the login" "$out" "$ME: restarted, but no control channel on prod-bc4e8e1"
+contains "J: says rolled back" "$out" "rolled back: $S/usr/ccquota ($ME kickstarted on the old binary)"
+grep -q prod-9b7e562 "$S/usr/ccquota" || fail "J: old bytes not restored" "$out"; ok
+[ ! -e "$S/usr/ccquota.prev" ] || fail "J: .prev should have moved back" "$out"; ok
+[ "$(grep -c "gui/$MYUID/com.ccquota.agent" "$S/launchctl.log")" = 2 ] || fail "J: kickstarted twice (upgrade + rollback)" "$(cat "$S/launchctl.log")"; ok
+# Without --rollback the new bytes stay (the historic behaviour, D).
+setup
+out=$(run STUCK="$ME" -- "$FULL" --binary "$S/new/ccquota" --logins "$ME" --wait 2)
+lacks "J: no rollback unasked" "$out" "rolled back"
+cmp -s "$S/usr/ccquota" "$S/new/ccquota" || fail "J: without --rollback the new bytes stay" "$out"; ok
 
 # ── G none / non-macOS ──────────────────────────────────────────────────────
 setup

@@ -60,6 +60,28 @@
 #              `skip: <stable>` recorded, so this version is not retried until
 #              stable moves.
 #
+# NODE → the node agent follows too (issue #1723, EPIC #1718 C5). A tick that
+# ends `current` or `updated` (the install IS stable) then asks THIS version's
+# bin/fleet-node-upgrade.sh for the plan at stable (`--dry-run`): every login on
+# the machine whose ccquota agent is not prod-<stable short> — on disk, or as the
+# hub sees it running — is behind. A tokenledger/ change is the usual reason,
+# but the version string is the test, so a stable move with no agent change
+# still brings every agent to the version the hub's /v1/nodes reports. Behind →
+#   fleet-node-upgrade.sh <stable> --dist --rollback --logins <login…>
+# — the hub's /v1/node/dist binary first (SHA-256 + version checked), a local
+# build only when the hub has none; one login at a time, each confirmed on the
+# hub; a login that never comes back goes back to its .prev bytes. Which logins:
+# this login's own LaunchAgent; a LaunchDaemon login needs `sudo -n`, so a login
+# that has it (the admin login) upgrades every behind login on the machine, its
+# own first, and one that has not leaves its own to that tick (`delegated`).
+# Only at an idle moment: a `current` tick checks the same EPIC / busy gates an
+# update does (`updated` already passed them). A failure is `node_upgrade_failed`
+# — ONE FLEET_NOTIFY_CMD per (login · stable), a `node-node_upgrade_failed` log
+# line, and no retry of that stable for FLEET_NODE_FOLLOW_RETRY_SECS (6h,
+# `backoff`) — so a broken machine never loops and the other logins never wait
+# on it. FLEET_NODE_FOLLOW=0 switches this half off; a version without
+# fleet-node-upgrade.sh, or a machine with no agent service, records nothing to do.
+#
 # STUCK → ONE notification (R4 #1125). The doctor's install row (C7 #1123) WARNs
 # on a stuck login, but nobody runs the doctor on the days nobody is looking, so
 # the tick that turns stuck says so itself — over FLEET_NOTIFY_CMD, the same
@@ -82,8 +104,13 @@
 #   head: <sha>  stable: <sha>|none  from: <sha>  to: <sha>  reason: <text>
 #   deferred_since: <epoch>|-  skip: <sha>|-  apply: <apply's last line>|-
 #   notified: <login> <why> <stable>|-  notified_at: <epoch>|-
+#   node: <current|upgraded|node_upgrade_failed|backoff|deferred|delegated|
+#         none|off|check-failed>|-  node_reason: <text>|-
+#   node_failed_at: <epoch>|-  node_fail_stable: <sha>|-  node_notified: <key>|-
 # Log: $ROOT/logs/install-sync.log, ONE line per tick —
 #   <UTC> <result> <from>..<to> <reason>
+# — plus ONE `node-<node result>` line in the same shape when the agent step
+# did something (upgraded / failed / backoff / delegated / deferred / check-failed)
 # — plus ONE `notified` line per notification that went out (the send log):
 #   <UTC> notified <from>..<to> <login> <why> <stable> via <FLEET_NOTIFY_CMD>
 # The apply and doctor transcripts go to stderr (the launchd/systemd log).
@@ -125,10 +152,13 @@ LOCK_TTL=3600   # an apply + two doctor runs take well under a minute; older = a
 STUCK_SECS="${FLEET_INSTALL_FOLLOW_STUCK_SECS:-86400}"
 case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=86400 ;; esac
 NOTIFY_BUDGET=30   # a notifier that hangs must not hold the tick lock
+# A failed agent upgrade is not retried on the same stable for this long (#1723).
+NODE_RETRY="${FLEET_NODE_FOLLOW_RETRY_SECS:-21600}"
+case "$NODE_RETRY" in ''|*[!0-9]*) NODE_RETRY=21600 ;; esac
 LOGIN=$(id -un 2>/dev/null || printf '%s' "${USER:-?}")
 HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '?')
 
-usage() { sed -n '2,104p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,131p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
@@ -162,7 +192,8 @@ g() { git -C "$ROOT" -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$TIMEOUT" 
 state_get() { [ -f "$STATE" ] && sed -n "s/^$1: //p" "$STATE" | head -1; }
 
 # The whole record, rewritten atomically. Globals: HEAD_SHA STABLE_SHA FROM TO
-# DEFERRED_SINCE SKIP APPLY_LINE NOTIFIED NOTIFIED_AT.
+# DEFERRED_SINCE SKIP APPLY_LINE NOTIFIED NOTIFIED_AT NODE NODE_REASON
+# NODE_FAILED_AT NODE_FAIL_STABLE NODE_NOTIFIED.
 write_state() { # $1 result $2 reason
   local tmp t
   t=$(now)
@@ -182,6 +213,11 @@ write_state() { # $1 result $2 reason
     printf 'apply: %s\n' "${APPLY_LINE:--}"
     printf 'notified: %s\n' "${NOTIFIED:--}"
     printf 'notified_at: %s\n' "${NOTIFIED_AT:--}"
+    printf 'node: %s\n' "${NODE:--}"
+    printf 'node_reason: %s\n' "${NODE_REASON:--}"
+    printf 'node_failed_at: %s\n' "${NODE_FAILED_AT:--}"
+    printf 'node_fail_stable: %s\n' "${NODE_FAIL_STABLE:--}"
+    printf 'node_notified: %s\n' "${NODE_NOTIFIED:--}"
   } > "$tmp" 2>/dev/null && mv -f "$tmp" "$STATE" 2>/dev/null
   rm -f "$tmp" 2>/dev/null
 }
@@ -250,11 +286,116 @@ One notice per (login · reason · stable); it re-arms once this login follows a
   say "notified ($key) via $cmd"
 }
 
+# node_follow <tick result> — the agent half (issue #1723; the header's NODE
+# paragraph). Sets NODE / NODE_REASON (+ the failure fields) for write_state,
+# writes its own log line when it did something, never exits, never fails the tick.
+node_follow() {
+  local nu plan rc cand self_dom sel others out msg cmd key
+  if [ "${FLEET_NODE_FOLLOW:-1}" = 0 ]; then
+    NODE=off; NODE_REASON='FLEET_NODE_FOLLOW=0 — this login does not upgrade the node agent'; return 0
+  fi
+  nu="${FLEET_INSTALL_NODE_UPGRADE:-$ROOT/bin/fleet-node-upgrade.sh}"
+  [ -f "$nu" ] || { NODE=''; NODE_REASON=''; return 0; }
+  # A stable move clears the last one's failure: the new version gets its try.
+  [ -n "$NODE_FAIL_STABLE" ] && [ "$NODE_FAIL_STABLE" != "$STABLE_SHA" ] && { NODE_FAIL_STABLE=''; NODE_FAILED_AT=''; }
+  plan=$(bash "$nu" "$STABLE_SHA" --dist --dry-run 2>&1 </dev/null); rc=$?
+  if [ "$rc" != 0 ]; then
+    case "$plan" in
+      *"no ccquota agent service"*|*"macOS (launchd) only"*)
+        NODE=none; NODE_REASON='no ccquota agent service on this machine'; return 0 ;;
+    esac
+    NODE=check-failed; NODE_REASON="fleet-node-upgrade.sh --dry-run exit $rc: $(printf '%s\n' "$plan" | tail -1)"
+    node_log; return 0
+  fi
+  # `  <login>  <domain>/<label>  <path>  disk … · hub …  → upgrade`
+  cand=$(printf '%s\n' "$plan" | awk '/→ upgrade$/ { split($2, d, "/"); print $1, d[1] }')
+  if [ -z "$cand" ]; then
+    NODE=current; NODE_REASON="every agent on this machine runs prod-$(short "$STABLE_SHA")"
+    NODE_FAILED_AT=''; NODE_FAIL_STABLE=''; NODE_NOTIFIED=''; return 0
+  fi
+  self_dom=$(printf '%s\n' "$cand" | awk -v me="$LOGIN" '$1 == me {print $2; exit}')
+  others=$(printf '%s\n' "$cand" | awk -v me="$LOGIN" '$1 != me {printf "%s ", $1}')
+  # shellcheck disable=SC2086  # a command line, split on purpose
+  if [ -n "$others" ] || [ "$self_dom" = system ] && ${FLEET_INSTALL_NODE_SUDO_CHECK:-sudo -n true} >/dev/null 2>&1 </dev/null; then
+    sel="${self_dom:+$LOGIN }$others"
+  elif [ "$self_dom" = gui ]; then
+    sel="$LOGIN"
+  elif [ "$self_dom" = system ]; then
+    NODE=delegated; NODE_REASON="this login's agent is a LaunchDaemon and sudo -n is not available here — an admin login's tick upgrades it to prod-$(short "$STABLE_SHA")"
+    node_log; return 0
+  else
+    NODE=current; NODE_REASON="this login's agent runs prod-$(short "$STABLE_SHA"); behind: ${others% } — an admin login's tick upgrades them"
+    return 0
+  fi
+  sel=${sel% }
+  if [ -n "$NODE_FAILED_AT" ] && [ $(( $(now) - NODE_FAILED_AT )) -lt "$NODE_RETRY" ]; then
+    NODE=backoff; NODE_REASON="the upgrade to prod-$(short "$STABLE_SHA") failed at $(iso_of "$NODE_FAILED_AT") — next try after $(iso_of $((NODE_FAILED_AT + NODE_RETRY)))"
+    node_log; return 0
+  fi
+  if [ "$1" = current ]; then   # `updated` passed these gates on the way in
+    local epic busy
+    if epic=$(fleet_epic_running 2>/dev/null); then
+      NODE=deferred; NODE_REASON="EPIC batch running ($epic) — the agent waits for the closing tick"; node_log; return 0
+    fi
+    busy=$(busy_fleets | tr '\n' ' ')
+    if [ -n "$busy" ]; then
+      NODE=deferred; NODE_REASON="busy window(s) on ${busy% } — the agent waits for an idle tick"; node_log; return 0
+    fi
+  fi
+  if [ "$DRY" = 1 ]; then printf 'node: would upgrade %s to prod-%s (fleet-node-upgrade.sh --dist --rollback)\n' "$sel" "$(short "$STABLE_SHA")"; return 0; fi
+  say "node: upgrading $sel to prod-$(short "$STABLE_SHA")"
+  # shellcheck disable=SC2086  # $sel is a list of login names
+  out=$(bash "$nu" "$STABLE_SHA" --dist --rollback --logins $sel 2>&1 </dev/null); rc=$?
+  printf '%s\n' "$out" | sed 's/^/    node: /' >&2
+  if [ "$rc" = 0 ]; then
+    NODE=upgraded; NODE_REASON=$(printf '%s\n' "$out" | grep '^done: ' | tail -1)
+    [ -n "$NODE_REASON" ] || NODE_REASON=$(printf '%s\n' "$out" | tail -1)
+    NODE_FAILED_AT=''; NODE_FAIL_STABLE=''; NODE_NOTIFIED=''
+    node_log; return 0
+  fi
+  NODE=node_upgrade_failed
+  NODE_REASON=$(printf '%s\n' "$out" | grep 'FAIL' | tail -1 | sed 's/^fleet-node-upgrade: FAIL — //')
+  [ -n "$NODE_REASON" ] || NODE_REASON="fleet-node-upgrade.sh exit $rc: $(printf '%s\n' "$out" | tail -1)"
+  NODE_FAILED_AT=$(now); NODE_FAIL_STABLE="$STABLE_SHA"
+  node_log
+  key="$LOGIN node_upgrade_failed $STABLE_SHA"
+  [ "$key" = "$NODE_NOTIFIED" ] && return 0
+  if [ -z "${FLEET_NOTIFY_CMD:-}" ]; then say "node_upgrade_failed and no FLEET_NOTIFY_CMD — nobody to tell"; return 0; fi
+  msg="# node agent upgrade failed — ${LOGIN}@${HOST}
+The ccquota agent of **${sel}** did not come up on prod-$(short "$STABLE_SHA"): ${NODE_REASON}
+It stays on the old binary; the other logins are untouched. Retried no sooner than $(iso_of $((NODE_FAILED_AT + NODE_RETRY))), or at once when stable moves. \`fleet-node-upgrade.sh --status\` shows every login; switch this off with \`FLEET_NODE_FOLLOW=0\`."
+  # shellcheck disable=SC2086
+  if fleet_timebox "$NOTIFY_BUDGET" $FLEET_NOTIFY_CMD "$msg" >/dev/null 2>&1; then
+    NODE_NOTIFIED="$key"
+    cmd=${FLEET_NOTIFY_CMD%% *}; cmd=${cmd##*/}
+    printf '%s notified %s..%s %s via %s\n' "$(utc)" "$(short "${FROM:-${HEAD_SHA:-?}}")" \
+      "$(short "${TO:-${HEAD_SHA:-?}}")" "$key" "$cmd" >> "$LOGF" 2>/dev/null
+  else
+    say "notify ($key) failed — retried next failure"
+  fi
+  return 0
+}
+node_log() { [ "$DRY" = 1 ] && { printf 'node: %s — %s\n' "$NODE" "$NODE_REASON"; return 0; }; log_line "node-$NODE" "$NODE_REASON"; }
+
 # finish <result> <reason> [why] — notify if newly stuck, record, log, leave.
 # Under --dry-run, print only (and what a real tick would notify).
 finish() {
-  if [ "$DRY" = 1 ]; then printf '%s: %s\n' "$1" "$2"; notify_stuck "$1" "$2" "${3:-}"; exit 0; fi
+  if [ "$DRY" = 1 ]; then
+    printf '%s: %s\n' "$1" "$2"; notify_stuck "$1" "$2" "${3:-}"
+    case "$1" in current) node_follow "$1" ;; esac
+    exit 0
+  fi
   notify_stuck "$1" "$2" "${3:-}"
+  # The install is stable now: the node agent follows it (issue #1723). Logged
+  # AFTER the tick's own line, so a grep of the result stays the first field.
+  local nodeq=0
+  case "$1" in current|updated) nodeq=1 ;; esac
+  if [ "$nodeq" = 1 ]; then
+    log_line "$1" "$2"; say "$1 — $2"
+    node_follow "$1"
+    write_state "$1" "$2"
+    exit 0
+  fi
   write_state "$1" "$2"
   log_line "$1" "$2"
   say "$1 — $2"
@@ -315,6 +456,7 @@ run_apply() { # $1 from $2 to → APPLY_LINE + rc; transcript to stderr
 
 main() {
   HEAD_SHA='' STABLE_SHA='' FROM='' TO='' DEFERRED_SINCE='' SKIP='' APPLY_LINE='' NOTIFIED='' NOTIFIED_AT=''
+  NODE='' NODE_REASON='' NODE_FAILED_AT='' NODE_FAIL_STABLE='' NODE_NOTIFIED=''
 
   if [ "$STATUS" = 1 ]; then
     if [ -f "$STATE" ]; then cat "$STATE"; exit 0; fi
@@ -326,6 +468,15 @@ main() {
   SKIP=$(state_get skip); [ "$SKIP" = - ] && SKIP=''
   NOTIFIED=$(state_get notified); [ "$NOTIFIED" = - ] && NOTIFIED=''
   NOTIFIED_AT=$(state_get notified_at); [ "$NOTIFIED_AT" = - ] && NOTIFIED_AT=''
+  # The agent half's record rides along on every tick; node_follow rewrites it.
+  local k v
+  for k in node node_reason node_failed_at node_fail_stable node_notified; do
+    v=$(state_get "$k"); [ "$v" = - ] && v=''
+    case "$k" in
+      node) NODE="$v" ;; node_reason) NODE_REASON="$v" ;; node_failed_at) NODE_FAILED_AT="$v" ;;
+      node_fail_stable) NODE_FAIL_STABLE="$v" ;; node_notified) NODE_NOTIFIED="$v" ;;
+    esac
+  done
   HEAD_SHA=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || :)
 
   # --- off ---------------------------------------------------------------------

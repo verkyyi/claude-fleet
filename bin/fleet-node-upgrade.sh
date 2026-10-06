@@ -5,6 +5,7 @@
 #   fleet-node-upgrade.sh [<sha>|stable] [--dry-run] [--logins all|<name>…]
 #                         [--status] [--no-hub] [--host <ssh-host>]
 #                         [--binary <file> [--sha256 <hex>]] [--wait <secs>]
+#                         [--dist] [--rollback]
 #
 # Upgrading the agent used to be by hand, and a login forgotten was a machine
 # whose half of a change never showed up. This does the whole thing:
@@ -15,7 +16,11 @@
 #            the worktree), with tokenledger/Makefile's LDFLAGS and
 #            VERSION=prod-<sha>; `<built> version` must say so. --binary <file>
 #            uses a ready build instead (its version is checked the same way;
-#            --sha256 pins its bytes too).
+#            --sha256 pins its bytes too). --dist asks the hub first
+#            (GET /v1/node/dist/<os>-<arch> with this login's node token from
+#            node.env, piped to curl on stdin — never on argv; the body must match
+#            its X-Ccquota-Sha256 AND say the target version) and builds only when
+#            the hub has no such binary (issue #1723).
 #   install  onto every distinct binary path the selected logins' agents run
 #            (the running process's own path, else the service's
 #            ProgramArguments): <path>.prev keeps the old bytes, the new one
@@ -29,6 +34,10 @@
 #            seconds) — tmux, sessions and windows are never touched.
 #            A step that fails stops there with exit 1; logins already done stay
 #            done (no rollback — `mv <path>.prev <path>` + kickstart is the undo).
+#            --rollback does that undo itself when a restarted login never shows
+#            up on the target: every installed path no finished login runs goes
+#            back to its .prev and the failed login is kickstarted onto it again
+#            (the install-sync tick passes it, issue #1723).
 #   --host   run the same upgrade on another machine over ssh: the binary is
 #            built (or taken) HERE and shipped, and this very script is streamed
 #            to `bash -s` there — the remote needs neither Go nor this script.
@@ -53,14 +62,16 @@
 # FLEET_NODE_UPGRADE_SUDO (`sudo -n`) · FLEET_NODE_UPGRADE_LAUNCHCTL (launchctl) ·
 # FLEET_NODE_UPGRADE_NODES_CMD (prints the /v1/nodes JSON) ·
 # FLEET_NODE_UPGRADE_HOSTNAME · FLEET_NODE_UPGRADE_OS · FLEET_NODE_UPGRADE_POLL (2)
-# · FLEET_NODE_UPGRADE_UIDS ("login=uid …", before id -u)
+# · FLEET_NODE_UPGRADE_UIDS ("login=uid …", before id -u) ·
+# FLEET_NODE_UPGRADE_DIST_CMD (`<cmd> <os-arch> <body> <headers>` writes both
+# files and prints the HTTP code — stands in for the --dist curl)
 #
 # Exit: 0 done / all current · 1 a step failed (the line says which) · 2 usage
 set -uo pipefail
 
 PROG=fleet-node-upgrade
 BIN_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
-TARGET="" DRY=0 STATUS=0 NOHUB=0 HOST="" BINARY="" WANT_SUM="" WAIT=90
+TARGET="" DRY=0 STATUS=0 NOHUB=0 HOST="" BINARY="" WANT_SUM="" WAIT=90 DIST=0 ROLLBACK=0
 LOGINS_ARG=""
 SUDO="${FLEET_NODE_UPGRADE_SUDO-sudo -n}"
 LAUNCHCTL="${FLEET_NODE_UPGRADE_LAUNCHCTL:-launchctl}"
@@ -78,6 +89,8 @@ while [ "$#" -gt 0 ]; do
     --dry-run|-n) DRY=1 ;;
     --status)     STATUS=1 ;;
     --no-hub)     NOHUB=1 ;;
+    --dist)       DIST=1 ;;
+    --rollback)   ROLLBACK=1 ;;
     --host)       HOST="${2:-}"; [ -n "$HOST" ] || die "--host needs an ssh host"; shift ;;
     --binary)     BINARY="${2:-}"; [ -n "$BINARY" ] || die "--binary needs a file"; shift ;;
     --sha256)     WANT_SUM="${2:-}"; shift ;;
@@ -89,7 +102,7 @@ while [ "$#" -gt 0 ]; do
                   done
                   [ -n "$LOGINS_ARG" ] || die "--logins needs all or login names"
                   continue ;;
-    -h|--help)    sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)    sed -n '2,69p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)           usage >&2; die "unknown flag $1" ;;
     *)            [ -z "$TARGET" ] || die "one target only (got $TARGET and $1)"; TARGET="$1" ;;
   esac
@@ -325,6 +338,7 @@ fi
 hub_load || true
 say "target: $VER  (commit $FULL; host $HOSTN${HUB_NOTE:+; hub: $HUB_NOTE})"
 if [ -n "$BINARY" ]; then say "binary: $BINARY"
+elif [ "$DRY" = 1 ] && [ "$DIST" = 1 ]; then say "binary: would ask the hub for ${VER}, else build tokenledger at $S7"
 elif [ "$DRY" = 1 ]; then say "binary: would build tokenledger at $S7 (make build VERSION=$VER)"
 fi
 PATHS=() TODO=()
@@ -333,7 +347,10 @@ for i in ${SEL[@]+"${SEL[@]}"}; do
   [ "$p" != "?" ] || fail "cannot tell which binary $nm's agent runs (not running, no ProgramArguments)"
   v=$( [ -x "$p" ] && bin_version "$p" ); v=${v:-?}
   hv=$(hub_field "$nm" "$HR" 2)
-  if ver_ok "$v" && [ -n "$hv" ] && ver_ok "$hv"; then act="current — skip"
+  # Hub not read at all (--no-hub, no viewer token, down) → the bytes on disk
+  # decide, as --status does; a hub that answers but lists no such login does not
+  # vouch for it.
+  if ver_ok "$v" && { if [ -n "$hv" ]; then ver_ok "$hv"; else [ -z "$HR" ] && [ -n "$HUB_NOTE" ]; fi; }; then act="current — skip"
   else act="upgrade"; TODO+=("$i"); fi
   say "  $nm  ${L_DOMAIN[$i]}/${L_LABEL[$i]}  $p  disk ${v} · hub ${hv:--}  → $act"
   case " ${PATHS[*]-} " in *" $p "*) ;; *) PATHS+=("$p") ;; esac
@@ -344,6 +361,40 @@ if [ "$DRY" = 1 ]; then say "dry-run: ${#TODO[@]} login(s) would be upgraded and
 # ── build / check the binary ────────────────────────────────────────────────
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-node-upgrade.XXXXXX") || fail "mktemp"
 trap 'rm -rf "$WORK"' EXIT
+# --dist: the hub's build of this platform, when it is the target version. Any
+# miss (no token, no hub, 404, a bad hash, another version) says why on one line
+# and falls through to the local build.
+dist_fetch() {
+  local os arch envf url code want got tok
+  os=$(uname -s | tr '[:upper:]' '[:lower:]'); arch=$(uname -m)
+  case "$arch" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
+  if [ -n "${FLEET_NODE_UPGRADE_DIST_CMD:-}" ]; then
+    code=$(sh -c "$FLEET_NODE_UPGRADE_DIST_CMD \"\$@\"" _ "$os-$arch" "$WORK/dist" "$WORK/dist.h" 2>/dev/null) || code=000
+  else
+    envf="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/node.env"
+    url="${CCQUOTA_HUB_URL:-}"
+    [ -n "$url" ] || url=$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$envf" 2>/dev/null | head -n 1 | tr -d "\"' ")
+    [ -n "$url" ] || url="$HUB_URL"
+    [ -n "$url" ] || { say "dist: no hub URL — building locally"; return 1; }
+    # The node token: read here, handed to curl on stdin, gone with this function.
+    tok="${CCQUOTA_TOKEN:-}"
+    [ -n "$tok" ] || tok=$(sed -n 's/^CCQUOTA_TOKEN=//p' "$envf" 2>/dev/null | head -n 1 | tr -d "\"' ")
+    [ -n "$tok" ] || { say "dist: no node token ($envf) — building locally"; return 1; }
+    code=$(printf 'Authorization: Bearer %s\n' "$tok" | curl -sS --max-time 300 -H @- \
+      -D "$WORK/dist.h" -o "$WORK/dist" -w '%{http_code}' "${url%/}/v1/node/dist/$os-$arch" 2>/dev/null) || code=000
+    tok=""
+  fi
+  [ "$code" = 200 ] || { say "dist: the hub serves no ccquota-$os-$arch (HTTP $code) — building locally"; return 1; }
+  want=$(tr -d '\r' < "$WORK/dist.h" 2>/dev/null | sed -n 's/^[Xx]-[Cc]cquota-[Ss]ha256: *//p' | head -n 1)
+  got=$(sha256_of "$WORK/dist")
+  [ -n "$want" ] && [ "$want" = "$got" ] || { say "dist: ccquota-$os-$arch sha256 ${got:-?} ≠ the hub's ${want:-none} — building locally"; return 1; }
+  chmod 755 "$WORK/dist" || return 1
+  got=$(bin_version "$WORK/dist")
+  [ "$got" = "$VER" ] || { say "dist: the hub serves ${got:-an unreadable binary}, not $VER — building locally"; return 1; }
+  say "dist: ccquota-$os-$arch $VER from the hub (sha256 $want)"
+  BINARY="$WORK/dist"
+}
+[ -z "$BINARY" ] && [ "$DIST" = 1 ] && dist_fetch
 if [ -z "$BINARY" ]; then
   command -v go >/dev/null 2>&1 || fail "no Go on $HOSTN to build $VER — run this where Go is with --host $HOSTN, or pass --binary <file>"
   git -C "$CHECKOUT" archive "$FULL" tokenledger | tar -x -C "$WORK" || fail "git archive $FULL tokenledger (is $FULL in $CHECKOUT?)"
@@ -361,6 +412,7 @@ SUM=$(sha256_of "$BINARY")
 say "binary: $VER sha256 $SUM"
 
 # ── install onto every path ─────────────────────────────────────────────────
+INST_P=() INST_PRIV=()
 for p in ${PATHS[@]+"${PATHS[@]}"}; do
   if [ -f "$p" ] && [ "$(sha256_of "$p")" = "$SUM" ]; then say "install: $p already $VER"; continue; fi
   d=$(dirname "$p")
@@ -374,19 +426,45 @@ for p in ${PATHS[@]+"${PATHS[@]}"}; do
     && $priv mv -f "$p.new" "$p" \
     || fail "install onto $p${priv:+ (via $priv)} — nothing restarted yet"
   [ "$(sha256_of "$p")" = "$SUM" ] || fail "$p sha256 after install is not $SUM"
+  INST_P+=("$p"); INST_PRIV+=("$priv")
   say "install: $p ← $VER (old kept as $p.prev)"
 done
 
 # ── restart, one login at a time, waiting for its control channel ───────────
+# kick <i> — launchctl kickstart -k that login's service.
+kick() {
+  if [ "${L_DOMAIN[$1]}" = gui ]; then
+    $LAUNCHCTL kickstart -k "gui/${L_UID[$1]}/${L_LABEL[$1]}" >/dev/null 2>&1
+  else
+    # shellcheck disable=SC2086
+    $SUDO $LAUNCHCTL kickstart -k "system/${L_LABEL[$1]}" >/dev/null 2>&1
+  fi
+}
+# undo <i> — --rollback: every path this run installed that no finished login
+# runs goes back to its .prev, then login <i> is kickstarted onto the old bytes.
+DONE_P=()
+undo() {
+  local k=0 p back=""
+  [ "$ROLLBACK" = 1 ] || return 0
+  while [ "$k" -lt "${#INST_P[@]}" ]; do
+    p="${INST_P[$k]}"
+    case " ${DONE_P[*]-} " in *" $p "*) k=$((k+1)); continue ;; esac
+    # shellcheck disable=SC2086
+    [ -f "$p.prev" ] && ${INST_PRIV[$k]} mv -f "$p.prev" "$p" && back="$back $p"
+    k=$((k+1))
+  done
+  kick "$1" || true
+  RB="; rolled back:${back:- nothing to restore} (${L_NAME[$1]} kickstarted on the old binary)"
+}
+RB=""
 done_n=0
 for i in ${TODO[@]+"${TODO[@]}"}; do
   nm="${L_NAME[$i]}" uid="${L_UID[$i]}"
   old=$(running_pid "$uid")
-  if [ "${L_DOMAIN[$i]}" = gui ]; then
-    $LAUNCHCTL kickstart -k "gui/$uid/${L_LABEL[$i]}" >/dev/null 2>&1 || fail "$nm: launchctl kickstart -k gui/$uid/${L_LABEL[$i]} ($done_n done)"
-  else
-    # shellcheck disable=SC2086
-    $SUDO $LAUNCHCTL kickstart -k "system/${L_LABEL[$i]}" >/dev/null 2>&1 || fail "$nm: ${SUDO:+$SUDO }launchctl kickstart -k system/${L_LABEL[$i]} ($done_n done)"
+  if ! kick "$i"; then
+    undo "$i"
+    if [ "${L_DOMAIN[$i]}" = gui ]; then fail "$nm: launchctl kickstart -k gui/$uid/${L_LABEL[$i]} ($done_n done)$RB"
+    else fail "$nm: ${SUDO:+$SUDO }launchctl kickstart -k system/${L_LABEL[$i]} ($done_n done)$RB"; fi
   fi
   deadline=$((SECONDS + WAIT)) ok=""
   while [ "$SECONDS" -le "$deadline" ]; do
@@ -400,8 +478,8 @@ for i in ${TODO[@]+"${TODO[@]}"}; do
       [ -n "$new" ] && [ "$new" != "$old" ] && { ok="process $new running (hub not checked${HUB_NOTE:+: $HUB_NOTE})"; break; }
     fi
   done
-  [ -n "$ok" ] || fail "$nm: restarted, but no control channel on $VER within ${WAIT}s — stopping here ($done_n done; the rest untouched)"
-  done_n=$((done_n+1))
+  [ -n "$ok" ] || { undo "$i"; fail "$nm: restarted, but no control channel on $VER within ${WAIT}s — stopping here ($done_n done; the rest untouched)$RB"; }
+  done_n=$((done_n+1)); DONE_P+=("${L_PATH[$i]}")
   say "restart: $nm — $ok"
 done
 say "done: ${done_n}/${#TODO[@]} login(s) on $VER"
