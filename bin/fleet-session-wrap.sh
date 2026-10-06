@@ -74,10 +74,10 @@ while :; do
 
   agent=$(opt @cc_agent); [ "$agent" = codex ] || agent=claude
   if [ "$agent" = codex ]; then sid=$(opt @codex_session_id); else sid=$(opt @cc_session_id); fi
-  wset @claude_state exited
+  wset @wrap_exit_rc "$rc"
   wset @claude_needs ''
   wset @claude_state_ts "$(date +%s)"
-  wset @wrap_exit_rc "$rc"
+  wset @claude_state exited          # last: a reader that sees it sees the rest
   python3 "$BIN/fleet-session-page.py" --rc "$rc" --agent "$agent" --sid "$sid" --title "$(opt window_name)"
   act=$?
   # Back from the page: a relaunch is a fresh turn as far as the list knows.
