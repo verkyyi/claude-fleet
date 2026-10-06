@@ -114,6 +114,28 @@ with tempfile.TemporaryDirectory() as d:
         assert status('', man, T)[0] == want, st
     (Path(d) / 'loop/state.json').write_text('{torn')
     assert status('', man, T)[0] == 'none'
+# rearm (issue #1846): the first turn that puts a reopened session's Loop back
+rearm = M['rearm']
+iso = lambda t: __import__('datetime').datetime.fromtimestamp(t, __import__('datetime').timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+def tr(*calls):
+    out = []
+    for i, (t, name, inp, resp) in enumerate(calls):
+        out.append(json.dumps({'timestamp': iso(t), 'message': {'content': [{'type': 'tool_use', 'id': 'u%d' % i, 'name': name, 'input': inp}]}}))
+        out.append(json.dumps({'timestamp': iso(t), 'toolUseResult': resp, 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'u%d' % i}]}}))
+    return out
+W = lambda t, p, s=1200: (t, 'ScheduleWakeup', {'delaySeconds': s, 'prompt': p}, 'ok')
+assert rearm(tr(W(T, '/fleet-epic-run 1851')), T + 60) == '/loop /fleet-epic-run 1851'
+assert rearm(tr(W(T, '<<autonomous-loop-dynamic>>')), T + 60) == '/loop'
+assert rearm(tr(W(T, '/loop check CI')), T + 60) == '/loop check CI'
+assert rearm(tr(W(T, 'x', 60)), T + 3600) == ''                       # lapsed: nothing pending
+assert rearm(tr(W(T, 'x'), (T + 5, 'ScheduleWakeup', {'stop': True}, 'ok')), T + 60) == ''
+C = lambda t, cron, p, rec=True, job='j1': (t, 'CronCreate', {'cron': cron, 'prompt': p, 'recurring': rec}, {'id': job})
+assert rearm(tr(C(T, '*/5 * * * *', 'babysit PRs')), T + 60) == '/loop 5m babysit PRs'
+assert rearm(tr(C(T, '7 */2 * * *', 'sweep')), T + 60) == '/loop 2h sweep'
+assert rearm(tr(C(T, '0 9 * * 1-5', 'standup')), T + 60) == '/loop standup'
+assert rearm(tr(C(T, '*/5 * * * *', 'x'), (T + 5, 'CronDelete', {'id': 'j1'}, 'ok')), T + 60) == ''
+assert rearm(tr(C(T, '30 14 1 1 *', 'remind', rec=False)), T + 60) == ''  # a one-shot is no Loop
+assert rearm([], T) == ''
 PY
 CHECKS=$((CHECKS+1))
 

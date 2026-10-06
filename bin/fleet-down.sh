@@ -1,9 +1,18 @@
 #!/bin/bash
-# fleet-down.sh <session> [--purge]
+# fleet-down.sh <session> [--yes] [--purge]
 #
 # Tear down a fleet: kill its tmux session. The local checkout is ALWAYS left on
 # disk (your work lives there). With --purge, also remove the per-fleet conf and
 # this fleet's slug'd cache files. See docs/ARCHITECTURE.md.
+#
+# It asks first (issue #1846): one slip took a dozen sessions and a running batch
+# down, and getting them back was by memory. With the fleet live it lists the
+# sessions that would stop; on a terminal you type the fleet's name to go on,
+# anything else cancels; with no terminal it refuses (exit 2) unless --yes — a
+# script that means it says so. Before the kill the fleet's restore map is
+# snapshotted and kept as fleets/<sess>/restore.map.down-<UTC>, so
+# `fleet up --undo` (fleet-restore.sh --undo) brings every session back on its
+# own conversation. A fleet with no live session has nothing to lose: no prompt.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
@@ -11,15 +20,16 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 die() { echo "fleet-down: $*" >&2; exit 1; }
 
-NAME=""; PURGE=0
+NAME=""; PURGE=0; YES=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --purge) PURGE=1; shift;;
+    --yes|-y) YES=1; shift;;
     -*) die "unknown flag $1";;
     *) [ -z "$NAME" ] && NAME="$1"; shift;;
   esac
 done
-[ -n "$NAME" ] || die "usage: fleet-down.sh <session> [--purge]"
+[ -n "$NAME" ] || die "usage: fleet-down.sh <session> [--yes] [--purge]"
 
 # Path-traversal guard (review of PR #196). $NAME becomes a path SEGMENT in
 # several rm targets — rm -rf "$FLEET_CONF_DIR/fleets/$NAME", "$NAME.conf",
@@ -48,7 +58,44 @@ fi
 # lone session also tears the server down, so the socket goes away — leaving every
 # OTHER fleet's server untouched (that isolation is the whole point).
 SOCK=$(fleet_socket "$NAME")
+DOWNMAP=''
 if tmux -L "$SOCK" has-session -t "$NAME" 2>/dev/null; then
+  # What would stop: every session window (by role, issue #1844), with its state.
+  LIST=$(tmux -L "$SOCK" list-windows -t "$NAME" -F "#{window_name}|#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}|$FLEET_ROLE_FMT" 2>/dev/null \
+         | awk -F'|' "$FLEET_ROLE_AWK"'
+             frole($3) == "worker" { printf "  %-28s %s\n", $1, ($2 == "" ? "-" : $2) }')
+  N=$(printf '%s' "$LIST" | grep -c .)
+  if [ "$YES" != 1 ]; then
+    {
+      printf 'fleet-down: 要关掉 fleet「%s」' "$NAME"
+      if [ "$N" -gt 0 ]; then printf '，下面 %s 个会话会一起停：\n%s\n' "$N" "$LIST"; else printf '（没有执行会话）。\n'; fi
+      [ "$PURGE" = 1 ] || printf '关掉后 fleet up --undo 可以把它们原样拉回。\n'
+    } >&2
+    if [ -t 0 ]; then
+      printf '输入 fleet 名「%s」确认（其他任何输入取消）：' "$NAME" >&2
+      ANSWER=''; IFS= read -r ANSWER || ANSWER=''
+      [ "$ANSWER" = "$NAME" ] || { echo "fleet-down: 已取消，什么都没关" >&2; exit 2; }
+    else
+      echo "fleet-down: 没有终端可确认，什么都没关。在终端里运行，或加 --yes（自动化）" >&2
+      exit 2
+    fi
+  fi
+  # Keep the map it is about to lose (issue #1846): a fresh snapshot first, so a
+  # session opened since the collector's last cycle is in it too.
+  if [ "$PURGE" != 1 ]; then
+    bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
+    for m in "$FLEET_CONF_DIR/fleets/$NAME/restore.map" "$FLEET_CONF_DIR/restore/$NAME.map"; do
+      [ -f "$m" ] || continue
+      DOWNMAP="$FLEET_CONF_DIR/fleets/$NAME/restore.map.down-$(date -u +%Y%m%dT%H%M%SZ)"
+      cp "$m" "$DOWNMAP" 2>/dev/null && echo "fleet-down: kept ${DOWNMAP#"$FLEET_CONF_DIR"/} — fleet up --undo brings it back" || DOWNMAP=''
+      break
+    done
+    # older downs: the newest five are plenty
+    for m in "$FLEET_CONF_DIR/fleets/$NAME"/restore.map.down-*; do
+      case "$m" in *.disarmed) ;; *) [ -f "$m" ] && printf '%s\n' "$m" ;; esac
+    done | sort -r | sed -n '6,$p' \
+      | while IFS= read -r m; do rm -f "$m" "$m.disarmed"; done
+  fi
   tmux -L "$SOCK" kill-session -t "$NAME" && echo "fleet-down: killed tmux session '$NAME'"
   # The server outlives its last session now (exit-empty off, issue #1784), so a
   # deliberate teardown ends it here — this fleet's own socket only.
@@ -95,6 +142,7 @@ fi
 # fleet_sockets whether ANY fleet is still live.
 if [ -z "$(fleet_sockets)" ]; then
   bash "$BIN/fleet-restore.sh" --disarm >/dev/null 2>&1 || true
+  [ -n "$DOWNMAP" ] && : > "$DOWNMAP.disarmed"      # --undo re-arms it
 else
   # other fleets still up: drop just this fleet's restore map so it isn't rebuilt
   # (new per-fleet layout + legacy path, issue #181)

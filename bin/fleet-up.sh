@@ -1,5 +1,6 @@
 #!/bin/bash
 # fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-attach]
+# fleet-up.sh --undo [<session>]
 #
 # ONE FLEET PER LOGIN (issue #979). A login runs exactly one fleet holding all its
 # repos, so this brings up THE fleet — or, when the login already has one, adds the
@@ -29,16 +30,24 @@
 # --no-attach (issue #1165): bring the fleet up and stop — no attach, no client
 # switch. For a script that sets a login up (fleet-login-bootstrap.sh) and must
 # carry on past this line; the login's next `fleet` opens the client.
+#
+# --undo (issue #1846): take back the last `fleet down` — every session it closed
+# comes back on its own conversation (fleet-restore.sh --undo, from the
+# restore.map.down-<time> fleet-down.sh kept). Nothing else on this line applies.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 
 die() { echo "fleet-up: $*" >&2; exit 1; }
-usage() { echo "usage: fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-attach]" >&2; }
+usage() { echo "usage: fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-attach] | --undo [<session>]" >&2; }
 need_arg() { [ "$1" -ge 2 ] || { usage; die "$2 needs an argument"; }; }   # $1=$#, $2=flag
 
 REPO=""; DIR=""; NAME=""; BASE=""; FROM_CONF=0; SEED=0; NOATTACH=0
+if [ "${1:-}" = --undo ]; then
+  shift
+  exec bash "$BIN/fleet-restore.sh" --undo "${1:-}"
+fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) need_arg "$#" --name; NAME="$2"; shift 2;;

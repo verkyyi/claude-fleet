@@ -35,6 +35,9 @@
 #                                                   (install-apply's layout + conf passes), fleet_conf_reserved
 #   node-menu / node-prefix-keys                    conf/tmux-node-human.conf (via tmux-fleet-server.conf)
 #   window-killed                                   bin/fleet-restore.sh --auto (pull-back), fleet_win_retire
+#   loop-window-killed                              bin/fleet-restore.sh (loop re-arm), fleet_loop_mark.py rearm
+#   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
+#                                                   fleet-restore.sh --undo
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -179,12 +182,14 @@ EOF
 chmod +x "$WORK/wbin/session-end-hook.sh" "$WORK/fake-agent"
 
 # The install --auto runs from: every bin/ file, fleet-up.sh a stub that builds
-# the session the way the real one leaves it (fleet-up-selftest owns the real one).
+# the session the way the real one leaves it (fleet-up-selftest owns the real one);
+# its --undo goes where the real one sends it (drill_fleet_down_confirm greps that).
 mkdir -p "$WORK/inst/bin" "$WORK/econf/fleets/oc" "$WORK/emain"
 for f in "$BIN"/* "$BIN"/.*.py; do [ -e "$f" ] && ln -s "$f" "$WORK/inst/bin/${f##*/}"; done
 rm -f "$WORK/inst/bin/fleet-up.sh"
 cat > "$WORK/inst/bin/fleet-up.sh" <<EOF
 #!/bin/bash
+[ "\${1:-}" = --undo ] && { shift; exec bash "$WORK/inst/bin/fleet-restore.sh" --undo "\$@"; }
 tmux new-session -d -s oc -n home -c "$WORK/emain" 'exec sleep 600'
 EOF
 chmod +x "$WORK/inst/bin/fleet-up.sh"
@@ -924,6 +929,124 @@ drill_window_killed() {
   auto PATH="$WORK/gbin:$WORK/tbin:$PATH" FLEET_HISTORY_LEDGER="$led"     # a second tick: nothing doubles
   [ "$(nt list-windows -t oc -F '#{window_name}' | grep -c '^issue-1$')" = 1 ] || { WHY="a second tick opened issue-1 twice"; return 1; }
   WHAT="被删的 issue-1 下一拍以原对话回来，/fleet-history 记 reason=killed-window；fleet 自己关的 issue-2 不拉回（节拍 60s 另计）"
+}
+
+# ---- /loop and fleet down (issue #1846) ------------------------------------------
+# A transcript in the sandbox HOME's project dir for <worktree>/<sid>: one
+# successful ScheduleWakeup <secs> ago, the way Claude Code writes it.
+loop_transcript() {
+  local wt="$1" sid="$2" lprompt="$3" d
+  d=$(HOME="$WORK/home" CLAUDE_PROJECTS_DIR='' bash -c '. "$1/fleet-lib.sh"; fleet_transcript_dir "$2"' _ "$BIN" "$wt")
+  mkdir -p "$d"
+  python3 - "$d/$sid.jsonl" "$lprompt" <<'PY'
+import datetime, json, sys
+ts = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=60)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+with open(sys.argv[1], 'w') as f:
+    f.write(json.dumps({'type': 'user', 'timestamp': ts, 'message': {'role': 'user', 'content': '/loop ' + sys.argv[2]}}) + '\n')
+    f.write(json.dumps({'type': 'assistant', 'timestamp': ts, 'message': {'role': 'assistant', 'content': [
+        {'type': 'tool_use', 'id': 'tu1', 'name': 'ScheduleWakeup',
+         'input': {'delaySeconds': 1200, 'prompt': sys.argv[2], 'reason': 'next tick'}}]}}) + '\n')
+    f.write(json.dumps({'type': 'user', 'timestamp': ts, 'message': {'role': 'user', 'content': [
+        {'type': 'tool_result', 'tool_use_id': 'tu1', 'content': 'scheduled'}]}}) + '\n')
+PY
+}
+
+# A worker running /loop is deleted by hand: the next tick brings it back with its
+# conversation AND its loop — `/loop <its input>` is the resumed session's first turn.
+drill_loop_window_killed() {
+  CAP=20; BREAK_SOCK="$WORK/sock-lk"; local t0 f1=1f0e0000-0000-4000-8000-0000000018b1
+  mkdir -p "$WORK/gbin" "$WORK/wt-3"
+  printf '#!/bin/sh\necho 0\n' > "$WORK/gbin/gh"; chmod +x "$WORK/gbin/gh"     # no merged PR
+  loop_transcript "$WORK/wt-3" sid-3 '/fleet-epic-run 1851'
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    printf 'FID\t%s\n' "$f1"; printf 'WIN\tissue-3\t%s\tsid-3\t3\tlooping\t-\t-\n' "$WORK/wt-3"
+  } > "$WORK/econf/fleets/oc/restore.map"
+  auto
+  until_ok 10 sh -c "'$REAL_TMUX' -S '$BREAK_SOCK' list-windows -t oc -F '#{@fleet_id}' 2>/dev/null | grep -qx '$f1'" \
+    || { WHY="the sandbox fleet never came up with the looping session"; return 1; }
+  : > "$WORK/claude-argv"
+  nt kill-window -t oc:issue-3                    # the break
+  t0=$(now)
+  auto PATH="$WORK/gbin:$WORK/tbin:$PATH"         # one diskguard tick
+  until_ok "$CAP" grep -q -- '--resume sid-3' "$WORK/claude-argv" 2>/dev/null \
+    || { WHY="the killed issue-3 did not come back with its conversation"; return 1; }
+  grep -q -- '--resume sid-3 /loop /fleet-epic-run 1851$' "$WORK/claude-argv" \
+    || { WHY="issue-3 came back without its loop: [$(tail -1 "$WORK/claude-argv")], want --resume sid-3 /loop /fleet-epic-run 1851"; return 1; }
+  SECS=$(since "$t0"); WHAT="被删的 issue-3 下一拍以原对话回来，第一轮就是 /loop /fleet-epic-run 1851（节拍 60s 另计）"
+}
+
+# pty_run <answer> <command…> — run it on a terminal, type <answer>⏎ at the
+# first prompt; the screen goes to $WORK/pty.out, the exit status is ours.
+pty_run() {
+  python3 - "$@" > "$WORK/pty.out" 2>&1 <<'PY'
+import os, pty, select, sys, time
+answer, argv = sys.argv[1], sys.argv[2:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+out, sent, end = b'', False, time.time() + 20
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try: data = os.read(fd, 4096)
+        except OSError: break
+        if not data: break
+        out += data
+    if not sent and ('确认'.encode() in out and out.rstrip().endswith(b':') or out.rstrip().endswith('：'.encode())):
+        os.write(fd, answer.encode() + b'\r'); sent = True
+sys.stdout.write(out.decode('utf-8', 'replace'))
+_, st = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(st) if hasattr(os, 'waitstatus_to_exitcode') else st >> 8)
+PY
+}
+
+# fleet down asks first (a terminal: type the fleet's name; a script: --yes) and
+# keeps the map it is about to lose; `fleet up --undo` brings every session back.
+drill_fleet_down_confirm() {
+  CAP=20; BREAK_SOCK="$WORK/sock-fd"; local t0 rc wins f1=1f0e0000-0000-4000-8000-0000000018c1 f2=1f0e0000-0000-4000-8000-0000000018c2
+  local fenv="PATH=$WORK/tbin:$PATH HOME=$WORK/home FLEET_CONF_DIR=$WORK/econf FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK=$BREAK_SOCK SHELL=/bin/sh FLEET_RESTORE_PROBE_SECS=2 FLEET_DISK_FLOOR_GB=0"
+  grep -q 'fleet-restore.sh.*--undo' "$BIN/fleet-up.sh" 2>/dev/null \
+    || { WHY="fleet-up.sh has no --undo (it should hand it to fleet-restore.sh --undo)"; return 1; }
+  rm -f "$WORK/econf/fleets/oc/restore.down" "$WORK/econf/fleets/oc"/restore.map.*
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    printf 'FID\t%s\n' "$f1"; printf 'WIN\tissue-1\t%s\tsid-1\t1\tworking\t-\t-\n' "$WORK/wt-1"
+    printf 'FID\t%s\n' "$f2"; printf 'WIN\tissue-2\t%s\tsid-2\t2\tdone\t-\t-\n'    "$WORK/wt-2"
+  } > "$WORK/econf/fleets/oc/restore.map"
+  env $fenv bash "$WORK/inst/bin/fleet-restore.sh" >/dev/null 2>&1
+  until_ok 10 sh -c "[ \"\$('$REAL_TMUX' -S '$BREAK_SOCK' list-windows -t oc -F '#{@fleet_id}' 2>/dev/null | grep -c .)\" = 2 ]" \
+    || { WHY="the sandbox fleet never came up with both sessions"; return 1; }
+  # their hooks stamp the session id; the conversation is on disk (the snapshot keeps an id only then)
+  nt set-option -w -t oc:issue-1 @cc_session_id sid-1; nt set-option -w -t oc:issue-2 @cc_session_id sid-2
+  loop_transcript "$WORK/wt-1" sid-1 x; loop_transcript "$WORK/wt-2" sid-2 x
+  nt set-option -w -t oc:issue-1 @claude_state working; nt set-option -w -t oc:issue-2 @claude_state 'done'
+  # 1. a script, no --yes: nothing goes down, and it says what would have
+  env $fenv bash "$WORK/inst/bin/fleet-down.sh" oc </dev/null > "$WORK/fd.out" 2>&1; rc=$?
+  [ "$rc" != 0 ] || { WHY="fleet-down with no terminal and no --yes went ahead (exit 0)"; return 1; }
+  nt has-session -t oc 2>/dev/null || { WHY="fleet-down with no confirmation took the fleet down"; return 1; }
+  grep -q 'issue-1' "$WORK/fd.out" && grep -q 'issue-2' "$WORK/fd.out" && grep -q -- '--yes' "$WORK/fd.out" \
+    || { WHY="the refusal does not list the sessions and --yes: [$(tr '\n' ' ' < "$WORK/fd.out")]"; return 1; }
+  # 2. a terminal, the wrong name: nothing goes down
+  pty_run nope env $fenv bash "$WORK/inst/bin/fleet-down.sh" oc; rc=$?
+  [ "$rc" != 0 ] && nt has-session -t oc 2>/dev/null \
+    || { WHY="a wrong name at the prompt still took the fleet down (exit $rc): [$(tr '\n' ' ' < "$WORK/pty.out")]"; return 1; }
+  grep -q '确认' "$WORK/pty.out" || { WHY="no confirmation prompt on a terminal: [$(tr '\n' ' ' < "$WORK/pty.out")]"; return 1; }
+  # 3. --yes: down, the map kept aside
+  env $fenv bash "$WORK/inst/bin/fleet-down.sh" oc --yes </dev/null >/dev/null 2>&1
+  nt has-session -t oc 2>/dev/null && { WHY="fleet-down --yes left the fleet up"; return 1; }
+  ls "$WORK/econf/fleets/oc"/restore.map.down-* >/dev/null 2>&1 || { WHY="fleet-down kept no restore.map.down-<time>"; return 1; }
+  # 4. fleet up --undo: every session back, on its own conversation
+  : > "$WORK/claude-argv"
+  t0=$(now)
+  env $fenv bash "$WORK/inst/bin/fleet-up.sh" --undo >/dev/null 2>&1
+  until_ok "$CAP" sh -c "grep -q -- '--resume sid-1' '$WORK/claude-argv' && grep -q -- '--resume sid-2' '$WORK/claude-argv'" \
+    || { WHY="--undo did not resume both sessions: [$(tr '\n' ' ' < "$WORK/claude-argv")] $(grep -i undo "$WORK/econf/restore/restore.log" 2>/dev/null | tail -2 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  wins=$(nt list-windows -t oc -F '#{window_name}' | sort | tr '\n' ' ')
+  [ "$wins" = "home issue-1 issue-2 " ] || { WHY="after --undo the fleet has [$wins], want [home issue-1 issue-2 ]"; return 1; }
+  [ "$(o oc:issue-1 @fleet_id)" = "$f1" ] || { WHY="issue-1 came back with another identity [$(o oc:issue-1 @fleet_id)]"; return 1; }
+  [ -e "$WORK/econf/fleets/oc/restore.down" ] && { WHY="--undo left restore.down: --auto would never bring it back again"; return 1; }
+  [ -e "$WORK/econf/restore/autorestore.off" ] && { WHY="--undo left auto-restore off"; return 1; }
+  WHAT="不确认不关（脚本无 --yes、终端输错名字）；--yes 关后 fleet up --undo 两个会话都以原对话回来"
 }
 
 # ===================================================== client: the sandbox =======

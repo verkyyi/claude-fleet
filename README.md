@@ -358,7 +358,8 @@ fleet                                      # open the client — the one way in 
 bin/fleet-up.sh you/webapp                 # first repo: clone-or-reuse ~/projects/webapp, bring the fleet up
 bin/fleet-repo.sh add you/infra ~/src/infra   # another repo in the same fleet (explicit checkout dir) — or ⌃z on the dash
 bin/fleet-list.sh                          # ● live / ○ down · name · repo · checkout (+ ↳ each further repo)
-bin/fleet-down.sh fleet --purge            # kill the fleet (+ drop its conf/cache); checkouts stay
+bin/fleet-down.sh fleet                    # kill the fleet after you type its name; `fleet up --undo` brings it back
+bin/fleet-down.sh fleet --yes --purge      # from a script, and drop its conf/cache too; checkouts stay
 ```
 
 On SSH login, `shell/fleet-intro.sh` prints a short, phone-width banner: this
