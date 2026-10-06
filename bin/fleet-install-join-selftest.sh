@@ -152,6 +152,7 @@ install_in() {
   HOME="$h" XDG_CONFIG_HOME="$h/.config" SHELL=/bin/sh FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 \
     FLEET_INSTALL_RC="$h/.profile" FLEET_JOIN_POLL=1 FLEET_JOIN_SUDO="" \
     FLEET_NODE_JOIN_ARGS="--service detached --wait 15" FLEET_INSTALL_NODE_FORCE="${FORCE-1}" \
+    FLEET_PROBE_CURL=false FLEET_PROBE_PMSET=false \
     sh -s -- "$@" < "$WORK/install.sh" >"$WORK/out" 2>&1
   echo $? >"$WORK/rc"
 }

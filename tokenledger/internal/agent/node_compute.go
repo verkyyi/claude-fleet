@@ -2,10 +2,15 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
@@ -85,4 +90,76 @@ func (a *Agent) nodeProbe() *control.NodeProbe {
 		return nil
 	}
 	return &p
+}
+
+// The daily probe (claude-fleet#1720): the agent runs on every node however it
+// was installed, so it is what re-probes — once node-probe.json is a day old
+// (or missing), it runs bin/fleet-node-probe.sh from the full install or the
+// client install, and the next beat carries the new verdict. A machine that
+// moved to an unsupported region is closed by the hub within a day of the move.
+const (
+	probeEvery   = 24 * time.Hour
+	probeCheck   = time.Hour
+	probeTimeout = 2 * time.Minute
+)
+
+// probeScripts are where bin/fleet-node-probe.sh lives: the node install
+// (~/.claude/fleet) first, then the client install (~/.local/share/claude-fleet).
+var probeScripts = []string{
+	filepath.Join(".claude", "fleet", "bin", "fleet-node-probe.sh"),
+	filepath.Join(".local", "share", "claude-fleet", "bin", "fleet-node-probe.sh"),
+}
+
+func (a *Agent) probeScript() string {
+	for _, rel := range probeScripts {
+		p := filepath.Join(a.cfg.Home, rel)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// probeDue: no probe file yet, or one older than probeEvery.
+func (a *Agent) probeDue(now time.Time) bool {
+	if a.cfg.FleetProbePath == "" {
+		return false
+	}
+	st, err := os.Stat(a.cfg.FleetProbePath)
+	return err != nil || now.Sub(st.ModTime()) >= probeEvery
+}
+
+func (a *Agent) runProbe(ctx context.Context) {
+	t := time.NewTicker(probeCheck)
+	defer t.Stop()
+	for {
+		a.probeOnce(ctx, time.Now())
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// probeOnce runs the probe when it is due; false when it did not run. Exit 1
+// is the script's "does not suit" — a verdict, not a failure.
+func (a *Agent) probeOnce(ctx context.Context, now time.Time) bool {
+	if !a.probeDue(now) {
+		return false
+	}
+	script := a.probeScript()
+	if script == "" {
+		return false
+	}
+	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(pctx, script, "--quiet")
+	cmd.Env = append(os.Environ(), "FLEET_CONF_DIR="+filepath.Dir(a.cfg.FleetProbePath))
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if err != nil && !(errors.As(err, &ee) && ee.ExitCode() == 1) && ctx.Err() == nil {
+		log.Printf("probe: %s: %v %s", script, err, strings.TrimSpace(string(out)))
+	}
+	return true
 }

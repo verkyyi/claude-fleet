@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // claude-fleet#1719: only CCQUOTA_FLEET_COMPUTE=0 says anything — unset sends
@@ -58,5 +60,38 @@ func TestComputeLive(t *testing.T) {
 	write(probef, `not json`)
 	if a.nodeProbe() != nil {
 		t.Fatal("an unreadable probe must send none")
+	}
+}
+
+// The daily probe: due with no file and once a day old; it runs the client
+// install's script with FLEET_CONF_DIR pointing at the probe file's dir, and a
+// fresh file is not re-probed.
+func TestProbeOnce(t *testing.T) {
+	home := t.TempDir()
+	conf := filepath.Join(home, "conf")
+	probef := filepath.Join(conf, "node-probe.json")
+	a := &Agent{cfg: Config{Home: home, FleetProbePath: probef}}
+	if a.probeOnce(context.Background(), time.Now()) {
+		t.Fatal("no script installed: nothing to run")
+	}
+	bin := filepath.Join(home, ".local", "share", "claude-fleet", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nmkdir -p \"$FLEET_CONF_DIR\"\nprintf '{\"loc\":\"CN\",\"ts\":\"2026-10-05T00:00:00Z\",\"verdict\":\"unsupported_region\"}' > \"$FLEET_CONF_DIR/node-probe.json\"\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "fleet-node-probe.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !a.probeOnce(context.Background(), time.Now()) {
+		t.Fatal("no probe file: the probe is due")
+	}
+	if p := a.nodeProbe(); p == nil || p.Loc != "CN" {
+		t.Fatalf("probe after a run: %+v", p)
+	}
+	if a.probeOnce(context.Background(), time.Now()) {
+		t.Fatal("a fresh probe file is not re-probed")
+	}
+	if !a.probeOnce(context.Background(), time.Now().Add(25*time.Hour)) {
+		t.Fatal("a day-old probe is due again")
 	}
 }

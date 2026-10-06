@@ -23,6 +23,15 @@
 #   fleet node status
 #       Like `fleet login status`: is this login a node, of which hub, and does
 #       the hub see it online. Exit 0 only when it does.
+#   fleet node compute on [--force] | off | status
+#       Whether the hub may run sessions here (issue #1720, EPIC #1718 C2) —
+#       node.env's CCQUOTA_FLEET_COMPUTE, the agent re-reads it every beat (no
+#       restart). `on` probes first (fleet-node-probe.sh: egress region, Claude /
+#       OpenAI reachable) and refuses with the reason unless the verdict is ok;
+#       --force opens it anyway, and the hub writes that into its audit and keeps
+#       it open over the region rule. `off` = coordinate only. A laptop is only
+#       noted. The other place compute is decided is the hub's team policy
+#       fleet.compute_auto (default off).
 #
 # The old way — a join code from the hub's /nodes page and
 # `fleet-node-join.sh --hub … --token fj_…` — still works for one version
@@ -30,7 +39,8 @@
 #
 # Env: FLEET_CONF_DIR (~/.config/claude-fleet) · FLEET_NODE_JOIN_ARGS (extra
 # fleet-node-join.sh options, the selftest's seam — never needed by a person).
-# Exit: 0 joined / online · 1 a step failed (rerun the same command) · 2 usage
+# Exit: 0 joined / online / compute set · 1 a step failed (rerun the same
+#   command) or `compute on` refused · 2 usage
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd -P)
@@ -85,7 +95,69 @@ cmd_join() {
   "$here/fleet-node-join.sh" --hub "$hub" --ui ${joined[@]+"${joined[@]}"} ${pass[@]+"${pass[@]}"} ${FLEET_NODE_JOIN_ARGS:-}
   rc=$?
   rm -rf "$work"
+  # Can it run sessions? One line, plus 「可以打开：fleet node compute on」 when
+  # it can (issue #1720) — never a reason to fail the join.
+  [ "$rc" = 0 ] && FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" 2>/dev/null
   return "$rc"
+}
+
+# setenv <KEY> <value|''> — node.env's line for KEY replaced (or removed when
+# the value is empty), every other line kept; 0600, atomic.
+setenv() {
+  { grep -v "^$1=" "$ENVF"; [ -z "$2" ] || printf '%s=%s\n' "$1" "$2"; } > "$ENVF.tmp" \
+    && chmod 600 "$ENVF.tmp" && mv "$ENVF.tmp" "$ENVF"
+}
+
+# nudge — the agent sends a beat now rather than at its next interval.
+nudge() { mkdir -p "$CONF/global" 2>/dev/null && touch "$CONF/global/hub-nudge" 2>/dev/null; }
+
+cmd_compute() {
+  local verb="${1:-status}" force=0 line rc
+  [ $# -gt 0 ] && shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1 ;;
+      *) echo "fleet node compute: unknown option $1 — fleet node compute on [--force] | off | status" >&2; return 2 ;;
+    esac
+    shift
+  done
+  if [ -z "$(envval CCQUOTA_TOKEN)" ]; then
+    echo "这台机器（$(id -un)）还不是节点 — 先运行：fleet node join"
+    return 1
+  fi
+  case "$verb" in
+    on)
+      line=$(FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" 2>&1); rc=$?
+      [ "$rc" -le 1 ] || { echo "✗ 没测成：$line"; return 1; }
+      printf '%s\n' "$line" | grep -v '^可以打开：'
+      if [ "$rc" != 0 ] && [ "$force" != 1 ]; then
+        echo "✗ 不打开：这台电脑不适合跑会话（上面一行是原因）。确要打开：fleet node compute on --force（会记进入口审计）"
+        return 1
+      fi
+      setenv CCQUOTA_FLEET_COMPUTE 1 || { echo "✗ 写不了 $ENVF"; return 1; }
+      if [ "$rc" != 0 ]; then setenv CCQUOTA_FLEET_COMPUTE_FORCE 1; else setenv CCQUOTA_FLEET_COMPUTE_FORCE ''; fi
+      nudge
+      if [ "$rc" != 0 ]; then
+        echo "✓ 已强制打开：入口会往这台派会话、借账号（越过了本机判断，入口已记审计）"
+      else
+        echo "✓ 已打开：入口可以往这台派会话、借账号（下一次心跳生效；fleet node compute off 关回只协调）"
+      fi
+      ;;
+    off)
+      setenv CCQUOTA_FLEET_COMPUTE 0 && setenv CCQUOTA_FLEET_COMPUTE_FORCE '' || { echo "✗ 写不了 $ENVF"; return 1; }
+      nudge
+      echo "✓ 已关闭：只协调 — 入口不往这台派会话、不借账号（本机跑会话用自己的账号）"
+      ;;
+    status)
+      case "$(envval CCQUOTA_FLEET_COMPUTE)" in
+        0) echo "只协调：入口不往这台派会话、不借账号（打开：fleet node compute on）" ;;
+        *) if [ "$(envval CCQUOTA_FLEET_COMPUTE_FORCE)" = 1 ]; then echo "已强制打开（--force）"; else echo "已打开：入口可以往这台派会话"; fi ;;
+      esac
+      FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" --max-age 86400 2>/dev/null | grep -v '^可以打开：'
+      return 0
+      ;;
+    *) echo "fleet node compute: on [--force] | off | status" >&2; return 2 ;;
+  esac
 }
 
 cmd_status() {
@@ -113,6 +185,7 @@ cmd_status() {
 case "${1:-}" in
   join) shift; cmd_join "$@" ;;
   status) shift; cmd_status "$@" ;;
+  compute) shift; cmd_compute "$@" ;;
   ''|-h|--help|help) usage ;;
-  *) echo "fleet node: unknown command ${1} — fleet node join | fleet node status" >&2; exit 2 ;;
+  *) echo "fleet node: unknown command ${1} — fleet node join | fleet node status | fleet node compute" >&2; exit 2 ;;
 esac

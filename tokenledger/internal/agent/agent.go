@@ -380,6 +380,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		var node sync.WaitGroup
 		node.Add(1)
 		go func() { defer node.Done(); a.runNode(ctx) }()
+		// The daily probe (claude-fleet#1720): is this machine somewhere
+		// Claude / OpenAI serve? Not waited for — it only writes a file.
+		go a.runProbe(ctx)
 		// A login that only coordinates still asks (claude-fleet#1720): the
 		// hub is the one gate — it refuses compute_off, and answers once the
 		// person (`fleet node compute on`) or the team policy opens the login.

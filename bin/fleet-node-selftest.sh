@@ -21,7 +21,8 @@
 #                `fleet login`'s against the same hub
 #                and (issue #1719) node.env says CCQUOTA_FLEET_COMPUTE=0, the
 #                ssh snippet carries the peer-certificate Match for every other
-#                machine and peer/machines lists them
+#                machine and peer/machines lists them; and (issue #1720) the
+#                join ends with the probe's line + 「可以打开：fleet node compute on」
 #   B. rerun     a second `fleet node join` does not scan again (no new start)
 #                and says it is already a node
 #   C. resume    a run that fails mid-way (the agent's hash) prints ONE ✗ line
@@ -123,6 +124,18 @@ hubstate() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))[sys.
 # fleet <home> <args…> — the installed entry point, in a sandbox HOME whose
 # fleet.conf already names the hub (what the install line leaves behind:
 # fleet-conf.sh set-hub, issue #1623).
+# The probe a join ends with (issue #1720) sees a supported egress where both
+# providers answer — no network from a test.
+cat >"$SB/probe-curl" <<'EOF'
+#!/bin/sh
+for a in "$@"; do case "$a" in
+  *cdn-cgi/trace) echo loc=US; exit 0 ;;
+  *ipinfo.io*) echo US; exit 0 ;;
+  https://api.*) printf 401; exit 0 ;;
+esac; done
+EOF
+chmod 755 "$SB/probe-curl"
+
 fleet_in() {
   local h="$SB/$1"; shift
   mkdir -p "$h/.config/claude-fleet"
@@ -130,6 +143,7 @@ fleet_in() {
     "$BIN/fleet-conf.sh" set-hub "$HUB" --role client >/dev/null 2>&1
   HOME="$h" FLEET_CONF_DIR="$h/.config/claude-fleet" XDG_CONFIG_HOME="$h/.config" FLEET_HUB_URL="" \
     FLEET_JOIN_POLL=1 FLEET_JOIN_SUDO="" FLEET_NODE_JOIN_ARGS="--no-deps --no-fleet --service detached --wait 15" \
+    FLEET_PROBE_CURL="$SB/probe-curl" FLEET_PROBE_PMSET=false FLEET_PROBE_OS=Darwin \
     "$BIN/fleet" "$@" >"$SB/out" 2>&1 </dev/null
   echo $? >"$SB/rc"
 }
@@ -189,6 +203,8 @@ cat >"$SB/node.want" <<'EOF'
 ! 入口没把 <ME> 列为管理登录：这台机器不开账号、不装 SSH CA（要的话在入口的 CCQUOTA_FLEET_ADMIN_USERS 里加上它）
 ✓ 只协调：入口不往这台派会话、不借账号（本机跑会话用自己的账号）
 ✓ 已上线：<HOST>/<ME> 是 <HUB> 的节点
+本机判断：合适 — 出口 US，Anthropic / OpenAI 都能直连
+可以打开：fleet node compute on
 EOF
 diff "$SB/node.want" "$SB/node.out" >"$SB/diff" && ok "A output matches the snapshot" || bad "A output snapshot:
 $(cat "$SB/diff")"
