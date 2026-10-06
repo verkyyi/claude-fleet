@@ -496,7 +496,7 @@ for l in open(sys.argv[1]):
 
 CRED=$(CRED='' gcred mint) || fail "J: --cred mint failed"
 case "$CRED" in fwc1.*.*) : ;; *) fail "J: the minted credential has the wrong form" ;; esac
-mode=$(stat -f %Lp "$G/conf/worker-cred/key" 2>/dev/null || stat -c %a "$G/conf/worker-cred/key")  # portable-ok: BSD then GNU
+mode=$(python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$G/conf/worker-cred/key")
 [ "$mode" = 600 ] || fail "J: the login key is $mode, not 0600"
 claims=$(gcred check) || fail "J: a fresh credential does not verify"
 python3 -c 'import json, sys
