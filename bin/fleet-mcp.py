@@ -922,6 +922,14 @@ def tool_where(args):
     return script([str(BIN / "fleet-client-where.sh")] + (["--json"] if args.get("json") else []), STATUS_TIMEOUT_S)
 
 
+def tool_whats_new(args):
+    argv = [str(BIN / "fleet-whats-new.sh"), "--full"]
+    if args.get("to") and not args.get("from"):
+        raise Refused("to needs from")
+    argv += [args[k] for k in ("from", "to") if args.get(k)]
+    return script(argv, STATUS_TIMEOUT_S)
+
+
 def tool_show(args):
     argv = [str(BIN / "fleet-show.sh")] + (["--inline"] if args.get("inline") else []) + ["--", args["file"]]
     return script(argv, SHOW_TIMEOUT_S)
@@ -1134,6 +1142,17 @@ TOOLS = {
                        "never guess a terminal. Exit 0 a client named · 3 nobody connected · 1 could not tell.",
         "inputSchema": {"type": "object", "properties": {
             "json": {"type": "boolean", "description": "The machine-readable form."}},
+            "additionalProperties": False}}),
+    "whats_new": (tool_whats_new, {
+        "description": "Read-only. What changed in the fleet since THIS session started (bin/fleet-whats-new.sh "
+                       "--full): the tools added or retired, worker-skill and guard changes, the rest counted. "
+                       "The same note a working session gets once at its next turn after a version move. "
+                       "Exit 0 printed · 1 nothing changed (or no version to compare).",
+        "inputSchema": {"type": "object", "properties": {
+            "from": {"type": "string", "pattern": "^[0-9a-f]{7,40}$",
+                     "description": "Old fleet version (sha); default this session's launch version."},
+            "to": {"type": "string", "pattern": "^[0-9a-f]{7,40}$",
+                   "description": "New fleet version (sha); default the current one."}},
             "additionalProperties": False}}),
     "show": (tool_show, {
         "description": "Show a file (image, PDF, QR code, screenshot) on the OPERATOR's terminal, never this "
