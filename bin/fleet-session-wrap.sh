@@ -57,6 +57,39 @@ wset() { tmux set-option -w -t "$TMUX_PANE" "$@" 2>/dev/null; }
 # the child, and the wrapper itself just keeps going when the agent returns.
 trap ':' INT QUIT
 
+# Ctrl+Z never freezes a session (issue #1843). The pane's process group is
+# orphaned — its leader, the pane's shell, is a session leader whose parent is
+# the tmux server — so the kernel discards a SIGTSTP and nothing ever stops. But
+# Claude Code and Codex suspend THEMSELVES on Ctrl+Z: tear the UI down, arm a
+# SIGCONT handler, `kill(0, SIGTSTP)` — and wait for an `fg` no shell here will
+# ever type: alive, silent, deaf to keys. This guard sits in the same process
+# group and catches that very SIGTSTP (a handler runs where a default stop is
+# discarded; `wait` returns at once on a trapped signal), then SIGCONTs the whole
+# group: the agent's own handler redraws it. One log line, and the clients looking
+# at this pane are told. It dies with the wrapper (EXIT below, or its next look).
+WRAP=$$
+if [ "$intmux" = 1 ]; then
+  (
+    trap '' INT QUIT TTIN TTOU HUP
+    log="$BIN/../logs/session-ctrl-z.log"
+    ctrl_z() {
+      kill -CONT 0 2>/dev/null
+      wset @wrap_ctrl_z "$(date +%s)"
+      [ -d "${log%/*}" ] && printf '%s pane=%s wrap=%s window=%s SIGTSTP → SIGCONT\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TMUX_PANE" "$WRAP" "$(opt window_name)" >> "$log" 2>/dev/null
+      local msg='执行会话里 Ctrl+Z 不起作用' c p
+      [ "${FLEET_UI_LANG:-}" = en ] && msg='Ctrl+Z does nothing in a fleet session'
+      tmux list-clients -F '#{client_name}	#{pane_id}' 2>/dev/null | while IFS='	' read -r c p; do
+        [ "$p" = "$TMUX_PANE" ] && tmux display-message -c "$c" -d 3000 "$msg" 2>/dev/null
+      done
+    }
+    trap ctrl_z TSTP
+    while kill -0 "$WRAP" 2>/dev/null; do sleep 5 & wait $!; done
+  ) </dev/null >/dev/null 2>&1 &
+  NOSTOP=$!
+  trap 'kill "$NOSTOP" 2>/dev/null' EXIT
+fi
+
 cmd=("$@")
 while :; do
   if [ "$intmux" = 1 ]; then
