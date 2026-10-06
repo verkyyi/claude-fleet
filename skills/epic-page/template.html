@@ -186,6 +186,8 @@
 
   footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--rule);font-size:.8rem;color:var(--ink-3)}
   @media (max-width:520px){ .kv{grid-template-columns:1fr;gap:1px 0} .kv dd{margin-bottom:9px} }
+  .proto{margin:10px 0 0}
+  .proto a{display:inline-block;padding:6px 12px;border:1px solid var(--rule);border-radius:8px;background:var(--surface-2);font-weight:600;text-decoration:none}
   @media (max-width:640px){ .proof{grid-template-columns:1fr} }
   /* print: nothing is folded away on paper — force every <details> (fold AND card) open, both the modern
      ::details-content path and the legacy display:none one, and drop the ▸ affordance */
@@ -313,7 +315,13 @@
      REPORT: the summary line also carries the status pill, and for anything unfinished the
      one-liner IS the why — a reader must not have to open a card to learn it did not ship.
      The .proof grid sits in the upper layer (the pictures are stakeholder content); the
-     上线证据 LINE that told the worker where to shoot folds with the rest. -->
+     上线证据 LINE that told the worker where to shoot folds with the rest.
+
+     PLAN, VISUAL members only (issue #1754): a member that changes something the user SEES
+     (侧栏 / 状态栏 / 弹出菜单 / 网页 / 小程序页面 / 报告页样式) carries ONE p.proto link in the
+     upper layer — under the four fields, never in the fold — to its clickable prototype, hosted
+     by doc-preview share.sh. A non-visual member drops the line. --lint WARNs `prototype` when
+     a visual card has none. -->
 <section id="members">
 <h2>要做的事</h2>
 
@@ -327,6 +335,7 @@
   <dt>解决什么</dt><dd>⟨what goes wrong for them today, as they experience it — not the code's shortcoming⟩</dd>
   <dt>怎么算成功</dt><dd>⟨what the decider would look at to believe it worked — names the #metrics row by its 指标 name⟩</dd>
 </dl>
+<p class="proto"><a href="⟨原型 URL — share.sh 的 READY 地址⟩">▶ 打开可交互原型</a></p>
 <!-- report only (issue #810) — the plan page drops this block. What the member looks like live, from
      `fleet-evidence.sh export --epic N <dir>`: each cell is an <img> (relative path — doc-preview copies
      it beside the page), a <pre> (a command's output / a capture-pane), or a .none cell — 无证据 when the

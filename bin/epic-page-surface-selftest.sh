@@ -9,6 +9,9 @@
 #   2. a page written to the rules lints clean (exit 0).
 #   3. a page carrying each of #929's six mistakes fires the matching rule
 #      (key / jargon / file / metric / for-whom / decision) and exits 1.
+#   3b. a visual member card (侧栏 / 状态栏 / 菜单 / 页面 …) with no upper-layer
+#      「▶ 打开可交互原型」 link fires `prototype`; one with it, or a non-visual
+#      card, does not (issue #1754).
 #   4. the shared template's surface still reads through it (the frame and the
 #      tool agree on the fold classes), and the skill + plan command point at it.
 set -uo pipefail
@@ -107,6 +110,38 @@ lint_fires for-whom '维护团队'     '维护团队' "$OKM" "$OKC" "$OKD"
 lint_fires decision '代码或路径'   "$OKW" "$OKM" "$OKC" '<tr><td>数据放哪</td><td><code>./_data/表名.json</code></td></tr>'
 lint_fires decision '不做'         "$OKW" "$OKM" "$OKC" '<tr><td>不做：视频预览</td><td>这批不碰</td></tr>'
 
+# 3b. a visual member with no upper-layer prototype link fires `prototype` (issue #1754)
+vpage() {  # <file> <card-name> <upper-extra> <fold-extra>
+  cat >"$1" <<EOF
+<!doctype html><html lang="zh"><body><h1>客户端新建与位置</h1>
+<section id="members"><h2>要做的事</h2>
+<div class="ob" id="m-C1"><details class="card">
+<summary><span class="ct"><strong>$2</strong><span class="cg">今天看不出会话在哪台电脑上。</span></span></summary>
+$3<dl class="kv"><dt>为谁</dt><dd>你，一个人用 3 台电脑</dd></dl>
+<details class="fold"><summary>技术细节</summary>$4<dl class="kv"><dt>编号 / 来源</dt><dd>C1 · 新建</dd></dl></details>
+</details></div></section></body></html>
+EOF
+}
+PROTO='<p class="proto"><a href="https://h/d/1/">▶ 打开可交互原型</a></p>'
+vlint() {  # <want-rc> <what> <card-name> <upper-extra> <fold-extra>
+  local want=$1 what=$2 f="$TMP/vis-$CHECKS.html" err rc; shift 2
+  vpage "$f" "$@"
+  CHECKS=$((CHECKS + 1))
+  err=$("$S" --lint "$f" 2>&1 >/dev/null </dev/null); rc=$?
+  [ "$rc" -eq "$want" ] || fail "prototype: $what — want rc=$want, got $rc: $err"
+  if [ "$want" -eq 1 ]; then
+    printf '%s\n' "$err" | grep '^WARN prototype:' | grep -q -F -- "$1" \
+      || fail "prototype: $what — no WARN naming the card; got: $err"
+  fi
+}
+vlint 1 'visual card, no link'          '侧栏每行标出所在电脑' '' ''
+vlint 1 'visual word only in the fold'  '每行标出所在电脑' '' '<p>改侧栏的行</p>'
+vlint 1 'link only inside the fold'     '侧栏每行标出所在电脑' '' "$PROTO"
+vlint 1 'upper link that is no prototype' '状态栏显示所在电脑' '<p><a href="https://h/x">相关单</a></p>' ''
+vlint 0 'upper-layer prototype link'    '侧栏每行标出所在电脑' "$PROTO" ''
+vlint 0 'class=proto link, other text'  '弹出菜单加一项' '<p><a class="proto" href="https://h/d/1/">▶ 打开</a></p>' ''
+vlint 0 'not a visual member'           '新会话启动更快' '' ''
+
 # 4. the frame reads through the tool; the docs point at it
 TS=$("$S" "$T" </dev/null) || fail "surface of template.html failed"
 for want in '## 指标' '## 要做的事' '## 需要你定的事' '▸ ⟨名称⟩ — ⟨一句：解决什么⟩'; do
@@ -120,6 +155,10 @@ done
 for f in "$ROOT/skills/epic-page/SKILL.md" "$ROOT/commands/fleet-epic-plan.md"; do
   CHECKS=$((CHECKS + 1))
   grep -q -F 'epic-page-surface.sh' "$f" || fail "${f#"$ROOT"/} does not point at epic-page-surface.sh"
+done
+for f in "$ROOT/skills/epic-page/SKILL.md" "$ROOT/commands/fleet-epic-plan.md" "$T"; do
+  CHECKS=$((CHECKS + 1))
+  grep -q -F '▶ 打开可交互原型' "$f" || fail "${f#"$ROOT"/} does not carry the prototype rule (issue #1754)"
 done
 
 printf 'epic-page-surface-selftest OK (%d checks)\n' "$CHECKS"
