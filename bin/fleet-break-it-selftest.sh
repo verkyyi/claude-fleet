@@ -27,6 +27,10 @@
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 #   personal-tmux-conf                              conf/tmux-fleet-server.conf, fleet_server_new_session,
 #                                                   fleet_tmuxconf_check, reapply-tmux-attention.sh
+#   personal-hook-hangs / personal-hook-errors      bin/fleet-hook-personal.sh (timeout, strikes)
+#   personal-mcp-missing / personal-mcp-over-default / personal-cache-truncated
+#                                                   bin/fleet-agent-team.py (personal_layer), fleet-claude.sh, fleet-codex.sh
+#   personal-breaks-session                         bin/fleet-session-wrap.sh, fleet-session-page.py (p), FLEET_PERSONAL=0
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -132,7 +136,7 @@ printf '%s|%s\n' "\$PWD" "\$*" >> "$WORK/claude-argv"
 printf '────────\n❯ \n────────\n'; exec sleep 600
 EOF
 chmod +x "$WORK/tbin/tmux" "$WORK/tbin/claude"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-hook-personal.sh; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/recycled"\n' "$WORK" > "$WORK/wbin/session-end-hook.sh"
 cat > "$WORK/fake-agent" <<'EOF'
 #!/bin/bash
@@ -141,6 +145,15 @@ cat > "$WORK/fake-agent" <<'EOF'
 # $CTL/agent = codex: a Codex session whose id was never recorded (#1842 ④).
 # $CTL/resume-fails: a resume dies at once, the way a lost conversation does.
 printf '%s\n' "$*" >> "$CTL/argv"
+printf '%s\n' "${FLEET_PERSONAL:-}" >> "$CTL/personal"
+# $CTL/hook: a personal hook's command, run the way Claude Code runs it (through
+# bin/fleet-hook-personal.sh) four times, each answer's exit code logged.
+if [ -s "$CTL/hook" ]; then
+  for _ in 1 2 3 4; do
+    echo '{}' | sh "$(dirname "$0")/wbin/fleet-hook-personal.sh" PreToolUse -- "$(cat "$CTL/hook")" >/dev/null 2>&1
+    echo $? >> "$CTL/hook-rc"
+  done
+fi
 agent=$(cat "$CTL/agent" 2>/dev/null); [ -n "$agent" ] || agent=claude
 case " $* " in *" --resume "*|*" resume "*)
   [ -e "$CTL/resume-fails" ] && { printf 'Error: No conversation found with session ID: SID-1\n' >&2; exit 1; } ;;
@@ -191,6 +204,7 @@ o()  { nt display-message -p -t "$1" "#{$2}" 2>/dev/null; }
 wrapped() {
   mkdir -p "$3"; : > "$3/argv"
   local cmd="env CTL='$3' FLEET_WRAP_LAUNCH='$WORK/fake-agent' FLEET_WRAP_FAST_FAIL=${WRAP_FAST:-0} FLEET_UI_LANG=zh"
+  [ -n "${PERS_CONF:-}" ] && cmd="$cmd FLEET_CONF_DIR='$PERS_CONF'"
   cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' --agent claude 'the seed'; exec sleep 600"
   if nt has-session -t "$1" 2>/dev/null; then nt new-window -d -t "$1:" -n "$2" "$cmd"
   else nt -f /dev/null new-session -d -s "$1" -n "$2" -x 100 -y 30 "$cmd"; fi
@@ -641,6 +655,155 @@ drill_personal_tmux_conf() {
   grep -q '^[[:space:]]*[^#[:space:]].*tmux-attention\.conf' "$h/.tmux.conf" \
     || { WHY="reapply-tmux-attention.sh took the commented line for the real one: [$out]"; return 1; }
   SECS=$(since "$t0"); WHAT="个人配置有语法错，fleet 层照常（回收 hook、改名保护、@fleet_conf_loaded），tmuxconf 核对 ok，reapply 补回 source 行"
+}
+
+# ---- a personal configuration written badly (issue #1862, EPIC #1855 C7) -------
+# The person's own layer (C2 #1857, C3 #1858) follows them to every machine — so
+# does a mistake in it. Each drill writes one bad layer; the session must still
+# open and work, and say which item is bad.
+#
+# ph_hook <timeout> <command> <calls> — one personal hook run the way Claude Code
+# runs it (bin/fleet-hook-personal.sh), <calls> times in ONE session ($PH_LAUNCH);
+# prints each call's "<rc>:<secs>" on one line.
+ph_hook() {
+  local out='' t
+  for _ in $(seq 1 "$3"); do
+    t=$(now)
+    echo '{"session_id":"S-1"}' | env HOME="$WORK/ph" FLEET_CONF_DIR="$WORK/ph/conf" FLEET_PERSONAL_HOOK_TIMEOUT="$1" \
+      FLEET_WRAP_LAUNCH_ID="$PH_LAUNCH" sh "$BIN/fleet-hook-personal.sh" PreToolUse -- "$2" >/dev/null 2>"$WORK/ph-hook.err"
+    out="$out $?:$(since "$t")"
+  done
+  printf '%s\n' "${out# }"
+}
+# A personal hook that hangs: cut off at the timeout (C3) — and after 3 failures
+# in a row it is off for the rest of this session, so the next call costs nothing.
+drill_personal_hook_hangs() {
+  CAP=6; local t0 r last; PH_LAUNCH="hang$$"; mkdir -p "$WORK/ph/conf"
+  t0=$(now); r=$(ph_hook 1 'sleep 30' 5)
+  last=${r##* }
+  case "$r" in 1:*' '1:*' '1:*) ;; *) WHY="the first three calls were not cut off at 1s: [$r]"; return 1 ;; esac
+  [ "${last%%:*}" = 0 ] && le "${last#*:}" 0.5 \
+    || { WHY="after 3 timeouts the hook still runs — every tool call waits on it again: [$r]"; return 1; }
+  ls "$WORK/ph/conf/personal-hook-strikes/$PH_LAUNCH/"*.off >/dev/null 2>&1 \
+    || { WHY="nothing records the hook as off (the recovery page has nothing to say)"; return 1; }
+  SECS=$(since "$t0"); WHAT="个人规则卡死：每次 1s 切断，连续 3 次后本会话停用（第 5 次 ${last#*:}s）"
+}
+# A personal hook that always errors (exit 1, a missing command → 127): off after
+# 3 in a row. A deliberate deny (exit 2) is the hook doing its job — never a strike.
+drill_personal_hook_errors() {
+  CAP=3; local t0 r; mkdir -p "$WORK/ph/conf"
+  t0=$(now); PH_LAUNCH="err$$"; r=$(ph_hook 5 'exit 1' 4)
+  case "$r" in 1:*' '1:*' '1:*' '0:*) ;; *) WHY="a hook that fails every time is never switched off: [$r]"; return 1 ;; esac
+  PH_LAUNCH="err127$$"; r=$(ph_hook 5 'no-such-personal-tool-xyz --go' 4)
+  case "$r" in 127:*' '127:*' '127:*' '0:*) ;; *) WHY="a hook whose command is missing is never switched off: [$r]"; return 1 ;; esac
+  PH_LAUNCH="deny$$"; r=$(ph_hook 5 'echo no >&2; exit 2' 5)
+  case "$r" in 2:*' '2:*' '2:*' '2:*' '2:*) ;; *) WHY="a deny (exit 2) was counted as a failure: [$r]"; return 1 ;; esac
+  SECS=$(since "$t0"); WHAT="个人规则一直报错（exit 1 / 命令不存在）连续 3 次后本会话停用；拒绝（exit 2）不算失败"
+}
+# pt <args…> — fleet-agent-team.py against the sandbox login $WORK/pt: the
+# person's answer is $WORK/pt/presp.json, the team layer empty, ~/.claude.json
+# carrying the fleet default github server (as the agents pass leaves it).
+pt_rig() {
+  local H="$WORK/pt"; rm -rf "$H"; mkdir -p "$H/.claude" "$H/.codex" "$H/conf"
+  python3 -c 'import json, sys
+gh = json.load(open(sys.argv[1]))["mcpServers"]["github"]
+json.dump({"numStartups": 1, "mcpServers": {"github": gh}}, open(sys.argv[2], "w"))' \
+    "$ROOT/conf/agent-defaults/claude/mcp.default.json" "$H/.claude.json"
+  echo '{}' > "$H/.claude/settings.json"; : > "$H/.codex/config.toml"
+  printf '%s\n' '{"version":1,"prev":0,"bundle":{}}' > "$H/tresp.json"
+}
+pt() {
+  local H="$WORK/pt"
+  ( cd "$H" && env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$H/conf" CODEX_HOME="$H/.codex" ${PT_ENV:+"$PT_ENV"} \
+    FLEET_TEAM_BUNDLE_CMD="cat '$H/tresp.json'" FLEET_PERSON_BUNDLE_CMD="cat '$H/presp.json'" \
+    python3 "$ROOT/bin/fleet-agent-team.py" "$@" --root "$ROOT" --claude-config "$H/.claude.json" \
+    --claude-settings "$H/.claude/settings.json" --claude-skills "$H/.claude/skills" --codex-home "$H/.codex" 2>&1 )
+}
+ptj() { python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print(json.dumps(eval(sys.argv[2]), sort_keys=True))' "$@" 2>/dev/null; }
+# A personal MCP server whose command is not on this machine (the person's laptop
+# has it, this login does not): never written into the login's files, never
+# handed to a session — and the session's start line names it.
+drill_personal_mcp_missing() {
+  CAP=10; local t0 H="$WORK/pt" out s
+  pt_rig
+  printf '%s\n' '{"version":1,"prev":0,"bundle":{"mcp":{"mytool":{"command":"/nonexistent/bin/mytool"},"fine":{"command":"sh","args":["-c","cat"]}}}}' > "$H/presp.json"
+  t0=$(now)
+  out=$(pt sync)
+  [ "$(ptj "$H/.claude.json" "'mytool' in d['mcpServers']")" = false ] \
+    || { WHY="sync wrote the missing-command server into ~/.claude.json: [$out]"; return 1; }
+  [ "$(ptj "$H/.claude.json" "d['mcpServers']['fine']['command']")" = '"sh"' ] || { WHY="the good personal server did not land: [$out]"; return 1; }
+  grep -q mytool "$H/.codex/config.toml" && { WHY="sync wrote it into config.toml"; return 1; }
+  printf '%s' "$out" | grep -q 'mytool' || { WHY="sync says nothing about mytool: [$out]"; return 1; }
+  s=$(pt session claude)
+  printf '%s\n' "$s" | grep -q $'^note\t.*mytool.*/nonexistent/bin/mytool' || { WHY="the session's start line does not name it: [$s]"; return 1; }
+  printf '%s\n' "$s" | sed -n 's/^mcp\t//p' | xargs cat 2>/dev/null | grep -q mytool && { WHY="the session was handed mytool"; return 1; }
+  grep -q 'note)' "$BIN/fleet-claude.sh" && grep -q 'note)' "$BIN/fleet-codex.sh" \
+    || { WHY="fleet-claude.sh / fleet-codex.sh do not print the composer's note lines"; return 1; }
+  SECS=$(since "$t0"); WHAT="个人 MCP 命令不存在：不写进本机文件、不交给会话，启动行点名"
+}
+# The personal layer replaces a fleet default MCP server (github) with one whose
+# command is not here: the fleet default stays in force; the start line says why.
+drill_personal_mcp_over_default() {
+  CAP=10; local t0 H="$WORK/pt" out s gh
+  pt_rig; gh=$(ptj "$H/.claude.json" "d['mcpServers']['github']")
+  printf '%s\n' '{"version":1,"prev":0,"bundle":{"mcp":{"github":{"command":"/nonexistent/gh-mcp"}}}}' > "$H/presp.json"
+  t0=$(now)
+  out=$(pt sync)
+  [ "$(ptj "$H/.claude.json" "d['mcpServers']['github']")" = "$gh" ] \
+    || { WHY="the personal layer broke the fleet's github server: $(ptj "$H/.claude.json" "d['mcpServers']['github']") [$out]"; return 1; }
+  [ "$(ptj "$H/conf/agent-effective.json" "d['items'].get('claude.mcp.github', {}).get('source')")" != '"personal"' ] \
+    || { WHY="agent-effective.json says github is the personal layer's"; return 1; }
+  s=$(pt session claude)
+  printf '%s\n' "$s" | grep -q $'^note\t.*github' || { WHY="the session's start line does not name github: [$s]"; return 1; }
+  SECS=$(since "$t0"); WHAT="个人层把 github 换成不存在的命令：fleet 默认照常生效，启动行点名"
+}
+# person-bundle.json cut short (a disk full mid-write, a crash, a bad hand edit):
+# the session uses the last good copy and says so — the person's items do not
+# silently vanish, and the next apply does not take them back.
+drill_personal_cache_truncated() {
+  CAP=10; local t0 H="$WORK/pt" out s
+  pt_rig
+  printf '%s\n' '{"version":1,"prev":0,"bundle":{"mcp":{"pm":{"command":"sh","args":["-c","cat"]}},"claude_settings":{"includeCoAuthoredBy":false}}}' > "$H/presp.json"
+  pt sync >/dev/null
+  [ "$(ptj "$H/.claude.json" "d['mcpServers']['pm']['command']")" = '"sh"' ] || { WHY="the rig's personal server did not land"; return 1; }
+  head -c 25 "$H/conf/person-bundle.json" > "$H/pb.cut" && mv "$H/pb.cut" "$H/conf/person-bundle.json"
+  t0=$(now)
+  s=$(pt session claude)
+  printf '%s\n' "$s" | grep -q $'^src\t.* personal:v1 ' || { WHY="a truncated cache dropped the personal layer from the session: [$s]"; return 1; }
+  printf '%s\n' "$s" | grep -q $'^note\t.*person-bundle.json' || { WHY="the session's start line does not say the cache is broken: [$s]"; return 1; }
+  out=$(pt apply)
+  [ "$(ptj "$H/.claude.json" "d['mcpServers'].get('pm', {}).get('command')")" = '"sh"' ] \
+    || { WHY="apply took the personal server back on a truncated cache: [$out]"; return 1; }
+  [ "$(ptj "$H/.claude/settings.json" "d.get('includeCoAuthoredBy')")" = false ] || { WHY="apply took the personal setting back: [$out]"; return 1; }
+  SECS=$(since "$t0"); WHAT="个人缓存被截断：用上一份完好的 v1，启动行告警，本机文件不被收回"
+}
+# The personal layer makes the session useless (a hook that refuses every call, a
+# setting that breaks it): the recovery page offers p — the SAME conversation, this
+# window only, without the personal layer (FLEET_PERSONAL=0: personal hooks do not
+# run, the composer leaves the layer out). Hooks switched off in the run that just
+# ended are named on the page.
+drill_personal_breaks_session() {
+  CAP=8; BREAK_SOCK="$WORK/sock-pb"; local c="$WORK/pb" t0 out rc
+  mkdir -p "$c/conf" && printf '%s\n' '{"version":3,"bundle":{}}' > "$c/conf/person-bundle.json"
+  printf 'exit 1' > "$c/hook"
+  PERS_CONF="$c/conf" wrapped sx w "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
+  until_ok 15 sh -c "[ \"\$(grep -c . '$c/hook-rc' 2>/dev/null)\" = 4 ]" || { WHY="the agent's personal hook calls never finished"; return 1; }
+  t0=$(now); printf rc0 > "$c/mode"; : > "$c/go"
+  until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page"; return 1; }
+  page_says '不带个人配置重开' \
+    || { WHY="the page offers no way to reopen without the personal layer: $(nt capture-pane -p -t sx:w | grep . | tail -1)"; return 1; }
+  page_says '个人自动规则' || { WHY="the page does not say a personal hook was switched off"; return 1; }
+  rm -f "$c/hook"; nt send-keys -t sx:w p
+  until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="p relaunched nothing"; return 1; }
+  [ "$(sed -n 2p "$c/argv")" = "--agent claude --resume SID-1" ] || { WHY="p ran [$(sed -n 2p "$c/argv")], not the same conversation"; return 1; }
+  [ "$(sed -n 2p "$c/personal")" = 0 ] || { WHY="the relaunch did not run with FLEET_PERSONAL=0 ([$(sed -n 2p "$c/personal")])"; return 1; }
+  out=$(echo '{}' | FLEET_PERSONAL=0 sh "$BIN/fleet-hook-personal.sh" PreToolUse -- 'echo no >&2; exit 2' 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="under FLEET_PERSONAL=0 a personal hook still runs (rc $rc: $out)"; return 1; }
+  pt_rig; printf '%s\n' '{"version":2,"prev":1,"bundle":{"claude_settings":{"includeCoAuthoredBy":false}}}' > "$WORK/pt/presp.json"
+  pt sync >/dev/null
+  out=$(PT_ENV=FLEET_PERSONAL=0 pt session claude)
+  printf '%s\n' "$out" | grep -q $'^src\t.* personal:off ' || { WHY="the composer under FLEET_PERSONAL=0 still uses the layer: [$out]"; return 1; }
+  SECS=$(since "$t0"); WHAT="恢复页 p：同一对话、本窗口不带个人配置重开；停用的个人规则在页上点名"
 }
 
 # ===================================================== client: the sandbox =======

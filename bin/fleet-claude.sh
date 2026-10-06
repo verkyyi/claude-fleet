@@ -353,6 +353,7 @@ if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && comm
       mcp)      cfg_flag+=("--mcp-config=$_fc_v") ;;      # the =form: --mcp-config is variadic (see above)
       settings) cfg_flag+=("--settings=$_fc_v") ;;
       lock)     _fc_locks="${_fc_locks:+$_fc_locks; }$_fc_v" ;;
+      note)     printf 'fleet-claude: %s (issue #1862)\n' "$_fc_v" >&2 ;;   # the personal layer written badly
     esac
   done < <(FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" \
              python3 "$BIN/fleet-agent-team.py" session claude ${_fc_ca[@]+"${_fc_ca[@]}"} 2>/dev/null)

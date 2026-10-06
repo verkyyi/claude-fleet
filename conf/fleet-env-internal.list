@@ -150,6 +150,10 @@ FLEET_PROBE_CURL                   seam: the curl fleet-node-probe.sh measures t
 FLEET_PROBE_OS                     seam: fleet-node-probe.sh's uname -s (Darwin → pmset, else BAT*; #1720)
 FLEET_PROBE_PMSET                  seam: the pmset fleet-node-probe.sh reads the battery + sleep setting with (#1720)
 FLEET_PROBE_UNSUPPORTED            knob: the egress regions fleet-node-probe.sh calls unsupported_region (default CN HK MO RU BY IR KP SY CU; #1720)
+FLEET_PERSONAL                     handoff: 0 = this window runs without the personal layer (the recovery page's p, fleet-session-wrap.sh → fleet-hook-personal.sh, fleet-agent-team.py session; issue #1862)
+FLEET_PERSONAL_HOOK_STRIKES        knob: a personal hook failing this many times in a row in one launch is off for the rest of it (fleet-hook-personal.sh, 3)
+FLEET_PERSONAL_MCP_CHECK           knob: 0 = keep a personal MCP server whose command is not on this machine (fleet-agent-team.py)
+FLEET_WRAP_LAUNCH_ID               handoff: one launch of fleet-session-wrap.sh, the session a personal hook's strikes count in (fleet-hook-personal.sh)
 FLEET_SESSION_WRAP                 handoff: the pid of the fleet-session-wrap.sh holding this pane, read by session-end-hook.sh
 FLEET_SLEEPWATCH_SELFTEST          seam: fleet-node-sleepwatch.sh posts one sleep + one wake to itself and exits (#1721)
 FLEET_MACHINE_SESSIONS_DIR         path: the machine-wide per-login session-count dir (default /Users/Shared/claude-fleet/sessions)

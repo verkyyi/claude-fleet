@@ -25,6 +25,11 @@
 #      below). Pinned to the stock C-b prefix so it is deterministic anywhere;
 #      one extra render under a C-s prefix checks the sheet shows the remap.
 #
+#   9. The recovery page's keys (bin/fleet-session-page.py, issue #1862): ↵ / r / q
+#      always, and p (reopen without the personal layer) only when the login has
+#      one — the keys row and choice() agree, and with no personal layer the row
+#      is exactly the three keys it always was.
+#
 #   8. The node binds none of them (issue #1714, EPIC #1710 C4): a server that
 #      sources conf/tmux-attention.conf lists EXACTLY tmux's stock keys, and one
 #      that sources the client's conf has every sheet key — on an isolated socket.
@@ -441,6 +446,26 @@ EOF
   ktm stock kill-server; ktm node kill-server; ktm shell kill-server
   rm -rf "$KW"
 fi
+
+# 9 — the recovery page's keys (issue #1862)
+page_out=$(python3 - "$BIN" <<'PY'
+import importlib.util, os, sys
+sys.path.insert(0, sys.argv[1])
+spec = importlib.util.spec_from_file_location("page", os.path.join(sys.argv[1], "fleet-session-page.py"))
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+plain = lambda t: __import__("re").sub(r"\x1b\[[0-9;]*m", "", t)
+w = m.TEXT["zh"]
+errs = []
+if plain(m.keys_line(w)) != "↵ 接着原对话   r 新开   q 回收这个窗口": errs.append("no-layer row: %r" % plain(m.keys_line(w)))
+if plain(m.keys_line(w, "off")) != plain(m.keys_line(w)): errs.append("off row differs")
+if plain(m.keys_line(w, "on")) != "↵ 接着原对话   r 新开   q 回收这个窗口   p 不带个人配置重开": errs.append("on row: %r" % plain(m.keys_line(w, "on")))
+for ch, want, pers in (("\r", m.RESUME, False), ("r", m.NEW, False), ("q", m.QUIT, False),
+                       ("p", None, False), ("p", m.PERSONAL, True)):
+    if m.choice(ch, 24, pers) != want: errs.append("choice(%r, personal=%s) = %r" % (ch, pers, m.choice(ch, 24, pers)))
+print("\n".join(errs) or "ok")
+PY
+)
+[ "$page_out" = ok ] || fail "9: the recovery page's keys: $page_out"
 
 printf 'selftest OK: cheatsheet matches shipped binds (%s prefix keys, %s dashboard ⌃-keys checked)\n' \
   "$(printf '%s\n' "$sheet_prefix_keys" | grep -c .)" \
