@@ -503,6 +503,9 @@ try:
     t0 = time.time()
     seen = until(5, lambda: "回车立即重连" in t("capture-pane", "-p", "-t", "=" + sess + "-stage:", sock=sess + "-stage"))
     say("drop_note", "1" if seen else "0"); say("drop_secs", "%.1f" % (time.time() - t0))
+    if not seen:   # what the stage window shows instead — a red drill says why
+        cap = t("capture-pane", "-p", "-t", "=" + sess + "-stage:", sock=sess + "-stage")
+        say("drop_pane", " | ".join(l.strip() for l in cap.splitlines() if l.strip())[-400:] or "(no window)")
     tsw = t("list-panes", "-t", "=" + sess + "-stage:", "-F", "#{pane_id}", sock=sess + "-stage")
     t("send-keys", "-t", tsw, "C-c", sock=sess + "-stage"); pump(1.0)
     say("drop_cc_kept", "1" if stage() == s0 else "0")
@@ -537,7 +540,7 @@ drill_client_pane_killed() {
 }
 drill_nested_drop() {
   CAP=5; driven || return 1
-  [ "$(r drop_note)" = 1 ] || { WHY="a dropped line does not say 回车立即重连"; return 1; }
+  [ "$(r drop_note)" = 1 ] || { WHY="a dropped line does not say 回车立即重连 — the stage shows: $(r drop_pane)"; return 1; }
   [ "$(r drop_cc_kept)" = 1 ] || { WHY="⌃c in the wait closed the stage's window"; return 1; }
   SECS=$(r drop_secs); WHAT="断线后停在「回车立即重连」，⌃c 不关窗口"
 }

@@ -669,7 +669,9 @@ EOF_PEER
     wait "$att"; rc=$?
     att=''
     stop_bg
-    why=$(rv_ssh_why "$ctl.ssherr")
+    why=$(rv_ssh_why "$ctl.ssherr" | cut -c1-120)
+    # the reason on a line of its own, above the drop line (issue #1775 §3): a
+    # long one wrapping into it would split the line a person reads
     mark_route ''
     retest=1
     if [ -f "$use.upgrade" ]; then
@@ -691,16 +693,17 @@ EOF_PEER
       [ -z "$shellopt" ] && hub_relay_ok && { [ "$route" = direct ] && route=hub || route=direct; }
       [ "$delay" -lt 10 ] && delay=$(( delay * 2 ))
     fi
+    [ -n "$why" ] && printf '\n原因：%s' "$why"
     if [ -n "$shellopt" ]; then
       # The client's right pane (issue #1785): a dropped line is never the end of
       # it — Enter reconnects now, and ⌃c, which closed the window (and with the
       # stage's last one, the right pane), does nothing while it waits.
-      printf '\n与 %s 的连接断了（%s）· %ss 后重连 · 回车立即重连\n' "$node" "${why:-exit $rc}" "$delay"
+      printf '\n与 %s 的连接断了（exit %s）· %ss 后重连 · 回车立即重连\n' "$node" "$rc" "$delay"
       trap '' INT
       if [ -t 0 ]; then read -r -t "$delay" _ 2>/dev/null || :; else sleep "$delay"; fi
       trap 'cleanup; exit 0' INT
     else
-      printf '\n与 %s 的连接断了（%s），%ss 后重连 · Ctrl-C 关闭窗口\n' "$node" "${why:-exit $rc}" "$delay"
+      printf '\n与 %s 的连接断了（exit %s），%ss 后重连 · Ctrl-C 关闭窗口\n' "$node" "$rc" "$delay"
       sleep "$delay"
     fi
   done
