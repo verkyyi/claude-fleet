@@ -35,8 +35,12 @@
 #      launchd / systemd. The node only COORDINATES: node.env says
 #      CCQUOTA_FLEET_COMPUTE=0, so the hub places no session here and leases no
 #      account (this computer runs sessions on its own). Already a node of this
-#      hub → left alone (no scan, no agent restart, nothing rewritten). A failure
-#      is said, never fatal. --no-node (FLEET_INSTALL_NO_NODE=1) skips it;
+#      hub → left alone (no scan, no agent restart, nothing rewritten). No
+#      terminal to draw the QR on (stderr is not a tty — a CI job, a log file)
+#      → skipped with the one line to run later, never a wait nobody can end
+#      (FLEET_INSTALL_NODE_FORCE=1 joins anyway: the selftests' fake hub
+#      confirms by itself). A failure is said, never fatal. --no-node
+#      (FLEET_INSTALL_NO_NODE=1) skips it;
 #   6. runs `fleet`: with the certificate the join just wrote, no second QR —
 #      and with tmux ≥ 3.2 on this computer, `fleet` is the shell.
 #
@@ -329,6 +333,8 @@ if [ "$NOHUB" = 0 ] && [ "${FLEET_INSTALL_NO_NODE:-}" != 1 ]; then
   NODE_ENV="${FLEET_CONF_DIR:-$CONF_DIR}/node.env"
   if [ -f "$NODE_ENV" ] && grep -qx "CCQUOTA_HUB_URL=$HUB" "$NODE_ENV" && grep -q '^CCQUOTA_TOKEN=.' "$NODE_ENV"; then
     say "节点: 已是 $HUB 的节点（${NODE_ENV}），不重登记"
+  elif [ ! -t 2 ] && [ "${FLEET_INSTALL_NODE_FORCE:-}" != 1 ]; then
+    say "节点: 这里没有终端可显示二维码，先不登记 — 在终端里敲 fleet node join 补上"
   else
     say "节点: 登记这台电脑（只协调：不在本机跑别人派的会话、不借入口的账号）…"
     if FLEET_CONF_DIR="${FLEET_CONF_DIR:-$CONF_DIR}" "$ROOT/bin/fleet" node join --no-fleet --no-deps --no-admin </dev/null >&2; then
