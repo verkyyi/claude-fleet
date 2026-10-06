@@ -29,6 +29,9 @@
 # since tmux ≤3.4 vis-escapes the 0x1f field separator the producer asks for). No
 # gh, no git, no network. Exit 0 = pass.
 set -uo pipefail
+# The rows' order asserted here is the status order (needs/done/working by rank):
+# pin it — the default born order (issue #1750) is dash-born-order-selftest.sh's.
+export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
@@ -163,6 +166,7 @@ dispw() { DISP="$1" perl -CO -MEncode -e '
 if perl -MEncode -e1 >/dev/null 2>&1; then
   while IFS= read -r line; do
     [ -z "$line" ] && continue
+    case "$line" in "hdr$US"*) continue ;; esac                # a heading / summary line: never padded
     plain=${line#*$US}; plain=${plain#*$US}                    # drop key + window-id
     plain=$(printf '%s' "$plain" | perl -pe 's/\e\[[0-9;]*m//g')
     eq "every row is $((COLS-4)) display columns [${plain:0:24}…]" \

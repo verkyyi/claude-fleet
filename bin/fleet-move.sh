@@ -199,17 +199,24 @@ ssh_run() { move_ssh "$TO" "$(remote_cmd "$@")"; }
 # the SAME @fleet_id (fleet-move-remote.sh launch). A file, not a flag: a target
 # install or ccquota agent that predates it just leaves the file where the tar put
 # it. Sets FIDTAR to the extra tar operands (`-C <dir> <sid>.fleet-id`), or empty.
+# Its birth (issue #1750) rides beside it as `<sid>.born` — its own file, so a
+# receiver older than it reads the identity file exactly as before — and the
+# target window keeps its place on every list (@born, else window_created here).
 FIDTAR=()
 fid_bundle() {
-  local f d
+  local f d b
   FIDTAR=()
   f=$(TM show-options -wqv -t "${1:-}" @fleet_id 2>/dev/null)
   fleet_is_fid "$f" || return 0
   d=$(mktemp -d "${TMPDIR:-/tmp}/fleet-move-fid.XXXXXX") || return 0
   printf '%s\n' "$f" > "$d/${2:-}.fleet-id" 2>/dev/null || { rm -rf "$d"; return 0; }
   FIDTAR=(-C "$d" "${2:-}.fleet-id")
+  b=$(TM display-message -p -t "${1:-}" '#{?@born,#{@born},#{window_created}}' 2>/dev/null)
+  case "$b" in ''|*[!0-9]*) ;; *)
+    printf '%s\n' "$b" > "$d/${2:-}.born" 2>/dev/null && FIDTAR+=("${2:-}.born") ;;
+  esac
 }
-fid_bundle_drop() { [ "${#FIDTAR[@]}" -eq 3 ] && rm -rf "${FIDTAR[1]}"; FIDTAR=(); return 0; }
+fid_bundle_drop() { [ "${#FIDTAR[@]}" -ge 3 ] && rm -rf "${FIDTAR[1]}"; FIDTAR=(); return 0; }
 
 # Sourced (fleet-move-selftest.sh pins the pure helpers above) → define only; a
 # direct run dispatches. Same guard idiom as fleet-migrate.sh/fleet-account.sh.

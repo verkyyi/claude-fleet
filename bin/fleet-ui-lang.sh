@@ -143,6 +143,10 @@ fleet_ui_t() {
     en:peer_hub_lost_fmt)       printf 'hub lost — machine-to-machine access paused; you can still go in directly with `fleet %s`' "${1:-}" ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
     en:pin_heading_fmt)         printf 'Pinned (%s)' "${1:-}" ;;
+    zh:attn_summary_fmt)        printf '! %s 个在问你 · ⌃k 跳过去' "${1:-}" ;;
+    en:attn_summary_fmt)        printf '! %s waiting on you · ⌃k' "${1:-}" ;;
+    zh:attn_summary_dash_fmt)   printf '! %s 个在问你' "${1:-}" ;;
+    en:attn_summary_dash_fmt)   printf '! %s waiting on you' "${1:-}" ;;
     zh:unknown_repo_heading)    printf '? · 未知仓库' ;;
     en:unknown_repo_heading)    printf '? · unknown repo' ;;
     zh:no_repo)                 printf '无仓库' ;;
@@ -440,8 +444,8 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_sidebar_09)        printf %s 'cursor to the end of the line' ;;
     zh:keys_sidebar_10)        printf %s '删除光标前一个词' ;;
     en:keys_sidebar_10)        printf %s 'delete the word before the cursor' ;;
-    zh:keys_sidebar_11)        printf %s '删除光标到行尾' ;;
-    en:keys_sidebar_11)        printf %s 'delete from the cursor to the end of the line' ;;
+    zh:keys_sidebar_11)        printf %s '有文字时删除光标到行尾；空行时跳到下一个在问你的任务' ;;
+    en:keys_sidebar_11)        printf %s 'with text: delete from the cursor to the end of the line. On an EMPTY line: jump to the next task waiting on you (red !), in list order' ;;
     zh:keys_sidebar_12k)       printf %s '点仓库标题' ;;
     en:keys_sidebar_12k)       printf %s 'tap a heading' ;;
     zh:keys_sidebar_12)        printf %s '2+ 仓库、看全部时：点一下仓库标题只选中它（不切换），输入行写着它——这时输入名称或新任务都建在那个仓库；再点一次在输入行写钉在该仓库的新任务标题。「无仓库」= $HOME；esc 或点任务行清除' ;;
