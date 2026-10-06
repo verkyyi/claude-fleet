@@ -145,7 +145,9 @@ case "$mode" in
     # gets on THIS machine now, on this machine's fleet version (@agent_ver,
     # `renew` = 待换新, #1895)? Judged here, where the expected file lives, so the
     # other machines' sidebars (the client's included) draw 配置旧 off the hub.
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}' 2>/dev/null) || cwds=''
+    # Column 17 (issue #1902): `reap=<policy>` — when the fleet may close the
+    # session (@reap_policy); empty = its kind's default. Always present.
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load
     while IFS= read -r row; do
       [ -n "$row" ] || continue
@@ -153,7 +155,9 @@ case "$mode" in
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7; exit }')
+      wreap=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      case "$wreap" in *[!A-Za-z0-9:.+-]*) wreap='' ;; esac
       born=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       case "$born" in *[!0-9]*) born='' ;; esac
       wfp=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -180,7 +184,7 @@ case "$mode" in
       fi
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\n' "$row" "$b" "$born" "$FCFG_STATE"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\treap=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$wreap"
     done <<<"$rows"
     ;;
   ready)
@@ -274,6 +278,10 @@ case "$mode" in
     # adds nothing.
     acls="${7:-}"
     case "$acls" in local|pool) ;; *) acls='' ;; esac
+    # $9 = the reap policy the asker chose (issue #1902) — one word, held to its
+    # shape here and canonicalized (or refused, exit 2) by the spawner's --reap.
+    reap="${9:-}"
+    case "$reap" in *[!A-Za-z0-9:.+-]*) reap='' ;; esac
     if [ "${3:-}" = scratch ]; then
       # A raw scratch session the hub placed here (issue #1541): no issue, no
       # claim — dash-raw-session.sh in its headless form, with $8 (the name the
@@ -282,9 +290,9 @@ case "$mode" in
       # $7 is read like an issue's but not replayed: dash-raw-session.sh has no
       # --account yet, so a scratch runs on the opening fleet's pick.
       sname="${8:-}"
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"}
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${reap:+--reap "$reap"}
     fi
-    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"}
+    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${reap:+--reap "$reap"}
     ;;
   # --- worker lifecycle by DURABLE key (issue #834) ---------------------------
   # $3 is issue-<N> / scratch-<N>; the window is re-resolved on the fleet at

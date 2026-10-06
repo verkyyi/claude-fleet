@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -517,5 +518,30 @@ func TestFleetWriteAccountClass(t *testing.T) {
 	e := postFleet(t, h, "worker_start", map[string]any{"issue": 9, "fleet_id": f4.FleetID, "account_class": "x", "idempotency_key": "ac-9"}, 400)["error"].(map[string]any)
 	if e["code"] != "INVALID_ARGUMENT" || m4.count() != 2 {
 		t.Fatalf("free text: %v (m4 writes %d); want INVALID_ARGUMENT and nothing sent", e, m4.count())
+	}
+}
+
+// reap on worker_start (claude-fleet#1902): a reap policy reaches the node's
+// params as one word, none adds nothing, anything off the grammar is refused.
+func TestFleetWriteReapPolicy(t *testing.T) {
+	h, _, m4, _, f4 := twoNodes(t)
+	postFleet(t, h, "worker_start", map[string]any{"issue": 7, "fleet_id": f4.FleetID, "reap": "merged:48h", "idempotency_key": "rp-7"}, 200)
+	if params := m4.writes[0]["params"].(map[string]any); params["reap"] != "merged:48h" {
+		t.Fatalf("params = %v; want reap merged:48h", params)
+	}
+	postFleet(t, h, "worker_start", map[string]any{"issue": 8, "fleet_id": f4.FleetID, "idempotency_key": "rp-8"}, 200)
+	if params := m4.writes[1]["params"].(map[string]any); params["reap"] != nil {
+		t.Fatalf("no reap must add nothing: %v", params)
+	}
+	for i, bad := range []string{"never", "keep; rm -rf /", "done:0", "at:soon"} {
+		e := postFleet(t, h, "worker_start", map[string]any{"issue": 20 + i, "fleet_id": f4.FleetID, "reap": bad, "idempotency_key": "rp-bad-" + strconv.Itoa(i)}, 400)["error"].(map[string]any)
+		if e["code"] != "INVALID_ARGUMENT" || m4.count() != 2 {
+			t.Fatalf("reap %q: %v (m4 writes %d); want INVALID_ARGUMENT and nothing sent", bad, e, m4.count())
+		}
+	}
+	for _, ok := range []string{"merged", "done:2h", "loop-end", "keep", "at:2026-10-06T18:00:00Z", "at:18:00"} {
+		if !reapPolicyOK(ok) {
+			t.Fatalf("reapPolicyOK(%q) = false", ok)
+		}
 	}
 }

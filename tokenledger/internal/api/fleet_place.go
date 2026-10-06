@@ -55,6 +55,8 @@ type placeRequest struct {
 	// OriginWID is the worker that asked for this one, if any.
 	OriginWID string `json:"origin_wid"`
 	Agent     string `json:"agent"`
+	// Reap is when the session may be closed on its own (claude-fleet#1902).
+	Reap string `json:"reap"`
 	// AccountClass is the kind of subscription the session must run on
 	// (claude-fleet#1540): "local" (the opening login's own), "pool" (the
 	// hub's leased accounts) or "any" / absent (that fleet's ordinary pick).
@@ -169,6 +171,10 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	}
 	if !accountClassOK(req.AccountClass) {
 		httpError(w, http.StatusBadRequest, "account_class must be local, pool or any")
+		return
+	}
+	if !reapPolicyOK(req.Reap) {
+		httpError(w, http.StatusBadRequest, "reap must be merged[:<dur>], done[:<dur>], loop-end, at:<time> or keep")
 		return
 	}
 	fl, err := s.Store.Fleet(fleetID)
@@ -290,6 +296,9 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	}
 	if accountClassBinds(req.AccountClass) {
 		args["account_class"] = req.AccountClass
+	}
+	if req.Reap != "" {
+		args["reap"] = req.Reap
 	}
 	op, err := s.submitWrite(r.Context(), p, "worker_start", args, &pl)
 	if err != nil {

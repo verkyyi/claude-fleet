@@ -258,6 +258,25 @@ issue_open_gate() {
 }
 issue_open_gate || exit 0
 
+# The session's own reap policy (issue #1902), automatic cleanup only: `keep` is
+# never closed here; done / loop-end / at belong to the idle pass
+# (fleet-cleanup-idle.py), never to this merged rule; `merged:<dur>` is its own
+# grace. No @reap_policy, or a plain `merged`: the historic rule, byte for byte.
+if [ "$AUTO" = 1 ] && [[ "$WIN" =~ ^@[0-9]+$ ]]; then
+  _rp=$(ftmux show-options -wqv -t "$WIN" @reap_policy 2>/dev/null)
+  if [ -n "$_rp" ]; then
+    _rg=$(python3 "$BIN/fleet_reap_policy.py" merged-grace "$_rp" 2>/dev/null)
+    case "$_rg" in
+      keep)  note "  #$PR: window $WIN is 常驻 (@reap_policy keep) — never reaped automatically."
+             done_token "skip:keep"; exit 0 ;;
+      other) note "  #$PR: window $WIN closes by its own policy ($_rp), not on merge."
+             done_token "skip:policy"; exit 0 ;;
+      ''|*[!0-9]*) ;;
+      *) [ "$st" = MERGED ] && MERGED_GRACE=$_rg ;;
+    esac
+  fi
+fi
+
 # A daemon must give a newly merged worker time to finish its report (#565).
 # This only narrows automatic cleanup: all existing gates still apply, manual
 # cleanup is immediate, and an already-cleaned PR remains an idempotent no-op.

@@ -620,7 +620,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -724,7 +724,7 @@ for f in local:
                     origin = (slug(r["repo"]) + ":" if f["multi"] else "") + "issue-" + p
         out.append("\x1f".join(clean(v) for v in ("wid:" + r["wid"], r["node"], r["av"], r["issue"], r["repo"],
                                                r["state"], r["agent"], r["name"], origin, r["needs"],
-                                               "1" if r["local"] else "0", r["lwid"], via, r["busy"], r["born"], r["cfg"])) + "\n")
+                                               "1" if r["local"] else "0", r["lwid"], via, r["busy"], r["born"], r["cfg"], r["reap"])) + "\n")
     path = os.path.join(gdir, "remote_" + f["sess"])
     if via == "node" and not (client and os.environ.get("FLEET_HUB_SESSIONS_LOCAL") == "1"):
         # The machines that did not answer over a connection keep their last

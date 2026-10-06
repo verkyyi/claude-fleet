@@ -1031,6 +1031,7 @@ _DIRECT_TOOLS = {
     "fleet-claim-brief.sh": ("brief", None),
     "fleet-issue-file.sh": ("file_issue", None),
     "fleet-gh.sh": ("gh", None),
+    "fleet-reap-policy.sh": ("set_reap", ("set",)),
 }
 # The mod's retired tools, by the name Claude showed them under.
 _RETIRED_TOOLS = {

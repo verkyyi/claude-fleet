@@ -5157,11 +5157,11 @@ fleet_node_is_self() {
 # session must run on, carried to the machine that opens it as `--account`;
 # anything else (`any`, empty) adds nothing to the command.
 # The command is FLEET_HUB_PLACE_CMD, else `ccquota place`; it is run as
-# `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] [--account <c>] <repo> <issue> <worker_id>`
+# `<cmd> --node <node> [--origin-wid <wid>] [--agent <a>] [--account <c>] [--reap <p>] <repo> <issue> <worker_id>`
 # — for a scratch `[--name <n>] <repo> scratch <fleet UUID>` —
 # with the node token from node.env in ITS environment only (`_fleet_hub_env`).
 fleet_hub_place() {
-  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" acct="${8:-}" name="${9:-}" cmd u pre='' out rc why ef what wid
+  local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" acct="${8:-}" name="${9:-}" reap="${10:-}" cmd u pre='' out rc why ef what wid
   fleet_hub_on "$sess" || return 10
   case "$num" in scratch) what='a scratch session' ;; ''|*[!0-9]*) return 1 ;; *) what="#$num" ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
@@ -5182,7 +5182,7 @@ fleet_hub_place() {
   case "$wait" in *[!0-9]*) wait='' ;; esac
   case "$acct" in local|pool) ;; *) acct='' ;; esac
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
-        ${wait:+--wait "$wait"} ${acct:+--account "$acct"} ${name:+--name "$name"} "$repo" "$num" "$wid" </dev/null 2>"$ef"); rc=$?
+        ${wait:+--wait "$wait"} ${acct:+--account "$acct"} ${name:+--name "$name"} ${reap:+--reap "$reap"} "$repo" "$num" "$wid" </dev/null 2>"$ef"); rc=$?
   out=$(printf '%s\n' "$out" | head -n1 | awk -F'\t' -v al="${FLEET_NODE_ALIASES:-}" '
     BEGIN { n = split(al, a, " "); for (i = 1; i <= n; i++) if ((p = index(a[i], "=")) > 1) m[substr(a[i], 1, p - 1)] = substr(a[i], p + 1) }
     { k = split($1, w, " ")

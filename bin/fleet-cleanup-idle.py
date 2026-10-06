@@ -9,6 +9,7 @@ import subprocess
 import time
 
 from fleet_reap_notice import clear, notice, option, tmux
+import fleet_reap_policy
 
 
 def retired_dir():
@@ -69,11 +70,53 @@ class Cleaner:
     def snapshot(self, window):
         names = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
                  "@pin", "@cc_agent", "@cc_launcher_pid", "@codex_identity",
-                 "@handoff_manifest", "@agent_transfer_until", "window_name")
+                 "@handoff_manifest", "@agent_transfer_until", "window_name",
+                 "@reap_policy", "@loop", "@worker_lifecycle")
         return {n: option(self.tm, window, n) for n in names}
 
+    def policy(self, snap):
+        """(kind, value) of the window's own @reap_policy (issue #1902), or None
+        for a window with none — the historic rule, byte for byte."""
+        return fleet_reap_policy.parse(snap["@reap_policy"]) if snap["@reap_policy"] else None
+
+    def busy(self, window, snap):
+        """A /loop still pending, or the agent still owning a background job:
+        its turn is over but its work is not (fleet-control-read.sh workers_busy)."""
+        if snap["@loop"]:
+            args = ["python3", str(BIN / "fleet_loop_mark.py"), "status", "--value", snap["@loop"]]
+            if snap["@handoff_manifest"]:
+                args += ["--manifest", snap["@handoff_manifest"]]
+            if subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode == 0:
+                return True
+        held = run("bash", "-c", '. "$1/fleet-lib.sh"; if fleet_window_bg_busy "$2" "$3" 1; then echo bg; fi',
+                   "idle-reap", str(BIN), self.args.session, window)
+        return bool(held)
+
+    def deadline(self, snap, pol):
+        """When this window's own policy lets it go (issue #1902)."""
+        kind, val = pol
+        stamp = int(snap["@claude_state_ts"])
+        if kind == "done":
+            return stamp + val
+        if kind == "loop-end":
+            return stamp + fleet_reap_policy.LOOP_END_GRACE
+        return val  # at
+
     def eligible(self, window, snap):
-        if (snap["@raw"] != "1" or snap["@issue"] or snap["@pin"] == "1"
+        pol = self.policy(snap)
+        if pol is not None:
+            # An explicit policy decides which windows this pass may close: done /
+            # loop-end / at, an issue session as well as a scratch. keep and merged
+            # are never this pass's (merged is fleet-cleanup.sh's). Every gate
+            # below still applies.
+            if (pol[0] not in ("done", "loop-end", "at") or snap["@pin"] == "1"
+                    or snap["@worker_lifecycle"] not in ("", "sleeping")):
+                return False
+        elif self.args.policy_only:
+            return False
+        elif snap["@raw"] != "1" or snap["@issue"]:
+            return False
+        if (snap["@pin"] == "1"
                 # An exited session on its recovery page (issue #1784) is as idle
                 # as a finished turn: the same grace, the same resumable record.
                 or snap["@claude_state"] not in ("done", "exited")
@@ -84,6 +127,10 @@ class Cleaner:
         if snap["@norepo"] == "1":
             return False
         if self.args.window_repo and norm_repo(snap["@repo"]) != norm_repo(self.args.repo):
+            return False
+        # An issue session with a policy: only this repo's (a one-repo fleet's
+        # issue windows carry no @repo, the conf's repo is theirs).
+        if pol is not None and snap["@repo"] and norm_repo(snap["@repo"]) != norm_repo(self.args.repo):
             return False
         stamp = snap["@claude_state_ts"]
         if not stamp.isdigit() or not 0 < int(stamp) <= self.now:
@@ -127,35 +174,48 @@ class Cleaner:
             if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith("idle:"):
                 clear(self.tm, window)
             return False
+        pol = self.policy(snap)
         wt = snap["@worktree"]
-        key = re.search(r"(?:^|-)scratch-(\d+)$", Path(wt).name)
-        if not key:
+        key = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name)
+        if not key or (key[1] == "issue" and pol is None):
             return False  # No stable ledger/restore key: never close blindly.
-        key = "scratch-" + key[1]
+        key = key[1] + "-" + key[2]
+        if pol is not None and self.busy(window, snap):
+            if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith("idle:"):
+                clear(self.tm, window)
+            return False
         head = run("git", "-C", wt, "rev-parse", "HEAD")
         branch = run("git", "-C", wt, "symbolic-ref", "--short", "HEAD")
         prs = json.loads(run("gh", "pr", "list", "--repo", self.args.repo, "--head", branch,
                              "--state", "all", "--limit", "100", "--json", "state"))
         if not isinstance(prs, list) or any(not isinstance(p, dict) or p.get("state") not in ("OPEN", "CLOSED", "MERGED") for p in prs):
             return False
-        if any(p["state"] == "MERGED" for p in prs):
+        if pol is None and any(p["state"] == "MERGED" for p in prs):
             return False  # Merged heads use the merged policy, including grace.
-        if prs:
+        if prs and not any(p["state"] == "MERGED" for p in prs):
             base = run("git", "-C", wt, "rev-parse", "--verify", "origin/" + self.args.base)
             if head == base:
                 return False
             run("git", "-C", wt, "merge-base", "--is-ancestor", head, base)
-        deadline = int(snap["@claude_state_ts"]) + self.idle
+        if pol is None:
+            deadline = int(snap["@claude_state_ts"]) + self.idle
+        else:
+            deadline = self.deadline(snap, pol)
         due = notice(self.tm, window, "idle:" + head, deadline, self.now, self.args.dry_run)
         if due > self.now:
             return False
+        if pol is not None:
+            # The metric's numerator (EPIC #1906): due by its own policy now.
+            print("reap-due:%s policy=%s" % (window, snap["@reap_policy"]), file=__import__("sys").stderr)
         if self.args.dry_run:
             print("would-reap-idle:" + window)
             return False
         history = str(BIN / "fleet-history.sh")
         run("bash", history, "record-closed", "--repo", self.args.repo, "--session", self.args.session,
             "--key", key, "--worktree", wt, "--win", window,
-            "--title", snap["window_name"], "--summary", "Automatically closed after idle done grace")
+            "--title", snap["window_name"],
+            "--summary", ("Automatically closed after idle done grace" if pol is None else
+                          "Automatically closed by its reap policy " + snap["@reap_policy"]))
         resume = run("bash", history, "resume", "--repo", self.args.repo,
                      "--main", self.args.main, key).split("\t")
         if len(resume) < 4 or resume[0] not in ("RESUME", "CODEX-RESUME") or resume[1] != wt:
@@ -164,11 +224,13 @@ class Cleaner:
         # different checkout must not inherit the old permission to close.
         if self.snapshot(window) != snap or not self.eligible(window, snap):
             return False
+        if pol is not None and self.busy(window, snap):
+            return False  # re-checked right before the close
         if run("git", "-C", wt, "rev-parse", "HEAD") != head:
             return False
         self.retire(window)
         self.tm("kill-window", "-t", window)
-        print("reaped-idle:" + window)
+        print("reaped-idle:" + window + ("" if pol is None else " policy=" + snap["@reap_policy"]))
         return True
 
     def main(self):
@@ -198,6 +260,8 @@ def main():
     p.add_argument("--window-repo", action="store_true",
                    help="only windows whose @repo is --repo (multi-repo fleet)")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--policy-only", action="store_true",
+                   help="only windows with their own @reap_policy (issue #1902; FLEET_SLEEP=on)")
     return Cleaner(p.parse_args()).main()
 
 

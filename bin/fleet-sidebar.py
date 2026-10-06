@@ -74,6 +74,11 @@ def load_text():
     return dict(zip(parts[0::2], parts[1::2]))
 
 
+try:   # the reap-policy grammar (issue #1902) — one parser, beside this file
+    import fleet_reap_policy
+except ImportError:   # a half-synced install: rows simply carry no reap word
+    fleet_reap_policy = None
+
 TEXT = load_text()
 
 
@@ -914,8 +919,47 @@ def place_answer(ask, value):
         if item is None or item[3]:
             return None, ("✗ " + tr("sidebar_place_cant_fmt", item[1], item[2]) if item else ""), False
         plan["node"], plan["label"] = item[0], "" if item[0] == "auto" else item[1]
+        if plan["what"].startswith("restore:"):
+            return None, "", True   # a restored session keeps the policy it had
+        return place_reap(plan), "", False
+    if ask.kind == "place-reap":
+        if value == "at":
+            return Ask("place-reap-at", tr("sidebar_place_reap_at_ask"), plan=plan,
+                       hint=tr("sidebar_place_reap_bad")), "", False
+        plan["reap"] = value
+        return None, "", True
+    if ask.kind == "place-reap-at":
+        text = value.strip()
+        if not text:
+            return None, "", False
+        canon = fleet_reap_policy.norm("at:" + text) if fleet_reap_policy else None
+        if not canon:
+            return None, "✗ " + tr("sidebar_place_reap_bad"), False
+        plan["reap"] = canon
         return None, "", True
     return None, "", False
+
+
+# 「什么时候回收？」(issue #1902): the five reap policies, the kind's default
+# highlighted so ↵ takes it — merged for an issue, done:2h for a scratch.
+REAP_CHOICES = (("merged", "reap_merged"), ("done:2h", "reap_done"), ("loop-end", "reap_loop_end"),
+                ("at", "reap_at"), ("keep", "reap_keep"))
+
+
+def place_reap(plan):
+    """The last question of a new session: when may the fleet close it?"""
+    short = plan["repo"].rsplit("/", 1)[-1]
+    dflt = "merged" if plan["what"] != "scratch" else "done:2h"
+    menu = []
+    for value, key in REAP_CHOICES:
+        label, _, note = tr("sidebar_place_" + key).partition("\t")
+        if value == dflt:
+            note = (note + " · " if note else "") + tr("sidebar_place_reap_default")
+        menu.append((value, label, note, False))
+    ask = Ask("place-reap", tr("sidebar_place_reap_fmt", short), plan=plan,
+              hint=tr("sidebar_place_reap_keys", next(m[1] for m in menu if m[0] == dflt)), menu=menu)
+    ask.at = [m[0] for m in menu].index(dflt)
+    return ask
 
 
 def place_job(plan, rows, env):
@@ -929,6 +973,8 @@ def place_job(plan, rows, env):
             "--node", plan["node"]]
     if plan.get("name") and plan["what"] == "scratch":
         args += ["--name", plan["name"]]   # an argv word: no shell parses it
+    if plan.get("reap"):
+        args += ["--reap", plan["reap"]]   # canonical: fleet_reap_policy.norm (#1902)
     return start_job(args, env, placed(plan))
 
 
@@ -1208,16 +1254,20 @@ def row_text(marker, glyph, tree, name, badge, width, info=""):
     return text
 
 
-def row_layout(marker, glyph, tree, name, badge, width, info="", node="", cfg=""):
+def row_layout(marker, glyph, tree, name, badge, width, info="", node="", cfg="", reap=""):
     """A session row in `width` cells with its machine's @ mark (issue #1780):
     (text, tag) — `row_text` in what the mark leaves, the mark (`fit_tag`) to
     paint at the row's last cells. No mark: the row is exactly `row_text`.
     A stale configuration (`cfg` == "stale", issue #1783) puts 配置旧 in front of
     the mark, one space between — `cfg_part(tag)` is that word, painted yellow;
-    `renew` (issue #1895) puts 待换新 there the same way."""
+    `renew` (issue #1895) puts 待换新 there the same way. A reap policy (issue
+    #1902) puts its word — 合并后回收 · 做完就回收 · 常驻 … — between the two."""
     right = row_right(badge, info)
     room = width - width_of(row_left(marker, glyph, tree, "")) - (width_of(right) + 1 if right else 0)
     tag = fit_tag(node, room)
+    rtag = fit_reap_tag(reap, room - (width_of(tag) + 1 if tag else 0))
+    if rtag:
+        tag = rtag + (" " + tag if tag else "")
     ctag = fit_cfg_tag(cfg, room - (width_of(tag) + 1 if tag else 0))
     if ctag:
         tag = ctag + (" " + tag if tag else "")
@@ -1236,7 +1286,8 @@ def row_need(row, info=False):
     need += width_of(right) + 1 if right else 0
     need += tag_need(row[8] if len(row) > 8 else "")   # the @ mark (#1780)
     ctag = cfg_tag(row[12] if len(row) > 12 else "")    # 配置旧 (#1783)
-    return need + (width_of(ctag) + 1 if ctag else 0)
+    rtag = reap_tag(row[13] if len(row) > 13 else "")   # 合并后回收 … (#1902)
+    return need + (width_of(ctag) + 1 if ctag else 0) + (width_of(rtag) + 1 if rtag else 0)
 
 
 def alias_of(name):
@@ -1328,6 +1379,58 @@ def fit_cfg_tag(cfg, room):
     if room - (width_of(tag) + 1) < NAME_MIN:
         tag = cfg_tag(cfg, narrow=True)
     return tag if room - (width_of(tag) + 1) > 0 else ""
+
+
+def _compact(secs):
+    for n, unit in ((86400, "d"), (3600, "h"), (60, "m")):
+        if secs % n == 0 and not (unit == "d" and secs < 3 * 86400):
+            return "%d%s" % (secs // n, unit)
+    return "%ds" % secs
+
+
+def reap_tag(policy, narrow=False):
+    """The word a row's reap policy (issue #1902, @reap_policy) carries left of
+    its @ mark — the new-session question's words; `narrow` the short one. ""
+    for none (an old window: its kind decides, nothing is drawn) or a garbled one."""
+    if not policy or fleet_reap_policy is None:
+        return ""
+    got = fleet_reap_policy.parse(policy)
+    if got is None:
+        return ""
+    kind, val = got
+    sfx = "_narrow" if narrow else ""
+    if kind == "at":
+        lt = time.localtime(val)
+        when = time.strftime("%H:%M" if time.localtime()[:3] == lt[:3] else "%m-%d %H:%M", lt)
+        return tr("sidebar_reap_at" + sfx, when)
+    if (kind == "merged" and val) or (kind == "done" and val != fleet_reap_policy.DONE_DEFAULT):
+        return tr("sidebar_reap_%s_for%s" % (kind, sfx), _compact(val))
+    return tr("sidebar_reap_" + kind.replace("-", "_") + sfx)
+
+
+def fit_reap_tag(policy, room):
+    """reap_tag for a row with `room` cells left beside the @ mark — fit_cfg_tag's rule."""
+    tag = reap_tag(policy)
+    if not tag:
+        return ""
+    if room - (width_of(tag) + 1) < NAME_MIN:
+        tag = reap_tag(policy, narrow=True)
+    return tag if room - (width_of(tag) + 1) > 0 else ""
+
+
+def reap_part(tag, cfg, policy):
+    """(offset, word) of the reap word inside a row_layout tag, else (0, "")."""
+    if not policy or not tag:
+        return 0, ""
+    at = 0
+    c = cfg_part(tag, cfg)
+    if c:
+        at = width_of(c) + 1
+    rest = tag[len(c) + 1:] if c else tag
+    for word in (reap_tag(policy), reap_tag(policy, narrow=True)):
+        if word and (rest == word or rest.startswith(word + " ")):
+            return at, word
+    return 0, ""
 
 
 def cfg_part(tag, cfg):
@@ -1906,9 +2009,10 @@ def collect_rows(proc):
     return [row_fields(line) for line in text.split("\n") if line.count(US) >= 4]
 
 
-# wid state glyph name tree badge depth detail node issue pr ctx cfg (issues
-# #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `ok`, absent when unknown)
-ROW_FIELDS = 13
+# wid state glyph name tree badge depth detail node issue pr ctx cfg reap (issues
+# #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `ok`, absent when
+# unknown; reap the @reap_policy, #1902 — absent when none)
+ROW_FIELDS = 14
 
 
 def row_fields(line):
@@ -2536,8 +2640,9 @@ def ui(screen, session, worker, lock):
             w = max(0, width - 1)
             # A stale configuration (issue #1783): a yellow 配置旧 left of the mark.
             cfg = row[12] if len(row) > 12 else ""
+            reap = row[13] if len(row) > 13 else ""   # the reap policy (#1902)
             text, tag = row_layout(marker, glyph, tree, label, badge, w,
-                                   info_text(row) if wide else "", node, cfg)
+                                   info_text(row) if wide else "", node, cfg, reap)
             put(y, text, attr, fill=raised)
             # The state glyph, painted over its own cell in the state's colour —
             # where row_left put it, and only when the row is wide enough for it.
@@ -2558,6 +2663,12 @@ def ui(screen, session, worker, lock):
                     if ctag:
                         screen.addstr(y, w - width_of(tag), ctag, curses.color_pair(
                             PAIR_STALE + SEL_GLYPH if raised else PAIR_STALE) | curses.A_BOLD)
+                    # 常驻 (issue #1902) in the 本机 magenta: the one policy that
+                    # says «this one stays»; every other word keeps the tag's dim.
+                    roff, rword = reap_part(tag, cfg, reap)
+                    if rword and reap == "keep":
+                        screen.addstr(y, w - width_of(tag) + roff, rword, curses.color_pair(
+                            PAIR_HERE + SEL_GLYPH if raised else PAIR_HERE))
                 except curses.error:
                     pass
         # The selected row's whole name takes the `?` row while the keyboard is

@@ -309,6 +309,10 @@ slp="bash $(sq "$BIN/fleet-sleep.sh")"
 [ "$life" = sleeping ] && add "$(t menu_wake)" "$(mk wake)" "$(sh_run "$slp wake $(sq "$sess") $wid --over-cap")"
 if [ "$keep" = 1 ]; then add "$(t menu_allow_sleep)" "$(mk awake)" "$(sh_run "$slp allow-sleep $(sq "$sess") $wid")"
 else add "$(t menu_keep_awake)" "$(mk awake)" "$(sh_run "$slp keep-awake $(sq "$sess") $wid")"; fi
+# 改回收方式 (issue #1902): a second menu of the five policies, the current one
+# marked; it writes @reap_policy through the one setter the session's own
+# `set_reap` tool runs too.
+add "$(t menu_reap_policy)" "$(mk reappol)" "$(sh_run "bash $(sq "$BIN/fleet-reap-policy.sh") menu $(sq "$sess") $wid${client:+ $(sq "$client")}")"
 m_reap_confirm=$(t menu_reap_confirm_fmt "$(fe "$name")")
 reap_args="$(sq "$sess") $wid"; [ -n "$client" ] && reap_args="$reap_args $(sq "$client")"
 add "$(t menu_reap)" "$(mk reap)" "confirm-before -p $(sq "$m_reap_confirm") $(dq "$(sh_run "bash $(sq "$BIN/fleet-sidebar-reap.sh") $reap_args")")"

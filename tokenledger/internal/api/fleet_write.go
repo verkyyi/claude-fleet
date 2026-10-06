@@ -340,7 +340,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "fleet_id", "agent", "repo", "node", "origin_wid", "account_class"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "fleet_id", "agent", "repo", "node", "origin_wid", "account_class", "reap"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -429,6 +429,20 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		if accountClassBinds(acls) {
 			w.params["account_class"] = acls
+		}
+		// reap (claude-fleet#1902): when the fleet may close the session on
+		// its own — the node's dash-*-session.sh --reap canonicalizes it; here
+		// it is held to the grammar's shape so it is one argv word, never text.
+		var reap string
+		if reap, err = argString(args, "reap"); err != nil {
+			break
+		}
+		if !reapPolicyOK(reap) {
+			err = fault("INVALID_ARGUMENT", "reap must be merged[:<dur>], done[:<dur>], loop-end, at:<time> or keep")
+			break
+		}
+		if reap != "" {
+			w.params["reap"] = reap
 		}
 		if w.node == "" {
 			w.node = "auto"
@@ -1395,3 +1409,10 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 	eff[SpotWeightKey] = s.spotWeight(settings)
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "effective": eff})
 }
+
+// reapPolicyRE is the shape of a session's reap policy (claude-fleet#1902,
+// bin/fleet_reap_policy.py is the grammar): merged[:<dur>] · done[:<dur>] ·
+// loop-end · at:<ISO time | HH:MM | epoch> · keep. "" = the kind's default.
+var reapPolicyRE = regexp.MustCompile(`^(?:(?:merged|done)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})$`)
+
+func reapPolicyOK(p string) bool { return p == "" || reapPolicyRE.MatchString(p) }

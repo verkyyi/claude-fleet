@@ -74,7 +74,7 @@ R="${E}0m"; US=$'\x1f'
 # NOW (fleet_cfg_state, the file read once per frame below), so 配置旧 costs no fork.
 # Inside the same field (issue #1895), `/<@agent_ver>` when the window has one —
 # the fleet version it runs, so 待换新 costs no field and no fork either.
-WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@reap_policy}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -443,7 +443,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_reap; do
     case "$r_wid" in
       '#ts'|'#me') continue ;;
       '#node') [ -n "$r_node" ] || continue
@@ -471,13 +471,13 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
       # about the row changes (its place, its nesting, its colour)
       r_node="$r_node~"
     fi
-    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg")
+    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_reap")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
-    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg <<< "$_rr"
+    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_reap <<< "$_rr"
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
-    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg"$'\n'
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_reap"$'\n'
   done
   unset _rrows _rr _rexpd _rexp
   WLIST="$RLIST$WLIST"
@@ -745,7 +745,7 @@ buf=""
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load
 CFG_STALE_T='' CFG_RENEW_T=''
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wreap; do
   [ -z "$name" ] && continue
   # Is this session's configuration the one it would get now? A local row
   # compares its @agent_cfg (fleet_cfg_state); a row on another machine carries
@@ -758,6 +758,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
            fleet_cfg_state "$agent" "$wcfg" "$wver"; cfgst=$FCFG_STATE ;;
   esac
   cfgf=''; [ "$cfgst" = unknown ] || cfgf="$US$cfgst"
+  # field 14 (issue #1902): the session's @reap_policy, the view words it
+  # (合并后回收 · 做完就回收 · 常驻 …). Field 13 stays, empty, when cfg is unknown;
+  # no policy ⇒ no field, so an old window's row is byte for byte as before.
+  case "$wreap" in ''|*[!A-Za-z0-9:.+-]*) ;; *) cfgf="${cfgf:-$US}$US$wreap" ;; esac
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue

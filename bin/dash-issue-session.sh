@@ -44,13 +44,13 @@ set -uo pipefail
 # GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
   if [ -n "$_want" ]; then
     case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) AGENT="$_a" ;; repo) REPO_ARG="$_a" ;;
-      node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; account) ACCOUNT_ARG="$_a" ;; esac
+      node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; account) ACCOUNT_ARG="$_a" ;; reap) REAP="$_a" ;; esac
     _want=""; continue
   fi
   # A FUSED "--flag value" (issue #1543) is --flag=value: zsh — Claude's Bash tool —
@@ -58,7 +58,7 @@ for _a in "$@"; do
   # us ONE arg, which fell to the unknown-flag branch and let the hub place a pinned
   # spawn on another machine.
   case "$_a" in
-    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*)
+    '--title '*|'--origin '*|'--agent '*|'--repo '*|'--node '*|'--origin-wid '*|'--account '*|'--reap '*)
       _v=${_a#* }; _v=${_v#"${_v%%[! ]*}"}; _a="${_a%% *}=$_v" ;;
   esac
   case "$_a" in
@@ -104,6 +104,11 @@ for _a in "$@"; do
     # placement so the machine that opens it honours the same choice.
     --account) _want=account ;;
     --account=*) ACCOUNT_ARG="${_a#--account=}" ;;
+    # --reap (issue #1902): when the fleet may close this session on its own —
+    # merged[:<dur>] | done[:<dur>] | loop-end | at:<time> | keep. None = merged,
+    # the historic rule (PR merged + the fleet's grace). Stamped as @reap_policy.
+    --reap) _want=reap ;;
+    --reap=*) REAP="${_a#--reap=}" ;;
     # An UNKNOWN dash-flag is almost always a typo (e.g. --forc). Do NOT let it
     # fall through to the positional slots — treating "--forc" as the issue number
     # strips to "" and silently spawns the wrong thing. Warn loudly and ignore it.
@@ -125,6 +130,10 @@ case "$ACCOUNT_ARG" in
 esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SELF="$BIN/$(basename "$0")"                   # absolute path for the --async re-invoke
+# The reap policy, canonical or refused before any gate runs (issue #1902).
+if [ -n "$REAP" ]; then
+  REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$REAP") || exit 2
+fi
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 . "$BIN/fleet-ui-lang.sh"   # fleet_ui_fail — the one failure line (issue #1618)
@@ -407,7 +416,7 @@ if [ "$PLACING" = 1 ]; then
     if [ "$ASYNC_FLAG" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && command -v gh >/dev/null 2>&1; then
       _pre_asg=$(gh issue view "$num" --repo "$REPO" --json assignees --jq '.assignees|length' 2>/dev/null)
     fi
-    place_out=$(fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT"); place_rc=$?
+    place_out=$(fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
     _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
     case "$place_rc:$_pv" in
       0:REMOTE\ *)
@@ -589,7 +598,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # separate client call independent of this process's fds (its stderr copy is what
   # this redirect drops, and the tail has no caller left to read it — the
   # interactive --async path is toast-only by construction).
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG} >/dev/null 2>&1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || { refuse "spawn failed for #$num: dispatch"; exit "$RC_INFRA"; }
   exit 0
@@ -686,6 +695,9 @@ TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ iss
 fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
+# When the fleet may close it on its own (issue #1902): the one asked for, else an
+# issue session's default — after its PR merged, the rule it always had.
+TM set-window-option -t "$win" @reap_policy "${REAP:-merged}" 2>/dev/null
 # The window's repo + worktree (issue #789) — every worker carries both, so any
 # consumer resolves its repo via fleet_window_repo without a git read.
 [ -n "$REPO" ] && TM set-window-option -t "$win" @repo "$REPO" 2>/dev/null
