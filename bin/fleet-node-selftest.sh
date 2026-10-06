@@ -164,7 +164,8 @@ case ",$role," in *,node,*) ok "A FLEET_ROLE has node ($role)" ;; *) bad "A FLEE
 grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$ENVF" 2>/dev/null && ok "A node.env says CCQUOTA_FLEET_COMPUTE=0 (只协调)" \
   || bad "A node.env compute: $(grep COMPUTE "$ENVF" 2>/dev/null)"
 SNIP="$SB/h1/.ssh/fleet-ssh-config"
-if grep -q "^Match originalhost m4,m4-\*,fleet-m4,fleet-m4-\* exec \"'$BIN/fleet-peer-cert.sh' m4 view" "$SNIP" 2>/dev/null \
+PBIN=$(cd "$BIN" && pwd -P)   # `fleet` runs its siblings by their physical path (/var → /private/var on macOS)
+if grep -qF "Match originalhost m4,m4-*,fleet-m4,fleet-m4-* exec \"'$PBIN/fleet-peer-cert.sh' m4 view" "$SNIP" 2>/dev/null \
    && grep -q '^  IdentityFile ~/.ssh/fleet-peer$' "$SNIP" && grep -qx 'm4 m4' "$SB/h1/.config/claude-fleet/peer/machines" 2>/dev/null; then
   ok "A the ssh snippet carries the peer Match for m4; peer/machines lists it"
 else bad "A peer section: $(cat "$SNIP" 2>/dev/null) / $(cat "$SB/h1/.config/claude-fleet/peer/machines" 2>/dev/null)"; fi
