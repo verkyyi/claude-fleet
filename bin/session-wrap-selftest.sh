@@ -40,8 +40,8 @@ CHECKS=0
 fail() { printf 'session-wrap FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '%s\n' "$2" >&2; exit 1; }
 eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
 waitfor() {  # <what> <command…> — up to 10s
-  local what="$1" i; shift
-  for i in $(seq 1 100); do "$@" && { CHECKS=$((CHECKS + 1)); return 0; }; sleep 0.1; done
+  local what="$1"; shift
+  for _ in $(seq 1 100); do "$@" && { CHECKS=$((CHECKS + 1)); return 0; }; sleep 0.1; done
   fail "timed out: $what"
 }
 
@@ -163,7 +163,7 @@ waitfor "q: state exited" state_is q exited
 tf send-keys -t sw:q q
 waitfor "q: session-end-hook --recycle was asked" grep -sqx -- '--recycle' "$WORK/recycled"
 waitfor "q: the wrapper returned 0" screen_has q 'WRAP_RC=0'
-eq "q: recycled windows read done" done "$(o q @claude_state)"
+eq "q: recycled windows read done" "done" "$(o q @claude_state)"
 
 # ------------------------------------------- C: the SessionEnd hook's gate -----
 # A pane stands in for the wrapper (its pid on @session_wrap); the hook's trace

@@ -95,7 +95,7 @@ while :; do
       fi ;;
     11)  cmd=(--agent "$agent" ${policy[@]+"${policy[@]}"}) ;;   # r — a new conversation
     12)  # q — recycle: the SessionEnd hook's reap + close, asked for on purpose
-      wset @claude_state done
+      wset @claude_state "done"
       bash "$BIN/session-end-hook.sh" --recycle
       exit 0 ;;
     *)   exit "$rc" ;;                          # the page died (hangup): nothing to resume into
