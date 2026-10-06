@@ -1342,7 +1342,7 @@ vr() { TMUX_TMPDIR="$WORK/vt" "$REAL_TMUX" -L "$1" "${@:2}"; }
 vr_clients() { vr vrn list-clients -F '#{client_session}' 2>/dev/null | sort | tr '\n' ' '; }
 vr_pid() { cut -f5 "$WORK/vr/conf/remote-views/$1" 2>/dev/null; }
 vr_view_reconnect() {
-  CAP=5; local t0 cs one two s opts
+  CAP=5; local t0 one s opts
   mkdir -p "$WORK/vt" "$WORK/vr/conf/fleets/vrn"
   printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s\n' "$WORK/vr" > "$WORK/vr/conf/fleets/vrn/conf"
   vr vrn -f /dev/null new-session -d -s vrn -n home -x 100 -y 20 'exec sleep 600' || { WHY="no node server"; return 1; }
@@ -1358,7 +1358,6 @@ vr_view_reconnect() {
       && [ \"\$(TMUX_TMPDIR='$WORK/vt' '$REAL_TMUX' -L vrn list-clients -F '#{client_session}')\" = 'vrn@view-V1' ]" \
     || { WHY="after the reconnect the node's clients are [$(vr_clients)] (want one, on vrn@view-V1), row pid $(vr_pid V1) (first was $one)"; return 1; }
   SECS=$(since "$t0")
-  two=$(vr_pid V1)
   s=$(vr vrn list-clients -F '#{client_session}' | head -n 1)
   opts="$(vr vrn show-options -qv -t "=$s:" status) $(vr vrn show-options -qv -t "=$s:" prefix)"
   [ "$opts" = "off None" ] || { WHY="the view session $s has status/prefix [$opts], want [off None]"; return 1; }
