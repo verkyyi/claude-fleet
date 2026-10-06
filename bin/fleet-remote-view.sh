@@ -172,6 +172,43 @@ hub_relay_ok() {
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 T() { tmux -L "$sock" "$@"; }   # the REMOTE fleet's server; each mode sets $sock first
 
+# A static forward in the person's ~/.ssh/config (`RemoteForward 2226 …`, the
+# open-url.sh opener) is asked for again by EVERY session on a shared master, and
+# the second ask of one remote port is refused — fatally for a mux client
+# (`muxclient: master forward request failed`): no attach, a reconnect, a storm
+# (issue #1775). So a session on a master never carries the config's forwards
+# (MUXO; the master that holds them already has them), and a master that cannot
+# get one goes on without it (MASTERO) — a lost opener, never a lost attach.
+MUXO=(-o ClearAllForwardings=yes)
+MASTERO=(-o ExitOnForwardFailure=no)
+
+# rv_ssh_why <stderr file> — ssh's last word on a dropped line, in words a person
+# reads (issue #1775 §3): a raw `mux_client_forward: …` reads as "the network is
+# broken". An unknown line is shown as it is.
+rv_ssh_why() {
+  local f="$1" l
+  [ -s "$f" ] || return 0
+  l=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | grep -v '^Warning: remote port forwarding failed' | tail -n 1)
+  [ -n "$l" ] || return 0
+  case "$l" in
+    *'forward request failed'*|*'port forwarding failed'*)
+      printf '端口转发被拒（另一条连接已占用同一个端口）' ;;
+    *'Connection refused'*)                  printf '对方的 ssh 拒绝连接' ;;
+    *'kex_exchange_identification'*|*'Connection reset'*|*'Connection closed by'*)
+      printf '对方的 ssh 在握手时断开（可能同时连接太多）' ;;
+    *'timed out'*|*'Timeout, server'*)       printf '连接超时（网络不通或对方不在线）' ;;
+    *'Permission denied'*)                   printf '认证被拒（证书可能过期，试试 fleet login）' ;;
+    *'Could not resolve hostname'*)          printf '找不到这台机器的地址' ;;
+    *'Host key verification failed'*|*'REMOTE HOST IDENTIFICATION'*)
+      printf '对方的主机指纹不符' ;;
+    *'Broken pipe'*|*'Network is unreachable'*|*'No route to host'*)
+      printf '网络断了' ;;
+    *'Control socket'*|*'mux_client'*|*'muxclient'*)
+      printf '共享的连接已关闭' ;;
+    *) printf '%s' "$l" ;;
+  esac
+}
+
 # --- the registry (issue #1485) ---------------------------------------------------
 # Live rows of the registry: `<tty> <session> <kind> <since> <pid>`. A row whose
 # attach shell is gone does not count; a row without a pid (written by an older
@@ -365,7 +402,7 @@ open)
         OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
         OT rename-window -t "$w" -- "$title" 2>/dev/null
       elif [ -n "$ctl" ] && [ -S "$ctl" ] && $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 \
-         && $SSH -S "$ctl" "$host" "bash $rbin/fleet-remote-view.sh select $(sq "$wid")${rview:+ $(sq "$rview")}" >/dev/null 2>&1; then
+         && $SSH "${MUXO[@]}" -S "$ctl" "$host" "bash $rbin/fleet-remote-view.sh select $(sq "$wid")${rview:+ $(sq "$rview")}" >/dev/null 2>&1; then
         OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
         OT rename-window -t "$w" -- "$title" 2>/dev/null
       else
@@ -398,7 +435,7 @@ run)
   # `open` retargets through the one, in the far end's view session named by the other.
   [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$ctl" \; \
                              set-window-option -t "${TMUX_PANE:-}" @remote_view "$view" 2>/dev/null
-  side='' upg='' chn=''
+  side='' upg='' chn='' att=''
   stop_bg() {   # the sidecar, the upgrader, the channel, and whatever they are waiting in
     local p
     for p in $side $upg $chn; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done
@@ -408,9 +445,26 @@ run)
   }
   cleanup() {
     stop_bg
+    # the attach itself (issue #1704): it runs in the background now, so a TERM
+    # reaches this trap at once — and must not leave it holding the far end's
+    # view session (a session on the warm master outlives our own `-O exit`)
+    [ -n "$att" ] && { pkill -P "$att" 2>/dev/null; kill "$att" 2>/dev/null; att=''; }
     $SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1   # our own master only — never the warm one (#1631)
-    rm -f "$ctl" "$ctl.route" "$ctl.upgrade"
+    rm -f "$ctl" "$ctl.route" "$ctl.upgrade" "$ctl.ssherr"
     [ "$use" = "$ctl" ] || rm -f "$use.upgrade"
+  }
+  # pane_gone — before a reconnect: this loop's pane (or its whole tmux server)
+  # is no more (issue #1704). A closed pane or a kill-server HUPs the loop, and
+  # with the attach in the background that HUP reaches the trap at once; this
+  # is the belt for a loop that slept through it. Only tmux's own "no such pane"
+  # (or its socket gone) counts — a busy server that does not answer is not gone.
+  pane_gone() {
+    local err
+    [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 1
+    [ -S "${TMUX%%,*}" ] || return 0
+    err=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_id}' 2>&1 >/dev/null)
+    case "$err" in *"can't find pane"*|*"no server running"*) return 0 ;; esac
+    return 1
   }
   use="$ctl"   # the master this round rides: ours, or the shell's warm one (#1631)
   trap 'cleanup; exit 0' INT TERM HUP
@@ -425,7 +479,7 @@ run)
     done
     # No master: never let `-S` fall through to a second, independent login.
     [ -n "$up" ] || return 0
-    $SSH -S "$use" "$host" "bash $rbin/fleet-remote-view.sh watch $(sq "$view")" 2>/dev/null \
+    $SSH "${MUXO[@]}" -S "$use" "$host" "bash $rbin/fleet-remote-view.sh watch $(sq "$view")" 2>/dev/null \
       | python3 -c '
 import json, socket, subprocess, sys
 ssh, ctl, host, opener = sys.argv[1:5]
@@ -465,7 +519,7 @@ for line in sys.stdin:
     [ -n "$up" ] || return 0
     rm -f "$ctl.cmd" "$ctl.ack"
     mkfifo "$ctl.cmd" "$ctl.ack" 2>/dev/null || return 0
-    $SSH -S "$use" "$host" "bash $rbin/fleet-remote-view.sh serve $(sq "$view")" \
+    $SSH "${MUXO[@]}" -S "$use" "$host" "bash $rbin/fleet-remote-view.sh serve $(sq "$view")" \
       0<>"$ctl.cmd" 1<>"$ctl.ack" 2>/dev/null &
     sp=$!
     exec 7<>"$ctl.ack" 8<>"$ctl.cmd"
@@ -563,14 +617,29 @@ EOF_PEER
     # window's `@remote_ctl` names it, so `open` retargets over it too. Its line,
     # keepalive and life are the warm loop's; a drop here just comes back round.
     use="$ctl"
+    pane_gone && exit 0   # the cleanup trap runs on the way out (issue #1704)
     if [ -n "$shellopt" ] && [ "${FLEET_SHELL_WARM:-1}" != 0 ]; then
+      # A warm master still coming up (its `<sock>.pending` pid alive — the shell
+      # and the first click start in the same second) is waited for, up to
+      # FLEET_REMOTE_WARM_WAIT (5) s, instead of opening a private master beside
+      # it (issue #1704); a round that does go private says so in warm.log.
       wsock="${TMPDIR:-/tmp}/warm/$node.sock"
-      [ -S "$wsock" ] && $SSH -S "$wsock" -O check "$host" >/dev/null 2>&1 && use="$wsock"
+      wdeadline=$(( $(date +%s) + ${FLEET_REMOTE_WARM_WAIT:-5} ))
+      while :; do
+        [ -S "$wsock" ] && $SSH -S "$wsock" -O check "$host" >/dev/null 2>&1 && { use="$wsock"; break; }
+        wp=''; { read -r wp < "$wsock.pending"; } 2>/dev/null
+        case "$wp" in ''|*[!0-9]*) break ;; esac
+        kill -0 "$wp" 2>/dev/null && [ "$(date +%s)" -lt "$wdeadline" ] || break
+        sleep 0.2
+      done
+      [ "$use" = "$ctl" ] && [ -d "${wsock%/*}" ] \
+        && printf '%s private %s (run %s: warm not up)\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$node" $$ \
+             >> "${wsock%/*}/warm.log" 2>/dev/null
     fi
     [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$use" 2>/dev/null
     if [ "$use" != "$ctl" ]; then
       printf '\033[2J\033[H→ %s (%s · 已连) …\n' "$node" "$host"
-      opts=(-tt -o ControlMaster=no -S "$use")
+      opts=(-tt -o ControlMaster=no "${MUXO[@]}" -S "$use")
     else
       printf '\033[2J\033[H→ %s (%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
         "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')"
@@ -578,7 +647,7 @@ EOF_PEER
       # no compression (a LAN / tailnet only pays its latency), low-delay QoS
       opts=(-tt -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8
             -o "IPQoS=lowdelay throughput" -o Compression=no
-            -o ControlMaster=yes -o "ControlPath=$ctl" -o ControlPersist=no ${peer[@]+"${peer[@]}"})
+            -o ControlMaster=yes -o "ControlPath=$ctl" "${MASTERO[@]}" -o ControlPersist=no ${peer[@]+"${peer[@]}"})
       [ "$route" = hub ] && opts+=(-o "ProxyCommand=$(sq "$BIN/fleet") connect --proxy $(sq "$(hub_node "$node")")")
       rm -f "$ctl" "$ctl.route" "$ctl.upgrade"
     fi
@@ -587,10 +656,22 @@ EOF_PEER
     upgrader & upg=$!
     chan & chn=$!
     started=$(date +%s)
+    # In the BACKGROUND, then `wait` (issue #1704): bash runs a trap only once the
+    # foreground command returns, and an attach never returns — a TERM waited
+    # forever. `wait` returns on a trapped signal; `0<&0` keeps the pane's tty as
+    # its stdin (a background job's default is /dev/null). ssh's own words go to
+    # a file, read back below in a person's words (issue #1775 §3).
+    : > "$ctl.ssherr"
     FLEET_CONNECT_ROUTE_FILE="$ctl.route" FLEET_CONNECT_RETEST="$retest" \
-      $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach$shellopt $(sq "$wid") $(sq "$view")"
-    rc=$?
+      $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach$shellopt $(sq "$wid") $(sq "$view")" \
+      0<&0 2>"$ctl.ssherr" &
+    att=$!
+    wait "$att"; rc=$?
+    att=''
     stop_bg
+    why=$(rv_ssh_why "$ctl.ssherr" | cut -c1-120)
+    # the reason on a line of its own, above the drop line (issue #1775 §3): a
+    # long one wrapping into it would split the line a person reads
     mark_route ''
     retest=1
     if [ -f "$use.upgrade" ]; then
@@ -612,6 +693,7 @@ EOF_PEER
       [ -z "$shellopt" ] && hub_relay_ok && { [ "$route" = direct ] && route=hub || route=direct; }
       [ "$delay" -lt 10 ] && delay=$(( delay * 2 ))
     fi
+    [ -n "$why" ] && printf '\n原因：%s' "$why"
     if [ -n "$shellopt" ]; then
       # The client's right pane (issue #1785): a dropped line is never the end of
       # it — Enter reconnects now, and ⌃c, which closed the window (and with the

@@ -148,6 +148,7 @@ chmod +x "$SB/fleet-connect.py"
 SHIM="$WORK/shim"; mkdir -p "$SHIM"
 cat > "$SHIM/ssh" <<EOF
 #!/bin/bash
+printf '%s\\n' "\$*" >> "$WORK/ssh.argv"
 op=''; ctl=''
 while [ \$# -gt 0 ]; do
   case "\$1" in
@@ -508,6 +509,14 @@ has 'H: the remote command after --' "$argv" "-- bash .claude/fleet/bin/fleet-re
 PATH="$SHIM:$PATH" bash "$SB/fleet-shell.sh" ssh -S "$WORK/x.ctl" m4 "bash .claude/fleet/bin/fleet-remote-view.sh select 'w'" >/dev/null 2>&1
 has 'H: a slave (-S) is plain ssh over the socket' "$(cat "$WORK/ssh.log")" "m4	bash .claude/fleet/bin/fleet-remote-view.sh select 'w'"
 eq 'H: a slave never asks fleet connect' 0 "$(grep -c select "$WORK/connect.argv")"
+# issue #1775: a session on a master never re-asks the config's static forwards
+# (a second `RemoteForward 2226` is refused, and a refused mux client never
+# attaches); fleet-open's `-O forward -L` bridge keeps its own -L
+has 'H: a slave (-S) clears the config forwards' "$(grep select "$WORK/ssh.argv")" '-o ClearAllForwardings=yes'
+: > "$WORK/ssh.argv"
+PATH="$SHIM:$PATH" bash "$SB/fleet-shell.sh" ssh -S "$WORK/x.ctl" -O forward -L 127.0.0.1:1:127.0.0.1:2 m4 >/dev/null 2>&1
+hasnt 'H: …an -O forward does not' "$(cat "$WORK/ssh.argv")" 'ClearAllForwardings'
+has 'H: …and keeps its -L' "$(cat "$WORK/ssh.argv")" '-L 127.0.0.1:1:127.0.0.1:2'
 me=$(hostname -s | cut -d. -f1)
 out=$( FLEET_NODE_ALIASES="$me=here" bash "$SB/fleet-shell.sh" ssh -tt -o ControlMaster=yes -o "ControlPath=$WORK/y.ctl" here "printf 'local:%s' \"\${TMUX:-unset}\"" 2>&1 )
 eq 'H: a host that is this computer runs the command here, TMUX unset' 'local:unset' "$out"
