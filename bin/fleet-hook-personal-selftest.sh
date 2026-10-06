@@ -124,7 +124,7 @@ cmp -s "$WORK/s0.json" "$H/.claude/settings.json" && ok "C a second sync writes 
 # ── D — enforce keeps it ───────────────────────────────────────────────────────
 sess() {
   env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" ${PSEAM:+FLEET_PERSON_BUNDLE_CMD="$PSEAM"} \
-    "$PY" - "$T" "$LOCKROOT" "$H" "$@" <<'PY'
+    "$PY" - "$T" "$LOCKROOT" "$H" <<'PY'
 import importlib.util, json, sys
 t, root, h = sys.argv[1:4]
 s = importlib.util.spec_from_file_location("t", t); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
@@ -166,7 +166,7 @@ f=$(printf '%s\n' "$s" | sed -n 's/^settings	//p')
 
 # ── E — no personal layer: settings.json as the team alone writes it ──────────
 for d in a b; do
-  rm -rf "$WORK/$d"; mkdir -p "$WORK/$d/.claude" "$WORK/$d/conf"
+  rm -rf "${WORK:?}/${d:?}"; mkdir -p "$WORK/$d/.claude" "$WORK/$d/conf"
   echo '{}' > "$WORK/$d/.claude.json"; echo '{"theme": "dark"}' > "$WORK/$d/.claude/settings.json"
 done
 E() {   # E <home> <person seam>
