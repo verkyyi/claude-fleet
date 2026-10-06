@@ -515,7 +515,7 @@ else
       line=''
       for _ in $(seq 1 60); do
         line=$("$REAL_TMUX" -S "$WORK/l-$st-$c.sock" capture-pane -p -t o 2>/dev/null | tail -n1)
-        case "$line" in *"$tok"*) break ;; esac
+        case "$line" in *"$tok"*) case "$line" in *"⌂ m5"*) break ;; esac ;; esac   # both #() jobs drawn
         sleep 0.2
       done
       has "L: $st at $c columns — its segment" "$tok" "$line"
