@@ -150,7 +150,7 @@ if [ "$laptop" = true ]; then
 fi
 case "$verdict" in
   ok) echo "本机判断：合适 — 出口 ${loc:-未知}，Anthropic / OpenAI 都能直连${note}" ;;
-  unsupported_region) echo "本机判断：不合适 — 出口 ${loc:-未知}：Anthropic $(word "$anthropic")，OpenAI $(word "$openai")；不在本机跑会话，账号用本机自己的${note}" ;;
+  unsupported_region) echo "本机判断：不合适 — 出口 ${loc:-未知} 不在 Claude / OpenAI 支持范围（Anthropic $(word "$anthropic")，OpenAI $(word "$openai")）；不在本机跑会话，账号用本机自己的${note}" ;;
   *) echo "本机判断：暂不合适 — 出口 ${loc:-未知}：Anthropic $(word "$anthropic")，OpenAI $(word "$openai")（网络恢复后再测：fleet-node-probe.sh）${note}" ;;
 esac
 # The one hint (EPIC #1718 decision 2): suitable, a node, compute off.
