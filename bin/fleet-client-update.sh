@@ -518,8 +518,7 @@ apply() {
   # a plain-dir home was just adopted: the old client now lives in its version dir
   [ -n "$ADOPTED" ] && old_root=$(cd "$VERS/$ADOPTED" && pwd -P)
   [ -n "$old" ] || old=$ADOPTED
-  if [ "${FLEET_CLIENT_UPDATE_FAIL:-}" = reload ] \
-     || ! FLEET_SHELL_SESSION="$s" bash "$ROOT/bin/fleet-shell.sh" reload "$s" --from "$old_root" >>"$STATE/update.log" 2>&1; then
+  if ! FLEET_SHELL_SESSION="$s" bash "$ROOT/bin/fleet-shell.sh" reload "$s" --from "$old_root" >>"$STATE/update.log" 2>&1; then
     why="新版载入失败，已退回旧版"
     ulog "$why"
     point "$old" || ulog "rollback: the link could not be put back ($old)"
