@@ -521,6 +521,20 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # @label=Locked agent config @group=spawn @tier=internal @scope=global @edit=str
 #FLEET_AGENT_LOCK=warn
 
+# A session whose configuration fingerprint (@agent_cfg) is not the one a fresh
+# session gets now is marked 配置旧 on the sidebar and counted by fleet-doctor's
+# `agentcfg` row (issue #1783). `auto` reopens it — same conversation, new window
+# (fleet-migrate.sh --cfg-stale) — once it has been idle (done, no /loop round, no
+# background job) for FLEET_CFG_RESTART_IDLE seconds, at most
+# FLEET_CFG_RESTART_MAX per fleet per tick; `ask` only raises an alert per session;
+# `off` only marks it. A working / looping / waiting-on-you session is never touched.
+# @label=Reopen stale-config sessions @group=spawn @tier=internal @scope=global @edit=str
+#FLEET_CFG_RESTART=auto
+# @label=Idle before a stale reopen @group=spawn @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_CFG_RESTART_IDLE=600
+# @label=Stale reopens per fleet per tick @group=spawn @tier=internal @scope=global @edit=int
+#FLEET_CFG_RESTART_MAX=1
+
 # --- Autofill dispatcher (bin/fleet-dispatch.sh, com.claude-fleet.dispatch) -----
 # OFF by default. When enabled for a fleet, the dispatch daemon (~60s) keeps that
 # fleet's worker slots filled FROM ITS BACKLOG, BY PRIORITY, whenever both caps

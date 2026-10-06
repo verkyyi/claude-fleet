@@ -69,7 +69,10 @@ R="${E}0m"; US=$'\x1f'
 # The LAST field (issue #1750) is the window's BIRTH — @born, stamped once at
 # spawn and carried by every road a session takes (move/migrate), else tmux's own
 # window_created — read off this same list-windows, so the born order costs no fork.
-WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}"
+# After it (issue #1783): @agent_cfg, the fingerprint of the configuration the
+# session was launched with (#1782) — compared per row against the one expected
+# NOW (fleet_cfg_state, the file read once per frame below), so 配置旧 costs no fork.
+WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -439,7 +442,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg; do
     case "$r_wid" in
       '#ts')   _rts=$r_node; case "$_rts" in ''|*[!0-9]*) _rts=0 ;; esac; continue ;;
       '#me')   continue ;;
@@ -477,16 +480,16 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
       # about the row changes (its place, its nesting, its colour)
       r_node="$r_node~"
     fi
-    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born")
+    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
-    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born <<< "$_rr"
+    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg <<< "$_rr"
     case "$r_node" in *!) r_orig='' ;; esac                      # lost: never nested
     # parent lost: _rlostw holds row ids (`wid:`-prefixed), the origin is bare
     [ -n "$r_orig" ] && case "$_rlostw" in *" wid:$r_orig "*) r_orig='' ;; esac
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
-    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born"$'\n'
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg"$'\n'
   done
   unset _rrows _rr _rexpd _rexp
   WLIST="$RLIST$WLIST"
@@ -537,7 +540,7 @@ fi
 # line of this fleet, taken off the first (panels included: a fleet whose only
 # windows are panels still draws its `(0)` headings, folded or not).
 KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
-while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn; do
+while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn _; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   RFOLD=$rfold
@@ -750,8 +753,21 @@ if [ "$RGRP" = 1 ] && [ -n "$RFOLD" ]; then
 fi
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn; do
+# 配置旧 (issue #1783): the fingerprint a fresh session would get NOW, read once a
+# frame — every row below is a compare against it, no fork.
+fleet_cfg_expected_load
+CFG_STALE_T=''
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg; do
   [ -z "$name" ] && continue
+  # Is this session's configuration the one it would get now? A local row
+  # compares its @agent_cfg (fleet_cfg_state); a row on another machine carries
+  # that machine's own verdict (the hub cache's `cfg`, judged there against ITS
+  # expected file). stale | ok | unknown — only stale draws.
+  case "$wid" in
+    wid:*) case "$wcfg" in stale|ok) cfgst=$wcfg ;; *) cfgst=unknown ;; esac ;;
+    *)     fleet_cfg_state "$agent" "$wcfg"; cfgst=$FCFG_STATE ;;
+  esac
+  cfgf=''; [ "$cfgst" = unknown ] || cfgf="$US$cfgst"
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
@@ -1232,7 +1248,11 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # fields 10-12 (issue #1532): the hub's issue · PR · ctx% cells, bare text
     # (`#1532` · `#1552✓` · `45%`; `—` / `·` when there is none). The view draws
     # them only while its info column is open (⌃i), right-aligned.
-    buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct"$'\n'
+    # field 13 (issue #1783): `stale` / `ok` — whether the session's configuration
+    # is the one it would get now; the view draws a yellow 配置旧 left of the @
+    # mark on a stale one. Absent when unknown, so a login with no expected file
+    # (or a session from before #1782) emits its rows byte for byte as before.
+    buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct$cfgf"$'\n'
     continue
   fi
   # full row: glyph1·issue5·tree2·window26·⟨flex: tags, badge⟩·act8·PR7·ctx4
@@ -1276,6 +1296,14 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # An automatic wake held at the session limit (issue #1058) says so here.
   [ -n "$zwait" ] && { [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
                        tagpfx+="${AM}${zwait}${R}"; dwidth=$(( dwidth + ${#zwait} )); }
+  # 配置旧 (issue #1783), amber, just before the @ mark: the session runs an older
+  # configuration than a fresh one would get (fleet_cfg_state above).
+  if [ "$cfgst" = stale ]; then
+    [ -n "$CFG_STALE_T" ] || CFG_STALE_T=$(fleet_ui_t sidebar_cfg_stale)
+    _a=${CFG_STALE_T//[![:ascii:]]/}
+    [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
+    tagpfx+="${AM}${CFG_STALE_T}${R}"; dwidth=$(( dwidth + ${#CFG_STALE_T} * 2 - ${#_a} ))
+  fi
   # A row on another machine ends its tags in that machine's `@m4` (issue #1780,
   # the sidebar's mark): `@m4!` once it is lost (the row dims too), `@m5~` heard
   # over the shell's own connection. This machine's own rows carry none.

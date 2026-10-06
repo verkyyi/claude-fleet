@@ -140,16 +140,24 @@ case "$mode" in
     # Column 15 (issue #1750): `born=<epoch>` — the session's birth (@born, stamped
     # at spawn and carried by move/migrate; else tmux's window_created), the one
     # ruler every machine's list orders its rows by. Read off this same list.
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{?@born,#{@born},#{window_created}}' 2>/dev/null) || cwds=''
+    # Column 16 (issue #1783): `cfg=<stale|ok|unknown>` — is the session's
+    # configuration (@agent_cfg, stamped at launch, #1782) the one a fresh session
+    # gets on THIS machine now? Judged here, where the expected file lives, so the
+    # other machines' sidebars (the client's included) draw 配置旧 off the hub.
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}\t#{?@born,#{@born},#{window_created}}' 2>/dev/null) || cwds=''
+    fleet_cfg_expected_load
     while IFS= read -r row; do
       [ -n "$row" ] || continue
       wid=${row%%$'\t'*}; rest=${row#*$'\t'}
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6; exit }')
       born=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       case "$born" in *[!0-9]*) born='' ;; esac
+      wfp=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      wag=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      fleet_cfg_state "$wag" "$wfp"
       if [ -z "$wt" ]; then
         cwd=${wrow%%$'\t'*}
         case "${cwd##*/}" in scratch-[1-9]*|*-scratch-[1-9]*)
@@ -170,7 +178,7 @@ case "$mode" in
       fi
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\n' "$row" "$b" "$born"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\n' "$row" "$b" "$born" "$FCFG_STATE"
     done <<<"$rows"
     ;;
   ready)
