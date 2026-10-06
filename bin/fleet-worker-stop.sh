@@ -177,11 +177,13 @@ if [ -z "$cpid" ]; then
   # No agent under the pane (a spawn parked at its shell, a crashed session): the
   # window holds nothing to exit. Index it, then close the shell-only window.
   record_row
+  fleet_win_retire "$wid" "$SOCK"   # a stop, not a kill to pull back (#1840)
   TM kill-window -t "$wid" 2>/dev/null || :
   printf 'stopped:shell\n'; exit 0
 fi
 
 # --- 3. ask the agent to exit, then WAIT for it ---------------------------------
+fleet_win_retire "$wid" "$SOCK"   # the fleet stops it: never pulled back (#1840)
 TM set-option -w -t "$wid" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
 SK -t "$wid" Escape 2>/dev/null; sleep 0.6
 if [ "$agent" = codex ]; then

@@ -568,6 +568,7 @@ teardown() {
     [ -n "$WT" ] && dropcmd="bash '$BIN/fleet-worktree-drop.sh' '$MAIN' '$WT' $DROP_FORCE; "
     local cmd="tmux kill-window -t ${WIN:-@self}; { ${dropcmd}git -C '$MAIN' branch -D '$BRANCH'; } >/dev/null 2>&1"
     note "  teardown (detached): $cmd"
+    [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ] || { [ -n "$WIN" ] && fleet_win_retire "$WIN" "$(fleet_socket "$FLEET_SESSION")"; }   # not a kill to pull back (#1840)
     [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ] && return 0
     ftmux run-shell -b "$cmd" 2>/dev/null || \
       note "  teardown: tmux run-shell failed — worktree-autoclean.sh will reap the merged worktree."
@@ -585,6 +586,7 @@ teardown() {
     note "  teardown: sleep record of $WIN could not be retired — deferred"
     done_token skip:live; return 1
   fi
+  [ -n "$WIN" ] && fleet_win_retire "$WIN" "$(fleet_socket "$FLEET_SESSION")"   # the fleet's close, not one to pull back (#1840)
   [ -n "$WIN" ] && ftmux kill-window -t "$WIN" 2>/dev/null
   if [ -n "$WT" ]; then
     # Drop, don't delete (issue #586) — a rename into .fleet-trash/ plus a prune,

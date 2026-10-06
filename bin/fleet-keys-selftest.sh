@@ -423,9 +423,27 @@ if command -v tmux >/dev/null 2>&1; then
   ktm node source-file "$NODE" 2>"$KW/node.err" || fail "8: the node conf failed to source: $(cat "$KW/node.err")"
   ktm shell source-file "$KW/shell.conf" 2>"$KW/shell.err" || fail "8: the client conf failed to source: $(cat "$KW/shell.err")"
   ktm stock list-keys > "$KW/stock.keys"; ktm node list-keys > "$KW/node.keys"
-  ndiff=$(diff "$KW/stock.keys" "$KW/node.keys")
-  [ -z "$ndiff" ] || { ktm stock kill-server; ktm node kill-server; ktm shell kill-server; fail "8: the node binds keys of its own (it must list exactly tmux's stock keys):
+  # Exactly tmux's stock keys — except the human layer (conf/tmux-node-human.conf,
+  # issue #1840), which may only TAKE AWAY the stock deletes and swap the pane's
+  # right-click menus for a read-only one, and drop whatever else this tmux ships
+  # that deletes (its sweep): no other key differs, and no key on the node deletes
+  # or respawns anything.
+  HUMAN_KEYS=' prefix:x prefix:& prefix:$ prefix:< prefix:> root:MouseDown3Pane root:M-MouseDown3Pane root:MouseDown3Status root:MouseDown3StatusLeft root:MouseDown3StatusRight root:M-MouseDown3Status root:M-MouseDown3StatusLeft root:M-MouseDown3StatusRight '
+  # tmux pads the key column to the longest key, so a removed key re-pads every
+  # line: compare whitespace-normalised.
+  hk() { awk -v hk="$HUMAN_KEYS" '/kill-(pane|window|session|server)|respawn-(pane|window)|rename-session/ { next } { k = $3 ":" $4; gsub(/\\/, "", k); if (index(hk, " " k " ") == 0) { $1 = $1; print } }' "$1"; }
+  ndiff=$(diff <(hk "$KW/stock.keys") <(hk "$KW/node.keys"))
+  [ -z "$ndiff" ] || { ktm stock kill-server; ktm node kill-server; ktm shell kill-server; fail "8: the node binds keys of its own (beyond the human layer it must list exactly tmux's stock keys):
 $ndiff"; }
+  if grep -Eq 'kill-(pane|window|session|server)|respawn-(pane|window)|rename-session' "$KW/node.keys"; then
+    ktm stock kill-server; ktm node kill-server; ktm shell kill-server
+    fail "8: a node key still deletes, respawns or renames: $(grep -E 'kill-|respawn-|rename-session' "$KW/node.keys" | awk '{print $3, $4}' | tr '\n' ' ')"
+  fi
+  for k in x '&' '$' '<' '>'; do
+    awk -v k="$k" '$3 == "prefix" { kk = $4; gsub(/\\/, "", kk); if (kk == k) f = 1 } END { exit !f }' "$KW/node.keys" \
+      && fail "8: the node still binds prefix $k"
+  done
+  grep -q 'MouseDown3Pane.*display-menu' "$KW/node.keys" || fail "8: the node's right-click is not the read-only menu"
   ktm node list-keys -T fleet-sidebar >/dev/null 2>&1 && ktm node list-keys -T fleet-sidebar | grep -q . \
     && fail "8: the node still has a fleet-sidebar key table"
   ktm node show-options -g status-right | grep -q '#(' && fail "8: the node's status line still runs a job"

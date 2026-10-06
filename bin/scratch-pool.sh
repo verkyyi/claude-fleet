@@ -127,6 +127,7 @@ EOF
           [ -n "$_r" ] && fleet_repo_hosted "$SESS" "$_r" && continue
           [ -z "$_r" ] && _wt=$(TM display-message -p -t "$_w" '#{@worktree}' 2>/dev/null) \
             && [ -n "$_wt" ] && [ -n "$(fleet_worktree_repo "$SESS" "$_wt")" ] && continue
+          fleet_win_retire "$_w" "$SOCK"
           TM kill-window -t "$_w" 2>/dev/null
         done
         while IFS= read -r _r; do
@@ -215,6 +216,7 @@ pool_windows() {
 retire() {
   local wid="$1" wt slug
   wt=$(wopt "$wid" @worktree); slug=$(wopt "$wid" @pool_slug)
+  fleet_win_retire "$wid" "$SOCK"   # the pool's close (#1840)
   TM kill-window -t "$wid" 2>/dev/null
   [ -n "$MAIN" ] && [ -n "$slug" ] && [ -n "$wt" ] && fleet_scratch_free "$MAIN" "$slug" "$wt"
   return 0

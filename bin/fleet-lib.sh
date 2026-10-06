@@ -4667,7 +4667,37 @@ fleet_window_fid() {
   printf '%s' "$f"
 }
 
-# ---- a session's birth: @born (issue #1750) ------------------------------------
+# ---- the fleet closed it on purpose: a retired @fleet_id (issue #1840) ---------
+# A session window that vanishes while unfinished is pulled back on the next tick
+# (fleet-restore.sh --auto) — unless the FLEET closed it: the cleanup daemon's
+# reap, dash ⌃x, the recovery page's q, a move, a stop, the warm pool. tmux cannot
+# say who killed a window (no after-kill-window hook, and the window's options are
+# gone by then), so each of those closers marks the identity first, while the
+# window still answers: one empty file per @fleet_id under global/retired/. A
+# window already gone marks nothing (a SessionEnd hook arriving after a person's
+# kill-window must not excuse it). FLEET_PULLBACK_RETIRED_DIR is the test seam.
+fleet_retired_dir() { printf '%s' "${FLEET_PULLBACK_RETIRED_DIR:-$FLEET_CONF_DIR/global/retired}"; }
+
+# fleet_win_retire <window> [<sock>] — mark that window's session as closed by the
+# fleet. Never fails; a window with no @fleet_id has nothing to mark.
+fleet_win_retire() {
+  local w="${1:-}" sock="${2:-}" f d
+  [ -n "$w" ] || return 0
+  if [ -n "$sock" ]; then f=$(tmux -L "$sock" show-options -wqv -t "$w" @fleet_id 2>/dev/null)
+  else f=$(tmux show-options -wqv -t "$w" @fleet_id 2>/dev/null); fi
+  fleet_is_fid "$f" || return 0
+  d=$(fleet_retired_dir)
+  [ -d "$d" ] || mkdir -p "$d" 2>/dev/null
+  : > "$d/$f" 2>/dev/null
+  return 0
+}
+
+# fleet_fid_retired <fid> — rc 0 when the fleet closed that session on purpose.
+fleet_fid_retired() {
+  fleet_is_fid "${1:-}" && [ -f "$(fleet_retired_dir)/$1" ]
+}
+
+# ---- a session's birth: @born (issue #1750)------------------------------------
 # The epoch a session was spawned — the list's ORDER (tmux-dashboard-rows.sh seg_v):
 # a row sits where it was born, whatever its state, so it never jumps. Stamped once
 # at spawn (dash-issue-session.sh / dash-raw-session.sh) with the time of the

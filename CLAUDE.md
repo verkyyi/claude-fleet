@@ -169,6 +169,14 @@ Do not install from memory: read the doc and work from it.
   and its status line is one static `请用 fleet` hint (`conf/tmux-bar.conf`); the
   person's keys live in `conf/tmux-shell.conf`. `fleet-keys-selftest.sh` leg 8
   pins both sides on isolated sockets — never add a `bind` to the node conf.
+  The one exception only TAKES AWAY (issue #1840): `conf/tmux-node-human.conf`
+  (fleet-human), loaded at the end of the node conf and again AFTER the person's
+  `~/.tmux.conf`, unbinds prefix x & $ < > and swaps the pane's right-click for a
+  read-only menu (`fleet-human-menu.sh`) — no key on a node deletes or respawns a
+  session. One deleted anyway (`:kill-window`) comes back on the next tick:
+  `fleet-restore.sh --auto` reopens an unfinished `@fleet_id` that vanished
+  unmarked, and every closer the fleet runs on purpose (reap, ⌃x, q, move, stop,
+  pool) marks it first with `fleet_win_retire` — a new one must too.
 - **A view session shares the fleet's windows; never scan or name them bare**
   (issue #1489). A shell or proxy client of this machine (`fleet-remote-view.sh
   attach --shell` / a view id) attaches to a GROUPED session of its own,

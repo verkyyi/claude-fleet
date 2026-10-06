@@ -237,6 +237,8 @@ FLEET_NEEDS_TRACE                  knob: debug trace for the needs-reconcile spi
 FLEET_ORIGIN_GATE                  seam: 0 skips the spawn's live-parent gate (fleet_origin_gate, issue #1355) — tests whose parent key has no window
 FLEET_PEER_MODE                    handoff: the sender's permission mode stamped on a cross-session message
 FLEET_PEER_QUEUE_TTL               knob: seconds a queued report/message waits for its recipient before EXPIRED (fleet-peer-queue.sh, 604800 = the hub relay TTL, #1647)
+FLEET_PULLBACK                     knob: 0 turns off --auto pulling back a session window killed while its fleet is up (fleet-restore.sh, #1840, default on)
+FLEET_PULLBACK_RETIRED_DIR         seam: where fleet_win_retire marks the fleet's own closes (default $FLEET_CONF_DIR/global/retired; #1840)
 FLEET_PICK_MODEL                   handoff: the model an account pick is evaluated for
 FLEET_PLUGIN_NAME                  knob: the Claude plugin namespace fleet commands resolve under
 FLEET_POOL_PROBE_TIMEOUT           knob: internal pacing/limit, safe in-code default (scratch-pool.sh)

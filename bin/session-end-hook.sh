@@ -124,6 +124,10 @@ if [ "${1:-}" = "--exec" ]; then
   # is released (fleet_issue_release_claim, dash ⌃x's copy), not left held.
   how="${6:-}"
   transfer_holds_window "$win" && exit 0
+  # Every road below closes the window: the fleet's close, never a kill the next
+  # tick pulls back (issue #1840). A window already gone (a person's kill-window,
+  # whose SessionEnd lands here after the fact) marks nothing.
+  fleet_win_retire "$win"
 
   # raw scratch → RECORD it into the /fleet-history ledger, then close the window
   # (issue #466). A scratch has no issue, so the ledger keys it by the `scratch-<N>`
@@ -398,6 +402,7 @@ elif [ "$raw" = 1 ]; then
 elif [ "$reason" = recycle ]; then
   # Neither a worker nor a scratch (a no-repo session): nothing to record or reap,
   # the operator asked for the window to go.
+  fleet_win_retire "$win"
   fleet_bg "tmux kill-window -t '$win'"
 fi
 exit 0

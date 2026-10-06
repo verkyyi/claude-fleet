@@ -33,6 +33,8 @@
 #   personal-breaks-session                         bin/fleet-session-wrap.sh, fleet-session-page.py (p), FLEET_PERSONAL=0
 #   conf-keys-lost                                  bin/fleet-migrate-layout.sh, bin/fleet-conf.sh migrate
 #                                                   (install-apply's layout + conf passes), fleet_conf_reserved
+#   node-menu / node-prefix-keys                    conf/tmux-node-human.conf (via tmux-fleet-server.conf)
+#   window-killed                                   bin/fleet-restore.sh --auto (pull-back), fleet_win_retire
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -806,6 +808,120 @@ drill_personal_breaks_session() {
   out=$(PT_ENV=FLEET_PERSONAL=0 pt session claude)
   printf '%s\n' "$out" | grep -q $'^src\t.* personal:off ' || { WHY="the composer under FLEET_PERSONAL=0 still uses the layer: [$out]"; return 1; }
   SECS=$(since "$t0"); WHAT="恢复页 p：同一对话、本窗口不带个人配置重开；停用的个人规则在页上点名"
+}
+
+# node-menu / node-prefix-keys / window-killed (issue #1840): what a PERSON can
+# reach on a node's fleet server deletes nothing, and a session window deleted
+# anyway comes back on the next tick, same conversation.
+# hpty <sock> <window> <out> <bytes…> — a real client in a python pty, attached to
+# <window>; each <bytes> arg (python escapes) is typed 0.6s apart; everything the
+# client drew lands in <out>.
+hpty() {
+  python3 - "$REAL_TMUX" "$@" <<'PY'
+import os, pty, select, struct, sys, time, fcntl, termios
+tm, sock, win, out = sys.argv[1:5]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm-256color"
+    os.execv(tm, [tm, "-S", sock, "attach", "-t", win])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+buf = b""
+def pump(sec):
+    global buf
+    end = time.time() + sec
+    while time.time() < end:
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            try: buf += os.read(fd, 65536)
+            except OSError: return
+pump(0.8)
+for b in sys.argv[5:]:
+    os.write(fd, b.encode().decode("unicode_escape").encode("latin-1")); pump(0.6)
+pump(0.4)
+open(out, "wb").write(buf)
+try: os.kill(pid, 9)
+except OSError: pass
+PY
+}
+# hnode <label> — a node server started the way fleet-up starts one (-f
+# conf/tmux-fleet-server.conf), beside a personal ~/.tmux.conf that puts tmux's
+# deletes back, with two execution windows
+hnode() {
+  BREAK_SOCK="$WORK/sock-$1"; local h="$WORK/$1home"
+  mkdir -p "$h"
+  { printf 'bind x kill-pane\nbind & kill-window\n'
+    printf 'bind -n MouseDown3Pane display-menu -t = -x M -y M Kill X { kill-pane } Respawn R { respawn-pane -k }\n'; } > "$h/.tmux.conf"
+  HOME="$h" "$REAL_TMUX" -S "$BREAK_SOCK" -f "$ROOT/conf/tmux-fleet-server.conf" new-session -d -s "$1" -n home -x 100 -y 30 'exec sleep 600' \
+    || { WHY="the node server did not start from conf/tmux-fleet-server.conf"; return 1; }
+  nt set-option -g mouse on
+  nt new-window -d -t "$1:" -n issue-1 'exec sleep 600'
+  nt new-window -d -t "$1:" -n issue-2 'exec sleep 600'
+}
+
+drill_node_menu() {
+  CAP=5; local t0 out="$WORK/hm.out" item
+  hnode hm || return 1
+  t0=$(now)
+  # the break: a right-click on the session's pane (SGR mouse, button 3) …
+  hpty "$BREAK_SOCK" hm:issue-1 "$out" '\x1b[<2;20;10M' '\x1b[<2;20;10m'
+  grep -aq 'Kill\|Respawn' "$out" && { WHY="the right-click menu still offers Kill / Respawn"; return 1; }
+  for item in 复制这一屏 它在哪台 给它发消息 看它的单; do
+    grep -aq "$item" "$out" || { WHY="the right-click menu has no 「$item」 (did it open at all?)"; return 1; }
+  done
+  # … and no other right-click (Alt, the status line) deletes either
+  nt list-keys -T root | grep -E 'MouseDown3' | grep -Eq 'kill-|respawn-' \
+    && { WHY="a right-click binding still deletes: $(nt list-keys -T root | grep -E 'MouseDown3' | grep -E 'kill-|respawn-' | awk '{print $4}' | tr '\n' ' ')"; return 1; }
+  [ "$(nt list-windows -t hm -F '#{window_name}' | sort | tr '\n' ' ')" = "home issue-1 issue-2 " ] || { WHY="a window went missing"; return 1; }
+  SECS=$(since "$t0"); WHAT="右键弹只读菜单（复制 · 在哪台 · 发消息 · 看单），没有 Kill / Respawn；个人配置加不回来"
+}
+
+drill_node_prefix_keys() {
+  CAP=10; local t0 out="$WORK/hk.out" wins
+  hnode hk || return 1
+  t0=$(now)
+  # the break: a direct attach typing prefix x y, prefix & y, prefix $ <name> ↵, prefix < (C-b = \x02)
+  hpty "$BREAK_SOCK" hk:issue-1 "$out" '\x02x' 'y' '\x02&' 'y' '\x02$' 'gone\r' '\x02<' '\x1b'
+  wins=$(nt list-windows -t hk -F '#{window_name}' 2>/dev/null | sort | tr '\n' ' ')
+  [ "$wins" = "home issue-1 issue-2 " ] || { WHY="after prefix x / & the windows are [$wins], want [home issue-1 issue-2 ]"; return 1; }
+  nt has-session -t '=hk' 2>/dev/null || { WHY="prefix \$ renamed the fleet session"; return 1; }
+  [ "$(nt show-options -gqv @fleet_human)" = v1 ] || { WHY="the human layer (@fleet_human) is not on the server"; return 1; }
+  SECS=$(since "$t0"); WHAT="prefix x / & / \$ / < 都不起作用，个人配置绑回的 x / & 也被最后一层拿掉"
+}
+
+drill_window_killed() {
+  CAP=20; BREAK_SOCK="$WORK/sock-wk"; local t0 wins w2 f led="$WORK/wk-ledger.tsv"
+  local f1=1f0e0000-0000-4000-8000-0000000018a1 f2=1f0e0000-0000-4000-8000-0000000018a2
+  for f in dash-reap.sh session-end-hook.sh fleet-cleanup.sh fleet-move.sh fleet-worker-stop.sh scratch-pool.sh fleet-cleanup-idle.py; do
+    grep -q 'retire' "$BIN/$f" || { WHY="$f closes a session window without marking it (fleet_win_retire): the next tick would pull it back"; return 1; }
+  done
+  mkdir -p "$WORK/gbin"
+  printf '#!/bin/sh\necho 0\n' > "$WORK/gbin/gh"; chmod +x "$WORK/gbin/gh"     # no merged PR
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    printf 'FID\t%s\n' "$f1"; printf 'WIN\tissue-1\t%s\tsid-1\t1\tworking\t-\t-\n' "$WORK/wt-1"
+    printf 'FID\t%s\n' "$f2"; printf 'WIN\tissue-2\t%s\tsid-2\t2\tidle\t-\t-\n'    "$WORK/wt-2"
+  } > "$WORK/econf/fleets/oc/restore.map"
+  auto
+  until_ok 10 sh -c "[ \"\$('$REAL_TMUX' -S '$BREAK_SOCK' list-windows -t oc -F '#{@fleet_id}' 2>/dev/null | grep -c .)\" = 2 ]" \
+    || { WHY="the sandbox fleet never came up with both sessions"; return 1; }
+  # issue-2 the fleet closes on purpose (the recovery page's q, a reap): marked first
+  w2=$(nt list-windows -t oc -F '#{window_id} #{@fleet_id}' | awk -v f="$f2" '$2 == f { print $1 }')
+  ( PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf"; export PATH HOME FLEET_CONF_DIR BREAK_SOCK
+    . "$BIN/fleet-lib.sh"; fleet_win_retire "$w2" oc )
+  : > "$WORK/claude-argv"
+  nt kill-window -t "$w2"
+  nt kill-window -t oc:issue-1                    # the break: a session window deleted by hand
+  t0=$(now)
+  auto PATH="$WORK/gbin:$WORK/tbin:$PATH" FLEET_HISTORY_LEDGER="$led"     # one diskguard tick
+  until_ok "$CAP" sh -c "'$REAL_TMUX' -S '$BREAK_SOCK' list-windows -t oc -F '#{@fleet_id}' 2>/dev/null | grep -qx '$f1'" \
+    || { WHY="the killed issue-1 did not come back: $(grep pullback "$WORK/econf/restore/restore.log" 2>/dev/null | tail -3 | tr '\n' ' ')"; return 1; }
+  until_ok "$CAP" grep -q -- '--resume sid-1' "$WORK/claude-argv" 2>/dev/null || { WHY="issue-1 came back without its conversation (--resume sid-1)"; return 1; }
+  SECS=$(since "$t0")
+  wins=$(nt list-windows -t oc -F '#{window_name}' | sort | tr '\n' ' ')
+  [ "$wins" = "home issue-1 " ] || { WHY="after the tick the fleet has [$wins], want [home issue-1 ] (the fleet's own close stays closed)"; return 1; }
+  grep -q 'sid-1.*reason=killed-window' "$led" 2>/dev/null || { WHY="/fleet-history has no reason=killed-window row: [$(cat "$led" 2>/dev/null)]"; return 1; }
+  auto PATH="$WORK/gbin:$WORK/tbin:$PATH" FLEET_HISTORY_LEDGER="$led"     # a second tick: nothing doubles
+  [ "$(nt list-windows -t oc -F '#{window_name}' | grep -c '^issue-1$')" = 1 ] || { WHY="a second tick opened issue-1 twice"; return 1; }
+  WHAT="被删的 issue-1 下一拍以原对话回来，/fleet-history 记 reason=killed-window；fleet 自己关的 issue-2 不拉回（节拍 60s 另计）"
 }
 
 # ===================================================== client: the sandbox =======
