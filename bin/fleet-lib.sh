@@ -7229,28 +7229,36 @@ fleet_child_busy() {
 # by every install-apply and every team apply). The two differ ⇒ the session runs
 # an old configuration: the sidebar marks it 配置旧, the doctor counts it, and
 # fleet-cfg-restart.sh reopens it once it has been idle long enough.
+# The file's `ver <sha12>` line (issue #1895, EPIC #1906 C2) is the fleet version a
+# fresh session gets — the version directory ~/.claude/fleet points at (C1), else
+# the install's git HEAD; the launcher stamps the one it ran as @agent_ver.
 # fleet_cfg_expected_load — read that file ONCE into FCFG_EXP_CLAUDE /
-# FCFG_EXP_CODEX (no fork: the rows producer runs it per frame).
+# FCFG_EXP_CODEX / FCFG_EXP_VER (no fork: the rows producer runs it per frame).
 fleet_cfg_expected_load() {
-  FCFG_EXP_CLAUDE=''; FCFG_EXP_CODEX=''
+  FCFG_EXP_CLAUDE=''; FCFG_EXP_CODEX=''; FCFG_EXP_VER=''
   local f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/agent-cfg.expected" ag fp _rest
   [ -f "$f" ] || return 0
   while read -r ag fp _rest; do
-    case "$ag" in claude) FCFG_EXP_CLAUDE=$fp ;; codex) FCFG_EXP_CODEX=$fp ;; esac
+    case "$ag" in claude) FCFG_EXP_CLAUDE=$fp ;; codex) FCFG_EXP_CODEX=$fp ;; ver) FCFG_EXP_VER=$fp ;; esac
   done < "$f"
   return 0
 }
-# fleet_cfg_state <agent> <fp> → FCFG_STATE = stale | ok | unknown (no fork,
-# nothing printed). <agent> is @cc_agent (`codex`, `codex:…` as the rows format
-# spells it, else Claude); <fp> the window's @agent_cfg. No fingerprint on the
-# window (a session from before #1782, FLEET_AGENT_CFG=0, a plain shell) or none
-# expected ⇒ unknown — never stale: a window we cannot judge is never reopened.
+# fleet_cfg_state <agent> <fp> <ver> → FCFG_STATE = stale | renew | ok | unknown
+# (no fork, nothing printed). <agent> is @cc_agent (`codex`, `codex:…` as the rows
+# format spells it, else Claude); <fp> the window's @agent_cfg, <ver> its
+# @agent_ver. No fingerprint on the window (a session from before #1782,
+# FLEET_AGENT_CFG=0, a plain shell) or none expected ⇒ unknown — never stale: a
+# window we cannot judge is never reopened. A different fingerprint ⇒ stale
+# (配置旧: the definition changed). The same one on an older fleet version ⇒ renew
+# (待换新, issue #1895) — a window with no @agent_ver was launched before #1895,
+# so it is older than any expected ver; no `ver` line expected ⇒ never renew.
 fleet_cfg_state() {
   local exp
   case "${1:-}" in codex|codex:*) exp=${FCFG_EXP_CODEX:-} ;; *) exp=${FCFG_EXP_CLAUDE:-} ;; esac
   if [ -z "${2:-}" ] || [ -z "$exp" ]; then FCFG_STATE=unknown
-  elif [ "$2" = "$exp" ]; then FCFG_STATE=ok
-  else FCFG_STATE=stale; fi
+  elif [ "$2" != "$exp" ]; then FCFG_STATE=stale
+  elif [ -n "${FCFG_EXP_VER:-}" ] && [ "${3:-}" != "$FCFG_EXP_VER" ]; then FCFG_STATE=renew
+  else FCFG_STATE=ok; fi
 }
 # fleet_cfg_restart_why <session> <win> [idle-secs] — may <win> be reopened onto
 # the current configuration NOW (issue #1783)? Exit 0 = yes. Else exit 1 and ONE
@@ -7258,25 +7266,26 @@ fleet_cfg_state() {
 # state:<s> · recent · asleep · looping · bg. The ONE judge — fleet-cfg-restart.sh
 # picks with it and fleet-migrate.sh --cfg-stale asks it again right before /exit,
 # so a session that started a turn in between is never interrupted. Only a Claude
-# session whose @agent_cfg differs from the expected one, `done` for <idle-secs>
+# session whose @agent_cfg differs from the expected one — or whose @agent_ver
+# does (待换新, issue #1895: the two are reopened alike) — `done` for <idle-secs>
 # (FLEET_CFG_RESTART_IDLE, 600), with no /loop round held and no Bash-tool job
 # still running. needs/blocked never qualify: a pending question is the
 # operator's, and a reopen would drop it.
 fleet_cfg_restart_why() {
-  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp st ts lp slp rem hub nm bin
+  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp slp rem hub nm bin
   case "$idle" in ''|*[!0-9]*) idle=600 ;; esac
   o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
-        '#{@cc_agent}|#{@agent_cfg}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@sleep_since}|#{@remote}|#{@hub}|#{window_name}' 2>/dev/null) \
+        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@sleep_since}|#{@remote}|#{@hub}|#{window_name}' 2>/dev/null) \
     && [ -n "$o" ] || { echo gone; return 1; }
   # parameter expansion, not a here-string: this lib is sourced by plain sh too
-  ag=${o%%|*}; o=${o#*|}; fp=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}
+  ag=${o%%|*}; o=${o#*|}; fp=${o%%|*}; o=${o#*|}; av=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}
   ts=${o%%|*}; o=${o#*|}; lp=${o%%|*}; o=${o#*|}; slp=${o%%|*}; o=${o#*|}
   rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; nm=${o#*|}
   case "$nm" in dash|plan|backlog|home) echo panel; return 1 ;; esac
   [ -z "$rem" ] && [ "$hub" != 1 ] || { echo remote; return 1; }
   [ "$ag" != codex ] || { echo codex; return 1; }
-  fleet_cfg_expected_load; fleet_cfg_state "$ag" "$fp"
-  [ "$FCFG_STATE" = stale ] || { echo "$FCFG_STATE"; return 1; }
+  fleet_cfg_expected_load; fleet_cfg_state "$ag" "$fp" "$av"
+  case "$FCFG_STATE" in stale|renew) ;; *) echo "$FCFG_STATE"; return 1 ;; esac
   [ -z "$slp" ] || { echo asleep; return 1; }
   [ "$st" = "done" ] || { echo "state:${st:-none}"; return 1; }
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac

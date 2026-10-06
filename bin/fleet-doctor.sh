@@ -2323,10 +2323,18 @@ if [ -f "$_at" ] && command -v python3 >/dev/null 2>&1; then
              --override "$conf_dir/agent-overrides.json" --lock "${_alock:-warn}" $_amodf 2>&1)"; _crc=$?
   # …and how many open sessions still run an OLDER configuration than that one
   # (issue #1783): marked 配置旧 on the sidebar, reopened once idle
-  # (fleet-cfg-restart.sh, FLEET_CFG_RESTART). Never a WARN on its own — right
-  # after a sync every session is stale until its idle reopen.
-  _cst=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-cfg-restart.sh" --count 2>/dev/null)
-  case "$_cst" in ''|*[!0-9]*|0) ;; *) _cout="$_cout · $_cst 个会话配置旧 / $_cst session(s) on an old configuration" ;; esac
+  # (fleet-cfg-restart.sh, FLEET_CFG_RESTART) — counted apart from those on the
+  # same configuration but an older fleet version (待换新, issue #1895), reopened
+  # alike. Never a WARN on its own — right after a sync every session is stale
+  # until its idle reopen.
+  _cst=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-cfg-restart.sh" --counts 2>/dev/null)
+  _cold=${_cst%% *}; _cnew=${_cst#* }
+  case "$_cold" in ''|*[!0-9]*) _cold=0 ;; esac
+  case "$_cnew" in ''|*[!0-9]*) _cnew=0 ;; esac
+  if [ "$_cold" != 0 ] || [ "$_cnew" != 0 ]; then
+    _cout="$_cout · 待换新 $_cnew · 配置旧 $_cold / $_cnew session(s) on an older fleet version, $_cold on an old configuration"
+  fi
+  unset _cst _cold _cnew
   case "$_crc" in
     0) pass agentcfg "${_cout#ok }" ;;
     1) warn agentcfg "$_cout (fix: drop the login's own value, or remove it from $conf_dir/agent-overrides.json — these are what fleet itself runs on)" ;;

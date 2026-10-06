@@ -8,7 +8,9 @@
 # They differ after a stable move or a team-config change, and the dozen sessions
 # still open quietly keep running the old one — so "did it reopen?" became the
 # first thing to rule out whenever something misbehaved. The sidebar marks such a
-# row 配置旧 (tmux-dashboard-rows.sh); this tick reopens it.
+# row 配置旧 (tmux-dashboard-rows.sh); this tick reopens it. A session on the
+# same configuration but an OLDER fleet version (@agent_ver, issue #1895) is
+# marked 待换新 instead, and reopened exactly alike.
 #
 # Each tick (fleet-sleep-daemon.sh, after the reeval), per fleet: the windows whose
 # @agent_cfg differs from the expected one are judged by fleet_cfg_restart_why —
@@ -32,6 +34,8 @@
 #        fleet-cfg-restart.sh --list  [<session>...]   one `sess wid name verdict` row
 #                                                      per stale session
 #        fleet-cfg-restart.sh --count [<session>...]   how many sessions are stale
+#                                                      (配置旧 + 待换新)
+#        fleet-cfg-restart.sh --counts [<session>...]  `<配置旧> <待换新>` (#1895)
 # No session = every live fleet (fleet_sockets). Always exits 0 except on a usage
 # error (2).
 set -uo pipefail
@@ -45,8 +49,9 @@ while [ $# -gt 0 ]; do
     --quiet) QUIET=1 ;;
     --list) MODE=list ;;
     --count) MODE=count ;;
+    --counts) MODE=counts ;;
     --) shift; break ;;
-    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     -*) printf 'fleet-cfg-restart: unknown option %s\n' "$1" >&2; exit 2 ;;
     *) break ;;
   esac
@@ -62,27 +67,28 @@ LOG="$BIN/../logs/cfg-restart.log"
 
 if [ $# -gt 0 ]; then sockets=$*; else sockets=$(fleet_sockets); fi
 fleet_cfg_expected_load
-total=0
+total=0 nstale=0 nrenew=0
 say() { [ -n "$QUIET" ] || printf '%s\n' "$*"; }
 
 for sess in $sockets; do
   # The stale ones first, off ONE list-windows: a compare per window, no fork;
   # only those are judged further.
   stale=''
-  while IFS='|' read -r wid ag fp ts; do
+  while IFS='|' read -r wid ag fp av ts; do
     [ -n "$wid" ] || continue
-    fleet_cfg_state "$ag" "$fp"
-    [ "$FCFG_STATE" = stale ] && stale+="$wid|$fp|$ts"$'\n'
+    fleet_cfg_state "$ag" "$fp" "$av"
+    case "$FCFG_STATE" in stale|renew) stale+="$wid|$fp${av:+/$av}|$ts|$FCFG_STATE"$'\n' ;; esac
   done < <(tmux -L "$sess" list-windows -t "=$sess" \
-             -F '#{window_id}|#{@cc_agent}|#{@agent_cfg}|#{@cfg_restart_ts}' 2>/dev/null)
+             -F '#{window_id}|#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@cfg_restart_ts}' 2>/dev/null)
   [ -n "$stale" ] || continue
   picked=0
-  while IFS='|' read -r wid fp ts; do
+  while IFS='|' read -r wid fp ts st; do
     [ -n "$wid" ] || continue
-    total=$((total + 1))
     nm=$(tmux -L "$sess" display-message -p -t "$wid" '#{window_name}' 2>/dev/null)
-    case "$nm" in dash|plan|backlog|home) total=$((total - 1)); continue ;; esac
-    [ "$MODE" = count ] && continue
+    case "$nm" in dash|plan|backlog|home) continue ;; esac
+    total=$((total + 1))
+    if [ "$st" = renew ]; then nrenew=$((nrenew + 1)); else nstale=$((nstale + 1)); fi
+    case "$MODE" in count|counts) continue ;; esac
     why=$(FLEET_CFG_RESTART_IDLE=$IDLE fleet_cfg_restart_why "$sess" "$wid" "$IDLE") && why=reopen
     if [ "$MODE" = list ]; then printf '%s\t%s\t%s\t%s\n' "$sess" "$wid" "$nm" "$why"; continue; fi
     [ "$why" = reopen ] || continue
@@ -91,11 +97,11 @@ for sess in $sockets; do
     [ $(( $(date +%s) - ts )) -ge "$IDLE" ] || continue        # tried lately: hold off
     if [ "$POLICY" = ask ]; then
       [ "$(tmux -L "$sess" display-message -p -t "$wid" '#{@cfg_asked}' 2>/dev/null)" = "$fp" ] && continue
-      say "ask: $sess:$nm ($wid) runs an old configuration and is idle"
+      say "ask: $sess:$nm ($wid) runs an old configuration or fleet version and is idle"
       [ -n "$DRY" ] && continue
       tmux -L "$sess" set-option -w -t "$wid" @cfg_asked "$fp" 2>/dev/null
       bash "$BIN/fleet-alerts.sh" event -L "$sess" cfg-stale \
-        "$nm: 配置旧，空闲中，可重开（fleet-migrate.sh --cfg-stale） · runs an old configuration" >/dev/null 2>&1 || :
+        "$nm: $([ "$st" = renew ] && printf 待换新 || printf 配置旧)，空闲中，可重开（fleet-migrate.sh --cfg-stale） · runs an old configuration" >/dev/null 2>&1 || :
       continue
     fi
     [ "$picked" -lt "$MAX" ] || { say "later: $sess:$nm ($wid) — $MAX reopen(s) per fleet per tick"; continue; }
@@ -109,4 +115,5 @@ for sess in $sockets; do
   done <<< "$stale"
 done
 [ "$MODE" = count ] && printf '%s\n' "$total"
+[ "$MODE" = counts ] && printf '%s %s\n' "$nstale" "$nrenew"
 exit 0

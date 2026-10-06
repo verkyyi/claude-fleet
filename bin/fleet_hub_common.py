@@ -175,14 +175,14 @@ def inventory_row(parts):
     Column 15 (issue #1750): `born=<epoch>`, the session's birth (@born, else
     window_created) — the ruler every machine's list orders its rows by; prefixed
     the same way, and an adapter older than it simply has none.
-    Column 16 (issue #1783): `cfg=<stale|ok|unknown>`, whether the session's
+    Column 16 (issue #1783): `cfg=<stale|renew|ok|unknown>`, whether the session's
     configuration is the one a fresh session gets on its machine now — the other
     machines' sidebars draw 配置旧 off it."""
     parts = list(parts)
     extra = {}
     if len(parts) >= 16 and parts[-1].startswith("cfg="):
         c = parts.pop()[4:]
-        extra["cfg"] = c if c in ("stale", "ok") else None
+        extra["cfg"] = c if c in ("stale", "renew", "ok") else None
     if len(parts) >= 15 and parts[-1].startswith("born="):
         b = parts.pop()[5:]
         extra["born"] = int(b) if b.isdigit() else None
