@@ -6712,10 +6712,14 @@ FLEET_CC_SESSIONS_DIR="${FLEET_CC_SESSIONS_DIR:-$HOME/.claude/sessions}"
 # those are safe to pass as `-v`.
 fleet_pane_claude_pids() {
   [ "$#" -gt 0 ] || return 0
-  { ps -axo pid=,ppid=,comm=; echo '---CMDS---'; ps -axo pid=,command=; } 2>/dev/null \
+  # A ZOMBIE is skipped (issue #1734): on Linux a process that just exited keeps
+  # its comm (`claude`) until its parent reaps it, so a /exit'ed Claude read as
+  # "another Claude appeared" for the few ms before tmux collected it (macOS shows
+  # `<defunct>`, so it never hit there). fleet_pid_alive already treats Z as gone.
+  { ps -axo pid=,ppid=,stat=,comm=; echo '---CMDS---'; ps -axo pid=,command=; } 2>/dev/null \
   | awk -v panes="$*" -v ccomm="${FLEET_CLAUDE_COMM:-}" '
       /^---CMDS---$/ { sec = 2; next }
-      sec != 2 { if (NF >= 3) { comm[$1] = $3; kids[$2] = kids[$2] " " $1 } next }
+      sec != 2 { if (NF >= 4 && index($3, "Z") == 0) { comm[$1] = $4; kids[$2] = kids[$2] " " $1 } next }
       { p = $1; $1 = ""; cmd[p] = " " substr($0, 2) " " }
       function base(s,   k) { k = s; sub(/^.*\//, "", k); return k }
       # BFS from the pane pid, in the same order the shell form used. `gen` stands

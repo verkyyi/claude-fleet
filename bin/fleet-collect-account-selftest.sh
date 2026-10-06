@@ -53,6 +53,7 @@ cat > "$WORK/fake/ps" <<'FAKE'
 #!/bin/sh
 printf '%s\n' "$*" >> "$PSLOG"
 case "$*" in
+  *stat=,comm=*) printf '101 1 Ss zsh\n201 101 S claude\n102 1 Ss zsh\n202 102 S claude\n103 1 Ss zsh\n203 103 S codex\n104 1 Ss zsh\n204 104 S claude\n105 1 Ss zsh\n205 105 S claude\n106 1 Ss zsh\n206 106 S claude\n107 1 Ss zsh\n207 107 S claude\n108 1 Ss zsh\n208 108 S claude\n109 1 Ss zsh\n209 109 S claude\n' ;;
   *comm=*) printf '101 1 zsh\n201 101 claude\n102 1 zsh\n202 102 claude\n103 1 zsh\n203 103 codex\n104 1 zsh\n204 104 claude\n105 1 zsh\n205 105 claude\n106 1 zsh\n206 106 claude\n107 1 zsh\n207 107 claude\n108 1 zsh\n208 108 claude\n109 1 zsh\n209 109 claude\n' ;;
   *command=*) printf '101 zsh\n201 claude\n102 zsh\n202 claude\n103 zsh\n203 codex\n104 zsh\n204 claude\n105 zsh\n205 claude\n106 zsh\n206 claude\n107 zsh\n207 claude\n108 zsh\n208 claude\n109 zsh\n209 claude\n' ;;
 esac
