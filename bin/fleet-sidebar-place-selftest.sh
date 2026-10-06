@@ -26,6 +26,9 @@
 #   F. held elsewhere (HELD, exit 3): 已在 m5 上跑 · y 切过去 → y steps into the
 #      m5 row of that issue
 #   G. degenerate: nothing in the list says 这台电脑上没有 fleet any more
+#   (pure) an empty list (issue #1927): no hub_repos → the old toast; one repo
+#      in it → straight to 「开在哪」; two → the repo menu; none → who to ask;
+#      headings present → hub_repos is never read
 # Plus the pure parts, imported: where_menu with an 11-field hub_nodes (an older
 # loop: nothing greyed but what is lost), fleet_status_hub_node still reading
 # ver_state off a 13-field line.
@@ -104,12 +107,33 @@ os.rename(g + "/hub_nodes.13", g + "/hub_nodes")
 rows = [["hdr", "acme/app", "", "app"], ["wid:U/issue-7", "working", "*", "seven", "", "", "0", "", "m5", "7", "", ""],
         ["hdr", "acme/web", "", "web"]]
 print("repos", m.shell_repos(rows), m.repo_of(rows, "wid:U/issue-7"), m.repo_of(rows, "hdr:acme/web"))
+# An empty list (issue #1927): the hub's hub_repos stands in for the headings.
+def first(label, verb, rows=[]):
+    ask, toast = m.place_start(verb, rows, "", name="tea")
+    print(label, ask and ask.kind, ask and ask.plan.get("repo"), ask and [v for v, *_ in ask.menu], toast)
+first("e0", "scratch")
+with open(g + "/hub_repos", "w") as f:
+    f.write("#ts\x1f1\nacme/solo\n")
+first("e1", "scratch")
+first("e1rows", "scratch", rows)     # headings present: hub_repos never read
+with open(g + "/hub_repos", "w") as f:
+    f.write("#ts\x1f1\nacme/a\nacme/b\n")
+first("e2", "scratch")
+with open(g + "/hub_repos", "w") as f:
+    f.write("#ts\x1f1\n")
+first("e3", "new")
+os.unlink(g + "/hub_repos")
 PY
 )
 has 'pure: 自动 first' "$pure" "menu [('auto', '自动（入口挑最闲的）', '推荐', False)"
 has 'pure: m4 (1 running) before m5 (3)' "$pure" "('mac-mini-m4.local', 'm4', '1 个在跑', False), ('m5.local', 'm5', '3 个在跑', False), ('MacBook-Pro.local', 'mbp', '只协调', True)"
 has 'pure: an 11-field cache — its label is the node, a lost one greyed' "$pure" "old [('auto', '推荐', False), ('m5', '2 个在跑', False), ('m6', '失联', True)]"
 has 'pure: the repos from the headings, a row in the heading above it' "$pure" "repos ['acme/app', 'acme/web'] acme/app acme/web"
+has 'empty list, no hub_repos: the old toast, byte for byte' "$pure" "e0 None None None 还没有仓库：侧栏里先要有一个仓库的会话"
+has 'empty list + one hub repo: straight to 「开在哪」' "$pure" "e1 place-where acme/solo ['auto', 'mac-mini-m4.local', 'm5.local', 'MacBook-Pro.local'] "
+has 'headings present: the repo menu from them, hub_repos unread' "$pure" "e1rows place-repo  ['acme/app', 'acme/web'] "
+has 'empty list + two hub repos: the repo menu' "$pure" "e2 place-repo  ['acme/a', 'acme/b'] "
+has 'the hub says none: who to ask' "$pure" "e3 None None None 你还没有能开会话的机器：请入口管理员给你分一台"
 vst=$(FLEET_STATUS_G="$FLEET_STATUS_G" bash -c '. "$1/fleet-status-lib.sh"; fleet_status_hub_node mbp; printf "%s|%s" "$HN_VST" "$HN_SESS"' _ "$SB")
 eq 'fleet_status_hub_node: ver_state off a 13-field line' 'ok|0' "$vst"
 

@@ -822,6 +822,19 @@ def shell_repos(rows):
     return out
 
 
+def hub_repos():
+    """The repos the hub says this person's machines host (issue #1927):
+    fleet-hub-sessions.sh's global/hub_repos, one per line under its `#ts`
+    line. None when there is no file (no hub, or a round that never stood);
+    [] when the hub answered and no machine of theirs hosts one."""
+    try:
+        with open(os.path.join(status_dir(), "hub_repos"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    return [r for r in lines if r and not r.startswith("#") and "/" in r]
+
+
 def repo_of(rows, key):
     """The repo a highlighted row is in: a heading's own, else the nearest
     heading above the row. "" when neither names one."""
@@ -845,7 +858,14 @@ def place_start(verb, rows, anchor, name="", pin=False):
         return None, tr("sidebar_place_hubdown")
     repos = shell_repos(rows)
     if not repos:
-        return None, tr("sidebar_place_norepo")
+        # An empty list (a newcomer's first look, issue #1927): the repos the
+        # hub says their machines host; none there is a person no machine
+        # was given to yet — say who to ask.
+        repos = hub_repos()
+        if repos is None:
+            return None, tr("sidebar_place_norepo")
+        if not repos:
+            return None, tr("sidebar_place_nohost")
     plan = {"verb": verb, "name": name, "repo": repo_of(rows, anchor)}
     if (pin and plan["repo"]) or len(repos) == 1:
         plan["repo"] = plan["repo"] or repos[0]

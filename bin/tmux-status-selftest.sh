@@ -27,7 +27,7 @@
 #      → nothing; an unreadable hub_ok → the #ts
 #   F  the window list: blank on entering hub mode (formats saved), restored on
 #      leaving; no tmux call when there is nothing to do — on an ISOLATED server
-#   G  fleet-hub-sessions.sh --refresh writes hub_nodes / hub_limits from the
+#   G  fleet-hub-sessions.sh --refresh writes hub_nodes / hub_limits (+ hub_repos, #1927) from the
 #      seams: the alias, mem %, newest login's version, the uuid → local label
 #      map, rounding, skipped rows; a failed fetch keeps the last file; off
 #      (CCQUOTA_FLEET unset) writes nothing; their own cadence (FLEET_HUB_SUMMARY_EVERY);
@@ -324,6 +324,14 @@ LIVEDIR="$WORK/nostable" hubs; rows=$(tr '\037' '|' < "$G/hub_nodes")
 eq "G: a checkout with no refs/tags/stable → every word empty" 0 "$(printf '%s\n' "$rows" | awk -F'|' 'NR > 1 && $11 != ""' | grep -c .)"
 hubs; rows=$(tr '\037' '|' < "$G/hub_nodes")
 eq "G: … and back with the tag" "$C1|old:1" "$(vw box3)"
+# hub_repos (issue #1927): the repos the machines' fleets host, for an empty list
+[ -e "$G/hub_repos" ] && fail "G: a hub older than \`repos\` (no key) wrote hub_repos"; CHECKS=$((CHECKS+1))
+NCMD="printf '%s' '{\"machines\":[{\"hostname\":\"a\",\"status\":\"online\",\"repos\":[\"acme/web\",\"acme/api\"]},{\"hostname\":\"b\",\"status\":\"online\",\"repos\":[\"acme/web\",\"bad repo\"]}]}'" hubs
+eq "G: hub_repos — #ts, then each repo once, sorted, a malformed one dropped" "#ts|acme/api|acme/web" "$(tr '\037' '|' < "$G/hub_repos" | sed '1s/|[0-9]*$//' | tr '\n' '|' | sed 's/|$//')"
+NCMD="printf '%s' '{\"machines\":[{\"hostname\":\"a\",\"status\":\"online\",\"repos\":[]}]}'" hubs
+eq "G: a hub that says none → hub_repos holds only #ts" "1" "$(grep -c . "$G/hub_repos")"
+hubs; [ -e "$G/hub_repos" ] && fail "G: back to an older hub → hub_repos removed"; CHECKS=$((CHECKS+1))
+hubs; rows=$(tr '\037' '|' < "$G/hub_nodes")
 lrows=$(tr '\037' '|' < "$G/hub_limits")
 has "G: a uuid this login has an accounts/<label>.conf for → that label; 65.4 → 65" "icloud|63|65|7a7e6173-f07c-490f-844e-00c27c3f0844|ylianghui@icloud.com" "$lrows"
 has "G: an unmapped uuid → the hub's label" "verky@24helpful.com|17|6|e69154ac|verky@24helpful.com" "$lrows"

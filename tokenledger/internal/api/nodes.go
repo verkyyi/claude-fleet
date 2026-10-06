@@ -555,6 +555,12 @@ type MachineView struct {
 	// (claude-fleet#1427): Status reads maintenance while any login is heard,
 	// lost when none is.
 	Maintenance *Maintenance `json:"maintenance,omitempty"`
+	// Repos is every repo a registered fleet on the machine hosts
+	// (store.FleetRow.HostedRepos, the list placement checks), over the
+	// logins the reader may see (claude-fleet#1927): a newcomer's empty list
+	// still knows which repo a first session can open in. Always present
+	// ([] for none), so a client tells "hosts none" from an older hub.
+	Repos []string `json:"repos"`
 }
 
 // NodesSnapshot is the body of /v1/nodes.
@@ -644,7 +650,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		m := machines[v.Hostname]
 		if m == nil {
 			zero := 0
-			m = &MachineView{Hostname: v.Hostname, Status: "lost", Kind: v.Kind, Sessions: &zero}
+			m = &MachineView{Hostname: v.Hostname, Status: "lost", Kind: v.Kind, Sessions: &zero, Repos: []string{}}
 			machines[v.Hostname] = m
 			order = append(order, v.Hostname)
 		}
@@ -680,8 +686,24 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			m.Load1, m.NCPU, m.MemFree, m.MemTotal = v.Load1, v.NCPU, v.MemFreeBytes, v.MemTotalBytes
 		}
 	}
+	// The repos each machine hosts (claude-fleet#1927): one read of the
+	// fleet registry, narrowed exactly as the roster is.
+	if fleets, err := s.Store.Fleets(); err == nil {
+		for _, r := range fleets {
+			m := machines[r.Hostname]
+			if m == nil || !r.Present || (visible != nil && !visible(r.Hostname, r.OSUser)) {
+				continue
+			}
+			for _, repo := range r.HostedRepos() {
+				if !hasString(m.Repos, repo) {
+					m.Repos = append(m.Repos, repo)
+				}
+			}
+		}
+	}
 	sort.Strings(order)
 	for _, h := range order {
+		sort.Strings(machines[h].Repos)
 		out.Machines = append(out.Machines, *machines[h])
 	}
 	out.Spot = s.spotSummary(now, out.Nodes)

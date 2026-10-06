@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // The status bar's two summaries by connection certificate (claude-fleet#1502).
@@ -118,5 +120,64 @@ func TestFleetSummaryByCertificate(t *testing.T) {
 	ms, as = summaryKeys(out)
 	if code != 200 || len(ms) != 2 || len(as) != 2 {
 		t.Fatalf("operator: HTTP %d %s, want both machines and both subscriptions", code, raw)
+	}
+}
+
+// Each machine carries the repos its registered fleets host (claude-fleet#1927),
+// narrowed like the machines: a newcomer whose list is still empty learns
+// which repo a first session opens in from their own machines only; a fleet
+// no longer configured adds nothing; a machine with no fleet carries [].
+func TestFleetSummaryCarriesHostedRepos(t *testing.T) {
+	h := newFleetHarness(t)
+	k := newCertKit(t)
+	h.srv.SSHCA = sshca.New(k.ca)
+	now := time.Now()
+	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
+	h.srv.Store.AdoptAccount(p, "m5", now)
+	a := connectNode(t, h, "m5-alice", "m5", "alice", false)
+	b := connectNode(t, h, "m4-bob", "m4", "bob", false)
+	connectNode(t, h, "m3-bob", "m3", "bob", false)
+	waitFor(t, 3*time.Second, "three nodes", func() bool { return len(roster(t, h).Nodes) == 3 })
+	if _, err := h.srv.Store.RecordFleetSnapshot(a.id, "m5", "alice", "mach-m5", []store.FleetReport{
+		{FleetID: "11111111-1111-4111-8111-111111111111", Name: "f1", Repo: "acme/web", Repos: []string{"acme/web", "acme/api"}, Checkout: "/c"},
+		{FleetID: "22222222-2222-4222-8222-222222222222", Name: "f2", Repo: "acme/web", Checkout: "/d"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.srv.Store.RecordFleetSnapshot(b.id, "m4", "bob", "mach-m4", []store.FleetReport{
+		{FleetID: "33333333-3333-4333-8333-333333333333", Name: "f3", Repo: "bob/secret", Checkout: "/e"},
+		{FleetID: "44444444-4444-4444-8444-444444444444", Name: "f4", Repo: "bob/old", Checkout: "/f"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	// m4's second snapshot drops a fleet it used to report: present=0, not hosted.
+	if _, err := h.srv.Store.RecordFleetSnapshot(b.id, "m4", "bob", "mach-m4", []store.FleetReport{
+		{FleetID: "33333333-3333-4333-8333-333333333333", Name: "f3", Repo: "bob/secret", Checkout: "/e"}}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	good := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
+	ts := now.Unix()
+	req := SummaryRequest{Cert: string(ssh.MarshalAuthorizedKey(good)), TS: ts,
+		Sig: sshsig(t, k.user, control.SummarySigNamespace, []byte(control.SummarySigMessage(ts)))}
+	code, out, raw := postSummary(t, h, nil, req)
+	if code != 200 || len(out.Machines) != 1 {
+		t.Fatalf("alice: HTTP %d %s, want her one machine", code, raw)
+	}
+	if got := strings.Join(out.Machines[0].Repos, ","); got != "acme/api,acme/web" {
+		t.Fatalf("m5 repos = %q, want acme/api,acme/web", got)
+	}
+
+	code, out, raw = postSummary(t, h, asOperator, nil)
+	if code != 200 {
+		t.Fatalf("operator: HTTP %d %s", code, raw)
+	}
+	got := map[string]string{}
+	for _, m := range out.Machines {
+		got[m.Hostname] = strings.Join(m.Repos, ",")
+	}
+	if got["m4"] != "bob/secret" || got["m5"] != "acme/api,acme/web" || got["m3"] != "" {
+		t.Fatalf("operator repos = %v", got)
+	}
+	if strings.Contains(raw, `"repos":null`) || strings.Count(raw, `"repos":`) < 3 {
+		t.Fatalf("every machine carries repos, [] for none (an older hub sends no key): %s", raw)
 	}
 }

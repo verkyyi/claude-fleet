@@ -300,6 +300,8 @@ fleet_ui_t() {
     en:sidebar_place_draft_fmt) printf 'scratch %s' "${1:-}" ;;
     zh:sidebar_place_norepo)    printf '还没有仓库：侧栏里先要有一个仓库的会话' ;;
     en:sidebar_place_norepo)    printf 'no repo yet: the list shows none to open in' ;;
+    zh:sidebar_place_nohost)    printf '你还没有能开会话的机器：请入口管理员给你分一台' ;;
+    en:sidebar_place_nohost)    printf 'no machine of yours hosts a repo yet: ask the hub admin for one' ;;
     zh:sidebar_place_hubdown)   printf '入口连不上，暂时不能新建' ;;
     en:sidebar_place_hubdown)   printf 'the hub is unreachable — nothing can be opened now' ;;
     zh:sidebar_place_opening_fmt) printf '正在 %s 上开…' "${1:-}" ;;
