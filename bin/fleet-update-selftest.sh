@@ -113,7 +113,7 @@ mv "$GH/api.off" "$GH/api"
 # --- C. 接 a hub that is never redeployed ---------------------------------------
 HUBD="$WORK/hub"; mkdir -p "$HUBD/proxy"
 ln -s "$GH/raw/$S2" "$HUBD/proxy/$S2"; ln -s "$GH/raw/$S3" "$HUBD/proxy/$S3"   # /install/stable/<sha> stand-in
-python3 - "$HUBD" "$WORK/port" <<'PY' >/dev/null 2>&1 &
+python3 - "$HUBD" "$WORK/port" <<'PY' >"$WORK/srv.log" 2>&1 &
 import functools, http.server, os, signal, sys
 signal.alarm(600)   # never outlives the test
 h = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
@@ -125,8 +125,9 @@ os.replace(sys.argv[2] + ".tmp", sys.argv[2])
 srv.serve_forever()
 PY
 SRV_PID=$!
-for _ in $(seq 1 50); do [ -s "$WORK/port" ] && break; sleep 0.1; done
-HUB="http://127.0.0.1:$(cat "$WORK/port" 2>/dev/null)"
+for _ in $(seq 1 300); do [ -s "$WORK/port" ] && break; sleep 0.1; done   # a cold CI runner is slow
+[ -s "$WORK/port" ] || { echo "FAIL C/D: the loopback hub never started"; exit 1; }
+HUB="http://127.0.0.1:$(cat "$WORK/port")"
 # hub_version <sha> [<client_url>] — what the hub's stable lookup reports
 hub_version() {
   printf '{"version":"prod-abc1234","commit":"abc1234","client_version":"%s","stable":"%s","client_url":"%s","client_compat":1,"min_client_compat":0}\n' \
