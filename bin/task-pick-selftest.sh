@@ -4,7 +4,8 @@
 # real client on a pty — never the operator's live server.
 #
 #   * at 90 columns the task bar is not there (fleet-sidebar.sh sync hides it);
-#   * `prefix Space` opens the picker as a popup, @popup_open raised while it is up;
+#   * `prefix Space` (the node's key until #1714 — a fixture here, #1739) opens
+#     the picker as a popup, @popup_open raised while it is up;
 #   * the list is the task bar's — tasks only, no hub/backlog panel windows;
 #   * picking the 2nd row makes that task the current window, @popup_open back to 0;
 #   * a typed name + the dash's scratch key hands the name to dash-raw-session.sh;
@@ -152,12 +153,19 @@ try:
     tm('set-option', '-w', '-t', w2, '@claude_state', 'idle')
     tm('new-window', '-d', '-n', 'backlog', 'sleep 600')
 
-    # The shipped binds, pointed at the sandbox; `sh` → `bash --posix` as
-    # hub-zoom-home-selftest.sh does (CI's /bin/sh is dash, issue #414).
-    shipped = (bin_dir.parent / 'conf/tmux-attention.conf').read_text()
-    wanted = [l for l in shipped.splitlines()
-              if l.startswith(('bind Space ', 'bind E ', 'bind -n F9 ', 'bind -T fleet-sidebar F9 '))]
-    check(len(wanted) == 4, 'conf lost one of: bind Space / bind E / bind -n F9 / fleet-sidebar F9')
+    # The binds that drove the picker, pointed at the sandbox; `sh` → `bash --posix`
+    # as hub-zoom-home-selftest.sh does (CI's /bin/sh is dash, issue #414). A NODE
+    # binds none of them since issue #1714 (the person's keys are the client's), so
+    # they are this test's own fixture until the picker chain retires (#1739).
+    node = (bin_dir.parent / 'conf/tmux-attention.conf').read_text()
+    check(not [l for l in node.splitlines()
+               if l.startswith(('bind -n F9 ', 'bind -T fleet-sidebar ')) or 'fleet-task-pick' in l
+               or ('bind Space ' in l and 'next-layout' not in l)],
+          'the node conf binds a key to the picker chain again (#1714)')
+    wanted = r'''bind E if -F '#{&&:#{@sidebar_worker},#{!=:#{window_zoomed_flag},1}}' { switch-client -T fleet-sidebar ; run-shell "bash ~/.claude/fleet/bin/fleet-sidebar.sh key '#{session_id}' Escape >/dev/null 2>&1 || :" ; run-shell -b "sh ~/.claude/fleet/bin/fleet-ui-lang.sh hint '#{client_name}' toast_sidebar_focus >/dev/null 2>&1 || :" } { run-shell "bash ~/.claude/fleet/bin/fleet-sidebar.sh home '' g '#{client_name}' >/dev/null 2>&1 || :" }
+bind Space run-shell "bash ~/.claude/fleet/bin/fleet-sidebar.sh home '' g '#{client_name}' >/dev/null 2>&1 || :"
+bind -T fleet-sidebar F9 run-shell "sh ~/.claude/fleet/bin/hub-zoom.sh --nav --client '#{client_name}'"
+bind -n F9 run-shell "sh ~/.claude/fleet/bin/hub-zoom.sh --client '#{client_name}'"'''.splitlines()
     fixture = work / 'pick.conf'
     fixture.write_text('\n'.join(wanted).replace('~/.claude/fleet', str(root))
                        .replace('run-shell "sh ', 'run-shell "bash --posix ') + '\n')

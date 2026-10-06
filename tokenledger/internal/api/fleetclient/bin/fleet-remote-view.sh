@@ -15,8 +15,9 @@
 # It is a TASK WINDOW of this machine (issue #1475): the local sidebar treats a
 # window with `@remote` like an issue worker's, so the list stays on the left and
 # the other machine's pane is on the right — never the whole window gone remote,
-# never two lists. `prefix h` (conf/tmux-attention.conf → `back`) returns to the
-# last local window; ↑↓ in the list do too.
+# never two lists. `prefix h` / `prefix q` (conf/tmux-shell.conf: last-window)
+# return to the machine you were on; ↑↓ in the list do too. `back` is kept for a
+# direct attach; the node binds no key to it since issue #1714.
 #
 #   open <worker_id>        (dash Enter, in a fleet pane) — open the proxy window
 #                           for the row's machine, or retarget + select the one

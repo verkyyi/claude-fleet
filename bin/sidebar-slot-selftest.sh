@@ -18,8 +18,9 @@
 #   F. sync, list off  — every slot goes (conf/fleet-sidebar.sh hide)
 #   G. sync, window    — a slot in a window with no content left goes, so it
 #                        never holds a closed proxy window open
-#   H. conf            — after-select-pane bounces off a slot in both confs
-#                        (conf/tmux-shell.conf, conf/tmux-attention.conf)
+#   H. conf            — after-select-pane bounces off a slot in the client's
+#                        conf (conf/tmux-shell.conf); a node's draws no list
+#                        and drops the hook (issue #1714)
 # Real tmux on an isolated socket via a PATH shim. Exit 0 = pass.
 set -uo pipefail
 # The list is drawn on a fleet socket here: on a real node it is the client's
@@ -166,8 +167,8 @@ rc=$?
 
 # H. a click on a slot never leaves it the window's active pane — the proxy's
 # respawn targets the window's active pane (fleet-remote-view.sh).
-for c in tmux-shell.conf tmux-attention.conf; do
-  grep -q "after-select-pane.*@sidebar_slot.*last-pane" "$BIN/../conf/$c" \
-    || { echo "FAIL: H: $c's after-select-pane does not bounce off a slot"; exit 1; }
-done
+grep -q "after-select-pane.*@sidebar_slot.*last-pane" "$BIN/../conf/tmux-shell.conf" \
+  || { echo "FAIL: H: tmux-shell.conf's after-select-pane does not bounce off a slot"; exit 1; }
+grep -Eq '^set-hook -gu after-select-pane\[71\]$' "$BIN/../conf/tmux-attention.conf" \
+  || { echo "FAIL: H: tmux-attention.conf must drop the list's after-select-pane hook (#1714)"; exit 1; }
 echo 'selftest PASS: H conf hooks'

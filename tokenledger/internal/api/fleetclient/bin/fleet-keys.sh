@@ -3,8 +3,9 @@
 # of truth for EVERY fleet shortcut, grouped by context:
 #   tmux prefix binds · task sidebar · dashboard fzf · backlog fzf · config modal fzf.
 #
-# Opened by `prefix ?` (a fleet popup; see conf/tmux-attention.conf) and by a
-# `?` bind inside the dash/backlog. The popup closes on q/esc.
+# Opened by `prefix ?` in the client (a popup; see conf/tmux-shell.conf — the
+# person's keys live only there since issue #1714) and by a `?` bind inside the
+# dash/backlog. The popup closes on q/esc.
 #
 # Context scoping (issue #265): the global `prefix ?` shows the WHOLE sheet, but
 # when opened from INSIDE a panel it shows only the shortcuts that apply there —
@@ -25,7 +26,7 @@
 #                                    #   also implied when stdout is not a tty
 #
 # Drift guard: bin/fleet-keys-selftest.sh cross-checks the keys listed here
-# against the binds actually shipped in conf/tmux-attention.conf + the dash/
+# against the binds actually shipped in conf/tmux-shell.conf + the dash/
 # backlog fzf --binds, so this sheet can't silently go stale.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -152,23 +153,16 @@ print_sheet() {
 
   if want prefix; then
   group "$(fleet_ui_t keys_g_prefix)" "$(fleet_ui_t keys_g_prefix_sub)"
-  key "prefix a" "$(fleet_ui_t keys_prefix_01)"
-  key "prefix g" "$(fleet_ui_t keys_prefix_02)"
-  key "prefix e" "$(fleet_ui_t keys_prefix_03)"
   key "prefix E" "$(fleet_ui_t keys_prefix_04)"
+  key "prefix g" "$(fleet_ui_t keys_prefix_02)"
+  key "prefix Space" "$(fleet_ui_t keys_prefix_06)"
+  key "prefix q" "$(fleet_ui_t keys_prefix_05)"
   key "prefix h" "$(fleet_ui_t keys_prefix_05)"
-  key "prefix Space" "$(fleet_ui_t keys_prefix_06 "$(dg scratch)")$(dn scratch)"
-  key "prefix b" "$(fleet_ui_t keys_prefix_07)"
-  key "prefix c" "$(fleet_ui_t keys_prefix_08)"
   key "prefix z" "$(fleet_ui_t keys_prefix_09)"
   key "prefix [" "$(fleet_ui_t keys_prefix_10)"
-  key "prefix u" "$(fleet_ui_t keys_prefix_11)"
-  key "prefix !" "$(fleet_ui_t keys_prefix_12)"
   key "prefix ?" "$(fleet_ui_t keys_prefix_13)"
   key "F9" "$(fleet_ui_t keys_prefix_14)"
   key "fleet guide" "$(fleet_ui_t keys_prefix_15)"
-  key "click ● N" "$(fleet_ui_t keys_prefix_16)"
-  key "click ✖ / ▲" "$(fleet_ui_t keys_prefix_17)"
   fi
 
   if want sidebar; then
@@ -194,7 +188,6 @@ print_sheet() {
   key "$(dg view)" "$(fleet_ui_t keys_sidebar_19)$(dn view)"
   key "$(dg reload)" "$(fleet_ui_t keys_sidebar_20)$(dn reload)"
   key "$(dg info)" "$(fleet_ui_t keys_sidebar_21)$(dn info)"
-  key "prefix e" "$(fleet_ui_t keys_sidebar_17)"
   fi
 
   if want menu; then

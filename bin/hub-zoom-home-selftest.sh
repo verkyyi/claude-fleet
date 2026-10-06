@@ -27,8 +27,9 @@
 #     split, but a press while already on the split zooms to fullscreen, and a
 #     press while zoomed restores the split. (Same start state as the --home split
 #     case, opposite result — that contrast is the whole point of the fix.)
-#   STATIC GUARD — the shipped conf wires the ⌂ hub range to `--home` and leaves
-#     the F9 bind on the plain toggle, and hub-zoom.sh understands --home.
+#   STATIC GUARD — the node conf reaches none of it since issue #1714 (⌂ / F9 /
+#     ☰ are the client's keys; the chain retires in #1739), and hub-zoom.sh still
+#     understands --home / --bar for the legs above.
 #
 #   DEFAULT (issue #1533) — the full-screen list retired: with no FLEET_DASH_WINDOW
 #     ⌂, F9 and prefix g all end on the TASK LIST, focused (the client in the
@@ -106,8 +107,12 @@ printf 'FLEET_DASH_WINDOW=1\n' > "$FLEET_CONF_DIR/fleets/t/conf"
 # the legs need: switch-client -T refuses a table that does not exist, and the
 # list's view pins a navigating client by sending it that key.
 tmux -f /dev/null new-session -d -s t -n plan -x 200 -y 50 'sleep 600' 2>/dev/null || fail "could not start isolated tmux server"
-grep -E '^bind -T fleet-sidebar (F9|C-M-S-F12) ' "$CONF" > "$WORK/sidebar-binds.conf"
-[ "$(wc -l < "$WORK/sidebar-binds.conf")" -eq 2 ] || fail "conf: the fleet-sidebar F9 / C-M-S-F12 binds moved"
+# A node binds neither since issue #1714 (the person's keys are the client's):
+# they are this test's own fixture until the ⌂ chain retires (#1739).
+cat > "$WORK/sidebar-binds.conf" <<'BINDS'
+bind -T fleet-sidebar C-M-S-F12 if -F -t '{top-left}' '#{==:#{@sidebar},1}' { switch-client -T fleet-sidebar ; refresh-client -f active-pane ; select-pane -t '{top-left}' } { switch-client -T fleet-sidebar ; refresh-client -f '!active-pane' }
+bind -T fleet-sidebar F9 run-shell "sh ~/.claude/fleet/bin/hub-zoom.sh --nav --client '#{client_name}'"
+BINDS
 tmux source-file "$WORK/sidebar-binds.conf" || fail "could not load the fleet-sidebar binds"
 tmux new-window -d -t t: -n worker 'sleep 600'
 dashp="$(tmux list-panes -t t:plan -F '#{pane_id}' | head -n1)"
@@ -374,27 +379,16 @@ else
   [ "$(plans)" = 1 ] || fail "D10: ☰ built a plan window ($(plans) now)"
 fi
 
-# =====================  STATIC GUARD : the shipped wiring  ==================
-awk '/^bind -n MouseDown1Status /,/^}$/' "$CONF" | grep -qF 'hub-zoom.sh --bar' \
-  || fail "conf: the ☰ click must run 'hub-zoom.sh --bar' (issue #1616)"
+# =====================  STATIC GUARD : the node binds none of it  ===========
+# ⌂ / F9 / ☰ / prefix g left the node with the person's keys (issue #1714, EPIC
+# #1710 C4): nothing in the node conf reaches hub-zoom.sh any more — the script
+# and the legs above stay until the chain retires (#1739).
+grep -v '^[[:space:]]*#' "$CONF" | grep -qE 'hub-zoom\.sh|dash-zoom\.sh|mouse_status_range' \
+  && fail "conf: the node conf reaches the ⌂ chain again (#1714)"
 grep -qF -- '--bar' "$SCRIPT" \
   || fail "hub-zoom.sh no longer understands --bar (issue #1616)"
-# the ⌂ home wiring sits in the MouseDown1Status hub branch, not on F9.
-grep -Eq 'bind -n F9 .*hub-zoom\.sh( |")' "$CONF" \
-  || fail "conf: expected an 'bind -n F9 … hub-zoom.sh' bind"
-grep -E 'bind -n F9 .*hub-zoom\.sh' "$CONF" | grep -q -- '--home' \
-  && fail "conf: F9 must stay the progressive toggle — it must NOT carry --home"
 grep -qF -- '--home' "$SCRIPT" \
   || fail "hub-zoom.sh no longer understands --home (issue #405)"
-# Task bar first (#899): the SECOND press only reaches hub-zoom.sh as --nav through
-# the fleet-sidebar table's own F9 / status-click binds (fleet-sidebar-selftest.sh
-# pins that the status click otherwise matches the root one).
-grep -Eq '^bind -T fleet-sidebar F9 .*hub-zoom\.sh --nav' "$CONF" \
-  || fail "conf: the fleet-sidebar table needs an F9 bind running 'hub-zoom.sh --nav' (#899)"
-awk '/^bind -T fleet-sidebar MouseDown1Status /,/^}$/' "$CONF" | grep -qF 'hub-zoom.sh --bar' \
-  || fail "conf: the fleet-sidebar status click must run 'hub-zoom.sh --bar' on the ☰ too (#1616)"
-grep -Eq '^bind -n F9 .*--client' "$CONF" \
-  || fail "conf: the root F9 must pass --client so the right client's table switches (#899)"
 
 printf 'selftest PASS: by default ⌂ / F9 / prefix g always end on the task list, focused, and no plan window is built (#1533); ☰ only shows / hides it (#1616); with FLEET_DASH_WINDOW=1 ⌂ --home lands unzoomed on the DASH, F9 keeps the zoom toggle (#405), both land on the task bar first (#899)\n'
 exit 0

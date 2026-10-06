@@ -375,13 +375,10 @@ rm -f "$G"/*
 # ---------------------------------------------------------------- 9. wording ----
 hits=$(grep -rn 'pace spread\|quota blind\|via banner\|no locally reachable' "$BIN" 2>/dev/null | grep -v 'fleet-alerts-selftest.sh')
 eq "9: the old wording is gone from bin/" "" "$hits"
-grep -q '^bind ! .*fleet-alerts.sh popup' "$BIN/../conf/tmux-attention.conf" || fail "9: prefix ! is not bound to the popup"; ok
-[ "$(grep -c 'mouse_status_range},alarm},' "$BIN/../conf/tmux-attention.conf")" = 2 ] \
-  || fail "9: both MouseDown1Status tables must open the popup from a count"; ok
-# one sheet since #1535 (both languages read the same row through fleet_ui_t)
-[ "$(grep -c 'key "prefix !"' "$BIN/fleet-keys.sh")" = 1 ] || fail "9: prefix ! missing from the cheatsheet"
-zsheet=$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$BIN/fleet-keys.sh" --plain)
-grep -q '^  prefix !  *告警弹窗' <<< "$zsheet" || fail "9: prefix ! missing from the zh cheatsheet"; ok
+# The node's door to the popup (prefix !, a click on ✖ / ▲) left with the person's
+# keys (issue #1714, EPIC #1710 C4): the node conf binds neither.
+grep -q 'fleet-alerts.sh popup' "$BIN/../conf/tmux-attention.conf" && fail "9: the node conf still opens the alerts popup (#1714)"; ok
+grep -q 'mouse_status_range' "$BIN/../conf/tmux-attention.conf" && fail "9: the node conf still binds a status click (#1714)"; ok
 grep -q 'fleet_alerts_refresh --kick' "$BIN/tmux-status.sh" || fail "9: the bar no longer refreshes the producer"; ok
 
 # ---------------------------------------------------------------- 14. reauth ----

@@ -47,13 +47,14 @@
 #      drawn with it), a lost machine's, at any width; ok / ahead / off / ? / a
 #      10-field row (a pre-#644 cache) draw nothing, and off hub mode never
 #   L  the 54-column contract: a 54 / 120 / 189-column CLIENT of an isolated
-#      server running the shipped conf/tmux-bar.conf, four states (正常 / 额度高 /
-#      有告警 / 入口失联): the bar line as tmux draws it — ≤ 30 columns of ink at
-#      54 in every state, the state's segment present, 本机 / 负载 / 内存 / 盘 /
-#      ● 入口 never; the login cut to 8 and `待处理` gone below 60
+#      server running the shipped bar — the CLIENT's (conf/tmux-shell.conf's
+#      status lines; a node's own line is one hint since issue #1714) — four
+#      states (正常 / 额度高 / 有告警 / 入口失联): the bar line as tmux draws it —
+#      ≤ 30 columns of ink at 54 in every state, the state's segment present,
+#      本机 / 负载 / 内存 / 盘 / ● 入口 never
 #
 # Drives bin/tmux-status.sh, bin/fleet-status-lib.sh, bin/fleet-hub-sessions.sh
-# and conf/tmux-bar.conf. ps / sysctl / vm_stat / free / df are shims (as
+# and conf/tmux-shell.conf's bar. ps / sysctl / vm_stat / free / df are shims (as
 # tmux-status-cache-selftest.sh); TMPDIR, FLEET_CONF_DIR and FLEET_ACCOUNTS_DIR are
 # a sandbox; every tmux server is on a private socket.
 set -uo pipefail
@@ -463,8 +464,8 @@ eq "K: off hub mode never" "" "$(CF='' bar $LOCAL)"
 rm -f "$G/hub_ok"
 
 # ---- L: the 54-column contract, on real clients of an isolated server
-# The shipped conf/tmux-bar.conf (its ~/.claude/fleet pointed at this tree) on an
-# inner server; three OUTER isolated servers, 54 / 120 / 189 columns, each with
+# The shipped client bar (conf/tmux-shell.conf's status lines, __BIN__ pointed at
+# this tree, as fleet-shell.sh renders it) on an inner server; three OUTER isolated servers, 54 / 120 / 189 columns, each with
 # one pane attached to it as a client — capture-pane on an outer pane's last line
 # is the bar exactly as tmux draws it for a client that wide.
 # ink <line> → the display width of what is drawn: the rstripped line less the
@@ -491,14 +492,15 @@ else
                printf '%s\n' $(( NOW - 600 )) > "$LG/hub_ok"; printf '#ts%s%s\n#me%sm5\n' "$US" $(( NOW - 600 )) "$US" > "$LG/remote_f1" ;;
     esac
     printf '%s\n' "$NOW" > "$LG/alerts.ndjson.ts"
-    sed "s#~/.claude/fleet#$BIN/..#g" "$BIN/../conf/tmux-bar.conf" > "$L/bar.conf"
+    sed -e "s#__BIN__#$BIN#g" -e 's#__PREFIX__#C-b#g' "$BIN/../conf/tmux-shell.conf" \
+      | grep -E '^set -g (status|window-status)' > "$L/bar.conf"
     IN="$WORK/l-$st-in.sock"
     env -i HOME="$HOME" PATH="$PATH" TERM=xterm-256color LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-}" \
       TMPDIR="$L/tmp/" FLEET_CONF_DIR="$L/conf" FLEET_ACCOUNTS_DIR="$L/acc" CCQUOTA_FLEET=$lcf \
       CCQUOTA_HUB_URL=http://127.0.0.1:9 FLEET_ALERTS_TTL=3600 FLEET_ALERTS_DISK=0 FLEET_ALERTS_MACHINE=0 \
       "$REAL_TMUX" -u -S "$IN" -f /dev/null new-session -d -s f1 -n issue-1 -x 80 -y 20 'sleep 300' \
       || fail "L: no isolated inner server"
-    "$REAL_TMUX" -S "$IN" source-file "$BIN/../conf/fleet-palette.conf" \; source-file "$L/bar.conf" \
+    "$REAL_TMUX" -S "$IN" source-file "$L/bar.conf" \
       \; set -g window-status-format '' \; set -g window-status-current-format '' \
       \; set -g @login verkyyi-long \; set -g @attn_needs 2 \; set -w -t f1:issue-1 @issue 1 || fail "L: the shipped bar conf did not load"
     [ "$st" = quota ] && "$REAL_TMUX" -S "$IN" set -w -t f1:issue-1 @cc_account icloud \; set -w -t f1:issue-1 @rl5h 86 \; set -w -t f1:issue-1 @rl7d 61
@@ -506,7 +508,7 @@ else
       "$REAL_TMUX" -S "$WORK/l-$st-$c.sock" -f /dev/null new-session -d -s o -x "$c" -y 12 \
         "env -u TMUX TERM=xterm-256color $REAL_TMUX -u -S '$IN' attach -t f1" || fail "L: no outer server at $c"
     done
-    case "$st" in quota) tok54='5h 86%' tokw='icloud 5h 86%' ;; alerts) tok54='▲ 2' tokw='▲ 2' ;; hublost) tok54='○ 入口 10m' tokw='○ 入口 10m' ;; *) tok54='● 2' tokw='● 2 待处理' ;; esac
+    case "$st" in quota) tok54='5h 86%' tokw='icloud 5h 86%' ;; alerts) tok54='▲ 2' tokw='▲ 2' ;; hublost) tok54='○ 入口 10m' tokw='○ 入口 10m' ;; *) tok54='fleet' tokw='fleet' ;; esac
     for c in 54 120 189; do
       tok=$tokw; [ "$c" = 54 ] && tok=$tok54
       line=''
@@ -516,18 +518,15 @@ else
         sleep 0.2
       done
       has "L: $st at $c columns — its segment" "$tok" "$line"
-      has "L: $st at $c — the ☰ leads" "☰" "$line"
+      has "L: $st at $c — the client's name leads" "fleet" "$line"
+      hasnt "L: $st at $c — no ☰ (a node's, retired by #1714)" "☰" "$line"
       for no in 本机 负载 内存 '盘 ' '● 入口' '⌂'; do hasnt "L: $st at $c — no $no" "$no" "$line"; done
       if [ "$c" = 54 ]; then
         read -r n _ <<< "$(ink "$line")"
         [ "$n" -le 30 ] || fail "L: $st at 54 columns draws $n columns of ink (> 30, the EPIC's metric)" "$line"; CHECKS=$((CHECKS+1))
-        has "L: $st at 54 — the login cut to 8" "verkyyi- " "$line"
-        hasnt "L: $st at 54 — the whole login does not fit" "verkyyi-long" "$line"
         hasnt "L: $st at 54 — no 待处理" "待处理" "$line"
         [ "$st" = quota ] && hasnt "L: quota at 54 — no account label" "icloud" "$line"
         printf 'tmux-status-selftest: L %-7s 54 cols, %2s of ink: [%s]\n' "$st" "$n" "$(printf '%s' "$line" | sed 's/ *$//')"
-      else
-        has "L: $st at $c — the whole login" "verkyyi-long" "$line"
       fi
       if [ "$st" = normal ]; then
         read -r _ g <<< "$(ink "$line")"

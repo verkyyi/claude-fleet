@@ -95,7 +95,7 @@ config) TABLE='scope ctrl-s alt-s
 reload ctrl-r alt-r
 preview ctrl-p alt-p' ;;
 # The worker task sidebar's navigation keys (issue #896). NOT fzf: a tmux key
-# table (conf/tmux-attention.conf, fleet-sidebar) whose `Any` bind types every
+# table (conf/tmux-shell.conf, fleet-sidebar — the client's, issue #1714) whose `Any` bind types every
 # other key into the input line — so a letter can never be an action here, and
 # an action is a ⌃-chord the view reads as a byte (⌃n = 0x0e). The prefix rule
 # is the same: tmux honours its prefix in that table too, so a colliding key

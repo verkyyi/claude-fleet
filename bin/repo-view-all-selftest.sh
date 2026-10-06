@@ -125,12 +125,11 @@ NEW_SL=$_fpe
 render() { tmux display-message -p -t alpha:plan "$1" | sed 's/#\[[^]]*\]//g'; }
 tmux set -gu @fleet_repo_label
 tmux set -g @login op-login
-eq    "B: one-repo fleet footer renders the one layout (#1534, #1616)" "$(render "$NEW_SL")" "  ☰  op-login "
+# A node's line is one hint since issue #1714 (the client draws the bar): it
+# names the login, and a waiting session changes nothing on it.
+eq    "B: one-repo fleet footer is the node's hint (#1714)" "$(render "$NEW_SL")" ' 请用 fleet 客户端 · run `fleet` · op-login 的节点会话，只跑执行会话 '
 tmux set -w -t alpha:plan @attn_needs 3 2>/dev/null; tmux set -t alpha @attn_needs 3
-case "$(render "$NEW_SL")" in
-  '  ☰  op-login ● '[0-9]'  ') CHECKS=$((CHECKS+1)) ;;
-  *) fail "B: …with the needs badge up: \`  ☰  op-login ● N  \`" "$(render "$NEW_SL")" ;;
-esac
+hasnt "B: …with sessions waiting, still no badge" "$(render "$NEW_SL")" "●"
 tmux set -t alpha -u @attn_needs
 has   "B: the login name is drawn" "$(render "$NEW_SL")" " op-login "
 hasnt "B: the fleet name is not" "$(render "$NEW_SL")" "alpha"
