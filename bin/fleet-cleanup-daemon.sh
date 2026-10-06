@@ -414,7 +414,7 @@ else
 fi
 
 if [ "${#SESSIONS[@]}" -eq 0 ]; then
-  log "no fleet sessions found (nothing to clean up)"
+  log "no fleet sessions found (nothing to clean up)$(fleet_wedged_note)"
   exit 0
 fi
 

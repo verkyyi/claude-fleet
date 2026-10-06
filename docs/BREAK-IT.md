@@ -19,6 +19,7 @@
 | 会话进程被杀（kill -9、OOM） | 同上 | 同上，恢复页写「被结束（信号 9）」 | `session-killed` |
 | 最后一个窗口关闭（home 的 shell 退出、最后一个会话结束） | tmux 服务器随之退出，整台 fleet 停 | 服务器 `exit-empty off`，home 窗格死了立即重开 shell（#1784） | `last-window` |
 | 节点 tmux 服务器被关（`kill-server`、崩溃） | 整台 fleet 停，没人拉起 | diskguard 节拍跑 `fleet-restore.sh --auto`，只拉起没做完的会话（#1784） | `kill-server` |
+| 节点 tmux 服务器退出时被一个不回应的客户端（网络冻住的 ssh 里的 attach）拖住 | 服务器不死不活：每个新连接都被它接下就关，`tmux -L fleet` 的一切（含 `fleet-up.sh`）都报 `server exited unexpectedly`，只能手工 `rm` socket | `fleet_socket_heal` 认出这种 socket，清掉并记一行（restore.log、`socket-heal.log`），`fleet-restore.sh --auto` / `fleet-up.sh` 随即起新服务器；守护进程的「no fleet sessions found」带上 WEDGED，`fleet-doctor` 的 `socket` 行报出来（#1729） | `wedged-socket` |
 | 磁盘满 | 拉起 → 写满 → 再崩的循环 | `--auto` 先问磁盘门：低于下限只记一行不拉起；腾出空间后下一拍拉起 | `disk-full` |
 | 非交互 shell（ssh、守护进程）PATH 里没有 claude | 会话开出来停在 shell，`exec claude` 失败 | `fleet_find_tool` 依次找 `FLEET_CLAUDE_BIN` → PATH → `~/.local/bin` → `/opt/homebrew/bin` → `/usr/local/bin`（#1774/#1784） | `no-claude-on-path` |
 | 客户端里 prefix x / prefix & / 右键菜单 Kill | 侧栏或右侧面板、甚至整个窗口和服务器被删 | 这些键和菜单在客户端里都不存在了（#1785） | `client-kill-keys` |

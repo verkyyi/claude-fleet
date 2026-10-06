@@ -315,7 +315,7 @@ else
 fi
 
 if [ "${#SESSIONS[@]}" -eq 0 ]; then
-  log "no fleet sessions found (nothing to watch)"
+  log "no fleet sessions found (nothing to watch)$(fleet_wedged_note)"
   exit 0
 fi
 

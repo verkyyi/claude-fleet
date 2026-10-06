@@ -674,7 +674,8 @@ stamp=''; [ "$MULTI" = 1 ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktre
 # default changed later does not move a running session.
 [ -n "$ACCOUNT" ] && stamp="$stamp$(fleet_win_stamp_cmd @account_class "$ACCOUNT")"
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
-  || { refuse "spawn failed for #$num: new-window"; exit "$RC_INFRA"; }
+  || { _why=''; fleet_socket_wedged "$SOCK" && _why=" — this fleet's tmux server is gone: its socket $(fleet_socket_path "$SOCK") is held by a dying server that drops every client (tmux says \"server exited unexpectedly\"); fleet-up.sh clears it and brings the fleet back"  # issue #1729
+       refuse "spawn failed for #$num: new-window$_why"; exit "$RC_INFRA"; }
 CLAIMED_HERE=0   # a window holds the issue now: its claim is the worker's
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).

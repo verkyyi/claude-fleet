@@ -355,7 +355,10 @@ restore() {
     # the hub REBUILD and still reconcile the work windows below,
     # reopening any mapped WIN whose window isn't currently present.
     local sock; sock=$(fleet_socket "$sess")   # this fleet's own socket (== session, issue #159)
-    local live=0 livewins="" livewt=""
+    local live=0 livewins="" livewt="" healed
+    # A socket left by a dying server (issue #1729): clear it, and log that the
+    # server died, before has-session reads it as down and fleet-up trips on it.
+    if [ -z "$dry" ] && healed=$(fleet_socket_heal "$sock"); then say "$healed"; log "$healed"; fi
     if tmux -L "$sock" has-session -t "$sess" 2>/dev/null; then
       live=1
       livewins=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_name}' 2>/dev/null)
