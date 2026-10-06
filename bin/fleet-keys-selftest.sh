@@ -469,7 +469,7 @@ body_of() {   # the body of the conf's bind for key $2 in table $1 (root / prefi
     t == "prefix" && $1 == "bind" && $2 == k             { sub(/^bind [^ ]+ /, ""); print; exit }' "$CONF"
 }
 SW_PROF=$(mktemp -d "${TMPDIR:-/tmp}/fkeys-iterm.XXXXXX") || fail "10: mktemp"
-FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE= python3 "$BIN/fleet-iterm-profile.py" write \
+FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' python3 "$BIN/fleet-iterm-profile.py" write \
   || fail "10: fleet-iterm-profile.py write exited non-zero"
 [ -f "$SW_PROF/fleet.json" ] || fail "10: fleet-iterm-profile.py wrote no fleet.json"
 while read -r sa sg sk sc sp; do
