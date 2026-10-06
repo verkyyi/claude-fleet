@@ -410,6 +410,7 @@ FLEET_CONNECT_PROBE_CMD            seam: the direct probe the shell's upgrader r
 FLEET_CONNECT_UPGRADE_SECS         knob: on the hub relay, seconds between direct probes (15, #1628)
 FLEET_REMOTE_IDLE_SECS             knob: seconds without a key before the upgrader switches lines (2, #1628)
 FLEET_REMOTE_WARM_WAIT             knob: seconds a proxy waits for a warm master still coming up before opening its own (5, #1704)
+FLEET_REMOTE_SELECT_SECS           knob: seconds a retarget waits on a proxy's one-shot select before reconnecting instead (2, #1876)
 FLEET_HUB_SESSIONS_USER            knob: whose sessions on the other machines the dash shows (os_user; default `id -un`, `*` = every login the hub shows; #1423)
 FLEET_CERT                         handoff: the connection-certificate key pair a sidebar / `fleet connect` signs with — the key; `<key>-cert.pub` beside it (default ~/.ssh/fleet-cert, what `fleet login` wrote; fleet-hub-sessions.sh, fleet-connect.py, #1475)
 FLEET_HUB_LEASE_CMD                seam: the hub issue-lease command (default `ccquota lease`), run as `<cmd> acquire|release [--force] <repo> <issue> <worker_id>` (fleet_hub_lease, #1422)
