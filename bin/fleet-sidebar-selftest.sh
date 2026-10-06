@@ -1407,7 +1407,14 @@ try:
     wait_for(lambda: bool(view_on(w1)), 'the sidebar did not come back to the first worker')
     click(p1, row=3)
     wait_for(lambda: not navigation(), 'a tap on the worker did not take the keyboard off the list')
-    os.write(terminal, b'\x02k')
+    wait_for(lambda: tm('display-message', '-p', '-t', w1 + '.{top-left}', '#{pane_id}') == side and
+             any(l.startswith('▶') and 'worker-one' in l for l in tm('capture-pane', '-p', '-t', side).splitlines()),
+             'the list on the first worker did not settle')
+    # prefix, then k, as a person types them: one write is a paste burst
+    # (assume-paste-time), and tmux runs no key binding inside a paste
+    os.write(terminal, b'\x02')
+    time.sleep(.3)
+    os.write(terminal, b'k')
     wait_for(lambda: bool(view_on(w2)) and on_window() == w2,
              'prefix k did not switch to the row waiting on you')
     tm('set-option', '-w', '-t', w2, '@claude_state', 'done')

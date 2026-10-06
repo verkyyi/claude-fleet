@@ -19,7 +19,7 @@
 #   C. machines  — another machine's rows (cache field 15) and this machine's share
 #                  one ruler: interleaved by birth, the cache's row order changes
 #                  nothing; a remote row with no birth sorts after its born siblings
-#   D. summary   — a needs / failed row puts `! N 个在问你 · ⌃k 跳过去` on top (the
+#   D. summary   — a needs / failed row puts `! N 个在问你 · 点这里跳过去 ⌃K` on top (the
 #                  sidebar's glyph field `!`, an inert hdr); none ⇒ no line; the hub
 #                  list's has no key hint; a lost machine's row is not counted
 #   E. inventory — fleet-control-read.sh's `born=` column parses (fleet_hub_common
@@ -156,7 +156,7 @@ eq "D: nobody asking — no summary line" "" "$(shdrs "$s")"
 fixture needs done failed done working
 s=$(side)
 eq "D: two asking — the summary line first, glyph ! for the view" \
-   "!|! 2 个在问你 · ⌃k 跳过去;" "$(shdrs "$s")"
+   "!|! 2 个在问你 · 点这里跳过去 ⌃K;" "$(shdrs "$s")"
 eq "D: …it is the first line of the list" "hdr" "$(printf '%s\n' "$s" | head -1 | cut -d"$US" -f1)"
 eq "D: …and the asking rows stay where they were born" "$want" "$(sorder "$s")"
 h=$(hub)
@@ -167,7 +167,7 @@ eq "D: status order — no summary line" "" "$(shdrs "$(FLEET_DASH_ORDER=status 
 PEXP='' fixture done done needs done done                 # P collapsed
 s=$(side)
 eq "D: a folded parent: its asking child stays on the list" "A;P;C1;Z;" "$(sorder "$s")"
-eq "D: …and counts" "!|! 1 个在问你 · ⌃k 跳过去;" "$(shdrs "$s")"
+eq "D: …and counts" "!|! 1 个在问你 · 点这里跳过去 ⌃K;" "$(shdrs "$s")"
 
 # ============================================================================
 # E. inventory — the adapter's born= column
