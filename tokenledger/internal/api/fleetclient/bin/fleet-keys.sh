@@ -158,6 +158,7 @@ print_sheet() {
   key "prefix Space" "$(fleet_ui_t keys_prefix_06)"
   key "prefix q" "$(fleet_ui_t keys_prefix_05)"
   key "prefix h" "$(fleet_ui_t keys_prefix_05)"
+  key "prefix k" "$(fleet_ui_t keys_prefix_16)"
   key "prefix z" "$(fleet_ui_t keys_prefix_09)"
   key "prefix [" "$(fleet_ui_t keys_prefix_10)"
   key "prefix ?" "$(fleet_ui_t keys_prefix_13)"

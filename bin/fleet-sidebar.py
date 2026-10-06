@@ -1164,6 +1164,13 @@ def next_attention(rows, selected):
     return next((k for k in loud if keys.index(k) > at), loud[0])
 
 
+def is_attn_summary(row):
+    """The 要你处理 summary line (issue #1750) — `hdr`, glyph `!`, text `! N …`.
+    Not a cursor stop (key_of is bare `hdr`), but a tap on it is one ⌃k
+    (issue #1771): onto the next row waiting on you, and over to it."""
+    return bool(row) and row[0] == "hdr" and len(row) > 3 and row[2] == "!" and row[3].startswith("!")
+
+
 def sessions(rows):
     """The window ids alone — what a close lands on (#900), never a heading."""
     return [row[0] for row in rows if row[0] != "hdr"]
@@ -1931,10 +1938,14 @@ def ui(screen, session, worker, lock):
             if wid == "hdr":
                 if navigation and key_of((wid, state)) == selected:
                     put(y, "› " + label, curses.color_pair(PAIR_SEL) | curses.A_BOLD, fill=True)
-                elif glyph == "!" and label.startswith("!"):
+                elif is_attn_summary(row):
                     # the 要你处理 summary (issue #1750), never a cursor stop: drawn
                     # like a row — its `!` alone red in the glyph column, the text
-                    # plain (issue #1622: only a state glyph has a colour)
+                    # plain (issue #1622: only a state glyph has a colour). Too
+                    # narrow for all of it: the trailing key goes first, so 「点这里」
+                    # (the tap, issue #1771) is what stays.
+                    if label.endswith(" ⌃K") and 2 + cells_of(label) > width - 1:
+                        label = label[:-3]
                     put(y, "  " + label, curses.color_pair(PAIR_FG) | curses.A_BOLD)
                     try:
                         screen.addstr(y, 2, "!", curses.color_pair(STATE_PAIR["needs"]) | curses.A_BOLD)
@@ -2074,6 +2085,19 @@ def ui(screen, session, worker, lock):
             # A menu action finished (fleet-sidebar-menu.sh wakes the view with
             # F11, issue #1530): read the rows now, not at the next tick.
             refresh_at = 0
+            continue
+        if key == curses.KEY_F10:
+            # prefix k (issue #1771, conf/tmux-shell.conf): the 要你处理 jump from
+            # wherever the keyboard is — onto the next row waiting on you and
+            # over to it, as a tap on the summary line does. Whatever is typed on
+            # the input line stays.
+            if view != "live":
+                view, rows, selected = "live", live_rows, current_row
+            nxt = next_attention(rows, selected)
+            if nxt:
+                selected, follow_at, refresh_at = nxt, None, 0
+                if not jump(session, selected, pane, lock):
+                    follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
             continue
         if key == curses.KEY_F12:
             # A menu item that asks here (issue #1620): it parked
@@ -2365,7 +2389,8 @@ def ui(screen, session, worker, lock):
                     continue
             y, buttons = mouse[:2]
             ry = y - waiting  # below the 「刷新中…」 row when it shows (issue #1536)
-            hit = key_of(rows[offset + ry]) if 0 <= ry < page and offset + ry < len(rows) else None
+            hit_row = rows[offset + ry] if 0 <= ry < page and offset + ry < len(rows) else None
+            hit = key_of(hit_row) if hit_row is not None else None
             # `selected`, not the painted cue: a fast double tap lands its second
             # press before the next refresh repaints the first one's switch.
             action = tap(hit, selected)
@@ -2384,6 +2409,14 @@ def ui(screen, session, worker, lock):
                         open_help(screen, env)
                     else:
                         armed = HELP_ROW
+                elif is_attn_summary(hit_row):
+                    # The 要你处理 summary (issue #1771): a tap is one ⌃k — the next
+                    # row waiting on you, and over to it; tap again for the next.
+                    nxt = next_attention(rows, selected)
+                    if nxt:
+                        selected, follow_at = nxt, None
+                        if not jump(session, selected, pane, lock):
+                            follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
                 elif action in ("menu", "new"):
                     # The second tap on a row (the first switched to it), or a tap
                     # on the row already in view: its action menu — the touch

@@ -1411,10 +1411,11 @@ fi
 # 要你处理 (issue #1750): in the born order a `needs` / `failed` row no longer
 # rises to the top — it stays where it was born, red — so ONE summary line above
 # everything (the 置顶 group included) says how many there are, `! 2 个在问你 ·
-# ⌃k 跳过去`; the sidebar's ⌃k (on an empty input line) walks the cursor onto
-# them in list order, and the view follows. No such row, no line: it never takes
-# a row of its own for nothing. An inert `hdr` row (never a cursor stop, no bind
-# acts on it); the sidebar paints it red off its glyph field `!`. The `status`
+# 点这里跳过去 ⌃K`; a tap on it, the sidebar's ⌃k (on an empty input line) and
+# prefix k (issue #1771) walk onto them in list order, and the view follows. No
+# such row, no line: it never takes a row of its own for nothing. A `hdr` row,
+# never a cursor stop; the sidebar paints it red off its glyph field `!` and
+# knows it by that (is_attn_summary). The `status`
 # order has no line — the rows themselves still rise — so it stays byte for byte.
 if [ "$ORDER" = born ] && [ "$ATTN" -gt 0 ]; then
   if [ "$SIDEBAR" = 1 ]; then
