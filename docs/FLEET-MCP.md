@@ -83,11 +83,85 @@ The definition lives once, in **`conf/mcp-worker.json`**:
   `mcp_servers.fleet={command, args, env_vars, tool_timeout_sec}` derived from the
   same file, after any allowlist policy and before the caller's `-c`. Codex hands a
   server only a short env allowlist, so `env_vars` forwards `TMUX`, `TMUX_PANE`,
-  `FLEET_CONF_DIR`, `FLEET_SESSION`, `FLEET_MCP_BIN`; `tool_timeout_sec=600` lets a
+  `FLEET_CONF_DIR`, `FLEET_SESSION`, `FLEET_WORKER_CRED`, `FLEET_MCP_BIN`; `tool_timeout_sec=600` lets a
   blocking `await` finish (Codex's default is 60 s).
 - **Off** — `FLEET_MCP=0`, a caller's own `--mcp-config` / `--strict-mcp-config`
   (Claude), or no `conf/mcp-worker.json` / `fleet-mcp.py` beside `bin/`: nothing is
   added and the argv is byte for byte what it was.
+
+## Identity — the worker credential (issue #1809, EPIC #1813 C7)
+
+Every session the fleet opens carries its own short-lived credential, and every
+tool call is made **as that session**: no more working out who is calling from
+the window's options, which drift when a window moves or a pane is not the one
+the session lives in.
+
+**Issued** by `bin/fleet-session-wrap.sh` — the one door every session opens
+through (spawn, restore, migrate, move, transfer, the warm pool, a wake) — once
+per launch: `fleet-mcp.py --cred mint` prints it to the wrapper, which exports it
+as **`FLEET_WORKER_CRED`** for that launch only; the agent hands it to this server
+(Claude: inherited; Codex: `env_vars` forwards the NAME). It is never in an argv,
+a file, a config, a log, a comment or a tmux option (`fleet-mcp-selftest.sh` J
+greps for it). **Revoked** when the agent exits (`--cred revoke` puts its nonce on
+the revoked list). A migrated or moved session is launched again on its new
+window and so gets a fresh credential for the **same** `worker_id` — and an older
+one still holds there, since it names the session, not the pane.
+
+**Format** — `fwc1.<base64url claims>.<base64url HMAC-SHA256>`, signed with this
+login's key `$FLEET_CONF_DIR/worker-cred/key` (0600, made on first mint). Claims:
+
+| claim | what |
+|---|---|
+| `v` | 1 |
+| `fleet` | the fleet (its socket label — the same for a warm-pool or view session) |
+| `fid` | the session's lifelong `@fleet_id` — its IDENTITY (#1646) |
+| `fleet_uuid` | the fleet UUID (`fleet_uuid`), empty on a machine with none |
+| `key` · `repo` · `issue` · `origin` | what the session was at issue time (informative; a scratch bound later keeps its `fid`) |
+| `iat` · `exp` | issued · expires: **24 h**, renewed hourly in the server's memory while it holds (decision 7) |
+| `nonce` | what the revoked list (`$FLEET_CONF_DIR/worker-cred/revoked`, nonces only) names |
+
+`worker_id` = `<fleet_uuid>/<fid>` (`fid` alone without a fleet UUID) — the same
+string `fleet_worker_id` prints.
+
+**Checked on every call, before the arguments** — a credential that is present
+and does not hold refuses the call (`isError`, `… Nothing ran.`), read-only tools
+included:
+
+| refused when | text |
+|---|---|
+| malformed / not this login's key / tampered | `credential is malformed` · `signature does not verify` |
+| past `exp` | `credential expired` |
+| its nonce is revoked | `credential was revoked (its session exited)` |
+| called from another fleet | `credential is for fleet X, this pane is in Y` |
+| called from a pane whose window is not the credential's session | `this pane's window (…) is not the credential's session (…)` |
+
+**Scope** — what a holder may do, given the pane IS its session:
+
+| tool | scope |
+|---|---|
+| `status` `children` `repos` `agents` | read: this session's view |
+| `spawn` `await` | only as **itself** the parent — the script stamps the child's `@origin` from this pane, and the pane is pinned to the credential's session |
+| `send` | only within **this fleet**: local keys (`issue:<N>` / `scratch-<N>` / `parent`), never a `wid:` address |
+| `report` `ask` `evidence` `handoff` | only **itself** — `fleet-report-parent.sh` reports the calling pane, pinned the same way |
+
+**No credential** (a person in a shell, a session launched before this, `FLEET_MCP=0`):
+the call runs as before, by the window's options — and is logged `via=marker`.
+
+**The call log** — `<install>/logs/mcp-calls.log` (`FLEET_MCP_LOG`), one line per
+call, never the credential:
+
+```
+2026-10-06T12:00:00-0700 tool=spawn via=cred who=<fleet uuid>/<fleet_id> verdict=exit=0
+2026-10-06T12:00:05-0700 tool=spawn via=badcred who=<the window's @fleet_id> verdict=refused why="this pane's window … is not the credential's session …"
+2026-10-06T12:01:00-0700 tool=status via=marker who=<@fleet_id or window name> verdict=ok
+```
+
+`via=cred` ÷ all is the EPIC's 「工具调用里认得出是哪个执行会话的」.
+`fleet-mcp.py --cred check` prints the verified claims of `$FLEET_WORKER_CRED`.
+
+What it is not: the key and the session share a uid, so a session that wants to
+can read the key — this is an identity rail against a moved window or a borrowed
+pane, not a wall against a hostile session. The hub checks again (C8).
 
 ## Compatibility
 
@@ -108,6 +182,9 @@ against fake scripts, no-hub degenerate, the legacy shim, the Codex mount; for �
 (G–I) every new tool's refusals, its exact argv + stdin, and script ≡ tool through the
 REAL `fleet-comment.sh` (the byte-identical comment) and `fleet-report-parent.sh
 --dry-run` (the same envelope, on an isolated tmux server).
+`bin/fleet-mcp-selftest.sh` J — the credential: valid / expired / forged /
+tampered / another pane / another fleet / revoked, migration, renewal, no leak.
+`bin/session-wrap-selftest.sh` B' — the wrapper mints per launch and revokes on exit.
 `bin/fleet-claude-selftest.sh` #1807 and `bin/fleet-codex-selftest.sh` I — the
 launch command lines carry the server. `mod/fleet/tests/tools.test.ts` — the mod
 registers none of its own when the server is mounted.

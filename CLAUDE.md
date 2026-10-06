@@ -103,6 +103,15 @@ Do not install from memory: read the doc and work from it.
   (`fleet_worker_id`); `<fleet UUID>/<key>` stays a readable alias for one
   version (`fleet_worker_id_key` — a relay's `from`, a lease). `worker-identity-selftest.sh`
   pins it.
+- **A session calls the fleet tools AS ITSELF: its credential** (issue #1809,
+  EPIC #1813 C7). `fleet-session-wrap.sh` mints `FLEET_WORKER_CRED` per launch
+  (`fleet-mcp.py --cred mint`, HMAC with `$FLEET_CONF_DIR/worker-cred/key`) and
+  revokes it on exit; `fleet-mcp.py` verifies it on every call and refuses one that
+  is expired, forged, revoked, from another fleet or from a pane that is not its
+  session. It travels in the environment only — never an argv, file, config, log
+  or tmux option; Codex forwards it by name (`env_vars`). No credential = the old
+  marker path, logged `via=marker` in `logs/mcp-calls.log`. Spec:
+  `docs/FLEET-MCP.md` «Identity»; `fleet-mcp-selftest.sh` J pins it.
 - **A spawn's parent is a LIVE session, or the spawn refuses** (issue #1355,
   EPIC #1645 C2). `fleet_origin_gate` (`bin/fleet-lib.sh`) runs in both spawners
   after `fleet_origin_canon`, before any window: a key no window answers to

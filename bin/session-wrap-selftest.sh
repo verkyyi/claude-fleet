@@ -10,6 +10,10 @@
 #      `--resume <the same id>`; r starts new; a fleet exit (@wrap_quiet) and a
 #      fast launch failure return the status with no page; q → session-end-hook
 #      --recycle
+#   B' the worker credential (issue #1809): with fleet-mcp.py beside it the wrapper
+#      hands the launch a FLEET_WORKER_CRED that verifies, for this window's
+#      @fleet_id, and revokes it when the agent exits; without it (every leg
+#      above) nothing is minted
 #   C  session-end-hook.sh: under a live wrapper a manual exit closes nothing;
 #      with @wrap_quiet the old close-on-exit policy runs
 #   D  fleet_server_resident / fleet_home_resident: `exit-empty off`, and the
@@ -91,6 +95,7 @@ cat > "$WORK/fake-launch" <<'EOF'
 # The agent: logs its argv, stamps the session id the way the hooks do, waits
 # for `go`, then leaves the way $CTL/mode says.
 printf '%s\n' "$*" >> "$CTL/argv"
+printf 'cred=%s\n' "${FLEET_WORKER_CRED:+set}" >> "$CTL/cred"
 tmux set-option -w -t "$TMUX_PANE" @cc_session_id SID-1
 tmux set-option -w -t "$TMUX_PANE" @cc_agent claude
 [ "$(cat "$CTL/mode" 2>/dev/null)" = fast ] && exit 3
@@ -165,6 +170,32 @@ tf send-keys -t sw:q q
 waitfor "q: session-end-hook --recycle was asked" grep -sqx -- '--recycle' "$WORK/recycled"
 waitfor "q: the wrapper returned 0" screen_has q 'WRAP_RC=0'
 eq "q: recycled windows read done" "done" "$(o q @claude_state)"
+
+# B': the worker credential (issue #1809) — minted per launch, revoked on exit.
+mkdir -p "$WORK/kbin" "$WORK/kconf"
+for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-mcp.py fleet-lib.sh; do
+  ln -s "$BIN/$f" "$WORK/kbin/$f"
+done
+cat > "$WORK/cred-launch" <<EOF
+#!/bin/bash
+printf '%s\n' "\${FLEET_WORKER_CRED:+set}" > "\$CTL/had"
+python3 "$BIN/fleet-mcp.py" --cred check > "\$CTL/claims" 2> "\$CTL/check.err"
+while [ ! -e "\$CTL/go" ]; do sleep 0.05; done
+EOF
+chmod +x "$WORK/cred-launch"
+mkdir -p "$WORK/k"
+tf new-window -d -t sw: -n k "env CTL='$WORK/k' FLEET_WRAP_LAUNCH='$WORK/cred-launch' FLEET_WRAP_FAST_FAIL=0 \
+  FLEET_CONF_DIR='$WORK/kconf' FLEET_CRED_FID_WAIT=0 '$WORK/kbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
+waitfor "k: the launch ran" test -s "$WORK/k/had"
+eq "k: the launch has FLEET_WORKER_CRED" set "$(cat "$WORK/k/had")"
+waitfor "k: the credential was checked" test -s "$WORK/k/claims"
+kfid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fid"])' "$WORK/k/claims")
+eq "k: the credential names this window's @fleet_id" "$(o k @fleet_id)" "$kfid"
+knonce=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["nonce"])' "$WORK/k/claims")
+tf set-option -w -t sw:k @wrap_quiet 1; : > "$WORK/k/go"
+waitfor "k: the wrapper returned" screen_has k 'WRAP_RC=0'
+waitfor "k: the agent's exit revoked the credential" grep -sq "^$knonce " "$WORK/kconf/worker-cred/revoked"
+eq "w: a wrapper with no fleet-mcp.py beside it mints nothing" "cred=" "$(sort -u "$WORK/w/cred")"
 
 # ------------------------------------------- C: the SessionEnd hook's gate -----
 # A pane stands in for the wrapper (its pid on @session_wrap); the hook's trace

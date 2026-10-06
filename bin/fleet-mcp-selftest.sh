@@ -24,6 +24,12 @@
 #      the comment tool) post the byte-identical comment, the REAL
 #      fleet-report-parent.sh --dry-run prints the same, and every new tool's argv +
 #      stdin is what the hand-typed contract command (commands/fleet-claim.md) runs
+#   J  the worker credential (issue #1809): minted for the pane's session, a valid
+#      one runs the tool and the call log names its worker_id; expired, forged,
+#      tampered, another session's pane, another fleet, revoked → refused, nothing
+#      ran; the same session in a new window (a migration) still holds; renewal
+#      keeps the nonce; no credential runs as before and logs `via=marker`; and the
+#      credential appears in no file, log, reply or tmux option the run left behind
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -100,7 +106,7 @@ chmod +x "$WORK/tmux"
 # serve <out> [extra server args] < requests — one stdio session, no hub anywhere.
 serve() {
   out=$1; shift
-  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u CCQUOTA_HUB_URL -u CCQUOTA_URL \
+  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u CCQUOTA_HUB_URL -u CCQUOTA_URL -u FLEET_WORKER_CRED \
     PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 python3 "$WORK/bin/fleet-mcp.py" "$@" > "$out"
 }
 call() { # call <id> <tool> <json args>
@@ -235,7 +241,7 @@ grep -qx 'fleet-await.sh 3 --timeout 540' "$LOG" || fail "D: await's default tim
 ok "D no hub configured: all fourteen tools listed, spawn/await run locally (await default 540s)"
 
 # --- E: the legacy fleet-peer shim --------------------------------------------
-PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 python3 "$WORK/bin/fleet-peer-mcp.py" > "$WORK/e" <<'EOF'
+env -u FLEET_WORKER_CRED PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 python3 "$WORK/bin/fleet-peer-mcp.py" > "$WORK/e" <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"send_message","arguments":{"to":"issue:99","text":"hi"}}}
@@ -252,7 +258,7 @@ ok "E fleet-peer-mcp.py still serves list_agents / send_message (one version)"
 # --- F: the Codex mount, from the one definition ------------------------------
 m=$(python3 "$WORK/bin/fleet-mcp.py" --mount codex) || fail "F: --mount codex failed"
 case "$m" in
-  'mcp_servers.fleet={command="bash",args=["-c",'*'fleet-mcp.py'*'],env_vars=["TMUX","TMUX_PANE",'*'"FLEET_MCP_BIN"],tool_timeout_sec=600}') : ;;
+  'mcp_servers.fleet={command="bash",args=["-c",'*'fleet-mcp.py'*'],env_vars=["TMUX","TMUX_PANE",'*'"FLEET_WORKER_CRED","FLEET_MCP_BIN"],tool_timeout_sec=600}') : ;;
   *) fail "F: the Codex mount value is wrong" "$m" ;;
 esac
 python3 - "$WORK/conf/mcp-worker.json" <<'PY' || fail "F: conf/mcp-worker.json is not the one fleet server"
@@ -435,5 +441,141 @@ tool=$(python3 -c 'import json,sys; d=json.loads(open(sys.argv[1]).read())["resu
 [ "$hand" = "$tool" ] || fail "I: report --dry-run differs between the script and the tool" "by hand: $hand
 by tool: $tool"
 ok "I the same inputs: real fleet-comment.sh posts the byte-identical comment by hand and by tool; real report --dry-run (isolated tmux, parent resolved) prints the same envelope"
+# --- J: the worker credential (issue #1809) -----------------------------------
+G="$WORK/cred"; mkdir -p "$G/conf" "$G/sbin"
+cat >> "$WORK/bin/fleet-lib.sh" <<'SH'
+fleet_uuid() { printf '11111111-2222-4333-8444-555555555555'; }
+fleet_window_fid() { tmux set-window-option -t "$2" @fleet_id 99999999-0000-4000-8000-000000000000; printf '99999999-0000-4000-8000-000000000000'; }
+SH
+# A tmux whose pane options come from the environment: FAKE_FID is the window's
+# @fleet_id; every set-* is recorded, so the leak check reads what tmux was told.
+cat > "$G/sbin/tmux" <<SH
+#!/bin/sh
+case "\$1" in
+  set-option|set-window-option|set-environment) printf '%s\n' "\$*" >> "$G/tmux-sets"; exit 0 ;;
+  display-message) ;;
+  *) exec "$WORK/tmux" "\$@" ;;
+esac
+for fmt in "\$@"; do :; done
+case "\$fmt" in
+  '#{@fleet_id}') printf '%s\n' "\${FAKE_FID:-}" ;;
+  '#{window_id}') printf '@1\n' ;;
+  '#{?@fleet_id,'*) printf '%s\n' "\${FAKE_FID:-issue-1809}" ;;
+  '#{@repo}'*) printf 'acme/app\t1809\tissue-77\n' ;;
+  *) exec "$WORK/tmux" "\$@" ;;
+esac
+SH
+chmod +x "$G/sbin/tmux"
+FID=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
+gsrv() { # gsrv <out> — one stdio session as a pane of fleet `tf`, credential from $CRED
+  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u FLEET_WORKER_CRED PATH="$G/sbin:$PATH" TMUX="${GTMUX:-1}" \
+    TMUX_PANE="${GPANE:-%1}" FLEET_CONF_DIR="$G/conf" FLEET_MCP_LOG="$G/calls.log" FAKE_FID="${PANE_FID-$FID}" \
+    ${CRED:+FLEET_WORKER_CRED="$CRED"} python3 "$WORK/bin/fleet-mcp.py" > "$1"
+}
+gcred() { # gcred <action> — fleet-mcp.py --cred <action> as the pane, credential from $CRED
+  env -u FLEET_WORKER_CRED PATH="$G/sbin:$PATH" TMUX=1 TMUX_PANE=%1 FLEET_CONF_DIR="$G/conf" FAKE_FID="$FID" \
+    FLEET_CRED_FID_WAIT=0 ${CRED:+FLEET_WORKER_CRED="$CRED"} python3 "$WORK/bin/fleet-mcp.py" --cred "$1"
+}
+# py <code> [args] — run python with fleet-mcp.py imported as m (FLEET_CONF_DIR = the sandbox's)
+py() {
+  code=$1; shift
+  env FLEET_CONF_DIR="$G/conf" python3 -c "import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location('m', '$WORK/bin/fleet-mcp.py'); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+$code" "$@"
+}
+# verdict <file> <id> → ok | refused:<text>
+verdict() {
+  python3 -c 'import json, sys
+for l in open(sys.argv[1]):
+    r = json.loads(l)
+    if r.get("id") == int(sys.argv[2]):
+        res = r["result"]
+        print("refused:" + res["content"][0]["text"] if res.get("isError") else "ok")' "$1" "$2"
+}
+
+CRED=$(CRED='' gcred mint) || fail "J: --cred mint failed"
+case "$CRED" in fwc1.*.*) : ;; *) fail "J: the minted credential has the wrong form" ;; esac
+mode=$(stat -f %Lp "$G/conf/worker-cred/key" 2>/dev/null || stat -c %a "$G/conf/worker-cred/key")  # portable-ok: BSD then GNU
+[ "$mode" = 600 ] || fail "J: the login key is $mode, not 0600"
+claims=$(gcred check) || fail "J: a fresh credential does not verify"
+python3 -c 'import json, sys
+c = json.loads(sys.argv[1])
+assert c["fid"] == sys.argv[2] and c["fleet"] == "tf", c
+assert c["worker_id"] == "11111111-2222-4333-8444-555555555555/" + sys.argv[2], c
+assert (c["repo"], c["issue"], c["origin"], c["key"]) == ("acme/app", "1809", "issue-77", "issue-1807"), c
+assert c["exp"] - c["iat"] == 24 * 3600 and len(c["nonce"]) >= 16, c' "$claims" "$FID" \
+  || fail "J: the claims are wrong" "$claims"
+ok "J mint: the pane's session (fid, fleet, worker_id, repo/issue/origin), 24h, key 0600"
+
+# A valid credential runs the tool; the log names the session.
+: > "$LOG"; : > "$G/calls.log"
+call 70 spawn '{"issue":5}' | gsrv "$G/ok"
+[ "$(verdict "$G/ok" 70)" = ok ] || fail "J: a valid credential was refused" "$(cat "$G/ok")"
+grep -q '^dash-issue-session.sh 5$' "$LOG" || fail "J: the spawn did not run" "$(cat "$LOG")"
+grep -q "tool=spawn via=cred who=11111111-2222-4333-8444-555555555555/$FID verdict=exit=2" "$G/calls.log" \
+  || fail "J: the call log does not name the session" "$(cat "$G/calls.log")"
+call 71 status '{}' | gsrv "$G/st"
+grep -q "identity: 11111111-2222-4333-8444-555555555555/$FID (credential" "$G/st" \
+  || fail "J: status does not show the identity" "$(cat "$G/st")"
+ok "J a valid credential runs the tool; the call log and status name the worker_id"
+
+# A migrated session: another pane, a new window carrying the same @fleet_id.
+: > "$LOG"
+call 72 spawn '{"issue":6}' | GPANE=%9 gsrv "$G/mig"
+[ "$(verdict "$G/mig" 72)" = ok ] || fail "J: the same session in a new window was refused" "$(cat "$G/mig")"
+grep -q '^dash-issue-session.sh 6$' "$LOG" || fail "J: the migrated session's spawn did not run" "$(cat "$LOG")"
+ok "J the same session (same @fleet_id) in a new window — a migration — still holds"
+
+# Refusals: each answered with why, logged via=badcred, nothing ran.
+refused() { # refused <label> <expected text> — reads $G/r
+  v=$(verdict "$G/r" 80)
+  case "$v" in refused:*"$2"*"Nothing ran."*) : ;; *) fail "J: $1 was not refused" "$v" ;; esac
+  [ ! -s "$LOG" ] || fail "J: $1 ran a script" "$(cat "$LOG")"
+  grep -q "tool=spawn via=badcred .*verdict=refused" "$G/calls.log" || fail "J: $1 not logged" "$(cat "$G/calls.log")"
+  ok "J refused: $1"
+  : > "$LOG"; : > "$G/calls.log"
+}
+: > "$LOG"; : > "$G/calls.log"
+EXPIRED=$(py 'c = m.cred_verify(sys.argv[1]); c["exp"] = 1000; print(m.cred_sign(c, m.cred_key()))' "$CRED")
+call 80 spawn '{"issue":5}' | CRED=$EXPIRED gsrv "$G/r"; refused "an expired credential" "expired"
+FORGED=$(env FLEET_CONF_DIR="$G/other" python3 -c "import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location('m', '$WORK/bin/fleet-mcp.py'); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+print(m.cred_sign(json.loads(sys.argv[1]), m.cred_key(create=True)))" "$claims")
+call 80 spawn '{"issue":5}' | CRED=$FORGED gsrv "$G/r"; refused "a forged credential (another login's key)" "signature"
+call 80 spawn '{"issue":5}' | CRED="${CRED%??}xx" gsrv "$G/r"; refused "a tampered signature" "signature"
+call 80 spawn '{"issue":5}' | PANE_FID=dddddddd-0000-4000-8000-000000000000 gsrv "$G/r"
+refused "another session's pane (a spawn as someone else's parent)" "is not the credential's session"
+call 80 spawn '{"issue":5}' | GTMUX=/tmp/tmux-501/other,1,0 gsrv "$G/r"; refused "another fleet" "credential is for fleet tf"
+
+# Renewal keeps the session and the nonce, with a fresh 24h.
+py 'old = m.cred_verify(sys.argv[1])
+m.HELD["cred"] = m.cred_sign(dict(old, iat=old["iat"] - 7200, exp=old["exp"] - 7200), m.cred_key())
+m.cred_renew()
+new = m.cred_verify(m.HELD["cred"])
+assert new["nonce"] == old["nonce"] and new["fid"] == old["fid"] and new["exp"] >= old["exp"], (old, new)' "$CRED" \
+  || fail "J: renewal is wrong"
+ok "J renewal: same session and nonce, a fresh 24h"
+
+# Revoked (the session exited): refused from then on.
+gcred revoke || fail "J: --cred revoke failed"
+call 80 spawn '{"issue":5}' | gsrv "$G/r"; refused "a revoked credential (its session exited)" "revoked"
+gcred check >/dev/null 2>&1 && fail "J: --cred check passed a revoked credential"
+
+# No credential: as before, by the window's options — and the log says so.
+call 81 spawn '{"issue":5}' | CRED='' PANE_FID='' gsrv "$G/n"
+[ "$(verdict "$G/n" 81)" = ok ] || fail "J: a call without a credential was refused" "$(cat "$G/n")"
+grep -q 'tool=spawn via=marker who=issue-1809 verdict=exit=2' "$G/calls.log" \
+  || fail "J: a call without a credential is not logged as via=marker" "$(cat "$G/calls.log")"
+ok "J no credential: runs as before, logged via=marker"
+
+# The credential is in no file the run left behind — the call log, the key dir,
+# the revoked list, every tmux option set, every reply.
+for c in "$CRED" "$EXPIRED"; do
+  hits=$(grep -rlF "${c##*.}" "$WORK" 2>/dev/null)
+  [ -z "$hits" ] || fail "J: the credential leaked into a file" "$hits"
+done
+ok "J the credential appears in no file, log, reply or tmux option"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

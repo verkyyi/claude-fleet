@@ -64,9 +64,23 @@ while :; do
     tmux set-option -p -t "$TMUX_PANE" @session_wrap "$$" 2>/dev/null
   fi
   export FLEET_SESSION_WRAP=$$
+  # The session's own credential (issue #1809, docs/FLEET-MCP.md «Identity»): minted
+  # fresh for every launch, handed to the agent — and so to the fleet tool service —
+  # through the environment ONLY (never argv, a file or a log), revoked when the
+  # agent exits. No tool service (FLEET_MCP=0), outside tmux, or a mint that fails:
+  # none — the tools then know the session by its window's options, as before.
+  unset FLEET_WORKER_CRED
+  if [ "$intmux" = 1 ] && [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$BIN/fleet-mcp.py" ]; then
+    FLEET_WORKER_CRED=$(python3 "$BIN/fleet-mcp.py" --cred mint 2>/dev/null) && [ -n "$FLEET_WORKER_CRED" ] \
+      && export FLEET_WORKER_CRED || unset FLEET_WORKER_CRED
+  fi
   t0=$(date +%s)
   "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   rc=$?
+  if [ -n "${FLEET_WORKER_CRED:-}" ]; then
+    python3 "$BIN/fleet-mcp.py" --cred revoke 2>/dev/null
+    unset FLEET_WORKER_CRED
+  fi
   [ "$intmux" = 1 ] || exit "$rc"
   # The fleet made it exit (it stamped @wrap_quiet), or a sleep is under way.
   if [ "$(opt @wrap_quiet)" = 1 ]; then wset -u @wrap_quiet; exit "$rc"; fi
