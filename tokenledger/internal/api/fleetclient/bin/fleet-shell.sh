@@ -788,7 +788,7 @@ if TS has-session -t "=$STAGE" 2>/dev/null; then
   [ -n "$node" ] && { stage_select "$node" || TS new-window -t "=$STAGE:" -n "$title" -c "$HOME" "$cmd" \; \
     set-window-option @remote "$remote" \; set-window-option automatic-rename off >/dev/null 2>&1; }
 else
-  stage_up "$cmd" "$remote" "$title" || fail_start 'tmux 开不了右侧'
+  stage_up "$cmd" "$remote" "$title" || fail_start 'tmux 开不了会话'
 fi
 w=$(tmux -L "$SESS" -f "$CACHE/tmux.conf" new-session -d -P -F '#{window_id}' -s "$SESS" -n home -c "$HOME" -x 220 -y 60 \
       "exec bash $(sq "$SHADOW/fleet-shell.sh") viewer $(sq "$SESS")") \
