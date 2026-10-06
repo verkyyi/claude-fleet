@@ -163,10 +163,19 @@ case "$_cu_out" in
   WARN*) warn fleet "${_cu_out#*	}" ;;
   INFO*) info fleet "${_cu_out#*	}" ;;
   *)
+    # a checkout leads with the same word an installed client does — 版本
+    # <stable's short commit> — so two computers on one stable read alike on
+    # their first row (issue #1805); install-sync's state says where stable is
     _fl_root=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
-    _fl_sha=$(git -C "$_fl_root" rev-parse --short HEAD 2>/dev/null)
+    _fl_head=$(git -C "$_fl_root" rev-parse HEAD 2>/dev/null)
+    _fl_st=$(sed -n 's/^stable: //p' "$conf_dir/global/install-sync.state" 2>/dev/null | head -n 1)
     if [ -n "$_hub_url" ]; then _fl_hub="入口 $(printf '%s' "$_hub_url" | sed 's#^[a-z]*://##')"; else _fl_hub='入口 不接'; fi
-    pass fleet "$(printf '%s' "$_fl_root" | sed "s#^$HOME#~#")${_fl_sha:+ @ $_fl_sha} · $_fl_hub" ;;
+    case "$_fl_st" in
+      "$_fl_head") _fl_hub="$_fl_hub · 跟 stable 同版" ;;
+      ''|none|-) ;;
+      *) [ -n "$_fl_head" ] && _fl_hub="$_fl_hub · stable $(printf '%.7s' "$_fl_st")（install-sync 跟上）" ;;
+    esac
+    pass fleet "${_fl_head:+版本 $(printf '%.7s' "$_fl_head") · }$(printf '%s' "$_fl_root" | sed "s#^$HOME#~#") · $_fl_hub" ;;
 esac
 
 _hub_on=${CCQUOTA_FLEET:-}

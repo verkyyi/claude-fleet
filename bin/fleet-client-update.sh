@@ -72,6 +72,17 @@
 # client's ⌂ badge (fleet-client-badge.sh) shows: ✓ 已更新到 … / the failure for
 # FLEET_CLIENT_UPDATE_SHOW seconds (4), 新版已就绪 · 下次打开生效 until then.
 #
+# STABLE (issue #1805, EPIC #1813 C3): the version every computer follows is
+# refs/tags/stable — the same one a 承载 machine's install-sync follows — so
+# moving stable is the whole release; the hub is not redeployed for a client to
+# move. A hub's /version names stable's commit as client_version (and its
+# /install installs stable's files through the hub, GitHub's raw host the
+# fallback); a hub that predates it names its image's digest, as before. No hub
+# (不接 — .client-version with an empty hub=): GitHub's API names stable
+# (FLEET_STABLE_API) and `stage` runs stable's own installer from the raw host
+# AT that commit (FLEET_STABLE_RAW). Same staging, same idle switch, same
+# rollback either way. A home with no .client-version is still never touched.
+#
 # FLEET_CLIENT_AUTO_UPDATE=0 (fleet.conf, or a team default) turns the version
 # half off; the settings half still runs.
 #
@@ -96,6 +107,9 @@ ROOT="${FLEET_CLIENT_ROOT:-$(cd "$BIN/.." && pwd -P)}"
 case "$ROOT" in *.versions/*) [ -n "${FLEET_CLIENT_ROOT:-}" ] || ROOT=${ROOT%.versions/*} ;; esac
 VERS="$ROOT.versions"
 CONF_DIR="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
+# GitHub's stable, for a client with no hub (issue #1805)
+RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"; RAW=${RAW%/}
+API="${FLEET_STABLE_API:-https://api.github.com/repos/verkyyi/claude-fleet/commits/stable}"
 STATE="${FLEET_CLIENT_STATE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/client}"
 TMO="${FLEET_CLIENT_TIMEOUT:-3}"
 case "$TMO" in ''|*[!0-9]*) TMO=3 ;; esac
@@ -135,6 +149,17 @@ except Exception:
   fi
   printf '%s' "${u%/}"
 }
+
+# stable_sha — the commit GitHub's stable names (40 hex), or rc 1
+stable_sha() {
+  local s
+  s=$(curl -fsS --max-time "$TMO" -H 'Accept: application/vnd.github.sha' "$API" 2>/dev/null | tr -d ' \r\n' | cut -c1-40)
+  case "$s" in *[!0-9a-f]*|'') return 1 ;; esac
+  [ "${#s}" -eq 40 ] || return 1
+  printf '%s' "$s"
+}
+# short <version> — a commit as 7 hex; anything else as it is
+short() { case "$1" in *[!0-9a-f]*|'') printf '%s' "$1" ;; *) [ "${#1}" -eq 40 ] && printf '%.7s' "$1" || printf '%s' "$1" ;; esac; }
 
 # ver_fields <json-file> — `client_version<TAB>client_compat<TAB>min_client_compat<TAB>commit`
 ver_fields() {
@@ -278,8 +303,10 @@ prune() {
 # tmux step, no run), then renamed into place. Done = <dir>/.staged and .next
 # naming it. A lock keeps two stagers from staging twice.
 stage() {
-  local lock="$VERS/.lock" tmp inst rc k
-  [ -n "$HUB" ] || { note "没有入口地址"; return 1; }
+  local lock="$VERS/.lock" tmp inst rc k sha="${1:-}" src
+  if [ -z "$HUB" ]; then
+    case "$sha" in ''|*[!0-9a-f]*) sha=$(stable_sha) || { note "问不到 GitHub 上 stable 指向哪个提交"; return 1; } ;; esac
+  fi
   mkdir -p "$VERS" 2>/dev/null || { note "写不了 $VERS"; return 1; }
   if ! mkdir "$lock" 2>/dev/null; then
     # a lock older than 15 minutes is a crashed stage's
@@ -291,13 +318,26 @@ stage() {
   fi
   inst="$lock/install.sh"; tmp="$VERS/.staging"
   rm -rf "$tmp" "$ROOT.next"
-  if ! curl -fsSL --max-time 30 "$HUB/install" -o "$inst" 2>"$lock/err"; then
-    note "取不到 $HUB/install（$(tr -d '\n' <"$lock/err" | cut -c1-80)）"; rm -rf "$lock"; return 1
+  # the installer: the hub's (stable's own, through it) or stable's on GitHub
+  if [ -n "$HUB" ]; then src="$HUB/install"; else src="$RAW/$sha/bin/fleet-install.sh"; fi
+  if ! curl -fsSL --max-time 30 "$src" -o "$inst" 2>"$lock/err"; then
+    note "取不到 $src（$(tr -d '\n' <"$lock/err" | cut -c1-80)）"; rm -rf "$lock"; return 1
   fi
-  [ "$(head -c 2 "$inst")" = '#!' ] || { note "$HUB/install 返回的不是安装脚本"; rm -rf "$lock"; return 1; }
-  FLEET_HUB_URL="$HUB" FLEET_INSTALL_HOME="$tmp" FLEET_INSTALL_BIN="$tmp/bin" \
-    FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_RC=/dev/null \
-    FLEET_CONF_DIR="$CONF_DIR" sh "$inst" >"$lock/out" 2>&1
+  [ "$(head -c 2 "$inst")" = '#!' ] || { note "$src 返回的不是安装脚本"; rm -rf "$lock"; return 1; }
+  # never asks (a stage runs in the background), never 承载, never a node: it
+  # only fills a staging dir with the part everyone has
+  if [ -n "$HUB" ]; then
+    FLEET_HUB_URL="$HUB" FLEET_INSTALL_HUB=1 FLEET_INSTALL_HOME="$tmp" FLEET_INSTALL_BIN="$tmp/bin" \
+      FLEET_INSTALL_ASK=0 FLEET_INSTALL_HOST=0 FLEET_INSTALL_NO_NODE=1 \
+      FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_RC=/dev/null \
+      FLEET_CONF_DIR="$CONF_DIR" sh "$inst" >"$lock/out" 2>&1
+  else
+    FLEET_INSTALL_SRC="$RAW/$sha" FLEET_INSTALL_VERSION="$sha" FLEET_INSTALL_HUB=0 \
+      FLEET_INSTALL_HOME="$tmp" FLEET_INSTALL_BIN="$tmp/bin" \
+      FLEET_INSTALL_ASK=0 FLEET_INSTALL_HOST=0 FLEET_INSTALL_NO_NODE=1 \
+      FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_RC=/dev/null \
+      FLEET_CONF_DIR="$CONF_DIR" sh "$inst" >"$lock/out" 2>&1
+  fi
   rc=$?
   if [ "$rc" -ne 0 ] || [ ! -f "$tmp/bin/fleet" ] || ! sh -n "$tmp/bin/fleet" 2>/dev/null; then
     note "安装脚本失败（exit ${rc}）：$(grep -v '^ *$' "$lock/out" | tail -n 1 | cut -c1-100)"
@@ -370,18 +410,27 @@ check() {
     return 0
   fi
   printf '%s\n' "$now" > "$STATE/checked"
-  # the team's defaults (a hub that does not serve them: the file stays)
-  f="$STATE/client-settings.json"
-  if curl -fsS --max-time "$TMO" "$HUB/v1/fleet/client-settings" -o "$f" 2>/dev/null; then
-    write_defaults "$f" || :
-  fi
-  [ "${FLEET_CLIENT_AUTO_UPDATE:-1}" = 0 ] && return 0
-  # the version
-  f="$STATE/version.json"
-  curl -fsS --max-time "$TMO" "$HUB/version" -o "$f" 2>/dev/null || return 0   # out of reach: open as is
-  IFS=$'\t' read -r hv _ hmin HCOMMIT <<VER
+  if [ -n "$HUB" ]; then
+    # the team's defaults (a hub that does not serve them: the file stays)
+    f="$STATE/client-settings.json"
+    if curl -fsS --max-time "$TMO" "$HUB/v1/fleet/client-settings" -o "$f" 2>/dev/null; then
+      write_defaults "$f" || :
+    fi
+    [ "${FLEET_CLIENT_AUTO_UPDATE:-1}" = 0 ] && return 0
+    # the version
+    f="$STATE/version.json"
+    curl -fsS --max-time "$TMO" "$HUB/version" -o "$f" 2>/dev/null || return 0   # out of reach: open as is
+    IFS=$'\t' read -r hv _ hmin HCOMMIT <<VER
 $(ver_fields "$f")
 VER
+    # a hub following stable names it as the version (#1805): say its commit
+    [ "${#hv}" -eq 40 ] && HCOMMIT=$(short "$hv")
+  else
+    # no hub: GitHub's stable (#1805); out of reach → open as is
+    [ "${FLEET_CLIENT_AUTO_UPDATE:-1}" = 0 ] && return 0
+    hv=$(stable_sha) || return 0
+    HCOMMIT=$(short "$hv")
+  fi
   HV=$hv
   [ -n "$hv" ] || return 0                           # a hub that does not say
   lv=$(mark_get "$mark" version)
@@ -401,15 +450,14 @@ stage_bg() {
   local k
   k=$(next_key)
   [ -n "$k" ] && [ "$k" = "$(vkey "${HV:-}")" ] && return 0
-  ( nohup bash "$SELF" stage </dev/null >"$STATE/stage.log" 2>&1 & )
+  ( nohup bash "$SELF" stage "${HV:-}" </dev/null >"$STATE/stage.log" 2>&1 & )
 }
 
 cmd_start() {
   local mark="$ROOT/.client-version" new sess rc
   [ -f "$mark" ] || return 0                          # not an installed client
   load_conf
-  HUB=$(hub_url)
-  [ -n "$HUB" ] || return 0                           # no hub: nothing to follow
+  HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
   mkdir -p "$STATE" 2>/dev/null || return 0
   sess=$(shell_sess)
   # 1. a client staged earlier: switch to it now — unless the client is
@@ -448,10 +496,11 @@ cmd_start() {
       note "更新失败（见上一行），照常打开 — 可再跑一次安装行：curl -fsSL $HUB/install | sh"
       return 0 ;;
     10)
+      local from='入口'; [ -n "$HUB" ] || from='stable'
       if shell_live "$sess"; then
-        note "入口有新版客户端（${HCOMMIT:-$HV}），后台取，等你空闲时原地换上"
+        note "${from}有新版（${HCOMMIT:-$HV}），后台取，等你空闲时原地换上"
       else
-        note "入口有新版客户端（${HCOMMIT:-$HV}），后台取，下次启动生效"
+        note "${from}有新版（${HCOMMIT:-$HV}），后台取，下次启动生效"
       fi
       stage_bg
       return 0 ;;
@@ -541,8 +590,7 @@ cmd_tick() {
   local s="$1" k idle rc
   [ -f "$ROOT/.client-version" ] || return 0
   load_conf
-  HUB=$(hub_url)
-  [ -n "$HUB" ] || return 0
+  HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
   mkdir -p "$STATE" 2>/dev/null || return 0
   check 2>/dev/null; rc=$?
   [ "${FLEET_CLIENT_AUTO_UPDATE:-1}" != 0 ] || return 0
@@ -573,10 +621,17 @@ cmd_doctor() {
   fi
   load_conf
   lv=$(mark_get "$mark" version); lc=$(mark_get "$mark" compat); commit=$(mark_get "$mark" commit)
-  parts="版本 ${lv:-?}${commit:+ ($commit)}"
+  if [ "${#lv}" -eq 40 ]; then parts="版本 $(short "$lv")"; else parts="版本 ${lv:-?}${commit:+ ($commit)}"; fi
   HUB=$(hub_url)
   if [ -z "$HUB" ]; then
-    parts="$parts · 入口 没有"
+    # no hub: GitHub's stable is what it follows (#1805)
+    if ! hv=$(stable_sha); then
+      parts="$parts · 入口 不接 · stable 问不到（GitHub 不可达）"; [ "$lvl" = PASS ] && lvl=INFO
+    elif [ "$hv" = "$lv" ]; then
+      parts="$parts · 入口 不接 · 跟 stable 同版"
+    else
+      parts="$parts · 入口 不接 · stable 有新版 $(short "$hv")（取好后空闲时原地换上）"; [ "$lvl" = PASS ] && lvl=INFO
+    fi
   else
     f=$(mktemp "${TMPDIR:-/tmp}/fleet-client-doctor.XXXXXX")
     if curl -fsS --max-time "$TMO" "$HUB/version" -o "$f" 2>/dev/null; then
@@ -590,9 +645,9 @@ EOF
       elif [ "$hv" = "$lv" ]; then
         parts="$parts · 入口 $HUB 同版"
       elif [ "$lc" -lt "$hmin" ]; then
-        parts="$parts · 入口 $HUB 要求更新（${hv}）"; lvl=WARN
+        parts="$parts · 入口 $HUB 要求更新（$(short "$hv")）"; lvl=WARN
       else
-        parts="$parts · 入口 $HUB 有新版 ${hv}（取好后空闲时原地换上）"; [ "$lvl" = PASS ] && lvl=INFO
+        parts="$parts · 入口 $HUB 有新版 $(short "$hv")（取好后空闲时原地换上）"; [ "$lvl" = PASS ] && lvl=INFO
       fi
     else
       parts="$parts · 入口 $HUB 不可达"; lvl=WARN
@@ -624,7 +679,7 @@ EOF
 
 case "${1:-}" in
   start)  shift; HUB=''; cmd_start "$@"; exit $? ;;
-  stage)  shift; load_conf; HUB=$(hub_url); stage; exit $? ;;
+  stage)  shift; load_conf; HUB=$(hub_url); stage "${1:-}"; exit $? ;;
   tick)   shift; HUB=''; cmd_tick "${1:-fleet-shell}"; exit $? ;;
   apply)  shift; load_conf; HUB=$(hub_url); mkdir -p "$STATE" 2>/dev/null; apply "${1:-$(shell_sess)}"; exit $? ;;
   doctor) shift; HUB=''; cmd_doctor "$@"; exit 0 ;;

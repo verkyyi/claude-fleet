@@ -343,7 +343,7 @@ func (s *Server) doors(f HubFacts) []Door {
 			ID: "version", Name: "Build version", Via: "http",
 			Where:      []string{"/version", "/v1/fleet/client-settings"},
 			Credential: "nothing",
-			Can:        `Learn which build this is: the version stamp and the git commit it names (claude-fleet#1696), so fleet-doctor can compare the hub with the stable tag without cluster access, and which client it hands out (client_version, client_compat, min_client_compat — claude-fleet#1722). With the fleet module on, /v1/fleet/client-settings answers the team's client defaults: whitelisted keys only, never a credential (refused at write). Reads nothing else.`,
+			Can:        `Learn which build this is: the version stamp and the git commit it names (claude-fleet#1696), so fleet-doctor can compare the hub with the stable tag without cluster access, and which client it hands out (client_version, client_compat, min_client_compat — claude-fleet#1722; with stable known, client_version is refs/tags/stable's commit and client_url where its files are — claude-fleet#1805). With the fleet module on, /v1/fleet/client-settings answers the team's client defaults: whitelisted keys only, never a credential (refused at write). Reads nothing else.`,
 			State:      "public",
 			Note:       "Here: always on. The commit is of a public repository; it says which client this hub hands out, nothing about who uses it.",
 		},

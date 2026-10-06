@@ -47,14 +47,19 @@ func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if !fleetclient.Packed {
-		httpError(w, http.StatusServiceUnavailable, "this hub was built without its client — pack it (bin/fleet-client-pack.sh) and rebuild")
-		return
-	}
-	tmpl, err := fleetclient.Files.ReadFile(fleetclient.Installer)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, "installer missing from this build")
-		return
+	// stable's own installer when it installs from stable (claude-fleet#1805),
+	// else the one this image was built with
+	tmpl := s.stableInstaller(r.Context())
+	if tmpl == nil {
+		if !fleetclient.Packed {
+			httpError(w, http.StatusServiceUnavailable, "this hub was built without its client — pack it (bin/fleet-client-pack.sh) and rebuild")
+			return
+		}
+		var err error
+		if tmpl, err = fleetclient.Files.ReadFile(fleetclient.Installer); err != nil {
+			httpError(w, http.StatusInternalServerError, "installer missing from this build")
+			return
+		}
 	}
 	body := strings.ReplaceAll(string(tmpl), fleetclient.HubPlaceholder, s.hubURL(r))
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
@@ -77,11 +82,15 @@ func (s *Server) handleInstallFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	name := strings.TrimPrefix(r.URL.Path, "/install/")
+	if rest, ok := strings.CutPrefix(name, "stable/"); ok {
+		s.handleStableFile(w, r, rest)
+		return
+	}
 	if !fleetclient.Packed {
 		httpError(w, http.StatusServiceUnavailable, "this hub was built without its client — pack it (bin/fleet-client-pack.sh) and rebuild")
 		return
 	}
-	name := strings.TrimPrefix(r.URL.Path, "/install/")
 	if !fleetclient.Serves(name) {
 		http.NotFound(w, r)
 		return

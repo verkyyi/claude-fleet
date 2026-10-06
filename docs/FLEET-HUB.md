@@ -588,8 +588,19 @@ path in the repo, no copy committed). `TestFleetClientMatchesBin` and
 `fleet-install-selftest.sh` leg A pin it from both sides, and leg E drives the installed `fleet`: a (fake) tmux ≥ 3.2 →
 `fleet-shell.sh` starts its server from the install root's `bin/` and `conf/`;
 no tmux → the one hint and `fleet-connect.py`. The hub image is deployed by
-hand: colleagues get the shell once the operator redeploys it; the connect
-page's command is the same line as before.
+hand — but a client does NOT wait for it (issue #1805): every computer follows
+`refs/tags/stable`. The hub looks up what stable names on GitHub (every 5
+minutes, `CCQUOTA_FLEET_STABLE_REPO`, default `verkyyi/claude-fleet`; `off` turns
+it off) and reports it on `/version` as `client_version` + `stable` +
+`client_url` (`<hub>/install/stable/<sha>`, the repo's client files at that
+commit fetched once from GitHub's raw host and kept — only shas stable has
+named, only the client's paths), and `/install` serves stable's own installer
+when it carries the `fleet-install: stable-aware` line. A client compares, stages
+in the background and switches when idle, as before; with no hub it asks
+GitHub's API directly. A hub that never reached GitHub hands out the image's
+packed client, exactly as before. So moving stable is the whole release; the
+image is redeployed only for the hub's own changes. `fleet update` on any
+computer says where it stands.
 Which commit the deployed image was built from is public on `GET /version`
 (`{"version":"prod-<sha>","commit":"<sha>"}`, issue #1696 — the commit is the
 hex run that ends the Dockerfile's `VERSION` build arg, so build with
