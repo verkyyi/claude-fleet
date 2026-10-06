@@ -16,6 +16,9 @@
 #   fleet connect --proxy <m>   ssh's ProxyCommand through the hub
 #   fleet host on|off|status    承载: whether this computer also runs sessions
 #                               (#1806 — the hub's word for it is node)
+#   fleet config [show|add|set|rm|promote|history|restore]
+#                               see where each Agent setting comes from (fleet ·
+#                               团队 · 个人 · 本机) and change your own (#1860)
 #   fleet doctor                with only the client here: its `fleet` row
 #                               (version, hub, tmux, cert — #1722) and its
 #                               `能力` row (基础 · 承载, #1806), then this
@@ -67,7 +70,7 @@ client() {
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;

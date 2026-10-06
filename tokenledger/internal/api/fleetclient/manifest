@@ -153,4 +153,5 @@ bin/fleet-install-apply.sh
 bin/fleet-hooks-merge.py
 bin/fleet-agent-defaults.py
 bin/fleet-agent-team.py
+bin/fleet-config.py
 # --- end agent bundle ---
