@@ -144,7 +144,7 @@ of what it received before this change.
 
 **The decider's view — the rules** (issue #881: six rounds of 发起人 feedback on
 EPIC #883's page, fixed into the frame so the next page starts there instead of
-at round one; rules 0 and 16–23 from issue #929, a page that filled every slot
+at round one; rules 0 and 16–23 from issue #929, rule 24 from issue #1754, a page that filled every slot
 and was still sent back for its surface). The surface is for someone deciding,
 not someone executing — same rules as `skills/epic-page/SKILL.md`'s
 「What goes IN the slots」:
@@ -220,6 +220,32 @@ not someone executing — same rules as `skills/epic-page/SKILL.md`'s
     as the decider sees it (folds stripped, each card one line) plus a `WARN`
     line per machine-visible miss. Walk rules 16–22 against that output; a WARN is
     a question, not a verdict, and rules 16, 17 and 21 are yours to read.
+24. **A visual member ships a clickable prototype, not a sketch** (issue #1754).
+    A member is **visual** when it changes anything the user sees — a dash /
+    侧栏 row, the 状态栏, a 弹出菜单, a 网页, a 小程序 page, a report page's
+    样式. For each one, build **one single-file HTML prototype** in your
+    scratchpad (`<scratchpad>/proto-<slug>-<key>.html`), host it with
+    `~/.claude/skills/doc-preview/share.sh`, and put the frame's
+    `<p class="proto"><a href="…">▶ 打开可交互原型</a></p>` in that card's
+    **upper layer** (under 怎么算成功 — never in the 技术细节 fold). The
+    prototype must:
+    - use the **real shape of the data** — real rows, names, states; no lorem;
+    - **switch the key scenarios** (another device, 失联, 空态, 出错 …);
+    - compare **现在 / 改后** side by side or by a toggle;
+    - make the main interactions **clickable and keyable**;
+    - work at **phone width**;
+    - **explain itself** — someone who never opened the design page gets it.
+
+    The 「客户端新建与位置」 prototype is the reference: a dark terminal frame
+    whose sidebar, status bar and popup menu are real DOM, scenario + 现在 / 改后
+    switches along the top, keyboard and taps both drive it. An ASCII sketch or a
+    still screenshot is **not** a delivery. When the design page changes, the
+    prototype changes with it — edit the same file and `share.sh --refresh`, so
+    the link already on the page stays valid. `--lint` (rule 23) WARNs
+    `prototype` for a card that reads visual (侧栏 / 状态栏 / 菜单 / 页面 / 界面 /
+    样式 …) with no such link; a non-visual card that trips it is yours to wave
+    through, a visual one is not. At filing (step 5) the link goes into the
+    member's body beside its 上线证据.
 
 Visible order, top to bottom: title → number band → `#metrics` → `#charter` →
 `#members` → `#risks` → `#signoff` → `#preflight` (only with something to
@@ -443,6 +469,7 @@ the bodies they always did. Only now, and in this order:
    依赖 C1 (#N) · 被依赖 C3 (#N) C4 (#N)
    ## 完成判据
    **上线证据**：<the one line, verbatim from the page>
+   **交互原型**：<the card's ▶ 打开可交互原型 URL — visual members only, drop the line otherwise>
 
    </details>
 
@@ -458,6 +485,11 @@ the bodies they always did. Only now, and in this order:
      text underneath, so bodies filed in the old shape still read — but the fallback
      is a compatibility path for what is already on GitHub, not a second format to
      write. One line, one label, one colon.
+   - **A visual member's prototype link rides next to its 上线证据** (rule 24,
+     issue #1754): the `**交互原型**：<url>` line right under it, so the worker
+     builds to the prototype and shoots its 改动后 against it. Its own line,
+     never folded into the 上线证据 text — `fleet-evidence.sh line` reads that
+     label alone.
    - **Keep the blank lines around the `<details>` tags.** GitHub renders
      `<details>` in an issue body, but without a blank line after `<summary>` the
      markdown inside stops being parsed as markdown.

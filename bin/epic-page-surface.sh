@@ -30,6 +30,10 @@
 #              > 现值), or 现在 and 目标 in different units (3 处 → 1 行)
 #   for-whom   a 为谁 with no count, or 「所有 …」 / 「团队」 as the person
 #   decision   code inside 需要你定的事, or a 不做 row there (不做 belongs in 范围)
+#   prototype  a member card that changes something the user SEES (侧栏 / 状态栏 /
+#              菜单 / 页面 / 界面 / 样式 …, anywhere in the card) with no
+#              「▶ 打开可交互原型」 link in its upper layer (issue #1754) — an
+#              ASCII sketch or a still is not a visual design
 # It is a checklist aid, not a judge: a clean lint does not make a page good —
 # rules like "the surface answers the theme's question" are yours to read.
 #
@@ -62,6 +66,8 @@ from html.parser import HTMLParser
 
 LINT = os.environ.get("EPS_LINT") == "1"
 BLOCK = {"h1","h2","h3","h4","p","li","tr","summary","dt","dd","pre","figcaption","div"}
+# a member that changes something the user SEES needs a clickable prototype (issue #1754)
+VISUAL = re.compile(r"侧栏|状态栏|菜单|页面|网页|界面|样式|弹窗|小程序")
 VOID = {"br","img","hr","meta","link","input","wbr","source"}
 
 class Surface(HTMLParser):
@@ -80,6 +86,9 @@ class Surface(HTMLParser):
         self.whom_buf = None
         self.raw = []
         self.head_row = False
+        self.cards = []        # per open card: base hidden level, all its text, has-prototype, name
+        self.visual = []       # names of visual member cards with no prototype link
+        self.a_card = None     # the card whose upper-layer <a> is open
     def flush(self, kind="p"):
         t = re.sub(r"\s+", " ", "".join(self.buf)).strip()
         self.buf = []
@@ -96,7 +105,12 @@ class Surface(HTMLParser):
         if tag == "section": self.section = a.get("id", "")
         if tag in ("head","style","script","template"): self.hidden += 1
         elif tag == "details" and "fold" in cls: self.hidden += 1
-        elif tag == "details" and "card" in cls: self.card.append(False)
+        elif tag == "details" and "card" in cls:
+            self.card.append(False)
+            self.cards.append({"base": hid, "text": [], "proto": False, "name": "", "sec": self.section})
+        if tag == "a" and self.cards and self.hidden == self.cards[-1]["base"] + 1:
+            self.a_card = self.cards[-1]       # a link in the card upper layer (tap 1), not in a fold
+            if "proto" in cls: self.a_card["proto"] = True
         if tag == "summary" and self.card and not self.card[-1] and self.stack and self.stack[-1][0] == "details":
             self.card[-1] = True
             self.stack.append((tag, hid, "cardsum")); self.flush(); return
@@ -129,6 +143,7 @@ class Surface(HTMLParser):
             self.cells = None; self.buf = []
         elif kind == "cardsum":
             self.flush("card")
+            if self.cards and self.lines and self.lines[-1][0] == "card": self.cards[-1]["name"] = self.lines[-1][1]
             self.hidden += 1        # the rest of the card is one tap away
         elif t in BLOCK:
             k = "eyebrow" if kind == "eyebrow" else t if t in ("h1","h2","h3","h4","li","dt","dd","summary") else "p"
@@ -138,12 +153,19 @@ class Surface(HTMLParser):
             self.flush(k)
         if t == "strong" and any(k == "cardsum" for _, _, k in self.stack):
             self.buf.append(" — ")   # 名称 — 一句
-        if kind == "card" and self.card: self.card.pop()
+        if t == "a": self.a_card = None
+        if kind == "card" and self.card:
+            self.card.pop()
+            c = self.cards.pop() if self.cards else None
+            if c and c["sec"] == "members" and not c["proto"] and VISUAL.search("".join(c["text"])):
+                self.visual.append(c["name"] or "（未命名成员）")
         # a fold, a card and <head>/<style>/<script> each end their own hiding
         if t in ("details","head","style","script","template"): self.hidden = hid
     def handle_data(self, d):
         if not self.hidden: self.buf.append(d)   # hidden text never reaches the surface
         self.raw.append(d)
+        for c in self.cards: c["text"].append(d)
+        if self.a_card is not None and "原型" in d: self.a_card["proto"] = True
         if self.whom_buf is not None: self.whom_buf.append(d)
     def handle_comment(self, d): pass
 
@@ -198,6 +220,8 @@ for w in p.whom:
     if w.strip("⟨…⟩ ") == "": continue
     if not re.search(r"[0-9０-９一二两三四五六七八九十百千万]", w) or re.search(r"所有|全体|维护团队|团队$", w):
         warn("for-whom", "为谁要写具体的人或角色，并给出数量  ← " + w)
+for name in p.visual:
+    warn("prototype", "视觉成员没有「▶ 打开可交互原型」链接  ← " + name)
 
 seen = set()
 for rule, text in warns:
