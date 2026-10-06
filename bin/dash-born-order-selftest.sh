@@ -21,7 +21,7 @@
 #                  nothing; a remote row with no birth sorts after its born siblings
 #   D. summary   — a needs / failed row puts `! N 个在问你 · 点这里跳过去 ⌃K` on top (the
 #                  sidebar's glyph field `!`, an inert hdr); none ⇒ no line; the hub
-#                  list's has no key hint; a lost machine's row is not counted
+#                  list's has no key hint; a lost machine's row still counts (#1882: the list does not change while a line is down)
 #   E. inventory — fleet-control-read.sh's `born=` column parses (fleet_hub_common
 #                  inventory_row); an adapter without it still parses, born None
 #

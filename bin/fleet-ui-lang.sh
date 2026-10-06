@@ -115,15 +115,11 @@ fleet_ui_t() {
     en:repo_none_tag)           printf '⇢none' ;;
     zh:remote_lost)             printf '失联' ;;
     en:remote_lost)             printf 'lost' ;;
-    # the sidebar's machine status line + the lost group (issue #1475)
+    # the machine words (issue #1475)
     zh:node_silent_fmt)         printf '%s 分钟没联系' "${1:-}" ;;
     en:node_silent_fmt)         printf 'silent %s min' "${1:-}" ;;
     zh:node_maint)              printf '维护中' ;;
     en:node_maint)              printf 'maintenance' ;;
-    zh:lost_heading_fmt)        printf '─ %s 失联 %s 分钟 ─' "${1:-}" "${2:-}" ;;
-    en:lost_heading_fmt)        printf '─ %s lost %s min ─' "${1:-}" "${2:-}" ;;
-    zh:lost_heading_short_fmt)  printf '─ %s 失联 ─' "${1:-}" ;;
-    en:lost_heading_short_fmt)  printf '─ %s lost ─' "${1:-}" ;;
     # the remote row's actions through the hub (issue #1487, EPIC #1479 C8)
     zh:remote_press_any)        printf '按任意键关闭…' ;;
     en:remote_press_any)        printf 'press any key to close…' ;;

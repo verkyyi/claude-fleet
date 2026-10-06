@@ -287,8 +287,9 @@ stderr says `hub unreachable for Ns`). Every reader goes through
 `fleet_status_hub_ok` / `fleet_status_hub_lost` (`bin/fleet-status-lib.sh`; a
 cache from before the file is judged by its own `#ts`, as it always was), none
 probes the hub: older than `FLEET_HUB_SESSIONS_STALE` (60 s) ⇒ 失联. Then the
-sidebar keeps the last list — the other machines' rows dimmed in their
-`─ m4 失联 N 分钟 ─` groups, dated by the hub's silence at least — and on the hub
+sidebar keeps the last list — the other machines' rows dimmed where they
+stand, each ending in `@m4!` (issue #1882: no group of their own, the list
+does not move) — and on the hub
 source this machine's rows come from tmux again (the local-source code, so a
 window opened or closed meanwhile shows at once, and a row's state is its live
 state as always: the hub's word on WHICH local rows exist is as old as its

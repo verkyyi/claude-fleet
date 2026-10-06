@@ -301,7 +301,6 @@ fi
 # for byte.
 RGRP=$RMANY
 RGCNT=()                               # rows per repo group, for the heading's (n)
-LCNT=()                                # rows per LOST machine's group (issue #1475)
 NSESS=0                                # session rows this frame; 0 → the empty-state hint (#998)
 ATTN=0                                 # rows on the list waiting on you (#1750)
 # rgrp_v <@repo> <@norepo> → $rgrp, the window's OWN repo group (issues
@@ -423,14 +422,14 @@ WLIST=${WLIST//\\037/$US}
 # The cache's header lines (#1475) feed the MACHINE STATUS LINE and the LOST
 # GROUPS: `#me` this machine's label; one `#node` per other machine — label,
 # online|lost, your session count there, the hub's last observation of it. A
-# LOST row (its machine lost, or the whole cache stale) is NOT nested: it moves
-# to its machine's group at the foot, `─ m4 失联 3 分钟 ─`, dimmed — so its
-# origin is dropped here, and so is the origin of any row whose parent is lost
-# (a child cannot indent under a parent that sorts somewhere else).
-RN_IDX=' '; RN_K=0; LGRP_BASE=1000000
+# LOST row (its machine lost, or the whole cache stale) STAYS PUT (issue #1882):
+# same group, same place, same parent — only dimmed, its `@m4!` mark and the
+# bar's 入口连不上 / machine cell saying why. It used to move to its machine's
+# own group at the foot (`─ m4 失联 ─`, #1475/#1770), so the list reshuffled the
+# moment a network dropped and again when it came back.
 HUBSRC=0; [ "$SIDEBAR" = 1 ] && [ "${FLEET_SIDEBAR_SOURCE:-local}" = hub ] && HUBSRC=1
 if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remote_$FLEET_SESSION" ]; then
-  RLIST=''; _rn=90000; _rts=0; _rstale=0; _rlostn=' '; _rlostw=' '; _rrows=(); _lwids=' '
+  RLIST=''; _rn=90000; _rstale=0; _rlostn=' '; _rrows=(); _lwids=' '
   # the remote rows' fold bits (issue #1749): the worker_ids opened on THIS machine
   _rexpd=$'\n'; [ -s "$G/remote_fold_$FLEET_SESSION" ] && _rexpd+="$(cat "$G/remote_fold_$FLEET_SESSION")"$'\n'
   # 失联 is decided ONCE, off global/hub_ok (#1483) — the cache's own #ts only
@@ -444,16 +443,11 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # #1488: hub | node) the same — empty reads as hub.
   while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg; do
     case "$r_wid" in
-      '#ts')   _rts=$r_node; case "$_rts" in ''|*[!0-9]*) _rts=0 ;; esac; continue ;;
-      '#me')   continue ;;
+      '#ts'|'#me') continue ;;
       '#node') [ -n "$r_node" ] || continue
                # a machine heard over the shell's own connection (via=node — its
                # 6th field, #1488) is not lost for the hub's silence: it answered
                [ "$_rstale" = 1 ] && [ "$r_state" != node ] && r_av=lost
-               RN_K=$((RN_K + 1)); RN_IDX+="$r_node=$RN_K "
-               RN_LABEL[RN_K]=$r_node; RN_AV[RN_K]=$r_av; RN_N[RN_K]=${r_iss:-0}; RN_SEEN[RN_K]=${r_repo:-0}
-               case "${RN_N[RN_K]}" in ''|*[!0-9]*) RN_N[RN_K]=0 ;; esac
-               case "${RN_SEEN[RN_K]}" in ''|*[!0-9]*) RN_SEEN[RN_K]=0 ;; esac
                [ "$r_av" = lost ] && _rlostn+="$r_node "
                continue ;;
       wid:*/*) ;;
@@ -468,12 +462,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
     [ "$_rstale" = 1 ] && [ "$r_via" != node ] && r_av=lost
     case "$_rlostn" in *" $r_node "*) r_av=lost ;; esac
     if [ "$r_av" = lost ]; then
-      r_node="$r_node!"; _rlostw+="$r_wid "
-      # a lost machine the cache has no #node line for (a pre-#1475 cache): one now
-      case "$RN_IDX" in *" ${r_node%!}="*) ;; *)
-        RN_K=$((RN_K + 1)); RN_IDX+="${r_node%!}=$RN_K "
-        RN_LABEL[RN_K]=${r_node%!}; RN_AV[RN_K]=lost; RN_N[RN_K]=0; RN_SEEN[RN_K]=0 ;;
-      esac
+      r_node="$r_node!"
     elif [ "$r_via" = node ]; then
       # taken over the machine's direct connection while the hub is silent
       # (#1488): `m5~` — the view ends the row in a dim `m5` (#1621), nothing else
@@ -484,9 +473,6 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
     IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg <<< "$_rr"
-    case "$r_node" in *!) r_orig='' ;; esac                      # lost: never nested
-    # parent lost: _rlostw holds row ids (`wid:`-prefixed), the origin is bare
-    [ -n "$r_orig" ] && case "$_rlostw" in *" wid:$r_orig "*) r_orig='' ;; esac
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
     RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg"$'\n'
@@ -781,14 +767,11 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # A row on another machine (issues #1423/#1475): @wid carries its machine
   # label — `m4`, `m4!` once that machine is lost, `m5~` when the row came over
   # the shell's direct connection to it (#1488). The label draws DIM at the
-  # row's end; a lost row sorts into its machine's group at the foot (lgrp).
-  rnode=''; rlost=''; lgrp=''
+  # row's end; a lost row stays where it is, dimmed (issue #1882).
+  rnode=''; rlost=''
   case "$wid" in wid:*)
     rnode=${hnd%[!~]}
-    case "$hnd" in *!) rlost=1
-      _t=${RN_IDX#* "$rnode"=}; _t=${_t%% *}
-      case "$_t" in ''|*[!0-9]*) lgrp=$LGRP_BASE ;; *) lgrp=$((LGRP_BASE + _t)) ;; esac ;;
-    esac ;;
+    case "$hnd" in *!) rlost=1 ;; esac ;;
   esac
   ckey_v "$path"; key=$ckey
   ctxkey="$key"
@@ -1105,11 +1088,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # filter, so a heading's `(n)` is the rows that render under it, a collapsed
   # parent's hidden ones too.
   repod=''
-  if [ -n "$lgrp" ]; then
-    # a lost machine's row (issue #1475): its machine's own group at the foot,
-    # counted for that group's heading; no pin tier, no repo tag
-    rgrp=$lgrp; LCNT[lgrp - LGRP_BASE]=$(( ${LCNT[lgrp - LGRP_BASE]:-0} + 1 ))
-  elif [ "$pinned" = 0 ]; then
+  if [ "$pinned" = 0 ]; then
     rgrp=$PGRP; PINCNT=$((PINCNT + 1))
     [ "$RGRP" = 1 ] && repod=${RGTAG[ownrgrp]-}
   elif [ "$RGRP" = 1 ]; then
@@ -1161,9 +1140,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     [ "$_hid" = 1 ] && continue
   fi
   # a row on the list that is waiting on you (rk 0: needs / failed) — the born
-  # order's summary line counts it (issue #1750); a lost machine's row cannot be
-  # answered from here, so it is not one
-  [ "$rk" = 0 ] && [ -z "$rlost" ] && ATTN=$((ATTN + 1))
+  # order's summary line counts it (issue #1750) — a lost machine's row too: the
+  # list keeps every line it had while a network is down (issue #1882), and the
+  # question is still waiting there once the line is back
+  [ "$rk" = 0 ] && ATTN=$((ATTN + 1))
   tagd="$repod"
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
   # repo badge (issue #793): DROPPED under `all` (issue #995) — the only frame
@@ -1406,44 +1386,11 @@ if [ "$RGRP" = 1 ]; then
   hd_v "$((RNREPO + 1))" "$(fleet_ui_t no_repo)" '' none
 fi
 
-# --- the other machines (issue #1475) ------------------------------------------
-# Only with a remote cache that names another machine (a `#node` line, or a lost
-# row's own machine): a one-machine fleet, or the hub off, adds not one line
-# here. Never keyed on `#me` (issue #1770): the client's cache leaves it empty —
-# every row there is another machine's — so a lost machine's rows sank to the
-# foot with no heading above them and read as the last group's, `无仓库`.
-# One LOST-GROUP heading per lost machine
-# that has rows this frame, `─ m4 失联 3 分钟 ─`, above its dimmed rows at the
-# foot (LGRP_BASE+k). There is no machine status line at the top any more
-# (issue #1531): it repeated the bar's machine cell, and its counts named no
-# row below it — which machine is online / 维护中 / lost lives in the bar's
-# machine cell and these headings only.
-if [ "$RN_K" -gt 0 ]; then
-  _k=1
-  while [ "$_k" -le "$RN_K" ]; do
-    # the group heading: a machine with lost rows this frame (the hub may call
-    # one fleet lost while the machine's node is still heard — the rows still
-    # gather under the machine's name, without a duration)
-    if [ "${LCNT[_k]:-0}" -gt 0 ]; then
-      _mins=0
-      if [ "${RN_AV[_k]}" = lost ]; then
-        _seen=${RN_SEEN[_k]}; [ "$_seen" -gt 0 ] || _seen=$_rts
-        # the hub itself silent (#1483): unheard at least since its last answer
-        [ "${_rstale:-0}" = 1 ] && [ "${FSH_TS:-0}" -gt 0 ] && [ "$_seen" -gt "$FSH_TS" ] && _seen=$FSH_TS
-        [ "$_seen" -gt 0 ] && [ "$NOW" -gt "$_seen" ] && _mins=$(( (NOW - _seen) / 60 ))
-      fi
-      if [ "$_mins" -gt 0 ]; then t=$(fleet_ui_t lost_heading_fmt "${RN_LABEL[_k]}" "$_mins")
-      else t=$(fleet_ui_t lost_heading_short_fmt "${RN_LABEL[_k]}"); fi
-      if [ "$SIDEBAR" = 1 ]; then
-        buf+="$((LGRP_BASE + _k))	-1	0	hdr$US$US$US$t$US "$'\n'
-      else
-        buf+="$((LGRP_BASE + _k))	-1	0	hdr${US}hdr${US}${GY}${t}${R}"$'\n'
-      fi
-    fi
-    _k=$((_k + 1))
-  done
-  unset _k _mins _seen
-fi
+# --- the other machines (issues #1475, #1882) -------------------------------
+# No heading of their own: a lost machine's rows stay in their own groups,
+# dimmed (above) — a `─ m4 失联 ─` group at the foot made the whole list move
+# when a network dropped (issue #1882). Which machine is lost, or that the hub
+# is unreachable, is the bar's machine cell and each row's `@m4!` mark.
 
 # 要你处理 (issue #1750): in the born order a `needs` / `failed` row no longer
 # rises to the top — it stays where it was born, red — so ONE summary line above
