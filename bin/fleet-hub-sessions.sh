@@ -760,7 +760,10 @@ node_ssh_host() {
 # machine no window is on.
 node_sources() {
   local remote ctl node host out
-  out=$(tmux -L "$CLIENT" list-windows -t "=$CLIENT" -F "#{@remote}"$'\t'"#{@remote_ctl}" 2>/dev/null \
+  # the stage's windows (issue #1759: the shell's proxies live on `<client>-stage`),
+  # and a shell's own, started before it
+  out=$( { tmux -L "$CLIENT-stage" list-windows -t "=$CLIENT-stage" -F "#{@remote}"$'\t'"#{@remote_ctl}" 2>/dev/null
+           tmux -L "$CLIENT" list-windows -t "=$CLIENT" -F "#{@remote}"$'\t'"#{@remote_ctl}" 2>/dev/null; } \
   | while IFS=$'\t' read -r remote ctl; do
       node=${remote%%:*}
       case "$node" in (''|-|*[!A-Za-z0-9._-]*) continue ;; esac
@@ -768,7 +771,7 @@ node_sources() {
       host=$(node_ssh_host "$node")
       ${FLEET_REMOTE_SSH_CMD:-ssh} -S "$ctl" -O check "$host" >/dev/null 2>&1 || continue
       printf '%s\t%s\t%s\n' "$node" "$host" "$ctl"
-    done)
+    done | awk -F '\t' '!seen[$1]++')   # one connection per machine, the stage's first
   [ -n "$out" ] && printf '%s\n' "$out"
   for ctl in "${TMPDIR:-/tmp}"/warm/*.sock; do
     [ -S "$ctl" ] || continue

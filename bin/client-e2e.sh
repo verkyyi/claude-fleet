@@ -95,6 +95,7 @@ waitfor() {
 ts() { "$REAL_TMUX" -L "$SESS" "$@"; }
 cleanup() {
   ts kill-server 2>/dev/null
+  "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
   pkill -f "fleet-shell.sh [a-z]* $SESS" 2>/dev/null
   # the client's own loops (keeper, hub-sessions) run from its cache's bin/
   [ -n "$SC" ] && pkill -f "$SC/bin/" 2>/dev/null
@@ -254,11 +255,16 @@ ts has-session -t "=$SESS" 2>/dev/null || die 'the client tmux server is not up'
 mkfifo "$WORK/client.fifo"
 "$REAL_TMUX" -L "$SESS" -C attach-session -t "=$SESS" <"$WORK/client.fifo" >/dev/null 2>&1 &
 exec 7>"$WORK/client.fifo"
-w1=$(ts list-windows -t "=$SESS" -F '#{window_id}' | head -1)
-remote=$(ts show-options -wqv -t "$w1" @remote)
-[ "$remote" = "$NODE:" ] || die "the right pane is not the node ($NODE:)" "@remote=$remote · $(ts list-windows -t "=$SESS" -F '#{window_name}' | tr '\n' ' ')"
+# The proxy windows: on the client's STAGE server (`<session>-stage`, issue
+# #1759), or — a client installed before it — on its own server.
+P="$SESS"; waitfor 5 "$REAL_TMUX" -L "$SESS-stage" has-session -t "=$SESS-stage" && P="$SESS-stage"
+tp() { "$REAL_TMUX" -L "$P" "$@"; }
+STG=''; [ "$P" = "$SESS" ] || STG=$P
+w1=$(tp list-windows -t "=$P" -F '#{window_id}' | head -1)
+remote=$(tp show-options -wqv -t "$w1" @remote)
+[ "$remote" = "$NODE:" ] || die "the right pane is not the node ($NODE:)" "@remote=$remote · $(tp list-windows -t "=$P" -F '#{window_name}' | tr '\n' ' ')"
 waitfor 15 grep -q "attach --shell" "$WORK/ssh.log" || die 'the client never asked the node for attach --shell' "$(cat "$WORK/ssh.log" 2>/dev/null)"
-ok "client up on -L $SESS: window $(ts display-message -p -t "$w1" '#{window_name}') (@remote=$remote)"
+ok "client up on -L $SESS: window $(tp display-message -p -t "$w1" '#{window_name}') on -L $P (@remote=$remote)"
 
 # =============================================================================
 step 'list: the client lists the node'"'"'s sessions'
@@ -279,12 +285,12 @@ ok 'the list shows issue-7 and scratch-3 on the node'
 
 # =============================================================================
 step 'switch: open the issue-7 row, the right pane points at it'
-waitfor 10 test -S "$(ts show-options -wqv -t "$w1" @remote_ctl)" || die 'no live @remote_ctl on the node window' "$(ts show-options -wqv -t "$w1" @remote_ctl)"
-got=$(cd "$SC/bin" && cenv TMUX="$sock,0,0" FLEET_SHELL=1 FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 TMPDIR="$SC/tmp" \
+waitfor 10 test -S "$(tp show-options -wqv -t "$w1" @remote_ctl)" || die 'no live @remote_ctl on the node window' "$(tp show-options -wqv -t "$w1" @remote_ctl)"
+got=$(cd "$SC/bin" && cenv TMUX="$sock,0,0" FLEET_SHELL=1 ${STG:+FLEET_SHELL_STAGE="$STG"} FLEET_SESSION="$SESS" CCQUOTA_FLEET=1 TMPDIR="$SC/tmp" \
         FLEET_CONF_DIR="$CH/.config/claude-fleet" bash "$SC/bin/fleet-remote-view.sh" open "wid:$FID/issue-7" 2>&1)
-remote=$(ts show-options -wqv -t "$w1" @remote)
+remote=$(tp show-options -wqv -t "$w1" @remote)
 [ "$remote" = "$NODE:$FID/issue-7" ] || die "the right pane does not point at issue-7" "open → $got · @remote=$remote"
 grep -q "select '$FID/issue-7'" "$WORK/ssh.log" || die 'the node was not asked to select issue-7' "$(cat "$WORK/ssh.log")"
-ok "@remote=$remote, window $(ts display-message -p -t "$w1" '#{window_name}')"
+ok "@remote=$remote, window $(tp display-message -p -t "$w1" '#{window_name}')"
 
 printf '\nclient-e2e: GREEN — installed from %s/install, listed and switched in %ss\n' "$HUB" "$(( $(date +%s) - START ))"
