@@ -30,5 +30,6 @@
 | 客户端服务器被关（`:kill-server`、删光窗口） | 客户端没了 | 再敲一次 `fleet` 就原样回来；机器上的会话不受影响 | `client-kill-server` |
 | `~/.ssh/config` 里给这台机器写了固定 `RemoteForward`（如 open-url.sh 的 2226） | 同一台机器的第二条连接再要这个端口被拒，骑共享连接的 attach 直接失败：右侧空白、有的行切不过去，`run` 循环几秒一次重连，最后对方 sshd 开始拒连 | 骑共享连接的会话一律 `ClearAllForwardings=yes`，自己开的 master 拿不到转发也照常连（`ExitOnForwardFailure=no`）；断线提示写人话（#1775） | `static-forward` |
 | 代理窗口被关（关窗、`kill-server`），而里面的 attach 永不返回 | `run` 循环和它的 ssh 成了孤儿，TERM 杀不掉，远端 view session 越积越多、把别人在看的窗口挤到最小 | attach 放后台 `wait`，窗格/服务器关掉的 HUP 和 TERM 立即走 cleanup；首次连接先等 warm 连接，不再私开一条（#1704） | `proxy-orphan` |
+| 客户端的文件在它运行中被换掉、没有重新载入（#1781 之前的 `start` 把整个目录挪开换新、或在跑的时候又跑了一遍安装行） | 旧代码的代理循环和它的连接还在，新代码再开一条要同一个 `RemoteForward 2226`：点 worker 卡死，而且毫无痕迹，只能比对文件时间才发现「刚换过版本」 | 运行中的服务器记着自己载入的版本（`@client_version`），和磁盘上的 `.client-version` 对不上时，keeper 空闲时（或下一次 `fleet`）`reload --all`：代理窗格全部重开、循环和 keeper 重启；状态栏「✓ 已更新到 …」、每个客户端一句「fleet 客户端已更新到 …（入口 …）」、`fleet doctor` 记着上次更新；还是普通目录的 home 补成版本目录（#1829）。home 里的手改下次切换就没了——长期的本地补丁放 `~/.ssh/config` | `client-files-swapped` |
 | 入口不可达 | 客户端打不开、看不出原因 | 客户端照常打开（侧栏 + 右侧），状态栏左边橙色「入口连不上」（#1779） | `hub-unreachable` |
 | 入口数据盘满 | 入口写不进，租约、会话表都停 | 在入口仓库修 | 登记：monorepo #11641 |

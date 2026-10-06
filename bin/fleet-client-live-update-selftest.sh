@@ -32,6 +32,16 @@
 #                  respawned (new pid), the servers still the same
 #   G. restart     a `later` client and nobody attached: `start` closes the
 #                  client's servers and switches (exit 3)
+#   H. drift       the files change under the running client with no reload
+#                  (issue #1829 — a pre-#1781 `start` swapped the home, or the
+#                  install line wrote it in place): the server's @client_version
+#                  no longer matches → not while someone types; once idle, tick
+#                  reloads it (exit 4) with the proxy pane respawned, the servers
+#                  the same, the stamp moved, update.state done; `start` does the
+#                  same before it attaches, and restarts the keeper
+#   I. adopt       a plain-dir home and a pre-#1781 <home>.prev, nothing running:
+#                  `start` makes them versions/<v> + the link, and .prev names the
+#                  old one
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -248,6 +258,42 @@ eq "F: the shell's server: same pid" "$SP" "$(shell_pid)"
 eq "F: the stage's server: same pid" "$GP" "$(stage_pid)"
 CHECKS=$((CHECKS + 1)); [ -d "$V/v4" ] && [ ! -d "$V/v2" ] || fail 'F: prune keeps the current + .prev only' "$(ls "$V")"
 
+# --- H. the files moved under the running client (issue #1829) -----------------------
+stamp() { ts show-options -gqv @client_version 2>/dev/null; }
+eq 'H: the running server carries the version it loaded' v6 "$(stamp)"
+# the install line (or a pre-#1781 start) — new files, no reload
+printf 'version=v6x\ncompat=1\ncommit=beef06x\nhub=%s\n' "$FLEET_HUB_URL" > "$ROOT/.client-version"
+PP=$(proxy_pid)
+FLEET_CLIENT_IDLE_SECS=99999999 upd tick "$SESS"; rc=$?
+eq 'H: someone typing → nothing yet (exit 0)' 0 "$rc"
+eq 'H: … the proxy untouched' "$PP" "$(proxy_pid)"
+FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
+eq 'H: idle → reloaded in place (exit 4)' 4 "$rc"
+eq 'H: the stamp follows the files' v6x "$(stamp)"
+waitfor 5 proxy_moved "$PP"
+CHECKS=$((CHECKS + 1)); [ -n "$(proxy_pid)" ] && [ "$(proxy_pid)" != "$PP" ] || fail 'H: the old proxy was kept beside the new code' "$PP → $(proxy_pid)"
+eq "H: the shell's server: same pid" "$SP" "$(shell_pid)"
+eq "H: the stage's server: same pid" "$GP" "$(stage_pid)"
+st=$(cat "$UST" 2>/dev/null)
+has 'H: update.state done' "$st" '"phase": "done"'
+has 'H: … names the new commit' "$st" '"commit": "beef06x"'
+has 'H: … and where it came from' "$st" '"from": "v6"'
+has 'H: the update log says why' "$(cat "$STATE/update.log" 2>/dev/null)" 'files moved under the running client'
+has 'H: the doctor row names the last update' "$(upd doctor)" '上次更新'
+FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
+eq 'H: in step again → nothing (exit 0)' 0 "$rc"
+# `start` (the person typing `fleet` again) — before it attaches
+printf 'version=v6y\ncompat=1\ncommit=beef06y\nhub=%s\n' "$FLEET_HUB_URL" > "$ROOT/.client-version"
+KP=$(cat "$FLEET_SHELL_CACHE/tmp/keeper.pid" 2>/dev/null)
+upd start; rc=$?
+eq 'H: start opens as usual (exit 0)' 0 "$rc"
+eq 'H: start reloaded it first' v6y "$(stamp)"
+keeper_moved() { local p; p=$(cat "$FLEET_SHELL_CACHE/tmp/keeper.pid" 2>/dev/null); [ -n "$p" ] && [ "$p" != "$KP" ] && kill -0 "$p" 2>/dev/null; }
+waitfor 5 keeper_moved
+CHECKS=$((CHECKS + 1)); keeper_moved || fail 'H: the old keeper was kept (start reload)' "$KP → $(cat "$FLEET_SHELL_CACHE/tmp/keeper.pid" 2>/dev/null)"
+CHECKS=$((CHECKS + 1)); [ -n "$KP" ] && kill -0 "$KP" 2>/dev/null && fail 'H: the old keeper still runs' "$KP"
+SP=$(shell_pid)
+
 # --- G. a restart-needing client, nobody attached: the next `fleet` takes it -------------
 exec 7>&-; kill "$CLIENT_PID" 2>/dev/null; CLIENT_PID=''
 waitfor 5 not attached
@@ -260,6 +306,22 @@ upd start; rc=$?
 eq 'G: start with nobody attached → switched (exit 3)' 3 "$rc"
 CHECKS=$((CHECKS + 1)); link_is v7 || fail 'G: not switched to v7'
 CHECKS=$((CHECKS + 1)); ts has-session -t "=$SESS" 2>/dev/null && fail "G: the old client's server is still up"
+
+# --- I. a home older than its version dirs (issue #1829) ---------------------------------
+"$REAL_TMUX" -L "$SESS" kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+rm -rf "$ROOT" "$V"
+mkver "$ROOT" w1 cafe001; rm -f "$ROOT/bin/fleet-up.sh"       # an installed client, not a full install
+mkver "$ROOT.prev" w0 cafe000                                  # what a pre-#1781 switch left
+upd start; rc=$?
+eq 'I: start (nothing running) → opens as usual (exit 0)' 0 "$rc"
+CHECKS=$((CHECKS + 1)); [ -L "$ROOT" ] && link_is w1 || fail 'I: <home> not adopted as versions/w1' "$(ls -la "$XDG_DATA_HOME")"
+CHECKS=$((CHECKS + 1)); [ -f "$V/w0/.client-version" ] && [ ! -e "$ROOT.prev" ] || fail 'I: <home>.prev not taken in as versions/w0' "$(ls -a "$V" "$XDG_DATA_HOME")"
+eq 'I: .prev names it' w0 "$(cat "$V/.prev" 2>/dev/null)"
+# a full install (bin/fleet-up.sh) is never adopted
+rm -rf "$ROOT" "$V" "$ROOT.prev"
+mkver "$ROOT" w2 cafe002
+upd start
+CHECKS=$((CHECKS + 1)); [ -L "$ROOT" ] && fail 'I: a full install was adopted'
 
 if [ "$FAIL" -eq 0 ]; then printf 'PASS fleet-client-live-update-selftest (%d checks)\n' "$CHECKS"; exit 0; fi
 printf 'FAIL fleet-client-live-update-selftest: %d of %d\n' "$FAIL" "$CHECKS"
