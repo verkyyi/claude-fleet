@@ -65,13 +65,13 @@ case "$MAXAGE" in ''|*[!0-9]*) [ -z "$MAXAGE" ] || { echo "fleet-node-probe: --m
 
 jget() { sed -n "s/.*\"$1\":\"\\{0,1\\}\\([^\",}]*\\)\"\\{0,1\\}.*/\\1/p" "$2" | head -n 1; }
 
-mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null; }
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }  # GNU first: GNU `stat -f` is filesystem status and succeeds
 
 # ── measure (or reuse) ──────────────────────────────────────────────────────
 reuse=0
 if [ -n "$MAXAGE" ] && [ -s "$OUT" ]; then
   m=$(mtime "$OUT")
-  [ -n "$m" ] && [ $(( $(date +%s) - m )) -lt "$MAXAGE" ] && reuse=1
+  case "$m" in ''|*[!0-9]*) ;; *) [ $(( $(date +%s) - m )) -lt "$MAXAGE" ] && reuse=1 ;; esac
 fi
 
 if [ "$reuse" = 0 ]; then
