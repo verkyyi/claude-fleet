@@ -332,10 +332,11 @@ $wid $w $s $fid"
   return 0
 }
 # rv_chan_select <chan> <worker_id> — `select` over a proxy's `serve` channel
-# (issue #1682). 0 = selected there; anything else (no channel, not live there,
-# no answer in 2 s) = the caller's one-shot path, which also says why.
+# (issue #1682). 0 = selected there; 2 = no answer in 2 s (a dead line, issue
+# #1876: the caller reconnects rather than try the same line again); anything
+# else (no channel, not live there) = the caller's one-shot path.
 rv_chan_select() {
-  local c="$1" nonce n r rc=1
+  local c="$1" nonce n r rc=none
   [ -p "$c.cmd" ] && [ -p "$c.ack" ] || return 1
   nonce="o$$-$RANDOM"
   exec 7<>"$c.ack" 8<>"$c.cmd" || return 1
@@ -346,7 +347,18 @@ rv_chan_select() {
     [ "$n" = "$nonce" ] && { rc=$r; break; }
   done
   exec 7<&- 8>&-
-  [ "$rc" = 0 ]
+  case "$rc" in 0) return 0 ;; none) return 2 ;; *) return 1 ;; esac
+}
+# rv_within <secs> <cmd…> — the command's status, or 124 once it has run <secs>
+# (killed then): an ssh on a half-dead master never returns (issue #1876).
+rv_within() {
+  local n=$(( $1 * 10 )) p; shift
+  "$@" & p=$!
+  while kill -0 "$p" 2>/dev/null; do
+    [ "$n" -le 0 ] && { pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; return 124; }
+    sleep 0.1; n=$((n - 1))
+  done
+  wait "$p"
 }
 
 case "$mode" in
@@ -397,12 +409,21 @@ open)
       ctl=$(OT show-options -wqv -t "$w" @remote_ctl 2>/dev/null)
       rview=$(OT show-options -wqv -t "$w" @remote_view 2>/dev/null)   # its view session (#1489)
       chn=$(OT show-options -wqv -t "$w" @remote_chan 2>/dev/null)
+      # A pane between two connections (issue #1876) — its line dropped, the
+      # loop waiting out the back-off or reconnecting — has nothing to select
+      # in: a one-shot `select` there "succeeds" against a far end with no view
+      # session and the pane comes back on the worker it had. It is respawned on
+      # the new row at once. A channel that does not answer in time is a dead
+      # line too; a one-shot select gets the same bound.
+      down=$(OT show-options -wqv -t "$w" @remote_down 2>/dev/null)
       SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"; host=$(ssh_host "$node"); rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
-      if [ -n "$chn" ] && rv_chan_select "$chn" "$wid"; then
+      crc=1; [ -z "$down" ] && [ -n "$chn" ] && { rv_chan_select "$chn" "$wid"; crc=$?; }
+      if [ "$crc" = 0 ]; then
         OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
         OT rename-window -t "$w" -- "$title" 2>/dev/null
-      elif [ -n "$ctl" ] && [ -S "$ctl" ] && $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 \
-         && $SSH "${MUXO[@]}" -S "$ctl" "$host" "bash $rbin/fleet-remote-view.sh select $(sq "$wid")${rview:+ $(sq "$rview")}" >/dev/null 2>&1; then
+      elif [ -z "$down" ] && [ "$crc" != 2 ] && [ -n "$ctl" ] && [ -S "$ctl" ] \
+         && rv_within "${FLEET_REMOTE_SELECT_SECS:-2}" $SSH -S "$ctl" -O check "$host" >/dev/null 2>&1 \
+         && rv_within "${FLEET_REMOTE_SELECT_SECS:-2}" $SSH "${MUXO[@]}" -S "$ctl" "$host" "bash $rbin/fleet-remote-view.sh select $(sq "$wid")${rview:+ $(sq "$rview")}" >/dev/null 2>&1; then
         OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
         OT rename-window -t "$w" -- "$title" 2>/dev/null
       else
@@ -618,6 +639,12 @@ EOF_PEER
     # keepalive and life are the warm loop's; a drop here just comes back round.
     use="$ctl"
     pane_gone && exit 0   # the cleanup trap runs on the way out (issue #1704)
+    # The row picked last (issue #1876): `open` writes it on this window, so a
+    # reconnect lands where the person is now, not where this loop began.
+    if [ -n "${TMUX:-}" ]; then
+      cur=$(tmux show-options -wqv -t "${TMUX_PANE:-}" @remote 2>/dev/null)
+      case "$cur" in "$node":?*) wid=${cur#"$node":} ;; esac
+    fi
     if [ -n "$shellopt" ] && [ "${FLEET_SHELL_WARM:-1}" != 0 ]; then
       # A warm master still coming up (its `<sock>.pending` pid alive — the shell
       # and the first click start in the same second) is waited for, up to
@@ -638,10 +665,10 @@ EOF_PEER
     fi
     [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$use" 2>/dev/null
     if [ "$use" != "$ctl" ]; then
-      printf '\033[2J\033[H→ %s (%s · 已连) …\n' "$node" "$host"
+      printf '\033[2J\033[H→ 正在连接 %s (%s · 已连) …\n' "$node" "$host"
       opts=(-tt -o ControlMaster=no "${MUXO[@]}" -S "$use")
     else
-      printf '\033[2J\033[H→ %s (%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
+      printf '\033[2J\033[H→ 正在连接 %s (%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
         "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')"
       # keepalive 2 s × 3: a dead line is seen in ≤ 6 s (issue #1631, was 5 × 3);
       # no compression (a LAN / tailnet only pays its latency), low-delay QoS
@@ -662,12 +689,23 @@ EOF_PEER
     # its stdin (a background job's default is /dev/null). ssh's own words go to
     # a file, read back below in a person's words (issue #1775 §3).
     : > "$ctl.ssherr"
+    # Between two connections nothing the person types is echoed (issue #1876):
+    # ssh -tt takes the tty raw for the session and gives back this state.
+    [ -t 0 ] && stty -echo 2>/dev/null
+    [ -n "${TMUX:-}" ] && tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_down 2>/dev/null
     FLEET_CONNECT_ROUTE_FILE="$ctl.route" FLEET_CONNECT_RETEST="$retest" \
       $SSH ${opts[@]+"${opts[@]}"} "$host" "bash $rbin/fleet-remote-view.sh attach$shellopt $(sq "$wid") $(sq "$view")" \
       0<&0 2>"$ctl.ssherr" &
     att=$!
     wait "$att"; rc=$?
     att=''
+    # The line is gone (issue #1876): `open` now reconnects instead of selecting
+    # over it, and the far end's tmux never got to turn its mouse reporting (and
+    # bracketed paste) off in this pane — the outer tmux would keep handing it
+    # SGR reports nobody reads. Off here, as the far end's exit would have.
+    [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_down 1 2>/dev/null
+    printf '\033[?1000l\033[?1002l\033[?1003l\033[?1005l\033[?1006l\033[?1015l\033[?2004l'
+    [ -t 0 ] && stty -echo 2>/dev/null
     stop_bg
     why=$(rv_ssh_why "$ctl.ssherr" | cut -c1-120)
     # the reason on a line of its own, above the drop line (issue #1775 §3): a
@@ -700,7 +738,7 @@ EOF_PEER
       # stage's last one, the right pane), does nothing while it waits.
       printf '\n与 %s 的连接断了（exit %s）· %ss 后重连 · 回车立即重连\n' "$node" "$rc" "$delay"
       trap '' INT
-      if [ -t 0 ]; then read -r -t "$delay" _ 2>/dev/null || :; else sleep "$delay"; fi
+      if [ -t 0 ]; then read -r -s -t "$delay" _ 2>/dev/null || :; else sleep "$delay"; fi
       trap 'cleanup; exit 0' INT
     else
       printf '\n与 %s 的连接断了（exit %s），%ss 后重连 · Ctrl-C 关闭窗口\n' "$node" "$rc" "$delay"

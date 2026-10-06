@@ -35,6 +35,8 @@
 | 客户端的侧栏 / 右侧进程被杀 | 一半屏幕空着，只能重开 | 侧栏 5 秒内重画，右侧窗格 5 秒内重开（#1785） | `client-pane-killed` |
 | 侧栏上按 Ctrl+C / Ctrl+\\ / Ctrl+Z | 侧栏进程退出或被挂起 | 侧栏忽略这三个键，还是同一个进程（#1785） | `sidebar-ctrl-c` |
 | 右侧嵌套连接断开（断网、合盖、对端重启） | 右侧窗口关掉，回不到那台机器 | 右侧停在「回车立即重连」，Ctrl+C 也不关窗口（#1785） | `nested-drop` |
+| 客户端断网重连期间（或连接半死时）在侧栏切换同一台机器的另一个会话 | 「切换」发到还没连上的连接上：远端在没有 view session 时退到 fleet 会话里选窗口、照样回 0，`open` 当已切换；run 循环重连时仍 attach 最初那个会话，右侧停在旧画面，再点同一行什么都不做，直到再换一行 | 断线到重连之间窗口标着 `@remote_down`，这时的切换一律重开右侧窗格、立即写「→ 正在连接 m4」并 attach 新的那一行；`serve` 通道 2 秒不答（半死的线）同样重开，单发 `select` 也限 2 秒；run 循环每轮 attach 窗口当前的 `@remote`（#1876） | `reconnect-stale-view` |
+| 右侧连接断掉后（重连页、正在连接）在右侧拖动 / 点击鼠标 | 远端 tmux 打开的鼠标上报没人关，外层 tmux 继续把 `ESC [ < b ; x ; y M` 送进窗格，等待页的 `read` 开着回显，屏幕上一串乱码 | attach 一结束就关掉窗格的鼠标上报、括号粘贴；等待和连接期间不回显输入（#1876） | `reconnect-mouse` |
 | 客户端服务器被关（`:kill-server`、删光窗口） | 客户端没了 | 再敲一次 `fleet` 就原样回来；机器上的会话不受影响 | `client-kill-server` |
 | `~/.ssh/config` 里给这台机器写了固定 `RemoteForward`（如 open-url.sh 的 2226） | 同一台机器的第二条连接再要这个端口被拒，骑共享连接的 attach 直接失败：右侧空白、有的行切不过去，`run` 循环几秒一次重连，最后对方 sshd 开始拒连 | 骑共享连接的会话一律 `ClearAllForwardings=yes`，自己开的 master 拿不到转发也照常连（`ExitOnForwardFailure=no`）；断线提示写人话（#1775） | `static-forward` |
 | 代理窗口被关（关窗、`kill-server`），而里面的 attach 永不返回 | `run` 循环和它的 ssh 成了孤儿，TERM 杀不掉，远端 view session 越积越多、把别人在看的窗口挤到最小 | attach 放后台 `wait`，窗格/服务器关掉的 HUP 和 TERM 立即走 cleanup；首次连接先等 warm 连接，不再私开一条（#1704） | `proxy-orphan` |
