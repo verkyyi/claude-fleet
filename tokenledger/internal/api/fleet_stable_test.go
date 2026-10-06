@@ -1,6 +1,9 @@
 package api
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,6 +26,12 @@ type fakeGitHub struct {
 	files  map[string]string // "<sha>/<path>" → body
 	raw    int
 	down   bool
+	// codeload (claude-fleet#1901): "<sha>" → a tar.gz of files[<sha>/…];
+	// served only when tarball is on. rawDown resets the raw host, as the
+	// hub's cluster in China sees raw.githubusercontent.com.
+	tarball bool
+	tars    int
+	rawDown bool
 }
 
 func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -41,12 +50,48 @@ func (g *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := strings.TrimPrefix(r.URL.Path, "/o/r/")
+	if sha, ok := strings.CutPrefix(key, "tar.gz/"); ok {
+		if !g.tarball {
+			http.NotFound(w, r)
+			return
+		}
+		g.tars++
+		_, _ = w.Write(g.tarOf(sha))
+		return
+	}
+	if g.rawDown {
+		http.Error(w, "reset", http.StatusBadGateway)
+		return
+	}
 	if b, ok := g.files[key]; ok {
 		g.raw++
 		_, _ = io.WriteString(w, b)
 		return
 	}
 	http.NotFound(w, r)
+}
+
+// tarOf is codeload's tar.gz of sha: every file under <repo>-<sha>/, plus a
+// directory entry and a non-client file, as the real one has.
+func (g *fakeGitHub) tarOf(sha string) []byte {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	top := "r-" + sha + "/"
+	_ = tw.WriteHeader(&tar.Header{Name: top, Typeflag: tar.TypeDir, Mode: 0o755})
+	add := func(p, body string) {
+		_ = tw.WriteHeader(&tar.Header{Name: top + p, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))})
+		_, _ = tw.Write([]byte(body))
+	}
+	add("README.md", "not a client file\n")
+	for k, v := range g.files {
+		if p, ok := strings.CutPrefix(k, sha+"/"); ok {
+			add(p, v)
+		}
+	}
+	_ = tw.Close()
+	_ = zw.Close()
+	return buf.Bytes()
 }
 
 const (
@@ -215,5 +260,56 @@ func TestStablePathOK(t *testing.T) {
 		if got := stablePathOK(p); got != want {
 			t.Errorf("stablePathOK(%q) = %v, want %v", p, got, want)
 		}
+	}
+}
+
+// claude-fleet#1901: from the hub's cluster the raw host is reset while
+// codeload answers — the commit comes in ONE tarball and every file is served
+// from it; a path the commit lacks is a 404, with no raw request at all.
+func TestStableFilesFromTarball(t *testing.T) {
+	h, g := stableRig(t)
+	g.mu.Lock()
+	g.tarball, g.rawDown = true, true
+	g.mu.Unlock()
+	for _, p := range []string{"bin/fleet", "bin/fleet-install.sh", StableManifestPath, "bin/fleet"} {
+		resp, body := getBody(t, h.http.URL+"/install/stable/"+shaA+"/"+p)
+		want := g.files[shaA+"/"+p]
+		sum := sha256.Sum256([]byte(body))
+		if resp.StatusCode != 200 || body != want || resp.Header.Get("X-Ccquota-Sha256") != hex.EncodeToString(sum[:]) {
+			t.Fatalf("%s: %d %q", p, resp.StatusCode, body)
+		}
+	}
+	for _, p := range []string{"bin/nothing.sh", "README.md"} {
+		if resp, _ := getBody(t, h.http.URL+"/install/stable/"+shaA+"/"+p); resp.StatusCode != 404 {
+			t.Errorf("%s: %d, want 404", p, resp.StatusCode)
+		}
+	}
+	if g.tars != 1 || g.raw != 0 {
+		t.Errorf("tarballs = %d raw = %d, want 1 and 0 (one download serves the commit)", g.tars, g.raw)
+	}
+	// stable's installer comes out of the same tarball
+	resp, body := getBody(t, h.http.URL+"/install")
+	if resp.StatusCode != 200 || !strings.Contains(body, stableAwareMark) {
+		t.Errorf("/install with the raw host down: %d %q", resp.StatusCode, firstLine(body))
+	}
+}
+
+// No tarball (codeload down): file by file from the raw host, as before, and
+// the failed tarball is not asked again within the TTL.
+func TestStableTarballDownFallsBackToRaw(t *testing.T) {
+	h, g := stableRig(t)
+	for _, p := range []string{"bin/fleet", "bin/fleet-install.sh"} {
+		if resp, _ := getBody(t, h.http.URL+"/install/stable/"+shaA+"/"+p); resp.StatusCode != 200 {
+			t.Fatalf("%s: %d", p, resp.StatusCode)
+		}
+	}
+	if g.raw != 2 || g.tars != 0 {
+		t.Errorf("raw = %d tarballs = %d, want 2 and 0", g.raw, g.tars)
+	}
+	h.srv.Stable.mu.Lock()
+	n := len(h.srv.Stable.tarFail)
+	h.srv.Stable.mu.Unlock()
+	if n != 1 {
+		t.Errorf("tarball failures remembered = %d, want 1 (asked once per TTL)", n)
 	}
 }
