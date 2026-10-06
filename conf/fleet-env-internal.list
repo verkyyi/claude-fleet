@@ -130,6 +130,8 @@ FLEET_HUB_SESSIONS_LOCAL           handoff: fleet-shell.sh tells the client loop
 FLEET_INSTALL_NO_HUB               handoff: = fleet-install.sh --no-hub, from the environment (#1712)
 FLEET_INSTALL_NO_NODE              seam: fleet-install.sh --no-node — skip the node step (--no-hub: this machine's fleet, #1712; hub: the join, #1719)
 FLEET_INSTALL_NODE_FORCE           seam: 1 = fleet-install.sh joins with no tty on stderr (fleet-install-join-selftest.sh's fake hub confirms the scan itself; #1719)
+FLEET_INSTALL_NO_AGENTS            seam: fleet-install.sh skips applying the Agent configuration package (#1725)
+FLEET_INSTALL_NODE_ROOT            path: where fleet-install-apply.sh --bundle / fleet-agent-bundle.py look for a full install (default ~/.claude/fleet, #1725)
 FLEET_INSTALL_SRC                  seam: where fleet-install.sh --no-hub fetches files (default GitHub stable raw; #1712)
 FLEET_PROBE_BATTERY_DIR            seam: where fleet-node-probe.sh looks for a Linux BAT* (default /sys/class/power_supply; #1720)
 FLEET_PROBE_CURL                   seam: the curl fleet-node-probe.sh measures the egress + the two APIs with (a stub in the selftests; #1720)

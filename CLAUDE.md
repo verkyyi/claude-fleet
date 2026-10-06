@@ -440,7 +440,16 @@ Do not install from memory: read the doc and work from it.
   `fleet-agent-defaults-selftest.sh` leg 11 greps every shipped and merged file
   for one. Both run on every `fleet-install-apply.sh` move (`settings`, `agents`
   passes) — never add a second place that writes these files; `fleet-doctor`'s
-  `settings` / `agents` rows count what a login still lacks.
+  `settings` / `agents` rows count what a login still lacks. **A client-only
+  computer gets the same package** (issue #1725): `conf/agent-bundle.manifest`
+  lists it (hooks · skills · commands · MCP · the mod, and what applies them);
+  `fleet-client-mirror.sh` writes its expansion into the hub client manifest's
+  generated block, the installer lands it beside `bin/` and runs
+  `fleet-install-apply.sh --bundle` — the same passes, fill only, hooks wired
+  through `bin/fleet-hook-run.sh` (no `~/.claude/fleet` there; a later node
+  sync replaces them in place). A new file the package needs goes in that
+  manifest, never in the generated block; `fleet doctor` on a client is
+  `fleet-agent-bundle.py doctor`. `fleet-agent-bundle-selftest.sh` pins it.
 - **A machine has ONE fleet config file, `$FLEET_CONF_DIR/fleet.conf`** (issue
   #1623). `FLEET_ROLE=client|node|client,node` and `FLEET_HUB_URL` (the hub's
   address — written nowhere else) sit in `[common]`; `[client]` (only the shell,
