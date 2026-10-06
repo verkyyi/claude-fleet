@@ -48,6 +48,9 @@
 #                  line from `session` (#1863); the next launch none; a sync keeps
 #                  `hinted`; FLEET_PROMOTE_HINT=0 none (L pins: no personal layer,
 #                  no hint and no field)
+#   S. codex      the same personal hooks reach a Codex session (#1864): `session
+#                  codex` hands `c hooks.<Event>=` = the fleet's own groups +
+#                  the wrapped personal ones; an event / tool Codex lacks → note
 #   Q. refused     a credential in the personal layer is refused (the cache is
 #                  kept); hook_scripts is personal-only
 set -uo pipefail
@@ -93,7 +96,7 @@ EOF
 team() {
   env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" CODEX_HOME="$H/.codex" \
     ${SEAM:+FLEET_TEAM_BUNDLE_CMD="$SEAM"} ${PSEAM:+FLEET_PERSON_BUNDLE_CMD="$PSEAM"} \
-    ${PHINT:+FLEET_PROMOTE_HINT="$PHINT"} "$PY" "$T" "$@" --root "$REPO" \
+    ${PHINT:+FLEET_PROMOTE_HINT="$PHINT"} ${FLEET_PERSONAL:+FLEET_PERSONAL="$FLEET_PERSONAL"} "$PY" "$T" "$@" --root "$REPO" \
     --claude-config "$H/.claude.json" --claude-settings "$H/.claude/settings.json" \
     --claude-skills "$H/.claude/skills" --codex-home "$H/.codex" 2>&1
 }
@@ -435,6 +438,37 @@ out=$(team sync)
 printf '%s' "$out" | grep -q '^personal: v6 (new)' && ok "Q hook_scripts is accepted in the personal layer" || bad "Q hook_scripts: $out"
 resp '{"version":11,"prev":10,"bundle":{"hook_scripts":{"x.sh":"echo hi"}}}'
 out=$(team sync); [ "$?" = 2 ] && ok "Q hook_scripts is refused in the team layer" || bad "Q team hook_scripts: $out"
+
+# ── S — the same personal hooks in a Codex session (issue #1864) ──────────────
+presp '{"version":7,"prev":6,"bundle":{
+  "hooks":{"PreToolUse":[{"matcher":"Bash","command":"echo me-pre"},{"matcher":"Edit|Write","command":"echo me-edit"},
+                         {"matcher":"Artifact","command":"echo me-art"}],
+           "Stop":[{"command":"echo me-stop","timeout":5}],
+           "Notification":[{"command":"echo me-note"}]}}}'
+team sync >/dev/null
+sc=$(team session codex)
+emit=$("$REPO/bin/fleet-hooks-emit.sh" --target codex --root "$REPO")
+fpre=$(printf '%s\n' "$emit" | sed -n 's/^PreToolUse	\[\(.*\)\]$/\1/p')
+fstop=$(printf '%s\n' "$emit" | sed -n 's/^Stop	\[\(.*\)\]$/\1/p')
+wrap() { printf 'sh \\"$HOME/.claude/fleet/bin/fleet-hook-personal.sh\\" %s -- '"'"'%s'"'" "$1" "$2"; }
+pre=$(printf '%s\n' "$sc" | sed -n 's/^c	hooks\.PreToolUse=//p')
+[ -n "$fpre" ] && [ "$pre" = "[$fpre,{matcher=\"Bash\",hooks=[{type=\"command\",command=\"$(wrap PreToolUse 'echo me-pre')\"}]},{matcher=\"apply_patch\",hooks=[{type=\"command\",command=\"$(wrap PreToolUse 'echo me-edit')\"}]}]" ] \
+  && ok "S session codex: c hooks.PreToolUse = the fleet's own groups + the personal hooks (Edit|Write → apply_patch)" \
+  || bad "S PreToolUse: $pre"
+stop=$(printf '%s\n' "$sc" | sed -n 's/^c	hooks\.Stop=//p')
+[ -n "$fstop" ] && [ "$stop" = "[$fstop,{hooks=[{type=\"command\",command=\"$(wrap Stop 'echo me-stop')\"}]}]" ] \
+  && ok "S session codex: c hooks.Stop carries the fleet's Stop + the personal one" || bad "S Stop: $stop"
+[ "$(j "$H/.claude/settings.json" "[h['command'] for g in d['hooks']['Stop'] for h in g['hooks']]")" = \
+    "[\"sh \\\"\$HOME/.claude/fleet/bin/fleet-hook-personal.sh\\\" Stop -- 'echo me-stop'\"]" ] \
+  && ok "S the same wrapped command as Claude's settings.json" || bad "S claude: $(cat "$H/.claude/settings.json")"
+printf '%s\n' "$sc" | grep -q '^note	个人自动规则 Notification「echo me-note」：Codex 没有这个事件' \
+  && printf '%s\n' "$sc" | grep -q '^note	个人自动规则 PreToolUse「echo me-art」：Codex 没有工具 Artifact' \
+  && [ "$(printf '%s\n' "$sc" | grep -c '^c	hooks\.')" = 2 ] \
+  && ok "S an event / tool Codex has not got: a note, no hook" || bad "S notes: $sc"
+team session codex --lock enforce | grep -q '^lock	codex.hooks.personal' \
+  && bad "S a personal hook inherited the codex.hooks lock" || ok "S codex.hooks.personal is outside the codex.hooks lock"
+sp=$(FLEET_PERSONAL=0 team session codex)
+! printf '%s\n' "$sp" | grep -q '^c	hooks\.' && ok "S FLEET_PERSONAL=0: no personal hook in the Codex session" || bad "S off: $sp"
 
 # ── L again — the personal layer goes away (404): everything it wrote goes ────
 resp '{"version":10,"prev":9,"bundle":{"mcp":{"shared":{"command":"team-shared"}},

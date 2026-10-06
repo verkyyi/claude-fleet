@@ -35,6 +35,10 @@ EPIC #1855。一个会话拿到的每一项配置——工具连接（MCP）、�
 加锁项是 fleet 自己赖以运转的东西，本机 / 个人 / 团队都盖不住它（`enforce` 下）。
 个人自动规则只能**加**（路径 `claude.hooks.personal.<Event>.<key>`，不受
 `claude.hooks` 锁连带），不能改写命令、关不掉 fleet 的拦截——见 #1858。
+同一批个人自动规则在 Codex 会话里也生效（#1864）：`codex.hooks.personal.<Event>.<key>`，
+不受 `codex.hooks` 锁连带；`session codex` 把它们接在 fleet 自己那张表后面，一个事件一行
+`c hooks.<Event>=[…]`。Codex 没有的事件（如 `Notification`）或工具（如 `Artifact`）不带，
+启动行出一条 note 说明。
 
 ## 一行说清来源
 

@@ -61,6 +61,14 @@ the wrapper sets. Each carries the line `# fleet personal hook` (added after the
 carries it and holds what was written — a file of the person's own in that
 directory is never touched. `session claude` lands a missing one (add only), so
 a session on a computer that never applied the layer still finds its programs.
+The same hooks follow the person into Codex (issue #1864, EPIC #1855 R2): `session
+codex` composes them as `codex.hooks.personal.<Event>.<key>` (outside the
+`codex.hooks` lock, like Claude's), each matcher translated by
+hooks/codex-map.json, and hands every event that has one as ONE `c` line,
+`hooks.<Event>=[<the fleet's own groups>, <the personal ones>]` — the fleet's
+groups come from bin/fleet-hooks-emit.sh, the same source the launcher inlines,
+so the later `-c` carries the guards too. An event or tool Codex does not have
+is left out with a `note` line; with no personal hook not one line changes.
 Written badly, the personal layer never stops a session (issue #1862,
 docs/BREAK-IT.md): a cache that does not parse falls back to
 person-bundle.good.json; a server whose command is not on this machine is left
@@ -154,6 +162,7 @@ PERSON_SIG_NS = "fleet-person@claude-fleet"
 # fleet's to follow while it still holds what that layer wrote.
 LAYERS = ("personal", "team")
 PERSONAL_HOOKS = "claude.hooks.personal"    # a personal hook's items (#1858): add-only, outside the hooks lock
+CODEX_PERSONAL_HOOKS = "codex.hooks.personal"   # the same hooks in a Codex session (#1864)
 WHOSE = {"team": "team's", "personal": "personal layer's"}
 SKILL_MARK = "<!-- fleet team skill -->"
 # The personal layer's hook programs (issue #1859, EPIC #1855 C4): one file per
@@ -1336,9 +1345,10 @@ def is_locked(path, locked):
     """`path` or an ancestor is in agent-locked.list — except that a personal hook
     (claude.hooks.personal.*, #1858) never inherits the `claude.hooks` lock: that
     lock is the fleet table + the team's hooks, and a personal hook is add-only
-    (its wrapper drops any rewrite), so enforce never throws it away."""
+    (its wrapper drops any rewrite), so enforce never throws it away. The same
+    for codex.hooks.personal.* under `codex.hooks` (#1864)."""
     parts = path.split(".")
-    lo = 3 if path == PERSONAL_HOOKS or path.startswith(PERSONAL_HOOKS + ".") else 1
+    lo = 3 if any(path == p or path.startswith(p + ".") for p in (PERSONAL_HOOKS, CODEX_PERSONAL_HOOKS)) else 1
     return any(".".join(parts[:i]) in locked for i in range(lo, len(parts) + 1))
 
 
@@ -1558,6 +1568,7 @@ class Session:
                                                   else os.environ.get("CODEX_HOME") or "~/.codex"))
         cc = CodexConf(self.ad, home)
         pb = self.pbundle
+        self.codex_hooks(pb)
         for k in sorted(set(self.dfl["codex"]) | set(b.get("codex_config") or {}) | set(pb.get("codex_config") or {})):
             self.item("codex." + k, cc.get_top(k), (pb.get("codex_config") or {}).get(k),
                       (b.get("codex_config") or {}).get(k), self.dfl["codex"].get(k))
@@ -1567,6 +1578,78 @@ class Session:
         for n in sorted(set(self.dfl["codex_mcp"]) | set(b.get("mcp") or {}) | set(pb.get("mcp") or {})):
             self.item("codex.mcp." + n, cc.get_server(n), (pb.get("mcp") or {}).get(n), (b.get("mcp") or {}).get(n),
                       self.dfl["codex_mcp"].get(n))
+
+    def codex_hooks(self, pb):
+        """The personal layer's hooks, for Codex (issue #1864): the same wrapped
+        command as Claude's, its matcher translated by hooks/codex-map.json — an
+        event or a tool Codex has not got is left out, said in a note. Never the
+        team's: team hooks stay Claude's (EPIC #1855 decision 5)."""
+        self.codex_order = []           # the person's own order, which the groups keep
+        if not pb.get("hooks"):
+            return
+        m = read_json_quiet(os.path.join(self.a.root, "hooks", "codex-map.json")) or {}
+        events = {k for k, v in (m.get("events") or {}).items() if v is True}
+        tools = {}
+        for k, v in (m.get("matchers") or {}).items():
+            for t in k.split("|"):
+                tools[t] = v
+        spelled = hm_spelling(self.a)
+        for ev, lst in sorted(pb["hooks"].items()):
+            for h in lst:
+                if ev not in events:
+                    self.notes_p.append("个人自动规则 %s「%s」：Codex 没有这个事件——Codex 会话不带这一条"
+                                        % (ev, h["command"]))
+                    continue
+                v = {"command": self.hm.personal_wrap(ev, h["command"], spelled)}
+                if h.get("matcher"):
+                    keep, gone = [], []
+                    for t in h["matcher"].split("|"):
+                        n = tools.get(t, t)
+                        (gone if n is None else keep).append(t if n is None else n)
+                    if not keep:
+                        self.notes_p.append("个人自动规则 %s「%s」：Codex 没有工具 %s——Codex 会话不带这一条"
+                                            % (ev, h["command"], h["matcher"]))
+                        continue
+                    v["matcher"] = "|".join(sorted(set(keep), key=keep.index))
+                path = "%s.%s.%s" % (CODEX_PERSONAL_HOOKS, ev, hook_key(h["command"]))
+                self.item(path, None, v, None, None)
+                self.codex_order.append(path)
+
+    def codex_hook_lines(self):
+        """`hooks.<Event>=<toml>` per event a personal hook rides on (#1864): the
+        fleet's own groups for that event (fleet-hooks-emit.sh, the launcher's
+        source) first, then the personal ones. The later -c replaces the
+        launcher's, so an event whose fleet groups cannot be read here is not
+        handed at all — a personal hook never displaces a guard."""
+        per = {}
+        for p in getattr(self, "codex_order", []):
+            if p in self.hand:
+                per.setdefault(p.split(".")[3], []).append(self.hand[p])
+        if not per:
+            return []
+        fleet = {}
+        try:
+            r = subprocess.run([os.path.join(self.a.root, "bin", "fleet-hooks-emit.sh"), "--target", "codex",
+                                "--root", self.a.root], capture_output=True, text=True, timeout=20)
+            if r.returncode == 0:
+                for ln in r.stdout.splitlines():
+                    ev, _, toml = ln.partition("\t")
+                    if toml.startswith("[") and toml.endswith("]"):
+                        fleet[ev] = toml[1:-1]
+        except (OSError, subprocess.SubprocessError):
+            pass
+        q = lambda x: '"%s"' % x.replace("\\", "\\\\").replace('"', '\\"')
+        out = []
+        for ev in sorted(per):
+            if ev not in fleet:
+                self.notes_p.append("个人自动规则 %s：读不出 fleet 自己的 %s 表——这次 Codex 会话不带 %s 上的个人自动规则"
+                                    % (ev, ev, ev))
+                continue
+            groups = ["{%shooks=[{type=\"command\",command=%s}]}"
+                      % ("matcher=%s," % q(v["matcher"]) if v.get("matcher") else "", q(v["command"]))
+                      for v in per[ev]]
+            out.append("hooks.%s=[%s]" % (ev, ",".join(([fleet[ev]] if fleet[ev] else []) + groups)))
+        return out
 
     def fingerprint(self):
         vals = {p: r["value"] for p, r in self.rows.items()}
@@ -1610,8 +1693,9 @@ def session(a):
     if agent not in ("claude", "codex"):
         die("session takes claude|codex")
     s = Session(a, agent, launch=True).compose()
-    if agent == "claude" and s.pbundle.get("hook_scripts"):
+    if s.pbundle.get("hook_scripts"):     # Codex runs the same programs (#1864)
         scripts_fill(s.pbundle)
+    hlines = s.codex_hook_lines() if agent == "codex" else []
     print("fp\t%s" % s.fingerprint())
     print("src\t%s" % s.src())
     if s.personal:                  # the person-facing line (EPIC #1855 C6) — absent, as before
@@ -1654,8 +1738,10 @@ def session(a):
             if p.startswith("codex.mcp."):
                 if not a.no_mcp:
                     print("c\tmcp_servers.%s=%s" % (s.ad.toml_key(p[len("codex.mcp."):]), s.ad.toml_val(v)))
-            elif p.startswith("codex.") and p != "codex.hooks":
+            elif p.startswith("codex.") and p != "codex.hooks" and not p.startswith(CODEX_PERSONAL_HOOKS + "."):
                 print("c\t%s=%s" % (s.ad.toml_key(p[len("codex."):]), s.ad.toml_val(v)))
+        for ln in hlines:
+            print("c\t%s" % ln)
     for path, what, why in s.overrides:
         print("lock\t%s %s (%s, FLEET_AGENT_LOCK=%s)" % (path, what, why, s.mode))
     return 0
