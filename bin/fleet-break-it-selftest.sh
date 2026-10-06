@@ -18,6 +18,7 @@
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
+#   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -251,6 +252,42 @@ drill_no_claude_on_path() {
         bash "$BIN/fleet-claude.sh" --version 2>&1)
   case "$out" in "found-claude "*"--version") ;; *) WHY="PATH=/usr/bin:/bin: [$out]"; return 1 ;; esac
   SECS=$(since "$t0"); WHAT="PATH=/usr/bin:/bin 也找到 ~/.local/bin/claude"
+}
+
+# install-sync SIGKILLed mid-tick (launchctl kickstart -k): its trap never runs and
+# the lock stays; the next tick must take a dead holder's lock over (issue #1691).
+drill_install_sync_killed() {
+  CAP=20; local t0 d="$WORK/isync" pid
+  mkdir -p "$d/conf" "$d/home"
+  (
+    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/install" 2>/dev/null
+    mkdir -p "$d/install/bin" "$d/install/logs"
+    printf 'echo "apply: ok"\n' > "$d/install/bin/fleet-install-apply.sh"
+    printf 'while [ -f "%s/hold" ]; do sleep 0.1; done; echo doctor >> "%s/doctor.log"\n' "$d" "$d" > "$d/install/bin/fleet-doctor.sh"
+    printf 'exit 0\n' > "$d/install/bin/fleet-diskguard.sh"; chmod +x "$d"/install/bin/*
+    printf 'logs/\n' > "$d/install/.gitignore"
+    git -C "$d/install" add -A && git -C "$d/install" commit -qm one && git -C "$d/install" push -q origin master
+    echo two > "$d/install/f"; git -C "$d/install" add -A; git -C "$d/install" commit -qm two
+    git -C "$d/install" push -q origin master; git -C "$d/install" reset -q --hard HEAD~1
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable master
+  ) >/dev/null 2>&1 || { WHY="sandbox install did not build"; return 1; }
+  isync() { HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+            bash "$BIN/fleet-install-sync.sh" --root "$d/install"; }
+  touch "$d/hold"; isync >"$d/tick1.out" 2>&1 &              # held in its baseline doctor run
+  until_ok 10 grep -q updating "$d/tick1.out" || { WHY="the first tick never got to updating: $(tail -2 "$d/tick1.out")"; return 1; }
+  pid=$(cat "$d/conf/global/install-sync.lock/pid" 2>/dev/null)
+  kill -9 "$pid" 2>/dev/null || { WHY="no live holder pid in the lock [$pid]"; return 1; }
+  wait 2>/dev/null; rm -f "$d/hold"                           # killed mid-tick: no trap ran
+  [ -d "$d/conf/global/install-sync.lock" ] || { WHY="SIGKILL left no lock — nothing to drill"; return 1; }
+  t0=$(now)
+  isync >"$d/tick2.out" 2>&1
+  grep -q 'another tick holds' "$d/tick2.out" && { WHY="the next tick skipped on a dead holder's lock: $(grep 'another tick' "$d/tick2.out")"; return 1; }
+  [ "$(git -C "$d/install" rev-parse HEAD)" = "$(git --git-dir="$d/origin.git" rev-parse stable)" ] \
+    || { WHY="the next tick did not follow stable: $(tail -2 "$d/tick2.out")"; return 1; }
+  grep -q "holder pid=$pid is dead" "$d/tick2.out" || { WHY="the takeover left no log line naming pid=$pid"; return 1; }
+  SECS=$(since "$t0"); WHAT="下一拍接管死掉那一跳（pid=${pid}）的锁，跟上 stable"
 }
 
 # ===================================================== client: the sandbox =======

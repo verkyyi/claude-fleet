@@ -21,6 +21,7 @@
 | 节点 tmux 服务器被关（`kill-server`、崩溃） | 整台 fleet 停，没人拉起 | diskguard 节拍跑 `fleet-restore.sh --auto`，只拉起没做完的会话（#1784） | `kill-server` |
 | 磁盘满 | 拉起 → 写满 → 再崩的循环 | `--auto` 先问磁盘门：低于下限只记一行不拉起；腾出空间后下一拍拉起 | `disk-full` |
 | 非交互 shell（ssh、守护进程）PATH 里没有 claude | 会话开出来停在 shell，`exec claude` 失败 | `fleet_find_tool` 依次找 `FLEET_CLAUDE_BIN` → PATH → `~/.local/bin` → `/opt/homebrew/bin` → `/usr/local/bin`（#1774/#1784） | `no-claude-on-path` |
+| install-sync 跟随中途被 kill -9（`launchctl kickstart -k`、OOM、重启、注销） | trap 不跑，锁目录留下；之后每一拍都 `another tick holds … skip`，这台登录停在旧版本，最多白等一小时（锁 TTL） | 下一拍读锁里的 `pid`，进程不在了就立即接管并记一行 `took over … holder pid=<n> is dead`；TTL 仍兜底（#1691） | `install-sync-killed` |
 | 客户端里 prefix x / prefix & / 右键菜单 Kill | 侧栏或右侧面板、甚至整个窗口和服务器被删 | 这些键和菜单在客户端里都不存在了（#1785） | `client-kill-keys` |
 | 客户端的侧栏 / 右侧进程被杀 | 一半屏幕空着，只能重开 | 侧栏 5 秒内重画，右侧窗格 5 秒内重开（#1785） | `client-pane-killed` |
 | 侧栏上按 Ctrl+C / Ctrl+\\ / Ctrl+Z | 侧栏进程退出或被挂起 | 侧栏忽略这三个键，还是同一个进程（#1785） | `sidebar-ctrl-c` |
