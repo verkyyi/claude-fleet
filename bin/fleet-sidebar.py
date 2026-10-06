@@ -1849,9 +1849,15 @@ def ui(screen, session, worker, lock):
             if wid == "hdr":
                 if navigation and key_of((wid, state)) == selected:
                     put(y, "› " + label, curses.color_pair(PAIR_SEL) | curses.A_BOLD, fill=True)
-                elif glyph == "!":
-                    # the 要你处理 summary (issue #1750): red, never a cursor stop
-                    put(y, label, curses.color_pair(STATE_PAIR["needs"]) | curses.A_BOLD)
+                elif glyph == "!" and label.startswith("!"):
+                    # the 要你处理 summary (issue #1750), never a cursor stop: drawn
+                    # like a row — its `!` alone red in the glyph column, the text
+                    # plain (issue #1622: only a state glyph has a colour)
+                    put(y, "  " + label, curses.color_pair(PAIR_FG) | curses.A_BOLD)
+                    try:
+                        screen.addstr(y, 2, "!", curses.color_pair(STATE_PAIR["needs"]) | curses.A_BOLD)
+                    except curses.error:
+                        pass  # a resize may race this paint
                 else:
                     put(y, label, dim_attr | curses.A_BOLD)
                 continue

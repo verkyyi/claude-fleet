@@ -1701,7 +1701,7 @@ FLEET_GLOBAL_MAX_SESSIONS=8
 # 在问你 · ⌃k 跳过去`) and the task list's ⌃k on an empty line walks onto them.
 # `status`: the old order — needs on top, then done, working, looping — byte for
 # byte, and no summary line.
-# @label=List order @group=status @tier=advanced @scope=global @edit=str
+# @label=List order @group=status @tier=internal @scope=global @edit=str
 #FLEET_DASH_ORDER=born
 # @label=Rotate early at @group=accounts @tier=advanced @scope=global @edit=int @unit=%
 #FLEET_ACCOUNT_CEILING=85
