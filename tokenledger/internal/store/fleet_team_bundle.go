@@ -72,6 +72,16 @@ func (s *Store) TeamBundle(v int) (FleetTeamBundle, error) {
 	return b, nil
 }
 
+// TeamBundleVersion is the current team version, 0 when there is none — the
+// one number a heartbeat compares (claude-fleet#1899), without the body.
+func (s *Store) TeamBundleVersion() (int, error) {
+	var v sql.NullInt64
+	if err := s.read.QueryRow(`SELECT MAX(version) FROM fleet_team_bundles`).Scan(&v); err != nil {
+		return 0, err
+	}
+	return int(v.Int64), nil
+}
+
 // TeamBundles lists the versions, newest first, without their bodies.
 func (s *Store) TeamBundles(limit int) ([]FleetTeamBundle, error) {
 	if limit <= 0 {

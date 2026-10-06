@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -428,6 +429,9 @@ func (s *Server) putTeamBundle(w http.ResponseWriter, id sshRelayIdentity, req T
 		return
 	}
 	s.teamAudit(id.Actor, fmt.Sprintf("OK v%d", b.Version), now)
+	// Every machine on a control channel hears it now, not on its next
+	// install-sync tick (claude-fleet#1899).
+	s.broadcastTeam(b.Version)
 	created := b.Created
 	w.Header().Set("ETag", teamETag(b.Version))
 	writeJSON(w, http.StatusOK, TeamBundleResponse{Version: b.Version, Prev: b.Prev, Actor: b.Actor,
@@ -464,4 +468,50 @@ func (s *Server) writeTeamBundle(w http.ResponseWriter, r *http.Request, v int, 
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// pushTeam tells one node's connection the team version (claude-fleet#1899,
+// EPIC #1906 C6) when it has not been told it yet: v > 0 is a version the
+// caller already knows (a PUT), 0 = read the current one. No team layer → no
+// message at all, so a hub without one sends byte for byte what it did. A
+// failed write is not recorded, so the next beat tries again.
+func (s *Server) pushTeam(endpointID string, nc *nodeConn, v int) {
+	if !nc.canTeam {
+		return
+	}
+	if v <= 0 {
+		cur, err := s.Store.TeamBundleVersion()
+		if err != nil {
+			log.Printf("node %s: read the team version: %v", endpointID, err)
+			return
+		}
+		v = cur
+	}
+	sent := nc.teamSent.Load()
+	if v <= 0 || int64(v) == sent {
+		return
+	}
+	msg, err := control.New(control.TypeTeam, control.Team{TeamVersion: v})
+	if err != nil {
+		return
+	}
+	wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if s.nodes.get(endpointID) != nc {
+		return // a newer link took over; it hears the version on its own first beat
+	}
+	if err := s.SendNodeWrite(wctx, endpointID, msg); err != nil {
+		return
+	}
+	nc.teamSent.CompareAndSwap(sent, int64(v))
+}
+
+// broadcastTeam pushes version v to every node on a control channel that
+// follows the team layer.
+func (s *Server) broadcastTeam(v int) {
+	s.nodes.each(func(id string, c *nodeConn) {
+		if c.canTeam {
+			go s.pushTeam(id, c, v)
+		}
+	})
 }

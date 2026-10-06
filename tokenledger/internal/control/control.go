@@ -90,6 +90,14 @@ const (
 	// ($FLEET_CONF_DIR/control/hub-workers.tsv), so routing never asks the
 	// network.
 	TypeWorkers = "workers"
+	// TypeTeam is the hub's word that the team configuration is at
+	// TeamVersion (claude-fleet#1899, EPIC #1906 C6): sent to a node that
+	// listed CapTeam on the first heartbeat of each connection, whenever the
+	// version it last told that connection is not the current one, and to
+	// every such node the moment the operator PUTs a new version. The node
+	// runs fleet-agent-team.py sync and retries on its next beat until one
+	// succeeds; it answers nothing. No team layer (version 0) → never sent.
+	TypeTeam = "team"
 )
 
 // CapRead is the hello capability a node lists when it answers TypeRequest.
@@ -106,6 +114,12 @@ const CapWrite = "write"
 // TypeRelay and keeps a TypeWorkers map (claude-fleet#1421). The hub never
 // pushes a relay or a map to a node that did not say it; relays for it wait.
 const CapRelay = "relay"
+
+// CapTeam is the hello capability a node lists when it follows TypeTeam
+// (claude-fleet#1899): its login has claude-fleet's fleet-agent-team.py. The
+// hub never pushes a team version to a node that did not say it, so an older
+// agent sees nothing new and keeps following on install-sync's tick.
+const CapTeam = "team"
 
 // CapMove is the hello capability a node lists when it takes a session moved
 // to it through the hub (claude-fleet#1426): before it hands a
@@ -175,6 +189,11 @@ type WorkerLoc struct {
 	WorkerID  string `json:"worker_id"`
 	Node      string `json:"node"`
 	OriginWID string `json:"origin_wid,omitempty"`
+}
+
+// Team is the payload of TypeTeam.
+type Team struct {
+	TeamVersion int `json:"team_version"`
 }
 
 // Workers is the payload of TypeWorkers.

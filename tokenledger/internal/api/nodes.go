@@ -67,6 +67,11 @@ type nodeConn struct {
 	canMove bool
 	// workersAt is when the worker map was last pushed (UnixNano).
 	workersAt atomic.Int64
+	// canTeam is the hello's CapTeam (claude-fleet#1899): this node follows
+	// TypeTeam. teamSent is the team version last told this connection (0 =
+	// none yet), so a beat pushes only a version the node has not heard.
+	canTeam  bool
+	teamSent atomic.Int64
 	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
 	// sshd (claude-fleet#1413). Set once, before the conn is published.
 	canSSHRelay bool
@@ -282,6 +287,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
+		canTeam:    hp.HasCap(control.CapTeam),
 		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal}
 	// The refresh relay is an ADMIN role: a node that offers it without
@@ -388,6 +394,11 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 				// unanswered (claude-fleet#1421).
 				go s.pushWorkers(*ep, nc)
 				go s.dispatchRelays(ep.ID)
+			}
+			if nc.canTeam {
+				// The team version this link has not heard yet — on a
+				// (re)connect, the current one (claude-fleet#1899).
+				go s.pushTeam(ep.ID, nc, 0)
 			}
 			if nc.admin {
 				// Each admin beat is a chance to send what is queued for

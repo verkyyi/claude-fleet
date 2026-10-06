@@ -2292,6 +2292,19 @@ if [ -f "$_ad" ] && [ -d "$(dirname "$0")/../conf/agent-defaults" ] && command -
   esac
 fi
 
+# --- team: the hub's team version vs this login's (issue #1899) ---
+# The node agent runs fleet-agent-team.py sync on the hub's push and records it;
+# the row reads 入口 v<N> · 本机 v<M> · 拉到 <when>. WARN when the hub pushed a
+# version this login has not applied for FLEET_TEAM_PUSH_WARN_SECS. No team layer
+# here (never fetched, never pushed) → no row at all.
+if [ -f "$(dirname "$0")/fleet-agent-team.py" ] && command -v python3 >/dev/null 2>&1; then
+  _tline="$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-agent-team.py" status --team 2>/dev/null)"; _trc=$?
+  case "$_trc" in
+    0) pass team "$_tline" ;;
+    1) warn team "$_tline (fix: python3 $(dirname "$0")/fleet-agent-team.py sync; the node agent retries every beat)" ;;
+  esac
+fi
+
 # --- agentcfg: the configuration a session is launched with (issue #1782) ---
 # bin/fleet-claude.sh / fleet-codex.sh compose fleet default < team < local at
 # every launch and stamp the fingerprint as @agent_cfg. A LOCKED item

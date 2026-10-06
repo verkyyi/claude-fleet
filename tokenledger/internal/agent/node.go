@@ -177,6 +177,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.cfg.FleetSSHRelay {
 		caps = append(caps, control.CapSSHRelay)
 	}
+	if a.teamCapable() {
+		// The team layer follows the hub's push (claude-fleet#1899).
+		caps = append(caps, control.CapTeam)
+	}
 	if a.relaysOAuthRefresh() {
 		caps = append(caps, control.CapOAuthRefresh)
 	}
@@ -258,6 +262,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 						log.Printf("control channel: write the worker map: %v", err)
 					}
 				}
+			case control.TypeTeam:
+				a.handleTeam(ctx, m)
 			case control.TypeSSHRelayOpen:
 				// Bound to this session's ctx: when the control channel
 				// drops, every relay it opened is closed with it
@@ -332,6 +338,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			if err := beat(); err != nil {
 				return true, err
 			}
+			// A team sync that failed runs again on this beat.
+			a.teamKick(ctx)
 		case <-nudge:
 			nb.arm()
 		case <-netc:
