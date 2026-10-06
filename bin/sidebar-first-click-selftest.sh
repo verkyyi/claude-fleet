@@ -45,15 +45,28 @@ for source in real_bin.iterdir():
     (bin_dir / source.name).symlink_to(source)
 (root / 'conf').symlink_to(real_bin.parent / 'conf')
 (root / 'fleet.conf').write_text('FLEET_GLOBAL_MAX_SESSIONS=0\n')
-sock = str(work / 'ft')
 env = dict(os.environ, TMPDIR=str(work), FLEET_CONF_DIR=str(work / 'conf'),
            TERM='xterm-256color', FLEET_UI_LANG='zh')
 env.pop('TMUX', None)
 env.pop('TMUX_PANE', None)
 shim = work / 'path'
 shim.mkdir()
-(shim / 'tmux').write_text('#!/bin/sh\nexec %s -S %s "$@"\n' % (shlex.quote(real_tmux), shlex.quote(sock)))
-(shim / 'tmux').chmod(0o755)
+socks = []
+
+
+def fresh_socket(n):
+    # One server per round (issue #1767): `kill-server` returns before the old
+    # server is gone, and a new-session on the same path can land on the dying
+    # one and go down with it — every time on a 1-CPU box, on CI's ubuntu runner.
+    # The file keeps the name `ft`: a socket's label is its fleet's name.
+    global sock
+    (work / ('s%d' % n)).mkdir()
+    sock = str(work / ('s%d' % n) / 'ft')
+    socks.append(sock)
+    (shim / 'tmux').write_text('#!/bin/sh\nexec %s -S %s "$@"\n' % (shlex.quote(real_tmux), shlex.quote(sock)))
+    (shim / 'tmux').chmod(0o755)
+
+
 env['PATH'] = str(shim) + os.pathsep + env['PATH']
 conf = work / 'conf/fleets/ft/conf'
 conf.parent.mkdir(parents=True)
@@ -87,7 +100,7 @@ def wait(predicate, secs=6):
 def cleanup(*_):
     if client is not None:
         client.kill()
-    for s in [sock] + inner_socks:
+    for s in socks + inner_socks:
         subprocess.run([real_tmux, '-S', s, 'kill-server'], env=env,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     shutil.rmtree(work, ignore_errors=True)
@@ -140,7 +153,8 @@ def row_of(side, name):
 
 
 try:
-    for kind in ('shell', 'tmux'):
+    for n, kind in enumerate(('shell', 'tmux')):
+        fresh_socket(n)
         tm('-f', '/dev/null', 'new-session', '-d', '-s', 'ft', '-x', '160', '-y', '30',
            '-n', 'one', right_cmd(kind, 1))
         env['TMUX'] = sock + ',1,0'

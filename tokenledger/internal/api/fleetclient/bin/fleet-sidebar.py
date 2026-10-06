@@ -1059,7 +1059,9 @@ def edit_of(key, text):
     if key == 23:
         return "kill_word"
     if key == 11:
-        return "kill_eol"
+        # ⌃k on an EMPTY line is the list's: the next row waiting on you (issue
+        # #1750, next_attention) — there is nothing after the cursor to delete
+        return "kill_eol" if text else ""
     if key == 21:
         return "clear"
     if key in (curses.KEY_BACKSPACE, 8, 127):
@@ -1146,6 +1148,20 @@ def selectable(rows):
     spawn target (issue #997) — the new-session path reads it, and every other
     action ignores it (`acts`). Other `hdr` rows (#974) are painted, never landed on."""
     return [key_of(row) for row in rows if key_of(row) != "hdr"]
+
+
+def next_attention(rows, selected):
+    """The row ⌃k lands on (issue #1750): the next one waiting on you — `needs` /
+    `failed`, FOLD_KEEP, which no fold ever hides — after the highlighted row in
+    list order, wrapping round; "" when none is. In the born order those rows stay
+    where they were born, so this, with the summary line above the list, is how
+    they are reached."""
+    loud = [row[0] for row in rows if row[0] != "hdr" and row[1] in FOLD_KEEP]
+    if not loud:
+        return ""
+    keys = [row[0] for row in rows]
+    at = keys.index(selected) if selected in keys else -1
+    return next((k for k in loud if keys.index(k) > at), loud[0])
 
 
 def sessions(rows):
@@ -1915,6 +1931,15 @@ def ui(screen, session, worker, lock):
             if wid == "hdr":
                 if navigation and key_of((wid, state)) == selected:
                     put(y, "› " + label, curses.color_pair(PAIR_SEL) | curses.A_BOLD, fill=True)
+                elif glyph == "!" and label.startswith("!"):
+                    # the 要你处理 summary (issue #1750), never a cursor stop: drawn
+                    # like a row — its `!` alone red in the glyph column, the text
+                    # plain (issue #1622: only a state glyph has a colour)
+                    put(y, "  " + label, curses.color_pair(PAIR_FG) | curses.A_BOLD)
+                    try:
+                        screen.addstr(y, 2, "!", curses.color_pair(STATE_PAIR["needs"]) | curses.A_BOLD)
+                    except curses.error:
+                        pass  # a resize may race this paint
                 else:
                     put(y, label, dim_attr | curses.A_BOLD)
                 continue
@@ -2173,6 +2198,13 @@ def ui(screen, session, worker, lock):
         elif key == curses.KEY_END and ids:
             selected = ids[-1]
             follow_at = time.monotonic() + FOLLOW_SECS
+        elif key == 11 and ids and view == "live":
+            # ⌃k on an empty line (issue #1750): onto the next row waiting on
+            # you, and the view follows it there like any move does
+            nxt = next_attention(rows, selected)
+            if nxt:
+                selected = nxt
+                follow_at = time.monotonic() + FOLLOW_SECS
         elif key in (10, 13, curses.KEY_ENTER) and asking is not None:
             # ↵ answers the question (submit). An empty rename still goes to
             # dash-rename.sh, which decides (an empty name cancels, as in the

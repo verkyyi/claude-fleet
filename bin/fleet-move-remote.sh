@@ -171,6 +171,14 @@ case "$cmd" in
       _fid=$(head -c 64 "$_ff" 2>/dev/null | tr -d '[:space:]'); rm -f "$_ff"
       fleet_is_fid "$_fid" && TM set-window-option -t "$nw" @fleet_id "$_fid" 2>/dev/null
     done
+    # Its birth (issue #1750, `<sid>.born` beside it): the moved session keeps its
+    # place on every list instead of sinking to the newest.
+    for _d in "$(fleet_mangle_path "$wt")" "$(printf '%s' "$wt" | tr '/.' '--')"; do
+      _ff="$HOME/.claude/projects/$_d/$sid.born"
+      [ -f "$_ff" ] || continue
+      _born=$(head -c 16 "$_ff" 2>/dev/null | tr -d '[:space:]'); rm -f "$_ff"
+      case "$_born" in ''|*[!0-9]*) ;; *) TM set-window-option -t "$nw" @born "$_born" 2>/dev/null ;; esac
+    done
     TM set-window-option -t "$nw" @raw "$raw" 2>/dev/null
     [ -n "$issue" ] && TM set-window-option -t "$nw" @issue "$issue" 2>/dev/null
     [ -n "$origin" ] && TM set-window-option -t "$nw" @origin "$origin" 2>/dev/null

@@ -171,9 +171,15 @@ def inventory_row(parts):
     adapter ships beside this file, so the trailing columns are always known).
     Column 13 (issue #1646): the session's lifelong identity (@fleet_id); the last
     three are then origin_wid, needs and identity. Column 14 (issue #1607):
-    `busy=<looping|bg|>` — prefixed, so it is never a stray piece of a name."""
+    `busy=<looping|bg|>` — prefixed, so it is never a stray piece of a name.
+    Column 15 (issue #1750): `born=<epoch>`, the session's birth (@born, else
+    window_created) — the ruler every machine's list orders its rows by; prefixed
+    the same way, and an adapter older than it simply has none."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 15 and parts[-1].startswith("born="):
+        b = parts.pop()[5:]
+        extra["born"] = int(b) if b.isdigit() else None
     if len(parts) >= 14 and parts[-1].startswith("busy="):
         extra["busy"] = parts.pop()[5:] or None
     if len(parts) >= 13:

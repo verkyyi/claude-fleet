@@ -66,7 +66,10 @@ R="${E}0m"; US=$'\x1f'
 # passes name it so nothing lands glued to @sleep_since.
 # A PROXY window (@remote, issue #1424) prints an EMPTY name, so both passes drop
 # it like a nameless line: the machine's own `[m4]` row already stands for it.
-WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}"
+# The LAST field (issue #1750) is the window's BIRTH — @born, stamped once at
+# spawn and carried by every road a session takes (move/migrate), else tmux's own
+# window_created — read off this same list-windows, so the born order costs no fork.
+WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{window_name}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -112,6 +115,26 @@ state_v() { case "$1" in
   looping) gc=$IN; gl='↻';      rk=3;;
   *)       gc=$GY; gl='·';      rk=4;;
 esac; }
+
+# seg_v <rk> <idx> <born> <window id> → $seg, one row's segment of the sort PATH.
+# A row's place is its BIRTH (issue #1750, FLEET_DASH_ORDER=born, the default):
+# `<born>:<stable id>` — the epoch it was spawned (@born, else window_created),
+# ties broken by the window id's number, a remote row's by its worker_id — so a
+# turn going working → done → working, a `needs` coming and going, or a window
+# closing in the middle (renumber-windows) moves no row, and this machine's rows
+# and another machine's are measured with the one ruler, whatever order the hub
+# returned them in. A row with no birth (a remote node older than #1750) sorts
+# after every born sibling, by its id. `status` is the old order, byte for byte:
+# `<rk>:<idx>` — the state rank first, so a row jumps whenever its state does.
+ORDER=${FLEET_DASH_ORDER:-born}; [ "$ORDER" = status ] || ORDER=born
+seg_v() {
+  if [ "$ORDER" = status ]; then printf -v seg '%s:%05d' "$1" "$2"; return; fi
+  local b=$3 t=$4
+  case "$b" in ''|*[!0-9]*) b=9999999999 ;; esac
+  case "$t" in @*[0-9]) t=${t#@}; case "$t" in *[!0-9]*) ;; *) printf -v t '%08d' "$((10#$t))" ;; esac ;;
+               wid:*) t=${t#wid:} ;; esac
+  printf -v seg '%010d:%s' "$((10#$b))" "$t"
+}
 
 # loop_live_v <@loop> — true while the window's Loop mark (issue #1331) still holds
 # a round: a wakeup not past `next + max(600, ttl/2)`, or a cron id not past its
@@ -275,6 +298,7 @@ RGRP=$RMANY
 RGCNT=()                               # rows per repo group, for the heading's (n)
 LCNT=()                                # rows per LOST machine's group (issue #1475)
 NSESS=0                                # session rows this frame; 0 → the empty-state hint (#998)
+ATTN=0                                 # rows on the list waiting on you (#1750)
 # rgrp_v <@repo> <@norepo> → $rgrp, the window's OWN repo group (issues
 # #793/#974), off its $rslug (rslug_v; keys are #790's okp_v, never re-qualified
 # here): each hosted repo is its own group in fleet_repos order (RGRPMAP, one
@@ -353,7 +377,11 @@ WLIST=${WLIST//\\037/$US}
 #   window id  `wid:<worker_id>` — no tmux target, so every action that needs a
 #              window (jump, menu, reap, rename, pin, fold) finds none: a remote
 #              row is read-only, and its key (below) is the worker_id itself
-#   index      90001+, after this machine's windows of the same rank
+#   index      90001+, after this machine's windows of the same rank (the
+#              `status` order; the default born order reads the next one)
+#   born       the session's birth (cache field 15, issue #1750: @born, else its
+#              window_created, as the node reported it) — the one ruler this
+#              machine's rows and the other machines' are ordered by
 #   @wid       the machine the row is on (`m4`; sidebar field 9, never drawn —
 #              the rows look alike), `m4!` once that machine is lost — or the
 #              hub itself has been silent longer than FLEET_HUB_SESSIONS_STALE
@@ -409,7 +437,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born; do
     case "$r_wid" in
       '#ts')   _rts=$r_node; case "$_rts" in ''|*[!0-9]*) _rts=0 ;; esac; continue ;;
       '#me')   RME=$r_node; continue ;;
@@ -447,16 +475,16 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
       # about the row changes (its place, its nesting, its colour)
       r_node="$r_node~"
     fi
-    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs")
+    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
-    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs <<< "$_rr"
+    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born <<< "$_rr"
     case "$r_node" in *!) r_orig='' ;; esac                      # lost: never nested
     # parent lost: _rlostw holds row ids (`wid:`-prefixed), the origin is bare
     [ -n "$r_orig" ] && case "$_rlostw" in *" wid:$r_orig "*) r_orig='' ;; esac
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
-    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US"$'\n'
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born"$'\n'
   done
   unset _rrows _rr _rexpd _rexp
   WLIST="$RLIST$WLIST"
@@ -488,8 +516,9 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   unset _lwids
 fi
 
-# pass A — KEYTAB: one `<key>\t<rk>\t<idx>\t<pin>\t<exp>\t<rgrp>\t<origin>` line
-# per addressable window, the parent-resolution table for the spawn-provenance
+# pass A — KEYTAB: one `<key>\t<rk>\t<seg>\t<pin>\t<exp>\t<rgrp>\t<origin>` line
+# per addressable window (<seg>: its sort-path segment, seg_v — issue #1750),
+# the parent-resolution table for the spawn-provenance
 # grouping (#503), the pin bit a child inherits from its parent (#623), the
 # @expand fold bit its children are hidden by, the subtree progress each parent
 # row reports (#624), and the repo group a cross-repo child follows its root into
@@ -506,7 +535,7 @@ fi
 # line of this fleet, taken off the first (panels included: a fleet whose only
 # windows are panels still draws its `(0)` headings, folded or not).
 KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
-while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _; do
+while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   RFOLD=$rfold
@@ -538,8 +567,8 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
   # a `wid:` added to it would match no KEYTAB key and flatten every chain).
   case "$rwid" in wid:*) okey=${rwid#wid:} ;; esac
   [ -z "$okey" ] && continue
-  state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"
-  KEYTAB+="$okey"$'\t'"$rk"$'\t'"$idx"$'\t'"$pin"$'\t'"$exp"$'\t'"$rgrp"$'\t'"$origin"$'\n'
+  state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"; seg_v "$rk" "$idx" "$wborn" "$rwid"
+  KEYTAB+="$okey"$'\t'"$rk"$'\t'"$seg"$'\t'"$pin"$'\t'"$exp"$'\t'"$rgrp"$'\t'"$origin"$'\n'
   # rank 1 is "quiet", not "finished" (issue #1331): a sleeper, a waking/preparing
   # worker, and a `done` window whose @loop still holds a pending round all sort
   # with done, but only a done window with NO Loop counts toward its parent's k/N.
@@ -582,7 +611,7 @@ fi
 # grandchild nests under its real parent (not beside it under the root), each
 # level folds on its own, and each level counts its own subtree.
 # Sets, all as globals (no subshells — this runs per row at 4Hz):
-#   ANC=n     ancestors found; A{K,R,I,P,E,G}[0..n-1] = key/rank/idx/@pin/@expand/
+#   ANC=n     ancestors found; A{K,I,P,E,G}[0..n-1] = key/seg/@pin/@expand/
 #             repo group, [0] the parent, [n-1] the topmost one found
 #   $croot    the root's key (= AK[n-1]); EMPTY ⇒ the chain is broken (a window
 #             in it closed and the ledger does not know its parent, or it ran
@@ -615,7 +644,7 @@ fi
 # string it scans that shrinks. A `${OMAP#*…}` scan of the whole 715-line ledger
 # took ~160 ms on bash 3.2, 35 lookups a frame — 5.7 s of a 5.8 s sidebar.
 CHAIN_MAX=16; DEPTH_MAX=4
-AK=(); AR=(); AI=(); AP=(); AE=(); AG=()
+AK=(); AI=(); AP=(); AE=(); AG=()
 OMAP=''; OMAP_LOADED=0
 lparent_v() { lpar=''
   if [ "$OMAP_LOADED" = 0 ]; then
@@ -654,7 +683,7 @@ chain_v() { croot=''; crootpin=0; cpnlvl=''; ANC=0
     fi
     prow=${m%%$'\n'*}
     AK[ANC]=$cur
-    AR[ANC]=${prow%%$'\t'*}; prest=${prow#*$'\t'}
+    prest=${prow#*$'\t'}                                      # (the rank: KIDTAB's)
     AI[ANC]=${prest%%$'\t'*}; prest=${prest#*$'\t'}
     AP[ANC]=${prest%%$'\t'*}; prest=${prest#*$'\t'}
     AE[ANC]=${prest%%$'\t'*}; prest=${prest#*$'\t'}
@@ -719,7 +748,7 @@ if [ "$RGRP" = 1 ] && [ -n "$RFOLD" ]; then
 fi
 
 buf=""
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn; do
   [ -z "$name" ] && continue
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).
@@ -919,7 +948,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # below stays exact.
   agentd=''
   case "$agent" in ''|claude) : ;; *) agentd="${agent//[^A-Za-z0-9_-]/}" ;; esac
-  # sort key: the row's PATH (issue #1328) — one `<rk>:<idx>` segment per live
+  # sort key: the row's PATH (issue #1328) — one segment per live ancestor
+  # (seg_v: `<born>:<id>` by default since issue #1750, so siblings keep their
+  # birth order whatever their state; `<rk>:<idx>` under FLEET_DASH_ORDER=status,
+  # which the rest of this note describes) — one `<rk>:<idx>` segment per live
   # ancestor, root first, then its own, `/`-joined and zero-padded so a plain
   # byte sort puts every subtree contiguously under its parent, siblings in the
   # (rank, idx) order roots have always had. A root's path is its own segment —
@@ -938,7 +970,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   #     nested under it. A row that is its own pin root sheds the └ indent: its
   #     parent is no longer the line above, and indenting under an unrelated row is
   #     a lie.
-  printf -v gpath '%s:%05d' "$rk" "$idx"
+  seg_v "$rk" "$idx" "$wborn" "$wid"; gpath=$seg
   depth=0; pinned=1; ANC=0; croot=''; top=0
   if [ "$pin" = 1 ]; then pinned=0
   else
@@ -951,7 +983,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
         depth=$top
         _i=0
         while [ "$_i" -lt "$top" ]; do
-          printf -v gpath '%s:%05d/%s' "${AR[_i]}" "${AI[_i]}" "$gpath"; _i=$((_i+1))
+          gpath="${AI[_i]}/$gpath"; _i=$((_i+1))
         done
         [ "$pinned" = 1 ] && [ -z "$croot" ] && gpath="9:99999/$gpath" ;;
     esac
@@ -1109,6 +1141,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     done
     [ "$_hid" = 1 ] && continue
   fi
+  # a row on the list that is waiting on you (rk 0: needs / failed) — the born
+  # order's summary line counts it (issue #1750); a lost machine's row cannot be
+  # answered from here, so it is not one
+  [ "$rk" = 0 ] && [ -z "$rlost" ] && ATTN=$((ATTN + 1))
   tagd="$repod"
   [ -n "$agentd" ] && tagd="${tagd:+$tagd }$agentd"
   # repo badge (issue #793): DROPPED under `all` (issue #995) — the only frame
@@ -1370,6 +1406,24 @@ if [ -n "$RME" ]; then
     _k=$((_k + 1))
   done
   unset _k _mins _seen
+fi
+
+# 要你处理 (issue #1750): in the born order a `needs` / `failed` row no longer
+# rises to the top — it stays where it was born, red — so ONE summary line above
+# everything (the 置顶 group included) says how many there are, `! 2 个在问你 ·
+# ⌃k 跳过去`; the sidebar's ⌃k (on an empty input line) walks the cursor onto
+# them in list order, and the view follows. No such row, no line: it never takes
+# a row of its own for nothing. An inert `hdr` row (never a cursor stop, no bind
+# acts on it); the sidebar paints it red off its glyph field `!`. The `status`
+# order has no line — the rows themselves still rise — so it stays byte for byte.
+if [ "$ORDER" = born ] && [ "$ATTN" -gt 0 ]; then
+  if [ "$SIDEBAR" = 1 ]; then
+    t=$(fleet_ui_t attn_summary_fmt "$ATTN")
+    buf+="-3	-1	0	hdr$US$US!$US$t$US "$'\n'
+  else
+    t=$(fleet_ui_t attn_summary_dash_fmt "$ATTN")
+    buf+="-3	-1	0	hdr${US}hdr${US}${RD}${t}${R}"$'\n'
+  fi
 fi
 
 # the empty state (issue #998): a frame with no session row says so, and how to

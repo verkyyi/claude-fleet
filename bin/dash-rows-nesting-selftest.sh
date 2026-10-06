@@ -32,6 +32,9 @@
 # Hermetic: `tmux` is PATH-shimmed to replay a fixture window list (never a live
 # server). No gh, no git, no network. Exit 0 = pass.
 set -uo pipefail
+# The rows' order asserted here is the status order (needs/done/working by rank):
+# pin it — the default born order (issue #1750) is dash-born-order-selftest.sh's.
+export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"

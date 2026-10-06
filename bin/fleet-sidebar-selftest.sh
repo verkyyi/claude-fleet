@@ -153,8 +153,19 @@ import curses
 for key in (curses.KEY_LEFT, curses.KEY_RIGHT, curses.KEY_HOME, curses.KEY_END):
     assert sidebar.edit_of(key, '') == '' and sidebar.edit_of(key, 'x'), key
 assert sidebar.edit_of(curses.KEY_UP, 'x') == '' and sidebar.edit_of(curses.KEY_DOWN, 'x') == ''
-assert [sidebar.edit_of(k, '') for k in (1, 5, 23, 11, 21)] == \
-    ['home', 'end', 'kill_word', 'kill_eol', 'clear']
+assert [sidebar.edit_of(k, '') for k in (1, 5, 23, 21)] == \
+    ['home', 'end', 'kill_word', 'clear']
+# ⌃k (issue #1750): kills to the end of a typed line; on an EMPTY one it is the
+# list's jump to the next row waiting on you
+assert sidebar.edit_of(11, 'x') == 'kill_eol' and sidebar.edit_of(11, '') == ''
+R = lambda k, st: [k, st, '', k] + [''] * 8
+rows = [['hdr', '', '!', '! 2'] + [''] * 8, R('@1', 'done'), R('@2', 'needs'),
+        R('@3', 'working'), R('@4', 'failed'), R('@5', 'done')]
+assert sidebar.next_attention(rows, '@1') == '@2'
+assert sidebar.next_attention(rows, '@2') == '@4'
+assert sidebar.next_attention(rows, '@5') == '@2'          # wraps round
+assert sidebar.next_attention(rows, 'gone') == '@2'
+assert sidebar.next_attention([R('@1', 'done')], '@1') == ''
 assert sidebar.edit_of(sidebar.WORD_LEFT, '') == 'word_left' and sidebar.edit_of(ord('a'), 'x') == ''
 
 real_tmux = shutil.which('tmux')
@@ -303,13 +314,16 @@ def type_keys(text):
     ARCHITECTURE.md for the two mechanisms that make that hold on < 3.7."""
     os.write(terminal, text.encode())
 
-def row_data(current='', compact=True):
+def row_data(current='', compact=True, summary=False):
     row_env = dict(env, FLEET_SESSION='fleet-test', FLEET_SIDEBAR_CURRENT=current)
     result = subprocess.run(['bash', str(bin_dir / 'tmux-dashboard-rows.sh')] +
                             (['--sidebar'] if compact else []), env=row_env,
                             text=True, capture_output=True, timeout=15)
     check(result.returncode == 0, result.stderr)
-    return [line.split('\x1f') for line in result.stdout.split('\n') if '\x1f' in line]
+    rows = [line.split('\x1f') for line in result.stdout.split('\n') if '\x1f' in line]
+    # the 要你处理 summary line (issue #1750) only where a check asks for it: the
+    # rest index the list as it was before it
+    return rows if summary else [r for r in rows if not (r[0] == 'hdr' and '在问你' in ''.join(r))]
 
 def cleanup(*_):
     if client:
@@ -480,8 +494,9 @@ try:
             x += max(1, sidebar.width_of(ch))
     check(pal['PAL_RED'] in glyphs.values() and pal['PAL_CYAN'] in glyphs.values(),
           'the needs / working glyphs lost their state colour: %r' % glyphs)
-    check('worker-one' in tm('capture-pane', '-p', '-t', side).splitlines()[0] or
-          '修复侧栏' in tm('capture-pane', '-p', '-t', side).splitlines()[0],
+    # (the 要你处理 summary, issue #1750, is the one line allowed above it)
+    first = [l for l in tm('capture-pane', '-p', '-t', side).splitlines() if '在问你' not in l][0]
+    check('worker-one' in first or '修复侧栏' in first,
           'sidebar should start with a task, not an internal title row')
     check(WORKER_FOCUS in border(p1),
           'active worker border must identify input focus')
@@ -498,11 +513,16 @@ try:
     check(all('a1' not in r[2] and 'b1' not in r[2] for r in full if r[0] != 'hdr'),
           'full hub list displays internal worker handles')
     check(tm('show-options', '-wqv', '-t', w1, '@wid') == 'a1', 'rendering changed the internal worker handle')
-    check([r[1] for r in full if r[0] != 'hdr'] == [r[0] for r in compact],
+    check([r[1] for r in full if r[0] != 'hdr'] == [r[0] for r in compact if r[0] != 'hdr'],
           'sidebar order diverges from hub')
     # ONE red `!` for every needs kind since #1328; the kind rides the detail field.
-    check(compact[0][0] == w2 and compact[0][2] == '!', 'needs cue was lost')
-    check(compact[0][7] != '', 'a needs row lost its detail (which kind of `!`)')
+    # (in place since #1750 — the born order — with the 要你处理 summary on top)
+    asking = next((r for r in compact if r[0] == w2), None)
+    check(asking is not None and asking[2] == '!', 'needs cue was lost')
+    check(asking[7] != '', 'a needs row lost its detail (which kind of `!`)')
+    top = row_data(summary=True)[0]
+    check(top[0] == 'hdr' and top[2] == '!' and '1 个在问你' in top[3],
+          'the 要你处理 summary is not on top: %r' % (top,))
     tm('set-option', '-w', '-t', w1, '@pin', '1')
     # The 置顶 group (issue #1170): its heading, then the pinned row — bare, no
     # `* ` — then ONE inert rule the view clips to its width.

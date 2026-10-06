@@ -34,6 +34,9 @@
 # Needs a real tmux, on an ISOLATED socket via the PATH shim (never the live
 # server — see dash-marker-selftest.sh). tmux absent → SKIP cleanly. Exit 0 = pass.
 set -uo pipefail
+# The rows' order asserted here is the status order (needs/done/working by rank):
+# pin it — the default born order (issue #1750) is dash-born-order-selftest.sh's.
+export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"

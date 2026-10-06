@@ -80,6 +80,9 @@
 # a private `tmux -L` server; leg I mints its own throwaway CA + certificate. No gh,
 # no network. Exit 0 = pass.
 set -uo pipefail
+# The rows' order asserted here is the status order (needs/done/working by rank):
+# pin it — the default born order (issue #1750) is dash-born-order-selftest.sh's.
+export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
@@ -571,7 +574,7 @@ eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machine'
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
 eq   "E: a row on another machine says local=0, no wid" "0|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$1 == w { print $11 "|" $12 }')"
-eq   "E: every row carries the four appended fields (local, wid, via, busy — #1480, #1488, #1607)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 14')"
+eq   "E: every row carries the five appended fields (local, wid, via, busy, born — #1480, #1488, #1607, #1750)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 15')"
 eq   "E: a hub answer's rows are via=hub" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && $13 != "hub"')"
 hasnt "E: another login's session is not shown" "$R" "theirs"
 hasnt "E: a session with no worker_id is not shown" "$R" "no-id"
