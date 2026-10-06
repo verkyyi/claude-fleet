@@ -52,15 +52,19 @@ fresh() {
   echo '{"numStartups": 1}' > "$h/.claude.json"
   printf '%s\n' "$h"
 }
-# install <home> — the one line, client only, from this repo
+# install <home> [<files dir>] — the one line, client only, from this repo; the
+# files land in the one fleet directory, ~/.claude/fleet (#1804), unless a
+# second argument names another (FLEET_INSTALL_HOME — legs E–G's separate one)
 install() {
-  env -i PATH="$SYS_PATH" HOME="$1" SHELL=/bin/zsh TMPDIR="$WORK" \
+  env -i PATH="$SYS_PATH" HOME="$1" SHELL=/bin/zsh TMPDIR="$WORK" ${2:+FLEET_INSTALL_HOME="$2"} \
     FLEET_INSTALL_NO_HUB=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 \
     FLEET_INSTALL_SRC="file://$REPO" sh "$REPO/bin/fleet-install.sh" 2>&1
 }
 # snap <home> — a digest of every file the apply may write
 snap() {
-  (cd "$1" && find .claude .claude.json .codex .config/claude-fleet -type f 2>/dev/null | LC_ALL=C sort \
+  # never the install itself: ~/.claude/fleet IS the files' directory now (#1804),
+  # where python leaves its __pycache__
+  (cd "$1" && find .claude .claude.json .codex .config/claude-fleet -path .claude/fleet -prune -o -type f -print 2>/dev/null | LC_ALL=C sort \
     | while IFS= read -r f; do printf '%s %s\n' "$(cksum < "$f")" "$f"; done)
 }
 
@@ -84,9 +88,10 @@ fi
 
 # ── B — client-only install: the four categories ─────────────────────────────
 H=$(fresh b); out=$(install "$H"); rc=$?
-R="$H/.local/share/claude-fleet"
+R="$H/.claude/fleet"
 [ "$rc" = 0 ] && echo "$out" | grep >/dev/null '^Agent 配置: 已装' && ok "B install exit 0, says the Agent configuration is in" || bad "B rc=$rc: $out"
-[ ! -e "$H/.claude/fleet" ] && ok "B no ~/.claude/fleet (client only)" || bad "B a full install appeared"
+[ -f "$R/bin/fleet" ] && [ ! -e "$R/.git" ] && [ ! -e "$R/bin/fleet-up.sh" ] && [ ! -e "$H/.local/share/claude-fleet" ] \
+  && ok "B the base in ~/.claude/fleet — one directory, no git, no part that runs sessions (#1804)" || bad "B layout: $(ls -a "$R" "$H/.local/share" 2>&1 | tr '\n' ' ')"
 chk=$("$PY" - "$H" "$R" <<'PY'
 import json, os, sys
 h, r = sys.argv[1], sys.argv[2]
@@ -105,14 +110,14 @@ PY
 nh=$(printf '%s\n' "$chk" | sed -n 's/^hooks //p')
 case "$nh" in 0/*|'') bad "B hooks: $chk" ;; *) [ "${nh%/*}" = "${nh#*/}" ] && ok "B Claude hooks: all $nh wired through the package's shim" || bad "B hooks: $nh" ;; esac
 printf '%s\n' "$chk" | grep -x >/dev/null 'mcp context7,fetch,github,playwright' && ok "B Claude MCP: context7 · fetch · github · playwright" || bad "B mcp: $chk"
-printf '%s\n' "$chk" | grep >/dev/null "^github .*\$HOME/.local/share/claude-fleet/bin/mcp-github.sh" && [ -x "$R/bin/mcp-github.sh" ] \
+printf '%s\n' "$chk" | grep >/dev/null "^github .*\$HOME/.claude/fleet/bin/mcp-github.sh" && [ -x "$R/bin/mcp-github.sh" ] \
   && ok "B github MCP runs the package's bin/mcp-github.sh" || bad "B github args: $chk"
 [ -f "$H/.claude/skills/doc-preview/SKILL.md" ] && [ -x "$H/.claude/skills/doc-preview/share.sh" ] && [ -f "$H/.claude/commands/fleet-claim.md" ] \
   && ok "B Claude skills + commands (a skill's script executable)" || bad "B claude skills: $(ls "$H/.claude/skills" "$H/.claude/commands" 2>&1 | tr '\n' ' ')"
 [ -f "$H/.codex/skills/doc-preview/SKILL.md" ] && [ -f "$H/.codex/skills/fleet-claim/SKILL.md" ] \
   && ok "B Codex skills (repo skills + command skills)" || bad "B codex skills: $(ls "$H/.codex/skills" 2>&1 | tr '\n' ' ')"
 n=$(grep -c '^\[mcp_servers\.' "$H/.codex/config.toml" 2>/dev/null)
-[ "$n" = 4 ] && grep -q 'local/share/claude-fleet/bin/mcp-fetch.sh' "$H/.codex/config.toml" && ok "B Codex MCP: 4 servers, fetch at the package's bin/" || bad "B codex mcp: $n $(cat "$H/.codex/config.toml" 2>&1)"
+[ "$n" = 4 ] && grep -q '\.claude/fleet/bin/mcp-fetch.sh' "$H/.codex/config.toml" && ok "B Codex MCP: 4 servers, fetch at the package's bin/" || bad "B codex mcp: $n $(cat "$H/.codex/config.toml" 2>&1)"
 [ -f "$R/mod/fleet/.claude-plugin/plugin.json" ] && ok "B the mod (mod/fleet/.claude-plugin/plugin.json) is in the package" || bad "B no mod"
 doc=$(env -i PATH="$SYS_PATH" HOME="$H" "$H/.local/bin/fleet" doctor 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$doc" | grep >/dev/null 'PASS  agents   4/4 · hooks .* · skills .* · mcp ok · mod ' \
@@ -151,7 +156,10 @@ ls "$H/.claude/"settings.json.bak.* >/dev/null 2>&1 && bad "D a settings backup 
 # ── E — the shim ─────────────────────────────────────────────────────────────
 # the wired path as it arrives when the hook's shell left the ~ unexpanded
 TL='~'
-R="$H/.local/share/claude-fleet"
+# a client whose files sit apart from ~/.claude/fleet (FLEET_INSTALL_HOME, the
+# pre-#1804 layout) — so ~/.claude/fleet below can be a full install's
+H=$(fresh e); R="$H/.local/share/claude-fleet"
+install "$H" "$R" >/dev/null || bad "E the separate-directory install failed"
 out=$(echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
   | env -i PATH="$SYS_PATH" HOME="$H" TMUX=/tmp/x,1,0 TMUX_PANE=%1 sh "$R/bin/fleet-hook-run.sh" python3 "$TL/.claude/fleet/hooks/bash-guard.py" 2>&1); rc=$?
 [ "$rc" = 2 ] && ok "E bash-guard runs from the package and blocks (exit 2)" || bad "E guard rc=$rc: $out"
@@ -161,6 +169,9 @@ out=$(echo '{"tool_name":"Bash","tool_input":{"command":"ls"}}' \
 env -i PATH="$SYS_PATH" HOME="$H" sh "$R/bin/fleet-hook-run.sh" sh "$TL/.claude/fleet/bin/set-claude-state.sh" busy </dev/null; rc=$?
 [ "$rc" = 0 ] && ok "E pane plumbing the package does not carry → exit 0" || bad "E plumbing rc=$rc"
 mkdir -p "$H/.claude/fleet/bin"; printf 'echo node-ran "$@"\n' > "$H/.claude/fleet/bin/set-claude-state.sh"
+out=$(env -i PATH="$SYS_PATH" HOME="$H" sh "$R/bin/fleet-hook-run.sh" sh "$H/.claude/fleet/bin/set-claude-state.sh" busy 2>&1)
+[ -z "$out" ] && ok "E the install line's base at ~/.claude/fleet (no fleet-up.sh, #1804) is no full install" || bad "E base taken for a node: $out"
+: > "$H/.claude/fleet/bin/fleet-up.sh"
 out=$(env -i PATH="$SYS_PATH" HOME="$H" sh "$R/bin/fleet-hook-run.sh" sh "$H/.claude/fleet/bin/set-claude-state.sh" busy 2>&1)
 [ "$out" = "node-ran busy" ] && ok "E a full install's script wins" || bad "E node script: $out"
 rm -rf "$H/.claude/fleet"

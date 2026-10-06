@@ -48,22 +48,43 @@ PASS  能力     基础 · 承载 未开（fleet host on）
 照旧认旧键，再认一个版本。守护：`bin/fleet-conf-selftest.sh` G 腿、
 `bin/fleet-host-selftest.sh`。
 
-## 只要工具不要入口
+## 一条安装命令（issue #1804）
 
-只有一台电脑、不打算接入口（同事自己的机器、只想要这套工具的开发者，或者入口还没开），
-一条命令装好，之后照样只敲 `fleet`（issue #1712，EPIC #1710 C2）：
+每台电脑——同事的笔记本、m5、m4、只想要这套工具的单机——都是同一条：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --no-hub
+curl -fsSL <入口>/install | sh
 ```
 
-- **装什么**：和入口装的是同一个 `fleet-install.sh`、同一份客户端清单
-  （`tokenledger/internal/api/fleetclient/manifest`），只是文件从 GitHub 的
-  `stable` 取（`FLEET_INSTALL_SRC` 可换源），**不写任何入口地址**。然后装 fleet 本身：
-  `~/.claude/fleet` 按 `stable` 克隆、跑 `fleet-login-bootstrap.sh`（钩子、命令、
-  守护进程、第一个 fleet——和新登录的设置一模一样；已有 checkout 就不动）。最后一行
-  说账号：订阅账号全在本机，`claude setup-token` 打出的 token 存成
-  `~/.config/claude-fleet/accounts/<名字>`（0600）。
+没有入口时，同一个文件从 GitHub 的 `stable` 取
+（`curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh`），
+只差入口预填的地址。装的时候从终端（`/dev/tty`，`curl | sh` 也能问）问两件事：
+
+1. **这台电脑要做什么？** `1 只看、只派`（推荐，回车）· `2 也跑会话（承载）`——选 2
+   再列出要多装的（git、tmux、后台程序）确认一次。
+2. **接入口吗？** `1 接`（命令是从入口复制来的、或 `fleet.conf` 里已有地址时是默认）·
+   `2 不接（单机）`。
+
+- **一个目录**：都装在 `~/.claude/fleet`。只看只派 = 客户端清单
+  （`tokenledger/internal/api/fleetclient/manifest`）那部分，不要 git；承载 = 同一个目录
+  原地换成跟 `stable` 的 git 检出、跑新登录的设置（`bin/fleet-host-install.sh`，
+  `fleet host on` 走的也是它）。已是完整安装的目录一个文件都不重下。
+- **再跑一次 = 改答案**：回车默认是这台上次的答案，所以再跑零改动；改选 2 只多装承载那部分。
+  安装从不拆东西——关承载用 `fleet host off`。也可以不跑安装：`fleet host on`。
+- **没有终端可问**（自动化、CI）：按默认只装基础，打印一行
+  「要承载：再跑一次本命令，或 fleet host on」。自动化用环境变量预填答案：
+  `FLEET_INSTALL_HOST=0|1`、`FLEET_INSTALL_HUB=0|1`（地址 `FLEET_HUB_URL`）。
+  旧的 `--host` / `--no-hub` 再认一个版本，作预填答案的别名。
+- **两套并存的旧机器**：`~/.local/share/claude-fleet`（旧客户端目录）改成指向
+  `~/.claude/fleet` 的符号链接（薄壳，一个版本后删），里面的旧文件在没有程序还从那里跑时删掉；
+  正在跑的客户端不断。
+- **不接入口时**：不写任何入口地址；承载时最后一行说账号——订阅账号全在本机，
+  `claude setup-token` 打出的 token 存成 `~/.config/claude-fleet/accounts/<名字>`（0600）。
+- 守护：`bin/fleet-install-selftest.sh` G 腿（不接入口、无终端）、H 腿（伪终端里三种答法、
+  再跑零改动、只看 → 承载、预填与交互一致）、I 腿（两套迁移成一套、运行中的进程不断）。
+
+### 不接入口时 `fleet` 打开什么
+
 - **`fleet` 打开的还是同一个客户端**：没有入口地址时 `fleet connect --pick` 答「本机」
   （reason `local`，`fleet connect --print` 打印 `local <机器>`），右窗格直接嵌套接入
   这台机器的 fleet（不 ssh），左边列表是这台机器自己的会话——客户端的取数循环改问本机
@@ -75,7 +96,7 @@ curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fle
   `curl -fsSL <入口>/install | sh` 会写）就回到入口来源，**有入口时客户端逐字节照旧**。
 - 守护：`bin/fleet-shell-selftest.sh` K 腿（隔离 socket、无入口地址、`CCQUOTA_*` 全清：
   客户端起来、列表是本机 fleet 的全部会话、点一行右窗格切过去；写上地址就是入口环境）、
-  `bin/fleet-install-selftest.sh` G 腿（`--no-hub` 在临时 HOME 装好、不写入口地址）、
+  `bin/fleet-install-selftest.sh` G 腿（不接入口在临时 HOME 装好、不写入口地址）、
   `bin/fleet-connect-selftest.sh` 第 7 段。
 
 ## 开关在哪一级

@@ -12,10 +12,11 @@
 #                                   `PASS|WARN|INFO<TAB><text>` on stdout
 #
 # An installed client (the one line, `curl <hub>/install | sh`) lives in one
-# directory, ~/.local/share/claude-fleet — the install HOME — and the installer
-# records which client it is in <home>/.client-version (version = the hub's
-# client digest, compat, the hub commit). A home without that file — a checkout,
-# a --no-hub install, an install that predates this — is never touched: `start`
+# directory, ~/.claude/fleet (#1804; ~/.local/share/claude-fleet before) — the
+# install HOME — and the installer records which client it is in
+# <home>/.client-version (version = the hub's client digest, compat, the hub
+# commit) when it 接s a hub. A home without that file — a checkout (承载), a
+# 不接 install, an install that predates this — is never touched: `start`
 # is a no-op there, byte for byte the old start.
 #
 # VERSIONS (issue #1781, EPIC #1776 C5): every client the hub hands over is

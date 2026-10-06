@@ -93,7 +93,7 @@
 #
 #   --bundle  (issue #1725, EPIC #1718 C7) the Agent configuration package alone,
 #             on an install that is NOT a git checkout — a client-only computer's
-#             ~/.local/share/claude-fleet, which the installer (bin/fleet-install.sh)
+#             ~/.claude/fleet without bin/fleet-up.sh (#1804), which the installer (bin/fleet-install.sh)
 #             fills from the hub's /install or GitHub's stable. No --from/--to:
 #             every file conf/agent-bundle.manifest lists counts as changed (each
 #             pass below compares before it writes, so a current login writes
@@ -349,6 +349,10 @@ if [ "$BUNDLE" = 1 ]; then
       say "apply: ok — nothing to apply from $ROOT"
       exit 0
     fi
+    CLIENT=1
+  elif [ ! -f "$ROOT/bin/fleet-up.sh" ]; then
+    # the install line's base IS ~/.claude/fleet (issue #1804): the part
+    # everyone has, no part that runs sessions — wired the client's way
     CLIENT=1
   fi
   BFILES=$(python3 "$ROOT/bin/fleet-agent-bundle.py" files --root "$ROOT") \
