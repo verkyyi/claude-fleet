@@ -81,8 +81,12 @@ grep -Eq '\-ge "\$MAX_AGE"' "$WAIT" \
 code_only() { grep -v '^[[:space:]]*#' "$CONF"; }
 shell_code() { grep -v '^[[:space:]]*#' "$SHELLC"; }
 [ "$(code_only | grep -c 'dash-popup\.sh')" -eq 0 ] || fail "the node conf opens a popup again (#1714)"
+# issue #1903 adds ⌘/ (the same sheet as prefix ?) and ⌘P / prefix / (quick open).
 npop=$(shell_code | grep -c 'dash-popup\.sh')
-[ "$npop" -eq 1 ] || fail "expected 1 dash-popup.sh bind in the client conf (prefix ?), found $npop"
+[ "$npop" -eq 4 ] || fail "expected 4 dash-popup.sh binds in the client conf (prefix ?, ⌘/, ⌘P, prefix /), found $npop"
+[ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'fleet-keys\.sh')" -eq 2 ] \
+  && [ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'fleet-quickopen\.py')" -eq 2 ] \
+  || fail "the client conf's popups are not exactly the key sheet ×2 (prefix ?, ⌘/) and quick open ×2 (⌘P, prefix /)"
 cat "$CONF" "$SHELLC" | grep -v '^[[:space:]]*#' | grep -q 'display-popup' \
   && fail "a conf calls display-popup directly — every popup goes through dash-popup.sh (issue #1535)"
 [ "$(shell_code | grep -c 'dash-popup\.sh')" -eq "$(shell_code | grep 'dash-popup\.sh' | grep -c 'run-shell -b ')" ] \

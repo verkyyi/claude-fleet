@@ -4,8 +4,8 @@ session (issue #1903, EPIC #1906 C10) — and the switch history ⌘[ / ⌘] wal
 
     fleet-quickopen.py [--session S] [--pane <list pane>]
                                               the popup (conf/tmux-shell.conf's
-                                              ⌘P / prefix / opens it through
-                                              dash-popup.sh)
+                                              ⌘P / prefix / open it through the
+                                              one popup door)
     fleet-quickopen.py rank [--all] [<query>] the ranked rows, one per line
                                               (`key<TAB>name`) — the selftest's view;
                                               --all reads every session as the popup does
