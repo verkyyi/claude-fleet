@@ -274,7 +274,7 @@ drill_install_sync_killed() {
     git --git-dir="$d/origin.git" update-ref refs/tags/stable master
   ) >/dev/null 2>&1 || { WHY="sandbox install did not build"; return 1; }
   isync() { HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-            bash "$BIN/fleet-install-sync.sh" --root "$d/install" "$@"; }
+            bash "$BIN/fleet-install-sync.sh" --root "$d/install"; }
   touch "$d/hold"; isync >"$d/tick1.out" 2>&1 &              # held in its baseline doctor run
   until_ok 10 grep -q updating "$d/tick1.out" || { WHY="the first tick never got to updating: $(tail -2 "$d/tick1.out")"; return 1; }
   pid=$(cat "$d/conf/global/install-sync.lock/pid" 2>/dev/null)
