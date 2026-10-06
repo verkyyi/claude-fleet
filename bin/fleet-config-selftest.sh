@@ -137,14 +137,9 @@ out=$(cfg rm --personal settings verbose); rc=$?
 out=$(cfg show); rc=$?
 r_d=$(row "$out" claude.mcp.context7); r_t=$(row "$out" claude.mcp.teamtool)
 r_p=$(row "$out" claude.mcp.perstool); r_l=$(row "$out" claude.mcp.mine)
-# the 个人 row is composed by fleet-agent-team.py's personal layer (#1857); until
-# that lands the composition has three sources, and this leg says so instead
 want_p=个人 want_ps=personal
-if ! grep -q '^PERSON_CACHE' "$REPO/bin/fleet-agent-team.py"; then
-  want_p=""; want_ps=""; echo "note B: fleet-agent-team.py has no personal layer yet (#1857) — the 个人 row is not composed"
-fi
 [ $rc = 0 ] && [ "$r_d" = fleet ] && [ "$r_t" = 团队 ] && [ "$r_p" = "$want_p" ] && [ "$r_l" = 本机 ] \
-  && ok "B show: fleet · 团队 · ${want_p:-(个人 待 #1857)} · 本机" || bad "B show sources: d=$r_d t=$r_t p=$r_p l=$r_l
+  && ok "B show: fleet · 团队 · 个人 · 本机" || bad "B show sources: d=$r_d t=$r_t p=$r_p l=$r_l
 $out"
 js=$(cfg show --json claude.mcp.)
 srcs=$(printf '%s' "$js" | "$PY" -c 'import json,sys; d=json.load(sys.stdin)["items"]; print(" ".join(d.get(k, {}).get("source", "") for k in ("claude.mcp.context7","claude.mcp.teamtool","claude.mcp.perstool","claude.mcp.mine")))' 2>&1)
@@ -161,7 +156,15 @@ out=$(cfg add --personal mcp racer '{"command": "r"}'); rc=$?
 out=$(cfg promote claude.mcp.mine); rc=$?
 [ $rc = 0 ] && pb | grep -q '"mine": {"args": \["--mine"\], "command": "my-mcp"}' \
   && ok "E promote: mine is in the personal layer" || bad "E promote: rc=$rc $(pb) $out"
-[ "$(row "$(cfg show claude.mcp.mine)" claude.mcp.mine)" = 本机 ] && ok "E here 本机 still wins" || bad "E source after promote"
+# identical here and in the layer, it composes as 个人; changed here, 本机 wins
+"$PY" - "$H/.claude.json" <<'PYEOF'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p)); d["mcpServers"]["mine"]["args"] = ["--mine", "--here"]
+json.dump(d, open(p, "w"))
+PYEOF
+out=$(cfg show claude.mcp.mine)
+[ "$(row "$out" claude.mcp.mine)" = 本机 ] && printf '%s' "$out" | grep -q -- '--here' \
+  && ok "E a local change still wins over the personal layer" || bad "E local over personal: $out"
 grep -q '"mine"' "$H/.claude.json" && ok "E the local file is untouched" || bad "E local file changed"
 
 # ── F — a credential is refused, naming the field ─────────────────────────────

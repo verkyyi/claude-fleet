@@ -323,12 +323,7 @@ def credential_hint(why):
 
 
 def validate(b):
-    v = getattr(T, "validate_person", None)
-    if v:
-        return v(b)
-    if "hook_scripts" in b:          # C4's key, until the client learns it
-        b = {k: x for k, x in b.items() if k != "hook_scripts"}
-    return T.validate(b)
+    return T.validate(b, "personal")
 
 
 def sync_here(a):
