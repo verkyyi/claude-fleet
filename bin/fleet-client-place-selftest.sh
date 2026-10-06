@@ -42,7 +42,7 @@ trap cleanup EXIT INT TERM
 
 # --- the fake hub -------------------------------------------------------------------
 cat > "$WORK/hub.py" <<'PY'
-import hashlib, hmac, json, sys
+import hashlib, hmac, json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 LEASE, KEY, UUID, LOG, PORTF = sys.argv[1:6]
@@ -93,14 +93,20 @@ class H(BaseHTTPRequestHandler):
 
 
 srv = HTTPServer(("127.0.0.1", 0), H)
-with open(PORTF, "w") as f:
+with open(PORTF + ".tmp", "w") as f:
     f.write(str(srv.server_port))
+os.replace(PORTF + ".tmp", PORTF)
 srv.serve_forever()
 PY
-python3 "$WORK/hub.py" "$LEASE" "$KEY" "$UUID" "$WORK/log" "$WORK/port" &
+python3 "$WORK/hub.py" "$LEASE" "$KEY" "$UUID" "$WORK/log" "$WORK/port" 2>"$WORK/hub.err" &
 HUBPID=$!
-for _ in $(seq 50); do [ -s "$WORK/port" ] && break; sleep 0.1; done
-[ -s "$WORK/port" ] || { printf 'FAIL: the fake hub did not start\n' >&2; exit 1; }
+# a cold python on a CI runner can take seconds to bind
+for _ in $(seq 300); do
+  [ -s "$WORK/port" ] && break
+  kill -0 "$HUBPID" 2>/dev/null || break
+  sleep 0.1
+done
+[ -s "$WORK/port" ] || { printf 'FAIL: the fake hub did not start\n' >&2; cat "$WORK/hub.err" >&2 2>/dev/null; exit 1; }
 HUB="http://127.0.0.1:$(cat "$WORK/port")"
 
 P="$BIN/fleet-client-place.sh"
