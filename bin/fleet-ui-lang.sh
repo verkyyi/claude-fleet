@@ -149,6 +149,12 @@ fleet_ui_t() {
     en:badge_bare_fmt)          printf '⌂ %s' "${1:-}" ;;
     zh:badge_hubdown_fmt)       printf '⌂ %s · 入口连不上' "${1:-}" ;;
     en:badge_hubdown_fmt)       printf '⌂ %s · hub unreachable' "${1:-}" ;;
+    zh:badge_updated_fmt)       printf '✓ 已更新到 %s' "${1:-}" ;;
+    en:badge_updated_fmt)       printf '✓ updated to %s' "${1:-}" ;;
+    zh:badge_update_failed_fmt) printf '更新没成功：%s' "${1:-}" ;;
+    en:badge_update_failed_fmt) printf 'update failed: %s' "${1:-}" ;;
+    zh:badge_update_later)      printf '新版已就绪 · 下次打开生效' ;;
+    en:badge_update_later)      printf 'new version ready · takes effect next open' ;;
     zh:peer_hub_lost_fmt)       printf '入口失联，机器间访问暂停；你可直接 `fleet %s` 进去' "${1:-}" ;;
     en:peer_hub_lost_fmt)       printf 'hub lost — machine-to-machine access paused; you can still go in directly with `fleet %s`' "${1:-}" ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
