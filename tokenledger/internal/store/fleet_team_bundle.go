@@ -211,3 +211,35 @@ func (s *Store) PutPersonBundle(principal, bundle, actor, note string, base int,
 	}
 	return b, tx.Commit()
 }
+
+// PersonBundleHead is one person's current version, without its body: who
+// wrote it, when, and the body — for the caller to count — kept off the wire.
+type PersonBundleHead struct {
+	Principal string
+	FleetTeamBundle
+}
+
+// PersonBundleHeads is every person's current version, one row each
+// (claude-fleet#1866): the operator's `fleet config people`.
+func (s *Store) PersonBundleHeads() ([]PersonBundleHead, error) {
+	rows, err := s.read.Query(`SELECT b.principal, b.version, b.prev, b.bundle, b.actor, b.note, b.created
+		FROM fleet_person_bundles b
+		JOIN (SELECT principal, MAX(version) AS v FROM fleet_person_bundles GROUP BY principal) m
+		  ON m.principal = b.principal AND m.v = b.version
+		ORDER BY b.principal`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PersonBundleHead
+	for rows.Next() {
+		var h PersonBundleHead
+		var created string
+		if err := rows.Scan(&h.Principal, &h.Version, &h.Prev, &h.Bundle, &h.Actor, &h.Note, &created); err != nil {
+			return nil, err
+		}
+		h.Created, _ = time.Parse(rfc, created)
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}

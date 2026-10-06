@@ -36,6 +36,12 @@ itself stays in fleet-agent-team.py, which it imports — no second set of rules
         your personal layer's versions / a rollback (version N's body as a new
         version). The operator, with CCQUOTA_VIEWER_TOKEN and --person ID, may
         read anyone's history and restore anyone to one of THEIR OWN versions.
+  people [--json]
+        the operator's (CCQUOTA_VIEWER_TOKEN): every person's personal layer —
+        current version, last change (when, by whom), item count; never the
+        content (`history --person ID`, then read a version on the hub). Help
+        someone back with `restore N --person ID`: the version row and the
+        hub's audit name you.
   --team  on add|set|rm|history|restore: the same on the team layer, through
         fleet-agent-team.py put/restore/history — the operator's only.
 
@@ -254,6 +260,12 @@ def person_call(a, method, body=None, query=""):
         no_hub()
     hdr = {"Accept": "application/json", "Content-Type": "application/json"}
     viewer = os.environ.get("CCQUOTA_VIEWER_TOKEN") or ""
+    if a.action == "people":
+        if not viewer:
+            die("fleet config people 是操作者的用法：要 CCQUOTA_VIEWER_TOKEN 在环境里")
+        code, raw = T.http(url + PERSON_PATH + "?" + query, method,
+                           dict(hdr, Authorization="Bearer " + viewer), None, a.timeout)
+        return code, decode(raw)
     if a.person:
         if not viewer:
             die("--person 是操作者的用法：要 CCQUOTA_VIEWER_TOKEN 在环境里")
@@ -537,6 +549,32 @@ def restore(a):
     return 1
 
 
+def people(a):
+    code, resp = person_call(a, "GET", None, "all=1")
+    if code != 200:
+        if code == 403:
+            die("入口拒绝：只有操作者（viewer token）能看每个人的版本", 1)
+        hub_err(code, resp)
+    rows = resp.get("people") or []
+    if a.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("入口上还没有人")
+        return 0
+    print("%-20s %-6s %-5s %-20s %s" % ("人", "版本", "条目", "最近修改", "改的人"))
+    for r in rows:
+        who = r.get("principal") or "?"
+        if r.get("display_name") and r["display_name"] != who:
+            who = "%s (%s)" % (who, r["display_name"])
+        v = int(r.get("version") or 0)
+        when = (r.get("updated") or "")[:19].replace("T", " ") if v else "—"
+        print("%-20s %-6s %-5s %-20s %s" % (who, "v%d" % v if v else "未写过", r.get("items") or 0,
+                                          when, r.get("actor") or "" if v else ""))
+    print("帮人退回：fleet config restore N --person <人>（先 fleet config history --person <人> 看版本）")
+    return 0
+
+
 # --- the team layer: fleet-agent-team.py does it -----------------------------------------
 
 def team_pass(a, argv):
@@ -586,7 +624,7 @@ def team_edit(a):
 def main():
     ap = argparse.ArgumentParser(prog="fleet config", description=__doc__.split("\n")[0])
     ap.add_argument("action", nargs="?", default="show",
-                    choices=("show", "add", "set", "rm", "promote", "history", "restore"))
+                    choices=("show", "add", "set", "rm", "promote", "history", "restore", "people"))
     ap.add_argument("args", nargs="*")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--personal", action="store_true")
@@ -603,7 +641,7 @@ def main():
     if a.person and a.action not in ("history", "restore"):
         die("--person 只用于 history / restore（操作者只能帮人退回到他自己的某一版）")
     return {"show": show, "add": edit, "set": edit, "rm": edit, "promote": promote,
-            "history": history, "restore": restore}[a.action](a)
+            "history": history, "restore": restore, "people": people}[a.action](a)
 
 
 if __name__ == "__main__":
