@@ -251,7 +251,8 @@ done
 # when ANY of these hits, and the reason is printed as `select: <test> ← <reason>`:
 #   a) it is itself a changed *-selftest.sh;
 #   b) its source names a changed file's BASENAME (a file under one of the shipped
-#      trees below — `docs/` and the READMEs select nothing of their own);
+#      trees below — `docs/` and the READMEs select nothing of their own); an
+#      extensionless one (bin/fleet) only as a path, `/<name>` (issue #1734);
 #   c) for a shared LIBRARY (bin/*lib.sh), where the basename is in nearly every
 #      test: its source names a FUNCTION whose body the diff touched (old or new
 #      side, so a removed function still selects its callers' tests);
@@ -354,7 +355,14 @@ if [ -n "$changed_base" ]; then
         bin/*|hooks/*|conf/*|commands/*|skills/*|launchd/*|systemd/*|mod/*|shell/*|extras/*|.claude-plugin/*|fleet.conf.example) ;;
         *) continue ;;
       esac
-      for t in $(grep -lF -- "$b" *-selftest.sh 2>/dev/null); do
+      # An EXTENSIONLESS basename (bin/fleet) is an ordinary word — `fleet` is in
+      # 330 of the tests — so it selects only where a test names it as a PATH:
+      # `/fleet` not followed by a name character or another `/` (issue #1734).
+      case "$b" in
+        *.*) hits=$(grep -lF -- "$b" *-selftest.sh 2>/dev/null) ;;
+        *)   hits=$(grep -lE -- "/$b([^A-Za-z0-9_./-]|\$)" *-selftest.sh 2>/dev/null) ;;
+      esac
+      for t in $hits; do
         picks="$picks$t${tab}mentions $b$nl"
       done
     done
