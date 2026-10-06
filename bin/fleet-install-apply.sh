@@ -843,6 +843,24 @@ else
   say 'agents: skip — no conf/agent-defaults in this version'
 fi
 
+# --- team (issue #1726, EPIC #1718 C8) ----------------------------------------------
+# The hub's team layer over what the agents pass just filled — fleet default <
+# team < local: fleet-agent-team.py sync fetches /v1/fleet/team-bundle (the node
+# token, else this person's connection certificate) and composes it, recording
+# every item's source in $FLEET_CONF_DIR/agent-effective.json. Always run (the
+# agents pass may have refilled a default the team replaces). No hub and no layer
+# ever applied here (exit 3) → no line at all: a login with no hub is byte for
+# byte what it was. A hub that does not answer keeps the cached version.
+if [ -f "$ROOT/bin/fleet-agent-team.py" ] && [ "$DRY" = 0 ]; then
+  out=$(python3 "$ROOT/bin/fleet-agent-team.py" sync --root "$ROOT" --claude-config "$GCONF" ${sroot[@]+"${sroot[@]}"}           --claude-settings "$CDIR/settings.json" --claude-skills "$CDIR/skills"           --override "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agent-overrides.json" 2>&1); rc=$?
+  case "$rc" in
+    0) say "team: ok — $(printf '%s\n' "$out" | grep '^team: ' | tail -1 | sed 's/^team: //')" ;;
+    3) : ;;
+    1) say "team: WARN — $(printf '%s\n' "$out" | grep '^team: ' | head -1 | sed 's/^team: //'); the cached version stays" ;;
+    *) say "team: WARN — $(printf '%s\n' "$out" | tail -1 | sed 's/^team: //; s/^fleet-agent-team: //'); nothing applied" ;;
+  esac
+fi
+
 # --- mod + the package's record (--bundle, issue #1725) ---------------------------
 # The mod is files, not a merge: it sits in the package (mod/fleet/) and every
 # fleet-launched Claude loads it from there (fleet_mod_dir). The state file is

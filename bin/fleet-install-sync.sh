@@ -82,6 +82,13 @@
 # on it. FLEET_NODE_FOLLOW=0 switches this half off; a version without
 # fleet-node-upgrade.sh, or a machine with no agent service, records nothing to do.
 #
+# TEAM → the hub's team layer follows too (issue #1726, EPIC #1718 C8). Every
+# tick that gets as far as finish (any result, never --dry-run) runs THIS
+# install's bin/fleet-agent-team.py sync: the team version on the hub moved →
+# the layer is composed again (fleet default < team < local, the login's own
+# writes always win) and one `team` log line is written; unchanged → nothing. No
+# hub configured is nothing at all. The state's `team:` line is its last word.
+#
 # STUCK → ONE notification (R4 #1125). The doctor's install row (C7 #1123) WARNs
 # on a stuck login, but nobody runs the doctor on the days nobody is looking, so
 # the tick that turns stuck says so itself — over FLEET_NOTIFY_CMD, the same
@@ -107,6 +114,7 @@
 #   node: <current|upgraded|node_upgrade_failed|backoff|deferred|delegated|
 #         none|off|check-failed>|-  node_reason: <text>|-
 #   node_failed_at: <epoch>|-  node_fail_stable: <sha>|-  node_notified: <key>|-
+#   team: <fleet-agent-team.py's last line>|-
 # Log: $ROOT/logs/install-sync.log, ONE line per tick —
 #   <UTC> <result> <from>..<to> <reason>
 # — plus ONE `node-<node result>` line in the same shape when the agent step
@@ -158,7 +166,7 @@ case "$NODE_RETRY" in ''|*[!0-9]*) NODE_RETRY=21600 ;; esac
 LOGIN=$(id -un 2>/dev/null || printf '%s' "${USER:-?}")
 HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '?')
 
-usage() { sed -n '2,131p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,139p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
@@ -218,6 +226,7 @@ write_state() { # $1 result $2 reason
     printf 'node_failed_at: %s\n' "${NODE_FAILED_AT:--}"
     printf 'node_fail_stable: %s\n' "${NODE_FAIL_STABLE:--}"
     printf 'node_notified: %s\n' "${NODE_NOTIFIED:--}"
+    printf 'team: %s\n' "${TEAM:--}"
   } > "$tmp" 2>/dev/null && mv -f "$tmp" "$STATE" 2>/dev/null
   rm -f "$tmp" 2>/dev/null
 }
@@ -377,6 +386,24 @@ It stays on the old binary; the other logins are untouched. Retried no sooner th
 }
 node_log() { [ "$DRY" = 1 ] && { printf 'node: %s — %s\n' "$NODE" "$NODE_REASON"; return 0; }; log_line "node-$NODE" "$NODE_REASON"; }
 
+# team_follow — the team layer (issue #1726): fetch + compose when the hub's
+# version moved. TEAM = its last line; one `team-…` log line when it applied or
+# failed. No hub (exit 3) → TEAM stays as it was, nothing logged.
+team_follow() {
+  local tt out rc
+  tt="$ROOT/bin/fleet-agent-team.py"
+  [ -f "$tt" ] && command -v python3 >/dev/null 2>&1 || return 0
+  out=$(python3 "$tt" sync 2>&1); rc=$?
+  [ "$rc" = 3 ] && return 0
+  TEAM=$(printf '%s\n' "$out" | grep '^team: ' | tail -1 | sed 's/^team: //')
+  [ -n "$TEAM" ] || TEAM="exit $rc: $(printf '%s\n' "$out" | tail -1)"
+  case "$rc:$out" in
+    0:*'item(s)'*) log_line team "$TEAM" ;;
+    0:*) ;;
+    *) log_line team-failed "$TEAM" ;;
+  esac
+}
+
 # finish <result> <reason> [why] — notify if newly stuck, record, log, leave.
 # Under --dry-run, print only (and what a real tick would notify).
 finish() {
@@ -386,6 +413,7 @@ finish() {
     exit 0
   fi
   notify_stuck "$1" "$2" "${3:-}"
+  team_follow
   # The install is stable now: the node agent follows it (issue #1723). Logged
   # AFTER the tick's own line, so a grep of the result stays the first field.
   local nodeq=0
@@ -457,6 +485,7 @@ run_apply() { # $1 from $2 to → APPLY_LINE + rc; transcript to stderr
 main() {
   HEAD_SHA='' STABLE_SHA='' FROM='' TO='' DEFERRED_SINCE='' SKIP='' APPLY_LINE='' NOTIFIED='' NOTIFIED_AT=''
   NODE='' NODE_REASON='' NODE_FAILED_AT='' NODE_FAIL_STABLE='' NODE_NOTIFIED=''
+  TEAM=$(state_get team); [ "$TEAM" = - ] && TEAM=''
 
   if [ "$STATUS" = 1 ]; then
     if [ -f "$STATE" ]; then cat "$STATE"; exit 0; fi

@@ -449,7 +449,19 @@ Do not install from memory: read the doc and work from it.
   through `bin/fleet-hook-run.sh` (no `~/.claude/fleet` there; a later node
   sync replaces them in place). A new file the package needs goes in that
   manifest, never in the generated block; `fleet doctor` on a client is
-  `fleet-agent-bundle.py doctor`. `fleet-agent-bundle-selftest.sh` pins it.
+  `fleet-agent-bundle.py doctor`. `fleet-agent-bundle-selftest.sh` pins it. **The hub hands ONE team layer on
+  top, and local still wins** (issue #1726): `GET/PUT /v1/fleet/team-bundle`
+  (PUT is the operator's; every PUT a version, a rollback a PUT of an older
+  body — `fleet-agent-team.py put|restore|history`) holds an allow-listed
+  bundle (mcp · hooks · skills · claude_settings · codex_config) that the hub
+  AND the computer refuse when it carries anything credential-shaped.
+  `bin/fleet-agent-team.py sync` composes fleet default < team < local after the
+  agents pass, on install-sync's tick and at the client shell's start: an item
+  is the team's only while it still holds what the team wrote, so a hand edit
+  wins and a rollback undoes exactly the team's writes; `"team": "off"` in
+  agent-overrides.json leaves the layer. Every item's source lands in
+  `$FLEET_CONF_DIR/agent-effective.json`; the doctor's `agents` row prints the
+  version. No hub ⇒ nothing fetched, nothing written (`fleet-agent-team-selftest.sh` A).
 - **A machine has ONE fleet config file, `$FLEET_CONF_DIR/fleet.conf`** (issue
   #1623). `FLEET_ROLE=client|node|client,node` and `FLEET_HUB_URL` (the hub's
   address — written nowhere else) sit in `[common]`; `[client]` (only the shell,
