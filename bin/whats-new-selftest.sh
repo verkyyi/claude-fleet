@@ -60,7 +60,7 @@ printf '<!-- fleet skill · owner: hub -->\nv1\n'    > "$WORK/repo/commands/flee
 printf 'v1\n' > "$WORK/repo/hooks/bash-guard.py"
 printf 'v1\n' > "$WORK/repo/lib.sh"
 V0=$(commit "base")
-mcp status brief whats_new;                         V1=$(commit "新工具 whats_new (#1897) (#2001)")
+mcp status brief whats_new; echo whats_new > "$WORK/repo/docs/FLEET-MCP.md"; V1=$(commit "新工具 whats_new (#1897) (#2001)")
 printf 'v2\n' >> "$WORK/repo/commands/fleet-claim.md"; V2=$(commit "交付前多一步 fleet.evidence after (#1810)")
 printf 'v2\n' >> "$WORK/repo/hooks/bash-guard.py";   V3=$(commit "直接敲 fleet-comment.sh 会被记录")
 printf 'v2\n' >> "$WORK/repo/lib.sh";                V4=$(commit "内部一")
@@ -75,6 +75,7 @@ has "A: new tool" "$out" "· 新工具 fleet.whats_new"
 has "A: worker skill" "$out" "· 技能 /fleet-claim：交付前多一步 fleet.evidence after"
 has "A: guard" "$out" "· 守卫：直接敲 fleet-comment.sh 会被记录"
 has "A: the rest counted (two internal + a hub skill)" "$out" "另有 3 项内部改动。"
+hasnt "A: the tool's own commit is not listed twice" "$out" "工具："
 hasnt "A: PR numbers stripped" "$out" "(#2001)"
 hasnt "A: a hub skill is not a worker's" "$out" "fleet-epic-run"
 eq "A: five lines" 5 "$(lines "$out")" "$out"

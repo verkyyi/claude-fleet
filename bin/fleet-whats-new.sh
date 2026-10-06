@@ -121,12 +121,12 @@ for rec in log.split("\x1e")[1:]:
     tag = sha if mode == "full" else ""
     if skills:
         lines.append("技能 %s：%s%s" % ("、".join(skills), clean(subject), " " + tag if tag else ""))
+    elif "bin/fleet-mcp.py" in files and tools(sha + "^") != tools(sha):
+        pass                        # a tool added / retired: said in the tool line above
     elif "docs/FLEET-MCP.md" in files:
         lines.append("工具：%s%s" % (clean(subject), " " + tag if tag else ""))
     elif any(GUARD.match(f) for f in files):
         lines.append("守卫：%s%s" % (clean(subject), " " + tag if tag else ""))
-    elif "bin/fleet-mcp.py" in files and tools(sha + "^") != tools(sha):
-        pass                        # a tool added / retired: said in the tool line above
     else:
         internal += 1
 
