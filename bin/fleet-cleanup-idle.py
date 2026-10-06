@@ -10,6 +10,15 @@ import time
 
 from fleet_reap_notice import clear, notice, option, tmux
 
+
+def retired_dir():
+    """fleet_retired_dir (fleet-lib.sh, issue #1840): the fleet's own closes."""
+    seam = os.environ.get("FLEET_PULLBACK_RETIRED_DIR")
+    if seam:
+        return Path(seam)
+    conf = os.environ.get("FLEET_CONF_DIR") or str(Path.home() / ".config/claude-fleet")
+    return Path(conf) / "global" / "retired"
+
 BIN = Path(__file__).absolute().parent
 
 
@@ -45,6 +54,17 @@ class Cleaner:
         self.tm = tmux(args.socket_name)
         self.now = int(time.time())
         self.idle = minutes() * 60
+
+    def retire(self, window):
+        """An idle reap is the fleet's close, never a kill to pull back (#1840)."""
+        try:
+            fid = option(self.tm, window, "@fleet_id")
+            if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+                d = retired_dir()
+                d.mkdir(parents=True, exist_ok=True)
+                (d / fid).touch()
+        except (OSError, subprocess.SubprocessError):
+            pass
 
     def snapshot(self, window):
         names = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
@@ -146,6 +166,7 @@ class Cleaner:
             return False
         if run("git", "-C", wt, "rev-parse", "HEAD") != head:
             return False
+        self.retire(window)
         self.tm("kill-window", "-t", window)
         print("reaped-idle:" + window)
         return True

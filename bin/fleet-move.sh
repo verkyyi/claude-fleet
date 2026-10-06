@@ -405,6 +405,7 @@ move_main() {
         read -r _ m nw ncp <<<"$head"
         # --- 8. verified on the target: close the source -------------------------
         for ((i = 1; i <= CLOSE_WAIT; i++)); do window_closed "$wid" && break; sleep 1; done
+        fleet_win_retire "$wid" "$SOCK"   # moved, not killed (#1840)
         TM kill-window -t "$wid" 2>/dev/null || :
         say "  ✓ $name ($wid → $m:$nw, pid $ncp): moved through the hub, session ${sid%%-*}… — now ${reason:-on $m}"
         return 0 ;;
@@ -547,6 +548,7 @@ move_main() {
       say "  ✓ $name ($wid → $TO:$nw, pid $ncp): resumed — SOURCE LEFT RUNNING (--keep-source): do not let both sides keep talking to session ${sid%%-*}…"
     else
       for ((i = 1; i <= CLOSE_WAIT; i++)); do window_closed "$wid" && break; sleep 1; done
+      fleet_win_retire "$wid" "$SOCK"   # moved, not killed (#1840)
       TM kill-window -t "$wid" 2>/dev/null || :
       say "  ✓ $name ($wid → $TO:$nw, pid $ncp): moved, session ${sid%%-*}…"
     fi

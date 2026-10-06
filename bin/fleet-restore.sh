@@ -84,6 +84,12 @@ restore_map_file() {
 # emit "<sess>\t<mapfile>" for every mapped fleet, new layout preferred, each once.
 each_restore_map() {
   local d mf sess
+  # One map only (the pull-back's, issue #1840): its FLEET row names the fleet.
+  if [ -n "${RESTORE_ONLY_MAP:-}" ]; then
+    sess=$(awk -F'\t' '$1=="FLEET"{print $2; exit}' "$RESTORE_ONLY_MAP" 2>/dev/null)
+    [ -n "$sess" ] && printf '%s\t%s\n' "$sess" "$RESTORE_ONLY_MAP"
+    return 0
+  fi
   for d in "$FLEET_CONF_DIR"/fleets/*/; do
     [ -d "$d" ] || continue
     mf="${d}restore.map"; [ -f "$mf" ] || continue
@@ -108,6 +114,9 @@ each_restore_map() {
 # so anything else parked there survives).
 sweep_state_dirs() {
   local d n
+  # The fleet's close marks (issue #1840) matter for a tick or two; a week is plenty.
+  d=$(fleet_retired_dir)
+  [ -d "$d" ] && find "$d" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
   for d in "$FLEET_CONF_DIR"/fleets/*/; do
     [ -d "$d" ] || continue
     find "$d" -maxdepth 1 -type f -name '.restore.*.map' \
@@ -318,6 +327,9 @@ $rejects consecutive snapshots rejected by the shrink guard — the durable reco
         fi
       fi
     fi
+    # A session that vanished since the last snapshot (issue #1840): looked at
+    # BEFORE the map forgets it — the next tick's --auto pulls it back.
+    [ -f "$prior" ] && pullback_scan "$sess" "$sock" "$prior"
     # Drop the stale legacy map ONLY when the new one actually landed — a failed mv
     # (ENOSPC/read-only/EXDEV) must NOT leave the fleet with no recovery map at all.
     if mv "$tmp" "$dest" 2>/dev/null; then
@@ -334,6 +346,127 @@ $rejects consecutive snapshots rejected by the shrink guard — the durable reco
   # destroyed the recovery data on a partial crash: after the server came back with
   # only the surviving fleet, the next snapshot deleted the down fleet's map before
   # restore could use it.
+}
+
+# --------------------------------------------------------------- pull-back ----
+# A session window killed by hand (issue #1840): the node's keys and menus no
+# longer offer a kill, but `:kill-window`, a choose-tree `x` or a personal bind
+# still can. While its fleet stays up nothing brought it back — --auto only looked
+# at fleets whose whole session was gone. Now the snapshot (and the tick itself)
+# notes every mapped @fleet_id that is gone from the server, was unfinished, and
+# that the fleet did not close on purpose (fleet_win_retire: reap, ⌃x, q, move,
+# stop, pool); the next --auto reopens it through restore()'s single-window path
+# — `--resume` of the same conversation — and /fleet-history gets a
+# `reason=killed-window` row. FLEET_PULLBACK=0 turns it off.
+pullback_file() { printf '%s/pullback.map' "$(fleet_state_dir "$1")"; }
+
+# pullback_scan <sess> <sock> <map> — append the vanished, unfinished, unretired
+# sessions of <map> to fleets/<sess>/pullback.map (FID + WIN rows, once each).
+pullback_scan() {
+  local sess="$1" sock="$2" mf="$3" live pb line fid wtag wname wpath wstate wsleep
+  [ "${FLEET_PULLBACK:-1}" = 0 ] && return 0
+  [ -f "$mf" ] && grep -q '^FID' "$mf" 2>/dev/null || return 0
+  # Every session on this server, the warm pool included (a recycled scratch
+  # parked there is not gone). An empty read is a transient, never "all killed".
+  live=$(tmux -L "$sock" list-windows -a -F '#{window_id} #{@fleet_id}' 2>/dev/null)
+  [ -n "$live" ] || return 0
+  live=$(printf '%s\n' "$live" | awk 'NF > 1 { print $2 }')
+  # A mark outlives its window only until the same identity is live again (a
+  # history resume, a migrate's reopen): then it must not excuse the NEXT kill.
+  # Two minutes of grace, so a closer's mark is never lifted before its kill lands.
+  local rd t; rd=$(fleet_retired_dir)
+  [ -d "$rd" ] && find "$rd" -type f -mmin +2 2>/dev/null | while IFS= read -r t; do
+    printf '%s\n' "$live" | grep -qxF "${t##*/}" && rm -f "$t"
+  done
+  pb=$(pullback_file "$sess")
+  while IFS= read -r line; do
+    wtag=${line%%$'\t'*}
+    fid=${wtag#WIN:}
+    [ "$fid" != "$wtag" ] && fleet_is_fid "$fid" || continue   # no identity: never
+    printf '%s\n' "$live" | grep -qxF "$fid" && continue
+    IFS=$'\t' read -r _ wname wpath _ _ wstate _ _ _ _ _ _ _ _ wsleep _ <<<"$line"
+    echo "$wname" | grep -qE "$PANEL_RE" && continue
+    case "$wstate" in done|exited) continue ;; esac            # finished: stays closed
+    [ -z "$wsleep" ] || [ "$wsleep" = - ] || continue           # a sleeper has its record
+    fleet_fid_retired "$fid" && continue                        # the fleet closed it
+    [ -d "$wpath" ] || continue
+    grep -qxF "$(printf 'FID\t%s' "$fid")" "$pb" 2>/dev/null && continue
+    [ -f "$pb" ] || awk -F'\t' '$1=="FLEET"{print; exit}' "$mf" > "$pb"
+    printf 'FID\t%s\n%s\n' "$fid" "WIN${line#"$wtag"}" >> "$pb"
+    log "pullback: $sess/$wname ($fid) gone while ${wstate:--} — queued for the next tick"
+  done < <(fleet_restore_wins "$mf")
+  return 0
+}
+
+# pullback_pending — queue every live fleet's vanished sessions; rc 0 when any
+# fleet has one waiting (so a quiet tick pays no disk gate and takes no lock).
+pullback_pending() {
+  [ "${FLEET_PULLBACK:-1}" = 0 ] && return 1
+  local _s mf sess sock any=1
+  while IFS=$'\t' read -r _s mf; do
+    sess=$(awk -F'\t' '$1=="FLEET"{print $2; exit}' "$mf")
+    [ -n "$sess" ] || continue
+    sock=$(fleet_socket "$sess")
+    tmux -L "$sock" has-session -t "$sess" 2>/dev/null || continue
+    pullback_scan "$sess" "$sock" "$mf"
+    [ -s "$(pullback_file "$sess")" ] && any=0
+  done < <(each_restore_map)
+  return "$any"
+}
+
+# pullback_merged <repo> <issue> — rc 0 when issue-<N> has a merged PR (then the
+# window went with its landing, whatever closed it). No gh / no answer = not merged.
+pullback_merged() {
+  case "${2:-}" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "${1:-}" ] && command -v gh >/dev/null 2>&1 || return 1
+  local n; n=$(gh pr list -R "$1" --state merged --head "issue-$2" --json number -q 'length' 2>/dev/null)
+  case "$n" in ''|0|*[!0-9]*) return 1 ;; esac
+  return 0
+}
+
+# pullback_run — for every LIVE fleet: queue what its current map knows is gone,
+# re-check each queued row (still gone, still unretired, not merged), reopen them
+# with restore(), and write the history row. Called by auto_restore under its lock.
+pullback_run() {
+  local _s mf sess sock pb keep fid wname wpath wsid wissue repo line n
+  while IFS=$'\t' read -r _s mf; do
+    sess=$(awk -F'\t' '$1=="FLEET"{print $2; exit}' "$mf")
+    [ -n "$sess" ] || continue
+    sock=$(fleet_socket "$sess")
+    tmux -L "$sock" has-session -t "$sess" 2>/dev/null || continue   # a down fleet: auto_restore's
+    pullback_scan "$sess" "$sock" "$mf"
+    pb=$(pullback_file "$sess")
+    [ -s "$pb" ] || continue
+    repo=$(awk -F'\t' '$1=="FLEET"{print $3; exit}' "$pb")
+    keep="$pb.run"
+    awk -F'\t' '$1=="FLEET"{print; exit}' "$pb" > "$keep"
+    n=0
+    while IFS= read -r line; do
+      fid=${line%%$'\t'*}; fid=${fid#WIN:}
+      IFS=$'\t' read -r _ wname wpath wsid wissue _ <<<"$line"
+      if tmux -L "$sock" list-windows -a -F '#{@fleet_id}' 2>/dev/null | grep -qxF "$fid"; then continue; fi
+      fleet_fid_retired "$fid" && { log "pullback: $sess/$wname retired by the fleet since — not reopened"; continue; }
+      pullback_merged "$repo" "$wissue" && { log "pullback: $sess/$wname issue #$wissue has a merged PR — not reopened"; continue; }
+      printf 'FID\t%s\n%s\n' "$fid" "WIN${line#WIN:"$fid"}" >> "$keep"
+      n=$((n + 1))
+    done < <(fleet_restore_wins "$pb")
+    rm -f "$pb"
+    if [ "$n" = 0 ]; then rm -f "$keep"; continue; fi
+    log "pullback: $sess — reopening $n killed session window(s)"
+    PENDING='' OUTCOMES='' OSEQ=0
+    RESTORE_ONLY_MAP="$keep" RESTORE_UNFINISHED=1 QUIET=1 restore
+    while IFS= read -r line; do
+      IFS=$'\t' read -r _ wname wpath wsid wissue _ <<<"$line"
+      local key="$wissue"
+      case "$key" in ''|-|*[!0-9]*) key=$(fleet_scratch_key "$wpath" 2>/dev/null) ;; esac
+      [ -n "$wsid" ] && [ "$wsid" != - ] || continue
+      bash "$BIN/fleet-history.sh" resumed --reason killed-window --session-id "$wsid" \
+        --repo "$repo" --session "$sess" --key "${key:--}" --worktree "$wpath" --title "$wname" >/dev/null 2>&1
+      log "pullback: $sess/$wname reopened (reason=killed-window, session ${wsid%%-*}…)"
+    done < <(fleet_restore_wins "$keep")
+    rm -f "$keep"
+  done < <(each_restore_map)
+  return 0
 }
 
 # ----------------------------------------------------------------- restore ----
@@ -788,13 +921,14 @@ auto_restore() {
     tmux -L "$(fleet_socket "$s")" has-session -t "$s" 2>/dev/null && continue
     down="$down $s"
   done < <(each_restore_map)
-  [ -n "$down" ] || return 0
+  # A live fleet that lost a session window to a kill (issue #1840) is work too.
+  [ -n "$down" ] || pullback_pending || return 0
   mkdir -p "$RDIR"
   # The machine-busy hold is the CALLER's (fleet-diskguard.sh restore_watch asks
   # the spawn admission gate before it runs this): a restore re-houses sessions
   # that were running, so this script itself never passes that gate (#1090 E).
   if [ -x "$BIN/fleet-diskguard.sh" ] && ! bash "$BIN/fleet-diskguard.sh" --gate 2>/dev/null; then
-    log "auto: fleet down ($down) — held: disk below floor"; return 0
+    log "auto: ${down:+fleet down ($down)}${down:-a killed session window} — held: disk below floor"; return 0
   fi
   local lk="$RDIR/.auto.lock"
   if ! mkdir "$lk" 2>/dev/null; then
@@ -803,8 +937,11 @@ auto_restore() {
     rm -rf "$lk"; mkdir "$lk" 2>/dev/null || return 0
   fi
   printf '%s\n' "$$" > "$lk/pid"
-  log "auto: fleet down ($down) → restoring unfinished sessions"
-  RESTORE_UNFINISHED=1 QUIET=1 restore
+  if [ -n "$down" ]; then
+    log "auto: fleet down ($down) → restoring unfinished sessions"
+    RESTORE_UNFINISHED=1 QUIET=1 restore
+  fi
+  pullback_run
   rm -rf "$lk"
 }
 
