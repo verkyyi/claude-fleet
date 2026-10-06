@@ -610,6 +610,9 @@ restore() {
       local nudge=""
       [ "$wstate" = "working" ] \
         && nudge="The tmux server crashed and this session was restored via claude --resume, so its turn was interrupted. First re-check git status, your branch, and your open PR to see where you left off. If the work is already complete (PR open, nothing left to do), just stop. Otherwise, continue the task.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
+      # A deliberate `fleet down` taken back (issue #1846) is no crash: say which.
+      [ -n "$nudge" ] && [ -n "${RESTORE_UNDO:-}" ] \
+        && nudge=${nudge/The tmux server crashed/This fleet was taken down with fleet down and brought back with fleet up --undo}
       # Route through fleet-claude.sh like the spawner (dash-issue-session.sh) so a
       # restored worker launches under the active subscription account (multi-account
       # failover) + the fleet's default model — a bare `claude` would strand it on
@@ -990,7 +993,7 @@ undo_down() {
   if [ -f "$m.disarmed" ]; then mkdir -p "$RDIR"; : > "$ARM"; rm -f "$RDIR/autorestore.off"; fi
   log "undo: fleet down of $sess ← ${m##*/}"
   say "▸ fleet up --undo: $sess ← ${m##*/}"
-  RESTORE_ONLY_MAP="$m" restore
+  RESTORE_ONLY_MAP="$m" RESTORE_UNDO=1 restore
   mv "$m" "${m%/*}/$(basename "$m" | sed 's/\.down-/.undone-/')" 2>/dev/null
   rm -f "$m.disarmed"
   return 0
