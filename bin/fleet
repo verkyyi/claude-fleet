@@ -14,8 +14,10 @@
 #   fleet connect [machine]     route + ssh only — what the client runs inside;
 #                               for debugging (`fleet connect m4 --print`)
 #   fleet connect --proxy <m>   ssh's ProxyCommand through the hub
-#   fleet doctor                this computer's health; with only the client,
-#                               its one `client` row (version, hub, tmux, cert)
+#   fleet doctor                with only the client here: its `client` row
+#                               (version, hub, tmux, cert — #1722), then this
+#                               login's Agent configuration — hooks · skills ·
+#                               MCP · mod (#1725)
 #
 # The client is the ONLY way in (issue #1628): there is no fallback to ssh-ing
 # into a machine's own list. It needs tmux ≥ 3.2 and a terminal; without either
@@ -62,7 +64,7 @@ client() {
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
@@ -70,12 +72,22 @@ case $cmd in
     echo "fleet · 不认识的选项 $cmd；选路调试用 fleet connect $* （fleet --help）" >&2
     exit 2 ;;
 esac
-# fleet doctor on a computer with only the client (issue #1722): its one row
-if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] && [ -x "$here/fleet-client-update.sh" ]; then
-  r=$("$here/fleet-client-update.sh" doctor); tab=$(printf '\t')
-  printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" client "${r#*"$tab"}"
-  case $r in WARN*) exit 1 ;; esac
-  exit 0
+# `fleet doctor` with only the client here: no fleet-doctor.sh beside — the
+# client's own row (issue #1722: version, hub, tmux, cert), then the Agent
+# configuration package's (issue #1725). Non-zero when either warns.
+if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
+   && { [ -x "$here/fleet-client-update.sh" ] || [ -f "$here/fleet-agent-bundle.py" ]; }; then
+  shift
+  rc=0
+  if [ -x "$here/fleet-client-update.sh" ]; then
+    r=$("$here/fleet-client-update.sh" doctor); tab=$(printf '\t')
+    printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" client "${r#*"$tab"}"
+    case $r in WARN*) rc=1 ;; esac
+  fi
+  if [ -f "$here/fleet-agent-bundle.py" ]; then
+    python3 "$here/fleet-agent-bundle.py" doctor --root "$here/.." "$@" || rc=1
+  fi
+  exit $rc
 fi
 for ext in py sh; do
   if [ -x "$here/fleet-$cmd.$ext" ]; then

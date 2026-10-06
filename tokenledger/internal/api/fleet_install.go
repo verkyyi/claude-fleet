@@ -91,13 +91,22 @@ func (s *Server) handleInstallFile(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(b)
 }
 
-// installContentType: python for .py, plain text for the manifest and a tmux
-// conf, a shell script for the rest (bin/fleet and the .sh files).
+// installContentType: python for .py, JSON for .json, plain text for the
+// manifest, a tmux conf and the package's documents / sources, a shell script
+// for the rest (bin/fleet and the .sh files).
 func installContentType(name string) string {
 	switch {
 	case strings.HasSuffix(name, ".py"):
 		return "text/x-python; charset=utf-8"
-	case name == fleetclient.ManifestName, strings.HasSuffix(name, ".conf"):
+	case strings.HasSuffix(name, ".json"):
+		return "application/json"
+	case name == fleetclient.ManifestName, strings.HasSuffix(name, ".conf"),
+		strings.HasSuffix(name, ".manifest"), strings.HasSuffix(name, ".md"),
+		strings.HasSuffix(name, ".toml"), strings.HasSuffix(name, ".ts"),
+		strings.HasSuffix(name, ".tsx"), strings.HasSuffix(name, ".mjs"),
+		strings.HasSuffix(name, ".html"):
+		// the Agent configuration package's files (#1725) are text to install,
+		// never a page to render — plain text, nosniff
 		return "text/plain; charset=utf-8"
 	}
 	return "text/x-shellscript; charset=utf-8"

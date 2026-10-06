@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Static file server for doc-preview + a tiny tailnet-only control API.
+
+Serves SERVE_DIR exactly like `python3 -m http.server`, and adds three control
+routes used by the in-page "public link" toggle:
+
+    GET  /_ctl/status?id=<id>   -> {"public": bool, "url": str|null}
+    POST /_ctl/publish   {id}   -> {"public": true,  "url": str}
+    POST /_ctl/unpublish {id}   -> {"public": false, "url": null}
+
+The control routes shell out to share.sh (--pubstatus/--publish/--unpublish),
+which manages the per-doc Tailscale Funnel path mount. These routes are only
+reachable over the tailnet `tailscale serve` origin: the public Funnel only
+mounts individual `/p/<id>/` document paths, never `/_ctl`, so a public viewer
+cannot reach the control API. The toggle UI itself is hidden on the public view
+(the page detects the `/p/` path prefix).
+
+Usage: server.py <port> <serve_dir> <skill_dir> [bind_addr] [public]
+
+bind_addr defaults to 127.0.0.1 (the `tailscale serve` HTTPS mode, which proxies
+to loopback). share.sh passes this login's tailscale IPv4 in its http-direct
+fallback — a login that is not tailscale's operator cannot `tailscale serve`, so
+the server listens on the tailnet address itself (issue #1093).
+
+`public` is share.sh's tunnel mode (issue #1151): a cloudflared quick tunnel fronts
+this loopback server on a public https://*.trycloudflare.com URL, so EVERY request
+is a public one. The control API is then 404 (there is no private origin to toggle
+from), every doc page is served with its header stripped exactly like `/_pub/`,
+and the index drops each row's source path — no internal metadata leaves the box.
+"""
+import json
+import os
+import re
+import socketserver
+import subprocess
+import sys
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, parse_qs
+
+PORT = int(sys.argv[1])
+SERVE_DIR = sys.argv[2]
+SKILL_DIR = sys.argv[3]
+BIND_ADDR = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else "127.0.0.1"
+PUBLIC = len(sys.argv) > 5 and sys.argv[5] == "public"
+DOC_RE = re.compile(r"^/d/([0-9]{8}-[0-9]{6}-[0-9]+)/(index\.html)?$")
+SHARE = os.path.join(SKILL_DIR, "share.sh")
+ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9]+$")
+
+
+def run_share(action, doc_id):
+    """Call share.sh <action> <id> --json; return parsed dict (or error dict)."""
+    try:
+        p = subprocess.run(
+            [SHARE, action, doc_id, "--json"],
+            capture_output=True, text=True, timeout=25,
+        )
+        out = (p.stdout or "").strip().splitlines()
+        for line in reversed(out):  # last JSON line wins
+            line = line.strip()
+            if line.startswith("{"):
+                return json.loads(line)
+        return {"error": (p.stderr or p.stdout or "no output").strip()[:300]}
+    except Exception as e:  # noqa: BLE001 - report any failure back as JSON
+        return {"error": str(e)[:300]}
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, directory=SERVE_DIR, **kw)
+
+    def log_message(self, *a):  # keep the console quiet
+        pass
+
+    def _json(self, obj, code=200):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_id(self):
+        """Extract & validate a doc id from query (GET) or body (POST)."""
+        parsed = urlparse(self.path)
+        doc_id = (parse_qs(parsed.query).get("id") or [None])[0]
+        if doc_id is None and self.command == "POST":
+            n = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(n).decode("utf-8", "replace") if n else ""
+            try:
+                doc_id = json.loads(raw).get("id") if raw else None
+            except Exception:  # noqa: BLE001 - fall back to form encoding
+                doc_id = (parse_qs(raw).get("id") or [None])[0]
+        if not doc_id or not ID_RE.match(doc_id):
+            return None
+        if not os.path.isdir(os.path.join(SERVE_DIR, "d", doc_id)):
+            return None
+        return doc_id
+
+    def _html(self, html):
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        return self.wfile.write(body)
+
+    def do_GET(self):
+        route = urlparse(self.path).path
+        if PUBLIC:
+            if route.startswith("/_ctl/"):
+                return self.send_error(404)
+            m = DOC_RE.match(route)
+            if m:
+                return self._serve_public("/_pub/" + m.group(1) + "/")
+            if route in ("/", "/index.html"):
+                try:
+                    html = open(os.path.join(SERVE_DIR, "index.html"), encoding="utf-8").read()
+                except OSError:
+                    return self.send_error(404)
+                return self._html(re.sub(r'<div class="src"[^>]*>.*?</div>', "", html, flags=re.S))
+        if route == "/_ctl/status":
+            doc_id = self._read_id()
+            if not doc_id:
+                return self._json({"error": "bad id"}, 400)
+            return self._json(run_share("--pubstatus", doc_id))
+        if route.startswith("/_pub/"):
+            return self._serve_public(route)
+        return super().do_GET()
+
+    def _serve_public(self, route):
+        """Public (Funnel) view of one doc: same content, but with the tailnet header
+        (index link + session/date/source-path metadata) stripped from the bytes, so
+        internal info never reaches the public internet — not even in view-source."""
+        rest = route[len("/_pub/"):]
+        doc_id, _, sub = rest.partition("/")
+        if not ID_RE.match(doc_id) or not os.path.isdir(os.path.join(SERVE_DIR, "d", doc_id)):
+            return self.send_error(404)
+        if sub in ("", "index.html"):
+            fp = os.path.join(SERVE_DIR, "d", doc_id, "index.html")
+            try:
+                html = open(fp, encoding="utf-8").read()
+            except OSError:
+                return self.send_error(404)
+            return self._html(re.sub(r'<div class="hdr">.*?</div>', "", html, count=1, flags=re.S))
+        # non-index assets (e.g. locally-referenced images): pass through, static.
+        self.path = "/d/" + doc_id + "/" + sub
+        return super().do_GET()
+
+    def do_POST(self):
+        route = urlparse(self.path).path
+        if PUBLIC:
+            return self.send_error(404)
+        if route in ("/_ctl/publish", "/_ctl/unpublish"):
+            doc_id = self._read_id()
+            if not doc_id:
+                return self._json({"error": "bad id"}, 400)
+            action = "--publish" if route.endswith("publish") and "unpub" not in route else "--unpublish"
+            return self._json(run_share(action, doc_id))
+        self.send_error(405)
+
+
+class Server(ThreadingHTTPServer):
+    """ThreadingHTTPServer minus the reverse-DNS lookup in HTTPServer.server_bind().
+
+    http.server resolves socket.getfqdn(bind_addr) between bind() and listen(). On a
+    GitHub macos-latest runner that lookup blocks for 30s+, so the port sat BOUND but
+    never accepting, share.sh's readiness probe gave up on five ports in a row, and
+    the doc-preview-share selftest was red on every macOS run (issue #1500). The
+    name only feeds CGIHTTPRequestHandler, which this server never uses, so a server
+    on a fixed address has nothing to look up: bind, record the address, listen.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+if __name__ == "__main__":
+    srv = Server((BIND_ADDR, PORT), Handler)
+    # One line to server.log once accepting — share.sh's failure path tails this file,
+    # and an EMPTY log then means "never reached listen()", not "nothing happened".
+    print("listening on http://%s:%d/%s" % (BIND_ADDR, PORT, " (public)" if PUBLIC else ""), flush=True)
+    srv.serve_forever()

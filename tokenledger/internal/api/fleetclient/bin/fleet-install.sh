@@ -43,7 +43,14 @@
 #      (FLEET_INSTALL_NODE_FORCE=1 joins anyway: the selftests' fake hub
 #      confirms by itself). A failure is said, never fatal. --no-node
 #      (FLEET_INSTALL_NO_NODE=1) skips it;
-#   6. runs `fleet`: with the certificate the join just wrote, no second QR —
+#   6. the Agent configuration (issue #1725): the same package a full install
+#      gets — Claude's hooks, skills, commands, MCP servers, the fleet mod;
+#      Codex's skills, MCP servers, defaults — rides the manifest into the same
+#      tree (hooks/ commands/ skills/ mod/ beside bin/ + conf/) and is applied
+#      by bin/fleet-install-apply.sh --bundle, fill only: what the login has or
+#      its override files name is never written. FLEET_INSTALL_NO_AGENTS=1
+#      skips the apply;
+#   7. runs `fleet`: with the certificate the join just wrote, no second QR —
 #      and with tmux ≥ 3.2 on this computer, `fleet` is the shell.
 #
 # NO HUB (issue #1712, EPIC #1710 C2) — only the tools, on this one computer:
@@ -162,7 +169,7 @@ FILES="$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" { print $1 }' "$tmp/m
 [ -n "${FILES% }" ] || { say "fleet-install: $FROM 的 manifest 里没有文件"; exit 1; }
 for f in $FILES; do
   case "$f" in
-    bin/*|conf/*) case "$f" in *..*|*/) say "fleet-install: manifest 里有不认识的路径 $f"; exit 1 ;; esac ;;
+    bin/*|conf/*|hooks/*|commands/*|skills/*|mod/*) case "$f" in *..*|*/) say "fleet-install: manifest 里有不认识的路径 $f"; exit 1 ;; esac ;;
     *) say "fleet-install: manifest 里有不认识的路径 $f"; exit 1 ;;
   esac
   fetch "$f"
@@ -171,11 +178,13 @@ for f in $FILES; do
 done
 for f in $FILES; do
   mkdir -p "$ROOT/$(dirname "$f")"
-  case "$f" in bin/*) chmod 0755 "$tmp/$f" ;; *) chmod 0644 "$tmp/$f" ;; esac
+  # bin/ is executable; elsewhere a script (a skill's share.sh) keeps its #!
+  case "$f" in bin/*) chmod 0755 "$tmp/$f" ;; *) if [ "$(head -c 2 "$tmp/$f")" = '#!' ]; then chmod 0755 "$tmp/$f"; else chmod 0644 "$tmp/$f"; fi ;; esac
   mv -f "$tmp/$f" "$ROOT/$f"
 done
 # A copy the manifest no longer lists — an earlier install's — goes: the tree
-# under $ROOT/bin and $ROOT/conf is the hub's, file for file.
+# under $ROOT/bin and $ROOT/conf is the hub's, file for file; so are the Agent
+# configuration package's hooks/ commands/ skills/ mod/ (issue #1725), all depths.
 for d in bin conf; do
   [ -d "$ROOT/$d" ] || continue
   for old in "$ROOT/$d"/*; do
@@ -183,6 +192,15 @@ for d in bin conf; do
     rel="$d/${old##*/}"
     case " $FILES" in *" $rel "*) ;; *) rm -f "$old"; say "  去掉了入口不再发的旧文件 $rel" ;; esac
   done
+done
+for d in hooks commands skills mod; do
+  [ -d "$ROOT/$d" ] || continue
+  find "$ROOT/$d" -type f > "$tmp/have.list" 2>/dev/null || continue
+  while IFS= read -r old; do
+    rel="${old#"$ROOT"/}"
+    case " $FILES" in *" $rel "*) ;; *) rm -f "$old"; say "  去掉了入口不再发的旧文件 $rel" ;; esac
+  done < "$tmp/have.list"
+  find "$ROOT/$d" -depth -type d -empty -exec rmdir {} \; 2>/dev/null || true
 done
 # Which client this is (issue #1722): the hub's /version answer for it, so
 # `fleet` can tell on its next start whether the hub hands out a newer one
@@ -309,6 +327,26 @@ if [ "$NOHUB" = 1 ] && [ "${FLEET_INSTALL_NO_NODE:-}" != 1 ]; then
       || say "fleet: 本机设置有一步没成（上面几行说了哪步）— 再跑一次这行会只补缺的"
   fi
 fi
+# The Agent configuration (issue #1725, EPIC #1718 C7): the package the files
+# above carry — Claude's hooks, skills, commands, MCP servers and the fleet mod;
+# Codex's skills, MCP servers and default keys — applied to this login the one
+# way a full install applies it (fleet-install-apply.sh --bundle): fill only, a
+# hook / server / key / skill this login already has is left as it is, and what
+# ~/.config/claude-fleet/agent-overrides.json or ~/.claude/settings.fleet-override.json
+# names is never written. With the full install here (--no-hub's node step, or
+# an existing ~/.claude/fleet) that install applies it, and this says so.
+# FLEET_INSTALL_NO_AGENTS=1 skips it; never fatal — running the line again retries.
+if [ "${FLEET_INSTALL_NO_AGENTS:-}" != 1 ] && [ -f "$ROOT/bin/fleet-agent-bundle.py" ] && [ -f "$ROOT/bin/fleet-install-apply.sh" ]; then
+  if aout="$(bash "$ROOT/bin/fleet-install-apply.sh" --bundle --root "$ROOT" 2>&1)"; then
+    case "$aout" in
+      *'bundle: skip'*) say "Agent 配置: 这台电脑有完整安装，由它的同步装同一份" ;;
+      *) say "Agent 配置: 已装 — 钩子·技能·MCP·Mod（$(printf '%s\n' "$aout" | sed -n 's/^apply: ok — //p')；只补不删，本机覆盖文件里列的不动）" ;;
+    esac
+  else
+    say "Agent 配置: 有一步没成 — $(printf '%s\n' "$aout" | grep ': FAIL' | head -1)；再跑一次这行会只补缺的"
+  fi
+fi
+
 # no hub — the subscription accounts are this computer's own
 if [ "$NOHUB" = 1 ]; then
   ACCTS="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$CONF_DIR}/accounts}"
@@ -365,7 +403,7 @@ if [ "$NOHUB" = 0 ] && [ "${FLEET_INSTALL_NO_NODE:-}" != 1 ]; then
   fi
 fi
 
-# 6 — the first `fleet`, right here.
+# 7 — the first `fleet`, right here.
 if [ "${FLEET_INSTALL_NO_RUN:-}" = 1 ]; then
   exit 0
 fi

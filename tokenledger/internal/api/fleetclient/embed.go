@@ -23,9 +23,12 @@ import (
 	"strings"
 )
 
-// Files holds the manifest and every file it lists, at its repo-relative path.
+// Files holds the manifest and every file it lists, at its repo-relative path:
+// the client's bin/ + conf/, and the Agent configuration package (#1725) —
+// hooks/ commands/ skills/ mod/, its files listed in the manifest's generated
+// `agent bundle` block. `all:` keeps mod/fleet/.claude-plugin/ (a dot directory).
 //
-//go:embed manifest bin conf
+//go:embed manifest bin conf hooks commands skills all:mod
 var Files embed.FS
 
 // ManifestName is the manifest's own path. The hub serves it at
