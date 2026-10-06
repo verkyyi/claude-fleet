@@ -80,11 +80,12 @@ for f in tmux-issues.sh tmux-config.sh dash-config-edit.sh fleet-repo-ask.sh; do
 done
 grep -q 'fleet_menu_style' "$BIN/fleet-sidebar-menu.sh" && grep -q 'FMENU_STYLE\[@\]' "$BIN/fleet-sidebar-menu.sh" \
   || fail "wired: the row menu does not take the popup frame"
-for k in b c u '!' '?'; do
-  grep -E "^bind $([ "$k" = '?' ] && echo '\?' || echo "$k") " "$ROOT/conf/tmux-attention.conf" | grep -q 'dash-popup\.sh .*--title popup_' \
-    || fail "wired: prefix $k does not open through dash-popup.sh with a title"
-done
-echo "ok: wired — hints, frames, the menu and the five binds"
+# The popups' keys are the CLIENT's since issue #1714 (EPIC #1710 C4): prefix ?
+# opens through the one door there, and the node opens none (b c u ! retired).
+grep -E '^bind \? ' "$ROOT/conf/tmux-shell.conf" | grep -q 'dash-popup\.sh .*--title popup_' \
+  || fail "wired: the client's prefix ? does not open through dash-popup.sh with a title"
+grep -v '^[[:space:]]*#' "$ROOT/conf/tmux-attention.conf" | grep -q 'dash-popup\.sh' && fail "wired: the node conf still opens a popup (#1714)"
+echo "ok: wired — hints, frames, the menu and the client's ? bind"
 
 # --- A. 54 columns, for real ---------------------------------------------------
 T() { "$REAL_TMUX" -S "$ISOCK" "$@"; }

@@ -115,7 +115,7 @@ def shell_refusal():
 # so the conf binds this unpressable key in the fleet-sidebar table to set the
 # flag and pin `{top-left}`, and `send-keys -K -c <client> PIN_KEY` runs it as
 # the client. `join-pane` forgets a moved pane's client entries: re-pin after a
-# follow. In root the same key only drops a stale flag (conf/tmux-attention.conf).
+# follow. In root the same key only drops a stale flag (conf/tmux-shell.conf).
 PIN_KEY = "C-M-S-F12"
 
 

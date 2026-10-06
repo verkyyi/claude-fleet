@@ -12,13 +12,12 @@
 # (`fleet-hub-visits.sh --since 1h`) must group those by cause, count repeat
 # arrivals within one second once, and keep `attach` out of the total.
 #
-# Drives the SHIPPED hook lines from conf/tmux-attention.conf (the [73] ones,
-# with ~/.claude/fleet rewritten to this checkout) and the REAL hub-zoom.sh /
-# dash-zoom.sh against an ISOLATED tmux server — a PATH shim pins every tmux
-# call, including the hook's `tmux -S <socket_path>`, to a private socket.
+# The arrival HOOKS are gone (issue #1714: a node binds none of a person's keys
+# and runs none of their hooks), so this pins the reader — summary, dedup,
+# trimming, the `record` verb hub-zoom.sh still calls — on hand-made logs, and
+# that the node conf drops the [73] hooks from a live server.
 #
-# tmux absent → SKIP (exit 0). The attach leg needs a pty client via `script`;
-# where neither BSD nor GNU `script` works it SKIPs that leg only.
+# tmux absent → SKIP (exit 0).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -83,119 +82,14 @@ wait_lines() {
 last_cause() { tail -n 1 "$LOG" | cut -f3; }
 last_from()  { tail -n 1 "$LOG" | cut -f2; }
 
-# --- static: the shipped wiring --------------------------------------------
-grep -q '^set-hook -g session-window-changed\[73\] .*fleet-hub-visits.sh record' "$CONF" \
-  || fail "static: conf lacks the session-window-changed[73] hub-visit hook"
-grep -q '^set-hook -g client-attached\[73\] .*fleet-hub-visits.sh record.* attach ' "$CONF" \
-  || fail "static: conf lacks the client-attached[73] attach hook"
-grep -q '@hub_nav_via home' "$BIN/hub-zoom.sh" && grep -q '@hub_nav_via f9' "$BIN/hub-zoom.sh" \
-  || fail "static: hub-zoom.sh does not stamp @hub_nav_via home/f9"
-grep -q '@hub_nav_via g' "$BIN/dash-zoom.sh" || fail "static: dash-zoom.sh does not stamp @hub_nav_via g"
-
-# --- the isolated fleet: plan (the @dash hub) + two workers ----------------
-# Panes run `sleep`, not a login shell: a shell's rc files are the operator's,
-# and one that exits on attach would take the @dash pane with it.
-tmux -f /dev/null new-session -d -s t -n plan -x 160 -y 40 'sleep 600' 2>/dev/null || fail "could not start isolated tmux server"
-tmux set-option -p -t t:plan @dash 1
-tmux new-window -d -t t: -n w1 'sleep 600'
-tmux new-window -d -t t: -n w2 'sleep 600'
-tmux set-option -w -t t:w1 @wid a1
-w2id="$(tmux display-message -p -t t:w2 '#{window_id}')"
-grep '\[73\]' "$CONF" | grep '^set-hook' | sed "s#~/.claude/fleet#$BIN/..#g" > "$WORK/hooks.conf"
-tmux source-file "$WORK/hooks.conf" || fail "the shipped [73] hook lines do not parse"
-
-# 1. switches between non-hub windows write nothing.
-tmux select-window -t t:w1
-tmux select-window -t t:w2
-tmux select-window -t t:w1
-wait_lines 0 "non-hub switches"
-
-# 2. F9 (hub-zoom.sh, as the conf runs it: POSIX sh) from w1 → f9, from a1.
-bash --posix "$BIN/hub-zoom.sh"
-wait_lines 1 "F9"
-[ "$(last_cause)" = f9 ] || fail "F9: cause is '$(last_cause)', want f9"
-[ "$(last_from)" = a1 ]  || fail "F9: from is '$(last_from)', want the @wid handle a1"
-
-# The summary counts repeat arrivals within one second ONCE (EPIC #894's reading
-# rule), so each counted arrival below starts on a fresh second.
-tick() { sleep 1.05; }
-
-# 3. the ⌂ tap (hub-zoom.sh --home) from w2 → home, from the window id (no @wid).
-tmux select-window -t t:w2
-tick
-bash --posix "$BIN/hub-zoom.sh" --home
-wait_lines 2 "home"
-[ "$(last_cause)" = home ]   || fail "home: cause is '$(last_cause)', want home"
-[ "$(last_from)" = "$w2id" ] || fail "home: from is '$(last_from)', want $w2id"
-
-# 3b. F9 / ⌂ pressed while ALREADY on the hub changes no window: nothing logged,
-#     and no stamp is left behind to mislabel a later trip.
-bash --posix "$BIN/hub-zoom.sh"
-bash --posix "$BIN/hub-zoom.sh" --home
-wait_lines 2 "F9/home on the hub"
-[ -z "$(tmux show-option -qv -t t @hub_nav_via)" ] || fail "a hub-on-hub press left @hub_nav_via stamped"
-
-# 4. closing the task you are on drops you on the hub → closed.
-tmux select-window -t t:w2
-tick
-tmux kill-window -t t:w2
-wait_lines 3 "close"
-[ "$(tmux display-message -p -t t '#{window_name}')" = plan ] || fail "close: tmux did not land on the hub (test premise)"
-[ "$(last_cause)" = closed ] || fail "close: cause is '$(last_cause)', want closed"
-[ "$(last_from)" = "$w2id" ] || fail "close: from is '$(last_from)', want $w2id"
-
-# 5. a client attaching onto the hub → attach.
-attach_bg() {
-  if script -q /dev/null true >/dev/null 2>&1; then           # BSD/macOS
-    script -q /dev/null tmux -S "$SOCK" attach -t t >/dev/null 2>&1 &
-  elif script -q -c true /dev/null >/dev/null 2>&1; then      # GNU/util-linux
-    script -q -c "$REAL_TMUX -S '$SOCK' attach -t t" /dev/null >/dev/null 2>&1 &
-  else
-    return 1
-  fi
-  CLIENT_PID=$!
-  local i=0
-  while [ "$i" -lt 60 ]; do
-    [ -n "$(tmux list-clients -t t 2>/dev/null)" ] && return 0
-    sleep 0.25; i=$((i + 1))
-  done
-  return 1
-}
-want=3
-if attach_bg; then
-  want=4
-  wait_lines 4 "attach"
-  [ "$(last_cause)" = attach ] || fail "attach: cause is '$(last_cause)', want attach"
-  [ "$(last_from)" = - ]       || fail "attach: from is '$(last_from)', want -"
-  kill "$CLIENT_PID" 2>/dev/null; CLIENT_PID=
-  i=0; while [ -n "$(tmux list-clients -t t 2>/dev/null)" ] && [ "$i" -lt 40 ]; do sleep 0.1; i=$((i + 1)); done
-else
-  printf 'selftest: no usable `script` for a pty client — attach leg SKIPPED\n' >&2
-fi
-
-# 6. prefix g (dash-zoom.sh) → g; a plain select-window onto the hub → other.
-tmux select-window -t t:w1
-tick
-bash --posix "$BIN/dash-zoom.sh"
-want=$((want + 1)); wait_lines "$want" "prefix g"
-[ "$(last_cause)" = g ] || fail "prefix g: cause is '$(last_cause)', want g"
-tmux select-window -t t:w1
-tick
-tmux select-window -t t:plan
-want=$((want + 1)); wait_lines "$want" "plain switch"
-[ "$(last_cause)" = other ] || fail "plain switch: cause is '$(last_cause)', want other"
-
-# --- the summary ---------------------------------------------------------------
-out="$(bash "$HV" --since 1h --session t)" || fail "summary exited non-zero"
-printf '%s\n' "$out" | grep -q "^hub visits · t · last 1h: 5" || fail "summary total (attach excluded) is not 5: $out"
-for c in f9 home closed g other; do
-  printf '%s\n' "$out" | grep -Eq "^  $c +1\$" || fail "summary lacks '$c 1': $out"
-done
-if [ "$want" = 6 ]; then
-  printf '%s\n' "$out" | grep -Eq '^  attach +1  \(not counted\)$' || fail "summary lacks the uncounted attach row: $out"
-fi
-brief="$(bash "$HV" --brief --all --since 1h)"
-[ "$(printf '%s\n' "$brief" | cut -f1,2)" = "$(printf 't\t5')" ] || fail "--brief: got '$brief'"
+# --- static: the node carries no hub-visit hook (issue #1714) ---------------
+# The [73] hooks that wrote one line per hub arrival left the node with the
+# person's keys (EPIC #1710 C4): a client looks through a view session and the
+# full-screen hub is FLEET_DASH_WINDOW=1's alone. What stays is the reader and
+# the `record` verb hub-zoom.sh still calls — the legs below.
+grep -Eq '^set-hook -g [a-z-]+\[73\] ' "$CONF" && fail "static: the node conf still sets a [73] hook"
+grep -Eq '^set-hook -gu session-window-changed\[73\]$' "$CONF" \
+  || fail "static: the node conf must drop a live server's session-window-changed[73] hook"
 
 # Reading rules on a hand-made log: same-second repeats count once; old lines
 # fall outside --since; an unknown future cause token is still grouped.

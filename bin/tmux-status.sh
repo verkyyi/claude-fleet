@@ -1,9 +1,9 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
-# IT DRAWS ONLY WHAT WANTS YOUR HAND (issue #1616, EPIC #1615 C1). The left side
-# (conf/tmux-bar.conf) is always there — ☰ · login · ● N, the sessions waiting on
-# you; this side is EMPTY while all is well, and each segment appears only on its
-# condition, in this order:
+# IT DRAWS ONLY WHAT WANTS YOUR HAND (issue #1616, EPIC #1615 C1). It is the
+# CLIENT's bar since issue #1714 (conf/tmux-shell.conf): a node's own status line
+# is one static hint (conf/tmux-bar.conf) and runs no job. This side is EMPTY while
+# all is well, and each segment appears only on its condition, in this order:
 #   <machine>        the current window is a session on ANOTHER machine (hub mode,
 #                    `@remote`): its name; `○ 失联 Nm` after it when the hub calls
 #                    that machine lost; `旧` when its live install is behind the

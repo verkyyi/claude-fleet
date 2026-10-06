@@ -28,19 +28,11 @@
 #     keywords never miscount, the retired beacon flag is gone, and the cross-fleet WINDOW
 #     aggregation ("total minus own").
 #
-#   PART B — the ☰ (the ⌂ before #1616) is never a beacon: expand the REAL status-left
-#     and assert its background is blue (bg=#7aa2f7) while the list is on screen /
-#     raised (bg=#414868) otherwise, and
-#     NEVER a red block (bg=#f7768e) — even when the hub itself is needy.
-#
-#   PART C — the LOCAL ● badge's active-window discount: a non-needy active window
-#     shows the full count; an active needy WORKER discounts by 1; an active needy
-#     PLAN also discounts (issue #368); an active needy dash/backlog does NOT (it is
-#     not in the badge); and a discount that reaches 0 hides the whole chip.
-#
-#   PART D — NO other-fleet dot (#980): even with @attn_other_windows > 0 the
-#     status-left renders no orange ● (fg=#ff9e64), and neither the status-left
-#     range nor the jump script survives.
+#   PART B — the node draws none of it (issue #1714, EPIC #1710 C4): the ☰, the
+#     ● badge and its discount (#368, #1616) left with the node's bar — the
+#     client's list shows who waits on you. Expand the REAL status-left: the
+#     one-line hint, no ☰, no ●, whatever @attn_needs says; and no other-fleet
+#     dot (#980) — neither the range nor the jump script survives.
 #
 # tmux absent → SKIP cleanly (exit 0), per the run-selftests convention.
 # Exit 0 = pass. Non-zero = fail (prints which assertion diverged).
@@ -204,13 +196,10 @@ kill "$SPIN_PID" 2>/dev/null; SPIN_PID=''
 printf 'PART A ok: unified badge — A●3(plan+2), B●1, C●0(dash/backlog excl), D●0; ⌂ beacon flag retired\n'
 printf 'PART A ok: cross-fleet WINDOW count — A1 B3 C4 D4 (total 4 minus own), @attn_other_fleets retired (#368)\n'
 
-# --- shared render helper: expand the REAL status-left as seen FROM a window ---
-# Pull the shipped `set -g status-left "..."` value and expand it in a chosen
-# window's context (display-message leaves #[...] literal when not writing to a tty,
-# so we can grep the chosen styles/counts). status-left renders in the ACTIVE
-# window's context, and `-t <sess>:<window>` pins that context to <window>.
-# The bar lives in conf/tmux-bar.conf since issue #1534, its colours spelled as
-# conf/fleet-palette.conf names — expanded here the way tmux expands them.
+# --- PART B: the node's status-left draws no ☰ / ● (issue #1714) --------------
+# The bar lives in conf/tmux-bar.conf (issue #1534), its colours spelled as
+# conf/fleet-palette.conf names — expanded here the way tmux expands them, in a
+# chosen window's context (display-message leaves #[...] literal off a tty).
 BARCONF="$BIN/../conf/tmux-bar.conf"
 SL="$(grep -m1 '^set -g status-left ' "$BARCONF" | sed -e 's/^set -g status-left "//' -e 's/"$//')"
 [ -n "$SL" ] || fail "could not extract status-left from $BARCONF"
@@ -219,58 +208,16 @@ fleet_palette_expand "$SL"
 # shellcheck disable=SC2154  # _fpe: fleet_palette_expand's result
 SL=$_fpe
 sl_at() { tf "$1" display-message -p -t "$1:$2" "$SL"; }
-
-# --- PART B: the ☰ is the list's switch, never a beacon (#368, #1616) --------
-# Its block is blue while the list is on screen in the window (@sidebar_worker,
-# not zoomed), raised (bg=#414868) otherwise — and NEVER a red block (bg=#f7768e),
-# not even on a needy hub: the red beacon is retired. (The red local ● uses
-# fg=#f7768e, so we grep the bg= form to isolate the icon block.)
-tf fleetB set-option -t fleetB @attn_needs 1
-tf fleetB set-option -t fleetB @attn_other_windows 0
-tf fleetB set-window-option -t fleetB:plan @claude_state needs   # needy hub
-out="$(sl_at fleetB plan)"
-case "$out" in *"☰"*) : ;; *) fail "☰: the status-left must lead with ☰ (#1616)" "$out" ;; esac
-case "$out" in *"bg=#414868"*) : ;; *) fail "☰: a window with no list on screen expected the raised block bg=#414868" ;; esac
-case "$out" in *"bg=#f7768e"*) fail "☰: a needy hub must NOT show a red block (beacon retired)" ;; esac
-tf fleetB set-window-option -t fleetB:issue-9 @sidebar_worker 1
-out="$(sl_at fleetB issue-9)"
-case "$out" in *"bg=#7aa2f7"*) : ;; *) fail "☰: the list on screen expected the blue block bg=#7aa2f7" ;; esac
-case "$out" in *"bg=#f7768e"*) fail "☰: must NOT show a red block" ;; esac
-tf fleetB set-window-option -u -t fleetB:issue-9 @sidebar_worker
-tf fleetB set-window-option -t fleetB:plan @claude_state 'done'  # restore
-printf 'PART B ok: ☰ — blue while the list is on screen, raised otherwise, never a red block, even on a needy hub (#368, #1616)\n'
-
-# --- PART C: the local ● badge's active-window discount (#368, supersedes #363) --
-# Zero the orange cross-fleet dot on the fleets we render so the ONLY ● is the local
-# badge under test.
-for f in fleetA fleetB fleetC; do tf "$f" set-option -t "$f" @attn_other_windows 0; done
-tf fleetA set-option -t fleetA @attn_needs 3
-# (a) non-needy active window (issue-3=working) → full count, no discount
-case "$(sl_at fleetA issue-3)" in *"● 3"*) : ;; *) fail "discount(a): non-needy active window must show the full ● 3" ;; esac
-# (b) active needy WORKER (issue-1=needs) → discount by 1
-case "$(sl_at fleetA issue-1)" in *"● 2"*) : ;; *) fail "discount(b): active needy worker must discount to ● 2" ;; esac
-# (c) active needy PLAN/hub (plan=needs) → ALSO discounts (issue #368)
-case "$(sl_at fleetA plan)" in *"● 2"*) : ;; *) fail "discount(c): active needy plan/hub must discount to ● 2 (#368)" ;; esac
-# (d) active needy dash/backlog PANEL → NOT discounted (never in the badge)
-tf fleetC set-option -t fleetC @attn_needs 3
-case "$(sl_at fleetC backlog)" in *"● 3"*) : ;; *) fail "discount(d): active needy backlog must NOT discount (● 3)" ;; esac
-case "$(sl_at fleetC dash)"    in *"● 3"*) : ;; *) fail "discount(d): active needy dash must NOT discount (● 3)" ;; esac
-# (e) discount → 0 → the whole chip hides (issue-9 is the sole needy worker, badge=1)
-tf fleetB set-option -t fleetB @attn_needs 1
-case "$(sl_at fleetB issue-9)" in *"●"*) fail "discount(e): the sole needy active worker must HIDE the badge" ;; *) : ;; esac
-printf 'PART C ok: ● discount — full off-target, -1 on a needy worker/plan, none on dash/backlog, hidden at 0\n'
-
-# --- PART D: no other-fleet dot (issue #980) ---------------------------------
-# One fleet per login: nothing renders @attn_other_windows any more. Zero the
-# local badge, set the other-fleet count, and the status-left carries no ● at all.
-tf fleetB set-option -t fleetB @attn_needs 0
+tf fleetB set-option -t fleetB @attn_needs 3
 tf fleetB set-option -t fleetB @attn_other_windows 3
+tf fleetB set-window-option -t fleetB:plan @claude_state needs
 out="$(sl_at fleetB plan)"
-case "$out" in *"fg=#ff9e64"*) fail "other-fleet ●: the orange dot must be gone (#980)" ;; *) : ;; esac
-case "$out" in *"●"*)          fail "other-fleet ●: no ● may render from @attn_other_windows (#980)" ;; *) : ;; esac
+case "$out" in *"fleet"*) : ;; *) fail "node bar: the status-left must say to use fleet (#1714)" "$out" ;; esac
+case "$out" in *"☰"*|*"●"*) fail "node bar: no ☰ / ● on a node any more (#1714)" "$out" ;; esac
+grep -q 'range=' "$BARCONF" && fail "node bar: a click range is back in conf/tmux-bar.conf"
 grep -q 'range=user|xfleet\|attn_other_windows' "$CONF" "$BARCONF" && fail "other-fleet ●: conf still carries the xfleet range / @attn_other_windows"
 [ -e "$BIN/fleet-xfleet-jump.sh" ] && fail "other-fleet ●: fleet-xfleet-jump.sh must be removed (#980)"
-printf 'PART D ok: no other-fleet dot — @attn_other_windows renders nothing, range + jump gone (#980)\n'
+printf 'PART B ok: the node bar is the hint — no ☰, no ●, no click range, no other-fleet dot (#1714, #980)\n'
 
-printf 'selftest PASS: unified ● badge (#368) — plan-in-badge + active-window discount + no other-fleet dot (#980)\n'
+printf 'selftest PASS: @attn_needs counts (#368) + the node draws no badge (#1714)\n'
 exit 0

@@ -6,7 +6,8 @@
 # stale silently:
 #
 #   1. Every `prefix <k>` row in the sheet has a matching `bind <k> ...` line in
-#      conf/tmux-attention.conf (and F9 has a `bind -n F9`).
+#      conf/tmux-shell.conf — the CLIENT's, the only place a person's key is bound
+#      since issue #1714 — (and F9 has a `bind -n F9`).
 #   2. Every prefix `bind`/`bind -n` in the conf (minus the mouse status bind) is
 #      documented in the sheet — no missing entries.
 #   3. The `?` popup bind exists in the conf, and the dash (`?`) + backlog (`?`)
@@ -24,7 +25,11 @@
 #      below). Pinned to the stock C-b prefix so it is deterministic anywhere;
 #      one extra render under a C-s prefix checks the sheet shows the remap.
 #
-# Exit 0 = pass. Non-zero = fail (prints what diverged). No network / no tmux.
+#   8. The node binds none of them (issue #1714, EPIC #1710 C4): a server that
+#      sources conf/tmux-attention.conf lists EXACTLY tmux's stock keys, and one
+#      that sources the client's conf has every sheet key — on an isolated socket.
+#
+# Exit 0 = pass. Non-zero = fail (prints what diverged). No network.
 set -uo pipefail
 # A block is searched with `grep -q … <<< "$block"`, never `printf … | grep -q`:
 # grep -q exits on its first match, and under pipefail a writer still flushing
@@ -36,12 +41,13 @@ export FLEET_UI_LANG=en
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 KEYS="$BIN/fleet-keys.sh"
-CONF="$ROOT/conf/tmux-attention.conf"
+CONF="$ROOT/conf/tmux-shell.conf"
+NODE="$ROOT/conf/tmux-attention.conf"
 DASH="$BIN/tmux-dashboard.sh"
 ISSUES="$BIN/tmux-issues.sh"
 KEYMAP="$BIN/dash-keymap.sh"
 
-for f in "$KEYS" "$CONF" "$DASH" "$ISSUES" "$KEYMAP"; do
+for f in "$KEYS" "$CONF" "$NODE" "$DASH" "$ISSUES" "$KEYMAP"; do
   [ -f "$f" ] || { printf 'selftest: missing %s\n' "$f" >&2; exit 2; }
 done
 
@@ -103,7 +109,7 @@ $conf_prefix_keys
 EOF
 
 # --- 3. the popup wiring is present -------------------------------------------
-grep -q 'bin/fleet-keys.sh' "$CONF"   || fail "conf has no fleet-keys.sh popup bind"
+grep -q '/fleet-keys.sh' "$CONF"   || fail "conf has no fleet-keys.sh popup bind"
 # The `?` bind opens its popup through the one door, dash-popup.sh (issue #1535),
 # which stamps the @popup_open epoch (#308/#431) and draws the one title row.
 grep -Eq '^bind[[:space:]]+\?[[:space:]]+run-shell -b ".*dash-popup\.sh .*fleet-keys\.sh' "$CONF" \
@@ -398,6 +404,43 @@ with tempfile.TemporaryDirectory(prefix='panel-keymap-') as tmp:
                     proc.wait(timeout=5)
 print('panel keys: table/binds/help lockstep; popup/windowed fzf argv, headers, prefix2 and unreachable cases passed')
 PYTEST
+
+# --- 8. the node binds none of a person's keys; the client binds them all ------
+# (issue #1714, EPIC #1710 C4). Three throwaway servers on sockets of our own
+# (never the fleet's): stock tmux, one that sourced the node conf, one that
+# sourced the client's conf as fleet-shell.sh renders it. HOME is a scratch dir
+# so the node conf's one-shot reap never reaches a live install.
+if command -v tmux >/dev/null 2>&1; then
+  KW=$(mktemp -d "${TMPDIR:-/tmp}/fkeys.XXXXXX") || fail "8: mktemp"
+  ktm() { local s="$1"; shift; HOME="$KW" tmux -S "$KW/$s" -f /dev/null "$@"; }
+  for s in stock node shell; do ktm "$s" new-session -d -s k -x 120 -y 30 || fail "8: tmux $s server did not start"; done
+  sed -e "s#__BIN__#$BIN#g" -e 's#__PREFIX__#C-b#g' "$CONF" > "$KW/shell.conf"
+  ktm node source-file "$NODE" 2>"$KW/node.err" || fail "8: the node conf failed to source: $(cat "$KW/node.err")"
+  ktm shell source-file "$KW/shell.conf" 2>"$KW/shell.err" || fail "8: the client conf failed to source: $(cat "$KW/shell.err")"
+  ktm stock list-keys > "$KW/stock.keys"; ktm node list-keys > "$KW/node.keys"
+  ndiff=$(diff "$KW/stock.keys" "$KW/node.keys")
+  [ -z "$ndiff" ] || { ktm stock kill-server; ktm node kill-server; ktm shell kill-server; fail "8: the node binds keys of its own (it must list exactly tmux's stock keys):
+$ndiff"; }
+  ktm node list-keys -T fleet-sidebar >/dev/null 2>&1 && ktm node list-keys -T fleet-sidebar | grep -q . \
+    && fail "8: the node still has a fleet-sidebar key table"
+  ktm node show-options -g status-right | grep -q '#(' && fail "8: the node's status line still runs a job"
+  ktm node show-hooks -g | grep -Eq '\[(71|73)\]' && fail "8: the node still carries the list's [71] / hub-visit [73] hooks"
+  # the client: every sheet key is bound, and to something that is not tmux's stock
+  while IFS= read -r k; do
+    [ -n "$k" ] || continue
+    # the whole table, filtered: `list-keys -T <table> <key>` prints nothing on tmux 3.7
+    sk=$(ktm stock list-keys -T prefix 2>/dev/null | awk -v k="$k" '$4 == k')
+    ck=$(ktm shell list-keys -T prefix 2>/dev/null | awk -v k="$k" '$4 == k')
+    [ -n "$ck" ] || fail "8: the client does not bind 'prefix $k'"
+    [ "$ck" != "$sk" ] || fail "8: the client's 'prefix $k' is still tmux's stock bind"
+  done <<EOF
+$sheet_prefix_keys
+EOF
+  ktm shell list-keys -T root | awk '$4 == "F9"' | grep -q 'resize-pane' || fail "8: the client does not bind F9"
+  ktm shell list-keys -T fleet-sidebar | grep -q . || fail "8: the client has no fleet-sidebar key table"
+  ktm stock kill-server; ktm node kill-server; ktm shell kill-server
+  rm -rf "$KW"
+fi
 
 printf 'selftest OK: cheatsheet matches shipped binds (%s prefix keys, %s dashboard ⌃-keys checked)\n' \
   "$(printf '%s\n' "$sheet_prefix_keys" | grep -c .)" \

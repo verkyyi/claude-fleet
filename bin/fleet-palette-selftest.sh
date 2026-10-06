@@ -92,12 +92,14 @@ source-file -F '#{d:current_file}/tmux-bar.conf'" "$(cat "$WORK/conf/main.conf")
     v=$(tm show-options -gv "$o")
     hasnt "C: $o has no unexpanded \$PAL_" '$PAL' "$v"
   done
-  has "C: status-left draws in the palette's blue" "fg=$PAL_BLUE" "$(tm show-options -gv status-left)"
-  has "C: …and the ⌂ off the hub on PAL_SEL" "bg=$PAL_SEL" "$(tm show-options -gv status-left)"
+  # a node's bar is one static hint since issue #1714 (the client draws the bar)
+  has "C: status-left draws in the palette's yellow" "fg=$PAL_YELLOW" "$(tm show-options -gv status-left)"
+  has "C: …and its dim" "fg=$PAL_DIM" "$(tm show-options -gv status-left)"
   eq "C: status-style is the palette's bg/fg" "bg=$PAL_BG,fg=$PAL_FG" "$(tm show-options -gv status-style)"
-  eq "C: status-interval 2 (issue #1534)" 2 "$(tm show-options -gv status-interval)"
+  eq "C: status-interval 60 — nothing on it changes (issue #1714)" 60 "$(tm show-options -gv status-interval)"
   hasnt "C: no PAL_* in the environment a pane inherits (%hidden)" 'PAL_' "$(tm show-environment -g)"
-  has "C: status-right passes the client's width" 'cw=#{client_width}' "$(tm show-options -gv status-right)"
+  eq "C: status-right is empty on a node — no job (issue #1714)" '' "$(tm show-options -gv status-right)"
+  has "C: the client's status-right passes its width" 'cw=#{client_width}' "$(grep '^set -g status-right ' "$ROOT/conf/tmux-shell.conf")"
   tm kill-server 2>/dev/null
 else
   printf 'fleet-palette-selftest: no tmux — leg C skipped\n' >&2

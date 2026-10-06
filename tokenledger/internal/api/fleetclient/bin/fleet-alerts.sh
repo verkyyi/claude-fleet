@@ -613,8 +613,8 @@ fleet_alerts_counts() {
 # (issue #1616: the bar draws what wants a hand; #1238's fixed-width blanks held
 # 13 columns of a 54-column phone bar while nothing was wrong). A count past 99
 # reads 99; each sits in a clickable range that opens the popup filtered to that
-# level (conf/tmux-attention.conf, MouseDown1Status). Needs keep their own
-# clickable `● N` at the left end of the bar (status-left).
+# level (a node's MouseDown1Status until issue #1714 took the person's keys and
+# bar off the node; the client's bar draws the counts).
 # Sets $FA_BAR, '' when there is nothing (no subshell: the bar renders every 2s
 # per client).
 fleet_alerts_bar() {

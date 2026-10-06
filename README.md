@@ -47,20 +47,20 @@ demo repo data.</sub>
 - **Urgency-sorted windows.** Windows re-slot themselves so position 1 is
   always the session that needs you most (needs > done > working > looping >
   idle). Your view never jumps — the sorter restores focus after every move.
-  `prefix+a` hops to the neediest window.
+  The client's task list puts the session that needs you first.
 
-- **A mission-control dashboard** (`prefix+g`): an fzf panel listing every
+- **A mission-control dashboard** (`FLEET_DASH_WINDOW=1`): an fzf panel listing every
   session with state glyph, bound issue, model, and context %. It lives as an
   embedded pane in the `plan` hub, which holds the dash and nothing else;
-  `prefix+g` focuses it and, pressed again, zooms it fullscreen — as does
- `F9`. `Enter` jumps. The prompt line at the bottom is the quick-scratch box:
+  the task list replaced it by default (#1533), and its `prefix+g` / `F9` keys left
+  the node with the rest of the person's keys (#1714). `Enter` jumps. The prompt line at the bottom is the quick-scratch box:
   **type a name and press Enter** — it spawns a scratch session (own
   writable `scratch-N` worktree, no issue) **named after that text**, with the
   full text prefilled in the first input as an **unsent, editable draft**.
   Chinese and spaces are fine (the window title is capped at 24 columns — 12 CJK
   glyphs; the draft is not clipped). The prompt label is the fleet's
   default agent for a new session (`claude ▸` / `codex ▸`); `Ctrl-V` flips it,
-  persisted to the fleet's conf — that key (or `prefix+c`) is how you pick the
+  persisted to the fleet's conf — that key (or the config modal) is how you pick the
   agent; typed text supplies the name and draft. `Ctrl-N` is the issue-bound path: it files a
   GitHub issue and spawns a worker session bound to it. (Every dash `Ctrl-` key
   is checked against your tmux prefix at launch and moved to its `Alt-` twin
@@ -80,7 +80,8 @@ demo repo data.</sub>
 
 ![backlog](docs/img/backlog.svg)
 
-- **GitHub backlog panel** (`prefix+b`): open issues grouped by milestone
+- **GitHub backlog panel** (`bin/tmux-issues.sh`; its `prefix+b` door left the node
+  with #1714 — #1739 decides the client's): open issues grouped by milestone
   (roadmap | unplanned panes). `Enter` on an issue creates a worktree
   `issue-<N>` off your base branch and starts `claude` seeded to read, claim,
   and implement it. Issues being worked show `▶ <window>`. Manage issues
@@ -237,28 +238,29 @@ line, which exits silently without it.)
 
 ## Keybindings (prefix defaults to your tmux prefix)
 
+Every key below is the **client's** — `fleet` on your own computer
+(`conf/tmux-shell.conf`, its own tmux server `-L fleet-shell`). A node's fleet
+session binds none of them (issue #1714, EPIC #1710): it carries the execution
+sessions only, and the client looks at it through a view session with its prefix
+and status line off. Attaching to a node session directly still works — tmux's
+stock keys and one line at the top saying to use `fleet`.
+
 | Key | Action |
 |---|---|
-| `prefix a` | jump to the next window that needs you (red first, then green) |
-| `prefix g` | focus the task list, like `F9` (with `FLEET_DASH_WINDOW=1`: the old hub dash pane, press again to zoom it). If your personal `~/.tmux.conf` binds `g` and is sourced after the fleet conf, your bind shadows this (tmux is last-write-wins) — rebind or drop it |
-| `prefix e` | show/hide the compact task sidebar in workers; remembers the preference for this fleet |
-| `prefix E` | focus the sidebar (or click it): ↑↓ switch tasks (follows once you pause); on an empty input line Home/End go to the ends and ←→ fold (a row's subtree, or a repo heading's whole group), on a typed name they move its cursor (with ⌥←→ ⌃a ⌃e ⌃w ⌃k to jump and delete, as on Claude's prompt), a terminal paste lands on it too (one name; newlines become spaces); Enter/Esc give input back to the worker, `n` (or a tap on the bottom row) new task — files an issue and spawns its worker, `q` hide (keyboard-only; nothing in the sidebar hides on a tap) |
-| `prefix Space` | task picker — the sidebar's task list as a popup, for when the sidebar is hidden (a window under ~111 columns) or off: ↵ switches, a typed name + `⌃s` (or ↵ on no match) starts a scratch session, F9 / `[⌂ hub]` goes on to the hub. `prefix E`, `F9` and the `☰` tap open it too in a task with no sidebar on screen |
-| `prefix b` | backlog modal — near-fullscreen popup; enter spawns the issue session |
-| `prefix c` | config modal — view/edit `FLEET_*` by friendly label, grouped + collapsible; pacing/budget/timeout knobs live under a collapsed INTERNAL "show all" header (#1101); identity keys locked; `⌃s` toggles where edits land — this fleet ⇄ one hosted repo (#1102), `?` reveals raw keys, enter edits |
-| `prefix u` | usage + account modal — local 5h/7d usage and the official limit line on top, the account pool (when configured) as a selectable body below; enter picks the account new sessions start from |
-| `prefix !` | alerts popup — every alert the status bar counts, as one table: `✖` alarm · `▲` warning · `●` needs (then `↻` recently healed), each `subject · condition · value`, how long, and one action. `↵` acts (go to the window / restart the daemon / see accounts / see disk), `1`/`2`/`3` filter by level (`0` all), `m` mutes a warning or needs row for 1h — an alarm cannot be muted — `esc` closes. Overrides tmux's stock `break-pane` |
-| `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut (tmux prefix · dash · backlog · config modal), each with a one-line description; `q`/`esc` closes it (also reachable via `?` in the dash and the backlog) |
-| `F9` | (no prefix) focus the task list — shown, and switched back on, if it is not; a second press hides it, a third shows it again. A window too narrow for it opens the task picker. (`FLEET_DASH_WINDOW=1`: the old hub — first press the sidebar, second the hub; `FLEET_HOME_SIDEBAR_FIRST=0` turns that off) |
+| `prefix E` | focus the task list (or click it): ↑↓ switch tasks (follows once you pause), ↵ enter, `.` the row menu, `?` its short key sheet; on an empty input line Home/End go to the ends and ←→ fold, on a typed name they move its cursor (with ⌥←→ ⌃a ⌃e ⌃w ⌃k to jump and delete); Enter/Esc give input back to the session |
+| `prefix g` / `prefix Space` | the same as `prefix E` |
+| `prefix q` / `prefix h` | back to the machine you were on (the previous window) |
+| `prefix z` | zoom the session pane — from the task list too: it zooms the session and hands the keyboard back, never the list |
+| `prefix [` | scroll back the session (tmux copy-mode) — from the task list too |
+| `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut, each with a one-line description; `q`/`esc` closes it |
+| `F9` | (no prefix) zoom the session pane on the right — this computer's pane; the key never reaches the far end |
 
-The shortcut surface was pruned in #289 (one keyboard home per action): raw
-scratch sessions live on the dash's `⌃s`, and the usage / account controls (once
-`prefix u` / `prefix A`) merged into one modal — back on `prefix u` since the
-footer usage stat it was clicked from left the bar (#1100). `prefix n` / `prefix r` are back to tmux's
-stock `next-window` / `refresh-client`.
-
-The dash (`prefix g`) and backlog (`prefix b`) each list their own fzf binds
-in a header; `prefix ?` is the one place that shows **all** of them together.
+What the node used to bind and where it went (#1714): `prefix a` (next needs
+window) and the `● N` badge — the task list orders by who waits on you;
+`prefix e` — the client's list is always on; `prefix b` / `c` / `u` / `!` (backlog,
+config, usage, alerts popups) and the bar's `☰` / `✖ ▲` taps — retired with the
+node's bar (#1739 decides what the client gets); `prefix g` / `Space` / `E` / `z` /
+`[` / `?` / `F9` — the client's, above.
 
 Worker and scratch windows show a **30-column task list on the left** on wide
 screens. It shares the hub's live statuses, pins and parent/child grouping,
@@ -277,55 +279,32 @@ its top border's **WORKER** label then turns blue. The words on a pane's top
 line never change with focus — only the colour moves.
 Clicking the top border itself requires tmux 3.7 or newer; on older versions,
 click inside the sidebar or use `prefix E` to focus it.
-`prefix e` saves the on/off preference as `FLEET_SIDEBAR`;
 `FLEET_SIDEBAR_WIDTH` sets the width (24–60) — the floor: the list widens to
 its longest row up to `FLEET_SIDEBAR_WIDTH_MAX` (44; set it to the width to pin
 the list), and a drag of the divider sets the width from then on (the session's
 `@sidebar_width_manual`; `tmux set -u -t <session>: @sidebar_width_manual` goes
 back to auto). Whichever applies is held: when a window takes a narrower
 client's size tmux scales every pane, and the list snaps back on the spot
-rather than sitting where the scale left it. Closing the task you are on lands
-on its neighbour in the sidebar rather than the hub (`FLEET_CLOSE_LANDS_NEXT=0`
-turns that off).
+rather than sitting where the scale left it.
 Below sidebar width + 81 columns (111 by default), the list hides automatically
 to leave 80 columns for the worker, then returns when space permits. `prefix z`
 still zooms the worker for focused work. Only the visible worker owns a sidebar;
 background windows and detached fleets do not run sidebar refresh loops.
 The full hub list also hides worker IDs and gives that space to task descriptions.
 
-Mouse mode is shipped **on** by the fleet baseline (see below), so the footer is
-clickable too: the **`☰`** (leftmost) is the task list's **switch** — one tap
-shows the list in this window, the next hides it, and it does nothing else (a
-window too narrow for the list opens it as a popup the width of the screen;
-issue #1616) — next to it your **login name** says whose fleet this is (not a tap
-target; cut to 8 characters under 60 columns) — the blue **`● N` needs badge**
-cycles to the next window that needs you. That left side is always there; the
-right side draws **only what wants your hand**, and is empty while all is well:
-the machine of a session on another machine, the current account once 5h or week
-reaches `FLEET_STATUS_QUOTA_PCT` (80 %), `⚠ GitHub 受限`, the **alert counts** and
-`○ 入口 Nm` when the hub has gone silent. The counts are `✖ N` alarms (red: what
-you see may be wrong, e.g. `quota · stale`, `quota · unreadable`, `dash · stale`,
-`daemon · stale`, `disk · low` under the floor) and `▲ N` warnings (yellow:
-drifting or a limit ahead, e.g. `quota · uneven`, `quota · from banner`,
-`accounts · all capped`, `model · capped`, `machine · load high` /
-`memory high` — load and memory left the bar and turn up here when red), each
-drawn only when it is not zero and never a sentence; tap one, or press
-`prefix !`, for the table (issue #1238; the one producer is
-`bin/fleet-alerts.sh`, which writes `$G/alerts.ndjson` for the bar, the popup and
-`fleet-doctor` alike). On a 54-column iPad / iPhone in portrait the whole bar
-stays within 30 columns in every state. No usage figures; `prefix u` opens the consolidated
-**usage + account modal** (usage/limit detail on top, the account pool as a
-selectable body below). (Comment out `set -g mouse on` in
-`conf/tmux-attention.conf` to keep native select-to-copy.)
+The status bar is the client's too (`conf/tmux-shell.conf` → `bin/tmux-status.sh`):
+`fleet` on the left; the right side draws **only what wants your hand**, and is
+empty while all is well — the machine of a session on another machine, the
+current account once 5h or week reaches `FLEET_STATUS_QUOTA_PCT` (80 %),
+`⚠ GitHub 受限`, the **alert counts** (`✖ N` alarms, `▲ N` warnings, from
+`bin/fleet-alerts.sh`) and `○ 入口 Nm` when the hub has gone silent. On a
+54-column iPad / iPhone in portrait the whole bar stays within 30 columns in
+every state. A node's own status line is one static hint at the top
+(`conf/tmux-bar.conf`), which only a direct attach ever sees.
 
-To zoom a pane fullscreen, double-click it (or its border), or use stock tmux
-`prefix z` — except a worker with its task sidebar on screen, where a double-click
-selects a word as in stock tmux (zoom it with `prefix z` or its border); `F9` and `prefix g` land on
-the task list, the `☰` shows or hides it (the full-screen hub retired, issue #1533; `FLEET_DASH_WINDOW=1`
-brings back the old dash and its zoom toggle). On iPad / Termius the double-tap
-doesn't always reach tmux over touch and `prefix z` is a chord on a soft keyboard,
-so the reliable single-tap footer ranges are the `☰` and the `● N` needs
-badge above — not a pane zoom.
+To zoom a pane fullscreen, double-click it (or its border), `prefix z`, or `F9` —
+except the session with the task list on screen, where a double-click selects a
+word as in stock tmux (zoom it with `prefix z`, `F9` or the divider).
 
 There is no other-fleet cue and no fleet switching: **one fleet per login** holds
 every repo you work on (EPIC #977), so the red `●` is the one needs signal and the
@@ -451,8 +430,8 @@ still works as a one-fleet default. **One settings file per login** (issue #979)
 `conf` into `~/.config/claude-fleet/fleet.settings` (the `conf` keeps only
 `FLEET_REPO`/`FLEET_MAIN`/`FLEET_BASE_BRANCH`; the old files stay as
 `*.pre-merge`). Read order is install `fleet.conf` < `fleet.settings` < the
-fleet `conf`, so an unmerged login loads exactly as before. The `prefix c`
-modal writes only the two layers you can tell apart — **this fleet** (a
+fleet `conf`, so an unmerged login loads exactly as before. The config
+modal (`bin/tmux-config.sh`) writes only the two layers you can tell apart — **this fleet** (a
 global-only key goes to `fleet.settings`, any other to the fleet `conf`) and **a
 hosted repo** — and never the install's `fleet.conf`, which it reads as legacy
 (issue #1102). Every fleet gets a **`plan` hub** window holding
@@ -524,7 +503,8 @@ are in [docs/MULTI-ACCOUNT.md](docs/MULTI-ACCOUNT.md#setup). Tokens stay outside
 the repository. Account choice is per launch through `CLAUDE_CODE_OAUTH_TOKEN`;
 settings, hooks and transcripts continue to use the shared Claude configuration.
 
-Press `prefix u` to open the **usage + account modal**. Selecting an
+The **usage + account modal** (`bin/usage-modal.sh`; its `prefix u` door left the
+node with #1714 — #1739 decides the client's): selecting an
 account changes the starting choice and migrates this fleet's idle Claude
 windows; working and looping windows are left alone by this manual path. A new
 spawn can reselect an account using the quota policy, so the selection is not a
@@ -826,8 +806,8 @@ watching.
   accounts, not a subscription quota or bill. Weights: output×1 + input×0.25 +
   cache-write×0.25 + cache-read×0.02 over rolling 5h/7d windows. With TokenLedger
   configured, the account pool additionally uses **account-wide quota readings**
-  from ccquota; these are separate from that local estimate. `prefix u` opens
-  the usage/limit details and the account pool.
+  from ccquota; these are separate from that local estimate. The usage + account
+  modal shows the usage/limit details and the account pool.
 - The classifier spends real (haiku-sized, change-gated) tokens. It is
   optional; everything else works without it.
 - Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd

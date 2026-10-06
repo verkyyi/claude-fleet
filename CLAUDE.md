@@ -127,14 +127,20 @@ Do not install from memory: read the doc and work from it.
   `home` are treated as panels and excluded from the dash session list, the
   session counts, snapshots and restore. **The full-screen list retired**
   (issue #1533): by default no `plan` window is built — a fleet's resting window
-  is `home`, a plain shell the task list draws beside, and ⌂ / F9 / prefix g all
-  end on that list, focused (`fleet-sidebar.sh home`). `FLEET_DASH_WINDOW=1`
+  is `home`, a plain shell the task list draws beside (the ⌂ / F9 / prefix g keys
+  that ended on it left the node with #1714; `fleet-sidebar.sh home` retires in #1739). `FLEET_DASH_WINDOW=1`
   brings the old dash hub back for one batch; adding a panel name means adding
   it everywhere `dash|plan|backlog` is spelled. **The task list is the CLIENT's
   only** (issue #1713): `fleet-sidebar.sh` draws it on the shell's server
   (`FLEET_SHELL=1`), never in a node's fleet session — so there is no make-way
   rule, and a viewer arriving or leaving changes no pane on the node.
   `FLEET_SIDEBAR_NODE=1` is the drawer's selftest seam, never a setting.
+  **So are the bar, the popups and every key** (issue #1714): a node's
+  `conf/tmux-attention.conf` binds tmux's stock keys only (its "stock restores"
+  block re-spells the ones an older version overrode, so a conf reload converges)
+  and its status line is one static `请用 fleet` hint (`conf/tmux-bar.conf`); the
+  person's keys live in `conf/tmux-shell.conf`. `fleet-keys-selftest.sh` leg 8
+  pins both sides on isolated sockets — never add a `bind` to the node conf.
 - **A view session shares the fleet's windows; never scan or name them bare**
   (issue #1489). A shell or proxy client of this machine (`fleet-remote-view.sh
   attach --shell` / a view id) attaches to a GROUPED session of its own,

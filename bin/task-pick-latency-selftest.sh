@@ -3,7 +3,8 @@
 # list is on screen, and where the time went (issue #1611).
 #
 # The iPad operator (Termius, 54x50 portrait, no task bar) taps the ⌂ and waits.
-# This drives the REAL chain — the shipped conf's MouseDown1Status bind →
+# This drives the REAL chain — the ☰'s MouseDown1Status bind (a node's until
+# issue #1714, a fixture here until #1739) →
 # hub-zoom.sh --bar → fleet-sidebar.sh home … bar → fleet-task-pick.sh --popup →
 # dash-popup.sh → the picker — on an ISOLATED tmux server, from a replay CLIENT
 # the test owns: a 54x50 pty (python's pty module), an SGR mouse press on the
@@ -115,13 +116,17 @@ for w in 2 3 4 5; do tmux new-window -d -t t -n "issue-$w" 'sleep 600'; tmux set
 tmux select-window -t t:issue-1
 tmux set -g mouse on \; set -g status on \; set -g status-position bottom \; set -g status-interval 2
 tmux set -g status-left "#[range=user|hub]  ⌂  #[norange] t "
-# The SHIPPED bind, verbatim but for the install path — and `sh` spelled as the
-# production /bin/sh, bash in POSIX mode (hub-zoom-home-selftest.sh's reasoning,
-# issue #414): a Linux runner's sh is dash, which the fleet's sh scripts never
-# run under.
-awk '/^bind -n MouseDown1Status /,/^}$/' "$CONF" | sed "s#~/.claude/fleet#$ROOT#g; s#run-shell \"sh #run-shell \"bash --posix #" > "$WORK/bind.conf"
-grep -q 'hub-zoom.sh --bar' "$WORK/bind.conf" || fail "the conf's MouseDown1Status bind no longer runs hub-zoom.sh --bar (the ☰, issue #1616)"
-tmux source-file "$WORK/bind.conf" || fail "the conf's MouseDown1Status bind did not load"
+# The ☰ tap's bind as a node shipped it until issue #1714 (the person's keys and
+# bar are the client's now; the node binds no status click — asserted here). It is
+# this test's own fixture until the ⌂ chain retires (#1739): its ☰ (hub range)
+# branch, verbatim but for the install path — and `sh` spelled as the production /bin/sh, bash in POSIX mode
+# (hub-zoom-home-selftest.sh's reasoning, issue #414): a Linux runner's sh is dash.
+grep -q 'mouse_status_range' "$CONF" && fail "the node conf binds a status click again (#1714)"
+cat > "$WORK/bind.raw" <<'BIND'
+bind -n MouseDown1Status if -F '#{==:#{mouse_status_range},hub}' { run-shell "sh ~/.claude/fleet/bin/hub-zoom.sh --bar --client '#{client_name}'" }
+BIND
+sed "s#~/.claude/fleet#$ROOT#g; s#run-shell \"sh #run-shell \"bash --posix #" "$WORK/bind.raw" > "$WORK/bind.conf"
+tmux source-file "$WORK/bind.conf" || fail "the ☰ fixture bind did not load"
 
 # The replay client: a pty of its own, 54x50, that taps the ⌂ and times the
 # prompt's arrival. `tap <k> <ms|TIMEOUT>` per tap, `median <ms>` at the end.

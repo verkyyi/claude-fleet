@@ -18,7 +18,8 @@
 #   [＋ new] [⌂ hub] [✕ close]   the same three as taps (iPad / Termius)
 #
 # Who opens it:
-#   prefix Space        always (conf/tmux-attention.conf)
+#   prefix Space        always — until issue #1714 moved the person's keys to the
+#                       client (conf/tmux-shell.conf), whose Space focuses its list
 #   ⌂ tap / F9          in a task with NO task bar on screen — the "no bar" branch
 #                       of C4's task-bar-first (hub-zoom.sh, FLEET_HOME_SIDEBAR_FIRST;
 #                       0 turns both off). A zoomed task keeps going home.

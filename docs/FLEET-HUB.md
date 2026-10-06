@@ -512,8 +512,11 @@ renewed by `--enter` first), or a nested attach when the machine is this
 computer. `fleet connect --pick [MACHINE]` is the certificate + machine-pick
 half of `fleet` as one JSON line, which the shell starts from. Keys: ↑↓ / ↵ / `.`
 / `?` on the list as in a fleet; `prefix q` (and `prefix h`) the previous
-machine; `prefix E` the keyboard onto the list; F9 zooms the right pane (this
-computer's, never sent on). `~/.config/claude-fleet/shell.conf` holds the knobs
+machine; `prefix E` (or `g` / `Space`) the keyboard onto the list; `prefix z` /
+`[` zoom / scroll the session; `prefix ?` every key; F9 zooms the right pane (this
+computer's, never sent on). These are the ONLY person's keys in the fleet (issue
+#1714): a node's fleet session binds none, draws no bar of its own (one static
+`请用 fleet` hint a direct attach sees) and opens no popup. `~/.config/claude-fleet/shell.conf` holds the knobs
 (`FLEET_SHELL_PREFIX`, `FLEET_NODE_ALIASES`, `FLEET_SHELL_WIDTH`, …).
 `bin/fleet-shell-selftest.sh` is the check: a fake hub, a fake `fleet connect`,
 an ssh shim, an isolated socket. The bar's machine chip reads the sessions

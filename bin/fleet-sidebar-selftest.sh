@@ -352,18 +352,13 @@ try:
     tm('set-option', '-p', '-t', hp, '@dash', '1')
 
     # Load the shipped sidebar wiring, without unrelated status commands/daemons.
-    shipped = (bin_dir.parent / 'conf/tmux-attention.conf').read_text()
-    # The status-bar tap is bound twice, root and fleet-sidebar (issue #896: the
-    # sidebar's `Any` would otherwise swallow it). Multi-line blocks, so they are
-    # compared here instead of loaded: the two bodies must never drift apart.
-    def status_block(head):
-        start = shipped.index(head)
-        return shipped[start + len(head):shipped.index('\n}\n', start)]
-    # No difference allowed: the ☰ is one switch whoever has the keyboard (issue
-    # #1616 — the ⌂ it replaced said --nav here, #899).
-    check(status_block('bind -n MouseDown1Status ') ==
-          status_block('bind -T fleet-sidebar MouseDown1Status '),
-          'the fleet-sidebar status-bar tap drifted from the root one')
+    # The list's keys and hooks are the CLIENT's (conf/tmux-shell.conf, rendered as
+    # fleet-shell.sh renders it) since issue #1714 — a node binds none; each
+    # window's header (pane-border-format) and the baseline are still the node's.
+    shell_conf = ((bin_dir.parent / 'conf/tmux-shell.conf').read_text()
+                  .replace('__BIN__', str(bin_dir)).replace('__PREFIX__', 'C-b'))
+    node_conf = (bin_dir.parent / 'conf/tmux-attention.conf').read_text()
+    shipped = shell_conf
     # Movement keys never fork (issue #1033): each goes straight to the view at
     # `{top-left}` behind the same @sidebar gate as `Any`, and all six bodies are
     # one body with the key swapped — so a fix to one cannot miss the others.
@@ -383,21 +378,17 @@ try:
     swc_skip = swc.split("if -F '", 1)[1].split("'", 1)[0] if "if -F '" in swc else ''
     check(swc_skip.startswith('#{?') and 'fleet-sidebar.sh sync' in swc,
           'session-window-changed sync lost its already-there fast path')
-    selected = [line for line in shipped.splitlines() if not line.startswith('#') and
-                'MouseDown1Status' not in line and
+    selected = [line for line in shell_conf.splitlines() if not line.startswith('#') and
                 ('fleet-sidebar' in line or 'after-select-pane[71]' in line or 'client-detached' in line or
                  'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or
                  line.startswith('bind -n F9 ') or line.startswith('bind -n C-M-S-F12 ') or
-                 line.startswith('bind z ') or line.startswith('bind [ ') or
+                 line.startswith('bind z ') or line.startswith('bind [ '))]
+    selected += [line for line in node_conf.splitlines() if
                  line.startswith('set -g pane-border') or line.startswith('set -g default-terminal') or
-                 line.startswith('set -g assume-paste-time ') or
-                 line == 'set -g mouse on')]
+                 line.startswith('set -g assume-paste-time ') or line.startswith('set -g @pct_sign ') or
+                 line == 'set -g mouse on']
     fixture = work / 'sidebar.conf'
-    # `run-shell "sh …hub-zoom.sh"` (the F9 binds): production /bin/sh is bash in
-    # POSIX mode, but CI's is dash, which has no `set -o pipefail` and aborts the
-    # script — drive it the way hub-zoom-home-selftest.sh does (issue #414).
-    fixture.write_text('\n'.join(selected).replace('~/.claude/fleet', str(bin_dir.parent))
-                       .replace('run-shell "sh ', 'run-shell "bash --posix ') + '\n')
+    fixture.write_text('\n'.join(selected) + '\n')
     tm('source-file', str(fixture))
     # Enter / Escape fork nothing either (issue #1530): on an empty line they hand
     # the keyboard back and send the key straight to `{top-left}`, as ↑↓ do — the
@@ -1541,8 +1532,8 @@ try:
     check(hub in windows(), 'the menu reap disposed of the hub')
 
     # A no-repo session in $HOME (issue #996) carries `@norepo 1` and none of
-    # @issue / @raw / @worktree — it still gets the view, and prefix e hides and
-    # brings it back there. A plain window with none of the four marks: none.
+    # @issue / @raw / @worktree — it still gets the view, and the toggle (prefix e's
+    # verb until issue #1714 took the key off the node) hides and brings it back. A plain window with none of the four marks: none.
     before = set(windows())
     # --origin hub: this harness has $TMUX but no pane, which the spawn refuses
     # unstated (issue #1355).
@@ -1563,11 +1554,11 @@ try:
             for pane in tm('list-panes', '-t', home, '-F',
                            '#{pane_id} left=#{pane_left} width=#{pane_width} sidebar=#{@sidebar}').splitlines()))
     wait_for(lambda: view_on(home) == [side], 'a no-repo ($HOME) session got no task bar')
-    os.write(terminal, b'\x02e')
-    wait_for(lambda: not views(), 'prefix e did not hide the task bar in a no-repo session')
-    os.write(terminal, b'\x02e')
+    call('toggle')
+    wait_for(lambda: not views(), 'toggle did not hide the task bar in a no-repo session')
+    call('toggle')
     wait_for(lambda: bool(view_on(home)),
-             'prefix e did not bring the task bar back in a no-repo session')
+             'toggle did not bring the task bar back in a no-repo session')
     side = view_on(home)[0]
     plain = tm('new-window', '-d', '-P', '-F', '#{window_id}', '-n', 'plain', 'sleep 600')
     tm('select-window', '-t', plain)
@@ -1579,13 +1570,10 @@ try:
     wait_for(lambda: bool(view_on(w1)), 'the view did not return after the no-repo leg')
     side = view_on(w1)[0]
 
-    # Hide is prefix e — from the sidebar's own key table too — never a click and
-    # never a letter.
-    os.write(terminal, b'\x02E')
-    wait_for(navigation, 'prefix E before hiding did not enter sidebar navigation')
-    os.write(terminal, b'\x02e')
-    wait_for(lambda: not views(), 'prefix e while navigating left a view')
-    check(not navigation(), 'hiding retained sidebar keyboard focus')
+    # Hide is the toggle verb — never a click and never a letter (no key is bound
+    # to it since issue #1714: the client's list is not optional).
+    call('toggle')
+    wait_for(lambda: not views(), 'toggle left a view')
     check('FLEET_SIDEBAR=0' in conf.read_text(), 'collapse was not saved')
     # A hook sync that loaded the conf BEFORE the hide (enabled=1 on its argv)
     # and got the lock AFTER it must not recreate the view (issue #826).
@@ -1649,26 +1637,17 @@ try:
     wait_for(lambda: side_width() != '40', 'clearing the manual width did not return the view to auto_width')
     check(30 <= int(side_width()) <= 40, 'auto_width left its 30..window/4 band: %s' % side_width())
 
-    # F9 is three-state on the list (issue #1533 — the full-screen hub retired):
-    # the first press hands the list the keyboard and stays in the task; the
-    # second, bound in the fleet-sidebar table, hides it (prefix e's off); the
-    # third shows it again. The plan window is never visited.
+    # F9 zooms the SESSION pane on the right — the client's key (issue #1714; the
+    # node's three-state F9 went with its list): first press zooms the worker, the
+    # second unzooms and the view is back, the keyboard never moves to the list.
     check(not navigation(), 'fixture should start with the worker holding input')
     os.write(terminal, b'\x1b[20~')  # F9
-    wait_for(navigation, 'first F9 did not put the keyboard on the task bar')
-    check(tm('display-message', '-p', '#{window_id}') == w2, 'first F9 left the task: %s | views %s | %s' % (
-        tm('list-windows', '-t', 'fleet-test', '-F', '#{window_id}:#{window_name}:#{window_active}'),
-        views(), tm('list-clients', '-F', '#{client_session} #{client_key_table}')))
-    os.write(terminal, b'\x1b[20~')  # F9 again, now in the fleet-sidebar table
-    wait_for(lambda: not views() and not navigation(), 'second F9 did not hide the list')
-    check('FLEET_SIDEBAR=0' in conf.read_text(), 'second F9 hid the list without switching it off')
-    check(tm('display-message', '-p', '#{window_id}') == w2, 'second F9 left the task')
-    os.write(terminal, b'\x1b[20~')  # F9 a third time: back on, focused
-    wait_for(lambda: view_on(w2) and navigation(), 'third F9 did not show and focus the list')
-    check('FLEET_SIDEBAR=1' in conf.read_text(), 'third F9 did not switch the list back on')
-    check(tm('display-message', '-p', '#{window_id}') == w2, 'third F9 left the task')
-    os.write(terminal, b'\x1b')      # Escape: the worker takes the keyboard back
-    wait_for(lambda: not navigation(), 'Escape did not hand the keyboard back')
+    wait_for(lambda: zoomed(w2) == '1', 'F9 did not zoom the session')
+    check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'F9 zoomed the list, not the session')
+    os.write(terminal, b'\x1b[20~')  # F9 again
+    wait_for(lambda: zoomed(w2) == '0', 'F9 again did not unzoom')
+    wait_for(lambda: bool(view_on(w2)), 'the list did not come back after the F9 unzoom')
+    check(not navigation(), 'F9 put the keyboard on the list')
     foreign = tm('new-session', '-d', '-s', 'adhoc', '-P', '-F', '#{window_id}', 'sleep 600')
     tm('set-option', '-w', '-t', foreign, '@issue', '99')
     check(foreign not in [r[0] for r in row_data()], 'another session leaked into sidebar')

@@ -227,7 +227,7 @@ live jobs today:
 
 - **The needs tally.** It counts windows whose `@claude_state == needs` per
   session and publishes `@attn_needs`; the status-left renders it as the red
-  **`● N`** badge (see [`conf/tmux-attention.conf`](../conf/tmux-attention.conf)).
+  **`● N`** badge (a node's bar until issue #1714; the client's task list reads it now).
   It also still publishes `@attn_other_windows` (needy windows in OTHER fleets),
   but nothing renders it: one fleet per login retired the orange other-fleet dot
   and its jump (#980); the loop is left as is, and with one fleet it reads 0.

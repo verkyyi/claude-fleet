@@ -1,7 +1,8 @@
 #!/bin/bash
 # usage-modal.sh — the consolidated Claude usage + subscription-account modal
 # (issue #289; merges the old usage-popup.sh + account-pick.sh into ONE surface).
-# Opened by `prefix u` (conf/tmux-attention.conf). Its old door, a click on the
+# Opened by `prefix u` until issue #1714 took the person's keys off the node (the
+# client binds none for it). Its older door, a click on the
 # footer's 5h/7d usage stat, went with the stat (issue #1100); there is no ◉
 # account chip either (dropped: see the "no fixed account" note below). It shows:
 #   • usage DETAIL as the header — the local 5h/7d proxy + the official
