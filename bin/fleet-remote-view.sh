@@ -223,7 +223,7 @@ rv_hide_borders() {
 rv_legacy_undo() {
   local s="$1" saved o v p w h
   for h in client-attached client-detached; do
-    T show-hooks -g 2>/dev/null | grep -q "^$h\[77\]" && T set-hook -gu "$h[77]" 2>/dev/null
+    T show-hooks -g 2>/dev/null | grep -q "^$h\[77\]" && T set-hook -gu "${h}[77]" 2>/dev/null
     T show-hooks -t "=$s:" 2>/dev/null | grep -q "^$h" || continue
     T show-hooks -t "=$s:" 2>/dev/null | grep "^$h\[" | grep -qv "^$h\[77\]" && continue   # someone else's: leave it
     T set-hook -u -t "=$s:" "$h" 2>/dev/null

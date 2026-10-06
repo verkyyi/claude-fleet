@@ -249,6 +249,7 @@ FLEET_SESSION_END_REASON           handoff: why the SessionEnd hook fired (set b
 FLEET_SIDEBAR_CURRENT              handoff: the window id the sidebar is rendering for
 FLEET_SIDEBAR_CURRENT_ROW          handoff: the row key that window stands for (a proxy's wid:…, #1697)
 FLEET_SIDEBAR_TEXT                 handoff: the text the sidebar input line asked for, to fleet-sidebar-remote.sh (#1620)
+FLEET_SIDEBAR_NODE                 seam: 1 lets fleet-sidebar.sh draw the list in a node fleet session — the drawer's selftests drive it on a fleet socket; the list is the client's only (#1713)
 FLEET_SKIP_GLOBAL_CONF             seam: fleet-lib skips the install fleet.conf (tests / isolated tools)
 FLEET_SMOKE_ONBOARD_SECS           knob: internal pacing/limit, safe in-code default (fleet-login-smoke.sh)
 FLEET_SMOKE_POLL_SECS              knob: internal pacing/limit, safe in-code default (fleet-login-smoke.sh)
