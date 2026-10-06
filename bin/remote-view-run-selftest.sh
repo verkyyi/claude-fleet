@@ -87,7 +87,7 @@ esac
 EOF
 chmod +x "$WORK/ssh"
 export FLEET_REMOTE_SSH_CMD="$WORK/ssh" FAKE_LOG="$WORK/ssh.log" FAKE_DIR="$WORK"
-export FLEET_REMOTE_VIA_HUB=0 FLEET_REMOTE_GUARD_SECS=1
+export FLEET_REMOTE_VIA_HUB=0
 RV="$BIN/fleet-remote-view.sh"
 WID="00000000-0000-0000-0000-000000000000/issue-1"
 bindsock() { python3 -c 'import socket, sys
@@ -143,7 +143,7 @@ rm -f "$WORK/hang.pid"
 if command -v tmux >/dev/null 2>&1; then
   rm -f "$WORK/hang.pid"
   tmux -L "$TSOCK" -f /dev/null new-session -d -s e -x 80 -y 20 \
-    "FLEET_REMOTE_SSH_CMD=$WORK/ssh FAKE_LOG=$WORK/ssh.log FAKE_DIR=$WORK FAKE_MODE=hang HOME=$HOME TMPDIR=$TMPDIR FLEET_CONF_DIR=$FLEET_CONF_DIR FLEET_REMOTE_VIA_HUB=0 FLEET_REMOTE_GUARD_SECS=1 exec bash $RV run m9 $WID"
+    "FLEET_REMOTE_SSH_CMD=$WORK/ssh FAKE_LOG=$WORK/ssh.log FAKE_DIR=$WORK FAKE_MODE=hang HOME=$HOME TMPDIR=$TMPDIR FLEET_CONF_DIR=$FLEET_CONF_DIR FLEET_REMOTE_VIA_HUB=0 exec bash $RV run m9 $WID"
   tmux -L "$TSOCK" new-window -d -t e: 'sleep 600'   # the server outlives the pane
   for _ in $(seq 1 50); do [ -s "$WORK/hang.pid" ] && break; sleep 0.1; done
   hang=$(cat "$WORK/hang.pid" 2>/dev/null)

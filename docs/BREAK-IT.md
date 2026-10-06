@@ -29,6 +29,6 @@
 | 右侧嵌套连接断开（断网、合盖、对端重启） | 右侧窗口关掉，回不到那台机器 | 右侧停在「回车立即重连」，Ctrl+C 也不关窗口（#1785） | `nested-drop` |
 | 客户端服务器被关（`:kill-server`、删光窗口） | 客户端没了 | 再敲一次 `fleet` 就原样回来；机器上的会话不受影响 | `client-kill-server` |
 | `~/.ssh/config` 里给这台机器写了固定 `RemoteForward`（如 open-url.sh 的 2226） | 同一台机器的第二条连接再要这个端口被拒，骑共享连接的 attach 直接失败：右侧空白、有的行切不过去，`run` 循环几秒一次重连，最后对方 sshd 开始拒连 | 骑共享连接的会话一律 `ClearAllForwardings=yes`，自己开的 master 拿不到转发也照常连（`ExitOnForwardFailure=no`）；断线提示写人话（#1775） | `static-forward` |
-| 代理窗口被关（关窗、`kill-server`），而里面的 attach 永不返回 | `run` 循环和它的 ssh 成了孤儿，TERM 杀不掉，远端 view session 越积越多、把别人在看的窗口挤到最小 | attach 放后台 `wait`，TERM 立即走 cleanup；窗格没了几秒内自退；首次连接先等 warm 连接，不再私开一条（#1704） | `proxy-orphan` |
+| 代理窗口被关（关窗、`kill-server`），而里面的 attach 永不返回 | `run` 循环和它的 ssh 成了孤儿，TERM 杀不掉，远端 view session 越积越多、把别人在看的窗口挤到最小 | attach 放后台 `wait`，窗格/服务器关掉的 HUP 和 TERM 立即走 cleanup；首次连接先等 warm 连接，不再私开一条（#1704） | `proxy-orphan` |
 | 入口不可达 | 客户端打不开、看不出原因 | 客户端照常打开（侧栏 + 右侧），状态栏左边橙色「入口连不上」（#1779） | `hub-unreachable` |
 | 入口数据盘满 | 入口写不进，租约、会话表都停 | 在入口仓库修 | 登记：monorepo #11641 |

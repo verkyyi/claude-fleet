@@ -435,11 +435,11 @@ run)
   # `open` retargets through the one, in the far end's view session named by the other.
   [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$ctl" \; \
                              set-window-option -t "${TMUX_PANE:-}" @remote_view "$view" 2>/dev/null
-  side='' upg='' chn='' grd='' att=''
-  stop_bg() {   # the sidecar, the upgrader, the channel, the guard, and whatever they are waiting in
+  side='' upg='' chn='' att=''
+  stop_bg() {   # the sidecar, the upgrader, the channel, and whatever they are waiting in
     local p
-    for p in $side $upg $chn $grd; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done
-    side='' upg='' chn='' grd=''
+    for p in $side $upg $chn; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done
+    side='' upg='' chn=''
     [ -n "${TMUX:-}" ] && tmux set-window-option -u -t "${TMUX_PANE:-}" @remote_chan 2>/dev/null
     rm -f "$ctl.cmd" "$ctl.ack"
   }
@@ -453,18 +453,18 @@ run)
     rm -f "$ctl" "$ctl.route" "$ctl.upgrade" "$ctl.ssherr"
     [ "$use" = "$ctl" ] || rm -f "$use.upgrade"
   }
-  # pane_gone — this loop's pane (or its whole tmux server) is no more (issue
-  # #1704): a kill-server or a closed window left `run` + its ssh holding a view
-  # session nobody looks at — attached, so destroy-unattached never took it.
+  # pane_gone — before a reconnect: this loop's pane (or its whole tmux server)
+  # is no more (issue #1704). A closed pane or a kill-server HUPs the loop, and
+  # with the attach in the background that HUP reaches the trap at once; this
+  # is the belt for a loop that slept through it. Only tmux's own "no such pane"
+  # (or its socket gone) counts — a busy server that does not answer is not gone.
   pane_gone() {
+    local err
     [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 1
-    [ "$(tmux display-message -p -t "$TMUX_PANE" '#{pane_id}' 2>/dev/null)" != "$TMUX_PANE" ]
-  }
-  # the guard: every FLEET_REMOTE_GUARD_SECS (5), a gone pane ends the loop
-  guard() {
-    while sleep "${FLEET_REMOTE_GUARD_SECS:-5}"; do
-      pane_gone && { kill -TERM $$ 2>/dev/null; return 0; }
-    done
+    [ -S "${TMUX%%,*}" ] || return 0
+    err=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_id}' 2>&1 >/dev/null)
+    case "$err" in *"can't find pane"*|*"no server running"*) return 0 ;; esac
+    return 1
   }
   use="$ctl"   # the master this round rides: ours, or the shell's warm one (#1631)
   trap 'cleanup; exit 0' INT TERM HUP
@@ -655,7 +655,6 @@ EOF_PEER
     sidecar & side=$!
     upgrader & upg=$!
     chan & chn=$!
-    guard & grd=$!
     started=$(date +%s)
     # In the BACKGROUND, then `wait` (issue #1704): bash runs a trap only once the
     # foreground command returns, and an attach never returns — a TERM waited

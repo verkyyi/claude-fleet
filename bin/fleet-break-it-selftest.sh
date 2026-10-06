@@ -602,7 +602,7 @@ s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$WORK/rv/tmp/warm/m9.so
 }
 RVWID=00000000-0000-0000-0000-000000000000/issue-1
 rv_env() {
-  printf 'HOME=%s TMPDIR=%s FLEET_CONF_DIR=%s FLEET_REMOTE_SSH_CMD=%s RV_LOG=%s RV_DIR=%s FLEET_REMOTE_VIA_HUB=0 FLEET_REMOTE_GUARD_SECS=1' \
+  printf 'HOME=%s TMPDIR=%s FLEET_CONF_DIR=%s FLEET_REMOTE_SSH_CMD=%s RV_LOG=%s RV_DIR=%s FLEET_REMOTE_VIA_HUB=0' \
     "$WORK/rv" "$WORK/rv/tmp" "$WORK/rv/conf" "$WORK/rv/ssh" "$WORK/rv/ssh.log" "$WORK/rv"
 }
 drill_static_forward() {

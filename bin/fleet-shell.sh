@@ -458,7 +458,7 @@ ssh)
   # refused the second time, and a refused mux client never attaches. The `-O
   # forward -L` of fleet-open's page bridge is an `-O`, untouched.
   if [ "$master" != 1 ]; then
-    mux=0; for a in "$@"; do [ "$a" = -S ] && mux=1; done
+    mux=0; for a in "$@"; do case "$a" in -S) mux=1 ;; ClearAllForwardings=*) mux=2; break ;; esac; done
     [ "$mux" = 1 ] && [ -z "$op" ] && exec ssh -o ClearAllForwardings=yes "$@"
     exec ssh "$@"
   fi
