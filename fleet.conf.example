@@ -155,6 +155,19 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # tick over https). Not seen ≠ refused: nothing moves, nothing alarms. GLOBAL.
 # @label=Install-sync fetch timeout @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_INSTALL_SYNC_TIMEOUT=30
+# The node agent follows stable too (issue #1723): once the install IS stable, the
+# same tick upgrades this machine's ccquota agent to prod-<stable short> when it
+# is behind — the hub's /v1/node/dist binary first, a local build else; one login
+# at a time, confirmed on the hub, rolled back to its .prev when it does not come
+# up. A LaunchDaemon login needs sudo -n, so the admin login's tick does those.
+# A failure sends ONE FLEET_NOTIFY_CMD per (login, stable). 0 = never touch the
+# agent from this login's tick (fleet-node-upgrade.sh by hand still works). GLOBAL.
+# @label=Upgrade the node agent with stable @group=janitor @tier=internal @scope=global @edit=bool
+#FLEET_NODE_FOLLOW=1
+# After a failed agent upgrade, the same stable is not retried for this long
+# (a stable move retries at once). GLOBAL.
+# @label=Node agent retry after failure @group=janitor @tier=internal @scope=global @edit=int @unit=seconds
+#FLEET_NODE_FOLLOW_RETRY_SECS=21600
 # A /loop session parked between rounds (`looping`, waiting on nothing but its
 # Loop) defers the tick only while its next round — a ScheduleWakeup or a
 # CronCreate job — may start within this many seconds (issue #1690); a cron

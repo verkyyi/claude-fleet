@@ -416,3 +416,6 @@ FLEET_PEER_CERT_CONNECT_SECS       seam: connect bound for the peer-cert request
 FLEET_WORKER_RECORDS               escape hatch: 0 = never hand a reaped worker's evidence/history to the hub nor read others' back (fleet-worker-records.sh, #1609)
 FLEET_WORKER_RECORDS_IMG_MAX       seam: image size in bytes above which push shrinks it with sips (default 614400) (fleet-worker-records.sh, #1609)
 FLEET_PEER_KEY                     path: the peer key the hub signs (default ~/.ssh/fleet-peer) (fleet-peer-cert.sh, #1626)
+FLEET_INSTALL_NODE_UPGRADE         seam: the fleet-node-upgrade.sh an install-sync tick drives (default $ROOT/bin/…) (fleet-install-sync.sh, #1723)
+FLEET_INSTALL_NODE_SUDO_CHECK      seam: the command that says sudo -n works, so this login upgrades LaunchDaemon logins (default `sudo -n true`) (fleet-install-sync.sh, #1723)
+FLEET_NODE_UPGRADE_DIST_CMD        seam: stands in for the --dist curl — `<cmd> <os-arch> <body> <headers>` prints the HTTP code (fleet-node-upgrade.sh, #1723)
