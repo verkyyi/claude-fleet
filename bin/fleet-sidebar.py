@@ -926,7 +926,10 @@ def place_answer(ask, value):
         if value == "at":
             return Ask("place-reap-at", tr("sidebar_place_reap_at_ask"), plan=plan,
                        hint=tr("sidebar_place_reap_bad")), "", False
-        plan["reap"] = value
+        # The kind's default is not sent (the opening machine stamps it the same),
+        # so a hub from before #1902 sees exactly the request it always did.
+        dflt = "merged" if plan["what"] != "scratch" else "done:2h"
+        plan["reap"] = "" if value == dflt else value
         return None, "", True
     if ask.kind == "place-reap-at":
         text = value.strip()
