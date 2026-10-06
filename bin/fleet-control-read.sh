@@ -145,6 +145,24 @@ case "$mode" in
     # gets on THIS machine now, on this machine's fleet version (@agent_ver,
     # `renew` = 待换新, #1895)? Judged here, where the expected file lives, so the
     # other machines' sidebars (the client's included) draw 配置旧 off the hub.
+    # Column 17 (issue #1921): `title=<issue title>` — the bound issue's title off
+    # THIS machine's issue cache (fleets/<repo slug>/issues, `milestone\t#num\t
+    # assignee\ttitle`, what fleet-gh.sh's cache_issue reads), joined on (repo,
+    # issue) — never a bare number. The other machines' sidebars and the session's
+    # top bar (#1904) show it instead of the window name's slug; empty for a
+    # scratch, a no-repo window or an issue the cache does not hold (the reader
+    # falls back to the name). Tabs inside a title become spaces: it is a column.
+    ttl=$'\n'; drepo=''
+    while IFS= read -r _r; do
+      [ -n "$_r" ] || continue
+      [ -n "$drepo" ] || drepo=$_r
+      _f="$FLEET_C/fleets/$(fleet_slug "$_r")/issues"
+      [ -s "$_f" ] || continue
+      ttl+=$(FR="$_r" awk -F'\t' '$2 ~ /^#[0-9]+$/ {
+          t = $0; sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t); gsub(/[\t\r]/, " ", t)
+          print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
+    done < <(fleet_repos "$sess" 2>/dev/null)
+    fleet_multirepo "$sess" && drepo=''
     cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load
     while IFS= read -r row; do
@@ -178,9 +196,16 @@ case "$mode" in
           rest=${rest%$'\t'*}$'\t'$fi ;;
         esac
       fi
+      t=''
+      case "$c2" in ''|*[!0-9]*) ;; *)
+        rr=$(printf '%s' "$rest" | cut -f5); [ -n "$rr" ] || rr=$drepo   # column 9
+        case "$ttl" in *$'\n'"$rr"$'\t'"$c2"$'\t'*)
+          t=${ttl#*$'\n'"$rr"$'\t'"$c2"$'\t'}; t=${t%%$'\n'*} ;;
+        esac ;;
+      esac
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\n' "$row" "$b" "$born" "$FCFG_STATE"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t"
     done <<<"$rows"
     ;;
   ready)

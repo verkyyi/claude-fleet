@@ -1906,9 +1906,11 @@ def collect_rows(proc):
     return [row_fields(line) for line in text.split("\n") if line.count(US) >= 4]
 
 
-# wid state glyph name tree badge depth detail node issue pr ctx cfg (issues
-# #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `ok`, absent when unknown)
-ROW_FIELDS = 13
+# wid state glyph name tree badge depth detail node issue pr ctx cfg title (issues
+# #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `ok`, absent when
+# unknown; #1921 — title is the session's issue title, absent when none: a reader
+# falls back to name)
+ROW_FIELDS = 14
 
 
 def row_fields(line):
