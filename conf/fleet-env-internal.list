@@ -342,6 +342,8 @@ FLEET_WEBHOOK_RESCAN               knob: internal pacing/limit, safe in-code def
 FLEET_WEBHOOK_STATE_DIR            path: state/log location override (fleet-webhook.sh)
 FLEET_WEBHOOK_WAKE_SLACK           knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
 FLEET_WEBHOOK_WAKE_TICK            knob: internal pacing/limit, safe in-code default (fleet-webhook.sh)
+FLEET_WHATS_NEW                    knob: 0 turns the next-turn 「fleet 有什么变了」 note off (fleet-whats-new.sh --hook)
+FLEET_WHATS_NEW_REPO               seam: the git repo fleet-whats-new.sh reads history from, instead of the install root
 FLEET_WINDOW_REAP                  knob: 0 turns the close-time orphan-tree sweep off (fleet-window-reap.sh; read from the tmux server env, not a conf)
 FLEET_WINDOW_REAP_EXEMPT_RE        knob: extra argv ERE the close-time sweep never reaps (fleet_orphan_trees)
 FLEET_WINDOW_REAP_FG               handoff: fleet-window-reap.sh --hook re-execs itself detached with this set
