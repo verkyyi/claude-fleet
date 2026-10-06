@@ -1,0 +1,235 @@
+#!/bin/bash
+# The list's FIRST tap and its cursor (issue #1756), on a private tmux socket with
+# the client's binds (conf/tmux-shell.conf) and a real terminal (a pty) sending
+# SGR mouse bytes, so every layer between the click and fleet-sidebar.py runs.
+#
+#   A  the session on the right holds the keyboard — a shell asking for every
+#      mouse motion (1003, as Claude does) or a nested tmux client — and one tap
+#      on another row switches to it: the first tap, not the second.
+#   B  the window was switched from the session side (prefix q, the bar, a
+#      spawn) a moment ago, before the list's 1s read caught up: one tap on the
+#      row just left still switches back. Before #1756 it read as the SECOND tap
+#      on the row the list still thought current (the menu), or fell in the
+#      hidden branch and was dropped.
+#   C  the keyboard on the list puts the terminal cursor on its input line —
+#      visible, on the last row, where typing goes; the keyboard back on the
+#      session takes it away.
+set -uo pipefail
+export FLEET_SIDEBAR_NODE=1   # the drawer's selftest seam (fleet-sidebar.sh)
+BIN="$(cd "$(dirname "$0")" && pwd)"
+command -v tmux >/dev/null 2>&1 || { echo 'selftest SKIP: tmux missing'; exit 0; }
+python3 - "$BIN" <<'PY'
+import fcntl
+import os
+import pty
+import shlex
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import threading
+import time
+from pathlib import Path
+
+real_bin = Path(sys.argv[1])
+real_tmux = shutil.which('tmux')
+# Sockets live under a short dir: AF_UNIX paths stop at 104 bytes.
+work = Path(tempfile.mkdtemp(prefix='sbfc.', dir='/tmp'))
+root = work / 'root'
+bin_dir = root / 'bin'
+bin_dir.mkdir(parents=True)
+for source in real_bin.iterdir():
+    (bin_dir / source.name).symlink_to(source)
+(root / 'conf').symlink_to(real_bin.parent / 'conf')
+(root / 'fleet.conf').write_text('FLEET_GLOBAL_MAX_SESSIONS=0\n')
+sock = str(work / 'ft')
+env = dict(os.environ, TMPDIR=str(work), FLEET_CONF_DIR=str(work / 'conf'),
+           TERM='xterm-256color', FLEET_UI_LANG='zh')
+env.pop('TMUX', None)
+env.pop('TMUX_PANE', None)
+shim = work / 'path'
+shim.mkdir()
+(shim / 'tmux').write_text('#!/bin/sh\nexec %s -S %s "$@"\n' % (shlex.quote(real_tmux), shlex.quote(sock)))
+(shim / 'tmux').chmod(0o755)
+env['PATH'] = str(shim) + os.pathsep + env['PATH']
+conf = work / 'conf/fleets/ft/conf'
+conf.parent.mkdir(parents=True)
+conf.write_text('FLEET_SIDEBAR=1\n')
+inner_socks = []
+client = terminal = None
+checks = 0
+
+
+def tm(*args):
+    return subprocess.run([real_tmux, '-S', sock, *args], env=env, capture_output=True,
+                          text=True, timeout=15).stdout.rstrip('\n')
+
+
+def check(condition, message):
+    global checks
+    if not condition:
+        raise AssertionError(message)
+    checks += 1
+
+
+def wait(predicate, secs=6):
+    end = time.monotonic() + secs
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(.05)
+    return False
+
+
+def cleanup(*_):
+    if client is not None:
+        client.kill()
+    for s in [sock] + inner_socks:
+        subprocess.run([real_tmux, '-S', s, 'kill-server'], env=env,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    shutil.rmtree(work, ignore_errors=True)
+
+
+for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(sig, lambda *_: sys.exit(130))
+
+
+def right_cmd(kind, n):
+    if kind == 'tmux':
+        isock = str(work / ('in%d' % n))
+        inner_socks.append(isock)
+        (work / 'i.conf').write_text('set -g mouse on\nset -g focus-events on\nset -g status off\n')
+        return "tmux -S %s -f %s new -A -s in 'cat -v'" % (isock, work / 'i.conf')
+    # Claude asks for every motion (1003) in SGR: the client's terminal follows it.
+    return "sh -c 'printf \"\\033[?1003h\\033[?1006h\"; exec cat -v'"
+
+
+def views():
+    return [line.split() for line in tm('list-panes', '-a', '-F', '#{pane_id} #{window_id} #{@sidebar}').splitlines()
+            if line.endswith(' 1')]
+
+
+def current():
+    return tm('display-message', '-p', '#{window_id}')
+
+
+def table():
+    return tm('list-clients', '-F', '#{client_key_table}')
+
+
+def cell(pane, row, column=2):
+    x = int(tm('display-message', '-p', '-t', pane, '#{pane_left}')) + column + 1
+    y = int(tm('display-message', '-p', '-t', pane, '#{pane_top}')) + row + 1
+    return x, y
+
+
+def tap(x, y, settle=.6):
+    # Apart from tmux's double-click interval, unless the case says otherwise.
+    time.sleep(settle)
+    os.write(terminal, ('\x1b[<0;%d;%dM' % (x, y)).encode())
+    time.sleep(.05)
+    os.write(terminal, ('\x1b[<0;%d;%dm' % (x, y)).encode())
+
+
+def row_of(side, name):
+    lines = tm('capture-pane', '-p', '-t', side).splitlines()
+    return next(i for i, line in enumerate(lines) if line.rstrip().endswith(name))
+
+
+try:
+    for kind in ('shell', 'tmux'):
+        tm('-f', '/dev/null', 'new-session', '-d', '-s', 'ft', '-x', '160', '-y', '30',
+           '-n', 'one', right_cmd(kind, 1))
+        env['TMUX'] = sock + ',1,0'
+        tm('set-option', '-g', 'default-shell', '/bin/sh')
+        w1 = current()
+        tm('set-option', '-w', '-t', w1, '@issue', '1')
+        w2 = tm('new-window', '-d', '-P', '-F', '#{window_id}', '-n', 'two', right_cmd(kind, 2))
+        tm('set-option', '-w', '-t', w2, '@issue', '2')
+        # The client's binds and hooks as fleet-shell.sh renders them, minus the bar.
+        shell_conf = ((real_bin.parent / 'conf/tmux-shell.conf').read_text()
+                      .replace('__BIN__', str(bin_dir)).replace('__PREFIX__', 'C-b'))
+        lines = [l for l in shell_conf.splitlines()
+                 if not l.startswith('#') and not l.startswith('set -g status')]
+        (work / 's.conf').write_text('\n'.join(lines) + '\n')
+        tm('source-file', str(work / 's.conf'))
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 160, 0, 0))
+        client_env = {k: v for k, v in env.items() if k != 'TMUX'}
+        client = subprocess.Popen([real_tmux, '-S', sock, 'attach-session', '-t', 'ft'],
+                                  env=client_env, stdin=slave, stdout=slave, stderr=slave)
+        os.close(slave)
+        terminal = master
+
+        def drain(fd=master):
+            try:
+                while os.read(fd, 65536):
+                    pass
+            except OSError:
+                pass
+        threading.Thread(target=drain, daemon=True).start()
+        check(wait(lambda: bool(views())), kind + ': the attach hook did not draw the list')
+        side = views()[0][0]
+        check(wait(lambda: 'two' in tm('capture-pane', '-p', '-t', side)), kind + ': the list has no rows')
+
+        # A: the keyboard on the session (a tap there), then one tap on the other row.
+        for n in range(2):
+            want = w2 if current() == w1 else w1
+            name = 'two' if want == w2 else 'one'
+            tap(*cell(tm('display-message', '-p', '#{pane_id}'), 5, 10))
+            check(wait(lambda: table() == 'root', 3), kind + ': a tap on the session kept the keyboard on the list')
+            tap(*cell(side, row_of(side, name)))
+            check(wait(lambda: current() == want, 3),
+                  'A %s: the first tap on «%s» did not switch to it (the keyboard was on the session)' % (kind, name))
+        print('A %s: the first tap switches, with the session holding the keyboard' % kind)
+
+        # B: switched from the session side; the list moves along; tap the row
+        # just left before the list's next read.
+        for n in range(3):
+            left = current()
+            other = w2 if left == w1 else w1
+            tm('select-window', '-t', other)
+            check(wait(lambda: any(v[1] == other for v in views()), 3), kind + ': the list did not follow the switch')
+            name = 'one' if left == w1 else 'two'
+            tap(*cell(side, row_of(side, name)), settle=.15)
+            check(wait(lambda: current() == left, 3),
+                  'B %s: one tap on «%s» right after a switch from the session side did not switch back' % (kind, name))
+        print('B %s: the first tap after a switch from the session side switches' % kind)
+
+        # C: the cursor follows the keyboard.
+        def cursor(pane):
+            return tm('display-message', '-p', '-t', pane, '#{cursor_flag} #{cursor_x} #{cursor_y} #{pane_height}').split()
+        check(wait(lambda: table() == 'fleet-sidebar', 3), kind + ': a tap on the list did not give it the keyboard')
+        check(wait(lambda: 'active-pane' in tm('list-clients', '-F', '#{client_flags}'), 3),
+              kind + ': the client was not pinned to the list (its cursor would not show)')
+        check(wait(lambda: (lambda c: c[0] == '1' and c[2] == str(int(c[3]) - 1) and c[1] == '2')(cursor(side)), 3),
+              'C %s: the keyboard on the list did not put the cursor after › on the input line: %r' % (kind, cursor(side)))
+        os.write(terminal, 'ab修'.encode())
+        check(wait(lambda: cursor(side)[1] == '6', 3),
+              'C %s: the cursor did not follow typing (› ab修 → column 6): %r' % (kind, cursor(side)))
+        os.write(terminal, b'\x15')  # ⌃u: the line empty again
+        tap(*cell(tm('display-message', '-p', '#{pane_id}'), 5, 10))
+        check(wait(lambda: table() == 'root', 3), kind + ': a tap on the session kept the keyboard on the list')
+        check(wait(lambda: cursor(side)[0] == '0', 3),
+              'C %s: the keyboard back on the session left the cursor on in the list: %r' % (kind, cursor(side)))
+        check('active-pane' not in tm('list-clients', '-F', '#{client_flags}'),
+              kind + ': the client is still pinned to the list after the session took the keyboard')
+        print('C %s: the cursor is on the input line exactly while the list has the keyboard' % kind)
+
+        client.kill()
+        client.wait()
+        client = None
+        os.close(terminal)
+        terminal = None
+        tm('kill-server')
+        env.pop('TMUX', None)
+    print('sidebar-first-click selftest: %d checks passed' % checks)
+except AssertionError as e:
+    print('FAIL: %s' % e)
+    cleanup()
+    sys.exit(1)
+cleanup()
+PY
