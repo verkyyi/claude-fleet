@@ -51,6 +51,11 @@
 #                           Exit 3 when the worker is not live here.
 #   watch <view>            (runs ON <node>, over the same ssh connection) — the
 #                           fleet-open back channel, below.
+#   health / prune          (ON <node>, issue #1907) — `shared=<n> orphans=<m>`:
+#                           remote clients on the fleet session instead of a view
+#                           session of their own, attaches whose tmux client is
+#                           gone (fleet-doctor's `rview`); `prune` reaps what every
+#                           attach reaps first.
 #   sessions                (runs ON <node>, over the same ssh connection; issue
 #                           #1488) — this machine's sessions in the hub's own
 #                           fleet_sessions shape, one JSON object on stdout, so a
@@ -240,8 +245,124 @@ rv_prune() {
     fleet_is_view_session "$g" || continue
     v=${g#*@view-}
     [ -f "$VIEWS/$v" ] && kill -0 "$(cut -f5 "$VIEWS/$v" 2>/dev/null)" 2>/dev/null && continue
+    # a uniquely-suffixed one (`<id>-x<pid>`, #1907) belongs to <id>'s row
+    case "$v" in *-x*) [ -f "$VIEWS/${v%-x*}" ] && kill -0 "$(cut -f5 "$VIEWS/${v%-x*}" 2>/dev/null)" 2>/dev/null && continue ;; esac
     T kill-session -t "=$g" 2>/dev/null
   done
+  rv_reap_orphans
+}
+# --- orphaned attaches (issue #1907) ---------------------------------------------
+# An attach whose line died without sshd noticing keeps its tmux client process —
+# stuck writing to a tty nobody reads — long after the server dropped that client
+# (m4, 2026-10-06: six of them, one to two days old, none in `list-clients`). Its
+# registry row and spool live on with it. An attach is an ORPHAN when it is older
+# than FLEET_REMOTE_ORPHAN_SECS (60) and no client of any live fleet server is its
+# child (or grandchild: a tmux shim on PATH may not exec).
+#
+# rv_attach_procs — `<pid>\t<age secs>\t<view id or ->\t<shell|view|plain>` for
+# every `fleet-remote-view.sh attach` shell of this login.
+rv_attach_procs() {
+  ps -axo uid=,pid=,etime=,command= 2>/dev/null | awk -v me="$(id -u)" '
+    $1 != me { next }
+    $5 !~ /fleet-remote-view\.sh$/ || $6 != "attach" { next }
+    { e = $3; d = 0; if (index(e, "-")) { split(e, dp, "-"); d = dp[1]; e = dp[2] }
+      n = split(e, t, ":"); secs = 0; for (i = 1; i <= n; i++) secs = secs * 60 + t[i]
+      secs += d * 86400
+      i = 7; kind = "plain"; if ($i == "--shell") { kind = "shell"; i++ }
+      if ($i == "--") i++
+      v = $(i + 1); if (v == "") v = "-"; else if (kind == "plain") kind = "view"
+      printf "%s\t%s\t%s\t%s\n", $2, secs, v, kind }'
+}
+# rv_client_rows — `<client pid> <session>` of every client of every live fleet
+# server here; rc 1 when no fleet server answers (nothing can be judged then).
+rv_client_rows() {
+  local f any=''
+  for f in $(fleet_sockets); do
+    any=1; tmux -L "$(fleet_socket "$f")" list-clients -F '#{client_pid} #{client_session}' 2>/dev/null
+  done
+  [ -n "$any" ]
+}
+# rv_scan — `<kind>\t<pid>\t<view>` per attach: `orphan` (no client is its
+# own), `shared` (a --shell / view attach whose client sits on a fleet session,
+# not a view session — what #1907 saw), `ok`.
+#
+# Only a REGISTERED attach is ever an orphan — one this machine's registry names
+# (its row's pid, or for a row an older version wrote without one, its view id): a
+# plain attach a person runs on the node is never touched, and neither is any
+# attach another FLEET_CONF_DIR (a selftest's sandbox, another install)
+# registered. `shared` needs no row (#1907's own lost it): a --shell / view attach
+# whose client one of THIS machine's fleet servers lists on a fleet session.
+rv_scan() {
+  local clients rows f
+  clients=$(rv_client_rows) || return 0
+  rows=$(for f in "$VIEWS"/*; do [ -f "$f" ] && printf '%s %s\n' "${f##*/}" "$(cut -f5 "$f" 2>/dev/null)"; done)
+  # multi-line values through the environment: BSD awk refuses a newline in -v
+  rv_attach_procs | RV_CLIENTS="$clients" RV_ROWS="$rows" RV_TREE="$(ps -axo pid=,ppid= 2>/dev/null)" \
+    awk -F '\t' -v grace="${FLEET_REMOTE_ORPHAN_SECS:-60}" '
+    BEGIN { clients = ENVIRON["RV_CLIENTS"]; rows = ENVIRON["RV_ROWS"]; tree = ENVIRON["RV_TREE"]
+            n = split(tree, tl, "\n"); for (i = 1; i <= n; i++) { split(tl[i], f, " "); par[f[1]] = f[2] }
+            n = split(clients, cl, "\n"); for (i = 1; i <= n; i++) { split(cl[i], f, " "); if (f[1] != "") sess[f[1]] = f[2] }
+            n = split(rows, rl, "\n"); for (i = 1; i <= n; i++) { split(rl[i], f, " "); if (f[1] == "") continue
+              if (f[2] != "") regpid[f[2]] = 1; else regview[f[1]] = 1 } }
+    { pid = $1; mine = ""; reg = (pid in regpid) || ($3 in regview)
+      for (c in sess) if (par[c] == pid || par[par[c]] == pid) { mine = sess[c]; break }
+      if (mine == "") { if (reg && $2 + 0 >= grace + 0) print "orphan\t" pid "\t" $3; next }
+      if ($4 != "plain" && mine !~ /@view-/) print "shared\t" pid "\t" $3; else print "ok\t" pid "\t" $3 }'
+}
+# rv_kill_attach <pid> — an attach shell and what it runs: TERM, then KILL what is
+# left (a client stuck in a tty write may not take a TERM).
+rv_kill_attach() {
+  local p="$1" kids _
+  kids=$(pgrep -P "$p" 2>/dev/null | tr '\n' ' ')
+  kill -TERM "$p" $kids 2>/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$p" 2>/dev/null || { [ -z "$kids" ] || ! kill -0 $kids 2>/dev/null; } && break
+    sleep 0.1
+  done
+  kill -KILL "$p" $kids 2>/dev/null
+  return 0
+}
+# rv_reap_orphans — kill every orphaned attach and drop the row it wrote (rows a
+# version before the pid column wrote are matched by the view id on its argv).
+rv_reap_orphans() {
+  local k p v rp
+  [ "${FLEET_REMOTE_ORPHAN_REAP:-1}" = 1 ] || return 0
+  while IFS="$(printf '\t')" read -r k p v; do
+    [ "$k" = orphan ] || continue
+    [ "$p" = "$$" ] && continue
+    rv_kill_attach "$p"
+    case "$v" in ''|-|*[!A-Za-z0-9-]*) continue ;; esac
+    [ -f "$VIEWS/$v" ] || continue
+    rp=$(cut -f5 "$VIEWS/$v" 2>/dev/null)
+    [ -z "$rp" ] || [ "$rp" = "$p" ] && rm -rf "${VIEWS:?}/$v" "${VIEWS:?}/$v.d"
+  done <<EOF
+$(rv_scan)
+EOF
+  return 0
+}
+# rv_unregister <view> — drop the row (and spool) only while it is this attach's.
+rv_unregister() {
+  [ "$(cut -f5 "$VIEWS/$1" 2>/dev/null)" = "$$" ] || return 0
+  rm -rf "${VIEWS:?}/$1" "${VIEWS:?}/$1.d" 2>/dev/null
+}
+# rv_takeover <view> <view session> — a reconnect reuses its view id (`run` keeps
+# one per pane); an attach of the last connection may still hold the id's row and
+# session (issue #1907). Same id = same proxy pane, so the old one is over: kill
+# its attach (only a live `fleet-remote-view.sh attach` naming this id), then its
+# session. Never touches another id.
+rv_takeover() {
+  local v="$1" g="$2" p
+  p=$(cut -f5 "$VIEWS/$v" 2>/dev/null)
+  case "$p" in ''|*[!0-9]*) p='' ;; esac
+  if [ -n "$p" ] && [ "$p" != "$$" ] && kill -0 "$p" 2>/dev/null \
+     && ps -o command= -p "$p" 2>/dev/null | grep -q "fleet-remote-view\.sh attach .*$v"; then
+    rv_kill_attach "$p"
+  fi
+  if T has-session -t "=$g" 2>/dev/null; then
+    T detach-client -s "=$g" 2>/dev/null
+    T kill-session -t "=$g" 2>/dev/null
+  fi
+  return 0
 }
 # rv_machine_word <label> — the proxy title's machine (issue #1780): `本机` when
 # the label names this computer (its short hostname, or that name's
@@ -310,7 +431,7 @@ rv_legacy_undo() {
 # paid once per row, not per click (issue #1682).
 RV_SEEN=''
 rv_select() {
-  local wid="${1#wid:}" view="${2:-}" hit loc fid tgt w='' s=''
+  local wid="${1#wid:}" view="${2:-}" hit loc fid tgt g w='' s=''
   hit=$(printf '%s\n' "$RV_SEEN" | awk -v k="$wid" '$1 == k { print $2, $3, $4; exit }')
   if [ -n "$hit" ]; then
     set -- $hit; sock=$(fleet_socket "$2")
@@ -326,7 +447,15 @@ rv_select() {
 $wid $w $s $fid"
   fi
   tgt="$s"
-  case "$view" in ''|*[!A-Za-z0-9-]*) ;; *) T has-session -t "=$s@view-$view" 2>/dev/null && tgt="$s@view-$view" ;; esac
+  # the view's session — or the uniquely-suffixed one an attach made when the
+  # name was still taken (#1907)
+  case "$view" in ''|*[!A-Za-z0-9-]*) ;; *)
+    if T has-session -t "=$s@view-$view" 2>/dev/null; then tgt="$s@view-$view"
+    else
+      g=$(T list-sessions -F '#{session_name}' 2>/dev/null | awk -v p="$s@view-$view-x" 'index($0, p) == 1 { print; exit }')
+      [ -n "$g" ] && tgt="$g"
+    fi ;;
+  esac
   T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; return 3; }
   rv_hide_border "$w"   # a window spawned since the attach (#1549, #1682)
   return 0
@@ -773,12 +902,14 @@ attach)
   # Register this client (issue #1485): `--shell` = a shell client; a <view> id =
   # a proxy view, with the spool its `watch` drains (no id → no spool: a request
   # nobody drains would read as sent).
-  reg=''; g=''
+  reg=''; g=''; gid=''
   if { [ -n "$shell" ] || [ -n "$view" ]; } && tty=$(tty 2>/dev/null); then
     kind=view; [ -n "$shell" ] && kind=shell
     spool="$view"
     [ -n "$view" ] || view="$kind-$(hostname -s 2>/dev/null | tr -c 'A-Za-z0-9-' '-')$$-$RANDOM"
     case "$view" in *[!A-Za-z0-9-]*) note "attach: bad view id $view — not registered" ;; *)
+      # The last connection of this very view id may still hold it (#1907).
+      rv_takeover "$view" "$s@view-$view"
       if mkdir -p "$VIEWS" 2>/dev/null \
          && printf '%s\t%s\t%s\t%s\t%s\n' "$tty" "$s" "$kind" "$(date +%s)" "$$" > "$VIEWS/$view"; then
         reg="$view"
@@ -786,16 +917,23 @@ attach)
         # This client's own VIEW SESSION (issue #1489): grouped onto the fleet's —
         # the same windows, a current window of its own — with the status line and
         # prefix off for good (the person's own tmux has both). It starts on the
-        # worker's window, or for `-` on the fleet session's current one.
+        # worker's window, or for `-` on the fleet session's current one. Never
+        # the fleet session itself (#1907): a name still taken gets a unique
+        # suffix (`select` finds it by prefix), and no session at all = exit 1,
+        # which `run` reconnects.
         g="$s@view-$view"
-        if T new-session -d -t "=$s" -s "$g" 2>/dev/null; then
-          T set-option -t "=$g:" status off \; set-option -t "=$g:" prefix None \; \
-            set-option -t "=$g:" prefix2 None 2>/dev/null
+        gid=$(T new-session -d -P -F '#{session_id}' -t "=$s" -s "$g" 2>/dev/null) \
+          || { g="$s@view-$view-x$$"; gid=$(T new-session -d -P -F '#{session_id}' -t "=$s" -s "$g" 2>/dev/null); } \
+          || gid=''
+        if [ -n "$gid" ]; then
+          T set-option -t "$gid:" status off \; set-option -t "$gid:" prefix None \; \
+            set-option -t "$gid:" prefix2 None 2>/dev/null
           [ -n "$w" ] || w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null)
-          [ -z "$w" ] || T select-window -t "=$g:$w" 2>/dev/null
+          [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
         else
-          note "attach: no view session for $view — sharing the fleet session's current window"
-          g=''
+          note "attach: no view session for $view — not attaching to the fleet session"
+          rv_unregister "$view"
+          exit 1
         fi
         # Before the first frame: the windows' own headers go, one way (#1549).
         rv_hide_borders "$s"
@@ -812,14 +950,17 @@ attach)
   if [ -n "$g" ]; then
     # destroy-unattached is armed IN the attach command: armed on the detached
     # session a moment earlier, any other client's leaving in between would have
-    # destroyed it before this client arrived.
-    T attach-session -t "=$g" \; set-option -t "=$g:" destroy-unattached on; rc=$?
-    T kill-session -t "=$g" 2>/dev/null
+    # destroyed it before this client arrived. By session ID: a session id is
+    # never reused, so a later connection's session of the same name (#1907) is
+    # never this one's to kill.
+    T attach-session -t "$gid" \; set-option -t "$gid:" destroy-unattached on; rc=$?
+    T kill-session -t "$gid" 2>/dev/null
   else
     T attach-session -t "=$s"; rc=$?
   fi
-  # Leaving changes nothing on this machine but the registry (issue #1713).
-  [ -n "$reg" ] && rm -rf "${VIEWS:?}/$reg" "${VIEWS:?}/$reg.d" 2>/dev/null
+  # Leaving changes nothing on this machine but the registry (issue #1713) — and
+  # only this attach's own row: a reconnect may have written its own since.
+  [ -n "$reg" ] && rv_unregister "$reg"
   exit "$rc"
   ;;
 
@@ -879,6 +1020,21 @@ back)
   [ -n "$w" ] || w=$(tmux list-windows -t "$t" -F '#{window_id} #{@remote}' 2>/dev/null \
                      | awk '$2 == "" { print $1; exit }')
   [ -n "$w" ] && tmux select-window -t "$w" 2>/dev/null
+  exit 0
+  ;;
+
+# ---------------------------------------------------------------------------------
+health)
+  # ON <node> (issue #1907): `shared=<n> orphans=<m>` — registered remote clients
+  # sitting on a fleet session instead of a view session of their own, and
+  # attaches whose tmux client the server no longer has. fleet-doctor's `rview`.
+  rv_scan | awk -F '\t' '{ c[$1]++ } END { printf "shared=%d orphans=%d\n", c["shared"], c["orphan"] }'
+  ;;
+prune)
+  # ON <node>: what every attach does first, on demand — dead rows, unattached
+  # view sessions, orphaned attaches (#1907).
+  s=$(fleet_sockets | head -n 1)
+  if [ -n "$s" ]; then sock=$(fleet_socket "$s"); rv_prune; else rv_reap_orphans; fi
   exit 0
   ;;
 
@@ -970,6 +1126,6 @@ PY
   ;;
 
 *)
-  sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,57p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2 ;;
 esac
