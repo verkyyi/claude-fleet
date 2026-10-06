@@ -388,7 +388,7 @@ clean_fleet() {   # $1=main-checkout  $2=owner/name  $3=base-branch  $4=protecte
   [ -z "$MASTER" ] && { say "SKIP  $REPO_ROOT (cannot resolve base $BASE)"; return; }
   MERGED_PRS=""
   [ -n "$REPO" ] && MERGED_PRS="$(gh -R "$REPO" pr list \
-    --state merged --limit 400 --json headRefName -q '.[].headRefName' 2>/dev/null)"
+    --state merged --limit 400 --json headRefName,headRefOid -q '.[] | "\(.headRefName)\t\(.headRefOid)"' 2>/dev/null)"
   say "fleet $REPO_ROOT  (repo=${REPO:-·} base=$BASE)"
   dir=""; head=""; branch=""
   while IFS= read -r line; do

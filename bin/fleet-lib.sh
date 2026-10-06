@@ -2294,8 +2294,13 @@ fleet_sleep_dispose() {
 #   unmerged    (rc 1) — clean but no merged PR or strict ancestry (includes tip == base)
 # Args: <worktree-dir> <repo-root> <branch> <head-sha> <base-ref> <merged-branches>
 # <merged-branches> is a newline-separated list of merged PR head-ref names (the
-# caller's `gh pr list --state merged` output). A caller that only wants the two
-# safe outcomes can just test the return code. Safe under a `set -u` caller.
+# caller's `gh pr list --state merged` output). A line may carry the PR's head sha
+# after its name (`<branch><TAB|space>…<40-hex sha>`, issue #1842): when ANY line for
+# the branch does, a merged PR counts only if the branch is still AT (or behind) one
+# of those heads, or its tip is already on the base — a commit made after the merge
+# would otherwise be reaped with the worktree. A bare name is the pre-#1842 answer.
+# A caller that only wants the two safe outcomes can just test the return code.
+# Safe under a `set -u` caller.
 fleet_reap_ok() {
   local wtdir="${1:-}" root="${2:-}" branch="${3:-}" head="${4:-}" base="${5:-}" merged="${6:-}"
   # $7 (optional, issue #1542): the merged PR's epoch — the probe waives the
@@ -2324,7 +2329,7 @@ fleet_reap_ok() {
     fi
     if [ -n "$_reap_status" ]; then printf 'dirty'; return 1; fi
   fi
-  if [ -n "$branch" ] && printf '%s\n' "$merged" | grep -qxF "$branch"; then
+  if [ -n "$branch" ] && fleet_reap_merged_at_head "$root" "$branch" "$head" "$base" "$merged"; then
     printf 'merged-pr'; return 0
   fi
   # Equality also satisfies --is-ancestor, but a just-created branch has exactly
@@ -2340,6 +2345,51 @@ fleet_reap_ok() {
     printf 'ancestor'; return 0
   fi
   printf 'unmerged'; return 1
+}
+
+# fleet_reap_ok's merged-PR evidence (issue #1842). rc 0 = <branch> has a merged PR
+# AND nothing on the branch post-dates it: the tip IS (or is behind) a merged PR's
+# head sha, or is already on <base>. Lines with no sha (an older caller) keep the
+# old name-only answer; a sha the repo does not hold fails closed (kept).
+# Args: <repo-root> <branch> <head> <base> <merged-lines>
+fleet_reap_merged_at_head() {
+  local root="${1:-}" branch="${2:-}" head="${3:-}" base="${4:-}" merged="${5:-}"
+  local line tok shas="" named=0 tip
+  while IFS= read -r line; do
+    line=$(printf '%s' "$line" | tr '\t' ' ')
+    [ "${line%% *}" = "$branch" ] || continue
+    named=1
+    for tok in ${line#"$branch"}; do
+      case "$tok" in *[!0-9a-f]*) ;; *) [ "${#tok}" = 40 ] && shas="$shas $tok" ;; esac
+    done
+  done <<EOF
+$merged
+EOF
+  [ "$named" = 1 ] || return 1
+  [ -n "$shas" ] || return 0                         # name only: the pre-#1842 answer
+  [ -n "$head" ] && [ -n "$root" ] || return 1
+  tip=$(git -C "$root" rev-parse --verify -q "$head^{commit}" 2>/dev/null) || return 1
+  for tok in $shas; do
+    [ "$tip" = "$tok" ] && return 0
+    git -C "$root" merge-base --is-ancestor "$tip" "$tok" 2>/dev/null && return 0
+  done
+  [ -n "$base" ] && git -C "$root" merge-base --is-ancestor "$tip" "$base" 2>/dev/null && return 0
+  return 1
+}
+
+# Release the claim on an issue whose work did not land (issue #1842): drop this
+# login's assignee — the assignee IS the claim (#283), so the dispatcher sees the
+# issue as free again — and leave one record-only line saying why. The ONE copy:
+# dash ⌃x (dash-reap.sh settle_issue) and the recovery page's q
+# (session-end-hook.sh --recycle) both call it. The caller decides the issue is
+# OPEN and unlanded. Args: <repo> <issue> <what happened, one clause>
+fleet_issue_release_claim() {
+  local repo="${1:-}" iss="${2:-}" what="${3:-}"
+  [ -n "$repo" ] && [ -n "$iss" ] && command -v gh >/dev/null 2>&1 || return 0
+  gh -R "$repo" issue edit "$iss" --remove-assignee @me >/dev/null 2>&1 || true
+  gh -R "$repo" issue comment "$iss" --body "$what. The issue stays OPEN and the claim is released, so it can be picked up again.
+
+<!-- fleet:no-relay -->" >/dev/null 2>&1 || true
 }
 
 # Locate the worktree checked out on <branch> in <repo-root>. Prints

@@ -18,6 +18,10 @@
 | 会话里连按 Ctrl+C 退出 | 同上 | 同上，恢复页写「按了 Ctrl+C」 | `session-ctrl-c` |
 | 会话进程被杀（kill -9、OOM） | 同上 | 同上，恢复页写「被结束（信号 9）」 | `session-killed` |
 | 会话里按 Ctrl+Z（或对它 `kill -TSTP`） | Claude Code / Codex 撤掉界面、打印「已挂起，用 `fg` 回来」，再向整个进程组发 SIGTSTP；窗格的进程组是孤儿组，内核丢弃这个信号，没有 shell 会 `fg`：进程还在、界面没了、不再收输入，看起来在干活其实停住了 | 包装进程旁一个同组的小守护接住这个 SIGTSTP，立即给整组发 SIGCONT（Agent 自己的恢复处理器重画界面），记一行 `logs/session-ctrl-z.log`，正看着这个窗格的客户端提示「执行会话里 Ctrl+Z 不起作用」（#1843） | `session-ctrl-z` |
+| PR 合并后又在分支上提交，再在恢复页按 q（或退出回收） | 只看「issue-N 有合并的 PR」就当已落地：worktree 和分支被删，合并后补的提交悄悄没了 | 只有分支当前提交就是已合并 PR 的 head（或已在默认分支上）才回收；否则按未合并保留，恢复页写「未推送：N 个提交（分支 issue-N）」（#1842） | `merged-then-commit` |
+| 未合并的单在恢复页按 q | 窗口关了，单子还挂在这台登录名下，调度以为有人在做，一直不再派 | q 和 dash ⌃x 走同一个放认领函数：去掉 assignee、留一句说明，单子保持打开可再派（#1842） | `q-releases-claim` |
+| 恢复页上 ↵ / r 重开，5 秒内就失败（对话找不到、认证失效） | 当成「启动失败」直接退出，窗口关掉，看不到原因 | 只有第一次启动沿用快速失败退出；重开失败回到恢复页，写「续上原对话失败」和原因；恢复页自己出错也落到一个最简恢复页（#1842） | `resume-fails-fast` |
+| Codex 会话没记下对话 id 时在恢复页按 ↵ | `codex resume --last` 接上同一 Codex home 里最近的对话——可能是别的会话的 | 先续本窗口记下的 thread（`@codex_thread_id`），没有就新开，恢复页写「回车新开」；从不 `--last`（#1842） | `codex-no-id` |
 | 最后一个窗口关闭（home 的 shell 退出、最后一个会话结束） | tmux 服务器随之退出，整台 fleet 停 | 服务器 `exit-empty off`，home 窗格死了立即重开 shell（#1784）；tmux ≤ 3.4 忙时会漏掉 shell 退出的信号、窗格停在死状态，diskguard 节拍的 `home_watch` 补救重开（#1801） | `last-window` |
 | 节点 tmux 服务器被关（`kill-server`、崩溃） | 整台 fleet 停，没人拉起 | diskguard 节拍跑 `fleet-restore.sh --auto`，只拉起没做完的会话（#1784） | `kill-server` |
 | 节点 tmux 服务器退出时被一个不回应的客户端（网络冻住的 ssh 里的 attach）拖住 | 服务器不死不活：每个新连接都被它接下就关，`tmux -L fleet` 的一切（含 `fleet-up.sh`）都报 `server exited unexpectedly`，只能手工 `rm` socket | `fleet_socket_heal` 认出这种 socket，清掉并记一行（restore.log、`socket-heal.log`），`fleet-restore.sh --auto` / `fleet-up.sh` 随即起新服务器；守护进程的「no fleet sessions found」带上 WEDGED，`fleet-doctor` 的 `socket` 行报出来（#1729） | `wedged-socket` |

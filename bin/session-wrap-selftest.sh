@@ -171,6 +171,33 @@ waitfor "q: session-end-hook --recycle was asked" grep -sqx -- '--recycle' "$WOR
 waitfor "q: the wrapper returned 0" screen_has q 'WRAP_RC=0'
 eq "q: recycled windows read done" "done" "$(o q @claude_state)"
 
+# U (issue #1842 ①): commits on no remote are counted on the page.
+git init -q --bare "$WORK/u-origin.git"
+git init -q "$WORK/u"; git -C "$WORK/u" config user.email t@t; git -C "$WORK/u" config user.name t
+git -C "$WORK/u" commit -q --allow-empty -m seed; git -C "$WORK/u" checkout -qb issue-7
+git -C "$WORK/u" remote add origin "$WORK/u-origin.git"; git -C "$WORK/u" push -q origin issue-7 2>/dev/null
+git -C "$WORK/u" commit -q --allow-empty -m one; git -C "$WORK/u" commit -q --allow-empty -m two
+mkdir -p "$WORK/uc"; : > "$WORK/uc/argv"
+tf new-window -d -t sw: -n u -c "$WORK/u" "env CTL='$WORK/uc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh '$WORK/wbin/fleet-session-wrap.sh' --agent claude; exec sleep 600"
+waitfor "u: first launch" launches uc 1
+printf rc0 > "$WORK/uc/mode"; : > "$WORK/uc/go"
+waitfor "u: the page counts the unpushed commits" screen_has u '未推送：2 个提交（分支 issue-7）'
+
+# P (issue #1842 ③): the page itself fails → a plain prompt, never an exit.
+mkdir -p "$WORK/pbin"
+for f in fleet-session-wrap.sh fleet_sleep_park.py; do ln -s "$BIN/$f" "$WORK/pbin/$f"; done
+printf 'import sys\nraise SystemExit(1)\n' > "$WORK/pbin/fleet-session-page.py"
+ln -s "$WORK/wbin/session-end-hook.sh" "$WORK/pbin/session-end-hook.sh"
+mkdir -p "$WORK/pc"; : > "$WORK/pc/argv"
+tf new-window -d -t sw: -n p "env CTL='$WORK/pc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh '$WORK/pbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
+waitfor "p: first launch" launches pc 1
+printf rc0 > "$WORK/pc/mode"; : > "$WORK/pc/go"
+waitfor "p: a broken page falls to the plain prompt" screen_has p '↵ 接着原对话   r 新开'
+CHECKS=$((CHECKS + 1)); screen_has p 'WRAP_RC=' && fail "p: a broken page closed the session"
+tf send-keys -t sw:p Enter
+waitfor "p: ↵ on the plain prompt resumes" launches pc 2
+eq "p: the same conversation" "--agent claude --resume SID-1" "$(sed -n 2p "$WORK/pc/argv")"
+
 # B': the worker credential (issue #1809) — minted per launch, revoked on exit.
 mkdir -p "$WORK/kbin" "$WORK/kconf"
 for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-mcp.py fleet-lib.sh; do

@@ -120,6 +120,9 @@ if [ "${1:-}" = "--exec" ]; then
   # $5 is kind-dependent: the issue number for a worker, the scratch-<N> key for a
   # raw one (#466) — so it is read raw here and interpreted per branch below.
   kind="${2:-}"; sess="${3:-}"; win="${4:-}"; iss=$(strip_num "${5:-}")
+  # $6 = recycle: the recovery page's q (issue #1842) — an unlanded issue's claim
+  # is released (fleet_issue_release_claim, dash ⌃x's copy), not left held.
+  how="${6:-}"
   transfer_holds_window "$win" && exit 0
 
   # raw scratch → RECORD it into the /fleet-history ledger, then close the window
@@ -154,7 +157,7 @@ if [ "${1:-}" = "--exec" ]; then
           || git -C "$MAIN" rev-parse --verify -q "$BASE" 2>/dev/null)
       fi
       command -v gh >/dev/null 2>&1 && [ -n "$REPO" ] && MERGED_PRS=$(gh -R "$REPO" pr list \
-        --state merged --head "$key" --json headRefName -q '.[].headRefName' 2>/dev/null)
+        --state merged --head "$key" --json headRefName,headRefOid -q '.[] | "\(.headRefName)\t\(.headRefOid)"' 2>/dev/null)
       verdict=$(fleet_reap_ok "$wtdir" "$MAIN" "$key" "$whead" "$MASTER" "$MERGED_PRS")
       # No issue → pass an empty one; fleet_reap_record derives the scratch key from
       # the branch. record-closed skips a worktree with no transcript, so a scratch
@@ -216,10 +219,11 @@ if [ "${1:-}" = "--exec" ]; then
   [ -n "$MAIN" ] && MASTER=$(git -C "$MAIN" rev-parse --verify -q "origin/$BASE" 2>/dev/null \
     || git -C "$MAIN" rev-parse --verify -q "$BASE" 2>/dev/null)
 
-  # merged PR head-refs for this branch (a --head filter keeps it to one branch).
+  # merged PR head-refs for this branch (a --head filter keeps it to one branch),
+  # each with its head sha: a commit made AFTER the merge keeps the branch (#1842).
   MERGED_PRS=""
   command -v gh >/dev/null 2>&1 && MERGED_PRS=$(gh -R "$REPO" pr list \
-    --state merged --head "$branch" --json headRefName -q '.[].headRefName' 2>/dev/null)
+    --state merged --head "$branch" --json headRefName,headRefOid -q '.[] | "\(.headRefName)\t\(.headRefOid)"' 2>/dev/null)
 
   verdict=$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS")
 
@@ -274,6 +278,18 @@ if [ "${1:-}" = "--exec" ]; then
       # sweep's judgement.
       [ -n "${wtdir:-}" ] && fleet_reap_worktree_listeners "$wtdir" >/dev/null 2>&1
       : ;;
+  esac
+  # q on an issue whose work did not land: release the claim so it can be
+  # dispatched again (issue #1842). A merged PR closed it above; `live` is a
+  # window still working it — neither is released.
+  case "$verdict" in merged-pr|live) ;; *)
+    if [ "$how" = recycle ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1 \
+       && [ "$(gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)" = OPEN ]; then
+      what="its work did not land"
+      [ "$verdict" = dirty ] && what="$what; its dirty worktree is kept"
+      [ "$verdict" = unmerged ] && [ -n "$wtdir" ] && what="$what; its worktree and branch $branch are kept"
+      fleet_issue_release_claim "$REPO" "$iss" "Recycled from the recovery page (q) — $what"
+    fi ;;
   esac
   exit 0
 fi
@@ -369,7 +385,8 @@ hub=$(tmux display-message -p -t "$TMUX_PANE" '#{@hub}' 2>/dev/null)
 #    raw path passes the key and not the raw @worktree path) — same quoting as
 #    dash-reap.sh's fleet_bg.
 if [ -n "$issue" ]; then
-  fleet_bg "bash '$BIN/session-end-hook.sh' --exec worker '$sess' '$win' '$issue'"
+  how=-; [ "$reason" = recycle ] && how=recycle
+  fleet_bg "bash '$BIN/session-end-hook.sh' --exec worker '$sess' '$win' '$issue' '$how'"
 elif [ "$raw" = 1 ]; then
   # @worktree is what dash-raw-session.sh binds at spawn; the pane cwd is the fallback
   # for a window that predates it. A key that doesn't resolve → the exec just closes

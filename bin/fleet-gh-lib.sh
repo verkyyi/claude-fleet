@@ -240,12 +240,18 @@ fleet_gh_rest_issue_close() {  # fleet_gh_rest_issue_close <repo> <issue>
 # `--at` (issue #1542) appends a TAB + the PR's mergedAt (ISO-8601 UTC) to each
 # line, so the reaper can hand the liveness probe the merge time (#1329) without a
 # second round-trip; without it the argv is byte for byte the pre-#1542 one.
-fleet_gh_merged_heads() {  # fleet_gh_merged_heads <repo> <branch> [--at]
-  local repo="$1" branch="$2" out rc
+# `--sha` (issue #1842) appends a TAB + the PR's head sha (after the mergedAt with
+# `--at`), which fleet_reap_ok reads to keep a commit made after the merge.
+fleet_gh_merged_heads() {  # fleet_gh_merged_heads <repo> <branch> [--at] [--sha]
+  local repo="$1" branch="$2" out rc at=0 sha=0 o
+  for o in "${3:-}" "${4:-}"; do case "$o" in --at) at=1 ;; --sha) sha=1 ;; esac; done
   local gq='.[].headRefName' gj=headRefName rq='.[] | select(.merged_at != null) | .head.ref'
-  if [ "${3:-}" = --at ]; then
-    gq='.[] | "\(.headRefName)\t\(.mergedAt)"'; gj=headRefName,mergedAt
-    rq='.[] | select(.merged_at != null) | "\(.head.ref)\t\(.merged_at)"'
+  if [ "$at" = 1 ] || [ "$sha" = 1 ]; then
+    gq='.[] | "\(.headRefName)'; gj=headRefName
+    rq='.[] | select(.merged_at != null) | "\(.head.ref)'
+    [ "$at" = 1 ] && { gq="$gq"'\t\(.mergedAt)'; gj=$gj,mergedAt; rq="$rq"'\t\(.merged_at)'; }
+    [ "$sha" = 1 ] && { gq="$gq"'\t\(.headRefOid)'; gj=$gj,headRefOid; rq="$rq"'\t\(.head.sha)'; }
+    gq="$gq\""; rq="$rq\""
   fi
   out=$(fleet_gh_run graphql reap -R "$repo" pr list --state merged --head "$branch" \
           --json "$gj" -q "$gq"); rc=$?
