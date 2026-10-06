@@ -5,13 +5,15 @@ A session gets a short-lived, proxy-signed SESSION credential; the proxy swaps
 it for the real subscription credential on the way out, so the real token never
 enters the session's environment or files.
 
-    cred_proxy.py serve  --port 8787 --state DIR [--accounts DIR] [--codex-auth FILE] [--audit]
+    cred_proxy.py serve  --port 8787 --state DIR [--accounts DIR] [--codex-auth FILE]
+                         [--codex-homes DIR] [--codex-upstream URL] [--audit] [--max-seconds N]
     cred_proxy.py mint   --state DIR --account LABEL [--sid NAME] [--ttl SECS]
     cred_proxy.py rebind --state DIR --sid NAME --account LABEL
 
 Routes (loopback only):
     /v1/...         -> https://api.anthropic.com/v1/...          (Claude Code)
-    /codex/...      -> https://chatgpt.com/backend-api/codex/...  (Codex)
+    /codex/...      -> https://chatgpt.com/backend-api/codex/...  (Codex; --codex-upstream
+                       moves it, e.g. to sim/fake_chatgpt.py on loopback — issue #1912)
     CONNECT host:p  -> logged + tunnelled (only with --audit; for HTTPS_PROXY
                        audits of what bypasses ANTHROPIC_BASE_URL)
 
@@ -20,7 +22,8 @@ every request (in memory, never copied, never logged); every credential-shaped
 header value is logged as <redacted:len>.
 """
 import argparse, base64, hashlib, hmac, http.client, json, os, secrets, select
-import socket, ssl, sys, threading, time
+import signal, socket, ssl, sys, threading, time
+from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ANTHROPIC = "api.anthropic.com"
@@ -87,6 +90,15 @@ def claude_token(accounts, label):
         return json.load(f)["claudeAiOauth"]["accessToken"]
 
 
+def codex_auth_path(cfg, label):
+    """The account's Codex home, the same mapping the node agent leases into
+    (tokenledger agent/node_creds.go codexHomeFor): `default` = ~/.codex, any
+    other label = <codex homes>/<label>."""
+    if label == "default":
+        return cfg.codex_auth
+    return os.path.join(cfg.codex_homes, label, "auth.json")
+
+
 def codex_tokens(path):
     with open(path) as f:
         t = json.load(f)["tokens"]
@@ -127,6 +139,8 @@ class Proxy(BaseHTTPRequestHandler):
         self.log(ev="connect", host=host, port=port)
         if not self.cfg.audit:
             return self.fail(403, "CONNECT disabled", "forbidden")
+        if self.cfg.sinkhole:
+            return self.sinkhole(host)
         try:
             up = socket.create_connection((host, int(port or 443)), timeout=30)
         except OSError as e:
@@ -147,6 +161,42 @@ class Proxy(BaseHTTPRequestHandler):
                     (up if s is self.connection else self.connection).sendall(d)
         finally:
             up.close()
+
+    def sinkhole(self, host):
+        """--sinkhole: an OFFLINE audit (issue #1912). Terminate the CONNECT's TLS with
+        the throwaway leaf, read ONE request, log its method/path and which KIND of
+        credential it carried (session credential / something else / none, + length),
+        answer 503 and close. Nothing is ever forwarded — nothing leaves the machine."""
+        self.send_response(200, "Connection established"); self.end_headers()
+        if not self.cfg.mitm_cert:
+            return self.log(ev="sinkhole", host=host, tls="no --mitm-cert: host only")
+        sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        sctx.load_cert_chain(self.cfg.mitm_cert, self.cfg.mitm_key)
+        sctx.set_alpn_protocols(["http/1.1"])
+        try:
+            cli = sctx.wrap_socket(self.connection, server_side=True)
+            cli.settimeout(10)
+            d = b""
+            while b"\r\n\r\n" not in d and len(d) < 65536:
+                c = cli.recv(65536)
+                if not c:
+                    break
+                d += c
+        except (ssl.SSLError, OSError) as e:
+            return self.log(ev="sinkhole", host=host, tls_fail=str(e)[:100])
+        head = d.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")
+        hs = {k.strip().lower(): v.strip() for k, v in (l.split(":", 1) for l in head[1:] if ":" in l)}
+        auth = hs.get("authorization", "")
+        tok = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+        kind = "none" if not tok else ("SESSION-CRED" if tok.startswith("fcp1.") else "other")
+        self.log(ev="sinkhole", host=host, req=(head[0].split("?")[0] if head else ""),
+                 auth=kind, auth_len=len(tok), acct_hdr="chatgpt-account-id" in hs,
+                 ua=hs.get("user-agent", "")[:60])
+        try:
+            cli.sendall(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+            cli.close()
+        except (ssl.SSLError, OSError):
+            pass
 
     def sniff(self, host, up):
         """--mitm-cert: terminate TLS with a throwaway local CA the AUDITED client
@@ -205,6 +255,11 @@ class Proxy(BaseHTTPRequestHandler):
             self.log(ev="absolute", url=path.split("?")[0])
             return self.fail(403, "absolute-URI proxying disabled", "forbidden")
         inbound = {k.lower(): v for k, v in self.headers.items()}
+        # Read the body FIRST: a refusal that leaves it unread on a keep-alive
+        # connection gets the body parsed as the next request (issue #1912 —
+        # Codex then showed an HTML "Bad request syntax" instead of our reason).
+        n = int(inbound.get("content-length") or 0)
+        self.body = self.rfile.read(n) if n else None
         seen = sorted("%s=%s" % (k, red(k, v)) for k, v in inbound.items())
         tok = ""
         if inbound.get("authorization", "").lower().startswith("bearer "):
@@ -221,10 +276,14 @@ class Proxy(BaseHTTPRequestHandler):
                and k.lower() not in ("authorization", "x-api-key")}
         try:
             if path.startswith("/codex/"):
-                host, upath = CHATGPT, "/backend-api/codex/" + path[len("/codex/"):]
-                at, aid = codex_tokens(self.cfg.codex_auth)
+                up = urlsplit(self.cfg.codex_upstream)
+                host, upath = up.netloc, up.path.rstrip("/") + "/" + path[len("/codex/"):]
+                at, aid = codex_tokens(codex_auth_path(self.cfg, acct))
                 out["Authorization"] = "Bearer " + at
-                if aid and not any(k.lower() == "chatgpt-account-id" for k in out):
+                # ALWAYS the bound account's id: a session never picks the
+                # workspace its request is billed to (issue #1912).
+                out = {k: v for k, v in out.items() if k.lower() != "chatgpt-account-id"}
+                if aid:
                     out["chatgpt-account-id"] = aid
             else:
                 host, upath = ANTHROPIC, path
@@ -239,19 +298,22 @@ class Proxy(BaseHTTPRequestHandler):
         except (OSError, KeyError, ValueError) as e:
             self.log(ev="nocred", sid=claims["sid"], acct=acct, err=type(e).__name__)
             return self.fail(503, "no upstream credential for account %s" % acct, "api_error")
-        self.upstream(host, upath, out, inbound, seen, t0, claims["sid"], acct)
+        self.upstream(host, upath, out, inbound, seen, t0, claims["sid"], acct,
+                      plain=path.startswith("/codex/") and self.cfg.codex_upstream.startswith("http://"))
 
     def passthrough(self, path, inbound, seen, t0):
         """An unauthenticated reachability probe (Claude Code's /api/hello): no credential added."""
         out = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
         self.upstream(ANTHROPIC, path, out, inbound, seen, t0, "-", "-")
 
-    def upstream(self, host, upath, out, inbound, seen, t0, sid, acct):
+    def upstream(self, host, upath, out, inbound, seen, t0, sid, acct, plain=False):
         path = self.path
-        n = int(inbound.get("content-length") or 0)
-        body = self.rfile.read(n) if n else None
+        body = self.body
         out["Host"] = host
-        conn = http.client.HTTPSConnection(host, 443, timeout=600, context=ssl.create_default_context())
+        if plain:   # --codex-upstream http://127.0.0.1:… (the simulator) — loopback only, checked at start
+            conn = http.client.HTTPConnection(host, timeout=600)
+        else:
+            conn = http.client.HTTPSConnection(host, 443, timeout=600, context=ssl.create_default_context())
         try:
             conn.request(self.command, upath, body=body, headers=out)
             r = conn.getresponse()
@@ -277,7 +339,7 @@ class Proxy(BaseHTTPRequestHandler):
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(d), d)); self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n"); self.wfile.flush()
         conn.close()
-        rl = {k: v for k, v in rh if "ratelimit" in k.lower()}
+        rl = {k: v for k, v in rh if "ratelimit" in k.lower() or k.lower().startswith("x-codex-")}
         self.log(ev="fwd", sid=sid, acct=acct, m=self.command, path=path.split("?")[0],
                  up=host, status=r.status, ttfb_ms=int(ttfb * 1000),
                  total_ms=int((time.time() - t0) * 1000), bytes=size, hdrs_in=seen,
@@ -292,11 +354,19 @@ def main():
     s.add_argument("--port", type=int, default=8787)
     s.add_argument("--state", required=True)
     s.add_argument("--accounts", default=os.path.expanduser("~/.config/claude-fleet/accounts"))
-    s.add_argument("--codex-auth", default=os.path.expanduser("~/.codex/auth.json"))
+    s.add_argument("--codex-auth", default=os.path.expanduser("~/.codex/auth.json"),
+                   help="the `default` Codex account's auth.json")
+    s.add_argument("--codex-homes", default=os.path.expanduser("~/.codex-accounts"),
+                   help="any other Codex account: <dir>/<label>/auth.json")
+    s.add_argument("--codex-upstream", default="https://chatgpt.com/backend-api/codex",
+                   help="where /codex/* goes; http:// is accepted for 127.0.0.1 only")
+    s.add_argument("--max-seconds", type=int, default=0, help="exit on its own after N s (0 = never)")
     s.add_argument("--log", default="")
     s.add_argument("--audit", action="store_true", help="tunnel+log CONNECT (HTTPS_PROXY audit)")
     s.add_argument("--mitm-cert", default="", help="audit only: TLS-terminate CONNECTs with this leaf")
     s.add_argument("--mitm-key", default="")
+    s.add_argument("--sinkhole", action="store_true",
+                   help="audit only: answer every CONNECT locally (503), never connect out")
     s.add_argument("--no-beta", action="store_true", help="do not add the oauth anthropic-beta")
     m = sub.add_parser("mint")
     m.add_argument("--state", required=True); m.add_argument("--account", required=True)
@@ -318,6 +388,11 @@ def main():
         tmp = p + ".tmp"; json.dump(d, open(tmp, "w")); os.replace(tmp, p)
         print("rebound %s -> %s" % (a.sid, a.account))
     else:
+        up = urlsplit(a.codex_upstream)
+        if up.scheme == "http" and up.hostname not in ("127.0.0.1", "localhost"):
+            sys.exit("cred-proxy: a plain-http --codex-upstream must be loopback")
+        if a.max_seconds:
+            signal.signal(signal.SIGALRM, lambda *_: os._exit(0)); signal.alarm(a.max_seconds)
         Proxy.cfg = a
         srv = ThreadingHTTPServer(("127.0.0.1", a.port), Proxy)
         srv.daemon_threads = True
