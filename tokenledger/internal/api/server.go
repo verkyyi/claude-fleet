@@ -341,6 +341,9 @@ func (s *Server) Handler() http.Handler {
 		// session list, so it authenticates itself outside the viewer gate.
 		mux.HandleFunc(control.ClientPath, s.handleFleetClient)
 		mux.HandleFunc(control.ClientPath+"/actions", s.handleFleetClientActions)
+		// Open a session from the client (claude-fleet#1777): the current
+		// lease, proven by its action key, asks the hub to open it.
+		mux.HandleFunc(control.ClientPath+"/place", s.handleFleetClientPlace)
 		// Connection certificates (claude-fleet#1412). start/poll carry no
 		// credential — they are what a person runs before having one, and
 		// grant nothing until a signed-in person confirms the code.

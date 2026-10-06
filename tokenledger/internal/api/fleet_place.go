@@ -90,7 +90,10 @@ type placeOutcome struct {
 	Exit   *int   `json:"exit,omitempty"`
 	Stderr string `json:"stderr1,omitempty"`
 	Window string `json:"window,omitempty"`
-	Node   string `json:"node"`
+	// WorkerID is the opened session's worker_id, when the node said it
+	// (claude-fleet#1777: the client switches to it).
+	WorkerID string `json:"worker_id,omitempty"`
+	Node     string `json:"node"`
 }
 
 func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
@@ -366,6 +369,7 @@ func outcomeOf(op map[string]any, node string) placeOutcome {
 		Window  string `json:"window"`
 		Workers []struct {
 			WindowID string `json:"window_id"`
+			WorkerID string `json:"worker_id"`
 		} `json:"workers"`
 		Error struct {
 			Code    string `json:"code"`
@@ -380,11 +384,14 @@ func outcomeOf(op map[string]any, node string) placeOutcome {
 	exit := func(n int) *int { return &n }
 	switch asString(op["status"]) {
 	case "succeeded":
-		win := res.Window
-		if win == "" && len(res.Workers) > 0 {
-			win = res.Workers[0].WindowID
+		win, wid := res.Window, ""
+		if len(res.Workers) > 0 {
+			wid = res.Workers[0].WorkerID
+			if win == "" {
+				win = res.Workers[0].WindowID
+			}
 		}
-		return placeOutcome{State: "done", Exit: exit(0), Window: win, Node: node}
+		return placeOutcome{State: "done", Exit: exit(0), Window: win, WorkerID: wid, Node: node}
 	case "failed":
 		why := res.Error.Stderr
 		if why == "" {

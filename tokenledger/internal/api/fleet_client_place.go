@@ -1,0 +1,504 @@
+package api
+
+import (
+	"crypto/hmac"
+	"encoding/json"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+)
+
+// Open a session from the client (claude-fleet#1777, EPIC #1776 C1).
+//
+// A computer that runs only the `fleet` client has no fleet to open anything
+// in: the client asks the hub, and the hub has the machine open it — the same
+// placement and the same journalled node operations a node's own
+// /v1/node/place uses (pickNode → worker_start / worker_resume).
+//
+//	POST /v1/fleet/client/place   {cert sig ts | a session / viewer door,
+//	                               lease, payload, mac}
+//
+// Who may ask: the person's CURRENT client lease, and nothing else. The
+// connection certificate (or door) says who the person is; the lease id must
+// be that person's live lease, and mac must be HMAC-SHA256 of payload under
+// that lease's action key — the key only the lease's own client is told
+// (fleet_client_actions.go). A taken-over or lapsed lease, or a wrong key, is
+// 401, so a second device of the same person, or anyone holding a copy of an
+// old key, opens nothing.
+//
+// payload is one JSON object (clientPlaceRequest): action place (default) or
+// status. place names repo, kind issue | scratch | restore (issue N /
+// key <fleet-history row key> / an optional name), node auto | a machine,
+// title, agent, idempotency_key, wait (seconds, at most clientPlaceWaitMax).
+// status names the operation_id a place answered and waits on it again — the
+// client polls this way, so no one request outlives a proxy's patience.
+//
+// The answer carries the line `ccquota place` prints for the same outcome
+// (`REMOTE <m> <op> done <worker_id>` / `DECLINED <m> <op> <exit>` /
+// `UNKNOWN <m> <op>` / `HELD <m>` / `REFUSED <code>`, the reason after a TAB)
+// and its exit code, so bin/fleet-client-place.sh prints exactly what
+// fleet_hub_place would. Machines are named the way a client names them (the
+// route list's alias, else the first label).
+
+const clientPlaceWaitMax = 25 * time.Second
+
+// clientPlaceKeyRE is a /fleet-history row key: issue-<N> or scratch-<N>, with
+// a multi-repo fleet's `<slug>:` prefix allowed.
+var clientPlaceKeyRE = regexp.MustCompile(`^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?((issue|scratch)-[1-9][0-9]{0,9})$`)
+
+// ClientPlaceEnvelope is the body of a POST to control.ClientPath+"/place".
+type ClientPlaceEnvelope struct {
+	Cert    string `json:"cert,omitempty"`
+	Sig     string `json:"sig,omitempty"`
+	TS      int64  `json:"ts,omitempty"`
+	Lease   string `json:"lease"`
+	Payload string `json:"payload"`
+	MAC     string `json:"mac"`
+}
+
+// clientPlaceRequest is the signed payload.
+type clientPlaceRequest struct {
+	Action      string `json:"action"` // place | status
+	TS          int64  `json:"ts"`
+	Repo        string `json:"repo"`
+	Kind        string `json:"kind"` // issue | scratch | restore
+	Issue       int    `json:"issue"`
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Node        string `json:"node"`
+	Title       string `json:"title"`
+	Agent       string `json:"agent"`
+	Idem        string `json:"idempotency_key"`
+	OperationID string `json:"operation_id"`
+	Wait        *int   `json:"wait"`
+}
+
+// ClientPlaceResponse is the answer: Line and Exit are fleet_hub_place's.
+// State is done / refused / failed / unknown (a start's outcome), held, or
+// pending — the start was sent and has no final state yet: poll status with
+// OperationID.
+type ClientPlaceResponse struct {
+	Line        string     `json:"line"`
+	Exit        int        `json:"exit"`
+	State       string     `json:"state"`
+	OperationID string     `json:"operation_id,omitempty"`
+	Machine     string     `json:"machine,omitempty"`
+	WorkerID    string     `json:"worker_id,omitempty"`
+	Window      string     `json:"window,omitempty"`
+	Placement   *Placement `json:"placement,omitempty"`
+}
+
+// checkActionMAC says whether lease is key's live current lease and mac is
+// payload's HMAC under its action key.
+func (t *clientLeaseTable) checkActionMAC(key, lease, payload, mac string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.init()
+	c := t.cur[key]
+	if !t.live(c, now) || c.ID != lease || lease == "" {
+		return false
+	}
+	k := t.keys[lease]
+	if k == "" {
+		return false
+	}
+	return hmac.Equal([]byte(signClientAction(k, []byte(payload))), []byte(strings.ToLower(mac)))
+}
+
+// clientPrincipal is who a client's request acts for: the person its
+// certificate names, or the operator's door.
+func (s *Server) clientPrincipal(id sshRelayIdentity) (fleetPrincipal, error) {
+	if id.Operator || id.Principal == "" {
+		actor := id.Actor
+		if actor == "" {
+			actor = "operator"
+		}
+		return fleetPrincipal{Actor: actor}, nil
+	}
+	scope, err := s.scopeFor(id.Principal)
+	if err != nil {
+		return fleetPrincipal{}, err
+	}
+	return fleetPrincipal{Actor: id.Principal, Person: id.Principal, scope: scope}, nil
+}
+
+// machineHostname turns a client's machine name (an alias from the route
+// list, `m5`) into the roster hostname placement matches on.
+func (s *Server) machineHostname(name string) string {
+	for _, m := range s.fleetMachines() {
+		if m.Alias != "" && strings.EqualFold(m.Alias, name) {
+			return m.Hostname
+		}
+	}
+	return name
+}
+
+func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		httpError(w, http.StatusMethodNotAllowed, "POST")
+		return
+	}
+	var env ClientPlaceEnvelope
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&env); err != nil {
+		httpError(w, http.StatusBadRequest, "the body must be one JSON object")
+		return
+	}
+	now := time.Now()
+	id, ok := s.clientIdentity(w, r, env.Cert, env.Sig, env.TS, now)
+	if !ok {
+		return
+	}
+	key := clientLeaseKey(id)
+	if !s.clientLeases.checkActionMAC(key, env.Lease, env.Payload, env.MAC, now) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
+		httpError(w, http.StatusUnauthorized, "not your current client: the lease is not current (taken over or lapsed) or the action key does not check")
+		return
+	}
+	var req clientPlaceRequest
+	if err := json.Unmarshal([]byte(env.Payload), &req); err != nil {
+		httpError(w, http.StatusBadRequest, "the payload must be one JSON object")
+		return
+	}
+	if d := now.Sub(time.Unix(req.TS, 0)); d > routesClockSkew || d < -routesClockSkew {
+		httpError(w, http.StatusUnauthorized, "the payload's timestamp is too far from the hub's clock — check this computer's time")
+		return
+	}
+	p, err := s.clientPrincipal(id)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	wait := clientPlaceWaitMax
+	if req.Wait != nil {
+		wait = min(max(time.Duration(*req.Wait)*time.Second, 0), clientPlaceWaitMax)
+	}
+	switch req.Action {
+	case "status":
+		s.clientPlaceStatus(w, r, p, req.OperationID, wait)
+	case "", "place":
+		s.clientPlace(w, r, p, env.Lease, req, wait, now)
+	default:
+		httpError(w, http.StatusBadRequest, "action must be place or status")
+	}
+}
+
+// refusedAnswer is a placement fault as the client's line: HELD for a lease
+// held elsewhere, REFUSED <code> for everything else.
+func refusedAnswer(err error, pl *Placement) ClientPlaceResponse {
+	e := errorObject(err)
+	return ClientPlaceResponse{Line: "REFUSED " + e["code"] + "\t" + oneLine(e["message"]), Exit: 4,
+		State: "refused", Placement: pl}
+}
+
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrincipal, lease string, req clientPlaceRequest, wait time.Duration, now time.Time) {
+	if !leaseRepoRE.MatchString(req.Repo) {
+		httpError(w, http.StatusBadRequest, "repo must be owner/name")
+		return
+	}
+	node := req.Node
+	if node == "" {
+		node = "auto"
+	}
+	if node != "auto" {
+		if !nodeNameRE.MatchString(node) {
+			httpError(w, http.StatusBadRequest, "node must be auto or a machine name from the roster")
+			return
+		}
+		node = s.machineHostname(node)
+	}
+	if req.Agent != "" && req.Agent != "claude" && req.Agent != "codex" {
+		httpError(w, http.StatusBadRequest, "agent must be claude or codex")
+		return
+	}
+	if req.Idem != "" && !idemRE.MatchString(req.Idem) {
+		httpError(w, http.StatusBadRequest, "idempotency_key must be 1–128 letters, digits or ._:-")
+		return
+	}
+	idem := req.Idem
+	if idem == "" {
+		idem = "client-" + lease[:min(8, len(lease))] + "-" + strconv.FormatInt(now.UnixNano(), 36)
+	}
+	args := map[string]any{"repo": req.Repo, "node": node, "idempotency_key": idem}
+	if req.Agent != "" {
+		args["agent"] = req.Agent
+	}
+	tool := "worker_start"
+	var pl Placement
+	var target store.FleetRow
+	giveBack := func() {}
+	what := ""
+
+	switch req.Kind {
+	case "issue", "":
+		if req.Issue <= 0 || req.Key != "" || req.Name != "" {
+			httpError(w, http.StatusBadRequest, "kind=issue names a positive issue and no key or name")
+			return
+		}
+		what = "#" + strconv.Itoa(req.Issue)
+	case "scratch":
+		if req.Issue != 0 || req.Key != "" {
+			httpError(w, http.StatusBadRequest, "kind=scratch names no issue or key")
+			return
+		}
+		name := req.Name
+		if name == "" {
+			name = req.Title // the title is a scratch's label when it has no name
+		}
+		n, err := checkScratchName(name)
+		if err != nil {
+			httpError(w, http.StatusBadRequest, errorObject(err)["message"])
+			return
+		}
+		args["kind"] = "scratch"
+		if n != "" {
+			args["name"] = n
+		}
+		what = "scratch"
+	case "restore":
+		if req.Issue != 0 || req.Name != "" || !clientPlaceKeyRE.MatchString(req.Key) {
+			httpError(w, http.StatusBadRequest, "kind=restore names key: a /fleet-history row's issue-<N> or scratch-<N>")
+			return
+		}
+		what = req.Key
+	default:
+		httpError(w, http.StatusBadRequest, "kind must be issue, scratch or restore")
+		return
+	}
+
+	if req.Kind == "restore" {
+		var err error
+		pl, target, err = s.restoreTarget(p, req.Repo, req.Key, node, now)
+		if err != nil {
+			s.leaseAudit(p.Actor, "client_place", what, errorObject(err)["code"], now)
+			writeJSON(w, http.StatusOK, refusedAnswer(err, &pl))
+			return
+		}
+		bare := clientPlaceKeyRE.FindStringSubmatch(req.Key)[1]
+		tool = "worker_resume"
+		args = map[string]any{"worker_id": target.FleetID + "/" + targetKey(bare, target, req.Repo), "idempotency_key": idem}
+	} else {
+		var err error
+		if pl, err = s.pickNode(p, req.Repo, node, now); err != nil {
+			s.leaseAudit(p.Actor, "client_place", what, errorObject(err)["code"], now)
+			writeJSON(w, http.StatusOK, refusedAnswer(err, &pl))
+			return
+		}
+		if target, err = s.Store.Fleet(pl.FleetID); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		args["fleet_id"] = pl.FleetID
+		if req.Kind != "scratch" {
+			args["issue"] = float64(req.Issue)
+			// The chosen machine's fleet takes the issue's lease, so the
+			// spawn that arrives there finds it its own and nobody else can
+			// take it in between (the node place rule).
+			claim := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue,
+				WorkerID: pl.FleetID + "/" + targetKey("issue-"+strconv.Itoa(req.Issue), target, req.Repo),
+				FleetID:  pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser}
+			hadOwn := false
+			if ls, err := s.Store.Leases(now); err == nil {
+				for _, l := range ls {
+					if l.Repo == store.NormRepo(req.Repo) && l.Issue == req.Issue && l.FleetID == pl.FleetID {
+						hadOwn = true // a live worker there already holds it: never give that back
+					}
+				}
+			}
+			granted, held, _, err := s.Store.AcquireLease(claim, leaseStartGrace, now)
+			if err != nil {
+				httpError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if !granted {
+				m := s.nodeMachineLabel(held.Hostname)
+				s.leaseAudit(p.Actor, "client_place", what, "HELD by "+held.WorkerID+" on "+m, now)
+				writeJSON(w, http.StatusOK, ClientPlaceResponse{Line: "HELD " + m + "\t" + what + " is leased to " + m,
+					Exit: 3, State: "held", Machine: m, Placement: &pl})
+				return
+			}
+			if !hadOwn {
+				giveBack = func() { _, _ = s.Store.ReleaseLease(req.Repo, req.Issue, claim.WorkerID) }
+			}
+		}
+	}
+
+	m := s.nodeMachineLabel(pl.Machine)
+	op, err := s.submitWrite(r.Context(), p, tool, args, &pl)
+	if err != nil {
+		giveBack()
+		s.leaseAudit(p.Actor, "client_place", what, "REMOTE "+m+" refused: "+errorObject(err)["code"], now)
+		writeJSON(w, http.StatusOK, refusedAnswer(err, &pl))
+		return
+	}
+	out := s.clientPlaceAnswer(r, op, &pl, wait)
+	if out.State == "refused" || out.State == "failed" {
+		giveBack()
+	}
+	s.leaseAudit(p.Actor, "client_place", what, "REMOTE "+m+" "+out.State+" "+asString(op["operation_id"]), now)
+	writeJSON(w, http.StatusOK, out)
+}
+
+// clientPlaceAnswer waits up to wait on op and words what became of it.
+func (s *Server) clientPlaceAnswer(r *http.Request, op map[string]any, pl *Placement, wait time.Duration) ClientPlaceResponse {
+	m := s.nodeMachineLabel(pl.Machine)
+	var heard error
+	if wait > 0 {
+		op, heard = s.awaitOperation(r.Context(), op, time.Now().Add(wait))
+	}
+	opID := asString(op["operation_id"])
+	out := ClientPlaceResponse{OperationID: opID, Machine: m, Placement: pl}
+	oc := outcomeOf(op, m)
+	if oc.State == "unknown" && wait > 0 {
+		oc = neverStarted(op, heard, oc, wait)
+	}
+	reason := oneLine(pl.Reason)
+	switch {
+	case oc.State == "done":
+		who := oc.WorkerID
+		if who == "" {
+			who = oc.Window
+		}
+		if who == "" {
+			who = "-"
+		}
+		out.State, out.Exit, out.WorkerID, out.Window = "done", 0, oc.WorkerID, oc.Window
+		out.Line = "REMOTE " + m + " " + opID + " done " + oneLine(who) + "\t" + reason
+	case (oc.State == "refused" || oc.State == "failed") && oc.Exit != nil && *oc.Exit > 0:
+		out.State, out.Exit = oc.State, 5
+		out.Line = "DECLINED " + m + " " + opID + " " + strconv.Itoa(*oc.Exit) + "\t" + oneLine(oc.Stderr)
+	case !operationFinal(asString(op["status"])):
+		// Still on its way: the client asks again with status.
+		out.State, out.Exit = "pending", 6
+		out.Line = "UNKNOWN " + m + " " + opID + "\t" + oneLine(oc.Stderr)
+	default:
+		out.State, out.Exit = "unknown", 6
+		out.Line = "UNKNOWN " + m + " " + opID + "\t" + oneLine(oc.Stderr)
+	}
+	return out
+}
+
+// clientPlaceStatus answers a poll of an operation this person's client
+// started: only one's own (the journal's actor) is ever read.
+func (s *Server) clientPlaceStatus(w http.ResponseWriter, r *http.Request, p fleetPrincipal, opID string, wait time.Duration) {
+	o, err := s.Store.FleetOperation(opID)
+	if err != nil || o.Actor != p.Actor || (o.Action != "worker_start" && o.Action != "worker_resume") {
+		httpError(w, http.StatusNotFound, "no such operation of yours")
+		return
+	}
+	var pl Placement
+	if o.Placement != "" {
+		_ = json.Unmarshal([]byte(o.Placement), &pl)
+	}
+	if pl.Machine == "" {
+		if f, err := s.Store.Fleet(o.FleetID); err == nil {
+			pl.Machine = f.Hostname
+		}
+	}
+	out := s.clientPlaceAnswer(r, operationView(o), &pl, wait)
+	if (out.State == "refused" || out.State == "failed") && o.Action == "worker_start" {
+		// The start there did not open: its lease goes back to the pool,
+		// as a place answered on the spot gives it back.
+		var q struct {
+			Params struct {
+				Issue int    `json:"issue"`
+				Repo  string `json:"repo"`
+			} `json:"params"`
+		}
+		if json.Unmarshal([]byte(o.Request), &q) == nil && q.Params.Issue > 0 {
+			if ls, err := s.Store.Leases(time.Now()); err == nil {
+				for _, l := range ls {
+					if l.Repo == store.NormRepo(q.Params.Repo) && l.Issue == q.Params.Issue && l.FleetID == o.FleetID && !l.Seen {
+						_, _ = s.Store.ReleaseLease(l.Repo, l.Issue, l.WorkerID)
+					}
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// restoreTarget is the fleet whose /fleet-history row key is: the machine
+// named, else the one whose reaped worker of that key the hub holds the
+// history record of (fleet-worker-records.sh push, claude-fleet#1609) — the
+// newest, among the fleets this person may see that host repo.
+func (s *Server) restoreTarget(p fleetPrincipal, repo, key, node string, now time.Time) (Placement, store.FleetRow, error) {
+	pl := Placement{Requested: node, Repo: repo, Candidates: []Candidate{}, At: now.UTC()}
+	_, rows, err := s.visibleFleets(p, now)
+	if err != nil {
+		return pl, store.FleetRow{}, err
+	}
+	bare := clientPlaceKeyRE.FindStringSubmatch(key)[1]
+	hosting := map[string]store.FleetRow{}
+	owners := map[string]bool{}
+	accts := s.activeAccounts()
+	for _, r := range rows {
+		if !r.Present || !hostsRepo(r, repo) {
+			continue
+		}
+		if node != "auto" && !sameMachine(r.Hostname, node) {
+			continue
+		}
+		hosting[r.FleetID] = r
+		owners[s.relayOwner(r.EndpointID, r.Hostname, r.OSUser, accts)] = true
+	}
+	if len(hosting) == 0 {
+		where := "any of your machines"
+		if node != "auto" {
+			where = node
+		}
+		return pl, store.FleetRow{}, fault("NOT_FOUND", "No fleet hosting "+repo+" on "+where)
+	}
+	var best *store.FleetWorkerRecord
+	for o := range owners {
+		recs, err := s.Store.WorkerRecords(store.WorkerRecordQuery{Owner: o, Repo: repo, Kind: "history"})
+		if err != nil {
+			return pl, store.FleetRow{}, err
+		}
+		for i := range recs {
+			rc := recs[i]
+			if _, ok := hosting[rc.FleetID]; !ok || (rc.Key != bare && !(rc.Key == "" && "issue-"+strconv.Itoa(rc.Issue) == bare)) {
+				continue
+			}
+			if best == nil || rc.CreatedAt.After(best.CreatedAt) {
+				best = &rc
+			}
+		}
+	}
+	var target store.FleetRow
+	switch {
+	case best != nil:
+		target = hosting[best.FleetID]
+		pl.Reason = "its /fleet-history row is on " + s.nodeMachineLabel(target.Hostname)
+	case node != "auto" && len(hosting) == 1:
+		// A machine named: its own ledger is asked, a row the hub never got
+		// (reaped before #1609) included.
+		for _, r := range hosting {
+			target = r
+		}
+		pl.Reason = "named " + node
+	default:
+		return pl, store.FleetRow{}, fault("NOT_FOUND", "no /fleet-history row of "+key+" in "+repo+
+			" on any of your machines — name the machine with --node")
+	}
+	pl.Machine, pl.FleetID = target.Hostname, target.FleetID
+	// A resumed session runs there like a start: never on a login that only
+	// coordinates (compute off), nor on someone's personal computer asked
+	// from elsewhere (submitWrite holds that rule for a named fleet too).
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return pl, target, err
+	}
+	hb, _, _ := s.nodeStatusOf(target.EndpointID, now)
+	if cv := s.computeOf(target.EndpointID, hb, settings, now); cv.Off {
+		return pl, target, fault("NO_ELIGIBLE_NODE", s.nodeMachineLabel(target.Hostname)+": "+cv.Why)
+	}
+	return pl, target, nil
+}
