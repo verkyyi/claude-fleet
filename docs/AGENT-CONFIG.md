@@ -31,7 +31,10 @@ EPIC #1855。一个会话拿到的每一项配置——工具连接（MCP）、�
 `~/.claude/fleet` 指向的版本目录 sha 前 12 位，没有版本目录时是 `git rev-parse HEAD`）。
 `global/agent-cfg.expected` 是新开会话会拿到的那一份（每个 agent 一行 + 一行 `ver <sha>`）；
 指纹不同 = **配置旧**（定义变了），指纹相同只是版本旧 = **待换新**——侧栏两种分开标，
-doctor `agentcfg` 行分开数，`fleet-cfg-restart.sh` 两种一样闲时重开。开会话不联网。每项的来源记在
+doctor `agentcfg` 行分开数，`fleet-cfg-restart.sh` 两种一样闲时重开——Claude 和 Codex
+一样（#1896：空闲满 10 分钟、无 /loop、无后台任务，Codex 另问一次 app-server；Claude
+`--resume` 同一会话、Codex `codex resume` 同一 thread、同一 CODEX_HOME），重开后第一句
+是「fleet 已从 X 更新到 Y」，`/fleet-history` 记 `reason=cfg-stale | ver-stale`。开会话不联网。每项的来源记在
 `$FLEET_CONF_DIR/agent-effective.json`（`source` 字段机器可读：`default|team|personal|local`）。
 
 ## 加锁

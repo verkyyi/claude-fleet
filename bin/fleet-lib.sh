@@ -7292,15 +7292,16 @@ fleet_cfg_state() {
 }
 # fleet_cfg_restart_why <session> <win> [idle-secs] — may <win> be reopened onto
 # the current configuration NOW (issue #1783)? Exit 0 = yes. Else exit 1 and ONE
-# word on stdout says why not: gone · panel · remote · codex · unknown · ok ·
+# word on stdout says why not: gone · panel · remote · unknown · ok ·
 # state:<s> · recent · asleep · looping · bg. The ONE judge — fleet-cfg-restart.sh
 # picks with it and fleet-migrate.sh --cfg-stale asks it again right before /exit,
-# so a session that started a turn in between is never interrupted. Only a Claude
-# session whose @agent_cfg differs from the expected one — or whose @agent_ver
-# does (待换新, issue #1895: the two are reopened alike) — `done` for <idle-secs>
-# (FLEET_CFG_RESTART_IDLE, 600), with no /loop round held and no Bash-tool job
-# still running. needs/blocked never qualify: a pending question is the
-# operator's, and a reopen would drop it.
+# so a session that started a turn in between is never interrupted. Only a
+# session — Claude or Codex alike (issue #1896) — whose @agent_cfg differs from
+# the expected one — or whose @agent_ver does (待换新, issue #1895: the two are
+# reopened alike) — `done` for <idle-secs> (FLEET_CFG_RESTART_IDLE, 600), with no
+# /loop round held and no Bash-tool job still running. needs/blocked never
+# qualify: a pending question is the operator's, and a reopen would drop it; a
+# Codex loop between rounds reads `looping`, never `done`.
 fleet_cfg_restart_why() {
   local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp slp rem hub nm bin
   case "$idle" in ''|*[!0-9]*) idle=600 ;; esac
@@ -7313,7 +7314,6 @@ fleet_cfg_restart_why() {
   rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; nm=${o#*|}
   case "$nm" in dash|plan|backlog|home) echo panel; return 1 ;; esac
   [ -z "$rem" ] && [ "$hub" != 1 ] || { echo remote; return 1; }
-  [ "$ag" != codex ] || { echo codex; return 1; }
   fleet_cfg_expected_load; fleet_cfg_state "$ag" "$fp" "$av"
   case "$FCFG_STATE" in stale|renew) ;; *) echo "$FCFG_STATE"; return 1 ;; esac
   [ -z "$slp" ] || { echo asleep; return 1; }

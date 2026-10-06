@@ -56,8 +56,15 @@
 #                             but only while fleet_cfg_restart_why still says yes
 #                             (stale @agent_cfg, `done` and idle, no /loop round, no
 #                             Bash-tool job), asked again right before the /exit; a
-#                             reopened session leaves a `reason=cfg-stale` row in
-#                             /fleet-history. fleet-cfg-restart.sh is the caller.
+#                             reopened session leaves a `reason=cfg-stale` row
+#                             (`reason=ver-stale` for one only on an older fleet
+#                             version, 待换新) in /fleet-history, and its first
+#                             prompt is the one line 「fleet 已从 <old> 更新到 <new>」.
+#                             A CODEX window takes the same road (issue #1896):
+#                             its thread is also asked natively (app-server
+#                             thread/read) before the /exit, and it comes back as
+#                             `codex resume <same thread>` in the same CODEX_HOME.
+#                             fleet-cfg-restart.sh is the caller.
 #         --nudge <text>      first prompt of the resumed session (default: the
 #                             interrupted-turn text for a `working` window; none if idle)
 #         --dry-run           print the plan, touch nothing
@@ -169,6 +176,50 @@ session_id_for() {
 
 # wopt <wid> <format> — one expanded format off a window (empty + exit 1 if gone).
 wopt() { TM display-message -p -t "$1" "$2" 2>/dev/null; }
+
+# --- a Codex window (--cfg-stale, issue #1896) -------------------------------------
+# codex_of_window <wid> → `<launcher-pid>\t<thread>\t<CODEX_HOME>\t<remote>` of the
+# Codex session BOUND to the window (fleet-codex-session.py identity: the
+# SessionStart record, owned by the launcher that is still @cc_launcher_pid) — the
+# exact thread, never the home's newest. Exit 1: none bound, or its launcher is gone.
+codex_of_window() {
+  local row
+  row=$(python3 "$BIN/fleet-codex-session.py" identity --pane "$1" --socket "$SOCK" 2>/dev/null \
+    | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+v = [str(d.get(k) or "") for k in ("owner", "session_id", "home", "remote")]
+if not (v[0] and v[1] and v[2]) or any(c in x for x in v for c in "\t\n\r"):
+    sys.exit(1)
+print("\t".join(v))' 2>/dev/null) && [ -n "$row" ] || return 1
+  kill -0 "${row%%$'\t'*}" 2>/dev/null || return 1
+  printf '%s\n' "$row"
+}
+# codex_native_idle <remote> <thread> → 0 idle · 1 not idle (or the app-server did
+# not answer: never reopen on a guess) · 2 no app-server endpoint to ask (the
+# hook-fed @claude_state the judge read is then the only word).
+codex_native_idle() {
+  case "${1:-}" in unix://?*) ;; *) return 2 ;; esac
+  python3 -c 'import runpy, sys
+rpc = runpy.run_path(sys.argv[1])["Client"](sys.argv[2], timeout=3)
+try:
+    t = rpc.call("thread/read", {"threadId": sys.argv[3], "includeTurns": False})["thread"]
+    ok = t.get("id") == sys.argv[3] and t.get("status", {}).get("type") == "idle"
+finally:
+    rpc.close()
+sys.exit(0 if ok else 1)' "$BIN/fleet-codex-rpc.py" "$1" "$2" >/dev/null 2>&1 || return 1
+}
+# cfg_update_nudge <old-ver> <new-ver> <reason> → the reopened session's first
+# prompt: ONE line (EPIC #1906 rule 5 — a notice, never a task) naming what moved,
+# and the language rule (#620).
+cfg_update_nudge() {
+  local old="${1:-}" new="${2:-}" why
+  if [ "${3:-}" = ver-stale ] && [ -n "$new" ]; then
+    why="fleet 已从 ${old:-旧版} 更新到 $new (fleet updated from ${old:-an older version} to $new)."
+  else
+    why="fleet 的会话配置已更新 (the fleet's session configuration changed: hooks, skills, MCP or settings)."
+  fi
+  printf '%s' "$why This session was idle, so the fleet reopened it on the new version, same conversation. Nothing to act on: if your task is finished, just stop; otherwise carry on.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
+}
 # migrate_report <kind> <text> — the summary: a toast for a keypress (--toast),
 # an alerts event for a daemon (--alert, issue #1617).
 migrate_report() {
@@ -365,7 +416,14 @@ migrate_one_body() {
   # mark that keeps every reaper off a $HOME session.
   wrepo=$(wopt "$wid" '#{@repo}'); norepo=$(wopt "$wid" '#{@norepo}'); nsid=$(wopt "$wid" '#{@norepo_sid}')
   hnd=$(wopt "$wid" '#{@wid}')      # the fleet's short window handle (issue #566)
-  local sid; sid=$(session_id_for "$cpid" "$cwd") || sid=""
+  # A Codex window (--cfg-stale only, issue #1896): $CX is its bound session —
+  # launcher pid (= $cpid), thread, CODEX_HOME, app-server endpoint.
+  local sid cxhome='' cxremote=''
+  if [ "${AGENT:-claude}" = codex ]; then
+    IFS=$'\t' read -r _ sid cxhome cxremote <<< "$CX"
+  else
+    sid=$(session_id_for "$cpid" "$cwd") || sid=""
+  fi
   # A multi-repo fleet has one base checkout per hosted repo (issue #791): a raw
   # pane sitting in ANY of them is the "main-cwd" case, not only the conf repo's.
   local wmain="${FLEET_MAIN:-}"
@@ -377,6 +435,19 @@ migrate_one_body() {
   # tick ago, and a session that has started a turn since is never interrupted.
   if [ "$CFG" = 1 ]; then
     local cwhy; cwhy=$(fleet_cfg_restart_why "$SESS" "$wid")       || { say "  – $name ($wid): not reopened for its configuration — ${cwhy:-?}"; skipped=$((skipped+1)); return 0; }
+    # A Codex thread is also asked natively (issue #1896): its hooks feed
+    # @claude_state, the app-server knows whether a turn is really running.
+    if [ "${AGENT:-claude}" = codex ]; then
+      codex_native_idle "$cxremote" "$sid"
+      [ $? != 1 ] || { say "  – $name ($wid): not reopened for its configuration — codex-busy"; skipped=$((skipped+1)); return 0; }
+    fi
+    # What moved — the configuration (配置旧) or only the fleet version (待换新) —
+    # names the /fleet-history reason and the one-line notice the session gets.
+    fleet_cfg_expected_load
+    fleet_cfg_state "$(wopt "$wid" '#{@cc_agent}')" "$(wopt "$wid" '#{@agent_cfg}')" "$(wopt "$wid" '#{@agent_ver}')"
+    CFG_REASON=cfg-stale; [ "$FCFG_STATE" = renew ] && CFG_REASON=ver-stale
+    CFG_NEWVER=${FCFG_EXP_VER:-}
+    [ "$NUDGE_SET" = 1 ] || CFG_NUDGE=$(cfg_update_nudge "$(wopt "$wid" '#{@agent_ver}')" "$CFG_NEWVER" "$CFG_REASON")
   fi
   if [ "$CFG" != 1 ] && migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then
     if [ "$label" = "$ACTIVE" ]; then say "  – $name ($wid): already on $label — skipped"
@@ -389,6 +460,7 @@ migrate_one_body() {
     if [ "$state" = working ]; then
       if [ -n "$MODEL" ]; then nudge="${NUDGE_MODEL_DEFAULT//__MODEL__/$MODEL}"; else nudge="$NUDGE_DEFAULT"; fi
     else nudge=""; fi
+    [ "$CFG" != 1 ] || nudge="${CFG_NUDGE:-}"
   fi
   # --force-bg (issue #873): inventory the background work NOW, while Claude is
   # alive and still its parent — after /exit the survivors are PPID-1 orphans no
@@ -405,9 +477,16 @@ migrate_one_body() {
   # read here, immediately before the plan is printed or the first state change;
   # a refusal leaves the window running and says so (a close + resume onto an
   # account that cannot log in is the 10-05 shape: window dead, conversation gone).
+  # A Codex reopen stays on its own CODEX_HOME — no account to switch, no check.
   local ta_why=''
-  ta_why=$(bash "$BIN/fleet-account.sh" target-auth --agent claude --label "$ACTIVE" 2>&1 >/dev/null) && ta_why='' \
-    || { ta_why=${ta_why##*fleet-account: }; ta_why=${ta_why#target-auth: }; ta_why=${ta_why:-the login check itself failed}; }
+  if [ "${AGENT:-claude}" != codex ]; then
+    ta_why=$(bash "$BIN/fleet-account.sh" target-auth --agent claude --label "$ACTIVE" 2>&1 >/dev/null) && ta_why='' \
+      || { ta_why=${ta_why##*fleet-account: }; ta_why=${ta_why#target-auth: }; ta_why=${ta_why:-the login check itself failed}; }
+  fi
+  if [ "$DRY" = 1 ] && [ "${AGENT:-claude}" = codex ]; then
+    say "  ↻ $name ($wid) [codex · $cxhome] would /exit launcher $cpid and codex resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
+    return 0
+  fi
   if [ "$DRY" = 1 ]; then
     say "  ↻ $name ($wid) [${label:-?} → ${ACTIVE:-?}${MODEL:+ on $MODEL}] would /exit pid $cpid and resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
     [ -z "$ta_why" ] || say "    ! target-auth: $ta_why — would be left running"
@@ -479,16 +558,23 @@ migrate_one_body() {
   # 2. exit: Escape (cancels the auto-continue wait / any menu), then /exit + Enter.
   TM set-option -w -t "$wid" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
   SK -t "$wid" Escape 2>/dev/null; sleep 0.6
-  SK -t "$wid" -l '/exit' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
+  if [ "${AGENT:-claude}" = codex ]; then
+    # Codex's paste detector can absorb a fast Enter as a newline: frame /exit as
+    # one bracketed paste, then submit (fleet-transfer.sh's Codex exit).
+    SK -t "$wid" C-u 2>/dev/null
+    SK -t "$wid" -l $'\033[200~/exit\033[201~' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
+  else
+    SK -t "$wid" -l '/exit' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
+  fi
   local i alive=1
   for ((i=1; i<=EXIT_WAIT; i++)); do
     kill -0 "$cpid" 2>/dev/null || { alive=0; break; }
     # the slash-command menu may have swallowed the first Enter: one more at 6s
-    [ "$i" = 6 ] && TM display-message -p -t "$wid" '#{pane_pid}' >/dev/null 2>&1 && SK -t "$wid" Enter 2>/dev/null
+    [ "$i" = 6 ] && [ "${AGENT:-claude}" != codex ] && TM display-message -p -t "$wid" '#{pane_pid}' >/dev/null 2>&1 && SK -t "$wid" Enter 2>/dev/null
     sleep 1
   done
   if [ "$alive" = 1 ]; then
-    lease_drop "$ldir"; reported_restore "$wid" "$prior_reported"; say "  ✗ $name ($wid): Claude (pid $cpid) did not exit within ${EXIT_WAIT}s — left as is"; skipped=$((skipped+1)); return 0
+    lease_drop "$ldir"; reported_restore "$wid" "$prior_reported"; say "  ✗ $name ($wid): ${AGENT:-claude} (pid $cpid) did not exit within ${EXIT_WAIT}s — left as is"; skipped=$((skipped+1)); return 0
   fi
   # --force-bg: Claude is verified gone — stop what it left running (only a pid
   # whose start fingerprint still matches; a reused pid is never touched) and
@@ -520,6 +606,12 @@ migrate_one_body() {
     pin="FLEET_ACCOUNT_SELECTED=1 FLEET_ACCOUNT_LABEL='$ACTIVE' FLEET_ACCOUNT_TARGET='$target_json' "
   fi
   local cmd="${pin}'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || ${pin}'$LAUNCH'$mflag; exec \$SHELL"
+  # Codex (issue #1896): `codex resume <thread>` in the SAME home — fleet-codex.sh
+  # turns `--resume` into the native verb; the explicit --agent keeps it Codex.
+  if [ "${AGENT:-claude}" = codex ]; then
+    local cxh; cxh=$(printf '%s' "$cxhome" | tr -d "'")
+    cmd="'$LAUNCH' --agent codex --codex-home '$cxh' --resume '$sid'${nudge:+ '$nudge'} || '$LAUNCH' --agent codex --codex-home '$cxh'; exec \$SHELL"
+  fi
   # 3. the SessionEnd hook closes the window (and records the ledger row) …
   for ((i=1; i<=CLOSE_WAIT; i++)); do
     window_closed "$wid" && break
@@ -530,6 +622,10 @@ migrate_one_body() {
     # … or it doesn't (FLEET_CLOSE_ON_EXIT=0): Claude is verified gone, the pane is
     # at its `exec $SHELL` — relaunch right there, keeping the window.
     fleet_pane_claude_pid "$wid" "$SOCK" >/dev/null 2>&1 && { lease_drop "$ldir"; reported_restore "$wid" "$prior_reported"; say "  ✗ $name ($wid): a Claude is back under the pane — not typing"; skipped=$((skipped+1)); return 0; }
+    # Codex: type only into the verified childless shell the launcher left.
+    if [ "${AGENT:-claude}" = codex ] && ! python3 "$BIN/.fleet-transfer.py" process shell "$(wopt "$wid" '#{pane_pid}')" >/dev/null 2>&1; then
+      lease_drop "$ldir"; reported_restore "$wid" "$prior_reported"; say "  ✗ $name ($wid): the pane is not an idle shell — not typing"; skipped=$((skipped+1)); return 0
+    fi
     TM clear-history -t "$wid" 2>/dev/null || :     # drop the old limit banner (stale-banner cascade guard)
     migrated_stamp "$wid" "$wall"
     SK -t "$wid" -l "$cmd" 2>/dev/null; SK -t "$wid" Enter 2>/dev/null
@@ -570,8 +666,13 @@ migrate_one_body() {
     [ -n "$hnd" ] && fleet_wid_stamp "$nw" "$SOCK" "$hnd" >/dev/null 2>&1
     TM set-window-option -t "$nw" @claude_state "${state:-done}" 2>/dev/null
     TM set-window-option -t "$nw" @claude_state_ts "$(now)" 2>/dev/null
+    [ "${AGENT:-claude}" != codex ] || TM set-window-option -t "$nw" @cc_agent codex 2>/dev/null
     fleet_hub_nudge   # issue #1481
   fi
+  # The version this reopen told it about (EPIC #1906 rule 5: each version once):
+  # the between-turns notice (#1897) reads @ver_told and stays quiet for it.
+  [ "$CFG" = 1 ] && [ -n "${CFG_NEWVER:-}" ] && [ -n "$nudge" ] \
+    && TM set-window-option -t "$nw" @ver_told "$CFG_NEWVER" 2>/dev/null
   # The window exists and carries @issue/@worktree again — the gap is over, so the
   # reapers get their normal signals back (issue #550). Dropped BEFORE the boot
   # verification below: that loop waits up to BOOT_WAIT seconds on a window whose
@@ -583,6 +684,16 @@ migrate_one_body() {
   # CLOSE_ON_EXIT=0 branch) $nw IS the window that carries it — while one whose
   # MERGED/FAILED already reached the parent must not send a late "stopped".
   reported_restore "$nw" "$prior_reported"
+  # 5. verify — Codex: the window binds the SAME thread again (its SessionStart).
+  if [ "${AGENT:-claude}" = codex ]; then
+    local ncx='' nsid=''
+    for ((i=1; i<=BOOT_WAIT*2; i++)); do
+      ncx=$(codex_of_window "$nw") && { IFS=$'\t' read -r _ nsid _ _ <<< "$ncx"; [ "$nsid" = "$sid" ] && break; }
+      sleep 1
+    done
+    if [ "$nsid" = "$sid" ]; then say "  ✓ $name ($wid → $nw): codex resumed thread ${sid%%-*}… on the current configuration"
+    else say "  ? $name ($wid → $nw): no Codex bound to thread ${sid%%-*}… within $((BOOT_WAIT*2))s — check it"; fi
+  else
   # 5. verify: the resumed process's token, read out of its environment.
   local ncp="" nl=""
   for ((i=1; i<=BOOT_WAIT; i++)); do
@@ -602,11 +713,12 @@ migrate_one_body() {
   else
     say "  ✓ $name ($wid → $nw): ${label:-?} → ${nl:-?}${MODEL:+ on $MODEL} (pid $ncp, session ${sid%%-*}…)"
   fi
+  fi
   # A configuration reopen leaves its row in /fleet-history (issue #1783): the
   # same transcript, `reason=cfg-stale`, so "was this session restarted onto the
   # new configuration?" has an answer.
   if [ "$CFG" = 1 ]; then
-    bash "$BIN/fleet-history.sh" resumed --session-id "$sid" --session "$SESS" --reason cfg-stale       --key "$(fleet_window_okey "$SESS" "$nw" 2>/dev/null)" --worktree "${wt:-$cwd}" --title "$name"       ${wrepo:+--repo "$wrepo"} >/dev/null 2>&1 || :
+    bash "$BIN/fleet-history.sh" resumed --session-id "$sid" --session "$SESS" --reason "${CFG_REASON:-cfg-stale}"       --key "$(fleet_window_okey "$SESS" "$nw" 2>/dev/null)" --worktree "${wt:-$cwd}" --title "$name"       ${wrepo:+--repo "$wrepo"} >/dev/null 2>&1 || :
   fi
   moved=$((moved+1)); note "$name"
   return 0
@@ -816,9 +928,18 @@ migrate_main() {
   say "fleet-migrate: $MODE${ACCOUNT:+ from $ACCOUNT} → ${ACTIVE:-<no active account>} (${#targets[@]} window$([ "${#targets[@]}" = 1 ] || printf s))"
   self_refused=0; detached=0
   for wid in ${targets[@]+"${targets[@]}"}; do
+    # --cfg-stale reopens a Codex window too (issue #1896): its pid is the bound
+    # session's launcher, and it keeps its own CODEX_HOME (no account label).
+    AGENT=claude; CX=''; CFG_REASON=''; CFG_NEWVER=''; CFG_NUDGE=''
+    [ "$CFG" = 1 ] && [ "$(wopt "$wid" '#{@cc_agent}')" = codex ] && AGENT=codex
+    if [ "$AGENT" = codex ]; then
+      CX=$(codex_of_window "$wid") || { say "  – $wid: no live Codex session bound — skipped"; skipped=$((skipped+1)); continue; }
+      cpid=${CX%%$'\t'*}; label=''
+    else
     cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || { say "  – $wid: no Claude process — skipped"; skipped=$((skipped+1)); continue; }
     stamp=$(TM display-message -p -t "$wid" '#{@cc_account}' 2>/dev/null)
     label=$(window_account "$wid" "$cpid" "$stamp")
+    fi
     # The caller's own window (issue #1474): refuse, or hand it to the detached
     # re-exec; --dry-run only says so and still prints the plan.
     if migrate_is_self "$wid" "$cpid"; then
