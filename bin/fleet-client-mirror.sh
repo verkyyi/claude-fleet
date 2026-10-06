@@ -60,18 +60,28 @@ listed() { awk '!/^[[:space:]]*#/ && NF { print $1 }' "$MANIFEST"; }
 # hooks/ commands/ skills/ mod/, every depth) the manifest does not name.
 unlisted() {
   local f rel l
-  l="$(listed)"
+  # one newline-framed string, matched with `case` — never `printf | grep -q`:
+  # under pipefail grep's early exit can SIGPIPE the printf and read "unlisted"
+  l="
+$(listed)
+"
   for f in "$CLIENT"/bin/* "$CLIENT"/conf/*; do
     [ -f "$f" ] || continue
     rel="${f#"$CLIENT"/}"
-    printf '%s\n' "$l" | grep -qxF "$rel" || printf '%s\n' "$rel"
+    case "$l" in *"
+$rel
+"*) ;; *) printf '%s\n' "$rel" ;; esac
   done
   for d in hooks commands skills mod; do
     [ -d "$CLIENT/$d" ] || continue
-    find "$CLIENT/$d" -type f | while IFS= read -r f; do
+    while IFS= read -r f; do
       rel="${f#"$CLIENT"/}"
-      printf '%s\n' "$l" | grep -qxF "$rel" || printf '%s\n' "$rel"
-    done
+      case "$l" in *"
+$rel
+"*) ;; *) printf '%s\n' "$rel" ;; esac
+    done <<EOT
+$(find "$CLIENT/$d" -type f)
+EOT
   done
 }
 

@@ -70,10 +70,10 @@ files=$("$PY" "$REPO/bin/fleet-agent-bundle.py" files --root "$REPO"); rc=$?
 miss=''
 for c in hooks/settings-hooks.json bin/fleet-hook-run.sh conf/agent-defaults/claude/mcp.default.json \
          bin/mcp-github.sh mod/fleet/.claude-plugin/plugin.json skills/doc-preview/SKILL.md commands/fleet-claim.md; do
-  printf '%s\n' "$files" | grep -qxF "$c" || miss="$miss $c"
+  printf '%s\n' "$files" | grep -xF >/dev/null "$c" || miss="$miss $c"
 done
 for h in $(grep -o '\.claude/fleet/hooks/[^ "]*' "$REPO/hooks/settings-hooks.json" | sed 's#^\.claude/fleet/##' | sort -u); do
-  printf '%s\n' "$files" | grep -qxF "$h" || miss="$miss $h"
+  printf '%s\n' "$files" | grep -xF >/dev/null "$h" || miss="$miss $h"
 done
 [ -z "$miss" ] && ok "A every category's anchor + every wired hooks/ script is in the package" || bad "A missing:$miss"
 v1=$("$PY" "$REPO/bin/fleet-agent-bundle.py" version --root "$REPO"); v2=$("$PY" "$REPO/bin/fleet-agent-bundle.py" version --root "$REPO")
@@ -85,7 +85,7 @@ fi
 # ── B — client-only install: the four categories ─────────────────────────────
 H=$(fresh b); out=$(install "$H"); rc=$?
 R="$H/.local/share/claude-fleet"
-[ "$rc" = 0 ] && echo "$out" | grep -q '^Agent 配置: 已装' && ok "B install exit 0, says the Agent configuration is in" || bad "B rc=$rc: $out"
+[ "$rc" = 0 ] && echo "$out" | grep >/dev/null '^Agent 配置: 已装' && ok "B install exit 0, says the Agent configuration is in" || bad "B rc=$rc: $out"
 [ ! -e "$H/.claude/fleet" ] && ok "B no ~/.claude/fleet (client only)" || bad "B a full install appeared"
 chk=$("$PY" - "$H" "$R" <<'PY'
 import json, os, sys
@@ -104,8 +104,8 @@ PY
 )
 nh=$(printf '%s\n' "$chk" | sed -n 's/^hooks //p')
 case "$nh" in 0/*|'') bad "B hooks: $chk" ;; *) [ "${nh%/*}" = "${nh#*/}" ] && ok "B Claude hooks: all $nh wired through the package's shim" || bad "B hooks: $nh" ;; esac
-printf '%s\n' "$chk" | grep -qx 'mcp context7,fetch,github,playwright' && ok "B Claude MCP: context7 · fetch · github · playwright" || bad "B mcp: $chk"
-printf '%s\n' "$chk" | grep -q "^github .*\$HOME/.local/share/claude-fleet/bin/mcp-github.sh" && [ -x "$R/bin/mcp-github.sh" ] \
+printf '%s\n' "$chk" | grep -x >/dev/null 'mcp context7,fetch,github,playwright' && ok "B Claude MCP: context7 · fetch · github · playwright" || bad "B mcp: $chk"
+printf '%s\n' "$chk" | grep >/dev/null "^github .*\$HOME/.local/share/claude-fleet/bin/mcp-github.sh" && [ -x "$R/bin/mcp-github.sh" ] \
   && ok "B github MCP runs the package's bin/mcp-github.sh" || bad "B github args: $chk"
 [ -f "$H/.claude/skills/doc-preview/SKILL.md" ] && [ -x "$H/.claude/skills/doc-preview/share.sh" ] && [ -f "$H/.claude/commands/fleet-claim.md" ] \
   && ok "B Claude skills + commands (a skill's script executable)" || bad "B claude skills: $(ls "$H/.claude/skills" "$H/.claude/commands" 2>&1 | tr '\n' ' ')"
@@ -115,7 +115,7 @@ n=$(grep -c '^\[mcp_servers\.' "$H/.codex/config.toml" 2>/dev/null)
 [ "$n" = 4 ] && grep -q 'local/share/claude-fleet/bin/mcp-fetch.sh' "$H/.codex/config.toml" && ok "B Codex MCP: 4 servers, fetch at the package's bin/" || bad "B codex mcp: $n $(cat "$H/.codex/config.toml" 2>&1)"
 [ -f "$R/mod/fleet/.claude-plugin/plugin.json" ] && ok "B the mod (mod/fleet/.claude-plugin/plugin.json) is in the package" || bad "B no mod"
 doc=$(env -i PATH="$SYS_PATH" HOME="$H" "$H/.local/bin/fleet" doctor 2>&1); rc=$?
-[ "$rc" = 0 ] && printf '%s\n' "$doc" | grep -q 'PASS  agents   4/4 · hooks .* · skills .* · mcp ok · mod ' \
+[ "$rc" = 0 ] && printf '%s\n' "$doc" | grep >/dev/null 'PASS  agents   4/4 · hooks .* · skills .* · mcp ok · mod ' \
   && ok "B fleet doctor: $(printf '%s' "$doc" | sed 's/^ *//')" || bad "B fleet doctor rc=$rc: $doc"
 
 # ── C — the login's own: overrides and what it already had ───────────────────
@@ -138,7 +138,7 @@ PY
 [ ! -e "$H/.codex/skills" ] && ok "C codex.skills overridden → no Codex skills written" || bad "C codex skills: $(ls "$H/.codex/skills")"
 grep -q 'fleet:agent-defaults' "$H/.claude/CLAUDE.md" 2>/dev/null && bad "C claude.doc overridden but CLAUDE.md got the block" || ok "C claude.doc overridden → no CLAUDE.md block"
 doc=$(env -i PATH="$SYS_PATH" HOME="$H" "$H/.local/bin/fleet" doctor 2>&1)
-printf '%s\n' "$doc" | grep -q 'PASS  agents   4/4' && ok "C what the login keeps is not counted missing" || bad "C doctor: $doc"
+printf '%s\n' "$doc" | grep >/dev/null 'PASS  agents   4/4' && ok "C what the login keeps is not counted missing" || bad "C doctor: $doc"
 
 # ── D — again: nothing changes ───────────────────────────────────────────────
 H="$WORK/b/home"
@@ -169,7 +169,7 @@ rm -rf "$H/.claude/fleet"
 mkdir -p "$H/.claude/fleet/bin"; : > "$H/.claude/fleet/bin/fleet-lib.sh"
 before=$(snap "$H")
 out=$(env -i PATH="$SYS_PATH" HOME="$H" bash "$R/bin/fleet-install-apply.sh" --bundle --root "$R" 2>&1); rc=$?
-[ "$rc" = 0 ] && echo "$out" | grep -q '^bundle: skip — this login has the full install' && [ "$before" = "$(snap "$H")" ] \
+[ "$rc" = 0 ] && echo "$out" | grep >/dev/null '^bundle: skip — this login has the full install' && [ "$before" = "$(snap "$H")" ] \
   && ok "F full install here → --bundle skips, nothing written" || bad "F rc=$rc: $out"
 rm -rf "$H/.claude/fleet"
 cp "$H/.claude/settings.json" "$WORK/node-settings.json"
