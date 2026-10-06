@@ -195,7 +195,7 @@ switch() {
 }
 
 cmd_start() {
-  local mark="$ROOT/.client-version" lv lc hv hc hmin hcommit secs f now new
+  local mark="$ROOT/.client-version" lv lc hv hmin hcommit secs f now new
   [ -f "$mark" ] || return 0                          # not an installed client
   load_conf
   HUB=$(hub_url)
@@ -226,7 +226,7 @@ cmd_start() {
   # 4. the version
   f="$STATE/version.json"
   curl -fsS --max-time "$TMO" "$HUB/version" -o "$f" 2>/dev/null || return 0   # out of reach: open as is
-  IFS=$'\t' read -r hv hc hmin hcommit <<EOF
+  IFS=$'\t' read -r hv _ hmin hcommit <<EOF
 $(ver_fields "$f")
 EOF
   [ -n "${hv:-}" ] || return 0                        # a hub that does not say
