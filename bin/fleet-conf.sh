@@ -117,16 +117,35 @@ _host_file() {
 # _host_of_role <roles> → 1 when the old list says this machine runs sessions.
 # `node` alone is not enough: a computer joined only to COORDINATE (issue #1719 —
 # node.env CCQUOTA_FLEET_COMPUTE=0, no fleet of its own, the install line's
-# --no-fleet join) is a node that hosts nothing — 承载 未开. A node with a fleet
-# here, or one the hub may place on (no COMPUTE line = a node from before #1719),
-# hosts.
+# --no-fleet join) is a node that hosts nothing — 承载 未开. Whether it hosts is
+# _hosts_here's to say.
 _host_of_role() {
   _role_has "$1" node || { printf 0; return 0; }
-  if [ -n "$(fleet_each_conf)" ] || [ "$(_fleet_node_env_val CCQUOTA_FLEET_COMPUTE 2>/dev/null)" != 0 ]; then
-    printf 1
-  else
-    printf 0
+  _hosts_here
+}
+
+# _hosts_here → 1 | 0: does this machine really 承载 sessions (issue #1887)?
+#   node.env says it: CCQUOTA_FLEET_COMPUTE=0 → 0, any other value → 1, and no
+#     COMPUTE line → 1 (a node from before #1719, which the hub places on).
+#   no node.env: a fleet conf alone is not enough — fleet-up (or an older sync)
+#     leaves one on a laptop that only coordinates. Its fleet must run HERE: a
+#     live server on its socket, or the session daemons installed (cleanup — gui
+#     LaunchAgent, a guest login's LaunchDaemon, or the systemd timer).
+_hosts_here() {
+  if [ -r "$(fleet_node_env_file)" ]; then
+    case "$(_fleet_node_env_val CCQUOTA_FLEET_COMPUTE 2>/dev/null | tr -d "\"' ")" in 0) printf 0 ;; *) printf 1 ;; esac
+    return 0
   fi
+  [ -n "$(fleet_each_conf)" ] || { printf 0; return 0; }
+  if [ -n "$(fleet_sockets 2>/dev/null)" ] || _session_daemons; then printf 1; else printf 0; fi
+}
+
+_session_daemons() {
+  [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/claude-fleet-cleanup.timer" ] && return 0
+  [ -f "$BIN/fleet-daemon-lib.sh" ] || return 1
+  ( . "$BIN/fleet-daemon-lib.sh" 2>/dev/null
+    for sh in gui system; do [ -f "$(fleet_daemon_plist cleanup "$sh")" ] && exit 0; done
+    exit 1 )
 }
 
 # _host_now → <1|0>\t<how>: FLEET_HOST, else the old FLEET_ROLE (one version),
@@ -141,10 +160,14 @@ _host_now() {
   esac
   r=$(_role_file)
   if [ -n "$r" ]; then printf '%s\tFLEET_ROLE=%s（旧键）' "$(_host_of_role "$r")" "$r"; return 0; fi
-  local why
+  # Nothing written yet: a read, as it always was — a node with a fleet conf
+  # here, or one the hub may place on, hosts. What a migration WRITES is
+  # _hosts_here's stricter answer (issue #1887).
+  local why h1=0
   ri=$(_role_infer); r=${ri%%	*}; why=''
   case "${ri#*	}" in *node:*) why=" — ${ri#*node: }" ;; esac
-  printf '%s\tinferred%s' "$(_host_of_role "$r")" "$why"
+  if _role_has "$r" node && { [ -n "$(fleet_each_conf)" ] || [ "$(_fleet_node_env_val CCQUOTA_FLEET_COMPUTE 2>/dev/null)" != 0 ]; }; then h1=1; fi
+  printf '%s\tinferred%s' "$h1" "$why"
 }
 
 # _migrate_key — an old FLEET_ROLE line becomes FLEET_HOST, in place (the line's
@@ -155,6 +178,7 @@ _migrate_key() {
   [ -f "$MC" ] || return 0
   r=$(_role_file)
   [ -n "$r" ] || grep -Eq "$ROLE_RE" "$MC" || return 0
+  _bak_mc >/dev/null || return 1
   h=$(_host_file)
   if [ -n "$h" ]; then
     _drop_role || return 1
@@ -170,6 +194,49 @@ _drop_role() {
   grep -Ev "$ROLE_RE" "$MC" > "$tmp" \
     && { chmod "$(stat -c '%a' "$MC" 2>/dev/null || stat -f '%Lp' "$MC")" "$tmp" 2>/dev/null; mv -f "$tmp" "$MC"; } \
     || { rm -f "$tmp"; return 1; }
+}
+
+# _bak_mc → keep fleet.conf as it is now, before a migration rewrites it (issue
+# #1887): fleet.conf.bak-<YYYYmmdd-HHMMSS>, 0600 like the file. Prints its path.
+_bak_mc() {
+  local b
+  [ -f "$MC" ] || return 0
+  b="$MC.bak-$(date +%Y%m%d-%H%M%S)"
+  [ -e "$b" ] || cp -p "$MC" "$b" || return 1
+  printf '%s' "$b"
+}
+
+# _host_mark <why> — the one line under FLEET_HOST that says the correction below
+# has run: it never runs twice. (A person's `fleet host on` needs no mark — it
+# turns compute on or installs the session daemons, which _hosts_here reads as 1.)
+# Replaces an earlier mark.
+HOST_MARK='# FLEET_HOST checked'
+_host_mark() {
+  local tmp="$MC.tmp.$$"
+  awk -v mark="$HOST_MARK" -v line="$HOST_MARK $(date '+%Y-%m-%d %H:%M:%S') — $1 (issue #1887)" -v re="$HOST_RE" '
+    index($0, mark) == 1 { next }
+    { print }
+    $0 ~ re && !done { print line; done = 1 }
+  ' "$MC" > "$tmp" && { chmod "$(stat -c '%a' "$MC" 2>/dev/null || stat -f '%Lp' "$MC")" "$tmp" 2>/dev/null; mv -f "$tmp" "$MC"; } \
+    || { rm -f "$tmp"; return 1; }
+}
+
+# _host_correct [dry] — a FLEET_HOST=1 a MIGRATION wrote (the file's «Migrated by»
+# header, no mark) on a machine that does not host (_hosts_here = 0) goes to 0,
+# once: before #1887 FLEET_ROLE=client,node and a leftover fleet conf both read as
+# 承载. The old file is kept (.bak-<time>) and the mark records it. Prints what it
+# did (or would do); nothing when there was nothing to do.
+_host_correct() {
+  local b
+  [ -f "$MC" ] && [ "$(_host_file)" = 1 ] || return 0
+  grep -q '^# Migrated by fleet-conf\.sh' "$MC" || return 0
+  grep -q "^$HOST_MARK" "$MC" && return 0
+  [ "$(_hosts_here)" = 0 ] || return 0
+  if [ "${1:-0}" = 1 ]; then printf 'would correct FLEET_HOST 1 → 0 (this machine hosts no sessions)'; return 0; fi
+  b=$(_bak_mc) || return 1
+  _set_common "$MC" FLEET_HOST "FLEET_HOST=0" || return 1
+  _host_mark 'migrated as 1, corrected to 0: no compute, no fleet running here' || return 1
+  printf 'FLEET_HOST 1 → 0 — this machine hosts no sessions (no compute, no fleet running here); was kept as %s' "${b##*/}"
 }
 
 set_host() {   # $1 1|0
@@ -255,17 +322,72 @@ _body() {
   grep -Ev "$HUB_RE" "$1" | grep -Ev "$SECRET_RE" | grep -Ev "$ROLE_RE" | grep -Ev "$HOST_RE" | grep -Ev "$ourhdr" | grep -Ev "$drop"
 }
 
+# _carry <old> <new> — every assignment <old> makes in its [common] / [client] /
+# [node] section whose key <new>'s same section does not set goes into <new>, at
+# that section's end (issue #1887). <new> is edited in place; mode kept.
+_carry() {
+  local tmp="$2.carry.$$"
+  awk -v co="$CLIENT_OPEN" -v cc="$CLIENT_CLOSE" -v no="$NODE_OPEN" -v nc="$NODE_CLOSE" '
+    function sect(l) {
+      if (l == "# ---- [common] ----") { cur = "common"; return 1 }
+      if (l == co) { cur = "client"; return 1 }
+      if (l == no) { cur = "node"; return 1 }
+      if (l == cc || l == nc) { cur = ""; return 1 }
+      if (cur == "common" && l ~ /^# ---- \[/) cur = ""
+      return 0
+    }
+    function key(l,   k) {
+      if (l !~ /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/) return ""
+      k = l; sub(/^[ \t]*(export[ \t]+)?/, "", k); sub(/=.*/, "", k); return k
+    }
+    FNR == 1 { cur = "" }
+    NR == FNR { if (sect($0) || cur == "") next
+                k = key($0); if (k == "") next
+                if (!((cur, k) in old)) { order[cur] = order[cur] SUBSEP k; }
+                old[cur, k] = $0; next }
+    { line[++n] = $0; if (!sect($0) && cur != "" && (k = key($0)) != "") have[cur, k] = 1
+      if ($0 == cc) hascl = 1; if ($0 == nc) hasnd = 1 }
+    function extra(s,   m, i, ks, o) {
+      o = ""; m = split(substr(order[s], 2), ks, SUBSEP)
+      for (i = 1; i <= m; i++) if (!((s, ks[i]) in have)) o = o old[s, ks[i]] "\n"
+      return o
+    }
+    END {
+      ec = extra("common"); el = extra("client"); en = extra("node")
+      if (!hasnd) { ec = ec en; en = "" }
+      if (!hascl) { ec = ec el; el = "" }
+      cur = ""
+      for (i = 1; i <= n; i++) {
+        l = line[i]
+        if (cur == "common" && ec != "" && l == "" && line[i + 1] ~ /^# ---- \[/) { printf "%s", ec; ec = "" }
+        prev = cur; sect(l)
+        if (prev == "common" && cur != "common" && ec != "") { printf "%s", ec; ec = "" }
+        if (l == cc && el != "") { printf "%s", el; el = "" }
+        if (l == nc && en != "") { printf "%s", en; en = "" }
+        print l
+      }
+      printf "%s", ec
+    }
+  ' "$1" "$2" > "$tmp" && sh -n "$tmp" 2>/dev/null \
+    && { chmod "$(stat -c '%a' "$2" 2>/dev/null || stat -f '%Lp' "$2")" "$tmp" 2>/dev/null; mv -f "$tmp" "$2"; } \
+    || { rm -f "$tmp"; return 1; }
+}
+
 migrate() {
   local DRY="$1" QUIET="$2"
   local SET="$CD/fleet.settings" SH="$CD/shell.conf" HJ="$CD/hub.json"
   if [ -f "$MC" ]; then
     # the one-key rename (issue #1806) runs on a file that is already one
-    local mk
+    local mk hc
     if [ "$DRY" = 1 ]; then
       grep -Eq "$ROLE_RE" "$MC" && { echo "fleet-conf: would rewrite FLEET_ROLE=\"$(_role_file)\" as FLEET_HOST=$(_host_of_role "$(_role_file)") in $MC"; return 0; }
+      hc=$(_host_correct 1); [ -n "$hc" ] && { echo "fleet-conf: $hc ($MC)"; return 0; }
     else
       mk=$(_migrate_key) || die "cannot rewrite FLEET_ROLE in $MC"
-      [ -n "$mk" ] && { echo "fleet-conf: $mk ($MC)"; return 0; }
+      hc=$(_host_correct) || die "cannot correct FLEET_HOST in $MC"
+      [ -n "$mk" ] && echo "fleet-conf: $mk ($MC)"
+      [ -n "$hc" ] && echo "fleet-conf: $hc ($MC)"
+      [ -n "$mk$hc" ] && return 0
     fi
     [ "$QUIET" = 1 ] || echo "fleet-conf: already one file — $MC"
     return 0
@@ -395,8 +517,17 @@ except Exception: print("")' "$HJ" 2>/dev/null)
   else
     rm -f "$stmp"
   fi
+  # A fleet.conf that appeared since the check above (another start, a sync) is
+  # never clobbered: it is kept as .bak-<time> and every key it set that the new
+  # file does not, in [common] [client] [node], is carried over (issue #1887).
+  local kept=''
+  if [ -f "$MC" ]; then
+    kept=$(_bak_mc) || { rm -f "$tmp"; die "cannot keep $MC"; }
+    _carry "$MC" "$tmp" || { rm -f "$tmp"; die "cannot carry $MC's keys"; }
+  fi
   mv -f "$tmp" "$MC" || { rm -f "$tmp"; die "failed to write $MC"; }
   local moved=''
+  [ -n "$kept" ] && moved=" fleet.conf(kept as ${kept##*/}, its keys carried)"
   for src in "$INST" "$SET" "$SH"; do
     [ -n "$src" ] || continue
     mv -f "$src" "$(_bak_path "$src")" && moved="$moved ${src##*/}"

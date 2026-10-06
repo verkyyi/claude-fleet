@@ -109,6 +109,7 @@ _overlay() {
   [ -n "$1" ] || return 0
   d="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
   [ -f "$d/fleets/$1/conf" ] && { printf '%s\n' "$d/fleets/$1/conf"; return 0; }
+  case "$1" in fleet|shell|hub-defaults) return 0 ;; esac   # not fleets — fleet_conf_reserved (#1887)
   [ -f "$d/$1.conf" ] && printf '%s\n' "$d/$1.conf"
 }
 

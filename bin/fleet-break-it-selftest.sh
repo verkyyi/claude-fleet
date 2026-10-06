@@ -31,6 +31,8 @@
 #   personal-mcp-missing / personal-mcp-over-default / personal-cache-truncated
 #                                                   bin/fleet-agent-team.py (personal_layer), fleet-claude.sh, fleet-codex.sh
 #   personal-breaks-session                         bin/fleet-session-wrap.sh, fleet-session-page.py (p), FLEET_PERSONAL=0
+#   conf-keys-lost                                  bin/fleet-migrate-layout.sh, bin/fleet-conf.sh migrate
+#                                                   (install-apply's layout + conf passes), fleet_conf_reserved
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -1443,6 +1445,62 @@ drill_zsh_guard_fleet_label() {
   ) > "$WORK/kz.out"; local rc=$?
   [ "$rc" = 0 ] || { WHY=$(sed -n 's/^WHY=//p' "$WORK/kz.out" | head -1); WHY=${WHY:-"the drill died (rc $rc)"}; return 1; }
   SECS=$(since "$t0"); WHAT="交互 zsh 的 tmux() 不再把 -L <fleet> 当测试服务器"
+}
+
+# conf-keys-lost (issue #1887): the machine's fleet.conf carries a key a person
+# added ([client] FLEET_UI_LANG=zh) on a laptop that only coordinates — a fleet
+# conf fleet-up left behind, no node.env, no fleet running. A sync runs
+# install-apply's two passes, layout then conf. Before the fix the layout pass
+# took fleet.conf for fleet `fleet`'s stale duplicate and deleted it, the conf
+# pass rebuilt it from its template — the key gone, no backup — and called the
+# machine 承载 (FLEET_HOST=1) for its leftover fleet conf. Now: the key stays,
+# hub-defaults.conf stays where the shell reads it, a migrated FLEET_HOST=1 goes
+# to 0 once with the old file kept as .bak-<time>; an old FLEET_ROLE="client,node"
+# on a node.env COMPUTE=0 machine becomes FLEET_HOST=0 with its keys and a backup;
+# a real host (node.env, no COMPUTE line) keeps FLEET_HOST=1.
+drill_conf_keys_lost() {
+  CAP=5; local t0 d="$WORK/ck" c out
+  ck() {   # <case> <cmd…> — one sandbox login per case
+    local h="$d/$1"; shift
+    env -u TMUX HOME="$h/home" FLEET_CONF_DIR="$h/conf" XDG_CONFIG_HOME="$h/home/.config" \
+      FLEET_LAUNCHD_AGENTS_DIR="$h/home/LA" FLEET_INSTALL_DAEMON_DIR="$h/home/LD" \
+      TMUX_TMPDIR="$h/tt" FLEET_SKIP_GLOBAL_CONF=1 "$@"
+  }
+  ckconf() {   # <case> <common lines> <client lines>
+    mkdir -p "$d/$1/conf/fleets/fleet" "$d/$1/home" "$d/$1/tt"
+    printf 'FLEET_REPO="o/r"\nFLEET_MAIN="%s/nowhere"\nFLEET_BASE_BRANCH="master"\n' "$d" > "$d/$1/conf/fleets/fleet/conf"
+    printf '# hub-defaults.conf — the team defaults\nFLEET_SIDEBAR_WIDTH=30\n' > "$d/$1/conf/hub-defaults.conf"
+    { printf "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
+      printf '# Migrated by fleet-conf.sh 2026-10-05 23:23:53 from: fleets/fleet/conf\n\n# ---- [common] ----\n%s\n' "$2"
+      printf 'export FLEET_HUB_URL="https://hub.example"\n\n# ---- [client] — only the shell ----\n'
+      printf 'if [ "${FLEET_SHELL:-0}" = 1 ]; then\n:\n%s\nfi  # ---- [client] end ----\n' "$3"
+      printf '\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nfi  # ---- [node] end ----\n'
+    } > "$d/$1/conf/fleet.conf"
+  }
+  sync_passes() { ck "$1" bash "$BIN/fleet-migrate-layout.sh" && ck "$1" bash "$BIN/fleet-conf.sh" migrate; }
+  ckconf laptop 'FLEET_HOST=1' 'export FLEET_UI_LANG=zh'
+  ckconf role 'FLEET_ROLE="client,node"' 'export FLEET_UI_LANG=zh'
+  printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_FLEET_COMPUTE=0\n' > "$d/role/conf/node.env"
+  ckconf host 'FLEET_HOST=1' 'export FLEET_UI_LANG=zh'
+  printf 'CCQUOTA_HUB_URL=https://hub.example\n' > "$d/host/conf/node.env"
+  t0=$(now)
+  for c in laptop role host; do
+    out=$(sync_passes "$c" 2>&1) || { WHY="$c: a sync pass failed: $(printf '%s' "$out" | tail -1)"; return 1; }
+    [ -f "$d/$c/conf/fleet.conf" ] || { WHY="$c: the sync deleted fleet.conf: $(printf '%s' "$out" | head -1)"; return 1; }
+    sed -n '/FLEET_SHELL:-0}" = 1/,/\[client\] end/p' "$d/$c/conf/fleet.conf" | grep -q '^export FLEET_UI_LANG=zh$' \
+      || { WHY="$c: [client] lost FLEET_UI_LANG=zh: $(grep -c . "$d/$c/conf/fleet.conf") lines, $(printf '%s' "$out" | tail -1)"; return 1; }
+    [ -f "$d/$c/conf/hub-defaults.conf" ] || { WHY="$c: hub-defaults.conf was moved away from where the shell reads it"; return 1; }
+  done
+  for c in laptop role; do
+    grep -q '^FLEET_HOST=0$' "$d/$c/conf/fleet.conf" \
+      || { WHY="$c: a machine that hosts nothing reads $(grep -E '^FLEET_(HOST|ROLE)=' "$d/$c/conf/fleet.conf" | tr '\n' ' ')"; return 1; }
+    ls "$d/$c/conf"/fleet.conf.bak-* >/dev/null 2>&1 || { WHY="$c: rewrote fleet.conf with no fleet.conf.bak-<time>"; return 1; }
+  done
+  grep -q '^FLEET_HOST=1$' "$d/host/conf/fleet.conf" || { WHY="host: a real host lost FLEET_HOST=1"; return 1; }
+  out=$(sync_passes laptop 2>&1); grep -q '^FLEET_HOST=0$' "$d/laptop/conf/fleet.conf" \
+    && [ "$(ls "$d/laptop/conf"/fleet.conf.bak-* | wc -l | tr -d ' ')" = 1 ] \
+    || { WHY="laptop: the second sync changed it again: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT="同步后手加的键还在、有备份；只协调的机器 FLEET_HOST=0，真承载的仍是 1"
 }
 
 # ================================================================ run ===========

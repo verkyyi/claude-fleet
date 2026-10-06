@@ -32,6 +32,12 @@
 #                     by migrate: FLEET_HOST 1 · 0 · 0, every other line kept, and
 #                     until then host / the doctor read the old key (one version);
 #                     `role` still answers from FLEET_HOST
+#   H. keys kept    — (issue #1887) a migration rewrite leaves fleet.conf.bak-<time>;
+#                     a migrated FLEET_HOST=1 on a machine that hosts nothing (a
+#                     leftover fleet conf, no node.env, no fleet running) goes to 0
+#                     ONCE — --dry-run only says so, a later set-host 1 is not
+#                     undone; _carry moves every key a file that appeared mid-
+#                     rewrite set into the same section of the new one
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 for f in fleet-conf.sh fleet-lib.sh fleet-doctor.sh fleet_config_write.py fleet-connect.py fleet-login.py; do
@@ -264,6 +270,99 @@ run bash "$INS/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
 has "G client: FLEET_HOST=0" "$(cat "$CD/fleet.conf")" "FLEET_HOST=0"
 is "G client: role still answers (one version)" "$(run bash "$INS/bin/fleet-conf.sh" role)" client
 sh -n "$CD/fleet.conf" && ok || bad "G: the rewritten file parses"
+
+# ---- H. keys kept, FLEET_HOST corrected once (issue #1887) ------------------------
+hrun() { run TMUX_TMPDIR="$WORK/htt" FLEET_LAUNCHD_AGENTS_DIR="$H/LA" FLEET_INSTALL_DAEMON_DIR="$H/LD" "$@"; }
+mkbox h1; mkdir -p "$CD/fleets/fleet" "$WORK/htt"
+printf 'FLEET_REPO="o/r"\nFLEET_MAIN="/nowhere"\nFLEET_BASE_BRANCH="master"\n' > "$CD/fleets/fleet/conf"
+cat > "$CD/fleet.conf" <<'EOF'
+# Migrated by fleet-conf.sh 2026-10-06 12:05:03 from: hub.json(url)
+
+# ---- [common] ----
+FLEET_HOST=1
+export FLEET_HUB_URL="https://hub.example"
+
+# ---- [client] — only the shell (FLEET_SHELL=1) reads this section ----
+if [ "${FLEET_SHELL:-0}" = 1 ]; then
+:
+export FLEET_UI_LANG=zh
+fi  # ---- [client] end ----
+EOF
+before=$(cat "$CD/fleet.conf")
+is "H: before, host reads the file's 1" "$(hrun bash "$INS/bin/fleet-conf.sh" host)" 1
+out=$(hrun bash "$INS/bin/fleet-conf.sh" migrate --dry-run 2>&1)
+has "H: --dry-run says it would correct" "$out" "would correct FLEET_HOST 1 → 0"
+is "H: --dry-run changes nothing" "$(cat "$CD/fleet.conf")" "$before"
+out=$(hrun bash "$INS/bin/fleet-conf.sh" migrate --quiet 2>&1)
+has "H: migrate corrects and says so" "$out" "FLEET_HOST 1 → 0"
+has "H: FLEET_HOST=0" "$(cat "$CD/fleet.conf")" "$(printf 'FLEET_HOST=0\n# FLEET_HOST checked')"
+has "H: the [client] key stays" "$(cat "$CD/fleet.conf")" "export FLEET_UI_LANG=zh"
+is "H: the old file kept as .bak-<time>" "$(cat "$CD"/fleet.conf.bak-*)" "$before"
+out=$(hrun bash "$INS/bin/fleet-conf.sh" migrate 2>&1)
+has "H: once — a second migrate is a no-op" "$out" "already one file"
+hrun bash "$INS/bin/fleet-conf.sh" set-host 1 >/dev/null 2>&1
+hrun bash "$INS/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
+is "H: a person's set-host 1 is never corrected" "$(hrun bash "$INS/bin/fleet-conf.sh" host)" 1
+is "H: …one mark line, not two" "$(grep -c '^# FLEET_HOST checked' "$CD/fleet.conf")" 1
+# the old key: FLEET_ROLE → FLEET_HOST in place leaves a backup too
+mkbox h2; oldkey client
+run bash "$INS/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
+has "H role: the in-place rewrite left a .bak-<time>" "$(cat "$CD"/fleet.conf.bak-* 2>/dev/null)" 'FLEET_ROLE="client"'
+# _carry: the same section, a key the new file already sets wins
+cat > "$WORK/c.old" <<'EOF'
+# ---- [common] ----
+FLEET_HOST=1
+export FLEET_MINE=7
+
+# ---- [client] — x ----
+if [ "${FLEET_SHELL:-0}" = 1 ]; then
+export FLEET_UI_LANG=zh
+fi  # ---- [client] end ----
+
+# ---- [node] — y ----
+if [ "${FLEET_SHELL:-0}" != 1 ]; then
+FLEET_MAX_SESSIONS=9
+FLEET_X=1
+fi  # ---- [node] end ----
+EOF
+cat > "$WORK/c.new" <<'EOF'
+# ---- [common] ----
+FLEET_HOST=0
+
+# ---- [client] — x ----
+if [ "${FLEET_SHELL:-0}" = 1 ]; then
+:
+fi  # ---- [client] end ----
+
+# ---- [node] — y ----
+if [ "${FLEET_SHELL:-0}" != 1 ]; then
+FLEET_MAX_SESSIONS=3
+fi  # ---- [node] end ----
+EOF
+cat > "$WORK/carry.sh" <<'EOF'
+eval "$(sed -n '/^NODE_OPEN=/,/^CLIENT_CLOSE=/p' "$1")"
+eval "$(sed -n '/^_carry() {/,/^}/p' "$1")"
+_carry "$2" "$3"
+EOF
+bash "$WORK/carry.sh" "$BIN/fleet-conf.sh" "$WORK/c.old" "$WORK/c.new" || bad "H carry: _carry failed"
+is "H carry: each section gains only what it lacked" "$(cat "$WORK/c.new")" "$(cat <<'EOF'
+# ---- [common] ----
+FLEET_HOST=0
+export FLEET_MINE=7
+
+# ---- [client] — x ----
+if [ "${FLEET_SHELL:-0}" = 1 ]; then
+:
+export FLEET_UI_LANG=zh
+fi  # ---- [client] end ----
+
+# ---- [node] — y ----
+if [ "${FLEET_SHELL:-0}" != 1 ]; then
+FLEET_MAX_SESSIONS=3
+FLEET_X=1
+fi  # ---- [node] end ----
+EOF
+)"
 
 printf 'fleet-conf-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"
 [ "$FAILS" = 0 ]

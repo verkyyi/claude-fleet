@@ -235,6 +235,7 @@ esac
 # so fleet_write_conf preserves its custom FLEET_* keys (issue #170) at the new path.
 CONF="$(fleet_state_dir "$NAME")/conf"
 legacy="$FLEET_CONF_DIR/$NAME.conf"
+fleet_conf_reserved "$NAME" && legacy=''   # fleet.conf is the machine's, never fleet `fleet`'s (#1887)
 # A fleet this login has never had (no conf, not even a legacy one): the one
 # moment the onboarding guide may open (issue #1169, below).
 NEWFLEET=0; [ ! -f "$CONF" ] && [ ! -f "$legacy" ] && NEWFLEET=1
