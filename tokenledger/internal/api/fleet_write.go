@@ -1280,7 +1280,8 @@ func placementReason(c Candidate, all []Candidate) string {
 // (mounted behind operatorOnly). fleet.node_cap.<machine> is an integer 0–256,
 // or "" to fall back to the default; fleet.spot_weight a number 0–2;
 // fleet.node_maintenance.<machine> (claude-fleet#1427) a reason — any text,
-// "" to end the maintenance — stored as the dated record the roster shows.
+// "" to end the maintenance — stored as the dated record the roster shows;
+// fleet.client_defaults.<KEY> (claude-fleet#1722) a client's team default.
 func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch r.Method {
@@ -1319,6 +1320,15 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			s.writeFleetSettings(w)
 			return
+		case strings.HasPrefix(body.Key, ClientDefaultsPrefix):
+			// A client's team default (claude-fleet#1722): whitelisted
+			// keys, plain one-line values, never a credential; "" clears.
+			if body.Value != "" {
+				if why := clientDefaultCheck(body.Key, body.Value); why != "" {
+					httpError(w, http.StatusBadRequest, why)
+					return
+				}
+			}
 		case body.Key == SpotWeightKey:
 			// The SPOT placement weight (claude-fleet#1428): 0–2, or ""
 			// for CCQUOTA_FLEET_SPOT_WEIGHT's value.
@@ -1344,7 +1354,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+SpotWeightKey+" and "+ComputeAutoKey+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+ClientDefaultsPrefix+"<KEY>, "+SpotWeightKey+" and "+ComputeAutoKey+" are settable")
 			return
 		}
 		if err := s.Store.SetFleetSetting(body.Key, body.Value, time.Now()); err != nil {

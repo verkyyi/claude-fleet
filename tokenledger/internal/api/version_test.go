@@ -39,7 +39,7 @@ func TestVersionEndpointIsPublic(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("/version: HTTP %d without a token, want 200", resp.StatusCode)
 	}
-	var got map[string]string
+	var got map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}

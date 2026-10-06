@@ -61,6 +61,9 @@ _flib_here="$(_s="${BASH_SOURCE[0]:-$0}"; [ "${_s#*/}" = "$_s" ] && _s="./$_s"
 if [ -z "${_FLEET_GLOBAL_CONF_SOURCED:-}" ] && [ -z "${FLEET_SKIP_GLOBAL_CONF:-}" ]; then
   _FLEET_GLOBAL_CONF_SOURCED=1
   _flib_dir="$_flib_here"
+  # The team's defaults from the hub (issue #1722), FIRST so every file below
+  # wins: written only by fleet-client-update.sh, each line fills a gap only.
+  [ -f "$FLEET_CONF_DIR/hub-defaults.conf" ] && . "$FLEET_CONF_DIR/hub-defaults.conf"
   if [ -n "$_flib_dir" ] && [ -f "$_flib_dir/../fleet.conf" ]; then
     . "$_flib_dir/../fleet.conf"
   fi
@@ -174,7 +177,7 @@ fleet_conf_file() {
   new="$FLEET_CONF_DIR/fleets/$sess/conf"; old="$FLEET_CONF_DIR/$sess.conf"
   # $FLEET_CONF_DIR/fleet.conf is the MACHINE's config (issue #1623), never the
   # legacy flat conf of a fleet named `fleet` — the default session name.
-  case "$sess" in fleet|shell) old='' ;; esac     # …nor the shell's shell.conf
+  case "$sess" in fleet|shell|hub-defaults) old='' ;; esac     # …nor the shell's shell.conf, nor the hub's defaults (#1722)
   if   [ -f "$new" ]; then printf '%s' "$new"
   elif [ -n "$old" ] && [ -f "$old" ]; then printf '%s' "$old"
   else                     printf '%s' "$new"; fi
@@ -205,7 +208,7 @@ fleet_each_conf() {
   for conf in "$FLEET_CONF_DIR"/*.conf; do
     [ -f "$conf" ] || continue
     sess=${conf##*/}; sess=${sess%.conf}          # basename … .conf, no fork (#888)
-    case "$sess" in fleet|shell) continue ;; esac  # the machine's config + the shell's (#1623), not fleets
+    case "$sess" in fleet|shell|hub-defaults) continue ;; esac  # the machine's config + the shell's (#1623) + the hub's defaults (#1722), not fleets
     # dedup only when the NEW-layout conf FILE exists — a fleets/<sess>/ dir that
     # holds just restore.map/bridge/watch (no conf yet) must NOT hide the legacy conf.
     [ -f "$FLEET_CONF_DIR/fleets/$sess/conf" ] && continue
