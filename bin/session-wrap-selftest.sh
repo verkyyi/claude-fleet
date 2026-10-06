@@ -234,31 +234,30 @@ auto() {
     SHELL=/bin/sh FLEET_RESTORE_PROBE_SECS=2 FLEET_DISK_FLOOR_GB=0 "$@" bash "$WORK/inst/bin/fleet-restore.sh" --auto
 }
 up() { tf has-session -t oc 2>/dev/null; }
-# busy machine: held, and the log says why
-auto FLEET_ADMIT_LOAD_PER_CORE=0.000001 FLEET_ADMIT_PRESSURE=off FLEET_ADMIT_MEM_FREE_PCT=0
-CHECKS=$((CHECKS + 1)); up && fail "E: --auto restored on a machine over its admit line"
-CHECKS=$((CHECKS + 1)); grep -q 'auto: fleet down ( oc) — held' "$WORK/econf/restore/restore.log" \
-  || fail "E: a held pull-up is not logged" "$(cat "$WORK/econf/restore/restore.log" 2>/dev/null)"
+# a busy machine: the tick never calls --auto (the admission gate is restore_watch's)
+CHECKS=$((CHECKS + 1))
+sed -n '/^restore_watch()/,/^}/p' "$BIN/fleet-diskguard.sh" | grep -q 'fleet_machine_admit' \
+  || fail "E: restore_watch does not hold a busy machine (fleet_machine_admit)"
 # taken down on purpose: never
 : > "$WORK/econf/fleets/oc/restore.down"
-auto FLEET_ADMIT=0
+auto
 CHECKS=$((CHECKS + 1)); up && fail "E: --auto restored a fleet fleet-down took down"
 rm -f "$WORK/econf/fleets/oc/restore.down"
 # a map nobody refreshed for a day: an old outage, not a crash — never
 touch -t 202001010000 "$WORK/econf/fleets/oc/restore.map"
-auto FLEET_ADMIT=0
+auto
 CHECKS=$((CHECKS + 1)); up && fail "E: --auto revived a fleet down since 2020"
 touch "$WORK/econf/fleets/oc/restore.map"
 # a fleet this login no longer has (no conf): never
 mv "$WORK/econf/oc.conf" "$WORK/econf/oc.conf.gone"
-auto FLEET_ADMIT=0
+auto
 CHECKS=$((CHECKS + 1)); up && fail "E: --auto revived a fleet with no conf"
 mv "$WORK/econf/oc.conf.gone" "$WORK/econf/oc.conf"
 # FLEET_AUTO_RESTORE=0: never
-auto FLEET_ADMIT=0 FLEET_AUTO_RESTORE=0
+auto FLEET_AUTO_RESTORE=0
 CHECKS=$((CHECKS + 1)); up && fail "E: FLEET_AUTO_RESTORE=0 still restored"
 # down (a kill-server): one tick brings it back, unfinished sessions only
-auto FLEET_ADMIT=0
+auto
 CHECKS=$((CHECKS + 1)); up || fail "E: --auto did not bring the fleet back" "$(cat "$WORK/econf/restore/restore.log" 2>/dev/null)"
 wins=$(tf list-windows -t oc -F '#{window_name}' | sort | tr '\n' ' ')
 eq "E: only the unfinished session came back" "home issue-1 " "$wins"
@@ -266,7 +265,7 @@ waitfor "E: issue-1 resumed its conversation" grep -q "^$WORK/wt-1|.*--resume si
 CHECKS=$((CHECKS + 1)); tf list-windows -t oc -F '#{pane_start_command}' | grep -q 'fleet-session-wrap.sh' \
   || fail "E: the restored window does not run through the wrapper"
 # up: a second tick changes nothing
-auto FLEET_ADMIT=0
+auto
 eq "E: a live fleet is left alone" "$wins" "$(tf list-windows -t oc -F '#{window_name}' | sort | tr '\n' ' ')"
 
 # ---------------------------------------------- F: claude off a bare PATH ----

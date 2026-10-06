@@ -736,6 +736,9 @@ mem_edge() {
 restore_watch() {
   [ "${FLEET_AUTO_RESTORE:-1}" = 0 ] && return 0
   [ -x "$BIN/fleet-restore.sh" ] || return 0
+  # A busy machine is left alone: the same gate a new spawn passes. Asked HERE,
+  # not in fleet-restore.sh, which an operator runs to re-house running sessions.
+  command -v fleet_machine_admit >/dev/null 2>&1 && ! fleet_machine_admit --short >/dev/null && return 0
   ( bash "$BIN/fleet-restore.sh" --auto >/dev/null 2>&1 & ) 2>/dev/null
   return 0
 }

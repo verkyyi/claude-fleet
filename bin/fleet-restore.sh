@@ -26,8 +26,8 @@
 #                     --disarm also stops --auto; --arm lets it run again.
 #   --auto            the diskguard tick's pull-up (issue #1784): a mapped fleet
 #                     whose session is gone — not one fleet-down took down on
-#                     purpose — is rebuilt when the machine admits new sessions
-#                     (fleet_machine_admit) and the disk gate passes, reopening ONLY
+#                     purpose — is rebuilt when the disk gate passes (the tick asks
+#                     the machine-admission gate before calling), reopening ONLY
 #                     the windows that were still running (@claude_state not
 #                     done/exited). Only a fleet with a conf whose map is fresher
 #                     than FLEET_AUTO_RESTORE_MAX_AGE (default 86400s). No arm
@@ -753,8 +753,8 @@ fresh_window() {
 # but only an armed launchd watcher ever ran it, and nothing armed it. This runs
 # every tick, unarmed, and is safe to: a fleet taken down on purpose carries
 # fleets/<sess>/restore.down (fleet-down.sh; fleet-up.sh clears it), a busy machine
-# is left alone (fleet_machine_admit — the spawn gate), and only the sessions that
-# were still running come back.
+# is left alone (the tick's restore_watch asks the spawn admission gate first), and
+# only the sessions that were still running come back.
 auto_restore() {
   [ "${FLEET_AUTO_RESTORE:-1}" = 0 ] && return 0
   [ -f "$RDIR/autorestore.off" ] && return 0
@@ -781,10 +781,9 @@ auto_restore() {
   done < <(each_restore_map)
   [ -n "$down" ] || return 0
   mkdir -p "$RDIR"
-  local why
-  if ! why=$(fleet_machine_admit --short); then
-    log "auto: fleet down ($down) — held: $why"; return 0
-  fi
+  # The machine-busy hold is the CALLER's (fleet-diskguard.sh restore_watch asks
+  # the spawn admission gate before it runs this): a restore re-houses sessions
+  # that were running, so this script itself never passes that gate (#1090 E).
   if [ -x "$BIN/fleet-diskguard.sh" ] && ! bash "$BIN/fleet-diskguard.sh" --gate 2>/dev/null; then
     log "auto: fleet down ($down) — held: disk below floor"; return 0
   fi
