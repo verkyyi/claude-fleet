@@ -415,6 +415,7 @@ func TestFleetHomePicks(t *testing.T) {
 // the script carries this hub's URL, each file its SHA-256; a hub that cannot
 // sign anyone in serves none of it.
 func TestInstallServed(t *testing.T) {
+	needPacked(t)
 	h, _ := certHarness(t)
 	get := func(path string) (*http.Response, []byte) {
 		resp, err := http.Get(h.http.URL + path)
@@ -488,11 +489,22 @@ func TestInstallServed(t *testing.T) {
 	}
 }
 
-// The embedded client is a byte-for-byte copy of the repo's bin/ + conf/ — the
-// originals the shell selftests drive — and the manifest is the one list: every
-// file it names is embedded and matches, and nothing unlisted is embedded.
-// Skipped where the repo is not beside the module (the Docker build context is
-// tokenledger/ alone). bin/fleet-client-mirror.sh --check is the shell twin.
+// needPacked fails a test that drives the served client in a build that
+// carries none: the client is packed from the repo before a build
+// (claude-fleet#1803), so `go test` without it has nothing to serve.
+func needPacked(t *testing.T) {
+	t.Helper()
+	if !fleetclient.Packed {
+		t.Fatal("this build carries no client — run bin/fleet-client-pack.sh first (CI does)")
+	}
+}
+
+// The repo keeps ONE copy of each client file (claude-fleet#1803) and the
+// manifest is the one list: every path it names exists in the repo, no copy is
+// committed under fleetclient/, and — when this build was packed — the pack is
+// exactly the manifest's files, each byte-for-byte the repo's. Skipped where
+// the repo is not beside the module. bin/fleet-client-mirror.sh --check and
+// bin/fleet-client-pack.sh --check are the shell twins.
 func TestFleetClientMatchesBin(t *testing.T) {
 	repo := filepath.Join("..", "..", "..")
 	if _, err := os.Stat(filepath.Join(repo, "bin", "fleet")); err != nil {
@@ -503,20 +515,23 @@ func TestFleetClientMatchesBin(t *testing.T) {
 		listed[name] = true
 		want, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(name)))
 		if err != nil {
-			t.Fatalf("%s is in the manifest but not in the repo: %v", name, err)
+			t.Errorf("%s is in the manifest but not in the repo: %v", name, err)
+			continue
+		}
+		if !fleetclient.Packed {
+			continue
 		}
 		got, err := fleetclient.Files.ReadFile(name)
 		if err != nil {
-			t.Fatalf("%s is in the manifest but not embedded — run bin/fleet-client-mirror.sh: %v", name, err)
-		}
-		if !bytes.Equal(got, want) {
-			t.Errorf("internal/api/fleetclient/%s differs from %s — run bin/fleet-client-mirror.sh", name, name)
+			t.Errorf("%s is in the manifest but not packed — run bin/fleet-client-pack.sh: %v", name, err)
+		} else if !bytes.Equal(got, want) {
+			t.Errorf("pack/%s differs from %s — run bin/fleet-client-pack.sh", name, name)
 		}
 	}
 	// The shell (claude-fleet#1484) ships: #1486 is what put it on the list.
 	// …and the Agent configuration package (claude-fleet#1725): its list, the
 	// hook table + shim, a skill, and the mod's manifest under a dot directory
-	// (embedded only through `all:mod`).
+	// (embedded only through `all:pack`).
 	for _, must := range []string{"bin/fleet", "bin/fleet-shell.sh", "bin/fleet-sidebar.py", "bin/tmux-status.sh", "conf/tmux-shell.conf",
 		"conf/agent-bundle.manifest", "bin/fleet-agent-bundle.py", "hooks/settings-hooks.json", "bin/fleet-hook-run.sh",
 		"skills/doc-preview/SKILL.md", "mod/fleet/.claude-plugin/plugin.json"} {
@@ -524,12 +539,23 @@ func TestFleetClientMatchesBin(t *testing.T) {
 			t.Errorf("manifest does not list %s", must)
 		}
 	}
+	// one copy: nothing but the manifest, the Go sources and pack/ (a build
+	// input, gitignored) under fleetclient/
+	ents, err := os.ReadDir(filepath.Join("fleetclient"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if n := e.Name(); n != fleetclient.ManifestName && n != "pack" && !strings.HasSuffix(n, ".go") {
+			t.Errorf("fleetclient/%s: the repo keeps one copy of the client — a build packs it (bin/fleet-client-pack.sh)", n)
+		}
+	}
 	if err := fs.WalkDir(fleetclient.Files, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && !listed[p] {
-			t.Errorf("internal/api/fleetclient/%s is embedded but not in the manifest — add it there or remove the copy", p)
+		if !d.IsDir() && !listed[p] && p != fleetclient.PackPlaceholder {
+			t.Errorf("pack/%s is embedded but not in the manifest — run bin/fleet-client-pack.sh", p)
 		}
 		return nil
 	}); err != nil {

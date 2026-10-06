@@ -417,16 +417,20 @@ Do not install from memory: read the doc and work from it.
   `~/.local/share/claude-fleet/<path>` (the repo's own layout, so `$BIN/../conf`
   resolves), with a two-line `~/.local/bin/fleet` that runs the real one (a
   script, not a symlink: `fleet` finds its siblings in its own `$0` directory,
-  which every dir-of-symlinks shadow relies on). The files come from
-  `tokenledger/internal/api/fleetclient/` — `//go:embed` copies in the same
-  `bin/` + `conf/` layout, because the Docker build context is `tokenledger/`
-  alone and embed cannot reach `..` — and **the list is `fleetclient/manifest`,
-  maintained there only**: `embed.go` parses it, the installer walks the served
-  copy, and a node-only script (spawning, reaping, gh) stays off it. Edit the
-  client in `bin/` or `conf/`, then run `bin/fleet-client-mirror.sh` (`--check`
-  is what the tests run); two tests pin the mirror from both sides
-  (`TestFleetClientMatchesBin` in the Go gate, `bin/fleet-install-selftest.sh`
-  leg A in the shell gate), so a drift reds whichever CI the change reaches. The
+  which every dir-of-symlinks shadow relies on). **The repo keeps ONE copy of
+  each client file** (issue #1803): `//go:embed` cannot reach `..`, so a hub
+  build first runs `bin/fleet-client-pack.sh`, which copies the manifest's files
+  into the gitignored `tokenledger/internal/api/fleetclient/pack/` (only
+  `pack/doc.go` is committed) — `bin/fleet-client-pack.sh && docker build -t
+  ccquota tokenledger/`; the Dockerfile refuses an empty pack, and a plain `go
+  build` without one serves no client (`fleetclient.Packed`, 503 on `/install`).
+  **The list is `fleetclient/manifest`, maintained there only**: `embed.go`
+  parses it, the installer walks the served copy, and a node-only script
+  (spawning, reaping, gh) stays off it. Never commit a copy back under
+  `fleetclient/`; `bin/fleet-client-mirror.sh` now only rewrites the manifest's
+  generated block (`--check`: every path in the repo, no copy committed), and
+  `TestFleetClientMatchesBin` (Go) + `bin/fleet-install-selftest.sh` leg A
+  (shell, a sandbox pack) pin it from both sides. The
   hub image is deployed by hand: a merge here reaches a colleague's `fleet` only
   after the operator redeploys it and they run the one line again.
 - **The node token never enters a pane's environment** (issue #1491).

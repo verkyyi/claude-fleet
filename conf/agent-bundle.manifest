@@ -14,8 +14,9 @@
 # Read in three places, maintained here only:
 #   · bin/fleet-agent-bundle.py   files / version / check — the expansion
 #   · bin/fleet-client-mirror.sh  writes the expansion into the hub's client
-#                                 manifest (its generated `agent bundle` block)
-#                                 and copies the files beside it
+#                                 manifest (its generated `agent bundle` block);
+#                                 bin/fleet-client-pack.sh packs the files into
+#                                 a hub build (#1803)
 #   · bin/fleet-install-apply.sh  --bundle: the apply a client runs (fill only;
 #                                 the override files always win)
 # Version = a digest of these files' bytes (`fleet-agent-bundle.py version`),

@@ -12,3 +12,8 @@
 *.sqlite
 .playwright-mcp/
 .superpowers/
+
+# The client a hub build packs from the repo (bin/fleet-client-pack.sh,
+# claude-fleet#1803): a build input, never committed — the repo keeps ONE copy.
+/internal/api/fleetclient/pack/*
+!/internal/api/fleetclient/pack/doc.go

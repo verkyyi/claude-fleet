@@ -13,6 +13,7 @@ import (
 
 // claude-fleet#1722: /version says which client this build hands out.
 func TestVersionCarriesTheClient(t *testing.T) {
+	needPacked(t)
 	h := newHarness(t)
 	resp, err := h.http.Client().Get(h.http.URL + "/version")
 	if err != nil {
@@ -38,6 +39,7 @@ func TestClientCompatPromise(t *testing.T) {
 		t.Errorf("MinCompat %d with Compat %d: a hub serves the current client and the previous one", fleetclient.MinCompat, fleetclient.Compat)
 	}
 	// the client this build serves speaks the same level it says
+	needPacked(t)
 	b, err := fleetclient.Files.ReadFile("bin/fleet-client-update.sh")
 	if err != nil {
 		t.Fatal(err)
