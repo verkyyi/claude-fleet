@@ -20,6 +20,11 @@
 # fleet-ui-lang.sh key (badge_*); the colours are the palette's (orange =
 # PAL_YELLOW).
 #
+# After it, the client's own update (issue #1781, fleet-client-update.sh's
+# update.state): `✓ 已更新到 <commit>` or the one-line failure for
+# FLEET_CLIENT_UPDATE_SHOW seconds (4) after it happened, and
+# `新版已就绪 · 下次打开生效` for as long as a change waits for a restart.
+#
 # Seams (tests): FLEET_CLIENT_BADGE_WHERE_CMD (the where read),
 # FLEET_CLIENT_BADGE_CACHE (the cache dir), FLEET_CLIENT_BADGE_HOST (this
 # machine's hostname), FLEET_CLIENT_BADGE_TTL.
@@ -103,3 +108,35 @@ fi
 
 text=$(fleet_ui_t "$key" "${host:-?}" "${detail:-}")
 printf '%s %s #[default]%s│' "$col" "${text//#/##}" "$DIM"
+
+# --- the client's own update (issue #1781): one more segment, or nothing
+UST="${FLEET_CLIENT_UPDATE_STATE:-${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}/update.state}"
+[ -s "$UST" ] || exit 0
+SHOW="${FLEET_CLIENT_UPDATE_SHOW:-4}"
+case "$SHOW" in ''|*[!0-9]*) SHOW=4 ;; esac
+# the bar ticks every 2 s: an old state that waits for nothing is no read at all
+m=$(stat -c %Y "$UST" 2>/dev/null || stat -f %m "$UST" 2>/dev/null)   # GNU first, as above
+case "$m" in ''|*[!0-9]*) m=0 ;; esac
+[ $(( $(date +%s) - m )) -lt "$SHOW" ] || grep -q '"phase": "later"' "$UST" 2>/dev/null || exit 0
+urow=$(python3 -c '
+import json, sys, time
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+f = lambda k: " ".join(str(d.get(k) or "").split())
+age = int(time.time()) - int(d.get("at") or 0)
+print("\x1f".join([f("phase"), str(age), (f("commit") or f("to"))[:12], f("why")]))
+' "$UST" 2>/dev/null)
+IFS=$'\037' read -r uph uage uto uwhy <<EOF
+$urow
+EOF
+case "$uage" in ''|*[!0-9]*) uage=999999 ;; esac
+utext=''; ucol=$OK
+case "$uph" in
+  done)   [ "$uage" -lt "$SHOW" ] && utext=$(fleet_ui_t badge_updated_fmt "${uto:-?}") ;;
+  failed) [ "$uage" -lt "$SHOW" ] && { utext=$(fleet_ui_t badge_update_failed_fmt "${uwhy:-?}"); ucol=$WARN; } ;;
+  later)  utext=$(fleet_ui_t badge_update_later); ucol=$WARN ;;
+esac
+[ -n "$utext" ] && printf '%s %s #[default]%s│' "$ucol" "${utext//#/##}" "$DIM"
+exit 0

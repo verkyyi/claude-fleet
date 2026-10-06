@@ -14,10 +14,14 @@
 #                  team's defaults land in hub-defaults.conf, a bad key / value
 #                  dropped; sourced in the readers' order a key fleet.conf sets
 #                  and an exported one both win over the hub's
-#   C. behind      compat ok → 0 at once, a background stage into <home>.next;
-#                  the next start switches (exit 3, 「已更新到 <commit>」), the old
-#                  home kept as .prev, the bar's note written; tmux-status.sh
-#                  shows it on a client (FLEET_SHELL=1), not elsewhere
+#   C. behind      compat ok → 0 at once, a background stage into
+#                  <home>.versions/<v> (.next names it); the next start switches
+#                  (exit 3, 「已更新到 <commit>」): <home> becomes a link to it, the
+#                  old plain-dir home adopted as <home>.versions/<old> (.prev),
+#                  the bar's note written; tmux-status.sh shows it on a client
+#                  (FLEET_SHELL=1), not elsewhere; a running client's server
+#                  (issue #1781) is left to take it in place — the start does not
+#                  switch under it
 #   D. below min   → staged + switched before opening: exit 3, 已更新到 …
 #   E. fails       below min and the installer fails → exit 0, one 更新失败
 #                  line, the home untouched
@@ -28,17 +32,20 @@
 #                  tmux · 证书; `fleet doctor` on a client-only home prints it as
 #                  the `client` row; no installed client → INFO
 #   I. bin/fleet   a staged client is switched by `fleet` itself, which then runs
-#                  the NEW bin/fleet (once — FLEET_CLIENT_UPDATED)
+#                  the NEW bin/fleet (once — FLEET_CLIENT_UPDATED); staged at the
+#                  old <home>.next, it is taken over as a version first
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-client-update-selftest.XXXXXX") || exit 2
-trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
+trap 'tmux -L "fcu$$" kill-server 2>/dev/null; rm -rf "${WORK:?}"' EXIT INT TERM HUP
 fail=0
 ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
 
 export HOME="$WORK/home"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" XDG_DATA_HOME="$HOME/.local/share"
+export FLEET_SHELL_SESSION="fcu$$"   # never the operator's running client
+unset FLEET_SHELL_CACHE FLEET_CLIENT_UPDATE_STATE
 unset FLEET_CONF_DIR FLEET_HUB_URL CCQUOTA_HUB_URL FLEET_CLIENT_ROOT FLEET_CLIENT_STATE FLEET_CLIENT_UPDATED FLEET_CLIENT_AUTO_UPDATE FLEET_CLIENT_CHECK_SECS FLEET_UI_LANG FLEET_SHELL_PREFIX FLEET_SHELL
 CONF="$XDG_CONFIG_HOME/claude-fleet"
 ROOT="$XDG_DATA_HOME/claude-fleet"
@@ -50,7 +57,7 @@ mkdir -p "$CONF" "$HUBD/v1/fleet" "$HUBD/new"
 # install_client <version> [compat] — a fresh "installed" home: the real
 # update script + a stand-in fleet, and the mark the installer writes
 install_client() {
-  rm -rf "$ROOT" "$ROOT.next" "$ROOT.prev" "$ROOT.next.lock" "$STATE"
+  rm -rf "$ROOT" "$ROOT.next" "$ROOT.prev" "$ROOT.next.lock" "$ROOT.versions" "$STATE"
   mkdir -p "$ROOT/bin"
   cp "$BIN/fleet-client-update.sh" "$ROOT/bin/"
   printf '#!/bin/sh\necho OLD\n' > "$ROOT/bin/fleet"; chmod +x "$ROOT/bin/fleet"
@@ -128,14 +135,24 @@ install_client v1; hub v2 1 1 beef002
 start; rc=$?
 if [ "$rc" = 0 ] && grep -q '后台取' "$WORK/err"; then ok "C behind: exit 0 at once, 「后台取，下次启动生效」"
 else bad "C behind: rc=$rc err=$(cat "$WORK/err")"; fi
-for _ in $(seq 1 50); do [ -f "$ROOT.next/.staged" ] && break; sleep 0.2; done
-[ -f "$ROOT.next/.staged" ] && ok "C the background stage landed in <home>.next" || bad "C no stage: $(cat "$STATE/stage.log" 2>&1)"
-grep -q OLD "$ROOT/bin/fleet" && ok "C this start still runs the old client" || bad "C switched too early"
+V="$ROOT.versions"
+for _ in $(seq 1 50); do [ -f "$V/v2/.staged" ] && break; sleep 0.2; done
+[ -f "$V/v2/.staged" ] && [ "$(cat "$V/.next" 2>/dev/null)" = v2 ] \
+  && ok "C the background stage landed in <home>.versions/v2 (.next)" || bad "C no stage: $(cat "$STATE/stage.log" 2>&1) $(ls -a "$V" 2>&1)"
+grep -q OLD "$ROOT/bin/fleet" && [ ! -L "$ROOT" ] && ok "C this start still runs the old client" || bad "C switched too early"
+# a running client (its server up): the start leaves the switch to it
+if command -v tmux >/dev/null 2>&1; then
+  tmux -L "$FLEET_SHELL_SESSION" new-session -d -s "$FLEET_SHELL_SESSION" 'sleep 60' 2>/dev/null
+  start; rc=$?
+  [ "$rc" = 0 ] && [ ! -L "$ROOT" ] && grep -q OLD "$ROOT/bin/fleet" \
+    && ok "C a running client's server: the start does not switch under it" || bad "C running: rc=$rc err=$(cat "$WORK/err")"
+  tmux -L "$FLEET_SHELL_SESSION" kill-server 2>/dev/null
+fi
 start; rc=$?
-if [ "$rc" = 3 ] && grep -q '已更新到 beef002' "$WORK/err" && grep -q NEW "$ROOT/bin/fleet" \
-   && grep -q OLD "$ROOT.prev/bin/fleet" && [ ! -e "$ROOT.next" ]; then
-  ok "C next start: switched (exit 3, 已更新到 beef002), old home kept as .prev"
-else bad "C switch: rc=$rc err=$(cat "$WORK/err") root=$(cat "$ROOT/bin/fleet")"; fi
+if [ "$rc" = 3 ] && grep -q '已更新到 beef002' "$WORK/err" && grep -q NEW "$ROOT/bin/fleet" && [ -L "$ROOT" ] \
+   && [ "$(cd "$ROOT" && pwd -P)" = "$(cd "$V/v2" && pwd -P)" ] && grep -q OLD "$V/v1/bin/fleet" && [ "$(cat "$V/.prev")" = v1 ] && [ ! -e "$V/.next" ]; then
+  ok "C next start: switched (exit 3, 已更新到 beef002): <home> → versions/v2, the old home adopted as versions/v1 (.prev)"
+else bad "C switch: rc=$rc err=$(cat "$WORK/err") root=$(cat "$ROOT/bin/fleet") link=$(readlink "$ROOT") vers=$(ls -a "$V")"; fi
 grep -q '已更新到 beef002' "$STATE/note" 2>/dev/null && ok "C the bar's note is written" || bad "C note: $(cat "$STATE/note" 2>&1)"
 bar=$(FLEET_SHELL=1 FLEET_STATUS_NOCOLOR=1 bash "$BIN/tmux-status.sh" sess=fleet-shell 2>/dev/null)
 nobar=$(FLEET_SHELL=0 bash "$BIN/tmux-status.sh" sess=x 2>/dev/null)

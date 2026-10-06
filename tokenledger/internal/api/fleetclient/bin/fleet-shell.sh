@@ -76,6 +76,8 @@
 #                          long as the shell's server lives
 #   wait <session>         the stage's first window when no machine is online: a
 #                          note, gone as soon as a row opens a real one
+#   reload <session> [--from <old home>]   a newer client into the running one,
+#                          same servers (issue #1781) — see `reload` below
 #   env [MACHINE]          print the environment the server would get (debug, tests)
 #
 # ~/.config/claude-fleet/fleet.conf — the machine's one config file (issue #1623):
@@ -350,7 +352,7 @@ FLEET_NODE_ALIASES=$FLEET_NODE_ALIASES"
            FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_STALE FLEET_HUB_SESSIONS_EVERY FLEET_HUB_SESSIONS_WATCHED_EVERY \
            FLEET_HUB_SESSIONS_LOOP_SECS FLEET_HUB_NODE_TIMEOUT FLEET_HUB_WRITE_CMD FLEET_REMOTE_BIN FLEET_REMOTE_SSH FLEET_REMOTE_VIA_HUB FLEET_CONF_DIR FLEET_CERT \
            FLEET_SHELL_WARM FLEET_SHELL_WARM_MAX FLEET_SHELL_WARM_EVERY FLEET_SHELL_WARM_CONNECT \
-           CCQUOTA_VIEWER_TOKEN FLEET_UI_LANG FLEET_SIDEBAR_WIDTH_MAX XDG_CONFIG_HOME XDG_CACHE_HOME \
+           CCQUOTA_VIEWER_TOKEN FLEET_UI_LANG FLEET_SIDEBAR_WIDTH_MAX XDG_CONFIG_HOME XDG_CACHE_HOME FLEET_SHELL_CACHE \
            FLEET_SKIP_GLOBAL_CONF LANG LC_ALL; do
     eval "v=\${$n:-}"
     [ -n "$v" ] && SHELL_ENV="$SHELL_ENV
@@ -505,6 +507,10 @@ keeper)
         client_take "$c" "${d:-未知设备}" '' || :
       fi
       bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || :
+      # a newer client, taken in place once you are idle (issue #1781); applied
+      # (4) → this keeper is the old one's code: the new one takes over, same pid
+      bash "$BIN/fleet-client-update.sh" tick "$s" >/dev/null 2>&1
+      [ $? -eq 4 ] && exec bash "$BIN/fleet-shell.sh" keeper "$s"
     fi
     sleep "${FLEET_CLIENT_LEASE_EVERY:-15}"
   done
@@ -675,6 +681,58 @@ viewer)
     fi
     sleep 0.2
   done
+  exit 0
+  ;;
+# ---------------------------------------------------------------------------------
+# A newer client into the RUNNING one (issue #1781): what
+# fleet-client-update.sh `apply` runs, from the NEW client, right after it
+# switched the install's link. The mirror again (onto the link, so it follows
+# it), both confs written from the new templates and sourced into the two
+# servers (the same servers, the same pids); the list drawn again where its
+# VIEW_VERSION moved; a proxy pane respawned only when fleet-remote-view.sh
+# itself changed (`--from <old home>` to compare with — no `--from`, none is);
+# the warm loop, the actions loop and the data loop restarted only when their
+# script changed. Exit non-zero = the caller rolls back.
+reload)
+  s="${2:-$SESS}"; from=''
+  [ "${3:-}" = --from ] && from="${4:-}"
+  SESS=$s; STAGE="$s-stage"
+  T has-session -t "=$SESS" 2>/dev/null || exit 0          # nothing running: nothing to reload
+  mirror || exit 1
+  [ -n "${FLEET_NODE_ALIASES:-}" ] \
+    || FLEET_NODE_ALIASES=$(T show-environment -g FLEET_NODE_ALIASES 2>/dev/null | sed -n 's/^FLEET_NODE_ALIASES=//p')
+  shell_env ''
+  write_conf || exit 1
+  T source-file "$CACHE/tmux.conf" || exit 1
+  if TS has-session -t "=$STAGE" 2>/dev/null; then
+    TS source-file "$CACHE/tmux-stage.conf" || exit 1
+  fi
+  export_env
+  T run-shell -b -t "=$SESS:" "bash $(sq "$SHADOW/fleet-sidebar.sh") sync '#{session_id}' >/dev/null 2>&1 || :"
+  # changed <file> — that script is not what the old client ran
+  changed() { [ -n "$from" ] && ! cmp -s "$from/bin/$1" "$REAL_BIN/$1"; }
+  if changed fleet-remote-view.sh; then
+    TS list-panes -s -t "=$STAGE" -F '#{pane_id} #{pane_start_command}' 2>/dev/null \
+      | while read -r p c; do
+          case "$c" in *fleet-remote-view.sh*) TS respawn-pane -k -t "$p" 2>/dev/null ;; esac
+        done
+  fi
+  # restart_loop <pid-file> <start command…> — that loop, on the new code
+  restart_loop() {
+    local pf="$1" p=''
+    shift
+    { read -r p < "$pf"; } 2>/dev/null
+    case "$p" in ''|*[!0-9]*) ;; *) kill "$p" 2>/dev/null ;; esac
+    rm -f "$pf"
+    ( nohup "$@" </dev/null >/dev/null 2>&1 & )
+  }
+  changed fleet-shell.sh && restart_loop "$CACHE/tmp/warm/loop.pid" bash "$SHADOW/fleet-shell.sh" warm "$SESS"
+  changed fleet-client-actions.py && restart_loop "$CL_DIR/actions.pid" bash "$SHADOW/fleet-shell.sh" actions "$SESS"
+  if changed fleet-hub-sessions.sh || changed fleet-lib.sh; then
+    p=$(bash "$SHADOW/fleet-hub-sessions.sh" --status 2>/dev/null | sed -n 's/^loop \([0-9][0-9]*\).*/\1/p')
+    [ -n "$p" ] && kill "$p" 2>/dev/null
+    bash "$SHADOW/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || :
+  fi
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
