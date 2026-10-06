@@ -1,0 +1,266 @@
+package api
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+)
+
+// The personal configuration (claude-fleet#1856, EPIC #1855 C1).
+//
+// The team layer's twin, one per person (principal): what a member wants in
+// every session on every computer they work from. Every computer composes
+// default < team < personal < local (bin/fleet-agent-team.py); this file
+// only keeps the layer.
+//
+//   GET  /v1/fleet/person-bundle[?version=N][&history=1]
+//        the caller's OWN layer: a person's session, a node's enrollment
+//        token (the person its login is bound to, PrincipalForLogin), or
+//        POST {cert, sig, ts} by a connection certificate. The operator's
+//        doors read anyone's with ?principal=<id>. ETag
+//        "person-<pid8>-v<N>"; If-None-Match answers 304.
+//   PUT  {bundle, base?, note?} | {restore: N, base?, note?}
+//        the person's own — session, node token or the same signed body.
+//        Someone else's (?principal= naming another) is 403. The operator
+//        may only {restore: N}: put one of the person's own versions back,
+//        never new content, and the audit names the operator.
+//
+// A login bound to no person has no personal layer: 404 "no person for this
+// login". The body rules are the team's (validateBundle), plus hook_scripts.
+
+// personETag tags a person's version without spelling their id.
+func personETag(principal string, v int) string {
+	sum := sha256.Sum256([]byte(principal))
+	return fmt.Sprintf(`"person-%s-v%d"`, hex.EncodeToString(sum[:])[:8], v)
+}
+
+// personCaller is who is asking and whose layer it is.
+type personCaller struct {
+	id sshRelayIdentity
+	// person is the canonical principal whose layer the call is on.
+	person string
+}
+
+// handleFleetPersonBundle serves control.PersonBundlePath. Like the team
+// layer, it authenticates itself: a node and a client-only computer call it.
+func (s *Server) handleFleetPersonBundle(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	now := time.Now()
+	var req TeamBundleRequest
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, teamBundleMax+4096)).Decode(&req); err != nil {
+			httpError(w, http.StatusBadRequest, "body must be JSON")
+			return
+		}
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodPost && r.Method != http.MethodPut {
+		w.Header().Set("Allow", "GET, POST, PUT")
+		httpError(w, http.StatusMethodNotAllowed, "GET, POST (certificate read) or PUT")
+		return
+	}
+	// A signed body speaks for its certificate's person, whatever other
+	// door the request also came through.
+	var id sshRelayIdentity
+	var self string // the caller's own principal, "" for the operator
+	ok := false
+	if req.Cert != "" && req.Sig != "" {
+		if d := now.Sub(time.Unix(req.TS, 0)); d > routesClockSkew || d < -routesClockSkew {
+			httpError(w, http.StatusUnauthorized, "the signed timestamp is too far from the hub's clock — check this computer's time")
+			return
+		}
+		cid, err := s.verifySSHRelayCert(req.Cert, req.Sig, control.PersonBundleSigMessage(req.TS), control.PersonBundleSigNamespace, now)
+		if err != nil {
+			var re *sshRelayError
+			if errors.As(err, &re) {
+				httpError(w, http.StatusUnauthorized, re.msg)
+				return
+			}
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		id, self, ok = sshRelayIdentity{Principal: cid.Principal, Actor: cid.Actor}, cid.Principal, true
+	}
+	if !ok {
+		id, ok = s.sshRelayHTTPIdentity(r)
+		self = id.Principal
+	}
+	if !ok {
+		if tok := bearer(r); tok != "" {
+			if ep, err := s.Store.EndpointByTokenHash(HashToken(tok)); err == nil {
+				host, user := s.peerSelf(ep)
+				id, ok = sshRelayIdentity{Actor: "node:" + user + "@" + host}, true
+				owner, err := s.Store.PrincipalForLogin(host, user)
+				switch {
+				case errors.Is(err, store.ErrNoPrincipal) || (err == nil && owner == ""):
+					httpError(w, http.StatusNotFound, "no person for this login")
+					return
+				case err != nil:
+					httpError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				self = owner
+			}
+		}
+	}
+	if !ok {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
+		httpError(w, http.StatusUnauthorized, "a session, a viewer token, a node token or a connection certificate is required")
+		return
+	}
+
+	// Whose layer: the caller's own; the operator names one.
+	want := strings.TrimSpace(r.URL.Query().Get("principal"))
+	target := self
+	if id.Operator {
+		if want == "" {
+			httpError(w, http.StatusBadRequest, "the operator names the person: ?principal=<id>")
+			return
+		}
+		target = want
+	}
+	if target == "" {
+		httpError(w, http.StatusNotFound, "no person for this login")
+		return
+	}
+	p, err := s.Store.Principal(target)
+	switch {
+	case errors.Is(err, store.ErrNoPrincipal):
+		if id.Operator {
+			httpError(w, http.StatusNotFound, fmt.Sprintf("the hub knows no person %q", target))
+		} else {
+			httpError(w, http.StatusNotFound, "no person for this login")
+		}
+		return
+	case err != nil:
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !id.Operator {
+		// The caller's own spelling may differ in case; the row's is canonical.
+		if want != "" {
+			if q, err := s.Store.Principal(want); err != nil || q.ID != p.ID {
+				s.personAudit(id.Actor, want, "FORBIDDEN", now)
+				httpError(w, http.StatusForbidden, "a personal configuration is its owner's alone")
+				return
+			}
+		}
+	}
+	c := personCaller{id: id, person: p.ID}
+
+	switch r.Method {
+	case http.MethodGet, http.MethodPost:
+		v, _ := strconv.Atoi(r.URL.Query().Get("version"))
+		s.writePersonBundle(w, r, c.person, v, r.URL.Query().Get("history") != "")
+	case http.MethodPut:
+		if id.Operator && len(req.Bundle) > 0 {
+			s.personAudit(id.Actor, c.person, "FORBIDDEN: operator write", now)
+			httpError(w, http.StatusForbidden, "the operator only puts back one of the person's own versions ({\"restore\": N}), never new content")
+			return
+		}
+		s.putPersonBundle(w, c, req, now)
+	}
+}
+
+func (s *Server) personAudit(actor, person, outcome string, now time.Time) {
+	if err := s.Store.FleetAudit(actor, "person_bundle_put", person, outcome, "", now); err != nil {
+		log.Printf("fleet audit: %v", err)
+	}
+}
+
+func (s *Server) putPersonBundle(w http.ResponseWriter, c personCaller, req TeamBundleRequest, now time.Time) {
+	raw := req.Bundle
+	note := strings.TrimSpace(req.Note)
+	switch {
+	case req.Restore > 0 && len(raw) > 0:
+		httpError(w, http.StatusBadRequest, "send bundle or restore, not both")
+		return
+	case req.Restore > 0:
+		old, err := s.Store.PersonBundle(c.person, req.Restore)
+		if errors.Is(err, store.ErrNoTeamBundle) {
+			httpError(w, http.StatusNotFound, fmt.Sprintf("no personal configuration version %d", req.Restore))
+			return
+		} else if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		raw = json.RawMessage(old.Bundle)
+		if note == "" {
+			note = fmt.Sprintf("restore v%d", req.Restore)
+		}
+	case len(raw) == 0:
+		httpError(w, http.StatusBadRequest, `body must be {"bundle": {…}} or {"restore": <version>}`)
+		return
+	}
+	if len(raw) > teamBundleMax {
+		httpError(w, http.StatusRequestEntityTooLarge, "a personal configuration is at most 256 KiB")
+		return
+	}
+	if len(note) > 200 {
+		note = note[:200]
+	}
+	text, err := validateBundle(raw, true)
+	if err != nil {
+		s.personAudit(c.id.Actor, c.person, "REFUSED: "+err.Error(), now)
+		httpError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	base := -1
+	if req.Base != nil {
+		base = *req.Base
+	}
+	b, err := s.Store.PutPersonBundle(c.person, text, c.id.Actor, note, base, now)
+	if errors.Is(err, store.ErrTeamBundleBase) {
+		httpError(w, http.StatusConflict, "your personal configuration changed since that version — read it again")
+		return
+	} else if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.personAudit(c.id.Actor, c.person, fmt.Sprintf("OK v%d", b.Version), now)
+	created := b.Created
+	w.Header().Set("ETag", personETag(c.person, b.Version))
+	writeJSON(w, http.StatusOK, TeamBundleResponse{Version: b.Version, Prev: b.Prev, Actor: b.Actor,
+		Note: b.Note, Created: &created, Bundle: json.RawMessage(b.Bundle)})
+}
+
+func (s *Server) writePersonBundle(w http.ResponseWriter, r *http.Request, person string, v int, history bool) {
+	b, err := s.Store.PersonBundle(person, v)
+	out := TeamBundleResponse{Bundle: json.RawMessage(`{}`)}
+	switch {
+	case errors.Is(err, store.ErrNoTeamBundle) && v > 0:
+		httpError(w, http.StatusNotFound, fmt.Sprintf("no personal configuration version %d", v))
+		return
+	case errors.Is(err, store.ErrNoTeamBundle):
+		// nothing written yet: version 0, an empty layer
+	case err != nil:
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	default:
+		created := b.Created
+		out = TeamBundleResponse{Version: b.Version, Prev: b.Prev, Actor: b.Actor, Note: b.Note,
+			Created: &created, Bundle: json.RawMessage(b.Bundle)}
+	}
+	if history {
+		if out.History, err = s.Store.PersonBundles(person, 50); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	tag := personETag(person, out.Version)
+	w.Header().Set("ETag", tag)
+	if v <= 0 && !history && r.Header.Get("If-None-Match") == tag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}

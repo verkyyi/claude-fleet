@@ -326,6 +326,9 @@ func (s *Server) Handler() http.Handler {
 		// door — a node's token and a client's certificate included — so it
 		// authenticates itself; a PUT is the operator's alone.
 		mux.HandleFunc(control.TeamBundlePath, s.handleFleetTeamBundle)
+		// Each person's own layer (claude-fleet#1856): the same doors, each
+		// reading and writing its own; the operator reads and restores.
+		mux.HandleFunc(control.PersonBundlePath, s.handleFleetPersonBundle)
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))

@@ -77,6 +77,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetTeamBundles(); err != nil {
 		return err
 	}
+	// Each person's own configuration layer (claude-fleet#1856).
+	if err := s.ensureFleetPersonBundles(); err != nil {
+		return err
+	}
 	// What a worker on another machine left behind (claude-fleet#1609).
 	if err := s.ensureFleetWorkerRecords(); err != nil {
 		return err
