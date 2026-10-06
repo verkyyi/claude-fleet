@@ -53,6 +53,8 @@
 #                   `无仓库`; ←/→ folds a group through the shell's OWN @repo_fold;
 #                   one repo ⇒ no heading; a node on the hub source (no FLEET_SHELL)
 #                   renders the same cache flat, byte for byte as before
+#                   (#1770: a lost machine's rows keep their `─ m4 失联 ─` heading on
+#                   a client too — `#me` empty never hides it under 无仓库)
 #   E. refresher  — fleet-hub-sessions.sh --refresh keeps YOUR sessions with a
 #                   worker_id: the other machines' (local=0) and, since #1480, this
 #                   fleet's own, marked local=1 with the window that holds them (empty
@@ -456,6 +458,29 @@ PATH="$SHIMPATH" FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle
 hasnt "P: …a node with no conf repos writes nothing" "$(cat "$TMUX_LOG")" "@repo_fold"
 LC_ALL=C grep -v 'acme/tool' "$G/remote_$SH" > "$WORK/one" && mv "$WORK/one" "$G/remote_$SH"
 eq "P: one repo among the rows — no repo heading (a one-repo fleet's frame)" "" "$(shdrs "$(FLEET_SHELL=1 shell_side)")"
+# Issue #1770: on the client (`#me` empty) a row with a repo goes to its repo's
+# group, a no-repo row to 无仓库 — and a LOST machine's row to that machine's
+# group at the foot, under its own `─ m4 失联 ─` heading. The heading used to be
+# keyed on `#me`, so on a client the lost row sank below 无仓库 with no heading
+# and read as a no-repo session (counted nowhere: `无仓库 (1)` above two rows).
+FP=33333333-4444-5555-6666-888888888888            # a fleet on m5
+{ printf '#ts\037%s\n#me\037\n#node\037m4\037lost\0371\037%s\n#node\037m5\037online\0373\037%s\n' "$NOW" "$((NOW - 600))" "$NOW"
+  printf 'wid:%s/acme-app:issue-41\037m5\037online\03741\037acme/app\037working\037claude\037应用活\037\037\0370\037\n' "$FP"
+  printf 'wid:%s/acme-tool:issue-42\037m5\037online\03742\037acme/tool\037working\037claude\037工具活\037\037\0370\037\n' "$FP"
+  printf 'wid:%s/0247d1c0-6d9d-420e-88ac-d867ee7526d1\037m5\037online\037\037\037working\037claude\037无仓活\037\037\0370\037\n' "$FP"
+  printf 'wid:%s/acme-app:issue-43\037m4\037online\03743\037acme/app\037looping\037claude\037活页\037\037\0370\037\n' "$F"
+} > "$G/remote_$SH"
+lr=$(FLEET_SHELL=1 shell_side)
+eq "P: #1770 — a client's lost machine gets its heading after 无仓库, not 无仓库's rows" \
+   "app (1);tool (1);无仓库 (1);─ m4 失联 10 分钟 ─;" "$(shdrs "$lr")"
+eq "P: #1770 — …its row sits under that heading, last" "应用活;工具活;无仓活;活页;" "$(sorder "$lr")"
+eq "P: #1770 — …the heading right above it" "─ m4 失联 10 分钟 ─|活页" \
+   "$(printf '%s\n' "$lr" | LC_ALL=C awk -F"$US" '{ if ($1 != "hdr" && $4 == "活页") { print h "|" $4; exit } h = $4 }')"
+sed -e "s/^#node\x1fm4\x1flost/#node\x1fm4\x1fonline/" "$G/remote_$SH" > "$WORK/l" && mv "$WORK/l" "$G/remote_$SH"
+lr=$(FLEET_SHELL=1 shell_side)
+eq "P: #1770 — m4 back online: the row with a repo is in its repo's group, no lost heading" \
+   "app (2);tool (1);无仓库 (1);" "$(shdrs "$lr")"
+eq "P: #1770 — …under app, the no-repo row alone in 无仓库" "应用活;活页;工具活;无仓活;" "$(sorder "$lr")"
 
 # K. kinship on the shell (issue #1698): a row's key is `wid:<worker_id>`, its
 # parent `<worker_id>` bare — pass A strips the `wid:` off the key (KEYTAB), so
