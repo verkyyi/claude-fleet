@@ -14,6 +14,7 @@
 #      with @wrap_quiet the old close-on-exit policy runs
 #   D  fleet_server_resident / fleet_home_resident: `exit-empty off`, and the
 #      home window's shell exiting leaves the window (a fresh shell in it)
+#      — and fleet_home_heal (the tick's backstop, #1801) respawns a home left dead
 #   E  fleet-restore.sh --auto (the diskguard tick): a fleet whose server was
 #      killed comes back with ONLY its unfinished sessions; held while the machine
 #      is busy; never for a fleet fleet-down took down (restore.down), one with no
@@ -197,6 +198,19 @@ eq "D: home keeps its pane when its shell exits" on "$(tf show-options -wv -t sw
 hpid=$(o home pane_pid)
 tf send-keys -t sw:home 'exit' Enter
 waitfor "D: home respawned a fresh shell" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_pid}')\" != '$hpid' ] && [ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_dead}')\" = 0 ]"
+# The tick's backstop (#1801): tmux ≤ 3.4 can lose the shell's SIGCHLD and leave
+# home dead with no pane-died — made here by dropping the hook. fleet_home_heal
+# respawns a dead home and leaves a live one alone.
+heal() ( PATH="$WORK/tbin:$PATH"; FLEET_CONF_DIR="$WORK/dconf"; export PATH FLEET_CONF_DIR
+         . "$BIN/fleet-lib.sh"; fleet_home_heal whatever sw )
+tf set-hook -wu -t sw:home pane-died
+hpid=$(o home pane_pid)
+tf send-keys -t sw:home 'exit' Enter
+waitfor "D: home left dead with no hook" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_dead}')\" = 1 ]"
+out=$(heal)
+CHECKS=$((CHECKS + 1)); case "$out" in "healed @"*) ;; *) fail "D: fleet_home_heal on a dead home printed [$out], want healed @<id>" ;; esac
+waitfor "D: fleet_home_heal respawned the dead home" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_pid}')\" != '$hpid' ] && [ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_dead}')\" = 0 ]"
+eq "D: fleet_home_heal leaves a live home alone" "" "$(heal)"
 tf kill-session -t sw
 CHECKS=$((CHECKS + 1)); tf show-options -sv exit-empty >/dev/null 2>&1 || fail "D: the server died with its last session"
 tf kill-server 2>/dev/null

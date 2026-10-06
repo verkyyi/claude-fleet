@@ -727,6 +727,20 @@ mem_edge() {
   printf '%s\n' "$nowt" > "$sf.notified" 2>/dev/null || true
   notify "$msg"
 }
+# home_watch — a live fleet whose `home` pane is dead gets a fresh shell (issue
+# #1801): the backstop for the pane-died hook a lost SIGCHLD never fires.
+home_watch() {
+  type fleet_home_heal >/dev/null 2>&1 || return 0
+  local s out
+  for s in $(fleet_sockets 2>/dev/null); do
+    out="$(fleet_home_heal "$s" "$s")"
+    [ -n "$out" ] || continue
+    mkdir -p "$GDIR" 2>/dev/null
+    printf '%s %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$out" >> "$GDIR/home-heal.log" 2>/dev/null
+  done
+  return 0
+}
+
 # restore_watch — the --watch tick's share of «the fleet never stays down» (issue
 # #1784): fleet-restore.sh --auto rebuilds a fleet whose session vanished (a crash,
 # a kill-server, the last window closing) when the machine admits new sessions,
@@ -860,6 +874,7 @@ EOF2
     crash_watch                                   # metrics row + reboot harvest (#1294)
     mem_watch                                     # memory / files / pty edges (#1293), notify-only
     transcript_watch                              # daily transcript archive (#1299), budgeted
+    home_watch                                    # a home pane left dead: respawn it (#1801)
     restore_watch                                 # a fleet that went down: pull it back up (#1784)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet

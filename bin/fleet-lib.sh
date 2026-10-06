@@ -1820,6 +1820,20 @@ fleet_home_resident() {
   return 0
 }
 
+# fleet_home_heal <socket> <session> — the tick's backstop for fleet_home_resident
+# (issue #1801). tmux 3.3/3.4 on a busy box can miss the SIGCHLD of home's exited
+# shell: the pane reads dead, the shell stays a zombie, and `pane-died` never fires
+# until some other child of that server exits — on a quiet node, never. A home
+# pane found dead is respawned here. Prints `healed <window id>` when it did; rc 0.
+fleet_home_heal() {
+  local win
+  win=$(tmux -L "$1" list-windows -t "$2" -F '#{window_id} #{window_name} #{pane_dead}' 2>/dev/null \
+        | awk '$2=="home" && $3==1 {print $1; exit}')
+  [ -n "$win" ] || return 0
+  tmux -L "$1" respawn-pane -k -t "$win" 2>/dev/null && printf 'healed %s\n' "$win"
+  return 0
+}
+
 # fleet_bg [-L <socket>] <shell-command> — the shared "background this bind body"
 # helper (issue #304). Dispatch <shell-command> as a DETACHED, server-side
 # background job (via `tmux run-shell -b`) so the interactive fzf bind / popup that
