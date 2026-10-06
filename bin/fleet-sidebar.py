@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -320,15 +321,48 @@ def leave_navigation(session):
             tmux("refresh-client", "-t", client, "-f", "!active-pane")
 
 
+def heal_frame(session, window):
+    """The client's `home` (`@shell_frame`, issue #1785) never loses its right
+    pane. That pane is the stage's viewer (fleet-shell.sh viewer); it is kept with
+    remain-on-exit, so whatever ends it — a kill, a crash, a disconnect — leaves a
+    DEAD pane, respawned here. A pane gone outright (a kill-pane typed at the
+    prompt, a shell started before this) leaves the list alone in the window: the
+    list's own pane becomes the viewer, and the sync below draws the list again
+    beside it. Returns whether anything was respawned."""
+    frame = [p for p in panes(session) if p[1] == window]
+    content = [p for p in frame if p[2] != "1" and p[7] != "1"]
+    if not frame or any(p[4] != "1" for p in content):
+        return False
+    target = content[0][0] if content else next(
+        (p[0] for p in frame if p[2] == "1"), frame[0][0])
+    # One that died within 2s of its last respawn waits a little first: a viewer
+    # that cannot start must not spin the hooks.
+    last = (fields(target, "#{@shell_viewer_at}") + [""])[0]
+    hold = "sleep 2; " if last.isdigit() and time.time() - int(last) < 2 else ""
+    cmd = hold + "exec bash " + shlex.quote(str(BIN / "fleet-shell.sh")) + " viewer " + shlex.quote(session)
+    if run(["tmux", "respawn-pane", "-k", "-t", target, "-c", os.path.expanduser("~"),
+            cmd]).returncode != 0:
+        return False
+    tmux("set-option", "-pu", "-t", target, "@sidebar", ";",
+         "set-option", "-pu", "-t", target, "@sidebar_version", ";",
+         "set-option", "-pu", "-t", target, "@sidebar_slot", ";",
+         "set-option", "-p", "-t", target, "@shell_viewer", "1", ";",
+         "set-option", "-p", "-t", target, "@shell_viewer_at", str(int(time.time())), ";",
+         "set-option", "-p", "-t", target, "remain-on-exit", "on")
+    return True
+
+
 def sync(session, enabled, width, lock):
     info = fields(session + ":", US.join(("#{window_id}", "#{window_name}",
                   "#{window_width}", "#{session_attached}", "#{@issue}",
                   "#{@raw}", "#{@worktree}", "#{@norepo}", "#{window_zoomed_flag}",
-                  "#{@sidebar_width_manual}", "#{@remote}")))
-    if len(info) != 11:
+                  "#{@sidebar_width_manual}", "#{@remote}", "#{@shell_frame}")))
+    if len(info) != 12:
         return
     (window, name, cols, attached, issue, raw, worktree, norepo, zoomed, manual,
-     remote) = info
+     remote, frame) = info
+    if frame:
+        heal_frame(session, window)  # the right pane first: the list's worker
     # A width the operator dragged to (issue #1328) is the width from then on.
     if manual.isdigit():
         width = max(24, min(60, int(manual)))
@@ -2479,6 +2513,17 @@ def ui(screen, session, worker, lock):
                 selected = ids[min(len(ids) - 1, index + 3)]
 
 
+def steady():
+    """The list leaves only when the fleet takes it away (issue #1785): kill-pane
+    and respawn-pane -k end it with SIGHUP. ⌃c, ⌃\\ and ⌃z reach this pane as
+    bytes (the fleet-sidebar table sends every key here) and curses' cbreak keeps
+    the tty's signals on, so each one ended or froze the list; a stray TERM is
+    no rebuild either. A handler, not SIG_IGN: an ignored signal is inherited
+    across exec, and the jobs this list starts must stay killable."""
+    for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGTSTP, signal.SIGTERM):
+        signal.signal(sig, lambda *_: None)
+
+
 def conf_enabled(conf, enabled):
     """FLEET_SIDEBAR as the fleet conf says NOW, read under the lock (issue #826).
 
@@ -2505,8 +2550,24 @@ def main():
         # A lone Escape clears the input line; don't wait ncurses' default 1s.
         os.environ.setdefault("ESCDELAY", "25")
         no_discard()
-        curses.wrapper(ui, sys.argv[2], sys.argv[3], sys.argv[4])
-        return
+        steady()
+        restarts = []
+        while True:
+            try:
+                curses.wrapper(ui, sys.argv[2], sys.argv[3], sys.argv[4])
+                return
+            except Exception:
+                # Paint again rather than leave the pane (issue #1785): a list
+                # that died on one bad frame took the keyboard's target with it.
+                # A pane that is gone, or one failing over and over, exits — the
+                # hooks' sync draws a fresh one.
+                now = time.monotonic()
+                restarts = [t for t in restarts if now - t < 60] + [now]
+                pane = os.environ.get("TMUX_PANE", "")
+                if len(restarts) > 5 or not pane or run(
+                        ["tmux", "display-message", "-p", "-t", pane, "#{pane_id}"]).returncode != 0:
+                    raise
+                time.sleep(0.5)
     verb, session, lock, enabled, width, key = sys.argv[1:7]
     conf = sys.argv[7] if len(sys.argv) > 7 else ""
     if verb == "key":
