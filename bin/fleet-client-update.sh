@@ -120,8 +120,10 @@ ROOT="${FLEET_CLIENT_ROOT:-$(cd "$BIN/.." && pwd -P)}"
 # the home is the one <home>.versions/ belongs to
 case "$ROOT" in *.versions/*) [ -n "${FLEET_CLIENT_ROOT:-}" ] || ROOT=${ROOT%.versions/*} ;; esac
 VERS="$ROOT.versions"
+# the one whole-version switch (fleet_versions_*); a copy of this script alone
+# (no client beside it) still answers start/doctor — it just cannot switch
 # shellcheck source=fleet-versions-lib.sh
-. "$BIN/fleet-versions-lib.sh"
+[ -f "$BIN/fleet-versions-lib.sh" ] && . "$BIN/fleet-versions-lib.sh"
 CONF_DIR="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 # GitHub's stable, for a client with no hub (issue #1805)
 RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"; RAW=${RAW%/}
@@ -298,6 +300,7 @@ adopt_home() {
 point() {
   local k="$1"
   [ -d "$VERS/$k" ] || return 1
+  command -v fleet_versions_point >/dev/null 2>&1 || return 1
   adopt_home "$k" || return 1
   fleet_versions_point "$ROOT" "$VERS/$k"
 }
@@ -331,6 +334,7 @@ prune() {
   local prev='' next=''
   { read -r next < "$VERS/.next"; } 2>/dev/null
   { read -r prev < "$VERS/.prev"; } 2>/dev/null
+  command -v fleet_versions_prune >/dev/null 2>&1 || return 0
   fleet_versions_prune "$ROOT" "$(cur_key)" "$prev" "$next"
 }
 
