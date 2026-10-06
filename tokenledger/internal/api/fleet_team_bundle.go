@@ -89,6 +89,19 @@ var (
 // no-credential rule, and returns it re-encoded with sorted keys (the stored
 // text). The error is the one line the operator reads.
 func validateTeamBundle(raw json.RawMessage) (string, error) {
+	return validateBundle(raw, false)
+}
+
+// personHookScriptMax is one hook_scripts program's cap; together they still
+// sit under the bundle's 256 KiB (claude-fleet#1859).
+const personHookScriptMax = 32 << 10
+
+var personScriptRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// validateBundle is validateTeamBundle for either layer: a person's layer
+// (claude-fleet#1856) takes the same allow-list plus hook_scripts — the
+// programs their own hooks run — and the same credential scan over all of it.
+func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 	var b map[string]json.RawMessage
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -96,7 +109,13 @@ func validateTeamBundle(raw json.RawMessage) (string, error) {
 		return "", errors.New("bundle must be a JSON object")
 	}
 	for k := range b {
+		if personal && k == "hook_scripts" {
+			continue
+		}
 		if !teamBundleKeys[k] {
+			if personal {
+				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts)", k)
+			}
 			return "", fmt.Errorf("bundle: %q is not something a team hands out (only mcp, hooks, skills, claude_settings, codex_config)", k)
 		}
 	}
@@ -188,8 +207,25 @@ func validateTeamBundle(raw json.RawMessage) (string, error) {
 			}
 		}
 	}
+	scripts, err := obj("hook_scripts")
+	if err != nil {
+		return "", err
+	}
+	for n, v := range scripts {
+		txt, ok := v.(string)
+		if !personScriptRE.MatchString(n) || !ok || strings.TrimSpace(txt) == "" {
+			return "", fmt.Errorf("bundle.hook_scripts.%s: a program is a name [a-z0-9._-] and its full text", n)
+		}
+		if len(txt) > personHookScriptMax {
+			return "", fmt.Errorf("bundle.hook_scripts.%s is over 32 KiB", n)
+		}
+	}
 	if path := secretIn("bundle", all); path != "" {
-		return "", fmt.Errorf("%s looks like a credential — the team layer never carries one (tokens are read on each computer at start)", path)
+		layer := "the team layer"
+		if personal {
+			layer = "a personal configuration"
+		}
+		return "", fmt.Errorf("%s looks like a credential — %s never carries one (write a ${VAR} reference; tokens are read on each computer at start)", path, layer)
 	}
 	out, err := json.Marshal(all) // map keys sort: one body, one text
 	if err != nil {

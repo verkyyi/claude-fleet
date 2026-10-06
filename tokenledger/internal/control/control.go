@@ -898,3 +898,21 @@ const (
 func TeamBundleSigMessage(unix int64) string {
 	return fmt.Sprintf("fleet-team %d", unix)
 }
+
+// The personal configuration (claude-fleet#1856, EPIC #1855 C1): one layer
+// per person, between the team's and the login's own. GET reads the
+// caller's own (a person's session, a node token — the person its login is
+// bound to — or a POST {cert, sig, ts} signed under PersonBundleSigNamespace
+// over PersonBundleSigMessage(ts)); the operator reads anyone's with
+// ?principal=<id>. PUT is the person's own (session, node token or the same
+// signed body); the operator may only {restore: N} one of their versions.
+const (
+	PersonBundlePath         = "/v1/fleet/person-bundle"
+	PersonBundleSigNamespace = "fleet-person@claude-fleet"
+)
+
+// PersonBundleSigMessage is what a client signs to read or write its
+// person's layer.
+func PersonBundleSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-person %d", unix)
+}

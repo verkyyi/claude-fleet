@@ -118,3 +118,96 @@ func (s *Store) PutTeamBundle(bundle, actor, note string, base int, at time.Time
 	}
 	return b, tx.Commit()
 }
+
+// The personal configuration (claude-fleet#1856, EPIC #1855 C1) — the same
+// layer, one per person (principal): what a member wants in every session
+// on every computer they work from. Same versions, same append-only history,
+// keyed by (principal, version). The row's principal is the canonical
+// fleet_principals spelling, so a case-folded lookup reads one book.
+const fleetPersonBundleSchema = `
+CREATE TABLE IF NOT EXISTS fleet_person_bundles (
+  principal TEXT NOT NULL,
+  version   INTEGER NOT NULL,
+  prev      INTEGER NOT NULL,
+  bundle    TEXT NOT NULL,
+  actor     TEXT NOT NULL,
+  note      TEXT NOT NULL DEFAULT '',
+  created   TEXT NOT NULL,
+  PRIMARY KEY (principal, version)
+);
+`
+
+func (s *Store) ensureFleetPersonBundles() error {
+	if _, err := s.write.Exec(fleetPersonBundleSchema); err != nil {
+		return fmt.Errorf("create fleet_person_bundles table: %w", err)
+	}
+	return nil
+}
+
+// PersonBundle is TeamBundle for one principal's layer.
+func (s *Store) PersonBundle(principal string, v int) (FleetTeamBundle, error) {
+	q := `SELECT version, prev, bundle, actor, note, created FROM fleet_person_bundles WHERE principal = ? `
+	var row *sql.Row
+	if v > 0 {
+		row = s.read.QueryRow(q+`AND version = ?`, principal, v)
+	} else {
+		row = s.read.QueryRow(q+`ORDER BY version DESC LIMIT 1`, principal)
+	}
+	var b FleetTeamBundle
+	var created string
+	if err := row.Scan(&b.Version, &b.Prev, &b.Bundle, &b.Actor, &b.Note, &created); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return FleetTeamBundle{}, ErrNoTeamBundle
+		}
+		return FleetTeamBundle{}, err
+	}
+	b.Created, _ = time.Parse(rfc, created)
+	return b, nil
+}
+
+// PersonBundles is TeamBundles for one principal's layer.
+func (s *Store) PersonBundles(principal string, limit int) ([]FleetTeamBundle, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.read.Query(`SELECT version, prev, actor, note, created FROM fleet_person_bundles
+		WHERE principal = ? ORDER BY version DESC LIMIT ?`, principal, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FleetTeamBundle
+	for rows.Next() {
+		var b FleetTeamBundle
+		var created string
+		if err := rows.Scan(&b.Version, &b.Prev, &b.Actor, &b.Note, &created); err != nil {
+			return nil, err
+		}
+		b.Created, _ = time.Parse(rfc, created)
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// PutPersonBundle is PutTeamBundle for one principal's layer: base >= 0
+// must be that principal's current version or ErrTeamBundleBase.
+func (s *Store) PutPersonBundle(principal, bundle, actor, note string, base int, at time.Time) (FleetTeamBundle, error) {
+	tx, err := s.write.Begin()
+	if err != nil {
+		return FleetTeamBundle{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck — a no-op after Commit
+	var cur int
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM fleet_person_bundles WHERE principal = ?`, principal).Scan(&cur); err != nil {
+		return FleetTeamBundle{}, err
+	}
+	if base >= 0 && base != cur {
+		return FleetTeamBundle{}, ErrTeamBundleBase
+	}
+	b := FleetTeamBundle{Version: cur + 1, Prev: cur, Bundle: bundle, Actor: actor, Note: note, Created: at.UTC()}
+	if _, err := tx.Exec(`INSERT INTO fleet_person_bundles (principal, version, prev, bundle, actor, note, created)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, principal, b.Version, b.Prev, b.Bundle, b.Actor, b.Note, at.UTC().Format(rfc)); err != nil {
+		return FleetTeamBundle{}, err
+	}
+	return b, tx.Commit()
+}
