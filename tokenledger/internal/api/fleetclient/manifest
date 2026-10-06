@@ -54,6 +54,8 @@ bin/fleet-client-lease.py
 bin/fleet-client-actions.py
 bin/fleet-client-escape.sh
 bin/fleet-client-where.sh
+# open a session on a machine from the client (#1777): the hub places it
+bin/fleet-client-place.sh
 bin/fleet-open.sh
 bin/fleet-open-addr.py
 bin/open-url.sh
