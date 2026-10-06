@@ -64,6 +64,7 @@ EPIC #1855。一个会话拿到的每一项配置——工具连接（MCP）、�
 | 加 / 改 / 删个人配置 | `fleet config add\|set\|rm --personal KIND NAME [VALUE\|--file F]` |
 | 把本机某一项带走 | `fleet config promote ITEM [--yes]` |
 | 个人配置的版本 / 退回 | `fleet config history` · `fleet config restore N` |
+| 导出 / 导入（给新人一份起点、留备份） | `fleet config export [--personal\|--team] > f.json` · `fleet config import f.json [--merge] [--yes]` |
 | 团队配置（操作者） | `fleet config … --team`（即 `fleet-agent-team.py put\|restore\|history`） |
 | 这台机器现在用哪版 | `fleet-agent-team.py status [--short]` |
 | 立刻同步一次 | `fleet-agent-team.py sync` |
@@ -71,3 +72,5 @@ EPIC #1855。一个会话拿到的每一项配置——工具连接（MCP）、�
 
 KIND：`mcp` · `settings` · `codex` · `skills` · `hooks` · `hook_scripts`。
 MCP 里的凭据只写 `${VAR}` 引用，值由你登录的环境提供。
+
+导出文件就是那一层的配置本身，外加一个 `"_from": "personal vN"` 的注释键（导入时剥掉）。导入是一次写入（基于当前版本），先过和每次写入同一套检查（带密钥的文件整份拒收，指出哪一项），列出差异（`+` 新增 · `~` 改动 · `-` 删除），加 `--yes` 才写；`--merge` 只加不删。导入期间那一层被别人改过就拒绝，重跑看新的差异。

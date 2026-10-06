@@ -20,6 +20,12 @@
 #   I. package    the client manifests carry the script; `fleet config` dispatches
 #   J. people     the operator's list (#1866): two fake people, version · items ·
 #                 who changed it, never a bundle; no viewer token over HTTP = exit 2
+#   K. export / import (issue #1865)  one person exports, another imports: the
+#                 file carries `_from`, the importer's version +1 and the body is
+#                 the exporter's; differences print and need --yes (exit 4); the
+#                 same file again sends nothing; a file with a credential is
+#                 refused naming the field; --merge only adds; a base that moved
+#                 is refused; export with no hub exits 3
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 real="$BIN/fleet-config.py"
@@ -229,6 +235,59 @@ out=$(cfg people --json); rc=$?
   && ! printf '%s' "$out" | grep -q '"bundle"' && ok "J --json: two rows, no bundle" || bad "J --json: rc=$rc $out"
 out=$(env -i PATH="$PATH" HOME="$H" FLEET_CONF_DIR="$CONF" "$PY" "$C" people --hub http://127.0.0.1:9 2>&1); rc=$?
 [ $rc = 2 ] && printf '%s' "$out" | grep -q 'CCQUOTA_VIEWER_TOKEN' && ok "J no viewer token → exit 2 before asking the hub" || bad "J no token: rc=$rc $out"
+# ── K — export / import ──────────────────────────────────────────────────────
+mkdir -p "$WORK/hub2"
+HUBCMD2="HUBDIR='$WORK/hub2' '$PY' '$WORK/fakehub.py'"
+cfg2() {
+  env -i PATH="$PATH" HOME="$H" USER=selftestuser FLEET_CONF_DIR="$CONF" CODEX_HOME="$H/.codex" \
+    FLEET_CONFIG_NO_SYNC=1 FLEET_PERSON_HUB_CMD="$HUBCMD2 \"\$@\"" "$PY" "$C" "$@"
+}
+ver2() { "$PY" -c 'import json,sys; s=json.load(open(sys.argv[1])); print(s["versions"][-1]["version"] if s["versions"] else 0)' "$WORK/hub2/p.json" 2>/dev/null || echo 0; }
+pb2()  { "$PY" -c 'import json,sys; s=json.load(open(sys.argv[1])); print(json.dumps(s["versions"][-1]["bundle"], sort_keys=True))' "$WORK/hub2/p.json" 2>/dev/null; }
+out=$(HUB=0 cfg export); rc=$?
+[ $rc = 3 ] && ok "K export with no hub → exit 3" || bad "K export no hub: rc=$rc $out"
+cfg export > "$WORK/exp.json" 2>"$WORK/exp.err"; rc=$?
+vx=$(ver)
+from=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("_from"))' "$WORK/exp.json" 2>&1)
+body=$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("_from"); print(json.dumps(d, sort_keys=True))' "$WORK/exp.json" 2>&1)
+[ $rc = 0 ] && [ "$from" = "personal v$vx" ] && [ "$body" = "$(pb)" ] \
+  && ok "K export: the bundle + _from=\"$from\"" || bad "K export: rc=$rc from=$from $(cat "$WORK/exp.err")"
+# the importer already has one item of their own
+cfg2 add --personal settings verbose true >/dev/null 2>&1
+v20=$(ver2)
+out=$(cfg2 import "$WORK/exp.json" 2>&1); rc=$?
+[ $rc = 4 ] && [ "$(ver2)" = "$v20" ] && printf '%s' "$out" | grep -q '^  + mcp.perstool' \
+  && printf '%s' "$out" | grep -q '^  - claude_settings.verbose' && printf '%s' "$out" | grep -q -- '--yes' \
+  && ok "K import lists the differences (+ / -), nothing sent without --yes (exit 4)" || bad "K import no --yes: rc=$rc v=$(ver2) $out"
+out=$(cfg2 import "$WORK/exp.json" --yes 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(ver2)" = $((v20 + 1)) ] && [ "$(pb2)" = "$(pb)" ] \
+  && ok "K round trip: importer v$v20 → v$((v20 + 1)), content identical to the exporter's" || bad "K round trip: rc=$rc v=$(ver2) $(pb2) $out"
+out=$(cfg2 import - < "$WORK/exp.json" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(ver2)" = $((v20 + 1)) ] && printf '%s' "$out" | grep -q '一致' \
+  && ok "K the same file again (stdin) sends nothing" || bad "K same again: rc=$rc v=$(ver2) $out"
+# a file carrying a credential
+"$PY" - "$WORK/exp.json" "$WORK/leak.json" <<'EOF'
+import json, sys
+d = json.load(open(sys.argv[1])); d.setdefault("mcp", {})["leaky"] = {"command": "gh-mcp", "env": {"GITHUB_TOKEN": "ghp_" + "b" * 36}}
+json.dump(d, open(sys.argv[2], "w"))
+EOF
+v21=$(ver2)
+out=$(cfg2 import "$WORK/leak.json" --yes 2>&1); rc=$?
+[ $rc = 2 ] && [ "$(ver2)" = "$v21" ] && printf '%s' "$out" | grep -q 'bundle.mcp.leaky.env.GITHUB_TOKEN' \
+  && ok "K a file with a credential is refused, naming the field, nothing sent" || bad "K secret import: rc=$rc v=$(ver2) $out"
+# --merge only adds
+cfg2 add --personal settings verbose true >/dev/null 2>&1
+echo '{"_from": "personal v9", "mcp": {"extra": {"command": "x"}}}' > "$WORK/small.json"
+v22=$(ver2)
+out=$(cfg2 import "$WORK/small.json" --merge --yes 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(ver2)" = $((v22 + 1)) ] && pb2 | grep -q '"extra"' && pb2 | grep -q '"perstool"' \
+  && pb2 | grep -q '"verbose": true' && ! printf '%s' "$out" | grep -q '^  - ' \
+  && ok "K --merge only adds: extra in, perstool + verbose kept" || bad "K merge: rc=$rc $(pb2) $out"
+# a base that moved meanwhile is refused, not retried over
+touch "$WORK/hub2/bump"; v23=$(ver2)
+out=$(cfg2 import "$WORK/exp.json" --yes 2>&1); rc=$?
+[ $rc = 1 ] && [ "$(ver2)" = $((v23 + 1)) ] && printf '%s' "$out" | grep -q '重跑' \
+  && ok "K a base that moved is refused (exit 1), not written over" || bad "K 409: rc=$rc v=$(ver2) $out"
 
 [ "$fail" = 0 ] && echo "fleet-config-selftest: PASS" || echo "fleet-config-selftest: FAIL"
 exit "$fail"
