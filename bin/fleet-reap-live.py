@@ -117,7 +117,9 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     # merge — an ACTIVE @loop mark, a running child or bg job already returned above
     # (#1331's ruling: a live Loop is kept), so this never takes a pending round.
     looping = state == "looping" and merged_at is not None
-    if state not in ("", "done") and not looping:
+    # `exited` (issue #1784): the agent left and the pane holds the recovery page —
+    # as idle as `done`; the walk below still refuses any agent found under it.
+    if state not in ("", "done", "exited") and not looping:
         return "state:"+state
     roots = read(*tmux, "list-panes", "-t", target, "-F", "#{pane_pid}").split()
     if not roots or not all(p.isdigit() for p in roots):

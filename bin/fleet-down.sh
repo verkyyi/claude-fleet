@@ -50,6 +50,10 @@ fi
 SOCK=$(fleet_socket "$NAME")
 if tmux -L "$SOCK" has-session -t "$NAME" 2>/dev/null; then
   tmux -L "$SOCK" kill-session -t "$NAME" && echo "fleet-down: killed tmux session '$NAME'"
+  # The server outlives its last session now (exit-empty off, issue #1784), so a
+  # deliberate teardown ends it here — this fleet's own socket only.
+  [ -z "$(tmux -L "$SOCK" list-sessions -F x 2>/dev/null)" ] \
+    && FLEET_ALLOW_TMUX_DESTROY=1 tmux -L "$SOCK" kill-server 2>/dev/null
 else
   echo "fleet-down: no live tmux session '$NAME'"
 fi
@@ -79,6 +83,10 @@ if [ "$PURGE" = 1 ]; then
     echo "fleet-down: purged cache for slug '$SLUG'"
   fi
 fi
+
+# Down on purpose (issue #1784): the diskguard tick's --auto pull-up leaves this
+# fleet alone until fleet-up brings it back. A crash never writes this.
+[ "$PURGE" = 1 ] || { mkdir -p "$FLEET_CONF_DIR/fleets/$NAME" 2>/dev/null && : > "$FLEET_CONF_DIR/fleets/$NAME/restore.down"; }
 
 # if that was the LAST fleet (no live fleet server remains), this was a deliberate
 # full teardown — disarm crash auto-restore so the watcher doesn't resurrect it. A

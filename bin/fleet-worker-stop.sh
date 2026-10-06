@@ -153,6 +153,7 @@ if [ -z "$cpid" ]; then
 fi
 
 # --- 3. ask the agent to exit, then WAIT for it ---------------------------------
+TM set-option -w -t "$wid" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
 SK -t "$wid" Escape 2>/dev/null; sleep 0.6
 if [ "$agent" = codex ]; then
   # Codex takes its slash command inside a bracketed paste (fleet-sleep.py does

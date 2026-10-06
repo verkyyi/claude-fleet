@@ -221,6 +221,20 @@ row and one close. **ON by default, globally** — set `FLEET_CLOSE_ON_EXIT=0` i
 per-fleet `FLEET_CLOSE_ON_EXIT` is ignored — the switch is global-only, not per-fleet.
 It is equivalent to auto-firing the dash `⌃x` one-key reap on exit.
 
+**Since issue #1784 an exit no longer closes the window by itself.** Every session
+is opened through `bin/fleet-session-wrap.sh`, and while that wrapper holds the pane
+the hook does nothing on a manual exit: the window stays on a recovery page
+(`@claude_state=exited`, ⏏ 已退出 on the list) — `↵` resumes the same conversation,
+`r` starts a new one, **`q` runs exactly the reap + close above**
+(`session-end-hook.sh --recycle`, which also honours a `q` when
+`FLEET_CLOSE_ON_EXIT=0`). One stray double Ctrl+C used to close the window — and,
+on a machine where it was the last one, the tmux server with it. An exit the
+FLEET asks for (sleep, migrate, move, stop, transfer) stamps the window's
+`@wrap_quiet` first and keeps the policy above unchanged. An `exited` window is
+idle for the reapers (`fleet-reap-live.py`, `fleet-cleanup.sh`,
+`fleet-cleanup-idle.py` treat it like `done`), so it is cleaned up by the same
+rules as a finished turn.
+
 ## A wedged candidate can't stall the pipeline
 
 The daemon is a **single process** on `StartInterval=60`: launchd starts no new

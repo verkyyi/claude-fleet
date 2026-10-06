@@ -101,6 +101,7 @@ FRAME=${SPINF:$(( TICK % 10 )):1}
 #      $2, the @claude_needs subtype (#640), is unchanged and still drives ⌃k
 #   ✓  done
 #   z  asleep — the glyph alone; the hub's act cell still says for how long
+#   ⏏  exited — the agent left; the window waits on its recovery page (issue #1784)
 #
 # Every one is ONE display cell: the row's leading "${gc}${gl}${R} " slot is a
 # fixed width the right-pinned act/PR/ctx block is padded against, so a 2-cell
@@ -108,6 +109,7 @@ FRAME=${SPINF:$(( TICK % 10 )):1}
 state_v() { case "$1" in
   needs)   gc=$RD; gl='!'; rk=0;;
   sleeping) gc=$GY; gl='z'; rk=1;;
+  exited)  gc=$AM; gl='⏏'; rk=1;;
   preparing|waking) gc=$CY; gl=$FRAME; rk=1;;
   failed) gc=$RD; gl='!'; rk=0;;
   done)    gc=$GN; gl='✓';      rk=1;;
@@ -883,6 +885,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   case "$state" in
     needs)  case "$nsub" in ask|perm|blocked|restore) _nk=$nsub ;; *) _nk=other ;; esac ;;
     failed) _nk=failed ;;
+    exited) _nk=exited ;;
     *)      _nk='' ;;
   esac
   if [ -n "$_nk" ]; then

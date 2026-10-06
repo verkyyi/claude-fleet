@@ -139,7 +139,7 @@ ok "C the collapsed seed carries none of the retired paragraph pieces or skills"
 # is dropped, not embedded.
 : > "$WORK/newwin"; run_spawn 234 --agent codex
 [ "$(seed)" = "/fleet-claim" ] || fail "D --agent must not change the seed" "$(seed)"
-grep -qF -- "fleet-claude.sh' --agent codex \"\$(cat '" "$WORK/newwin" \
+grep -qF -- "fleet-session-wrap.sh' --agent codex \"\$(cat '" "$WORK/newwin" \
   || fail "D --agent codex must sit between the launcher and the seed in the new-window command" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; run_spawn 234
 grep -q -- '--agent' "$WORK/newwin" && fail "D a default spawn must carry NO --agent" "$(cat "$WORK/newwin")"

@@ -356,7 +356,7 @@ WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt $'audit the dash binds for "$
 grep -q -- '-n scratch-1\b' "$NEWWIN_LOG"  || fail "N --prompt must still land a scratch-N window" "$(cat "$NEWWIN_LOG")"
 grep -q 'SETOPT .*@raw 1' "$OPTS_LOG"      || fail "N a seeded scratch is still @raw=1" "$(cat "$OPTS_LOG")"
 grep -q '@issue' "$OPTS_LOG"               && fail "N a seeded scratch must NOT get an @issue" "$(cat "$OPTS_LOG")"
-grep -qF -- "fleet-claude.sh' \"\$(cat '" "$NEWWIN_LOG" || fail "N the seed must ride in a task file read at launch (\"\$(cat <tf>)\")" "$(cat "$NEWWIN_LOG")"
+grep -qF -- "fleet-session-wrap.sh' \"\$(cat '" "$NEWWIN_LOG" || fail "N the seed must ride in a task file read at launch (\"\$(cat <tf>)\")" "$(cat "$NEWWIN_LOG")"
 grep -qF -- 'injection' "$NEWWIN_LOG"      && fail "N the prompt text must NEVER be interpolated into the new-window command" "$(cat "$NEWWIN_LOG")"
 tf="$(grep -o "cat '[^']*task_scratch-1.txt'" "$NEWWIN_LOG" | head -1 | sed "s/^cat '//; s/'$//")"
 [ -n "$tf" ] && [ -f "$tf" ]               || fail "N the task file task_scratch-1.txt must exist" "$(cat "$NEWWIN_LOG")"
@@ -430,12 +430,12 @@ ok "O in-flight spawn markers count toward the cap (fresh blocks, stale ages out
 # dropped (fleet default) rather than embedded. Default spawns carry no --agent.
 reset_scratch; : > "$POOL_LOG"; : > "$NEWWIN_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --agent codex
-grep -qF -- "fleet-claude.sh' --agent codex" "$NEWWIN_LOG" || fail "O --agent codex must reach the launcher inside the new-window command" "$(cat "$NEWWIN_LOG")"
+grep -qF -- "fleet-session-wrap.sh' --agent codex" "$NEWWIN_LOG" || fail "O --agent codex must reach the launcher inside the new-window command" "$(cat "$NEWWIN_LOG")"
 grep -qs 'claim' "$POOL_LOG"               && fail "O an explicit --agent scratch must never claim a warm-pool window" "$(cat "$POOL_LOG")"
 [ -s "$DISPLAY_LOG" ]                      && fail "O a codex spawn that works draws NO line (issue #1618)" "$(cat "$DISPLAY_LOG")"
 reset_scratch; : > "$NEWWIN_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg --agent=codex --prompt 'seeded on codex'
-grep -qF -- "fleet-claude.sh' --agent codex \"\$(cat '" "$NEWWIN_LOG" || fail "O --bg --agent must survive the re-exec and precede the seed" "$(cat "$NEWWIN_LOG")"
+grep -qF -- "fleet-session-wrap.sh' --agent codex \"\$(cat '" "$NEWWIN_LOG" || fail "O --bg --agent must survive the re-exec and precede the seed" "$(cat "$NEWWIN_LOG")"
 reset_scratch; : > "$NEWWIN_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --agent gemini
 grep -q -- '--agent' "$NEWWIN_LOG"         && fail "O an unknown --agent must be dropped, never embedded" "$(cat "$NEWWIN_LOG")"

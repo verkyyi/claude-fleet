@@ -310,6 +310,7 @@ move_main() {
   stop_agent() {
     local wid="$1" cpid="$2" i alive=1
     TM set-window-option -t "$wid" @reported 1 2>/dev/null
+    TM set-option -w -t "$wid" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
     SK -t "$wid" Escape 2>/dev/null; sleep 0.6
     SK -t "$wid" -l '/exit' 2>/dev/null; sleep 0.6; SK -t "$wid" Enter 2>/dev/null
     for ((i = 1; i <= EXIT_WAIT; i++)); do

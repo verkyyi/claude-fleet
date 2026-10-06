@@ -753,7 +753,8 @@ def launch(agent, argv):
             argv = ['-m',target['model'],*argv]
     else:
         env['FLEET_ACCOUNT_LABEL'] = target['label']
-    os.execve(str(BIN / 'fleet-claude.sh'), [str(BIN / 'fleet-claude.sh'), '--agent', target['agent'], *argv], env)
+    # wrap-ok: called FROM fleet-claude.sh, already under fleet-session-wrap.sh (#1784)
+    os.execve(str(BIN / 'fleet-claude.sh'), [str(BIN / 'fleet-claude.sh'), '--agent', target['agent'], *argv], env)  # wrap-ok: see above
 
 
 def main():

@@ -825,6 +825,19 @@ if [ -n "$_rl_role" ] && [ "$_rl_role" != none ]; then
   fi
 fi
 
+# --- tools (issue #1774, #1784): can a PATH-less shell find claude and tmux? -----
+# What a daemon, an ssh command or a restore sees — not this terminal's PATH. Asked
+# the way fleet-claude.sh / fleet-restore.sh ask (fleet_find_tool: $FLEET_CLAUDE_BIN,
+# PATH, ~/.local/bin, /opt/homebrew/bin, /usr/local/bin). A miss is a FAIL: every
+# restore on this machine would park at a shell.
+_tl_out=$(env -i HOME="$HOME" PATH=/usr/bin:/bin ${FLEET_CLAUDE_BIN:+FLEET_CLAUDE_BIN="$FLEET_CLAUDE_BIN"} \
+  bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; for t in claude tmux; do w=$(fleet_find_tool "$t" 2>/dev/null) || w=-; printf "%s=%s " "$t" "$w"; done' \
+  _ "$(dirname "$0")" 2>/dev/null)
+case "$_tl_out" in
+  *=-\ *) fail tools "a bare shell (PATH=/usr/bin:/bin) cannot find: $(printf '%s' "$_tl_out" | tr ' ' '\n' | sed -n 's/=-$//p' | tr '\n' ' ')— install it, or set FLEET_CLAUDE_BIN" ;;
+  *)       pass tools "$(printf '%s' "$_tl_out" | sed "s#$HOME#~#g")— found from a bare shell" ;;
+esac
+
 # --- hub-image (issue #1696): which commit the hub serves, vs the stable tag -----
 # The hub image is deployed by hand, and its commit used to live only in the
 # image tag (cluster access to read). bin/fleet-hub-image.sh reads the hub's
@@ -1714,7 +1727,7 @@ EOF2
       mcp_ts=$((mcp_ts+lns)); mcp_tp=$((mcp_tp+lnp)); mcp_tk=$((mcp_tk+lnk))
     fi
     if [ -n "$unl" ]; then
-      warn mcp "$sess: no MCP allowlist ($unl) — its sessions inherit every MCP server in ~/.claude.json ($mcp_host, plus plugins + remote connectors), one copy per session (bin/fleet-claude.sh, FLEET_MCP_CONFIG)${lst:+; $lst}$ltxt. Fix: FLEET_MCP_CONFIG=~/.claude/fleet/conf/mcp-worker.json in the fleet conf. Silence: FLEET_DOCTOR_MCP=0"
+      warn mcp "$sess: no MCP allowlist ($unl) — its sessions inherit every MCP server in ~/.claude.json ($mcp_host, plus plugins + remote connectors), one copy per session (bin/fleet-claude.sh, FLEET_MCP_CONFIG)${lst:+; $lst}$ltxt. Fix: FLEET_MCP_CONFIG=~/.claude/fleet/conf/mcp-worker.json in the fleet conf. Silence: FLEET_DOCTOR_MCP=0"   # wrap-ok: a message, not a launch
     else
       pass mcp "$sess: $lst$ltxt"
     fi

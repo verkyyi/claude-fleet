@@ -293,7 +293,12 @@ fi
 #    manual invocation without a piped payload never hangs on cat (mirrors the
 #    SessionStart hook handoff-latch-reset).
 codex_exit=0
-if [ "${1:-}" = --codex-exit ]; then
+if [ "${1:-}" = --recycle ]; then
+  # The recovery page's `q` (issue #1784): the operator asked for exactly what a
+  # manual exit used to do — gate-reap the worktree, record the row, close the
+  # window. fleet-session-wrap.sh runs this in the pane, the agent already gone.
+  reason=recycle
+elif [ "${1:-}" = --codex-exit ]; then
   case "${2:-}" in ''|*[!0-9]*) exit 0 ;; esac
   [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_agent}' 2>/dev/null)" = codex ] || exit 0
   [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@cc_launcher_pid}' 2>/dev/null)" = "$2" ] || exit 0
@@ -312,10 +317,22 @@ fi
 #    resume, bypass_permissions_disabled, other → NO-OP. The settings-hooks.json
 #    matcher already pre-filters to prompt_input_exit|logout; this is defense-in-depth.
 case "$reason" in
-  prompt_input_exit|logout) : ;;
+  prompt_input_exit|logout|recycle) : ;;
   process_exit) [ "$codex_exit" = 1 ] || exit 0 ;;
   *) exit 0 ;;
 esac
+
+# 2b. Under fleet-session-wrap.sh (issue #1784) an exit no longer closes anything:
+#     the window stays on the recovery page, and its `q` comes back here as
+#     --recycle. The wrapper is THIS pane's (its pid on the pane, in our env, and
+#     alive), and the fleet did not ask for the exit — a sleep / migrate / move /
+#     stop / transfer stamps @wrap_quiet first and keeps the old policy.
+if [ "$reason" != recycle ] && [ -n "${FLEET_SESSION_WRAP:-}" ] \
+   && [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@session_wrap}' 2>/dev/null)" = "$FLEET_SESSION_WRAP" ] \
+   && kill -0 "$FLEET_SESSION_WRAP" 2>/dev/null \
+   && [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@wrap_quiet}' 2>/dev/null)" != 1 ]; then
+  exit 0
+fi
 
 # 3. Resolve THIS fleet, then honor the GLOBAL-AUTHORITATIVE gate. Default ON: skip
 #    ONLY when the GLOBAL fleet.conf set FLEET_CLOSE_ON_EXIT=0 (captured in
@@ -326,7 +343,7 @@ esac
 sess=$(fleet_current_session)
 [ -n "$sess" ] || exit 0
 fleet_load_conf "$sess"                          # still needed for FLEET_MAIN/REPO/BASE
-[ "$_close_on_exit" = 0 ] && exit 0              # global opt-out only; per-fleet ignored
+[ "$_close_on_exit" = 0 ] && [ "$reason" != recycle ] && exit 0   # global opt-out only; per-fleet ignored; a `q` is asked for
 
 # 4. Scope: read this pane's window role markers. A worker window carries a numeric
 #    @issue; a raw scratch carries @raw=1; the operator hub pane carries @hub=1; a
@@ -361,5 +378,9 @@ elif [ "$raw" = 1 ]; then
   [ -z "$wt" ] && wt=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_current_path}' 2>/dev/null)
   skey=$(fleet_scratch_key "$wt")
   fleet_bg "bash '$BIN/session-end-hook.sh' --exec raw '$sess' '$win' '${skey:--}'"
+elif [ "$reason" = recycle ]; then
+  # Neither a worker nor a scratch (a no-repo session): nothing to record or reap,
+  # the operator asked for the window to go.
+  fleet_bg "tmux kill-window -t '$win'"
 fi
 exit 0

@@ -259,7 +259,7 @@ fleet_repo_trust_warn "$DIR" fleet-up
 # below get it as this client's — so ~/.local/bin (Claude Code's native install)
 # goes on it BEFORE the fork, or a login whose PATH lacked the dir never finds
 # claude on a respawn (issue #1191, #1183; fleet_local_bin_path in fleet-lib.sh).
-PATH=$(fleet_local_bin_path); export PATH
+PATH=$(fleet_local_bin_path); PATH=$(fleet_path_fill); export PATH
 workwin=$(tmux -L "$SOCK" new-session -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
   || die "tmux new-session failed for '$NAME'"
 # A fresh server recycles pane ids: drop the last server's unrun mod commands
@@ -309,6 +309,10 @@ fi
 # own PATH — gets ~/.local/bin stamped onto its global environment, so the next
 # window it spawns server-side finds claude too (issue #1191). A no-op when there.
 fleet_server_local_bin "$SOCK"
+# The server outlives its last window (issue #1784): an exit that closes the last
+# session must not take every view of this machine down with it.
+fleet_server_resident "$SOCK"
+rm -f "$FLEET_CONF_DIR/fleets/$NAME/restore.down" 2>/dev/null   # up again: --auto may restore it (#1784)
 
 # --- a repo the fleet does not host yet: add it ---
 if [ -n "$ADD_REPO" ]; then
