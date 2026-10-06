@@ -286,7 +286,35 @@ type Hello struct {
 	// placement and no credential lease. nil — an agent older than #1719, or
 	// one started without the setting — is compute on, as every node was.
 	Compute *bool `json:"compute,omitempty"`
+	// ComputeForce is `fleet node compute on --force` (claude-fleet#1720):
+	// the person opened this login although its probe said it does not suit
+	// running sessions. The hub honours it over the probe and audits it.
+	ComputeForce bool `json:"compute_force,omitempty"`
+	// Probe is this machine's own reading of whether it suits running
+	// sessions (claude-fleet#1720) — nil when bin/fleet-node-probe.sh never
+	// ran here, which the hub reads exactly as before the probe existed.
+	Probe *NodeProbe `json:"probe,omitempty"`
 }
+
+// NodeProbe is bin/fleet-node-probe.sh's verdict (claude-fleet#1720), read off
+// $FLEET_CONF_DIR/node-probe.json: the egress region, whether Anthropic's and
+// OpenAI's APIs answer from here, and whether the machine is a laptop.
+type NodeProbe struct {
+	Loc       string    `json:"loc,omitempty"`
+	Anthropic string    `json:"anthropic,omitempty"` // reachable | unsupported_region | unreachable
+	OpenAI    string    `json:"openai,omitempty"`
+	Laptop    bool      `json:"laptop,omitempty"`
+	TS        time.Time `json:"ts"`
+	Verdict   string    `json:"verdict"` // ok | unsupported_region | unreachable
+	Reason    string    `json:"reason,omitempty"`
+}
+
+// Probe verdicts (claude-fleet#1720).
+const (
+	ProbeOK                = "ok"
+	ProbeUnsupportedRegion = "unsupported_region"
+	ProbeUnreachable       = "unreachable"
+)
 
 // ComputeOn reads a hello's or heartbeat's Compute: only an explicit false is
 // off (claude-fleet#1719).
@@ -387,6 +415,11 @@ type Heartbeat struct {
 	// Compute repeats the hello's (claude-fleet#1719) so the roster row the
 	// hub keeps says it too: false = coordinate only, never placed or leased.
 	Compute *bool `json:"compute,omitempty"`
+	// ComputeForce and Probe repeat the hello's too (claude-fleet#1720): the
+	// agent re-reads both every beat, so `fleet node compute` and the daily
+	// probe reach the hub without a reconnect.
+	ComputeForce bool       `json:"compute_force,omitempty"`
+	Probe        *NodeProbe `json:"probe,omitempty"`
 
 	AgentVersion string    `json:"agent_version,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`

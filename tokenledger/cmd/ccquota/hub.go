@@ -171,6 +171,15 @@ func fleetNudgePath() string {
 	return ""
 }
 
+// fleetConfPath is $FLEET_CONF_DIR/<name> when the conf dir is named in the
+// environment; empty lets the agent derive the default from its home.
+func fleetConfPath(name string) string {
+	if d := os.Getenv("FLEET_CONF_DIR"); d != "" {
+		return filepath.Join(d, name)
+	}
+	return ""
+}
+
 // fleetEnabled reports CCQUOTA_FLEET=1, the one switch for the whole fleet
 // module (claude-fleet#1408). Anything else — unset, empty, 0 — is off, and off
 // is today's hub and agent exactly.
@@ -943,6 +952,9 @@ func runAgent(args []string) error {
 		// The state nudge (claude-fleet#1481): the fleet's conf dir when
 		// the environment names one, else the agent's default under home.
 		FleetNudgePath: fleetNudgePath(),
+		// node.env + node-probe.json, re-read every beat (claude-fleet#1720).
+		FleetNodeEnvPath: fleetConfPath("node.env"),
+		FleetProbePath:   fleetConfPath("node-probe.json"),
 	})
 	if err != nil {
 		return err

@@ -961,18 +961,6 @@ func (s *Server) nodeStatusOf(endpointID string, now time.Time) (control.Heartbe
 	return control.Heartbeat{}, "lost", false
 }
 
-// excludedComputeOff is placement's word for a login that only coordinates.
-const excludedComputeOff = "compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)"
-
-// computeOff reports whether a login only coordinates (claude-fleet#1719):
-// its live connection's hello said so, or its last heartbeat did.
-func (s *Server) computeOff(endpointID string, hb control.Heartbeat) bool {
-	if c := s.nodes.get(endpointID); c != nil && c.computeOff {
-		return true
-	}
-	return !control.ComputeOn(hb.Compute)
-}
-
 // checkNodeCap refuses a start or resume that would take a person past their
 // cap on the fleet's machine.
 func (s *Server) checkNodeCap(r store.FleetRow, now time.Time) error {
@@ -1144,13 +1132,15 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	}
 	_, connErr := s.writableConn(r.EndpointID)
 	maint, flagged := maintenanceOf(r.Hostname, settings)
+	cv := s.computeOf(r.EndpointID, hb, settings, now)
 	switch {
 	case status != "online":
 		c.Excluded = "offline"
-	case s.computeOff(r.EndpointID, hb):
-		// 只协调 (claude-fleet#1719): the login asked for no sessions —
-		// out for auto AND for a start that names it.
-		c.Excluded = excludedComputeOff
+	case cv.Off:
+		// 只协调 (claude-fleet#1719): the login asked for no sessions, or its
+		// egress region closed it (#1720) — out for auto AND for a start
+		// that names it.
+		c.Excluded = cv.Why
 	case flagged:
 		// 维护中 (claude-fleet#1427): the operator is taking the machine down.
 		// Out for auto AND for a start that names it — unlike not-ready, this
@@ -1319,6 +1309,14 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+		case body.Key == ComputeAutoKey:
+			// The team policy (claude-fleet#1720): on opens a login whose
+			// fresh probe is ok; "" or off is the default — only a hint.
+			if body.Value != "" && body.Value != "on" && body.Value != "off" {
+				httpError(w, http.StatusBadRequest, ComputeAutoKey+" is on | off, or \"\" for the default (off)")
+				return
+			}
+			s.computeAutoAudit(body.Value, time.Now())
 		case strings.HasPrefix(body.Key, NodeCapPrefix) && nodeNameRE.MatchString(body.Key[len(NodeCapPrefix):]):
 			if body.Value != "" {
 				if n, err := strconv.Atoi(body.Value); err != nil || n < 0 || n > 256 {
@@ -1327,7 +1325,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine> and "+SpotWeightKey+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+SpotWeightKey+" and "+ComputeAutoKey+" are settable")
 			return
 		}
 		if err := s.Store.SetFleetSetting(body.Key, body.Value, time.Now()); err != nil {

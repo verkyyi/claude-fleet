@@ -137,8 +137,10 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if hb, _, _ := s.nodeStatusOf(ep.ID, time.Now()); s.computeOff(ep.ID, hb) {
-		deny(http.StatusForbidden, LeaseComputeOff, "", osUser+" on "+host+" only coordinates (CCQUOTA_FLEET_COMPUTE=0): no credentials are leased to it")
+	hb, _, _ := s.nodeStatusOf(ep.ID, time.Now())
+	settings, _ := s.Store.FleetSettings()
+	if cv := s.computeOf(ep.ID, hb, settings, time.Now()); cv.Off {
+		deny(http.StatusForbidden, LeaseComputeOff, "", osUser+" on "+host+" only coordinates — "+cv.Why+": no credentials are leased to it")
 		return
 	}
 	principal, err := s.Store.PrincipalForLogin(host, osUser)
