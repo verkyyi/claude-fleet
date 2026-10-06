@@ -133,6 +133,15 @@ type FleetOperation struct {
 	Placement string
 }
 
+// fleetStateUnknown is control.FleetStateUnknown (claude-fleet#1465): a fleet
+// whose fleet_status read failed on its node, sent with no window list. That
+// is "could not read", never "no windows" (claude-fleet#1795): the stored list
+// stays the last one read, so fleet_sessions does not drop every row of that
+// machine for the seconds a read times out — the sidebar on every client
+// collapsed to the one row it was standing on, then came back. The machine's
+// count still reads unknown off the state.
+const fleetStateUnknown = "unknown"
+
 // RecordFleetSnapshot registers machineID (reporting through endpointID) and
 // replaces its fleet list with fleets. A fleet the machine no longer reports
 // stays in the registry with present=0 — a dispatcher holding its UUID gets
@@ -178,7 +187,9 @@ func (s *Store) RecordFleetSnapshot(endpointID, hostname, osUser, machineID stri
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
 			ON CONFLICT(fleet_id) DO UPDATE SET name = excluded.name, repo = excluded.repo,
 			  checkout = excluded.checkout, agent = excluded.agent, state = excluded.state,
-			  worker_count = excluded.worker_count, workers_json = excluded.workers_json,
+			  worker_count = excluded.worker_count,
+			  workers_json = CASE WHEN excluded.state = '`+fleetStateUnknown+`' THEN fleet_fleets.workers_json
+			                      ELSE excluded.workers_json END,
 			  present = 1, observed_at = excluded.observed_at, repos_json = excluded.repos_json`,
 			f.FleetID, machineID, f.Name, f.Repo, f.Checkout, f.Agent, f.State,
 			f.WorkerCount, workers, ts, ts, reposJSON(f.Repos)); err != nil {

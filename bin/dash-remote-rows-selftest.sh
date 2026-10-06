@@ -65,7 +65,9 @@
 #                   locator cache; derives #node from the sessions on a hub without a
 #                   `nodes` list, never counting a local row; writes global/hub_ok on
 #                   a round that stood (#1483); a failed fetch keeps the last cache AND
-#                   hub_ok; off ⇒ writes nothing, --ensure starts nothing
+#                   hub_ok; off ⇒ writes nothing, --ensure starts nothing; a machine
+#                   the hub could not read (sessions null) keeps its last rows when
+#                   the answer lists none of them, until a read stands (#1795)
 #   I. identity   — who the refresher asks the hub as (#1475): FLEET_HUB_SESSIONS_CMD,
 #                   else a VALID connection certificate (a signed POST), else the viewer
 #                   token (a bearer GET), else nothing is fetched and --identity says why;
@@ -566,6 +568,12 @@ json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"
 json.dump({"machines": [], "sessions": sessions}, open(old, "w"), ensure_ascii=False)   # a hub older than #1475
 unk = [dict(n, sessions=None) if n["machine_name"] == "mini2.local" else n for n in nodes]   # #1465: a fleet there unread
 json.dump({"machines": [], "sessions": sessions, "nodes": unk}, open(path.replace("sessions.json", "sessions-unk.json"), "w"), ensure_ascii=False)
+# #1795: a hub that blanked the unread machine's rows — the same unknown count, none of its rows
+blank = [x for x in sessions if x["machine_name"] != "mini2.local"]
+json.dump({"machines": [], "sessions": blank, "nodes": unk}, open(path.replace("sessions.json", "sessions-blank.json"), "w"), ensure_ascii=False)
+# …and the machine read again, really empty: its rows go
+gone = [dict(n, sessions=0) if n["machine_name"] == "mini2.local" else n for n in nodes]
+json.dump({"machines": [], "sessions": blank, "nodes": gone}, open(path.replace("sessions.json", "sessions-gone.json"), "w"), ensure_ascii=False)
 PY
 export FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" FLEET_NODE_ALIASES="mini2=m4 box3=m9 box8=m8"
 rm -f "$G/remote_$S"
@@ -612,6 +620,17 @@ FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-unk.json'" PATH="$SHIMPATH" bash "$H
 eq   "E: the hub's sessions null (a fleet it could not read, #1465) → that #node's count is ?, never the rows held" \
      "#node${US}m4${US}online${US}?$US$(ep 2026-10-04T10:07:00Z)${US}hub;" \
      "$(LC_ALL=C awk -F"$US" '$1 == "#node" && $2 == "m4" { printf "%s;", $0 }' "$G/remote_$S")"
+# #1795: an unread machine is "could not read", never "no windows" — a hub answer
+# that lists none of its rows keeps their last lines, so the sidebar does not
+# collapse to the row it stands on for the seconds a node's read times out
+m4rows() { LC_ALL=C awk -F"$US" '/^wid:/ && $2 == "m4" { print $1 }' "$G/remote_$S" | sort | tr '\n' ' '; }
+M4=$(m4rows)
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-blank.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (blanked rows) failed"
+eq   "E: the hub's sessions null and none of that machine's rows (#1795) → its last rows stay, none lost" "$M4" "$(m4rows)"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-blank.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+eq   "E: …round after round while it stays unread" "$M4" "$(m4rows)"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-gone.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (read empty) failed"
+eq   "E: …and a read that stands with no rows takes them away" "" "$(m4rows)"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null; R=$(cat "$G/remote_$S")
 OK=$(cat "$G/hub_ok" 2>/dev/null)
 case "$OK" in

@@ -148,3 +148,39 @@ func TestSessionsCountDegenerate(t *testing.T) {
 		t.Fatalf("no fleets = %v; want 0", n)
 	}
 }
+
+// A failed read is "could not read", never "no windows" (claude-fleet#1795):
+// fleet_sessions keeps the machine's last-read rows while its fleet is
+// unknown, so the sidebar on every client does not collapse to the one row it
+// stands on for the seconds a node's fleet_status times out. A read that
+// stands — even an empty one — replaces them as before.
+func TestUnreadableFleetKeepsItsLastRows(t *testing.T) {
+	h, m5, _, f5, _ := twoNodes(t)
+	m5rows := func() int {
+		n := 0
+		for _, x := range getFleet(t, h, "/v1/fleet/fleet_sessions", 200)["sessions"].([]any) {
+			if x.(map[string]any)["machine_name"] == "m5" {
+				n++
+			}
+		}
+		return n
+	}
+	if got := m5rows(); got != 1 {
+		t.Fatalf("m5 rows before = %d; want 1", got)
+	}
+	m5.beatLoad("m5", "verk", machineA, 1, 0, unknownFleet(f5))
+	waitFor(t, 3*time.Second, "m5's unreadable beat", func() bool {
+		for _, n := range roster(t, h).Nodes {
+			if n.Hostname == "m5" {
+				return n.Sessions == nil
+			}
+		}
+		return false
+	})
+	if got := m5rows(); got != 1 {
+		t.Fatalf("m5 rows while unreadable = %d; want the last-read 1, not 0", got)
+	}
+	empty := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet")
+	m5.beatLoad("m5", "verk", machineA, 1, 0, empty)
+	waitFor(t, 3*time.Second, "m5's empty read", func() bool { return m5rows() == 0 })
+}
