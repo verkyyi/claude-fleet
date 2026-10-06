@@ -294,6 +294,12 @@ type Hello struct {
 	// sessions (claude-fleet#1720) — nil when bin/fleet-node-probe.sh never
 	// ran here, which the hub reads exactly as before the probe existed.
 	Probe *NodeProbe `json:"probe,omitempty"`
+	// Personal is a person's own computer (claude-fleet#1721, `fleet node
+	// compute on --personal`, a laptop's default): an auto placement never
+	// picks it, and a start lands on it only when it was asked for FROM it —
+	// its own client, or a session already running there. false/absent is a
+	// shared machine, as every node was.
+	Personal bool `json:"personal,omitempty"`
 }
 
 // NodeProbe is bin/fleet-node-probe.sh's verdict (claude-fleet#1720), read off
@@ -420,6 +426,8 @@ type Heartbeat struct {
 	// probe reach the hub without a reconnect.
 	ComputeForce bool       `json:"compute_force,omitempty"`
 	Probe        *NodeProbe `json:"probe,omitempty"`
+	// Personal repeats the hello's (claude-fleet#1721), re-read every beat.
+	Personal bool `json:"personal,omitempty"`
 
 	AgentVersion string    `json:"agent_version,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`

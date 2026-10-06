@@ -246,7 +246,7 @@ unset _why
 # is known (a no-repo or seeded scratch never travels).
 NODE="$NODE_ARG"
 if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
-  NODE="${FLEET_SPAWN_NODE:-auto}"
+  NODE="${FLEET_SPAWN_NODE:-$(fleet_spawn_node_default)}"   # personal machine → local (#1721)
   case "$NODE" in ''|*[!A-Za-z0-9._-]*) NODE=auto ;; esac
 fi
 PLACING=0
