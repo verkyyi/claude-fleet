@@ -48,9 +48,16 @@ PR="${PR//[^0-9]/}"
 [ -z "$PR" ] && { printf 'fleet-pr-merge: a PR number is required\n' >&2; exit 2; }
 note() { [ "$quiet" = 1 ] || printf 'fleet-pr-merge: %s\n' "$1" >&2; }
 
+# Same resolution as fleet-pr-verdict.sh: in a fleet hosting 2+ repos the repo is
+# the pane's window repo (@repo) or a refusal — never the dash's cached repo, which
+# would merge #N of ANOTHER repo (issue #1822).
 repo="${repo:-${CF_REPO:-}}"
 sess=$(fleet_current_session 2>/dev/null)
-if [ -z "$repo" ]; then
+if [ -z "$repo" ] && fleet_multirepo "$sess"; then
+  repo=$(fleet_target_repo "$sess") || {
+    printf 'fleet-pr-merge: fleet %s hosts several repos and this pane has none — pass --repo (%s)\n' \
+      "$sess" "$(fleet_repos "$sess" | tr '\n' ' ' | sed 's/ $//')" >&2; exit 2; }
+elif [ -z "$repo" ]; then
   repo="${FLEET_REPO:-}"
   _r=$(fleet_repo_cached "$sess"); [ -n "$_r" ] && repo="$_r"
 fi

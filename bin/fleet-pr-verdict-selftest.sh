@@ -151,6 +151,74 @@ OUT=$(env PATH="$WORK/nogh" TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
 [ -z "$OUT" ] || fail "no gh on PATH must print no verdict" "$OUT"
 ok "gh missing → exit 2, no verdict invented"
 
+# ===== REPO: a fleet hosting 2+ repos (issue #1822) ============================
+# With no --repo, both fleet-pr-verdict.sh and fleet-pr-merge.sh used to read
+# fleet_repo_cached — the repo the dash last picked — so a claude-fleet worker in a
+# monorepo fleet got #N of the OTHER repo (MERGED, while its own #N was OPEN), and
+# the merge could land there. Now: the pane's window @repo, or a refusal naming the
+# hosted repos. A fleet with no repos/ overlay resolves exactly as before.
+MERGE_CLI="$BIN/fleet-pr-merge.sh"
+RW="$WORK/repo"; mkdir -p "$RW/fakebin" "$RW/conf/fleets/mr/repos" "$RW/conf/fleets/one" "$RW/tmp"
+printf 'FLEET_REPO=o/a\n' > "$RW/conf/fleets/mr/conf"
+printf 'FLEET_REPO=o/b\n' > "$RW/conf/fleets/mr/repos/o-b.conf"
+printf 'FLEET_REPO=o/a\n' > "$RW/conf/fleets/one/conf"
+# fake tmux: the session name for $FLEET_SESSION_FMT, the window's @repo for the
+# '#{@repo}|#{@norepo}|#{@worktree}' read; everything else answers nothing.
+cat > "$RW/fakebin/tmux" <<'TMUXFAKE'
+#!/bin/bash
+case "$*" in
+  *'#{@repo}|'*)        printf '%s||\n' "${FAKE_AT_REPO:-}" ;;
+  *session_group*|*session_name*) printf '%s\n' "${FAKE_SESS:-}" ;;
+esac
+exit 0
+TMUXFAKE
+# fake gh: logs every argv, answers a READY row.
+cat > "$RW/fakebin/gh" <<'GHFAKE'
+#!/bin/bash
+printf '%s\n' "$*" >> "$GH_ARGV"
+printf 'OPEN\nMERGEABLE\nCLEAN\n\npass\n'
+GHFAKE
+chmod +x "$RW/fakebin/tmux" "$RW/fakebin/gh"
+run_repo() {  # run_repo <cli> <sess> <@repo> [args…] → OUT/ERR/RC + $RW/argv
+  local cli="$1" s="$2" at="$3"; shift 3
+  : > "$RW/argv"
+  OUT=$(env PATH="$RW/fakebin:$PATH" TMPDIR="$RW/tmp" FLEET_CONF_DIR="$RW/conf" \
+            FLEET_SKIP_GLOBAL_CONF=1 TMUX=/fake,1,0 TMUX_PANE=%1 FAKE_SESS="$s" \
+            FAKE_AT_REPO="$at" GH_ARGV="$RW/argv" FLEET_REPO="${RUN_FLEET_REPO-}" \
+            bash "$cli" "$@" 2>"$RW/err"); RC=$?
+  ERR=$(cat "$RW/err")
+}
+run_repo "$CLI" mr o/b 1821
+[ "$OUT" = READY ] && grep -q -- '--repo o/b' "$RW/argv" && ! grep -q -- 'o/a' "$RW/argv" \
+  || fail "verdict in a 2-repo fleet must read the pane's @repo (o/b)" "out=$OUT rc=$RC argv=$(cat "$RW/argv") $ERR"
+run_repo "$CLI" mr o/b 1821 --repo ''
+grep -q -- '--repo o/b' "$RW/argv" || fail "an EMPTY --repo (\$FLEET_REPO unset) resolves like a bare call" "$(cat "$RW/argv") $ERR"
+run_repo "$CLI" mr '' 1821
+[ "$RC" = 2 ] && [ -z "$OUT" ] && [ ! -s "$RW/argv" ] && printf '%s' "$ERR" | grep -q 'pass --repo (o/a o/b)' \
+  || fail "verdict from a pane with no @repo must refuse, list the repos, call no gh" "out=$OUT rc=$RC argv=$(cat "$RW/argv") $ERR"
+run_repo "$CLI" mr o/b 1821 --repo o/a
+grep -q -- '--repo o/a' "$RW/argv" || fail "an explicit --repo still wins" "$(cat "$RW/argv")"
+ok "verdict: 2-repo fleet reads the window's @repo, refuses with none, --repo still wins"
+
+run_repo "$MERGE_CLI" mr o/b 1821
+grep -q -- '--repo o/b' "$RW/argv" && ! grep -q -- 'o/a' "$RW/argv" \
+  || fail "merge in a 2-repo fleet must act on the pane's @repo (o/b)" "rc=$RC argv=$(cat "$RW/argv") $ERR"
+run_repo "$MERGE_CLI" mr '' 1821
+[ "$RC" = 2 ] && [ ! -s "$RW/argv" ] && printf '%s' "$ERR" | grep -q 'pass --repo (o/a o/b)' \
+  || fail "merge from a pane with no @repo must refuse before any gh call" "rc=$RC argv=$(cat "$RW/argv") $ERR"
+ok "merge: 2-repo fleet acts on the window's @repo, refuses (no gh call) with none"
+
+# Degenerate: no repos/ overlay — the pane's @repo is NOT consulted, the fleet's
+# own repo (FLEET_REPO, a one-repo pane's env) is, byte for byte as before.
+RUN_FLEET_REPO=o/a
+run_repo "$CLI" one o/zzz 1821
+grep -q -- '--repo o/a' "$RW/argv" || fail "one-repo fleet: verdict resolves as before (o/a)" "$(cat "$RW/argv") $ERR"
+run_repo "$MERGE_CLI" one o/zzz 1821
+grep -q -- '--repo o/a' "$RW/argv" && ! grep -q -- 'o/zzz' "$RW/argv" \
+  || fail "one-repo fleet: merge resolves as before (o/a)" "$(cat "$RW/argv") $ERR"
+RUN_FLEET_REPO=
+ok "degenerate: a one-repo fleet resolves exactly as before"
+
 # ===== WAIT: --wait / --until-merged (issue #950) ==============================
 if ! command -v jq >/dev/null 2>&1; then
   printf 'skip WAIT layer: no jq on PATH to run the real --jq program\n'
