@@ -206,7 +206,11 @@ func consistentWorkers(fleetID string, raw json.RawMessage) json.RawMessage {
 			continue
 		}
 		fid, k, err := fleetid.ParseWorkerID(id)
-		if err != nil || fid != fleetID || k != key {
+		// A keyless window (a no-repo session, claude-fleet#1749) is listed under
+		// its identity: <fleet UUID>/<fleet_id>, the id half its own "identity".
+		ident, _ := w["identity"].(string)
+		byIdent := key == "" && ident != "" && k == ident && fleetid.IsUUID(k)
+		if err != nil || fid != fleetID || (k != key && !byIdent) {
 			w["worker_id"] = nil
 		}
 	}

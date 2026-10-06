@@ -161,7 +161,11 @@ class Control:
                 raise Fault("PROTOCOL_ERROR", "Invalid worker inventory")
             parts, extra = row
             window, issue, scratch, worktree, state, agent, handle, lifecycle, repo = parts
-            if not issue and scratch != "1":
+            # A window with no key — a no-repo session, a pinned guide — is listed
+            # under its identity (issue #1749): the adapter mints one for every
+            # session window, so what the operator's own list shows, the other
+            # machines' lists show too. No key and no identity: not a session.
+            if not issue and scratch != "1" and not extra.get("identity"):
                 continue
             number = int(issue) if issue.isdigit() and int(issue) > 0 else None
             # repo: empty = a one-repo fleet (its keys stay bare); else the
@@ -169,7 +173,7 @@ class Control:
             key = worker_key(number, scratch == "1", worktree, repo)
             # worker_id is the durable identity (issue #834); window_id and handle
             # are observations of where it lives right now.
-            workers.append(dict(worker_id=worker_identity(fleet["fleet_id"], key), key=key,
+            workers.append(dict(worker_id=worker_identity(fleet["fleet_id"], key or extra.get("identity")), key=key,
                                 window_id=window, issue=number,
                                 repo=repo if repo and repo != "?" else (None if repo else fleet.get("repo")),
                                 scratch=scratch == "1", worktree=worktree, state=state or "unknown",
