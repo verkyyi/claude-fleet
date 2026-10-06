@@ -2,16 +2,18 @@
 // (claude-fleet#1470, #1486): `curl -fsSL <hub>/install | sh` — `fleet`, the
 // two it dispatches to, and the SHELL (#1484) it opens when tmux is there.
 //
-// The canonical files live in the repo's bin/ and conf/, where the shell
-// selftests drive them. The Docker build's context is tokenledger/ alone, so
-// the hub cannot embed them from there; this directory holds byte-for-byte
-// copies in the same bin/ + conf/ layout, and ONE list — `manifest` — says
-// which (and which is the installer template). Two tests hold the copies to
-// the originals, both reading the manifest: TestFleetClientMatchesBin here (Go)
-// and bin/fleet-install-selftest.sh leg A (shell). Edit in bin/ or conf/, then:
+// The files live ONCE, in the repo's bin/ conf/ hooks/ commands/ skills/ mod/,
+// where the shell selftests drive them (claude-fleet#1803). //go:embed cannot
+// reach ../bin, so a hub build packs them first: bin/fleet-client-pack.sh copies
+// every file `manifest` lists into pack/ (gitignored, only pack/doc.go is
+// committed), at its repo-relative path. ONE list — `manifest` — says which
+// (and which is the installer template); TestFleetClientMatchesBin holds it to
+// the repo. Edit in bin/ or conf/, then build with:
 //
-//	bin/fleet-client-mirror.sh          # copy every manifest file over
-//	bin/fleet-client-mirror.sh --check  # what the two tests assert
+//	bin/fleet-client-pack.sh && docker build -t ccquota tokenledger/
+//	bin/fleet-client-pack.sh --check   # pack/ is exactly the repo's files
+//
+// A build with no pack compiles and runs; it serves no client (Packed false).
 package fleetclient
 
 import (
@@ -20,16 +22,60 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"io/fs"
 	"strings"
 )
 
-// Files holds the manifest and every file it lists, at its repo-relative path:
-// the client's bin/ + conf/, and the Agent configuration package (#1725) —
-// hooks/ commands/ skills/ mod/, its files listed in the manifest's generated
-// `agent bundle` block. `all:` keeps mod/fleet/.claude-plugin/ (a dot directory).
+// raw holds the manifest and the pack: every file the manifest lists, under
+// pack/ at its repo-relative path — the client's bin/ + conf/, and the Agent
+// configuration package (#1725) — hooks/ commands/ skills/ mod/, its files
+// listed in the manifest's generated `agent bundle` block. `all:` keeps
+// mod/fleet/.claude-plugin/ (a dot directory).
 //
-//go:embed manifest bin conf hooks commands skills all:mod
-var Files embed.FS
+//go:embed manifest all:pack
+var raw embed.FS
+
+// Files is the client at its repo-relative paths: the manifest, and every file
+// it lists (read out of pack/). It is what /install and /install/<path> serve.
+var Files = clientFS{pack: mustSub(raw, "pack")}
+
+// PackPlaceholder is pack/'s one committed file — never part of the client.
+const PackPlaceholder = "doc.go"
+
+// Packed says this build carries the client: every file the manifest lists was
+// packed. False for a plain `go build` with no bin/fleet-client-pack.sh before
+// it — the hub then answers 503 on /install and an empty client_version.
+var Packed bool
+
+type clientFS struct{ pack fs.FS }
+
+func (c clientFS) Open(name string) (fs.File, error) {
+	if name == ManifestName {
+		return raw.Open(ManifestName)
+	}
+	if name == PackPlaceholder {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+	return c.pack.Open(name)
+}
+
+func (c clientFS) ReadFile(name string) ([]byte, error) {
+	switch name {
+	case ManifestName:
+		return raw.ReadFile(ManifestName)
+	case PackPlaceholder:
+		return nil, &fs.PathError{Op: "read", Path: name, Err: fs.ErrNotExist}
+	}
+	return fs.ReadFile(c.pack, name)
+}
+
+func mustSub(f fs.FS, dir string) fs.FS {
+	s, err := fs.Sub(f, dir)
+	if err != nil {
+		panic("fleetclient: " + err.Error())
+	}
+	return s
+}
 
 // ManifestName is the manifest's own path. The hub serves it at
 // /install/manifest, so the installer walks the very list this build embeds.
@@ -57,14 +103,23 @@ func init() {
 	if Installer == "" {
 		panic("fleetclient: the manifest names no `installer` line")
 	}
-	Version = Digest(func(name string) ([]byte, error) { return Files.ReadFile(name) }, Names)
+	Packed = true
+	for _, n := range append([]string{Installer}, Names...) {
+		if _, err := fs.Stat(Files, n); err != nil {
+			Packed = false
+			break
+		}
+	}
+	if Packed {
+		Version = Digest(func(name string) ([]byte, error) { return Files.ReadFile(name) }, Names)
+	}
 }
 
 // Version is this build's CLIENT version (claude-fleet#1722): a digest of
 // every file a client downloads, so it changes exactly when what a colleague
 // would install changes — and a client asks GET /version whether its own
 // (recorded by the installer in <install home>/.client-version) is still it.
-// A digest has no order; "older" is Compat's job.
+// A digest has no order; "older" is Compat's job. Empty when !Packed.
 var Version string
 
 // Compat is the client↔hub protocol level of the client this build serves,

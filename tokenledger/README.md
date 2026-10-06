@@ -1268,7 +1268,8 @@ curl -fsSL https://<hub>/install | sh
 `GET /install` is `bin/fleet-install.sh` with this hub's URL filled in; it
 downloads `fleet`, `fleet-login.py` and `fleet-connect.py` from
 `/install/<name>` (the copies this image was built from — embedded from
-`internal/api/fleetclient/`, byte-for-byte `bin/`, pinned by
+`internal/api/fleetclient/pack/`, packed from the repo's `bin/` at build time
+by `bin/fleet-client-pack.sh`, claude-fleet#1803; the list pinned by
 `TestFleetClientMatchesBin` and `bin/fleet-install-selftest.sh`; each file's
 SHA-256 rides in `X-Ccquota-Sha256` and a mismatch is refused) into
 `~/.local/bin`, writes the URL to `~/.config/claude-fleet/hub.json` (a token
@@ -2817,14 +2818,21 @@ for a change confined to this directory.
 
 ### Docker image
 
-The image builds straight from this directory — the Dockerfile's context is
-`tokenledger/`, exactly as it was the old repo's root:
+The image builds from this directory — the Dockerfile's context is
+`tokenledger/`, exactly as it was the old repo's root — after packing the client
+`/install` serves (claude-fleet#1803: the repo keeps one copy of each client
+file in `bin/` `conf/` …; `bin/fleet-client-pack.sh` copies the manifest's into
+the gitignored `internal/api/fleetclient/pack/`, and the build refuses an empty
+pack). Always pack in the same command, so an image never carries a stale one:
 
 ```bash
-docker build -t ccquota tokenledger/                       # from the claude-fleet root
-docker build --build-arg VERSION=$(git rev-parse --short HEAD) \
+bin/fleet-client-pack.sh && docker build -t ccquota tokenledger/      # from the claude-fleet root
+bin/fleet-client-pack.sh && docker build --build-arg VERSION=prod-$(git rev-parse --short HEAD) \
   --platform linux/amd64 -t <registry>/ccquota:<tag> tokenledger/
 ```
+
+`go test ./...` here wants the pack too (CI runs the script first); a plain
+`go build` without it compiles a hub that answers 503 on `/install`.
 
 The production hub image is built and pushed by hand (the deployment manifest
 lives in the operator's infra repo); nothing here pushes an image.

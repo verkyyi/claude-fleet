@@ -47,6 +47,10 @@ func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !fleetclient.Packed {
+		httpError(w, http.StatusServiceUnavailable, "this hub was built without its client — pack it (bin/fleet-client-pack.sh) and rebuild")
+		return
+	}
 	tmpl, err := fleetclient.Files.ReadFile(fleetclient.Installer)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "installer missing from this build")
@@ -71,6 +75,10 @@ func (s *Server) handleInstallFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.installReady() {
 		http.NotFound(w, r)
+		return
+	}
+	if !fleetclient.Packed {
+		httpError(w, http.StatusServiceUnavailable, "this hub was built without its client — pack it (bin/fleet-client-pack.sh) and rebuild")
 		return
 	}
 	name := strings.TrimPrefix(r.URL.Path, "/install/")

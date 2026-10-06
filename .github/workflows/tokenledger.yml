@@ -45,6 +45,9 @@ jobs:
           go-version: '1.25'
           cache: true
           cache-dependency-path: tokenledger/go.sum
+      # The client /install serves lives once, in the repo's bin/ conf/ …
+      # (claude-fleet#1803); a build packs it into fleetclient/pack/ first.
+      - run: ../bin/fleet-client-pack.sh
       - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
       - run: go vet ./...
       - run: go test -race ./...

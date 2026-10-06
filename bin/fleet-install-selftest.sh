@@ -7,11 +7,12 @@
 # (FLEET_INSTALL_NO_RUN=1) except in leg E, where `fleet` is driven on purpose.
 #
 # Legs:
-#   A. mirror     tokenledger/internal/api/fleetclient/ is byte-for-byte the
-#                 repo's bin/ + conf/ for every manifest path, and nothing
-#                 unlisted is there (bin/fleet-client-mirror.sh --check — the
-#                 shell half of the Go pin, TestFleetClientMatchesBin); the
-#                 manifest ships the shell (fleet-shell.sh, conf/tmux-shell.conf)
+#   A. one copy   every manifest path exists in the repo, its generated block
+#                 is current and no copy is committed under fleetclient/
+#                 (bin/fleet-client-mirror.sh --check — the shell half of the Go
+#                 pin, TestFleetClientMatchesBin, #1803); a pack into a sandbox
+#                 copy holds exactly those files, byte for byte; the manifest
+#                 ships the shell (fleet-shell.sh, conf/tmux-shell.conf)
 #   B. install    `curl … | sh` style (the script on stdin, the hub URL filled
 #                 in): every manifest file lands under
 #                 ~/.local/share/claude-fleet/<path>, identical, bin/ executable;
@@ -68,9 +69,27 @@ MANIFEST="$CLIENT/manifest"
 # the download list: every manifest path but the installer's
 FILES=$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" { print $1 }' "$MANIFEST")
 
-# ── A — the embedded copies mirror bin/ + conf/ ─────────────────────────────
-if out=$(bash "$BIN/fleet-client-mirror.sh" --check 2>&1); then ok "A fleetclient/ mirrors every manifest file, nothing unlisted"
+# ── A — one copy: the manifest names repo files, a build packs them ─────────
+if out=$(bash "$BIN/fleet-client-mirror.sh" --check 2>&1); then ok "A every manifest path is in the repo, no copy under fleetclient/"
 else bad "A fleet-client-mirror.sh --check: $out"; fi
+# the pack (#1803), in a sandbox copy of the repo — never the live tree's pack/
+SB="$WORK/packrepo"; SBC="$SB/tokenledger/internal/api/fleetclient"
+mkdir -p "$SB/bin" "$SBC/pack"
+cp "$REPO/bin/fleet-client-pack.sh" "$SB/bin/"; cp "$MANIFEST" "$SBC/manifest"; printf 'package pack\n' > "$SBC/pack/doc.go"
+for f in $(awk '!/^[[:space:]]*#/ && NF { print $1 }' "$MANIFEST"); do mkdir -p "$SB/$(dirname "$f")"; cp "$REPO/$f" "$SB/$f"; done
+out=$(bash "$SB/bin/fleet-client-pack.sh" --check 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q '^not packed: bin/fleet ' && ok "A an empty pack is not packed (--check exit 1)" || bad "A empty pack: rc=$rc $out"
+bash "$SB/bin/fleet-client-pack.sh" >/dev/null 2>&1; out=$(bash "$SB/bin/fleet-client-pack.sh" --check 2>&1); rc=$?
+n=$(cd "$SBC/pack" && find . -type f ! -name doc.go | wc -l | tr -d ' ')
+[ "$rc" = 0 ] && [ "$n" = "$(awk '!/^[[:space:]]*#/ && NF' "$MANIFEST" | wc -l | tr -d ' ')" ] && [ -f "$SBC/pack/doc.go" ] \
+  && cmp -s "$SB/bin/fleet" "$SBC/pack/bin/fleet" && ok "A pack: exactly the manifest's $n files, byte for byte, doc.go kept" || bad "A pack: rc=$rc n=$n $out"
+echo '# edited' >> "$SB/bin/fleet"
+out=$(bash "$SB/bin/fleet-client-pack.sh" --check 2>&1) && bad "A an edit after packing passed --check" \
+  || { printf '%s\n' "$out" | grep -q '^stale: pack/bin/fleet ' && ok "A an edit after packing is stale (--check)" || bad "A stale: $out"; }
+grep -vx 'bin/fleet-lang.sh' "$SBC/manifest" > "$SBC/m.tmp" && mv "$SBC/m.tmp" "$SBC/manifest"
+bash "$SB/bin/fleet-client-pack.sh" >/dev/null 2>&1
+[ ! -e "$SBC/pack/bin/fleet-lang.sh" ] && bash "$SB/bin/fleet-client-pack.sh" --check >/dev/null 2>&1 \
+  && ok "A a file the manifest dropped leaves the pack" || bad "A a dropped file stayed in the pack"
 for must in bin/fleet bin/fleet-login.py bin/fleet-connect.py bin/fleet-shell.sh bin/fleet-sidebar.py bin/tmux-status.sh conf/tmux-shell.conf; do
   printf '%s\n' "$FILES" | grep -qxF "$must" && ok "A manifest lists $must" || bad "A manifest does not list $must"
 done

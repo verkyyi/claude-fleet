@@ -57,7 +57,8 @@ jobs:
           cache-dependency-path: tokenledger/go.sum
       - name: Build ccquota from this checkout
         working-directory: tokenledger
-        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/ccquota" ./cmd/ccquota
+        # pack the client it serves first (claude-fleet#1803)
+        run: ../bin/fleet-client-pack.sh && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/ccquota" ./cmd/ccquota
       - name: Install from the hub, open, list, switch
         run: bin/client-e2e.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/client-e2e.log"
       - name: Summary
@@ -78,7 +79,8 @@ jobs:
           cache-dependency-path: tokenledger/go.sum
       - name: Build ccquota from this checkout
         working-directory: tokenledger
-        run: CGO_ENABLED=0 go build -o "$RUNNER_TEMP/ccquota" ./cmd/ccquota
+        # pack the client it serves first (claude-fleet#1803)
+        run: ../bin/fleet-client-pack.sh && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/ccquota" ./cmd/ccquota
       - name: Install from the hub, open, list, switch
         # /bin/bash is 3.2 here: the script runs on the operator's own shell
         run: /bin/bash bin/client-e2e.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/client-e2e.log"

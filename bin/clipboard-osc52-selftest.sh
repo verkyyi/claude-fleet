@@ -11,8 +11,8 @@
 # outward must say `on`, or the copy dies there.
 #
 #   A. lint   each of the three confs sets `set-clipboard on`; the hub's client
-#             mirror (fleetclient/) carries the shell + stage confs as they are
-#             (fleet-client-mirror.sh --check).
+#             manifest is current — the hub packs these very files at build
+#             time (fleet-client-mirror.sh --check, #1803).
 #   B. chain  three tmux servers on isolated sockets, each given the
 #             set-clipboard value its conf sets, nested shell → stage → node, a
 #             python pty as the outer terminal. In the node, copy-mode selects a
@@ -47,11 +47,8 @@ NODE_V=$(clipval "$REPO/conf/tmux-attention.conf")
 [ "$SHELL_V" = on ] && ok "A conf/tmux-shell.conf: set-clipboard on" || bad "A conf/tmux-shell.conf: set-clipboard '${SHELL_V}', want on"
 [ "$STAGE_V" = on ] && ok "A conf/tmux-shell-stage.conf: set-clipboard on" || bad "A conf/tmux-shell-stage.conf: set-clipboard '${STAGE_V}', want on"
 [ "$NODE_V" = on ] && ok "A conf/tmux-attention.conf: set-clipboard on" || bad "A conf/tmux-attention.conf: set-clipboard '${NODE_V}', want on"
-MIRROR="$REPO/tokenledger/internal/api/fleetclient/conf"
-if [ -d "$MIRROR" ]; then
-  for c in tmux-shell.conf tmux-shell-stage.conf; do
-    [ "$(clipval "$MIRROR/$c")" = on ] && ok "A fleetclient mirror $c: set-clipboard on" || bad "A fleetclient mirror $c: not on"
-  done
+# the hub serves these very files (one copy, packed at build time — #1803)
+if [ -d "$REPO/tokenledger/internal/api/fleetclient" ]; then
   if out=$(bash "$BIN/fleet-client-mirror.sh" --check 2>&1); then ok "A fleet-client-mirror.sh --check"
   else bad "A fleet-client-mirror.sh --check: $out"; fi
 fi

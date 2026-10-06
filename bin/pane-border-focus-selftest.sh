@@ -22,7 +22,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
-CONFS="conf/tmux-shell.conf conf/tmux-attention.conf tokenledger/internal/api/fleetclient/conf/tmux-shell.conf"
+CONFS="conf/tmux-shell.conf conf/tmux-attention.conf"
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 # the value of `set -g <opt> <value>` (outer quotes stripped); last one wins, as in tmux
@@ -63,7 +63,7 @@ for rel in $CONFS; do
 done
 
 if [ -x "$BIN/fleet-client-mirror.sh" ] && [ -d "$ROOT/tokenledger/internal/api/fleetclient" ]; then
-  "$BIN/fleet-client-mirror.sh" --check >/dev/null || fail "fleet-client-mirror.sh --check: the fleetclient mirror drifted"
+  "$BIN/fleet-client-mirror.sh" --check >/dev/null || fail "fleet-client-mirror.sh --check: the client manifest drifted"
 fi
 
 printf 'selftest OK: no pane border paints keyboard focus — active = inactive, indicators off, TASKS dim (#1764)\n'

@@ -15,6 +15,11 @@ ENV GOPROXY=$GOPROXY
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# The client /install serves is packed from the repo before the build
+# (claude-fleet#1803): bin/fleet-client-pack.sh && docker build … tokenledger/.
+# An image without it would serve no client — refuse to build one.
+RUN test -f internal/api/fleetclient/pack/bin/fleet || { \
+      echo "no client in internal/api/fleetclient/pack/ — run bin/fleet-client-pack.sh before docker build" >&2; exit 1; }
 # End VERSION with the commit (`prod-$(git rev-parse --short HEAD)`): the hub
 # serves it on GET /version and fleet-doctor's hub-image row compares that
 # commit with refs/tags/stable (claude-fleet#1696). `docker` names none.

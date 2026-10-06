@@ -569,10 +569,13 @@ lists is removed, so running the line again is the update. The set was fixed by
 running `fleet-shell-selftest.sh` from a root holding only those files; what a
 node needs (spawning, reaping, the daemons, gh) stays off it, and the shell's
 row menu still lists a few node-only items (新建 / 恢复 / 加仓库) that do
-nothing there — #1518. `bin/fleet-client-mirror.sh` copies `bin/` +
-`conf/` into the embed dir (`--check` asserts the mirror);
-`TestFleetClientMatchesBin` and `fleet-install-selftest.sh` leg A pin it from
-both sides, and leg E drives the installed `fleet`: a (fake) tmux ≥ 3.2 →
+nothing there — #1518. The repo keeps ONE copy of each file (#1803): a hub
+build first runs `bin/fleet-client-pack.sh`, which copies the manifest's files
+into the gitignored embed dir `fleetclient/pack/` (the Dockerfile refuses an
+empty one), so `bin/fleet-client-pack.sh && docker build -t ccquota tokenledger/`;
+`bin/fleet-client-mirror.sh` only keeps the manifest current (`--check`: every
+path in the repo, no copy committed). `TestFleetClientMatchesBin` and
+`fleet-install-selftest.sh` leg A pin it from both sides, and leg E drives the installed `fleet`: a (fake) tmux ≥ 3.2 →
 `fleet-shell.sh` starts its server from the install root's `bin/` and `conf/`;
 no tmux → the one hint and `fleet-connect.py`. The hub image is deployed by
 hand: colleagues get the shell once the operator redeploys it; the connect
