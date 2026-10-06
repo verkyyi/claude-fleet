@@ -133,22 +133,28 @@ case "$mode" in
     #   here exactly as on its own sidebar, instead of reporting no key at all;
     # - a session window with no @fleet_id gets one minted (fleet_window_fid, the
     #   lazy mint #1646 built for an older window), so a no-repo / keyless window
-    #   has an identity to be listed under. A panel never does: it is not a session.
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}' 2>/dev/null) || cwds=''
+    #   has an identity to be listed under. Only a SESSION is: an issue window, a
+    #   raw scratch or a deliberately no-repo one (`@norepo 1`, what the local
+    #   sidebar keeps, #1643) — any other keyless window (a hand-made `hub`, a
+    #   panel) reports no identity, so it stays off every list as before.
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}' 2>/dev/null) || cwds=''
     while IFS= read -r row; do
       [ -n "$row" ] || continue
       wid=${row%%$'\t'*}; rest=${row#*$'\t'}
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3; exit }')
       if [ -z "$wt" ]; then
-        cwd=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2; exit }')
+        cwd=${wrow%%$'\t'*}
         case "${cwd##*/}" in scratch-[1-9]*|*-scratch-[1-9]*)
           sn=${cwd##*scratch-}; case "$sn" in *[!0-9]*) ;; *) wt=$cwd ;; esac ;;
         esac
       fi
       fi=${rest##*$'\t'}
-      if [ -z "$fi" ]; then
+      if [ -z "$c2" ] && [ "$c3" != 1 ] && [ "${wrow##*$'\t'}" != 1 ]; then
+        [ -z "$fi" ] || rest=${rest%$'\t'*}$'\t'   # not a session: no identity to list
+      elif [ -z "$fi" ]; then
         # column 10 is the window name in both shapes (the multi-repo one put
         # @repo at 9): the 6th field from here, counting from @claude_state
         nm=$(printf '%s' "$rest" | cut -f6)
