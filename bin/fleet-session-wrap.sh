@@ -87,7 +87,11 @@ while :; do
   case "$(opt @worker_lifecycle)" in preparing|sleeping) exit "$rc" ;; esac
   # A launch that never came up (claude missing, a refused resume, a one-shot
   # `--version`): the caller's own failure path decides, as it always did.
-  [ $(( $(date +%s) - t0 )) -lt "$FAST" ] && exit "$rc"
+  # Its rc stays on the pane too: tmux ≤3.4 can leave #{pane_dead_status} empty
+  # when it misses the SIGCHLD (#1801), and fleet-transfer's rollback names it.
+  if [ $(( $(date +%s) - t0 )) -lt "$FAST" ]; then
+    tmux set-option -p -t "$TMUX_PANE" @wrap_last_rc "$rc" 2>/dev/null; exit "$rc"
+  fi
 
   agent=$(opt @cc_agent); [ "$agent" = codex ] || agent=claude
   if [ "$agent" = codex ]; then sid=$(opt @codex_session_id); else sid=$(opt @cc_session_id); fi
