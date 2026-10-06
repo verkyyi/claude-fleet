@@ -17,7 +17,8 @@ the arguments and the path spelling (~ vs $HOME vs absolute) are NOT identity.
          removed; an identity with no entry is appended. A fleet-path entry whose
          identity is no longer in the table (a retired hook, or one whose matcher
          changed) is removed too — it fires a script the table no longer wires.
-         Anything that is not a fleet-path hook is left exactly as it was.
+         Anything that is not a fleet-path hook is left exactly as it was — a
+         personal hook wired through bin/fleet-hook-personal.sh (#1858) included.
          Backs the file up to <settings>.bak.<epoch> before writing, and writes
          nothing at all when the result is unchanged. Prints one line per change.
          --via R (issue #1725): a client-only computer has no ~/.claude/fleet,
@@ -86,8 +87,37 @@ def script_of(command):
     return m.group(1) if m else None
 
 
+# A personal hook (issue #1858, EPIC #1855 C3) is wired through the fleet's
+# wrapper — `sh "<root>/bin/fleet-hook-personal.sh" <Event> -- '<command>'` —
+# which drops any command rewrite from its output. The wrapper's path is a fleet
+# path, but the hook is the person's, not the table's: identity() says None, so
+# a merge never takes it for a stale fleet hook, never folds two of them into
+# one, and a second merge leaves it exactly where it was.
+PERSONAL_WRAPPER = "fleet-hook-personal.sh"
+_PERSONAL = re.compile(r'^sh "[^"]*/bin/' + re.escape(PERSONAL_WRAPPER) + r'" (\S+) -- (.*)$', re.S)
+
+
+def personal_wrap(event, command, spelled):
+    """The command settings.json carries for a personal hook. `spelled` is the
+    scripts root as a command spells it, ending in `/` ("$HOME/.claude/fleet/")."""
+    return "sh \"%sbin/%s\" %s -- '%s'" % (spelled, PERSONAL_WRAPPER, event, command.replace("'", "'\\''"))
+
+
+def personal_inner(command):
+    """(event, the person's own command) for a wrapped personal hook, else None."""
+    m = _PERSONAL.match(command or "")
+    if not m:
+        return None
+    q = m.group(2)
+    if not (len(q) >= 2 and q[0] == "'" and q[-1] == "'"):
+        return None
+    return m.group(1), q[1:-1].replace("'\\''", "'")
+
+
 def identity(event, group, hook):
     """(event, matcher, basename) — the ONE identity rule sync and doctor share."""
+    if personal_inner(hook.get("command")) is not None:
+        return None
     base = script_of(hook.get("command"))
     if base is None:
         return None
