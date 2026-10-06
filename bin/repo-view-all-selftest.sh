@@ -148,11 +148,12 @@ tmux set -g @fleet_repo_label all      # a stale value left on a live server
 hasnt 'B: 2+ repo fleet: no "· all" tail, even from a stale option' "$(render "$NEW_SL")" "· all"
 tmux set -gu @fleet_repo_label
 tmux source-file "$CONF" >/dev/null 2>&1
-for tbl in root fleet-sidebar; do
-  b=$(tmux list-keys -T "$tbl" 2>/dev/null | grep ' MouseDown1Status ')
-  has   "B: $tbl MouseDown1Status is bound" "$b" "MouseDown1Status"
-  hasnt "B: $tbl MouseDown1Status has no fleet range" "$b" ",fleet}"
-done
+# A node binds no status click of its own since issue #1714 (root keeps tmux's
+# stock click; the list's key table went with the list, #1713) — absence is
+# fleet-keys-selftest.sh leg 8's, on a server no ~/.tmux.conf reached.
+b=$(tmux list-keys -T root 2>/dev/null | grep ' MouseDown1Status ')
+has   "B: root MouseDown1Status is bound" "$b" "MouseDown1Status"
+hasnt "B: root MouseDown1Status has no fleet range" "$b" ",fleet}"
 
 # --- C. always all ------------------------------------------------------------
 # No script reads the retired picker's `current-repo` file (#1038): the one live
