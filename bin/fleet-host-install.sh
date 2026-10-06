@@ -54,7 +54,9 @@ lib="$here/fleet-client-lib.sh"
 [ -f "$lib" ] || lib="$ROOT/bin/fleet-client-lib.sh"
 # shellcheck source=fleet-client-lib.sh
 . "$lib" || { echo "✗ 找不到 fleet-client-lib.sh"; exit 1; }
+# shellcheck disable=SC2034  # FC_LOG / FC_SUDO are read by the lib just sourced
 FC_LOG="$LOG"
+# shellcheck disable=SC2034
 if [ -n "${FLEET_INSTALL_SUDO+x}" ]; then FC_SUDO="$FLEET_INSTALL_SUDO"; fi
 need() {  # <tool> <ok-test> — present, or installed, or one ✗ line
   if eval "$2"; then return 0; fi
