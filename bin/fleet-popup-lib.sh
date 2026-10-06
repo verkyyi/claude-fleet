@@ -15,6 +15,10 @@
 #       the draw: the frame below around <cmd>, on <client> (whose
 #       #{client_width} is <width>). Blocks until the popup closes. Called by
 #       dash-popup.sh only; its exit status means nothing (see there, #454).
+#   fleet_popup_screen <socket-label> <client> <cmd>
+#       a WHOLE-SCREEN state, not a dialog: no frame, no title, 100% × 100% on
+#       <client> of the server `-L <socket-label>` (none = the current one).
+#       Blocks until it closes. The shell's standby screen (fleet-shell.sh, #1715).
 #   fleet_popup_title <text>      → $FPOP_TITLE, the -T format: centred, # → ##
 #   fleet_popup_geom <width> <w> <h> → $FPOP_W $FPOP_H. A client 80 columns or
 #       narrower (the iPad's 54) gets 96% × 90% whatever was asked, so the border
@@ -50,6 +54,10 @@ fleet_popup() {
   local t="$1" w="$2" h="$3"; shift 3
   [ "${1:-}" = -- ] && shift
   bash "$_FPOP_BIN/dash-popup.sh" --title "$t" -w "$w" -h "$h" -- "$@"
+}
+
+fleet_popup_screen() {
+  tmux ${1:+-L "$1"} display-popup -c "$2" -E -w 100% -h 100% "$3"
 }
 
 fleet_popup_title() {

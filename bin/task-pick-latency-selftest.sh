@@ -32,6 +32,9 @@
 # chain is the thing under test; the shim only makes the budget optimistic).
 # tmux or python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
+# The list is drawn on a fleet socket here: on a real node it is the client's
+# only (issue #1713), so the drawer's tests take the seam fleet-sidebar.sh offers.
+export FLEET_SIDEBAR_NODE=1
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
 CONF="$ROOT/conf/tmux-attention.conf"

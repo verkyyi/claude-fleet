@@ -33,6 +33,15 @@ conf=$(fleet_conf_file "$sess")
 [ -f "$conf" ] || [ "${FLEET_SHELL:-0}" = 1 ] || exit 0
 fleet_load_conf "$sess"
 fleet_home_mark side
+# The list is the CLIENT's (issue #1713, EPIC #1710 C3): it is drawn only on the
+# shell's server (FLEET_SHELL=1). A node's fleet session draws none — every sync
+# there runs as "off", which also takes away a list an older version drew, so a
+# viewer arriving or leaving never changes a pane on the node. FLEET_SIDEBAR_NODE=1
+# is the drawer's selftest seam (its tests drive it on a fleet socket), never a
+# setting: nothing writes it, and the gate's runner strips every FLEET_* variable.
+node_list=1
+[ "${FLEET_SHELL:-0}" = 1 ] || [ "${FLEET_SIDEBAR_NODE:-0}" = 1 ] || node_list=0
+[ "$node_list" = 1 ] || FLEET_SIDEBAR=0
 export FLEET_UI_LANG="${FLEET_UI_LANG:-}"
 # the auto-width ceiling (issue #1328) rides the env into the spawned view
 export FLEET_SIDEBAR_WIDTH_MAX="${FLEET_SIDEBAR_WIDTH_MAX:-44}"
@@ -41,6 +50,7 @@ export FLEET_SIDEBAR_WIDTH_MAX="${FLEET_SIDEBAR_WIDTH_MAX:-44}"
 # or F9 turned it off; a no-op when it is on, and in the shell, which has no off.
 show_on() {
   [ "${FLEET_SHELL:-0}" = 1 ] && return 0
+  [ "$node_list" = 1 ] || return 0   # a node has no list to switch on (#1713)
   [ "${FLEET_SIDEBAR:-1}" = 1 ] && return 0
   . "$BIN/fleet-config-lib.sh"
   if ! fcfg_write "$conf" FLEET_SIDEBAR 1 bool >/dev/null; then
@@ -55,14 +65,16 @@ case "$verb" in
   home) ;;
   toggle|hide)
     [ "${FLEET_SHELL:-0}" = 1 ] && exit 0   # the shell's list is not optional, and it has no conf to write
-    enabled=1
-    { [ "$verb" = hide ] || [ "${FLEET_SIDEBAR:-1}" = 1 ]; } && enabled=0
-    . "$BIN/fleet-config-lib.sh"
-    if ! fcfg_write "$conf" FLEET_SIDEBAR "$enabled" bool >/dev/null; then
-      fleet_ui_fail "$(fleet_ui_t sidebar_save_failed)" "$(fleet_ui_t sidebar_save_next)"
-      exit 0
+    if [ "$node_list" = 1 ]; then   # a node has nothing to write: the sync reaps (#1713)
+      enabled=1
+      { [ "$verb" = hide ] || [ "${FLEET_SIDEBAR:-1}" = 1 ]; } && enabled=0
+      . "$BIN/fleet-config-lib.sh"
+      if ! fcfg_write "$conf" FLEET_SIDEBAR "$enabled" bool >/dev/null; then
+        fleet_ui_fail "$(fleet_ui_t sidebar_save_failed)" "$(fleet_ui_t sidebar_save_next)"
+        exit 0
+      fi
+      FLEET_SIDEBAR=$enabled   # no toast: the list coming or going is the answer (issue #1618)
     fi
-    FLEET_SIDEBAR=$enabled   # no toast: the list coming or going is the answer (issue #1618)
     verb=sync ;;
   sync|key) ;;
   menu|reap) . "$BIN/fleet-sidebar-menu.sh"; exit 0 ;;

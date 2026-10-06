@@ -13,6 +13,9 @@
 # Real tmux on an ISOLATED socket via the PATH shim (never the live server — see
 # dash-marker-selftest.sh). tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
+# The list is drawn on a fleet socket here: on a real node it is the client's
+# only (issue #1713), so the drawer's tests take the seam fleet-sidebar.sh offers.
+export FLEET_SIDEBAR_NODE=1
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 CHECKS=0

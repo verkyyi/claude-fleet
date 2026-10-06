@@ -55,11 +55,10 @@
 #                           over the connection it already holds. The rows are the
 #                           control adapter's inventory keyed by the hub's own rule
 #                           (fleet_hub_common.worker_key) — never a second generator.
-#   reconcile <sess>        (ON <node>; its client-attached/-detached hooks) — apply
-#                           the one rule: hidden ⇔ every client is a shell/view.
-#   restore <sess>          (ON <node>) — hand the session its status line, prefix
-#                           and sidebar back now (an escape hatch; the rule wins at
-#                           the next client change).
+#   reconcile <sess>        (ON <node>) — retired with the rule (issue #1713):
+#   restore <sess>          both undo what an OLDER version left on <sess> — its
+#                           hidden status line / prefix, the solo marker, the
+#                           server's [77] hooks — and nothing else.
 #   back [<session>]        (the local `prefix h`) — from a proxy window, select
 #                           the last LOCAL window; anywhere else, nothing.
 #
@@ -79,21 +78,16 @@
 # fleet from a view session too. `select` targets the proxy's own view session,
 # so one proxy's retarget moves nobody else's screen.
 #
-# Nesting — ONE rule (issue #1485, EPIC #1479 rule 7): the remote session's own
-# status line, prefix and sidebar are HIDDEN exactly while it has at least one
-# client and every client is a registered shell/view; any other client — someone
-# who ssh'd onto that machine and attached — brings them back at once, and so
-# does the last shell leaving. Hidden = #1475's hide: status off, prefix None
-# (saved in `@remote_view_saved`), `@remote_view_solo 1`, which that machine's
-# sidebar reads as "draw no list" (fleet-sidebar.py sync) — so the remote looks
-# like a local window, this machine's prefix reaches this machine, and the one
-# list on screen is the viewer's. Each window's pane-border-status goes off with
-# them (issue #1549, saved per window), so the viewer's `m4 …` header is the one
-# title line. Two shells on one session: still one list each.
-# Never `resize-pane -Z`. `reconcile` applies the rule; the server's GLOBAL hooks
-# `client-attached[77]` / `client-detached[77]` run it on every client change
-# while any shell is registered (global, not on the session: a session-level hook
-# array — even an emptied one — shadows the fleet's own [71]–[73] hooks).
+# Nesting — NO rule (issue #1713, EPIC #1710 C3; #1485's rule retired): the
+# node never makes way for a viewer, because it has nothing of its own to hide.
+# The list is drawn only on the CLIENT's server (fleet-sidebar.sh, FLEET_SHELL=1);
+# a node fleet session draws none, so a viewer arriving or leaving changes no
+# pane on the node. A shell/view client attaches to its own VIEW SESSION (below)
+# with that session's status line and prefix off for good. The one thing a
+# window carries for everyone is its top header (pane-border-status, a WINDOW
+# option): a window a shell/view looks at loses it ONE WAY (issue #1549 — the
+# viewer's `m4 …` header is the one title line) and never gets it back, so no
+# client change ever resizes a pane. Never `resize-pane -Z`.
 #
 # The registry $FLEET_CONF_DIR/remote-views/<id>: one line per client,
 # `<tty> <session> <kind=shell|view> <since epoch> <pid>` (tab-separated — the
@@ -118,7 +112,7 @@
 # machinery on a person's own computer — its tmux server holds one proxy window
 # per machine and nothing else. It sets FLEET_SHELL=1 in that server's environment,
 # and that is the only difference `open` sees: the pane it starts runs `run --shell`,
-# so the far end registers a SHELL client (#1485) and hides its own list and bar.
+# so the far end registers a SHELL client (#1485) on a view session of its own.
 #
 # Knobs (env, fleet.conf or the fleet's conf):
 #   FLEET_REMOTE_SSH         `m4=m4-lan m5=macmini` — ssh host per machine label
@@ -174,7 +168,7 @@ hub_relay_ok() {
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 T() { tmux -L "$sock" "$@"; }   # the REMOTE fleet's server; each mode sets $sock first
 
-# --- the registry + the one rule (issue #1485) -----------------------------------
+# --- the registry (issue #1485) ---------------------------------------------------
 # Live rows of the registry: `<tty> <session> <kind> <since> <pid>`. A row whose
 # attach shell is gone does not count; a row without a pid (written by an older
 # attach) is trusted as before.
@@ -208,87 +202,38 @@ rv_prune() {
     T kill-session -t "=$g" 2>/dev/null
   done
 }
-# The clients of the fleet session AND of its view sessions (issue #1489): a
-# shell or proxy sits on `<s>@view-<id>`, a person on `<s>` itself; the rule
-# counts both — FLEET_SESSION_FMT names the fleet from either.
-rv_clients() {
-  T list-clients -F "#{client_tty}	$FLEET_SESSION_FMT" 2>/dev/null \
-    | awk -F '\t' -v s="$1" '$2 == s { print $1 }'
-}
-# Every client of the session is a registered shell/view (none at all → yes).
-rv_shells_only() {
-  local s="$1" reg tty
-  reg=$(rv_registry | awk -F '\t' -v s="$s" '$2 == s { print $1 }')
-  while IFS= read -r tty; do
-    [ -n "$tty" ] || continue
-    printf '%s\n' "$reg" | grep -qxF -- "$tty" || return 1
-  done <<< "$(rv_clients "$s")"
-  return 0
-}
-rv_sync() {   # the sidebar follows the solo marker (issue #1475); the script wants $TMUX
-  TMUX="$(T display-message -p '#{socket_path}' 2>/dev/null),0,0" \
-    bash "$BIN/fleet-sidebar.sh" sync "=$1:" >/dev/null 2>&1 || :
-}
-# #1475's hide: status line + prefix off, what the SESSION itself set saved
-# (`-` = inherited), the solo marker on, its sidebar gone. Idempotent.
-# Plus each window's own top header (issue #1549): `pane-border-status` is a
-# WINDOW option, so every window of the session saves what IT set in a window-
-# scoped `@remote_view_saved` and goes off — the viewer's `m4 …` header is then
-# the only title line, not a second one nested under it. Re-run on every
-# reconcile, so a window born while hidden is covered at the next client change.
-rv_hide_border() {   # <window-id> — one window's header off, its own value saved
-  local w="$1" v
-  [ -z "$(T show-options -wqv -t "$w" @remote_view_saved 2>/dev/null)" ] || return 0
-  v=$(T show-options -wqv -t "$w" pane-border-status 2>/dev/null)
-  T set-option -w -t "$w" @remote_view_saved "pane-border-status=${v:--}" \; \
-    set-option -w -t "$w" pane-border-status off 2>/dev/null
+# A window a shell/view looks at loses its own top header, ONE WAY (issues #1549,
+# #1713): the viewer's `m4 …` header is the one title line, and since it never
+# comes back no client arriving or leaving resizes a pane on this machine.
+rv_hide_border() {   # <window-id>
+  [ "$(T show-options -wqv -t "$1" pane-border-status 2>/dev/null)" = off ] ||
+    T set-option -w -t "$1" pane-border-status off 2>/dev/null
 }
 rv_hide_borders() {
-  local s="$1" w
-  for w in $(T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null); do rv_hide_border "$w"; done
+  local w
+  for w in $(T list-windows -t "=$1" -F '#{window_id}' 2>/dev/null); do rv_hide_border "$w"; done
 }
-rv_restore_borders() {
-  local s="$1" w v
-  for w in $(T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null); do
-    v=$(T show-options -wqv -t "$w" @remote_view_saved 2>/dev/null)
-    case "$v" in pane-border-status=*) v=${v#pane-border-status=} ;; *) continue ;; esac
-    if [ "$v" = - ]; then T set-option -wu -t "$w" pane-border-status 2>/dev/null
-    else T set-option -w -t "$w" pane-border-status "$v" 2>/dev/null; fi
-    T set-option -wu -t "$w" @remote_view_saved 2>/dev/null
-  done
-}
-rv_hide() {
-  local s="$1" saved='' o v
-  rv_hide_borders "$s"
-  [ -z "$(T show-options -qv -t "=$s:" @remote_view_saved 2>/dev/null)" ] || return 0
-  # Space-separated: an argument ENDING in `;` is a command separator to tmux.
-  for o in status prefix prefix2; do
-    v=$(T show-options -q -t "=$s:" "$o" 2>/dev/null | sed "s/^$o //")
-    saved="$saved$o=${v:--} "
-  done
-  T set-option -t "=$s:" @remote_view_saved "$saved" \; \
-    set-option -t "=$s:" status off \; set-option -t "=$s:" prefix None \; set-option -t "=$s:" prefix2 None \; \
-    set-option -t "=$s:" @remote_view_solo 1 2>/dev/null
-  rv_sync "$s"
-}
-# #1475 set its hook ON THE SESSION, and a session-level hook array — even one
-# emptied by `set-hook -u <hook>[77]` — shadows the server's global hooks of that
-# name for good (the fleet's [71]–[73]: sidebar sync, sleep wake, hub visits).
-# Lift what an older attach left; the hooks live on the server now.
-rv_unshadow() {
-  local s="$1" h
+# What an OLDER version's rule (#1475/#1485, retired in #1713) left on a session:
+# its status line + prefix hidden (the originals saved in `@remote_view_saved`,
+# `-` = inherited), `@remote_view_solo`, a window's saved header, the server's
+# GLOBAL `client-attached[77]` / `client-detached[77]` hooks, and a session-level
+# hook array #1475 set (even an emptied one shadows the fleet's own [71]–[73]).
+# Undone once, on the next attach (or `restore`); with none of it, a no-op. A
+# window's header stays off: that is the one-way rule above, not a leftover.
+rv_legacy_undo() {
+  local s="$1" saved o v p w h
   for h in client-attached client-detached; do
+    T show-hooks -g 2>/dev/null | grep -q "^$h\[77\]" && T set-hook -gu "${h}[77]" 2>/dev/null
     T show-hooks -t "=$s:" 2>/dev/null | grep -q "^$h" || continue
     T show-hooks -t "=$s:" 2>/dev/null | grep "^$h\[" | grep -qv "^$h\[77\]" && continue   # someone else's: leave it
     T set-hook -u -t "=$s:" "$h" 2>/dev/null
   done
-}
-rv_restore() {
-  local s="$1" saved o v p
+  for w in $(T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null); do
+    [ -z "$(T show-options -wqv -t "$w" @remote_view_saved 2>/dev/null)" ] ||
+      T set-option -wu -t "$w" @remote_view_saved 2>/dev/null
+  done
   saved=$(T show-options -qv -t "=$s:" @remote_view_saved 2>/dev/null)
-  rv_unshadow "$s"
-  rv_restore_borders "$s"
-  [ -n "$saved" ] || return 0
+  [ -n "$saved$(T show-options -qv -t "=$s:" @remote_view_solo 2>/dev/null)" ] || return 0
   IFS=' ' read -r -a kv <<< "$saved"
   for p in ${kv[@]+"${kv[@]}"}; do
     o=${p%%=*}; v=${p#*=}
@@ -297,43 +242,6 @@ rv_restore() {
     else T set-option -t "=$s:" "$o" "$v" 2>/dev/null; fi
   done
   T set-option -u -t "=$s:" @remote_view_saved \; set-option -u -t "=$s:" @remote_view_solo 2>/dev/null
-  rv_sync "$s"
-}
-# One application of the rule at a time per session: a client leaving fires the
-# detached hook AND its own attach's cleanup, and two hides racing re-save the
-# hidden values (`prefix=None`) as the originals. A holder that died keeps nobody
-# waiting; a lock older than ~5 s is taken anyway.
-rv_lock() {
-  local d="$VIEWS/.lock-$1" pid
-  mkdir -p "$VIEWS" 2>/dev/null
-  for _ in $(seq 1 100); do
-    if mkdir "$d" 2>/dev/null; then printf '%s\n' "$$" > "$d/pid"; return 0; fi
-    pid=$(cat "$d/pid" 2>/dev/null)
-    case "$pid" in ''|*[!0-9]*) ;; *) kill -0 "$pid" 2>/dev/null || rm -rf "$d" ;; esac
-    sleep 0.05
-  done
-  rm -rf "$d"; mkdir "$d" 2>/dev/null && printf '%s\n' "$$" > "$d/pid"
-  return 0
-}
-rv_unlock() { rm -rf "${VIEWS:?}/.lock-$1"; }
-# The rule: hidden ⇔ at least one client, and every one of them a shell/view.
-rv_reconcile() {
-  local s="$1" n
-  rv_lock "$s"
-  n=$(rv_clients "$s" | grep -c .)
-  if [ "$n" -gt 0 ] && rv_shells_only "$s"; then rv_hide "$s"; else rv_restore "$s"; fi
-  rv_unlock "$s"
-}
-# select's share of the rule (issue #1682): a window born since the hide still has
-# its own header (#1549) — the one a viewer is about to look at gets it taken now,
-# while the session is hidden. The full rule is the client-attached/-detached
-# hooks' job: switching rows changes no client, so it does not run here.
-rv_header_for() {   # <sess> <window-id>
-  [ "$(T show-options -qv -t "=$1:" @remote_view_solo 2>/dev/null)" = 1 ] || return 0
-  [ -z "$(T show-options -wqv -t "$2" @remote_view_saved 2>/dev/null)" ] || return 0
-  rv_lock "$1"
-  [ "$(T show-options -qv -t "=$1:" @remote_view_solo 2>/dev/null)" = 1 ] && rv_hide_border "$2"
-  rv_unlock "$1"
 }
 # rv_select <worker_id> [<view>] — the worker's window becomes the current one of
 # the view session (the fleet session when none is named or live). 3 = not live
@@ -362,18 +270,9 @@ $wid $w $s $fid"
   tgt="$s"
   case "$view" in ''|*[!A-Za-z0-9-]*) ;; *) T has-session -t "=$s@view-$view" 2>/dev/null && tgt="$s@view-$view" ;; esac
   T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; return 3; }
-  rv_header_for "$s" "$w"
+  rv_hide_border "$w"   # a window spawned since the attach (#1549, #1682)
   return 0
 }
-# The server's hooks run the rule on every client change while a shell is registered.
-rv_hooks_on() {
-  local s="$1" cmd
-  cmd="run-shell -b 'bash $(sq "$BIN/fleet-remote-view.sh") reconcile $(sq "$s") >/dev/null 2>&1'"
-  T set-hook -g 'client-attached[77]' "$cmd" \; set-hook -g 'client-detached[77]' "$cmd" 2>/dev/null
-  rv_unshadow "$s"
-}
-rv_hooks_off() { T set-hook -gu 'client-attached[77]' \; set-hook -gu 'client-detached[77]' 2>/dev/null; }
-
 # rv_chan_select <chan> <worker_id> — `select` over a proxy's `serve` channel
 # (issue #1682). 0 = selected there; anything else (no channel, not live there,
 # no answer in 2 s) = the caller's one-shot path, which also says why.
@@ -706,27 +605,22 @@ attach)
     set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
     T display-message -p -t "=$s:$w" '' >/dev/null 2>&1 || { note "cannot select $w"; exit 3; }
   fi
-  # A marker a SIGKILLed proxy left behind, or a state the hooks missed: the rule
-  # first, on the clients that are here now.
+  # A row a SIGKILLed proxy left behind; what an older version's rule left (#1713).
   rv_prune
-  rv_reconcile "$s"
+  rv_legacy_undo "$s"
   # Register this client (issue #1485): `--shell` = a shell client; a <view> id =
   # a proxy view, with the spool its `watch` drains (no id → no spool: a request
-  # nobody drains would read as sent). Either way it counts toward the rule.
+  # nobody drains would read as sent).
   reg=''; g=''
   if { [ -n "$shell" ] || [ -n "$view" ]; } && tty=$(tty 2>/dev/null); then
     kind=view; [ -n "$shell" ] && kind=shell
     spool="$view"
     [ -n "$view" ] || view="$kind-$(hostname -s 2>/dev/null | tr -c 'A-Za-z0-9-' '-')$$-$RANDOM"
     case "$view" in *[!A-Za-z0-9-]*) note "attach: bad view id $view — not registered" ;; *)
-      # Under the lock, like the unregister below: a shell leaving must not read the
-      # registry without this row and take the hooks down right after they went up.
-      rv_lock "$s"
       if mkdir -p "$VIEWS" 2>/dev/null \
          && printf '%s\t%s\t%s\t%s\t%s\n' "$tty" "$s" "$kind" "$(date +%s)" "$$" > "$VIEWS/$view"; then
         reg="$view"
         [ -n "$spool" ] && mkdir -p "$VIEWS/$spool.d" 2>/dev/null
-        rv_hooks_on "$s"
         # This client's own VIEW SESSION (issue #1489): grouped onto the fleet's —
         # the same windows, a current window of its own — with the status line and
         # prefix off for good (the person's own tmux has both). It starts on the
@@ -741,11 +635,9 @@ attach)
           note "attach: no view session for $view — sharing the fleet session's current window"
           g=''
         fi
-        # Before the first frame: every client already here is a shell (none at
-        # all counts), so this one makes the session shells-only.
-        rv_shells_only "$s" && rv_hide "$s"
-      fi
-      rv_unlock "$s" ;;
+        # Before the first frame: the windows' own headers go, one way (#1549).
+        rv_hide_borders "$s"
+      fi ;;
     esac
   fi
   # A plain client sees the worker in the FLEET session — by name: a bare `-t @w`
@@ -764,13 +656,8 @@ attach)
   else
     T attach-session -t "=$s"; rc=$?
   fi
-  # The last registered client of this session takes the hooks with it; the rule
-  # decides what the remaining clients get (none → everything back).
-  rv_lock "$s"
+  # Leaving changes nothing on this machine but the registry (issue #1713).
   [ -n "$reg" ] && rm -rf "${VIEWS:?}/$reg" "${VIEWS:?}/$reg.d" 2>/dev/null
-  rv_registry | awk -F '\t' -v s="$s" '$2 == s { f = 1 } END { exit !f }' || rv_hooks_off "$s"
-  rv_unlock "$s"
-  rv_reconcile "$s"
   exit "$rc"
   ;;
 
@@ -781,7 +668,7 @@ select)
   # the <view> id `run` gave `attach`; the fleet session itself when none is
   # named (an older `open`) or live. Not live here → 3, and `open` reconnects.
   # The one-shot form: `open` uses it when the proxy's `serve` channel (below) is
-  # not up. A window spawned since the hide loses its header too (#1549).
+  # not up. A window spawned since the attach loses its header too (#1549).
   rv_select "${1:-}" "${2:-}"; exit $?
   ;;
 
@@ -806,20 +693,13 @@ serve)
   ;;
 
 # ---------------------------------------------------------------------------------
-reconcile)
+reconcile|restore)
+  # Both retired with the rule (issue #1713). Kept for ONE version: the [77]
+  # hooks an older attach set still call `reconcile`, and `restore` was the
+  # escape hatch — each now undoes that older version's leftovers and no more.
   s="${1:-}"; [ -n "$s" ] || exit 2
   sock=$(fleet_socket "$s")
-  rv_reconcile "$s"
-  exit 0
-  ;;
-
-# ---------------------------------------------------------------------------------
-restore)
-  s="${1:-}"; [ -n "$s" ] || exit 2
-  sock=$(fleet_socket "$s")
-  # The hook an older attach set (`--unless-view <tty>`): the rule decides now.
-  [ "${2:-}" = --unless-view ] && { rv_reconcile "$s"; exit 0; }
-  rv_lock "$s"; rv_restore "$s"; rv_unlock "$s"
+  rv_legacy_undo "$s"
   exit 0
   ;;
 

@@ -308,21 +308,20 @@ def sync(session, enabled, width, lock):
     info = fields(session + ":", US.join(("#{window_id}", "#{window_name}",
                   "#{window_width}", "#{session_attached}", "#{@issue}",
                   "#{@raw}", "#{@worktree}", "#{@norepo}", "#{window_zoomed_flag}",
-                  "#{@sidebar_width_manual}", "#{@remote}", "#{@remote_view_solo}")))
-    if len(info) != 12:
+                  "#{@sidebar_width_manual}", "#{@remote}")))
+    if len(info) != 11:
         return
     (window, name, cols, attached, issue, raw, worktree, norepo, zoomed, manual,
-     remote, solo) = info
+     remote) = info
     # A width the operator dragged to (issue #1328) is the width from then on.
     if manual.isdigit():
         width = max(24, min(60, int(manual)))
     all_panes = panes(session)
     workers = [p for p in all_panes if p[1] == window and is_worker(p)]
+    # A node's fleet session never gets here with enabled == "1" (issue #1713:
+    # fleet-sidebar.sh draws the list only on the client's server), so a viewer
+    # needs no marker of its own any more — one list, the client's.
     wanted = (enabled == "1" and attached != "0" and
-              # This session is another machine's proxy view, and its ONLY client
-              # (fleet-remote-view.sh attach, issue #1475): it is drawn inside THAT
-              # machine's sidebar, so no list of its own — one list, not two.
-              solo != "1" and
               name not in ("plan", "dash", "backlog") and
               # A task: issue worker, repo scratch, a no-repo session in $HOME (#996),
               # or a proxy window onto another machine's session (`@remote`, #1475):

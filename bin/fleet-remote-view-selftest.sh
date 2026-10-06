@@ -20,35 +20,36 @@
 #   C. attach      — the proxy is a client of a VIEW SESSION of its own, grouped
 #                    onto the remote fleet session (`<fleet>@view-<id>`, #1489) and
 #                    on the worker's window; the fleet session's current window
-#                    never moves; status line + prefix off there for good, and on
-#                    the fleet session too (saved), its sidebar gone
-#                    (`@remote_view_solo`, #1475); typing reaches it; registered
-#                    as a `view` row; the fleet's own global client-attached hook
-#                    still fires (the rule's hooks are global too, #1485)
+#                    never moves; status line + prefix off there for good — and
+#                    NOTHING on the fleet session itself (#1713: the node makes no
+#                    way); what an older version's rule left there (status/prefix
+#                    hidden, `@remote_view_solo`, the [77] hooks, a session-level
+#                    hook array) is undone; typing reaches it; registered as a
+#                    `view` row; the fleet's own global client-attached hook fires
 #   D. fleet-open  — from the remote session, the request reaches the proxy side
 #                    (sent:proxy), not an escape on the remote's terminal
-#   G. shared      — a client attaching AT the remote end gets status + prefix +
-#                    sidebar back
-#   I. shells      — (#1485) hidden ⇔ every client is a shell/view: a second
-#                    `--shell` client (nested on the node, no ssh, $TMUX set) keeps
-#                    it hidden; a plain hand-run attach brings everything back at
-#                    once; a shell arriving beside that plain client hides nothing;
-#                    the plain client leaving hides again; the last shell takes the
-#                    server's hooks with it, and no session-level hook array is
-#                    left to shadow the fleet's own
-#   K. one title   — (#1549) while hidden every remote window's pane-border-status
-#                    is off (its own value saved per window), so the proxy pane
-#                    shows no second header; a plain client gets each back as it
-#                    was (a window's own value, or inherited), the close too
+#   N. no list     — (#1713) a node fleet session draws no list: fleet-sidebar.sh
+#                    sync there, a client on it, adds no sidebar pane and reaps the
+#                    one an older version drew; the drawer's selftest seam
+#                    (FLEET_SIDEBAR_NODE=1) does draw one — the positive control
+#   G. shared      — a client attaching AT the remote end changes nothing: no pane
+#                    on the node is added, removed or moved
+#   I. shells      — (#1485/#1713) shells, a plain hand-run attach, a shell beside
+#                    it, each leaving: the registry follows every one (a shell row,
+#                    no spool without a view id) and the node's panes never change
+#   K. one title   — (#1549) a window a shell/view looks at loses its own header
+#                    ONE WAY — off at the attach, still off after every client
+#                    has gone — so the proxy pane shows no second header and no
+#                    client change resizes a pane
 #   J. own window  — (#1489) two shells on one machine: each view session keeps
 #                    its own current window; `select <wid> <view>` moves that view
 #                    alone, `select <wid>` (an older open) the fleet session alone;
 #                    fleet_lw lists each window once and fleet-peer-send resolves
 #                    the worker (no AMBIGUOUS); FLEET_SESSION_FMT names the fleet
 #                    from a pane of the shared window
-#   E. close       — killing the proxy window leaves the remote worker running and
-#                    hands the remote session its status line + sidebar back,
-#                    the registry, the hooks and the markers all gone
+#   E. close       — killing the proxy window leaves the remote worker running,
+#                    the registry gone, no hook and no marker anywhere, the node's
+#                    panes as they were
 #   F. skipped     — a proxy window is no dash row, no session in either cap
 #                    tally, no fleet-restore row, no sleep candidate
 #   L. no ⇄ (lint) — (#1621) a proxy window is known by `@remote`, never by its
@@ -145,21 +146,32 @@ WID="$U/issue-7"; WID2="$U/issue-8"
 tr_ -f /dev/null new-session -d -s "$RS" -n plan -x 200 -y 50 'while :; do sleep 300; done' 2>/dev/null \
   || { printf 'fleet-remote-view selftest: cannot start an isolated tmux server — SKIP\n' >&2; exit 0; }
 # The fleet conf's own hook (tmux-attention.conf, client-attached[71]): a hook ON
-# THE SESSION — #1475's form — would shadow it; the rule's hooks are global (#1485).
+# THE SESSION — #1475's form — would shadow it.
 tr_ set-hook -g 'client-attached[71]' "run-shell -b 'echo att >> $WORK/hook71'"
 RW=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n worker7 "cat > '$WORK/typed'")
 tr_ set-window-option -t "$RW" @issue 7
 RW8=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n worker8 'while :; do sleep 300; done')
 tr_ set-window-option -t "$RW8" @issue 8
 # Each window's own top header (tmux-attention.conf: global `top`, a marker format
-# to find it in a capture); worker 8 sets its OWN value — what a restore must give
-# back, where worker 7's inherited one must come back unset (#1549).
+# to find it in a capture); worker 8 sets its OWN value (#1549).
 tr_ set-option -g pane-border-status top \; set-option -g pane-border-format 'RBORDER #{window_name}'
 tr_ set-window-option -t "$RW8" pane-border-status bottom
-# The remote fleet's own sidebar view, in the worker's window (#1475: it goes
-# while the proxy is the only client, and comes back with the status line).
+# What an OLDER version left on a node (#1475/#1485, retired in #1713): its own
+# sidebar view in the worker's window, the session hidden (status + prefix off,
+# the originals saved), the solo marker, a window's saved header, the server's
+# [77] hooks and a session-level hook array. The first attach undoes the rule's
+# leftovers; the node's next sync reaps the view (N).
 RVP=$(tr_ split-window -d -h -b -f -l 30 -P -F '#{pane_id}' -t "$RW" 'while :; do sleep 300; done')
 tr_ set-option -p -t "$RVP" @sidebar 1
+tr_ set-option -t "=$RS:" prefix C-a
+tr_ set-option -t "=$RS:" @remote_view_saved 'status=- prefix=C-a prefix2=- ' \; \
+  set-option -t "=$RS:" status off \; set-option -t "=$RS:" prefix None \; set-option -t "=$RS:" prefix2 None \; \
+  set-option -t "=$RS:" @remote_view_solo 1
+tr_ set-window-option -t "$RW8" @remote_view_saved 'pane-border-status=bottom'
+tr_ set-hook -g 'client-attached[77]' "run-shell -b 'echo legacy >> $WORK/hook77'" \; \
+  set-hook -g 'client-detached[77]' "run-shell -b 'echo legacy >> $WORK/hook77'"
+tr_ set-hook -t "=$RS:" 'client-attached[77]' "run-shell -b 'echo legacy >> $WORK/hook77'"
+tr_ set-hook -u -t "=$RS:" 'client-attached[77]'   # #1475's emptied array: it still shadows
 
 # --- the LOCAL fleet + the sidebar's remote cache (#1423's row shape) ---------------
 tl -f /dev/null new-session -d -s "$LS" -n plan -x 160 -y 40 'while :; do sleep 300; done'
@@ -256,18 +268,16 @@ eq "C: …which shows the worker's window" "$RW" "$(vcur "$VS")"
 eq "C: …while the fleet session's own current window never moved" "plan" "$(rscur)"
 eq "C: …its status line and prefix off for good, and it goes with its client" "off None None on" "$(tr_ show-options -qv -t "=$VS:" status) $(tr_ show-options -qv -t "=$VS:" prefix) $(tr_ show-options -qv -t "=$VS:" prefix2) $(tr_ show-options -qv -t "=$VS:" destroy-unattached)"
 eq "C: …the fleet session has no client of its own" "0" "$(tr_ display-message -p -t "=$RS:" '#{session_attached}')"
-eq "C: remote status line off while the proxy is its only client" "off" "$(tr_ show-options -qv -t "=$RS:" status)"
-eq "C: remote prefix off" "None" "$(tr_ show-options -qv -t "=$RS:" prefix)"
-has "C: what it was is saved" "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" "status=- "
-eq "C: the remote session is marked solo — its sidebar draws no list (#1475)" "1" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
+# #1713: the node makes no way — the fleet session's own status line and prefix
+# are its own (the older rule's hiding undone: status inherited, prefix C-a).
+eq "C: the fleet session's status line and prefix are its own — an older hide undone (#1713)" "|C-a|" "$(tr_ show-options -qv -t "=$RS:" status)|$(tr_ show-options -qv -t "=$RS:" prefix)|$(tr_ show-options -qv -t "=$RS:" prefix2)"
+eq "C: …no marker of the retired rule left (#1713)" "|" "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)|$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
 rviews() { tr_ list-panes -s -t "$RS" -F '#{pane_id} #{@sidebar}' | awk '$2 == 1 { print $1 }' | tr '\n' ' '; }
-eq "C: …the view it had is gone" "" "$(rviews)"
-# K (#1549): the far side's own header goes with the status line — one title line.
+# K (#1549): the far side's own header goes, one way — one title line.
 pbs() { printf '%s|%s' "$(tr_ show-options -wqv -t "$RW" pane-border-status)" "$(tr_ show-options -wqv -t "$RW8" pane-border-status)"; }
 pbsaved() { printf '%s|%s' "$(tr_ show-options -wqv -t "$RW" @remote_view_saved)" "$(tr_ show-options -wqv -t "$RW8" @remote_view_saved)"; }
-eq "K: hidden — every remote window's pane-border-status is off" "off|off" "$(pbs)"
-eq "K: …what each window set is saved on the window (- = inherited)" "pane-border-status=-|pane-border-status=bottom" "$(pbsaved)"
-eq "K: …the session's own saved columns are untouched" "status=- prefix=- prefix2=- " "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)"
+eq "K: every remote window's pane-border-status is off once a view is attached" "off|off" "$(pbs)"
+eq "K: …nothing is saved to give back (one way), an older marker lifted" "|" "$(pbsaved)"
 noheader() { ! tl capture-pane -p -t "$PW" | grep -q RBORDER; }
 waitfor 5 noheader || fail "K: the proxy pane still shows the remote window's own header" "$(tl capture-pane -p -t "$PW" | head -3)"
 tl send-keys -t "$PW" 'hello-from-m5' Enter
@@ -280,7 +290,7 @@ has "C: …its tty is the proxy client's" "$(tr_ list-clients -F '#{client_tty}'
 kill -0 "$(regrows | cut -f5)" 2>/dev/null; eq "C: …its pid is the attach shell, alive" "0" "$?"
 hook71() { [ -s "$WORK/hook71" ]; }
 waitfor 5 hook71 || fail "C: the fleet's own global client-attached hook did not fire for the proxy (shadowed by a session-level hook?)"
-eq "C: the rule's hooks are on the server, not the session" "2 " "$(tr_ show-hooks -g | grep -c '\[77\]') $(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
+eq "C: no [77] hook anywhere — an older attach's lifted, none set (#1713)" "0 " "$(tr_ show-hooks -g | grep -c '\[77\]') $(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
 
 # M (#1682): the proxy holds a `serve` channel on its own connection, and a
 # retarget rides it — no one-shot `select` (a fresh remote bash) per click.
@@ -326,39 +336,57 @@ sl=$(FLEET_SLEEP=observe python3 "$BIN/fleet-sleep.py" scan --session "$LL" --dr
 hasnt "F: the sleeper reports nothing about the proxy" "$sl" "\"$PW\""
 
 # ============================================================================
-# G. someone attaches AT the remote end → its session gets status + prefix back
+# N. a node fleet session draws no list (#1713) — G's plain client on it
 # ============================================================================
+# The panes of every remote window — which window, where it starts, a list or not:
+# no client change may add, remove or move one. (Not sizes: tmux sizes a window
+# to its newest client, which is tmux's and not the fleet's — and `window-size
+# manual`, which would pin them, takes this tmux server down.)
+layout() { tr_ list-panes -s -t "=$RS" -F '#{pane_id} #{window_id} #{pane_left},#{pane_top} sb=#{@sidebar}' 2>/dev/null | sort | tr '\n' ' '; }
 HW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n helper "env -u TMUX $REAL_TMUX -L $RS attach -t '=$RS'")   # quoted: zsh expands a bare =word
 two() { [ "$(gatt)" = 2 ]; }
 waitfor 10 two || fail "G: the second client never attached"
-back() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ] && [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" ]; }
-waitfor 5 back || fail "G: a client at the remote end did not get the status line back" "$(tr_ show-options -t "=$RS:" status)"
-eq "G: …and the solo marker is gone: its sidebar may draw again (#1475)" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
-eq "K: a plain client gets each window's header back as it was" "|bottom" "$(pbs)"
-eq "K: …and no window keeps a saved marker" "|" "$(pbsaved)"
-header() { tl capture-pane -p -t "$PW" | grep -q RBORDER; }
-waitfor 5 header || fail "K: with a plain client there, the remote header is not back (the positive control)" "$(tl capture-pane -p -t "$PW" | head -3)"
+tr_ select-window -t "=$RS:$RW"   # a task window, on the plain client's screen
+nsync() { TMUX="$RSOCK,0,0" bash "$BIN/fleet-sidebar.sh" sync "=$RS:" >/dev/null 2>&1; }
+nsync
+eq "N: sync on the node, a client on it — no sidebar pane; the one an older version drew is reaped" "" "$(rviews)"
+FLEET_SIDEBAR_NODE=1 nsync
+drawn() { [ -n "$(rviews)" ]; }
+waitfor 5 drawn || fail "N: the selftest seam did not draw the list (the positive control: the gate is what keeps it off)" "$(tr_ list-panes -t "$RW" -F '#{pane_id} #{pane_width} #{@sidebar}')"
+nsync
+eq "N: …and the node's next sync takes it away again" "" "$(rviews)"
+NW=$(tr_ new-window -P -F '#{window_id}' -t "$RS:" -n worker10 'while :; do sleep 300; done')
+tr_ set-window-option -t "$NW" @issue 10
+nsync
+eq "N: a window the node opens has no sidebar pane" "1 " "$(tr_ list-panes -t "$NW" -F '#{pane_id}' | grep -c .) $(rviews)"
+tr_ kill-window -t "$NW"; tr_ select-window -t "=$RS:plan"
+L0=$(layout)
+
+# ============================================================================
+# G. someone attaches AT the remote end → nothing on the node changes
+# ============================================================================
+settle() { sleep 0.7; }   # give a NEGATIVE check time to be wrong
+eq "G: a plain client at the remote end — the status line stays the fleet's own, no marker" "|" "$(tr_ show-options -qv -t "=$RS:" status)|$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)"
+eq "K: a plain client gets no header back — the one-way rule (#1549, #1713)" "off|off" "$(pbs)"
 tl kill-window -t "$HW"
 one() { [ "$(gatt)" = 1 ]; }
 waitfor 5 one || fail "G: the helper client did not leave"
+settle
+eq "G: the plain client came and went — the node's panes unchanged" "$L0" "$(layout)"
 
 # ============================================================================
 # I. shells (#1485): hidden ⇔ at least one client, and every one a shell/view
 # ============================================================================
-hidden() { [ "$(tr_ show-options -qv -t "=$RS:" status)" = off ] && [ "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)" = 1 ]; }
-shown() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ] && [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)" ] && [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" ]; }
 natt() { [ "$(gatt)" = "$1" ]; }
-settle() { sleep 0.7; }   # the hooks run -b; give a NEGATIVE check time to be wrong
-# After G the proxy is alone again — the rule hides (the old code left the status
-# line on from the helper's visit until the proxy itself left).
-waitfor 5 hidden || fail "I: the proxy alone again after G — not hidden" "$(tr_ show-options -t "=$RS:" status)"
+# The node never changes for a client (#1713): the fleet session's own status
+# line, no marker, every pane where it was.
+still() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" ] && [ "$(layout)" = "$L0" ]; }
 # I1. a second SHELL client, on the node itself: a pane of ANOTHER tmux server (the
 # shell's own), no ssh, $TMUX left set — C5's `fleet` shell run on the machine.
 SW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n shell2 "bash '$BIN/fleet-remote-view.sh' attach --shell '$WID2'; sleep 300")
 waitfor 10 natt 2 || fail "I: the nested --shell client never attached" "$(tl capture-pane -p -t "$SW" | head -3)"
 settle
-hidden || fail "I: two shells — must stay hidden" "$(tr_ show-options -t "=$RS:" status)"
-has "I: …what was saved is still the original (no re-save)" "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" "status=- "
+still || fail "I: a second shell changed the node" "$(layout) vs $L0"
 eq "I: …no list" "" "$(rviews)"
 eq "I: the registry holds the view and the shell" "shell view " "$(regrows | cut -f3 | sort | tr '\n' ' ')"
 srow=$(regrows | awk -F '\t' '$3 == "shell"')
@@ -386,13 +414,13 @@ tr_ select-window -t "=$RS:plan"
 out=$(printf 'a select %s\nb select %s\nc ping -\nd bogus x\n' "$WID" "$WID" | bash "$BIN/fleet-remote-view.sh" serve "$S2ID" 2>/dev/null | tr '\n' ' ')
 eq "M: serve answers each request by its nonce" "a 0 b 0 c 0 d 2 " "$out"
 eq "M: …and moved that view alone" "$RW $RW8 plan" "$(vcur "$S2V") $(vcur "$VS") $(rscur)"
-# A window born while hidden (#1549) has its own header until the next client
-# change — selecting it takes it now, without the full rule (issue #1682).
+# A window born since the attach (#1549) has its own header — selecting it in a
+# view takes it, one way (issues #1682, #1713).
 RW9=$(tr_ new-window -d -P -F '#{window_id}' -t "$RS:" -n worker9 'while :; do sleep 300; done')
 tr_ set-window-option -t "$RW9" @issue 9; tr_ set-window-option -t "$RW9" @fleet_id 99999999-0000-4000-8000-000000000009
-eq "M: a window born while hidden still has its header" "1 " "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo) $(tr_ show-options -wqv -t "$RW9" @remote_view_saved)"
+eq "M: a window born since the attach still has its header" "" "$(tr_ show-options -wqv -t "$RW9" pane-border-status)"
 out=$(printf 'a select %s\n' "$U/issue-9" | bash "$BIN/fleet-remote-view.sh" serve "$S2ID" 2>/dev/null)
-eq "M: …selecting it takes the header now (saved, off)" "a 0|pane-border-status=-|off" "$out|$(tr_ show-options -wqv -t "$RW9" @remote_view_saved)|$(tr_ show-options -wqv -t "$RW9" pane-border-status)"
+eq "M: …selecting it takes the header now (off, nothing saved)" "a 0||off" "$out|$(tr_ show-options -wqv -t "$RW9" @remote_view_saved)|$(tr_ show-options -wqv -t "$RW9" pane-border-status)"
 out=$( { printf 'a select %s\n' "$U/issue-9"; sleep 0.3; tr_ kill-window -t "$RW9"; printf 'b select %s\n' "$U/issue-9"; } \
        | bash "$BIN/fleet-remote-view.sh" serve "$S2ID" 2>/dev/null | tr '\n' ' ')
 eq "M: selected, then gone: the remembered window is re-checked, not trusted" "a 0 b 3 " "$out"
@@ -410,36 +438,36 @@ eq "J: FLEET_SESSION_FMT names the fleet from a pane of the shared window" "$RS"
 # — so it registers nothing and counts as a person. Everything back at once.
 HW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n hand "env -u TMUX bash '$BIN/fleet-remote-view.sh' attach '$WID2'; sleep 300")
 waitfor 10 natt 3 || fail "I: the plain client never attached" "$(tl capture-pane -p -t "$HW" | head -3)"
-waitfor 5 shown || fail "I: a plain client did not bring status + prefix + sidebar back" "$(tr_ show-options -t "=$RS:")"
+settle
+still || fail "I: a plain client changed the node" "$(layout) vs $L0"
 eq "I: …it registered nothing" "2" "$(regrows | wc -l | tr -d ' ')"
 # I3. a shell arriving beside the plain client hides nothing (a view id too: a
 # shell may carry a fleet-open spool).
 SW3=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n shell3 "env -u TMUX bash '$BIN/fleet-remote-view.sh' attach --shell '$WID2' view3; sleep 300")
 waitfor 10 natt 4 || fail "I: the third shell never attached"
 settle
-shown || fail "I: a shell arriving while a plain client is attached must hide nothing" "$(tr_ show-options -t "=$RS:" status)"
+still || fail "I: a shell arriving beside a plain client changed the node" "$(layout) vs $L0"
 eq "I: …registered as a shell, with its spool" "2 yes" "$(regrows | awk -F '\t' '$3 == "shell"' | wc -l | tr -d ' ') $([ -d "$FLEET_CONF_DIR/remote-views/view3.d" ] && echo yes)"
 eq "I: …and a view session named by the id it brought (#1489)" "1" "$(tr_ has-session -t "=$RS@view-view3" 2>/dev/null && echo 1)"
 # I4. that shell leaves: the plain client keeps everything.
 tl kill-window -t "$SW3"
 waitfor 10 natt 3 || fail "I: the third shell did not leave"
 settle
-shown || fail "I: a shell leaving beside a plain client must change nothing" "$(tr_ show-options -t "=$RS:" status)"
-# I5. the plain client leaves: only shells remain — hidden again, at once.
+still || fail "I: a shell leaving beside a plain client changed the node" "$(layout) vs $L0"
+# I5. the plain client leaves: only shells remain — still nothing changes.
 tl kill-window -t "$HW"
 waitfor 10 natt 2 || fail "I: the plain client did not leave"
-waitfor 5 hidden || fail "I: the plain client left, two shells remain — not hidden again" "$(tr_ show-options -t "=$RS:" status)"
-eq "I: …and the saved values are the originals" "status=- prefix=- prefix2=- " "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)"
-eq "K: hidden again — the headers off again, the originals saved again" "off|off pane-border-status=-|pane-border-status=bottom" "$(pbs) $(pbsaved)"
-# I6. the nested shell leaves: the proxy alone — still hidden; its row gone; the
-# server's hooks stay while a shell is registered, and never land on the session.
+settle
+still || fail "I: the plain client leaving changed the node" "$(layout) vs $L0"
+eq "K: the headers stay off (one way)" "off|off |" "$(pbs) $(pbsaved)"
+# I6. the nested shell leaves: the proxy alone; its row gone; still no hook.
 tl kill-window -t "$SW"
 waitfor 10 natt 1 || fail "I: the nested shell did not leave"
 settle
-hidden || fail "I: the shell left, the proxy remains — must stay hidden" "$(tr_ show-options -t "=$RS:" status)"
+still || fail "I: the nested shell leaving changed the node" "$(layout) vs $L0"
 eq "I: one row left, the proxy's view" "view" "$(regrows | cut -f3 | tr '\n' ' ' | sed 's/ $//')"
 eq "I: …and one view session, the proxy's (#1489)" "$VS" "$(vsess)"
-eq "I: the server's hooks stay while a shell is registered — and none on the session" "2 " "$(tr_ show-hooks -g | grep -c '\[77\]') $(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
+eq "I: no hook on the server or the session (#1713)" "0 " "$(tr_ show-hooks -g | grep -c '\[77\]') $(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
 
 # ============================================================================
 # E. close the proxy window
@@ -450,18 +478,13 @@ waitfor 10 detached || fail "E: the remote client outlived the proxy window"
 noview() { [ -z "$(vsess)" ]; }
 waitfor 5 noview || fail "E: the proxy's view session outlived its client (#1489)" "$(vsess)"
 eq "E: the remote worker still runs" "$RW8" "$(tr_ list-windows -t "=$RS:" -F '#{window_id}' | grep -x "$RW8")"
-restored() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)" ]; }
-waitfor 5 restored || fail "E: the remote session's status line was not handed back" "$(tr_ show-options -t "=$RS:" status)"
-# rv_restore puts `status` back BEFORE it unsets the markers: wait for them too
-unmarked() { [ -z "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)" ]; }
-waitfor 5 unmarked || :
-eq "E: the saved marker is gone" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)"
-eq "E: the solo marker too" "" "$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)"
-eq "K: closed — each window's header as it was, no marker left" "|bottom |" "$(pbs) $(pbsaved)"
 gone() { [ -z "$(ls "$FLEET_CONF_DIR/remote-views" 2>/dev/null)" ]; }
 waitfor 5 gone || fail "E: the view registration was left behind" "$(ls "$FLEET_CONF_DIR/remote-views")"
-hooksoff() { [ "$(tr_ show-hooks -g | grep -c '\[77\]')" = 0 ]; }
-waitfor 5 hooksoff || fail "E: the rule's hooks outlived the last shell" "$(tr_ show-hooks -g | grep '\[77\]')"
+settle
+still || fail "E: the last client leaving changed the node" "$(layout) vs $L0"
+eq "K: closed — the headers stay off, no marker left (one way)" "off|off |" "$(pbs) $(pbsaved)"
+eq "E: no [77] hook" "0" "$(tr_ show-hooks -g | grep -c '\[77\]')"
+eq "E: the legacy hooks never fired once the attach lifted them" "" "$(cat "$WORK/hook77" 2>/dev/null)"
 eq "E: no session-level hook array left behind (it would shadow the fleet's [71]–[73] for good)" "" "$(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
 eq "E: the fleet's own hook is still in place" "1" "$(tr_ show-hooks -g | grep -c '^client-attached\[71\]')"
 

@@ -210,10 +210,11 @@ lease() {
 }
 standby_on() { [ -f "$CL_DIR/client.standby" ]; }
 # standby_popup <client> — the standby screen on that client (a popup is the
-# client's own, so the session's other clients keep their screen); display-popup
-# holds its caller until the popup closes, so it runs in the background.
+# client's own, so the session's other clients keep their screen); a popup
+# holds its caller until the popup closes, so it runs in the background. Through
+# the popup lib's one door (fleet_popup_screen; dash-popup-selftest greps for it).
 standby_popup() {
-  ( T display-popup -c "$1" -E -w 100% -h 100% \
+  ( . "$BIN/fleet-popup-lib.sh" && fleet_popup_screen "$SESS" "$1" \
       "exec bash $(sq "$SHADOW/fleet-shell.sh") standby $(sq "$SESS") $(sq "$1")" </dev/null >/dev/null 2>&1 & )
 }
 # others_standby <client|''> <device> — every client of the session but that one

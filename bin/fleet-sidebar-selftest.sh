@@ -2,6 +2,9 @@
 # Real tmux on a private socket: layout/focus, input, narrow screens, lifecycle,
 # fleet isolation, shared row order, and the spinner's sidebar activity guard.
 set -uo pipefail
+# The list is drawn on a fleet socket here: on a real node it is the client's
+# only (issue #1713), so the drawer's tests take the seam fleet-sidebar.sh offers.
+export FLEET_SIDEBAR_NODE=1
 BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v tmux >/dev/null 2>&1 || { echo 'selftest SKIP: tmux missing'; exit 0; }
 python3 - "$BIN" <<'PY'
