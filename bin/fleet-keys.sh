@@ -157,13 +157,27 @@ print_sheet() {
   key "prefix g" "$(fleet_ui_t keys_prefix_02)"
   key "prefix Space" "$(fleet_ui_t keys_prefix_06)"
   key "prefix q" "$(fleet_ui_t keys_prefix_05)"
-  key "prefix h" "$(fleet_ui_t keys_prefix_05)"
   key "prefix k" "$(fleet_ui_t keys_prefix_16)"
   key "prefix z" "$(fleet_ui_t keys_prefix_09)"
   key "prefix [" "$(fleet_ui_t keys_prefix_10)"
   key "prefix ?" "$(fleet_ui_t keys_prefix_13)"
   key "F9" "$(fleet_ui_t keys_prefix_14)"
   key "fleet guide" "$(fleet_ui_t keys_prefix_15)"
+  fi
+
+  if want switch; then
+  # one row per `dash-keymap.sh --panel switch` action (issue #1903): the prefix
+  # key (F9 has none), then its ⌘ chord in iTerm2 — read from the table, so a row
+  # can never name a key the conf does not catch (fleet-keys-selftest.sh leg 10)
+  group "$(fleet_ui_t keys_g_switch)" "$(fleet_ui_t keys_g_switch_sub)"
+  local sa sg sp
+  while read -r sa sg _ _ sp; do
+    [ -n "$sa" ] || continue
+    case "$sp" in F[0-9]*) ;; *) sp="prefix $sp" ;; esac
+    key "$sp" "$sg  $(fleet_ui_t "keys_switch_$sa")"
+  done <<EOF
+$(bash "$BIN/dash-keymap.sh" --panel switch list 2>/dev/null)
+EOF
   fi
 
   if want sidebar; then

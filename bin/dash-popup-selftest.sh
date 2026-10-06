@@ -285,14 +285,15 @@ echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh,
 # since issue #1714 took the node's keys (prefix b / u / c / ! and the alert-count
 # taps were the only doors of backlog / usage / config / alerts): keys — the
 # client's prefix ? — and the task picker, until its chain retires (#1739). The
-# row menu is a display-menu, not a popup.
+# row menu is a display-menu, not a popup. Issue #1903 adds the third, quick open
+# (⌘P / prefix /): a filtered list over every session needs the screen.
 kept=$(grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v '^$' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
 kept_hub=$(grep -lE -- '--title["'"'"', ]*popup_' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/conf/*.conf 2>/dev/null \
   | grep -v -- '-selftest\.' | grep -v '/tmux-dashboard\.sh$' \
   | xargs grep -ho -- '--title["'"'"', ]*popup_[a-z_]*' | sed 's/.*\(popup_[a-z_]*\)$/\1/' | sort -u | paste -sd ' ' -)
-[ "$kept_hub" = 'popup_keys popup_tasks' ] \
-  || fail "kept popups: want keys tasks (2), got: $kept_hub (all, the hub too: $kept)"
+[ "$kept_hub" = 'popup_keys popup_quickopen popup_tasks' ] \
+  || fail "kept popups: want keys quickopen tasks (3), got: $kept_hub (all, the hub too: $kept)"
 # the one-field popups that moved onto the sidebar's line open no popup at all
 for f in fleet-sidebar-menu.sh fleet-restore-pick.sh dash-issue-close.sh dash-issue-new.sh dash-reap.sh \
          dash-migrate.sh open-url.sh dash-repo-add.sh fleet-sidebar-remote.sh; do
@@ -301,7 +302,7 @@ for f in fleet-sidebar-menu.sh fleet-restore-pick.sh dash-issue-close.sh dash-is
 done
 grep -E 'dash-popup\.sh.*popup_(new_task|restore)' "$BIN/fleet-sidebar.py" \
   && fail "kept popups: the sidebar's ⌃n / ⌃o / landed restore still open a popup"
-echo "ok: two popups kept (the client's keys sheet, the narrow task picker); one-field ones ask on the sidebar line"
+echo "ok: three popups kept (the client's keys sheet, quick open, the narrow task picker); one-field ones ask on the sidebar line"
 
 # --- 7. STATIC GUARD: the binds route through the helper ---------------------
 [ -f "$DASH" ] || fail "static guard: $DASH not found"

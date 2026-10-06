@@ -21,6 +21,8 @@
 #
 # Usage:
 #   dash-keymap.sh --panel dash|backlog|config|sidebar <command>  # default panel: dash
+#   dash-keymap.sh --panel switch list|actions   # the ⌘ / prefix switch keys (#1903):
+#                                   #   action ⌘glyph iterm-key code prefix-key
 #                                   # env names stay DASH_KEY_* within each panel
 #   dash-keymap.sh env              # shell assignments, one fork for the table —
 #                                   #   DASH_KEY_<ACTION>=<fzf key>  DASH_GLYPH_<ACTION>=⌃x|⌥x
@@ -138,7 +140,34 @@ bol ctrl-a alt-a
 eol ctrl-e alt-e
 kill_word ctrl-w alt-w
 kill_eol ctrl-k alt-k' ;;
-*) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|sidebar)" >&2; exit 2 ;;
+# Switching sessions from anywhere in the client (issue #1903, EPIC #1906 C10).
+# NOT fzf and not ⌃-chords: on the Mac each row is a ⌘ chord that the iTerm2
+# Dynamic Profile `fleet` (bin/fleet-iterm-profile.py, written from THIS table)
+# turns into a private code `ESC [ <code> ~` — codes no terminal sends for a real
+# key — which conf/tmux-shell.conf catches as `user-keys[<code>]` → `User<code>`.
+# Every other terminal reaches the same action with the prefix key in the last
+# column (`F9` is a root key, no prefix). Columns: action, ⌘ glyph, iTerm2 key
+# (`0x<char>-0x<modifier mask>`, as iTerm2 spells its Keyboard Map: 0x100000 ⌘,
+# + 0x200000 for an arrow), private code, prefix key. A tmux prefix never
+# collides with a ⌘ chord, so nothing here remaps; `list` prints the table as is.
+# bin/fleet-keys-selftest.sh holds it in lockstep with the conf, the sheet and
+# the profile.
+switch) TABLE='next ⌘↓ 0xf701-0x300000 920 n
+prev ⌘↑ 0xf700-0x300000 921 p
+back ⌘[ 0x5b-0x100000 922 h
+fwd ⌘] 0x5d-0x100000 923 l
+needs ⌘J 0x6a-0x100000 924 k
+zoom ⌘↩ 0xd-0x100000 925 F9
+help ⌘/ 0x2f-0x100000 926 ?
+quickopen ⌘P 0x70-0x100000 927 /'
+  cmd="${1:-list}"
+  case "$cmd" in
+    list)    printf '%s\n' "$TABLE" ;;
+    actions) printf '%s\n' "$TABLE" | awk '{print $1}' ;;
+    *) echo "usage: dash-keymap.sh --panel switch list|actions" >&2; exit 2 ;;
+  esac
+  exit 0 ;;
+*) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|sidebar|switch)" >&2; exit 2 ;;
 esac
 
 # tmux_to_fzf <tmux key name> → the fzf spelling, lowercase, modifiers ordered

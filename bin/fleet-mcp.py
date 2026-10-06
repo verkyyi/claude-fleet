@@ -41,6 +41,8 @@ came. Caps, claim dedup and guards live in the scripts, once.
   fleet-mcp.py --cred mint     print a fresh worker credential for THIS pane (stdout only)
   fleet-mcp.py --cred check    verify $FLEET_WORKER_CRED; print its claims (never the credential)
   fleet-mcp.py --cred revoke   revoke $FLEET_WORKER_CRED (its nonce goes on the revoked list)
+  fleet-mcp.py --probe         list the tools and exit — a running server asks a new version this
+                               before it execs it (issue #1898: a new version, taken between calls)
 
 The worker credential (issue #1809, EPIC #1813 C7): bin/fleet-session-wrap.sh mints
 one per launch and hands it to the agent — and so to this server — ONLY through the
@@ -1269,9 +1271,10 @@ def respond(request, result=None, error=None):
 def handle(request, table, name):
     method = request.get("method")
     if method == "initialize":
+        RELOAD["ready"] = True
         asked = (request.get("params") or {}).get("protocolVersion")
         return {"protocolVersion": asked if isinstance(asked, str) and asked else "2024-11-05",
-                "capabilities": {"tools": {}},
+                "capabilities": {"tools": {"listChanged": True}},
                 "serverInfo": {"name": name, "version": VERSION}}
     if method == "tools/list":
         return {"tools": [{"name": n, **spec} for n, (_, spec) in table.items()]}
@@ -1285,13 +1288,155 @@ def handle(request, table, name):
     raise ToolFault("unsupported MCP method: " + str(method))
 
 
+# --- a new version, taken between calls (issue #1898, EPIC #1906 C5) -------------
+#
+# The install is a LINK to one version (#1894): ~/.claude/fleet → fleet.versions/<sha>/.
+# Before each request — and every RELOAD_POLL_S while the client is quiet — the server
+# compares the file it was launched as (the link path, never resolved) with the one it
+# is running: another real path, inode, size or mtime means a new version. Requests are
+# served one at a time, so "between calls" is simply here: a call in flight finishes on
+# the old code first. The new file must answer `--probe` (it lists its tools) before the
+# server os.execv's it — same pid, same stdin/stdout, so the MCP connection never drops;
+# the credential rides in the environment as it is (renewed in place, #1809). Request
+# bytes already read but not served go to the new process through a 0600 carry file.
+# The new process then sends notifications/tools/list_changed: Claude Code re-lists at
+# once (it does so only because initialize declared tools.listChanged — a session that
+# met an older server keeps its list until it is reopened); Codex only logs the
+# notification today, so a Codex session keeps its first tool list and the C4 notice +
+# C3 idle reopen cover it — the exec still moves its tools' scripts onto the new version.
+# FLEET_MCP_RELOAD=0 turns all of this off.
+
+RELOAD_ENV = "FLEET_MCP_EXEC"          # old → new process handover (never inherited further)
+RELOAD_POLL_S = float(os.environ.get("FLEET_MCP_RELOAD_POLL_S") or 30)
+PROBE_TIMEOUT_S = 20
+SELF = os.path.abspath(__file__)       # the path as launched: through the version link
+RELOAD = {"ready": False, "sig": None, "bad": None}
+
+
+def self_sig():
+    """What version SELF is right now: its real path + the file's identity."""
+    try:
+        real = os.path.realpath(SELF)
+        st = os.stat(real)
+    except OSError:
+        return None
+    return "%s:%d:%d:%d" % (real, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def reload_log(verdict, why):
+    line = "%s tool=(reload) via=- who=pid%d verdict=%s why=%s\n" % (
+        time.strftime("%Y-%m-%dT%H:%M:%S%z"), os.getpid(), verdict, json.dumps(why, ensure_ascii=False))
+    try:
+        log_path().parent.mkdir(parents=True, exist_ok=True)
+        with open(str(log_path()), "a") as fh:
+            fh.write(line)
+    except OSError:
+        pass
+
+
+def reload_due():
+    """The new version's signature when one is in place and passes its probe, else None."""
+    if os.environ.get("FLEET_MCP_RELOAD", "1") == "0" or not RELOAD["ready"] or RELOAD["sig"] is None:
+        return None
+    sig = self_sig()
+    if sig is None or sig == RELOAD["sig"] or sig == RELOAD["bad"]:
+        return None
+    try:
+        probe = subprocess.run([sys.executable, SELF, "--probe"], stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=PROBE_TIMEOUT_S)
+        ok = probe.returncode == 0 and isinstance(json.loads(probe.stdout).get("tools"), list)
+        why = "" if ok else (probe.stderr or probe.stdout or "exit %d" % probe.returncode).strip()[-300:]
+    except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired) as exc:
+        ok, why = False, str(exc) or type(exc).__name__
+    if not ok:
+        RELOAD["bad"] = sig
+        reload_log("refused", "new version failed its probe, staying on this one: " + why)
+        return None
+    return sig
+
+
+def reload_exec(sig, carry):
+    """Become the new version: same pid, same stdin/stdout. Returns only on failure."""
+    import tempfile
+    state = {"from": RELOAD["sig"], "to": sig}
+    if carry:
+        fd, path = tempfile.mkstemp(prefix="fleet-mcp-carry.")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(carry)
+        state["carry"] = path
+    os.environ[RELOAD_ENV] = json.dumps(state)
+    sys.stdout.flush()
+    reload_log("exec", "%s -> %s" % (RELOAD["sig"], sig))
+    try:
+        os.execv(sys.executable, [sys.executable, SELF])
+    except OSError as exc:
+        os.environ.pop(RELOAD_ENV, None)
+        if state.get("carry"):
+            os.unlink(state["carry"])
+        RELOAD["bad"] = sig
+        reload_log("refused", "exec failed, staying on this one: %s" % exc)
+
+
+def reload_resume():
+    """In the new process: take the handover, hand back the unserved bytes, tell the client."""
+    raw = os.environ.pop(RELOAD_ENV, None)
+    if not raw:
+        return b""
+    carry = b""
+    try:
+        state = json.loads(raw)
+        if state.get("carry"):
+            with open(state["carry"], "rb") as fh:
+                carry = fh.read()
+            os.unlink(state["carry"])
+    except (OSError, ValueError, AttributeError):
+        state = {}
+    RELOAD["ready"] = True
+    print(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"},
+                     separators=(",", ":")), flush=True)
+    reload_log("resumed", "now %s" % RELOAD["sig"])
+    return carry
+
+
+def read_lines(buf, watch):
+    """Lines off fd 0, unbuffered by Python (an exec must not lose what it read ahead).
+    Yields (line, rest-of-buffer); with `watch`, yields (None, buf) after each quiet
+    RELOAD_POLL_S so the caller can look for a new version while nothing is asked."""
+    import select
+    while True:
+        while b"\n" not in buf:
+            if watch:
+                ready, _, _ = select.select([0], [], [], RELOAD_POLL_S)
+                if not ready:
+                    yield None, buf
+                    continue
+            chunk = os.read(0, 65536)
+            if not chunk:
+                if buf.strip():
+                    yield buf, b""
+                return
+            buf += chunk
+        line, buf = buf.split(b"\n", 1)
+        yield line, buf
+
+
 def serve(table, name):
     # The credential this session was launched with (issue #1809): taken once, renewed
     # in memory while it holds — the environment never hands the server a new one.
     HELD["cred"] = os.environ.get(CRED_ENV) or None
     if HELD["cred"]:
         threading.Thread(target=renew_loop, daemon=True).start()
-    for line in sys.stdin:
+    watch = table is TOOLS
+    RELOAD["sig"] = self_sig() if watch else None
+    buf = reload_resume() if watch else b""
+    for raw, rest in read_lines(buf, watch):
+        if watch:
+            sig = reload_due()
+            if sig is not None:
+                reload_exec(sig, rest if raw is None else raw + b"\n" + rest)
+        if raw is None:
+            continue
+        line = raw.decode("utf-8", "replace")
         if not line.strip():
             continue
         request = {}
@@ -1329,11 +1474,15 @@ def main(argv):
         return 0
     if argv[:1] == ["--cred"] and len(argv) == 2:
         return cred_main(argv[1])
+    if argv[:1] == ["--probe"]:
+        # A new version proves it starts before a running server execs it (#1898).
+        print(json.dumps({"tools": sorted(TOOLS)}))
+        return 0
     if argv[:1] == ["--legacy-peer"]:
         serve(LEGACY, "fleet-peer")
         return 0
     if argv:
-        print("usage: fleet-mcp.py [--mount codex | --legacy-peer | --cred mint|check|revoke]", file=sys.stderr)
+        print("usage: fleet-mcp.py [--mount codex | --legacy-peer | --probe | --cred mint|check|revoke]", file=sys.stderr)
         return 2
     serve(TOOLS, SERVER)
     return 0

@@ -1511,6 +1511,24 @@ else
   pass listen "no fleet process listening on the LAN"
 fi
 
+# --- remote clients of this machine (issue #1907) ---------------------------------
+# A shell / proxy client of this machine sits on a view session of its own
+# (`<fleet>@view-<id>`, #1489): one on the FLEET session shows the node's status
+# line under the client's header and leaves the node's prefix live — what a
+# reconnect onto a half-dead attach did. An orphan is a registered attach whose
+# tmux client the server no longer has (a dead line sshd never noticed); every
+# attach reaps those, `fleet-remote-view.sh prune` on demand.
+_rv="$(dirname "$0")/fleet-remote-view.sh"
+if [ -f "$_rv" ]; then
+  _rvh=$(bash "$_rv" health 2>/dev/null)
+  _rvs=$(printf '%s' "$_rvh" | sed -n 's/.*shared=\([0-9]*\).*/\1/p'); _rvo=$(printf '%s' "$_rvh" | sed -n 's/.*orphans=\([0-9]*\).*/\1/p')
+  if [ "${_rvs:-0}" -gt 0 ] || [ "${_rvo:-0}" -gt 0 ]; then
+    warn rview "${_rvs:-0} remote client(s) on a fleet session (not their own view session — the node's status line and prefix are live for them), ${_rvo:-0} orphaned attach(es) (their tmux client is gone). Reconnecting the client fixes the first; \`bin/fleet-remote-view.sh prune\` reaps the second (issue #1907)"
+  else
+    pass rview "remote clients each on a view session of their own, no orphaned attach"
+  fi
+fi
+
 # --- fleet-open: the operator's browser over their ssh (issue #1379) ------------
 # bin/fleet-open.sh writes an iTerm2 Custom= escape signed with a shared secret the
 # laptop side (#1380) reads over ssh; open.last is its last result. No secret yet
