@@ -139,6 +139,16 @@ fleet_ui_t() {
     zh:remote_hub_lost_fmt)     printf '入口失联 %s，稍后再试' "${1:-}" ;;
     en:remote_hub_lost_fmt)     printf 'hub lost %s — try again later' "${1:-}" ;;
     # a cross-machine certificate while the hub is down (issue #1630): refused at once, with the way round
+    # the bar's left end (issue #1779, fleet-client-badge.sh): ⌂ = where the CLIENT runs,
+    # and nowhere else — local: machine · terminal; over ssh: machine ← the device in your hand
+    zh:badge_local_fmt)         printf '⌂ %s · %s' "${1:-}" "${2:-}" ;;
+    en:badge_local_fmt)         printf '⌂ %s · %s' "${1:-}" "${2:-}" ;;
+    zh:badge_ssh_fmt)           printf '⌂ %s ← %s' "${1:-}" "${2:-}" ;;
+    en:badge_ssh_fmt)           printf '⌂ %s ← %s' "${1:-}" "${2:-}" ;;
+    zh:badge_bare_fmt)          printf '⌂ %s' "${1:-}" ;;
+    en:badge_bare_fmt)          printf '⌂ %s' "${1:-}" ;;
+    zh:badge_hubdown_fmt)       printf '⌂ %s · 入口连不上' "${1:-}" ;;
+    en:badge_hubdown_fmt)       printf '⌂ %s · hub unreachable' "${1:-}" ;;
     zh:peer_hub_lost_fmt)       printf '入口失联，机器间访问暂停；你可直接 `fleet %s` 进去' "${1:-}" ;;
     en:peer_hub_lost_fmt)       printf 'hub lost — machine-to-machine access paused; you can still go in directly with `fleet %s`' "${1:-}" ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;
