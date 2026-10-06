@@ -23,6 +23,11 @@ import (
 // min_client_compat (fleetclient.Compat / MinCompat). Behind client_version →
 // the client updates in the background for its next start; below
 // min_client_compat → it updates before it opens.
+//
+// With a StableSource (claude-fleet#1805) client_version is stable's commit,
+// beside `stable` (the same) and `client_url`, where its files are — so moving
+// stable upgrades every client without redeploying this hub (fleet_stable.go).
+// compat / min_client_compat stay this hub's own: the protocol it speaks.
 
 var versionCommitRe = regexp.MustCompile(`(?:^|[-_.g])([0-9a-f]{7,40})(?:-dirty)?$`)
 
@@ -46,11 +51,17 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		v = "dev"
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"version":           v,
 		"commit":            VersionCommit(v),
 		"client_version":    fleetclient.Version,
 		"client_compat":     fleetclient.Compat,
 		"min_client_compat": fleetclient.MinCompat,
-	})
+	}
+	if sha := s.stableCommit(); sha != "" {
+		out["client_version"] = sha
+		out["stable"] = sha
+		out["client_url"] = s.hubURL(r) + "/install/stable/" + sha
+	}
+	writeJSON(w, http.StatusOK, out)
 }

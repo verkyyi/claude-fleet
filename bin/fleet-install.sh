@@ -70,6 +70,20 @@
 # Exit: 0 installed (and `fleet` is running, which replaces this process) ·
 # 2 an unsupported system, a missing prerequisite or a bad answer · 1 a download
 # failed.
+#
+# WHICH VERSION (claude-fleet#1805): the part everyone has is stable's — the one
+# version every computer follows. 接: the hub's /version names stable's commit
+# (client_version) and where its files are through the hub (client_url, which
+# reaches where GitHub does not), GitHub's raw host at that commit the fallback
+# per file; a hub that names no client_url hands out its image's files, as
+# before. 不接: GitHub's API names stable's commit (FLEET_STABLE_API), the files
+# come from the raw host AT that commit (FLEET_STABLE_RAW) — one install is one
+# version, never a mix of two. Either way .client-version records it, and
+# `fleet` follows stable from there (fleet-client-update.sh). FLEET_INSTALL_SRC
+# pins a source as it is (FLEET_INSTALL_VERSION names its version; none = no
+# .client-version, the selftests' seam).
+# fleet-install: stable-aware — the hub serves this installer from stable only
+# while it carries this line (tokenledger/internal/api/fleet_stable.go).
 set -eu
 
 DEPS=1
@@ -93,6 +107,11 @@ PRE_HUB="${FLEET_HUB_URL:-__FLEET_HUB_URL__}"
 case "$PRE_HUB" in http://*|https://*) PRE_HUB="${PRE_HUB%/}" ;; *) PRE_HUB='' ;; esac
 SRC="${FLEET_INSTALL_SRC:-https://raw.githubusercontent.com/verkyyi/claude-fleet/stable}"
 SRC="${SRC%/}"
+RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"
+RAW="${RAW%/}"
+API="${FLEET_STABLE_API:-https://api.github.com/repos/verkyyi/claude-fleet/commits/stable}"
+MANIFEST_PATH=tokenledger/internal/api/fleetclient/manifest
+ALT=''
 
 say() { printf '%s\n' "$*" >&2; }
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -240,14 +259,18 @@ mkdir -p "$BIN" "$CONF"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/fleet-install.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT INT TERM HUP
 
-# fetch <path> [<url>] → $tmp/<path>, from <url> (default $FROM/<path>). Each
-# file's SHA-256 rides in a header from the hub; a download that does not match
-# it (a proxy's error page, a cut connection) is refused rather than installed.
+# fetch <path> [<rel>] → $tmp/<path>, from $FROM/<rel> (default <path>), and
+# when that fails from $ALT/<rel> (GitHub's raw host at the same commit, #1805).
+# Each file's SHA-256 rides in a header from the hub; a download that does not
+# match it (a proxy's error page, a cut connection) is refused rather than
+# installed.
 fetch() {
-  src_url="${2:-$FROM/$1}"
+  src_url="$FROM/${2:-$1}"
   mkdir -p "$tmp/$(dirname "$1")"
   if ! curl -fsSL -D "$tmp/$1.hdr" "$src_url" -o "$tmp/$1"; then
-    say "fleet-install: 下载 $src_url 失败"; exit 1
+    if [ -z "$ALT" ] || ! curl -fsSL -D "$tmp/$1.hdr" "$ALT/${2:-$1}" -o "$tmp/$1"; then
+      say "fleet-install: 下载 $src_url 失败"; exit 1
+    fi
   fi
   want="$(tr -d '\r' <"$tmp/$1.hdr" | awk 'tolower($1)=="x-ccquota-sha256:"{print $2}')"
   if [ -n "$want" ]; then
@@ -260,9 +283,48 @@ fetch() {
 if full; then
   say "fleet: $ROOT 已是完整安装（跟 stable），基础文件不重下"
 else
+  # which version, and from where (WHICH VERSION above): FROM, the manifest's
+  # path under it, ALT (the per-file fallback), and what .client-version says
+  VER='' COMPAT='' COMMIT='' MARK=0 MPATH="$MANIFEST_PATH" STABLE='' CURL='' HCOMMIT=''
+  if [ "$HUB_ANS" = 1 ]; then
+    MARK=1
+    curl -fsS --max-time 10 "$HUBURL/version" -o "$tmp/version.json" 2>/dev/null || : > "$tmp/version.json"
+    eval "$(python3 - "$tmp/version.json" <<'PYV'
+import json, re, shlex, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+def s(k):
+    v = d.get(k)
+    return "" if v is None else str(v)
+st = s("stable") if re.match(r"^[0-9a-f]{40}$", s("stable")) else ""
+url = s("client_url") if st and re.match(r"^https?://[A-Za-z0-9._~:/@%+-]+$", s("client_url")) else ""
+for k, v in (("VER", s("client_version")), ("COMPAT", s("client_compat")), ("HCOMMIT", s("commit")), ("STABLE", st), ("CURL", url)):
+    print("%s=%s" % (k, shlex.quote(v)))
+PYV
+)"
+    if [ -n "$CURL" ]; then
+      FROM="${CURL%/}" ALT="$RAW/$STABLE" COMMIT=$(printf '%.7s' "$STABLE")
+    else
+      FROM="$HUBURL/install" MPATH=manifest COMMIT=$HCOMMIT     # the image's client
+    fi
+  elif [ -n "${FLEET_INSTALL_SRC:-}" ]; then
+    FROM="$SRC" VER="${FLEET_INSTALL_VERSION:-}"
+    if [ -n "$VER" ]; then MARK=1 COMMIT=$(printf '%.7s' "$VER"); fi
+  else
+    MARK=1
+    STABLE=$(curl -fsS --max-time 10 -H 'Accept: application/vnd.github.sha' "$API" 2>/dev/null | tr -d ' \r\n' | cut -c1-40) || STABLE=''
+    if printf '%s' "$STABLE" | grep -Eq '^[0-9a-f]{40}$'; then
+      FROM="$RAW/$STABLE" VER=$STABLE COMMIT=$(printf '%.7s' "$STABLE")
+    else
+      FROM="$RAW/stable"      # GitHub's API out of reach: the tag's tip; `fleet` pins it next time
+      say "fleet: 问不到 stable 指向哪个提交，按 stable 当前内容装（下次启动 fleet 时对齐）"
+    fi
+  fi
   # the manifest first (its `installer` line is this very script, not a
   # download), then every file on it; nothing is installed until all are here
-  if [ "$HUB_ANS" = 1 ]; then fetch manifest; else fetch manifest "$SRC/tokenledger/internal/api/fleetclient/manifest"; fi
+  fetch manifest "$MPATH"
   FILES="$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" { print $1 }' "$tmp/manifest" | tr '\n' ' ')"
   [ -n "${FILES% }" ] || { say "fleet-install: $FROM 的 manifest 里没有文件"; exit 1; }
   for f in $FILES; do
@@ -304,19 +366,10 @@ else
   # Which client this is (#1722): the hub's /version answer, so `fleet` can
   # tell on its next start whether the hub hands out a newer one. Unchanged
   # but for the time → the file is left as it was (a rerun changes nothing).
-  if [ "$HUB_ANS" = 1 ]; then
-    curl -fsS --max-time 10 "$HUBURL/version" -o "$tmp/version.json" 2>/dev/null || : > "$tmp/version.json"
-    python3 - "$tmp/version.json" "$HUBURL" > "$tmp/client-version" <<'PY' || :
-import json, sys, time
-try:
-    d = json.load(open(sys.argv[1]))
-except Exception:
-    d = {}
-def s(k):
-    v = d.get(k)
-    return "" if v is None else str(v)
-print("version=%s\ncompat=%s\ncommit=%s\nhub=%s\nat=%d" % (s("client_version"), s("client_compat"), s("commit"), sys.argv[2], time.time()))
-PY
+  # 不接 too (#1805): `fleet` then follows GitHub's stable by itself.
+  if [ "$MARK" = 1 ]; then
+    _mhub=''; [ "$HUB_ANS" = 1 ] && _mhub=$HUBURL
+    printf 'version=%s\ncompat=%s\ncommit=%s\nhub=%s\nat=%s\n' "$VER" "$COMPAT" "$COMMIT" "$_mhub" "$(date +%s)" > "$tmp/client-version"
     if [ "$(grep -v '^at=' "$tmp/client-version" 2>/dev/null)" != "$(grep -v '^at=' "$ROOT/.client-version" 2>/dev/null)" ]; then
       mv -f "$tmp/client-version" "$ROOT/.client-version"
     fi

@@ -444,9 +444,17 @@ Do not install from memory: read the doc and work from it.
   `fleetclient/`; `bin/fleet-client-mirror.sh` now only rewrites the manifest's
   generated block (`--check`: every path in the repo, no copy committed), and
   `TestFleetClientMatchesBin` (Go) + `bin/fleet-install-selftest.sh` leg A
-  (shell, a sandbox pack) pin it from both sides. The
-  hub image is deployed by hand: a merge here reaches a colleague's `fleet` only
-  after the operator redeploys it and they run the one line again.
+  (shell, a sandbox pack) pin it from both sides. **The client follows
+  STABLE, not the hub image** (issue #1805): the hub's `/version` names
+  `refs/tags/stable`'s commit as `client_version` (+ `client_url`, its files
+  proxied at `/install/stable/<sha>/`, `CCQUOTA_FLEET_STABLE_REPO`; `off` / GitHub
+  never answered = the image's pack, byte for byte), `/install` serves stable's
+  own installer when it carries `fleet-install: stable-aware`, and a client with
+  no hub asks GitHub (`FLEET_STABLE_API` / `FLEET_STABLE_RAW`). So moving stable
+  is the whole release for both layers — `fleet-client-update.sh` (基础) and
+  `fleet-install-sync.sh` (承载), dispatched by `bin/fleet-update.sh`
+  (`fleet update`) — and the hub image is redeployed only for the hub's own
+  changes. `fleet-update-selftest.sh` pins it.
 - **The node token never enters a pane's environment** (issue #1491).
   `ccquota lease|place|move` act as this machine's agent and need its token;
   `fleet_hub_lease` / `fleet_hub_place` / `fleet_hub_move` (`bin/fleet-lib.sh`)

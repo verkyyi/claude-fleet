@@ -200,6 +200,12 @@ func loadFleetCerts(srv *api.Server) error {
 	srv.FleetPublicURL = os.Getenv("CCQUOTA_FLEET_PUBLIC_URL")
 	srv.FleetDistDir = os.Getenv("CCQUOTA_FLEET_DIST_DIR")
 	srv.FleetJoinScriptURL = os.Getenv("CCQUOTA_FLEET_JOIN_SCRIPT_URL")
+	// The client follows GitHub's stable through this hub (claude-fleet#1805);
+	// "off" hands out the image's packed client only.
+	if repo := os.Getenv("CCQUOTA_FLEET_STABLE_REPO"); repo != "off" {
+		srv.Stable = &api.StableSource{Repo: repo}
+		srv.Stable.Commit() // the first lookup, in the background
+	}
 	path := os.Getenv("CCQUOTA_FLEET_SSH_CA_KEY")
 	if path == "" {
 		log.Printf("fleet: no CCQUOTA_FLEET_SSH_CA_KEY — connection certificates are off")

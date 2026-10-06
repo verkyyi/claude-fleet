@@ -194,6 +194,11 @@ type Server struct {
 	// FleetJoinScriptURL is where the join command fetches the script
 	// (CCQUOTA_FLEET_JOIN_SCRIPT_URL); empty means DefaultJoinScriptURL.
 	FleetJoinScriptURL string
+	// Stable is where the client comes from (claude-fleet#1805): GitHub's
+	// refs/tags/stable, reported by /version and proxied at
+	// /install/stable/<sha>/ (CCQUOTA_FLEET_STABLE_REPO; "off" = nil). Nil:
+	// the image's packed client, as before.
+	Stable *StableSource
 	// joinClock replaces the join-code clock in tests.
 	joinClock func() time.Time
 
