@@ -241,7 +241,7 @@ else bad "D rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")";
 
 # ── F. no terminal ──────────────────────────────────────────────────────────
 # output to a file and no FORCE: nobody could scan, so no join — one line instead
-FORCE= install_in h3
+FORCE='' install_in h3
 if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && [ ! -e "$WORK/h3/.config/claude-fleet/node.env" ] \
    && grep -q '节点: 这里没有终端可显示二维码' "$WORK/out"; then
   ok "F no terminal: no scan, no wait, the fleet node join line"
