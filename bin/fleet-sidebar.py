@@ -945,8 +945,9 @@ def place_answer(ask, value):
 
 # 「什么时候回收？」(issue #1902): the five reap policies, the kind's default
 # highlighted so ↵ takes it — merged for an issue, done:2h for a scratch.
-REAP_CHOICES = (("merged", "reap_merged"), ("done:2h", "reap_done"), ("loop-end", "reap_loop_end"),
-                ("at", "reap_at"), ("keep", "reap_keep"))
+REAP_CHOICES = (("merged", "sidebar_place_reap_merged"), ("done:2h", "sidebar_place_reap_done"),
+                ("loop-end", "sidebar_place_reap_loop_end"), ("at", "sidebar_place_reap_at"),
+                ("keep", "sidebar_place_reap_keep"))
 
 
 def place_reap(plan):
@@ -955,7 +956,7 @@ def place_reap(plan):
     dflt = "merged" if plan["what"] != "scratch" else "done:2h"
     menu = []
     for value, key in REAP_CHOICES:
-        label, _, note = tr("sidebar_place_" + key).partition("\t")
+        label, _, note = tr(key).partition("\t")
         if value == dflt:
             note = (note + " · " if note else "") + tr("sidebar_place_reap_default")
         menu.append((value, label, note, False))
@@ -1401,14 +1402,21 @@ def reap_tag(policy, narrow=False):
     if got is None:
         return ""
     kind, val = got
-    sfx = "_narrow" if narrow else ""
     if kind == "at":
         lt = time.localtime(val)
         when = time.strftime("%H:%M" if time.localtime()[:3] == lt[:3] else "%m-%d %H:%M", lt)
-        return tr("sidebar_reap_at" + sfx, when)
-    if (kind == "merged" and val) or (kind == "done" and val != fleet_reap_policy.DONE_DEFAULT):
-        return tr("sidebar_reap_%s_for%s" % (kind, sfx), _compact(val))
-    return tr("sidebar_reap_" + kind.replace("-", "_") + sfx)
+        return tr("sidebar_reap_at_narrow", when) if narrow else tr("sidebar_reap_at", when)
+    if kind == "merged" and val:
+        return tr("sidebar_reap_merged_for_narrow" if narrow else "sidebar_reap_merged_for", _compact(val))
+    if kind == "done" and val != fleet_reap_policy.DONE_DEFAULT:
+        return tr("sidebar_reap_done_for_narrow" if narrow else "sidebar_reap_done_for", _compact(val))
+    return tr(REAP_WORDS[kind][1 if narrow else 0])
+
+
+REAP_WORDS = {"merged": ("sidebar_reap_merged", "sidebar_reap_merged_narrow"),
+              "done": ("sidebar_reap_done", "sidebar_reap_done_narrow"),
+              "loop-end": ("sidebar_reap_loop_end", "sidebar_reap_loop_end_narrow"),
+              "keep": ("sidebar_reap_keep", "sidebar_reap_keep_narrow")}
 
 
 def fit_reap_tag(policy, room):

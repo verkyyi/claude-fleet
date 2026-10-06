@@ -85,7 +85,13 @@ case "$sub" in
     margs=(); n=0
     for p in merged done:2h loop-end at keep; do
       n=$((n + 1))
-      lbl=$(fleet_ui_t "reap_menu_$(printf '%s' "$p" | tr -c 'a-z' '_')")
+      case "$p" in   # literal keys: fleet-ui-lang-selftest reads them off the code
+        merged) lbl=$(fleet_ui_t reap_menu_merged) ;;
+        done:2h) lbl=$(fleet_ui_t reap_menu_done_2h) ;;
+        loop-end) lbl=$(fleet_ui_t reap_menu_loop_end) ;;
+        at) lbl=$(fleet_ui_t reap_menu_at) ;;
+        *) lbl=$(fleet_ui_t reap_menu_keep) ;;
+      esac
       [ -n "$cur" ] && [ "${cur%%:*}" = "${p%%:*}" ] && lbl="● $lbl"
       if [ "$p" = at ]; then
         cmd="command-prompt -p \"$(fleet_ui_t reap_menu_at_prompt)\" \"$(run 'at:%%')\""
