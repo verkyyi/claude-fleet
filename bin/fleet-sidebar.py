@@ -114,6 +114,81 @@ SHELL = os.environ.get("FLEET_SHELL") == "1"
 STAGE = os.environ.get("FLEET_SHELL_STAGE", "") if SHELL else ""
 
 
+# Switching from anywhere (issue #1903): ⌘↓ ⌘↑ ⌘[ ⌘] and ⌘P (conf/tmux-shell.conf)
+# append verbs to this pane's @sidebar_do and wake it with F12; the history ⌘[ ⌘]
+# walk and the rows ⌘P lists are written here, by the one view that knows them
+# (bin/fleet-quickopen.py names the files). The client's list only — a node's
+# selftest view writes them when FLEET_SWITCH_STATE points somewhere.
+SWITCH_ON = SHELL or bool(os.environ.get("FLEET_SWITCH_STATE"))
+_SWITCH = []
+
+
+def switch_lib():
+    """bin/fleet-quickopen.py as a module, loaded once (its name has a dash)."""
+    if not _SWITCH:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("fleet_quickopen", str(BIN / "fleet-quickopen.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _SWITCH.append(mod)
+    return _SWITCH[0]
+
+
+def switch_visit(row):
+    """The row in view became `row`: one step in the history (a step ⌘[ / ⌘]
+    already stands on moves only its recency)."""
+    if SWITCH_ON and row:
+        lib = switch_lib()
+        lib.save(lib.visit(lib.load(), row))
+
+
+def take_switch(pane):
+    """The verbs queued on @sidebar_do since the last wake, read and cleared in
+    one tmux call — every press a step, none lost to a press racing the read."""
+    return tmux("show-options", "-pqv", "-t", pane, "@sidebar_do", ";",
+                "set-option", "-up", "-t", pane, "@sidebar_do").split()
+
+
+def switch_target(verbs, rows, current, live, session=""):
+    """Where the queued verbs land, read against the live rows: `next` / `prev`
+    the session row below / above (no wrap), `back` / `fwd` the history, `jump=<key>`
+    that row (⌘P's pick — it may sit in a folded subtree). Each verb steps from
+    where the one before it landed. "" = stay. A history entry the list does not
+    paint is looked up once among every session (folded ones too) before it is
+    stepped over as closed."""
+    ids = [key for key in selectable(rows) if acts(key)]
+    live = set(live)
+    unfolded = []
+
+    def alive(key):
+        if key in live:
+            return True
+        if not unfolded:
+            unfolded.append({r["key"] for r in (switch_lib().full_rows(session, timeout=4) or [])})
+        return key in unfolded[0]
+    base, target = current, ""
+    for verb in verbs:
+        nxt = ""
+        if verb in ("next", "prev") and ids and (base in ids or not alive(base)):
+            # from no row at all (nothing picked yet), the first / last; a row
+            # not painted yet — a folded one ⌘P just opened, before the list's
+            # next read — is no place to step from: stay, never the top
+            i = ids.index(base) if base in ids else (-1 if verb == "next" else len(ids))
+            j = i + (1 if verb == "next" else -1)
+            nxt = ids[j] if 0 <= j < len(ids) else ""
+        elif verb in ("back", "fwd") and SWITCH_ON:
+            lib = switch_lib()
+            hist = lib.load()
+            nxt = lib.step(hist, alive, -1 if verb == "back" else 1)
+            if nxt:
+                lib.save(hist)
+        elif verb.startswith("jump="):
+            nxt = acts(verb[5:]) if verb[5:].startswith(("@", "wid:")) else ""
+        if nxt:
+            base = target = nxt
+    return target
+
+
 def stage_remote():
     """`@remote` of the stage's current window — the row the right pane shows."""
     if not STAGE:
@@ -2096,6 +2171,8 @@ def ui(screen, session, worker, lock):
     decoder = codecs.getincrementaldecoder("utf-8")("ignore")
     mark_input(pane, "")
     published = None  # the (window, candidates) last written to @sidebar_next
+    switch_rows = None  # the switch-rows.tsv last written (issue #1903)
+    switch_visit(current_row)
     # The row producer in flight (issue #1033), and whether any run has landed:
     # only the FIRST frame waits for one — every later frame paints the last
     # good rows, so a jump's `▶` moves as soon as the pane has.
@@ -2167,6 +2244,11 @@ def ui(screen, session, worker, lock):
             elif fresh is not None:
                 rows, loaded, frame_at, failure, empty_held, stalled = fresh, True, now, "", False, False
                 remember_folds(rows, fold_cache)
+                if SWITCH_ON:
+                    # what ⌘P lists (issue #1903) — written only on change
+                    text = switch_lib().rows_text(rows)
+                    if text != switch_rows and switch_lib().write_atomic(switch_lib().rows_path(), text):
+                        switch_rows = text
                 # Publish the close-landing candidates for THIS window (issue
                 # #900) — only on change, so an idle view forks nothing extra.
                 # `@sidebar_next_of` pins them to the window they were read
@@ -2263,6 +2345,7 @@ def ui(screen, session, worker, lock):
                     window, current_row, selected = info[4], row, row
                     env["FLEET_SIDEBAR_CURRENT"] = window
                     env["FLEET_SIDEBAR_CURRENT_ROW"] = current_row
+                    switch_visit(current_row)
                 worker = info[5] or worker
                 navigation = info[6] == "fleet-sidebar"
                 route_input(session)
@@ -2303,7 +2386,22 @@ def ui(screen, session, worker, lock):
             if pressed is not None and read_at >= pressed[2]:
                 pressed = None  # read again since, and still hidden: not ours
             screen.timeout(max(1, min(1000, int((refresh_at - time.monotonic()) * 1000))))
-            if screen.getch() == curses.KEY_MOUSE and pressed is None:
+            key = screen.getch()
+            if key == curses.KEY_F12:
+                # ⌘P's pick lands while its popup still covers this view, and ⌘↓
+                # may come with the session zoomed (issue #1903): a hidden view
+                # still switches for the queue — never for a stray key.
+                todo = take_switch(pane)
+                if todo and spawning is None:
+                    base = rows if view == "live" else live_rows
+                    nxt = switch_target(todo, base, current_row, sessions(base), session)
+                    if nxt and nxt != current_row:
+                        if view != "live":
+                            view, rows = "live", live_rows
+                        selected, refresh_at = nxt, 0
+                        jump(session, nxt, pane, lock)
+                continue
+            if key == curses.KEY_MOUSE and pressed is None:
                 # tmux sends a press only to a pane on screen: this view was
                 # read as hidden before it moved into view. Read now, then act.
                 event = held_press()
@@ -2583,6 +2681,17 @@ def ui(screen, session, worker, lock):
                     follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
             continue
         if key == curses.KEY_F12:
+            # ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P (issue #1903): the verbs queued on @sidebar_do since
+            # the last wake, read and cleared in one tmux call — every press a step.
+            todo = take_switch(pane)
+            if todo and spawning is None:
+                if view != "live":
+                    view, rows, selected = "live", live_rows, current_row
+                nxt = switch_target(todo, rows, current_row, sessions(rows), session)
+                if nxt and nxt != current_row:
+                    selected, follow_at, refresh_at = nxt, None, 0
+                    if not jump(session, nxt, pane, lock):
+                        follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
             # A menu item that asks here (issue #1620): it parked
             # `<kind> <arg>…` in @sidebar_ask on this pane (a rename: the row's
             # @id in @sidebar_rename, as since #898), switched the client to the

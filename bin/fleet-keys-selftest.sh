@@ -25,6 +25,9 @@
 #      below). Pinned to the stock C-b prefix so it is deterministic anywhere;
 #      one extra render under a C-s prefix checks the sheet shows the remap.
 #
+#  10. The switch keys (issue #1903): dash-keymap.sh --panel switch ⇄ the conf's
+#      user-keys + User<code> binds + prefix keys ⇄ the sheet ⇄ the iTerm2 profile.
+#
 #   9. The recovery page's keys (bin/fleet-session-page.py, issue #1862): ↵ / r / q
 #      always, and p (reopen without the personal layer) only when the login has
 #      one — the keys row and choice() agree, and with no personal layer the row
@@ -445,6 +448,76 @@ EOF
   ktm shell list-keys -T fleet-sidebar | grep -q . || fail "8: the client has no fleet-sidebar key table"
   ktm stock kill-server; ktm node kill-server; ktm shell kill-server
   rm -rf "$KW"
+fi
+
+# --- 10. the switch keys: table ⇄ conf ⇄ sheet ⇄ iTerm2 profile (issue #1903) --
+# `dash-keymap.sh --panel switch` is the one table. Every row: the conf catches its
+# private code (`user-keys[<code>] "\e[<code>~"` + `bind -n User<code>`) and binds
+# its prefix key (F9: a root key) to the SAME body — prefix h alone adds a branch
+# for no list on screen; the sheet's 切会话 group lists the prefix key with the ⌘
+# glyph; the profile fleet-iterm-profile.py writes sends exactly `ESC [<code>~` for
+# the ⌘ chord. On the client server of leg 8's kind the codes are live.
+sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --panel switch list exited non-zero"
+[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 8 ] || fail "10: the switch table is not the 8 actions of #1903: $sw_table"
+[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd needs zoom help quickopen " ] \
+  || fail "10: the switch actions are not next prev back fwd needs zoom help quickopen"
+sw_block="$(printf '%s\n' "$FULL_SHEET" | awk '/^switch sessions /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
+[ -n "$sw_block" ] || fail "10: the full sheet has no 'switch sessions' group"
+body_of() {   # the body of the conf's bind for key $2 in table $1 (root / prefix)
+  awk -v t="$1" -v k="$2" '
+    t == "root"   && $1 == "bind" && $2 == "-n" && $3 == k { sub(/^bind -n [^ ]+ /, ""); print; exit }
+    t == "prefix" && $1 == "bind" && $2 == k             { sub(/^bind [^ ]+ /, ""); print; exit }' "$CONF"
+}
+SW_PROF=$(mktemp -d "${TMPDIR:-/tmp}/fkeys-iterm.XXXXXX") || fail "10: mktemp"
+FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE= python3 "$BIN/fleet-iterm-profile.py" write \
+  || fail "10: fleet-iterm-profile.py write exited non-zero"
+[ -f "$SW_PROF/fleet.json" ] || fail "10: fleet-iterm-profile.py wrote no fleet.json"
+while read -r sa sg sk sc sp; do
+  [ -n "$sa" ] || continue
+  grep -Fxq "set -s user-keys[$sc] \"\\e[$sc~\"" "$CONF" || fail "10: $sa: the conf does not catch its code ($sc) as user-keys[$sc]"
+  ub=$(body_of root "User$sc"); [ -n "$ub" ] || fail "10: $sa: the conf has no 'bind -n User$sc'"
+  case "$sp" in F[0-9]*) pb=$(body_of root "$sp") ;; *) pb=$(body_of prefix "$sp") ;; esac
+  [ -n "$pb" ] || fail "10: $sa: its prefix key '$sp' is not bound in the conf"
+  if [ "$sa" = back ]; then
+    case "$pb" in "${ub% \}}"*) ;; *) fail "10: back: prefix h does not run ⌘['s body first: $pb" ;; esac
+  else
+    [ "$ub" = "$pb" ] || fail "10: $sa: ⌘ (User$sc) and '$sp' run different bodies:
+  $ub
+  $pb"
+  fi
+  case "$sp" in F[0-9]*) row="  $sp" ;; *) row="  prefix $sp" ;; esac
+  grep -F "$row " <<< "$sw_block" | grep -qF " $sg " || fail "10: $sa: the sheet has no '$row … $sg' row"
+  case "$sk" in 0x[0-9a-f]*-0x[0-9a-f]*) ;; *) fail "10: $sa: '$sk' is not an iTerm2 key spec" ;; esac
+  [ $(( $(printf '%d' "${sk#*-}") & 0x100000 )) -ne 0 ] || fail "10: $sa: '$sk' carries no ⌘"
+  python3 - "$SW_PROF/fleet.json" "$sk" "$sc" <<'PY' || fail "10: $sa: the profile does not send ESC [$sc~ for $sk"
+import json, sys
+p = json.load(open(sys.argv[1]))["Profiles"][0]
+assert p["Name"] == "fleet" and p["Guid"]
+m = p["Keyboard Map"][sys.argv[2]]
+assert m == {"Action": 10, "Text": "[%s~" % sys.argv[3]}, m
+PY
+done <<EOF
+$sw_table
+EOF
+[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 8 ] \
+  || fail "10: the profile maps keys beyond the table (no parent map to keep here)"
+FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_KEYS=0 python3 "$BIN/fleet-iterm-profile.py" write
+[ -f "$SW_PROF/fleet.json" ] && fail "10: FLEET_ITERM_KEYS=0 left the profile in place"
+rm -rf "$SW_PROF"
+if command -v tmux >/dev/null 2>&1; then
+  KW=$(mktemp -d "${TMPDIR:-/tmp}/fkeys.XXXXXX") || fail "10: mktemp"
+  sed -e "s#__BIN__#$BIN#g" -e 's#__PREFIX__#C-b#g' "$CONF" > "$KW/shell.conf"
+  HOME="$KW" tmux -S "$KW/s" -f /dev/null new-session -d -s k -x 120 -y 30 || fail "10: tmux did not start"
+  HOME="$KW" tmux -S "$KW/s" source-file "$KW/shell.conf" || fail "10: the client conf failed to source"
+  uk=$(HOME="$KW" tmux -S "$KW/s" show-options -s user-keys); rk=$(HOME="$KW" tmux -S "$KW/s" list-keys -T root)
+  HOME="$KW" tmux -S "$KW/s" kill-server; rm -rf "$KW"
+  while read -r sa _ _ sc _; do
+    [ -n "$sa" ] || continue
+    grep -Fq "user-keys[$sc] \\033[$sc~" <<< "$uk" || fail "10: $sa: user-keys[$sc] is not live on the client server: $uk"
+    awk -v k="User$sc" '$4 == k' <<< "$rk" | grep -q . || fail "10: $sa: User$sc is not bound on the client server"
+  done <<EOF
+$sw_table
+EOF
 fi
 
 # 9 — the recovery page's keys (issue #1862)

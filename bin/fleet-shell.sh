@@ -397,6 +397,27 @@ stamp_ver() {
   [ -n "$v" ] && T set-option -g @client_version "$v" 2>/dev/null
   return 0
 }
+# iterm_keys — the iTerm2 profile `fleet` (issue #1903): its ⌘ chords send the
+# switch codes conf/tmux-shell.conf catches. Written (only when it changed) at
+# every start and reload, so the install line and each update leave it current;
+# nothing at all off a Mac with iTerm2 (bin/fleet-iterm-profile.py).
+iterm_keys() { python3 "$SHADOW/fleet-iterm-profile.py" write >/dev/null 2>&1 || :; }
+# attach_client — the attach, exec'd as always; in an iTerm2 window, with the
+# profile there, the window wears it while attached and goes back to the profile
+# it came from after the detach — outside the client iTerm2 is as it was.
+attach_client() {
+  local back="${ITERM_PROFILE:-}" rc
+  if [ -n "$back" ] && [ "$back" != fleet ] && [ "${FLEET_ITERM_KEYS:-1}" != 0 ] \
+     && { [ "${TERM_PROGRAM:-}" = iTerm.app ] || [ "${LC_TERMINAL:-}" = iTerm2 ]; } \
+     && [ -f "${FLEET_ITERM_DIR:-$HOME/Library/Application Support/iTerm2/DynamicProfiles}/fleet.json" ] \
+     && { : > /dev/tty; } 2>/dev/null; then
+    printf '\033]1337;SetProfile=fleet\007' > /dev/tty
+    tmux -L "$SESS" attach-session -t "=$SESS"; rc=$?
+    printf '\033]1337;SetProfile=%s\007' "$back" > /dev/tty
+    exit "$rc"
+  fi
+  exec tmux -L "$SESS" attach-session -t "=$SESS"
+}
 # write_conf — conf/tmux-shell.conf (the shell's server) and conf/tmux-shell-stage.conf
 # (the stage's, issue #1759) with the paths filled + the environment
 write_conf() {
@@ -736,6 +757,7 @@ reload)
     || FLEET_NODE_ALIASES=$(T show-environment -g FLEET_NODE_ALIASES 2>/dev/null | sed -n 's/^FLEET_NODE_ALIASES=//p')
   shell_env ''
   write_conf || exit 1
+  iterm_keys
   T source-file "$CACHE/tmux.conf" || exit 1
   if TS has-session -t "=$STAGE" 2>/dev/null; then
     TS source-file "$CACHE/tmux-stage.conf" || exit 1
@@ -806,6 +828,7 @@ mirror || exit 1
 shell_env "$pick"
 if [ "$mode" = env ]; then printf '%s\n' "$SHELL_ENV"; exit 0; fi
 export_env
+iterm_keys
 
 # team_check — the hub's team layer (issue #1726, EPIC #1718 C8): its version
 # moved since the last start → composed again (fleet default < team < local), in
@@ -864,7 +887,7 @@ if T has-session -t "=$SESS" 2>/dev/null; then
   ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
   ( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
   client_where
-  exec tmux -L "$SESS" attach-session -t "=$SESS"
+  attach_client
 fi
 
 # 3. the servers: conf (keys, hooks, bar, environment); the stage with the first
@@ -906,4 +929,4 @@ client_open
 ( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
 client_where
 [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
-exec tmux -L "$SESS" attach-session -t "=$SESS"
+attach_client
