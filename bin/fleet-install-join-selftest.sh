@@ -1,19 +1,23 @@
 #!/bin/bash
-# fleet-install-join-selftest.sh — the install line joins the hub as a node
-# that only coordinates (issue #1719, EPIC #1718 C1): bin/fleet-install.sh, as
-# the hub serves it, against ONE fake hub (stdlib python3 on 127.0.0.1) that
-# serves /install/*, the device flow (/v1/fleet/login/start + poll, purpose=node
-# answered with a node pass and the machine list), the node endpoints
-# (/v1/node/dist, /v1/node/self) and /v1/node/peer-cert. HOME is a sandbox; the
+# fleet-install-join-selftest.sh — the install line + ONE `fleet login` make
+# this computer a node that only coordinates (issue #1719, EPIC #1718 C1; 登录
+# 即登记, issue #2212): bin/fleet-install.sh, as the hub serves it, against ONE
+# fake hub (stdlib python3 on 127.0.0.1) that serves /install/*, the device flow
+# (/v1/fleet/login/start + poll with the machine list), the login's node pass
+# (/v1/fleet/login/node), the node endpoints (/v1/node/dist, /v1/node/self,
+# /v1/node/leave) and /v1/node/peer-cert. HOME is a sandbox; the
 # agent is a stub run --service detached (the FLEET_NODE_JOIN_ARGS seam, never
 # launchd from a test) and killed by its pid file; `fleet` itself is not run
 # (FLEET_INSTALL_NO_RUN=1).
 #
 # What it pins (the issue's 完成判据, selftest half):
-#   A. one line   the install exits 0 and, in the same run, the computer is a
-#                 node: ONE scan (purpose=node), node.env 0600 with the pass,
-#                 CCQUOTA_FLEET_COMPUTE=0 and no CCQUOTA_FLEET_ADMIN; the agent
-#                 checked in; the output says 只协调
+#   A. one scan   the install exits 0 with no scan and says the login will
+#                 register it; then `fleet login`: ONE scan (a plain login, no
+#                 purpose=node), the node pass by the device key
+#                 (/v1/fleet/login/node, signed), node.env 0600 with the pass,
+#                 CCQUOTA_FLEET_COMPUTE=0, CCQUOTA_FLEET_PERSONAL=1 and no
+#                 CCQUOTA_FLEET_ADMIN; the agent checked in; the output says
+#                 随登录登记 + 不可信 · 只协调
 #   B. ssh        ~/.ssh/fleet-ssh-config carries a Match per OTHER machine
 #                 (m4 = mini2 on the hub, s9 = spare9; never this one) that runs the INSTALLED
 #                 fleet-peer-cert.sh with the hub's hostname; peer/machines lists
@@ -29,7 +33,11 @@
 #                 unchanged
 #   E. no node    --no-node: no scan, no node.env (the degenerate case)
 #   F. no tty     stderr not a terminal (CI, a log): no scan, no wait — the
-#                 line says to run `fleet node join` later
+#                 same line: the login registers it
+#   G. old login  logged in, node.env gone: `fleet node ensure` takes the pass
+#                 again by the device key — no scan, the same hub endpoint asked
+#   H. logout     `fleet logout`: the node leaves the hub (/v1/node/leave),
+#                 node.env, the certificate and the device key are gone
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-join-st.XXXXXX") || exit 2
@@ -75,7 +83,7 @@ BIN = open(os.path.join(W, "ccquota"), "rb").read()
 TOKEN = "ccq_nodepass0123456789abcdefXYZ"
 names = [l.split()[0] for l in open(MAN) if l.strip() and not l.lstrip().startswith("#")
          and not (len(l.split()) > 1 and l.split()[1] == "installer")]
-state = {"starts": 0, "polls": {}, "online": False, "codes": {}, "peer": []}
+state = {"starts": 0, "polls": {}, "online": False, "codes": {}, "peer": [], "lnode": [], "left": 0}
 def save(): json.dump(state, open(os.path.join(W, "state.json"), "w"))
 save()
 class H(BaseHTTPRequestHandler):
@@ -107,6 +115,18 @@ class H(BaseHTTPRequestHandler):
                 res["node"] = {"endpoint_id": "ep_1", "label": st["device_name"] + "-" + st["os_user"], "token": TOKEN,
                     "hub": "x", "admin": False, "dist": ["darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"], "kind": "fixed"}
             return self.reply(200, res)
+        if self.path == "/v1/fleet/login/node":
+            # 登录即登记 (#2212): the device key's signature buys the pass
+            if not (body.get("public_key", "").startswith("ssh-ed25519 ") and "SSH SIGNATURE" in body.get("sig", "")):
+                return self.reply(401, {"error": "bad signature", "code": "bad_signature"})
+            state["lnode"].append({"hostname": body.get("hostname"), "os_user": body.get("os_user")}); save()
+            return self.reply(200, {"endpoint_id": "ep_1", "label": body["hostname"] + "-" + body["os_user"], "token": TOKEN,
+                "hub": "x", "admin": False, "dist": ["darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"], "kind": "fixed"})
+        if self.path == "/v1/node/leave":
+            if self.headers.get("Authorization") != "Bearer " + TOKEN:
+                return self.reply(401, {"error": "unrecognised enrollment token"})
+            state["left"] += 1; save()
+            return self.reply(200, {"endpoint_id": "ep_1", "removed": True})
         if self.path == "/v1/node/peer-cert":
             if self.headers.get("Authorization") != "Bearer " + TOKEN:
                 return self.reply(401, {"error": "unrecognised enrollment token"})
@@ -175,22 +195,38 @@ Host macbook
 EOF
 cp "$H1/.ssh/config" "$WORK/config.orig"
 
-# ── A. one line ─────────────────────────────────────────────────────────────
+# login_in <home> [args…] — `fleet login` (or another `fleet` command) in that sandbox
+fleet_in() {
+  local h="$WORK/$1"; shift
+  HOME="$h" XDG_CONFIG_HOME="$h/.config" FLEET_CONF_DIR="$h/.config/claude-fleet" FLEET_JOIN_POLL=1 FLEET_JOIN_SUDO="" \
+    FLEET_NODE_JOIN_ARGS="--service detached --wait 15" FLEET_PROBE_CURL=false FLEET_PROBE_PMSET=false \
+    "$h/.claude/fleet/bin/fleet" "$@" </dev/null >"$WORK/out" 2>&1
+  echo $? >"$WORK/rc"
+}
+
+# ── A. one scan ─────────────────────────────────────────────────────────────
 install_in h1
 CONF="$H1/.config/claude-fleet"
 ROOT="$H1/.claude/fleet"   # the one fleet directory (#1804)
 ENVF="$CONF/node.env"
 [ "$(cat "$WORK/rc")" = 0 ] && ok "A install exit 0" || bad "A install rc=$(cat "$WORK/rc"): $(cat "$WORK/out")"
-[ "$(hubstate starts)" = 1 ] && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if s["codes"]["dc1"]["purpose"]=="node" else 1)' "$WORK/state.json" \
-  && ok "A one scan, purpose=node" || bad "A scans: $(cat "$WORK/state.json")"
+if [ "$(hubstate starts)" = 0 ] && [ ! -e "$ENVF" ] && grep -q '入口: 登录（fleet login，扫一次码）时自动登记' "$WORK/out"; then
+  ok "A the install scans nothing — the login will register it"
+else bad "A install: starts=$(hubstate starts): $(cat "$WORK/out")"; fi
+fleet_in h1 login
+[ "$(cat "$WORK/rc")" = 0 ] && ok "A fleet login exit 0" || bad "A fleet login rc=$(cat "$WORK/rc"): $(cat "$WORK/out")"
+[ "$(hubstate starts)" = 1 ] && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if not s["codes"]["dc1"].get("purpose") else 1)' "$WORK/state.json" \
+  && ok "A one scan, a plain login" || bad "A scans: $(cat "$WORK/state.json")"
+python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if len(s["lnode"]) == 1 and s["lnode"][0]["hostname"] and s["lnode"][0]["os_user"] else 1)' "$WORK/state.json" \
+  && ok "A the node pass by the device key (signed, one ask)" || bad "A login-node asks: $(cat "$WORK/state.json")"
 mode=$(python3 -c 'import os,sys;print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$ENVF" 2>/dev/null)
 if [ "$mode" = 600 ] && grep -qx 'CCQUOTA_TOKEN=ccq_nodepass0123456789abcdefXYZ' "$ENVF" && grep -qx "CCQUOTA_HUB_URL=$HUB" "$ENVF" \
-   && grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$ENVF" && ! grep -q 'CCQUOTA_FLEET_ADMIN' "$ENVF"; then
-  ok "A node.env (0600): the pass, CCQUOTA_FLEET_COMPUTE=0, no admin"
+   && grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$ENVF" && grep -qx 'CCQUOTA_FLEET_PERSONAL=1' "$ENVF" && ! grep -q 'CCQUOTA_FLEET_ADMIN' "$ENVF"; then
+  ok "A node.env (0600): the pass, COMPUTE=0, PERSONAL=1, no admin"
 else bad "A node.env mode=$mode: $(sed 's/TOKEN=.*/TOKEN=…/' "$ENVF" 2>/dev/null)"; fi
-[ "$(hubstate online)" = True ] && ok "A the agent checked in" || bad "A the agent never checked in: $(cat "$WORK/out")"
-grep -q '✓ 只协调' "$WORK/out" && grep -q '✓ 已登记到入口' "$WORK/out" && ok "A the output says 已登记 + 只协调" || bad "A output: $(cat "$WORK/out")"
-grep -q 'ccq_nodepass' "$WORK/out" && bad "A the token was printed" || ok "A the token is never printed"
+[ "$(hubstate online)" = True ] && ok "A the agent checked in" || bad "A the agent never checked in: $(cat "$CONF/node-join.log" 2>/dev/null)"
+grep -q '随登录登记为节点（不可信 · 只协调' "$WORK/out" && ok "A the output says 随登录登记 · 不可信 · 只协调" || bad "A output: $(cat "$WORK/out")"
+grep -q 'ccq_nodepass' "$WORK/out" "$CONF/node-join.log" && bad "A the token was printed" || ok "A the token is never printed"
 
 # ── B. ssh ──────────────────────────────────────────────────────────────────
 SNIP="$H1/.ssh/fleet-ssh-config"
@@ -244,8 +280,8 @@ else bad "D rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")";
 # output to a file and no FORCE: nobody could scan, so no join — one line instead
 FORCE='' install_in h3
 if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && [ ! -e "$WORK/h3/.config/claude-fleet/node.env" ] \
-   && grep -q '入口: 这里没有终端可显示二维码' "$WORK/out"; then
-  ok "F no terminal: no scan, no wait, the fleet node join line"
+   && grep -q '入口: 登录（fleet login，扫一次码）时自动登记' "$WORK/out"; then
+  ok "F no terminal: no scan, no wait, the login-registers line"
 else bad "F rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 
 # ── E. no node ──────────────────────────────────────────────────────────────
@@ -254,6 +290,30 @@ if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && [ ! -e "$WORK/
    && ! grep -q '入口:' "$WORK/out"; then
   ok "E --no-node: no scan, no node.env"
 else bad "E rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
+
+# ── G. an old login with no node.env ────────────────────────────────────────
+kill "$(cat "$H1/.ccquota/agent.pid")" 2>/dev/null
+rm -f "$ENVF"
+fleet_in h1 node ensure
+if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && grep -qx 'CCQUOTA_TOKEN=ccq_nodepass0123456789abcdefXYZ' "$ENVF" \
+   && python3 -c 'import json,sys; sys.exit(0 if len(json.load(open(sys.argv[1]))["lnode"]) == 2 else 1)' "$WORK/state.json" \
+   && [ ! -s "$WORK/out" ]; then
+  ok "G logged in, no node.env: fleet node ensure takes the pass again — no scan, no output"
+else bad "G rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
+# a token already there is never replaced from here
+fleet_in h1 node ensure
+python3 -c 'import json,sys; sys.exit(0 if len(json.load(open(sys.argv[1]))["lnode"]) == 2 else 1)' "$WORK/state.json" \
+  && ok "G a node.env with a token: ensure asks nothing" || bad "G ensure asked again: $(cat "$WORK/state.json")"
+
+# ── H. logout ───────────────────────────────────────────────────────────────
+fleet_in h1 logout
+if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate left)" = 1 ] && [ ! -e "$ENVF" ] && [ ! -e "$H1/.ssh/fleet-cert-cert.pub" ] \
+   && [ ! -e "$H1/.ssh/fleet-cert" ]; then
+  ok "H fleet logout: the node left, node.env + certificate + device key gone"
+else bad "H rc=$(cat "$WORK/rc") left=$(hubstate left): $(cat "$WORK/out")"; fi
+# without a login, ensure does nothing (exit 3) and asks nothing
+fleet_in h1 node ensure
+[ "$(cat "$WORK/rc")" = 3 ] && [ ! -e "$ENVF" ] && ok "H signed out: ensure does nothing (3)" || bad "H ensure rc=$(cat "$WORK/rc")"
 
 [ "$fail" = 0 ] && echo "PASS fleet-install-join-selftest" || echo "FAIL fleet-install-join-selftest"
 exit "$fail"

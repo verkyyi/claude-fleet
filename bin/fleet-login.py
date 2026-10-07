@@ -7,6 +7,7 @@
     fleet login check
     fleet login hub [--hub URL]                  print the hub URL it would use
     fleet login node --out FILE [--hub URL] [--invert]
+    fleet login node-pass --out FILE [--hub URL] [--quiet]
 
 `bin/fleet` dispatches `fleet login` here. Logging in (claude-fleet#1412) is the device-code flow against the fleet hub
 (tokenledger, CCQUOTA_FLEET=1):
@@ -52,6 +53,16 @@ start, QR, page and poll, with purpose=node — the page reads 「把 <机器名
 certificate. The pass (the hub's NodeJoinResponse JSON, a credential) goes to
 FILE (0600) for fleet-node-join.sh --joined; it is never printed.
 
+`node-pass` is 登录即登记 (claude-fleet#2212): no scan. A computer this login
+already registered (the scan above) signs a timestamp with its device key and
+POSTs it to <hub>/v1/fleet/login/node; the hub answers the device's node pass —
+enrolled the first time as an untrusted, coordinate-only node, the same node
+with a fresh token after (never a second one). The pass goes to FILE (0600),
+for fleet-node-join.sh --joined, never printed. Exit 0 written · 3 this device
+must scan (`fleet login`) first · 4 the hub offers no such door (an older hub)
+or refuses this name (a machine it trusts already has it) — scan instead with
+`fleet node join` · 1 anything else.
+
 `check` prints the certificate's state (valid <seconds left> · expired · none)
 and exits 0 only while it is valid. `status` is `ssh-keygen -L` on it.
 
@@ -96,6 +107,11 @@ INCLUDE_BEGIN = "# >>> fleet login (claude-fleet#1412) >>>"
 INCLUDE_END = "# <<< fleet login <<<"
 RENEW_PATH = "/v1/fleet/login/renew"
 RENEW_NAMESPACE = "fleet-renew@claude-fleet"
+# 登录即登记 (claude-fleet#2212): the device key buys the node pass.
+LOGIN_NODE_PATH = "/v1/fleet/login/node"
+LOGIN_NODE_NAMESPACE = "fleet-login-node@claude-fleet"
+# Exit code: the hub has no login-node door (or refuses the name) — scan instead.
+NO_DOOR = 4
 # The renewal's check (claude-fleet#2112): the client lease, as fleet-client-lease.py asks it.
 CLIENT_PATH = "/v1/fleet/client"
 CLIENT_NAMESPACE = "fleet-client@claude-fleet"
@@ -459,6 +475,77 @@ def renew(hub, quiet=False, include=True):
     return 1
 
 
+def node_pass(hub, out, quiet=False):
+    """The device's node pass by its key (claude-fleet#2212), written to out.
+    0 written · NEEDS_SCAN · NO_DOOR · 1 anything else."""
+    say = (lambda *_: None) if quiet else (lambda m: print("fleet login: " + m, file=sys.stderr))
+    if not (os.path.exists(KEY) and os.path.exists(KEY + ".pub")):
+        say("no device key yet (%s) — run: fleet login" % KEY)
+        return NEEDS_SCAN
+    with open(KEY + ".pub") as f:
+        pub = f.read().strip()
+    ts = int(time.time())
+    try:
+        sig = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", KEY, "-n", LOGIN_NODE_NAMESPACE],
+                             input=("fleet-login-node %d" % ts).encode(), capture_output=True, check=True).stdout.decode()
+    except (OSError, subprocess.CalledProcessError) as e:
+        say("ssh-keygen -Y sign failed: %s" % e)
+        return 1
+    try:
+        code, res = post(hub + LOGIN_NODE_PATH, {"public_key": pub, "ts": ts, "sig": sig,
+                                                 "hostname": device_name(), "os_user": getpass.getuser()})
+    except (urllib.error.URLError, OSError) as e:
+        say("hub unreachable (%s)" % getattr(e, "reason", e))
+        return 1
+    if code == 200 and res.get("token"):
+        # compact, as the hub writes it: fleet-node-join.sh reads it with sed
+        write_file(out, json.dumps(res, separators=(",", ":")) + "\n", 0o600)
+        return 0
+    why = res.get("error", "HTTP %d" % code)
+    rc = res.get("code")
+    if rc in ("unknown_device", "device_revoked", "device_idle", "no_account"):
+        say("需要先登录：%s（fleet login）" % why)
+        return NEEDS_SCAN
+    if rc == "trusted_name" or code in (404, 405):
+        say("入口不发登录通行证（%s）— 改用扫码：fleet node join" % why)
+        return NO_DOOR
+    say("没拿到节点通行证（HTTP %d）：%s" % (code, why))
+    return 1
+
+
+def ensure_node(hub):
+    """登录即登记 (claude-fleet#2212): after a login, this computer's node pass,
+    silently — `fleet node ensure` (no scan, never fails the login)."""
+    sh = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-node.sh")
+    if not os.path.exists(sh):
+        return False
+    try:
+        r = subprocess.run(["bash", sh, "ensure", "--hub", hub], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+        return r.returncode == 0 and os.path.exists(NODE_ENV)
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def cmd_node_pass(argv):
+    hub_arg, out, quiet = "", "", False
+    it = iter(argv)
+    for a in it:
+        if a == "--hub":
+            hub_arg = next(it, "")
+        elif a.startswith("--hub="):
+            hub_arg = a.split("=", 1)[1]
+        elif a == "--out":
+            out = next(it, "")
+        elif a == "--quiet":
+            quiet = True
+        else:
+            die("node-pass: unknown option %s" % a)
+    if not out:
+        die("node-pass: --out FILE is required")
+    return node_pass(hub_url(hub_arg), out, quiet)
+
+
 def parse_scan_opts(argv, node=False):
     hub_arg, invert, include, out = "", False, True, ""
     it = iter(argv)
@@ -528,13 +615,23 @@ def scan(hub, invert, purpose=""):
 
 def cmd_login(argv):
     hub_arg, invert, include, _ = parse_scan_opts(argv)
-    res = scan(hub_url(hub_arg), invert)
+    hub = hub_url(hub_arg)
+    res = scan(hub, invert)
+    was_node = os.path.exists(NODE_ENV)
+    # 登录即登记 (claude-fleet#2212): the same confirmation makes it a node —
+    # before the snippet is written, so it carries a node's machine-to-machine
+    # blocks the first time. The certificate goes first: it is what says
+    # "logged in" to `fleet node ensure`.
+    write_file(CERT, res["certificate"], 0o644)
+    ensure_node(hub)
     added = write_cert(res, include)
     show("✓ 证书已写入 %s（%s 前有效，账号 %s）" % (CERT, res["valid_before"], ",".join(res["principals"])))
     show("✓ ssh 配置 %s%s" % (SSH_CONFIG_SNIPPET, "（已在 ~/.ssh/config 末尾 Include）" if added else ""))
     for n in NOTES:
         show(n)
     show("✓ 这台电脑已登记为设备：之后 fleet 自动续证书，连续 7 天不用才需再扫")
+    if os.path.exists(NODE_ENV) and not was_node:
+        show("✓ 也已随登录登记为节点（不可信 · 只协调；可信只在入口 /nodes 设）")
     hosts = [l.split()[1] for l in res["ssh_config"].splitlines() if l.startswith("Host ")]
     if hosts:
         show("  现在可以：fleet（或 ssh %s）" % hosts[0])
@@ -602,6 +699,12 @@ def cmd_status(_argv):
     if not os.path.exists(CERT):
         print("no certificate (%s) — run: fleet login" % CERT)
         return 1
+    # 登录即登记 (claude-fleet#2212): a computer logged in before it, with no
+    # node.env yet, gets its node pass here — silently, no scan.
+    if not os.path.exists(NODE_ENV):
+        hub = os.environ.get("FLEET_HUB_URL", "") or machine_conf_hub() or str(read_hub_file().get("url") or "")
+        if hub.startswith(("https://", "http://")):
+            ensure_node(hub.rstrip("/"))
     out = subprocess.run(["ssh-keygen", "-L", "-f", CERT], capture_output=True, text=True)
     sys.stdout.write(out.stdout or out.stderr)
     return out.returncode
@@ -631,6 +734,8 @@ def main(argv):
         return cmd_renew(argv[1:])
     if argv and argv[0] == "node":
         return cmd_node(argv[1:])
+    if argv and argv[0] == "node-pass":
+        return cmd_node_pass(argv[1:])
     if argv and argv[0] == "hub":
         return cmd_hub(argv[1:])
     if argv and argv[0] == "login":  # `fleet-login.py login …` reads naturally too

@@ -146,25 +146,8 @@ func (s *Server) handleDeviceRenew(w http.ResponseWriter, r *http.Request) {
 	}
 	// The signature is good: whoever sent this holds the private key. From
 	// here every refusal is about the DEVICE, and is audited as such.
-	dev, err := s.Store.Device(fp)
-	switch {
-	case errors.Is(err, store.ErrNoDevice):
-		s.deviceAudit(store.DeviceRenewRefused, fp, "", "", "unknown device", now)
-		refuseJSON(w, http.StatusNotFound, "unknown_device", "this computer is not registered — scan to sign in")
-		return
-	case err != nil:
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	case dev.Revoked():
-		s.deviceAudit(store.DeviceRenewRefused, fp, dev.PrincipalID, dev.PrincipalID,
-			fmt.Sprintf("revoked %s by %s", dev.RevokedAt.UTC().Format(time.RFC3339), dev.RevokedBy), now)
-		refuseJSON(w, http.StatusForbidden, "device_revoked", "this device was revoked — scan to sign in again")
-		return
-	case now.Sub(dev.LastUsedAt) > DeviceIdle:
-		s.deviceAudit(store.DeviceRenewRefused, fp, dev.PrincipalID, dev.PrincipalID,
-			fmt.Sprintf("idle since %s (> %s)", dev.LastUsedAt.UTC().Format(time.RFC3339), DeviceIdle), now)
-		refuseJSON(w, http.StatusForbidden, "device_idle",
-			fmt.Sprintf("this device has not been used for %d days — scan to sign in again", int(DeviceIdle.Hours()/24)))
+	dev, ok := s.usableDevice(w, fp, store.DeviceRenewRefused, now)
+	if !ok {
 		return
 	}
 	resp, err := s.issueCert(r, dev.PrincipalID, req.PublicKey, "renew")
@@ -188,6 +171,36 @@ func (s *Server) handleDeviceRenew(w http.ResponseWriter, r *http.Request) {
 		"serial "+resp.Serial+", until "+resp.ValidBefore.UTC().Format(time.RFC3339), now)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// usableDevice reads the device behind a verified signature and refuses (and
+// audits under refusedAction) one that cannot act without a scan: unknown,
+// revoked, or idle past DeviceIdle. The refusal is written to w.
+//
+//	404 unknown_device · 403 device_revoked · 403 device_idle
+func (s *Server) usableDevice(w http.ResponseWriter, fp, refusedAction string, now time.Time) (*store.FleetDevice, bool) {
+	dev, err := s.Store.Device(fp)
+	switch {
+	case errors.Is(err, store.ErrNoDevice):
+		s.deviceAudit(refusedAction, fp, "", "", "unknown device", now)
+		refuseJSON(w, http.StatusNotFound, "unknown_device", "this computer is not registered — scan to sign in")
+		return nil, false
+	case err != nil:
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return nil, false
+	case dev.Revoked():
+		s.deviceAudit(refusedAction, fp, dev.PrincipalID, dev.PrincipalID,
+			fmt.Sprintf("revoked %s by %s", dev.RevokedAt.UTC().Format(time.RFC3339), dev.RevokedBy), now)
+		refuseJSON(w, http.StatusForbidden, "device_revoked", "this device was revoked — scan to sign in again")
+		return nil, false
+	case now.Sub(dev.LastUsedAt) > DeviceIdle:
+		s.deviceAudit(refusedAction, fp, dev.PrincipalID, dev.PrincipalID,
+			fmt.Sprintf("idle since %s (> %s)", dev.LastUsedAt.UTC().Format(time.RFC3339), DeviceIdle), now)
+		refuseJSON(w, http.StatusForbidden, "device_idle",
+			fmt.Sprintf("this device has not been used for %d days — scan to sign in again", int(DeviceIdle.Hours()/24)))
+		return nil, false
+	}
+	return dev, true
 }
 
 // deviceOfCert names the device behind a connection certificate: the

@@ -22,6 +22,20 @@
 #       fleet-node-join.sh as they are — the install line (fleet-install.sh)
 #       joins with all three: the client is already there, and a laptop needs
 #       no Homebrew packages and runs no account ops.
+#       登录即登记 (issue #2212): a computer `fleet login` already registered
+#       is never scanned twice — the join asks for its node pass with the device
+#       key (`fleet-login.py node-pass`); the QR appears only when that road is
+#       not open (never logged in, an older hub, a name the hub trusts).
+#   fleet node ensure [--hub URL]
+#       The silent half of 登录即登记 (issue #2212): `fleet login`, `fleet login
+#       status`, `fleet run` and the client shell's start run it. When node.env
+#       holds no token for the hub and this computer is logged in, it takes the
+#       node pass by the device key and joins coordinate-only (--no-fleet
+#       --no-deps --no-admin; a first node.env gets COMPUTE=0 and PERSONAL=1) —
+#       no scan, no output (the detail in node-join.log). A token already there
+#       is never replaced, even one the hub refuses (that is `fleet node join`'s).
+#       No hub ⇒ nothing. Exit 0 a token is in node.env · 2 no hub · 3 not
+#       logged in · 4 the hub offers no such door · 1 anything else.
 #   fleet node status
 #       Like `fleet login status`: is this login a node, of which hub, and does
 #       the hub see it online. Exit 0 only when it does.
@@ -61,6 +75,8 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd -P)
 CONF="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 ENVF="$CONF/node.env"
+# `fleet login`'s certificate: present = this computer is logged in (#2212)
+CERT="$HOME/.ssh/fleet-cert-cert.pub"
 
 usage() { sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
@@ -98,6 +114,10 @@ cmd_join() {
   tok=$(envval CCQUOTA_TOKEN)
   if [ -n "$tok" ] && [ "$(envval CCQUOTA_HUB_URL)" = "$hub" ] && self "$hub" "$tok" >/dev/null; then
     : # already a node of this hub: no scan; the join script skips its join step
+  elif [ -z "$invert" ] && [ -f "$CERT" ] && "$here/fleet-login.py" node-pass --hub "$hub" --out "$work/node.json" --quiet; then
+    # 登录即登记 (issue #2212): logged in already — the device key, no scan
+    joined=(--joined "$work/node.json")
+    echo "✓ 已用这台电脑的登录登记（不再扫码）" >&2
   else
     # shellcheck disable=SC2086
     "$here/fleet-login.py" node --hub "$hub" --out "$work/node.json" $invert || { rc=$?; rm -rf "$work"; return "$rc"; }
@@ -114,6 +134,40 @@ cmd_join() {
   # it can (issue #1720) — never a reason to fail the join.
   [ "$rc" = 0 ] && FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" 2>/dev/null
   return "$rc"
+}
+
+# ensure [--hub URL] — 登录即登记's silent join (issue #2212); see the header.
+cmd_ensure() {
+  local hub_arg="" hub work rc fresh=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --hub) hub_arg="${2:-}"; shift ;;
+      --hub=*) hub_arg="${1#--hub=}" ;;
+      *) echo "fleet node ensure: unknown option $1" >&2; return 2 ;;
+    esac
+    shift
+  done
+  if [ -n "$hub_arg" ]; then hub=$("$here/fleet-login.py" hub --hub "$hub_arg" 2>/dev/null) || return 2
+  else hub=$("$here/fleet-login.py" hub 2>/dev/null) || return 2; fi
+  # a token already here — working or not — is never replaced from here
+  [ -n "$(envval CCQUOTA_TOKEN)" ] && return 0
+  [ -f "$CERT" ] || return 3
+  [ -f "$ENVF" ] || fresh=1
+  mkdir -p "$CONF" 2>/dev/null
+  work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-node.XXXXXX") || return 1
+  chmod 700 "$work"
+  "$here/fleet-login.py" node-pass --hub "$hub" --out "$work/node.json" --quiet
+  rc=$?
+  if [ "$rc" != 0 ]; then rm -rf "$work"; return "$rc"; fi
+  "$here/fleet-conf.sh" set-hub "$hub" >/dev/null 2>&1
+  # shellcheck disable=SC2086
+  FLEET_CONF_DIR="$CONF" "$here/fleet-node-join.sh" --hub "$hub" --joined "$work/node.json" \
+    --no-fleet --no-deps --no-admin --wait 20 ${FLEET_NODE_JOIN_ARGS:-} >>"$CONF/node-join.log" 2>&1
+  rm -rf "$work"
+  [ -n "$(envval CCQUOTA_TOKEN)" ] || return 1
+  # a computer that only coordinates is a person's own (#1721)
+  [ "$fresh" = 1 ] && [ -z "$(envval CCQUOTA_FLEET_PERSONAL)" ] && setenv CCQUOTA_FLEET_PERSONAL 1
+  return 0
 }
 
 # setenv <KEY> <value|''> — node.env's line for KEY replaced (or removed when
@@ -217,6 +271,7 @@ cmd_status() {
 case "${1:-}" in
   join) shift; cmd_join "$@" ;;
   status) shift; cmd_status "$@" ;;
+  ensure) shift; cmd_ensure "$@" ;;
   compute) shift; cmd_compute "$@" ;;
   leave) shift; FLEET_CONF_DIR="$CONF" exec "$here/fleet-node-leave.sh" "$@" ;;
   ''|-h|--help|help) usage ;;

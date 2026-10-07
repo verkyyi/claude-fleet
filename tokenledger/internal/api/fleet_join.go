@@ -236,6 +236,11 @@ func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*No
 	if err := s.Store.FleetAudit("node:"+host+"/"+osUser, "node_join", "endpoint:"+id, "JOINED "+label, "", now); err != nil {
 		log.Printf("join audit: %v", err)
 	}
+	return s.joinResponse(r, id, label, tok, osUser), nil
+}
+
+// joinResponse is the node pass for an enrolled endpoint and its token.
+func (s *Server) joinResponse(r *http.Request, id, label, tok, osUser string) *NodeJoinResponse {
 	out := &NodeJoinResponse{
 		EndpointID: id, Label: label, Token: tok, Hub: s.hubURL(r),
 		Admin: s.isFleetAdmin(osUser), Dist: s.distNames(), Kind: store.NodeKindFixed,
@@ -246,7 +251,7 @@ func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*No
 	if s.SSHCA != nil {
 		out.SSHCA = s.SSHCA.PublicKey()
 	}
-	return out, nil
+	return out
 }
 
 // enrollNode is the scan's half of adding a machine (claude-fleet#1627): the

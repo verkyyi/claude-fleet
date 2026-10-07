@@ -1149,6 +1149,9 @@ client_open
 ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
 ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
 ( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
+# 登录即登记 (issue #2212): a logged-in computer with no node token yet takes
+# its node pass by the device key, in the background — no scan, no output
+[ -f "$BIN/fleet-node.sh" ] && ( nohup bash "$BIN/fleet-node.sh" ensure </dev/null >/dev/null 2>&1 & )
 client_where
 [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
 attach_client

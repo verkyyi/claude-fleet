@@ -79,7 +79,7 @@ var routeAccess = map[string]string{
 	control.SessionsPath: accessUser, control.SummaryPath: accessUser,
 	control.WritePath: accessSelf, control.ClientPath: accessSelf, ClientTestPath: accessSelf,
 	control.ClientPath + "/actions": accessSelf, control.ClientPath + "/place": accessSelf,
-	control.RenewPath: accessSelf, control.HomePath: accessSelf,
+	control.RenewPath: accessSelf, control.HomePath: accessSelf, control.LoginNodePath: accessSelf,
 	"/v1/fleet/client-settings": accessSelf,
 	"/v1/fleet/session-cred":    accessSelf, "/v1/fleet/session-cred/": accessSelf,
 	CredProxyResolvePath: accessSelf, CredProxyRebindPath: accessSelf,
