@@ -6,9 +6,9 @@
 //   import { Shell } from './app-shell.js';
 //   Shell.mount('sessions', async (ctx) => { ctx.el.innerHTML = '…'; });
 //
-// ctx is { me, admin, el, api, toast, drawer, confirm, close, refresh }.
+// ctx is { me, admin, el, api, toast, drawer, modal, confirm, close, refresh }.
 // The page draws into ctx.el; refresh() runs it again. The shell is the same
-// for the admin pages C8 (#1990) builds — they mount the same way.
+// for the admin pages (#1990) — they mount the same way.
 //
 // Fails closed: no /v1/me, no menu — the page says it could not tell who you
 // are and offers to sign in again, rather than drawing a menu that guesses.
@@ -58,6 +58,10 @@ function layer() {
 function close() { layer().innerHTML = ''; }
 function drawer(html) {
   layer().innerHTML = `<div class="scrim drawer-scrim" data-shell="scrim"><div class="drawer" role="dialog" aria-modal="true">${html}</div></div>`;
+}
+/** modal opens a dialog of the page's own (head, body, foot already drawn). */
+function modal(html) {
+  layer().innerHTML = `<div class="scrim" data-shell="scrim"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`;
 }
 function confirm(title, body, label, fn) {
   layer().innerHTML = `<div class="scrim" data-shell="scrim"><div class="modal" role="dialog" aria-modal="true">
@@ -142,7 +146,7 @@ async function mount(page, render) {
     el.innerHTML = `<div class="panel"><div class="empty">${ic('lock')}<b>${esc(t('ui.err.notOnMenu'))}</b><span>${esc(t('ui.err.askAdmin'))}</span><a class="btn" href="/">${esc(t('ui.err.goOverview'))}</a></div></div>`;
     return;
   }
-  const ctx = { me, admin: isAdmin(me), el, api, toast, drawer, confirm, close, copy: copyText, setLive, setCount };
+  const ctx = { me, admin: isAdmin(me), el, api, toast, drawer, modal, confirm, close, copy: copyText, setLive, setCount };
   // The fleet's session list, read once per draw and shared by the page and
   // the top bar's live line. A hub without the fleet module answers 404:
   // the line stays hidden and a page shows its empty state.

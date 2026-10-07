@@ -6,7 +6,7 @@ import { useLocale, fmtCompact, fmtDate, fmtAgo } from '../dist/lib/i18n.js';
 import { navFor, pageAllowed, isAdmin, viewer, fmtTokens, spark, ctxBar, liveLine, esc, titleOf, PAGES } from '../dist/lib/shell.js';
 
 const USER = ['overview', 'sessions', 'devices', 'config'];
-const ADMIN = [...USER, 'subscriptions', 'machines', 'people', 'credentials', 'audit', 'access'];
+const ADMIN = [...USER, 'subscriptions', 'machines', 'people', 'settings', 'audit'];
 
 test('a user sees their four pages and no Admin group', () => {
   const nav = navFor(USER);
@@ -15,12 +15,15 @@ test('a user sees their four pages and no Admin group', () => {
   assert.deepEqual(nav.map((x) => x.href), ['/', '/sessions', '/connect', '/config']);
 });
 
-test('an admin also sees the Admin group, only pages that exist yet', () => {
+test('an admin also sees the Admin group: the five admin pages (#1990)', () => {
   const nav = navFor(ADMIN);
   const i = nav.findIndex((x) => x.heading === 'Admin');
   assert.equal(i, 4);
-  const admin = nav.slice(i + 1).map((x) => x.id);
-  assert.deepEqual(admin, ['machines', 'credentials', 'access']);
+  const admin = nav.slice(i + 1);
+  assert.deepEqual(admin.map((x) => x.id), ['subscriptions', 'machines', 'people', 'settings', 'audit']);
+  assert.deepEqual(admin.map((x) => x.href), ['/subscriptions', '/nodes', '/admin/users', '/admin/settings', '/admin/audit']);
+  // The old admin pages are gone from the menu, not hidden.
+  assert.deepEqual(navFor([...ADMIN, 'credentials', 'access']).length, nav.length);
   assert.ok(nav.every((x) => x.heading || x.href), 'every item links somewhere');
 });
 

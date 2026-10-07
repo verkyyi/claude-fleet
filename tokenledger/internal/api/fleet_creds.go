@@ -36,10 +36,14 @@ import (
 // shared-pool account (not the person's own); Kind says what was issued —
 // a setup_token is handed down as is and runs out at ExpiresAt for good.
 type NodeCredential struct {
-	Provider  string            `json:"provider"`
-	Account   string            `json:"account"`
-	Kind      string            `json:"kind,omitempty"`
-	Pool      bool              `json:"pool,omitempty"`
+	Provider string `json:"provider"`
+	Account  string `json:"account"`
+	Kind     string `json:"kind,omitempty"`
+	Pool     bool   `json:"pool,omitempty"`
+	// Paused: an admin paused this pool account (pool.paused.<account>,
+	// claude-fleet#1990). It is still leased, so a session already on it
+	// finishes; a node starts no new session on it.
+	Paused    bool              `json:"paused,omitempty"`
 	ExpiresAt *time.Time        `json:"expires_at,omitempty"`
 	Access    *credvault.Access `json:"access,omitempty"`
 	Error     string            `json:"error,omitempty"`
@@ -202,10 +206,16 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	creds = append(creds, pool...)
+	paused := map[string]bool{}
+	if settings, err := s.Store.FleetSettings(); err == nil {
+		for _, a := range pausedAccounts(settings) {
+			paused[a] = true
+		}
+	}
 	resp := NodeCredentialsResponse{PrincipalID: principal, IssuedAt: time.Now().UTC(), Credentials: []NodeCredential{}}
 	for _, c := range creds {
 		isPool := c.PrincipalID == store.PoolPrincipal
-		nc := NodeCredential{Provider: c.Provider, Account: c.Account, Kind: c.Kind, Pool: isPool}
+		nc := NodeCredential{Provider: c.Provider, Account: c.Account, Kind: c.Kind, Pool: isPool, Paused: isPool && paused[c.Account]}
 		// The row is sealed to ITS principal — "pool" for a pool row — while
 		// the audit names the person who leased it.
 		acc, err := s.Vault.Lease(r.Context(), c.PrincipalID, c.Provider, c.Account)
@@ -229,6 +239,17 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// joinDetail is a · b, or whichever is set.
+func joinDetail(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + " · " + b
 }
 
 func optional(s string, ok bool) string {
@@ -267,8 +288,14 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		settings, err := s.Store.FleetSettings()
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, http.StatusOK, map[string]any{"credentials": creds, "revocations": revs})
+		// paused: the pool accounts an admin paused (claude-fleet#1990).
+		writeJSON(w, http.StatusOK, map[string]any{"credentials": creds, "revocations": revs, "paused": pausedAccounts(settings)})
 	case http.MethodPost:
 		var req FleetCredentialRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
@@ -318,6 +345,8 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			httpError(w, http.StatusBadRequest, "action must be put or delete")
 			return
 		}
+		// Who did it (claude-fleet#1990): the audit page names the admin.
+		audit.Detail = "by " + actorOf(r)
 		_ = s.Store.AddCredAudit(audit)
 		writeJSON(w, http.StatusOK, map[string]string{"ok": req.Action})
 	default:
@@ -386,6 +415,7 @@ func (s *Server) handleFleetRevoke(w http.ResponseWriter, r *http.Request) {
 		audit.Action = store.CredRevoke
 	}
 	s.relayCacheReset() // a revoked machine's relay pass stops now (#1974)
+	audit.Detail = joinDetail(audit.Detail, "by "+actorOf(r))
 	_ = s.Store.AddCredAudit(audit)
 	s.sessCred.drop("") // a session pass of the revoked machine / person stops at once (#1969)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": audit.Action})
@@ -404,9 +434,4 @@ func (s *Server) handleFleetCredAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{"audit": rows})
-}
-
-// serveCredentialsPage serves the audit page.
-func (s *Server) serveCredentialsPage(w http.ResponseWriter, r *http.Request) {
-	s.serveStandalonePage(w, r, "credentials.html")
 }

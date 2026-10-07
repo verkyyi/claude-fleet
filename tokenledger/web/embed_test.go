@@ -11,14 +11,20 @@ import (
 // go:embed fails the BUILD. An unanchored `dist/` in .gitignore once kept the
 // whole directory out of every commit, and a fresh clone could not compile.
 
-// appPages are the four everyday pages (claude-fleet#1989): each a thin HTML
-// file that links the one stylesheet and mounts its script into the shell
-// under the page id /v1/me lists.
+// appPages are the four everyday pages (claude-fleet#1989) and the five
+// admin pages (claude-fleet#1990): each a thin HTML file that links the one
+// stylesheet and mounts its script into the shell under the page id /v1/me
+// lists.
 var appPages = []struct{ html, script, id string }{
 	{"index.html", "overview.js", "overview"},
 	{"sessions.html", "sessions-page.js", "sessions"},
 	{"connect.html", "connect.js", "devices"},
 	{"config.html", "config.js", "config"},
+	{"subscriptions.html", "subscriptions.js", "subscriptions"},
+	{"nodes.html", "nodes.js", "machines"},
+	{"users.html", "users.js", "people"},
+	{"settings.html", "settings.js", "settings"},
+	{"audit.html", "audit.js", "audit"},
 }
 
 func TestAssets_AppPagesAreEmbedded(t *testing.T) {
@@ -26,7 +32,7 @@ func TestAssets_AppPagesAreEmbedded(t *testing.T) {
 	if assets == nil {
 		t.Fatal("no dashboard embedded: web/dist/index.html is missing from this checkout")
 	}
-	for _, name := range []string{"app.css", "app-shell.js", "lib/shell.js", "lib/pages.js"} {
+	for _, name := range []string{"app.css", "app-shell.js", "lib/shell.js", "lib/pages.js", "lib/admin.js"} {
 		if _, err := fs.Stat(assets, name); err != nil {
 			t.Fatalf("%s is not embedded: %v", name, err)
 		}
@@ -48,14 +54,15 @@ func TestAssets_AppPagesAreEmbedded(t *testing.T) {
 	}
 }
 
-// Every page the menu links is embedded: lib/shell.js's PAGES hrefs are
-// either one of the four app pages or an older admin page C8 replaces.
+// Every page the menu links is embedded: lib/shell.js's PAGES hrefs are the
+// four app pages and the five admin pages.
 func TestAssets_MenuLinksResolve(t *testing.T) {
 	assets := Assets()
 	src := string(mustRead(t, assets, "lib/shell.js"))
 	route := map[string]string{
 		"/": "index.html", "/sessions": "sessions.html", "/connect": "connect.html", "/config": "config.html",
-		"/nodes": "nodes.html", "/credentials": "credentials.html", "/access": "access.html",
+		"/subscriptions": "subscriptions.html", "/nodes": "nodes.html", "/admin/users": "users.html",
+		"/admin/settings": "settings.html", "/admin/audit": "audit.html",
 	}
 	hrefs := regexp.MustCompile(`href: '([^']+)'`).FindAllStringSubmatch(src, -1)
 	if len(hrefs) < 4 {
@@ -77,7 +84,9 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 // the module set they booted are no longer in the build.
 func TestAssets_OldDashboardIsGone(t *testing.T) {
 	assets := Assets()
-	for _, name := range []string{"user.html", "styles.css", "app.js", "now.js", "review.js", "lib/sessions.js"} {
+	// The older admin pages and their shared header went with claude-fleet#1990.
+	for _, name := range []string{"user.html", "styles.css", "app.js", "now.js", "review.js", "lib/sessions.js",
+		"credentials.html", "access.html", "whoami.js", "whoami.css", "lib/whoami.js"} {
 		if _, err := fs.Stat(assets, name); err == nil {
 			t.Errorf("%s is still embedded; the old page it belongs to was removed", name)
 		}
@@ -89,27 +98,6 @@ func TestAssets_OldDashboardIsGone(t *testing.T) {
 	}
 }
 
-func TestAssets_AccessPageIsEmbeddedAndFetchesItsFacts(t *testing.T) {
-	b, err := fs.ReadFile(Assets(), "access.html")
-	if err != nil {
-		t.Fatalf("access.html unreadable: %v", err)
-	}
-	src := string(b)
-	if len(b) < 1024 {
-		t.Fatalf("access.html is %d bytes; that is a placeholder", len(b))
-	}
-	if !strings.Contains(src, `fetch("/v1/access"`) {
-		t.Error("the access page does not fetch /v1/access; its facts would be frozen markup")
-	}
-	// Route strings the page must NOT carry. Each is a door whose description
-	// belongs to the router: find one here and the table has started drifting.
-	for _, leaked := range []string{"/v1/ingest", "ccquota enroll", "/badge/u/", "POST /mcp"} {
-		if strings.Contains(src, leaked) {
-			t.Errorf("access.html hard-codes %q -- door descriptions come from /v1/access, not from the page", leaked)
-		}
-	}
-}
-
 func mustRead(t *testing.T, assets fs.FS, name string) []byte {
 	t.Helper()
 	b, err := fs.ReadFile(assets, name)
@@ -117,22 +105,4 @@ func mustRead(t *testing.T, assets fs.FS, name string) []byte {
 		t.Fatalf("%s unreadable: %v", name, err)
 	}
 	return b
-}
-
-// The older standalone pages (C8 replaces them) still share the one header.
-func TestAssets_EveryOlderPageSharesTheHeader(t *testing.T) {
-	assets := Assets()
-	for _, name := range []string{"whoami.js", "whoami.css", "lib/whoami.js"} {
-		if _, err := fs.Stat(assets, name); err != nil {
-			t.Fatalf("%s is not embedded: %v", name, err)
-		}
-	}
-	for _, page := range []string{"nodes.html", "credentials.html"} {
-		b := mustRead(t, assets, page)
-		for _, want := range []string{`id="whoami"`, `src="whoami.js"`, `href="whoami.css"`} {
-			if !strings.Contains(string(b), want) {
-				t.Errorf("%s is missing %s", page, want)
-			}
-		}
-	}
 }

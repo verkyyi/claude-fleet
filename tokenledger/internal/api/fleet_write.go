@@ -1473,14 +1473,14 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					httpError(w, http.StatusInternalServerError, err.Error())
 					return
 				}
-				s.maintenanceAudit("operator", machine, map[bool]string{true: "LEAVE", false: "NOT_FLAGGED"}[was], now)
+				s.maintenanceAudit(actorOf(r), machine, map[bool]string{true: "LEAVE", false: "NOT_FLAGGED"}[was], now)
 			} else {
-				m, already, err := s.enterMaintenance(machine, reason, "operator", now)
+				m, already, err := s.enterMaintenance(machine, reason, actorOf(r), now)
 				if err != nil {
 					httpError(w, http.StatusInternalServerError, err.Error())
 					return
 				}
-				s.maintenanceAudit("operator", machine, map[bool]string{true: "ALREADY", false: "ENTER"}[already]+": "+m.Reason, now)
+				s.maintenanceAudit(actorOf(r), machine, map[bool]string{true: "ALREADY", false: "ENTER"}[already]+": "+m.Reason, now)
 			}
 			s.writeFleetSettings(w)
 			return

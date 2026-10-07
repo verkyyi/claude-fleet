@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -119,6 +120,11 @@ func (s *Server) handleFleetJoinCodes(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// 加机器 is in the audit (claude-fleet#1990): who minted a code, and
+		// below, which machine redeemed one. Never the code itself.
+		if err := s.Store.FleetAudit(actorOf(r), "node_join_code", "join:"+req.Label, "MINTED "+req.Kind, "", now); err != nil {
+			log.Printf("join code audit: %v", err)
+		}
 		writeJSON(w, http.StatusOK, JoinCodeView{
 			Code: code, Label: req.Label, Kind: req.Kind, ExpiresAt: now.Add(JoinCodeTTL).UTC(),
 			Command: s.joinCommand(r, code),
@@ -226,6 +232,9 @@ func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*No
 	}
 	if ep, err := s.Store.EndpointByTokenHash(HashToken(tok)); err == nil {
 		label = ep.Label
+	}
+	if err := s.Store.FleetAudit("node:"+host+"/"+osUser, "node_join", "endpoint:"+id, "JOINED "+label, "", now); err != nil {
+		log.Printf("join audit: %v", err)
 	}
 	out := &NodeJoinResponse{
 		EndpointID: id, Label: label, Token: tok, Hub: s.hubURL(r),
