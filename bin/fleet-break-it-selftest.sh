@@ -527,7 +527,7 @@ drill_orchestrator_closed() {
 # (the holder file — fleet_orchestrator.go's answer): only the holder opens one;
 # the hub names the other machine and the old one is closed on its next tick.
 drill_orchestrator_two() {
-  CAP=5; BREAK_SOCK="$WORK/sock-o5"; local t0 m o w4 w5 hub="$WORK/ohub2"
+  CAP=5; BREAK_SOCK="$WORK/sock-o5"; local t0 m hub="$WORK/ohub2"
   sed -n '/^home_watch()/,/^}/p' "$BIN/fleet-diskguard.sh" | grep -q 'fleet-orchestrator.sh" ensure "$s" 2>/dev/null)"; rc=' \
     || { WHY="home_watch no longer asks ensure on every tick — a machine the hub did not name never closes its own"; return 1; }
   mkdir -p "$hub"; printf 'm5' > "$hub/holder"
