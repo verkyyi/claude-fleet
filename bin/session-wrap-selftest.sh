@@ -290,8 +290,20 @@ tf set-option -wu -t sw:c @wrap_quiet
 )
 eq "D: exit-empty is off" off "$(tf show-options -sv exit-empty)"
 eq "D: home keeps its pane when its shell exits" on "$(tf show-options -wv -t sw:home remain-on-exit)"
-hpid=$(o home pane_pid)
-tf send-keys -t sw:home 'exit' Enter
+# home_exit: type `exit` into home's shell once it is really up (its pane pid has
+# exec'd sh — before that a key can be lost, issue #2042), again while that
+# same shell is still alive, so what is timed is the respawn, never the keystroke.
+home_up() { local p; p=$(o home pane_pid); [ -n "$p" ] && [ "$(o home pane_dead)" = 0 ] \
+  && [ "$(ps -o comm= -p "$p" 2>/dev/null | sed 's|.*/||')" = sh ]; }
+home_exit() {
+  waitfor "D: home's shell is up" home_up
+  hpid=$(o home pane_pid)
+  for _ in $(seq 1 5); do
+    tf send-keys -t sw:home 'exit' Enter
+    for _ in $(seq 1 20); do kill -0 "$hpid" 2>/dev/null && [ "$(ps -o stat= -p "$hpid" 2>/dev/null | cut -c1)" != Z ] || return 0; sleep 0.1; done
+  done
+}
+home_exit
 waitfor "D: home respawned a fresh shell" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_pid}')\" != '$hpid' ] && [ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_dead}')\" = 0 ]"
 # The tick's backstop (#1801): tmux ≤ 3.4 can lose the shell's SIGCHLD and leave
 # home dead with no pane-died — made here by dropping the hook. fleet_home_heal
@@ -299,8 +311,7 @@ waitfor "D: home respawned a fresh shell" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' 
 heal() ( PATH="$WORK/tbin:$PATH"; FLEET_CONF_DIR="$WORK/dconf"; export PATH FLEET_CONF_DIR
          . "$BIN/fleet-lib.sh"; fleet_home_heal whatever sw )
 tf set-hook -wu -t sw:home pane-died
-hpid=$(o home pane_pid)
-tf send-keys -t sw:home 'exit' Enter
+home_exit
 waitfor "D: home left dead with no hook" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_dead}')\" = 1 ]"
 out=$(heal)
 CHECKS=$((CHECKS + 1)); case "$out" in "healed @"*) ;; *) fail "D: fleet_home_heal on a dead home printed [$out], want healed @<id>" ;; esac
