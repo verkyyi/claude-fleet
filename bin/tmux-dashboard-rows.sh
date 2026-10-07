@@ -237,13 +237,11 @@ okey_v() { okey=''
 # Takes the window's @repo + @norepo; resolution is rslug_v's (below), one rule for
 # the PR cell and the grouping key.
 okp=''
-RZERO=''                               # 1 = the fleet hosts NO repo: its keys stay bare
 okp_v() { okp=''
-  rslug_v "$1" "$2"
+  rslug_v "$1" "$2"                    # the window's repo slug, fork-free (#792)
   if [ -z "$rslug" ]; then
-    [ -n "$RZERO" ] || { RZERO=0; [ -z "$(fleet_repos "${FLEET_SESSION:-}")" ] && RZERO=1; }
-    [ "$RZERO" = 1 ] && return 0
-  fi                    # the window's repo slug, fork-free (#792)
+    rlist_v; [ "$RZERO" = 1 ] && return 0  # the fleet hosts NO repo: its keys stay bare
+  fi
   if [ -n "$rslug" ]; then okp="$rslug:"; else okp='?:'; fi
 }
 
@@ -252,55 +250,58 @@ okp_v() { okp=''
 model_v() {
   case "$1" in *haiku*) cwin=200000;; *) cwin=${FLEET_CTX_WINDOW:-200000};; esac; }
 
-# This fleet's PR map — slug-resolved for THIS dash's own session (issue #180:
-# all fleets equal, no privileged "primary" flat mirror). The row loop below
-# strictly filters to FLEET_SESSION, so one slug'd cache is exactly this fleet's
-# PR status and can never be another fleet's; fleet_cache's flat name is only a
-# cold-start fallback before the slug'd .ts marker lands.
-# Only the PATH is resolved here — the CONTENT is loaded after pass A, which is
-# what collects the branches this frame actually needs (issue #662).
-_pf=$(fleet_cache prmap "${FLEET_SESSION:-}")
-# deploy_<sha> files (issue #541) live beside the prmap they were derived from.
-PRDIR=${_pf%/*}
-
-# A fleet that hosts more than one repo (issue #792). Identity is (repo, branch),
-# never the branch alone: two repos can each have an `issue-3`, and one per-fleet
-# prmap would paint repo A's green check on repo B's unfinished work. So once the
-# fleet has a repos/ overlay every window is looked up in its OWN repo's prmap
-# (fleets/<slug>/prmap, deploy_<sha> beside it), and the frame's haystack is keyed
-# `<slug>\t<branch>` — still ONE narrowed string per frame, built by ONE awk over
-# the repos on screen, so #662's per-frame bound holds. The window's repo is its
-# @repo (pr-refresh stamps it via fleet_window_repo within a tick); `@norepo 1` has
-# none; an unstamped window falls back to the fleet's ONLY repo, and in a 2+ repo
-# fleet is unknown → no PR cell, never a guess. No overlay = every fleet today:
-# RMULTI=0 and every line below takes the old path, byte for byte.
-RMULTI=0; RONLY=''; RONLY_DONE=0
-[ -n "${FLEET_SESSION:-}" ] && fleet_has_repo_overlays "$FLEET_SESSION" && RMULTI=1
+# The PR map is per REPO, never per fleet (issues #792, #1940): identity is
+# (repo, branch), never the branch alone — two repos can each have an `issue-3`,
+# and one per-fleet prmap would paint repo A's green check on repo B's unfinished
+# work. So every window is looked up in its OWN repo's prmap (fleets/<slug>/prmap,
+# deploy_<sha> beside it — issue #541), however many repos the fleet hosts (a
+# one-repo fleet's sessmap slug IS its repo's slug, so that is the same file it
+# always read), and the frame's haystack is keyed `<slug>\t<branch>` — ONE
+# narrowed string per frame, built by ONE awk over the repos on screen, so #662's
+# per-frame bound holds. The CONTENT is loaded after pass A, which is what collects
+# the (repo, branch) pairs this frame actually needs. The window's repo is its
+# @repo (pr-refresh stamps it via fleet_window_repo within a tick); `@norepo 1`
+# has none; an unstamped window falls back to the fleet's ONLY repo, and in a 2+
+# repo fleet is unknown → no PR cell, never a guess.
+# The fleet's repo list is read ONCE a frame (rlist_v, EPIC #1935 rule 5), and
+# only when some window needs it: RONLY = its only repo ('' for none / 2+),
+# RZERO = 1 when it hosts none — and then RCSLUG is the collector's slug for the
+# session (sessmap, builtins only), the caches such a fleet's windows read, as
+# fleet_target_repo falls back to the collector's repo.
+RLIST_DONE=0; RONLY=''; RZERO=0; RCSLUG=''
+rlist_v() {
+  [ "$RLIST_DONE" = 1 ] && return 0
+  RLIST_DONE=1; RONLY=$(fleet_repos "${FLEET_SESSION:-}")
+  [ -z "$RONLY" ] && { RZERO=1; RCSLUG=$(fleet_slug_cached "${FLEET_SESSION:-}"); }
+  case "$RONLY" in *$'\n'*) RONLY='' ;; esac              # 2+ repos: no default
+}
 # window's @repo/@norepo → $rslug, its repo's cache slug ('' = no repo / unknown).
 # fleet_repos (forks) runs at most once a frame, and only for an unstamped window.
 rslug_v() { rslug=''
   [ "$2" = 1 ] && return
   local r=$1
-  if [ -z "$r" ]; then
-    if [ "$RONLY_DONE" = 0 ]; then
-      RONLY_DONE=1; RONLY=$(fleet_repos "$FLEET_SESSION")
-      case "$RONLY" in *$'\n'*) RONLY='' ;; esac          # 2+ repos: no default
-    fi
-    r=$RONLY
-  fi
+  if [ -z "$r" ]; then rlist_v; r=$RONLY; fi
   [ -n "$r" ] || return
   r=${r//\//-}; rslug=${r//[^[:alnum:]._-]/}               # = fleet_slug, fork-free
+}
+# cslug_v <@repo> <@norepo> → $rslug, the slug whose caches (prmap, issues,
+# deploy_<sha>) the window's PR cell and title read: rslug_v's, else — a fleet
+# hosting no repo — the collector's (RCSLUG). Keys never use it (okp_v).
+cslug_v() {
+  rslug_v "$1" "$2"
+  [ -z "$rslug" ] && [ "$2" != 1 ] && { rlist_v; rslug=$RCSLUG; }
+  return 0
 }
 
 # The repos this dash shows (issue #793): every hosted one, under `all` (#1034).
 # RMANY=1 only in a fleet hosting 2+ repos; then RHEADS is its group headings
-# (fleet_dash_repo_frame, once a frame). A one-repo fleet has RMANY=0 and every
-# branch below keeps today's path.
-# The shell (FLEET_SHELL=1, issue #1680) has no conf and so no overlay: its repos
-# are the hub rows' own (fleet_dash_repo_frame reads the hub cache), so its list
-# groups and folds like a 2+ repo fleet's — RMULTI stays 0 (no per-repo prmap).
+# (fleet_dash_repo_frame, once a frame); a fleet hosting one repo counts RMANY=0.
+# The shell (FLEET_SHELL=1, issue #1680) has no conf: its repos are the hub rows'
+# own (fleet_dash_repo_frame reads the hub cache), so its list groups and folds
+# like a 2+ repo fleet's. A node's dash outside the sidebar has no hub cache to
+# read, which fleet_dash_repo_frame answers from one directory test.
 RMANY=0; RGRPMAP=''; RHEADS=''; RNREPO=0
-if [ "$RMULTI" = 1 ] || { [ "${FLEET_SHELL:-0}" = 1 ] && [ "$SIDEBAR" = 1 ]; }; then
+if [ "${FLEET_SHELL:-0}" != 1 ] || [ "$SIDEBAR" = 1 ]; then
   fleet_dash_repo_frame "${FLEET_SESSION:-}"
 fi
 # RGRP=1 iff this frame groups its rows by repo (issue #974): a 2+ repo fleet. A
@@ -550,25 +551,17 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
   prbr=''; [ -f "$G/git_$ckey" ] && { IFS=$'\t' read -r prbr _ < "$G/git_$ckey" || :; }
   case "$prbr" in ''|-) ;; *)
     prcands_v "$prbr"
-    if [ "$RMULTI" = 1 ]; then          # (repo, branch) keys — issue #792
-      rslug_v "$wrepo" "$wnorepo"
-      if [ -n "$rslug" ]; then
-        PRWANT+="$rslug"$'\t'"$b1"$'\n'"$rslug"$'\t'"$b3"$'\n'"$rslug"$'\t'"$b2"$'\n'
-        case "$RSLUGS" in *" $rslug "*) ;; *) RSLUGS+="$rslug " ;; esac
-      fi
-    else
-      PRWANT+="$b1"$'\n'"$b3"$'\n'"$b2"$'\n'
+    cslug_v "$wrepo" "$wnorepo"         # (repo, branch) keys — issue #792
+    if [ -n "$rslug" ]; then
+      PRWANT+="$rslug"$'\t'"$b1"$'\n'"$rslug"$'\t'"$b3"$'\n'"$rslug"$'\t'"$b2"$'\n'
+      case "$RSLUGS" in *" $rslug "*) ;; *) RSLUGS+="$rslug " ;; esac
     fi ;;
   esac
   if [ "$SIDEBAR" = 1 ]; then
     case "$rwid" in wid:*) ;; *) case "$iss" in ''|*[!0-9]*) ;; *)
-      if [ "$RMULTI" = 1 ]; then
-        rslug_v "$wrepo" "$wnorepo"
-        [ -n "$rslug" ] && { ITWANT+="$rslug"$'\t#'"$iss"$'\n'
-                             case "$ISLUGS" in *" $rslug "*) ;; *) ISLUGS+="$rslug " ;; esac; }
-      elif [ "$wnorepo" != 1 ]; then
-        ITWANT+="#$iss"$'\n'
-      fi ;; esac ;;
+      cslug_v "$wrepo" "$wnorepo"
+      [ -n "$rslug" ] && { ITWANT+="$rslug"$'\t#'"$iss"$'\n'
+                           case "$ISLUGS" in *" $rslug "*) ;; *) ISLUGS+="$rslug " ;; esac; } ;; esac ;;
     esac
   fi
   okp_v "$wrepo" "$wnorepo"
@@ -600,40 +593,29 @@ done <<< "$WLIST"
 # PRWANT rides the ENVIRONMENT, not `-v`: awk processes escape sequences in a -v
 # assignment, so a branch containing a backslash would arrive mangled and its row
 # would silently lose its PR cell.
+# One awk over every on-screen repo's prmap; each line comes out prefixed with
+# its repo's slug (the dir it was read from), so the lookup key is (repo, branch).
 PRMAPN=$'\n'
-if [ "$RMULTI" = 1 ]; then
-  # one awk over every on-screen repo's prmap; each line comes out prefixed with
-  # its repo's slug (the dir it was read from), so the lookup key is (repo, branch).
-  PRFILES=()
-  for _s in $RSLUGS; do [ -s "$FLEET_C/fleets/$_s/prmap" ] && PRFILES+=("$FLEET_C/fleets/$_s/prmap"); done
-  if [ "${#PRFILES[@]}" -gt 0 ] && [ -n "$PRWANT" ]; then
-    PRMAPN=$'\n'$(PRWANT="$PRWANT" awk -F'\t' '
-      BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
-      { d = FILENAME; sub(/\/prmap$/, "", d); sub(/.*\//, "", d); if ((d "\t" $1) in want) print d "\t" $0 }' \
-      ${PRFILES[@]+"${PRFILES[@]}"} 2>/dev/null)
-  fi
-elif [ -s "$_pf" ] && [ -n "$PRWANT" ]; then
+PRFILES=()
+for _s in $RSLUGS; do [ -s "$FLEET_C/fleets/$_s/prmap" ] && PRFILES+=("$FLEET_C/fleets/$_s/prmap"); done
+if [ "${#PRFILES[@]}" -gt 0 ] && [ -n "$PRWANT" ]; then
   PRMAPN=$'\n'$(PRWANT="$PRWANT" awk -F'\t' '
     BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
-    ($1 in want)' "$_pf" 2>/dev/null)
+    { d = FILENAME; sub(/\/prmap$/, "", d); sub(/.*\//, "", d); if ((d "\t" $1) in want) print d "\t" $0 }' \
+    ${PRFILES[@]+"${PRFILES[@]}"} 2>/dev/null)
 fi
 
-# The issue-title haystack (issue #1921): one awk over the issue cache(s) — the
-# fleet's own (beside its prmap), or each on-screen repo's in a 2+ repo fleet —
-# narrowed to the keys pass A collected, `<key>\t<title>` a line. The cache line
+# The issue-title haystack (issue #1921): one awk over each on-screen repo's
+# issue cache (beside its prmap), narrowed to the keys pass A collected, `<key>\t<title>` a line. The cache line
 # is `milestone\t#num\tassignee\ttitle`. No issue row on screen ⇒ no fork.
 ITTL=$'\n'
 if [ -n "$ITWANT" ]; then
   ITFILES=()
-  if [ "$RMULTI" = 1 ]; then
-    for _s in $ISLUGS; do [ -s "$FLEET_C/fleets/$_s/issues" ] && ITFILES+=("$FLEET_C/fleets/$_s/issues"); done
-  else
-    [ -s "$PRDIR/issues" ] && ITFILES+=("$PRDIR/issues")
-  fi
+  for _s in $ISLUGS; do [ -s "$FLEET_C/fleets/$_s/issues" ] && ITFILES+=("$FLEET_C/fleets/$_s/issues"); done
   if [ "${#ITFILES[@]}" -gt 0 ]; then
-    ITTL=$'\n'$(ITWANT="$ITWANT" RM="$RMULTI" awk -F'\t' '
+    ITTL=$'\n'$(ITWANT="$ITWANT" awk -F'\t' '
       BEGIN { n = split(ENVIRON["ITWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
-      { k = $2; if (ENVIRON["RM"] == 1) { d = FILENAME; sub(/\/issues$/, "", d); sub(/.*\//, "", d); k = d "\t" $2 }
+      { d = FILENAME; sub(/\/issues$/, "", d); sub(/.*\//, "", d); k = d "\t" $2
         if (!(k in want)) next
         t = $0; sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t); gsub(/[\t\r\037]/, " ", t)
         if (t != "") print k "\t" t }' ${ITFILES[@]+"${ITFILES[@]}"} 2>/dev/null)$'\n'
@@ -810,8 +792,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       *) wittl=''
          case "$iss" in ''|*[!0-9]*) ;; *)
            _ik=''
-           if [ "$RMULTI" = 1 ]; then rslug_v "$wrepo" "$wnorepo"; [ -n "$rslug" ] && _ik="$rslug"$'\t#'"$iss"
-           elif [ "$wnorepo" != 1 ]; then _ik="#$iss"; fi
+           cslug_v "$wrepo" "$wnorepo"; [ -n "$rslug" ] && _ik="$rslug"$'\t#'"$iss"
            if [ -n "$_ik" ]; then
              case "$ITTL" in *$'\n'"$_ik"$'\t'*) wittl=${ITTL#*$'\n'"$_ik"$'\t'}; wittl=${wittl%%$'\n'*} ;; esac
            fi ;;
@@ -862,12 +843,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # PR cell: look up the branch in prmap. The cache branch may carry +ahead/-behind
   # decorations; try EXACT first (real branch names can end in -digits, e.g.
   # issue-231 — the old sed-strip wrongly ate that), then decoration-stripped.
-  # In a multi-repo fleet the key is prefixed with the window's repo slug, and its
-  # deploy_<sha> verdicts come from that repo's dir (issue #792); no repo → '—'.
-  ptxt='—'; pcol=$GY; rpfx=''; rowdir=$PRDIR; rslug=-   # `-` = one-repo fleet: always look up
-  if [ "$RMULTI" = 1 ]; then
-    rslug_v "$wrepo" "$wnorepo"; rpfx="$rslug"$'\t'; rowdir="$FLEET_C/fleets/$rslug"
-  fi
+  # The key is prefixed with the window's repo slug, and its deploy_<sha> verdicts
+  # come from that repo's dir (issue #792); no repo → '—'.
+  ptxt='—'; pcol=$GY
+  cslug_v "$wrepo" "$wnorepo"; rpfx="$rslug"$'\t'; rowdir="$FLEET_C/fleets/$rslug"
   if [ "$branch" != '-' ] && [ -n "$branch" ] && [ -n "$rslug" ]; then
     prcands_v "$branch"
     for bare in "$b1" "$b3" "$b2"; do

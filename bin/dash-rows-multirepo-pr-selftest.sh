@@ -9,10 +9,14 @@
 #      `@norepo 1` and an unstamped window in a 2-repo fleet show no PR (never a
 #      guess); an unstamped window in a fleet whose only repo has an overlay falls
 #      back to that repo.
-#   B. DEGENERATE — no repos/ overlay: @repo is ignored and every row reads the
-#      fleet's one prmap, exactly as before.
+#   B. ONE ROAD (issue #1940) — a fleet hosting one repo (no repos/ overlay, the
+#      conf's FLEET_REPO) looks every window up the same way: its OWN repo's prmap,
+#      an unstamped window taking the only repo, `@norepo 1` none.
 #   C. SCALE — #662's bound holds in multi-repo mode: a 2000-line prmap in each repo
 #      costs about what a 1-line one does.
+#   E. ADDING A REPO CHANGES NOTHING (issue #1940, EPIC #1935 rule 6) — the
+#      original repo's sidebar rows are byte for byte the same once a second repo
+#      is hosted.
 #   D. pr-refresh (tmux-pr-refresh.sh) — @prci per window from its own repo's prmap,
 #      an unstamped window gets @repo derived from @worktree + stamped; degenerate
 #      fleet unchanged. Real tmux on a PRIVATE socket (PATH shim), gh shimmed to fail.
@@ -125,16 +129,34 @@ out=$(rows)
 has   "A: one-repo fleet with an own-repo overlay: unstamped window → its only repo" "$(row_of "$out" 5)" "#11✓"
 rm -f "$OVL/acme-alpha.conf"
 
-# --- B. degenerate: no repos/ overlay ---
+# --- B. one road: a fleet hosting one repo, no repos/ overlay ---
 overlay_off; fixture 1
 out_st=$(rows)
-has   "B: degenerate — repo A's row as before"     "$(row_of "$out_st" 1)" "#11✓"
-has   "B: degenerate — @repo is ignored (one prmap per fleet, as before)" "$(row_of "$out_st" 2)" "#11✓"
+has   "B: one repo — repo A's row shows A's PR"                 "$(row_of "$out_st" 1)" "#11✓"
+has   "B: one repo — a window's own repo's prmap, as with 2+"   "$(row_of "$out_st" 2)" "#22✗"
+hasnt "B: one repo — @norepo window shows no PR"                "$(row_of "$out_st" 4)" "#"
 fixture 0
 out_un=$(rows)
+has   "B: one repo — unstamped window → the only repo's PR"     "$(row_of "$out_un" 2)" "#11✓"
+has   "B: one repo — unstamped, deploy dir is the only repo's"  "$(row_of "$out_un" 3)" "merged"
+# a fleet hosting NO repo still reads the collector's cache (sessmap slug)
+mv "$FLEET_CONF_DIR/fleets/$SESS/conf" "$WORK/conf.keep"; : > "$FLEET_CONF_DIR/fleets/$SESS/conf"
+out_nr=$(rows)
+has   "B: no repo hosted — unstamped window → the collector's prmap" "$(row_of "$out_nr" 1)" "#11✓"
+mv "$WORK/conf.keep" "$FLEET_CONF_DIR/fleets/$SESS/conf"
+
+# --- E. adding a repo changes nothing for the original repo's rows ---
+overlay_off; : > "$WLIST_FILE"
+w 1 alpha3 /w/alpha-issue-3 3 acme/alpha ''
+w 2 alpha7 /w/beta-issue-7  7 acme/alpha ''
+srows() { PATH="$WORK/bin:$PATH" FLEET_SESSION="$SESS" FZF_COLUMNS=140 bash "$ROWS" --sidebar 2>&1 | grep -E "^@[12]$US"; }
+one=$(srows)
+overlay_on; w 3 beta3 /w/beta-issue-3 3 acme/beta ''
+two=$(srows)
+has   "E: the one-repo sidebar rows carry the PR"                "$one" "#11"
 CHECKS=$((CHECKS+1))
-[ "$out_st" = "$out_un" ] || fail "B: degenerate output depends on @repo/@norepo" \
-  "$(printf 'STAMPED:\n%s\n\nUNSTAMPED:\n%s\n' "$out_st" "$out_un")"
+[ -n "$one" ] && [ "$one" = "$two" ] || fail "E: adding a second repo changed the original repo's sidebar rows" \
+  "$(printf 'ONE REPO:\n%s\n\nTWO REPOS:\n%s\n' "$one" "$two")"
 
 # --- C. scale (#662's bench, in multi-repo mode) ---
 overlay_on; fixture 1

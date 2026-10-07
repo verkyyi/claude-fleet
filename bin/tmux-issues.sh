@@ -19,16 +19,18 @@ FLEET_SESSION=$(tmux display-message -p -t "${TMUX_PANE:-}" '#{?#{session_group}
 [ -z "$FLEET_SESSION" ] && FLEET_SESSION=$(tmux display-message -p '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)
 export FLEET_SESSION
 _r=$(fleet_repo_cached "$FLEET_SESSION"); [ -n "$_r" ] && REPO="$_r"
-# A fleet hosting 2+ repos (issue #794): the rows carry their repo as field 4, and
-# every row action passes it on (RARG) — close/priority/preview/open/spawn act on
-# THAT row's repo, never the fleet conf's. One-repo: RARG is empty, binds unchanged.
-MULTI=0; RARG=''
-if [ -n "$FLEET_SESSION" ] && fleet_multirepo "$FLEET_SESSION"; then MULTI=1; RARG=' --repo={4}'; fi
+# Every row carries its repo as field 4 (issues #794, #1940), and every row action
+# passes it on (RARG) — close/priority/preview/open/spawn act on THAT row's repo,
+# however many repos the fleet hosts. NREPO counts them: 2+ only names the list
+# `all repos`; 0 (a fleet with no repo) has rows without a field 4, so ⌃o opens
+# the resolved $REPO and an empty --repo= resolves the way it always has.
+NREPO=0; [ -n "$FLEET_SESSION" ] && NREPO=$(fleet_repos "$FLEET_SESSION" | grep -c .)
+RARG=' --repo={4}'
 ROWS="$BIN/tmux-issues-rows.sh"
 command -v fzf >/dev/null 2>&1 || { echo "fzf required"; sleep 5; exit 1; }
 case "$MODE" in roadmap) LABEL=' roadmap · milestoned ';; unplanned) LABEL=' unplanned · no milestone ';; *) LABEL=' backlog · GitHub issues ';; esac
 # 2+ repos: the border names what the list shows — `all repos`.
-[ "$MULTI" = 1 ] && LABEL="${LABEL}· all repos "
+[ "$NREPO" -ge 2 ] && LABEL="${LABEL}· all repos "
 
 # The ⌃n new · ⌃x close · ? keys sub-actions each open a small
 # a tmux popup (input dialog / cheatsheet). That works from a windowed
@@ -96,13 +98,14 @@ if [ -n "${POPUP:-}" ]; then
   . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-popup-lib.sh"
   # No inner border: the popup's is the frame and its title names the panel;
   # what the label said beyond that (every repo, #1034) joins the header.
-  PHDR=$SLOTS; [ "$MULTI" = 1 ] && PHDR="$SLOTS · all repos"
+  PHDR=$SLOTS; [ "$NREPO" -ge 2 ] && PHDR="$SLOTS · all repos"
   fleet_fzf_hint "$(fleet_ui_t hint_backlog)" "$PHDR"
   FZF_FRAME=(--border=none)
   mkdir -p "$(dirname "$ACT")" 2>/dev/null || true
   N_BIND="$DASH_KEY_NEW:execute-silent(printf 'new' > '$ACT')+abort"
-  X_ARGS='{1}'; [ "$MULTI" = 1 ] && X_ARGS='{1} {4}'   # + the row's repo (issue #794)
-  X_BIND="$DASH_KEY_CLOSE:execute-silent(printf 'close %s' $X_ARGS > '$ACT')+abort"
+  # + the row's repo (issue #794): one %s per field — `printf 'close %s' {1} {4}`
+  # reused the format and wrote `close 12close <repo>`.
+  X_BIND="$DASH_KEY_CLOSE:execute-silent(printf 'close %s %s' {1} {4} > '$ACT')+abort"
   K_BIND="?:execute-silent(printf 'keys' > '$ACT')+abort"
   # The clicked header word is a single whitespace token, so a bracketed multi-word
   # chip `[＋ new]` arrives as `[＋` OR `new]` — glob both (issue #381).
@@ -130,8 +133,8 @@ fi
 # blocks fzf until the label edit + optimistic cache write finish, so the reload
 # repaints with the fresh tag). {1} is the row's issue number.
 P_BIND="$DASH_KEY_PRIORITY:execute-silent(bash $BIN/dash-issue-priority.sh {1} cycle$RARG)+reload(bash $ROWS $MODE)"
-# ⌃o opens the row's issue on GitHub — the row's own repo in a 2+ repo fleet.
-O_URL="https://github.com/$REPO/issues/{1}"; [ "$MULTI" = 1 ] && O_URL="https://github.com/{4}/issues/{1}"
+# ⌃o opens the row's issue on GitHub — in the row's own repo.
+O_URL="https://github.com/{4}/issues/{1}"; [ "$NREPO" = 0 ] && O_URL="https://github.com/$REPO/issues/{1}"
 
 # The panel is list-only by default (search off, issue #156). `--no-input` also
 # DROPS the query/prompt input row entirely (issue #361) — one less line of
