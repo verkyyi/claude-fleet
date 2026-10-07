@@ -2810,11 +2810,12 @@ def ui(screen, session, worker, lock):
             # Read and cleared in ONE tmux call (as take_switch): a verb parked
             # between a read and its clear would be cleared unread.
             got = run(["tmux", "show-options", "-pqv", "-t", pane, "@sidebar_ask", ";",
-                       "display-message", "-p", "-t", pane, US, ";",
+                       "display-message", "-p", "-t", pane, "@@", ";",
                        "show-options", "-pqv", "-t", pane, "@sidebar_rename", ";",
                        "set-option", "-up", "-t", pane, "@sidebar_ask", ";",
                        "set-option", "-up", "-t", pane, "@sidebar_rename"]).stdout
-            parked, _, wid = got.partition(US + "\n")
+            # (a printable separator: tmux 3.4 vis-escapes a control one)
+            parked, _, wid = got.partition("@@\n")
             parked, wid = parked.strip(), wid.strip()
             if wid and not parked:
                 parked = "rename " + wid
