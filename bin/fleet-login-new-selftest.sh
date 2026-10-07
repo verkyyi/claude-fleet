@@ -324,6 +324,7 @@ eq "D key mode" 600 "$(mode "$FLEET_LOGIN_HOMES/dora/.ssh/authorized_keys")"
 : > "$WORK/empty.pub"
 mkdir -p "$WORK/nopool"
 for args in "Bad!Name --full-name X --pubkey $KEY" \
+            "2468 --full-name X --pubkey $KEY" \
             "eve --pubkey $KEY" \
             "eve --full-name X --pubkey $WORK/missing.pub" \
             "eve --full-name X --pubkey $WORK/empty.pub --apply" \
@@ -341,6 +342,10 @@ for args in "Bad!Name --full-name X --pubkey $KEY" \
   not_contains "E bash32 [$args]" "$OUT" "unbound variable"
 done
 [ -e "$FLEET_LOGIN_HOMES/eve" ] && fail "E created a home on a usage error"
+# a digit-leading login is a login (macOS allows it — issue #2105, `24haowan`)
+run 24haowan --full-name X --pubkey "$KEY"
+eq "E digit-leading dry run exit" 0 "$RC"
+contains "E digit-leading addUser" "$OUT" "sysadminctl -addUser 24haowan"
 # an empty key is fine for a PREVIEW (the evidence run uses /dev/null) — it warns
 run eve --full-name X --pubkey /dev/null
 eq "E empty key dry run exit" 0 "$RC"

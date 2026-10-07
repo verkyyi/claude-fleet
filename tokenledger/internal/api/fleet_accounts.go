@@ -148,6 +148,10 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 	}
 	queued := false
 	for _, host := range hosts {
+		if err := s.creatableLogin(p, host); err != nil {
+			log.Printf("fleet: queue %s on %s: %v", p.Login, host, err)
+			continue
+		}
 		created, err := s.Store.RequestAccount(p, host, false, now)
 		if err != nil {
 			log.Printf("fleet: queue %s on %s: %v", p.Login, host, err)
@@ -369,6 +373,9 @@ func (s *Server) dispatchAccounts() {
 				continue
 			}
 			op.FullName = fullNameFor(p)
+			if !control.ValidLogin(a.Login) {
+				op.Existing = s.loginHeldElsewhere(a.PrincipalID, a.Login, a.Hostname)
+			}
 		}
 		msg, err := control.New(control.TypeAccountOp, op)
 		if err != nil {
@@ -596,12 +603,49 @@ func (s *Server) rekeyAccount(w http.ResponseWriter, r *http.Request, req FleetA
 	writeJSON(w, http.StatusOK, res)
 }
 
+// creatableLogin is the node's create rule (control.ValidCreateLogin), judged
+// before an op is queued, so an assign the node would refuse is a 400 here
+// and never a failed row (claude-fleet#2105). A login the hub minted passes;
+// an adopted digit-leading one (`24haowan`) passes only as a second machine's
+// copy of a login the person already holds active elsewhere.
+func (s *Server) creatableLogin(p *store.Principal, hostname string) error {
+	if control.ValidLogin(p.Login) {
+		return nil
+	}
+	if !control.ValidCreateLogin(p.Login, true) {
+		return fmt.Errorf("login %q cannot be created: a node makes only 2-16 lowercase letters and digits with at least one letter", p.Login)
+	}
+	if !s.loginHeldElsewhere(p.ID, p.Login, hostname) {
+		return fmt.Errorf("login %q starts with a digit: a node creates one only as the same person's login already active on another machine — adopt it where it exists first", p.Login)
+	}
+	return nil
+}
+
+// loginHeldElsewhere says login is principal's active login on a machine other
+// than hostname — what makes a create of it "existing" (control.AccountOp).
+func (s *Server) loginHeldElsewhere(principal, login, hostname string) bool {
+	as, err := s.Store.FleetAccounts(principal)
+	if err != nil {
+		log.Printf("fleet: accounts of %q: %v", principal, err)
+		return false
+	}
+	for _, a := range as {
+		if a.State == store.AccountActive && a.Login == login && !strings.EqualFold(a.Hostname, hostname) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) changeAccount(req FleetAccountRequest) error {
 	now := time.Now()
 	switch req.Action {
 	case "assign", "retry":
 		p, err := s.Store.EnsurePrincipal(req.PrincipalID, req.DisplayName, control.MaxLoginLen, control.ValidLogin, now)
 		if err != nil {
+			return err
+		}
+		if err := s.creatableLogin(p, req.Hostname); err != nil {
 			return err
 		}
 		_, err = s.Store.RequestAccount(p, req.Hostname, req.Action == "retry", now)

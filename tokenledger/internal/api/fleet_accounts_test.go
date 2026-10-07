@@ -418,3 +418,56 @@ func TestPrincipalLoginsAreUnique(t *testing.T) {
 		t.Fatalf("root -> %+v %v", r, err)
 	}
 }
+
+// An adopted digit-leading login (`24haowan`) can be opened on a second machine:
+// assign queues it marked existing, and the node gets the same login. With no
+// active copy elsewhere the assign is a 400 on the spot and leaves no row
+// (claude-fleet#2105).
+func TestFleetAssignExistingDigitLogin(t *testing.T) {
+	h := newFleetHarness(t)
+	h.srv.FleetAdmins = []string{"verkyyi"}
+	m5 := connectNode(t, h, "m5-op", "m5", "verkyyi", true)
+	const pCao = "gh:2987262"
+
+	// Adopted nowhere yet: nothing to copy.
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pCao, Hostname: "m4", Login: "24haowan"}); code != 200 {
+		t.Fatalf("adopt: HTTP %d", code)
+	}
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "remove", PrincipalID: pCao, Hostname: "m4"}); code != 200 {
+		t.Fatalf("remove: HTTP %d", code)
+	}
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pCao, Hostname: "m5"}); code != http.StatusBadRequest {
+		t.Fatalf("assign with no active copy: HTTP %d, want 400", code)
+	}
+	if as, _ := h.srv.Store.FleetAccounts(pCao); len(as) != 1 || as[0].Hostname != "m4" {
+		t.Fatalf("a refused assign left rows: %+v", as)
+	}
+	if got, ok := readMsg(m5.tnode, 300*time.Millisecond); ok {
+		t.Fatalf("a refused assign sent %+v", got)
+	}
+
+	// Active on m4: m5 gets a create of the same login, marked existing.
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pCao, Hostname: "m4", Login: "24haowan"}); code != 200 {
+		t.Fatalf("re-adopt: HTTP %d", code)
+	}
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pCao, Hostname: "m5"}); code != 200 {
+		t.Fatalf("assign: HTTP %d", code)
+	}
+	m, op := expectAccountOp(t, m5.tnode)
+	if op.Op != control.AccountCreate || op.Login != "24haowan" || !op.Existing {
+		t.Fatalf("op = %+v; want create 24haowan existing", op)
+	}
+	sendResult(t, m5.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, pCao, "m5", store.AccountActive)
+}
+
+// A minted login is never marked existing.
+func TestFleetAssignMintedLoginNotExisting(t *testing.T) {
+	h := newFleetHarness(t)
+	h.srv.FleetAdmins = []string{"verkyyi"}
+	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
+	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "lisi", Hostname: "m4"})
+	if _, op := expectAccountOp(t, admin.tnode); op.Existing {
+		t.Fatalf("minted login marked existing: %+v", op)
+	}
+}

@@ -133,8 +133,11 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$LOGIN" ] || usage
-printf '%s' "$LOGIN" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' \
-  || die2 "bad login name '$LOGIN' (lowercase letters, digits, _ and -; at most 32)"
+# A leading digit is allowed (macOS permits it; `24haowan` opened on a second
+# machine, issue #2105) — an all-digit name is not: it reads as a uid.
+printf '%s' "$LOGIN" | grep -Eq '^[a-z0-9_][a-z0-9_-]{0,31}$' \
+  && printf '%s' "$LOGIN" | grep -q '[a-z_-]' \
+  || die2 "bad login name '$LOGIN' (lowercase letters, digits, _ and -, not all digits; at most 32)"
 [ -n "$FULL" ] || die2 "--full-name is required"
 case "$WLANG" in zh|en) ;; *) die2 "--lang: zh or en (got '$WLANG')" ;; esac
 # No --pubkey ⇒ a temporary pair, carried by the welcome letter (issue #1195).

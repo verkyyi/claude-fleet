@@ -576,7 +576,7 @@ type Fleet struct {
 //	remove  fleet-login-remove.sh <login> --keep-home --apply
 //
 // The hub chooses only the login and the display name, and both are checked
-// against ValidLogin / ValidFullName on the node before anything runs.
+// against ValidCreateLogin / ValidFullName on the node before anything runs.
 const (
 	AccountCreate = "create"
 	AccountRemove = "remove"
@@ -587,6 +587,12 @@ type AccountOp struct {
 	Op       string `json:"op"`
 	Login    string `json:"login"`
 	FullName string `json:"full_name,omitempty"`
+	// Existing says the login is not a new one: the hub already holds it as
+	// this person's active login on another machine (adopted, claude-fleet#2105),
+	// and asks for the same name here. It widens the node's check from
+	// ValidLogin to ValidCreateLogin(login, true); an older node ignores it and
+	// keeps refusing a digit-leading login.
+	Existing bool `json:"existing,omitempty"`
 }
 
 // AccountResult is the payload of TypeAccountResult.
@@ -616,14 +622,34 @@ func ValidLogin(s string) bool {
 	return len(s) > 0 && s[0] >= 'a' && s[0] <= 'z' && ValidExistingLogin(s)
 }
 
+// ValidCreateLogin is the shape of login a create op may make. A login the
+// hub mints is ValidLogin. One it already holds as the person's active login
+// elsewhere (existing — a hand-made `24haowan` adopted on the first machine,
+// claude-fleet#2105) may be opened under the same name on another machine:
+// ValidExistingLogin, and never all digits (a numeric name reads as a uid).
+func ValidCreateLogin(s string, existing bool) bool {
+	if !existing {
+		return ValidLogin(s)
+	}
+	if !ValidExistingLogin(s) {
+		return false
+	}
+	for _, c := range s {
+		if c >= 'a' && c <= 'z' {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidExistingLogin is the shape of a login the operator may NAME — one
 // that already exists on a machine and is adopted, mapped to a person
 // (user.<id>.machine_login) or put on a certificate — as opposed to
 // one the hub would create. The same alphabet as ValidLogin, so it still
 // cannot be an option or a path, but a leading digit is allowed: macOS
-// permits it, and `24haowan` is a real login (claude-fleet#1458). A create
-// op keeps ValidLogin on both sides, so a login of this shape is never
-// minted or made, only recorded.
+// permits it, and `24haowan` is a real login (claude-fleet#1458). The hub
+// never MINTS a login of this shape; a create op makes one only as a second
+// machine's copy of a login the hub already holds (ValidCreateLogin).
 func ValidExistingLogin(s string) bool {
 	if len(s) < 2 || len(s) > MaxLoginLen {
 		return false

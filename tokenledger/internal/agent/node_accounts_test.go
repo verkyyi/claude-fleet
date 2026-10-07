@@ -287,3 +287,54 @@ func TestAdminAgentResendsResultAfterReconnect(t *testing.T) {
 		t.Fatalf("script ran %d times, want once: %q", strings.Count(string(got), "\n"), got)
 	}
 }
+
+// A digit-leading login the hub marks existing (the person's adopted login on
+// another machine) is created on macOS with the same fixed argv; unmarked, all
+// digits, or on Linux it is refused before anything runs (claude-fleet#2105).
+func TestAdminAgentCreatesExistingDigitLogin(t *testing.T) {
+	old := accountGOOS
+	t.Cleanup(func() { accountGOOS = old })
+
+	accountGOOS = "darwin"
+	shrinkBackoff(t)
+	hub := newAccountHub(t, control.AccountOp{Op: control.AccountCreate, Login: "24haowan", FullName: "Cao Jian", Existing: true})
+	a := adminAgent(t, hub.srv.URL, true)
+	newLog, _ := fakeLoginScripts(t, a.cfg.Home, "0")
+	runAgentUntil(t, a, 5*time.Second, func() bool { r, _, _ := hub.snapshot(); return len(r) > 0 })
+	results, errs, _ := hub.snapshot()
+	if len(errs) != 0 || len(results) != 1 {
+		t.Fatalf("results=%v errors=%v", results, errs)
+	}
+	got, _ := os.ReadFile(newLog)
+	if want := "[24haowan][--full-name][Cao Jian][--share-pool][--apply]\n"; string(got) != want {
+		t.Fatalf("fleet-login-new.sh argv = %q, want %q", got, want)
+	}
+
+	for name, c := range map[string]struct {
+		goos string
+		op   control.AccountOp
+	}{
+		"unmarked":   {"darwin", control.AccountOp{Op: control.AccountCreate, Login: "24haowan", FullName: "x"}},
+		"all digits": {"darwin", control.AccountOp{Op: control.AccountCreate, Login: "2468", FullName: "x", Existing: true}},
+		"linux":      {"linux", control.AccountOp{Op: control.AccountCreate, Login: "24haowan", FullName: "x", Existing: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			accountGOOS = c.goos
+			shrinkBackoff(t)
+			hub := newAccountHub(t, c.op)
+			a := adminAgent(t, hub.srv.URL, true)
+			newLog, _ := fakeLoginScripts(t, a.cfg.Home, "0")
+			runAgentUntil(t, a, 5*time.Second, func() bool { _, e, _ := hub.snapshot(); return len(e) > 0 })
+			_, errs, _ := hub.snapshot()
+			if len(errs) != 1 || errs[0].Error.Code != control.CodeBadArgs {
+				t.Fatalf("errors = %+v; want one BAD_ARGS", errs)
+			}
+			if c.goos == "linux" && !strings.Contains(errs[0].Error.Message, "macOS") {
+				t.Fatalf("linux refusal does not say why: %q", errs[0].Error.Message)
+			}
+			if _, err := os.Stat(newLog); err == nil {
+				t.Fatal("fleet-login-new.sh ran on a refused op")
+			}
+		})
+	}
+}
