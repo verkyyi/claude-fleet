@@ -19,8 +19,10 @@ service, register machines or grant anyone access.
 > `config_get` / `operation_get` (plus `fleet_sessions`) over its MCP endpoint,
 > and every write tool below with the same journal semantics (issue #1410). Its
 > `worker_start` can also omit `fleet_id`: `node=auto` places the start on the
-> caller's least-loaded machine with account headroom, under a per-person cap
-> per machine (`fleet.node_cap.<machine>`, m4 = 6), and journals why.
+> caller's least-loaded machine — the tighter of CPU and memory idle; account
+> quota is shared by every machine and never scored (issue #1994) — under a
+> per-person cap per machine only where one is set (`fleet.node_cap.<machine>`,
+> no default), and journals why.
 > This Python hub is kept as is for one machine, or when the cloud hub is out of
 > reach. See `tokenledger/README.md`, "Sessions on every machine".
 

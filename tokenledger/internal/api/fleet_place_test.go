@@ -353,11 +353,12 @@ func TestNodePlaceWaitZeroAnswersOnAcceptance(t *testing.T) {
 }
 
 // beatCap sends a beat that carries the login's own cap (claude-fleet#1587):
-// max = 0 leaves both fields off, as an agent older than #1587 does.
+// max = 0 leaves both fields off, as an agent older than #1587 does. Memory is
+// plentiful, so the score follows CPU load (claude-fleet#1994).
 func beatCap(t *testing.T, h *harness, n *writeNode, host, machine string, load1 float64, used, max int, f control.Fleet) {
 	t.Helper()
 	hb := control.Heartbeat{Hostname: host, OSUser: "verk", MachineID: machine, Load1: load1, NCPU: 10,
-		MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: used, Fleets: []control.Fleet{f}, ObservedAt: time.Now()}
+		MemFreeBytes: 15 << 30, MemTotalBytes: 16 << 30, Sessions: used, Fleets: []control.Fleet{f}, ObservedAt: time.Now()}
 	if max > 0 {
 		hb.MaxSessions, hb.CapSessions = max, &used
 	}
