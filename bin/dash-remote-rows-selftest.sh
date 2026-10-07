@@ -765,7 +765,7 @@ if [ -n "$REAL_TMUX" ] && "$REAL_TMUX" -L "$S" -f /dev/null new-session -d -s "$
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 w = [x for x in ctl.workers(f)["workers"] if x["issue"] == 1423][0]
 print(w["name"] + "|" + str(w["origin_wid"]) + "|" + w["key"] + "|" + str(w["needs"]))' "$FLEET_CONF_DIR" "$S" 2>&1)
-  eq "G: the adapter hands over the window name, @origin_wid and @claude_needs" "侧边栏 x|$F/issue-1419|issue-1423|ask" "$got"
+  eq "G: the adapter hands over the window name, @origin_wid and @claude_needs" "侧边栏 x|$F/issue-1419|acme-app:issue-1423|ask" "$got"   # the internal key carries the repo (#1939); the name is unchanged
   # The shell's road while the hub is silent (#1488): fleet-remote-view.sh
   # sessions reads the SAME adapter on this machine. Its hand copy of the column
   # rule missed #1607's `busy=` and glued @origin_wid onto the name (issue
