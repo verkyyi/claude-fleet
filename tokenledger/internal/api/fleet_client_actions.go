@@ -430,7 +430,9 @@ func (s *Server) handleFleetClientActions(w http.ResponseWriter, r *http.Request
 		httpError(w, http.StatusBadRequest, "the lease id is required")
 		return
 	}
-	key := clientLeaseKey(id)
+	// a test identity's lease polls in its own slot (#1931): no action is ever
+	// queued there, so it waits and reads active, never taken_over
+	key := s.clientLeases.slotOf(clientLeaseKey(id), req.Lease)
 	w.Header().Set("Cache-Control", "no-store")
 	switch req.Action {
 	case "done":
