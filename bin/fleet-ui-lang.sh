@@ -151,6 +151,8 @@ fleet_ui_t() {
     en:badge_hubdown_fmt)       printf '⌂ %s · hub unreachable' "${1:-}" ;;
     zh:badge_updated_fmt)       printf '✓ 已更新到 %s' "${1:-}" ;;
     en:badge_updated_fmt)       printf '✓ updated to %s' "${1:-}" ;;
+    zh:badge_reloaded)          printf '✓ 已重新载入新文件' ;;
+    en:badge_reloaded)          printf '✓ reloaded the new files' ;;
     zh:badge_update_failed_fmt) printf '更新没成功：%s' "${1:-}" ;;
     en:badge_update_failed_fmt) printf 'update failed: %s' "${1:-}" ;;
     zh:badge_update_later)      printf '新版已就绪 · 下次打开生效' ;;

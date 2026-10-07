@@ -442,10 +442,15 @@ mirror() {
 # checkout): fleet-client-update.sh compares it with the files on disk, and
 # files that moved under a running client are reloaded into it (issue #1829).
 # Set at a new start and by `reload` — never on a re-attach, which loads nothing.
+# Beside it @client_digest, the same client by CONTENT (issue #2145): a home
+# with no .client-version is told apart by that — fleet-client-update.sh's
+# client_digest is the one list of files.
 stamp_ver() {
   local v
   v=$(sed -n 's/^version=//p' "$REAL_BIN/../.client-version" 2>/dev/null | head -n 1)
   [ -n "$v" ] && T set-option -g @client_version "$v" 2>/dev/null
+  v=$(bash "$REAL_BIN/fleet-client-update.sh" digest --root "$REAL_BIN/.." 2>/dev/null)
+  [ -n "$v" ] && T set-option -g @client_digest "$v" 2>/dev/null
   return 0
 }
 # portal_ver — the code the writing area runs (issue #2113): fleet-compose.py and
