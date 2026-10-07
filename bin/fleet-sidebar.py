@@ -2794,6 +2794,10 @@ def ui(screen, session, worker, lock):
             # @sidebar_ask on this pane (a rename: the row's @id in
             # @sidebar_rename, as since #898) and sent F12 to wake us. The
             # question opens under the session (issue #1950, `ask_now`).
+            if spawning is not None:
+                # One spawn at a time: what is parked stays parked, and the
+                # tick after the spawn ends takes it (the re-arm above).
+                continue
             parked = tmux("show-options", "-pqv", "-t", pane, "@sidebar_ask")
             wid = tmux("show-options", "-pqv", "-t", pane, "@sidebar_rename")
             tmux("set-option", "-up", "-t", pane, "@sidebar_ask", ";",
@@ -2802,7 +2806,7 @@ def ui(screen, session, worker, lock):
                 parked = "rename " + wid
             kind, _, rest = parked.strip().partition(" ")
             arg, _, extra = rest.partition(" ")
-            if spawning is not None or not kind:
+            if not kind:
                 continue
             follow_at, nxt = None, None
             if kind == "rename" and arg.startswith("@"):
