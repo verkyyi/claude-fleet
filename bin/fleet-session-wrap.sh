@@ -176,11 +176,28 @@ while :; do
   fi
   t0=$(date +%s)
   export FLEET_WRAP_LAUNCH_ID="$$-$t0"     # the session a personal hook's strikes count in (#1862)
+  # The session's SUBSCRIPTION credential goes through this login's proxy (issue
+  # #1972, EPIC #1967 C5): with FLEET_CRED_PROXY=1 every launch gets its own
+  # FLEET_CRED_SID, the launcher (fleet-claude.sh / fleet-codex.sh) has the proxy
+  # mint a session credential for it — an fcp1. bound to the picked account, or on
+  # an untrusted machine an fcp-h1. pass from the hub — and it is revoked here when
+  # the agent exits. `fleet-account.sh migrate` then rebinds the sid: no closed
+  # window. Switched off: nothing is set — the launch is what it always was.
+  unset FLEET_CRED_SID
+  if [ -f "$BIN/fleet-session-cred.sh" ] && bash "$BIN/fleet-session-cred.sh" on 2>/dev/null; then
+    export FLEET_CRED_SID="w-$$-$t0"
+    [ "$intmux" = 1 ] && wset @cred_sid "$FLEET_CRED_SID"
+  fi
   PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   rc=$?
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then
     python3 "$BIN/fleet-mcp.py" --cred revoke 2>/dev/null
     unset FLEET_WORKER_CRED
+  fi
+  if [ -n "${FLEET_CRED_SID:-}" ]; then
+    bash "$BIN/fleet-session-cred.sh" revoke --sid "$FLEET_CRED_SID" 2>/dev/null
+    [ "$intmux" = 1 ] && { wset -u @cred_sid; wset -u @cred_route; }
+    unset FLEET_CRED_SID
   fi
   [ "$intmux" = 1 ] || exit "$rc"
   # The fleet made it exit (it stamped @wrap_quiet), or a sleep is under way.
