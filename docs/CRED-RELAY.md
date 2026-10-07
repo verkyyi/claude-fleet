@@ -28,6 +28,8 @@
 **只开 `/openai-auth/`**。审计里刷新记录写 `refresh_via=relay`；转发机不可达、网关错、拒绝通行证时
 回落到 node 路（审计写明 `relay unavailable: <原因>`）。Claude 的刷新仍走 node 路。
 
+prod 入口已开（#2137：`deploy/k8s/overlays/prod/deployment-env.yaml`，base 仍是 `node`）；回滚删掉 overlay 那一条即可。
+
 ## 入口自己读订阅额度（issue #2169）
 
 入口设 `CCQUOTA_FLEET_HUB_QUOTA=relay`（同样要 `CCQUOTA_FLEET_CRED_RELAY_URL` 和
