@@ -60,3 +60,8 @@ bin/fleet-agent-defaults.py         tool
 bin/fleet-agent-team.py             tool
 bin/fleet-config.py                 tool
 bin/fleet-daemon-lib.sh             tool
+
+# the credential proxy every session reaches its subscription through (#1970):
+# a client-only computer runs it too (`fleet-cred-proxy.sh ensure`)
+bin/fleet-cred-proxy.sh             tool
+bin/fleet-cred-proxy.py             tool

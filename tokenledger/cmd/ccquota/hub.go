@@ -220,6 +220,36 @@ func loadFleetCerts(srv *api.Server) error {
 	return nil
 }
 
+// loadSessionCreds wires session passes for untrusted machines
+// (claude-fleet#1969): CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE] is the signing
+// key (its own k8s Secret, never the database);
+// CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE] admits the cluster
+// credential proxy and the relay to /verify. No key: the routes answer 503
+// and nothing else changes. A key that is set but unreadable is fatal.
+func loadSessionCreds(srv *api.Server) error {
+	key, ok, err := api.LoadSessionCredKey(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		log.Printf("fleet: no CCQUOTA_FLEET_SESSION_CRED_KEY — session passes are off")
+		return nil
+	}
+	srv.SessionCredKey = key
+	vt := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN"))
+	if path := os.Getenv("CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN_FILE"); path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN_FILE: %w", err)
+		}
+		vt = strings.TrimSpace(string(b))
+	}
+	srv.SessionCredVerifyToken = vt
+	log.Printf("fleet: session passes on — /v1/fleet/session-cred (verify: %s)",
+		map[bool]string{true: "verifier token + operator", false: "operator only"}[vt != ""])
+	return nil
+}
+
 func runHub(args []string) error {
 	fs := flag.NewFlagSet("hub", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8787",
@@ -518,6 +548,9 @@ func runHub(args []string) error {
 			return err
 		}
 		if err := fleetRefreshVia(srv, vault); err != nil {
+			return err
+		}
+		if err := loadSessionCreds(srv); err != nil {
 			return err
 		}
 		// SPOT nodes (claude-fleet#1428): on only with an image to run.

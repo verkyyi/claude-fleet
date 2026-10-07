@@ -380,6 +380,7 @@ func (s *Server) handleFleetRevoke(w http.ResponseWriter, r *http.Request) {
 		audit.Action = store.CredRevoke
 	}
 	_ = s.Store.AddCredAudit(audit)
+	s.sessCred.drop("") // a session pass of the revoked machine / person stops at once (#1969)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": audit.Action})
 }
 

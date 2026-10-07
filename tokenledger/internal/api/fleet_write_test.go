@@ -383,8 +383,12 @@ func TestFleetWriteAuthorization(t *testing.T) {
 // start named at it is refused.
 func TestFleetWriteNodeCap(t *testing.T) {
 	h, m5, m4, _, f4 := twoNodes(t)
+	// No machine has a default cap (claude-fleet#1994): the operator sets one.
+	if err := h.srv.Store.SetFleetSetting(NodeCapPrefix+"m4", "6", time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	m5.beatLoad("m5", "verk", machineA, 1, 3, fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1))
-	m4.beatLoad("m4", "verk", machineB, 0, 6, f4) // idle, but at m4's default cap of 6
+	m4.beatLoad("m4", "verk", machineB, 0, 6, f4) // idle, but at m4's cap of 6
 	time.Sleep(100 * time.Millisecond)
 
 	op := postFleet(t, h, "worker_start", map[string]any{"issue": 14, "repo": writeRepo, "idempotency_key": "cap-1"}, 200)

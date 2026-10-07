@@ -166,6 +166,16 @@ type Server struct {
 	// as short-lived tokens. nil (no key configured) leaves every credential
 	// route answering 503 and the rest of the fleet module unaffected.
 	Vault *credvault.Vault
+	// SessionCredKey signs session passes for untrusted machines
+	// (claude-fleet#1969, CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]); it never
+	// leaves the hub. Nil: /v1/fleet/session-cred answers 503.
+	SessionCredKey []byte
+	// SessionCredVerifyToken lets the cluster credential proxy and the relay
+	// call POST /v1/fleet/session-cred/verify
+	// (CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]); empty = the operator only.
+	SessionCredVerifyToken string
+	// sessCred caches verified passes' rows for ≤ 30 s.
+	sessCred sessionCredCache
 	// leaseNow replaces the lease clock in tests (claude-fleet#1422).
 	leaseNow func() time.Time
 
@@ -401,6 +411,11 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevoke))))
 		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredAudit))))
 		mux.Handle("/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveCredentialsPage))))
+		// Session passes for untrusted machines (claude-fleet#1969): issue /
+		// renew / revoke by the node's token, verify by the verifiers' token,
+		// the list by the operator — each route checks its own.
+		mux.HandleFunc("/v1/fleet/session-cred", s.handleSessionCred)
+		mux.HandleFunc("/v1/fleet/session-cred/", s.handleSessionCred)
 		// The relay (claude-fleet#1413). Both halves authenticate
 		// themselves: the client by session, token or certificate (the
 		// last proven in-band, so outside the viewer gate), the agent by

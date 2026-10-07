@@ -168,4 +168,6 @@ bin/fleet-hooks-merge.py
 bin/fleet-agent-defaults.py
 bin/fleet-agent-team.py
 bin/fleet-config.py
+bin/fleet-cred-proxy.sh
+bin/fleet-cred-proxy.py
 # --- end agent bundle ---

@@ -19,8 +19,10 @@ service, register machines or grant anyone access.
 > `config_get` / `operation_get` (plus `fleet_sessions`) over its MCP endpoint,
 > and every write tool below with the same journal semantics (issue #1410). Its
 > `worker_start` can also omit `fleet_id`: `node=auto` places the start on the
-> caller's least-loaded machine with account headroom, under a per-person cap
-> per machine (`fleet.node_cap.<machine>`, m4 = 6), and journals why.
+> caller's least-loaded machine — the tighter of CPU and memory idle; account
+> quota is shared by every machine and never scored (issue #1994) — under a
+> per-person cap per machine only where one is set (`fleet.node_cap.<machine>`,
+> no default), and journals why.
 > This Python hub is kept as is for one machine, or when the cloud hub is out of
 > reach. See `tokenledger/README.md`, "Sessions on every machine".
 
@@ -1272,6 +1274,26 @@ principal and revocation checks, an untrusted machine's lease is
 `403 untrusted_node` plus a `fleet_cred_audit` deny row. The roster and
 `GET /v1/node/self` carry `trust`. The doctor's `可信` row shows it for this
 machine (`fleet-node-trust.sh self`).
+
+**An untrusted machine's session borrows a pass (claude-fleet#1969).** Instead
+of a credential, a session asks `POST /v1/fleet/session-cred` (the node's
+enrollment token + the session's own `X-Fleet-Worker` assertion, #1810; body
+`{providers?, ttl_seconds?}`) for an `fcp-h1.` pass: one person, one session
+(`worker_id`), `claude`/`codex`, 24 h by default, signed with a key only the hub
+holds (`CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]`, 32 bytes base64; unset = every
+route `503 session_cred_off`). It is issued only when the assertion verifies
+under this node's token, names a fleet this node runs, and the login is an
+active, unrevoked person. `POST …/renew {cred}` (the issuing node, from
+`renew_after` = 2 h before expiry) hands back the same pass id with a new
+expiry; `DELETE …/<id>` (the issuing node — the session wrapper at exit — or the
+operator) revokes it; `GET …` is the operator's list (`?all=1`). The cluster
+credential proxy and the relay call `POST …/verify {cred, principal?, provider?}`
+with `CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]` (or the operator's token)
+→ `{valid, reason, principal, worker_id, machine, providers, exp, revoked}`;
+verify caches a pass's row ≤ 30 s, and a revocation through the hub — the pass's
+DELETE, or a machine / person revoke — is seen at once. Every issue, renewal and
+revocation is a `fleet_audit` row (`session_cred`) carrying the `worker_id`. A
+trusted machine may ask for one too; by default it leases as before.
 
 Importing: `bin/fleet-creds-import.sh` for Claude setup tokens,
 `bin/fleet-creds-import.sh --codex [profile]` for a Codex refresh token (reads
