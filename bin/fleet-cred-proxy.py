@@ -13,6 +13,8 @@ request on, with the real credential put in on the way out (or none, centrally).
     attach  --sid NAME          (a hub session credential, fcp-h1.…, on STDIN —
                                  what the central route forwards for this sid)
     status  [--json]
+    quota                       → {sid: the last rate-limit reading} as JSON
+                                 (issue #1978 — bin/fleet-proxy-quota.sh stamps it)
     store   --kind claude|codex --label LABEL   (the file's bytes on STDIN — the
                                  node agent's lease, separated mode only)
     probe                       (node-probe.json on STDIN — separated mode only)
@@ -24,6 +26,16 @@ request on, with the real credential put in on the way out (or none, centrally).
 <state>/ctl.sock (0600); every other subcommand is a client of that socket.
 <state> is $FLEET_CONF_DIR/cred-proxy. bin/fleet-cred-proxy.sh is the launcher
 (launchd / systemd run it; it reads fleet.conf and honours FLEET_CRED_PROXY).
+
+QUOTA READINGS (issue #1978): every answer the provider sends carries the
+account's rate-limit windows — Claude `anthropic-ratelimit-unified-{5h,7d}-
+{utilization,reset}`, Codex `x-codex-{primary,secondary}-{used-percent,
+window-minutes,reset-at}`. The proxy keeps the newest one per session (memory
+only; no credential in it) and answers it on ctl `quota`;
+bin/fleet-proxy-quota.sh hands each to `conf/statusline.sh --from proxy` on the
+window whose @cred_sid it is. Not separated, a fresh reading also kicks
+FLEET_CRED_QUOTA_PUSH (the launcher points it at that script; empty = off),
+at most once per FLEET_CRED_QUOTA_PUSH_SECS (2).
 
 ROUTES (EPIC #1967 共同约定 1) — decided ONLY by the hub's record of this
 machine's trust × the last probe (bin/fleet-node-probe.sh → node-probe.json):
@@ -60,6 +72,18 @@ the hub with the node token put in, for a fcpn1. credential minted over the
 control socket. The broker refuses POST /v1/node/credentials: a session that
 asks for the node token gets something that can place, move and lease issues,
 never something that can lease the subscription pool (EPIC route ④).
+
+PER-PERSON BUDGET (issue #1977, EPIC #1967 R2): every 2xx answer sent with a
+credential of this login (direct / relay) is metered off its own `usage`
+(input + cache writes + output — cache reads are left out) and reported to the
+hub every FLEET_CRED_BUDGET_SECS (15) as POST /v1/node/usage with the node
+token; the hub files it under the login's person and answers their standing
+against fleet.person_budget.<principal>. Over it, every request is refused 403
+with error.code person_budget_exceeded and the hub's line (「已达个人额度…」) —
+neither client retries a 403. The central route is metered by the cluster
+proxy, never twice here. No hub / no node token / FLEET_CRED_BUDGET=0 = nothing
+reported, nothing refused; a verdict the hub has not renewed for
+FLEET_CRED_BUDGET_STALE (600 s) lapses (open).
 """
 import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, secrets
 import resource, signal, socket, ssl, sys, threading, time, urllib.request
@@ -125,6 +149,138 @@ def node_env():
     except OSError:
         pass
     return out
+
+
+# ---- per-person budget (issue #1977) ------------------------------------------
+BUDGET_CODE = "person_budget_exceeded"
+
+
+class Meter:
+    """What one answer says it used: the largest value each usage field
+    reached (Claude: message_start + message_delta; Codex: response.completed;
+    a plain JSON body: once). Mirrors tokenledger internal/credproxy usage.go."""
+    MAX_WHOLE = 8 << 20
+
+    def __init__(self):
+        self.line, self.whole, self.sse, self.f = bytearray(), bytearray(), False, {}
+
+    def feed(self, d):
+        if not self.sse and len(self.whole) < self.MAX_WHOLE:
+            self.whole += d
+        parts = d.split(b"\n")
+        for i, p in enumerate(parts):
+            if len(self.line) < (1 << 20):
+                self.line += p
+            if i < len(parts) - 1:
+                self.on_line(bytes(self.line)); self.line = bytearray()
+
+    def on_line(self, l):
+        l = l.strip()
+        if l.startswith(b"event:"):
+            self.sse, self.whole = True, bytearray()
+        if not l.startswith(b"data:"):
+            return
+        self.sse, self.whole = True, bytearray()
+        try:
+            self.take(json.loads(l[5:].strip()))
+        except ValueError:
+            pass
+
+    def take(self, v):
+        if not isinstance(v, dict):
+            return
+        for u in (v.get("usage"), (v.get("message") or {}).get("usage") if isinstance(v.get("message"), dict) else None,
+                  (v.get("response") or {}).get("usage") if isinstance(v.get("response"), dict) else None):
+            if not isinstance(u, dict):
+                continue
+            for k, x in u.items():
+                if isinstance(x, (int, float)) and not isinstance(x, bool) and x > self.f.get(k, 0):
+                    self.f[k] = int(x)
+            det = u.get("input_tokens_details")
+            if isinstance(det, dict) and isinstance(det.get("cached_tokens"), (int, float)):
+                self.f["cached_tokens"] = max(self.f.get("cached_tokens", 0), int(det["cached_tokens"]))
+
+    def tokens(self):
+        if not self.sse and self.whole:
+            try:
+                self.take(json.loads(bytes(self.whole)))
+            except ValueError:
+                pass
+            self.whole = bytearray()
+        g = self.f.get
+        return (max(0, g("input_tokens", 0) - g("cached_tokens", 0)) + g("cache_creation_input_tokens", 0)
+                + g("output_tokens", 0) + g("prompt_tokens", 0) + g("completion_tokens", 0))
+
+
+class Budget:
+    """This login's person's standing, as the hub last said, and what is still
+    to be reported."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.pending = {}            # provider -> [tokens, requests]
+        self.state, self.ts, self.err = {}, 0, ""
+
+    def add(self, provider, tokens):
+        if tokens <= 0:
+            return
+        with self.lock:
+            p = self.pending.setdefault(provider, [0, 0])
+            p[0] += tokens; p[1] += 1
+
+    def over(self):
+        """-> the hub's line when the person is over (and the word is fresh), else ""."""
+        stale = int(env("FLEET_CRED_BUDGET_STALE", "600"))
+        with self.lock:
+            if self.state.get("over") and time.time() - self.ts < stale:
+                return self.state.get("message") or "已达个人额度（%s）" % BUDGET_CODE
+        return ""
+
+    def flush(self, log=None):
+        """POST the pending usage (none = just ask); keep it on failure."""
+        if env("FLEET_CRED_BUDGET", "1") == "0":
+            return None
+        ne = node_env()
+        hub = (ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/")
+        tok = ne.get("CCQUOTA_TOKEN", "")
+        if not hub or not tok or not loopback_ok(hub):
+            return None
+        with self.lock:
+            sent = {k: list(v) for k, v in self.pending.items()}
+        body = json.dumps({"usage": [{"provider": k, "tokens": v[0], "requests": v[1]} for k, v in sorted(sent.items())]}).encode()
+        try:
+            req = urllib.request.Request(hub + "/v1/node/usage", data=body, method="POST",
+                                         headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                st = json.loads(r.read() or b"{}")
+        except Exception as e:
+            with self.lock:
+                self.err = type(e).__name__
+            return None
+        with self.lock:
+            for k, (t, n) in sent.items():
+                p = self.pending.get(k)
+                if p:
+                    p[0] -= t; p[1] -= n
+                    if p[0] <= 0 and p[1] <= 0:
+                        del self.pending[k]
+            was = bool(self.state.get("over"))
+            self.state, self.ts, self.err = st if isinstance(st, dict) else {}, time.time(), ""
+            now_over = bool(self.state.get("over"))
+        if log and was != now_over:
+            log(ev="budget", over=now_over, principal=self.state.get("principal", ""),
+                window=self.state.get("window", ""), used_5h=self.state.get("used_5h", 0),
+                used_week=self.state.get("used_week", 0))
+        return self.state
+
+    def view(self):
+        with self.lock:
+            s = dict(self.state)
+            out = {k: s.get(k) for k in ("principal", "over", "window", "used_5h", "limit_5h",
+                                         "used_week", "limit_week", "message") if k in s}
+            out.update(age=int(time.time() - self.ts) if self.ts else None, err=self.err,
+                       pending=sum(v[0] for v in self.pending.values()))
+            return out
 
 
 # ---- session credentials (fcp1.<claims>.<HMAC>) ----------------------------
@@ -273,9 +429,46 @@ class Router:
 class Proxy(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     cfg = keys = router = None
+    budget = Budget()
     lock = threading.Lock()
     skip = {}       # sid -> {route: until}: a route that refused this session
     hubcreds = {}   # sid -> fcp-h1.… handed in over ctl `attach` (memory only)
+    quota = {}      # sid -> its newest rate-limit reading (issue #1978; memory only)
+    push_due = False
+
+    @classmethod
+    def note_quota(cls, sid, provider, acct, route, headers):
+        """Keep this answer's rate-limit reading for its session, then kick the push."""
+        if sid in ("-", "node"):
+            return
+        rd = rl_reading(provider, headers)
+        if not rd:
+            return
+        rd.update(provider=provider, acct=acct, route=route, ts=int(time.time()))
+        with cls.lock:
+            cls.quota[sid] = rd
+            if len(cls.quota) > 4096:   # a day of dead sessions, at most: oldest out
+                for k in sorted(cls.quota, key=lambda k: cls.quota[k]["ts"])[:len(cls.quota) - 4096]:
+                    del cls.quota[k]
+            # separated, the proxy is another uid: it cannot reach the login's tmux,
+            # so the quota watch's tick pulls instead (fleet-proxy-quota.sh push)
+            kick = bool(cls.cfg.quota_push) and not cls.cfg.store and not cls.push_due
+            cls.push_due = cls.push_due or kick
+        if kick:
+            t = threading.Timer(cls.cfg.quota_push_secs, cls.run_push)
+            t.daemon = True
+            t.start()
+
+    @classmethod
+    def run_push(cls):
+        with cls.lock:
+            cls.push_due = False
+        try:
+            import subprocess
+            subprocess.Popen([cls.cfg.quota_push, "push"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            cls.log(ev="quota_push_err", err=type(e).__name__)
 
     def log_message(self, fmt, *a):
         pass
@@ -295,8 +488,11 @@ class Proxy(BaseHTTPRequestHandler):
             if cls.cfg.verbose:
                 sys.stderr.write(line + "\n"); sys.stderr.flush()
 
-    def fail(self, code, msg, typ="authentication_error"):
-        body = json.dumps({"type": "error", "error": {"type": typ, "message": "cred-proxy: " + msg}}).encode()
+    def fail(self, code, msg, typ="authentication_error", ecode=""):
+        err = {"type": typ, "message": "cred-proxy: " + msg}
+        if ecode:
+            err["code"] = ecode
+        body = json.dumps({"type": "error", "error": err}, ensure_ascii=False).encode()
         self.send_response(code)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
@@ -421,6 +617,11 @@ class Proxy(BaseHTTPRequestHandler):
         return base, upath, put, drop, "file"
 
     def send(self, order, provider, path, body, hubcred, sid, acct, seen, t0, public=False):
+        over = "" if public else self.budget.over()
+        if over:
+            # the person is over their budget (issue #1977): 403, never retried
+            self.log(ev="deny", sid=sid, acct=acct, path=path.split("?")[0], why=BUDGET_CODE)
+            return self.fail(403, over, "permission_error", BUDGET_CODE)
         order = [r for r in self.plan(order, sid)
                  if (r != "relay" or (self.cfg.relay_url and relay_pass(self.cfg))) and (r != "central" or (self.cfg.central_url and hubcred))]
         if not order:
@@ -483,6 +684,8 @@ class Proxy(BaseHTTPRequestHandler):
             self.fail(502, "upstream %s: %s" % (route, type(e).__name__), "api_error")
             return None
         ttfb = time.time() - t0
+        if provider in ("claude", "codex"):
+            self.note_quota(sid, provider, acct, route, r.getheaders())
         first = b""
         if r.status == 403:
             first = r.read(65536)
@@ -502,12 +705,17 @@ class Proxy(BaseHTTPRequestHandler):
             self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
         size = 0
+        # metered here only when this login's credential was used (issue #1977):
+        # the central route's answer is the cluster proxy's to count
+        meter = Meter() if cred == "file" and 200 <= r.status < 300 else None
         try:
             if chunked:
                 d = first
                 while True:
                     if d:
                         size += len(d)
+                        if meter:
+                            meter.feed(d)
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(d), d)); self.wfile.flush()
                     d = r.read1(65536)
                     if not d:
@@ -516,11 +724,63 @@ class Proxy(BaseHTTPRequestHandler):
         except OSError:
             pass
         conn.close()
+        extra = {}
+        if meter:
+            extra["tokens"] = meter.tokens()
+            self.budget.add(provider, extra["tokens"])
         self.log(ev="fwd", sid=sid, acct=acct, route=route, cred=cred, provider=provider,
                  m=self.command, path=self.path.split("?")[0], up=u.netloc, status=r.status,
                  ttfb_ms=int(ttfb * 1000), total_ms=int((time.time() - t0) * 1000), bytes=size,
-                 hdrs_in=seen, sent=sorted(k.lower() for k in out))
+                 hdrs_in=seen, sent=sorted(k.lower() for k in out), **extra)
         return None
+
+
+def _num(v):
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if x == x and x not in (float("inf"), float("-inf")) else None
+
+
+def rl_reading(provider, headers, now=None):
+    """The rate-limit windows on one upstream answer, on the bus's scale (issue
+    #1978): {"rl5h", "rl7d", "rl_reset5", "rl_reset7"} — percents as decimal
+    strings (Claude's fraction × 100, ccquota's Utilization; never rounded here:
+    conf/statusline.sh is the one place that floors) and epoch-second resets
+    ("-" when absent) — or None when either window is missing: a half reading
+    is no reading (the quota watch's rule)."""
+    h = {k.lower(): v for k, v in headers}
+    now = int(now or time.time())
+    if provider == "codex":
+        wins = []
+        for w in ("primary", "secondary"):
+            pct = _num(h.get("x-codex-%s-used-percent" % w))
+            if pct is None:
+                return None
+            mins = _num(h.get("x-codex-%s-window-minutes" % w))
+            rs = _num(h.get("x-codex-%s-reset-at" % w))
+            if rs is None and _num(h.get("x-codex-%s-reset-after-seconds" % w)) is not None:
+                rs = now + _num(h.get("x-codex-%s-reset-after-seconds" % w))
+            wins.append((mins, pct, rs))
+        # primary is the short window; trust the minutes when both say otherwise
+        if wins[0][0] is not None and wins[1][0] is not None and wins[0][0] > wins[1][0]:
+            wins.reverse()
+        (_, p5, r5), (_, p7, r7) = wins
+    else:
+        p5 = _num(h.get("anthropic-ratelimit-unified-5h-utilization"))
+        p7 = _num(h.get("anthropic-ratelimit-unified-7d-utilization"))
+        if p5 is None or p7 is None:
+            return None
+        p5, p7 = p5 * 100, p7 * 100
+        r5 = _num(h.get("anthropic-ratelimit-unified-5h-reset"))
+        r7 = _num(h.get("anthropic-ratelimit-unified-7d-reset"))
+    if p5 < 0 or p7 < 0:
+        return None
+    # six places cancel the float noise (0.29 × 100 = 28.999…96 → "29")
+    pc = lambda x: ("%.6f" % x).rstrip("0").rstrip(".")
+    rs = lambda r: str(int(r)) if r is not None and r > 0 else "-"
+    return {"rl5h": pc(p5), "rl7d": pc(p7), "rl_reset5": rs(r5), "rl_reset7": rs(r7)}
 
 
 def claude_token(accounts, label):
@@ -645,6 +905,7 @@ def ctl_handle(req, cfg):
             fd = os.open(os.path.join(cfg.state, "revoked"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             os.write(fd, (sid + "\n").encode()); os.close(fd)
             Proxy.hubcreds.pop(sid, None)
+            Proxy.quota.pop(sid, None)
         Proxy.log(ev="revoke", sid=sid)
         return {"ok": True}
     if op == "attach":
@@ -710,11 +971,15 @@ def ctl_handle(req, cfg):
         if not t:
             return {"ok": False, "err": "node-hash: no node token here"}
         return {"ok": True, "hash": hashlib.sha256(t.encode()).hexdigest()}
+    if op == "quota":
+        with Proxy.lock:
+            q = {k: dict(v) for k, v in Proxy.quota.items() if v["ts"] > time.time() - 86400}
+        return {"ok": True, "quota": q}
     if op == "status":
         return {"ok": True, "pid": os.getpid(), "port": cfg.bound_port, "separated": bool(cfg.store),
                 "trust": Proxy.router.trust or "unknown", "trust_why": Proxy.router.trust_why,
                 "relay": bool(cfg.relay_url), "relay_pass": bool(relay_pass(cfg)),
-                "central": cfg.central_url or ""}
+                "central": cfg.central_url or "", "budget": Proxy.budget.view()}
     return {"ok": False, "err": "unknown op %r" % op}
 
 
@@ -827,6 +1092,8 @@ def serve(a):
     cfg.ttl = int(env("FLEET_CRED_PROXY_TTL", "86400"))
     cfg.switch_ttl = int(env("FLEET_CRED_PROXY_SWITCH_SECS", "1800"))
     cfg.timeout = int(env("FLEET_CRED_PROXY_TIMEOUT", "600"))
+    cfg.quota_push = env("FLEET_CRED_QUOTA_PUSH")
+    cfg.quota_push_secs = float(env("FLEET_CRED_QUOTA_PUSH_SECS", "2"))
     # separated mode (issue #1971): set by bin/fleet-credsep-launch.py only
     cfg.store = env("FLEET_CRED_STORE") == "1"
     cfg.broker = cfg.store
@@ -898,6 +1165,10 @@ def serve(a):
         signal.signal(signal.SIGALRM, bye); signal.alarm(a.max_seconds)
 
     Proxy.router.refresh(Proxy.log)
+    try:
+        Proxy.budget.flush(Proxy.log)
+    except Exception:
+        pass
     with open(portf + ".tmp", "w") as f:
         f.write("%d\n" % cfg.bound_port)
     os.replace(portf + ".tmp", portf)
@@ -911,11 +1182,18 @@ def serve(a):
 
     def tick():
         every = max(5, int(env("FLEET_CRED_PROXY_TRUST_SECS", "300")))
-        last = time.time()
+        bevery = max(1, int(env("FLEET_CRED_BUDGET_SECS", "15")))
+        last = blast = time.time()
         while True:
             time.sleep(1)
             if a.parent_watch and os.getppid() != parent:
                 bye()       # the launcher died: never outlive it as an orphan
+            if time.time() - blast >= bevery:
+                blast = time.time()
+                try:
+                    Proxy.budget.flush(Proxy.log)
+                except Exception:
+                    pass
             if time.time() - last >= every:
                 last = time.time()
                 try:
@@ -954,6 +1232,7 @@ def main():
     v.add_argument("--sid", required=True)
     t = sub.add_parser("attach")
     t.add_argument("--sid", required=True)
+    sub.add_parser("quota")
     u = sub.add_parser("status")
     u.add_argument("--json", action="store_true")
     o = sub.add_parser("store")
@@ -993,6 +1272,8 @@ def main():
         print("%s\t%s" % (res["url"], res["token"]))
     elif a.cmd == "node-hash":
         print(ctl_call(a.state, {"op": "node-hash"})["hash"])
+    elif a.cmd == "quota":
+        print(json.dumps(ctl_call(a.state, {"op": "quota"})["quota"], sort_keys=True))
     elif a.cmd == "status":
         res = ctl_call(a.state, {"op": "status"})
         res.pop("ok", None)
