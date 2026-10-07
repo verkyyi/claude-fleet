@@ -313,7 +313,7 @@ lib_fn=$(fnbody "$BIN/fleet-client-lib.sh")
 [ -n "$lib_fn" ] && [ "$lib_fn" = "$(fnbody "$BIN/fleet-node-join.sh")" ] \
   && ok "F fleet-node-join.sh's fc_tmux_ok is fleet-client-lib.sh's, byte for byte" || bad "F fc_tmux_ok copies differ"
 F="$WORK/f"; FARM="$F/farm"; mkdir -p "$FARM"
-for t in sh bash curl python3 ssh ssh-keygen uname tr awk sed mkdir mktemp rm mv chmod dirname basename head tail cat grep od id env pwd cmp true date sleep wc tar ls; do
+for t in sh bash curl python3 ssh ssh-keygen uname tr awk sed mkdir mktemp rm mv chmod dirname basename head tail cat grep od id env pwd cmp true date sleep wc tar gzip ls; do
   p=$(type -P "$t") && ln -sf "$p" "$FARM/$t"   # a path, not a builtin
 done
 # fakes: brew (logs, `install tmux` puts a tmux 3.5a in its own bin, which its
@@ -749,7 +749,7 @@ KHUB="http://127.0.0.1:$(cat "$K/port" 2>/dev/null)"
 sed -e "s|__FLEET_HUB_URL__|$KHUB|g" -e "s|__FLEET_INVITE__|inv-K2260abc|g" "$BIN/fleet-install.sh" > "$K/install.sh"
 # a PATH a stock computer has: no brew, no tmux (only what the install itself runs)
 KP="$K/path"; mkdir -p "$KP"
-for t in sh bash curl python3 ssh ssh-keygen uname tr awk sed mkdir mktemp rm mv chmod dirname basename head tail cat grep od id env pwd cmp true date sleep wc tar ls find ps cut sort stat; do
+for t in sh bash curl python3 ssh ssh-keygen uname tr awk sed mkdir mktemp rm mv chmod dirname basename head tail cat grep od id env pwd cmp true date sleep wc tar gzip ln ls find ps cut sort stat; do
   p=$(type -P "$t") && ln -sf "$p" "$KP/$t"
 done
 # kinstall <home> — one install with nothing given; $out, $rc, $secs
