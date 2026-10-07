@@ -298,8 +298,7 @@ home_up() { local p; p=$(o home pane_pid); [ -n "$p" ] && [ "$(o home pane_dead)
 home_exit() {
   waitfor "D: home's shell is up" home_up
   hpid=$(o home pane_pid)
-  local i
-  for i in $(seq 1 5); do
+  for _ in $(seq 1 5); do
     tf send-keys -t sw:home 'exit' Enter
     for _ in $(seq 1 20); do kill -0 "$hpid" 2>/dev/null && [ "$(ps -o stat= -p "$hpid" 2>/dev/null | cut -c1)" != Z ] || return 0; sleep 0.1; done
   done
