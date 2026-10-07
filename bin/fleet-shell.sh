@@ -74,8 +74,10 @@
 #   viewer <session>       the right pane of `home`: a nested client of the stage,
 #                          started again (with the stage, when it is gone) for as
 #                          long as the shell's server lives
-#   wait <session>         the stage's first window when no machine is online: a
-#                          note, gone as soon as a row opens a real one
+#   wait <session> [<machine>]  the stage's first window when no machine is online: a
+#                          note, gone as soon as a row opens a real one. With a
+#                          machine (THIS computer, no fleet of this login here —
+#                          issue #2219): the home page, how to start, instead
 #   portal <session>       ⌘N / prefix c / a tap on 「新任务」 (issue #1953): the
 #                          stage's writing-area window (`@fleet_role portal`,
 #                          `@remote new`, bin/fleet-compose.py) made once and
@@ -851,7 +853,14 @@ warm)
 # ---------------------------------------------------------------------------------
 wait)
   s="${2:-$SESS}"
-  printf '\n  入口没有在线的机器，或者连不上入口。\n  左边是入口给的列表（缓存也算）：点一行就进那台机器；底下一栏说入口通不通。\n  prefix d 离开；再敲 fleet 回来。\n'
+  if [ -n "${3:-}" ]; then
+    # the home page (issue #2219): the pick was THIS computer and this login has
+    # no fleet here — a client that only looks and hands out work. Not a failed
+    # connection: how to start, instead.
+    printf '\n  这台电脑（%s）上没有你的 fleet 会话——这个客户端只看、只派，正常。\n  开第一个会话：⌘N 新任务，写下要做的事，入口交给有空的机器去做。\n  左边是你在各台机器上的会话：点一行就进去。\n  prefix d 离开；再敲 fleet 回来。\n' "$3"
+  else
+    printf '\n  入口没有在线的机器，或者连不上入口。\n  左边是入口给的列表（缓存也算）：点一行就进那台机器；底下一栏说入口通不通。\n  prefix d 离开；再敲 fleet 回来。\n'
+  fi
   # its own server's windows: the stage's (issue #1759), or — a shell started
   # before it — the shell's own
   while [ "$(tmux list-windows -F x 2>/dev/null | grep -c x)" -le 1 ]; do
@@ -1116,10 +1125,22 @@ fi
 #    machine's window (issue #1759), then the shell's one window, `home`, whose
 #    right pane looks at the stage
 write_conf || fail_start "写不了 $CACHE/tmux.conf"
+# The pick is THIS computer but this login has no fleet here (issue #2219: a
+# newcomer's 「只看、只派」 client on the machine the hub knows them by): no
+# connection that can only fail with 「没有活着的 fleet 会话」 — the home page,
+# how to start, in its place.
+home=''
+if [ -n "$node" ] && this_machine "$node" && ! bash "$SHADOW/fleet-remote-view.sh" live >/dev/null 2>&1; then
+  home=$node; node=''
+fi
 if [ -n "$node" ]; then
   title="$node"
   cmd="exec bash $(sq "$SHADOW/fleet-remote-view.sh") run --shell $(sq "$node") -"
   remote="$node:"
+elif [ -n "$home" ]; then
+  title="fleet"
+  cmd="exec bash $(sq "$SHADOW/fleet-shell.sh") wait $(sq "$SESS") $(sq "$home")"
+  remote="-:"
 else
   title="fleet"   # no machine picked yet; known by @remote=-:, not the name (#1621)
   cmd=''          # stage_up's default: the `wait` note
