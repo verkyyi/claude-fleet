@@ -81,7 +81,9 @@ func (s *Server) pageLocale(w http.ResponseWriter, r *http.Request) string {
 
 	if q := parseLang(r.URL.Query().Get("lang")); q != "" {
 		if signedIn && q != account {
-			_ = s.Store.SetFleetSetting(langSettingKey(id), q, time.Now())
+			// Through the settings store, so the change is audited like
+			// every other setting (claude-fleet#1986).
+			_, _ = s.putHubSetting(githubPrincipal(id), langSettingKey(id), q, time.Now())
 		}
 		if q != cookie {
 			setLangCookie(w, r, q)

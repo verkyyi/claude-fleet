@@ -26,12 +26,29 @@ import (
 // route list.
 const routesClockSkew = 5 * time.Minute
 
-// fleetMachines is the merged machine list: CCQUOTA_FLEET_ROUTES, then what
-// the nodes advertise.
+// fleetMachines is the merged machine list: CCQUOTA_FLEET_ROUTES, then the
+// admin's fleet.routes_extra (claude-fleet#1986), then what the nodes
+// advertise.
 func (s *Server) fleetMachines() []FleetMachine {
 	out := make([]FleetMachine, 0, len(s.FleetRoutes))
 	idx := map[string]int{}
-	for _, m := range s.FleetRoutes {
+	for _, m := range append(append([]FleetMachine(nil), s.FleetRoutes...), s.routesExtra()...) {
+		if i, ok := idx[m.Hostname]; ok {
+			// The same machine again: its new routes join, by name.
+			have := map[string]bool{}
+			for _, r := range out[i].Routes {
+				have[r.Name] = true
+			}
+			for _, r := range m.Routes {
+				if !have[r.Name] {
+					out[i].Routes = append(out[i].Routes, r)
+				}
+			}
+			if out[i].Alias == "" {
+				out[i].Alias = m.Alias
+			}
+			continue
+		}
 		m.Routes = append([]FleetRoute(nil), m.Routes...)
 		idx[m.Hostname] = len(out)
 		out = append(out, m)

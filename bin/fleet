@@ -24,6 +24,10 @@
 #                               own lease beside yours — takes nothing over,
 #                               never where you are; the default inside a
 #                               session (FLEET_CLIENT_IDENTITY=test)
+#   fleet users [list|add <name>|remove <name>]
+#                               who may sign in to the hub with GitHub (#1986)
+#   fleet hub set <key> <value> the hub's settings, at once, audited (#1986);
+#                               fleet hub settings | get <key> | unset <key>
 #   fleet doctor                with only the client here: its `fleet` row
 #                               (version, hub, tmux, cert — #1722) and its
 #                               `能力` row (基础 · 承载, #1806), then this
@@ -81,7 +85,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
