@@ -115,6 +115,9 @@ preview ctrl-p alt-p' ;;
 # the profile. `new` (issue #1953, EPIC #1949 C4): ⌘N opens the writing area on
 # the right (bin/fleet-compose.py, the stage's `@fleet_role portal` window) —
 # prefix c elsewhere, tmux's own new-window key, which the client has no use for.
+# `fold` (issue #2167): ⌘. opens or shuts the sub-tasks of the session in view
+# (on a sub-task: shuts its parent) — the list's caret, from wherever the
+# keyboard is; prefix . elsewhere (tmux's move-window prompt, no use here).
 switch) TABLE='next ⌘↓ 0xf701-0x300000 920 n
 prev ⌘↑ 0xf700-0x300000 921 p
 back ⌘[ 0x5b-0x100000 922 h
@@ -123,7 +126,8 @@ needs ⌘J 0x6a-0x100000 924 k
 zoom ⌘↩ 0xd-0x100000 925 F9
 help ⌘/ 0x2f-0x100000 926 ?
 quickopen ⌘P 0x70-0x100000 927 /
-new ⌘N 0x6e-0x100000 928 c'
+new ⌘N 0x6e-0x100000 928 c
+fold ⌘. 0x2e-0x100000 929 .'
   cmd="${1:-list}"
   case "$cmd" in
     list)    printf '%s\n' "$TABLE" ;;

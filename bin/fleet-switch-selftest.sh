@@ -14,7 +14,8 @@
 #      write are two steps, ⌘J lands on the row waiting on you, ⌘↩ zooms (and ⌘↓
 #      still steps from there, the list hidden), and ⌘P
 #      opens the popup where 「thr」 ↵ switches to «three» — and finds a session
-#      folded under its parent, which ⌘[ steps back onto too.
+#      folded under its parent, which ⌘[ steps back onto too; ⌘. (issue #2167)
+#      opens and shuts the parent in view, and on its child shuts the parent.
 #   D  commands (issue #1952): ONE table, fleet-quickopen.py COMMANDS — every
 #      action of the row menu's letter table is in it and nothing else; `>` lists
 #      the menu's own items for the row in view in the table's order, filters
@@ -291,6 +292,29 @@ try:
     check(wait(lambda: 'five' not in tm('capture-pane', '-p', '-t', side), 4), '«five» did not fold away again')
     press(922, 'five', '⌘[ back onto a folded row')
     print('B: a folded child: ⌘P finds it, ⌘[ comes back to it (%d checks)' % checks)
+    # ⌘. (issue #2167): the parent in view opens and shuts its block; on the
+    # child, it shuts the parent, which then holds the highlight
+    expand = lambda: tm('show-options', '-wqv', '-t', W['three'], '@expand')
+    painted = lambda: tm('capture-pane', '-p', '-t', side)
+    check(wait(lambda: 'five' in painted(), 4), 'the list does not paint the child it came back to')
+    press(921, 'three', '⌘↑ from the child (2)')
+    check(wait(lambda: 'five' not in painted(), 4), '«five» is painted under a folded «three»')
+    check(expand() == '', '«three» starts open: @expand=%r' % expand())
+    os.write(master, b'\x1b[929~')
+    check(wait(lambda: 'five' in painted(), 4), '⌘. on the folded parent did not paint its child')
+    check(wait(lambda: expand() == '1', 10), '⌘. on the folded parent did not write @expand=1')
+    os.write(master, b'\x1b[929~')
+    check(wait(lambda: 'five' not in painted(), 4), '⌘. on the open parent did not fold its child away')
+    check(wait(lambda: expand() == '', 10), '⌘. on the open parent did not clear @expand')
+    os.write(master, b'\x1b[929~')
+    check(wait(lambda: expand() == '1', 10), '⌘. did not open «three» again')
+    press(920, 'five', '⌘↓ onto the open child')
+    os.write(master, b'\x1b[929~')
+    check(wait(lambda: expand() == '', 10), '⌘. on the child did not shut its parent')
+    check(wait(lambda: any(l.startswith('›') and 'three' in l for l in painted().splitlines()), 4),
+          '⌘. on the child did not leave the highlight on its parent: %r' % painted())
+    check(current() == W['five'], '⌘. switched windows: on %s' % current())
+    print('B: ⌘. opens and shuts the parent in view; on its child it shuts the parent (%d checks)' % checks)
     # D: `>` — the row menu's items for the row in view, in the table's order
     qo = lambda *a: subprocess.run(['python3', str(bin_dir / 'fleet-quickopen.py'), *a], env=dict(env, FLEET_SESSION='ft'),
                                    capture_output=True, text=True, timeout=20).stdout

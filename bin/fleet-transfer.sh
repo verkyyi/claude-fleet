@@ -210,7 +210,7 @@ opt() { TM display-message -p -t "$PANE" "$1" 2>/dev/null; }
 SK() { FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" "$@"; }
 TARGET=$(fleet_wid_target "$TARGET" "$SOCK") && [ -n "$TARGET" ] || die 'no live window carries that handle'
 WIN=$(TM display-message -p -t "$TARGET" '#{window_id}' 2>/dev/null) || die 'window not found'
-# A TASKS sidebar is an auxiliary pane, never a second worker. Resolve the sole
+# The task-list sidebar (@sidebar 1) is an auxiliary pane, never a second worker. Resolve the sole
 # worker explicitly, including when a sidebar happens to be the active pane.
 PANE=$(TM list-panes -t "$WIN" -F '#{pane_id}|#{@sidebar}' 2>/dev/null \
   | awk -F'|' '$2 != "1" { pane=$1; n++ } END { if (n == 1) print pane; else exit 1 }') \

@@ -135,7 +135,10 @@ keys: the `fleet-sidebar` key table, prefix E / g / Space, the input line and it
 editing keys, the `? 快捷键` row, the 要你处理 summary row, the paste pin
 (`PIN_KEY`, the `active-pane` client flag tmux 3.8 removes — #1761) and the
 cursor are gone. A tap on a row switches to it, a second tap or a right-click
-opens its menu, a tap on ▸ / ▾ folds. Its actions (new · restore · scratch ·
+opens its menu, a tap on ▸ / ▾ folds — anywhere left of the name counts, and a
+double-click is one fold (issue #2167); `⌘.` (code 929, prefix `.`) queues a
+`fold` verb on `@sidebar_do` that folds the session in view, or — on a
+sub-task — shuts its parent. Its actions (new · restore · scratch ·
 view · reload · info · needs) are verbs parked in `@sidebar_ask` and woken with
 F12 (`fleet-sidebar.py` `act`; `fleet-shell.sh ask <kind> [arg…]` from anywhere
 in the client). A question — a rename, an answer, a message, an account, the
@@ -437,8 +440,8 @@ client and holds `@popup_open` for its lifetime; the view pauses its repaint
 meanwhile and leaves curses so an inline fallback has a tty); the spawned
 window becomes current and the view follows, and a cap refusal leaves the issue
 filed with a toast, as from the dash.
-Focus cues use the client's key table, not just `pane_active`: an amber
-**TASKS** pane border means sidebar navigation, a blue **WORKER**
+Focus cues use the client's key table, not just `pane_active`: the sidebar's
+border carries no label (its TASKS label went with issue #2167), a blue **WORKER**
 badge means worker input — colour only, the border text is the same focused or
 not (issue #999), while the `▶` row always identifies the current task.
 There is no title row inside the sidebar; task descriptions start at row zero.

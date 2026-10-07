@@ -360,9 +360,12 @@ step_scan() {
 }
 
 # --- 7 client -----------------------------------------------------------------------
+CLIENT_UP='新任务|New task'
 step_client() {
   local k
-  k=$(wait_for "$STEP_SECS" 'TASKS' 'open terminal failed|not a terminal' "$LOGIN@[^ ]+ [^ ]* ?[%\$#] *\$")
+  # the list is up once its 「新任务」 row is (the list's border has no label
+  # since issue #2167)
+  k=$(wait_for "$STEP_SECS" "$CLIENT_UP" 'open terminal failed|not a terminal' "$LOGIN@[^ ]+ [^ ]* ?[%\$#] *\$")
   shot client
   case "$k" in
     1) row "客户端：左边任务列表、右边主页" "—（装完自己打开）" 否
@@ -370,11 +373,11 @@ step_client() {
     2) row "客户端没打开：$(pane | grep -E 'open terminal failed|not a terminal' | tail -n 1)" "再敲 fleet" "是 — 装完没进客户端"
        failstep client "the installer's own 'fleet' did not open:"; tail_pane 4
        keys -l fleet; keys Enter
-       wait_for "$STEP_SECS" 'TASKS' >/dev/null || return 1
+       wait_for "$STEP_SECS" "$CLIENT_UP" >/dev/null || return 1
        shot client-again ;;
     *) row "装完回到提示符" "敲 fleet" "是 — 装完没进客户端"
        failstep client "back at the prompt, no client"; keys -l fleet; keys Enter
-       wait_for "$STEP_SECS" 'TASKS' >/dev/null || return 1
+       wait_for "$STEP_SECS" "$CLIENT_UP" >/dev/null || return 1
        shot client-again ;;
   esac
 }
