@@ -322,7 +322,9 @@ def call(verb='sync', *args):
 def view_on(window):
     return [p[0] for p in views() if p[1] == window]
 
-def click(pane, row=0, column=2, repeat=False, count=1):
+def click(pane, row=0, column=8, repeat=False, count=1):
+    # A row tap lands on the row's NAME (column 8): everything left of it is a
+    # parent's fold caret since issue #2167.
     # Separate ordinary single clicks from tmux's delayed double-click zoom.
     # The repeat-click regression below deliberately stays inside that interval.
     # count=2 is a deliberate double-click: both press/release pairs go out in
