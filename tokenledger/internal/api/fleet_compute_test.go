@@ -56,6 +56,7 @@ func TestComputeOffNodeIsNeverPlaced(t *testing.T) {
 		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
 		return !control.ComputeOn(hb.Compute)
 	})
+	waitLoad(t, h, "m5", 5)
 	pl, err := h.srv.PickNode("", writeRepo)
 	if err != nil || pl.Machine != "m5" || !strings.Contains(pl.Reason, "m4 excluded: "+excludedComputeOff) {
 		t.Fatalf("auto placement = %q %q %v; want m5 with m4 excluded as compute off", pl.Machine, pl.Reason, err)

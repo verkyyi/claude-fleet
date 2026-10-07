@@ -28,6 +28,33 @@
 **只开 `/openai-auth/`**。审计里刷新记录写 `refresh_via=relay`；转发机不可达、网关错、拒绝通行证时
 回落到 node 路（审计写明 `relay unavailable: <原因>`）。Claude 的刷新仍走 node 路。
 
+## 入口自己读订阅额度（issue #2169）
+
+入口设 `CCQUOTA_FLEET_HUB_QUOTA=relay`（同样要 `CCQUOTA_FLEET_CRED_RELAY_URL` 和
+`CCQUOTA_FLEET_SESSION_CRED_KEY`）后，每 `CCQUOTA_FLEET_HUB_QUOTA_INTERVAL`（默认 5m，至少 1m）
+把保险箱里每个 pool 凭据（github、已暂停、待重新登录的除外）的额度自己读一遍，读数不再依赖节点：
+
+- **Claude**：setup token 经 `/anthropic/v1/messages` 发和节点 `probeToken` 一样的一 token 请求，
+  从响应头读 5 小时 / 7 天（`internal/limits`）。每读一次消耗极少量订阅额度，频率可配。
+- **Codex**：保险箱的 access token（入口自己刷新）经 `/chatgpt/wham/usage` 读用量
+  （`codex.ParseUsage`，和 app-server 读数同一套池 / 窗口命名）。
+- **归属**：按凭据自己的 `account_uuid`（Codex 由 id_token 算出；Claude 用导入时记下的，或操作者
+  `POST /v1/fleet/credentials {"action":"bind","principal_id":"pool","provider":"claude","account":"icloud","account_uuid":"…"}`
+  补上的——不需要密钥，写审计 `bind`）。没有时按 #2104 的名字规则配唯一账号，配不上就不写，**不新建 `win_`**。
+- **订阅页**：入口读数在新鲜期内（两轮，至少 10 分钟）就以它为准；转发机不可达 / 通行证被拒时
+  回退到节点读数，`/v1/limits` 的 `read_via`（`hub` / `node`）和 `read_note`（入口为什么没读到）写明来源，
+  卡片上显示「最后读取 · 入口/节点」。
+- **通行证**：另一张 `frq1.<到期>.<HMAC>`（与 `frh1.` 分开派生，五分钟，每次现签，不落库），
+  **只开 `/anthropic/v1/messages` 和 `/chatgpt/wham/usage` 两条**，且只在这个开关打开时入口才认。
+- 不设（或 `off`）：入口什么都不读、不签也不认 `frq1.`，订阅页和现在完全一样
+  （`TestHubQuotaOffChangesNothing`、`TestFleetHubQuota` 固定）。
+- **转发机不用改**：`/anthropic/`、`/chatgpt/` 两条路由和 forward_auth 本来就在，核验在入口。
+  运维只需在入口加上面的环境变量并重新部署入口镜像。
+
+顺带：Codex「查额度」租约不再续给一直失败的采集端——节点报连续失败 ≥3 次（新 agent 会带
+`failures`），或持有租约 15 分钟（或两个租期，取大）没交回一次完整读数（老 agent 也管用），入口就收回租约、
+让它歇 30 分钟，换另一个在线采集端。
+
 ## 两道闸（取代来源 IP 白名单）
 
 1. **通行证** —— 由入口逐请求核验，不在转发机上：
@@ -36,6 +63,8 @@
      `fleet.node_relay.<machine>`（与 C1 的 `fleet.node_trust.<machine>` 同表、同一套机器名匹配），
      值是 `<login>:<hash>` 若干个；同一登录重领只替换自己那一张。
    - `frh1.…`：入口自己的通行证，只给它自己经 `/openai-auth/` 刷新 OpenAI 凭据用（R1，见上一节）。
+   - `frq1.…`：入口自己读额度的通行证，只开 `/anthropic/v1/messages`、`/chatgpt/wham/usage`，
+     只在 `CCQUOTA_FLEET_HUB_QUOTA=relay` 时认（#2169，见上一节）。
    - `fcp-h1.…`：入口签给不可信机器会话的通行证（C2）。中心代理（C6）出门时带它。
      由 C2 的 `verifySessionCred` 核验，并且只放它覆盖的那家：`/anthropic/` 要 claude，
      `/chatgpt/`、`/openai-auth/` 要 codex；经 C2 的路由撤销即刻生效（不走下面的缓存）。

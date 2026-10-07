@@ -220,12 +220,13 @@ case "$tgt" in
   scratch-*)
     case "${tgt#scratch-}" in ''|*[!0-9]*) die 2 "bad scratch target '$tgt' (want scratch-<N>)" ;; esac
     key="$tgt" ;;
+  orchestrator) key="$tgt" ;;     # the fleet's orchestrating session (issue #2129)
   @*|%*|*-*-*-*-*) ;;
   *:*) die 2 "'$tgt' is a window position or name (<sess>:<idx> / <sess>:<name>) — a closing window renumbers it onto someone else; address the worker as issue:<N>, scratch-<N> or wid:<key>" ;;
   *[!0-9]*) die 2 "'$tgt' is a window name, not an address (tmux prefix-matches names); use issue:<N>, scratch-<N> or wid:<key>" ;;
 esac
 if [ -n "$key" ]; then
-  [ -n "$REPO" ] && key="$(fleet_slug "$(fleet_norm_repo "$REPO")"):$key"
+  [ -n "$REPO" ] && [ "$key" != orchestrator ] && key="$(fleet_slug "$(fleet_norm_repo "$REPO")"):$key"
   if [ -n "$SOCK" ]; then socks="$SOCK"
   elif [ -n "${TMUX:-}" ]; then socks="-"          # bare tmux: this pane's own server
   else socks=$(fleet_sockets); fi
@@ -254,7 +255,7 @@ EOF
     # through the hub, its repo checked on arrival; ENDED, it says when and how.
     # `-L` pins one fleet of THIS machine (the hub's own inject, a node's deliver,
     # a script that named its socket): no detour for it.
-    if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -z "$SOCK" ]; then
+    if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -z "$SOCK" ] && [ "$key" != orchestrator ]; then
       full=$(fleet_hub_wid "" "$key" 2>/dev/null)         || { [ "${key#*:}" != "$key" ] && full=$(fleet_hub_wid "" "${key#*:}" 2>/dev/null); } || full=''
       if [ -n "$full" ] && ! fleet_wid_home "wid:$full" >/dev/null 2>&1; then
         HUB_REPO=$(sender_repo "$key")

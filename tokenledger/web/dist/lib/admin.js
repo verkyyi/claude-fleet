@@ -139,6 +139,10 @@ export function subscriptions({ limits, accounts, creds, paused, live } = {}) {
       plan: (pa.limits && pa.limits.plan) || a.subscription_type || '',
       h5: w.h5, h7: w.h7, available: !!(pa.limits && pa.limits.available !== false), reason: (pa.limits && pa.limits.reason) || '',
       sessions: n[pa.account_uuid] || 0, cred: cred || null, paused: !!(cred && pausedSet.has(cred.account)), managed: !!cred,
+      // When the reading was taken, and by whom — the hub through the relay or
+      // a node — with why the hub's is missing (claude-fleet#2169).
+      readAt: (pa.limits && pa.limits.observed_at) || '', readVia: (pa.limits && pa.limits.read_via) || '',
+      readNote: (pa.limits && pa.limits.read_note) || '',
     });
   }
   for (const c of pool) {
@@ -227,8 +231,10 @@ export function arrived(audit, prov, label, since) {
 export function machineCards(snap) {
   const ms = (snap && Array.isArray(snap.machines)) ? snap.machines : [];
   const vers = {};
+  const eps = {};
   for (const n of (snap && snap.nodes) || []) {
     const h = n.hostname;
+    if (n.endpoint_id) (eps[h] = eps[h] || []).push(n.endpoint_id);
     const v = n.fleet_version || n.agent_version || '';
     if (v && (!vers[h] || v > vers[h])) vers[h] = v;
   }
@@ -237,6 +243,7 @@ export function machineCards(snap) {
     host: m.hostname, name: String(m.hostname || '').split('.')[0], status: m.status, kind: m.kind,
     sessions: m.sessions, loadCore: m.ncpu ? m.load1 / m.ncpu : null, hist: Array.isArray(m.load_hist) ? m.load_hist : [],
     version: vers[m.hostname] || '', seen: m.last_heartbeat, maintenance: m.maintenance || null,
+    eps: eps[m.hostname] || [],
   })).sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || a.name.localeCompare(b.name));
 }
 

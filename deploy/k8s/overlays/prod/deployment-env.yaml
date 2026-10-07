@@ -60,6 +60,15 @@ spec:
             # yet and the hub never dials it at startup.
             - name: CCQUOTA_FLEET_CRED_RELAY_URL
               value: "https://fleet-relay.24hw.cn"
+            # The hub reads every pool subscription's quota itself through the
+            # relay above (#2169 code, switched on by #2182): readings no longer
+            # depend on a node being online. Needs the relay URL above and
+            # CCQUOTA_FLEET_SESSION_CRED_KEY (the hub signs its quota pass with
+            # it — without it the hub refuses to start). Interval stays the
+            # default 5m: the hub runs one replica, so the probe cost is paid
+            # once. Roll back: delete this entry.
+            - name: CCQUOTA_FLEET_HUB_QUOTA
+              value: "relay"
             - name: CCQUOTA_FLEET_ROUTES
               value: |-
                 [{"hostname":"macmini","alias":"m5"},{"hostname":"mini2","alias":"m4"}]

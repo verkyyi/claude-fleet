@@ -883,8 +883,11 @@ What the drill found and where it went:
   whose `ttyname()` is `/dev/tty`, which tmux refuses; the installer now hands it the terminal's
   own device (stderr's).
 - **An empty list cannot open its first session** — #1927.
-- **A joined computer cannot be taken off the hub** except by `ccquota endpoint retire` on the
-  hub's own database — #1928.
+- **A joined computer could not be taken off the hub** except by `ccquota endpoint retire` on the
+  hub's own database (#1928). Now `fleet node leave` takes it off from the computer itself (the
+  hub retires its token and drops it from the machines page, then the agent stops and `node.env`
+  goes), the machines page's 「移除」 does it from the hub, and `fleet-login-remove.sh` runs the
+  leave as the login it deletes.
 
 **The person's own steps** (never counted as 要人帮): the WeCom scan, and — when the hub has not
 yet given them a login on any machine — the hub's page says so; that one IS the operator's

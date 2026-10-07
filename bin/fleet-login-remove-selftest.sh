@@ -16,7 +16,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/login-remove-selftest.XXXXXX") || exit 2
 WORK=$(cd "$WORK" && pwd -P)   # one spelling of the path: $PWD is compared against it (#1216)
 trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
 mkdir -p "$WORK/bin" "$WORK/shim" "$WORK/shim-tar-fails" "$WORK/homes" "$WORK/LaunchDaemons" "$WORK/ds/groups"
-cp "$BIN/fleet-login-remove.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" "$WORK/bin/"
+cp "$BIN/fleet-login-remove.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" "$BIN/fleet-node-leave.sh" "$WORK/bin/"
 cat > "$WORK/bin/fleet-restore.sh" <<'EOF'
 #!/bin/sh
 exit 0
@@ -318,4 +318,47 @@ has "$FLEET_TEST_LOG" 'tmux -L alice-fleet kill-session -t alice-fleet' 'closed 
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'closed cwd: account was not deleted'
 has "$FLEET_TEST_LOG" "sudo tar -czf $ARCH/alice-" 'closed cwd: home was not archived'
 [ ! -e "$WORK/homes/alice" ] || fail 'closed cwd: home remains'
+# A login that is a node is taken off the hub first, as itself, with its own
+# token (issue #1928): the hub is asked, node.env goes, and it happens before the
+# services are booted out. The dry run only shows it.
+reset_fixture
+printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=tok-alice\n' > "$FLEET_CONF_DIR/node.env"
+cat > "$WORK/shim/fakecurl" <<'EOF2'
+#!/bin/sh
+printf 'curl %s\n' "$*" >> "$FLEET_TEST_LOG"
+cat >> "$FLEET_TEST_LOG.stdin"
+printf '{"endpoint_id":"ep_7","already":false,"removed":true}\n200'
+EOF2
+chmod +x "$WORK/shim/fakecurl"
+export FLEET_HUB_CURL="$WORK/shim/fakecurl"
+run alice
+has "$WORK/out" 'fleet-node-leave.XXXXXX --hub-only --reason' 'dry run does not show the hub leave'
+[ -f "$FLEET_CONF_DIR/node.env" ] || fail 'dry run removed node.env'
+not_has "$FLEET_TEST_LOG" 'curl' 'dry run asked the hub'
+: > "$FLEET_TEST_LOG.stdin"
+run alice --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail 'node leg apply failed'; }
+has "$FLEET_TEST_LOG" 'curl -sS --max-time 15' 'the hub was not asked to retire the node'
+has "$FLEET_TEST_LOG" 'https://hub.test/v1/node/leave' 'the leave went to the wrong route'
+not_has "$FLEET_TEST_LOG" 'tok-alice' 'the node token reached an argv'
+has "$FLEET_TEST_LOG.stdin" 'Authorization: Bearer tok-alice' 'the node token was not handed over on stdin'
+has "$WORK/out" 'ep_7' 'the retire verdict was not printed'
+has "$FLEET_TEST_LOG" 'sudo -u alice' 'the leave did not run as the login'
+python3 - "$FLEET_TEST_LOG" <<'PY' || fail 'the hub leave must come before the services are booted out'
+import pathlib, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+def at(s): return next(i for i, line in enumerate(lines) if s in line)
+assert at('kill-session') < at('/v1/node/leave') < at('launchctl bootout')
+PY
+# The hub down: a WARN naming the other way, and the login still goes.
+reset_fixture
+printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=tok-alice\n' > "$FLEET_CONF_DIR/node.env"
+printf '#!/bin/sh\nexit 7\n' > "$WORK/shim/fakecurl"
+run alice --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail 'a hub that cannot be asked stopped the offboarding'; }
+has "$WORK/out" 'was not taken off the hub' 'hub-down WARN missing'
+has "$WORK/out" '「移除」' 'hub-down WARN does not name the machines page'
+has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'hub down: the login was not deleted'
+unset FLEET_HUB_CURL
+
 printf 'fleet-login-remove-selftest: PASS\n'

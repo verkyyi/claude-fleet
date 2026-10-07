@@ -79,6 +79,7 @@ BIN = Path(__file__).absolute().parent
 MAX_TITLE = 256       # GitHub's bound — the hub's checkIssueTitle
 MAX_BODY = 4000       # the hub's checkText — what a write may carry
 MAX_SCRATCH = 64      # the hub's checkScratchName
+PLACE_WORDS = ("REMOTE", "LOCAL", "HELD", "REFUSED", "DECLINED", "UNKNOWN")  # fleet-client-place.sh's line
 PORTAL = "new"        # the portal window's @remote: the list's row key for it
 SAVE_EVERY = 1.0      # the draft is written at most this often while typing
 
@@ -97,6 +98,44 @@ def draft_path():
 
 def send_path():
     return state_dir() / "compose-send.json"
+
+
+def log_path():
+    """logs/compose.ndjson beside this install's bin/ (issue #1955) —
+    FLEET_COMPOSE_LOG overrides it (the selftest's seam)."""
+    return Path(os.environ.get("FLEET_COMPOSE_LOG") or (BIN.parent / "logs" / "compose.ndjson"))
+
+
+def compose_log(ev, **fields):
+    """One line of logs/compose.ndjson (issue #1955, EPIC #1949 R2): how the
+    writing area is used, for /fleet-history's `drafts` and the daily brief.
+      sent     a ↵ / a hand-over left the area: id, how (issue · scratch · norepo ·
+               multi · orchestrate), repo; ts = the ↵'s time
+      placed   the place answered: id, rc, result (the place's first word),
+               machine, session (the worker_id it named), secs since sent
+      started  the new session's row appeared in the list: id, session, fid,
+               state, secs since sent — the task list writes it
+    Append-only, one write per line; a failure to write never stops a send."""
+    row = {"ev": ev, "ts": int(time.time())}
+    row.update({k: v for k, v in fields.items() if v not in (None, "")})
+    try:
+        path = log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(path), "a", encoding="utf-8") as out:
+            out.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def send_how(data, mode=""):
+    """The 发法 a payload went out by, as compose.ndjson spells it."""
+    mode = mode or data.get("repo_mode") or ""
+    if mode == "none":
+        return "norepo"
+    if mode == "multi":
+        return "multi"
+    return "issue" if data.get("issue", True) else "scratch"
 
 
 def write_atomic(path, text):
@@ -183,7 +222,8 @@ def payload(text, issue=True, prev="", repo="", mode="auto"):
     if mode not in REPO_MODES or (mode == "repo") != bool(repo):
         mode, repo = ("repo", repo) if repo else ("auto", "")
     out = {"title": title, "body": body, "issue": bool(issue) and mode in ("auto", "repo"),
-           "attachments": files, "repo": repo, "repo_mode": mode, "prev": prev, "at": int(time.time())}
+           "attachments": files, "repo": repo, "repo_mode": mode, "prev": prev, "at": int(time.time()),
+           "id": "%x" % time.time_ns()}
     if mode == "multi":
         out["orchestrate"] = True
     return out
@@ -238,6 +278,9 @@ def send(path, repo="", node="auto", reap="", mode=""):
         if "/" not in repo:
             print("fleet-compose: name the repo (owner/name) — 「自动」 has none to go on", file=sys.stderr)
             return 2
+    cid = data.get("id") or "%x" % time.time_ns()
+    at = int(data.get("at") or time.time())
+    compose_log("sent", id=cid, how=send_how(data, mode), repo="" if norepo else repo, at=at)
     args = ["bash", str(BIN / "fleet-client-place.sh"), "-" if norepo else repo]
     text = data.get("body") or ""
     if not norepo and data.get("issue", True):
@@ -276,6 +319,12 @@ def send(path, repo="", node="auto", reap="", mode=""):
             except OSError:
                 pass
     sys.stdout.write(out.stdout)
+    line = next((l for l in reversed(out.stdout.splitlines()) if l.split(" ", 1)[0] in PLACE_WORDS), "")
+    words = line.partition("\t")[0].split()
+    compose_log("placed", id=cid, rc=out.returncode, result=words[0] if words else "",
+                machine=words[1] if len(words) > 1 else "",
+                session=words[4] if words[:1] == ["REMOTE"] and len(words) > 4 and "/" in words[4] else "",
+                secs=max(0, int(time.time()) - at))
     return out.returncode
 
 
@@ -667,6 +716,7 @@ def ui(screen, session):
             toast = tr("compose_orch_kept")
         else:
             if text.strip():
+                compose_log("sent", id="%x" % time.time_ns(), how="orchestrate", at=int(time.time()))
                 toast = tr("compose_orch_sent_fmt", payload(text).get("title", ""))
                 ed.clear()
                 issue, focus, mode, chosen, via = True, "body", "auto", "", ""

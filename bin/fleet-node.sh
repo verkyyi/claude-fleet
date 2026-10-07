@@ -43,6 +43,10 @@
 #       维护中 (reason sleep), tells the client how many sessions still run,
 #       and clears the flag on waking. Neither flag: a laptop is personal, a
 #       machine that already chose keeps its choice, anything else is shared.
+#   fleet node leave [--reason <text>] [--hub-only] [--dry-run]
+#       Take this login off the hub (issue #1928): the hub retires its node
+#       token and drops it from the machines page, then the agent stops and
+#       node.env is deleted — bin/fleet-node-leave.sh, which says each step.
 #
 # The old way — a join code from the hub's /nodes page and
 # `fleet-node-join.sh --hub … --token fj_…` — still works for one version
@@ -214,6 +218,7 @@ case "${1:-}" in
   join) shift; cmd_join "$@" ;;
   status) shift; cmd_status "$@" ;;
   compute) shift; cmd_compute "$@" ;;
+  leave) shift; FLEET_CONF_DIR="$CONF" exec "$here/fleet-node-leave.sh" "$@" ;;
   ''|-h|--help|help) usage ;;
-  *) echo "fleet node: unknown command ${1} — fleet node join | fleet node status | fleet node compute" >&2; exit 2 ;;
+  *) echo "fleet node: unknown command ${1} — fleet node join | fleet node status | fleet node compute | fleet node leave" >&2; exit 2 ;;
 esac

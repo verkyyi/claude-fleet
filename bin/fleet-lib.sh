@@ -218,6 +218,37 @@ fleet_epic_running() {
   printf 'epic=%s session=%s tick=%s age=%ss ttl=%ss' "${epic:--}" "${sess:--}" "${tick:--}" "$age" "$ttl"
   [ "$age" -lt "$ttl" ]
 }
+# fleet_epic_stale_list [<driven refs>] — the batches NOBODY is driving (issue
+# #1916): a mark gone stale whose EPIC is still OPEN, one line each,
+#   <owner/name>\t<N>\t<age seconds>\t<the EPIC's title>
+# «Open» is the collector's open-issue list (fleets/<slug>/issues — no gh here):
+# no list, or the EPIC not on it ⇒ not open, not listed (a closed EPIC's leftover
+# mark is history; an unread repo is never guessed). A mark with no repo (`-`) is
+# never listed either. <driven refs> — `<owner/name>#<N>` words, the @epic of the
+# windows still open — are skipped: that window's own row already says how it is.
+fleet_epic_stale_list() {
+  local driven=" ${1:-} " f out rc age n r t cache
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    out=$(fleet_epic_running "$f"); rc=$?
+    [ "$rc" = 1 ] || continue
+    n=${out#epic=}; n=${n%% *}
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    r=$(sed -n 's/^repo: //p' "$f" 2>/dev/null | head -1)
+    case "$r" in ''|-|*[!A-Za-z0-9/._-]*) continue ;; */*) ;; *) continue ;; esac
+    case "$driven" in *" $r#$n "*) continue ;; esac
+    age=${out##*age=}; age=${age%%s*}
+    cache="$FLEET_C/fleets/$(fleet_slug "$r")/issues"
+    [ -s "$cache" ] || continue
+    t=$(awk -F'\t' -v k="#$n" '$2 == k { t = $0; sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t)
+                                          gsub(/[\t\r\037]/, " ", t); print t; f = 1; exit }
+                               END { exit !f }' "$cache" 2>/dev/null) || continue
+    printf '%s\t%s\t%s\t%s\n' "$r" "$n" "$age" "$t"
+  done <<EOF_STALE
+$(fleet_epic_running_marks)
+EOF_STALE
+  return 0
+}
 
 # fleet_conf_reserved <name> — rc 0 when $FLEET_CONF_DIR/<name>.conf is NOT a
 # fleet's legacy flat conf: fleet.conf is the MACHINE's config (#1623, and `fleet`
@@ -4620,8 +4651,12 @@ fleet_origin_key() {
   [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
   local o iss owt pth k pre
   o=$(tmux display-message -p -t "$TMUX_PANE" \
-        '#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+        '#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
+  # The orchestrating session (issue #2129): no issue, no scratch, no repo — its
+  # key is the literal `orchestrator`, the one fleet_win_for_key answers to.
+  [ "${o%%|*}" = orchestrator ] && { printf 'orchestrator'; return 0; }
+  o=${o#*|}
   iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; pth=${o#*|}
   pre=$(_fleet_key_prefix "$(fleet_current_session)" "$TMUX_PANE") || return 0
   case "$iss" in
@@ -4694,7 +4729,7 @@ fleet_origin_gate() {
     return 4
   fi
   case "$o" in
-    issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*) ;;
+    issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*|orchestrator) ;;
     *) return 0 ;;
   esac
   v=$(fleet_worker_locate "wid:$o" "$sess" 2>/dev/null)
@@ -4744,7 +4779,9 @@ fleet_origin_canon() {
   fi
   [ -n "$det" ] && [ -n "$tgt" ] && [ -n "$src" ] && [ "$src" != "$tgt" ] && det=$src
   [ -z "$ex" ] && { printf '%s' "$det"; return 0; }
-  case "$ex" in autofill|bridge) printf '%s' "$ex"; return 0 ;; esac
+  # `orchestrator` (issue #2129) is a key, the fleet's one orchestrating session —
+  # never repo-qualified, never swapped for a detected one.
+  case "$ex" in autofill|bridge|orchestrator) printf '%s' "$ex"; return 0 ;; esac
   # `hub` (issue #896): the caller IS the hub's ⌃s by another road — the worker
   # sidebar's input line runs inside a worker's window, so detection would nest
   # the new session under that worker. Empty ≡ hub, whatever was detected.
@@ -5183,7 +5220,7 @@ _fleet_wid_split() {
   if [ -n "$u" ]; then
     fleet_is_fid "$u" || return 1
   fi
-  if ! fleet_is_fid "$k"; then
+  if ! fleet_is_fid "$k" && [ "$k" != orchestrator ]; then   # orchestrator: issue #2129
     printf '%s' "$k" | grep -Eqx '([A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(issue|scratch)-[1-9][0-9]{0,9}' || return 1
   fi
   printf '%s\t%s' "$u" "$k"
@@ -5678,7 +5715,7 @@ fleet_worker_locate() {
   local t="${1:-}" sess="${2:-}" sp u k home w node rc
   [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
   case "$t" in
-    wid:*|*/*|issue-*|scratch-*) sp=$(_fleet_wid_split "$t") || { echo unknown; return 2; } ;;
+    wid:*|*/*|issue-*|scratch-*|orchestrator) sp=$(_fleet_wid_split "$t") || { echo unknown; return 2; } ;;
     *) sp='' ;;
   esac
   if [ -n "$sp" ]; then
@@ -8111,8 +8148,10 @@ fleet_window_okey() {
   local sess="${1:-}" t="${2:-}" o iss owt pth k pre
   [ -n "$t" ] || return 0
   o=$(_fleet_tmux "$sess" display-message -p -t "$t" \
-        '#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+        '#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
+  [ "${o%%|*}" = orchestrator ] && { printf 'orchestrator'; return 0; }   # issue #2129
+  o=${o#*|}
   iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; pth=${o#*|}
   pre=$(_fleet_key_prefix "$sess" "$t") || return 0
   case "$iss" in

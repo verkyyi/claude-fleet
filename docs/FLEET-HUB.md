@@ -1306,6 +1306,23 @@ any machine's memory and no admin node has to be online.
   answer (`invalid_grant`, its 403) is the answer, never a reason to fall back.
 - A Claude refresh keeps the node path: the relay's token route is OpenAI's.
 
+**The hub reads the pool's quota itself (claude-fleet#2169).** With
+`CCQUOTA_FLEET_HUB_QUOTA=relay` (plus the relay URL and the session pass key;
+`CCQUOTA_FLEET_HUB_QUOTA_INTERVAL`, default 5m) the hub reads every pool
+credential in its vault — Claude through the relay's `/anthropic/v1/messages`
+(the node probe's one-token request), Codex through `/chatgpt/wham/usage` with
+the vault's access token — and files each reading under the credential's own
+`account_uuid` (Codex: id_token; Claude: as imported, or set with
+`POST /v1/fleet/credentials` `action: bind`), else the one account its label
+names, else nowhere (never a new `win_`). Readings are rows with
+`endpoint_id = hub:quota`; a fresh one (two rounds, ≥10 min) is what
+`/v1/limits` shows, else the newest node reading with `read_via: node` and a
+`read_note` saying why. Its relay pass is `frq1.` — two routes only, accepted
+only while this is on. Unset/`off`: nothing read, nothing signed, no
+`read_via` — byte for byte as before. The Codex quota lease is no longer
+renewed to a collector that reports ≥3 failed reads in a row or delivered no
+complete read for 15 minutes (or two lease terms); it is benched for 30.
+
 **A hub-leased Codex home is refreshed by nobody on the machine
 (claude-fleet#1666).** Its `auth.json` carries the `hub-managed` placeholder in
 place of a refresh token; `ccquota codex list --json` reports it as
@@ -1344,6 +1361,23 @@ are revoked in the retire's transaction; its relay credential is dropped; one
 `node_revoke` row lands in `fleet_audit`. There is no un-revoke — re-enroll the
 machine with a join code. Revocation state is never a field on `Endpoint`
 (the #43 rule for `EnrollKind`).
+
+**A machine can be taken off the hub — by its person, or by itself
+(claude-fleet#1928).** The revoke keeps the roster row (a lost machine may come
+back); a computer whose person changed machines, left, or was a drill's should
+not stay on /nodes forever. `POST /v1/fleet/nodes/retire {endpoint_id[,
+reason]}` runs the revoke above AND drops the roster row: an admin (or the
+viewer token) any machine, a signed-in user only one `FleetScope` gives them —
+anything else, a missing id included, is 403. The machines page's 「移除」
+(behind a confirm) calls it for each enrollment on the card.
+`POST /v1/node/leave [{reason}]` is the same retire for the CALLER's own
+enrollment token — `fleet node leave` (`bin/fleet-node-leave.sh`): ask the hub,
+then stop the agent and remove its service file, then delete `node.env`; a hub
+that cannot be asked or refuses changes nothing local (rerun). Both audit one
+`node_revoke` row under who asked (`gh:<id>`, `node:<login>@<machine>`, the
+viewer). `fleet-login-remove.sh` runs `fleet node leave --hub-only` as the login
+it deletes, so the onboard drill's teardown needs no kubectl
+(`fleet_node_retire_test.go`, `bin/fleet-node-leave-selftest.sh`).
 
 **An untrusted machine's session borrows a pass (claude-fleet#1969).** Instead
 of a credential, a session asks `POST /v1/fleet/session-cred` (the node's

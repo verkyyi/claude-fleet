@@ -70,6 +70,10 @@ const (
 	// (invalid_grant and kin) — nothing more is leased from this account
 	// until the operator logs in again and stores the new one.
 	CredReauth = "reauth_required"
+	// CredBind: the operator recorded which usage account an existing
+	// credential belongs to (claude-fleet#2169) — no secret changed hands.
+	// Detail names the account_uuid, never anything sealed.
+	CredBind = "bind"
 )
 
 // PoolPrincipal is the principal_id of a SHARED-POOL credential
@@ -240,6 +244,24 @@ func (s *Store) PutCredential(principalID, provider, account string, secret []by
 		  kind = excluded.kind, secret_expires_at = excluded.secret_expires_at`,
 		principalID, provider, account, secret, now, now, kind, fmtTimePtr(secretExpires))
 	return err
+}
+
+// RewriteSecret replaces a credential's sealed long-lived half in place —
+// only while the row is still at version, and leaving version, the cached
+// access and every other column as they were: the secret it seals is the
+// same token with a field added (claude-fleet#2169's account_uuid), not a new
+// credential. ErrNoCredential when the row moved on or is gone.
+func (s *Store) RewriteSecret(principalID, provider, account string, version int64, secret []byte, at time.Time) error {
+	res, err := s.write.Exec(`UPDATE fleet_credentials SET secret_sealed = ?, updated_at = ?
+		WHERE principal_id = ? AND provider = ? AND account = ? AND version = ?`,
+		secret, fmtTime(at), principalID, provider, account, version)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNoCredential
+	}
+	return nil
 }
 
 // DeleteCredential removes a credential.
