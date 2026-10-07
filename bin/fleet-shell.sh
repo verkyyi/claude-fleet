@@ -110,6 +110,13 @@
 # Exit: 0 (the attach's); 1 no machine / no tmux / could not start; 2 a picker
 # that still says «no hub URL» (an older fleet-connect.py).
 set -uo pipefail
+# a session's test or drill is the TEST identity (issue #1931): its own lease,
+# never the person's — fleet-client-lease.py reads FLEET_CLIENT_IDENTITY, and the
+# keeper / actions loops started below inherit it
+if [ "${1:-}" = --test-identity ]; then
+  export FLEET_CLIENT_IDENTITY=test
+  shift
+fi
 BIN="$(cd "$(dirname "$0")" && pwd)"                      # the bin/ this runs from (the mirror, once started)
 SELF="$0"; [ -L "$SELF" ] && SELF=$(readlink "$SELF")   # the real file's dir has conf/ beside it
 REAL_BIN="$(cd "$(dirname "$SELF")" && pwd)"
