@@ -50,7 +50,7 @@ touch "$WORK/conf/global/onboarded"
 fail() { printf 'selftest FAIL: %s (got: %s)\n' "$1" "${out:-}" >&2; exit 1; }
 checks=0
 probe() {
-  out=$(HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_ACCOUNTS_DIR="$WORK/accounts" \
+  out=$(HOME="$WORK/home" FLEET_TOOL_DIRS="$WORK/home/.local/bin" FLEET_CONF_DIR="$WORK/conf" FLEET_ACCOUNTS_DIR="$WORK/accounts" \
     PATH="$WORK/shim:$WORK/core" /usr/bin/env "$@" /bin/bash "$WORK/bin/fleet-doctor-onboard.sh" 2>"$WORK/err")
   rc=$?
   [ ! -s "$WORK/err" ] || fail "unexpected stderr: $(cat "$WORK/err")"
@@ -59,7 +59,11 @@ ready() { probe "$@"; [ "$rc" = 0 ] && [[ "$out" = ready:* ]] || fail 'expected 
 needs() { local needle=$1; shift; probe "$@"; [ "$rc" = 1 ] && [[ "$out" == *"$needle"* ]] || fail "missing $needle"; checks=$((checks+1)); }
 
 ready
-mv "$WORK/shim/claude" "$WORK/claude"; needs 'Claude CLI'; mv "$WORK/claude" "$WORK/shim/claude"
+mv "$WORK/shim/claude" "$WORK/claude"; needs 'Claude CLI'
+# Installed in ~/.local/bin but not on PATH (`sudo -u <login> -i bash`, #1233):
+# found where fleet-claude.sh finds it, so the row passes.
+mkdir -p "$WORK/home/.local/bin"; cp "$WORK/claude" "$WORK/home/.local/bin/claude"; ready
+rm "$WORK/home/.local/bin/claude"; mv "$WORK/claude" "$WORK/shim/claude"
 needs 'GitHub login' TEST_GH=missing
 needs 'Codex LOGIN valid' TEST_CODEX=invalid
 needs 'Codex LOGIN valid' TEST_CODEX=error
