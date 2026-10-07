@@ -464,6 +464,12 @@ Do not install from memory: read the doc and work from it.
   stdin; the fleet mod (`mod/fleet/hooks/usage.ts`) feeds it `--from mod key=value …`
   from inside the session (context + rate limits off `session.measure`, model +
   effort off `turn.step`, a `/model` off a 2 s poll) and marks `@ctx_src mod`.
+  A third feeder carries QUOTA only (issue #1978): with `FLEET_CRED_PROXY=1` the
+  credential proxy keeps each session's last rate-limit headers (Claude and
+  Codex alike) and `bin/fleet-proxy-quota.sh` hands them to `--from proxy` on
+  the window whose `@cred_sid` it is (`@rl_src proxy`, `@rl_ts` = the reading's
+  time); while that stamp is fresh (`FLEET_RL_PROXY_FRESH`, 300 s) the other two
+  leave `@rl*` alone. No proxy ⇒ no such stamp ⇒ byte for byte as before.
   Never add a second place that computes a band or rounds a percent. Claude Code
   keeps one blank bottom row for ANY `statusLine`, so the key is removable once
   every Claude window on the login runs mod ≥ 0.2.0: `bin/fleet-statusline.sh

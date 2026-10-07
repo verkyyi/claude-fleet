@@ -28,6 +28,7 @@
 #          `.fleet-real-home` naming DIR. bin/fleet-codex.sh maps it back.
 #
 # State: $FLEET_CONF_DIR/cred-proxy/sessions/<sid> (route, provider, hub pass id,
+# the proxy's name for a hub pass's requests (qsid, a hash — issue #1978),
 # the wrapper's pid — never a credential) and …/codex-homes/<sid>/. A credential
 # goes to stdout only, never argv, a file, a log or a tmux option (共同约定 4).
 set -uo pipefail
@@ -158,6 +159,10 @@ case "$cmd" in
       row=$(hub_pass "$provider") || exit 1
       rec_set "$sid" hub_id "${row%%	*}"
       cred="${row#*	}"
+      # the name the proxy files this pass's requests under (h-<hash>) — so its
+      # quota reading finds this window (issue #1978); a hash, never the pass
+      qs=$(printf '%s' "$cred" | python3 -I -c 'import hashlib,sys; print("h-" + hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:10])' 2>/dev/null)
+      [ -n "$qs" ] && rec_set "$sid" qsid "$qs"
     else
       if [ -z "$account" ] && [ "$provider" = codex ] && [ -n "$chome" ]; then
         account=$(codex_label "$chome") || account=''

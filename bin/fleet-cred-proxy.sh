@@ -13,8 +13,10 @@
 #                                 (a computer with no daemon — a client-only one);
 #                                 prints the port. Exit 3 = switched off.
 #   fleet-cred-proxy.sh port      the port sessions use (exit 1 = not running)
-#   fleet-cred-proxy.sh route|mint|rebind|revoke|attach|status …
+#   fleet-cred-proxy.sh route|mint|rebind|revoke|attach|status|quota …
 #                                 the control socket — see fleet-cred-proxy.py
+#                                 (`quota`: each session's last rate-limit reading,
+#                                 issue #1978 — bin/fleet-proxy-quota.sh stamps it)
 #
 # Config (fleet.conf [common], or the environment): FLEET_CRED_PROXY (0 = today's
 # wiring byte for byte, the default), FLEET_CRED_PROXY_PORT, FLEET_CRED_RELAY_URL,
@@ -117,6 +119,10 @@ if [ -n "$SEP_RUN" ]; then
   esac
 fi
 
+# a fresh quota reading is pushed onto its window by the proxy itself (issue
+# #1978); FLEET_CRED_QUOTA_PUSH= (empty) turns that off — the quota watch's
+# tick still pulls
+export FLEET_CRED_QUOTA_PUSH="${FLEET_CRED_QUOTA_PUSH-$BIN/fleet-proxy-quota.sh}"
 case "$cmd" in
   node-token|node-hash|probe|store|relay)
     echo "fleet-cred-proxy: $cmd: not separated (bin/fleet-credsep.sh)" >&2; exit 3 ;;
@@ -155,7 +161,7 @@ case "$cmd" in
     live_pid >/dev/null || { echo "fleet-cred-proxy: not running" >&2; exit 1; }
     cat "$STATE/port"
     ;;
-  route|mint|rebind|revoke|attach|status)
+  route|mint|rebind|revoke|attach|status|quota)
     exec python3 -I "$PY" --state "$STATE" "$cmd" "$@"
     ;;
   -h|--help|'')

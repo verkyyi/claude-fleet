@@ -13,6 +13,8 @@ request on, with the real credential put in on the way out (or none, centrally).
     attach  --sid NAME          (a hub session credential, fcp-h1.…, on STDIN —
                                  what the central route forwards for this sid)
     status  [--json]
+    quota                       → {sid: the last rate-limit reading} as JSON
+                                 (issue #1978 — bin/fleet-proxy-quota.sh stamps it)
     store   --kind claude|codex --label LABEL   (the file's bytes on STDIN — the
                                  node agent's lease, separated mode only)
     probe                       (node-probe.json on STDIN — separated mode only)
@@ -24,6 +26,16 @@ request on, with the real credential put in on the way out (or none, centrally).
 <state>/ctl.sock (0600); every other subcommand is a client of that socket.
 <state> is $FLEET_CONF_DIR/cred-proxy. bin/fleet-cred-proxy.sh is the launcher
 (launchd / systemd run it; it reads fleet.conf and honours FLEET_CRED_PROXY).
+
+QUOTA READINGS (issue #1978): every answer the provider sends carries the
+account's rate-limit windows — Claude `anthropic-ratelimit-unified-{5h,7d}-
+{utilization,reset}`, Codex `x-codex-{primary,secondary}-{used-percent,
+window-minutes,reset-at}`. The proxy keeps the newest one per session (memory
+only; no credential in it) and answers it on ctl `quota`;
+bin/fleet-proxy-quota.sh hands each to `conf/statusline.sh --from proxy` on the
+window whose @cred_sid it is. Not separated, a fresh reading also kicks
+FLEET_CRED_QUOTA_PUSH (the launcher points it at that script; empty = off),
+at most once per FLEET_CRED_QUOTA_PUSH_SECS (2).
 
 ROUTES (EPIC #1967 共同约定 1) — decided ONLY by the hub's record of this
 machine's trust × the last probe (bin/fleet-node-probe.sh → node-probe.json):
@@ -276,6 +288,42 @@ class Proxy(BaseHTTPRequestHandler):
     lock = threading.Lock()
     skip = {}       # sid -> {route: until}: a route that refused this session
     hubcreds = {}   # sid -> fcp-h1.… handed in over ctl `attach` (memory only)
+    quota = {}      # sid -> its newest rate-limit reading (issue #1978; memory only)
+    push_due = False
+
+    @classmethod
+    def note_quota(cls, sid, provider, acct, route, headers):
+        """Keep this answer's rate-limit reading for its session, then kick the push."""
+        if sid in ("-", "node"):
+            return
+        rd = rl_reading(provider, headers)
+        if not rd:
+            return
+        rd.update(provider=provider, acct=acct, route=route, ts=int(time.time()))
+        with cls.lock:
+            cls.quota[sid] = rd
+            if len(cls.quota) > 4096:   # a day of dead sessions, at most: oldest out
+                for k in sorted(cls.quota, key=lambda k: cls.quota[k]["ts"])[:len(cls.quota) - 4096]:
+                    del cls.quota[k]
+            # separated, the proxy is another uid: it cannot reach the login's tmux,
+            # so the quota watch's tick pulls instead (fleet-proxy-quota.sh push)
+            kick = bool(cls.cfg.quota_push) and not cls.cfg.store and not cls.push_due
+            cls.push_due = cls.push_due or kick
+        if kick:
+            t = threading.Timer(cls.cfg.quota_push_secs, cls.run_push)
+            t.daemon = True
+            t.start()
+
+    @classmethod
+    def run_push(cls):
+        with cls.lock:
+            cls.push_due = False
+        try:
+            import subprocess
+            subprocess.Popen([cls.cfg.quota_push, "push"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            cls.log(ev="quota_push_err", err=type(e).__name__)
 
     def log_message(self, fmt, *a):
         pass
@@ -483,6 +531,8 @@ class Proxy(BaseHTTPRequestHandler):
             self.fail(502, "upstream %s: %s" % (route, type(e).__name__), "api_error")
             return None
         ttfb = time.time() - t0
+        if provider in ("claude", "codex"):
+            self.note_quota(sid, provider, acct, route, r.getheaders())
         first = b""
         if r.status == 403:
             first = r.read(65536)
@@ -521,6 +571,54 @@ class Proxy(BaseHTTPRequestHandler):
                  ttfb_ms=int(ttfb * 1000), total_ms=int((time.time() - t0) * 1000), bytes=size,
                  hdrs_in=seen, sent=sorted(k.lower() for k in out))
         return None
+
+
+def _num(v):
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if x == x and x not in (float("inf"), float("-inf")) else None
+
+
+def rl_reading(provider, headers, now=None):
+    """The rate-limit windows on one upstream answer, on the bus's scale (issue
+    #1978): {"rl5h", "rl7d", "rl_reset5", "rl_reset7"} — percents as decimal
+    strings (Claude's fraction × 100, ccquota's Utilization; never rounded here:
+    conf/statusline.sh is the one place that floors) and epoch-second resets
+    ("-" when absent) — or None when either window is missing: a half reading
+    is no reading (the quota watch's rule)."""
+    h = {k.lower(): v for k, v in headers}
+    now = int(now or time.time())
+    if provider == "codex":
+        wins = []
+        for w in ("primary", "secondary"):
+            pct = _num(h.get("x-codex-%s-used-percent" % w))
+            if pct is None:
+                return None
+            mins = _num(h.get("x-codex-%s-window-minutes" % w))
+            rs = _num(h.get("x-codex-%s-reset-at" % w))
+            if rs is None and _num(h.get("x-codex-%s-reset-after-seconds" % w)) is not None:
+                rs = now + _num(h.get("x-codex-%s-reset-after-seconds" % w))
+            wins.append((mins, pct, rs))
+        # primary is the short window; trust the minutes when both say otherwise
+        if wins[0][0] is not None and wins[1][0] is not None and wins[0][0] > wins[1][0]:
+            wins.reverse()
+        (_, p5, r5), (_, p7, r7) = wins
+    else:
+        p5 = _num(h.get("anthropic-ratelimit-unified-5h-utilization"))
+        p7 = _num(h.get("anthropic-ratelimit-unified-7d-utilization"))
+        if p5 is None or p7 is None:
+            return None
+        p5, p7 = p5 * 100, p7 * 100
+        r5 = _num(h.get("anthropic-ratelimit-unified-5h-reset"))
+        r7 = _num(h.get("anthropic-ratelimit-unified-7d-reset"))
+    if p5 < 0 or p7 < 0:
+        return None
+    # six places cancel the float noise (0.29 × 100 = 28.999…96 → "29")
+    pc = lambda x: ("%.6f" % x).rstrip("0").rstrip(".")
+    rs = lambda r: str(int(r)) if r is not None and r > 0 else "-"
+    return {"rl5h": pc(p5), "rl7d": pc(p7), "rl_reset5": rs(r5), "rl_reset7": rs(r7)}
 
 
 def claude_token(accounts, label):
@@ -645,6 +743,7 @@ def ctl_handle(req, cfg):
             fd = os.open(os.path.join(cfg.state, "revoked"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             os.write(fd, (sid + "\n").encode()); os.close(fd)
             Proxy.hubcreds.pop(sid, None)
+            Proxy.quota.pop(sid, None)
         Proxy.log(ev="revoke", sid=sid)
         return {"ok": True}
     if op == "attach":
@@ -710,6 +809,10 @@ def ctl_handle(req, cfg):
         if not t:
             return {"ok": False, "err": "node-hash: no node token here"}
         return {"ok": True, "hash": hashlib.sha256(t.encode()).hexdigest()}
+    if op == "quota":
+        with Proxy.lock:
+            q = {k: dict(v) for k, v in Proxy.quota.items() if v["ts"] > time.time() - 86400}
+        return {"ok": True, "quota": q}
     if op == "status":
         return {"ok": True, "pid": os.getpid(), "port": cfg.bound_port, "separated": bool(cfg.store),
                 "trust": Proxy.router.trust or "unknown", "trust_why": Proxy.router.trust_why,
@@ -827,6 +930,8 @@ def serve(a):
     cfg.ttl = int(env("FLEET_CRED_PROXY_TTL", "86400"))
     cfg.switch_ttl = int(env("FLEET_CRED_PROXY_SWITCH_SECS", "1800"))
     cfg.timeout = int(env("FLEET_CRED_PROXY_TIMEOUT", "600"))
+    cfg.quota_push = env("FLEET_CRED_QUOTA_PUSH")
+    cfg.quota_push_secs = float(env("FLEET_CRED_QUOTA_PUSH_SECS", "2"))
     # separated mode (issue #1971): set by bin/fleet-credsep-launch.py only
     cfg.store = env("FLEET_CRED_STORE") == "1"
     cfg.broker = cfg.store
@@ -954,6 +1059,7 @@ def main():
     v.add_argument("--sid", required=True)
     t = sub.add_parser("attach")
     t.add_argument("--sid", required=True)
+    sub.add_parser("quota")
     u = sub.add_parser("status")
     u.add_argument("--json", action="store_true")
     o = sub.add_parser("store")
@@ -993,6 +1099,8 @@ def main():
         print("%s\t%s" % (res["url"], res["token"]))
     elif a.cmd == "node-hash":
         print(ctl_call(a.state, {"op": "node-hash"})["hash"])
+    elif a.cmd == "quota":
+        print(json.dumps(ctl_call(a.state, {"op": "quota"})["quota"], sort_keys=True))
     elif a.cmd == "status":
         res = ctl_call(a.state, {"op": "status"})
         res.pop("ok", None)

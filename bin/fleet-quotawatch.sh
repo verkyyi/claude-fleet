@@ -555,6 +555,16 @@ if [ "$pre_ts" -gt 0 ] && [ $(( START - pre_ts )) -ge "$STALE" ]; then blind=$((
 # Cheap on purpose — it runs every tick, and on a loaded box every fork counts
 # against the budget legs (#582): no merge at all while no window carries a stamp.
 qw_rl_socket() { fleet_lw "$FLEET_QUOTA_RL_FMT" tmux -L "$1"; }
+# The credential proxy's readings first (issue #1978): with FLEET_CRED_PROXY=1
+# every session's requests pass it, and it holds each one's newest rate-limit
+# headers — stamped onto the windows here (@rl_src proxy) so the read below
+# sees them. The proxy pushes on its own when it can; separated (another uid)
+# this tick is the only road. Off ⇒ not run, nothing changes.
+if [ "${FLEET_CRED_PROXY:-0}" = 1 ] && [ -n "$SOCKETS" ] && [ -x "$BIN/fleet-proxy-quota.sh" ] && tick_room; then
+  qpb=$(qw_left "$SECONDS" "$TMUX_BUDGET")
+  # shellcheck disable=SC2086  # SOCKETS: one label per word
+  [ "$qpb" -ge 1 ] && fleet_timebox "$qpb" "$BIN/fleet-proxy-quota.sh" push $(printf -- '--socket %s ' $SOCKETS) >/dev/null 2>&1
+fi
 qsl=""
 for qs in $SOCKETS; do
   tick_room || break
@@ -566,7 +576,8 @@ for qs in $SOCKETS; do
   done <<< "$(fleet_timebox "$qsb" qw_rl_socket "$qs")"
 done
 # The fleet mod (mod/fleet/hooks/usage.ts, #1338) stamps the same set off the
-# engine's `session.measure` after EVERY turn — watched or not — as @rl_src=mod.
+# engine's `session.measure` after EVERY turn — watched or not — as @rl_src=mod;
+# the credential proxy's reading (@rl_src=proxy, issue #1978) counts the same.
 # When every pool account carries a mod stamp younger than QW_MOD_FRESH (60 s,
 # one tick) the sessions have already told us what ccquota
 # would, so this tick reads ccquota's CACHE instead of the hub. Only while that
@@ -578,7 +589,7 @@ QW_MOD_FRESH=60
 qw_mod_covers_pool() {
   _qmc_now=$(now)
   _qmc_fresh=$(printf '%s' "$qsl" | awk -v now="$_qmc_now" -v ttl="$QW_MOD_FRESH" '
-    $7 == "mod" && $2 ~ /^[0-9]+$/ && $2 + 0 <= now + 60 && now - $2 <= ttl { print $1 }')
+    ($7 == "mod" || $7 == "proxy") && $2 ~ /^[0-9]+$/ && $2 + 0 <= now + 60 && now - $2 <= ttl { print $1 }')
   _qmc_n=0
   for _qmc_f in "$ACCT_DIR"/*; do
     [ -f "$_qmc_f" ] || continue
