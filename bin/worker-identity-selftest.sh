@@ -144,6 +144,8 @@ ok; [ "$(frames)" = $((before + 2)) ] || fail "B: two frames reached the parent'
 ok; [ "$(opt "$C" @origin)" = "${Q}issue-99" ] || fail "B: the report re-pointed the child's @origin at the parent's current key" "$(opt "$C" @origin)"
 ok; [ -s "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson" ] && grep -q 'second: after the rename' "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson" \
   || fail "B: the second report is booked under the key the parent answers to now"
+ok; grep 'second: after the rename' "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson" | grep -q "\"pfid\": \"$PF\"" \
+  || fail "B: the book's row carries the parent's identity as pfid (issue #1955)" "$(tail -1 "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson")"
 # The contrast — a child from before #1646 (no @origin_fid) still books under the
 # name its parent wore, scratch-5: a book the parent (issue-99 now) never reads,
 # and a key the sidebar's nesting and the hub's inventory no longer know.
