@@ -13,7 +13,11 @@
 #                  died on the last test login. The archive path prints last.
 #   --delete-home  no archive; the login and its home are deleted outright.
 # The copied Claude account pool is removed BEFORE the archive is taken, so the
-# shared tokens are never inside it.
+# shared tokens are never inside it. Library/Caches is never archived, and a
+# file tar cannot read (a socket, a SIP-protected file) is a WARN, not a stop,
+# so long as the archive it wrote reads back whole (issue #1700).
+# Step 2 removes the node agent's LaunchDaemon com.ccquota.agent.<login> with
+# the fleet's own, and the .bak-* / .pre-move copies left beside them.
 # A login that joined the hub as a node (node.env) is taken off it first, as
 # itself — `fleet node leave --hub-only` (issue #1928): the hub retires its
 # token and drops it from the machines page. A hub that cannot be asked is a
@@ -145,8 +149,11 @@ fi
 
 # System shape belongs to this login by label. GUI shape belongs to the login's
 # private LaunchAgents directory, where its fleet labels do not include login.
+# The node agent's system shape is com.ccquota.agent.<login> (issue #1700): left
+# behind, launchd restarts it forever (exit 78) once the login is gone.
 step 2 'boot out and remove fleet/ccquota services'
 for plist in "$DDIR"/com.claude-fleet."$LOGIN".*.plist \
+             "$DDIR"/com.ccquota.agent."$LOGIN".plist \
              "$H"/Library/LaunchAgents/com.claude-fleet.*.plist \
              "$H"/Library/LaunchAgents/com.ccquota.agent*.plist; do
   [ -f "$plist" ] || continue
@@ -166,6 +173,15 @@ for plist in "$DDIR"/com.claude-fleet."$LOGIN".*.plist \
     fi
   fi
   run sudo rm -f "$plist"
+done
+# Copies an upgrade or a move left beside the system plists (.bak-*, .pre-move):
+# never loaded, so only removed — a stray one is a service the next admin revives.
+for stale in "$DDIR"/com.claude-fleet."$LOGIN".*.plist.* \
+             "$DDIR"/com.ccquota.agent."$LOGIN".plist.* \
+             "$DDIR"/com.ccquota.agent."$LOGIN".bak-* \
+             "$DDIR"/com.ccquota.agent."$LOGIN".pre-move*; do
+  [ -f "$stale" ] || continue
+  run sudo rm -f "$stale"
 done
 
 step 3 'remove the copied Claude account pool'
@@ -189,6 +205,9 @@ fi
 # The home is quiet now (pool removed, processes gone): archive it as root — the
 # admin cannot read a 0700 home — into a dir only the admin can enter, then hand
 # the archive to the admin at 600. A failed archive stops BEFORE the login goes.
+# Library/Caches is left out, and a file even root cannot read (a socket, a
+# SIP-protected file — issue #1700) is a WARN: tar skips it and exits non-zero,
+# so the archive is checked instead — readable through to its end ⇒ go on.
 step 5 "archive $LOGIN's home"
 if [ "$KEEP" = 0 ]; then
   printf '  (skipped: --delete-home)\n'
@@ -197,7 +216,21 @@ elif [ ! -d "$H" ]; then
   ARCHIVE=''
 else
   run sudo install -d -m 700 -o "$ADMIN_UID" "$ARCHIVE_DIR"
-  run sudo tar -czf "$ARCHIVE" -C "$HOMES" "$LOGIN"
+  TAR=(sudo tar --exclude="$LOGIN/Library/Caches" -czf "$ARCHIVE" -C "$HOMES" "$LOGIN")
+  show "${TAR[@]}"
+  if [ "$APPLY" = 1 ]; then
+    TERR=$(mktemp "${TMPDIR:-/tmp}/fleet-login-remove.tar.XXXXXX") || { printf '%s: mktemp failed; stopped before deleting the login\n' "$PROG" >&2; exit 1; }
+    if ! "${TAR[@]}" 2>"$TERR"; then
+      if sudo tar -tzf "$ARCHIVE" >/dev/null 2>&1; then
+        printf '%s: WARN %s line(s) from tar — what it could not read is left out of the archive:\n' "$PROG" "$(grep -c . "$TERR")" >&2
+        sed 's/^/    /' "$TERR" >&2
+      else
+        cat "$TERR" >&2; rm -f "$TERR"
+        printf '%s: failed; stopped before deleting the login\n' "$PROG" >&2; exit 1
+      fi
+    fi
+    rm -f "$TERR"
+  fi
   run sudo chown "$ADMIN_UID" "$ARCHIVE"
   run sudo chmod 600 "$ARCHIVE"
 fi
