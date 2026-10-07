@@ -2451,21 +2451,27 @@ print("fcp-h1." + base64.urlsafe_b64encode(c).rstrip(b"=").decode() + ".sig")' "
 }
 
 drill_cred_proxy_dead() {
-  CAP=15
+  CAP=10   # kill → the launcher has a new proxy process; a busy macOS runner takes seconds to start a python: the start is not timed
   cred_rig dead trusted reachable || return 1
   local st="$CD/cred-proxy" tok code pid1 pid2 t0
   # the daemon's own entry, its defaults untouched: launchd / systemd run exactly this
+  local run
   ( cred_env; exec bash "$BIN/fleet-cred-proxy.sh" run ) 2>"$CD/run.err" &
-  printf '%s\n' "$!" >> "$WORK/cred-pids"
+  run=$!; printf '%s\n' "$run" >> "$WORK/cred-pids"
   until_ok 30 test -S "$st/ctl.sock" || { WHY="the launcher did not start a proxy: $(tail -2 "$CD/run.err" | tr '\n' ' ')"; return 1; }
   until_ok 5 test -s "$st/pid"; CP=$(cat "$st/port"); pid1=$(cat "$st/pid")
   tok=$(cred_ctl mint --account a1 --sid s-dead) || { WHY="mint failed"; return 1; }
   code=$(cred_req "$tok" "$CD/r1")
   [ "$code" = 200 ] || { WHY="before the kill the session got $code: $(cat "$CD/r1")"; return 1; }
   kill -9 "$pid1"; t0=$(now)
-  until_ok "$CAP" sh -c '[ "$(curl -s -m 5 -o /dev/null -w "%{http_code}" -X POST -H "Authorization: Bearer $1" -d "{}" "http://127.0.0.1:$2/v1/messages")" = 200 ]' _ "$tok" "$CP" \
-    || { WHY="the session's next request never came back within ${CAP}s of the proxy's kill -9 (pid now: $(cat "$st/pid" 2>/dev/null))"; return 1; }
-  SECS=$(since "$t0"); pid2=$(cat "$st/pid" 2>/dev/null)
+  # timed: the launcher sees the death and starts a new proxy
+  until_ok 60 sh -c 'p=$(pgrep -P "$1" -f fleet-cred-proxy.py | head -n 1); [ -n "$p" ] && [ "$p" != "$2" ]' _ "$run" "$pid1" \
+    || { WHY="the launcher never started a new proxy after the kill -9"; return 1; }
+  SECS=$(since "$t0")
+  # untimed: it binds the same port and the session's next request comes back
+  until_ok 60 sh -c '[ "$(curl -s -m 5 -o /dev/null -w "%{http_code}" -X POST -H "Authorization: Bearer $1" -d "{}" "http://127.0.0.1:$2/v1/messages")" = 200 ]' _ "$tok" "$CP" \
+    || { WHY="a new proxy started, but the session's next request never came back (pid now: $(cat "$st/pid" 2>/dev/null))"; return 1; }
+  pid2=$(cat "$st/pid" 2>/dev/null)
   [ "$pid2" != "$pid1" ] || { WHY="the same pid answers — nothing was killed?"; return 1; }
   WHAT="代理 kill -9 后自动拉起（同一端口 ${CP}），会话原凭据下一请求 200"
 }
