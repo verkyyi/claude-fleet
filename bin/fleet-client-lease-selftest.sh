@@ -253,11 +253,12 @@ out=$(FLEET_SHELL=1 TMPDIR="$WORK/cache-$SY/tmp" FLEET_HUB_WRITE_CMD="touch $WOR
 eq "E: a write in standby → exit 1" 1 "$rc"
 has "E: … saying why" "$out" "待机"
 ok test ! -e "$WORK/sent"
+echo 4 > "$H/max"   # room again: taking a lease back asks nobody else to leave
 FLEET_ALLOW_SENDKEYS=1 to send-keys -t "$p3" Enter
 waitfor 6 sh -c "! test -f '$WORK/cache-$SY/tmp/client.standby'" || fail "E: Enter did not take a lease again"
 waitfor 5 sh -c "! tmux -L $OUT capture-pane -p -t '$p3' | grep -q 客户端已开满" || fail "E: the popup is still up" "$(screen "$p3")"
 has "E: its where is back" "$(cat "$WORK/cache-$SY/tmp/client.where.json" 2>/dev/null)" '"device": "iPhone"'
-echo 4 > "$H/max"
+ok test ! -f "$WORK/cache-$SX/tmp/client.standby"
 
 # --- F. disconnected from another client --------------------------------------------
 idz=$(cat "$WORK/cache-$SZ/tmp/client.lease" 2>/dev/null)
@@ -268,8 +269,9 @@ waitfor 5 shows "$p4" "被断开" || fail "F: the iPad shows no 'disconnected' s
 
 # --- G. a server that ends gives the lease up -------------------------------------
 idx=$(cat "$WORK/cache-$SX/tmp/client.lease" 2>/dev/null)
+CHECKS=$((CHECKS + 1)); [ -n "$idx" ] || fail "G: the MacBook's machine holds no lease"
 "$REAL_TMUX" -L "$SX" kill-server 2>/dev/null
-waitfor 15 grep -q "^release $idx" "$H/log" || fail "G: no release after the server ended" "$(tail -3 "$H/log")"
+waitfor 8 grep -q "^release $idx" "$H/log" || fail "G: no release after the server ended" "$(tail -3 "$H/log")"
 ok test ! -f "$H/cur/$idx"
 
 [ "$FAIL" = 0 ] || { printf "hub log:\n"; cat "$H/log"; } >&2
