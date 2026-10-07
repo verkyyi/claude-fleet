@@ -508,3 +508,4 @@ FLEET_CFG_RESTART_MIGRATE          seam: the fleet-migrate.sh a stale-config reo
 FLEET_WORKER_CRED                  handoff: the session's worker credential, minted per launch by fleet-session-wrap.sh for the fleet tool service — env only, never written down (fleet-mcp.py, #1809)
 FLEET_CODEX_LAUNCHER_PID           handoff: the Codex launcher's pid, exported by fleet-codex.sh — marks a Codex pane to its hooks (fleet-codex-session.py, fleet-where-hook.sh #1954)
 FLEET_WORKER_ASSERT                handoff: a session's own hub worker assertion (fleet-mcp.py, #1810); fleet-session-cred.sh borrows a hub pass with it (#1972)
+FLEET_COMMENT_PEER_FALLBACK        knob: 0 = fleet-comment.sh --to-worker on an unbridged repo posts the record and says so, without the peer send (#2059)
