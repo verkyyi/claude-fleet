@@ -45,6 +45,10 @@
 #      发法 开工 — ↵ starts the work itself (acme/web new …)
 #   L. waiting on you: 「新任务」 turns red `!`, the area's line says its question;
 #      Tab to 发法 + space flips it to 编排; an empty ⇧⇥ just goes there
+# A client update (issue #2113):
+#   M. a portal window an older client made (@portal_ver) is respawned on ⌘N — same
+#      window, new process, draft kept; the same version is left alone; a SIGHUP
+#      mid-typing saves the draft first
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -407,6 +411,43 @@ CHECKS=$((CHECKS + 1)); n=0; while ! grep -qx 'wid:U/orch' "$VIEW" && [ $n -lt 4
 grep -qx 'wid:U/orch' "$VIEW" || fail 'L: an empty ⇧⇥ goes there' "$(cat "$VIEW")"
 sleep .5
 eq 'L: …pasting nothing' '' "$(cat "$WORK/orch-in")"
+
+# M. a client update under a running writing area (issue #2113): the window made
+# by an older client (@portal_ver not this code's) is respawned on ⌘N — same
+# window, a new process, the draft kept; the same version keeps its process; a
+# hang-up mid-typing (a respawn's SIGHUP) still lands the draft on disk
+ppid_() { st_ display-message -p -t "$pw" '#{pane_pid}'; }
+pver() { st_ show-window-option -v -t "$pw" @portal_ver 2>/dev/null; }
+settled
+st_ select-window -t fcs-stage:0
+type_ '\033[928~'
+sleep .6
+v_now=$(pver)
+[ -n "$v_now" ] || fail 'M: the portal window carries @portal_ver'
+p0=$(ppid_)
+st_ select-window -t fcs-stage:0
+type_ '\033[928~'
+sleep .6
+eq 'M: the same version keeps its process' "$p0" "$(ppid_)"
+st_ send-keys -t "$pw" -l '升级前写的半句'
+st_ set-window-option -t "$pw" @portal_ver old-client
+st_ select-window -t fcs-stage:0
+type_ '\033[928~'
+CHECKS=$((CHECKS + 1)); n=0; while [ "$(ppid_)" = "$p0" ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+[ "$(ppid_)" != "$p0" ] || fail 'M: an older version is respawned on ⌘N'
+eq 'M: …in the same window' "$pw" "$(portal | awk '{print $1}')"
+eq 'M: …still ONE portal window' 1 "$(portal | grep -c .)"
+eq 'M: …stamped with this code' "$v_now" "$(pver)"
+eq 'M: …still @remote new' 'new' "$(portal | awk '{print $3}')"
+eq 'M: the draft survived the respawn' '升级前写的半句' "$(cat "$FLEET_SWITCH_STATE/compose-draft" 2>/dev/null)"
+CHECKS=$((CHECKS + 1)); waitfor 6 '升级前写的半句' compose || fail 'M: the new process shows the draft' "$(compose)"
+p1=$(ppid_)
+st_ send-keys -t "$pw" -l '，再补一句'
+sleep .15
+st_ respawn-pane -k -t "$pw"
+CHECKS=$((CHECKS + 1)); n=0; while [ "$(ppid_)" = "$p1" ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+sleep .3
+eq 'M: a hang-up mid-typing saves the draft first' '升级前写的半句，再补一句' "$(cat "$FLEET_SWITCH_STATE/compose-draft" 2>/dev/null)"
 
 [ "$FAIL" = 0 ] || { printf 'fleet-compose selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS"; exit 1; }
 printf 'fleet-compose selftest: PASS (%d checks)\n' "$CHECKS"
