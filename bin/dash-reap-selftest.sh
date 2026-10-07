@@ -768,8 +768,8 @@ run_reap_tok 7 'fleet-x:c4-name-8558' --yes 2>/dev/null
 [ "$TOK" = refused:target ] && [ "$RC" = 4 ] || fail "a session:name target must refuse non-zero (#869) (got [$TOK] rc $RC)"
 grep -q 'dash-reap.sh <window-target>' "$BIN/../commands/fleet-epic-run.md" \
   && fail "fleet-epic-run.md still teaches the refused <window-target> form (#869)"
-grep -q 'dash-reap.sh issue-<N>' "$BIN/../commands/fleet-epic-run.md" \
-  || fail "fleet-epic-run.md must name dash-reap.sh issue-<N> (#869)"
+grep -q 'dash-reap.sh <slug>:issue-<N>' "$BIN/../commands/fleet-epic-run.md" \
+  || fail "fleet-epic-run.md must name dash-reap.sh <slug>:issue-<N> (#869, #1942)"
 
 # F5 (#867): a worker that never started is reaped, but its issue stays OPEN,
 # the claim is released and the note says "never started" — no false COMPLETED.

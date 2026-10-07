@@ -292,7 +292,7 @@ if [ "$cmd" = list ] || [ "$cmd" = export ]; then
         [ -d "$d" ] || continue
         n="${d%/}"; n="${n##*/}"; [ "$n" = "${n//[^0-9]/}" ] && printf '%s\n' "$n"
       done
-      [ -z "$subs" ] || printf '%s\n' "$subs" | awk -F '\t' -v r="$erepo" '$1 == r { print $2 }'
+      [ -z "$subs" ] || printf '%s\n' "$subs" | awk -F '\t' -v r="$erepo" 'NF == 1 { print $1; next } $1 == r { print $2 }'
     } | grep -E '^[0-9]+$' | sort -un)
     other=$( {   # `<label>\t<dir>\t<member repo>`
       for d in "$eroot"/*/; do
@@ -301,7 +301,7 @@ if [ "$cmd" = list ] || [ "$cmd" = export ]; then
         [ -n "$r" ] && printf '%s#%s\t%s\t%s\n' "$r" "${n##*.}" "$n" "$r"
       done
       [ -z "$subs" ] || printf '%s\n' "$subs" | while IFS=$'\t' read -r r n _; do
-        [ -n "$r" ] && [ "$r" != "$erepo" ] || continue
+        [ -n "$n" ] && [ -n "$r" ] && [ "$r" != "$erepo" ] || continue   # a bare number is the EPIC's own
         printf '%s#%s\t%s\t%s\n' "$r" "$n" "$(member_dir "$r" "$erepo" "$n")" "$r"
       done
     } | sort -t $'\t' -u -k1,1)
