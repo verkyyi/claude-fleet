@@ -582,8 +582,8 @@ stage_bg() {
 # #2145): only the drift check, by content — the files on disk into the running
 # client. Exit 4 reloaded · 0 nothing to do · 1 failed.
 unversioned() {
+  drifted "$1" || return 0                            # in step: nothing written
   mkdir -p "$STATE" 2>/dev/null || return 0
-  drifted "$1" || return 0
   reconcile "$@"
 }
 
