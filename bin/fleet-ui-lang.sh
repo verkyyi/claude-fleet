@@ -149,6 +149,10 @@ fleet_ui_t() {
     en:badge_bare_fmt)          printf '⌂ %s' "${1:-}" ;;
     zh:badge_hubdown_fmt)       printf '⌂ %s · 入口连不上' "${1:-}" ;;
     en:badge_hubdown_fmt)       printf '⌂ %s · hub unreachable' "${1:-}" ;;
+    zh:badge_hubrefused_fmt)    printf '⌂ %s · 入口不认这台电脑 · 请重新扫码（fleet login）' "${1:-}" ;;
+    en:badge_hubrefused_fmt)    printf '⌂ %s · the hub refused this computer · scan again (fleet login)' "${1:-}" ;;
+    zh:badge_rescan_note)       printf '入口不认这台电脑的证书，续期也没用 — 请重新扫码：点左下角，或运行 fleet login' ;;
+    en:badge_rescan_note)       printf 'The hub refuses this computer'"'"'s certificate and renewing will not help — scan again: tap the bottom left, or run fleet login' ;;
     zh:badge_updated_fmt)       printf '✓ 已更新到 %s' "${1:-}" ;;
     en:badge_updated_fmt)       printf '✓ updated to %s' "${1:-}" ;;
     zh:badge_reloaded)          printf '✓ 已重新载入新文件' ;;
@@ -193,6 +197,8 @@ fleet_ui_t() {
     en:popup_config)            printf 'Config' ;;
     zh:popup_keys)              printf '快捷键' ;;
     en:popup_keys)              printf 'Keys' ;;
+    zh:popup_rescan)            printf '重新扫码' ;;
+    en:popup_rescan)            printf 'Scan again' ;;
     zh:popup_quickopen)         printf '跳到会话' ;;
     en:popup_quickopen)         printf 'Go to session' ;;
     # ⌘P's commands (issue #1952): `>` lists the row menu's items

@@ -4,6 +4,8 @@
 # REAL bin/fleet-client-where.sh (its hub read faked by FLEET_CLIENT_WHERE_CMD):
 #   A. three leases  — local iTerm2 / ssh from an iPhone in Termius / no lease
 #   B. hub down      — orange 「⌂ <this machine> · 入口连不上」
+#   B2. refused     — (#2112) the hub answered 401: orange 「入口不认这台电脑 · 请重新
+#                     扫码（fleet login）」, a `rescan` range a tap turns into fleet login
 #   C. narrow bar    — under 60 columns: ⌂ + the machine only
 #   D. English       — the same words off fleet-ui-lang.sh
 #   E. the cache     — one where read per TTL; a width change still redraws
@@ -44,6 +46,19 @@ printf '#!/bin/bash\nexit 1\n' > "$WORK/hubdown"; chmod +x "$WORK/hubdown"
 eq "B hub out of reach → orange 入口连不上" "$WARN ⌂ MacBook · 入口连不上 $TAIL" "$(FLEET_CLIENT_WHERE_CMD="$WORK/hubdown" badge)"
 eq "B the where itself could not be read → the same" "$WARN ⌂ MacBook · 入口连不上 $TAIL" \
   "$(FLEET_CLIENT_BADGE_WHERE_CMD=false badge)"
+
+# --- B2. the hub refused this machine's credential (#2112) ---------------------------
+printf '#!/bin/bash\nexit 4\n' > "$WORK/hubrefused"; chmod +x "$WORK/hubrefused"
+R="#[range=user|rescan]"
+eq "B2 401 → orange 请重新扫码, a tap range" "$R$WARN ⌂ MacBook · 入口不认这台电脑 · 请重新扫码（fleet login） #[norange]$TAIL" \
+  "$(FLEET_CLIENT_WHERE_CMD="$WORK/hubrefused" badge)"
+eq "B2 English" "$R$WARN ⌂ MacBook · the hub refused this computer · scan again (fleet login) #[norange]$TAIL" \
+  "$(FLEET_UI_LANG=en FLEET_CLIENT_WHERE_CMD="$WORK/hubrefused" badge)"
+eq "B2 narrow → ⌂ + machine, no range" "$WARN ⌂ MacBook $TAIL" "$(CW=40 FLEET_CLIENT_WHERE_CMD="$WORK/hubrefused" badge)"
+case "$(cat "$ROOT/conf/tmux-shell.conf")" in
+  *"#{==:#{mouse_status_range},rescan}' { run-shell -b \"bash __BIN__/dash-popup.sh --client '#{client_name}'"*"-- bash __BIN__/fleet login"*) eq "B2 a tap on it runs fleet login" 1 1 ;;
+  *) eq "B2 a tap on it runs fleet login" "rescan bind" "missing" ;;
+esac
 
 # --- C. narrow -----------------------------------------------------------------------
 printf '%s\n' '{"state":"active","lease":{"device":"iPhone","terminal":"Termius","via":"tailnet","host":"m5"}}' > "$WORK/lease.json"

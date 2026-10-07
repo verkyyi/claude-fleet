@@ -64,6 +64,9 @@
 #                                                   fleet-remote-view.sh
 #   client-kill-server                              bin/fleet (run again)
 #   hub-unreachable                                 bin/fleet, fleet-client-badge.sh
+#   hub-refused-cert                                fleet-client-lease.py where, fleet-client-where.sh,
+#                                                   fleet-client-badge.sh
+#   cert-expiry-keeper                              bin/fleet-shell.sh (keeper), fleet-login.py renew --if-under
 #   offline-list-moves                              tmux-dashboard-rows.sh (lost rows stay put), fleet-sidebar.py
 #   static-forward / proxy-orphan                   bin/fleet-remote-view.sh (run), fleet-shell.sh
 #   reconnect-stale-view / reconnect-mouse          bin/fleet-remote-view.sh (run, open, select)
@@ -1492,6 +1495,111 @@ drill_hub_unreachable() {
            FLEET_CLIENT_BADGE_CACHE="$WORK/badge" bash "$BIN/fleet-client-badge.sh" cw=120 )
   case "$badge" in *入口连不上*) ;; *) WHY="the bar does not say 入口连不上: [$badge]"; return 1 ;; esac
   WHAT="客户端照常打开，状态栏写「入口连不上」"
+}
+
+# The hub refuses this machine's certificate (issue #2112): a key id its roster
+# no longer names (the 2026-10-04 move to gh:<id>), an expired certificate. The
+# hub is UP — /healthz 200 — and answers 401; before, the bar said 入口连不上 and
+# sent the person after the network. A fake hub answering 401 「names no one」,
+# the REAL lease → where → badge chain.
+# cert_hub <dir> <secs> — a fake hub: /v1/fleet/login/renew signs a fresh 12-hour
+# certificate with <dir>/ca; /v1/fleet/client answers 401 「names no one」 while
+# <dir>/orphan exists, else 404 (no lease door). Its port lands in <dir>/port.
+cert_hub() {
+  cat > "$1/hub.py" <<'PY'
+import json, os, signal, subprocess, sys, tempfile
+from http.server import BaseHTTPRequestHandler, HTTPServer
+D = sys.argv[1]; signal.alarm(int(sys.argv[2]))
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def reply(self, code, obj):
+        b = json.dumps(obj).encode()
+        self.send_response(code); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        open(os.path.join(D, "log"), "a").write(self.path + "\n")
+        if self.path == "/v1/fleet/login/renew":
+            t = tempfile.mkdtemp(dir=D)
+            open(os.path.join(t, "k.pub"), "w").write(body["public_key"] + "\n")
+            subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(D, "ca"), "-I", "person:gh:1", "-n", "verk",
+                            "-V", "-1m:+12h", os.path.join(t, "k.pub")], check=True)
+            return self.reply(200, {"certificate": open(os.path.join(t, "k-cert.pub")).read(), "principals": ["verk"],
+                                    "valid_before": "", "ssh_config": "# test\n"})
+        if self.path.startswith("/v1/fleet/client") and os.path.exists(os.path.join(D, "orphan")):
+            return self.reply(401, {"error": "connection certificate refused: its key id names no one this hub knows"})
+        self.reply(404, {})
+    do_GET = lambda self: self.reply(404, {})
+srv = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(D, "port.tmp"), "w").write(str(srv.server_address[1])); os.replace(os.path.join(D, "port.tmp"), os.path.join(D, "port"))
+srv.serve_forever()
+PY
+  [ -f "$1/ca" ] || ssh-keygen -q -t ed25519 -N '' -f "$1/ca"
+  rm -f "$1/port"
+  python3 "$1/hub.py" "$1" "$2" 2>"$1/hub.err" & CHUB_PID=$!
+  for _ in $(seq 1 300); do [ -s "$1/port" ] && break; sleep 0.1; done
+  [ -s "$1/port" ]
+}
+drill_hub_refused_cert() {
+  CAP=15; local t0 sc="$WORK/hrc" port badge wj
+  mkdir -p "$sc"; : > "$sc/orphan"
+  cert_hub "$sc" 60 || { kill "$CHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$sc/hub.err")"; return 1; }
+  read -r port < "$sc/port"
+  t0=$(now)
+  wj=$( client_env; export FLEET_HUB_URL="http://127.0.0.1:$port" FLEET_HUB_TOKEN=tok FLEET_SHELL_SESSION="${CSESS}r"
+        unset CCQUOTA_TOKEN CCQUOTA_HUB_URL; bash "$BIN/fleet-client-where.sh" --json 2>&1 )
+  badge=$( client_env; export FLEET_HUB_URL="http://127.0.0.1:$port" FLEET_HUB_TOKEN=tok FLEET_SHELL_SESSION="${CSESS}r"
+           unset CCQUOTA_TOKEN CCQUOTA_HUB_URL
+           FLEET_CLIENT_BADGE_TTL=0 FLEET_CLIENT_BADGE_CACHE="$sc/badge" bash "$BIN/fleet-client-badge.sh" cw=120 )
+  SECS=$(since "$t0")
+  kill "$CHUB_PID" 2>/dev/null; wait "$CHUB_PID" 2>/dev/null
+  case "$wj" in *'"hub": "refused"'*) ;; *) WHY="where --json does not say refused: [$wj]"; return 1 ;; esac
+  case "$badge" in *入口连不上*) WHY="the bar still says 入口连不上 for a 401: [$badge]"; return 1 ;; esac
+  case "$badge" in *'range=user|rescan'*请重新扫码*) ;; *) WHY="the bar does not offer the rescan: [$badge]"; return 1 ;; esac
+  WHAT="入口回 401「names no one」：where 报 hub refused，状态栏橙色「入口不认这台电脑 · 请重新扫码」，可点"
+}
+
+# A shell left open past its certificate (issue #2112): 12 hours, and only a new
+# connection (`fleet-connect.py --enter`) renewed it — a client left overnight
+# went 401 at that minute. The real client (bin/fleet → keeper) with a
+# certificate 30 minutes from its end and a fake hub that renews: the keeper
+# renews it (fleet-login.py renew --if-under 3600); then the hub stops naming the
+# key id, and the keeper's renew exit 3 is the one thing the person is told.
+drill_cert_expiry_keeper() {
+  CAP=20; local t0 s="${CSESS}k" sc="$WORK/cek" port left
+  client_setup
+  mkdir -p "$sc"; rm -f "$sc/orphan"
+  cert_hub "$sc" $((CAP * 2 + 60)) || { kill "$CHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$sc/hub.err")"; return 1; }
+  read -r port < "$sc/port"
+  ( client_env; rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub" "$HOME/.ssh/fleet-cert-cert.pub"
+    ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert"
+    ssh-keygen -q -s "$sc/ca" -I person:gh:1 -n verk -V -1m:+30m "$HOME/.ssh/fleet-cert.pub" )
+  left=$( client_env; python3 "$BIN/fleet-login.py" check )
+  case "$left" in "valid "*) ;; *) kill "$CHUB_PID" 2>/dev/null; WHY="the 30-minute certificate did not take: [$left]"; return 1 ;; esac
+  t0=$(now)
+  if ! client_start "$s" FLEET_HUB_URL="http://127.0.0.1:$port" FLEET_CLIENT_IDENTITY=test \
+       FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_CERT_CHECK_EVERY=1 FLEET_SHELL_CACHE="$sc/cache"; then
+    kill "$CHUB_PID" 2>/dev/null; WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1
+  fi
+  for _ in $(seq 1 $((CAP * 10))); do
+    left=$( client_env; python3 "$BIN/fleet-login.py" check ); left=${left#valid }
+    case "$left" in ''|*[!0-9.]*) ;; *) [ "${left%.*}" -gt 39600 ] && break ;; esac
+    sleep 0.1
+  done
+  SECS=$(since "$t0")
+  case "$left" in ''|*[!0-9.]*) left=0 ;; esac
+  if [ "${left%.*}" -le 39600 ]; then
+    "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; kill "$CHUB_PID" 2>/dev/null
+    WHY="the keeper did not renew a certificate 30 minutes from its end (left ${left}s; hub saw: $(tr '\n' ' ' < "$sc/log" 2>/dev/null))"; return 1
+  fi
+  # the hub stops naming the key id: renewing will never help — the person is told
+  : > "$sc/orphan"
+  ( client_env; ssh-keygen -q -s "$sc/ca" -I person:YiLiangHui -n verk -V -1m:+30m "$HOME/.ssh/fleet-cert.pub" )
+  for _ in $(seq 1 $((CAP * 10))); do [ -f "$sc/cache/tmp/client.rescan" ] && break; sleep 0.1; done
+  "$REAL_TMUX" -L "$s" kill-server 2>/dev/null
+  kill "$CHUB_PID" 2>/dev/null; wait "$CHUB_PID" 2>/dev/null
+  [ -f "$sc/cache/tmp/client.rescan" ] || { WHY="an orphaned key id: the keeper's renew exit 3 left no rescan mark"; return 1; }
+  WHAT="证书剩 30 分钟：keeper 自己续成 12 小时；入口不认 key id 时只提示一次「请重新扫码」"
 }
 
 # The list does not move while a line is down (issue #1882): the real client on

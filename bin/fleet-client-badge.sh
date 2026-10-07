@@ -7,6 +7,9 @@
 #   ⌂ m5 ← verkyyi-iphone Termius  the client runs on m5; you reached it over
 #                                  ssh from the device after the arrow
 #   ⌂ MacBook · 入口连不上         (orange) a hub is set but cannot be asked
+#   ⌂ MacBook · 入口不认这台电脑 · 请重新扫码（fleet login）
+#                                  (orange) the hub answered 401: it refused this
+#                                  machine's certificate (issue #2112) — scan again
 #   ⌂ MacBook                      (orange) nobody holds the client lease
 #   ⌂ m5                           a bar narrower than 60 columns: the machine only
 #
@@ -94,6 +97,8 @@ tword=${term%% [0-9]*}   # "iTerm2 3.7.3" → iTerm2: the terminal, not its vers
 col=$OK
 if [ "$hub" = down ]; then
   col=$WARN; host=$me; key=badge_hubdown_fmt
+elif [ "$hub" = refused ]; then
+  col=$WARN; host=$me; key=badge_hubrefused_fmt
 elif [ "$st" != active ]; then
   col=$WARN; host=$me; key=badge_bare_fmt
 else
@@ -107,7 +112,12 @@ fi
 [ "$cw" -lt 60 ] && key=badge_bare_fmt
 
 text=$(fleet_ui_t "$key" "${host:-?}" "${detail:-}")
-printf '%s %s #[default]%s│' "$col" "${text//#/##}" "$DIM"
+if [ "$key" = badge_hubrefused_fmt ]; then
+  # one tap scans again (conf/tmux-shell.conf's MouseDown1Status, `rescan`)
+  printf '#[range=user|rescan]%s %s #[norange]#[default]%s│' "$col" "${text//#/##}" "$DIM"
+else
+  printf '%s %s #[default]%s│' "$col" "${text//#/##}" "$DIM"
+fi
 
 # --- the client's own update (issue #1781): one more segment, or nothing
 UST="${FLEET_CLIENT_UPDATE_STATE:-${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}/update.state}"

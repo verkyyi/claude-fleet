@@ -39,7 +39,8 @@ FLEET_CLIENT_LIST_FILE when that is set (the sidebar's 我的客户端 and the t
 line's 「也在 iPhone 上打开」 read it). Exit 0 = the hub answered (or nohub: there is no hub here, and with no
 hub there is no lease — the machine's one shell is already the only one);
 1 = the hub could not be asked (network, a refusal) — the caller keeps what it
-had.
+had. `where` alone answers a 401 with exit 4: the hub is up and refused this
+machine's credential — scan again (`fleet login`), not a network fault (#2112).
 
 Where the person is (issue #1716, EPIC #1710 C6) — read off the connection
 itself, never a key or a name someone gave it:
@@ -524,7 +525,8 @@ def read_where(fc, hub, token):
     line: {"state": active|none|nohub, "lease": {...}, "clients": [...],
     "primary": id} (an older hub: no clients). A node asks with its own
     token (GET /v1/node/client — its owner's); a client machine with its
-    connection certificate (or hub token). Exit 1 = the hub could not be asked."""
+    connection certificate (or hub token). Exit 1 = the hub could not be asked ·
+    4 = it answered 401: it refused this machine's credential (issue #2112)."""
     ntok = os.environ.get("CCQUOTA_TOKEN") or node_env("CCQUOTA_TOKEN")
     hub = hub or os.environ.get("CCQUOTA_HUB_URL") or node_env("CCQUOTA_HUB_URL")
     if not hub:
@@ -556,8 +558,15 @@ def read_where(fc, hub, token):
         if e.code == 404:
             print(json.dumps({"state": "nohub"}))   # a hub without the lease
             return 0
-        sys.stderr.write("fleet-client-lease: hub answered HTTP %d\n" % e.code)
-        return 1
+        why = ""
+        try:
+            why = (json.loads(e.read() or b"{}").get("error") or "").strip()
+        except (OSError, ValueError, AttributeError):
+            pass
+        sys.stderr.write("fleet-client-lease: hub answered HTTP %d%s\n" % (e.code, (" — " + why) if why else ""))
+        # 401: the hub is up and REFUSED this machine's credential (an orphaned
+        # key id, an expired certificate) — not out of reach (issue #2112)
+        return 4 if e.code == 401 else 1
     except (OSError, ValueError) as e:
         sys.stderr.write("fleet-client-lease: %s\n" % e)
         return 1

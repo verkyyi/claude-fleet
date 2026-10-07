@@ -2,7 +2,7 @@
 """fleet-login.py — `fleet login`: scan once, get a 12-hour SSH certificate.
 
     fleet login [--hub URL] [--invert] [--no-include]
-    fleet login renew [--hub URL] [--quiet]
+    fleet login renew [--hub URL] [--quiet] [--if-under SECS]
     fleet login status
     fleet login check
     fleet login hub [--hub URL]                  print the hub URL it would use
@@ -32,6 +32,19 @@ timestamp with the device key (ssh-keygen -Y sign) and POSTs it to
 registered, that the device is not revoked and was used inside the last seven
 days, and signs again. `fleet` (no argument) runs this for you before every
 connection, so a scan is needed only after seven idle days or a revocation.
+
+A renewal signs the SAME identity the device was registered under, so a hub
+whose roster no longer names it (claude-fleet#2112: the 2026-10-04 move from the
+old person:<name> ids to gh:<id>) renews happily and then refuses the new
+certificate everywhere with 401 「its key id names no one this hub knows」.
+So a 200 is checked once — the new certificate signs a `get` on the client
+lease (POST /v1/fleet/client) — and that refusal (or 「not signed by this hub」)
+is exit 3: scan again, not a renewal. A hub without the lease door, or one out
+of reach for the check, leaves the renewal as it was. `--if-under SECS` renews
+only when the certificate has less than SECS left (exit 0, nothing asked,
+otherwise — and when there is no certificate at all): the client keeper's
+hourly-margin call (fleet-shell.sh keeper), so a shell left open overnight never
+reaches the 12-hour end.
 
 `node` is the scan half of `fleet node join` (claude-fleet#1627): the same key,
 start, QR, page and poll, with purpose=node — the page reads 「把 <机器名> 加为
@@ -83,6 +96,12 @@ INCLUDE_BEGIN = "# >>> fleet login (claude-fleet#1412) >>>"
 INCLUDE_END = "# <<< fleet login <<<"
 RENEW_PATH = "/v1/fleet/login/renew"
 RENEW_NAMESPACE = "fleet-renew@claude-fleet"
+# The renewal's check (claude-fleet#2112): the client lease, as fleet-client-lease.py asks it.
+CLIENT_PATH = "/v1/fleet/client"
+CLIENT_NAMESPACE = "fleet-client@claude-fleet"
+# The hub's words for a certificate it will never accept, however often renewed
+# (tokenledger/internal/api/ssh_relay.go verifySSHRelayCert).
+RESCAN_REFUSALS = ("names no one this hub knows", "not signed by this hub")
 # Exit code: this device has to scan again.
 NEEDS_SCAN = 3
 
@@ -375,6 +394,25 @@ def cert_remaining(cert=CERT):
     return until - time.time()
 
 
+def cert_refused(hub):
+    """The hub's refusal of the certificate on disk, or "" when it took it (or
+    could not say: no lease door, out of reach). One signed `get` on the client
+    lease — read-only, the person's lease untouched."""
+    ts = int(time.time())
+    try:
+        sig = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", KEY, "-n", CLIENT_NAMESPACE],
+                             input=("fleet-client %d" % ts).encode(), capture_output=True, check=True).stdout.decode()
+        with open(CERT) as f:
+            cert = f.read().strip()
+        code, res = post(hub + CLIENT_PATH, {"action": "get", "cert": cert, "sig": sig, "ts": ts}, timeout=8)
+    except (OSError, subprocess.CalledProcessError, urllib.error.URLError, ValueError):
+        return ""
+    if code != 401:
+        return ""
+    why = str(res.get("error") or "")
+    return why if any(r in why for r in RESCAN_REFUSALS) else ""
+
+
 def renew(hub, quiet=False, include=True):
     """Renew by the device key. Returns 0 renewed · NEEDS_SCAN (3) when the hub
     says this device must scan again · 1 for anything else (hub unreachable,
@@ -399,6 +437,11 @@ def renew(hub, quiet=False, include=True):
         return 1
     if code == 200:
         added = write_cert(res, include)
+        why = cert_refused(hub)
+        if why:
+            # renewed, and still refused: the identity it renews is gone (#2112)
+            say("续期拿到了证书，但入口不认它（%s）— 需要重新扫码：fleet login" % why)
+            return NEEDS_SCAN
         say("✓ 证书已续期（%s 前有效，账号 %s）%s" % (res.get("valid_before", "?"), ",".join(res.get("principals", [])),
                                                "；ssh 配置已 Include" if added else ""))
         for n in NOTES:
@@ -528,19 +571,30 @@ def cmd_hub(argv):
 
 
 def cmd_renew(argv):
-    hub_arg, quiet, include = "", False, True
+    hub_arg, quiet, include, under = "", False, True, None
     it = iter(argv)
     for a in it:
         if a == "--hub":
             hub_arg = next(it, "")
         elif a.startswith("--hub="):
             hub_arg = a.split("=", 1)[1]
+        elif a == "--if-under" or a.startswith("--if-under="):
+            v = a.split("=", 1)[1] if "=" in a else next(it, "")
+            if not v.isdigit():
+                die("--if-under needs a number of seconds")
+            under = int(v)
         elif a in ("-q", "--quiet"):
             quiet = True
         elif a == "--no-include":
             include = False
         else:
             die("unknown option " + a)
+    if under is not None:
+        # the keeper's margin call: nothing to do while there is time left, and
+        # nothing to renew on a machine signed in another way (no certificate)
+        left = cert_remaining()
+        if left is None or left >= under:
+            return 0
     return renew(hub_url(hub_arg), quiet, include)
 
 

@@ -23,6 +23,8 @@
 #                   line byte for byte as before
 #   G. node read  — fleet-client-lease.py where asks GET /v1/node/client with
 #                   node.env's token (never another credential)
+#   G2. refused   — (#2112) the hub answers 401: lease where exits 4 and --json
+#                   says hub refused; a hub out of reach stays exit 1, hub down
 #   H. local read — no hub: the fleet-shell client attached on this machine
 #                   (client.where.json); none attached → exit 3
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
@@ -223,6 +225,16 @@ eq "G rc" "0" "$rc"
 has "G the owner's lease" "$w" '"device": "MacBook"'
 has "G asked with the node token" "$(cat "$WORK/hub.log" 2>/dev/null)" "GET /v1/node/client Bearer NODETOK"
 eq "G through the reader" "MacBook · iTerm2 · 能：打开网页" "$(env -u FLEET_CLIENT_WHERE_CMD bash "$BIN/fleet-client-where.sh")"
+# G2 (#2112): the hub is UP and refuses the credential (401) — exit 4, hub
+# refused; out of reach (a dead port) stays exit 1, hub down
+printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=WRONGTOK\n' "$port" > "$FLEET_CONF_DIR/node.env"
+python3 "$BIN/fleet-client-lease.py" where >/dev/null 2>&1; rc=$?
+eq "G2 401 → exit 4 (refused, not unreachable)" "4" "$rc"
+has "G2 --json hub refused" "$(env -u FLEET_CLIENT_WHERE_CMD bash "$BIN/fleet-client-where.sh" --json)" '"hub": "refused"'
+printf 'CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=NODETOK\n' > "$FLEET_CONF_DIR/node.env"
+python3 "$BIN/fleet-client-lease.py" where >/dev/null 2>&1; rc=$?
+eq "G2 out of reach → exit 1" "1" "$rc"
+has "G2 --json hub down" "$(env -u FLEET_CLIENT_WHERE_CMD bash "$BIN/fleet-client-where.sh" --json)" '"hub": "down"'
 rm -f "$FLEET_CONF_DIR/node.env"
 w=$(python3 "$BIN/fleet-client-lease.py" where); rc=$?
 eq "G no hub anywhere → nohub" '{"state": "nohub"}' "$w"
