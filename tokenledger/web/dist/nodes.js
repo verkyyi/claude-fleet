@@ -3,7 +3,9 @@
 // maintenance switch behind a confirm, «add a machine» (a one-time join code,
 // its command and countdown, waiting for the machine to join), and the SPOT
 // switch. Reads /v1/nodes, /v1/fleet/join-codes, /v1/fleet/settings; writes
-// fleet.node_maintenance.<machine> and fleet.spot. An admin's.
+// fleet.node_maintenance.<machine> and fleet.spot, and 「移除」 (claude-fleet#1928)
+// retires every enrollment on the machine through /v1/fleet/nodes/retire — its
+// token stops working and its card leaves the page. An admin's.
 import { Shell } from './app-shell.js';
 import { esc, ic, spark, relTime } from './lib/shell.js';
 import { machineCards, joined, countdown } from './lib/admin.js';
@@ -27,10 +29,11 @@ function card(m) {
   const btn = m.status === 'maintenance' || (m.status === 'lost' && m.maintenance)
     ? `<button class="btn sm" data-act="leave" data-m="${esc(m.name)}">${ic('wrench')}${esc(t('ui.mach.endMaint'))}</button>`
     : m.status === 'online' ? `<button class="btn sm" data-act="enter" data-m="${esc(m.name)}" data-n="${m.sessions == null ? '' : m.sessions}">${ic('wrench')}${esc(t('ui.mach.maintBtn'))}</button>` : '';
+  const rm = m.eps.length ? `<button class="btn sm ghost" data-act="remove" data-m="${esc(m.name)}" data-eps="${esc(m.eps.join(' '))}" data-n="${m.sessions == null ? '' : m.sessions}">${ic('trash')}${esc(t('ui.mach.removeBtn'))}</button>` : '';
   return `<div class="panel mc"><div class="mc-h"><b>${esc(m.name)}</b>${m.kind === 'ephemeral' ? `<span class="chip brand">${esc(t('ui.mach.spot'))}</span>` : ''}${status(m)}</div>${why}` +
     trend +
     `<div class="stats"><div><b>${m.sessions == null ? '?' : m.sessions}</b>${esc(t('ui.mach.sessions'))}</div><div><b>${esc(load)}</b>${esc(t('ui.mach.load'))}</div><div><b>${esc(m.version || '—')}</b>${esc(t('ui.mach.version'))}</div></div>` +
-    `<div class="mc-f"><span>${esc(t('ui.mach.seen', { when: relTime(m.seen) }))}</span>${btn}</div></div>`;
+    `<div class="mc-f"><span>${esc(t('ui.mach.seen', { when: relTime(m.seen) }))}</span><span>${btn}${rm}</span></div></div>`;
 }
 
 function joinModal(ctx, j) {
@@ -103,6 +106,16 @@ Shell.mount('machines', async (ctx) => {
       if (inp) inp.oninput = () => { reason = inp.value; };
     } else if (b.dataset.act === 'leave') {
       put('fleet.node_maintenance.' + m, '', t('ui.mach.left', { m }));
+    } else if (b.dataset.act === 'remove') {
+      const eps = (b.dataset.eps || '').split(' ').filter(Boolean);
+      const n = b.dataset.n === '' ? '?' : b.dataset.n;
+      ctx.confirm(t('ui.mach.removeQ', { m }), esc(t('ui.mach.removeBody', { n })), t('ui.mach.removeBtn'), async () => {
+        try {
+          for (const id of eps) await ctx.api('/v1/fleet/nodes/retire', { json: { endpoint_id: id, reason: 'removed on the machines page' } });
+          ctx.toast(t('ui.mach.removed', { m }));
+          await ctx.refresh();
+        } catch (err) { ctx.toast(t('ui.err.action', { e: err.message })); }
+      });
     } else if (b.dataset.act === 'spot') {
       put('fleet.spot', spotOn ? 'off' : 'on', t(spotOn ? 'ui.mach.spotOffToast' : 'ui.mach.spotOnToast'));
     } else if (b.dataset.act === 'add') {

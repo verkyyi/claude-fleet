@@ -1362,6 +1362,23 @@ are revoked in the retire's transaction; its relay credential is dropped; one
 machine with a join code. Revocation state is never a field on `Endpoint`
 (the #43 rule for `EnrollKind`).
 
+**A machine can be taken off the hub — by its person, or by itself
+(claude-fleet#1928).** The revoke keeps the roster row (a lost machine may come
+back); a computer whose person changed machines, left, or was a drill's should
+not stay on /nodes forever. `POST /v1/fleet/nodes/retire {endpoint_id[,
+reason]}` runs the revoke above AND drops the roster row: an admin (or the
+viewer token) any machine, a signed-in user only one `FleetScope` gives them —
+anything else, a missing id included, is 403. The machines page's 「移除」
+(behind a confirm) calls it for each enrollment on the card.
+`POST /v1/node/leave [{reason}]` is the same retire for the CALLER's own
+enrollment token — `fleet node leave` (`bin/fleet-node-leave.sh`): ask the hub,
+then stop the agent and remove its service file, then delete `node.env`; a hub
+that cannot be asked or refuses changes nothing local (rerun). Both audit one
+`node_revoke` row under who asked (`gh:<id>`, `node:<login>@<machine>`, the
+viewer). `fleet-login-remove.sh` runs `fleet node leave --hub-only` as the login
+it deletes, so the onboard drill's teardown needs no kubectl
+(`fleet_node_retire_test.go`, `bin/fleet-node-leave-selftest.sh`).
+
 **An untrusted machine's session borrows a pass (claude-fleet#1969).** Instead
 of a credential, a session asks `POST /v1/fleet/session-cred` (the node's
 enrollment token + the session's own `X-Fleet-Worker` assertion, #1810; body

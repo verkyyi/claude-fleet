@@ -43,9 +43,12 @@
 #               要人帮 — a FAIL naming it. The row's line is the evidence.
 #   9 offboard  stop the login's processes, revoke its device on the hub
 #               (POST /v1/fleet/devices/revoke, viewer token from the
-#               environment), retire its node (FLEET_DRILL_RETIRE_CMD <ep_id>;
-#               none → a WARN with the command, #1928), then
-#               fleet-login-remove.sh <login> --delete-home --apply.
+#               environment), then fleet-login-remove.sh <login> --delete-home
+#               --apply — which takes the login's node off the hub as the login
+#               itself (`fleet node leave --hub-only`, #1928). Only when that did
+#               not: FLEET_DRILL_RETIRE_CMD <ep_id>, else the operator's
+#               POST /v1/fleet/nodes/retire, else a WARN naming the machines
+#               page's 「移除」 — never kubectl.
 #               With --invite: the drill person deletes ITSELF instead — person,
 #               device, node (DELETE /v1/self, signed by the login's own
 #               certificate, else the code) — no operator token needed.
@@ -428,6 +431,16 @@ hub_revoke() {
         --data-binary @- "$HUB/v1/fleet/devices/revoke" 2>&1) || { printf '%s' "$out"; return 1; }
   printf '%s' "$out"
 }
+# hub_retire <ep_id>: the operator takes a node off the hub (#1928) — the
+# fallback when the login's own `fleet node leave` did not.
+hub_retire() {
+  local ep=$1 out
+  [ -n "$VIEWER" ] || { printf 'no CCQUOTA_VIEWER_TOKEN / FLEET_HUB_TOKEN in the environment'; return 1; }
+  out=$(printf '{"endpoint_id":"%s","reason":"onboard drill teardown"}' "$ep" | curl -fsS --max-time 15 -X POST \
+        -H "Authorization: Bearer $VIEWER" -H 'Content-Type: application/json' \
+        --data-binary @- "$HUB/v1/fleet/nodes/retire" 2>&1) || { printf '%s' "$out"; return 1; }
+  printf '%s' "$out"
+}
 # hub_self_delete: the drill person removes itself — person, devices, nodes —
 # signed by the login's own certificate, else proven by the approve code (a
 # scan that never finished left no certificate). Prints the hub's answer.
@@ -464,15 +477,21 @@ step_offboard() {
     if out=$(hub_revoke "$FPR"); then note "device $FPR revoked on the hub: $out"
     else warn="$warn · device $FPR not revoked ($out)"; fi
   fi
+  ( cd "$HOME" && bash "$RM_SH" "$LOGIN" --delete-home --apply ) > "$RUN/login-remove.log" 2>&1; rc=$?
+  # The node: fleet-login-remove.sh's own `fleet node leave` (#1928), else the
+  # operator's retire — never a step inside the cluster.
   if [ -n "$EPID" ]; then
-    if [ -n "${FLEET_DRILL_RETIRE_CMD:-}" ]; then
+    if grep -aEq 'the hub (had already )?retired|no longer knows this token' "$RUN/login-remove.log"; then
+      note "node $EPID taken off the hub by fleet node leave"
+    elif [ -n "${FLEET_DRILL_RETIRE_CMD:-}" ]; then
       if sh -c "$FLEET_DRILL_RETIRE_CMD \"\$1\"" _ "$EPID" > "$RUN/retire.log" 2>&1; then note "node $EPID retired: $(tail -n 1 "$RUN/retire.log")"
       else warn="$warn · node $EPID not retired ($(tail -n 1 "$RUN/retire.log"))"; fi
+    elif out=$(hub_retire "$EPID"); then
+      note "node $EPID retired by the operator: $out"
     else
-      warn="$warn · node $EPID stays on the hub's roster: ccquota endpoint retire $EPID (no HTTP way yet, #1928)"
+      warn="$warn · node $EPID stays on the hub ($out) — remove it on the machines page (「移除」)"
     fi
   fi
-  ( cd "$HOME" && bash "$RM_SH" "$LOGIN" --delete-home --apply ) > "$RUN/login-remove.log" 2>&1; rc=$?
   if [ "$rc" != 0 ]; then
     failstep offboard "fleet-login-remove.sh $LOGIN --delete-home --apply: exit $rc — $(tail -n 1 "$RUN/login-remove.log")$warn"
     return 1

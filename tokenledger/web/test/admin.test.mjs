@@ -140,12 +140,15 @@ test('machines: lost last, load per core, trend and version carried', () => {
     { hostname: 'm5.lan', status: 'lost', load1: 0, ncpu: 8, sessions: 0, kind: 'fixed' },
     { hostname: 'mini2.tail.ts.net', status: 'online', load1: 4, ncpu: 8, sessions: 3, kind: 'fixed', load_hist: [0.1, 0.5] },
     { hostname: 'm4', status: 'maintenance', load1: 1, ncpu: 4, sessions: null, kind: 'ephemeral', maintenance: { reason: 'upgrade', by: 'verkyyi' } },
-  ], nodes: [{ hostname: 'mini2.tail.ts.net', fleet_version: '0.4.1' }, { hostname: 'mini2.tail.ts.net', agent_version: '0.3.9' }] });
+  ], nodes: [{ hostname: 'mini2.tail.ts.net', fleet_version: '0.4.1', endpoint_id: 'ep_a' }, { hostname: 'mini2.tail.ts.net', agent_version: '0.3.9', endpoint_id: 'ep_b' }] });
   assert.deepEqual(ms.map((m) => [m.name, m.status]), [['mini2', 'online'], ['m4', 'maintenance'], ['m5', 'lost']]);
   assert.equal(ms[0].loadCore, 0.5);
   assert.deepEqual(ms[0].hist, [0.1, 0.5]);
   assert.equal(ms[0].version, '0.4.1');
   assert.equal(ms[1].sessions, null);
+  // Every enrollment on the machine: 「移除」 retires them all (claude-fleet#1928).
+  assert.deepEqual(ms[0].eps, ['ep_a', 'ep_b']);
+  assert.deepEqual(ms[2].eps, []);
   assert.deepEqual(machineCards(null), []);
 });
 
@@ -195,7 +198,7 @@ test('audit: grouped by day, newest first; actors without their principal', () =
 // The pages themselves, read as source: what a DOM test would pin, without a DOM.
 const PAGES = [
   { file: 'subscriptions.js', id: 'subscriptions', confirms: 2, empty: 'ui.sub.empty' },
-  { file: 'nodes.js', id: 'machines', confirms: 1, empty: 'ui.mach.empty' },
+  { file: 'nodes.js', id: 'machines', confirms: 2, empty: 'ui.mach.empty' },
   { file: 'users.js', id: 'people', confirms: 1, empty: 'ui.usr.empty' },
   { file: 'settings.js', id: 'settings', confirms: 0, empty: null },
   { file: 'audit.js', id: 'audit', confirms: 0, empty: 'ui.aud.empty' },
