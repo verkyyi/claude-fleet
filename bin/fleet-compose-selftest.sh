@@ -349,7 +349,7 @@ orch() { printf 'U/orch%sm4%sonline%s%s%s%s%s%s\n' "$US" "$US" "$US" "$1" "$US" 
 newtask() { screen | grep -F '新任务' | head -1; }
 # J. free: 编排 by default; ⇧⇥ carries the draft over
 settled
-orch done
+orch 'done'
 st_ select-window -t "$pw"
 st_ send-keys -t "$pw" -l '活页里加一张 fleet 状态卡：在跑几个会话'
 CHECKS=$((CHECKS + 1)); waitfor 4 '编排空闲' compose || fail 'J: the area says the orchestrator is free' "$(compose)"
