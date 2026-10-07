@@ -19,7 +19,8 @@
 #                       is removed; a personal one is untouched; a README.md an
 #                       old sync left behind is removed
 #   F. skills           a changed skill dir is mirrored whole; a divergent
-#                       personal skill is warned + left alone; a retired one goes
+#                       personal skill is warned + left alone; a retired one goes;
+#                       every skills/*/ the repo ships passes the gate (#2110)
 #   G. hooks / ui       hooks-merge runs only when the table changed; the conf
 #                       reload gets --from's conf as its before-file
 #   H. dry-run          prints the plan, changes nothing, calls no launchctl
@@ -306,6 +307,18 @@ C7=$(commit 'retire sk')
 run_ap --from "$C6" --to "$C7"
 ok 'F retired removed' "[ ! -d '$H/.claude/skills/sk' ]"
 ok 'F retired codex skill removed' "[ ! -d '$H/.codex/skills/sk' ] && [ ! -d '$H/codex account/skills/sk' ]"
+bash "$AP" --is-skill "$R/skills/mine"; eq 'F gate accepts the plain marker' 0 $?
+mkdir -p "$WORK/owned"; printf '# o\n\n<!-- fleet skill · owner: hub -->\n' > "$WORK/owned/SKILL.md"
+bash "$AP" --is-skill "$WORK/owned"; eq 'F gate rejects the commands owner form' 1 $?
+# every skill the real repo ships passes the gate the skills pass installs by
+# (issue #2110: fleet-orchestrate wore the commands' owner marker and was
+# silently skipped, so the orchestrator's seed was an Unknown command)
+if [ -d "$BIN/../skills" ]; then
+  for d in "$BIN/../skills"/*/; do
+    [ -f "$d/SKILL.md" ] || continue
+    bash "$AP" --is-skill "${d%/}"; eq "F repo skill $(basename "$d") installs" 0 $?
+  done
+fi
 
 # --- G. hooks / ui ------------------------------------------------------------------
 echo '{"hooks":{"x":1}}' > "$R/hooks/settings-hooks.json"

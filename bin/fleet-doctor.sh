@@ -469,6 +469,18 @@ skills_dir="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 if [ "$plug" = 0 ] && [ -f "$cmd_dir/fleet-handoff.md" ] && [ ! -f "$skills_dir/handoff/SKILL.md" ]; then
   warn skills "/fleet-handoff installed but its base skill $skills_dir/handoff/SKILL.md is missing — handoff will have nothing to delegate to (run /fleet-sync-install to install skills/*)"
 fi
+# The orchestrating session (issue #1957) is seeded `/fleet-orchestrate`; with
+# the skill missing it opens on `Unknown command` and sits there empty (issue
+# #2110). Same switch fleet-orchestrator.sh reads: FLEET_ORCHESTRATOR, default 承载.
+_orch_on=${FLEET_ORCHESTRATOR:-$(_gconf_val FLEET_ORCHESTRATOR)}
+[ -n "$_orch_on" ] || _orch_on=$(bash "$(dirname "$0")/fleet-conf.sh" host 2>/dev/null)
+case "$_orch_on" in 1|on|yes|true) _orch_on=1 ;; *) _orch_on=0 ;; esac
+_orch_agent=${FLEET_AGENT:-$(_gconf_val FLEET_AGENT)}
+if [ "$_orch_agent" = codex ]; then _orch_sk="${CODEX_HOME:-$HOME/.codex}/skills/fleet-orchestrate/SKILL.md"
+else _orch_sk="$skills_dir/fleet-orchestrate/SKILL.md"; fi
+if [ "$_orch_on" = 1 ] && [ "$plug" = 0 ] && [ ! -f "$_orch_sk" ]; then
+  warn skills "the orchestrator is on here but $_orch_sk is missing — its session opens on \`Unknown command: /fleet-orchestrate\` and sits empty (run /fleet-sync-install; or FLEET_ORCHESTRATOR=0 to turn it off)"
+fi
 
 # doc-preview is a soft/opt dep on tailscale: it hosts Markdown docs on the
 # machine's tailnet, so with the skill installed but tailscale absent it's a
