@@ -512,6 +512,8 @@ def window_key(row, one_repo, no_repo=False):
     """fleet_window_okey's key: `<slug>:issue-N` / `<slug>:scratch-N` in every
     fleet (issue #1939); a window with no @repo is the fleet's ONE repo's
     (<one_repo>, fleet_window_repo's fallback), and nothing when that is unknown."""
+    if row.get("role") == "orchestrator":
+        return "orchestrator"           # the fleet's orchestrating session (issue #2129)
     if row["issue"].isdigit():
         key = "issue-" + row["issue"]
     else:
@@ -557,15 +559,17 @@ def list_agents():
     no_repo = not one
     fmt = "#{window_id}\t#{session_name}\t#{window_name}\t#{@issue}\t#{@cc_agent}\t" \
           "#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}\t#{@claude_needs}\t" \
-          "#{@origin}\t#{@repo}\t#{@norepo}\t#{@worktree}\t#{pane_current_path}"
+          "#{@origin}\t#{@repo}\t#{@norepo}\t#{@worktree}\t#{pane_current_path}\t#{@fleet_role}"
     out = tmux("list-windows", "-a", "-F", fmt)
     agents = []
     for line in out.splitlines():
         parts = line.split("\t")
-        if len(parts) != 12 or parts[1] != session or parts[2] in ("dash", "plan", "backlog", "home"):
+        if len(parts) == 12:
+            parts.append("")            # no @fleet_role column: an older reader's row
+        if len(parts) != 13 or parts[1] != session or parts[2] in ("dash", "plan", "backlog", "home"):
             continue
         row = dict(zip(("window_id", "session", "window_name", "issue", "agent", "state", "needs",
-                        "origin", "repo", "norepo", "worktree", "path"), parts))
+                        "origin", "repo", "norepo", "worktree", "path", "role"), parts))
         key = window_key(row, one_repo, no_repo)
         state = row["needs"] or row["state"] or "unknown"
         agent = "codex" if row["agent"] == "codex" else "claude"
@@ -586,7 +590,7 @@ def list_agents():
 
 def parent_window():
     parent = origin_option()
-    if not re.match(r"^([A-Za-z0-9._-]+:)?(issue|scratch)-[0-9]+$", parent or ""):
+    if parent != "orchestrator" and not re.match(r"^([A-Za-z0-9._-]+:)?(issue|scratch)-[0-9]+$", parent or ""):
         raise ToolFault("this session has no live-addressable parent")
     session = current_session()
     # The ONE resolver (fleet_win_for_key, issue #1537): rc 2 = the key is
@@ -614,8 +618,8 @@ def send_message(to, text):
         raise Refused("text is required")
     target = to.strip()
     if target != "parent" and not re.match(
-            r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|[@%][A-Za-z0-9_.:-]+)$", target):
-        raise Refused("to must be issue:<N>, scratch-<N> or parent")
+            r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|orchestrator|[@%][A-Za-z0-9_.:-]+)$", target):
+        raise Refused("to must be issue:<N>, scratch-<N>, orchestrator or parent")
     if target == "parent":
         target = parent_window()
     result = run(["bash", str(BIN / "fleet-peer-send.sh"), target, "-"], input_text=text, check=False,
@@ -1037,7 +1041,7 @@ TOOLS = {
             "required": ["issue"], "additionalProperties": False}}),
     "send": (tool_send, {
         "description": "Send text to a live fleet peer as its next turn (bin/fleet-peer-send.sh). "
-                       "to is issue:<N>, scratch-<N> or parent.",
+                       "to is issue:<N>, scratch-<N>, orchestrator or parent.",
         "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"}},
                         "required": ["to", "text"], "additionalProperties": False}}),
     "report": (tool_report, {
