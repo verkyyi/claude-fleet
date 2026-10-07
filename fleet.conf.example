@@ -2227,7 +2227,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # docs/CRED-RELAY.md) and kept 0600 in $FLEET_CONF_DIR/cred-proxy/; a hand-set
 # FLEET_CRED_RELAY_TOKEN overrides it and lives in secrets.env, never here.
 # @label=Credential proxy @group=disk @tier=internal @scope=global @edit=bool
-#FLEET_CRED_PROXY=0                # 1 = run the proxy (bin/fleet-cred-proxy.sh)
+#FLEET_CRED_PROXY=0                # 1 = run the proxy (bin/fleet-cred-proxy.sh); flip it with `fleet cred-proxy enable|disable` (#2134)
 # @label=Credential proxy idle check @group=disk @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_CRED_PROXY_IDLE_SECS=60     # how often the launcher re-reads the switch
 # @label=Singapore relay URL @group=disk @tier=internal @scope=global @edit=str

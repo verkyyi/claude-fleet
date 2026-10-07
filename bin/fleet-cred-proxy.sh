@@ -15,10 +15,15 @@
 #                                 (a computer with no daemon — a client-only one);
 #                                 prints the port. Exit 3 = switched off.
 #   fleet-cred-proxy.sh port      the port sessions use (exit 1 = not running)
-#   fleet-cred-proxy.sh route|mint|rebind|revoke|attach|status|quota …
+#   fleet-cred-proxy.sh route|mint|rebind|revoke|attach|quota …
 #                                 the control socket — see fleet-cred-proxy.py
 #                                 (`quota`: each session's last rate-limit reading,
 #                                 issue #1978 — bin/fleet-proxy-quota.sh stamps it)
+#   fleet-cred-proxy.sh enable|disable [--all-logins] · status [--all-logins]
+#                                 the switch for this login (and every other login
+#                                 on the machine): bin/fleet-cred-rollout.sh, issue
+#                                 #2134 — `fleet cred-proxy …`. `status --json` /
+#                                 `status --ctl` is the control socket's status.
 #   fleet-cred-proxy.sh doctor    fleet-doctor's `cred` row (issue #1975): ONE line
 #                                 `<PASS|WARN|FAIL>` TAB `<text>` — trust, the road
 #                                 each agent takes and why, the proxy, credsep, renewal.
@@ -133,9 +138,14 @@ case "$cmd" in
   node-token|node-hash|probe|store|relay)
     echo "fleet-cred-proxy: $cmd: not separated (bin/fleet-credsep.sh)" >&2; exit 3 ;;
   run)
-    child=''; on_now=0; seen=-1
+    child=''; on_now=0; seen=-1; nap=''
     stop_child() { [ -n "$child" ] && kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; child=''; }
-    trap 'stop_child; exit 0' TERM INT
+    trap 'stop_child; rm -f "$STATE/launcher.pid"; exit 0' TERM INT
+    # USR1 = re-read the switch NOW (issue #2134): `fleet cred-proxy enable|disable`
+    # (bin/fleet-cred-rollout.sh) nudges the launcher it finds in launcher.pid, so a
+    # flip takes effect in seconds, not on the next $IDLE re-read
+    trap 'seen=-1' USR1
+    mkdir -p "$STATE" && chmod 700 "$STATE" && printf '%s\n' "$$" > "$STATE/launcher.pid"
     # Two clocks (issue #1975): the config is re-read every $IDLE seconds, the
     # proxy is looked at every $WATCH — a dead proxy is every session's next
     # request on this login, so it comes back within seconds, not a minute.
@@ -156,7 +166,9 @@ case "$cmd" in
         stop_child
         sleep "$IDLE" &
       fi
-      wait $! 2>/dev/null
+      nap=$!
+      wait "$nap" 2>/dev/null
+      kill "$nap" 2>/dev/null   # a USR1 cut the nap short: no stray sleep left behind
     done
     ;;
   ensure)
@@ -175,7 +187,17 @@ case "$cmd" in
     live_pid >/dev/null || { echo "fleet-cred-proxy: not running" >&2; exit 1; }
     cat "$STATE/port"
     ;;
-  route|mint|rebind|revoke|attach|status|quota)
+  enable|disable)
+    exec bash "$BIN/fleet-cred-rollout.sh" "$cmd" "$@"
+    ;;
+  status)   # the person's one line (issue #2134); --json / --ctl = the control socket's
+    case "${1:-}" in
+      --json) exec python3 -I "$PY" --state "$STATE" status "$@" ;;
+      --ctl)  shift; exec python3 -I "$PY" --state "$STATE" status "$@" ;;
+    esac
+    exec bash "$BIN/fleet-cred-rollout.sh" status "$@"
+    ;;
+  route|mint|rebind|revoke|attach|quota)
     exec python3 -I "$PY" --state "$STATE" "$cmd" "$@"
     ;;
   doctor)

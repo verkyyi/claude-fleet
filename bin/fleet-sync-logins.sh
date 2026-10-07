@@ -2,6 +2,7 @@
 # fleet-sync-logins.sh [--dry-run] [--logins a,b] [--include-off] [--force]
 #                      [--source <dir>] [--homes <dir>] [--summary]
 #                      [--to-git [--origin <url>]]
+#                      [--cred-proxy enable|disable|status]
 #   — keep every login's ~/.claude/fleet on ONE machine at the same commit
 #     (issue #1069); --to-git turns a copy install into a git clone (issue #1121).
 #
@@ -89,6 +90,13 @@
 # sync: the converted login sits at the version it had; a following plain run
 # brings it forward like any other checkout.
 #
+# --cred-proxy enable|disable|status (issue #2134) — no sync: for every other
+# login's install found here, run ITS OWN bin/fleet-cred-rollout.sh <verb> as
+# that login (its HOME and FLEET_CONF_DIR), and print each line it says as
+# `<login>: <line>`. This is how `fleet cred-proxy … --all-logins` reaches the
+# other logins; an install without the script needs a plain sync first (said so,
+# counted a failure). No passwordless sudo → the admin command is printed (exit 5).
+#
 # Exit status is the reason, worst first:
 #   6  a sync / conversion or its verification failed for at least one login
 #   5  at least one login needs sudo — the commands to run are printed
@@ -124,7 +132,7 @@ SUDO="${FLEET_SYNC_LOGINS_SUDO-sudo -n}"
 LAUNCHCTL="${FLEET_SYNC_LOGINS_LAUNCHCTL:-launchctl}"
 DAEMON_DIR="${FLEET_SYNC_LOGINS_DAEMON_DIR:-/Library/LaunchDaemons}"
 TMPROOT="${FLEET_SYNC_LOGINS_TMP:-/tmp}"
-dry=0 force=0 only='' summary=0 togit=0 origin='' incoff=0
+dry=0 force=0 only='' summary=0 togit=0 origin='' incoff=0 credp=''
 
 usage() { sed -n '2,/^set -u/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
@@ -134,6 +142,7 @@ while [ "$#" -gt 0 ]; do
     --include-off) incoff=1 ;;
     --summary)    summary=1; dry=1 ;;
     --to-git)     togit=1 ;;
+    --cred-proxy) shift; credp="${1:-}" ;;
     --origin)     shift; origin="${1:-}" ;;
     --origin=*)   origin="${1#--origin=}" ;;
     --logins)     shift; only="${1:-}" ;;
@@ -145,6 +154,13 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+case "$credp" in
+  ''|enable|disable|status) ;;
+  *) echo 'fleet-sync-logins: --cred-proxy takes enable, disable or status' >&2; exit 2 ;;
+esac
+if [ -n "$credp" ] && { [ "$summary" -eq 1 ] || [ "$togit" -eq 1 ]; }; then
+  echo 'fleet-sync-logins: --cred-proxy runs alone (no --summary / --to-git)' >&2; exit 2
+fi
 if [ "$summary" -eq 1 ] && [ "$togit" -eq 1 ]; then
   echo 'fleet-sync-logins: --summary and --to-git are exclusive (the summary line counts drift, not shape)' >&2; exit 2
 fi
@@ -504,6 +520,48 @@ if [ -n "$only" ]; then
   for want in $(printf '%s' "$only" | tr ',' ' '); do
     case " $found $unreadable " in *" $want "*) ;; *) printf 'fleet-sync-logins: no install for login %s under %s\n' "$want" "$homes" >&2; exit 2 ;; esac
   done
+fi
+
+# --- --cred-proxy: the switch on every other login, no sync (issue #2134) -------
+if [ -n "$credp" ]; then
+  cd / || exit 1
+  cfail=0 csudo=0 ccmds=''
+  for u in $unreadable; do
+    csudo=$((csudo + 1))
+    ccmds="$ccmds  sudo -u $u env HOME=$homes/$u bash $homes/$u/.claude/fleet/bin/fleet-cred-rollout.sh $credp
+"
+  done
+  while IFS='|' read -r login rd owner shape head n state note ents target; do
+    [ -n "$login" ] || continue
+    home="$homes/$login"
+    tool="$rd/bin/fleet-cred-rollout.sh"
+    if [ "$owner" = "$me" ]; then as=''
+    elif as_owner "$owner"; then as="$SUDO -u $owner"
+    else
+      csudo=$((csudo + 1))
+      ccmds="$ccmds  sudo -u $owner env HOME=$home bash $tool $credp
+"
+      continue
+    fi
+    if ! ofs "$owner" test -f "$tool"; then
+      printf '%s: no fleet-cred-rollout.sh in its install — sync it first (fleet-sync-logins.sh --logins %s)\n' "$login" "$login"
+      cfail=$((cfail + 1)); continue
+    fi
+    _cd=$(conf_dir_of "$owner" "$rd" "$home")
+    # shellcheck disable=SC2086
+    _out=$($as env HOME="$home" FLEET_CONF_DIR="$_cd" bash "$tool" "$credp" 2>&1); _rc=$?
+    [ "$_rc" -eq 0 ] || cfail=$((cfail + 1))
+    if [ "$credp" = status ]; then printf '%s: %s\n' "$login" "$(printf '%s\n' "$_out" | tail -n 1)"
+    else printf '%s\n' "$_out" | sed "s|^|$login: |"; fi
+  done <<EOF
+$plan
+EOF
+  if [ -n "$ccmds" ]; then
+    echo "no passwordless sudo for $csudo login(s) — run as an admin:"
+    printf '%s' "$ccmds"
+  fi
+  if [ "$cfail" -gt 0 ]; then exit 6; elif [ "$csudo" -gt 0 ]; then exit 5; fi
+  exit 0
 fi
 
 total=0 ncur=0 ndrift=0 nblock=0 nskipgit=0 noff=0 driftlist=''
