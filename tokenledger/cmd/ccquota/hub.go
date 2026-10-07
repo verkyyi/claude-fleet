@@ -708,7 +708,12 @@ func githubAuthFromEnv(getenv func(string) string) (*api.GitHubAuth, error) {
 			"CCQUOTA_GITHUB_CLIENT_ID and CCQUOTA_GITHUB_CLIENT_SECRET are both required")
 	}
 	log.Printf("github sign-in: on, %d admin name(s) from CCQUOTA_GITHUB_ADMINS", len(admins))
-	return &api.GitHubAuth{ClientID: id, ClientSecret: secret, Admins: admins}, nil
+	// CCQUOTA_GITHUB_API_BASE: GitHub's REST API (`fleet users add` looks a
+	// username up there), for a hub on 127.0.0.1 that must not reach
+	// api.github.com — the newcomer e2e (claude-fleet#2096). The authorize and
+	// token endpoints never move, so no sign-in can be completed against it.
+	return &api.GitHubAuth{ClientID: id, ClientSecret: secret, Admins: admins,
+		APIBase: strings.TrimSpace(getenv("CCQUOTA_GITHUB_API_BASE"))}, nil
 }
 
 func splitList(s string) []string {

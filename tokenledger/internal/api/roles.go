@@ -158,7 +158,12 @@ func (s *Server) machineLoginOf(principal string) (string, error) {
 		if err != nil || u == nil {
 			return "", err
 		}
-		return u.MachineLogin, nil
+		if u.MachineLogin != "" {
+			return u.MachineLogin, nil
+		}
+		// No admin mapping: the login fleet.auto_assign minted at their first
+		// sign-in, below — without it a newcomer held a certificate for that
+		// login and saw none of its sessions (claude-fleet#2096).
 	}
 	if !s.Fleet {
 		return "", nil // no fleet module, no principals table: no login on record

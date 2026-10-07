@@ -336,6 +336,44 @@ func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 	}
 }
 
+// An auto-assigned newcomer sees the login they hold a certificate for
+// (claude-fleet#2096): with no admin mapping, their scope is the minted login,
+// never noLogin — before, the cert said gh2001 and the list showed nothing.
+func TestFleetAutoAssignedLoginIsTheirScope(t *testing.T) {
+	h := newFleetHarness(t)
+	const p = "gh:2001"
+	enablePeople(t, h, p)
+	h.srv.FleetAdmins = []string{"verkyyi"}
+	setHubSetting(t, h.srv, AutoAssignKey, "m4")
+	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
+	if got, err := h.srv.machineLoginOf(p); err != nil || got != "" {
+		t.Fatalf("before any sign-in: machineLoginOf = %q, %v; want \"\"", got, err)
+	}
+	h.srv.onPrincipalSignIn(p, "zhangsan")
+	m, op := expectAccountOp(t, admin.tnode)
+	sendResult(t, admin.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, p, "m4", store.AccountActive)
+	_, certLogins, _, err := h.srv.fleetLoginsOf(p)
+	if err != nil || len(certLogins) != 1 {
+		t.Fatalf("fleetLoginsOf = %v, %v", certLogins, err)
+	}
+	if got, err := h.srv.machineLoginOf(p); err != nil || got != certLogins[0] {
+		t.Fatalf("machineLoginOf = %q, %v; want the certificate's login %q", got, err, certLogins[0])
+	}
+	// An admin mapping still wins over the minted login.
+	u, err := h.srv.Store.HubUserByID(2001)
+	if err != nil || u == nil {
+		t.Fatalf("HubUserByID: %v, %v", u, err)
+	}
+	u.MachineLogin = "zhang"
+	if err := h.srv.Store.UpsertHubUser(*u); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := h.srv.machineLoginOf(p); got != "zhang" {
+		t.Fatalf("with a mapping: machineLoginOf = %q; want zhang", got)
+	}
+}
+
 // "Already exists" is never success: the name may be someone else's login.
 // The operator retries or adopts.
 func TestFleetExistingLoginIsFailedNotActive(t *testing.T) {
