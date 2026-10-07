@@ -152,6 +152,15 @@ test('machines: lost last, load per core, trend and version carried', () => {
   assert.deepEqual(machineCards(null), []);
 });
 
+test('machines: the admin\'s short name labels the card, the hostname stays the action\'s (claude-fleet#1706)', () => {
+  const ms = machineCards({ machines: [
+    { hostname: 'macmini', alias: 'm5', status: 'online' },
+    { hostname: 'mini2.tail.ts.net', alias: 'm4', status: 'online' },
+    { hostname: 'spot-1', status: 'online' },
+  ] });
+  assert.deepEqual(ms.map((m) => [m.label, m.name]), [['m4', 'mini2'], ['m5', 'macmini'], ['spot-1', 'spot-1']]);
+});
+
 test('the join wait ends when the code it minted is used; the countdown counts down', () => {
   const codes = { codes: [{ label: 'web-1', used_at: null }, { label: 'web-0', used_at: iso(NOW), joined_host: 'old' }] };
   assert.equal(joined(codes, 'web-1'), null);

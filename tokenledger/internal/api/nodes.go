@@ -559,9 +559,12 @@ type NodeFleetSummary struct {
 // up", not "is each of m4's six agents up".
 type MachineView struct {
 	Hostname string `json:"hostname"`
-	Status   string `json:"status"` // online if any login is; maintenance when flagged
-	Online   int    `json:"logins_online"`
-	Logins   int    `json:"logins"`
+	// Alias is the short name the admin gave it (fleet.machine_names,
+	// claude-fleet#1706), else CCQUOTA_FLEET_ROUTES' alias; absent for none.
+	Alias  string `json:"alias,omitempty"`
+	Status string `json:"status"` // online if any login is; maintenance when flagged
+	Online int    `json:"logins_online"`
+	Logins int    `json:"logins"`
 	// Sessions is nil when a heard login's count is unknown
 	// (claude-fleet#1465); SessionsUnknown names those fleets as
 	// "<login>/<fleet>: <why>".
@@ -655,6 +658,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		settings, _ = s.Store.FleetSettings()
 	}
 	peers := s.peerConns() // nil on a single hub (claude-fleet#2124)
+	aliases := s.staticAliases(settings)
 	machines := map[string]*MachineView{}
 	order := []string{}
 	for _, n := range rows {
@@ -697,7 +701,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		m := machines[v.Hostname]
 		if m == nil {
 			zero := 0
-			m = &MachineView{Hostname: v.Hostname, Status: "lost", Kind: v.Kind, Sessions: &zero, Repos: []string{}}
+			m = &MachineView{Hostname: v.Hostname, Alias: machineAlias(v.Hostname, aliases), Status: "lost", Kind: v.Kind, Sessions: &zero, Repos: []string{}}
 			machines[v.Hostname] = m
 			order = append(order, v.Hostname)
 		}

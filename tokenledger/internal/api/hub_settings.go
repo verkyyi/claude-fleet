@@ -36,6 +36,7 @@ const (
 	AutoAssignKey   = "fleet.auto_assign"
 	SpotKey         = "fleet.spot"
 	RoutesExtraKey  = "fleet.routes_extra"
+	MachineNamesKey = "fleet.machine_names"
 
 	// userSettingPrefix / machineLoginSuffix make user.<id>.machine_login:
 	// the OS login that is a person's on the machines. <id> is the principal
@@ -132,6 +133,17 @@ var hubSettings = map[string]hubSetting{
 				return "", RoutesExtraKey + " is a JSON array of machines, or \"\" for none"
 			}
 			return strings.TrimSpace(v), ""
+		}},
+	MachineNamesKey: {def: "", help: "the short name every client shows a machine by: hostname=name, comma-separated (macmini=m5, mini2=m4)",
+		check: func(_ *Server, v string) (string, string) {
+			names, err := parseMachineNames(v)
+			if err != "" {
+				return "", err
+			}
+			if len(names) == 0 {
+				return "", MachineNamesKey + " is hostname=name pairs, comma-separated, or \"\" for none"
+			}
+			return formatMachineNames(names), ""
 		}},
 }
 
@@ -318,6 +330,93 @@ func (s *Server) routesExtra() []FleetMachine {
 		return nil
 	}
 	return ms
+}
+
+// parseMachineNames reads fleet.machine_names (claude-fleet#1706):
+// "macmini=m5, mini2=m4" → {"macmini": "m5", "mini2": "m4"}, keyed by the
+// hostname's first label, lower-cased, the way a heartbeat's hostname is
+// matched. Both sides go into ssh configs, so both are plain tokens; a name
+// two machines would share is refused.
+func parseMachineNames(v string) (map[string]string, string) {
+	names := map[string]string{}
+	taken := map[string]string{}
+	for _, pair := range strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == '\n' || r == ';' }) {
+		if pair = strings.TrimSpace(pair); pair == "" {
+			continue
+		}
+		h, a, ok := strings.Cut(pair, "=")
+		h, a = strings.ToLower(firstLabel(strings.TrimSpace(h))), strings.TrimSpace(a)
+		if !ok || !sshToken(h) || !sshToken(a) {
+			return nil, fmt.Sprintf("%s: %q is not hostname=name", MachineNamesKey, pair)
+		}
+		if _, dup := names[h]; dup {
+			return nil, fmt.Sprintf("%s: %s is named twice", MachineNamesKey, h)
+		}
+		if other, dup := taken[strings.ToLower(a)]; dup {
+			return nil, fmt.Sprintf("%s: %s and %s cannot both be %s", MachineNamesKey, other, h, a)
+		}
+		names[h], taken[strings.ToLower(a)] = a, h
+	}
+	return names, ""
+}
+
+// formatMachineNames is the stored form: "h=a,h=a", sorted by hostname.
+func formatMachineNames(names map[string]string) string {
+	hs := make([]string, 0, len(names))
+	for h := range names {
+		hs = append(hs, h)
+	}
+	sort.Strings(hs)
+	for i, h := range hs {
+		hs[i] = h + "=" + names[h]
+	}
+	return strings.Join(hs, ",")
+}
+
+// machineNames is fleet.machine_names, parsed; a stored value that no longer
+// parses is logged and reads as none.
+func (s *Server) machineNames() map[string]string {
+	v := s.setting(MachineNamesKey)
+	if v == "" {
+		return nil
+	}
+	names, err := parseMachineNames(v)
+	if err != "" {
+		log.Printf("fleet routes: %s", err)
+		return nil
+	}
+	return names
+}
+
+// machineAlias is the short name a machine is shown by: fleet.machine_names,
+// else "" (the caller keeps whatever it had).
+func machineAlias(hostname string, names map[string]string) string {
+	if hostname == "" {
+		return ""
+	}
+	return names[strings.ToLower(firstLabel(hostname))]
+}
+
+// staticAliases is every alias the operator wrote down, keyed like
+// machineNames: CCQUOTA_FLEET_ROUTES and fleet.routes_extra first, then
+// fleet.machine_names over them — fleetMachines' precedence, without the
+// node roster read (a caller that has the settings in hand).
+func (s *Server) staticAliases(settings map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, m := range append(append([]FleetMachine(nil), s.FleetRoutes...), s.routesExtra()...) {
+		k := strings.ToLower(firstLabel(m.Hostname))
+		if m.Alias != "" && out[k] == "" {
+			out[k] = m.Alias
+		}
+	}
+	if v := settings[MachineNamesKey]; v != "" {
+		if names, err := parseMachineNames(v); err == "" {
+			for h, a := range names {
+				out[h] = a
+			}
+		}
+	}
+	return out
 }
 
 // settingMachineLogins is every user.<id>.machine_login stored in the

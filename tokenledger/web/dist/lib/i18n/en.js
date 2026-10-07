@@ -857,6 +857,8 @@ export const en = {
   'ui.set.h.pool.move_when_full': 'Switch a session to another subscription when its own fills up',
   'ui.set.k.fleet.auto_assign': 'New users get a login on',
   'ui.set.h.fleet.auto_assign': 'least-busy (the hub picks), machines comma-separated, or none',
+  'ui.set.k.fleet.machine_names': 'Machine short names',
+  'ui.set.h.fleet.machine_names': 'What every client calls a machine: hostname=name, comma-separated',
   'ui.set.k.fleet.spot': 'SPOT machines',
   'ui.set.h.fleet.spot': 'Rent a temporary machine when no machine has room',
   'ui.set.default': 'default',

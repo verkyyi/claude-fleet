@@ -28,8 +28,22 @@ const routesClockSkew = 5 * time.Minute
 
 // fleetMachines is the merged machine list: CCQUOTA_FLEET_ROUTES, then the
 // admin's fleet.routes_extra (claude-fleet#1986), then what the nodes
-// advertise.
+// advertise. A machine's alias is the admin's fleet.machine_names when it
+// names it (claude-fleet#1706 — the hub's one place to set the short name
+// every client shows), else what the route lists gave.
 func (s *Server) fleetMachines() []FleetMachine {
+	out := s.fleetMachinesRaw()
+	if names := s.machineNames(); len(names) > 0 {
+		for i := range out {
+			if a := machineAlias(out[i].Hostname, names); a != "" {
+				out[i].Alias = a
+			}
+		}
+	}
+	return out
+}
+
+func (s *Server) fleetMachinesRaw() []FleetMachine {
 	out := make([]FleetMachine, 0, len(s.FleetRoutes))
 	idx := map[string]int{}
 	for _, m := range append(append([]FleetMachine(nil), s.FleetRoutes...), s.routesExtra()...) {

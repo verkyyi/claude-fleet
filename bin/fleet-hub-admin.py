@@ -14,8 +14,8 @@
     fleet hub accounts forget <principal> drop a record that never reached a machine
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
-fleet.auto_assign fleet.spot fleet.routes_extra user.<id>.machine_login (and the
-fleet.* keys PUT /v1/fleet/settings already took).
+fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names
+user.<id>.machine_login (and the fleet.* keys PUT /v1/fleet/settings already took).
 
 Auth, read from the environment and never written down: CCQUOTA_VIEWER_TOKEN
 (the operator's token), else FLEET_HUB_SESSION — the value of the `ccq_sess`
