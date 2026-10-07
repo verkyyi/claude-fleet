@@ -4,7 +4,7 @@
 哪条演练在隔离环境里真做一遍（issue #1786，EPIC #1776 C10）。
 
 **规则：新发现一种弄坏 fleet 的方式，先在这张表加一行、在
-`bin/fleet-break-it-selftest.sh` 加一条演练（先红），再修（变绿）。** 一条演练 =
+`bin/fleet-break-it-selftest.sh` 加一条演练（先红），再修（变绿）。凭据代理的 `cred-*` 几行由 `bin/fleet-break-it-cred-selftest.sh` 演练（#1975），表与它同样互相校验。** 一条演练 =
 一个 `drill_<id>` 函数；`演练` 一列写它的 `id`。不在本仓库修的（别的仓库、别的单），
 `演练` 一列写 `登记：<单号>`，只登记不演练。
 
@@ -67,6 +67,11 @@
 | 同一个人开第二个客户端（在 iPhone 上看一眼，或同一台机器上再敲一次 `fleet`） | 第二个顶掉第一个的租约：Mac 掉到待机页「正在 iPhone 上使用 · 按回车接回」，回来还要按回车抢回；同一台机器上先连着的那个也被弹到待机（2026-10-06 之前） | 入口一人一组租约（上限 4，`FLEET_CLIENT_MAX`），每个客户端自己的租约和动作密钥，谁也不踢谁；「你在哪」和网页、文件、通知跟着主客户端——最后打字的那个（无输入超过 10 分钟的不当主）；只在第 5 个打开时请最久没用的那台下线、或在「我的客户端」里被断开时才待机，并在它屏幕上写明原因（#1932） | `second-client` |
 | 手机连上把 Mac 的窗口挤小（MacBook 和 iPhone 同时看同一个会话） | 节点的窗口取所有在看的客户端里最小的尺寸（`window-size smallest`，#1681）：手机一连上，Mac 上的执行会话被压成手机宽度，一直到手机离开（2026-10-06 之前） | 节点改 `window-size latest`：窗口跟着最后在它里面打字（点击、获得焦点、自己的终端改尺寸）的那个客户端；视图切窗口用 `switch-client -c` 把窗口交给切过去的那个客户端。另一个客户端看到的是裁切，不是重排（#1933） | `phone-squeezes-window` |
 | 入口重启（部署、Pod 重建）而客户端一直连着 | 入口的客户端租约只在内存里，重启后下一次续租按原 id 收回租约，但续租只带租约 id：设备、终端、能力全没了，`fleet-client-where.sh` 说「未知设备」，fleet-open / fleet-show 不知道送到哪、能不能开网页，直到客户端重新打开（2026-10-06 prod-42857c1 部署后） | 每次续租都带上这台客户端当前在用的 where（`client.where.json`：设备、终端、系统、来路、host、能力）和版本，入口照收（与 `input` 同一份）；多个客户端各自续各自的，重启后 15 秒内各自补回（#1995） | `hub-restart-where` |
+| 本机凭据代理进程死了（崩溃、kill -9、OOM），`FLEET_CRED_PROXY=1` | 这台登录上所有会话的下一请求连不上 `127.0.0.1:<port>`：launchd / systemd 只看守外层启动器，启动器每 60 秒才看一眼，一分钟里会话个个报错 | 启动器每 `FLEET_CRED_PROXY_WATCH_SECS`（2 秒）看一次代理，死了喘 2 秒就在同一端口拉起（端口文件、签名钥匙、绑定都在状态目录里），会话手上的会话凭据照旧能用，下一请求就恢复（#1975） | `cred-proxy-dead` |
+| 新加坡转发挂了（可信但不能直连的机器走 relay） | 走 relay 的会话一个个连不上 | 连不上就在同一会话里切 direct 重发同一请求，日志记 `route_switch`；direct 也被上游按地区拒时，回一个代理自己的 403，写明 relay、direct 各自怎么了，不是把上游的「Request not allowed」原样甩给会话（#1975） | `cred-relay-down` |
+| 集群中心代理全挂（不可信机器走 central） | 不可信机器的会话没路可走；万一退回 direct 就等于在不可信机器上用凭据文件 | 不可信只有 central 一条路：会话收到代理写明「central 连不上」的 502，不会退化成读凭据文件直连；本地会话凭据在不可信机器上一律 403（#1975） | `cred-central-down` |
+| 探测误判：探测说能直连，上游却按地区拒 | 每个请求先吃一个地区 403 | 地区 403 → 同一请求切 relay，这条会话 30 分钟内不再先试 direct（`FLEET_CRED_PROXY_SWITCH_SECS`）（#1975） | `cred-probe-wrong` |
+| 会话凭据在会话中途到期（入口通行证最长一天、本机会话凭据默认一天） | 会话环境里的凭据换不了：到点后每个请求 401，长会话只能关窗重开 | 入口通行证：代理在 `renew_after`（到期前 2 小时或半衰期）向入口续签，之后替会话转发新的那张，会话还拿着旧的照常用；本机会话凭据：会话的包装进程还活着就由代理续期，会话结束（包装退出、被撤销）即失效；续签成败记在 `status` 里，`fleet doctor` 的 `cred` 行报出来（#1975） | `cred-session-expire` |
 | 入口部署丢了配置（overlay 漏了 env / Secret：GitHub 登录、`CCQUOTA_FLEET_STABLE_REPO`） | `/healthz` 200、commit 对，部署判健康；实际 `GET /install`、`POST /v1/fleet/login/start` 都 404——新同事装不了；`/version` 不报 `stable`，客户端把镜像自带的包当新版，绕过稳定版（2026-10-06 prod-e2be8bb） | hub-deploy 的健康检查（`.github/actions/hub-release/release.sh health`）对每个地址另查三条：`/install` 200 且首行 `#!`、`/version` 带 `stable`、`login/start` 对空请求回 4xx 而不是 404；缺一条即判不健康，工作流自动回退到上一版（#2060） | `hub-deploy-lost-config` |
 | 多仓库 fleet 里发给第二个仓库 worker 的话送不到：机器配置（含 `FLEET_ISSUE_BRIDGE=1`）被 #1887 之前的迁移器困在 `fleets/fleet/conf`，又新建了空的 fleet.conf | 真 fleet 的仓库没有一个开着 bridge，只有幽灵 fleet `fleet` 在扫第一个仓库；`fleet-comment.sh --to-worker` 照样说「将转达」，给 claude-fleet 单子 worker 的话一个多小时没送到；被困文件里的其余机器设置（模型、睡眠、failover…）也都没生效（2026-10-06 #1901） | 同步跑的 `fleet-conf.sh migrate` 认出被困的机器配置，把它的键补进 fleet.conf（只补缺的），把 `fleets/fleet/` 退役成 `fleets/.stranded-machine-conf-<时间>/`；`fleet_each_conf` 不再把它当 fleet；bridge 的轮询集合和 `--to-worker` 共用一个读者 `fleet_bridge_covers`，不覆盖的仓库直说并改走 peer 通道（#2059） | `multirepo-bridge-second-repo` |
 | master 变红时几个会话同时开单修同一个故障 | 16 秒内开出 3 张单、3 个修复，白占两个名额，修复之间还互相冲突（2026-10-07 04:26Z #2039 #2040 #2041，一处重复路由） | 开单前算故障指纹（变红那次提交 + 第一个失败的检查 + 报错首行去掉行号，`fleet_breakage_probe`，只走 REST），本机 2 分钟锁 + 单子正文的 `fleet:breakage` 标记：后来者只在第一张单上留「同一故障，来自 …」，拿到那张单号，退出码 5，不另开单、不派人；换一个故障照常开单，普通开单一字不动（#2078） | `breakage-three-filers` |

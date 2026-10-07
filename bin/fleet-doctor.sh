@@ -300,6 +300,22 @@ if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
   esac
 fi
 
+# --- cred: which road this login's sessions take, and why (issue #1975) -----------
+# FLEET_CRED_PROXY=1 only (off = no row, as before): trust × probe → direct /
+# relay / central per agent, the proxy alive, credsep, session-pass renewal —
+# one line from `fleet-cred-proxy.sh doctor` (its exit 3 = off).
+if [ -f "$(dirname "$0")/fleet-cred-proxy.py" ]; then
+  _cr=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-cred-proxy.sh" doctor 2>/dev/null); _crc=$?
+  if [ "$_crc" = 0 ] && [ -n "$_cr" ]; then
+    _cr_lv=$(printf '%s' "$_cr" | cut -f1); _cr_m=$(printf '%s' "$_cr" | cut -f2-)
+    case "$_cr_lv" in
+      PASS) pass cred "$_cr_m" ;;
+      FAIL) fail cred "$_cr_m" ;;
+      *)    warn cred "$_cr_m" ;;
+    esac
+  fi
+fi
+
 # --- tmux ≥ 3.2 (core) ---
 if command -v tmux >/dev/null 2>&1; then
   v=$(tmux -V 2>/dev/null | sed -E 's/[^0-9.]//g')

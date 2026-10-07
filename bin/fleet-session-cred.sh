@@ -168,7 +168,9 @@ case "$cmd" in
         account=$(codex_label "$chome") || account=''
       fi
       [ -n "$account" ] || exit 4
-      cred=$(bash "$PROXY" mint --account "$account" --sid "$sid" 2>/dev/null) && [ -n "$cred" ] \
+      # --wrap: the session's wrapper — while it lives the proxy keeps this
+      # credential good past its stamp (issue #1975: no mid-session expiry)
+      cred=$(bash "$PROXY" mint --account "$account" --sid "$sid" --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null) && [ -n "$cred" ] \
         || die "the proxy would not mint a session credential for $account"
       rec_set "$sid" account "$account"
     fi

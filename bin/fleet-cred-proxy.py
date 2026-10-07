@@ -7,7 +7,8 @@ request on, with the real credential put in on the way out (or none, centrally).
 
     serve   [--state DIR] [--port N] [--max-seconds N] [--parent-watch]
     route   [--provider claude|codex] [--refresh] [--json]   → {route, reason, …}
-    mint    --account LABEL [--sid NAME] [--ttl SECS]       → fcp1.<…> on stdout
+    mint    --account LABEL [--sid NAME] [--ttl SECS] [--wrap PID]
+                                                            → fcp1.<…> on stdout
     rebind  --sid NAME --account LABEL                      (next request, no restart)
     revoke  --sid NAME
     attach  --sid NAME          (a hub session credential, fcp-h1.…, on STDIN —
@@ -51,6 +52,19 @@ A region refusal (Anthropic 403 / OpenAI unsupported_country_region_territory)
 or a connection that never opens moves THAT session to the next route and
 retries the same request; the move is logged `route_switch`.
 
+A SESSION CREDENTIAL OUTLIVES ITS STAMP WHILE ITS SESSION LIVES (issue #1975):
+the session cannot swap the credential in its environment, so the proxy does
+the renewing. An fcp1. minted with --wrap PID stays good past its exp while that
+process (the session's wrapper) lives and the sid is not revoked, at most
+FLEET_CRED_PROXY_RENEW_MAX_SECS (7 days) past it. A hub pass (fcp-h1.) is
+renewed with the hub (POST /v1/fleet/session-cred/renew, the node token) once
+it reaches its renew point — 2h before exp, or half-life for a short one — on
+the session's next request or the background tick, whichever comes first; the
+session keeps sending the pass it was born with and the proxy forwards the
+newest one it holds for that id (<state>/hub-passes.json, 0600). A pass the hub
+refuses (revoked, the session over) is dropped; any other failure is counted in
+`status` (renew.hub_err, the doctor's `cred` row).
+
 Rails (共同约定 4/5): loopback + unix socket only; only Authorization is
 rewritten (Claude: x-api-key dropped; Codex: chatgpt-account-id overwritten),
 the body passes byte for byte, responses stream chunk by chunk; a refusal reads
@@ -86,7 +100,7 @@ reported, nothing refused; a verdict the hub has not renewed for
 FLEET_CRED_BUDGET_STALE (600 s) lapses (open).
 """
 import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, secrets
-import resource, signal, socket, ssl, sys, threading, time, urllib.request
+import resource, signal, socket, ssl, sys, threading, time, urllib.error, urllib.request
 from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -301,8 +315,9 @@ class Keys:
                               "n": secrets.token_hex(4)}, separators=(",", ":")).encode()
         return tag + "." + b64e(payload) + "." + b64e(hmac.new(self.key, payload, hashlib.sha256).digest())
 
-    def verify(self, tok, want=LOCAL_TAG):
-        """-> (claims, None) or (None, reason)."""
+    def verify(self, tok, want=LOCAL_TAG, live=None):
+        """-> (claims, None) or (None, reason). `live(claims)` true = an expired
+        credential whose session still runs: good (issue #1975)."""
         try:
             tag, p, s = tok.split(".")
             if tag != want:
@@ -313,11 +328,140 @@ class Keys:
             c = json.loads(payload)
         except Exception:
             return None, "malformed session credential"
-        if c.get("exp", 0) < time.time():
-            return None, "session credential expired"
         if c.get("sid") in read_lines(os.path.join(self.state, "revoked")):
             return None, "session credential revoked"
+        if c.get("exp", 0) < time.time():
+            if not (live and live(c)):
+                return None, "session credential expired"
+            c["renewed"] = True
         return c, None
+
+
+def pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except PermissionError:
+        return True     # another uid's (separated mode): it exists
+    except (OSError, ValueError, TypeError):
+        return False
+    return True
+
+
+def hub_claims(tok):
+    """The claims of a hub pass (fcp-h1.<claims>.<sig>), read, NOT verified —
+    only the hub can; the proxy needs the id and the clock."""
+    try:
+        c = json.loads(b64d(tok.split(".")[1]))
+        return c if c.get("id") and int(c.get("exp", 0)) > 0 else None
+    except Exception:
+        return None
+
+
+class HubPasses:
+    """The newest hub pass the proxy holds per pass id, renewed at its renew
+    point (issue #1975). The session's own pass is the key; what goes out is
+    whichever of the two lives longer."""
+
+    def __init__(self, state):
+        self.path = os.path.join(state, "hub-passes.json")
+        self.lock = threading.Lock()
+        self.busy = set()
+        self.held = read_json(self.path, {})
+        self.stats = {"ok": 0, "err": 0, "dropped": 0, "local": 0,
+                      "last_ok": 0, "last_err": 0, "err_why": ""}
+        self.backoff = {}
+
+    @staticmethod
+    def renew_at(c):
+        iat, exp = int(c.get("iat") or 0), int(c["exp"])
+        return max(exp - 7200, iat + (exp - iat) // 2) if iat else exp - 7200
+
+    def save(self):
+        try:
+            write_json(self.path, self.held)
+        except OSError:
+            pass
+
+    def best(self, tok):
+        """-> the pass to forward for this session's `tok`, renewed when due."""
+        c = hub_claims(tok)
+        if not c:
+            return tok
+        pid = c["id"]
+        with self.lock:
+            have = self.held.get(pid, "")
+            hc = hub_claims(have) if have else None
+            if not hc or hc["exp"] < c["exp"]:
+                self.held[pid], hc, have = tok, c, tok
+                self.save()
+        if time.time() >= self.renew_at(hc):
+            have = self.renew(pid) or have
+        return have
+
+    def renew(self, pid, log=None):
+        log = log or Proxy.log
+        now = time.time()
+        with self.lock:
+            cur = self.held.get(pid, "")
+            if not cur or pid in self.busy or self.backoff.get(pid, 0) > now:
+                return None
+            self.busy.add(pid)
+        try:
+            ne = node_env()
+            hub, tok = (ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/"), ne.get("CCQUOTA_TOKEN", "")
+            if not hub or not tok:
+                raise RuntimeError("no hub / node token here")
+            req = urllib.request.Request(hub + "/v1/fleet/session-cred/renew", method="POST",
+                                         data=json.dumps({"cred": cur}).encode(),
+                                         headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    new = (json.loads(r.read() or b"{}").get("cred") or "").strip()
+            except urllib.error.HTTPError as e:
+                if e.code in (403, 404):
+                    # the hub says this pass is over (revoked, ran out, not ours): so is the session
+                    with self.lock:
+                        self.held.pop(pid, None); self.save()
+                        self.stats["dropped"] += 1
+                    log(ev="renew_drop", kind="hub", pass_id=pid, status=e.code)
+                    return None
+                raise RuntimeError("hub answered %d" % e.code)
+            nc = hub_claims(new)
+            if not new.startswith(HUB_TAG + ".") or not nc or nc["id"] != pid:
+                raise RuntimeError("the hub's answer carries no pass")
+            with self.lock:
+                self.held[pid] = new; self.save()
+                self.stats["ok"] += 1; self.stats["last_ok"] = int(time.time())
+            log(ev="renew", kind="hub", pass_id=pid, exp=nc["exp"])
+            return new
+        except Exception as e:
+            why = str(e) if isinstance(e, RuntimeError) else type(e).__name__
+            with self.lock:
+                self.stats["err"] += 1; self.stats["last_err"] = int(time.time()); self.stats["err_why"] = why
+                self.backoff[pid] = time.time() + 30
+            log(ev="renew_err", kind="hub", pass_id=pid, err=why)
+            return None
+        finally:
+            with self.lock:
+                self.busy.discard(pid)
+
+    def tick(self):
+        """Renew every held pass that is due; forget the ones long over."""
+        now = time.time()
+        with self.lock:
+            items = list(self.held.items())
+        gone = False
+        for pid, tok in items:
+            c = hub_claims(tok)
+            if not c or c["exp"] < now - 86400:
+                with self.lock:
+                    self.held.pop(pid, None)
+                gone = True
+            elif c["exp"] > now and now >= self.renew_at(c):
+                self.renew(pid)
+        if gone:
+            with self.lock:
+                self.save()
 
 
 def read_lines(p):
@@ -340,6 +484,16 @@ def read_json(p, dflt):
         return json.load(open(p))
     except (OSError, ValueError):
         return dflt
+
+
+def live_session(state):
+    """-> live(claims): an expired fcp1 whose session (its --wrap pid) still runs."""
+    def live(c):
+        if time.time() > c.get("exp", 0) + int(env("FLEET_CRED_PROXY_RENEW_MAX_SECS", str(7 * 86400))):
+            return False
+        pid = read_json(os.path.join(state, "live.json"), {}).get(c.get("sid", ""))
+        return bool(pid) and pid_alive(pid)
+    return live
 
 
 # ---- the route decision ----------------------------------------------------
@@ -428,10 +582,11 @@ class Router:
 # ---- the proxy ---------------------------------------------------------------
 class Proxy(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    cfg = keys = router = None
+    cfg = keys = router = passes = None
     budget = Budget()
     lock = threading.Lock()
-    skip = {}       # sid -> {route: until}: a route that refused this session
+    extended = set()   # sids whose fcp1 is past its stamp, kept by a live session
+    skip = {}       # sid -> {route: (until, why)}: a route that refused this session
     hubcreds = {}   # sid -> fcp-h1.… handed in over ctl `attach` (memory only)
     quota = {}      # sid -> its newest rate-limit reading (issue #1978; memory only)
     push_due = False
@@ -533,14 +688,23 @@ class Proxy(BaseHTTPRequestHandler):
         if tok.startswith(HUB_TAG + "."):
             # a hub-issued session credential: only the cluster can check it
             sid = "h-" + hashlib.sha256(tok.encode()).hexdigest()[:10]
-            return self.send(["central"], provider, path, body, tok, sid, "-", seen, t0)
-        claims, why = self.keys.verify(tok)
+            return self.send(["central"], provider, path, body, self.passes.best(tok), sid, "-", seen, t0)
+        claims, why = self.keys.verify(tok, live=live_session(self.cfg.state))
         if not claims:
             self.log(ev="deny", path=path.split("?")[0], why=why, hdrs=seen)
             return self.fail(401, why)
         sid = claims["sid"]
+        if claims.get("renewed"):
+            with self.lock:
+                first = sid not in self.extended
+                self.extended.add(sid)
+            if first:
+                self.passes.stats["local"] += 1
+                self.log(ev="renew", kind="local", sid=sid)
         acct = read_json(os.path.join(self.cfg.state, "bind.json"), {}).get(sid, claims["acct"])
         hubcred = self.hubcreds.get(sid)
+        if hubcred:
+            hubcred = self.passes.best(hubcred)
         order, _ = self.router.candidates(provider, bool(hubcred))
         self.send(order, provider, path, body, hubcred, sid, acct, seen, t0)
 
@@ -575,13 +739,17 @@ class Proxy(BaseHTTPRequestHandler):
                       [], t0, "hub", can_switch=False)
 
     def plan(self, order, sid):
-        """Drop the routes that refused this session recently; all of them = try again."""
+        """-> (routes, skipped): drop the routes that refused this session
+        recently (all of them = try again); `skipped` says why, for a refusal."""
         now = time.time()
         with self.lock:
-            sk = {r: u for r, u in self.skip.get(sid, {}).items() if u > now}
+            sk = {r: u for r, u in self.skip.get(sid, {}).items() if u[0] > now}
             self.skip[sid] = sk
         left = [r for r in order if r not in sk]
-        return left or order
+        if not left:
+            return order, []
+        return left, ["%s: %s %ds ago, skipped" % (r, sk[r][1], now - sk[r][0] + self.cfg.switch_ttl)
+                      for r in order if r in sk]
 
     def target(self, route, provider, path, acct, hubcred, public=False):
         """-> (base url, path, headers to set, headers to drop, cred source)."""
@@ -622,20 +790,22 @@ class Proxy(BaseHTTPRequestHandler):
             # the person is over their budget (issue #1977): 403, never retried
             self.log(ev="deny", sid=sid, acct=acct, path=path.split("?")[0], why=BUDGET_CODE)
             return self.fail(403, over, "permission_error", BUDGET_CODE)
-        order = [r for r in self.plan(order, sid)
+        order, skipped = self.plan(order, sid)
+        order = [r for r in order
                  if (r != "relay" or (self.cfg.relay_url and relay_pass(self.cfg))) and (r != "central" or (self.cfg.central_url and hubcred))]
         if not order:
             # permanent: 403, which neither client retries (never a 503)
             self.log(ev="deny", sid=sid, path=path.split("?")[0], why="no usable route")
             return self.fail(403, "this machine routes central (untrusted) and this session has no "
                              "hub session credential (or no central proxy is configured)", "permission_error")
-        last = None
+        last, tried = None, list(skipped)
         for i, route in enumerate(order):
             try:
                 base, upath, put, drop, cred = self.target(route, provider, path, acct, hubcred, public)
             except (OSError, KeyError, ValueError, TypeError) as e:
                 self.log(ev="nocred", sid=sid, acct=acct, route=route, err=type(e).__name__)
                 last = (403, "no upstream credential for account %s" % acct, "permission_error")
+                tried.append("%s: no credential for %s" % (route, acct))
                 continue
             out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() not in drop}
             if provider == "claude" and cred == "file":
@@ -648,19 +818,23 @@ class Proxy(BaseHTTPRequestHandler):
             out.update(put)
             nxt = order[i + 1] if i + 1 < len(order) else None
             res = self.upstream(base, upath, out, body, route, sid, acct, cred, seen, t0, provider,
-                                can_switch=nxt is not None)
+                                can_switch=nxt is not None, tried=tried)
             if res is None:
                 return
+            tried.append("%s: %s" % (route, res))
             # a region refusal / a connection that never opened: next route, same request
             with self.lock:
-                self.skip.setdefault(sid, {})[route] = time.time() + self.cfg.switch_ttl
+                self.skip.setdefault(sid, {})[route] = (time.time() + self.cfg.switch_ttl, res)
             self.log(ev="route_switch", sid=sid, acct=acct, provider=provider, frm=route, to=nxt, why=res)
         code, msg, typ = last or (502, "no route answered", "api_error")
         self.fail(code, msg, typ)
 
-    def upstream(self, base, upath, out, body, route, sid, acct, cred, seen, t0, provider, can_switch):
+    def upstream(self, base, upath, out, body, route, sid, acct, cred, seen, t0, provider, can_switch, tried=()):
         """Send one request. None = answered (the response went to the client);
-        a reason string = switch routes (only when can_switch)."""
+        a reason string = switch routes (only when can_switch). On the LAST
+        route after others failed (`tried`), a refusal of the same kind is the
+        proxy's own answer naming every road (issue #1975) — never the
+        upstream's bare "Request not allowed"."""
         u = urlsplit(base)
         out["Host"] = u.netloc
         if u.scheme == "http":
@@ -674,7 +848,8 @@ class Proxy(BaseHTTPRequestHandler):
             self.log(ev="upstream_err", sid=sid, route=route, phase="connect", err=type(e).__name__)
             if can_switch:
                 return "connect failed (%s)" % type(e).__name__
-            self.fail(502, "upstream %s unreachable: %s" % (route, type(e).__name__), "api_error")
+            self.fail(502, "upstream %s unreachable: %s%s" % (route, type(e).__name__,
+                      "".join("; " + t for t in tried)), "api_error")
             return None
         try:
             conn.request(self.command, upath, body=body, headers=out)
@@ -689,9 +864,17 @@ class Proxy(BaseHTTPRequestHandler):
         first = b""
         if r.status == 403:
             first = r.read(65536)
-            if can_switch and any(m in first.decode("utf-8", "replace").lower() for m in REGION_MARKS):
-                conn.close()
-                return "region refusal (403)"
+            if any(m in first.decode("utf-8", "replace").lower() for m in REGION_MARKS):
+                if can_switch:
+                    conn.close()
+                    return "region refusal (403)"
+                if tried:
+                    conn.close()
+                    self.log(ev="deny", sid=sid, path=self.path.split("?")[0], why="every route refused",
+                             tried=list(tried) + ["%s: region refusal (403)" % route])
+                    self.fail(403, "no route can reach the provider from here: %s; %s: region refusal (403)"
+                              % ("; ".join(tried), route), "permission_error")
+                    return None
         if provider == "codex" and cred == "file":
             if r.status == 401:
                 first = r.read(65536)
@@ -886,6 +1069,14 @@ def ctl_handle(req, cfg):
             return {"ok": False, "err": "mint: --account LABEL"}
         sid = req.get("sid") or "s-" + secrets.token_hex(4)
         tok = Proxy.keys.mint(acct, sid, int(req.get("ttl") or cfg.ttl))
+        wrap = int(req.get("wrap") or 0)
+        if wrap > 1:
+            # the session's wrapper: while it lives, this credential outlives its stamp
+            p = os.path.join(cfg.state, "live.json")
+            with Proxy.lock:
+                d = read_json(p, {})
+                d = {k: v for k, v in d.items() if pid_alive(v)}
+                d[sid] = wrap; write_json(p, d)
         Proxy.log(ev="mint", sid=sid, acct=acct)
         return {"ok": True, "token": tok, "sid": sid}
     if op == "rebind":
@@ -906,6 +1097,10 @@ def ctl_handle(req, cfg):
             os.write(fd, (sid + "\n").encode()); os.close(fd)
             Proxy.hubcreds.pop(sid, None)
             Proxy.quota.pop(sid, None)
+            p = os.path.join(cfg.state, "live.json")
+            d = read_json(p, {})
+            if d.pop(sid, None) is not None:
+                write_json(p, d)
         Proxy.log(ev="revoke", sid=sid)
         return {"ok": True}
     if op == "attach":
@@ -979,7 +1174,8 @@ def ctl_handle(req, cfg):
         return {"ok": True, "pid": os.getpid(), "port": cfg.bound_port, "separated": bool(cfg.store),
                 "trust": Proxy.router.trust or "unknown", "trust_why": Proxy.router.trust_why,
                 "relay": bool(cfg.relay_url), "relay_pass": bool(relay_pass(cfg)),
-                "central": cfg.central_url or "", "budget": Proxy.budget.view()}
+                "central": cfg.central_url or "", "budget": Proxy.budget.view(),
+                "renew": dict(Proxy.passes.stats), "hub_passes": len(Proxy.passes.held)}
     return {"ok": False, "err": "unknown op %r" % op}
 
 
@@ -1114,7 +1310,7 @@ def serve(a):
         os.makedirs(os.path.dirname(cfg.log), exist_ok=True)
     except OSError:
         pass
-    Proxy.cfg, Proxy.keys, Proxy.router = cfg, Keys(st), Router(cfg)
+    Proxy.cfg, Proxy.keys, Proxy.router, Proxy.passes = cfg, Keys(st), Router(cfg), HubPasses(st)
 
     # the port: --port, else the last one used (live sessions carry it in
     # ANTHROPIC_BASE_URL — a restart must not move it), else any free one
@@ -1183,7 +1379,7 @@ def serve(a):
     def tick():
         every = max(5, int(env("FLEET_CRED_PROXY_TRUST_SECS", "300")))
         bevery = max(1, int(env("FLEET_CRED_BUDGET_SECS", "15")))
-        last = blast = time.time()
+        last = blast = last_pass = time.time()
         while True:
             time.sleep(1)
             if a.parent_watch and os.getppid() != parent:
@@ -1198,6 +1394,12 @@ def serve(a):
                 last = time.time()
                 try:
                     Proxy.router.refresh(Proxy.log)
+                except Exception:
+                    pass
+            if time.time() - last_pass >= 60:
+                last_pass = time.time()
+                try:
+                    Proxy.passes.tick()
                 except Exception:
                     pass
     threading.Thread(target=tick, daemon=True).start()
@@ -1225,7 +1427,7 @@ def main():
     r.add_argument("--json", action="store_true")
     m = sub.add_parser("mint")
     m.add_argument("--account", required=True); m.add_argument("--sid", default="")
-    m.add_argument("--ttl", type=int, default=0)
+    m.add_argument("--ttl", type=int, default=0); m.add_argument("--wrap", type=int, default=0)
     b = sub.add_parser("rebind")
     b.add_argument("--sid", required=True); b.add_argument("--account", required=True)
     v = sub.add_parser("revoke")
@@ -1250,7 +1452,8 @@ def main():
         res.pop("ok", None)
         print(json.dumps(res, ensure_ascii=False) if a.json else "%s\t%s" % (res["route"], res["reason"]))
     elif a.cmd == "mint":
-        print(ctl_call(a.state, {"op": "mint", "account": a.account, "sid": a.sid, "ttl": a.ttl})["token"])
+        print(ctl_call(a.state, {"op": "mint", "account": a.account, "sid": a.sid, "ttl": a.ttl,
+                                 "wrap": a.wrap})["token"])
     elif a.cmd == "rebind":
         ctl_call(a.state, {"op": "rebind", "sid": a.sid, "account": a.account})
         print("rebound %s -> %s" % (a.sid, a.account))
