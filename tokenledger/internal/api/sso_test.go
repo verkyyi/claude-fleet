@@ -109,8 +109,8 @@ func TestSSO_TicketBecomesASessionThatOpensTheDashboard(t *testing.T) {
 		t.Error("cookie 不是 HttpOnly")
 	}
 
-	// 拿着它、不带任何 token，面板该开。
-	resp = h.raw(t, "/v1/accounts", map[string]string{"Cookie": c.Name + "=" + c.Value})
+	// 拿着它、不带任何 token，面板该开。（订阅 /v1/accounts 是管理员的，claude-fleet#1985）
+	resp = h.raw(t, "/v1/me", map[string]string{"Cookie": c.Name + "=" + c.Value})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("带会话 cookie 访问回了 %d，want 200", resp.StatusCode)
 	}

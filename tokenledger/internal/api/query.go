@@ -397,6 +397,12 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if dim == "" {
 		dim = store.ByEndpoint
 	}
+	// Subscriptions and teams are an admin's view (claude-fleet#1985).
+	if (dim == store.ByAccount || dim == store.ByTeam) && !seesAll(r) {
+		s.auditRoleDenied(r)
+		httpError(w, http.StatusForbidden, "只有管理员可以按订阅或团队查看（only an admin can group by "+string(dim)+"）")
+		return
+	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	buckets, err := s.Store.UsageByFiltered(f, dim, limit)
 	if err != nil {

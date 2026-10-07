@@ -45,6 +45,11 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	plans = PlansForSource(plans, f.Source)
+	if !seesAll(r) {
+		// A subscription's invoice is an admin's, not a user's
+		// (claude-fleet#1985).
+		plans = nil
+	}
 	out := map[string]any{
 		"account_uuid": f.Account, "all_accounts": f.Account == store.AllAccounts,
 		"since": f.Start, "until": f.End,
@@ -146,6 +151,11 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []store.SessionRow{}
 	}
+	if !seesAll(r) {
+		for i := range rows {
+			rows[i].AccountUUID = "" // which subscription is an admin's to know
+		}
+	}
 	writeJSON(w, http.StatusOK, rows)
 }
 
@@ -165,14 +175,25 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	login, scoped, ok := s.userScope(w, r)
+	if !ok {
+		return
+	}
+	if scoped {
+		account = store.AllAccounts
+	}
 	head, err := s.Store.Session(account, id, source)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if head == nil {
+	// Someone else's session is, to a user, no session at all.
+	if head == nil || (scoped && head.OSUser != login) {
 		httpError(w, http.StatusNotFound, "unknown session")
 		return
+	}
+	if scoped {
+		head.AccountUUID = ""
 	}
 	turns, err := s.Store.SessionTurns(account, id, source)
 	if err != nil {
