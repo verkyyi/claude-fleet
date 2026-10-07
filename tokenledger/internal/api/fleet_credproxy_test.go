@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,7 +38,20 @@ type cpRig struct {
 	upAuth   []string
 	upAcct   []string
 	audit    []string
+	skew     atomic.Int64 // the proxy's clock runs this far ahead (pastCache)
 }
+
+// cpCacheTTL is the rig proxy's verdict cache. It runs on the rig's clock and
+// is long on purpose: a test steps past it with pastCache, never a sleep. It
+// was 1 ms of wall clock, and a live call plus a revoke can both finish inside
+// one millisecond — the next call was then answered from the cache, 5 times in
+// 12 (claude-fleet#2072). Long, a forgotten step fails every run, not 1 in 3.
+const cpCacheTTL = 10 * time.Second
+
+// pastCache moves the proxy's clock beyond every verdict it holds, so its
+// next request asks the hub — what CacheTTL promises of a revocation or a
+// rebind in production.
+func (r *cpRig) pastCache() { r.skew.Add(int64(cpCacheTTL + time.Millisecond)) }
 
 func newCPRig(t *testing.T) *cpRig {
 	t.Helper()
@@ -65,7 +79,8 @@ func newCPRig(t *testing.T) *cpRig {
 	p, err := credproxy.New(credproxy.Config{
 		Resolver: &credproxy.HubResolver{URL: h.http.URL, Token: cpToken},
 		Direct:   true, AnthropicURL: up.URL, CodexURL: up.URL,
-		CacheTTL: time.Millisecond, StaleFor: time.Minute,
+		CacheTTL: cpCacheTTL, StaleFor: time.Minute,
+		Now:   func() time.Time { return time.Now().Add(time.Duration(r.skew.Load())) },
 		Audit: func(l string) { r.mu.Lock(); r.audit = append(r.audit, l); r.mu.Unlock() },
 	})
 	if err != nil {
@@ -195,6 +210,7 @@ func TestCredProxyRefusesBadPasses(t *testing.T) {
 	if st, out := sessDo(t, r.h, http.MethodDelete, "/v1/fleet/session-cred/"+c.ID, r.tok5, "", nil); st != 200 {
 		t.Fatalf("revoke: %d %v", st, out)
 	}
+	r.pastCache()
 	if st, body := r.call(t, credvault.Claude, cred); st != http.StatusForbidden || !strings.Contains(body, "revoked") {
 		t.Fatalf("revoked → %d %s", st, body)
 	}
@@ -231,7 +247,7 @@ func TestCredProxyBindAndRebind(t *testing.T) {
 		map[string]any{"worker_id": widA, "provider": "claude", "account": "acct2"}); st != 200 || out["rev"] != float64(2) {
 		t.Fatalf("rebind A: %d %v", st, out)
 	}
-	time.Sleep(5 * time.Millisecond) // past the proxy's 1 ms cache
+	r.pastCache()
 	r.call(t, credvault.Claude, credA)
 	if got := r.lastAuth(); got != a2 {
 		t.Fatalf("A after rebind → %q; want acct2", got)
@@ -258,7 +274,7 @@ func TestCredProxyRidesOutHubRestart(t *testing.T) {
 	}
 	want := r.lastAuth()
 	r.h.http.Close()
-	time.Sleep(5 * time.Millisecond)
+	r.pastCache()
 	for i := 0; i < 3; i++ {
 		if st, body := r.call(t, credvault.Claude, cred); st != 200 {
 			t.Fatalf("hub down, request %d → %d %s", i, st, body)
