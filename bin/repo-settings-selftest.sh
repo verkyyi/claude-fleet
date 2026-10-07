@@ -224,7 +224,7 @@ hasnt 'cleanup a runs'       "$out" "[o/a] cleanup off"
 hasnt 'cleanup e runs'       "$out" "[o/e] cleanup off"
 hasnt 'fleet not skipped'    "$out" "$M: cleanup off"
 out=$(bash "$BIN/fleet-cleanup-daemon.sh" --dry-run $D 2>&1)
-has   'cleanup degenerate'   "$out" "$D: cleanup off (FLEET_CLEANUP=0) — skip"
+has   'cleanup one repo'     "$out" "$D: [o/c] cleanup off (FLEET_CLEANUP=0) — skip"   # one road (#1941)
 printf 'hi\n' | bash "$BIN/fleet-control-read.sh" message $M o-b:issue-5 >/dev/null 2>&1
 eq 'bridge b off → 5' "$?" 5
 printf 'hi\n' | bash "$BIN/fleet-control-read.sh" message $M o-e:issue-5 >/dev/null 2>&1; rc=$?

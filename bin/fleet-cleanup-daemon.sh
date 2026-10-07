@@ -17,7 +17,7 @@
 #
 # Design (mirrors the other single-writer, disk-gated fleet daemons):
 #   for each live fleet session (or the ones named on argv):
-#     load its conf; skip if FLEET_CLEANUP=0 (a multi-repo fleet: per repo, #978)
+#     load its conf; skip a repo whose FLEET_CLEANUP=0 (per repo, #978)
 #     acquire a per-REPO LEASE (mkdir, steal-if-stale)      → single-writer
 #     honor the diskguard GATE (fleet-diskguard.sh --gate)  → never reap on a full disk
 #     read the prmap_<slug> cache pr-refresh already writes  → ZERO extra gh
@@ -154,11 +154,11 @@ final_prs() { # $1 = prmap file, $2 = 1 when non-issue heads are armed
 }
 
 # --- the PR pass for ONE repo of a fleet --------------------------------------
-# Globals in: sess repo main slug prmf k cto multi. Reaps up to k of the repo's
-# final PRs with debris left, logs its summary, and leaves the slots it spent in
-# $used. In a multi-repo fleet (issue #791) every window it looks at is filtered
-# to THIS repo — (repo, issue), never the bare number — and the janitor is told
-# the repo, so repo A's merged #12 cannot reach repo B's #12 window or worktree.
+# Globals in: sess repo main slug prmf k cto. Reaps up to k of the repo's final
+# PRs with debris left, logs its summary, and leaves the slots it spent in $used.
+# Every window it looks at is filtered to THIS repo (issue #791) — (repo, issue),
+# never the bare number — and the janitor is told the repo, so repo A's merged #12
+# cannot reach repo B's #12 window or worktree.
 reap_repo_prs() {
   # tmux socket helper: the daemon has no $TMUX → target the fleet's OWN socket.
   ftmux() { tmux -L "$(fleet_socket "$sess")" "$@"; }
@@ -166,17 +166,13 @@ reap_repo_prs() {
   # Each live issue window's own verdict, `<issue> <@claude_state>` per line
   # (issue #544 — the CLOSED pre-screen). Space-separated like every other format
   # in the fleet: a literal TAB is a control byte, and tmux <=3.4 vis-escapes those
-  # in format output. Multi-repo: only the windows that belong to THIS repo; a
-  # window whose repo is unknown or none is nobody's to reap.
-  if [ "$multi" = 1 ]; then
-    istate=$(ftmux list-windows -t "$sess" -F '#{window_id} #{@issue} #{@claude_state}' 2>/dev/null |
-      while read -r _w _i _st; do
-        case "$_i" in (''|*[!0-9]*) continue ;; esac
-        [ "$(fleet_norm_repo "$(fleet_window_repo "$sess" "$_w")")" = "$repo" ] && printf '%s %s\n' "$_i" "$_st"
-      done)
-  else
-    istate=$(ftmux list-windows -t "$sess" -F '#{@issue} #{@claude_state}' 2>/dev/null)
-  fi
+  # in format output. Only the windows that belong to THIS repo; a window whose
+  # repo is unknown or none is nobody's to reap.
+  istate=$(ftmux list-windows -t "$sess" -F '#{window_id} #{@issue} #{@claude_state}' 2>/dev/null |
+    while read -r _w _i _st; do
+      case "$_i" in (''|*[!0-9]*) continue ;; esac
+      [ "$(fleet_norm_repo "$(fleet_window_repo "$sess" "$_w")")" = "$repo" ] && printf '%s %s\n' "$_i" "$_st"
+    done)
 
   # Collect the live BRANCHES ONCE (local, zero gh) — a PR is a cleanup candidate
   # only if its head still has debris to reap. Keyed by branch name rather than by
@@ -187,12 +183,11 @@ reap_repo_prs() {
   while IFS= read -r b; do [ -n "$b" ] && live="${live}${b}"$'\n'; done < <(
     git -C "$main" worktree list --porcelain 2>/dev/null | \
       sed -n 's#^branch refs/heads/##p'
-    if [ "$multi" = 1 ]; then printf '%s\n' "$istate" | awk 'NF{print $1}'
-    else ftmux list-windows -t "$sess" -F '#{@issue}' 2>/dev/null; fi | \
+    printf '%s\n' "$istate" | awk 'NF{print $1}' | \
       sed 's/[^0-9]//g' | sed -n 's/^[0-9][0-9]*$/issue-&/p'
   )
 
-  repo_args=(); [ "$multi" = 1 ] && repo_args=(--repo "$repo")
+  repo_args=(--repo "$repo")
   cleaned=0; considered=0; timedout=0
   while IFS=$'\t' read -r pr branch state; do
     [ -z "$pr" ] && continue
@@ -269,8 +264,8 @@ reap_repo_prs() {
 $(final_prs "$prmf" "${FLEET_CLEANUP_SCRATCH_HEADS:-0}")
 EOF
 
-  # Multi-repo summaries name the repo: one fleet logs one line per repo.
-  rn=""; [ "$multi" = 1 ] && rn=" [$repo]"
+  # Summaries name the repo: one fleet logs one line per repo.
+  rn=" [$repo]"
   to_note=""
   [ "$timedout" -gt 0 ] && to_note=", $timedout timed out (${cto}s each)"
   if [ "$considered" -eq 0 ]; then
@@ -283,7 +278,7 @@ EOF
   used=$((cleaned + timedout))
 }
 
-# --- one repo of a MULTI-repo fleet (issue #791). Runs in a subshell so the repo's
+# --- one repo of a fleet (issues #791, #1941). Runs in a subshell so the repo's
 # overlay never leaks into the next one; prints the slots it spent on stdout. ----
 cleanup_repo() { (
   repo="$1"
@@ -314,25 +309,9 @@ cleanup_repo() { (
 cleanup_fleet() { (
   sess="$1"
   fleet_load_conf "$sess"
-  multi=0; fleet_has_repo_overlays "$sess" && multi=1
-  # A multi-repo fleet switches cleanup per repo (issue #978) — in cleanup_repo,
-  # where each repo's overlay may override the fleet's FLEET_CLEANUP.
-  if [ "$multi" = 0 ] && [ "${FLEET_CLEANUP:-1}" = 0 ]; then
-    log "$sess: cleanup off (FLEET_CLEANUP=0) — skip"
-    exit 0
-  fi
-
-  if [ "$multi" = 0 ]; then
-    repo="${FLEET_REPO:-}"
-    _r=$(fleet_repo_cached "$sess"); [ -n "$_r" ] && repo="$_r"
-    [ -z "$repo" ] && { log "$sess: no repo resolved — skip"; exit 0; }
-  fi
+  # Cleanup is switched per repo (issue #978) — in cleanup_repo, where each
+  # repo's overlay may override the fleet's FLEET_CLEANUP.
   command -v gh >/dev/null 2>&1 || { log "$sess: gh not on PATH — skip"; exit 0; }
-  if [ "$multi" = 0 ]; then
-    main="${FLEET_MAIN:-}"
-    [ -d "$main/.git" ] || { log "$sess: FLEET_MAIN is not a git checkout — skip"; exit 0; }
-    slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
-  fi
 
   # Rate-limit: at most K reaps this tick. 0 → skip.
   k="${FLEET_CLEANUP_MAX_PER_TICK:-4}"
@@ -350,16 +329,8 @@ cleanup_fleet() { (
   cto="${FLEET_CLEANUP_CANDIDATE_TIMEOUT:-120}"
   case "$cto" in ''|*[!0-9]*) cto=120 ;; esac
 
-  # Single-writer per REPO: two sessions serving one repo don't double-drive a reap.
-  # A multi-repo fleet takes each repo's lease inside cleanup_repo instead.
-  if [ "$multi" = 0 ]; then
-    lease="$LEASE_DIR/cleanup-$slug.lock"
-    me="cleanup:$sess:$$@$(hostname -s 2>/dev/null || echo host)"
-    if [ "$DRY" = 0 ]; then
-      lease_acquire "$lease" "$me" || { log "$sess: another cleaner holds the lease — skip"; exit 0; }
-      trap 'lease_release "$lease" "$me"' EXIT
-    fi
-  fi
+  # Single-writer per REPO: two sessions serving one repo don't double-drive a
+  # reap — each repo's lease is taken inside cleanup_repo.
 
   # Detection is cache-only: the prmap pr-refresh already writes (ZERO extra gh).
   # Done raw sessions do not necessarily HAVE a PR/cache row. Use the same
@@ -382,25 +353,15 @@ cleanup_fleet() { (
     [ "$k" -gt 0 ] || exit 0
   fi
 
-  if [ "$multi" = 1 ]; then
-    # One pass per hosted repo (issue #791), sharing this fleet's per-tick cap.
-    while IFS= read -r r; do
-      [ -n "$r" ] || continue
-      [ "$k" -gt 0 ] || break
-      u=$(cleanup_repo "$r"); case "$u" in ''|*[!0-9]*) u=0 ;; esac
-      k=$(( k - u ))
-    done <<EOF
+  # One pass per hosted repo (issue #791), sharing this fleet's per-tick cap.
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    [ "$k" -gt 0 ] || break
+    u=$(cleanup_repo "$r"); case "$u" in ''|*[!0-9]*) u=0 ;; esac
+    k=$(( k - u ))
+  done <<EOF
 $(fleet_repos "$sess")
 EOF
-    exit 0
-  fi
-
-  prmf=$(fleet_cache prmap "$sess")
-  if [ ! -s "$prmf" ]; then
-    log "$sess: no prmap cache yet (pr-refresh hasn't run for $slug?) — skip"
-    exit 0
-  fi
-  reap_repo_prs
 ) }
 
 # --- which fleets? argv wins; else every live fleet session on this server. -----

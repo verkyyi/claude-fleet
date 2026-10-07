@@ -399,19 +399,18 @@ bridge_inject() {
 
 # Find a live fleet session serving <repo> (for a revive spawn). Prints the
 # session name or empty. A fleet session owns a 'plan'/'dash' hub window. A fleet
-# with repo overlays (issue #798) serves every repo it hosts — its sessmap slug
-# names only one of them; a fleet without keeps the cached-slug match.
+# serves every repo it hosts (issues #798, #1941); only when no fleet hosts it
+# does the collector's cached slug answer — a conf that names no repo at all, the
+# same fallback fleet_target_repo keeps.
 bridge_fleet_for_repo() {
-  local repo="$1" want_slug s
+  local repo="$1" want_slug s cached=''
   want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
   while IFS= read -r s; do
     [ -n "$s" ] || continue
-    if fleet_has_repo_overlays "$s"; then
-      fleet_repo_hosted "$s" "$repo" && { printf '%s' "$s"; return 0; }
-      continue
-    fi
-    [ "$(fleet_slug_cached "$s")" = "$want_slug" ] && { printf '%s' "$s"; return 0; }
+    fleet_repo_hosted "$s" "$repo" && { printf '%s' "$s"; return 0; }
+    [ -z "$cached" ] && [ "$(fleet_slug_cached "$s")" = "$want_slug" ] && cached=$s
   done < <(fleet_hub_sessions)
+  printf '%s' "$cached"
   return 0
 }
 
@@ -760,30 +759,19 @@ poll() {
     && queue "$FLEET_REPO" "$ASSOC_FLOOR" "$REVIVE"
   # Per-fleet confs opt in individually, each carrying its own floor/revive. Source
   # in a subshell and emit repo<TAB>floor<TAB>revive so the values can't leak.
-  # A fleet hosting several repos (issue #798) queues EVERY one of them — each
-  # through its own view (fleet conf + that repo's overlay), so an overlay can turn
-  # the bridge off (FLEET_ISSUE_BRIDGE=0) or retune its gate for its repo alone. A
-  # fleet with no repos/ overlay takes the historic one-conf path, byte for byte.
+  # A fleet queues EVERY repo it hosts (issues #798, #1941) — each through its own
+  # view (fleet conf + that repo's overlay), so an overlay can turn the bridge off
+  # (FLEET_ISSUE_BRIDGE=0) or retune its gate for its repo alone.
   local _s cf
   while IFS=$'\t' read -r _s cf; do
     [ -f "$cf" ] || continue
     local line rp fl rv
-    if fleet_has_repo_overlays "$_s"; then
-      line=$(fleet_repos "$_s" | while IFS= read -r rp; do
-               ( fleet_load_repo_conf "$_s" "$rp" >/dev/null 2>&1 || exit 0
-                 [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
-                   "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
-                   "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
-             done)
-    else
-      # An empty FLEET_REPO emits nothing: tab is IFS whitespace, so `read` would
-      # swallow the empty field and poll the assoc floor as a repo name.
-      line=$( . "$cf" >/dev/null 2>&1
-              [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ -n "${FLEET_REPO:-}" ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s' \
-                "${FLEET_REPO:-}" \
-                "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
-                "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
-    fi
+    line=$(fleet_repos "$_s" | while IFS= read -r rp; do
+             ( fleet_load_repo_conf "$_s" "$rp" >/dev/null 2>&1 || exit 0
+               [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
+                 "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
+                 "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
+           done)
     [ -z "$line" ] && continue
     while IFS=$'\t' read -r rp fl rv; do
       queue "$rp" "$fl" "$rv"

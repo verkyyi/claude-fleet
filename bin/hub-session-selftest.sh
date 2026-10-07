@@ -124,7 +124,9 @@ no_claude resume+override "$out"
 d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")
 [ "$d" = home ] || fail "default: hub-session must build the 'home' window, not the dash: $d"
 d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=cwd bash "$SCRIPT")
-[ "$d" = "$MAIN" ] || fail "default: home must open in the fleet's checkout, got: $d"
+[ "$d" = "$HOME" ] || fail "default: home must open in \$HOME (a fleet has no main repo, #1941), got: $d"
+d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_CWD="$MAIN" HUB_PRINT_CMD=cwd bash "$SCRIPT")
+[ "$d" = "$MAIN" ] || fail "HUB_CWD must still pin the hub's cwd, got: $d"
 # fleet.settings carries the knob too (the login's settings, #979).
 printf 'FLEET_DASH_WINDOW=1\n' > "$CONF/fleet.settings"
 d=$(env -u FLEET_DASH_WINDOW FLEET_CONF_DIR="$CONF" HUB_SESSION="$SESS" HUB_PRINT_CMD=1 bash "$SCRIPT")

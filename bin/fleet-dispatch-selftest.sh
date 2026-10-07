@@ -95,6 +95,7 @@ cat > "$WORK/fakepath/tmux" <<'FAKE'
 #!/bin/bash
 args="$*"
 case "$args" in
+  *window_id*'@issue'*) printf '@1||plan\n@2||dash\n@3||backlog\n@4|10|issue-10\n@5||issue-15\n' ;;  # fleet_bound_windows: id|@issue|name
   *'@issue'*)     printf '%b' "\tplan\n\tdash\n\tbacklog\n10\tissue-10\n\tissue-15\n" ;;  # @issue<tab>name
   *session_name*) printf 's1 plan\ns1 dash\ns1 backlog\ns1 issue-10\ns1 issue-15\n' ;;    # global count
   *window_name*)  printf 'plan\ndash\nbacklog\nissue-10\nissue-15\n' ;;                    # one session
@@ -168,6 +169,7 @@ case "\$args" in
   *set-window-option*) printf '%s\n' "\$args" >> "$TMUX_LOG" ;;   # first: its argv names @trust_stuck too
   *trust_stuck*)  printf '%b' "@1\t10\t\t\tissue-10\n@2\t15\tworking\t\tissue-15\n@3\t\t\t\tplan\n@4\t20\t\t1\tissue-20\n" ;;
   *capture-pane*) printf ' Accessing workspace:\n /Users/x/proj-issue-N\n Quick safety check: Is this a project you created or one you trust?\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n' ;;
+  *window_id*'@issue'*) printf '@1||plan\n@2||dash\n@3||backlog\n@4|10|issue-10\n@5||issue-15\n' ;;  # fleet_bound_windows: id|@issue|name
   *'@issue'*)     printf '%b' "\tplan\n\tdash\n\tbacklog\n10\tissue-10\n\tissue-15\n" ;;
   *session_name*) printf 's1 plan\ns1 dash\ns1 backlog\ns1 issue-10\ns1 issue-15\n' ;;
   *window_name*)  printf 'plan\ndash\nbacklog\nissue-10\nissue-15\n' ;;
@@ -216,7 +218,7 @@ PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR
 fail4() { printf 'selftest FAIL: %s\n' "$1" >&2; printf -- '--- log ---\n' >&2; cat "$LOG4" >&2; printf -- '--- spawns ---\n' >&2; cat "$SPAWN_LOG" >&2; exit 1; }
 grep -qxF 20 "$SPAWN_LOG" && fail4 "#683 the claimed issue must not count as spawned"
 grep -qxF 50 "$SPAWN_LOG" || fail4 "#683 a CLAIMED refusal (exit 3) takes the issue, not the slot — the tick must go on to #50"
-grep -q 'skip #20 (p1) — #20 already claimed elsewhere (assigned)' "$LOG4" || fail4 "#683 the log must carry the spawn's stderr reason for the skip"
+grep -q 'skip fake/repo#20 (p1) — #20 already claimed elsewhere (assigned)' "$LOG4" || fail4 "#683 the log must carry the spawn's stderr reason for the skip"
 grep -q 'cap/dup race' "$LOG4" && fail4 "#683 the generic 'cap/dup race' guess must be gone — the reason is known now"
 
 # Capacity and infrastructure failures stop the tick. Log every attempt so the
@@ -236,7 +238,7 @@ for spawn_rc in 2 1; do
   SPAWN_RC="$spawn_rc" SPAWN_REASON="$reason" \
     bash "$WORK/bin/fleet-dispatch.sh" s1 >/dev/null 2>"$LOG5" || { cat "$LOG5" >&2; fail "dispatcher refusal run exited non-zero"; }
   [ "$(cat "$SPAWN_LOG")" = 20 ] || fail "#683 rc=$spawn_rc must stop after the first attempt"
-  grep -qF "spawn of #20 refused (rc=$spawn_rc: $reason) — stop this tick" "$LOG5" \
+  grep -qF "spawn of fake/repo#20 refused (rc=$spawn_rc: $reason) — stop this tick" "$LOG5" \
     || { cat "$LOG5" >&2; fail "#683 log must retain both class and stderr reason"; }
   grep -q 'stdout-must-not-enter-the-log' "$LOG5" && fail "#683 capture stderr only"
 done
@@ -265,7 +267,7 @@ for order in 's1 s2' 's2 s1'; do
     || fail2 "Claude quota must hold s1 while Codex s2 still spawns (order: $order)"
   [ "$(wc -l < "$WORK/quota-calls" | tr -d ' ')" = 1 ] \
     || fail2 "the shared quota measurement must run only once per tick"
-  grep -q 's1: Claude quota gate closed' "$LOG2" || fail2 "quota log must name the held Claude fleet"
+  grep -q 's1: fake/repo: Claude quota gate closed' "$LOG2" || fail2 "quota log must name the held Claude fleet"
 done
 printf 'ok   Claude quota holds only Claude fleets, independent of dispatch order\n'
 # The native Codex gate is separately opt-in and receives this fleet overlay.
@@ -281,7 +283,7 @@ printf 'FLEET_CODEX_QUOTA_GATE=1\n' >> "$WORK/conf/s2.conf"
 PATH="$WORK/fakepath:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_DISPATCH_LEASE_DIR="$WORK/leases" \
   bash "$WORK/bin/fleet-dispatch.sh" s2 >/dev/null 2>"$LOG2" || fail2 'Codex gate run failed'
 [ ! -s "$SPAWN_LOG" ] || fail2 'native Codex hold must block Codex autofill'
-grep -q 's2: Codex quota gate closed.*Codex native quota hold' "$LOG2" || fail2 'native quota reason missing'
+grep -q 's2: fake/repo: Codex quota gate closed.*Codex native quota hold' "$LOG2" || fail2 'native quota reason missing'
 
 # --- #799: a multi-repo fleet autofills EVERY armed repo, under ONE pair of caps ---
 # Fleet m hosts o/a (the fleet conf, FLEET_AUTOFILL=1), o/b (overlay, inherits the
@@ -328,6 +330,7 @@ case "$args" in
   *set-window-option*|*trust_stuck*|*capture-pane*) : ;;
   *'@repo'*)       case "$args" in *'-t @1 '*) printf 'o/a||\n' ;; *) printf '||\n' ;; esac ;;
   *'window_id}|'*) printf '@0||plan\n@1|10|issue-10\n' ;;
+  *window_id*'@issue'*) printf '@1||plan\n@2||dash\n@3||backlog\n@4|10|issue-10\n@5||issue-15\n' ;;  # fleet_bound_windows: id|@issue|name
   *'@issue'*)      printf '%b' "\tplan\n10\tissue-10\n" ;;
   *session_name*)  printf 'm plan\nm issue-10\n' ;;
   *window_name*)   printf 'plan\nissue-10\n' ;;

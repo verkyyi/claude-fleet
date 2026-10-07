@@ -731,7 +731,7 @@ for f in local:
                 if pk:
                     origin = pk if f["uuid"] and pu == f["uuid"] else pu + "/" + pk
                 else:
-                    origin = (slug(r["repo"]) + ":" if f["multi"] else "") + "issue-" + p
+                    origin = slug(r["repo"]) + ":issue-" + p     # every key carries its repo (#1939, #1941)
         out.append("\x1f".join(clean(v) for v in ("wid:" + r["wid"], r["node"], r["av"], r["issue"], r["repo"],
                                                r["state"], r["agent"], r["name"], origin, r["needs"],
                                                "1" if r["local"] else "0", r["lwid"], via, r["busy"], r["born"], r["cfg"])

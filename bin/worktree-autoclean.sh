@@ -415,25 +415,23 @@ EOF
 DEFAULT_MAIN="${FLEET_MAIN:-}"
 [ -n "$DEFAULT_MAIN" ] && clean_fleet "$DEFAULT_MAIN" "${FLEET_REPO:-}" \
   "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-}" "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}"
+# Every repo every fleet hosts (issues #791, #1941), each with its own MAIN/base
+# read through its overlay; a checkout is cleaned once, however many fleets or
+# the global default name it.
+_seen_mains=" $DEFAULT_MAIN "
 while IFS=$'\t' read -r _s cf; do
   [ -f "$cf" ] || continue
-  # 0x1f, not a tab: a tab is IFS WHITESPACE, so an empty field would collapse and
-  # slide every later one (the worktree root, usually empty, is last) into its slot.
-  IFS=$'\037' read -r fm fr fb fp fx fw < <( . "$cf" >/dev/null 2>&1
-    printf '%s\037%s\037%s\037%s\037%s\037%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
-      "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-^(master|main|develop|test)\$}" \
-      "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}" )
-  [ -n "$fm" ] || continue
-  [ "$fm" = "$DEFAULT_MAIN" ] || clean_fleet "$fm" "$fr" "$fb" "$fp" "$fx" "$fw"   # else already cleaned as the global default
-  # Every FURTHER repo the fleet hosts (issue #791), each with its own MAIN/base.
-  fleet_has_repo_overlays "$_s" || continue
   while IFS= read -r _r; do
     [ -n "$_r" ] || continue
+    # 0x1f, not a tab: a tab is IFS WHITESPACE, so an empty field would collapse and
+    # slide every later one (the worktree root, usually empty, is last) into its slot.
     IFS=$'\037' read -r rm rr rb rp rx rw < <( fleet_load_repo_conf "$_s" "$_r" >/dev/null 2>&1
       printf '%s\037%s\037%s\037%s\037%s\037%s' "${FLEET_MAIN:-}" "${FLEET_REPO:-}" \
         "${FLEET_BASE_BRANCH:-main}" "${FLEET_PROTECTED_RE:-^(master|main|develop|test)\$}" \
         "${FLEET_SCRATCH_MAX_IDLE:-0}" "${FLEET_WORKTREE_ROOT:-}" )
-    [ -n "$rm" ] && [ "$rm" != "$fm" ] && [ "$rm" != "$DEFAULT_MAIN" ] || continue
+    [ -n "$rm" ] || continue
+    case "$_seen_mains" in *" $rm "*) continue ;; esac
+    _seen_mains="$_seen_mains$rm "
     clean_fleet "$rm" "$rr" "$rb" "$rp" "$rx" "$rw"
   done <<EOF
 $(fleet_repos "$_s")
