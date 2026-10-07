@@ -172,3 +172,56 @@ export function withLocale(path) {
 /** tIn is t() in a named locale. Used by the language switcher, which has to
  *  label the OTHER language in its own words. */
 export const tIn = (loc, key, vars) => interpolate(lookup(loc, key), vars);
+
+/* ---------------------------------------------------------------- formats
+ * Big numbers and times, by the reader's language (claude-fleet#1989, the
+ * EPIC #1982 design's rules; C9 #2023 reuses them): English 212.4M · 1.31B ·
+ * Oct 6, 18:20 · 6 min ago; Chinese counts in 万 / 亿 — 2.12 亿 · 13.1 亿 ·
+ * 10月6日 18:20 · 6 分钟前. `loc` defaults to the page's language.
+ */
+
+const trim0 = (s) => (s.includes('.') ? s.replace(/\.?0+$/, '') : s);
+// Three significant digits, never an exponent: 2.12 · 13.1 · 424 · 4240.
+const sig3 = (v) => (Math.abs(v) >= 100 ? String(Math.round(v)) : trim0(v.toPrecision(3)));
+
+/** fmtCompact prints a count short: 212.4M / 2.12 亿. */
+export function fmtCompact(n, loc = current) {
+  n = Number(n) || 0;
+  const a = Math.abs(n);
+  if (loc === 'zh-CN') {
+    if (a >= 1e8) return sig3(n / 1e8) + ' 亿';
+    if (a >= 1e4) return sig3(n / 1e4) + ' 万';
+    return String(Math.round(n));
+  }
+  if (a >= 1e9) return trim0((n / 1e9).toFixed(2)) + 'B';
+  if (a >= 1e6) return trim0((n / 1e6).toFixed(1)) + 'M';
+  if (a >= 1e3) return trim0((n / 1e3).toFixed(1)) + 'k';
+  return String(Math.round(n));
+}
+
+const toMs = (t) => (typeof t === 'number' ? t : Date.parse(t));
+const pad2 = (x) => ('0' + x).slice(-2);
+
+/** fmtDate is a day and a clock time: "Oct 6, 18:20" / "10月6日 18:20";
+ *  `withTime: false` drops the clock. Local time. Invalid → "—". */
+export function fmtDate(t, loc = current, withTime = true) {
+  const ms = toMs(t);
+  if (!Number.isFinite(ms) || ms <= 0) return '—';
+  const d = new Date(ms);
+  const time = withTime ? `${pad2(d.getHours())}:${pad2(d.getMinutes())}` : '';
+  if (loc === 'zh-CN') return `${d.getMonth() + 1}月${d.getDate()}日${time ? ' ' + time : ''}`;
+  const day = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return time ? `${day}, ${time}` : day;
+}
+
+/** fmtAgo is how long ago: "6 min ago" / "6 分钟前". Invalid → "—". */
+export function fmtAgo(t, now = Date.now(), loc = current) {
+  const ms = toMs(t);
+  if (!Number.isFinite(ms) || ms <= 0) return '—';
+  const s = Math.max(0, Math.round((now - ms) / 1000));
+  const zh = loc === 'zh-CN';
+  if (s < 60) return zh ? '刚刚' : 'just now';
+  if (s < 3600) return zh ? `${Math.floor(s / 60)} 分钟前` : `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return zh ? `${Math.floor(s / 3600)} 小时前` : `${Math.floor(s / 3600)} h ago`;
+  return zh ? `${Math.floor(s / 86400)} 天前` : `${Math.floor(s / 86400)} d ago`;
+}

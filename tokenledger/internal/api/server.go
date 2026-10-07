@@ -397,6 +397,9 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(DrillPath, s.handleAdminDrill)
 		mux.HandleFunc(DrillSelfPath, s.handleSelf)
 		mux.Handle("/connect", s.viewerOnly(http.HandlerFunc(s.serveConnectPage)))
+		// Config (claude-fleet#1989): my settings and the team layer, read
+		// from the bundle routes below.
+		mux.Handle("/config", s.viewerOnly(http.HandlerFunc(s.serveConfigPage)))
 		// Registered devices (claude-fleet#1470): a renewal is proven by the
 		// device's own key, so it authenticates itself, outside the viewer
 		// gate — like start/poll, it is what `fleet` runs before it holds a
@@ -496,7 +499,6 @@ func (s *Server) routes() *routeMux {
 	mux.Handle("/share/", s.shareOnly(s.serveSharePage))
 
 	mux.Handle("/v1/user", s.viewerOnly(http.HandlerFunc(s.handleUserData)))
-	mux.Handle("/u/", s.viewerOnly(http.HandlerFunc(s.serveUserPage)))
 
 	// The door map: every way into this hub, what each costs in credentials,
 	// and what is actually turned on here. Behind the viewer gate like every

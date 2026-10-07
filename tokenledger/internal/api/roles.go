@@ -56,7 +56,10 @@ var routeAccess = map[string]string{
 	"/v1/ingest": accessSelf, "/v1/ingest/repo": accessSelf, "/v1/ingest/growth": accessSelf,
 	"/v1/growth/latest": accessSelf, "/v1/live/report": accessSelf,
 	"/v1/collectors/quota-lease": accessSelf,
-	control.Path:                 accessSelf, "/v1/node/lease": accessSelf, "/v1/node/place": accessSelf,
+	// The onboarding drill (claude-fleet#2010): each request signed by the
+	// inviting machine, the drill person's certificate or its approve code.
+	DrillPath: accessSelf, DrillSelfPath: accessSelf, LoginApprovePath: accessSelf,
+	control.Path: accessSelf, "/v1/node/lease": accessSelf, "/v1/node/place": accessSelf,
 	"/v1/node/move": accessSelf, "/v1/node/move/bundle": accessSelf, "/v1/node/move/bundle/": accessSelf,
 	"/v1/node/join": accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf,
 	"/v1/node/reclaim": accessSelf, "/v1/node/maintenance": accessSelf, "/v1/node/peer-cert": accessSelf,
@@ -104,13 +107,13 @@ var routeAccess = map[string]string{
 	"/v1/usage": accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,
 	"/v1/sessions": accessUser, "/v1/sessions/": accessUser,
 	"/v1/live": accessUser, "/v1/live/stream": accessUser,
-	"/v1/user": accessUser, "/u/": accessUser, "/mcp": accessUser,
+	"/v1/user": accessUser, "/mcp": accessUser,
 	"/sessions": accessUser, "/v1/fleet/me": accessUser, "/v1/fleet/": accessUser,
 	// The roster, cut by FleetScope to the machines where their login runs
 	// (claude-fleet#1411); maintenance, SPOT and join codes stay an admin's.
 	"/v1/nodes": accessUser, "/nodes": accessUser,
 	"/v1/fleet/connect": accessUser, "/v1/fleet/cert": accessUser,
-	"/fleet/login": accessUser, "/connect": accessUser,
+	"/fleet/login": accessUser, "/connect": accessUser, "/config": accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,
 }
 

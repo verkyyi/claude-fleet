@@ -1,0 +1,173 @@
+// The four everyday pages' computations (claude-fleet#1989): Overview's days,
+// bars and attention list, Sessions' rows, filters and empty states, Config's
+// item lists — and a source check that no page asks the hub for someone
+// else's rows.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import {
+  dayKeys, dayTokens, stack, delta, bars, areaChart, niceMax,
+  sessionRows, counts, filterRows, running, attention, stateOf,
+  activeDevices, looksLikeKey, bundleItems, parseImport,
+} from '../dist/lib/pages.js';
+import { useLocale } from '../dist/lib/i18n.js';
+import { en } from '../dist/lib/i18n/en.js';
+
+const NOW = Date.parse('2026-10-06T15:00:00Z');
+
+test('14 UTC days end today, oldest first', () => {
+  const k = dayKeys(NOW, 14);
+  assert.equal(k.length, 14);
+  assert.equal(k[0], '2026-09-23');
+  assert.equal(k[13], '2026-10-06');
+});
+
+test('a sparse series fills absent days with 0', () => {
+  const k = dayKeys(NOW, 3);
+  assert.deepEqual(dayTokens(k, [{ key: '2026-10-05', tokens: 7 }, { key: '2026-09-01', tokens: 99 }]), [0, 7, 0]);
+  assert.deepEqual(dayTokens(k, undefined), [0, 0, 0]);
+  assert.deepEqual(stack([1, 2], [3]), [[1, 3], [2, 0]]);
+});
+
+test('delta: percent change, nothing when there is no earlier window', () => {
+  assert.deepEqual(delta(114, 100, 'ui.ov.vsYesterday'), { text: '+14% vs yesterday', down: false });
+  assert.deepEqual(delta(50, 100, 'ui.ov.vsLastWeek'), { text: '-50% vs last week', down: true });
+  assert.deepEqual(delta(5, 0, 'ui.ov.vsYesterday'), { text: '', down: false });
+  try {
+    useLocale('zh-CN');
+    assert.equal(delta(114, 100, 'ui.ov.vsYesterday').text, '比昨天 +14%');
+    assert.equal(stateOf('waiting').label, '在等你回答');
+  } finally { useLocale('en'); }
+});
+
+test('bars merge one machine across endpoints, largest first, tail folded', () => {
+  const rows = bars([{ label: 'm4', tokens: 5 }, { label: 'mini2', tokens: 9 }, { label: 'm4', tokens: 6 }, { label: 'zero', tokens: 0 }]);
+  assert.deepEqual(rows, [['m4', 11], ['mini2', 9]]);
+  const many = bars(Array.from({ length: 9 }, (_, i) => ({ label: 'h' + i, tokens: 10 - i })), 4);
+  assert.equal(many.length, 4);
+  assert.deepEqual(many[3], ['other', 7 + 6 + 5 + 4 + 3 + 2]);
+  assert.deepEqual(bars(null), []);
+});
+
+test('the area chart scales to a nice top and labels its days', () => {
+  assert.equal(niceMax(0), 1);
+  assert.equal(niceMax(171e6), 200e6);
+  assert.equal(niceMax(31), 50);
+  const k = dayKeys(NOW, 14);
+  const svg = areaChart(stack(k.map(() => 1e6), k.map(() => 5e5)), k);
+  assert.match(svg, /role="img"/);
+  assert.match(svg, /Oct 6/);
+  assert.match(svg, /21M in all/);
+  assert.equal(areaChart([], []), '');
+});
+
+const FS = {
+  sessions: [
+    { machine_name: 'mini2', os_user: 'verk', availability: 'online', worker: { worker_id: 'w1', key: 'issue-1950', repo: 'verkyyi/claude-fleet', title: 'Team settings', state: 'working', worktree: '/wt/1950', born: 200, agent: 'claude' } },
+    { machine_name: 'm4', os_user: 'verk', availability: 'lost', worker: { worker_id: 'w2', key: 'issue-1953', title: 'Doctor row', state: 'waiting', worktree: '/wt/1953', born: 300 } },
+    { machine_name: 'm4', os_user: 'verk', availability: 'online', worker: { worker_id: 'w3', key: 'scratch-6', state: 'idle', born: 100 } },
+    { machine_name: 'm4', os_user: 'verk', availability: 'online', worker: { worker_id: 'w4', key: 'issue-9', state: 'blocked', born: 50 } },
+  ],
+  nodes: [{ machine_name: 'mini2', availability: 'online' }, { machine_name: 'm1', availability: 'lost' }, { machine_name: 'm2', availability: 'maintenance' }],
+};
+const LIVE = { sessions: [{ worktree: '/wt/1950', context_used_pct: 41.2, model: 'claude-opus-5-5', account: 'Max · A' }, { cwd: '/wt/1953', context_unknown: true, context_used_pct: 0 }] };
+
+test('rows join live context and model by worktree, newest first', () => {
+  const rows = sessionRows(FS, LIVE);
+  assert.deepEqual(rows.map((r) => r.key), ['issue-1953', 'issue-1950', 'scratch-6', 'issue-9']);
+  const w = rows.find((r) => r.key === 'issue-1950');
+  assert.equal(w.ctx, 41.2);
+  assert.equal(w.model, 'claude-opus-5-5');
+  assert.equal(w.account, 'Max · A');
+  assert.equal(rows.find((r) => r.key === 'issue-1953').ctx, null, 'unknown context is a dash, not 0%');
+  assert.equal(rows.find((r) => r.key === 'issue-1953').availability, 'lost');
+});
+
+test('an empty or failed list is no rows, not a crash', () => {
+  assert.deepEqual(sessionRows(null, null), []);
+  assert.deepEqual(sessionRows({ sessions: [] }, undefined), []);
+  assert.deepEqual(counts([]), { all: 0, working: 0, waiting: 0, idle: 0 });
+  assert.deepEqual(attention([], [], true), []);
+});
+
+test('filters count by group and search across key, repo, title, machine', () => {
+  const rows = sessionRows(FS, LIVE);
+  assert.deepEqual(counts(rows), { all: 4, working: 1, waiting: 2, idle: 1 });
+  assert.deepEqual(filterRows(rows, 'waiting', '').map((r) => r.key), ['issue-1953', 'issue-9']);
+  assert.deepEqual(filterRows(rows, 'all', 'TEAM').map((r) => r.key), ['issue-1950']);
+  assert.deepEqual(filterRows(rows, 'all', 'm4').length, 3);
+  assert.deepEqual(filterRows(rows, 'idle', 'nope'), []);
+  assert.equal(running(rows).length, 3);
+  assert.equal(stateOf('weird').label, 'Unknown');
+});
+
+test('attention: sessions waiting for everyone, machines only for an admin', () => {
+  const rows = sessionRows(FS, LIVE);
+  const user = attention(rows, FS.nodes, false);
+  assert.deepEqual(user.map((a) => a.title), ['issue-1953 needs an answer', 'issue-9 is blocked']);
+  const admin = attention(rows, FS.nodes, true);
+  assert.deepEqual(admin.slice(2).map((a) => a.title), ['m1 is lost', 'm2 is in maintenance']);
+  try { useLocale('zh-CN'); assert.equal(attention(rows, FS.nodes, true)[2].title, 'm1 失联了'); } finally { useLocale('en'); }
+});
+
+test('devices: active ones, and the hand-issue key check', () => {
+  assert.equal(activeDevices([{ fingerprint: 'a' }, { fingerprint: 'b', revoked_at: 'x' }]).length, 1);
+  assert.equal(activeDevices(undefined).length, 0);
+  assert.ok(looksLikeKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc you@laptop'));
+  assert.ok(!looksLikeKey('hello'));
+  assert.ok(!looksLikeKey(''));
+});
+
+test('a bundle lists one row per server, hook, skill and setting', () => {
+  const items = bundleItems({
+    mcp: { github: {}, fetch: {} },
+    hooks: { PreToolUse: [{ matcher: 'Bash', command: 'bash-guard.py' }] },
+    skills: { 'fleet-open': '# skill' },
+    claude_settings: { effort: 'high' },
+    codex_config: { approval_policy: 'on-request' },
+    hook_scripts: { 'guard.sh': '#!/bin/sh' },
+  });
+  assert.deepEqual(items, [
+    ['mcp', 'fetch'], ['mcp', 'github'],
+    ['hook', 'PreToolUse Bash · bash-guard.py'],
+    ['script', 'guard.sh'], ['skill', 'fleet-open'],
+    ['claude', 'effort = high'], ['codex', 'approval_policy = on-request'],
+  ]);
+  assert.deepEqual(bundleItems(null), []);
+  assert.deepEqual(bundleItems({}), []);
+});
+
+test('import takes an export back, and refuses what is not one', () => {
+  assert.deepEqual(parseImport('{"version":3,"bundle":{"mcp":{}}}'), { mcp: {} });
+  assert.deepEqual(parseImport('{"skills":{}}'), { skills: {} });
+  assert.throws(() => parseImport('nope'), /not JSON/);
+  assert.throws(() => parseImport('[1]'), /settings object/);
+});
+
+// A user's answers are cut by the hub (#1985); the pages must not try to
+// widen them. No page names another person or asks for a by-account / by-team
+// cut, and only an admin's request carries a principal.
+test('no page asks the hub for someone else\'s rows', () => {
+  for (const f of ['overview.js', 'sessions-page.js', 'connect.js', 'config.js', 'app-shell.js']) {
+    const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8');
+    assert.doesNotMatch(src, /by=(account|team)/, `${f} asks for a by-account/team cut`);
+    assert.doesNotMatch(src, /[?&]user=/, `${f} filters by another user`);
+    assert.doesNotMatch(src, /all=1/, `${f} asks for everyone's layer`);
+  }
+  const ov = readFileSync(new URL('../dist/overview.js', import.meta.url), 'utf8');
+  assert.match(ov, /admin \? q\('\/v1\/usage', 'by=user/, 'by person is an admin\'s only');
+  const cfg = readFileSync(new URL('../dist/config.js', import.meta.url), 'utf8');
+  assert.match(cfg, /admin && me\.person \? `\?principal=/, 'principal= only on an admin\'s request');
+});
+
+// Every word on the four pages is a dictionary key (EPIC #1982 convention 11):
+// no English sentence typed into a template, and no t() key the dictionary
+// lacks (the parity test in i18n.test.mjs then holds zh-CN to it).
+test('the app pages print only dictionary words', () => {
+  for (const f of ['overview.js', 'sessions-page.js', 'connect.js', 'config.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js']) {
+    const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8').replace(/^\s*(\/\/|\*|\/\*).*$/gm, '');
+    const bare = src.match(/>[A-Z][a-z]+[ <.]/g) || [];
+    assert.deepEqual(bare.filter((m) => !/>(Claude|Codex|GitHub)/.test(m)), [], `${f} types English into markup`);
+    for (const [, key] of src.matchAll(/\bt\('(ui\.[\w.]*\w)'/g)) assert.ok(key in en, `${f}: t('${key}') is not in en.js`);
+  }
+});
