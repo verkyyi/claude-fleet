@@ -805,9 +805,8 @@ printf '\t#1949\t\t侧栏改版\n\t#1950\t\t只看只点\n' > "$WORK/.claude-das
 # 8 @issue · 9 @origin · 10 @worktree · 14 @expand · 20 @repo · 30 @epic
 we() { printf '%s\n' "$QS$US$1$US$2$US$3$US$4$US$US$5$US${6:-}$US${7:-}$US$3$US$US$US$US${10:-}$US$US$US$US$US$US${8:-}$US$US$US$US$US$US$US$US$US$US${9:-}" >> "$WLIST_FILE"; }
 cp "$WLIST_FILE" "$WORK/wlist.q"; : > "$WLIST_FILE"
-#  idx name       path                  state    wid issue origin               repo       epic           expand
 we 1  scratch-7  /w/app-scratch-7      looping  @1  ''    ''                   acme/app   acme/app#1949  1
-we 2  只看只点   /w/app-issue-1950     done     @2  1950  acme-app:scratch-7   acme/app
+we 2  只看只点   /w/app-issue-1950     'done'     @2  1950  acme-app:scratch-7   acme/app
 we 3  底栏       /w/app-issue-1951     working  @3  1951  acme-app:scratch-7   acme/app
 we 4  工具活     /w/tool-issue-31      working  @4  31    acme-app:scratch-7   acme/tool
 we 5  单干       /w/app-issue-1960     working  @5  1960  ''                   acme/app
