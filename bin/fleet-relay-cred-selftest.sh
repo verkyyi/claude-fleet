@@ -257,7 +257,7 @@ case "$out" in "relay: ISSUED m4/alice → $FLEET_CONF_DIR/cred-proxy/relay.toke
 TOKFILE="$FLEET_CONF_DIR/cred-proxy/relay.token"
 PASS1=$(cat "$TOKFILE")
 case "$PASS1" in frl1.?*) ok ;; *) fail "B: kept pass is not frl1." ;; esac
-perm() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+perm() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 [ "$(perm "$TOKFILE")" = 600 ] || fail "B: pass mode $(perm "$TOKFILE")"; ok
 [ "$(perm "$FLEET_CONF_DIR/cred-proxy")" = 700 ] || fail "B: dir mode $(perm "$FLEET_CONF_DIR/cred-proxy")"; ok
 
