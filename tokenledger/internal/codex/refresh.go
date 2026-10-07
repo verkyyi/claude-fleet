@@ -110,6 +110,7 @@ func LoginHealth(home string, auth *Auth, enabled bool) *model.LoginHealth {
 			h.State = "access_expired"
 			h.Reason = "Hub lease expired and the node agent has not renewed it; check ccquota agent (CCQUOTA_FLEET_CREDS=1) on this machine"
 		}
+		applyUpstream(h, home, auth)
 		return h
 	}
 	h.Source = "local"
@@ -137,7 +138,29 @@ func LoginHealth(home string, auth *Auth, enabled bool) *model.LoginHealth {
 			}
 		}
 	}
+	applyUpstream(h, home, auth)
 	return h
+}
+
+// applyUpstream downgrades a login the clock still calls usable when the
+// upstream has refused this exact access token (claude-fleet#1920). An
+// expired, reauth-required or otherwise already-unusable state stays as it is:
+// it is the more specific word.
+func applyUpstream(h *model.LoginHealth, home string, auth *Auth) {
+	if h.State != "valid" && h.State != "refresh_due" && h.State != "retry_pending" && h.State != "refreshing" {
+		return
+	}
+	v := upstreamRejection(home, auth)
+	if v == nil {
+		return
+	}
+	at := v.At
+	h.State, h.UpstreamError, h.UpstreamRejectedAt = "access_rejected", v.Error, &at
+	if h.Source == "hub" {
+		h.Reason = "Upstream refused this hub lease (" + v.Error + ", " + at.Format(time.RFC3339) + ") before its expiry; the hub must issue a new one — a local refresh or re-login here does not fix it"
+	} else {
+		h.Reason = "Upstream refused this access token (" + v.Error + ", " + at.Format(time.RFC3339) + ") before its expiry; renewal will be attempted, sign in again if it stays refused"
+	}
 }
 
 // Maintain refreshes only near expiry (or after an authorization error), in

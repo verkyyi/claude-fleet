@@ -83,6 +83,13 @@ class Providers(unittest.TestCase):
             r = accounts.normalize_codex(accounts.profiles()[0], reading)
             self.assertEqual(r['reason'], 'hub-lease-lapsed')
             self.assertFalse(accounts.eligible(r))
+            # claude-fleet#1920: a lease the upstream refused before its exp is
+            # not usable either, and the cause says the hub must re-issue it.
+            row['login'] = dict(state='access_rejected', source='hub', upstream_error='token_revoked',
+                                reason='Upstream refused this hub lease (token_revoked, …)')
+            with self.assertRaisesRegex(ValueError, 'hub-managed.*refused its lease.*token_revoked.*hub must issue'):
+                accounts.profile('default')
+            self.assertFalse(accounts.eligible(accounts.normalize_codex(accounts.profiles()[0], reading)))
             # Degenerate case: an older ccquota prints no source → local, and
             # the gate is what it always was.
             row['login'] = dict(state='valid')

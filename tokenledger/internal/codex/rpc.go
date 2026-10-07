@@ -41,7 +41,16 @@ type rpcError struct {
 	code         int
 	reauth       bool
 	unauthorized bool
+	// authCode is the upstream's own reason for refusing the access token
+	// (token_revoked, …) when the message carries one of the recognized,
+	// credential-free codes in accessRejectCodes — never the message itself.
+	authCode string
 }
+
+// accessRejectCodes are the error codes an upstream answers with when it
+// refuses the ACCESS token itself (claude-fleet#1920): a revoked lease reads
+// token_revoked long before its exp, so the clock alone cannot see it.
+var accessRejectCodes = []string{"token_revoked", "token_invalidated", "token_expired", "invalid_token", "account_deactivated"}
 
 func (e *rpcError) Error() string {
 	if e.reauth {
@@ -58,6 +67,14 @@ func classifyRPC(code int, message string) *rpcError {
 	for _, marker := range []string{"401 (unauthorized)", "status: 401", "status code: 401", "status code 401", "http 401"} {
 		if strings.Contains(m, marker) {
 			e.unauthorized = true
+		}
+	}
+	for _, c := range accessRejectCodes {
+		// refresh_token_expired contains token_expired: a refresh-side code is
+		// not an access verdict.
+		if strings.Contains(strings.ReplaceAll(m, "refresh_"+c, ""), c) {
+			e.unauthorized, e.authCode = true, c
+			break
 		}
 	}
 	for _, marker := range []string{"refresh_token_reused", "refresh_token_expired", "refresh_token_invalidated", "refresh_token_revoked", "invalid_grant", "refresh token has expired", "refresh token has already been used", "refresh token has been revoked"} {

@@ -148,6 +148,17 @@ type Result struct {
 	LimitsError     string
 	UsageError      string
 	refreshRequired bool
+	rejected        error // the first upstream refusal of the access token (RecordUpstream)
+}
+
+func (r *Result) noteAuth(err error) bool {
+	if !unauthorized(err) {
+		return false
+	}
+	if r.rejected == nil {
+		r.rejected = err
+	}
+	return true
 }
 
 func Query(ctx context.Context, binary string, auth *Auth) (Result, error) {
@@ -194,7 +205,7 @@ func Query(ctx context.Context, binary string, auth *Auth) (Result, error) {
 	var raw json.RawMessage
 	if err := rpc(3, "account/rateLimits/read", nil, &raw); err != nil {
 		out.LimitsError = err.Error()
-		out.refreshRequired = unauthorized(err)
+		out.refreshRequired = out.noteAuth(err)
 	} else {
 		var response map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &response); err != nil {
@@ -226,7 +237,7 @@ func Query(ctx context.Context, binary string, auth *Auth) (Result, error) {
 	}
 	if err := rpc(4, "account/usage/read", nil, &usage); err != nil {
 		out.UsageError = err.Error()
-		out.refreshRequired = out.refreshRequired || unauthorized(err)
+		out.refreshRequired = out.noteAuth(err) || out.refreshRequired
 	} else {
 		u := &model.AccountUsage{Source: model.SourceCodex, ObservedAt: time.Now().UTC(), LifetimeTokens: usage.Summary.Lifetime, PeakDailyTokens: usage.Summary.Peak}
 		for _, d := range usage.Daily {
