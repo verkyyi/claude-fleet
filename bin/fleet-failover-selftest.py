@@ -355,6 +355,39 @@ class Failover(unittest.TestCase):
             flow.reconcile_windows('test',True)
         inspect.assert_not_called();reconcile.assert_not_called()
 
+    def norepo_tm(self, agent=''):
+        opts={'#{@worker_lifecycle}':'','#{@norepo}':'1','#{@cc_agent}':agent,'#{pane_id}':'%4'}
+        return lambda *a: '@4||guide' if a[1]=='list-windows' else opts.get(a[-1],'')
+
+    def test_walled_no_repo_session_moves_through_migrate_not_transfer(self):
+        # issue #2102: the pinned guide is `@norepo 1` — no worktree, so
+        # fleet-transfer.sh refuses it. A benched account moves it through
+        # fleet-migrate.sh instead (close + --resume in $HOME), once per retry window.
+        benched=dict(account('claude','old',100),limited_until=time.time()+3600)
+        data={'accounts':[benched,account('claude','fresh',10)]}
+        with patch.object(flow,'tm',side_effect=self.norepo_tm()), patch.object(flow,'run',return_value='old'), \
+             patch.object(flow,'inspect') as inspect, patch.object(flow,'reconcile_one') as one, \
+             patch.dict(flow.ACCOUNT,inventory=lambda:data), patch.object(flow.subprocess,'Popen') as popen:
+            out=io.StringIO()
+            with contextlib.redirect_stdout(out): flow.reconcile_windows('test',True)
+            self.assertEqual(json.loads(out.getvalue())['decision']['state'],'norepo-migrate')
+            popen.assert_not_called()
+            flow.reconcile_windows('test',False)
+            flow.reconcile_windows('test',False)
+        inspect.assert_not_called(); one.assert_not_called()
+        self.assertEqual(popen.call_count,1)
+        argv=popen.call_args[0][0]
+        self.assertTrue(argv[1].endswith('fleet-migrate.sh')); self.assertEqual(argv[-1],'@4')
+
+    def test_healthy_or_codex_no_repo_session_is_left_alone(self):
+        data={'accounts':[account('claude','old',10)]}
+        for agent in ('','codex'):
+            with patch.object(flow,'tm',side_effect=self.norepo_tm(agent)), patch.object(flow,'run',return_value='old'), \
+                 patch.object(flow,'claude_wall',return_value=False), patch.object(flow,'inspect') as inspect, \
+                 patch.dict(flow.ACCOUNT,inventory=lambda:data), patch.object(flow.subprocess,'Popen') as popen:
+                flow.reconcile_windows('test',False)
+            inspect.assert_not_called(); popen.assert_not_called()
+
     def test_sleep_preserves_pending_request_until_wake(self):
         path=flow.root()/'retained';path.mkdir(parents=True)
         request=dict(source=self.source,state='waiting',hard=False)

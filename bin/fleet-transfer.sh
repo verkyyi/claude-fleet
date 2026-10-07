@@ -215,7 +215,11 @@ WIN=$(TM display-message -p -t "$TARGET" '#{window_id}' 2>/dev/null) || die 'win
 PANE=$(TM list-panes -t "$WIN" -F '#{pane_id}|#{@sidebar}' 2>/dev/null \
   | awk -F'|' '$2 != "1" { pane=$1; n++ } END { if (n == 1) print pane; else exit 1 }') \
   || die 'transfer requires exactly one worker pane (sidebars are allowed)'
-[ "$(opt '#{session_name}')" = "$SESS" ] || die 'window belongs to a different session'
+# The group-or-name form (issue #1489): with a Fleet Shell view attached a bare
+# #{session_name} names the view (`<fleet>@view-<id>`), and every window — the
+# no-repo guide included — read as another session's, so failover marked them
+# all unsupported and none could leave a walled account (issue #2102).
+[ "$(opt "$FLEET_SESSION_FMT")" = "$SESS" ] || die 'window belongs to a different session'
 case "$(opt '#{window_name}')" in dash|plan|backlog|home) die 'panel windows cannot be transferred' ;; esac
 [ "$(opt '#{@hub}')" != 1 ] || die 'the hub cannot be transferred'
 SOURCE_AGENT=$(opt '#{@cc_agent}'); SOURCE_AGENT=${SOURCE_AGENT:-claude}

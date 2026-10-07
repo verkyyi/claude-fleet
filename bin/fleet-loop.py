@@ -65,7 +65,9 @@ def current(r):
     f = r['fleet']
     want = '|'.join([f['session'], f['window_id'], str(r['pane_pid']), r.get('agent','codex'),
                      r['manifest'], r['worktree']])
-    got = pane(r, '#{session_name}|#{window_id}|#{pane_pid}|#{@cc_agent}|#{@handoff_manifest}|#{@worktree}')
+    # group-or-name (issues #1489, #2102): a bare session_name names a Fleet
+    # Shell view session while one is attached, and every loop read as moved.
+    got = pane(r, '#{?#{session_group},#{session_group},#{session_name}}|#{window_id}|#{pane_pid}|#{@cc_agent}|#{@handoff_manifest}|#{@worktree}')
     if got != want or pane(r, '#{pane_dead}') == '1':
         raise ValueError('pane, agent, worktree or handoff identity changed')
     if r.get('thread_id'):
