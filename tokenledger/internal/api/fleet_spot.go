@@ -560,7 +560,7 @@ func (c *SpotController) finish(n store.SpotNode, pod spot.Pod, found bool, rost
 		if err := c.s.Store.DeleteNode(n.EndpointID); err != nil {
 			c.logf("fleet: SPOT %s: drop roster row: %v", n.ID, err)
 		}
-		if _, err := c.s.Store.RetireEndpoint(n.EndpointID); err != nil {
+		if _, err := c.s.Store.RetireEndpointAs(n.EndpointID, "spot", "SPOT node released", time.Now()); err != nil {
 			c.logf("fleet: SPOT %s: retire endpoint: %v", n.ID, err)
 		}
 		c.s.nodes.dropAll(n.EndpointID)

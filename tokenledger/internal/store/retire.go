@@ -174,14 +174,82 @@ func (s *Store) EndpointByID(endpointID string) (*Endpoint, error) {
 // wanted gone. Re-enrolling is the supported path: a new id, a new token, and
 // the retired endpoint keeps its history exactly as it stands.
 func (s *Store) RetireEndpoint(endpointID string) (bool, error) {
-	res, err := s.write.Exec(`UPDATE endpoints SET retired_at = ?
-		WHERE endpoint_id = ? AND retired_at IS NULL`,
-		fmtTime(time.Now().UTC()), endpointID)
+	r, err := s.RetireEndpointAs(endpointID, "operator", "", time.Now())
+	return r.Retired, err
+}
+
+// RetireResult is what one retire did.
+type RetireResult struct {
+	Retired bool // false: it was already retired, nothing changed
+	Passes  int  // session passes (fleet_session_creds) this endpoint issued, revoked with it
+}
+
+// RetireEndpointAs is RetireEndpoint with who did it and why, and the rest
+// of the revocation in the same transaction (claude-fleet#1403):
+//
+//   - every live session pass the endpoint's node issued (claude-fleet#1969)
+//     is revoked with it — a pass is the node's word that a session is its
+//     own, and the node's word is exactly what was just withdrawn;
+//   - one fleet_audit row: actor, node_revoke, endpoint:<id>, the outcome.
+//
+// Both tables exist only with the fleet module on (EnsureNodes); on a hub
+// without it (`ccquota endpoint retire` against a plain ledger) the retire
+// alone happens, exactly as before. A no-op retire changes and records
+// nothing.
+func (s *Store) RetireEndpointAs(endpointID, actor, reason string, at time.Time) (RetireResult, error) {
+	var out RetireResult
+	tx, err := s.write.Begin()
 	if err != nil {
-		return false, fmt.Errorf("retire endpoint: %w", err)
+		return out, fmt.Errorf("retire endpoint: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE endpoints SET retired_at = ?
+		WHERE endpoint_id = ? AND retired_at IS NULL`,
+		fmtTime(at.UTC()), endpointID)
+	if err != nil {
+		return out, fmt.Errorf("retire endpoint: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return out, nil
+	}
+	out.Retired = true
+	if ok, err := txHasTable(tx, "fleet_session_creds"); err != nil {
+		return out, fmt.Errorf("retire endpoint: %w", err)
+	} else if ok {
+		why := "the node's enrollment was revoked"
+		if reason != "" {
+			why += ": " + reason
+		}
+		res, err := tx.Exec(`UPDATE fleet_session_creds SET revoked_at = ?, revoked_by = ?, reason = ?
+			WHERE endpoint_id = ? AND revoked_at IS NULL`, at.UTC().Format(sessRFC), actor, why, endpointID)
+		if err != nil {
+			return out, fmt.Errorf("retire endpoint: revoke its session passes: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		out.Passes = int(n)
+	}
+	if ok, err := txHasTable(tx, "fleet_audit"); err != nil {
+		return out, fmt.Errorf("retire endpoint: %w", err)
+	} else if ok {
+		outcome := fmt.Sprintf("REVOKE passes=%d", out.Passes)
+		if reason != "" {
+			outcome += " reason=" + reason
+		}
+		if _, err := tx.Exec(`INSERT INTO fleet_audit (actor, worker_id, worker_key, action, fleet_id, outcome, operation_id, created)
+			VALUES (?, '', '', 'node_revoke', ?, ?, '', ?)`, actor, "endpoint:"+endpointID, outcome, at.UTC().Format(rfc)); err != nil {
+			return out, fmt.Errorf("retire endpoint: audit: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return RetireResult{}, fmt.Errorf("retire endpoint: %w", err)
+	}
+	return out, nil
+}
+
+func txHasTable(tx *sql.Tx, name string) (bool, error) {
+	var n int
+	err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n)
+	return n > 0, err
 }
 
 // InUseError says an endpoint cannot be deleted because its history is in the

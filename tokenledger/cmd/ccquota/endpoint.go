@@ -169,11 +169,11 @@ func endpointRetire(st *store.Store, id string) error {
 	if err != nil {
 		return err
 	}
-	changed, err := st.RetireEndpoint(id)
+	res, err := st.RetireEndpointAs(id, "cli", "", time.Now())
 	if err != nil {
 		return err
 	}
-	if !changed {
+	if !res.Retired {
 		return fmt.Errorf("%s was already retired (%s)", id,
 			ep.RetiredAt.Local().Format(time.RFC3339))
 	}
@@ -182,6 +182,9 @@ func endpointRetire(st *store.Store, id string) error {
 		name = id
 	}
 	fmt.Printf("Retired %q (%s). Its enrollment token is no longer accepted.\n", name, id)
+	if res.Passes > 0 {
+		fmt.Printf("%d session pass(es) it issued were revoked with it.\n", res.Passes)
+	}
 
 	// Say plainly what was kept. An operator who wanted the row gone should
 	// find out now, from the machine that did the thing, rather than later
