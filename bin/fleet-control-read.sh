@@ -280,8 +280,13 @@ case "$mode" in
     # No $5 → the fleet's only repo (fleet_target_repo, issue #1938) — a fleet
     # hosting several refuses (6): two repos can both have an issue-12. The
     # adapter acts for the hub, never for a pane, so the pane step is off.
-    srepo=''
-    if [ -n "${5:-}" ]; then
+    srepo=''; norepo=0
+    # `-` (issue #1956, the writing area's 「不关联仓库」): a scratch of no repo —
+    # opened in $HOME with --no-repo; anything but a scratch is refused (6).
+    if [ "${5:-}" = - ]; then
+      [ "${3:-}" = scratch ] || { printf 'start: only a scratch belongs to no repo\n' >&2; exit 6; }
+      norepo=1
+    elif [ -n "${5:-}" ]; then
       srepo=$(fleet_repo_for_slug "$sess" "$5") || { printf 'start: %s is not a repo this fleet hosts\n' "$5" >&2; exit 6; }
     else
       srepo=$( unset TMUX TMUX_PANE; fleet_target_repo "$sess" ) || {
@@ -317,8 +322,16 @@ case "$mode" in
       # receipt the controller reads back (`<window_id>\t<name>\t<worktree>\t<fleet_id>`).
       # $7 is read like an issue's but not replayed: dash-raw-session.sh has no
       # --account yet, so a scratch runs on the opening fleet's pick.
-      sname="${8:-}"
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"}
+      # stdin (issue #1956): the writing area's text, the seed the session
+      # starts working on (--prompt-file: arbitrary text never meets a shell).
+      sname="${8:-}"; seedf=''
+      if [ ! -t 0 ]; then
+        seedf=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") || exit 1
+        cat > "$seedf"
+        [ -s "$seedf" ] || { rm -f "$seedf"; seedf=''; }
+      fi
+      nrarg=''; [ "$norepo" = 1 ] && nrarg=--no-repo
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${seedf:+"--prompt-file=$seedf"}
     fi
     num="${3:-}"
     if [ "$num" = new ]; then
