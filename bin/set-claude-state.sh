@@ -270,8 +270,15 @@ if [ "$sem" != "leave" ]; then
   # the `needs` subtype, ALWAYS written beside the state it qualifies (issue #640):
   # a working/done write clears it, so no reader can ever pair a fresh state with a
   # stale reason.
-  tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" \; \
-       set-window-option -t "$TMUX_PANE" @claude_needs_detail "$detail" 2>/dev/null
+  # …and its question (issue #1951), in the same call: unset when there is none,
+  # so a window that never asked carries exactly the options it always did.
+  if [ -n "$detail" ]; then
+    tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" \; \
+         set-window-option -t "$TMUX_PANE" @claude_needs_detail "$detail" 2>/dev/null
+  else
+    tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" \; \
+         set-window-option -u -t "$TMUX_PANE" @claude_needs_detail 2>/dev/null
+  fi
   # …and WHY a Stop wrote `looping` (issue #1370) beside it; only a Stop decides it,
   # and a window that waits on nothing carries no option at all.
   if [ "$sem" = 'done' ]; then
