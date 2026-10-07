@@ -443,7 +443,7 @@ eq "14: …and drew nothing" "" "$(FLEET_C="$WORK/.claude-dash" bash "$FA" list 
 # pending retry record makes the refresh hand `resume` off, detached — and with
 # no record it forks nothing. A sandbox bin with a recording fake relogin.
 mkdir -p "$WORK/bin14r" "$WORK/conf14/handoffs/retry/x-1"
-for f in fleet-alerts.sh usage-lib.sh fleet-daemon-lib.sh fleet-lib.sh fleet-config-lib.sh .fleet-account.py; do [ -e "$BIN/$f" ] && ln -sf "$BIN/$f" "$WORK/bin14r/$f"; done
+for f in fleet-alerts.sh usage-lib.sh fleet-daemon-lib.sh fleet-lib.sh fleet-config-lib.sh .fleet-account.py fleet_iso.py; do [ -e "$BIN/$f" ] && ln -sf "$BIN/$f" "$WORK/bin14r/$f"; done
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/relogin14"\n' "$WORK" > "$WORK/bin14r/fleet-relogin.sh"
 fa14r() { FLEET_CONF_DIR="$WORK/conf14" FLEET_QUOTA_BIN="$WORK/shim/ccquota" FLEET_C="$WORK/.claude-dash" FLEET_ALERTS_REAUTH_SECS=0 PATH="$WORK/shim:$PATH" TMUX='' bash "$WORK/bin14r/fleet-alerts.sh" "$@"; }
 rm -f "$G"/alerts.* "$G/account.reauth" "$WORK/relogin14"

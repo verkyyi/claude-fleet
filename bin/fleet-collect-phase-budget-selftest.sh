@@ -60,7 +60,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet-lib.sh usage-lib.sh fleet-restore.sh; do
+for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet_iso.py fleet-lib.sh usage-lib.sh fleet-restore.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
@@ -71,7 +71,7 @@ WORK="$(cd "$WORK" && pwd -P)"
 HANGMARK="collect-phase-budget-hang-$$"
 trap 'pkill -9 -f "$HANGMARK" >/dev/null 2>&1; rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf/fleets/sessA" "$WORK/.claude-dash/global"
-for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet-lib.sh usage-lib.sh fleet-restore.sh; do
+for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet_iso.py fleet-lib.sh usage-lib.sh fleet-restore.sh; do
   cp "$BIN/$f" "$WORK/bin/"
 done
 chmod +x "$WORK/bin/"*.sh

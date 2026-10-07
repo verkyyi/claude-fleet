@@ -24,7 +24,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 # The fake ccquota (issue #1667): the ONE registered Codex profile, its login
 # state read from a file; no file = no profiles, so every leg that does not set

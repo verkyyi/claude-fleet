@@ -28,7 +28,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/quota-verdict-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf" "$WORK/.claude-dash/global"
-for f in fleet-account.sh fleet-lib.sh usage-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
+for f in fleet-account.sh fleet_iso.py fleet-lib.sh usage-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 printf 'tok-a\n' > "$WORK/accounts/a"; printf 'tok-b\n' > "$WORK/accounts/b"
 chmod 600 "$WORK/accounts/a" "$WORK/accounts/b"
 G="$WORK/.claude-dash/global"
