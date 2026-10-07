@@ -564,6 +564,8 @@ def list_agents():
     agents = []
     for line in out.splitlines():
         parts = line.split("\t")
+        if len(parts) == 12:
+            parts.append("")            # no @fleet_role column: an older reader's row
         if len(parts) != 13 or parts[1] != session or parts[2] in ("dash", "plan", "backlog", "home"):
             continue
         row = dict(zip(("window_id", "session", "window_name", "issue", "agent", "state", "needs",
