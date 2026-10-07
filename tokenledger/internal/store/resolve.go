@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
@@ -375,4 +376,63 @@ func (s *Store) SourcePoolBinding(source string) (string, error) {
 		return "", nil
 	}
 	return bound, err
+}
+
+// ResolveCredentialLabel names the account a vault credential's label points
+// at, or "" when no single account fits (claude-fleet#2104).
+//
+// A setup token cannot say which account it belongs to, so the agent keys its
+// reading by the seven-day reset fingerprint and ResolveFingerprint folds that
+// onto the real account by the account's LAST known reset. Once the real login
+// stops reporting — it moved onto the vault's setup token — that last reset is
+// frozen, and the first time the schedule moves the fingerprint matches
+// nothing: a "win_…" phantom appears beside the account it is, and the hub's
+// subscription count is one too many. The agent knows one more thing — the
+// label the operator imported the token under ("icloud", "ly297") — and that
+// label names its account the way the operator wrote it: the e-mail, its local
+// part, its domain ("gmail" ↔ verky.yi@gmail.com) or the display name.
+//
+// Exact keys first, then the domain; each tier must fit exactly ONE account of
+// the same source, never a fingerprint or a pool — two candidates is a guess,
+// and a wrong guess would hand one subscription's meter to another.
+func (s *Store) ResolveCredentialLabel(source, label string) (string, error) {
+	want := strings.ToLower(strings.TrimSpace(label))
+	if want == "" {
+		return "", nil
+	}
+	rows, err := s.read.Query(`SELECT account_uuid, email, display_name FROM accounts WHERE source = ?`, source)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var exact, domain []string
+	for rows.Next() {
+		var uuid string
+		var email, name sql.NullString
+		if err := rows.Scan(&uuid, &email, &name); err != nil {
+			return "", err
+		}
+		if sessions.IsFingerprint(uuid) || uuid == PoolAccount(source) {
+			continue
+		}
+		e := strings.ToLower(strings.TrimSpace(email.String))
+		local, dom, _ := strings.Cut(e, "@")
+		switch {
+		case want == strings.ToLower(uuid), e != "" && (want == e || want == local),
+			want == strings.ToLower(strings.TrimSpace(name.String)):
+			exact = append(exact, uuid)
+		case dom != "" && (want == dom || want == strings.SplitN(dom, ".", 2)[0]):
+			domain = append(domain, uuid)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	switch {
+	case len(exact) == 1:
+		return exact[0], nil
+	case len(exact) == 0 && len(domain) == 1:
+		return domain[0], nil
+	}
+	return "", nil
 }
