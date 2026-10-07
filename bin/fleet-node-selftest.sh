@@ -141,7 +141,7 @@ fleet_in() {
   mkdir -p "$h/.config/claude-fleet"
   [ -f "$h/.config/claude-fleet/fleet.conf" ] || HOME="$h" FLEET_CONF_DIR="$h/.config/claude-fleet" \
     "$BIN/fleet-conf.sh" set-hub "$HUB" --role client >/dev/null 2>&1
-  HOME="$h" FLEET_CONF_DIR="$h/.config/claude-fleet" XDG_CONFIG_HOME="$h/.config" FLEET_HUB_URL="" \
+  HOME="$h" FLEET_CONF_DIR="$h/.config/claude-fleet" XDG_CONFIG_HOME="$h/.config" FLEET_HUB_URL="" FLEET_LOGIN_BROWSER=0 \
     FLEET_JOIN_POLL=1 FLEET_JOIN_SUDO="" FLEET_NODE_JOIN_ARGS="--no-deps --no-fleet --service detached --wait 15" \
     FLEET_PROBE_CURL="$SB/probe-curl" FLEET_PROBE_PMSET=false FLEET_PROBE_OS=Darwin \
     "$BIN/fleet" "$@" >"$SB/out" 2>&1 </dev/null
@@ -189,12 +189,12 @@ else bad "A peer section: $(cat "$SNIP" 2>/dev/null) / $(cat "$SB/h1/.config/cla
 norm <"$SB/out" >"$SB/node.out"
 cat >"$SB/node.want" <<'EOF'
 
-用手机扫码或在浏览器打开下面的链接，用 GitHub 登录后点确认（验证码 BCDF-GHJK）：
+用手机扫码，用 GitHub 登录后点「确认签发」（验证码 BCDF-GHJK）：
 
 <QR>
 
   链接：http://hub.test/fleet/login?code=BCDF-GHJK
-  密钥指纹 SHA256:testfp · 30 秒内有效
+  密钥指纹 SHA256:testfp
 
 ✓ 证书已写入 <HOME>/.ssh/fleet-cert-cert.pub（2026-10-05T12:00:00Z 前有效，账号 alice）
 ✓ ssh 配置 <HOME>/.ssh/fleet-ssh-config（已在 ~/.ssh/config 末尾 Include）

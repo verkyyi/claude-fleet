@@ -43,6 +43,8 @@
 #   H. logout     `fleet logout`: the node leaves the hub (/v1/node/leave),
 #                 node.env, the certificate and the device key are gone
 set -uo pipefail
+# the scans draw the QR: a runner with a GUI session never opens a real browser (#2262)
+export FLEET_LOGIN_BROWSER=0
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-join-st.XXXXXX") || exit 2
 HUB_PID=""
