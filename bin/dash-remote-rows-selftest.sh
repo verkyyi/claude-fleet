@@ -811,7 +811,7 @@ print(str(g.get("key")) + "|" + str(g.get("worker_id")) + "|" + str(r.get("key")
   gfid=$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wg" @fleet_id)
   case "$gfid" in ????????-????-????-????-????????????) ;; *) fail "G: the adapter minted no @fleet_id for a keyless window (got '$gfid')" ;; esac
   eq "G: a keyless no-repo window is listed under its minted identity; a raw scratch keys off its cwd; no panel" \
-     "None|$U/$gfid|scratch-21|False" "$got"
+     "None|$U/$gfid|acme-app:scratch-21|False" "$got"   # the scratch key carries the repo (#1939)
   got=$(bash "$BIN/fleet-remote-view.sh" sessions 2>&1 | python3 -c 'import json, sys
 d = json.load(sys.stdin); print(";".join(sorted(s["worker_id"].split("/", 1)[1] for s in d["sessions"])))' 2>&1)
   has "G: remote-view sessions lists the keyless window too" "$got" "$gfid"
