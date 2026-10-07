@@ -1036,6 +1036,31 @@ echo "https://github.com/example/project/issues/128"
         self.assertEqual((failed["status"], failed["result"]["error"]["exit"]), ("failed", 7))
         self.assertEqual(len((self.node.conf / "spawn.calls").read_text().splitlines()), 1)
 
+    def test_start_carries_the_agent(self):
+        # issue #2232 (EPIC #2230 C2): the agent picked in the writing area rides
+        # worker_start's `agent` to the spawn as --agent, for every kind of start;
+        # one of two words, never free text; none = the fleet's own (claude here),
+        # the argv an older hub's start gets, byte for byte.
+        for bad in ({"issue": 1, "agent": "gpt"}, {"issue": 1, "agent": "codex; rm -rf ~"}, {"issue": 1, "agent": 1}):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                validate_write("worker_start", bad)
+        self.node.script(self.node.bin / "fleet-issue-file.sh", '''#!/bin/bash
+echo "https://github.com/example/project/issues/131"
+''')
+        for key, params in (("a-issue", {"issue": 130, "agent": "codex"}),
+                            ("a-new", {"kind": "new", "title": "在 m4 上用 codex", "agent": "codex"}),
+                            ("a-scratch", {"kind": "scratch", "name": "codex 试试", "agent": "codex"}),
+                            ("a-none", {"issue": 132})):
+            op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key=key,
+                                                               params=params))["operation_id"])
+            self.assertEqual(op["status"], "succeeded", key)
+        self.assertEqual((self.node.conf / "spawn.calls").read_text(),
+                         "130 demo --agent codex --origin hub --repo example/project\n"
+                         "131 demo --agent codex --origin hub --repo example/project\n"
+                         "132 demo --agent claude --origin hub --repo example/project\n")
+        self.assertEqual((self.node.conf / "scratch.calls").read_text(),
+                         "demo --origin hub --print --agent codex --repo example/project --name codex 试试\n")
+
     def test_move_in_runs_the_target_half_and_maps_its_outcome(self):
         # issue #1426: a session moved here through the hub. Every value is held
         # to the hub's own rule before it can become an argv word…

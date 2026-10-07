@@ -74,8 +74,10 @@
 #   viewer <session>       the right pane of `home`: a nested client of the stage,
 #                          started again (with the stage, when it is gone) for as
 #                          long as the shell's server lives
-#   wait <session>         the stage's first window when no machine is online: a
-#                          note, gone as soon as a row opens a real one
+#   wait <session> [<machine>]  the stage's first window when no machine is online: a
+#                          note, gone as soon as a row opens a real one. With a
+#                          machine (THIS computer, no fleet of this login here —
+#                          issue #2219): the home page, how to start, instead
 #   portal <session>       ⌘N / prefix c / a tap on 「新任务」 (issue #1953): the
 #                          stage's writing-area window (`@fleet_role portal`,
 #                          `@remote new`, bin/fleet-compose.py) made once and
@@ -520,7 +522,9 @@ stage_up() {
   local cmd="${1:-}" remote="${2:--:}" title="${3:-fleet}" w
   TS has-session -t "=$STAGE" 2>/dev/null && return 0
   [ -f "$CACHE/tmux-stage.conf" ] || return 1
-  [ -n "$cmd" ] || cmd="exec bash $(sq "$SHADOW/fleet-shell.sh") wait $(sq "$SESS")"
+  # the home page's machine (issue #2219), so a stage started again shows the same
+  local hm=''; { read -r hm < "$CACHE/home-machine"; } 2>/dev/null
+  [ -n "$cmd" ] || cmd="exec bash $(sq "$SHADOW/fleet-shell.sh") wait $(sq "$SESS")${hm:+ $(sq "$hm")}"
   w=$(TS -f "$CACHE/tmux-stage.conf" new-session -d -P -F '#{window_id}' -s "$STAGE" -n "$title" -c "$HOME" -x 180 -y 50 "$cmd") \
     || return 1
   TS set-window-option -t "$w" @remote "$remote" \; set-window-option -t "$w" automatic-rename off 2>/dev/null
@@ -857,7 +861,7 @@ wait)
   # missing one names who to ask. No line (a login they hold, no hub, an older
   # hub): the note as before. Read again every second, redrawn on a change.
   hr="${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}/hub_repos"
-  said=''
+  said='' seen='' n=0
   while :; do
     st='' eta='' mach='' ask=''
     acct=$(awk -F $'\037' '$1 == "#account" { print $2 FS $3 FS $4 FS $5; exit }' "$hr" 2>/dev/null)
@@ -868,7 +872,11 @@ EOF
       opening) note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_opening_fmt "${mach:-…}" "${eta:-60}") ;;
       failed)  note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_failed_fmt "${ask:-?}") ;;
       none)    note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_none_fmt "${ask:-?}") ;;
-      *)       note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_nohost) ;;
+      # the home page (issue #2219): the pick was THIS computer and this login
+      # has no fleet here — a client that only looks and hands out work, not a
+      # failed connection: how to start, instead
+      *)       if [ -n "${3:-}" ]; then note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_home_fmt "$3")
+               else note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_nohost); fi ;;
     esac
     note="$note
   $(sh "$BIN/fleet-ui-lang.sh" t shell_wait_leave)"
@@ -877,10 +885,13 @@ EOF
       said=$note
     fi
     # its own server's windows: the stage's (issue #1759), or — a shell started
-    # before it — the shell's own
+    # before it — the shell's own. The stage comes up BEFORE the shell's server
+    # (issue #2219): a shell not there yet is not a shell gone — up to 10 s of
+    # grace, else this page closed at once and the viewer's restart showed another
     [ "$(tmux list-windows -F x 2>/dev/null | grep -c x)" -le 1 ] || exit 0
-    tmux -L "$s" has-session -t "=$s" 2>/dev/null || exit 0
-    sleep 1
+    if tmux -L "$s" has-session -t "=$s" 2>/dev/null; then seen=1
+    elif [ -n "$seen" ] || [ "$n" -ge 10 ]; then exit 0; fi
+    n=$((n + 1)); sleep 1
   done
   ;;
 # ---------------------------------------------------------------------------------
@@ -1139,10 +1150,23 @@ fi
 #    machine's window (issue #1759), then the shell's one window, `home`, whose
 #    right pane looks at the stage
 write_conf || fail_start "写不了 $CACHE/tmux.conf"
+# The pick is THIS computer but this login has no fleet here (issue #2219: a
+# newcomer's 「只看、只派」 client on the machine the hub knows them by): no
+# connection that can only fail with 「没有活着的 fleet 会话」 — the home page,
+# how to start, in its place.
+home=''
+if [ -n "$node" ] && this_machine "$node" && ! bash "$SHADOW/fleet-remote-view.sh" live >/dev/null 2>&1; then
+  home=$node; node=''
+fi
+if [ -n "$home" ]; then printf '%s\n' "$home" > "$CACHE/home-machine"; else rm -f "$CACHE/home-machine"; fi
 if [ -n "$node" ]; then
   title="$node"
   cmd="exec bash $(sq "$SHADOW/fleet-remote-view.sh") run --shell $(sq "$node") -"
   remote="$node:"
+elif [ -n "$home" ]; then
+  title="fleet"
+  cmd="exec bash $(sq "$SHADOW/fleet-shell.sh") wait $(sq "$SESS") $(sq "$home")"
+  remote="-:"
 else
   title="fleet"   # no machine picked yet; known by @remote=-:, not the name (#1621)
   cmd=''          # stage_up's default: the `wait` note

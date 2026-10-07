@@ -293,3 +293,65 @@ func TestClientPlaceNeedsALease(t *testing.T) {
 		t.Fatal("sent a write without a lease")
 	}
 }
+
+// The writing area's machine and agent (claude-fleet#2232, EPIC #2230 C2): a
+// request with neither is today's (auto, no agent sent); naming m4 with codex
+// lands there even when auto would pick m5, and the agent rides the write to
+// the node as it was asked; naming a machine in maintenance is refused with
+// its reason and nothing is sent.
+func TestClientPlaceNamedNodeAndAgent(t *testing.T) {
+	h, m5, m4, f5, f4 := twoNodes(t)
+	lease, key := clientLeaseFor(t, h)
+	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@4",
+		"workers": []map[string]any{{"window_id": "@4", "worker_id": f4.FleetID + "/issue-77"}}}))
+
+	// An older client: no node, no agent — auto (m5 busy → m4), no agent key.
+	st, out := clientPlace(t, h, lease, key, map[string]any{"repo": writeRepo, "kind": "new", "title": "老客户端"})
+	if st != 200 || out.Exit != 0 || m4.count() != 1 {
+		t.Fatalf("old request = %d %+v (m4 writes %d); want done on m4", st, out, m4.count())
+	}
+	params := m4.writes[0]["params"].(map[string]any)
+	if _, ok := params["agent"]; ok {
+		t.Fatalf("an older client's start carried an agent: %v", params)
+	}
+
+	// m5 idle now: auto would pick it — naming m4 still lands on m4, with codex.
+	m5.beatLoad("m5", "verk", machineA, 0.5, 0, f5)
+	waitFor(t, 3*time.Second, "m5 reports idle", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_m5", time.Now())
+		return hb.Load1 == 0.5
+	})
+	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m5" {
+		t.Fatalf("auto now = %q %v; want m5", pl.Machine, err)
+	}
+	st, out = clientPlace(t, h, lease, key, map[string]any{"repo": writeRepo, "kind": "new", "title": "在 m4 上用 codex",
+		"node": "m4", "agent": "codex"})
+	if st != 200 || out.Exit != 0 || !strings.HasPrefix(out.Line, "REMOTE m4 ") || out.Placement == nil ||
+		out.Placement.Requested != "m4" {
+		t.Fatalf("named m4 = %d %+v; want REMOTE m4 as requested", st, out)
+	}
+	if m5.count() != 0 || m4.count() != 2 {
+		t.Fatalf("writes m5=%d m4=%d; want 0 and 2", m5.count(), m4.count())
+	}
+	if params := m4.writes[1]["params"].(map[string]any); params["agent"] != "codex" || params["kind"] != "new" {
+		t.Fatalf("m4 was sent %v; want agent=codex", params)
+	}
+	if st, _ := clientPlace(t, h, lease, key, map[string]any{"repo": writeRepo, "kind": "new", "title": "x",
+		"agent": "gpt"}); st != 400 {
+		t.Fatalf("agent=gpt = %d; want 400", st)
+	}
+
+	// m5 in maintenance: naming it is refused, saying why; nothing is sent.
+	if st, mo := maintCall(t, h, h.tokens["m5"], http.MethodPost, map[string]any{"action": "enter", "reason": "升级 macOS"}); st != 200 {
+		t.Fatalf("enter = %d %v", st, mo)
+	}
+	st, out = clientPlace(t, h, lease, key, map[string]any{"repo": writeRepo, "kind": "new", "title": "开到 m5",
+		"node": "m5", "agent": "codex"})
+	if st != 200 || out.Exit != 4 || !strings.HasPrefix(out.Line, "REFUSED NO_ELIGIBLE_NODE\t") ||
+		!strings.Contains(out.Line, "m5: maintenance: 升级 macOS") {
+		t.Fatalf("named m5 in maintenance = %d %+v; want REFUSED with the maintenance reason", st, out)
+	}
+	if m5.count() != 0 || m4.count() != 2 {
+		t.Fatalf("a refused start sent a write: m5=%d m4=%d", m5.count(), m4.count())
+	}
+}

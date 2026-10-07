@@ -27,6 +27,9 @@
 #                certificate (a PATH `ssh` stand-in: a fake node has no sshd);
 #                a second `fleet` asks for no scan; under the renew threshold
 #                it renews with the device key, no scan (the 12-hour roll)
+#   4b. home   — `fleet` ON the machine the hub picks, with no fleet of this
+#                login there (issue #2219): the right pane is the home page,
+#                never 「正在连接 <本机>」 / 「没有活着的 fleet 会话」
 #   5. opening — the same person with no login yet and fleet.auto_assign on
 #                (a newcomer's first look, #2069): the right pane says
 #                正在为你开机器, never 入口没有在线的机器 (issue #2220)
@@ -51,7 +54,7 @@ CCQ=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --ccquota) CCQ=${2:-}; shift 2 ;;
-    -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'newcomer-e2e: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -82,7 +85,7 @@ ok() { printf '   ✓ %s\n' "$1"; }
 scrub() { sed -E 's/fd_[a-z2-7]{20,}/fd_…/g; s/"(token|approve_code|certificate)":"[^"]*"/"\1":"…"/g'; }
 logs() {
   local f
-  for f in hub.log agent.log install.log login.out fleet.err fleet2.err ssh.log; do
+  for f in hub.log agent.log install.log login.out fleet.err fleet2.err fleet4.err ssh.log; do
     [ -s "$WORK/$f" ] || continue
     printf -- '--- %s (last 40)\n' "$f"; tail -n 40 "$WORK/$f" | scrub
   done
@@ -352,6 +355,33 @@ after=$(ssh-keygen -L -f "$CERT" | awk '/Serial:/{print $2}')
 [ "$after" != "$before" ] || die 'the certificate was not renewed under the threshold' "$(cat "$WORK/fleet3.err")"
 [ "$(grep -c '>>> fleet login' "$CH/.ssh/config")" = 1 ] || die 'renewal added a second Include' "$(cat "$CH/.ssh/config")"
 ok "no scan the second time; renewed by key (serial $before → $after)"
+ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+
+# =============================================================================
+step 'home: on the very machine the hub picks, with no fleet of theirs there'
+# The C8 drill (issue #2219): the newcomer's 「只看、只派」 client ran ON the
+# machine the hub knows them by. This login has no fleet here, so the right pane
+# is the home page — never 「正在连接 <本机>」 then 「没有活着的 fleet 会话」.
+# the last step's shell fully gone first: its right pane (`viewer`) starts the
+# stage again when the stage goes before it, and a stage left behind is reused
+pkill -f "fleet-shell.sh [a-z]* $SESS" 2>/dev/null
+ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+stage_gone() { ! "$REAL_TMUX" -L "$SESS-stage" has-session 2>/dev/null; }
+waitfor 5 stage_gone || die 'the last step left its stage running'
+printf '#!/bin/sh\necho %s\n' "$NODE" > "$SHIM/hostname"
+out=$(fenv "$FLEET" 2>"$WORK/fleet4.err" </dev/null); rc=$?
+printf '#!/bin/sh\necho newcomer-laptop\n' > "$SHIM/hostname"
+[ "$rc" = 0 ] && [ "$out" = "$SESS" ] || die "fleet on the picked machine exited $rc" "$(tail -n 8 "$WORK/fleet4.err")"
+P="$SESS"; waitfor 5 "$REAL_TMUX" -L "$SESS-stage" has-session -t "=$SESS-stage" && P="$SESS-stage"
+w1=$(tp list-windows -t "=$P" -F '#{window_id}' | head -1)
+remote=$(tp show-options -wqv -t "$w1" @remote)
+[ "$remote" = '-:' ] || die "the right pane connects to this computer ($NODE) with no fleet here" "@remote=$remote"
+homepg() { tp capture-pane -p -t "$w1" 2>/dev/null | grep -q '没有你的 fleet 会话'; }
+waitfor 10 homepg || die 'the right pane is not the home page' "$(tp capture-pane -p -t "$w1" 2>/dev/null | grep -v '^$'
+  tp list-windows -t "=$P" -F '#{window_id} @remote=#{@remote} #{pane_start_command}' 2>/dev/null)"
+pg=$(tp capture-pane -p -t "$w1" 2>/dev/null)
+case "$pg" in *正在连接*|*没有活着的*) die 'the right pane still tries this computer' "$pg" ;; esac
+ok "@remote=-: · the home page, no 正在连接 $NODE, no 没有活着的 fleet 会话"
 ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
 
 # =============================================================================
