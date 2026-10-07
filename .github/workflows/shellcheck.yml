@@ -1,7 +1,10 @@
 name: shellcheck
 
+# `push` is master-only (a branch push only duplicated its PR's run) and a
+# re-push to a PR cancels its stale run — issue #2034.
 on:
   push:
+    branches: [master]
     paths:
       - 'bin/**'
       - 'hooks/**'
@@ -19,6 +22,10 @@ on:
       - '.shellcheckrc'
       - '.shellcheck-version'
       - '.github/workflows/shellcheck.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   shellcheck:
