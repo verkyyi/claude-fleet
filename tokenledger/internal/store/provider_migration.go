@@ -38,14 +38,14 @@ func migrateHourlyProvider(db *sql.DB) error {
 		return fmt.Errorf("usage_hourly definition not found in schema.sql")
 	}
 	end := start + strings.Index(schemaSQL[start:], ";") + 1
-	if _, err := tx.Exec(schemaSQL[start:end]); err != nil {
+	if _, err := tx.Exec(dialectOf(db).ddl(schemaSQL[start:end])); err != nil {
 		return err
 	}
 	// Copy whatever the old table actually has, not a hard-coded list: columns
 	// reach usage_hourly by two routes -- schema.sql and migrateDetails' ALTERs
 	// -- so the shape on disk depends on which version created the database.
 	// A fixed list drops a column on one of those histories, silently.
-	keep, err := commonColumns(tx, "usage_hourly_before_provider", "usage_hourly")
+	keep, err := commonColumns(dialectOf(db), tx, "usage_hourly_before_provider", "usage_hourly")
 	if err != nil {
 		return err
 	}
@@ -81,23 +81,18 @@ func migrateHourlyProvider(db *sql.DB) error {
 // commonColumns lists the columns both tables have, excluding provider (which
 // the old table by definition lacks). Order follows the old table, so the
 // SELECT and the INSERT line up.
-func commonColumns(tx *sql.Tx, from, to string) ([]string, error) {
+func commonColumns(d dialect, tx *sql.Tx, from, to string) ([]string, error) {
 	cols := func(table string) (map[string]bool, []string, error) {
-		rows, err := tx.Query(`SELECT name FROM pragma_table_info(?)`, table)
+		cs, err := d.columns(tx, table)
 		if err != nil {
 			return nil, nil, err
 		}
-		defer rows.Close()
 		set, order := map[string]bool{}, []string(nil)
-		for rows.Next() {
-			var n string
-			if err := rows.Scan(&n); err != nil {
-				return nil, nil, err
-			}
-			set[n] = true
-			order = append(order, n)
+		for _, c := range cs {
+			set[c.name] = true
+			order = append(order, c.name)
 		}
-		return set, order, rows.Err()
+		return set, order, nil
 	}
 	_, oldOrder, err := cols(from)
 	if err != nil {

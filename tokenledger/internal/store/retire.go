@@ -213,7 +213,7 @@ func (s *Store) RetireEndpointAs(endpointID, actor, reason string, at time.Time)
 		return out, nil
 	}
 	out.Retired = true
-	if ok, err := txHasTable(tx, "fleet_session_creds"); err != nil {
+	if ok, err := s.d.tableExists(tx, "fleet_session_creds"); err != nil {
 		return out, fmt.Errorf("retire endpoint: %w", err)
 	} else if ok {
 		why := "the node's enrollment was revoked"
@@ -228,7 +228,7 @@ func (s *Store) RetireEndpointAs(endpointID, actor, reason string, at time.Time)
 		n, _ := res.RowsAffected()
 		out.Passes = int(n)
 	}
-	if ok, err := txHasTable(tx, "fleet_audit"); err != nil {
+	if ok, err := s.d.tableExists(tx, "fleet_audit"); err != nil {
 		return out, fmt.Errorf("retire endpoint: %w", err)
 	} else if ok {
 		outcome := fmt.Sprintf("REVOKE passes=%d", out.Passes)
@@ -244,12 +244,6 @@ func (s *Store) RetireEndpointAs(endpointID, actor, reason string, at time.Time)
 		return RetireResult{}, fmt.Errorf("retire endpoint: %w", err)
 	}
 	return out, nil
-}
-
-func txHasTable(tx *sql.Tx, name string) (bool, error) {
-	var n int
-	err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n)
-	return n > 0, err
 }
 
 // InUseError says an endpoint cannot be deleted because its history is in the

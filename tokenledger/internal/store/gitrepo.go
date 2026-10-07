@@ -120,7 +120,7 @@ func (s *Store) RepoDeclaration(f Filter, repo string) (*RepoDeclaration, error)
 // figure explaining what it is still blind to.
 func (s *Store) AnyRepoDeclared() (bool, error) {
 	var n int64
-	err := s.read.QueryRow(`SELECT EXISTS(SELECT 1 FROM usage_hourly WHERE git_repo != '')`).Scan(&n)
+	err := s.read.QueryRow(`SELECT CASE WHEN EXISTS(SELECT 1 FROM usage_hourly WHERE git_repo != '') THEN 1 ELSE 0 END`).Scan(&n)
 	if err != nil {
 		return false, fmt.Errorf("any repo declared: %w", err)
 	}

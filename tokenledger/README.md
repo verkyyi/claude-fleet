@@ -175,6 +175,15 @@ The database defaults to `~/.ccquota/ccquota.db`, or `$CCQUOTA_DB`. If you point
 `--db` somewhere else, set `CCQUOTA_DB` to the same path for the shell you run
 `enroll` and `name` from — they act on that same file.
 
+**Postgres instead of the file** (claude-fleet#2120): set `CCQUOTA_DB_URL` to a
+`postgres://user:pass@host:5432/db?sslmode=require` connection string and the
+hub (and every `ccquota` command run with the same environment) uses that
+database; `--db` / `CCQUOTA_DB` are then not read. Unset — the default — it is
+the SQLite file above, exactly as before. The tables are created on first open,
+in the connection's current schema; text compares byte for byte (`COLLATE "C"`)
+whatever locale the database was created with. Moving an existing file's data
+across is a separate step (EPIC #2119).
+
 **Enroll each endpoint** (on the hub — the token is shown once):
 
 ```bash

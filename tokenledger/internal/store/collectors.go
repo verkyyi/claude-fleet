@@ -13,7 +13,7 @@ func (s *Store) InsertQuota(q model.QuotaSnapshot) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.write.Exec(`INSERT OR IGNORE INTO quota_snapshots VALUES(?,?,?,?,?,?,?)`, q.AccountUUID, q.Source, q.ProfileID, q.EndpointID, observationTime(q.ObservedAt), q.Observation, string(b))
+	_, err = s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO quota_snapshots VALUES(?,?,?,?,?,?,?)`), q.AccountUUID, q.Source, q.ProfileID, q.EndpointID, observationTime(q.ObservedAt), q.Observation, string(b))
 	return err
 }
 
@@ -163,7 +163,7 @@ func (s *Store) UpsertCollector(c model.CollectorStatus) error {
 		return err
 	}
 	if prev != "" && prev != c.AccountUUID {
-		if _, err = tx.Exec(`INSERT OR IGNORE INTO source_account_switches VALUES(?,?,?,?,?,?)`, c.EndpointID, c.Source, c.ProfileID, prev, c.AccountUUID, observationTime(c.ObservedAt)); err != nil {
+		if _, err = tx.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO source_account_switches VALUES(?,?,?,?,?,?)`), c.EndpointID, c.Source, c.ProfileID, prev, c.AccountUUID, observationTime(c.ObservedAt)); err != nil {
 			return err
 		}
 	}
@@ -214,7 +214,7 @@ func (s *Store) InsertAccountUsage(u model.AccountUsage) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.write.Exec(`INSERT OR IGNORE INTO account_usage_observations VALUES(?,?,?,?,?)`, u.AccountUUID, u.Source, u.EndpointID, observationTime(u.ObservedAt), string(b))
+	_, err = s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO account_usage_observations VALUES(?,?,?,?,?)`), u.AccountUUID, u.Source, u.EndpointID, observationTime(u.ObservedAt), string(b))
 	return err
 }
 
