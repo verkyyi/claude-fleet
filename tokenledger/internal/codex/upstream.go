@@ -1,8 +1,10 @@
 package codex
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -77,4 +79,43 @@ func upstreamRejection(home string, auth *Auth) *upstreamVerdict {
 		return nil
 	}
 	return &v
+}
+
+// AccessFingerprint names one access token without carrying it: the hex
+// SHA-256 of the token alone. It is what a node reports to the hub when the
+// upstream refused a leased token (claude-fleet#2007) and what the hub's vault
+// compares with its cached copy (credvault.AccessFingerprint is this one).
+func AccessFingerprint(token string) string {
+	if token == "" {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
+}
+
+// UpstreamRejection is a hub-leased home's standing refusal, as the node
+// reports it back to the hub: which access token (by AccessFingerprint), what
+// the upstream said, when.
+type UpstreamRejection struct {
+	Fingerprint string    `json:"fingerprint"`
+	Error       string    `json:"error,omitempty"`
+	At          time.Time `json:"at"`
+}
+
+// HubLeaseRejected reports the upstream's refusal of the access token a
+// hub-managed home holds right now (claude-fleet#2007): nil when the home is
+// not the hub's, holds no readable auth.json, or its current token was never
+// refused. A refusal recorded for an earlier token says nothing about this
+// one and is not reported.
+func HubLeaseRejected(home string) *UpstreamRejection {
+	// An identity ReadAuth cannot read does not unmake the refusal: the
+	// tokens are what was refused, and they were read.
+	auth, _ := ReadAuth(home)
+	if auth == nil || !auth.HubManaged || auth.accessFP == "" {
+		return nil
+	}
+	v := upstreamRejection(home, auth)
+	if v == nil {
+		return nil
+	}
+	return &UpstreamRejection{Fingerprint: auth.accessFP, Error: v.Error, At: v.At}
 }

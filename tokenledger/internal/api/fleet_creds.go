@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -47,7 +48,33 @@ type NodeCredential struct {
 	ExpiresAt *time.Time        `json:"expires_at,omitempty"`
 	Access    *credvault.Access `json:"access,omitempty"`
 	Error     string            `json:"error,omitempty"`
+	// State is CredStateReauth when nothing is leased because the account
+	// needs a new login (claude-fleet#2007); "" otherwise.
+	State string `json:"state,omitempty"`
 }
+
+// NodeCredentialsRequest is the (optional) body of POST /v1/node/credentials.
+// An agent that predates it sends none, and is answered exactly as before.
+type NodeCredentialsRequest struct {
+	// UpstreamRejected: leased access tokens the upstream has refused since
+	// (claude-fleet#2007) — token_revoked keeps its exp, so without this the
+	// hub would hand the same dead token back until it ran out.
+	UpstreamRejected []UpstreamRejected `json:"upstream_rejected,omitempty"`
+}
+
+// UpstreamRejected names one refused access token — by its fingerprint
+// (credvault.AccessFingerprint), never the token — for one leased account.
+type UpstreamRejected struct {
+	Provider    string     `json:"provider"`
+	Account     string     `json:"account"`
+	Fingerprint string     `json:"fingerprint"`
+	Error       string     `json:"error,omitempty"`
+	At          *time.Time `json:"at,omitempty"`
+}
+
+// CredStateReauth is NodeCredential.State for an account the provider has
+// refused (store.Credential.ReauthRequired): log in again and store it.
+const CredStateReauth = "reauth_required"
 
 // NodeCredentialsResponse is the answer to POST /v1/node/credentials.
 type NodeCredentialsResponse struct {
@@ -127,6 +154,11 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.vaultOff(w) {
+		return
+	}
+	var body NodeCredentialsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		httpError(w, http.StatusBadRequest, "malformed request: "+err.Error())
 		return
 	}
 	host, osUser := s.nodeIdentity(ep)
@@ -212,6 +244,18 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 			paused[a] = true
 		}
 	}
+	// Refusals first, so the lease below already answers with what replaced
+	// the refused token. Only a row this login may lease can be named.
+	for _, rj := range body.UpstreamRejected {
+		for _, c := range creds {
+			if c.Provider != rj.Provider || c.Account != rj.Account {
+				continue
+			}
+			if _, err := s.Vault.RejectUpstream(c.PrincipalID, c.Provider, c.Account, rj.Fingerprint, rj.Error, osUser+"@"+host); err != nil {
+				log.Printf("credentials: upstream rejection of %s/%s from %s@%s: %v", c.Provider, c.Account, osUser, host, err)
+			}
+		}
+	}
 	resp := NodeCredentialsResponse{PrincipalID: principal, IssuedAt: time.Now().UTC(), Credentials: []NodeCredential{}}
 	for _, c := range creds {
 		isPool := c.PrincipalID == store.PoolPrincipal
@@ -226,6 +270,9 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			nc.Error = err.Error()
+			if errors.Is(err, credvault.ErrReauthRequired) {
+				nc.State = CredStateReauth
+			}
 			audit.Action, audit.Detail = store.CredDeny, optional("pool · ", isPool)+"lease failed: "+err.Error()
 		} else {
 			a := acc

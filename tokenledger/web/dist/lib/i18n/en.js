@@ -727,6 +727,7 @@ export const en = {
   'ui.sub.cred': 'Credential',
   'ui.sub.credNone': 'Not in the vault',
   'ui.sub.credError': 'Refresh failing',
+  'ui.sub.credReauth': 'Needs a new login',
   'ui.sub.credExpired': 'Expired',
   'ui.sub.credEnds': 'Ends {when}',
   'ui.sub.credOk': 'Stored {when}',

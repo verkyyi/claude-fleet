@@ -311,3 +311,172 @@ func TestSetupTokenIssuedAsIsAndNeverRefreshed(t *testing.T) {
 		t.Fatalf("refresh-token lease = %+v, %v", acc, err)
 	}
 }
+
+// revokingRefresher is countingRefresher whose refusal is the provider's own
+// (a *ProviderRefusal): set code to refuse every refresh with it.
+type revokingRefresher struct {
+	countingRefresher
+	code atomic.Value // string
+}
+
+func (r *revokingRefresher) Refresh(ctx context.Context, p string, s Secret) (Access, Secret, error) {
+	if c, _ := r.code.Load().(string); c != "" {
+		r.n.Add(1)
+		return Access{}, s, &ProviderRefusal{Status: http.StatusUnauthorized, Code: c, Body: `{"error":{"code":"` + c + `"}}`}
+	}
+	return r.countingRefresher.Refresh(ctx, p, s)
+}
+
+// claude-fleet#2007: token_revoked keeps the token's exp, so the clock alone
+// would hand a dead access out for days. A node's report drops the cache and
+// the next lease refreshes.
+func TestUpstreamRejectedAccessIsReplaced(t *testing.T) {
+	r := &countingRefresher{ttl: 183 * time.Hour}
+	v := newVault(t, r)
+	if err := v.Put("p1", Codex, "work", Secret{RefreshToken: "RT-0", AccountID: "acct"}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := v.Lease(context.Background(), "p1", Codex, "work")
+	if err != nil || a.AccessToken != "AT-1" {
+		t.Fatalf("first lease %+v %v", a, err)
+	}
+	if a, _ := v.Lease(context.Background(), "p1", Codex, "work"); a.AccessToken != "AT-1" || r.n.Load() != 1 {
+		t.Fatalf("cached lease %+v refreshes=%d", a, r.n.Load())
+	}
+	dropped, err := v.RejectUpstream("p1", Codex, "work", AccessFingerprint("AT-1"), "token_revoked", "alice@m4")
+	if err != nil || !dropped {
+		t.Fatalf("reject: dropped=%v err=%v", dropped, err)
+	}
+	a, err = v.Lease(context.Background(), "p1", Codex, "work")
+	if err != nil || a.AccessToken != "AT-2" {
+		t.Fatalf("lease after the upstream rejected AT-1: %+v %v, want AT-2", a, err)
+	}
+	// A late report about the token already replaced changes nothing.
+	if dropped, err := v.RejectUpstream("p1", Codex, "work", AccessFingerprint("AT-1"), "token_revoked", "bob@m1"); err != nil || dropped {
+		t.Fatalf("stale reject: dropped=%v err=%v", dropped, err)
+	}
+	if a, _ := v.Lease(context.Background(), "p1", Codex, "work"); a.AccessToken != "AT-2" || r.n.Load() != 2 {
+		t.Fatalf("after a stale report %+v refreshes=%d, want AT-2 from the cache", a, r.n.Load())
+	}
+	audit, _ := v.Store.CredAuditLog("p1", 50)
+	var rows []string
+	for _, x := range audit {
+		if x.Action == store.CredUpstreamRejected {
+			rows = append(rows, x.Detail)
+		}
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0], "token_revoked") || !strings.Contains(rows[0], "alice@m4") {
+		t.Fatalf("upstream_rejected audit rows = %q", rows)
+	}
+}
+
+func TestUpstreamRevokedRefreshRefusedNeedsReauth(t *testing.T) {
+	r := &revokingRefresher{countingRefresher: countingRefresher{ttl: 183 * time.Hour}}
+	v := newVault(t, r)
+	_ = v.Put("p1", Codex, "work", Secret{RefreshToken: "RT-0", AccountID: "acct"})
+	if _, err := v.Lease(context.Background(), "p1", Codex, "work"); err != nil {
+		t.Fatal(err)
+	}
+	// The whole grant was revoked: the refresh token is dead too.
+	r.code.Store("refresh_token_invalidated")
+	if _, err := v.RejectUpstream("p1", Codex, "work", AccessFingerprint("AT-1"), "token_revoked", "alice@m4"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := v.Lease(context.Background(), "p1", Codex, "work")
+	if !errors.Is(err, ErrReauthRequired) {
+		t.Fatalf("lease after a revoked grant: %v, want ErrReauthRequired (never the old AT-1)", err)
+	}
+	c, _ := v.Store.Credential("p1", Codex, "work")
+	if !c.ReauthRequired || c.ReauthRequiredAt == nil || !strings.Contains(c.RefreshError, "refresh_token_invalidated") {
+		t.Fatalf("row = %+v, want reauth_required", c)
+	}
+	// Nothing more is asked of the provider, nothing more is leased.
+	n := r.n.Load()
+	if _, err := v.Lease(context.Background(), "p1", Codex, "work"); !errors.Is(err, ErrReauthRequired) || r.n.Load() != n {
+		t.Fatalf("second lease: %v, refreshes %d → %d (want no new refresh)", err, n, r.n.Load())
+	}
+	audit, _ := v.Store.CredAuditLog("p1", 50)
+	found := false
+	for _, x := range audit {
+		found = found || x.Action == store.CredReauth
+	}
+	if !found {
+		t.Fatalf("no %s audit row in %+v", store.CredReauth, audit)
+	}
+	// A new login, stored, clears it.
+	r.code.Store("")
+	if err := v.Put("p1", Codex, "work", Secret{RefreshToken: "RT-new", AccountID: "acct"}); err != nil {
+		t.Fatal(err)
+	}
+	if a, err := v.Lease(context.Background(), "p1", Codex, "work"); err != nil || a.AccessToken == "AT-1" {
+		t.Fatalf("lease after a new login: %+v %v", a, err)
+	}
+	if c, _ := v.Store.Credential("p1", Codex, "work"); c.ReauthRequired {
+		t.Fatal("a put left reauth_required set")
+	}
+}
+
+// A refused refresh with no upstream report keeps serving the cached token
+// (it was never refused) but stops refreshing; once it runs out, reauth.
+func TestRevokedRefreshTokenKeepsUnrefusedCache(t *testing.T) {
+	r := &revokingRefresher{countingRefresher: countingRefresher{ttl: 4 * time.Hour}}
+	v := newVault(t, r)
+	now := time.Now()
+	v.Now = func() time.Time { return now }
+	_ = v.Put("p1", Codex, "work", Secret{RefreshToken: "RT-0", AccountID: "acct"})
+	_, _ = v.Lease(context.Background(), "p1", Codex, "work")
+	r.code.Store("invalid_grant")
+	now = now.Add(2 * time.Hour)
+	if a, err := v.Lease(context.Background(), "p1", Codex, "work"); err != nil || a.AccessToken != "AT-1" {
+		t.Fatalf("%+v %v, want the still-valid AT-1", a, err)
+	}
+	n := r.n.Load()
+	if a, err := v.Lease(context.Background(), "p1", Codex, "work"); err != nil || a.AccessToken != "AT-1" || r.n.Load() != n {
+		t.Fatalf("%+v %v refreshes %d→%d, want AT-1 and no new refresh", a, err, n, r.n.Load())
+	}
+	now = now.Add(3 * time.Hour)
+	if _, err := v.Lease(context.Background(), "p1", Codex, "work"); !errors.Is(err, ErrReauthRequired) {
+		t.Fatalf("expired: %v, want ErrReauthRequired", err)
+	}
+}
+
+func TestSetupTokenRevokedUpstreamNeedsReauth(t *testing.T) {
+	v := newVault(t, &countingRefresher{})
+	exp := time.Now().Add(300 * 24 * time.Hour)
+	tok := "sk-ant-oat01-setup"
+	if err := v.Put("p1", Claude, "main", Secret{SetupToken: tok, ExpiresAt: &exp}); err != nil {
+		t.Fatal(err)
+	}
+	if dropped, _ := v.RejectUpstream("p1", Claude, "main", AccessFingerprint("other"), "401", ""); dropped {
+		t.Fatal("a report about another token marked the setup token")
+	}
+	if dropped, err := v.RejectUpstream("p1", Claude, "main", AccessFingerprint(tok), "token_revoked", "alice@m4"); err != nil || !dropped {
+		t.Fatalf("reject: %v %v", dropped, err)
+	}
+	if _, err := v.Lease(context.Background(), "p1", Claude, "main"); !errors.Is(err, ErrReauthRequired) {
+		t.Fatalf("lease of a revoked setup token: %v", err)
+	}
+}
+
+func TestNeedsReauthOnlyForTheProvidersRevokedAnswer(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		body   string
+		want   bool
+	}{
+		{400, `{"error":"invalid_grant","error_description":"Refresh token revoked"}`, true},
+		{401, `{"error":{"code":"refresh_token_reused","message":"…"}}`, true},
+		{401, `{"error":{"code":"refresh_token_expired"}}`, true},
+		{400, `{"error":"invalid_request"}`, false},
+		{503, `{"error":"invalid_grant"}`, false},
+		{403, `<html>blocked</html>`, false},
+	} {
+		_, _, err := parseRefresh(Codex, Secret{RefreshToken: "x"}, c.status, []byte(c.body), time.Now())
+		if got := NeedsReauth(err); got != c.want {
+			t.Errorf("%d %s: NeedsReauth = %v, want %v (err %v)", c.status, c.body, got, c.want, err)
+		}
+	}
+	if NeedsReauth(fmt.Errorf("%w: no node", ErrRefreshUnavailable)) {
+		t.Error("refresh_unavailable is not the provider's answer")
+	}
+}

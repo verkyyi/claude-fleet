@@ -37,6 +37,7 @@ type Auth struct {
 	HasRefreshToken bool
 	HubManaged      bool // refresh_token is HubManagedRefreshToken: the hub refreshes, the node agent renews
 	fingerprint     string
+	accessFP        string // AccessFingerprint of the access token (claude-fleet#2007)
 	snapshot        []byte
 }
 
@@ -75,6 +76,7 @@ func ReadAuth(home string) (*Auth, error) {
 	hub := doc.Tokens.Refresh == HubManagedRefreshToken
 	a := &Auth{Mode: "unknown", LastRefresh: doc.LastRefresh, HasRefreshToken: doc.Tokens.Refresh != "" && !hub, HubManaged: hub}
 	a.fingerprint = fmt.Sprintf("%x", sha256.Sum256([]byte(doc.Tokens.Access+"\x00"+doc.Tokens.Refresh)))
+	a.accessFP = AccessFingerprint(doc.Tokens.Access)
 	if doc.Mode == "apikey" || (doc.APIKey != nil && *doc.APIKey != "") {
 		a.Mode = "api"
 		return a, nil

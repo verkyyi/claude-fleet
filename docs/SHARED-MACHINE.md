@@ -272,25 +272,23 @@ INSTALL.md step 1).
 For a login that exists but has no `com.claude-fleet.<login>.*` under
 `/Library/LaunchDaemons` (the bootstrap's `daemons: WARN`, or the doctor's
 `onboard` row naming missing fleet services): step 8 of `fleet-login-new.sh`
-by hand, as the admin. Her clone is 0700 to you, so render from YOUR checkout —
-ideally at the same commit as her `stable` clone, so her next apply finds every
-unit "already current":
+alone, one command, as the admin (issue #1223):
 
 ```sh
-L=alice; H=/Users/$L
-for t in ~/.claude/fleet/launchd/com.claude-fleet.*.plist.tmpl; do
-  u=${t##*/com.claude-fleet.}; u=${u%.plist.tmpl}
-  FLEET_INSTALL_LOGIN=$L FLEET_INSTALL_HOME=$H \
-    ~/.claude/fleet/bin/fleet-install-apply.sh --render-system "$u" > "/tmp/com.claude-fleet.$L.$u.plist"
-  sudo install -m 644 "/tmp/com.claude-fleet.$L.$u.plist" /Library/LaunchDaemons/
-  sudo launchctl bootstrap system "/Library/LaunchDaemons/com.claude-fleet.$L.$u.plist"
-done
-sudo launchctl list | grep -c "com.claude-fleet.$L."   # = the number of templates
+~/.claude/fleet/bin/fleet-login-new.sh alice --daemons-only           # dry run: the plan
+~/.claude/fleet/bin/fleet-login-new.sh alice --daemons-only --apply   # installed N/N
+sudo launchctl list | grep -c "com.claude-fleet.alice."              # = N
 ```
 
+It skips steps 1–7 and 9 (and refuses their options), needs the login and its
+home (else exit 4), and reads the templates from HER clone, as her — her home is
+0700 to you (#1213) — so her next apply finds every unit "already current". A
+unit whose plist is already in place is left alone, so a rerun only fills what
+is missing. No clone yet (she never logged in) is exit 1 naming it: her first
+login installs it, then re-run.
+
 Nothing on her side needs re-running: the units start at bootstrap, and they
-run the scripts of her own `~/.claude/fleet`. (One command for this loop —
-`fleet-login-new.sh <login> --daemons-only` — is #1223.)
+run the scripts of her own `~/.claude/fleet`.
 
 ## 6. Verify the machine
 

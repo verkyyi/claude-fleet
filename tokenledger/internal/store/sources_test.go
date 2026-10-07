@@ -31,7 +31,7 @@ func TestSourcesMigrationPreservesPrunedHistoryAndDedup(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	s, err := Open(path)
+	s, err := openSQLite(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestSourcesMigrationPreservesPrunedHistoryAndDedup(t *testing.T) {
 	}
 	s.Close()
 	// Reopening after both sources reuse an id must not recreate the old index.
-	s, err = Open(path)
+	s, err = openSQLite(path)
 	if err != nil {
 		t.Fatal(err)
 	}

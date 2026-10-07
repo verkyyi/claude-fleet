@@ -431,6 +431,9 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 	if err != nil {
 		return Access{}, err
 	}
+	if c.ReauthRequired && provider != GitHub && c.Kind == KindSetupToken {
+		return Access{}, reauthErr(c)
+	}
 	if provider == GitHub || c.Kind == KindSetupToken {
 		// No refresh: the stored token IS the lease. Nothing is written, so
 		// no row lock — any number of machines read the same token.
@@ -471,6 +474,15 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		if haveCached && cached.ExpiresAt != nil && cached.ExpiresAt.Sub(v.now()) >= v.minTTL() {
 			return cached, nil
 		}
+		if c.ReauthRequired {
+			// The refresh token is dead; asking again only fails again. What
+			// is still cached was never refused (a refused one was dropped),
+			// so it runs out on its own — then nothing more is issued.
+			if haveCached && cached.ExpiresAt != nil && cached.ExpiresAt.After(v.now()) {
+				return cached, nil
+			}
+			return Access{}, reauthErr(c)
+		}
 
 		var s Secret
 		if err := sl.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
@@ -485,13 +497,28 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 			viaNote = " · refresh_via=" + via
 		}
 		if rerr != nil {
-			_ = v.Store.NoteRefreshError(principal, provider, account, truncate(rerr.Error(), 300), at)
+			reauth := NeedsReauth(rerr)
+			if reauth {
+				// The provider refused the refresh token itself
+				// (claude-fleet#2007): only a new login helps. Say so on the
+				// row, so the pages and the next lease read it.
+				_ = v.Store.MarkReauthRequired(principal, provider, account, truncate(rerr.Error(), 300), false, at)
+			} else {
+				_ = v.Store.NoteRefreshError(principal, provider, account, truncate(rerr.Error(), 300), at)
+			}
 			_ = v.Store.AddCredAudit(store.CredAudit{At: at, Action: store.CredRefresh, PrincipalID: principal,
 				Provider: provider, Account: account, Detail: "failed: " + truncate(rerr.Error(), 300) + viaNote})
+			if reauth {
+				_ = v.Store.AddCredAudit(store.CredAudit{At: at, Action: store.CredReauth, PrincipalID: principal,
+					Provider: provider, Account: account, Detail: "the provider refused the refresh token: " + truncate(rerr.Error(), 300)})
+			}
 			// A still-valid cached token beats nothing: the node gets a
 			// shorter lease and asks again sooner.
 			if haveCached && cached.ExpiresAt != nil && cached.ExpiresAt.After(at) {
 				return cached, nil
+			}
+			if reauth {
+				return Access{}, fmt.Errorf("%w (%v)", ErrReauthRequired, rerr)
 			}
 			return Access{}, fmt.Errorf("%w: %v", ErrRefreshFailed, rerr)
 		}
@@ -519,6 +546,101 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		return acc, nil
 	}
 	return Access{}, store.ErrCredConflict
+}
+
+// ErrReauthRequired: the provider has refused this account's refresh token
+// (or a setup token was revoked upstream) — nothing is leased from it until
+// the operator logs in again and stores the new credential. Its leading word
+// is the status word the node, the pages and the doctor read.
+var ErrReauthRequired = errors.New("reauth_required: the provider refused this account's credential; log in again and store the new one")
+
+func reauthErr(c *store.Credential) error {
+	since := ""
+	if c.ReauthRequiredAt != nil {
+		since = " since " + c.ReauthRequiredAt.UTC().Format(time.RFC3339)
+	}
+	return fmt.Errorf("%w%s", ErrReauthRequired, since)
+}
+
+// AccessFingerprint names one access token without carrying it: the hex
+// SHA-256 of the token. A node reports an upstream refusal by it
+// (upstream_rejected.fingerprint, claude-fleet#2007) and the vault compares it
+// with what it has cached, so neither side sends a token back.
+func AccessFingerprint(token string) string {
+	return codex.AccessFingerprint(token)
+}
+
+// RejectUpstream records that the upstream refused the access token
+// fingerprint names, for one credential (claude-fleet#2007): a revoked
+// authorization (token_revoked — a logout, a revocation, or a refresh token
+// reused after it rotated elsewhere) keeps its exp, so the clock alone would
+// hand the dead token out for days. When fingerprint is the cached access,
+// the cache is dropped — the next Lease refreshes from the stored refresh
+// token, and a refresh the provider refuses marks the account
+// reauth_required. A setup token (it cannot be refreshed) refused upstream is
+// marked reauth_required at once. A fingerprint that matches nothing the
+// vault holds — a report about a token already replaced — changes nothing:
+// dropped is false. by names who reported it, for the audit.
+func (v *Vault) RejectUpstream(principal, provider, account, fingerprint, code, by string) (dropped bool, err error) {
+	if provider == GitHub || fingerprint == "" {
+		return false, nil
+	}
+	sl, err := v.sealer()
+	if err != nil {
+		return false, err
+	}
+	l := v.lock(principal, provider, account)
+	l.Lock()
+	defer l.Unlock()
+	c, err := v.Store.Credential(principal, provider, account)
+	if err != nil {
+		return false, err
+	}
+	at := v.now()
+	detail := optionalCode(code) + optionalBy(by)
+	if c.Kind == KindSetupToken {
+		var s Secret
+		if err := sl.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
+			return false, err
+		}
+		if AccessFingerprint(s.SetupToken) != fingerprint || c.ReauthRequired {
+			return false, nil
+		}
+		if err := v.Store.MarkReauthRequired(principal, provider, account, "upstream rejected the setup token: "+code, false, at); err != nil {
+			return false, err
+		}
+		_ = v.Store.AddCredAudit(store.CredAudit{At: at, Action: store.CredUpstreamRejected, PrincipalID: principal,
+			Provider: provider, Account: account, Detail: detail + " · setup token: reauth_required"})
+		return true, nil
+	}
+	var cached Access
+	if len(c.AccessSealed) == 0 || sl.Open(c.AccessSealed, &cached, principal, provider, account, "access") != nil ||
+		AccessFingerprint(cached.AccessToken) != fingerprint {
+		return false, nil
+	}
+	if err := v.Store.DropAccess(principal, provider, account, c.Version, at); err != nil {
+		if errors.Is(err, store.ErrCredConflict) {
+			return false, nil // refreshed meanwhile: the refused token is already gone
+		}
+		return false, err
+	}
+	_ = v.Store.AddCredAudit(store.CredAudit{At: at, Action: store.CredUpstreamRejected, PrincipalID: principal,
+		Provider: provider, Account: account, ExpiresAt: cached.ExpiresAt, Detail: detail + " · cached access dropped"})
+	return true, nil
+}
+
+func optionalCode(code string) string {
+	if code == "" {
+		return "rejected"
+	}
+	return truncate(code, 64)
+}
+
+func optionalBy(by string) string {
+	if by == "" {
+		return ""
+	}
+	return " · by " + truncate(by, 128)
 }
 
 // refresh runs the Refresher, asking a RefresherVia where it ran.

@@ -64,6 +64,11 @@
 #                 block, English; host unset → `<HOST>` in the letter + a WARN;
 #                 --no-welcome without --pubkey / a bad --lang / a bad port → 2;
 #                 --no-welcome writes no letter; a dry run plans both, writes none
+#   K. daemons-only (#1223) an existing login + its clone, no daemons → `--daemons-only
+#                 --apply` = N install + N bootstrap system calls, steps 1–7 zero,
+#                 `installed N/N`; a rerun leaves every unit alone; one missing
+#                 unit → only it; no clone → exit 1 naming it; no such login / no
+#                 home → exit 4, nothing run; another step's option → exit 2
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -555,4 +560,70 @@ eq "J6 nothing executed" 0 "$(mutations)"
 [ -e "$HOME/quin-onboard" ] && fail "J6 dry run created the onboard dir"
 [ -e "$FLEET_LOGIN_HOMES/quin" ] && fail "J6 dry run created a home"
 not_contains "J6 bash32" "$OUT" "unbound variable"
+# --- K. --daemons-only (issue #1223) ------------------------------------------
+# an existing login with its home + its own clone (first login already ran),
+# but nothing under the daemons dir: step 8 alone, nothing else
+KH="$FLEET_LOGIN_HOMES/kai"; mkdir -p "$KH/.claude"
+git clone -q -b stable "$GB/verkyyi/claude-fleet.git" "$KH/.claude/fleet"
+chmod 000 "$KH"
+konly() { : > "$LOG"; OUT=$(FAKE_EXISTING='kai nohome' "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); unlock_homes; }
+steps_1to7() { printf '%s\n' "$CALLS" | grep -Ec '^(sysadminctl|createhomedir|dseditgroup|chown|sudo (tee|mkdir|cp|chmod|git|ssh-keygen))( |$)'; }
+konly kai --daemons-only
+eq "K dry run exit" 0 "$RC"
+contains "K dry run banner" "$OUT" "DRY RUN"
+contains "K step is 8" "$OUT" "[8] install kai's $NTMPL background services as system LaunchDaemons"
+not_contains "K no step 1" "$OUT" "[1]"
+not_contains "K no addUser" "$OUT" "sysadminctl"
+not_contains "K no letter" "$OUT" "welcome letter"
+eq "K dry run nothing executed" 0 "$(mutations)"
+for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kai.*; do [ -e "$f" ] && fail "K dry run wrote $f"; done
+if [ -z "$DAEMONS" ]; then
+  konly kai --daemons-only --apply
+  eq "K apply exit" 0 "$RC"
+  eq "K $NTMPL installs" "$NTMPL" "$(grep -c '^sudo install$' "$LOG")"
+  eq "K $NTMPL bootstraps" "$NTMPL" "$(grep -c '^launchctl bootstrap system ' "$LOG")"
+  eq "K steps 1–7: zero calls" 0 "$(steps_1to7)"
+  contains "K installed N/N" "$OUT" "installed $NTMPL/$NTMPL"
+  contains "K read as the login" "$OUT" "sudo -u kai -H ls -1 $KH/.claude/fleet/launchd"
+  eq "K $NTMPL plists" "$NTMPL" "$(ls "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kai.*.plist | wc -l | tr -d ' ')"
+  eq "K Label" com.claude-fleet.kai.spinner "$(plutil -extract Label raw -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist")"
+  [ -e "$HOME/kai-onboard" ] && fail "K wrote an onboard dir"
+  # again: everything already in place → left alone, nothing bootstrapped twice
+  konly kai --daemons-only --apply
+  eq "K rerun exit" 0 "$RC"
+  eq "K rerun no bootstrap" 0 "$(grep -c '^launchctl ' "$LOG")"
+  contains "K rerun installed N/N" "$OUT" "installed $NTMPL/$NTMPL ($NTMPL already in place)"
+  # one unit missing → only that one
+  rm -f "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist"
+  konly kai --daemons-only --apply
+  eq "K fill one: exit" 0 "$RC"
+  eq "K fill one: one bootstrap" "launchctl bootstrap system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist" "$(grep '^launchctl ' "$LOG")"
+  # a login with no clone yet: fails at step 8 naming what is missing
+  LH="$FLEET_LOGIN_HOMES/nohome"; mkdir -p "$LH"; chmod 000 "$LH"
+  konly nohome --daemons-only --apply
+  eq "K no clone → 1" 1 "$RC"
+  contains "K no clone says why" "$OUT" "--daemons-only needs nohome's own clone"
+  eq "K no clone nothing bootstrapped" 0 "$(grep -c '^launchctl ' "$LOG")"
+  rm -rf "$LH"
+fi
+# refusals: no such login, a login with no home → 4, nothing run
+for m in "" --apply; do
+  konly ghost --daemons-only $m
+  eq "K no login → 4 ($m)" 4 "$RC"
+  contains "K no login says so ($m)" "$OUT" "--daemons-only: no login ghost"
+  eq "K no login nothing run ($m)" 0 "$(mutations)"
+  konly nohome --daemons-only $m
+  eq "K no home → 4 ($m)" 4 "$RC"
+  contains "K no home says so ($m)" "$OUT" "has no home at $FLEET_LOGIN_HOMES/nohome"
+  eq "K no home nothing run ($m)" 0 "$(mutations)"
+done
+# the options of other steps are refused, not silently dropped
+for args in "kai --daemons-only --no-daemons" "kai --daemons-only --share-pool --pool-src $POOL" \
+            "kai --daemons-only --pubkey $KEY" "kai --daemons-only --password-file $WORK/pw.txt"; do
+  # shellcheck disable=SC2086
+  konly $args
+  eq "K usage → 2 ($args)" 2 "$RC"
+  eq "K usage nothing run ($args)" 0 "$(mutations)"
+done
+not_contains "K bash32" "$OUT" "unbound variable"
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"

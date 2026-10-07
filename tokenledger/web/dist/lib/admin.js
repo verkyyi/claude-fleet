@@ -159,6 +159,7 @@ export function subState(s, skip = 85) {
 /** credState is the credential line on a card. */
 export function credState(c, now = Date.now()) {
   if (!c) return { tone: 'warn', text: t('ui.sub.credNone') };
+  if (c.reauth_required) return { tone: 'bad', text: t('ui.sub.credReauth') };
   if (c.refresh_error) return { tone: 'bad', text: t('ui.sub.credError') };
   const end = toMs(c.secret_expires_at);
   if (Number.isFinite(end) && end > 0) {

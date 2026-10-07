@@ -82,7 +82,7 @@ type WorkerRecordQuery struct {
 }
 
 func (s *Store) ensureFleetWorkerRecords() error {
-	if _, err := s.write.Exec(fleetWorkerRecordsSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetWorkerRecordsSchema)); err != nil {
 		return fmt.Errorf("create fleet_worker_records table: %w", err)
 	}
 	return nil
@@ -97,9 +97,9 @@ func (s *Store) PutWorkerRecords(recs []FleetWorkerRecord) error {
 	}
 	defer tx.Rollback()
 	for _, r := range recs {
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO fleet_worker_records (id, worker_id, fleet_id,
+		if _, err := tx.Exec(s.d.insertReplace(`INSERT OR REPLACE INTO fleet_worker_records (id, worker_id, fleet_id,
 			origin_wid, owner, endpoint_id, node, repo, issue, key, epic, kind, name, stage, ts, note,
-			content, size, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			content, size, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "id"),
 			r.ID, r.WorkerID, r.FleetID, r.OriginWID, r.Owner, r.EndpointID, r.Node, r.Repo, r.Issue,
 			r.Key, r.Epic, r.Kind, r.Name, r.Stage, r.TS, r.Note, r.Content, len(r.Content),
 			r.CreatedAt.UTC().Format(rfc)); err != nil {

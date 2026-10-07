@@ -236,6 +236,11 @@ type Agent struct {
 	limits          *limits.Client
 	http            *http.Client
 
+	// credReported: access fingerprints whose upstream refusal a lease has
+	// already carried to the hub (claude-fleet#2007), so a waiting lease loop
+	// renews early once per refusal, not every poll. The lease loop's own.
+	credReported map[string]bool
+
 	// lastSessions is the newest beat's session count, -1 unknown — what a
 	// sleeping personal machine tells its person (claude-fleet#1721).
 	lastSessions atomic.Int64

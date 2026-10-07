@@ -4,7 +4,8 @@
 #   fleet-conf.sh path                   print it ($FLEET_CONF_DIR/fleet.conf)
 #   fleet-conf.sh host [--why]           1 | 0 — does this machine 承载 (host) sessions? FLEET_HOST, else inferred
 #   fleet-conf.sh set-host 1|0           write FLEET_HOST (creates the file; drops an old FLEET_ROLE line)
-#   fleet-conf.sh migrate [--dry-run] [--quiet]   fold the old files into it (each kept as .bak)
+#   fleet-conf.sh migrate [--dry-run] [--quiet]   fold the old files into it (each kept as .bak);
+#                                        fills CCQUOTA_FLEET / FLEET_HUB_URL from node.env (#2116)
 #   fleet-conf.sh set-hub <url> [--host] write FLEET_HUB_URL (+ FLEET_HOST=1 with --host)
 #   fleet-conf.sh role [--why] · add-role client|node · set-hub … --role client|node — the
 #                                        FLEET_ROLE spellings, read for ONE more version (issue #1806)
@@ -584,6 +585,39 @@ PY
   return 0
 }
 
+# ---- the hub switch the node agent has and fleet.conf lost (issue #2116) ----------
+# The agent reads node.env (CCQUOTA_FLEET=1, CCQUOTA_HUB_URL) and keeps using the
+# hub, while every fleet script reads fleet.conf — and a migrate that ran after the
+# install's fleet.conf had already gone to .bak (the stable link switch, a second
+# run) folded neither key in. Then fleet-relay-cred.sh / fleet-node-trust.sh /
+# fleet-mcp.py --cred all said "the hub module is off". hub_fill writes what
+# node.env says into [common] — fill only: a CCQUOTA_FLEET line anywhere in the
+# file (even =0, the operator's word) or any hub URL line is left as it is.
+# FLEET_HUB_URL is the address only — a URL carrying user:pass@ is not written.
+# No node.env (a client) ⇒ nothing read, nothing written.
+hub_fill() {
+  local DRY="$1" QUIET="$2" on url did=''
+  [ -f "$MC" ] || return 0
+  [ -r "$(fleet_node_env_file)" ] || [ -r "$CD/node.pub.env" ] || return 0
+  on=$(_fleet_node_env_val CCQUOTA_FLEET 2>/dev/null | tr -d "\"' ")
+  url=$(_fleet_node_env_val CCQUOTA_HUB_URL 2>/dev/null | tr -d "\"' ")
+  if [ "$on" = 1 ] && ! grep -Eq '^[[:space:]]*(export[[:space:]]+)?CCQUOTA_FLEET[[:space:]]*=' "$MC"; then
+    did="$did CCQUOTA_FLEET=1"
+    [ "$DRY" = 1 ] || _set_common "$MC" CCQUOTA_FLEET 'export CCQUOTA_FLEET=1' || die "cannot write CCQUOTA_FLEET into $MC"
+  fi
+  if [ -n "$url" ] && ! grep -Eq "$HUB_RE" "$MC"; then
+    case "$url" in
+      *://*@*) echo "fleet-conf: node.env's CCQUOTA_HUB_URL carries credentials — FLEET_HUB_URL not written; set it by hand (fleet-conf.sh set-hub <url>)" >&2 ;;
+      *) did="$did FLEET_HUB_URL"
+         [ "$DRY" = 1 ] || _set_common "$MC" FLEET_HUB_URL "export FLEET_HUB_URL=\"$url\"" || die "cannot write FLEET_HUB_URL into $MC" ;;
+    esac
+  fi
+  [ -n "$did" ] || return 0
+  if [ "$DRY" = 1 ]; then echo "fleet-conf: would add to $MC [common] from node.env:$did"
+  else echo "fleet-conf: added to $MC [common] from node.env:$did"; fi
+  return 0
+}
+
 # ---- a machine config stranded as fleet `fleet` (issue #2059) ---------------------
 # Before #1887 the layout migrator took $FLEET_CONF_DIR/fleet.conf — the machine's
 # ONE file — for the legacy flat conf of a fleet named `fleet` and moved it to
@@ -682,6 +716,7 @@ case "$cmd" in
     done
     migrate "$DRY" "$QUIET"
     rescue_stranded "$DRY" "$QUIET"
+    hub_fill "$DRY" "$QUIET"
     migrate_repos "$DRY" "$QUIET" ;;
   add-role)
     case "${1:-}" in client|node) add_role "$1" ;; *) usage ;; esac ;;

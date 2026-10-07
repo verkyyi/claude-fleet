@@ -41,7 +41,7 @@ type FleetCert struct {
 }
 
 func (s *Store) ensureFleetCerts() error {
-	if _, err := s.write.Exec(fleetCertsSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetCertsSchema)); err != nil {
 		return fmt.Errorf("create fleet_certs table: %w", err)
 	}
 	return nil

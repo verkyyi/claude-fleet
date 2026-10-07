@@ -47,7 +47,7 @@ type SessionBind struct {
 var ErrNoSessionBind = errors.New("no account binding for this session")
 
 func (s *Store) ensureFleetSessionBinds() error {
-	if _, err := s.write.Exec(fleetSessionBindsSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetSessionBindsSchema)); err != nil {
 		return fmt.Errorf("create fleet session bind table: %w", err)
 	}
 	return nil
