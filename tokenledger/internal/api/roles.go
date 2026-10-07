@@ -55,7 +55,7 @@ var routeAccess = map[string]string{
 	// Their own credential, checked by the handler.
 	"/v1/ingest": accessSelf, "/v1/live/report": accessSelf,
 	"/v1/collectors/quota-lease": accessSelf,
-	control.Path: accessSelf, "/v1/node/lease": accessSelf, "/v1/node/place": accessSelf,
+	control.Path:                 accessSelf, "/v1/node/lease": accessSelf, "/v1/node/place": accessSelf,
 	"/v1/node/move": accessSelf, "/v1/node/move/bundle": accessSelf, "/v1/node/move/bundle/": accessSelf,
 	"/v1/node/join": accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf,
 	"/v1/node/reclaim": accessSelf, "/v1/node/maintenance": accessSelf, "/v1/node/peer-cert": accessSelf,
