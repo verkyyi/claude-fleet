@@ -114,6 +114,19 @@ account). Windows mid-turn (`working`) or between `/loop` iterations
 (`looping`) are left alone; they pick up the switch on their next restart. Esc
 cancels.
 
+**Through the credential proxy, a move closes nothing** (issue #1972, EPIC #1967
+C5). With `FLEET_CRED_PROXY=1` every session opens with a session credential from
+this login's proxy (`bin/fleet-session-cred.sh`, minted per launch by
+`fleet-session-wrap.sh` → `fleet-claude.sh` / `fleet-codex.sh`, revoked at exit):
+Claude sees `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>` + an `fcp1.` token,
+Codex a `fleet` custom provider and a CODEX_HOME with no `auth.json`. The window
+carries `@cred_sid` and `@cred_route` (direct · relay · central). `migrate` then
+**rebinds** a direct / relay Claude window in place — `@fleet_id`, the pane and
+every running tool and `/loop` stay, the next request runs on the new account
+(the proxy log's `acct`). A Codex window, a `--model` / `--cfg-stale` move and a
+central window (the cluster picks the account) still take the close + `--resume`
+road; so does every window with the switch off, byte for byte.
+
 There is **no fixed or default account**, so the footer shows no account chip:
 the pick is a starting point, and every spawn re-picks on ccquota headroom
 (issue #513, below) and rotates past a limited account. The old green

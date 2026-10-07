@@ -3721,11 +3721,53 @@ fleet_reap_orphan_listeners() {
 # FLEET_WINDOW_REAP_ROOT (selftests) narrows the sweep to tops whose cwd is under it.
 FLEET_WINDOW_REAP_EXEMPT_RE_DEFAULT='/bin/(session-end-hook|dash-reap|fleet-[a-z0-9-]+|worktree-autoclean|tmux-[a-z0-9-]+)\.(sh|py)'
 
+# _fleet_codex_cred_daemons — the fourth anchor (issue #1972, EPIC #1967 C5): a
+# Codex session launched through the credential proxy runs in its own
+# credential-free CODEX_HOME, $FLEET_CONF_DIR/cred-proxy/codex-homes/<sid>, and
+# interactive Codex leaves a `codex app-server` daemon behind that carries the
+# session credential in its environment. An agent is never a tree top above, so
+# this asks the daemon's own CODEX_HOME instead (macOS: what it holds open there): a PPID=1 app-server of ours whose
+# home is such a dir and whose session is over (the wrapper's revoke marked it
+# `.revoked`, or no session record is left) is a candidate — kind `codexhome`, key
+# the sid. A live session's daemon (record present, not revoked) is never one.
+# Same row shape as fleet_orphan_trees. FLEET_WINDOW_REAP_ROOT narrows it too.
+_fleet_codex_cred_daemons() {
+  local me st pid ppid uid et cmdline home sid age
+  me="$(id -u 2>/dev/null)"; [ -n "$me" ] || return 0
+  st="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/cred-proxy"
+  [ -d "$st/codex-homes" ] || return 0
+  ps -eo pid=,ppid=,uid=,etime=,command= 2>/dev/null | awk -v me="$me" '
+    $2 == 1 && $3 == me && $0 ~ /app-server/ && $0 ~ /codex/ { print }' \
+  | while read -r pid ppid uid et cmdline; do
+      # Its home: the environment where the OS shows it (Linux), else a file it
+      # holds open inside the session dir (macOS keeps another process's
+      # environment to itself; the dir's own `tmp` — never linked — holds its socket).
+      home=''
+      if [ -r "/proc/$pid/environ" ]; then
+        home="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^CODEX_HOME=//p' | head -n 1)"
+      fi
+      if [ -z "$home" ] && command -v lsof >/dev/null 2>&1; then
+        home="$(lsof -w -p "$pid" -Fn 2>/dev/null | sed -n 's/^n//p' | grep -F "$st/codex-homes/" | head -n 1)"
+      fi
+      case "$home" in "$st/codex-homes/"*) ;; *) continue ;; esac
+      sid="${home#"$st/codex-homes/"}"; sid="${sid%%/*}"
+      [ -n "$sid" ] || continue
+      if [ -n "${FLEET_WINDOW_REAP_ROOT:-}" ]; then
+        case "$home" in "$FLEET_WINDOW_REAP_ROOT"|"$FLEET_WINDOW_REAP_ROOT"/*) ;; *) continue ;; esac
+      fi
+      [ -e "$st/codex-homes/$sid/.revoked" ] || [ ! -e "$st/sessions/$sid" ] || continue
+      age="$(printf '%s' "$et" | awk -F'[-:]' '{ if (NF==4) print $1*86400+$2*3600+$3*60+$4
+        else if (NF==3) print $1*3600+$2*60+$3; else if (NF==2) print $1*60+$2; else print 0 }')"
+      printf '%s\t%s\tcodexhome\t%s\t%s\t%s\n' "$pid" "$age" "$sid" "$home" "$cmdline"
+    done
+}
+
 # fleet_orphan_trees — the candidates, one row per tree:
 #   top \t age_s \t kind \t key \t cwd \t argv
 fleet_orphan_trees() {
   local me tops cwds
   me="$(id -u 2>/dev/null)"; [ -n "$me" ] || return 0
+  _fleet_codex_cred_daemons
   command -v lsof >/dev/null 2>&1 || return 0
   local re="$FLEET_LISTEN_EXEMPT_RE_DEFAULT|$FLEET_WINDOW_REAP_EXEMPT_RE_DEFAULT${FLEET_WINDOW_REAP_EXEMPT_RE:+|$FLEET_WINDOW_REAP_EXEMPT_RE}"
   # PPID=1 tops of ours that are neither a tmux server nor an agent, and whose

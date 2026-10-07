@@ -523,8 +523,17 @@ class Proxy(BaseHTTPRequestHandler):
 
 
 def claude_token(accounts, label):
-    with open(os.path.join(accounts, label + ".hub", ".credentials.json")) as f:
-        return json.load(f)["claudeAiOauth"]["accessToken"]
+    """A hub-leased account's renewed file (#1415), else the account's own token file
+    — a `claude setup-token` line (bin/fleet-account.sh acct_token, issue #1972)."""
+    hub = os.path.join(accounts, label + ".hub", ".credentials.json")
+    if os.path.exists(hub):
+        with open(hub) as f:
+            return json.load(f)["claudeAiOauth"]["accessToken"]
+    with open(os.path.join(accounts, label)) as f:
+        tok = f.readline().strip()
+    if not tok or tok.startswith("hub:"):
+        raise ValueError("no token for this account")
+    return tok
 
 
 def codex_auth_path(cfg, label):
