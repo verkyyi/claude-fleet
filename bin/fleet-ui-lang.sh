@@ -149,6 +149,10 @@ fleet_ui_t() {
     en:badge_bare_fmt)          printf '⌂ %s' "${1:-}" ;;
     zh:badge_hubdown_fmt)       printf '⌂ %s · 入口连不上' "${1:-}" ;;
     en:badge_hubdown_fmt)       printf '⌂ %s · hub unreachable' "${1:-}" ;;
+    zh:badge_hubrefused_fmt)    printf '⌂ %s · 入口不认这台电脑 · 请重新扫码（fleet login）' "${1:-}" ;;
+    en:badge_hubrefused_fmt)    printf '⌂ %s · the hub refused this computer · scan again (fleet login)' "${1:-}" ;;
+    zh:badge_rescan_note)       printf '入口不认这台电脑的证书，续期也没用 — 请重新扫码：点左下角，或运行 fleet login' ;;
+    en:badge_rescan_note)       printf 'The hub refuses this computer'"'"'s certificate and renewing will not help — scan again: tap the bottom left, or run fleet login' ;;
     zh:badge_updated_fmt)       printf '✓ 已更新到 %s' "${1:-}" ;;
     en:badge_updated_fmt)       printf '✓ updated to %s' "${1:-}" ;;
     zh:badge_update_failed_fmt) printf '更新没成功：%s' "${1:-}" ;;

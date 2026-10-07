@@ -28,8 +28,11 @@
 #          client becomes the one in use), else the first attached client's
 #          device + tmux client_termname
 # `hub` says which: up (the hub answered) · nohub (no hub here, or one without the
-# lease) · down (a hub is set but could not be asked) — the status bar's
-# 「⌂ … · 入口连不上」 (fleet-client-badge.sh, issue #1779) reads it here.
+# lease) · down (a hub is set but could not be asked: a timeout, DNS, a 5xx) ·
+# refused (the hub answered 401: it does not accept this machine's credential —
+# an orphaned key id, an expired certificate; issue #2112) — the status bar's
+# 「⌂ … · 入口连不上」 / 「入口不认这台电脑 · 请重新扫码」 (fleet-client-badge.sh,
+# issue #1779) reads it here. A refused hub falls back to local like a down one.
 # Nothing is cached: every call reads the source afresh, so a takeover shows on
 # the very next call.
 #
@@ -51,7 +54,7 @@ json=0
 case "${1:-}" in
   --json) json=1 ;;
   '') ;;
-  -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) printf 'usage: fleet-client-where.sh [--json]\n' >&2; exit 2 ;;
 esac
 
@@ -92,7 +95,8 @@ def from_hub():
     """(state, where) off the hub, or None when there is no hub to ask."""
     global HUB
     if os.environ.get("HRC") != "0":
-        HUB = "down"
+        # 4: fleet-client-lease.py where got a 401 — up, but not us (#2112)
+        HUB = "refused" if os.environ.get("HRC") == "4" else "down"
         return None
     try:
         d = json.loads(os.environ.get("HUBREAD") or "{}")

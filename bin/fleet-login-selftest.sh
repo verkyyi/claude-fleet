@@ -32,6 +32,13 @@
 #                no_machine_login): the client prints the reason, exits 1 (#2090)
 #   I. pick      `fleet-connect.py --pick` that needs a scan: everything the
 #                scan shows is on stderr, stdout is one JSON line (#2090)
+#   J. orphan    (#2112) a renewal the hub signs (200) but whose key id its
+#                roster no longer names: the check (a signed `get` on the client
+#                lease) answers 401 「names no one」 → exit 3, scan again; a hub
+#                with no lease door (404) leaves the renewal at exit 0
+#   K. if-under  `renew --if-under SECS` asks nothing while more is left (and
+#                with no certificate at all), renews when less is; --quiet
+#                orphan → exit 3 and silent (the client keeper's call)
 #   G. blip      a 503 between two polls (the ingress, the hub restarting) is
 #                not a refusal: the client keeps waiting and gets its
 #                certificate (#1901 — a colleague's first scan died on one)
@@ -82,6 +89,10 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(403, {"error": "this device has not been used for 7 days", "code": "device_idle"})
             return self.reply(200, {"certificate": self.sign(body["public_key"], 2), "serial": "2", "key_id": "gh:Alice",
                 "principals": ["alice"], "valid_before": "2026-10-05T00:00:00Z", "ssh_config": CONF, "hub": ""})
+        if self.path == "/v1/fleet/client" and os.path.exists(os.path.join(SB, "orphan")):
+            # #2112: the hub's roster no longer names the certificate's key id
+            open(os.path.join(SB, "client.json"), "w").write(json.dumps(body))
+            return self.reply(401, {"error": "connection certificate refused: its key id names no one this hub knows"})
         if self.path == "/v1/fleet/login/start":
             state["pub"] = body["public_key"]
             open(os.path.join(SB, "sent.pub"), "w").write(body["public_key"] + "\n")
@@ -216,6 +227,43 @@ out="$(python3 "$BIN/fleet-login.py" renew --hub "http://127.0.0.1:1" 2>&1)"; rc
 rm -f "$HOME/.ssh/fleet-cert-cert.pub"
 out="$(python3 "$BIN/fleet-login.py" check)"; rc=$?
 [ "$rc" = 1 ] && [ "$out" = none ] && ok "F check: none" || bad "F check rc=$rc out=$out"
+
+# ── J — renewed, and still refused: the key id names no one (#2112) ──
+start_hub; python3 "$BIN/fleet-login.py" renew --quiet >/dev/null 2>&1; stop_hub   # a certificate again
+touch "$SB/orphan"; rm -f "$SB/client.json"
+start_hub
+out="$(python3 "$BIN/fleet-login.py" renew 2>&1)"; rc=$?
+stop_hub
+rm -f "$SB/orphan"
+[ "$rc" = 3 ] && echo "$out" | grep -q '重新扫码' && echo "$out" | grep -q 'names no one' \
+  && ok "J renew 200 but the certificate's key id names no one → exit 3 (scan again)" || bad "J orphan rc=$rc: $out"
+grep -q '"action": "get"' "$SB/client.json" 2>/dev/null && grep -q '"cert": "ssh-ed25519-cert' "$SB/client.json" \
+  && ok "J the check is a signed get on the client lease" || bad "J check request: $(cat "$SB/client.json" 2>/dev/null)"
+start_hub
+out="$(python3 "$BIN/fleet-login.py" renew 2>&1)"; rc=$?
+stop_hub
+[ "$rc" = 0 ] && ok "J a hub with no lease door (404) → the renewal stands, exit 0" || bad "J no-door rc=$rc: $out"
+
+# ── K — --if-under: the keeper's margin call (#2112) ──
+rm -f "$SB/renew.json"
+start_hub
+out="$(python3 "$BIN/fleet-login.py" renew --quiet --if-under 3600 2>&1)"; rc=$?
+stop_hub
+[ "$rc" = 0 ] && [ ! -e "$SB/renew.json" ] && ok "K 12h left, under 1h asked → exit 0, nothing asked" || bad "K early rc=$rc renew.json=$([ -e "$SB/renew.json" ] && echo yes): $out"
+start_hub
+out="$(python3 "$BIN/fleet-login.py" renew --quiet --if-under 86400 2>&1)"; rc=$?
+stop_hub
+[ "$rc" = 0 ] && [ -s "$SB/renew.json" ] && ok "K less left than asked → renewed" || bad "K due rc=$rc: $out"
+touch "$SB/orphan"
+start_hub
+out="$(python3 "$BIN/fleet-login.py" renew --quiet --if-under 86400 2>&1)"; rc=$?
+stop_hub
+rm -f "$SB/orphan"
+[ "$rc" = 3 ] && [ -z "$out" ] && ok "K --quiet orphan → exit 3, silent" || bad "K quiet orphan rc=$rc: $out"
+mv "$HOME/.ssh/fleet-cert-cert.pub" "$SB/cert.bak"
+out="$(python3 "$BIN/fleet-login.py" renew --quiet --if-under 3600 --hub "http://127.0.0.1:1" 2>&1)"; rc=$?
+mv "$SB/cert.bak" "$HOME/.ssh/fleet-cert-cert.pub"
+[ "$rc" = 0 ] && ok "K no certificate (signed in another way) → exit 0, nothing asked" || bad "K nocert rc=$rc: $out"
 
 # ── G — a 5xx between two polls is a blip, not a «no» (#1901) ──
 rm -f "$HOME/.ssh/fleet-cert-cert.pub"; touch "$SB/blip"

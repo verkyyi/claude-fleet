@@ -667,6 +667,27 @@ keeper)
       if [ $((now - ${slow:-0})) -ge "$every" ]; then
         slow=$now
         bash "$BIN/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 || :
+        # the connection certificate (issue #2112): 12 hours, and an open shell
+        # never re-enters `fleet-connect.py --enter` — so with less than
+        # FLEET_CERT_RENEW_UNDER (3600 s) left, renew it here, quietly, at most
+        # every FLEET_CERT_CHECK_EVERY (300 s). Only exit 3 (scan again) is the
+        # person's: one message on each client here, once until it clears.
+        if [ $((now - ${certck:-0})) -ge "${FLEET_CERT_CHECK_EVERY:-300}" ]; then
+          certck=$now
+          crc=0
+          ${FLEET_CERT_RENEW_CMD:-python3 "$BIN/fleet-login.py" renew} --quiet --if-under "${FLEET_CERT_RENEW_UNDER:-3600}" \
+            >/dev/null 2>&1 || crc=$?
+          if [ "$crc" = 3 ]; then
+            if [ ! -f "$CL_DIR/client.rescan" ]; then
+              : > "$CL_DIR/client.rescan"
+              T list-clients -t "=$s" -F '#{client_name}' 2>/dev/null | while IFS= read -r c; do
+                [ -n "$c" ] && T display-message -c "$c" -d 10000 "$(sh "$BIN/fleet-ui-lang.sh" t badge_rescan_note 2>/dev/null)" 2>/dev/null
+              done
+            fi
+          elif [ "$crc" = 0 ]; then
+            rm -f "$CL_DIR/client.rescan"
+          fi
+        fi
         # a newer client, taken in place once you are idle (issue #1781); applied
         # (4) → this keeper is the old one's code: the new one takes over, same pid
         bash "$BIN/fleet-client-update.sh" tick "$s" >/dev/null 2>&1
@@ -679,7 +700,7 @@ keeper)
   # takes nothing over
   id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
   [ -n "$id" ] && lease release --lease "$id"
-  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/keeper.pid" "$CL_DIR/client.where.json" "$CL_DIR/client.key" "$CL_DIR/client.list.json" "$CL_DIR/client.why"
+  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/keeper.pid" "$CL_DIR/client.where.json" "$CL_DIR/client.key" "$CL_DIR/client.list.json" "$CL_DIR/client.why" "$CL_DIR/client.rescan"
   # the stage (issue #1759) holds the connections: it goes with the shell — our
   # own server, never a fleet's
   tmux -L "$s-stage" kill-server 2>/dev/null
