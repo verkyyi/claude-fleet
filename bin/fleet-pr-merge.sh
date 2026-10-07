@@ -48,18 +48,20 @@ PR="${PR//[^0-9]/}"
 [ -z "$PR" ] && { printf 'fleet-pr-merge: a PR number is required\n' >&2; exit 2; }
 note() { [ "$quiet" = 1 ] || printf 'fleet-pr-merge: %s\n' "$1" >&2; }
 
-# Same resolution as fleet-pr-verdict.sh: in a fleet hosting 2+ repos the repo is
-# the pane's window repo (@repo) or a refusal — never the dash's cached repo, which
-# would merge #N of ANOTHER repo (issue #1822).
+# Same resolution as fleet-pr-verdict.sh: the pane's window repo (@repo), else the
+# fleet's only repo, else a refusal — never the dash's cached repo, which would
+# merge #N of ANOTHER repo (issues #1822, #1938).
 repo="${repo:-${CF_REPO:-}}"
 sess=$(fleet_current_session 2>/dev/null)
-if [ -z "$repo" ] && fleet_multirepo "$sess"; then
-  repo=$(fleet_target_repo "$sess") || {
+if [ -z "$repo" ]; then
+  # ONE rule however many repos the fleet hosts (issue #1938): the pane's window
+  # repo, else the fleet's only repo, else a refusal — never the dash's cached repo
+  # (#1822/#1461). Outside any fleet, the global FLEET_REPO.
+  repo=$(fleet_target_repo "$sess"); _rc=$?
+  [ "$_rc" = 4 ] && {
     printf 'fleet-pr-merge: fleet %s hosts several repos and this pane has none — pass --repo (%s)\n' \
       "$sess" "$(fleet_repos "$sess" | tr '\n' ' ' | sed 's/ $//')" >&2; exit 2; }
-elif [ -z "$repo" ]; then
-  repo="${FLEET_REPO:-}"
-  _r=$(fleet_repo_cached "$sess"); [ -n "$_r" ] && repo="$_r"
+  [ -n "$repo" ] || repo="${FLEET_REPO:-}"
 fi
 [ -z "$repo" ] && { printf 'fleet-pr-merge: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 2; }
 if [ -z "$method" ]; then

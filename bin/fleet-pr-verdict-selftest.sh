@@ -156,7 +156,7 @@ ok "gh missing → exit 2, no verdict invented"
 # fleet_repo_cached — the repo the dash last picked — so a claude-fleet worker in a
 # monorepo fleet got #N of the OTHER repo (MERGED, while its own #N was OPEN), and
 # the merge could land there. Now: the pane's window @repo, or a refusal naming the
-# hosted repos. A fleet with no repos/ overlay resolves exactly as before.
+# hosted repos — and a one-repo fleet runs the same rule (issue #1938).
 MERGE_CLI="$BIN/fleet-pr-merge.sh"
 RW="$WORK/repo"; mkdir -p "$RW/fakebin" "$RW/conf/fleets/mr/repos" "$RW/conf/fleets/one" "$RW/tmp"
 printf 'FLEET_REPO=o/a\n' > "$RW/conf/fleets/mr/conf"
@@ -208,16 +208,25 @@ run_repo "$MERGE_CLI" mr '' 1821
   || fail "merge from a pane with no @repo must refuse before any gh call" "rc=$RC argv=$(cat "$RW/argv") $ERR"
 ok "merge: 2-repo fleet acts on the window's @repo, refuses (no gh call) with none"
 
-# Degenerate: no repos/ overlay — the pane's @repo is NOT consulted, the fleet's
-# own repo (FLEET_REPO, a one-repo pane's env) is, byte for byte as before.
-RUN_FLEET_REPO=o/a
-run_repo "$CLI" one o/zzz 1821
-grep -q -- '--repo o/a' "$RW/argv" || fail "one-repo fleet: verdict resolves as before (o/a)" "$(cat "$RW/argv") $ERR"
-run_repo "$MERGE_CLI" one o/zzz 1821
-grep -q -- '--repo o/a' "$RW/argv" && ! grep -q -- 'o/zzz' "$RW/argv" \
-  || fail "one-repo fleet: merge resolves as before (o/a)" "$(cat "$RW/argv") $ERR"
-RUN_FLEET_REPO=
-ok "degenerate: a one-repo fleet resolves exactly as before"
+# One rule, one repo or two (issue #1938): the same pane gets the same repo.
+# A pane whose @repo is hosted → that repo in both fleets; an explicit --repo
+# wins in both; a pane with no hosted repo → the fleet's ONLY repo in a one-repo
+# fleet (no FLEET_REPO in the env — the conf's repo, not the env's), a refusal
+# in a two-repo one.
+for f in one mr; do
+  for cli in "$CLI" "$MERGE_CLI"; do
+    run_repo "$cli" "$f" o/a 1821
+    grep -q -- '--repo o/a' "$RW/argv" || fail "$f: ${cli##*/} on an o/a pane acts on o/a" "$(cat "$RW/argv") $ERR"
+    run_repo "$cli" "$f" '' 1821 --repo o/a
+    grep -q -- '--repo o/a' "$RW/argv" || fail "$f: ${cli##*/} --repo o/a acts on o/a" "$(cat "$RW/argv") $ERR"
+  done
+done
+for cli in "$CLI" "$MERGE_CLI"; do
+  run_repo "$cli" one o/zzz 1821
+  grep -q -- '--repo o/a' "$RW/argv" && ! grep -q -- 'o/zzz' "$RW/argv" \
+    || fail "one-repo fleet: ${cli##*/} from a pane with no hosted repo takes the only repo (o/a)" "$(cat "$RW/argv") $ERR"
+done
+ok "one rule: a one-repo and a two-repo fleet resolve the same pane the same way"
 
 # ===== WAIT: --wait / --until-merged (issue #950) ==============================
 if ! command -v jq >/dev/null 2>&1; then

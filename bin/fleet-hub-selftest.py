@@ -635,7 +635,8 @@ class HubTests(HubFixture):
         done = self.lifecycle("worker_resume")
         self.assertEqual(done["status"], "succeeded")
         self.assertEqual(done["result"]["workers"][0]["worker_id"], self.worker())
-        self.assertEqual(self.node.calls("restore"), ["landed:issue:123 demo"])
+        # issue #1938: the fleet's only repo is named, the same rule as a 2-repo fleet
+        self.assertEqual(self.node.calls("restore"), ["landed:issue:123 demo --repo example/project"])
         self.assertEqual(self.node.calls("history"), ["resume --repo example/project --main /fixture/project 123"])
         live = self.lifecycle("worker_resume", idem="resume-again")
         self.assertEqual((live["status"], live["result"]["error"]["code"]), ("failed", "ALREADY_RUNNING"))
@@ -844,7 +845,7 @@ class HubTests(HubFixture):
                                                  params={"issue": 126, "origin_wid": parent}))
         self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
-                         "126 demo --agent claude --origin hub --origin-wid %s\n" % parent)
+                         "126 demo --agent claude --origin hub --repo example/project --origin-wid %s\n" % parent)
 
     def test_start_carries_the_account_class(self):
         # issue #1540: the asker's `--account local|pool` holds on the machine that
@@ -857,12 +858,12 @@ class HubTests(HubFixture):
                                                  params={"issue": 127, "account_class": "local"}))
         self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
-                         "127 demo --agent claude --origin hub --account local\n")
+                         "127 demo --agent claude --origin hub --repo example/project --account local\n")
         (self.node.conf / "spawn.calls").unlink()
         plain = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="unclassed",
                                                params={"issue": 128, "account_class": "any"}))
         self.assertEqual(self.node.wait(plain["operation_id"])["status"], "succeeded")
-        self.assertEqual((self.node.conf / "spawn.calls").read_text(), "128 demo --agent claude --origin hub\n")
+        self.assertEqual((self.node.conf / "spawn.calls").read_text(), "128 demo --agent claude --origin hub --repo example/project\n")
 
     def test_start_scratch_opens_a_raw_session(self):
         # issue #1541: kind=scratch is a raw scratch session — no issue, no claim;
@@ -883,7 +884,7 @@ class HubTests(HubFixture):
         worker = op["result"]["workers"][0]
         self.assertEqual((worker["key"], worker["scratch"], worker["issue"]), ("scratch-3", True, None))
         self.assertEqual((self.node.conf / "scratch.calls").read_text(),
-                         "demo --origin hub --print --agent claude --origin-wid %s --name 试一下\n" % parent)
+                         "demo --origin hub --print --agent claude --repo example/project --origin-wid %s --name 试一下\n" % parent)
         self.assertFalse((self.node.conf / "spawn.calls").exists())
         # a refusal there comes back with the raw spawner's own code and line
         (self.node.conf / "spawn-full").touch()

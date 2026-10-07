@@ -276,5 +276,43 @@ if fc 26 --note --no-such-flag x 2>/dev/null; then
 fi
 printf 'selftest: gh-flag leg PASS (-b / --body-file / -F / stdin accepted, bad file + unknown flag still rejected)\n' >&2
 
+# ============================== one rule, one repo or two (#1938) ============
+# The repo a bare post lands on is fleet_target_repo's, the same rule however many
+# repos the fleet hosts: the pane's hosted @repo, an explicit --repo, else the
+# fleet's ONLY repo — a two-repo fleet refuses (no gh call) where a one-repo fleet
+# has its one. The env's FLEET_REPO is never consulted inside a fleet.
+RP="$WORK/repo1938"; mkdir -p "$RP/bin" "$RP/conf/fleets/one" "$RP/conf/fleets/two/repos"
+printf 'FLEET_REPO=o/a\n' > "$RP/conf/fleets/one/conf"
+printf 'FLEET_REPO=o/a\n' > "$RP/conf/fleets/two/conf"
+printf 'FLEET_REPO=o/b\n' > "$RP/conf/fleets/two/repos/o-b.conf"
+cat > "$RP/bin/gh" <<'FAKE'
+#!/bin/bash
+printf '%s\n' "$*" >> "$RP_ARGV"; echo "https://example.test/issue/comment/1"; exit 0
+FAKE
+cat > "$RP/bin/tmux" <<'FAKE'
+#!/bin/bash
+case "$*" in
+  *'#{@repo}|'*) printf '%s||\n' "${FAKE_AT_REPO:-}" ;;
+  *session_group*|*session_name*) printf '%s\n' "${FAKE_SESSION:-}" ;;
+esac
+exit 0
+FAKE
+chmod +x "$RP/bin/gh" "$RP/bin/tmux"
+rp() {  # rp <fleet> <@repo> [args…] → $RP/argv, RC
+  : > "$RP/argv"
+  ( PATH="$RP/bin:$PATH" FLEET_CONF_DIR="$RP/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+    FLEET_REPO=o/env TMUX=/fake,1,0 TMUX_PANE=%1 FAKE_SESSION="$1" FAKE_AT_REPO="$2" \
+    RP_ARGV="$RP/argv" FAKE_ISSUE='' bash "$FCS" 31 --note --body x "${@:3}" >/dev/null 2>&1 ); RC=$?
+}
+for f in one two; do
+  rp "$f" o/a;              grep -q -- '--repo o/a' "$RP/argv" || fail "$f: a pane on o/a posts on o/a ($(cat "$RP/argv"))"
+  rp "$f" '' --repo o/a;    grep -q -- '--repo o/a' "$RP/argv" || fail "$f: --repo o/a posts on o/a ($(cat "$RP/argv"))"
+done
+rp one '';  grep -q -- '--repo o/a' "$RP/argv" || fail "one: a pane with no repo posts on the fleet's only repo ($(cat "$RP/argv"))"
+rp two '';  [ "$RC" != 0 ] && [ ! -s "$RP/argv" ] || fail "two: a pane with no repo must refuse before any gh call (rc=$RC $(cat "$RP/argv"))"
+rm -f "$RP/conf/fleets/two/repos/o-b.conf"
+rp two '';  grep -q -- '--repo o/a' "$RP/argv" || fail "two minus its overlay posts like one ($(cat "$RP/argv"))"
+printf 'selftest: one-rule repo leg PASS (one repo and two resolve the same pane the same way)\n' >&2
+
 printf 'selftest PASS: footer role-resolution (worker/operator/generic) + --from override + --to-worker + --no-footer + idempotency + no-leak + no-emoji + body-verbatim + gh-compatible flags verified\n'
 exit 0

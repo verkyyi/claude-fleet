@@ -30,7 +30,7 @@
 # WHERE IT LANDS (the report reads exactly these, so they are not negotiable):
 #   $FLEET_CONF_DIR/fleets/<sess>/epic/<E>/evidence/<M>/   M is a member of EPIC E
 #   $FLEET_CONF_DIR/fleets/<sess>/evidence/<M>/            M has no EPIC parent
-# In a fleet hosting 2+ repos, a repo other than the conf's own FLEET_REPO puts
+# A repo other than the conf's own FLEET_REPO (a second hosted repo) puts
 # both under fleets/<sess>/by-repo/<slug>/ instead — issue numbers repeat across
 # repos, and B's #12 must never read as A's (issue #803).
 # E is resolved from GitHub's parent link (GET …/issues/M/parent) unless given;
@@ -48,8 +48,8 @@
 #   --epic E      the EPIC parent (default: as above; `--epic none` forces the
 #                 non-EPIC path without asking GitHub)
 #   --session S   fleet session (default: the tmux session this pane is in)
-#   --repo R      GitHub repo (default: FLEET_REPO of the session; in a 2+ repo
-#                 fleet the pane's repo, then the dash's current one)
+#   --repo R      GitHub repo, one the fleet hosts (default: the pane's repo, else
+#                 the fleet's only repo — fleet_target_repo, issue #1938)
 #   --note '…'    one line on what the capture shows (manifest + comment)
 #   --name F      file name for a stdin capture (`-`) or a --pane capture
 #   --pane T      capture `tmux capture-pane -p -t T` — the TUI form of evidence
@@ -110,24 +110,23 @@ case "$epic_arg" in none|NONE|-) epic_arg=none ;; *) epic_arg="${epic_arg//[^0-9
 sess="${sess_arg:-$(fleet_current_session)}"
 [ -n "$sess" ] || die "no fleet session (not inside tmux — pass --session <fleet>)" 2
 fleet_load_conf "$sess"
-repo="${repo_arg:-${FLEET_REPO:-}}"
 state="$FLEET_CONF_DIR/fleets/$sess"
-# A fleet hosting 2+ repos (issue #803): the repo is the EPIC's, never just the
-# conf's — so the report run from the hub reads repo B's sub-issues, and a worker
-# gets its own window's repo. No --repo resolves like every repo-wide command
-# (fleet_target_repo: the pane's repo, then the dash's current one); under `all`
-# it refuses rather than filing B's evidence under A. Issue numbers repeat across
+# The repo is the EPIC's, never just the conf's (issue #803) — so the report run
+# from the hub reads repo B's sub-issues, and a worker gets its own window's repo.
+# ONE rule however many repos the fleet hosts (fleet_target_repo, issue #1938): a
+# --repo must be hosted, else the pane's repo, else the fleet's only repo, else it
+# refuses rather than filing B's evidence under A. Issue numbers repeat across
 # repos, so every repo but the conf's own keeps its store under by-repo/<slug>/ —
-# the conf repo's paths are the ones it always had. One-repo: untouched.
-if fleet_multirepo "$sess"; then
-  repo=$(fleet_target_repo "$sess" "$repo_arg"); _rc=$?
-  case "$_rc" in
-    0) ;;
-    4) die "fleet $sess hosts several repos — pass --repo ($(fleet_repos "$sess" | tr '\n' ' '))" 2 ;;
-    *) die "$repo_arg is not a repo fleet $sess hosts" 2 ;;
-  esac
-  [ "$repo" = "$(fleet_repos "$sess" | head -n1)" ] || state="$state/by-repo/$(fleet_slug "$repo")"
-fi
+# the conf repo's paths are the ones it always had.
+repo=$(fleet_target_repo "$sess" "$repo_arg"); _rc=$?
+case "$_rc" in
+  0) ;;
+  4) die "fleet $sess hosts several repos — pass --repo ($(fleet_repos "$sess" | tr '\n' ' '))" 2 ;;
+  *) [ -n "$repo_arg" ] && die "$repo_arg is not a repo fleet $sess hosts" 2
+     repo='' ;;   # a fleet with no repo: before/after still capture; post/line refuse
+esac
+_first=$(fleet_repos "$sess" | head -n1)
+[ -z "$_first" ] || [ "$repo" = "$_first" ] || state="$state/by-repo/$(fleet_slug "$repo")"
 
 # ---- the member issue: @issue wins, the issue-<M> worktree in cwd is the fallback
 resolve_issue() {
