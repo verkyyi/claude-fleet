@@ -431,7 +431,7 @@ rv_legacy_undo() {
 # paid once per row, not per click (issue #1682).
 RV_SEEN=''
 rv_select() {
-  local wid="${1#wid:}" view="${2:-}" hit loc fid tgt g w='' s=''
+  local wid="${1#wid:}" view="${2:-}" hit loc fid tgt g c w='' s=''
   hit=$(printf '%s\n' "$RV_SEEN" | awk -v k="$wid" '$1 == k { print $2, $3, $4; exit }')
   if [ -n "$hit" ]; then
     set -- $hit; sock=$(fleet_socket "$2")
@@ -456,7 +456,13 @@ $wid $w $s $fid"
       [ -n "$g" ] && tgt="$g"
     fi ;;
   esac
-  T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; return 3; }
+  # A view's own client switches (issue #1933): `switch-client -c` makes it the
+  # window's latest client, so the window takes THIS viewer's size (the node runs
+  # `window-size latest`); a bare select-window comes from no client and leaves
+  # the window at whoever typed into it last. No client attached → select-window.
+  c=''; [ "$tgt" = "$s" ] || c=$(T list-clients -t "=$tgt" -F '#{client_tty}' 2>/dev/null | head -1)
+  { [ -n "$c" ] && T switch-client -c "$c" -t "=$tgt:$w" 2>/dev/null; } \
+    || T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; return 3; }
   rv_hide_border "$w"   # a window spawned since the attach (#1549, #1682)
   return 0
 }
