@@ -11,7 +11,12 @@ accounts=${FLEET_ACCOUNTS_DIR:-$HOME/.config/claude-fleet/accounts}
 missing=''
 add() { missing="${missing:+$missing, }$1"; }
 
-command -v claude >/dev/null 2>&1 || add 'Claude CLI'
+# claude where the launcher finds it (issue #1233): PATH, else ~/.local/bin /
+# /opt/homebrew/bin / /usr/local/bin — a `sudo -u <login> -i bash` has no
+# ~/.local/bin on PATH (zsh adds it in .zshrc), and the installer puts it there.
+# shellcheck source=/dev/null
+. "$bin/fleet-lib.sh"
+fleet_find_tool claude >/dev/null 2>&1 || add 'Claude CLI'
 
 tokens=0
 bad_tokens=0
@@ -67,8 +72,6 @@ if [ ! -e "$conf_dir/global/onboarded" ]; then
   # global/guide.spoke, issue #1215) AND its agent is still running — a window
   # left at a bare shell, or a claude that only printed `Unknown command`, is
   # not a guide. The onboarded marker also counts: it survives the guide closing.
-  # shellcheck source=/dev/null
-  . "$bin/fleet-lib.sh"
   guide=0
   while IFS=$'\t' read -r sess _; do
     [ -n "$sess" ] || continue
