@@ -27,6 +27,9 @@
 #                certificate (a PATH `ssh` stand-in: a fake node has no sshd);
 #                a second `fleet` asks for no scan; under the renew threshold
 #                it renews with the device key, no scan (the 12-hour roll)
+#   4b. home   — `fleet` ON the machine the hub picks, with no fleet of this
+#                login there (issue #2219): the right pane is the home page,
+#                never 「正在连接 <本机>」 / 「没有活着的 fleet 会话」
 #   5. leave   — the person deleted (DELETE /v1/self, the drill's own
 #                teardown): `fleet login renew` says scan again (exit 3), and
 #                the list no longer carries them after `fleet users remove`
@@ -48,7 +51,7 @@ CCQ=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --ccquota) CCQ=${2:-}; shift 2 ;;
-    -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'newcomer-e2e: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -352,7 +355,27 @@ ok "no scan the second time; renewed by key (serial $before → $after)"
 ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
 
 # =============================================================================
-step 'leave: the person removed — renew says scan again, the list forgets them'
+step 'home: on the very machine the hub picks, with no fleet of theirs there'
+# The C8 drill (issue #2219): the newcomer's 「只看、只派」 client ran ON the
+# machine the hub knows them by. This login has no fleet here, so the right pane
+# is the home page — never 「正在连接 <本机>」 then 「没有活着的 fleet 会话」.
+printf '#!/bin/sh\necho %s\n' "$NODE" > "$SHIM/hostname"
+out=$(fenv "$FLEET" 2>"$WORK/fleet4.err" </dev/null); rc=$?
+printf '#!/bin/sh\necho newcomer-laptop\n' > "$SHIM/hostname"
+[ "$rc" = 0 ] && [ "$out" = "$SESS" ] || die "fleet on the picked machine exited $rc" "$(tail -n 8 "$WORK/fleet4.err")"
+P="$SESS"; waitfor 5 "$REAL_TMUX" -L "$SESS-stage" has-session -t "=$SESS-stage" && P="$SESS-stage"
+w1=$(tp list-windows -t "=$P" -F '#{window_id}' | head -1)
+remote=$(tp show-options -wqv -t "$w1" @remote)
+[ "$remote" = '-:' ] || die "the right pane connects to this computer ($NODE) with no fleet here" "@remote=$remote"
+homepg() { tp capture-pane -p -t "$w1" 2>/dev/null | grep -q '没有你的 fleet 会话'; }
+waitfor 10 homepg || die 'the right pane is not the home page' "$(tp capture-pane -p -t "$w1" 2>/dev/null | grep -v '^$')"
+pg=$(tp capture-pane -p -t "$w1" 2>/dev/null)
+case "$pg" in *正在连接*|*没有活着的*) die 'the right pane still tries this computer' "$pg" ;; esac
+ok "@remote=-: · the home page, no 正在连接 $NODE, no 没有活着的 fleet 会话"
+ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+
+# =============================================================================
+step 'leave:the person removed — renew says scan again, the list forgets them'
 code=$(printf '{"approve_code":"%s"}' "$APPROVE" | curl -s -m 10 -o "$WORK/self.out" -w '%{http_code}' \
          -X DELETE -H 'Content-Type: application/json' --data-binary @- "$HUB/v1/self")
 case "$code" in 200|204) ;; *) die 'DELETE /v1/self refused' "HTTP $code $(cat "$WORK/self.out")" ;; esac
