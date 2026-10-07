@@ -36,7 +36,9 @@ func oldIdentity(t *testing.T, st *store.Store, pid, login, host string, mapped 
 func settingCount(t *testing.T, st *store.Store, key string) int {
 	t.Helper()
 	var n int
-	if err := st.DB().QueryRow(`SELECT count(*) FROM fleet_settings WHERE key = ? COLLATE NOCASE`, key).Scan(&n); err != nil {
+	// lower() on both sides, not COLLATE NOCASE: that collation is SQLite's
+	// only, and the pg leg runs this too (claude-fleet#2173).
+	if err := st.DB().QueryRow(`SELECT count(*) FROM fleet_settings WHERE lower(key) = lower(?)`, key).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
