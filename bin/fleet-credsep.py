@@ -827,7 +827,7 @@ def machine_logins(spec):
     names = [l for l in spec.split(",") if l] if spec and spec != "all" else [n for n, _, _ in fleet_logins()]
     out = []
     for n in names:
-        if not re.match(r"^[a-z_][a-z0-9_.-]{0,31}$", n):
+        if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", n):
             die("bad login %r" % n, 2)
         pw = getpw(n)
         home = pw.pw_dir
@@ -1122,7 +1122,7 @@ def main():
         return {"install": machine_install, "uninstall": machine_uninstall, "refresh": machine_refresh}[a.verb](a)
     if a.cmd in ("install", "uninstall"):
         DRY = a.dry_run
-        if not re.match(r"^[a-z_][a-z0-9_.-]{0,31}$", a.login):
+        if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", a.login):
             die("bad login %r" % a.login, 2)
         if os.geteuid() != 0 and not TEST and not DRY:
             die("%s needs root (bin/fleet-credsep.sh runs it through sudo -n)" % a.cmd, 2)
