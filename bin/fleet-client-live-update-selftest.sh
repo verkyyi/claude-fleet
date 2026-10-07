@@ -42,6 +42,13 @@
 #   I. adopt       a plain-dir home and a pre-#1781 <home>.prev, nothing running:
 #                  `start` makes them versions/<v> + the link, and .prev names the
 #                  old one
+#   J. unversioned a home with NO .client-version (issue #2145), started on a conf
+#                  without the key hints: the server carries @client_digest; new
+#                  files → the doctor WARNs (no mark, the fix, the drift); not while
+#                  someone types; once idle tick reloads (exit 4): @fleet_hint set,
+#                  the digest moved, update.state reloaded, the badge 已重新载入新文件;
+#                  nothing adopted or staged; `start` does the same; a MARKED home
+#                  never reloads on the digest alone
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -322,6 +329,54 @@ rm -rf "$ROOT" "$V" "$ROOT.prev"
 mkver "$ROOT" w2 cafe002
 upd start
 CHECKS=$((CHECKS + 1)); [ -L "$ROOT" ] && fail 'I: a full install was adopted'
+
+# --- J. no .client-version: told by content (issue #2145) ------------------------------
+"$REAL_TMUX" -L "$SESS" kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+rm -rf "$ROOT" "$V" "$UST"
+mkver "$ROOT" j1 cafe0j1; rm -f "$ROOT/bin/fleet-up.sh" "$ROOT/.client-version"
+rm -f "$ROOT/conf/tmux-shell.conf"
+grep -v fleet_hint "$BIN/../conf/tmux-shell.conf" > "$ROOT/conf/tmux-shell.conf"   # an older conf: no key hints
+PATH="$SHIM:$PATH" bash "$ROOT/bin/fleet-shell.sh" >"$WORK/start-j.out" 2>&1 || { cat "$WORK/start-j.out" >&2; fail 'J: the unversioned client did not start'; }
+hint() { ts show-options -gqv @fleet_hint 2>/dev/null; }
+dig() { ts show-options -gqv @client_digest 2>/dev/null; }
+eq 'J: the old conf has no key hints' '' "$(hint)"
+eq 'J: no @client_version without the mark' '' "$(ts show-options -gqv @client_version 2>/dev/null)"
+eq 'J: @client_digest = the files it loaded' "$(upd digest)" "$(dig)"
+D0=$(dig)
+FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
+eq 'J: in step → nothing (exit 0)' 0 "$rc"
+cp "$BIN/../conf/tmux-shell.conf" "$ROOT/conf/tmux-shell.conf.new" && mv -f "$ROOT/conf/tmux-shell.conf.new" "$ROOT/conf/tmux-shell.conf"
+has 'J: the doctor WARNs: no mark, follows no update' "$(upd doctor)" 'WARN	没有 .client-version'
+has 'J: … with the fix' "$(upd doctor)" '/install | sh'
+has 'J: … and the drift' "$(upd doctor)" '正在运行的客户端不是磁盘上的文件'
+FLEET_CLIENT_IDLE_SECS=99999999 upd tick "$SESS"; rc=$?
+eq 'J: someone typing → nothing yet (exit 0)' 0 "$rc"
+eq 'J: … still the old conf' '' "$(hint)"
+FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
+eq 'J: idle → reloaded in place (exit 4)' 4 "$rc"
+CHECKS=$((CHECKS + 1)); [ -n "$(hint)" ] || fail 'J: @fleet_hint still empty after the reload'
+CHECKS=$((CHECKS + 1)); [ "$(dig)" != "$D0" ] && [ "$(dig)" = "$(upd digest)" ] || fail 'J: the digest did not follow the files' "$D0 → $(dig)"
+has 'J: update.state reloaded' "$(cat "$UST" 2>/dev/null)" '"phase": "reloaded"'
+has 'J: the badge says so' "$(badge)" '已重新载入新文件'
+hasnt 'J: … not 已更新到' "$(badge)" '已更新到'
+hasnt 'J: the doctor no longer sees a drift' "$(upd doctor)" '正在运行的客户端不是'
+FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
+eq 'J: in step again → nothing (exit 0)' 0 "$rc"
+CHECKS=$((CHECKS + 1)); [ ! -L "$ROOT" ] && [ ! -e "$V" ] || fail 'J: an unversioned home was adopted / staged' "$(ls -la "$XDG_DATA_HOME")"
+# `start` the same, before it attaches
+printf '\n# j2\n' >> "$ROOT/conf/tmux-shell.conf"
+upd start; rc=$?
+eq 'J: start opens as usual (exit 0)' 0 "$rc"
+eq 'J: start reloaded it first' "$(upd digest)" "$(dig)"
+# with the mark, the content is not asked (#1829 byte for byte): files that move
+# under the same version reload nothing
+printf 'version=j2\ncompat=1\ncommit=cafe0j2\nhub=%s\n' "$FLEET_HUB_URL" > "$ROOT/.client-version"
+ts set-option -g @client_version j2
+D1=$(dig)
+printf '\n# j3\n' >> "$ROOT/conf/tmux-shell.conf"
+FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
+eq 'J: a marked home ignores the digest (exit 0)' 0 "$rc"
+eq 'J: … nothing reloaded' "$D1" "$(dig)"
 
 if [ "$FAIL" -eq 0 ]; then printf 'PASS fleet-client-live-update-selftest (%d checks)\n' "$CHECKS"; exit 0; fi
 printf 'FAIL fleet-client-live-update-selftest: %d of %d\n' "$FAIL" "$CHECKS"
