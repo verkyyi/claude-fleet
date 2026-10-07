@@ -233,19 +233,14 @@ echo "fleet-up: wrote $CONF"
 add_repo
 mark_seed
 
-# Where the hub opens: its repo's checkout when the fleet hosts exactly one, else
-# $HOME — a fleet with no repo, or several, has no main checkout (#795, #1937).
-HUB_DIR="$HOME"
-_repos=$(fleet_repos "$NAME")
-if [ -n "$_repos" ] && [ "$(printf '%s\n' "$_repos" | grep -c .)" = 1 ]; then
-  _m=$(fleet_repo_conf_get "$NAME" "$_repos" FLEET_MAIN)
-  [ -n "$_m" ] && [ -d "$_m" ] && HUB_DIR="$_m"
-fi
+# Where the hub opens: $HOME (or HUB_CWD), however many repos the fleet hosts —
+# a fleet has no main checkout (#795, #1937, #1941).
+HUB_DIR="${HUB_CWD:-$HOME}"
 
 # --- create the session + the HUB ---
 # 'work' is the plain work shell; the 'plan' hub (the dash, and ONLY the dash —
 # a fresh fleet no longer comes up with a hub Claude session) is built by
-# hub-session.sh, scoped to THIS fleet's session + checkout so F9 toggles this
+# hub-session.sh, scoped to THIS fleet's session so F9 toggles this
 # fleet's own hub.
 # The server inherits THIS process's PATH for its whole life, and every window it
 # spawns server-side (a bind, a hook) runs under it; the hub + guide spawned right

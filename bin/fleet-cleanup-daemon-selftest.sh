@@ -74,7 +74,7 @@ cat > "$WORK/bin/fleet-cleanup.sh" <<FAKE
 pr=''
 # Every daemon candidate must opt into merged grace; fail if wiring regresses.
 case " \$* " in *' --auto '*) ;; *) exit 2 ;; esac
-while [ "\$#" -gt 0 ]; do case "\$1" in --pr) shift; pr="\${1:-}";; -*) : ;; *) pr="\$1";; esac; shift; done
+while [ "\$#" -gt 0 ]; do case "\$1" in --pr) shift; pr="\${1:-}";; --repo) shift ;; -*) : ;; *) pr="\$1";; esac; shift; done
 # Wedge on demand (timeout test): park in a child, publish BOTH pids, never
 # record a reap. Mirrors the real hang — the script blocked inside a child.
 if grep -qxF "\$pr" "$WORK/hang" 2>/dev/null; then
@@ -133,7 +133,9 @@ case "\${1:-}" in
       # The #544 CLOSED pre-screen asks for BOTH the issue and the state.
       # Must be matched before the bare claude_state arm, which the scratch
       # pre-screen (#589) uses and which is keyed by window id, not issue.
-      *"@issue"*claude_state*) printf '11 %s\n' "\${ISSUE11_STATE:-done}" ;;
+      # Keyed by window id first: the daemon keeps a window only when it is THIS
+      # repo's (fleet_window_repo — the fleet's only repo here, #1941).
+      *"@issue"*claude_state*) printf '@11 11 %s\n' "\${ISSUE11_STATE:-done}" ;;
       *claude_state*)          printf '@99 done\n@98 working\n@97 done\n' ;;
       *)                       echo '11' ;;    # the @issue probe → issue-11 has a window
     esac ;;
@@ -343,7 +345,10 @@ grep -q -- '--dry-run' "$WORK/idle-calls" || fail 'dry-run must reach idle polic
 reset
 conf 'FLEET_CLEANUP=0'
 run s1
-[ ! -s "$WORK/idle-calls" ] || fail 'cleanup off must suppress idle pass'
+# The switch is per repo (#978, one road #1941): the idle pass gates each repo
+# itself (fleet-cleanup-idle.sh), and the PR pass for the repo is off.
+[ ! -s "$CLEAN_LOG" ] || fail 'cleanup off must suppress the PR pass'
+grep -q 'fake/repo\] cleanup off' "$WORK/log" || fail 'cleanup off must be logged for its repo'
 reset
 conf
 mv "$C/fleets/fake-repo/prmap" "$WORK/saved-prmap"

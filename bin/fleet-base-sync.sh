@@ -104,27 +104,19 @@ log() { printf '%s fleet-base-sync: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || ech
 
 # --- extract ONE fleet's base identities (subshelled so its conf never leaks into
 # the discovery loop). Prints TSV: on-flag \t repo \t main \t base-branch \t deps
-# — one row, or in a multi-repo fleet one row PER HOSTED REPO, each read through
-# that repo's overlay (issue #978): its own base checkout, and its own
-# FLEET_WORKTREE_SETUP / FLEET_BASE_DEPS deciding whether its deps are refreshed.
+# — one row PER HOSTED REPO, however many (issues #978, #1941), each read through
+# that repo's overlay: its own base checkout, and its own FLEET_WORKTREE_SETUP /
+# FLEET_BASE_DEPS deciding whether its deps are refreshed.
 fleet_ident() { (
   fleet_load_conf "$1"
-  if fleet_has_repo_overlays "$1"; then
-    while IFS= read -r r; do
-      [ -n "$r" ] || continue
-      ( fleet_load_repo_conf "$1" "$r" || exit 0
-        deps=0; fleet_base_deps_on && deps=1
-        printf '%s\t%s\t%s\t%s\t%s\n' "${FLEET_BASE_SYNC:-1}" "$r" "${FLEET_MAIN:-}" "${FLEET_BASE_BRANCH:-master}" "$deps" )
-    done <<EOF
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    ( fleet_load_repo_conf "$1" "$r" || exit 0
+      deps=0; fleet_base_deps_on && deps=1
+      printf '%s\t%s\t%s\t%s\t%s\n' "${FLEET_BASE_SYNC:-1}" "$r" "${FLEET_MAIN:-}" "${FLEET_BASE_BRANCH:-master}" "$deps" )
+  done <<EOF
 $(fleet_repos "$1")
 EOF
-    exit 0
-  fi
-  off="${FLEET_BASE_SYNC:-1}"
-  repo="${FLEET_REPO:-}"
-  _r=$(fleet_repo_cached "$1"); [ -n "$_r" ] && repo="$_r"
-  deps=0; fleet_base_deps_on && deps=1
-  printf '%s\t%s\t%s\t%s\t%s\n' "$off" "$repo" "${FLEET_MAIN:-}" "${FLEET_BASE_BRANCH:-master}" "$deps"
 ) }
 
 # --- move ONE repo's base. Runs in a subshell so its lease trap is scoped to the

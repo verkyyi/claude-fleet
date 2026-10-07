@@ -63,7 +63,7 @@
 #
 # Env knobs (all per-fleet, in $FLEET_CONF_DIR/<session>.conf or global fleet.conf):
 #   FLEET_AUTOFILL              1 to enable for this fleet          (default 0/off)
-#                               (per repo in a multi-repo fleet, #799)
+#                               (per repo — its overlay, else the fleet conf, #799)
 #   FLEET_MAX_SESSIONS          per-fleet session ceiling           (default 0/unlimited)
 #   FLEET_GLOBAL_MAX_SESSIONS   system-wide ceiling (shared)        (default 0 = off, #1831)
 #   FLEET_AUTOFILL_MAX_PER_TICK max spawns per fleet per tick       (default 1)
@@ -253,7 +253,7 @@ autofill_gate() {
   return 0
 }
 
-# Every autofill-eligible issue across a multi-repo fleet's armed repos, as TSV
+# Every autofill-eligible issue across the fleet's armed repos, as TSV
 # "tier<TAB>number<TAB>repo", ONE merged order (issue #799). Priority still comes
 # first; within a tier the repos are INTERLEAVED, least-loaded first: a repo's
 # j-th candidate in a tier ranks at (its live windows in this fleet + j). So with
@@ -285,43 +285,31 @@ EOF
 }
 
 # --- dispatch ONE fleet. Runs in a subshell so its per-fleet conf never leaks. --
-# A fleet hosting 2+ repos (issue #799) dispatches for EVERY hosted repo whose own
-# view of FLEET_AUTOFILL is 1 (its overlay, else the fleet conf — #978), under the
-# fleet's ONE pair of caps and ONE per-tick budget; each repo keeps its own lease,
-# its own agent/quota gate, and spawns with --repo. A one-repo fleet takes the
-# historic path, byte for byte.
+# ONE road however many repos the fleet hosts (issues #799, #1941): dispatch for
+# EVERY hosted repo whose own view of FLEET_AUTOFILL is 1 (its overlay, else the
+# fleet conf — #978), under the fleet's ONE pair of caps and ONE per-tick budget;
+# each repo keeps its own lease, its own agent/quota gate, and spawns with --repo.
+# One repo is just fleet_repos counting 1.
 dispatch_fleet() { (
   sess="$1"
   fleet_load_conf "$sess"
-  multi=0; fleet_multirepo "$sess" && multi=1
 
-  if [ "$multi" = 0 ]; then
-    autofill_gate "$sess" "$sess" || exit 0
-    # An autofill fleet is by definition unattended — report a parked spawn before
-    # counting slots (it stays counted; see trust_sweep).
-    [ "$DRY" = 1 ] || trust_sweep "$sess"
-
-    repo="${FLEET_REPO:-}"
-    _r=$(fleet_repo_cached "$sess"); [ -n "$_r" ] && repo="$_r"
-    [ -z "$repo" ] && { log "$sess: no repo resolved — skip"; exit 0; }
-    command -v gh >/dev/null 2>&1 || { log "$sess: gh not on PATH — skip"; exit 0; }
-    repos=$repo
-  else
-    # Each repo is judged on its own view of the conf, in a subshell, so repo A's
-    # overlay never colours repo B's verdict.
-    repos=''
-    while IFS= read -r r; do
-      [ -n "$r" ] || continue
-      ( fleet_load_repo_conf "$sess" "$r" >/dev/null 2>&1; autofill_gate "$sess" "$sess: $r" ) \
-        && repos="$repos$r
+  # Each repo is judged on its own view of the conf, in a subshell, so repo A's
+  # overlay never colours repo B's verdict.
+  repos=''
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    ( fleet_load_repo_conf "$sess" "$r" >/dev/null 2>&1; autofill_gate "$sess" "$sess: $r" ) \
+      && repos="$repos$r
 "
-    done <<EOF
+  done <<EOF
 $(fleet_repos "$sess")
 EOF
-    [ -n "$repos" ] || exit 0
-    [ "$DRY" = 1 ] || trust_sweep "$sess"
-    command -v gh >/dev/null 2>&1 || { log "$sess: gh not on PATH — skip"; exit 0; }
-  fi
+  [ -n "$repos" ] || exit 0
+  # An autofill fleet is by definition unattended — report a parked spawn before
+  # counting slots (it stays counted; see trust_sweep).
+  [ "$DRY" = 1 ] || trust_sweep "$sess"
+  command -v gh >/dev/null 2>&1 || { log "$sess: gh not on PATH — skip"; exit 0; }
 
   # Rate-limit: at most K spawns this tick (the 60s interval is the cooldown).
   # Per FLEET, not per repo: hosting more repos never multiplies the spend.
@@ -351,10 +339,8 @@ EOF
 "
         kept="$kept$r
 "
-      elif [ "$multi" = 1 ]; then
-        log "$sess: $r: another dispatcher holds the lease — skip"
       else
-        log "$sess: another dispatcher holds the lease — skip"
+        log "$sess: $r: another dispatcher holds the lease — skip"
       fi
     done <<EOF
 $repos
@@ -369,28 +355,21 @@ EOF
   # cleared (a slug-named window) is still recognised as live and not counted as
   # a fresh spawn. Second guard beyond the eligible-set's unassigned filter.
   # A 2+ repo fleet's names carry a repo tag (`tl·issue-12`, issue #793).
-  live=$(tmux -L "$(fleet_socket "$sess")" list-windows -t "$sess" -F '#{@issue}	#{window_name}' 2>/dev/null | awk -F'\t' '
-    { if ($1 != "") print $1
-      if ($2 ~ /^(.*·)?issue-[0-9]+$/) { n=$2; sub(/^.*issue-/, "", n); print n } }' | sort -u)
-  is_live() { printf '%s\n' "$live" | grep -qxF "$1"; }
-  # A fleet hosting 2+ repos keys the live set by (repo, N) (issue #790): repo A's
-  # #12 window must not block spawning repo B's #12. A window whose repo is unknown
-  # (`#N`) still blocks N in every repo — a skipped spawn retries next tick, a
-  # double spawn spends tokens twice. A one-repo fleet keeps the set above as is.
-  if [ "$multi" = 1 ]; then
-    live=$(fleet_bound_windows "$sess" | cut -f1 | sort -u)
-    is_live() { printf '%s\n' "$live" | grep -qxF -e "$(fleet_norm_repo "$2")#$1" -e "#$1"; }
-  fi
+  # Keyed by (repo, N) (issue #790): repo A's #12 window must not block spawning
+  # repo B's #12. A window whose repo is unknown (`#N`) still blocks N in every
+  # repo — a skipped spawn retries next tick, a double spawn spends tokens twice.
+  # A window whose @issue was cleared still blocks by its bare `issue-<N>` NAME
+  # (fleet_bound_windows), the same name rule dash-issue-session.sh's dedup applies.
+  live=$(fleet_bound_windows "$sess" | cut -f1 | sort -u)
+  is_live() { printf '%s\n' "$live" | grep -qxF -e "$(fleet_norm_repo "$2")#$1" -e "#$1"; }
 
   spawned=0; considered=0
   while IFS=$(printf '\t') read -r tier num r; do
     [ -z "$num" ] && continue
     considered=$((considered + 1))
-    # A multi-repo fleet names the issue by (repo, N) in every line and spawns it
-    # with --repo (#972 refuses one that does not); a one-repo fleet keeps its
-    # historic `#N` log lines and argv, byte for byte.
-    ref="#$num"; ra=(); rtag=''
-    [ "$multi" = 1 ] && { ref="$r#$num"; ra=(--repo "$r"); rtag=" --repo $r"; }
+    # The issue is named by (repo, N) in every line and spawned with --repo (#972
+    # refuses one that does not).
+    ref="$r#$num"; ra=(--repo "$r"); rtag=" --repo $r"
     if is_live "$num" "$r"; then
       log "$sess: skip $ref (p$tier) — window already bound"
       continue
@@ -431,12 +410,8 @@ EOF
     fi
     [ "$spawned" -ge "$slots" ] && break
   done <<EOF
-$(if [ "$multi" = 1 ]; then
-    # shellcheck disable=SC2086  # deliberate: one repo per word (owner/name has no space)
-    merged_eligible "$live" $repos
-  else
-    eligible_issues "$repo"
-  fi)
+$(# shellcheck disable=SC2086  # deliberate: one repo per word (owner/name has no space)
+  merged_eligible "$live" $repos)
 EOF
 
   if [ "$considered" -eq 0 ]; then
