@@ -171,3 +171,14 @@ print(json.dumps(out))
 		}
 	}
 }
+
+// ClientFleetID is Python's uuid.uuid5(uuid.NAMESPACE_URL, "fleet-client:" + h)
+// byte for byte — bin/fleet-run.sh derives the same one (claude-fleet#2136).
+func TestClientFleetIDMatchesPython(t *testing.T) {
+	if got, want := ClientFleetID("abc"), "a5195890-1ae2-51ad-9694-7c7fb059e253"; got != want {
+		t.Fatalf("ClientFleetID(abc) = %s, want %s", got, want)
+	}
+	if ClientFleetID("abc") == ClientFleetID("abd") {
+		t.Fatal("two tokens, one client fleet")
+	}
+}

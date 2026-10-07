@@ -185,4 +185,7 @@ bin/fleet-config.py
 bin/fleet-cred-proxy.sh
 bin/fleet-cred-proxy.py
 bin/fleet-relay-cred.sh
+bin/fleet-run.sh
+bin/fleet-session-cred.sh
+bin/fleet-cred-scan.py
 # --- end agent bundle ---

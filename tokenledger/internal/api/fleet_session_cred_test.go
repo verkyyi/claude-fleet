@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 )
 
 // 会话通行证 (claude-fleet#1969, EPIC #1967 C2): a pass for one person's one
@@ -368,5 +369,32 @@ func TestSessionCredOffAddsNothing(t *testing.T) {
 	}
 	if rows, _ := h.srv.Store.SessionCreds(false, time.Now(), 10); len(rows) != 0 || len(sessAudits(t, h)) != 0 {
 		t.Fatal("a pass or an audit row with passes off")
+	}
+}
+
+// A client-only computer runs no fleet (claude-fleet#2136): its session names
+// the fleet UUID derived from its own node token, and gets a pass as the
+// node's login. Another node cannot name it, and an unregistered UUID that is
+// not this derivation is still no such session.
+func TestSessionCredClientComputer(t *testing.T) {
+	h, tok5, tok4, _, _ := sessHarness(t)
+	now := time.Now()
+	cf := fleetid.ClientFleetID(HashToken(tok5))
+	out := sessIssue(t, h, tok5, cf, map[string]any{"providers": []string{"claude"}})
+	if !strings.HasPrefix(out["cred"].(string), "fcp-h1.") {
+		t.Fatalf("no pass: %v", out)
+	}
+	v := sessVerify(t, h, map[string]any{"cred": out["cred"]})
+	if v["valid"] != true || v["worker_id"] != fleetid.WorkerID(cf, assertFid) || v["machine"] != "m5" {
+		t.Fatalf("verify: %v", v)
+	}
+	for name, c := range map[string]struct{ tok, fleet string }{
+		"m5's client fleet, signed by m4":  {tok4, cf},
+		"an unregistered, underived fleet": {tok5, fleetid.ClientFleetID("someone-else")},
+	} {
+		a := signWorkerAssertion(assertClaims(c.fleet, now), HashToken(c.tok))
+		if st, out := sessDo(t, h, http.MethodPost, "/v1/fleet/session-cred", c.tok, a, nil); st != 404 || out["cred"] != nil {
+			t.Errorf("%s: %d %v; want 404 and no pass", name, st, out)
+		}
 	}
 }

@@ -67,6 +67,19 @@ func FleetID(machineID, session, repo, checkout string) (string, error) {
 	return uuid5(ns, Canonical([]string{session, repo, checkout})), nil
 }
 
+// clientNS is RFC 4122's URL namespace (Python's uuid.NAMESPACE_URL).
+var clientNS = [16]byte{0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8}
+
+// ClientFleetID is the fleet UUID a client-only computer's own sessions run
+// under (claude-fleet#2136): such a computer runs no fleet, so the registry has
+// no row for it, and the hub and the computer both derive this one from the
+// node's token hash (HashToken) —
+//
+//	uuid.uuid5(uuid.NAMESPACE_URL, "fleet-client:" + token_hash)
+//
+// Only the holder of that node's token can sign an assertion naming it.
+func ClientFleetID(tokenHash string) string { return uuid5(clientNS, "fleet-client:"+tokenHash) }
+
 // RepoSlug is fleet_slug: owner/name → owner-name, with anything outside
 // [A-Za-z0-9._-] dropped.
 func RepoSlug(repo string) string {
