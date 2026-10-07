@@ -161,6 +161,7 @@ pkey() {
 pgroup() { printf '\n  %s%s%s%s%s\n' "$B" "$CYAN" "$1" "$R" "${2:+  $DIM$2$R}"; }
 print_page() {
   local sa sg sp acts='' done_acts=''
+  local G_next='' G_prev='' G_back='' G_fwd='' P_next='' P_prev='' P_back='' P_fwd=''
   printf '\n  %s%s%s  %s%s%s  %s%s%s\n' "$B" "$(fleet_ui_t keys_page_title)" "$R" \
     "$DIM" "$(fleet_ui_t keys_page_sub)" "$R" "$DIM" "$(fleet_ui_t keys_close)" "$R"
   pgroup "$(fleet_ui_t keys_page_cmd)"
