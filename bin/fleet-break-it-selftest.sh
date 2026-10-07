@@ -1024,7 +1024,7 @@ PY
   grep -q ":$w .*kept working" "$d/reconcile.log" 2>/dev/null \
     || { WHY="the reconcile neither demoted nor kept $w: $(cat "$d/reconcile.out" "$d/reconcile.log" 2>/dev/null | tail -3 | tr '\n' ' ')"; return 1; }
   # break ②: the turn ends (the Stop hook runs) while the call is still running
-  printf '' | tw_env TMUX_PANE="$p" sh "$BIN/set-claude-state.sh" done >/dev/null 2>&1
+  printf '' | tw_env TMUX_PANE="$p" sh "$BIN/set-claude-state.sh" 'done' >/dev/null 2>&1
   st="$(o "$w" @claude_state)/$(o "$w" @claude_wait)"
   [ "$st" = looping/tool ] \
     || { WHY="the Stop during a fleet tool call left @claude_state/@claude_wait=[$st], want looping/tool — reopen, reap, sleep and the backstop would all take the session mid-wait"; return 1; }
