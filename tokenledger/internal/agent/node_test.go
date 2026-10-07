@@ -317,7 +317,7 @@ func TestReadFleetsCarriesCapacity(t *testing.T) {
 	script := filepath.Join(home, fleetControlScript)
 	os.MkdirAll(filepath.Dir(script), 0o755)
 	os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755)
-	capacity := `,"capacity":{"sessions":9,"max_sessions":8}`
+	capacity := `,"capacity":{"sessions":9,"max_sessions":8,"admit":false,"admit_why":"内存紧张","room":0}`
 	old := fleetControlCommand
 	fleetControlCommand = func(ctx context.Context, s string, stdin []byte) ([]byte, error) {
 		var req map[string]any
@@ -333,9 +333,77 @@ func TestReadFleetsCarriesCapacity(t *testing.T) {
 	if err != nil || snap.capacity == nil || snap.capacity.Sessions != 9 || snap.capacity.MaxSessions != 8 {
 		t.Fatalf("snapshot capacity = %+v (%v); want 9/8", snap.capacity, err)
 	}
+	// The gate's own verdict rides along (claude-fleet#1836).
+	if c := snap.capacity; c.Admit == nil || *c.Admit || c.AdmitWhy != "内存紧张" || c.Room == nil || *c.Room != 0 {
+		t.Fatalf("snapshot capacity = %+v; want admit false 内存紧张, room 0", c)
+	}
+	capacity = `,"capacity":{"sessions":9,"max_sessions":8}`
+	if snap, _ := readFleets(context.Background(), home); snap.capacity == nil || snap.capacity.Admit != nil || snap.capacity.Room != nil || snap.capacity.AdmitWhy != "" {
+		t.Fatalf("a claude-fleet older than #1836 said no verdict, got %+v", snap.capacity)
+	}
 	capacity = ""
 	if snap, _ := readFleets(context.Background(), home); snap.capacity != nil {
 		t.Fatalf("an older claude-fleet sent no capacity, got %+v", snap.capacity)
+	}
+}
+
+// The heartbeat carries the login's own admission verdict (claude-fleet#1836)
+// whatever its count cap says — with FLEET_GLOBAL_MAX_SESSIONS=0 (the default
+// since #1831) the cap fields stay off and admit / admit_why / room still ride;
+// a discover without them leaves them unsaid.
+func TestNodeHeartbeatCarriesAdmit(t *testing.T) {
+	a := nodeTestAgent(t, "http://unused", true)
+	script := filepath.Join(a.cfg.Home, fleetControlScript)
+	os.MkdirAll(filepath.Dir(script), 0o755)
+	os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755)
+	var mu sync.Mutex
+	capacity := `,"capacity":{"sessions":3,"max_sessions":0,"admit":false,"admit_why":"内存紧张","room":0}`
+	old := fleetControlCommand
+	fleetControlCommand = func(ctx context.Context, s string, stdin []byte) ([]byte, error) {
+		var req map[string]any
+		json.Unmarshal(stdin, &req)
+		mu.Lock()
+		c := capacity
+		mu.Unlock()
+		switch req["method"] {
+		case "discover":
+			return []byte(`{"result":{"machine_id":"m-1","fleets":[{"fleet_id":"f-a","name":"fleet-a","repo":"o/a"}]` + c + `}}`), nil
+		case "ready":
+			return []byte(`{"result":{"ready":true,"missing":[]}}`), nil
+		}
+		return []byte(`{"result":{"state":"running","workers":[]}}`), nil
+	}
+	t.Cleanup(func() { fleetControlCommand = old })
+
+	hb := a.nodeHeartbeat(context.Background(), &fleetProbe{})
+	if hb.MaxSessions != 0 || hb.CapSessions != nil {
+		t.Fatalf("beat = max %d cap %v; want no cap fields with max_sessions 0", hb.MaxSessions, hb.CapSessions)
+	}
+	if hb.Admit == nil || *hb.Admit || hb.AdmitWhy != "内存紧张" || hb.Room == nil || *hb.Room != 0 {
+		t.Fatalf("beat = admit %v %q room %v; want false 内存紧张 0", hb.Admit, hb.AdmitWhy, hb.Room)
+	}
+	if paused, why := hb.Paused(); !paused || why != "内存紧张" {
+		t.Fatalf("Paused() = %v %q; want true 内存紧张", paused, why)
+	}
+	mu.Lock()
+	capacity = `,"capacity":{"sessions":3,"max_sessions":0,"admit":true,"room":4}`
+	mu.Unlock()
+	hb = a.nodeHeartbeat(context.Background(), &fleetProbe{})
+	if hb.Admit == nil || !*hb.Admit || hb.AdmitWhy != "" || hb.Room == nil || *hb.Room != 4 {
+		t.Fatalf("beat = admit %v %q room %v; want true, no why, 4", hb.Admit, hb.AdmitWhy, hb.Room)
+	}
+	if paused, _ := hb.Paused(); paused {
+		t.Fatal("a machine with room 4 reads as paused")
+	}
+	mu.Lock()
+	capacity = `,"capacity":{"sessions":3,"max_sessions":0}`
+	mu.Unlock()
+	hb = a.nodeHeartbeat(context.Background(), &fleetProbe{})
+	if hb.Admit != nil || hb.AdmitWhy != "" || hb.Room != nil {
+		t.Fatalf("an older claude-fleet: beat = admit %v %q room %v; want all unsaid", hb.Admit, hb.AdmitWhy, hb.Room)
+	}
+	if paused, _ := hb.Paused(); paused {
+		t.Fatal("a beat without the fields reads as paused")
 	}
 }
 

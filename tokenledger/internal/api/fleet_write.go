@@ -981,6 +981,13 @@ type Candidate struct {
 	// absent from a node that does not say. Full there = never a candidate.
 	MaxSessions int  `json:"max_sessions,omitempty"`
 	CapSessions *int `json:"cap_sessions,omitempty"`
+	// Admit is the login's own admission verdict (claude-fleet#1836: its
+	// fleet_machine_admit — false = holding new sessions, AdmitWhy why) and
+	// Room how many more fit in its memory; absent from a node that does not
+	// say. admit false or room < 1 = never a candidate, as full is.
+	Admit    *bool  `json:"admit,omitempty"`
+	AdmitWhy string `json:"admit_why,omitempty"`
+	Room     *int   `json:"room,omitempty"`
 	// QuotaUsedPct is the busier of the 5-hour and 7-day windows of the
 	// account this login's Claude Code runs on; nil when unknown. Shown, never
 	// scored (claude-fleet#1994): every machine spends the same shared quota.
@@ -1206,16 +1213,22 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 		}
 	}
 	if best < 0 {
-		reasons, full := []string{}, true
+		reasons, full, paused := []string{}, true, false
 		for _, c := range pl.Candidates {
 			reasons = append(reasons, c.Machine+": "+c.Excluded)
 			full = full && excludedForFullness(c.Excluded)
+			paused = paused || strings.HasPrefix(c.Excluded, excludedPaused)
 		}
 		msg := "No machine can take a new session now — " + strings.Join(reasons, "; ")
 		if full {
 			// Every candidate is at its own cap (claude-fleet#1587): say so
-			// as the refusal a full machine gives, not as "no machine".
+			// as the refusal a full machine gives, not as "no machine". One
+			// whose own gate is holding (claude-fleet#1836) is full the same
+			// way; with none such the wording is byte for byte the old one.
 			msg = "all-full: every machine is at its session cap — " + strings.Join(reasons, "; ")
+			if paused {
+				msg = "all-full: every machine is at its session cap or pausing new sessions — " + strings.Join(reasons, "; ")
+			}
 		}
 		if sp := s.spot(); sp != nil && node == "auto" {
 			// Peak: every fixed machine is out. Ask for a SPOT node
@@ -1257,6 +1270,8 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	}
 	full, used, own := hb.Full()
 	c.MaxSessions, c.CapSessions = hb.MaxSessions, hb.CapSessions
+	paused, pausedWhy := hb.Paused()
+	c.Admit, c.AdmitWhy, c.Room = hb.Admit, hb.AdmitWhy, hb.Room
 	if acct := accounts[r.EndpointID]; acct != "" {
 		if snap, err := s.Store.LatestLimits(acct); err == nil && snap != nil {
 			u := math.Max(snap.FiveHour.Utilization, snap.SevenDay.Utilization)
@@ -1298,6 +1313,12 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 		// The login's own cap (claude-fleet#1587): its spawn gate would refuse
 		// the start, so it is no candidate — named or auto.
 		c.Excluded = fmt.Sprintf("%s (%d/%d sessions, the login's own cap)", excludedFull, used, own)
+	case paused:
+		// The login's own gate is holding new sessions (claude-fleet#1836:
+		// memory tight, load high, or no room for one more) — a start placed
+		// there would be refused on arrival, so it is no candidate, named or
+		// auto, and counts as full for the all-full verdict.
+		c.Excluded = excludedPaused + "：" + pausedWhy
 	default:
 		c.Eligible = true
 	}
@@ -1341,17 +1362,21 @@ func memPressureName(lv int) string {
 }
 
 // excludedFull opens the verdict on a login at its own session cap
-// (claude-fleet#1587); excludedPersonCap the one at the hub's per-person cap.
+// (claude-fleet#1587); excludedPersonCap the one at the hub's per-person cap;
+// excludedPaused the one whose own gate is holding new sessions
+// (claude-fleet#1836) — 「机器暂停接新：<原因>」, the reason in the gate's words.
 const (
 	excludedFull      = "full"
 	excludedPersonCap = "at the per-person cap"
+	excludedPaused    = "机器暂停接新"
 )
 
 // excludedForFullness reports whether a candidate is out only because it has
-// no free session slot: when every candidate is, placement refuses
+// no free session slot — its own cap, the per-person cap, or its own gate
+// holding (claude-fleet#1836): when every candidate is, placement refuses
 // AT_CAPACITY "all-full" (claude-fleet#1587) rather than NO_ELIGIBLE_NODE.
 func excludedForFullness(why string) bool {
-	return strings.HasPrefix(why, excludedFull) || strings.HasPrefix(why, excludedPersonCap)
+	return strings.HasPrefix(why, excludedFull) || strings.HasPrefix(why, excludedPersonCap) || strings.HasPrefix(why, excludedPaused)
 }
 
 // unknownSessionsWeight discounts the score of a candidate whose session count

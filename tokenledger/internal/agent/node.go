@@ -382,9 +382,14 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 		for _, f := range snap.fleets {
 			hb.Sessions += f.Count
 		}
-		if c := snap.capacity; c != nil && c.MaxSessions > 0 {
-			n := c.Sessions
-			hb.MaxSessions, hb.CapSessions = c.MaxSessions, &n
+		if c := snap.capacity; c != nil {
+			if c.MaxSessions > 0 {
+				n := c.Sessions
+				hb.MaxSessions, hb.CapSessions = c.MaxSessions, &n
+			}
+			// The gate's own verdict (claude-fleet#1836), as discover said it:
+			// absent from a claude-fleet older than that, and then unsaid here.
+			hb.Admit, hb.AdmitWhy, hb.Room = c.Admit, c.AdmitWhy, c.Room
 		}
 	}
 	if fv := probe.reading(ctx, a.cfg.Home); fv != nil {
@@ -477,6 +482,11 @@ type fleetSnapshot struct {
 type fleetCapacity struct {
 	Sessions    int `json:"sessions"`
 	MaxSessions int `json:"max_sessions"`
+	// Admit / AdmitWhy / Room are the login's own admission verdict
+	// (claude-fleet#1836): nil / "" from a claude-fleet older than that.
+	Admit    *bool  `json:"admit"`
+	AdmitWhy string `json:"admit_why"`
+	Room     *int   `json:"room"`
 }
 
 // fleetControlCommand is the injection point for tests, like fleetCommand.

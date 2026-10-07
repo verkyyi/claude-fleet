@@ -38,6 +38,9 @@
 #   loop-window-killed                              bin/fleet-restore.sh (loop re-arm), fleet_loop_mark.py rearm
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
+#   node-paused-still-placed                        bin/fleet-control-read.sh capacity (admit / admit_why / room),
+#                                                   fleet_machine_admit, fleet_machine_headroom; the hub half is
+#                                                   tokenledger/internal/api judge() (go test, when a toolchain is here)
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -2440,6 +2443,61 @@ drill_multirepo_bridge_second_repo() {
     || { WHY="the second tick never listed o/b's comments (gh: $(tr '\n' ' ' < "$d/gh.log" 2>/dev/null); log: $(tail -2 "$d/poll2.err" | tr '\n' ' '))"; return 1; }
   grep -q 'repos/o/a/issues/comments' "$d/gh.log" || { WHY="o/a stopped being listed"; return 1; }
   WHAT="一次同步把被困的机器配置并回 fleet.conf、退役幽灵 fleet；下一拍起两个仓库都被 bridge 轮询"
+}
+
+# A machine whose own gate is holding new sessions (fleet_machine_admit: memory
+# tight / load high) while its heartbeat says nothing of it (issue #1836, EPIC
+# #2074 C5). Since #1831 FLEET_GLOBAL_MAX_SESSIONS defaults to 0, so the beat's
+# capacity read `max_sessions:0` = never full, and the hub kept placing starts
+# on a machine that refused each one on arrival (RC_CAP). Node half, for real:
+# `fleet-control-read.sh capacity` under stubbed readings — critical memory
+# pressure, then a load over the bound, then a healthy machine, then the gate
+# switched off — must say admit:false + the reason + room, admit:true + room,
+# and with FLEET_ADMIT=0 admit:true and no room (nothing for the hub to hold
+# on). Hub half: the Go tests that pin judge() (`TestNodePlace{SkipsPausedNode,
+# AllPausedRefuses,WithoutCapFieldsFiltersNothing}`), run here when a toolchain
+# and the module cache are present — GOPROXY=off, a drill never downloads;
+# otherwise the Go gate (tokenledger.yml) is where they run and WHAT says so.
+drill_node_paused_still_placed() {
+  CAP=120; local t0 d="$WORK/np" out gohalf rc
+  mkdir -p "$d/conf" "$d/tmp"
+  # cap <mem-stub> <load-stub> [VAR=val …] → the capacity object. 16000 MB of RAM,
+  # one agent of 400 MB (×3 growth ⇒ 1200 MB a session) — never this box's own ps.
+  cap() {
+    local m="$1" l="$2"; shift 2
+    env "$@" FLEET_CONF_DIR="$d/conf" TMPDIR="$d/tmp" HOME="$d" FLEET_MEM_TOTAL_MB=16000 \
+      FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 409600 01:00 claude\\n'" \
+      FLEET_MEM_PROBE_CMD="$m" FLEET_LOAD_PROBE_CMD="$l" \
+      bash "$BIN/fleet-control-read.sh" capacity 2>&1
+  }
+  t0=$(now)
+  out=$(cap 'echo 4 5 97 0' 'echo 0.5')
+  case "$out" in *'"admit":false'*'"admit_why":"内存紧张"'*'"room":0'*) ;; *)
+    WHY="capacity under critical memory pressure does not say admit:false, admit_why 内存紧张, room 0: $out"; return 1 ;; esac
+  out=$(cap 'echo 1 66 5 6' 'echo 1.9')
+  case "$out" in *'"admit":false'*'"admit_why":"负载过高"'*'"room":'[1-9]*) ;; *)
+    WHY="capacity under load 1.9/core does not say admit:false, admit_why 负载过高 with its room: $out"; return 1 ;; esac
+  out=$(cap 'echo 1 66 5 6' 'echo 0.5')
+  case "$out" in *'"max_sessions":0'*'"admit":true'*'"room":'[1-9]*) ;; *)
+    WHY="a healthy machine's capacity does not say admit:true with room ≥ 1: $out"; return 1 ;; esac
+  case "$out" in *admit_why*) WHY="a healthy machine carries an admit_why: $out"; return 1 ;; esac
+  out=$(cap 'echo 4 5 97 0' 'echo 9' FLEET_ADMIT=0)
+  case "$out" in *'"admit":true'*) ;; *) WHY="FLEET_ADMIT=0 (the gate off) must say admit:true: $out"; return 1 ;; esac
+  case "$out" in *'"room"'*) WHY="with FLEET_ADMIT=0 the beat still carries room — the hub would hold on it: $out"; return 1 ;; esac
+  gohalf='hub half: the Go gate (tokenledger.yml) runs judge()'"'"'s tests'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run 'TestNodePlace(SkipsPausedNode|AllPausedRefuses|WithoutCapFieldsFiltersNothing)$' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) gohalf='hub half: go test TestNodePlace{SkipsPausedNode,AllPausedRefuses,WithoutCapFieldsFiltersNothing} ok' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        gohalf='hub half: no go module cache / toolchain here — the Go gate (tokenledger.yml) runs judge()'"'"'s tests' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="机器暂停接新时心跳带 admit:false（内存紧张 / 负载过高）+ room，健康时 admit:true + room，FLEET_ADMIT=0 不带 room；$gohalf"
 }
 
 # ================================================================ run ===========
