@@ -81,7 +81,7 @@ cleanup() {
   for s in vrn vrc; do TMUX_TMPDIR="$WORK/vt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}o" "${CSESS}o-stage" "${CSESS}u" "${CSESS}u-stage" "${CSESS}w" "${CSESS}w-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   pkill -f "fleet-shell.sh keeper $CSESS" 2>/dev/null
-  [ -f "$WORK/cred-pids" ] && kill $(cat "$WORK/cred-pids") 2>/dev/null
+  [ -f "$WORK/cred-pids" ] && while read -r s; do kill "$s" 2>/dev/null; done < "$WORK/cred-pids"
   pkill -f "$WORK/" 2>/dev/null
   [ -n "${BREAK_KEEP:-}" ] && { printf 'kept %s\n' "$WORK" >&2; return; }
   rm -rf "$WORK"
