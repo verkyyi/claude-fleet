@@ -82,6 +82,14 @@
 #                          selected — the right pane shows it, the list its row
 #   reload <session> [--from <old home>]   a newer client into the running one,
 #                          same servers (issue #1781) — see `reload` below
+#   ask <kind> [arg…]      a short question on ONE line at the bottom of the stage
+#                          (issue #1950): the list asks it (`<kind>` as its row
+#                          menu does — rename @id, message wid:…, answer wid:… ask,
+#                          sub @id, repo, new [machine]) and its answer takes that
+#                          kind's path; the list's actions are kinds too (restore,
+#                          scratch, view, reload, info, needs). Exit 0 asked, 1 no
+#                          list on screen. A bare question (no kind of the list's):
+#                          bin/fleet-ask.py open --below <pane> --kind --prompt.
 #   env [MACHINE]          print the environment the server would get (debug, tests)
 #
 # ~/.config/claude-fleet/fleet.conf — the machine's one config file (issue #1623):
@@ -214,7 +222,9 @@ this_machine() {
 # typed into last: every FLEET_CLIENT_INPUT_EVERY (5 s) the keeper reads tmux's
 # #{client_activity} of the clients attached here and, when it moved, reports it
 # (`input`, at most once per 5 s) with that client's where; a renewal carries
-# the session the stage is showing (`viewing`, the top line's 「也在 iPhone 上打开」).
+# the session the stage is showing (`viewing`, the top line's 「也在 iPhone 上打开」)
+# and the where in use here (client.where.json — a hub restart forgets every
+# lease, and the renewal that re-adopts ours tells it the device again, #1995).
 # Only two things send this server to STANDBY now: a fifth client asked this one,
 # the least recently used, to leave (reason evicted), or you disconnected it from
 # another client's 我的客户端 (revoked). Then every attached client gets a
@@ -495,6 +505,20 @@ stage_select() {
 mode="${1:-}"
 case "$mode" in
 # ---------------------------------------------------------------------------------
+# A question asked from anywhere (issue #1950): parked on the list of the shell's
+# `home` as its row menu parks one (@sidebar_ask, fleet-sidebar-menu.sh `ask`) and
+# the list woken with F12 — it opens the line under the session (bin/fleet-ask.py)
+# and runs the answer through the kind's own path. Every word is a token (an @id,
+# a wid:…, a machine); no shell or tmux parser sees an answer.
+ask)
+  shift
+  [ $# -gt 0 ] || { note 'ask: <kind> [arg…]'; exit 2; }
+  side=$(T list-panes -s -t "=$SESS" -F '#{@sidebar} #{pane_dead} #{pane_id}' 2>/dev/null | awk '$1 == 1 && $2 != 1 { print $3; exit }')
+  [ -n "$side" ] || exit 1
+  T set-option -p -t "$side" @sidebar_ask "$*" \; send-keys -t "$side" F12 2>/dev/null || exit 1
+  exit 0
+  ;;
+# ---------------------------------------------------------------------------------
 ssh)
   shift
   master=0; for a in "$@"; do [ "$a" = ControlMaster=yes ] && master=1; done
@@ -591,6 +615,9 @@ keeper)
         fi
         if [ -n "$what" ]; then
           wf=''; [ "$what" = input ] && [ -n "$c" ] && wf=$(where_file "$c") && [ -s "$wf" ] || wf=''
+          # a renewal carries the where in use here too: the hub keeps leases
+          # in memory, and one that restarted learns the device from it (#1995)
+          [ "$what" = renew ] && [ -s "$CL_DIR/client.where.json" ] && wf="$CL_DIR/client.where.json"
           v=$(viewing "$s")
           # an older hub knows no `input`: the renewal it does know, so the
           # lease never lapses under someone typing
@@ -961,10 +988,12 @@ client_open() {
   case "$tt" in /dev/*) ;; *) tt='' ;; esac
   mkdir -p "$CL_DIR/client.where" 2>/dev/null
   # the whole where saved for this tty (#1716): the lease carries it, and a
-  # take-back from the standby screen hands the same again
-  dev=$($LEASE_CMD device ${tt:+--save "$(where_file "$tt")"} 2>/dev/null) || dev=''
+  # take-back from the standby screen hands the same again. No tty: saved all
+  # the same (under notty), so client.where.json — what every renewal carries
+  # (#1995) — is the whole of it, not the device alone
+  dev=$($LEASE_CMD device --save "$(where_file "${tt:-notty}")" 2>/dev/null) || dev=''
   rm -f "$CL_DIR/client.nohub"
-  client_take "$tt" "${dev%%$'\t'*}" "$(printf '%s' "$dev" | cut -f2 -s)" && return 0
+  client_take "${tt:-notty}" "${dev%%$'\t'*}" "$(printf '%s' "$dev" | cut -f2 -s)" && return 0
   rm -f "$CL_DIR/client.standby"
   mkdir -p "$CL_DIR/client.dev" 2>/dev/null
   [ -n "$tt" ] && printf '%s\n' "${dev%%$'\t'*}" > "$CL_DIR/client.dev/$(cl_key "$tt")"

@@ -22,10 +22,19 @@
 #      under 「新任务」 at once; then the new row is selected and switched to
 #   C. ⌘N again: the same window (never a second); a line, esc: the draft file
 #      holds it, and the list is asked back to the row before (`jump=`)
-#   D. 「记成 issue」 off (Tab, space) + ↵: a scratch — `acme/web scratch --name …`
+#   D. 「记成 issue」 off (Tab Tab, space) + ↵: a scratch — `acme/web scratch --name …`
 #   E. (pure) payload: title = the first line, body = the whole text, a dropped
 #      file listed as an attachment, a forged marker defused; dash-keymap's
 #      `new` row is ⌘N · 928 · prefix c and the conf binds both to fleet-shell.sh portal
+# The 「仓库」 option (issue #1956), one leg per choice:
+#   F. (pure) the payload of each: auto (no repo named — resolved where the rows
+#      are), --repo (named), --no-repo (none: no issue), --multi (orchestrate)
+#   G. a repo: Tab to 「仓库」, space opens the menu (自动 · each hub repo ·
+#      不关联仓库 · 多个仓库), ↓ ↵ picks acme/app: `acme/app new …`
+#   H. 不关联仓库: no 「记成 issue」, its why-line; ↵ → `- scratch --name … --body-file`
+#      (the text is the seed), and the session's row lands under the list's no repo heading
+#   I. 多个仓库: 「编排」 and its why-line; ↵ → a no-repo scratch whose seed asks
+#      it to split the work by repo (the orchestrator's route is C7's)
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -67,18 +76,27 @@ printf '#!/bin/sh\ncat %q\n' "$ROWS" > "$SB/tmux-dashboard-rows.sh"
 printf '#!/bin/sh\n[ "$1" = open ] && printf "%%s\\n" "$2" >> %q\nexit 0\n' "$VIEW" > "$SB/fleet-remote-view.sh"
 cat > "$SB/fleet-client-place.sh" <<EOF
 #!/bin/bash
+# the body first: the test reads it as soon as the argv is logged
+prev=''; name=''; for a in "\$@"; do [ "\$prev" = --body-file ] && cat "\$a" > "$BODY"; [ "\$prev" = --name ] && name=\$a; prev=\$a; done
 printf '%s\n' "\$*" >> "$LOG"
-prev=''; for a in "\$@"; do [ "\$prev" = --body-file ] && cat "\$a" > "$BODY"; prev=\$a; done
+n=\$(grep -c . "$LOG")
 sleep 2
-case "\$2" in
-  new) printf 'wid:U/issue-43${US}working${US}*${US}forty-three${US}${US}${US}0${US}${US}m4${US}43${US}${US}\n' >> "$ROWS"
-       printf 'REMOTE m4 op1 done U/issue-43\tm5 busier\n' ;;
-  *)   printf 'wid:U/scratch-5${US}working${US}*${US}draft${US}${US}${US}0${US}${US}m4${US}${US}${US}\n' >> "$ROWS"
-       printf 'REMOTE m4 op2 done U/scratch-5\t\n' ;;
+case "\$1 \$2" in
+  *' new') k=\$((42 + n)); nm=forty-three; [ "\$k" = 43 ] || nm=new-\$k
+       printf 'wid:U/issue-%s${US}working${US}*${US}%s${US}${US}${US}0${US}${US}m4${US}%s${US}${US}\n' "\$k" "\$nm" "\$k" >> "$ROWS"
+       printf 'REMOTE m4 op%s done U/issue-%s\tm5 busier\n' "\$n" "\$k" ;;
+  '- scratch')
+       printf 'hdr${US}none${US}${US}no repo (1)${US} \n' >> "$ROWS"
+       printf 'wid:U/norepo-%s${US}working${US}*${US}%s${US}${US}${US}0${US}${US}m4${US}${US}${US}\n' "\$n" "\$name" >> "$ROWS"
+       printf 'REMOTE m4 op%s done U/norepo-%s\t\n' "\$n" "\$n" ;;
+  *)   printf 'wid:U/scratch-%s${US}working${US}*${US}draft${US}${US}${US}0${US}${US}m4${US}${US}${US}\n' "\$n" >> "$ROWS"
+       printf 'REMOTE m4 op%s done U/scratch-%s\t\n' "\$n" "\$n" ;;
 esac
 EOF
 chmod +x "$SB/tmux-dashboard-rows.sh" "$SB/fleet-client-place.sh" "$SB/fleet-remote-view.sh"
 date +%s > "$FLEET_STATUS_G/hub_ok"
+# the repos the hub says this person's machines host (fleet-hub-sessions.sh's cache)
+printf '#ts%s%s\nacme/app\nacme/web\n' "$US" "$(date +%s)" > "$FLEET_STATUS_G/hub_repos"
 
 # --- E. the pure parts ---------------------------------------------------------------
 printf 'https://x/a.png\n' > "$WORK/shot.png"
@@ -93,6 +111,22 @@ has 'E: an issue by default' "$pl" '"issue": true'
 has 'E: --no-issue: a scratch' "$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --no-issue)" '"issue": false'
 printf '\n\n' > "$WORK/t0"
 eq 'E: nothing written: nothing to send' '{}' "$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t0")"
+pl=$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1")
+has 'F: auto by default' "$pl" '"repo_mode": "auto"'
+has 'F: …naming no repo (resolved where the rows are)' "$pl" '"repo": ""'
+pl=$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --repo acme/app)
+has 'F: --repo names it' "$pl" '"repo": "acme/app"'
+has 'F: …repo_mode repo' "$pl" '"repo_mode": "repo"'
+has 'F: …still an issue' "$pl" '"issue": true'
+pl=$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --no-repo)
+has 'F: --no-repo: none' "$pl" '"repo_mode": "none"'
+has 'F: …never an issue' "$pl" '"issue": false'
+hasnt 'F: …not orchestrated' "$pl" 'orchestrate'
+pl=$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --multi)
+has 'F: --multi: multi' "$pl" '"repo_mode": "multi"'
+has 'F: …orchestrated' "$pl" '"orchestrate": true'
+has 'F: …never an issue' "$pl" '"issue": false'
+eq 'F: one choice only' 2 "$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --no-repo --multi >/dev/null 2>&1; echo $?)"
 eq 'E: the keymap row' 'new ⌘N 0x6e-0x100000 928 c' "$(bash "$SB/dash-keymap.sh" --panel switch list | awk '$1 == "new"')"
 CONF="$BIN/../conf/tmux-shell.conf"
 for k in 'bind -n User928 ' 'bind c '; do
@@ -201,13 +235,80 @@ grep -qx 'wid:U/issue-9' "$VIEW" || fail 'C: esc goes back to the row before' "$
 
 # D. 「记成 issue」 off: a scratch
 st_ select-window -t "$pw"
-st_ send-keys -t "$pw" Tab
+st_ send-keys -t "$pw" Tab      # 「仓库」 (issue #1956)
+st_ send-keys -t "$pw" Tab      # 「记成 issue」
 st_ send-keys -t "$pw" Space
 sleep .3
 has 'D: the go word says 草稿会话' "$(compose)" '开草稿会话'
 st_ send-keys -t "$pw" Enter
 CHECKS=$((CHECKS + 1)); n=0; while [ "$(grep -c . "$LOG")" -lt 2 ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
 eq 'D: a scratch, named by the line' 'acme/web scratch --name 看一下 m5 为什么慢 --node auto' "$(sed -n 2p "$LOG")"
+
+# The 「仓库」 option (issue #1956). Each send waits for the one before it to land.
+settled() { n=0; while screen | grep -qF '开工中' && [ $n -lt 80 ]; do sleep .1; n=$((n + 1)); done; }
+placed_n() { n=0; while [ "$(grep -c . "$LOG")" -lt "$1" ] && [ $n -lt 60 ]; do sleep .1; n=$((n + 1)); done; sed -n "$1p" "$LOG"; }
+# G. a repo, picked from the menu
+settled
+st_ send-keys -t "$pw" Tab
+st_ send-keys -t "$pw" Space
+sleep .4
+menu=$(compose)
+for want in '自动' 'web · 你刚才在这' 'app' 'acme' '不关联仓库' '多个仓库' '↑↓ 选'; do has "G: the menu lists $want" "$menu" "$want"; done
+st_ send-keys -t "$pw" Down
+st_ send-keys -t "$pw" Enter
+sleep .3
+has 'G: the field names the repo picked' "$(compose)" ' app ▾'
+st_ send-keys -t "$pw" -l '修一下 app 的登录页'
+sleep .2
+st_ send-keys -t "$pw" Enter
+line=$(placed_n 3)
+has 'G: the picked repo, an issue' "$line" 'acme/app new --title 修一下 app 的登录页 --body-file '
+CHECKS=$((CHECKS + 1)); waitfor 3 '自动 · web' compose || fail 'G: back to 自动 after a send' "$(compose)"
+
+# H. 不关联仓库: a session of no repo, its row under the no repo heading
+settled
+st_ send-keys -t "$pw" Tab
+st_ send-keys -t "$pw" Space
+sleep .3
+st_ send-keys -t "$pw" Down Down Down
+st_ send-keys -t "$pw" Enter
+sleep .3
+c=$(compose)
+has 'H: the field says 不关联仓库' "$c" '不关联仓库 ▾'
+has 'H: …and why' "$c" '开一个会话，不开 issue，进 no repo 组'
+has 'H: …the go word' "$c" '↵ 开会话'
+hasnt 'H: no 「记成 issue」 (an issue belongs to a repo)' "$c" '记成 issue'
+st_ send-keys -t "$pw" -l '整理一下这周的日报'
+sleep .2
+st_ send-keys -t "$pw" Enter
+line=$(placed_n 4)
+has 'H: no repo, a scratch named by the line' "$line" '- scratch --name 整理一下这周的日报 --body-file '
+has 'H: …--node auto' "$line" ' --node auto'
+eq 'H: the text is its seed' '整理一下这周的日报' "$(cat "$BODY" 2>/dev/null)"
+CHECKS=$((CHECKS + 1)); waitfor 8 'no repo (1)' || fail 'H: the session row arrived' "$(screen)"
+grp=$(screen | awk '/no repo/ { on = 1 } on && /整理一下/ { print "under"; exit }')
+eq 'H: …under the no repo heading' under "$grp"
+
+# I. 多个仓库: 「编排」
+settled
+st_ send-keys -t "$pw" Tab
+st_ send-keys -t "$pw" Space
+sleep .3
+st_ send-keys -t "$pw" Up
+st_ send-keys -t "$pw" Enter
+sleep .3
+c=$(compose)
+has 'I: the field says 多个仓库' "$c" '多个仓库 ▾'
+has 'I: …why it is orchestrated' "$c" '跨仓库的事交给编排会话，由它按仓库拆'
+has 'I: …the go word is 编排' "$c" '↵ 编排'
+hasnt 'I: no 「记成 issue」' "$c" '记成 issue'
+st_ send-keys -t "$pw" -l '活页里加一张 fleet 状态卡'
+sleep .2
+st_ send-keys -t "$pw" Enter
+line=$(placed_n 5)
+has 'I: a session of no repo' "$line" '- scratch --name 活页里加一张 fleet 状态卡 --body-file '
+has 'I: the seed is the text…' "$(cat "$BODY" 2>/dev/null)" '活页里加一张 fleet 状态卡'
+has 'I: …and asks it to split by repo' "$(cat "$BODY" 2>/dev/null)" '按仓库各开 issue'
 
 [ "$FAIL" = 0 ] || { printf 'fleet-compose selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS"; exit 1; }
 printf 'fleet-compose selftest: PASS (%d checks)\n' "$CHECKS"

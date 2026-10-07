@@ -5,6 +5,10 @@
 # the sudo ticket, a login that already exists, a teardown with nothing to
 # clean — against PATH shims: a shim sudo answers the ticket question and
 # refuses everything else, so no run here can ever create a login.
+# Issue #2010 adds --invite (the drill person): its refusals, and a teardown
+# whose hub half runs against a curl shim — the drill person deletes ITSELF
+# (DELETE /v1/self, the approve code on stdin, never an argv), no operator
+# token in the environment, and the residue check reads the hub's 401.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 DRILL="$BIN/fleet-onboard-drill.sh"
@@ -53,8 +57,53 @@ run 3 'already exists'              'the login already exists'  --login "$(id -u
 mkdir -p "$T/homes/drillghost"
 run 3 'already exists'              'a home with no login'      --login drillghost
 run 2 'nothing to clean'            'a teardown of nothing'     --teardown drillnone
+run 2 'not an approve code'         '--invite: a malformed code' --login drillx --invite nope
+run 2 'needs --login'               '--invite with no --login'  --invite fd_abcdefghijklmnopqrstuvwxyz
 # nothing past the preflight ran: no run dir was made
 if ls -d "$T"/fleet-onboard-drill.* >/dev/null 2>&1; then bad 'a refused run left a run dir'; else ok 'no refused run made a run dir'; fi
+
+# --- --teardown --invite: the drill person deletes itself on the hub -----------
+# curl: logs method · url · stdin body, answers DELETE /v1/self 200 the first
+# time and 401 after (the person is gone); argv must never hold the code
+cat > "$T/shim/curl" <<'EOF'
+#!/bin/bash
+out='' m=GET url='' body='' argv="$*"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out=$2; shift 2 ;; -X) m=$2; shift 2 ;; -w|-H|--max-time|-m) shift 2 ;;
+    --data-binary) [ "$2" = @- ] && body=$(cat); shift 2 ;;
+    http*) url=$1; shift ;; *) shift ;;
+  esac
+done
+printf '%s %s %s\n' "$m" "$url" "$body" >> "$CURL_LOG"
+printf 'ARGV %s\n' "$argv" >> "$CURL_LOG"
+n=$(grep -c '^DELETE ' "$CURL_LOG")
+if [ "$m" = DELETE ] && [ "$n" = 1 ]; then
+  printf '{"person_id":"drill-1","devices":1,"accounts":1,"nodes":["ep_9"]}' > "$out"; printf 200
+else
+  printf '{"error":"approve code unknown or expired"}' > "$out"; printf 401
+fi
+EOF
+cat > "$T/shim/remove" <<'EOF'
+#!/bin/sh
+# the login-remove seam: removes the sandbox home only
+rm -rf "$FLEET_LOGIN_HOMES/$1"; echo "removed $1"
+EOF
+chmod +x "$T/shim/curl" "$T/shim/remove"
+mkdir -p "$T/homes/drillx"
+CODE=fd_abcdefghijklmnopqrstuvwxyz
+out=$(env PATH="$T/shim:$PATH" FLEET_CONF_DIR="$T/conf" FLEET_LOGIN_HOMES="$T/homes" TMPDIR="$T" \
+      CURL_LOG="$T/curl.log" FLEET_DRILL_LOGIN_REMOVE="$T/shim/remove" CCQUOTA_VIEWER_TOKEN='' FLEET_HUB_TOKEN='' \
+      bash "$DRILL" --teardown drillx --invite "$CODE" 2>&1); rc=$?
+if [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q 'drill person deleted itself on the hub by the approve code' \
+   && printf '%s\n' "$out" | grep -q 'no drill person on the hub'; then ok 'teardown --invite: the drill person deletes itself, residue reads the hub (exit 0)'
+else bad "teardown --invite: exit $rc: $(printf '%s' "$out" | tail -n 6)"; fi
+if grep -qF "DELETE https://hub.example/v1/self {\"approve_code\":\"$CODE\"}" "$T/curl.log" 2>/dev/null; then ok 'the self-delete went to DELETE /v1/self with the code in the body'
+else bad "no DELETE /v1/self with the code: $(cat "$T/curl.log" 2>/dev/null)"; fi
+if grep '^ARGV' "$T/curl.log" | grep -q "$CODE"; then bad "the approve code reached curl's argv"; else ok 'the approve code never reached an argv'; fi
+if grep -q 'devices/revoke' "$T/curl.log"; then bad 'a drill-person teardown still asked the operator-token revoke'; else ok 'no operator-token revoke on the drill-person path'; fi
+r=$(ls "$T"/fleet-onboard-drill.drillx.*/hub-residue.txt 2>/dev/null | head -n 1)
+if [ -n "$r" ] && grep -q 'HTTP 401' "$r"; then ok "the hub's 401 is kept as evidence (hub-residue.txt)"; else bad "no hub-residue.txt with the 401 (${r:-none})"; fi
 
 [ "$FAILS" = 0 ] && { echo 'fleet-onboard-drill-selftest: PASS'; exit 0; }
 echo "fleet-onboard-drill-selftest: FAIL ($FAILS)"; exit 1

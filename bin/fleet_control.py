@@ -546,10 +546,15 @@ class Control:
                     # in its usual slot and the name (validated above) as one more
                     # argv word; dash-raw-session.sh opens it and prints its receipt
                     # (`<window_id>\t<name>\t<worktree>\t<fleet_id>`).
+                    # issue #1956: a no-repo scratch says `-` for its repo (the
+                    # adapter opens it with --no-repo), and the writing area's
+                    # text rides stdin as its seed — never an argv.
                     code, output, err = self.adapter("start", fleet["name"], "scratch", params.get("agent", ""),
-                                                     params.get("repo", ""), params.get("origin_wid", ""),
+                                                     "-" if params.get("no_repo") else params.get("repo", ""),
+                                                     params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params.get("name", "").strip(),
-                                                     *reap_arg, timeout=180)
+                                                     *reap_arg, payload=params["body"].encode("utf-8") if params.get("body") else None,
+                                                     timeout=180)
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start
                     # with `new` for the issue and the title (validated above) where

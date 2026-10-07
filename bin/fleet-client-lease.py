@@ -3,7 +3,10 @@
 several at once since #1932, EPIC #1906 C13).
 
   fleet-client-lease.py acquire [--lease ID] [--device D] [--terminal T]
-  fleet-client-lease.py renew   --lease ID [--last-input EPOCH] [--viewing WID]
+  fleet-client-lease.py renew   --lease ID [--last-input EPOCH] [--viewing WID] [--where-file F]
+                                          F = the where in use here: every renewal
+                                          carries it, so a restarted hub knows the
+                                          device again at once (#1995)
   fleet-client-lease.py input   --lease ID [--last-input EPOCH] [--viewing WID] [--where-file F]
                                           this client was typed into / tapped (≤ 1 per 5 s)
   fleet-client-lease.py release --lease ID
@@ -352,7 +355,7 @@ def main(argv):
         body["target"] = a.target
     if ident == "test":
         body["identity"] = "test"
-    if a.action == "acquire" or (a.action == "input" and a.where_file):
+    if a.action == "acquire" or (a.action in ("input", "renew") and a.where_file):
         w = None
         if a.where_file:
             try:
@@ -370,11 +373,15 @@ def main(argv):
             body["terminal"] = a.terminal or w.get("terminal") or terminal()
             body["version"] = run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"], 2)
         else:
-            # another client of the same server typed into: the lease says
-            # where that one is (#1932)
+            # input: another client of the same server typed into — the lease
+            # says where that one is (#1932). renew: the one in use here, every
+            # time — a hub that restarted re-adopts the lease by its id alone,
+            # and this is how it learns the device again (#1995)
             for k in ("device", "terminal"):
-                if w.get(k):
+                if w.get(k) and w[k] != "未知设备":
                     body[k] = w[k]
+            if a.action == "renew":
+                body["version"] = run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"], 2)
     headers = {"Content-Type": "application/json"}
     if in_session():
         # a session's request says so: the hub never hands it the person's lease

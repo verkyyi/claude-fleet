@@ -72,6 +72,7 @@ func (s *Server) RunNodeAlerts(ctx context.Context) {
 			return
 		case now := <-t.C:
 			s.NodeAlertTick(start, now)
+			s.SweepDrills(now) // a drill person past its life (claude-fleet#2010)
 		}
 	}
 }

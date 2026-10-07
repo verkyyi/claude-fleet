@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -83,37 +82,4 @@ func (s *Server) UserPage(login string, start, end time.Time) (*UserView, error)
 		UserSummary: sum, TopProjects: projects, MachinesBreakdown: machines,
 		Disclaimer: shareDisclaimer,
 	}, nil
-}
-
-// serveUserPage serves /u/<login>. The page fetches its own data from
-// /v1/user, so the login never has to be templated into HTML.
-func (s *Server) serveUserPage(w http.ResponseWriter, r *http.Request) {
-	if s.UI == nil {
-		httpError(w, http.StatusNotFound, "this binary was built without the UI")
-		return
-	}
-	if strings.TrimPrefix(r.URL.Path, "/u/") == "" {
-		httpError(w, http.StatusNotFound, "no login in the path: /u/<os login>")
-		return
-	}
-	f, err := s.UI.Open("user.html")
-	if err != nil {
-		httpError(w, http.StatusNotFound, "no user page in this build")
-		return
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, "unreadable page")
-		return
-	}
-	rs, ok := f.(interface {
-		Read([]byte) (int, error)
-		Seek(int64, int) (int64, error)
-	})
-	if !ok {
-		httpError(w, http.StatusInternalServerError, "unreadable page")
-		return
-	}
-	http.ServeContent(w, r, "user.html", st.ModTime(), rs)
 }

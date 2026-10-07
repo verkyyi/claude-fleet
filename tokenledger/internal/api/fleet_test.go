@@ -614,6 +614,30 @@ func TestFleetSessionsPage(t *testing.T) {
 	}
 }
 
+// Config (claude-fleet#1989) is its own page beside /sessions and /connect,
+// served from the embedded UI only when the fleet module is on, and gone /u/.
+func TestFleetConfigPage(t *testing.T) {
+	h := newFleetHarness(t)
+	h.srv.UI = fstest.MapFS{
+		"config.html": &fstest.MapFile{Data: []byte("<!doctype html><title>Config</title>")},
+		"index.html":  &fstest.MapFile{Data: []byte("<!doctype html><title>overview</title>")},
+		"user.html":   &fstest.MapFile{Data: []byte("<!doctype html><title>old user page</title>")},
+	}
+	resp, body := h.get(t, "/config")
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "<title>Config") {
+		t.Fatalf("GET /config = %d %q; want config.html", resp.StatusCode, body)
+	}
+	if _, body := h.get(t, "/u/alice"); strings.Contains(string(body), "old user page") {
+		t.Errorf("GET /u/alice still serves the old per-person page")
+	}
+
+	off := newHarness(t)
+	off.srv.UI = h.srv.UI
+	if _, body := off.get(t, "/config"); strings.Contains(string(body), "<title>Config") {
+		t.Errorf("GET /config served the page with the fleet module off")
+	}
+}
+
 // fleet_sessions carries a validator (claude-fleet#1481): the same answer
 // twice is a 304 for a poller that sends the ETag back, and any heartbeat
 // moves it.

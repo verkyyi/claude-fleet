@@ -302,14 +302,26 @@ def validate_gh_read(params):
 
 def validate_write(action, params):
     if action == "worker_start":
-        fields(params, (), ("issue", "kind", "name", "title", "body", "agent", "repo", "origin_wid", "account_class", "reap"))
+        fields(params, (), ("issue", "kind", "name", "title", "body", "agent", "repo", "no_repo", "origin_wid",
+                            "account_class", "reap"))
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
         # (tokenledger/internal/api/fleet_write.go), letter for letter.
         kind = params.get("kind", "issue")
-        if kind != "new" and ("title" in params or "body" in params):
-            raise Fault("INVALID_ARGUMENT", "title and body belong to a new-issue start (kind=new)")
+        if kind != "new" and "title" in params:
+            raise Fault("INVALID_ARGUMENT", "title belongs to a new-issue start (kind=new)")
+        if kind not in ("new", "scratch") and "body" in params:
+            raise Fault("INVALID_ARGUMENT", "body belongs to a new-issue or scratch start (kind=new / scratch)")
+        # no_repo (issue #1956): a scratch of no repo — opened in $HOME, @norepo
+        # (dash-raw-session.sh --no-repo). Only a scratch, only true, never with a repo.
+        if "no_repo" in params:
+            if params["no_repo"] is not True:
+                raise Fault("INVALID_ARGUMENT", "no_repo must be true when given")
+            if kind != "scratch":
+                raise Fault("INVALID_ARGUMENT", "no_repo belongs to a scratch start (kind=scratch)")
+            if params.get("repo"):
+                raise Fault("INVALID_ARGUMENT", "no_repo names no repo")
         if kind == "new":
             # issue #1953: the client's writing area — this machine files the
             # issue (a title, an optional body), then opens its worker.
@@ -324,6 +336,8 @@ def validate_write(action, params):
             if "issue" in params:
                 raise Fault("INVALID_ARGUMENT", "a scratch start has no issue")
             check_scratch_name(params.get("name"))
+            if params.get("body", "") != "":
+                check_text(params["body"], "body")   # its seed (issue #1956)
         elif kind == "issue":
             if "issue" not in params or "name" in params:
                 raise Fault("INVALID_ARGUMENT", "Missing or unsupported request fields")

@@ -458,6 +458,11 @@ func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if s.Store.IsDrill(principal) {
+		audit(c, fl.FleetID, "refused:"+LeaseDrill)
+		sessionCredRefuse(w, http.StatusForbidden, LeaseDrill, "a drill person gets no session pass")
+		return
+	}
 	if rev, err := s.Store.RevokedFor(host, principal); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

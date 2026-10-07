@@ -2,6 +2,12 @@
 # fleet-migrate.sh — move LIVE Claude sessions onto the fleet's active subscription
 # account (issue #512; `fleet-account.sh migrate …` delegates here).
 #
+# THROUGH THE CREDENTIAL PROXY (FLEET_CRED_PROXY=1, issue #1972) it IS an in-place
+# swap: the session holds only a session credential (@cred_sid, @cred_route
+# direct|relay) and the move is `fleet-session-cred.sh rebind` — the window, its
+# @fleet_id and pane pid stay; the next request runs on the new account
+# (migrate_rebind). Everything below is the road for every other window.
+#
 # WHY a close + resume, never an in-place swap: a running `claude` bakes its OAuth
 # token in at launch (CLAUDE_CODE_OAUTH_TOKEN, exported by fleet-claude.sh) and has
 # no way to change accounts afterwards — apiKeyHelper carries API keys only
@@ -379,6 +385,42 @@ migrated_stamp() {
 reported_restore() {
   if [ "${2:-}" = 1 ]; then TM set-window-option -t "$1" @reported 1 2>/dev/null
   else TM set-window-option -t "$1" -u @reported 2>/dev/null; fi
+  return 0
+}
+
+# migrate_rebind <wid> <label> — the move for a session that runs through this
+# login's credential proxy (issue #1972, EPIC #1967 C5): its window carries
+# @cred_sid (fleet-session-wrap.sh) and a direct/relay @cred_route
+# (fleet-claude.sh), so the proxy is told to put $ACTIVE's credential on the
+# sid's next request — the window, its @fleet_id, the pane and every running tool
+# stay as they are. 0 = handled here (rebound, skipped or dry-run, counted);
+# 1 = not this road: a Codex window, a --model / --cfg-stale move (those relaunch
+# on purpose), a central route (the cluster picks the account), the proxy off, or
+# a rebind that failed — then the close + resume below, as before.
+migrate_rebind() {
+  local wid="$1" label="$2" csid route name
+  [ "${AGENT:-claude}" = claude ] && [ -z "$MODEL" ] && [ "$CFG" != 1 ] && [ -n "$ACTIVE" ] || return 1
+  csid=$(wopt "$wid" '#{@cred_sid}'); route=$(wopt "$wid" '#{@cred_route}')
+  [ -n "$csid" ] || return 1
+  case "$route" in direct|relay) ;; *) return 1 ;; esac
+  bash "$BIN/fleet-session-cred.sh" on 2>/dev/null || return 1
+  name=$(wopt "$wid" '#{window_name}')
+  if migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then
+    if [ "$label" = "$ACTIVE" ]; then say "  – $name ($wid): already on $label — skipped"
+    else say "  – $name ($wid): nowhere to move (${label:-ambient login} → $ACTIVE, benched too) — skipped"; fi
+    skipped=$((skipped+1)); return 0
+  fi
+  if [ "$DRY" = 1 ]; then
+    say "  → $name ($wid): would rebind ${label:-?} → $ACTIVE in place (credential proxy, $route; no restart)"
+    return 0
+  fi
+  if ! bash "$BIN/fleet-session-cred.sh" rebind --sid "$csid" --account "$ACTIVE" 2>/dev/null; then
+    say "  ! $name ($wid): the proxy refused the rebind — closing and resuming instead"
+    return 1
+  fi
+  TM set-window-option -t "$wid" @cc_account "$ACTIVE" 2>/dev/null
+  say "  ✓ $name ($wid): ${label:-?} → $ACTIVE, rebound in place (credential proxy, $route; window and process kept)"
+  moved=$((moved+1)); note "$name"
   return 0
 }
 
@@ -941,6 +983,10 @@ migrate_main() {
     stamp=$(TM display-message -p -t "$wid" '#{@cc_account}' 2>/dev/null)
     label=$(window_account "$wid" "$cpid" "$stamp")
     fi
+    # Through the credential proxy (issue #1972): the session holds a session
+    # credential, so the move is the proxy's rebind — no /exit, no new window, not
+    # even for the caller's own. Anything else takes the road below.
+    migrate_rebind "$wid" "$label" && continue
     # The caller's own window (issue #1474): refuse, or hand it to the detached
     # re-exec; --dry-run only says so and still prints the plan.
     if migrate_is_self "$wid" "$cpid"; then

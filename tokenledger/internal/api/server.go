@@ -390,7 +390,16 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/fleet/login/start", s.handleDeviceStart)
 		mux.HandleFunc("/v1/fleet/login/poll", s.handleDevicePoll)
 		mux.Handle("/fleet/login", s.rememberLoginCode(s.viewerOnly(http.HandlerFunc(s.handleFleetLoginPage))))
+		// Drill people (claude-fleet#2010): an approve code confirms a scan
+		// as the drill person — it is the whole credential, so outside the
+		// viewer gate; the invite authenticates itself (cert or gate).
+		mux.HandleFunc(LoginApprovePath, s.handleLoginApprove)
+		mux.HandleFunc(DrillPath, s.handleAdminDrill)
+		mux.HandleFunc(DrillSelfPath, s.handleSelf)
 		mux.Handle("/connect", s.viewerOnly(http.HandlerFunc(s.serveConnectPage)))
+		// Config (claude-fleet#1989): my settings and the team layer, read
+		// from the bundle routes below.
+		mux.Handle("/config", s.viewerOnly(http.HandlerFunc(s.serveConfigPage)))
 		// Registered devices (claude-fleet#1470): a renewal is proven by the
 		// device's own key, so it authenticates itself, outside the viewer
 		// gate — like start/poll, it is what `fleet` runs before it holds a
@@ -414,6 +423,11 @@ func (s *Server) routes() *routeMux {
 		// node's enrollment token, like the control channel; everything else
 		// is the operator's.
 		mux.HandleFunc("/v1/node/credentials", s.handleNodeCredentials)
+		// The Singapore relay (claude-fleet#1974): a trusted node mints its
+		// own relay credential with its token; the forwarder's forward_auth
+		// asks the check, which authenticates the pass it carries.
+		mux.HandleFunc("/v1/node/relay-credential", s.handleNodeRelayCredential)
+		mux.HandleFunc(RelayCheckPath, s.handleRelayCheck)
 		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredentials))))
 		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevoke))))
 		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredAudit))))
@@ -490,7 +504,6 @@ func (s *Server) routes() *routeMux {
 	mux.Handle("/share/", s.shareOnly(s.serveSharePage))
 
 	mux.Handle("/v1/user", s.viewerOnly(http.HandlerFunc(s.handleUserData)))
-	mux.Handle("/u/", s.viewerOnly(http.HandlerFunc(s.serveUserPage)))
 
 	// The door map: every way into this hub, what each costs in credentials,
 	// and what is actually turned on here. Behind the viewer gate like every
@@ -533,7 +546,8 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/odometer.svg", s.handleOdometer)
 
 	// Signed out, "/" is the front page; signed in, the app.
-	mux.Handle("/", s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding))
+	// Every page under it settles its language first (claude-fleet#2023).
+	mux.Handle("/", s.withPageLang(s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding)))
 
 	return mux
 }

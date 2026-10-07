@@ -364,11 +364,23 @@ placeholder the node agent writes when it leases the account from the hub
 one refresher and the node agent rewrites the access token before it expires,
 so `ccquota codex list` reports `login.source: hub` with `auto_refresh: false`,
 its login is `valid` until the lease itself lapses (`access_expired`, naming the
-node agent — never `reauth_required`), its local renewal record is not read,
+node agent — never `reauth_required`) or the upstream refuses it
+(`access_rejected`, below), its local renewal record is not read,
 and `ccquota codex refresh` / the agent's auto-refresh refuse it before the
 official CLI is started. A self-managed home reports `login.source: local` and
 behaves exactly as above. Two refreshers of one Codex refresh token lock each
 other out — a refresh token is single-use — which is what the split exists for.
+
+The clock is not the only judge (claude-fleet#1920). An access token can be
+refused by the upstream long before its `exp` — a logout, a revocation, or a
+reused refresh token taking its whole grant down — so whatever actually spoke
+to the upstream with a home's token leaves the verdict in
+`<home>/.ccquota-upstream.json`: the agent's quota poll, and the fleet
+credential proxy on a session's request. It is keyed by the credential's
+fingerprint and holds the upstream's code only (never a token or a message).
+While it stands, a login the clock calls usable reads `access_rejected` with
+`upstream_error` (`token_revoked`, …) and `upstream_rejected_at`; a later
+accepted read of the same credential, or a new `auth.json`, clears it.
 
 **Now → Collection by source** shows the account email, plan, profile/default,
 login state, access expiry, last credential refresh, retry time, and per-machine
@@ -539,7 +551,7 @@ process, and they do not share a credential.
 
 | Door | What you need | What it gives you |
 |---|---|---|
-| Dashboard, `/u/<login>`, `/growth` | viewer token, a WeCom session, or a named tailnet peer | every figure this hub holds |
+| The app (`/`, `/sessions`, `/connect`, `/config`), `/growth` | viewer token, a WeCom session, or a named tailnet peer | every figure this hub holds |
 | `/enter` | a 90-second ticket from the authorization service | exchanges that ticket for this hub's session cookie, nothing else |
 | `POST /logout` | a same-origin form (the page header's 退出) | clears the cookies this hub minted and shows the signed-out page; the authorization service's own session stays |
 | `/v1/...` | the viewer token, as a bearer header | the same figures as JSON |
@@ -1963,9 +1975,8 @@ Once any team is assigned, team becomes a choice for the two breakdown
 cards' group-by (`g1`/`g2` in the URL), alongside project, login, machine,
 model and branch — not something the dashboard leads with. An OS login in
 the sessions table is a chip link that filters the current view to that
-person, not a link to a page; `/u/<login>` still exists and still renders a
-per-person view, but is now a direct-URL surface only — reachable by typing
-it or an old bookmark, not by clicking anything in the dashboard. Both are
+person, not a link to a page; the old `/u/<login>` page is gone
+(claude-fleet#1989) — a user's own figures are the app's Overview. Both are
 deliberately unnumbered. Read as a per-person performance ranking, an internal usage board
 fails by Goodhart — people avoid the tool or pad their usage — and either
 outcome destroys the cost data it exists to provide.

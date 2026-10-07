@@ -56,6 +56,9 @@ LOCAL_TAG, HUB_TAG = "fcp1", "fcp-h1"
 REGION_MARKS = ("unsupported_country_region_territory", "unsupported_country",
                 "unsupported_region", "request not allowed",
                 "not available in your country", "not available in your region")
+# The upstream's codes for refusing a Codex ACCESS token — the same list as
+# tokenledger/internal/codex rpc.go accessRejectCodes (claude-fleet#1920).
+ACCESS_REJECT = ("token_revoked", "token_invalidated", "token_expired", "invalid_token", "account_deactivated")
 BIN = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -226,7 +229,7 @@ class Router:
         """-> ([route, …] best first, reason)."""
         with self.lock:
             trust, twhy = self.trust or "unknown", self.trust_why
-        relay = bool(self.cfg.relay_url)
+        relay = bool(self.cfg.relay_url and relay_pass(self.cfg))
         if trust != "trusted":
             return ["central"], "%s (%s) → central, no credential file is read" % (trust, twhy)
         p = self.probe(provider)
@@ -237,7 +240,8 @@ class Router:
         if not relay:
             order.remove("relay")
             if order[0] == "direct" and p not in ("reachable", "none"):
-                why += ", no relay configured (FLEET_CRED_RELAY_URL)"
+                why += (", no relay pass (fleet-relay-cred.sh fetch)" if self.cfg.relay_url
+                        else ", no relay configured (FLEET_CRED_RELAY_URL)")
         if has_hub_cred:
             order.append("central")
         return order, why
@@ -343,7 +347,7 @@ class Proxy(BaseHTTPRequestHandler):
             upath = urlsplit(base).path.rstrip("/") + path
         put, drop = {}, {"authorization", "x-api-key"}
         if route == "relay":
-            put["X-Fleet-Relay"] = c.relay_token
+            put["X-Fleet-Relay"] = relay_pass(c)
         if public:
             return base, upath, put, set(), "none"
         if route == "central":
@@ -351,7 +355,9 @@ class Proxy(BaseHTTPRequestHandler):
             put["Authorization"] = "Bearer " + hubcred
             return base, upath, put, drop, "none"
         if provider == "codex":
-            at, aid = codex_tokens(codex_auth_path(c, acct))
+            path = codex_auth_path(c, acct)
+            at, aid, fp = codex_tokens(path)
+            self.codex_seen = (os.path.dirname(path), fp)
             put["Authorization"] = "Bearer " + at
             drop.add("chatgpt-account-id")
             if aid:   # ALWAYS the bound account's: a session never picks its workspace (#1912)
@@ -362,7 +368,7 @@ class Proxy(BaseHTTPRequestHandler):
 
     def send(self, order, provider, path, body, hubcred, sid, acct, seen, t0, public=False):
         order = [r for r in self.plan(order, sid)
-                 if (r != "relay" or self.cfg.relay_url) and (r != "central" or (self.cfg.central_url and hubcred))]
+                 if (r != "relay" or (self.cfg.relay_url and relay_pass(self.cfg))) and (r != "central" or (self.cfg.central_url and hubcred))]
         if not order:
             # permanent: 403, which neither client retries (never a 503)
             self.log(ev="deny", sid=sid, path=path.split("?")[0], why="no usable route")
@@ -429,6 +435,10 @@ class Proxy(BaseHTTPRequestHandler):
             if can_switch and any(m in first.decode("utf-8", "replace").lower() for m in REGION_MARKS):
                 conn.close()
                 return "region refusal (403)"
+        if provider == "codex" and cred == "file":
+            if r.status == 401:
+                first = r.read(65536)
+            codex_verdict(getattr(self, "codex_seen", None), route, r.status, first)
         self.send_response_only(r.status, r.reason)
         rh = [(k, v) for k, v in r.getheaders() if k.lower() not in HOP]
         for k, v in rh:
@@ -460,8 +470,17 @@ class Proxy(BaseHTTPRequestHandler):
 
 
 def claude_token(accounts, label):
-    with open(os.path.join(accounts, label + ".hub", ".credentials.json")) as f:
-        return json.load(f)["claudeAiOauth"]["accessToken"]
+    """A hub-leased account's renewed file (#1415), else the account's own token file
+    — a `claude setup-token` line (bin/fleet-account.sh acct_token, issue #1972)."""
+    hub = os.path.join(accounts, label + ".hub", ".credentials.json")
+    if os.path.exists(hub):
+        with open(hub) as f:
+            return json.load(f)["claudeAiOauth"]["accessToken"]
+    with open(os.path.join(accounts, label)) as f:
+        tok = f.readline().strip()
+    if not tok or tok.startswith("hub:"):
+        raise ValueError("no token for this account")
+    return tok
 
 
 def codex_auth_path(cfg, label):
@@ -473,9 +492,49 @@ def codex_auth_path(cfg, label):
 
 
 def codex_tokens(path):
+    """-> (access token, account id, credential fingerprint). The fingerprint is
+    ccquota's credential_version (sha256 of access NUL refresh), so a verdict
+    names the exact credential it was given on and nothing more."""
     with open(path) as f:
         t = json.load(f)["tokens"]
-    return t["access_token"], t.get("account_id")
+    fp = hashlib.sha256((t["access_token"] + "\0" + (t.get("refresh_token") or "")).encode()).hexdigest()
+    return t["access_token"], t.get("account_id"), fp
+
+
+def codex_verdict(seen, route, status, body):
+    """Leave the upstream's word on a Codex home's access token where
+    `ccquota codex list` reads it (<home>/.ccquota-upstream.json,
+    claude-fleet#1920): a 401 is a refusal of THIS credential — its code when
+    the body names one, else "401" (direct only: a relay's own 401 is about
+    X-Fleet-Relay, so there only a named code counts). A 2xx clears a refusal on
+    record for the same credential; otherwise nothing is written per request.
+    Never a token, never the upstream's message. Best effort: never fails a
+    request."""
+    if not seen or not (status == 401 or 200 <= status < 300):
+        return
+    home, fp = seen
+    path = os.path.join(home, ".ccquota-upstream.json")
+    old = read_json(path, {})
+    if not isinstance(old, dict):
+        old = {}
+    if status == 401:
+        text = (body or b"").decode("utf-8", "replace").lower()
+        code = next((c for c in ACCESS_REJECT if c in text.replace("refresh_" + c, "")), "")
+        if not code and route != "direct":
+            return
+        v = {"credential_version": fp, "state": "rejected", "error": code or "401"}
+    else:
+        if old.get("credential_version") != fp or old.get("state") != "rejected":
+            return
+        v = {"credential_version": fp, "state": "accepted"}
+    if old.get("credential_version") == fp and old.get("state") == v["state"] \
+            and old.get("error", "") == v.get("error", ""):
+        return
+    v["at"], v["by"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "proxy"
+    try:
+        write_json(path, v)
+    except OSError:
+        pass
 
 
 # ---- the control socket ------------------------------------------------------
@@ -527,7 +586,8 @@ def ctl_handle(req, cfg):
     if op == "status":
         return {"ok": True, "pid": os.getpid(), "port": cfg.bound_port,
                 "trust": Proxy.router.trust or "unknown", "trust_why": Proxy.router.trust_why,
-                "relay": bool(cfg.relay_url), "central": cfg.central_url or ""}
+                "relay": bool(cfg.relay_url), "relay_pass": bool(relay_pass(cfg)),
+                "central": cfg.central_url or ""}
     return {"ok": False, "err": "unknown op %r" % op}
 
 
@@ -583,6 +643,19 @@ def ctl_call(state, req):
     return res
 
 
+def relay_pass(cfg):
+    """The relay pass (#1974): FLEET_CRED_RELAY_TOKEN, else the one
+    fleet-relay-cred.sh minted for this login (<state>/relay.token, 0600) —
+    read per request, so a re-mint needs no restart."""
+    if cfg.relay_token:
+        return cfg.relay_token
+    try:
+        with open(os.path.join(cfg.state, "relay.token")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 # ---- serve ---------------------------------------------------------------------
 def serve(a):
     cfg = a
@@ -610,8 +683,11 @@ def serve(a):
         v = getattr(cfg, name)
         if v and not loopback_ok(v):
             sys.exit("fleet-cred-proxy: %s=%s: https, or plain http on loopback only" % (name, v))
-    if cfg.relay_url and not cfg.relay_token:
-        sys.exit("fleet-cred-proxy: FLEET_CRED_RELAY_URL set without FLEET_CRED_RELAY_TOKEN")
+    if cfg.relay_url and not relay_pass(cfg):
+        # not fatal: the launcher mints one (fleet-relay-cred.sh fetch); until
+        # then the relay road is simply not a candidate
+        sys.stderr.write("fleet-cred-proxy: FLEET_CRED_RELAY_URL set but no relay pass yet "
+                         "(FLEET_CRED_RELAY_TOKEN or %s) — relay road off\n" % os.path.join(cfg.state, "relay.token"))
     if not cfg.log:
         cfg.log = env("FLEET_CRED_PROXY_LOG", os.path.join(os.path.dirname(BIN), "logs", "cred-proxy.log"))
     try:

@@ -78,6 +78,7 @@ bin/fleet-hub-sessions.sh
 bin/fleet-hub-write.sh
 bin/fleet-sidebar.sh
 bin/fleet-sidebar.py
+bin/fleet-ask.py
 bin/fleet_reap_policy.py
 bin/fleet-reap-policy.sh
 bin/fleet-sidebar-menu.sh
@@ -170,4 +171,5 @@ bin/fleet-agent-team.py
 bin/fleet-config.py
 bin/fleet-cred-proxy.sh
 bin/fleet-cred-proxy.py
+bin/fleet-relay-cred.sh
 # --- end agent bundle ---

@@ -54,7 +54,7 @@ func (d *device) scan(t *testing.T, h *harness, sub, name string) CertResponse {
 	}
 	var st DeviceStart
 	json.Unmarshal(body, &st)
-	if pc, done := personForm(t, h, sub, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}}); pc != 200 || !strings.Contains(done, "已签发") {
+	if pc, done := personForm(t, h, sub, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}}); pc != 200 || !strings.Contains(done, "valid until") {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
 	code, body = postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})

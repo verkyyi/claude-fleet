@@ -240,65 +240,33 @@ grep -q '^  ⌃v .*flip this fleet' <<< "$dash_block" \
 grep -q '^  ⌃a ' <<< "$dash_block" \
   && fail "dashboard sheet lists ⌃a — that is a common tmux prefix (#556)"
 
-# --- 7. task sidebar: keymap table ⇄ tmux key table ⇄ view ⇄ sheet (#896) ------
-# The sidebar's navigation table is a tmux key table whose `Any` bind types every
-# other key into the input line, so: no plain-letter bind may shadow typing, each
-# `--panel sidebar` action's ⌃ default reaches the view as a byte it handles, its
-# ⌥ fallback is rewritten to that ⌃ byte in the conf, and the sheet lists it.
+# --- 7. the task list takes NO keys (issue #1950, EPIC #1949 C1) ---------------
+# It shows and taps (#896's input line, its key table and its ⌃ actions went):
+# no `fleet-sidebar` key table in the client conf and nothing there or in the row
+# menu switches a client into one, no `sidebar` panel in the keymap, and the view
+# reads no key but its wakes (F10 F11 F12), a resize and the mouse — its actions
+# are verbs parked in @sidebar_ask (fleet-sidebar.py `act`).
 SIDEBAR_PY="$BIN/fleet-sidebar.py"
-grep -Eq '^bind -T fleet-sidebar Any ' "$CONF" \
-  || fail "conf has no 'bind -T fleet-sidebar Any' — typed keys cannot reach the input line (#896)"
-grep -Eq '^bind -T fleet-sidebar [[:alnum:]] ' "$CONF" \
-  && fail "conf binds a plain letter/digit in the fleet-sidebar table — it types into the input line since #896 (hide is prefix e)"
-side_block="$(awk '/^  if want sidebar; then/{f=1;next} f && /^  fi$/{f=0} f' "$KEYS")"
-[ -n "$side_block" ] || fail "fleet-keys.sh has no 'if want sidebar' block"
-side_table="$(bash "$KEYMAP" --panel sidebar list)" || fail "dash-keymap.sh --panel sidebar list exited non-zero"
-[ -n "$side_table" ] || fail "dash-keymap.sh --panel sidebar has no actions"
-while read -r action _ _ def _; do
-  [ -n "$action" ] || continue
-  grep -q "\$(dg $action)" <<< "$side_block" \
-    || fail "sidebar action '$action' has no \$(dg $action) row in fleet-keys.sh"
-  grep -q "\$(dn $action)" <<< "$side_block" \
-    || fail "sidebar action '$action' has no \$(dn $action) remap note in fleet-keys.sh"
-  # A printable punctuation default (`menu` = `.`, #898) acts only on an EMPTY
-  # input line, so it reaches the view through the `Any` bind as its own byte
-  # (read as `press`, which also folds an IME's full-width 。/？ onto it, #965).
-  case "$def" in [[:punct:]])
-    grep -qF "press == \"$def\" and not line.text" "$SIDEBAR_PY" \
-      || fail "sidebar action '$action' ($def) must act only on an empty input line in fleet-sidebar.py"
-    continue ;;
-  esac
-  letter="${def#ctrl-}"
-  [ "$letter" != "$def" ] && [ "${#letter}" = 1 ] || fail "sidebar default '$def' must be a ctrl-<letter> or one punctuation key (a letter types)"
-  byte=$(( $(printf '%d' "'$letter") - 96 ))
-  grep -q "key == $byte\b" "$SIDEBAR_PY" \
-    || fail "sidebar action '$action' ($def = byte $byte) is not handled in fleet-sidebar.py"
-  grep -Eq "^bind -T fleet-sidebar M-$letter .*send-keys -t '\{top-left\}' C-$letter" "$CONF" \
-    || fail "sidebar action '$action': conf does not rewrite its ⌥$letter fallback to C-$letter"
-done <<EOF
-$side_table
-EOF
-# The sidebar's own `?` sheet (issue #948, cut to one screen by #963): its
-# popup cannot scroll, so it is the seven everyday keys + a title and nothing
-# else — the input line's editing keys share ONE row (#1097). Every sidebar action and every row-menu letter still has a row — in the
-# FULL sheet (prefix ?), which is what the checks above and below read.
+grep -Eq '^bind -T fleet-sidebar ' "$CONF" \
+  && fail "7: the client conf binds a fleet-sidebar key table again — the list takes no keys (#1950)"
+grep -n -- '-T fleet-sidebar' "$CONF" "$BIN/fleet-sidebar-menu.sh" "$SIDEBAR_PY" | grep -v ':[0-9]*:[[:space:]]*#' | grep -q . \
+  && fail "7: something still switches a client into the list's key table: $(grep -n -- '-T fleet-sidebar' "$CONF" "$BIN/fleet-sidebar-menu.sh" "$SIDEBAR_PY" | head -3)"
+bash "$KEYMAP" --panel sidebar list >/dev/null 2>&1 \
+  && fail "7: dash-keymap.sh still has a sidebar panel — the list has no keys to map"
+grep -nE '\bkey (==|in) \(?([0-9]|curses\.KEY_(UP|DOWN|LEFT|RIGHT|HOME|END|ENTER|BTAB|BACKSPACE))' "$SIDEBAR_PY" | grep -q . \
+  && fail "7: fleet-sidebar.py reads a key again: $(grep -nE '\bkey (==|in) \(?([0-9]|curses\.KEY_(UP|DOWN|LEFT|RIGHT|HOME|END|ENTER))' "$SIDEBAR_PY" | head -3)"
+for k in F10 F11 F12 RESIZE MOUSE; do
+  grep -q "key == curses.KEY_$k" "$SIDEBAR_PY" || fail "7: fleet-sidebar.py no longer wakes on KEY_$k"
+done
+# The list's short sheet (issue #948, cut to one screen by #963) is its taps.
 SSHEET="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --context sidebar --plain)" || fail "fleet-keys.sh --context sidebar exited non-zero"
 [ "$(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ')" -le 10 ] \
   || fail "the sidebar sheet is $(printf '%s\n' "$SSHEET" | wc -l | tr -d ' ') lines — it must fit its popup (≤ 10)"
-printf '%s\n' "$SSHEET" | head -1 | grep -q '任务栏快捷键' || fail "the sidebar sheet lacks its 任务栏快捷键 title"
-for k in "打字 ↵" "↑ ↓" "编辑" ". / 再点一次" "esc" "F9" "prefix ?"; do
+printf '%s\n' "$SSHEET" | head -1 | grep -q '任务栏' || fail "the sidebar sheet lacks its 任务栏 title"
+for k in "点一行" "再点一次 / 右键" "点 ▸ ▾"; do
   grep -qF "  $k " <<< "$SSHEET" || fail "the sidebar sheet does not list '$k'"
 done
-for k in "⌃o" "⌃n" "prefix E" "prefix Space"; do
-  grep -qF "$k" <<< "$SSHEET" && fail "the sidebar sheet lists '$k' — only the seven everyday keys belong there"
-done
-# The editing row names every edit key, each keymap one as it resolves (#1097).
-edit_row="$(printf '%s\n' "$SSHEET" | grep -F '  编辑 ')"
-for k in "←→" "Home" "End" "⌥←→" "$(bash "$KEYMAP" --panel sidebar glyph bol)" \
-         "$(bash "$KEYMAP" --panel sidebar glyph eol)" "$(bash "$KEYMAP" --panel sidebar glyph kill_word)" \
-         "$(bash "$KEYMAP" --panel sidebar glyph kill_eol)" "⌃u"; do
-  grep -qF " $k" <<< "$edit_row" || fail "the sidebar sheet's 编辑 row lacks '$k': $edit_row"
-done
+grep -qE '⌃|↑|prefix E|打字' <<< "$SSHEET" && fail "the sidebar sheet still lists a key: $SSHEET"
 grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' <<< "$SSHEET" \
   && fail "the sidebar sheet shows a full-sheet group"
 menu_keys="$(bash "$BIN/fleet-sidebar-menu.sh" --keys)" || fail "fleet-sidebar-menu.sh --keys exited non-zero"
@@ -325,11 +293,6 @@ grep -Eq '^ *add "[^"]*" [a-z] ' "$BIN/fleet-sidebar-menu.sh" \
 DSHEET="$(NO_COLOR=1 bash "$KEYS" --context dash --plain)"
 grep -Eq '^(row menu|task sidebar) ' <<< "$DSHEET" \
   && fail "the dash sheet shows a sidebar group"
-
-NSHEET="$(FLEET_TMUX_PREFIX=C-n NO_COLOR=1 bash "$KEYS" --plain)" || fail "fleet-keys.sh under a C-n prefix exited non-zero"
-printf '%s\n' "$NSHEET" | awk '/^task sidebar /{f=1;next} f && NF && /^[^ ]/{f=0} f' \
-  | grep -q '^  ⌥n .*⌃n is your tmux prefix C-n' \
-  || fail "under a C-n tmux prefix the sidebar group must list ⌥n for new task and say why"
 
 # #558: panel tables, source bindings, rendered help and actual fzf argv agree.
 # Only test subprocesses run: fake tmux/gh cannot contact a fleet or GitHub, and
@@ -463,7 +426,7 @@ $ndiff"; }
 $sheet_prefix_keys
 EOF
   ktm shell list-keys -T root | awk '$4 == "F9"' | grep -q 'resize-pane' || fail "8: the client does not bind F9"
-  ktm shell list-keys -T fleet-sidebar | grep -q . || fail "8: the client has no fleet-sidebar key table"
+  ktm shell list-keys -T fleet-sidebar 2>/dev/null | grep -q . && fail "8: the client still has a fleet-sidebar key table — the list takes no keys (#1950)"
   ktm stock kill-server; ktm node kill-server; ktm shell kill-server
   rm -rf "$KW"
 fi

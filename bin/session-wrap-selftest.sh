@@ -14,6 +14,9 @@
 #      hands the launch a FLEET_WORKER_CRED that verifies, for this window's
 #      @fleet_id, and revokes it when the agent exits; without it (every leg
 #      above) nothing is minted
+#   B'' the credential-proxy sid (issue #1972): FLEET_CRED_PROXY=0 sets nothing
+#      (the launch as before); =1 hands each launch its own FLEET_CRED_SID, stamps
+#      @cred_sid, and the exit revokes the session record and drops the options
 #   C  session-end-hook.sh: under a live wrapper a manual exit closes nothing;
 #      with @wrap_quiet the old close-on-exit policy runs
 #   D  fleet_server_resident / fleet_home_resident: `exit-empty off`, and the
@@ -224,6 +227,40 @@ waitfor "k: the wrapper returned" screen_has k 'WRAP_RC=0'
 waitfor "k: the agent's exit revoked the credential" grep -sq "^$knonce " "$WORK/kconf/worker-cred/revoked"
 eq "w: a wrapper with no fleet-mcp.py beside it mints nothing" "cred=" "$(sort -u "$WORK/w/cred")"
 
+# B'': the credential-proxy sid (issue #1972) — FLEET_CRED_PROXY=0: nothing set,
+# the launch is what it was; =1: a per-launch FLEET_CRED_SID on the launch and on
+# the window (@cred_sid), its session record revoked and the option gone at exit.
+mkdir -p "$WORK/xbin"
+for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-session-cred.sh fleet-cred-proxy.sh fleet-cred-proxy.py; do
+  ln -s "$BIN/$f" "$WORK/xbin/$f"
+done
+cat > "$WORK/sid-launch" <<'EOF'
+#!/bin/bash
+printf 'sid=%s\n' "${FLEET_CRED_SID:-}" > "$CTL/sid"
+printf 'opt=%s\n' "$(tmux display-message -p -t "$TMUX_PANE" '#{@cred_sid}')" >> "$CTL/sid"
+if [ -n "${FLEET_CRED_SID:-}" ]; then   # what a mint leaves: a session record
+  mkdir -p "$FLEET_CONF_DIR/cred-proxy/sessions"
+  printf 'route=central\n' > "$FLEET_CONF_DIR/cred-proxy/sessions/$FLEET_CRED_SID"
+  tmux set-option -w -t "$TMUX_PANE" @cred_route central
+fi
+while [ ! -e "$CTL/go" ]; do sleep 0.05; done
+EOF
+chmod +x "$WORK/sid-launch"
+for sw in 0 1; do
+  mkdir -p "$WORK/x$sw" "$WORK/xconf$sw"
+  tf new-window -d -t sw: -n "x$sw" "env CTL='$WORK/x$sw' FLEET_WRAP_LAUNCH='$WORK/sid-launch' FLEET_WRAP_FAST_FAIL=0 \
+    FLEET_CONF_DIR='$WORK/xconf$sw' FLEET_CRED_PROXY=$sw FLEET_MCP=0 '$WORK/xbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
+  waitfor "x$sw: the launch ran" test -s "$WORK/x$sw/sid"
+done
+eq "x0: switched off — no FLEET_CRED_SID, no @cred_sid" "sid= opt=" "$(tr '\n' ' ' < "$WORK/x0/sid" | sed 's/ $//')"
+xsid=$(sed -n 's/^sid=//p' "$WORK/x1/sid")
+CHECKS=$((CHECKS + 1)); case "$xsid" in w-[0-9]*-[0-9]*) ;; *) fail "x1: FLEET_CRED_SID is not a per-launch id" "$xsid" ;; esac
+eq "x1: the window carries the same sid" "opt=$xsid" "$(sed -n 2p "$WORK/x1/sid")"
+for sw in 0 1; do tf set-option -w -t "sw:x$sw" @wrap_quiet 1; : > "$WORK/x$sw/go"; waitfor "x$sw: the wrapper returned" screen_has "x$sw" 'WRAP_RC=0'; done
+eq "x1: the exit revoked the session record" no "$([ -e "$WORK/xconf1/cred-proxy/sessions/$xsid" ] && echo yes || echo no)"
+eq "x1: @cred_sid / @cred_route are gone" "" "$(o x1 @cred_sid)$(o x1 @cred_route)"
+eq "x0: nothing written under cred-proxy/" no "$([ -e "$WORK/xconf0/cred-proxy" ] && echo yes || echo no)"
+
 # ------------------------------------------- C: the SessionEnd hook's gate -----
 # A pane stands in for the wrapper (its pid on @session_wrap); the hook's trace
 # shows whether it went on to resolve the fleet (= the close-on-exit path).
@@ -253,8 +290,20 @@ tf set-option -wu -t sw:c @wrap_quiet
 )
 eq "D: exit-empty is off" off "$(tf show-options -sv exit-empty)"
 eq "D: home keeps its pane when its shell exits" on "$(tf show-options -wv -t sw:home remain-on-exit)"
-hpid=$(o home pane_pid)
-tf send-keys -t sw:home 'exit' Enter
+# home_exit: type `exit` into home's shell once it is really up (its pane pid has
+# exec'd sh — before that a key can be lost, issue #2042), again while that
+# same shell is still alive, so what is timed is the respawn, never the keystroke.
+home_up() { local p; p=$(o home pane_pid); [ -n "$p" ] && [ "$(o home pane_dead)" = 0 ] \
+  && [ "$(ps -o comm= -p "$p" 2>/dev/null | sed 's|.*/||')" = sh ]; }
+home_exit() {
+  waitfor "D: home's shell is up" home_up
+  hpid=$(o home pane_pid)
+  for _ in $(seq 1 5); do
+    tf send-keys -t sw:home 'exit' Enter
+    for _ in $(seq 1 20); do kill -0 "$hpid" 2>/dev/null && [ "$(ps -o stat= -p "$hpid" 2>/dev/null | cut -c1)" != Z ] || return 0; sleep 0.1; done
+  done
+}
+home_exit
 waitfor "D: home respawned a fresh shell" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_pid}')\" != '$hpid' ] && [ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_dead}')\" = 0 ]"
 # The tick's backstop (#1801): tmux ≤ 3.4 can lose the shell's SIGCHLD and leave
 # home dead with no pane-died — made here by dropping the hook. fleet_home_heal
@@ -262,8 +311,7 @@ waitfor "D: home respawned a fresh shell" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' 
 heal() ( PATH="$WORK/tbin:$PATH"; FLEET_CONF_DIR="$WORK/dconf"; export PATH FLEET_CONF_DIR
          . "$BIN/fleet-lib.sh"; fleet_home_heal whatever sw )
 tf set-hook -wu -t sw:home pane-died
-hpid=$(o home pane_pid)
-tf send-keys -t sw:home 'exit' Enter
+home_exit
 waitfor "D: home left dead with no hook" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_dead}')\" = 1 ]"
 out=$(heal)
 CHECKS=$((CHECKS + 1)); case "$out" in "healed @"*) ;; *) fail "D: fleet_home_heal on a dead home printed [$out], want healed @<id>" ;; esac

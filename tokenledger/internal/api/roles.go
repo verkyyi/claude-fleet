@@ -47,6 +47,8 @@ var routeAccess = map[string]string{
 	"/auth/github/start": accessPublic, "/auth/github/callback": accessPublic,
 	"/healthz": accessPublic, "/version": accessPublic,
 	"/install": accessPublic, "/install/": accessPublic,
+	// The public counter (claude-fleet#1988); the handler 404s it when off.
+	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
 	"/v1/fleet/ssh-ca.pub":  accessPublic,
 	"/v1/fleet/login/start": accessPublic, "/v1/fleet/login/poll": accessPublic,
 
@@ -54,13 +56,19 @@ var routeAccess = map[string]string{
 	"/v1/ingest": accessSelf, "/v1/ingest/repo": accessSelf, "/v1/ingest/growth": accessSelf,
 	"/v1/growth/latest": accessSelf, "/v1/live/report": accessSelf,
 	"/v1/collectors/quota-lease": accessSelf,
-	control.Path:                 accessSelf, "/v1/node/lease": accessSelf, "/v1/node/place": accessSelf,
+	// The onboarding drill (claude-fleet#2010): each request signed by the
+	// inviting machine, the drill person's certificate or its approve code.
+	DrillPath: accessSelf, DrillSelfPath: accessSelf, LoginApprovePath: accessSelf,
+	control.Path: accessSelf, "/v1/node/lease": accessSelf, "/v1/node/place": accessSelf,
 	"/v1/node/move": accessSelf, "/v1/node/move/bundle": accessSelf, "/v1/node/move/bundle/": accessSelf,
 	"/v1/node/join": accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf,
 	"/v1/node/reclaim": accessSelf, "/v1/node/maintenance": accessSelf, "/v1/node/peer-cert": accessSelf,
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
 	"/v1/node/worker-records": accessSelf, "/v1/node/progress": accessSelf,
 	"/v1/node/credentials": accessSelf,
+	// The Singapore relay (claude-fleet#1974): a node token mints a pass;
+	// the check authenticates the pass the forwarder carries.
+	"/v1/node/relay-credential": accessSelf, RelayCheckPath: accessSelf,
 	// The team layer is read by every machine that applies it — a node's
 	// token, a client's certificate — and its PUT is refused to anyone but an
 	// admin by the handler itself.
@@ -102,13 +110,13 @@ var routeAccess = map[string]string{
 	"/v1/usage": accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,
 	"/v1/sessions": accessUser, "/v1/sessions/": accessUser,
 	"/v1/live": accessUser, "/v1/live/stream": accessUser,
-	"/v1/user": accessUser, "/u/": accessUser, "/mcp": accessUser,
+	"/v1/user": accessUser, "/mcp": accessUser,
 	"/sessions": accessUser, "/v1/fleet/me": accessUser, "/v1/fleet/": accessUser,
 	// The roster, cut by FleetScope to the machines where their login runs
 	// (claude-fleet#1411); maintenance, SPOT and join codes stay an admin's.
 	"/v1/nodes": accessUser, "/nodes": accessUser,
 	"/v1/fleet/connect": accessUser, "/v1/fleet/cert": accessUser,
-	"/fleet/login": accessUser, "/connect": accessUser,
+	"/fleet/login": accessUser, "/connect": accessUser, "/config": accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,
 }
 

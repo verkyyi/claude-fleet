@@ -195,6 +195,12 @@ def profile(name='', home='', account=''):
         raise ValueError('expected one registered Codex profile with the pinned account/home')
     p = found[0]
     if not p['account'] or p['login'] not in LOGIN_OK or not Path(p['home']).is_dir():
+        if p.get('source') == 'hub' and p['login'] == 'access_rejected':
+            # The upstream refused the lease itself (claude-fleet#1920): the
+            # node agent cannot renew its way out of a revoked grant.
+            raise ValueError('hub-managed Codex profile %s: the upstream refused its lease (%s); '
+                             'the hub must issue a new one — a re-login here does not fix it'
+                             % (p['profile'], p.get('login_reason') or 'access_rejected'))
         if p.get('source') == 'hub':
             # The hub refreshes this one; a re-login here would not fix it —
             # and ccquota's reason, when it has one, says what did happen.

@@ -123,7 +123,8 @@ if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
   exit 2
 fi
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/scratch.calls"
-repo=''; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; prev=$a; done
+repo=''; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; prev=$a
+  case "$a" in --prompt-file=*) cat "${a#--prompt-file=}" > "$FLEET_CONF_DIR/scratch.seed" ;; esac; done
 printf '@13\\t\\t1\\t/fixture/project-scratch-3\\tdone\\tclaude\\ta2\\t\\t%s\\n' "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
 printf '@13\\tscratch-3\\t/fixture/project-scratch-3\\n'
 ''')
@@ -899,6 +900,26 @@ class HubTests(HubFixture):
         err = refused["result"]["error"]
         self.assertEqual((refused["status"], err["code"], err["exit"]), ("failed", "AT_CAPACITY", 2))
         self.assertEqual(err["stderr1"], "dash-raw-session: at capacity: 6/6 sessions")
+
+    def test_start_no_repo_scratch_with_seed(self):
+        # issue #1956: the writing area's 「不关联仓库」 — no_repo is a scratch of
+        # no repo: the adapter gets `-` for its repo and opens it with --no-repo,
+        # never a repo; the text rides stdin to --prompt-file, never an argv.
+        for bad in ({"kind": "scratch", "no_repo": False}, {"kind": "scratch", "no_repo": "1"},
+                    {"kind": "issue", "issue": 1, "no_repo": True}, {"kind": "new", "title": "x", "no_repo": True},
+                    {"kind": "scratch", "no_repo": True, "repo": "example/project"},
+                    {"kind": "scratch", "body": "<!-- fleet:from -->"}):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                validate_write("worker_start", bad)
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="norepo-1",
+                                                 params={"kind": "scratch", "no_repo": True, "name": "整理日报",
+                                                         "body": "整理这周的日报\n按天分。"}))
+        op = self.node.wait(started["operation_id"])
+        self.assertEqual((op["status"], op["result"]["window"]), ("succeeded", "@13"))
+        call = (self.node.conf / "scratch.calls").read_text()
+        self.assertRegex(call, r"^demo --origin hub --print --agent claude --no-repo --name 整理日报 --prompt-file=\S+\n$")
+        self.assertNotIn("--repo", call)
+        self.assertEqual((self.node.conf / "scratch.seed").read_text(), "整理这周的日报\n按天分。")
 
     def test_new_issue_start_files_then_spawns(self):
         # issue #1953: the client's writing area — kind=new carries a title and a
