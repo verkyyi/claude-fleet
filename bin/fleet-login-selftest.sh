@@ -42,6 +42,20 @@
 #   G. blip      a 503 between two polls (the ingress, the hub restarting) is
 #                not a refusal: the client keeps waiting and gets its
 #                certificate (#1901 — a colleague's first scan died on one)
+#   L. browser   (#2262) with a screen here the confirmation page opens in this
+#                computer's browser (a fake `open` / `xdg-open` records its
+#                argv): the verification URL, no QR drawn, certificate written
+#   M. no screen over ssh (SSH_CONNECTION) the opener is never called and the
+#                QR is drawn; --qr does the same with a screen
+#   N. no opener the browser will not open → says so, draws the QR, still logs in
+#   O. waiting   every FLEET_LOGIN_NUDGE_SECS a 「还在等浏览器里授权…（按 q 改用
+#                二维码）」 line; past FLEET_LOGIN_TIMEOUT_SECS it stops (exit 1)
+#                with why and the next step, no certificate; defaults 15 / 120
+#   P. q         on a real terminal (a pty) a `q` while waiting draws the QR
+#   Q. old token a hub.json token the hub answers 401 (an old identity) is
+#                removed before the scan, every other key kept; `fleet --pick`
+#                with such a token logs this person in instead of failing
+#   W. wording   no output of any leg says 企业微信
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/fleet-cert-st.XXXXXX")"
@@ -73,6 +87,13 @@ class H(BaseHTTPRequestHandler):
         subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(SB, "ca"), "-I", "gh:Alice",
                         "-n", "alice", "-V", "-1m:+12h", "-z", str(serial), os.path.join(d, "k.pub")], check=True)
         return open(os.path.join(d, "k-cert.pub")).read()
+    def do_GET(self):
+        if self.path.startswith("/v1/fleet/home"):
+            # #2262: a viewer token from an old identity is refused
+            if self.headers.get("Authorization", "") == "Bearer dead-tok":
+                return self.reply(401, {"error": "a session, a viewer token or a connection certificate is required"})
+            return self.reply(200, {})
+        self.reply(404, {})
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         if self.path == "/v1/fleet/login/renew":
@@ -104,7 +125,7 @@ class H(BaseHTTPRequestHandler):
             state["polls"] += 1
             if os.path.exists(os.path.join(SB, "blip")) and state["polls"] == 1:
                 return self.reply(503, {})
-            if state["polls"] < 2:
+            if state["polls"] < 2 or os.path.exists(os.path.join(SB, "pending")):
                 return self.reply(202, {"status": "authorization_pending"})
             if os.path.exists(os.path.join(SB, "nologin")):
                 # #2090: the person has no machine login — the hub denies at once, with the reason
@@ -139,6 +160,16 @@ stop_hub() { kill "$HUB_PID" 2>/dev/null; wait "$HUB_PID" 2>/dev/null; HUB_PID="
 
 PORT=""
 export HOME="$SB/home" XDG_CONFIG_HOME="$SB/home/.config"
+# The legs before L run as a terminal with no screen (the QR); L–Q choose.
+export FLEET_LOGIN_BROWSER=0
+unset SSH_CONNECTION SSH_TTY FLEET_HUB_TOKEN
+# A fake browser opener for L–Q: records its argv, answers $SB/open.rc.
+mkdir -p "$SB/fakebin"
+for o in open xdg-open; do
+  printf '#!/bin/sh\necho "$0 $*" >>"%s/opened"\nexit "$(cat "%s/open.rc" 2>/dev/null || echo 0)"\n' "$SB" "$SB" >"$SB/fakebin/$o"
+  chmod +x "$SB/fakebin/$o"
+done
+ALL_OUT=""
 unset FLEET_CONF_DIR   # a laptop has none: fleet.conf is ~/.config/claude-fleet/fleet.conf (issue #1623)
 mkdir -p "$HOME/.ssh"
 printf 'Host mine\n  HostName 10.0.0.1\n  User me\n' >"$HOME/.ssh/config"
@@ -294,6 +325,118 @@ if [ "$(wc -l <"$SB/pick.out" | tr -d ' ')" = 1 ] && python3 -c 'import json,sys
    && grep -q 'BCDF-GHJK' "$SB/pick.err" && grep -q '链接：http://' "$SB/pick.err" && grep -q '证书已写入' "$SB/pick.err"; then
   ok "I --pick with a scan: code + link + ✓ on stderr, stdout one JSON line"
 else bad "I pick rc=$rc stdout=[$(cat "$SB/pick.out")] stderr=[$(cat "$SB/pick.err")]"; fi
+
+# ── L — a screen here: the browser opens on the confirmation page (#2262) ──
+rm -f "$HOME/.ssh/fleet-cert-cert.pub" "$SB/opened" "$SB/open.rc"
+start_hub
+out="$(PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=1 python3 "$BIN/fleet-login.py" 2>&1 </dev/null)"; rc=$?
+stop_hub
+ALL_OUT="$ALL_OUT$out"
+grep -q 'open.* http://127.0.0.1/fleet/login?code=BCDF-GHJK$' "$SB/opened" 2>/dev/null \
+  && ok "L the browser opened on the verification URL" || bad "L opener: $(cat "$SB/opened" 2>&1)"
+[ "$rc" = 0 ] && [ -s "$HOME/.ssh/fleet-cert-cert.pub" ] && echo "$out" | grep -q '已在浏览器里打开' \
+  && echo "$out" | grep -q 'BCDF-GHJK' && ! echo "$out" | grep -q '█\|▀\|▄' \
+  && ok "L said so, no QR drawn, certificate written" || bad "L rc=$rc: $out"
+
+# ── M — no screen (ssh in), or --qr: the opener is never called, the QR is drawn ──
+rm -f "$HOME/.ssh/fleet-cert-cert.pub" "$SB/opened"
+start_hub
+out="$(PATH="$SB/fakebin:$PATH" SSH_CONNECTION="10.0.0.2 5000 10.0.0.1 22" FLEET_LOGIN_BROWSER=auto python3 "$BIN/fleet-login.py" 2>&1 </dev/null)"; rc=$?
+stop_hub
+ALL_OUT="$ALL_OUT$out"
+[ "$rc" = 0 ] && [ ! -e "$SB/opened" ] && echo "$out" | grep -q '█\|▀\|▄' && echo "$out" | grep -q '链接：http://' \
+  && ok "M over ssh: no browser, QR + link" || bad "M rc=$rc opened=$(cat "$SB/opened" 2>&1): $out"
+rm -f "$HOME/.ssh/fleet-cert-cert.pub" "$SB/opened"
+start_hub
+out="$(PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=1 python3 "$BIN/fleet-login.py" --qr 2>&1 </dev/null)"; rc=$?
+stop_hub
+[ "$rc" = 0 ] && [ ! -e "$SB/opened" ] && echo "$out" | grep -q '█\|▀\|▄' \
+  && ok "M --qr: no browser, QR" || bad "M --qr rc=$rc: $out"
+
+# ── N — the browser will not open: say so, QR, still log in ──
+rm -f "$HOME/.ssh/fleet-cert-cert.pub" "$SB/opened"; echo 1 >"$SB/open.rc"
+start_hub
+out="$(PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=1 python3 "$BIN/fleet-login.py" 2>&1 </dev/null)"; rc=$?
+stop_hub
+rm -f "$SB/open.rc"
+ALL_OUT="$ALL_OUT$out"
+[ "$rc" = 0 ] && echo "$out" | grep -q '浏览器打不开' && echo "$out" | grep -q '█\|▀\|▄' && [ -s "$HOME/.ssh/fleet-cert-cert.pub" ] \
+  && ok "N opener failed → said so, QR, certificate" || bad "N rc=$rc: $out"
+
+# ── O — never a silent wait: a nudge every N seconds, a stop with the reason ──
+rm -f "$HOME/.ssh/fleet-cert-cert.pub"; touch "$SB/pending"
+start_hub
+out="$(PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=1 FLEET_LOGIN_NUDGE_SECS=1 FLEET_LOGIN_TIMEOUT_SECS=4 \
+  python3 "$BIN/fleet-login.py" 2>&1 </dev/null)"; rc=$?
+stop_hub
+ALL_OUT="$ALL_OUT$out"
+[ "$rc" = 1 ] && [ ! -e "$HOME/.ssh/fleet-cert-cert.pub" ] \
+  && echo "$out" | grep -q '还在等浏览器里授权…（已等 [0-9]* 秒；按 q 改用二维码）' \
+  && echo "$out" | grep -q '4 秒内浏览器里没有完成授权，已停下' && echo "$out" | grep -q 'fleet login --qr' \
+  && ok "O nudges while waiting, stops with why + next step" || bad "O rc=$rc: $out"
+start_hub
+out="$(PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=0 FLEET_LOGIN_NUDGE_SECS=1 FLEET_LOGIN_TIMEOUT_SECS=3 \
+  python3 "$BIN/fleet-login.py" 2>&1 </dev/null)"; rc=$?
+stop_hub
+[ "$rc" = 1 ] && echo "$out" | grep -q '还在等扫码确认' && echo "$out" | grep -q '3 秒内没有完成扫码确认' \
+  && ok "O the QR wait nudges and stops too" || bad "O qr rc=$rc: $out"
+grep -q '"FLEET_LOGIN_NUDGE_SECS", 15)' "$BIN/fleet-login.py" && grep -q '"FLEET_LOGIN_TIMEOUT_SECS", 120)' "$BIN/fleet-login.py" \
+  && ok "O defaults: a nudge every 15 s, a stop at 2 minutes" || bad "O defaults changed"
+
+# ── P — q on a real terminal switches to the QR ──
+start_hub
+out="$(PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=1 FLEET_LOGIN_TIMEOUT_SECS=4 python3 - "$BIN/fleet-login.py" <<'PTY' 2>&1
+import os, pty, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("python3", ["python3", sys.argv[1]])
+buf, sent, end = b"", False, time.time() + 15
+while time.time() < end:
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    buf += chunk
+    if not sent and "或按 q".encode() in buf:
+        time.sleep(0.3); os.write(fd, b"q"); sent = True
+os.waitpid(pid, 0)
+sys.stdout.write(buf.decode("utf-8", "replace"))
+PTY
+)"
+stop_hub
+rm -f "$SB/pending"
+ALL_OUT="$ALL_OUT$out"
+echo "$out" | grep -q '已在浏览器里打开' && echo "$out" | grep -q '█\|▀\|▄' && echo "$out" | grep -q '用手机扫码' \
+  && ok "P q while waiting → the QR is drawn" || bad "P: $out"
+
+# ── Q — an old identity's token does not outlive the hub (#2262) ──
+rm -f "$HOME/.ssh/fleet-cert-cert.pub"
+printf '{"token": "dead-tok", "keep": 1}\n' >"$HOME/.config/claude-fleet/hub.json"
+start_hub
+out="$(python3 "$BIN/fleet-login.py" 2>&1 </dev/null)"; rc=$?
+stop_hub
+ALL_OUT="$ALL_OUT$out"
+[ "$rc" = 0 ] && ! grep -q 'dead-tok' "$HOME/.config/claude-fleet/hub.json" && grep -q '"keep": 1' "$HOME/.config/claude-fleet/hub.json" \
+  && echo "$out" | grep -q '清掉了本机一个入口已不认的旧令牌' && ! echo "$out" | grep -q 'dead-tok' \
+  && ok "Q a dead hub.json token is removed before the scan (other keys kept, value never printed)" || bad "Q rc=$rc hub.json=$(cat "$HOME/.config/claude-fleet/hub.json"): $out"
+printf '{"token": "live-tok"}\n' >"$HOME/.config/claude-fleet/hub.json"
+start_hub
+python3 "$BIN/fleet-login.py" >/dev/null 2>&1 </dev/null
+stop_hub
+grep -q 'live-tok' "$HOME/.config/claude-fleet/hub.json" && ok "Q a token the hub accepts is kept" || bad "Q live token dropped"
+rm -f "$HOME/.ssh/fleet-cert-cert.pub" "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub"
+printf '{"token": "dead-tok"}\n' >"$HOME/.config/claude-fleet/hub.json"
+start_hub
+python3 "$BIN/fleet-connect.py" --hub "http://127.0.0.1:$PORT" --pick >"$SB/pick.out" 2>"$SB/pick.err" </dev/null; rc=$?
+stop_hub
+ALL_OUT="$ALL_OUT$(cat "$SB/pick.err")"
+[ ! -e "$HOME/.config/claude-fleet/hub.json" ] && [ -s "$HOME/.ssh/fleet-cert-cert.pub" ] && grep -q '清掉了本机一个入口已不认的旧令牌' "$SB/pick.err" \
+  && ok "Q fleet --pick with a dead token: dropped, this person logged in" || bad "Q pick rc=$rc stderr=[$(cat "$SB/pick.err")]"
+
+# ── W — no output says 企业微信 ──
+echo "$ALL_OUT" | grep -q '企业微信' && bad "W some output says 企业微信" || ok "W no output says 企业微信"
 
 [ "$fail" = 0 ] && echo "PASS fleet-login-selftest" || echo "FAIL fleet-login-selftest"
 exit "$fail"

@@ -72,6 +72,8 @@
 #   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
+#   login-browser-silent                            bin/fleet-login.py (scan: open_browser, KeyWatch, nudge, timeout)
+#   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 #   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
@@ -2443,6 +2445,92 @@ PY2
   out=$(python3 "$hub/drive.py" "$BIN/fleet-drill.sh" "$((CAP + 10))" "$hub/home" 2>&1)
   [ "$out" = OK ] || { WHY=${out#WHY=}; WHY="${WHY:-the drive died}"; return 1; }
   SECS=$(since "$t0"); WHAT="演练的扫码以演练同事确认：入口上确认人是 drill person，不带运营者的 token / 证书，确认码只能用一次"
+}
+
+# A login's wait with no answer (issue #2262, EPIC #2259 约定 5/8): the browser
+# will not open, or opens and nobody confirms (a company network blocking
+# GitHub). Before, the terminal drew a QR and waited out the code's ten minutes
+# without a word. A fake hub that never confirms, a fake opener that fails, then
+# one that works: it says the browser would not open and draws the QR; it says
+# every few seconds what it waits for; it stops with the reason and what to do.
+login_pending_hub() {
+  cat > "$1/hub.py" <<'PY2'
+import json, os, signal, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+signal.alarm(int(sys.argv[2]))
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path == "/v1/fleet/login/start":
+            st, out = 200, {"device_code": "d" * 64, "user_code": "BCDF-GHJK", "expires_in": 600, "interval": 1,
+                            "verification_uri": "http://127.0.0.1/fleet/login?code=BCDF-GHJK",
+                            "key_fingerprint": "SHA256:x", "qr": ["#.#", ".#.", "#.#"]}
+        elif self.path == "/v1/fleet/login/poll":
+            st, out = 202, {"status": "authorization_pending"}
+        else:
+            st, out = 404, {}
+        b = json.dumps(out).encode()
+        self.send_response(st); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+srv = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(sys.argv[1], "port"), "w").write(str(srv.server_port))
+srv.serve_forever()
+PY2
+  rm -f "$1/port"
+  python3 "$1/hub.py" "$1" "$2" 2>"$1/hub.err" & LHUB_PID=$!
+  for _ in $(seq 1 300); do [ -s "$1/port" ] && break; sleep 0.1; done
+  [ -s "$1/port" ]
+}
+login_sandbox_run() {   # <dir> <env…> — fleet-login.py in a sandbox HOME (killed at 20 s), its output printed
+  local d="$1"; shift
+  env -i PATH="$d/fakebin:$PATH" HOME="$d/home" XDG_CONFIG_HOME="$d/home/.config" "$@" \
+    python3 -c 'import subprocess, sys
+try: sys.exit(subprocess.run(sys.argv[1:], stdin=subprocess.DEVNULL, stderr=subprocess.STDOUT, timeout=20).returncode)
+except subprocess.TimeoutExpired: print("(still waiting after 20 s — killed)"); sys.exit(124)' \
+    python3 "$BIN/fleet-login.py" --hub "http://127.0.0.1:$(cat "$d/port")" 2>&1
+}
+drill_login_browser_silent() {
+  CAP=10; local t0 d="$WORK/lbs" out
+  mkdir -p "$d/home/.ssh" "$d/fakebin"
+  for o in open xdg-open; do printf '#!/bin/sh\nexit "$(cat %s/open.rc)"\n' "$d" > "$d/fakebin/$o"; chmod +x "$d/fakebin/$o"; done
+  login_pending_hub "$d" $((CAP * 3)) || { kill "$LHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$d/hub.err")"; return 1; }
+  echo 1 > "$d/open.rc"
+  out=$(login_sandbox_run "$d" FLEET_LOGIN_BROWSER=1 FLEET_LOGIN_NUDGE_SECS=1 FLEET_LOGIN_TIMEOUT_SECS=2)
+  case "$out" in *浏览器打不开*'█'*) ;; *) kill "$LHUB_PID" 2>/dev/null; WHY="an opener that fails: no 「浏览器打不开」 + QR: [$out]"; return 1 ;; esac
+  echo 0 > "$d/open.rc"
+  t0=$(now)
+  out=$(login_sandbox_run "$d" FLEET_LOGIN_BROWSER=1 FLEET_LOGIN_NUDGE_SECS=1 FLEET_LOGIN_TIMEOUT_SECS=3)
+  SECS=$(since "$t0")
+  kill "$LHUB_PID" 2>/dev/null; wait "$LHUB_PID" 2>/dev/null
+  case "$out" in *还在等浏览器里授权*按\ q\ 改用二维码*) ;; *) WHY="no 「还在等浏览器里授权…（按 q 改用二维码）」 while waiting: [$out]"; return 1 ;; esac
+  case "$out" in *秒内浏览器里没有完成授权，已停下*'fleet login --qr'*) ;; *) WHY="the wait did not stop with the reason + next step: [$out]"; return 1 ;; esac
+  [ -e "$d/home/.ssh/fleet-cert-cert.pub" ] && { WHY="a certificate appeared with nothing confirmed"; return 1; }
+  WHAT="浏览器打不开就说并画码；等着时每拍一句「还在等浏览器里授权…（按 q 改用二维码）」，到点停下给原因和下一步"
+}
+
+# A sandbox login that writes the REAL config (issue #2262): 2026-10-07 a
+# worker took its 上线证据 with HOME pointed at a temp dir but its session's
+# FLEET_CONF_DIR still set — `fleet login` remembered the fake hub in the
+# machine's real fleet.conf and m5 lost its hub. The real home is a seam here
+# ($d/real); the guard must keep both writes (the address, node.env's dir for
+# `fleet node ensure`) in the sandbox.
+drill_login_sandbox_real_conf() {
+  CAP=10; local t0 d="$WORK/lsr" out
+  mkdir -p "$d/home/.ssh" "$d/real/.config/claude-fleet" "$d/fakebin"
+  printf 'export FLEET_HUB_URL="https://hub.real"\n' > "$d/real/.config/claude-fleet/fleet.conf"
+  login_pending_hub "$d" $((CAP * 3)) || { kill "$LHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$d/hub.err")"; return 1; }
+  t0=$(now)
+  out=$(login_sandbox_run "$d" FLEET_LOGIN_BROWSER=0 FLEET_LOGIN_TIMEOUT_SECS=1 \
+        FLEET_LOGIN_REAL_HOME="$d/real" FLEET_CONF_DIR="$d/real/.config/claude-fleet")
+  SECS=$(since "$t0")
+  kill "$LHUB_PID" 2>/dev/null; wait "$LHUB_PID" 2>/dev/null
+  grep -q 'hub.real' "$d/real/.config/claude-fleet/fleet.conf" && ! grep -q '127.0.0.1' "$d/real/.config/claude-fleet/fleet.conf" \
+    || { WHY="the sandbox login wrote the real fleet.conf: $(cat "$d/real/.config/claude-fleet/fleet.conf")"; return 1; }
+  grep -q '127.0.0.1' "$d/home/.config/claude-fleet/fleet.conf" 2>/dev/null \
+    || { WHY="the sandbox's own fleet.conf did not get the address: [$out]"; return 1; }
+  case "$out" in *'belongs to'*) ;; *) WHY="it did not say it ignored the carried FLEET_CONF_DIR: [$out]"; return 1 ;; esac
+  WHAT="沙箱 HOME 下带着真的 FLEET_CONF_DIR 登录：真 fleet.conf 一字不动，地址写进沙箱，并说一句为什么"
 }
 
 # `fleet drill invite` on a client-only computer (issue #2024, EPIC #1906 C17):
