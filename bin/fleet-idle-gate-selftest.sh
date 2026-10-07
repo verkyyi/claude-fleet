@@ -123,7 +123,7 @@ grep -q 'FLEET_DAEMON_IDLE_AFTER=0' "$WORK/gate.err" || fail "log: the line name
 
 # --- 8/9. the real collector and quotawatch in a sandbox -----------------------
 SB="$WORK/sb"; mkdir -p "$SB/bin" "$SB/fakepath" "$SB/conf/fleets/sessA" "$SB/tmp"
-for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-lib.sh usage-lib.sh fleet-daemon-lib.sh fleet-account.sh; do
+for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-lib.sh usage-lib.sh fleet-daemon-lib.sh fleet-account.sh fleet_iso.py; do
   [ -f "$BIN/$f" ] && cp "$BIN/$f" "$SB/bin/"
 done
 printf 'FLEET_REPO="acme/widgets"\n' > "$SB/conf/fleets/sessA/conf"

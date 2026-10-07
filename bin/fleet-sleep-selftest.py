@@ -25,7 +25,7 @@ class SleepTest(unittest.TestCase):
         cls.root=Path(cls.tmp.name)
         cls.socket='sleep-test-'+str(os.getpid())
         cls.bin=cls.root/'bin'; cls.bin.mkdir()
-        for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py','fleet_sleep_park.py','fleet_loop_mark.py',
+        for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_sleep_mcp.py','fleet_sleep_park.py','fleet_loop_mark.py','fleet_iso.py',
                      'fleet-session-wrap.sh','fleet-session-page.py'):
             shutil.copyfile(BIN/name,cls.bin/name)
         (cls.bin/'fleet-session-wrap.sh').chmod(0o755)   # a wake relaunches through it (issue #1784)
