@@ -129,7 +129,8 @@ done
   && pass "B alpha's signing key MOVED into the store (no copy left to forge with)" || fail "B alpha key"
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if m["legacy_port"]==int(sys.argv[2]) else 1)' \
   "$SB/db/alpha/meta.json" "$OLDPORT" && pass "B alpha's old port :$OLDPORT recorded" || fail "B legacy port"
-n=$(ls "$SB/daemons" | grep -c 'cred-proxy-shared'); per=$(ls "$SB/daemons" | grep -c 'credsep\.')
+n=0; per=0
+for f in "$SB/daemons"/*; do case "${f##*/}" in *cred-proxy-shared*) n=$((n + 1)) ;; *credsep.*) per=$((per + 1)) ;; esac; done
 [ "$n" = 1 ] && [ "$per" = 0 ] && pass "B ONE service for the machine, none per login" || fail "B services: $(ls "$SB/daemons")"
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["logins"]==["alpha","beta"] and r["port"]==int(sys.argv[2]) else 1)' \
   "$SB/db/.shared.json" "$FLEET_CRED_SHARED_PORT" && pass "B the record: both logins, the fixed port" || fail "B record"
