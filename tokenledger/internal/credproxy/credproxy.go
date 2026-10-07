@@ -374,50 +374,59 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 
 	target, route := p.target(provider, r.URL)
 	a.route = route
-	out, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
-	if err != nil {
+	send := func(res Resolution) (*http.Response, error) {
+		out, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		out.ContentLength = int64(len(body))
+		if len(body) == 0 {
+			out.Body = http.NoBody
+		}
+		var betas []string
+		for k, vs := range r.Header {
+			lk := strings.ToLower(k)
+			if dropAlways[lk] || (provider == Codex && lk == "chatgpt-account-id") {
+				continue
+			}
+			if provider == Claude && lk == "anthropic-beta" {
+				for _, v := range vs {
+					for _, b := range strings.Split(v, ",") {
+						if b = strings.TrimSpace(b); b != "" {
+							betas = append(betas, b)
+						}
+					}
+				}
+				continue
+			}
+			out.Header[k] = vs
+		}
+		out.Header.Set("Authorization", "Bearer "+res.AccessToken)
+		if provider == Claude {
+			if !contains(betas, oauthBeta) {
+				betas = append(betas, oauthBeta)
+			}
+			out.Header.Set("Anthropic-Beta", strings.Join(betas, ","))
+		}
+		if provider == Codex && res.AccountID != "" {
+			// ALWAYS the bound account's: a session never picks its workspace (#1912)
+			out.Header.Set("Chatgpt-Account-Id", res.AccountID)
+		}
+		if route == "relay" {
+			// the relay's forward_auth checks the pass with the hub (C7); it
+			// never sees the credential, which rides inside TLS to the provider
+			out.Header.Set("X-Fleet-Relay", pass)
+		}
+		return p.cfg.Upstream.Do(out)
+	}
+	if _, err := http.NewRequest(r.Method, target, nil); err != nil {
 		a.status, a.why = refuse(w, provider, http.StatusBadRequest, "invalid_request_error", "bad request path")
 		return
 	}
-	out.ContentLength = int64(len(body))
-	if len(body) == 0 {
-		out.Body = http.NoBody
+	resp, err := send(res)
+	if err == nil && resp.StatusCode == http.StatusTooManyRequests {
+		resp = p.rebind(r.Context(), resp, pass, provider, &res, &a, send)
 	}
-	var betas []string
-	for k, vs := range r.Header {
-		lk := strings.ToLower(k)
-		if dropAlways[lk] || (provider == Codex && lk == "chatgpt-account-id") {
-			continue
-		}
-		if provider == Claude && lk == "anthropic-beta" {
-			for _, v := range vs {
-				for _, b := range strings.Split(v, ",") {
-					if b = strings.TrimSpace(b); b != "" {
-						betas = append(betas, b)
-					}
-				}
-			}
-			continue
-		}
-		out.Header[k] = vs
-	}
-	out.Header.Set("Authorization", "Bearer "+res.AccessToken)
-	if provider == Claude {
-		if !contains(betas, oauthBeta) {
-			betas = append(betas, oauthBeta)
-		}
-		out.Header.Set("Anthropic-Beta", strings.Join(betas, ","))
-	}
-	if provider == Codex && res.AccountID != "" {
-		// ALWAYS the bound account's: a session never picks its workspace (#1912)
-		out.Header.Set("Chatgpt-Account-Id", res.AccountID)
-	}
-	if route == "relay" {
-		// the relay's forward_auth checks the pass with the hub (C7); it
-		// never sees the credential, which rides inside TLS to the provider
-		out.Header.Set("X-Fleet-Relay", pass)
-	}
-	resp, err := p.cfg.Upstream.Do(out)
 	if err != nil {
 		if r.Context().Err() != nil {
 			a.status, a.why = 499, "client gone"
@@ -545,17 +554,22 @@ type audit struct {
 	provider, method, route string
 	principal, worker, pass string
 	account, why            string
+	rebindFrom              string
 	status                  int
 	in, out, ms, tokens     int64
 	stale                   bool
 }
 
 func (a audit) line() string {
-	b, _ := json.Marshal(map[string]any{
+	m := map[string]any{
 		"ev": "credproxy", "provider": a.provider, "m": a.method, "route": a.route,
 		"principal": a.principal, "worker_id": a.worker, "pass": a.pass, "account": a.account,
 		"status": a.status, "bytes_in": a.in, "bytes_out": a.out, "ms": a.ms, "stale": a.stale,
 		"why": a.why, "tokens": a.tokens,
-	})
+	}
+	if a.rebindFrom != "" {
+		m["rebind_from"] = a.rebindFrom // a quota 429 moved the session (claude-fleet#2115)
+	}
+	b, _ := json.Marshal(m)
 	return string(b)
 }
