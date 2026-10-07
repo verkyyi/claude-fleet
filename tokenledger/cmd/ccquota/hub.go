@@ -909,8 +909,10 @@ func hubElector() (*leader.Elector, error) {
 	return e, nil
 }
 
-// pruneLoop trims raw events past the retention window once a day. Rollups and
-// limit snapshots are kept: they are small and are the long-term record.
+// pruneLoop trims raw events past the retention window once a day, and the
+// limit snapshots and account usage observations on the same cut
+// (claude-fleet#1818) — each group's latest row stays. Rollups are kept: they
+// are small and are the long-term record.
 func pruneLoop(ctx context.Context, st *store.Store, e *leader.Elector, days int) {
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
@@ -923,6 +925,12 @@ func pruneLoop(ctx context.Context, st *store.Store, e *leader.Elector, days int
 				log.Printf("prune: %v", err)
 			} else if n > 0 {
 				log.Printf("pruned %d events older than %d days", n, days)
+			}
+			ls, obs, err := st.PruneObservations(cut)
+			if err != nil {
+				log.Printf("prune: %v", err)
+			} else if ls+obs > 0 {
+				log.Printf("pruned %d limit snapshots, %d account usage observations older than %d days", ls, obs, days)
 			}
 		}
 		select {

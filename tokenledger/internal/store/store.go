@@ -898,6 +898,46 @@ func (s *Store) PruneEvents(olderThan time.Time) (int64, error) {
 	return n, nil
 }
 
+// PruneObservations deletes limit_snapshots and account_usage_observations rows
+// older than the retention window (claude-fleet#1818), on the same cut as
+// PruneEvents. Every read path that is not a time window asks for the LATEST
+// row of a group, so that row survives however old it is:
+//   - limit_snapshots: the newest per (account, endpoint) — LatestLimitsFrom —
+//     and the newest with a seven_day_resets_at per account —
+//     ResolveFingerprint / DuplicateAccountsBySchedule;
+//   - account_usage_observations: the newest per (account, source) — AccountUsage.
+//
+// LimitsHistory is a time window, bounded like the usage charts beside it.
+func (s *Store) PruneObservations(olderThan time.Time) (snapshots, observations int64, err error) {
+	res, err := s.write.Exec(`
+		DELETE FROM limit_snapshots
+		 WHERE observed_at < ?
+		   AND observed_at < (SELECT MAX(l.observed_at) FROM limit_snapshots l
+		                       WHERE l.account_uuid = limit_snapshots.account_uuid
+		                         AND l.endpoint_id = limit_snapshots.endpoint_id)
+		   AND (seven_day_resets_at IS NULL
+		        OR observed_at < (SELECT MAX(l.observed_at) FROM limit_snapshots l
+		                           WHERE l.account_uuid = limit_snapshots.account_uuid
+		                             AND l.seven_day_resets_at IS NOT NULL))`,
+		fmtTime(olderThan))
+	if err != nil {
+		return 0, 0, fmt.Errorf("prune limit snapshots: %w", err)
+	}
+	snapshots, _ = res.RowsAffected()
+	res, err = s.write.Exec(`
+		DELETE FROM account_usage_observations
+		 WHERE observed_at < ?
+		   AND observed_at < (SELECT MAX(o.observed_at) FROM account_usage_observations o
+		                       WHERE o.account_uuid = account_usage_observations.account_uuid
+		                         AND o.source = account_usage_observations.source)`,
+		observationTime(olderThan))
+	if err != nil {
+		return snapshots, 0, fmt.Errorf("prune account usage observations: %w", err)
+	}
+	observations, _ = res.RowsAffected()
+	return snapshots, observations, nil
+}
+
 // SetEndpointTeam allocates an endpoint's spend to a team.
 //
 // Operator-side on purpose: this is the only writer of endpoints.team, and the
