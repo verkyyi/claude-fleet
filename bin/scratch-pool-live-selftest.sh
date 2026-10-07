@@ -92,8 +92,8 @@ nt -f /dev/null new-session -d -s "$SESS" -n home -x 120 -y 30 'exec sleep 600' 
 
 pool_wins() { nt list-windows -t "$SESS-pool" -F '#{window_id}|#{@norepo}|#{@repo}|#{@pool_ready}' 2>/dev/null; }
 ready_in() {  # ready_in <secs> <slot> — true once `status` shows that slot ready=1
-  local i
-  for i in $(seq 1 "$1"); do
+  local _
+  for _ in $(seq 1 "$1"); do
     bash "$POOL" status "$SESS" 2>/dev/null | grep -q "^slot $2 agent=claude want=1 ready=1" && return 0
     sleep 1
   done
