@@ -43,6 +43,15 @@ came. Caps, claim dedup and guards live in the scripts, once.
   fleet-mcp.py --cred revoke   revoke $FLEET_WORKER_CRED (its nonce goes on the revoked list)
   fleet-mcp.py --probe         list the tools and exit — a running server asks a new version this
                                before it execs it (issue #1898: a new version, taken between calls)
+  fleet-mcp.py --spec <tool>…  print the named tools' {name, description, inputSchema} as JSON
+  fleet-mcp.py --call <tool> [<json args>]
+                               ONE tool call, no MCP framing: the same identity check, argument
+                               check, script run and call log as a tools/call, the result text on
+                               stdout; exit 0 answered (the script's exit is in the text), 1 refused
+                               or faulted (isError), 2 usage. The mod's fallback road (issue #2057):
+                               a session launched before the service was mounted (--plugin-dir only,
+                               no --mcp-config) still carries the mod's fleet_status / fleet_spawn /
+                               fleet_await, and the mod forwards each to this — one implementation.
 
 The worker credential (issue #1809, EPIC #1813 C7): bin/fleet-session-wrap.sh mints
 one per launch and hands it to the agent — and so to this server — ONLY through the
@@ -372,6 +381,7 @@ ASSERT_PREFIX = "fwa1"
 ASSERT_TTL_S = 600              # a placement: the call is happening now
 ASSERT_RELAY_TTL_S = 24 * 3600  # a message may wait in the hub outbox while the hub is away
 SIGNED = {"assert": False}      # whether the call being served handed one out (the call log says so)
+ROAD = {"call": False}          # served through --call (the mod's fallback, issue #2057), not MCP
 
 
 def node_token_hash():
@@ -439,7 +449,7 @@ def log_call(tool, claims, verdict, why="", via=None):
     line = "%s tool=%s via=%s who=%s verdict=%s%s%s\n" % (
         time.strftime("%Y-%m-%dT%H:%M:%S%z"), tool, via, who or "-", verdict,
         " hub=asserted" if SIGNED["assert"] else "",
-        (" why=" + json.dumps(why, ensure_ascii=False)) if why else "")
+        (" road=call" if ROAD["call"] else "") + ((" why=" + json.dumps(why, ensure_ascii=False)) if why else ""))
     try:
         log_path().parent.mkdir(parents=True, exist_ok=True)
         with open(str(log_path()), "a") as fh:
@@ -1529,10 +1539,47 @@ def mount_codex():
     return "mcp_servers.%s={%s}" % (SERVER, ",".join(fields))
 
 
+def call_main(name, raw):
+    """One tool call from a command line (the mod's fallback road, issue #2057).
+    Exactly tool_call: the credential from the environment (one shot — no renewal),
+    identity, check_args, the script, the call log (road=call). The result text goes
+    to stdout as the model would read it; exit 0 answered, 1 isError, 2 usage."""
+    try:
+        args = json.loads(raw) if raw.strip() else {}
+    except ValueError as exc:
+        print("fleet-mcp: --call %s: arguments are not JSON (%s)" % (name, exc), file=sys.stderr)
+        return 2
+    if not isinstance(args, dict):
+        print("fleet-mcp: --call %s: arguments must be a JSON object" % name, file=sys.stderr)
+        return 2
+    HELD["cred"] = os.environ.get(CRED_ENV) or None
+    ROAD["call"] = True
+    result = tool_call(TOOLS, name, args)
+    text = "".join(c.get("text", "") for c in result.get("content", []) if c.get("type") == "text")
+    print(text)
+    return 1 if result.get("isError") else 0
+
+
+def spec_main(names):
+    """The named tools' {name, description, inputSchema}, as tools/list carries them —
+    what the mod registers its fallback tools from, so a schema lives once."""
+    unknown = [n for n in names if n not in TOOLS]
+    if not names or unknown:
+        print("fleet-mcp: --spec: unknown tool%s %s" % ("s" if len(unknown) != 1 else "", ", ".join(unknown))
+              if unknown else "usage: fleet-mcp.py --spec <tool>…", file=sys.stderr)
+        return 2
+    print(json.dumps([{"name": n, **TOOLS[n][1]} for n in names], ensure_ascii=False))
+    return 0
+
+
 def main(argv):
     if argv[:2] == ["--mount", "codex"]:
         print(mount_codex())
         return 0
+    if argv[:1] == ["--spec"]:
+        return spec_main(argv[1:])
+    if argv[:1] == ["--call"] and len(argv) in (2, 3):
+        return call_main(argv[1], argv[2] if len(argv) == 3 else "")
     if argv[:1] == ["--cred"] and len(argv) == 2:
         return cred_main(argv[1])
     if argv[:1] == ["--probe"]:
@@ -1543,7 +1590,8 @@ def main(argv):
         serve(LEGACY, "fleet-peer")
         return 0
     if argv:
-        print("usage: fleet-mcp.py [--mount codex | --legacy-peer | --probe | --cred mint|check|revoke|assert]", file=sys.stderr)
+        print("usage: fleet-mcp.py [--mount codex | --legacy-peer | --probe | --spec <tool>… | "
+              "--call <tool> [<json args>] | --cred mint|check|revoke|assert]", file=sys.stderr)
         return 2
     serve(TOOLS, SERVER)
     return 0

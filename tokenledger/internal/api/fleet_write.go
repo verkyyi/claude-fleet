@@ -1217,10 +1217,11 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 			// as the refusal a full machine gives, not as "no machine".
 			msg = "all-full: every machine is at its session cap — " + strings.Join(reasons, "; ")
 		}
-		if s.Spot != nil && node == "auto" {
+		if sp := s.spot(); sp != nil && node == "auto" {
 			// Peak: every fixed machine is out. Ask for a SPOT node
-			// (claude-fleet#1428); the next placement finds it.
-			msg += "; " + s.Spot.Want("placement for "+repo+" found no eligible machine: "+strings.Join(reasons, "; "))
+			// (claude-fleet#1428) while fleet.spot is on (claude-fleet#1986);
+			// the next placement finds it.
+			msg += "; " + sp.Want("placement for "+repo+" found no eligible machine: "+strings.Join(reasons, "; "))
 		}
 		if full {
 			return pl, fault("AT_CAPACITY", msg)
@@ -1524,13 +1525,17 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.computeAutoAudit(body.Value, time.Now())
-		case body.Key == MeterKey:
-			// The public counter (claude-fleet#1988): off hides /meter.json
-			// and /odometer.svg; "" or on is the default — shown.
-			if body.Value != "" && body.Value != "on" && body.Value != "off" {
-				httpError(w, http.StatusBadRequest, MeterKey+" is on | off, or \"\" for the default (on)")
+		case isHubSettingKey(body.Key):
+			// The hub's own settings (claude-fleet#1986): hub.*, pool.*,
+			// fleet.auto_assign / spot / routes_extra and
+			// user.<id>.machine_login — checked, stored and audited in one
+			// place (hub_settings.go).
+			if code, why := s.putHubSetting(actorOf(r), body.Key, body.Value, time.Now()); code != http.StatusOK {
+				httpError(w, code, why)
 				return
 			}
+			s.writeFleetSettings(w)
+			return
 		case strings.HasPrefix(body.Key, NodeCapPrefix) && nodeNameRE.MatchString(body.Key[len(NodeCapPrefix):]):
 			if body.Value != "" {
 				if n, err := strconv.Atoi(body.Value); err != nil || n < 0 || n > 256 {
@@ -1539,13 +1544,21 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SpotWeightKey+", "+ComputeAutoKey+" and "+MeterKey+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
-		if err := s.Store.SetFleetSetting(body.Key, body.Value, time.Now()); err != nil {
+		now := time.Now()
+		before, err := s.Store.FleetSettings()
+		if err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if err := s.Store.SetFleetSetting(body.Key, body.Value, now); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// Every settings change is one audit row (claude-fleet#1986).
+		s.settingAudit(actorOf(r), body.Key, before[body.Key], body.Value, now)
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		httpError(w, http.StatusMethodNotAllowed, "GET or PUT")
@@ -1589,7 +1602,7 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 			eff[k] = v
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "effective": eff})
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "effective": eff, "hub": s.hubSettingsView(settings)})
 }
 
 // reapPolicyRE is the shape of a session's reap policy (claude-fleet#1902,

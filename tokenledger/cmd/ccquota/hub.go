@@ -307,7 +307,7 @@ func runHub(args []string) error {
 			"an unprivileged process take :443 only on the wildcard address.\n"+
 			"The URL becomes https://<node>.<tailnet>.ts.net")
 	tlsHost := fs.String("tls-host", "", "the name to get a certificate for (default: detected from tailscale status)")
-	publicBadges := fs.Bool("public-badges", false,
+	publicBadges := fs.Bool("public-badges", false, // deprecated: the setting hub.public_badges (claude-fleet#1986)
 		"serve /badge/... without a viewer token.\n"+
 			"Needed for a README image, which sends no credential and is\n"+
 			"proxied through a cache that strips cookies. Off by default")
@@ -574,11 +574,28 @@ func runHub(args []string) error {
 		}
 	}
 	srv.MCP = mcp.Handler(srv)
+	// The settings an admin changes on the web (claude-fleet#1986): each old
+	// variable / flag above (--public-badges, CCQUOTA_FLEET_AUTO_ASSIGN,
+	// CCQUOTA_FLEET_PRINCIPAL_LOGINS, a SPOT image) is copied into the
+	// database once and read for this one version; the next drops them. The
+	// warnings print under --check too; the copy (a write, never a refusal —
+	// an unusable old value is a WARN) waits for a real start.
+	for _, v := range []string{"CCQUOTA_FLEET_AUTO_ASSIGN", "CCQUOTA_FLEET_PRINCIPAL_LOGINS"} {
+		if os.Getenv(v) != "" {
+			log.Printf("WARN %s is deprecated: copied into the hub's settings (fleet hub set / fleet users); remove it from the deploy", v)
+		}
+	}
+	if *publicBadges {
+		log.Printf("WARN --public-badges is deprecated: copied into the setting hub.public_badges; remove it from the deploy")
+	}
 	if *check {
 		// Everything that can refuse a start has run; what is left (the
 		// listeners, the background loops) is not configuration.
 		fmt.Fprintf(os.Stdout, "check: ok — %s migrated and every startup setting read; this image may be switched to\n", dbFile)
 		return nil
+	}
+	if err := srv.MigrateLegacySettings(time.Now()); err != nil {
+		log.Printf("WARN hub settings: copying the old variables: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

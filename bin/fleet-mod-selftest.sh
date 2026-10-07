@@ -24,10 +24,14 @@
 #      off session.measure, model + effort off turn.step, a /model off the model
 #      poll — all through conf/statusline.sh --from mod (tests/usage.test.ts,
 #      issues #1338 / #1459).
-#   E  the three old tools are retired (issue #1812, EPIC #1813 C10): no file
-#      under mod/fleet/hooks registers a tool or names fleet_status /
-#      fleet_spawn / fleet_await, and register.ts still wires every other
-#      feature — static, so it runs in CI where D cannot.
+#   E  the three tools are the FALLBACK only, with ONE implementation (issue
+#      #2057; retired as the primary road in #1812): lifecycle registers them
+#      only when FLEET_MCP_SERVER is not 1 (a session launched before the tool
+#      service was mounted), from `fleet-mcp.py --spec`; tools.ts forwards every
+#      call to `fleet-mcp.py --call` and carries no schema, no argument check
+#      and no script of its own; `--spec status spawn await` answers with the
+#      service's three closed schemas; register.ts wires every feature — static
+#      + the python CLI, so it runs in CI where D cannot.
 #
 # Hermetic for A-C: a temp bin with the real launcher + lib symlinked, fake
 # `claude` / `tmux` / `fleet-account.sh` on PATH, no tmux server touched.
@@ -158,17 +162,39 @@ else
   case "$t" in *'AskUserQuestion'*) : ;; *) fail "D: the state tests (#1336) did not run" "$t" ;; esac
   case "$t" in *'feeds conf/statusline.sh --from mod'*) : ;; *) fail "D: the measurement-bus feed tests (#1338/#1459) did not run" "$t" ;; esac
   case "$t" in *'a /model lands within one poll'*) : ;; *) fail "D: the model-poll test (#1459) did not run" "$t" ;; esac
-  case "$t" in *'retired tools'*) : ;; *) fail "D: the retired-tools test (#1812) did not run" "$t" ;; esac
-  ok "D claude plugin validate + test pass (out-of-range gate + command inbox + session state + bus feed covered)"
+  case "$t" in *'fallback tools (#2057)'*) : ;; *) fail "D: the fallback-tools lifecycle test (#2057) did not run" "$t" ;; esac
+  case "$t" in *'forwards to fleet-mcp.py --call'*) : ;; *) fail "D: the fallback-tools forwarding tests (tests/tools.test.ts, #2057) did not run" "$t" ;; esac
+  ok "D claude plugin validate + test pass (out-of-range gate + command inbox + session state + bus feed + fallback tools covered)"
 fi
 
-# --- E: the mod's three tools are retired (issue #1812) ----------------------------
-[ -e "$MOD/hooks/tools.ts" ] && fail "E: mod/fleet/hooks/tools.ts is back — the fleet tools live in bin/fleet-mcp.py"
-hits=$(grep -rnE 'tool\.register|fleet_(status|spawn|await)' "$MOD/hooks" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//')
-[ -z "$hits" ] || fail "E: the mod registers or names a retired tool" "$hits"
-for f in Lifecycle Usage State Progress Where; do
-  grep -q "^  register$f(on)\$" "$MOD/hooks/register.ts" || fail "E: register.ts no longer wires register$f — the other features must stay"
+# --- E: the fallback tools — one implementation, in bin/fleet-mcp.py (issue #2057) ---
+T="$MOD/hooks/tools.ts"
+[ -e "$T" ] || fail "E: mod/fleet/hooks/tools.ts missing — a session without the tool service (launched before #1828) needs the mod's fleet_status/spawn/await fallback (#2057)"
+# The gate: lifecycle registers only when the launcher did not mount the service.
+grep -q "env.get('FLEET_MCP_SERVER')) !== '1') await registerFallbackTools" "$MOD/hooks/lifecycle.ts" \
+  || fail "E: lifecycle.ts no longer gates the fallback registration on FLEET_MCP_SERVER != 1"
+# The two roads to the service — and nothing else: no schema, no argument check, no script named as a command.
+grep -q -- "'--spec'" "$T" && grep -q -- "'--call'" "$T" || fail "E: tools.ts does not go through fleet-mcp.py --spec / --call"
+[ "$(grep -cE '\$\.process\.run\(' "$T")" = 1 ] && grep -qE '\$\.process\.run\(callArgv\(' "$T" \
+  || fail "E: tools.ts runs something other than fleet-mcp.py --call" "$(grep -nE '\$\.process\.run\(' "$T")"
+hits=$(grep -nE 'inputSchema: \{|required: \[|checkArgs|parseRepoList|dash-issue-session\.sh|fleet-await\.sh|fleet-children\.sh' "$T" \
+       | grep -vE '^[0-9]+:[[:space:]]*//' | grep -vE "<N>|'fleet-children\.sh'$")
+[ -z "$hits" ] || fail "E: tools.ts carries a schema, an argument check or a script of its own — the service has the one copy" "$hits"
+# --spec: the service's three, closed, in the fallback's order (python3 is what the mod runs).
+spec=$(python3 "$BIN/fleet-mcp.py" --spec status spawn await 2>&1) || fail "E: fleet-mcp.py --spec status spawn await failed" "$spec"
+printf '%s' "$spec" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)
+assert [r["name"] for r in rows] == ["status", "spawn", "await"], rows
+for r in rows:
+    assert r["description"] and r["inputSchema"]["additionalProperties"] is False, r
+assert set(rows[1]["inputSchema"]["required"]) == {"issue"} and "reap" in rows[1]["inputSchema"]["properties"], rows[1]
+' || fail "E: --spec did not print the three closed schemas" "$spec"
+python3 "$BIN/fleet-mcp.py" --spec status nope >/dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] || fail "E: --spec of an unknown tool exited $rc, want 2"
+for f in Lifecycle Usage State Progress Where Tools; do
+  grep -q "^  register$f(on)\$" "$MOD/hooks/register.ts" || fail "E: register.ts no longer wires register$f"
 done
-ok "E the mod registers no tool (fleet_status/spawn/await retired); lifecycle/usage/state/progress/where still wired"
+ok "E fallback tools: registered only without the service, from --spec; every call forwarded to --call; no second copy of a schema, a check or a script"
 
 printf 'fleet-mod-selftest: %d passed\n' "$pass"

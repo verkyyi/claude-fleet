@@ -560,7 +560,7 @@ func (c *SpotController) finish(n store.SpotNode, pod spot.Pod, found bool, rost
 		if err := c.s.Store.DeleteNode(n.EndpointID); err != nil {
 			c.logf("fleet: SPOT %s: drop roster row: %v", n.ID, err)
 		}
-		if _, err := c.s.Store.RetireEndpoint(n.EndpointID); err != nil {
+		if _, err := c.s.Store.RetireEndpointAs(n.EndpointID, "spot", "SPOT node released", time.Now()); err != nil {
 			c.logf("fleet: SPOT %s: retire endpoint: %v", n.ID, err)
 		}
 		c.s.nodes.dropAll(n.EndpointID)
@@ -625,7 +625,8 @@ func (s *Server) spotSummary(now time.Time, roster []NodeView) *SpotSummary {
 	sum := &SpotSummary{Nodes: []SpotNodeView{}, History: []SpotNodeView{}, Weight: s.spotWeight(settings)}
 	if s.Spot != nil {
 		cfg := s.Spot.Config()
-		sum.Enabled, sum.Max, sum.IdleMinutes = true, cfg.Max, int(cfg.Idle/time.Minute)
+		sum.Enabled = s.spot() != nil // the image, and fleet.spot on (claude-fleet#1986)
+		sum.Max, sum.IdleMinutes = cfg.Max, int(cfg.Idle/time.Minute)
 		sum.Image, sum.Namespace = cfg.Image, cfg.Namespace
 	}
 	names := map[string]string{}
@@ -702,6 +703,10 @@ func (s *Server) handleFleetSpot(w http.ResponseWriter, r *http.Request) {
 			why := "started by the operator"
 			if req.Reason != "" {
 				why += ": " + req.Reason
+			}
+			if s.spot() == nil {
+				httpError(w, http.StatusConflict, "SPOT nodes are switched off on this hub ("+SpotKey+" off; fleet hub set "+SpotKey+" on)")
+				return
 			}
 			n, err := s.Spot.Start(r.Context(), why, now)
 			if err != nil {

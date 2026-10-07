@@ -104,5 +104,21 @@ func (s *Server) handleClientSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"settings": clientDefaults(settings),
 		"keys":     clientDefaultKeyList(),
+		"pool":     s.poolSettings(),
 	})
+}
+
+// poolSettings is the subscription pool's two hub settings (claude-fleet#1986)
+// in the names a node's fleet.conf gives them — pool.skip_pct as
+// FLEET_ACCOUNT_CEILING, pool.move_when_full as FLEET_FAILOVER — so a node
+// can take the admin's value from here. What applies, defaults included.
+func (s *Server) poolSettings() map[string]string {
+	failover := "0"
+	if s.settingOn(PoolMoveFullKey) {
+		failover = "1"
+	}
+	return map[string]string{
+		"FLEET_ACCOUNT_CEILING": s.setting(PoolSkipPctKey),
+		"FLEET_FAILOVER":        failover,
+	}
 }

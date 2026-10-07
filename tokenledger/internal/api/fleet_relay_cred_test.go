@@ -207,7 +207,7 @@ func TestRelayCredUntrusted(t *testing.T) {
 // that login's.
 func TestRelayCredPerLogin(t *testing.T) {
 	h, m4, _ := newVaultHarness(t)
-	p, err := h.srv.Store.AdoptPrincipal("wecom-bob", "bob", "Bob", time.Now())
+	p, err := h.srv.Store.AdoptPrincipal("gh:1006", "bob", "Bob", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestRelayCheckSessionPass(t *testing.T) {
 			t.Fatalf("claude-only pass on %q: %d, want 403", uri, code)
 		}
 	}
-	if code, _ := relayCheck(t, h, reclaim(t, cred, func(c *sessionCredClaims) { c.Principal = "wecom-evil" }), "/anthropic/v1/messages"); code != http.StatusForbidden {
+	if code, _ := relayCheck(t, h, reclaim(t, cred, func(c *sessionCredClaims) { c.Principal = "gh:666" }), "/anthropic/v1/messages"); code != http.StatusForbidden {
 		t.Fatalf("re-signed claims: %d, want 403", code)
 	}
 	if st, _ := sessDo(t, h, http.MethodDelete, "/v1/fleet/session-cred/"+id, tok5, "", nil); st != 200 {

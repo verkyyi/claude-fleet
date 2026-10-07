@@ -127,7 +127,7 @@ func (s *Server) handleAccess(w http.ResponseWriter, r *http.Request) {
 func (s *Server) hubFacts() HubFacts {
 	f := HubFacts{
 		ViewerAuth:   "token",
-		PublicBadges: s.PublicBadges,
+		PublicBadges: s.publicBadges(),
 		PublicMeter:  s.publicMeter(),
 		MCP:          s.MCP != nil,
 		Dashboard:    s.UI != nil,
@@ -241,7 +241,7 @@ func (s *Server) doors(f HubFacts) []Door {
 		{
 			ID: "badges", Name: "Badges and embeds", Via: "http",
 			Where:      []string{"/badge/u/<login>.svg", "/badge/team/<team>.json", "/embed/u/…", "/embed/team/…"},
-			Credential: pick(f.PublicBadges, "nothing — --public-badges is on", "the viewer token, like everything else"),
+			Credential: pick(f.PublicBadges, "nothing — "+PublicBadgesKey+" is on", "the viewer token, like everything else"),
 			Can: "Render one number as an SVG or a small live embed, for a README. This is the only surface " +
 				"that may be unauthenticated, and only deliberately: a README image sends no credential and " +
 				"the proxy in front of it strips cookies.",

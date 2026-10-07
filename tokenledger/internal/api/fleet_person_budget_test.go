@@ -93,7 +93,7 @@ func TestPersonBudgetCentral(t *testing.T) {
 	r.mu.Lock()
 	before := len(r.upAuth)
 	r.mu.Unlock()
-	time.Sleep(5 * time.Millisecond) // past the rig's 1 ms resolve cache
+	r.pastCache()
 	st, body := r.call(t, credvault.Claude, verk)
 	if st != http.StatusForbidden || !strings.Contains(body, PersonBudgetExceeded) || !strings.Contains(body, "已达个人额度") {
 		t.Fatalf("over budget → %d %s; want 403 person_budget_exceeded", st, body)
@@ -114,6 +114,7 @@ func TestPersonBudgetCentral(t *testing.T) {
 	}
 	// the 5h window passes: back in (the week's 1000 still has room)
 	clk.add(5*time.Hour + 11*time.Minute)
+	r.pastCache()
 	if st, body := r.call(t, credvault.Claude, verk); st != 200 {
 		t.Fatalf("after the window → %d %s", st, body)
 	}
