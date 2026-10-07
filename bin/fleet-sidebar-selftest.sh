@@ -1508,8 +1508,8 @@ try:
     sh_keys = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-menu.sh'), '--keys'],
                              env=dict(env, FLEET_SHELL='1'), text=True, capture_output=True, timeout=15).stdout
     all_keys = command(['bash', str(bin_dir / 'fleet-sidebar-menu.sh'), '--keys']).stdout
-    check({l.split('\t')[0] for l in all_keys.splitlines()} - {l.split('\t')[0] for l in sh_keys.splitlines()} == {'n', '1-9', 'o', 'g'},
-          'the shell `?` sheet does not drop exactly the row-less items: %r' % sh_keys)
+    check({l.split('\t')[0] for l in all_keys.splitlines()} - {l.split('\t')[0] for l in sh_keys.splitlines()} == {'n', '1-9', 'g'},
+          'the shell `?` sheet does not drop exactly the row-less items (已落地 o stays, #1952): %r' % sh_keys)
     local_items = menu_items(w1)
     local_cmds = menu_commands(w1)
     check(local_items.get('1') == '新建到 m4…' and 'new m4' in local_cmds['1'],
