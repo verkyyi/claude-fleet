@@ -53,10 +53,17 @@ func TestLanding_SignedOutRootIsTheFrontPage(t *testing.T) {
 		t.Fatalf("signed-in / = %d %.60q, want the app", rec.Code, rec.Body.String())
 	}
 
-	// Only "/" is public: every other path is still behind the gate.
-	for _, p := range []string{"/index.html", "/landing.html", "/app.js", "/sessions"} {
+	// Only "/" is public: every other file of the app is still behind the
+	// gate, and a path the hub has nothing at is a 404 for everyone
+	// (claude-fleet#1987) — never the app's index.
+	for _, p := range []string{"/index.html", "/landing.html"} {
 		if rec := meterGet(t, s, p, nil); rec.Code != http.StatusUnauthorized {
 			t.Errorf("signed-out %s = %d, want 401", p, rec.Code)
+		}
+	}
+	for _, p := range []string{"/app.js", "/sessions"} {
+		if rec := meterGet(t, s, p, nil); rec.Code != http.StatusNotFound {
+			t.Errorf("signed-out %s (not in this hub's UI) = %d, want 404", p, rec.Code)
 		}
 	}
 	if rec := meterGet(t, s, "/v1/live", nil); rec.Code != http.StatusUnauthorized {

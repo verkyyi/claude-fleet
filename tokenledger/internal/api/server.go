@@ -481,9 +481,13 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/meter.json", s.handleMeter)
 	mux.HandleFunc("/odometer.svg", s.handleOdometer)
 
-	// Signed out, "/" is the front page; signed in, the app.
-	// Every page under it settles its language first (claude-fleet#2023).
-	mux.Handle("/", s.withPageLang(s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding)))
+	// Signed out, "/" is the front page; signed in, the app. Every page under
+	// it settles its language first (claude-fleet#2023). Every other path that
+	// reaches here is one of the app's own files or a 404 -- for everyone,
+	// before the gate: the file list is the repository's web/dist, so whether
+	// a path exists tells a stranger nothing, and a removed route answers 404
+	// rather than the app's index (claude-fleet#1987).
+	mux.Handle("/", s.uiPathOr404(s.withPageLang(s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding))))
 
 	return mux
 }
@@ -570,8 +574,31 @@ func stripToken(r *http.Request) string {
 	return u.RequestURI()
 }
 
-// serveUI serves the embedded dashboard, falling back to index.html so the SPA
-// owns its own routing.
+// uiPathOr404 lets through "/" and the paths the built UI holds, and answers
+// 404 to every other path. The dashboard routes by its URL fragment
+// (#/?view=…), so it never needed a path fallback, and an unknown path —
+// a route this hub no longer has, an API path that never existed — is a 404.
+func (s *Server) uiPathOr404(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.UI == nil {
+			http.NotFound(w, r)
+			return
+		}
+		st, err := fs.Stat(s.UI, strings.TrimPrefix(r.URL.Path, "/"))
+		if err != nil || st.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// serveUI serves the embedded dashboard: index.html at "/", else the file
+// the path names (uiPathOr404 has already refused one the UI does not hold).
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	if s.UI == nil {
 		writeJSON(w, http.StatusOK, map[string]string{
@@ -587,12 +614,8 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := s.UI.Open(path)
 	if err != nil {
-		f, err = s.UI.Open("index.html")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		path = "index.html"
+		http.NotFound(w, r)
+		return
 	}
 	defer f.Close()
 
