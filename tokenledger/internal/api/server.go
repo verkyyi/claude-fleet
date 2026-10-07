@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,6 +62,12 @@ type Server struct {
 
 	// MCP handles /mcp when wired up.
 	MCP http.Handler
+
+	// ReadOnly is CCQUOTA_READONLY=1 (claude-fleet#2122): the hub's database
+	// is being moved, so every write request is answered 503 + Retry-After and
+	// every read is served as usual. The caller has also put the store itself
+	// read-only (Store.SetReadOnly), which catches the writes no request makes.
+	ReadOnly bool
 
 	// counter caches the all-time token total behind the hero counter. Its
 	// query is a full scan and the SSE stream pushes several times a second,
@@ -220,7 +227,37 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.logRequests(s.routes())
+	return s.logRequests(s.readOnlyGate(s.routes()))
+}
+
+// readOnlyRetryAfter is the Retry-After a write gets while the hub is
+// read-only: the runbook's write stop is under a minute, so a client that
+// waits this long and retries lands on the moved database or one more 503.
+const readOnlyRetryAfter = 15
+
+// readOnlyGate answers every write request 503 + Retry-After while the hub is
+// read-only. A write is any method but GET / HEAD / OPTIONS — a WebSocket
+// upgrade is a GET and stays up — except /mcp, whose POSTs are JSON-RPC reads
+// (a tool that writes fails at the read-only store instead). Off, it is not in
+// the chain at all.
+func (s *Server) readOnlyGate(next http.Handler) http.Handler {
+	if !s.ReadOnly {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet, r.Method == http.MethodHead, r.Method == http.MethodOptions,
+			r.URL.Path == "/mcp":
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(readOnlyRetryAfter))
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error":       "read_only",
+			"message":     "the hub is read-only while its database is moved; retry shortly",
+			"retry_after": readOnlyRetryAfter,
+		})
+	})
 }
 
 // routes mounts every route; roles.go's routeAccess names each one
@@ -432,7 +469,11 @@ func (s *Server) routes() *routeMux {
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		body := map[string]string{"status": "ok"}
+		if s.ReadOnly {
+			body["mode"] = "read-only"
+		}
+		writeJSON(w, http.StatusOK, body)
 	})
 	// Which commit this image was built from (claude-fleet#1696): public like
 	// /healthz, so `fleet-doctor`'s hub-image row can compare it with
