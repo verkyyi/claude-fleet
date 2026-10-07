@@ -22,7 +22,8 @@
 # boot). That is the same close + `claude --resume <same session>` road a quota
 # move takes — `codex resume <same thread>` in the same CODEX_HOME for a Codex
 # session — so the conversation goes on in the new window, its first prompt the
-# one line 「fleet 已从 <old> 更新到 <new>」; migrate asks the judge AGAIN right
+# one line 「fleet 已从 <old> 更新到 <new>」 (a worker whose PR is still open is told
+# to carry its ship on instead, issue #2189); migrate asks the judge AGAIN right
 # before its /exit (a Codex thread is also asked natively, over its app-server),
 # and records a `reason=cfg-stale` (配置旧) or `reason=ver-stale` (待换新) row in
 # /fleet-history. @cfg_restart_ts holds a window off for the idle span after a try,

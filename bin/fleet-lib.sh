@@ -8009,7 +8009,8 @@ fleet_cfg_state() {
 # session — Claude or Codex alike (issue #1896) — whose @agent_cfg differs from
 # the expected one — or whose @agent_ver does (待换新, issue #1895: the two are
 # reopened alike) — `done` for <idle-secs> (FLEET_CFG_RESTART_IDLE, 600), with no
-# /loop round held, no Bash-tool job and no fleet tool call (issue #1880) still
+# /loop round held (its @loop, else its transcript — issue #2189), no Bash-tool
+# job and no fleet tool call (issue #1880) still
 # running. needs/blocked never
 # qualify: a pending question is the operator's, and a reopen would drop it; a
 # Codex loop between rounds reads `looping`, never `done`.
@@ -8036,6 +8037,15 @@ fleet_cfg_restart_why() {
   if [ -n "$lp" ] && [ -f "$bin/fleet_loop_mark.py" ] \
      && python3 "$bin/fleet_loop_mark.py" status --value "$lp" >/dev/null 2>&1; then
     echo looping; return 1
+  fi
+  # No @loop is not proof of no Loop (issue #2189): a ScheduleWakeup the hook never
+  # saw (scheduled before the hook was synced, a hook that failed) lives only in the
+  # process, and a reopen drops it without a word. Ask the transcript before the
+  # reopen — the same replay backfill does, which also writes the missing @loop.
+  if [ -z "$lp" ] && [ "$ag" != codex ] && [ -f "$bin/fleet_loop_mark.py" ]; then
+    lp=''; [ -n "${TMUX:-}" ] || lp=$(fleet_socket "$sess")
+    python3 "$bin/fleet_loop_mark.py" backfill "$win" ${lp:+--socket-name "$lp"} >/dev/null 2>&1 \
+      && { echo looping; return 1; }
   fi
   fleet_window_bg_busy "$sess" "$win" 1 && { echo bg; return 1; }
   fleet_window_tool_busy "$sess" "$win" && { echo tool; return 1; }

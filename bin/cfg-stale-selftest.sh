@@ -14,7 +14,8 @@
 #   C. judge     — fleet_cfg_restart_why on an isolated tmux socket: only a stale,
 #                  `done`, idle ≥ FLEET_CFG_RESTART_IDLE session qualifies — a
 #                  Codex one alike (issue #1896); working / needs / looping /
-#                  recent / ok / unknown never
+#                  recent / ok / unknown never; nor a Loop the hook never marked
+#                  that the transcript still holds (issue #2189)
 #   D. tick      — fleet-cfg-restart.sh (fleet-migrate.sh faked): auto hands the
 #                  eligible window to `--cfg-stale`, never the working one, at most
 #                  FLEET_CFG_RESTART_MAX, the Codex one on a later tick, not again
@@ -169,6 +170,29 @@ eq "C: a Codex session → reopened alike (#1896)" "rc=0"                "$(why 
 eq "C: current configuration → nothing"        "ok rc=1"              "$(why "$WOK")"
 eq "C: no fingerprint → nothing"               "unknown rc=1"         "$(why "$WNONE")"
 eq "C: a panel → nothing"                      "panel rc=1"           "$(why "$(T display-message -p -t "$S:home" '#{window_id}')")"
+# A Loop the PostToolUse hook never marked (issue #2189): no @loop, but the
+# transcript holds a pending ScheduleWakeup — the judge reads it, says `looping`,
+# and writes the missing @loop; a lapsed one is no Loop.
+export FLEET_CC_PROJECTS_DIR="$WORK/projects"; mkdir -p "$WORK/projects/p"
+looptr() {   # <sid> <delay> <age-secs>
+  python3 - "$WORK/projects/p/$1.jsonl" "$2" "$3" <<'PY'
+import datetime, json, sys, time
+t = datetime.datetime.fromtimestamp(time.time() - int(sys.argv[3]), datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+with open(sys.argv[1], 'w') as f:
+    f.write(json.dumps({'timestamp': t, 'message': {'content': [{'type': 'tool_use', 'id': 'u0', 'name': 'ScheduleWakeup',
+            'input': {'delaySeconds': int(sys.argv[2]), 'prompt': '/loop check CI'}}]}}) + '\n')
+    f.write(json.dumps({'timestamp': t, 'toolUseResult': 'ok', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'u0'}]}}) + '\n')
+PY
+}
+SIDP=aaaaaaaa-1111-2222-3333-444444444444; SIDL=bbbbbbbb-1111-2222-3333-444444444444
+looptr "$SIDP" 1200 60; looptr "$SIDL" 60 7200
+WUNMARK=$(mk unmarked done bbbbbbbbbbbb); T set-option -w -t "$WUNMARK" @cc_session_id "$SIDP"
+WLAPSED=$(mk lapsed done bbbbbbbbbbbb);   T set-option -w -t "$WLAPSED" @cc_session_id "$SIDL"
+eq "C: no @loop, a pending wakeup in the transcript → never (#2189)" "looping rc=1" "$(why "$WUNMARK")"
+has "C: …and the missing @loop is written" "$(T display-message -p -t "$WUNMARK" '#{@loop}')" "kind=wakeup"
+eq "C: a lapsed wakeup in the transcript → reopen" "rc=0" "$(why "$WLAPSED")"
+eq "C: …and no @loop written" "" "$(T display-message -p -t "$WLAPSED" '#{@loop}')"
+T kill-window -t "$WUNMARK"; T kill-window -t "$WLAPSED"
 
 # ============================================================================
 # D. tick — fleet-cfg-restart.sh with fleet-migrate.sh faked
