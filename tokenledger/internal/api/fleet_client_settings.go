@@ -117,8 +117,14 @@ func (s *Server) poolSettings() map[string]string {
 	if s.settingOn(PoolMoveFullKey) {
 		failover = "1"
 	}
+	paused := []string{}
+	if settings, err := s.Store.FleetSettings(); err == nil {
+		paused = pausedAccounts(settings)
+	}
 	return map[string]string{
 		"FLEET_ACCOUNT_CEILING": s.setting(PoolSkipPctKey),
 		"FLEET_FAILOVER":        failover,
+		// The pool accounts an admin paused (claude-fleet#1990), space-separated.
+		"FLEET_ACCOUNT_PAUSED": strings.Join(paused, " "),
 	}
 }

@@ -423,3 +423,41 @@ func (s *Store) FleetAuditWorker(actor, workerID, workerKey, action, fleetID, ou
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, actor, workerID, workerKey, action, fleetID, outcome, operationID, at.UTC().Format(rfc))
 	return err
 }
+
+// FleetAuditEntry is one fleet_audit row, as the admin Audit page reads it
+// (claude-fleet#1990).
+type FleetAuditEntry struct {
+	ID          int64     `json:"id"`
+	Created     time.Time `json:"created"`
+	Actor       string    `json:"actor"`
+	WorkerKey   string    `json:"worker_key,omitempty"`
+	Action      string    `json:"action"`
+	FleetID     string    `json:"fleet_id"`
+	Outcome     string    `json:"outcome"`
+	OperationID string    `json:"operation_id,omitempty"`
+}
+
+// FleetAuditLog is the newest fleet_audit rows, newest first (limit ≤ 0 =
+// 200).
+func (s *Store) FleetAuditLog(limit int) ([]FleetAuditEntry, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.read.Query(`SELECT id, created, actor, worker_key, action, fleet_id, outcome, operation_id
+		FROM fleet_audit ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []FleetAuditEntry{}
+	for rows.Next() {
+		var e FleetAuditEntry
+		var created string
+		if err := rows.Scan(&e.ID, &created, &e.Actor, &e.WorkerKey, &e.Action, &e.FleetID, &e.Outcome, &e.OperationID); err != nil {
+			return nil, err
+		}
+		e.Created, _ = time.Parse(rfc, created)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

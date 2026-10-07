@@ -94,14 +94,17 @@ var routeAccess = map[string]string{
 	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/users": accessAdmin,
 	"/v1/fleet/credentials": accessAdmin, "/v1/fleet/credentials/revoke": accessAdmin,
 	NodeRevokePath:                accessAdmin,
-	"/v1/fleet/credentials/audit": accessAdmin, "/credentials": accessAdmin,
-	"/v1/fleet/ssh-relays": accessAdmin,
-	"/v1/accounts":         accessAdmin, "/v1/accounts/label": accessAdmin,
+	"/v1/fleet/credentials/audit": accessAdmin,
+	"/v1/fleet/ssh-relays":        accessAdmin,
+	"/v1/accounts":                accessAdmin, "/v1/accounts/label": accessAdmin,
 	"/v1/collectors": accessAdmin, "/v1/account-usage": accessAdmin,
 	"/v1/limits": accessAdmin, "/v1/limits/history": accessAdmin, "/v1/quota/history": accessAdmin,
 	"/v1/endpoints": accessAdmin, "/v1/account-switches": accessAdmin, "/v1/endpoint-accounts": accessAdmin,
 	"/v1/findings": accessAdmin, "/v1/findings/mutes": accessAdmin,
-	"/v1/access": accessAdmin, "/access": accessAdmin, "/access/": accessAdmin,
+	"/v1/access": accessAdmin,
+	// The admin pages (claude-fleet#1990) and the one audit they read.
+	"/subscriptions": accessAdmin, "/nodes": accessAdmin, "/admin/users": accessAdmin,
+	"/admin/settings": accessAdmin, "/admin/audit": accessAdmin, AuditPath: accessAdmin,
 	"/badge/": accessAdmin, "/embed/": accessAdmin,
 
 	// A user's own: scoped to their machine login, their principal, or
@@ -114,7 +117,7 @@ var routeAccess = map[string]string{
 	"/sessions": accessUser, "/v1/fleet/me": accessUser, "/v1/fleet/": accessUser,
 	// The roster, cut by FleetScope to the machines where their login runs
 	// (claude-fleet#1411); maintenance, SPOT and join codes stay an admin's.
-	"/v1/nodes": accessUser, "/nodes": accessUser,
+	"/v1/nodes":         accessUser,
 	"/v1/fleet/connect": accessUser, "/v1/fleet/cert": accessUser,
 	"/fleet/login": accessUser, "/connect": accessUser, "/config": accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,
@@ -256,11 +259,12 @@ func (s *Server) auditRoleDenied(r *http.Request) {
 }
 
 // Pages, as /v1/me lists them for the menu (C7, C8). A user's four; an
-// admin's every one.
+// admin's every one: the four, then Subscriptions, Machines, Users,
+// Settings and Audit (claude-fleet#1990).
 var (
 	userPages  = []string{"overview", "sessions", "devices", "config"}
 	adminPages = []string{"overview", "sessions", "devices", "config",
-		"subscriptions", "machines", "people", "credentials", "audit", "access"}
+		"subscriptions", "machines", "people", "settings", "audit"}
 )
 
 func pagesFor(role string) []string {

@@ -77,6 +77,7 @@ type Server struct {
 	meter          meterState
 	sourceCounters scopedCounters
 	quotaLeases    quotaLeases
+	loadHist       loadHistory
 
 	// LiveStore holds the seconds-scale view of running sessions. In memory
 	// only: it describes this minute, and a restart legitimately knows nothing
@@ -321,7 +322,9 @@ func (s *Server) routes() *routeMux {
 		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
 		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
-		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
+		// Machines (claude-fleet#1990): an admin's page; a user gets the
+		// shell's 403 (admin_pages.go).
+		mux.Handle("/nodes", s.viewerOnly(s.adminPage("machines", "nodes.html")))
 		// 我的会话 (claude-fleet#1429): the phone view of fleet_sessions.
 		mux.Handle("/sessions", s.viewerOnly(http.HandlerFunc(s.serveSessionsPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
@@ -412,7 +415,6 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(NodeRevokePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleNodeRevoke))))
 		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevoke))))
 		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredAudit))))
-		mux.Handle("/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveCredentialsPage))))
 		// Session passes for untrusted machines (claude-fleet#1969): issue /
 		// renew / revoke by the node's token, verify by the verifiers' token,
 		// the list by the operator — each route checks its own.
@@ -487,11 +489,16 @@ func (s *Server) routes() *routeMux {
 	// and what is actually turned on here. Behind the viewer gate like every
 	// other human surface -- it describes the configuration, and /signin's
 	// unconditional 404 exists precisely so an uncredentialled prober cannot
-	// learn that. Both spellings, so /access/ is the page rather than the SPA
-	// fallback. See access.go.
+	// learn that. Its page retired with claude-fleet#1990; Settings reads it.
+	// See access.go.
 	mux.Handle("/v1/access", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccess))))
-	mux.Handle("/access", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveAccessPage))))
-	mux.Handle("/access/", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveAccessPage))))
+
+	// The admin pages (claude-fleet#1990): Subscriptions, Users, Settings,
+	// Audit (Machines is /nodes, above). A user gets the 403 page.
+	for _, p := range adminPageRoutes {
+		mux.Handle(p.path, s.viewerOnly(s.adminPage(p.id, p.file)))
+	}
+	mux.Handle(AuditPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminAudit))))
 
 	// Badges are the one surface that may be unauthenticated, and only on
 	// purpose. Everything else on this hub stays behind the viewer token.

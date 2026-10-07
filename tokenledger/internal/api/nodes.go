@@ -388,6 +388,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 				m.Proto, string(m.Payload), now); err != nil {
 				log.Printf("node %s: record heartbeat: %v", ep.ID, err)
 			}
+			s.loadHist.add(hb.Hostname, hb.Load1, hb.NCPU, now)
 			// The Fleet Hub registry (claude-fleet#1409): this login's
 			// fleets, re-derived and checked before they are registered.
 			s.nodeBack(*ep, now)
@@ -569,6 +570,10 @@ type MachineView struct {
 	// (claude-fleet#1427): Status reads maintenance while any login is heard,
 	// lost when none is.
 	Maintenance *Maintenance `json:"maintenance,omitempty"`
+	// LoadHist is load per core over the last two hours, one point per five
+	// minutes, oldest first (claude-fleet#1990, the Machines card's trend).
+	// Kept in memory since the hub started: empty after a restart.
+	LoadHist []float64 `json:"load_hist"`
 	// Repos is every repo a registered fleet on the machine hosts
 	// (store.FleetRow.HostedRepos, the list placement checks), over the
 	// logins the reader may see (claude-fleet#1927): a newcomer's empty list
@@ -723,6 +728,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	sort.Strings(order)
 	for _, h := range order {
 		sort.Strings(machines[h].Repos)
+		machines[h].LoadHist = s.loadHist.series(h, now)
 		out.Machines = append(out.Machines, *machines[h])
 	}
 	out.Spot = s.spotSummary(now, out.Nodes)
@@ -784,11 +790,6 @@ func (s *Server) serveConnectPage(w http.ResponseWriter, r *http.Request) {
 // team layer.
 func (s *Server) serveConfigPage(w http.ResponseWriter, r *http.Request) {
 	s.serveStandalonePage(w, r, "config.html")
-}
-
-// serveNodesPage serves the standalone roster page.
-func (s *Server) serveNodesPage(w http.ResponseWriter, r *http.Request) {
-	s.serveStandalonePage(w, r, "nodes.html")
 }
 
 // serveSessionsPage serves 我的会话 (claude-fleet#1429): every session the

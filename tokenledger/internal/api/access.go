@@ -293,17 +293,6 @@ func (s *Server) doors(f HubFacts) []Door {
 	}
 }
 
-// serveAccessPage serves the door map's page.
-//
-// Its own file, like the user page, rather than a route inside the
-// dashboard: the dashboard is a module set that boots ~20 requests once you
-// are through the gate, and a page whose whole job is to explain how to get in
-// should not be the heaviest thing to load after you have.
-
-func (s *Server) serveAccessPage(w http.ResponseWriter, r *http.Request) {
-	s.serveStandalonePage(w, r, "access.html")
-}
-
 // serveStandalonePage serves one self-contained page from the built UI.
 func (s *Server) serveStandalonePage(w http.ResponseWriter, r *http.Request, name string) {
 	if s.UI == nil {

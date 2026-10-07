@@ -162,8 +162,39 @@ func isHubSettingKey(key string) bool {
 	if _, ok := langKeyID(key); ok {
 		return true
 	}
+	if _, ok := poolPausedKey(key); ok {
+		return true
+	}
 	_, ok := machineLoginKey(key)
 	return ok
+}
+
+// PoolPausedPrefix makes pool.paused.<account> (claude-fleet#1990): a pool
+// subscription an admin paused — "on", or "" (the row is deleted) when it
+// runs. <account> is the credential's account as /v1/fleet/credentials
+// lists it. The hub still leases it, flagged paused, so a session already
+// on it finishes; a node that reads the flag starts no new one there.
+const PoolPausedPrefix = "pool.paused."
+
+// poolPausedKey parses pool.paused.<account>.
+func poolPausedKey(key string) (string, bool) {
+	acct, ok := strings.CutPrefix(key, PoolPausedPrefix)
+	if !ok || !validAccountLabel(acct) {
+		return "", false
+	}
+	return acct, true
+}
+
+// pausedAccounts is every pool account an admin paused, sorted.
+func pausedAccounts(settings map[string]string) []string {
+	out := []string{}
+	for k, v := range settings {
+		if acct, ok := poolPausedKey(k); ok && strings.EqualFold(v, "on") {
+			out = append(out, acct)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // machineLoginKey parses user.<id>.machine_login. <id> is a GitHub ID — bare
@@ -394,6 +425,21 @@ func (s *Server) putHubSetting(actor, key, value string, now time.Time) (int, st
 	}
 	if pid, ok := machineLoginKey(key); ok {
 		return s.putMachineLogin(actor, pid, value, settings, now)
+	}
+	if _, ok := poolPausedKey(key); ok {
+		stored := ""
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "on":
+			stored = "on"
+		case "", "off":
+		default:
+			return http.StatusBadRequest, PoolPausedPrefix + "<account> is on, or \"\" (off) to resume"
+		}
+		if err := s.Store.SetFleetSetting(key, stored, now); err != nil {
+			return http.StatusInternalServerError, err.Error()
+		}
+		s.settingAudit(actor, key, settings[key], stored, now)
+		return http.StatusOK, ""
 	}
 	if id, ok := langKeyID(key); ok {
 		// The account language (claude-fleet#2033): zh-CN | en, or "".
