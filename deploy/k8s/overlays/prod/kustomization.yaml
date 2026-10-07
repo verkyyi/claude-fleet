@@ -7,10 +7,9 @@ kind: Kustomization
 namespace: new-deploy
 resources:
   - ../../base
-# Still the single SQLite shape (one replica, Recreate, the data disk) until the
-# switch to Postgres — which deletes these two lines (../../RUNBOOK.md «换库»).
-components:
-  - sqlite
+# The two-replica rolling shape on managed Postgres (mode=postgres): the
+# `components: [sqlite]` lines went with the switch (../../RUNBOOK.md «换库»);
+# a rollback reverts this commit.
 images:
   - name: ccquota
     newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/ccquota
