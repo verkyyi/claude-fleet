@@ -9,6 +9,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -96,6 +97,33 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 		// The guessed identity's placeholder fields must not overwrite the real
 		// account's; only the uuid was ever worth anything here.
 		id.Email, id.DisplayName = "", ""
+	} else if sessions.IsFingerprint(id.AccountUUID) && batch.Limits != nil && batch.Limits.CredentialLabel != "" {
+		// The schedule matched nothing — the real account's last known reset
+		// is older than a move of the schedule — but the reading came from a
+		// token the operator imported under a label, and the label names the
+		// account. Without this, every such move minted a phantom subscription
+		// beside the real one (claude-fleet#2104).
+		if named, err := s.Store.ResolveCredentialLabel(string(id.Source), batch.Limits.CredentialLabel); err != nil {
+			return nil, err
+		} else if named != "" {
+			log.Printf("fingerprint %s is %s (credential %q)", id.AccountUUID, named, batch.Limits.CredentialLabel)
+			// A phantom minted before this reading (an older hub, or an agent
+			// that sent no label) holds the same schedule under the same key:
+			// it IS this account, so fold it in rather than leave it counted
+			// as a subscription of its own. A failed fold is repaired by the
+			// next reading; the reading itself still lands where it belongs.
+			if had, err := s.Store.AccountExists(id.AccountUUID); err != nil {
+				return nil, err
+			} else if had {
+				if _, _, err := s.Store.MergeAccount(id.AccountUUID, named); err != nil {
+					log.Printf("could not fold phantom %s into %s: %v", id.AccountUUID, named, err)
+				} else {
+					log.Printf("folded phantom %s into %s", id.AccountUUID, named)
+				}
+			}
+			id.AccountUUID = named
+			id.Email, id.DisplayName = "", ""
+		}
 	}
 
 	if err := s.Store.UpsertAccount(id, id.SubscriptionType, id.RateLimitTier); err != nil {

@@ -475,3 +475,45 @@ func TestBindSourcePool_RefusesAnUnknownAccount(t *testing.T) {
 		t.Fatal("bound a source's usage to an account this hub has never seen")
 	}
 }
+
+// claude-fleet#2104: a vault label names its account the way the operator
+// typed it; a label that fits two accounts, a stand-in or another source's
+// account names nothing.
+func TestResolveCredentialLabel(t *testing.T) {
+	s := newStore(t)
+	add := func(uuid, source, email, name string) {
+		id := ident(uuid)
+		id.Source, id.Email, id.DisplayName = source, email, name
+		if err := s.UpsertAccount(id, "max", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("u-icloud", "claude", "ylianghui@icloud.com", "Lee-ICLOUD")
+	add("u-gmail", "claude", "verky.yi@gmail.com", "Lee")
+	add("u-24h", "claude", "verky@24helpful.com", "Lee")
+	add("u-gu", "claude", "ly297@georgetown.edu", "Lee")
+	add("codex:account:a0", "codex", "verky.yi@gmail.com", "Codex account")
+	add("codex:local", "codex", "", "Codex (local usage)")
+	add("win_cf27f64c872e47f0", "claude", "", "")
+	for _, tc := range []struct{ source, label, want string }{
+		{"claude", "icloud", "u-icloud"},
+		{"claude", "gmail", "u-gmail"},
+		{"claude", "24helpful", "u-24h"},
+		{"claude", "ly297", "u-gu"},
+		{"claude", "Verky.Yi@gmail.com", "u-gmail"},
+		{"claude", "lee-icloud", "u-icloud"},
+		{"claude", "lee", ""},                  // three accounts wear it
+		{"claude", "win_cf27f64c872e47f0", ""}, // a stand-in is never the answer
+		{"codex", "gmail", "codex:account:a0"},
+		{"codex", "default", ""},
+		{"claude", "", ""},
+	} {
+		got, err := s.ResolveCredentialLabel(tc.source, tc.label)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.want {
+			t.Errorf("%s/%q = %q, want %q", tc.source, tc.label, got, tc.want)
+		}
+	}
+}

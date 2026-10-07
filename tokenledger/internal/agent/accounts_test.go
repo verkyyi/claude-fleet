@@ -72,6 +72,11 @@ func TestProbeAccounts_ReadsAnUnobservedSubscription(t *testing.T) {
 		t.Errorf("account key = %q; it must be the seven-day fingerprint so the hub "+
 			"can fold it onto a real uuid", got[0].AccountUUID)
 	}
+	// The label it is kept under travels too: when the schedule has moved and
+	// the fingerprint matches nothing, it is what names the account (#2104).
+	if got[0].CredentialLabel != "idle@example.com" {
+		t.Errorf("credential label = %q, want the token's file name", got[0].CredentialLabel)
+	}
 }
 
 // The property that keeps monitoring from consuming what it measures: a probe

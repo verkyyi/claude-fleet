@@ -50,16 +50,34 @@ export function windowsOf(lim) {
 
 const norm = (s) => String(s || '').trim().toLowerCase();
 
+/**
+ * isStandIn is an account key that is not a subscription's own identity: a
+ * reset-schedule fingerprint (win_…) or a source's unattributed pool
+ * (codex:local). Such a row can sit beside the real account, so it never
+ * counts as "the one account" a lone credential belongs to.
+ */
+export const isStandIn = (uuid) => /^win_/.test(String(uuid || '')) || /:local$/.test(String(uuid || ''));
+
 /** credKey is a credential's identity: provider/account. */
 export const credKey = (c) => `${c.provider}/${c.account}`;
 
 /**
  * subscriptions joins what the hub knows about each subscription into one
  * card each: its usage (/v1/limits?account=all), its account (/v1/accounts),
- * the pool credential the vault holds for it (/v1/fleet/credentials, matched
- * by label, e-mail or uuid), whether an admin paused it, and how many live
- * sessions run on it (/v1/live). A pool credential no usage names yet is a
- * card of its own. Claude first, then Codex, each by label.
+ * the pool credential the vault holds for it (/v1/fleet/credentials), whether
+ * an admin paused it, and how many live sessions run on it (/v1/live). A pool
+ * credential no usage names yet is a card of its own. Claude first, then
+ * Codex, each by label.
+ *
+ * A vault label is whatever the operator typed at import — "gmail" for
+ * verky.yi@gmail.com, "default" for the one Codex login — so it is matched to
+ * an account of the SAME provider in three passes (claude-fleet#2104: four
+ * real subscriptions showed as eight cards beside their own credentials):
+ *   1. exactly: label, display label, e-mail, its local part or the uuid;
+ *   2. by e-mail domain ("gmail" ↔ @gmail.com), only when one account fits;
+ *   3. a provider with ONE pool credential and ONE real account: the same one.
+ * A guess that fits two accounts matches neither — a spare credential stays a
+ * card of its own rather than wearing someone else's usage.
  */
 export function subscriptions({ limits, accounts, creds, paused, live } = {}) {
   const per = (limits && Array.isArray(limits.per_account)) ? limits.per_account : [];
@@ -69,17 +87,39 @@ export function subscriptions({ limits, accounts, creds, paused, live } = {}) {
   const n = {};
   for (const s of (live && Array.isArray(live.sessions)) ? live.sessions : []) if (s.account) n[s.account] = (n[s.account] || 0) + 1;
   const used = new Set();
-  const out = [];
-  const match = (uuid, label, email) => pool.find((c) => !used.has(credKey(c)) &&
-    [norm(label), norm(email), norm(String(email || '').split('@')[0]), norm(uuid)].includes(norm(c.account)));
-  for (const pa of per) {
+  const rows = per.map((pa) => {
     const a = accts.get(pa.account_uuid) || {};
     const label = pa.label || a.label || a.display_name || a.email || pa.account_uuid;
-    const cred = match(pa.account_uuid, label, a.email);
-    if (cred) used.add(credKey(cred));
+    return { pa, a, label, prov: provOf(pa.account_uuid, (pa.limits && pa.limits.source) || a.source), cred: null };
+  });
+  const take = (r, c) => { r.cred = c; used.add(credKey(c)); };
+  const free = (prov) => pool.filter((c) => !used.has(credKey(c)) && (c.provider === 'codex' ? 'codex' : 'claude') === prov);
+  // 1. exact
+  for (const r of rows) {
+    const email = r.a.email;
+    const keys = [norm(r.label), norm(email), norm(String(email || '').split('@')[0]), norm(r.pa.account_uuid)];
+    const c = free(r.prov).find((x) => keys.includes(norm(x.account)));
+    if (c) take(r, c);
+  }
+  // 2. e-mail domain, unique
+  const domainOf = (email) => { const d = norm(String(email || '').split('@')[1]); return d ? [d, d.split('.')[0]] : []; };
+  for (const c of pool) {
+    if (used.has(credKey(c))) continue;
+    const prov = c.provider === 'codex' ? 'codex' : 'claude';
+    const fit = rows.filter((r) => !r.cred && r.prov === prov && domainOf(r.a.email).includes(norm(c.account)));
+    if (fit.length === 1) take(fit[0], c);
+  }
+  // 3. one credential, one real account
+  for (const prov of ['claude', 'codex']) {
+    const creds = pool.filter((c) => (c.provider === 'codex' ? 'codex' : 'claude') === prov);
+    const real = rows.filter((r) => r.prov === prov && !isStandIn(r.pa.account_uuid));
+    if (creds.length === 1 && real.length === 1 && !used.has(credKey(creds[0])) && !real[0].cred) take(real[0], creds[0]);
+  }
+  const out = [];
+  for (const { pa, label, prov, cred, a } of rows) {
     const w = windowsOf(pa.limits);
     out.push({
-      id: pa.account_uuid, label, prov: provOf(pa.account_uuid, (pa.limits && pa.limits.source) || a.source),
+      id: pa.account_uuid, label, prov,
       plan: (pa.limits && pa.limits.plan) || a.subscription_type || '',
       h5: w.h5, h7: w.h7, available: !!(pa.limits && pa.limits.available !== false), reason: (pa.limits && pa.limits.reason) || '',
       sessions: n[pa.account_uuid] || 0, cred: cred || null, paused: !!(cred && pausedSet.has(cred.account)),

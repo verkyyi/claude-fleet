@@ -102,6 +102,7 @@ func (a *Agent) probeAccounts(ctx context.Context, observed map[string]bool) []*
 			continue
 		}
 		snap.AccountUUID = key
+		snap.CredentialLabel = label
 		out = append(out, snap)
 	}
 	return out

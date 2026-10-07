@@ -222,3 +222,51 @@ test('a user never reaches an admin page from the menu, and a direct visit shows
   assert.match(shell, /if \(!pageAllowed\(me, page\)\)/);
   assert.match(shell, /ui\.err\.notOnMenu/);
 });
+
+test('vault labels find their own account — four Claude + one Codex is five cards (claude-fleet#2104)', () => {
+  // The hub's real shape on 2026-10-07: setup tokens named after the mail
+  // provider, the one Codex login "default", and one Codex account whose
+  // e-mail equals a Claude account's.
+  const acct = (u, email, source = 'claude') => ({ account_uuid: u, email, source });
+  const limits = { per_account: [
+    { account_uuid: 'u-icloud', label: 'ylianghui@icloud.com', limits: { available: true } },
+    { account_uuid: 'u-gmail', label: 'verky.yi@gmail.com', limits: { available: true } },
+    { account_uuid: 'u-24h', label: 'verky@24helpful.com', limits: { available: true } },
+    { account_uuid: 'codex:account:a0', label: 'verky.yi@gmail.com', limits: { available: true, source: 'codex' } },
+    { account_uuid: 'u-gu', label: 'ly297@georgetown.edu', limits: { available: true } },
+  ] };
+  const accounts = [acct('u-icloud', 'ylianghui@icloud.com'), acct('u-gmail', 'verky.yi@gmail.com'), acct('u-24h', 'verky@24helpful.com'),
+    acct('codex:account:a0', 'verky.yi@gmail.com', 'codex'), acct('u-gu', 'ly297@georgetown.edu')];
+  const pool = (provider, account) => ({ principal_id: 'pool', provider, account, created_at: iso(NOW) });
+  const creds = { credentials: [pool('claude', '24helpful'), pool('claude', 'gmail'), pool('claude', 'icloud'), pool('claude', 'ly297'), pool('codex', 'default')] };
+  const cards = subscriptions({ limits, accounts, creds });
+  assert.equal(cards.filter((c) => c.prov === 'claude').length, 4);
+  assert.equal(cards.filter((c) => c.prov === 'codex').length, 1);
+  const by = Object.fromEntries(cards.map((c) => [c.id, c.cred && c.cred.account]));
+  assert.deepEqual(by, { 'u-icloud': 'icloud', 'u-gmail': 'gmail', 'u-24h': '24helpful', 'codex:account:a0': 'default', 'u-gu': 'ly297' });
+});
+
+test('a vault guess that fits two accounts, or a stand-in row, matches nothing', () => {
+  const limits = { per_account: [
+    { account_uuid: 'u-1', label: 'a@gmail.com', limits: {} },
+    { account_uuid: 'u-2', label: 'b@gmail.com', limits: {} },
+    { account_uuid: 'win_0123', label: 'win_0123', limits: {} },
+    { account_uuid: 'codex:local', label: 'Codex (local usage)', limits: { source: 'codex' } },
+  ] };
+  const accounts = [{ account_uuid: 'u-1', email: 'a@gmail.com' }, { account_uuid: 'u-2', email: 'b@gmail.com' }];
+  const creds = { credentials: [
+    { principal_id: 'pool', provider: 'claude', account: 'gmail' },
+    { principal_id: 'pool', provider: 'codex', account: 'default' },
+  ] };
+  const cards = subscriptions({ limits, accounts, creds });
+  // two gmail accounts: the label could be either, so it is its own card
+  assert.ok(cards.some((c) => c.id === 'cred:claude/gmail'));
+  // codex:local is a pool of unattributed usage, not the credential's account
+  assert.ok(cards.some((c) => c.id === 'cred:codex/default'));
+  assert.equal(cards.find((c) => c.id === 'codex:local').cred, null);
+  // a Claude credential never lands on a Codex card, however its label reads
+  const x = subscriptions({ limits: { per_account: [{ account_uuid: 'codex:account:z', label: 'z@gmail.com', limits: { source: 'codex' } }] },
+    accounts: [{ account_uuid: 'codex:account:z', email: 'z@gmail.com', source: 'codex' }],
+    creds: { credentials: [{ principal_id: 'pool', provider: 'claude', account: 'z' }] } });
+  assert.equal(x.find((c) => c.id === 'codex:account:z').cred, null);
+});

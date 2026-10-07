@@ -192,6 +192,13 @@ type LimitsSnapshot struct {
 	ExtraUsageJSON string `json:"extra_usage_json"`
 	SpendJSON      string `json:"spend_json"`
 	RawJSON        string `json:"raw_json"`
+
+	// CredentialLabel is the name the token behind a probed reading is kept
+	// under — the vault's label for a hub-managed account ("icloud"). A setup
+	// token cannot say which account it is, so when the fingerprint names no
+	// known account the hub resolves this label instead (claude-fleet#2104).
+	// Empty for every other reading; an older hub ignores it.
+	CredentialLabel string `json:"credential_label,omitempty"`
 }
 
 // Attribution reports what the agent refused to attribute, and why.
