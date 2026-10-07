@@ -239,6 +239,9 @@ case "$worigin" in
   '') quiet 'hub-spawned (@origin empty)' ;;
   *)  quiet "@origin '$worigin' is not a window key (daemon / cross-fleet parent)" ;;
 esac
+# A bare @origin (stamped before issue #1939) is the fleet's one repo's: booked and
+# sent under the key's one spelling, `<slug>:<key>`.
+[ -n "$sess" ] && worigin=$(fleet_key_qualify "$sess" "$worigin")
 
 # --- the parent by IDENTITY (issue #1646) ----------------------------------------
 # A spawn records the parent's @fleet_id as @origin_fid. The key in @origin is only
@@ -273,11 +276,11 @@ fi
 # cwd is the LAST resort, and only useful in the child's own pane — a reaper runs
 # elsewhere, which is what --key is for.
 [ -n "$selfkey" ] || selfkey=$(fleet_scratch_key "$(pwd -P 2>/dev/null)")
-case "$selfkey" in
-  issue-*)   label="issue #${selfkey#issue-}" ;;
-  scratch-*) label="scratch ~${selfkey#scratch-}" ;;
-  ?*:issue-*)   label="${selfkey%%:*} issue #${selfkey##*:issue-}" ;;
-  ?*:scratch-*) label="${selfkey%%:*} scratch ~${selfkey##*:scratch-}" ;;
+# The label is the name the person sees — never the repo slug the key carries
+# internally (issue #1939).
+case "${selfkey#*:}" in
+  issue-*)   label="issue #${selfkey##*issue-}" ;;
+  scratch-*) label="scratch ~${selfkey##*scratch-}" ;;
   *)         label="session ${wname:-?}" ;;
 esac
 # 2+ repos (issue #789): name the child's repo, since a parent can have children in
@@ -291,9 +294,9 @@ esac
 branch_arg="$BRANCH"
 [ -n "$BRANCH" ] || BRANCH="${selfkey##*:}"
 # The ledger spells the child the way its window and its placement do (issue
-# #1351): `<slug>:issue-N` in a 2+ repo fleet, so fleet-children.sh joins the three
-# into ONE row. The child's own repo, off its window — unknown ⇒ the bare key, which
-# the reader then reads in the parent's repo. A one-repo fleet: the key as it was.
+# #1351): `<slug>:issue-N` (every fleet, issue #1939), so fleet-children.sh joins the
+# three into ONE row. The child's own repo, off its window — unknown ⇒ the bare key,
+# which the reader then reads in the parent's repo.
 ledkey="$selfkey"
 case "$ledkey" in
   issue-*|scratch-*)

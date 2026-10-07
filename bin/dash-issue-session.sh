@@ -391,9 +391,9 @@ fi
 # --async asks without waiting and leaves the operation id for fleet-children.sh.
 # Every REMOTE answer is written to the parent's `children/<key>.dispatch`.
 _place_note() {  # <state> <machine> <op> [<window>] [<exit>] [<line>]
-  case "$ORIGIN" in issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*) ;; *) return 0 ;; esac
-  local ck="issue-$num"
-  [ "$MULTI" = 1 ] && ck="$(fleet_slug "$REPO"):issue-$num"
+  case "$ORIGIN" in issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*) ;; *) return 0 ;; esac
+  local ck   # the child's key carries its repo in every fleet (issue #1939)
+  ck="$(fleet_okey_prefix "$SESS" "$REPO")issue-$num"
   python3 "$BIN/fleet-children.py" dispatch \
     --file "$(fleet_state_dir "$SESS")/children/$(printf '%s' "$ORIGIN" | LC_ALL=C tr -cd 'A-Za-z0-9._:-').dispatch" \
     --child "$ck" --state "$1" --node "$2" --op "$3" --window "${4:-}" --exit "${5:-}" --line "${6:-}" >/dev/null 2>&1 || :

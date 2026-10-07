@@ -117,7 +117,7 @@ flush_fleet() { (
   [ -n "$PARENT" ] || [ "$(children_report_mode)" = batch ] || exit 0
   dir=$(children_dir "$sess") || exit 0
   if [ -n "$PARENT" ]; then
-    flush_one "$sess" "$(fleet_origin_canon "$PARENT" '')"
+    flush_one "$sess" "$(fleet_origin_canon "$PARENT" '' "$sess")"
     exit 0
   fi
   [ -d "$dir" ] || exit 0

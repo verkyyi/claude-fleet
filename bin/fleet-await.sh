@@ -142,7 +142,7 @@ sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
 [ -n "$sess" ] || die "not inside a fleet — run it from a fleet pane, or pass -L <socket>"
 [ -n "$KEY" ] || KEY=$(fleet_origin_key)
 [ -n "$KEY" ] || die "no parent key — run it from a scratch or worker pane (the hub has none), or pass --parent issue-N|scratch-N"
-KEY=$(fleet_origin_canon "$KEY" '')
+KEY=$(fleet_origin_canon "$KEY" '' "$sess")
 
 # A worker_id target (issue #1420) → this fleet's issue number, or a refusal.
 case "$NUM" in wid:*)
@@ -191,13 +191,15 @@ case "$NUM" in wid:*)
   fi ;;
 esac
 
-# The child's key, spelled the way its @origin-keyed ledger rows spell it.
-CKEY="issue-$NUM"
+# The child's key, spelled the way its @origin-keyed ledger rows spell it:
+# `<slug>:issue-N` in every fleet (issue #1939).
 if [ -n "${REMOTE:-}" ]; then
   CKEY=$REMOTE      # as the child's own machine spells it — what its reports carry
-elif _fleet_hosts_many "$sess"; then
-  [ -n "$REPO_ARG" ] || die "this fleet hosts several repos — pass --repo <owner/name>"
-  CKEY="$(fleet_slug "$(fleet_norm_repo "$REPO_ARG")"):issue-$NUM"
+elif [ -n "$REPO_ARG" ]; then
+  CKEY="$(fleet_okey_prefix "$sess" "$REPO_ARG")issue-$NUM"
+else
+  CKEY=$(fleet_key_qualify "$sess" "issue-$NUM")
+  case "$CKEY" in ?*:*) ;; *) die "this fleet hosts several repos — pass --repo <owner/name>" ;; esac
 fi
 
 # `wid|@origin` of #N's live window on this fleet, or nothing — through the ONE
@@ -442,7 +444,7 @@ if [ -n "$wid" ]; then
     fleet_stamp_origin_gen "$sess" "$wid" "$KEY" "$SOCK"
     worigin=$KEY
   fi
-  LEDGER=$(fleet_origin_canon "$worigin" '')
+  LEDGER=$(fleet_origin_canon "$worigin" '' "$sess")
   [ "$LEDGER" = "$KEY" ] || printf 'fleet-await: #%s belongs to %s — reading its ledger\n' "$NUM" "$LEDGER" >&2
 else
   LEDGER=$KEY

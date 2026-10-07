@@ -69,11 +69,13 @@ sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
 [ -n "$KEY" ] || KEY=$(fleet_origin_key)
 [ -n "$KEY" ] || { printf 'fleet-children: no parent key — run it in a worker/scratch pane, or name one (issue-N / scratch-N)\n' >&2; exit 2; }
 # Canonical spelling, exactly what a child's @origin carries (and so the file name).
-KEY=$(fleet_origin_canon "$KEY" '')
+KEY=$(fleet_origin_canon "$KEY" '' "$sess")
 dir=$(children_dir "$sess") || dir="$FLEET_CONF_DIR/fleets/_/children"
-
-multi=0
-[ -n "$sess" ] && _fleet_hosts_many "$sess" && multi=1
+# The fleet's ONE repo's slug, when it has exactly one (issue #1939): a bare book
+# (`issue-N.ndjson`, written before keys always carried the repo) is that repo's,
+# and is read merged into its `<slug>:issue-N` book — one parent, one book (#982).
+one_slug=$(fleet_key_qualify "$sess" issue-0); one_slug=${one_slug%:issue-0}
+[ "$one_slug" = issue-0 ] && one_slug=''
 prmap=''; prdir=''
 if [ -n "$sess" ]; then
   prmap=$(fleet_cache prmap "$sess"); prdir="$FLEET_C/fleets"
@@ -101,13 +103,11 @@ rows() {
     fid=${rest%%|*}; name=${rest#*|}
     [ -n "$sess" ] && [ "$ws" != "$sess" ] && continue
     case "$name" in dash|plan|backlog|home) continue ;; esac
-    pre=''
-    if [ "$multi" = 1 ]; then
-      # okp_v: the window's repo slug; unknown → `?:`, a key no @origin names.
-      [ -n "$repo" ] || repo=$(fleet_window_repo "$sess" "$wid")
-      slug=''; [ "$norepo" != 1 ] && [ -n "$repo" ] && slug=$(fleet_slug "$repo")
-      pre="${slug:-?}:"
-    fi
+    # okp_v: the window's repo slug (every fleet, issue #1939); unknown → `?:`, a
+    # key no @origin names.
+    [ -n "$repo" ] || repo=$(fleet_window_repo "$sess" "$wid")
+    slug=''; [ "$norepo" != 1 ] && [ -n "$repo" ] && slug=$(fleet_slug "$repo")
+    pre="${slug:-?}:"
     key=''
     case "$iss" in
       ''|*[!0-9]*) key=$(fleet_scratch_key "$wt"); [ -n "$key" ] || key=$(fleet_scratch_key "$pth")
@@ -145,7 +145,7 @@ if [ -n "$sess" ] && fleet_hub_on "$sess"; then
   fleet_timebox 15 bash "$BIN/fleet-hub-node.sh" progress --max-age "${FLEET_PROGRESS_MAX_AGE:-30}" >/dev/null 2>&1 || :
 fi
 
-args=(show --dir "$dir" --parent "$KEY" --session "$sess" --since "$SINCE" --prmap "$prmap" --prmap-dir "$prdir")
+args=(show --dir "$dir" --parent "$KEY" --session "$sess" --since "$SINCE" --prmap "$prmap" --prmap-dir "$prdir" --one-slug "$one_slug")
 # What a child on another machine is doing NOW (issue #1607): the hub's session
 # table, the cache fleet-hub-sessions.sh keeps — read, never fetched. Hub off ⇒
 # not passed, and a one-machine answer is unchanged.

@@ -428,7 +428,7 @@ refresh() {
     fi
     u=$(fleet_uuid "$sess" 2>/dev/null) || u=''
     repos=$(fleet_repos "$sess" 2>/dev/null | tr '\n' ' ')
-    if fleet_multirepo "$sess" 2>/dev/null; then m=1; else m=0; fi
+    m=1   # every key carries its repo (issue #1939) — the bit stays for an older reader
     printf '%s\t%s\t%s\t%s\n' "$sess" "$u" "$m" "$repos"
     bash "$BIN/fleet-control-read.sh" workers "$sess" 2>/dev/null \
       | while IFS= read -r line; do [ -n "$line" ] && printf '%s\t%s\n' "$sess" "$line"; done >> "$mf"

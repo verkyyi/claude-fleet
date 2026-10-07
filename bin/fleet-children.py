@@ -115,11 +115,14 @@ def canon_child(child, pre, ev=None):
     return pre + child
 
 
-def read_rows(path):
+def read_rows(path, pre=None):
     """Every JSON object in the ledger, reports and wake rows alike — each `child`
-    in its canonical spelling (canon_child); the file itself is never rewritten."""
+    in its canonical spelling (canon_child); the file itself is never rewritten.
+    <pre> overrides the book's own prefix: a bare ALIAS book read as a qualified
+    key's (issue #1939) canonicalizes its children with that key's repo."""
     out = []
-    pre = book_prefix(path)
+    if pre is None:
+        pre = book_prefix(path)
     try:
         with open(path, encoding='utf-8') as fh:
             for line in fh:
@@ -142,9 +145,34 @@ def is_wake(e):
     return e.get('type') == 'wake'
 
 
-def read_events(path):
+def read_events(path, pre=None):
     """The child REPORTS — wake rows (issue #1268) are not events."""
-    return [e for e in read_rows(path) if not is_wake(e)]
+    return [e for e in read_rows(path, pre) if not is_wake(e)]
+
+
+def alias_of(key, one_slug):
+    """The bare key a qualified <key> was spelled as before issue #1939 — only
+    while its repo is the fleet's ONE repo (<one_slug>, fleet_key_alias's rule);
+    '' otherwise. Its book is the same parent's, read for one version."""
+    if one_slug and key.startswith(one_slug + ':') and is_key(key):
+        return key[len(one_slug) + 1:]
+    return ''
+
+
+def book_events(d, key, one_slug):
+    """<key>'s reports, its bare alias's book merged in (issue #1939, #982)."""
+    evs = read_events(os.path.join(d, key + '.ndjson'))
+    al = alias_of(key, one_slug)
+    if al:                              # its own seq counter: older than every row above
+        for e in read_events(os.path.join(d, al + '.ndjson'), key.split(':', 1)[0] + ':'):
+            e['_alias'] = 1
+            evs.append(e)
+    return evs
+
+
+def ev_order(e):
+    """Sort key: an alias book's rows (written before issue #1939) come first."""
+    return (0 if e.get('_alias') else 1, int(e.get('seq') or 0))
 
 
 def read_wakes(path):
@@ -786,7 +814,7 @@ def cmd_merge(a):
             if not iss:
                 continue                # a scratch start names no child key here
             child = 'issue-' + iss
-            if a.multi == '1' and ev.get('repo'):
+            if ev.get('repo'):           # every fleet's key carries its repo (issue #1939)
                 child = ''.join(ch for ch in str(ev['repo']).replace('/', '-') if ch in NODE_OK) + ':' + child
             seq = dispatch_row(dfile, child, str(ev.get('state') or ''), ev.get('node', ''), ev.get('op', ''),
                                ev.get('window', ''), ev.get('line', ''), ev.get('exit', ''), rid)
@@ -795,23 +823,33 @@ def cmd_merge(a):
     return 0
 
 
-def last_per_child(path):
+def last_per_child(path, pre=None, rows=None):
     """The last row per child of one book, in seq order."""
     last = {}
-    for e in read_rows(path):
+    for e in (rows if rows is not None else read_rows(path, pre)):
         if e.get('child'):
             last[e['child']] = e
     return sorted(last.values(), key=seq_of)
 
 
-def read_dispatches(d, parent):
-    """The last placement row per child (issue #1586), in seq order."""
-    return last_per_child(os.path.join(d, parent + '.dispatch'))
+def read_dispatches(d, parent, one_slug=''):
+    """The last placement row per child (issue #1586), in seq order — the bare
+    alias's book first, so the qualified book's later rows win (issue #1939)."""
+    rows = []
+    al = alias_of(parent, one_slug)
+    if al:
+        rows = read_rows(os.path.join(d, al + '.dispatch'), parent.split(':', 1)[0] + ':')
+    rows += read_rows(os.path.join(d, parent + '.dispatch'))
+    return last_per_child('', rows=rows)
 
 
 def cmd_show(a):
     wins = read_windows(sys.stdin)
     parent = a.parent
+    if a.one_slug:                      # a bare @origin is the one repo's (issue #1939)
+        for w in wins.values():
+            if is_key(w['origin']) and ':' not in w['origin']:
+                w['origin'] = a.one_slug + ':' + w['origin']
     # ledger side: the parent's own file, plus each descendant's (≤4 levels), so a
     # grandchild whose window is gone is still counted under the root — the same
     # "ultimate parent" attribution the live side gets from descends().
@@ -826,7 +864,7 @@ def cmd_show(a):
             if p in seen:
                 continue
             seen.add(p)
-            for ev in read_events(os.path.join(a.dir, p + '.ndjson')):
+            for ev in book_events(a.dir, p, a.one_slug):
                 ev['child'] = byfid.get(ev.get('fid') or '', ev['child'])
                 events.setdefault(ev['child'], []).append(ev)
                 nxt.append(ev['child'])
@@ -841,7 +879,7 @@ def cmd_show(a):
     # no report or window yet IS that child's row (issue #1648), counted like any
     # other, its state the placement's until the first report says more.
     hub = hub_states(a.hub_cache)
-    dispatches = read_dispatches(a.dir, parent)
+    dispatches = read_dispatches(a.dir, parent, a.one_slug)
     dmap = {d['child']: d for d in dispatches}
     for d in dispatches:
         if d['child'] != parent:
@@ -849,7 +887,7 @@ def cmd_show(a):
 
     kids = []
     for child, evs in events.items():
-        evs.sort(key=lambda e: int(e.get('seq') or 0))
+        evs.sort(key=ev_order)
         last = evs[-1] if evs else None
         live = wins.get(child)
         # A LIVE window that no longer descends from this parent (re-parented, or a
@@ -870,7 +908,7 @@ def cmd_show(a):
             title=(live['name'] if live else '') or (last or {}).get('title', ''),
             pr=(last or {}).get('pr') or prn, pr_state=prs,
             last=last,
-            since=[e for e in evs if int(e.get('seq') or 0) > a.since]))
+            since=[e for e in evs if int(e.get('seq') or 0) > a.since and not e.get('_alias')]))
         if node:                        # only then: a one-machine answer is unchanged
             kids[-1]['node'] = node
             # …and what it is doing there now (issue #1607), off the hub's table
@@ -894,7 +932,7 @@ def cmd_show(a):
         text += ' · %d!' % n['!']
     summary = dict(total=total, done=n['✓'], waiting=n['⏳'], needs=n['!'],
                    working=n['▸'], ended=n['–'], text=text)
-    seqmax = max([int(e.get('seq') or 0) for evs in events.values() for e in evs] or [0])
+    seqmax = max([int(e.get('seq') or 0) for evs in events.values() for e in evs if not e.get('_alias')] or [0])
     if a.since:
         kids = [k for k in kids if k['since']]
 
@@ -954,6 +992,7 @@ def main():
     p.add_argument('--prmap', default='')
     p.add_argument('--prmap-dir', default='')
     p.add_argument('--hub-cache', default='')
+    p.add_argument('--one-slug', default='')   # the fleet's ONE repo's slug: bare books alias it
     p = sub.add_parser('scan')
     p.add_argument('--dir', required=True)
     p = sub.add_parser('digest')
@@ -977,7 +1016,7 @@ def main():
     p = sub.add_parser('merge')
     p.add_argument('--file', default='')
     p.add_argument('--parent', default='')
-    p.add_argument('--multi', default='')
+    p.add_argument('--multi', default='')   # ignored since issue #1939: every key carries its repo
     p.add_argument('--parents', action='store_true')
     sub.add_parser('open-ops')
     p = sub.add_parser('wake-state')

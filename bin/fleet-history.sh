@@ -221,7 +221,12 @@ lshort_v() { lshort=${LANDED_SHORTMAP#*$'\n'"$1"$'\t'}
 # the substring filter also sees the repo, so `list tokenledger` narrows to it.
 landed_stream() {
   if [ "$LANDED_MERGED" = 0 ]; then
-    read_ledger "${1:-}" "${2:-}" | awk -v r="${1:--}" '{ print r "\t" $0 }'
+    # An origin recorded since issue #1939 carries its repo (`<slug>:scratch-6`);
+    # this one-ledger view keys its rows bare, so its own repo's prefix is dropped
+    # on the way in — another repo's stays, and names no row here.
+    read_ledger "${1:-}" "${2:-}" | awk -F'\t' -v OFS='\t' -v r="${1:--}" -v s="$(fleet_slug "${1:-}"):" '
+      NF >= 11 && s != ":" && index($11, s) == 1 && substr($11, length(s) + 1) ~ /^(issue|scratch)-/ { $11 = substr($11, length(s) + 1) }
+      { print r, $0 }'
     return 0
   fi
   if [ -n "${2:-}" ]; then landed_stream "${1:-}" | grep -iF -- "$2"; return 0; fi

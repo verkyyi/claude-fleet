@@ -179,8 +179,8 @@ class Control:
             if not issue and scratch != "1" and not extra.get("identity"):
                 continue
             number = int(issue) if issue.isdigit() and int(issue) > 0 else None
-            # repo: empty = a one-repo fleet (its keys stay bare); else the
-            # window's own repo, which a multi-repo key carries (issue #1018).
+            # repo: the window's own repo, which its key carries (issue #1018;
+            # every fleet since #1939 — empty only from an older adapter).
             key = worker_key(number, scratch == "1", worktree, repo)
             # worker_id is the durable identity (issue #834); window_id and handle
             # are observations of where it lives right now.
