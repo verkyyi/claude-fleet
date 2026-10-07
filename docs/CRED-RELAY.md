@@ -18,6 +18,15 @@
                         （节点令牌换本登录的通行证）                     （只带 X-Fleet-Relay + 路径，不带 Authorization）
 ```
 
+## 入口自己刷新 OpenAI 凭据（R1，issue #1976）
+
+入口设 `CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay` + `CCQUOTA_FLEET_CRED_RELAY_URL=https://fleet-relay.24hw.cn`
+后，Codex 的刷新由入口直接 POST 到转发机 `/openai-auth/oauth/token`，不再交给某台管理节点——
+长期 refresh token 不进任何机器的内存，管理节点不在线也能刷新。入口给自己签一张通行证
+`frh1.<到期>.<HMAC>`（密钥由 `CCQUOTA_FLEET_SESSION_CRED_KEY` 派生，五分钟，每次刷新现签，不落库），
+**只开 `/openai-auth/`**。审计里刷新记录写 `refresh_via=relay`；转发机不可达、网关错、拒绝通行证时
+回落到 node 路（审计写明 `relay unavailable: <原因>`）。Claude 的刷新仍走 node 路。
+
 ## 两道闸（取代来源 IP 白名单）
 
 1. **通行证** —— 由入口逐请求核验，不在转发机上：
@@ -25,6 +34,7 @@
      （`fleet-relay-cred.sh fetch`）。入口只存它的 SHA-256，放在 fleet 设置
      `fleet.node_relay.<machine>`（与 C1 的 `fleet.node_trust.<machine>` 同表、同一套机器名匹配），
      值是 `<login>:<hash>` 若干个；同一登录重领只替换自己那一张。
+   - `frh1.…`：入口自己的通行证，只给它自己经 `/openai-auth/` 刷新 OpenAI 凭据用（R1，见上一节）。
    - `fcp-h1.…`：入口签给不可信机器会话的通行证（C2）。中心代理（C6）出门时带它。
      由 C2 的 `verifySessionCred` 核验，并且只放它覆盖的那家：`/anthropic/` 要 claude，
      `/chatgpt/`、`/openai-auth/` 要 codex；经 C2 的路由撤销即刻生效（不走下面的缓存）。
