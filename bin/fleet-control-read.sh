@@ -66,8 +66,13 @@ case "$mode" in
     # Field 6 (issue #1512): every repo the fleet hosts, one per line —
     # fleet_repos, the conf's own first, then the repos/ overlays — so the hub
     # can place another repo's issue here. It is a list, never part of the UUID.
+    # The UUID itself is FROZEN (issue #1936): fleet_uuid writes it to
+    # fleets/<sess>/identity on its first call, and fleet_control.py reads that
+    # file — the triplet only mints a fleet that has none yet, so a repo moving
+    # in or out of the conf never changes the fleet the hub knows.
     while IFS=$'\t' read -r sess _conf; do
       [ -n "$sess" ] || continue
+      fleet_uuid "$sess" >/dev/null 2>&1 || true
       fleet_identity_triplet "$sess"
       (
         unset TMUX TMUX_PANE

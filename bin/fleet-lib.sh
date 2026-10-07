@@ -4589,17 +4589,33 @@ fleet_identity_triplet() {
     printf '%s\0' "$sess" "${FLEET_REPO:-}" "${FLEET_MAIN:-}" )
 }
 
-# fleet_uuid <sess> → the fleet's durable UUID — byte-for-byte what
-# fleet_control.py's inventory mints: uuid5(<machine id>, canonical JSON of
-# fleet_identity_triplet) — the fleet conf's OWN repo and checkout, whichever
-# pane asks (issues #1491, #1498).
-# READ-ONLY: a machine whose control database has no machine id yet
-# (fleet-control.py never ran) has no fleet UUID — nothing, rc 1 — and so no
-# worker_id either; nothing here creates one.
+# fleet_uuid <sess> → the fleet's durable UUID, FROZEN once (issue #1936): the
+# first call computes it — uuid5(<machine id>, canonical JSON of
+# fleet_identity_triplet), byte-for-byte what fleet_control.py's inventory used to
+# mint from the fleet conf's OWN repo and checkout (issues #1491, #1498) — and
+# writes it to fleets/<sess>/identity (fleet_identity_file, 0600, one line); every
+# later call reads only that file. So a fleet's identity depends on NO repo: a
+# FLEET_REPO / FLEET_MAIN that moves or leaves the conf changes nothing, and the
+# hub's sessions, leases and records keep their fleet. fleet-install-apply.sh's
+# conf pass freezes every fleet before anything rewrites a conf; the inventory
+# (fleet-control-read.sh → fleet_control.py) and fleet_uuid_home read the file.
+# Only a CONFIGURED fleet is frozen — a name with no conf gets the computed value
+# and nothing written. A machine whose control database has no machine id yet
+# (fleet-control.py never ran) and no frozen file has no fleet UUID — nothing,
+# rc 1 — and so no worker_id either; nothing here creates a machine id.
+fleet_identity_file() { printf '%s' "$FLEET_CONF_DIR/fleets/${1:-_}/identity"; }
 fleet_uuid() {
-  local sess="${1:-}" db="$FLEET_CONF_DIR/control/state.sqlite3"
-  [ -n "$sess" ] && [ -f "$db" ] || return 1
-  fleet_identity_triplet "$sess" | python3 -c '
+  local sess="${1:-}" db="$FLEET_CONF_DIR/control/state.sqlite3" idf u
+  [ -n "$sess" ] || return 1
+  idf=$(fleet_identity_file "$sess")
+  if [ -f "$idf" ]; then
+    u=$(head -1 "$idf" 2>/dev/null | tr -d '[:space:]' | tr 'A-F' 'a-f')
+    case "$u" in
+      ????????-????-????-????-????????????) printf '%s\n' "$u"; return 0 ;;
+    esac                               # a damaged file: recompute + rewrite below
+  fi
+  [ -f "$db" ] || return 1
+  u=$(fleet_identity_triplet "$sess" | python3 -c '
 import json, sqlite3, sys, uuid
 from urllib.parse import quote
 try:
@@ -4612,7 +4628,20 @@ try:
                                                    sort_keys=True, separators=(",", ":"))))
 except Exception:
     sys.exit(1)
-' "$db" 2>/dev/null
+' "$db" 2>/dev/null) && [ -n "$u" ] || return 1
+  [ -f "$(fleet_conf_file "$sess")" ] && _fleet_identity_write "$idf" "$u"
+  printf '%s\n' "$u"
+}
+
+# _fleet_identity_write <file> <uuid> — atomic (temp + rename), 0600. Two first
+# calls racing compute the same value, so whichever rename lands last is the same.
+_fleet_identity_write() {
+  local f="$1" tmp
+  mkdir -p "${f%/*}" 2>/dev/null || return 0
+  tmp=$(umask 077; mktemp "${f}.XXXXXX" 2>/dev/null) || return 0
+  printf '%s\n' "$2" > "$tmp" && chmod 600 "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null \
+    || rm -f "$tmp" 2>/dev/null
+  return 0
 }
 
 # ---- a session's lifelong identity: @fleet_id (issue #1646, EPIC #1645 C1) ------
