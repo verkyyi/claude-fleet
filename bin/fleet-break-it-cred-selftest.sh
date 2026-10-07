@@ -12,6 +12,8 @@
 #                                                   bin/fleet-cred-proxy.py (Router, send: route_switch)
 #   cred-session-expire                             bin/fleet-cred-proxy.py (hub pass renewal, live fcp1),
 #                                                   bin/fleet-session-cred.sh (--wrap)
+#   cred-relay-hub-restart                          extras/cred-relay/fleet-relay-check.py (the relay's
+#                                                   forward_auth gate: cache + grace while the hub restarts)
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # python3 / curl absent → SKIP. BREAK_KEEP=1 keeps the work dir; BREAK_ONLY
@@ -202,6 +204,89 @@ drill_cred_relay_down() {
   case "$code:$(cat "$CD/r2")" in 403:*cred-proxy*relay*direct*) ;; *)
     WHY="relay down and direct region-blocked: wanted a 403 from cred-proxy naming relay and direct, got $code $(cat "$CD/r2")"; return 1 ;; esac
   WHAT="新加坡转发连不上 → 同一请求切 direct 成功；direct 也被地区拒 → 403 写明两条路各自怎么了"
+}
+
+# The relay's own gate while the hub restarts (issue #2048, EPIC #2119 C7): the
+# forwarder's local checker (extras/cred-relay/fleet-relay-check.py) in front of
+# a fake hub that answers 503 (an ingress with no ready pod), then not at all.
+# The windows are scaled down (cache 1s, grace 10s); production is 30s / 600s.
+relay_hub() {   # <dir> <port|0> — a fake hub: 200 for a pass listed in <dir>/allow, 503 while <dir>/hub-503 exists
+  cat > "$1/hub.py" <<'PY'
+import os, signal, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+signal.alarm(120)
+D = sys.argv[1]
+class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def log_message(self, *a): pass
+    def do_GET(self):
+        with open(os.path.join(D, "hub-hits"), "a") as f: f.write("check\n")
+        if os.path.exists(os.path.join(D, "hub-503")): code = 503
+        else:
+            allow = open(os.path.join(D, "allow")).read().split() if os.path.exists(os.path.join(D, "allow")) else []
+            code = 200 if self.headers.get("X-Fleet-Relay", "") in allow else 403
+        b = b"" if code == 200 else b'{"error":"x"}'
+        self.send_response(code); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+ThreadingHTTPServer.allow_reuse_address = True
+s = ThreadingHTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+open(os.path.join(D, "hub.port.tmp"), "w").write(str(s.server_address[1])); os.rename(os.path.join(D, "hub.port.tmp"), os.path.join(D, "hub.port"))
+s.serve_forever()
+PY
+  rm -f "$1/hub.port"
+  python3 -I "$1/hub.py" "$1" "$2" 2>>"$1/hub.err" &
+  RH=$!; printf '%s\n' "$RH" >> "$WORK/cred-pids"
+  until_ok 30 test -s "$1/hub.port"
+}
+# relay_ask <pass> [<path>] → the checker's status for one forward_auth subrequest
+relay_ask() {
+  curl -s -m 10 -o /dev/null -w '%{http_code}' -H "X-Fleet-Relay: $1" \
+    -H "X-Forwarded-Uri: ${2:-/anthropic/v1/messages}" -H 'X-Forwarded-Method: POST' \
+    "http://127.0.0.1:$RCP/v1/relay/check" 2>/dev/null
+}
+relay_is() { [ "$(relay_ask "$2")" = "$1" ]; }   # <status> <pass> — for until_ok
+drill_cred_relay_hub_restart() {
+  CAP=3   # revoke → the checker refuses the pass: ≤ the cache window (1s here) + one poll
+  local d="$WORK/relay-check" code tok t0 tA hp
+  mkdir -p "$d"; printf 'frl1.A\nfrl1.R\n' > "$d/allow"
+  relay_hub "$d" 0 || { WHY="the fake hub did not start: $(tail -2 "$d/hub.err" | tr '\n' ' ')"; return 1; }
+  hp=$(cat "$d/hub.port"); RCP=$(cred_deadport)
+  local chk="$ROOT/extras/cred-relay/fleet-relay-check.py"
+  [ -f "$chk" ] || { WHY="no local checker on the relay ($chk): Caddy asks the hub per request and refuses while it restarts"; return 1; }
+  FLEET_HUB_URL="http://127.0.0.1:$hp" FLEET_RELAY_CHECK_LISTEN="127.0.0.1:$RCP" RELAY_CHECK_CACHE_S=1 RELAY_CHECK_GRACE_S=10 \
+    RELAY_CHECK_TIMEOUT_S=2 FLEET_RELAY_CHECK_LOG="$d/check.log" FLEET_RELAY_CHECK_MAX_SECONDS=120 \
+    python3 -I "$chk" 2>"$d/check.err" &
+  printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 30 sh -c 'curl -s -m 2 -o /dev/null "http://127.0.0.1:$1/healthz"' _ "$RCP" \
+    || { WHY="the checker did not start: $(tail -2 "$d/check.err" | tr '\n' ' ')"; return 1; }
+  # hub up: A and R pass, U was never issued
+  for tok in frl1.A frl1.R; do
+    code=$(relay_ask "$tok"); [ "$code" = 200 ] || { WHY="hub up: $tok → $code"; return 1; }
+  done
+  tA=$(now)
+  code=$(relay_ask frl1.U); [ "$code" = 403 ] || { WHY="hub up: an unknown pass → $code"; return 1; }
+  # revoke R on the hub: the checker refuses it within its cache window (timed)
+  printf 'frl1.A\n' > "$d/allow"; t0=$(now)
+  until_ok 10 relay_is 403 frl1.R || { WHY="a revoked pass still passes after 10s"; return 1; }
+  SECS=$(since "$t0")
+  # the hub restarts — first an ingress 503, then nothing listening
+  : > "$d/hub-503"; sleep 1.2
+  code=$(relay_ask frl1.A); [ "$code" = 200 ] || { WHY="hub 503: a pass the hub checked → $code (the relay refuses while the hub restarts)"; return 1; }
+  code=$(relay_ask frl1.U); case "$code" in 2*) WHY="hub 503: a never-checked pass → $code"; return 1 ;; esac
+  code=$(relay_ask frl1.R); case "$code" in 2*) WHY="hub 503: the revoked pass → $code"; return 1 ;; esac
+  code=$(relay_ask frl1.A /chatgpt/codex/x); case "$code" in 2*) WHY="hub 503: A on a prefix the hub never checked it for → $code"; return 1 ;; esac
+  kill "$RH" 2>/dev/null; wait "$RH" 2>/dev/null
+  code=$(relay_ask frl1.A); [ "$code" = 200 ] || { WHY="hub gone: a pass the hub checked → $code"; return 1; }
+  code=$(relay_ask frl1.U); case "$code" in 2*) WHY="hub gone: a never-checked pass → $code"; return 1 ;; esac
+  grep -q ' grace ' "$d/check.log" || { WHY="no grace line in the checker's log"; return 1; }
+  grep -q ' refused-unavailable ' "$d/check.log" || { WHY="no refused-unavailable line in the checker's log"; return 1; }
+  ! grep -q 'frl1\.' "$d/check.log" || { WHY="the checker's log carries a pass"; return 1; }
+  # the window is bounded: 10s after the hub last said yes, A is refused too
+  while ! le 10.5 "$(since "$tA")"; do sleep 0.2; done
+  code=$(relay_ask frl1.A); case "$code" in 2*) WHY="hub gone past the grace window: A still → $code"; return 1 ;; esac
+  # the hub comes back (same port): A passes again, asked for real
+  rm -f "$d/hub-503"; relay_hub "$d" "$hp" || { WHY="the fake hub did not come back"; return 1; }
+  until_ok 5 relay_is 200 frl1.A || { WHY="hub back: A still refused"; return 1; }
+  WHAT="入口 503 / 停掉期间：核过的通行证照常放行（记 grace），没核过的、被吊销的、换前缀的拒；吊销 ${SECS}s 内生效；窗口过了也拒；入口回来照常"
 }
 
 drill_cred_central_down() {
