@@ -192,7 +192,12 @@ eq "E: …with the clipped row's whole name first" " issue-1909 · 一个很长�
 T set-option -uw -t "$PANE" @fleet_on_list
 T set-option -w -t "$PANE" @fleet_view portal
 eq "E: the writing area in view → its keys" " ↵ 发出  ⇧↵ 换行  Tab 下一项  esc 回去" "$(hint)"
+T set-option -w -t "$PANE" @fleet_orch 1
+eq "E: …with an orchestrator: ⌘N 编排 and ⇧⇥ (issue #2146)" " ↵ 发出  ⇧↵ 换行  Tab 下一项  ⌘N 编排  ⇧⇥ 交给编排  esc 回去" "$(hint)"
+case "$(raw)" in *"range=user|key-User928]"*"⌘N"*"range=user|key-BTab]"*"⇧⇥"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the writing area's ⌘N / ⇧⇥ are key ranges (issue #2146)" "$(raw)" ;; esac
 T set-option -uw -t "$PANE" @fleet_view
+eq "E: …and in a session, ⌘N is still 新任务" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘/ 按键" "$(hint)"
+T set-option -uw -t "$PANE" @fleet_orch
 sl=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
 case "$sl" in "B ⌘N 新任务  ⌘P 跳转"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the hint after the badge" "$sl" ;; esac
 T resize-window -t "=$L:" -x 90 2>/dev/null; "$REAL_TMUX" -L "${L}o" resize-window -t =o -x 90 2>/dev/null; sleep 0.2
@@ -209,12 +214,14 @@ rows = [["hdr", "acme", "", "acme"], long, short]
 print(side.bar_hint(rows, "@3", "@4", 30))
 print(side.bar_hint(rows, "@4", "@4", 30))
 print(side.bar_hint(rows, "@4", side.PORTAL_KEY, 30))
+print(side.bar_hint(rows, "@4", side.PORTAL_KEY, 30, True))
 PY
 )
 eq "E: bar_hint — a clipped row's whole name (# doubled), the writing area as a view" \
-   "('', 'issue-1909 · 一个很长很长很长很长很长很长的名字 ##x')
-('', '')
-('portal', '')" "$out"
+   "('', 'issue-1909 · 一个很长很长很长很长很长很长的名字 ##x', '')
+('', '', '')
+('portal', '', '')
+('portal', '', '1')" "$out"
 # a tap on a range is that key; 「! n 等你」 is ⌘J
 grep -q "bind -n MouseDown1Status if -F '#{m:key-\*,#{mouse_status_range}}' { run-shell -C \"send-keys -K -c '#{client_name}' '#{s/^key-//:mouse_status_range}'\" }" "$CONF" \
   && grep -q "#{==:#{mouse_status_range},needs}' { run-shell -C \"send-keys -K -c '#{client_name}' User924\" }" "$CONF" \

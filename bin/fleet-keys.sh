@@ -194,6 +194,7 @@ EOF
   pkey "↵" "$(fleet_ui_t keys_page_c_send)"
   pkey "⇧↵  ⌥↵" "$(fleet_ui_t keys_page_c_nl)"
   pkey "Tab" "$(fleet_ui_t keys_page_c_tab)"
+  pkey "⇧⇥" "$(fleet_ui_t keys_page_c_btab)"
   pkey "space" "$(fleet_ui_t keys_page_c_space)"
   pkey "esc" "$(fleet_ui_t keys_page_c_esc)"
   pgroup "$(fleet_ui_t keys_page_mouse)"

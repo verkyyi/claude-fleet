@@ -26,7 +26,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "29"  # #1957: 「新任务」 wears the orchestrator · #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
+VIEW_VERSION = "30"  # #2146: @fleet_orch for the bar · #1957: 「新任务」 wears the orchestrator · #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -1331,7 +1331,9 @@ def open_menu(session, wid, env):
     this view keeps painting meanwhile."""
     # A row on another machine (`wid:…`) has one too (issue #1475): its title
     # names the machine (`<name> · 在 m4`), as the row's own @ mark does (#1780).
-    if wid.startswith("@") or (wid.startswith("wid:") and "/" in wid):
+    # 「新任务」 (the writing area's row) has one as well (issue #2146): 进编排会话
+    # and the row-less items — its tap stays the writing area.
+    if wid.startswith("@") or (wid.startswith("wid:") and "/" in wid) or wid == PORTAL_KEY:
         subprocess.Popen(["bash", str(BIN / "fleet-sidebar.sh"), "menu", session, wid],
                          env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
@@ -1669,26 +1671,29 @@ def hint_line(row, width, info=False):
     return None
 
 
-def bar_hint(rows, selected, current, width):
+def bar_hint(rows, selected, current, width, orch=False):
     """What the client's bar reads off the list (issue #1951, EPIC #1949 C2), as
     (view, name): view `portal` while the writing area (「新任务」, issue #1953) is
     in the right pane — the bar then says ITS keys — else ""; name = the
     highlighted row's whole name when the list clipped it (hint_line, issue
-    #1328 — the `?` row's old job), else "". A literal for tmux: `#` doubled."""
+    #1328 — the `?` row's old job), else "". A literal for tmux: `#` doubled.
+    The third, `1` while a machine runs the orchestrating session (issue #2146):
+    the writing area's bar then names ⌘N 编排 and ⇧⇥ — else ""."""
     view = "portal" if current == PORTAL_KEY else ""
     row = next((r for r in rows if r and r[0] != "hdr" and r[0] == selected), None)
     name = (hint_line(row, width) or "").strip()
-    return view, name.replace("#", "##")
+    return view, name.replace("#", "##"), "1" if orch else ""
 
 
 def publish_hint(window, hint, last):
-    """`@fleet_view` / `@fleet_hint_name` on the list's window — the bar's
-    format reads them (conf/tmux-shell.conf @fleet_hint) — only on change."""
+    """`@fleet_view` / `@fleet_hint_name` / `@fleet_orch` on the list's window —
+    the bar's format reads them (conf/tmux-shell.conf @fleet_hint) — only on
+    change."""
     if hint == last or not window:
         return last
-    view, name = hint
+    view, name, orch = hint
     cmds = []
-    for opt, val in (("@fleet_view", view), ("@fleet_hint_name", name)):
+    for opt, val in (("@fleet_view", view), ("@fleet_hint_name", name), ("@fleet_orch", orch)):
         cmds += (["set-option", "-w", "-t", window, opt, val] if val else
                  ["set-option", "-uw", "-t", window, opt]) + [";"]
     tmux(*cmds[:-1])
@@ -2910,7 +2915,8 @@ def ui(screen, session, worker, lock):
         # view is in the right pane, and the highlighted row's whole name when
         # the list clipped it — written only when it changes.
         if view == "live":
-            hint_last = publish_hint(window, bar_hint(rows, selected, current_row, width), hint_last)
+            hint_last = publish_hint(window, bar_hint(rows, selected, current_row, width,
+                                                          bool(STAGE and orch_state(session))), hint_last)
         if where < offset:
             offset = where
         elif where >= offset + page:

@@ -56,6 +56,11 @@
 #   O. (pure) fleet-history.sh drafts: a scratch book generation that holds a
 #      child's report is a draft of its day — unless its pfid is a session the
 #      writing area opened; a relayed row is no child; sends / started / the median
+# The direct key (issue #2146):
+#   P. ⌘N ON the writing area with an orchestrator: the list's jump to wid:U/orch,
+#      the stage on it, nothing pasted; ⌘N again: back to the writing area. No
+#      orch_fcs: ⌘N on the writing area changes nothing. 「新任务」's right-click
+#      menu: 进编排会话 on the same road (greyed, saying why, with none)
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -494,5 +499,38 @@ eq 'O: yesterday — the recycled number'"'"'s earlier generation, dated by its 
   "$yday	drafts=1	sends=0	started=0	start_median=-" "$(printf '%s\n' "$out" | sed -n 2p)"
 has 'O: --json' "$(FLEET_CONF_DIR="$DC" FLEET_COMPOSE_LOG="$DC/compose.ndjson" bash "$BIN/fleet-history.sh" drafts --days 1 --json)" '"drafts": 1, "sends": 3'
 
+# P. ⌘N twice (issue #2146): the writing area ⇄ the orchestrator, no draft carried
+settled
+orch 'done'
+st_ select-window -t "$pw"
+st_ send-keys -t "$pw" C-u
+st_ send-keys -t "$pw" -l '留在写作区的半句'
+sleep .3
+: > "$VIEW"; : > "$WORK/orch-in"
+type_ '\033[928~'
+CHECKS=$((CHECKS + 1)); n=0; while ! grep -qx 'wid:U/orch' "$VIEW" && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+grep -qx 'wid:U/orch' "$VIEW" || fail 'P: ⌘N on the writing area asked the list to jump to the orchestrator' "$(cat "$VIEW")"
+CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{@remote}')" != m4:U/orch ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+eq 'P: the stage shows the orchestrator' m4:U/orch "$(st_ display-message -p -t fcs-stage: '#{@remote}')"
+sleep .5
+eq 'P: …pasting nothing' '' "$(cat "$WORK/orch-in")"
+type_ '\033[928~'
+CHECKS=$((CHECKS + 1)); n=0; while [ "$(st_ display-message -p -t fcs-stage: '#{window_id}')" != "$pw" ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+eq 'P: ⌘N again: back to the writing area' "$pw" "$(st_ display-message -p -t fcs-stage: '#{window_id}')"
+has 'P: …the draft still there' "$(compose)" '留在写作区的半句'
+# …and 「新任务」's right-click menu (fleet-sidebar-menu.sh `menu <s> new`): 进编排会话
+# first, on the same road; none → greyed, with the reason
+pmenu() { FLEET_SHELL=1 bash -c 'BIN=$1; sess=$2; verb=menu; set -- menu "$2" new --print
+  . "$BIN/fleet-lib.sh"; . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-sidebar-menu.sh"' _ "$BIN" fcs 2>/dev/null; }
+m=$(pmenu)
+eq 'P: 「新任务」 has a menu, titled with its name' $'title\t新任务' "$(printf '%s\n' "$m" | head -1)"
+has 'P: …its first item goes to the orchestrator' "$(printf '%s\n' "$m" | sed -n 2p | cut -f1,2)" $'b\t进编排会话'
+has 'P: …by fleet-compose.py --orch' "$(printf '%s\n' "$m" | sed -n 2p | tr -d "'\\\\")" 'fleet-compose.py --orch fcs'
+rm -f "$FLEET_STATUS_G/orch_fcs"
+: > "$VIEW"
+type_ '\033[928~'
+sleep 1
+eq 'P: no orchestrator → ⌘N on the writing area changes nothing' "$pw|" "$(st_ display-message -p -t fcs-stage: '#{window_id}')|$(cat "$VIEW")"
+has 'P: none → greyed, saying why' "$(pmenu | sed -n 2p | cut -f1,2)" $'b\t-进编排会话 · 这台机器没有编排会话'
 [ "$FAIL" = 0 ] || { printf 'fleet-compose selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS"; exit 1; }
 printf 'fleet-compose selftest: PASS (%d checks)\n' "$CHECKS"

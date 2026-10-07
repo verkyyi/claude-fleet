@@ -337,6 +337,7 @@ def do(verb):
 # 消息 / 控制 / 其它. A new row action is a line here, a line in menu_keys and its
 # item in fleet-sidebar-menu.sh; nothing else lists it.
 COMMANDS = (
+    ("orch", "enter"),       # 进编排会话 — 「新任务」's menu / row-less (issue #2146)
     ("open", "enter"),       # 进入 — the proxy window (a row on another machine)
     ("pr", "enter"),         # 打开 PR
     ("message", "message"),  # 发消息…

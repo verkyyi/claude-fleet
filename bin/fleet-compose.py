@@ -19,6 +19,15 @@
                                           (The orchestrator's route is no --send:
                                           the draft is handed over on the stage —
                                           carry(), issue #1957.)
+    fleet-compose.py --orch <session> [--client C]
+                                          ⌘N again on the writing area (issue
+                                          #2146, fleet-shell.sh portal) and
+                                          「新任务」's menu: the stage straight
+                                          onto the orchestrating session, no
+                                          draft — carry()'s own switch; with
+                                          none (no orch_<session>), or no list to
+                                          jump with, one line on the client C and
+                                          exit 1
     fleet-compose.py payload <text-file> [--no-issue] [--repo R | --no-repo | --multi]
                                           the payload a ↵ on that text would write
                                           (title · body · attachments · repo), as
@@ -458,6 +467,20 @@ class Shell:
             return False
         self.run("set-option", "-pa", "-t", pane, "@sidebar_do", verb + " ", ";", "send-keys", "-t", pane, "F12")
         return True
+
+
+def to_orch(session, client=""):
+    """⌘N on the writing area / 进编排会话 (issue #2146): carry() with no text — the list's jump to
+    orch_<session>'s window, the road ⇧⇥ takes. Nothing to go to says so on
+    the client's line instead (never an error). 0 switched, 1 not."""
+    shell = Shell(session)
+    o = orchestrator(session)
+    if o and carry(shell, o, "")[0]:
+        return 0
+    msg = tr("compose_orch_nolist") if o else tr("compose_orch_none")
+    shell.run("display-message", *(["-c", client] if client else []), msg)
+    print(msg)
+    return 1
 
 
 def go_back(shell, prev):
@@ -967,6 +990,8 @@ def main(argv):
             print(json.dumps(data, ensure_ascii=False, sort_keys=True))
             return 0
         return send(argv[1], opts["--repo"], opts["--node"], opts["--reap"], mode)
+    if argv[:1] == ["--orch"] and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--client"):
+        return to_orch(argv[1], argv[3] if len(argv) == 4 else "")
     session = ""
     if argv[:1] == ["--session"] and len(argv) >= 2:
         session = argv[1]

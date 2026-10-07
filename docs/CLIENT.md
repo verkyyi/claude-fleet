@@ -17,6 +17,7 @@ keyboard on the list.
 | every key | ⌘/ | prefix ? | |
 | quick open | ⌘P | prefix / | type a few letters, ↵ |
 | a new task: the writing area on the right | ⌘N | prefix c | below |
+| the orchestrating session ⇄ the writing area (issue #2146) | ⌘N again | prefix c again | only with an orchestrator; also the 「新任务」 row's right-click menu |
 
 **Quick open** lists every session — one folded under its parent too. An empty
 query lists the most recent first and the one in view last, so ⌘P ↵ is «the one
