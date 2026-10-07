@@ -108,6 +108,13 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
+	// Over the person's budget (claude-fleet#1977): refused like a pass,
+	// with its own code — the proxy answers it without retrying.
+	if st, err := s.personBudgetState(c.Principal, s.budgetClock()); err == nil && st.Over {
+		out.Valid, out.Error, out.Reason = false, PersonBudgetExceeded, st.Message
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	b, err := s.sessionBind(c.WorkerID, c.Principal, req.Provider, now)
 	if err != nil {
 		out.Valid, out.Error, out.Reason = false, "no_credential", err.Error()

@@ -24,6 +24,7 @@ type fakeHub struct {
 	calls int
 	bind  map[string]string // pass → account
 	bad   map[string]string // pass → reason
+	over  map[string]string // pass → over-budget line (claude-fleet#1977)
 }
 
 func (h *fakeHub) Resolve(_ context.Context, pass, provider string) (Resolution, error) {
@@ -32,6 +33,9 @@ func (h *fakeHub) Resolve(_ context.Context, pass, provider string) (Resolution,
 	h.calls++
 	if h.down {
 		return Resolution{}, ErrHubUnavailable
+	}
+	if why, ok := h.over[pass]; ok {
+		return Resolution{Valid: false, Error: PersonBudgetExceeded, Reason: why, ID: "sc_over", Principal: "p-over"}, nil
 	}
 	if why, ok := h.bad[pass]; ok {
 		return Resolution{Valid: false, Reason: why, ID: "sc_bad"}, nil

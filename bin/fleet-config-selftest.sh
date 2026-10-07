@@ -26,6 +26,11 @@
 #                 same file again sends nothing; a file with a credential is
 #                 refused naming the field; --merge only adds; a base that moved
 #                 is refused; export with no hub exits 3
+#   L. budget     per-person budgets (issue #1977), behind FLEET_BUDGET_HUB_CMD:
+#                 people grows the 5h / 7-day usage columns (⛔ = over); budget
+#                 PERSON 5h=… PUTs fleet.person_budget.<principal> (a display
+#                 name resolves to it), `off` clears it; a hub that does not know
+#                 budgets leaves `people` byte for byte
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 real="$BIN/fleet-config.py"
@@ -288,6 +293,52 @@ touch "$WORK/hub2/bump"; v23=$(ver2)
 out=$(cfg2 import "$WORK/exp.json" --yes 2>&1); rc=$?
 [ $rc = 1 ] && [ "$(ver2)" = $((v23 + 1)) ] && printf '%s' "$out" | grep -q '重跑' \
   && ok "K a base that moved is refused (exit 1), not written over" || bad "K 409: rc=$rc v=$(ver2) $out"
+
+# ── L — per-person budgets (issue #1977) ─────────────────────────────────────
+cat > "$WORK/budgethub.py" <<'EOF'
+import json, os, sys
+d = os.environ.get("HUBDIR", ""); m, path = sys.argv[1], sys.argv[2]
+body = json.load(sys.stdin)
+if os.environ.get("OLDHUB"):
+    print(json.dumps({"status": 400, "code": "INVALID_ARGUMENT", "message": "Unknown Fleet tool"})); sys.exit(0)
+if path.startswith("/v1/fleet/person-usage"):
+    rows = [{"principal": "wx-alice", "display_name": "Alice", "used_5h": 250000, "limit_5h": 200000,
+             "used_week": 900000, "limit_week": 0, "over": True, "window": "5h",
+             "message": "已达个人额度：近 5 小时已用 250k / 上限 200k token（person_budget_exceeded）"},
+            {"principal": "wx-carol", "used_5h": 1200, "used_week": 1200, "over": False}]
+    if "principal=" in path:
+        rows = [r for r in rows if r["principal"] == path.split("principal=")[1]]
+    print(json.dumps({"status": 200, "people": rows})); sys.exit(0)
+if m == "PUT" and path == "/v1/fleet/settings":
+    open(os.path.join(d, "put.json"), "w").write(json.dumps(body))
+    print(json.dumps({"status": 200})); sys.exit(0)
+print(json.dumps({"status": 400, "code": "INVALID_ARGUMENT", "message": "Unknown Fleet tool"}))
+EOF
+BCMD="HUBDIR='$WORK/hub' '$PY' '$WORK/budgethub.py'"
+bcfg() {
+  env -i PATH="$PATH" HOME="$H" USER=selftestuser FLEET_CONF_DIR="$CONF" CODEX_HOME="$H/.codex" OLDHUB="${OLDHUB:-}" \
+    FLEET_CONFIG_NO_SYNC=1 FLEET_PERSON_HUB_CMD="$HUBCMD \"\$@\"" FLEET_BUDGET_HUB_CMD="$BCMD \"\$@\"" "$PY" "$C" "$@" 2>&1
+}
+out=$(bcfg people); rc=$?
+{ [ $rc = 0 ] && printf '%s\n' "$out" | grep 'wx-alice' | grep -q '⛔250k/200k *900k' \
+  && printf '%s\n' "$out" | grep 'wx-bob' | grep -q '  0 ' && printf '%s\n' "$out" | grep -q '^wx-carol.*1200'; } \
+  && ok "L people: 5h / 7-day usage against the budget, ⛔ on the window that is over; usage-only people listed" \
+  || bad "L people: rc=$rc $out"
+out=$(bcfg budget Alice 5h=200k week=2M); rc=$?
+[ $rc = 0 ] && [ "$(cat "$WORK/hub/put.json")" = '{"key": "fleet.person_budget.wx-alice", "value": "5h=200k,week=2M"}' ] \
+  && printf '%s' "$out" | grep -q '已达个人额度' \
+  && ok "L budget Alice 5h=… week=…: the display name resolves, one PUT of fleet.person_budget.wx-alice" \
+  || bad "L budget set: rc=$rc $(cat "$WORK/hub/put.json" 2>/dev/null) $out"
+out=$(bcfg budget wx-alice off); rc=$?
+[ $rc = 0 ] && grep -q '"value": ""' "$WORK/hub/put.json" && ok "L budget … off clears it" || bad "L off: rc=$rc $out"
+out=$(bcfg budget); rc=$?
+[ $rc = 0 ] && printf '%s' "$out" | grep -q 'wx-carol' && ok "L budget: everyone's usage" || bad "L list: rc=$rc $out"
+# a hub before #1977: people exactly as before, budget says why it cannot
+before=$(cfg people)
+after=$(OLDHUB=1 bcfg people)
+[ "$before" = "$after" ] && ok "L a hub with no budgets: people byte for byte" || bad "L degenerate: $after"
+out=$(OLDHUB=1 bcfg budget); rc=$?
+[ $rc = 1 ] && printf '%s' "$out" | grep -q '还不认按人额度' && ok "L budget on such a hub → exit 1, says why" || bad "L old hub: rc=$rc $out"
 
 [ "$fail" = 0 ] && echo "fleet-config-selftest: PASS" || echo "fleet-config-selftest: FAIL"
 exit "$fail"
