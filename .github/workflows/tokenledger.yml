@@ -82,10 +82,10 @@ jobs:
           cache: true
           cache-dependency-path: tokenledger/go.sum
       - run: ../bin/fleet-client-pack.sh
-      - name: store + api tests on Postgres
+      - name: store + api + leader tests on Postgres
         run: |
           set -o pipefail
-          go test -race -count=1 -v ./internal/store/... ./internal/api/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)'
+          go test -race -count=1 -v ./internal/store/... ./internal/api/... ./internal/leader/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
       - name: skip 0
         run: |
           if grep -E '^ *(SKIP-PG|--- SKIP)' /tmp/pg.log; then
@@ -101,7 +101,7 @@ jobs:
             echo "passed: $(grep -c '^ *--- PASS' /tmp/pg.log) · failed: $(grep -c '^ *--- FAIL' /tmp/pg.log) · skipped: $(grep -cE '^ *(--- SKIP|SKIP-PG)' /tmp/pg.log)"
             echo
             echo '```'
-            grep -E '^(pg leg|  SKIP-PG|ok|FAIL)' /tmp/pg.log || true
+            grep -E '^(pg leg|  SKIP-PG|ok|FAIL)|leader_test.go:[0-9]+: (handover|job )' /tmp/pg.log || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

@@ -19,6 +19,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/leader"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -183,6 +184,11 @@ type Server struct {
 	// Spot starts and releases SPOT execution nodes in the hub's cluster
 	// (claude-fleet#1428); nil when CCQUOTA_FLEET_SPOT_IMAGE is unset.
 	Spot *SpotController
+
+	// Elector says which replica runs each background loop when two hubs
+	// share one Postgres database (claude-fleet#2123). nil — every hub on
+	// SQLite — leads everything, exactly as before.
+	Elector *leader.Elector
 
 	// nodes holds the open node control channels.
 	nodes nodeConns

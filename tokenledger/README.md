@@ -211,6 +211,14 @@ What each replica keeps in its own memory, and why that is acceptable:
 | client leases, device logins, live sessions, counters | `fleet_client.go`, `fleet_certs.go`, `live.go` | outside the node links; EPIC #2119's other members |
 | a revoked node token | `fleet_node_revoke.go` | the holder closes the link at the node's next message (every message re-checks the token) |
 
+**Two hubs on one Postgres** (claude-fleet#2123): each background loop — the
+daily prune, node alerts, the SPOT controller — runs only on the replica holding
+its Postgres advisory lock (`internal/leader`); the lock goes with that
+replica's connection, and the other takes it within 5 s. A credential refresh
+takes a per-account lock across replicas, so one account is never refreshed
+twice at once. Log lines and refresh audit rows carry `replica=<name>`
+(`CCQUOTA_REPLICA`, else `HOSTNAME`). On SQLite the one hub leads everything.
+
 **Enroll each endpoint** (on the hub — the token is shown once):
 
 ```bash
