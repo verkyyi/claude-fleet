@@ -85,9 +85,18 @@ func (c *Client) FetchForModel(ctx context.Context, token, m string) (*model.Lim
 		`{"model":%q,"max_tokens":%d,"messages":[{"role":"user","content":"."}]}`,
 		m, probeTokens))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, messagesEndpoint, body)
+	url := messagesEndpoint
+	if c.MessagesURL != "" {
+		url = c.MessagesURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
 		return nil, err
+	}
+	if c.Decorate != nil {
+		if err := c.Decorate(req); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		}
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("anthropic-beta", oauthBeta)

@@ -1306,6 +1306,23 @@ any machine's memory and no admin node has to be online.
   answer (`invalid_grant`, its 403) is the answer, never a reason to fall back.
 - A Claude refresh keeps the node path: the relay's token route is OpenAI's.
 
+**The hub reads the pool's quota itself (claude-fleet#2169).** With
+`CCQUOTA_FLEET_HUB_QUOTA=relay` (plus the relay URL and the session pass key;
+`CCQUOTA_FLEET_HUB_QUOTA_INTERVAL`, default 5m) the hub reads every pool
+credential in its vault — Claude through the relay's `/anthropic/v1/messages`
+(the node probe's one-token request), Codex through `/chatgpt/wham/usage` with
+the vault's access token — and files each reading under the credential's own
+`account_uuid` (Codex: id_token; Claude: as imported, or set with
+`POST /v1/fleet/credentials` `action: bind`), else the one account its label
+names, else nowhere (never a new `win_`). Readings are rows with
+`endpoint_id = hub:quota`; a fresh one (two rounds, ≥10 min) is what
+`/v1/limits` shows, else the newest node reading with `read_via: node` and a
+`read_note` saying why. Its relay pass is `frq1.` — two routes only, accepted
+only while this is on. Unset/`off`: nothing read, nothing signed, no
+`read_via` — byte for byte as before. The Codex quota lease is no longer
+renewed to a collector that reports ≥3 failed reads in a row or delivered no
+complete read for 15 minutes (or two lease terms); it is benched for 30.
+
 **A hub-leased Codex home is refreshed by nobody on the machine
 (claude-fleet#1666).** Its `auth.json` carries the `hub-managed` placeholder in
 place of a refresh token; `ccquota codex list --json` reports it as

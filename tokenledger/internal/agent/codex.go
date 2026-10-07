@@ -40,7 +40,11 @@ type codexCollector struct {
 	result         codex.Result
 	resultAt       time.Time
 	pollError      string
-	live           []liveSession // snapshots guarded by mu; scanner itself has one owner
+	// failStreak counts account reads that failed in a row; the quota
+	// lease request carries it so a collector that keeps failing gives the
+	// account up to another (claude-fleet#2169).
+	failStreak int
+	live       []liveSession // snapshots guarded by mu; scanner itself has one owner
 }
 
 func (a *Agent) codexProfileSnapshot() []*codexCollector {
@@ -115,7 +119,7 @@ func (p *codexCollector) owns(t scan.CodexTelemetry, at time.Time) bool {
 	return p.binding.Account != "" && t.Provider == "openai" && !t.StartedAt.IsZero() && !t.StartedAt.Before(p.binding.Since) && !at.Before(p.binding.Since)
 }
 
-func (p *codexCollector) poll(ctx context.Context, auth *codex.Auth, binary string, interval time.Duration, once bool, autoRefresh bool, lease func() bool) {
+func (p *codexCollector) poll(ctx context.Context, auth *codex.Auth, binary string, interval time.Duration, once bool, autoRefresh bool, lease func(failures int) bool) {
 	if auth == nil || auth.Mode != "subscription" {
 		return
 	}
@@ -145,7 +149,10 @@ func (p *codexCollector) poll(ctx context.Context, auth *codex.Auth, binary stri
 				return
 			}
 		}
-		if (auth.ExpiresAt.IsZero() || auth.ExpiresAt.After(time.Now())) && lease != nil && !lease() {
+		p.mu.Lock()
+		streak := p.failStreak
+		p.mu.Unlock()
+		if (auth.ExpiresAt.IsZero() || auth.ExpiresAt.After(time.Now())) && lease != nil && !lease(streak) {
 			p.mu.Lock()
 			p.polling = false
 			p.pollAccount = auth.Identity.AccountUUID
@@ -174,8 +181,10 @@ func (p *codexCollector) poll(ctx context.Context, auth *codex.Auth, binary stri
 		p.pollAccount = auth.Identity.AccountUUID
 		p.polling = false
 		p.pollError = ""
+		p.failStreak = 0
 		if err != nil {
 			p.pollError = err.Error()
+			p.failStreak++
 		}
 	}
 	if once {
@@ -239,7 +248,9 @@ func (a *Agent) cycleCodexProfile(ctx context.Context, p *codexCollector) error 
 	if a.serverInterval > interval {
 		interval = a.serverInterval
 	}
-	p.poll(ctx, auth, codex.Binary(a.cfg.Home, a.cfg.CodexBinary), jitter(interval), a.cfg.Once, !a.cfg.CodexDisableRefresh, func() bool { return a.codexQuotaLease(ctx, current.AccountUUID, p.id, interval) })
+	p.poll(ctx, auth, codex.Binary(a.cfg.Home, a.cfg.CodexBinary), jitter(interval), a.cfg.Once, !a.cfg.CodexDisableRefresh, func(failures int) bool {
+		return a.codexQuotaLease(ctx, current.AccountUUID, p.id, interval, failures)
+	})
 	events, err := p.scanner.Scan()
 	if err != nil {
 		return fmt.Errorf("scan Codex transcripts: %w", err)
@@ -429,8 +440,8 @@ func (p *codexCollector) bindObserved(account string, auth *codex.Auth, now time
 	return p.bind(account, at)
 }
 
-func (a *Agent) codexQuotaLease(ctx context.Context, account, profile string, interval time.Duration) bool {
-	b, _ := json.Marshal(map[string]any{"account_uuid": account, "profile_id": profile, "seconds": int(interval.Seconds() * 1.5)})
+func (a *Agent) codexQuotaLease(ctx context.Context, account, profile string, interval time.Duration, failures int) bool {
+	b, _ := json.Marshal(map[string]any{"account_uuid": account, "profile_id": profile, "seconds": int(interval.Seconds() * 1.5), "failures": failures})
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.HubURL+"/v1/collectors/quota-lease", bytes.NewReader(b))

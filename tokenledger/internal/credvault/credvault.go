@@ -415,6 +415,38 @@ func (v *Vault) AccountUUID(c store.Credential) string {
 	return s.AccountUUID
 }
 
+// BindAccountUUID records which usage account an EXISTING credential belongs
+// to (claude-fleet#2169): a Claude setup token imported before account_uuid
+// was recorded cannot say, and the hub's own quota reading files it under
+// this. The sealed secret is opened, the field set, and sealed back at the
+// same version — the token itself is untouched and never leaves here.
+func (v *Vault) BindAccountUUID(principal, provider, account, uuid string) error {
+	if provider == GitHub {
+		return errors.New("a GitHub credential has no usage account")
+	}
+	sl, err := v.sealer()
+	if err != nil {
+		return err
+	}
+	l := v.lock(principal, provider, account)
+	l.Lock()
+	defer l.Unlock()
+	c, err := v.Store.Credential(principal, provider, account)
+	if err != nil {
+		return err
+	}
+	var s Secret
+	if err := sl.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
+		return err
+	}
+	s.AccountUUID = uuid
+	blob, err := sl.Seal(s, principal, provider, account, "secret")
+	if err != nil {
+		return err
+	}
+	return v.Store.RewriteSecret(principal, provider, account, c.Version, blob, v.now())
+}
+
 // ErrRefreshFailed wraps a refresh that failed with no usable token left.
 var ErrRefreshFailed = errors.New("credential refresh failed")
 

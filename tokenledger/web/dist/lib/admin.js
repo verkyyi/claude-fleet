@@ -139,6 +139,10 @@ export function subscriptions({ limits, accounts, creds, paused, live } = {}) {
       plan: (pa.limits && pa.limits.plan) || a.subscription_type || '',
       h5: w.h5, h7: w.h7, available: !!(pa.limits && pa.limits.available !== false), reason: (pa.limits && pa.limits.reason) || '',
       sessions: n[pa.account_uuid] || 0, cred: cred || null, paused: !!(cred && pausedSet.has(cred.account)), managed: !!cred,
+      // When the reading was taken, and by whom — the hub through the relay or
+      // a node — with why the hub's is missing (claude-fleet#2169).
+      readAt: (pa.limits && pa.limits.observed_at) || '', readVia: (pa.limits && pa.limits.read_via) || '',
+      readNote: (pa.limits && pa.limits.read_note) || '',
     });
   }
   for (const c of pool) {

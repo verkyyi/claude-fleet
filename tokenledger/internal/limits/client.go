@@ -41,6 +41,13 @@ const maxBody = 1 << 20
 type Client struct {
 	HTTP     *http.Client
 	Endpoint string
+
+	// MessagesURL, when set, is where FetchForModel posts its probe instead
+	// of the Anthropic API — the hub's own reading through the Singapore
+	// relay's /anthropic/ route (claude-fleet#2169). Decorate, when set, adds
+	// what that route needs (the hub's relay pass) to each probe request.
+	MessagesURL string
+	Decorate    func(*http.Request) error
 }
 
 // New returns a Client with sane timeouts.
