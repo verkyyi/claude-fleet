@@ -15,7 +15,8 @@
 #   stale     a stale current-repo file (the retired picker's, #1034) filters nothing
 #   restore   dash-restore-session.sh resumes a row in the repo its target names;
 #             dash-open-pr.sh opens THAT repo's PR
-#   one-repo  fleet D: no legend, no badge, no `@` on a target
+#   one-repo  fleet D: one road (#1940) — every target ends in `@<repo>` as with 2+,
+#             but no legend and no badge (one repo has nothing to tell apart)
 #
 # No tmux server, no network: tmux + gh are shimmed to fail, and the restore leg
 # runs a copy of the restorer against a stub fleet-history.sh.
@@ -139,8 +140,8 @@ out=$(FLEET_SESSION=$D bash "$H" list --repo o/c 2>&1)
 has "one-repo: list" "$out" "gamma-twelve"
 hasnt "one-repo: no legend" "$out" "repos:"
 out=$(rows "$D"); vis=$(printf '%s\n' "$out" | strip)
-has "one-repo: bare target" "$out" "landed:101"$'\x1f'
-hasnt "one-repo: no @ on a target" "$out" "@o/"
+has "one-repo: the target names its repo" "$out" "landed:101@o/c"$'\x1f'
+hasnt "one-repo: no other repo on a target" "$out" "@o/a"
 has "one-repo: no badge" "$vis" "  gamma-twelve"
 leg one-repo
 

@@ -70,22 +70,21 @@ FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
 # BOTH phases (this runs before the phase split), so phase 2 inside the popup sees it
 # too. Repo resolution below still wins via CF_REPO.
 fleet_load_conf "$FLEET_SESSION"
-# repo: CF_REPO (passed through the popup) wins; else the fleet's cached repo,
-# else the global FLEET_REPO — matching the backlog panel's resolution.
-# A fleet hosting 2+ repos (issue #794): CF_REPO, else none (the view is always
-# `all`, #1034) — an issue always belongs to one repo — so the popup ASKS first
-# (fleet-repo-ask.sh, phase 2 below); only the background create pass,
-# which the popup hands a repo, still refuses without one.
-MULTI=0; fleet_multirepo "$FLEET_SESSION" && MULTI=1
+# repo — ONE road however many repos the fleet hosts (issues #794, #1940):
+# CF_REPO (passed through the popup), else the caller's own / the fleet's only
+# repo (fleet_backlog_repo; a fleet hosting none falls back to the global
+# FLEET_REPO), else the highlighted row's (issue #997: a session's repo or a repo
+# heading's, via the one resolver the sidebar shares), else the popup ASKS
+# (fleet-repo-ask.sh, phase 2 below) — an issue always belongs to one repo. Only
+# the background create pass, which the popup hands a repo, refuses without one —
+# and a fleet hosting no repo, which has nothing to ask.
+HOSTED=$(fleet_repos "$FLEET_SESSION")
 REPO=$(fleet_backlog_repo "$FLEET_SESSION")
-# Under `all`, the hub's highlighted row names the repo (issue #997): a session's
-# repo or a repo heading's, via the one resolver the sidebar shares. `none` (a
-# no-repo row) and anything unresolved still ask below — an issue needs a repo.
-if [ -z "$REPO" ] && [ "$MULTI" = 1 ] && [ -n "$sel" ]; then
+if [ -z "$REPO" ] && [ -n "$sel" ]; then
   REPO=$(fleet_selection_repo "$FLEET_SESSION" "$sel")
   [ "$REPO" = none ] && REPO=''
 fi
-if [ -z "$REPO" ] && { [ "$MULTI" = 0 ] || [ -n "$title_file" ]; }; then
+if [ -z "$REPO" ] && { [ -z "$HOSTED" ] || [ -n "$title_file" ]; }; then
   fleet_ui_fail "backlog: no repo resolved — cannot create issue"; exit 1
 fi
 command -v gh >/dev/null 2>&1 || { fleet_ui_fail "gh not found — cannot create issue"; exit 1; }
@@ -130,8 +129,9 @@ create_issue() {
       # (acceptance (c)). --title names the window after the WORK without depending on
       # the optimistic row surviving the collector refetch (issue #216).
       # No "filed ✓" line (issue #1618): the new row / window is the answer.
-      # --repo only where it is needed (issue #794): a one-repo fleet's call is unchanged.
-      _sr=''; [ "$MULTI" = 1 ] && _sr=$REPO
+      # --repo: the issue's own (issue #794) — but a fleet hosting no repo has
+      # none to name, and dash-issue-session.sh refuses one it does not host.
+      _sr=''; [ -n "$HOSTED" ] && _sr=$REPO
       # A bg pass (the popup's confirm, fleet_bg) has no $TMUX_PANE: say it is the
       # operator's, as detection always read it there — the spawn refuses an
       # unstated origin from a lost pane (issue #1355). From a pane, detect as before.
@@ -191,14 +191,15 @@ if [ "$key" = ctrl-s ]; then
   # is never interpolated into the run-shell string. --origin hub: this popup is
   # the hub's ⌃s, not the row's child (#896). --node (one token, checked above):
   # the machine this popup was opened for; dash-raw-session.sh places it there
-  # (#1541), toasting its own outcome. --repo only where it is needed (#794).
+  # (#1541), toasting its own outcome. --repo: the repo the popup resolved (#794),
+  # in every fleet that hosts one.
   nfarg=''
   if [ -n "$title" ]; then
     nf=$(mktemp "${TMPDIR:-/tmp}/dash-raw.XXXXXX") || { fleet_ui_fail "backlog: cannot stage the scratch name"; exit 1; }
     printf '%s' "$title" > "$nf"
     nfarg=" --name-file='$nf'"           # the mktemp path has no metachars
   fi
-  rarg=''; [ "$MULTI" = 1 ] && rarg=" --repo='$REPO'"   # owner/name, as the create's CF_REPO above
+  rarg=''; [ -n "$HOSTED" ] && rarg=" --repo='$REPO'"   # owner/name, as the create's CF_REPO above
   fleet_bg "bash '$BIN/dash-raw-session.sh' --origin hub$nfarg${node:+ --node=$node}$rarg"
   exit 0
 fi

@@ -179,34 +179,38 @@ landed_fold_file() { # [<slug>]
 }
 
 # --- the merged landed view (issue #804) ---------------------------------------
-# A fleet hosting 2+ repos keeps one ledger PER REPO (landed_<slug>.tsv). The
-# landed view (`rows`, `fold`) and `list` merge every repo on screen into ONE
-# newest-first list — every hosted repo, under `all` — and each row keeps its
-# repo: a leading column on the stream, the `@<repo>` on its target (so a resume
-# lands in its own repo), and a short repo badge on the row, the live dash's own
-# (#793).
+# Every hosted repo keeps its own ledger (landed_<slug>.tsv). The landed view
+# (`rows`, `fold`) and `list` merge every hosted repo into ONE newest-first list —
+# however many the fleet hosts (issue #1940: one road) — and each row keeps its
+# repo: a leading column on the stream and the `@<repo>` on its target (so a
+# resume lands in its own repo).
 # Inside the merged view every session key is REPO-QUALIFIED, `<slug>:issue-<N>`
-# — the spelling a multi-repo spawn already stamps into @origin (#789) — so two
-# repos' `issue-12` never join, and a parent in ANOTHER hosted repo still nests
-# its child. A bare origin (a row recorded before its fleet went multi-repo) is
+# — the spelling every spawn stamps into @origin (#789, #1939) — so two repos'
+# `issue-12` never join, and a parent in ANOTHER hosted repo still nests its
+# child. A bare origin (a row recorded before keys carried their repo) is
 # qualified with the row's own repo on the way in.
-# One-repo fleet: LANDED_MERGED=0, the stream is that one ledger, keys stay bare
-# and every renderer takes the path it always took, byte for byte.
-LANDED_MERGED=0; LANDED_REPOS=''; LANDED_SHORTMAP=$'\n'
+# LANDED_BADGE=1 when the fleet hosts 2+ repos: only then does a row wear its
+# repo's short badge (and `list` its legend + repo column, its filter the repo
+# name), the live dash's own #793 rule — one repo has nothing to tell apart.
+# A fleet hosting NO repo (or a pinned ledger) has one ledger and nothing to
+# qualify with: LANDED_MERGED=0, keys bare.
+LANDED_MERGED=0; LANDED_BADGE=0; LANDED_REPOS=''; LANDED_SHORTMAP=$'\n'
 landed_scope() { # merges every hosted repo
-  LANDED_MERGED=0; LANDED_REPOS=''; LANDED_SHORTMAP=$'\n'
+  LANDED_MERGED=0; LANDED_BADGE=0; LANDED_REPOS=''; LANDED_SHORTMAP=$'\n'
   [ -z "${FLEET_HISTORY_LEDGER:-}" ] || return 0     # a pinned ledger IS one ledger
-  [ -n "${FLEET_SESSION:-}" ] && command -v fleet_multirepo >/dev/null 2>&1 \
-    && fleet_multirepo "$FLEET_SESSION" || return 0
-  LANDED_MERGED=1
-  local r s sh
+  [ -n "${FLEET_SESSION:-}" ] && command -v fleet_repo_shorts >/dev/null 2>&1 || return 0
+  local r s sh n=0
   while IFS=$'\t' read -r r s sh; do
     [ -n "$r" ] || continue
     LANDED_SHORTMAP+="$s"$'\t'"$sh"$'\n'
     LANDED_REPOS+="$r"$'\n'
+    n=$((n + 1))
   done <<EOF
 $(fleet_repo_shorts "$FLEET_SESSION")
 EOF
+  [ "$n" -gt 0 ] && LANDED_MERGED=1
+  [ "$n" -gt 1 ] && LANDED_BADGE=1
+  return 0
 }
 # lslug_v <owner/name> → $lslug, fleet_slug's spelling without the fork (the
 # dash's rslug_v idiom) — this runs per row.
@@ -217,8 +221,9 @@ lshort_v() { lshort=${LANDED_SHORTMAP#*$'\n'"$1"$'\t'}
 # landed_stream <repo> [filter] → `<repo>\t<ledger row>` per row, newest first.
 # <repo> is the one-repo fleet's; merged, it is ignored and every LANDED_REPOS
 # ledger is read, its col-11 origin qualified, and the whole set sorted by
-# timestamp — stable, so same-second rows keep their repo's own order. Merged,
-# the substring filter also sees the repo, so `list tokenledger` narrows to it.
+# timestamp — stable, so same-second rows keep their repo's own order. With 2+
+# repos the substring filter also sees the repo, so `list tokenledger` narrows to
+# it; with one, it filters the ledger row as it always did.
 landed_stream() {
   if [ "$LANDED_MERGED" = 0 ]; then
     # An origin recorded since issue #1939 carries its repo (`<slug>:scratch-6`);
@@ -229,11 +234,11 @@ landed_stream() {
       { print r, $0 }'
     return 0
   fi
-  if [ -n "${2:-}" ]; then landed_stream "${1:-}" | grep -iF -- "$2"; return 0; fi
+  if [ -n "${2:-}" ] && [ "$LANDED_BADGE" = 1 ]; then landed_stream "${1:-}" | grep -iF -- "$2"; return 0; fi
   local r
   while IFS= read -r r; do
     [ -n "$r" ] || continue
-    read_ledger "$r" | awk -F'\t' -v OFS='\t' -v r="$r" -v s="$(fleet_slug "$r")" '
+    read_ledger "$r" "${2:-}" | awk -F'\t' -v OFS='\t' -v r="$r" -v s="$(fleet_slug "$r")" '
       NF >= 11 && $11 ~ /^(issue|scratch)-/ { $11 = s ":" $11 } { print r, $0 }'
   done <<EOF | LC_ALL=C sort -s -t"$(printf '\t')" -k2,2r
 $LANDED_REPOS
@@ -643,9 +648,8 @@ cmd_list() {
   while [ $# -gt 0 ]; do
     case "$1" in --repo) repo="${2:-}"; shift 2;; --all) all=1; shift;; --local) lonly=1; shift;; *) filter="$1"; shift;; esac
   done
-  # Every hosted repo (issue #804) with `--all`, or with no --repo at all in a
-  # fleet hosting 2+ repos; `--repo R` stays that one ledger. One-repo fleet: the
-  # merge never switches on, and the list below is the one it always printed.
+  # Every hosted repo (issue #804) with `--all`, or with no --repo at all — one
+  # road however many the fleet hosts (#1940); `--repo R` stays that one ledger.
   if [ -n "$all" ] || [ -z "$repo" ]; then
     [ -n "${FLEET_SESSION:-}" ] || FLEET_SESSION=$(fleet_current_session 2>/dev/null)
     landed_scope
@@ -677,9 +681,9 @@ cmd_list() {
   # than a raw ISO timestamp (issue #228), so the CLI list matches the dash's
   # last-activity column. Per-row (a bash loop, not the one-shot awk) since the
   # ISO→relative conversion needs fleet_epoch_from_iso + fleet_reltime.
-  # Merged: one legend line first — which repo each badge names, so a row can be
+  # 2+ repos: one legend line first — which repo each badge names, so a row can be
   # resumed with its repo's --repo/--main (fleet_load_repo_conf <sess> <repo>).
-  if [ "$LANDED_MERGED" = 1 ]; then
+  if [ "$LANDED_BADGE" = 1 ]; then
     local lg='' lr lsh
     while IFS=$'\t' read -r lr _ lsh; do [ -n "$lr" ] && lg="${lg:+$lg · }$lsh=$lr"; done <<EOF
 $(fleet_repo_shorts "$FLEET_SESSION")
@@ -698,8 +702,8 @@ EOF
     # glyph tells landed (✓) from closed-unlanded (✗); empty state == legacy landed.
     local glyph="✓"; [ "$state" = "closed-unlanded" ] && glyph="✗"
     # key cell: `#<issue>` for a worker, `~<N>` for a scratch (#466) — same width.
-    # Merged (issue #804): a repo column after it — the row's short badge.
-    if [ "$LANDED_MERGED" = 1 ]; then
+    # 2+ repos (issue #804): a repo column after it — the row's short badge.
+    if [ "$LANDED_BADGE" = 1 ]; then
       local lslug lshort; lslug_v "$rrepo"; lshort_v "$lslug"
       printf '%s %-5s  %-4s  %-8s  %-44s  PR %-5s  %-7s  %s\n' \
         "$glyph" "$(key_label "$iss")" "$lshort" "$rel" "$title" "$pr" "$short" "$smry"
@@ -1025,7 +1029,7 @@ cmd_rows() {
     # repo's short tag first — the live dash's #793 badge, same place, same ASCII
     # clamp (so ${#} stays its width).
     local repod=''
-    if [ "$LANDED_MERGED" = 1 ]; then lshort_v "$lslug"; repod=${lshort//[^A-Za-z0-9._ ?-]/}; fi
+    if [ "$LANDED_BADGE" = 1 ]; then lshort_v "$lslug"; repod=${lshort//[^A-Za-z0-9._ ?-]/}; fi
     local avail=$(( USABLE - LEFTW - RIGHTW - 1 )); [ "$avail" -lt 0 ] && avail=0
     [ -n "$repod" ] && { avail=$(( avail - ${#repod} - 1 )); [ "$avail" -lt 0 ] && avail=0; }
     [ -n "$tagd" ] && { avail=$(( avail - ${#tagd} - 1 )); [ "$avail" -lt 0 ] && avail=0; }
