@@ -196,7 +196,7 @@ T set-option -w -t "$PANE" @fleet_orch 1
 eq "E: …with an orchestrator: ⌘N 编排 and ⇧⇥ (issue #2146)" " ↵ 发出  ⇧↵ 换行  Tab 下一项  ⌘N 编排  ⇧⇥ 交给编排  esc 回去" "$(hint)"
 case "$(raw)" in *"range=user|key-User928]"*"⌘N"*"range=user|key-BTab]"*"⇧⇥"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the writing area's ⌘N / ⇧⇥ are key ranges (issue #2146)" "$(raw)" ;; esac
 T set-option -uw -t "$PANE" @fleet_view
-eq "E: …and in a session, ⌘N is still 新任务" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘/ 按键" "$(hint)"
+eq "E: …and in a session, ⌘N is still 新任务" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘. 展开/收起  ⌘/ 按键" "$(hint)"
 T set-option -uw -t "$PANE" @fleet_orch
 sl=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
 case "$sl" in "B ⌘N 新任务  ⌘P 跳转"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the hint after the badge" "$sl" ;; esac
