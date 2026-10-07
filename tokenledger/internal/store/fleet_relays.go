@@ -75,19 +75,13 @@ type FleetRelay struct {
 }
 
 func (s *Store) ensureFleetRelays() error {
-	if _, err := s.write.Exec(fleetRelaySchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetRelaySchema)); err != nil {
 		return fmt.Errorf("create fleet_relays: %w", err)
 	}
 	// claude-fleet#1647: a database created before receipts. Additive only.
 	for _, col := range []string{"receipt", "receipt_at"} {
-		var n int
-		if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('fleet_relays') WHERE name = ?`, col).Scan(&n); err != nil {
+		if err := s.addColumn("fleet_relays", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
-		}
-		if n == 0 {
-			if _, err := s.write.Exec(`ALTER TABLE fleet_relays ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
-				return fmt.Errorf("add fleet_relays.%s: %w", col, err)
-			}
 		}
 	}
 	return nil

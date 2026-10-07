@@ -49,7 +49,7 @@ type FleetPeerCert struct {
 }
 
 func (s *Store) ensureFleetPeerCerts() error {
-	if _, err := s.write.Exec(fleetPeerCertsSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetPeerCertsSchema)); err != nil {
 		return fmt.Errorf("create fleet_peer_certs table: %w", err)
 	}
 	return nil

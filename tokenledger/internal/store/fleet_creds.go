@@ -139,7 +139,7 @@ var ErrCredConflict = errors.New("credential changed concurrently")
 var ErrNoCredential = errors.New("no such credential")
 
 func (s *Store) ensureFleetCreds() error {
-	if _, err := s.write.Exec(fleetCredsSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetCredsSchema)); err != nil {
 		return fmt.Errorf("create fleet credential tables: %w", err)
 	}
 	// Columns added after the table shipped (claude-fleet#1463): a hub whose
@@ -150,14 +150,8 @@ func (s *Store) ensureFleetCreds() error {
 		{"secret_expires_at", "TEXT"},
 		{"reauth_required_at", "TEXT"}, // claude-fleet#2007
 	} {
-		var n int
-		if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('fleet_credentials') WHERE name = ?`, c.column).Scan(&n); err != nil {
+		if err := s.addColumn("fleet_credentials", c.column, c.spec); err != nil {
 			return err
-		}
-		if n == 0 {
-			if _, err := s.write.Exec(`ALTER TABLE fleet_credentials ADD COLUMN ` + c.column + ` ` + c.spec); err != nil {
-				return fmt.Errorf("add fleet_credentials.%s: %w", c.column, err)
-			}
 		}
 	}
 	return nil
