@@ -32,3 +32,10 @@ test("the operator's doors name the door, not a person", () => {
   assert.deepEqual(peer, { name: 'verkyyi@github', sub: 'tailnet', person: '', via: 'tailnet', logout: false });
   assert.equal(whoami({ via: 'tailnet' }).name, '管理员');
 });
+
+test('a GitHub person (claude-fleet#1984): their username, the role and GitHub under it', () => {
+  const admin = whoami({ via: 'github', person: 'gh:12345', name: 'verkyyi', role: 'admin', can_logout: true }, 'en');
+  assert.deepEqual(admin, { name: 'verkyyi', sub: 'Admin · GitHub', person: '', via: 'GitHub', logout: true });
+  assert.equal(whoami({ via: 'github', person: 'gh:7', name: 'alice', role: 'user', can_logout: true }).sub, '使用者 · GitHub');
+  assert.equal(whoami({ via: 'github', person: 'gh:7', name: ' ' }), null);
+});
