@@ -1388,7 +1388,8 @@ func placementReason(c Candidate, all []Candidate) string {
 // fleet.node_maintenance.<machine> (claude-fleet#1427) a reason — any text,
 // "" to end the maintenance — stored as the dated record the roster shows;
 // fleet.client_defaults.<KEY> (claude-fleet#1722) a client's team default;
-// fleet.node_trust.<machine> (claude-fleet#1968) trusted | untrusted.
+// fleet.node_trust.<machine> (claude-fleet#1968) trusted | untrusted;
+// fleet.node_relay.<machine> (claude-fleet#1974) "" only — a revocation.
 func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch r.Method {
@@ -1439,6 +1440,21 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				httpError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			s.relayCacheReset()
+			s.writeFleetSettings(w)
+			return
+		case strings.HasPrefix(body.Key, NodeRelayPrefix) && nodeNameRE.MatchString(body.Key[len(NodeRelayPrefix):]):
+			// A machine's relay credentials (claude-fleet#1974): the
+			// operator only drops them ("" = revoke every login's); a
+			// node mints its own through /v1/node/relay-credential.
+			if body.Value != "" {
+				httpError(w, http.StatusBadRequest, "a relay credential is only revoked here (value \"\"); a node mints its own")
+				return
+			}
+			if err := s.revokeRelay(body.Key[len(NodeRelayPrefix):], time.Now()); err != nil {
+				httpError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 			s.writeFleetSettings(w)
 			return
 		case strings.HasPrefix(body.Key, ClientDefaultsPrefix):
@@ -1482,7 +1498,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+ClientDefaultsPrefix+"<KEY>, "+SpotWeightKey+", "+ComputeAutoKey+" and "+MeterKey+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+SpotWeightKey+", "+ComputeAutoKey+" and "+MeterKey+" are settable")
 			return
 		}
 		if err := s.Store.SetFleetSetting(body.Key, body.Value, time.Now()); err != nil {
@@ -1519,6 +1535,13 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 		}
 	}
 	eff[SpotWeightKey] = s.spotWeight(settings)
+	// A relay credential's hash never leaves the hub (claude-fleet#1974).
+	settings = relayRedact(settings)
+	for k, v := range settings {
+		if strings.HasPrefix(k, NodeRelayPrefix) {
+			eff[k] = v
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "effective": eff})
 }
 
