@@ -7,7 +7,7 @@
 #   A  off (the degenerate): status reads `off · - · sessions 0/4` and changes
 #      no byte; the launcher runs no proxy
 #   B  enable: `export FLEET_CRED_PROXY=1` under [common], the running launcher
-#      is nudged (USR1 — its re-read is 30s away) and the proxy is up in seconds;
+#      is nudged (USR1 — its own re-read is 600s away) and the proxy is up in seconds;
 #      status counts only the sessions that talk to THIS proxy
 #   C  disable: fleet.conf byte for byte as before enable, the proxy stops
 #   D  twice more, on a conf that already holds FLEET_CRED_PROXY=0 in [node] and a
@@ -33,7 +33,7 @@ trap cleanup EXIT
 export HOME="$SB/home" FLEET_CONF_DIR="$SB/conf" XDG_CONFIG_HOME="$SB/xdg"
 mkdir -p "$HOME" "$FLEET_CONF_DIR" "$XDG_CONFIG_HOME"
 unset FLEET_CRED_PROXY FLEET_CRED_RELAY_URL FLEET_HUB_URL CCQUOTA_HUB_URL CCQUOTA_TOKEN CCQUOTA_FLEET FLEET_PROBE_FORCE_UNREACHABLE
-export FLEET_CRED_ROLLOUT_WAIT=20 FLEET_CRED_ROLLOUT_PROCS="$SB/procs"
+export FLEET_CRED_ROLLOUT_WAIT=120 FLEET_CRED_ROLLOUT_PROCS="$SB/procs"
 
 FAIL=0
 pass() { printf 'PASS %s\n' "$*"; }
@@ -85,8 +85,9 @@ fi  # ---- [node] end ----
 CONF
 cp "$FLEET_CONF_DIR/fleet.conf" "$SB/orig.conf"
 
-# the login's daemon: idles a long 30s between re-reads — only the nudge is fast
-FLEET_CRED_PROXY_IDLE_SECS=30 bash "$BIN/fleet-cred-proxy.sh" run --max-seconds 300 >/dev/null 2>&1 & RUNPID=$!
+# the login's daemon: idles 600s between re-reads — only the nudge can be in time
+# (a slow runner — macOS CI — takes many seconds to start a proxy at all)
+FLEET_CRED_PROXY_IDLE_SECS=600 bash "$BIN/fleet-cred-proxy.sh" run --max-seconds 900 >/dev/null 2>&1 & RUNPID=$!
 waitfor test -s "$FLEET_CONF_DIR/cred-proxy/launcher.pid" || fail "launcher wrote no launcher.pid"
 
 # ── A: off ─────────────────────────────────────────────────────────────────
@@ -103,8 +104,8 @@ if grep -qx 'export FLEET_CRED_PROXY=1' "$FLEET_CONF_DIR/fleet.conf" \
    && [ "$(sed -n '/^# ---- \[common\] ----$/{n;p;}' "$FLEET_CONF_DIR/fleet.conf")" = 'export FLEET_CRED_PROXY=1' ]; then
   pass "B enable: FLEET_CRED_PROXY=1 written under [common]"
 else fail "B enable: conf is"; cat "$FLEET_CONF_DIR/fleet.conf"; fi
-if [ "$rc" = 0 ] && up && [ $((t1 - t0)) -lt 20 ]; then
-  pass "B enable: launcher nudged, proxy up in $((t1 - t0))s (its own re-read is 30s away)"
+if [ "$rc" = 0 ] && up && [ $((t1 - t0)) -lt 300 ]; then
+  pass "B enable: launcher nudged, proxy up in $((t1 - t0))s (its own re-read is 600s away)"
 else fail "B enable: rc=$rc up=$(up && echo y || echo n) $((t1 - t0))s — $out"; fi
 case "$out" in *'doctor cred:'*) pass "B enable: prints the doctor's cred row" ;; *) fail "B enable: no cred row — $out" ;; esac
 PORT=$(cat "$FLEET_CONF_DIR/cred-proxy/port"); procs "$PORT"
