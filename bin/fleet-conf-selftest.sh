@@ -45,6 +45,12 @@
 #                     are unchanged, both files kept as .bak, --dry-run moves
 #                     nothing, a second run changes nothing; the original first
 #                     repo then removes like any (no promotion)
+#   J. hub fill     — (issue #2116) node.env has CCQUOTA_FLEET=1 + a hub URL, an
+#                     already-migrated fleet.conf has neither: migrate adds both
+#                     to [common] (no token), the node's view reads them, the
+#                     doctor's hub row goes WARN → PASS, a second run changes
+#                     nothing; an explicit CCQUOTA_FLEET=0 is never overwritten;
+#                     a client with no node.env stays byte for byte
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 for f in fleet-conf.sh fleet-lib.sh fleet-doctor.sh fleet_config_write.py fleet-connect.py fleet-login.py; do
@@ -443,6 +449,57 @@ is "I: …a caller with no window reads the new first" "$(lib_i 'fleet_load_conf
 printf 'FLEET_REPO="bbb/new"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$H/p/app2" > "$CD/fleets/fleet/repos/bbb-new.conf"
 lib_i 'fleet_repo_order_put fleet bbb/new'
 is "I: a repo recorded later lists after the others" "$(lib_i 'fleet_repos fleet' | tr '\n' ' ')" "aaa/first zzz/last bbb/new "
+
+# ---------------------------------------------------------------------------- J
+hub_row() { run bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+hub([[:space:]]|$)'; }
+j_conf() {
+  printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=1\n%s\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nFLEET_AUTOFILL_NODE=local\nfi  # ---- [node] end ----\n' "${1:-}" > "$CD/fleet.conf"
+}
+mkbox j
+j_conf
+printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=node-tok\nCCQUOTA_FLEET=1\n' > "$CD/node.env"; chmod 600 "$CD/node.env"
+has "J: doctor WARNs while fleet.conf says off" "$(hub_row)" "WARN  hub"
+has "J: …naming both keys" "$(hub_row)" "CCQUOTA_FLEET=1、FLEET_HUB_URL"
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate --dry-run 2>&1)
+has "J: --dry-run says what it would add" "$out" "would add to $CD/fleet.conf [common] from node.env: CCQUOTA_FLEET=1 FLEET_HUB_URL"
+hasnt "J: --dry-run writes nothing" "$(cat "$CD/fleet.conf")" "CCQUOTA_FLEET"
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate --quiet 2>&1); rc=$?
+is "J: migrate exits 0" "$rc" 0
+has "J: says what it added" "$out" "from node.env: CCQUOTA_FLEET=1 FLEET_HUB_URL"
+mc=$(cat "$CD/fleet.conf")
+has "J: CCQUOTA_FLEET in the file" "$mc" "export CCQUOTA_FLEET=1"
+has "J: FLEET_HUB_URL in the file" "$mc" 'export FLEET_HUB_URL="https://hub.example"'
+hasnt "J: no token entered it" "$mc" "node-tok"
+is "J: both sit in [common]" "$(awk '/^# ---- \[common\]/{c=1;next} /^# ---- \[/{c=0} c' "$CD/fleet.conf" | grep -cE '^export (CCQUOTA_FLEET|FLEET_HUB_URL)=')" 2
+sh -n "$CD/fleet.conf" && ok || bad "J: the file still parses"
+vv=$(view)
+has "J: a node script reads the hub as on" "$vv" "CCQUOTA_FLEET=1"
+has "J: the shell reads it too" "$(run FLEET_SHELL=1 bash -c '. "$0/fleet-lib.sh"; printf "%s" "$FLEET_HUB_URL"' "$INS/bin")" "https://hub.example"
+has "J: doctor hub PASS after" "$(hub_row)" "PASS  hub"
+snap=$(cat "$CD/fleet.conf")
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate --quiet 2>&1)
+hasnt "J: a second migrate adds nothing" "$out" "from node.env"
+is "J: …and changes nothing" "$(cat "$CD/fleet.conf")" "$snap"
+# the operator's explicit off is theirs: never overwritten, the doctor says it
+j_conf 'CCQUOTA_FLEET=0'
+run bash "$INS/bin/fleet-conf.sh" migrate --quiet >/dev/null 2>&1
+has "J: an explicit CCQUOTA_FLEET=0 stays" "$(cat "$CD/fleet.conf")" "CCQUOTA_FLEET=0"
+hasnt "J: …and no =1 is added beside it" "$(cat "$CD/fleet.conf")" "CCQUOTA_FLEET=1"
+has "J: doctor names the explicit off" "$(hub_row)" "写着 CCQUOTA_FLEET=0"
+# a URL carrying credentials is never written
+j_conf
+printf 'CCQUOTA_HUB_URL=https://u:pw@hub.example\nCCQUOTA_FLEET=1\n' > "$CD/node.env"
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate --quiet 2>&1)
+hasnt "J: a credentialed URL is not written" "$(cat "$CD/fleet.conf")" "pw@"
+has "J: …and says so" "$out" "carries credentials"
+# a client (no node.env): byte for byte, and no hub row
+mkbox j2
+printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=0\n' > "$CD/fleet.conf"
+snap=$(cat "$CD/fleet.conf")
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate --quiet 2>&1)
+is "J: a client without node.env is byte for byte" "$(cat "$CD/fleet.conf")" "$snap"
+is "J: …migrate says nothing" "$out" ""
+is "J: …and the doctor has no hub row" "$(hub_row)" ""
 
 printf 'fleet-conf-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"
 [ "$FAILS" = 0 ]
