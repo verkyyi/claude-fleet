@@ -28,6 +28,8 @@
 #                                 and ⌘P's `>` (fleet-quickopen.py), which lists
 #                                 and runs exactly these
 #   menu <session> - [--print]    the row-less items alone (no row in view)
+#   menu <session> new [--print]  「新任务」's (the writing area's row, issue #2146):
+#                                 进编排会话 first, then the row-less items
 #
 # The items' ORDER and groups are THE command table, fleet-quickopen.py
 # `COMMANDS` (issue #1952): ⌘P's `>` and this menu are one list. An item is
@@ -70,7 +72,7 @@ wid="${3:-}"
 # that the rows look alike — with `enter` (the proxy window) and the row-less
 # items. Everything a local row's menu does needs a window here; it has none.
 remote='' rowless=''
-case "$wid" in @[0-9]*) ;; wid:*/*) remote=1 ;; -) rowless=1 ;; *) exit 0 ;; esac
+case "$wid" in @[0-9]*) ;; wid:*/*) remote=1 ;; -|new) rowless=1 ;; *) exit 0 ;; esac
 # Never act on another fleet's window, or a stale id tmux recycled elsewhere.
 [ -n "$remote$rowless" ] || [ "$(tmux display-message -p -t "$wid" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)" = "$sess" ] || exit 0
 
@@ -264,12 +266,26 @@ add_other() {
   adda "$(t menu_repo)" "$(mk repo)" "$(ask repo)"
 }
 
+# 进编排会话 (issue #2146): ⌘E's road — fleet-compose.py --orch, the list's own
+# jump to the window orch_<session> names (fleet-hub-sessions.sh). Listed where
+# that file is, or in the client (greyed with the reason: none on this machine).
+add_orch() {
+  if [ -s "${FLEET_STATUS_G:-$FLEET_C/global}/orch_$sess" ]; then
+    add "$(t menu_orch)" "$(mk orch)" "run-shell -b $(sq "python3 $(sq "$BIN/fleet-compose.py") --orch $(sq "$sess")${client:+ --client $(sq "$client")} >/dev/null 2>&1 || :")"
+  elif [ "${FLEET_SHELL:-0}" = 1 ]; then
+    add "-$(t menu_orch_none)" "$(mk orch)" ''
+  fi
+}
+
 if [ -n "$rowless" ]; then
-  # No row in view (⌘P's `>` on the writing area, say): the row-less items alone.
+  # No row in view (⌘P's `>` on the writing area, say): the row-less items alone;
+  # 「新任务」's own (a right-click on it) is the same menu, titled with its name.
   side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
+  add_orch
+  group
   if [ "${FLEET_SHELL:-0}" = 1 ]; then add_views view
   else add_other; fi
-  show ""
+  if [ "$wid" = new ]; then show "$(t sidebar_portal)"; else show ""; fi
 fi
 
 if [ -n "$remote" ]; then

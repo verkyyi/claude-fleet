@@ -172,10 +172,10 @@ i=0; CL=''; while [ -z "$CL" ] && [ "$i" -lt 30 ]; do CL=$(T list-clients -F '#{
 hint() { T display-message -p -c "$CL" '#{E:@fleet_hint}' | sed 's/#\[[^]]*\]//g'; }
 raw() { T display-message -p -c "$CL" '#{E:@fleet_hint}'; }
 T select-pane -t "$PANE"
-eq "E: the keyboard in the session → its keys" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘/ 按键" "$(hint)"
-case "$(raw)" in *"range=user|key-User928]"*"⌘N"*"range=user|key-User924]"*"⌘J"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: each key is its own key-<key> range" "$(raw)" ;; esac
+eq "E: the keyboard in the session → its keys" " ⌘N 新任务  ⌘E 编排  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘/ 按键" "$(hint)"
+case "$(raw)" in *"range=user|key-User928]"*"⌘N"*"range=user|key-User929]"*"⌘E"*"range=user|key-User924]"*"⌘J"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: each key is its own key-<key> range" "$(raw)" ;; esac
 T switch-client -c "$CL" -T prefix
-eq "E: prefix pressed → the prefix keys" " n p 切换  k 等你的  c 新任务  / 跳转  ? 按键  d 离开" "$(hint)"
+eq "E: prefix pressed → the prefix keys" " n p 切换  k 等你的  c 新任务  e 编排  / 跳转  ? 按键  d 离开" "$(hint)"
 T switch-client -c "$CL" -T root
 T set-option -g @popup_open "$(date +%s)"; T set-option -g @popup_title popup_quickopen
 eq "E: ⌘P open → its keys" " ↵ 去  > 命令  esc 关" "$(hint)"
@@ -186,15 +186,17 @@ T set-option -p -t "$PANE" @stage_ask 1
 eq "E: a question's pane → ↵ / esc" " ↵ 确定  esc 取消" "$(hint)"
 T set-option -pu -t "$PANE" @stage_ask
 T set-option -w -t "$PANE" @fleet_on_list 1
-eq "E: a tap on the list → what a tap does" " 点一行 切过去  右键 菜单  ⌘P 跳转  ⌘N 新任务  ⌘/ 按键" "$(hint)"
+eq "E: a tap on the list → what a tap does" " 点一行 切过去  右键 菜单  ⌘P 跳转  ⌘N 新任务  ⌘E 编排  ⌘/ 按键" "$(hint)"
+case "$(raw)" in *"range=user|key-User929]"*"⌘E"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the list's ⌘E is a key-User929 range (issue #2146)" "$(raw)" ;; esac
 T set-option -w -t "$PANE" @fleet_hint_name 'issue-1909 · 一个很长很长的名字, 带逗号'
-eq "E: …with the clipped row's whole name first" " issue-1909 · 一个很长很长的名字, 带逗号  │  点一行 切过去  右键 菜单  ⌘P 跳转  ⌘N 新任务  ⌘/ 按键" "$(hint)"
+eq "E: …with the clipped row's whole name first" " issue-1909 · 一个很长很长的名字, 带逗号  │  点一行 切过去  右键 菜单  ⌘P 跳转  ⌘N 新任务  ⌘E 编排  ⌘/ 按键" "$(hint)"
 T set-option -uw -t "$PANE" @fleet_on_list
 T set-option -w -t "$PANE" @fleet_view portal
-eq "E: the writing area in view → its keys" " ↵ 发出  ⇧↵ 换行  Tab 下一项  esc 回去" "$(hint)"
+eq "E: the writing area in view → its keys" " ↵ 发出  ⇧↵ 换行  Tab 下一项  ⇧⇥ 交给编排  esc 回去" "$(hint)"
+case "$(raw)" in *"range=user|key-BTab]"*"⇧⇥"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the writing area's ⇧⇥ is a key-BTab range (issue #2146)" "$(raw)" ;; esac
 T set-option -uw -t "$PANE" @fleet_view
 sl=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
-case "$sl" in "B ⌘N 新任务  ⌘P 跳转"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the hint after the badge" "$sl" ;; esac
+case "$sl" in "B ⌘N 新任务  ⌘E 编排  ⌘P 跳转"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the hint after the badge" "$sl" ;; esac
 T resize-window -t "=$L:" -x 90 2>/dev/null; "$REAL_TMUX" -L "${L}o" resize-window -t =o -x 90 2>/dev/null; sleep 0.2
 eq "E: narrower than 100 columns → the badge alone" "B" "$(T display-message -p -c "$CL" '#{E:status-left}')"
 "$REAL_TMUX" -L "${L}o" kill-server 2>/dev/null

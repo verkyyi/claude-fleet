@@ -417,6 +417,8 @@ fleet_ui_t() {
     en:compose_orch_kept)       printf 'switched to the orchestrator; the draft could not be pasted and is still here' ;;
     zh:compose_orch_nolist)     printf '没找到任务列表，切不到编排' ;;
     en:compose_orch_nolist)     printf 'no task list found: cannot switch to the orchestrator' ;;
+    zh:compose_orch_none)       printf '这台机器没有编排会话' ;;
+    en:compose_orch_none)       printf 'no orchestrating session on this machine' ;;
     zh:orch_window)             printf '编排' ;;
     en:orch_window)             printf 'orchestrator' ;;
     zh:compose_sent_fmt)        printf '已发出：%s · 开工中…' "${1:-}" ;;
@@ -477,7 +479,8 @@ open	e	进入 — 打开代理窗口（只有另一台机器上的行有；菜�
 message	m	发消息… — 只有别机行有：在输入行写，经入口送到那台机器的 issue 桥，作为它的下一轮
 stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit（可恢复）
 resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）
-clients	d	我的客户端 — 只在客户端：同时开着的每台设备、终端、最后使用时间，可断开某一台' ;;
+clients	d	我的客户端 — 只在客户端：同时开着的每台设备、终端、最后使用时间，可断开某一台
+orch	b	进编排会话 — 直接切到固定的编排会话（⌘E；「新任务」行的右键菜单，⌘P 的 > 也有）' ;;
     en:menu_keys)               printf '%s' 'rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
 pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
@@ -497,7 +500,8 @@ open	e	enter — open the proxy window (a row on another machine only; the menu 
 message	m	message… — a row on another machine only: typed on the input line, through the hub to the issue bridge on that machine, as its next turn
 stop	q	stop — a row on another machine only: /exit there through the hub (resumable)
 resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)
-clients	d	my clients — in the client only: every device you have open, its terminal and when last used; disconnect one' ;;
+clients	d	my clients — in the client only: every device you have open, its terminal and when last used; disconnect one
+orch	b	go to the orchestrator — straight to the orchestrating session of the fleet (⌘E; also on the right-click menu of the 「New task」 row, and in ⌘P >)' ;;
     zh:menu_open_remote)        printf '进入（代理窗口）…' ;;
     en:menu_open_remote)        printf 'Enter (proxy window)…' ;;
     zh:menu_r_message)          printf '发消息…' ;;
@@ -645,6 +649,10 @@ clients	d	my clients — in the client only: every device you have open, its ter
     en:menu_reap_confirm_fmt)   printf 'Reap "%s"? (y/n)' "${1:-}" ;;
     zh:menu_new)                printf '新建任务（建 issue）…' ;;
     en:menu_new)                printf 'New task (file issue)…' ;;
+    zh:menu_orch)               printf '进编排会话' ;;
+    en:menu_orch)               printf 'Go to the orchestrator' ;;
+    zh:menu_orch_none)          printf '进编排会话 · 这台机器没有编排会话' ;;
+    en:menu_orch_none)          printf 'Go to the orchestrator · none on this machine' ;;
     zh:menu_restore)            printf '恢复已收工…' ;;
     en:menu_restore)            printf 'Restore finished task…' ;;
     zh:menu_info)               printf '详情列（issue · PR · ctx%%）' ;;
@@ -707,6 +715,8 @@ clients	d	my clients — in the client only: every device you have open, its ter
     en:keys_switch_quickopen)  printf %s 'quick open: type a few letters (name, machine, state), ↵ switches; ↵ on nothing = the one you saw before' ;;
     zh:keys_switch_new)        printf %s '新任务：右边打开写作区，多行、附件，↵ 开 issue 和会话' ;;
     en:keys_switch_new)        printf %s 'new task: the writing area on the right — several lines, attachments; ↵ files the issue and opens its session' ;;
+    zh:keys_switch_orch)       printf %s '编排会话：直接切过去（不带草稿）；没有时只提示一行' ;;
+    en:keys_switch_orch)       printf %s 'the orchestrating session, straight there (no draft); with none, one line says so' ;;
     zh:keys_single_f1)         printf %s '窄屏（手机）：全屏切换器 —— 在等你的 · 最近 1–9 · 全部，点一行切过去；顶栏点名字同此' ;;
     en:keys_single_f1)         printf %s 'narrow (a phone): the full-screen switcher — waiting on you · recent 1–9 · all, tap a row; tapping the name on the top line too' ;;
     zh:keys_single_f23)        printf %s '窄屏：上一个 / 下一个会话（顶栏 ‹ › 同此）' ;;
@@ -723,6 +733,8 @@ clients	d	my clients — in the client only: every device you have open, its ter
     en:keys_page_cmd)          printf %s '⌘ keys' ;;
     zh:keys_page_new)          printf %s '新任务（写作区）' ;;
     en:keys_page_new)          printf %s 'new task (the writing area)' ;;
+    zh:keys_page_orch)         printf %s '编排会话（不带草稿）' ;;
+    en:keys_page_orch)         printf %s 'the orchestrating session (no draft)' ;;
     zh:keys_page_quickopen)    printf %s '跳到任意会话；输入 > 是命令' ;;
     en:keys_page_quickopen)    printf %s 'go to any session; type > for commands' ;;
     zh:keys_page_prevnext)     printf %s '上一个 / 下一个会话' ;;
@@ -743,6 +755,8 @@ clients	d	my clients — in the client only: every device you have open, its ter
     en:keys_page_c_nl)         printf %s 'new line' ;;
     zh:keys_page_c_tab)        printf %s '下一项（记成 issue · 仓库）' ;;
     en:keys_page_c_tab)        printf %s 'next option (file an issue · repo)' ;;
+    zh:keys_page_c_btab)       printf %s '交给编排，草稿一起带过去' ;;
+    en:keys_page_c_btab)       printf %s 'hand it to the orchestrator, the draft along' ;;
     zh:keys_page_c_space)      printf %s '切换选中的那一项' ;;
     en:keys_page_c_space)      printf %s 'flip the option it is on' ;;
     zh:keys_page_c_esc)        printf %s '回去，草稿留着' ;;

@@ -1263,7 +1263,9 @@ def open_menu(session, wid, env):
     this view keeps painting meanwhile."""
     # A row on another machine (`wid:…`) has one too (issue #1475): its title
     # names the machine (`<name> · 在 m4`), as the row's own @ mark does (#1780).
-    if wid.startswith("@") or (wid.startswith("wid:") and "/" in wid):
+    # 「新任务」 (the writing area's row) has one as well (issue #2146): 进编排会话
+    # and the row-less items — its tap stays the writing area.
+    if wid.startswith("@") or (wid.startswith("wid:") and "/" in wid) or wid == PORTAL_KEY:
         subprocess.Popen(["bash", str(BIN / "fleet-sidebar.sh"), "menu", session, wid],
                          env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)

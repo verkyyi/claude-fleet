@@ -17,6 +17,7 @@ keyboard on the list.
 | every key | ⌘/ | prefix ? | |
 | quick open | ⌘P | prefix / | type a few letters, ↵ |
 | a new task: the writing area on the right | ⌘N | prefix c | below |
+| the orchestrating session, no draft (issue #2146) | ⌘E | prefix e | also the 「新任务」 row's right-click menu; none → one line says so |
 
 **Quick open** lists every session — one folded under its parent too. An empty
 query lists the most recent first and the one in view last, so ⌘P ↵ is «the one
@@ -53,7 +54,7 @@ A terminal sends nothing for ⌘ — macOS keeps it. So the client installs an
 
     ESC [ <code> ~        code 920 next · 921 prev · 922 back · 923 fwd ·
                                924 needs · 925 zoom · 926 help · 927 quickopen ·
-                               928 new
+                               928 new · 929 orch
 
 No terminal sends `ESC [ 92x ~` for a real key. `conf/tmux-shell.conf` catches
 each as `user-keys[<code>]` → `User<code>`, bound to the same body as the prefix
