@@ -1952,7 +1952,7 @@ def on_caret(row, x):
     return 0 <= x < width_of(row_left(" ", row[2], row[4], ""))
 
 
-# A second press on the same caret this soon after the first is the same tap
+# A second press on the same caret this soon after the first one folded is the same tap
 # (issue #2167): a double-click reaches the list as two presses or more
 # (DoubleClick1Pane forwards its own), and the second folded straight back.
 CARET_REPEAT_SECS = 0.3
@@ -3248,7 +3248,10 @@ def ui(screen, session, worker, lock):
                     follow_at = None
                     if caret_tap[0] == hit and _when - caret_tap[1] < CARET_REPEAT_SECS:
                         continue
-                    caret_tap = (hit, _when)
+                    # from when THIS fold ran, not when its press was read: a
+                    # press read stale waits for a fresh tmux read first (#1756),
+                    # and its double-click's second press is read after that
+                    caret_tap = (hit, time.monotonic())
                     verb = "collapse" if fold_open(hit_row) else "expand"
                     rows, holder = fold_now(rows, hit, verb, window, fold_cache)
                     folding = fold_write(folding, verb, hit, env)
