@@ -28,7 +28,7 @@ pass, nothing changes.
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"
 REPO=$(fleet_target_repo "$S" "<the --repo value, or empty>"); RC=$?   # issue #803
-[ "$RC" = 0 ] && fleet_multirepo "$S" && fleet_load_repo_conf "$S" "$REPO"   # → that repo's FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH / deploy
+[ "$RC" = 0 ] && fleet_load_repo_conf "$S" "$REPO"   # → that repo's FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH / deploy
 SEAT=$(fleet_seat)
 PKEY=$(fleet_epic_parent_key "$S" "${FLEET_REPO:-}" <EPIC>)   # issue #1110: this loop's ledger key
 echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} rc=$RC pkey=${PKEY:-}"

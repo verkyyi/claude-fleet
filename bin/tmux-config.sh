@@ -586,8 +586,8 @@ emit_preview() {
   else
     printf '  %s%s%s%s\n' "$B" "$GN" "$(cfg_t fleet_preview)" "$R"
   fi
-  # A per-repo key in a multi-repo fleet: what EACH hosted repo reads.
-  if fcfg_is_repo_key "$key" && fleet_has_repo_overlays "$SESSION"; then
+  # A per-repo key: what EACH hosted repo reads (one repo or several, issue #1943).
+  if fcfg_is_repo_key "$key" && [ -n "$(fcfg_repo_scopes "$SESSION")" ]; then
     printf '\n  %s%s%s\n' "$B" "$(cfg_t per_repo)" "$R"
     while IFS= read -r row; do
       [ -n "$row" ] || continue

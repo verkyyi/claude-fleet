@@ -1251,6 +1251,24 @@ issues exactly as before.
 - No admin node online → the leasing machine gets `refresh_unavailable`, not
   the provider's 403; a still-valid cached access token is issued meanwhile.
 
+**Through the Singapore relay, no machine at all (claude-fleet#1976).** With
+`CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay` the hub posts a Codex refresh itself to
+the relay's `/openai-auth/oauth/token` (`CCQUOTA_FLEET_CRED_RELAY_URL`, the C7
+forwarder of docs/CRED-RELAY.md), so the long-lived refresh token is never in
+any machine's memory and no admin node has to be online.
+
+- The relay's forward_auth asks `/v1/relay/check` as for every request; the hub
+  answers for its own with a pass only it signs — `frh1.<exp>.<HMAC>`, keyed
+  from `CCQUOTA_FLEET_SESSION_CRED_KEY` (the same Secret on every replica), five
+  minutes, minted per refresh, stored nowhere, and good for `/openai-auth/`
+  only. `relay` refuses to start without the URL or the key.
+- The audit row says `refresh_via=relay`.
+- The relay cannot be asked — unreachable, its own 502/503/504, a 404 (no
+  route), or `relay_refused` for the pass — → the node path above, and the row
+  says `refresh_via=<login>@<host> (relay unavailable: <why>)`. A provider's own
+  answer (`invalid_grant`, its 403) is the answer, never a reason to fall back.
+- A Claude refresh keeps the node path: the relay's token route is OpenAI's.
+
 **A hub-leased Codex home is refreshed by nobody on the machine
 (claude-fleet#1666).** Its `auth.json` carries the `hub-managed` placeholder in
 place of a refresh token; `ccquota codex list --json` reports it as

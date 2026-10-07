@@ -270,8 +270,8 @@ grep -qE '⌃|↑|prefix E|打字' <<< "$SSHEET" && fail "the sidebar sheet stil
 grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' <<< "$SSHEET" \
   && fail "the sidebar sheet shows a full-sheet group"
 menu_keys="$(bash "$BIN/fleet-sidebar-menu.sh" --keys)" || fail "fleet-sidebar-menu.sh --keys exited non-zero"
-[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpaswklvxn1-9ogemqc ] \
-  || fail "the row menu's key table is not r t p a s w k l v x n 1-9 o g e m q c: $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
+[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpaswklvxn1-9oigemqc ] \
+  || fail "the row menu's key table is not r t p a s w k l v x n 1-9 o i g e m q c (i: 详情列, #1952): $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
 while IFS='	' read -r mk _; do
   [ -n "$mk" ] || continue
   grep -Eq "^  $mk +" <<< "$SSHEET" && fail "the sidebar sheet lists the row menu letter '$mk'"
@@ -508,6 +508,46 @@ if command -v tmux >/dev/null 2>&1; then
 $sw_table
 EOF
 fi
+
+# --- 11. ⌘/ — the one page (issue #1952) ------------------------------------
+# fleet-keys.sh --page is what ⌘/ and prefix ? open on the stage: it fits a
+# 38-row window and the stage's 119 columns, in both languages; it names every
+# chord of the switch table with that action's key for any other terminal on the
+# same line (⌘↑ ⌘↓ and ⌘[ ⌘] a pair each — 7 lines for the 9 actions); its three
+# groups are the ⌘ keys, the writing area's and the mouse's; and it lists no ⌃
+# key — the list has none (leg 7). Both binds open it (leg 10 holds them equal).
+for lang in zh en; do
+  PG="$(FLEET_UI_LANG=$lang NO_COLOR=1 bash "$KEYS" --page --plain)" || fail "11: fleet-keys.sh --page ($lang) exited non-zero"
+  n=$(printf '%s\n' "$PG" | wc -l | tr -d ' ')
+  [ "$n" -le 38 ] || fail "11: the $lang page is $n lines — it must fit a 38-row window"
+  wmax=$(printf '%s\n' "$PG" | python3 -c 'import sys, unicodedata
+print(max(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in l.rstrip("\n")) for l in sys.stdin))')
+  [ "$wmax" -le 119 ] || fail "11: the $lang page is $wmax cells wide — the stage is 119"
+  grep -q '⌃' <<< "$PG" && fail "11: the $lang page lists a ⌃ key: $(grep '⌃' <<< "$PG" | head -2)"
+  while read -r sa sg _ _ sp; do
+    [ -n "$sa" ] || continue
+    line=$(grep -F "$sg" <<< "$PG" | head -1)
+    [ -n "$line" ] || fail "11: the $lang page does not name $sa's $sg"
+    case "$sp" in F[0-9]*) want=$sp ;; *) want=$sp ;; esac
+    case "$line" in *"prefix "*"$want"*|*" $want") ;; *) fail "11: $sa: the $lang page's $sg line lacks its key '$want': $line" ;; esac
+  done <<EOF
+$sw_table
+EOF
+  [ "$(grep -c '⌘' <<< "$(printf '%s\n' "$PG" | awk '/^    ⌘/')")" = 7 ] \
+    || fail "11: the $lang page's ⌘ group is not 7 lines: $(printf '%s\n' "$PG" | awk '/^    ⌘/')"
+done
+PG="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --page --plain)"
+[ "$(printf '%s\n' "$PG" | grep -E '^  [^ ]' | sed -e 1d -e 's/^  //' | tr '\n' '|')" = '⌘ 键|写作区|鼠标|面板里的按键：在那个面板里按 ?|' ] \
+  || fail "11: the page's groups are not ⌘ 键 · 写作区 · 鼠标: $(printf '%s\n' "$PG" | grep -E '^  [^ ]' | tr '\n' '|')"
+grep -q '输入 > 是命令' <<< "$PG" || fail "11: the page does not say ⌘P's > is commands"
+for b in 'bind ?' 'bind -n User926'; do
+  grep -E "^$b " "$CONF" | grep -q 'fleet-shell.sh keys __SESS__' \
+    || fail "11: '$b' does not open the page on the stage (fleet-shell.sh keys)"
+  grep -E "^$b " "$CONF" | grep -q 'fleet-keys.sh --page' \
+    || fail "11: '$b' has no popup fallback with the page"
+done
+grep -q '^keys)$' "$BIN/fleet-shell.sh" || fail "11: fleet-shell.sh has no keys mode"
+grep -A12 '^keys)$' "$BIN/fleet-shell.sh" | grep -q 'fleet-keys.sh") --page' || fail "11: fleet-shell.sh keys does not run fleet-keys.sh --page"
 
 # 9 — the recovery page's keys (issue #1862)
 page_out=$(python3 - "$BIN" <<'PY'

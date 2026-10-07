@@ -248,18 +248,14 @@ snapshot() {
     # the resolver writes it as a FID row just before the window's WIN row, and
     # restore() stamps it back, so a child reporting to this session by identity
     # still finds it after a crash restore.
-    # Leading field (issue #789): the window's repo — `@repo` in a fleet hosting 2+
-    # repos, `norepo:<sid>` for a no-repo session, empty otherwise, so a one-repo
-    # fleet's WIN rows stay byte-identical (the resolver writes column 16 only when
-    # it is non-empty). An unstamped window in a 2+ repo fleet gets it derived once
-    # through fleet_window_repo, which stamps it, before the list is read.
-    local rfmt='' _w
-    if _fleet_hosts_many "$sess"; then
-      rfmt='#{@repo}'
-      for _w in $(tmux -L "$sock" list-windows -t "$sess" -F '#{?@repo,,#{?@norepo,,#{window_id}}}' 2>/dev/null); do
-        TMUX='' fleet_window_repo "$sess" "$_w" >/dev/null
-      done
-    fi
+    # Leading field (issue #789): the window's repo — `@repo`, or `norepo:<sid>` for
+    # a no-repo session, in every fleet (issue #1943; the resolver writes column 16
+    # only when it is non-empty). An unstamped window gets it derived once through
+    # fleet_window_repo, which stamps it, before the list is read.
+    local rfmt='#{@repo}' _w
+    for _w in $(tmux -L "$sock" list-windows -t "$sess" -F '#{?@repo,,#{?@norepo,,#{window_id}}}' 2>/dev/null); do
+      TMUX='' fleet_window_repo "$sess" "$_w" >/dev/null
+    done
     # A PROXY window (@remote, #1424) prints no name, so the resolver drops it:
     # it is another machine's session, never one to `claude --resume` here.
     # Leading-most field (issue #1902): @reap_policy — when the fleet may close the
@@ -540,8 +536,7 @@ restore() {
     # map for completeness but restore does not replay them (see the re-stamp
     # note below). `reopened` tracks whether the reconcile path (issue #160)
     # actually had a window to reopen, for the "fully up" note after the loop.
-    local wname wpath wid wissue wstate wagent whome wmanifest wraw wsleep wrepo reopened=0 multi=0
-    _fleet_hosts_many "$sess" && multi=1
+    local wname wpath wid wissue wstate wagent whome wmanifest wraw wsleep wrepo reopened=0
     while IFS=$'\t' read -r wtag wname wpath wid wissue wstate _ _ worigin wagent whome _ wmanifest wraw wsleep wrepo; do
       [ -z "$wname" ] && continue
       # A no-repo session (issue #789) lives in $HOME, not a worktree: its transcript
@@ -562,14 +557,9 @@ restore() {
       # still that session, and a name is only the fallback for a map row or a
       # window with no identity.
       case "$wtag" in WIN:?*) [ -n "$livefid" ] && printf '%s\n' "$livefid" | grep -qxF "${wtag#WIN:}" && continue ;; esac
-      # In a fleet hosting 2+ repos (issue #789) a name is not an identity — A#12
-      # and B#12 are both `issue-12` — so a live window counts only when it also
-      # sits in this row's worktree.
-      if [ "$multi" = 1 ]; then
-        [ -n "$livewins" ] && printf '%s\n' "$livewt" | grep -qxF "$wname|$wpath" && continue
-      elif [ -n "$livewins" ] && printf '%s\n' "$livewins" | grep -qxF "$wname"; then
-        continue
-      fi
+      # A name is not an identity (issue #789) — A#12 and B#12 are both `issue-12` —
+      # so a live window counts only when it also sits in this row's worktree.
+      [ -n "$livewins" ] && printf '%s\n' "$livewt" | grep -qxF "$wname|$wpath" && continue
       if [ ! -d "$wpath" ]; then
         say "    ⚠ $wname: worktree gone ($wpath) — skipped"
         log "skip $sess/$wname worktree-missing $wpath"
@@ -685,14 +675,13 @@ restore() {
         say "    z $wname → retained sleeping worker"
       fi
       # The window stamps its repo identity BEFORE its launcher reads the conf (issue
-      # #789): a no-repo session anywhere; in a 2+ repo fleet @worktree (+ @repo when
-      # the row carries it — an old row's repo is derived from @worktree by
-      # fleet_window_repo). A one-repo fleet's command is unchanged.
+      # #789): a no-repo session; else @worktree (+ @repo when the row carries it —
+      # an old row's repo is derived from @worktree by fleet_window_repo).
       local stamp=''
       if [ "${wrepo:-}" = - ]; then
         stamp=$(fleet_win_stamp_cmd @norepo 1)
         [ -n "$wid" ] && [ "$wid" != - ] && stamp="$stamp$(fleet_win_stamp_cmd @norepo_sid "$wid")"
-      elif [ "$multi" = 1 ]; then
+      else
         stamp=$(fleet_win_stamp_cmd @worktree "$wpath")
         [ -n "${wrepo:-}" ] && stamp="$stamp$(fleet_win_stamp_cmd @repo "$wrepo")"
       fi
@@ -766,7 +755,7 @@ restore() {
         elif [ -n "${wrepo:-}" ]; then
           tmux -L "$sock" set-window-option -t "$nw" @repo "$wrepo" 2>/dev/null
         fi
-        [ "$multi" = 1 ] && [ "${wrepo:-}" != - ] \
+        [ "${wrepo:-}" != - ] \
           && tmux -L "$sock" set-window-option -t "$nw" @worktree "$wpath" 2>/dev/null
         if [ -n "$wstate" ] && [ "$wstate" != "-" ]; then
           tmux -L "$sock" set-window-option -t "$nw" @claude_state "$wstate" 2>/dev/null

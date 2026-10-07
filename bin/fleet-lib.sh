@@ -474,6 +474,7 @@ fleet_load_conf() {
 $_flc_txt" in *"
 CCQUOTA_FLEET="*|*"
 export CCQUOTA_FLEET="*) export CCQUOTA_FLEET ;; esac
+  # compat-1v: 下一批删 (the old layout, below)
   # Every repo lives in repos/<slug>.conf (issue #1937): in a fleet that has a
   # repos/ dir, a fleet conf naming no repo describes the fleet only, so a repo key
   # the caller's environment or the global conf carries is not this fleet's —
@@ -645,6 +646,7 @@ fleet_repo_conf_file() {
   printf '%s/fleets/%s/repos/%s.conf' "$FLEET_CONF_DIR" "${1:-_}" "$(fleet_slug "$(fleet_norm_repo "${2:-}")")"
 }
 
+# compat-1v: 下一批删 (the old layout's FLEET_REPO, below)
 # fleet_repos <sess> → every repo the fleet hosts, owner/name, one per line, in
 # order: an old-layout fleet conf's FLEET_REPO first (read for one version, issue
 # #1937), then repos/.order, then any other repos/*.conf, deduplicated. Nothing for a
@@ -685,20 +687,6 @@ fleet_repo_first() {
   local r; r=$(fleet_repos "${1:-}")
   printf '%s' "${r%%
 *}"
-}
-
-# fleet_has_repo_overlays <sess> → 0 iff fleets/<sess>/repos/ holds an overlay —
-# the CHEAP "might this fleet host more than one repo?" gate for hot paths (the
-# dash's 4Hz row producer, pr-refresh's per-window pass; issue #792). Builtins
-# only, no fork. 1 = the degenerate one-repo fleet: callers keep today's
-# per-session code path byte for byte.
-fleet_has_repo_overlays() {
-  local f
-  [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
-  for f in "$FLEET_CONF_DIR/fleets/${1:-_}/repos"/*.conf; do
-    [ -f "$f" ] && return 0
-  done
-  return 1
 }
 
 # fleet_repo_hosted <sess> <repo> → 0 iff the fleet hosts <repo>.
@@ -797,11 +785,11 @@ _fleet_repo_overlay() {
 # when the fleet does not host <repo> (the fleet conf is still loaded).
 fleet_load_repo_conf() {
   local conf; conf=$(fleet_conf_file "${1:-}")
-  # A multi-repo fleet first puts the per-repo keys back to what they were before
-  # ANY conf was loaded (issue #978): else, in a shell that already applied repo B's
-  # overlay (a pane of B spawning for A), a key A's overlay leaves unset would keep
-  # B's value instead of falling back to the fleet's. One-repo fleet: untouched.
-  fleet_has_repo_overlays "${1:-}" && _fleet_repo_keys_reset
+  # First the per-repo keys go back to what they were before ANY conf was loaded
+  # (issue #978): else, in a shell that already applied repo B's overlay (a pane of
+  # B spawning for A), a key A's overlay leaves unset would keep B's value instead
+  # of falling back to the fleet's.
+  _fleet_repo_keys_reset
   local _flr_txt=''
   if [ -f "$conf" ]; then
     _flr_txt=$(_fleet_conf_sans_global "$conf")
@@ -918,20 +906,19 @@ fleet_repo_conf_file_for() {
 # janitor) and every mover that decides "is this worktree ours" resolves its repo
 # from the WINDOW it acts on, never from the fleet conf alone, and joins windows on
 # (repo, issue) — never a bare issue number. A window whose repo is unknown or
-# deliberately none (@norepo) is never reaped automatically. A fleet with no
-# overlay (fleet_has_repo_overlays) takes the historic single-repo path in every
-# caller, byte for byte.
+# deliberately none (@norepo) is never reaped automatically — however many repos
+# the fleet hosts (issue #1943).
 
 # fleet_load_window_conf <sess> <window> — for a caller acting ON <window> (a
 # reaper, not the window's own pane): the fleet conf with THAT window's repo
-# overlay on top. Degenerate (no overlay): exactly fleet_load_conf. Otherwise
-# returns 1 when the window's repo is unknown, none (@norepo) or no longer hosted —
-# with FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH UNSET, so a caller that ignores the
-# status still cannot reach any repo's worktrees.
+# overlay on top. Returns 1 when the window's repo is unknown, none (@norepo) or no
+# longer hosted — with FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH UNSET, so a caller
+# that ignores the status still cannot reach any repo's worktrees.
 fleet_load_window_conf() {
   local sess="${1:-}" r
   fleet_load_conf "$sess"
-  fleet_has_repo_overlays "$sess" || return 0
+  # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN lists no repo: its own.
+  [ -n "$(fleet_repos "$sess")" ] || return 0
   r=$(fleet_window_repo "$sess" "${2:-}")
   if [ -z "$r" ] || ! fleet_load_repo_conf "$sess" "$r"; then
     eval "unset $_FLEET_REPO_SCOPED"
@@ -941,32 +928,28 @@ fleet_load_window_conf() {
 }
 
 # fleet_resolved_repo <sess> — the repo a reaper acts on, read AFTER a
-# fleet_load_*conf. A one-repo fleet keeps the historic rule (the collector's
-# sessmap wins over FLEET_REPO); a multi-repo fleet must not: the sessmap holds ONE
-# repo per session and would drag every window back to the conf's own repo.
+# fleet_load_*conf: the loaded FLEET_REPO. Never the collector's sessmap, which
+# holds ONE repo per session and would drag every window back to the conf's own
+# (issue #1943) — except, compat-1v: 下一批删, for a pre-#1937 conf naming only
+# FLEET_MAIN, which lists no repo and has none other.
 fleet_resolved_repo() {
-  local r=''
-  fleet_has_repo_overlays "${1:-}" || r=$(fleet_repo_cached "${1:-}")
-  printf '%s' "${r:-${FLEET_REPO:-}}"
+  local r="${FLEET_REPO:-}"
+  [ -n "$r" ] || [ -n "$(fleet_repos "${1:-}")" ] || r=$(fleet_repo_cached "${1:-}")
+  printf '%s' "$r"
 }
 
 # fleet_issue_windows <sess> <repo> <issue> → the window ids bound to (repo,
-# issue), one per line. In a multi-repo fleet a window matches only when its own
-# repo (fleet_window_repo) IS <repo> — an unknown/@norepo window never matches, so
-# repo B's #12 is invisible to repo A's cleanup. Degenerate: every window whose
-# @issue is <issue>, as before.
+# issue), one per line. A window matches only when its own repo
+# (fleet_window_repo) IS <repo> — an unknown/@norepo window never matches, so
+# repo B's #12 is invisible to repo A's cleanup.
 fleet_issue_windows() {
-  local sess="${1:-}" want i w wi multi=0
+  local sess="${1:-}" want i w wi
   want=$(fleet_norm_repo "${2:-}"); i="${3:-}"
-  [ -n "$i" ] || return 0
-  fleet_has_repo_overlays "$sess" && multi=1
+  [ -n "$i" ] && [ -n "$want" ] || return 0
   _fleet_tmux "$sess" list-windows -t "$sess" -F '#{window_id} #{@issue}' 2>/dev/null |
   while read -r w wi; do
     [ "$wi" = "$i" ] || continue
-    if [ "$multi" = 1 ]; then
-      [ -n "$want" ] || continue
-      [ "$(fleet_norm_repo "$(fleet_window_repo "$sess" "$w")")" = "$want" ] || continue
-    fi
+    [ "$(fleet_norm_repo "$(fleet_window_repo "$sess" "$w")")" = "$want" ] || continue
     printf '%s\n' "$w"
   done
   return 0
@@ -1206,13 +1189,6 @@ fleet_backlog_repo() {
 # snapshot and ledger row still matches. (The dash's grouping keys are a
 # different spelling of the same idea, `<slug>:issue-<N>`, because they must equal
 # what a spawn stamps into @origin — see fleet_okey_prefix.)
-
-# fleet_multirepo <sess> → 0 iff the fleet hosts 2+ repos. A fleet with no repos/
-# dir answers from one [ -d ] — no fork, no tmux — so a 4Hz path may ask it.
-fleet_multirepo() {
-  [ -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || return 1
-  [ "$(fleet_repos "$1" | grep -c .)" -ge 2 ]
-}
 
 # fleet_target_repo <sess> [<repo>] → the ONE repo a repo-wide command (the EPIC
 # trio, fleet-epic-preflight.sh, fleet-evidence.sh, the PR / comment wrappers;
@@ -4501,10 +4477,6 @@ fleet_scratch_key() {
 }
 
 # ---- repo-qualified keys + self-stamping windows (issue #789) ----------------
-# _fleet_hosts_many <sess> → 0 iff the fleet hosts 2+ repos. No repos/ dir ⇒ 1 before
-# reading any conf, so a one-repo fleet pays nothing (the degenerate case).
-_fleet_hosts_many() { fleet_multirepo "$@"; }   # one rule for every key (#790)
-
 # _fleet_key_prefix <sess> <window-target> → "<slug>:" of the window's repo, in
 # every fleet (issue #1939); exit 1 when the window's repo is unknown or it is a
 # no-repo session — the caller then mints no key rather than guess. A fleet that
@@ -4762,8 +4734,9 @@ fleet_win_for_key() {
   esac
   fleet="$sock"; [ -n "$fleet" ] || fleet=$(fleet_current_session 2>/dev/null)
   if [ -z "$pre" ] && [ -n "$fleet" ]; then
+    # compat-1v: 下一批删 — a bare key is the old spelling, read in a one-repo fleet.
     case "$key" in issue-*)
-      if fleet_multirepo "$fleet"; then
+      if [ "$(fleet_repos "$fleet" | grep -c .)" -ge 2 ]; then
         printf 'fleet: %s is ambiguous in %s — the fleet hosts several repos and each may bind #%s; qualify the key with the repo slug (<slug>:%s)\n' \
           "$key" "$fleet" "${key#issue-}" "$key" >&2
         return 2

@@ -21,6 +21,11 @@
 #   fleet-keys.sh --context dash     # dashboard-scoped sheet (+ tmux prefix)
 #   fleet-keys.sh --context backlog  # backlog-scoped sheet (+ tmux prefix)
 #   fleet-keys.sh --context sidebar  # the task list's short sheet (its taps)
+#   fleet-keys.sh --page             # ⌘/ / prefix ? (issue #1952): ONE page, opened
+#                                    #   on the stage (fleet-shell.sh keys) — the ⌘
+#                                    #   keys with each one's key in any other
+#                                    #   terminal beside it, the writing area's, the
+#                                    #   mouse's; fits a 38-row window
 #   fleet-keys.sh --plain            # print once and exit (no wait) — pipes/tests
 #                                    #   also implied when stdout is not a tty
 #
@@ -41,9 +46,11 @@ fleet_ui_pin
 
 PLAIN=""
 CONTEXT="all"
+PAGE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --plain)      PLAIN=1 ;;
+    --page)       PAGE=1 ;;
     --context)    shift; CONTEXT="${1:-all}" ;;
     --context=*)  CONTEXT="${1#--context=}" ;;
     *)            ;;  # ignore unknown args (forward-compat)
@@ -130,6 +137,72 @@ print_sidebar_sheet() {
   skey "$(fleet_ui_t keys_sidebar_m3k)" "$(fleet_ui_t keys_sidebar_m3)"
   skey "$(fleet_ui_t keys_sidebar_12k)" "$(fleet_ui_t keys_sidebar_12)"
   skey "$(fleet_ui_t keys_sidebar_m4k)" "$(fleet_ui_t keys_sidebar_m4)"
+}
+
+# THE page (issue #1952): what ⌘/ opens on the right. Three groups — the ⌘ keys
+# (read from `dash-keymap.sh --panel switch`, so the page can never name a chord
+# the conf does not catch; a pair — ⌘↑ ⌘↓, ⌘[ ⌘] — is one line), the writing
+# area's, the mouse's — and on every ⌘ line, from a fixed column, the key any
+# other terminal presses for it. The panels' inner keys stay on the full sheet.
+# `pkey <key> <desc> [<other>]`: the key column 16 cells, the desc to column 64.
+pkey() {
+  local k="$1" d="$2" o="${3:-}" pad n
+  n=$((16 - ${#k} - $(wide "$k"))); [ "$n" -lt 1 ] && n=1
+  printf -v pad '%*s' "$n" ''
+  if [ -n "$o" ]; then
+    local dpad m
+    m=$((44 - ${#d} - $(wide "$d"))); [ "$m" -lt 1 ] && m=1
+    printf -v dpad '%*s' "$m" ''
+    printf '    %s%s%s%s%s%s%s%s%s\n' "$B$YEL" "$k" "$R" "$pad" "$d" "$dpad" "$DIM" "$o" "$R"
+  else
+    printf '    %s%s%s%s%s\n' "$B$YEL" "$k" "$R" "$pad" "$d"
+  fi
+}
+pgroup() { printf '\n  %s%s%s%s%s\n' "$B" "$CYAN" "$1" "$R" "${2:+  $DIM$2$R}"; }
+print_page() {
+  local sa sg sp acts='' done_acts=''
+  local G_next='' G_prev='' G_back='' G_fwd='' P_next='' P_prev='' P_back='' P_fwd=''
+  printf '\n  %s%s%s  %s%s%s  %s%s%s\n' "$B" "$(fleet_ui_t keys_page_title)" "$R" \
+    "$DIM" "$(fleet_ui_t keys_page_sub)" "$R" "$DIM" "$(fleet_ui_t keys_close)" "$R"
+  pgroup "$(fleet_ui_t keys_page_cmd)"
+  # one read of the table: each action's chord (G_<a>) and other key (P_<a>)
+  while read -r sa sg _ _ sp; do
+    [ -n "$sa" ] || continue
+    case "$sp" in F[0-9]*) ;; *) sp="prefix $sp" ;; esac
+    printf -v "G_$sa" '%s' "$sg"; printf -v "P_$sa" '%s' "$sp"
+    acts="$acts $sa"
+  done <<EOF
+$(bash "$BIN/dash-keymap.sh" --panel switch list 2>/dev/null)
+EOF
+  # the prototype's order: new, quick open, the two pairs, the rest; a table
+  # action this list does not know still gets its line (the sheet's words)
+  for sa in new quickopen prev back needs zoom help $acts; do
+    case " $done_acts " in *" $sa "*) continue ;; esac
+    done_acts="$done_acts $sa"
+    sg="G_$sa"; sp="P_$sa"
+    [ -n "${!sg:-}" ] || continue
+    case "$sa" in
+      prev) done_acts="$done_acts next"
+            pkey "$G_prev $G_next" "$(fleet_ui_t keys_page_prevnext)" "$P_prev / ${P_next#prefix }" ;;
+      back) done_acts="$done_acts fwd"
+            pkey "$G_back $G_fwd" "$(fleet_ui_t keys_page_backfwd)" "$P_back / ${P_fwd#prefix }" ;;
+      new|quickopen|needs|zoom|help) pkey "${!sg}" "$(fleet_ui_t "keys_page_$sa")" "${!sp}" ;;
+      *) pkey "${!sg}" "$(fleet_ui_t "keys_switch_$sa")" "${!sp}" ;;
+    esac
+  done
+  pgroup "$(fleet_ui_t keys_page_compose)"
+  pkey "↵" "$(fleet_ui_t keys_page_c_send)"
+  pkey "⇧↵  ⌥↵" "$(fleet_ui_t keys_page_c_nl)"
+  pkey "Tab" "$(fleet_ui_t keys_page_c_tab)"
+  pkey "space" "$(fleet_ui_t keys_page_c_space)"
+  pkey "esc" "$(fleet_ui_t keys_page_c_esc)"
+  pgroup "$(fleet_ui_t keys_page_mouse)"
+  pkey "$(fleet_ui_t keys_sidebar_m1k)" "$(fleet_ui_t keys_sidebar_m1)"
+  pkey "$(fleet_ui_t keys_sidebar_m2k)" "$(fleet_ui_t keys_page_m_menu)"
+  pkey "$(fleet_ui_t keys_sidebar_m3k)" "$(fleet_ui_t keys_sidebar_m3)"
+  pkey "$(fleet_ui_t keys_sidebar_12k)" "$(fleet_ui_t keys_sidebar_12)"
+  pkey "$(fleet_ui_t keys_sidebar_m4k)" "$(fleet_ui_t keys_sidebar_m4)"
+  printf '\n  %s%s%s\n' "$DIM" "$(fleet_ui_t keys_page_more)" "$R"
 }
 
 # THE sheet — one structure, every string from fleet-ui-lang.sh (issue #1535:
@@ -247,7 +320,12 @@ EOF
   fi
 }
 
-print_sheet
+if [ -n "$PAGE" ]; then
+  [ -t 1 ] && printf '\033[?25l'   # no cursor on a page to read
+  print_page
+else
+  print_sheet
+fi
 
 [ -n "$PLAIN" ] && exit 0
 

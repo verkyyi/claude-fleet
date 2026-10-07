@@ -133,6 +133,12 @@ kubectl -n new-deploy logs deploy/ccquota-hub -c ccquota | grep 'store: migratio
 |---|---|---|---|
 | 1 | `remove-company-business`（#1987） | 删 `usage_events` / `usage_hourly` / `accounts` / `subscription_plans` 等带 `source` 列的表里 **source = gateway / vendor_bill / voice** 的行（Claude、Codex 的行一行不动）；丢掉 `growth_facts`、`repo_*`、`share_links`、`finding_notices` 这些表；把 repo / growth 的上报令牌标成已退役 | 镜像换回迁移前的 tag + 用 `hub-deploy` 在这次发布前拍的快照恢复（上面「恢复」一节） |
 
+**发布前演练**（#2050）：`hub-deploy` 拍完快照、apply 之前，把新镜像作为临时容器（ephemeral
+container）塞进正在跑的 hub pod，挂 `/data`，对快照的一份拷贝跑 `ccquota hub --migrate-only`。
+跑不过 ⇒ 不 apply，job 红，线上 pod 一直没停。本地复现同一件事：
+`ccquota hub --migrate-only --db <快照的拷贝>`（不给拷贝、给不存在的文件都会拒绝）。
+演练本身的演练：workflow_dispatch 勾 `simulate_migration_failure`。
+
 迁移没有反向脚本：回滚只走「旧镜像 + 快照」。删掉的公司业务数据只在那份快照里还有。
 
 

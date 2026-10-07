@@ -151,9 +151,10 @@ eq 'b then e: deps unset' \
    "$( fleet_load_repo_conf $M o/b; fleet_load_repo_conf $M o/e; printf '%s' "${FLEET_BASE_DEPS-unset}" )" unset
 eq 'caller env survives (baseline)' \
    "$( FLEET_CLEANUP=9 bash -c ". '$BIN/fleet-lib.sh'; fleet_load_repo_conf $M o/b; fleet_load_repo_conf $M o/a; printf %s \"\$FLEET_CLEANUP\"" )" 9
-# Degenerate: no reset at all — a one-repo fleet's load is what it always was.
-eq 'degenerate untouched' \
-   "$( FLEET_SCRATCH_POOL=7; fleet_load_repo_conf $D o/c; printf '%s' "$FLEET_SCRATCH_POOL" )" 7
+# One road (issue #1943): a one-repo fleet resets to the baseline too, so a value
+# a previous load left behind never survives into the next repo's view.
+eq 'one-repo reset like any other' \
+   "$( FLEET_SCRATCH_POOL=7; fleet_load_repo_conf $D o/c; printf '%s' "${FLEET_SCRATCH_POOL-unset}" )" "$( fleet_load_repo_conf $D o/c; printf '%s' "${FLEET_SCRATCH_POOL-unset}" )"
 leg leak
 
 # --- setup -----------------------------------------------------------------------

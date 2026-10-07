@@ -273,18 +273,26 @@ if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then
   else refuse "$cap_msg"; exit 2; fi
 fi
 
-# Which repo (issue #789) — see the header. The chosen repo's overlay replaces what
-# fleet_load_conf resolved (possibly the CALLER window's repo).
-MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
+# Which repo (issue #789) — see the header. ONE rule, however many repos the fleet
+# hosts (issue #1943): --repo, else the selected row's repo, else the fleet's only
+# repo; several and none chosen ⇒ a no-repo scratch. The chosen repo's overlay
+# replaces what fleet_load_conf resolved (possibly the CALLER window's repo).
 if [ "$NOREPO" != 1 ]; then
-  if [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ] && [ -n "$SEL" ]; then
+  if [ -z "$REPO_ARG" ] && [ -n "$SEL" ]; then
     REPO_ARG=$(fleet_selection_repo "$SESS" "$SEL")
     [ "$REPO_ARG" = none ] && { REPO_ARG=''; NOREPO=1; }
   fi
-  [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ] && NOREPO=1
-  # A fleet with no repo at all (issue #1937) — no repo hosted and no checkout to
-  # branch from: every session is a no-repo one.
-  [ -z "$REPO_ARG" ] && [ -z "${FLEET_MAIN:-}" ] && [ -z "$(fleet_repos "$SESS")" ] && NOREPO=1
+  if [ -z "$REPO_ARG" ] && [ "$NOREPO" != 1 ]; then
+    _all=$(fleet_repos "$SESS")
+    case "$(printf '%s' "$_all" | grep -c .)" in
+      1) REPO_ARG=$_all ;;
+      # A fleet with no repo at all (issue #1937): every session is a no-repo one.
+      # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN keeps its checkout.
+      0) [ -n "${FLEET_MAIN:-}" ] || NOREPO=1 ;;
+      *) NOREPO=1 ;;
+    esac
+    unset _all
+  fi
   if [ -n "$REPO_ARG" ]; then
     REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
     fleet_load_repo_conf "$SESS" "$REPO_ARG" \
@@ -471,11 +479,11 @@ fi
 # argument, which only a cold spawn can carry (see the header).
 warm=0; win=""; slug=""; wt=""
 claimed=""
-# One pool per hosted repo (issue #797): in a 2+ repo fleet the claim names the
-# scratch's repo, so it only ever gets a window warmed from THAT repo's worktree.
-# A no-repo scratch never claims. A one-repo fleet passes no --repo: unchanged.
+# One pool per hosted repo (issue #797): the claim names the scratch's repo, so it
+# only ever gets a window warmed from THAT repo's worktree. A no-repo scratch never
+# claims.
 _pool_ok=1; [ "$NOREPO" = 1 ] && _pool_ok=0
-_pool_repo=''; [ "$MULTI" = 1 ] && _pool_repo="$REPO_ARG"
+_pool_repo=$REPO_ARG
 [ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" ${_pool_repo:+--repo "$_pool_repo"} 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
   warm=1
@@ -530,7 +538,7 @@ else
   # launcher consumes it. Validated to claude|codex above, so bare is safe.
   launch="'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}"
   # The window stamps its own repo identity BEFORE the launcher reads its conf
-  # (issue #789 — see fleet_win_stamp_cmd). A one-repo repo scratch: unchanged.
+  # (issue #789 — see fleet_win_stamp_cmd).
   stamp=''; nsid=''
   if [ "$NOREPO" = 1 ]; then
     if [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ]; then
@@ -539,7 +547,7 @@ else
       [ -n "$nsid" ] && launch="$launch --session-id $nsid"
     fi
     stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
-  elif [ "$MULTI" = 1 ]; then
+  elif [ -n "$REPO_ARG" ]; then
     stamp=$(fleet_win_stamp_cmd @repo "$REPO_ARG" @worktree "$wt")
   fi
   if [ -n "$PROMPT" ]; then
@@ -569,8 +577,6 @@ fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on t
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
 # Every repo scratch carries its repo (issue #789), warm or cold.
 [ -n "$REPO_ARG" ] && TM set-window-option -t "$win" @repo "$REPO_ARG" 2>/dev/null
-[ "$NOREPO" != 1 ] && [ "$MULTI" = 0 ] && [ -n "${FLEET_REPO:-}" ] \
-  && TM set-window-option -t "$win" @repo "$(fleet_norm_repo "$FLEET_REPO")" 2>/dev/null
 [ "$PIN" = 1 ] && TM set-window-option -t "$win" @pin 1 2>/dev/null
 # When the fleet may close it on its own (issue #1902): the one asked for, else the
 # kind's default — a /loop seed until its loop stops, any other scratch once done

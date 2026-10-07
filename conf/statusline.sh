@@ -64,20 +64,34 @@
 # value by construction, so the only visible seam is the model's spelling (the
 # mod derives the display name from the model id — mod/fleet/hooks/usage.ts).
 #
+# A THIRD FEEDER, FOR QUOTA ONLY: the credential proxy (issue #1978, EPIC #1967).
+# With FLEET_CRED_PROXY=1 every request of a session — Claude or Codex — passes
+# bin/fleet-cred-proxy.py, which keeps each session's last rate-limit headers;
+# bin/fleet-proxy-quota.sh hands them here per window (@cred_sid):
+#
+#   statusline.sh --from proxy rl5h=N rl7d=N rl_reset5=E rl_reset7=E ts=E
+#       stamps the @rl* set with @rl_src proxy and @rl_ts = the READING's time
+#       (ts=, else now). It never touches the context, model or effort stamps.
+#
+# The proxy's reading is the provider's own word for EVERY session, so it wins:
+# while @rl_src is proxy and its @rl_ts is younger than FLEET_RL_PROXY_FRESH
+# (300 s) the other two feeders leave the @rl* set alone. No proxy (the
+# default) ⇒ no @rl_src proxy ⇒ both behave byte for byte as before.
+#
 # Outside tmux there is no bus: nothing is stamped and nothing is printed. The
 # old visible line's cwd + git-branch segments went with it (#1452 — the window
 # name and the task bar show both), so this never runs git.
 # Requires: jq on the Claude path (silently exits if absent); none on the mod's.
 
-FROM=''
+FROM='' RLTS=''
 if [[ "${1:-}" == --from ]]; then FROM="${2:-}"; shift 2; fi
 
 US=$'\x1f'   # field separator — never whitespace, so `read` keeps EMPTY fields
 
-if [[ "$FROM" == mod ]]; then
-  # ── the mod's reading: key=value argv, no stdin ─────────────────────────────
+if [[ "$FROM" == mod || "$FROM" == proxy ]]; then
+  # ── the mod's / the proxy's reading: key=value argv, no stdin ───────────────
   [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || exit 0
-  CTX_PCT='' CTX_SIZE='' MODEL='' EFFORT='' RL5='-' RL7='-' RLR5='-' RLR7='-'
+  CTX_PCT='' CTX_SIZE='' MODEL='' EFFORT='' RL5='-' RL7='-' RLR5='-' RLR7='-' RLTS=''
   for kv in "$@"; do
     case "$kv" in
       ctx_pct=*)   CTX_PCT=${kv#*=} ;;
@@ -88,8 +102,11 @@ if [[ "$FROM" == mod ]]; then
       rl7d=*)      RL7=${kv#*=} ;;
       rl_reset5=*) RLR5=${kv#*=} ;;
       rl_reset7=*) RLR7=${kv#*=} ;;
+      ts=*)        RLTS=${kv#*=} ;;
     esac
   done
+  # the proxy feeds quota only: whatever else it might say is not its to say
+  [[ "$FROM" == proxy ]] && { CTX_PCT=''; MODEL=''; }
   # The jq path floors a decimal %; floor the mod's the same way.
   [[ "$RL5" =~ ^[0-9]+\.[0-9]+$ ]] && RL5=${RL5%%.*}
   [[ "$RL7" =~ ^[0-9]+\.[0-9]+$ ]] && RL7=${RL7%%.*}
@@ -177,9 +194,24 @@ if [[ "$CTX_PCT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
 fi
 
 # ── one read of what is on the bus now; queue only what differs ─────────────
+# The quota writer + time lead as two space-separated words (`-` = unset): an
+# older tmux prints a control character as `_` to a client it does not take for
+# UTF-8, so the proxy-wins rule below must not hang on the \x1f split.
 CUR=$(tmux display-message -p -t "$TMUX_PANE" \
-        "#{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}" 2>/dev/null)
+        "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}" 2>/dev/null)
+cur_rlsrc='' cur_rlts=''
+if [[ "$CUR" =~ ^([^ ]+)\ ([^ ]+)\ (.*)$ ]]; then
+  cur_rlsrc=${BASH_REMATCH[1]}; cur_rlts=${BASH_REMATCH[2]}; CUR=${BASH_REMATCH[3]}
+fi
 IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort cur_src <<< "$CUR"
+
+# The proxy's quota reading wins while it is fresh (issue #1978): a status-line
+# render or a mod measure then leaves the @rl* set as the proxy stamped it.
+if [[ "$FROM" != proxy && "$cur_rlsrc" == proxy && "$cur_rlts" =~ ^[0-9]+$ ]]; then
+  rl_fresh=${FLEET_RL_PROXY_FRESH:-300}; [[ "$rl_fresh" =~ ^[0-9]+$ ]] || rl_fresh=300
+  (( $(date +%s) - cur_rlts < rl_fresh )) && RL5='-'
+fi
+[[ "${RLTS:-}" =~ ^[0-9]+$ ]] || RLTS=''
 
 ARGS=()
 # stamp <option> <want> <have> — queue a set (want='' ⇒ an unset) when they differ.
@@ -204,9 +236,9 @@ if [[ "$RL5" =~ ^[0-9]+$ && "$RL7" =~ ^[0-9]+$ ]]; then
   ARGS+=(set-window-option -t "$TMUX_PANE" @rl5h "$RL5" \; \
          set-window-option -t "$TMUX_PANE" @rl7d "$RL7" \; \
          set-window-option -t "$TMUX_PANE" @rl_reset "$RLR5 $RLR7" \; \
-         set-window-option -t "$TMUX_PANE" @rl_ts "$(date +%s)" \;)
-  if [[ "$FROM" == mod ]]; then ARGS+=(set-window-option -t "$TMUX_PANE" @rl_src mod)
-  else                          ARGS+=(set-window-option -u -t "$TMUX_PANE" @rl_src); fi
+         set-window-option -t "$TMUX_PANE" @rl_ts "${RLTS:-$(date +%s)}" \;)
+  if [[ -n "$FROM" ]]; then ARGS+=(set-window-option -t "$TMUX_PANE" @rl_src "$FROM")
+  else                      ARGS+=(set-window-option -u -t "$TMUX_PANE" @rl_src); fi
 fi
 [[ ${#ARGS[@]} -gt 0 ]] && tmux ${ARGS[@]+"${ARGS[@]}"} 2>/dev/null
 exit 0

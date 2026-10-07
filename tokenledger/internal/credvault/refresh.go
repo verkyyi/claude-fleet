@@ -248,6 +248,143 @@ func (p *ProxyRefresher) RefreshVia(ctx context.Context, provider string, s Secr
 	return acc, next, ans.Via, err
 }
 
+// --- refresh through the Singapore relay (claude-fleet#1976) -------------------
+
+// RelayVia is what the audit row says when the relay carried a refresh:
+// refresh_via=relay. No machine's memory held the refresh token.
+const RelayVia = "relay"
+
+// RelayTokenPath is the relay's route to auth.openai.com's token endpoint
+// (extras/cred-relay/Caddyfile, the /openai-auth/ prefix of C7).
+const RelayTokenPath = "/openai-auth/oauth/token"
+
+// RelayPassHeader carries the hub's own pass to the relay's forward_auth; the
+// relay strips it before it forwards (docs/CRED-RELAY.md).
+const RelayPassHeader = "X-Fleet-Relay"
+
+// RelayRefresher posts a Codex refresh to the Singapore relay
+// (<URL>/openai-auth/oauth/token) instead of handing it to an admin node, so
+// the long-lived refresh token never enters any machine's memory and a
+// refresh no longer needs one online. The request and its reading are
+// HTTPRefresher's; the relay only carries bytes. When the relay cannot be
+// asked — unreachable, a gateway error, or it refuses the hub's pass — the
+// refresh falls back to Fallback (the node path) and the audit says so.
+// A provider's own answer (invalid_grant, 403 from OpenAI) is never a reason
+// to fall back: it is the answer.
+type RelayRefresher struct {
+	URL      string                 // the relay's base URL, e.g. https://fleet-relay.24hw.cn
+	Pass     func() (string, error) // the hub's short-lived relay pass
+	Fallback RefresherVia           // the node path; nil = no fallback
+	Client   *http.Client
+	Now      func() time.Time
+}
+
+func (r *RelayRefresher) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
+func (r *RelayRefresher) client() *http.Client {
+	if r.Client != nil {
+		return r.Client
+	}
+	return &http.Client{Timeout: 30 * time.Second}
+}
+
+// Refresh implements Refresher.
+func (r *RelayRefresher) Refresh(ctx context.Context, provider string, s Secret) (Access, Secret, error) {
+	acc, next, _, err := r.RefreshVia(ctx, provider, s)
+	return acc, next, err
+}
+
+// RefreshVia implements RefresherVia.
+func (r *RelayRefresher) RefreshVia(ctx context.Context, provider string, s Secret) (Access, Secret, string, error) {
+	form, err := refreshForm(provider, s)
+	if err != nil {
+		return Access{}, s, "", err
+	}
+	if provider != Codex {
+		// The relay's /openai-auth/ route is OpenAI's only; anything else
+		// keeps the path it had.
+		return r.fallback(ctx, provider, s, "")
+	}
+	status, raw, err := r.post(ctx, form)
+	if err != nil {
+		return r.fallback(ctx, provider, s, err.Error())
+	}
+	if why := relayRefused(status, raw); why != "" {
+		return r.fallback(ctx, provider, s, why)
+	}
+	acc, next, err := parseRefresh(provider, s, status, raw, r.now())
+	return acc, next, RelayVia, err
+}
+
+func (r *RelayRefresher) post(ctx context.Context, form map[string]string) (int, []byte, error) {
+	if strings.TrimSpace(r.URL) == "" {
+		return 0, nil, errors.New("no relay URL")
+	}
+	if r.Pass == nil {
+		return 0, nil, errors.New("no relay pass")
+	}
+	pass, err := r.Pass()
+	if err != nil {
+		return 0, nil, fmt.Errorf("relay pass: %w", err)
+	}
+	b, _ := json.Marshal(form)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(r.URL, "/")+RelayTokenPath, bytes.NewReader(b))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set(RelayPassHeader, pass)
+	resp, err := r.client().Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode, raw, nil
+}
+
+// relayRefused names why an answer came from the relay itself rather than
+// from auth.openai.com ("" = it is the provider's answer): the forward_auth
+// refusal (the hub's relay_refused body), a path the relay does not route,
+// or the relay's own gateway error.
+func relayRefused(status int, raw []byte) string {
+	switch status {
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return fmt.Sprintf("relay answered %d", status)
+	case http.StatusNotFound:
+		return "relay does not route " + RelayTokenPath
+	case http.StatusForbidden:
+		var e struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &e) == nil && e.Error == "relay_refused" {
+			return "relay refused the hub's pass"
+		}
+	}
+	return ""
+}
+
+// fallback runs the node path, its audit naming why the relay was skipped.
+func (r *RelayRefresher) fallback(ctx context.Context, provider string, s Secret, why string) (Access, Secret, string, error) {
+	if r.Fallback == nil {
+		if why == "" {
+			return Access{}, s, "", fmt.Errorf("%w: the relay carries OpenAI refreshes only, and no node path is wired", ErrRefreshUnavailable)
+		}
+		return Access{}, s, RelayVia, fmt.Errorf("%w: relay: %s", ErrRefreshUnavailable, why)
+	}
+	acc, next, via, err := r.Fallback.RefreshVia(ctx, provider, s)
+	if why != "" {
+		via = strings.TrimSpace(via + " (relay unavailable: " + truncate(why, 120) + ")")
+	}
+	return acc, next, via, err
+}
+
 // JWTExpiry reads the exp claim of a JWT without verifying it (the hub just
 // received it from the issuer over TLS; it only needs the date).
 func JWTExpiry(tok string) *time.Time {

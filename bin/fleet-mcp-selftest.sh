@@ -73,7 +73,6 @@ LOG="$WORK/runs"; : > "$LOG"
 
 cat > "$WORK/bin/fleet-lib.sh" <<'SH'
 fleet_origin_key() { printf 'issue-1807'; }
-_fleet_hosts_many() { return 1; }
 fleet_origin_win() { printf '@77'; }
 fleet_win_for_key() { [ "$1" = issue-77 ] && printf '@77'; }
 SH

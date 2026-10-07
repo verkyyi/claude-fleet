@@ -852,19 +852,24 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
 
 A colleague gets ONE line from the operator — `curl -fsSL https://<入口>/install | sh` — and
 nothing else. What they then see, press and wait for, as
-`bin/fleet-onboard-drill.sh` recorded it on a throwaway login on m4
-(2026-10-06; 「要人帮」 = a step they would have had to ask someone about):
+`bin/fleet-onboard-drill.sh` recorded it on a throwaway login on m4 — final run
+2026-10-07, stable `644641e`, hub `prod-56a4d57`, a DRILL PERSON confirming the scan
+(`fleet drill invite`), the client on the test identity; paste → list in 137 s
+(「要人帮」 = a step they would have had to ask someone about):
 
 | # | 看到什么 | 按了什么 | 用时 | 要人帮 |
 |---|---|---|---|---|
 | 1 | 终端提示符 | 粘贴 `curl -fsSL https://<入口>/install \| sh`，回车 | — | 否 |
-| 2 | 「这台电脑要做什么？ 1 只看、只派（推荐）· 2 也跑会话（承载）」 | 回车（1） | ~2s | 否 |
-| 3 | 「接入口吗？ 1 接（推荐）· 2 不接」 | 回车（1） | ~2s | 否 |
-| 4 | 下载、装 tmux、登记这台电脑 | 等 | ~2min | 否（#1901 前：每个文件一行 `curl: (56) … 502`，装不完 — 是） |
+| 2 | 「这台电脑要做什么？ 1 只看、只派（推荐）· 2 也跑会话（承载）」 | 回车（1） | 2s | 否 |
+| 3 | 「接入口吗？ 1 接（推荐）· 2 不接」 | 回车（1） | 2s | 否 |
+| 4 | 下载、装 tmux、登记这台电脑（屏上没有一行 curl 报错） | 等 | 99s | 否（#1901 前：每个文件一行 `curl: (56) … 502`，装不完 — 是） |
 | 5 | 企业微信二维码 + 验证码，600 秒有效 | 用企业微信扫码、点确认 | 本人 | 本人的一步 |
-| 6 | ✓ 证书 · ✓ ssh 配置 · ✓ 已登记到入口 · ✓ agent · 「能力: 基础 · 承载 未开 · 入口 接」 | 等 | ~20s | 否 |
-| 7 | 客户端：左边任务列表、右边主页 | —（装完自己打开） | ~5s | 否（#1901 前：`open terminal failed: can't use /dev/tty` — 是） |
-| 8 | 空列表 `No sessions — type a name` | prefix 空格 到列表，敲名字，回车；「开在哪」回车（自动） | — | 是，直到 #1927：空列表没有仓库可开 |
+| 6 | ✓ 证书 · ✓ 已登记到入口 · 「能力: 基础 · 承载 未开 · 入口 接」，客户端：左边任务列表、右边主页 | —（装完自己打开） | 16s | 否（#1901 前：`open terminal failed: can't use /dev/tty` — 是） |
+| 7 | 空列表 `No sessions — type a name` | prefix 空格 到列表，敲名字，回车 | 7s | **是** — 4 秒提示「你还没有能开会话的机器：请入口管理员给你分一台」：新人名下还没有任何一台机器，只有管理员能分（见下） |
+
+So the reading is **1**, and it is a step the operator takes BEFORE sending the line, not one the
+colleague can take: give the new person a machine (a login on a host) on the hub first. With one
+given, row 7 goes on to 「选仓库 / 开在哪」 (each Enter = the default) and the new row.
 
 What the drill found and where it went:
 

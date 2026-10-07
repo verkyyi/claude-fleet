@@ -84,7 +84,7 @@ log()   { cat "$TMUXLOG"; }
 
 FULL='{"model":{"id":"claude-opus-5-5","display_name":"Opus 5.5"},"effort":{"level":"high"},"workspace":{"current_dir":"/tmp/x"},"context_window":{"used_percentage":42.4,"context_window_size":200000},"rate_limits":{"five_hour":{"used_percentage":12.7,"resets_at":1791031200},"seven_day":{"used_percentage":2,"resets_at":1791554400}}}'
 NORL='{"model":{"display_name":"Opus 5.5"},"effort":{"level":"high"},"context_window":{"used_percentage":42.4,"context_window_size":200000}}'
-CUR_FULL="42${US}200000${US}ok${US}Opus 5.5${US}high"
+CUR_FULL="- - 42${US}200000${US}ok${US}Opus 5.5${US}high"
 
 # --- A: a full render ---------------------------------------------------------
 out=$(printf '%s' "$FULL" | render)

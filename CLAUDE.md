@@ -70,11 +70,17 @@ Do not install from memory: read the doc and work from it.
   window whose repo is unknown is skipped, never guessed. **An EPIC's parent is
   in one repo, its members may be in any hosted repo** (issue #1942): a member is
   (repo, issue) — `owner/name#N` in the charter's list, read through
-  `fleet_member_ref` / `fleet_sub_issues`, never a sub-issue's `.number` alone. In a 2+ repo fleet the
-  hub opens in `$HOME`. **Degenerate case is sacred:** a fleet with no `repos/`
-  overlay must behave byte for byte as a one-repo fleet always has, and any
-  change here ships a selftest leg that asserts it. `bin/multirepo-e2e-selftest.sh`
-  is the end-to-end check (`leaks: 0/9`).
+  `fleet_member_ref` / `fleet_sub_issues`, never a sub-issue's `.number` alone. The
+  hub opens in `$HOME`. **One repo is not a mode** (issue #1943, EPIC #1935): it
+  is `fleet_repos` counting 1, so there is no "is this a multi-repo fleet?" test —
+  the repo comes from `--repo`, else the window's own, else the fleet's only one,
+  else the caller ASKS (`fleet_target_repo`, rc 4). **The rule that replaced the
+  degenerate case: adding or removing a repo changes NOTHING for the sessions of
+  the other repos** — their keys, dash rows, working directories, restore rows
+  and ledgers stay byte for byte; any change here ships a selftest leg that adds
+  a repo and asserts it. Code that still reads an old format carries
+  `# compat-1v: 下一批删`. `bin/multirepo-e2e-selftest.sh` is the end-to-end check
+  (`leaks: 0/9`, and its `(n)` leg is the rule).
 - **Cross-session addressing has ONE resolver, and it refuses rather than
   guesses** (issue #1537, EPIC #1529 E8). A key (`issue-<N>` / `scratch-<N>` /
   `<slug>:issue-<N>`) becomes a window only through `fleet_win_for_key`
@@ -464,6 +470,12 @@ Do not install from memory: read the doc and work from it.
   stdin; the fleet mod (`mod/fleet/hooks/usage.ts`) feeds it `--from mod key=value …`
   from inside the session (context + rate limits off `session.measure`, model +
   effort off `turn.step`, a `/model` off a 2 s poll) and marks `@ctx_src mod`.
+  A third feeder carries QUOTA only (issue #1978): with `FLEET_CRED_PROXY=1` the
+  credential proxy keeps each session's last rate-limit headers (Claude and
+  Codex alike) and `bin/fleet-proxy-quota.sh` hands them to `--from proxy` on
+  the window whose `@cred_sid` it is (`@rl_src proxy`, `@rl_ts` = the reading's
+  time); while that stamp is fresh (`FLEET_RL_PROXY_FRESH`, 300 s) the other two
+  leave `@rl*` alone. No proxy ⇒ no such stamp ⇒ byte for byte as before.
   Never add a second place that computes a band or rounds a percent. Claude Code
   keeps one blank bottom row for ANY `statusLine`, so the key is removable once
   every Claude window on the login runs mod ≥ 0.2.0: `bin/fleet-statusline.sh

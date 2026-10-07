@@ -12,7 +12,7 @@
 # every leg asserts it still behaves exactly as before #790.
 #
 # One leg per join the issue names:
-#   keys       fleet_multirepo / fleet_issue_key / fleet_window_key /
+#   keys       fleet_repos / fleet_issue_key / fleet_window_key /
 #              fleet_bound_windows / fleet_repo_for_slug / fleet_okey_prefix
 #   dispatch   autofill dedup (fleet-dispatch.sh)
 #   backlog    the ACTIVE map (tmux-issues-rows.sh)
@@ -131,8 +131,8 @@ mkdir -p "$FLEET_C/global"
 printf '%s\t%s\t%s\n' "$M" o-a o/a "$D" o-c o/c > "$FLEET_C/global/sessmap"
 
 # --- keys -----------------------------------------------------------------------
-fleet_multirepo "$M" || fail "keys: M hosts two repos"
-fleet_multirepo "$D" && fail "keys: D hosts one repo"
+eq "keys: M hosts two repos" "$(fleet_repos "$M" | grep -c .)" 2
+eq "keys: D hosts one repo" "$(fleet_repos "$D" | grep -c .)" 1
 eq "keys: issue key, multi"  "$(fleet_issue_key "$M" https://github.com/o/b.git 12)" "o/b#12"
 eq "keys: issue key, one-repo carries its repo too (#1939)" "$(fleet_issue_key "$D" o/c 12)" "o/c#12"
 eq "keys: window key A12" "$(fleet_window_key "$M" "$A12")" "o/a#12"

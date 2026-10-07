@@ -24,7 +24,15 @@
 #                                 holds this call until the menu closes, so a
 #                                 caller that keeps working must not wait on it
 #   menu <session> <@id> --print  print the items (`key<TAB>name<TAB>command`,
-#                                 a disabled item's name starts with `-`) — tests
+#                                 a disabled item's name starts with `-`) — tests,
+#                                 and ⌘P's `>` (fleet-quickopen.py), which lists
+#                                 and runs exactly these
+#   menu <session> - [--print]    the row-less items alone (no row in view)
+#
+# The items' ORDER and groups are THE command table, fleet-quickopen.py
+# `COMMANDS` (issue #1952): ⌘P's `>` and this menu are one list. An item is
+# built here, where the tmux syntax lives; `show` lays them out in the table's
+# order, a rule between two groups.
 #   reap <session> <@id>          what the menu's reap runs AFTER confirm-before:
 #                                 `dash-reap.sh <@id> --yes`, its result token
 #                                 read off stdout (never the exit code, #869) and
@@ -51,7 +59,7 @@ mk() { printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v a="$1" '$1 == a { print $2; e
 if [ "${1:-}" = --keys ]; then
   # the shell's menu has no row-less items (issue #1518), so its sheet lists none
   printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v sh="${FLEET_SHELL:-0}" \
-    'sh == 1 && ($1 == "new" || $1 == "newto" || $1 == "restore" || $1 == "repo") { next }
+    'sh == 1 && ($1 == "new" || $1 == "newto" || $1 == "repo") { next }
      sh != 1 && $1 == "clients" { next } { print $2 "\t" $3 }'
   exit 0
 fi
@@ -61,10 +69,10 @@ wid="${3:-}"
 # #1475): titled `<name> · 在 m4` — the ONE place the list names the machine, now
 # that the rows look alike — with `enter` (the proxy window) and the row-less
 # items. Everything a local row's menu does needs a window here; it has none.
-remote=''
-case "$wid" in @[0-9]*) ;; wid:*/*) remote=1 ;; *) exit 0 ;; esac
+remote='' rowless=''
+case "$wid" in @[0-9]*) ;; wid:*/*) remote=1 ;; -) rowless=1 ;; *) exit 0 ;; esac
 # Never act on another fleet's window, or a stale id tmux recycled elsewhere.
-[ -n "$remote" ] || [ "$(tmux display-message -p -t "$wid" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)" = "$sess" ] || exit 0
+[ -n "$remote$rowless" ] || [ "$(tmux display-message -p -t "$wid" '#{?#{session_group},#{session_group},#{session_name}}' 2>/dev/null)" = "$sess" ] || exit 0
 
 # sq <text> → one word for BOTH /bin/sh and tmux's command parser: single quotes
 # (no $ ~ expansion in either), an embedded quote closed, escaped and reopened.
@@ -160,9 +168,56 @@ state_word() {   # <state> <needs kind> → the act cell's word, or nothing
     failed) t needs_failed ;;
   esac
 }
+# THE command table (issue #1952): `action<TAB>group`, in order — and each
+# letter's action off menu_keys (1–9 are newto's), so an item finds its line.
+ORDER=$(python3 "$BIN/fleet-quickopen.py" commands 2>/dev/null)
+LETTERS=$(printf '%s\n' "$MENU_KEYS" | awk -F '\t' '{ print $2 "=" $1 }')
+act_of() {   # <letter> → $ACT (no subshell: one per item)
+  local l a
+  ACT=''
+  case "$1" in [1-9]) ACT=newto; return 0 ;; esac
+  while IFS='=' read -r l a; do
+    [ "$l" = "$1" ] && { ACT=$a; return 0; }
+  done <<EOF
+$LETTERS
+EOF
+}
+# order — the items in the table's order, a rule where the group changes; an
+# item the table does not name (none should) keeps its place at the end. No
+# table (python3 missing): the build order and its own rules, as before.
+order() {
+  [ -n "$ORDER" ] || return 0
+  local i a g lastg="" out=() seen=() n=${#items[@]}
+  i=0; while [ "$i" -lt "$n" ]; do seen+=(""); i=$((i + 3)); done
+  while IFS='	' read -r a g; do
+    [ -n "$a" ] || continue
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      if [ -n "${items[$i]}" ] && [ -z "${seen[$((i / 3))]}" ]; then
+        act_of "${items[$((i + 1))]}"
+        if [ "$ACT" = "$a" ]; then
+          [ -n "$lastg" ] && [ "$g" != "$lastg" ] && out+=("" "" "")
+          out+=("${items[$i]}" "${items[$((i + 1))]}" "${items[$((i + 2))]}")
+          seen[$((i / 3))]=1; lastg=$g
+        fi
+      fi
+      i=$((i + 3))
+    done
+  done <<EOF
+$ORDER
+EOF
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    [ -n "${items[$i]}" ] && [ -z "${seen[$((i / 3))]}" ] \
+      && out+=("${items[$i]}" "${items[$((i + 1))]}" "${items[$((i + 2))]}")
+    i=$((i + 3))
+  done
+  items=(${out[@]+"${out[@]}"})
+}
 # show <title> — print (--print, the tests) or draw the menu
 show() {
   local i=0 margs=()
+  order
   add "" "" ""
   add "-$(t ui_close)" "" ""
   if [ "$PRINT" = 1 ]; then
@@ -188,6 +243,13 @@ show() {
 }
 PRINT=''; [ "${4:-}" = --print ] && PRINT=1
 
+# add_views <restore kind> — the list's two views (issue #1952): the landed list
+# (`landed` on a node's list, `view` in the shell's) and the detail column.
+add_views() {
+  adda "$(t menu_restore)" "$(mk restore)" "$(ask "$1")"
+  adda "$(t menu_info)" "$(mk info)" "$(ask info)"
+}
+
 # The row-less items, the same at the bottom of both menus.
 add_other() {
   # Each asks on the view's input line (issue #1620), not in a popup: a new
@@ -196,11 +258,19 @@ add_other() {
   add_newto
   # Row-less too (issue #901): the landed list — the view's own ⌃t list, in
   # place (the restore popup was that list a second time) …
-  adda "$(t menu_restore)" "$(mk restore)" "$(ask landed)"
+  add_views landed
   # Row-less (issue #1103): the hub's ⌃z, as an owner/name on the line.
   # Listed in a one-repo fleet too: it is how the second repo gets in.
   adda "$(t menu_repo)" "$(mk repo)" "$(ask repo)"
 }
+
+if [ -n "$rowless" ]; then
+  # No row in view (⌘P's `>` on the writing area, say): the row-less items alone.
+  side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
+  if [ "${FLEET_SHELL:-0}" = 1 ]; then add_views view
+  else add_other; fi
+  show ""
+fi
 
 if [ -n "$remote" ]; then
   # Its machine, name, state and what it needs come from the sidebar's own cache
@@ -252,9 +322,12 @@ if [ -n "$remote" ]; then
     group
     add_other
   else
+    # 已落地 · 详情列 (issue #1952): the list's own views, as verbs on its line —
+    # the shell's landed list is the machines' ledger (fleet-sidebar.py `act`)
+    group
+    add_views view
     # 我的客户端 (issue #1932): the clients open at once, one to disconnect —
     # a second menu, drawn by fleet-client-menu.sh on the same client
-    group
     add "$(t menu_clients)" "$(mk clients)" "$(sh_run "bash $(sq "$BIN/fleet-client-menu.sh") menu $(sq "$sess")${client:+ $(sq "$client")}")"
   fi
   show "$title"

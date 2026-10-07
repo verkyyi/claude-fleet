@@ -154,7 +154,7 @@ r = json.load(open(sys.argv[1]))
 p = r["payload"]
 ok = (r["kind"] == "child_report" and r["from"] == sys.argv[2] and r["to"] == sys.argv[3]
       and r["id"].startswith(sys.argv[2] + "#") and p["child"] == "issue-20" and p["state"] == "BLOCKED"
-      and p["tier"] == "loud" and "[child-report] issue #20" in p["msg"] and "need a key" in p["msg"])
+      and p["tier"] == "loud" and "[child-report] acme/app issue #20" in p["msg"] and "need a key" in p["msg"])
 sys.exit(0 if ok else 1)
 PY
 ok; [ "$(nlines "$LEDGER")" = "$before" ] || fail "D: nothing written to this machine's same-key ledger"
