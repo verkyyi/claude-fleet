@@ -1561,12 +1561,11 @@ drill_hub_refused_cert() {
 # renews it (fleet-login.py renew --if-under 3600); then the hub stops naming the
 # key id, and the keeper's renew exit 3 is the one thing the person is told.
 drill_cert_expiry_keeper() {
-  CAP=20; local t0 s="${CSESS}k" sc="$WORK/cek" port left hh
+  CAP=20; local t0 s="${CSESS}k" sc="$WORK/cek" port left
   client_setup
   mkdir -p "$sc"; rm -f "$sc/orphan"
   cert_hub "$sc" $((CAP * 2 + 60)) || { kill "$CHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$sc/hub.err")"; return 1; }
   read -r port < "$sc/port"
-  hh="$WORK/chome"
   ( client_env; rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub" "$HOME/.ssh/fleet-cert-cert.pub"
     ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert"
     ssh-keygen -q -s "$sc/ca" -I person:gh:1 -n verk -V -1m:+30m "$HOME/.ssh/fleet-cert.pub" )
