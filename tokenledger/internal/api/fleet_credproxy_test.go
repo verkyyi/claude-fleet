@@ -31,6 +31,7 @@ const (
 type cpRig struct {
 	h        *harness
 	tok5, f5 string
+	tok4, f4 string
 	proxy    *httptest.Server
 	mu       sync.Mutex
 	upAuth   []string
@@ -40,7 +41,7 @@ type cpRig struct {
 
 func newCPRig(t *testing.T) *cpRig {
 	t.Helper()
-	h, tok5, _, f5, _ := sessHarness(t)
+	h, tok5, tok4, f5, f4 := sessHarness(t)
 	h.srv.CredProxyToken = cpToken
 	for _, acct := range []string{"acct1", "acct2"} {
 		if err := h.srv.Vault.Put("gh:1005", credvault.Claude, acct, credvault.Secret{RefreshToken: "rt-" + acct}); err != nil {
@@ -50,14 +51,15 @@ func newCPRig(t *testing.T) *cpRig {
 	if err := h.srv.Vault.Put(store.PoolPrincipal, credvault.Codex, "poolcx", credvault.Secret{RefreshToken: "rt-cx", AccountID: "aid-pool"}); err != nil {
 		t.Fatal(err)
 	}
-	r := &cpRig{h: h, tok5: tok5, f5: f5}
+	r := &cpRig{h: h, tok5: tok5, f5: f5, tok4: tok4, f4: f4}
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		_, _ = io.Copy(io.Discard, req.Body)
 		r.mu.Lock()
 		r.upAuth = append(r.upAuth, req.Header.Get("Authorization"))
 		r.upAcct = append(r.upAcct, req.Header.Get("Chatgpt-Account-Id"))
 		r.mu.Unlock()
-		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"PONG"}]}`)
+		// usage: 150 counted tokens a request (claude-fleet#1977)
+		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"PONG"}],"usage":{"input_tokens":100,"cache_read_input_tokens":9000,"output_tokens":50}}`)
 	}))
 	t.Cleanup(up.Close)
 	p, err := credproxy.New(credproxy.Config{

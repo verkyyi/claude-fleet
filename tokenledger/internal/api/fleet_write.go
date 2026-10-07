@@ -1496,6 +1496,17 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+		case strings.HasPrefix(body.Key, PersonBudgetPrefix) && principalKeyRE.MatchString(body.Key[len(PersonBudgetPrefix):]):
+			// A person's budget (claude-fleet#1977): 5h=<tokens>,week=<tokens>;
+			// "" removes it (= no limit).
+			if body.Value != "" {
+				b, err := parsePersonBudget(body.Value)
+				if err != nil {
+					httpError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				body.Value = b.String()
+			}
 		case body.Key == SpotWeightKey:
 			// The SPOT placement weight (claude-fleet#1428): 0–2, or ""
 			// for CCQUOTA_FLEET_SPOT_WEIGHT's value.
@@ -1528,7 +1539,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+SpotWeightKey+", "+ComputeAutoKey+" and "+MeterKey+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SpotWeightKey+", "+ComputeAutoKey+" and "+MeterKey+" are settable")
 			return
 		}
 		if err := s.Store.SetFleetSetting(body.Key, body.Value, time.Now()); err != nil {
@@ -1558,6 +1569,12 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 		}
 		if strings.HasPrefix(k, NodeTrustPrefix) {
 			eff[k] = v
+			continue
+		}
+		if strings.HasPrefix(k, PersonBudgetPrefix) {
+			if b, err := parsePersonBudget(v); err == nil {
+				eff[k] = b
+			}
 			continue
 		}
 		if n, err := strconv.Atoi(v); err == nil {
