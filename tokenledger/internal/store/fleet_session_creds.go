@@ -147,12 +147,13 @@ func (s *Store) SessionCreds(activeOnly bool, now time.Time, limit int) ([]Sessi
 	return out, rows.Err()
 }
 
-// RenewSessionCred moves a live pass's expiry; false when the pass is gone,
-// revoked or already expired (nothing changes).
-func (s *Store) RenewSessionCred(id string, exp, at time.Time) (bool, error) {
+// RenewSessionCred moves a pass's expiry; false when the pass is gone,
+// revoked or expired at or before lapsedSince (nothing changes). lapsedSince
+// = at refuses any expired pass; earlier is the hub's renewal grace (#2012).
+func (s *Store) RenewSessionCred(id string, exp, at, lapsedSince time.Time) (bool, error) {
 	ts := at.UTC().Format(sessRFC)
 	res, err := s.write.Exec(`UPDATE fleet_session_creds SET expires_at = ?, renewed_at = ?
-		WHERE id = ? AND revoked_at IS NULL AND expires_at > ?`, exp.UTC().Format(sessRFC), ts, id, ts)
+		WHERE id = ? AND revoked_at IS NULL AND expires_at > ?`, exp.UTC().Format(sessRFC), ts, id, lapsedSince.UTC().Format(sessRFC))
 	if err != nil {
 		return false, err
 	}

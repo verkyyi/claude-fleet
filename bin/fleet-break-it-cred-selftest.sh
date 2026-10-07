@@ -12,6 +12,8 @@
 #                                                   bin/fleet-cred-proxy.py (Router, send: route_switch)
 #   cred-session-expire                             bin/fleet-cred-proxy.py (hub pass renewal, live fcp1),
 #                                                   bin/fleet-session-cred.sh (--wrap)
+#   cred-pass-lapsed                                bin/fleet-cred-proxy.py (HubPasses: a lapsed pass renewed
+#                                                   on the next request; HUB_RENEW_GRACE)
 #   cred-relay-hub-restart                          extras/cred-relay/fleet-relay-check.py (the relay's
 #                                                   forward_auth gate: cache + grace while the hub restarts)
 #
@@ -90,8 +92,8 @@ class H(BaseHTTPRequestHandler):
             if h.get("authorization") != "Bearer nodetok":
                 return self.reply(401, {"error": "node token"})
             c = claims(json.loads(body or b"{}").get("cred", ""))
-            if c["exp"] < time.time():
-                return self.reply(403, {"error": "invalid", "reason": "expired"})
+            if c["exp"] < time.time() - 7 * 86400:   # the hub's renewal grace (#2012)
+                return self.reply(403, {"error": "invalid", "reason": "past the renewal grace"})
             return self.reply(200, {"cred": mint(c["id"], 3600), "id": c["id"]})
         if via == "direct-anthropic":
             if has("region-direct"):
@@ -366,6 +368,31 @@ drill_cred_session_expire() {
 # record, its agent — never a `root` store beside an agent left reading node.env.
 # Sandbox: every root path under the work dir (FLEET_CREDSEP_* seams), an `id`
 # shim playing root, the role account played by this user, no launchctl.
+drill_cred_pass_lapsed() {
+  CAP=10
+  cred_rig lapsed untrusted reachable || return 1
+  local pass old code t0
+  cred_serve || return 1
+  # the laptop slept through the renew window: its session's pass ran out 10 h ago
+  pass=$(cred_hubpass h-lap -86400 -36000)
+  t0=$(now)
+  code=$(cred_req "$pass" "$CD/r1")
+  SECS=$(since "$t0")
+  case "$code:$(cat "$CD/r1")" in 200:*'"via": "central"'*) ;; *)
+    WHY="a pass lapsed while the machine slept: wanted the proxy to renew it and 200, got $code $(cat "$CD/r1")"; return 1 ;; esac
+  grep -q '"ev": "renew", "kind": "hub", "pass_id": "h-lap"' "$CD/proxy.log" \
+    || { WHY="200, but no hub renewal of the lapsed pass in the log"; return 1; }
+  code=$(cred_req "$pass" "$CD/r2")
+  [ "$code" = 200 ] || { WHY="the next request after the renewal got $code: $(cat "$CD/r2")"; return 1; }
+  # past the hub's grace: refused and dropped, never forwarded as live
+  old=$(cred_hubpass h-old -700000 -691200)
+  code=$(cred_req "$old" "$CD/r3")
+  [ "$code" = 401 ] || { WHY="a pass 8 days lapsed came back $code (wanted the central's 401): $(cat "$CD/r3")"; return 1; }
+  grep -q '"ev": "renew_drop", "kind": "hub", "pass_id": "h-old"' "$CD/proxy.log" \
+    || { WHY="the pass past the grace was not dropped"; return 1; }
+  WHAT="机器睡过续签窗口、入口通行证已过期 10 小时 → 会话下一请求由代理补签照常 200；过期超 7 天的入口拒签、代理丢掉"
+}
+
 drill_cred_sep_sudo_root() {
   CAP=30
   local me sb t0 out

@@ -69,6 +69,14 @@ const (
 	// sessionCredRenewBefore is when the machine's proxy renews: this long
 	// before exp (the answer's renew_after).
 	sessionCredRenewBefore = 2 * time.Hour
+	// SessionCredRenewGrace is how long after its newest expiry a pass that
+	// was never revoked may still be renewed by its issuing node
+	// (claude-fleet#2012): a laptop asleep through the renew window, or its
+	// proxy down then, finds its session's pass lapsed — the session itself
+	// is still alive (its wrapper revokes the pass at exit). Verify still
+	// refuses a lapsed pass; only /renew takes it back. Mirrors
+	// HUB_RENEW_GRACE in bin/fleet-cred-proxy.py.
+	SessionCredRenewGrace = 7 * 24 * time.Hour
 	// sessionCredCacheTTL bounds how stale a verify may be: a revocation
 	// made on another replica (or straight in the store) is seen within it.
 	// One made through this hub's own routes is seen at once.
@@ -520,7 +528,13 @@ func (s *Server) renewSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "body must be {\"cred\": \"fcp-h1.…\"}")
 		return
 	}
-	v, c := s.verifySessionCred(req.Cred, "", "", true, now)
+	// A lapsed pass (#2012) is checked as of its own last second: the row,
+	// its revocation, the machine's and the person's all still apply.
+	at := now
+	if pc, why := parseSessionCred(req.Cred, s.SessionCredKey, now); why == "expired" && pc != nil {
+		at = time.Unix(pc.Exp-1, 0)
+	}
+	v, c := s.verifySessionCred(req.Cred, "", "", true, at)
 	if !v.Valid {
 		sessionCredRefuse(w, http.StatusForbidden, "invalid", v.Reason)
 		return
@@ -528,6 +542,13 @@ func (s *Server) renewSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 	row, err := s.Store.SessionCredByID(c.ID)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// The grace runs from the newest expiry on record — the session may
+	// still hold the string it was born with, older than its last renewal.
+	lapsed := !row.ExpiresAt.After(now)
+	if lapsed && !row.ExpiresAt.Add(SessionCredRenewGrace).After(now) {
+		sessionCredRefuse(w, http.StatusForbidden, "invalid", "the pass ran out "+row.ExpiresAt.UTC().Format(time.RFC3339)+", past the renewal grace")
 		return
 	}
 	host, user := s.nodeIdentity(ep)
@@ -547,7 +568,7 @@ func (s *Server) renewSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 	iat := now.Truncate(time.Second)
 	nc := *c
 	nc.Iat, nc.Exp = iat.Unix(), iat.Add(ttl).Unix()
-	ok, err := s.Store.RenewSessionCred(c.ID, time.Unix(nc.Exp, 0), now)
+	ok, err := s.Store.RenewSessionCred(c.ID, time.Unix(nc.Exp, 0), now, now.Add(-SessionCredRenewGrace))
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -558,7 +579,7 @@ func (s *Server) renewSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 		return
 	}
 	if err := s.Store.FleetAuditWorker(actor, row.WorkerID, row.WorkerKey, "session_cred", row.FleetID,
-		"renewed "+c.ID+" until "+time.Unix(nc.Exp, 0).UTC().Format(time.RFC3339), "", now); err != nil {
+		"renewed "+c.ID+optional(" (lapsed)", lapsed)+" until "+time.Unix(nc.Exp, 0).UTC().Format(time.RFC3339), "", now); err != nil {
 		log.Printf("fleet audit: %v", err)
 	}
 	writeJSON(w, http.StatusOK, sessionCredAnswer(signSessionCred(nc, s.SessionCredKey), nc))
