@@ -186,6 +186,12 @@ type Server struct {
 
 	// nodes holds the open node control channels.
 	nodes nodeConns
+	// Replica is this process as one of several hub replicas
+	// (claude-fleet#2124): a call for a node whose link another replica
+	// holds is handed to it. Nil — a single hub — forwards nothing.
+	Replica *Replica
+	// forwarded counts the calls handed to another replica.
+	forwarded atomic.Int64
 	// recent is the starts just sent to each node that its heartbeat may not
 	// show yet (claude-fleet#2077); judge counts them as running.
 	recent recentTable
@@ -257,6 +263,11 @@ func (s *Server) routes() *routeMux {
 	if s.Fleet {
 		// The control channel authenticates per endpoint, like ingest.
 		mux.HandleFunc(control.Path, s.handleNodeConnect)
+		if s.Replica != nil {
+			// A node call another replica hands over (claude-fleet#2124);
+			// in-cluster, behind the replicas' shared token.
+			mux.HandleFunc(NodeRoutePath, s.handleNodeRoute)
+		}
 		// Issue leases (claude-fleet#1422) authenticate the same way.
 		mux.HandleFunc("/v1/node/lease", s.handleNodeLease)
 		// Placement for a node's own spawn (claude-fleet#1425), the same way.
