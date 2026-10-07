@@ -198,11 +198,12 @@ EOF_MARKS
   return 2
 }
 # fleet_epic_running [<file>] — ONE mark: 0 fresh / 1 stale / 2 no mark; prints
-#   epic=<N> session=<sess> tick=<n> age=<s>s ttl=<s>s
+#   epic=<N> session=<sess> tick=<n> age=<s>s ttl=<s>s[ live=<n> inflight=<n>]
+# (the last two only when the mark carries them — issue #2247)
 # With no <file> it is every mark on the login (fleet_epic_running_fresh), so an
 # older caller that read "the" mark now sees every batch.
 fleet_epic_running() {
-  local f="${1:-}" epoch ttl age epic sess tick
+  local f="${1:-}" epoch ttl age epic sess tick live inflight
   [ -n "$f" ] || { fleet_epic_running_fresh; return; }
   [ -f "$f" ] || return 2
   epoch=$(sed -n 's/^epoch: //p' "$f" | head -1)
@@ -217,9 +218,38 @@ fleet_epic_running() {
   epic=$(sed -n 's/^epic: //p' "$f" | head -1)
   sess=$(sed -n 's/^session: //p' "$f" | head -1)
   tick=$(sed -n 's/^tick: //p' "$f" | head -1)
+  live=$(sed -n 's/^live: //p' "$f" | head -1); inflight=$(sed -n 's/^inflight: //p' "$f" | head -1)
+  case "$live$inflight" in *[!0-9]*) live='' ;; esac
+  [ -n "$inflight" ] || live=''
   age=$(( $(date +%s) - epoch )); [ "$age" -lt 0 ] && age=0
   printf 'epic=%s session=%s tick=%s age=%ss ttl=%ss' "${epic:--}" "${sess:--}" "${tick:--}" "$age" "$ttl"
+  [ -z "$live" ] || printf ' live=%s inflight=%s' "$live" "$inflight"   # #2247: only when stamped
   [ "$age" -lt "$ttl" ]
+}
+# fleet_epic_holding — which fresh batches HOLD the install (issue #2247). One
+# line per fresh mark, youngest first:
+#   <active|idle>\t<mark file>\t<fleet_epic_running's line>
+# `idle` = the mark says live 0 AND inflight 0 (no member session running, no
+# member PR in flight — the loop only waits on the operator); anything else is
+# `active`, and a mark with no live/inflight reading (an older loop, a bare
+# `touch`) is `active` — the conservative reading, what every fresh mark was
+# before. rc 0 when any line is `active`, 1 when every fresh mark is idle, 2 when
+# no mark is fresh. install-sync defers only on `active` (and caps that hold).
+fleet_epic_holding() {
+  local f out age kind rows='' act=1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    out=$(fleet_epic_running "$f") || continue
+    age=${out##*age=}; age=${age%%s*}
+    case "$out" in *' live=0 inflight=0') kind=idle ;; *) kind=active; act=0 ;; esac
+    rows="$rows$age	$kind	$f	$out
+"
+  done <<EOF_HOLD
+$(fleet_epic_running_marks)
+EOF_HOLD
+  [ -n "$rows" ] || return 2
+  printf '%s' "$rows" | sort -n | cut -f2-
+  return "$act"
 }
 # fleet_epic_stale_list [<driven refs>] — the batches NOBODY is driving (issue
 # #1916): a mark gone stale whose EPIC is still OPEN, one line each,

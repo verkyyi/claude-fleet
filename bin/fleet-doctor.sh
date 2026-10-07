@@ -1818,7 +1818,9 @@ while IFS= read -r _ep_f; do
   _ep_tick=$(printf '%s' "$_ep" | sed -n 's/.*tick=\([^ ]*\).*/\1/p')
   _ep_m=$(( ${_ep_age:-0} / 60 ))
   if [ "$_ep_rc" = 0 ]; then
-    _ep_run="${_ep_run:+$_ep_run · }#${_ep_n:-?}（第 ${_ep_tick:--} 拍，${_ep_m} 分钟前）"
+    # #2247: a batch stamped live 0 + inflight 0 is idle and does not hold install-sync
+    case "$_ep" in *' live=0 inflight=0') _ep_idle='，空转·不挡升级' ;; *) _ep_idle='' ;; esac
+    _ep_run="${_ep_run:+$_ep_run · }#${_ep_n:-?}（第 ${_ep_tick:--} 拍，${_ep_m} 分钟前${_ep_idle}）"
     continue
   fi
   _ep_repo=$(sed -n 's/^repo: //p' "$_ep_f" 2>/dev/null | head -1); [ "$_ep_repo" = - ] && _ep_repo=''
@@ -1835,7 +1837,8 @@ while IFS= read -r _ep_f; do
 done <<EP_MARKS
 $(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_running_marks' _ "$(dirname "$0")" 2>/dev/null)
 EP_MARKS
-[ -n "$_ep_run" ] && pass epic "批次 $_ep_run 在跑 — install-sync 整套不动，到批次都结束"
+_ep_cap=${FLEET_EPIC_HOLD_CAP_SECS:-7200}; case "$_ep_cap" in ''|*[!0-9]*) _ep_cap=7200 ;; esac
+[ -n "$_ep_run" ] && pass epic "批次 $_ep_run 在跑 — 有活的批次挡住 install-sync（每个最多 $((_ep_cap / 60)) 分钟），空转的不挡"
 
 # --- last crash + the record a crash would leave (issue #1294) -----------------
 # The diskguard tick harvests the system's panic / Jetsam reports into

@@ -241,6 +241,12 @@ Do not install from memory: read the doc and work from it.
   file `global/epic-running` is read for one version, never written
   (`# compat-1v: 下一批删`). `install-sync-selftest.sh` O, `fleet-update-selftest.sh`
   E and the `epic-mark-overwritten` / `epic-fresh-switched` BREAK-IT drills pin it.
+  **Only a batch WITH WORK holds, and never past the cap** (issue #2247): the
+  stamp carries `--live` / `--inflight`, `fleet_epic_holding` reads `live 0` +
+  `inflight 0` as idle (switched under) and a mark with no reading as active;
+  one active mark holds one stable at most `FLEET_EPIC_HOLD_CAP_SECS` (2h), then
+  install-sync switches and notes it on the EPIC. `install-sync-selftest.sh` O2,
+  BREAK-IT `epic-idle-held` / `epic-hold-uncapped`.
 - **A new way to break the fleet gets its row and its drill BEFORE its fix**
   (issue #1786). `docs/BREAK-IT.md` lists every known way (方式 · 后果 · 自愈方式 ·
   演练); `bin/fleet-break-it-selftest.sh` does each one for real on isolated
