@@ -581,6 +581,11 @@ func runHub(args []string) error {
 	if err := srv.MigrateLegacySettings(time.Now()); err != nil {
 		log.Printf("WARN hub settings: copying the old variables: %v", err)
 	}
+	if err := srv.DropLegacyMachineLogins(time.Now()); err != nil {
+		// An old identity's machine-login map with no reader left
+		// (claude-fleet#2108).
+		log.Printf("WARN hub settings: dropping old machine-login maps: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
