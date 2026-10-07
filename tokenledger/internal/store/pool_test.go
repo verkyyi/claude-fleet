@@ -26,7 +26,7 @@ func TestStore_ReadsDoNotQueueBehindAWrite(t *testing.T) {
 	defer tx.Rollback()
 	// Take the write lock for real — an open transaction that has not written
 	// anything yet does not hold it.
-	if _, err := tx.Exec(`INSERT OR REPLACE INTO rollup_meta(key, value) VALUES('pool-probe','1')`); err != nil {
+	if _, err := tx.Exec(`INSERT INTO rollup_meta(key, value) VALUES('pool-probe','1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`); err != nil {
 		t.Fatal(err)
 	}
 

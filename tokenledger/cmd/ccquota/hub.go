@@ -396,7 +396,11 @@ func runHub(args []string) error {
 	// The hub is the one command allowed to bring a database into being, so
 	// say when it does. A hub silently starting on an empty database looks
 	// exactly like a hub that has lost everything.
-	if _, statErr := os.Stat(dbFile); errors.Is(statErr, os.ErrNotExist) {
+	if store.UsesPostgres() {
+		// --db names no file then: the database is the server CCQUOTA_DB_URL
+		// points at (claude-fleet#2120), and Open creates its tables.
+		log.Printf("database: Postgres (%s); --db %s is not used", "CCQUOTA_DB_URL", dbFile)
+	} else if _, statErr := os.Stat(dbFile); errors.Is(statErr, os.ErrNotExist) {
 		if err := os.MkdirAll(filepath.Dir(dbFile), 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(dbFile), err)
 		}
@@ -1068,7 +1072,7 @@ func sshRelayConfig(srv *api.Server) error {
 // way a broken one would — the caller exits non-zero and the copy is thrown
 // away.
 func migrateOnlyRun(dbFile string, out io.Writer, simulate bool) error {
-	if _, err := os.Stat(dbFile); err != nil {
+	if _, err := os.Stat(dbFile); err != nil && !store.UsesPostgres() {
 		return fmt.Errorf("--migrate-only: %w", err)
 	}
 	st, err := store.Open(dbFile)

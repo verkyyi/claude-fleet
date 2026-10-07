@@ -45,7 +45,7 @@ func (s *Store) SummaryWithPricing(f Filter) (*Summary, []UnpricedReason, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := tx.Query(`SELECT source,model,COALESCE(json_extract(details_json,'$.price_basis'),''),COUNT(*) FROM usage_events `+where+` AND cost_usd IS NULL GROUP BY source,model,3`, args...)
+	rows, err := tx.Query(`SELECT source,model,COALESCE(`+s.d.jsonText("details_json", "price_basis")+`,''),COUNT(*) FROM usage_events `+where+` AND cost_usd IS NULL GROUP BY source,model,3`, args...)
 	if err != nil {
 		return nil, nil, err
 	}

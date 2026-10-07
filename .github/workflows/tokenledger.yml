@@ -52,6 +52,49 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
+  # The store's Postgres leg (claude-fleet#2120, EPIC #2119): the same
+  # internal/store tests, run against a real Postgres. CCQUOTA_DB_URL is what
+  # switches the store over; with it set, the package's TestMain gives every
+  # test database its own schema and prints the tests the leg does not run yet
+  # (SKIP-PG …, pg_test.go's pgSkip) — that list is this job's skip 清单. The
+  # server is the image's default locale on purpose: the store must sort TEXT
+  # byte for byte (COLLATE "C") without help from how the database was made.
+  tokenledger-pg:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      CCQUOTA_DB_URL: postgres://postgres:ci-only@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: tokenledger/go.sum
+      - name: store tests on Postgres
+        run: |
+          set -o pipefail
+          go test -race -count=1 -v ./internal/store/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|ok|FAIL|panic)'
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo '### tokenledger-pg'
+            echo
+            echo "passed: $(grep -c '^--- PASS' /tmp/pg.log) · failed: $(grep -c '^--- FAIL' /tmp/pg.log)"
+            echo
+            echo '```'
+            grep -E '^(pg leg|  SKIP-PG|ok|FAIL)' /tmp/pg.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   web:
     runs-on: ubuntu-latest
     steps:

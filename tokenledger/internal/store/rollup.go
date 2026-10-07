@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
@@ -29,25 +30,41 @@ INSERT INTO usage_hourly (
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 1,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, provider,
             git_branch, effort, entrypoint, is_sidechain, source) DO UPDATE SET
-  events                 = events + 1,
-  input_tokens           = input_tokens + excluded.input_tokens,
-  output_tokens          = output_tokens + excluded.output_tokens,
-  cache_create_5m_tokens = cache_create_5m_tokens + excluded.cache_create_5m_tokens,
-  cache_create_1h_tokens = cache_create_1h_tokens + excluded.cache_create_1h_tokens,
-  cache_read_tokens      = cache_read_tokens + excluded.cache_read_tokens,
-  thinking_tokens        = thinking_tokens + excluded.thinking_tokens,
-  cost_usd               = cost_usd + excluded.cost_usd,
-  unpriced_events        = unpriced_events + excluded.unpriced_events,
-  cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
-  cache_write_known_events = cache_write_known_events + excluded.cache_write_known_events,
-  min_ts                 = min(min_ts, excluded.min_ts),
-  max_ts                 = max(max_ts, excluded.max_ts),
+  events                 = usage_hourly.events + 1,
+  input_tokens           = usage_hourly.input_tokens + excluded.input_tokens,
+  output_tokens          = usage_hourly.output_tokens + excluded.output_tokens,
+  cache_create_5m_tokens = usage_hourly.cache_create_5m_tokens + excluded.cache_create_5m_tokens,
+  cache_create_1h_tokens = usage_hourly.cache_create_1h_tokens + excluded.cache_create_1h_tokens,
+  cache_read_tokens      = usage_hourly.cache_read_tokens + excluded.cache_read_tokens,
+  thinking_tokens        = usage_hourly.thinking_tokens + excluded.thinking_tokens,
+  cost_usd               = usage_hourly.cost_usd + excluded.cost_usd,
+  unpriced_events        = usage_hourly.unpriced_events + excluded.unpriced_events,
+  cache_write_tokens = usage_hourly.cache_write_tokens + excluded.cache_write_tokens,
+  cache_write_known_events = usage_hourly.cache_write_known_events + excluded.cache_write_known_events,
+  min_ts                 = min(usage_hourly.min_ts, excluded.min_ts),
+  max_ts                 = max(usage_hourly.max_ts, excluded.max_ts),
   -- A declaration wins over silence, and silence never erases a declaration.
   -- git_repo is not in the key, so an endpoint that upgrades mid-hour folds
   -- rows that declare and rows that do not into the SAME row; plain assignment
   -- would let whichever event happened to arrive last decide, and half the
   -- time that is the older agent undoing the newer one.
-  git_repo               = CASE WHEN excluded.git_repo != '' THEN excluded.git_repo ELSE git_repo END`
+  git_repo               = CASE WHEN excluded.git_repo != '' THEN excluded.git_repo ELSE usage_hourly.git_repo END`
+
+// rollupInsertSQL is rollupInsertSQL in this dialect.
+func (d dialect) rollupInsertSQL() string { return d.minMaxTS(rollupInsertSQL) }
+
+// minMaxTS spells an upsert's `min(usage_hourly.min_ts, excluded.min_ts)` /
+// `max(usage_hourly.max_ts, …)` — SQLite's two-argument min/max — in this
+// dialect.
+func (d dialect) minMaxTS(q string) string {
+	if !d.pg() {
+		return q
+	}
+	return strings.NewReplacer(
+		"min(usage_hourly.min_ts, excluded.min_ts)", d.least("usage_hourly.min_ts", "excluded.min_ts"),
+		"max(usage_hourly.max_ts, excluded.max_ts)", d.greatest("usage_hourly.max_ts", "excluded.max_ts"),
+	).Replace(q)
+}
 
 // rollupUpsert folds one freshly inserted event into its hourly row.
 func rollupUpsert(stmt *sql.Stmt, e *model.UsageEvent) error {
@@ -78,7 +95,7 @@ INSERT INTO usage_hourly (
   issue_number, git_repo, effort, entrypoint, is_sidechain, source,
   events, input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
   cache_read_tokens, thinking_tokens, cost_usd, unpriced_events, min_ts, max_ts,cache_write_tokens,cache_write_known_events)
-SELECT strftime('%Y-%m-%dT%H:00:00Z', ts), account_uuid, endpoint_id, session_id, os_user, cwd, model, provider, git_branch,
+SELECT %s, account_uuid, endpoint_id, session_id, os_user, cwd, model, provider, git_branch,
        issue_number, MAX(git_repo), effort, entrypoint, is_sidechain, source,
        COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(cache_create_5m_tokens), SUM(cache_create_1h_tokens),
        SUM(cache_read_tokens), SUM(thinking_tokens), COALESCE(SUM(cost_usd), 0), /* cost-split-exempt: GROUP BY below includes source (column 14) */
@@ -133,7 +150,7 @@ func (s *Store) RebuildRollup(force bool) (int64, error) {
 	}
 	defer tx.Rollback()
 
-	n, err := rebuildRollupTx(tx, force)
+	n, err := rebuildRollupTx(s.d, tx, force)
 	if err != nil {
 		return 0, err
 	}
@@ -150,12 +167,12 @@ func (s *Store) RebuildRollup(force bool) (int64, error) {
 // must: between rewriting an event's cost and refolding the hour that contains
 // it there is a state where the raw rows and every dashboard figure disagree
 // about money. One commit means that state is never observable.
-func rebuildRollupTx(tx *sql.Tx, force bool) (int64, error) {
+func rebuildRollupTx(d dialect, tx *sql.Tx, force bool) (int64, error) {
 	// The earliest hour usage_events can still attest to. NULL when
 	// usage_events is empty (nothing survives to rebuild from at all).
 	var earliestHour sql.NullString
 	if err := tx.QueryRow(
-		`SELECT strftime('%Y-%m-%dT%H:00:00Z', MIN(ts)) FROM usage_events`,
+		`SELECT ` + d.hourOf("MIN(ts)") + ` FROM usage_events`,
 	).Scan(&earliestHour); err != nil {
 		return 0, fmt.Errorf("find earliest surviving event: %w", err)
 	}
@@ -191,7 +208,7 @@ func rebuildRollupTx(tx *sql.Tx, force bool) (int64, error) {
 			return 0, fmt.Errorf("clear reconstructable rollup rows: %w", err)
 		}
 	}
-	res, err := tx.Exec(rollupBackfillSQL)
+	res, err := tx.Exec(fmt.Sprintf(rollupBackfillSQL, d.hourOf("ts")))
 	if err != nil {
 		return 0, fmt.Errorf("backfill rollup: %w", err)
 	}
