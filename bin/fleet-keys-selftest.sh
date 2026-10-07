@@ -476,9 +476,12 @@ fi
 # glyph; the profile fleet-iterm-profile.py writes sends exactly `ESC [<code>~` for
 # the ⌘ chord. On the client server of leg 8's kind the codes are live.
 sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --panel switch list exited non-zero"
-[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 8 ] || fail "10: the switch table is not the 8 actions of #1903: $sw_table"
-[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd needs zoom help quickopen " ] \
-  || fail "10: the switch actions are not next prev back fwd needs zoom help quickopen"
+# `new` (⌘N / prefix c, issue #1953): the writing area — private code 928.
+[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 9 ] || fail "10: the switch table is not the 8 actions of #1903 + #1953's new: $sw_table"
+[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd needs zoom help quickopen new " ] \
+  || fail "10: the switch actions are not next prev back fwd needs zoom help quickopen new"
+printf '%s\n' "$sw_table" | awk '$1 == "new" && $2 == "⌘N" && $4 == 928 && $5 == "c"' | grep -q . \
+  || fail "10: new is not ⌘N · code 928 · prefix c"
 sw_block="$(printf '%s\n' "$FULL_SHEET" | awk '/^switch sessions /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
 [ -n "$sw_block" ] || fail "10: the full sheet has no 'switch sessions' group"
 body_of() {   # the body of the conf's bind for key $2 in table $1 (root / prefix)
@@ -519,8 +522,11 @@ PY
 done <<EOF
 $sw_table
 EOF
-[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 8 ] \
-  || fail "10: the profile maps keys beyond the table (no parent map to keep here)"
+# the table's 9 + ⇧↵ → 0x0a (the writing area's newline, issue #1953)
+[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 10 ] \
+  || fail "10: the profile maps keys beyond the table + ⇧↵ (no parent map to keep here)"
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]; assert m["0xd-0x20000"] == {"Action": 11, "Text": "0x0a"}, m' "$SW_PROF/fleet.json" \
+  || fail "10: the profile does not send 0x0a for ⇧↵"
 FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_KEYS=0 python3 "$BIN/fleet-iterm-profile.py" write
 [ -f "$SW_PROF/fleet.json" ] && fail "10: FLEET_ITERM_KEYS=0 left the profile in place"
 rm -rf "$SW_PROF"

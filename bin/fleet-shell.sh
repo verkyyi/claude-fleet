@@ -76,6 +76,10 @@
 #                          long as the shell's server lives
 #   wait <session>         the stage's first window when no machine is online: a
 #                          note, gone as soon as a row opens a real one
+#   portal <session>       ⌘N / prefix c / a tap on 「新任务」 (issue #1953): the
+#                          stage's writing-area window (`@fleet_role portal`,
+#                          `@remote new`, bin/fleet-compose.py) made once and
+#                          selected — the right pane shows it, the list its row
 #   reload <session> [--from <old home>]   a newer client into the running one,
 #                          same servers (issue #1781) — see `reload` below
 #   env [MACHINE]          print the environment the server would get (debug, tests)
@@ -705,6 +709,32 @@ wait)
     tmux -L "$s" has-session -t "=$s" 2>/dev/null || exit 0
     sleep 1
   done
+  exit 0
+  ;;
+# ---------------------------------------------------------------------------------
+# The writing area (issue #1953, EPIC #1949 C4): ONE stage window, told by its
+# `@fleet_role portal` (never its name — the person may rename it), whose
+# `@remote new` is the row key the list paints as 「新任务」 (`@remote` names no
+# machine — no `<node>:` — so no machine's `open` ever retargets it). Made the
+# first time, selected every time after: the draft lives in the pane and on disk
+# (fleet-compose.py), so leaving and coming back loses nothing. The list is woken
+# (F12) so its ▶ moves at once rather than on its next tick.
+portal)
+  s="${2:-$SESS}"
+  SESS=$s; STAGE="$s-stage"; SHADOW=$BIN
+  stage_up || exit 1
+  w=$(TS list-windows -t "=$STAGE" -F '#{window_id} #{@fleet_role}' 2>/dev/null | awk '$2 == "portal" { print $1; exit }')
+  if [ -z "$w" ]; then
+    w=$(TS new-window -d -P -F '#{window_id}' -t "=$STAGE:" -n "$(sh "$BIN/fleet-ui-lang.sh" t compose_title 2>/dev/null || echo 新任务)" -c "$HOME" \
+          "exec python3 $(sq "$BIN/fleet-compose.py") --session $(sq "$s")") || exit 1
+    # fleet_win_role_stamp's write, on the stage's socket (fleet-lib.sh is the
+    # node's whole library; the one option is all this needs of it)
+    TS set-window-option -t "$w" @fleet_role portal \; set-window-option -t "$w" @remote new \; \
+      set-window-option -t "$w" automatic-rename off 2>/dev/null
+  fi
+  TS select-window -t "$w" 2>/dev/null || exit 1
+  lp=$(T list-panes -a -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }')
+  [ -n "$lp" ] && T send-keys -t "$lp" F12 2>/dev/null
   exit 0
   ;;
 # ---------------------------------------------------------------------------------

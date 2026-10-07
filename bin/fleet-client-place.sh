@@ -2,9 +2,13 @@
 # fleet-client-place.sh — open a session on a machine, from the client (issue
 # #1777, EPIC #1776 C1).
 #
-#   fleet-client-place.sh <repo> <issue|scratch|restore:<key>> [--node <m>|auto]
+#   fleet-client-place.sh <repo> <issue|scratch|restore:<key>|new> [--node <m>|auto]
 #                         [--title <t>] [--name <n>] [--agent claude|codex]
-#                         [--reap <policy>]
+#                         [--reap <policy>] [--body-file <f>]
+#
+# `new` (issue #1953, the writing area ⌘N opens): an issue that does not exist
+# yet — --title (required) and --body-file are its title and body; the machine
+# that takes it files it (fleet-issue-file.sh) and opens its worker.
 #
 # <issue> is a number (or issue-<N>); restore:<key> resumes a /fleet-history row
 # (issue-<N> / scratch-<N>, a multi-repo fleet's <slug>: prefix allowed). A
@@ -47,7 +51,7 @@ usage() { sed -n '5,7p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 REPO=$1; WHAT=$2; shift 2
-NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''
+NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)  [ $# -ge 2 ] || usage; NODE=$2; shift 2 ;;
@@ -57,6 +61,7 @@ while [ $# -gt 0 ]; do
     # when the fleet may close it on its own (issue #1902) — the new-session
     # question's answer; canonical here, held to its shape by the hub too
     --reap)  [ $# -ge 2 ] || usage; REAP=$2; shift 2 ;;
+    --body-file) [ $# -ge 2 ] || usage; BODYF=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -69,19 +74,28 @@ fi
 KIND=''; ISSUE=''; KEY=''
 case "$WHAT" in
   scratch) KIND=scratch ;;
+  new) KIND=new ;;
   restore:?*) KIND=restore; KEY=${WHAT#restore:} ;;
   issue-[1-9]*) KIND=issue; ISSUE=${WHAT#issue-} ;;
   [1-9]*) KIND=issue; ISSUE=$WHAT ;;
 esac
 case "$ISSUE" in *[!0-9]*) KIND='' ;; esac
-[ -n "$KIND" ] || { printf 'fleet-client-place: %s is not an issue number, scratch or restore:<key>\n' "$WHAT" >&2; exit 2; }
+[ -n "$KIND" ] || { printf 'fleet-client-place: %s is not an issue number, scratch, restore:<key> or new\n' "$WHAT" >&2; exit 2; }
+if [ "$KIND" = new ]; then
+  [ -n "$TITLE" ] || { printf 'fleet-client-place: new needs --title\n' >&2; exit 2; }
+  [ -z "$BODYF" ] || [ -r "$BODYF" ] || { printf 'fleet-client-place: cannot read %s\n' "$BODYF" >&2; exit 2; }
+fi
 
 # --- the hub ----------------------------------------------------------------------
 # rc 10 = not applicable here (no hub URL, or no lease / key to sign with).
-python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" <<'PY'
+python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" <<'PY'
 import hashlib, hmac, importlib.util, json, os, sys, time, urllib.error, urllib.request
 
-here, repo, kind, issue, key, node, title, name, agent, reap = sys.argv[1:11]
+here, repo, kind, issue, key, node, title, name, agent, reap, bodyf = sys.argv[1:12]
+body = ""
+if bodyf:
+    with open(bodyf, encoding="utf-8") as f:
+        body = f.read()
 
 
 def connect_module():
@@ -138,7 +152,7 @@ def rnd():
 req = {"action": "place", "repo": repo, "kind": kind, "node": node, "idempotency_key": idem, "wait": rnd()}
 if issue:
     req["issue"] = int(issue)
-for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap)):
+for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap), ("body", body)):
     if v:
         req[k] = v
 try:
@@ -188,6 +202,8 @@ case "$KIND" in
   issue)   out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" "$ISSUE" "$AGENT" "$REPO" '' '' ${REAP:+'' "$REAP"} 2>"$ef"); src=$? ;;
   scratch) out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" scratch "$AGENT" "$REPO" '' '' "${NAME:-$TITLE}" ${REAP:+"$REAP"} 2>"$ef"); src=$? ;;
   restore) out=$(bash "$BIN/fleet-control-read.sh" resume "$SESS" "$KEY" 2>"$ef"); src=$? ;;
+  new)     out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" new "$AGENT" "$REPO" '' '' "$TITLE" ${REAP:+"$REAP"} \
+                   < "${BODYF:-/dev/null}" 2>"$ef"); src=$? ;;
 esac
 why=$(tail -n1 "$ef" 2>/dev/null | tr '\t' ' ')
 [ "$ef" = /dev/null ] || rm -f "$ef"

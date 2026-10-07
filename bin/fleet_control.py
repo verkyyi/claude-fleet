@@ -536,6 +536,7 @@ class Control:
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True
                 scratch = params.get("kind") == "scratch"
+                filed = params.get("kind") == "new"
                 # The reap policy (issue #1902) as the adapter's $9, only when one
                 # was chosen — with none the argv is exactly what it was.
                 reap_arg = [params["reap"]] if params.get("reap") else []
@@ -549,6 +550,23 @@ class Control:
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params.get("name", "").strip(),
                                                      *reap_arg, timeout=180)
+                elif filed:
+                    # issue #1953: the client's writing area — the adapter's start
+                    # with `new` for the issue and the title (validated above) where
+                    # a scratch has its name; the body rides stdin, never an argv.
+                    # It files the issue, prints its URL first, then spawns as an
+                    # issue start does.
+                    code, output, err = self.adapter("start", fleet["name"], "new", params.get("agent", ""),
+                                                     params.get("repo", ""), params.get("origin_wid", ""),
+                                                     params.get("account_class", ""), params["title"].strip(),
+                                                     *reap_arg, payload=params.get("body", "").encode("utf-8"),
+                                                     timeout=240)
+                    if not code:
+                        first = output.decode("utf-8", "replace").split("\n", 1)[0].strip()
+                        number = re.search(r"/issues/([1-9][0-9]*)$", first)
+                        if not number:
+                            raise Fault("UNKNOWN_OUTCOME", "The issue was filed but its number did not come back")
+                        params = dict(params, issue=int(number.group(1)))
                 else:
                     code, output, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
@@ -556,7 +574,9 @@ class Control:
                                                      timeout=180)
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
-                    reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT"}
+                    # 7 = a new issue (issue #1953) that could not be filed: nothing was opened.
+                    reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT",
+                               7: "EXECUTION_FAILED"}
                     attempted = code not in reasons
                     # The spawn's own exit code and refusal line ride back to
                     # whoever placed it (issue #1586): a refusal there prints

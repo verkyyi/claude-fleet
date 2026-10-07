@@ -28,7 +28,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "26"  # #1904: the one-pane layout (@fleet_single) + the stage's top line record
+VIEW_VERSION = "27"  # #1953: 「新任务」 on top, its 「开工中…」 row, the `compose` verb
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -119,6 +119,16 @@ SHELL = os.environ.get("FLEET_SHELL") == "1"
 # or a shell started before the stage): everything below is as it was.
 STAGE = os.environ.get("FLEET_SHELL_STAGE", "") if SHELL else ""
 
+# The writing area (issue #1953, EPIC #1949 C4): with a stage, the list's first
+# row is 「新任务」 — the stage's `@fleet_role portal` window, whose `@remote` is
+# this key — then a rule. A tap (or ⌘N, prefix c) opens it (fleet-shell.sh
+# portal); its ↵ queues `compose` here, and while the new session is on its way
+# a 「开工中…」 row stands under it. Neither row is a session: no history entry,
+# no ⌘↓ stop, never a place's answer.
+PORTAL_KEY = "new"
+PLACING_KEY = "placing"
+PLACING_TITLE = 14   # cells of the sent title the 「开工中…」 row shows
+
 
 # Switching from anywhere (issue #1903): ⌘↓ ⌘↑ ⌘[ ⌘] and ⌘P (conf/tmux-shell.conf)
 # append verbs to this pane's @sidebar_do and wake it with F12; the history ⌘[ ⌘]
@@ -143,7 +153,7 @@ def switch_lib():
 def switch_visit(row):
     """The row in view became `row`: one step in the history (a step ⌘[ / ⌘]
     already stands on moves only its recency)."""
-    if SWITCH_ON and row:
+    if SWITCH_ON and row and row != PORTAL_KEY:
         lib = switch_lib()
         lib.save(lib.visit(lib.load(), row))
 
@@ -161,8 +171,8 @@ def switch_target(verbs, rows, current, live, session=""):
     that row (⌘P's pick — it may sit in a folded subtree). Each verb steps from
     where the one before it landed. "" = stay. A history entry the list does not
     paint is looked up once among every session (folded ones too) before it is
-    stepped over as closed."""
-    ids = [key for key in selectable(rows) if acts(key)]
+    stepped over as closed. The 「新任务」 row is no stop (issue #1953)."""
+    ids = [key for key in selectable(rows) if acts(key) and key != PORTAL_KEY]
     live = set(live)
     unfolded = []
 
@@ -200,8 +210,11 @@ def bar_record(rows, current):
     the rows this list paints — so the line and the list never disagree: its
     place among the session rows (‹ i/n ›), state, needs kind, key, title, PR,
     repo (only in a fleet showing more than one), machine and whether it is lost,
-    and how many rows wait on you. None when the row is not on the list."""
-    ids = [key for key in selectable(rows) if acts(key)]
+    and how many rows wait on you. None when the row is not on the list — or is
+    the writing area (issue #1953): the top line is then its window's name."""
+    if current == PORTAL_KEY:
+        return None
+    ids = [key for key in selectable(rows) if acts(key) and key != PORTAL_KEY]
     repos, repo, slug, hit = set(), "", "", None
     for row in rows:
         if row[0] == "hdr":
@@ -656,6 +669,10 @@ def lock_within(handle, wait):
 def jump(session, window, pane, lock):
     """Switch to `window`. False only when the view lock stayed busy past
     LOCK_WAIT — the caller paints what was pressed and retries."""
+    if window == PORTAL_KEY:
+        # 「新任务」 (issue #1953): the stage's writing-area window, made once.
+        open_portal(session)
+        return True
     # Another machine's row (`wid:<worker_id>`, #1423): step in through a proxy
     # window (fleet-remote-view.sh, issue #1424), which `open` creates or
     # retargets and prints — then land in it exactly as in a local task window
@@ -690,6 +707,33 @@ def jump(session, window, pane, lock):
                 return True
             tmux("select-window", "-t", window, ";", "select-pane", "-t", worker)
     return True
+
+
+def open_portal(session):
+    """The writing area on the right (issue #1953): fleet-shell.sh portal — the
+    same door ⌘N and prefix c take."""
+    run(["bash", str(BIN / "fleet-shell.sh"), "portal", session], stdin=subprocess.DEVNULL)
+
+
+def with_portal(rows, placing):
+    """The rows as painted in the shell (issue #1953): 「新任务」, the 「开工中…」 row
+    of a task ↵ just sent, a rule — then the list. Built again every frame from
+    the list without them, so a fresh producer frame and a place ending both
+    show at once."""
+    if not STAGE:
+        return rows
+    body = [row for row in rows if row[0] not in (PORTAL_KEY, PLACING_KEY) and
+            not (row[0] == "hdr" and row[1] == "" and row[2] == "─")]
+    pad = [""] * (ROW_FIELDS - 9)
+    top = [[PORTAL_KEY, "portal", "+", tr("sidebar_portal"), " ", "", "0", "", ""] + pad]
+    if placing is not None and placing.get("verb") == "compose" and placing.get("state") in ("placing", "await"):
+        title = placing.get("title", "")
+        if cells_of(title) > PLACING_TITLE:   # never the row that widens the list
+            title = clip(title, PLACING_TITLE - 1) + "…"
+        top.append([PLACING_KEY, "working", "⠇", tr("sidebar_portal_placing_fmt", title),
+                    " ", "", "0", "", ""] + pad)
+    top.append(["hdr", "", "─", "─" * 120] + [""] * (ROW_FIELDS - 4))
+    return top + body
 
 
 def clip(text, width):
@@ -1021,6 +1065,8 @@ def place_answer(ask, value):
     plan = ask.plan
     if ask.kind == "place-repo":
         plan["repo"] = value
+        if plan.get("verb") == "compose":
+            return None, "", True   # the writing area (issue #1953): the rest is said
         return place_after_repo(plan), "", False
     if ask.kind == "place-issue":
         text = value.strip().lstrip("#")
@@ -1099,6 +1145,14 @@ def place_job(plan, rows, env):
     plan["note"] = (tr("sidebar_place_opening_fmt", plan["label"]) if plan["label"]
                     else tr("sidebar_place_opening_auto"))
     plan["state"] = "placing"
+    if plan.get("verb") == "compose":
+        # The writing area's one way out (issue #1953): fleet-compose.py --send,
+        # which says fleet-client-place.sh's line and code as they are.
+        args = [sys.executable, str(BIN / "fleet-compose.py"), "--send", plan["payload"],
+                "--repo", plan["repo"], "--node", plan["node"]]
+        if plan.get("reap"):
+            args += ["--reap", plan["reap"]]
+        return start_job(args, env, placed(plan))
     args = ["bash", str(BIN / "fleet-client-place.sh"), plan["repo"], plan["what"],
             "--node", plan["node"]]
     if plan.get("name") and plan["what"] == "scratch":
@@ -1113,6 +1167,11 @@ def placed(plan):
     wait for the row; the issue held elsewhere → «y 切过去»; a refusal → its
     reason as the hub said it; the hub not reachable → 入口连不上."""
     def done(rc, text):
+        if plan.get("payload"):
+            try:
+                os.unlink(plan["payload"])
+            except OSError:
+                pass
         line = next((l for l in reversed(text.splitlines()) if l.split(" ", 1)[0] in PLACE_WORDS), "")
         head, _, why = line.partition("\t")
         words = head.split()
@@ -1147,6 +1206,7 @@ def place_found(rows, plan):
     """The new session's row once the list carries it: the worker_id the hub
     named; else the row of this issue / key on that machine; else a row that was
     not there when the place started, on that machine. "" until then."""
+    rows = [row for row in rows if row[0] not in (PORTAL_KEY, PLACING_KEY)]
     keys = [key_of(row) for row in rows if row[0] != "hdr"]
     if plan.get("key") in keys:
         return plan["key"]
@@ -1927,8 +1987,10 @@ def tap(hit, highlighted):
     opens the `new`-session popup pinned to its repo. A bare `hdr` (the `?`
     heading, the empty-state hint) or no row at all: None. A fleet with no
     headings never sees `select` or `new`, so it taps exactly as before."""
-    if not hit or hit == "hdr":
+    if not hit or hit == "hdr" or hit == PLACING_KEY:
         return None
+    if hit == PORTAL_KEY:
+        return "jump"   # 「新任务」 (issue #1953): every tap opens the writing area
     if hit == PIN_HEADING:
         return "select"  # a fold stop only (issue #1170): no repo to open a session in
     if hit.startswith("hdr:"):
@@ -1941,7 +2003,7 @@ def acts(key):
     a heading (`hdr:…`) is none — jump, menu, tap all stay no-ops on it (EPIC #994)
     — and so is a landed row (`landed:…`, issue #1532): its one action is ↵,
     restore, which the landed view handles itself."""
-    return "" if key.startswith(("hdr", "landed:")) else key
+    return "" if key.startswith(("hdr", "landed:")) or key == PLACING_KEY else key
 
 
 def folds(key):
@@ -1949,7 +2011,7 @@ def folds(key):
     heading with a spawn target — `hdr:<target>`, which dash-fold-toggle.sh reads
     as that repo's whole group (issue #1037). A bare `hdr` (the `?` heading, the
     empty-state hint) or no row at all: nothing to fold."""
-    return key if key and key != "hdr" else ""
+    return key if key and key != "hdr" and key not in (PORTAL_KEY, PLACING_KEY) else ""
 
 
 # ←/→ fold AT ONCE (issue #1530): the view applies the fold to the rows it has
@@ -2345,7 +2407,10 @@ def palette_colors(table, colors):
 def shown_row(window, remote):
     """The row the current window stands for: itself — or, in a proxy window onto
     another machine's session (`@remote=<node>:<worker_id>`, issue #1475), that
-    machine's row `wid:<worker_id>`, so the ▶ and the cursor land on it."""
+    machine's row `wid:<worker_id>`, so the ▶ and the cursor land on it. The
+    stage's writing area (`@remote new`, issue #1953) stands for 「新任务」."""
+    if STAGE and remote == PORTAL_KEY:
+        return PORTAL_KEY
     return "wid:" + remote.split(":", 1)[1] if ":" in remote else window
 
 
@@ -2460,6 +2525,46 @@ def ui(screen, session, worker, lock):
             asking = nxt
             line.clear()
             mark_input(pane, "1")
+
+    def compose_take(verbs):
+        """The writing area's ↵ (issue #1953): `compose` on the queue means its
+        payload waits in compose-send.json. Taken (renamed, so the next ↵ never
+        overwrites it), its repo resolved — the payload's, else the repo of the
+        row that was in view when the writing area opened (「自动」), else the only
+        one, else the place-repo question — and placed in the background, its
+        「开工中…」 row painted at once. The other verbs go on as they came."""
+        nonlocal asking, toast, toast_until
+        rest = [v for v in verbs if v != "compose"]
+        if len(rest) == len(verbs):
+            return verbs
+        if placing is not None:
+            toast, toast_until = placing.get("note", ""), time.monotonic() + TOAST_SECS
+            return rest
+        src = switch_lib().state_dir() / "compose-send.json"
+        dst = src.with_name("compose-send.%d.json" % time.time_ns())
+        try:
+            os.replace(str(src), str(dst))
+            data = json.loads(dst.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return rest
+        base = [row for row in rows if row[0] not in (PORTAL_KEY, PLACING_KEY)]
+        plan = {"verb": "compose", "what": "new" if data.get("issue", True) else "scratch",
+                "title": data.get("title", ""), "name": "", "payload": str(dst), "node": "auto",
+                "label": "", "repo": data.get("repo") or repo_of(base, data.get("prev") or "")}
+        if not plan["repo"]:
+            repos = shell_repos(base) or hub_repos() or []
+            if len(repos) == 1:
+                plan["repo"] = repos[0]
+            elif not repos:
+                toast, toast_until = tr("sidebar_place_norepo"), time.monotonic() + TOAST_SECS
+                return rest
+            else:
+                asking = Ask("place-repo", tr("sidebar_place_repo"), hint=tr("sidebar_place_keys"), plan=plan,
+                             menu=[(r, r.rsplit("/", 1)[-1], r.split("/", 1)[0], False) for r in repos])
+                mark_input(pane, "1")
+                return rest
+        place_step(None, "", True, plan)
+        return rest
 
     while True:
         now = time.monotonic()
@@ -2646,7 +2751,7 @@ def ui(screen, session, worker, lock):
                 # ⌘P's pick lands while its popup still covers this view, and ⌘↓
                 # may come with the session zoomed (issue #1903): a hidden view
                 # still switches for the queue — never for a stray key.
-                todo = take_switch(pane)
+                todo = compose_take(take_switch(pane))
                 if todo and spawning is None:
                     base = rows if view == "live" else live_rows
                     nxt = switch_target(todo, base, current_row, sessions(base), session)
@@ -2703,6 +2808,8 @@ def ui(screen, session, worker, lock):
         # follow all ignore it (`acts`); ←/→ on it fold and unfold its whole repo
         # group (`folds`, issue #1037). `where` is the selection's place in the
         # PAINTED list, which the scroll offset is measured in.
+        if view == "live":
+            rows = with_portal(rows, placing)   # 「新任务」 on top (issue #1953)
         ids = selectable(rows)
         # Rows still in flight for a window just jumped to may not hold it yet (a
         # folded child shows only as the current row): keep the selection until
@@ -2717,7 +2824,9 @@ def ui(screen, session, worker, lock):
         # The 「刷新中…」 row (issue #1536): the list waits on a frame that has not
         # come — the first, or one past STALE_SECS. The rows it has stay painted
         # one row lower; the top row says what the view is waiting for.
-        waiting = 1 if height >= 4 and (not loaded or age > STALE_SECS or placing is not None) else 0
+        # a task the writing area sent says so in its own row (issue #1953)
+        noted = placing is not None and placing.get("verb") != "compose"
+        waiting = 1 if height >= 4 and (not loaded or age > STALE_SECS or noted) else 0
         page = max(1, height - waiting - (1 if help_y is None else 2))
         offset = max(0, min(offset, max(0, len(rows) - page)))
         if index == 0:
@@ -2737,7 +2846,7 @@ def ui(screen, session, worker, lock):
                     pass  # a resize may race this paint
 
         screen.erase()
-        if waiting and placing is not None:
+        if waiting and noted:
             put(0, placing.get("note", ""), curses.color_pair(PAIR_TOAST))  # 「正在 m5 上开…」
         elif waiting:
             put(0, tr("sidebar_refreshing"), dim_attr)
@@ -2768,6 +2877,8 @@ def ui(screen, session, worker, lock):
             lost = node.endswith("!") and not raised
             if lost:
                 attr = dim_attr  # a lost machine's row (issue #1475)
+            if wid == PORTAL_KEY:
+                attr |= curses.A_BOLD   # 「新任务」 (issue #1953)
             pair = STATE_PAIR.get(state)
             glyph_attr = curses.color_pair(pair + SEL_GLYPH if raised else pair) if pair else attr
             if lost:
@@ -2945,7 +3056,7 @@ def ui(screen, session, worker, lock):
         if key == curses.KEY_F12:
             # ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P (issue #1903): the verbs queued on @sidebar_do since
             # the last wake, read and cleared in one tmux call — every press a step.
-            todo = take_switch(pane)
+            todo = compose_take(take_switch(pane))
             if todo and spawning is None:
                 if view != "live":
                     view, rows, selected = "live", live_rows, current_row
