@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -309,6 +310,11 @@ func TestInviteInstallCommand(t *testing.T) {
 		t.Fatalf("dead code = %d %q", resp.StatusCode, b)
 	}
 
+	rec := httptest.NewRecorder()
+	if body, ok := h.srv.installerScript(rec, httptest.NewRequest("GET", "/i/x", nil), "abcdefghijklmnop"); ok &&
+		strings.Contains(body, InvitePlaceholder) {
+		t.Errorf("the installer still carries %s", InvitePlaceholder)
+	}
 	if got := withInvite("#!/bin/sh\nset -eu\n", "abcdefghijklmnop"); got !=
 		"#!/bin/sh\nFLEET_INVITE='abcdefghijklmnop'; export FLEET_INVITE  # invite (claude-fleet#2261): sent once by fleet login\nset -eu\n" {
 		t.Fatalf("withInvite = %q", got)

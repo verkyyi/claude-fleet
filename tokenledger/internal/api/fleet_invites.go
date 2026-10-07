@@ -351,7 +351,7 @@ func (s *Server) handleInviteInstall(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	body, ok := s.installerScript(w, r)
+	body, ok := s.installerScript(w, r, code)
 	if !ok {
 		return
 	}
@@ -361,7 +361,10 @@ func (s *Server) handleInviteInstall(w http.ResponseWriter, r *http.Request) {
 }
 
 // withInvite puts `FLEET_INVITE=<code>; export FLEET_INVITE` right under the
-// script's shebang (code is validInviteCode's shape: nothing to quote).
+// script's shebang (code is validInviteCode's shape: nothing to quote) — for
+// an installer from before its __FLEET_INVITE__ placeholder (stable's may be
+// older than the hub); a newer one reads either and writes
+// $FLEET_CONF_DIR/invite, which `fleet login` sends.
 func withInvite(script, code string) string {
 	line := "FLEET_INVITE='" + code + "'; export FLEET_INVITE  # invite (claude-fleet#2261): sent once by fleet login\n"
 	if strings.HasPrefix(script, "#!") {
