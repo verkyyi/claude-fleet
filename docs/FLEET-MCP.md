@@ -190,7 +190,10 @@ call, never the credential:
 ```
 
 `via=cred` ÷ all is the EPIC's 「工具调用里认得出是哪个执行会话的」.
-`fleet-mcp.py --cred check` prints the verified claims of `$FLEET_WORKER_CRED`.
+`fleet-mcp.py --cred check` prints the verified claims of `$FLEET_WORKER_CRED`. `--cred assert` prints
+the session's OWN worker assertion (the hub on, the credential holding) — what
+`bin/fleet-session-cred.sh` hands `POST /v1/fleet/session-cred` to borrow a session
+pass on an untrusted machine (claude-fleet#1972).
 
 What it is not: the key and the session share a uid, so a session that wants to
 can read the key — this is an identity rail against a moved window or a borrowed

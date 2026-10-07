@@ -136,7 +136,13 @@ while [ "$#" -gt 0 ]; do
       export FLEET_CODEX_PROFILE="$2"; shift 2 ;;
     --codex-home)
       [ "$#" -ge 2 ] && [ -d "$2" ] || { echo 'fleet-codex: recorded CODEX_HOME is missing' >&2; exit 2; }
-      export CODEX_HOME="$2"; _codex_home_explicit=1; shift 2 ;;
+      export CODEX_HOME="$2"; _codex_home_explicit=1; shift 2
+      # a session's credential-free home (issue #1972) names the account home it mirrors
+      if [ -f "$CODEX_HOME/.fleet-real-home" ]; then
+        _fx_rh=$(head -n 1 "$CODEX_HOME/.fleet-real-home")
+        [ -d "$_fx_rh" ] && export CODEX_HOME="$_fx_rh"
+        unset _fx_rh
+      fi ;;
     --resume)
       [ "$#" -ge 2 ] || { echo 'fleet-codex: --resume requires a session id' >&2; exit 2; }
       resume_id="$2"; shift 2 ;;
@@ -423,6 +429,40 @@ if [ "${FLEET_CODEX_VERSION_CHECK:-1}" != 0 ] && [ -f "$BIN/fleet-codex-runtime.
   unset _vline
 fi
 
+# --- through this login's credential proxy (issue #1972, EPIC #1967 C5) ---------
+# The wrapper handed this launch a FLEET_CRED_SID (FLEET_CRED_PROXY=1). The proxy
+# mints a session credential for the account this CODEX_HOME is (an fcp1.; on an
+# untrusted machine an fcp-h1. pass from the hub), Codex reaches it as a custom
+# provider (共同约定 2: base_url + env_key, plugins / apps / analytics off), and
+# CODEX_HOME becomes this session's credential-free mirror of the account home —
+# everything linked but auth.json, so threads, trust and skills stay where they
+# were. The window still records the REAL home (@codex_home), and a recorded
+# mirror maps back (--codex-home above). A ccquota-managed profile keeps its own
+# isolated environment, untouched. Exit 4 = a home the proxy cannot read for →
+# today's launch; any other failure refuses.
+_fx_real_home=''; _fx_route=''
+if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "${FLEET_CODEX_PROFILE:-}" ]; then
+  _fx_px=$(bash "$BIN/fleet-session-cred.sh" mint --provider codex --sid "$FLEET_CRED_SID" --codex-home "${CODEX_HOME:-$HOME/.codex}")
+  _fx_rc=$?
+  case "$_fx_rc" in
+    0)
+      IFS=$'\t' read -r _fx_route _fx_port FLEET_CODEX_SESSION_CRED <<< "$_fx_px"
+      export FLEET_CODEX_SESSION_CRED
+      _fx_real_home="${CODEX_HOME:-$HOME/.codex}"
+      _fx_home=$(bash "$BIN/fleet-session-cred.sh" codex-home --sid "$FLEET_CRED_SID" --real "$_fx_real_home") \
+        || { echo 'fleet-codex: could not make this session a credential-free CODEX_HOME — refusing to launch' >&2; exit 1; }
+      export CODEX_HOME="$_fx_home"
+      flags+=(-c 'model_provider="fleet"'
+              -c "model_providers.fleet={name=\"fleet\",base_url=\"http://127.0.0.1:$_fx_port/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\",wire_api=\"responses\"}"
+              -c 'features.plugins=false' -c 'features.apps=false' -c 'analytics.enabled=false')
+      unset _fx_home _fx_port ;;
+    4) : ;;
+    *) echo 'fleet-codex: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)' >&2
+       exit 1 ;;
+  esac
+  unset _fx_px _fx_rc
+fi
+
 # --- stamp THIS pane's window (issue #511: -t "$TMUX_PANE", never the current window)
 export FLEET_CODEX_LAUNCHER_PID="$$"
 export FLEET_CODEX_REMOTE=''
@@ -433,8 +473,9 @@ for a in ${pass[@]+"${pass[@]}"}; do
 done
 if [ -n "${TMUX_PANE:-}" ]; then
   tmux set-option -w -t "$TMUX_PANE" @cc_agent codex 2>/dev/null || true
-  tmux set-option -w -t "$TMUX_PANE" @codex_home "${CODEX_HOME:-$HOME/.codex}" 2>/dev/null || true
-  _acct=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" python3 "$BIN/fleet-codex-account.py" label "${CODEX_HOME:-$HOME/.codex}" 2>/dev/null) || _acct=''
+  tmux set-option -w -t "$TMUX_PANE" @codex_home "${_fx_real_home:-${CODEX_HOME:-$HOME/.codex}}" 2>/dev/null || true
+  _acct=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" python3 "$BIN/fleet-codex-account.py" label "${_fx_real_home:-${CODEX_HOME:-$HOME/.codex}}" 2>/dev/null) || _acct=''
+  [ -n "$_fx_route" ] && tmux set-option -w -t "$TMUX_PANE" @cred_route "$_fx_route" 2>/dev/null || true
   tmux set-option -w -t "$TMUX_PANE" @cc_account "${_acct:+codex:$_acct}" 2>/dev/null || true
   tmux set-option -w -t "$TMUX_PANE" @cc_launcher_pid "$$" 2>/dev/null || true
   # New ownership invalidates the old JSON even if the process died before its
