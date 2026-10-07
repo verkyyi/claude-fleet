@@ -96,6 +96,9 @@ label.f { display: grid; gap: 5px; font-size: 12.5px; font-weight: 500; color: v
 .nav .cnt { margin-left: auto; font: 11px var(--f-mono); color: var(--side-muted); }
 .side-foot { margin-top: auto; display: grid; gap: 8px; }
 .side-foot form { margin: 0; }
+.langsw { display: inline-flex; justify-self: start; border: 1px solid var(--side-hi); border-radius: 7px; overflow: hidden; margin: 0 8px; }
+.langsw button { border: 0; background: none; color: var(--side-muted); font: 12px var(--f-ui); padding: 4px 10px; cursor: pointer; }
+.langsw button[aria-pressed="true"] { background: var(--side-hi); color: #fff; }
 .nav a.navi { text-decoration: none; }
 .me { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 9px; cursor: pointer; border: 0; background: none; color: var(--side-ink); width: 100%; text-align: left; }
 .me:hover { background: var(--side-hi); }
@@ -228,7 +231,8 @@ pre.out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/
  * letter-spacing or case change on labels, a taller line. C9 (#2023) owns the
  * language switch. */
 :root:lang(zh-CN) { --f-ui: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif; --f-display: var(--f-ui); }
-:lang(zh-CN) body { line-height: 1.7; }
+:lang(zh-CN) body { line-height: 1.75; }
+:lang(zh-CN) h1, :lang(zh-CN) h2, :lang(zh-CN) h3 { line-height: 1.25; letter-spacing: 0; }
 :lang(zh-CN) .nav-h, :lang(zh-CN) .items .kind { letter-spacing: 0; text-transform: none; }
 
 @media (max-width: 1100px) { .g4 { grid-template-columns: repeat(2, minmax(0,1fr)); } .g21 { grid-template-columns: minmax(0,1fr); } }

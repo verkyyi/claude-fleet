@@ -12,6 +12,27 @@
 // token / Codex / Claude Code / gateway 这类标识符不译：API 里是什么、
 // 运维 grep 的是什么，页面上就是什么。
 //
+// ── 词表（claude-fleet#2023，中文设计页；入口所有网页的唯一用词来源）──
+// 与 fleet 的中文 issue、dash 已经在用的词一致；新字符串先查这里，没有再加一行。
+//
+//   Session              会话          Subscription         订阅
+//   Worker (session)     执行会话      Subscription pool    订阅池
+//   Machine              机器          Headroom             余量
+//   Device               设备          5-hour window        5 小时额度
+//   Admin / User         管理员 / 使用者  Weekly window     每周额度
+//   Sign in / Sign out   登录 / 退出   Credential           凭据
+//   Maintenance          维护          Join code            加入码
+//   Audit                审计          Team settings        团队设置
+//   Needs answer         在等你回答    Working / Idle       进行中 / 空闲
+//   SPOT machine         临时机器      Front page           首页
+//
+// 不译：产品名（claudefleet、Claude、Codex、GitHub）、命令（fleet login）、
+// 会话编号（issue-1950）、模型 id、机器名、MCP、存档的审计原文。
+// 格式：大数字用 lib/i18n.js 的 fmtCompact（2.12 亿 / 13.1 亿，万 / 亿），
+// 日期用 fmtDate / fmtAgo（10月6日 18:20 · 6 分钟前）；标点用全角 ，。：（）；
+// 中文与拉丁字母、数字之间留一个空格。公开页（首页、登录、拒绝、fleet login）
+// 由入口在服务端渲染，它们的字符串在 internal/api/pagetext.go，用同一张词表。
+//
 // 键必须与 en.js 完全一致 —— 少一个键、多一个键都会让
 // web/test/i18n.test.mjs 变红，而不是悄悄漏出一句英文。
 export const zhCN = {
@@ -661,6 +682,7 @@ export const zhCN = {
   'ui.door.wecom': '企业微信',
   'ui.door.open': '开放',
   'ui.me.signout': '退出',
+  'ui.lang': '语言',
   'ui.me.you': '你',
   'ui.fleet': '{name} 的 fleet',
   'ui.loading': '加载中…',

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"html/template"
 	"log"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"rsc.io/qr"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -662,7 +664,8 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 	code := strings.ToUpper(strings.TrimSpace(r.FormValue("code")))
 	pid := s.ensurePerson(r)
-	page := loginPage{Code: code}
+	loc := s.pageLocale(w, r)
+	page := loginPage{pageView: newPageView(r, loc), Code: code}
 	now := time.Now()
 
 	if r.Method == http.MethodPost {
@@ -704,11 +707,11 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case errors.Is(err, errLoginGone):
-			page.Error = "这个验证码已过期或已用过，请在终端重新运行 fleet login。"
+			page.Error = pageT(loc, "login.err.gone")
 		case errors.Is(err, store.ErrDrillCode):
-			page.Error = "演练确认码无效、已用过或已过期。"
+			page.Error = pageT(loc, "login.err.drill")
 		case err != nil:
-			page.Error = "签发失败：" + err.Error()
+			page.Error = i18n.Interpolate(pageT(loc, "login.err.issue"), map[string]string{"err": err.Error()})
 		case !approve:
 			page.Done, page.Denied = true, true
 		default:
@@ -720,7 +723,7 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 
 	// GET: show what is being confirmed.
 	if pid == "" {
-		page.Error = "领取连接证书需要用企业微信登录（运营者令牌与 tailnet 身份不对应任何人）。"
+		page.Error = pageT(loc, "login.err.noperson")
 		renderLoginPage(w, page)
 		return
 	}
@@ -730,7 +733,7 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 			page.setPurpose(l.purpose, l.name)
 		}
 	}) || page.KeyFP == "" {
-		page.Error = "这个验证码已过期或已用过，请在终端重新运行 fleet login。"
+		page.Error = pageT(loc, "login.err.gone")
 		renderLoginPage(w, page)
 		return
 	}
@@ -742,7 +745,7 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
-		page.Error = "还不能签发：" + err.Error()
+		page.Error = i18n.Interpolate(pageT(loc, "login.err.notyet"), map[string]string{"err": err.Error()})
 		renderLoginPage(w, page)
 		return
 	}
@@ -842,6 +845,7 @@ func sameOrigin(r *http.Request) bool {
 }
 
 type loginPage struct {
+	pageView
 	Title   string // 领取连接证书, or 把 <机器名> 加为节点 (#1627)
 	Node    string // the machine being added, purpose=node only
 	Code    string
@@ -855,17 +859,19 @@ type loginPage struct {
 	Denied  bool
 }
 
-var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8">
+var loginTmpl = template.Must(template.New("login").Funcs(pageFuncs(i18n.EN)).Parse(`<!doctype html>
+<html lang="{{.Lang}}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{.Title}}</title>
 <style>
-:root{--bg:#fff;--fg:#1f2328;--mut:#59636e;--card:#f6f8fa;--line:#d1d9e0;--ok:#1a7f37;--bad:#cf222e;--btn:#1f6feb}
+:root{--bg:#fff;--fg:#1f2328;--mut:#59636e;--card:#f6f8fa;--line:#d1d9e0;--ok:#1a7f37;--bad:#cf222e;--btn:#1f6feb;--ink:var(--fg);--ink-2:var(--mut)}
 @media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--mut:#9198a1;--card:#151b23;--line:#3d444d;--ok:#3fb950;--bad:#f85149;--btn:#388bfd}}
-body{background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif;margin:0;padding:24px 16px}
+body{background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,system-ui,sans-serif;margin:0;padding:24px 16px}
+:lang(zh) body{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;line-height:1.75}
 main{max-width:460px;margin:0 auto}
-h1{font-size:20px;margin:0 0 16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:12px 0}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin:0 0 16px}
+h1{font-size:20px;margin:0;line-height:1.3}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:12px 0;overflow-wrap:anywhere}
 .code{font:600 28px/1.2 ui-monospace,Menlo,monospace;letter-spacing:2px}
 .mut{color:var(--mut);font-size:14px}
 code{font-family:ui-monospace,Menlo,monospace;font-size:13px;word-break:break-all}
@@ -873,21 +879,20 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:13px;word-break:break-al
 button{flex:1;font-size:16px;padding:12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
 button.go{background:var(--btn);border-color:var(--btn);color:#fff}
 .ok{color:var(--ok)}.bad{color:var(--bad)}
-</style></head><body><main>
-<h1>{{.Title}}</h1>
+` + langSwitchCSS + `</style></head><body><main>
+<div class="top"><h1>{{.Title}}</h1>` + langSwitch + `</div>
 {{if .Error}}<div class="card bad">{{.Error}}</div>
-{{else if .Done}}{{if .Denied}}<div class="card">已拒绝。终端里的 fleet login 会停下来。</div>
-{{else if .Node}}<div class="card ok">已把 <b>{{.Node}}</b> 加为节点（证书签给 <b>{{.Login}}</b>，{{.Until}} 前有效）。回到终端，fleet node join 会接着装好并上线。</div>
-{{else}}<div class="card ok">已签发给 <b>{{.Login}}</b>，{{.Until}} 前有效。回到终端，fleet login 会自动写好证书。</div>{{end}}
+{{else if .Done}}{{if .Denied}}<div class="card">{{t "login.denied"}}</div>
+{{else}}<div class="card ok">{{.DoneHTML}}</div>{{end}}
 {{else if .Confirm}}
-<p>确认终端上显示的验证码与下面一致，再点「确认签发」。</p>
-<div class="card"><div class="mut">验证码</div><div class="code">{{.Code}}</div></div>
-<div class="card"><div class="mut">签给</div><div>{{.Who}} · 系统账号 <b>{{.Login}}</b></div>
-<div class="mut" style="margin-top:8px">密钥指纹</div><code>{{.KeyFP}}</code>
-<div class="mut" style="margin-top:8px">有效期 12 小时，过期后再扫一次即可。</div>
-{{if .Node}}<div class="mut" style="margin-top:8px">确认后 <b>{{.Node}}</b> 成为节点：入口可以把会话派到它上面。</div>{{end}}</div>
+<p>{{t "login.confirm.lead"}}</p>
+<div class="card"><div class="mut">{{t "login.code"}}</div><div class="code">{{.Code}}</div></div>
+<div class="card"><div class="mut">{{t "login.for"}}</div><div>{{.Who}} · {{t "login.account"}} <b>{{.Login}}</b></div>
+<div class="mut" style="margin-top:8px">{{t "login.keyfp"}}</div><code>{{.KeyFP}}</code>
+<div class="mut" style="margin-top:8px">{{t "login.validity"}}</div>
+{{if .Node}}<div class="mut" style="margin-top:8px">{{.NodeNoteHTML}}</div>{{end}}</div>
 <form method="post" action="/fleet/login"><input type="hidden" name="code" value="{{.Code}}">
-<div class="row"><button name="action" value="deny">不是我</button><button class="go" name="action" value="approve">确认签发</button></div></form>
+<div class="row"><button name="action" value="deny">{{t "login.btn.deny"}}</button><button class="go" name="action" value="approve">{{t "login.btn.approve"}}</button></div></form>
 {{end}}
 </main></body></html>`))
 
@@ -901,19 +906,54 @@ func (p *loginPage) setPurpose(purpose, machine string) {
 		return
 	}
 	if machine == "" {
-		machine = "这台机器"
+		machine = pageT(p.Lang, "login.this.machine")
 	}
-	p.Node, p.Title = machine, "把 "+machine+" 加为节点"
+	p.Node = machine
+	p.Title = i18n.Interpolate(pageT(p.Lang, "login.title.node"), map[string]string{"machine": machine})
+}
+
+// DoneHTML is the confirmation's closing sentence, its values bolded and
+// escaped.
+func (p loginPage) DoneHTML() template.HTML {
+	key := "login.done"
+	if p.Node != "" {
+		key = "login.done.node"
+	}
+	return boldIn(p.Lang, key, map[string]string{"node": p.Node, "login": p.Login, "until": p.Until}, "until")
+}
+
+// NodeNoteHTML says what confirming a node scan does, the machine bolded.
+func (p loginPage) NodeNoteHTML() template.HTML {
+	return boldIn(p.Lang, "login.node.note", map[string]string{"node": p.Node})
+}
+
+// boldIn fills key's placeholders with escaped values, bolding each one
+// except those named in plain.
+func boldIn(loc, key string, vars map[string]string, plain ...string) template.HTML {
+	out := make(map[string]string, len(vars))
+	for k, v := range vars {
+		out[k] = "<b>" + html.EscapeString(v) + "</b>"
+	}
+	for _, k := range plain {
+		out[k] = html.EscapeString(vars[k])
+	}
+	return template.HTML(i18n.Interpolate(html.EscapeString(pageT(loc, key)), out))
 }
 
 func renderLoginPage(w http.ResponseWriter, p loginPage) {
+	if p.Lang == "" {
+		p.pageView = newPageView(nil, i18n.EN)
+	}
 	if p.Title == "" {
-		p.Title = "领取连接证书"
+		p.Title = pageT(p.Lang, "login.title")
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
-	_ = loginTmpl.Execute(w, p)
+	w.Header().Set("Content-Language", p.Lang)
+	if c, err := loginTmpl.Clone(); err == nil {
+		_ = c.Funcs(pageFuncs(p.Lang)).Execute(w, p)
+	}
 }
 
 // qrMatrix encodes s as rows of '#' (dark) and '.' (light).

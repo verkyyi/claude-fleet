@@ -13,7 +13,7 @@
 // Fails closed: no /v1/me, no menu — the page says it could not tell who you
 // are and offers to sign in again, rather than drawing a menu that guesses.
 import { esc, ic, ICONS, navFor, pageAllowed, titleOf, isAdmin, viewer, liveLine } from './lib/shell.js';
-import { t } from './lib/i18n.js';
+import { t, locale, chooseLocale } from './lib/i18n.js';
 
 /** api fetches a same-origin JSON endpoint; a non-2xx throws an Error whose
  *  message is the hub's own line ({error} or the status). */
@@ -79,7 +79,11 @@ function frame(me, page) {
   const nav = navFor(me && me.pages).map((x) => x.heading
     ? `<div class="nav-h">${esc(x.heading)}</div>`
     : `<a class="navi" href="${esc(x.href)}"${x.id === page ? ' aria-current="page"' : ''}>${ic(x.icon)}<span>${esc(x.label)}</span><span class="cnt" data-cnt="${esc(x.id)}"></span></a>`).join('');
-  const foot = v ? `<div class="side-foot">${v.logout
+  // The language switch (claude-fleet#2023): chooseLocale writes the cookie
+  // and reloads with ?lang=, which the hub saves on the account.
+  const zh = locale() === 'zh-CN';
+  const langsw = `<div class="langsw" role="group" aria-label="${esc(t('ui.lang'))}"><button type="button" data-shell="lang" data-lang="zh-CN" lang="zh-CN" aria-pressed="${zh}">中文</button><button type="button" data-shell="lang" data-lang="en" lang="en" aria-pressed="${!zh}">EN</button></div>`;
+  const foot = v ? `<div class="side-foot">${langsw}${v.logout
     ? `<form method="post" action="/logout"><button class="me" type="submit" title="${esc(t('ui.me.signout'))}"><span class="av" style="background:var(--brand)">${esc(v.initials)}</span><span class="who"><b>${esc(v.name)}</b><span>${esc(v.sub)}</span></span>${ic('out')}</button></form>`
     : `<div class="me"><span class="av" style="background:var(--brand)">${esc(v.initials)}</span><span class="who"><b>${esc(v.name)}</b><span>${esc(v.sub)}</span></span></div>`}</div>` : '';
   return `<div class="app" id="app">
@@ -104,6 +108,7 @@ function wire() {
       const s = $('.nav-scrim'); if (s) s.hidden = !open;
     } else if (a === 'close' || a === 'scrim') close();
     else if (a === 'confirm') { const fn = layer()._confirm; close(); if (fn) fn(); }
+    else if (a === 'lang') { if (el.getAttribute('aria-pressed') !== 'true') chooseLocale(el.dataset.lang); }
     else if (a === 'copy') copyText(el.dataset.text || '');
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });

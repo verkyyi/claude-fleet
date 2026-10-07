@@ -1,13 +1,17 @@
 package api
 
 import (
-	"io"
+	"bytes"
+	"html/template"
+	"io/fs"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/badge"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -204,26 +208,46 @@ func (s *Server) handleOdometer(w http.ResponseWriter, r *http.Request) {
 // serveLanding answers a signed-out "/" with the front page
 // (claude-fleet#1988). Any other path, or a hub built without it, falls
 // through to the gate's sign-in redirect or 401.
+//
+// The page is an html/template drawn in the language pageLocale picks
+// (claude-fleet#2023), so it arrives in 中文 or English with <html lang> set.
 func (s *Server) serveLanding(w http.ResponseWriter, r *http.Request) bool {
 	if r.URL.Path != "/" || (r.Method != http.MethodGet && r.Method != http.MethodHead) || s.UI == nil {
 		return false
 	}
-	f, err := s.UI.Open("landing.html")
+	src, err := fs.ReadFile(s.UI, "landing.html")
 	if err != nil {
 		return false
 	}
-	defer f.Close()
-	rs, ok := f.(io.ReadSeeker)
-	if !ok {
+	loc := s.pageLocale(w, r)
+	tmpl, err := template.New("landing").Funcs(pageFuncs(loc)).Parse(string(src))
+	if err != nil {
+		log.Printf("landing.html: %v", err)
 		return false
 	}
-	st, err := f.Stat()
-	if err != nil {
+	var body bytes.Buffer
+	if err := tmpl.Execute(&body, landingPage{
+		pageView: newPageView(r, loc),
+		Hosted:   i18n.Interpolate(pageT(loc, "landing.foot.hosted"), map[string]string{"host": r.Host}),
+	}); err != nil {
+		log.Printf("landing.html: %v", err)
 		return false
 	}
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Language", loc)
+	w.Header().Add("Vary", "Accept-Language, Cookie")
 	// Same-origin only: the page sends no request anywhere else.
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
-	http.ServeContent(w, r, "landing.html", st.ModTime(), rs)
+	if r.Method == http.MethodHead {
+		return true
+	}
+	_, _ = w.Write(body.Bytes())
 	return true
+}
+
+// landingPage is what landing.html is drawn from.
+type landingPage struct {
+	pageView
+	Hosted string // "Hosted at <host>", until the script repeats it from location
 }
