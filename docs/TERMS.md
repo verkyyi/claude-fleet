@@ -41,9 +41,18 @@ nests three levels, and this is where the confusing vocabulary starts:
   charter). This is where you file, triage, spawn workers, hand work back and
   land whatever a worker couldn't — a worker lands its own PR on a green gate
   (issue #441), so the hub only steps in for the strays. **One hub per fleet**; its pane carries `@hub=1` and F9 /
-  the ⌂ icon jump to it. There is no resident orchestrator agent — the fleet is
-  operator-driven (issue #439). Built by
+  the ⌂ icon jump to it. Built by
   [`bin/hub-session.sh`](../bin/hub-session.sh).
+- **Orchestrator** (编排会话) — the fleet's ONE resident session that talks a
+  request through with you and then dispatches it (a quick task, an EPIC, the
+  queue), never writing code itself (issue #1957). A no-repo session in `$HOME`,
+  told by `@fleet_role orchestrator`, addressed as `orchestrator`; it has no row
+  of its own — it lives in the client's 「新任务」 (its glyph is its state; ⇧⇥ in
+  the writing area hands it the draft). Opened and kept open by
+  [`bin/fleet-orchestrator.sh`](../bin/fleet-orchestrator.sh) (fleet-up, the
+  diskguard tick); restore / migrate / move treat it as `home`. On by default
+  where the computer is 承载 (`FLEET_HOST=1`); `FLEET_ORCHESTRATOR=0` turns it off.
+  Instructions: [`skills/fleet-orchestrate/`](../skills/fleet-orchestrate/SKILL.md).
 - **Scheduler** — whatever starts the collector on a timer: **launchd** on macOS
   (`launchd/com.claude-fleet.collect.plist.tmpl`), a **systemd** user timer on
   Linux (`systemd/claude-fleet-collect.timer`).

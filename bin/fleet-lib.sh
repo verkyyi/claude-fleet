@@ -4825,6 +4825,22 @@ fleet_win_for_key() {
   case "$key" in ?*:?*) pre=${key%%:*}; key=${key#*:} ;; esac
   case "$key" in
     issue-*|scratch-*) sn=${key#*-}; case "$sn" in ''|*[!0-9]*) return 1 ;; esac ;;
+    orchestrator)
+      # The fleet's one orchestrating session (issue #1957): its @fleet_role, on
+      # this fleet's server — no number to recycle, no repo to qualify it.
+      [ -z "$pre" ] || return 1
+      if [ -n "$sock" ]; then
+        hits=$(fleet_lw '#{window_id}|#{@fleet_role}' tmux -L "$sock" | awk -F'|' '$2 == "orchestrator" { print $1 }')
+      else
+        hits=$(fleet_lw '#{window_id}|#{@fleet_role}' | awk -F'|' '$2 == "orchestrator" { print $1 }')
+      fi
+      n=$(printf '%s' "$hits" | grep -c .)
+      case "$n" in
+        0) return 1 ;;
+        1) printf '%s' "$hits"; return 0 ;;
+      esac
+      printf 'fleet: orchestrator is ambiguous — %s windows carry @fleet_role orchestrator\n' "$n" >&2
+      return 2 ;;
     *) return 1 ;;
   esac
   fleet="$sock"; [ -n "$fleet" ] || fleet=$(fleet_current_session 2>/dev/null)

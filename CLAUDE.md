@@ -293,6 +293,18 @@ Do not install from memory: read the doc and work from it.
   carries it as a `REAP<TAB><fleet_id><TAB><policy>` row, the inventory as
   `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
   `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.
+- **The fleet has ONE orchestrating session, and it is no row** (issue #1957).
+  `bin/fleet-orchestrator.sh ensure` opens it (fleet-up, and the diskguard tick's
+  `home_watch` reopens it — the same conversation when it can): `@fleet_role
+  orchestrator`, `@norepo 1`, in `$HOME`, the login's agent at its strongest model
+  and high effort, seeded `/fleet-orchestrate`. Restore / migrate / move read it
+  as `home` (the role-aware formats map it there — never snapshotted, never moved);
+  the session caps never count it (only `worker` does); `fleet_win_for_key
+  orchestrator` addresses it. The inventory's column 20 `role=orchestrator` carries
+  it to the client: `fleet-hub-sessions.sh` writes `orch_<sess>`, the rows skip
+  it, 「新任务」 wears its state, the writing area hands it a draft (⇧⇥). Off
+  unless `FLEET_ORCHESTRATOR` (default: `FLEET_HOST`) — no orchestrator ⇒ byte
+  for byte as before.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).

@@ -290,6 +290,27 @@ FLEET_CTX_WINDOW=200000
 # @label=Subagent model @group=spawn @tier=advanced @scope=fleet @edit=enum
 #FLEET_SUBAGENT_MODEL="opus"
 
+# The fleet's ONE orchestrating session (issue #1957, bin/fleet-orchestrator.sh):
+# a no-repo session in $HOME that lives behind the client's 「新任务」 — the person
+# hands it a draft (⇧⇥ in the writing area), it talks the work through and then
+# files / spawns / plans it (skills/fleet-orchestrate/). fleet-up opens it, the
+# diskguard tick reopens it when it is closed. Default: on where this computer
+# hosts sessions (FLEET_HOST=1, 承载); 0 = no orchestrator on this fleet.
+# @label=Orchestrator session @group=spawn @tier=internal @scope=fleet @edit=bool
+#FLEET_ORCHESTRATOR=1
+
+# The orchestrator runs this login's default agent (FLEET_AGENT) on its strongest
+# model at high effort: Claude --model FLEET_ORCH_MODEL (fable; FLEET_MODEL_FALLBACK
+# while that model is capped on the active account) --effort FLEET_ORCH_EFFORT;
+# Codex -m FLEET_ORCH_CODEX_MODEL (empty: the login's own) with
+# model_reasoning_effort = FLEET_ORCH_EFFORT. Read when it is (re)opened.
+# @label=Orchestrator model (Claude) @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_ORCH_MODEL="fable"
+# @label=Orchestrator model (Codex) @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_ORCH_CODEX_MODEL=""
+# @label=Orchestrator effort @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_ORCH_EFFORT="high"
+
 # When an account hits a PER-MODEL cap ("You've hit your Fable 5 limit · resets
 # Sep 6 …" / "You've reached your Fable limit …") while its subscription still
 # has 5h/7d headroom, the fleet does NOT bench the account (that rotation is for

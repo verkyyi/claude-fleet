@@ -34,7 +34,17 @@
 #   H. 不关联仓库: no 「记成 issue」, its why-line; ↵ → `- scratch --name … --body-file`
 #      (the text is the seed), and the session's row lands under the list's no repo heading
 #   I. 多个仓库: 「编排」 and its why-line; ↵ → a no-repo scratch whose seed asks
-#      it to split the work by repo (the orchestrator's route is C7's)
+#      it to split the work by repo (no orchestrator running: the old road)
+# The orchestrator (issue #1957) — orch_fcs in the status dir names one (m4, U/orch);
+# the faked fleet-remote-view.sh opens it as a stage window @remote m4:U/orch whose
+# program turns bracketed paste on and logs what it is sent:
+#   J. free: the area says so (编排空闲), 发法 编排, the go word ↵ 交给编排; a draft
+#      and ⇧⇥ → the list's jump (wid:U/orch), the stage on it, the draft PASTED there
+#      (bracketed, never sent), the area emptied — nothing placed
+#   K. working: 「新任务」 wears the spinner, the area says what it is busy with,
+#      发法 开工 — ↵ starts the work itself (acme/web new …)
+#   L. waiting on you: 「新任务」 turns red `!`, the area's line says its question;
+#      Tab to 发法 + space flips it to 编排; an empty ⇧⇥ just goes there
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -73,7 +83,31 @@ ROWS="$WORK/rows"; LOG="$WORK/place.log"; BODY="$WORK/body.log"; VIEW="$WORK/vie
   printf 'wid:U/issue-9%sidle%s·%snine%s%s%s0%s%sm4%s9%s%s\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"; } > "$ROWS"
 rm -f "$SB/tmux-dashboard-rows.sh" "$SB/fleet-client-place.sh" "$SB/fleet-remote-view.sh"
 printf '#!/bin/sh\ncat %q\n' "$ROWS" > "$SB/tmux-dashboard-rows.sh"
-printf '#!/bin/sh\n[ "$1" = open ] && printf "%%s\\n" "$2" >> %q\nexit 0\n' "$VIEW" > "$SB/fleet-remote-view.sh"
+cat > "$WORK/recv.py" <<'PY'
+import os, sys, tty
+out = sys.argv[1]
+tty.setraw(0)
+os.write(1, b"\x1b[?2004h")
+while True:
+    data = os.read(0, 4096)
+    if not data:
+        break
+    with open(out, "ab") as f:
+        f.write(data)
+PY
+cat > "$SB/fleet-remote-view.sh" <<EOF
+#!/bin/bash
+[ "\$1" = open ] || exit 0
+printf '%s\n' "\$2" >> "$VIEW"
+# the orchestrator's row (issue #1957): a stage window that reads bracketed paste
+if [ "\$2" = wid:U/orch ]; then
+  T() { "$REAL_TMUX" -L fcs-stage "\$@"; }
+  w=\$(T list-windows -t fcs-stage -F '#{window_id} #{@remote}' | awk '\$2 == "m4:U/orch" { print \$1 }')
+  [ -n "\$w" ] || { w=\$(T new-window -d -P -F '#{window_id}' -t fcs-stage: "python3 '$WORK/recv.py' '$WORK/orch-in'"); T set-window-option -t "\$w" @remote m4:U/orch; }
+  T select-window -t "\$w"
+fi
+exit 0
+EOF
 cat > "$SB/fleet-client-place.sh" <<EOF
 #!/bin/bash
 # the body first: the test reads it as soon as the argv is logged
@@ -309,6 +343,70 @@ line=$(placed_n 5)
 has 'I: a session of no repo' "$line" '- scratch --name 活页里加一张 fleet 状态卡 --body-file '
 has 'I: the seed is the text…' "$(cat "$BODY" 2>/dev/null)" '活页里加一张 fleet 状态卡'
 has 'I: …and asks it to split by repo' "$(cat "$BODY" 2>/dev/null)" '按仓库各开 issue'
+
+# --- the orchestrator (issue #1957) ------------------------------------------------
+orch() { printf 'U/orch%sm4%sonline%s%s%s%s%s%s\n' "$US" "$US" "$US" "$1" "$US" "${2:-}" "$US" "${3:-}" > "$FLEET_STATUS_G/orch_fcs"; }
+newtask() { screen | grep -F '新任务' | head -1; }
+# J. free: 编排 by default; ⇧⇥ carries the draft over
+settled
+orch 'done'
+st_ select-window -t "$pw"
+st_ send-keys -t "$pw" -l '活页里加一张 fleet 状态卡：在跑几个会话'
+CHECKS=$((CHECKS + 1)); waitfor 4 '编排空闲' compose || fail 'J: the area says the orchestrator is free' "$(compose)"
+c=$(compose)
+has 'J: 发法 编排 by default while it is free' "$c" '发法  编排 '
+has 'J: …the go word hands it over' "$c" '↵ 交给编排'
+has 'J: the keys line names ⇧⇥' "$c" '⇧⇥ 交给编排'
+has 'J: 「新任务」 is no busy row' "$(newtask)" '+'
+nlog=$(grep -c . "$LOG"); : > "$VIEW"
+st_ send-keys -t "$pw" BTab
+CHECKS=$((CHECKS + 1)); n=0; while ! grep -qx 'wid:U/orch' "$VIEW" && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+grep -qx 'wid:U/orch' "$VIEW" || fail 'J: ⇧⇥ asked the list to jump to the orchestrator' "$(cat "$VIEW")"
+CHECKS=$((CHECKS + 1)); n=0; while ! grep -qF '状态卡' "$WORK/orch-in" 2>/dev/null && [ $n -lt 60 ]; do sleep .1; n=$((n + 1)); done
+got=$(cat "$WORK/orch-in" 2>/dev/null)
+eq 'J: the draft pasted into it, bracketed, not sent' $'\e[200~活页里加一张 fleet 状态卡：在跑几个会话\e[201~' "$got"
+eq 'J: the stage shows the orchestrator' m4:U/orch "$(st_ display-message -p -t fcs-stage: '#{@remote}')"
+st_ select-window -t "$pw"
+CHECKS=$((CHECKS + 1)); waitfor 4 '已交给编排：活页里加一张' compose || fail 'J: the area says it went over' "$(compose)"
+hasnt 'J: …and is empty' "$(compose | sed -n '/╭/,/╰/p')" '状态卡'
+eq 'J: nothing placed' "$nlog" "$(grep -c . "$LOG")"
+
+# K. working: 开工 by default, the line says why
+orch working '' '跑 #1935 的批'
+st_ send-keys -t "$pw" -l '修一下 web 的页脚'
+CHECKS=$((CHECKS + 1)); waitfor 4 '编排在忙：跑 #1935 的批' compose || fail 'K: the area says what it is busy with' "$(compose)"
+c=$(compose)
+has 'K: 发法 开工 while it works' "$c" '发法  开工 '
+has 'K: …the go word starts it' "$c" '↵ 开工'
+spun() { newtask | grep -q '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]'; }
+CHECKS=$((CHECKS + 1)); n=0; while ! spun && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+spun || fail 'K: 「新任务」 wears the spinner' "$(newtask)"
+st_ send-keys -t "$pw" Enter
+line=$(placed_n $((nlog + 1)))
+has 'K: ↵ started the work itself' "$line" 'acme/web new --title 修一下 web 的页脚 --body-file '
+
+# L. waiting on you: red 「新任务」, its question; 发法 can be flipped; an empty ⇧⇥ goes there
+settled
+orch needs ask '开一个 EPIC 还是三个快任务？'
+st_ select-window -t "$pw"
+st_ send-keys -t "$pw" -l '再看一眼'
+CHECKS=$((CHECKS + 1)); waitfor 4 '! 编排在等你回答：开一个 EPIC 还是三个快任务？' compose || fail 'L: the area says its question' "$(compose)"
+red() { newtask | grep -q '!'; }
+CHECKS=$((CHECKS + 1)); n=0; while ! red && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+red || fail 'L: 「新任务」 turns red !' "$(newtask)"
+st_ send-keys -t "$pw" Tab Tab Tab
+st_ send-keys -t "$pw" Space
+sleep .3
+has 'L: Tab to 发法, space: 编排' "$(compose)" '↵ 交给编排'
+st_ send-keys -t "$pw" Tab      # back to the text
+st_ send-keys -t "$pw" C-u
+sleep .2
+: > "$VIEW"; : > "$WORK/orch-in"
+st_ send-keys -t "$pw" BTab
+CHECKS=$((CHECKS + 1)); n=0; while ! grep -qx 'wid:U/orch' "$VIEW" && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
+grep -qx 'wid:U/orch' "$VIEW" || fail 'L: an empty ⇧⇥ goes there' "$(cat "$VIEW")"
+sleep .5
+eq 'L: …pasting nothing' '' "$(cat "$WORK/orch-in")"
 
 [ "$FAIL" = 0 ] || { printf 'fleet-compose selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS"; exit 1; }
 printf 'fleet-compose selftest: PASS (%d checks)\n' "$CHECKS"

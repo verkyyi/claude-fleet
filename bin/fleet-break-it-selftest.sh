@@ -23,6 +23,8 @@
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
+#   orchestrator-closed                             bin/fleet-orchestrator.sh ensure (fleet-up.sh,
+#                                                   fleet-diskguard.sh home_watch)
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 #   epic-mark-overwritten / epic-fresh-switched     bin/fleet-epic-heartbeat.sh (one mark per batch),
@@ -472,6 +474,41 @@ drill_disk_full() {
   auto                                            # space freed: the next tick
   until_ok "$CAP" nt has-session -t oc 2>/dev/null || { WHY="space freed, still not restored"; return 1; }
   SECS=$(since "$t0"); WHAT="盘满时只记 held 不拉起，腾出空间后下一拍拉起"
+}
+
+# orchestrator-closed (issue #1957): the fleet's one orchestrating session is
+# closed — the tick's home_watch opens it again, in $HOME, on the same Claude
+# conversation (its id kept in fleets/<sess>/orchestrator.sid, its transcript on
+# disk), told by @fleet_role orchestrator whatever it was renamed to.
+drill_orchestrator_closed() {
+  CAP=5; BREAK_SOCK="$WORK/sock-or"; local t0 w w2 sid oa="$WORK/orch-argv" h="$WORK/ohome"
+  grep -q 'fleet-orchestrator.sh" ensure' "$BIN/fleet-up.sh" || { WHY="fleet-up.sh no longer opens the orchestrator"; return 1; }
+  sed -n '/^home_watch()/,/^}/p' "$BIN/fleet-diskguard.sh" | grep -q 'fleet-orchestrator.sh" ensure' \
+    || { WHY="the diskguard tick's home_watch no longer reopens the orchestrator"; return 1; }
+  mkdir -p "$h"; : > "$oa"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\nexec sleep 600\n' "$oa" > "$WORK/orch-agent"; chmod +x "$WORK/orch-agent"
+  nt -f /dev/null new-session -d -s or -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+  oens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$WORK/oconf" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
+             FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/orch-agent" bash "$BIN/fleet-orchestrator.sh" ensure or 2>/dev/null; }
+  w=$(oens) || { WHY="ensure did not open it"; return 1; }
+  until_ok 5 grep -q . "$oa" || { WHY="the orchestrator's agent never started"; return 1; }
+  grep -q -- '--model fable --effort high --session-id .* /fleet-orchestrate' "$oa" || { WHY="not the strongest model at high effort, seeded: $(cat "$oa")"; return 1; }
+  [ "$(o "$w" @fleet_role)" = orchestrator ] || { WHY="no @fleet_role orchestrator on $w"; return 1; }
+  [ "$(o "$w" pane_current_path)" = "$(cd "$h" && pwd -P)" ] || [ "$(o "$w" pane_current_path)" = "$h" ] || { WHY="not opened in \$HOME: $(o "$w" pane_current_path)"; return 1; }
+  [ "$(oens)" = "$w" ] || { WHY="a second ensure opened a second one"; return 1; }
+  sid=$(cat "$WORK/oconf/fleets/or/orchestrator.sid" 2>/dev/null)
+  [ -n "$sid" ] || { WHY="no conversation id kept"; return 1; }
+  mkdir -p "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+  : > "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')/$sid.jsonl"   # it talked
+  nt rename-window -t "$w" 'my planner'
+  nt kill-window -t "$w"                          # the break
+  : > "$oa"; t0=$(now)
+  w2=$(oens)                                      # the next tick's home_watch
+  [ -n "$w2" ] && [ "$w2" != "$w" ] || { WHY="it did not come back"; return 1; }
+  until_ok "$CAP" grep -q -- "--resume $sid" "$oa" || { WHY="it came back on a new conversation: $(cat "$oa")"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(nt list-windows -t or -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
+  WHAT="下一拍在 \$HOME 重开，续上同一对话（节拍 60s 另计）"
 }
 
 # window-renamed (issue #1844): a name is not an identity. Home renamed, a worker

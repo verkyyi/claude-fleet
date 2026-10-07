@@ -613,7 +613,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", role="orchestrator" if w.get("role") == "orchestrator" else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -776,6 +776,17 @@ for f in local:
         need.append("\x1f".join(clean(v) for v in (r["wid"], subj, clean(r["needs"]) if st == "needs" else "failed",
                                                    r["node"], r["detail"][:120])) + "\n")
     write(os.path.join(gdir, "needs_" + f["sess"]), "".join(need))
+    # The orchestrating session (issue #1957): `orch_<sess>` beside the cache, one
+    # line per machine that runs one — `<worker_id> US <machine> US <online|lost>
+    # US <state> US <needs> US <question>`, online first, then by machine. Its row
+    # stays in the cache (fleet-remote-view.sh open finds it there), but the rows
+    # skip every worker_id named here, and 「新任务」 wears the first line's state
+    # (fleet-sidebar.py), the writing area its busy line (fleet-compose.py).
+    orch = sorted((r for r in rows if r["role"] == "orchestrator" and not (r["local"] and r["local"] != f["sess"])),
+                  key=lambda r: (r["av"] != "online", r["node"]))
+    write(os.path.join(gdir, "orch_" + f["sess"]),
+          "".join("\x1f".join(clean(v) for v in (r["wid"], r["node"], r["av"], r["state"], r["needs"],
+                                                  r["detail"][:120])) + "\n" for r in orch))
 PY
 }
 
