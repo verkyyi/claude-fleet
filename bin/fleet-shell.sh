@@ -1082,7 +1082,7 @@ home-session)
   # cache's TMPDIR (so $FLEET_C is the shell's), the stage — what a row's own
   # jump runs with
   while IFS= read -r line; do
-    case "$line" in FLEET_*=*|CCQUOTA_*=*|TMPDIR=*|XDG_*=*) export "$line" ;; esac
+    case "$line" in FLEET_*=*|CCQUOTA_*=*|TMPDIR=*|XDG_*=*) export "${line?}" ;; esac
   done <<EOF
 $(T show-environment -g 2>/dev/null)
 EOF
@@ -1108,7 +1108,7 @@ EOF
   # the hub loop's next read; give up after FLEET_HOME_OPEN_WAIT (60 s), leaving
   # it on the list. FLEET_HOME_OPEN_CMD is the selftests' seam.
   (
-    cd "$HOME" 2>/dev/null; trap '' HUP
+    cd "$HOME" 2>/dev/null || :; trap '' HUP
     rf="${TMPDIR:-/tmp}/.claude-dash/global/remote_$SESS"
     n=$(( ${FLEET_HOME_OPEN_WAIT:-60} * 4 )); i=0
     case "$hkey" in
@@ -1228,7 +1228,7 @@ first_home() {
     [ -n "$(find "$lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] || return 0
     rm -rf "$lock"; mkdir "$lock" 2>/dev/null || return 0
   fi
-  ( trap '' HUP; cd "$HOME" 2>/dev/null
+  ( trap '' HUP; cd "$HOME" 2>/dev/null || :
     bash "$SHADOW/fleet-shell.sh" home-session claude --first; rmdir "$lock" 2>/dev/null
   ) </dev/null >"$CACHE/home-first.log" 2>&1 &
 }
