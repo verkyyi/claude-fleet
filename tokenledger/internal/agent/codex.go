@@ -154,10 +154,14 @@ func (p *codexCollector) poll(ctx context.Context, auth *codex.Auth, binary stri
 			return
 		}
 		result, err := codex.Query(ctx, binary, auth)
+		// The upstream's word on this exact access token (claude-fleet#1920):
+		// a refusal before exp is what the clock in LoginHealth cannot see.
+		_ = codex.RecordUpstream(p.home, auth, result, err)
 		if autoRefresh && codex.NeedsRefresh(result, err) {
 			fresh, refreshErr := codex.Maintain(ctx, binary, p.home, true)
 			if refreshErr == nil && fresh != nil && fresh.Identity.AccountUUID == auth.Identity.AccountUUID {
 				result, err = codex.Query(ctx, binary, fresh)
+				_ = codex.RecordUpstream(p.home, fresh, result, err)
 			}
 		}
 		if renewalErr != nil && !auth.ExpiresAt.IsZero() && !auth.ExpiresAt.After(time.Now()) {

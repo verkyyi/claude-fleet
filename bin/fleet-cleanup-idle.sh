@@ -6,8 +6,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 FLEET_SESSION="${1:?session required}"; shift
 fleet_load_conf "$FLEET_SESSION"
-# A multi-repo fleet switches this per repo (issue #978) — in the loop below.
-fleet_has_repo_overlays "$FLEET_SESSION" || [ "${FLEET_CLEANUP:-1}" != 0 ] || exit 0
+# FLEET_CLEANUP is switched per repo (issue #978) — in the loop below.
 # Automatic sleep retains idle tasks in their original windows. Do not race its
 # observation/exit policy with the older raw-window disposal timer — but a session
 # that chose WHEN it is closed (@reap_policy, issue #1902) chose it over sleep:
@@ -18,14 +17,9 @@ set -- ${only[@]+"${only[@]}"} "$@"
 export FLEET_SESSION
 export FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}"
 export FLEET_REAP_IDLE_DONE_MIN="${FLEET_REAP_IDLE_DONE_MIN:-30}"
-if ! fleet_has_repo_overlays "$FLEET_SESSION"; then
-  exec python3 "$BIN/fleet-cleanup-idle.py" --session "$FLEET_SESSION" \
-    --socket-name "$(fleet_socket "$FLEET_SESSION")" --main "${FLEET_MAIN:-}" \
-    --repo "${FLEET_REPO:-}" --base "${FLEET_BASE_BRANCH:-master}" "$@"
-fi
-# A multi-repo fleet (issue #791): one pass per hosted repo, each with THAT repo's
-# MAIN/base, sharing the caller's --limit. The pass only considers windows stamped
-# with its repo; a window whose repo is unknown or none is never closed here.
+# One pass per hosted repo (issues #791, #1941), each with THAT repo's MAIN/base,
+# sharing the caller's --limit. The pass only considers windows stamped with its
+# repo; a window whose repo is unknown or none is never closed here.
 limit=4; rest=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -35,12 +29,18 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$limit" in ''|*[!0-9]*) limit=4 ;; esac
-# Resolve every window's repo ONCE first: fleet_window_repo stamps @repo from the
-# window's @worktree, which is the only field the per-repo pass reads.
-for w in $(tmux -L "$(fleet_socket "$FLEET_SESSION")" list-windows -t "$FLEET_SESSION" \
-             -F '#{window_id}' 2>/dev/null); do
-  fleet_window_repo "$FLEET_SESSION" "$w" >/dev/null
-done
+# Resolve every window's repo ONCE first — @repo is the only field the per-repo
+# pass reads. fleet_window_repo stamps it from the window's @worktree; a worktree
+# window it answers by the fleet's ONLY repo (a worktree with no origin) is
+# stamped here too, so adding a second repo later cannot orphan it (#1941).
+_sock=$(fleet_socket "$FLEET_SESSION")
+while IFS='|' read -r w wr wt; do   # '|', not a space: an empty @repo must not collapse
+  [ -n "$w" ] && [ -z "$wr" ] || continue
+  r=$(fleet_window_repo "$FLEET_SESSION" "$w")
+  [ -n "$r" ] && [ -n "$wt" ] && tmux -L "$_sock" set-option -w -t "$w" @repo "$r" 2>/dev/null
+done <<EOF
+$(tmux -L "$_sock" list-windows -t "$FLEET_SESSION" -F '#{window_id}|#{@repo}|#{@worktree}' 2>/dev/null)
+EOF
 while IFS= read -r repo; do
   [ -n "$repo" ] || continue
   [ "$limit" -gt 0 ] || break

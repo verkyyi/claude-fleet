@@ -44,20 +44,20 @@
 #   reap <sess>     retire stale / dead / never-ready entries and their worktrees
 #   status <sess>   one line per entry (for humans + the selftest)
 #
-# One pool PER HOSTED REPO (issue #797). In a fleet hosting 2+ repos every warm
-# window is stamped @repo, and each command takes `--repo <owner/name>`:
+# One pool PER HOSTED REPO (issue #797), however many the fleet hosts (#1941):
+# every warm window is stamped @repo, and each command takes `--repo <owner/name>`:
 #   ensure/reap/status  with --repo: that repo's entries only, under that repo's
 #                       conf (fleet conf + its overlay: FLEET_MAIN, base, agent,
 #                       FLEET_SCRATCH_POOL…). Without: fan out over every hosted
 #                       repo, one after another, and retire any entry whose repo
 #                       the fleet no longer hosts.
 #   claim               with --repo: only an entry of that repo. Without: the
-#                       fleet conf's own repo (the pre-#797 pool).
-# All repos share the one holding session; @repo is what tells them apart. A
-# one-repo fleet (fleet_multirepo false) ignores all of it: no @repo stamp, no
-# filter — byte for byte the historic single pool.
+#                       fleet's first repo.
+# All repos share the one holding session; @repo is what tells them apart (an
+# older unstamped entry is told by its worktree's origin, pool_repo). A fleet
+# with no repo has no pool.
 #
-# Config (per-fleet conf; in a 2+ repo fleet a repo overlay overrides any of it):
+# Config (per-fleet conf; a repo overlay overrides any of it):
 #   FLEET_SCRATCH_POOL       how many warm entries to keep. 0 (default) = OFF.
 #   FLEET_POOL_MAX_AGE       seconds before an unclaimed entry is retired (1800).
 #                            A warm worktree is a snapshot of origin/<base> taken
@@ -92,60 +92,56 @@ done
 # The pool is never the CALLER's window: a claim runs from whichever pane pressed
 # ⌃s, and fleet_load_conf would lay that window's repo overlay on top — leaking
 # repo A's FLEET_AGENT / FLEET_SCRATCH_POOL into repo B's pool. No-op in a fleet
-# without repos/ (fleet_load_conf returns before it reads TMUX_PANE).
+# (fleet_load_conf would otherwise read TMUX_PANE for the window's overlay).
 unset TMUX_PANE
 fleet_load_conf "$SESS"
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
 POOL=$(fleet_pool_session "$SESS")
 
-# REPO is set iff this fleet hosts 2+ repos — the one switch every per-repo branch
-# below keys on, so a one-repo fleet never reaches any of them.
-REPO=''
-if fleet_multirepo "$SESS"; then
-  if [ -z "$REPO_ARG" ]; then
-    case "$CMD" in
-      ensure|reap|status)
-        # Fan out: one pass per hosted repo, each under its own conf. The refill
-        # delay is paid ONCE, here, and only when some repo has its pool on — with
-        # every pool off this costs nothing (see cmd_ensure).
-        if [ "$CMD" = ensure ] && [ "$DELAY" = 1 ]; then
-          while IFS= read -r _r; do
-            [ -n "$_r" ] || continue
-            _w=$( fleet_load_repo_conf "$SESS" "$_r" >/dev/null 2>&1; printf '%s' "${FLEET_SCRATCH_POOL:-0}" )
-            case "$_w" in ''|*[!0-9]*|0) continue ;; esac
-            sleep "${FLEET_POOL_REFILL_DELAY:-45}"; break
-          done <<EOF
-$(fleet_repos "$SESS")
-EOF
-        fi
-        # An entry whose repo the fleet no longer hosts (or cannot be told) belongs
-        # to no pass below: retire the window. Its worktree cannot be freed without
-        # that repo's MAIN — the scratch janitor owns what is left.
-        [ "$CMD" = status ] || for _w in $(TM list-windows -t "$POOL" -F '#{window_id}' 2>/dev/null); do
-          _r=$(TM display-message -p -t "$_w" '#{@repo}' 2>/dev/null)
-          [ -n "$_r" ] && fleet_repo_hosted "$SESS" "$_r" && continue
-          [ -z "$_r" ] && _wt=$(TM display-message -p -t "$_w" '#{@worktree}' 2>/dev/null) \
-            && [ -n "$_wt" ] && [ -n "$(fleet_worktree_repo "$SESS" "$_wt")" ] && continue
-          fleet_win_retire "$_w" "$SOCK"
-          TM kill-window -t "$_w" 2>/dev/null
-        done
+# REPO: the one repo this pass serves — the pool is per repo, one road whatever
+# the count (#1941). With no --repo, ensure/reap/status fan out over every hosted
+# repo and claim takes the first.
+if [ -z "$REPO_ARG" ]; then
+  case "$CMD" in
+    ensure|reap|status)
+      # Fan out: one pass per hosted repo, each under its own conf. The refill
+      # delay is paid ONCE, here, and only when some repo has its pool on — with
+      # every pool off this costs nothing (see cmd_ensure).
+      if [ "$CMD" = ensure ] && [ "$DELAY" = 1 ]; then
         while IFS= read -r _r; do
           [ -n "$_r" ] || continue
-          bash "$0" "$CMD" "$SESS" --repo "$_r"
+          _w=$( fleet_load_repo_conf "$SESS" "$_r" >/dev/null 2>&1; printf '%s' "${FLEET_SCRATCH_POOL:-0}" )
+          case "$_w" in ''|*[!0-9]*|0) continue ;; esac
+          sleep "${FLEET_POOL_REFILL_DELAY:-45}"; break
         done <<EOF
 $(fleet_repos "$SESS")
 EOF
-        exit 0 ;;
-      *) REPO_ARG=$(fleet_repos "$SESS" | head -n1) ;;
-    esac
-  fi
-  REPO=$(fleet_norm_repo "$REPO_ARG")
-  fleet_load_repo_conf "$SESS" "$REPO" || exit 0     # not hosted: an empty pool
-elif [ -n "$REPO_ARG" ] && [ -n "${FLEET_REPO:-}" ] \
-     && [ "$(fleet_norm_repo "$REPO_ARG")" != "$(fleet_norm_repo "$FLEET_REPO")" ]; then
-  exit 0                                             # a one-repo fleet has no pool for it
+      fi
+      # An entry whose repo the fleet no longer hosts (or cannot be told) belongs
+      # to no pass below: retire the window. Its worktree cannot be freed without
+      # that repo's MAIN — the scratch janitor owns what is left.
+      [ "$CMD" = status ] || for _w in $(TM list-windows -t "$POOL" -F '#{window_id}' 2>/dev/null); do
+        _r=$(TM display-message -p -t "$_w" '#{@repo}' 2>/dev/null)
+        [ -n "$_r" ] && fleet_repo_hosted "$SESS" "$_r" && continue
+        [ -z "$_r" ] && _wt=$(TM display-message -p -t "$_w" '#{@worktree}' 2>/dev/null) \
+          && [ -n "$_wt" ] && [ -n "$(fleet_worktree_repo "$SESS" "$_wt")" ] && continue
+        fleet_win_retire "$_w" "$SOCK"
+        TM kill-window -t "$_w" 2>/dev/null
+      done
+      while IFS= read -r _r; do
+        [ -n "$_r" ] || continue
+        bash "$0" "$CMD" "$SESS" --repo "$_r"
+      done <<EOF
+$(fleet_repos "$SESS")
+EOF
+      exit 0 ;;
+    *) REPO_ARG=$(fleet_repos "$SESS" | head -n1) ;;
+  esac
 fi
+REPO=$(fleet_norm_repo "$REPO_ARG")
+[ -n "$REPO" ] || exit 0                             # no repo hosted: no pool
+fleet_load_repo_conf "$SESS" "$REPO" || exit 0       # not hosted: an empty pool
 
 WANT="${FLEET_SCRATCH_POOL:-0}"; case "$WANT" in ''|*[!0-9]*) WANT=0;; esac
 AGENT="${FLEET_AGENT:-claude}"
@@ -203,12 +199,12 @@ pool_repo() {
   fleet_norm_repo "$r"
 }
 
-# pool_windows → this pool's entries: every window in a one-repo fleet, only
-# REPO's in a 2+ repo fleet (the holding session is shared by all of them).
+# pool_windows → this pool's entries: REPO's only (the holding session is shared
+# by every hosted repo).
 pool_windows() {
   local w
   for w in $(TM list-windows -t "$POOL" -F '#{window_id}' 2>/dev/null); do
-    if [ -z "$REPO" ] || [ "$(pool_repo "$w")" = "$REPO" ]; then printf '%s\n' "$w"; fi
+    if [ "$(pool_repo "$w")" = "$REPO" ]; then printf '%s\n' "$w"; fi
   done
 }
 
@@ -377,7 +373,7 @@ EOF
   TM set-window-option -t "$win" @pool_account "$acct" 2>/dev/null
   TM set-window-option -t "$win" @pool_agent "$AGENT" 2>/dev/null
   TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null
-  [ -n "$REPO" ] && TM set-window-option -t "$win" @repo "$REPO" 2>/dev/null
+  TM set-window-option -t "$win" @repo "$REPO" 2>/dev/null
   if [ "$AGENT" = codex ]; then
     if python3 "$BIN/fleet-codex-warm.py" --socket "$SOCK" --pane "$win" --timeout "$PTIMEOUT" \
         --settle "$POOL_SETTLE_MIN" --stable-hits "$POOL_STABLE_HITS"; then

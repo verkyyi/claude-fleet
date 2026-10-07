@@ -670,57 +670,49 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusForbidden, "cross-origin form")
 			return
 		}
-		if pid == "" || !validUserCode(code) {
+		if (pid == "" && r.FormValue("approve_code") == "") || !validUserCode(code) {
 			httpError(w, http.StatusBadRequest, "nothing to confirm")
 			return
 		}
 		approve := r.FormValue("action") == "approve"
-		var keyLine, devName, purpose, osUser string
-		found := s.devices.withUser(code, now, func(l *deviceLogin) {
+		var devName, purpose string
+		s.devices.withUser(code, now, func(l *deviceLogin) {
 			if l.state == devicePending {
-				keyLine, devName, purpose, osUser = l.keyLine, l.name, l.purpose, l.osUser
+				devName, purpose = l.name, l.purpose
 			}
 		})
 		page.setPurpose(purpose, devName)
+		var resp *CertResponse
+		var err error
 		switch {
-		case !found || keyLine == "":
-			page.Error = "这个验证码已过期或已用过，请在终端重新运行 fleet login。"
-		case !approve:
-			s.devices.withUser(code, now, func(l *deviceLogin) {
+		case approve && r.FormValue("approve_code") != "":
+			// A drill's code (claude-fleet#2010): the login is the drill
+			// person's, whoever is signed in on this browser.
+			_, resp, _, err = s.approveWithCode(r, code, strings.TrimSpace(r.FormValue("approve_code")), now)
+		case approve:
+			resp, _, err = s.approveDeviceLogin(r, pid, code, now)
+		default:
+			if !s.devices.withUser(code, now, func(l *deviceLogin) {
 				if l.state == devicePending {
 					l.state = deviceDenied
+				} else {
+					err = errLoginGone
 				}
-			})
+			}) {
+				err = errLoginGone
+			}
+		}
+		switch {
+		case errors.Is(err, errLoginGone):
+			page.Error = "这个验证码已过期或已用过，请在终端重新运行 fleet login。"
+		case errors.Is(err, store.ErrDrillCode):
+			page.Error = "演练确认码无效、已用过或已过期。"
+		case err != nil:
+			page.Error = "签发失败：" + err.Error()
+		case !approve:
 			page.Done, page.Denied = true, true
 		default:
-			resp, err := s.issueCert(r, pid, keyLine, "device")
-			if err == nil && purpose == purposeNode {
-				// Same eligibility as the certificate (an active login), then
-				// the node pass the old join code used to buy (#1627).
-				var node *NodeJoinResponse
-				if node, err = s.enrollNode(r, devName, osUser); err == nil {
-					resp.Node = node
-					log.Printf("fleet: %s added node %s (%s) by scan", pid, node.Label, node.EndpointID)
-				}
-			}
-			s.devices.withUser(code, now, func(l *deviceLogin) {
-				if l.state != devicePending {
-					return
-				}
-				if err != nil {
-					l.state, l.err = deviceDenied, err.Error()
-					return
-				}
-				l.state, l.issued = deviceApproved, resp
-			})
-			if err != nil {
-				page.Error = "签发失败：" + err.Error()
-			} else {
-				// The scan is the proof: this computer is now a registered
-				// device that renews without one (#1470).
-				s.registerDevice(pid, keyLine, devName, "device", now)
-				page.Done, page.Login, page.Until = true, strings.Join(resp.Principals, ","), resp.ValidBefore.Local().Format("01-02 15:04")
-			}
+			page.Done, page.Login, page.Until = true, strings.Join(resp.Principals, ","), resp.ValidBefore.Local().Format("01-02 15:04")
 		}
 		renderLoginPage(w, page)
 		return
@@ -757,6 +749,49 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 	page.Login = strings.Join(logins, ",")
 	page.Confirm = true
 	renderLoginPage(w, page)
+}
+
+// approveDeviceLogin confirms the pending login under code as pid: the
+// certificate, the node pass for a `fleet node join` scan, and the device
+// record (#1470). errLoginGone when nothing is pending under code; on an
+// issuance error the login is denied with it and resp is nil.
+func (s *Server) approveDeviceLogin(r *http.Request, pid, code string, now time.Time) (*CertResponse, string, error) {
+	var keyLine, devName, purpose, osUser string
+	s.devices.withUser(code, now, func(l *deviceLogin) {
+		if l.state == devicePending {
+			keyLine, devName, purpose, osUser = l.keyLine, l.name, l.purpose, l.osUser
+		}
+	})
+	if keyLine == "" {
+		return nil, purpose, errLoginGone
+	}
+	resp, err := s.issueCert(r, pid, keyLine, "device")
+	if err == nil && purpose == purposeNode {
+		// Same eligibility as the certificate (an active login), then
+		// the node pass the old join code used to buy (#1627).
+		var node *NodeJoinResponse
+		if node, err = s.enrollNode(r, devName, osUser); err == nil {
+			resp.Node = node
+			log.Printf("fleet: %s added node %s (%s) by scan", pid, node.Label, node.EndpointID)
+		}
+	}
+	s.devices.withUser(code, now, func(l *deviceLogin) {
+		if l.state != devicePending {
+			return
+		}
+		if err != nil {
+			l.state, l.err = deviceDenied, err.Error()
+			return
+		}
+		l.state, l.issued = deviceApproved, resp
+	})
+	if err != nil {
+		return nil, purpose, err
+	}
+	// The scan is the proof: this computer is now a registered
+	// device that renews without one (#1470).
+	s.registerDevice(pid, keyLine, devName, "device", now)
+	return resp, purpose, nil
 }
 
 // rememberLoginCode is mounted in front of viewerOnly on /fleet/login: a

@@ -73,6 +73,8 @@ FLEET_CLIENT_TTY                   seam: the terminal fleet-client-lease.py asks
 FLEET_CLIENT_BADGE_CACHE           path: where fleet-client-badge.sh keeps its last where read (~/.cache/claude-fleet/shell/tmp, #1779)
 FLEET_CLIENT_BADGE_HOST            seam: this machine's hostname as the status-bar badge reads it (fleet-client-badge.sh, #1779)
 FLEET_CRED_PROXY_START_SECS        knob: how long `fleet-cred-proxy.sh ensure` waits for the proxy to come up (30)
+FLEET_DRILL_INVITE                 handoff: the drill's approve code, fleet-onboard-drill.sh → fleet-drill.sh approve (never an argv, #2010)
+FLEET_DRILL_LOGIN_REMOVE           seam: the login-remove script fleet-onboard-drill.sh tears down with (selftest sandbox, #2010)
 FLEET_DRILL_POLL_SECS              knob: how often fleet-onboard-drill.sh reads its pane (2 s)
 FLEET_DRILL_RETIRE_CMD             seam: the command fleet-onboard-drill.sh retires a drill node with (no HTTP way yet, #1928)
 FLEET_DRILL_SCAN_SECS              knob: how long fleet-onboard-drill.sh waits for the QR scan (600 s, the code's life)

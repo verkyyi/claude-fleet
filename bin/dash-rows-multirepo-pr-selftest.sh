@@ -215,9 +215,12 @@ EOF
      "$(RT display-message -p -t "$SESS:derive3" '#{@repo}')" "acme/beta"
   eq "D: … and it gets its derived repo's CI"                 "$(prci derive3)" "✗"
 
+  # One road (#1941): with ONE repo hosted, every window still reads its OWN repo's
+  # prmap — the repo A window's glyph does not change when the second repo goes.
   overlay_off; RT set-option -w -t "$SESS:derive3" -u @repo; refresh
-  eq "D: degenerate — every window reads the fleet's one prmap (as before)" "$(prci beta3)" "✓"
-  eq "D: degenerate — no @repo derivation"  "$(RT display-message -p -t "$SESS:derive3" '#{@repo}')" ""
+  eq "D: one repo — repo A window's CI unchanged by removing repo B" "$(prci alpha3)" "✓"
+  eq "D: one repo — a window stamped B still reads B's prmap"        "$(prci beta3)"  "✗"
+  eq "D: one repo — @repo derived from @worktree, the same rule"     "$(RT display-message -p -t "$SESS:derive3" '#{@repo}')" "acme/beta"
 fi
 
 [ "$FAILS" -eq 0 ] || { printf 'dash-rows-multirepo-pr-selftest: %s of %s checks FAILED\n' "$FAILS" "$CHECKS" >&2; exit 1; }
