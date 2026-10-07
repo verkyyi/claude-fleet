@@ -43,6 +43,8 @@
 #   tool-wait-idle                                  fleet_window_tool_busy / fleet_window_wait (fleet-lib.sh),
 #                                                   fleet-state-reconcile.py, bin/set-claude-state.sh (Stop),
 #                                                   fleet-wait-reeval.sh
+#   cfg-reopen-loop                                 fleet_cfg_restart_why (fleet-lib.sh: the transcript backfill),
+#                                                   bin/fleet-migrate.sh (cfg_update_nudge, the /loop rearm)
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
 #   breakage-three-filers                           bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
@@ -1168,6 +1170,41 @@ PY
   st="$(o "$w" @claude_state)/$(o "$w" @claude_wait)"
   [ "$st" = done/ ] || { WHY="after the call returned the re-ask left [$st], want done/"; return 1; }
   SECS=$(since "$t0"); WHAT="等工具时状态核对不降级、Stop 记 looping·tool、cfg-restart 答 tool 不重开；调用返回后重判回 done"
+}
+
+# ---- a config reopen dropping a /loop and a ship (issue #2189) ---------------------
+# 2026-10-07: a skill landed in ~/.claude/skills, every idle session was reopened
+# onto the new configuration, and scratch-4's ScheduleWakeup (03:38) died with the
+# old process — its @loop had never been stamped, so the judge read plain `done`;
+# four workers with a green PR came back at a bare prompt and nobody merged. The
+# judge is the real one on an isolated server, the transcript the session's own;
+# the notice is the real migrate's.
+drill_cfg_reopen_loop() {
+  CAP=10; BREAK_SOCK="$WORK/sock-cl"; local d="$WORK/cl" w t0 why n sid=c1a00000-0000-4000-8000-000000002189
+  mkdir -p "$d/conf/global" "$d/wt"
+  printf 'claude fp-new x\n' > "$d/conf/global/agent-cfg.expected"
+  loop_transcript "$d/wt" "$sid" 'check CI'
+  nt -f /dev/null new-session -d -s cl -n issue-5 -x 100 -y 30 'exec sleep 600' \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  w=$(nt display-message -p -t cl:issue-5 '#{window_id}')
+  # the break: an idle worker on an old configuration, a Loop pending in its
+  # transcript but no @loop (the hook never saw the ScheduleWakeup), a PR open
+  nt set-option -w -t "$w" @agent_cfg fp-old \; set-option -w -t "$w" @claude_state 'done' \; \
+     set-option -w -t "$w" @claude_state_ts 1 \; set-option -w -t "$w" @cc_session_id "$sid" \; \
+     set-option -w -t "$w" @issue 5 \; set-option -w -t "$w" @pr_num '#55'
+  t0=$(now)
+  why=$(env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
+          FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+          bash -c '. "$1/fleet-lib.sh"; fleet_cfg_restart_why cl "$2"' _ "$BIN" "$w")
+  [ "$why" = looping ] \
+    || { WHY="cfg-restart would reopen it and drop the pending /loop: fleet_cfg_restart_why said [$why], want looping"; return 1; }
+  case "$(o "$w" @loop)" in *kind=wakeup*) ;; *) WHY="the judge read the Loop but left no @loop: [$(o "$w" @loop)]"; return 1 ;; esac
+  # the Loop over, the session is reopened: a worker with its PR still open is told
+  # to carry the ship on, never "nothing to act on"
+  n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; cfg_update_nudge "" "" cfg-stale "$2"' _ "$BIN" "$(o "$w" @pr_num)")
+  case "$n" in *"Your PR #55 is still open"*"continue the /fleet-claim ship"*) ;;
+    *) WHY="a worker mid-ship is reopened with [$n] — it would park at the prompt with its PR unmerged"; return 1 ;; esac
+  SECS=$(since "$t0"); WHAT="没盖 @loop 的 /loop 会话：judge 读原对话答 looping、补上 @loop、不重开；有开着 PR 的 worker 重开提示是续 ship"
 }
 
 # pty_run <answer> <command…> — run it on a terminal, type <answer>⏎ at the

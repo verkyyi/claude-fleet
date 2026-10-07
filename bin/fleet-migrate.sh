@@ -214,15 +214,24 @@ finally:
     rpc.close()
 sys.exit(0 if ok else 1)' "$BIN/fleet-codex-rpc.py" "$1" "$2" >/dev/null 2>&1 || return 1
 }
-# cfg_update_nudge <old-ver> <new-ver> <reason> → the reopened session's first
-# prompt: ONE line (EPIC #1906 rule 5 — a notice, never a task) naming what moved,
-# and the language rule (#620).
+# cfg_update_nudge <old-ver> <new-ver> <reason> [<pr>] → the reopened session's
+# first prompt: ONE line (EPIC #1906 rule 5 — a notice, never a task) naming what
+# moved, and the language rule (#620). <pr> (`#N`, a worker's still-OPEN PR off
+# @pr_num, issue #2189) is the one exception: a worker mid-ship had a verdict wait
+# or a merge to come, which lived in the process the reopen closed — so it is told
+# to go on with the ship rather than "nothing to act on", or it parks at the prompt
+# with a green PR nobody merges.
 cfg_update_nudge() {
-  local old="${1:-}" new="${2:-}" why
+  local old="${1:-}" new="${2:-}" pr="${4:-}" why
+  pr=${pr//[^0-9]/}; pr=${pr:+#$pr}
   if [ "${3:-}" = ver-stale ] && [ -n "$new" ]; then
     why="fleet 已从 ${old:-旧版} 更新到 $new (fleet updated from ${old:-an older version} to $new)."
   else
     why="fleet 的会话配置已更新 (the fleet's session configuration changed: hooks, skills, MCP or settings)."
+  fi
+  if [ -n "$pr" ]; then
+    printf '%s' "$why This session was idle, so the fleet reopened it on the new version, same conversation. Your PR $pr is still open, and any wait you had running on it ended with the old process: continue the /fleet-claim ship — read the verdict (pr_verdict, wait on PENDING), merge on READY, then report to whoever spawned you.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
+    return 0
   fi
   printf '%s' "$why This session was idle, so the fleet reopened it on the new version, same conversation. Nothing to act on: if your task is finished, just stop; otherwise carry on.${FLEET_LANG_RULE_RESUME:+ $FLEET_LANG_RULE_RESUME}"
 }
@@ -492,7 +501,9 @@ migrate_one_body() {
     fleet_cfg_state "$(wopt "$wid" '#{@cc_agent}')" "$(wopt "$wid" '#{@agent_cfg}')" "$(wopt "$wid" '#{@agent_ver}')"
     CFG_REASON=cfg-stale; [ "$FCFG_STATE" = renew ] && CFG_REASON=ver-stale
     CFG_NEWVER=${FCFG_EXP_VER:-}
-    [ "$NUDGE_SET" = 1 ] || CFG_NUDGE=$(cfg_update_nudge "$(wopt "$wid" '#{@agent_ver}')" "$CFG_NEWVER" "$CFG_REASON")
+    local cfgpr=''
+    [ -n "$iss" ] && [ -z "$raw" ] && cfgpr=$(wopt "$wid" '#{@pr_num}')   # an OPEN PR only (tmux-pr-refresh.sh)
+    [ "$NUDGE_SET" = 1 ] || CFG_NUDGE=$(cfg_update_nudge "$(wopt "$wid" '#{@agent_ver}')" "$CFG_NEWVER" "$CFG_REASON" "$cfgpr")
   fi
   if [ "$CFG" != 1 ] && migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then
     if [ "$label" = "$ACTIVE" ]; then say "  – $name ($wid): already on $label — skipped"
@@ -506,6 +517,19 @@ migrate_one_body() {
       if [ -n "$MODEL" ]; then nudge="${NUDGE_MODEL_DEFAULT//__MODEL__/$MODEL}"; else nudge="$NUDGE_DEFAULT"; fi
     else nudge=""; fi
     [ "$CFG" != 1 ] || nudge="${CFG_NUDGE:-}"
+  fi
+  # A Loop between rounds (issue #2189, #1846's restore rule on this road): its
+  # ScheduleWakeup / CronCreate lives in the process the /exit ends, and a bare
+  # resume comes back idle with the Loop gone and nobody told. The transcript says
+  # what it had pending; the resume's first turn is `/loop <that input>`
+  # (fleet_loop_mark.py rearm). A working window keeps its interrupted-turn nudge,
+  # an explicit --nudge wins, nothing pending ⇒ exactly as before.
+  local loopline=''
+  if [ "${AGENT:-claude}" != codex ] && [ "$NUDGE_SET" = 0 ] && [ "$state" != working ]; then
+    local ltr   # by session id, as fleet_loop_mark.py's transcript_for finds it
+    ltr=$(ls "${FLEET_CC_PROJECTS_DIR:-${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}}"/*/"$sid.jsonl" 2>/dev/null | head -n 1)
+    [ -z "$ltr" ] || loopline=$(python3 "$BIN/fleet_loop_mark.py" rearm --transcript "$ltr" 2>/dev/null) || loopline=''
+    [ -z "$loopline" ] || say "  ⟳ $name ($wid): a pending Loop rides the resume: $loopline"
   fi
   # --force-bg (issue #873): inventory the background work NOW, while Claude is
   # alive and still its parent — after /exit the survivors are PPID-1 orphans no
@@ -639,6 +663,8 @@ migrate_one_body() {
     nudge="$nudge ${bgnote# }"
   fi
   nudge=$(printf '%s' "$nudge" | tr -d "'\`")             # embedded single-quoted below
+  # the person's own /loop text: kept whole, quoted rather than stripped
+  if [ -n "$loopline" ]; then local sq="'" esc="'\\''"; nudge=${loopline//$sq/$esc}; fi
   # --model rides BEFORE --resume (and on the fresh-launch fallback too) so
   # fleet-claude.sh sees an explicit model and skips its FLEET_MODEL default.
   local mflag=""; [ -n "$MODEL" ] && mflag=" --model '$MODEL'"

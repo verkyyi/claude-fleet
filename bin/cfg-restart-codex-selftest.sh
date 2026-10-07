@@ -20,7 +20,9 @@
 #                 nothing launched, the window untouched
 #   C. unbound  — a Codex window whose launcher is gone: skipped, nothing typed
 #   D. notice   — cfg_update_nudge: ver-stale names both versions; cfg-stale
-#                 names the configuration; one line; the language rule
+#                 names the configuration; one line; the language rule; a
+#                 worker's open PR (@pr_num) turns it into the ship's go-on
+#                 (issue #2189)
 #   E. Claude   — fleet_cfg_restart_why answers a Claude window exactly as before
 # Exit 0 = pass.
 set -uo pipefail
@@ -152,6 +154,18 @@ n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; cfg_update_nudge "" 222 ver-stale'
 has "D: no old version stamped — 旧版" "$n" "fleet 已从 旧版 更新到 222"
 n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; cfg_update_nudge 222 222 cfg-stale' _ "$BIN")
 has "D: cfg-stale names the configuration" "$n" "fleet 的会话配置已更新"
+hasnt "D: …no PR — nothing to act on stays" "$n" "fleet-claim ship"
+has "D: …\"Nothing to act on\"" "$n" "Nothing to act on"
+# a worker mid-ship (an OPEN PR on @pr_num, issue #2189): told to carry the ship on
+n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; FLEET_LANG_RULE_RESUME=KEEP-LANG; cfg_update_nudge 222 222 cfg-stale "#77"' _ "$BIN")
+has "D: an open PR — continue the ship" "$n" "Your PR #77 is still open"
+has "D: …verdict → merge → report" "$n" "continue the /fleet-claim ship — read the verdict (pr_verdict, wait on PENDING), merge on READY, then report"
+hasnt "D: …never \"nothing to act on\"" "$n" "Nothing to act on"
+has "D: …the language rule" "$n" "KEEP-LANG"
+eq "D: …one line" "1" "$(printf '%s\n' "$n" | wc -l | tr -d ' ')"
+n=$(bash -c 'set -u; . "$1/fleet-migrate.sh"; cfg_update_nudge 111 222 ver-stale 77' _ "$BIN")
+has "D: a bare number reads as #N, ver-stale too" "$n" "fleet 已从 111 更新到 222"
+has "D: …" "$n" "Your PR #77 is still open"
 
 # ============================================================================
 # E. Claude — the judge answers a Claude window as before

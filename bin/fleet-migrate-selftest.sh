@@ -610,6 +610,40 @@ rp=$(bash "$BIN/fleet-report-parent.sh" -L "$LBL" --win "$kid" --state blocked -
 ok; printf '%s' "$rp" | grep -q "would send to scratch-7 ($nw9," \
   || fail "a child's report must address the RESUMED parent window $nw9: $rp"
 
+# --- a Loop between rounds rides the move (issue #2189): its ScheduleWakeup lived
+# in the process the /exit ends; the transcript says what it had pending, and the
+# resume's first turn is `/loop <that input>` — the person's text whole, a quote
+# included. A transcript with nothing pending ⇒ a bare resume, as before.
+loop_tr() {  # <sid> <prompt> <delay> → a transcript holding ONE ScheduleWakeup, made now
+  mkdir -p "$FLEET_CC_PROJECTS_DIR/loopproj"
+  python3 - "$FLEET_CC_PROJECTS_DIR/loopproj/$1.jsonl" "$2" "$3" <<'PY'
+import datetime, json, sys
+t = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+with open(sys.argv[1], 'w') as f:
+    f.write(json.dumps({'timestamp': t, 'message': {'content': [{'type': 'tool_use', 'id': 'u0', 'name': 'ScheduleWakeup',
+            'input': {'delaySeconds': int(sys.argv[3]), 'prompt': sys.argv[2]}}]}}) + '\n')
+    f.write(json.dumps({'timestamp': t, 'toolUseResult': 'ok', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'u0'}]}}) + '\n')
+PY
+}
+mkdir -p "$WORK/wtl" "$WORK/wtn"
+loop_tr sid-loop "/loop check CI, it's slow" 1200
+loop_tr sid-noloop "/loop gone" 1200
+printf '' > "$FLEET_CC_PROJECTS_DIR/loopproj/sid-noloop.jsonl"     # nothing pending
+wl=$(spawn wloop runner-hook sid-loop "$WORK/wtl"); wn=$(spawn wnoloop runner-hook sid-noloop "$WORK/wtn")
+TM set-window-option -t "$wl" @claude_state done; TM set-window-option -t "$wn" @claude_state done
+sleep 1.5
+: > "$WORK/launched"
+out=$(bash "$SCRIPT" --session "$SESS" --target-account acctB "$wl" 2>&1)
+for _ in $(seq 1 30); do grep -q 'sid-loop' "$WORK/launched" 2>/dev/null && break; sleep 0.5; done
+ok; printf '%s' "$out" | grep -q "wloop ($wl): a pending Loop rides the resume: /loop check CI, it's slow" \
+  || fail "a pending Loop must be named on the move: $out $(diag)"
+ok; grep -qF -- "--resume sid-loop /loop check CI, it's slow" "$WORK/launched" 2>/dev/null \
+  || fail "the resume's first turn must re-enter the Loop, its text whole (launched: $(cat "$WORK/launched" 2>/dev/null))"
+out=$(bash "$SCRIPT" --session "$SESS" --target-account acctB "$wn" 2>&1)
+for _ in $(seq 1 30); do grep -q 'sid-noloop' "$WORK/launched" 2>/dev/null && break; sleep 0.5; done
+ok; grep -qx -- "--resume sid-noloop" "$WORK/launched" 2>/dev/null \
+  || fail "nothing pending ⇒ a bare resume, as before (launched: $(cat "$WORK/launched" 2>/dev/null)) $out"
+
 cleanup; trap - EXIT
 printf 'fleet-migrate selftest: OK (%d checks)\n' "$CHECKS"
 exit 0
