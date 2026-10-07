@@ -97,7 +97,7 @@ class H(BaseHTTPRequestHandler):
                 "interval": 1, "key_fingerprint": "SHA256:testfp", "qr": ["#.#", ".#.", "#.#"]})
         if self.path == "/v1/fleet/login/poll":
             dc = body["device_code"]; st = state["codes"][dc]
-            res = {"certificate": "ssh-ed25519-cert-v01@openssh.com AAAAfake\n", "serial": "1", "key_id": "wecom:Alice",
+            res = {"certificate": "ssh-ed25519-cert-v01@openssh.com AAAAfake\n", "serial": "1", "key_id": "gh:Alice",
                    "principals": ["alice"], "valid_after": "2026-10-05T00:00:00Z", "valid_before": "2026-10-05T12:00:00Z",
                    "ssh_config": "# fleet-ssh-config v1\n\nHost m4 fleet-m4 fleet-m4-public\n  HostName 127.0.0.1\n  User alice\n"
                                  "\nHost s9 fleet-s9 fleet-s9-public\n  HostName 127.0.0.2\n  User alice\n",

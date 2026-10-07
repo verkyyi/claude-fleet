@@ -193,6 +193,11 @@ def users_main(a):
                 # The login was the hub's under an identity from before GitHub
                 # sign-in (claude-fleet#2094).
                 print(moved_line(moved, resp.get("added")))
+            if not a.machine_login:
+                # #2090: signed in, but `fleet login` cannot sign a certificate for them yet
+                sys.stderr.write("warning: no --machine-login — %s can open the hub but cannot connect to a machine yet"
+                                 " (unless fleet.auto_assign opens one); set it with: fleet users add %s --machine-login <login>\n"
+                                 % (a.name, a.name))
         users_print(resp, a.json)
     else:
         resp = call(a, "DELETE", USERS_PATH + "?login=" + urllib.parse.quote(a.name))

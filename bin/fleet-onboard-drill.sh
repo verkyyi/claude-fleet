@@ -343,13 +343,13 @@ step_scan() {
   fi
   # 「已登记到入口」 only: the installer goes on to 「能力:」 after a refused or
   # expired scan too (「not issued (HTTP 410)」), so 能力: is no confirmation
-  k=$(wait_for "$SCAN_SECS" '已登记到入口' '✗ |还不能签发|access_denied|已过期|not issued|没登记成')
+  k=$(wait_for "$SCAN_SECS" '已登记到入口' '✗ |还不能签发|access_denied|已过期|not issued|没登记成|机器登录')
   EPID=$(pane | grep -Eo '已登记到入口：[^（]*（ep_[0-9]+）' | grep -Eo 'ep_[0-9]+' | tail -n 1)
   shot joined
   case "$k" in
-    1) row "企业微信二维码 + 验证码 $code" "$([ -n "$INVITE" ] && echo '演练确认码代扫（演练同事）' || echo '用企业微信扫码、点确认')" "本人"
+    1) row "GitHub 登录二维码 + 验证码 $code" "$([ -n "$INVITE" ] && echo '演练确认码代扫（演练同事）' || echo '扫码、用 GitHub 登录、点确认')" "本人"
        pass scan "confirmed: device ${FPR:-?} · node ${EPID:-none} · $(elapsed)" ;;
-    2) row "扫码后：$(pane | grep -E '✗ |还不能签发|access_denied|已过期|not issued|没登记成' | head -n 1)" "扫码" "是 — 入口不肯签发"
+    2) row "扫码后：$(pane | grep -E '✗ |还不能签发|access_denied|已过期|not issued|没登记成|机器登录' | head -n 1)" "扫码" "是 — 入口不肯签发"
        failstep scan "the hub did not issue (refused, or the code expired):"; tail_pane; return 1 ;;
     *) row "二维码 ${SCAN_SECS}s 内没人扫" "—" "本人（没扫）"
        failstep scan "nobody confirmed within ${SCAN_SECS}s"; return 1 ;;

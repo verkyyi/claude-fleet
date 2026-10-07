@@ -171,6 +171,18 @@ var pageText = map[string]i18n.Text{
 	},
 	"login.err.issue":  {i18n.EN: "Couldn't issue: {err}", i18n.ZhCN: "签发失败：{err}"},
 	"login.err.notyet": {i18n.EN: "Can't issue yet: {err}", i18n.ZhCN: "还不能签发：{err}"},
+	"login.err.nomachine": {
+		i18n.EN:   "Can't issue yet: {why}. fleet login in the terminal has stopped; run it again once that is done.",
+		i18n.ZhCN: "还不能签发：{why}。终端里的 fleet login 已停下，设好后重新运行。",
+	},
+	"login.why.nologin": {
+		i18n.EN:   "the hub has not given you a machine login yet — ask an admin to set one for {who} on the Users page",
+		i18n.ZhCN: "入口还没给你分配机器登录 —— 请管理员在「使用者」页给 {who} 设机器登录",
+	},
+	"login.why.notopen": {
+		i18n.EN:   "your machine login {login} is not open on any machine yet — ask an admin to check {who} on the Users page",
+		i18n.ZhCN: "你的机器登录 {login} 还没在任何机器上开好 —— 请管理员在「使用者」页查看 {who}",
+	},
 	"login.err.noperson": {
 		i18n.EN:   "A connection certificate needs a personal GitHub sign-in (the operator token belongs to no one).",
 		i18n.ZhCN: "领取连接证书需要用 GitHub 登录（运营者令牌不对应任何人）。",

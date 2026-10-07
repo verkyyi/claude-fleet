@@ -39,8 +39,13 @@ func viewerOf(ctx context.Context) string {
 // Navigations send an Accept that prefers HTML; fetch/XHR from our own
 // dashboard asks for JSON and would rather have the 401 (it can then show a
 // sign-in prompt itself instead of trying to render a login page into a table).
+//
+// Only X-Requested-With: XMLHttpRequest marks an API call (claude-fleet#2090):
+// an Android WebView — WeChat, WeCom, any in-app browser — sends its package
+// name there (com.tencent.mm) on every page navigation, and a scanned
+// /fleet/login QR got the JSON 401 instead of the GitHub sign-in.
 func wantsHTML(r *http.Request) bool {
-	if r.Header.Get("X-Requested-With") != "" {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Requested-With")), "XMLHttpRequest") {
 		return false
 	}
 	return strings.Contains(r.Header.Get("Accept"), "text/html")

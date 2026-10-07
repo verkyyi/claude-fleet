@@ -89,7 +89,7 @@ class H(BaseHTTPRequestHandler):
             if flag("deny"):
                 return self.reply(403, {"error": "access_denied"})
             st = state["codes"][dc]
-            res = {"certificate": "ssh-ed25519-cert-v01@openssh.com AAAAfake\n", "serial": "1", "key_id": "wecom:Alice",
+            res = {"certificate": "ssh-ed25519-cert-v01@openssh.com AAAAfake\n", "serial": "1", "key_id": "gh:Alice",
                    "principals": ["alice"], "valid_after": "2026-10-05T00:00:00Z", "valid_before": "2026-10-05T12:00:00Z",
                    "ssh_config": "# fleet-ssh-config v1\n\nHost m4 fleet-m4\n  HostName 127.0.0.1\n  User alice\n", "hub": "x"}
             if st.get("purpose") == "node":
@@ -189,11 +189,11 @@ else bad "A peer section: $(cat "$SNIP" 2>/dev/null) / $(cat "$SB/h1/.config/cla
 norm <"$SB/out" >"$SB/node.out"
 cat >"$SB/node.want" <<'EOF'
 
-用企业微信扫码，确认验证码 BCDF-GHJK：
+用手机扫码或在浏览器打开下面的链接，用 GitHub 登录后点确认（验证码 BCDF-GHJK）：
 
 <QR>
 
-  或在已登录企业微信的浏览器打开：http://hub.test/fleet/login?code=BCDF-GHJK
+  链接：http://hub.test/fleet/login?code=BCDF-GHJK
   密钥指纹 SHA256:testfp · 30 秒内有效
 
 ✓ 证书已写入 <HOME>/.ssh/fleet-cert-cert.pub（2026-10-05T12:00:00Z 前有效，账号 alice）
@@ -224,7 +224,7 @@ kill "$(cat "$SB/h1/.ccquota/agent.pid")" 2>/dev/null
 starts=$(hubstate starts)
 fleet_in h1 node join
 if [ "$(cat "$SB/rc")" = 0 ] && [ "$(hubstate starts)" = "$starts" ] && grep -q "^✓ 已登记在 $HUB" "$SB/out" \
-   && ! grep -q 用企业微信扫码 "$SB/out"; then
+   && ! grep -q 用手机扫码 "$SB/out"; then
   ok "B a rerun does not scan again"
 else bad "B rc=$(cat "$SB/rc") starts $starts→$(hubstate starts): $(cat "$SB/out")"; fi
 

@@ -15,7 +15,8 @@
      the private key never leaves this computer;
   2. POSTs the public half to <hub>/v1/fleet/login/start and draws the
      returned QR code here;
-  3. you scan it in WeCom, sign in, and confirm the code on the page;
+  3. you scan it with a phone (or open the link), sign in with GitHub, and
+     confirm the code on the page;
   4. polls <hub>/v1/fleet/login/poll and writes
         ~/.ssh/fleet-cert-cert.pub   the certificate (12 hours)
         ~/.ssh/fleet-ssh-config      Host blocks for your machines
@@ -434,15 +435,15 @@ def scan(hub, invert, purpose=""):
         body.update(purpose=purpose, os_user=getpass.getuser())
     code, st = post(hub + "/v1/fleet/login/start", body)
     if code == 404:
-        die("this hub does not issue certificates (no CA or no WeCom sign-in configured)", 1)
+        die("this hub does not issue certificates (no CA or no GitHub sign-in configured)", 1)
     if code != 200:
         die("start refused (HTTP %d): %s" % (code, st.get("error", "")), 1)
     if not purpose:
         remember_hub(hub)
 
-    print("\n用企业微信扫码，确认验证码 %s：\n" % st["user_code"])
+    print("\n用手机扫码或在浏览器打开下面的链接，用 GitHub 登录后点确认（验证码 %s）：\n" % st["user_code"])
     draw_qr(st.get("qr") or [], invert)
-    print("\n  或在已登录企业微信的浏览器打开：%s" % st["verification_uri"])
+    print("\n  链接：%s" % st["verification_uri"])
     print("  密钥指纹 %s · %d 秒内有效\n" % (st.get("key_fingerprint", ""), st.get("expires_in", 600)))
 
     deadline = time.time() + st.get("expires_in", 600)
@@ -457,6 +458,9 @@ def scan(hub, invert, purpose=""):
             continue  # a 5xx is the ingress / hub between two polls, not a «no» (#1901)
         if code == 200:
             return res
+        if res.get("code") == "no_machine_login":
+            # the hub cannot sign for this person yet (claude-fleet#2090)
+            die("✗ %s" % (res.get("reason") or res.get("error", "")), 1)
         die("not issued (HTTP %d): %s" % (code, res.get("error", "")), 1)
     die("timed out waiting for the scan — run it again", 1)
 

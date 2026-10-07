@@ -28,6 +28,8 @@
 #   F. re-scan   the hub's device_idle / device_revoked refusal exits 3 (the
 #                "scan again" code) and leaves the old certificate alone;
 #                the start request carries the device name too
+#   H. nologin   the hub denies a person with no machine login (code
+#                no_machine_login): the client prints the reason, exits 1 (#2090)
 #   G. blip      a 503 between two polls (the ingress, the hub restarting) is
 #                not a refusal: the client keeps waiting and gets its
 #                certificate (#1901 — a colleague's first scan died on one)
@@ -59,7 +61,7 @@ class H(BaseHTTPRequestHandler):
     def sign(self, pub, serial):
         d = tempfile.mkdtemp(dir=SB)
         open(os.path.join(d, "k.pub"), "w").write(pub + "\n")
-        subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(SB, "ca"), "-I", "wecom:Alice",
+        subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(SB, "ca"), "-I", "gh:Alice",
                         "-n", "alice", "-V", "-1m:+12h", "-z", str(serial), os.path.join(d, "k.pub")], check=True)
         return open(os.path.join(d, "k-cert.pub")).read()
     def do_POST(self):
@@ -76,7 +78,7 @@ class H(BaseHTTPRequestHandler):
             open(os.path.join(SB, "renew.json"), "w").write(json.dumps(body))
             if os.path.exists(os.path.join(SB, "idle")):
                 return self.reply(403, {"error": "this device has not been used for 7 days", "code": "device_idle"})
-            return self.reply(200, {"certificate": self.sign(body["public_key"], 2), "serial": "2", "key_id": "wecom:Alice",
+            return self.reply(200, {"certificate": self.sign(body["public_key"], 2), "serial": "2", "key_id": "gh:Alice",
                 "principals": ["alice"], "valid_before": "2026-10-05T00:00:00Z", "ssh_config": CONF, "hub": ""})
         if self.path == "/v1/fleet/login/start":
             state["pub"] = body["public_key"]
@@ -91,14 +93,18 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(503, {})
             if state["polls"] < 2:
                 return self.reply(202, {"status": "authorization_pending"})
+            if os.path.exists(os.path.join(SB, "nologin")):
+                # #2090: the person has no machine login — the hub denies at once, with the reason
+                return self.reply(403, {"error": "access_denied: no machine login", "code": "no_machine_login",
+                    "reason": "入口还没给你分配机器登录 —— 请管理员在「使用者」页给 cjilyy 设机器登录"})
             if state["deny"]:
                 return self.reply(403, {"error": "access_denied"})
             d = tempfile.mkdtemp(dir=SB)
             open(os.path.join(d, "k.pub"), "w").write(state["pub"] + "\n")
-            subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(SB, "ca"), "-I", "wecom:Alice",
+            subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(SB, "ca"), "-I", "gh:Alice",
                             "-n", "alice", "-V", "-1m:+12h", "-z", "1", os.path.join(d, "k.pub")], check=True)
             cert = open(os.path.join(d, "k-cert.pub")).read()
-            return self.reply(200, {"certificate": cert, "serial": "1", "key_id": "wecom:Alice",
+            return self.reply(200, {"certificate": cert, "serial": "1", "key_id": "gh:Alice",
                 "principals": ["alice"], "valid_before": "2026-10-04T12:00:00Z", "ssh_config": CONF, "hub": ""})
         self.reply(404, {})
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2]) if len(sys.argv) > 2 else 0), H)
@@ -171,7 +177,7 @@ rm -f "$SB/deny"
 
 # ── D ──
 start_hub; python3 "$BIN/fleet-login.py" >/dev/null 2>&1; stop_hub
-python3 "$BIN/fleet-login.py" status | grep -q 'Key ID: "wecom:Alice"' && ok "D status" || bad "D status"
+python3 "$BIN/fleet-login.py" status | grep -q 'Key ID: "gh:Alice"' && ok "D status" || bad "D status"
 
 # ── E — renew by the device key (#1470) ──
 grep -q '"device_name": "[A-Za-z0-9._-]' "$SB/start.json" && ok "E start carried the device name" || bad "E start.json: $(cat "$SB/start.json")"
@@ -216,6 +222,16 @@ out="$(python3 "$BIN/fleet-login.py" 2>&1)"; rc=$?
 stop_hub
 rm -f "$SB/blip"
 [ "$rc" = 0 ] && [ -s "$HOME/.ssh/fleet-cert-cert.pub" ] && ok "G a 503 poll → kept waiting, certificate written" || bad "G blip rc=$rc: $out"
+
+# ── H — no machine login: the terminal says why at that poll and stops (#2090) ──
+rm -f "$HOME/.ssh/fleet-cert-cert.pub"; touch "$SB/nologin"
+start_hub
+out="$(python3 "$BIN/fleet-login.py" 2>&1)"; rc=$?
+stop_hub
+rm -f "$SB/nologin"
+[ "$rc" = 1 ] && [ ! -e "$HOME/.ssh/fleet-cert-cert.pub" ] && echo "$out" | grep -q '「使用者」页给 cjilyy 设机器登录' \
+  && ! echo "$out" | grep -q 'timed out' && ok "H no machine login → reason printed, exit 1" || bad "H nologin rc=$rc: $out"
+echo "$out" | grep -q 'GitHub' && ! echo "$out" | grep -q '企业微信' && ok "H the prompt says GitHub, not WeCom" || bad "H prompt: $out"
 
 [ "$fail" = 0 ] && echo "PASS fleet-login-selftest" || echo "FAIL fleet-login-selftest"
 exit "$fail"

@@ -85,7 +85,7 @@ machine's sshd still decides who logs in.
 
 The hub admits you on one of (first that is present):
   FLEET_HUB_TOKEN / hub.json "token"   a viewer token (the operator) or a
-                                       WeCom session token
+                                       GitHub session token
   ~/.ssh/fleet-cert + -cert.pub        the connection certificate `fleet
                                        login` fetches (proven by signing with
                                        ssh-keygen -Y sign)

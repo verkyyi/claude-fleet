@@ -716,7 +716,7 @@ has   "I: …FLEET_HUB_URL before it" "$(cat "$NET_LOG")" "http://env.hub/v1/fle
 if command -v ssh-keygen >/dev/null 2>&1; then
   ssh-keygen -q -t ed25519 -N '' -f "$WORK/ca" >/dev/null 2>&1
   ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert" >/dev/null 2>&1
-  ssh-keygen -q -s "$WORK/ca" -I 'wecom:wx-a' -n alice -V '-5m:+1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1 \
+  ssh-keygen -q -s "$WORK/ca" -I 'gh:a' -n alice -V '-5m:+1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1 \
     || fail "I: could not sign a test certificate"
   has "I: a valid certificate is the identity, before the token" "$(bash "$HUBS" --identity)" "cert $HOME/.ssh/fleet-cert-cert.pub "
   : > "$NET_LOG"
@@ -743,12 +743,12 @@ print("ok" if r.returncode == 0 else "bad:" + r.stderr.decode(errors="replace").
 ' "$HOME/.ssh/fleet-cert.pub" 2>&1)
   eq "I: …the signature verifies under fleet-sessions@claude-fleet over the timestamp" "ok" "$sigok"
   # an expired certificate is skipped: the token again, and --identity says expired without one
-  ssh-keygen -q -s "$WORK/ca" -I 'wecom:wx-a' -n alice -V '-2h:-1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
+  ssh-keygen -q -s "$WORK/ca" -I 'gh:a' -n alice -V '-2h:-1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
   eq  "I: an expired certificate falls back to the token" "token ~/.ccquota/viewer-token" "$(bash "$HUBS" --identity)"
   rm -f "$HOME/.ccquota/viewer-token"
   has "I: …and with no token says it expired" "$(bash "$HUBS" --identity 2>/dev/null)" "none certificate expired"
   # FLEET_CERT names another pair
-  ssh-keygen -q -s "$WORK/ca" -I 'wecom:wx-a' -n alice -V '-5m:+1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
+  ssh-keygen -q -s "$WORK/ca" -I 'gh:a' -n alice -V '-5m:+1h' "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
   cp "$HOME/.ssh/fleet-cert" "$WORK/other"; cp "$HOME/.ssh/fleet-cert-cert.pub" "$WORK/other-cert.pub"
   rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert-cert.pub"
   has "I: FLEET_CERT names the pair" "$(FLEET_CERT="$WORK/other" bash "$HUBS" --identity)" "cert $WORK/other-cert.pub "
