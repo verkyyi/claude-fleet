@@ -57,6 +57,37 @@ bash ~/.claude/fleet/bin/fleet-credsep.sh status
 bash ~/.claude/fleet/bin/fleet-credsep.sh check       # the doctor's `credsep` row
 ```
 
+### Rolling it out on a machine (issue #2135, EPIC #2133 C5)
+
+One login at a time, the operator types the only `sudo`; nothing else needs root.
+
+```sh
+bash ~/.claude/fleet/bin/fleet-credsep.sh plan                 # every login here: state + its commands
+bash ~/.claude/fleet/bin/fleet-credsep.sh install --dry-run    # no sudo: every move it would make
+sudo bash ~/.claude/fleet/bin/fleet-credsep.sh install         # THE sudo (the login is SUDO_USER's)
+bash ~/.claude/fleet/bin/fleet-credsep.sh status               # separated · /var/db/fleet-cred/<login> · …
+bash ~/.claude/fleet/bin/fleet-credsep.sh check                # credsep: OK — … Permission denied …
+bash ~/.claude/fleet/bin/fleet-credsep.sh uninstall --dry-run  # no sudo: the whole way back
+# then FLEET_CRED_SEPARATE=1 in fleet.conf [common], so the sync keeps it
+```
+
+Then, in a real session of that login (its Bash tool),
+`python3 -I ~/.claude/fleet/bin/fleet-cred-scan.py scan` tries ①②④ and prints
+counts only: ① `readable=0`, ② `readable=0`, ④ `readable=0` (or the hub refuses).
+
+- Under `sudo`, `id` says root: the script takes the login from `SUDO_USER` (or
+  `--login <login>`, which is how `plan` spells another login's line) and that
+  login's own conf dir. Root with neither is refused — before #2135 the hint
+  separated a `root` store and left the login's agent unable to read `node.env`
+  (BREAK-IT `cred-sep-sudo-root`).
+- The dry runs run as the login. Separated, the login cannot read the store, so
+  `uninstall --dry-run` reads the way back from `credsep.json`'s `back` — the
+  paths each credential left, the agent's and the proxy's service (no secret).
+- **A login with password-less sudo** is not separated from its own sessions:
+  `sudo -n cat /var/db/fleet-cred/<login>/node.env` works from any session. The
+  doctor's `credsep` row says so; on such a login the boundary only holds once
+  its sudo asks for a password — the operator's decision (see «What it does not stop»).
+
 Install creates the role account (macOS: UID/GID in 450–499, shell
 `/usr/bin/false`, home `/var/empty`), the store, a **root-owned copy** of the
 launcher + proxy (`/Library/Application Support/claude-fleet/credsep/`,
