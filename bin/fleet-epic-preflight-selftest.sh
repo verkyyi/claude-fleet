@@ -24,7 +24,8 @@
 #   J. --session reads ANOTHER fleet's conf (repo + knobs together), and an
 #      unknown fleet name is a usage error, not a half-answered screen
 #   K. a multi-repo fleet: --repo B probes B with B's own knobs; no --repo takes
-#      the current repo, and under `all` refuses with the list (issue #803)
+#      the current repo, and under `all` refuses with the list (issue #803); an
+#      EPIC spanning repos checks every --member-repo is hosted + writable (#1942)
 #   L. the EPIC trio's documented spawn / preflight / evidence calls carry --repo
 #   M. a GraphQL rate limit is NOT a permission problem (issue #989): perm WARNs
 #      with the REST reading, the verdict stays READY/FIXABLE (never BLOCKED),
@@ -211,7 +212,9 @@ cat > "$WORK/fakebin/gh" <<'GHFAKE3'
 #!/bin/bash
 case "$1 $2" in
   "auth status")  [ "${GH_AUTH:-1}" = 1 ] || exit 1; exit 0 ;;
-  "repo view")    printf '%s\t%s\t%s\n' "${GH_PERM:-WRITE}" "${GH_DEFBRANCH:-master}" "${GH_ISSUES:-true}"; exit 0 ;;
+  "repo view")    p="${GH_PERM:-WRITE}"   # GH_PERM_FOR='<repo>=<perm>': one repo's own answer (K4)
+                  case "${GH_PERM_FOR:-}" in "$3="*) p="${GH_PERM_FOR#*=}" ;; esac
+                  printf '%s\t%s\t%s\n' "$p" "${GH_DEFBRANCH:-master}" "${GH_ISSUES:-true}"; exit 0 ;;
   "issue list")
     [ "${GH_NOISSUES:-0}" = 1 ] && { printf '\n'; exit 0; }
     printf '%s\n' "${GH_PROBE:-42}"; exit 0 ;;
@@ -392,6 +395,25 @@ $(cat "$WORK/err")"
 rm -f "$WORK/mconf/fleets/fepsess/current-repo"
 ok "K3 a stale current-repo file is ignored — no --repo still refuses (#1034)"
 
+# K4 — an EPIC spanning repos (issue #1942): the parent in acme/widgets, members
+# in acme/b. Each --member-repo must be hosted here (the run spawns with --repo M)
+# and writable; a miss is a blocker, never a member the run cannot open.
+mrun --repo acme/widgets --member-repo acme/b
+[ "$RC" -eq 0 ] || fail "K4 a hosted, writable member repo must stay READY (got $RC)" "$OUT
+$(cat "$WORK/err")"
+printf '%s' "$OUT" | grep -qE 'PASS  *members  *acme/b: WRITE' || fail "K4 a members row must name acme/b" "$OUT"
+mrun --repo acme/widgets --member-repo acme/zzz
+[ "$RC" -eq 3 ] || fail "K4 a member repo the fleet does not host must BLOCK (got $RC)" "$OUT"
+printf '%s' "$OUT" | grep -q 'fleet-repo.sh add acme/zzz' || fail "K4 the blocker must say how to host it" "$OUT"
+export GH_PERM_FOR='acme/b=READ'
+mrun --repo acme/widgets --member-repo acme/b
+unset GH_PERM_FOR
+[ "$RC" -eq 3 ] || fail "K4 a read-only member repo must BLOCK (got $RC)" "$OUT"
+printf '%s' "$OUT" | grep -qE 'FAIL  *members  *acme/b: READ' || fail "K4 the blocker must name acme/b's permission" "$OUT"
+mrun --repo acme/widgets
+printf '%s' "$OUT" | grep -q 'members' && fail "K4 no --member-repo ⇒ no members row (one-repo EPIC unchanged)" "$OUT"
+ok "K4 --member-repo: hosted + writable passes, unhosted / read-only blocks, none adds nothing"
+
 # ============================ L: the trio's documented calls name the repo ==
 # A fleet hosting 2+ repos refuses a spawn with no --repo (#972) — and the run
 # loop follows its doc literally, so an unattended batch stalls on the first
@@ -401,8 +423,8 @@ CMDS="$BIN/../commands"
 [ -f "$CMDS/fleet-epic-run.md" ] || fail "L commands/fleet-epic-run.md not found beside bin/"
 grep -E 'dash-issue-session\.sh <N>' "$CMDS/fleet-epic-run.md" | grep -qv -- '--repo' \
   && fail "L every documented epic-run spawn line must carry --repo" "$(grep -n 'dash-issue-session' "$CMDS/fleet-epic-run.md")"
-grep -q 'dash-issue-session\.sh <N> --repo "\$FLEET_REPO"' "$CMDS/fleet-epic-run.md" \
-  || fail "L epic-run's spawn line must be \`dash-issue-session.sh <N> --repo \"\$FLEET_REPO\"\`"
+grep -q 'dash-issue-session\.sh <N> --repo "\$MREPO"' "$CMDS/fleet-epic-run.md" \
+  || fail "L epic-run's spawn line must be \`dash-issue-session.sh <N> --repo \"\$MREPO\"\` — the MEMBER's repo (#1942)"
 grep -q 'fleet-epic-preflight\.sh --repo "\$FLEET_REPO"' "$CMDS/fleet-epic-plan.md" \
   || fail "L epic-plan must run preflight against the resolved repo"
 grep -E 'fleet-evidence\.sh (list|export|live) ' "$CMDS/fleet-epic-report.md" | grep -qv -- '--repo' \

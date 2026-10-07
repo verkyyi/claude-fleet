@@ -1248,6 +1248,35 @@ fleet_issue_key() {
   printf '%s#%s' "$(fleet_norm_repo "${2:-}")" "${3:-}"
 }
 
+# ---- an EPIC's members may live in other repos (issue #1942, EPIC #1935 C7) ---
+# The parent sits in one repo; a member is filed in ITS repo and linked as a
+# GitHub sub-issue across repos. Numbers repeat across repos, so a member is
+# always the pair (repo, N) — a reader that keeps only `.number` reads B's #1 as
+# A's #1. These two are the only spelling of that pair for the EPIC trio.
+
+# fleet_sub_issues <repo> <N> → one `<owner/name>\t<num>\t<state>` line per
+# sub-issue of <repo>#<N>, each with the repo it lives in. rc ≠ 0 = gh failed.
+fleet_sub_issues() {
+  gh api "repos/${1:-}/issues/${2:-}/sub_issues" --paginate \
+    --jq '.[] | "\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)\t\(.state)"' 2>/dev/null
+}
+
+# fleet_member_ref <epic-repo> <ref> → `<owner/name>\t<N>` for one member of an
+# EPIC charter line: `owner/name#N` names its own repo; a bare `#N` / `N` is the
+# EPIC's (<epic-repo>), the form every one-repo charter has always written.
+# rc 1 = not a member reference.
+fleet_member_ref() {
+  local r="${2:-}" repo n
+  r="${r#\#}"
+  case "$r" in
+    ?*/?*#[0-9]*) repo="${r%%#*}"; n="${r##*#}" ;;
+    [0-9]*)       repo="${1:-}"; n="$r" ;;
+    *) return 1 ;;
+  esac
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\t%s\n' "$(fleet_norm_repo "$repo")" "$n"
+}
+
 # fleet_window_key <sess> <window-target> → the window's join key, the same
 # spelling fleet_issue_key gives its (repo, N): nothing for a window with no
 # @issue; `#<N>` for a window whose repo is unknown (see below).

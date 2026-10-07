@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-epic-preflight.sh [--session S] [--repo R] [--fix] [-h] — CAN THIS REPO RUN AN EPIC?
+# fleet-epic-preflight.sh [--session S] [--repo R] [--member-repo M]… [--fix] [-h] — CAN THIS REPO RUN AN EPIC?
 # (issue #678). The first thing `/fleet-epic plan` does, and the reason it is a
 # separate script: the answer has to land in front of the operator during PHASE1,
 # while they are awake, not at 03:00 when PHASE2 discovers the repo has no `epic`
@@ -20,6 +20,10 @@
 #   deploy    FLEET_DEPLOY_REF / _CHECK (#541)        neither ⇒ merged ≡ done
 #   slots     the effective concurrent-session cap    stated, never warned (#881)
 #   quota     pool accounts under FLEET_ACCOUNT_CEILING  none ⇒ warn (waits for a window)
+#   members   each --member-repo M (issue #1942): hosted by this fleet + WRITE + issues on
+#             any miss ⇒ blocker — an EPIC whose parent is in R may have members
+#             filed in M (a cross-repo sub-issue), and the run opens their sessions
+#             in M, which it can only do in a repo the fleet hosts
 #
 # Half these rows are REPO facts (gh, perm, subissue, labels) and half are FLEET
 # facts (base, deploy, slots, quota) — so the two have to be resolved together or
@@ -57,13 +61,14 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-gh-lib.sh"
 
-repo_arg='' sess_arg='' do_fix=0
+repo_arg='' sess_arg='' do_fix=0 member_repos=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo)    shift; repo_arg="${1:-}" ;;
     --session) shift; sess_arg="${1:-}" ;;
+    --member-repo) shift; member_repos="$member_repos ${1:-}" ;;
     --fix)     do_fix=1 ;;
-    -h|--help) sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)       printf 'fleet-epic-preflight: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)         printf 'fleet-epic-preflight: unexpected argument %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -252,6 +257,33 @@ elif [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
     fixme labels "missing in $repo: $missing — rerun with --fix to seed them (that seeds the FULL canonical set, so on a team repo get the nod first)"
   fi
 fi
+
+# --- members: the other repos an EPIC spanning repos files members in (#1942) ---
+# GitHub links a sub-issue across repos (probed 2026-10-06: a parent in one repo
+# lists another repo's issue), so the parent's repo answering above is enough for
+# the link itself; what each member repo needs is the fleet to HOST it (the run
+# spawns with --repo M, and a spawn refuses a repo the fleet does not host) and
+# write access (its member is filed, labelled and landed there).
+for mr in $member_repos; do
+  mr=$(fleet_norm_repo "$mr")
+  [ -n "$mr" ] && [ "$mr" != "$repo" ] || continue
+  if ! fleet_target_repo "$sess" "$mr" >/dev/null 2>&1; then
+    fail members "$mr is not a repo fleet $sess hosts — the run can only open a member's session in a hosted repo: \`bin/fleet-repo.sh add $mr\` first"
+    continue
+  fi
+  [ "$gh_ok" = 1 ] || continue
+  mrv=$(fleet_gh_run graphql preflight repo view "$mr" --json viewerPermission,defaultBranchRef,hasIssuesEnabled \
+         -q '[(.viewerPermission // ""), (.defaultBranchRef.name // ""), (.hasIssuesEnabled|tostring)] | @tsv' 2>/dev/null)
+  [ "$?" -eq "$FLEET_GH_LIMITED_RC" ] && mrv=$(fleet_gh_rest_repo_perm "$mr" 2>/dev/null)
+  IFS=$'\t' read -r mperm _ missues <<<"$mrv"
+  case "$mperm" in
+    '') warn members "$mr: permission unreadable (rate limit, offline) — members filed there are unverified" ;;
+    ADMIN|MAINTAIN|WRITE)
+      if [ "$missues" = false ]; then fail members "$mr has ISSUES DISABLED — no member can be filed there"
+      else pass members "$mr: $mperm — its members are filed there and linked under the EPIC in $repo"; fi ;;
+    *) fail members "$mr: $mperm — a member is filed, labelled and landed there; that needs WRITE or better" ;;
+  esac
+done
 
 # --- base branch: an EPIC is a whole batch aimed at one branch (#603) ----------
 cbase="${FLEET_BASE_BRANCH:-}"
