@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -106,7 +107,14 @@ func TestTokenFromFD(t *testing.T) {
 	}
 	w.Write([]byte("ccq_piped\n"))
 	w.Close()
-	tok, err := tokenFromFD(strconv.Itoa(int(r.Fd())))
+	// tokenFromFD closes the fd it is given: hand it a dup, never r's own —
+	// r's finalizer would close that number again, by then another test's file
+	fd, err := syscall.Dup(int(r.Fd()))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := tokenFromFD(strconv.Itoa(fd))
 	if err != nil || tok != "ccq_piped" {
 		t.Fatalf("token = %q, %v", tok, err)
 	}
