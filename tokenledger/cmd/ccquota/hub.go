@@ -750,9 +750,13 @@ func runHub(args []string) error {
 		go func() { errCh <- hs.ServeTLS(ln, "", "") }()
 	}
 
+	grace, err := shutdownGrace(os.Getenv)
+	if err != nil {
+		return err
+	}
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 		defer cancel()
 		for _, hs := range servers {
 			_ = hs.Shutdown(shutdownCtx)
@@ -768,6 +772,25 @@ func runHub(args []string) error {
 		}
 	}
 	return nil
+}
+
+// shutdownGrace is how long a stopping hub lets the requests it already took
+// finish (CCQUOTA_SHUTDOWN_GRACE, a Go duration; default 10s, at most 5m).
+// A rolling release sets it to 25s (deploy/k8s/base, claude-fleet#2125): the
+// pod's preStop has already taken it out of the Service, so every second here
+// is a request finishing, not a request refused. Long streams (the live view,
+// SSE) hold it to the end and are then cut — their clients reconnect to the
+// other replica.
+func shutdownGrace(getenv func(string) string) (time.Duration, error) {
+	v := strings.TrimSpace(getenv("CCQUOTA_SHUTDOWN_GRACE"))
+	if v == "" {
+		return 10 * time.Second, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 || d > 5*time.Minute {
+		return 0, fmt.Errorf("CCQUOTA_SHUTDOWN_GRACE=%q: want a duration in (0, 5m], e.g. 25s", v)
+	}
+	return d, nil
 }
 
 // splitList parses a comma-separated flag value, ignoring blanks.

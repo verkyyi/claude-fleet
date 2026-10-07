@@ -7,6 +7,10 @@ kind: Kustomization
 namespace: new-deploy
 resources:
   - ../../base
+# Still the single SQLite shape (one replica, Recreate, the data disk) until the
+# switch to Postgres — which deletes these two lines (../../RUNBOOK.md «换库»).
+components:
+  - sqlite
 images:
   - name: ccquota
     newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/ccquota

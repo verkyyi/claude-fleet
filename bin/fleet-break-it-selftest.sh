@@ -55,6 +55,12 @@
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
 #   two-hubs-double-refresh                         tokenledger/internal/leader (Leader / Lock), credvault Lease's
 #                                                   CrossLock, the three gated loops (go test, when a toolchain is here)
+#   hub-release-downtime                            .github/actions/hub-release/probe.sh (downtime_seconds),
+#                                                   release.sh shape, deploy/k8s/base (2 replicas, rolling,
+#                                                   /readyz, preStop, PDB), tokenledger /readyz + /v1/deploy-probe
+#                                                   (go test, when a toolchain is here); the kind drill is
+#                                                   .github/workflows/hub-rolling.yml
+#   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
@@ -2940,6 +2946,102 @@ drill_two_hubs_double_refresh() {
     esac
   else
     WHAT='没有 go：测试与三处 Leader 门按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- hub-release-downtime (#2125, EPIC #2119 C6): a hub release used to be
+# 30–60 s of the whole site down (Recreate on one SQLite disk), and nobody
+# measured it. Now every release is measured — probe.sh, once a second, /healthz
+# + a write; a fake hub that goes down for ~3 s must read downtime_seconds ≥ 2,
+# one that stays up must read 0 — and the base is the rolling shape that makes
+# it 0 (two replicas, maxUnavailable 0, /readyz, preStop, a PDB), whose hub half
+# is go-tested here when a toolchain is. The real thing (kind, two replicas +
+# Postgres, three releases, a deleted pod, a broken release + rollback) is CI's
+# hub-rolling.yml; this checks it is there and runs drill.sh.
+drill_hub_release_downtime() {
+  CAP=60; local t0 sc="$WORK/hrd" probe="$ROOT/.github/actions/hub-release/probe.sh" port='' hpid out out2 down1 rc f
+  f="$ROOT/deploy/k8s/base/deployment.yaml"
+  [ -f "$probe" ] || { WHY="no availability probe (${probe#$ROOT/})"; return 1; }
+  grep -q '^  replicas: 2$' "$f" || { WHY="the base is not two replicas"; return 1; }
+  grep -q '^    type: RollingUpdate$' "$f" && grep -q '^      maxUnavailable: 0$' "$f" || { WHY="the base does not roll with maxUnavailable 0"; return 1; }
+  grep -q 'path: /readyz' "$f" || { WHY="the base's readiness is not /readyz"; return 1; }
+  grep -q 'preStop:' "$f" || { WHY="the base has no preStop"; return 1; }
+  grep -q 'minAvailable: 1' "$ROOT/deploy/k8s/base/pdb.yaml" 2>/dev/null || { WHY="the base has no PodDisruptionBudget"; return 1; }
+  grep -q 'downtime_seconds' "$ROOT/.github/workflows/hub-deploy.yml" || { WHY="hub-deploy's summary has no downtime_seconds"; return 1; }
+  grep -q 'overlays/kind/drill.sh' "$ROOT/.github/workflows/hub-rolling.yml" 2>/dev/null || { WHY="no kind drill in CI (hub-rolling.yml → drill.sh)"; return 1; }
+  mkdir -p "$sc"
+  cat > "$sc/hub.py" <<'PY2'
+import os, signal, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+signal.alarm(int(sys.argv[2]))
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def reply(self):
+        up = open(sys.argv[3]).read().strip() == "up"
+        self.send_response(200 if up else 503); self.send_header("Content-Length", "0"); self.end_headers()
+    def do_GET(self): self.reply()
+    def do_POST(self): self.reply()
+srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1] + ".tmp", "w").write(str(srv.server_address[1])); os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+srv.serve_forever()
+PY2
+  echo up > "$sc/mode"
+  python3 "$sc/hub.py" "$sc/port" "$((CAP + 30))" "$sc/mode" 2>"$sc/hub.err" & hpid=$!
+  for _ in $(seq 1 300); do [ -s "$sc/port" ] && break; sleep 0.1; done
+  { read -r port < "$sc/port"; } 2>/dev/null
+  [ -n "$port" ] || { kill "$hpid" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$sc/hub.err" | tr '\n' ' ')"; return 1; }
+  t0=$(now)
+  # a Recreate release: up, ~3 s of 503, up again
+  sh "$probe" "http://127.0.0.1:$port" "$sc/stop1" 30 > "$sc/p1.log" 2>&1 &
+  sleep 2; echo down > "$sc/mode"; sleep 3; echo up > "$sc/mode"; sleep 2; touch "$sc/stop1"
+  for _ in $(seq 1 50); do tail -1 "$sc/p1.log" | grep -q '^probes=' && break; sleep 0.1; done
+  out=$(tail -1 "$sc/p1.log")
+  case "$out" in "probes="*" downtime_seconds="[2-6]" write_unsupported=0") ;; *)
+    kill "$hpid" 2>/dev/null; WHY="~3 s of 503 read as [$out], want downtime_seconds 2–6"; return 1 ;; esac
+  down1=${out#*downtime_seconds=}; down1=${down1%% *}
+  grep -q '^DOWN .* healthz=503 write=503' "$sc/p1.log" || { kill "$hpid" 2>/dev/null; WHY="the probe named no DOWN second"; return 1; }
+  # a rolling release: up throughout
+  sh "$probe" "http://127.0.0.1:$port" "$sc/stop2" 30 > "$sc/p2.log" 2>&1 &
+  sleep 3; touch "$sc/stop2"
+  for _ in $(seq 1 50); do tail -1 "$sc/p2.log" | grep -q '^probes=' && break; sleep 0.1; done
+  kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+  out2=$(tail -1 "$sc/p2.log")
+  case "$out2" in "probes="[1-9]*" downtime_seconds=0 write_unsupported=0") ;; *) WHY="a hub up throughout read as [$out2]"; return 1 ;; esac
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^(TestReadyzAndDeployProbe|TestReadyFollowsTheMigrations|TestShutdownGrace)$' ./internal/api ./internal/store ./cmd/ccquota 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT="停 ~3 秒的发布读出 downtime_seconds=${down1}；一直在的读 0；base 两份滚动 + /readyz + preStop + PDB；/readyz 与写探测、关停宽限 go test 绿；真两份 + Postgres 的三次发布 / 删 pod / 回退在 CI hub-rolling" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='探测读数对（停 ~3 秒 ≥2、一直在 0）；base 是滚动形态；入口的 Go 测试在这台没有模块缓存——Go 门跑它们' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='探测读数对（停 ~3 秒 ≥2、一直在 0）；base 是滚动形态；没有 go：Go 门跑 /readyz 测试'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- hub-disk-attach-stuck (#2125): a release or a rebuilt pod stuck in
+# ContainerCreating on the cloud disk's detach/attach (RUNBOOK, 2026-09-13).
+# The rolling shape mounts no disk at all; the disk lives only in the single
+# SQLite shape's component, which production drops at the switch.
+drill_hub_disk_attach_stuck() {
+  CAP=30; local t0 b="$ROOT/deploy/k8s/base" c="$ROOT/deploy/k8s/components/sqlite-single" r
+  t0=$(now)
+  if grep -l 'persistentVolumeClaim\|kind: PersistentVolumeClaim' "$b"/*.yaml >/dev/null 2>&1; then
+    WHY="the base still has a disk: $(grep -l 'persistentVolumeClaim\|kind: PersistentVolumeClaim' "$b"/*.yaml | tr '\n' ' ')"; return 1
+  fi
+  grep -q 'kind: PersistentVolumeClaim' "$c/pvc.yaml" 2>/dev/null || { WHY="the single SQLite shape lost its disk (${c#$ROOT/}/pvc.yaml)"; return 1; }
+  if command -v kubectl >/dev/null 2>&1 && r=$(kubectl kustomize "$b" 2>/dev/null); then
+    case "$r" in *PersistentVolumeClaim*|*claimName*) WHY="the base render mounts a disk"; return 1 ;; esac
+    r=$(kubectl kustomize "$ROOT/deploy/k8s/overlays/prod" 2>/dev/null) || { WHY="the prod overlay does not render"; return 1; }
+    case "$r" in *'claimName: ccquota-data'*) ;; *) WHY="prod lost its disk before the switch"; return 1 ;; esac
+    WHAT='base 的渲染没有盘（库在 Postgres），盘只在单份形态的组件里；切换前的生产渲染仍挂 ccquota-data'
+  else
+    WHAT='base 没有盘（按文件核对；没有 kubectl 不渲染），盘只在单份形态的组件里'
   fi
   SECS=$(since "$t0")
 }

@@ -32,6 +32,21 @@
 #                                         (its own run, queued behind this one,
 #                                         ships both). Prints verdict=go |
 #                                         verdict=superseded + newer=<sha>.
+#   release.sh shape <render>             which shape a render is (issue #2125):
+#                                         `mode=sqlite` — a data disk, so one
+#                                         replica + Recreate + no CCQUOTA_DB_URL
+#                                         + no disruption budget — or
+#                                         `mode=postgres` — no disk, ≥ 2 replicas,
+#                                         RollingUpdate maxUnavailable 0, the
+#                                         db-url, /readyz, a preStop, a PDB.
+#                                         Anything between is refused (exit 1,
+#                                         one line per fault): two pods on one
+#                                         SQLite file is a corrupt database.
+#                                         <render> = JSON documents (yq -o=json),
+#                                         '-' = stdin.
+#   release.sh probe <url> <stop> [secs]  the availability probe (probe.sh):
+#                                         per second, /healthz + a write; ends
+#                                         with probes= downtime_seconds= …
 #   release.sh --selftest                 pure logic only; no network, no cluster.
 set -euo pipefail
 
@@ -102,6 +117,53 @@ cmd_health() {
   done
   return "$rc"
 }
+
+cmd_shape() { # <render JSON | -> → mode=sqlite | mode=postgres, or the faults
+  python3 -c "$SHAPE_PY" "${1:--}"
+}
+
+SHAPE_PY=$(cat <<'PY'
+import json, sys
+src = sys.argv[1]
+raw = (sys.stdin.read() if src == '-' else open(src).read()).strip()
+docs, dec, i = [], json.JSONDecoder(), 0
+while i < len(raw):
+    while i < len(raw) and raw[i].isspace(): i += 1
+    if i >= len(raw): break
+    d, i = dec.raw_decode(raw, i)
+    if d: docs.extend(d.get('items', []) if d.get('kind') == 'List' else [d])
+deps = [d for d in docs if d.get('kind') == 'Deployment' and d.get('metadata', {}).get('name') == 'ccquota-hub']
+if len(deps) != 1:
+    print('the render has %d ccquota-hub Deployment(s), want 1' % len(deps)); sys.exit(1)
+dep = deps[0]; spec = dep.get('spec', {}); pod = spec.get('template', {}).get('spec', {})
+hub = ([c for c in pod.get('containers', []) if c.get('name') == 'ccquota'] or [{}])[0]
+env = {e.get('name') for e in hub.get('env') or []}
+disk = any('persistentVolumeClaim' in v for v in pod.get('volumes') or [])
+pdb = any(d.get('kind') == 'PodDisruptionBudget' for d in docs)
+replicas = spec.get('replicas', 1)
+strat = spec.get('strategy', {}); ru = strat.get('rollingUpdate') or {}
+faults = []
+if disk:
+    mode = 'sqlite'
+    if replicas != 1: faults.append('a data disk with replicas %s (want 1: one SQLite file, one writer)' % replicas)
+    if strat.get('type') != 'Recreate': faults.append('a data disk with strategy %s (want Recreate: two pods would open one SQLite file)' % strat.get('type'))
+    if 'CCQUOTA_DB_URL' in env: faults.append('a data disk AND CCQUOTA_DB_URL (half switched)')
+    if pdb: faults.append('a PodDisruptionBudget on one replica (it would block every node drain)')
+else:
+    mode = 'postgres'
+    if not isinstance(replicas, int) or replicas < 2: faults.append('no data disk but replicas %s (want ≥ 2)' % replicas)
+    if strat.get('type') != 'RollingUpdate' or str(ru.get('maxUnavailable')) != '0':
+        faults.append('strategy %s maxUnavailable %s (want RollingUpdate, 0)' % (strat.get('type'), ru.get('maxUnavailable')))
+    if 'CCQUOTA_DB_URL' not in env: faults.append('no data disk and no CCQUOTA_DB_URL (the hub would write a file nobody keeps)')
+    if (hub.get('readinessProbe') or {}).get('httpGet', {}).get('path') != '/readyz': faults.append('readiness is not /readyz')
+    if not (hub.get('lifecycle') or {}).get('preStop'): faults.append('no preStop (a stopping pod would refuse requests the ingress still sends it)')
+    if not pdb: faults.append('no PodDisruptionBudget')
+if faults:
+    for f in faults: print('mode=%s: %s' % (mode, f))
+    sys.exit(1)
+print('mode=' + mode)
+PY
+)
 
 # Lines a diff of tokenledger/internal/store adds that change the schema: the
 # embedded schema.sql and the ALTER list in store.go's migrate() are where it
@@ -338,15 +400,35 @@ envFrom {"secretRef":{"name":"hub"}}' ] && ok "env: ccquota only, sorted, secret
   t=$(hold_verdict 10000 aaa bbb 9990 "" 600 1800); [ "$t" = "superseded bbb" ] && ok "hold: a newer commit supersedes" || no "hold superseded: $t"
   t=$(iso_epoch 2026-10-07T00:00:00Z); [ "$t" = 1791331200 ] && ok "iso_epoch" || no "iso_epoch: $t"
 
+  # shape: the two good shapes and the mixes between them
+  local sq pg
+  sq='{"kind":"Deployment","metadata":{"name":"ccquota-hub"},"spec":{"replicas":1,"strategy":{"type":"Recreate"},"template":{"spec":{"containers":[{"name":"ccquota","env":[{"name":"A","value":"1"}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"d"}}]}}}}'
+  pg='{"kind":"Deployment","metadata":{"name":"ccquota-hub"},"spec":{"replicas":2,"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxUnavailable":0,"maxSurge":1}},"template":{"spec":{"containers":[{"name":"ccquota","env":[{"name":"CCQUOTA_DB_URL"}],"readinessProbe":{"httpGet":{"path":"/readyz"}},"lifecycle":{"preStop":{"sleep":{"seconds":5}}}}]}}}}
+{"kind":"PodDisruptionBudget"}'
+  t=$(printf '%s\n' "$sq" | cmd_shape -); [ "$t" = mode=sqlite ] && ok "shape: one replica on a disk is sqlite" || no "shape sqlite: $t"
+  t=$(printf '%s\n' "$pg" | cmd_shape -); [ "$t" = mode=postgres ] && ok "shape: two rolling replicas on Postgres" || no "shape postgres: $t"
+  t=$(printf '%s\n' "${sq/\"replicas\":1/\"replicas\":2}" | cmd_shape -) && no "shape: two replicas on a disk passed" || ok "shape: two replicas on one SQLite disk refused"
+  t=$(printf '%s\n' "${sq/Recreate/RollingUpdate}" | cmd_shape -) && no "shape: a rolling disk passed" || ok "shape: RollingUpdate on a disk refused"
+  t=$(printf '%s\n' "${pg/CCQUOTA_DB_URL/X}" | cmd_shape -) && no "shape: no db-url passed" || ok "shape: two replicas without CCQUOTA_DB_URL refused"
+  t=$(printf '%s\n' "${pg/\"maxUnavailable\":0/\"maxUnavailable\":1}" | cmd_shape -) && no "shape: maxUnavailable 1 passed" || ok "shape: maxUnavailable 1 refused"
+  t=$(printf '%s\n' "${pg%%$'\n'*}" | cmd_shape -) && no "shape: no PDB passed" || ok "shape: rolling without a PDB refused"
+
+  # probe: nothing listens ⇒ every second down; the verdict is the last line
+  local stop; stop=$(mktemp -u)
+  t=$(sh "$(dirname "$0")/probe.sh" http://127.0.0.1:9 "$stop" 2 | tail -1)
+  case "$t" in "probes="*" downtime_seconds="[1-9]*" write_unsupported=0") ok "probe: an unreachable hub is down, verdict last" ;; *) no "probe: $t" ;; esac
+
   [ "$fail" = 0 ] && echo "hub-release selftest: ok"
   return "$fail"
 }
 
 case "${1:-}" in
   health) shift; cmd_health "$@" ;;
+  shape) shift; cmd_shape "$@" ;;
+  probe) shift; exec sh "$(dirname "$0")/probe.sh" "$@" ;;
   changes) shift; cmd_changes "$@" ;;
   env) shift; cmd_env "$@" ;;
   hold) shift; cmd_hold "$@" ;;
   --selftest) selftest ;;
-  *) sed -n '2,30p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,50p' "$0" >&2; exit 2 ;;
 esac

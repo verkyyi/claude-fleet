@@ -1,0 +1,83 @@
+name: hub-rolling
+
+# The rolling-release drill (claude-fleet#2125, EPIC #2119 C6): the hub as it
+# runs after the switch — two replicas on Postgres, deploy/k8s/base — on a
+# throwaway kind cluster in this runner. A probe inside the cluster hits
+# /healthz and a write once a second while the hub is released three times,
+# loses a pod, and takes a release that never gets ready plus hub-deploy's
+# rollback of it; one second not 2xx is red (deploy/k8s/overlays/kind/drill.sh).
+#
+# Runs on every PR that touches what a release is made of: the manifests, the
+# release scripts, this file, or the hub itself (its /readyz, its shutdown).
+# Nothing here touches a real cluster, and it needs no credential.
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/k8s/**'
+      - '.github/actions/hub-release/**'
+      - '.github/workflows/hub-rolling.yml'
+      - 'tokenledger/**'
+  workflow_dispatch:
+
+concurrency:
+  group: hub-rolling-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The client /install serves (#1803): the Dockerfile refuses an empty pack.
+      - name: Pack the client
+        run: bin/fleet-client-pack.sh
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the hub image
+        uses: docker/build-push-action@v6
+        with:
+          context: tokenledger
+          load: true
+          tags: ccquota:drill-1
+          build-args: |
+            VERSION=drill
+            GOPROXY=https://proxy.golang.org,direct
+            DIST_TARGETS=linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Four tags of one image (a tag change is a release) and one that exits
+      # at start — the release that never gets ready.
+      - name: Tag the releases
+        run: |
+          set -euo pipefail
+          for n in 2 3 4; do docker tag ccquota:drill-1 "ccquota:drill-$n"; done
+          printf 'FROM ccquota:drill-1\nENTRYPOINT ["ccquota", "no-such-command"]\n' | docker build -q -t ccquota:drill-broken -
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: hub-drill
+          wait: 120s
+
+      - name: Load the images into kind
+        run: |
+          set -euo pipefail
+          for t in drill-1 drill-2 drill-3 drill-4 drill-broken; do kind load docker-image "ccquota:$t" --name hub-drill; done
+
+      - name: The drill (downtime_seconds must be 0)
+        run: deploy/k8s/overlays/kind/drill.sh drill-1 drill-2 drill-3 drill-4 drill-broken
+
+      - name: What the cluster looked like
+        if: failure()
+        run: |
+          kubectl -n hub-e2e get pod -o wide || true
+          kubectl -n hub-e2e get events --sort-by=.lastTimestamp | tail -60 || true
+          kubectl -n hub-e2e logs -l app=ccquota-hub -c ccquota --tail=80 --prefix || true
+          kubectl -n hub-e2e logs prober || true

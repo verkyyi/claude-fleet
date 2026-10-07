@@ -1,0 +1,10 @@
+# Production on the single SQLite shape until the switch (claude-fleet#2125):
+# ../../../components/sqlite-single plus where its disk-watch sidecar posts.
+# The switch (../../../RUNBOOK.md «换库») deletes the `components:` line in
+# ../kustomization.yaml that names this directory — nothing else.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+components:
+  - ../../../components/sqlite-single
+patches:
+  - path: disk-watch-env.yaml

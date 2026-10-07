@@ -221,6 +221,10 @@ type Server struct {
 	// devices holds `fleet login` device-code logins in progress.
 	devices deviceLogins
 
+	// probe is /readyz's last verdict and the deploy probe's last write
+	// (claude-fleet#2125).
+	probe deployProbe
+
 	// sshCAStatus is each admin node's last answer to the CA install.
 	sshCAMu     sync.Mutex
 	sshCAStatus map[string]string
@@ -492,6 +496,10 @@ func (s *Server) routes() *routeMux {
 		}
 		writeJSON(w, http.StatusOK, body)
 	})
+	// What a rolling release asks (claude-fleet#2125, deploy_probe.go): may
+	// this replica take traffic, and does a write go through.
+	mux.HandleFunc("/readyz", s.handleReadyz)
+	mux.HandleFunc("/v1/deploy-probe", s.handleDeployProbe)
 	// Which commit this image was built from (claude-fleet#1696): public like
 	// /healthz, so `fleet-doctor`'s hub-image row can compare it with
 	// refs/tags/stable from any machine, with no cluster access and no token.

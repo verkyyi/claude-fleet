@@ -3,9 +3,22 @@
 > 2026-10-06 从 24haowan-monorepo `doc/k8s-yamls/ccquota/RUNBOOK.md` 搬来（EPIC #1982 C1，issue #1983）。
 > 发布见 [README.md](README.md)。
 
-单副本 + 单块 RWO 云盘（`ccquota-data`，`alicloud-disk-topology-alltype`，20Gi）。
-这是**刻意**的设计：hub 是一个 Go 二进制加一个 SQLite 文件，没有要预置的数据库。
-代价是任何一次重启都要经历一次「解绑—挂载」，而那一步会出事。
+入口有两种形态（#2125，EPIC #2119）：
+
+| | 单份 SQLite（生产，切换前） | 两份滚动（base，切换后） |
+|---|---|---|
+| 清单 | `overlays/prod` 带 `components: [sqlite]`（`components/sqlite-single`） | `base` 原样 |
+| 副本 · 发布 | 1 份，`Recreate`：每次发布 30–60 秒整站不可用 | 2 份，`RollingUpdate` maxUnavailable 0 / maxSurge 1：0 秒 |
+| 数据 | 一块 RWO 云盘（`ccquota-data`）上的 SQLite 文件 | 托管 Postgres（RDS），Secret `ccquota-db` |
+| 会卡住的 | 盘的「解绑—挂载」（下一节） | 没有盘 |
+
+一份 pod 怎么走（滚动形态）：新 pod 只有 `/readyz` 说库连得上、迁移版本够了才接流量；
+旧 pod 先 `preStop` 睡 5 秒（等 ingress 把它摘掉），再收 SIGTERM，手上的请求最多再给
+`CCQUOTA_SHUTDOWN_GRACE`（25 秒）做完。发布、删 pod、节点排空都是这一条路；PDB 保证排空时
+至少留一份。每次发布 hub-deploy 每秒探一次 `/healthz` + 一次写，摘要里 `downtime_seconds=<n>`
+就是不可用秒数；CI 的 `hub-rolling` 在 kind 里把三次发布 + 删 pod + 回退各做一遍，必须是 0。
+
+下面「卡在 ContainerCreating」「快照与恢复」「数据盘水位」只适用于**单份 SQLite 形态**。
 
 ## 症状：pod 卡在 ContainerCreating，服务 503
 
@@ -35,7 +48,6 @@ kubectl uncordon <node>          # ★ 起来之后立刻解除，别把节点�
 
 ### 不要做的事
 
-- **不要**改 `strategy` —— 已经是 `Recreate`，不是滚动更新抢占 PVC 的问题。
 - **不要**急着断定「节点坏了」。先看那个节点上有没有**同存储类**的其它 pod 正常跑：
 
   ```bash
@@ -194,9 +206,19 @@ kubectl -n new-deploy logs deploy/ccquota-hub -c disk-watch --tail=5   # 平时�
 | `the target is not empty` | 目标库里有 hub 写过的数据 | 同上；换一个空库更稳 |
 | `the target has no table for …` / `no column …` | 二进制比写源库的 hub 旧 | 用同一版本的镜像跑 |
 
-前提（批后，你来做）：RDS Postgres 就绪；连接串放进 Secret `ccquota-db`，key 名 `CCQUOTA_DB_URL`
-（`kubectl -n new-deploy create secret generic ccquota-db --from-literal=CCQUOTA_DB_URL='postgres://…?sslmode=require'`，
-在你自己的终端敲，别进任何文件或单子）。
+前提（批后，你来做）：
+
+1. RDS Postgres 就绪。Secret `ccquota-db` 两个 key：`db-url`（连接串）和 `replica-token`（两份入口互相转交
+   机器连接用的共享令牌，#2124）——在你自己的终端敲，别进任何文件或单子：
+   ```bash
+   kubectl -n new-deploy create secret generic ccquota-db \
+     --from-literal=db-url='postgres://…?sslmode=require' \
+     --from-literal=replica-token="$(openssl rand -hex 32)"
+   ```
+2. 部署 Role 能管 PodDisruptionBudget（[README.md](README.md)「Who may do what」那段 yaml，24haowan-monorepo 里改）。
+3. #2190 已合并（`fleet login`、客户端租约、实时会话在两份入口之间不丢）。
+4. 准备好**切换 PR**：只删 `overlays/prod/kustomization.yaml` 里 `components:` / `  - sqlite` 两行。
+   它的 hub-deploy `check` 会证明删完的渲染是完整的滚动形态（`mode=postgres`）。
 
 ### 1. 演练（不停写，任何时候都可以）
 
@@ -205,7 +227,7 @@ POD=$(kubectl -n new-deploy get pod -l app=ccquota-hub -o name | head -1)
 SNAP=/data/backup-move-rehearsal-$(date -u +%Y%m%dT%H%M%SZ).db
 kubectl -n new-deploy exec $POD -c ccquota -- /data/snapshot-tool /data/ccquota.db $SNAP
 # 连接串只给这一条命令，经环境变量，不上命令行：
-kubectl -n new-deploy get secret ccquota-db -o jsonpath='{.data.CCQUOTA_DB_URL}' | base64 -d \
+kubectl -n new-deploy get secret ccquota-db -o jsonpath='{.data.db-url}' | base64 -d \
   | kubectl -n new-deploy exec -i $POD -c ccquota -- sh -c \
       'read -r U; CCQUOTA_DB_URL="$U" ccquota db migrate --from '$SNAP' --dry-run --verify'
 kubectl -n new-deploy exec $POD -c ccquota -- rm $SNAP
@@ -216,31 +238,50 @@ kubectl -n new-deploy exec $POD -c ccquota -- rm $SNAP
 
 ### 2. 正式切换（你定时间）
 
-1. **只读**：`kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_READONLY=1`（滚一次）。
+停写从第 2 步算到第 4 步两份新 pod 就绪；读一直不停（旧 pod 只读服务到新 pod 接手）。
+
+1. **停自动发布，合切换 PR**：`gh variable set HUB_DEPLOY_PAUSED --body 1 --repo verkyyi/claude-fleet`，再合并
+   上面第 4 条的切换 PR（暂停中，什么都不发）。
+2. **只读**：`kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_READONLY=1`（滚一次）。
    起来后 `curl -s https://<hub>/healthz` 带 `"mode":"read-only"`；写接口一律 `503` + `Retry-After: 15`，
    读接口照常；store 自己也只读，后台的写（心跳、清理）报错而不是写进旧库后丢掉。
-2. **搬 + 核对**（停写从这里算）：
+3. **搬 + 核对**：
    ```bash
    POD=$(kubectl -n new-deploy get pod -l app=ccquota-hub -o name | head -1)
-   kubectl -n new-deploy get secret ccquota-db -o jsonpath='{.data.CCQUOTA_DB_URL}' | base64 -d \
+   kubectl -n new-deploy get secret ccquota-db -o jsonpath='{.data.db-url}' | base64 -d \
      | kubectl -n new-deploy exec -i $POD -c ccquota -- sh -c \
          'read -r U; CCQUOTA_DB_URL="$U" ccquota db migrate --from /data/ccquota.db --verify'
    ```
-   有任何 `DIFF` 它自己回滚、退出码 1 —— 不往下走，先 `kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_READONLY-`
-   回到原样。
-3. **指过去**：`kubectl -n new-deploy set env deploy/ccquota-hub --from=secret/ccquota-db CCQUOTA_READONLY-`
-   （同一次滚动：加上 `CCQUOTA_DB_URL`、去掉只读）。起来后 `/healthz` 不再有 `mode`，日志里没有
-   `sqlite /data/ccquota.db`。之后把这条 env 写进 `deploy/k8s/base/deployment.yaml`（secretKeyRef），否则
-   它只存在于集群里。
-4. **旧盘留 7 天**：`/data/ccquota.db` 和 PVC 都不动、不删。
+   有任何 `DIFF` 它自己回滚、退出码 1 —— 不往下走：`kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_READONLY-`
+   回到原样，revert 切换 PR，删掉 `HUB_DEPLOY_PAUSED`。
+4. **换成两份**（管理员 kubeconfig，在切换 PR 合并后的 master 干净 checkout 里；这是唯一一次手工 apply——
+   用线上正在跑的镜像，不发新版本）：
+   ```bash
+   LIVE=$(kubectl -n new-deploy get deploy ccquota-hub -o jsonpath='{.spec.template.spec.containers[?(@.name=="ccquota")].image}')
+   kubectl kustomize deploy/k8s/overlays/prod | sed "s#image: .*:set-by-hub-deploy\$#image: $LIVE#" > /tmp/hub-switch.yaml
+   grep -c 'set-by-hub-deploy' /tmp/hub-switch.yaml   # 必须是 0
+   kubectl apply -f /tmp/hub-switch.yaml && kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_READONLY-
+   kubectl -n new-deploy rollout status deploy/ccquota-hub --timeout=8m
+   ```
+   `apply` 不会去掉第 2 步 `set env` 加的只读（那一项不在上次 apply 的记录里），所以紧跟一条 `set env … CCQUOTA_READONLY-`；
+   两次改动之间控制器直接滚到最后那版。策略在同一次 apply 里换成 RollingUpdate：旧的单份 pod 只读服务到两份新 pod
+   就绪才走。判据：`kubectl -n new-deploy get pod -l app=ccquota-hub` 两份 Ready；`/healthz` 不再有 `mode`；
+   `kubectl -n new-deploy logs deploy/ccquota-hub -c ccquota | grep 'database: Postgres'`；
+   `curl -s -X POST https://<hub>/v1/deploy-probe` 回 200。
+5. **恢复自动发布**：`gh variable delete HUB_DEPLOY_PAUSED --repo verkyyi/claude-fleet`。之后第一次真发布的
+   hub-deploy 摘要里 `downtime_seconds=<n>` 那一行就是这批的上线证据，应为 0。
+6. **旧盘留 7 天**：PVC `ccquota-data` 不再在渲染里，但 apply 从不删东西，它和 `/data/ccquota.db` 原样留着。
+   第 7 天：`kubectl -n new-deploy delete pvc ccquota-data`（管理员）。
 
-### 3. 退回（一条命令）
+### 3. 退回（7 天内）
 
-```bash
-kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_DB_URL-
-```
+1. `gh variable set HUB_DEPLOY_PAUSED --body 1 --repo verkyyi/claude-fleet`，revert 切换 PR（`components: [sqlite]` 回来）。
+2. 管理员 kubeconfig，在 revert 后的 master 上，同第 4 步的 `LIVE` / `kubectl kustomize … | sed … | kubectl apply -f -`，
+   再 `kubectl -n new-deploy delete pdb ccquota-hub`（apply 不删它；单份上留着它会挡住节点排空）。
+   这一次是 `Recreate`：两份停掉、单份挂盘起来，30–60 秒不可用。
+3. `kubectl -n new-deploy rollout status deploy/ccquota-hub`，`/healthz` 200 后删掉 `HUB_DEPLOY_PAUSED`。
 
-hub 回到 `/data/ccquota.db`，也就是第 1 步只读那一刻的数据。⚠️ 切过去之后写进 Postgres 的东西不在旧库里，
+hub 回到 `/data/ccquota.db`，也就是第 2 步只读那一刻的数据。⚠️ 切过去之后写进 Postgres 的东西不在旧库里，
 没有反向搬家；所以退回要早——发现不对就在当晚退。
 
 ## fleet 的两把 Secret（#11200 起，多机统一入口）

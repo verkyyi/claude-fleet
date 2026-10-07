@@ -8,7 +8,14 @@ name: hub-deploy
 # image with the real config on a copy of it (`ccquota hub --check`, issues
 # #2050 #2052), applies deploy/k8s/overlays/prod with that tag, waits for the
 # rollout and checks /healthz + /version + the entry (/install, /version's
-# stable, login/start — issue #2060) on every address. A manual rollback =
+# stable, login/start — issue #2060) on every address. From the moment before
+# the apply until the health check (or rollback) is done, a probe hits /healthz
+# and a write once a second and the summary says how many seconds were down
+# (downtime_seconds=<n>, issue #2125). The render's shape decides the rest: the
+# single SQLite shape (one replica, Recreate, the data disk) is snapshotted and
+# its new image checked on a copy first; the rolling shape (two replicas on
+# Postgres) needs neither — RDS keeps its own backups, and a new pod that is
+# not ready never replaces an old one. A manual rollback =
 # `workflow_dispatch` with the old tag (no build; the snapshot step still runs).
 #
 # Nobody approves a run any more (issue #2013, 方案 B), so the job is its own
@@ -104,12 +111,32 @@ jobs:
           kubectl kustomize deploy/k8s/overlays/prod > "$RUNNER_TEMP/hub.yaml"
           n=$(grep -c ":$PLACEHOLDER\$" "$RUNNER_TEMP/hub.yaml" || true)
           [ "$n" = 1 ] || { echo "::error::expected one image tagged :$PLACEHOLDER, found $n"; exit 1; }
-          for k in Deployment Service Ingress PersistentVolumeClaim ConfigMap; do
+          for k in Deployment Service Ingress ConfigMap; do
             grep -q "^kind: $k\$" "$RUNNER_TEMP/hub.yaml" || { echo "::error::render has no $k"; exit 1; }
           done
-          # Nothing beyond what Role claudefleet-deployer may touch.
-          extra=$(grep '^kind: ' "$RUNNER_TEMP/hub.yaml" | grep -vE '^kind: (Deployment|Service|Ingress|PersistentVolumeClaim|ConfigMap)$' || true)
+          # Nothing beyond what Role claudefleet-deployer may touch (the
+          # PodDisruptionBudget only once switched — deploy/k8s/README.md).
+          extra=$(grep '^kind: ' "$RUNNER_TEMP/hub.yaml" | grep -vE '^kind: (Deployment|Service|Ingress|PersistentVolumeClaim|PodDisruptionBudget|ConfigMap)$' || true)
           [ -z "$extra" ] || { echo "::error::the deploy role cannot apply: $extra"; exit 1; }
+      # Issue #2125: every render is one of the two shapes, never a mix — two
+      # pods on one SQLite file is a corrupt database. Prod as it is (the
+      # sqlite component), prod as the switch leaves it (the component line
+      # deleted), and the base.
+      - name: Each render is one whole shape (sqlite · postgres)
+        run: |
+          set -euo pipefail
+          shape() { yq -o=json '.' "$1" | .github/actions/hub-release/release.sh shape -; }
+          echo "prod: $(shape "$RUNNER_TEMP/hub.yaml")"
+          kubectl kustomize deploy/k8s/base > "$RUNNER_TEMP/base.yaml"
+          [ "$(shape "$RUNNER_TEMP/base.yaml")" = mode=postgres ] || { shape "$RUNNER_TEMP/base.yaml"; echo "::error::the base is not the rolling shape"; exit 1; }
+          sw=$(mktemp -d); cp -R deploy/k8s "$sw/"
+          grep -q '^components:$' "$sw/k8s/overlays/prod/kustomization.yaml" && {
+            sed -i '/^components:$/,/^  - sqlite$/d' "$sw/k8s/overlays/prod/kustomization.yaml"
+            kubectl kustomize "$sw/k8s/overlays/prod" > "$RUNNER_TEMP/switched.yaml"
+            [ "$(shape "$RUNNER_TEMP/switched.yaml")" = mode=postgres ] || { shape "$RUNNER_TEMP/switched.yaml"; echo "::error::prod without the sqlite component is not the rolling shape"; exit 1; }
+            echo "prod after the switch: mode=postgres"
+          }
+          rm -rf "$sw"
       - name: The 正在更新 page renders, and the Ingress names its Service
         run: |
           set -euo pipefail
@@ -296,6 +323,18 @@ jobs:
           fi
           grep -n 'image:\|default-backend' "$RUNNER_TEMP/hub.yaml"
 
+      # Which shape this release is (issue #2125): sqlite — snapshot + check
+      # on a copy, Recreate; postgres — rolling, neither needed. A mix is
+      # refused here, before anything changes.
+      - name: Which shape
+        id: shape
+        run: |
+          set -euo pipefail
+          out=$(yq -o=json '.' "$RUNNER_TEMP/hub.yaml" | .github/actions/hub-release/release.sh shape -) \
+            || { printf '%s\n' "$out" | sed 's/^/::error::/'; exit 1; }
+          echo "$out" >> "$GITHUB_OUTPUT"
+          echo "$out"
+
       # Before anything changes: a transaction-consistent copy of the live
       # database (VACUUM INTO via /data/snapshot-tool — never a raw copy, the
       # database is in WAL mode). Named after the image it was taken FROM, so a
@@ -303,7 +342,7 @@ jobs:
       # snapshots (backup-hubdeploy-*); a person's backup-* is never touched.
       - name: Snapshot the database
         id: snapshot
-        if: github.event.inputs.snapshot != 'false'
+        if: github.event.inputs.snapshot != 'false' && steps.shape.outputs.mode == 'sqlite'
         run: |
           set -euo pipefail
           pod=$(kubectl -n "$NS" get pod -l app=ccquota-hub --field-selector=status.phase=Running -o name | head -1)
@@ -434,6 +473,19 @@ jobs:
           [ "$code" = 0 ] || { echo "::error::the new image's startup check FAILED (exit $code: a migration on the copy of the live database, or a setting it refuses to start without — the log above) — nothing released, the live hub is untouched"; exit 1; }
           echo "check passed: the new image migrated a copy of the live database and read every startup setting"
 
+      # From here until the health check / rollback is done (issue #2125):
+      # once a second, /healthz + a write on the first address; the stop step
+      # below reads how many seconds were down. In the background of the job —
+      # the runner ends it with the job, and probe.sh has its own deadline.
+      - name: Start the availability probe
+        id: probe
+        run: |
+          set -euo pipefail
+          url=${HUB_URLS%% *}
+          echo "out=$RUNNER_TEMP/probe.log" >> "$GITHUB_OUTPUT"
+          nohup .github/actions/hub-release/release.sh probe "$url" "$RUNNER_TEMP/probe.stop" 3000 > "$RUNNER_TEMP/probe.log" 2>&1 &
+          echo "probing $url/healthz + POST $url/v1/deploy-probe every second (pid $!)"
+
       - name: Apply
         id: apply
         run: kubectl apply -f "$RUNNER_TEMP/hub.yaml"
@@ -441,10 +493,13 @@ jobs:
       - name: Rollout
         id: rollout
         run: |
-          # 3 minutes, not 10 (issue #2050): with Recreate the old pod is already
+          # Recreate: 3 minutes, not 10 (issue #2050) — the old pod is already
           # gone, so every minute waited here is a minute of 503 before the
-          # rollback below starts.
-          if ! kubectl -n "$NS" rollout status deploy/ccquota-hub --timeout=3m; then
+          # rollback below starts. Rolling (issue #2125): the old pods serve
+          # until each new one is ready, so waiting costs nothing — 8 minutes
+          # for two pulls, migrations and readiness one after the other.
+          t=3m; [ "${{ steps.shape.outputs.mode }}" = postgres ] && t=8m
+          if ! kubectl -n "$NS" rollout status deploy/ccquota-hub --timeout=$t; then
             kubectl -n "$NS" get pod -l app=ccquota-hub -o wide || true
             echo "::error::rollout did not finish — a pod stuck in ContainerCreating is the disk attach (deploy/k8s/RUNBOOK.md)"
             exit 1
@@ -524,6 +579,21 @@ jobs:
           fi
           echo "::error::release ${NEW_TAG} failed its checks — rolled back to ${PREV_IMAGE##*:}"
 
+      - name: Stop the availability probe
+        id: downtime
+        if: always() && steps.probe.outcome == 'success'
+        continue-on-error: true
+        env:
+          OUT: ${{ steps.probe.outputs.out }}
+        run: |
+          touch "$RUNNER_TEMP/probe.stop"
+          for _ in $(seq 1 20); do tail -1 "$OUT" | grep -q '^probes=' && break; sleep 0.5; done
+          grep '^DOWN' "$OUT" | head -40 || true
+          last=$(tail -1 "$OUT")
+          case "$last" in probes=*) ;; *) echo "::warning::the probe gave no verdict: $last"; exit 0 ;; esac
+          echo "$last"
+          for kv in $last; do echo "$kv" >> "$GITHUB_OUTPUT"; done
+
       # What happened, on the run's summary page — every run, red or green.
       # Its first lines decide the verdict (result / head, read by Notify);
       # everything after is reporting, and a reporting failure must never
@@ -542,6 +612,10 @@ jobs:
           SNAPSHOT: ${{ steps.snapshot.outputs.path }}
           SNAPSHOT_OUTCOME: ${{ steps.snapshot.outcome }}
           REHEARSE: ${{ steps.rehearse.outcome }}
+          SHAPE: ${{ steps.shape.outputs.mode }}
+          DOWN_SECS: ${{ steps.downtime.outputs.downtime_seconds }}
+          PROBES: ${{ steps.downtime.outputs.probes }}
+          WRITE_UNSUPPORTED: ${{ steps.downtime.outputs.write_unsupported }}
           SIMULATE_MIGRATION: ${{ github.event.inputs.simulate_migration_failure || 'false' }}
           SIMULATE_CHECK: ${{ github.event.inputs.simulate_check_failure || 'false' }}
           APPLY: ${{ steps.apply.outcome }}
@@ -569,7 +643,8 @@ jobs:
           echo "head=$head" >> "$GITHUB_OUTPUT"
           case "$SNAPSHOT_OUTCOME" in
             success) snap="\`$SNAPSHOT\`" ;;
-            skipped) snap="没做（${{ github.event.inputs.snapshot == 'false' && '手动关掉' || '没走到这一步' }}）" ;;
+            skipped) if [ "$SHAPE" = postgres ]; then snap="不需要（托管 Postgres，RDS 自动备份）"
+                     else snap="没做（${{ github.event.inputs.snapshot == 'false' && '手动关掉' || '没走到这一步' }}）"; fi ;;
             *) snap="失败" ;;
           esac
           {
@@ -580,8 +655,18 @@ jobs:
             echo "| 线上旧版本 | \`${PREV_TAG:-（无）}\` |"
             echo "| 新版本 | \`$NEW_TAG\` |"
             echo "| 快照 | $snap |"
-            echo "| 启动检查（真实配置 + 库副本） | $( [ "$REHEARSE" = skipped ] && echo '没做（没有快照可用）' || echo "$REHEARSE" ) |"
+            if [ "$SHAPE" = postgres ]; then
+              echo "| 启动检查 | 不需要（滚动发布：新 pod 不就绪，旧 pod 不下） |"
+            else
+              echo "| 启动检查（真实配置 + 库副本） | $( [ "$REHEARSE" = skipped ] && echo '没做（没有快照可用）' || echo "$REHEARSE" ) |"
+            fi
+            echo "| 发布方式 | ${SHAPE:-?}$( [ "$SHAPE" = postgres ] && echo '（两份滚动）' || { [ "$SHAPE" = sqlite ] && echo '（单份 Recreate）'; } ) |"
             echo "| apply · rollout · 健康检查 | $APPLY · $ROLLOUT · $HEALTH |"
+            if [ -n "$DOWN_SECS" ]; then
+              echo "| 发布期间不可用 | downtime_seconds=$DOWN_SECS（每秒探 /healthz + 一次写，共 $PROBES 次$( [ "${WRITE_UNSUPPORTED:-0}" = 0 ] || echo "；$WRITE_UNSUPPORTED 次写探测 404 = 旧镜像还没有 /v1/deploy-probe，不计入" )） |"
+            else
+              echo "| 发布期间不可用 | 没测（探测没起来或没给出结果） |"
+            fi
             echo "| 回退 | $( [ "$ROLLBACK" = skipped ] && echo 没回退 || echo "$ROLLBACK（只回镜像；数据库要恢复照 RUNBOOK.md 用上面的快照手工做）" ) |"
             case "$CREDPROXY" in
               rolled) echo "| 中心代理 | 已滚到 \`$NEW_TAG\` |" ;;
