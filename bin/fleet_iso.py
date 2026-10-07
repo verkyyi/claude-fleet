@@ -1,3 +1,4 @@
+# fleet_iso.py — imported, not run (a comment first: fleet-install.sh checks every bin/ file starts with one)
 """fleet_iso — the ONE ISO-8601 / RFC 3339 timestamp reader for bin/ (issue #2024).
 
 The hub (Go) writes time.Time as RFC 3339 with NANOSECONDS and a `Z`:
