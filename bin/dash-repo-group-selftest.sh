@@ -243,7 +243,7 @@ eq    "E: all, no sessions — the hint, then every hosted heading at 0" "$(prin
 has   "E: …under the column header" "$(FLEET_SESSION=alpha bash "$ROWS" | head -n1 | strip)" "window"
 s=$(side)
 eq    "E: sidebar, no sessions" "$(printf '%s\n' "$s" | awk -F'|' '{ print $1 ":" $4 }' | tr '\n' '/')" \
-      "hdr:No sessions — type a name/hdr:claude-fleet (0)/hdr:tokenledger (0)/"
+      "hdr:No sessions — ⌘N new task/hdr:claude-fleet (0)/hdr:tokenledger (0)/"
 sel=$(printf '%s\n' "$s" | python3 -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
@@ -258,7 +258,7 @@ rm -f "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 mv "$FLEET_CONF_DIR/fleets/alpha/repos" "$WORK/repos.off"
 eq    "E: one-repo fleet, no sessions — the bare hint" "$(rows)" \
       "hdr|  No sessions — type a name to start one · ⌃n new task"
-eq    "E: …and in the sidebar" "$(side)" "hdr|||No sessions — type a name| "
+eq    "E: …and in the sidebar" "$(side)" "hdr|||No sessions — ⌘N new task| "
 win 'issue-1' @repo o/claude-fleet @issue 1
 hasnt "E: one-repo fleet with a session — no hint" "$(rows)" "No sessions"
 hasnt "E: …no heading"                             "$(rows)" "──"

@@ -72,8 +72,8 @@ fleet_ui_t() {
     en:ui_filed_no_worker_next) printf 'start it from the backlog' ;;
     zh:sidebar_narrow_why)      printf '窗口太窄放不下任务栏' ;;
     en:sidebar_narrow_why)      printf 'too narrow for the list' ;;
-    zh:sidebar_narrow_next)     printf '加宽终端或 prefix Space' ;;
-    en:sidebar_narrow_next)     printf 'widen it, or prefix Space' ;;
+    zh:sidebar_narrow_next)     printf '加宽终端，或 ⌘P 跳转' ;;
+    en:sidebar_narrow_next)     printf 'widen it, or ⌘P to jump' ;;
     zh:sidebar_save_next)       printf '配置目录只读？' ;;
     en:sidebar_save_next)       printf 'conf dir read-only?' ;;
     zh:sidebar_save_failed)     printf '任务栏设置没保存' ;;
@@ -173,8 +173,8 @@ fleet_ui_t() {
     en:unknown_repo_heading)    printf '? · unknown repo' ;;
     zh:no_repo)                 printf '无仓库' ;;
     en:no_repo)                 printf 'no repo' ;;
-    zh:empty_sidebar)           printf '暂无会话 — 输入名称新建' ;;
-    en:empty_sidebar)           printf 'No sessions — type a name' ;;
+    zh:empty_sidebar)           printf '暂无会话 — ⌘N 新任务' ;;
+    en:empty_sidebar)           printf 'No sessions — ⌘N new task' ;;
     zh:empty_dash_fmt)          printf '暂无会话 — 输入名称新建 · %s 新任务' "${1:-}" ;;
     en:empty_dash_fmt)          printf 'No sessions — type a name to start one · %s new task' "${1:-}" ;;
     zh:keys_sidebar_title)      printf '任务栏：只点' ;;
@@ -341,6 +341,19 @@ fleet_ui_t() {
     en:sidebar_place_account_opening_fmt) printf 'opening a machine for you (%s), about %ss — your session opens once it is ready' "${1:-}" "${2:-}" ;;
     zh:sidebar_place_account_failed_fmt) printf '给你开机器没成功：请找入口管理员 %s' "${1:-}" ;;
     en:sidebar_place_account_failed_fmt) printf 'opening a machine for you failed: ask the hub admin (%s)' "${1:-}" ;;
+    # the stage's first window while no machine is up (fleet-shell.sh wait,
+    # issue #2220): the hub's word on the person's login, never a bare
+    # 「没有在线的机器」 while one is being opened for them
+    zh:shell_wait_nohost)       printf '入口没有在线的机器，或者连不上入口。\n  左边是入口给的列表（缓存也算）：点一行就进那台机器；底下一栏说入口通不通。' ;;
+    en:shell_wait_nohost)       printf 'no machine of yours is online, or the hub is out of reach.\n  The list on the left is the hub'"'"'s (cached counts): tap a row to enter that machine; the bottom line says whether the hub answers.' ;;
+    zh:shell_wait_opening_fmt)  printf '正在为你开机器（%s），约 %s 秒。\n  开好后左边会出现它；那时 ⌘N 新任务（或 prefix c）开第一个会话。' "${1:-}" "${2:-}" ;;
+    en:shell_wait_opening_fmt)  printf 'opening a machine for you (%s), about %ss.\n  It shows on the left once it is ready; then ⌘N new task (or prefix c) opens your first session.' "${1:-}" "${2:-}" ;;
+    zh:shell_wait_failed_fmt)   printf '给你开机器没成功：请找入口管理员 %s。' "${1:-}" ;;
+    en:shell_wait_failed_fmt)   printf 'opening a machine for you failed: ask the hub admin (%s).' "${1:-}" ;;
+    zh:shell_wait_none_fmt)     printf '你还没有能开会话的机器：请找入口管理员 %s 给你分一台。' "${1:-}" ;;
+    en:shell_wait_none_fmt)     printf 'no machine of yours hosts a session yet: ask the hub admin (%s) for one.' "${1:-}" ;;
+    zh:shell_wait_leave)        printf 'prefix d 离开；再敲 fleet 回来。' ;;
+    en:shell_wait_leave)        printf 'prefix d to leave; type fleet to come back.' ;;
     zh:sidebar_place_account_slow_fmt) printf '机器还没开好：稍后再回车一次，或找入口管理员 %s' "${1:-}" ;;
     en:sidebar_place_account_slow_fmt) printf 'your machine is not ready yet: press enter again later, or ask the hub admin (%s)' "${1:-}" ;;
     zh:sidebar_place_hubdown)   printf '入口连不上，暂时不能新建' ;;
