@@ -789,17 +789,35 @@ for f in local:
         need.append("\x1f".join(clean(v) for v in (r["wid"], subj, clean(r["needs"]) if st == "needs" else "failed",
                                                    r["node"], r["detail"][:120])) + "\n")
     write(os.path.join(gdir, "needs_" + f["sess"]), "".join(need))
-    # The orchestrating session (issue #1957): `orch_<sess>` beside the cache, one
-    # line per machine that runs one — `<worker_id> US <machine> US <online|lost>
-    # US <state> US <needs> US <question>`, online first, then by machine. Its row
-    # stays in the cache (fleet-remote-view.sh open finds it there), but the rows
-    # skip every worker_id named here, and 「新任务」 wears the first line's state
+    # The orchestrating session (issue #1957): `orch_<sess>` beside the cache, ONE
+    # line — `<worker_id> US <machine> US <online|lost> US <state> US <needs> US
+    # <question>`. The person has one (issue #2117: the hub names the machine that
+    # holds it, fleet-orchestrator.sh closes the others); should two still answer
+    # — a machine that has not asked yet, an old hub — the line is the online one
+    # on the home machine (`fleet connect`'s last pick), then online, then by
+    # machine, and `orch_multi_<sess>` names them all for the doctor's WARN. Every
+    # orchestrator's row stays in the cache (fleet-remote-view.sh open finds it
+    # there), the rows skip every one of them (tmux-dashboard-rows.sh reads the
+    # worker_ids from `orch_all_<sess>`), and 「新任务」 wears the line's state
     # (fleet-sidebar.py), the writing area its busy line (fleet-compose.py).
+    home = ""
+    try:
+        cp = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"),
+                          "claude-fleet", "connect.json")
+        with open(cp, encoding="utf-8") as cf:
+            home = str((json.load(cf) or {}).get("last") or "")
+    except (OSError, ValueError, AttributeError):
+        home = ""
+    def first_label(n):
+        return (n or "").split(".")[0].lower()
     orch = sorted((r for r in rows if r["role"] == "orchestrator" and not (r["local"] and r["local"] != f["sess"])),
-                  key=lambda r: (r["av"] != "online", r["node"]))
-    write(os.path.join(gdir, "orch_" + f["sess"]),
-          "".join("\x1f".join(clean(v) for v in (r["wid"], r["node"], r["av"], r["state"], r["needs"],
-                                                  r["detail"][:120])) + "\n" for r in orch))
+                  key=lambda r: (r["av"] != "online", not home or first_label(r["node"]) != first_label(home), r["node"]))
+    line = lambda r: "\x1f".join(clean(v) for v in (r["wid"], r["node"], r["av"], r["state"], r["needs"],
+                                                      r["detail"][:120])) + "\n"
+    write(os.path.join(gdir, "orch_" + f["sess"]), "".join(line(r) for r in orch[:1]))
+    write(os.path.join(gdir, "orch_all_" + f["sess"]), "".join(line(r) for r in orch))
+    write(os.path.join(gdir, "orch_multi_" + f["sess"]),
+          "".join(clean(r["node"]) + "\x1f" + clean(r["av"]) + "\n" for r in orch) if len(orch) > 1 else "")
     # The batches nobody drives (issue #1916): `epicstale_<sess>` beside the cache,
     # one line per (machine, EPIC) — `<owner/name>#<N> US <machine> US <online|lost>
     # US <age s> US <title> US <local 1|0>` — off any row of that machine (every

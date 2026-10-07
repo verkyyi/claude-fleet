@@ -497,10 +497,13 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
   # The orchestrating session (issue #1957) is no row: 「新任务」 wears it
-  # (fleet-sidebar.py). Its worker_ids are fleet-hub-sessions.sh's orch_<sess>.
-  _orchw=' '
-  if [ -s "$G/orch_$FLEET_SESSION" ]; then
-    while IFS=$US read -r _ow _; do [ -n "$_ow" ] && _orchw+="wid:$_ow "; done < "$G/orch_$FLEET_SESSION"
+  # (fleet-sidebar.py). Its worker_ids are fleet-hub-sessions.sh's orch_all_<sess>
+  # — every one still answering (issue #2117: orch_<sess> keeps one line); a cache
+  # older than #2117 has only orch_<sess>.
+  _orchw=' ' _orchf="$G/orch_all_$FLEET_SESSION"
+  [ -e "$_orchf" ] || _orchf="$G/orch_$FLEET_SESSION"
+  if [ -s "$_orchf" ]; then
+    while IFS=$US read -r _ow _; do [ -n "$_ow" ] && _orchw+="wid:$_ow "; done < "$_orchf"
   fi
   while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic; do
     case "$_orchw" in *" $r_wid "*) continue ;; esac

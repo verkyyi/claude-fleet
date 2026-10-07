@@ -239,6 +239,10 @@ type Server struct {
 	// (claude-fleet#1421), so two heartbeat triggers never push one relay
 	// twice in the same instant.
 	relayLocks sync.Map // endpoint ID → *sync.Mutex
+
+	// orchHost is who asked to hold the orchestrator, and serialises the pick
+	// (claude-fleet#2117, fleet_orchestrator.go).
+	orchHost orchState
 	// relayExpiredAt is when pending relays were last expired (UnixNano).
 	relayExpiredAt atomic.Int64
 }
@@ -352,6 +356,9 @@ func (s *Server) routes() *routeMux {
 		// outage, with its own token; the operator flags any machine through
 		// /v1/fleet/settings.
 		mux.HandleFunc("/v1/node/maintenance", s.handleNodeMaintenance)
+		// The person's one orchestrator (claude-fleet#2117): each machine asks,
+		// with its own token, whether it is the one to hold it.
+		mux.HandleFunc("/v1/node/orchestrator", s.handleNodeOrchestrator)
 		// Machine-to-machine access (claude-fleet#1626): a node asks, with its
 		// own token, for a five-minute certificate to one other machine of
 		// the same owner; the operator reads every issuance.

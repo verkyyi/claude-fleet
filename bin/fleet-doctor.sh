@@ -2515,6 +2515,18 @@ if [ -f "$_at" ] && command -v python3 >/dev/null 2>&1; then
   esac
 fi
 
+# --- orch: the person has ONE orchestrating session (issue #2117) ---
+# The client's refresh loop writes orch_multi_<sess> when more than one machine
+# still answers with one (fleet-hub-sessions.sh); the hub names the holder and
+# every other machine closes its own on the next tick, so a lasting line here is
+# a machine that cannot ask (no node token, an old hub) or FLEET_ORCHESTRATOR
+# forced on in two places. Silent when there is no client cache here.
+for _of in "${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}"/orch_multi_*; do
+  [ -s "$_of" ] || continue
+  _om=$(awk -F '\037' '{ printf "%s%s(%s)", (NR > 1 ? " " : ""), $1, $2 }' "$_of")
+  warn orch "${_of##*/orch_multi_}: 不止一个编排会话 — $_om (fix: 每台的 \`fleet-orchestrator.sh where <fleet>\` 应只有一台 here；不能问入口的那台补 node token，或去掉它的 FLEET_ORCHESTRATOR=1)"
+done
+
 # --- auto-handoff nudge: does the Stop hook SEE the threshold? (issue #561) ---
 # FLEET_AUTO_HANDOFF_PCT=60 sat in the global fleet.conf for weeks while the Stop
 # hook (bin/set-claude-state.sh) read the knob from its ENVIRONMENT — which nothing
