@@ -1,0 +1,34 @@
+# claudefleet.24haowan.com is the address; ccquota.24haowan.com stays until
+# every client has moved to the new one (EPIC #1982). The `24haowan.com` TLS
+# secret is the domain's wildcard certificate.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ccquota-hub
+spec:
+  tls:
+    - hosts:
+        - claudefleet.24haowan.com
+        - ccquota.24haowan.com
+      secretName: 24haowan.com
+  rules:
+    - host: claudefleet.24haowan.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ccquota-hub
+                port:
+                  number: 80
+    - host: ccquota.24haowan.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ccquota-hub
+                port:
+                  number: 80

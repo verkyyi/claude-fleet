@@ -1,0 +1,17 @@
+# Production: namespace new-deploy on the Aliyun ACK cluster, image from ACR
+# (the cluster pulls over the VPC endpoint; hub-deploy pushes over the public
+# one — same repository). The image tag stays the placeholder: hub-deploy pins
+# `prod-<sha7>` at deploy time (../../README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: new-deploy
+resources:
+  - ../../base
+images:
+  - name: ccquota
+    newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/ccquota
+  - name: busybox
+    newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/busybox
+patches:
+  - path: deployment-env.yaml
+  - path: ingress-hosts.yaml

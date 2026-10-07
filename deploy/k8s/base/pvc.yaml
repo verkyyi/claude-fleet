@@ -1,0 +1,18 @@
+# The hub's one data disk: a single SQLite file (+ the pre-deploy snapshots).
+# hub-deploy may only READ this object — growing it is a person's
+# `kubectl apply` (online expansion, never shrink; see ../RUNBOOK.md).
+# Keep it byte-for-byte what is live, or every deploy's apply would try a patch
+# the deploy role is not allowed to make.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ccquota-data
+  labels:
+    app: ccquota-hub
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: alicloud-disk-topology-alltype
+  resources:
+    requests:
+      storage: 40Gi

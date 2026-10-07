@@ -1,0 +1,25 @@
+name: hub ACR push credentials (prod, master only)
+description: >
+  Trade this job's GitHub OIDC token for a short-lived ACR login (Aliyun STS as
+  RAM role gha-claudefleet-deploy → cr:GetAuthorizationToken), written into
+  ~/.docker/config.json for both the public and the VPC registry endpoint.
+  The job must declare `environment: prod` and `permissions: id-token: write`.
+
+# EPIC #1982 C1 (issue #1983). Ported from 24haowan-monorepo's acr-credentials
+# action. The role's ACR policy (gha-claudefleet-acr-push) pulls and pushes
+# 24haowan/ccquota only — it cannot create or delete a repository.
+inputs:
+  duration:
+    description: "STS (= login) lifetime in seconds (900–7200); must cover the last push"
+    required: false
+    default: "3600"
+
+runs:
+  using: composite
+  steps:
+    - name: ACR credentials (OIDC → STS → GetAuthorizationToken)
+      shell: bash
+      env:
+        DURATION: ${{ inputs.duration }}
+        ACR_JS: ${{ github.action_path }}/acr.js
+      run: node "$ACR_JS" --duration "$DURATION"
