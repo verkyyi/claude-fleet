@@ -86,6 +86,15 @@ jobs:
         run: |
           set -o pipefail
           go test -race -count=1 -v ./internal/store/... ./internal/api/... ./internal/leader/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
+      # claude-fleet#2216: `ccquota db migrate` on a million usage_events
+      # rows, without -race, each table's and phase's time in the summary.
+      - name: db migrate timing (1M rows)
+        env:
+          CCQUOTA_MOVE_SPEED_ROWS: '1000000'
+        run: |
+          set -o pipefail
+          go test -count=1 -v -run '^TestMoveDatabaseSpeed$' -timeout 15m ./internal/store/ 2>&1 | tee /tmp/move-speed.log | grep -E 'usage_events|indexes|moved|source:|--- |^(ok|FAIL)'
+          { echo '### db migrate timing (1M rows)'; echo; echo '```'; grep -E 'usage_events|indexes|moved|source:' /tmp/move-speed.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: skip 0
         run: |
           if grep -E '^ *(SKIP-PG|--- SKIP)' /tmp/pg.log; then

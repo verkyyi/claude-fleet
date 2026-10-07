@@ -172,13 +172,29 @@ func MoveDatabase(ctx context.Context, o MoveOptions) (*MoveReport, error) {
 		}
 	}
 
+	// Secondary indexes are dropped for the copy and rebuilt once at the end
+	// (claude-fleet#2216): one sort per index instead of a b-tree insert per
+	// row. Inside the same transaction, so a rollback puts them back too.
+	idx, err := dropSecondaryIndexes(ctx, tx, plans)
+	if err != nil {
+		return nil, err
+	}
+
 	rep := &MoveReport{}
+	srcHashes := map[string]TableCheck{}
 	fmt.Fprintf(out, "copy:\n")
 	for _, p := range plans {
 		t0 := time.Now()
-		n, err := copyTable(ctx, srcTx, tx, p)
+		var sh *rowHasher
+		if o.Verify {
+			sh = newRowHasher(p.kinds)
+		}
+		n, err := copyTable(ctx, srcTx, tx, p, sh)
 		if err != nil {
 			return nil, fmt.Errorf("copy %s: %w", p.table, err)
+		}
+		if sh != nil {
+			srcHashes[p.table] = TableCheck{Table: p.table, SrcRows: n, SrcHash: sh.sum()}
 		}
 		if err := alignIdentities(ctx, srcTx, tx, p); err != nil {
 			return nil, fmt.Errorf("align %s's sequence: %w", p.table, err)
@@ -195,9 +211,21 @@ func MoveDatabase(ctx context.Context, o MoveOptions) (*MoveReport, error) {
 	if _, err := tx.Exec(ctx, `SET CONSTRAINTS ALL IMMEDIATE`); err != nil {
 		return nil, fmt.Errorf("foreign keys: %w", err)
 	}
+	// After the foreign keys: Postgres builds no index on a table with
+	// deferred checks still pending.
+	t0 := time.Now()
+	if _, err := tx.Exec(ctx, `SET LOCAL maintenance_work_mem = '256MB'`); err != nil {
+		return nil, err
+	}
+	for _, def := range idx {
+		if _, err := tx.Exec(ctx, def); err != nil {
+			return nil, fmt.Errorf("rebuild an index: %w", err)
+		}
+	}
+	fmt.Fprintf(out, "  %-34s %12d built %6.1fs\n", "(indexes)", len(idx), time.Since(t0).Seconds())
 
 	if o.Verify {
-		if err := verifyPlans(ctx, srcTx, tx, plans, rep, out); err != nil {
+		if err := verifyPlans(ctx, srcTx, tx, plans, srcHashes, rep, out); err != nil {
 			return nil, err
 		}
 	}
@@ -274,7 +302,7 @@ func VerifyDatabase(ctx context.Context, from, to string, out io.Writer) (*MoveR
 		return nil, err
 	}
 	rep := &MoveReport{}
-	if err := verifyPlans(ctx, srcTx, tx, plans, rep, out); err != nil {
+	if err := verifyPlans(ctx, srcTx, tx, plans, nil, rep, out); err != nil {
 		return nil, err
 	}
 	return rep, nil
@@ -291,7 +319,10 @@ func openMoveSource(path string) (*sql.DB, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("source database: %w", err)
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
+	// A big page cache and the file mapped: the copy reads every page once,
+	// and a read() per page was most of the source side's time (#2216).
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)"+
+		"&_pragma=cache_size(-262144)&_pragma=mmap_size(4294967296)")
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
@@ -599,8 +630,15 @@ func moveGuard(ctx context.Context, tx pgx.Tx, overwrite bool) error {
 
 // ---- copy -------------------------------------------------------------------
 
-func copyTable(ctx context.Context, srcTx *sql.Tx, tx pgx.Tx, p movePlan) (int64, error) {
-	rows, err := srcTx.QueryContext(ctx, selectSQL(p.table, p.srcCols, nil))
+// copyTable streams one table into the target with COPY. With sh set it reads
+// in primary-key order and feeds every row to sh as it goes, so the verify
+// needs no second pass over the source.
+func copyTable(ctx context.Context, srcTx *sql.Tx, tx pgx.Tx, p movePlan, sh *rowHasher) (int64, error) {
+	var order []int
+	if sh != nil {
+		order = p.orderBy
+	}
+	rows, err := srcTx.QueryContext(ctx, selectSQL(p.table, p.srcCols, order))
 	if err != nil {
 		return 0, err
 	}
@@ -629,6 +667,9 @@ func copyTable(ctx context.Context, srcTx *sql.Tx, tx pgx.Tx, p movePlan) (int64
 				return nil, rowErr
 			}
 			out[i] = c
+		}
+		if sh != nil {
+			sh.add(out)
 		}
 		return out, nil
 	})
@@ -730,6 +771,13 @@ func convertValue(v any, k colKind) (any, error) {
 	case kindBytes:
 		switch x := v.(type) {
 		case []byte:
+			// SQLite hands a zero-length BLOB back as a nil []byte inside a
+			// non-nil interface; pgx writes a nil []byte as NULL. Empty stays
+			// empty (claude-fleet#2216: the 2026-10-07 rehearsal turned every
+			// empty fleet_worker_records.content into NULL).
+			if x == nil {
+				return []byte{}, nil
+			}
 			return x, nil
 		case string:
 			return []byte(x), nil
@@ -747,12 +795,17 @@ func convertValue(v any, k colKind) (any, error) {
 
 // ---- verify -----------------------------------------------------------------
 
-func verifyPlans(ctx context.Context, srcTx *sql.Tx, tx pgx.Tx, plans []movePlan, rep *MoveReport, out io.Writer) error {
+// verifyPlans checks every table. src holds the source side already hashed
+// during the copy (MoveDatabase); a table missing from it — every table, for
+// VerifyDatabase — is read from the source here, beside the target's read.
+func verifyPlans(ctx context.Context, srcTx *sql.Tx, tx pgx.Tx, plans []movePlan, src map[string]TableCheck,
+	rep *MoveReport, out io.Writer) error {
 	fmt.Fprintf(out, "verify:\n")
 	seen := map[string]bool{}
 	for _, p := range plans {
 		seen[p.dstTable] = true
-		c, err := checkTable(ctx, srcTx, tx, p)
+		t0 := time.Now()
+		c, err := checkTable(ctx, srcTx, tx, p, src)
 		if err != nil {
 			return fmt.Errorf("verify %s: %w", p.table, err)
 		}
@@ -766,7 +819,7 @@ func verifyPlans(ctx context.Context, srcTx *sql.Tx, tx pgx.Tx, plans []movePlan
 		if c.SrcHash != c.DstHash {
 			hashes += " ≠ " + c.DstHash[:16]
 		}
-		fmt.Fprintf(out, "  %s %-34s %12d %s %-12d %s\n", mark, p.table, c.SrcRows, rel, c.DstRows, hashes)
+		fmt.Fprintf(out, "  %s %-34s %12d %s %-12d %s %6.1fs\n", mark, p.table, c.SrcRows, rel, c.DstRows, hashes, time.Since(t0).Seconds())
 	}
 	// A table only the target has is fine while it is empty (a newer hub's
 	// table, or the move's own record); rows in one did not come from here.
@@ -803,86 +856,160 @@ func countDiffer(rep *MoveReport) int {
 }
 
 // checkTable counts and digests one table on both sides, rows in primary-key
-// order.
-func checkTable(ctx context.Context, srcTx *sql.Tx, tx pgx.Tx, p movePlan) (TableCheck, error) {
-	c := TableCheck{Table: p.table}
-	h := sha256.New()
+// order — the source from src when the copy already hashed it, else read here
+// while the target is read.
+func checkTable(ctx context.Context, srcTx *sql.Tx, tx pgx.Tx, p movePlan, src map[string]TableCheck) (TableCheck, error) {
+	c, have := src[p.table]
+	c.Table = p.table
+	var srcErr error
+	done := make(chan struct{})
+	if have {
+		close(done)
+	} else {
+		go func() {
+			defer close(done)
+			c.SrcRows, c.SrcHash, srcErr = hashSource(ctx, srcTx, p)
+		}()
+	}
+
+	h := newRowHasher(p.kinds)
+	var dstRows int64
+	dstErr := func() error {
+		rows, err := tx.Query(ctx, selectSQL(p.dstTable, p.dstCols, p.orderBy))
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			v, err := rows.Values()
+			if err != nil {
+				return err
+			}
+			if err := h.add(v); err != nil {
+				return err
+			}
+			dstRows++
+		}
+		return rows.Err()
+	}()
+	<-done
+	if srcErr != nil {
+		return c, srcErr
+	}
+	if dstErr != nil {
+		return c, dstErr
+	}
+	c.DstRows, c.DstHash = dstRows, h.sum()
+	return c, nil
+}
+
+func hashSource(ctx context.Context, srcTx *sql.Tx, p movePlan) (int64, string, error) {
+	h := newRowHasher(p.kinds)
 	rows, err := srcTx.QueryContext(ctx, selectSQL(p.table, p.srcCols, p.orderBy))
 	if err != nil {
-		return c, err
+		return 0, "", err
 	}
+	defer rows.Close()
 	vals := make([]any, len(p.srcCols))
 	ptrs := make([]any, len(vals))
 	for i := range vals {
 		ptrs[i] = &vals[i]
 	}
+	var n int64
 	for rows.Next() {
 		if err := rows.Scan(ptrs...); err != nil {
-			rows.Close()
-			return c, err
+			return n, "", err
 		}
-		if err := hashRow(h, vals, p.kinds); err != nil {
-			rows.Close()
-			return c, err
+		if err := h.add(vals); err != nil {
+			return n, "", err
 		}
-		c.SrcRows++
+		n++
 	}
-	rows.Close()
 	if err := rows.Err(); err != nil {
-		return c, err
+		return n, "", err
 	}
-	c.SrcHash = hex.EncodeToString(h.Sum(nil))
-
-	h = sha256.New()
-	pgRows, err := tx.Query(ctx, selectSQL(p.dstTable, p.dstCols, p.orderBy))
-	if err != nil {
-		return c, err
-	}
-	defer pgRows.Close()
-	for pgRows.Next() {
-		v, err := pgRows.Values()
-		if err != nil {
-			return c, err
-		}
-		if err := hashRow(h, v, p.kinds); err != nil {
-			return c, err
-		}
-		c.DstRows++
-	}
-	if err := pgRows.Err(); err != nil {
-		return c, err
-	}
-	c.DstHash = hex.EncodeToString(h.Sum(nil))
-	return c, nil
+	return n, h.sum(), nil
 }
 
-// hashRow feeds one row into h, each value in the target column's kind and
-// length-prefixed, so ("ab","c") and ("a","bc") never hash alike.
-func hashRow(h hash.Hash, vals []any, kinds []colKind) error {
-	h.Write([]byte{'r'})
+// rowHasher is a table's SHA-256 over its rows, each value in the target
+// column's kind and length-prefixed, so ("ab","c") and ("a","bc") never hash
+// alike. One buffer is reused across rows: the hash runs over every row of a
+// million-row table, and a formatted write per value cost as much as the copy.
+type rowHasher struct {
+	h     hash.Hash
+	kinds []colKind
+	buf   []byte
+}
+
+func newRowHasher(kinds []colKind) *rowHasher {
+	return &rowHasher{h: sha256.New(), kinds: kinds}
+}
+
+func (r *rowHasher) add(vals []any) error {
+	b := append(r.buf[:0], 'r')
 	for i, v := range vals {
-		c, err := convertValue(v, kinds[i])
+		c, err := convertValue(v, r.kinds[i])
 		if err != nil {
 			return err
 		}
 		switch x := c.(type) {
 		case nil:
-			h.Write([]byte{'n'})
+			b = append(b, 'n')
 		case int64:
-			fmt.Fprintf(h, "i%d;", x)
+			b = append(strconv.AppendInt(append(b, 'i'), x, 10), ';')
 		case float64:
-			fmt.Fprintf(h, "f%s;", strconv.FormatFloat(x, 'g', -1, 64))
+			b = append(strconv.AppendFloat(append(b, 'f'), x, 'g', -1, 64), ';')
 		case bool:
-			fmt.Fprintf(h, "b%t;", x)
+			b = append(strconv.AppendBool(append(b, 'b'), x), ';')
 		case string:
-			fmt.Fprintf(h, "s%d:", len(x))
-			io.WriteString(h, x)
+			b = append(append(strconv.AppendInt(append(b, 's'), int64(len(x)), 10), ':'), x...)
 		case []byte:
-			fmt.Fprintf(h, "s%d:", len(x))
-			h.Write(x)
+			b = append(append(strconv.AppendInt(append(b, 's'), int64(len(x)), 10), ':'), x...)
 		}
 	}
+	r.buf = b
+	r.h.Write(b)
 	return nil
+}
+
+func (r *rowHasher) sum() string { return hex.EncodeToString(r.h.Sum(nil)) }
+
+// dropSecondaryIndexes drops every index of the copied tables that backs no
+// constraint (a primary key or a UNIQUE constraint stays) and returns the
+// statements that rebuild them.
+func dropSecondaryIndexes(ctx context.Context, tx pgx.Tx, plans []movePlan) ([]string, error) {
+	var names, defs []string
+	for _, p := range plans {
+		rows, err := tx.Query(ctx, `
+			SELECT i.relname, pg_get_indexdef(i.oid)
+			FROM pg_index x
+			JOIN pg_class i ON i.oid = x.indexrelid
+			JOIN pg_class t ON t.oid = x.indrelid
+			WHERE t.relname = $1 AND t.relnamespace = current_schema()::regnamespace
+			  AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = x.indexrelid)
+			ORDER BY i.relname`, p.dstTable)
+		if err != nil {
+			return nil, fmt.Errorf("inspect %s's indexes: %w", p.dstTable, err)
+		}
+		for rows.Next() {
+			var n, d string
+			if err := rows.Scan(&n, &d); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			names, defs = append(names, n), append(defs, d)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	for _, n := range names {
+		if _, err := tx.Exec(ctx, `DROP INDEX `+quoteIdent(n)); err != nil {
+			return nil, fmt.Errorf("drop index %s for the copy: %w", n, err)
+		}
+	}
+	return defs, nil
 }
 
 // ---- helpers ----------------------------------------------------------------
