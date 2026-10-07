@@ -2679,9 +2679,10 @@ def ui(screen, session, worker, lock):
             return rest
         base = [row for row in rows if row[0] not in (PORTAL_KEY, PLACING_KEY)]
         plan = {"verb": "compose", "what": "new" if data.get("issue", True) else "scratch",
-                "title": data.get("title", ""), "name": "", "payload": str(dst), "node": "auto",
+                "title": data.get("title", ""), "name": "", "payload": str(dst),
+                "node": data.get("node") or "auto",   # the machine picked in the area (#2232); null = auto
                 "cid": data.get("id", ""), "at": data.get("at", 0),
-                "label": "", "repo": data.get("repo") or repo_of(base, data.get("prev") or "")}
+                "label": data.get("node") or "", "repo": data.get("repo") or repo_of(base, data.get("prev") or "")}
         if data.get("repo_mode") in ("none", "multi"):
             # 「不关联仓库」 / 「多个仓库」 (issue #1956): no repo to resolve — a
             # session of no repo, said to --send as --no-repo / --multi.

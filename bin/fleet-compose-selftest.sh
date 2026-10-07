@@ -56,6 +56,11 @@
 #   O. (pure) fleet-history.sh drafts: a scratch book generation that holds a
 #      child's report is a draft of its day — unless its pfid is a session the
 #      writing area opened; a relayed row is no child; sends / started / the median
+# The machine and the agent (issue #2232, EPIC #2230 C2):
+#   Q. (pure) --send hands the payload's `node` / `agent` on as --node / --agent
+#      (null = --node auto and no --agent — an older payload's argv, byte for byte);
+#      a named --node / --agent beats the payload's; an agent other than claude /
+#      codex is refused (2) before anything is placed
 # The direct key (issue #2146):
 #   P. ⌘N ON the writing area with an orchestrator: the list's jump to wid:U/orch,
 #      the stage on it, nothing pasted; ⌘N again: back to the writing area. No
@@ -532,5 +537,32 @@ type_ '\033[928~'
 sleep 1
 eq 'P: no orchestrator → ⌘N on the writing area changes nothing' "$pw|" "$(st_ display-message -p -t fcs-stage: '#{window_id}')|$(cat "$VIEW")"
 has 'P: none → greyed, saying why' "$(pmenu | sed -n 2p | cut -f1,2)" $'b\t-进编排会话 · 这台机器没有编排会话'
+# Q. (pure) the machine and the agent (issue #2232): a sandbox bin/ whose
+# fleet-client-place.sh prints its argv (the body file's path masked)
+QB="$WORK/q-bin"; mkdir -p "$QB"
+for f in "$BIN"/*; do ln -sf "$f" "$QB/"; done
+rm -f "$QB/fleet-client-place.sh"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" | sed "s#--body-file [^ ]*#--body-file B#"\n' > "$QB/fleet-client-place.sh"
+chmod +x "$QB/fleet-client-place.sh"
+qsend() { printf '%s\n' "$1" > "$WORK/q.json"; shift
+  FLEET_SWITCH_STATE="$WORK/q-state" FLEET_COMPOSE_LOG="$WORK/q.ndjson" python3 "$QB/fleet-compose.py" --send "$WORK/q.json" "$@" 2>&1; }
+mkdir -p "$WORK/q-state"
+eq 'Q: an older payload (no node, no agent) → --node auto, no --agent' \
+  'acme/web new --title 看日志 --body-file B --node auto' \
+  "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web"}')"
+eq 'Q: node / agent null → the same argv' \
+  'acme/web new --title 看日志 --body-file B --node auto' \
+  "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":null,"agent":null}')"
+eq 'Q: m4 + codex → --node m4 --agent codex' \
+  'acme/web new --title 看日志 --body-file B --node m4 --agent codex' \
+  "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":"m4","agent":"codex"}')"
+eq 'Q: a scratch of no repo carries them too' \
+  '- scratch --name 看日志 --body-file B --node m4 --agent codex' \
+  "$(qsend '{"title":"看日志","body":"看日志","repo_mode":"none","node":"m4","agent":"codex"}')"
+eq 'Q: a named --node / --agent beats the payload'"'"'s' \
+  'acme/web new --title 看日志 --body-file B --node m5 --agent claude' \
+  "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":"m4","agent":"codex"}' --node m5 --agent claude)"
+out=$(qsend '{"title":"看日志","repo":"acme/web","agent":"gpt"}'); rc=$?
+eq 'Q: an unknown agent is refused (2), nothing placed' '2|fleet-compose: agent is claude or codex, not gpt' "$rc|$out"
 [ "$FAIL" = 0 ] || { printf 'fleet-compose selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS"; exit 1; }
 printf 'fleet-compose selftest: PASS (%d checks)\n' "$CHECKS"

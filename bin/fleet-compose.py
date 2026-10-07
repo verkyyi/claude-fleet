@@ -6,7 +6,7 @@
                                           window (fleet-shell.sh portal opens it:
                                           ⌘N / prefix c / a tap on 「新任务」)
     fleet-compose.py --send <payload.json> [--repo R | --no-repo | --multi]
-                     [--node N] [--reap P]
+                     [--node N] [--agent claude|codex] [--reap P]
                                           the ONE way out: the payload a ↵ wrote,
                                           to the machine that opens it —
                                           fleet-client-place.sh <repo> new (an
@@ -14,8 +14,12 @@
                                           <repo> scratch (「记成 issue」 off: a
                                           scratch session), or `-` scratch with
                                           the text as its seed (「不关联仓库」 /
-                                          「多个仓库」, issue #1956). Prints the
-                                          place's one line and returns its code.
+                                          「多个仓库」, issue #1956). The machine
+                                          and the agent (issue #2232): --node /
+                                          --agent, else the payload's `node` /
+                                          `agent` (null = auto / the fleet's
+                                          default), handed on as they are. Prints
+                                          the place's one line and returns its code.
                                           (The orchestrator's route is no --send:
                                           the draft is handed over on the stage —
                                           carry(), issue #1957.)
@@ -259,17 +263,25 @@ def hub_repos():
         return None
 
 
-def send(path, repo="", node="auto", reap="", mode=""):
+def send(path, repo="", node="", reap="", mode="", agent=""):
     """The way out (`--send`): the payload to fleet-client-place.sh. Prints its
     line, returns its code. 2 = nothing to send / no repo to send it to. `mode`
     (none / multi, from --no-repo / --multi) beats the payload's repo_mode; a
-    named --repo beats both."""
+    named --repo beats both. The machine and the agent (issue #2232, EPIC #2230
+    共同约定 1): a named --node / --agent, else the payload's `node` / `agent`;
+    null or absent = auto / the fleet's default (no --agent at all), so an
+    older payload hands on exactly the argv it always did."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         print("fleet-compose: cannot read %s: %s" % (path, error), file=sys.stderr)
         return 2
     title = data.get("title") or ""
+    node = node or data.get("node") or "auto"
+    agent = agent or data.get("agent") or ""
+    if agent not in ("claude", "codex", ""):
+        print("fleet-compose: agent is claude or codex, not %s" % agent, file=sys.stderr)
+        return 2
     if not title:
         print("fleet-compose: the payload has no title", file=sys.stderr)
         return 2
@@ -316,7 +328,9 @@ def send(path, repo="", node="auto", reap="", mode=""):
         with os.fdopen(fd, "w", encoding="utf-8") as out:
             out.write(text)
         args += ["--body-file", bodyf]
-    args += ["--node", node or "auto"]
+    args += ["--node", node]
+    if agent:
+        args += ["--agent", agent]
     if reap:
         args += ["--reap", reap]
     try:
@@ -962,7 +976,7 @@ def main(argv):
     global TEXT
     TEXT = load_text()
     if argv[:1] in (["--send"], ["payload"]) and len(argv) >= 2:
-        opts = {"--repo": "", "--node": "auto", "--reap": ""}
+        opts = {"--repo": "", "--node": "", "--agent": "", "--reap": ""}
         flags = {"--no-repo": "none", "--multi": "multi", "--no-issue": ""}
         mode, issue, chosen = "", True, 0
         rest = argv[2:]
@@ -989,7 +1003,7 @@ def main(argv):
             data = payload(text, issue, repo=opts["--repo"], mode=mode or ("repo" if opts["--repo"] else "auto"))
             print(json.dumps(data, ensure_ascii=False, sort_keys=True))
             return 0
-        return send(argv[1], opts["--repo"], opts["--node"], opts["--reap"], mode)
+        return send(argv[1], opts["--repo"], opts["--node"], opts["--reap"], mode, opts["--agent"])
     if argv[:1] == ["--orch"] and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--client"):
         return to_orch(argv[1], argv[3] if len(argv) == 4 else "")
     session = ""
