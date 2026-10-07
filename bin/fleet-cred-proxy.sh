@@ -9,12 +9,18 @@
 #                                 launcher only re-reads the config every
 #                                 FLEET_CRED_PROXY_IDLE_SECS (60) and starts one
 #                                 when it turns on; turned off → the proxy stops.
+#                                 A proxy that dies is restarted within
+#                                 FLEET_CRED_PROXY_WATCH_SECS (2) + a 2s breath.
 #   fleet-cred-proxy.sh ensure    start it detached when it is on and not running
 #                                 (a computer with no daemon — a client-only one);
 #                                 prints the port. Exit 3 = switched off.
 #   fleet-cred-proxy.sh port      the port sessions use (exit 1 = not running)
 #   fleet-cred-proxy.sh route|mint|rebind|revoke|attach|status …
 #                                 the control socket — see fleet-cred-proxy.py
+#   fleet-cred-proxy.sh doctor    fleet-doctor's `cred` row (issue #1975): ONE line
+#                                 `<PASS|WARN|FAIL>` TAB `<text>` — trust, the road
+#                                 each agent takes and why, the proxy, credsep, renewal.
+#                                 Exit 3 = switched off (no row).
 #
 # Config (fleet.conf [common], or the environment): FLEET_CRED_PROXY (0 = today's
 # wiring byte for byte, the default), FLEET_CRED_PROXY_PORT, FLEET_CRED_RELAY_URL,
@@ -121,21 +127,29 @@ case "$cmd" in
   node-token|node-hash|probe|store|relay)
     echo "fleet-cred-proxy: $cmd: not separated (bin/fleet-credsep.sh)" >&2; exit 3 ;;
   run)
-    child=''
+    child=''; on_now=0; seen=-1
     stop_child() { [ -n "$child" ] && kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; child=''; }
     trap 'stop_child; exit 0' TERM INT
+    # Two clocks (issue #1975): the config is re-read every $IDLE seconds, the
+    # proxy is looked at every $WATCH — a dead proxy is every session's next
+    # request on this login, so it comes back within seconds, not a minute.
+    WATCH="${FLEET_CRED_PROXY_WATCH_SECS:-2}"
     while :; do
-      if [ "$(switch_now)" = 1 ]; then
-        relay_due && relay_fetch
+      if [ "$seen" -lt 0 ] || [ $(( $(date +%s) - seen )) -ge "$IDLE" ]; then
+        on_now=$(switch_now); seen=$(date +%s)
+        [ "$on_now" = 1 ] && relay_due && relay_fetch
+      fi
+      if [ "$on_now" = 1 ]; then
         if [ -z "$child" ] || ! kill -0 "$child" 2>/dev/null; then
           [ -n "$child" ] && { wait "$child" 2>/dev/null; sleep 2; }   # crashed: a short breath, then again
           python3 -I "$PY" serve --parent-watch "$@" &
           child=$!
         fi
+        sleep "$WATCH" &
       else
         stop_child
+        sleep "$IDLE" &
       fi
-      sleep "$IDLE" &
       wait $! 2>/dev/null
     done
     ;;
@@ -157,6 +171,63 @@ case "$cmd" in
     ;;
   route|mint|rebind|revoke|attach|status)
     exec python3 -I "$PY" --state "$STATE" "$cmd" "$@"
+    ;;
+  doctor)
+    on || exit 3
+    if ! live_pid >/dev/null; then
+      if [ "$(uname -s)" = Darwin ]; then kick="launchctl kickstart -k gui/$(id -u)/com.claude-fleet.cred-proxy"
+      else kick="systemctl --user restart claude-fleet-cred-proxy"; fi
+      printf 'FAIL\t代理没在跑：这台登录上的会话用不了订阅（启动器 2 秒内会拉起；没起来看 logs/cred-proxy.log，%s）\n' "$kick"
+      exit 0
+    fi
+    st=$(python3 -I "$PY" --state "$STATE" status --json 2>&1) || { printf 'FAIL\t代理不回话：%s\n' "$st"; exit 0; }
+    rc=$(python3 -I "$PY" --state "$STATE" route --provider claude --json 2>/dev/null)
+    rx=$(python3 -I "$PY" --state "$STATE" route --provider codex --json 2>/dev/null)
+    FCD_ST="$st" FCD_RC="$rc" FCD_RX="$rx" FCD_SEP="${FLEET_CRED_SEPARATE:-0}" python3 -I - <<'DOC'
+import json, os, time
+def j(k):
+    try:
+        return json.loads(os.environ.get(k) or "{}")
+    except ValueError:
+        return {}
+st, rc, rx = j("FCD_ST"), j("FCD_RC"), j("FCD_RX")
+NAME = {"direct": "direct 直连", "relay": "relay 经新加坡转发", "central": "central 交给中心代理"}
+TRUST = {"trusted": "可信", "untrusted": "不可信", "unknown": "可信与否不知道"}
+lv, notes = "PASS", []
+trust = st.get("trust") or "unknown"
+if trust == "unknown":
+    lv = "WARN"
+    notes.append("入口问不到、也没有记过：按不可信走 central")
+def road(name, r):
+    if not r:
+        return "%s 问不出路" % name
+    return "%s 走 %s（%s）" % (name, NAME.get(r.get("route"), r.get("route")), r.get("reason", ""))
+parts = ["%s（%s）" % (TRUST.get(trust, trust), st.get("trust_why", "")), road("Claude", rc)]
+if rx and rx.get("route") != rc.get("route"):
+    parts.append(road("Codex", rx))
+elif rx:
+    parts.append("Codex 同路")
+if any(r.get("route") == "central" for r in (rc, rx)) and not st.get("central"):
+    lv = "WARN"
+    notes.append("没有中心代理地址（FLEET_CRED_CENTRAL_URL / 入口）")
+parts.append("代理 pid %s 127.0.0.1:%s" % (st.get("pid"), st.get("port")))
+if st.get("separated"):
+    parts.append("凭据隔离 开")
+elif os.environ.get("FCD_SEP") == "1":
+    lv = "WARN"
+    parts.append("凭据隔离 应开未开（看 credsep 行）")
+else:
+    parts.append("凭据隔离 关")
+rn = st.get("renew") or {}
+if rn.get("err") and rn.get("last_err", 0) >= rn.get("last_ok", 0):
+    lv = "WARN"
+    parts.append("通行证续签失败 %d 次，最近 %d 秒前：%s"
+                 % (rn["err"], int(time.time() - rn["last_err"]), rn.get("err_why", "")))
+else:
+    parts.append("续签 正常（入口通行证 %d 次 · 本机会话凭据 %d 个续期 · 持有 %d 张）"
+                 % (rn.get("ok", 0), rn.get("local", 0), st.get("hub_passes", 0)))
+print("%s\t%s%s" % (lv, " · ".join(parts), ("；" + "；".join(notes)) if notes else ""))
+DOC
     ;;
   -h|--help|'')
     sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
