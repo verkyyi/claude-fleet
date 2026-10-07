@@ -4,10 +4,21 @@
 # EPIC #1967 C4). bin/fleet-credsep.py does the work; this resolves the login,
 # its conf and sudo.
 #
-#   fleet-credsep.sh install [--dry-run]    separate (needs `sudo -n`, once)
+#   fleet-credsep.sh install [--dry-run]    separate (needs `sudo -n`, once;
+#                                           --dry-run needs none: what it would do)
 #   fleet-credsep.sh uninstall [--dry-run]  undo: every file back where it was
+#                                           (--dry-run, no sudo: the steps back)
 #   fleet-credsep.sh status [--json]        separated or not (exit 3 = not)
 #   fleet-credsep.sh check                  the doctor's `credsep` row
+#   fleet-credsep.sh plan                   every login on this machine: its state
+#                                           and the exact commands — dry run, the
+#                                           ONE sudo to type, status, the way back
+#                                           (issue #2135; no sudo, changes nothing)
+#
+# Run as root (`sudo bash …/fleet-credsep.sh install`, the line this script and
+# the doctor print), the login is SUDO_USER's — or `--login <login>` — and its
+# conf dir is under THAT login's home: never root's (issue #2135, BREAK-IT
+# `cred-sep-sudo-root`). Root with neither is refused (exit 2).
 #   fleet-credsep.sh apply [--dry-run]      the install pass: converge on the
 #                                           switch — FLEET_CRED_SEPARATE=1 and not
 #                                           separated → install; 0 and separated →
@@ -26,9 +37,47 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-CONF="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
-LOGIN="$(id -un)"
 SUDO="${FLEET_CREDSEP_SUDO-sudo -n}"
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift
+# --login <login> may sit anywhere after the command; the rest pass through
+want='' rest=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --login)   want="${2:-}"; [ $# -gt 1 ] && shift ;;
+    --login=*) want="${1#--login=}" ;;
+    *) rest+=("$1") ;;
+  esac
+  shift
+done
+set -- ${rest[@]+"${rest[@]}"}
+
+# whose credentials: as root the login is SUDO_USER's or --login's, never root's
+# (a `sudo bash fleet-credsep.sh install` used to separate a `root` store and
+# leave the login's agent reading a node.env it no longer could — #2135)
+SELF="$(id -un)"
+if [ "$(id -u)" = 0 ]; then
+  LOGIN="${want:-${SUDO_USER:-}}"
+  if [ -z "$LOGIN" ] || [ "$LOGIN" = root ]; then
+    case "$cmd" in install|uninstall|apply)
+      echo "fleet-credsep: as root, say whose credentials: run it with sudo from the login, or add --login <login>" >&2
+      exit 2 ;;
+    esac
+    LOGIN="$SELF"
+  fi
+else
+  LOGIN="$SELF"
+  if [ -n "$want" ] && [ "$want" != "$SELF" ]; then
+    echo "fleet-credsep: --login $want is for root (sudo); this is $SELF" >&2; exit 2
+  fi
+fi
+if [ "$LOGIN" = "$SELF" ] && [ "$(id -u)" != 0 ]; then
+  CONF="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
+else
+  LHOME="$(python3 -I -c 'import pwd, sys; print(pwd.getpwnam(sys.argv[1]).pw_dir)' "$LOGIN" 2>/dev/null)" \
+    || { echo "fleet-credsep: no such login $LOGIN" >&2; exit 2; }
+  CONF="${FLEET_CONF_DIR:-$LHOME/.config/claude-fleet}"
+fi
 
 _env_switch="${FLEET_CRED_SEPARATE:-}"
 set -a
@@ -56,12 +105,18 @@ root_py() { # the privileged half, through sudo (env seams passed explicitly)
 can_sudo() { [ -z "$SUDO" ] || $SUDO true 2>/dev/null; }
 separated() { [ -f "$CONF/credsep.json" ]; }
 
-cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   install|uninstall)
+    if [ "${1:-}" = --dry-run ] && [ "$(id -u)" != 0 ]; then
+      # a dry run moves nothing: run as the login, no sudo (what the operator
+      # reads BEFORE typing the one sudo)
+      python3 -I "$BIN/fleet-credsep.py" "$cmd" --dry-run --login "$LOGIN" --conf-dir "$CONF" --install-dir "$BIN/.."
+      exit $?
+    fi
     can_sudo || { echo "fleet-credsep: $cmd needs password-less sudo once — run: sudo bash $BIN/fleet-credsep.sh $cmd" >&2; exit 4; }
     root_py "$cmd" "$@"
     ;;
+  plan) python3 -I "$BIN/fleet-credsep.py" plan --bin "$BIN" ;;
   status) py status --conf-dir "$CONF" "$@" ;;
   check)  py check --conf-dir "$CONF" ;;
   apply)

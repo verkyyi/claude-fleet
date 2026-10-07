@@ -7,6 +7,12 @@ front; install / uninstall run as ROOT (it calls them through `sudo -n`).
     uninstall --login L --conf-dir C [--dry-run]
     status    --conf-dir C [--json]                 (as the login)
     check     --conf-dir C                          (as the login: the doctor row)
+    plan      --bin B                               (anyone: every login's state + commands)
+
+--dry-run needs no root (bin/fleet-credsep.sh runs it as the login): it prints
+what would happen. Separated, the store is unreadable to the login, so the
+uninstall dry run reads the way back from C/credsep.json's `back` (every login
+path a credential left, the agent's service, the proxy's) — paths, no secret.
 
 What install does, each step idempotent:
   1. the role account _fleetcred (macOS: UID/GID in 450-499, shell
@@ -24,7 +30,8 @@ What install does, each step idempotent:
   6. the agent service now starts through fleet-credsep-launch.py agent (root,
      token down a pipe, then the login); the original definition is kept in
      backup/ for uninstall
-  7. C/credsep.json — the login-readable record that says "separated" (no secret)
+  7. C/credsep.json — the login-readable record that says "separated" (no secret),
+     with `back`: the paths uninstall puts things back to (issue #2135)
 
 uninstall reverses all of it: every credential file under the store goes back
 to the login's own path (the agent may have renewed them meanwhile), node.env
@@ -37,7 +44,8 @@ FLEET_CREDSEP_RUN_BASE, FLEET_CREDSEP_LOG_BASE, FLEET_CREDSEP_LIB,
 FLEET_CREDSEP_DAEMON_DIR, FLEET_CREDSEP_ROLE (an existing user — not created),
 FLEET_CREDSEP_SVC=0 (no launchctl/systemctl: the commands are printed; the role
 account is still created unless FLEET_CREDSEP_ROLE names one),
-FLEET_CREDSEP_TEST=1 (allow a non-root install into the sandbox).
+FLEET_CREDSEP_TEST=1 (allow a non-root install into the sandbox),
+FLEET_CREDSEP_HOMES / FLEET_CREDSEP_USERS (plan: the homes dir, a `name:home` list).
 """
 import argparse, grp, json, os, plistlib, pwd, re, shlex, shutil, subprocess, sys, time
 
@@ -63,6 +71,7 @@ TEST = os.environ.get("FLEET_CREDSEP_TEST") == "1"
 PY = "/usr/bin/python3"
 
 DRY = False
+MOVED = []      # [store path, login path] of every credential install moved (credsep.json `back`)
 
 
 def say(*a):
@@ -312,6 +321,7 @@ def install(a):
         f = os.path.join(acc, d, ".credentials.json")
         if d.endswith(".hub") and SAFE.match(d[:-4]) and os.path.isfile(f):
             move(f, os.path.join(R, "accounts", d, ".credentials.json"), ROLE); n += 1
+            MOVED.append([os.path.join(R, "accounts", d, ".credentials.json"), f])
             chown_tree(os.path.join(R, "accounts", d), ROLE)
     ne_path = os.path.join(conf, "node.env")
     ne = env_file(ne_path) if os.path.isfile(ne_path) and not os.path.islink(ne_path) else {}
@@ -321,6 +331,7 @@ def install(a):
              if SAFE.match(d)]:
         if os.path.isfile(f) and not os.path.islink(f) and hub_managed_codex(f):
             move(f, os.path.join(R, "codex", label, "auth.json"), ROLE); n += 1
+            MOVED.append([os.path.join(R, "codex", label, "auth.json"), f])
             chown_tree(os.path.join(R, "codex", label), ROLE)
     say("credentials: %d moved into %s" % (n, R))
     if ne:
@@ -329,6 +340,7 @@ def install(a):
             "# claude-fleet credsep (issue #1971) — node.env's lines WITHOUT the token; the token is in %s\n%s"
             % (R, pub), 0o600, login)
         move(ne_path, os.path.join(R, "node.env"), ROLE)
+        MOVED.append([os.path.join(R, "node.env"), ne_path])
         if not DRY:
             os.symlink(os.path.join(R, "node.env"), ne_path)
             chown(ne_path, login, follow=False)
@@ -390,7 +402,7 @@ def install(a):
             if not DRY:
                 os.unlink(s["path"])
             dp = os.path.join(DAEMON_DIR, "com.ccquota.agent.%s.plist" % login)
-            with open(bk, "rb") as f:
+            with open(s["path"] if DRY else bk, "rb") as f:
                 pl = plistlib.load(f)
             pl["Label"] = "com.ccquota.agent.%s" % login
             pl.pop("Program", None)
@@ -409,9 +421,14 @@ def install(a):
     elif not meta.get("agent"):
         say("agent: none on this login (no node) — only the files move")
 
+    prev = (record(conf) or {}).get("back") or {}
+    back = {"files": sorted({tuple(m) for m in (prev.get("files") or []) + MOVED}),
+            "agent": meta.get("agent"), "proxy": ppath}
+    back["files"] = [list(m) for m in back["files"]]
     put(os.path.join(conf, "credsep.json"),
         json.dumps({"separated": True, "root": R, "run": RUN, "role": ROLE, "lib": LIB,
-                    "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, indent=1) + "\n", 0o644, login)
+                    "since": (record(conf) or {}).get("since") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "back": back}, indent=1) + "\n", 0o644, login)
     say("credsep: ON —", R, "(%s only)" % ROLE)
 
 
@@ -448,6 +465,12 @@ def uninstall(a):
         meta = json.load(open(os.path.join(R, "meta.json")))
     except (OSError, ValueError):
         meta = {}
+    rec = record(conf)
+    if DRY and not rec and not meta:
+        say("credsep: not separated — nothing to undo (%s has no credsep.json)" % conf)
+        return 0
+    if DRY and not meta and rec:
+        return uninstall_plan(login, conf, rec)
     plabel = "com.claude-fleet.credsep.%s" % login if MAC else "claude-fleet-credsep-%s.service" % login
     ppath = os.path.join(DAEMON_DIR, plabel + (".plist" if MAC else ""))
     # the agent first: it must stop handing leases to a proxy about to go
@@ -523,6 +546,81 @@ def uninstall(a):
                 pass
     drop_role()
     say("credsep: OFF — every file back where it was")
+
+
+def uninstall_plan(login, conf, rec):
+    """The uninstall dry run AS THE LOGIN: the store is the role account's, so
+    the way back is read from credsep.json's `back` (paths only — issue #2135)."""
+    back = rec.get("back") or {}
+    R = rec.get("root") or paths(login)[0]
+    say("credsep: uninstall --dry-run for %s (the store %s is not readable here: the way back is read" % (login, R))
+    say("  from %s/credsep.json; run it under sudo for the store's own list)" % conf)
+    s = back.get("agent")
+    if s:
+        say("  1. agent: %s back to its original definition (%s, kept in %s/backup/), restarted"
+            % (s.get("label"), s.get("path"), R))
+    else:
+        say("  1. agent: none recorded — nothing to restore")
+    say("  2. proxy: %s stopped and removed" % (back.get("proxy") or "com.claude-fleet.credsep.%s" % login))
+    files = back.get("files") or []
+    say("  3. credentials back to the login (%d recorded, plus any lease the agent renewed into the store since):" % len(files))
+    for src, dst in files:
+        say("       %s → %s" % (src, dst))
+    say("  4. node.env a plain file again (0600, the login's); node.pub.env and credsep.json deleted")
+    say("  5. %s and %s deleted; with no other login separated, also %s and the role account %s"
+        % (R, rec.get("run") or paths(login)[1], rec.get("lib") or LIB, rec.get("role") or ROLE))
+    say("  then: FLEET_CRED_SEPARATE=0 in fleet.conf [common] (or the next sync's credsep pass undoes it the same way)")
+    return 0
+
+
+# ---- every login on the machine -----------------------------------------------------
+def plan(a):
+    """Every login with a fleet install here: its state and the exact commands —
+    the dry run, the ONE sudo to type, the checks, the way back (issue #2135).
+    Reads, never writes; another login's conf may be unreadable (state `?`)."""
+    homes = E("FLEET_CREDSEP_HOMES", "/Users" if MAC else "/home")
+    me = pwd.getpwuid(os.getuid()).pw_name
+    rows = []
+    users = [(p.pw_name, p.pw_dir) for p in pwd.getpwall()]
+    if os.environ.get("FLEET_CREDSEP_USERS"):       # selftest seam: `name:home` per line
+        users = [tuple(l.strip().split(":", 1)) for l in open(os.environ["FLEET_CREDSEP_USERS"]) if ":" in l]
+    for name, pdir in sorted(set(users)):
+        tool = os.path.join(pdir, ".claude", "fleet", "bin", "fleet-credsep.sh")
+        if os.path.dirname(pdir.rstrip("/")) != homes.rstrip("/"):
+            continue
+        if not os.path.isfile(tool):
+            try:
+                os.stat(tool)
+            except PermissionError:
+                pass            # a home we cannot look into: listed, state unknown
+            except OSError:
+                continue
+        rows.append((name, pdir, tool))
+    if not rows:
+        say("credsep plan: no login under %s has ~/.claude/fleet" % homes)
+        return 3
+    say("credsep plan — %d login(s) under %s; the dry runs change nothing, `sudo` is the one line you type" % (len(rows), homes))
+    for name, home, tool in rows:
+        conf = os.path.join(home, ".config", "claude-fleet")
+        try:
+            rec = json.load(open(os.path.join(conf, "credsep.json")))
+            state = "separated since %s" % rec.get("since", "?")
+        except FileNotFoundError:
+            state = "not separated" if os.access(conf, os.X_OK) else "? (conf not readable as %s)" % me
+        except (OSError, ValueError):
+            state = "? (conf not readable as %s)" % me
+        q = shlex.quote(tool)
+        as_ = "" if name == me else "sudo -u %s env HOME=%s " % (name, shlex.quote(home))
+        say("")
+        say("%s — %s" % (name, state))
+        say("  dry run     %sbash %s install --dry-run" % (as_, q))
+        say("  separate    sudo bash %s install --login %s" % (q, name))
+        say("  read        %sbash %s status ; %sbash %s check" % (as_, q, as_, q))
+        say("  way back    %sbash %s uninstall --dry-run   (then: sudo bash %s uninstall --login %s)"
+            % (as_, q, q, name))
+    say("")
+    say("then FLEET_CRED_SEPARATE=1 in each login's fleet.conf [common] so the sync keeps it (0 + sync = the way back)")
+    return 0
 
 
 # ---- the login's side -------------------------------------------------------------
@@ -637,7 +735,10 @@ def main():
         p.add_argument("--dry-run", action="store_true")
     s = sub.add_parser("status"); s.add_argument("--conf-dir", required=True); s.add_argument("--json", action="store_true")
     c = sub.add_parser("check"); c.add_argument("--conf-dir", required=True)
+    pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     a = ap.parse_args()
+    if a.cmd == "plan":
+        return plan(a)
     if a.cmd in ("install", "uninstall"):
         DRY = a.dry_run
         if not re.match(r"^[a-z_][a-z0-9_.-]{0,31}$", a.login):

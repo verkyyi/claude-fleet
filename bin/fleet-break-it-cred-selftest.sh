@@ -360,6 +360,45 @@ drill_cred_session_expire() {
   WHAT="会话中途凭据到期：入口通行证由代理续签（会话还拿着旧的照常 200），本地会话凭据随会话续期；会话结束即失效"
 }
 
+# cred-sep-sudo-root (issue #2135): the operator types what fleet-credsep.sh
+# itself says — `sudo bash …/fleet-credsep.sh install`. Under sudo `id` says
+# root; the install must still separate THE LOGIN (SUDO_USER) — its store, its
+# record, its agent — never a `root` store beside an agent left reading node.env.
+# Sandbox: every root path under the work dir (FLEET_CREDSEP_* seams), an `id`
+# shim playing root, the role account played by this user, no launchctl.
+drill_cred_sep_sudo_root() {
+  CAP=30
+  local me sb t0 out
+  me=$(id -un); sb="$WORK/sep"
+  mkdir -p "$sb/shim" "$sb/home/.config/claude-fleet/accounts/a1.hub" "$sb/daemons" "$sb/home/.ccquota"
+  cat > "$sb/shim/id" <<'EOF'
+#!/bin/sh
+case "$*" in -u) echo 0 ;; -un|"-u -n"|"-n -u") echo root ;; *) exec /usr/bin/id "$@" ;; esac
+EOF
+  chmod +x "$sb/shim/id"
+  printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-SEP","refreshToken":null}}' \
+    > "$sb/home/.config/claude-fleet/accounts/a1.hub/.credentials.json"
+  printf 'CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=ccq_SEP_SECRET\n' > "$sb/home/.config/claude-fleet/node.env"
+  printf 'export FLEET_CRED_SEPARATE=1\n' > "$sb/home/.config/claude-fleet/fleet.conf"
+  t0=$(now)
+  out=$(PATH="$sb/shim:$PATH" SUDO_USER="$me" HOME="$sb/home" FLEET_CONF_DIR="$sb/home/.config/claude-fleet" \
+    FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" FLEET_CREDSEP_LOG_BASE="$sb/log" \
+    FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" FLEET_CREDSEP_ROLE="$me" \
+    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_SUDO='' \
+    bash "$BIN/fleet-credsep.sh" install 2>&1)
+  SECS=$(since "$t0")
+  [ ! -e "$sb/db/root" ] || { WHY="under sudo the login was taken as root: the credentials went to $sb/db/root ($(printf '%s' "$out" | tail -1))"; return 1; }
+  [ -f "$sb/db/$me/node.env" ] && [ -f "$sb/db/$me/accounts/a1.hub/.credentials.json" ] \
+    || { WHY="the login's store $sb/db/$me was not filled: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  grep -q "\"root\": \"$sb/db/$me\"" "$sb/home/.config/claude-fleet/credsep.json" 2>/dev/null \
+    || { WHY="credsep.json does not name the login's store"; return 1; }
+  # root with neither SUDO_USER nor --login: refused, nothing touched
+  out=$(PATH="$sb/shim:$PATH" SUDO_USER='' HOME="$sb/home" FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_TEST=1 \
+    bash "$BIN/fleet-credsep.sh" install 2>&1); local rc=$?
+  [ "$rc" = 2 ] || { WHY="root without SUDO_USER / --login was not refused (rc $rc): $out"; return 1; }
+  WHAT="sudo 下照提示敲 install：凭据进的是登录 ${me} 自己的存储，不是 root 的；root 没 SUDO_USER 又没 --login 直接拒"
+}
+
 # ================================================================ run ===========
 FAILS=0; PASSES=0
 for fn in $(sed -n 's/^\(drill_cred_[a-z0-9_]*\)() *{.*/\1/p' "$0"); do

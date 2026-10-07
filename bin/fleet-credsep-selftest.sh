@@ -21,6 +21,12 @@
 #   F  the launcher's agent mode: the token arrives on fd 3, never in the env
 #   G  uninstall: every file back where it was, byte for byte; the store, the
 #      record and the service changes gone
+#   H  install --dry-run with NO sudo (issue #2135): runs as the login, names
+#      every move, changes nothing
+#   I  uninstall --dry-run as the login while the store is unreadable to it:
+#      the way back is read from credsep.json's `back` (paths, no secret)
+#   J  plan: every login under the homes dir, the ONE sudo line per login
+#      carries --login, a `sudo -u` line carries that login's HOME
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "/tmp/credsep-st.XXXXXX")
@@ -105,6 +111,17 @@ if [ "$out" = "credsep: skip — off (FLEET_CRED_SEPARATE=0)" ] && [ "$(snap)" =
 else fail "A off: '$out'"; fi
 out=$(FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" check 2>&1)
 case "$out" in "credsep: INFO — off"*) pass "A off: check is INFO off (the doctor prints no row)" ;; *) fail "A check: $out" ;; esac
+
+# ── H: the dry run needs no sudo and changes nothing (issue #2135) ──────────────
+out=$(FLEET_CREDSEP_SUDO=false bash "$BIN/fleet-credsep.sh" install --dry-run 2>&1); rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q "would move $C/node.env" \
+   && printf '%s' "$out" | grep -q "would move $C/accounts/main.hub/.credentials.json" \
+   && [ "$(snap)" = "$BEFORE" ] && [ ! -e "$SB/db" ] && [ ! -e "$SB/lib" ]; then
+  pass "H install --dry-run without sudo: names every move, changes nothing"
+else fail "H dry run rc=$rc: $out"; fi
+printf '%s' "$out" | grep -q 'sk-ant-\|ccq_' && fail "H the dry run printed a credential" || pass "H the dry run prints paths, no credential"
+out=$(FLEET_CREDSEP_SUDO=false bash "$BIN/fleet-credsep.sh" uninstall --dry-run 2>&1); rc=$?
+case "$rc:$out" in "0:credsep: not separated"*) pass "H uninstall --dry-run when not separated: nothing to undo" ;; *) fail "H uninstall dry rc=$rc: $out" ;; esac
 
 # ── B: install ─────────────────────────────────────────────────────────────────
 out=$(FLEET_CRED_SEPARATE=1 bash "$BIN/fleet-credsep.sh" apply 2>&1); rc=$?
@@ -245,6 +262,29 @@ grep -q '^fd3=ccq_NODE_SECRET_0123$' "$HOME/agent.out" && grep -q '^envhits=0$' 
   && pass "F agent: token on fd 3, not in its environment; the store socket handed over" \
   || fail "F agent: $(cat "$HOME/agent.out" "$SB/agent.err" 2>/dev/null)"
 rm -f "$HOME/agent.out"
+
+# ── I: the way back, read by the login that cannot read the store ─────────────
+chmod 000 "$R"
+out=$(FLEET_CREDSEP_SUDO=false bash "$BIN/fleet-credsep.sh" uninstall --dry-run 2>&1); rc=$?
+chmod 700 "$R"
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -qF "$R/accounts/main.hub/.credentials.json → $C/accounts/main.hub/.credentials.json" \
+   && printf '%s' "$out" | grep -qF "$R/node.env → $C/node.env" \
+   && printf '%s' "$out" | grep -qF "$R/codex/work/auth.json → $HOME/.codex-accounts/work/auth.json" \
+   && printf '%s' "$out" | grep -q "agent: com.ccquota.agent.$ME\|agent: ccquota-agent-$ME.service"; then
+  pass "I uninstall --dry-run, store unreadable: every way back from credsep.json"
+else fail "I rc=$rc: $out"; fi
+[ -f "$R/node.env" ] && [ -L "$C/node.env" ] && pass "I the dry run moved nothing back" || fail "I the dry run moved something"
+grep -q 'sk-ant-\|ccq_\|at-WORK' "$C/credsep.json" && fail "I credsep.json holds a credential" || pass "I credsep.json: paths only"
+
+# ── J: plan ──────────────────────────────────────────────────────────────────────
+mkdir -p "$SB/homes/ann/.claude/fleet/bin" "$SB/homes/bob" && : > "$SB/homes/ann/.claude/fleet/bin/fleet-credsep.sh"
+printf 'ann:%s\nbob:%s\nroot:/var/root\n' "$SB/homes/ann" "$SB/homes/bob" > "$SB/users"
+out=$(FLEET_CREDSEP_HOMES="$SB/homes" FLEET_CREDSEP_USERS="$SB/users" bash "$BIN/fleet-credsep.sh" plan 2>&1); rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -qF "sudo bash $SB/homes/ann/.claude/fleet/bin/fleet-credsep.sh install --login ann" \
+   && printf '%s' "$out" | grep -qF "sudo -u ann env HOME=$SB/homes/ann bash" \
+   && ! printf '%s' "$out" | grep -q '^bob\|^root'; then
+  pass "J plan: one block per login with an install, the one sudo carries --login"
+else fail "J plan rc=$rc: $out"; fi
 
 # ── G: uninstall ───────────────────────────────────────────────────────────────
 kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null; LPID=''
