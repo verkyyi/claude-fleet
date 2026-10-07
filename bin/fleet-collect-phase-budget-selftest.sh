@@ -173,7 +173,7 @@ hang_survivors() { sleep 2; pgrep -f "$HANGMARK" 2>/dev/null | wc -l | tr -d ' '
 # 1. CLEAN TICK — every phase runs, in the historical order, nothing deferred ------
 run_collector || fail "1: a full tick must exit 0"
 [ "$(hbget phase)" = "done" ] || fail "1: the tick must reach phase=done"
-exp='quotawatch sockets guide sessmap issues git ctx usage scrape banner escalate snapshot '
+exp='quotawatch sockets guide sessmap issues git ctx usage scrape banner escalate agentcfg snapshot '
 [ "$(order)" = "$exp" ] || fail "1: phase order wrong.
   want: $exp
   got : $(order)"
@@ -225,7 +225,7 @@ clamp="$(sed -n 's/^fleet-collect: phase git hit the \([0-9]*\)s budget (FLEET_C
 [ -n "$clamp" ] || fail "4: stderr must name the budget git was killed at"
 [ "$clamp" -le 10 ] || fail "4: git's budget must be CLAMPED to the tick's room (≤10s), not its own 20s (got: ${clamp}s)"
 skipped="$(hbget skipped)"
-[ "$skipped" = "ctx usage scrape banner escalate snapshot" ] \
+[ "$skipped" = "ctx usage scrape banner escalate agentcfg snapshot" ] \
   || fail "4: skipped= must be exactly every phase after the wedge, in order (got: $skipped)"
 [ "$(pcur)" = "ctx" ] || fail "4: the cursor must park on the FIRST deferred phase (want ctx, got: $(pcur))"
 grep -q 'tick hit its 10s budget (FLEET_COLLECT_TICK_BUDGET)' "$WORK/stderr" \
@@ -239,7 +239,7 @@ ok "…and the wedge was clamped to the tick's room (${clamp}s of its own 20s), 
 TICK=120 run_collector || fail "5: the resuming tick must exit 0"
 # The deferred phases run FIRST, then the wrap picks up the ones this rotation has
 # not served yet — including `git`, which ran last tick and is now last in line.
-exp='quotawatch sockets ctx usage scrape banner escalate snapshot guide sessmap issues git '
+exp='quotawatch sockets ctx usage scrape banner escalate agentcfg snapshot guide sessmap issues git '
 [ "$(order)" = "$exp" ] || fail "5: the tick must resume at the cursor and wrap.
   want: $exp
   got : $(order)"
