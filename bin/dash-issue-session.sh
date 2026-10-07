@@ -203,18 +203,27 @@ refuse() {  # <reason> — stderr line + sticky red toast; the CALLER exits with
 # Which repo (issue #789). Every session is born with its repo written on it and
 # spawns from THAT repo's checkout: its overlay (fleet_load_repo_conf) replaces
 # whatever fleet_load_conf resolved — including a CALLER window's repo, which says
-# nothing about the issue being spawned. A fleet hosting 2+ repos needs --repo; a
-# one-repo fleet takes its only repo, and refuses a --repo naming any other.
-MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
-if [ "$MULTI" = 1 ] && [ -z "$REPO_ARG" ]; then
-  refuse "#$num: this fleet hosts several repos — pass --repo <owner/name>"; exit "$RC_INFRA"
-fi
-if [ -n "$REPO_ARG" ] || [ "$MULTI" = 1 ]; then
-  [ -n "$REPO_ARG" ] || REPO_ARG=$(fleet_repos "$SESS" | head -n1)
-  REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
-  fleet_load_repo_conf "$SESS" "$REPO_ARG" \
-    || { refuse "#$num: $REPO_ARG is not a repo this fleet hosts"; exit "$RC_INFRA"; }
-fi
+# nothing about the issue being spawned (so the rule is asked with no pane). ONE
+# rule, however many repos the fleet hosts (issue #1943): --repo, which must be
+# hosted; else the fleet's only repo; several ⇒ refuse, the caller asks.
+_rc=0; _r=$(unset TMUX_PANE; fleet_target_repo "$SESS" "$REPO_ARG") || _rc=$?
+case "$_rc" in
+  0) REPO_ARG=$_r
+     # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN hosts no repo
+     # fleet_repos lists (its repo is the collector's cache): nothing to overlay.
+     if [ -n "$(fleet_repos "$SESS")" ]; then
+       fleet_load_repo_conf "$SESS" "$REPO_ARG" \
+         || { refuse "#$num: $REPO_ARG is not a repo this fleet hosts"; exit "$RC_INFRA"; }
+     fi ;;
+  4) refuse "#$num: this fleet hosts several repos — pass --repo <owner/name>"; exit "$RC_INFRA" ;;
+  # compat-1v: 下一批删 — no repo listed (a conf naming only FLEET_MAIN, or none):
+  # the loaded FLEET_REPO / FLEET_MAIN, as before; a --repo must name that one.
+  *) if [ -n "$REPO_ARG" ] && [ "$(fleet_norm_repo "$REPO_ARG")" != "$(fleet_norm_repo "${FLEET_REPO:-}")" ]; then
+       refuse "#$num: $(fleet_norm_repo "$REPO_ARG") is not a repo this fleet hosts"; exit "$RC_INFRA"
+     fi
+     REPO_ARG='' ;;
+esac
+unset _r _rc
 
 slug="issue-$num"
 
@@ -228,20 +237,17 @@ slug="issue-$num"
 # stranded on the dash. Scope the scan to $SESS (the target fleet, not the
 # caller's). Like every spawn below, focus is non-invasive by default and only
 # moves on an interactive spawn when FLEET_SPAWN_FOCUS=1.
-existing=$(TM list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2; exit}')
-[ -z "$existing" ] && existing=$(TM list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s{print $2; exit}')
-# 2+ repos (issue #789): identity is (repo, N) — B#12 is not a duplicate of A#12. Scan
-# every candidate and keep the first whose repo is this one OR unknown: a window of
-# unknown repo still blocks (a refused spawn is recoverable, a duplicate is not).
-if [ "$MULTI" = 1 ]; then
-  existing=''
-  for _w in $( { TM list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2}'
-                 TM list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s || $1 ~ ("·" s "$") {print $2}'; } ); do
-    _wr=$(fleet_window_repo "$SESS" "$_w")
-    if [ -z "$_wr" ] || [ "$_wr" = "$REPO_ARG" ]; then existing=$_w; break; fi
-  done
-  unset _w _wr
-fi
+# Identity is (repo, N) (issue #789): B#12 is not a duplicate of A#12. Match on the
+# @issue binding (survives a ctrl-e rename) or the slug name, and keep the first
+# candidate whose repo is this one OR unknown: a window of unknown repo still
+# blocks (a refused spawn is recoverable, a duplicate is not).
+existing=''
+for _w in $( { TM list-windows -t "$SESS" -F '#{@issue} #{window_id}' 2>/dev/null | awk -v n="$num" '$1==n{print $2}'
+               TM list-windows -t "$SESS" -F '#{window_name} #{window_id}' 2>/dev/null | awk -v s="$slug" '$1==s || $1 ~ ("·" s "$") {print $2}'; } ); do
+  _wr=$(fleet_window_repo "$SESS" "$_w")
+  if [ -z "$_wr" ] || [ -z "$REPO_ARG" ] || [ "$_wr" = "$REPO_ARG" ]; then existing=$_w; break; fi
+done
+unset _w _wr
 if [ -n "$existing" ]; then
   # Non-invasive by default: don't yank the caller to the existing window; just
   # say why nothing new opened. Opt into the jump with FLEET_SPAWN_FOCUS=1
@@ -673,11 +679,10 @@ detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detac
 # `--agent <a>` (issue #547) rides inside the command when a caller chose one; the
 # launcher consumes it and picks the agent. Validated to claude|codex above, so it
 # is safe to embed bare. Absent (the default) the command string is unchanged.
-# 2+ repos (issue #789): the window stamps its OWN @repo/@worktree before the launcher
-# runs — the launcher's fleet_load_conf is window-aware, and a set-option from here
-# after new-window would race it (repo A's trust/model/MCP for a repo-B worker). A
-# one-repo fleet's command string is unchanged.
-stamp=''; [ "$MULTI" = 1 ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree "$wt")
+# The window stamps its OWN @repo/@worktree before the launcher runs (issue #789) —
+# the launcher's fleet_load_conf is window-aware, and a set-option from here after
+# new-window would race it (repo A's trust/model/MCP for a repo-B worker).
+stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree "$wt")
 # The session's account class (issue #1540) rides the same way: @account_class is on
 # the window before fleet-claude.sh reads it, and it is the window's — a conf
 # default changed later does not move a running session.

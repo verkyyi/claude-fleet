@@ -39,9 +39,15 @@
 #                                one-repo fleet's UUID is unchanged.
 #   (p) hub inventory            the node agent's discover lists every hosted repo
 #                                (issue #1512), the one-repo fleet's its one repo.
-#   (z) degenerate               a one-repo fleet beside it keeps bare keys,
-#                                three-field backlog rows, no repo column, and its
-#                                hub in its checkout (a 2-repo fleet's hub: $HOME).
+#   (z) one repo, one road       a one-repo fleet beside it takes the same road:
+#                                repo-carrying keys, backlog rows and restore rows,
+#                                and its hub in $HOME.
+#   (n) adding a repo            a one-repo fleet with two sessions (one the other's
+#                                child) gains a second repo, then loses it: the
+#                                sessions' keys, dash rows, working directories,
+#                                restore rows and child ledger are byte for byte the
+#                                same at every step (issue #1943) — the rule that
+#                                replaced "a one-repo fleet is the degenerate case".
 #
 # Real git, a real tmux server on a PRIVATE socket (PATH shim folds every -L/-S —
 # never the live server); `gh` is a stub serving per-repo PR / issue JSON through
@@ -409,7 +415,7 @@ zrows=$(backlog "$D" | tail -n +2)
 [ -n "$zrows" ] && [ "$(printf '%s\n' "$zrows" | awk -F '\037' '{print NF ":" $4}' | sort -u)" = 4:o/solo ] \
   && ok "(z) one-repo backlog rows carry their repo, as in a 2-repo fleet" || fail "(z) one-repo backlog rows: $zrows"
 bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
-chk z "one-repo restore rows carry no repo column" "$(awk -F'\t' '$1=="WIN" && NF>15' "$FLEET_CONF_DIR/fleets/$D/restore.map" 2>/dev/null | wc -l | tr -d ' ')" 0
+chk z "one-repo restore rows carry their repo, as in a 2-repo fleet" "$(awk -F'\t' '$1=="WIN" {print $16}' "$FLEET_CONF_DIR/fleets/$D/restore.map" 2>/dev/null | sort -u)" o/solo
 [ -e "$FLEET_CONF_DIR/fleets/$D/repos" ] && fail "(z) the one-repo fleet grew a repos/ dir" || ok "(z) the one-repo fleet has no repos/ dir"
 
 # ==== (p) the hub sees every repo (issue #1512) ==========================================
@@ -428,8 +434,60 @@ ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sy
 print(f["fleet_id"] == str(uuid.uuid5(uuid.UUID(ctl.machine_id), c.canonical([f["name"], f["repo"], f["checkout"]]))))' "$FLEET_CONF_DIR" "$S") 2>&1)
 chk p "the 2-repo fleet's UUID still hashes its own repo only" "$fidS" True
 
+# ==== (n) adding a repo changes nothing for the sessions already there (issue #1943) ======
+# A fleet of ONE repo is not a mode: it is fleet_repos counting 1. So a second repo
+# arriving — or leaving again — must not move a single thing a session there is known
+# by: its key, the window that key resolves to, its dash row, its working directory,
+# its restore row, and the child ledger its parent reads.
+N=fn; MN="$WORK/n/nu"; MT="$WORK/n2/two"
+mkrepo "$MN" o/nu; mkrepo "$MT" o/two
+mkdir -p "$FLEET_CONF_DIR/fleets/$N"
+printf 'FLEET_REPO="o/nu"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$MN" > "$FLEET_CONF_DIR/fleets/$N/conf"
+tmux new-session -d -s "$N" -n plan -x 200 -y 50
+spawn 12 "$N" || fail "(n) spawn #12: $(cat "$WORK/err")"
+nP=$(tmux list-windows -t "$N" -F '#{@issue} #{window_id}' | awk '$1==12 {print $2; exit}')
+[ -n "$nP" ] && wait_rec "$nP" || fail "(n) #12 never reached claude"
+kP=$(inpane "$nP" fleet_origin_key)
+spawn 7 "$N" --origin "$kP" || fail "(n) spawn #7 as #12's child: $(cat "$WORK/err")"
+nC=$(tmux list-windows -t "$N" -F '#{@issue} #{window_id}' | awk '$1==7 {print $2; exit}')
+[ -n "$nC" ] && wait_rec "$nC" || fail "(n) #7 never reached claude"
+inpane "$nC" bash "$BIN/fleet-report-parent.sh" --state blocked --summary 'n: a report on the ledger' >/dev/null 2>&1
+settle() {   # wait out a collector tick the add/remove kicked, then one tick of our own
+  local _
+  for _ in $(seq 1 300); do [ -s "$TMPDIR/.claude-dash/global/collect.pid" ] || break; sleep 0.1; done
+  collect
+}
+nsnap() {   # everything a session is known by; an age (12s, 3m) is not identity
+  local w k
+  for w in "$nP" "$nC"; do
+    k=$(inpane "$w" fleet_origin_key)
+    printf 'key=%s wkey=%s resolves=%s\n' "$k" "$(fleet_window_key "$N" "$w")" "$(fleet_win_for_key "$k" "$N")"
+    printf 'repo=%s wt=%s cwd=%s origin=%s\n' "$(opt "$w" @repo)" "$(opt "$w" @worktree)" "$(opt "$w" pane_current_path)" "$(opt "$w" @origin)"
+    printf 'row=%s\n' "$(FLEET_SESSION="$N" FZF_COLUMNS=160 bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null | tail -n +2 | strip | awk -F '\037' -v w="$w" '$2==w')"
+  done
+  bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
+  printf 'map=%s\n' "$(awk -F'\t' '$1=="WIN"' "$FLEET_CONF_DIR/fleets/$N/restore.map" 2>/dev/null)"
+  printf 'ledger=%s\n' "$(inpane "$nP" bash "$BIN/fleet-children.sh" 2>/dev/null)"
+}
+nnorm() { sed -E 's/[0-9]+[smhd]//g' | tr -s ' '; }   # an age's column width goes with it
+settle; before=$(nsnap | nnorm)
+case "$before" in *"key=o-nu:issue-12 "*"key=o-nu:issue-7 "*) ok "(n) setup: two sessions, repo-carrying keys" ;;
+  *) fail "(n) setup: $before" ;; esac
+case "$before" in *"origin=o-nu:issue-12"*) ok "(n) setup: #7 is #12's child" ;; *) fail "(n) setup: #7's origin: $before" ;; esac
+case "$before" in *"ledger="*"o-nu:issue-7"*BLOCKED*) ok "(n) setup: the child's report is on #12's ledger" ;; *) fail "(n) setup: ledger: $before" ;; esac
+out=$(bash "$BIN/fleet-repo.sh" add --session "$N" o/two "$MT" --base master 2>"$WORK/add.err")
+[ "$out" = "added:o-two" ] && ok "(n) a second repo added" || fail "(n) add: $out $(cat "$WORK/add.err")"
+settle; after=$(nsnap | nnorm)
+chk n "adding a repo changes nothing the sessions are known by" "$after" "$before"
+spawn 30 "$N"; rc=$?
+[ "$rc" != 0 ] && grep -q 'pass --repo' "$WORK/err" && ok "(n) …but a new spawn naming no repo now asks which" \
+  || fail "(n) a no-repo spawn in a 2-repo fleet [$rc]: $(cat "$WORK/err")"
+out=$(bash "$BIN/fleet-repo.sh" remove --session "$N" o/two 2>&1) || fail "(n) remove: $out"
+settle; again=$(nsnap | nnorm)
+chk n "removing it again changes nothing either" "$again" "$before"
+
 # ==== the readout ===========================================================================
-n=0; for c in $LEAKS; do [ "$c" = z ] || [ "$c" = p ] || n=$((n+1)); done   # z, p: not one of the nine
+n=0; for c in $LEAKS; do [ "$c" = z ] || [ "$c" = p ] || [ "$c" = n ] || n=$((n+1)); done   # z, p, n: not one of the nine
 printf 'leaks: %s/9 known ways work leaks across repos%s\n' "$n" "${LEAKS:+ (classes:$LEAKS)}"
 [ "$FAILS" = 0 ] && { printf 'PASS multirepo-e2e-selftest\n'; exit 0; }
 printf '%s failure(s)\n' "$FAILS" >&2; exit 1

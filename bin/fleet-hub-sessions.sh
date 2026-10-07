@@ -529,6 +529,7 @@ if worker_key is not None:
             k = worker_key(issue, p[3] == "1", p[4], p[9] if len(p) > 9 else "")
             if k:
                 windows[(p[0], k)] = p[1]
+                # compat-1v: 下一批删
                 # …and by the bare key a one-repo fleet's worker_id wore before
                 # issue #1939 (the one repo's alias, read for one version)
                 if ":" in k and len(one_repo.get(p[0]) or []) == 1:

@@ -175,7 +175,7 @@ case "$NUM" in wid:*)
         [ -n "$RWID" ] && rorigin=$(awk -F'\t' -v w="$RWID" '$1 == w { print $3; exit }' "$(fleet_hub_cache)" 2>/dev/null)
         me=$(fleet_uuid "$sess" 2>/dev/null)/$KEY
         mefid=$(fleet_key_wid "$sess" "$KEY" 2>/dev/null) || mefid=$me   # by identity (#1646)
-        meal=$(fleet_key_alias "$sess" "$KEY"); [ -n "$meal" ] && meal=${me%/*}/$meal   # the bare key, pre-#1939
+        meal=$(fleet_key_alias "$sess" "$KEY"); [ -n "$meal" ] && meal=${me%/*}/$meal   # the bare key, pre-#1939 — compat-1v: 下一批删
         case "${k##*:}" in issue-*) NUM=${k##*:issue-} ;; *) note="'$WID' is a scratch session — fleet-await waits on an issue worker" ;; esac
         if [ -z "$note" ] && [ -z "$RWID" ]; then note="'$WID' lives on $RNODE, but the hub map has no full worker_id for it"
         elif [ -z "$note" ] && [ "$rorigin" != "$me" ] && [ "$rorigin" != "$mefid" ] && { [ -z "$meal" ] || [ "$rorigin" != "$meal" ]; }; then

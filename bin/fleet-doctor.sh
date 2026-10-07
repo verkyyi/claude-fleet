@@ -1083,6 +1083,7 @@ EOF
   # The seed repo (issue #1167): `fleet-up.sh --seed` brought the fleet up on a
   # starter repo that only LOOKS — dispatch + issue-bridge skip it whatever its
   # switches say. Said once per seeded repo; a fleet without FLEET_SEED says nothing.
+  # compat-1v: 下一批删 (the old layout, below)
   # The mark lives in the seed's overlay (issue #1937), or — the old layout, read
   # for one version — in the fleet conf beside its own repo.
   while IFS= read -r cf; do
@@ -3142,6 +3143,7 @@ if [ -d "$conf_dir" ]; then
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
     own=$(_norm_repo "$(_conf_val "$cf" FLEET_REPO)")
     seen=' '; rs_n=0; rs_bad=0; rs_list=''
+    # compat-1v: 下一批删
     # An old-layout conf still names its first repo (read for one version, issue
     # #1937); a new one names none — every repo is an overlay below.
     if [ -n "$own" ]; then

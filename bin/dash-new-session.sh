@@ -12,10 +12,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-ui-lang.sh"   # fleet_ui_fail — the one failure line (issue #1618)
 SESS=$(fleet_current_session)
 fleet_load_conf "$SESS"                        # multi-fleet: target THIS fleet's repo
-REPO="${FLEET_REPO:-}"
-# A fleet hosting 2+ repos (issue #789): the view is always `all` (#1034), so
-# there is no repo to file into here — say so rather than guess.
-_fleet_hosts_many "$SESS" && { fleet_ui_fail "new session: this fleet hosts several repos — use ⌃n, which asks which repo"; exit 1; }
+# Which repo — the one rule (issue #1943), asked with no pane: the view is always
+# `all` (#1034), so several repos leave nothing to file into here — say so rather
+# than guess. compat-1v: 下一批删 — none listed: the conf's FLEET_REPO, as before.
+_rc=0; REPO=$(unset TMUX_PANE; fleet_target_repo "$SESS") || _rc=$?
+[ "$_rc" = 4 ] && { fleet_ui_fail "new session: this fleet hosts several repos — use ⌃n, which asks which repo"; exit 1; }
+[ -n "$REPO" ] || REPO="${FLEET_REPO:-}"
 [ -z "$REPO" ] && { fleet_ui_fail "fleet.conf: FLEET_REPO not set — cannot create issue"; exit 1; }
 command -v gh >/dev/null 2>&1 || { fleet_ui_fail "gh not found — cannot create issue"; exit 1; }
 

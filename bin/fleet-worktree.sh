@@ -40,7 +40,6 @@ if [ -z "${FLEET_WORKTREE_ROOT+x}" ]; then
   # Not a fleet conf's own checkout: maybe a hosted repo's (issue #978) — then that
   # repo's overlay applies, so its FLEET_WORKTREE_SETUP runs, not the fleet's.
   [ -n "${found:-}" ] || while IFS=$'\t' read -r s cf; do
-    fleet_has_repo_overlays "$s" || continue
     while IFS= read -r r; do
       [ -n "$r" ] || continue
       fm=$( fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1 || exit 0

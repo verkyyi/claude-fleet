@@ -283,11 +283,12 @@ case "${selfkey#*:}" in
   scratch-*) label="scratch ~${selfkey##*scratch-}" ;;
   *)         label="session ${wname:-?}" ;;
 esac
-# 2+ repos (issue #789): name the child's repo, since a parent can have children in
-# several; the branch itself stays the bare key.
+# Name the child's repo (issue #789), since a parent can have children in several —
+# in every fleet, so adding a repo changes no report (issue #1943); the branch
+# itself stays the bare key.
 case "$label" in
   issue\ *|scratch\ *)
-    if [ -n "$sess" ] && _fleet_hosts_many "$sess" && [ -n "${selfwin:-}" ]; then
+    if [ -n "$sess" ] && [ -n "${selfwin:-}" ]; then
       _cr=$(fleet_window_repo "$sess" "$selfwin"); [ -n "$_cr" ] && label="$_cr $label"
     fi ;;
 esac
