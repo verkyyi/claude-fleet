@@ -41,8 +41,10 @@ import (
 //
 // What is new is where a start lands. worker_start may name no fleet at all:
 // node=auto (the default) asks PickNode for the best of the caller's machines
-// — load, free memory, the per-person cap, then account headroom — and the
-// reasoning is journalled beside the operation.
+// — load per core, free memory and memory pressure, any per-person cap set,
+// then the tighter of CPU and memory idle; never account quota, which every
+// machine shares (claude-fleet#1994) — and the reasoning is journalled beside
+// the operation.
 //
 // Transport is the control channel (control.TypeWrite → the agent → the
 // login's own fleet-control.py rpc), never SSH: the hub cannot reach a node.
@@ -904,16 +906,25 @@ func validGHFields(s string) bool {
 
 // --- placement ---------------------------------------------------------
 
-// Placement thresholds (EPIC #1407 C3): a machine above maxLoadPerCore or
-// below minFreeMem is never chosen. Variables so tests can move them.
+// Placement thresholds (EPIC #1407 C3, claude-fleet#1994): a machine above
+// maxLoadPerCore, below its free-memory floor (minFreeMem or minFreeMemFrac
+// of its total, whichever is larger) or at memory pressure memPressureWarn
+// is never chosen. Variables so tests can move them.
+//
+// The floor: a worker's claude is ~300-400 MB, with node / MCP children a new
+// session wants ~1 GB, and the system keeps one session's worth on top.
 var (
-	maxLoadPerCore         = 0.8
-	minFreeMem     float64 = 1 << 30
+	maxLoadPerCore          = 0.8
+	minFreeMem      float64 = 2 << 30
+	minFreeMemFrac          = 0.10
+	memPressureWarn         = 2
 )
 
-// defaultNodeCaps is fleet.node_cap.<node> when the hub sets nothing: the
-// 2026-10-03 decision — everyone may use m4, at most 6 sessions each.
-var defaultNodeCaps = map[string]int{"m4": 6}
+// memFloor is the free memory a machine of total bytes must keep to take a
+// new session: max(minFreeMem, minFreeMemFrac × total).
+func memFloor(total uint64) float64 {
+	return math.Max(minFreeMem, minFreeMemFrac*float64(total))
+}
 
 // NodeCapPrefix names the per-person, per-machine session cap setting.
 const NodeCapPrefix = "fleet.node_cap."
@@ -926,8 +937,12 @@ type Candidate struct {
 	FleetID    string `json:"fleet_id"`
 	FleetName  string `json:"fleet_name"`
 	// LoadPerCore is load1 / ncpu; nil when the node did not say.
-	LoadPerCore  *float64 `json:"load_per_core"`
-	MemFreeBytes uint64   `json:"mem_free_bytes"`
+	LoadPerCore   *float64 `json:"load_per_core"`
+	MemFreeBytes  uint64   `json:"mem_free_bytes"`
+	MemTotalBytes uint64   `json:"mem_total_bytes,omitempty"`
+	// MemPressure is the node's memory-pressure level (darwin: 1 normal,
+	// 2 warn, 4 critical); absent when it did not say.
+	MemPressure int `json:"mem_pressure,omitempty"`
 	// Sessions is this login's sessions on the machine — nil when a fleet of
 	// the login could not be read (claude-fleet#1465), SessionsUnknown then
 	// says which and why; Cap the per-person cap there (nil: none).
@@ -940,7 +955,8 @@ type Candidate struct {
 	MaxSessions int  `json:"max_sessions,omitempty"`
 	CapSessions *int `json:"cap_sessions,omitempty"`
 	// QuotaUsedPct is the busier of the 5-hour and 7-day windows of the
-	// account this login's Claude Code runs on; nil when unknown.
+	// account this login's Claude Code runs on; nil when unknown. Shown, never
+	// scored (claude-fleet#1994): every machine spends the same shared quota.
 	QuotaUsedPct *float64 `json:"quota_used_pct"`
 	Eligible     bool     `json:"eligible"`
 	Excluded     string   `json:"excluded,omitempty"`
@@ -973,9 +989,12 @@ type Placement struct {
 // PickNode is pick_node(user, repo) — the placement EPIC B's dispatcher
 // calls (claude-fleet#1410): among the machines where person has an active
 // login with a fleet hosting repo, drop the offline ones, those above 0.8
-// load per core, short of free memory, or at the person's cap there; score
-// the rest by account headroom (60%) and load (40%); return the best, with
-// every candidate's verdict. person "" is the operator.
+// load per core, below max(2 GiB, 10% of total) free memory, under memory
+// pressure, or at a cap set for the person there; score the rest by load
+// alone — min(cpu idle, memory idle), whichever resource is tighter
+// (claude-fleet#1994: account quota is shared by every machine, so it never
+// decides where); return the best, with every candidate's verdict. person ""
+// is the operator.
 func (s *Server) PickNode(person, repo string) (Placement, error) {
 	scope, err := s.scopeFor(person)
 	if err != nil {
@@ -1006,19 +1025,15 @@ func sameMachine(hostname, name string) bool {
 	return false
 }
 
-// nodeCap is the per-person session cap on hostname, from the hub's settings
-// or the defaults; ok false when there is none.
+// nodeCap is the per-person session cap on hostname, from the hub's settings;
+// ok false when there is none — no machine has a default (claude-fleet#1994:
+// load decides).
 func (s *Server) nodeCap(hostname string, settings map[string]string) (int, bool) {
 	for k, v := range settings {
 		if strings.HasPrefix(k, NodeCapPrefix) && sameMachine(hostname, k[len(NodeCapPrefix):]) {
 			if n, err := strconv.Atoi(v); err == nil {
 				return n, true
 			}
-		}
-	}
-	for k, n := range defaultNodeCaps {
-		if _, set := settings[NodeCapPrefix+k]; !set && sameMachine(hostname, k) {
-			return n, true
 		}
 	}
 	return 0, false
@@ -1193,6 +1208,7 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	c := Candidate{Machine: r.Hostname, OSUser: r.OSUser, EndpointID: r.EndpointID, FleetID: r.FleetID, FleetName: r.Name}
 	hb, status, _ := s.nodeStatusOf(r.EndpointID, now)
 	c.Sessions, c.MemFreeBytes = hb.SessionsCount(), hb.MemFreeBytes
+	c.MemTotalBytes, c.MemPressure = hb.MemTotalBytes, hb.MemPressure
 	if c.Sessions == nil {
 		c.SessionsUnknown = strings.Join(hb.UnreadableFleets(), "; ")
 	}
@@ -1239,8 +1255,10 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 		c.Excluded = errorObject(connErr)["message"]
 	case c.LoadPerCore != nil && *c.LoadPerCore > maxLoadPerCore:
 		c.Excluded = fmt.Sprintf("load %.2f/core > %.1f", *c.LoadPerCore, maxLoadPerCore)
-	case hb.MemTotalBytes > 0 && float64(hb.MemFreeBytes) < minFreeMem:
-		c.Excluded = fmt.Sprintf("free memory %.1f GiB < %.1f GiB", float64(hb.MemFreeBytes)/(1<<30), minFreeMem/(1<<30))
+	case hb.MemTotalBytes > 0 && float64(hb.MemFreeBytes) < memFloor(hb.MemTotalBytes):
+		c.Excluded = fmt.Sprintf("free memory %.1f GiB < %.1f GiB", float64(hb.MemFreeBytes)/(1<<30), memFloor(hb.MemTotalBytes)/(1<<30))
+	case hb.MemPressure >= memPressureWarn:
+		c.Excluded = fmt.Sprintf("memory pressure %s", memPressureName(hb.MemPressure))
 	case c.Cap != nil && c.Sessions == nil:
 		c.Excluded = fmt.Sprintf("session count unknown (%s); the per-person cap %d cannot be checked", c.SessionsUnknown, *c.Cap)
 	case c.Cap != nil && *c.Sessions >= *c.Cap:
@@ -1252,14 +1270,7 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	default:
 		c.Eligible = true
 	}
-	headroom, idle := 0.5, 0.5 // unknown reads as middling, never as best
-	if c.QuotaUsedPct != nil {
-		headroom = math.Max(0, 1-*c.QuotaUsedPct/100)
-	}
-	if c.LoadPerCore != nil {
-		idle = math.Max(0, 1-*c.LoadPerCore/maxLoadPerCore)
-	}
-	score := 0.6*headroom + 0.4*idle
+	score := loadScore(c.LoadPerCore, hb.MemFreeBytes, hb.MemTotalBytes)
 	if c.Sessions == nil {
 		// A login whose fleet could not be read may run any number of
 		// sessions (claude-fleet#1465): never scored as the idle 0 the
@@ -1268,6 +1279,34 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	}
 	c.Score = math.Round(score*1000) / 1000
 	return c
+}
+
+// loadScore is how much room a machine has (claude-fleet#1994): the tighter of
+// its CPU idle (1 − load per core / maxLoadPerCore) and its memory idle (free /
+// total), each clamped to 0..1 — whichever runs out first decides. A reading
+// the node did not give counts as middling (0.5), never as best.
+func loadScore(loadPerCore *float64, memFree, memTotal uint64) float64 {
+	cpu, mem := 0.5, 0.5
+	if loadPerCore != nil {
+		cpu = clamp01(1 - *loadPerCore/maxLoadPerCore)
+	}
+	if memTotal > 0 {
+		mem = clamp01(float64(memFree) / float64(memTotal))
+	}
+	return math.Min(cpu, mem)
+}
+
+func clamp01(x float64) float64 { return math.Max(0, math.Min(1, x)) }
+
+// memPressureName spells a darwin memory-pressure level.
+func memPressureName(lv int) string {
+	switch lv {
+	case 2:
+		return "warn"
+	case 4:
+		return "critical"
+	}
+	return strconv.Itoa(lv)
 }
 
 // excludedFull opens the verdict on a login at its own session cap
@@ -1311,8 +1350,8 @@ func placementReason(c Candidate, all []Candidate) string {
 	if c.LoadPerCore != nil {
 		parts = append(parts, fmt.Sprintf("load %.2f/core", *c.LoadPerCore))
 	}
-	if c.QuotaUsedPct != nil {
-		parts = append(parts, fmt.Sprintf("account %.0f%% used", *c.QuotaUsedPct))
+	if c.MemTotalBytes > 0 {
+		parts = append(parts, fmt.Sprintf("%.1f/%.0f GiB free", float64(c.MemFreeBytes)/(1<<30), float64(c.MemTotalBytes)/(1<<30)))
 	}
 	switch {
 	case c.Sessions == nil:
@@ -1344,7 +1383,7 @@ func placementReason(c Candidate, all []Candidate) string {
 // --- settings ----------------------------------------------------------
 
 // handleFleetSettings serves GET/PUT /v1/fleet/settings — the operator's
-// (mounted behind operatorOnly). fleet.node_cap.<machine> is an integer 0–256,
+// (mounted behind adminOnly). fleet.node_cap.<machine> is an integer 0–256,
 // or "" to fall back to the default; fleet.spot_weight a number 0–2;
 // fleet.node_maintenance.<machine> (claude-fleet#1427) a reason — any text,
 // "" to end the maintenance — stored as the dated record the roster shows;
@@ -1459,9 +1498,6 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 		return
 	}
 	eff := map[string]any{}
-	for k, n := range defaultNodeCaps {
-		eff[NodeCapPrefix+k] = n
-	}
 	for k, v := range settings {
 		if strings.HasPrefix(k, NodeMaintenancePrefix) {
 			eff[k] = parseMaintenance(k[len(NodeMaintenancePrefix):], v)

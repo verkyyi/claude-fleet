@@ -76,6 +76,11 @@ type Server struct {
 	// sign-on. Nil means not wired up — /enter 404s and nothing else changes.
 	SSO *SSO
 
+	// GitHub is the GitHub sign-in and its list (claude-fleet#1984). Nil
+	// means not wired up — /signin and /auth/github/* 404 and nothing else
+	// changes.
+	GitHub *GitHubAuth
+
 	// MCP handles /mcp when wired up.
 	MCP http.Handler
 
@@ -161,6 +166,16 @@ type Server struct {
 	// as short-lived tokens. nil (no key configured) leaves every credential
 	// route answering 503 and the rest of the fleet module unaffected.
 	Vault *credvault.Vault
+	// SessionCredKey signs session passes for untrusted machines
+	// (claude-fleet#1969, CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]); it never
+	// leaves the hub. Nil: /v1/fleet/session-cred answers 503.
+	SessionCredKey []byte
+	// SessionCredVerifyToken lets the cluster credential proxy and the relay
+	// call POST /v1/fleet/session-cred/verify
+	// (CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]); empty = the operator only.
+	SessionCredVerifyToken string
+	// sessCred caches verified passes' rows for ≤ 30 s.
+	sessCred sessionCredCache
 	// leaseNow replaces the lease clock in tests (claude-fleet#1422).
 	leaseNow func() time.Time
 
@@ -271,6 +286,12 @@ func (s *Server) Handler() http.Handler {
 	// minted, GET is the signed-out page. Outside the gate for the same
 	// reason /enter is -- a signed-out browser must be able to reach it.
 	mux.HandleFunc("/logout", s.handleLogout)
+	// Sign in with GitHub (claude-fleet#1984): the page, the hop to GitHub
+	// and the way back. Outside the gate like /enter, mounted
+	// unconditionally and 404 when not configured, for the same reason.
+	mux.HandleFunc("/signin", s.handleSignin)
+	mux.HandleFunc("/auth/github/start", s.handleGitHubStart)
+	mux.HandleFunc("/auth/github/callback", s.handleGitHubCallback)
 
 	if s.Fleet {
 		// The control channel authenticates per endpoint, like ingest.
@@ -289,7 +310,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/v1/node/join", s.handleNodeJoin)
 		mux.HandleFunc("/v1/node/dist/", s.handleNodeDist)
 		mux.HandleFunc("/v1/node/self", s.handleNodeSelf)
-		mux.Handle("/v1/fleet/join-codes", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetJoinCodes))))
+		mux.Handle("/v1/fleet/join-codes", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetJoinCodes))))
 		// SPOT nodes (claude-fleet#1428): the node's own reclaim notice
 		// authenticates with its token; starting and releasing are the
 		// operator's.
@@ -312,16 +333,16 @@ func (s *Server) Handler() http.Handler {
 		// reaped it and read back by its owner's others (claude-fleet#1609).
 		mux.HandleFunc("/v1/node/worker-records", s.handleNodeWorkerRecords)
 		mux.HandleFunc("/v1/node/progress", s.handleNodeProgress)
-		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
-		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetSpot))))
+		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
+		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
 		// 我的会话 (claude-fleet#1429): the phone view of fleet_sessions.
 		mux.Handle("/sessions", s.viewerOnly(http.HandlerFunc(s.serveSessionsPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
-		mux.Handle("/v1/fleet/accounts", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetAccounts))))
+		mux.Handle("/v1/fleet/accounts", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetAccounts))))
 		// Per-person node caps (claude-fleet#1410), the operator's.
-		mux.Handle("/v1/fleet/settings", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetSettings))))
+		mux.Handle("/v1/fleet/settings", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetSettings))))
 		// The team configuration layer (claude-fleet#1726): read by every
 		// door — a node's token and a client's certificate included — so it
 		// authenticates itself; a PUT is the operator's alone.
@@ -386,10 +407,15 @@ func (s *Server) Handler() http.Handler {
 		// node's enrollment token, like the control channel; everything else
 		// is the operator's.
 		mux.HandleFunc("/v1/node/credentials", s.handleNodeCredentials)
-		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetCredentials))))
-		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetRevoke))))
-		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleFleetCredAudit))))
-		mux.Handle("/credentials", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.serveCredentialsPage))))
+		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredentials))))
+		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevoke))))
+		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredAudit))))
+		mux.Handle("/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveCredentialsPage))))
+		// Session passes for untrusted machines (claude-fleet#1969): issue /
+		// renew / revoke by the node's token, verify by the verifiers' token,
+		// the list by the operator — each route checks its own.
+		mux.HandleFunc("/v1/fleet/session-cred", s.handleSessionCred)
+		mux.HandleFunc("/v1/fleet/session-cred/", s.handleSessionCred)
 		// The relay (claude-fleet#1413). Both halves authenticate
 		// themselves: the client by session, token or certificate (the
 		// last proven in-band, so outside the viewer gate), the agent by
@@ -400,7 +426,7 @@ func (s *Server) Handler() http.Handler {
 		// admits a certificate by a signed timestamp, so it authenticates
 		// itself, outside the viewer gate.
 		mux.HandleFunc(control.RoutesPath, s.handleFleetRoutes)
-		mux.Handle("/v1/fleet/ssh-relays", s.viewerOnly(s.operatorOnly(http.HandlerFunc(s.handleSSHRelayAudit))))
+		mux.Handle("/v1/fleet/ssh-relays", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleSSHRelayAudit))))
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -536,6 +562,14 @@ func (s *Server) viewerOnly(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(withDoor(r.Context(), doorToken)))
 			return
 		}
+		// A GitHub session (claude-fleet#1984), re-checked against the list
+		// on every request: someone taken off it is refused here, now.
+		if ctx, ok, handled := s.githubAdmit(w, r); handled {
+			return
+		} else if ok {
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		// A WeCom session this hub minted itself, from a ticket the company's
 		// authorization service signed. Checked after the token so the token
 		// stays the fallback that works when WeCom does not.
@@ -557,7 +591,12 @@ func (s *Server) viewerOnly(next http.Handler) http.Handler {
 			return
 		}
 		// A browser with no credential is someone who has not signed in yet;
-		// send them to do that. Everything else gets the honest 401.
+		// send them to do that — GitHub's page when it is wired up, else
+		// WeCom's gate. Everything else gets the honest 401.
+		if s.GitHub.ready() && wantsHTML(r) {
+			http.Redirect(w, r, "/signin", http.StatusFound)
+			return
+		}
 		if to, ok := s.ssoSignInURL(r); ok {
 			http.Redirect(w, r, to, http.StatusFound)
 			return

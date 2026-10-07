@@ -1,5 +1,10 @@
 # cred-proxy — research prototype (issue #1872)
 
+> **The installed proxy is [`bin/fleet-cred-proxy.py`](../../bin/fleet-cred-proxy.py)**
+> (issue #1970, EPIC #1967 C3): a per-login daemon (`com.claude-fleet.cred-proxy`)
+> with a control socket and route selection (direct / relay / central). This
+> prototype stays for the research audits below (`--audit`, `--sinkhole`, `sim/`).
+
 **Not part of the install.** Nothing in `bin/`, `conf/` or any launch path
 references it. It exists to answer whether a session can run on a subscription
 without the subscription credential ever entering the session.

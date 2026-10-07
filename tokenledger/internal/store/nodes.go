@@ -96,6 +96,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetCreds(); err != nil {
 		return err
 	}
+	// Session passes for untrusted machines (claude-fleet#1969).
+	if err := s.ensureFleetSessionCreds(); err != nil {
+		return err
+	}
 	// The vault's KMS-wrapped data key (claude-fleet#1417).
 	if err := s.ensureFleetCredKey(); err != nil {
 		return err

@@ -927,24 +927,30 @@ instead; `node` defaults to `auto` (or names one roster machine). The hub then
 calls `PickNode(person, repo)` — the placement EPIC B's dispatcher uses — over
 the caller's own logins with a fleet hosting that repo (for the operator's
 doors: the `CCQUOTA_FLEET_ADMIN_USERS` logins, when set). It excludes a machine
-that is offline, above **0.8 load per core**, under **1 GiB free memory**, or
-where the person is already at their **per-person cap** or the login at
-**its own cap** (below); scores the rest 60% on
-the headroom of the account that login's Claude Code runs on (the busier of its
-5-hour and 7-day windows) and 40% on load; and journals the choice with every
-candidate's verdict as the operation's `placement`:
+that is offline, above **0.8 load per core**, under **max(2 GiB, 10% of its
+memory) free**, under **memory pressure** (darwin's
+`kern.memorystatus_vm_pressure_level` at warn or above; a node that does not
+report it is never excluded for it), or where the person is already at their
+**per-person cap** or the login at **its own cap** (below); scores the rest on
+load alone — `min(cpu_idle, mem_idle)` with `cpu_idle = 1 − load_per_core / 0.8`
+and `mem_idle = free / total`, so whichever resource is tighter decides, and a
+tie goes to fewer sessions; and journals the choice with every candidate's
+verdict as the operation's `placement`. Account quota is shown in each
+candidate (`quota_used_pct`) but never scored: every machine spends the same
+shared subscription (claude-fleet#1994).
 
 ```json
-"placement": {"machine": "m4", "reason": "chose m4 (score 0.875, load 0.10/core, account 20% used, 1/6 sessions); m5 excluded: load 1.00/core > 0.8", "candidates": [...]}
+"placement": {"machine": "m4", "reason": "chose m4 (score 0.500, load 0.10/core, 8.0/16 GiB free, 1 sessions); m5 excluded: load 1.00/core > 0.8", "candidates": [...]}
 ```
 
-The per-person cap is the hub setting `fleet.node_cap.<machine>` (default:
-`m4` = 6; a machine with none is uncapped; `0` closes it). It holds for a named
+The per-person cap is the hub setting `fleet.node_cap.<machine>` (no default
+since claude-fleet#1994 — load decides; a machine with none is uncapped; `0`
+closes it). It holds for a named
 fleet too — a start or resume past it is `AT_CAPACITY`. The operator sets it:
 
 ```sh
 curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"key":"fleet.node_cap.m4","value":"8"}' https://hub/v1/fleet/settings   # "" = back to the default
+  -d '{"key":"fleet.node_cap.m4","value":"8"}' https://hub/v1/fleet/settings   # "" = uncapped again
 ```
 
 **A login at its own cap is never a candidate** (claude-fleet#1587). Every
@@ -1009,7 +1015,11 @@ is no principal parameter to forge — and only on a machine the operator marked
 trusted|untrusted`). No key = untrusted → `403 untrusted_node` + a deny audit
 row, checked after the principal and the revocation. Every machine with an
 active account when it shipped was marked trusted once
-(`fleet.node_trust_migrated`), so their leases are unchanged. The operator
+(`fleet.node_trust_migrated`), so their leases are unchanged. A session on an
+untrusted machine borrows a revocable `fcp-h1.` session pass instead
+(claude-fleet#1969, `/v1/fleet/session-cred` — issue / renew / verify / revoke;
+key `CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]`, verifiers
+`CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]`; docs/FLEET-HUB.md). The operator
 stores, lists and revokes:
 
     # store (or replace) — the secret never comes back out of the hub
@@ -1459,8 +1469,9 @@ ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] <owner/re
 
 `POST /v1/node/place` authenticates with the node's enrollment token, for a
 fleet that endpoint's heartbeats registered, like the lease. It runs the same
-`pickNode` as a placed `worker_start` (offline, 维护中, >0.8 load/core, <1 GiB
-free and at-cap machines are out; account headroom 60% + load 40%), for the person whose
+`pickNode` as a placed `worker_start` (offline, 维护中, >0.8 load/core, short of
+memory or under memory pressure, and at-cap machines are out; scored on the
+tighter of CPU and memory idle), for the person whose
 active fleet account is that (machine, login) — a login nobody owns places among
 the logins of the same name. The asker's own fleet ⇒ `LOCAL`, nothing journalled
 but an audit row. Another machine ⇒ the hub hands that fleet the lease (the spawn

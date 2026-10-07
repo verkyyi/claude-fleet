@@ -725,3 +725,44 @@ CREATE TABLE IF NOT EXISTS finding_notices (
   first_at   TEXT NOT NULL,
   last_at    TEXT NOT NULL
 );
+
+-- Who may sign in with GitHub (claude-fleet#1984). A person is their GitHub
+-- numeric ID, never their username: a username can be freed and taken by
+-- someone else, an ID cannot. role is 'admin' (copied from the deploy's
+-- CCQUOTA_GITHUB_ADMINS -- the row records them, the deploy decides) or
+-- 'user' (added on the web). machine_login is the OS login that is theirs on
+-- every machine, '' when none yet. Removing a row signs them out on their
+-- next request: the gate reads this table on every request.
+CREATE TABLE IF NOT EXISTS hub_users (
+  github_id     INTEGER PRIMARY KEY,
+  login         TEXT NOT NULL,
+  role          TEXT NOT NULL,
+  machine_login TEXT NOT NULL DEFAULT '',
+  added_by      TEXT NOT NULL DEFAULT '',
+  added_at      TEXT NOT NULL,
+  last_seen     TEXT
+);
+
+-- The pin (claude-fleet#1984): the first time the hub learns which GitHub ID
+-- holds a username, it keeps the pair, and from then on the name means that ID
+-- only. A sign-in under a pinned name with another ID is refused and audited.
+-- login is stored lower-cased: GitHub usernames are case-insensitive.
+CREATE TABLE IF NOT EXISTS hub_user_names (
+  login     TEXT PRIMARY KEY,
+  github_id INTEGER NOT NULL,
+  pinned_at TEXT NOT NULL
+);
+
+-- The hub's own audit trail for sign-in and the people list
+-- (claude-fleet#1984): every refusal, every pin, every change. actor is a
+-- principal (gh:<id>), 'deploy' or 'operator'; target names who it was about.
+CREATE TABLE IF NOT EXISTS hub_audit (
+  id      INTEGER PRIMARY KEY,
+  created TEXT NOT NULL,
+  actor   TEXT NOT NULL DEFAULT '',
+  action  TEXT NOT NULL,
+  target  TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL,
+  detail  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_hub_audit_created ON hub_audit(created);
