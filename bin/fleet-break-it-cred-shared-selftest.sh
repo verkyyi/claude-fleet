@@ -9,6 +9,7 @@
 #   cred-shared-down    bin/fleet-credsep.py machine (the shared service's KeepAlive +
 #                       ThrottleInterval), bin/fleet-credsep-launch.py shared,
 #                       bin/fleet-cred-proxy.py serve --shared, bin/fleet-cred-proxy.sh mint
+# shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT / CP are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh
