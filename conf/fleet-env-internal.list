@@ -75,6 +75,16 @@ FLEET_CLIENT_BADGE_HOST            seam: this machine's hostname as the status-b
 FLEET_CRED_PROXY_START_SECS        knob: how long `fleet-cred-proxy.sh ensure` waits for the proxy to come up (30)
 FLEET_DRILL_INVITE                 handoff: the drill's approve code, fleet-onboard-drill.sh → fleet-drill.sh approve (never an argv, #2010)
 FLEET_DRILL_LOGIN_REMOVE           seam: the login-remove script fleet-onboard-drill.sh tears down with (selftest sandbox, #2010)
+FLEET_CRED_CTL_DIR                 handoff: separated (#1971) — the run dir of the role account's proxy (ctl.sock, port); fleet-cred-proxy.sh sets it for its ctl client
+FLEET_CREDSEP_DAEMON_DIR           seam: fleet-credsep sandbox — where the proxy/agent service definitions are written (/Library/LaunchDaemons, /etc/systemd/system)
+FLEET_CREDSEP_LIB                  seam: fleet-credsep sandbox — the root-owned code copy the role account runs
+FLEET_CREDSEP_LOG_BASE             seam: fleet-credsep sandbox — the proxy's log dir (/var/log/fleet-cred)
+FLEET_CREDSEP_ROLE                 seam: fleet-credsep sandbox — an EXISTING user standing in for the role account (never created/deleted)
+FLEET_CREDSEP_ROOT_BASE            seam: fleet-credsep sandbox — the store's base (/var/db/fleet-cred)
+FLEET_CREDSEP_RUN_BASE             seam: fleet-credsep sandbox — the proxy's run dir base (/var/run/fleet-cred)
+FLEET_CREDSEP_SUDO                 seam: fleet-credsep — the privilege prefix (default `sudo -n`; empty = run directly, the sandbox)
+FLEET_CREDSEP_SVC                  seam: fleet-credsep sandbox — 0 = print launchctl/systemctl commands instead of running them
+FLEET_CREDSEP_TEST                 seam: fleet-credsep sandbox — allow a non-root install/launch into the sandbox paths
 FLEET_DRILL_POLL_SECS              knob: how often fleet-onboard-drill.sh reads its pane (2 s)
 FLEET_DRILL_RETIRE_CMD             seam: the command fleet-onboard-drill.sh retires a drill node with (no HTTP way yet, #1928)
 FLEET_DRILL_SCAN_SECS              knob: how long fleet-onboard-drill.sh waits for the QR scan (600 s, the code's life)

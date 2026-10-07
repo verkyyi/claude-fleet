@@ -480,16 +480,43 @@ def save_key(key):
 
 
 def node_env(key):
-    """KEY's value in node.env — read, never sourced: it holds a credential."""
+    """KEY's value in node.env — read, never sourced: it holds a credential.
+    Separated (issue #1971) node.env is unreadable here: the hub URL + token
+    pair becomes the credential proxy's hub broker (both, never one of them),
+    any other key comes from node.pub.env."""
     d = os.environ.get("FLEET_CONF_DIR") or os.path.join(os.path.expanduser("~"), ".config", "claude-fleet")
-    try:
-        with open(os.path.join(d, "node.env")) as f:
-            for line in f:
-                if line.startswith(key + "="):
-                    return line.split("=", 1)[1].strip().strip("\"'")
-    except OSError:
-        pass
+    for name in ("node.env", "node.pub.env"):
+        try:
+            with open(os.path.join(d, name)) as f:
+                if name == "node.pub.env" and key in ("CCQUOTA_TOKEN", "CCQUOTA_HUB_URL"):
+                    return _node_broker(d)[key == "CCQUOTA_TOKEN"]
+                for line in f:
+                    if line.startswith(key + "="):
+                        return line.split("=", 1)[1].strip().strip("\"'")
+                return ""
+        except OSError:
+            continue
     return ""
+
+
+_BROKER = []
+
+
+def _node_broker(d):
+    """(broker url, fcpn1. token) — one mint per process; ('', '') when none."""
+    if not _BROKER:
+        pair = ("", "")
+        if os.path.isfile(os.path.join(d, "credsep.json")):
+            try:
+                out = subprocess.run(["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                           "fleet-cred-proxy.sh"), "node-token"],
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=15).stdout
+                u, t = out.strip().split("\t", 1)
+                pair = (u.rstrip("/"), t)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                pass
+        _BROKER.append(pair)
+    return _BROKER[0]
 
 
 def read_where(fc, hub, token):

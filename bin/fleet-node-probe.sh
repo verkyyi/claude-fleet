@@ -132,6 +132,11 @@ if [ "$reuse" = 0 ]; then
     [ -z "$sleep_min" ] || printf '"sleep_min":%s,' "$sleep_min"
     printf '"ts":"%s","verdict":"%s","reason":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$verdict" "$reason"
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT" || { echo "fleet-node-probe: cannot write $OUT" >&2; exit 1; }
+  # separated (issue #1971): the credential proxy runs as another account and
+  # cannot read this file — hand it the fresh verdict over its socket
+  if [ -f "$CONF/credsep.json" ]; then
+    bash "$(cd "$(dirname "$0")" && pwd)/fleet-cred-proxy.sh" probe "$OUT" >/dev/null 2>&1 || true
+  fi
 fi
 
 verdict=$(jget verdict "$OUT")

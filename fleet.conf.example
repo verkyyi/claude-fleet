@@ -2195,6 +2195,14 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_CRED_RELAY_URL=             # the relay route's base (…/anthropic, …/chatgpt/codex); empty = no relay route
 # @label=Central credential proxy URL @group=disk @tier=internal @scope=global @edit=str
 #FLEET_CRED_CENTRAL_URL=           # the central route's base (…/v1/proxy/{anthropic,codex}); empty = the hub
+# Separated credentials (issue #1971, EPIC #1967 C4): on a trusted machine, a role
+# account (_fleetcred) owns /var/db/fleet-cred/<login>/ — the leased credentials,
+# Codex auth.json and node.env — and runs the proxy; a session reading them gets
+# "Permission denied". Needs root ONCE (the install pass uses password-less sudo,
+# else prints the command); turning it back to 0 moves every file back.
+# Needs FLEET_CRED_PROXY=1 (sessions reach the subscription only through it).
+# @label=Separated credentials @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_CRED_SEPARATE=0             # 1 = bin/fleet-credsep.sh install (docs/CRED-SEPARATE.md)
 
 # `fleet-doctor`'s `spotlight` line (host section, macOS only, issue #1075): WARNs
 # while Spotlight still indexes the data volume, naming `sudo mdutil -a -i off`

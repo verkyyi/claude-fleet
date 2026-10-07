@@ -944,6 +944,15 @@ func runAgent(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *token == "" {
+		// Separated (claude-fleet#1971): the root launcher hands the token
+		// down a pipe, never the environment a session could `ps -E`.
+		t, err := tokenFromFD(os.Getenv("CCQUOTA_TOKEN_FD"))
+		if err != nil {
+			return err
+		}
+		*token = t
+	}
 
 	h, err := homeDir(*home)
 	if err != nil {
@@ -1002,6 +1011,8 @@ func runAgent(args []string) error {
 		// Lease this login's credentials from the hub's vault (#1415).
 		FleetCreds:         fleetEnabled() && os.Getenv("CCQUOTA_FLEET_CREDS") == "1",
 		FleetCodexHomesDir: os.Getenv("CCQUOTA_FLEET_CODEX_HOMES"),
+		// Separated (claude-fleet#1971): the lease goes to the proxy's socket.
+		FleetCredStore: os.Getenv("CCQUOTA_FLEET_CRED_STORE"),
 		// The relay rides the control channel, so it is on wherever that is
 		// unless explicitly refused (claude-fleet#1413).
 		FleetSSHRelay: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",

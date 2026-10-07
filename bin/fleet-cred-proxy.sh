@@ -21,6 +21,17 @@
 # FLEET_CRED_RELAY_TOKEN (secrets.env — never fleet.conf), FLEET_CRED_CENTRAL_URL
 # (default: the hub). State: $FLEET_CONF_DIR/cred-proxy/ (port, ctl.sock 0600,
 # key, bind.json, revoked, trust.json). Log: logs/cred-proxy.log (redacted).
+#
+# Separated (issue #1971 — bin/fleet-credsep.sh; $FLEET_CONF_DIR/credsep.json
+# says so): the proxy is NOT this login's to run — the role account's service
+# runs it — so `run` only idles, `ensure` / `port` read its port from the run
+# dir, and the control commands talk to its socket there (the proxy checks our
+# uid). Plus three that only exist there:
+#   fleet-cred-proxy.sh node-token   → `<broker url>\t<fcpn1.…>` (the hub broker)
+#   fleet-cred-proxy.sh node-hash    → sha256 of the node token (fleet-mcp)
+#   fleet-cred-proxy.sh probe <file> → hand the proxy a fresh node-probe.json
+#   fleet-cred-proxy.sh store --kind claude|codex --label L < file
+#                                    → put one credential file in the store
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -41,12 +52,22 @@ load_conf() { # the machine's one file (#1623) + the install's; the env wins ove
 
 on() { [ "${FLEET_CRED_PROXY:-0}" = 1 ]; }
 
+SEP_RUN=''   # separated: the role account's run dir (ctl.sock, port, pid)
+if [ -f "$CONF/credsep.json" ]; then
+  SEP_RUN=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run",""))' "$CONF/credsep.json" 2>/dev/null)
+fi
+
 switch_now() { # → 1 / 0, read fresh in a subshell (the conf may have changed under us)
   ( unset FLEET_CRED_PROXY; [ -n "${_FCP_ENV_SWITCH:-}" ] && FLEET_CRED_PROXY="$_FCP_ENV_SWITCH"; load_conf; printf '%s' "${FLEET_CRED_PROXY:-0}" )
 }
 
 live_pid() { # the serving proxy's pid, if any
   local p
+  if [ -n "$SEP_RUN" ]; then   # another uid's process: kill -0 cannot tell; the socket can
+    [ -S "$SEP_RUN/ctl.sock" ] && [ -s "$SEP_RUN/port" ] || return 1
+    cat "$SEP_RUN/pid" 2>/dev/null || printf 'separated'
+    return 0
+  fi
   p=$(cat "$STATE/pid" 2>/dev/null) || return 1
   case "$p" in ''|*[!0-9]*) return 1 ;; esac
   kill -0 "$p" 2>/dev/null && printf '%s' "$p"
@@ -58,7 +79,26 @@ load_conf
 [ -n "$_FCP_ENV_SWITCH" ] && FLEET_CRED_PROXY="$_FCP_ENV_SWITCH"
 export FLEET_CONF_DIR="$CONF"
 
+if [ -n "$SEP_RUN" ]; then
+  export FLEET_CRED_CTL_DIR="$SEP_RUN"
+  case "$cmd" in
+    run)   # the role account's service runs the proxy; this one has nothing to start
+      trap 'exit 0' TERM INT
+      while :; do sleep "$IDLE" & wait $! 2>/dev/null; [ -f "$CONF/credsep.json" ] || exec "$0" run "$@"; done ;;
+    ensure|port)
+      live_pid >/dev/null || { echo "fleet-cred-proxy: separated, and its service is not running ($SEP_RUN)" >&2; exit 1; }
+      cat "$SEP_RUN/port"; exit 0 ;;
+    node-token|node-hash|store)
+      exec python3 -I "$PY" --state "$STATE" "$cmd" "$@" ;;
+    probe)
+      [ -f "${1:-}" ] || { echo "fleet-cred-proxy: probe <node-probe.json>" >&2; exit 2; }
+      exec python3 -I "$PY" --state "$STATE" probe < "$1" ;;
+  esac
+fi
+
 case "$cmd" in
+  node-token|node-hash|probe|store)
+    echo "fleet-cred-proxy: $cmd: not separated (bin/fleet-credsep.sh)" >&2; exit 3 ;;
   run)
     child=''
     stop_child() { [ -n "$child" ] && kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; child=''; }

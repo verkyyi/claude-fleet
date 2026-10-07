@@ -67,6 +67,10 @@
 #             written. The github token is read by bin/mcp-github.sh from
 #             `gh auth token` at start — no merged file carries one. Skills are
 #             the two passes above; this one only counts them.
+#   credsep   FLEET_CRED_SEPARATE (issue #1971): converge this login on it —
+#             bin/fleet-credsep.sh apply (install / uninstall / refresh the root-
+#             owned copy; needs password-less sudo, else one line says what to
+#             run). Off and never separated: no line at all.
 #   ui        dash launcher / tmux conf changed -> fleet-ui-refresh.sh --all
 #   repark    re-park stale sleeping-worker pages on every live fleet (#1064)
 #   loopmark  give every Claude window on every live fleet the `@loop` mark its
@@ -895,6 +899,19 @@ if [ -f "$ROOT/bin/fleet-agent-team.py" ] && [ "$DRY" = 0 ] && [ "$BUNDLE" != 1 
     say "agentcfg: ok — expected $(printf '%s\n' "$out" | awk '{printf "%s%s %s", (NR>1?" · ":""), $1, $2}')"
   else
     say "agentcfg: WARN — $(printf '%s\n' "$out" | tail -1)"
+  fi
+fi
+
+# --- credsep (issue #1971, EPIC #1967 C4) ------------------------------------------
+# Converge on FLEET_CRED_SEPARATE: 1 and not separated → install (root once, via
+# password-less sudo; none → one line saying what to run); 0 and separated →
+# uninstall; separated → refresh the root-owned code copy the role account runs.
+# Off and never separated: nothing runs and no line is printed — byte for byte.
+if [ -f "$ROOT/bin/fleet-credsep.sh" ] && [ "$BUNDLE" != 1 ]; then
+  _cs_cf="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+  if [ -f "$_cs_cf/credsep.json" ] || grep -qs '^[[:space:]]*\(export[[:space:]]*\)\{0,1\}FLEET_CRED_SEPARATE=["'"'"']\{0,1\}1' \
+       "$_cs_cf/fleet.conf" "$_cs_cf/fleet.settings" "$ROOT/fleet.conf" || [ "${FLEET_CRED_SEPARATE:-0}" = 1 ]; then
+    say "$(bash "$ROOT/bin/fleet-credsep.sh" apply ${DRYFLAG:+"$DRYFLAG"} 2>&1 | tail -n 1)"
   fi
 fi
 

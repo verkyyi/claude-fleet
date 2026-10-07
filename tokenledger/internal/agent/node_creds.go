@@ -162,9 +162,9 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 		var werr error
 		switch c.Provider {
 		case "claude":
-			werr = writeClaudeCred(a.credAccountsDir(), c.Account, c.Access.AccessToken, c.ExpiresAt, c.Access.Scopes, c.Access.SubscriptionType)
+			werr = writeClaudeCred(a.credAccountsDir(), c.Account, c.Access.AccessToken, c.ExpiresAt, c.Access.Scopes, c.Access.SubscriptionType, a.credSink())
 		case "codex":
-			werr = writeCodexAuth(a.codexHomeFor(c.Account), c.Access.AccessToken, c.Access.IDToken, c.Access.AccountID, now)
+			werr = writeCodexAuth(a.codexHomeFor(c.Account), c.Access.AccessToken, c.Access.IDToken, c.Access.AccountID, now, a.credSink())
 		case "github":
 			werr = writeGHHosts(a.ghConfigDir(), c.Access.User, c.Access.Token)
 		default:
@@ -271,8 +271,10 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 
 // writeClaudeCred writes one Claude account's short-lived token and its label
 // marker. The JSON is the shape Claude Code itself stores (claudeAiOauth),
-// with no refresh token.
-func writeClaudeCred(dir, label, accessToken string, expires *time.Time, scopes []string, subType string) error {
+// with no refresh token. A non-nil sink takes the credential file's bytes
+// instead (claude-fleet#1971: separated, the file lives where only the
+// credential proxy reads); the marker is not a credential and stays here.
+func writeClaudeCred(dir, label, accessToken string, expires *time.Time, scopes []string, subType string, sink credSink) error {
 	if !safeLabel.MatchString(label) {
 		return fmt.Errorf("unsafe account label %q", label)
 	}
@@ -292,12 +294,18 @@ func writeClaudeCred(dir, label, accessToken string, expires *time.Time, scopes 
 		oauth["subscriptionType"] = subType
 	}
 	b, _ := json.Marshal(map[string]any{"claudeAiOauth": oauth})
-	credDir := filepath.Join(dir, label+".hub")
-	if err := os.MkdirAll(credDir, 0o700); err != nil {
-		return err
-	}
-	if err := writeAtomic(filepath.Join(credDir, ".credentials.json"), b, 0o600); err != nil {
-		return err
+	if sink != nil {
+		if err := sink("claude", label, b); err != nil {
+			return err
+		}
+	} else {
+		credDir := filepath.Join(dir, label+".hub")
+		if err := os.MkdirAll(credDir, 0o700); err != nil {
+			return err
+		}
+		if err := writeAtomic(filepath.Join(credDir, ".credentials.json"), b, 0o600); err != nil {
+			return err
+		}
 	}
 	marker := []byte(HubMarkerPrefix + label + "\n")
 	markerPath := filepath.Join(dir, label)
@@ -313,8 +321,10 @@ func writeClaudeCred(dir, label, accessToken string, expires *time.Time, scopes 
 }
 
 // writeCodexAuth writes one Codex home's auth.json, and makes sure that home
-// stores credentials in the file (not a keyring the hub cannot write).
-func writeCodexAuth(home, accessToken, idToken, accountID string, now time.Time) error {
+// stores credentials in the file (not a keyring the hub cannot write). A
+// non-nil sink takes auth.json's bytes instead (claude-fleet#1971), under the
+// home's label — "default" for ~/.codex.
+func writeCodexAuth(home, accessToken, idToken, accountID string, now time.Time, sink credSink) error {
 	if !safeLabel.MatchString(filepath.Base(home)) && filepath.Base(home) != ".codex" {
 		return fmt.Errorf("unsafe codex home %q", home)
 	}
@@ -336,7 +346,15 @@ func writeCodexAuth(home, accessToken, idToken, accountID string, now time.Time)
 		"last_refresh": now.UTC().Format(time.RFC3339),
 	}
 	b, _ := json.MarshalIndent(auth, "", "  ")
-	if err := writeAtomic(filepath.Join(home, "auth.json"), b, 0o600); err != nil {
+	if sink != nil {
+		label := filepath.Base(home)
+		if label == ".codex" {
+			label = "default"
+		}
+		if err := sink("codex", label, b); err != nil {
+			return err
+		}
+	} else if err := writeAtomic(filepath.Join(home, "auth.json"), b, 0o600); err != nil {
 		return err
 	}
 	return ensureCodexFileStore(filepath.Join(home, "config.toml"))

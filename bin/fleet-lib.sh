@@ -5252,10 +5252,35 @@ fleet_node_env_file() { printf '%s/node.env' "$FLEET_CONF_DIR"; }
 
 # _fleet_node_env_val <KEY> → the value node.env assigns KEY ('' when none; rc 1
 # when there is no readable file). READ, never sourced: it holds a credential.
+#
+# Separated (issue #1971, bin/fleet-credsep.sh) node.env is a symlink into the
+# role account's store and unreadable here: CCQUOTA_TOKEN is then a short-lived
+# fcpn1. credential for the credential proxy's hub broker (_fleet_node_broker),
+# every other key comes from node.pub.env — the token-less copy.
 _fleet_node_env_val() {
   local f; f=$(fleet_node_env_file)
+  if [ ! -r "$f" ] && _fleet_node_separated; then
+    if [ "$1" = CCQUOTA_TOKEN ]; then
+      f=$(_fleet_node_broker) || return 1
+      printf '%s\n' "${f#*	}"; return 0
+    fi
+    f="$FLEET_CONF_DIR/node.pub.env"
+  fi
   [ -r "$f" ] || return 1
   sed -n "s/^$1=//p" "$f" | head -n 1
+}
+
+# _fleet_node_separated → rc 0 when this login's credentials live in the role
+# account's store (bin/fleet-credsep.sh wrote $FLEET_CONF_DIR/credsep.json).
+_fleet_node_separated() { [ -f "$FLEET_CONF_DIR/credsep.json" ]; }
+
+# _fleet_node_broker → `<broker url>TAB<fcpn1.…>`: the hub through the credential
+# proxy, which puts the node token in on the way out and never forwards
+# POST /v1/node/credentials. rc 1 = the proxy did not answer.
+_fleet_node_broker() {
+  local out
+  out=$(bash "${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}/fleet-cred-proxy.sh" node-token 2>/dev/null) || return 1
+  case "$out" in http://127.0.0.1:*"	"fcpn1.*) printf '%s\n' "$out" ;; *) return 1 ;; esac
 }
 
 # fleet_spawn_node_default → what a spawn follows when neither --node nor
@@ -5278,6 +5303,11 @@ fleet_spawn_node_default() {
 # never reach the caller, nor anything the caller spawns.
 _fleet_hub_env() {
   local v
+  if [ -z "${CCQUOTA_TOKEN:-}" ] && [ ! -r "$(fleet_node_env_file)" ] && _fleet_node_separated; then
+    # separated (issue #1971): URL and token are ONE pair — the broker's
+    v=$(_fleet_node_broker) && { export CCQUOTA_HUB_URL="${v%%	*}" CCQUOTA_TOKEN="${v#*	}"; }
+    return 0
+  fi
   if [ -z "${CCQUOTA_TOKEN:-}" ]; then v=$(_fleet_node_env_val CCQUOTA_TOKEN); [ -n "$v" ] && export CCQUOTA_TOKEN="$v"; fi
   if [ -z "${CCQUOTA_HUB_URL:-}" ]; then v=$(_fleet_node_env_val CCQUOTA_HUB_URL); [ -n "$v" ] && export CCQUOTA_HUB_URL="$v"; fi
   return 0
