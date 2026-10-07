@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -310,11 +311,31 @@ func optional(s string, ok bool) string {
 // PrincipalID is a person, or store.PoolPrincipal ("pool") for a shared-pool
 // account every active principal may lease.
 type FleetCredentialRequest struct {
-	Action      string           `json:"action"` // put | delete
+	Action      string           `json:"action"` // put | delete | bind
 	PrincipalID string           `json:"principal_id"`
 	Provider    string           `json:"provider"`
 	Account     string           `json:"account"`
 	Secret      credvault.Secret `json:"secret"`
+	// AccountUUID is bind's one argument (claude-fleet#2169): which usage
+	// account an existing credential belongs to. No secret travels with it.
+	AccountUUID string `json:"account_uuid,omitempty"`
+}
+
+var (
+	claudeAccountUUIDRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	codexAccountUUIDRE  = regexp.MustCompile(`^codex:account:[0-9a-f]{32}$`)
+)
+
+// validBindUUID is an account_uuid of the shape the usage side names that
+// provider's accounts — never a win_ fingerprint or a pool stand-in.
+func validBindUUID(provider, uuid string) bool {
+	switch provider {
+	case credvault.Claude:
+		return claudeAccountUUIDRE.MatchString(uuid)
+	case credvault.Codex:
+		return codexAccountUUIDRE.MatchString(uuid)
+	}
+	return false
 }
 
 // handleFleetCredentials lists credential metadata (GET — never a secret) or
@@ -400,12 +421,37 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			audit.Action = store.CredDelete
+		case "bind":
+			// Record which usage account an existing credential belongs to
+			// (claude-fleet#2169): the hub's own quota reading files it under
+			// this. No secret in the request, none in the audit.
+			uuid := strings.TrimSpace(req.AccountUUID)
+			if !validBindUUID(req.Provider, uuid) {
+				httpError(w, http.StatusBadRequest, "bind needs account_uuid: a Claude account's UUID, or a Codex codex:account:<32 hex>")
+				return
+			}
+			if s.vaultLocked(w) {
+				return
+			}
+			if err := s.Vault.BindAccountUUID(req.PrincipalID, req.Provider, req.Account, uuid); err != nil {
+				code := http.StatusInternalServerError
+				switch {
+				case errors.Is(err, store.ErrNoCredential):
+					code = http.StatusNotFound
+				case errors.Is(err, credvault.ErrLocked):
+					code = http.StatusServiceUnavailable
+				}
+				httpError(w, code, err.Error())
+				return
+			}
+			audit.Action = store.CredBind
+			audit.Detail = "account_uuid=" + uuid + " · "
 		default:
-			httpError(w, http.StatusBadRequest, "action must be put or delete")
+			httpError(w, http.StatusBadRequest, "action must be put, delete or bind")
 			return
 		}
 		// Who did it (claude-fleet#1990): the audit page names the admin.
-		audit.Detail = "by " + actorOf(r)
+		audit.Detail += "by " + actorOf(r)
 		_ = s.Store.AddCredAudit(audit)
 		writeJSON(w, http.StatusOK, map[string]string{"ok": req.Action})
 	default:

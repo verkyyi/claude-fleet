@@ -309,3 +309,19 @@ test('a vault guess that fits two accounts, or a stand-in row, matches nothing',
     creds: { credentials: [{ principal_id: 'pool', provider: 'claude', account: 'z' }] } });
   assert.equal(x.find((c) => c.id === 'codex:account:z').cred, null);
 });
+
+test('a card says when its reading was taken and by whom (claude-fleet#2169)', () => {
+  const at = iso(NOW - 120000);
+  const limits = { per_account: [{ account_uuid: 'u-h', limits: { available: true, observed_at: at, read_via: 'hub',
+    five_hour: { utilization: 10 }, seven_day: { utilization: 5 } } },
+  { account_uuid: 'u-n', limits: { available: true, observed_at: at, read_via: 'node', read_note: 'hub reading failed (x); showing a node\'s reading',
+    five_hour: { utilization: 10 } } }] };
+  const accounts = [{ account_uuid: 'u-h', email: 'h@x.io' }, { account_uuid: 'u-n', email: 'n@x.io' }];
+  const [h, n] = subscriptions({ limits, accounts });
+  assert.deepEqual([h.readAt, h.readVia, h.readNote], [at, 'hub', '']);
+  assert.equal(n.readVia, 'node');
+  assert.match(n.readNote, /hub reading failed/);
+  // Without the hub's own reading the fields are simply empty.
+  const [old] = subscriptions({ limits: LIMITS, accounts: ACCOUNTS, creds: CREDS, live: LIVE });
+  assert.equal(old.readVia, '');
+});

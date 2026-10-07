@@ -127,6 +127,12 @@ type Server struct {
 	// as short-lived tokens. nil (no key configured) leaves every credential
 	// route answering 503 and the rest of the fleet module unaffected.
 	Vault *credvault.Vault
+	// HubQuota is the hub reading every pool subscription's quota itself
+	// through the Singapore relay (claude-fleet#2169,
+	// CCQUOTA_FLEET_HUB_QUOTA=relay). Nil: the hub reads none, signs no
+	// quota pass and the subscriptions page shows the nodes' readings —
+	// exactly as before.
+	HubQuota *HubQuota
 	// SessionCredKey signs session passes for untrusted machines
 	// (claude-fleet#1969, CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]); it never
 	// leaves the hub. Nil: /v1/fleet/session-cred answers 503.

@@ -52,6 +52,23 @@ func (s *Server) codexLimitsFor(account string) (*LimitsView, error) {
 	if err != nil {
 		return nil, err
 	}
+	var readNote string
+	if s.HubQuota != nil {
+		// A fresh hub read outranks the collectors' (claude-fleet#2169).
+		hq, err := s.Store.LatestQuotaFrom(account, HubQuotaEndpoint)
+		if err != nil {
+			return nil, err
+		}
+		if hq != nil && time.Since(hq.ObservedAt) <= s.HubQuota.Fresh() {
+			q = hq
+		} else {
+			readNote = s.HubQuota.noteFor(account)
+		}
+		v.ReadNote = readNote
+		if q != nil {
+			v.ReadVia = readVia(q.EndpointID)
+		}
+	}
 	if q == nil {
 		v.ReasonCode = ReasonCodexUnverified
 		v.Reason = LimitsReasonIn(v.ReasonCode, i18n.EN)
@@ -116,6 +133,9 @@ func (s *Server) ingestObservations(endpoint string, b *model.Batch) error {
 		q.EndpointID = endpoint
 		if err := s.Store.InsertQuota(q); err != nil {
 			return err
+		}
+		if q.Observation == "app_server" {
+			s.quotaLeaseDelivered(q.AccountUUID, endpoint, time.Now())
 		}
 	}
 	if b.Collector != nil {
