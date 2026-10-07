@@ -4448,7 +4448,8 @@ fleet_origin_canon() {
   fi
   if [ -n "$k" ]; then
     # A bare key is the one repo's (issue #1939): written qualified, never bare.
-    fleet_key_qualify "${tgt:-$(fleet_current_session 2>/dev/null)}" "$k"; return 0
+    # No target and no pane: no fleet to read a repo from — the key as it is.
+    fleet_key_qualify "${tgt:-$([ -n "${TMUX:-}" ] && fleet_current_session 2>/dev/null)}" "$k"; return 0
   fi
   if [ -n "$det" ]; then
     printf 'fleet: --origin %s is not a provenance key (issue-<N> / scratch-<N>); stamping the detected %s instead\n' "$ex" "$det" >&2
@@ -5878,7 +5879,7 @@ fleet_stamp_origin_gen() {
 # report goes to the retired book (fleet-report-parent.sh). The new holder was
 # allocated a moment ago, so no window can be ITS child yet.
 fleet_scratch_gen_new() {
-  local r key old sock w o
+  local r key old sock w o al
   [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
   r=$(fleet_worktree_repo "$1" "${3:-}"); r=${r%%$'\t'*}
   if [ -n "$r" ]; then key="$(fleet_slug "$r"):$2"
@@ -5886,11 +5887,12 @@ fleet_scratch_gen_new() {
   fi
   case "$key" in ?*:*) ;; *) return 0 ;; esac
   old=$(fleet_key_gen "$1" "$key"); [ -n "$old" ] || old=0
+  al=$(fleet_key_alias "$1" "$key")             # a child stamped bare before #1939 is one too
   fleet_key_gen_new "$1" "$key" >/dev/null || return 0
   sock=$(fleet_socket "$1")
   [ -n "$sock" ] || return 0
   fleet_lw '#{window_id}|#{@origin}' tmux -L "$sock" | while IFS='|' read -r w o; do
-    [ -n "$w" ] && [ "$o" = "$key" ] || continue
+    [ -n "$w" ] && { [ "$o" = "$key" ] || { [ -n "$al" ] && [ "$o" = "$al" ]; }; } || continue
     tmux -L "$sock" set-window-option -t "$w" @origin_retired "$key#$old" \; \
       set-window-option -u -t "$w" @origin \; \
       set-window-option -u -t "$w" @origin_wid \; \

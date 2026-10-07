@@ -37,6 +37,10 @@
 #      tmux with no TMUX_PANE fleet-comment.sh refuses before any gh call, and the
 #      five pane-identity reads go through fleet_pane_fmt; an unstamped @wid handle
 #      is refused by fleet_wid_target and every caller checks its rc.
+#      F6 (issue #1939): a ONE-repo fleet's keys carry the repo too
+#      (`acme-app:issue-7`), a bare key still resolves there as the one repo's
+#      alias (one version), fleet_key_qualify / fleet_key_alias spell the rule, and
+#      adding a second repo changes no existing window's key.
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -85,8 +89,9 @@ ok; [ -n "$fid7" ] && [ "$wid7" = "$U/$fid7" ] || fail "A: worker_id of the issu
 ok; [ "$(lib fleet_worker_id "$L" "$w7")" = "$wid7" ] || fail "A: a second ask returns the same identity (never re-minted)"
 wid3=$(lib fleet_worker_id "$L" "$w3"); fid3=$(tf show-options -wqv -t "$w3" @fleet_id)
 ok; [ -n "$fid3" ] && [ "$fid3" != "$fid7" ] && [ "$wid3" = "$U/$fid3" ] || fail "A: worker_id of the scratch window" "$wid3"
-ok; [ "$(lib fleet_worker_id_key "$L" "$w7")" = "$U/issue-7" ] || fail "A: the key-form alias of the issue window" "$(lib fleet_worker_id_key "$L" "$w7")"
-ok; [ "$(lib fleet_worker_id_key "$L" "$w3")" = "$U/scratch-3" ] || fail "A: the key-form alias of the scratch window" "$(lib fleet_worker_id_key "$L" "$w3")"
+# The key carries the repo in a one-repo fleet too (issue #1939).
+ok; [ "$(lib fleet_worker_id_key "$L" "$w7")" = "$U/acme-app:issue-7" ] || fail "A: the key-form alias of the issue window" "$(lib fleet_worker_id_key "$L" "$w7")"
+ok; [ "$(lib fleet_worker_id_key "$L" "$w3")" = "$U/acme-app:scratch-3" ] || fail "A: the key-form alias of the scratch window" "$(lib fleet_worker_id_key "$L" "$w3")"
 
 # --- B: locate ------------------------------------------------------------------------
 F=11111111-2222-3333-4444-555555555555          # another machine's fleet
@@ -252,6 +257,31 @@ ok; [ "$(tf show-options -wqv -t "$w7b" @origin)" = scratch-3 ] && [ -z "$(tf sh
 run bash "$BIN/fleet-await.sh" 7 -L "$L" --parent scratch-3 --no-spawn --timeout 2 --interval 1
 ok; [ "$rc" = 2 ] && case "$err" in *"--repo"*) true ;; *) false ;; esac || fail "F4: fleet-await without --repo in a 2+ repo fleet → usage refusal" "rc=$rc $err"
 tf kill-window -t "$w7b"; rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; tf set-window-option -u -t "$w7" @repo
+
+# F6 (issue #1939) one spelling: a ONE-repo fleet keys acme-app:issue-7 too; the
+#    bare key is that repo's alias; a second repo renames no session
+okey() { lib fleet_window_okey "$L" "$1"; }
+ok; [ "$(okey "$w7")" = acme-app:issue-7 ] || fail "F6: a one-repo fleet's issue key carries the repo" "$(okey "$w7")"
+ok; [ "$(okey "$w3")" = acme-app:scratch-3 ] || fail "F6: a one-repo fleet's scratch key carries the repo" "$(okey "$w3")"
+wfk acme-app:issue-7 "$L"; ok; [ "$out" = "$w7" ] || fail "F6: the qualified key resolves" "$out / $err"
+wfk issue-7 "$L"; ok; [ "$rc" = 0 ] && [ "$out" = "$w7" ] || fail "F6: the bare key is the one repo's alias" "rc=$rc $out / $err"
+wfk acme-lib:issue-7 "$L"; ok; [ "$rc" = 1 ] || fail "F6: another repo's key never answers" "rc=$rc $out"
+ok; [ "$(lib fleet_key_qualify "$L" issue-7)" = acme-app:issue-7 ] || fail "F6: qualify a bare key" "$(lib fleet_key_qualify "$L" issue-7)"
+ok; [ "$(lib fleet_key_qualify "$L" acme-lib:scratch-2)" = acme-lib:scratch-2 ] || fail "F6: a qualified key passes as is"
+ok; [ "$(lib fleet_key_qualify "$L" hub)" = hub ] || fail "F6: a non-key passes as is"
+ok; [ "$(lib fleet_key_alias "$L" acme-app:scratch-3)" = scratch-3 ] || fail "F6: the alias of the one repo's key" "$(lib fleet_key_alias "$L" acme-app:scratch-3)"
+ok; [ -z "$(lib fleet_key_alias "$L" acme-lib:scratch-3)" ] || fail "F6: no alias for a repo that is not the fleet's"
+O=$(lib fleet_origin_canon issue-7 '' "$L")
+ok; [ "$O" = acme-app:issue-7 ] || fail "F6: an explicit bare --origin is stamped qualified, never bare" "$O"
+mkdir -p "$FLEET_CONF_DIR/fleets/$L/repos"
+printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/$L/repos/acme-app.conf"
+printf 'FLEET_REPO=acme/lib\n' > "$FLEET_CONF_DIR/fleets/$L/repos/acme-lib.conf"
+tf set-window-option -t "$w7" @repo acme/app; tf set-window-option -t "$w3" @repo acme/app
+ok; [ "$(okey "$w7")" = acme-app:issue-7 ] && [ "$(okey "$w3")" = acme-app:scratch-3 ] \
+  || fail "F6: adding a second repo renames no session" "$(okey "$w7") $(okey "$w3")"
+ok; [ "$(lib fleet_key_qualify "$L" issue-7)" = issue-7 ] && [ -z "$(lib fleet_key_alias "$L" acme-app:issue-7)" ] \
+  || fail "F6: in a 2+ repo fleet a bare key names no one repo"
+rm -rf "$FLEET_CONF_DIR/fleets/$L/repos"; tf set-window-option -u -t "$w7" @repo; tf set-window-option -u -t "$w3" @repo
 
 # F5 a position (<sess>:<idx>, <sess>:<name>) and a window NAME are not addresses
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "$L:1" hi
