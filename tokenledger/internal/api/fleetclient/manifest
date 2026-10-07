@@ -163,6 +163,7 @@ mod/fleet/hooks/progress.tsx
 mod/fleet/hooks/register.ts
 mod/fleet/hooks/state.ts
 mod/fleet/hooks/tmux.ts
+mod/fleet/hooks/tools.ts
 mod/fleet/hooks/usage.ts
 mod/fleet/hooks/version.ts
 mod/fleet/hooks/where.ts
