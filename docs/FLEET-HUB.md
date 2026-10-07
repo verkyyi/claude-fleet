@@ -105,8 +105,8 @@ operation journal. Spec: [FLEET-MCP.md](FLEET-MCP.md) «The hub route».
   now. They are re-minted by every migration, restore and warm-pool claim and are
   never accepted as a target.
 
-`worker_message`, `worker_stop`, `worker_resume`, `worker_answer` and
-`worker_reap` take the `worker_id`. The
+`worker_message`, `worker_stop`, `worker_resume`, `worker_answer`,
+`worker_reap` and `worker_switch` take the `worker_id`. The
 node re-resolves it against the fleet's live windows at the moment it acts and
 refuses (`NOT_FOUND`, `AMBIGUOUS`) unless exactly one window holds it — a window
 that merely has the number a caller last saw is never touched. `lifecycle`
@@ -812,6 +812,7 @@ too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
 | `worker_resume(worker_id, idempotency_key)` | Reopen a stopped worker from its `/fleet-history` row in a new window (`dash-restore-session.sh`) | `worker:resume` on the worker's Fleet |
 | `worker_answer(worker_id, answer, idempotency_key)` | Answer what the worker's pane is asking (#1487): `answer` = `yes` / `no` presses the plain Yes / the No of an open **permission prompt** in the caller's name (`fleet-permission.sh --allow` / `--deny --by <actor>`; never a "don't ask again" row); option numbers (`2`, `1,3`; one per question, space-separated) answer an `AskUserQuestion` (`fleet-answer.sh --answer`). Refused — the script's own reason verbatim — when nothing is pending or the screen does not show the row | `worker:answer` on the worker's Fleet |
 | `worker_reap(worker_id, idempotency_key)` | The dash's confirmed reap (#1487): `dash-reap.sh <key> --yes` — close the window, remove the worktree when clean (a dirty one is KEPT); an unlanded Issue stays open with its claim released (#1542); a live or too-young agent is refused with the reason (`skip:live`) | `worker:reap` on the worker's Fleet |
+| `worker_switch(worker_id, idempotency_key, account?)` | Move a session onto an available subscription (#2102): `dash-migrate.sh <window> to [<account>]` — close + `claude --resume` of the same conversation; refused with the migrate's one-line reason when the target is the source, benched or over its quota gate | `worker:stop` on the worker's Fleet |
 | `config_set(fleet_id, key, value, expected_revision, idempotency_key)` | Compare-and-set one allowed configuration key | `config:write` plus an explicit key grant |
 | `operation_get(operation_id)` | Reconcile a caller's own operation with its node | `fleet:read` on the target Fleet |
 | `gh_issue_view(fleet_id, number, repo?, fields?)` | One Issue through the node's `fleet-gh.sh`: the daemons' local copy when fresh, else `gh`, else REST — the `gh --json` fields plus `_source` (`cache`/`gh`/`rest`) and `_age` seconds (#1274) | `gh:read` on that Fleet |
@@ -1190,6 +1191,18 @@ with a code, never `unknown`:
   malformed pick (`INVALID_ARGUMENT`), no named human (`FORBIDDEN`); keys sent
   but never confirmed are `unknown`. A hibernating worker asks nothing
   (`INVALID_STATE`).
+- `worker_switch` (issue #2102) is the sidebar's 「换到可用订阅」 on a row on
+  another machine — the Fleet Shell's only way to move a walled session, the
+  no-repo guide included, since every row it draws is remote. The node resolves
+  the worker (key or identity: a no-repo session has only its identity) to its
+  window and runs `dash-migrate.sh <window> to [<account>]` on the fleet's own
+  server: the migrate's own dry-run refuses the same, a benched or an
+  unverifiable target, or a pane with no Claude, in one line (`failed`,
+  `INVALID_STATE`); a plan that moves is dispatched detached and the fleet's
+  alerts report the landing — `succeeded` means the move started. `account`
+  (optional, one label) names the target, else the fleet's active pick. It
+  needs `worker:stop`: a switch is a stop + resume of the same conversation, so
+  no grant gains a new scope.
 - `worker_reap` is the dash's confirmed ⌃x, unasked: `dash-reap.sh <key>
   --yes` on the fleet's own server (the adapter points bare `tmux` at it through
   `TMUX`, as `fleet-remote-view.sh` does with no pane). Its result token on

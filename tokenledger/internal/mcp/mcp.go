@@ -1316,6 +1316,17 @@ func fleetToolSpecs() []toolSpec {
 			InputSchema: obj(map[string]any{"worker_id": workerIDProp, "idempotency_key": idemProp}, "worker_id", "idempotency_key"),
 		},
 		{
+			Name:  "worker_switch",
+			Title: "Move a worker to an available subscription",
+			Description: "Close the session and resume the same conversation on another subscription " +
+				"(fleet-migrate.sh): account names one, omitted = the fleet's active pick. Refused with the " +
+				"node's reason when the target is the source, benched or above its quota gate, or the pane " +
+				"has no Claude. Success means the move started. Needs worker:stop." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"worker_id": workerIDProp,
+				"account":         map[string]any{"type": "string", "description": "subscription label (optional)"},
+				"idempotency_key": idemProp}, "worker_id", "idempotency_key"),
+		},
+		{
 			Name:  "config_set",
 			Title: "Set one fleet setting",
 			Description: "Compare-and-set one of FLEET_MAX_SESSIONS (0–256), FLEET_AUTOFILL (0|1), " +

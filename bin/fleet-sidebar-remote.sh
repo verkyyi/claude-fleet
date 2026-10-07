@@ -17,6 +17,11 @@
 #                             tmux command string, so it needs no quoting.
 #                             Without it (a terminal): asks for the text, sends
 #                             it, shows the outcome.
+#   switch   worker_switch  — 换到可用订阅 (issue #2102): the node closes the
+#                             session and resumes the same conversation on the
+#                             fleet's active subscription (dash-migrate.sh `to`,
+#                             whose dry-run refuses the same / a benched target);
+#                             toasts the outcome — a refusal says why
 #   answer   worker_answer  — the same: $FLEET_SIDEBAR_TEXT, or asked — a
 #                             permission prompt (`⊘`, needs=perm) takes y / n →
 #                             yes / no; a question (`?`, needs=ask) the option
@@ -92,7 +97,7 @@ else:
 
 label() {  # the action's human name for the toast / popup title
   case "$1" in
-    stop|resume|reap|message|answer) fleet_ui_t "remote_label_${1}_fmt" "$name" "$node" ;;
+    stop|resume|reap|message|answer|switch) fleet_ui_t "remote_label_${1}_fmt" "$name" "$node" ;;
   esac
 }
 # write <tool> <json> [wait] → the record on stdout (fleet-hub-write's), rc its rc
@@ -120,7 +125,7 @@ if fleet_status_hub_lost "$(date +%s)"; then
     message|answer)
       if [ -n "$LINE" ]; then toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")"
       else printf '%s\n%s\n' "$(label "$action")" "$(fleet_ui_t remote_hub_lost_fmt "$FSA")" >&2; pause; fi ;;
-    stop|resume|reap) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
+    stop|resume|reap|switch) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
   esac
   exit 0
 fi
@@ -140,7 +145,7 @@ case "$action" in
     esac
     toast "$msg · $(label reap)"
     ;;
-  stop|resume)
+  stop|resume|switch)
     tool=worker_$action
     rec=$(write "$tool" "$(json_wid)" 30)
     toast "fleet: $(outcome "$rec" "$(label "$action")")"

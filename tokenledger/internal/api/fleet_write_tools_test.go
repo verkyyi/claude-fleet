@@ -240,3 +240,38 @@ func TestFleetWriteByCertificate(t *testing.T) {
 		t.Fatalf("GET %s: HTTP %d", control.WritePath, resp.StatusCode)
 	}
 }
+
+// worker_switch (claude-fleet#2102): the sidebar's 「换到可用订阅」 on a row on
+// another machine. A journalled write under worker:stop's authority (a switch is
+// a stop + resume of the same conversation); the node gets worker_id and, when
+// named, the account label — nothing else, and no label that is not one argv word.
+func TestFleetWriteSwitch(t *testing.T) {
+	h, _, m4, _, f4 := twoNodes(t)
+	wid := f4.FleetID + "/issue-2"
+	if !hasString(FleetTools, "worker_switch") || !fleetWriteTools["worker_switch"] || fleetScopeOf["worker_switch"] != "worker:stop" {
+		t.Fatal("worker_switch must be a listed write tool under worker:stop")
+	}
+	op := postFleet(t, h, "worker_switch", map[string]any{"worker_id": wid, "idempotency_key": "s1"}, 200)
+	if op["status"] != "accepted" {
+		t.Fatalf("worker_switch = %v; want accepted", op)
+	}
+	waitFor(t, 2*time.Second, "the node took the switch", func() bool { return m4.count() == 1 })
+	env := m4.writes[0]
+	params, _ := env["params"].(map[string]any)
+	if env["action"] != "worker_switch" || params["worker_id"] != wid || len(params) != 1 {
+		t.Fatalf("the node was sent %v", env)
+	}
+	postFleet(t, h, "worker_switch", map[string]any{"worker_id": wid, "account": "gmail", "idempotency_key": "s2"}, 200)
+	waitFor(t, 2*time.Second, "the node took the named switch", func() bool { return m4.count() == 2 })
+	params, _ = m4.writes[1]["params"].(map[string]any)
+	if params["account"] != "gmail" || len(params) != 2 {
+		t.Fatalf("the node was sent %v", m4.writes[1])
+	}
+	for i, bad := range []any{"", "a b", "x;rm", "../x", 3, true} {
+		postFleet(t, h, "worker_switch", map[string]any{"worker_id": wid, "account": bad, "idempotency_key": fmt.Sprintf("bad-%d", i)}, 400)
+	}
+	postFleet(t, h, "worker_switch", map[string]any{"worker_id": wid, "text": "x", "idempotency_key": "extra"}, 400)
+	if m4.count() != 2 {
+		t.Fatalf("a refused switch reached the node (%d writes)", m4.count())
+	}
+}

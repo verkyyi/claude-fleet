@@ -239,6 +239,8 @@ fleet_ui_t() {
     # a remote row's action, named for its toast / popup (fleet-sidebar-remote.sh)
     zh:remote_label_stop_fmt)    printf '停 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_stop_fmt)    printf 'stop %s (on %s)' "${1:-}" "${2:-}" ;;
+    zh:remote_label_switch_fmt)  printf '%s 换订阅（在 %s）' "${1:-}" "${2:-}" ;;
+    en:remote_label_switch_fmt)  printf 'switch %s to an available subscription (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_resume_fmt)  printf '继续 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_resume_fmt)  printf 'resume %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_reap_fmt)    printf '回收 %s（在 %s）' "${1:-}" "${2:-}" ;;
@@ -498,6 +500,8 @@ clients	d	my clients — in the client only: every device you have open, its ter
     en:menu_r_stop)             printf 'Stop (/exit)' ;;
     zh:menu_r_resume)           printf '继续（恢复）' ;;
     en:menu_r_resume)           printf 'Resume' ;;
+    zh:menu_r_switch)           printf '换到可用订阅（同一对话）' ;;
+    en:menu_r_switch)           printf 'Move to an available subscription' ;;
     zh:menu_r_answer)           printf '答授权 / 回答…' ;;
     en:menu_r_answer)           printf 'Answer prompt…' ;;
     zh:menu_r_answer_none)      printf '答授权 / 回答（没有在等）' ;;

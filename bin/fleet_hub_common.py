@@ -22,12 +22,22 @@ SCOPES = {"fleet:read", "worker:start", "worker:message", "worker:stop", "worker
 SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             "worker_message": "worker:message", "worker_stop": "worker:stop",
             "worker_resume": "worker:resume", "worker_answer": "worker:answer",
-            "worker_reap": "worker:reap", "gh_comment": "gh:comment"}
+            "worker_reap": "worker:reap", "gh_comment": "gh:comment",
+            # worker_switch (issue #2102) closes the session and resumes the same
+            # conversation on another subscription: a stop's authority, no new grant.
+            "worker_switch": "worker:stop"}
 # The tools that name a WORKER (a worker_id), not a fleet. worker_answer and
 # worker_reap (issue #1487, EPIC #1479 C8) are what a sidebar on another machine
 # runs on a row here: answer the pane's open prompt (fleet-answer.sh /
 # fleet-permission.sh) and reap the row (dash-reap.sh --yes).
-WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap")
+# worker_switch (issue #2102): the sidebar's 「换到可用订阅」 on a row here —
+# dash-migrate.sh <window> to [<account>]: the same conversation resumed on the
+# fleet's active (or the named) subscription.
+WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap",
+                  "worker_switch")
+# worker_switch's optional `account`: a label in the accounts dir, one argv word
+# (fleet-manual-sub.sh check's own rule).
+ACCOUNT_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}")
 # worker_answer's `answer` (issue #1487): `yes` / `no` for a permission prompt
 # (fleet-permission.sh --allow / --deny), else the picks of an AskUserQuestion —
 # one option number per question in order, `1,3` toggling several in a
@@ -392,6 +402,11 @@ def validate_write(action, params):
     elif action in WORKER_ACTIONS:
         if action == "worker_answer":
             fields(params, ("worker_id", "answer"))
+        elif action == "worker_switch":
+            fields(params, ("worker_id",), ("account",))
+            if "account" in params and not (isinstance(params["account"], str)
+                                            and ACCOUNT_RE.fullmatch(params["account"])):
+                raise Fault("INVALID_ARGUMENT", "account must be an account label")
         else:
             fields(params, ("worker_id",), ("text",) if action == "worker_message" else ())
         parse_worker_id(params["worker_id"])
