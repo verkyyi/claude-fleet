@@ -1,0 +1,14 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-credproxy
+spec:
+  template:
+    spec:
+      containers:
+        - name: credproxy
+          env:
+            # The fleet's own Singapore forwarder (EPIC #1967 拍板 1, C7:
+            # extras/cred-relay/Caddyfile, docs/CRED-RELAY.md).
+            - name: CCQUOTA_CREDPROXY_RELAY_URL
+              value: "https://fleet-relay.24hw.cn"

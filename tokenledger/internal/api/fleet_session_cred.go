@@ -50,6 +50,8 @@ import (
 //	POST   /verify   the verifiers (CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN)
 //	                 or the operator: {cred, principal?, provider?} →
 //	                 {valid, principal, worker_id, machine, providers, exp, revoked}
+//	GET|PUT /bind    a session's account binding, for the cluster credential
+//	                 proxy (claude-fleet#1973): the issuing node or the operator
 //	DELETE /<id>     the issuing node (the session wrapper at exit, C5) or the operator
 //	GET    ""        the operator's list (?all=1 includes revoked / expired)
 //
@@ -323,20 +325,27 @@ func (s *Server) handleSessionCred(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		operator(s.handleSessionCredVerify)
+	case sub == "bind" && (r.Method == http.MethodGet || r.Method == http.MethodPut):
+		// a session's account binding (claude-fleet#1973, fleet_credproxy.go)
+		if ep != nil {
+			s.handleSessionBind(w, r, ep)
+			return
+		}
+		operator(func(w http.ResponseWriter, r *http.Request) { s.handleSessionBind(w, r, nil) })
 	case sub == "renew" && r.Method == http.MethodPost:
 		if ep == nil {
 			sessionCredRefuse(w, http.StatusUnauthorized, "unauthenticated", "the issuing node's enrollment token is required")
 			return
 		}
 		s.renewSessionCred(w, r, ep)
-	case sub != "" && !strings.Contains(sub, "/") && sub != "verify" && sub != "renew" && r.Method == http.MethodDelete:
+	case sub != "" && !strings.Contains(sub, "/") && sub != "verify" && sub != "renew" && sub != "bind" && r.Method == http.MethodDelete:
 		if ep != nil {
 			s.revokeSessionCred(w, r, sub, ep)
 			return
 		}
 		operator(func(w http.ResponseWriter, r *http.Request) { s.revokeSessionCred(w, r, sub, nil) })
 	default:
-		httpError(w, http.StatusMethodNotAllowed, "POST (issue) · GET (list) · POST /verify · POST /renew · DELETE /<id>")
+		httpError(w, http.StatusMethodNotAllowed, "POST (issue) · GET (list) · POST /verify · POST /renew · GET|PUT /bind · DELETE /<id>")
 	}
 }
 

@@ -1002,7 +1002,11 @@ active account when it shipped was marked trusted once
 untrusted machine borrows a revocable `fcp-h1.` session pass instead
 (claude-fleet#1969, `/v1/fleet/session-cred` — issue / renew / verify / revoke;
 key `CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]`, verifiers
-`CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]`; docs/FLEET-HUB.md). The operator
+`CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]`; docs/FLEET-HUB.md), which the
+cluster credential proxy — `ccquota credproxy`, its own Deployment
+(deploy/k8s/credproxy, claude-fleet#1973) — swaps for the bound account's
+credential via `/v1/fleet/credproxy/resolve`
+(`CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE]`). The operator
 stores, lists and revokes:
 
     # store (or replace) — the secret never comes back out of the hub

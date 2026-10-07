@@ -1295,6 +1295,32 @@ DELETE, or a machine / person revoke — is seen at once. Every issue, renewal a
 revocation is a `fleet_audit` row (`session_cred`) carrying the `worker_id`. A
 trusted machine may ask for one too; by default it leases as before.
 
+**The cluster credential proxy** (claude-fleet#1973, EPIC #1967 C6) is what
+takes those passes: `ccquota credproxy`, the hub's image as its own stateless
+Deployment (`deploy/k8s/credproxy`, ≥ 2 replicas, applied by a person — its
+README is the runbook), behind the same front door at `/v1/proxy/anthropic/…`
+and `/v1/proxy/codex/…` (an untrusted machine's `FLEET_CRED_CENTRAL_URL`
+defaults to the hub URL, so nothing on the machine changes). It asks the hub
+one question per pass, `POST /v1/fleet/credproxy/resolve {cred, provider}`
+with `CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE]` (unset = `503 credproxy_off`; the
+verifier's token is not enough — resolve hands out an access token) →
+`{valid, reason, principal, worker_id, owner, account, bind_rev, access_token,
+account_id, expires_at}`: verify as above, then the session's account binding
+(`fleet_session_binds`, by `worker_id`: the first resolve picks the person's
+own account for the provider, else a shared-pool one, and keeps it), then the
+vault's lease of that account. `GET|PUT /v1/fleet/session-cred/bind
+{worker_id, provider, account, owner?}` (the node that issued the session a
+live pass, or the operator) lists / rebinds — a `fleet_audit` `session_bind`
+row; the proxy sees it within its ≤ 30 s cache. The proxy swaps the pass for
+the token (Claude: `Authorization` + the oauth beta, `x-api-key` dropped; Codex:
+`Authorization` + `chatgpt-account-id`), forwards the session's pass to the
+Singapore relay as `X-Fleet-Relay`, passes the body byte for byte, streams the
+answer, and writes one audit line per request (principal, worker_id, account,
+status, bytes — never a header). A refused pass or no account is a 403; a hub
+that cannot answer is ridden out on the cached answer for up to `--stale`
+(15 min, never past the token's expiry), and only a pass it has never seen gets
+a 503.
+
 Importing: `bin/fleet-creds-import.sh` for Claude setup tokens,
 `bin/fleet-creds-import.sh --codex [profile]` for a Codex refresh token (reads
 `~/.codex/auth.json`, or the home a ccquota-registered profile name points at —

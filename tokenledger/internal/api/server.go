@@ -157,6 +157,10 @@ type Server struct {
 	// call POST /v1/fleet/session-cred/verify
 	// (CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]); empty = the operator only.
 	SessionCredVerifyToken string
+	// CredProxyToken admits the cluster credential proxy (`ccquota
+	// credproxy`, claude-fleet#1973) to POST /v1/fleet/credproxy/resolve
+	// (CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE]); empty = the route answers 503.
+	CredProxyToken string
 	// sessCred caches verified passes' rows for ≤ 30 s.
 	sessCred sessionCredCache
 	// leaseNow replaces the lease clock in tests (claude-fleet#1422).
@@ -398,6 +402,9 @@ func (s *Server) routes() *routeMux {
 		// the list by the operator — each route checks its own.
 		mux.HandleFunc("/v1/fleet/session-cred", s.handleSessionCred)
 		mux.HandleFunc("/v1/fleet/session-cred/", s.handleSessionCred)
+		// The cluster credential proxy's one question (claude-fleet#1973):
+		// its own token, checked by the handler.
+		mux.HandleFunc(CredProxyResolvePath, s.handleCredProxyResolve)
 		// The relay (claude-fleet#1413). Both halves authenticate
 		// themselves: the client by session, token or certificate (the
 		// last proven in-band, so outside the viewer gate), the agent by

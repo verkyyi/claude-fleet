@@ -219,11 +219,26 @@ func loadFleetCerts(srv *api.Server) error {
 	return nil
 }
 
+// envOrFile reads a secret from NAME_FILE (a Secret mount) or NAME.
+func envOrFile(name string) (string, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if path := os.Getenv(name + "_FILE"); path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("%s_FILE: %w", name, err)
+		}
+		v = strings.TrimSpace(string(b))
+	}
+	return v, nil
+}
+
 // loadSessionCreds wires session passes for untrusted machines
 // (claude-fleet#1969): CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE] is the signing
 // key (its own k8s Secret, never the database);
 // CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE] admits the cluster
-// credential proxy and the relay to /verify. No key: the routes answer 503
+// credential proxy and the relay to /verify;
+// CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE] admits `ccquota credproxy` to
+// resolve (claude-fleet#1973). No key: the routes answer 503
 // and nothing else changes. A key that is set but unreadable is fatal.
 func loadSessionCreds(srv *api.Server) error {
 	key, ok, err := api.LoadSessionCredKey(os.Getenv)
@@ -244,6 +259,14 @@ func loadSessionCreds(srv *api.Server) error {
 		vt = strings.TrimSpace(string(b))
 	}
 	srv.SessionCredVerifyToken = vt
+	pt, err := envOrFile("CCQUOTA_FLEET_CREDPROXY_TOKEN")
+	if err != nil {
+		return err
+	}
+	srv.CredProxyToken = pt
+	if pt != "" {
+		log.Printf("fleet: cluster credential proxy admitted — %s", api.CredProxyResolvePath)
+	}
 	log.Printf("fleet: session passes on — /v1/fleet/session-cred (verify: %s)",
 		map[bool]string{true: "verifier token + operator", false: "operator only"}[vt != ""])
 	return nil

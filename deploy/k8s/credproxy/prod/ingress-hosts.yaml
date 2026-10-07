@@ -1,0 +1,33 @@
+# Both of the hub's addresses (../../overlays/prod/ingress-hosts.yaml): a
+# machine's central route is the hub URL it was installed with.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ccquota-credproxy
+spec:
+  tls:
+    - hosts:
+        - claudefleet.24haowan.com
+        - ccquota.24haowan.com
+      secretName: 24haowan.com
+  rules:
+    - host: claudefleet.24haowan.com
+      http:
+        paths:
+          - path: /v1/proxy/
+            pathType: Prefix
+            backend:
+              service:
+                name: ccquota-credproxy
+                port:
+                  number: 80
+    - host: ccquota.24haowan.com
+      http:
+        paths:
+          - path: /v1/proxy/
+            pathType: Prefix
+            backend:
+              service:
+                name: ccquota-credproxy
+                port:
+                  number: 80
