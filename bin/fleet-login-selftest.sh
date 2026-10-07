@@ -30,6 +30,8 @@
 #                the start request carries the device name too
 #   H. nologin   the hub denies a person with no machine login (code
 #                no_machine_login): the client prints the reason, exits 1 (#2090)
+#   I. pick      `fleet-connect.py --pick` that needs a scan: everything the
+#                scan shows is on stderr, stdout is one JSON line (#2090)
 #   G. blip      a 503 between two polls (the ingress, the hub restarting) is
 #                not a refusal: the client keeps waiting and gets its
 #                certificate (#1901 — a colleague's first scan died on one)
@@ -232,6 +234,18 @@ rm -f "$SB/nologin"
 [ "$rc" = 1 ] && [ ! -e "$HOME/.ssh/fleet-cert-cert.pub" ] && echo "$out" | grep -q '「使用者」页给 cjilyy 设机器登录' \
   && ! echo "$out" | grep -q 'timed out' && ok "H no machine login → reason printed, exit 1" || bad "H nologin rc=$rc: $out"
 echo "$out" | grep -q 'GitHub' && ! echo "$out" | grep -q '企业微信' && ok "H the prompt says GitHub, not WeCom" || bad "H prompt: $out"
+
+# ── I — `fleet --pick` (fleet-shell.sh captures its stdout) that needs a scan:
+#        the code, QR and link reach the person on stderr; stdout stays the one JSON line (#2090) ──
+rm -f "$HOME/.ssh/fleet-cert-cert.pub" "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub" \
+      "$HOME/.config/claude-fleet/hub.json"   # B's token would skip the certificate
+start_hub
+python3 "$BIN/fleet-connect.py" --hub "http://127.0.0.1:$PORT" --pick >"$SB/pick.out" 2>"$SB/pick.err" </dev/null; rc=$?
+stop_hub
+if [ "$(wc -l <"$SB/pick.out" | tr -d ' ')" = 1 ] && python3 -c 'import json,sys; json.loads(open(sys.argv[1]).read())' "$SB/pick.out" \
+   && grep -q 'BCDF-GHJK' "$SB/pick.err" && grep -q '链接：http://' "$SB/pick.err" && grep -q '证书已写入' "$SB/pick.err"; then
+  ok "I --pick with a scan: code + link + ✓ on stderr, stdout one JSON line"
+else bad "I pick rc=$rc stdout=[$(cat "$SB/pick.out")] stderr=[$(cat "$SB/pick.err")]"; fi
 
 [ "$fail" = 0 ] && echo "PASS fleet-login-selftest" || echo "FAIL fleet-login-selftest"
 exit "$fail"
