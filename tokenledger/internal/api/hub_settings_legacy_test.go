@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,9 +36,17 @@ func oldIdentity(t *testing.T, st *store.Store, pid, login, host string, mapped 
 
 func settingCount(t *testing.T, st *store.Store, key string) int {
 	t.Helper()
-	var n int
-	if err := st.DB().QueryRow(`SELECT count(*) FROM fleet_settings WHERE key = ? COLLATE NOCASE`, key).Scan(&n); err != nil {
+	// Through the store, not raw SQL: COLLATE NOCASE is SQLite's only, and
+	// the Postgres leg runs this too (claude-fleet#2163).
+	all, err := st.FleetSettings()
+	if err != nil {
 		t.Fatal(err)
+	}
+	n := 0
+	for k := range all {
+		if strings.EqualFold(k, key) {
+			n++
+		}
 	}
 	return n
 }
