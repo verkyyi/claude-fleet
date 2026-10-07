@@ -18,6 +18,9 @@
 #     drops the effort below pane_width 100 and the model below 70, never the %;
 #     a Codex-shaped window (% alone) shows just the %; no @ctx_pct ⇒ the header
 #     is byte for byte the pre-#1452 ` name #issue `
+#   • the PR segment (#1954): `PR #N` + ✓ 检查通过 (green) / … 检查中 (amber) /
+#     ✗ <red checks> (red, cut at 24) off @pr_num/@pr_ci/@pr_fail; no @pr_num ⇒
+#     the header is byte for byte the old one
 #   • panels never show it: the hub / dash / sidebar panes, and a window NAMED
 #     dash / plan / backlog
 #
@@ -172,10 +175,42 @@ tmux set-window-option -u -t "$ww" @effort
 tmux set-window-option -u -t "$ww" @ctx_pct
 [ "$(render "$ww")" = " issue-267 #267 " ] || fail "no @ctx_pct must leave the old header untouched — got [$(render "$ww")]"
 
+# --- #1954: the PR segment after the name — PR #N + its checks ----------------
+# what bin/tmux-pr-refresh.sh stamps: @pr_num / @pr_ci / @pr_fail
+tmux set-window-option -t "$ww" @pr_num '#1951' \; set-window-option -t "$ww" @pr_ci '✓' \; set-window-option -t "$ww" @pr_fail ''
+[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✓ 检查通过  " ] || fail "green PR segment — got [$(render "$ww")]"
+case "$(raw "$ww")" in *'#[bg=#9ece6a]#[bold] PR #1951 ✓ 检查通过 '*) : ;; *) fail "✓ must draw on green — got [$(raw "$ww")]" ;; esac
+tmux set-window-option -t "$ww" @pr_ci '…'
+[ "$(render "$ww")" = " issue-267 #267  PR #1951 … 检查中  " ] || fail "pending PR segment — got [$(render "$ww")]"
+case "$(raw "$ww")" in *'#[bg=#e0af68]#[bold] PR #1951 … 检查中 '*) : ;; *) fail "… must draw on amber — got [$(raw "$ww")]" ;; esac
+tmux set-window-option -t "$ww" @pr_ci '✗' \; set-window-option -t "$ww" @pr_fail 'shellcheck'
+[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✗ shellcheck  " ] || fail "red PR segment names the red check — got [$(render "$ww")]"
+case "$(raw "$ww")" in *'#[bg=#f7768e]#[bold] PR #1951 ✗ shellcheck '*) : ;; *) fail "✗ must draw on red — got [$(raw "$ww")]" ;; esac
+# several red checks: the comma-joined names survive the #{?…} nesting; a long list is cut
+tmux set-window-option -t "$ww" @pr_fail 'lint,selftests (1/8),selftests (2/8),selftests (3/8)'
+case "$(render "$ww")" in
+  *' PR #1951 ✗ lint,selftests (1/8),sel…  ') : ;;
+  *) fail "a long red list must be cut to 24 columns, … included — got [$(render "$ww")]" ;;
+esac
+tmux set-window-option -t "$ww" @pr_fail ''
+[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✗ 检查没过  " ] || fail "red with no name → 检查没过 — got [$(render "$ww")]"
+# a PR with no checks at all: just the number, muted
+tmux set-window-option -t "$ww" @pr_ci ''
+[ "$(render "$ww")" = " issue-267 #267  PR #1951  " ] || fail "no-checks PR segment — got [$(render "$ww")]"
+# beside the right segment: both draw
+tmux set-window-option -t "$ww" @pr_ci '✓' \; set-window-option -t "$ww" @ctx_pct 62
+[ "$(render "$ww")" = " issue-267 #267  PR #1951 ✓ 检查通过  62% " ] || fail "PR segment + ctx % — got [$(render "$ww")]"
+tmux set-window-option -u -t "$ww" @ctx_pct
+# @pr_num empty (the refresher's 'no open PR') or unset → byte for byte the old header
+tmux set-window-option -t "$ww" @pr_num ''
+[ "$(render "$ww")" = " issue-267 #267 " ] || fail "an empty @pr_num must leave the header untouched — got [$(render "$ww")]"
+tmux set-window-option -u -t "$ww" @pr_num \; set-window-option -u -t "$ww" @pr_ci \; set-window-option -u -t "$ww" @pr_fail
+[ "$(render "$ww")" = " issue-267 #267 " ] || fail "no @pr_num must leave the header untouched — got [$(render "$ww")]"
+
 # panels never show it: the hub + dash panes (their window stamped), the sidebar,
 # and a window NAMED dash / plan / backlog
-tmux set-window-option -t "$hw" @ctx_pct 62 \; set-window-option -t "$hw" @model 'Opus 5.5' \; set-window-option -t "$hw" @effort high
-case "$(render "$sp")" in *%*|*Opus*) fail "the hub pane must not show the segment — got [$(render "$sp")]" ;; esac
+tmux set-window-option -t "$hw" @ctx_pct 62 \; set-window-option -t "$hw" @model 'Opus 5.5' \; set-window-option -t "$hw" @effort high \; set-window-option -t "$hw" @pr_num '#1' \; set-window-option -t "$hw" @pr_ci '✓'
+case "$(render "$sp")" in *%*|*Opus*|*"PR #"*) fail "the hub pane must not show the segment — got [$(render "$sp")]" ;; esac
 [ -z "$(render "$dp" | tr -d '[:space:]')" ] || fail "the dash pane must stay empty with stamps — got [$(render "$dp")]"
 sw="$(tmux new-window -P -F '#{window_id}' -t s: -n sidebar)"
 sbp="$(tmux display-message -p -t "$sw" '#{pane_id}')"
@@ -188,12 +223,12 @@ case "$(render "$sbp")" in
 esac
 for nm in dash plan backlog; do
   pw="$(tmux new-window -P -F '#{window_id}' -t s: -n "$nm")"
-  tmux set-window-option -t "$pw" @ctx_pct 62 \; set-window-option -t "$pw" @model 'Opus 5.5' \; set-window-option -t "$pw" @effort high
+  tmux set-window-option -t "$pw" @ctx_pct 62 \; set-window-option -t "$pw" @model 'Opus 5.5' \; set-window-option -t "$pw" @effort high \; set-window-option -t "$pw" @pr_num '#1' \; set-window-option -t "$pw" @pr_ci '✓'
   case "$(render "$pw")" in
-    *%*|*Opus*) fail "a window named $nm is a panel and must not show the segment — got [$(render "$pw")]" ;;
+    *%*|*Opus*|*"PR #"*) fail "a window named $nm is a panel and must not show the segment — got [$(render "$pw")]" ;;
     *"$nm"*) : ;;
     *) fail "a window named $nm lost its name — got [$(render "$pw")]" ;;
   esac
 done
 
-printf 'selftest OK: top-of-window header routes worker/hub/dash/raw correctly (#267) and carries %% · model · effort on the right (#1452)\n'
+printf 'selftest OK: top-of-window header routes worker/hub/dash/raw correctly (#267), carries %% · model · effort on the right (#1452) and PR #N + its checks after the name (#1954)\n'

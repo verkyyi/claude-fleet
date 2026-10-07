@@ -25,6 +25,8 @@
 #                   `deploy✗` and the landed list's `dep` column. `live` is terminal.
 #   prmap         — flat mirror of the PRIMARY (FLEET_REPO) slug'd file
 #   @prci / @pfg  — per-window tmux options (glyph + color)
+#   @pr_num / @pr_ci / @pr_fail — the open PR's #N, check verdict (✓ … ✗) and red
+#                   check names: the session header's PR segment (issue #1954)
 # Reads (owned by the collector, read-only here): sessmap (session→slug→repo)
 # and git_<key> (window branch). Run from launchd (com.claude-fleet.pr-refresh,
 # StartInterval FLEET_PR_REFRESH_INTERVAL) or a systemd user timer.
@@ -289,11 +291,11 @@ MR_SEEN=' ' MR_MULTI=' '
 # -a` lists a session's windows together.
 last_sess=$US; sess_prmf=''
 for sock in $SOCKETS; do
-wl=$(fleet_lw "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}${US}#{@repo}${US}#{@norepo}" tmux -L "$sock")
+wl=$(fleet_lw "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}${US}#{@repo}${US}#{@norepo}${US}#{@pr_num}${US}#{@pr_ci}${US}#{@pr_fail}" tmux -L "$sock")
 # tmux 3.4 escapes a control separator as the literal four bytes `\037`;
 # newer versions return the byte. Accept both (same as tmux-dashboard-rows.sh).
 wl=${wl//\\037/$US}
-while IFS="$US" read -r sess win path cur wrepo wnorepo; do
+while IFS="$US" read -r sess win path cur wrepo wnorepo cnum cci cfail; do
   [ -z "$path" ] && continue
   case "$MR_SEEN" in *" $sess "*) ;; *)
     MR_SEEN="$MR_SEEN$sess "
@@ -317,7 +319,7 @@ while IFS="$US" read -r sess win path cur wrepo wnorepo; do
   key=$(cache_key "$path")
   branch=''; [ -f "$G/git_$key" ] && IFS= read -r branch < "$G/git_$key" 2>/dev/null
   branch=${branch%%$'\t'*}                       # field 1, no `cut`
-  glyph=""; pfg=""
+  glyph=""; pfg=""; st=""; pnum=""; pfail=""; hci=""
   if [ -n "$prmf" ] && [ -n "$branch" ] && [ "$branch" != "-" ]; then
     # The cache branch may carry +ahead/-behind decorations. Try it EXACTLY first,
     # then decoration-stripped — the same three spellings, in the same order, as
@@ -328,11 +330,11 @@ while IFS="$US" read -r sess win path cur wrepo wnorepo; do
     # …and hand back just the hit's state / CI / readiness / merge sha, US-joined
     # (US is not IFS whitespace, so an EMPTY field survives the read below).
     hit=$(awk -F'\t' -v x1="$branch" -v x2="$b3" -v x3="$b2" '
-      { r = $3 "\037" $4 "\037" $5 "\037" $6 }
+      { r = $3 "\037" $4 "\037" $5 "\037" $6 "\037" $2 "\037" $7 }
       $1==x1 && h1=="" {h1=r} $1==x2 && h2=="" {h2=r} $1==x3 && h3=="" {h3=r}
       END { if (h1!="") print h1; else if (h2!="") print h2; else if (h3!="") print h3 }' "$prmf" 2>/dev/null)
-    st=''; ci=''; ready=''; msha=''
-    [ -n "$hit" ] && IFS="$US" read -r st ci ready msha <<< "$hit"
+    st=''; ci=''; ready=''; msha=''; pnum=''; pfail=''
+    [ -n "$hit" ] && IFS="$US" read -r st ci ready msha pnum pfail <<< "$hit"
     # a live window sitting on a MERGED branch is a deploy-state candidate (#541):
     # hand its merge sha to the deploy pass below, as a PID-unique temp file swept by
     # the EXIT trap (keyed by the prmap's dir, so each repo's candidates stay its own).
@@ -340,6 +342,10 @@ while IFS="$US" read -r sess win path cur wrepo wnorepo; do
       [ -n "$msha" ] && printf '%s\t%s\n' "${prmf%/*}" "$msha" >> "$C/deploy-live.$$"
     fi
     if [ -n "$hit" ] && [ "$st" = "OPEN" ]; then
+      # the session header's PR segment (issue #1954): #N + the bare check verdict
+      # (✓ / … / ✗, "" for no checks) + the red checks' names
+      case "$ci" in ✓|…|✗) hci=$ci ;; esac
+      [ "$hci" = ✗ ] || pfail=''
       case "$ci" in
         ✗) glyph="✗"; pfg="#f7768e";;   # real CI failure → attention
         ✓) case "$ready" in             # green: decorate by land-readiness (#533)
@@ -356,6 +362,15 @@ while IFS="$US" read -r sess win path cur wrepo wnorepo; do
   if [ "$cur" != "$glyph" ]; then
     tmux -L "$sock" set-window-option -t "$win" @prci "$glyph" 2>/dev/null
     tmux -L "$sock" set-window-option -t "$win" @pfg "$pfg" 2>/dev/null
+  fi
+  # @pr_num / @pr_ci / @pr_fail: what conf/tmux-attention.conf's pane-border-format
+  # draws as the header's PR segment (issue #1954) — an OPEN PR only, else all "".
+  # Same single writer, same change-only discipline: one tmux call per change.
+  [ "$st" = OPEN ] || { pnum=''; hci=''; pfail=''; }
+  if [ "$cnum" != "$pnum" ] || [ "$cci" != "$hci" ] || [ "$cfail" != "$pfail" ]; then
+    tmux -L "$sock" set-window-option -t "$win" @pr_num "$pnum" \; \
+      set-window-option -t "$win" @pr_ci "$hci" \; \
+      set-window-option -t "$win" @pr_fail "$pfail" 2>/dev/null
   fi
 done <<< "$wl"
 done

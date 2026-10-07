@@ -6879,7 +6879,7 @@ fleet_backlog_col_header() {
 #
 # Input: the JSON array from
 #   gh pr list --state all --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,mergeCommit
-# Output: one line per branch (newest PR wins):  branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha
+# Output: one line per branch (newest PR wins):  branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha<TAB>fail
 #   ci    ·  no checks at all
 #         ✗  any red: a CheckRun whose conclusion is FAILURE / TIMED_OUT / CANCELLED /
 #            ACTION_REQUIRED, or a StatusContext (the OTHER rollup shape — it has
@@ -6899,8 +6899,11 @@ fleet_backlog_col_header() {
 #   sha   the MERGE commit (mergeCommit.oid) of a MERGED PR, "" otherwise (issue #541).
 #         The deploy probe below keys its fleets/<slug>/deploy_<sha> cache on it; the
 #         ledger's own sha is the pre-squash worktree HEAD, which is NOT on master.
+#   fail  the names of the RED checks (CheckRun .name / StatusContext .context), sorted,
+#         comma-joined, "" when none (issue #1954) — the session header's `✗ <name>`.
+#         Last on the line, so every reader that cuts the sha at the next tab is unchanged.
 # The first 4 fields are a stable contract (fleet-cleanup-daemon.sh keys off
-# branch/#num/state); readers tab-guard a missing 5th/6th field to "" (older caches).
+# branch/#num/state); readers tab-guard a missing 5th/6th/7th field to "" (older caches).
 # shellcheck disable=SC2016,SC2034  # jq vars ($r/$ci/$ready) not shell — keep single-quoted; read cross-file by pr-refresh + its selftest
 FLEET_PRMAP_JQ='group_by(.headRefName)[] | max_by(.number) |
   (.statusCheckRollup // []) as $r |
@@ -6919,8 +6922,13 @@ FLEET_PRMAP_JQ='group_by(.headRefName)[] | max_by(.number) |
       elif .mergeStateStatus=="BLOCKED"                                      then "blocked"
       else "unknown" end)
    else "" end) as $ready |
+  ([$r[] | select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT"
+                  or .conclusion=="CANCELLED" or .conclusion=="ACTION_REQUIRED"
+                  or .state=="FAILURE" or .state=="ERROR")
+        | (.name // .context // "") | gsub("[\t\n,]"; " ") | select(. != "")]
+   | unique | join(",")) as $fail |
   .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + $ci + "\t" + $ready
-  + "\t" + (.mergeCommit.oid // "")'
+  + "\t" + (.mergeCommit.oid // "") + "\t" + $fail'
 
 # ── poll backoff for the 15s GitHub pollers (issue #892) ─────────────────────────
 # pr-refresh and the issue-bridge poll each fire every ~15s and each fire used to
