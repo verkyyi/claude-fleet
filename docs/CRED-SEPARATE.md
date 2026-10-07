@@ -162,6 +162,28 @@ again. The shared proxy dying is BREAK-IT `cred-shared-down`.
 `bin/fleet-cred-shared-selftest.sh` runs two logins through one proxy in a
 sandbox.
 
+## A step fails halfway (issue #2273)
+
+The one sudo is the person's — `hooks/bash-guard.py` refuses `install` /
+`uninstall` / `apply` / `machine install|uninstall` from any session, even
+with password-less sudo (`--dry-run`, `plan`, `status` pass;
+`FLEET_ALLOW_CREDSEP_SUDO=1` in the session's start environment is the
+person's hatch).
+
+`install` and `machine install` are all-or-nothing for a login that had
+nothing in the store: when a step fails — on 2026-10-07 m4's agent bootstrap
+came 4 ms after `bootout` while the old agent was still exiting, and launchd
+refused it (`37: Operation already in progress`, printed `Bootstrap failed: 5`)
+— every such login is put back from the store's `meta.json` (credentials,
+node.env, fleet.conf, the agent's definition, the proxy's key) and the
+command exits 1. `load_daemon` now waits for `bootout` to finish and retries
+the bootstrap (`FLEET_CREDSEP_BOOT_TRIES`, 3). If a step of the way back fails
+too, the exit is 5, the store is kept as `<login>.rolledback-<UTC>`, and the
+steps to finish by hand are printed. A store with no `credsep.json` (an install
+that stopped before its last step) is undone by `uninstall --login <login>`;
+its `--dry-run` says HALF INSTALLED. BREAK-IT rows `cred-sep-by-agent`,
+`cred-sep-bootstrap-fails`.
+
 ## What it does not stop
 
 - **Root.** A login with password-less sudo can `sudo cat` anything; the

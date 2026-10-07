@@ -446,6 +446,22 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
         if why:
             block(why)
 
+    # 3c) Credential separation is the PERSON's one sudo (issue #2273). On
+    #    2026-10-07 a session on m4 ran `sudo -n bash …/fleet-credsep.sh machine
+    #    install` itself — the login has password-less sudo — and when launchd
+    #    refused the agent's new definition halfway, every session on the login
+    #    lost its subscription and the node agent stopped. #2135 says the person
+    #    types it, in their own terminal, after starting the local proxy. So any
+    #    install / uninstall / apply / machine install|uninstall of
+    #    fleet-credsep.{sh,py} is refused, sudo or not (without sudo the script
+    #    reaches root through `sudo -n` itself), quoted inside `bash -c '…'` too
+    #    (raw_seg). --dry-run, plan, status, check and machine status/refresh pass.
+    #    FLEET_ALLOW_CREDSEP_SUDO=1 counts only in the session's own environment —
+    #    set by a person when it started — never inline, which a session could type.
+    why = _credsep_refused(raw_seg if _credsep_scan_quoted(masked_seg) else masked_seg)
+    if why and os.environ.get("FLEET_ALLOW_CREDSEP_SUDO", "").strip() != "1":
+        block(why)
+
     # 4) A raw `gh` issue-comment from a FLEET pane is REWRITTEN onto
     #    fleet-comment.sh (issue #483, repaired-not-denied in #528). Every fleet
     #    actor comments as the SAME gh account, so the issue-bridge cannot tell a
@@ -499,6 +515,67 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
 
     # Operator-specific rails, if the local overlay defines any (never shipped).
     _run_overlay(masked_seg)
+
+
+_CREDSEP_RE = re.compile(r"fleet-credsep\.(?:sh|py)[\x22\x27]?((?:[ \t]+[^\s;&|\x22\x27()]+)*)")
+_CREDSEP_VERBS = {"install", "uninstall", "apply"}
+_CREDSEP_RUNNERS = {"sudo", "bash", "sh", "zsh", "dash", "python3", "python", "exec", "env", "nohup",
+                    "time", "command", "doas"}
+
+
+def _credsep_runs(prefix):
+    """True when the text before the script path RUNS it: nothing (command position),
+    or a runner word (sudo / bash / python3 / env …) with only flags and VAR=x
+    between — never `grep -n "…fleet-credsep.sh install"`."""
+    toks = prefix.split()
+    if toks and not prefix[-1:].isspace():
+        toks = toks[:-1]                        # the path token's own leading part
+    for t in reversed(toks):
+        if t[-1:] in ";&|(":
+            return True                         # a statement boundary inside a quoted script
+        w = os.path.basename(t.lstrip("\x22\x27({!"))
+        if w.startswith("-") or re.match(r"^[a-z_][a-z0-9_]*=", w):
+            continue
+        return w in _CREDSEP_RUNNERS
+    return True
+
+
+def _credsep_scan_quoted(masked_seg):
+    """Read the quoted text too only when the statement runs one: its command word
+    is a shell / sudo / env (`bash -c '…'`, `sudo bash "$BIN/…"`), or itself quoted
+    (`"$BIN/fleet-credsep.sh" install`). A PR body or a commit message that merely
+    NAMES the command (`gh pr create --body "…sudo bash …/fleet-credsep.sh install…"`)
+    is data."""
+    m = re.match(r"\s*(?:[a-z_][a-z0-9_]*=\S*\s+)*(\S*)", masked_seg)
+    w = m.group(1) if m else ""
+    return not w or w[:1] in "\x22\x27" or os.path.basename(w.lstrip("({!")) in _CREDSEP_RUNNERS
+
+
+def _credsep_refused(raw_seg):
+    """The refusal text when this statement changes credential separation, else ''."""
+    for m in _CREDSEP_RE.finditer(raw_seg):
+        start = m.start()
+        while start > 0 and not raw_seg[start - 1].isspace():
+            start -= 1
+        if not _credsep_runs(raw_seg[:start]):
+            continue
+        words = m.group(1).split()
+        if not words or "--dry-run" in words:
+            continue
+        verb = words[0]
+        if verb == "machine":
+            verb = words[1] if len(words) > 1 and words[1] in ("install", "uninstall") else ""
+            verb = verb and "machine " + verb
+        elif verb not in _CREDSEP_VERBS:
+            verb = ""
+        if verb:
+            return ("`fleet-credsep.sh %s` moves this login's credentials, node.env and agent "
+                    "service as root — 这一步由发起人在自己的终端里敲（issue #2135 / #2273），"
+                    "never a session, even with password-less sudo. Show them the line to type "
+                    "(`fleet-credsep.sh plan` prints it, `--dry-run` shows what it would do), "
+                    "and wait. FLEET_ALLOW_CREDSEP_SUDO=1 in the session's environment is the "
+                    "person's hatch; inline it does not count" % verb)
+    return ""
 
 
 # pkill options that take a value (BSD and procps), as a separate token or glued.

@@ -91,7 +91,8 @@
 #                                                   fleet-client-where.sh
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
-#   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217).
+#   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
+#   cred-sep-bootstrap-fails, bin/fleet-break-it-cred-sep-selftest.sh (issue #2273).
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
 #   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
 #   zsh-guard-fleet-label                           shell/cw.zsh tmux()
@@ -154,7 +155,7 @@ lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
 [ -f "$DOC" ] || lintfail "docs/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
-DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" | tr _ -)
+DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" | tr _ -)
 IDS=''
 NROWS=0
 while IFS= read -r r; do

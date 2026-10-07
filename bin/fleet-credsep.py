@@ -100,6 +100,9 @@ STATE_COPY = ("bind.json", "revoked", "live.json", "trust.json")
 
 DRY = False
 MOVED = []      # [store path, login path] of every credential install moved (credsep.json `back`)
+CUR = {}        # what install has done so far for the login it is on: a rollback's meta.json
+SOFT = None     # a rollback in progress (issue #2273): a failed command is noted here, not fatal
+BOOT_TRIES = max(1, int(E("FLEET_CREDSEP_BOOT_TRIES", "3")))
 
 
 def say(*a):
@@ -118,7 +121,12 @@ def sh(*cmd, check=True, quiet=False):
         return 0
     r = subprocess.run(list(cmd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if r.returncode and check:
-        die("%s → exit %d: %s" % (" ".join(cmd), r.returncode, r.stdout.strip()[-300:]))
+        msg = "%s → exit %d: %s" % (" ".join(cmd), r.returncode, r.stdout.strip()[-300:])
+        if SOFT is not None:        # a rollback goes on past one failed step, and says so
+            SOFT.append(msg)
+            say("    FAILED:", msg)
+            return r.returncode
+        die(msg)
     if r.stdout.strip() and not quiet and r.returncode:
         say("   ", r.stdout.strip()[-300:])
     return r.returncode
@@ -325,10 +333,32 @@ def plist(label, argv, out=None, throttle=None):
     return plistlib.dumps(d)
 
 
+def wait_gone(target, secs=25):
+    """`launchctl bootout` returns once it has SIGTERMed the job, not once the job
+    is gone: on 2026-10-07 m4's bootstrap came 4 ms after it, while the agent was
+    still exiting, and launchd refused it (`37: Operation already in progress`,
+    which launchctl prints as `Bootstrap failed: 5: Input/output error` — issue
+    #2273). Wait until launchd no longer knows the label (its ExitTimeOut is 20 s)."""
+    if DRY or not SVC:
+        return
+    end = time.time() + secs
+    while time.time() < end:
+        if subprocess.run(["launchctl", "print", target], stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode:
+            return
+        time.sleep(0.2)
+
+
 def load_daemon(path, label):
     if MAC:
         sh("launchctl", "bootout", "system/" + label, check=False, quiet=True)
-        sh("launchctl", "bootstrap", "system", path)
+        wait_gone("system/" + label)
+        for i in range(BOOT_TRIES):     # and a bootstrap that still races it backs off
+            last = i == BOOT_TRIES - 1
+            if sh("launchctl", "bootstrap", "system", path, check=last, quiet=not last) == 0 or last:
+                break
+            time.sleep(1 + i)
+            wait_gone("system/" + label, 5)
     else:
         sh("systemctl", "daemon-reload")
         sh("systemctl", "enable", "--now", label)
@@ -351,6 +381,9 @@ def install(a):
     R, RUN = paths(login)
     if shared:
         RUN = SHARED_RUN
+    CUR.clear()
+    CUR.update(login=login, uid=pw.pw_uid, home=home, conf_dir=conf, role=ROLE,
+               install_dir=os.path.abspath(a.install_dir or ""), codex_homes=codex_homes(conf, home))
     if os.path.lexists(os.path.join(conf, "credsep.json")) and os.path.isfile(os.path.join(R, "meta.json")):
         say("credsep: already separated —", R, "(refreshing the code copy and services)")
     created = ensure_role()
@@ -379,6 +412,7 @@ def install(a):
     ne_path = os.path.join(conf, "node.env")
     ne = env_file(ne_path) if os.path.isfile(ne_path) and not os.path.islink(ne_path) else {}
     ch = codex_homes(conf, home, ne or None)
+    CUR["codex_homes"] = ch
     for label, f in [("default", os.path.join(home, ".codex", "auth.json"))] + \
             [(d, os.path.join(ch, d, "auth.json")) for d in (sorted(os.listdir(ch)) if os.path.isdir(ch) else [])
              if SAFE.match(d)]:
@@ -408,6 +442,7 @@ def install(a):
         pass
     legacy = old.get("legacy_port") or 0
     if shared and old.get("mode") != "shared":
+        CUR.update(mode="shared")
         legacy = join_state(login, conf, R) or legacy
 
     # 5 + 6. services
@@ -424,6 +459,7 @@ def install(a):
         if svc["kind"] == "systemd-user":
             die("the agent runs as a systemd --user unit; move it to ccquota-agent-%s.service first" % login)
         meta["agent_argv"], meta["path"] = agent_argv(svc)
+    CUR.update(meta)
     put(os.path.join(R, "meta.json"), json.dumps(meta, indent=1), 0o600, ROLE)
 
     plabel = "com.claude-fleet.credsep.%s" % login if MAC else "claude-fleet-credsep-%s.service" % login
@@ -547,6 +583,14 @@ def uninstall(a):
         meta = {}
     rec = record(conf)
     if DRY and not rec and not meta:
+        if os.path.lexists(R):
+            # an install that stopped halfway leaves the store and no credsep.json
+            # (2026-10-07 m4, issue #2273): the way back is in the store's meta.json
+            say("credsep: HALF INSTALLED — %s is there but %s has no credsep.json (an install that stopped"
+                % (R, conf))
+            say("  halfway); the store is not readable here. Put it back, from the store's meta.json:")
+            say("  sudo bash %s uninstall --login %s" % (os.path.join(HERE, "fleet-credsep.sh"), login))
+            return 0
         say("credsep: not separated — nothing to undo (%s has no credsep.json)" % conf)
         return 0
     if DRY and not meta and rec:
@@ -589,21 +633,9 @@ def uninstall(a):
         conf_switch_back(login, conf, pw, meta.get("conf_prior") or {})
     # every credential back to the login's own path — the agent may have renewed them
     n = 0
-    acc = os.path.join(R, "accounts")
-    for d in sorted(os.listdir(acc)) if os.path.isdir(acc) else []:
-        f = os.path.join(acc, d, ".credentials.json")
-        if d.endswith(".hub") and SAFE.match(d[:-4]) and os.path.isfile(f):
-            dst = os.path.join(conf, "accounts", d, ".credentials.json")
-            mkdir(os.path.dirname(dst), 0o700, login)
-            move(f, dst, login); n += 1
-    ch = meta.get("codex_homes") or codex_homes(conf, home)
-    cx = os.path.join(R, "codex")
-    for d in sorted(os.listdir(cx)) if os.path.isdir(cx) else []:
-        f = os.path.join(cx, d, "auth.json")
-        if SAFE.match(d) and os.path.isfile(f):
-            dst = os.path.join(home, ".codex", "auth.json") if d == "default" else os.path.join(ch, d, "auth.json")
-            mkdir(os.path.dirname(dst), 0o700, login)
-            move(f, dst, login); n += 1
+    for f, dst in store_files(R, conf, home, meta.get("codex_homes") or codex_homes(conf, home)):
+        mkdir(os.path.dirname(dst), 0o700, login)
+        move(f, dst, login); n += 1
     ne_path = os.path.join(conf, "node.env")
     if os.path.isfile(os.path.join(R, "node.env")):
         if os.path.islink(ne_path) and not DRY:
@@ -618,20 +650,138 @@ def uninstall(a):
               os.path.join(LOG_BASE, login + ".launch.log")):
         if os.path.exists(p) and not DRY:
             os.unlink(p)
-    if not DRY:
+    if not DRY and SOFT:
+        # a rollback with a failed step keeps the store (backup/, meta.json) for
+        # the person, under a name no reader takes for a separated login
+        kept = "%s.rolledback-%s" % (R, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
+        os.rename(R, kept)
+        say("store: kept as", kept, "(a step failed — see below)")
+    elif not DRY:
         shutil.rmtree(R, ignore_errors=True)
         shutil.rmtree(RUN, ignore_errors=True)
+    if shared and not DRY and shared_rec():
+        left = [m["login"] for m in shared_tenants()]
+        shared_record(left)
+        if not left:
+            say("shared: no login left on it — `machine uninstall` stops the shared proxy")
     others = [d for d in (os.listdir(ROOT_BASE) if os.path.isdir(ROOT_BASE) else []) if not d.startswith(".")]
-    if not others and not DRY:
+    if not others and not DRY and not SOFT:
         shutil.rmtree(LIB, ignore_errors=True)
         for d in (ROOT_BASE, RUN_BASE, LOG_BASE, os.path.dirname(LIB)):
             try:
                 os.rmdir(d)        # only when empty: the last login leaves nothing behind
             except OSError:
                 pass
+    if SOFT:
+        return 1
     drop_role()
     say("credsep: OFF — every file back where it was")
     return 0
+
+
+def store_files(R, conf, home, ch):
+    """[(store path, the login's path)] of every credential file in the store —
+    the leased Claude credentials and the hub-managed Codex auth.json files."""
+    out = []
+    acc = os.path.join(R, "accounts")
+    for d in sorted(os.listdir(acc)) if os.path.isdir(acc) else []:
+        f = os.path.join(acc, d, ".credentials.json")
+        if d.endswith(".hub") and SAFE.match(d[:-4]) and os.path.isfile(f):
+            out.append((f, os.path.join(conf, "accounts", d, ".credentials.json")))
+    cx = os.path.join(R, "codex")
+    for d in sorted(os.listdir(cx)) if os.path.isdir(cx) else []:
+        f = os.path.join(cx, d, "auth.json")
+        if SAFE.match(d) and os.path.isfile(f):
+            out.append((f, os.path.join(home, ".codex", "auth.json") if d == "default"
+                        else os.path.join(ch, d, "auth.json")))
+    return out
+
+
+# ---- rollback (issue #2273) -----------------------------------------------------------
+def rollback_login(login, conf, home):
+    """Put a login an install has just half-done back the way it was, from the
+    store's meta.json (written from CUR when the install died before it did).
+    -> True when every step held; else the store is kept and the steps to do by
+    hand are printed."""
+    global SOFT
+    R = paths(login)[0]
+    say("")
+    say("rollback: %s — putting it back the way it was" % login)
+    if not os.path.isdir(R):
+        say("rollback: %s — nothing had moved yet" % login)
+        return True
+    mp = os.path.join(R, "meta.json")
+    if not os.path.isfile(mp):
+        m = dict(CUR) if CUR.get("login") == login else {"login": login, "conf_dir": conf, "home": home}
+        put(mp, json.dumps(m, indent=1), 0o600, ROLE)
+    SOFT = []
+    try:
+        uninstall(argparse.Namespace(login=login, conf_dir=conf, home=home if TEST else "",
+                                     install_dir="", dry_run=False))
+    except SystemExit as e:
+        SOFT.append(str(e.code))
+    except Exception as e:      # noqa: BLE001 — a rollback reports, it never stops halfway silently
+        SOFT.append("%s: %s" % (type(e).__name__, e))
+    fails, SOFT = SOFT, None
+    if not fails:
+        say("rollback: %s — rolled back, every file where it was" % login)
+        return True
+    manual_steps(login, conf, home, fails)
+    return False
+
+
+def manual_steps(login, conf, home, fails):
+    """The way back by hand, from whatever is still in the store."""
+    R = paths(login)[0]
+    kept = sorted(d for d in (os.listdir(ROOT_BASE) if os.path.isdir(ROOT_BASE) else [])
+                  if d.startswith(login + ".rolledback-"))
+    S = os.path.join(ROOT_BASE, kept[-1]) if kept and not os.path.isdir(R) else R
+    try:
+        meta = json.load(open(os.path.join(S, "meta.json")))
+    except (OSError, ValueError):
+        meta = {}
+    q = shlex.quote
+    say("")
+    say("rollback: %s — FAILED at: %s" % (login, " | ".join(fails)))
+    say("Put it back by hand, as root, in this order (the store: %s):" % S)
+    n = 0
+    for f, dst in store_files(S, conf, home, meta.get("codex_homes") or codex_homes(conf, home)):
+        n += 1
+        say("  %d. mkdir -p %s && mv %s %s && chown %s %s && chmod 600 %s"
+            % (n, q(os.path.dirname(dst)), q(f), q(dst), q(login), q(dst), q(dst)))
+    ne = os.path.join(conf, "node.env")
+    if os.path.isfile(os.path.join(S, "node.env")):
+        n += 1
+        say("  %d. rm -f %s && mv %s %s && chown %s %s && chmod 600 %s && rm -f %s"
+            % (n, q(ne), q(os.path.join(S, "node.env")), q(ne), q(login), q(ne), q(ne),
+               q(os.path.join(conf, "node.pub.env"))))
+    s = meta.get("agent")
+    if s:
+        bk = os.path.join(S, "backup", os.path.basename(s["path"]))
+        n += 1
+        if s["kind"] == "launchd-system":
+            say("  %d. cp %s %s && launchctl bootout system/%s; sleep 5; launchctl bootstrap system %s"
+                % (n, q(bk), q(s["path"]), s["label"], q(s["path"])))
+        elif s["kind"] == "launchd-gui":
+            dp = os.path.join(DAEMON_DIR, "com.ccquota.agent.%s.plist" % login)
+            say("  %d. launchctl bootout system/com.ccquota.agent.%s; rm -f %s; cp %s %s && chown %s %s && "
+                "launchctl bootstrap gui/%s %s" % (n, login, q(dp), q(bk), q(s["path"]), q(login), q(s["path"]),
+                                                   meta.get("uid", "<uid>"), q(s["path"])))
+        else:
+            say("  %d. rm -f %s && systemctl daemon-reload && systemctl restart %s"
+                % (n, q(s["path"] + ".d/credsep.conf"), s["label"]))
+    for k, line in sorted((meta.get("conf_prior") or {}).items()):
+        n += 1
+        say("  %d. as %s: bash ~/.claude/fleet/bin/fleet-conf.sh %s" % (
+            n, login, "set-line %s %s" % (k, q(line)) if line else "drop-line %s" % k))
+    if os.path.isdir(os.path.join(S, "cred-proxy")) and os.listdir(os.path.join(S, "cred-proxy")):
+        n += 1
+        say("  %d. cp -p %s/* %s/ && chown -R %s %s   (the proxy's key and passes)"
+            % (n, q(os.path.join(S, "cred-proxy")), q(os.path.join(conf, "cred-proxy")), q(login),
+               q(os.path.join(conf, "cred-proxy"))))
+    n += 1
+    say("  %d. rm -f %s, then check: bash ~/.claude/fleet/bin/fleet-credsep.sh status (as %s)"
+        % (n, q(os.path.join(conf, "credsep.json")), login))
 
 
 def uninstall_plan(login, conf, rec):
@@ -697,11 +847,12 @@ def leave_state(login, conf, R):
     src, dst = os.path.join(R, "cred-proxy"), os.path.join(conf, "cred-proxy")
     if os.path.lexists(dst) and not os.path.isdir(dst):
         die("%s is not a directory" % dst)
-    mkdir(dst, 0o700, login)
     n = 0
     for f in STATE_MOVE + STATE_COPY:
         sp = os.path.join(src, f)
         if os.path.isfile(sp):
+            if not n:
+                mkdir(dst, 0o700, login)
             with open(sp, "rb") as fh:
                 put(os.path.join(dst, f), fh.read(), 0o600, login)
             n += 1
@@ -844,20 +995,64 @@ def machine_install(a):
         die("machine install: no login to join (--logins a,b, or a login with ~/.claude/fleet)", 2)
     created = ensure_role()
     say("role:", ROLE, "(created)" if created else "(exists)")
-    for login, conf, home in rows:
-        say("")
-        say("== %s" % login)
-        install(argparse.Namespace(login=login, conf_dir=conf, home=home if TEST else "",
-                                   install_dir=os.path.join(home, ".claude", "fleet"), shared=True))
-        del MOVED[:]
-    logins = sorted({m["login"] for m in shared_tenants()} | {r[0] for r in rows}) if not DRY else [r[0] for r in rows]
-    shared_service()
-    shared_record(logins)
-    load_daemon(SHARED_PATH, SHARED_LABEL)
+    pre = {"service": os.path.exists(SHARED_PATH), "rec": shared_rec() is not None}
+    fresh = []      # the logins this run took into the store from nothing: a failure puts them back
+    try:
+        for login, conf, home in rows:
+            say("")
+            say("== %s" % login)
+            if not os.path.lexists(paths(login)[0]):
+                fresh.append((login, conf, home))
+            install(argparse.Namespace(login=login, conf_dir=conf, home=home if TEST else "",
+                                       install_dir=os.path.join(home, ".claude", "fleet"), shared=True))
+            del MOVED[:]
+        logins = sorted({m["login"] for m in shared_tenants()} | {r[0] for r in rows}) if not DRY else [r[0] for r in rows]
+        shared_service()
+        shared_record(logins)
+        load_daemon(SHARED_PATH, SHARED_LABEL)
+    except BaseException as e:  # noqa: B036 — die() is a SystemExit; any stop here is half a machine
+        if DRY:
+            raise
+        return machine_rollback(rows, fresh, pre, e)
     say("")
     say("shared: ON — %s on 127.0.0.1:%d as %s, %d login(s): %s"
         % (SHARED_LABEL, SHARED_PORT, ROLE, len(logins), ", ".join(logins)))
     return 0
+
+
+def machine_rollback(rows, fresh, pre, err):
+    """machine install stopped halfway (issue #2273: launchd refused the agent's new
+    definition and the login was left with its credentials in the store, its
+    agent down). Every login this run took from nothing goes back, newest first;
+    a shared service this run created goes too. -> 1, or 5 when a step of the
+    way back failed and its manual steps were printed."""
+    del MOVED[:]
+    why = err.code if isinstance(err, SystemExit) else "%s: %s" % (type(err).__name__, err)
+    say("")
+    say("machine install: FAILED (%s) — rolling back %d login(s): %s"
+        % (why, len(fresh), ", ".join(l for l, _, _ in fresh) or "none"))
+    ok = True
+    for login, conf, home in reversed(fresh):
+        ok = rollback_login(login, conf, home) and ok
+    if not pre["service"] and os.path.exists(SHARED_PATH):
+        unload_daemon(SHARED_LABEL)
+        os.unlink(SHARED_PATH)
+        say("shared: %s removed (this run had made it)" % SHARED_LABEL)
+    left = [m["login"] for m in shared_tenants()]
+    if not pre["rec"] and not left and os.path.exists(SHARED_REC):
+        os.unlink(SHARED_REC)
+    elif shared_rec():
+        shared_record(left)
+    for login, _, _ in rows:
+        if login not in [f[0] for f in fresh]:
+            say("note: %s was in the store before this run — left as it is (`uninstall --login %s` takes it out)"
+                % (login, login))
+    say("")
+    if ok:
+        say("machine install: rolled back — every login this run touched is as it was; nothing is separated")
+        return 1
+    say("machine install: rollback INCOMPLETE — do the steps above by hand, then `fleet-credsep.sh status`")
+    return 5
 
 
 def machine_uninstall(a):
@@ -874,6 +1069,16 @@ def machine_uninstall(a):
                 os.unlink(p)
         shutil.rmtree(SHARED_DIR, ignore_errors=True)
         shutil.rmtree(SHARED_RUN, ignore_errors=True)
+    if DRY:
+        for d in sorted(os.listdir(ROOT_BASE)) if os.path.isdir(ROOT_BASE) else []:
+            if d.startswith(".") or ".rolledback-" in d:
+                continue
+            try:
+                open(os.path.join(ROOT_BASE, d, "meta.json")).close()
+            except PermissionError:
+                say("== %s: a store is there, not readable here — under sudo it is put back the same way" % d)
+            except OSError:
+                pass
     for m in shared_tenants():
         say("")
         say("== %s" % m["login"])
@@ -1128,7 +1333,21 @@ def main():
             die("%s needs root (bin/fleet-credsep.sh runs it through sudo -n)" % a.cmd, 2)
         if not (MAC or sys.platform.startswith("linux")):
             die("only macOS and Linux", 2)
-        return install(a) if a.cmd == "install" else uninstall(a)
+        if a.cmd == "uninstall":
+            return uninstall(a)
+        fresh = not DRY and not os.path.lexists(paths(a.login)[0])
+        try:
+            return install(a)
+        except BaseException as e:  # noqa: B036
+            if not fresh:
+                raise
+            say("install: FAILED (%s) — rolling back %s" % (
+                e.code if isinstance(e, SystemExit) else "%s: %s" % (type(e).__name__, e), a.login))
+            home = (getattr(a, "home", "") or os.environ["HOME"]) if TEST else getpw(a.login).pw_dir
+            if rollback_login(a.login, os.path.abspath(a.conf_dir), home):
+                say("install: rolled back — %s is as it was; nothing is separated" % a.login)
+                return 1
+            return 5
     return status(a) if a.cmd == "status" else check(a)
 
 
