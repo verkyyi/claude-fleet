@@ -645,6 +645,17 @@ younger than half `FLEET_ACCOUNT_QUOTA_STALE`, it reads that cache instead of
 calling the hub (`fleet-quotawatch: … ccquota fetch skipped`). No mod ⇒ no `mod`
 stamp ⇒ every fetch runs as before.
 
+**Quota from the credential proxy (#1978).** With `FLEET_CRED_PROXY=1` every
+session's requests pass `bin/fleet-cred-proxy.py`, which keeps each session's
+newest `anthropic-ratelimit-unified-{5h,7d}-*` / `x-codex-{primary,secondary}-*`
+reading (ctl `quota`, memory only). `bin/fleet-proxy-quota.sh push` stamps it
+through `conf/statusline.sh --from proxy` onto the window whose `@cred_sid` it
+is — `@rl*` with `@rl_src proxy` and `@rl_ts` = the reading's time — so a Codex
+window has `@rl*` too. The proxy kicks the push itself (not separated) and the
+quota watch runs it every tick before its read; the merge counts `proxy` like
+`mod`. While that stamp is younger than `FLEET_RL_PROXY_FRESH` (300 s) the
+status line and the mod leave `@rl*` alone.
+
 **Tools** — none since mod 0.4.0 (issue #1812, EPIC #1813 C10). The mod's
 `fleet_status` / `fleet_spawn` / `fleet_await` (issue #1340) retired: the fleet
 tool service (`bin/fleet-mcp.py`, `docs/FLEET-MCP.md`) serves `status` / `spawn` /
