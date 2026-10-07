@@ -685,6 +685,8 @@ func runHub(args []string) error {
 
 	srv.Elector = elector
 	go elector.Run(ctx)
+	// A replica's fleet_replicas row (claude-fleet#2190); a single hub: no-op.
+	go srv.RunReplica(ctx)
 	if srv.Spot != nil {
 		go srv.Spot.Run(ctx)
 	}

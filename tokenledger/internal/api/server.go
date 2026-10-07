@@ -211,6 +211,12 @@ type Server struct {
 	Replica *Replica
 	// forwarded counts the calls handed to another replica.
 	forwarded atomic.Int64
+	// replicaLife is when this replica started — its place in the state
+	// holder order (claude-fleet#2190); stateForwarded counts the requests
+	// handed to the holder, liveFanned the live reports handed to the others.
+	replicaLife    replicaLife
+	stateForwarded atomic.Int64
+	liveFanned     atomic.Int64
 	// recent is the starts just sent to each node that its heartbeat may not
 	// show yet (claude-fleet#2077); judge counts them as running.
 	recent recentTable
@@ -293,6 +299,10 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/v1/ingest", s.handleIngest)
 	// Live reports authenticate per endpoint, like ingest.
 	mux.HandleFunc("/v1/live/report", s.handleLiveReport)
+	if s.Replica != nil {
+		// A report another replica received (claude-fleet#2190).
+		mux.HandleFunc(LiveFanoutPath, s.handleLiveFanout)
+	}
 	mux.HandleFunc("/v1/collectors/quota-lease", s.handleQuotaLease)
 	// The way out (claude-fleet#1467): POST clears the cookies this hub
 	// minted, GET is the signed-out page. Outside the gate on purpose -- a
@@ -316,6 +326,8 @@ func (s *Server) routes() *routeMux {
 			// A node call another replica hands over (claude-fleet#2124);
 			// in-cluster, behind the replicas' shared token.
 			mux.HandleFunc(NodeRoutePath, s.handleNodeRoute)
+			// The client leases' read for another replica (claude-fleet#2190).
+			mux.HandleFunc(StateLeasePath, s.handleStateLease)
 		}
 		// Issue leases (claude-fleet#1422) authenticate the same way.
 		mux.HandleFunc("/v1/node/lease", s.handleNodeLease)
@@ -346,10 +358,10 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/node/peer-cert", s.handleNodePeerCert)
 		// Where the owner is (claude-fleet#1716): the client they are
 		// connected through right now, read by a node with its own token.
-		mux.HandleFunc("/v1/node/client", s.handleNodeClient)
+		mux.Handle("/v1/node/client", s.stateRouteFunc(s.handleNodeClient))
 		// Open it on the owner's device (claude-fleet#1717): a node sends
 		// an action to that client; the client polls for its lease's.
-		mux.HandleFunc("/v1/node/client/actions", s.handleNodeClientActions)
+		mux.Handle("/v1/node/client/actions", s.stateRouteFunc(s.handleNodeClientActions))
 		// A worker's evidence and history, uploaded by the machine that
 		// reaped it and read back by its owner's others (claude-fleet#1609).
 		mux.HandleFunc("/v1/node/worker-records", s.handleNodeWorkerRecords)
@@ -391,25 +403,25 @@ func (s *Server) routes() *routeMux {
 		// The client lease (claude-fleet#1715): one person, one connected
 		// client — a certificate proven by a signed timestamp, like the
 		// session list, so it authenticates itself outside the viewer gate.
-		mux.HandleFunc(control.ClientPath, s.handleFleetClient)
-		mux.HandleFunc(ClientTestPath, s.handleFleetClient) // #1931
-		mux.HandleFunc(control.ClientPath+"/actions", s.handleFleetClientActions)
+		mux.Handle(control.ClientPath, s.stateRouteFunc(s.handleFleetClient))
+		mux.Handle(ClientTestPath, s.stateRouteFunc(s.handleFleetClient)) // #1931
+		mux.Handle(control.ClientPath+"/actions", s.stateRouteFunc(s.handleFleetClientActions))
 		// Open a session from the client (claude-fleet#1777): the current
 		// lease, proven by its action key, asks the hub to open it.
-		mux.HandleFunc(control.ClientPath+"/place", s.handleFleetClientPlace)
+		mux.Handle(control.ClientPath+"/place", s.stateRouteFunc(s.handleFleetClientPlace))
 		// Connection certificates (claude-fleet#1412). start/poll carry no
 		// credential — they are what a person runs before having one, and
 		// grant nothing until a signed-in person confirms the code.
 		mux.Handle("/v1/fleet/connect", s.viewerOnly(http.HandlerFunc(s.handleFleetConnect)))
 		mux.Handle("/v1/fleet/cert", s.viewerOnly(http.HandlerFunc(s.handleFleetCert)))
 		mux.HandleFunc("/v1/fleet/ssh-ca.pub", s.handleSSHCAPub)
-		mux.HandleFunc("/v1/fleet/login/start", s.handleDeviceStart)
-		mux.HandleFunc("/v1/fleet/login/poll", s.handleDevicePoll)
-		mux.Handle("/fleet/login", s.rememberLoginCode(s.viewerOnly(http.HandlerFunc(s.handleFleetLoginPage))))
+		mux.Handle("/v1/fleet/login/start", s.stateRouteFunc(s.handleDeviceStart))
+		mux.Handle("/v1/fleet/login/poll", s.stateRouteFunc(s.handleDevicePoll))
+		mux.Handle("/fleet/login", s.stateRoute(s.rememberLoginCode(s.viewerOnly(http.HandlerFunc(s.handleFleetLoginPage)))))
 		// Drill people (claude-fleet#2010): an approve code confirms a scan
 		// as the drill person — it is the whole credential, so outside the
 		// viewer gate; the invite authenticates itself (cert or gate).
-		mux.HandleFunc(LoginApprovePath, s.handleLoginApprove)
+		mux.Handle(LoginApprovePath, s.stateRouteFunc(s.handleLoginApprove))
 		mux.HandleFunc(DrillPath, s.handleAdminDrill)
 		mux.HandleFunc(DrillSelfPath, s.handleSelf)
 		mux.Handle("/connect", s.viewerOnly(http.HandlerFunc(s.serveConnectPage)))

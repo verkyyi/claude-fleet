@@ -478,7 +478,10 @@ type deviceLogin struct {
 }
 
 // deviceLogins is in memory on purpose: a pending login lives ten minutes,
-// the hub is one instance, and a restart costs the person one more scan.
+// and a restart costs the person one more scan. With two hub replicas only
+// the state holder keeps them — the other proxies start, poll and the
+// confirmation to it (replica_state.go, claude-fleet#2190) — so a certificate
+// and a node pass never enter the database.
 type deviceLogins struct {
 	mu     sync.Mutex
 	byCode map[string]*deviceLogin // device code → login

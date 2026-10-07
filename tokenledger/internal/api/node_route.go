@@ -96,13 +96,20 @@ func ParseReplica(getenv func(string) string, token string) (*Replica, error) {
 	return &Replica{Name: name, URL: url, Token: token}, nil
 }
 
-// StartReplica prepares the store for this replica: the table, and no row
-// left over from a previous life of the same name.
+// StartReplica prepares the store for this replica: the tables, no row left
+// over from a previous life of the same name, and its first beat
+// (fleet_replicas, claude-fleet#2190 — RunReplica keeps it fresh).
 func (s *Server) StartReplica() error {
 	if s.Replica == nil {
 		return nil
 	}
 	if err := s.Store.EnsureFleetNodeConns(); err != nil {
+		return err
+	}
+	if err := s.Store.EnsureFleetReplicas(); err != nil {
+		return err
+	}
+	if err := s.beatReplica(time.Now()); err != nil {
 		return err
 	}
 	n, err := s.Store.ReleaseReplicaConns(s.Replica.Name)

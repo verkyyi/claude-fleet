@@ -53,7 +53,9 @@ import (
 // carries on, unless it was asked to leave meanwhile. The table lives in the
 // hub's memory: a restart forgets every lease, and the next renewal of each
 // live client re-adopts its own id while there is room, so a deploy costs
-// nobody a standby screen.
+// nobody a standby screen. With two hub replicas the table is the state
+// holder's alone; the other proxies every lease route to it
+// (replica_state.go, claude-fleet#2190).
 //
 // A test identity (claude-fleet#1931, EPIC #1906 C12): a session's drill or
 // test that runs a real client is never the person. It asks with `identity:
@@ -578,7 +580,7 @@ func (t *clientLeaseTable) slotOf(key, lease string) string {
 // any (principal "" = the operator).
 func (s *Server) ClientLeaseOf(principal string, now time.Time) (ClientLease, bool) {
 	key := clientLeaseKey(sshRelayIdentity{Operator: principal == "", Principal: principal})
-	r := s.clientLeases.get(key, now)
+	r := s.clientLeasesGet(key, now)
 	if r.Lease == nil {
 		return ClientLease{}, false
 	}
@@ -589,7 +591,7 @@ func (s *Server) ClientLeaseOf(principal string, now time.Time) (ClientLease, bo
 // the primary's id.
 func (s *Server) ClientLeasesOf(principal string, now time.Time) ([]ClientLease, string) {
 	key := clientLeaseKey(sshRelayIdentity{Operator: principal == "", Principal: principal})
-	r := s.clientLeases.get(key, now)
+	r := s.clientLeasesGet(key, now)
 	return r.Clients, r.Primary
 }
 
