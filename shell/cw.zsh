@@ -175,11 +175,13 @@ tmux() {
   local -a A=( "$@" )
   # Walk the GLOBAL options to find the subcommand; note an isolated socket
   # (-L name / -S path), which means "not the shared default server" → allowed.
-  local sub="" isolated=0 i=1
+  local sub="" isolated=0 i=1 sock_l="" sock_s=""
   while (( i <= ${#A} )); do
     case "${A[i]}" in
-      -L|-S)     isolated=1; (( i++ )) ;;   # socket value is the next token
-      -L*|-S*)   isolated=1 ;;              # glued form: -Lname / -S/path/sock
+      -L)        isolated=1; (( i++ )); sock_l="${A[i]-}" ;;   # value is the next token
+      -S)        isolated=1; (( i++ )); sock_s="${A[i]-}" ;;
+      -L*)       isolated=1; sock_l="${A[i]#-L}" ;;           # glued form: -Lname
+      -S*)       isolated=1; sock_s="${A[i]#-S}" ;;           # glued form: -S/path/sock
       -f|-c|-T)  (( i++ )) ;;               # global opts that consume a value
       -*)        ;;                          # a boolean global flag
       *)         sub="${A[i]}"; break ;;    # the subcommand
@@ -192,13 +194,28 @@ tmux() {
   # operator↔worker messages must go through fleet-comment.sh --to-worker (the
   # issue-bridge), which the bash-guard.py hook enforces as the real rail. This is
   # the shell belt: it catches a bare `tmux send-keys` typed in any interactive/
-  # sourced zsh that loaded cw.zsh. Refused on ANY server — unlike the kill-*
-  # rails below, send-keys carries no cross-fleet blast radius, so the isolated-
-  # socket exemption doesn't apply; the concern is the racy drive, not the server.
-  # FLEET_ALLOW_SENDKEYS=1 is the sanctioned override (mirrors FLEET_ALLOW_TMUX_
-  # DESTROY above); `command tmux send-keys` also bypasses (belt, not sandbox).
+  # sourced zsh that loaded cw.zsh. An ISOLATED test server is not a pane and is
+  # not guarded (issue #1919 — the charter's "drive it freely"): `-S <path>` or
+  # `-L <label>` passes unless it names a FLEET's server — the same rule as
+  # bin/tmux-shim/tmux and bash-guard.py's _sendkeys_targets_fleet: a label owning
+  # $FLEET_CONF_DIR/fleets/<label>/conf (or the legacy <label>.conf), or a -S path
+  # that is such a label's socket in this user's tmux dir. The ambient server
+  # (no -L/-S) stays refused. FLEET_ALLOW_SENDKEYS=1 is the sanctioned override
+  # (mirrors FLEET_ALLOW_TMUX_DESTROY above); `command tmux send-keys` also
+  # bypasses (belt, not sandbox).
   if [[ "$sub" == send-keys ]]; then
     [[ "${FLEET_ALLOW_SENDKEYS:-}" == 1 ]] && { command tmux "$@"; return; }
+    if (( isolated )); then
+      local sk_label="$sock_l" sk_confd="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
+      if [[ -z "$sk_label" && -n "$sock_s" && "${sock_s:h}" == */tmux-${UID} ]]; then
+        sk_label="${sock_s:t}"
+      fi
+      case "$sk_label" in
+        ''|fleet|shell|hub-defaults|*/*) command tmux "$@"; return ;;
+      esac
+      [[ -f "$sk_confd/fleets/$sk_label/conf" || -f "$sk_confd/$sk_label.conf" ]] \
+        || { command tmux "$@"; return; }
+    fi
     print -ru2 -- "tmux: refusing 'send-keys' — inter-agent messaging must go through fleet-comment.sh --to-worker (the issue-bridge), not raw send-keys (bracketed-paste eats the Enter). Set FLEET_ALLOW_SENDKEYS=1 for sanctioned fleet plumbing."
     return 1
   fi
