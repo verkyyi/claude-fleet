@@ -2101,7 +2101,7 @@ PY
 # TestClientLeaseRenewRefillsAfterRestart pins the hub's own): where before, the
 # hub's memory wiped, where after ONE renewal.
 drill_hub_restart_where() {
-  CAP=20; local t0 s="${CSESS}w" sc="$WORK/hrw" out port='' i hpid
+  CAP=20; local t0 s="${CSESS}w" sc="$WORK/hrw" out port='' _ hpid
   client_setup
   mkdir -p "$sc"
   cat > "$sc/hub.py" <<'PY'
@@ -2149,7 +2149,7 @@ srv.serve_forever()
 PY
   : > "$sc/log"
   python3 "$sc/hub.py" "$sc/port" "$((CAP + 40))" "$sc/log" & hpid=$!
-  for i in $(seq 1 50); do [ -s "$sc/port" ] && break; sleep 0.1; done
+  for _ in $(seq 1 50); do [ -s "$sc/port" ] && break; sleep 0.1; done
   { read -r port < "$sc/port"; } 2>/dev/null
   [ -n "$port" ] || { kill "$hpid" 2>/dev/null; WHY="the fake hub did not start"; return 1; }
   local hub="http://127.0.0.1:$port" before
@@ -2163,7 +2163,7 @@ PY
     kill "$hpid" 2>/dev/null; WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1
   fi
   out=''
-  for i in $(seq 1 100); do out=$(hw); case "$out" in *"Verky's Mac"*iTerm2*) break ;; esac; sleep 0.1; done
+  for _ in $(seq 1 100); do out=$(hw); case "$out" in *"Verky's Mac"*iTerm2*) break ;; esac; sleep 0.1; done
   before=$out
   printf '入口重启前：%s\n' "$out" > "$sc/where.txt"
   case "$out" in *"Verky's Mac"*iTerm2*) ;; *)
@@ -2173,7 +2173,7 @@ PY
   curl -s -X POST -d '{}' "$hub/_restart" >/dev/null
   t0=$(now)
   printf '入口重启后：%s\n' "$(hw)" >> "$sc/where.txt"
-  for i in $(seq 1 $((CAP * 10))); do
+  for _ in $(seq 1 $((CAP * 10))); do
     grep -q '^RESTART' "$sc/log" && sed -n '/^RESTART/,$p' "$sc/log" | grep -q '^renew ' && { out=$(hw); [ "$out" = "$before" ] && break; }
     sleep 0.1
   done
