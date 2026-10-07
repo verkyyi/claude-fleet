@@ -165,6 +165,11 @@ case "$mode" in
     # session (@fleet_role, bin/fleet-orchestrator.sh) — its key is `orchestrator`
     # (fleet_control.py) and the client wears it on 「新任务」 instead of a row;
     # empty on every other window.
+    # Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` on the
+    # window that drives a running EPIC (@epic, stamped by fleet-epic-heartbeat.sh),
+    # the counts off THIS machine's mark for that batch (epic-running.d); its
+    # `title=` is then the EPIC's own. The other machines' lists draw the batch as
+    # one row off it. Empty on every other window.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -176,7 +181,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load
     while IFS= read -r row; do
       [ -n "$row" ] || continue
@@ -184,7 +189,9 @@ case "$mode" in
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10; exit }')
+      wepic=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      case "$wepic" in *[!A-Za-z0-9/._#-]*|*'#'*'#'*) wepic='' ;; *'#'[0-9]*) ;; *) wepic='' ;; esac
       wrole=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       wdet=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       wreap=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -220,9 +227,21 @@ case "$mode" in
           t=${ttl#*$'\n'"$rr"$'\t'"$c2"$'\t'}; t=${t%%$'\n'*} ;;
         esac ;;
       esac
+      if [ -n "$wepic" ]; then
+        _en=${wepic##*#}; _er=${wepic%#*}
+        case "$_en" in *[!0-9]*|'') wepic='' ;; *)
+          case "$ttl" in *$'\n'"$_er"$'\t'"$_en"$'\t'*)
+            t=${ttl#*$'\n'"$_er"$'\t'"$_en"$'\t'}; t=${t%%$'\n'*} ;;
+          esac
+          _ef=$(fleet_epic_mark_file "${_er:--}" "$_en")
+          _el=$(sed -n 's/^landed: //p' "$_ef" 2>/dev/null | head -1)
+          _em=$(sed -n 's/^members: //p' "$_ef" 2>/dev/null | head -1)
+          case "$_el:$_em" in *[!0-9:]*|:*|*:) ;; *) wepic="$wepic:$_el/$_em" ;; esac ;;
+        esac
+      fi
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic"
     done <<<"$rows"
     ;;
   ready)

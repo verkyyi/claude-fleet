@@ -73,8 +73,9 @@ if [ -n "$REAL_TMUX" ]; then
   # column 18 is the reap policy (issue #1902): 16 before the title as they were
   # column 19 is the question a `needs` session asks (issue #1951), empty otherwise
   # column 20 is role=orchestrator on the orchestrating session (issue #1957), empty otherwise
-  eq "A: column 17, the reap column 18, the detail column 19, the role column 20; 16 before it as they were" "16 reap= detail= role=" \
-     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 4, $18, $19, $20 }')"
+  # column 21 is epic=<ref>[:k/n] on an EPIC's driver window (issue #1958), empty otherwise
+  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21; 16 before it as they were" "16 reap= detail= role= epic=" \
+     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 5, $18, $19, $20, $21 }')"
   T set-option -w -t "=$S:uncached" @claude_state needs
   T set-option -w -t "=$S:uncached" @claude_needs_detail '演练放在 m5 还是只在 m4？'
   T set-option -w -t "=$S:draft" @claude_needs_detail 'a stale question'
