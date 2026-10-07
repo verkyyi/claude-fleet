@@ -200,7 +200,7 @@ bridge_assoc_ok() {
 # or nothing. A conf's own repo wins over an overlay naming the same slug.
 _BR_SLUG='' _BR_SUB=''
 bridge_state_subdir() {
-  local want="$1" sess conf rp found=''
+  local want="$1" sess rp found=''
   [ -n "$want" ] || return 0
   [ "$want" = "$_BR_SLUG" ] && { printf '%s' "$_BR_SUB"; return; }
   while IFS=$'\t' read -r sess _; do
@@ -208,7 +208,7 @@ bridge_state_subdir() {
     [ "$(fleet_slug "$(fleet_norm_repo "$rp")")" = "$want" ] && { found="$sess/bridge"; break; }
   done < <(fleet_each_conf)
   if [ -z "$found" ]; then
-    while IFS=$'\t' read -r sess conf; do
+    while IFS=$'\t' read -r sess _; do
       [ -f "$FLEET_CONF_DIR/fleets/$sess/repos/$want.conf" ] && { found="$sess/bridge/$want"; break; }
     done < <(fleet_each_conf)
   fi
