@@ -23,6 +23,7 @@ _fleet_hub_url_ok() { case "$1" in http://*|https://*) printf '%s\n' "${1%/}"; r
 _fleet_hub_url_src() {
   [ -f "$1" ] || return 1
   ( set +eu; unset FLEET_HUB_URL CCQUOTA_HUB_URL
+    # shellcheck disable=SC2034  # FLEET_SHELL picks the conf's [client] / [node] section
     if [ -n "${2-}" ]; then FLEET_SHELL=$2; else unset FLEET_SHELL; fi
     . "$1" >/dev/null 2>&1 </dev/null
     printf '%s' "${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}" )
