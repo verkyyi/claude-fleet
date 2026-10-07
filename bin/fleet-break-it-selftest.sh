@@ -1821,7 +1821,9 @@ drill_conf_keys_lost() {
 # `ssh m4 fleet` without --test-identity, lets `fleet --test-identity`,
 # `fleet doctor` and the hatch through.
 drill_session_takes_client() {
-  CAP=30; local t0 hub out rc h
+  # not a recovery race: the bound only catches a hang (a macOS runner starts a
+  # python in ~1s, and this drill starts ~15)
+  CAP=120; local t0 hub out rc h
   t0=$(now)
   hub="$WORK/fakehub-$$"; mkdir -p "$hub/conf"
   # one process: the hub in a thread, the client as its child — nothing left
@@ -1884,12 +1886,12 @@ PY2
   # the guard: a session's client start must say --test-identity
   h=( env -u FLEET_HUB FLEET_WORKER_CRED=fwc1.x FLEET_HEAVY=0 FLEET_LIB=/nonexistent python3 "$ROOT/hooks/bash-guard.py" )
   for cmd in 'fleet' 'fleet m4' 'FLEET_HUB_URL=https://hub.example fleet' "$BIN/fleet-shell.sh" 'ssh m4 fleet' 'ssh -p 22022 m4 "fleet shell"'; do
-    out=$(python3 -c 'import json, sys; print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))' "$cmd" | "${h[@]}" 2>&1)
+    out=$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$(printf '%s' "$cmd" | sed 's/["\\]/\\&/g')" | "${h[@]}" 2>&1)
     [ $? = 2 ] || { WHY="bash-guard let a session's [$cmd] through"; return 1; }
     case "$out" in *--test-identity*FLEET_ALLOW_PERSON_CLIENT=1*) ;; *) WHY="bash-guard gave no way out for [$cmd]: [$out]"; return 1 ;; esac
   done
   for cmd in 'fleet --test-identity m4' 'FLEET_CLIENT_IDENTITY=test fleet' 'fleet doctor' 'ssh m4 fleet --test-identity' 'FLEET_ALLOW_PERSON_CLIENT=1 fleet'; do
-    out=$(python3 -c 'import json, sys; print(json.dumps({"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}))' "$cmd" | "${h[@]}" 2>&1)
+    out=$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$(printf '%s' "$cmd" | sed 's/["\\]/\\&/g')" | "${h[@]}" 2>&1)
     [ $? = 0 ] || { WHY="bash-guard refused [$cmd]: [$out]"; return 1; }
   done
   out=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"fleet m4"}}' \
