@@ -243,7 +243,7 @@ FLEET="$CH/.local/bin/fleet"
 [ -x "$FLEET" ] || die 'no fleet in ~/.local/bin after the install' "$(ls -la "$CH/.local/bin" 2>&1)"
 grep -qs "FLEET_HUB_URL=\"\\{0,1\\}$HUB" "$CH/.config/claude-fleet/fleet.conf" || die 'fleet.conf does not carry the hub address' "$(cat "$CH/.config/claude-fleet/fleet.conf" 2>&1)"
 grep -qs '\.local/bin' "$CH/.zshrc" || die 'the install did not put ~/.local/bin on the PATH of a new zsh' "$(cat "$CH/.zshrc" 2>&1)"
-ls "$CH/.ssh" | grep -q . && die 'the install wrote into ~/.ssh before any login' "$(ls -la "$CH/.ssh")"
+[ -n "$(ls -A "$CH/.ssh")" ] && die 'the install wrote into ~/.ssh before any login' "$(ls -la "$CH/.ssh")"
 REAL_TMUX=$(PATH="$CH/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v tmux) || die 'no tmux after the install line' "$(grep -i tmux "$WORK/install.log")"
 ok "fleet installed, fleet.conf names $HUB, ~/.ssh untouched"
 
@@ -275,8 +275,8 @@ perm=$(ls -l "$CH/.ssh/fleet-cert" | cut -c1-10)
 [ "$perm" = '-rw-------' ] || die 'the device key is not 0600' "$perm"
 princ=$(ssh-keygen -L -f "$CERT" | awk '/Principals:/{f=1;next} f&&/:/{f=0} f{print $1}' | tr '\n' ' ')
 case "$princ" in 'drillnew ') ;; *) die 'the certificate does not carry the login drillnew' "$princ" ;; esac
-[ "$(grep -c '>>> fleet login' "$CH/.ssh/config" 2>/dev/null)" = 1 ] || die '~/.ssh/config does not carry exactly one fleet Include' "$(cat "$CH/.ssh/config" 2>&1)"
-grep -q '^Host ' "$CH/.ssh/fleet-ssh-config" || die '~/.ssh/fleet-ssh-config names no machine' "$(cat "$CH/.ssh/fleet-ssh-config" 2>&1)"
+[ "$(grep -c '>>> fleet login' "$CH/.ssh/config" 2>/dev/null)" = 1 ] || die 'the ssh config does not carry exactly one fleet Include' "$(cat "$CH/.ssh/config" 2>&1)"
+grep -q '^Host ' "$CH/.ssh/fleet-ssh-config" || die 'fleet-ssh-config names no machine' "$(cat "$CH/.ssh/fleet-ssh-config" 2>&1)"
 ok "certificate for [$princ] in ~/.ssh (0600), one Include, $(grep -c '^Host ' "$CH/.ssh/fleet-ssh-config") Host block(s)"
 
 # =============================================================================
