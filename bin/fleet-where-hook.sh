@@ -23,12 +23,11 @@
 # SessionStart hook never blocks a session.
 #
 #   fleet-where-hook.sh            (stdin: the hook's JSON, unread)
-#   FLEET_WHERE_HOOK_ANY=1         print for any agent (selftest seam)
 set -uo pipefail
 case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac
 BIN="$(cd "${BIN:-/}" && pwd)"
 
-[ -n "${FLEET_CODEX_LAUNCHER_PID:-}" ] || [ "${FLEET_WHERE_HOOK_ANY:-}" = 1 ] || exit 0
+[ -n "${FLEET_CODEX_LAUNCHER_PID:-}" ] || exit 0
 [ -f "$BIN/fleet-client-where.sh" ] || exit 0
 
 out=$(bash "$BIN/fleet-client-where.sh" 2>/dev/null </dev/null); rc=$?
