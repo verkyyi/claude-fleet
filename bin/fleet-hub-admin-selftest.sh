@@ -23,8 +23,10 @@ bad() { FAIL=$((FAIL+1)); echo "FAIL $*"; }
 LOG="$WORK/requests.ndjson"; PORTF="$WORK/port"
 # The fake hub: answers like /v1/fleet/users and /v1/fleet/settings, logs each
 # request. alarm(60) bounds it even if this script is killed.
-python3 - "$LOG" "$PORTF" <<'PY' &
-import json, signal, sys
+# Written to a file and run from it: a heredoc on a backgrounded command is
+# not something bash 3.2 (macOS) can be trusted with.
+cat > "$WORK/hub.py" <<'PY'
+import json, os, signal, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 signal.alarm(60)
@@ -67,9 +69,12 @@ class H(BaseHTTPRequestHandler):
         self.answer(404, {"error": "no such route"})
     do_GET = do_POST = do_PUT = do_DELETE = handle_any
 s = HTTPServer(("127.0.0.1", 0), H)
-open(portf, "w").write(str(s.server_address[1]))
+with open(portf + ".tmp", "w") as f:
+    f.write(str(s.server_address[1]))
+os.rename(portf + ".tmp", portf)
 s.serve_forever()
 PY
+python3 "$WORK/hub.py" "$LOG" "$PORTF" 2>"$WORK/hub.err" &
 HUBPID=$!
 trap 'kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; rm -rf "$WORK"' EXIT
 # up to 15s: a busy CI runner can take seconds to start python3
@@ -79,7 +84,7 @@ end = time.time() + 15
 while time.time() < end and not (os.path.exists(sys.argv[1]) and os.path.getsize(sys.argv[1]) > 0):
     time.sleep(0.05)
 PY
-[ -s "$PORTF" ] || { echo "FAIL the fake hub did not start"; exit 1; }
+[ -s "$PORTF" ] || { echo "FAIL the fake hub did not start: $(cat "$WORK/hub.err" 2>/dev/null)"; exit 1; }
 HUB="http://127.0.0.1:$(cat "$PORTF")"
 
 # a clean environment: no operator config, the fake hub only
