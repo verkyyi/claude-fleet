@@ -1,5 +1,5 @@
 # Back to one replica on one SQLite file (see kustomization.yaml): Recreate,
-# the data disk + fsGroup, the disk-watch sidecar, readiness on /healthz, and
+# the data disk, the disk-watch sidecar, readiness on /healthz, and
 # none of the replica / Postgres / graceful-stop settings.
 apiVersion: apps/v1
 kind: Deployment
@@ -15,10 +15,6 @@ spec:
     spec:
       terminationGracePeriodSeconds: 30
       topologySpreadConstraints: null
-      securityContext:
-        # The image runs as uid 10001. A fresh cloud disk is root-owned; without
-        # fsGroup the hub cannot write its own database and dies at start.
-        fsGroup: 10001
       containers:
         - name: ccquota
           env:

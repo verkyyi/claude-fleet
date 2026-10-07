@@ -59,6 +59,12 @@ spec:
           labelSelector:
             matchLabels:
               app: ccquota-hub
+      securityContext:
+        # The image runs as uid 10001. The Secret volumes below are 0440: only
+        # their group (fsGroup) can read them — without it the hub dies on
+        # "read credential key: permission denied". (On the sqlite shape it also
+        # owns the root-owned cloud disk.)
+        fsGroup: 10001
       containers:
         - name: ccquota
           image: ccquota:set-by-hub-deploy
