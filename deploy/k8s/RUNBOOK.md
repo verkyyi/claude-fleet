@@ -179,6 +179,70 @@ kubectl -n new-deploy logs deploy/ccquota-hub -c disk-watch --tail=5   # 平时�
    云盘**在线扩容**，pod 不重启；判据是 `kubectl get pvc ccquota-data` 的 CAPACITY 变了、pod 里 `df -h /data`
    变大。尺寸按「至少是库的 2.5 倍」（库 + 一份 VACUUM INTO 快照 + 余量）。只能扩、不能缩。
 
+## 换库：SQLite → 托管 Postgres（#2122，EPIC #2119）
+
+一条命令搬：`ccquota db migrate`。整份拷贝是**一个 Postgres 事务**：中途被杀（进程、pod、网络）目标库原样不动，
+重跑就是干净重来；`--dry-run` 是同一个事务最后回滚，演练拷的、核对的和正式搬一模一样，目标库什么都不留
+（只留 hub 本来就会建的空表结构）。`--verify` 在同一事务里逐表比 **行数 + 按主键排序的内容 SHA-256**；
+`ccquota db verify` 可单独跑，只读两边。输出只有表名、行数、摘要和 `host/库名`——**不打印任何行的值，
+也不打印连接串**。
+
+| 拒绝 | 为什么 | 怎么办 |
+|---|---|---|
+| `the source predates hub migration N` | 源库是旧版 hub 留下的，表结构和目标对不上 | 对**拷贝**跑 `ccquota hub --migrate-only --db <拷贝>`，再搬 |
+| `the target already holds a finished move` | 目标库里已有一次完成的搬家（`db_move_log`），之后 hub 可能已写过 | 确认要覆盖才加 `--overwrite` |
+| `the target is not empty` | 目标库里有 hub 写过的数据 | 同上；换一个空库更稳 |
+| `the target has no table for …` / `no column …` | 二进制比写源库的 hub 旧 | 用同一版本的镜像跑 |
+
+前提（批后，你来做）：RDS Postgres 就绪；连接串放进 Secret `ccquota-db`，key 名 `CCQUOTA_DB_URL`
+（`kubectl -n new-deploy create secret generic ccquota-db --from-literal=CCQUOTA_DB_URL='postgres://…?sslmode=require'`，
+在你自己的终端敲，别进任何文件或单子）。
+
+### 1. 演练（不停写，任何时候都可以）
+
+```bash
+POD=$(kubectl -n new-deploy get pod -l app=ccquota-hub -o name | head -1)
+SNAP=/data/backup-move-rehearsal-$(date -u +%Y%m%dT%H%M%SZ).db
+kubectl -n new-deploy exec $POD -c ccquota -- /data/snapshot-tool /data/ccquota.db $SNAP
+# 连接串只给这一条命令，经环境变量，不上命令行：
+kubectl -n new-deploy get secret ccquota-db -o jsonpath='{.data.CCQUOTA_DB_URL}' | base64 -d \
+  | kubectl -n new-deploy exec -i $POD -c ccquota -- sh -c \
+      'read -r U; CCQUOTA_DB_URL="$U" ccquota db migrate --from '$SNAP' --dry-run --verify'
+kubectl -n new-deploy exec $POD -c ccquota -- rm $SNAP
+```
+
+判据：最后一行 `verify: N table(s), N match, 0 differ`、退出码 0。末行的耗时 ≈ 正式搬时停写的长度——
+超过 1 分钟就先别切，回单子上说。
+
+### 2. 正式切换（你定时间）
+
+1. **只读**：`kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_READONLY=1`（滚一次）。
+   起来后 `curl -s https://<hub>/healthz` 带 `"mode":"read-only"`；写接口一律 `503` + `Retry-After: 15`，
+   读接口照常；store 自己也只读，后台的写（心跳、清理）报错而不是写进旧库后丢掉。
+2. **搬 + 核对**（停写从这里算）：
+   ```bash
+   POD=$(kubectl -n new-deploy get pod -l app=ccquota-hub -o name | head -1)
+   kubectl -n new-deploy get secret ccquota-db -o jsonpath='{.data.CCQUOTA_DB_URL}' | base64 -d \
+     | kubectl -n new-deploy exec -i $POD -c ccquota -- sh -c \
+         'read -r U; CCQUOTA_DB_URL="$U" ccquota db migrate --from /data/ccquota.db --verify'
+   ```
+   有任何 `DIFF` 它自己回滚、退出码 1 —— 不往下走，先 `kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_READONLY-`
+   回到原样。
+3. **指过去**：`kubectl -n new-deploy set env deploy/ccquota-hub --from=secret/ccquota-db CCQUOTA_READONLY-`
+   （同一次滚动：加上 `CCQUOTA_DB_URL`、去掉只读）。起来后 `/healthz` 不再有 `mode`，日志里没有
+   `sqlite /data/ccquota.db`。之后把这条 env 写进 `deploy/k8s/base/deployment.yaml`（secretKeyRef），否则
+   它只存在于集群里。
+4. **旧盘留 7 天**：`/data/ccquota.db` 和 PVC 都不动、不删。
+
+### 3. 退回（一条命令）
+
+```bash
+kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_DB_URL-
+```
+
+hub 回到 `/data/ccquota.db`，也就是第 1 步只读那一刻的数据。⚠️ 切过去之后写进 Postgres 的东西不在旧库里，
+没有反向搬家；所以退回要早——发现不对就在当晚退。
+
 ## fleet 的两把 Secret（#11200 起，多机统一入口）
 
 hub 开了 `CCQUOTA_FLEET=1` 之后多挂两把密钥，**各自独立 Secret，不进库、不进仓库**，Deployment 对它们

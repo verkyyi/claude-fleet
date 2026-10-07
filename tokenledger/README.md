@@ -181,8 +181,17 @@ hub (and every `ccquota` command run with the same environment) uses that
 database; `--db` / `CCQUOTA_DB` are then not read. Unset — the default — it is
 the SQLite file above, exactly as before. The tables are created on first open,
 in the connection's current schema; text compares byte for byte (`COLLATE "C"`)
-whatever locale the database was created with. Moving an existing file's data
-across is a separate step (EPIC #2119).
+whatever locale the database was created with.
+
+**Moving an existing file across** (claude-fleet#2122): `ccquota db migrate
+--from <file> --to <url> [--dry-run] [--verify]` copies every table in one
+Postgres transaction (killed half way = nothing written; `--dry-run` rolls it
+back after the copy and the verify), aligns the id sequences, and with
+`--verify` compares each table's row count and a hash of its rows in key order;
+`ccquota db verify` runs the comparison on its own. `--to` defaults to
+`CCQUOTA_DB_URL`. `CCQUOTA_READONLY=1` holds the hub still meanwhile: writes
+answer `503` + `Retry-After`, reads work. The cut-over and the way back are in
+deploy/k8s/RUNBOOK.md.
 
 **Two hub replicas — 两份入口** (claude-fleet#2124): with the fleet module on, a
 node's control channel ends in whichever replica the load balancer handed it

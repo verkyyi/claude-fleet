@@ -572,6 +572,15 @@ func runHub(args []string) error {
 	if err != nil {
 		return err
 	}
+	// CCQUOTA_READONLY=1 (claude-fleet#2122): hold the database still while
+	// `ccquota db migrate` copies it. Last of the startup writes above.
+	readOnly := os.Getenv("CCQUOTA_READONLY") == "1"
+	if readOnly {
+		if err := st.SetReadOnly(); err != nil {
+			return err
+		}
+		log.Printf("read-only (CCQUOTA_READONLY=1): writes answer 503 + Retry-After, reads as usual")
+	}
 
 	srv := &api.Server{
 		Store:               st,
@@ -583,6 +592,7 @@ func runHub(args []string) error {
 		UI:                  web.Assets(),
 		LiveStore:           api.NewLive(),
 		Fleet:               fleetOn,
+		ReadOnly:            readOnly,
 		FleetAdmins:         splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
 		// A person's grant on their own logins (claude-fleet#1410).
 		FleetPersonScopes:     fleetPersonScopes(),

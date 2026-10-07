@@ -48,6 +48,10 @@ type Store struct {
 	// (dialect.go).
 	d dialect
 
+	// src is what the pools were opened on (the SQLite path or the Postgres
+	// connection string), for SetReadOnly to reopen the writer.
+	src string
+
 	// BackfilledRollup is how many usage_hourly rows Open rebuilt from
 	// usage_events on this open, 0 when the rollup was already current. The
 	// hub logs it so an operator can see a first-run backfill happen.
@@ -83,6 +87,25 @@ func openPool(d dialect, src string, readOnly bool) (*sql.DB, error) {
 		dsn += "&_pragma=query_only(1)"
 	}
 	return sql.Open("sqlite", dsn)
+}
+
+// SetReadOnly turns the store's writer into a reader: from here on every write
+// fails, every read works (CCQUOTA_READONLY=1, claude-fleet#2122). It is how a
+// hub holds its database still while `ccquota db migrate` copies it — the HTTP
+// layer already answers a write request 503, and this catches the writes no
+// request makes (a heartbeat, a background loop), which would otherwise land
+// after the copy's snapshot and be lost with the old file.
+//
+// Call it before the store is shared: it swaps the writer without a lock.
+func (s *Store) SetReadOnly() error {
+	ro, err := openPool(s.d, s.src, true)
+	if err != nil {
+		return fmt.Errorf("reopen the writer read-only: %w", err)
+	}
+	ro.SetMaxOpenConns(1)
+	old := s.write
+	s.write = ro
+	return old.Close()
 }
 
 func openStore(d dialect, src, name string) (*Store, error) {
@@ -131,7 +154,7 @@ func openStore(d dialect, src, name string) (*Store, error) {
 	}
 	read.SetMaxOpenConns(readPoolSize)
 
-	st := &Store{read: read, write: write, d: d}
+	st := &Store{read: read, write: write, d: d, src: src}
 	if st.BackfilledRollup, err = ensureRollup(st); err != nil {
 		st.Close()
 		return nil, err
