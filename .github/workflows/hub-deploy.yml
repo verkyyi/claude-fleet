@@ -4,11 +4,20 @@ name: hub-deploy
 # C1, issue #1983. A merge to master that touches tokenledger/** or
 # deploy/k8s/** builds the image, pushes it as `prod-<sha7>`, snapshots the
 # database, applies deploy/k8s/overlays/prod with that tag, waits for the
-# rollout and reads /version back. Rollback = `workflow_dispatch` with the old
-# tag (no build; the snapshot step still runs).
+# rollout and checks /healthz + /version on every address. A manual rollback =
+# `workflow_dispatch` with the old tag (no build; the snapshot step still runs).
+#
+# Nobody approves a run any more (issue #2013, 方案 B), so the job is its own
+# safety net: it reads the live image before it changes anything and, when the
+# rollout or the health check fails, `kubectl set image`s that image back and
+# goes red (the database is never restored automatically — the snapshot path is
+# in the summary, RUNBOOK.md has the restore). Every run writes a summary (old →
+# new, the commits between, schema changes, env changes, snapshot, rollback),
+# comments on issue $HUB_DEPLOY_NOTIFY_ISSUE (repo variable; unset = silent),
+# and repo variable HUB_DEPLOY_PAUSED=1 stops a push from deploying at all.
 #
 # No long-lived credential exists for it, in this repo or anywhere: the deploy
-# job runs in environment `prod` (master only, @verkyyi approves each run) and
+# job runs in environment `prod` (master only) and
 # trades GitHub's OIDC token for STS as RAM role gha-claudefleet-deploy
 # (.github/actions/hub-acr, .github/actions/hub-kubeconfig). In the cluster that
 # role is Role new-deploy/claudefleet-deployer: the hub's own Deployment,
@@ -40,9 +49,14 @@ on:
         description: "Snapshot the database first (turn off only when the hub pod is down and cannot be exec'd into)"
         type: boolean
         default: true
+      simulate_unhealthy:
+        description: "Rollback drill: treat the health check as failed, so the job rolls back to the live image and goes red"
+        type: boolean
+        default: false
 
 # One deploy at a time, never cancelled half-way (a cancelled Recreate rollout
-# leaves the hub down until the next one).
+# leaves the hub down until the next one): a newer run waits, and replaces any
+# run that is still only waiting.
 concurrency:
   group: hub-deploy-${{ github.event_name == 'pull_request' && github.ref || 'prod' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -65,6 +79,7 @@ jobs:
         with: { node-version: '20' }
       - run: node .github/actions/hub-kubeconfig/oidc.js --selftest
       - run: node .github/actions/hub-acr/acr.js --selftest
+      - run: .github/actions/hub-release/release.sh --selftest
       - name: The prod overlay renders, with exactly one placeholder tag
         run: |
           set -euo pipefail
@@ -83,17 +98,49 @@ jobs:
             echo "::error::deploy/k8s/base must stay environment-free — move it to an overlay"; exit 1
           fi
 
-  deploy:
+  # The pause switch (issue #2013): repo variable HUB_DEPLOY_PAUSED=1 and a push
+  # deploys nothing — this job goes green, says 已暂停 on the summary, and the
+  # deploy job is skipped. A person's workflow_dispatch is never paused: that
+  # is how you deploy (or roll back) by hand while automatic releases are off.
+  gate:
     if: github.event_name != 'pull_request'
-    needs: check
+    runs-on: ubuntu-latest
+    outputs:
+      paused: ${{ steps.pause.outputs.paused }}
+    steps:
+      - name: Paused?
+        id: pause
+        env:
+          PAUSED: ${{ vars.HUB_DEPLOY_PAUSED }}
+        run: |
+          if [ "$PAUSED" = 1 ] && [ "$GITHUB_EVENT_NAME" = push ]; then
+            echo "paused=true" >> "$GITHUB_OUTPUT"
+            { echo "## hub-deploy · ⏸ 已暂停"
+              echo
+              echo "仓库变量 \`HUB_DEPLOY_PAUSED=1\`：这次 push（\`${GITHUB_SHA:0:7}\`）没有部署。"
+              echo "恢复自动发布：删掉这个变量（或改成别的值）；要现在发这一版：Actions → hub-deploy → Run workflow。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::hub-deploy paused (HUB_DEPLOY_PAUSED=1) — nothing deployed"
+          else
+            echo "paused=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    if: github.event_name != 'pull_request' && needs.gate.outputs.paused != 'true'
+    needs: [check, gate]
     runs-on: ubuntu-latest
     environment: prod
     timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
+      issues: write   # the release notice on $HUB_DEPLOY_NOTIFY_ISSUE, nothing else
+    env:
+      HUB_DEPLOY_SIMULATE_UNHEALTHY: ${{ github.event.inputs.simulate_unhealthy || 'false' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the summary's commit list runs from the live commit to this one
 
       - name: Which image
         id: tag
@@ -142,6 +189,25 @@ jobs:
 
       - uses: ./.github/actions/hub-kubeconfig
 
+      # Before anything changes: what is live — the image a failed release
+      # rolls back to, and the env the summary compares with.
+      - name: What is live
+        id: live
+        run: |
+          set -euo pipefail
+          if kubectl -n "$NS" get deploy ccquota-hub -o json > "$RUNNER_TEMP/live.json" 2>"$RUNNER_TEMP/live.err"; then
+            image=$(kubectl -n "$NS" get deploy ccquota-hub -o jsonpath='{.spec.template.spec.containers[?(@.name=="ccquota")].image}')
+          else
+            grep -q NotFound "$RUNNER_TEMP/live.err" || { cat "$RUNNER_TEMP/live.err"; exit 1; }
+            image=''; : > "$RUNNER_TEMP/live.json"
+          fi
+          tag=${image##*:}; [ -n "$image" ] || tag=''
+          commit=''; [[ "$tag" =~ ^prod-([0-9a-f]{7,40})$ ]] && commit=${BASH_REMATCH[1]}
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "live: ${image:-<no deployment yet — nothing to roll back to>}"
+
       - name: Render the manifests with this tag
         run: |
           set -euo pipefail
@@ -156,6 +222,7 @@ jobs:
       # rollback finds its pair. This step keeps the newest 3 of ITS OWN
       # snapshots (backup-hubdeploy-*); a person's backup-* is never touched.
       - name: Snapshot the database
+        id: snapshot
         if: github.event.inputs.snapshot != 'false'
         run: |
           set -euo pipefail
@@ -164,6 +231,7 @@ jobs:
           from=$(kubectl -n "$NS" get deploy ccquota-hub -o jsonpath='{.spec.template.spec.containers[?(@.name=="ccquota")].image}')
           from=${from##*:}
           ts=$(date -u +%Y%m%dT%H%M%SZ)
+          echo "path=/data/backup-hubdeploy-$ts-$from.db (pod $pod, PVC ccquota-data)" >> "$GITHUB_OUTPUT"
           kubectl -n "$NS" exec "$pod" -c ccquota -- sh -c '
             set -e
             ls -1t /data/backup-hubdeploy-*.db 2>/dev/null | tail -n +3 | while read -r f; do rm -f "$f"; echo "pruned $f"; done
@@ -177,9 +245,11 @@ jobs:
           ' _ "$ts" "$from"
 
       - name: Apply
+        id: apply
         run: kubectl apply -f "$RUNNER_TEMP/hub.yaml"
 
       - name: Rollout
+        id: rollout
         run: |
           if ! kubectl -n "$NS" rollout status deploy/ccquota-hub --timeout=10m; then
             kubectl -n "$NS" get pod -l app=ccquota-hub -o wide || true
@@ -187,20 +257,127 @@ jobs:
             exit 1
           fi
 
-      - name: /version names this commit, on every address
+      # The release is good only when every address answers /healthz = 200
+      # AND /version names this commit, within ~2 minutes each.
+      - name: Health check (/healthz + /version, every address)
+        id: health
+        run: .github/actions/hub-release/release.sh health "${{ steps.tag.outputs.commit }}"
+
+      # Anything after the apply went wrong ⇒ put the live image back. Only the
+      # image: the manifests stay master's, and a migration the new image ran
+      # stays run (the snapshot is in the summary; restoring it is a person's,
+      # RUNBOOK.md). The job stays red either way.
+      - name: Roll back to the live image
+        id: rollback
+        if: failure() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure')
         env:
-          WANT: ${{ steps.tag.outputs.commit }}
+          PREV_IMAGE: ${{ steps.live.outputs.image }}
+          PREV_COMMIT: ${{ steps.live.outputs.commit }}
+          NEW_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -uo pipefail
-          for url in $HUB_URLS; do
-            got=''
-            for _ in $(seq 1 30); do
-              got=$(curl -fsS -m 10 "$url/version" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
-              [ "$got" = "$WANT" ] && break
-              sleep 5
-            done
-            if [ "$got" != "$WANT" ]; then
-              echo "::error::$url/version reports commit '$got', want '$WANT'"; exit 1
+          if [ -z "$PREV_IMAGE" ]; then
+            echo "::error::no live image was recorded before the deploy — nothing to roll back to"; exit 1
+          fi
+          if [ "${PREV_IMAGE##*:}" = "$NEW_TAG" ]; then
+            echo "::error::the live image already was $NEW_TAG — rolling back would change nothing"; exit 1
+          fi
+          echo "rolling back to $PREV_IMAGE"
+          kubectl -n "$NS" set image deploy/ccquota-hub "ccquota=$PREV_IMAGE" || exit 1
+          if ! kubectl -n "$NS" rollout status deploy/ccquota-hub --timeout=10m; then
+            kubectl -n "$NS" get pod -l app=ccquota-hub -o wide || true
+            echo "::error::the rollback's rollout did not finish either — the hub may be down (deploy/k8s/RUNBOOK.md)"; exit 1
+          fi
+          if [ -n "$PREV_COMMIT" ]; then
+            HUB_DEPLOY_SIMULATE_UNHEALTHY=false .github/actions/hub-release/release.sh health "$PREV_COMMIT" \
+              || { echo "::error::rolled back to $PREV_IMAGE, but it does not answer healthy"; exit 1; }
+          fi
+          echo "::error::release ${NEW_TAG} failed its checks — rolled back to ${PREV_IMAGE##*:}"
+
+      # What happened, on the run's summary page — every run, red or green.
+      - name: Summary
+        id: summary
+        if: always() && steps.tag.outcome == 'success'
+        env:
+          NEW_TAG: ${{ steps.tag.outputs.tag }}
+          NEW_COMMIT: ${{ steps.tag.outputs.commit }}
+          PREV_TAG: ${{ steps.live.outputs.tag }}
+          PREV_COMMIT: ${{ steps.live.outputs.commit }}
+          SNAPSHOT: ${{ steps.snapshot.outputs.path }}
+          SNAPSHOT_OUTCOME: ${{ steps.snapshot.outcome }}
+          APPLY: ${{ steps.apply.outcome }}
+          ROLLOUT: ${{ steps.rollout.outcome }}
+          HEALTH: ${{ steps.health.outcome }}
+          ROLLBACK: ${{ steps.rollback.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          if [ "$HEALTH" = success ]; then
+            result=success head="✅ 已发布 \`$NEW_TAG\`"
+          elif [ "$ROLLBACK" = success ]; then
+            result=rolled-back head="↩️ 已回退到 \`$PREV_TAG\`（\`$NEW_TAG\` 没过检查）"
+          elif [ "$ROLLBACK" = failure ]; then
+            result=rollback-failed head="🔥 回退失败 — 线上可能不健康，照 deploy/k8s/RUNBOOK.md 手工处理"
+          elif [ "$APPLY" = success ] || [ "$APPLY" = failure ]; then
+            result=failed head="❌ 发布失败"
+          else
+            result=not-applied head="❌ 没部署（在 apply 之前失败，线上没动）"
+          fi
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          case "$SNAPSHOT_OUTCOME" in
+            success) snap="\`$SNAPSHOT\`" ;;
+            skipped) snap="没做（${{ github.event.inputs.snapshot == 'false' && '手动关掉' || '没走到这一步' }}）" ;;
+            *) snap="失败" ;;
+          esac
+          {
+            echo "## hub-deploy · $head"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| 线上旧版本 | \`${PREV_TAG:-（无）}\` |"
+            echo "| 新版本 | \`$NEW_TAG\` |"
+            echo "| 快照 | $snap |"
+            echo "| apply · rollout · 健康检查 | $APPLY · $ROLLOUT · $HEALTH |"
+            echo "| 回退 | $( [ "$ROLLBACK" = skipped ] && echo 没回退 || echo "$ROLLBACK（只回镜像；数据库要恢复照 RUNBOOK.md 用上面的快照手工做）" ) |"
+            [ "$HUB_DEPLOY_SIMULATE_UNHEALTHY" != true ] || echo "| 演练 | simulate_unhealthy=true：健康检查按失败处理 |"
+            echo
+            echo "### 环境变量（ccquota 容器，线上 → 这次的渲染）"
+            echo
+            if [ ! -s "$RUNNER_TEMP/hub.yaml" ]; then
+              echo "_没渲染出清单，没法比较。_"
+            elif [ ! -s "$RUNNER_TEMP/live.json" ]; then
+              echo "_线上还没有 deployment，没法比较。_"
+            elif ! new_env=$(yq -o=json 'select(.kind == "Deployment")' "$RUNNER_TEMP/hub.yaml" | .github/actions/hub-release/release.sh env -) \
+              || ! old_env=$(.github/actions/hub-release/release.sh env "$RUNNER_TEMP/live.json"); then
+              echo "_读不出 env，没法比较。_"
+            elif [ "$old_env" = "$new_env" ]; then
+              echo "没变。"
+            else
+              echo '```diff'
+              diff -U0 <(printf '%s\n' "$old_env") <(printf '%s\n' "$new_env") | grep -E '^[+-][^+-]' || true
+              echo '```'
             fi
-            echo "$url/version → $(curl -fsS -m 10 "$url/version")"
-          done
+            echo
+            .github/actions/hub-release/release.sh changes "$PREV_COMMIT" "$NEW_COMMIT"
+            echo
+            echo "[这次运行]($RUN_URL)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # One comment per release on the fixed issue (repo variable
+      # HUB_DEPLOY_NOTIFY_ISSUE; unset = no comment), with this job's token.
+      - name: Notify
+        if: always() && vars.HUB_DEPLOY_NOTIFY_ISSUE != '' && steps.summary.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ vars.HUB_DEPLOY_NOTIFY_ISSUE }}
+          HEAD: ${{ steps.summary.outputs.head }}
+          PREV_TAG: ${{ steps.live.outputs.tag }}
+          NEW_TAG: ${{ steps.tag.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "**hub-deploy** · $HEAD
+
+          \`${PREV_TAG:-（无）}\` → \`$NEW_TAG\` · 触发：$GITHUB_EVENT_NAME by @$GITHUB_ACTOR
+          摘要（提交列表、migration、环境变量、快照）：$RUN_URL" \
+            || echo "::warning::could not comment on issue #$ISSUE"

@@ -8,7 +8,7 @@ description: >
 # EPIC #1982 C1 (issue #1983). Ported from 24haowan-monorepo's prod-kubeconfig
 # action, with the role fixed. No long-lived credential exists anywhere: the
 # role trusts only sub = repo:verkyyi/claude-fleet:environment:prod, and the
-# prod environment admits master only, behind @verkyyi's approval. In the
+# prod environment admits master only (no reviewer since #2013). In the
 # cluster the role's ID (300826830644931552) is bound to Role
 # new-deploy/claudefleet-deployer — the hub's own objects, no secrets, no RBAC.
 inputs:
