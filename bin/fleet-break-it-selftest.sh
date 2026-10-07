@@ -2148,10 +2148,11 @@ open(sys.argv[1] + ".tmp", "w").write(str(srv.server_address[1])); __import__("o
 srv.serve_forever()
 PY
   : > "$sc/log"
-  python3 "$sc/hub.py" "$sc/port" "$((CAP + 40))" "$sc/log" & hpid=$!
-  for _ in $(seq 1 50); do [ -s "$sc/port" ] && break; sleep 0.1; done
+  # a busy macOS runner takes seconds to start a python: the start is not timed
+  python3 "$sc/hub.py" "$sc/port" "$((CAP + 90))" "$sc/log" 2>"$sc/hub.err" & hpid=$!
+  for _ in $(seq 1 300); do [ -s "$sc/port" ] && break; sleep 0.1; done
   { read -r port < "$sc/port"; } 2>/dev/null
-  [ -n "$port" ] || { kill "$hpid" 2>/dev/null; WHY="the fake hub did not start"; return 1; }
+  [ -n "$port" ] || { kill "$hpid" 2>/dev/null; WHY="the fake hub did not start in 30s: $(tail -2 "$sc/hub.err" | tr '\n' ' ')"; return 1; }
   local hub="http://127.0.0.1:$port" before
   # where, as a session on this machine reads it
   hw() { ( client_env; export FLEET_HUB_URL="$hub" FLEET_HUB_TOKEN=tok FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$sc/cache"
