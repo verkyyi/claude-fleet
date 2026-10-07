@@ -1,0 +1,35 @@
+# The hub's front door, one more path: /v1/proxy/ goes to the credential
+# proxy, everything else stays the hub's (its own Ingress, ccquota-hub). The
+# longest prefix wins in ingress-nginx, so this needs no change to the hub's.
+# The overlay replaces tls + rules with the real hostnames.
+#
+# No limit-rps here (the hub's 20/s per client would throttle one machine's
+# sessions); streams need no buffering and hour-long reads; a request body
+# may be as large as the proxy takes (64 MiB).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ccquota-credproxy
+  labels:
+    app: ccquota-credproxy
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: hub.example.com
+      http:
+        paths:
+          - path: /v1/proxy/
+            pathType: Prefix
+            backend:
+              service:
+                name: ccquota-credproxy
+                port:
+                  number: 80

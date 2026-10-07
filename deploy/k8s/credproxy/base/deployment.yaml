@@ -1,0 +1,87 @@
+# Stateless: no disk, no vault key, no database. It asks the hub's Service one
+# question per session pass (POST /v1/fleet/credproxy/resolve, its own token)
+# and caches the answer ≤ 30 s — and rides out a hub restart on what it holds
+# (--stale). So, unlike the hub, any number of replicas and a RollingUpdate.
+#
+# Same placeholder image as the hub (`ccquota:set-by-hub-deploy`); whoever
+# applies it pins the hub's live tag (README.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-credproxy
+  labels:
+    app: ccquota-credproxy
+spec:
+  replicas: 2
+  revisionHistoryLimit: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ccquota-credproxy
+  template:
+    metadata:
+      labels:
+        app: ccquota-credproxy
+    spec:
+      # A stream in flight finishes before the pod goes (the process waits
+      # 110 s after SIGTERM).
+      terminationGracePeriodSeconds: 120
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: ccquota-credproxy
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: credproxy
+          image: ccquota:set-by-hub-deploy
+          imagePullPolicy: IfNotPresent
+          # The image's ENTRYPOINT is `ccquota hub …`: replace it whole.
+          command: ["ccquota", "credproxy", "--listen=:8788"]
+          ports:
+            - containerPort: 8788
+          env:
+            # The hub's Service, inside the cluster — never the public door.
+            - name: CCQUOTA_CREDPROXY_HUB_URL
+              value: "http://ccquota-hub"
+            - name: CCQUOTA_FLEET_CREDPROXY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: credproxy-token
+            # The Singapore relay (C7) — every request goes through it. The
+            # overlay sets it; with neither it nor --direct the pod refuses to
+            # start.
+            - name: CCQUOTA_CREDPROXY_RELAY_URL
+              value: ""
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8788
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8788
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi

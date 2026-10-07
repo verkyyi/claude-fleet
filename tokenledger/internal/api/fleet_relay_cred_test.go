@@ -185,7 +185,7 @@ func TestRelayCredUntrusted(t *testing.T) {
 	}
 
 	// A machine that joined after the migration mints nothing.
-	p, _ := h.srv.Store.Principal("wecom-alice")
+	p, _ := h.srv.Store.Principal(pAlice)
 	if err := h.srv.Store.AdoptAccount(p, "m9", time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestRelayCheckSessionPass(t *testing.T) {
 	h, tok5, _, f5, _ := sessHarness(t)
 	out := sessIssue(t, h, tok5, f5, map[string]any{"providers": []string{"claude"}})
 	cred, id := out["cred"].(string), out["id"].(string)
-	if code, who := relayCheck(t, h, cred, "/anthropic/v1/messages"); code != http.StatusOK || who != "wecom-verk@m5" {
+	if code, who := relayCheck(t, h, cred, "/anthropic/v1/messages"); code != http.StatusOK || who != "gh:1005@m5" {
 		t.Fatalf("session pass on /anthropic/: %d who=%q", code, who)
 	}
 	for _, uri := range []string{"/chatgpt/codex/responses", "/openai-auth/oauth/token", "/v1/fleet/settings"} {

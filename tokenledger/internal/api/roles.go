@@ -80,6 +80,7 @@ var routeAccess = map[string]string{
 	control.RenewPath: accessSelf, control.HomePath: accessSelf,
 	"/v1/fleet/client-settings": accessSelf,
 	"/v1/fleet/session-cred":    accessSelf, "/v1/fleet/session-cred/": accessSelf,
+	CredProxyResolvePath: accessSelf,
 	control.SSHRelayPath: accessSelf, control.SSHRelayDataPath: accessSelf,
 	control.RoutesPath: accessSelf,
 

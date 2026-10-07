@@ -94,9 +94,18 @@ jobs:
           [ -z "$extra" ] || { echo "::error::the deploy role cannot apply: $extra"; exit 1; }
       - name: The base names no environment
         run: |
-          if grep -rn '24haowan' deploy/k8s/base; then
-            echo "::error::deploy/k8s/base must stay environment-free — move it to an overlay"; exit 1
+          if grep -rn '24haowan' deploy/k8s/base deploy/k8s/credproxy/base; then
+            echo "::error::a base must stay environment-free — move it to an overlay"; exit 1
           fi
+      # The cluster credential proxy (#1973) is applied by a person, never by
+      # the deploy job (deploy/k8s/credproxy/README.md) — but it must render.
+      - name: The credential proxy renders, with one placeholder tag
+        run: |
+          set -euo pipefail
+          kubectl kustomize deploy/k8s/credproxy/prod > "$RUNNER_TEMP/credproxy.yaml"
+          n=$(grep -c ":$PLACEHOLDER\$" "$RUNNER_TEMP/credproxy.yaml" || true)
+          [ "$n" = 1 ] || { echo "::error::expected one image tagged :$PLACEHOLDER, found $n"; exit 1; }
+          grep -q 'value: https://' "$RUNNER_TEMP/credproxy.yaml" || { echo "::error::no relay URL in the prod render"; exit 1; }
 
   # The pause switch (issue #2013): repo variable HUB_DEPLOY_PAUSED=1 and a push
   # deploys nothing — this job goes green, says 已暂停 on the summary, and the

@@ -104,6 +104,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetSessionCreds(); err != nil {
 		return err
 	}
+	// Their account bindings, for the cluster credential proxy (claude-fleet#1973).
+	if err := s.ensureFleetSessionBinds(); err != nil {
+		return err
+	}
 	// The vault's KMS-wrapped data key (claude-fleet#1417).
 	if err := s.ensureFleetCredKey(); err != nil {
 		return err

@@ -1,0 +1,13 @@
+# The cluster credential proxy — 中心代理 (claude-fleet#1973, EPIC #1967 C6):
+# `ccquota credproxy`, the hub's image as its own Deployment. Environment-free
+# like ../../base; ../prod adds the namespace, registry, hostnames and relay.
+#
+# NOT part of overlays/prod, so hub-deploy never applies it: its first apply
+# needs a Secret key and a Role the deploy job does not have. ../README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - pdb.yaml
