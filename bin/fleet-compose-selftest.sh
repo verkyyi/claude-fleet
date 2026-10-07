@@ -76,9 +76,10 @@ printf '#!/bin/sh\ncat %q\n' "$ROWS" > "$SB/tmux-dashboard-rows.sh"
 printf '#!/bin/sh\n[ "$1" = open ] && printf "%%s\\n" "$2" >> %q\nexit 0\n' "$VIEW" > "$SB/fleet-remote-view.sh"
 cat > "$SB/fleet-client-place.sh" <<EOF
 #!/bin/bash
+# the body first: the test reads it as soon as the argv is logged
+prev=''; name=''; for a in "\$@"; do [ "\$prev" = --body-file ] && cat "\$a" > "$BODY"; [ "\$prev" = --name ] && name=\$a; prev=\$a; done
 printf '%s\n' "\$*" >> "$LOG"
 n=\$(grep -c . "$LOG")
-prev=''; name=''; for a in "\$@"; do [ "\$prev" = --body-file ] && cat "\$a" > "$BODY"; [ "\$prev" = --name ] && name=\$a; prev=\$a; done
 sleep 2
 case "\$1 \$2" in
   *' new') k=\$((42 + n)); nm=forty-three; [ "\$k" = 43 ] || nm=new-\$k
