@@ -847,6 +847,7 @@ is one `hub_audit` row: who, when, old → new.
 | `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN`, no longer read (`none` = no machines; `least-busy` = the hub picks, claude-fleet#2069) |
 | `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
+| `fleet.machine_names` | — | the short name every client shows a machine by, `macmini=m5,mini2=m4` (claude-fleet#1706); wins over a `CCQUOTA_FLEET_ROUTES` alias, rides `/v1/fleet/routes` → each client's `FLEET_NODE_ALIASES`, and `/v1/nodes` → `machines[].alias` |
 | `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS`, no longer read (`<id>` = a GitHub ID, `583231` or `gh:583231`; `none` = no login) |
 | `user.<GitHub ID>.lang` | — | the account's page language (claude-fleet#2033): `zh-CN` \| `en` |
 

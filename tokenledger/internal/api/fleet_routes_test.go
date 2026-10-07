@@ -72,6 +72,46 @@ func TestFleetMachinesMergesHeartbeatRoutes(t *testing.T) {
 	}
 }
 
+// fleet.machine_names is the hub's one place for the short name
+// (claude-fleet#1706): it labels a machine that only a heartbeat mentions,
+// wins over CCQUOTA_FLEET_ROUTES' alias, and rides /v1/nodes' machine rows.
+// Unset, every alias is what the route lists said.
+func TestFleetMachinesNamesFromSetting(t *testing.T) {
+	h := newFleetHarness(t)
+	h.srv.FleetRoutes = []FleetMachine{{Hostname: "mini", Alias: "old",
+		Routes: []FleetRoute{{Name: "public", Host: "gw.static", Port: 22022}}}}
+	beatRoutes(t, h, "a", "mini", []control.NodeRoute{{Name: "tailnet", Host: "mini.tail.ts.net"}})
+	beatRoutes(t, h, "b", "macmini.local", []control.NodeRoute{{Name: "tailnet", Host: "macmini.tail.ts.net"}})
+
+	aliases := func() map[string]string {
+		out := map[string]string{}
+		for _, m := range h.srv.fleetMachines() {
+			out[m.Hostname] = m.Alias
+		}
+		return out
+	}
+	if got := aliases(); got["mini"] != "old" || got["macmini.local"] != "" {
+		t.Fatalf("unset: aliases = %v", got)
+	}
+	if err := h.srv.Store.SetFleetSetting(MachineNamesKey, "macmini=m5,mini=m4", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := aliases(); got["mini"] != "m4" || got["macmini.local"] != "m5" {
+		t.Fatalf("set: aliases = %v", got)
+	}
+	snap, err := h.srv.nodesWhere(time.Now(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, m := range snap.Machines {
+		got[m.Hostname] = m.Alias
+	}
+	if got["mini"] != "m4" || got["macmini.local"] != "m5" {
+		t.Fatalf("/v1/nodes machines = %+v", snap.Machines)
+	}
+}
+
 func postRoutes(t *testing.T, h *harness, auth func(http.Header), body any) (int, RoutesResponse, string) {
 	t.Helper()
 	var rd *bytes.Reader

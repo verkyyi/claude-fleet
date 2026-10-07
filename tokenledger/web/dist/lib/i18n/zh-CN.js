@@ -856,6 +856,8 @@ export const zhCN = {
   'ui.set.h.pool.move_when_full': '会话自己的订阅满了，换到别的订阅',
   'ui.set.k.fleet.auto_assign': '新使用者在哪些机器上开登录名',
   'ui.set.h.fleet.auto_assign': 'least-busy（入口挑最闲的），或机器名用逗号分隔，或 none',
+  'ui.set.k.fleet.machine_names': '机器短名',
+  'ui.set.h.fleet.machine_names': '每个客户端怎么称呼这台机器：主机名=短名，逗号分隔',
   'ui.set.k.fleet.spot': '临时机器',
   'ui.set.h.fleet.spot': '没有机器有空时租一台临时机器',
   'ui.set.default': '默认',

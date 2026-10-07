@@ -237,6 +237,10 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 		{MeterKey, "off", http.StatusOK, "off"},
 		{RoutesExtraKey, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`, http.StatusOK, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`},
 		{RoutesExtraKey, `[{"hostname":"bad host"}]`, http.StatusBadRequest, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`},
+		{MachineNamesKey, " mini2=m4, MacMini.local=m5 ", http.StatusOK, "macmini=m5,mini2=m4"}, // claude-fleet#1706
+		{MachineNamesKey, "macmini=m5,mini2=m5", http.StatusBadRequest, "macmini=m5,mini2=m4"},
+		{MachineNamesKey, "macmini", http.StatusBadRequest, "macmini=m5,mini2=m4"},
+		{MachineNamesKey, "macmini=bad name", http.StatusBadRequest, "macmini=m5,mini2=m4"},
 		{PoolSkipPctKey, "", http.StatusOK, "85"},
 	}
 	for _, c := range cases {
@@ -258,8 +262,8 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 			n++
 		}
 	}
-	if n != 9 { // one per accepted change
-		t.Errorf("setting audit rows = %d, want 9", n)
+	if n != 10 { // one per accepted change
+		t.Errorf("setting audit rows = %d, want 10", n)
 	}
 	// The readers follow at once.
 	if got := h.srv.autoAssign(); strings.Join(got, ",") != "m4,macmini" {

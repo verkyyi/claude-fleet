@@ -227,7 +227,9 @@ export function arrived(audit, prov, label, since) {
   return rows.find((r) => r.action === 'put' && r.provider === prov && norm(r.account) === norm(label) && toMs(r.at) >= since - 1000) || null;
 }
 
-/** machineCards are /v1/nodes' machines, lost last, by name. */
+/** machineCards are /v1/nodes' machines, lost last, by name. name is the
+ *  hostname's first label (what the actions send); label is the short name
+ *  the admin gave it (fleet.machine_names → alias), else name. */
 export function machineCards(snap) {
   const ms = (snap && Array.isArray(snap.machines)) ? snap.machines : [];
   const vers = {};
@@ -240,11 +242,11 @@ export function machineCards(snap) {
   }
   const rank = { online: 0, maintenance: 1, lost: 2 };
   return ms.map((m) => ({
-    host: m.hostname, name: String(m.hostname || '').split('.')[0], status: m.status, kind: m.kind,
+    host: m.hostname, name: String(m.hostname || '').split('.')[0], label: m.alias || String(m.hostname || '').split('.')[0], status: m.status, kind: m.kind,
     sessions: m.sessions, loadCore: m.ncpu ? m.load1 / m.ncpu : null, hist: Array.isArray(m.load_hist) ? m.load_hist : [],
     version: vers[m.hostname] || '', seen: m.last_heartbeat, maintenance: m.maintenance || null,
     eps: eps[m.hostname] || [],
-  })).sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || a.name.localeCompare(b.name));
+  })).sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || a.label.localeCompare(b.label));
 }
 
 /** joined is the join code that answers a wait started for label: used, or null. */
@@ -272,11 +274,11 @@ export function userRows(list) {
 }
 
 /** The switches and fields Settings draws, in groups, after the prototype.
- *  Each is a hub setting key (hub_settings.go); type on/off, pct or hosts. */
+ *  Each is a hub setting key (hub_settings.go); type on/off, pct, hosts or names. */
 export const SETTING_GROUPS = Object.freeze([
   { id: 'public', items: [{ key: 'hub.public_meter', type: 'onoff' }, { key: 'hub.public_badges', type: 'onoff' }] },
   { id: 'pool', items: [{ key: 'pool.skip_pct', type: 'pct' }, { key: 'pool.move_when_full', type: 'onoff' }] },
-  { id: 'people', items: [{ key: 'fleet.auto_assign', type: 'hosts' }, { key: 'fleet.spot', type: 'onoff' }] },
+  { id: 'people', items: [{ key: 'fleet.auto_assign', type: 'hosts' }, { key: 'fleet.machine_names', type: 'names' }, { key: 'fleet.spot', type: 'onoff' }] },
 ]);
 
 /** settingValue is what applies for key in a /v1/fleet/settings answer:
