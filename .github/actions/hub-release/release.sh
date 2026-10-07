@@ -16,6 +16,16 @@
 #   release.sh env <deploy.json>          one line per env / envFrom entry of the
 #                                         ccquota container (sorted), for a
 #                                         before/after diff. '-' = stdin.
+#   release.sh hold                       the batching (issue #2052): a push's
+#                                         run waits until master has been quiet
+#                                         for $QUIET_MINUTES (no newer
+#                                         tokenledger / deploy/k8s commit) AND
+#                                         $MIN_GAP_MINUTES have passed since the
+#                                         last successful release; a newer such
+#                                         commit landing meanwhile supersedes it
+#                                         (its own run, queued behind this one,
+#                                         ships both). Prints verdict=go |
+#                                         verdict=superseded + newer=<sha>.
 #   release.sh --selftest                 pure logic only; no network, no cluster.
 set -euo pipefail
 
@@ -65,6 +75,11 @@ schema_lines() { # git diff on stdin → the added schema-changing lines
   grep -E '^\+[^+]' | grep -iE 'CREATE (TABLE|(UNIQUE )?INDEX|VIEW|TRIGGER)|ALTER TABLE|DROP (TABLE|INDEX|COLUMN)|RENAME (TO|COLUMN)|\{ *"[a-z_]+" *, *"[a-z_]+" *, *"[A-Z]' || true
 }
 
+# cap <n>: the first n lines, then drain the rest. A bare `| head -n` closes the
+# pipe early and the writer dies of SIGPIPE — under pipefail a long diff turned
+# a green release's summary into exit 141 (run 37578256836).
+cap() { head -n "$1"; cat >/dev/null; }
+
 has_commit() { [ -n "$1" ] && git cat-file -e "$1^{commit}" 2>/dev/null; }
 
 cmd_changes() {
@@ -103,7 +118,7 @@ cmd_changes() {
     echo "⚠️ **可能有** — 这之间 \`tokenledger/internal/store\` 加了改表结构的行。回退时只回镜像，数据库不自动恢复；要恢复快照照 deploy/k8s/RUNBOOK.md 手工做。"
     echo
     echo '```diff'
-    printf '%s\n' "$mig" | head -40
+    printf '%s\n' "$mig" | cap 40
     echo '```'
   else
     echo "没有 — \`tokenledger/internal/store\` 这之间没有改表结构的行。"
@@ -117,7 +132,7 @@ cmd_changes() {
     echo '<details><summary>'"$(git diff --shortstat "$range" -- deploy/k8s)"'</summary>'
     echo
     echo '```diff'
-    git diff "$range" -- deploy/k8s | head -300
+    git diff "$range" -- deploy/k8s | cap 300
     echo '```'
     echo '</details>'
   fi
@@ -154,6 +169,56 @@ for o in objs:
         print('\n'.join(sorted(out)))
 PY
 )
+
+# hold_verdict <now> <mine> <latest> <latest_ct> <last_release|""> <quiet_s> <gap_s>
+# → "go" | "superseded <sha>" | "wait <secs> <why>". Pure: every input is an argument.
+hold_verdict() {
+  local now=$1 mine=$2 latest=$3 latest_ct=$4 last=$5 quiet=$6 gap=$7 q g
+  # A newer relevant commit is on master (or ours is not on it any more): its
+  # run is queued behind this one and ships everything up to it.
+  [ "$latest" = "$mine" ] || { echo "superseded $latest"; return; }
+  q=$(( latest_ct + quiet - now ))
+  g=0; [ -z "$last" ] || g=$(( last + gap - now ))
+  if [ "$q" -gt 0 ] && [ "$q" -ge "$g" ]; then echo "wait $q quiet"; return; fi
+  if [ "$g" -gt 0 ]; then echo "wait $g gap"; return; fi
+  echo go
+}
+
+iso_epoch() { python3 -c 'import sys,datetime
+print(int(datetime.datetime.strptime(sys.argv[1], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp()))' "$1"; }
+
+last_release_epoch() { # the newest successful prod deployment (the deploy job's environment), or ""
+  local id t
+  for id in $(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=prod&per_page=10" --jq '.[].id' 2>/dev/null); do
+    t=$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=30" --jq '[.[] | select(.state == "success")][0].created_at // empty' 2>/dev/null || true)
+    [ -z "$t" ] || { iso_epoch "$t"; return 0; }
+  done
+}
+
+cmd_hold() {
+  local quiet=$(( ${QUIET_MINUTES:-10} * 60 )) gap=$(( ${MIN_GAP_MINUTES:-30} * 60 )) poll=${HOLD_POLL:-60}
+  local mine=${GITHUB_SHA:?} last latest latest_ct v secs why now
+  last=$(last_release_epoch || true)
+  if [ -n "$last" ]; then
+    echo "last successful release: $(python3 -c 'import sys,time;print(time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime(int(sys.argv[1]))))' "$last")" >&2
+  else
+    echo "::warning::could not read the last successful release (deployments API) — only the quiet period applies" >&2
+  fi
+  while :; do
+    git fetch -q origin master 2>/dev/null || echo "::warning::git fetch failed — deciding on the last fetched master" >&2
+    read -r latest latest_ct < <(git log -1 --format='%H %ct' origin/master -- tokenledger deploy/k8s)
+    now=$(date +%s)
+    v=$(hold_verdict "$now" "$mine" "$latest" "$latest_ct" "$last" "$quiet" "$gap")
+    case "$v" in
+      go) echo "verdict=go"; return 0 ;;
+      superseded*) echo "verdict=superseded"; echo "newer=${v#superseded }"; return 0 ;;
+      wait*) read -r _ secs why <<<"$v"
+             echo "waiting ${secs}s ($why: $( [ "$why" = quiet ] && echo "master quiet for ${QUIET_MINUTES:-10} min" || echo "${MIN_GAP_MINUTES:-30} min since the last release" ))" >&2
+             [ "$secs" -le "$poll" ] || secs=$poll
+             sleep "$secs" ;;
+    esac
+  done
+}
 
 selftest() {
   local fail=0 t
@@ -198,6 +263,37 @@ envFrom {"secretRef":{"name":"hub"}}' ] && ok "env: ccquota only, sorted, secret
   t=$(cmd_changes HEAD HEAD)
   printf '%s' "$t" | grep -q '同一个提交' && ok "changes: same commit says so" || no "changes same: $t"
 
+  # A long change list: >100 commits, a manifest diff and a schema diff far
+  # past their caps — the summary must still exit 0 under pipefail.
+  # Run as the workflow runs it — the script itself, errexit on (a function
+  # inside $(…) would not inherit it, and the failure would hide).
+  local repo self
+  self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+  repo=$(mktemp -d)
+  if (
+    set -euo pipefail
+    cd "$repo"
+    git init -q . && git config user.email t@t && git config user.name t
+    mkdir -p deploy/k8s tokenledger/internal/store
+    echo base > deploy/k8s/a.yaml; git add -A; git commit -qm base
+    for i in $(seq 1 120); do echo "c$i" >> tokenledger/x; git add -A; git commit -qm "c$i"; done
+    seq 1 20000 | sed 's/^/line: /' > deploy/k8s/a.yaml
+    seq 1 500 | sed 's/^/CREATE TABLE t/' > tokenledger/internal/store/s.sql
+    git add -A; git commit -qm big
+    out=$(bash "$self" changes HEAD~121 HEAD) || exit   # an `if` ignores errexit: check by hand
+    printf '%s' "$out" | grep -q '还有 21 条' && printf '%s' "$out" | grep -q '### 清单'
+  ); then ok "changes: a long change list exits 0 under pipefail (no SIGPIPE)"; else no "changes: long list failed (exit $?)"; fi
+  rm -rf "$repo"
+
+  # hold_verdict: now=10000, quiet 600, gap 1800
+  t=$(hold_verdict 10000 aaa aaa 9900 "" 600 1800); [ "$t" = "wait 500 quiet" ] && ok "hold: a fresh commit waits out the quiet period" || no "hold quiet: $t"
+  t=$(hold_verdict 10000 aaa aaa 9000 "" 600 1800); [ "$t" = go ] && ok "hold: quiet + no known release ⇒ go" || no "hold go: $t"
+  t=$(hold_verdict 10000 aaa aaa 9000 9000 600 1800); [ "$t" = "wait 800 gap" ] && ok "hold: a release 1000s ago waits for the 30 min gap" || no "hold gap: $t"
+  t=$(hold_verdict 10000 aaa aaa 9900 8500 600 1800); [ "$t" = "wait 500 quiet" ] && ok "hold: the longer of the two waits" || no "hold both: $t"
+  t=$(hold_verdict 10000 aaa aaa 9000 7000 600 1800); [ "$t" = go ] && ok "hold: quiet + gap passed ⇒ go" || no "hold go2: $t"
+  t=$(hold_verdict 10000 aaa bbb 9990 "" 600 1800); [ "$t" = "superseded bbb" ] && ok "hold: a newer commit supersedes" || no "hold superseded: $t"
+  t=$(iso_epoch 2026-10-07T00:00:00Z); [ "$t" = 1791331200 ] && ok "iso_epoch" || no "iso_epoch: $t"
+
   [ "$fail" = 0 ] && echo "hub-release selftest: ok"
   return "$fail"
 }
@@ -206,6 +302,7 @@ case "${1:-}" in
   health) shift; cmd_health "$@" ;;
   changes) shift; cmd_changes "$@" ;;
   env) shift; cmd_env "$@" ;;
+  hold) shift; cmd_hold "$@" ;;
   --selftest) selftest ;;
-  *) sed -n '2,20p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,30p' "$0" >&2; exit 2 ;;
 esac

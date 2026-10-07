@@ -7,14 +7,29 @@ disk. These manifests moved here from `24haowan-monorepo/doc/k8s-yamls/ccquota/`
 ```
 base/              environment-free: Deployment, Service, Ingress, PVC, pricing ConfigMap
 overlays/prod/     namespace new-deploy, ACR image, hostnames + TLS, production settings
+updating/          the 「正在更新」 page the Ingress falls back to during a release (installed by a person)
 RUNBOOK.md         when the pod will not come up, the data disk, the two secrets
 ```
 
-## Release = merge
+## Release = merge, batched
 
 A merge to `master` that touches `tokenledger/**` or `deploy/k8s/**` starts
 [`hub-deploy`](../../.github/workflows/hub-deploy.yml). Nobody approves the run
-(environment `prod` admits master only, no reviewer — issue #2013); it:
+(environment `prod` admits master only, no reviewer — issue #2013).
+
+**Cadence** (issue #2052) — a push does not deploy at once. Its `gate` job holds
+until master has been **quiet for `QUIET_MINUTES` (10)** — no newer
+`tokenledger/` / `deploy/k8s/` commit — **and `MIN_GAP_MINUTES` (30)** have
+passed since the last successful release (the newest success of environment
+`prod`). When a newer such commit lands while it holds, the run stands down
+green (summary: 已合并到后面的发布): that commit's run is already queued behind
+it in the `prod` concurrency group and ships both. So an evening of fifteen
+merges is one or two releases, not fifteen restarts. The two constants sit at
+the top of the workflow. **Emergency release** (a fix, a rollback) =
+Actions → hub-deploy → Run workflow: `workflow_dispatch` never holds and is
+never paused.
+
+Once it goes, the deploy job:
 
 1. packs the client (`bin/fleet-client-pack.sh`) and builds `tokenledger/` for
    linux/amd64, pushed as `registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota:prod-<sha7>`
@@ -23,20 +38,42 @@ A merge to `master` that touches `tokenledger/**` or `deploy/k8s/**` starts
    `set-by-hub-deploy`; the live tag is never committed);
 3. snapshots the database (`/data/backup-hubdeploy-<UTC>-<previous tag>.db`,
    the newest 3 kept);
-4. **rehearses the migrations** (issue #2050): the new image runs as an
-   ephemeral container in the live pod, mounts `/data` and runs
-   `ccquota hub --migrate-only` on a copy of that snapshot
-   (`/data/rehearse-<run>.db`, deleted afterwards). A migration that fails there
+4. **checks the new image before the switch** (issues #2050, #2052): the new
+   image runs as an ephemeral container in the live pod — the render's env /
+   envFrom / args, the live pod's volume mounts (Secrets, CA, credential key,
+   pricing, `/data`) — and runs `ccquota hub --check` on a copy of that
+   snapshot (`/data/rehearse-<run>.db`, deleted afterwards). `--check` starts
+   the hub as far as serving and stops there: it runs the pending migrations,
+   then every startup check the hub refuses to start without — the GitHub
+   sign-in pair (one half ⇒ refuse), the SSH CA and credential-vault keys,
+   `--pricing`, `CCQUOTA_FLEET_PRINCIPAL_LOGINS`, the routes, the SPOT and
+   refresh settings — and exits 0 without binding a port or touching the live
+   database. A Secret key the env names but the Secret lacks fails the
+   container's own start (CreateContainerConfigError) — red too. Anything red
    stops the release before the apply — the live pod never stopped, the job is
-   red, the summary says 没部署. Drill: `workflow_dispatch` with
-   `simulate_migration_failure`;
+   red, the summary says 没部署. A volume only the render mounts (a running pod
+   takes no new one) is named as a warning and first tried by the real start.
+   An image older than `--check` (a rollback tag) is rehearsed with
+   `--migrate-only`. Drills: `workflow_dispatch` with `simulate_check_failure`
+   (half a GitHub pair) or `simulate_migration_failure`;
 5. records the live image, `kubectl apply`s the render, waits for the rollout
    (3 minutes — with `Recreate` the old pod is already gone, so a longer wait is
    a longer 503 before the rollback);
 6. checks every address for `/healthz` = 200 **and** `/version` naming this
    commit (up to ~2 minutes each);
 7. writes the run's summary page and, when repo variable
-   `HUB_DEPLOY_NOTIFY_ISSUE` names an issue, comments there.
+   `HUB_DEPLOY_NOTIFY_ISSUE` names an issue, comments there. The summary is
+   reporting only: if it fails, the job stays green and the notice still says
+   what the release did.
+
+**During the switch** the hub has no ready pod for a few tens of seconds
+(`Recreate`). The Ingress's `default-backend` annotation sends those requests
+to [`updating/`](updating/README.md): a browser gets a bilingual
+「ClaudeFleet 正在更新，一分钟内回来 / is updating — back in a minute」 page
+that reloads every 15 s; `/v1/*`, `/mcp`, `/install`, `/healthz`, `/version`
+and anything not asking for HTML get `503` + `Retry-After: 30` + a short JSON
+body, so agents and clients retry as before. Until a person has installed it,
+hub-deploy drops the annotation from its render (warning in the run).
 
 Nothing on any machine: no docker, no registry login, no kubeconfig.
 
@@ -83,7 +120,8 @@ snapshot for the drill.
 
 **Concurrency** — one deploy at a time; a running one is never cancelled (a
 cancelled `Recreate` rollout leaves the hub down), a newer run waits and
-replaces any run still only waiting.
+replaces any run still only waiting. A run still holding for the quiet period
+stands down by itself when a newer commit lands (above).
 
 **Never `kubectl apply -k overlays/prod` by hand**: the placeholder tag does not
 exist, and with `Recreate` the hub would go down. To redeploy, run the workflow.
@@ -100,8 +138,12 @@ exist, and with `Recreate` the hub would go down. To redeploy, run the workflow.
 - Cluster: Role `new-deploy/claudefleet-deployer` (24haowan-monorepo#11751) —
   the hub's Deployment, Service, Ingress, the `ccquota-pricing` ConfigMap, a
   read of the `ccquota-data` PVC, pod exec for the snapshot, and patch on
-  `pods/ephemeralcontainers` for the migration rehearsal (issue #2050 — without
-  it the rehearsal refuses and nothing is released). No Secret, no RBAC.
+  `pods/ephemeralcontainers` for the pre-switch check (issues #2050, #2052 —
+  without it the check refuses and nothing is released; the Secrets the check
+  container reads are resolved by the kubelet, never by the Role), and `list`
+  on pods (which is how it sees whether the updating page runs). No Secret, no
+  RBAC. The updating page's own objects are not in the Role: a person applies
+  them (updating/README.md).
   So a change to the PVC (growing the disk) or to a Secret is a person's, with
   an admin kubeconfig — RUNBOOK.md.
 

@@ -1,0 +1,17 @@
+# The name the hub's Ingress names in its default-backend annotation
+# (deploy/k8s/base/ingress.yaml). Keep the two in step.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ccquota-hub-updating
+  labels:
+    app: ccquota-hub-updating
+spec:
+  type: ClusterIP
+  selector:
+    app: ccquota-hub-updating
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
