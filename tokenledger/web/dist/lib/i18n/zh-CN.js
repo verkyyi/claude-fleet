@@ -726,6 +726,7 @@ export const zhCN = {
   'ui.sub.cred': '凭据',
   'ui.sub.credNone': '不在保险箱里',
   'ui.sub.credError': '刷新失败',
+  'ui.sub.credReauth': '需重新登录',
   'ui.sub.credExpired': '已过期',
   'ui.sub.credEnds': '{when}到期',
   'ui.sub.credOk': '{when}存入',

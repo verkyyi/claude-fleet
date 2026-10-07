@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS fleet_credentials (
   updated_at       TEXT NOT NULL,
   kind             TEXT NOT NULL DEFAULT '',
   secret_expires_at TEXT,
+  reauth_required_at TEXT,
   PRIMARY KEY (principal_id, provider, account)
 );
 CREATE TABLE IF NOT EXISTS fleet_cred_audit (
@@ -61,6 +62,14 @@ const (
 	CredDelete   = "delete"   // the operator removed a credential
 	CredRevoke   = "revoke"   // a node / person was revoked
 	CredUnrevoke = "unrevoke" // a revocation was lifted
+	// CredUpstreamRejected: a node reported that the upstream refused the
+	// access token it was leased (claude-fleet#2007); the hub dropped its
+	// cached copy. Detail names the code (token_revoked, …) and who said so.
+	CredUpstreamRejected = "upstream_rejected"
+	// CredReauth: the provider refused the stored refresh token itself
+	// (invalid_grant and kin) — nothing more is leased from this account
+	// until the operator logs in again and stores the new one.
+	CredReauth = "reauth_required"
 )
 
 // PoolPrincipal is the principal_id of a SHARED-POOL credential
@@ -88,8 +97,14 @@ type Credential struct {
 	Version         int64      `json:"version"`
 	RefreshedAt     *time.Time `json:"refreshed_at,omitempty"`
 	RefreshError    string     `json:"refresh_error,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	// ReauthRequiredAt: since when the provider has refused this account's
+	// refresh token (claude-fleet#2007). Set, nothing is refreshed or
+	// leased from the row until a put replaces the secret; ReauthRequired
+	// is the same fact as the status word the pages and the agent read.
+	ReauthRequiredAt *time.Time `json:"reauth_required_at,omitempty"`
+	ReauthRequired   bool       `json:"reauth_required,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // CredAudit is one audit row.
@@ -133,6 +148,7 @@ func (s *Store) ensureFleetCreds() error {
 	for _, c := range []struct{ column, spec string }{
 		{"kind", "TEXT NOT NULL DEFAULT ''"},
 		{"secret_expires_at", "TEXT"},
+		{"reauth_required_at", "TEXT"}, // claude-fleet#2007
 	} {
 		var n int
 		if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('fleet_credentials') WHERE name = ?`, c.column).Scan(&n); err != nil {
@@ -148,16 +164,18 @@ func (s *Store) ensureFleetCreds() error {
 }
 
 const credColumns = `SELECT principal_id, provider, account, secret_sealed, access_sealed, access_expires_at,
-	version, refreshed_at, refresh_error, created_at, updated_at, kind, secret_expires_at FROM fleet_credentials`
+	version, refreshed_at, refresh_error, created_at, updated_at, kind, secret_expires_at, reauth_required_at FROM fleet_credentials`
 
 func scanCred(sc interface{ Scan(...any) error }) (Credential, error) {
 	var c Credential
-	var exp, ref, sexp sql.NullString
+	var exp, ref, sexp, reauth sql.NullString
 	var created, updated string
 	if err := sc.Scan(&c.PrincipalID, &c.Provider, &c.Account, &c.SecretSealed, &c.AccessSealed, &exp,
-		&c.Version, &ref, &c.RefreshError, &created, &updated, &c.Kind, &sexp); err != nil {
+		&c.Version, &ref, &c.RefreshError, &created, &updated, &c.Kind, &sexp, &reauth); err != nil {
 		return c, err
 	}
+	c.ReauthRequiredAt = parseTimePtr(reauth)
+	c.ReauthRequired = c.ReauthRequiredAt != nil
 	c.AccessExpiresAt = parseTimePtr(exp)
 	c.RefreshedAt = parseTimePtr(ref)
 	c.SecretExpiresAt = parseTimePtr(sexp)
@@ -224,7 +242,7 @@ func (s *Store) PutCredential(principalID, provider, account string, secret []by
 		VALUES (?, ?, ?, ?, NULL, NULL, 1, '', ?, ?, ?, ?)
 		ON CONFLICT(principal_id, provider, account) DO UPDATE SET
 		  secret_sealed = excluded.secret_sealed, access_sealed = NULL, access_expires_at = NULL,
-		  version = fleet_credentials.version + 1, refresh_error = '', updated_at = excluded.updated_at,
+		  version = fleet_credentials.version + 1, refresh_error = '', reauth_required_at = NULL, updated_at = excluded.updated_at,
 		  kind = excluded.kind, secret_expires_at = excluded.secret_expires_at`,
 		principalID, provider, account, secret, now, now, kind, fmtTimePtr(secretExpires))
 	return err
@@ -249,7 +267,7 @@ func (s *Store) DeleteCredential(principalID, provider, account string) error {
 func (s *Store) SaveRefresh(principalID, provider, account string, version int64, secret, access []byte,
 	expires *time.Time, at time.Time) error {
 	res, err := s.write.Exec(`UPDATE fleet_credentials SET secret_sealed = ?, access_sealed = ?, access_expires_at = ?,
-		version = version + 1, refreshed_at = ?, refresh_error = '', updated_at = ?
+		version = version + 1, refreshed_at = ?, refresh_error = '', reauth_required_at = NULL, updated_at = ?
 		WHERE principal_id = ? AND provider = ? AND account = ? AND version = ?`,
 		secret, access, fmtTimePtr(expires), fmtTime(at), fmtTime(at), principalID, provider, account, version)
 	if err != nil {
@@ -266,6 +284,36 @@ func (s *Store) SaveRefresh(principalID, provider, account string, version int64
 func (s *Store) NoteRefreshError(principalID, provider, account, detail string, at time.Time) error {
 	_, err := s.write.Exec(`UPDATE fleet_credentials SET refresh_error = ?, updated_at = ?
 		WHERE principal_id = ? AND provider = ? AND account = ?`, detail, fmtTime(at), principalID, provider, account)
+	return err
+}
+
+// DropAccess forgets the cached short-lived half — the upstream refused it
+// (claude-fleet#2007) — so the next lease refreshes instead of handing it out
+// again. Only a row still at version: a refresh that landed meanwhile already
+// replaced what was refused.
+func (s *Store) DropAccess(principalID, provider, account string, version int64, at time.Time) error {
+	res, err := s.write.Exec(`UPDATE fleet_credentials SET access_sealed = NULL, access_expires_at = NULL, updated_at = ?
+		WHERE principal_id = ? AND provider = ? AND account = ? AND version = ?`,
+		fmtTime(at), principalID, provider, account, version)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrCredConflict
+	}
+	return nil
+}
+
+// MarkReauthRequired records that the provider refused the stored refresh
+// token itself: the account needs a new login. The cached access is dropped
+// with it only when dropAccess (it was refused too); detail is the refusal.
+func (s *Store) MarkReauthRequired(principalID, provider, account, detail string, dropAccess bool, at time.Time) error {
+	q := `UPDATE fleet_credentials SET reauth_required_at = ?, refresh_error = ?, updated_at = ?`
+	if dropAccess {
+		q += `, access_sealed = NULL, access_expires_at = NULL`
+	}
+	_, err := s.write.Exec(q+` WHERE principal_id = ? AND provider = ? AND account = ?`,
+		fmtTime(at), detail, fmtTime(at), principalID, provider, account)
 	return err
 }
 
