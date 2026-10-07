@@ -550,6 +550,16 @@ def ensure_node(hub):
         return False
 
 
+def node_login_why():
+    """Why the last node pass did not bind this login (claude-fleet#2249):
+    node-login.why, written by `fleet node ensure`; "" when it did."""
+    try:
+        with open(os.path.join(CONF_DIR, "node-login.why")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def cmd_node_pass(argv):
     hub_arg, out, quiet = "", "", False
     it = iter(argv)
@@ -653,6 +663,9 @@ def cmd_login(argv):
     for n in NOTES:
         show(n)
     show("✓ 这台电脑已登记为设备：之后 fleet 自动续证书，连续 7 天不用才需再扫")
+    why = node_login_why()
+    if why:
+        show("⚠ 这台电脑的登录还没认到你名下（机间连接会被拒）：%s — 详情 %s" % (why, os.path.join(CONF_DIR, "node-join.log")))
     if os.path.exists(NODE_ENV) and not was_node:
         show("✓ 也已随登录登记为节点（不可信 · 只协调；可信只在入口 /nodes 设）")
     hosts = [l.split()[1] for l in res["ssh_config"].splitlines() if l.startswith("Host ")]

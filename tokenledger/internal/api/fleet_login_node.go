@@ -117,7 +117,7 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.recordLoginAccount(pid, fp, out, req.OSUser, now)
+	out.AccountRefused = s.recordLoginAccount(pid, fp, out, req.OSUser, now)
 	s.deviceAudit(store.DeviceNodePass, fp, pid, pid, fmt.Sprintf("%s %s (%s) · untrusted · 随登录登记", what, out.Label, out.EndpointID), now)
 	log.Printf("fleet: device %s of %s %s node %s (%s) at login", fp, pid, what, out.Label, out.EndpointID)
 	w.Header().Set("Cache-Control", "no-store")
@@ -224,25 +224,37 @@ func (s *Server) principalOnNode(endpointID, host, login string) (string, error)
 // person ran `fleet login` under, on the computer they confirmed it on, is
 // theirs — one active fleet_accounts row, by computer (never the global
 // machine-login mapping, never another machine). A row someone else holds is
-// left alone and audited; it never fails the node pass.
-func (s *Server) recordLoginAccount(pid, fp string, out *NodeJoinResponse, osUser string, now time.Time) {
+// left alone and audited; it never fails the node pass. It answers why the
+// login is NOT the person's afterwards — read back the way every reader reads
+// it (principalOnNode) — empty when it is (claude-fleet#2249).
+func (s *Server) recordLoginAccount(pid, fp string, out *NodeJoinResponse, osUser string, now time.Time) string {
 	osUser = sanitizeJoinField(osUser)
 	if osUser == "" || !control.ValidExistingLogin(osUser) {
-		return
+		return fmt.Sprintf("system login %s is not one the hub records", osUser)
 	}
 	ep, err := s.Store.EndpointByTokenHash(HashToken(out.Token))
 	if err != nil || ep.Hostname == "" {
-		return
+		return "this node has no machine name on the hub"
 	}
 	p, err := s.Store.Principal(pid)
 	if err != nil {
-		return
+		return "account not recorded: " + err.Error()
 	}
 	wrote, err := s.Store.RecordLoginAccount(p, ep.Hostname, osUser, ep.ID, "登录即认人 · device "+fp, now)
 	switch {
 	case err != nil:
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, "account not recorded: "+err.Error(), now)
+		return "account not recorded: " + err.Error()
 	case wrote:
 		s.deviceAudit(store.DeviceNodePass, fp, pid, pid, fmt.Sprintf("account %s on %s is %s · 登录即认人", osUser, ep.Hostname, pid), now)
 	}
+	if who, err := s.principalOnNode(ep.ID, ep.Hostname, osUser); err != nil || who != pid {
+		why := fmt.Sprintf("login %s on %s is not recorded as yours", osUser, ep.Hostname)
+		if who != "" {
+			why = fmt.Sprintf("login %s on %s already belongs to someone else", osUser, ep.Hostname)
+		}
+		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, why, now)
+		return why
+	}
+	return ""
 }

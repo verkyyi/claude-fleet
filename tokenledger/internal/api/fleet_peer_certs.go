@@ -33,7 +33,8 @@ import (
 // pauses, and nothing falls back to a standing key.
 //
 // Ownership: the owner of a node is the person whose ACTIVE fleet account is
-// the node's login on its machine (PrincipalForLogin); the target login is
+// the node's login on its machine (principalOnNode: PrincipalForLogin, else
+// the 登录即认人 row bound to that node — #2249); the target login is
 // that person's login on the target machine. A login no person owns (the
 // operator's own, opened by hand) reaches only the login of the same name on
 // the target — and only one no person owns either.
@@ -156,7 +157,11 @@ func (s *Server) peerTargetHosts(name string, rows []store.Node) map[string]bool
 // issuePeerCert checks ownership, signs, records, and builds the answer.
 func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key ssh.PublicKey, ttl time.Duration, now time.Time) (*PeerCertResponse, error) {
 	srcHost, srcUser := s.peerSelf(ep)
-	owner, err := s.Store.PrincipalForLogin(srcHost, srcUser)
+	// Both ends read "whose login" the one way session-cred does
+	// (principalOnNode, claude-fleet#2249): the machine's account, else the
+	// 登录即认人 row bound to that very node — its name may not be the one
+	// the login was recorded under (`m.local` vs `m`).
+	owner, err := s.principalOnNode(ep.ID, srcHost, srcUser)
 	if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
 		return nil, err
 	}
@@ -193,7 +198,7 @@ func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key s
 		if n.Hostname != tHost || !active[n.EndpointID] || n.OSUser == "" {
 			continue
 		}
-		who, err := s.Store.PrincipalForLogin(n.Hostname, n.OSUser)
+		who, err := s.principalOnNode(n.EndpointID, n.Hostname, n.OSUser)
 		if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
 			return nil, err
 		}
