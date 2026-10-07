@@ -40,6 +40,19 @@
 #                   leg G: the stamp marks its own pane's window, the adapter's
 #                   column 21 carries `epic=<ref>:<k>/<n>` + the EPIC's title, and
 #                   --clear unmarks the window
+#   T. nobody drives it — issue #1916: a heartbeat mark gone stale, its EPIC still
+#                   on the open-issue list and no window wearing its @epic is ONE grey
+#                   row at the top of its repo's group — `epicstale:<ref>`, `#<N>
+#                   <title>`, badged 没人在跑, the minutes in its detail; a fresh mark,
+#                   a closed EPIC, a window still wearing it, a mark with no repo ⇒
+#                   none, and with no mark at all the frame is byte for byte the one
+#                   without the directory; another machine's off the cache's
+#                   epicstale_<sess> (its machine, `!` when lost; a local=1 line left
+#                   to this machine's own marks); the refresher writes that file off
+#                   the workers' `epic_stale`; inventory column 22 parses (junk
+#                   dropped); fleet_epic_stale_list says the same as the rows; the
+#                   shell reads no local mark; leg G: the real adapter hands every
+#                   window the login's list
 #   D. no network — rendering with the hub on runs no curl/wget/nc/ccquota, and the
 #                   producer names none of them (nor the refresher)
 #   H. hub source — FLEET_SIDEBAR_SOURCE=hub (issue #1480, EPIC #1479 C1): the
@@ -872,6 +885,93 @@ PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null   # leave leg E's cache as i
 cp "$WORK/wlist.q" "$WLIST_FILE"
 
 # ============================================================================
+# T. nobody drives it (issue #1916)
+# ============================================================================
+TS="epict$$"
+mkdir -p "$WORK/conf/fleets/$TS/repos" "$WORK/.claude-dash/fleets/acme-app"
+printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$TS/conf"
+printf 'FLEET_REPO=acme/tool\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$TS/repos/acme-tool.conf"
+printf '\t#1949\t\t侧栏改版\n\t#1950\t\t只看只点\n' > "$WORK/.claude-dash/fleets/acme-app/issues"
+cp "$WLIST_FILE" "$WORK/wlist.t"; : > "$WLIST_FILE"
+wt_() { printf '%s\n' "$TS$US$1$US$2$US$3$US$4$US$US$5$US${6:-}$US$US$3$US$US$US$US$US$US$US$US$US$US${7:-}$US$US$US$US$US$US$US$US$US$US${8:-}" >> "$WLIST_FILE"; }
+wt_ 1  只看只点   /w/app-issue-1950   working  @1  1950  acme/app
+wt_ 2  工具活     /w/tool-issue-31    working  @2  31    acme/tool
+tside() { PATH="$SHIMPATH" FLEET_SESSION=$TS bash "$ROWS" --sidebar 2>/dev/null | strip; }
+EDIR="$WORK/conf/global/epic-running.d"; rm -rf "$EDIR"
+t0=$(unset CCQUOTA_FLEET; tside)
+mkdir -p "$EDIR"
+eq "T: an empty mark directory changes nothing" "$t0" "$(unset CCQUOTA_FLEET; tside)"
+TM="$EDIR/acme-app-1949"
+printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: acme/app\ntick: 12\n' "$((NOW - 5400))" > "$TM"
+t=$(unset CCQUOTA_FLEET; tside)
+eq "T: a stale mark, its EPIC open, nobody wearing it — one grey row on top of its repo's group" \
+   "#1949 侧栏改版;只看只点;工具活;" "$(sorder "$t")" "$t"
+eq "T: …keyed epicstale:<ref>, badged 没人在跑, a root" "epicstale:acme/app#1949| |没人在跑|0|" "$(srow "$t" '#1949 侧栏改版')"
+eq "T: …its state epicstale, the minutes in its detail, the EPIC as its issue cell" \
+   "epicstale|○|心跳 90 分钟前停了 · 再点一下重开驱动会话|#1949" \
+   "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '$1 ~ /^epicstale:/ { print $2 "|" $3 "|" $8 "|" $10; exit }')"
+eq "T: …under the acme/app heading, above the tool group" "app (1);#1949 侧栏改版;只看只点;tool (1);工具活;" \
+   "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '{ printf "%s;", $4 }')"
+got=$(FLEET_SESSION=$TS bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list' _ "$BIN" 2>&1)
+eq "T: fleet_epic_stale_list says the same" "acme/app	1949	5400	侧栏改版" "$(printf '%s' "$got" | LC_ALL=C sed 's/	54[0-9][0-9]	/	5400	/')"
+eq "T: …a driven ref is skipped" "" "$(bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list "acme/tool#3 acme/app#1949"' _ "$BIN" 2>&1)"
+printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: acme/app\n' "$NOW" > "$TM"
+hasnt "T: a fresh mark — no grey row" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
+eq "T: …and the lib lists none" "" "$(bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list' _ "$BIN" 2>&1)"
+printf 'epoch: %s\nttl: 2700\nepic: 1951\nrepo: acme/app\n' "$((NOW - 5400))" > "$TM"
+hasnt "T: the EPIC closed (not on the open list) — none" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
+eq "T: …nor in the lib" "" "$(bash -c '. "$1/fleet-lib.sh"; fleet_epic_stale_list' _ "$BIN" 2>&1)"
+printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: -\n' "$((NOW - 5400))" > "$TM"
+hasnt "T: a mark with no repo — never guessed" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
+printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: acme/app\n' "$((NOW - 5400))" > "$TM"
+cp "$WLIST_FILE" "$WORK/wl.t0"
+wt_ 3  scratch-9  /w/app-scratch-9    'done'   @3  ''    acme/app  acme/app#1949
+hasnt "T: a window still wearing its @epic — its own row says it, no grey one" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
+cp "$WORK/wl.t0" "$WLIST_FILE"
+hasnt "T: the shell reads no local mark" "$(unset CCQUOTA_FLEET; FLEET_SHELL=1 tside)" "epicstale"
+rm -f "$TM"
+eq "T: the mark gone — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
+# another machine's, off the hub cache
+printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0370\037%s\n' "$NOW" "$NOW" > "$G/remote_$TS"
+printf '%s\n' "$NOW" > "$G/hub_ok"
+printf 'acme/tool#77\037m4\037online\0373600\037工具批\0370\nacme/app#1949\037m5\037online\03760\037本机的\0371\nbad ref\037m4\037online\0371\037x\0370\n' > "$G/epicstale_$TS"
+t=$(CCQUOTA_FLEET=1 tside)
+eq "T: a remote batch nobody drives — its machine on the row, in its repo's group" \
+   "epicstale:acme/tool#77@m4| |没人在跑|0|m4" "$(srow "$t" '#77 工具批')"
+hasnt "T: …a local=1 line is left to this machine's own marks; junk dropped" "$t" "本机的"
+eq "T: …one grey row in all" "1" "$(printf '%s\n' "$t" | LC_ALL=C grep -c '^epicstale:')"
+printf 'acme/tool#77\037m4\037lost\0373600\037工具批\0370\n' > "$G/epicstale_$TS"
+eq "T: …a lost machine's is dimmed (m4!)" "epicstale:acme/tool#77@m4| |没人在跑|0|m4!" "$(srow "$(CCQUOTA_FLEET=1 tside)" '#77 工具批')"
+hasnt "T: …the hub off draws no remote one" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
+rm -f "$G/epicstale_$TS" "$G/remote_$TS" "$G/hub_ok"
+# the refresher: a worker's epic_stale → epicstale_<sess>, one line per (machine, EPIC)
+python3 - "$WORK/sessions.json" "$WORK/sessions-stale.json" "$F" <<'PY3'
+import json, sys
+src, dst, f = sys.argv[1:4]
+d = json.load(open(src, encoding="utf-8"))
+st = [dict(epic="acme/app#1949", age=5400, title="侧栏改版"), dict(epic="x;y", age=1, title="junk")]
+for s in d["sessions"]:
+    if (s.get("worker") or {}).get("key"):
+        s["worker"]["epic_stale"] = st
+json.dump(d, open(dst, "w"), ensure_ascii=False)
+PY3
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-stale.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || fail "T: --refresh (epic_stale) failed"
+got=$(LC_ALL=C awk -F"$US" '{ print $1 "|" $3 "|" $4 "|" $5 "|" $6 }' "$G/epicstale_$S" | LC_ALL=C sort -u)
+has "T: the refresher writes epicstale_<sess> off the workers' epic_stale" "$got" "acme/app#1949|online|5400|侧栏改版|"
+hasnt "T: …a bad ref is dropped" "$got" "x;y"
+eq "T: …once per machine" "$(LC_ALL=C cut -d"$US" -f2 "$G/epicstale_$S" | LC_ALL=C sort | uniq -d)" ""
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null
+eq "T: …and empties it when no worker carries one" "" "$(cat "$G/epicstale_$S" 2>/dev/null)"
+got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
+p = ["@5", "", "1", "/w/x", "looping", "claude", "a1", "", "acme/app", "scratch-7", "", "", "", "busy=", "born=", "cfg=", "title=t", "reap=", "detail=", "role=", "epic="]
+a = h.inventory_row(p + ["epicstale=acme/app#1949\x1f5400\x1f侧栏改版\x1ejunk\x1f1\x1fx\x1eacme/tool#3\x1fzz\x1fy\x1eacme/tool#4\x1f7\x1fa\x07b"])[1]
+print(a.get("epic_stale"), h.inventory_row(p + ["epicstale="])[1].get("epic_stale"), h.inventory_row(p)[1].get("title"), a.get("title"))' 2>&1)
+eq "T: inventory column 22 — valid entries kept, junk dropped, absent when empty, the columns before it intact" \
+   "[{'epic': 'acme/app#1949', 'age': 5400, 'title': '侧栏改版'}, {'epic': 'acme/tool#4', 'age': 7, 'title': 'a b'}] None t t" "$got"
+rm -rf "$WORK/conf/fleets/$TS" "$EDIR"
+cp "$WORK/wlist.t" "$WLIST_FILE"
+
+# ============================================================================
 # G. inventory columns 10-12
 # ============================================================================
 if [ -n "$REAL_TMUX" ] && "$REAL_TMUX" -L "$S" -f /dev/null new-session -d -s "$S" -n plan 'while :; do sleep 300; done' 2>/dev/null; then
@@ -962,6 +1062,22 @@ print(";".join(sorted(str(w.get("epic")) for w in ctl.workers(f)["workers"] if w
   eq "G: --clear of another EPIC leaves the window marked" "acme/app#1949" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
   hb --clear 1949
   eq "G: --clear <N> unmarks it" "" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
+  # Issue #1916: a batch nobody drives rides EVERY window's column 22 (it has no
+  # window of its own); a window wearing its @epic takes it off the list.
+  mkdir -p "$FLEET_CONF_DIR/global/epic-running.d"
+  printf 'epoch: %s\nttl: 60\nepic: 1949\nrepo: acme/app\n' "$(( $(date +%s) - 600 ))" > "$FLEET_CONF_DIR/global/epic-running.d/acme-app-1949"
+  got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
+ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
+ws = ctl.workers(f)["workers"]
+print(len(ws) > 1, sorted({str([(e["epic"], e["title"]) for e in w.get("epic_stale") or []]) for w in ws}))' "$FLEET_CONF_DIR" "$S" 2>&1)
+  eq "G: every window carries the login's batch nobody drives (column 22)" "True [\"[('acme/app#1949', '侧栏改版')]\"]" "$got"
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wd" @epic acme/app#1949
+  got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
+ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
+print(sum(1 for w in ctl.workers(f)["workers"] if w.get("epic_stale")))' "$FLEET_CONF_DIR" "$S" 2>&1)
+  eq "G: …and none once a window wears its @epic again" "0" "$got"
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wd" -u @epic
+  rm -f "$FLEET_CONF_DIR/global/epic-running.d/acme-app-1949"
   "$REAL_TMUX" -L "$S" kill-window -t "$wd" 2>/dev/null
 else
   printf 'dash-remote-rows selftest: no isolated tmux server — leg G (live adapter) skipped\n' >&2

@@ -270,6 +270,18 @@ fleet_ui_t() {
     en:sidebar_cfg_broken)      printf 'breaks·reopen' ;;
     zh:sidebar_cfg_broken_narrow) printf '坏' ;;
     en:sidebar_cfg_broken_narrow) printf 'brk' ;;
+    zh:sidebar_epic_stale)      printf '没人在跑' ;;
+    en:sidebar_epic_stale)      printf 'not driven' ;;
+    zh:sidebar_epic_stale_detail_fmt) printf '心跳 %s 分钟前停了 · 再点一下重开驱动会话' "${1:-}" ;;
+    en:sidebar_epic_stale_detail_fmt) printf 'heartbeat stopped %s min ago · tap again to reopen its driver' "${1:-}" ;;
+    zh:sidebar_ask_epic_fmt)    printf '#%s 没人在跑 — 重开驱动会话？' "${1:-}" ;;
+    en:sidebar_ask_epic_fmt)    printf '#%s is not driven — reopen its driver?' "${1:-}" ;;
+    zh:sidebar_epic_reopen)     printf '重开驱动会话 /fleet-epic-run' ;;
+    en:sidebar_epic_reopen)     printf 'Reopen the driver /fleet-epic-run' ;;
+    zh:sidebar_epic_reopen_keys) printf '↵ 开 · esc 取消' ;;
+    en:sidebar_epic_reopen_keys) printf '↵ open · esc cancel' ;;
+    zh:sidebar_epic_reopening_fmt) printf '在开 #%s 的驱动会话…' "${1:-}" ;;
+    en:sidebar_epic_reopening_fmt) printf 'opening the driver for #%s…' "${1:-}" ;;
     zh:sidebar_refreshing)      printf '刷新中…' ;;
     en:sidebar_refreshing)      printf 'refreshing…' ;;
     zh:sidebar_landed_heading_fmt) printf '已落地 (%s) · ↵ 恢复' "${1:-}" ;;

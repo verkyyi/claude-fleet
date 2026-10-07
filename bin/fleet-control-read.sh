@@ -170,6 +170,13 @@ case "$mode" in
     # the counts off THIS machine's mark for that batch (epic-running.d); its
     # `title=` is then the EPIC's own. The other machines' lists draw the batch as
     # one row off it. Empty on every other window.
+    # Column 22 (issue #1916): `epicstale=` — the batches on this login NOBODY is
+    # driving (fleet_epic_stale_list: a stale heartbeat mark, its EPIC still on the
+    # open-issue list, no window here wearing its @epic), each
+    # `<owner/name>#<N>\037<age s>\037<title>`, \036-joined. It is the LOGIN's,
+    # not a window's, and a batch nobody drives has no window to ride on, so every
+    # row carries the same cell (the hub keeps only windows); the reader takes it
+    # off any of them. Empty when there is none — the common case.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -183,6 +190,11 @@ case "$mode" in
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
     cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
+    estale=''
+    while IFS=$'\t' read -r _sr _sn _sa _st; do
+      [ -n "$_sr" ] || continue
+      estale+="${estale:+$'\036'}$_sr#$_sn"$'\037'"$_sa"$'\037'"${_st//$'\036'/ }"
+    done < <(fleet_epic_stale_list "$(printf '%s\n' "$cwds" | awk -F'\t' '$10 != "" { printf "%s ", $10 }')" 2>/dev/null)
     while IFS= read -r row; do
       [ -n "$row" ] || continue
       wid=${row%%$'\t'*}; rest=${row#*$'\t'}
@@ -241,7 +253,7 @@ case "$mode" in
       fi
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale"
     done <<<"$rows"
     ;;
   ready)

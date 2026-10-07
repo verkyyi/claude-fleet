@@ -218,6 +218,37 @@ fleet_epic_running() {
   printf 'epic=%s session=%s tick=%s age=%ss ttl=%ss' "${epic:--}" "${sess:--}" "${tick:--}" "$age" "$ttl"
   [ "$age" -lt "$ttl" ]
 }
+# fleet_epic_stale_list [<driven refs>] — the batches NOBODY is driving (issue
+# #1916): a mark gone stale whose EPIC is still OPEN, one line each,
+#   <owner/name>\t<N>\t<age seconds>\t<the EPIC's title>
+# «Open» is the collector's open-issue list (fleets/<slug>/issues — no gh here):
+# no list, or the EPIC not on it ⇒ not open, not listed (a closed EPIC's leftover
+# mark is history; an unread repo is never guessed). A mark with no repo (`-`) is
+# never listed either. <driven refs> — `<owner/name>#<N>` words, the @epic of the
+# windows still open — are skipped: that window's own row already says how it is.
+fleet_epic_stale_list() {
+  local driven=" ${1:-} " f out rc age n r t cache
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    out=$(fleet_epic_running "$f"); rc=$?
+    [ "$rc" = 1 ] || continue
+    n=${out#epic=}; n=${n%% *}
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    r=$(sed -n 's/^repo: //p' "$f" 2>/dev/null | head -1)
+    case "$r" in ''|-|*[!A-Za-z0-9/._-]*) continue ;; */*) ;; *) continue ;; esac
+    case "$driven" in *" $r#$n "*) continue ;; esac
+    age=${out##*age=}; age=${age%%s*}
+    cache="$FLEET_C/fleets/$(fleet_slug "$r")/issues"
+    [ -s "$cache" ] || continue
+    t=$(awk -F'\t' -v k="#$n" '$2 == k { t = $0; sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t)
+                                          gsub(/[\t\r\037]/, " ", t); print t; f = 1; exit }
+                               END { exit !f }' "$cache" 2>/dev/null) || continue
+    printf '%s\t%s\t%s\t%s\n' "$r" "$n" "$age" "$t"
+  done <<EOF_STALE
+$(fleet_epic_running_marks)
+EOF_STALE
+  return 0
+}
 
 # fleet_conf_reserved <name> — rc 0 when $FLEET_CONF_DIR/<name>.conf is NOT a
 # fleet's legacy flat conf: fleet.conf is the MACHINE's config (#1623, and `fleet`
