@@ -25,6 +25,8 @@
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
 #   orchestrator-closed                             bin/fleet-orchestrator.sh ensure (fleet-up.sh,
 #                                                   fleet-diskguard.sh home_watch)
+#   orchestrator-two                                bin/fleet-orchestrator.sh ensure asks the hub
+#                                                   (/v1/node/orchestrator) which machine holds it
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 #   epic-mark-overwritten / epic-fresh-switched     bin/fleet-epic-heartbeat.sh (one mark per batch),
@@ -518,6 +520,40 @@ drill_orchestrator_closed() {
   SECS=$(since "$t0")
   [ "$(nt list-windows -t or -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
   WHAT="下一拍在 \$HOME 重开，续上同一对话（节拍 60s 另计）"
+}
+
+# orchestrator-two (issue #2117): two 承载 machines of one person each opened their
+# own orchestrator (#1957's ensure ran per machine). Two machines, one fake hub
+# (the holder file — fleet_orchestrator.go's answer): only the holder opens one;
+# the hub names the other machine and the old one is closed on its next tick.
+drill_orchestrator_two() {
+  CAP=5; BREAK_SOCK="$WORK/sock-o5"; local t0 m o w4 w5 hub="$WORK/ohub2"
+  sed -n '/^home_watch()/,/^}/p' "$BIN/fleet-diskguard.sh" | grep -q 'fleet-orchestrator.sh" ensure "$s" 2>/dev/null)"; rc=' \
+    || { WHY="home_watch no longer asks ensure on every tick — a machine the hub did not name never closes its own"; return 1; }
+  mkdir -p "$hub"; printf 'm5' > "$hub/holder"
+  cat > "$WORK/ocurl" <<'EOC'
+#!/bin/sh
+h=$(cat "$OHUB/holder"); here=false; [ "$h" = "$OME" ] && here=true
+printf '{"machine":"%s","here":%s}\n200' "$h" "$here"
+EOC
+  chmod +x "$WORK/ocurl"
+  printf '#!/bin/sh\nexec sleep 600\n' > "$WORK/o2-agent"; chmod +x "$WORK/o2-agent"
+  for m in m4 m5; do
+    mkdir -p "$WORK/o2$m/home"
+    "$REAL_TMUX" -S "$WORK/sock-$m" -f /dev/null new-session -d -s or -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+  done
+  o2() { env PATH="$WORK/tbin:$PATH" HOME="$WORK/o2$1/home" FLEET_CONF_DIR="$WORK/o2$1/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+           BREAK_SOCK="$WORK/sock-$1" OME="$1" OHUB="$hub" FLEET_HUB_CURL="$WORK/ocurl" CCQUOTA_FLEET=1 CCQUOTA_TOKEN=t \
+           CCQUOTA_HUB_URL=http://hub.invalid FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_ORCH_MODEL='' \
+           FLEET_WRAP_LAUNCH="$WORK/o2-agent" bash "$BIN/fleet-orchestrator.sh" ensure or 2>/dev/null; }
+  oc() { "$REAL_TMUX" -S "$WORK/sock-$1" list-windows -t or -F '#{@fleet_role}' 2>/dev/null | grep -cx orchestrator; }
+  o2 m4 >/dev/null; o2 m5 >/dev/null              # one tick on each machine
+  [ "$(oc m4)+$(oc m5)" = 0+1 ] || { WHY="two machines ticked: m4+m5 = $(oc m4)+$(oc m5), want 0+1"; return 1; }
+  printf 'm4' > "$hub/holder"; t0=$(now)          # the break: home moved to m4
+  o2 m5 >/dev/null; o2 m4 >/dev/null              # the next tick
+  SECS=$(since "$t0")
+  [ "$(oc m4)+$(oc m5)" = 1+0 ] || { WHY="after the hub named m4: m4+m5 = $(oc m4)+$(oc m5), want 1+0"; return 1; }
+  WHAT="入口只认一台：下一拍旧的那台收掉（标记 retired、对话 id 留着），新的那台开出（节拍 60s 另计）"
 }
 
 # window-renamed (issue #1844): a name is not an identity. Home renamed, a worker

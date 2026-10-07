@@ -322,7 +322,13 @@ Do not install from memory: read the doc and work from it.
   it to the client: `fleet-hub-sessions.sh` writes `orch_<sess>`, the rows skip
   it, 「新任务」 wears its state, the writing area hands it a draft (⇧⇥). Off
   unless `FLEET_ORCHESTRATOR` (default: `FLEET_HOST`) — no orchestrator ⇒ byte
-  for byte as before.
+  for byte as before. **One per PERSON, not per machine** (issue #2117): with the
+  hub on, `ensure` asks `/v1/node/orchestrator` (`fleet_orchestrator.go`: the
+  holder sticks while online and not 维护中) and a machine not named closes its
+  own (rc 5); `home_watch` asks every tick. `orch_<sess>` is one line,
+  `orch_multi_<sess>` feeds the doctor's `orch` WARN; no hub / an old hub ⇒
+  each machine decides alone. BREAK-IT `orchestrator-two`,
+  `fleet-orchestrator-selftest.sh`.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).

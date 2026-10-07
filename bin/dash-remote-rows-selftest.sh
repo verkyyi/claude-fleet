@@ -673,6 +673,32 @@ s=$(side)
 hasnt "O: the sidebar draws no row for it" "$s" "编排"
 has  "O: …the other rows are all there" "$s" "侧边栏"
 hasnt "O: …nor does the hub list" "$(hub)" "编排"
+# O2. two machines still answer with one (issue #2117): orch_<sess> keeps ONE line —
+# the online one on the home machine (connect.json's last), else online first —
+# orch_multi_<sess> names both for the doctor, the rows skip both.
+python3 - "$WORK/sessions-orch.json" "$WORK/sessions-orch2.json" "$F" <<'PY'
+import json, sys
+src, dst, f = sys.argv[1:4]
+d = json.load(open(src, encoding="utf-8"))
+o = json.loads(json.dumps(d["sessions"][-1]))
+oid = "1e2f3a4b-5c6d-4e7f-8a9b-0c1d2e3f4a5c"
+o["worker_id"], o["machine_name"], o["worker"]["identity"] = f + "/" + oid, "zz9.local", oid
+d["sessions"].append(o)
+json.dump(d, open(dst, "w"), ensure_ascii=False)
+PY
+OID2=1e2f3a4b-5c6d-4e7f-8a9b-0c1d2e3f4a5c
+mkdir -p "$WORK/xdgc/claude-fleet"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch2.json'" XDG_CACHE_HOME="$WORK/xdgc" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O2: --refresh (two orchestrators) failed"
+eq   "O2: two answer — orch_<sess> keeps one line" "1" "$(grep -c . "$G/orch_$S" 2>/dev/null)"
+eq   "O2: …orch_multi_<sess> names both for the doctor" "2" "$(grep -c . "$G/orch_multi_$S" 2>/dev/null)"
+eq   "O2: …orch_all_<sess> carries both worker_ids" "2" "$(grep -c . "$G/orch_all_$S" 2>/dev/null)"
+hasnt "O2: …the sidebar draws neither" "$(side)" "编排"
+printf '{"last":"zz9"}' > "$WORK/xdgc/claude-fleet/connect.json"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch2.json'" XDG_CACHE_HOME="$WORK/xdgc" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+eq   "O2: …the line is the home machine's (fleet connect's last)" "$F/$OID2" "$(cut -d"$US" -f1 "$G/orch_$S" 2>/dev/null)"
+printf '{"last":"nowhere"}' > "$WORK/xdgc/claude-fleet/connect.json"
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" XDG_CACHE_HOME="$WORK/xdgc" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+eq   "O2: one again — orch_multi_<sess> empties" "" "$(cat "$G/orch_multi_$S" 2>/dev/null)"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 eq   "O: no orchestrator: orch_<sess> is empty" "" "$(cat "$G/orch_$S" 2>/dev/null)"
 

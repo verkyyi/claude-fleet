@@ -110,6 +110,13 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
     if [ "$(bash "$here/fleet-conf.sh" host 2>/dev/null)" = 1 ]; then w='基础 · 承载'; else w='基础 · 承载 未开（fleet host on）'; fi
     printf '  PASS  能力     %s\n' "$w"
   fi
+  # orch (issue #2117): the person has ONE orchestrating session — fleet-doctor.sh's row
+  for _of in "${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}"/orch_multi_*; do
+    [ -s "$_of" ] || continue
+    _om=$(awk -F '\037' '{ printf "%s%s(%s)", (NR > 1 ? " " : ""), $1, $2 }' "$_of")
+    printf '  WARN  %-8s %s\n' orch "${_of##*/orch_multi_}: 不止一个编排会话 — $_om（入口只留一台；持续出现请在那几台跑 fleet doctor）"
+    rc=1
+  done
   if [ -f "$here/fleet-agent-bundle.py" ]; then
     python3 "$here/fleet-agent-bundle.py" doctor --root "$here/.." "$@" || rc=1
   fi
