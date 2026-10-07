@@ -37,7 +37,8 @@
 #   window-killed                                   bin/fleet-restore.sh --auto (pull-back), fleet_win_retire
 #   loop-window-killed                              bin/fleet-restore.sh (loop re-arm), fleet_loop_mark.py rearm
 #   tool-wait-idle                                  fleet_window_tool_busy / fleet_window_wait (fleet-lib.sh),
-#                                                   bin/set-claude-state.sh (Stop), fleet-wait-reeval.sh
+#                                                   fleet-state-reconcile.py, bin/set-claude-state.sh (Stop),
+#                                                   fleet-wait-reeval.sh
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
@@ -1003,12 +1004,26 @@ with open(sys.argv[1], 'w') as fh: fh.write(str(child.pid))
 child.wait()                                               # the call returned
 time.sleep(120); bye()                                     # an idle server, no child
 PY
-  nt -f /dev/null new-session -d -s tw -n issue-9 -x 100 -y 30 "python3 '$d/fleet-mcp.py' '$d/call.pid' & exec sleep 600" \
+  # The pane: Claude's empty input line (the call is running, nothing to type), the
+  # fleet MCP server with its call, and an agent process (comm `claude`) under it.
+  ln -sf "$(command -v sleep)" "$d/claude"
+  nt -f /dev/null new-session -d -s tw -n issue-9 -x 100 -y 30 \
+    "printf '\033[2J\033[H> '; python3 '$d/fleet-mcp.py' '$d/call.pid' & exec '$d/claude' 600" \
     || { WHY="cannot start the isolated tmux server"; return 1; }
   w=$(nt display-message -p -t tw:issue-9 '#{window_id}'); p=$(nt display-message -p -t "$w" '#{pane_id}')
-  nt set-option -w -t "$w" @issue 9
+  nt set-option -w -t "$w" @issue 9 \; set-option -w -t "$w" @cc_agent claude \; \
+     set-option -w -t "$w" @claude_state working \; set-option -w -t "$w" @claude_state_ts "$(( $(date +%s) - 300 ))"
   until_ok 10 test -s "$d/call.pid" || { WHY="the fake server never started its call"; return 1; }
-  # the break: the turn ends (the Stop hook runs) while the call is still running
+  # break ①: the sleep tick's state reconcile (#806) reads the call's empty input line
+  # as an idle prompt — no hook has stamped `working` since the call began
+  mkdir -p "$d/reg"
+  tw_env python3 "$BIN/fleet-state-reconcile.py" --dry-run --registry "$d/reg" --cache-dir "$d/cache" \
+    --log "$d/reconcile.log" --idle-secs 5 -- tw > "$d/reconcile.out" 2>&1
+  grep -q "would demote.*:$w " "$d/reconcile.out" \
+    && { WHY="the state reconcile would demote the window mid-call: $(grep ":$w " "$d/reconcile.out" | head -1)"; return 1; }
+  grep -q ":$w .*kept working" "$d/reconcile.log" 2>/dev/null \
+    || { WHY="the reconcile neither demoted nor kept $w: $(cat "$d/reconcile.out" "$d/reconcile.log" 2>/dev/null | tail -3 | tr '\n' ' ')"; return 1; }
+  # break ②: the turn ends (the Stop hook runs) while the call is still running
   printf '' | tw_env TMUX_PANE="$p" sh "$BIN/set-claude-state.sh" done >/dev/null 2>&1
   st="$(o "$w" @claude_state)/$(o "$w" @claude_wait)"
   [ "$st" = looping/tool ] \
@@ -1026,7 +1041,7 @@ PY
   tw_env bash "$BIN/fleet-wait-reeval.sh" --window "$w" tw >/dev/null 2>&1
   st="$(o "$w" @claude_state)/$(o "$w" @claude_wait)"
   [ "$st" = done/ ] || { WHY="after the call returned the re-ask left [$st], want done/"; return 1; }
-  SECS=$(since "$t0"); WHAT="等工具时 Stop 记 looping·tool，cfg-restart 答 tool 不重开；调用返回后重判回 done"
+  SECS=$(since "$t0"); WHAT="等工具时状态核对不降级、Stop 记 looping·tool、cfg-restart 答 tool 不重开；调用返回后重判回 done"
 }
 
 # pty_run <answer> <command…> — run it on a terminal, type <answer>⏎ at the

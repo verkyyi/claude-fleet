@@ -108,9 +108,19 @@ pane with a live child is a call in flight — `fleet_window_tool_busy`
 `done`. Every idle judge (cfg-restart, install-sync's busy gate, the EPIC backstop,
 auto-sleep, the idle reap) reads that as busy; the first re-ask after the call
 returns (the sleep tick's `fleet-wait-reeval.sh`, the next Stop) writes `done`
-again. An idle server, or one probing a new version, is not a call; a foreground
-call keeps `working` as before. `FLEET_TOOL_WAIT=0` turns the reason off.
-`fleet-wait-selftest.sh` F and the `tool-wait-idle` drill (docs/BREAK-IT.md) pin it.
+again. An idle server, or one probing a new version, is not a call.
+
+The same fact guards the call while it is still in the foreground: no hook stamps
+`working` for its whole length and the input line is empty, which the state
+reconcile (`fleet-state-reconcile.py`, #806) read as an idle prompt whenever it
+could not find the session's registry record — and it could not, for a Claude
+started while a viewer's grouped `<fleet>@view-<id>` session was the active
+client (its record names that session). It now strips the `@view-<id>` (a `busy`
+record outranks the screen) and never demotes a window whose fleet MCP server
+still runs a tool (`kept working …` in logs/reconcile.log). `FLEET_TOOL_WAIT=0`
+turns the reason off everywhere. `fleet-wait-selftest.sh` F,
+`fleet-state-reconcile-selftest.py` and the `tool-wait-idle` drill
+(docs/BREAK-IT.md) pin it.
 
 ## How a session gets it
 
