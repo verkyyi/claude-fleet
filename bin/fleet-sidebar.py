@@ -2489,8 +2489,9 @@ def ui(screen, session, worker, lock):
                                              "#{session_attached}", "#{@popup_open}",
                                              "#{window_id}", "#{@sidebar_worker}",
                                              "#{client_key_table}", "#{@remote}",
-                                             "#{@popup_pid}", "#{@fleet_single}")))
-                if len(info) != 10:
+                                             "#{@popup_pid}", "#{@fleet_single}",
+                                             "#{@sidebar_ask}")))
+                if len(info) != 11:
                     return
                 if info[9] == "1":
                     # The one-pane layout (issue #1904): zoomed away behind the
@@ -2514,6 +2515,10 @@ def ui(screen, session, worker, lock):
                 if fields(worker, "#{pane_dead}") != ["0"]:
                     return
                 shown = visible(info[:4] + info[8:9], time.time())
+                if shown and info[10]:
+                    # A question or verb parked while this view was hidden (its F12
+                    # landed mid-move): take it now, as its F12 would have.
+                    curses.ungetch(curses.KEY_F12)
                 if not shown and info[3] not in ("", "0"):
                     # Under a popup: look again soon, so its close repaints the
                     # list within a second (issue #1536), not at the next tick.
