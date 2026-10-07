@@ -293,9 +293,21 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// account_uuid: the usage account a credential belongs to (a Codex
+		// one's from its id_token, a Claude one's as recorded at import), so
+		// the subscriptions page pairs them by identity, not by label
+		// (claude-fleet#2127). Never a secret.
+		type credRow struct {
+			store.Credential
+			AccountUUID string `json:"account_uuid,omitempty"`
+		}
+		rows := make([]credRow, 0, len(creds))
+		for _, c := range creds {
+			rows = append(rows, credRow{Credential: c, AccountUUID: s.Vault.AccountUUID(c)})
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		// paused: the pool accounts an admin paused (claude-fleet#1990).
-		writeJSON(w, http.StatusOK, map[string]any{"credentials": creds, "revocations": revs, "paused": pausedAccounts(settings)})
+		writeJSON(w, http.StatusOK, map[string]any{"credentials": rows, "revocations": revs, "paused": pausedAccounts(settings)})
 	case http.MethodPost:
 		var req FleetCredentialRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {

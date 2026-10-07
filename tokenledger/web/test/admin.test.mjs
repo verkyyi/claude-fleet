@@ -246,6 +246,44 @@ test('vault labels find their own account — four Claude + one Codex is five ca
   assert.deepEqual(by, { 'u-icloud': 'icloud', 'u-gmail': 'gmail', 'u-24h': '24helpful', 'codex:account:a0': 'default', 'u-gu': 'ly297' });
 });
 
+test('the hub counts what its vault holds — 4 Claude · 1 Codex, the rest 未纳管 (claude-fleet#2127)', () => {
+  // The hub's shape on 2026-10-07: four Claude setup tokens and the one Codex
+  // "default" in the vault; the agents report five Claude accounts (one a
+  // win_ fingerprint), two Codex accounts (one a teammate's own login) and
+  // codex:local.
+  const acct = (u, email, source = 'claude') => ({ account_uuid: u, email, source });
+  const row = (u, label, source) => ({ account_uuid: u, label, limits: { available: true, ...(source ? { source } : {}) } });
+  const limits = { per_account: [
+    row('u-icloud', 'ylianghui@icloud.com'), row('u-gmail', 'verky.yi@gmail.com'), row('u-24h', 'verky@24helpful.com'),
+    row('u-gu', 'ly297@georgetown.edu'), row('win_cf27aa', 'win_cf27aa'),
+    row('codex:account:a0', 'verky.yi@gmail.com', 'codex'), row('codex:account:98', 'keep.cj@gmail.com', 'codex'),
+    row('codex:local', 'Codex (local usage)', 'codex'),
+  ] };
+  const accounts = [acct('u-icloud', 'ylianghui@icloud.com'), acct('u-gmail', 'verky.yi@gmail.com'), acct('u-24h', 'verky@24helpful.com'),
+    acct('u-gu', 'ly297@georgetown.edu'), acct('codex:account:a0', 'verky.yi@gmail.com', 'codex'), acct('codex:account:98', 'keep.cj@gmail.com', 'codex')];
+  const pool = (provider, account, uuid) => ({ principal_id: 'pool', provider, account, created_at: iso(NOW), ...(uuid ? { account_uuid: uuid } : {}) });
+  // by identity: the Codex one from its id_token, one Claude one recorded at import
+  // under a label that names nothing ("spare-1" would otherwise be its own card)
+  const creds = { credentials: [pool('claude', '24helpful'), pool('claude', 'gmail'), pool('claude', 'spare-1', 'u-icloud'), pool('claude', 'ly297'),
+    pool('codex', 'default', 'codex:account:a0')] };
+  const cards = subscriptions({ limits, accounts, creds });
+  const managed = cards.filter((c) => c.managed), other = cards.filter((c) => !c.managed);
+  assert.equal(managed.filter((c) => c.prov === 'claude').length, 4);
+  assert.equal(managed.filter((c) => c.prov === 'codex').length, 1);
+  assert.deepEqual(Object.fromEntries(managed.map((c) => [c.id, c.cred.account])),
+    { 'u-icloud': 'spare-1', 'u-gmail': 'gmail', 'u-24h': '24helpful', 'u-gu': 'ly297', 'codex:account:a0': 'default' });
+  assert.deepEqual(other.map((c) => c.id).sort(), ['codex:account:98', 'codex:local', 'win_cf27aa']);
+  assert.ok(other.every((c) => c.cred === null));
+  // no account_uuid (an older import, no id_token): the label guess again — two
+  // real Codex accounts, so "default" fits neither and is a card of its own
+  for (const c of creds.credentials) delete c.account_uuid;
+  creds.credentials[2].account = 'icloud';
+  const guess = subscriptions({ limits, accounts, creds });
+  assert.ok(guess.some((c) => c.id === 'cred:codex/default' && c.managed));
+  assert.equal(guess.find((c) => c.id === 'u-icloud').cred.account, 'icloud');
+  assert.equal(guess.find((c) => c.id === 'codex:account:a0').managed, false);
+});
+
 test('a vault guess that fits two accounts, or a stand-in row, matches nothing', () => {
   const limits = { per_account: [
     { account_uuid: 'u-1', label: 'a@gmail.com', limits: {} },

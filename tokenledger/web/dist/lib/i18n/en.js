@@ -734,6 +734,8 @@ export const en = {
   'ui.sub.resume': 'Resume',
   'ui.sub.remove': 'Remove',
   'ui.sub.notPool': 'Not in the pool',
+  'ui.sub.unmanaged': 'Not managed · {n}',
+  'ui.sub.unmanagedHint': 'Machines report usage for these accounts, but the vault holds no credential for them: the hub does not manage them or count them as subscriptions. Kept here for troubleshooting (a win_… phantom, say).',
   'ui.sub.notPoolHint': 'The hub sees this subscription\'s usage but holds no pool credential for it; a machine signs in to it on its own.',
   'ui.sub.pauseQ': 'Pause {label}?',
   'ui.sub.pauseBody': 'No new sessions start on it. Its {n} running session(s) keep going until they finish.',

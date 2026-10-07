@@ -10,7 +10,7 @@
 # over the viewer token — the token travels in a 0600 file to curl, never on a
 # command line, and is never printed: not on success, not on failure.
 #
-#   fleet-creds-import.sh [--principal <id>] [--expires-at <RFC3339>] [--dry-run] [label …]
+#   fleet-creds-import.sh [--principal <id>] [--expires-at <RFC3339>] [--account-uuid <uuid>|none] [--dry-run] [label …]
 #   fleet-creds-import.sh --codex [--principal <id>] [--dry-run] [profile …]
 #
 #   label …        which pool files; default = every plain setup-token file in
@@ -23,6 +23,13 @@
 #                  mtime + 365 days (`claude setup-token` mints for a year and
 #                  the file is written right after) — printed per label so you
 #                  can see what was assumed. The hub refuses one already past.
+#   --account-uuid which account the token belongs to (issue #2127): a setup
+#                  token cannot say, so the hub pairs it with its usage by this
+#                  uuid instead of guessing from the label. ONE label only.
+#                  Default for a single label: this login's own
+#                  oauthAccount.accountUuid (${CLAUDE_CONFIG_DIR:-~}/.claude.json),
+#                  printed so you can see what was assumed; several labels send
+#                  none. `none` sends none (the hub falls back to the label).
 #   --codex        import CODEX refresh tokens instead (issue #1490): each
 #                  profile's auth.json — `default` = ~/.codex/auth.json, any
 #                  other = <codex-homes>/<profile>/auth.json (CCQUOTA_FLEET_CODEX_HOMES,
@@ -57,14 +64,15 @@
 # rotate each other out.
 set -uo pipefail
 
-usage() { sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
-PRINCIPAL=pool EXPIRES='' DRY=0 CODEX=0
+PRINCIPAL=pool EXPIRES='' DRY=0 CODEX=0 AUUID='' AUUID_GIVEN=0
 LABELS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --principal)  [ -n "${2:-}" ] || usage; PRINCIPAL="$2"; shift 2 ;;
     --expires-at) [ -n "${2:-}" ] || usage; EXPIRES="$2"; shift 2 ;;
+    --account-uuid) [ -n "${2:-}" ] || usage; AUUID="$2"; AUUID_GIVEN=1; shift 2 ;;
     --codex)      CODEX=1; shift ;;
     --dry-run)    DRY=1; shift ;;
     -h|--help)    usage ;;
@@ -74,6 +82,28 @@ while [ $# -gt 0 ]; do
 done
 if [ "$CODEX" = 1 ] && [ -n "$EXPIRES" ]; then
   printf 'fleet-creds-import: --expires-at does not apply to --codex (a refresh token rotates; nothing to date)\n' >&2; usage
+fi
+if [ "$CODEX" = 1 ] && [ "$AUUID_GIVEN" = 1 ]; then
+  printf 'fleet-creds-import: --account-uuid does not apply to --codex (the hub reads it from the id_token)\n' >&2; usage
+fi
+if [ "$AUUID_GIVEN" = 1 ] && [ "${#LABELS[@]}" -ne 1 ]; then
+  printf 'fleet-creds-import: --account-uuid names ONE label'"'"'s account — name exactly one label\n' >&2; usage
+fi
+[ "$AUUID" != none ] || AUUID=''
+case "$AUUID" in *[!A-Za-z0-9:._-]*) printf 'fleet-creds-import: --account-uuid must be [A-Za-z0-9:._-]\n' >&2; usage ;; esac
+# One label and no --account-uuid: the importing login's own account
+# (issue #2127) — the add flow is `claude setup-token` then this, on that login.
+AUUID_NOTE=''
+if [ "$CODEX" = 0 ] && [ "$AUUID_GIVEN" = 0 ] && [ "${#LABELS[@]}" -eq 1 ]; then
+  cj="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+  AUUID=$(python3 -c '
+import json, re, sys
+try:
+    u = (json.load(open(sys.argv[1])).get("oauthAccount") or {}).get("accountUuid") or ""
+except (OSError, ValueError, AttributeError):
+    u = ""
+print(u if re.fullmatch(r"[A-Za-z0-9:._-]{1,128}", u) else "")' "$cj" 2>/dev/null) || AUUID=''
+  [ -z "$AUUID" ] || AUUID_NOTE="this login's $cj — --account-uuid <uuid> names another, none sends none"
 fi
 
 ACCT_DIR="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}"
@@ -123,9 +153,9 @@ printf 'Authorization: Bearer %s\n' "$VIEWER" > "$WORK/hdr"
 # Also writes the request body to $WORK/body when ok. The token is read here,
 # inside python, and goes nowhere but that 0600 file.
 plan() {
-  python3 - "$1" "$2" "$3" "$4" "$WORK/body" <<'PY'
+  python3 - "$1" "$2" "$3" "$4" "$WORK/body" "$AUUID" <<'PY'
 import json, os, sys, datetime
-path, label, principal, expires, out = sys.argv[1:6]
+path, label, principal, expires, out, auuid = sys.argv[1:7]
 try:
     with open(path, 'rb') as f:
         tok = f.readline().strip().decode('ascii', 'replace')
@@ -144,8 +174,10 @@ if expires:
 else:
     mt = datetime.datetime.fromtimestamp(os.stat(path).st_mtime, datetime.timezone.utc)
     exp = (mt + datetime.timedelta(days=365)).strftime('%Y-%m-%dT%H:%M:%SZ')
-body = {"action": "put", "principal_id": principal, "provider": "claude", "account": label,
-        "secret": {"setup_token": tok, "expires_at": exp}}
+secret = {"setup_token": tok, "expires_at": exp}
+if auuid:
+    secret["account_uuid"] = auuid
+body = {"action": "put", "principal_id": principal, "provider": "claude", "account": label, "secret": secret}
 fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, 'w') as f:
     json.dump(body, f)
@@ -243,6 +275,7 @@ for l in ${LABELS[@]+"${LABELS[@]}"}; do
     [ -f "$f" ] || { printf 'skip   %-14s no such pool file\n' "$l"; skipped=$((skipped+1)); continue; }
     line=$(plan "$f" "$l" "$PRINCIPAL" "$EXPIRES") || { printf 'FAIL   %-14s could not read it\n' "$l"; failed=$((failed+1)); continue; }
     exp=${line%%	*}
+    [ -z "$AUUID" ] || printf 'uuid   %-14s account %s%s\n' "$l" "$AUUID" "${AUUID_NOTE:+ ($AUUID_NOTE)}"
   fi
   why=${line#*	}
   if [ -n "$why" ]; then printf 'skip   %-14s %s\n' "$l" "$why"; skipped=$((skipped+1)); continue; fi
