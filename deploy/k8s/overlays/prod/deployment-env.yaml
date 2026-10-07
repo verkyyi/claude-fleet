@@ -1,0 +1,67 @@
+# Production settings. Secrets are only ever referenced by key (Secret
+# `ccquota`, `smoke-creds`), never written here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-hub
+spec:
+  template:
+    spec:
+      containers:
+        - name: ccquota
+          env:
+            # The address people (and /install) use. Clients installed from the
+            # old address keep it; it stays served (ingress-hosts.yaml).
+            - name: CCQUOTA_FLEET_PUBLIC_URL
+              value: "https://claudefleet.24haowan.com"
+            - name: CCQUOTA_PUBLIC_URL
+              value: "https://claudefleet.24haowan.com"
+            - name: CCQUOTA_SSO_APP
+              value: "ccquota"
+            - name: CCQUOTA_SSO_SLUG
+              value: "staff"
+            - name: CCQUOTA_SSO_ENTER_URL
+              value: "https://ai.24haowan.com/kf/authz/enter"
+            - name: CCQUOTA_SSO_TICKET_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: sso-ticket-secret
+            - name: CCQUOTA_SSO_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: sso-session-secret
+            - name: CCQUOTA_FLEET_ADMIN_USERS
+              value: "verkyyi"
+            - name: CCQUOTA_FLEET_PRINCIPAL_LOGINS
+              value: "YiLiangHui=verkyyi,CaoJian=24haowan,zx=zx,HuangYongSheng=vincent"
+            - name: CCQUOTA_NOTIFY_URL
+              valueFrom:
+                secretKeyRef:
+                  name: smoke-creds
+                  key: NOTIFY_URL
+            - name: CCQUOTA_NOTIFY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: smoke-creds
+                  key: NOTIFY_KEY
+            - name: CCQUOTA_NOTIFY_DEST
+              value: "alerts.prod"
+            - name: CCQUOTA_FLEET_ROUTES
+              value: |-
+                [{"hostname":"macmini","alias":"m5"},{"hostname":"mini2","alias":"m4"}]
+        - name: disk-watch
+          env:
+            - name: NOTIFY_URL
+              valueFrom:
+                secretKeyRef:
+                  name: smoke-creds
+                  key: NOTIFY_URL
+            - name: NOTIFY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: smoke-creds
+                  key: NOTIFY_KEY
+            - name: NOTIFY_DEST
+              value: "alerts.prod"

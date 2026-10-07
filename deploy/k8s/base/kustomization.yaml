@@ -1,0 +1,13 @@
+# The hub (tokenledger/, the ccquota image) as one Deployment + its Service,
+# Ingress, data disk and pricing table. Nothing here names an environment: the
+# namespace, registry, hostnames, TLS secret and every site-specific setting
+# live in an overlay (overlays/prod). Deploy through the hub-deploy workflow —
+# see ../README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - pvc.yaml
+  - ccquota-pricing.yaml

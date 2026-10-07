@@ -1,0 +1,47 @@
+name: hub kubeconfig (prod, master only)
+description: >
+  Sign a short-lived kubeconfig for this job (GitHub OIDC → Aliyun STS as RAM
+  role gha-claudefleet-deploy → ACK temporary certificate) and export
+  KUBECONFIG. The job must declare `environment: prod` and
+  `permissions: id-token: write`.
+
+# EPIC #1982 C1 (issue #1983). Ported from 24haowan-monorepo's prod-kubeconfig
+# action, with the role fixed. No long-lived credential exists anywhere: the
+# role trusts only sub = repo:verkyyi/claude-fleet:environment:prod, and the
+# prod environment admits master only, behind @verkyyi's approval. In the
+# cluster the role's ID (300826830644931552) is bound to Role
+# new-deploy/claudefleet-deployer — the hub's own objects, no secrets, no RBAC.
+inputs:
+  minutes:
+    description: "kubeconfig lifetime in minutes (15–4320)"
+    required: false
+    default: "60"
+
+runs:
+  using: composite
+  steps:
+    - name: Write kubeconfig (OIDC → STS → ACK)
+      shell: bash
+      env:
+        MINUTES: ${{ inputs.minutes }}
+        OIDC_JS: ${{ github.action_path }}/oidc.js
+      run: |
+        set -euo pipefail
+        ACCOUNT=1720148580188583
+        CLUSTER=cff10a18030a74894a0bbc765e21779ef
+        ROLE=gha-claudefleet-deploy
+        D="$RUNNER_TEMP/hub-kube"
+        mkdir -p "$D" && chmod 700 "$D"
+        export KUBECONFIG="$D/config"
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+          echo "::error::no OIDC — the job lacks \`permissions: id-token: write\` or \`environment: prod\`"
+          exit 1
+        fi
+        node "$OIDC_JS" --role-arn "acs:ram::$ACCOUNT:role/$ROLE" \
+          --provider-arn "acs:ram::$ACCOUNT:oidc-provider/github-actions" \
+          --cluster "$CLUSTER" --minutes "$MINUTES" --out "$KUBECONFIG"
+        chmod 600 "$KUBECONFIG"
+        echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+        kubectl auth whoami -o jsonpath='{.status.userInfo.username}' --request-timeout=30s 2>/dev/null \
+          | sed 's/^/kube identity: /' || echo "kube identity: (whoami unsupported)"
+        echo

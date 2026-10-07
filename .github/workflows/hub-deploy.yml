@@ -1,0 +1,206 @@
+name: hub-deploy
+
+# The ONE way the hub (tokenledger/, the ccquota image) goes live — EPIC #1982
+# C1, issue #1983. A merge to master that touches tokenledger/** or
+# deploy/k8s/** builds the image, pushes it as `prod-<sha7>`, snapshots the
+# database, applies deploy/k8s/overlays/prod with that tag, waits for the
+# rollout and reads /version back. Rollback = `workflow_dispatch` with the old
+# tag (no build; the snapshot step still runs).
+#
+# No long-lived credential exists for it, in this repo or anywhere: the deploy
+# job runs in environment `prod` (master only, @verkyyi approves each run) and
+# trades GitHub's OIDC token for STS as RAM role gha-claudefleet-deploy
+# (.github/actions/hub-acr, .github/actions/hub-kubeconfig). In the cluster that
+# role is Role new-deploy/claudefleet-deployer: the hub's own Deployment,
+# Service, Ingress and pricing ConfigMap, a read of its PVC, pod exec for the
+# snapshot — no secrets, no RBAC. The runbook is deploy/k8s/README.md.
+#
+# The `check` job runs on every PR that touches any of it and needs no
+# credential: the actions' selftests, the overlay renders, the base names no
+# environment.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'tokenledger/**'
+      - 'deploy/k8s/**'
+  pull_request:
+    paths:
+      - 'deploy/k8s/**'
+      - '.github/actions/hub-*/**'
+      - '.github/workflows/hub-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Deploy an EXISTING image tag (prod-<sha7>) instead of building this commit — the rollback"
+        required: false
+        default: ''
+      snapshot:
+        description: "Snapshot the database first (turn off only when the hub pod is down and cannot be exec'd into)"
+        type: boolean
+        default: true
+
+# One deploy at a time, never cancelled half-way (a cancelled Recreate rollout
+# leaves the hub down until the next one).
+concurrency:
+  group: hub-deploy-${{ github.event_name == 'pull_request' && github.ref || 'prod' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NS: new-deploy
+  PUSH_REPO: registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota
+  PLACEHOLDER: set-by-hub-deploy
+  HUB_URLS: https://claudefleet.24haowan.com https://ccquota.24haowan.com
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: node .github/actions/hub-kubeconfig/oidc.js --selftest
+      - run: node .github/actions/hub-acr/acr.js --selftest
+      - name: The prod overlay renders, with exactly one placeholder tag
+        run: |
+          set -euo pipefail
+          kubectl kustomize deploy/k8s/overlays/prod > "$RUNNER_TEMP/hub.yaml"
+          n=$(grep -c ":$PLACEHOLDER\$" "$RUNNER_TEMP/hub.yaml" || true)
+          [ "$n" = 1 ] || { echo "::error::expected one image tagged :$PLACEHOLDER, found $n"; exit 1; }
+          for k in Deployment Service Ingress PersistentVolumeClaim ConfigMap; do
+            grep -q "^kind: $k\$" "$RUNNER_TEMP/hub.yaml" || { echo "::error::render has no $k"; exit 1; }
+          done
+          # Nothing beyond what Role claudefleet-deployer may touch.
+          extra=$(grep '^kind: ' "$RUNNER_TEMP/hub.yaml" | grep -vE '^kind: (Deployment|Service|Ingress|PersistentVolumeClaim|ConfigMap)$' || true)
+          [ -z "$extra" ] || { echo "::error::the deploy role cannot apply: $extra"; exit 1; }
+      - name: The base names no environment
+        run: |
+          if grep -rn '24haowan' deploy/k8s/base; then
+            echo "::error::deploy/k8s/base must stay environment-free — move it to an overlay"; exit 1
+          fi
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Which image
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            [[ "$INPUT_TAG" =~ ^prod-[0-9a-f]{7,40}$ ]] || { echo "::error::tag must look like prod-<sha7>, got '$INPUT_TAG'"; exit 1; }
+            tag=$INPUT_TAG build=false
+          else
+            tag="prod-${GITHUB_SHA:0:7}" build=true
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "commit=${tag#prod-}" >> "$GITHUB_OUTPUT"
+          echo "image: $PUSH_REPO:$tag (build=$build)"
+
+      - uses: ./.github/actions/hub-acr
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The client /install serves lives once, in bin/ conf/ … (#1803): pack it
+      # into the build context first; the Dockerfile refuses an empty pack.
+      - name: Pack the client
+        if: steps.tag.outputs.build == 'true'
+        run: bin/fleet-client-pack.sh
+
+      - name: Build and push
+        if: steps.tag.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: tokenledger
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ env.PUSH_REPO }}:${{ steps.tag.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.tag.outputs.tag }}
+            GOPROXY=https://proxy.golang.org,direct
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: The image exists
+        run: docker buildx imagetools inspect "$PUSH_REPO:${{ steps.tag.outputs.tag }}" >/dev/null
+
+      - uses: ./.github/actions/hub-kubeconfig
+
+      - name: Render the manifests with this tag
+        run: |
+          set -euo pipefail
+          kubectl kustomize deploy/k8s/overlays/prod \
+            | sed "s#:$PLACEHOLDER\$#:${{ steps.tag.outputs.tag }}#" > "$RUNNER_TEMP/hub.yaml"
+          ! grep -q "$PLACEHOLDER" "$RUNNER_TEMP/hub.yaml" || { echo "::error::placeholder left in the render"; exit 1; }
+          grep -n 'image:' "$RUNNER_TEMP/hub.yaml"
+
+      # Before anything changes: a transaction-consistent copy of the live
+      # database (VACUUM INTO via /data/snapshot-tool — never a raw copy, the
+      # database is in WAL mode). Named after the image it was taken FROM, so a
+      # rollback finds its pair. This step keeps the newest 3 of ITS OWN
+      # snapshots (backup-hubdeploy-*); a person's backup-* is never touched.
+      - name: Snapshot the database
+        if: github.event.inputs.snapshot != 'false'
+        run: |
+          set -euo pipefail
+          pod=$(kubectl -n "$NS" get pod -l app=ccquota-hub --field-selector=status.phase=Running -o name | head -1)
+          [ -n "$pod" ] || { echo "::error::no running hub pod to snapshot — re-run from workflow_dispatch with snapshot off if the hub is down"; exit 1; }
+          from=$(kubectl -n "$NS" get deploy ccquota-hub -o jsonpath='{.spec.template.spec.containers[?(@.name=="ccquota")].image}')
+          from=${from##*:}
+          ts=$(date -u +%Y%m%dT%H%M%SZ)
+          kubectl -n "$NS" exec "$pod" -c ccquota -- sh -c '
+            set -e
+            ls -1t /data/backup-hubdeploy-*.db 2>/dev/null | tail -n +3 | while read -r f; do rm -f "$f"; echo "pruned $f"; done
+            db_kb=$(du -k /data/ccquota.db | cut -f1)
+            free_kb=$(df -Pk /data | awk "NR==2{print \$4}")
+            echo "db ${db_kb}K, free ${free_kb}K"
+            [ "$free_kb" -gt $((db_kb * 12 / 10)) ] || { echo "not enough room on /data for a snapshot (deploy/k8s/RUNBOOK.md: 数据盘水位)"; exit 1; }
+            out="/data/backup-hubdeploy-$1-$2.db"
+            /data/snapshot-tool /data/ccquota.db "$out"
+            ls -la "$out"
+          ' _ "$ts" "$from"
+
+      - name: Apply
+        run: kubectl apply -f "$RUNNER_TEMP/hub.yaml"
+
+      - name: Rollout
+        run: |
+          if ! kubectl -n "$NS" rollout status deploy/ccquota-hub --timeout=10m; then
+            kubectl -n "$NS" get pod -l app=ccquota-hub -o wide || true
+            echo "::error::rollout did not finish — a pod stuck in ContainerCreating is the disk attach (deploy/k8s/RUNBOOK.md)"
+            exit 1
+          fi
+
+      - name: /version names this commit, on every address
+        env:
+          WANT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -uo pipefail
+          for url in $HUB_URLS; do
+            got=''
+            for _ in $(seq 1 30); do
+              got=$(curl -fsS -m 10 "$url/version" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)
+              [ "$got" = "$WANT" ] && break
+              sleep 5
+            done
+            if [ "$got" != "$WANT" ]; then
+              echo "::error::$url/version reports commit '$got', want '$WANT'"; exit 1
+            fi
+            echo "$url/version → $(curl -fsS -m 10 "$url/version")"
+          done

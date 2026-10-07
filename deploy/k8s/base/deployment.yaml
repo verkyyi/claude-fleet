@@ -1,0 +1,162 @@
+# The hub: one Go binary + one SQLite file on one RWO disk.
+#
+# ★ replicas: 1 + strategy: Recreate is a HARD requirement. The database is a
+#   single-writer SQLite file; a RollingUpdate would open it from two pods at
+#   once — that is a corrupt database, not a brief double write. The price is a
+#   few tens of seconds down per deploy (agents spool and retry; the dashboard
+#   502s briefly).
+#
+# The image is the placeholder name `ccquota` with the placeholder tag
+# `set-by-hub-deploy`: the overlay maps the name to its registry, and the
+# hub-deploy workflow pins the tag (`prod-<sha7>`) at deploy time. The live tag
+# is never recorded in this repo — read it from the cluster or from /version.
+# So never `kubectl apply -k` by hand: run the workflow (../README.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-hub
+  labels:
+    app: ccquota-hub
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ccquota-hub
+  template:
+    metadata:
+      labels:
+        app: ccquota-hub
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        # The image runs as uid 10001. A fresh cloud disk is root-owned; without
+        # fsGroup the hub cannot write its own database and dies at start.
+        fsGroup: 10001
+      containers:
+        - name: ccquota
+          image: ccquota:set-by-hub-deploy
+          imagePullPolicy: IfNotPresent
+          args:
+            - --retention-days=60
+            - --pricing=/etc/ccquota/pricing.json
+          ports:
+            - containerPort: 8787
+          env:
+            - name: CCQUOTA_VIEWER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: viewer-token
+            - name: CCQUOTA_FLEET
+              value: "1"
+            - name: CCQUOTA_FLEET_CRED_KEY_FILE
+              value: "/secrets/cred-key/key"
+            - name: CCQUOTA_FLEET_SSH_CA_KEY
+              value: "/secrets/ssh-ca/ca"
+            - name: CCQUOTA_FLEET_OAUTH_REFRESH_VIA
+              value: "node"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8787
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8787
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 848Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: pricing
+              mountPath: /etc/ccquota
+              readOnly: true
+            - name: ssh-ca
+              mountPath: /secrets/ssh-ca
+              readOnly: true
+            - name: cred-key
+              mountPath: /secrets/cred-key
+              readOnly: true
+        # Data-disk watermark: every 5 minutes `df /data`; ≥ THRESHOLD_PCT posts
+        # one alert (≥ 90% as error), and one recovery below THRESHOLD_PCT-5.
+        # NOTIFY_URL / NOTIFY_KEY come from the overlay; without them it only logs.
+        - name: disk-watch
+          image: busybox:1.36.1@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c"]
+          args:
+            - |
+              cat > /tmp/disk-watch.sh <<'EOF'
+              T="${THRESHOLD_PCT:-80}"; HIGH=0
+              P=""; K=""; [ -n "${DRILL:-}" ] && P="[演练] " && K="drill:"
+              post() { # severity title body recovery
+                [ -n "${NOTIFY_URL:-}" ] && [ -n "${NOTIFY_KEY:-}" ] || { echo "未配 NOTIFY_URL/NOTIFY_KEY，本条未发：$2"; return 1; }
+                wget -q -O /dev/null -T 10 --header "Authorization: Bearer $NOTIFY_KEY" --header 'Content-Type: application/json' \
+                  --post-data "{\"dest\":\"${NOTIFY_DEST:-alerts.prod}\",\"source\":\"ccquota:disk-watch\",\"dedupKey\":\"${K}ccquota:data-disk-high\",\"dedupWindowSec\":21600,\"severity\":\"$1\",\"title\":\"$P$2\",\"body\":\"$3\",\"recovery\":$4}" \
+                  "${NOTIFY_URL%/}/v1/notify" && echo "kf-notify ok：$2" || echo "kf-notify 失败：$2"
+              }
+              check() {
+                L=$(df -P /data | awk 'NR==2{u=$5; sub("%","",u); printf "%s %.1f %.1f %.1f", u, $2/1048576, $3/1048576, $4/1048576}')
+                [ -n "$L" ] || { echo "df /data 读不到"; return; }
+                set -- $L; pct=$1; size=$2; used=$3; free=$4
+                echo "$(date -u +%FT%TZ) /data ${pct}% used ${used}G / ${size}G free ${free}G (threshold ${T}%)"
+                if [ "$pct" -ge "$T" ]; then
+                  sev=warn; [ "$pct" -ge 90 ] && sev=error
+                  post "$sev" "ccquota hub 数据盘已用 ${pct}%" "ccquota hub 的 /data 已用 ${pct}%（${used}G / ${size}G，剩 ${free}G），阈值 ${T}%。库写满时入口停摆；发布前的 VACUUM INTO 快照要和库一样大的空间，可能已经放不下。处置：claude-fleet 仓 deploy/k8s/RUNBOOK.md 的「数据盘水位」一节（清旧快照、扩 PVC）。" false && HIGH=1
+                elif [ "$HIGH" = 1 ] && [ "$pct" -lt $((T - 5)) ]; then
+                  post info "ccquota hub 数据盘回落到 ${pct}%" "ccquota hub 的 /data 回落到 ${pct}%（${used}G / ${size}G，剩 ${free}G）。" true && HIGH=0
+                fi
+              }
+              if [ "${1:-loop}" = once ]; then check; exit 0; fi
+              trap 'exit 0' TERM INT
+              while true; do check; sleep "${INTERVAL_SECS:-300}" & wait $!; done
+              EOF
+              exec sh /tmp/disk-watch.sh loop
+          env:
+            - name: THRESHOLD_PCT
+              value: "80"
+          securityContext:
+            runAsUser: 10001
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 1m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ccquota-data
+        - name: pricing
+          configMap:
+            name: ccquota-pricing
+        # Two secrets created by hand, never in this repo (../RUNBOOK.md); not
+        # optional on purpose: missing ⇒ the hub does not start, rather than
+        # running with the fleet vault silently off.
+        - name: ssh-ca
+          secret:
+            secretName: ccquota-ssh-ca
+            defaultMode: 0440
+        - name: cred-key
+          secret:
+            secretName: ccquota-fleet-cred-key
+            defaultMode: 0440

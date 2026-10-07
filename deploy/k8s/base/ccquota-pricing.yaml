@@ -1,0 +1,222 @@
+# ccquota hub 的费率覆盖文件（`--pricing`，PROD new-deploy，#5983）。
+#
+# hub 启动时读它，**merge 而非 replace** —— 改一个模型的费率不会把其它的丢掉
+# （ccquota internal/pricing/pricing.go `Table.LoadOverrides`）。所以调价 = 改这份
+# ConfigMap + 重启 hub，不用发版、不用重建镜像。
+#
+# ★★★ `gateway` 这一档的 cost_usd 是**真账单**，不是别处那个「假如按 API 价会花多少」
+#   的假想成本。所以这里写错一个数字，面板上出现的就是一笔**错误的钱**，而且它长得跟
+#   对的一模一样。ccquota 因此刻意**不在镜像里内置任何网关费率**：
+#   「a price is a contract term this build cannot know」——两家用同一个厂商，付的钱
+#   可以不一样，而烤进镜像里的错价没人能在不发版的情况下改。
+#
+# ★★★ 下面的 models **不是公开标价抄来的，是从真实账单逐行反推的**（2026-09-13 首次填入）。
+#   怎么反推的写在这里，免得下次调价时有人凭记忆重写：
+#
+#   阿里云百炼（qwen* / text-embedding-v4）——
+#     aliyun bssopenapi QueryInstanceBill --BillingCycle 2026-08 --ProductCode sfm \
+#       --IsBillingItem true --PageSize 300 --region cn-shanghai
+#     ⚠️ **`--IsBillingItem true` 是关键**：不加它 `Usage` 与 `ListPrice` 两列恒为空字符串，
+#        只剩金额、推不出单价（本仓为此绕过一次弯路）。加上之后每行给
+#        `Usage`(千tokens) + `ListPrice`(元/千tokens) + `PretaxAmount`，且逐行满足
+#        Usage × ListPrice = PretaxAmount。`InstanceID` 形如
+#        `<订单>;<workspace>;qwen-plus;input_token_cache;;0` —— 模型名与计费项在里面。
+#     核对过的三件：① 2026-08 与 2026-09 两个账期**逐档挂牌价完全一致**（不是变价期的数）；
+#        ② 全部行 `DeductedByCoupons` / `InvoiceDiscount` / `DeductedByResourcePackage` 均为 0
+#        （= ListPrice 就是结算价，没有折扣层）；③ 单位换算 元/千tokens × 1000 = CNY/百万 token。
+#     `DescribeInstanceBill --Granularity DAILY --BillingDate <d> --IsBillingItem true` 可按天核。
+#
+#   OpenRouter（anthropic/claude-haiku-4.5）——
+#     账单不按 input/output 拆，但 management key 能读到**按天的真实计费额 + prompt/completion
+#     token 数**（`POST /api/v1/analytics/query`，dimensions=[model]，
+#     metrics=[total_usage, tokens_prompt, tokens_completion]）。拿两天解二元一次方程：
+#       09-13: 153 prompt + 54 completion = $0.000423
+#       09-12:  80 prompt + 28 completion = $0.000220
+#       ⇒ input $1.0000/M、output $5.0000/M（两天各自回代完全吻合）
+#     再按 hub 内置的 7.09 CNY/USD 折回 CNY：7.09 / 35.45。**本文件刻意不写 `cny_per_usd`** ——
+#     内置那份带日期且被人复核过（2026-09-12），在这里抄一份并盖上更新的日期，等于往每个事件的
+#     price_basis 里写一句没发生过的复核。
+#
+# ⚠️ **key 必须与事件里的模型串一致**（ccquota 的 `Normalize()` 只剥**结尾的 8 位或 ISO 日期**，
+#    别的一个字都不改）。所以：
+#      · 写 `anthropic/claude-haiku-4.5`（我们网关记的名字），**不是** OpenRouter 的规范名
+#        `anthropic/claude-4.5-haiku-20251001`（那个会被剥成 `anthropic/claude-4.5-haiku`）。
+#      · `doubao-seed-2-0-mini-260428` 结尾是 6 位，不被剥，要连后缀一起写。
+#
+# ⚠️ 三条填写规则，写错会被 hub 在**启动时**拒绝（不是悄悄忽略）：
+#   ① 单位是 **CNY / 百万 token**，只有 input 与 output 两项。网关这一档没有 cache 拆分，
+#      填了任何一个 cache 费率 hub 直接报错。
+#   ② 费率必须 > 0。「0 不是折扣」—— 填 0 只会静默少算一笔真钱；真的算不出来就**别填这个模型**，
+#      unpriced 会在面板上逐个模型说「没配费率」，那是一句诚实的「不知道」。
+#   ③ `rates_as_of` 必填（只要 models 非空）。
+#
+# ★ input 用的是**未命中价**（发起人 2026-09-13 拍板）。qwen-plus 与 qwen3-max 在账单里把
+#   **缓存命中 token 单列**（qwen-plus 0.00016、qwen3-max 0.0005 元/千tokens），而搬运工
+#   `smoke/ai-gateway-ccquota-ship.js` 硬编码 `cache_read_tokens: 0`、ccquota 的 gateway 档
+#   也「carries no cache breakdown at all」⇒ **带缓存定价的模型无法复现账单**，只能二选一：
+#     A 未命中价 = 合同里真实存在的那个数，误差方向是**高估**（不会少算钱）；
+#     B 按量加权 = 与历史账单总额吻合，但那个数任何一份合同上都不存在，命中率一变就偏
+#       （实测 qwen-plus 的加权值两个月就从 0.605 漂到 0.458）。
+#   选 A。实测偏差（整模型总额）：qwen-plus 高估 1.26×（08，命中 30.5%）/ 1.65×（09，命中 53.5%）；
+#   qwen3-max 高估 1.46×（08，命中 47.7%）/ 1.30×（09，命中 37.8%）。要消掉这个高估，得让搬运工
+#   与 hub 都带上 cache 维度 —— 那是另一件事，不是调一个数字。
+#
+# ★ `text-embedding-v4` 的 output 只是为了过 hub 的「必须 > 0」这条校验，**永不生效**：
+#   搬运工的 output 取 `completion_tokens`，embedding 响应里没有这个字段 ⇒ 恒为 0。
+#
+# ⛔ 刻意**不填**的四个，连理由一起记下来（删掉理由等于邀请下一个人填错）：
+#   · `deepseek-v4-flash` / `deepseek-chat` —— DeepSeek 2026-08 起**峰谷两档**（峰时＝谷时 2×，
+#     峰时窗口 01:00–04:00 与 06:00–10:00 UTC 工作日），再叠缓存命中/未命中，而它**没有任何
+#     用量或账单接口**（只有 `/user/balance`；`/user/usage`、`/usage`、`/v1/usage`、
+#     `/dashboard/billing/usage`、`/user/billing`、`/user/bills` 实测全 404）。
+#     ⇒ 单一费率在结构上就表达不了它。顺带一句业界现状：LiteLLM 的价目表里**没有任何时段字段**，
+#     它对 deepseek 填的是**峰时价** ⇒ 约 79% 的时间把成本算成真实值的 2 倍。别照抄。
+#   · `doubao-seed-2-0-mini-260428` —— 火山引擎账单（`ListBillDetail`，service `billing`，
+#     `GroupTerm=0` + `GroupPeriod=2`，region cn-beijing）里**单价有、实付是 0**：
+#     每月 500k token 的「免费在线推理资源包」把它整个抵扣掉了，而我们一个月只用几千 token。
+#     填上 0.20 / 2.00 会**长期虚报一笔根本没发生的支出**。抵扣完之后的结算价就是
+#     input 0.0002、output 0.002 元/千tokens（2026-08 与 2026-09 两期一致，即 0.20 / 2.00
+#     CNY/百万 token），届时直接填。
+#   · `qwen-omni-turbo` —— 它按**模态**分档而不是按 context 分档：同一个「输出」类目在账单里
+#     同时出现 0.05 与 0.0016 元/千tokens（音频 vs 文本，差 31×），input 也有 0.025 与 0.0004
+#     两档。ccquota 的 gateway 档不带模态维度 ⇒ 填任何单值都可能错 30 倍。
+#     （本文件 2026-09-13 之前的注释把它列进了「值得填」的名单 —— 那是错的，已改。）
+#
+# ⚠️ 还没出现在账单里的档位要当心：qwen3-max 只见过 `context_0-32k` 一档，
+#    doubao-seed-2-0-mini 只见过「32k 以内」一档。哪天有请求超过 32k 上下文，实际结算会跳到
+#    更贵的档，而这里的数字不会自己跟上。
+#
+# ── 第二种形状：按**次**/按秒计价（#6130，hub ≥ prod-237abde4）─────────────────
+#
+# 网关前面越来越多的调用**根本不按 token 计费**。费率项因此多了一种写法，与上面那种
+# **二选一**（同一条里两种都写，hub 启动时直接拒绝）：
+#
+#     "passthrough-ark-v1-images-generations": { "unit": "call", "price": 0.14 }
+#
+# ★ **key 是 route 名，不是模型名**：这一档的日志里根本没有 `model_served`（不是 OpenAI
+#   形状、没有 model 语义），搬运工发上来的 `model` 就是 route 名。
+# ★ 单位是封闭集（image / second / char / call），写错一个字**不报错**、但永远匹配不上
+#   事件的 usage_unit ⇒ 那一档永远静默不计价。所以 hub 在启动时校验它。
+# ★ 搬运工当前发的是 **call**（一行日志 = 一次调用），不是 image —— 声称「一张图」等于
+#   断言网关看得见请求体里的 `n`，而它不解析请求体。n=1 时两者同值。
+# ★ 与 token 那档同一条规矩：**0 不是折扣**，填 0 会被拒。
+#
+# ★ `passthrough-ark-v1-images-generations` = **0.6 元/次**，2026-09-14 从真实账单反推
+#   （本文件 2026-09-13 之前写着「一条都没填，因为还没有账单可反推」—— 那句话当时是真的，
+#   现在已经**不成立**：发起人 09-13 批了一次付费出图，账单行已经出现）。怎么反推的：
+#
+#     火山 ListBillDetail（GroupTerm=0 + GroupPeriod=2）· BillPeriod 2026-09
+#       Product        Doubao-Seedream          （★ **不是** `ark_bd`，见下面那条⚠️）
+#       ExpandField    doubao-seedream-5-0-pro
+#       Element        Doubao-Seedream-5.0-pro-超过1.5K不超过2K输出图
+#       Price 0.600000 · PriceUnit 张 · Count 1 · PayableAmount 0.60 · Unit 张
+#       Formula        （0.6）【单价】*（1）【用量】*（1）【有效因子】- 0 - 0 - 0 - 0
+#
+#   三件都核过：① **真的付了钱**（PayableAmount = OriginalBillAmount = 0.60，没有资源包抵扣、
+#   没有代金券、没有折扣层）—— 这正是 `doubao-seed-2-0-mini` 那条「单价有、实付是 0 ⇒ 不填」
+#   的反面；② 两个账期同价（2026-08 共 11 行 ¥12.60，逐行 0.600000；2026-09 共 3 行 ¥1.80）；
+#   ③ 一行账单 = 一次调用 = 一张图 ⇒ 元/张与元/次同值，与搬运工发的 `usage_unit: "call"` 对得上。
+#
+# ⚠️ **这条路由上的价只对「它实际被调用的那个模型」成立，而路由本身不带模型维度。**
+#   同一个 `/v1/images/generations` 下的挂牌价差 3 倍：
+#     doubao-seedream-5-0-pro（2K 档）0.60 · doubao-seedream-5-0 0.22 · 4-5 0.25 · 4-0 0.20 元/张。
+#   日志行里**没有 `model_served`**（网关不解析请求体），所以 hub 只能按 route 记一个价。
+#   今天填 0.6 是对的，因为这条路由**全部**计费调用（截至 2026-09-14 共 2 次，都是
+#   `AI_GATEWAY_CHECK_PAID=1` 那个付费探针）用的都是 `doubao-seedream-5-0-pro-260628` + `size=2K`。
+#   挡住它悄悄失准的是一条守卫：`smoke/ai-gateway-ccquota-ship.test.js` 把这一格与
+#   `core/ai-gateway/test/vendor-passthrough.lua` 里付费探针的 model/size 逐字锁步 ——
+#   改了探针的模型却不回来改价，PR 当场红。
+#   ⚠️ 还没被守卫盖住的那一半：`ai-site` 的内容工厂配的是 `doubao-seedream-4-0-250828`
+#   （`ai-site/app/lib/factoryBudget.ts`，它自己的账本也写着「0.20 元/张」）。它**今天不经网关**
+#   （`IMAGE_ON_GATEWAY` 由 `FACTORY_IMAGE_BASE_URL`/`FACTORY_IMAGE_API_KEY` 成对开启，
+#   实测 2026-09-14 前 14 天这条路由 biz 档 **0 行**）。哪天把它接上网关，这一格会 3× 虚报 ——
+#   那一步要连着改价，或者先让网关把 model 记进直通日志。跟进单 #6757。
+#   ⚠️ 同理 `doubao-seedream-4-0` 的账单行实付是 **0**（免费在线推理资源包全额抵扣），
+#   照 `doubao-seed-2-0-mini` 那条先例**不能**拿它 0.20 的挂牌价来填。
+#
+# ⚠️ **不要**把出图加进 `smoke/vendor-bill-ccquota-ship.js` 的 `VOLC_INCLUDE`：出图经过网关、
+#   已经按次逐条入账，两边都收就是**同一笔钱进两次**。
+#   ★ 今天挡着它的其实是**另一件事**，且是个巧合，写下来免得下一个人拆掉：那个采集器的
+#   `fetchVolcBills` 把查询钉死在 `Product: 'ark_bd'`，而 Seedream 的 product code 是
+#   `Doubao-Seedream` / `Doubao-image-generation`（2026-09-14 实测：不带 Product 过滤时
+#   2026-08 有 57 个计费项、¥287.34，钉住只剩 22 个、¥241.62）—— 出图行**根本到不了**
+#   `VOLC_INCLUDE` 那张白名单，所以单测里「Seedream 不许搬」那条用例是**空过的**（它判的是
+#   classify，而 classify 永远收不到这种行）。Seedance 视频仍在 `ark_bd` 下，采集器的主目标
+#   没受影响。谁要放宽那个 Product 过滤，必须同时把出图挡在 `VOLC_INCLUDE` 之外。
+#
+# ⛔ `kind: ws` 那一档（Tier 3 实时语音）**搬运工不发**，所以这里也无从填：一条 ws 日志行的
+#   `latency_s` 是**连接活了多久**，不是**计费时长**。拿它当秒数等于断言厂商按连接墙钟收费，
+#   而豆包实时对话按音频/token 收 —— 一条挂着没说话的连接会被算成一大笔钱。
+#   要收这一档，得先让网关记下真正的计费量，那是另一件事。
+#
+# 改完之后 hub 要**重启**才会重新读（Recreate 策略，几十秒不可用）：
+#   kubectl -n new-deploy rollout restart deploy/ccquota-hub
+#
+# ★ 这份文件同时是 `subscription_plans` 的入口（ccquota `LoadPlanPrices`，PR #6）——
+#   订阅一个月真花了多少钱。那是**第三种钱**（① 订阅实付 / ② 假想成本 / ③ 网关实付），
+#   也是算「订阅性价比 = 假想成本 ÷ 订阅实付」的前提。#5983 落库时这一格是空的
+#   （订阅数与单价是人手上的信息，不在任何系统里，见 #5983 的第二条评论）。
+#
+#   ⚠️ 2026-09-14（#6631）：它后来被**直接在集群上填了**，而仓库这份没跟上 ——
+#   夜跑 drift-check 因此每晚报一条 PROD 配置漂移（它报对了）。这里按线上那份逐字补回。
+#   补回来不只是为了让夜跑变绿，是因为**这份文件是真源、`config-deploy.yml` 合并即 apply 它**：
+#   仓库里缺这一块的话，下一次任何人改动本文件并合并，apply 会把线上手填的 plans **抹掉**，
+#   而 ccquota 的「订阅性价比」会安静地退回「算不出来」。
+#   改订阅价请改**这里**再走配置发布路径，别再直接 `kubectl edit`。
+#
+# ── `providers`：给上游一个人看得懂的名字（2026-09-20，tokenledger EPIC #122 / #127）──
+#
+# `gateway.providers.<provider>.label` 是**纯显示名**，key 是事件里的 `provider` 原串、
+# 不做归一化，且 `label` 永远不参与算价（ccquota `internal/pricing/gateway.go` 的
+# `merge()`：只填 label、不填 models 的条目直接 `continue`，一条费率都不会动）。
+#
+# 为什么要填：hub **绝不发明名字** —— 叫不出名字的主机名就按主机名显示
+# （`pricing/gateway.go:327-330`）。所以在这块填上之前，消耗表上印的是
+# `ark.cn-beijing.volces.com` 这种裸串。#127 把读标签的调用点接上了并已随
+# `prod-e37d3301` 上线，但那天线上这一段**根本不存在**，于是那半个改动在生产上一个字都看不见。
+#
+# ⛔ **裸 IP 不填。** 线上有 5 个（180.184.47.154 / 39.96.198.249 / 39.96.213.166 /
+#   8.140.217.18 / 8.152.159.24，共 20 次请求，其中第一个带 $0.085 真实费用）。
+#   设计明令 hub 不把主机名映射成厂商、也不猜；一个 IP 一行手写标签正是当初被拒的
+#   「第二份会悄悄漂移的真相」。要真名得让采集端（ai-gateway 的 `providerOf()`）发出来。
+#
+# ⛔ **`ai-relay.24hw.cn` 不填。** 它是自建中转，最终上游**可能是多个**、取决于怎么用。
+#   静态标签是一个 provider 对一个固定字符串：今天它底下只有 `anthropic/claude-haiku-4.5`，
+#   标成 Anthropic 今天对、接了第二家就悄悄变成假的。真做法是按行从 model id 的斜杠前缀
+#   解析真实上游（`pricing.Normalize` 目前只剥日期后缀、不拆斜杠），那是一条独立的代码改动。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ccquota-pricing
+data:
+  # 单位一律 CNY / 百万 token。每个数字的来路见文件头。
+  pricing.json: |
+    {
+      "plans": [
+        { "plan": "max",     "source": "claude", "monthly_cost": 200, "currency": "USD",
+          "effective_from": "2026-07-09T00:00:00Z" },
+        { "plan": "prolite", "source": "codex",  "monthly_cost": 200, "currency": "USD",
+          "effective_from": "2026-01-31T00:00:00Z" }
+      ],
+      "gateway": {
+        "rates_as_of": "2026-09-14",
+        "price_source": "按真实账单反推（非公开标价）：百炼 = aliyun bssopenapi QueryInstanceBill --ProductCode sfm --IsBillingItem true 的 ListPrice，2026-08 与 2026-09 两期逐档一致、无折扣/优惠券/资源包抵扣；OpenRouter = /api/v1/analytics/query 按天的真实计费额与 token 数解方程得 $1/$5 per M，按 hub 内置 7.09 CNY/USD（2026-09-12 复核）折算。input 取未命中价，故 qwen-plus / qwen3-max 的缓存命中部分被高估（实测整模型 1.26–1.75×）。deepseek-* / doubao-* / qwen-omni-turbo 刻意留空，理由见 ConfigMap 注释。passthrough-ark-v1-images-generations = 火山 ListBillDetail 的 Doubao-Seedream 行（Price 0.600000 元/张、PayableAmount 0.60 无抵扣、2026-08 与 2026-09 两期同价），只对付费探针实际发的 doubao-seedream-5-0-pro-260628 + size=2K 成立 —— 路由不带模型维度，见 ConfigMap 注释。",
+        "models": {
+          "qwen-flash":                 { "input": 0.15, "output": 1.5 },
+          "qwen-plus":                  { "input": 0.8,  "output": 2.0 },
+          "qwen3-max":                  { "input": 2.5,  "output": 10.0 },
+          "qwen-vl-plus":               { "input": 0.8,  "output": 2.0 },
+          "qwen-vl-ocr":                { "input": 0.3,  "output": 0.5 },
+          "text-embedding-v4":          { "input": 0.5,  "output": 0.5 },
+          "anthropic/claude-haiku-4.5": { "input": 7.09, "output": 35.45 },
+          "passthrough-ark-v1-images-generations": { "unit": "call", "price": 0.6 }
+        },
+        "providers": {
+          "dashscope.aliyuncs.com":    { "label": "阿里云百炼" },
+          "ark.cn-beijing.volces.com": { "label": "火山方舟" },
+          "api.deepseek.com":          { "label": "深度求索 DeepSeek" },
+          "dashscope":                 { "label": "阿里云百炼" },
+          "doubao":                    { "label": "豆包（火山引擎）" }
+        }
+      }
+    }

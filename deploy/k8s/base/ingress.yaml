@@ -1,0 +1,28 @@
+# The overlay replaces tls + rules with its real hostnames.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ccquota-hub
+  labels:
+    app: ccquota-hub
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # MCP / SSE / the node channel hold long streams: no buffering, hour-long reads.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: hub.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ccquota-hub
+                port:
+                  number: 80
