@@ -47,6 +47,10 @@
 #                  --expires-at does not apply (a refresh token rotates).
 #   --dry-run      print the plan, send nothing.
 #
+# One new subscription, signed in and imported with no local copy left behind:
+# `fleet account add --provider claude|codex --label <name>` (fleet-account-add.sh,
+# issue #2084) — it runs this script against a private temp dir.
+#
 # Env: CCQUOTA_HUB_URL (required), CCQUOTA_VIEWER_TOKEN or ~/.ccquota/viewer-token
 # (the OPERATOR's — the route is operator-only), FLEET_ACCOUNTS_DIR (default
 # ~/.config/claude-fleet/accounts), CCQUOTA_FLEET_CODEX_HOMES (default ~/.codex-accounts).
@@ -64,7 +68,7 @@
 # rotate each other out.
 set -uo pipefail
 
-usage() { sed -n '2,53p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,57p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 PRINCIPAL=pool EXPIRES='' DRY=0 CODEX=0 AUUID='' AUUID_GIVEN=0
 LABELS=()
@@ -300,7 +304,9 @@ if [ "$DRY" = 1 ]; then
   printf 'dry-run: %d would be imported, %d skipped — nothing sent\n' "$ok" "$skipped"
 else
   printf '%d imported, %d skipped, %d failed → %s/credentials\n' "$ok" "$skipped" "$failed" "$HUB"
-  if [ "$CODEX" = 1 ] && [ "$ok" -gt 0 ]; then
+  # FLEET_CREDS_IMPORT_NO_HOLDER=1: `fleet account add` (issue #2084) signed the
+  # account into a temp home it deletes right after — nothing here refreshes it.
+  if [ "$CODEX" = 1 ] && [ "$ok" -gt 0 ] && [ "${FLEET_CREDS_IMPORT_NO_HOLDER:-0}" != 1 ]; then
     # The moment it matters (issue #1666): on 2026-10-04 the hub rotated an
     # imported token 23 s after the import and this machine's own ccquota
     # auto-refresh, 10 h later, was refused with the stale copy — the login

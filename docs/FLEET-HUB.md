@@ -1467,6 +1467,10 @@ answers as soon as a report says they are over. `GET /v1/fleet/person-usage
 `fleet config people` prints it as two more columns (`⛔` = over). No budget
 set ⇒ nothing is ever refused; `FLEET_CRED_PROXY=0` ⇒ nothing is reported.
 
+Adding a NEW subscription is one command on a fleet machine (issue #2084):
+`fleet account add --provider claude|codex --label <name>` signs it in with the
+provider's own CLI into a private temp dir, runs the import below against it and
+deletes the copy — what the subscriptions page's 「加订阅」 gives.
 Importing: `bin/fleet-creds-import.sh` for Claude setup tokens,
 `bin/fleet-creds-import.sh --codex [profile]` for a Codex refresh token (reads
 `~/.codex/auth.json`, or the home a ccquota-registered profile name points at —

@@ -31,6 +31,9 @@
 #   fleet run claude|codex [args]
 #                               a session on THIS computer through its
 #                               credential proxy, no credential in it (#2136)
+#   fleet account add --provider claude|codex --label <name>
+#                               on a fleet machine: sign a new subscription in
+#                               and hand it to the hub, no copy kept (#2084)
 #   fleet cred-scan scan        counts what a session here can reach (#2136)
 #   fleet doctor                with only the client here: its `fleet` row
 #                               (version, hub, tmux, cert — #1722) and its
@@ -89,7 +92,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;

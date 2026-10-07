@@ -115,10 +115,11 @@ test('who is on which: live sessions named by their GitHub account, newest first
 // answers; the machine's put does.
 test('adding a subscription: the commands, then the wait ends when a fake machine delivers', () => {
   assert.ok(LABEL_RE.test('max-e') && !LABEL_RE.test('has space') && !LABEL_RE.test('.dot') && !LABEL_RE.test(''));
+  // one command per provider (claude-fleet#2084), nothing to save by hand
   const claude = addSubCommands('claude', 'max-e');
-  assert.deepEqual(claude.cmds, ['claude setup-token', '~/.claude/fleet/bin/fleet-creds-import.sh max-e']);
-  assert.match(claude.note, /accounts\/max-e/);
-  assert.deepEqual(addSubCommands('codex', 'cx2').cmds, ['CODEX_HOME=~/.codex-accounts/cx2 codex login', '~/.claude/fleet/bin/fleet-creds-import.sh --codex cx2']);
+  assert.deepEqual(claude.cmds, ['~/.claude/fleet/bin/fleet account add --provider claude --label max-e']);
+  assert.equal(claude.note, '');
+  assert.deepEqual(addSubCommands('codex', 'cx2'), { cmds: ['~/.claude/fleet/bin/fleet account add --provider codex --label cx2'], note: '' });
 
   const since = NOW;
   const audit = { audit: [
