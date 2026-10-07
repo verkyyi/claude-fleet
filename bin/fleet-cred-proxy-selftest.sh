@@ -264,7 +264,7 @@ CP mint --account a9 --sid s9 > "$SB/t9"; j=$(R /v1/messages "$(cat "$SB/t9")")
 [ "$(jf "$j" _status)" = 403 ] && pass "F no credential for the account → 403 (permanent, never 503)" || fail "F nocred: $j"
 
 # ── G: rails ─────────────────────────────────────────────────────────────────
-mode=$(stat -f %Lp "$FLEET_CONF_DIR/cred-proxy/ctl.sock" 2>/dev/null || stat -c %a "$FLEET_CONF_DIR/cred-proxy/ctl.sock")
+mode=$(stat -c %a "$FLEET_CONF_DIR/cred-proxy/ctl.sock" 2>/dev/null || stat -f %Lp "$FLEET_CONF_DIR/cred-proxy/ctl.sock")   # GNU first: GNU `stat -f` is filesystem status
 [ "$mode" = 600 ] && pass "G ctl.sock 0600" || fail "G ctl.sock mode $mode"
 if command -v lsof >/dev/null 2>&1; then
   l=$(lsof -nP -a -p "$PROXY_PID" -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}')
