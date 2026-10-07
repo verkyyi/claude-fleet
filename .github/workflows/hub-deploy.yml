@@ -7,7 +7,8 @@ name: hub-deploy
 # image, pushes it as `prod-<sha7>`, snapshots the database, starts the new
 # image with the real config on a copy of it (`ccquota hub --check`, issues
 # #2050 #2052), applies deploy/k8s/overlays/prod with that tag, waits for the
-# rollout and checks /healthz + /version on every address. A manual rollback =
+# rollout and checks /healthz + /version + the entry (/install, /version's
+# stable, login/start — issue #2060) on every address. A manual rollback =
 # `workflow_dispatch` with the old tag (no build; the snapshot step still runs).
 #
 # Nobody approves a run any more (issue #2013, 方案 B), so the job is its own
@@ -449,8 +450,10 @@ jobs:
           fi
 
       # The release is good only when every address answers /healthz = 200
-      # AND /version names this commit, within ~2 minutes each.
-      - name: Health check (/healthz + /version, every address)
+      # AND /version names this commit, within ~2 minutes each — and the entry
+      # people reach first is whole (issue #2060): /install 200 with `#!`,
+      # /version names stable, login/start is not 404.
+      - name: Health check (/healthz + /version + entry, every address)
         id: health
         run: .github/actions/hub-release/release.sh health "${{ steps.tag.outputs.commit }}"
 
