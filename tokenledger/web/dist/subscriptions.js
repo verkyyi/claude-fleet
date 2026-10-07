@@ -61,8 +61,8 @@ function addModal(ctx) {
   } else if (add.step === 1) {
     const { cmds, note } = addSubCommands(add.prov, add.label);
     const box = (c) => `<div class="cmdbox"><span>${esc(c)}</span><button class="btn sm" data-shell="copy" data-text="${esc(c)}" aria-label="${esc(t('ui.copy'))}">${ic('copy')}</button></div>`;
-    b = `<p>${esc(t('ui.sub.add.run'))}</p>` + box(cmds[0]) +
-      (note ? `<p style="font-size:12.5px;color:var(--muted)">${esc(note)}</p>` : '') + box(cmds[1]) +
+    b = `<p>${esc(t('ui.sub.add.run'))}</p>` + cmds.map(box).join('') +
+      (note ? `<p style="font-size:12.5px;color:var(--muted)">${esc(note)}</p>` : '') +
       `<p style="font-size:12.5px;color:var(--muted)">${esc(t('ui.sub.add.needs'))}</p>` +
       `<div class="waiting"><span class="spinner"></span>${esc(t('ui.sub.add.waiting'))}</div>`;
     f = `<button class="btn ghost" data-shell="close">${esc(t('ui.cancel'))}</button>`;

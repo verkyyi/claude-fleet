@@ -77,6 +77,9 @@
 #                          operator logs in again. inventory/choose/target-auth read
 #                          it as login=reauth_required (#1667)
 #   clear-reauth [label] — drop the mark for <label> (or all)
+#   add --provider claude|codex --label <name>
+#                        — sign a NEW subscription in and hand it to the hub's
+#                          vault, no local copy kept: fleet-account-add.sh (#2084)
 #   reauth-since <label> — epoch <label> was marked (0 = not marked)
 #   choose --agent claude|codex [--exclude KEY] [--spawn] — JSON decision
 #   reconcile --session S [--dry-run] — bounded per-session quota continuation
@@ -1747,6 +1750,7 @@ if [ "${BASH_SOURCE[0]:-}" = "${0}" ]; then
 case "${1:-active}" in
   inventory|choose|profile|check-target|target-auth|bench-codex|launch) account_adapter "$@" ;;
   reconcile) account_reconcile "$@" ;;
+  add)       shift; exec bash "$BIN/fleet-account-add.sh" "$@" ;;
   failover-status) account_reconcile status ;;
   _claude-inventory) shift; cmd_claude_inventory "$@" ;;
   active)        cmd_active ;;

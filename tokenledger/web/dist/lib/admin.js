@@ -211,12 +211,12 @@ export function switchRows(sw, cards) {
 export const LABEL_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/;
 
 /** addSubCommands is what to run on a fleet machine to hand the hub a new
- *  subscription: sign in with the provider's own CLI, then import it —
- *  { cmds, note }, the note saying where a Claude token goes in between. */
+ *  subscription — ONE command (claude-fleet#2084): `fleet account add` signs
+ *  in with the provider's own CLI, imports it and keeps no local copy.
+ *  { cmds, note }; the full path works on a machine whose PATH has no `fleet`. */
 export function addSubCommands(prov, label) {
-  const imp = '~/.claude/fleet/bin/fleet-creds-import.sh';
-  if (prov === 'codex') return { cmds: [`CODEX_HOME=~/.codex-accounts/${label} codex login`, `${imp} --codex ${label}`], note: '' };
-  return { cmds: ['claude setup-token', `${imp} ${label}`], note: t('ui.sub.add.saveAs', { file: `~/.config/claude-fleet/accounts/${label}` }) };
+  const p = prov === 'codex' ? 'codex' : 'claude';
+  return { cmds: [`~/.claude/fleet/bin/fleet account add --provider ${p} --label ${label}`], note: '' };
 }
 
 /** arrived is the credential audit's put that answers an add started at
