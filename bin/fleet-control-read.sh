@@ -9,8 +9,8 @@ sess="${2:-}"
 # WINDOW's (or the ledger's) business, never the fleet conf's FLEET_REPO — two
 # repos can both have an issue-12. A key may name its repo, `<repo>:issue-N`
 # (the #789 spelling; <repo> = owner/name, slug or bare name); a bare one is
-# resolved below and REFUSED when it matches more than one repo. A one-repo
-# fleet never enters these paths.
+# resolved below and REFUSED when it matches more than one repo — one rule
+# however many repos the fleet hosts (fleet_target_repo, issue #1938).
 key_repo_split() { # <key> → sets krepo (hosted owner/name, or empty) + kbare
   krepo=''; kbare=$1
   case "$1" in *:issue-*|*:scratch-*)
@@ -99,7 +99,7 @@ case "$mode" in
     # hosted repos can both have an issue-12, and since issue #1939 a one-repo
     # fleet's keys are `<slug>:issue-N` too — adding a second repo renames no
     # session. `?` = a window whose repo is unknown or @norepo — the controller
-    # never guesses one.
+    # never guesses one; a fleet hosting NO repo leaves it empty (bare keys).
     # Columns 10-11 (issue #1423): the window name and @origin_wid, for the other
     # machines' sidebars (a remote row's label, and which parent it nests under).
     # Column 12 (issue #1475): what the window needs of its person (@claude_needs:
@@ -116,7 +116,6 @@ case "$mode" in
     # merge, #921). Always present and always `busy=`-prefixed, so a window name
     # holding a tab can never pass for it.
     rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}$xfmt") || exit 1
-    # A fleet hosting NO repo keeps column 9 empty (bare keys): nothing to qualify with.
     unk='?'; [ -z "$(fleet_repos "$sess")" ] && unk=''
     rows=$(while IFS= read -r row; do
       [ -n "$row" ] || continue
@@ -159,17 +158,17 @@ case "$mode" in
     # top bar (#1904) show it instead of the window name's slug; empty for a
     # scratch, a no-repo window or an issue the cache does not hold (the reader
     # falls back to the name). Tabs inside a title become spaces: it is a column.
-    ttl=$'\n'; drepo=''
+    ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
-      [ -n "$drepo" ] || drepo=$_r
+      _nr=$((_nr + 1)); drepo=$_r
       _f="$FLEET_C/fleets/$(fleet_slug "$_r")/issues"
       [ -s "$_f" ] || continue
       ttl+=$(FR="$_r" awk -F'\t' '$2 ~ /^#[0-9]+$/ {
           t = $0; sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t); gsub(/[\t\r]/, " ", t)
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
-    fleet_multirepo "$sess" && drepo=''
+    [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
     cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load
     while IFS= read -r row; do
@@ -277,14 +276,17 @@ case "$mode" in
     agent="${4:-${FLEET_AGENT:-claude}}"
     [ -n "$agent" ] || agent="${FLEET_AGENT:-claude}"
     # $5 = which hosted repo issue $3 belongs to (issue #984): owner/name, slug
-    # or bare name. A fleet hosting 2+ repos REQUIRES it — two repos can both
-    # have an issue-12 — and an unknown/ambiguous one is refused (6) before any
-    # gate runs. A one-repo fleet with no $5 execs exactly as it always has.
+    # or bare name; an unknown/ambiguous one is refused (6) before any gate runs.
+    # No $5 → the fleet's only repo (fleet_target_repo, issue #1938) — a fleet
+    # hosting several refuses (6): two repos can both have an issue-12. The
+    # adapter acts for the hub, never for a pane, so the pane step is off.
     srepo=''
     if [ -n "${5:-}" ]; then
       srepo=$(fleet_repo_for_slug "$sess" "$5") || { printf 'start: %s is not a repo this fleet hosts\n' "$5" >&2; exit 6; }
-    elif fleet_multirepo "$sess"; then
-      printf 'start: this fleet hosts several repos; name the repo of %s\n' "$([ "${3:-}" = scratch ] && echo 'the scratch' || echo "#${3:-}")" >&2; exit 6
+    else
+      srepo=$( unset TMUX TMUX_PANE; fleet_target_repo "$sess" ) || {
+        [ $? = 4 ] && { printf 'start: this fleet hosts several repos; name the repo of %s\n' "$([ "${3:-}" = scratch ] && echo 'the scratch' || echo "#${3:-}")" >&2; exit 6; }
+        srepo=''; }
     fi
     bash "$BIN/fleet-diskguard.sh" --gate >&2 || exit 4
     if [ "$agent" = codex ]; then
@@ -330,29 +332,23 @@ case "$mode" in
     # the fleet has not opted into the bridge — a post would look delivered and
     # reach nobody (issue #489).
     fleet_load_conf "$sess"
-    repo=${FLEET_REPO:-}
-    if ! fleet_multirepo "$sess"; then
-      [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] || exit 5
-      # A one-repo fleet's key carries its repo too (issue #1939): `<slug>:issue-N`.
-      key_repo_split "${3:-}"; [ -n "$krepo" ] && repo=$krepo
-      set -- "$1" "$2" "${kbare#issue-}"
-    else
-      key_repo_split "${3:-}"; n=${kbare#issue-}
-      case "$n" in ''|*[!0-9]*) exit 2 ;; esac
-      if [ -n "$krepo" ]; then repo=$krepo
-      else
-        # a bare N: the repo of the live window(s) bound to it, when they agree;
-        # none, two repos, or an unknown repo (`#N`) → refuse, never a guess.
-        repo=$(fleet_bound_windows "$sess" | awk -F'\t' -v s="#$n" '
-          { k = $1; if (substr(k, length(k) - length(s) + 1) != s) next
-            r = substr(k, 1, length(k) - length(s)); if (!(r in seen)) { seen[r] = 1; c++; last = r } }
-          END { if (c == 1 && last != "") print last }')
-        [ -n "$repo" ] || { printf 'message: #%s is not live in exactly one repo; name it <repo>:issue-%s\n' "$n" "$n" >&2; exit 2; }
-      fi
-      # The bridge is switched per repo (issue #978): the target repo's own value.
-      [ "$(fleet_repo_conf_get "$sess" "$repo" FLEET_ISSUE_BRIDGE)" = 1 ] || exit 5
-      set -- "$1" "$2" "$n"
+    key_repo_split "${3:-}"; n=${kbare#issue-}
+    case "$n" in ''|*[!0-9]*) exit 2 ;; esac
+    # The repo (issue #1938, one rule): the key's own, else the fleet's only repo,
+    # else the repo of the live window(s) bound to a bare N when they agree; none,
+    # two repos, or an unknown repo (`#N`) → refuse, never a guess.
+    repo=$krepo
+    [ -n "$repo" ] || repo=$( unset TMUX TMUX_PANE; fleet_target_repo "$sess" ) || repo=''
+    if [ -z "$repo" ]; then
+      repo=$(fleet_bound_windows "$sess" | awk -F'\t' -v s="#$n" '
+        { k = $1; if (substr(k, length(k) - length(s) + 1) != s) next
+          r = substr(k, 1, length(k) - length(s)); if (!(r in seen)) { seen[r] = 1; c++; last = r } }
+        END { if (c == 1 && last != "") print last }')
+      [ -n "$repo" ] || { printf 'message: #%s is not live in exactly one repo; name it <repo>:issue-%s\n' "$n" "$n" >&2; exit 2; }
     fi
+    # The bridge is switched per repo (issue #978): the target repo's own value.
+    [ "$(fleet_repo_conf_get "$sess" "$repo" FLEET_ISSUE_BRIDGE)" = 1 ] || exit 5
+    set -- "$1" "$2" "$n"
     case "${3:-}" in ''|*[!0-9]*) exit 2 ;; esac
     exec bash "$BIN/fleet-comment.sh" "$3" --repo "$repo" --to-worker --from hub --body-file -
     ;;
@@ -376,14 +372,14 @@ case "$mode" in
   # gh <sess> issue|pr|checks <N> [<repo>] [<fields>] — fleet-gh.sh: the daemons'
   # local copy first, gh/REST only when it is too old. comment <sess> <N> [<repo>]
   # — body on stdin, record-only (--note), through the per-token write queue.
-  # <repo> must be one this fleet hosts; a 2+ repo fleet must name it (6).
+  # <repo> must be one this fleet hosts; with none, the fleet's only repo — a
+  # fleet hosting several must name it (6; fleet_target_repo, issue #1938).
   gh|comment)
     fleet_load_conf "$sess"
     if [ "$mode" = gh ]; then n=${4:-}; want=${5:-}; fields=${6:-}; else n=${3:-}; want=${4:-}; fi
     case "$n" in ''|*[!0-9]*) exit 2 ;; esac
     if [ -n "$want" ]; then repo=$(fleet_repo_for_slug "$sess" "$want") || exit 6
-    elif fleet_multirepo "$sess"; then exit 6
-    else repo=$(fleet_target_repo "$sess") || exit 6
+    else repo=$( unset TMUX TMUX_PANE; fleet_target_repo "$sess" ) || exit 6
     fi
     if [ "$mode" = comment ]; then
       exec bash "$BIN/fleet-comment.sh" "$n" --repo "$repo" --note --from hub --body-file -
@@ -483,13 +479,8 @@ case "$mode" in
     # dash-restore-session.sh (2 = at capacity). A resumed session is a real
     # session: it holds a slot and spends tokens like a start.
     fleet_load_conf "$sess"
-    rrepo=''; multi=0
-    if fleet_multirepo "$sess"; then
-      multi=1; key_repo_split "${3:-}"; rrepo=$krepo
-      set -- "$1" "$2" "$kbare"
-    else                      # `<slug>:issue-N` names the one repo too (issue #1939)
-      key_repo_split "${3:-}"; set -- "$1" "$2" "$kbare"
-    fi
+    key_repo_split "${3:-}"; rrepo=$krepo
+    set -- "$1" "$2" "$kbare"
     case "${3:-}" in
       issue-*)   rkey="${3#issue-}";  target="landed:issue:$rkey" ;;
       scratch-*) rkey="$3";           target="landed:scratch:$3" ;;
@@ -504,16 +495,9 @@ case "$mode" in
     else
       bash "$BIN/fleet-quotaguard.sh" --gate >&2 || exit 4
     fi
-    if [ "$multi" = 0 ]; then
-      verdict=$(bash "$BIN/fleet-history.sh" resume --repo "${FLEET_REPO:-}" --main "${FLEET_MAIN:-}" "$rkey" 2>/dev/null)
-      case "${verdict%%$'\t'*}" in
-        RESUME|CODEX-RESUME|FROM-PR) ;;
-        *) printf '%s\n' "${verdict:-no verdict}" >&2; exit 5 ;;
-      esac
-      exec bash "$BIN/dash-restore-session.sh" "$target" "$sess"
-    fi
-    # multi-repo: the key's own repo when it names one, else the ONE hosted repo
-    # whose ledger can resume it — two that can is ambiguous, and is refused.
+    # The key's own repo when it names one, else the ONE hosted repo whose ledger
+    # can resume it (issue #1938: the same walk however many repos the fleet
+    # hosts) — two that can is ambiguous, and is refused.
     hit=''; nhit=0
     while IFS= read -r r; do
       [ -n "$r" ] || continue
@@ -522,7 +506,10 @@ case "$mode" in
         bash "$BIN/fleet-history.sh" resume --repo "$r" --main "${FLEET_MAIN:-}" "$rkey" 2>/dev/null )
       case "${verdict%%$'\t'*}" in RESUME|CODEX-RESUME|FROM-PR) hit=$r; nhit=$((nhit+1)) ;; esac
     done < <(fleet_repos "$sess")
-    [ "$nhit" = 1 ] || { printf 'resume: %s is resumable in %s repos; name it <repo>:%s\n' "$3" "$nhit" "$3" >&2; exit 5; }
+    [ "$nhit" = 1 ] || {
+      if [ "$nhit" = 0 ]; then printf '%s\n' "${verdict:-no verdict}" >&2
+      else printf 'resume: %s is resumable in %s repos; name it <repo>:%s\n' "$3" "$nhit" "$3" >&2; fi
+      exit 5; }
     exec bash "$BIN/dash-restore-session.sh" "$target" "$sess" --repo "$hit"
     ;;
   *) printf 'unsupported control adapter action\n' >&2; exit 2 ;;

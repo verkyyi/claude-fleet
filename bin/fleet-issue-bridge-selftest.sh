@@ -119,9 +119,11 @@ case "\$1" in
     else
       printf 'a past user turn\n❯ some earlier prompt\n❯ %s\n  ████░░ 50%% status\n' "\$FAKE_INPUT_TEXT"
     fi ;;
-  display-message)  # cursor probe: FAKE_CURSOR is "x y" (empty ⇒ unresolvable, so
-                    # bridge_input_busy falls back to the faint-strip signal alone).
-    printf '%s\n' "\$FAKE_CURSOR" ;;
+  display-message)  # the window's repo (bridge_find_window matches the WINDOW's
+                    # repo, #1938); else the cursor probe: FAKE_CURSOR is "x y" (empty
+                    # ⇒ unresolvable, so bridge_input_busy falls back to the faint-strip
+                    # signal alone).
+    case "\$args" in *'@repo'*) printf 'fake/repo||\n' ;; *) printf '%s\n' "\$FAKE_CURSOR" ;; esac ;;
   set-buffer|paste-buffer|send-keys|delete-buffer)
     printf '%s\n' "\$args" >> "$INJECT" ;;
 esac
@@ -133,8 +135,8 @@ chmod +x "$WORK/fakepath/tmux"
 # fleet discoverable. FLEET_REPO="" (explicitly empty) OVERRIDES the ambient
 # FLEET_REPO in the conf-sourcing subshell, so bridge_state_subdir does NOT
 # resolve fake-repo→s1 — the bridge's per-fleet state (issue #181) therefore stays
-# on the legacy flat path this test asserts. (bridge_find_window still resolves the
-# window via the global FLEET_REPO env, which the resolver falls through to.)
+# on the legacy flat path this test asserts. (bridge_find_window resolves the
+# window by its own @repo, which the fake tmux answers.)
 printf 'FLEET_REPO=""\n' > "$WORK/conf/s1.conf"
 
 # --- canned comments (ascending updated_at) ------------------------------------

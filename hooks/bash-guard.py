@@ -1199,6 +1199,119 @@ def check_direct(script, tool, masked_cmd, cwd):
     sys.exit(2)
 
 
+# --- a session's client is the test identity (issue #1931, EPIC #1906 C12) ------
+#
+# A session that starts a REAL client — `fleet` / `fleet <machine>` / `fleet shell`
+# / fleet-shell.sh, here or through `ssh <host> …` — as the person takes the
+# person's one client lease: on 2026-10-06 a drill (#1901) did exactly that from m4
+# and the operator's MacBook dropped to its standby screen again and again. Inside
+# a session the client asks as the test identity by default (fleet-client-lease.py),
+# but the `fleet` on PATH may be an older install that does not, and over ssh the
+# session's environment does not travel — so a client start must SAY it:
+# `--test-identity` / FLEET_CLIENT_IDENTITY=test passes; FLEET_ALLOW_PERSON_CLIENT=1
+# is the hatch. The operator's hub pane (FLEET_HUB=1) and a person's shell are
+# never touched.
+_SSH_ARG_OPTS = set("bcDEeFIiJLlmOoPpQRSWw")
+_FLEET_NOT_CLIENT = {"-h", "--help", "help", "doctor"}
+
+
+def _client_start(toks, i):
+    """True when toks[i:] starts a client as the person; i is the command word."""
+    word = os.path.basename(toks[i].rstrip(")"))
+    rest = toks[i + 1:]
+    if word == "fleet-shell.sh":
+        return "--test-identity" not in rest
+    if word != "fleet":
+        return False
+    if rest and rest[0] == "--test-identity":
+        return False
+    sub = rest[0] if rest else ""
+    if sub in ("", "shell"):
+        return True
+    if sub.startswith("-") or sub in _FLEET_NOT_CLIENT:
+        return False
+    # a word naming a command this install has is a command (over ssh too: the
+    # remote install is not knowable here), any other word a machine
+    for r in _install_roots():
+        for ext in ("py", "sh"):
+            if os.path.exists(os.path.join(r, "bin", "fleet-%s.%s" % (sub, ext))):
+                return False
+    return True
+
+
+def _client_forms(orig_seg):
+    """(kind, assigned identity) for this statement: kind local / remote / None."""
+    try:
+        toks = shlex.split(orig_seg, comments=True)
+    except ValueError:
+        toks = orig_seg.split()
+    i, ident = 0, ""
+    while i < len(toks):
+        t = toks[i].lstrip("({!")
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", t)
+        if m:
+            if m.group(1) == "FLEET_CLIENT_IDENTITY":
+                ident = m.group(2).strip().lower()
+            i += 1
+            continue
+        if not t or t in _DIRECT_WRAPPERS or t in _DIRECT_KEYWORDS or (
+                t.startswith("-") and i > 0 and toks[i - 1] in _DIRECT_WRAPPERS):
+            i += 1
+            continue
+        break
+    if i >= len(toks):
+        return None, ident
+    toks[i] = toks[i].lstrip("({!")
+    if os.path.basename(toks[i]) in ("ssh", "autossh"):
+        j = i + 1
+        while j < len(toks) and toks[j].startswith("-"):
+            opt = toks[j]
+            j += 1
+            if len(opt) == 2 and opt[1] in _SSH_ARG_OPTS:
+                j += 1
+        j += 1                            # the host
+        if j >= len(toks):
+            return None, ident
+        rem = toks[j:]
+        if len(rem) == 1 and " " in rem[0]:
+            try:
+                rem = shlex.split(rem[0])
+            except ValueError:
+                rem = rem[0].split()
+        k = 0
+        while k < len(rem) and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", rem[k]) or rem[k] in _DIRECT_WRAPPERS):
+            if rem[k].startswith("FLEET_CLIENT_IDENTITY="):
+                ident = rem[k].split("=", 1)[1].strip().lower()
+            k += 1
+        if k < len(rem) and _client_start(rem, k):
+            return "remote", ident
+        return None, ident
+    if _client_start(toks, i):
+        return "local", ident
+    return None, ident
+
+
+def check_client_identity(orig_seg, masked_cmd, cwd):
+    if os.environ.get("FLEET_HUB", "").strip() == "1":
+        return
+    kind, ident = _client_forms(orig_seg)
+    if kind is None or ident == "test":
+        return
+    in_session = bool(os.environ.get("FLEET_WORKER_CRED", "").strip()) or \
+        _direct_seat(cwd)[0] == "worker"
+    if not in_session or _hatched(masked_cmd, "FLEET_ALLOW_PERSON_CLIENT"):
+        return
+    where = "over ssh (this session's environment does not travel)" if kind == "remote" \
+        else "without --test-identity"
+    sys.stderr.write(
+        "⛔ BLOCKED by ~/.claude/fleet/hooks/bash-guard.py: a session starts a real client %s — "
+        "it would take the person's one client lease and drop their screen to standby (issue #1931).\n"
+        "Run it as the test identity: `fleet --test-identity …` (or FLEET_CLIENT_IDENTITY=test), "
+        "or point it at a fake hub.\n"
+        "Truly the person's client, on purpose? Prefix FLEET_ALLOW_PERSON_CLIENT=1.\n" % where)
+    sys.exit(2)
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -1243,6 +1356,12 @@ def main():
             raise
         except Exception:
             pass                         # fail open, as every rail here
+        try:
+            check_client_identity(cmd[a:b], masked, cwd)
+        except SystemExit:
+            raise
+        except Exception:
+            pass                         # fail open
         try:
             hit = _direct_script(cmd[a:b], cwd)
             if hit:

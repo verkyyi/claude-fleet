@@ -405,8 +405,9 @@ if [ -n "$wD" ]; then
 else fail "(z) no one-repo #12 window"; fi
 chk z "a one-repo worker's bare comment lands on its repo" "$(cmt "$wD" 12)" "https://github.com/o/solo/issues/12#issuecomment-1"
 zrows=$(backlog "$D" | tail -n +2)
-[ -n "$zrows" ] && [ "$(printf '%s\n' "$zrows" | awk -F '\037' '{print NF}' | sort -u)" = 3 ] \
-  && ok "(z) one-repo backlog rows keep three fields" || fail "(z) one-repo backlog rows: $zrows"
+# One path however many repos (#1938): every row carries its repo, the 4th field.
+[ -n "$zrows" ] && [ "$(printf '%s\n' "$zrows" | awk -F '\037' '{print NF ":" $4}' | sort -u)" = 4:o/solo ] \
+  && ok "(z) one-repo backlog rows carry their repo, as in a 2-repo fleet" || fail "(z) one-repo backlog rows: $zrows"
 bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
 chk z "one-repo restore rows carry no repo column" "$(awk -F'\t' '$1=="WIN" && NF>15' "$FLEET_CONF_DIR/fleets/$D/restore.map" 2>/dev/null | wc -l | tr -d ' ')" 0
 [ -e "$FLEET_CONF_DIR/fleets/$D/repos" ] && fail "(z) the one-repo fleet grew a repos/ dir" || ok "(z) the one-repo fleet has no repos/ dir"

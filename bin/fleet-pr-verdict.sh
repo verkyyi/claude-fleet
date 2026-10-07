@@ -108,19 +108,21 @@ note() { [ "$quiet" = 1 ] || printf 'fleet-pr-verdict: %s\n' "$1" >&2; }
 
 # Repo resolution mirrors bin/fleet-comment.sh: an explicit --repo wins (an EMPTY
 # one is no repo — `--repo "$FLEET_REPO"` from a multi-repo pane), else $CF_REPO
-# (passed through a popup); in a fleet hosting 2+ repos the pane's window repo
-# (@repo, fleet_target_repo) or a refusal — the cached repo is whichever the dash
-# last picked, and reading it answered #N of ANOTHER repo (issue #1822); else this
-# fleet's cached repo, else the global FLEET_REPO.
+# (passed through a popup); else fleet_target_repo — the pane's window repo (@repo),
+# the fleet's only repo, or a refusal, the same however many repos it hosts (issue
+# #1938). Never the dash's cached repo: that is whichever the dash last picked, and
+# reading it answered #N of ANOTHER repo (issue #1822). Outside a fleet, FLEET_REPO.
 repo="${repo:-${CF_REPO:-}}"
 _sess=$(fleet_current_session 2>/dev/null)
-if [ -z "$repo" ] && fleet_multirepo "$_sess"; then
-  repo=$(fleet_target_repo "$_sess") || {
+if [ -z "$repo" ]; then
+  # ONE rule however many repos the fleet hosts (issue #1938): the pane's window
+  # repo, else the fleet's only repo, else a refusal — never the dash's cached repo
+  # (#1822/#1461). Outside any fleet, the global FLEET_REPO.
+  repo=$(fleet_target_repo "$_sess"); _rc=$?
+  [ "$_rc" = 4 ] && {
     printf 'fleet-pr-verdict: fleet %s hosts several repos and this pane has none — pass --repo (%s)\n' \
       "$_sess" "$(fleet_repos "$_sess" | tr '\n' ' ' | sed 's/ $//')" >&2; exit 2; }
-elif [ -z "$repo" ]; then
-  repo="${FLEET_REPO:-}"
-  _r=$(fleet_repo_cached "$_sess"); [ -n "$_r" ] && repo="$_r"
+  [ -n "$repo" ] || repo="${FLEET_REPO:-}"
 fi
 [ -z "$repo" ] && { printf 'fleet-pr-verdict: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 2; }
 command -v gh >/dev/null 2>&1 || { printf 'fleet-pr-verdict: gh not on PATH\n' >&2; exit 2; }

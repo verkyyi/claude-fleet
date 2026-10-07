@@ -348,6 +348,7 @@ func (s *Server) Handler() http.Handler {
 		// client — a certificate proven by a signed timestamp, like the
 		// session list, so it authenticates itself outside the viewer gate.
 		mux.HandleFunc(control.ClientPath, s.handleFleetClient)
+		mux.HandleFunc(ClientTestPath, s.handleFleetClient) // #1931
 		mux.HandleFunc(control.ClientPath+"/actions", s.handleFleetClientActions)
 		// Open a session from the client (claude-fleet#1777): the current
 		// lease, proven by its action key, asks the hub to open it.

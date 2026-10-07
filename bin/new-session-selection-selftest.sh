@@ -16,7 +16,8 @@
 #      resolvable → today's no-repo scratch.
 #   D. a stale current-repo file (the retired picker's filter, #1034): the selection
 #      still wins — there is no filtered view any more.
-#   E. DEGENERATE — a one-repo fleet: the selection is ignored, byte for byte.
+#   E. a one-repo fleet: the resolver runs the same rule (#1938); a spawn there
+#      lands in its only repo whatever the selection.
 #   F. the hub's ⌃s / ⌃n / Enter binds pass `{2}:{4}` — a session row's WINDOW
 #      ID (field 1 is its `sess:idx` jump target, which the resolver cannot read,
 #      issue #1010) + a heading's spawn target; ⌃n resolves the highlighted repo
@@ -165,7 +166,8 @@ eq "D: …and a beta row spawns in beta" "$(spawned "$S" --name d1 --selection "
 rm -f "$FLEET_CONF_DIR/fleets/$S/current-repo"
 
 # ==== E. degenerate: one repo =======================================================
-eq "E: one-repo fleet — the resolver says nothing" "$(fleet_selection_repo "$D" hdr:o/solo)" ""
+eq "E: one-repo fleet — its heading names its repo, as in a 2-repo fleet (#1938)" "$(fleet_selection_repo "$D" hdr:o/solo)" o/solo
+eq "E: one-repo fleet — an unhosted heading names nothing" "$(fleet_selection_repo "$D" hdr:o/beta)" ""
 eq "E: one-repo fleet — a selection changes nothing" \
    "$(spawned "$D" --name e1 --selection hdr:o/beta)" "$(spawned "$D" --name e2)"
 

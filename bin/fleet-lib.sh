@@ -837,19 +837,18 @@ EOF
 # file on disk is read by nothing and deleted by fleet-up.sh.
 
 # fleet_selection_repo <sess> <row-id> → where a session started FROM the highlighted
-# row goes (issues #1009/#997): only in a 2+ repo fleet. <row-id> is a
+# row goes (issues #1009/#997) — however many repos the fleet hosts (#1938). <row-id> is a
 # window (`@12` — its repo via fleet_window_repo, never a guess; `none` for a
 # deliberate `@norepo 1` window) or a repo heading, `hdr:<owner/name>` (a hosted
 # repo) or `hdr:none` (the `no repo` group). A trailing `:<anything>` after a window
 # id is ignored, so a caller may always send `<id>:<heading-repo>` (the hub's id is
 # fzf field 2 — field 1 is the `sess:idx` jump target, issue #1010). Prints the repo,
-# `none` (start in $HOME, --no-repo), or NOTHING — a one-repo fleet, an unknown
-# window, the `?` heading, a landed row — and the caller keeps today's behavior.
+# `none` (start in $HOME, --no-repo), or NOTHING — an unknown window, the `?`
+# heading, a landed row — and the caller keeps today's behavior.
 # The one resolver the sidebar and hub share.
 fleet_selection_repo() {
   local sess="${1:-}" id="${2:-}" r
   [ -n "$id" ] || return 0
-  fleet_multirepo "$sess" || return 0
   case "$id" in
     hdr:none) r=none ;;
     hdr:?*/?*) r=$(fleet_norm_repo "${id#hdr:}"); fleet_repo_hosted "$sess" "$r" || r='' ;;
@@ -998,23 +997,20 @@ EOF
 
 # ---- the backlog for any repo (issue #794) ----------------------------------
 # The backlog (tmux-issues.sh + its rows producer, preview and row actions) reads
-# every hosted repo's issues in a 2+ repo fleet, each row carrying its repo. A
-# one-repo fleet never enters any helper's multi branch: its backlog keeps the
-# per-session cache and repo chain it always had.
+# every hosted repo's issues, each row carrying its repo — one path however many
+# repos the fleet hosts (issue #1938).
 
-# fleet_backlog_repos <sess> → the repos the backlog lists, one per line: NOTHING in
-# a one-repo fleet (the caller keeps today's path), every hosted repo (fleet_repos
-# order) otherwise.
+# fleet_backlog_repos <sess> → the repos the backlog lists, one per line: every
+# hosted repo (fleet_repos order).
 fleet_backlog_repos() {
-  fleet_multirepo "${1:-}" || return 0
-  fleet_repos "$1"
+  fleet_repos "${1:-}"
 }
 
 # fleet_backlog_cache <base> <sess> <repo> → the runtime cache file <base>
 # (issues / labels / parents) the backlog reads for <repo>: that repo's own
-# fleets/<slug>/ dir in a 2+ repo fleet, else fleet_cache's per-session file.
+# fleets/<slug>/ dir; with no <repo>, fleet_cache's per-session file.
 fleet_backlog_cache() {
-  if [ -n "${3:-}" ] && fleet_multirepo "${2:-}"; then
+  if [ -n "${3:-}" ]; then
     printf '%s/%s' "$(fleet_cache_dir "$(fleet_slug "$(fleet_norm_repo "$3")")")" "${1:-}"
   else
     fleet_cache "${1:-}" "${2:-}"
@@ -1022,24 +1018,16 @@ fleet_backlog_cache() {
 }
 
 # fleet_backlog_repo <sess> [<row-repo>] → the repo a backlog action targets, or
-# NOTHING (the caller refuses) — never a guess:
-#   2+ repos: the row's repo (must be hosted), else $CF_REPO (carried through a
-#             popup), else nothing (a new issue asks — fleet-repo-ask.sh);
-#   one repo: the historic chain — $CF_REPO, else the sessmap's, else FLEET_REPO.
+# NOTHING (the caller refuses, or a new issue asks — fleet-repo-ask.sh) — never a
+# guess. fleet_target_repo's one rule (issue #1938): the row's repo, else $CF_REPO
+# (carried through a popup) — either must be hosted — else the caller pane's own
+# repo, else the fleet's only repo.
 fleet_backlog_repo() {
-  local sess="${1:-}" r c
+  local sess="${1:-}" r
   r=$(fleet_norm_repo "${2:-}")
-  if fleet_multirepo "$sess"; then
-    if [ -n "$r" ]; then fleet_repo_hosted "$sess" "$r" && printf '%s' "$r"; return 0; fi
-    if [ -n "${CF_REPO:-}" ]; then
-      r=$(fleet_norm_repo "$CF_REPO"); fleet_repo_hosted "$sess" "$r" && printf '%s' "$r"; return 0
-    fi
-    return 0
-  fi
-  r="${FLEET_REPO:-}"
-  [ -n "$sess" ] && c=$(fleet_repo_cached "$sess") && [ -n "$c" ] && r=$c
-  [ -n "${CF_REPO:-}" ] && r=$CF_REPO
-  printf '%s' "$r"
+  [ -n "$r" ] || r=$(fleet_norm_repo "${CF_REPO:-}")
+  r=$(fleet_target_repo "$sess" "$r" 2>/dev/null) && printf '%s' "$r"
+  return 0
 }
 
 # ---- (repo, issue) identity (issue #790) -------------------------------------
@@ -1059,33 +1047,31 @@ fleet_multirepo() {
 }
 
 # fleet_target_repo <sess> [<repo>] → the ONE repo a repo-wide command (the EPIC
-# trio, fleet-epic-preflight.sh, fleet-evidence.sh; issue #803) acts on:
+# trio, fleet-epic-preflight.sh, fleet-evidence.sh, the PR / comment wrappers;
+# issues #803, #1938) acts on — ONE rule, however many repos the fleet hosts:
 #   1. <repo>, when given — it must be hosted (exit 1 otherwise);
-#   2. a one-repo fleet: its repo (FLEET_REPO, else the collector's cached one);
-#   3. the caller pane's own window repo (a worker, a scratch bound to a repo);
+#   2. the caller pane's own window repo (a worker, a scratch bound to a repo);
+#   3. the fleet's only repo, when fleet_repos counts exactly one (a conf with no
+#      FLEET_REPO line falls back to the collector's cached repo);
 #   4. else exit 4 — AMBIGUOUS: the caller ASKS (fleet_repos lists the choices),
 #      never guesses. Exit 1 = <repo> not hosted / nothing resolvable.
-# Degenerate (no repos/ overlay): 1 → the conf's own repo, unvalidated, as before.
 fleet_target_repo() {
-  local sess="${1:-}" want r
+  local sess="${1:-}" want r all
   want=$(fleet_norm_repo "${2:-}")
-  if ! fleet_multirepo "$sess"; then
-    r=$( fleet_load_conf "$sess" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-    [ -n "$r" ] || r=$(fleet_repo_cached "$sess" 2>/dev/null)
-    r=$(fleet_norm_repo "$r")
-    printf '%s\n' "${want:-$r}"
-    [ -n "${want:-$r}" ]; return
-  fi
+  all=$(fleet_repos "$sess")
+  [ -n "$all" ] || all=$(fleet_norm_repo "$(fleet_repo_cached "$sess" 2>/dev/null)")
   if [ -n "$want" ]; then
-    fleet_repo_hosted "$sess" "$want" || return 1
+    printf '%s\n' "$all" | grep -qxF "$want" || return 1
     printf '%s\n' "$want"; return 0
   fi
   if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
      && [ "$(tmux display-message -p -t "$TMUX_PANE" "$FLEET_SESSION_FMT" 2>/dev/null)" = "$sess" ]; then
     r=$(fleet_norm_repo "$(fleet_window_repo "$sess" "$TMUX_PANE")")
-    if [ -n "$r" ] && fleet_repo_hosted "$sess" "$r"; then printf '%s\n' "$r"; return 0; fi
+    if [ -n "$r" ] && printf '%s\n' "$all" | grep -qxF "$r"; then printf '%s\n' "$r"; return 0; fi
   fi
-  return 4
+  [ -n "$all" ] || return 1
+  [ "$(printf '%s\n' "$all" | grep -c .)" = 1 ] || return 4
+  printf '%s\n' "$all"; return 0
 }
 
 # fleet_issue_key <sess> <repo> <N> → the join key for issue N of <repo>:

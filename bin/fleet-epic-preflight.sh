@@ -86,8 +86,8 @@ fail() { printf '  %sFAIL%s  %-9s %s\n' "$R" "$Z" "$1" "$2"; fails=$((fails+1));
 note() { printf '        %s\n' "$1"; }
 
 # --- which fleet, which repo --------------------------------------------------
-# Repo resolution mirrors fleet-pr-verdict.sh / fleet-issue-file.sh: an explicit
-# --repo wins, then the conf's FLEET_REPO, then this fleet's cached repo.
+# Repo resolution: fleet_target_repo below (issue #1938); outside a fleet, an
+# explicit --repo, then the conf's FLEET_REPO, then this fleet's cached repo.
 sess="${sess_arg:-$(fleet_current_session)}"
 if [ -n "$sess_arg" ] && [ ! -f "$(fleet_conf_file "$sess_arg")" ]; then
   printf 'fleet-epic-preflight: no conf for fleet "%s" (%s) — name it exactly as fleet-up.sh created it\n' \
@@ -100,25 +100,23 @@ repo="${repo_arg:-$conf_repo}"
 if [ -z "$repo" ]; then
   _r=$(fleet_repo_cached "$sess" 2>/dev/null); [ -n "$_r" ] && repo="$_r"
 fi
-# A fleet hosting 2+ repos (issue #803): the target is one of THEM, and the fleet
-# rows below (base, deploy) must be that repo's — so load its overlay, not the conf
-# repo's. No --repo resolves like every repo-wide command (fleet_target_repo): the
-# pane's own repo; else (the dash is always `all`, #1034) it refuses and lists
-# the choices, so the skill asks instead of this screen silently probing repo A.
-# A --repo the fleet does NOT host keeps the one-repo override below (repo rows
-# only, noted). A one-repo fleet never enters this block.
-if fleet_multirepo "$sess"; then
-  _t=$(fleet_target_repo "$sess" "$repo_arg"); _rc=$?
-  if [ "$_rc" = 0 ] && [ -n "$_t" ]; then
-    repo="$_t"; fleet_load_repo_conf "$sess" "$repo"; conf_repo="${FLEET_REPO:-$repo}"
-    hint_repo="$repo"   # the --fix rerun must name it: another pane has another repo
-  elif [ -z "$repo_arg" ]; then
-    printf 'fleet-epic-preflight: fleet %s hosts several repos — pass --repo, one of:\n' "$sess" >&2
-    fleet_repos "$sess" | sed 's/^/  /' >&2
-    exit 2
-  fi
-  unset _t _rc
+# The target is one of the fleet's repos (issue #803), and the fleet rows below
+# (base, deploy) must be that repo's — so load its overlay, not the conf repo's.
+# ONE rule however many repos the fleet hosts (fleet_target_repo, issue #1938): a
+# hosted --repo, else the pane's own repo, else the fleet's only repo; else (the
+# dash is always `all`, #1034) it refuses and lists the choices, so the skill asks
+# instead of this screen silently probing repo A. A --repo the fleet does NOT host
+# keeps the override below (repo rows only, noted).
+_t=$(fleet_target_repo "$sess" "$repo_arg"); _rc=$?
+if [ "$_rc" = 0 ] && [ -n "$_t" ]; then
+  repo="$_t"; fleet_load_repo_conf "$sess" "$repo"; conf_repo="${FLEET_REPO:-$repo}"
+  hint_repo="$repo"   # the --fix rerun must name it: another pane has another repo
+elif [ "$_rc" = 4 ]; then
+  printf 'fleet-epic-preflight: fleet %s hosts several repos — pass --repo, one of:\n' "$sess" >&2
+  fleet_repos "$sess" | sed 's/^/  /' >&2
+  exit 2
 fi
+unset _t _rc
 [ -n "$repo" ] || {
   printf 'fleet-epic-preflight: no repo resolved (pass --repo or --session, or run inside a fleet)\n' >&2; exit 2; }
 

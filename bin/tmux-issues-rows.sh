@@ -101,8 +101,11 @@ render_src() {
   [ -s "$src" ] || return 0
   loaded=1
   MS_LIST=$(LC_ALL=C cut -f1 "$src" | LC_ALL=C grep -vxF "$NOMS" | LC_ALL=C sort -Vu)
+  # A bare `N` key is the fleet's ONLY repo's (fleet_issue_key spells one-repo
+  # keys bare until #1939) — it only occurs when this block's repo is that one.
   [ -n "$repo" ] && ACTIVE=$(printf '%s\n' "$BOUND" \
-    | awk -F'\t' -v p="$repo#" 'index($1, p)==1 { print substr($1, length(p)+1) "\t" $3 }')
+    | awk -F'\t' -v p="$repo#" 'index($1, p)==1 { print substr($1, length(p)+1) "\t" $3; next }
+                                $1 ~ /^[0-9]+$/ { print $1 "\t" $3 }')
 
   # priority per issue: read the collector's labels cache (num<TAB>comma-labels — the
   # SAME fetch the backlog uses, no extra gh call) and map the priority:p{0,1,2} label
