@@ -72,7 +72,7 @@ eq "E TTL 0 reads again" "$WARN ⌂ MacBook $TAIL" "$(TTL=0 FLEET_CLIENT_WHERE_C
 
 # --- F. wiring -----------------------------------------------------------------------
 eq "F status-left runs the badge" '1' \
-  "$(grep -c '^set -g status-left "#(bash __BIN__/fleet-client-badge.sh cw=#{client_width})"$' "$ROOT/conf/tmux-shell.conf")"
+  "$(grep -c '^set -g status-left "#(bash __BIN__/fleet-client-badge.sh cw=#{client_width})' "$ROOT/conf/tmux-shell.conf")"
 eq "F the badge rides the client package" '1' \
   "$(grep -cx 'bin/fleet-client-badge.sh' "$ROOT/tokenledger/internal/api/fleetclient/manifest")"
 # ⌂ is the client's place and nothing else on a bar: the node's bar and the

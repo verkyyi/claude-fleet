@@ -62,15 +62,20 @@ has()  { CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) : ;; *) fail "$1" "$2";; esa
 hasnt(){ CHECKS=$((CHECKS+1)); case "$2" in *"$3"*) fail "$1" "$2";; *) : ;; esac; }
 
 # ============================ STAMP =========================================
-# Shim: record every set-window-option; answer display-message with nothing (so the
-# auto-handoff nudge stays off — it needs a numeric @ctx_pct it will never get).
+# Shim: record every set-window-option — one line each, also when several ride one
+# call split by `;` (@claude_needs and @claude_needs_detail do, issue #1951); answer
+# display-message with nothing (so the auto-handoff nudge stays off — it needs a
+# numeric @ctx_pct it will never get).
 SETLOG="$WORK/setopts"
 cat > "$WORK/bin/tmux" <<SHIM
 #!/bin/sh
-case "\${1:-}" in
-  set-window-option) shift; printf '%s\n' "\$*" >> "$SETLOG" ;;
-  *) : ;;
-esac
+line='' on=0
+for a in "\$@"; do
+  if [ "\$a" = ';' ]; then [ "\$on" = 1 ] && printf '%s\n' "\$line" >> "$SETLOG"; line='' on=0; continue; fi
+  if [ "\$on" = 0 ] && [ -z "\$line" ]; then [ "\$a" = set-window-option ] && on=1; line=' '; continue; fi
+  if [ "\$line" = ' ' ]; then line=\$a; else line="\$line \$a"; fi
+done
+[ "\$on" = 1 ] && printf '%s\n' "\$line" >> "$SETLOG"
 exit 0
 SHIM
 chmod +x "$WORK/bin/tmux"

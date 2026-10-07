@@ -1563,6 +1563,32 @@ def hint_line(row, width, info=False):
     return None
 
 
+def bar_hint(rows, selected, current, width):
+    """What the client's bar reads off the list (issue #1951, EPIC #1949 C2), as
+    (view, name): view `portal` while the writing area (「新任务」, issue #1953) is
+    in the right pane — the bar then says ITS keys — else ""; name = the
+    highlighted row's whole name when the list clipped it (hint_line, issue
+    #1328 — the `?` row's old job), else "". A literal for tmux: `#` doubled."""
+    view = "portal" if current == PORTAL_KEY else ""
+    row = next((r for r in rows if r and r[0] != "hdr" and r[0] == selected), None)
+    name = (hint_line(row, width) or "").strip()
+    return view, name.replace("#", "##")
+
+
+def publish_hint(window, hint, last):
+    """`@fleet_view` / `@fleet_hint_name` on the list's window — the bar's
+    format reads them (conf/tmux-shell.conf @fleet_hint) — only on change."""
+    if hint == last or not window:
+        return last
+    view, name = hint
+    cmds = []
+    for opt, val in (("@fleet_view", view), ("@fleet_hint_name", name)):
+        cmds += (["set-option", "-w", "-t", window, opt, val] if val else
+                 ["set-option", "-uw", "-t", window, opt]) + [";"]
+    tmux(*cmds[:-1])
+    return hint
+
+
 def say(session, text, secs=None):
     """What the list has to say, on the BAR of every client looking at it (issue
     #1950): a refusal's reason, 「正在 m5 上开…」 — tmux's display-message, so
@@ -2197,6 +2223,7 @@ def ui(screen, session, worker, lock):
     published = None  # the (window, candidates) last written to @sidebar_next
     switch_rows = None  # the switch-rows.tsv last written (issue #1903)
     bar_gen = None  # the stage top line's record last published (issue #1904)
+    hint_last = None  # the bar's (view, name) last written (issue #1951)
     switch_visit(current_row)
     # The row producer in flight (issue #1033), and whether any run has landed:
     # only the FIRST frame waits for one — every later frame paints the last
@@ -2663,6 +2690,11 @@ def ui(screen, session, worker, lock):
         offset = max(0, min(offset, max(0, len(rows) - page)))
         if index == 0:
             where = 0  # the top row keeps the heading above it in view
+        # The client's bar says the keys of where you are (issue #1951): which
+        # view is in the right pane, and the highlighted row's whole name when
+        # the list clipped it — written only when it changes.
+        if view == "live":
+            hint_last = publish_hint(window, bar_hint(rows, selected, current_row, width), hint_last)
         if where < offset:
             offset = where
         elif where >= offset + page:

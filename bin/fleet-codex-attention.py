@@ -22,6 +22,7 @@ import time
 BIN = Path(__file__).absolute().parent
 session = runpy.run_path(str(BIN / 'fleet-codex-session.py'))
 Client = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
+needs_detail = runpy.run_path(str(BIN / 'fleet_needs_detail.py'))['detail']
 QUESTION = 'item/tool/requestUserInput'
 PERMISSIONS = {'item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval', 'mcpServer/elicitation/request'}
 
@@ -105,6 +106,28 @@ class Pending:
                 and p.get('requestId') == self.request['id'])
 
 
+def request_detail(data, subtype):
+    """What the pending request asks, in its own words (issue #1951): the
+    request_user_input question, an approval's command — the one rule
+    (fleet_needs_detail.py) Claude's needs use too. '' when it cannot be read: a
+    missing detail never costs the state."""
+    try:
+        pending = Pending(data, subtype)
+    except Exception:
+        return ''
+    try:
+        req = pending.request or {}
+        params = req.get('params') or {}
+        tool = '' if req.get('method') == QUESTION else {
+            'item/commandExecution/requestApproval': 'Bash', 'item/fileChange/requestApproval': 'Edit',
+            'mcpServer/elicitation/request': 'MCP'}.get(req.get('method'), 'Permission')
+        return needs_detail(tool, params)
+    except Exception:
+        return ''
+    finally:
+        pending.close()
+
+
 def answers(request, picks):
     qs = request['params'].get('questions', [])
     if len(qs) != len(picks): raise ValueError('provide one answer per question')
@@ -181,10 +204,12 @@ class Monitor:
             if subtype:
                 if (state, why, before) == ('needs', subtype, subtype): return
                 values = {'@claude_state':'needs','@claude_needs':subtype,'@codex_attention':subtype,
+                          '@claude_needs_detail':request_detail(data, subtype),
                           '@claude_state_ts':str(int(time.time()))}
             elif before and why == before and state == 'needs' and thread.get('status', {}).get('type') in ('active','idle'):
                 values = {'@claude_state':'working' if thread['status']['type']=='active' else 'done',
-                          '@claude_needs':'','@codex_attention':'','@claude_state_ts':str(int(time.time()))}
+                          '@claude_needs':'','@claude_needs_detail':'','@codex_attention':'',
+                          '@claude_state_ts':str(int(time.time()))}
             elif before:
                 values = {'@codex_attention':''}
             else: return

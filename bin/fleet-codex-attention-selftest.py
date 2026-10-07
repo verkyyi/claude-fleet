@@ -122,8 +122,11 @@ class Attention(unittest.TestCase):
             f=Fake();mon=a.Monitor(DATA['remote'],{'TMUX_PANE':'%0','FLEET_CODEX_LAUNCHER_PID':'123'})
             with patch.dict(a.session,tmux=lambda args:call(*args)),patch.object(a,'Client',return_value=f):
                 mon.tick();self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'needs/ask')
+                # the question's own words, as Claude's needs carry them (#1951)
+                self.assertEqual(call('display-message','-p','#{@claude_needs_detail}'),'继续？')
                 f.state='idle';mon.next_at=0;mon.tick()
                 self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'done/')
+                self.assertEqual(call('display-message','-p','#{@claude_needs_detail}'),'')
                 opt('@codex_attention','ask');opt('@claude_state','needs');opt('@claude_needs','blocked')
                 mon.next_at=0;mon.tick()
                 self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'needs/blocked')

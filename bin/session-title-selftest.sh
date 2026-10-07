@@ -71,8 +71,18 @@ if [ -n "$REAL_TMUX" ]; then
   eq "A: an issue the cache does not hold → empty" "title=" "$(col17 "$out" uncached)"
   eq "A: a scratch → empty" "title=" "$(col17 "$out" draft)"
   # column 18 is the reap policy (issue #1902): 16 before the title as they were
-  eq "A: column 17, then the reap column 18; 16 before it as they were" "16 reap=" \
-     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 2, $18 }')"
+  # column 19 is the question a `needs` session asks (issue #1951), empty otherwise
+  eq "A: column 17, the reap column 18, the detail column 19; 16 before it as they were" "16 reap= detail=" \
+     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 3, $18, $19 }')"
+  T set-option -w -t "=$S:uncached" @claude_state needs
+  T set-option -w -t "=$S:uncached" @claude_needs_detail '演练放在 m5 还是只在 m4？'
+  T set-option -w -t "=$S:draft" @claude_needs_detail 'a stale question'
+  out1=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
+  eq "A: a needs session carries its question (column 19, #1951)" "detail=演练放在 m5 还是只在 m4？" \
+     "$(printf '%s\n' "$out1" | awk -F'\t' '$10 == "uncached" { print $19 }')"
+  eq "A: not in needs → no question, whatever the option says" "detail=" \
+     "$(printf '%s\n' "$out1" | awk -F'\t' '$10 == "draft" { print $19 }')"
+  T set-option -wu -t "=$S:uncached" @claude_state
   eq "A: every other column is unchanged by the cache" \
      "$(printf '%s\n' "$out0" | awk -F'\t' '{ $17 = ""; print }' OFS='\t' | sort)" \
      "$(printf '%s\n' "$out" | awk -F'\t' '{ $17 = ""; print }' OFS='\t' | sort)"
@@ -100,6 +110,13 @@ assert (p0, x0) == (p, {k: v for k, v in x.items() if k != "title"}), (x0, x)
 # a name that happens to start with `title=` in a short row is still the name
 p, x = inventory_row(base[:9] + ["title=x"])
 assert x["name"] == "title=x" and "title" not in x, x
+# column 19 (issue #1951): the question a needs session asks; empty = None
+p, x = inventory_row(base + tail + ["title=t", "reap=", "detail=演练放在 m5 还是只在 m4？"])
+assert x["detail"] == "演练放在 m5 还是只在 m4？" and x["title"] == "t" and x["reap"] is None, x
+p, x = inventory_row(base + tail + ["title=t", "reap=keep", "detail="])
+assert x["detail"] is None and x["reap"] == "keep", x
+p, x = inventory_row(base + tail + ["title=t", "reap=keep"])
+assert "detail" not in x, x
 print("ok")
 PY
 )
@@ -120,7 +137,10 @@ def s(key, **w):
                 fleet_name="x", availability="online", worker=w, observed_at="2026-10-06T10:00:00Z")
 sessions = [s("issue-21", issue=21, name="slug-of-21", title="远程的 issue 标题"),
             s("issue-22", issue=22, name="slug-of-22", title=None),
-            s("issue-23", issue=23, name="slug-of-23")]
+            s("issue-23", issue=23, name="slug-of-23"),
+            s("issue-24", issue=24, name="slug-of-24", state="needs", needs="ask", detail="演练放在 m5 还是只在 m4？"),
+            s("scratch-5", name="scratch-5", state="needs", needs="perm", detail="Bash: git push"),
+            s("issue-25", issue=25, name="slug-of-25", state="failed")]
 nodes = [dict(machine_name="mini2.local", availability="online", sessions=3, observed_at="2026-10-06T10:00:00Z", age_sec=3)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
@@ -132,6 +152,11 @@ crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { p
 eq "C: a titled worker's row ends in field 17 = the title" "17|远程的 issue 标题" "$(crow issue-21)"
 eq "C: a null title keeps the row's 16 fields" "16|" "$(crow issue-22)"
 eq "C: no title key keeps the row's 16 fields" "16|" "$(crow issue-23)"
+# who waits on you and what they ask (issue #1951): needs_<sess> beside the cache
+eq "C: needs_<sess> lists the needs / failed sessions with their question" \
+   "$F/issue-24${US}#24${US}ask${US}m4${US}演练放在 m5 还是只在 m4？
+$F/scratch-5${US}scratch-5${US}perm${US}m4${US}Bash: git push
+$F/issue-25${US}#25${US}failed${US}m4${US}" "$(cat "$G/needs_$S" 2>/dev/null)"
 
 # ============================================================================
 # D. sidebar — field 14

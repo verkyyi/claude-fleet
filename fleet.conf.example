@@ -1390,6 +1390,18 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Task sidebar max auto width @group=status @tier=internal @scope=global @edit=int @unit=columns
 #FLEET_SIDEBAR_WIDTH_MAX=44
 
+# The client's macOS notification when a session newly waits on you (issue
+# #1951): the title says who, the body what it asks, a click goes there. Once per
+# wait (deduped by the alert id); 0 = no notification (the bar's 「! n 等你」 stays).
+# @label=Notify when a session asks you @group=status @tier=internal @scope=global @edit=bool
+#FLEET_NOTIFY=1
+
+# A notification whose notifier cannot run a click (osascript, iTerm2's OSC 9)
+# only brings the terminal forward; that focus-in jumps to the session if it
+# comes within this many seconds. 0 = never jump on focus.
+# @label=Notification click window @group=status @tier=internal @scope=global @edit=int @unit=seconds
+#FLEET_NOTIFY_JUMP_SECS=60
+
 # Closing the task you are on (reap, exit, kill) lands on its NEIGHBOUR in the
 # task sidebar — the next row, or the previous one when it was the last — instead
 # of tmux's pick, which is usually the hub (issue #900). A sleeping task is
