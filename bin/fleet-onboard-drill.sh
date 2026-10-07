@@ -505,11 +505,7 @@ else: print("gone")' "$FPR" 2>/dev/null)
     esac
   fi
   if [ -z "$left" ]; then
-<<<<<<< HEAD
-    pass residue "none: no login, no home, no process, no access-group entry$([ -n "$FPR" ] && printf ', device revoked')$([ -n "$INVITE" ] && printf ', no drill person on the hub')"
-=======
-    pass residue "none: no login, no home, no process, no access-group entry$([ -n "$FPR" ] && [ -n "$VIEWER" ] && printf ', device revoked')"
->>>>>>> aa493297 (演练终跑修补：测试身份、问答不重复回车、扫码过期不算过、轮询遇 5xx 接着等 (#1901))
+    pass residue "none: no login, no home, no process, no access-group entry$([ -n "$FPR" ] && [ -n "$VIEWER" ] && printf ', device revoked')$([ -n "$INVITE" ] && printf ', no drill person on the hub')"
   else
     failstep residue "left behind:$left"
     return 1
