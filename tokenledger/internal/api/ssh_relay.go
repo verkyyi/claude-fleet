@@ -632,9 +632,11 @@ func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce, namespace string,
 		return bad("not signed by this hub")
 	}
 	checker := ssh.CertChecker{Clock: func() time.Time { return now }}
+	// Only the scheme is cut: a GitHub person's id is itself "gh:<id>", so
+	// "wecom:gh:123" names gh:123 (claude-fleet#2010), never 123.
 	pid := cert.KeyId
-	if i := strings.LastIndex(pid, ":"); i >= 0 {
-		pid = pid[i+1:]
+	if scheme, rest, ok := strings.Cut(pid, ":"); ok && scheme != githubPrincipalPrefix[:len(githubPrincipalPrefix)-1] {
+		pid = rest
 	}
 	p, err := s.Store.Principal(pid)
 	if err != nil {

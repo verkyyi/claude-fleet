@@ -390,6 +390,12 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/fleet/login/start", s.handleDeviceStart)
 		mux.HandleFunc("/v1/fleet/login/poll", s.handleDevicePoll)
 		mux.Handle("/fleet/login", s.rememberLoginCode(s.viewerOnly(http.HandlerFunc(s.handleFleetLoginPage))))
+		// Drill people (claude-fleet#2010): an approve code confirms a scan
+		// as the drill person — it is the whole credential, so outside the
+		// viewer gate; the invite authenticates itself (cert or gate).
+		mux.HandleFunc(LoginApprovePath, s.handleLoginApprove)
+		mux.HandleFunc(DrillPath, s.handleAdminDrill)
+		mux.HandleFunc(DrillSelfPath, s.handleSelf)
 		mux.Handle("/connect", s.viewerOnly(http.HandlerFunc(s.serveConnectPage)))
 		// Registered devices (claude-fleet#1470): a renewal is proven by the
 		// device's own key, so it authenticates itself, outside the viewer
