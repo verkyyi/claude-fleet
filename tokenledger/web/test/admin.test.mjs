@@ -84,6 +84,7 @@ test('the credential line says what is wrong with it', () => {
   useLocale('en');
   assert.equal(credState(null).tone, 'warn');
   assert.equal(credState({ refresh_error: 'x' }).tone, 'bad');
+  assert.equal(credState({ refresh_error: 'invalid_grant', reauth_required: true }).text, 'Needs a new login');
   assert.equal(credState({ secret_expires_at: iso(NOW - 1) }, NOW).text, 'Expired');
   assert.equal(credState({ secret_expires_at: iso(NOW + 5 * 86400000), created_at: iso(NOW) }, NOW).tone, 'warn');
   assert.equal(credState({ created_at: iso(NOW) }, NOW).tone, 'ok');

@@ -23,10 +23,17 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-type stubRefresher struct{ n atomic.Int64 }
+type stubRefresher struct {
+	n atomic.Int64
+	// refuse: answer every refresh with the provider's invalid_grant.
+	refuse atomic.Bool
+}
 
 func (r *stubRefresher) Refresh(_ context.Context, provider string, s credvault.Secret) (credvault.Access, credvault.Secret, error) {
 	n := r.n.Add(1)
+	if r.refuse.Load() {
+		return credvault.Access{}, s, &credvault.ProviderRefusal{Status: http.StatusBadRequest, Code: "invalid_grant", Body: `{"error":"invalid_grant"}`}
+	}
 	exp := time.Now().Add(8 * time.Hour).UTC()
 	next := s
 	next.RefreshToken = fmt.Sprintf("rotated-%d", n)
@@ -547,5 +554,77 @@ func TestFleetCredentialsNameCodexAccount(t *testing.T) {
 	if len(by) != 4 || by["default"] != codex.AccountUUID("acct-1", "user-1") || by["bare"] != "" || by["gmail"] != "" ||
 		by["icloud"] != "6f1c2d3e-0000-4000-8000-000000000001" {
 		t.Fatalf("account_uuid = %v", by)
+	}
+}
+
+func leaseWith(t *testing.T, h *harness, tok string, body any) NodeCredentialsResponse {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/node/credentials", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	res, err := h.http.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out NodeCredentialsResponse
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("lease with body: %d", res.StatusCode)
+	}
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return out
+}
+
+func codexOf(t *testing.T, r NodeCredentialsResponse) NodeCredential {
+	t.Helper()
+	for _, c := range r.Credentials {
+		if c.Provider == credvault.Codex {
+			return c
+		}
+	}
+	t.Fatalf("no codex credential in %+v", r)
+	return NodeCredential{}
+}
+
+// claude-fleet#2007: a node that saw the upstream refuse its leased access
+// says so on the next lease, and gets a new one — or a plain reauth_required
+// — never the refused token again.
+func TestNodeLeaseUpstreamRevokedGetsNewAccess(t *testing.T) {
+	h, tok, ref := newVaultHarness(t)
+	putCred(t, h, credvault.Codex, "work", credvault.Secret{RefreshToken: "rt-SECRET", AccountID: "acct-1"})
+	_, first, _ := lease(t, h, tok)
+	old := codexOf(t, first)
+	if old.Access == nil || old.Access.AccessToken != "codex-access-1" {
+		t.Fatalf("first lease %+v", old)
+	}
+	// An empty body (an agent that predates the field) is the old answer.
+	if _, again, _ := lease(t, h, tok); codexOf(t, again).Access.AccessToken != "codex-access-1" {
+		t.Fatal("a plain renewal did not come from the cache")
+	}
+	rejected := func(token string) map[string]any {
+		return map[string]any{"upstream_rejected": []UpstreamRejected{{Provider: credvault.Codex, Account: "work",
+			Fingerprint: credvault.AccessFingerprint(token), Error: "token_revoked", At: ptrTime(time.Now())}}}
+	}
+	next := codexOf(t, leaseWith(t, h, tok, rejected("codex-access-1")))
+	if next.Access == nil || next.Access.AccessToken == "codex-access-1" || next.Access.AccessToken != "codex-access-2" {
+		t.Fatalf("lease after the upstream refused codex-access-1: %+v", next)
+	}
+	// The grant is gone at the provider too: a new refusal ends in reauth.
+	ref.refuse.Store(true)
+	dead := codexOf(t, leaseWith(t, h, tok, rejected("codex-access-2")))
+	if dead.Access != nil || dead.State != CredStateReauth || !strings.HasPrefix(dead.Error, "reauth_required") {
+		t.Fatalf("lease after a revoked grant: %+v, want state reauth_required and no access", dead)
+	}
+	res, raw := h.get(t, "/v1/fleet/credentials")
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(raw), `"reauth_required":true`) {
+		t.Fatalf("credentials list: %d %s, want reauth_required", res.StatusCode, raw)
+	}
+	audit, _ := h.srv.Store.CredAuditLog(pAlice, 100)
+	var seen []string
+	for _, a := range audit {
+		seen = append(seen, a.Action)
+	}
+	if !strings.Contains(strings.Join(seen, ","), store.CredUpstreamRejected) || !strings.Contains(strings.Join(seen, ","), store.CredReauth) {
+		t.Fatalf("audit actions %v, want %s and %s", seen, store.CredUpstreamRejected, store.CredReauth)
 	}
 }

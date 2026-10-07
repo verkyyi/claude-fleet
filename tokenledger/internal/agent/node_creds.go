@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -61,6 +62,10 @@ const (
 	// credRefusedWait is the retry after the hub refused this login (revoked,
 	// or no account yet): it may be lifted, or the account may land.
 	credRefusedWait = 15 * time.Minute
+	// credRejectPoll is how often a waiting lease loop looks for an upstream
+	// refusal of a token it holds (claude-fleet#2007): a new one renews at
+	// once instead of at the token's exp, which a revocation does not move.
+	credRejectPoll = time.Minute
 )
 
 // credLease mirrors the hub's NodeCredentialsResponse.
@@ -71,6 +76,7 @@ type credLease struct {
 		Account   string     `json:"account"`
 		ExpiresAt *time.Time `json:"expires_at"`
 		Error     string     `json:"error"`
+		State     string     `json:"state"`
 		Access    *struct {
 			AccessToken      string   `json:"access_token"`
 			IDToken          string   `json:"id_token"`
@@ -132,14 +138,74 @@ func (a *Agent) runCredLeases(ctx context.Context) {
 			bo.reset()
 			lastErr = ""
 		}
-		t := time.NewTimer(wait)
+		if !a.waitCredLease(ctx, wait) {
+			return
+		}
+	}
+}
+
+// waitCredLease waits wait before the next lease, cut short when an upstream
+// refusal of a token this node holds appears that the hub has not been told
+// of yet. False when ctx ended.
+func (a *Agent) waitCredLease(ctx context.Context, wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for {
+		step := time.Until(deadline)
+		if step <= 0 {
+			return true
+		}
+		if step > credRejectPoll {
+			step = credRejectPoll
+		}
+		t := time.NewTimer(step)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			return
+			return false
 		case <-t.C:
 		}
+		for _, rj := range a.upstreamRejections() {
+			if !a.credReported[rj.Fingerprint] {
+				return true
+			}
+		}
 	}
+}
+
+// upstreamRejection mirrors the hub's api.UpstreamRejected.
+type upstreamRejection struct {
+	Provider    string     `json:"provider"`
+	Account     string     `json:"account"`
+	Fingerprint string     `json:"fingerprint"`
+	Error       string     `json:"error,omitempty"`
+	At          *time.Time `json:"at,omitempty"`
+}
+
+// upstreamRejections lists the hub-leased Codex homes whose CURRENT access
+// token the upstream has refused (claude-fleet#2007) — recorded by the quota
+// poll and the credential proxy in <home>/.ccquota-upstream.json (#1920). A
+// home the hub does not manage, or one whose refusal was of an earlier token,
+// is not listed.
+func (a *Agent) upstreamRejections() []upstreamRejection {
+	homes := map[string]string{"default": a.codexHomeFor("default")}
+	if ents, err := os.ReadDir(filepath.Dir(a.codexHomeFor("x"))); err == nil {
+		for _, e := range ents {
+			if e.IsDir() && safeLabel.MatchString(e.Name()) && e.Name() != "default" {
+				homes[e.Name()] = a.codexHomeFor(e.Name())
+			}
+		}
+	}
+	var out []upstreamRejection
+	for account, home := range homes {
+		rj := codex.HubLeaseRejected(home)
+		if rj == nil {
+			continue
+		}
+		at := rj.At
+		out = append(out, upstreamRejection{Provider: "codex", Account: account, Fingerprint: rj.Fingerprint, Error: rj.Error, At: &at})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Account < out[j].Account })
+	return out
 }
 
 // credCycle leases once, writes what came back, and returns how long to wait
@@ -189,28 +255,49 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 func (a *Agent) fetchCredLease(ctx context.Context) (*credLease, error) {
 	rctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(rctx, http.MethodPost, a.cfg.HubURL+"/v1/node/credentials", nil)
+	// Every lease carries the standing refusals (claude-fleet#2007); the hub
+	// drops a refused token it still caches and answers with its
+	// replacement, and ignores one it has already replaced.
+	var body io.Reader
+	rejected := a.upstreamRejections()
+	if len(rejected) > 0 {
+		b, err := json.Marshal(map[string]any{"upstream_rejected": rejected})
+		if err != nil {
+			return nil, err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(rctx, http.MethodPost, a.cfg.HubURL+"/v1/node/credentials", body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+a.cfg.Token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := a.http.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode == http.StatusForbidden {
 		var r struct{ Error, Message string }
-		_ = json.Unmarshal(body, &r)
+		_ = json.Unmarshal(raw, &r)
 		return nil, errLeaseRefused{reason: r.Error, message: r.Message}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("lease: HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(body))
+		return nil, fmt.Errorf("lease: HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
 	}
 	var l credLease
-	if err := json.Unmarshal(body, &l); err != nil {
+	if err := json.Unmarshal(raw, &l); err != nil {
 		return nil, fmt.Errorf("lease: %w", err)
+	}
+	if a.credReported == nil {
+		a.credReported = map[string]bool{}
+	}
+	for _, rj := range rejected {
+		a.credReported[rj.Fingerprint] = true
 	}
 	return &l, nil
 }
