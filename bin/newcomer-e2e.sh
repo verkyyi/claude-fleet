@@ -82,7 +82,7 @@ ok() { printf '   ✓ %s\n' "$1"; }
 scrub() { sed -E 's/fd_[a-z2-7]{20,}/fd_…/g; s/"(token|approve_code|certificate)":"[^"]*"/"\1":"…"/g'; }
 logs() {
   local f
-  for f in hub.log agent.log install.log login.out fleet.err fleet2.err ssh.log; do
+  for f in hub.log agent.log install.log login.out fleet.err fleet2.err fleet4.err ssh.log; do
     [ -s "$WORK/$f" ] || continue
     printf -- '--- %s (last 40)\n' "$f"; tail -n 40 "$WORK/$f" | scrub
   done
@@ -359,6 +359,12 @@ step 'home: on the very machine the hub picks, with no fleet of theirs there'
 # The C8 drill (issue #2219): the newcomer's 「只看、只派」 client ran ON the
 # machine the hub knows them by. This login has no fleet here, so the right pane
 # is the home page — never 「正在连接 <本机>」 then 「没有活着的 fleet 会话」.
+# the last step's shell fully gone first: its right pane (`viewer`) starts the
+# stage again when the stage goes before it, and a stage left behind is reused
+pkill -f "fleet-shell.sh [a-z]* $SESS" 2>/dev/null
+ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+stage_gone() { ! "$REAL_TMUX" -L "$SESS-stage" has-session 2>/dev/null; }
+waitfor 5 stage_gone || die 'the last step left its stage running'
 printf '#!/bin/sh\necho %s\n' "$NODE" > "$SHIM/hostname"
 out=$(fenv "$FLEET" 2>"$WORK/fleet4.err" </dev/null); rc=$?
 printf '#!/bin/sh\necho newcomer-laptop\n' > "$SHIM/hostname"
