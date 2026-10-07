@@ -503,7 +503,7 @@ drifted() {
 # keeper's own tick passes --in-keeper (it restarts itself, exit 4). Exit 4
 # reloaded · 1 failed (said in update.state; not retried for the same pair).
 reconcile() {
-  local s="$1" from to why phase=done
+  local s="$1" from to why phase='done'
   from=$(vkey "$(run_ver "$s")"); [ -n "$from" ] || from='?'
   to=$(vkey "$(disk_ver)")
   [ -f "$ROOT/.client-version" ] || phase=reloaded     # no version to name (#2145)
