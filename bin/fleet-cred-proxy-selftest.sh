@@ -241,8 +241,8 @@ rm -f "$SB/region-direct"
 T2=$(CP mint --account a2 --sid s2); T3=$(CP mint --account a3 --sid s3)
 cpids=''
 for s in 1 2 3; do
-  eval "tok=\$T$s"
-  ( for k in 1 2 3 4; do R /v1/messages "$tok"; R /codex/responses "$tok"; done > "$SB/conc.$s" ) &
+  case "$s" in 1) tok="$T1" ;; 2) tok="$T2" ;; *) tok="$T3" ;; esac
+  ( for _ in 1 2 3 4; do R /v1/messages "$tok"; R /codex/responses "$tok"; done > "$SB/conc.$s" ) &
   cpids="$cpids $!"
 done
 for p in $cpids; do wait "$p"; done   # never a bare `wait`: the fake server is a child too
