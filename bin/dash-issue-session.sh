@@ -260,7 +260,7 @@ if [ -n "$existing" ]; then
   elif [ -z "$TARGET_SESS" ]; then
     FLEET_UI_SOCK=$SOCK fleet_ui_fail "$(fleet_ui_t ui_already_open_fmt "$num")" "$(fleet_ui_t ui_already_open_next)"
   fi
-  [ "$PRINT_FLAG" = 1 ] && printf '%s\n' "$existing"
+  if [ "$PRINT_FLAG" = 1 ]; then printf '%s\n' "$existing"; fi
   exit 0
 fi
 
@@ -815,4 +815,5 @@ fi
 if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
   TM select-window -t "$win"
 fi
-[ "$PRINT_FLAG" = 1 ] && printf '%s\n' "$win"
+if [ "$PRINT_FLAG" = 1 ]; then printf '%s\n' "$win"; fi
+exit 0

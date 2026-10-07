@@ -111,8 +111,10 @@ if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
   exit 2
 fi
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/spawn.calls"
-repo=''; [ "${7:-}" = --repo ] && repo=$8
+repo=''; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; prev=$a; done
 printf '@12\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\ta1\\t\\t%s\\n' "$1" "$1" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
+# --print (issue #2237): the window it opened, last — the controller reads it back alone
+case " $* " in *" --print "*) echo '@12' ;; esac
 ''')
         # A scratch start (issue #1541) runs dash-raw-session.sh instead: its argv
         # is recorded, a @raw row joins the window table, and the --print receipt
@@ -919,7 +921,7 @@ class HubTests(HubFixture):
                                                params={"issue": 123, "repo": "example/other"}))
         self.assertEqual(self.node.wait(named["operation_id"])["status"], "succeeded")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
-                         "123 demo --agent claude --origin hub --repo example/other\n")
+                         "123 demo --print --agent claude --origin hub --repo example/other\n")
 
     def test_start_carries_a_remote_parent(self):
         # issue #1425: a start another machine's node placed here names its parent
@@ -931,7 +933,7 @@ class HubTests(HubFixture):
                                                  params={"issue": 126, "origin_wid": parent}))
         self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
-                         "126 demo --agent claude --origin hub --repo example/project --origin-wid %s\n" % parent)
+                         "126 demo --print --agent claude --origin hub --repo example/project --origin-wid %s\n" % parent)
 
     def test_start_carries_the_account_class(self):
         # issue #1540: the asker's `--account local|pool` holds on the machine that
@@ -944,12 +946,12 @@ class HubTests(HubFixture):
                                                  params={"issue": 127, "account_class": "local"}))
         self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
-                         "127 demo --agent claude --origin hub --repo example/project --account local\n")
+                         "127 demo --print --agent claude --origin hub --repo example/project --account local\n")
         (self.node.conf / "spawn.calls").unlink()
         plain = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="unclassed",
                                                params={"issue": 128, "account_class": "any"}))
         self.assertEqual(self.node.wait(plain["operation_id"])["status"], "succeeded")
-        self.assertEqual((self.node.conf / "spawn.calls").read_text(), "128 demo --agent claude --origin hub --repo example/project\n")
+        self.assertEqual((self.node.conf / "spawn.calls").read_text(), "128 demo --print --agent claude --origin hub --repo example/project\n")
 
     def test_start_scratch_opens_a_raw_session(self):
         # issue #1541: kind=scratch is a raw scratch session — no issue, no claim;
@@ -1026,7 +1028,7 @@ echo "https://github.com/example/project/issues/128"
         self.assertEqual((self.node.conf / "file.calls").read_text(),
                          "--repo example/project --from hub --title 侧栏的名字太长 --body 两行\n正文\n")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
-                         "128 demo --agent claude --origin hub --repo example/project\n")
+                         "128 demo --print --agent claude --origin hub --repo example/project\n")
         # a filing that fails opens nothing
         (self.node.conf / "file-fail").touch()
         failed = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="new-2",
