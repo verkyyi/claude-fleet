@@ -783,7 +783,8 @@ cmd_doctor() {
     # (承载) is install-sync's, not the line's: as before.
     if [ -f "$ROOT/conf/tmux-shell.conf" ] && [ ! -e "$ROOT/.git" ]; then
       load_conf; HUB=$(hub_url)
-      parts="没有 .client-version（${ROOT}）：不跟${HUB:+入口}${HUB:-stable}自动更新 · 修法：重跑安装行 curl -fsSL ${HUB:-<入口>}/install | sh"
+      f=stable; [ -n "$HUB" ] && f=入口
+      parts="没有 .client-version（${ROOT}）：不跟${f}自动更新 · 修法：重跑安装行 curl -fsSL ${HUB:-<入口>}/install | sh"
       f=$(shell_sess)
       if shell_live "$f" && [ "$(running_digest "$f")" != "$(client_digest "$ROOT")" ]; then
         parts="$parts · 正在运行的客户端不是磁盘上的文件（空闲时自动重新载入；现在就要：fleet-shell.sh reload $f --all）"
