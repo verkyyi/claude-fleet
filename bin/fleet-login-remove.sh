@@ -14,6 +14,10 @@
 #   --delete-home  no archive; the login and its home are deleted outright.
 # The copied Claude account pool is removed BEFORE the archive is taken, so the
 # shared tokens are never inside it.
+# A login that joined the hub as a node (node.env) is taken off it first, as
+# itself — `fleet node leave --hub-only` (issue #1928): the hub retires its
+# token and drops it from the machines page. A hub that cannot be asked is a
+# WARN with what to do instead, never a reason to keep the login.
 # After the login is gone its name AND its GUID are removed from every
 # com.apple.access_* group (Remote Login's SSH allow-list, Screen Sharing, …).
 # `dseditgroup -d` cannot do that once the user record is gone ("Record was not
@@ -62,6 +66,7 @@ H="$HOMES/$LOGIN"
 DDIR=$(abs_dir "${FLEET_INSTALL_DAEMON_DIR:-/Library/LaunchDaemons}")
 ARCHIVE_DIR=$(abs_dir "$ARCHIVE_DIR")
 ACCOUNTS="$H/.config/claude-fleet/accounts"
+LEAVE_SH="$BIN/fleet-node-leave.sh"
 cd / || die 'cannot cd / (every step runs from there; issue #1216)'
 [ ! -L "$H" ] || refuse "symlinked home '$H'"
 [ ! -L "$H/.config" ] && [ ! -L "$H/.config/claude-fleet" ] || refuse "symlinked config under '$H'"
@@ -115,6 +120,27 @@ step 1 "stop $LOGIN's live fleet"
 show sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet" bash -c 'source "$1"; while IFS= read -r sess; do [ -n "$sess" ] || continue; bash "$2" "$sess" --yes || exit; done < <(fleet_sockets)' _ "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh"
 if [ "$APPLY" = 1 ]; then
   sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet" bash -c 'source "$1"; while IFS= read -r sess; do [ -n "$sess" ] || continue; bash "$2" "$sess" --yes || exit; done < <(fleet_sockets)' _ "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" || exit 1
+fi
+
+# Off the hub while the login's node token still exists (issue #1928). As the
+# login, which can read its own node.env; the script runs from a 0644 copy in
+# /tmp (not on stdin: a script read from stdin shares it with every command it
+# runs), so the login needs no read access to $BIN — it holds no secret. No
+# node.env → it says so, exit 0.
+step 1b "take $LOGIN off the hub (fleet node leave)"
+LEAVE=(sudo -u "$LOGIN" -H env "HOME=$H" "FLEET_CONF_DIR=$H/.config/claude-fleet")
+[ -z "${FLEET_HUB_CURL:-}" ] || LEAVE+=("FLEET_HUB_CURL=$FLEET_HUB_CURL")   # the selftest's transport
+LEAVE_ARGS=(--hub-only --reason "login $LOGIN removed")
+show ${LEAVE[@]+"${LEAVE[@]}"} bash /tmp/fleet-node-leave.XXXXXX ${LEAVE_ARGS[@]+"${LEAVE_ARGS[@]}"}
+if [ "$APPLY" = 1 ]; then
+  LCOPY=''
+  if [ ! -f "$LEAVE_SH" ] || ! LCOPY=$(mktemp /tmp/fleet-node-leave.XXXXXX) \
+     || ! cp "$LEAVE_SH" "$LCOPY" || ! chmod 644 "$LCOPY"; then
+    printf '%s: WARN cannot stage %s — if %s was a node, remove it on the hub machines page (「移除」)\n' "$PROG" "$LEAVE_SH" "$LOGIN" >&2
+  elif ! ${LEAVE[@]+"${LEAVE[@]}"} bash "$LCOPY" ${LEAVE_ARGS[@]+"${LEAVE_ARGS[@]}"}; then
+    printf '%s: WARN %s was not taken off the hub — an admin removes it on the machines page (「移除」), or: fleet-node-revoke.sh <machine>:%s\n' "$PROG" "$LOGIN" "$LOGIN" >&2
+  fi
+  [ -z "$LCOPY" ] || rm -f "$LCOPY"
 fi
 
 # System shape belongs to this login by label. GUI shape belongs to the login's

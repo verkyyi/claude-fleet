@@ -34,12 +34,15 @@
 # bin/fleet-node-probe.sh is `fleet node compute` and the join's last line
 # (#1720): can this computer run sessions — and the node agent runs it daily
 # from here on a computer with only the client installed.
+# bin/fleet-node-leave.sh is `fleet node leave` (#1928): the computer takes
+# itself off the hub — a laptop joined by the install line leaves the same way.
 bin/fleet-install.sh  installer
 bin/fleet
 bin/fleet-login.py
 bin/fleet-node.sh
 bin/fleet-node-join.sh
 bin/fleet-node-probe.sh
+bin/fleet-node-leave.sh
 # bin/fleet-host.sh is `fleet host on|off|status` (#1806): 承载 — the person's
 # word for the node steps above (join, compute on/off).
 bin/fleet-host.sh
