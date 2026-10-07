@@ -22,6 +22,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/leader"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
@@ -481,6 +482,13 @@ func runHub(args []string) error {
 		return err
 	}
 	defer st.Close()
+	// Which replica runs each background loop (claude-fleet#2123). SQLite is
+	// one hub: it leads everything and nothing below changes.
+	elector, err := hubElector()
+	if err != nil {
+		return err
+	}
+	defer elector.Close()
 	if st.BackfilledRollup > 0 {
 		log.Printf("rollup: built %d hourly rows from usage_events", st.BackfilledRollup)
 	}
@@ -494,6 +502,9 @@ func runHub(args []string) error {
 	vault, err := fleetVault(fleetOn, st)
 	if err != nil {
 		return err
+	}
+	if vault != nil && elector.Elected() {
+		vault.CrossLock, vault.Replica = elector.Lock, elector.Name()
 	}
 	if *rebuild {
 		n, err := st.RebuildRollup(*rebuildForce)
@@ -672,6 +683,8 @@ func runHub(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	srv.Elector = elector
+	go elector.Run(ctx)
 	if srv.Spot != nil {
 		go srv.Spot.Run(ctx)
 	}
@@ -687,7 +700,7 @@ func runHub(args []string) error {
 	go srv.ResolveGitHubAdmins(ctx)
 
 	if *retentionDays > 0 {
-		go pruneLoop(ctx, st, *retentionDays)
+		go pruneLoop(ctx, st, elector, *retentionDays)
 	}
 
 	handler := srv.Handler()
@@ -852,18 +865,40 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// hubElector is this hub's leader.Elector: elected through CCQUOTA_DB_URL's
+// Postgres, a single hub on SQLite. With replicas every log line carries
+// replica=<name>, so two hubs' logs read apart.
+func hubElector() (*leader.Elector, error) {
+	url := ""
+	if store.UsesPostgres() {
+		url = os.Getenv("CCQUOTA_DB_URL")
+	}
+	e, err := leader.New(url, "")
+	if err != nil {
+		return nil, err
+	}
+	if e.Elected() {
+		log.SetPrefix("replica=" + e.Name() + " ")
+		log.Printf("hub replica %s: background loops run on whichever replica holds their lock", e.Name())
+	}
+	return e, nil
+}
+
 // pruneLoop trims raw events past the retention window once a day. Rollups and
 // limit snapshots are kept: they are small and are the long-term record.
-func pruneLoop(ctx context.Context, st *store.Store, days int) {
+func pruneLoop(ctx context.Context, st *store.Store, e *leader.Elector, days int) {
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
 	for {
-		cut := time.Now().AddDate(0, 0, -days)
-		n, err := st.PruneEvents(cut)
-		if err != nil {
-			log.Printf("prune: %v", err)
-		} else if n > 0 {
-			log.Printf("pruned %d events older than %d days", n, days)
+		// One replica prunes (claude-fleet#2123).
+		if e.Leader(ctx, "prune") {
+			cut := time.Now().AddDate(0, 0, -days)
+			n, err := st.PruneEvents(cut)
+			if err != nil {
+				log.Printf("prune: %v", err)
+			} else if n > 0 {
+				log.Printf("pruned %d events older than %d days", n, days)
+			}
 		}
 		select {
 		case <-ctx.Done():

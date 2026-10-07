@@ -264,6 +264,14 @@ type Vault struct {
 	MinTTL time.Duration
 	Now    func() time.Time
 
+	// CrossLock, when set, holds an account's refresh across hub replicas
+	// (claude-fleet#2123): two hubs on one Postgres each have their own row
+	// mutex, and an account refreshed by both at once gets its whole grant
+	// revoked upstream. nil — a single hub — is the row mutex alone.
+	CrossLock func(ctx context.Context, name string) (unlock func(), err error)
+	// Replica names this hub in the refresh audit when set (claude-fleet#2123).
+	Replica string
+
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
 
@@ -327,6 +335,10 @@ func (v *Vault) sealer() (*Sealer, error) {
 	return v.Sealer, nil
 }
 
+// crossLockWait bounds the wait for another replica's refresh of the same
+// account: one refresh round-trip, with room.
+const crossLockWait = 45 * time.Second
+
 // DefaultMinTTL is Vault.MinTTL when unset.
 const DefaultMinTTL = 3 * time.Hour
 
@@ -344,9 +356,9 @@ func (v *Vault) minTTL() time.Duration {
 	return DefaultMinTTL
 }
 
-// lock returns the one mutex for a row. The hub is a single instance (SQLite,
-// Recreate), so an in-process lock IS the single writer; the version check in
-// SaveRefresh is the belt to its braces.
+// lock returns the one mutex for a row. On a single hub (SQLite, Recreate) an
+// in-process lock IS the single writer; with replicas CrossLock is taken under
+// it. The version check in SaveRefresh is the belt to its braces.
 func (v *Vault) lock(principal, provider, account string) *sync.Mutex {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -494,6 +506,17 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 	l := v.lock(principal, provider, account)
 	l.Lock()
 	defer l.Unlock()
+	if v.CrossLock != nil {
+		// The other replica may be refreshing this account right now: wait
+		// for it, then read the row it saved like any other waiter.
+		lctx, cancel := context.WithTimeout(ctx, crossLockWait)
+		unlock, err := v.CrossLock(lctx, principal+"/"+provider+"/"+account)
+		cancel()
+		if err != nil {
+			return Access{}, fmt.Errorf("credential lock across hub replicas: %w", err)
+		}
+		defer unlock()
+	}
 
 	for attempt := 0; attempt < 2; attempt++ {
 		c, err := v.Store.Credential(principal, provider, account)
@@ -527,6 +550,9 @@ func (v *Vault) Lease(ctx context.Context, principal, provider, account string) 
 		viaNote := ""
 		if via != "" {
 			viaNote = " · refresh_via=" + via
+		}
+		if v.Replica != "" {
+			viaNote += " · replica=" + v.Replica
 		}
 		if rerr != nil {
 			reauth := NeedsReauth(rerr)

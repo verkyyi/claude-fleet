@@ -53,6 +53,8 @@
 #   dispatch-wrong-replica                          tokenledger/internal/api node_route.go (fleet_node_conns +
 #                                                   /internal/v1/node-write; go test, when a toolchain is here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
+#   two-hubs-double-refresh                         tokenledger/internal/leader (Leader / Lock), credvault Lease's
+#                                                   CrossLock, the three gated loops (go test, when a toolchain is here)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
@@ -2902,6 +2904,42 @@ drill_dispatch_wrong_replica() {
     esac
   else
     WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- two-hubs-double-refresh (#2123, EPIC #2119 C4): two hub replicas on one
+# Postgres run every background loop once and refresh an account once. The change
+# is the hub's, so the drill is its Go tests where a toolchain is: two vaults on one
+# database refresh one account once with CrossLock (and twice without — the
+# hazard, shown); a single hub leads everything. The two-process Postgres legs
+# (one runner per job for an hour of ticks, handover ≤ 15 s) run in the Go gate's
+# tokenledger-pg job. Without go the tests and the loop gates must exist by name.
+drill_two_hubs_double_refresh() {
+  CAP=120; local t0 out rc f tl
+  t0=$(now)
+  f="$ROOT/tokenledger/internal/leader/leader_test.go"
+  for tl in TestSingleHubAlwaysLeads TestTwoReplicasOneRunner TestCloseHandsOver TestLockAcrossReplicas; do
+    grep -q "^func $tl(" "$f" 2>/dev/null || { WHY="the leader test $tl is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q '^func TestTwoReplicasRefreshOnce(' "$ROOT/tokenledger/internal/credvault/credvault_test.go" 2>/dev/null \
+    || { WHY="credvault has no TestTwoReplicasRefreshOnce"; return 1; }
+  grep -q 'v.CrossLock(' "$ROOT/tokenledger/internal/credvault/credvault.go" || { WHY="Lease takes no cross-replica lock"; return 1; }
+  grep -q 'Leader(ctx, "alerts")' "$ROOT/tokenledger/internal/api/fleet_alerts.go" || { WHY="node alerts are not gated on the leader"; return 1; }
+  grep -q 'Leader(ctx, "spot")' "$ROOT/tokenledger/internal/api/fleet_spot.go" || { WHY="the SPOT controller is not gated on the leader"; return 1; }
+  grep -q 'Leader(ctx, "prune")' "$ROOT/tokenledger/cmd/ccquota/hub.go" || { WHY="the daily prune is not gated on the leader"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^(TestTwoReplicasRefreshOnce|TestSingleHubAlwaysLeads)$' ./internal/credvault ./internal/leader 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='两份保险箱同时租一个账号 → 只刷新一次（无跨副本锁时两次）；单份恒为 leader（go test）；两进程 Postgres 一小时只一份在干、交接 ≤15 s 在 Go 门 tokenledger-pg' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；测试与三处 Leader 门按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：测试与三处 Leader 门按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }

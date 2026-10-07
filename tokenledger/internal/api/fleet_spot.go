@@ -210,9 +210,54 @@ func (c *SpotController) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// One replica starts and releases pods (claude-fleet#2123); the
+			// other passes on what placement asked of it.
+			if !c.s.Elector.Leader(ctx, "spot") {
+				c.handWant(c.now())
+				continue
+			}
 			c.Tick(ctx, c.now())
 		}
 	}
+}
+
+// spotWantKey is the fleet setting a replica that does not lead "spot" leaves
+// placement's request in, for the leader's next tick (claude-fleet#2123).
+const spotWantKey = "spot.want"
+
+// handWant moves a request Want noted on this replica to the leader.
+func (c *SpotController) handWant(now time.Time) {
+	c.mu.Lock()
+	want := c.want
+	c.want = ""
+	c.mu.Unlock()
+	if want == "" {
+		return
+	}
+	if err := c.s.Store.SetFleetSetting(spotWantKey, want, now); err != nil {
+		c.logf("fleet: SPOT hand request to the leader: %v", err)
+		c.mu.Lock()
+		if c.want == "" {
+			c.want = want
+		}
+		c.mu.Unlock()
+	}
+}
+
+// takeWant is the request another replica handed over, cleared as it is read;
+// "" on a single hub, which never hands one.
+func (c *SpotController) takeWant() string {
+	if !c.s.Elector.Elected() {
+		return ""
+	}
+	settings, err := c.s.Store.FleetSettings()
+	if err != nil || settings[spotWantKey] == "" {
+		return ""
+	}
+	if err := c.s.Store.SetFleetSetting(spotWantKey, "", c.now()); err != nil {
+		return ""
+	}
+	return settings[spotWantKey]
 }
 
 // Want notes that placement found no machine: the next tick starts a node
@@ -478,6 +523,9 @@ func (c *SpotController) Tick(ctx context.Context, now time.Time) []string {
 	want := c.want
 	c.want = ""
 	c.mu.Unlock()
+	if want == "" {
+		want = c.takeWant()
+	}
 	if want != "" {
 		if _, err := c.Start(ctx, want, now); err != nil {
 			did = append(did, "start: "+err.Error())

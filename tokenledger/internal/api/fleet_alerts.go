@@ -61,7 +61,8 @@ func (s *Server) nodeLostAfter() time.Duration {
 	return defaultNodeLostAfter
 }
 
-// RunNodeAlerts sweeps on nodeAlertTick until ctx ends.
+// RunNodeAlerts sweeps on nodeAlertTick until ctx ends, on the replica that
+// leads "alerts".
 func (s *Server) RunNodeAlerts(ctx context.Context) {
 	start := time.Now()
 	t := time.NewTicker(nodeAlertTick)
@@ -71,6 +72,11 @@ func (s *Server) RunNodeAlerts(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
+			// One replica sweeps (claude-fleet#2123): two would raise and
+			// prune every alert twice.
+			if !s.Elector.Leader(ctx, "alerts") {
+				continue
+			}
 			s.NodeAlertTick(start, now)
 			s.SweepDrills(now) // a drill person past its life (claude-fleet#2010)
 		}

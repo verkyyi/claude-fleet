@@ -480,3 +480,60 @@ func TestNeedsReauthOnlyForTheProvidersRevokedAnswer(t *testing.T) {
 		t.Error("refresh_unavailable is not the provider's answer")
 	}
 }
+
+// Two hub replicas on one database (claude-fleet#2123): each has its own row
+// mutex, so only CrossLock keeps them from refreshing one account twice — the
+// double refresh that gets a grant revoked upstream. Here CrossLock is a plain
+// shared mutex; internal/leader's Postgres advisory lock is the real one.
+func TestTwoReplicasRefreshOnce(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		r := &countingRefresher{ttl: 8 * time.Hour, delay: 50 * time.Millisecond}
+		a := newVault(t, r)
+		b := &Vault{Store: a.Store, Sealer: a.Sealer, Refresher: r}
+		var mu sync.Mutex
+		if shared {
+			cross := func(context.Context, string) (func(), error) { mu.Lock(); return mu.Unlock, nil }
+			a.CrossLock, b.CrossLock = cross, cross
+			a.Replica, b.Replica = "hub-a", "hub-b"
+		}
+		if err := a.Put("p1", Claude, "main", Secret{RefreshToken: "RT-0"}); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			for _, v := range []*Vault{a, b} {
+				wg.Add(1)
+				go func(v *Vault) {
+					defer wg.Done()
+					if _, err := v.Lease(context.Background(), "p1", Claude, "main"); err != nil && shared {
+						t.Error(err)
+					}
+				}(v)
+			}
+		}
+		wg.Wait()
+		n := r.n.Load()
+		if shared && n != 1 {
+			t.Fatalf("two replicas with CrossLock refreshed %d times, want exactly 1", n)
+		}
+		if !shared && n < 2 {
+			// The hazard this guards against, shown: without it both refresh.
+			t.Fatalf("without CrossLock two replicas refreshed %d times; the test no longer shows the double refresh", n)
+		}
+		if shared {
+			audits, err := a.Store.CredAuditLog("p1", 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, x := range audits {
+				if x.Action == store.CredRefresh && strings.Contains(x.Detail, "replica=hub-") {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("refresh audit carries no replica: %+v", audits)
+			}
+		}
+	}
+}
