@@ -310,7 +310,10 @@ def carry(shell, o, text, wait=None):
     the half-written text into its input — pasted, never sent: ↵ there is the
     person's. The paste waits until the stage shows that session with an agent
     reading bracketed paste (a line break must never send half of it), at most
-    FLEET_COMPOSE_CARRY_SECS (8 s). Returns (switched, carried)."""
+    FLEET_COMPOSE_CARRY_SECS (8 s). A tmux too old to say (no
+    `bracket_paste_flag`, < 3.5): the stage on it and a beat to settle — the
+    paste is still bracketed when the agent asked (`paste-buffer -p`).
+    Returns (switched, carried)."""
     if not o or not shell.hand("jump=wid:" + o["wid"]):
         return False, False
     if not text.strip():
@@ -323,7 +326,10 @@ def carry(shell, o, text, wait=None):
                                 "#{window_id}\t#{window_active}\t#{@remote}\t#{@remote_down}\t#{bracket_paste_flag}"
                                 ).splitlines():
             w = (line.split("\t") + [""] * 5)[:5]
-            if w[1] == "1" and w[2] == want and not w[3] and w[4] == "1":
+            known = w[4] in ("0", "1")
+            if w[1] == "1" and w[2] == want and not w[3] and w[4] != "0":
+                if not known:
+                    time.sleep(1.0)
                 buf = "fleet-compose-carry"
                 try:
                     subprocess.run(shell.stage_cmd + ["load-buffer", "-b", buf, "-"], input=text.encode("utf-8"),

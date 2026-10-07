@@ -372,7 +372,7 @@ hasnt 'J: …and is empty' "$(compose | sed -n '/╭/,/╰/p')" '状态卡'
 eq 'J: nothing placed' "$nlog" "$(grep -c . "$LOG")"
 
 # K. working: 开工 by default, the line says why
-orch working '跑 #1935 的批'
+orch working '' '跑 #1935 的批'
 st_ send-keys -t "$pw" -l '修一下 web 的页脚'
 CHECKS=$((CHECKS + 1)); waitfor 4 '编排在忙：跑 #1935 的批' compose || fail 'K: the area says what it is busy with' "$(compose)"
 c=$(compose)
@@ -398,6 +398,7 @@ st_ send-keys -t "$pw" Tab Tab Tab
 st_ send-keys -t "$pw" Space
 sleep .3
 has 'L: Tab to 发法, space: 编排' "$(compose)" '↵ 交给编排'
+st_ send-keys -t "$pw" Tab      # back to the text
 st_ send-keys -t "$pw" C-u
 sleep .2
 : > "$VIEW"; : > "$WORK/orch-in"
