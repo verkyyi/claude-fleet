@@ -178,7 +178,7 @@ func TestCredCycleRejectsUnsafeLabel(t *testing.T) {
 func TestHubAccountTokenResolvesMarker(t *testing.T) {
 	dir := t.TempDir()
 	exp := time.Now().Add(time.Hour)
-	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-live", &exp, nil, ""); err != nil {
+	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-live", &exp, nil, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := hubAccountToken(dir, "main", "hub:main"); err != nil || got != "sk-ant-oat01-live" {
@@ -226,7 +226,7 @@ func TestHubAccountTokenNamesTheHubSourceWhenUnreadable(t *testing.T) {
 	check("empty token", err, "has no claudeAiOauth.accessToken")
 
 	past := time.Now().Add(-3 * time.Hour)
-	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-stale", &past, nil, ""); err != nil {
+	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-stale", &past, nil, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	_, err = hubAccountToken(dir, "main", "hub:main")

@@ -319,6 +319,24 @@ def env_file_val(path, key):
     return ""
 
 
+def node_auth(url):
+    """(url, node token) for a call AS this machine. Separated (issue #1971):
+    node.env is unreadable to this login, so the call goes through the
+    credential proxy's hub broker — the broker's URL for the hub's, a
+    short-lived fcpn1. for the token. Not separated: (url, node.env's token),
+    exactly as before."""
+    tok = env_file_val(os.path.join(CONF_DIR, "node.env"), "CCQUOTA_TOKEN")
+    if tok or not os.path.isfile(os.path.join(CONF_DIR, "credsep.json")):
+        return url, tok
+    try:
+        out = subprocess.run(["bash", os.path.join(HERE, "fleet-cred-proxy.sh"), "node-token"],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=15).stdout
+        burl, btok = out.strip().split("\t", 1)
+        return burl.rstrip("/"), btok
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return url, ""
+
+
 def hub_url(arg):
     url = arg or os.environ.get("CCQUOTA_HUB_URL") or os.environ.get("FLEET_HUB_URL") \
         or env_file_val(os.path.join(CONF_DIR, "node.env"), "CCQUOTA_HUB_URL") \
@@ -384,10 +402,10 @@ def fetch(a):
         hdr = {"Accept": "application/json"}
         if isinstance(have, int):
             hdr["If-None-Match"] = '"team-v%d"' % have
-        tok = env_file_val(os.path.join(CONF_DIR, "node.env"), "CCQUOTA_TOKEN")
+        nurl, tok = node_auth(url)
         code, raw = 0, b""
         if tok:
-            code, raw = http(url + TEAM_PATH, "GET", dict(hdr, Authorization="Bearer " + tok), None, a.timeout)
+            code, raw = http(nurl + TEAM_PATH, "GET", dict(hdr, Authorization="Bearer " + tok), None, a.timeout)
         if code in (0, 401, 403) or not tok:
             proof = cert_proof()
             if proof:
@@ -441,10 +459,10 @@ def fetch_person(a):
         hdr = {"Accept": "application/json"}
         if cached and cached.get("etag"):
             hdr["If-None-Match"] = cached["etag"]
-        tok = env_file_val(os.path.join(CONF_DIR, "node.env"), "CCQUOTA_TOKEN")
+        nurl, tok = node_auth(url)
         code, raw = 0, b""
         if tok:
-            code, raw = http(url + PERSON_PATH, "GET", dict(hdr, Authorization="Bearer " + tok), None, a.timeout, got)
+            code, raw = http(nurl + PERSON_PATH, "GET", dict(hdr, Authorization="Bearer " + tok), None, a.timeout, got)
         if code in (0, 401, 403) or not tok:
             proof = cert_proof(PERSON_SIG_NS, "fleet-person")
             if proof:

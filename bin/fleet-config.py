@@ -289,10 +289,10 @@ def person_call(a, method, body=None, query=""):
                            json.dumps(body).encode() if body is not None else None, a.timeout)
         return code, decode(raw)
     full = url + PERSON_PATH + ("?" + query if query else "")
-    tok = T.env_file_val(os.path.join(T.CONF_DIR, "node.env"), "CCQUOTA_TOKEN")
+    nurl, tok = T.node_auth(url)
     code, raw = 0, b""
     if tok:
-        code, raw = T.http(full, method, dict(hdr, Authorization="Bearer " + tok),
+        code, raw = T.http(nurl + PERSON_PATH + ("?" + query if query else ""), method, dict(hdr, Authorization="Bearer " + tok),
                            json.dumps(body).encode() if body is not None else None, a.timeout)
     if code in (0, 401) or not tok:
         proof = cert_proof()
@@ -751,10 +751,12 @@ def team_get(a, operator=False):
         tok = os.environ.get("CCQUOTA_VIEWER_TOKEN") or ""
         if not tok and operator:
             die("团队配置只有操作者能改：要 CCQUOTA_VIEWER_TOKEN 在环境里")
-        tok = tok or T.env_file_val(os.path.join(T.CONF_DIR, "node.env"), "CCQUOTA_TOKEN")
+        nurl = url
+        if not tok:
+            nurl, tok = T.node_auth(url)
         code, raw_ = 0, b""
         if tok:
-            code, raw_ = T.http(url + T.TEAM_PATH, "GET", dict(hdr, Authorization="Bearer " + tok), None, a.timeout)
+            code, raw_ = T.http(nurl + T.TEAM_PATH, "GET", dict(hdr, Authorization="Bearer " + tok), None, a.timeout)
         if not operator and (code in (0, 401, 403) or not tok):
             proof = T.cert_proof()
             if proof:

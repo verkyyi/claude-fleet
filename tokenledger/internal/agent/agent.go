@@ -141,6 +141,14 @@ type Config struct {
 	// (CCQUOTA_FLEET_CODEX_HOMES).
 	FleetCodexHomesDir string
 
+	// FleetCredStore is the credential proxy's control socket
+	// (CCQUOTA_FLEET_CRED_STORE, claude-fleet#1971). Set — only by
+	// bin/fleet-credsep-launch.py, in separated mode — every leased Claude
+	// and Codex credential is handed to that socket instead of written into
+	// this login's files, so no session of this login can read one. Empty =
+	// the files, byte for byte as before.
+	FleetCredStore string
+
 	// FleetOAuthRefresh lets the hub relay a credential REFRESH through this
 	// machine (claude-fleet#1490): an admin agent posts the hub's one token
 	// request to the provider from its own network and hands the answer
