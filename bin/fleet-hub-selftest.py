@@ -741,6 +741,47 @@ class HubTests(HubFixture):
         (self.node.root / "fleet.conf").write_text("FLEET_GLOBAL_MAX_SESSIONS=8\n")
         self.assertEqual(self.node.rpc("discover", {})["capacity"]["max_sessions"], 8)
 
+    def test_discover_carries_the_gates_own_verdict(self):
+        # Issue #1836 (EPIC #2074 C5): with the count cap 0 the hub could never
+        # see this machine as full, while fleet_machine_admit refused each
+        # placed start on arrival. capacity now carries that gate's verdict —
+        # admit / admit_why / room — read from the same knobs the spawn reads
+        # (the install's fleet.conf, which the adapter sources; never a caller's
+        # environment). 16000 MB of RAM, one 400 MB agent (×3 ⇒ 1200 MB a
+        # session) and stubbed readings, never this box's own.
+        conf = self.node.root / "fleet.conf"
+        stubs = ("FLEET_MEM_TOTAL_MB=16000\nFLEET_MEM_PS_CMD=\"printf '101 1 %d 409600 01:00 claude\\\\n'\"\n"
+                 "FLEET_LOAD_PROBE_CMD='echo 0.5'\n" % os.getuid())
+        conf.write_text(stubs + "FLEET_MEM_PROBE_CMD='echo 4 5 97 0'\n")   # critical pressure, 5% free
+        cap = self.node.rpc("discover", {})["capacity"]
+        self.assertEqual(cap["max_sessions"], 0, cap)
+        self.assertIs(cap["admit"], False, cap)
+        self.assertEqual(cap["admit_why"], "内存紧张", cap)
+        self.assertEqual(cap["room"], 0, cap)
+        conf.write_text(stubs.replace("echo 0.5", "echo 1.9") + "FLEET_MEM_PROBE_CMD='echo 1 66 5 6'\n")
+        cap = self.node.rpc("discover", {})["capacity"]
+        self.assertIs(cap["admit"], False, cap)
+        self.assertEqual(cap["admit_why"], "负载过高", cap)
+        self.assertGreaterEqual(cap["room"], 1, cap)
+        conf.write_text(stubs + "FLEET_MEM_PROBE_CMD='echo 1 66 5 6'\n")   # healthy
+        cap = self.node.rpc("discover", {})["capacity"]
+        self.assertIs(cap["admit"], True, cap)
+        self.assertNotIn("admit_why", cap)
+        self.assertGreaterEqual(cap["room"], 1, cap)
+        # The gate switched off: nothing for the hub to hold on — admit true, no room.
+        conf.write_text(stubs + "FLEET_MEM_PROBE_CMD='echo 4 5 97 0'\nFLEET_ADMIT=0\n")
+        cap = self.node.rpc("discover", {})["capacity"]
+        self.assertIs(cap["admit"], True, cap)
+        self.assertNotIn("room", cap)
+        # A read script older than #1836 says only the two counts: the
+        # controller passes exactly those through, and the hub filters nothing.
+        with patch.object(self.node.controller, "adapter",
+                          return_value=(0, b'{"sessions":2,"max_sessions":0}\n', b"")):
+            self.assertEqual(self.node.controller.capacity(), {"sessions": 2, "max_sessions": 0})
+        with patch.object(self.node.controller, "adapter",
+                          return_value=(0, b'{"sessions":2,"max_sessions":0,"admit":"no","room":"x"}\n', b"")):
+            self.assertEqual(self.node.controller.capacity(), {"sessions": 2, "max_sessions": 0})
+
     def test_permissions_revocation_expiry_and_no_cross_fleet_routing(self):
         reader = self.hub.grant("reader", [self.fleet], ["fleet:read"])
         before = len(self.rpc_calls)

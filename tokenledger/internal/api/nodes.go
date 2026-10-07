@@ -509,8 +509,14 @@ type NodeView struct {
 	SessionsUnknown []string `json:"sessions_unknown,omitempty"`
 	// MaxSessions is the login's own session cap and CapSessions the count
 	// its gate reads (claude-fleet#1587); absent when the node does not say.
-	MaxSessions  int                `json:"max_sessions,omitempty"`
-	CapSessions  *int               `json:"cap_sessions,omitempty"`
+	MaxSessions int  `json:"max_sessions,omitempty"`
+	CapSessions *int `json:"cap_sessions,omitempty"`
+	// Admit / AdmitWhy / Room are the login's own admission verdict
+	// (claude-fleet#1836): false = its gate is holding new sessions, and why;
+	// Room how many more fit in its memory. Absent when the node does not say.
+	Admit        *bool              `json:"admit,omitempty"`
+	AdmitWhy     string             `json:"admit_why,omitempty"`
+	Room         *int               `json:"room,omitempty"`
 	Fleets       []NodeFleetSummary `json:"fleets"`
 	FleetError   string             `json:"fleet_error,omitempty"`
 	FleetVersion string             `json:"fleet_version,omitempty"`
@@ -746,6 +752,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.MemFreeBytes, v.MemTotalBytes = hb.MemFreeBytes, hb.MemTotalBytes
 		v.Sessions, v.SessionsUnknown = hb.SessionsCount(), hb.UnreadableFleets()
 		v.MaxSessions, v.CapSessions = hb.MaxSessions, hb.CapSessions
+		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
 		for _, f := range hb.Fleets {
 			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count, Error: f.Error})
