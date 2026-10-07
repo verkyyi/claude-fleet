@@ -993,6 +993,19 @@ machine freed a slot since its last beat, in which case it opens here. A beat
 without the two fields (an agent or claude-fleet older than #1587) filters
 nothing, as before. Both show on `/v1/nodes` and on each `placement` candidate.
 
+**A login whose own gate is holding is never a candidate either**
+(claude-fleet#1836). The count cap defaults to 0 since claude-fleet#1831, so
+`max_sessions:0` never says full — while the machine's real gate,
+`fleet_machine_admit` (memory pressure, the room for one more session above the
+kept-back floor, CPU load), refused each placed start on arrival. `capacity`
+therefore also carries `admit` (false = holding), `admit_why` (the gate's own
+tag: `内存紧张` / `负载过高`) and `room` (`fleet_machine_headroom`'s count of
+how many more fit; absent with `FLEET_ADMIT=0`, the gate off). `admit=false` or
+`room<1` excludes the candidate as `机器暂停接新：<原因>`, auto or named, and
+counts as full: with every machine out that way the refusal is `AT_CAPACITY`
+`all-full: every machine is at its session cap or pausing new sessions — …`. A
+beat without the fields filters nothing on them, as before.
+
 **Grants.** Each tool has the Python hub's scope (`worker:start`,
 `worker:message`, `worker:stop`, `worker:resume`, `config:write` plus the key,
 `gh:read`, `gh:comment`; every call needs `fleet:read`). The operator's doors

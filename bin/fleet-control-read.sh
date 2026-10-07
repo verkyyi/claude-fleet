@@ -267,9 +267,34 @@ case "$mode" in
     # refuses on — FLEET_GLOBAL_MAX_SESSIONS (default 0 = unlimited since #1831) against
     # the awake session windows of every fleet (a sleeper holds no slot). The
     # in-flight spawns are left out: the asker's own spawn is one of them.
+    # Since #1831 that cap is 0 by default, so the number alone never says
+    # "full" — and the machine's REAL gate, fleet_machine_admit, was invisible
+    # to the hub, which kept placing starts here to be refused on arrival
+    # (issue #1836, EPIC #2074 C5). So the object also carries the gate's own
+    # verdict, the same one a spawn here meets:
+    #   admit      may this machine take ONE MORE session right now
+    #   admit_why  the hold's tag without its 暂停开新： prefix — 内存紧张 / 负载过高
+    #              (only with admit false)
+    #   room       fleet_machine_headroom's count: how many more fit in memory.
+    #              Left out when memory is unreadable, or with FLEET_ADMIT=0 —
+    #              the gate is off, so there is nothing for the hub to hold on.
+    # The hub reads admit=false or room<1 as full (机器暂停接新：<原因>); a hub
+    # older than #1836 reads past the fields, a read script older than it says
+    # none and the hub filters nothing — byte for byte as before.
     gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}"
     case "$gmax" in ''|*[!0-9]*) gmax=0 ;; esac
-    printf '{"sessions":%d,"max_sessions":%d}\n' "$(fleet_session_count)" "$gmax"
+    admit=true; why=''; room=''
+    if why=$(fleet_machine_admit --short 2>/dev/null); then why=''
+    else admit=false; why="${why#暂停开新：}"; fi
+    if [ "${FLEET_ADMIT:-1}" != 0 ]; then
+      hr=$(fleet_machine_headroom 2>/dev/null) && room="${hr%% *}"
+      case "$room" in ''|*[!0-9]*) room='' ;; esac
+    fi
+    why=$(printf '%s' "$why" | sed 's/[\\"]/\\&/g')
+    printf '{"sessions":%d,"max_sessions":%d,"admit":%s' "$(fleet_session_count)" "$gmax" "$admit"
+    [ -n "$why" ] && printf ',"admit_why":"%s"' "$why"
+    [ -n "$room" ] && printf ',"room":%d' "$room"
+    printf '}\n'
     ;;
   config)
     fleet_load_conf "$sess"

@@ -144,7 +144,18 @@ class Control:
         if not isinstance(got, dict) or type(got.get("sessions")) is not int \
                 or type(got.get("max_sessions")) is not int:
             return None
-        return dict(sessions=got["sessions"], max_sessions=got["max_sessions"])
+        out = dict(sessions=got["sessions"], max_sessions=got["max_sessions"])
+        # The gate's own verdict rides along (issue #1836): admit (bool),
+        # admit_why (the hold's reason, only with admit false) and room (how
+        # many more fit in memory). A read script older than #1836 says none,
+        # and the hub then filters nothing on them.
+        if type(got.get("admit")) is bool:
+            out["admit"] = got["admit"]
+            if not got["admit"] and isinstance(got.get("admit_why"), str) and got["admit_why"]:
+                out["admit_why"] = got["admit_why"]
+        if type(got.get("room")) is int and got["room"] >= 0:
+            out["room"] = got["room"]
+        return out
 
     def fleet(self, fleet_id):
         identifier(fleet_id)
