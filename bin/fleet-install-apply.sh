@@ -1024,5 +1024,31 @@ else
   say 'reeval: skip — no fleet-wait-reeval.sh in this version'
 fi
 
+# --- oldcfg (issue #2076, EPIC #2074 C3) --------------------------------------------
+# Which open sessions THIS version breaks — their start (@agent_cfg_manifest) names a
+# hook script, a mod tool's handler or an MCP script the new tree no longer has, the
+# C2 judgment (fleet-oldcfg-replay.py) asked per window by fleet-oldcfg-check.sh —
+# and which stale ones are looping (a scheduler the idle tick never reopens). Named
+# here, with window · repo · issue · state, and NEVER reopened: #2068 B is the
+# operator's call (a looping scheduler is reopened by hand, when free). The sweep
+# also writes global/agent-cfg.broken, so the sidebar's red is right on the first
+# frame after the move rather than one collector tick later.
+if [ -f "$ROOT/bin/fleet-oldcfg-check.sh" ] && [ "$BUNDLE" != 1 ]; then
+  if [ "$DRY" = 1 ]; then say 'oldcfg: would name the open sessions this version breaks, and the looping ones on an old configuration'
+  else
+    out=$(bash "$ROOT/bin/fleet-oldcfg-check.sh" --sweep --list --new-dir "$ROOT" 2>&1); rc=$?
+    nb=$(printf '%s\n' "$out" | grep -c '^broken	'); nl=$(printf '%s\n' "$out" | grep -c '^looping	')
+    if [ "$rc" -gt 2 ]; then say "oldcfg: WARN — $(printf '%s\n' "$out" | tail -1)"
+    elif [ "$nb" = 0 ] && [ "$nl" = 0 ]; then say 'oldcfg: ok — no open session breaks on this version; none looping on an old configuration'
+    else
+      say "oldcfg: 会坏·需重开 $nb · 循环中的配置旧 $nl — not reopened (#2068 B): reopen them when free (a looping one by hand, an idle broken one the cfg-restart tick takes)"
+      printf '%s\n' "$out" | grep -E '^(broken|looping)	' \
+        | awk -F'\t' '{ printf "    %s  %s:%s  %s  %s  %s%s\n", ($1 == "broken" ? "会坏" : "循环"), $2, $3, $4, $5, $6, ($7 != "" ? "  — " $7 : "") }'
+    fi
+  fi
+else
+  say 'oldcfg: skip — no fleet-oldcfg-check.sh in this version'
+fi
+
 logins_step
 finish "${from:0:7}..${to:0:7}$([ "$DRY" = 1 ] && printf ' (dry-run, nothing changed)')"

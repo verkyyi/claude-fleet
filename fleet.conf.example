@@ -1088,6 +1088,10 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_COLLECT_BANNER_PER_WINDOW_MS=1500
 # @label=Collector escalate budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_ESCALATE_BUDGET=30
+# The agentcfg phase (issue #2076): every stale / renew window's start judged against
+# the live install (fleet-oldcfg-check.sh --sweep) — the sidebar's red 会坏·需重开.
+# @label=Collector agentcfg budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_COLLECT_AGENTCFG_BUDGET=20
 # @label=Collector snapshot budget @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_COLLECT_SNAPSHOT_BUDGET=30
 # @label=Collector hubsess budget @group=cache @tier=internal @scope=global @edit=int @unit=sec

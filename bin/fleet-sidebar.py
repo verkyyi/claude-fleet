@@ -1468,16 +1468,28 @@ def fit_tag(node, room):
     return tag if room - (width_of(tag) + 1) > 0 else ""
 
 
+CFG_WORDS = ("stale", "renew", "broken")   # the cfg verdicts that carry a word
+
+
 def cfg_tag(cfg, narrow=False):
     """The 配置旧 word a row whose configuration is stale carries left of its @
     mark (issue #1783) — `旧` when narrow; 待换新 (`换`) for a `renew` row, the
-    same configuration on an older fleet version (issue #1895); "" for `ok` /
-    unknown (empty)."""
+    same configuration on an older fleet version (issue #1895); 会坏·需重开 (`坏`)
+    for a `broken` row, whose start names something the install no longer has
+    (issue #2076 — painted red, every other word yellow); "" for `ok` / unknown
+    (empty)."""
     if cfg == "stale":
         return tr("sidebar_cfg_stale_narrow" if narrow else "sidebar_cfg_stale")
     if cfg == "renew":
         return tr("sidebar_cfg_renew_narrow" if narrow else "sidebar_cfg_renew")
+    if cfg == "broken":
+        return tr("sidebar_cfg_broken_narrow" if narrow else "sidebar_cfg_broken")
     return ""
+
+
+def cfg_pair(cfg):
+    """The colour pair cfg_part is painted in: red for broken, yellow otherwise."""
+    return PAIR_BROKEN if cfg == "broken" else PAIR_STALE
 
 
 def fit_cfg_tag(cfg, room):
@@ -1553,7 +1565,7 @@ def reap_part(tag, cfg, policy):
 
 def cfg_part(tag, cfg):
     """The leading 配置旧 / 待换新 (or its narrow word) of a row_layout tag, else ""."""
-    if cfg not in ("stale", "renew") or not tag:
+    if cfg not in CFG_WORDS or not tag:
         return ""
     for word in (cfg_tag(cfg), cfg_tag(cfg, narrow=True)):
         if tag == word or tag.startswith(word + " "):
@@ -1962,7 +1974,7 @@ def collect_rows(proc):
 
 
 # wid state glyph name tree badge depth detail node issue pr ctx cfg title reap
-# (issues #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `ok`,
+# (issues #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `broken` (#2076) / `ok`,
 # absent when unknown; #1921 — title is the session's issue title, absent when
 # none: a reader falls back to name; #1902 — reap is the @reap_policy, absent when
 # none)
@@ -2141,11 +2153,15 @@ PAIR_SEL, PAIR_HERE, PAIR_TOAST, PAIR_FG, PAIR_DIM, SEL_GLYPH = 5, 6, 7, 8, 9, 1
 PAIR_DIM_SEL = 17
 # 配置旧 (issue #1783): yellow, on the raised row's ground too (PAIR_STALE + SEL_GLYPH).
 PAIR_STALE = 18
+# 会坏·需重开 (issue #2076): red — the session WILL fail on this install, not merely
+# lack a feature; the one cfg word that is not yellow.
+PAIR_BROKEN = 19
 PAIRS = {PAIR_SEL: ("PAL_FG", "PAL_SEL"), PAIR_TOAST: ("PAL_RED", None),
          PAIR_FG: ("PAL_FG", None), PAIR_DIM: ("PAL_DIM", None),
          PAIR_HERE: ("PAL_MAGENTA", None), PAIR_HERE + SEL_GLYPH: ("PAL_MAGENTA", "PAL_SEL"),
          PAIR_DIM_SEL: ("PAL_DIM", "PAL_SEL"),
-         PAIR_STALE: ("PAL_YELLOW", None), PAIR_STALE + SEL_GLYPH: ("PAL_YELLOW", "PAL_SEL")}
+         PAIR_STALE: ("PAL_YELLOW", None), PAIR_STALE + SEL_GLYPH: ("PAL_YELLOW", "PAL_SEL"),
+         PAIR_BROKEN: ("PAL_RED", None), PAIR_BROKEN + SEL_GLYPH: ("PAL_RED", "PAL_SEL")}
 for _state, _pair in STATE_PAIR.items():
     PAIRS[_pair] = (STATE_COLOR[_state], None)
     PAIRS[_pair + SEL_GLYPH] = (STATE_COLOR[_state], "PAL_SEL")
@@ -2796,7 +2812,7 @@ def ui(screen, session, worker, lock):
                     ctag = cfg_part(tag, cfg)
                     if ctag:
                         screen.addstr(y, w - width_of(tag), ctag, curses.color_pair(
-                            PAIR_STALE + SEL_GLYPH if raised else PAIR_STALE) | curses.A_BOLD)
+                            cfg_pair(cfg) + SEL_GLYPH if raised else cfg_pair(cfg)) | curses.A_BOLD)
                     # 常驻 (issue #1902) in the 本机 magenta: the one policy that
                     # says «this one stays»; every other word keeps the tag's dim.
                     roff, rword = reap_part(tag, cfg, reap)

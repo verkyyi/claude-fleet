@@ -2444,17 +2444,28 @@ if [ -f "$_at" ] && command -v python3 >/dev/null 2>&1; then
   # (issue #1783): marked 配置旧 on the sidebar, reopened once idle
   # (fleet-cfg-restart.sh, FLEET_CFG_RESTART) — counted apart from those on the
   # same configuration but an older fleet version (待换新, issue #1895), reopened
-  # alike. Never a WARN on its own — right after a sync every session is stale
-  # until its idle reopen.
+  # alike. Neither is a WARN on its own — right after a sync every session is
+  # stale until its idle reopen. The third count (issue #2076) IS: 会坏·需重开, a
+  # session whose start names something this install no longer has (a hook
+  # script, a mod tool's handler, an MCP script — fleet-oldcfg-check.sh --sweep's
+  # list); it fails every turn until reopened, and a looping one is never
+  # reopened for you.
   _cst=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-cfg-restart.sh" --counts 2>/dev/null)
   _cold=${_cst%% *}; _cnew=${_cst#* }
+  case "$_cnew" in *' '*) _cbrk=${_cnew#* }; _cnew=${_cnew%% *} ;; *) _cbrk=0 ;; esac   # 2 numbers = an older tick
   case "$_cold" in ''|*[!0-9]*) _cold=0 ;; esac
   case "$_cnew" in ''|*[!0-9]*) _cnew=0 ;; esac
-  if [ "$_cold" != 0 ] || [ "$_cnew" != 0 ]; then
-    _cout="$_cout · 待换新 $_cnew · 配置旧 $_cold / $_cnew session(s) on an older fleet version, $_cold on an old configuration"
+  case "$_cbrk" in ''|*[!0-9]*) _cbrk=0 ;; esac
+  if [ "$_cold" != 0 ] || [ "$_cnew" != 0 ] || [ "$_cbrk" != 0 ]; then
+    _cout="$_cout · 会坏 $_cbrk · 待换新 $_cnew · 配置旧 $_cold / $_cbrk session(s) this install BREAKS, $_cnew on an older fleet version, $_cold on an old configuration"
   fi
-  unset _cst _cold _cnew
+  if [ "$_cbrk" != 0 ] && [ "$_crc" = 0 ]; then
+    warn agentcfg "${_cout#ok } (fix: reopen the broken ones — \`$(dirname "$0")/fleet-oldcfg-check.sh --sweep --list\` names each (window · repo · issue · state · what is gone); an idle one the cfg-restart tick reopens itself, a looping scheduler you reopen by hand (/fleet-handoff), issue #2076)"
+    _crc=-1
+  fi
+  unset _cst _cold _cnew _cbrk
   case "$_crc" in
+    -1) ;;
     0) pass agentcfg "${_cout#ok }" ;;
     1) warn agentcfg "$_cout (fix: drop the login's own value, or remove it from $conf_dir/agent-overrides.json — these are what fleet itself runs on)" ;;
     *) warn agentcfg "fleet-agent-team.py check: $(printf '%s\n' "$_cout" | tail -1)" ;;

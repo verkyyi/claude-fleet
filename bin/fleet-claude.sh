@@ -376,12 +376,13 @@ if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && comm
   case " $* " in *" --mcp-config "*|*" --mcp-config="*|*" --strict-mcp-config "*) _fc_ca+=(--no-mcp) ;; esac
   case " $* " in *" --settings "*|*" --settings="*) _fc_ca+=(--no-settings) ;; esac
   if command -v fleet_mod_on >/dev/null 2>&1 && ! fleet_mod_on; then _fc_ca+=(--mod-off); fi
-  _fc_fp=''; _fc_src=''; _fc_ver=''; _fc_modw=''; _fc_locks=''; _fc_say=''
+  _fc_fp=''; _fc_src=''; _fc_ver=''; _fc_man=''; _fc_modw=''; _fc_locks=''; _fc_say=''
   while IFS=$'\t' read -r _fc_k _fc_v; do
     case "$_fc_k" in
       fp)       _fc_fp="$_fc_v" ;;
       src)      _fc_src="$_fc_v" ;;
       ver)      _fc_ver="$_fc_v" ;;
+      manifest) _fc_man="$_fc_v" ;;
       say)      _fc_say="$_fc_v" ;;
       mod)      _fc_modw="$_fc_v" ;;
       mcp)      cfg_flag+=("--mcp-config=$_fc_v") ;;      # the =form: --mcp-config is variadic (see above)
@@ -408,8 +409,12 @@ if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && comm
     # the fleet version it runs (issue #1895): differs from the expected ver ⇒ 待换新
     if [ -n "$_fc_ver" ]; then tmux set-option -w -t "$TMUX_PANE" @agent_ver "$_fc_ver" 2>/dev/null || true
     else tmux set-option -wu -t "$TMUX_PANE" @agent_ver 2>/dev/null || true; fi
+    # what it started with (issue #2076): fleet-oldcfg-check.sh reads it to tell a
+    # session a release BREAKS (会坏·需重开) from one that only lacks a new feature
+    if [ -n "$_fc_man" ]; then tmux set-option -w -t "$TMUX_PANE" @agent_cfg_manifest "$_fc_man" 2>/dev/null || true
+    else tmux set-option -wu -t "$TMUX_PANE" @agent_cfg_manifest 2>/dev/null || true; fi
   fi
-  unset _fc_ca _fc_fp _fc_src _fc_ver _fc_modw _fc_locks _fc_say _fc_k _fc_v
+  unset _fc_ca _fc_fp _fc_src _fc_ver _fc_man _fc_modw _fc_locks _fc_say _fc_k _fc_v
 fi
 
 # The binary (issue #1774): $FLEET_CLAUDE_BIN, else `claude` when PATH has it (the

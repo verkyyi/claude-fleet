@@ -16,7 +16,7 @@
 #   B. judge     — fleet_cfg_state: ok · renew (older ver, or none stamped) ·
 #                  stale (another fingerprint, whatever the ver); no `ver` line
 #                  expected ⇒ never renew (the degenerate: byte for byte #1783)
-#   C. tick      — fleet-cfg-restart.sh --counts `<配置旧> <待换新>`, --count both,
+#   C. tick      — fleet-cfg-restart.sh --counts `<配置旧> <待换新> <会坏>` (#2076), --count both,
 #                  fleet_cfg_restart_why reopens a renew one like a stale one
 #   D. rows      — tmux-dashboard-rows.sh: field 13 `renew` and 待换新 on the hub
 #                  list off `@agent_cfg/@agent_ver`; a remote row's `renew` verdict
@@ -121,7 +121,7 @@ FAKE="$WORK/fake-migrate.sh"; printf '#!/bin/sh\nexit 0\n' > "$FAKE"; chmod +x "
 tick() { FLEET_CFG_RESTART_MIGRATE="$FAKE" bash "$BIN/fleet-cfg-restart.sh" "$@" -- "$S" 2>&1; }
 why() { bash -c '. "$1/fleet-lib.sh"; fleet_cfg_restart_why "$2" "$3"; echo "rc=$?"' _ "$BIN" "$S" "$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'; }
 expected "$v2"
-eq "C: --counts — 配置旧 2 · 待换新 2" "2 2" "$(tick --counts)"
+eq "C: --counts — 配置旧 2 · 待换新 2 · 会坏 0" "2 2 0" "$(tick --counts)"
 eq "C: --count — both kinds" "4" "$(tick --count)"
 eq "C: a renew session, done + idle → reopened like a stale one" "rc=0" "$(why "$WREN")"
 eq "C: …one with no @agent_ver too" "rc=0" "$(why "$WNOV")"
@@ -130,7 +130,7 @@ l=$(tick --list)
 has "C: --list names the renew one" "$l" "$WREN	oldver	reopen"
 hasnt "C: …never the current one" "$l" "$WCUR"
 expected
-eq "C: no ver line — only 配置旧 counts (the degenerate)" "2 0" "$(tick --counts)"
+eq "C: no ver line — only 配置旧 counts (the degenerate)" "2 0 0" "$(tick --counts)"
 eq "C: …the renew one is ok again" "ok rc=1" "$(why "$WREN")"
 : "$WSTA$WBOTH"
 

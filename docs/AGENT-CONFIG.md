@@ -37,6 +37,20 @@ doctor `agentcfg` 行分开数，`fleet-cfg-restart.sh` 两种一样闲时重开
 是「fleet 已从 X 更新到 Y」，`/fleet-history` 记 `reason=cfg-stale | ver-stale`。开会话不联网。每项的来源记在
 `$FLEET_CONF_DIR/agent-effective.json`（`source` 字段机器可读：`default|team|personal|local`）。
 
+旧和**会坏**是两回事（#2076，EPIC #2074 C3）：`session` 还把会话启动时读到的三样记下来——
+交给它的 hook 表、mod 登记的工具清单、MCP 服务器——写成 `$FLEET_CONF_DIR/agentcfg/<sha>.json`
+（按内容寻址，窗口选项 `@agent_cfg_manifest` 指着它）。`bin/fleet-oldcfg-check.sh <manifest>` 用
+发版门（C2，`fleet-oldcfg-replay.py --manifest`）的同一判定对着当前安装静态比：hook 命令里的
+`~/.claude/fleet/…` 路径没了、mod 工具在新 `TOOL_RE` 里没 handler、MCP 服务器的脚本没了 =
+**broken**（会真坏：每轮 hook error、每次 spawn `no tool.call hook answered`）；只是新表 / 新 mod
+多了它不知道的东西 = **stale**（只缺新功能）；三样一字不差 = **ok**。`--sweep` 把每个 fleet 里配置旧 /
+待换新窗口的 manifest 各判一次，会坏的写进 `global/agent-cfg.broken`，`fleet_cfg_state` 读它：侧栏
+那一行从黄「配置旧」变成红「**会坏·需重开**」，doctor `agentcfg` 行三种分开数（有会坏的就 WARN），
+闲时重开照旧把它当配置旧处理。采集 tick 的 `agentcfg` 阶段每轮扫一遍；`fleet-install-apply.sh` 末尾的
+`oldcfg:` 一步在挪版后立刻扫并点名会坏的和**在循环的**配置旧会话（窗口 · 仓库 · 单号 · 状态）——
+循环的调度会话闲时重开永远不碰，你得找空自己重开；这一步不自动重开任何会话（#2068 B 不做）。
+没有 manifest 的老窗口（#2076 之前开的）照旧算 stale，永远不红。
+
 ## 加锁
 
 加锁项是 fleet 自己赖以运转的东西，本机 / 个人 / 团队都盖不住它（`enforce` 下）。

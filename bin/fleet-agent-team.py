@@ -1752,6 +1752,59 @@ def gen_file(kind, agent, data):
     return path
 
 
+def manifest_file(s, a, agent, fp, ver):
+    """The session's START written down (issue #2076, EPIC #2074 C3): the hook table
+    it was handed, the mod tools it registers, the MCP servers — the three things a
+    later release can break under it. bin/fleet-oldcfg-check.sh judges it against the
+    live install with the release gate's own rule (fleet-oldcfg-replay.py): gone =
+    broken (red, 会坏·需重开), merely new = stale (yellow). Content-addressed under
+    $FLEET_CONF_DIR/agentcfg/<sha>.json, so two launches of one start share a file;
+    the launcher stamps the path as @agent_cfg_manifest. Kept apart from the
+    fingerprint: @agent_cfg says WHETHER the definition changed, the manifest WHAT it
+    was. Never fails a launch: an unreadable piece is left out, an unwritable
+    directory means no line (the window then has no manifest and reads stale)."""
+    hooks = {}
+    rows = (s.rows.get("claude.hooks" if agent == "claude" else "codex.hooks") or {}).get("value") or []
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 3:
+            continue
+        h = {"type": "command", "command": row[2]}
+        if len(row) > 3 and row[3] is not None:
+            h["timeout"] = row[3]
+        hooks.setdefault(row[0], []).append({"matcher": row[1], "hooks": [h]} if row[1] else {"hooks": [h]})
+    pre = "claude.mcp." if agent == "claude" else "codex.mcp."
+    mcp = {p[len(pre):]: r["value"] for p, r in s.rows.items() if p.startswith(pre) and isinstance(r.get("value"), dict)}
+    worker = read_json_quiet(os.path.join(a.root, "conf", "mcp-worker.json"))
+    for n, v in (worker.get("mcpServers") or {}).items() if isinstance(worker, dict) else ():
+        mcp.setdefault(n, v)
+    # the mod's tools: None = this session has no mod (Codex, FLEET_MOD=0) — nothing
+    # of the kind to break, and a new tool is not «new to it» either
+    tools = None
+    mr = s.rows.get("mod")
+    if agent == "claude" and mr and mr.get("value") not in ("off", "na") \
+            and os.path.isfile(os.path.join(HERE, "fleet-oldcfg-replay.py")):
+        try:
+            oc = load_mod("fleet_oldcfg_replay", "fleet-oldcfg-replay.py")
+            with open(os.path.join(a.root, "mod", "fleet", "hooks", "tools.ts"), encoding="utf-8") as fh:
+                tools = oc.Replay.registered_tools(fh.read()) or []
+        except (OSError, AttributeError, ValueError):
+            tools = None
+    data = {"agent": agent, "fp": fp, "ver": ver or None, "hooks": hooks, "tools": tools, "mcp": mcp}
+    body = json.dumps(data, sort_keys=True, ensure_ascii=False, indent=1) + "\n"
+    d = os.path.join(CONF_DIR, "agentcfg")
+    path = os.path.join(d, hashlib.sha256(body.encode()).hexdigest()[:12] + ".json")
+    if not os.path.exists(path):
+        try:
+            os.makedirs(d, exist_ok=True)
+            tmp = path + ".tmp.%d" % os.getpid()
+            with open(tmp, "w") as f:
+                f.write(body)
+            os.replace(tmp, path)
+        except OSError:
+            return None
+    return path
+
+
 def session(a):
     agent = a.arg or "claude"
     if agent not in ("claude", "codex"):
@@ -1760,11 +1813,15 @@ def session(a):
     if s.pbundle.get("hook_scripts"):     # Codex runs the same programs (#1864)
         scripts_fill(s.pbundle)
     hlines = s.codex_hook_lines() if agent == "codex" else []
-    print("fp\t%s" % s.fingerprint())
+    fp = s.fingerprint()
+    print("fp\t%s" % fp)
     print("src\t%s" % s.src())
     ver = fleet_ver(a.root)
     if ver:                         # stamped as @agent_ver (#1895)
         print("ver\t%s" % ver)
+    mpath = manifest_file(s, a, agent, fp, ver)
+    if mpath:                       # stamped as @agent_cfg_manifest (#2076)
+        print("manifest\t%s" % mpath)
     if s.personal:                  # the person-facing line (EPIC #1855 C6) — absent, as before
         say = human_line(a)
         if say:

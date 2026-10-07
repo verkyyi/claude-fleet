@@ -316,6 +316,7 @@ fcfg_label_i18n() {
     FLEET_COLLECT_BANNER_BUDGET) printf 'Collector banner 预算' ;;
     FLEET_COLLECT_BANNER_PER_WINDOW_MS) printf 'Collector banner 每窗口预算' ;;
     FLEET_COLLECT_ESCALATE_BUDGET) printf 'Collector escalate 预算' ;;
+    FLEET_COLLECT_AGENTCFG_BUDGET) printf 'Collector agentcfg 预算' ;;
     FLEET_COLLECT_SNAPSHOT_BUDGET) printf 'Collector snapshot 预算' ;;
     FLEET_COLLECT_HUBSESS_BUDGET) printf 'Collector hubsess 预算' ;;
     FLEET_COLLECT_STALE) printf 'Dash 陈旧告警' ;;
