@@ -16,22 +16,6 @@ spec:
               value: "https://claudefleet.24haowan.com"
             - name: CCQUOTA_PUBLIC_URL
               value: "https://claudefleet.24haowan.com"
-            - name: CCQUOTA_SSO_APP
-              value: "ccquota"
-            - name: CCQUOTA_SSO_SLUG
-              value: "staff"
-            - name: CCQUOTA_SSO_ENTER_URL
-              value: "https://ai.24haowan.com/kf/authz/enter"
-            - name: CCQUOTA_SSO_TICKET_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: ccquota
-                  key: sso-ticket-secret
-            - name: CCQUOTA_SSO_SESSION_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: ccquota
-                  key: sso-session-secret
             - name: CCQUOTA_FLEET_ADMIN_USERS
               value: "verkyyi"
             # GitHub sign-in (#1984, wired by #2002). The client pair comes from
@@ -54,18 +38,6 @@ spec:
                   optional: true
             - name: CCQUOTA_FLEET_PRINCIPAL_LOGINS
               value: "YiLiangHui=verkyyi,CaoJian=24haowan,zx=zx,HuangYongSheng=vincent"
-            - name: CCQUOTA_NOTIFY_URL
-              valueFrom:
-                secretKeyRef:
-                  name: smoke-creds
-                  key: NOTIFY_URL
-            - name: CCQUOTA_NOTIFY_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: smoke-creds
-                  key: NOTIFY_KEY
-            - name: CCQUOTA_NOTIFY_DEST
-              value: "alerts.prod"
             - name: CCQUOTA_FLEET_ROUTES
               value: |-
                 [{"hostname":"macmini","alias":"m5"},{"hostname":"mini2","alias":"m4"}]

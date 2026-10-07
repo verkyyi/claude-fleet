@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
@@ -22,8 +21,8 @@ import (
 // under SessionsSigNamespace. The holder is then exactly a signed-in person:
 // FleetScope narrows the answer to the (machine, login) pairs of their ACTIVE
 // accounts, and the audit row names them. Every door handleFleet admits still
-// works here (the viewer token, a WeCom session, a tailnet peer), so the
-// operator's sidebar is unchanged.
+// works here (the viewer token, a GitHub session), so the operator's sidebar
+// is unchanged.
 
 // SessionsRequest proves a connection certificate for the session list: Sig
 // is `ssh-keygen -Y sign -n fleet-sessions@claude-fleet` over
@@ -83,12 +82,8 @@ func (s *Server) handleFleetSessions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !id.Operator {
 		// A person: the fleet principal FleetScope and the audit read, as a
-		// WeCom sign-in sets it (viewerOnly's ssoSession branch).
+		// GitHub sign-in sets it (viewerOnly's githubAdmit).
 		ctx = context.WithValue(withViewer(ctx, id.Principal), principalKey{}, id.Principal)
-	} else if login := strings.TrimPrefix(id.Actor, "tailnet:"); login != id.Actor {
-		// A tailnet peer is the operator's door, audited by its login, as
-		// viewerOnly does.
-		ctx = withViewer(ctx, login)
 	}
 	out, err := s.CallFleetTool(r.WithContext(ctx), "fleet_sessions", args)
 	writeFleetResult(w, r, out, err)

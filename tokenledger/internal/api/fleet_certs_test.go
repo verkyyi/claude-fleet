@@ -9,6 +9,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -17,17 +18,16 @@ import (
 	"github.com/coder/websocket/wsjson"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 )
 
-// certHarness: fleet on, WeCom SSO on, a CA, two machines with routes, and
-// Alice holding an active login "alice" on both.
+// certHarness: fleet on, GitHub sign-in on, a CA, two machines with routes,
+// and Alice holding an active login "alice" on both.
 func certHarness(t *testing.T) (*harness, *sshca.CA) {
 	t.Helper()
 	h := newFleetHarness(t)
-	enableSSO(h)
+	enablePeople(t, h, pAlice, pBob, pCarol)
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	signer, _ := ssh.NewSignerFromKey(priv)
 	ca := sshca.New(signer)
@@ -41,7 +41,7 @@ func certHarness(t *testing.T) (*harness, *sshca.CA) {
 	}
 	h.srv.FleetRoutes = routes
 	for _, host := range []string{"macmini-m4", "macmini"} {
-		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: "Alice", Hostname: host, Login: "alice"}); code != 200 {
+		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: host, Login: "alice"}); code != 200 {
 			t.Fatalf("adopt on %s: HTTP %d", host, code)
 		}
 	}
@@ -67,10 +67,11 @@ func postJSON(t *testing.T, h *harness, path string, body any) (int, []byte) {
 	return resp.StatusCode, out
 }
 
-// personForm posts the confirmation form as sub, from this origin.
-func personForm(t *testing.T, h *harness, sub, origin string, form url.Values) (int, string) {
+// personForm posts the confirmation form as principal, from this origin.
+func personForm(t *testing.T, h *harness, principal, origin string, form url.Values) (int, string) {
 	t.Helper()
-	return cookieForm(t, h, &http.Cookie{Name: authz.CookieName, Value: authz.SignSession(sub, ssoSessionKey, time.Now(), time.Hour)}, origin, form)
+	listPerson(t, h, principal, "")
+	return cookieForm(t, h, personCookie(principal, ""), origin, form)
 }
 
 // cookieForm posts the confirmation form on the given session cookie.
@@ -130,14 +131,14 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 	}
 
 	// The page the QR opens shows the code, the login and the key.
-	pc, raw := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "Alice", nil)
+	pc, raw := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, pAlice, nil)
 	page := html.UnescapeString(string(raw))
 	if pc != 200 || !strings.Contains(page, st.UserCode) || !strings.Contains(page, "alice") ||
 		!strings.Contains(page, st.KeyFingerprint) || !strings.Contains(page, ">Confirm</button>") {
 		t.Fatalf("confirm page %d:\n%s", pc, page)
 	}
 
-	pc, done := personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	pc, done := personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
 	if pc != 200 || !strings.Contains(done, "valid until") {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
@@ -158,7 +159,7 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 	if d := time.Duration(c.ValidBefore-c.ValidAfter) * time.Second; d < 12*time.Hour || d > 12*time.Hour+2*time.Minute {
 		t.Fatalf("validity %v", d)
 	}
-	if c.KeyId != "wecom:Alice" {
+	if c.KeyId != sshca.KeyIDPrefix+pAlice {
 		t.Fatalf("key id %q", c.KeyId)
 	}
 	if string(c.SignatureKey.Marshal()) != string(mustParseKey(t, ca.PublicKey()).Marshal()) {
@@ -188,7 +189,7 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 		t.Fatalf("second poll: %d, want 410", code)
 	}
 	// And recorded.
-	certs, err := h.srv.Store.FleetCerts("Alice", 10)
+	certs, err := h.srv.Store.FleetCerts(pAlice, 10)
 	if err != nil || len(certs) != 1 || certs[0].Via != "device" || certs[0].KeyID != c.KeyId {
 		t.Fatalf("audit = %+v, %v", certs, err)
 	}
@@ -209,7 +210,7 @@ func TestFleetLoginDeny(t *testing.T) {
 	_, body := postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)})
 	var st DeviceStart
 	json.Unmarshal(body, &st)
-	personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"deny"}})
+	personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"deny"}})
 	if code, _ := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code != http.StatusForbidden {
 		t.Fatalf("poll after deny: %d, want 403", code)
 	}
@@ -225,7 +226,7 @@ func TestFleetLoginRefusesCrossOrigin(t *testing.T) {
 	_, body := postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)})
 	var st DeviceStart
 	json.Unmarshal(body, &st)
-	if code, _ := personForm(t, h, "Alice", "https://evil.example", url.Values{"code": {st.UserCode}, "action": {"approve"}}); code != http.StatusForbidden {
+	if code, _ := personForm(t, h, pAlice, "https://evil.example", url.Values{"code": {st.UserCode}, "action": {"approve"}}); code != http.StatusForbidden {
 		t.Fatalf("cross-origin approve: %d, want 403", code)
 	}
 	if code, _ := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code != http.StatusAccepted {
@@ -240,12 +241,12 @@ func TestFleetCertNeedsAnActiveLogin(t *testing.T) {
 	_, body := postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)})
 	var st DeviceStart
 	json.Unmarshal(body, &st)
-	_, page := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "Carol", nil)
+	_, page := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, pCarol, nil)
 	if !strings.Contains(string(page), "issue yet") || strings.Contains(string(page), ">Confirm</button>") {
 		t.Fatalf("Carol's confirm page:\n%s", page)
 	}
 	req, _ := json.Marshal(map[string]string{"public_key": newUserKey(t)})
-	if code, b := asPerson(t, h, http.MethodPost, "/v1/fleet/cert", "Carol", req); code != http.StatusConflict {
+	if code, b := asPerson(t, h, http.MethodPost, "/v1/fleet/cert", pCarol, req); code != http.StatusConflict {
 		t.Fatalf("Carol /v1/fleet/cert: %d %s, want 409", code, b)
 	}
 	r, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/fleet/cert", bytes.NewReader(req))
@@ -259,8 +260,8 @@ func TestFleetCertNeedsAnActiveLogin(t *testing.T) {
 		t.Fatalf("operator token /v1/fleet/cert: %d, want 403", resp.StatusCode)
 	}
 	// A pending (not yet active) account does not count.
-	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "Dave", Hostname: "macmini-m4"})
-	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/cert", "Dave", req); code != http.StatusConflict {
+	operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "gh:1004", Hostname: "macmini-m4"})
+	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/cert", "gh:1004", req); code != http.StatusConflict {
 		t.Fatalf("Dave (pending only): %d, want 409", code)
 	}
 }
@@ -270,7 +271,7 @@ func TestFleetCertNeedsAnActiveLogin(t *testing.T) {
 func TestFleetCertWebAndConnectInfo(t *testing.T) {
 	h, ca := certHarness(t)
 	req, _ := json.Marshal(map[string]string{"public_key": newUserKey(t)})
-	code, body := asPerson(t, h, http.MethodPost, "/v1/fleet/cert", "Alice", req)
+	code, body := asPerson(t, h, http.MethodPost, "/v1/fleet/cert", pAlice, req)
 	if code != 200 {
 		t.Fatalf("web cert: %d %s", code, body)
 	}
@@ -279,11 +280,11 @@ func TestFleetCertWebAndConnectInfo(t *testing.T) {
 	parseCert(t, cr.Certificate)
 
 	bad, _ := json.Marshal(map[string]string{"public_key": `command="sh" ` + newUserKey(t)})
-	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/cert", "Alice", bad); code != http.StatusBadRequest {
+	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/cert", pAlice, bad); code != http.StatusBadRequest {
 		t.Fatalf("key with options: %d, want 400", code)
 	}
 
-	code, body = asPerson(t, h, http.MethodGet, "/v1/fleet/connect", "Alice", nil)
+	code, body = asPerson(t, h, http.MethodGet, "/v1/fleet/connect", pAlice, nil)
 	var ci ConnectInfo
 	json.Unmarshal(body, &ci)
 	if code != 200 || ci.Login != "alice" || !ci.CAEnabled || ci.CAFingerprint != ca.Fingerprint() ||
@@ -306,13 +307,14 @@ func TestFleetCertWebAndConnectInfo(t *testing.T) {
 	}
 }
 
-// A QR scanned while signed out survives the trip through WeCom: the code
-// waits in a cookie and /enter lands back on the confirmation page.
+// A QR scanned while signed out survives the trip through GitHub sign-in:
+// the code waits in a cookie and the callback lands back on the confirmation
+// page (loginReturn).
 func TestFleetLoginSurvivesSignIn(t *testing.T) {
 	h, _ := certHarness(t)
 	resp := h.raw(t, "/fleet/login?code=BCDF-GHJK", map[string]string{"Accept": "text/html"})
-	if resp.StatusCode != http.StatusFound || !strings.HasPrefix(resp.Header.Get("Location"), ssoGate) {
-		t.Fatalf("signed-out QR: %d → %q, want the WeCom gate", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/signin" {
+		t.Fatalf("signed-out QR: %d → %q, want /signin", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	var remembered *http.Cookie
 	for _, c := range resp.Cookies() {
@@ -323,15 +325,16 @@ func TestFleetLoginSurvivesSignIn(t *testing.T) {
 	if remembered == nil || remembered.Value != "BCDF-GHJK" {
 		t.Fatalf("code not remembered: %+v", resp.Cookies())
 	}
-	resp = h.raw(t, "/enter?ticket="+mintTicket(t, "ccquota", "Alice", time.Now().Add(time.Minute).Unix()),
-		map[string]string{"Cookie": remembered.Name + "=" + remembered.Value})
-	if loc := resp.Header.Get("Location"); loc != "/fleet/login?code=BCDF-GHJK" {
+	back := func(c *http.Cookie) string {
+		r := httptest.NewRequest(http.MethodGet, "/auth/github/callback", nil)
+		r.AddCookie(c)
+		return loginReturn(httptest.NewRecorder(), r)
+	}
+	if loc := back(remembered); loc != "/fleet/login?code=BCDF-GHJK" {
 		t.Fatalf("after sign-in → %q", loc)
 	}
 	// A tampered cookie lands on "/", never on a path it names.
-	resp = h.raw(t, "/enter?ticket="+mintTicket(t, "ccquota", "Alice", time.Now().Add(time.Minute).Unix()),
-		map[string]string{"Cookie": loginCookie + "=//evil.example"})
-	if loc := resp.Header.Get("Location"); loc != "/" {
+	if loc := back(&http.Cookie{Name: loginCookie, Value: "//evil.example"}); loc != "/" {
 		t.Fatalf("tampered cookie → %q, want /", loc)
 	}
 }
@@ -374,7 +377,7 @@ func TestFleetAdminNodeGetsTheCA(t *testing.T) {
 // sent nothing new.
 func TestFleetCertsOffWithoutCA(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
+	enablePeople(t, h)
 	if code, _ := postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)}); code != http.StatusNotFound {
 		t.Fatalf("start without a CA: %d, want 404", code)
 	}
@@ -447,13 +450,13 @@ func TestFleetNodeJoinByScan(t *testing.T) {
 		t.Fatalf("verification uri %q — the node scan opens the SAME page", st.VerificationURI)
 	}
 
-	pc, raw := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "Alice", nil)
+	pc, raw := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, pAlice, nil)
 	page := html.UnescapeString(string(raw))
 	if pc != 200 || !strings.Contains(page, "<title>Add newbox as a node</title>") || !strings.Contains(page, "<h1>Add newbox as a node</h1>") ||
 		!strings.Contains(page, st.UserCode) || !strings.Contains(page, ">Confirm</button>") {
 		t.Fatalf("node confirm page %d:\n%s", pc, page)
 	}
-	pc, done := personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	pc, done := personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
 	if pc != 200 || !strings.Contains(html.UnescapeString(done), "Added <b>newbox</b> as a node") {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
@@ -489,7 +492,7 @@ func TestFleetNodeJoinNeedsAnActiveLogin(t *testing.T) {
 	}
 	var st DeviceStart
 	json.Unmarshal(body, &st)
-	personForm(t, h, "Carol", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	personForm(t, h, pCarol, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
 	if code, body := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code == 200 {
 		t.Fatalf("a person with no login added a node: %s", body)
 	}

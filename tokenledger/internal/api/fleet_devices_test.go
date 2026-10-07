@@ -97,13 +97,13 @@ func (d *device) routes(t *testing.T, h *harness) int {
 }
 
 // homeHarness: twoNodes' rig (m5 at 1.0 load/core with 3 sessions, m4 idle
-// with 1), WeCom SSO, a CA, routes for both machines, and Alice adopted as
+// with 1), GitHub sign-in, a CA, routes for both machines, and Alice adopted as
 // login "verk" — the login the fleets there run as — on both.
 func homeHarness(t *testing.T) (*harness, *writeNode, *writeNode, control.Fleet, control.Fleet) {
 	t.Helper()
 	h, m5, m4, f5, f4 := twoNodes(t)
 	h.srv.ViewerToken = viewerToken
-	enableSSO(h)
+	enablePeople(t, h, pAlice, pBob, pCarol)
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	signer, _ := ssh.NewSignerFromKey(priv)
 	h.srv.SSHCA = sshca.New(signer)
@@ -115,7 +115,7 @@ func homeHarness(t *testing.T) (*harness, *writeNode, *writeNode, control.Fleet,
 	}
 	h.srv.FleetRoutes = routes
 	for _, host := range []string{"m5", "m4"} {
-		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: "Alice", Hostname: host, Login: "verk"}); code != 200 {
+		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: host, Login: "verk"}); code != 200 {
 			t.Fatalf("adopt on %s: HTTP %d", host, code)
 		}
 	}
@@ -161,10 +161,10 @@ func auditActions(a []store.DeviceAudit) string {
 func TestDeviceScanRegistersAndRenews(t *testing.T) {
 	h, _, _, _, _ := homeHarness(t)
 	a := newDevice(t)
-	a.scan(t, h, "Alice", "alices-mbp")
+	a.scan(t, h, pAlice, "alices-mbp")
 
 	dev, err := h.srv.Store.Device(a.fp)
-	if err != nil || dev.PrincipalID != "Alice" || dev.Name != "alices-mbp" || dev.Revoked() {
+	if err != nil || dev.PrincipalID != pAlice || dev.Name != "alices-mbp" || dev.Revoked() {
 		t.Fatalf("device after the scan = %+v, %v", dev, err)
 	}
 
@@ -173,13 +173,13 @@ func TestDeviceScanRegistersAndRenews(t *testing.T) {
 		t.Fatalf("renew: %d %v", code, out)
 	}
 	c := parseCert(t, out["certificate"].(string))
-	if strings.Join(c.ValidPrincipals, ",") != "verk" || c.KeyId != "wecom:Alice" {
+	if strings.Join(c.ValidPrincipals, ",") != "verk" || c.KeyId != "person:"+pAlice {
 		t.Fatalf("renewed certificate says %v %q", c.ValidPrincipals, c.KeyId)
 	}
 	if want, _, _, _, _ := ssh.ParseAuthorizedKey([]byte(a.pub)); !bytes.Equal(c.Key.Marshal(), want.Marshal()) {
 		t.Fatal("renewed a different key")
 	}
-	certs, _ := h.srv.Store.FleetCerts("Alice", 10)
+	certs, _ := h.srv.Store.FleetCerts(pAlice, 10)
 	if len(certs) != 2 || certs[0].Via != "renew" || certs[1].Via != "device" {
 		t.Fatalf("issuances = %+v; want device then renew", certs)
 	}
@@ -202,7 +202,7 @@ func TestDeviceScanRegistersAndRenews(t *testing.T) {
 		t.Fatalf("a key nobody scanned: %d %v", code, out)
 	}
 
-	mine := devicesAs(t, h, "Alice")
+	mine := devicesAs(t, h, pAlice)
 	if !mine.Mine || len(mine.Devices) != 1 || mine.Devices[0].Fingerprint != a.fp || mine.Devices[0].PublicKey != "" {
 		t.Fatalf("Alice's devices = %+v", mine)
 	}
@@ -223,7 +223,7 @@ func TestDeviceScanRegistersAndRenews(t *testing.T) {
 func TestDeviceIdleAndRevoke(t *testing.T) {
 	h, _, _, _, _ := homeHarness(t)
 	a := newDevice(t)
-	a.scan(t, h, "Alice", "laptop")
+	a.scan(t, h, pAlice, "laptop")
 
 	eightDaysAgo := time.Now().Add(-8 * 24 * time.Hour)
 	if err := h.srv.Store.TouchDevice(a.fp, eightDaysAgo, "", false); err != nil {
@@ -232,7 +232,7 @@ func TestDeviceIdleAndRevoke(t *testing.T) {
 	if code, out := a.renew(t, h, time.Now().Unix()); code != 403 || out["code"] != "device_idle" {
 		t.Fatalf("renew after 8 idle days: %d %v; want 403 device_idle", code, out)
 	}
-	a.scan(t, h, "Alice", "laptop") // the QR again: registered afresh
+	a.scan(t, h, pAlice, "laptop") // the QR again: registered afresh
 	if code, _ := a.renew(t, h, time.Now().Unix()); code != 200 {
 		t.Fatalf("renew after the second scan: %d", code)
 	}
@@ -242,7 +242,7 @@ func TestDeviceIdleAndRevoke(t *testing.T) {
 
 	// Bob may not revoke Alice's device.
 	body, _ := json.Marshal(map[string]string{"fingerprint": a.fp})
-	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/devices/revoke", "Bob", body); code != 403 {
+	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/devices/revoke", pBob, body); code != 403 {
 		t.Fatalf("Bob revoking Alice's device: %d, want 403", code)
 	}
 	// The operator does.
@@ -278,7 +278,7 @@ func TestDeviceIdleAndRevoke(t *testing.T) {
 		t.Fatalf("second revoke: %d %v", resp.StatusCode, rev)
 	}
 
-	mine := devicesAs(t, h, "Alice")
+	mine := devicesAs(t, h, pAlice)
 	if len(mine.Devices) != 1 || !mine.Devices[0].Revoked() || mine.Devices[0].RevokedBy != "operator" {
 		t.Fatalf("Alice's device = %+v; want revoked by operator", mine.Devices)
 	}
@@ -288,7 +288,7 @@ func TestDeviceIdleAndRevoke(t *testing.T) {
 
 	// A scan after the revocation registers the device again: the scan is
 	// the proof, the revocation only forces it.
-	a.scan(t, h, "Alice", "laptop")
+	a.scan(t, h, pAlice, "laptop")
 	if code, _ := a.renew(t, h, time.Now().Unix()); code != 200 {
 		t.Fatalf("renew after re-scan: %d", code)
 	}
@@ -321,7 +321,7 @@ func TestFleetHomePicks(t *testing.T) {
 	m4.beatLoad("m4", "verk", machineB, 1, 0, empty4)
 	settle("both fleets empty", func() bool { return count("m5") == 0 && count("m4") == 0 })
 	a := newDevice(t)
-	a.scan(t, h, "Alice", "laptop-a")
+	a.scan(t, h, pAlice, "laptop-a")
 	code, out := a.home(t, h, "")
 	if code != 200 || out["rule"] != "load" || out["machine"].(map[string]any)["hostname"] != "m4" {
 		t.Fatalf("no sessions: %d %v; want m4 by load", code, out)
@@ -338,7 +338,7 @@ func TestFleetHomePicks(t *testing.T) {
 	m4.beatLoad("m4", "verk", machineB, 1, 1, one4)
 	settle("sessions registered", func() bool { return count("m5") == 3 && count("m4") == 1 })
 	b := newDevice(t)
-	b.scan(t, h, "Alice", "laptop-b")
+	b.scan(t, h, pAlice, "laptop-b")
 	if code, out := b.home(t, h, ""); code != 200 || out["rule"] != "sessions" || out["machine"].(map[string]any)["hostname"] != "m5" {
 		t.Fatalf("with sessions: %d %v; want m5 by sessions", code, out)
 	}
@@ -385,7 +385,7 @@ func TestFleetHomePicks(t *testing.T) {
 	}
 
 	// Every ask was audited on the device, with the pick.
-	mine := devicesAs(t, h, "Alice")
+	mine := devicesAs(t, h, pAlice)
 	homes := 0
 	for _, row := range mine.Audit {
 		if row.Action == store.DeviceHome && row.Fingerprint == a.fp {
@@ -474,7 +474,7 @@ func TestInstallServed(t *testing.T) {
 		t.Fatalf("only the named client files are served: %d", resp.StatusCode)
 	}
 	// The 连接 page's API carries the line to copy.
-	code, body := asPerson(t, h, http.MethodGet, "/v1/fleet/connect", "Alice", nil)
+	code, body := asPerson(t, h, http.MethodGet, "/v1/fleet/connect", pAlice, nil)
 	var ci ConnectInfo
 	json.Unmarshal(body, &ci)
 	if code != 200 || ci.InstallCommand != "curl -fsSL "+h.http.URL+"/install | sh" || !ci.InstallReady {

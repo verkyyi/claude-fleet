@@ -86,7 +86,7 @@ export function viewer(me) {
   if (!me) return null;
   const name = me.name || me.login || me.person || (me.via === 'token' ? 'operator' : t('ui.me.you'));
   const role = t(isAdmin(me) ? 'ui.role.admin' : 'ui.role.user');
-  const door = ['github', 'token', 'tailnet', 'wecom', 'open'].includes(me.via) ? t('ui.door.' + me.via) : me.via || '';
+  const door = ['github', 'token', 'open'].includes(me.via) ? t('ui.door.' + me.via) : me.via || '';
   return { name, sub: door ? `${role} · ${door}` : role, initials: String(name).slice(0, 2).toUpperCase(), logout: !!me.can_logout };
 }
 

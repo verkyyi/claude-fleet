@@ -130,6 +130,22 @@ per-fleet caches, directories and symlinks are outside this sweep.
 
 ### Worker task sidebar
 
+**Since issue #1950 (EPIC #1949 C1) the list only shows and taps.** It takes no
+keys: the `fleet-sidebar` key table, prefix E / g / Space, the input line and its
+editing keys, the `? 快捷键` row, the 要你处理 summary row, the paste pin
+(`PIN_KEY`, the `active-pane` client flag tmux 3.8 removes — #1761) and the
+cursor are gone. A tap on a row switches to it, a second tap or a right-click
+opens its menu, a tap on ▸ / ▾ folds. Its actions (new · restore · scratch ·
+view · reload · info · needs) are verbs parked in `@sidebar_ask` and woken with
+F12 (`fleet-sidebar.py` `act`; `fleet-shell.sh ask <kind> [arg…]` from anywhere
+in the client). A question — a rename, an answer, a message, an account, the
+restore y / r, the shell's open-a-session menus — opens on ONE line under the
+session (`bin/fleet-ask.py`: a pane split under the session pane, marked
+`@stage_ask`, holding the keyboard; its answer runs the kind's old path), and
+what the list has to say goes on the bar (tmux `display-message`). The
+paragraphs below describe the keyboard model this replaced, kept for its
+history.
+
 `fleet-sidebar.sh` loads the fleet's preference; `fleet-sidebar.py` manages a
 compact pane on the left of the visible worker. Indexed tmux hooks reconcile it
 on attach, window changes, resize and exit. A kernel-held per-fleet lock serializes

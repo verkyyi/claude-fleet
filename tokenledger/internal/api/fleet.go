@@ -37,8 +37,8 @@ import (
 //
 // Every query is scoped to the caller (EPIC #1407 共同约定 5) through ONE seam,
 // fleetScope, which is C4's Server.FleetScope (claude-fleet#1411): the
-// operator's doors (viewer token, tailnet identity, --no-auth) see every
-// machine; a person signed in through WeCom sees only their own logins.
+// operator's doors (viewer token, --no-auth) see every machine; a person
+// signed in with GitHub sees only their own logins.
 
 // FleetFault is a refusal with a Fleet Hub code (the same codes the Python
 // hub returns, so a client written against one reads the other).
@@ -60,7 +60,7 @@ type fleetPrincipal struct {
 	// Actor names the caller in the journal and the audit log: the viewer,
 	// or "operator" for the shared token (which names nobody).
 	Actor string
-	// Person is the WeCom principal behind the call, "" for the operator's
+	// Person is the signed-in principal behind the call, "" for the operator's
 	// doors. It picks the grant (claude-fleet#1410): the operator holds every
 	// scope, a person holds Server.FleetPersonScopes.
 	Person string
@@ -88,7 +88,7 @@ func (p fleetPrincipal) sees(hostname, osUser string) bool {
 
 // fleetScope is the one place a fleet read asks "what may this caller see":
 // C4's Server.FleetScope (claude-fleet#1411) — nil for the operator's doors
-// (viewer token, tailnet identity), else exactly the signed-in person's ACTIVE
+// (viewer token), else exactly the signed-in person's ACTIVE
 // (machine, login) accounts.
 func (s *Server) fleetScope(r *http.Request) (func(hostname, osUser string) bool, error) {
 	if s.fleetScopeHook != nil {
@@ -103,7 +103,7 @@ func (s *Server) FleetPrincipal(r *http.Request) (fleetPrincipal, error) {
 	if err != nil {
 		return fleetPrincipal{}, err
 	}
-	// A person is journalled as their WeCom subject, whatever the access
+	// A person is journalled as their principal, whatever the access
 	// log calls them: it is the key their idempotency and operations are
 	// scoped by.
 	person := principalOf(r.Context())

@@ -185,7 +185,7 @@ func TestRelayCredUntrusted(t *testing.T) {
 	}
 
 	// A machine that joined after the migration mints nothing.
-	p, _ := h.srv.Store.Principal("wecom-alice")
+	p, _ := h.srv.Store.Principal(pAlice)
 	if err := h.srv.Store.AdoptAccount(p, "m9", time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestRelayCredUntrusted(t *testing.T) {
 // that login's.
 func TestRelayCredPerLogin(t *testing.T) {
 	h, m4, _ := newVaultHarness(t)
-	p, err := h.srv.Store.AdoptPrincipal("wecom-bob", "bob", "Bob", time.Now())
+	p, err := h.srv.Store.AdoptPrincipal("gh:1006", "bob", "Bob", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestRelayCheckSessionPass(t *testing.T) {
 	h, tok5, _, f5, _ := sessHarness(t)
 	out := sessIssue(t, h, tok5, f5, map[string]any{"providers": []string{"claude"}})
 	cred, id := out["cred"].(string), out["id"].(string)
-	if code, who := relayCheck(t, h, cred, "/anthropic/v1/messages"); code != http.StatusOK || who != "wecom-verk@m5" {
+	if code, who := relayCheck(t, h, cred, "/anthropic/v1/messages"); code != http.StatusOK || who != "gh:1005@m5" {
 		t.Fatalf("session pass on /anthropic/: %d who=%q", code, who)
 	}
 	for _, uri := range []string{"/chatgpt/codex/responses", "/openai-auth/oauth/token", "/v1/fleet/settings"} {
@@ -268,7 +268,7 @@ func TestRelayCheckSessionPass(t *testing.T) {
 			t.Fatalf("claude-only pass on %q: %d, want 403", uri, code)
 		}
 	}
-	if code, _ := relayCheck(t, h, reclaim(t, cred, func(c *sessionCredClaims) { c.Principal = "wecom-evil" }), "/anthropic/v1/messages"); code != http.StatusForbidden {
+	if code, _ := relayCheck(t, h, reclaim(t, cred, func(c *sessionCredClaims) { c.Principal = "gh:666" }), "/anthropic/v1/messages"); code != http.StatusForbidden {
 		t.Fatalf("re-signed claims: %d, want 403", code)
 	}
 	if st, _ := sessDo(t, h, http.MethodDelete, "/v1/fleet/session-cred/"+id, tok5, "", nil); st != 200 {

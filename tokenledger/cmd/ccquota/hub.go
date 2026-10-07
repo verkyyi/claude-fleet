@@ -21,7 +21,6 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
@@ -259,23 +258,7 @@ func runHub(args []string) error {
 	dbPath := fs.String("db", "", "path to the SQLite database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
 	token := secretEnvFlag(fs, "token", "CCQUOTA_VIEWER_TOKEN", "viewer `token` for the dashboard, API and MCP")
 	noAuth := fs.Bool("no-auth", false, "serve without a viewer token (loopback binds only)")
-	// 企微 SSO（把「人看面板」这一档接到公司已有的授权服务上）。
-	// ★ 两把密钥只从环境来、不给命令行开关：命令行参数在 `ps` 里人人可见，而这两把
-	//   一把能验票、一把能签会话 —— 泄露任何一把都等于可以凭空造一个已登录的人。
-	//   一把也没配 = 整条 SSO 关闭，/enter 回 404，行为与从前逐字节相同。
-	ssoApp := fs.String("sso-app", os.Getenv("CCQUOTA_SSO_APP"),
-		"this hub's app id at the authorization service (its `aud`); empty disables WeCom SSO")
-	ssoSlug := fs.String("sso-slug", os.Getenv("CCQUOTA_SSO_SLUG"), "tenant slug to enter as")
-	ssoEnterURL := fs.String("sso-enter-url", os.Getenv("CCQUOTA_SSO_ENTER_URL"),
-		"authorization endpoint a signed-out browser is sent to")
-	ssoHours := fs.Int("sso-session-hours", 8, "how long a WeCom session lasts")
-
-	tailnetViewers := fs.String("tailnet-viewers", os.Getenv("CCQUOTA_TAILNET_VIEWERS"),
-		"comma-separated tailnet logins who may open the dashboard with no\n"+
-			"token, on the word of the local tailscaled (tailscale whois).\n"+
-			"Tagged nodes, other logins, the LAN, loopback and the hub's own\n"+
-			"address still need the token. Empty = off")
-	tailscaleBin := fs.String("tailscale-bin", "", "path to the tailscale CLI (default: search PATH and the usual places)")
+	tailscaleBin := fs.String("tailscale-bin", "", "path to the tailscale CLI, for --https-addr (default: search PATH and the usual places)")
 	httpsAddr := fs.String("https-addr", "",
 		"also serve HTTPS here (e.g. :443) with a certificate from tailscale cert\n"+
 			"for this node's MagicDNS name, renewed by the hub. Only tailnet peers\n"+
@@ -289,19 +272,6 @@ func runHub(args []string) error {
 			"proxied through a cache that strips cookies. Off by default")
 	insecurePublic := fs.Bool("insecure-public", false, "acknowledge binding to a public address without TLS in front")
 	pricingFile := fs.String("pricing", "", "path to a pricing override file")
-	// Display-side currency conversion. It converts NOTHING in the ledger --
-	// stored figures keep the currency they were billed in, and RealSpendOver
-	// still refuses to add two currencies rather than converting one. This only
-	// decides what a reader sees, and every converted figure on the page carries
-	// the rate and the date the feed last moved.
-	fxURL := fs.String("fx-url", envOr("CCQUOTA_FX_URL", fx.DefaultURL),
-		"exchange-rate feed for DISPLAY-ONLY currency conversion, keyed on USD.\n"+
-			"The dashboard shows a viewer the figures in their own currency and\n"+
-			"states the rate and its date beside them; nothing stored is converted\n"+
-			"and no total is computed through it. Set empty to disable, and every\n"+
-			"figure is shown in the currency it was billed in")
-	fxRefresh := fs.Duration("fx-refresh", fx.DefaultRefresh,
-		"how often to re-read --fx-url. Daily feeds do not move faster than this")
 	pollInterval := fs.Int("limits-poll-interval", 120, "seconds between agents' limit polls")
 	retentionDays := fs.Int("retention-days", 90, "days of raw events to keep (0 disables pruning)")
 	rebuild := fs.Bool("rebuild-rollup", false,
@@ -319,9 +289,7 @@ func runHub(args []string) error {
 			"only the events that arrive after it: the month you could not price\n"+
 			"last month stays unpriced forever, and --rebuild-rollup does not\n"+
 			"help (it refolds the same stale figures). Use this after correcting\n"+
-			"--pricing. Costs that ARRIVE with the event (vendor bills, voice\n"+
-			"charges) are never recomputed -- repricing refuses rather than\n"+
-			"overwrite an invoice")
+			"--pricing")
 	repriceSince := fs.String("reprice-since", "",
 		"with --reprice, only touch events at or after this RFC3339 instant\n"+
 			"(for example 2026-09-01T00:00:00Z). Default: every event")
@@ -427,8 +395,8 @@ func runHub(args []string) error {
 	}
 
 	// After the table is loaded, and after any --pricing overrides are merged
-	// into it: repricing against the built-in table alone would restate every
-	// gateway figure as unpriced, which is the opposite of the point.
+	// into it: repricing against the built-in table alone would undo every
+	// operator correction, which is the opposite of the point.
 	if *reprice {
 		scope := "every event"
 		if !repriceFrom.IsZero() {
@@ -443,44 +411,6 @@ func runHub(args []string) error {
 			"net %+.6f USD, largest single change %.6f USD, refolded %d hourly row(s)",
 			res.Scanned, res.Changed, res.NewlyPriced, res.Unpriced, res.NetUSD, res.MaxAbsUSD, res.RollupRows)
 	}
-
-	var tailnet *api.TailnetViewers
-	if *tailnetViewers != "" {
-		bin, err := api.FindTailscaleBin(*tailscaleBin)
-		if err != nil {
-			// Fail closed and loud: an operator who asked for tailnet
-			// identity must not get a hub that silently never grants it.
-			return fmt.Errorf("--tailnet-viewers: %w", err)
-		}
-		tailnet = api.NewTailnetViewers(strings.Split(*tailnetViewers, ","), bindHosts(*addr), api.TailscaleWhoIs(bin))
-		log.Printf("tailnet identity: %s may view without a token (via %s)", *tailnetViewers, bin)
-	}
-
-	var sso *api.SSO
-	if *ssoApp != "" {
-		sso = &api.SSO{
-			AppID:         *ssoApp,
-			Slug:          *ssoSlug,
-			TicketSecret:  os.Getenv("CCQUOTA_SSO_TICKET_SECRET"),
-			SessionSecret: os.Getenv("CCQUOTA_SSO_SESSION_SECRET"),
-			EnterURL:      *ssoEnterURL,
-			TTL:           time.Duration(*ssoHours) * time.Hour,
-		}
-		// 配了一半比没配更危险：运维以为登录口在跑，实际上每个人都被挡在门外
-		// （或者更糟，以为挡住了其实没挡）。当场说清缺哪一件。
-		if sso.TicketSecret == "" || sso.SessionSecret == "" || sso.EnterURL == "" {
-			return errors.New("--sso-app is set but the rest is not: " +
-				"CCQUOTA_SSO_TICKET_SECRET, CCQUOTA_SSO_SESSION_SECRET and --sso-enter-url are all required")
-		}
-	}
-
-	// The pinned rate is the fallback, never the default: if the feed cannot be
-	// reached the page still converts, but says the rate is a pinned one rather
-	// than passing it off as today's. pricing.GatewayCNYPerUSD is already
-	// human-reviewed and dated, which is exactly what a fallback needs to be.
-	feed := fx.New(*fxURL, *fxRefresh,
-		map[string]float64{"CNY": pricing.GatewayCNYPerUSD},
-		"pinned in this build, reviewed "+pricing.GatewayFXAsOf)
 
 	// Resolve the HTTPS name HERE rather than in the TLS block below, so the
 	// Server is complete before Handler() is called and nothing writes to it
@@ -515,12 +445,9 @@ func runHub(args []string) error {
 	}
 	srv := &api.Server{
 		Store:               st,
-		FX:                  feed,
-		SSO:                 sso,
 		GitHub:              gh,
 		Pricing:             table,
 		ViewerToken:         *token,
-		Tailnet:             tailnet,
 		PublicBadges:        *publicBadges,
 		LimitsPollIntervalS: *pollInterval,
 		Version:             Version,
@@ -598,29 +525,9 @@ func runHub(args []string) error {
 		srv.NodeLostAfter = api.NodeLostAfterFromEnv()
 		go srv.RunNodeAlerts(ctx)
 	}
-	// Findings to kf-notify (claude-fleet#1705), else a WeCom robot
-	// (claude-fleet#1469). The key / webhook is a secret: environment only,
-	// never a flag (`ps`), never logged.
-	notifier, err := api.FindingNotifierFromEnv(os.Getenv, srv.FleetPublicURL)
-	if err != nil {
-		return err
-	}
-	if notifier != nil {
-		srv.Notifier = notifier
-		log.Printf("findings: push on via %s (repeat every %s, %s)", notifier.Channel(), notifier.Repeat, notifier.Locale)
-		go srv.RunFindingNotify(ctx)
-	} else {
-		log.Printf("findings: push off (set CCQUOTA_NOTIFY_URL + CCQUOTA_NOTIFY_KEY to turn it on)")
-	}
-
 	// Pin each CCQUOTA_GITHUB_ADMINS name to its GitHub ID (claude-fleet#1984).
 	// In the background: GitHub being slow must not hold the hub's start.
 	go srv.ResolveGitHubAdmins(ctx)
-
-	// Reads the feed once now, then on the interval. Failure is not fatal: a hub
-	// with no route to an FX feed is a working hub that shows every figure in
-	// the currency it was billed in.
-	go feed.Refreshing(ctx)
 
 	if *retentionDays > 0 {
 		go pruneLoop(ctx, st, *retentionDays)
@@ -741,15 +648,14 @@ func githubAuthFromEnv(getenv func(string) string) (*api.GitHubAuth, error) {
 }
 
 // fleetPrincipalLogins parses CCQUOTA_FLEET_PRINCIPAL_LOGINS
-// (`<wecom userid>=<os login>,…`, claude-fleet#1458). A malformed entry, a
+// (`gh:<GitHub ID>=<os login>,…`, claude-fleet#1458). A malformed entry, a
 // login the nodes would refuse, or one login claimed by two people refuses
 // to start the hub: this map is what decides whose machine a sign-in lands
 // on, and a half-read one would place someone silently wrong.
 //
-// The userid is folded to lower case (claude-fleet#1472): WeCom's userids are
-// case-insensitive, so `YiLiangHui=verkyyi` and `yilianghui=verkyyi` are one
-// entry, and `YiLiangHui=a,yilianghui=b` is the same person mapped twice. The
-// hub compares the map to a ticket case-insensitively either way; the fold
+// The principal is folded to lower case (claude-fleet#1472), so two
+// spellings of one principal are one entry and mapping it twice is a
+// conflict. The hub compares the map case-insensitively either way; the fold
 // here is what makes the conflict checks see one person.
 func fleetPrincipalLogins(v string) (map[string]string, error) {
 	out := map[string]string{}
@@ -758,7 +664,7 @@ func fleetPrincipalLogins(v string) (map[string]string, error) {
 		pid, login, ok := strings.Cut(e, "=")
 		pid, login = strings.ToLower(strings.TrimSpace(pid)), strings.TrimSpace(login)
 		if !ok || pid == "" || login == "" {
-			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: %q is not <userid>=<login>", e)
+			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: %q is not <principal>=<login>", e)
 		}
 		if !control.ValidExistingLogin(login) {
 			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: %q is not a login (2-16 lowercase letters and digits, not reserved)", login)
@@ -819,12 +725,6 @@ func isLoopback(host string) bool {
 
 // pruneLoop trims raw events past the retention window once a day. Rollups and
 // limit snapshots are kept: they are small and are the long-term record.
-//
-// Repo progress is bounded on the same schedule and by the same window, for
-// the same reason and with the same trade: repo_days is the long-term record
-// and is never touched, while the per-issue rows behind it are detail that
-// ages out. One knob rather than two, because a hub with two retention windows
-// has two ways to be surprised by its own disk.
 func pruneLoop(ctx context.Context, st *store.Store, days int) {
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
@@ -835,14 +735,6 @@ func pruneLoop(ctx context.Context, st *store.Store, days int) {
 			log.Printf("prune: %v", err)
 		} else if n > 0 {
 			log.Printf("pruned %d events older than %d days", n, days)
-		}
-		// A repo-progress failure must not stop event pruning, and vice
-		// versa: they are independent tables and the loop that keeps the disk
-		// bounded should not be taken out by whichever one broke.
-		if n, err := st.PruneRepoIssues(cut); err != nil {
-			log.Printf("prune repo issues: %v", err)
-		} else if n > 0 {
-			log.Printf("pruned %d repo issue rows older than %d days (day rows kept)", n, days)
 		}
 		select {
 		case <-ctx.Done():
@@ -856,23 +748,12 @@ func runEnroll(args []string) error {
 	fs := flag.NewFlagSet("enroll", flag.ExitOnError)
 	dbPath := fs.String("db", "", "the hub's database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
 	label := fs.String("name", "", "a human name for this endpoint, e.g. web-01")
-	kind := fs.String("kind", "agent", "what this enrollment is: agent | growth_reader")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *label == "" {
 		return errors.New("--name is required")
 	}
-	// Only the kinds a human has a reason to mint. The *_shipper kinds are
-	// deliberately absent: a shipper marks itself on its first successful push,
-	// so offering them here would create a second way to say the same thing --
-	// and the typo'd one would be a token that looks enrolled and is in the
-	// wrong roster forever. A reader has no such moment, which is why it is the
-	// one kind that must be chosen up front.
-	if *kind != "agent" && *kind != "growth_reader" {
-		return fmt.Errorf("--kind %q: want agent or growth_reader", *kind)
-	}
-
 	// Refuses to create one: a token minted into a fresh database is printed
 	// exactly like a real one and fails only later, on another machine.
 	dbFile, err := resolveExistingDB(*dbPath)
@@ -890,7 +771,7 @@ func runEnroll(args []string) error {
 		return err
 	}
 	id := fmt.Sprintf("ep_%d", time.Now().UnixNano())
-	if err := st.EnrollKind(id, *label, api.HashToken(tok), *kind); err != nil {
+	if err := st.Enroll(id, *label, api.HashToken(tok)); err != nil {
 		return err
 	}
 
@@ -903,19 +784,6 @@ Run this on that endpoint (the token is shown once and is not recoverable):
   ccquota agent
 
 `, *label, id, dbFile, tok)
-	if *kind == "growth_reader" {
-		// A reader never runs `ccquota agent`, so the block above is the wrong
-		// instruction for it. Say what it is actually for, here, where the
-		// token is on screen -- the one moment anybody is looking.
-		fmt.Printf(`This one is a READ-ONLY ledger credential (kind=%s). It does not run an
-agent; point the Monday brief at it instead:
-
-  export CCQUOTA_URL=https://your-hub.example.com
-  export CCQUOTA_TOKEN=%s
-  curl -sH "Authorization: Bearer $CCQUOTA_TOKEN" "$CCQUOTA_URL/v1/growth/latest"
-
-`, *kind, tok)
-	}
 	return nil
 }
 

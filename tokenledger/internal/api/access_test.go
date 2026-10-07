@@ -5,15 +5,14 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
-	"time"
 )
 
 // The door map's contract, in four parts: it is gated, it is complete, it is
 // live, and it leaks nothing.
 
-// Gated. A page that names the tailnet allowlist and says whether SSO is on
-// must not answer someone who holds no credential -- that is precisely the
-// answer /enter's unconditional 404 exists to withhold.
+// Gated. A page that says whether GitHub sign-in is on must not answer
+// someone who holds no credential -- that is precisely the answer /signin's
+// unconditional 404 exists to withhold.
 func TestAccess_NeedsTheViewerToken(t *testing.T) {
 	h := newHarness(t)
 	for _, path := range []string{"/v1/access", "/access", "/access/"} {
@@ -41,12 +40,10 @@ func TestAccess_ListsEveryDoorIncludingTheOneThatIsNotHTTP(t *testing.T) {
 
 	want := map[string]string{
 		"dashboard": "http",
-		"enter":     "http",
 		"github":    "http",
 		"api":       "http",
 		"mcp":       "http",
 		"ingest":    "http",
-		"share":     "http",
 		"badges":    "http",
 		"meter":     "http",
 		"healthz":   "http",
@@ -94,11 +91,8 @@ func TestAccess_ReportsWhatIsActuallyTurnedOn(t *testing.T) {
 
 	var off AccessMap
 	h.getJSON(t, "/v1/access", &off)
-	if off.Hub.SSO.Enabled {
-		t.Error("SSO reported as enabled on a hub that never configured it")
-	}
-	if len(off.Hub.TailnetViewers) != 0 {
-		t.Errorf("tailnet viewers = %v; want none", off.Hub.TailnetViewers)
+	if off.Hub.GitHub {
+		t.Error("GitHub sign-in reported as enabled on a hub that never configured it")
 	}
 	if off.Hub.PublicBadges {
 		t.Error("public badges reported on by default; they are off by default")
@@ -109,33 +103,21 @@ func TestAccess_ReportsWhatIsActuallyTurnedOn(t *testing.T) {
 	if doorState(off.Doors, "mcp") != "off" {
 		t.Errorf("mcp door = %q with no MCP handler; want off", doorState(off.Doors, "mcp"))
 	}
-	if !strings.Contains(doorNote(off.Doors, "enter"), "404") {
-		t.Errorf("the /enter row does not say it 404s when SSO is unconfigured: %q", doorNote(off.Doors, "enter"))
+	if !strings.Contains(doorNote(off.Doors, "github"), "404") {
+		t.Errorf("the github row does not say /signin 404s when it is unconfigured: %q", doorNote(off.Doors, "github"))
 	}
 
 	// Now turn things on. The handler reads the Server at request time, so
 	// this is the same hub answering differently -- which is the claim.
 	h.srv.PublicBadges = true
 	h.srv.MCP = http.NotFoundHandler()
-	h.srv.SSO = &SSO{
-		AppID: "ccquota", Slug: "ops", TicketSecret: "t", SessionSecret: "s",
-		EnterURL: "https://ai.example.com/enter", TTL: 3 * time.Hour,
-	}
-	h.srv.Tailnet = NewTailnetViewers([]string{"Ada@example.com", "bob@example.com"}, nil, nil)
+	h.srv.GitHub = &GitHubAuth{ClientID: "Iv1.test", ClientSecret: "s", Admins: []string{"ada", "bob"}}
 	h.srv.Listeners = ListenerFacts{HTTP: []string{"127.0.0.1:8787"}, HTTPS: ":443", HTTPSURL: "https://hub.example.ts.net/"}
 
 	var on AccessMap
 	h.getJSON(t, "/v1/access", &on)
-	if !on.Hub.SSO.Enabled || on.Hub.SSO.EnterURL != "https://ai.example.com/enter" {
-		t.Errorf("SSO facts = %+v; want enabled with the enter URL", on.Hub.SSO)
-	}
-	if on.Hub.SSO.SessionHours != 3 {
-		t.Errorf("session hours = %v; want 3", on.Hub.SSO.SessionHours)
-	}
-	// Lower-cased and sorted, the same normalisation the gate itself applies,
-	// so the page cannot imply an allowlist entry that would never match.
-	if got := strings.Join(on.Hub.TailnetViewers, ","); got != "ada@example.com,bob@example.com" {
-		t.Errorf("tailnet viewers = %q; want the allowlist lower-cased and sorted", got)
+	if !on.Hub.GitHub || on.Hub.GitHubAdmins != 2 {
+		t.Errorf("github facts = %v / %d admins; want on with 2", on.Hub.GitHub, on.Hub.GitHubAdmins)
 	}
 	if !on.Hub.PublicBadges || doorState(on.Doors, "badges") != "public" {
 		t.Errorf("badges door = %q with --public-badges on; want public", doorState(on.Doors, "badges"))
@@ -148,9 +130,9 @@ func TestAccess_ReportsWhatIsActuallyTurnedOn(t *testing.T) {
 	}
 	// The dashboard row lists the ways in, so a new one has to show up there
 	// too -- a reader who reads only the row must not be told "token only"
-	// while two other credentials work.
+	// while another credential works.
 	note := doorNote(on.Doors, "dashboard")
-	for _, want := range []string{"viewer token", "WeCom", "tailnet"} {
+	for _, want := range []string{"viewer token", "GitHub"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("the dashboard row does not mention %q: %q", want, note)
 		}
@@ -158,39 +140,16 @@ func TestAccess_ReportsWhatIsActuallyTurnedOn(t *testing.T) {
 }
 
 // Live, second half: the counts come from the database, not from a constant.
-func TestAccess_CountsEnrollmentsAndShareLinks(t *testing.T) {
+func TestAccess_CountsEnrollments(t *testing.T) {
 	h := newHarness(t)
 	h.enroll(t, "laptop")
 	h.enroll(t, "desktop")
-	h.enrollKind(t, "repo-bot", "repo_shipper")
-	h.enrollKind(t, "monday-brief", "growth_reader")
-
-	if _, err := h.srv.Store.CreateShareLink("board", HashToken("s1"), false, nil); err != nil {
-		t.Fatal(err)
-	}
-	gone, err := h.srv.Store.CreateShareLink("old", HashToken("s2"), false, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.srv.Store.RevokeShareLink(gone.ID); err != nil {
-		t.Fatal(err)
-	}
 
 	var m AccessMap
 	h.getJSON(t, "/v1/access", &m)
 
-	for kind, want := range map[string]int{"agent": 2, "repo_shipper": 1, "growth_reader": 1} {
-		if m.Hub.Enrollments[kind] != want {
-			t.Errorf("enrollments[%q] = %d; want %d", kind, m.Hub.Enrollments[kind], want)
-		}
-	}
-	if m.Hub.ShareLinks.Active != 1 || m.Hub.ShareLinks.Total != 2 {
-		t.Errorf("share links = %+v; want 1 active of 2", m.Hub.ShareLinks)
-	}
-	// A revoked link is not an open door, and the row has to say the number
-	// that is still usable rather than the number ever minted.
-	if note := doorNote(m.Doors, "share"); !strings.Contains(note, "1 active link") {
-		t.Errorf("the share row does not report the active count: %q", note)
+	if m.Hub.Enrollments["agent"] != 2 {
+		t.Errorf("enrollments[agent] = %d; want 2", m.Hub.Enrollments["agent"])
 	}
 	if note := doorNote(m.Doors, "ingest"); !strings.Contains(note, "2 agents") {
 		t.Errorf("the ingest row does not report the enrolled agents: %q", note)
@@ -202,27 +161,15 @@ func TestAccess_CountsEnrollmentsAndShareLinks(t *testing.T) {
 // the door it was written to explain.
 func TestAccess_CarriesNoSecret(t *testing.T) {
 	h := newHarness(t)
-	h.srv.SSO = &SSO{
-		AppID: "ccquota", TicketSecret: "ticket-key-do-not-leak",
-		SessionSecret: "session-key-do-not-leak", EnterURL: "https://ai.example.com/enter",
-	}
-	shareTok, err := MintToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.srv.Store.CreateShareLink("board", HashToken(shareTok), true, nil); err != nil {
-		t.Fatal(err)
-	}
+	h.srv.GitHub = &GitHubAuth{ClientID: "Iv1.client-id", ClientSecret: "client-secret-do-not-leak", Admins: []string{"ada"}}
 	enrollTok := h.enroll(t, "laptop")
 
 	_, body := h.get(t, "/v1/access")
 	for name, secret := range map[string]string{
-		"the viewer token":     viewerToken,
-		"a share token":        shareTok,
-		"an enrollment token":  enrollTok,
-		"the SSO ticket key":   "ticket-key-do-not-leak",
-		"the SSO session key":  "session-key-do-not-leak",
-		"a share token's hash": HashToken(shareTok),
+		"the viewer token":         viewerToken,
+		"an enrollment token":      enrollTok,
+		"the GitHub client secret": "client-secret-do-not-leak",
+		"the GitHub client id":     "Iv1.client-id",
 	} {
 		if strings.Contains(string(body), secret) {
 			t.Errorf("/v1/access carries %s", name)

@@ -71,7 +71,7 @@ func TestFleetSummaryByCertificate(t *testing.T) {
 	connectNode(t, h, "m4-bob", "m4", "bob", false)
 	waitFor(t, 3*time.Second, "two nodes", func() bool { return len(roster(t, h).Nodes) == 2 })
 
-	good := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
+	good := k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
 	signed := func(c *ssh.Certificate, ns string, msg func(int64) string, ts int64) SummaryRequest {
 		return SummaryRequest{Cert: string(ssh.MarshalAuthorizedKey(c)), TS: ts,
 			Sig: sshsig(t, k.user, ns, []byte(msg(ts)))}
@@ -109,7 +109,7 @@ func TestFleetSummaryByCertificate(t *testing.T) {
 
 	// Someone with no account anywhere sees nothing — not someone else's.
 	h.srv.Store.AdoptPrincipal("wx-carol", "carol", "Carol", now)
-	carol := k.cert(t, "wecom:wx-carol", []string{"carol"}, now.Add(-time.Minute), now.Add(time.Hour))
+	carol := k.cert(t, "person:wx-carol", []string{"carol"}, now.Add(-time.Minute), now.Add(time.Hour))
 	code, out, raw = postSummary(t, h, nil, signed(carol, control.SummarySigNamespace, control.SummarySigMessage, now.Unix()))
 	if ms, as := summaryKeys(out); code != 200 || len(ms) != 0 || len(as) != 0 {
 		t.Errorf("no account: HTTP %d %s, want 200 with nothing in it", code, raw)
@@ -154,7 +154,7 @@ func TestFleetSummaryCarriesHostedRepos(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	good := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
+	good := k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
 	ts := now.Unix()
 	req := SummaryRequest{Cert: string(ssh.MarshalAuthorizedKey(good)), TS: ts,
 		Sig: sshsig(t, k.user, control.SummarySigNamespace, []byte(control.SummarySigMessage(ts)))}

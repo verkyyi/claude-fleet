@@ -166,8 +166,7 @@ func scanPlan(sc scanner) (model.SubscriptionPlan, error) {
 
 // SubscriptionSpend is what one plan actually cost over a reporting period.
 //
-// REAL money. It may be added to a metered gateway bill; it must never be
-// added to the notional token figure — see the subscription_plans schema
+// REAL money. It must never be added to the notional token figure — see the subscription_plans schema
 // comment and the guard in plans_test.go.
 type SubscriptionSpend struct {
 	Plan     string `json:"plan"`

@@ -12,10 +12,11 @@
 //   - principals: the person's login (the one name C4 gave them on every
 //     machine) — sshd lets the certificate in only as that login;
 //   - validity: 12 hours from now (a minute of back-dating for clock skew);
-//   - key id: "wecom:<wecom userid>", which sshd writes to its log on every
-//     login, so an auth line names the person, not a key. The hub relay (C6,
-//     claude-fleet#1413) reads the userid back as everything after the last
-//     ':'; the login is in the principals and the serial in its own field;
+//   - key id: "person:<principal>" (gh:<GitHub ID>), which sshd writes to
+//     its log on every login, so an auth line names the person, not a key.
+//     The hub relay (C6, claude-fleet#1413) reads the principal back with
+//     PrincipalOfKeyID; the login is in the principals and the serial in its
+//     own field;
 //   - extensions: the ordinary interactive set (pty, port/agent forwarding,
 //     user rc). No critical options: no force-command, no source-address —
 //     the routes a person comes in on (LAN, tailnet, relay) are many.
@@ -107,7 +108,7 @@ func ParseUserKey(line string) (ssh.PublicKey, error) {
 // Request is what a certificate is signed for.
 type Request struct {
 	Key ssh.PublicKey
-	// PrincipalID is the WeCom userid; it goes into the key id for audit.
+	// PrincipalID is the person (gh:<GitHub ID>); it goes into the key id for audit.
 	PrincipalID string
 	// Logins are the OS logins the certificate admits (its principals).
 	Logins []string
@@ -126,6 +127,18 @@ type Issued struct {
 	KeyFingerprint string
 }
 
+// KeyIDPrefix starts a person's certificate key id.
+const KeyIDPrefix = "person:"
+
+// PrincipalOfKeyID is the person a certificate's key id names: everything
+// after the prefix, which may itself hold a ':' (gh:<id>).
+func PrincipalOfKeyID(keyID string) string {
+	if p, ok := strings.CutPrefix(keyID, KeyIDPrefix); ok {
+		return p
+	}
+	return keyID
+}
+
 // Sign issues a user certificate valid for TTL from now.
 func (c *CA) Sign(req Request, now time.Time) (*Issued, error) {
 	if req.Key == nil {
@@ -137,7 +150,7 @@ func (c *CA) Sign(req Request, now time.Time) (*Issued, error) {
 	if req.PrincipalID == "" {
 		return nil, errors.New("no principal")
 	}
-	return c.sign(req.Key, "wecom:"+req.PrincipalID, req.Logins, TTL, map[string]string{
+	return c.sign(req.Key, KeyIDPrefix+req.PrincipalID, req.Logins, TTL, map[string]string{
 		"permit-pty":              "",
 		"permit-port-forwarding":  "",
 		"permit-agent-forwarding": "",

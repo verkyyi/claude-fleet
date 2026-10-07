@@ -22,12 +22,7 @@ func everyFinding(t *testing.T) []findings.Finding {
 			{SessionID: "abcdef123456", CWD: "/srv/work/api", Model: "claude-opus-5",
 				Tokens: 400_000_000, Turns: 42, Duration: 95 * time.Minute},
 		},
-		Models: []findings.ModelStat{{Model: "qwen-plus", Tokens: 900, Unpriced: 19}},
-		// Both sides of the allowance line: one model past it, one approaching.
-		FreeAllowances: []findings.FreeAllowanceStat{
-			{Model: "doubao-seed-2-0-mini", Tokens: 1_400_000, Allowance: 1_000_000},
-			{Model: "doubao-lite", Tokens: 900_000, Allowance: 1_000_000},
-		},
+		Models:           []findings.ModelStat{{Model: "qwen-plus", Tokens: 900, Unpriced: 19}},
 		Critical:         []findings.AccountCritical{{Label: "team@example.com", Seconds: 3600, PrevSeconds: 600, Episodes: 3}},
 		SelectionSeconds: 7200,
 		Projects:         []findings.ProjectStat{{CWD: "/srv/work/api", Turns: 250, CacheHit: 0.30, Tokens: 4_000_000_000, PrevTokens: 1_000_000_000}},
@@ -51,7 +46,7 @@ func everyFinding(t *testing.T) []findings.Finding {
 		VaultLock: &findings.VaultLock{Reason: "kms Decrypt: kms 503 ServiceUnavailable", Since: seen},
 		SetupTokens: []findings.SetupToken{
 			{PrincipalID: "pool", Provider: "claude", Account: "icloud", ExpiresAt: time.Now().UTC().Add(20 * 24 * time.Hour)},
-			{PrincipalID: "wecom-bob", Provider: "claude", Account: "own", ExpiresAt: time.Now().UTC().Add(-2 * 24 * time.Hour)},
+			{PrincipalID: pBob, Provider: "claude", Account: "own", ExpiresAt: time.Now().UTC().Add(-2 * 24 * time.Hour)},
 		},
 		ComputeClosed: []findings.ComputeClosed{{EndpointID: "ep_m4", Hostname: "m4", OSUser: "alice", Loc: "CN",
 			Reason: "egress CN: Anthropic says unsupported_region, OpenAI unreachable"}},

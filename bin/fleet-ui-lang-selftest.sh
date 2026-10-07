@@ -23,15 +23,16 @@ import sys
 spec = importlib.util.spec_from_file_location("fleet_sidebar", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-print(mod.PLACEHOLDER)
-print(mod.HELP_ROW)
 print(mod.target_name("hdr:none"))
-print(mod.placeholder("hdr:none"))
+print(mod.Ask("rename", mod.tr("sidebar_rename")).spec()["hint"])
 PY
 }
 
-eq 'sidebar English strings' "$(probe_sidebar en | paste -sd'|' -)" 'New session name…| ? keys|no repo|New session → no repo…'
-eq 'sidebar Chinese strings' "$(probe_sidebar zh | paste -sd'|' -)" '新会话名…| ? 快捷键|无仓库|新会话 → 无仓库…'
+# The list has no input line since issue #1950: its strings are the question's,
+# asked on the line under the session (bin/fleet-ask.py) — a hintless one gets
+# the keys.
+eq 'sidebar English strings' "$(probe_sidebar en | paste -sd'|' -)" 'no repo|↵ ok · esc cancel'
+eq 'sidebar Chinese strings' "$(probe_sidebar zh | paste -sd'|' -)" '无仓库|↵ 确定 · esc 取消'
 eq 'ghost English' "$(FLEET_UI_LANG=en FLEET_SESSION='' "$BIN/dash-agent-prompt.sh" ghost 2>/dev/null)" '↵ new scratch (prefilled, unsent) · switch agent: ⌃v'
 eq 'ghost Chinese' "$(FLEET_UI_LANG=zh FLEET_SESSION='' "$BIN/dash-agent-prompt.sh" ghost 2>/dev/null)" '↵ 新开 scratch（预填不发送） · 切换 agent: ⌃v'
 

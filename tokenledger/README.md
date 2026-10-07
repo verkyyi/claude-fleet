@@ -23,10 +23,8 @@ both support subscription-limit monitoring when a usable local login is present.
 
 ![what it cost, and every model that ran](docs/img/dashboard.png)
 
-<sub>The headline is the sum of two <em>different kinds of money</em> — a
-subscription that bills monthly, and metered spend that bills per call — and the
-consumption table below it is keyed on (provider, model), because one gateway
-failing over between vendors reaches the same model id on two contracts.
+<sub>The headline is the subscriptions — what bills monthly whether or not a
+token is spent; the API-equivalent token cost is never added to it.
 Screenshots on this page come from a throwaway hub with invented data —
 <code>docs/img/seed-demo.sh</code> stands that hub up again so the pictures can be
 re-shot when the UI moves. Endpoint ids and dates differ every run, so it
@@ -209,22 +207,20 @@ it carries a token.
 **Retiring one** (also on the hub, same database, same access assumption):
 
 ```bash
-ccquota endpoint list                  # every enrollment: agents AND shippers
+ccquota endpoint list                  # every enrollment, whatever its kind
 ccquota endpoint list --all            # retired ones too
 ccquota endpoint retire <endpoint_id>  # stop accepting its token, keep its history
 ```
 
 `endpoint list` is the operator's inventory, so unlike the dashboard's Endpoints
-roster it shows **every kind** — agents, repo shippers, growth tokens — with a
-`KIND` column. The roster filters to agents because a shipper is not a machine
-and would be reported as one that stopped reporting; but a shipper is one of the
-likelier things to need retiring, and one you cannot see is one whose id you
-cannot look up.
+roster it shows **every kind** of enrollment with a `KIND` column — the roster
+filters to agents, and an enrollment you cannot see is one whose id you cannot
+look up.
 
 `retire` is the one you want. It keeps the endpoint's row and every usage row
 pointing at it — **past totals do not move** — and its enrollment token stops
-being accepted immediately: usage pushes, repo and growth pushes, the live
-report and the quota lease all reject it from that moment. The dashboard's
+being accepted immediately: usage pushes, the live report and the quota lease
+all reject it from that moment. The dashboard's
 roster hides it, with a toggle on the Endpoints card to show retired ones
 again, and its spend keeps its name everywhere history is drawn.
 
@@ -238,7 +234,7 @@ ccquota endpoint delete <endpoint_id>  # remove it entirely
 ```
 
 `delete` is only for an endpoint that **never reported anything** — a token
-minted for a one-off experiment, or for a shipper that was replaced before it
+minted for a one-off experiment, or for a machine that was replaced before it
 ever pushed. It refuses the moment the endpoint has reported, and names what it
 found:
 
@@ -495,8 +491,8 @@ totals:
   while the scope is `all`.
 - **Cost across sources** — `claude` and `codex` figures are notional (what the
   tokens would have cost at API rates; nobody is billed them, the plan is),
-  while a gateway's are billed per call. Adding them invents spending that
-  never happened. Each row carries its own kind; see the per-source breakdown.
+  each at its own published rates. Each row carries its own kind; see the
+  per-source breakdown.
 
 ### Several users on one machine
 
@@ -551,26 +547,25 @@ process, and they do not share a credential.
 
 | Door | What you need | What it gives you |
 |---|---|---|
-| The app (`/`, `/sessions`, `/connect`, `/config`), `/growth` | viewer token, a WeCom session, or a named tailnet peer | every figure this hub holds |
-| `/enter` | a 90-second ticket from the authorization service | exchanges that ticket for this hub's session cookie, nothing else |
-| `POST /logout` | a same-origin form (the page header's 退出) | clears the cookies this hub minted and shows the signed-out page; the authorization service's own session stays |
+| The app (`/`, `/sessions`, `/connect`, `/config`) | a GitHub sign-in on this hub's list, or the viewer token | what the viewer's role lets them see (a user: their own) |
+| `/signin`, `/auth/github/*` | a GitHub account whose numeric ID is on the list | exchanges a GitHub sign-in for this hub's session cookie, nothing else |
+| `POST /logout` | a same-origin form (the page header's 退出) | clears the cookies this hub minted and shows the signed-out page; GitHub's own session stays |
 | `/v1/...` | the viewer token, as a bearer header | the same figures as JSON |
 | `POST /mcp` | the same viewer token again | the read tools, for an agent |
-| `/v1/ingest`, `/v1/ingest/repo`, `/v1/ingest/growth`, … | each shipper's own enrollment token | write: push usage, progress or the ledger |
-| `/share?token=…` | a share token from `ccquota share` | one redacted page |
+| `/v1/ingest`, `/v1/live/report`, … | each agent's own enrollment token | write: push Claude and Codex usage |
 | `/badge/…`, `/embed/…` | nothing while the setting `hub.public_badges` is on, an admin's sign-in otherwise | one number, for a README |
-| `ccquota enroll / share / team / plan / name` | a shell on the hub machine | the only door that can change who gets in |
+| `ccquota enroll / team / plan / name` | a shell on the hub machine | the only door that can change who gets in |
 
 That table is the software. The half it cannot tell you is *your* hub — whether
-SSO is wired up, who is on the tailnet allowlist, whether badges are public,
-how many shippers are enrolled. The hub answers that itself:
+GitHub sign-in is wired up, how many admins the deploy names, whether badges are
+public, how many agents are enrolled. The hub answers that itself:
 
     https://<your hub>/access          # the page
     https://<your hub>/v1/access       # the same thing as JSON
 
-Both sit behind the viewer token, like every other human surface. That is
-deliberate rather than incidental: `/enter` is mounted unconditionally and
-404s when SSO is unconfigured *precisely* so the route cannot tell an
+Both sit behind the viewer gate, like every other human surface. That is
+deliberate rather than incidental: `/signin` is mounted unconditionally and
+404s when GitHub sign-in is unconfigured *precisely* so the route cannot tell an
 uncredentialled prober whether the feature is on, and a page that reports the
 configuration must not undo it. You read `/access` because you already came
 through a door.
@@ -583,20 +578,16 @@ its own team could move its spend onto another team's budget.
 ### The page header — who is signed in, and the way out (claude-fleet#1467)
 
 Every human page — the dashboard, 连接, 我的会话, 机器节点, 凭据发放 — carries
-the same header, top right: the signed-in person's directory name (the
-ticket's `nam`, else what the hub has on record for them, else their WeCom
-userid) with 企业微信 under it, or 管理员 · 令牌 / 内网 for the operator's own
-doors. It is drawn by `web/dist/whoami.js` from **one** answer, `/v1/me`
-(`via`: `open | token | wecom | tailnet`, `person`, `name`, `login`,
-`can_logout`), recorded by the gate as it admits the request — never inferred
-per page. Clicking it opens 姓名 / 企微账号 / 登录方式 and, when a cookie of this
-hub's is behind the request, **退出**: a plain same-origin `POST /logout` that
-clears the session and the parked viewer token, then shows a signed-out page
-whose only link is 重新登录 → the gate (or `/` without SSO). No destination
-parameter, so no open redirect. As on OPS, the authorization service's own
-8-hour session on ai.24haowan.com is not this host's to end: it has no logout
-endpoint, and while it lives 重新登录 signs a fresh ticket without a WeCom
-prompt.
+the same header, top right: the signed-in person's GitHub username with their
+role · GitHub under it, or 管理员 · 令牌 for the operator's own door. It is
+drawn by `web/dist/whoami.js` from **one** answer, `/v1/me` (`via`:
+`open | token | github`, `person`, `name`, `role`, `can_logout`), recorded by the
+gate as it admits the request — never inferred per page. Clicking it opens
+姓名 / 登录方式 and, when a cookie of this hub's is behind the request, **退出**:
+a plain same-origin `POST /logout` that clears the session and the parked viewer
+token, then shows a signed-out page whose only link is 重新登录 → `/signin` (or
+`/` without GitHub sign-in). No destination parameter, so no open redirect.
+GitHub's own session is not this host's to end.
 
 ## Fleet nodes — every machine reports in (`CCQUOTA_FLEET=1`)
 
@@ -660,7 +651,7 @@ the join-code button below stays, for the operator, one more version.
 
 ### A new machine — join codes (claude-fleet#1418, kept one version)
 
-The `/nodes` page has an **加一台机器** panel (the operator's; a WeCom session
+The `/nodes` page has an **加一台机器** panel (the operator's; a user's session
 gets 403): one click mints a **join code** and prints the line to paste on the
 new machine, as the login that will run the fleet:
 
@@ -789,7 +780,7 @@ is one `hub_audit` row: who, when, old → new.
 | `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN` (`none` = no machines) |
 | `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
-| `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS` (`<id>` = a GitHub ID (`583231` or `gh:583231`) or a WeCom userid; `none` = no login) |
+| `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS` (`<id>` = a GitHub ID, `583231` or `gh:583231`; `none` = no login) |
 | `user.<GitHub ID>.lang` | — | the account's page language (claude-fleet#2033): `zh-CN` \| `en` |
 
 At start the hub copies each old value it was given into the database once
@@ -799,58 +790,38 @@ stops reading the old variables. The CLI authenticates with
 `CCQUOTA_VIEWER_TOKEN`, or `FLEET_HUB_SESSION` set to a signed-in admin's
 `ccq_sess` cookie — both read from the environment, never written down.
 
-### People and their logins — WeCom sign-in opens the account (claude-fleet#1411)
+### People and their logins — GitHub sign-in opens the account (claude-fleet#1411)
 
-With the fleet module on, a person signing in through WeCom (`/enter`) becomes
-a **principal**, keyed by their WeCom userid, and has ONE login name used on
+With the fleet module on, a person signing in with GitHub (`/signin`) becomes
+a **principal**, keyed `gh:<their GitHub ID>`, and has ONE login name used on
 every machine — either the one the operator mapped them to (below) or one the
 hub mints once (lowercase letters + digits, ≤16, de-duplicated). The hub
 keeps, per (principal, machine), whether that login exists there:
 `fleet_principals` + `fleet_accounts`, created only when the switch is on.
-
-**The person is the ticket's `uid`, never its `sub`** (claude-fleet#1458). The
-authorization service signs one `sub` per (app, tenant) — for this hub the
-role `staff`, identical on every colleague's ticket — and keying a principal on
-it filed everyone as one person. The WeCom userid rides the ticket as `uid`
-(and the directory name as `nam`) only once the issuer lists this app in its
-`AUTHZ_UID_APPS`; until then every sign-in logs `ticket for "…" names no
-person` and the role is the principal — a colleague the hub cannot place,
-never an identity it opens accounts for. `/v1/fleet/me` says which it saw:
-`signed_in` (a WeCom person, not an operator door), `person` (the userid, even
-before the hub has a row for them), `principal` (the row, or null) and
-`accounts`.
+`/v1/fleet/me` says who it saw: `signed_in` (a person, not an operator door),
+`person` (`gh:<id>`, even before the hub has a row for them), `principal` (the
+row, or null) and `accounts`.
 
 **Whose login is whose — the explicit map.** The setting
-`user.<userid>.machine_login` (claude-fleet#1986; for one version also
-`CCQUOTA_FLEET_PRINCIPAL_LOGINS=CaoJian=24haowan,YiLiangHui=verkyyi`) names the
-OS login that belongs to each person. At a mapped person's sign-in the
-hub records them under that login and **adopts** it (state `active`, op
-`adopt`) on every roster machine whose agent runs as that login — the roster
-is the evidence the login exists there — and again at any later node hello,
-so the order of "person signs in" and "machine joins" does not matter. Nothing
-is ever created for a mapped person, and no op is sent. A person **not** in
-the map leaves no row at all (no minted login name, no op) unless
-`CCQUOTA_FLEET_AUTO_ASSIGN` below applies to them; the operator's `adopt`
-records them when there is somewhere to record them on. A malformed entry, a
-login outside `[a-z0-9]{2,16}` or one login claimed by two people refuses to
-start the hub. A mapped login may start with a digit (`24haowan` is real); a
+`user.<GitHub ID>.machine_login` (claude-fleet#1986; for one version also
+`CCQUOTA_FLEET_PRINCIPAL_LOGINS=gh:2718137=verkyyi`) names the OS login that
+belongs to each person. At a mapped person's sign-in the hub records them under
+that login and **adopts** it (state `active`, op `adopt`) on every roster
+machine whose agent runs as that login — the roster is the evidence the login
+exists there — and again at any later node hello, so the order of "person signs
+in" and "machine joins" does not matter. Nothing is ever created for a mapped
+person, and no op is sent. A person **not** in the map leaves no row at all (no
+minted login name, no op) unless `fleet.auto_assign` below applies to
+them; the operator's `adopt` records them when there is somewhere to record them
+on. A malformed entry, a login outside `[a-z0-9]{2,16}` or one login claimed by
+two people refuses to start the hub. A mapped login may start with a digit; a
 login the hub *creates* still starts with a letter.
 
-**The userid's case never matters** (claude-fleet#1472). WeCom userids are
-case-insensitive — the directory lists `YiLiangHui`, the ticket carries it
-so, and the operator typed `yilianghui` — so the map is compared to the
-ticket case-insensitively, and every lookup of a principal (the row,
-their accounts, an operator's `adopt`/`remove`/`forget` by id) folds case
-too; the row keeps the spelling it was first written with, the directory's
-when the ticket wrote it. Spelling one person two ways in the map is one
-entry when the logins agree and a startup refusal when they do not.
-
-**The placement runs at every door that needs the row, not only at `/enter`**
-(claude-fleet#1472). The session cookie lives eight hours, and a person
-mapped *after* they signed in — or whose first visit predated the map — would
-otherwise reach the `fleet login` confirmation, `/connect` and the
-certificate with no principal and be told `no active login on any machine
-yet`. `/fleet/login` (the page and the confirm), `/connect`,
+**The placement runs at every door that needs the row, not only at sign-in**
+(claude-fleet#1472). The session cookie lives on, and a person mapped *after*
+they signed in would otherwise reach the `fleet login` confirmation,
+`/connect` and the certificate with no principal and be told `no active login
+on any machine yet`. `/fleet/login` (the page and the confirm), `/connect`,
 `/v1/fleet/connect` and `/v1/fleet/cert` run the same idempotent placement
 first; an unmapped person is still recorded nowhere by it.
 
@@ -879,8 +850,8 @@ anything; `forget` drops the hub's record of a row that never reached a
 machine (`pending` / `failed` / `removed`), or — with no `hostname` — of the
 person and every such row of theirs, and refuses (409) while any row is
 active, in flight or unknown: an active login is `remove`d, not forgotten.
-That route, and its `GET`, refuse a WeCom session (403): only the viewer
-token or a tailnet identity can change accounts.
+That route, and its `GET`, refuse a user's session (403): only the viewer
+token or an admin can change accounts.
 
 An op is recorded before it is sent; a link that drops with one in flight
 leaves the account `unknown` and it is **never re-sent on its own**. The node
@@ -888,11 +859,11 @@ keeps its result until the hub acks it and re-sends it on reconnect, so the
 late answer settles it; otherwise the operator `retry`s. Exit 3 ("login
 already exists") is `failed`, never `active` — the name may be someone else's.
 
-**Only see your own (hub side).** A WeCom session's `/v1/nodes` lists only the
+**Only see your own (hub side).** A user's `/v1/nodes` lists only the
 (machine, login) pairs that are its own ACTIVE accounts; `/v1/fleet/me` says
 who the hub thinks you are and where your login exists. Every later fleet view
-filters through the same `Server.FleetScope`. The token and tailnet doors
-still see everything. The home page reads `/v1/fleet/me` once and shows the
+filters through the same `Server.FleetScope`. The token door still sees
+everything. The home page reads `/v1/fleet/me` once and shows the
 way to `/connect` and `/sessions` for a person with an active login (and
 `/nodes` too for an operator door), or 「未分配机器，联系管理员」 for a person
 the hub has placed nowhere yet (`web/dist/lib/fleetnav.js`).
@@ -932,8 +903,8 @@ node, whatever the hub asks), with the node's OWN `machine_id`. An agent older
 than this never advertises the `read` capability in its hello, so the hub never
 asks it and answers from its heartbeat instead.
 
-Every answer is scoped to the caller: the operator's doors (viewer token,
-tailnet identity) see every machine; a person signed in through WeCom sees only
+Every answer is scoped to the caller: the operator's door (viewer token) and an
+admin see every machine; a person signed in with GitHub sees only
 the logins assigned to them (claude-fleet#1411) and gets `NOT_FOUND` — the same
 answer as for a fleet that does not exist — for anyone else's. The `/nodes` page
 shows the same "my sessions" table under the roster.
@@ -1025,7 +996,7 @@ nothing, as before. Both show on `/v1/nodes` and on each `placement` candidate.
 **Grants.** Each tool has the Python hub's scope (`worker:start`,
 `worker:message`, `worker:stop`, `worker:resume`, `config:write` plus the key,
 `gh:read`, `gh:comment`; every call needs `fleet:read`). The operator's doors
-hold every scope. A person signed in through WeCom holds
+hold every scope. A person signed in with GitHub holds
 `CCQUOTA_FLEET_PERSON_SCOPES` (default: everything except `config:write`) on
 their own logins only, and `config_set` only for the keys in
 `CCQUOTA_FLEET_PERSON_CONFIG_KEYS` (default none).
@@ -1078,7 +1049,7 @@ key `CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]`, verifiers
 stores, lists and revokes:
 
     # store (or replace) — the secret never comes back out of the hub
-    curl -H "Authorization: Bearer $VIEWER" -d '{"action":"put","principal_id":"<wecom userid>",
+    curl -H "Authorization: Bearer $VIEWER" -d '{"action":"put","principal_id":"gh:<GitHub ID>",
       "provider":"claude","account":"main","secret":{"refresh_token":"sk-ant-ort01-…","subscription_type":"max"}}' \
       $HUB/v1/fleet/credentials
     #   codex:  "secret":{"refresh_token":"…","account_id":"…"}   (from ~/.codex/auth.json)
@@ -1089,7 +1060,7 @@ stores, lists and revokes:
 
 Every issue, refusal, refresh, store and revocation is an audit row:
 `/v1/fleet/credentials/audit`, and the page **`/credentials`**. All of these
-refuse a WeCom session. A Claude refresh token comes from an interactive
+refuse a user's session. A Claude refresh token comes from an interactive
 `claude` login (`claudeAiOauth.refreshToken`); once it is in the hub, log that
 machine out — two holders of one refresh token rotate each other out.
 A Codex home the hub writes is registered once with
@@ -1241,93 +1212,6 @@ decrypted for anything else.
   the audit keep working. Machines keep the access tokens they already have, so
   a short KMS outage costs nothing until those run out.
 
-#### Findings reach your phone — kf-notify push (claude-fleet#1469, #1705, EPIC #1665 C2)
-
-A finding used to live only on the entrance page and the `/credentials` banner:
-a 5-second poll by whoever happened to be looking. The setup-token reminder
-above, a Codex account whose refresh died at 23:46 — found the next morning,
-when a switch ran into them (EPIC #1665 measured about ten hours). With the
-cluster's notification service **kf-notify** configured, the hub pushes every
-**warning / critical** finding of the live (`view=now`) view to it within a
-minute:
-
-```
-CCQUOTA_NOTIFY_URL=http://kf-notify.<ns>:<port>     # from the cluster Secret's NOTIFY_URL
-CCQUOTA_NOTIFY_KEY=…                                 # from the cluster Secret's NOTIFY_KEY
-CCQUOTA_NOTIFY_DEST=alerts.prod                      # optional
-```
-
-The hub reads the `CCQUOTA_`-prefixed names only (not the bare `NOTIFY_*` the
-cluster's producers use): the Deployment maps the Secret's `NOTIFY_URL` /
-`NOTIFY_KEY` onto them.
-
-| variable | role | what it does |
-|---|---|---|
-| `CCQUOTA_NOTIFY_URL` | hub | kf-notify's base URL; the hub posts to `<url>/v1/notify`. Set together with the key — one without the other refuses to start |
-| `CCQUOTA_NOTIFY_KEY` | hub | kf-notify's caller key, sent as `Authorization: Bearer …` — **a secret**: environment only, like the SSO secrets; never a flag (`ps`), never logged, never in an error or a page |
-| `CCQUOTA_NOTIFY_DEST` | hub | the kf-notify `dest` (default `alerts.prod`, the cluster's default) |
-| `CCQUOTA_NOTIFY_REPEAT_HOURS` | hub | remind about a problem that is still standing this often (default `6`, the operator's interval; `0` = announce once, never remind). Old name `CCQUOTA_WECOM_REPEAT_HOURS` still read |
-| `CCQUOTA_NOTIFY_LOCALE` | hub | the messages' language (`zh-CN`; `en`). Old name `CCQUOTA_WECOM_LOCALE` still read |
-| `CCQUOTA_WECOM_WEBHOOK` | hub | **deprecated, kept one version**: a bare WeCom group robot webhook, used only when kf-notify is not configured. It carries the robot's key — same rules as the kf-notify key |
-
-Neither kf-notify nor the webhook set: the push is off and nothing about
-findings changes.
-
-What a kf-notify request carries (the cluster's convention, as in
-24haowan-monorepo `smoke/notify-post.js`):
-
-| field | value |
-|---|---|
-| `source` | `ccquota:finding:<kind>` (`account_login`, `cred_setup_token`, …) |
-| `dedupKey` | `ccquota:<problem>` — the finding's problem id (below), the same key for its announcement, reminders, escalation and recovery, so kf-notify folds them into one inbox event |
-| `severity` | critical → `error`, warning → `warn`, a recovery → `info` |
-| `recovery` | `true` on the `已恢复` message (kf-notify drops it if it never saw the problem) |
-| `title` / `body` | the finding's sentence / the markdown message below |
-| `dedupWindowSec` | `60` — the hub's own rules below are the dedup; kf-notify's default hour would swallow a `（有变化）` sent within it |
-
-A delivery failure (unreachable, a non-2xx answer) is one log line without the
-key, and never touches the finding itself.
-
-One message is one finding, as markdown: a bold head (`ccquota · 严重`), the
-finding's sentence in that language, its detail and its link
-(`CCQUOTA_FLEET_PUBLIC_URL` + the finding's anchor) quoted under it.
-
-**The dedup rules** — what keeps a 5-second page refresh from becoming a
-message every 5 seconds — live in one place (`internal/api/finding_notify.go`,
-backed by the `finding_notices` table):
-
-- The unit is the finding's **problem**: its kind + subject, without severity
-  or sentence (`Finding.Problem`, beside the `ID` a mute keys on). A problem is
-  announced **once** when first seen.
-- The same problem back **more severe** (a token's 30-day warning turning
-  critical in its last week) is announced again as `升级为严重`; the same
-  severity with another sentence (expiring → expired) as `（有变化）`; a
-  quieter one is recorded silently.
-- Still standing after `CCQUOTA_NOTIFY_REPEAT_HOURS`: one reminder per
-  interval (`仍在严重 · 已持续 6小时`).
-- **Gone**: one `已恢复` message carrying the sentence last sent — for the
-  kinds whose clearing means a person acted or a machine came back
-  (`cred_vault_locked`, `cred_setup_token`, `account_login`, `stale_agent`);
-  a rate-limit window cooling off on its own is not news. The row is dropped,
-  so the problem would be "new" again if it came back.
-- A **muted** finding is a problem already dealt with: neither announced nor
-  reminded while the mute holds, and not "gone" either. `info` is never pushed.
-- The findings are evaluated **uncapped** for this: the page's cap of eight
-  would let the ninth problem flap between new and recovered.
-- A failed send records nothing (it is retried) and pauses the notifier five
-  minutes; at most 10 messages leave per tick (a robot takes 20 a minute).
-
-**`account_login`** is the finding this was built for: an account that needs a
-PERSON to sign in again — critical, one per (provider, account), its title
-carrying the one command that fixes it (Codex `codex login --device-auth`,
-Claude `claude setup-token`). Two feeders: a machine's Codex collector reporting
-its profile's login as `reauth_required` (the reading `ccquota codex list`
-prints), and a vault credential whose refresh the hub itself could not complete
-once the access token it backed has run out. On the node, the same state draws
-`▲ accounts · reauth · <profile>` on the status bar (`bin/fleet-alerts.sh`, off
-`.fleet-account.py`'s `account.reauth` stamp — the one judge of a login) and
-flashes once — the fallback for a hub that is unreachable, or absent.
-
 ### One line to install, then just `fleet` (claude-fleet#1470)
 
 A colleague's whole setup is one line in their own terminal (macOS or Linux;
@@ -1349,7 +1233,7 @@ already there is kept), appends one PATH line to the shell's rc file once, and
 runs `fleet` with stdin from `/dev/tty`. Only stock tools: sh, curl, python3
 (macOS's own 3.9 is enough), ssh. These routes are public like the CA's public
 key — a script and three programs carrying no credential — and answer 404
-until the hub has both a CA and WeCom sign-in, because that is what the first
+until the hub has both a CA and GitHub sign-in, because that is what the first
 `fleet` needs.
 
 **`fleet`** with nothing after it (`bin/fleet` → `fleet-connect.py --enter`):
@@ -1406,7 +1290,8 @@ Make the CA once: `ssh-keygen -t ed25519 -N '' -C fleet-user-ca -f ca`, then
 **What a certificate says** (`internal/sshca`): principals = the person's
 login (C4's one name, active somewhere — no active login, no certificate),
 valid 12 hours (a minute back-dated for clock skew), key id
-`wecom:<userid>` (the hub relay, C6, reads the userid after the last `:`) —
+`person:<principal>` (`person:gh:<GitHub ID>`; the hub relay, C6, reads the
+principal after the `person:` prefix) —
 sshd logs it on every login, and the
 hub's `fleet_certs` table turns it back into a person, a key and a moment. The
 issuance is recorded before the certificate is handed out.
@@ -1417,14 +1302,14 @@ issuance is recorded before the certificate is handed out.
   `~/.config/claude-fleet/hub.json` `{"url":…}`, which C6's client reads too): makes
   `~/.ssh/fleet-cert` if needed, POSTs its public half to
   `/v1/fleet/login/start`, draws the QR, and polls `/v1/fleet/login/poll`.
-  Scanning it in WeCom opens `/fleet/login`, which signs the person in (the
-  code survives the trip through WeCom in a short cookie) and asks them to
+  Scanning it opens `/fleet/login`, which signs the person in with GitHub (the
+  code survives the trip through `/signin` in a short cookie) and asks them to
   confirm the code their terminal shows; the next poll carries the
   certificate, exactly once. start/poll carry no credential and grant nothing
   until a signed-in person confirms; the form only accepts a same-origin POST.
 - the **连接** page (`/connect`): the hub address, every route, the ssh config
   snippet, and paste-a-public-key → download the certificate
-  (`POST /v1/fleet/cert`, WeCom session only — the operator's token is not a
+  (`POST /v1/fleet/cert`, a GitHub session only — the operator's token is not a
   person and gets 403).
 
 The client paths are a contract (`fleet connect`, C7, reads them):
@@ -1697,15 +1582,15 @@ Who may ask (checked by the hub; sshd checks again):
 
 | credential | how the client sends it | reaches |
 |---|---|---|
-| viewer token, tailnet identity | `FLEET_HUB_TOKEN` (bearer) / tailnet | any machine (the operator) |
-| WeCom session | the session token as `FLEET_HUB_TOKEN`, or the cookie | only machines where the hub opened them an **active** login |
+| viewer token, an admin's GitHub session | `FLEET_HUB_TOKEN` (bearer) / the cookie | any machine (the operator) |
+| a user's GitHub session | the session token as `FLEET_HUB_TOKEN`, or the cookie | only machines where the hub opened them an **active** login |
 | connection certificate (C5, #1412) | `~/.ssh/fleet-cert` + `-cert.pub`, proven by signing the hub's nonce with `ssh-keygen -Y sign -n fleet-relay@claude-fleet` | same as a session |
 
 A certificate must be a user certificate signed by the hub's own CA
 (`CCQUOTA_FLEET_SSH_CA_KEY`, claude-fleet#1412) or a key listed in
 `CCQUOTA_FLEET_SSH_CA_PUB` (a file of CA public keys — e.g. one being rotated
-out), valid now, with key id = the person's WeCom userid (`wecom:<userid>` as
-`fleet login` gets it; the part after the last `:` is read) and the hub-minted
+out), valid now, with key id = `person:<principal>` (as `fleet login` gets it;
+everything after the prefix is read, `gh:<id>` and all) and the hub-minted
 login among its principals. The hub URL comes from `--hub`, `FLEET_HUB_URL`, or
 `{"url": …, "token": …}` in `~/.config/claude-fleet/hub.json`.
 
@@ -1762,11 +1647,10 @@ place on this page, it does not switch you between pages. Tabs used to split
 the dashboard into regions that fetched and refreshed on their own rhythms,
 and that split was wrong — "what is burning right now" and "what did this
 period cost" are one question at two time scales, so picking a tab meant
-picking half an answer. One surface, one refresh loop, four labelled bands:
-**Ledger** (what was paid, and to whom) · **Usage** (what drove it) ·
-**Progress** (what the spend bought, where a shipper pushes repo facts) ·
-**Operations** (quota, machines, collection health, sessions — folded by
-default). The nav names those four, and highlights the one you are reading.
+picking half an answer. One surface, one refresh loop, labelled bands:
+**Ledger** (what was paid) · **Usage** (what drove it) · **Operations**
+(machines, collection health, sessions — folded by default). The nav names
+them, and highlights the one you are reading.
 
 It still reads top to bottom: what this actually cost, what is running right
 now, every model that ran and what it cost, then the analysis and the fleet.
@@ -1776,92 +1660,9 @@ now, every model that ran and what it cost, then the analysis and the fleet.
 <sub>Drag the timeline selection and every card below it re-reports on that
 span. Each tile is compared with the equal-length period right before it.</sub>
 
-The top-level axis is the **billing relationship**, not the product name.
-There are two ways a deployment is charged — a subscription that bills monthly
-whether or not a token is spent, and metered spend that bills per call — and
-the headline figure is the sum of those two, with the API-equivalent
-("notional") figure printed beside it and explicitly outside it.
-
-`gateway` is not on that axis. It is the channel one of the metered sources
-reports through, so it appears as a per-row attribute and in collection
-health, not as a peer of the subscriptions. The consumption table is keyed on
-**(provider, model)**: a gateway that fails over between vendors reaches one
-model id through several upstreams at several contracted prices, and a row
-keyed on the model alone would add two invoices together. Rows sort within a
-billing kind, never across one — a metered charge and an API-equivalent
-estimate are not comparable amounts.
-
-## Showing it to someone else
-
-The dashboard is not shareable. It carries account emails, project paths (which
-are client names), machine names, OS logins, session ids and branches, and its
-viewer token also opens the MCP server. There is no safe way to hand that to a
-third party "just for the charts", and no way to take it back afterwards without
-rotating it for everyone.
-
-So a share link is a **separate, revocable credential onto a separate page**:
-
-```bash
-ccquota share --name "conference talk"      # prints the link once
-ccquota share --list                        # what has been handed out, and its use count
-ccquota share --revoke <id>                 # dead immediately
-```
-
-The public page shows tokens and turns over time, the model mix, live plan
-utilization under pseudonyms ("Subscription A"), and **counts** of machines,
-logins and projects — never their names. What it omits is the point:
-
-| Shown | Never shown |
-|---|---|
-| tokens, turns, trend | account emails and uuids |
-| model mix | project paths |
-| plan utilization % | machine names, OS logins |
-| how many machines/logins/projects | session ids, git branches |
-
-This is enforced structurally rather than by filtering. The share token is
-accepted **only** on the share routes, and those routes build their own object
-from scratch — a field cannot leak in by being forgotten, only by being written
-there on purpose. A test asserts the share token is rejected on every other
-route, and another seeds a client name, a colleague's login and an unreleased
-branch and asserts none of them appear.
-
-**Notional costs are off by default** (`--with-costs` to include them). A dollar
-figure shown to someone who does not know it is API-equivalent reads as a bill.
-And `--with-costs` publishes the *notional* figure only: metered gateway
-charges and subscription invoices — the hub's real spend — are never on a
-public link at any setting. A recipient of a share link cannot ask what a
-number means, so the strong promise is worth more than the caveat.
-
-Add `--expires 720h` for a link that dies on its own.
-
-## Tokenless on your own tailnet
-
-```bash
-ccquota hub --tailnet-viewers you@example.com,colleague@example.com
-```
-
-Named tailnet logins open the dashboard with **no token**. The hub asks the
-local tailscaled (`tailscale whois`) who owns the peer a connection came from —
-nothing in the request is trusted, so there is nothing to forge. Three rules
-keep it honest:
-
-- **An allowlist, not "anyone on the tailnet."** A tailnet routinely has shared
-  users and tagged servers on it.
-- **Tagged nodes are never people.** A tag means a server.
-- **The hub's own tailnet address is never trusted.** It resolves to the
-  machine's *owner*, so on a shared box every other OS login could be them.
-  Connections from the hub's machine to itself, and over loopback, still need
-  the token.
-
-Everything else — the LAN, unknown peers, a whois error — is a 401, exactly as
-if the feature were off. Lookups are cached for five minutes. The viewer token
-keeps working everywhere (MCP clients, scripts), and identity-authenticated
-requests show `viewer=<login>` in the access log.
-
-macOS note: the application firewall silently blocks incoming connections to an
-ad-hoc-signed hub when nobody is at the screen to click *Allow*, and an ad-hoc
-signature changes with every build. After each upgrade:
-`sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add <path> && sudo … --unblockapp <path>`.
+The headline figure is the **subscriptions** — what bills monthly whether or
+not a token is spent — with the API-equivalent ("notional") token figure
+printed beside it and explicitly outside it.
 
 ## HTTPS, with a name you can remember
 
@@ -2052,12 +1853,11 @@ they are published; these cannot.
 
 Three things this is careful about:
 
-**It is real money.** Together with metered gateway charges it is the only real
-money the hub holds — see [Three kinds of money](#three-kinds-of-money-never-one-number).
-The `cost_usd` figure on `claude` and `codex` is *notional* — what the tokens
-would have cost at API rates — and is explicitly not an invoice. Subscription
-spend may be added to a metered gateway bill; it must **never** be added to the
-notional figure, and there is a test that fails if recording a price moves any
+**It is real money.** It is the only real money the hub holds — see
+[Two kinds of money](#two-kinds-of-money-never-one-number). The `cost_usd`
+figure on `claude` and `codex` is *notional* — what the tokens would have cost
+at API rates — and is explicitly not an invoice. Subscription spend must
+**never** be added to the notional figure, and there is a test that fails if recording a price moves any
 notional aggregate by a cent.
 
 **Prices are effective-dated and appended, never overwritten.** A single column
@@ -2138,14 +1938,13 @@ Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer
 }}}
 ```
 
-Thirty-three read-only tools: `list_accounts`, `get_limits`, `get_limits_history`,
+Twenty-seven read-only tools: `list_accounts`, `get_limits`, `get_limits_history`,
 `list_endpoints`, `usage_by_source`,
-`usage_by_provider`, `usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
+`usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
 `usage_by_endpoint`, `usage_by_user`, `usage_by_project`, `usage_by_session`,
 `usage_by_model`, `usage_by_team`, `usage_by_branch`, `usage_by_effort`, `usage_by_entrypoint`,
 `usage_history`, `usage_summary`, `list_sessions`, `get_session`, `get_user`,
-`get_findings`, `get_collectors`, `get_account_usage`, `get_live`, `quota_history`, `get_fx`,
-`list_repos`, `repo_progress`, `list_repo_issues`, `repo_issue_cost`.
+`get_findings`, `get_collectors`, `get_account_usage`, `get_live`, `quota_history`.
 
 **Every axis the HTTP API can group by, MCP can group by too.** They went out of
 step once: `team`, `branch`, `model`, `effort` and `entrypoint` were reachable as
@@ -2156,11 +1955,6 @@ carries the effort and entrypoint splits that `GET /v1/summary` has always
 returned, for the same reason: those two are the only axes with no chip to filter
 on, so a missing split left them unreachable rather than merely inconvenient.
 
-`get_fx` is there because an agent reading a plan priced in CNY beside gateway
-charges in USD otherwise has no way to reach a rate at all, nor to learn how
-stale it is — and one that converts at a rate it invented produces a figure
-nobody can check.
-
 The asymmetry ran the other way too, and `GET /v1/quota/history` closes it: the
 provider-defined quota windows were reachable from the dashboard and from MCP,
 but over HTTP only as the `quota_series` key folded inside `/v1/limits/history`
@@ -2169,10 +1963,8 @@ utilization series to get at them. `/v1/limits/history` keeps its folded copy:
 the dashboard draws both on one axis, and splitting that into two round-trips
 would let the halves straddle a refresh.
 
-What stays deliberately one-sided: `/v1/share`, `/badge/*` and `/embed/*` are
-public-facing renderings and have no MCP tools; `/v1/growth/latest` is gated on
-the enrollment's *kind* rather than the viewer token, so moving it would be a
-permission change rather than a parity fix; and `/v1/live/stream` is a stream,
+What stays deliberately one-sided: `/badge/*` and `/embed/*` are public-facing
+renderings and have no MCP tools; and `/v1/live/stream` is a stream,
 which this server does not open (see the GET handler). MCP is read-only
 throughout — the hub's two viewer-facing writes, `POST /v1/accounts/label` and
 `POST /v1/findings/mutes`, have no tools and will not grow any. The second one
@@ -2223,295 +2015,9 @@ before — a muted finding gives up its slot, which is what silencing it was for
 — and the muted ones follow under their own cap. So muting makes room without
 deleting anything.
 
-The last three read repo progress rather than spend. They exist because agents
-read backlogs and humans read dashboards: one source, two renderers. A second
-agent-facing copy of the same rows would drift from this one within a week.
-
 Read-only is deliberate. A monitor that could also pause endpoints or change
 quotas needs a control channel back to every machine — a far larger security
 surface than "tell me what my fleet spent".
-
-## Repo progress — what the tokens bought
-
-The sections above answer *how much* a subscription spent and *where* it went.
-They cannot answer what that spend produced. A hub can also hold repository
-progress — issues opened and closed, how long they live, what is stalled — and
-hold it **under the same key**:
-
-- the hub already keys spend by account / machine / session
-- a fleet-style orchestrator binds a session to an issue
-- a commit convention binds a commit to an issue
-
-`issue` is the axis that joins all three. That is why this is not a second
-dashboard beside the ledger: two dashboards sharing a binary gain nothing, and
-the same key is what makes cost-per-issue and cost-per-merged-PR answerable at
-all.
-
-**The collector is deliberately not in this binary.** Which repositories, which
-credentials, how often, behind which firewall — every one of those is a
-per-team decision, and folding them in here would couple hub releases to
-collection logic. The hub is a sink. A shipper POSTs snapshots into it, the way
-endpoint agents already do.
-
-### Shipping a snapshot
-
-Mint a token for the shipper the same way you enroll a machine, then POST:
-
-```bash
-curl -s https://your-hub/v1/ingest/repo \
-  -H "Authorization: Bearer $SHIPPER_TOKEN" \
-  -H 'Content-Type: application/json' -d @- <<'JSON'
-{
-  "repo": "owner/name",
-  "observed_at": "2026-09-14T03:00:00Z",
-  "issues": [
-    {"number": 32, "state": "open", "created_at": "2026-09-01T10:00:00Z",
-     "title": "hub: ingest repo-progress facts", "labels": ["enhancement"],
-     "comments": 3, "url": "https://github.com/owner/name/issues/32",
-     "shipped_at": "2026-09-12T08:00:00Z", "shipped_ref": "e10e39c"}
-  ],
-  "days": [
-    {"day": "2026-09-13", "opened": 4, "closed": 6, "open_at_end": 431,
-     "merged_prs": 5, "close_p50_seconds": 11232, "close_p90_seconds": 397440,
-     "close_p95_seconds": 941760, "closed_sample": 2257}
-  ]
-}
-JSON
-```
-
-It is an enrollment token, not the viewer token — one credential per shipper,
-revocable on its own (`ccquota endpoint retire`). Unlike `/v1/ingest` it carries no identity: a repo shipper
-is a cron job with a GitHub token, not a machine running an agent, and making it
-invent an `account_uuid` to be let in would stamp a fabricated attribution on
-every row it writes. **Repo rows carry no account at all**, deliberately: one
-repository is worked by endpoints on several plans at once, so naming one of
-them would be a guess presented as a fact.
-
-Everything is upserted on `(repo, number)`, `(repo, day)` and `(repo)`, so a
-retry is a no-op and a large backlog can be paged across several POSTs under one
-`observed_at`. An older snapshot never overwrites a newer one — after a retry
-they can arrive out of order, and a stale row would silently reopen a closed
-issue.
-
-### Saying whether the checks themselves still work
-
-A backlog card is only as good as the checks behind it, so a shipper can also
-send `verify_health`: a handful of figures about its own verification, which
-the hub stores and shows **verbatim**.
-
-```json
-{
-  "repo": "owner/name",
-  "observed_at": "2026-09-15T03:00:00Z",
-  "verify_health": {
-    "source": "tools/cd/measure-verify-health.js",
-    "stale_after_seconds": 172800,
-    "readings": [
-      {"key": "touch", "value": "p50 1.7d · p90 ≥ 8.8d",
-       "note": "30-day window, 561 cards that were actually red", "ok": true},
-      {"key": "rot", "value": "1 red now (denominator < 8, ratio withheld)",
-       "note": "stock right now, not a window", "ok": true},
-      {"key": "inflow", "value": "0% (0 / 252)",
-       "note": "7-day window", "ok": true}
-    ]
-  }
-}
-```
-
-A snapshot may carry this and nothing else. The rules:
-
-- **The hub never computes these.** They are honest because of floors that live
-  in the producer — a percentile withheld below a sample floor, a ratio withheld
-  below a denominator floor, a bound marker on an observation still running. Two
-  copies of a judgement drift without either side reporting a problem, which is
-  the very thing these figures are there to measure.
-- **`value` is required even when `ok` is false**, and then it says *why* it
-  could not be read. "Not measured" and "measured, nothing wrong" are opposite
-  answers; a blank cell reads as the second one. `ok` defaults to false, so a
-  producer that forgets it gets the fail-closed reading.
-- **`stale_after_seconds` is the shipper's own cadence.** Without it the page
-  declines to judge freshness rather than picking a threshold — the same rule
-  every age band here obeys. A stale figure and a fresh one look identical
-  otherwise.
-- **`key` is lowercase and stable**; it selects the page's translated label, and
-  an unknown key falls back to the shipped `label`. A figure the page has never
-  heard of still renders.
-
-### Two lifetimes, on purpose
-
-- **Daily rows are kept forever.** They are one row per repo per day, and they
-  are the only record of what the backlog looked like *last Tuesday* — a
-  question GitHub itself cannot answer retroactively, because its API exposes
-  only each issue's current state. This is also why the hub stores rows and
-  never rendered output: stored HTML makes history impossible.
-- **Per-issue rows are bounded** by the same `--retention-days` window the raw
-  event ledger uses. A closed issue ages out once the daily rows have absorbed
-  it, and an open issue no shipper has reported for a whole window ages out too
-  — it was deleted, transferred or made private upstream, and a phantom at the
-  top of a stalled list is where a wrong row does the most damage.
-
-One binary and one SQLite file on a single replica is a property worth
-defending. A reporting feature must not turn storage into an operational
-problem for what was previously just a token ledger.
-
-### Thresholds come from the repository, never from this README
-
-Nothing here says "stale after 30 days", and nothing in the code does either.
-The close-time percentiles a shipper sends are the scale every age is judged
-against, and they differ by orders of magnitude between repositories. Measured
-on one real repo — 2,688 issues in 82 days — the median issue closed in 0.13
-days, p90 was 4.6 and p95 10.9, with 149 of 431 open issues past p95. A
-threshold that fits that repository fits no other.
-
-So when no percentiles have been shipped, the hub does not substitute one:
-`/v1/repo/issues?stale=1` answers `409`, the MCP tool errors, and the dashboard
-card says the scale is unknown. A confident "12 stale issues" computed from a
-number nobody measured is worse than no answer, because a reader cannot tell it
-from a measured one.
-
-Read it back over `/v1/repos`, `/v1/repo/flow`, `/v1/repo/issues` — the
-dashboard's Progress band and the MCP tools are two renderers over those
-same rows, never two copies of them.
-
-### The issue axis — where the money landed, and what it could not say
-
-`/v1/repo/cost?repo=owner/name` (MCP: `repo_issue_cost`) is the join between
-the two halves: spend rows carry an issue number read off the branch name, repo
-rows carry the backlog, and this is the read that puts them side by side. Per
-issue it answers the window's tokens and cost, the issue's **lifetime** cost —
-every hour ever attributed to it, unbounded by the window, because a branch
-named `issue-57` is work on issue 57 whenever it happened — and the issue's own
-progress. `/v1/repo/issues?cost=1` puts the same lifetime figure beside a
-stalled issue.
-
-Two refusals travel with it, and both are the same stance the rest of this
-section takes.
-
-**The unattributed bucket is a row, never a rounding error.** The attribution
-rule is anchored — `issue-<N>` and nothing else — so work whose branch never
-said what it was for is honestly unattributed rather than guessed at. Measured
-over 420,237 real events that is **63.5%**, and the response therefore carries
-`attributed`, `unattributed` and `total` so a reader can check that the parts
-sum rather than trust that they do. A chart quoting only the attributed share
-is not slightly optimistic; it is wrong by a factor of three, in the flattering
-direction. `unattributed.branches` says which branches it was, so the bucket is
-explicable and not merely disclosed.
-
-**A spend row names the repository it was earned in, because the endpoint
-declares it.** The agent runs inside the checkout, so it resolves
-`git remote get-url origin` once per working directory and sends `owner/name`
-as one more field on the usage ingest. The hub still reads no git of its own —
-it stores what the reporter recorded, which is the same stance that keeps the
-issue number a pure function of the branch name.
-
-That declaration is what the read is scoped by, and `binding` on the response
-says which reading you got:
-
-- **`declared`** — at least one endpoint reports a repository, so the figures
-  are this repository's and stay correct on a hub holding any number of them.
-- **`sole_repo`** — nothing declares yet, so these are the whole hub's numbers,
-  readable as this repository's only because the hub holds no other. With two
-  repositories and no declarations, `/v1/repo/cost` still answers `409` and
-  `?cost=1` still degrades with `cost_unavailable` — the refusal did not go
-  away, it stopped being the only answer available.
-
-**A scope is a filter, and this one says what it dropped.** Under `declared`
-the response carries a `declaration` block: `scoped`, `other_repos`,
-`undeclared` and `total`, which sum. `undeclared` is spend that named no
-repository — an endpoint that has not been upgraded, a working directory that
-is not a checkout, and every row written before the column existed, which
-cannot be filled in afterwards because nobody ever told the hub. "Not declared"
-is not "not this repository", so it is excluded from the answer and disclosed
-beside it. A small set of bars next to a large `undeclared` means *not measured
-yet*, never *cheap* — the same factor-of-three error the unattributed bucket
-exists to prevent, one level up.
-
-### The other half of progress: what is waiting on a person
-
-A backlog can be moving fast and still be blocked, if what it is blocked on is
-somebody doing something by hand. So a shipper may also send `human_steps` and
-`human_days` in the same snapshot: the pre-release steps a release batch is
-waiting on, and the daily share of release batches that needed one at all.
-Read them back over `/v1/repo/human-debt?repo=owner/name`.
-
-Three shapes this deliberately refuses:
-
-- **It does not filter by the signed-in viewer.** This hub's WeCom ticket
-  carries one fixed subject per (app, tenant), so two colleagues' sessions are
-  byte-identical here. The card groups by owner and says "everyone's" in its
-  first line. A "mine" filter would be a coin flip rendered as a personal
-  claim, on the one surface whose whole job is saying who owes what.
-- **It is a view, never a control.** Finishing a step happens wherever the
-  person was told about it. A "done" button here would be a second writer and
-  therefore a second truth.
-- **It stores no thresholds.** There is no "overdue" column and no escalation
-  ladder: how long a step has waited is computed on read, and who gets told at
-  three days is the business of whatever does the telling.
-
-`done` and `done_at` are two fields on purpose. A step is finished by striking
-it out where it is written, and a person can do that by hand — in which case it
-is done and no clock recorded when. Requiring a time would force a shipper to
-choose between inventing one and reporting a finished step as still owed.
-
-## Growth facts — what the company earned while it ran
-
-Two books answer *how much a subscription spent* and *what that spend shipped*.
-`POST /v1/ingest/growth` adds the third: what the business actually earns,
-kept in the same SQLite file and read at `/growth`.
-
-It is on the hub rather than in a product admin for the reasons the ledger
-already is — one internal binary to redeploy instead of a public front door to
-roll, an existing `/v1/ingest/*` sink instead of a new table in a product
-database, and a narrow SSO list instead of an operator account system.
-
-```bash
-curl -s https://your-hub/v1/ingest/growth \
-  -H "Authorization: Bearer $GROWTH_SHIPPER_TOKEN" \
-  -H 'Content-Type: application/json' -d @- <<'JSON'
-{
-  "source": "growth-facts",
-  "day": "2026-09-15",
-  "h5": { "arr_cny": 303600, "expiring_in_window_cny": 282000,
-          "expiring_accounts": 52, "churned_accounts": 6, "active_accounts": 76 },
-  "ai": { "signed_deals": 0, "qualified_leads": 0, "arr_cny": 0,
-          "updated_at": "2026-09-14T00:00:00Z" },
-  "okr": { "focus": "wechat_agent", "quarter": "2026Q4-first-deal",
-           "target_annualized": 420000, "days_to_kill_switch": 76 }
-}
-JSON
-```
-
-Its own enrollment token, like every other shipper — **one shipper, one token**.
-Sharing one across the gateway, the billing job and this one makes revoking any
-of them a way to stop all of them.
-
-One whole document per `(source, day)`, upserted. Everything here is a *level* —
-money on the books, accounts alive today — so nothing is additive and a replayed
-push is a no-op rather than a double count. There is deliberately **no watermark
-and no back-fill**: a night the cron job missed stays missing, because a figure
-interpolated from its neighbours is one no query can reproduce.
-
-### The half a machine cannot produce
-
-`h5.*` comes off a production database every night. `ai.*` is typed in by a
-person, because those deals live in conversations and there is nothing to query.
-That asymmetry is the whole reason `ai.updated_at` is a required field:
-
-> When nobody has confirmed the hand-filled figures for more than three days,
-> `/growth` stops printing them as today's. It says how many days it has been,
-> and shows the last filing **dated and named as a filing** instead.
-
-A board that prints last week's hand-filled number in today's slot lies more
-convincingly than one that prints nothing, because the reader cannot tell.
-Same discipline as the repo percentiles above: where the hub does not know, it
-says so rather than substituting something that looks authoritative.
-
-`/growth` sits behind the viewer gate like every other human surface — revenue
-is the most sensitive thing this binary holds. It is server-rendered rather than
-another module in the dashboard's SPA: the board is a projection of one day's
-figures with nothing to ask of it, and rendering it in Go is what lets a test
-read the staleness rule in the bytes that go out. It renders in Chinese by
-default and in English on `?locale=en`.
 
 ## How it works, and what that costs you
 
@@ -2638,135 +2144,36 @@ dollar figures answer "what would this have cost at API rates" — useful for
 ranking endpoints against each other, misleading read as a bill. Rates live in
 `internal/pricing` and are overridable with `--pricing`.
 
-**Except on the `gateway` source, where the cost is real.** That source is an
-OpenAI-compatible gateway fronting non-Anthropic vendors on a pay-per-call
-contract, so its `cost_usd` is an actual charge rather than an estimate. Two
-consequences: **never add a gateway total to a Claude or Codex one** — same
-column, different kinds of money — and gateway rates ship with no built-in
-values at all, because a price is a contract term this build cannot know. State
-them in the `--pricing` file, in the currency the vendors publish:
+### Two kinds of money, never one number
 
-```json
-{
-  "gateway": {
-    "rates_as_of": "2026-09-12",
-    "cny_per_usd": 7.09,
-    "cny_per_usd_as_of": "2026-09-12",
-    "price_source": "https://internal.example/gateway/pricing",
-    "models": { "vendor-large": { "input": 7.0, "output": 70.0 } },
-    "providers": {
-      "dashscope.aliyuncs.com": {
-        "label": "阿里云百炼",
-        "models": { "qwen-plus": { "input": 0.8, "output": 2.0 } }
-      },
-      "ark.cn-beijing.volces.com": {
-        "label": "火山方舟",
-        "models": { "deepseek-v4-flash": { "input": 0.5, "output": 1.5 } }
-      }
-    }
-  }
-}
-```
-
-A gateway that fans out to several upstreams reaches the same model id at more
-than one contracted price, and failover decides which one served any given
-call — so a rate keyed on the model alone prices some calls at another
-vendor’s number. State each contract under `providers`, keyed by the provider
-string the reporting side sends (this deployment sends the upstream hostname).
-
-`models` at the top level still means **this price holds whoever serves it**,
-and answers only what a provider left unsaid: a provider block is authoritative
-for the models it names. `label` is display only and never affects a rate.
-Every priced event’s `price_basis` names the contract it used.
-
-Rates are **CNY per million tokens**, input and output only — the source
-carries no cache breakdown. They are converted to USD at `cny_per_usd`, a
-pinned constant rather than a live feed: a rate that moves on its own restates
-every historical figure each morning, which is worse than being slightly stale.
-Nothing here is dateless — an undated rate or conversion is rejected at load,
-and every priced event's `price_basis` names the rate, the conversion and both
-dates. A model with no configured rate stays unpriced and says so. Correcting
-one entry never drops the others.
-
-A rate may instead be priced **per billing unit** — per image, per second, per
-char, per call — with `{"unit": "second", "price": 0.5}`. A rate carries exactly
-one shape; setting both is rejected at load, because it would price the same
-event twice. Per-unit rows price off the event's own declared usage and never
-fall back to the token columns: an image call carries no tokens, so a fallback
-would price every one of them at 0.00 and report a real bill as free.
-
-### Contracts priced by time of day
-
-Some contracts charge a multiple at peak hours. State the window and let the
-event's own timestamp decide which tier it fell in:
-
-```json
-"vendor-chat": {
-  "input": 1.0, "output": 2.0,
-  "peak": { "multiplier": 2, "utc_hours": ["01:00-04:00", "06:00-10:00"], "weekdays_only": true }
-}
-```
-
-**The base rate is the OFF-PEAK one** and `multiplier` scales it inside the
-window — including the per-unit `price`. That direction is deliberate: the
-cheaper number is the one a contract quotes as its headline, so a reader who
-ignores the peak block under-reads rather than over-reads the bill, and an
-unnoticed omission errs toward "look again" rather than a confident overcharge.
-
-Hours are UTC, `"HH:MM-HH:MM"`, start inclusive and end exclusive; a window may
-cross midnight (`"22:30-02:00"`). The **event's** timestamp decides, never the
-clock, so repricing old events lands them in the tier they actually happened in.
-A multiplier at or below 1, an empty `utc_hours`, an unreadable window or a
-zero-width one is rejected at load — each of those would otherwise leave a
-running hub reporting money that is quietly wrong.
-
-A contract this cannot express is better left unpriced than approximated: a
-model priced by modality, or one whose cache hits bill separately, cannot be
-reduced to one number, and `unpriced` is an honest "not known" where a single
-rate would be a confident wrong answer.
-
-### Three kinds of money, never one number
-
-Because `cost_usd` means two different things depending on source, and a third
-kind of money is not in that column at all, **no surface in this hub reports a
-single blended cost figure.** There are three:
+`cost_usd` is the notional figure, and the one kind of real money is not in that
+column at all, so **no surface in this hub reports a single blended cost
+figure.** There are two:
 
 | | what it is | billed? | where it lives |
 |---|---|---|---|
 | **subscription spend** | what the plans cost per month | **real** | `subscription_plans`, `ccquota plan --spend`, `subscription_spend` in the API |
 | **notional token cost** | "what this would have cost at API rates" (`claude`, `codex`) | no | the `notional` entries of `cost` |
-| **gateway cost** | metered per call | **real** | the `billed` entries of `cost` |
 
-Provider is a grouping axis *inside* the billed kind, never a fourth kind of
-money. `usage_by_provider` (and `?by=provider`) returns the same per-source
-`cost` split as every other breakdown. An empty provider is the reporting side
-declaring none — Claude transcripts carry no upstream, and rollup rows
-aggregated before the hub gained the dimension were not re-attributed — not a
-vendor called "unknown"; responses containing one carry `provider_note`.
+Real spend is the **subscriptions**. The notional figure is not a term in it,
+and adding it in invents spending that never happened.
 
-Real spend is **subscription + gateway**. The notional figure is not a term in
-it, and adding it in invents spending that never happened.
-
-Every aggregate therefore returns cost as a *list*, one entry per source, each
-carrying the kind of money it is:
+Every aggregate returns cost as a *list*, one entry per source, each carrying
+the kind of money it is:
 
 ```json
 "cost": [
   {"source": "claude",  "kind": "notional", "events": 812, "cost_usd": 41.20, "unpriced_events": 0},
-  {"source": "codex",   "kind": "notional", "events":  93, "cost_usd":  6.05, "unpriced_events": 4},
-  {"source": "gateway", "kind": "billed",   "events":  57, "cost_usd": 12.80, "unpriced_events": 0}
+  {"source": "codex",   "kind": "notional", "events":  93, "cost_usd":  6.05, "unpriced_events": 4}
 ],
 "cost_notional": 47.25,
-"cost_billed": 12.80,
-"real_spend": {"currency": "USD", "subscription": 200, "gateway": 12.80, "total": 212.80, "complete": true}
+"real_spend": {"currency": "USD", "subscription": 200, "total": 200, "complete": true}
 ```
 
 `GET /v1/summary` adds `pricing` — one entry per source with its own
 `rates_as_of` and the note saying what that source's figure is — and
-`subscription_spend` for the same period. The dashboard renders one cost column
-per source, labelled with its kind, plus a single **real spend** tile. The MCP
-tools do the same, and their descriptions say which figures are notional and
-which are billed.
+`subscription_spend` for the same period. The MCP tools say the same in their
+descriptions.
 
 The one aggregate that carries a plain `cost_usd` is a **session row**: sessions
 are grouped by source, so each row is a single kind of money and says so in
@@ -2801,11 +2208,6 @@ a state where the raw rows and every dashboard disagree about money, and one
 commit means that state is never observable. The flag is off by default: a hub
 started without it reprices nothing.
 
-**Costs that arrive with the event are never recomputed.** A `vendor_bill` or
-`voice` figure is an invoice or a collector's own charge — no rate table could
-reproduce one — so repricing refuses the whole run rather than overwrite one, and
-says which event moved.
-
 Read the log line before trusting the run:
 
 ```
@@ -2819,45 +2221,6 @@ a real production snapshot — only 38 events gained a figure; the other 24,888
 were rows stored by an older build whose arithmetic rounds a hair differently,
 which is why the net is under a cent. A large `changed` with a near-zero net is
 that; a large net is a rate that moved.
-
-## Upgrading to the provider dimension
-
-This release adds `provider` — the upstream that actually served a request — to
-`usage_events` and to `usage_hourly`'s primary key. It matters because a gateway
-that fails over between vendors reaches one model id through several upstreams
-at several contracted prices, so a rate keyed on the model alone prices some
-calls at another vendor's number.
-
-**Back up the database before the first start.** The `usage_hourly` change
-rebuilds the table (SQLite cannot alter a primary key); `~/.ccquota/backups/` is
-the conventional place.
-
-Existing raw events are backfilled from `details.model_provider`, which the
-reporting side has been sending all along, so no collector has to change.
-
-**Then rebuild the rollup, or the dimension reports nothing:**
-
-```bash
-ccquota hub --rebuild-rollup --rebuild-rollup-force
-```
-
-Every breakdown reads `usage_hourly`, and the migration carries pre-existing
-hour-rows across with an *empty* provider rather than guessing one — so until
-they are re-derived, the dimension answers "not declared" for all history and
-looks broken rather than empty. The rebuild re-derives whatever raw events
-retention still covers and leaves pre-retention hours untouched.
-`--rebuild-rollup` on its own **refuses**, precisely because it would otherwise
-erase hours whose raw rows have already been pruned; the `--force` variant is
-the one that skips them instead. The startup log names the affected row count
-and repeats this command.
-
-Rehearsed against a 394 MB production snapshot: 41,462 rows rebuilt in under ten
-seconds, every event count and token total unchanged, the only movement being
-the last bit of a float64 cost sum as the addition order changed.
-
-Gateway rates keyed on a bare model id keep working and now mean "this price
-holds whoever serves it". State per-contract rates under `gateway.providers`
-when two upstreams serve one model id at different prices.
 
 ## Development
 

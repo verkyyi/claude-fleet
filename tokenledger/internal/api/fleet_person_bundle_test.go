@@ -58,8 +58,8 @@ func TestPersonBundleOwnLayerFollowsThePerson(t *testing.T) {
 	}
 
 	// A writes once, from a session
-	code, v1, raw, _ := personCall(t, h, http.MethodPut, asSession("Alice"), personV1, "")
-	if code != 200 || v1.Version != 1 || v1.Prev != 0 || v1.Actor != "Alice" || !strings.Contains(string(v1.Bundle), "say-done.sh") {
+	code, v1, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), personV1, "")
+	if code != 200 || v1.Version != 1 || v1.Prev != 0 || v1.Actor != pAlice || !strings.Contains(string(v1.Bundle), "say-done.sh") {
 		t.Fatalf("Alice PUT: HTTP %d %s, want version 1 by Alice", code, raw)
 	}
 	// … and reads the same version on both machines, under the same tag
@@ -83,11 +83,11 @@ func TestPersonBundleOwnLayerFollowsThePerson(t *testing.T) {
 	if code, got, raw, _ := personCall(t, h, http.MethodGet, asNode(n["bob4"].token), nil, ""); code != 200 || got.Version != 0 {
 		t.Fatalf("bob@m4 reads his own: HTTP %d %s, want version 0", code, raw)
 	}
-	for name, auth := range map[string]func(http.Header){"Bob's session": asSession("Bob"), "Bob's node": asNode(n["bob4"].token)} {
-		if code, _, raw, _ := personCall(t, h, http.MethodPut, auth, map[string]any{"bundle": map[string]any{}}, "?principal=Alice"); code != http.StatusForbidden {
+	for name, auth := range map[string]func(http.Header){"Bob's session": asSession(pBob), "Bob's node": asNode(n["bob4"].token)} {
+		if code, _, raw, _ := personCall(t, h, http.MethodPut, auth, map[string]any{"bundle": map[string]any{}}, "?principal="+pAlice); code != http.StatusForbidden {
 			t.Fatalf("%s PUT Alice's: HTTP %d %s, want 403", name, code, raw)
 		}
-		if code, _, raw, _ := personCall(t, h, http.MethodGet, auth, nil, "?principal=alice"); code != http.StatusForbidden {
+		if code, _, raw, _ := personCall(t, h, http.MethodGet, auth, nil, "?principal="+pAlice); code != http.StatusForbidden {
 			t.Fatalf("%s GET Alice's: HTTP %d %s, want 403", name, code, raw)
 		}
 	}
@@ -97,25 +97,25 @@ func TestPersonBundleOwnLayerFollowsThePerson(t *testing.T) {
 	if code != 200 || v2.Version != 2 || v2.Prev != 1 || !strings.HasPrefix(v2.Actor, "node:alice@") {
 		t.Fatalf("alice@m4 PUT base 1: HTTP %d %s, want version 2 by her node", code, raw)
 	}
-	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession("alice"), map[string]any{"base": 1, "bundle": map[string]any{}}, ""); code != http.StatusConflict {
+	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), map[string]any{"base": 1, "bundle": map[string]any{}}, ""); code != http.StatusConflict {
 		t.Fatalf("stale base: HTTP %d %s, want 409", code, raw)
 	}
 	// a literal credential is refused, naming where it sits
 	ghp := map[string]any{"bundle": map[string]any{"mcp": map[string]any{"gh": map[string]any{"command": "x", "args": []string{"--t", "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}}
-	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession("Alice"), ghp, ""); code != http.StatusUnprocessableEntity || !strings.Contains(raw, "bundle.mcp.gh.args[1]") {
+	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), ghp, ""); code != http.StatusUnprocessableEntity || !strings.Contains(raw, "bundle.mcp.gh.args[1]") {
 		t.Fatalf("ghp_ literal: HTTP %d %s, want 422 naming bundle.mcp.gh.args[1]", code, raw)
 	}
 
 	// restore = a new version carrying an older body
-	code, v3, raw, _ := personCall(t, h, http.MethodPut, asSession("Alice"), map[string]any{"restore": 1, "base": 2}, "")
+	code, v3, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), map[string]any{"restore": 1, "base": 2}, "")
 	if code != 200 || v3.Version != 3 || v3.Prev != 2 || string(v3.Bundle) != string(v1.Bundle) {
 		t.Fatalf("restore 1: HTTP %d %s, want version 3 carrying v1's body", code, raw)
 	}
-	code, hist, raw, _ := personCall(t, h, http.MethodGet, asSession("Alice"), nil, "?history=1")
+	code, hist, raw, _ := personCall(t, h, http.MethodGet, asSession(pAlice), nil, "?history=1")
 	if code != 200 || len(hist.History) != 3 || hist.History[0].Version != 3 {
 		t.Fatalf("history: HTTP %d %s", code, raw)
 	}
-	if code, old, _, _ := personCall(t, h, http.MethodGet, asSession("Alice"), nil, "?version=2"); code != 200 || !strings.Contains(string(old.Bundle), "my-notes") {
+	if code, old, _, _ := personCall(t, h, http.MethodGet, asSession(pAlice), nil, "?version=2"); code != 200 || !strings.Contains(string(old.Bundle), "my-notes") {
 		t.Fatalf("?version=2: HTTP %d v%d", code, old.Version)
 	}
 
@@ -123,13 +123,13 @@ func TestPersonBundleOwnLayerFollowsThePerson(t *testing.T) {
 	if code, _, raw, _ := personCall(t, h, http.MethodGet, asOperator, nil, ""); code != http.StatusBadRequest {
 		t.Fatalf("operator GET with no ?principal: HTTP %d %s, want 400", code, raw)
 	}
-	if code, got, raw, _ := personCall(t, h, http.MethodGet, asOperator, nil, "?principal=alice"); code != 200 || got.Version != 3 {
+	if code, got, raw, _ := personCall(t, h, http.MethodGet, asOperator, nil, "?principal="+pAlice); code != 200 || got.Version != 3 {
 		t.Fatalf("operator GET Alice's: HTTP %d %s", code, raw)
 	}
-	if code, _, raw, _ := personCall(t, h, http.MethodPut, asOperator, map[string]any{"bundle": map[string]any{}}, "?principal=Alice"); code != http.StatusForbidden {
+	if code, _, raw, _ := personCall(t, h, http.MethodPut, asOperator, map[string]any{"bundle": map[string]any{}}, "?principal="+pAlice); code != http.StatusForbidden {
 		t.Fatalf("operator writes content: HTTP %d %s, want 403", code, raw)
 	}
-	code, v4, raw, _ := personCall(t, h, http.MethodPut, asOperator, map[string]any{"restore": 2}, "?principal=Alice")
+	code, v4, raw, _ := personCall(t, h, http.MethodPut, asOperator, map[string]any{"restore": 2}, "?principal="+pAlice)
 	if code != 200 || v4.Version != 4 || v4.Actor != "operator" || !strings.Contains(string(v4.Bundle), "my-notes") {
 		t.Fatalf("operator restores v2: HTTP %d %s, want version 4 by operator", code, raw)
 	}
@@ -147,7 +147,7 @@ func TestPersonBundleOwnLayerFollowsThePerson(t *testing.T) {
 		t.Fatalf("no credential: HTTP %d, want 401", code)
 	}
 	// nothing B tried landed: A's history is exactly the four versions
-	if _, got, _, _ := personCall(t, h, http.MethodGet, asSession("Alice"), nil, "?history=1"); len(got.History) != 4 {
+	if _, got, _, _ := personCall(t, h, http.MethodGet, asSession(pAlice), nil, "?history=1"); len(got.History) != 4 {
 		t.Fatalf("Alice's history after refusals: %+v", got.History)
 	}
 }
@@ -156,8 +156,8 @@ func TestPersonBundleOwnLayerFollowsThePerson(t *testing.T) {
 // a program carries the same credential scan as everything else.
 func TestPersonBundleHookScripts(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
-	h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", time.Now())
+	enablePeople(t, h, pAlice, pBob, pCarol)
+	h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
 	if code, _, raw, _ := teamCall(t, h, http.MethodPut, asOperator, personV1, ""); code != http.StatusUnprocessableEntity {
 		t.Fatalf("team PUT with hook_scripts: HTTP %d %s, want 422", code, raw)
 	}
@@ -169,16 +169,17 @@ func TestPersonBundleHookScripts(t *testing.T) {
 		"key in body":  map[string]any{"x.sh": "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz' x"},
 		"not a object": []any{"x"},
 	} {
-		code, _, raw, _ := personCall(t, h, http.MethodPut, asSession("wx-alice"), map[string]any{"bundle": map[string]any{"hook_scripts": s}}, "")
+		code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), map[string]any{"bundle": map[string]any{"hook_scripts": s}}, "")
 		if code != http.StatusUnprocessableEntity {
 			t.Errorf("%s: HTTP %d %s, want 422", name, code, raw)
 		}
 	}
-	if code, out, raw, _ := personCall(t, h, http.MethodPut, asSession("wx-alice"), personV1, ""); code != 200 || out.Version != 1 {
+	if code, out, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), personV1, ""); code != 200 || out.Version != 1 {
 		t.Fatalf("a valid personal bundle: HTTP %d %s", code, raw)
 	}
-	// a session for someone the hub has no person for has no layer
-	if code, _, raw, _ := personCall(t, h, http.MethodGet, asSession("wx-ghost"), nil, ""); code != http.StatusNotFound {
+	// a session for someone on the list the hub has no person for has no layer
+	listPerson(t, h, pGhost, "")
+	if code, _, raw, _ := personCall(t, h, http.MethodGet, asSession(pGhost), nil, ""); code != http.StatusNotFound {
 		t.Fatalf("unknown person's session: HTTP %d %s, want 404", code, raw)
 	}
 }
@@ -190,8 +191,8 @@ func TestPersonBundleByCertificate(t *testing.T) {
 	k := newCertKit(t)
 	h.srv.SSHCA = sshca.New(k.ca)
 	now := time.Now()
-	h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
-	good := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(time.Hour))
+	h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", now)
+	good := k.cert(t, sshca.KeyIDPrefix+pAlice, []string{"alice"}, now.Add(-time.Minute), now.Add(time.Hour))
 	signed := func(ns string, msg func(int64) string) TeamBundleRequest {
 		ts := now.Unix()
 		return TeamBundleRequest{Cert: string(ssh.MarshalAuthorizedKey(good)), TS: ts,
@@ -200,8 +201,8 @@ func TestPersonBundleByCertificate(t *testing.T) {
 	w := signed(control.PersonBundleSigNamespace, control.PersonBundleSigMessage)
 	w.Bundle = json.RawMessage(`{"skills":{"my-notes":"# notes\n"}}`)
 	code, out, raw, _ := personCall(t, h, http.MethodPut, nil, w, "")
-	if code != 200 || out.Version != 1 || out.Actor != "wx-alice" {
-		t.Fatalf("certificate PUT: HTTP %d %s, want version 1 by wx-alice", code, raw)
+	if code != 200 || out.Version != 1 || out.Actor != pAlice {
+		t.Fatalf("certificate PUT: HTTP %d %s, want version 1 by %s", code, raw, pAlice)
 	}
 	code, out, raw, _ = personCall(t, h, http.MethodPost, nil, signed(control.PersonBundleSigNamespace, control.PersonBundleSigMessage), "")
 	if code != 200 || out.Version != 1 || !strings.Contains(string(out.Bundle), "my-notes") {
@@ -211,8 +212,8 @@ func TestPersonBundleByCertificate(t *testing.T) {
 		t.Fatalf("a team signature: HTTP %d, want 401", code)
 	}
 	// the certificate's person is the only one it reaches
-	h.srv.Store.AdoptPrincipal("wx-bob", "bob", "Bob", now)
-	if code, _, raw, _ := personCall(t, h, http.MethodPost, nil, signed(control.PersonBundleSigNamespace, control.PersonBundleSigMessage), "?principal=wx-bob"); code != http.StatusForbidden {
+	h.srv.Store.AdoptPrincipal(pBob, "bob", "Bob", now)
+	if code, _, raw, _ := personCall(t, h, http.MethodPost, nil, signed(control.PersonBundleSigNamespace, control.PersonBundleSigMessage), "?principal="+pBob); code != http.StatusForbidden {
 		t.Fatalf("certificate reads Bob's: HTTP %d %s, want 403", code, raw)
 	}
 }
@@ -221,10 +222,10 @@ func TestPersonBundleByCertificate(t *testing.T) {
 func TestPersonBundleOffAddsNothing(t *testing.T) {
 	h := newHarness(t)
 	// the catch-all UI answers every unknown path; no layer comes back
-	if _, _, raw, _ := personCall(t, h, http.MethodGet, asOperator, nil, "?principal=alice"); strings.Contains(raw, `"bundle"`) {
+	if _, _, raw, _ := personCall(t, h, http.MethodGet, asOperator, nil, "?principal="+pAlice); strings.Contains(raw, `"bundle"`) {
 		t.Fatalf("person-bundle answered with the fleet module off: %s", raw)
 	}
-	if _, err := h.srv.Store.PersonBundles("alice", 1); err == nil {
+	if _, err := h.srv.Store.PersonBundles(pAlice, 1); err == nil {
 		t.Fatal("fleet_person_bundles exists although the fleet module is off")
 	}
 }
@@ -233,17 +234,17 @@ func TestPersonBundleOffAddsNothing(t *testing.T) {
 // version, updated time and item count — never a body; anyone else is 403.
 func TestPersonBundlePeopleSummary(t *testing.T) {
 	h, _, n := peerHarness(t) // Alice and Bob
-	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession("Alice"), personV1, ""); code != 200 {
+	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), personV1, ""); code != 200 {
 		t.Fatalf("Alice PUT: HTTP %d %s", code, raw)
 	}
-	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession("Alice"), map[string]any{"base": 1, "bundle": map[string]any{
+	if code, _, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), map[string]any{"base": 1, "bundle": map[string]any{
 		"skills": map[string]any{"my-notes": "# notes\n"},
 		"hooks":  map[string]any{"Stop": []any{map[string]any{"command": "echo a"}, map[string]any{"command": "echo b"}}},
 	}}, ""); code != 200 {
 		t.Fatalf("Alice PUT v2: HTTP %d %s", code, raw)
 	}
 
-	for name, auth := range map[string]func(http.Header){"a session": asSession("Alice"), "a node": asNode(n["alice4"].token)} {
+	for name, auth := range map[string]func(http.Header){"a session": asSession(pAlice), "a node": asNode(n["alice4"].token)} {
 		if code, _, raw, _ := personCall(t, h, http.MethodGet, auth, nil, "?all=1"); code != http.StatusForbidden {
 			t.Fatalf("%s ?all=1: HTTP %d %s, want 403", name, code, raw)
 		}
@@ -269,11 +270,11 @@ func TestPersonBundlePeopleSummary(t *testing.T) {
 	for _, p := range got.People {
 		by[p.Principal] = p
 	}
-	a, b := by["Alice"], by["Bob"]
-	if a.Version != 2 || a.Items != 3 || a.Updated == nil || a.Actor != "Alice" {
+	a, b := by[pAlice], by[pBob]
+	if a.Version != 2 || a.Items != 3 || a.Updated == nil || a.Actor != pAlice {
 		t.Fatalf("Alice: %+v, want version 2, 3 items (1 skill + 2 Stop hooks), updated, by Alice", a)
 	}
-	if _, ok := by["Bob"]; !ok || b.Version != 0 || b.Items != 0 || b.Updated != nil {
+	if _, ok := by[pBob]; !ok || b.Version != 0 || b.Items != 0 || b.Updated != nil {
 		t.Fatalf("Bob: %+v (present %v), want listed at version 0", b, ok)
 	}
 }

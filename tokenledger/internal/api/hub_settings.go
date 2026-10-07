@@ -37,7 +37,7 @@ const (
 	// userSettingPrefix / machineLoginSuffix make user.<id>.machine_login:
 	// the OS login that is a person's on the machines. <id> is the principal
 	// — gh:<GitHub ID> for a GitHub person (stored on their hub_users row,
-	// the one place the scope reads), a WeCom userid otherwise.
+	// the one place the scope reads), any other principal otherwise (an old map's entry).
 	userSettingPrefix  = "user."
 	machineLoginSuffix = ".machine_login"
 
@@ -168,7 +168,7 @@ func isHubSettingKey(key string) bool {
 
 // machineLoginKey parses user.<id>.machine_login. <id> is a GitHub ID — bare
 // digits, as C9's user.<id>.lang spells it (claude-fleet#2033), or gh:<id> —
-// else a WeCom userid; the principal comes back as gh:<id> for a GitHub one.
+// else any other principal; the principal comes back as gh:<id> for a GitHub one.
 func machineLoginKey(key string) (principal string, ok bool) {
 	rest, ok := strings.CutPrefix(key, userSettingPrefix)
 	if !ok {
@@ -273,7 +273,7 @@ func (s *Server) routesExtra() []FleetMachine {
 }
 
 // settingMachineLogins is every user.<id>.machine_login stored in the
-// settings table (WeCom people; a GitHub person's is on their hub_users
+// settings table (non-GitHub principals; a GitHub person's is on their hub_users
 // row), principal → login. "none" entries are kept: they mean "no login",
 // and they hide an old CCQUOTA_FLEET_PRINCIPAL_LOGINS entry.
 func (s *Server) settingMachineLogins() map[string]string {
@@ -444,7 +444,7 @@ func (s *Server) putMachineLogin(actor, pid, value string, settings map[string]s
 		}
 	}
 	if _, gh := githubIDOf(pid); !gh {
-		// A WeCom userid is case-insensitive (claude-fleet#1472): one key
+		// Any other principal is case-insensitive (claude-fleet#1472): one key
 		// per person, whichever way it was typed.
 		pid = strings.ToLower(pid)
 	}

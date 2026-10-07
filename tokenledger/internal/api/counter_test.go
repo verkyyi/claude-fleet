@@ -181,12 +181,12 @@ func TestLiveSnapshot_SurvivesAHubWithNoLiveStore(t *testing.T) {
 	h := newHarness(t)
 	h.srv.LiveStore = nil
 
-	code, body := getAs(t, h, "/v1/live", viewerToken)
-	if code != 200 {
-		t.Fatalf("HTTP %d: %s", code, first(body, 200))
+	resp, body := h.get(t, "/v1/live")
+	if resp.StatusCode != 200 {
+		t.Fatalf("HTTP %d: %.200s", resp.StatusCode, body)
 	}
 	var snap Snapshot
-	if err := json.Unmarshal([]byte(body), &snap); err != nil {
+	if err := json.Unmarshal(body, &snap); err != nil {
 		t.Fatal(err)
 	}
 	if snap.ActiveSessions != 0 {

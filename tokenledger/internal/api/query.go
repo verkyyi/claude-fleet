@@ -105,15 +105,12 @@ type ScopedView struct {
 
 // shareDisclaimer is what every internal surface carries next to its figures.
 //
-// It no longer says "costs are notional" flatly. That was true of every source
-// this hub had until one started charging per call, and a blanket disclaimer
-// that is wrong about one column is worse than none: it tells the reader an
-// actual invoice is an estimate. Which kind a figure is now travels WITH the
-// figure (pricing.SourceProvenance), and this line says so.
+// Which kind a figure is travels WITH the figure (pricing.SourceProvenance),
+// and this line says so.
 const shareDisclaimer = "The account-wide utilization is exact and already covers every device. " +
 	"Per-endpoint shares are proportional estimates. Cost is reported per source and never summed " +
-	"across them: Claude and Codex figures are notional API-equivalents, not a bill, while gateway " +
-	"figures are actual per-call charges. Real spend is subscription plus gateway."
+	"across them: Claude and Codex figures are notional API-equivalents, not a bill. Real spend is " +
+	"the subscriptions."
 
 // LimitsAcross is the answer to "am I about to hit the wall" when more than one
 // subscription is in view.
@@ -161,15 +158,6 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 		return nil, err
 	}
 	if snap == nil {
-		// Nothing to read is not the same as nobody could read it. A gateway
-		// caller, a voice application or a vendor invoice is billed per call
-		// and has no window at all, so the endpoint-gap wording below would be
-		// blaming a collector that was never supposed to exist.
-		if !model.HasQuotaWindow(source) {
-			view.ReasonCode = ReasonMeteredNoWindow
-			view.Reason = LimitsReasonIn(view.ReasonCode, i18n.EN)
-			return view, nil
-		}
 		source, err := s.Store.SourceForAccount(account)
 		if err != nil {
 			return nil, err
@@ -430,9 +418,6 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if buckets == nil {
 		buckets = []store.Bucket{}
 	}
-	if dim == store.ByProvider {
-		s.LabelProviders(buckets)
-	}
 	out := map[string]any{
 		"account_uuid": f.Account,
 		"all_accounts": f.Account == store.AllAccounts,
@@ -443,51 +428,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		"disclaimer":   shareDisclaimerText.In(localeOf(r)),
 		"scope_note":   scopeNoteIn(f.Account, localeOf(r)),
 	}
-	// Two different absences share the empty provider bucket -- a source that
-	// declares no upstream, and rows that predate the dimension. Naming them
-	// beats leaving a blank row for the reader to guess at. Only attached when
-	// there IS a blank row: an unconditional note reads as a caveat on figures
-	// that have none.
-	if dim == store.ByProvider {
-		for _, b := range buckets {
-			if b.Key == "" {
-				out["provider_note"] = store.ProviderNoteIn(localeOf(r))
-				break
-			}
-		}
-	}
 	writeJSON(w, http.StatusOK, out)
-}
-
-// LabelProviders fills each upstream bucket's display name from --pricing.
-//
-// The mechanism has been in place since the provider dimension shipped and had
-// no caller: pricing.Table holds the operator's labels, store.Bucket has the
-// Label field to put one in, and nothing joined them. It cannot be joined in
-// the store -- naming an upstream is a pricing fact, and internal/store neither
-// imports internal/pricing nor should grow an edge to it just to carry a
-// string. The api layer already holds the table, so this is the cheapest seam;
-// MCP calls this same method rather than keeping a second copy that could one
-// day name the same host differently.
-//
-// Two rules are inherited, not re-decided here:
-//
-//   - An upstream --pricing did not name keeps its raw key, because Label ends
-//     up empty and every reader falls back to the key. The hub never invents a
-//     name for a host it cannot identify (pricing.Table.GatewayProviderLabel).
-//   - The empty provider is skipped outright. It means "the reporting side
-//     declared none", so there is no vendor to name -- and --pricing refuses an
-//     empty provider key for exactly that reason. It gets provider_note below.
-func (s *Server) LabelProviders(buckets []store.Bucket) {
-	if s.Pricing == nil {
-		return
-	}
-	for i := range buckets {
-		if buckets[i].Key == "" {
-			continue
-		}
-		buckets[i].Label = s.Pricing.GatewayProviderLabel(buckets[i].Key)
-	}
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {

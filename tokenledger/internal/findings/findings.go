@@ -24,8 +24,6 @@ const (
 	TmplStaleAgentNever   = "stale_agent_never"
 	TmplStaleAgentLast    = "stale_agent_last"
 	TmplLiveRunaway       = "live_runaway"
-	TmplFreeAllowanceGone = "free_allowance_exceeded"
-	TmplFreeAllowanceNear = "free_allowance_near"
 	TmplCredVaultLocked   = "cred_vault_locked"
 	TmplCredSetupExpiring = "cred_setup_token_expiring"
 	TmplCredSetupExpired  = "cred_setup_token_expired"
@@ -39,7 +37,7 @@ var Templates = []string{
 	TmplRunawaySession, TmplUnpricedModel, TmplTimeInCritical, TmplCacheHitDrop,
 	TmplSpendSpikeTotal, TmplSpendSpikeProject, TmplWindowHigh,
 	TmplStaleAgentNever, TmplStaleAgentLast, TmplLiveRunaway,
-	TmplFreeAllowanceGone, TmplFreeAllowanceNear, TmplCredVaultLocked,
+	TmplCredVaultLocked,
 	TmplCredSetupExpiring, TmplCredSetupExpired, TmplAccountReauth,
 	TmplComputeRegion,
 }
@@ -68,7 +66,6 @@ var Templates = []string{
 //	runaway_session  yes -- a session ran as one login on one endpoint
 //	live_runaway     yes -- same, for a session still in flight
 //	unpriced_model   no  -- a model, used fleet-wide
-//	free_allowance   no  -- a model's month, fleet-wide
 //	cache_hit_drop   no  -- a project, which several logins share
 //	spend_spike      no  -- the period, or the project driving it
 //	time_in_critical no  -- a subscription, not a person: the label is an
@@ -194,16 +191,6 @@ type ModelStat struct {
 	Tokens, Unpriced int64
 }
 
-// FreeAllowanceStat is one model's CALENDAR-MONTH token total against the free
-// monthly allowance its rate declares.
-//
-// The month, never the selection: an allowance resets on the first, so "have we
-// used it up" is a question about the month whatever window the page is showing.
-type FreeAllowanceStat struct {
-	Model     string
-	Tokens    int64 // month to date
-	Allowance int64 // as declared by the rate
-}
 type AccountCritical struct {
 	// AccountUUID is the subscription this is about, when the caller has it.
 	// Label is what the sentence PRINTS; this is what the finding's identity
@@ -223,7 +210,6 @@ type ProjectStat struct {
 type Inputs struct {
 	Sessions               []SessionStat
 	Models                 []ModelStat
-	FreeAllowances         []FreeAllowanceStat
 	Critical               []AccountCritical
 	SelectionSeconds       int64
 	Projects, PrevProjects []ProjectStat
@@ -378,7 +364,6 @@ func Review(in Inputs) []Finding {
 	var fs []Finding
 	fs = append(fs, runaway(in.Sessions, in.SessionTokenMedian)...)
 	fs = append(fs, unpriced(in.Models)...)
-	fs = append(fs, freeAllowance(in.FreeAllowances)...)
 	fs = append(fs, critical(in.Critical, in.SelectionSeconds)...)
 	fs = append(fs, cacheDrop(in.Projects, in.PrevProjects)...)
 	fs = append(fs, spike(in)...)
@@ -446,63 +431,6 @@ func runaway(ss []SessionStat, populationMedian int64) []Finding {
 			subject: s.SessionID,
 			weight:  float64(s.Tokens),
 		})
-	}
-	return out
-}
-
-// freeAllowanceNearFull is where "plenty left" turns into "worth knowing".
-const freeAllowanceNearFull = 0.80
-
-// freeAllowance watches a declared free monthly allowance.
-//
-// This rule is the other half of pricing.Rates.FreeMonthlyTokens. An event
-// inside the allowance prices to 0 because that is what the vendor charges, but
-// Table.Cost is a pure function of one event and cannot see the month's total --
-// so nothing in the pricing path can notice the month crossing the line. The
-// store can, exactly, and this says so.
-//
-// Without it the failure is silent and expensive: the allowance is exceeded, the
-// vendor starts charging, and every one of those calls keeps reporting 0.00.
-func freeAllowance(as []FreeAllowanceStat) []Finding {
-	var out []Finding
-	for _, a := range as {
-		if a.Allowance <= 0 {
-			continue
-		}
-		used := float64(a.Tokens) / float64(a.Allowance)
-		if used >= 1 {
-			out = append(out, Finding{
-				Severity: "critical", Kind: "free_allowance",
-				Title: fmt.Sprintf("%s has used its whole free monthly allowance (%s of %s tokens)",
-					a.Model, tokens(a.Tokens), tokens(a.Allowance)),
-				Detail: "Calls beyond the allowance are charged, and this build still reports them as free — " +
-					"its cost for this model is a floor, not a bill. Set a rate for it in --pricing.",
-				Template: TmplFreeAllowanceGone,
-				Args: map[string]string{
-					"model": a.Model, "used": tokens(a.Tokens), "allowance": tokens(a.Allowance),
-				},
-				Scope:   map[string]string{"model": a.Model},
-				subject: a.Model,
-				weight:  used * 1e6,
-			})
-			continue
-		}
-		if used >= freeAllowanceNearFull {
-			out = append(out, Finding{
-				Severity: "warning", Kind: "free_allowance",
-				Title: fmt.Sprintf("%s is at %.0f%% of its free monthly allowance (%s of %s tokens)",
-					a.Model, used*100, tokens(a.Tokens), tokens(a.Allowance)),
-				Detail:   "Past it the vendor charges, and this build would keep reporting the calls as free.",
-				Template: TmplFreeAllowanceNear,
-				Args: map[string]string{
-					"model": a.Model, "pct": fmt.Sprintf("%.0f", used*100),
-					"used": tokens(a.Tokens), "allowance": tokens(a.Allowance),
-				},
-				Scope:   map[string]string{"model": a.Model},
-				subject: a.Model,
-				weight:  used * 1e5,
-			})
-		}
 	}
 	return out
 }

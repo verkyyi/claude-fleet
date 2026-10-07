@@ -3,7 +3,6 @@ package store
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,24 +12,12 @@ import (
 // fakePricer prices from a model -> rate map, in the same shape the real table
 // does: absent means unpriced (nil), never zero.
 type fakePricer struct {
-	rate     map[string]float64 // per output token
-	supplied bool               // mimic a pricing bug: derive a supplied figure
+	rate map[string]float64 // per output token
 }
 
 func (f fakePricer) Apply(evs []model.UsageEvent) {
 	for i := range evs {
 		e := &evs[i]
-		if model.CostIsSupplied(e.Source) {
-			if f.supplied {
-				// What a future edit could wrongly do: compute rather than pass
-				// the invoice through.
-				c := 999.0
-				e.CostUSD = &c
-			}
-			// Otherwise leave the supplied figure exactly as it arrived, which
-			// is what pricing.vendorBillCost/voiceCost do.
-			continue
-		}
 		r, ok := f.rate[e.Model]
 		if !ok {
 			e.CostUSD = nil
@@ -64,8 +51,8 @@ func TestReprice_PricesEventsStoredBeforeTheRateExisted(t *testing.T) {
 	s := newStore(t)
 	seedAccount(t, s, "acct-a", "ep-a1")
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		repriceEvent("u-1", "gateway", "deepseek-chat", 100, nil), // arrived unpriced
-		repriceEvent("u-2", "gateway", "deepseek-chat", 50, nil),
+		repriceEvent("u-1", "codex", "deepseek-chat", 100, nil), // arrived unpriced
+		repriceEvent("u-2", "codex", "deepseek-chat", 50, nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +95,7 @@ func TestReprice_RemovingARateReturnsTheEventToUnpriced(t *testing.T) {
 	seedAccount(t, s, "acct-a", "ep-a1")
 	c := 5.0
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		repriceEvent("u-1", "gateway", "qwen-plus", 100, &c),
+		repriceEvent("u-1", "codex", "qwen-plus", 100, &c),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -128,85 +115,6 @@ func TestReprice_RemovingARateReturnsTheEventToUnpriced(t *testing.T) {
 	}
 }
 
-// THE GUARD. A vendor bill and a voice charge are invoices: no rate table can
-// reproduce them, so repricing must refuse rather than overwrite one. The fake
-// pricer here does exactly what a careless future edit would.
-func TestReprice_RefusesToOverwriteASuppliedCost(t *testing.T) {
-	s := newStore(t)
-	seedAccount(t, s, "acct-a", "ep-a1")
-	invoice := 38.7
-	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		repriceEvent("u-1", "vendor_bill", "video-gen", 0, &invoice),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	_, err := s.Reprice(fakePricer{rate: map[string]float64{}, supplied: true}, time.Time{})
-	if err == nil {
-		t.Fatal("repricing rewrote a supplied cost without complaint")
-	}
-	for _, want := range []string{"vendor_bill", "supplied cost", "invoice"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
-		}
-	}
-	// Refusing means the transaction rolled back: the invoice is untouched.
-	var cost float64
-	if err := s.write.QueryRow(`SELECT cost_usd FROM usage_events`).Scan(&cost); err != nil {
-		t.Fatal(err)
-	}
-	if cost != invoice {
-		t.Fatalf("invoice = %v; want %v left exactly as supplied", cost, invoice)
-	}
-}
-
-// A supplied cost passes through a NORMAL reprice untouched — the everyday case,
-// not the refusal above. Both sources are covered by deriving them from
-// model.CostIsSupplied rather than naming them, so a new supplied source is
-// covered the day it is added.
-func TestReprice_LeavesSuppliedCostsAlone(t *testing.T) {
-	s := newStore(t)
-	seedAccount(t, s, "acct-a", "ep-a1")
-	var evs []model.UsageEvent
-	var want []float64
-	for i, src := range model.Sources {
-		if !model.CostIsSupplied(src) {
-			continue
-		}
-		amount := 10.0 + float64(i)
-		evs = append(evs, repriceEvent("u-"+src, src, "line-item", 0, &amount))
-		want = append(want, amount)
-	}
-	if len(evs) == 0 {
-		t.Fatal("no supplied-cost source in model.Sources; this test has nothing to protect")
-	}
-	if _, _, err := s.InsertEvents(evs); err != nil {
-		t.Fatal(err)
-	}
-	got, err := s.Reprice(fakePricer{rate: map[string]float64{"line-item": 1.0}}, time.Time{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Changed != 0 {
-		t.Fatalf("changed %d supplied figures; want 0", got.Changed)
-	}
-	rows, err := s.write.Query(`SELECT cost_usd FROM usage_events ORDER BY id`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var i int
-	for rows.Next() {
-		var c float64
-		if err := rows.Scan(&c); err != nil {
-			t.Fatal(err)
-		}
-		if c != want[i] {
-			t.Errorf("row %d = %v; want %v", i, c, want[i])
-		}
-		i++
-	}
-}
-
 // THE INVARIANT that guards repriceColumns. Ingest prices an event; repricing it
 // immediately with the same table must change nothing. If it does, reprice is
 // reading less of the row than pricing depends on — a rate keyed on a column
@@ -217,9 +125,9 @@ func TestReprice_IsANoOpOnFreshlyPricedEvents(t *testing.T) {
 	p := fakePricer{rate: map[string]float64{"qwen-plus": 0.02, "deepseek-chat": 0.01}}
 
 	evs := []model.UsageEvent{
-		repriceEvent("u-1", "gateway", "qwen-plus", 100, nil),
-		repriceEvent("u-2", "gateway", "deepseek-chat", 7, nil),
-		repriceEvent("u-3", "gateway", "no-such-model", 5, nil), // stays unpriced
+		repriceEvent("u-1", "codex", "qwen-plus", 100, nil),
+		repriceEvent("u-2", "codex", "deepseek-chat", 7, nil),
+		repriceEvent("u-3", "codex", "no-such-model", 5, nil), // stays unpriced
 		repriceEvent("u-4", "claude", "qwen-plus", 3, nil),
 	}
 	// Price them the way ingest does, then store the result.
@@ -246,9 +154,9 @@ func TestReprice_IsANoOpOnFreshlyPricedEvents(t *testing.T) {
 func TestReprice_SinceBoundsWhichEventsAreTouched(t *testing.T) {
 	s := newStore(t)
 	seedAccount(t, s, "acct-a", "ep-a1")
-	old := repriceEvent("u-old", "gateway", "qwen-plus", 100, nil)
+	old := repriceEvent("u-old", "codex", "qwen-plus", 100, nil)
 	old.TS = time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	recent := repriceEvent("u-new", "gateway", "qwen-plus", 100, nil)
+	recent := repriceEvent("u-new", "codex", "qwen-plus", 100, nil)
 	if _, _, err := s.InsertEvents([]model.UsageEvent{old, recent}); err != nil {
 		t.Fatal(err)
 	}
@@ -275,8 +183,8 @@ func TestReprice_SinceBoundsWhichEventsAreTouched(t *testing.T) {
 func TestReprice_RestampsThePriceBasis(t *testing.T) {
 	s := newStore(t)
 	seedAccount(t, s, "acct-a", "ep-a1")
-	e := repriceEvent("u-1", "gateway", "qwen-plus", 100, nil)
-	e.Details.PriceBasis = "unpriced: no gateway rate configured"
+	e := repriceEvent("u-1", "codex", "qwen-plus", 100, nil)
+	e.Details.PriceBasis = "unpriced: unknown provider or model"
 	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +212,7 @@ func TestReprice_CrossesBatchBoundaries(t *testing.T) {
 	const n = repriceBatch + 37
 	evs := make([]model.UsageEvent, 0, n)
 	for i := 0; i < n; i++ {
-		evs = append(evs, repriceEvent(fmt.Sprintf("u-%d", i), "gateway", "qwen-plus", 1, nil))
+		evs = append(evs, repriceEvent(fmt.Sprintf("u-%d", i), "codex", "qwen-plus", 1, nil))
 	}
 	if _, _, err := s.InsertEvents(evs); err != nil {
 		t.Fatal(err)
@@ -352,8 +260,8 @@ func TestReprice_ReportsTheNetMoneyDelta(t *testing.T) {
 	seedAccount(t, s, "acct-a", "ep-a1")
 	was := 1.0
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		repriceEvent("u-1", "gateway", "qwen-plus", 100, &was), // 1.00 -> 2.00
-		repriceEvent("u-2", "gateway", "qwen-plus", 50, nil),   // unpriced -> 1.00
+		repriceEvent("u-1", "codex", "qwen-plus", 100, &was), // 1.00 -> 2.00
+		repriceEvent("u-2", "codex", "qwen-plus", 50, nil),   // unpriced -> 1.00
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -377,8 +285,8 @@ func TestReprice_ReportsTheLargestSingleChange(t *testing.T) {
 	seedAccount(t, s, "acct-a", "ep-a1")
 	tiny, big := 0.999999999, 1.0
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		repriceEvent("u-small", "gateway", "qwen-plus", 50, &tiny), // moves ~1e-9
-		repriceEvent("u-big", "gateway", "qwen-plus", 100, &big),   // moves +1.00
+		repriceEvent("u-small", "codex", "qwen-plus", 50, &tiny), // moves ~1e-9
+		repriceEvent("u-big", "codex", "qwen-plus", 100, &big),   // moves +1.00
 	}); err != nil {
 		t.Fatal(err)
 	}

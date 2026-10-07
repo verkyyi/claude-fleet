@@ -17,13 +17,10 @@ func TestPriceNotes_EnglishIsTheConstant(t *testing.T) {
 		text   i18n.Text
 		const_ string
 	}{
-		"claude":      {claudeNote, ClaudePriceNote},
-		"codex":       {openAINote, OpenAIPriceNote},
-		"gateway":     {gatewayNote, GatewayPriceNote},
-		"vendor_bill": {vendorBillNote, VendorBillPriceNote},
-		"voice":       {voiceNote, VoicePriceNote},
-		"mixed":       {mixedNote, MixedSourceNote},
-		"unknown":     {unknownSourceNote, unknownSourceNoteEN},
+		"claude":  {claudeNote, ClaudePriceNote},
+		"codex":   {openAINote, OpenAIPriceNote},
+		"mixed":   {mixedNote, MixedSourceNote},
+		"unknown": {unknownSourceNote, unknownSourceNoteEN},
 	} {
 		if pair.text[i18n.EN] != pair.const_ {
 			t.Errorf("%s: the English entry has drifted from its constant", name)
@@ -65,7 +62,7 @@ func TestNoteIn_EverySourceIsTranslated(t *testing.T) {
 }
 
 // Only the prose travels. Source, kind and the rate-review date are a filter
-// value, a classification and a date: a reader grepping for `gateway` or
+// value, a classification and a date: a reader grepping for `codex` or
 // checking when rates were last reviewed needs the same token in any language.
 func TestProvenanceIn_TranslatesOnlyTheNote(t *testing.T) {
 	for _, src := range model.Sources {

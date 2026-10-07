@@ -1,3 +1,5 @@
+// Package authz is this hub's own session: the cookie a GitHub sign-in
+// (internal/api/github_auth.go) mints and every later request presents.
 package authz
 
 import (
@@ -5,51 +7,46 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 )
 
+// ErrSession is the only error VerifySession returns.
+//
+// Deliberately one kind: the caller answers "sign in again" either way, and a
+// caller that can tell "bad key" from "expired" hands that distinction to
+// whoever is probing it.
+var ErrSession = errors.New("session rejected")
+
 // CookieName is this hub's session cookie.
 //
-// Set host-only — never with a Domain attribute. Every other 24haowan site that
-// takes a ticket does the same, and for the same reason: a cookie scoped to the
-// parent domain is a cookie handed to every preview environment and every other
-// app on *.24haowan.com.
+// Set host-only — never with a Domain attribute: a cookie scoped to the parent
+// domain is a cookie handed to every other app on it.
 const CookieName = "ccq_sess"
 
-// sessionAud separates a session cookie from an 入场票.
-//
-// The two use the same encoding and, on a bad day, the same leaked key. What
-// keeps one from being replayed as the other is this field and the fact that
-// both verifiers check it — in BOTH directions. kf-context's
-// verifySession/verifyScoped pair is where this pattern comes from: its
-// verifySession refuses any token that carries an `aud` at all.
+// sessionAud marks a value as this hub's session, so a token signed for
+// anything else under the same key never verifies as one.
 const sessionAud = "ccquota-session"
 
 // Session is a signed-in human on this hub.
 type Session struct {
-	// Sub is the ticket's subject, carried through unchanged so an audit line
-	// can name the same subject the issuer named. It is the authorization
-	// (the role the issuer admitted), not the person — see Payload.UID.
+	// Sub is the issuer of the sign-in ("github").
 	Sub string `json:"sub"`
 	Aud string `json:"aud"`
 	Exp int64  `json:"exp"`
-	// UID and Name are the ticket's `uid` / `nam`, carried through so every
-	// later request knows the person without re-reading a ticket that no
-	// longer exists (claude-fleet#1458). Omitted when the ticket had none —
-	// a cookie minted before this field existed parses the same way.
+	// UID is the person (gh:<GitHub ID>) and Name their username, carried so
+	// every later request knows who it is without asking GitHub again.
 	UID  string `json:"uid,omitempty"`
 	Name string `json:"nam,omitempty"`
-	// Role is the hub role a GitHub sign-in was admitted as
-	// (claude-fleet#1984): admin or user. A record of the sign-in, never the
-	// authority: the gate re-reads the list on every request, so a person
-	// taken off it or demoted is refused on their next one whatever the
-	// cookie says. Empty on a WeCom session.
+	// Role is the hub role the sign-in was admitted as (claude-fleet#1984):
+	// admin or user. A record of the sign-in, never the authority: the gate
+	// re-reads the list on every request, so a person taken off it or demoted
+	// is refused on their next one whatever the cookie says.
 	Role string `json:"role,omitempty"`
 }
 
-// Principal is the person this session is for: the WeCom userid when the
-// ticket carried one, else the role subject (see Payload.Principal).
+// Principal is the person this session is for: UID, else the subject.
 func (s *Session) Principal() string {
 	if s.UID != "" {
 		return s.UID
@@ -57,24 +54,8 @@ func (s *Session) Principal() string {
 	return s.Sub
 }
 
-// SignSession mints the cookie value for a verified ticket subject that
-// names no person. Kept for callers (and cookies) predating the `uid`
-// claim; SignPerson is what /enter uses.
-func SignSession(sub, secret string, now time.Time, ttl time.Duration) string {
-	return SignPerson(sub, "", "", secret, now, ttl)
-}
-
-// SignPerson mints the cookie value for a verified ticket: its subject plus,
-// when the issuer named one, the person (`uid`) and their display name.
-//
-// ttl is this hub's own session length, unrelated to the ticket's 90 seconds:
-// the ticket's job ends the moment it is exchanged.
-func SignPerson(sub, uid, name, secret string, now time.Time, ttl time.Duration) string {
-	return SignRole(sub, uid, name, "", secret, now, ttl)
-}
-
-// SignRole is SignPerson with the role the person was admitted as
-// (claude-fleet#1984: a GitHub sign-in).
+// SignRole mints the cookie value for a person signed in by sub, admitted as
+// role, for ttl.
 func SignRole(sub, uid, name, role, secret string, now time.Time, ttl time.Duration) string {
 	body, _ := json.Marshal(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role})
 	enc := base64.RawURLEncoding.EncodeToString(body)
@@ -83,46 +64,38 @@ func SignRole(sub, uid, name, role, secret string, now time.Time, ttl time.Durat
 	return enc + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// VerifySession checks a cookie value. Every failure is ErrTicket — the caller
-// answers "log in again" either way.
-//
-// ★ No clock skew here, deliberately. The 30s margin exists because a 90-second
-// ticket crosses between two machines whose NTP never quite agrees. Extending an
-// eight-hour cookie by 30 seconds buys nothing and makes "when does this expire"
-// a question with two answers.
+// VerifySession checks a cookie value. Every failure is ErrSession.
 func VerifySession(cookie, secret string, now time.Time) (*Session, error) {
 	if secret == "" || cookie == "" {
-		return nil, ErrTicket
+		return nil, ErrSession
 	}
 	i := strings.LastIndex(cookie, ".")
 	if i <= 0 || i == len(cookie)-1 {
-		return nil, ErrTicket
+		return nil, ErrSession
 	}
 	body, sig64 := cookie[:i], cookie[i+1:]
 	sig, err := base64.RawURLEncoding.DecodeString(sig64)
 	if err != nil {
-		return nil, ErrTicket
+		return nil, ErrSession
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(body))
 	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return nil, ErrTicket
+		return nil, ErrSession
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(body)
 	if err != nil {
-		return nil, ErrTicket
+		return nil, ErrSession
 	}
 	var s Session
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return nil, ErrTicket
+		return nil, ErrSession
 	}
-	// The audience split, enforced on this side too: a ticket signed for the app
-	// (aud "ccquota") must never pass as a session.
 	if !hmac.Equal([]byte(s.Aud), []byte(sessionAud)) || s.Sub == "" {
-		return nil, ErrTicket
+		return nil, ErrSession
 	}
 	if s.Exp < now.Unix() {
-		return nil, ErrTicket
+		return nil, ErrSession
 	}
 	return &s, nil
 }

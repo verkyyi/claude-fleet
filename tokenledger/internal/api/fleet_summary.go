@@ -23,13 +23,13 @@ import (
 // person to what is theirs:
 //
 //   - machines: the roster through FleetScope — only machines where one of
-//     their ACTIVE logins runs, exactly as /v1/nodes narrows it for a WeCom
+//     their ACTIVE logins runs, exactly as /v1/nodes narrows it for a GitHub
 //     sign-in.
 //   - per_account: only the subscriptions some endpoint of those same logins
 //     reports usage under, and without endpoint_shares (that split names
 //     other people's endpoints).
 //
-// The operator's doors (viewer token, tailnet peer) see everything, as on the
+// The operator's doors (viewer token) see everything, as on the
 // two viewer routes. A revoked device is refused by verifySSHRelayCert; every
 // answer is one fleet audit row (tool fleet_summary) naming the actor.
 

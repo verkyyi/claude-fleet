@@ -35,9 +35,7 @@ import (
 // Severity IS part of it, and that is the load-bearing choice: it is what lets
 // an escalation break through a mute. A 5-hour window silenced at 78% must
 // speak up again when it crosses 90%, because "I know it is warm" is not
-// consent to be surprised by it running out. The same cut makes a mute on
-// free_allowance's 80% warning not cover the "allowance is gone" critical --
-// which is the same rule, and the same reason.
+// consent to be surprised by it running out.
 //
 // The cost of that choice is the mirror case: a critical that improves to a
 // warning is a new identity too, so its mute does not carry over and the
@@ -59,7 +57,6 @@ import (
 //	runaway_session   the FULL session id (Title shows only the first 8)
 //	live_runaway      the full session id, same reason
 //	unpriced_model    the model name
-//	free_allowance    the model name
 //	cache_hit_drop    the full CWD (Title shows a shortened path)
 //	spend_spike       the full CWD for the per-project sentence; EMPTY for the
 //	                  blended one, whose subject genuinely is "the selection"
@@ -138,7 +135,7 @@ func firstNonEmpty(vs ...string) string {
 // never fires. An expiry makes the silence self-correcting -- the worst case
 // is being told again about something already handled, which costs one click.
 //
-// By is who silenced it, when the hub knows (a tailnet or SSO identity). It is
+// By is who silenced it, when the hub knows (a GitHub sign-in). It is
 // empty for a request authenticated by the shared viewer token, which names
 // nobody -- and empty is the honest answer there, not a guess at which person
 // holds the token.

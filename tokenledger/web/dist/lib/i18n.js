@@ -14,7 +14,7 @@
 //     basis it was priced under, and rewriting it per viewer would be editing
 //     the ledger to match who is looking at it.
 //   - identifiers: model ids, account uuids, endpoint names, source keys.
-//     `gateway` is what the API calls it and what an operator greps for.
+//     `codex` is what the API calls it and what an operator greps for.
 //   - the product name. TokenLedger is TokenLedger.
 //
 // Server prose (RealSpendNote and friends) IS translated, but not here: every
@@ -139,16 +139,6 @@ export const LOCALE_PUNCT = {
 
 /** punct is this viewer's punctuation set. */
 export const punct = () => LOCALE_PUNCT[current] || LOCALE_PUNCT[FALLBACK];
-
-/** LOCALE_CURRENCY is the currency a viewer of each locale reads money in.
- *
- *  A reader's language is a decent proxy for the currency they think in, and it
- *  is the only signal this page has. It decides DISPLAY only — what was
- *  actually billed is a property of the charge, not of who is looking at it. */
-export const LOCALE_CURRENCY = { en: 'USD', 'zh-CN': 'CNY' };
-
-/** displayCurrency is the currency this viewer's figures are rendered in. */
-export const displayCurrency = () => LOCALE_CURRENCY[current] || 'USD';
 
 /** useLocale sets the in-memory locale without persisting or reloading. For
  *  tests, and for anything that needs to render one string in a locale that is

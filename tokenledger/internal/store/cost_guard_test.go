@@ -13,14 +13,13 @@ import (
 )
 
 // THE GUARD (issue #2). Sibling to plans_test.go's guard, which keeps real
-// subscription spend out of the notional token figure; this one keeps the
-// three kinds of money inside cost_usd apart from each other.
+// subscription spend out of the notional token figure; this one keeps each
+// source's figure inside cost_usd apart from the others'.
 //
 // It needs to be a test rather than a convention because the failure is
 // silent. A blended cost aggregate returns a plausible number: nothing errors,
 // nothing looks empty, and the first sign of trouble is somebody acting on a
-// figure that was an API-equivalent estimate and a real invoice added
-// together. Every aggregate below is checked against per-source arithmetic
+// figure that was two sources' estimates added together. Every aggregate below is checked against per-source arithmetic
 // chosen so that a blend is unmistakable.
 
 // The fixture's per-source costs are order-of-magnitude apart so that any
@@ -28,20 +27,18 @@ import (
 //
 //	claude   3 events x $1    = $3     notional
 //	codex    2 events x $10   = $20    notional
-//	gateway  1 event  x $100  = $100   BILLED
 //
-// notional = 23, billed = 100, and the forbidden blend = 123.
+// notional = 23 — a legitimate fold — but no single source entry may carry it.
 const (
 	guardClaudeCost   = 3.0
 	guardCodexCost    = 20.0
-	guardGatewayCost  = 100.0
 	guardNotionalCost = guardClaudeCost + guardCodexCost
-	guardBlended      = guardNotionalCost + guardGatewayCost
+	guardBlended      = guardNotionalCost
 )
 
 var guardBase = time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 
-// seedThreeSources puts all three kinds of money in one account, one endpoint,
+// seedThreeSources puts every source's money in one account, one endpoint,
 // one project, one user and one hour, so that EVERY breakdown axis produces a
 // bucket that spans sources. A fixture that separated them by project would
 // let a blending aggregate pass by accident.
@@ -63,7 +60,6 @@ func seedThreeSources(t *testing.T, s *Store) {
 		mk(model.SourceClaude, "c3", 1, "s-claude"),
 		mk(model.SourceCodex, "x1", 10, "s-codex"),
 		mk(model.SourceCodex, "x2", 10, "s-codex"),
-		mk(model.SourceGateway, "g1", 100, "s-gateway"),
 	}
 	if _, _, err := s.InsertEvents(evs); err != nil {
 		t.Fatal(err)
@@ -84,7 +80,6 @@ func checkSplit(t *testing.T, what string, c CostBySource) {
 	}{
 		{model.SourceClaude, guardClaudeCost, model.CostNotional},
 		{model.SourceCodex, guardCodexCost, model.CostNotional},
-		{model.SourceGateway, guardGatewayCost, model.CostBilled},
 	} {
 		got, ok := c.Of(want.source)
 		if !ok {
@@ -101,16 +96,13 @@ func checkSplit(t *testing.T, what string, c CostBySource) {
 	if !near(c.Notional(), guardNotionalCost) {
 		t.Errorf("%s: Notional() = %v, want %v", what, c.Notional(), guardNotionalCost)
 	}
-	if !near(c.Billed(), guardGatewayCost) {
-		t.Errorf("%s: Billed() = %v, want %v", what, c.Billed(), guardGatewayCost)
-	}
 	// The whole point: no figure anywhere in the aggregate is the blend.
 	for _, sc := range c {
 		if near(sc.CostUSD, guardBlended) {
 			t.Errorf("%s: %s carries the BLENDED total %v — costs were summed across sources", what, sc.Source, sc.CostUSD)
 		}
 	}
-	if near(c.Notional()+c.Billed(), guardBlended) && len(c) == 1 {
+	if len(c) == 1 {
 		t.Errorf("%s: the split collapsed to one entry: %+v", what, c)
 	}
 }
@@ -230,9 +222,8 @@ func TestSessionRowsAreScopedToOneSource(t *testing.T) {
 		cost float64
 		kind string
 	}{
-		"s-claude":  {guardClaudeCost, model.CostNotional},
-		"s-codex":   {guardCodexCost, model.CostNotional},
-		"s-gateway": {guardGatewayCost, model.CostBilled},
+		"s-claude": {guardClaudeCost, model.CostNotional},
+		"s-codex":  {guardCodexCost, model.CostNotional},
 	}
 	if len(rows) != len(want) {
 		t.Fatalf("got %d session rows, want %d: %+v", len(rows), len(want), rows)
@@ -256,8 +247,8 @@ func TestSessionRowsAreScopedToOneSource(t *testing.T) {
 		}
 	}
 	// Sorted by cost, descending: the ranking still works, it just never sums.
-	if rows[0].SessionID != "s-gateway" {
-		t.Errorf("sort=cost gave %q first, want s-gateway", rows[0].SessionID)
+	if rows[0].SessionID != "s-codex" {
+		t.Errorf("sort=cost gave %q first, want s-codex", rows[0].SessionID)
 	}
 }
 
@@ -273,7 +264,6 @@ func TestSourceFilterScopesCost(t *testing.T) {
 	}{
 		{model.SourceClaude, guardClaudeCost},
 		{model.SourceCodex, guardCodexCost},
-		{model.SourceGateway, guardGatewayCost},
 	} {
 		f := guardFilter()
 		f.Source = tc.source
@@ -293,9 +283,9 @@ func TestSourceFilterScopesCost(t *testing.T) {
 	}
 }
 
-// A source this build has no rate basis for must land in neither fold. The
-// alternative — defaulting it into "notional" — is how a real charge would
-// quietly become an estimate the day a fourth collector ships.
+// A source this build has no rate basis for must land in no fold. The
+// alternative — defaulting it into "notional" — is how money of an unknown
+// kind would quietly become an estimate the day a new collector ships.
 func TestUnknownSourceIsInNeitherFold(t *testing.T) {
 	s := newStore(t)
 	seedThreeSources(t, s)
@@ -313,9 +303,6 @@ func TestUnknownSourceIsInNeitherFold(t *testing.T) {
 	}
 	if !near(sum.Cost.Notional(), guardNotionalCost) {
 		t.Errorf("an unclassified source entered Notional(): %v", sum.Cost.Notional())
-	}
-	if !near(sum.Cost.Billed(), guardGatewayCost) {
-		t.Errorf("an unclassified source entered Billed(): %v", sum.Cost.Billed())
 	}
 	un := sum.Cost.Unclassified()
 	if len(un) != 1 || !near(un[0].CostUSD, 7) {
@@ -335,7 +322,7 @@ func TestSplitAccountsForEveryEvent(t *testing.T) {
 	if sum.Cost.Events() != sum.Events {
 		t.Errorf("split covers %d events, summary counted %d", sum.Cost.Events(), sum.Events)
 	}
-	if sum.Events != 6 {
+	if sum.Events != 5 {
 		t.Errorf("fixture drift: %d events", sum.Events)
 	}
 }
@@ -392,7 +379,7 @@ func TestCostSplitCoversEverySource(t *testing.T) {
 	// CostUnknown.
 	for _, s := range model.Sources {
 		if model.CostKind(s) == model.CostUnknown {
-			t.Errorf("source %q has no cost kind: it would be reported in neither Notional() nor Billed()", s)
+			t.Errorf("source %q has no cost kind: it would be reported in no fold", s)
 		}
 	}
 	if model.CostKind("not-a-source") != model.CostUnknown {
@@ -407,14 +394,14 @@ func TestCostBySourceHasNoBlendedTotal(t *testing.T) {
 	var c CostBySource
 	c.Add(CostBySource{
 		{Source: model.SourceClaude, Kind: model.CostNotional, CostUSD: 1, Events: 1},
-		{Source: model.SourceGateway, Kind: model.CostBilled, CostUSD: 100, Events: 1},
+		{Source: "some-future-thing", Kind: model.CostUnknown, CostUSD: 100, Events: 1},
 	})
 	// If a Total() ever appears, this line stops compiling only if it is
 	// removed again -- so assert the intent in words the reviewer will see.
-	if fmt.Sprintf("%.2f/%.2f", c.Notional(), c.Billed()) != "1.00/100.00" {
+	if fmt.Sprintf("%.2f", c.Notional()) != "1.00" {
 		t.Fatalf("folds are wrong: %+v", c)
 	}
-	if near(c.Notional(), 101) || near(c.Billed(), 101) {
+	if near(c.Notional(), 101) {
 		t.Fatal("a fold produced the blended figure")
 	}
 }
@@ -453,37 +440,5 @@ func TestSubscriptionSpendHonoursTheAccountScope(t *testing.T) {
 	}
 	if _, err := s.SubscriptionSpendOver("", from, now); err == nil {
 		t.Error(`an empty account was accepted; "which subscriptions is this the bill for" has no default`)
-	}
-}
-
-// Provider is a grouping axis inside the billed kind, never a fourth kind of
-// money. A provider bucket's cost must still arrive split by source and
-// classified exactly as its source is.
-func TestProviderBuckets_IntroduceNoNewMoneyKind(t *testing.T) {
-	s := newStore(t)
-	seedAccount(t, s, "acct", "ep1")
-
-	e := ev("acct", "ep1", "k1", 10)
-	e.Source = model.SourceGateway
-	e.Details = &model.UsageDetails{Provider: "ark.cn-beijing.volces.com"}
-	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
-		t.Fatal(err)
-	}
-
-	start := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
-	got, err := s.UsageBy(AllAccounts, ByProvider, start, start.Add(48*time.Hour), 50)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) == 0 {
-		t.Fatal("no provider buckets")
-	}
-	for _, b := range got {
-		for _, c := range b.Cost {
-			if c.Kind != model.CostKind(c.Source) {
-				t.Errorf("provider bucket %q: source %q classified %q, want %q",
-					b.Key, c.Source, c.Kind, model.CostKind(c.Source))
-			}
-		}
 	}
 }

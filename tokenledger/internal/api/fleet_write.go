@@ -74,7 +74,7 @@ var fleetScopeOf = map[string]string{
 var FleetScopes = []string{"fleet:read", "worker:start", "worker:message", "worker:stop",
 	"worker:resume", "worker:answer", "worker:reap", "config:write", "gh:read", "gh:comment"}
 
-// DefaultPersonScopes is what a person signed in through WeCom may do on
+// DefaultPersonScopes is what a person signed in with GitHub may do on
 // their OWN logins when the hub sets nothing (CCQUOTA_FLEET_PERSON_SCOPES):
 // run their workers and read/comment on GitHub. config:write is the
 // operator's — a fleet's caps and autofill are not a colleague's to move.

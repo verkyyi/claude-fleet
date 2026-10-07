@@ -388,7 +388,7 @@ func TestMigrateLegacySettings(t *testing.T) {
 	}
 }
 
-// A WeCom person's machine login set in the settings replaces the old map's
+// A non-GitHub principal (an old map entry)'s machine login set in the settings replaces the old map's
 // entry, and "none" takes them out of it.
 func TestMachineLoginSettingOverridesLegacy(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))

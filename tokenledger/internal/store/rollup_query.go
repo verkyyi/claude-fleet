@@ -133,8 +133,8 @@ type Summary struct {
 
 	// Cost is the KPI strip's money, split by source and with no blended
 	// member. The strip shows one column per source; a "total spend" tile, if
-	// the page shows one, adds Cost.Billed() to subscription spend and leaves
-	// Cost.Notional() out of it.
+	// the page shows one, is subscription spend and leaves Cost.Notional() out
+	// of it.
 	Cost CostBySource `json:"cost"`
 
 	Unpriced          int64 `json:"unpriced_events"`
@@ -249,9 +249,8 @@ type SessionRow struct {
 	// place to filter — session ids come out of a single source's transcript,
 	// so a row spanning two would be a collision, not a session.
 	//
-	// CostKind is what stops the number being read as one currency of money:
-	// "billed" is an invoice, "notional" is an estimate for work billed by
-	// subscription. It is also why the cost SORT is safe to offer without
+	// CostKind is what stops the number being read as an invoice: "notional"
+	// is an estimate for work billed by subscription. It is also why the cost SORT is safe to offer without
 	// being safe to add up — see sessionSorts.
 	Source   string  `json:"source"`
 	CostKind string  `json:"cost_kind"`

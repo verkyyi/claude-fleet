@@ -6,8 +6,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
 // Rollup history outlives the raw events it was built from, so the migration
@@ -68,49 +66,5 @@ func TestMigrateProvider_PreservesRollupHistory(t *testing.T) {
 	if _, err := s.DB().Exec(`INSERT INTO usage_hourly(hour, account_uuid, endpoint_id, provider, events, output_tokens, unpriced_events, min_ts, max_ts)
 		VALUES ('2026-09-01T12:00:00Z', 'a', 'e', 'p1', 1, 5, 0, '2026-09-01T12:00:00Z', '2026-09-01T12:00:00Z')`); err != nil {
 		t.Fatalf("provider is not part of the primary key: %v", err)
-	}
-}
-
-// Two providers serving the same model in the same hour are two rollup rows,
-// not one. If provider is missing from the PRIMARY KEY they collapse and the
-// per-contract figures are lost forever.
-func TestRollup_ProviderSplitsRows(t *testing.T) {
-	s := newStore(t)
-	seedAccount(t, s, "acct", "ep1")
-
-	mk := func(uuid, provider string, out int64) model.UsageEvent {
-		e := ev("acct", "ep1", uuid, out)
-		e.Source = model.SourceGateway
-		e.Model = "deepseek-v4-flash"
-		e.Details = &model.UsageDetails{Provider: provider}
-		return e
-	}
-	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		mk("g1", "dashscope.aliyuncs.com", 10),
-		mk("g2", "ark.cn-beijing.volces.com", 20),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	rows, err := s.DB().Query(`SELECT provider, output_tokens FROM usage_hourly
-		WHERE source = 'gateway' ORDER BY provider`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	got := map[string]int64{}
-	for rows.Next() {
-		var p string
-		var out int64
-		if err := rows.Scan(&p, &out); err != nil {
-			t.Fatal(err)
-		}
-		got[p] = out
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d rollup rows (%v); want one per provider", len(got), got)
-	}
-	if got["dashscope.aliyuncs.com"] != 10 || got["ark.cn-beijing.volces.com"] != 20 {
-		t.Errorf("rollup rows = %v", got)
 	}
 }

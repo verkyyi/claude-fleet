@@ -18,8 +18,7 @@ import (
 
 // People and their logins on every machine (claude-fleet#1411).
 //
-// A person signs in through WeCom; the SSO subject (their WeCom userid) is
-// their principal. The hub mints ONE login name for them and keeps, per
+// A person signs in with GitHub; gh:<their GitHub ID> is their principal. The hub mints ONE login name for them and keeps, per
 // machine, whether that login exists there. Opening it is not the hub's to do
 // — the hub cannot reach a machine — so it is an op sent down the machine's
 // control channel to its admin agent: the operator's own login there, which
@@ -28,15 +27,15 @@ import (
 //
 // Two rails keep "only see your own" true at the hub: every view of the fleet
 // a signed-in person gets is filtered through FleetScope, and only the
-// operator (a shared viewer token or a tailnet identity — never a WeCom
-// session) can assign, adopt or remove.
+// operator (a shared viewer token, or an admin — never a user's session) can
+// assign, adopt or remove.
 
-// principalKey carries the WeCom subject of an SSO-authenticated request.
+// principalKey carries the person behind a signed-in request.
 type principalKey struct{}
 
 // principalOf names the person behind r, or "" when the request did not come
-// through WeCom (the shared viewer token or a tailnet identity — the
-// operator's doors, which see every node as they always have).
+// through a sign-in (the shared viewer token — the operator's door, which
+// sees every node as it always has).
 func principalOf(ctx context.Context) string {
 	p, _ := ctx.Value(principalKey{}).(string)
 	return p
@@ -90,7 +89,7 @@ func (s *Server) isFleetAdmin(osUser string) bool {
 	return false
 }
 
-// onPrincipalSignIn records a person at their WeCom sign-in and gives them
+// onPrincipalSignIn records a person at their GitHub sign-in and gives them
 // their logins. Never in the way of the sign-in: a failure here is logged,
 // and the person is still let in.
 //
@@ -149,8 +148,8 @@ func (s *Server) onPrincipalSignIn(principal, displayName string) {
 }
 
 // ensurePerson is onPrincipalSignIn for a request that arrived on a session
-// cookie minted earlier (claude-fleet#1472). /enter runs the placement once,
-// at the ticket exchange — but the cookie lives eight hours, and a person
+// cookie minted earlier (claude-fleet#1472). The GitHub callback runs the placement once,
+// at the sign-in — but the cookie lives on, and a person
 // whose row was not there at that moment (the operator mapped them after
 // they had signed in; their first visit predates the map) reached
 // /fleet/login, /connect and the certificate with no principal and was told
@@ -165,7 +164,7 @@ func (s *Server) ensurePerson(r *http.Request) string {
 	}
 	var name string
 	if sess := sessionOf(r.Context()); sess != nil {
-		name = sess.Name // the ticket's `nam`, kept on the request by the gate
+		name = sess.Name // the GitHub username, kept on the request by the gate
 	}
 	s.onPrincipalSignIn(pid, name)
 	return pid
@@ -175,11 +174,9 @@ func (s *Server) ensurePerson(r *http.Request) string {
 // person's hub_users row, else user.<id>.machine_login, else (one version)
 // CCQUOTA_FLEET_PRINCIPAL_LOGINS (claude-fleet#1986).
 //
-// The comparison folds case (claude-fleet#1472): a WeCom userid is
-// case-insensitive — the directory lists `YiLiangHui`, the ticket carries it
-// so, and the operator types the map by hand, as `yilianghui` the first time
-// — so the two spellings are one person here, whichever way the map and the
-// ticket happen to disagree. The map is a handful of entries; a scan is fine.
+// The comparison folds case (claude-fleet#1472): the operator types the map
+// by hand, and two spellings of one principal are one person here. The map
+// is a handful of entries; a scan is fine.
 func (s *Server) mappedLoginFor(principal string) (string, bool) {
 	if id, ok := githubIDOf(principal); ok && s.Store != nil {
 		if u, err := s.Store.HubUserByID(id); err == nil && u != nil && u.MachineLogin != "" {
@@ -212,7 +209,7 @@ func (s *Server) mappedLogin(login string) bool {
 // already active, is left alone.
 //
 // It walks the people the hub knows and asks the map about each — not the
-// other way round — so the row keeps the directory's spelling of the userid
+// other way round — so the row keeps its own spelling of the principal
 // and the map may spell it any way (claude-fleet#1472). A mapped person with
 // no row yet has not signed in; nothing to adopt for them until they do.
 func (s *Server) adoptMappedLogins(now time.Time) {
@@ -252,7 +249,7 @@ func (s *Server) adoptMappedLogins(now time.Time) {
 }
 
 // fullNameFor is the display name sysadminctl gets: the person's name when the
-// hub knows one the node will accept, else their userid, else the login.
+// hub knows one the node will accept, else their principal, else the login.
 func fullNameFor(p *store.Principal) string {
 	for _, n := range []string{p.DisplayName, p.ID} {
 		if control.ValidFullName(n) {
@@ -369,10 +366,9 @@ func truncate(s string, n int) string {
 
 // FleetMe is the body of /v1/fleet/me.
 type FleetMe struct {
-	// Signed says a WeCom person is behind this request (the operator's
-	// doors — token, tailnet — are not a person). Person is who: the
-	// ticket's WeCom userid, present even before the hub has a row for
-	// them, so "signed in but nowhere yet" is distinguishable from the
+	// Signed says a signed-in person is behind this request (the
+	// operator's token is not a person). Person is who: gh:<GitHub ID>,
+	// present even before the hub has a row for them, so "signed in but nowhere yet" is distinguishable from the
 	// operator's own view (claude-fleet#1458).
 	Signed    bool                 `json:"signed_in"`
 	Person    string               `json:"person,omitempty"`

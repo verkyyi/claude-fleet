@@ -93,17 +93,16 @@ func TestSourceRollupRebuildEqualsRaw(t *testing.T) {
 
 // ---- provider dimension -----------------------------------------------
 
-// The gateway shipper sends the upstream inside details.model_provider. The
-// hub lifts it onto the event so it can be grouped, without the shipper having
-// to change what it sends.
+// Codex names its upstream inside details.model_provider. The hub lifts it
+// onto the event's provider column.
 func TestInsert_ProviderComesFromDetailsWhenUnset(t *testing.T) {
 	s := newStore(t)
 	seedAccount(t, s, "acct", "ep1")
 
 	e := ev("acct", "ep1", "u-gw-1", 10)
-	e.Source = model.SourceGateway
-	e.Model = "qwen-plus"
-	e.Details = &model.UsageDetails{Provider: "dashscope.aliyuncs.com"}
+	e.Source = model.SourceCodex
+	e.Model = "gpt-5"
+	e.Details = &model.UsageDetails{Provider: "openai"}
 	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +112,7 @@ func TestInsert_ProviderComesFromDetailsWhenUnset(t *testing.T) {
 		`SELECT provider FROM usage_events WHERE message_uuid = ?`, "u-gw-1").Scan(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got != "dashscope.aliyuncs.com" {
+	if got != "openai" {
 		t.Errorf("provider = %q, want dashscope.aliyuncs.com", got)
 	}
 }
@@ -123,7 +122,7 @@ func TestInsert_ExplicitProviderWins(t *testing.T) {
 	seedAccount(t, s, "acct", "ep1")
 
 	e := ev("acct", "ep1", "u-gw-2", 10)
-	e.Source = model.SourceGateway
+	e.Source = model.SourceCodex
 	e.Provider = "explicit.example"
 	e.Details = &model.UsageDetails{Provider: "details.example"}
 	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
@@ -171,8 +170,8 @@ func TestMigrate_BackfillsProviderFromDetails(t *testing.T) {
 	seedAccount(t, s, "acct", "ep1")
 
 	e := ev("acct", "ep1", "u-old", 10)
-	e.Source = model.SourceGateway
-	e.Details = &model.UsageDetails{Provider: "ark.cn-beijing.volces.com"}
+	e.Source = model.SourceCodex
+	e.Details = &model.UsageDetails{Provider: "azure"}
 	if _, _, err := s.InsertEvents([]model.UsageEvent{e}); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +192,7 @@ func TestMigrate_BackfillsProviderFromDetails(t *testing.T) {
 		`SELECT provider FROM usage_events WHERE message_uuid = ?`, "u-old").Scan(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got != "ark.cn-beijing.volces.com" {
+	if got != "azure" {
 		t.Errorf("backfilled provider = %q, want ark.cn-beijing.volces.com", got)
 	}
 }

@@ -19,7 +19,6 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -33,13 +32,9 @@ type Server struct {
 	// ingest uses per-endpoint enrollment tokens instead.
 	ViewerToken string
 
-	// Tailnet grants the viewer role to allowlisted tailnet logins with no
-	// token, on the word of the local tailscaled. Nil means off.
-	Tailnet *TailnetViewers
-
 	// LogWriter receives access-log lines; nil means the standard logger.
-	// Tests capture it to assert that a tailnet-authenticated request is
-	// logged with who made it.
+	// Tests capture it to assert that a signed-in request is logged with who
+	// made it.
 	LogWriter func(line string)
 
 	// PublicBadges is --public-badges, the old switch: read for one version
@@ -49,13 +44,6 @@ type Server struct {
 	// camo strips cookies). Off by default: an operator who upgrades must not
 	// silently start serving without auth.
 	PublicBadges bool
-
-	// FX converts a figure from the currency it was BILLED in to the one a
-	// viewer reads. Presentation only: no stored figure and no total is ever
-	// computed through it, and every converted figure travels with the rate and
-	// its timestamp so it cannot be mistaken for the invoice. Nil means the
-	// dashboard shows each figure in its own currency, which is always correct.
-	FX *fx.Feed
 
 	// LimitsPollIntervalS is echoed to agents so a noisy fleet can be backed
 	// off centrally without touching every machine.
@@ -73,10 +61,6 @@ type Server struct {
 	// nothing routes on it, and the zero value just means the page names the
 	// doors without their addresses.
 	Listeners ListenerFacts
-
-	// SSO connects the human-facing surfaces to the company's WeCom single
-	// sign-on. Nil means not wired up — /enter 404s and nothing else changes.
-	SSO *SSO
 
 	// GitHub is the GitHub sign-in and its list (claude-fleet#1984). Nil
 	// means not wired up — /signin and /auth/github/* 404 and nothing else
@@ -120,7 +104,7 @@ type Server struct {
 	FleetAdmins []string
 
 	// FleetAutoAssign is the machines (roster hostnames) a person gets a
-	// login on the first time they sign in through WeCom
+	// login on the first time they sign in with GitHub
 	// (CCQUOTA_FLEET_AUTO_ASSIGN). Empty means accounts are only ever opened
 	// by an explicit assignment. A person in FleetPrincipalLogins is never
 	// auto-assigned: their login already exists, and is adopted instead.
@@ -129,22 +113,20 @@ type Server struct {
 	// unset.
 	FleetAutoAssign []string
 
-	// FleetPrincipalLogins maps a person (WeCom userid, the ticket's `uid`)
-	// to the OS login that is theirs on every machine
-	// (CCQUOTA_FLEET_PRINCIPAL_LOGINS=caojian=24haowan,yilianghui=verkyyi;
-	// claude-fleet#1458). At sign-in a mapped person is recorded under that
+	// FleetPrincipalLogins maps a person (gh:<GitHub ID>) to the OS login
+	// that is theirs on every machine
+	// (CCQUOTA_FLEET_PRINCIPAL_LOGINS=gh:2718137=verkyyi; claude-fleet#1458). At sign-in a mapped person is recorded under that
 	// login and the login is ADOPTED on every roster machine whose agent
 	// runs as it — nothing is ever created. A person not in the map gets no
 	// row and no op (unless FleetAutoAssign says otherwise). Empty means the
-	// map is not in use. Keys are matched to the userid case-insensitively
-	// (mappedLoginFor, claude-fleet#1472): WeCom's are, and `YiLiangHui` in
-	// the directory is `yilianghui` as the operator typed it.
+	// map is not in use. Keys are matched case-insensitively
+	// (mappedLoginFor, claude-fleet#1472).
 	// The old variable: since claude-fleet#1986 user.<id>.machine_login
 	// decides (Server.principalLogins); an entry here applies for one version
 	// to a person the settings do not name.
 	FleetPrincipalLogins map[string]string
 
-	// FleetPersonScopes is the grant a person signed in through WeCom holds
+	// FleetPersonScopes is the grant a person signed in with GitHub holds
 	// on their own logins (CCQUOTA_FLEET_PERSON_SCOPES, claude-fleet#1410);
 	// nil means DefaultPersonScopes. The operator's doors hold every scope.
 	FleetPersonScopes []string
@@ -192,10 +174,6 @@ type Server struct {
 	// node_lost alert (FLEET_NODE_LOST_ALERT_SECS, claude-fleet#1630); zero =
 	// the 120 s default.
 	NodeLostAfter time.Duration
-
-	// Notifier pushes warning / critical findings to a WeCom robot
-	// (claude-fleet#1469). Nil: off, and nothing about findings changes.
-	Notifier *FindingNotifier
 
 	// SSHCA signs people's connection certificates (claude-fleet#1412),
 	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,
@@ -279,31 +257,14 @@ func (s *Server) routes() *routeMux {
 	// Live reports authenticate per endpoint, like ingest.
 	mux.HandleFunc("/v1/live/report", s.handleLiveReport)
 	mux.HandleFunc("/v1/collectors/quota-lease", s.handleQuotaLease)
-	// Repo progress ships on an enrollment token too, but carries no identity:
-	// see handleRepoIngest for why it is a sibling of /v1/ingest rather than
-	// another optional field on the usage batch.
-	mux.HandleFunc("/v1/ingest/repo", s.handleRepoIngest)
-	// The business ledger ships the same way and for the same reasons: its own
-	// enrollment token, no identity in the body, one whole day per push.
-	mux.HandleFunc("/v1/ingest/growth", s.handleGrowthIngest)
-	// Reading the ledger back, for the Monday brief. Outside the viewer gate
-	// for the same reason ingest is -- a headless job holds an enrollment
-	// token, not an SSO session -- but gated a second time on the enrollment's
-	// kind, because every shipper on this hub holds a token and only the growth
-	// ones may read revenue. See handleGrowthRead.
-	mux.HandleFunc("/v1/growth/latest", s.handleGrowthRead)
-
-	// The way in. Outside the viewer-token gate on purpose, and mounted
-	// unconditionally: when SSO is not configured the handler answers 404, so
-	// whether the route exists never leaks whether the feature is on.
-	mux.HandleFunc("/enter", s.handleEnter)
 	// The way out (claude-fleet#1467): POST clears the cookies this hub
-	// minted, GET is the signed-out page. Outside the gate for the same
-	// reason /enter is -- a signed-out browser must be able to reach it.
+	// minted, GET is the signed-out page. Outside the gate on purpose -- a
+	// signed-out browser must be able to reach it.
 	mux.HandleFunc("/logout", s.handleLogout)
 	// Sign in with GitHub (claude-fleet#1984): the page, the hop to GitHub
-	// and the way back. Outside the gate like /enter, mounted
-	// unconditionally and 404 when not configured, for the same reason.
+	// and the way back. Outside the gate, mounted unconditionally and 404
+	// when not configured, so whether the route exists never leaks whether
+	// the feature is on.
 	mux.HandleFunc("/signin", s.handleSignin)
 	mux.HandleFunc("/auth/github/start", s.handleGitHubStart)
 	mux.HandleFunc("/auth/github/callback", s.handleGitHubCallback)
@@ -473,7 +434,6 @@ func (s *Server) routes() *routeMux {
 	// Who the gate admitted, for the shared page header (claude-fleet#1467).
 	// Unconditional: the header is on every hub's dashboard, fleet module or not.
 	mux.Handle("/v1/me", s.viewerOnly(http.HandlerFunc(s.handleMe)))
-	mux.Handle("/v1/fx", s.viewerOnly(http.HandlerFunc(s.handleFX)))
 	mux.Handle("/v1/collectors", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCollectors))))
 	mux.Handle("/v1/account-usage", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccountUsage))))
 	mux.Handle("/v1/limits", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleLimits))))
@@ -498,41 +458,22 @@ func (s *Server) routes() *routeMux {
 	// first (/v1/accounts/label) and deliberately not behind a new one --
 	// see internal/api/finding_mutes.go on the trust boundary.
 	mux.Handle("/v1/findings/mutes", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFindingMutes))))
-	mux.Handle("/v1/repos", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleRepos))))
-	mux.Handle("/v1/repo/flow", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleRepoFlow))))
-	mux.Handle("/v1/repo/issues", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleRepoIssues))))
-	mux.Handle("/v1/repo/cost", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleRepoCost))))
-	mux.Handle("/v1/repo/human-debt", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleRepoHumanDebt))))
 
 	if s.MCP != nil {
 		mux.Handle("/mcp", s.viewerOnly(s.MCP))
 	}
 
-	// The public view. Mounted BEFORE "/" so the share token never reaches a
-	// viewerOnly route, and viewerOnly never has to know share tokens exist.
-	mux.Handle("/v1/share", s.shareOnly(s.handleShareData))
-	mux.Handle("/share", s.shareOnly(s.serveSharePage))
-	mux.Handle("/share/", s.shareOnly(s.serveSharePage))
-
 	mux.Handle("/v1/user", s.viewerOnly(http.HandlerFunc(s.handleUserData)))
 
 	// The door map: every way into this hub, what each costs in credentials,
 	// and what is actually turned on here. Behind the viewer gate like every
-	// other human surface -- it describes the configuration, and /enter's
+	// other human surface -- it describes the configuration, and /signin's
 	// unconditional 404 exists precisely so an uncredentialled prober cannot
 	// learn that. Both spellings, so /access/ is the page rather than the SPA
 	// fallback. See access.go.
 	mux.Handle("/v1/access", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccess))))
 	mux.Handle("/access", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveAccessPage))))
 	mux.Handle("/access/", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveAccessPage))))
-
-	// The business board. Gated like every other human surface -- these are
-	// the most sensitive figures this binary holds -- and mounted at a fixed
-	// path rather than inside the dashboard's hash router because it is
-	// server-rendered; see serveGrowthPage. Both spellings, so /growth/ is the
-	// board rather than the SPA's index.html fallback.
-	mux.Handle("/growth", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveGrowthPage))))
-	mux.Handle("/growth/", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveGrowthPage))))
 
 	// Badges are the one surface that may be unauthenticated, and only on
 	// purpose. Everything else on this hub stays behind the viewer token.
@@ -561,9 +502,13 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/meter.json", s.handleMeter)
 	mux.HandleFunc("/odometer.svg", s.handleOdometer)
 
-	// Signed out, "/" is the front page; signed in, the app.
-	// Every page under it settles its language first (claude-fleet#2023).
-	mux.Handle("/", s.withPageLang(s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding)))
+	// Signed out, "/" is the front page; signed in, the app. Every page under
+	// it settles its language first (claude-fleet#2023). Every other path that
+	// reaches here is one of the app's own files or a 404 -- for everyone,
+	// before the gate: the file list is the repository's web/dist, so whether
+	// a path exists tells a stranger nothing, and a removed route answers 404
+	// rather than the app's index (claude-fleet#1987).
+	mux.Handle("/", s.uiPathOr404(s.withPageLang(s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding))))
 
 	return mux
 }
@@ -623,38 +568,14 @@ func (s *Server) viewerOr(next http.Handler, signedOut func(http.ResponseWriter,
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		// A WeCom session this hub minted itself, from a ticket the company's
-		// authorization service signed. Checked after the token so the token
-		// stays the fallback that works when WeCom does not.
-		if sess, ok := s.ssoSession(r); ok {
-			// The signed-in person (the ticket's `uid`, else its role
-			// subject) is also the fleet principal: the one identity whose
-			// views are narrowed to that person's own machines. The session
-			// itself rides along for /v1/me, which shows the name it carries.
-			sub := sess.Principal()
-			ctx := context.WithValue(withViewer(r.Context(), sub), principalKey{}, sub)
-			ctx = withDoor(withSession(ctx, sess), doorWeCom)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-		// No token. A named tailnet peer may still be let in -- on the word
-		// of the local tailscaled, never of anything in the request.
-		if login, ok := s.Tailnet.Lookup(r.RemoteAddr); ok {
-			next.ServeHTTP(w, r.WithContext(withDoor(withViewer(r.Context(), login), doorTailnet)))
-			return
-		}
 		if signedOut != nil && signedOut(w, r) {
 			return
 		}
 		// A browser with no credential is someone who has not signed in yet;
-		// send them to do that — GitHub's page when it is wired up, else
-		// WeCom's gate. Everything else gets the honest 401.
+		// send them to GitHub's page when it is wired up. Everything else gets
+		// the honest 401.
 		if s.GitHub.ready() && wantsHTML(r) {
 			http.Redirect(w, r, "/signin", http.StatusFound)
-			return
-		}
-		if to, ok := s.ssoSignInURL(r); ok {
-			http.Redirect(w, r, to, http.StatusFound)
 			return
 		}
 
@@ -674,8 +595,31 @@ func stripToken(r *http.Request) string {
 	return u.RequestURI()
 }
 
-// serveUI serves the embedded dashboard, falling back to index.html so the SPA
-// owns its own routing.
+// uiPathOr404 lets through "/" and the paths the built UI holds, and answers
+// 404 to every other path. The dashboard routes by its URL fragment
+// (#/?view=…), so it never needed a path fallback, and an unknown path —
+// a route this hub no longer has, an API path that never existed — is a 404.
+func (s *Server) uiPathOr404(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.UI == nil {
+			http.NotFound(w, r)
+			return
+		}
+		st, err := fs.Stat(s.UI, strings.TrimPrefix(r.URL.Path, "/"))
+		if err != nil || st.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// serveUI serves the embedded dashboard: index.html at "/", else the file
+// the path names (uiPathOr404 has already refused one the UI does not hold).
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	if s.UI == nil {
 		writeJSON(w, http.StatusOK, map[string]string{
@@ -691,12 +635,8 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := s.UI.Open(path)
 	if err != nil {
-		f, err = s.UI.Open("index.html")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		path = "index.html"
+		http.NotFound(w, r)
+		return
 	}
 	defer f.Close()
 
@@ -722,7 +662,7 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 }
 
 // logRequests logs method, path, status and duration, plus who it was when a
-// tailnet identity let the request in. Query strings are omitted: they can
+// signed-in identity let the request in. Query strings are omitted: they can
 // carry the viewer token.
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -206,7 +206,7 @@ func deviceOfCert(certLine string) string {
 
 // DevicesResponse is the body of GET /v1/fleet/devices.
 type DevicesResponse struct {
-	// Mine is true when the list is one person's own (a WeCom session), false
+	// Mine is true when the list is one person's own (a GitHub session), false
 	// for the operator's view of everyone's.
 	Mine    bool                `json:"mine"`
 	IdleSec int                 `json:"idle_sec"`

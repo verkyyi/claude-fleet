@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// The door map: one page that says how a person, an agent or a shipper gets
+// The door map: one page that says how a person, an agent or a machine gets
 // into THIS hub, what each way in costs them in credentials, and what it lets
 // them do once they are through.
 //
@@ -36,14 +36,14 @@ import (
 //
 // # Why it is behind the viewer gate
 //
-// It reports what is configured on this hub — SSO on or off, who the tailnet
-// allowlist names, whether badges are public. That is exactly the shape of
-// answer /enter refuses to give: /enter is mounted unconditionally and 404s
-// when SSO is unconfigured, so the ROUTE's existence never leaks the feature to
-// someone with no credential. This page does not change that, and must not: it
-// sits behind viewerOnly, so only a reader who already came through one door
-// learns about the others. An unauthenticated prober still gets the same 401
-// it always got.
+// It reports what is configured on this hub — GitHub sign-in on or off, how
+// many admins the deploy names, whether badges are public. That is exactly the
+// shape of answer /signin refuses to give: it is mounted unconditionally and
+// 404s when GitHub sign-in is unconfigured, so the ROUTE's existence never
+// leaks the feature to someone with no credential. This page does not change
+// that, and must not: it sits behind viewerOnly, so only a reader who already
+// came through one door learns about the others. An unauthenticated prober
+// still gets the same 401 it always got.
 
 // Door is one way into this hub.
 type Door struct {
@@ -68,28 +68,11 @@ type Door struct {
 	Note string `json:"note"`
 }
 
-// SSOFacts is what this hub will say about its WeCom wiring. The two secrets
-// on api.SSO — the ticket key and the session key — are absent by
-// construction: one verifies a ticket and one signs a session, so either would
-// let a holder conjure a signed-in person out of nothing.
-type SSOFacts struct {
-	Enabled      bool    `json:"enabled"`
-	EnterURL     string  `json:"enter_url,omitempty"`
-	Slug         string  `json:"slug,omitempty"`
-	SessionHours float64 `json:"session_hours,omitempty"`
-}
-
 // ListenerFacts is where `ccquota hub` actually bound. Presentation only.
 type ListenerFacts struct {
 	HTTP     []string `json:"http,omitempty"`
 	HTTPS    string   `json:"https,omitempty"`
 	HTTPSURL string   `json:"https_url,omitempty"`
-}
-
-// ShareFacts counts the redacted public links, never lists their tokens.
-type ShareFacts struct {
-	Active int `json:"active"`
-	Total  int `json:"total"`
 }
 
 // HubFacts is the configuration a reader cannot infer from the software.
@@ -100,16 +83,13 @@ type HubFacts struct {
 	GitHubAdmins int  `json:"github_admins"`
 	// ViewerAuth is "token" or "off (--no-auth)". The token itself never
 	// appears, here or anywhere else this package writes.
-	ViewerAuth     string         `json:"viewer_auth"`
-	SSO            SSOFacts       `json:"sso"`
-	TailnetViewers []string       `json:"tailnet_viewers"`
-	PublicBadges   bool           `json:"public_badges"`
-	PublicMeter    bool           `json:"public_meter"`
-	MCP            bool           `json:"mcp"`
-	Dashboard      bool           `json:"dashboard"`
-	Listeners      ListenerFacts  `json:"listeners"`
-	ShareLinks     ShareFacts     `json:"share_links"`
-	Enrollments    map[string]int `json:"enrollments"`
+	ViewerAuth   string         `json:"viewer_auth"`
+	PublicBadges bool           `json:"public_badges"`
+	PublicMeter  bool           `json:"public_meter"`
+	MCP          bool           `json:"mcp"`
+	Dashboard    bool           `json:"dashboard"`
+	Listeners    ListenerFacts  `json:"listeners"`
+	Enrollments  map[string]int `json:"enrollments"`
 }
 
 // AccessMap is the whole answer to "how do I get in, and what does that let me
@@ -145,22 +125,14 @@ func (s *Server) handleAccess(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hubFacts() HubFacts {
-	// An empty allowlist is [], never null: "nobody gets in without a token"
-	// is an answer, and a reader who has to tell it apart from "this hub did
-	// not say" has been handed the ambiguity this page exists to remove.
-	tailnet := s.Tailnet.Logins()
-	if tailnet == nil {
-		tailnet = []string{}
-	}
 	f := HubFacts{
-		ViewerAuth:     "token",
-		TailnetViewers: tailnet,
-		PublicBadges:   s.publicBadges(),
-		PublicMeter:    s.publicMeter(),
-		MCP:            s.MCP != nil,
-		Dashboard:      s.UI != nil,
-		Listeners:      s.Listeners,
-		Enrollments:    map[string]int{},
+		ViewerAuth:   "token",
+		PublicBadges: s.publicBadges(),
+		PublicMeter:  s.publicMeter(),
+		MCP:          s.MCP != nil,
+		Dashboard:    s.UI != nil,
+		Listeners:    s.Listeners,
+		Enrollments:  map[string]int{},
 	}
 	if s.ViewerToken == "" {
 		f.ViewerAuth = "off (--no-auth)"
@@ -168,27 +140,10 @@ func (s *Server) hubFacts() HubFacts {
 	if s.GitHub.ready() {
 		f.GitHub, f.GitHubAdmins = true, len(s.GitHub.Admins)
 	}
-	if s.SSO.ready() {
-		f.SSO = SSOFacts{
-			Enabled:      true,
-			EnterURL:     s.SSO.EnterURL,
-			Slug:         s.SSO.Slug,
-			SessionHours: s.SSO.ttl().Hours(),
-		}
-	}
-	// Both of these are best-effort. A hub whose database hiccups should still
-	// be able to tell a reader where the doors are; a zero count is reported
-	// as what it is by the note beside it, never dressed up as "none".
+	// Best-effort. A hub whose database hiccups should still be able to tell a
+	// reader where the doors are; a zero count is reported as what it is by
+	// the note beside it, never dressed up as "none".
 	if s.Store != nil {
-		if links, err := s.Store.ListShareLinks(); err == nil {
-			now := time.Now()
-			for _, l := range links {
-				f.ShareLinks.Total++
-				if l.Active(now) {
-					f.ShareLinks.Active++
-				}
-			}
-		}
 		if counts, err := s.Store.EnrollmentCounts(); err == nil {
 			f.Enrollments = counts
 		}
@@ -206,9 +161,9 @@ func (f HubFacts) enrolled(kinds ...string) int {
 }
 
 // doors is the table itself: one row per way in, in the order a reader should
-// meet them — the two human doors, then the two agent doors, then the machine
-// door, then the two that are open on purpose, then the one that is not on
-// HTTP at all.
+// meet them — the human doors, then the agent doors, then the machine door,
+// then the ones that are open on purpose, then the one that is not on HTTP at
+// all.
 //
 // It is built here, beside Handler(), rather than written into the page,
 // because a door that is described in HTML is a door that drifts from the
@@ -221,13 +176,7 @@ func (s *Server) doors(f HubFacts) []Door {
 	if f.ViewerAuth == "token" {
 		ways = append(ways, "the viewer token (`?token=` once, then a 30-day cookie)")
 	}
-	if f.SSO.Enabled {
-		ways = append(ways, "a WeCom session from /enter")
-	}
-	if n := len(f.TailnetViewers); n > 0 {
-		ways = append(ways, plural(n, "named tailnet login", "named tailnet logins")+" with no token")
-	}
-	dashCred := "a GitHub sign-in on the list, the viewer token, a WeCom session, or a named tailnet peer"
+	dashCred := "a GitHub sign-in on the list, or the viewer token"
 	dashNote := "Here: " + joinAnd(ways) + "."
 	if f.ViewerAuth != "token" {
 		dashCred = "nothing — this hub runs with --no-auth"
@@ -238,12 +187,10 @@ func (s *Server) doors(f HubFacts) []Door {
 	return []Door{
 		{
 			ID: "dashboard", Name: "The dashboard", Via: "http",
-			Where:      []string{"/", "/sessions", "/connect", "/config", "/growth"},
+			Where:      []string{"/", "/sessions", "/connect", "/config"},
 			Credential: dashCred,
 			Can: "Read what the viewer's role lets them see (claude-fleet#1985, #1989): an admin every " +
-				"figure this hub holds, a user their own usage, sessions, devices and settings. " +
-				"/growth is the revenue ledger, the most sensitive figures in this binary, behind the " +
-				"same gate as the rest.",
+				"figure this hub holds, a user their own usage, sessions, devices and settings.",
 			State: pick(f.Dashboard, "open", "off"),
 			Note:  dashNote + pick(f.Dashboard, "", " This binary was built without the dashboard, so / answers JSON instead."),
 		},
@@ -261,34 +208,8 @@ func (s *Server) doors(f HubFacts) []Door {
 				"Here: NOT configured, so /signin answers 404."),
 		},
 		{
-			ID: "enter", Name: "The SSO way in", Via: "http",
-			Where:      []string{"/enter", "/logout"},
-			Credential: "a 90-second ticket the company's authorization service signed",
-			Can: "Exchange that ticket for this hub's own session cookie, and nothing else. " +
-				"It grants no read by itself. OAuth completes on ai.24haowan.com — the corp allows one " +
-				"callback domain and it is not this host — so only the ticket crosses. " +
-				// claude-fleet#1467: the way out sits beside the way in. It
-				// clears only what this hub minted; the authorization
-				// service keeps its own session, as it does for every site.
-				"POST /logout (same-origin, from the page header) clears the cookies this hub minted — " +
-				"the session and a parked viewer token — and shows a signed-out page; the authorization " +
-				"service's own session is not this host's to end.",
-			// NOT "public", even though it is the one route outside the viewer
-			// gate. "Public" on this page means "no credential", and /enter
-			// demands a signed ticket — labelling it public would contradict
-			// the credential named one line above it. When SSO is unconfigured
-			// the honest word is "off": the route answers, and it is still not
-			// a way in.
-			State: pick(f.SSO.Enabled, "open", "off"),
-			Note: pick(f.SSO.Enabled,
-				"Here: wired up, sending signed-out browsers to "+f.SSO.EnterURL+
-					". Sessions last "+hours(f.SSO.SessionHours)+".",
-				"Here: NOT configured, so /enter answers 404. The route is mounted anyway, on purpose: "+
-					"whether it exists must not tell an unauthenticated prober whether SSO is on."),
-		},
-		{
 			ID: "api", Name: "The query API", Via: "http",
-			Where:      []string{"/v1/summary", "/v1/usage", "/v1/history", "/v1/live/stream", "/v1/repo/…", "and ~20 more"},
+			Where:      []string{"/v1/summary", "/v1/usage", "/v1/history", "/v1/live/stream", "and ~20 more"},
 			Credential: "the same viewer token, as an `Authorization: Bearer` header",
 			Can: "Read the same figures as JSON, on the same gate as the dashboard — it IS the dashboard's " +
 				"back end. One route writes: POST /v1/accounts/label renames a subscription.",
@@ -307,37 +228,15 @@ func (s *Server) doors(f HubFacts) []Door {
 		},
 		{
 			ID: "ingest", Name: "Shipper ingest", Via: "http",
-			Where: []string{"/v1/ingest", "/v1/live/report", "/v1/collectors/quota-lease",
-				"/v1/ingest/repo", "/v1/ingest/growth", "/v1/growth/latest"},
+			Where: []string{"/v1/ingest", "/v1/live/report", "/v1/collectors/quota-lease"},
 			Credential: "each shipper's OWN enrollment token from `ccquota enroll` — never the viewer token, " +
 				"and revocable on its own with `ccquota endpoint retire`",
-			Can: "Write: push usage batches, live session reports, repo progress or the business ledger. " +
-				"The endpoint's identity comes from the token lookup, never from the body. /v1/growth/latest " +
-				"reads the revenue ledger back and is gated a SECOND time on the enrollment's kind, because " +
-				"every shipper here holds a token and only the growth ones may read revenue. Retiring an " +
+			Can: "Write: push Claude and Codex usage batches and live session reports. " +
+				"The endpoint's identity comes from the token lookup, never from the body. Retiring an " +
 				"endpoint closes every one of these doors to its token at once — they all resolve it through " +
 				"the same lookup — so the count beside this row is live tokens, not rows in the table.",
 			State: "open",
-			Note: "Here: " + plural(f.enrolled("agent"), "agent", "agents") +
-				", " + plural(f.enrolled("repo_shipper"), "repo shipper", "repo shippers") +
-				", " + plural(f.enrolled("growth_shipper", "growth_reader"), "growth token", "growth tokens") + " enrolled.",
-		},
-		{
-			ID: "share", Name: "A share link", Via: "http",
-			Where:      []string{"/share?token=…", "/v1/share"},
-			Credential: "a share token minted by `ccquota share --name …`, revocable and optionally dated",
-			Can: "Read ONE redacted page: totals, scale, plan utilization, model mix. No logins, no projects, " +
-				"no session detail, and costs only if the link was minted to show them. Mounted before \"/\" " +
-				"so a share token can never reach a viewer route.",
-			State: "open",
-			Note: pick(f.ShareLinks.Total == 0,
-				"Here: no share links have been minted.",
-				"Here: "+plural(f.ShareLinks.Active, "active link", "active links")+
-					" of "+strconv.Itoa(f.ShareLinks.Total)+" minted"+
-					// Only account for a difference when there is one. "1 of 1
-					// minted, the rest revoked" invents a rest.
-					pick(f.ShareLinks.Active < f.ShareLinks.Total,
-						"; the rest are revoked or expired.", ".")),
+			Note:  "Here: " + plural(f.enrolled("agent"), "agent", "agents") + " enrolled.",
 		},
 		{
 			ID: "badges", Name: "Badges and embeds", Via: "http",
@@ -380,7 +279,7 @@ func (s *Server) doors(f HubFacts) []Door {
 		},
 		{
 			ID: "cli", Name: "The CLI, on the hub machine", Via: "hub-shell",
-			Where: []string{"ccquota enroll", "ccquota share", "ccquota team", "ccquota plan", "ccquota name"},
+			Where: []string{"ccquota enroll", "ccquota team", "ccquota plan", "ccquota name"},
 			Credential: "a shell on the machine running the hub, and read/write on its SQLite file — " +
 				"no token, and no HTTP route exists for any of it",
 			Can: "Mint and revoke credentials, name a subscription, record what a plan actually costs, " +
@@ -396,15 +295,11 @@ func (s *Server) doors(f HubFacts) []Door {
 
 // serveAccessPage serves the door map's page.
 //
-// Its own file, like the share and user pages, rather than a route inside the
+// Its own file, like the user page, rather than a route inside the
 // dashboard: the dashboard is a module set that boots ~20 requests once you
 // are through the gate, and a page whose whole job is to explain how to get in
 // should not be the heaviest thing to load after you have.
-//
-// (serveSharePage streams its own file the same way. It is
-// deliberately NOT folded together here: the share page sets no-store and
-// this one sets no-cache, and unifying them would mean changing the share
-// page's caching as a side effect of a documentation change.)
+
 func (s *Server) serveAccessPage(w http.ResponseWriter, r *http.Request) {
 	s.serveStandalonePage(w, r, "access.html")
 }
@@ -455,16 +350,6 @@ func plural(n int, one, many string) string {
 		return "1 " + one
 	}
 	return strconv.Itoa(n) + " " + many
-}
-
-// hours formats a session lifetime. --sso-session-hours is an int flag, so a
-// fraction only arrives from a hand-built SSO struct; %g keeps that honest
-// rather than truncating it to a wrong whole number.
-func hours(h float64) string {
-	if h == 1 {
-		return "1 hour"
-	}
-	return strconv.FormatFloat(h, 'g', -1, 64) + " hours"
 }
 
 // joinAnd renders a list the way a person would say it out loud.

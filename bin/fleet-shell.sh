@@ -82,6 +82,14 @@
 #                          selected — the right pane shows it, the list its row
 #   reload <session> [--from <old home>]   a newer client into the running one,
 #                          same servers (issue #1781) — see `reload` below
+#   ask <kind> [arg…]      a short question on ONE line at the bottom of the stage
+#                          (issue #1950): the list asks it (`<kind>` as its row
+#                          menu does — rename @id, message wid:…, answer wid:… ask,
+#                          sub @id, repo, new [machine]) and its answer takes that
+#                          kind's path; the list's actions are kinds too (restore,
+#                          scratch, view, reload, info, needs). Exit 0 asked, 1 no
+#                          list on screen. A bare question (no kind of the list's):
+#                          bin/fleet-ask.py open --below <pane> --kind --prompt.
 #   env [MACHINE]          print the environment the server would get (debug, tests)
 #
 # ~/.config/claude-fleet/fleet.conf — the machine's one config file (issue #1623):
@@ -496,6 +504,20 @@ stage_select() {
 
 mode="${1:-}"
 case "$mode" in
+# ---------------------------------------------------------------------------------
+# A question asked from anywhere (issue #1950): parked on the list of the shell's
+# `home` as its row menu parks one (@sidebar_ask, fleet-sidebar-menu.sh `ask`) and
+# the list woken with F12 — it opens the line under the session (bin/fleet-ask.py)
+# and runs the answer through the kind's own path. Every word is a token (an @id,
+# a wid:…, a machine); no shell or tmux parser sees an answer.
+ask)
+  shift
+  [ $# -gt 0 ] || { note 'ask: <kind> [arg…]'; exit 2; }
+  side=$(T list-panes -s -t "=$SESS" -F '#{@sidebar} #{pane_dead} #{pane_id}' 2>/dev/null | awk '$1 == 1 && $2 != 1 { print $3; exit }')
+  [ -n "$side" ] || exit 1
+  T set-option -p -t "$side" @sidebar_ask "$*" \; send-keys -t "$side" F12 2>/dev/null || exit 1
+  exit 0
+  ;;
 # ---------------------------------------------------------------------------------
 ssh)
   shift

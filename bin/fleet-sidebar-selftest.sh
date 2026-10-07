@@ -64,8 +64,6 @@ assert fit(26, 117, '@1', False, '37', [], (37, 210, '@1', '')) == (None, (26, 1
 assert fit(26, 118, '@1', False, '37', [], (37, 210, '@1', ''))[0] == ('resize', 37), 'just wide enough: corrected'
 assert fit(26, 189, '@1', False, '', [], (30, 210, '@1', '')) == (('resize', 30), (30, 189, '@1', '')), 'no manual width: auto_width is re-applied as before'
 assert fit(26, 100, '@1', False, '', [], (30, 160, '@1', '')) == (None, (26, 100, '@1', '')), 'auto, too narrow: nothing'
-assert sidebar.typed('q') and sidebar.typed('修') and sidebar.typed(' ')
-assert not sidebar.typed('\x0e') and not sidebar.typed('\x7f')
 # The `?` row for the selected row (issue #1377): only a CLIPPED name takes it.
 # Which `!` / why a ↻ waits (field 7) moved to the worker header, @title_info.
 parent = ['@1', 'looping', '↻', '阿里云成本', '▸', '1/2', '0', '等子任务 1/2']
@@ -128,8 +126,12 @@ assert lrows[0][3] == '已落地 (2) · ↵ 恢复' and lrows[1][2:4] == ['✓',
 assert sidebar.selectable(lrows) == ['landed:1548@o/r', 'landed:scratch:scratch-5']
 assert sidebar.landed_rows('hdr\x1fhdr\x1fx\n')[1][3] == '（还没有已落地的会话）'
 assert sidebar.acts('landed:1548') == '' and sidebar.tap('landed:7', 'landed:7') == 'menu'
-# The input line's editor (issue #1097): a cursor, readline's moves and kills.
-Line = sidebar.Line
+# The question's line editor (issue #1097 — the list's input line's until #1950,
+# bin/fleet-ask.py now): a cursor, readline's moves and kills.
+aspec = importlib.util.spec_from_file_location('fleet_ask', real_bin / 'fleet-ask.py')
+fask = importlib.util.module_from_spec(aspec)
+aspec.loader.exec_module(fask)
+Line = fask.Line
 line = Line('ab'); line.left(); line.insert('c')
 assert (line.text, line.pos) == ('acb', 2)
 line.home(); assert line.pos == 0; line.end(); assert line.pos == 3
@@ -147,17 +149,45 @@ line = Line('修复仪表盘侧栏'); line.pos = 3
 assert line.view(7) == '复仪▏表', line.view(7)
 line.end(); assert line.view(7) == '盘侧栏▏'; line.home(); assert line.view(7) == '▏修复仪'
 assert Line('abc').view(9) == 'abc▏' and Line().view(5) == '▏'
-# The keys' double meaning: ←→ Home End edit only a NON-empty line — on an empty
-# one they are the list's fold / first-last row. ↑↓ never edit; ⌃ keys always do.
+# One meaning per key on the question's line (issue #1950): the list's double
+# meaning (an empty line's ←→ fold, ⌃k jump) went with its input line.
 import curses
-for key in (curses.KEY_LEFT, curses.KEY_RIGHT, curses.KEY_HOME, curses.KEY_END):
-    assert sidebar.edit_of(key, '') == '' and sidebar.edit_of(key, 'x'), key
-assert sidebar.edit_of(curses.KEY_UP, 'x') == '' and sidebar.edit_of(curses.KEY_DOWN, 'x') == ''
-assert [sidebar.edit_of(k, '') for k in (1, 5, 23, 21)] == \
-    ['home', 'end', 'kill_word', 'clear']
-# ⌃k (issue #1750): kills to the end of a typed line; on an EMPTY one it is the
-# list's jump to the next row waiting on you
-assert sidebar.edit_of(11, 'x') == 'kill_eol' and sidebar.edit_of(11, '') == ''
+assert [fask.edit_of(k) for k in (curses.KEY_LEFT, curses.KEY_RIGHT, curses.KEY_HOME, curses.KEY_END)] == \
+    ['left', 'right', 'home', 'end']
+assert fask.edit_of(curses.KEY_UP) == '' and fask.edit_of(curses.KEY_DOWN) == ''
+assert [fask.edit_of(k) for k in (1, 5, 23, 21, 11)] == ['home', 'end', 'kill_word', 'clear', 'kill_eol']
+assert fask.edit_of(fask.WORD_LEFT) == 'word_left' and fask.edit_of(ord('a')) == ''
+assert fask.paste_text('a\nb\tc\n') == 'a b c'
+assert fask.typed('q') and fask.typed('修') and fask.typed(' ')
+assert not fask.typed('\x0e') and not fask.typed('\x7f')
+# The list has no line editor and reads no key (issue #1950): its strings and
+# its editor are the question's.
+for gone in ('Line', 'edit_of', 'escape_word', 'pasted', 'HELP_ROW', 'PLACEHOLDER', 'PIN_KEY', 'mark_input'):
+    assert not hasattr(sidebar, gone), 'the list still has ' + gone
+# A question is a spec bin/fleet-ask.py draws: a rename starts on the old name,
+# a hintless line names its keys; a one-key question and a menu carry theirs.
+q = sidebar.Ask('rename', '改名› ', arg='@1', text='旧名').spec()
+assert (q['prompt'], q['text'], q['hint']) == ('改名›', '旧名', '↵ 确定 · esc 取消'), q
+q = sidebar.Ask('restore', 'y / r› ', hint='PR 已关', keys='yYrR').spec()
+assert (q['keys'], q['hint']) == ('yYrR', 'PR 已关'), q
+q = sidebar.Ask('place-where', '开在哪', menu=[('m4', 'm4', '', True), ('m5', 'm5', 'idle', False)]).spec()
+assert q['menu'][1] == ['m5', 'm5', 'idle', False] and q['at'] == 1 and q['hint'] == '', q
+nq = sidebar.Ask('new', '新任务› ')
+nq.choices, nq.at, nq.repo = [('o/a', 'o/a'), ('o/b', 'o/b')], 0, 'o/a'
+q = nq.spec()
+assert [c[0] for c in q['choices']] == ['o/a', 'o/b'] and 'b' in q['choices'][1][1] and not q.get('fill'), q
+sq = sidebar.Ask('sub', '切到› ', arg='@1'); sq.choices = [('acct1', 'acct1 · 5h 10%')]
+assert sidebar.Ask('sub', '').spec().get('choices') is None and sq.spec()['fill'] and sq.spec()['at'] == -1
+q = fask.Question(sq.spec()); q.step(); assert q.line.text == 'acct1' and q.answer() == {'text': 'acct1', 'choice': 'acct1'}
+q = fask.Question(sidebar.Ask('place-where', '', menu=[('m4', 'm4', '', True), ('m5', 'm5', '', False)]).spec())
+q.move(1); assert q.answer() == {'choice': 'm5'}, 'a greyed item is never picked'
+# A tap on a row's caret folds it (issue #1950: the mouse's ←/→) — a session
+# row's ▸ / ▾ cell, a heading's first two cells; a row with no block never.
+crow = ['@1', 'working', '·', 'x', '▾', '', '0', '', '']
+cx = sidebar.width_of(sidebar.row_left(' ', '·', '▾', '')) - 2
+assert sidebar.row_left(' ', '·', '▾', 'x')[cx] == '▾' and sidebar.on_caret(crow, cx)
+assert not sidebar.on_caret(crow, cx + 2) and not sidebar.on_caret(crow[:4] + [' '] + crow[5:], cx)
+assert sidebar.on_caret(['hdr', 'o/a', '', '▸ a (2)', ''] + [''] * 4, 0) and not sidebar.on_caret(['hdr', 'o/a', '', 'a (2)', ''] + [''] * 4, 5)
 R = lambda k, st: [k, st, '', k] + [''] * 8
 rows = [['hdr', '', '!', '! 2'] + [''] * 8, R('@1', 'done'), R('@2', 'needs'),
         R('@3', 'working'), R('@4', 'failed'), R('@5', 'done')]
@@ -166,18 +196,19 @@ assert sidebar.next_attention(rows, '@2') == '@4'
 assert sidebar.next_attention(rows, '@5') == '@2'          # wraps round
 assert sidebar.next_attention(rows, 'gone') == '@2'
 assert sidebar.next_attention([R('@1', 'done')], '@1') == ''
-# the summary line is a tap target, never a cursor stop (issue #1771)
+# the producer's 要你处理 summary row (issue #1750) is told apart — and never drawn
+# since issue #1950 (the list is sessions only; a row waiting is its own red !)
 assert sidebar.is_attn_summary(rows[0]) and not sidebar.is_attn_summary(rows[1])
 assert not sidebar.is_attn_summary(None) and sidebar.key_of(rows[0]) == 'hdr'
 assert not sidebar.is_attn_summary(['hdr', 'o/b', '', 'b (1)'])
-assert sidebar.edit_of(sidebar.WORD_LEFT, '') == 'word_left' and sidebar.edit_of(ord('a'), 'x') == ''
 
 real_tmux = shutil.which('tmux')
 work = Path(tempfile.mkdtemp(prefix='sidebar-selftest.'))
 # A sandbox install root (issue #896): the input line spawns through the REAL
 # dash-raw-session.sh, so every script is the shipped one except the agent
 # launcher, which only holds its window open. Its fleet.conf lifts the machine-
-# wide session cap — the operator's own live sessions must not refuse this test.
+# wide session cap and the memory admit gate — the operator's own live sessions
+# must not refuse this test.
 root = work / 'root'
 bin_dir = root / 'bin'
 bin_dir.mkdir(parents=True)
@@ -187,7 +218,7 @@ for source in real_bin.iterdir():
 (bin_dir / 'fleet-claude.sh').write_text('#!/bin/sh\nexec sleep 600\n')
 (bin_dir / 'fleet-claude.sh').chmod(0o755)
 (root / 'conf').symlink_to(real_bin.parent / 'conf')
-(root / 'fleet.conf').write_text('FLEET_GLOBAL_MAX_SESSIONS=0\n')
+(root / 'fleet.conf').write_text('FLEET_GLOBAL_MAX_SESSIONS=0\nFLEET_ADMIT=0\n')   # nor a busy box's memory gate
 main = work / 'main'
 main.mkdir()
 for git in (['init', '-q'], ['config', 'user.email', 't@t'], ['config', 'user.name', 't'],
@@ -229,8 +260,8 @@ def check(condition, message):
     assert condition, message
     checks += 1
 
-def wait_for(predicate, message):
-    deadline = time.monotonic() + 8
+def wait_for(predicate, message, secs=8):
+    deadline = time.monotonic() + secs
     while time.monotonic() < deadline:
         if predicate():
             return
@@ -273,25 +304,42 @@ def copied():
         return ''
 
 def navigation():
+    # a client in the list's old key table — there is none since issue #1950
     return 'fleet-sidebar' in tm('list-clients', '-F', '#{client_key_table}')
 
-def input_line(pane):
-    # The view's LAST row is the one input line (issue #896).
-    lines = tm('capture-pane', '-p', '-t', pane).splitlines()
-    return lines[-1].rstrip() if lines else ''
+def list_only(pane):
+    """The view is sessions only (issue #1950): no input line (#896/#1620's `›`),
+    no `? 快捷键` row (#948), no 要你处理 summary (#1750) — anywhere in it."""
+    text = tm('capture-pane', '-p', '-t', pane)
+    lines = [l.rstrip() for l in text.splitlines()]
+    return (not any(l == '›' or l.startswith('› ') or l.startswith('改名›') for l in lines)
+            and '快捷键' not in text and '在问你' not in text)
 
-def worker_cue(pane):
-    return input_line(pane) == '›'
+def refreshing(pane):
+    """The 「刷新中…」 top row is up (issue #1536): a stalled producer's frame is
+    past STALE_SECS. A tap during a stall waits for it, so the row it aims at
+    does not move down under the press."""
+    return tm('capture-pane', '-p', '-t', pane).splitlines()[:1] == ['刷新中…']
 
-def spawning(pane):
-    # A spawn in flight (issue #1608): the input line shows the name dimmed with
-    # a trailing ` …` until dash-raw-session.sh EXITS — which is after its window
-    # shows (option stamps, the prefill, the pool refill) — and the sidebar drops
-    # a ⌃s / ↵ pressed while it runs.
-    return input_line(pane).endswith(' …')
+def row_y(pane, text):
+    """The painted row of the list that shows `text` — a 「刷新中…」 top row
+    (issue #1536) moves every row down one."""
+    return next(i for i, line in enumerate(tm('capture-pane', '-p', '-t', pane).splitlines()) if text in line)
 
-def tasks_cue(pane):
-    return input_line(pane).startswith('› 新会话名')
+def ask_pane(window):
+    """The question open under the session (bin/fleet-ask.py, `@stage_ask`)."""
+    for line in tm('list-panes', '-t', window, '-F', '#{pane_id} #{@stage_ask} #{pane_active}').splitlines():
+        part = line.split()
+        if len(part) == 3 and part[1] == '1':
+            return part[0], part[2] == '1'
+    return '', False
+
+def ask_line(window):
+    pane = ask_pane(window)[0]
+    return tm('capture-pane', '-p', '-t', pane).rstrip() if pane else ''
+
+def painted_text():
+    return bytes(screen_out).decode('utf-8', 'replace')
 
 # Focus on a pane's top line is COLOUR ONLY (issue #999): the focused style is
 # the bg, and the words never change with focus — so no label jumps in or out.
@@ -377,20 +425,12 @@ try:
                   .replace('__BIN__', str(bin_dir)).replace('__PREFIX__', 'C-b'))
     node_conf = (bin_dir.parent / 'conf/tmux-attention.conf').read_text()
     shipped = shell_conf
-    # Movement keys never fork (issue #1033): each goes straight to the view at
-    # `{top-left}` behind the same @sidebar gate as `Any`, and all six bodies are
-    # one body with the key swapped — so a fix to one cannot miss the others.
-    moves = ('Up', 'Down', 'Home', 'End', 'Left', 'Right')
-    move_body = {}
-    for line in shipped.splitlines():
-        parts = line.split(' ', 4)
-        if line.startswith('bind -T fleet-sidebar ') and len(parts) == 5 and parts[3] in moves:
-            move_body[parts[3]] = parts[4].replace(' ' + parts[3] + ' }', ' KEY }')
-    check(sorted(move_body) == sorted(moves), 'a sidebar movement bind is missing: %r' % sorted(move_body))
-    check(len(set(move_body.values())) == 1, 'sidebar movement binds drifted apart: %r' % move_body)
-    check(all('run-shell' not in body and "send-keys -t '{top-left}' KEY" in body
-              for body in move_body.values()),
-          'a sidebar movement bind forks a shell again: %r' % move_body.get('Up'))
+    # The list takes NO keys (issue #1950): no key table routes the keyboard to
+    # it, and nothing in the conf switches a client into one.
+    check(not any(line.startswith('bind -T fleet-sidebar ') or
+                  ('-T fleet-sidebar' in line and not line.startswith('#'))
+                  for line in shipped.splitlines()),
+          'the client conf still routes keys to the list (a fleet-sidebar key table)')
     swc = next(line for line in shipped.splitlines()
                if line.startswith('set-hook -g session-window-changed[71] '))
     swc_skip = swc.split("if -F '", 1)[1].split("'", 1)[0] if "if -F '" in swc else ''
@@ -398,8 +438,10 @@ try:
           'session-window-changed sync lost its already-there fast path')
     selected = [line for line in shell_conf.splitlines() if not line.startswith('#') and
                 ('fleet-sidebar' in line or 'after-select-pane[71]' in line or 'client-detached' in line or
-                 'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or
-                 line.startswith('bind -n F9 ') or line.startswith('bind -n C-M-S-F12 ') or
+                 'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or 'DoubleClick1Border' in line or
+                 'MouseDown3Pane' in line or line.startswith('bind -n Any ') or
+                 line in ('unbind E', 'unbind g', 'unbind Space') or
+                 line.startswith('bind -n F9 ') or
                  line.startswith('bind z ') or line.startswith('bind [ ') or line.startswith('bind k '))]
     selected += [line for line in node_conf.splitlines() if
                  line.startswith('set -g pane-border') or line.startswith('set -g default-terminal') or
@@ -408,18 +450,10 @@ try:
     fixture = work / 'sidebar.conf'
     fixture.write_text('\n'.join(selected) + '\n')
     tm('source-file', str(fixture))
-    # Enter / Escape fork nothing either (issue #1530): on an empty line they hand
-    # the keyboard back and send the key straight to `{top-left}`, as ↑↓ do — the
-    # binds AS LOADED, not only the file's spelling.
-    # (The whole list, filtered here: `list-keys -T <table> <key>` prints nothing
-    # for a table of no default keys on tmux 3.7.)
-    all_keys = tm('list-keys').splitlines()
-    for key in ('Enter', 'Escape'):
-        bound = re.sub('["\']', '', next((l for l in all_keys if
-                                         re.match(r'bind-key\s+(-r\s+)?-T fleet-sidebar %s\s' % key, l)), ''))
-        check('run-shell' not in bound and 'fleet-sidebar.sh' not in bound and
-              bound.count('send-keys -t {top-left} ' + key) == 2,
-              'the sidebar %s bind forks a shell again: %r' % (key, bound))
+    check(not tm('list-keys', '-T', 'fleet-sidebar').strip() if
+          subprocess.run([real_tmux, '-S', sock, 'list-keys', '-T', 'fleet-sidebar'], env=env,
+                         capture_output=True).returncode == 0 else True,
+          'the loaded conf has a fleet-sidebar key table')
     tm('set-hook', '-g', 'session-window-changed[72]',
        "set-option -wF -t fleet-test: @sidebar_ready_on_select '#{@sidebar_worker}'")
 
@@ -461,7 +495,9 @@ try:
     call()
     check(len(views()) == 1, 'sync must be idempotent')
     wait_for(lambda: '修复侧栏' in tm('capture-pane', '-p', '-t', side), 'sidebar did not render tasks')
-    wait_for(lambda: worker_cue(side), 'worker focus cue missing')
+    # Sessions only (issue #1950 — #1620's input line, #948's `? 快捷键` row and
+    # #1750's 要你处理 summary went): the whole height is the list's.
+    wait_for(lambda: list_only(side), 'the view still draws a row that is not a session')
     # Only the state glyph has a colour (issue #1622): every other painted cell
     # is PAL_FG or PAL_DIM text, on the default ground or the PAL_SEL raise that
     # the current row (▶) shares with the keyboard's row (›).
@@ -498,10 +534,11 @@ try:
             x += max(1, sidebar.width_of(ch))
     check(pal['PAL_RED'] in glyphs.values() and pal['PAL_CYAN'] in glyphs.values(),
           'the needs / working glyphs lost their state colour: %r' % glyphs)
-    # (the 要你处理 summary, issue #1750, is the one line allowed above it)
-    first = [l for l in tm('capture-pane', '-p', '-t', side).splitlines() if '在问你' not in l][0]
+    # (the 要你处理 summary, issue #1750, is not drawn since #1950: the first row
+    # is a session — the producer still writes the summary, below)
+    first = tm('capture-pane', '-p', '-t', side).splitlines()[0]
     check('worker-one' in first or '修复侧栏' in first,
-          'sidebar should start with a task, not an internal title row')
+          'sidebar should start with a task, not an internal title row: %r' % first)
     check(WORKER_FOCUS in border(p1),
           'active worker border must identify input focus')
     check('INPUT' not in border_text(p1) + border_text(side), 'a border still names its focus')
@@ -526,7 +563,8 @@ try:
     check(asking[7] != '', 'a needs row lost its detail (which kind of `!`)')
     top = row_data(summary=True)[0]
     check(top[0] == 'hdr' and top[2] == '!' and '1 个在问你' in top[3],
-          'the 要你处理 summary is not on top: %r' % (top,))
+          'the producer lost the 要你处理 summary (the list drops it; #1940 retires it): %r' % (top,))
+    check('在问你' not in tm('capture-pane', '-p', '-t', side), 'the list draws the 要你处理 summary again (#1950)')
     tm('set-option', '-w', '-t', w1, '@pin', '1')
     # The 置顶 group (issue #1170): its heading, then the pinned row — bare, no
     # `* ` — then ONE inert rule the view clips to its width.
@@ -538,7 +576,7 @@ try:
     check(sum(1 for r in pinned if r[0] == 'hdr' and r[3].startswith('─')) == 1, 'more than one rule')
     check(sidebar.key_of(pinned[0]) == 'hdr:pin' and sidebar.key_of(pinned[2]) == 'hdr',
           'the 置顶 heading must be a fold stop and the rule never a cursor stop')
-    check(sidebar.tap('hdr:pin', 'hdr:pin') == 'select' and sidebar.placeholder('hdr:pin') == sidebar.PLACEHOLDER,
+    check(sidebar.tap('hdr:pin', 'hdr:pin') == 'select' and sidebar.target_name('hdr:pin') == '',
           'the 置顶 heading names no repo: a tap only selects it')
     tm('set-option', '-uw', '-t', w1, '@pin')
     check(not any(r[0] == 'hdr' for r in row_data()), 'the 置顶 frame outlived the pin')
@@ -568,30 +606,35 @@ try:
     check(w1 in [r[0] for r in row_data()], 'hub history toggle hid live sidebar')
     (cache / 'dash_view_fleet-test').unlink()
 
-    # Keyboard input is sent only to the UI; Enter selects by stable window ID.
+    # A tap selects by stable window ID; the keyboard never moves (issue #1950).
     wait_for(lambda: '└ 修复侧栏' in tm('capture-pane', '-p', '-t', side), 'fold update did not reach view')
     # `marker glyph tree label` — a root's name and a child's start at the same column.
     pane = [l for l in tm('capture-pane', '-p', '-t', side).split('\n') if '修复侧栏' in l]
     check(bool(pane) and pane[0].index('修复侧栏') == 6,
           'the sidebar name column moved: ' + repr(pane[:1]))
-    os.write(terminal, b'\x02E')  # actual prefix E, then terminal arrow + Enter
-    wait_for(lambda: 'fleet-sidebar' in tm('list-clients', '-F', '#{client_key_table}'), 'prefix E did not enter sidebar navigation')
-    wait_for(lambda: tasks_cue(side),
-             'keyboard navigation needs a persistent focus cue')
-    check(WORKER_FOCUS not in border(p1),
-          'worker header claims input focus while keys go to sidebar')
-    os.write(terminal, b'\x1b[B\r')
-    wait_for(lambda: bool(view_on(w2)), 'keyboard jump did not move to second worker')
+    os.write(terminal, b'\x02E')  # prefix E: the list's old "keyboard onto it" — gone
+    time.sleep(.5)
+    check(not navigation(), 'prefix E still puts the keyboard on the list (#1950)')
+    tm('set-option', '-g', '@switches', '')
+    tm('set-hook', '-g', 'session-window-changed[73]', "set-option -gaF @switches '#{window_id} '")
+    switches = lambda: tm('show-options', '-gv', '@switches').split()
+    started = time.monotonic()
+    time.sleep(.6)
+    click(side, row_y(side, "修复侧栏"), repeat=True)
+    wait_for(lambda: bool(view_on(w2)), 'a tap did not move to the second worker')
+    # Informational (issue #1033): the tap → switched latency on this box.
+    print('sidebar timing: tap → view on the next worker in %.2fs' % (time.monotonic() - started))
     check(len(views()) == 1, 'background worker retained a sidebar process')
     check(view_on(w2) == [side] and tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
-          'keyboard navigation recreated the sidebar instead of moving its populated grid')
+          'a tap recreated the sidebar instead of moving its populated grid')
     check(tm('show-options', '-wqv', '-t', w1, '@sidebar_worker') == '',
           'source window retained sidebar worker metadata after the move')
     check(tm('show-options', '-wqv', '-t', w2, '@sidebar_ready_on_select') == p2,
           'destination was selected before its sidebar layout was ready')
-    wait_for(lambda: worker_cue(side),
-             'Enter did not restore the worker focus cue')
     check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'jump did not focus worker input')
+    check(switches() == [w2], 'one tap made %r window switches' % switches())
+    check(not navigation(), 'a tap moved the keyboard onto the list')
+    tm('set-hook', '-gu', 'session-window-changed[73]')
     # A terminal mouse event exercises the shipped root-table forwarding bind.
     side2 = view_on(w2)[0]
     wait_for(lambda: 'worker-one' in tm('capture-pane', '-p', '-t', side2), 'new view not ready')
@@ -605,51 +648,16 @@ try:
     check(tm('show-options', '-wqv', '-t', w1, '@sidebar_ready_on_select') == p1,
           'mouse navigation showed a destination without its sidebar')
     check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'click changed worker pane identity')
-    wait_for(navigation, 'mouse press/release did not leave arrow keys with the sidebar')
-    wait_for(lambda: tasks_cue(side),
-             'click did not visibly focus the sidebar')
-    check(WORKER_FOCUS not in border(p1),
-          'worker still advertises input focus after a sidebar click')
-    # Focus is the cursor on the input line (issue #1764): TASKS keeps one dim
-    # colour whichever pane holds the keys.
-    check(TASKS_FOCUS not in border(side),
-          'sidebar border still paints keyboard focus')
-    nav_text = [border_text(p1), border_text(side)]
-    # ↑↓ follow (issue #822): an arrow through the key table switches to the
-    # highlighted worker once the highlight settles, keeps the client in the
-    # sidebar key table and keeps the worker pane active; a burst that ends on
-    # the current row never switches. Enter/Esc still hand input back (below).
-    tm('set-option', '-g', '@switches', '')
-    tm('set-hook', '-g', 'session-window-changed[73]', "set-option -gaF @switches '#{window_id} '")
-    switches = lambda: tm('show-options', '-gv', '@switches').split()
+    # The keyboard stays with the session (issue #1950): a key after a tap types
+    # into the worker, and the list never shows it.
     worker_before = tm('capture-pane', '-p', '-t', p1)
-    started = time.monotonic()
-    os.write(terminal, b'\x1b[B')
-    wait_for(lambda: bool(view_on(w2)), 'Down after a click did not follow to the highlighted worker')
-    # Informational (issue #1033): the arrow → switched latency on this box.
-    print('sidebar timing: Down → view on the next worker in %.2fs' % (time.monotonic() - started))
-    check(tm('capture-pane', '-p', '-t', p1) == worker_before, 'sidebar arrow leaked into worker input')
-    check(view_on(w2) == [side] and tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
-          'follow recreated the sidebar instead of moving its populated grid')
-    wait_for(navigation, 'follow did not keep the client in the sidebar key table')
-    wait_for(lambda: tasks_cue(side), 'follow lost the navigation cue')
-    check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'follow did not keep the worker pane active')
-    check(WORKER_FOCUS not in border(p2),
-          'worker advertises input focus after a follow')
-    check(switches() == [w2], 'one arrow made %r window switches' % switches())
-    os.write(terminal, b'\x1b[A')
-    wait_for(lambda: bool(view_on(w1)), 'Up did not follow back to the first worker')
-    wait_for(navigation, 'Up follow left the sidebar key table')
-    check(switches() == [w2, w1], 'Up follow made %r window switches' % switches())
-    # One pty write lands both keys inside the debounce, ending on the current
-    # row: a row only passed over is never switched to (nor woken — the wake
-    # hook's dwell is the sleep selftest's). Long enough for a wrong follow to show.
-    tm('send-keys', '-t', side, 'Down', 'Up')
-    time.sleep(1)
-    check(switches() == [w2, w1], 'passing over a row switched windows: %r' % switches())
-    check(view_on(w1) == [side], 'a pass-over moved the sidebar')
-    wait_for(navigation, 'a pass-over left the sidebar key table')
-    tm('set-hook', '-gu', 'session-window-changed[73]')
+    type_keys('zq\r')   # its own line: the select-word leg below reads that pane
+    wait_for(lambda: 'zq' in tm('capture-pane', '-p', '-t', p1), 'a key after a tap did not reach the session')
+    check('zq' not in tm('capture-pane', '-p', '-t', side), 'a key after a tap reached the list')
+    check(not navigation(), 'a tap left the client in a key table of the list')
+    check(WORKER_FOCUS in border(p1), 'the worker lost its input-focus border after a tap')
+    check(TASKS_FOCUS not in border(side), 'sidebar border paints keyboard focus')
+    nav_text = [border_text(p1), border_text(side)]
 
     # The window-changed fast path (issue #1033): a window that already holds a
     # live view naming its worker skips the sync fork; one without a view syncs.
@@ -681,9 +689,12 @@ try:
     stall.write_text('')
     os.replace(staged, rows_bin)
     time.sleep(1.5)  # the view's next refresh is now stuck in the producer
+    wait_for(lambda: refreshing(side), 'a stalled producer never showed 「刷新中…」')
+    time.sleep(.6)   # past the double-click window, THEN read where the row is
+    y = row_y(side, '修复侧栏')
     started = time.monotonic()
-    os.write(terminal, b'\x1b[B')
-    wait_for(lambda: bool(view_on(w2)), 'a stalled producer blocked the arrow follow')
+    click(side, y, repeat=True)
+    wait_for(lambda: bool(view_on(w2)), 'a stalled producer blocked the tap')
     moved = time.monotonic() - started
     wait_for(lambda: any(l.startswith('▶') and '修复侧栏' in l
                          for l in tm('capture-pane', '-p', '-t', side).splitlines()),
@@ -695,14 +706,16 @@ try:
     rows_bin.unlink()
     rows_bin.symlink_to(real_bin / 'tmux-dashboard-rows.sh')
     (bin_dir / 'tmux-dashboard-rows-real.sh').unlink()
-    os.write(terminal, b'\x1b[A')
-    wait_for(lambda: bool(view_on(w1)), 'Up did not follow back after the stalled-producer leg')
-    wait_for(navigation, 'the stalled-producer leg left the sidebar key table')
+    wait_for(lambda: not refreshing(side), 'the list did not recover its frame')
+    time.sleep(.6)
+    click(side, row_y(side, 'worker-one'), repeat=True)
+    wait_for(lambda: bool(view_on(w1)), 'a tap did not go back after the stalled-producer leg')
 
-    # ←/→ fold AT ONCE (issue #1530): with the producer stalled — no frame can
-    # land — ← on the parent hides its child and → brings it back from the rows
-    # last seen open. The bit is written all the same, and the first frame after
-    # the stall agrees with what was painted.
+    # A fold AT ONCE (issue #1530; a tap on the caret since #1950 took ←/→):
+    # with the producer stalled — no frame can land — a tap on the parent's ▾
+    # hides its child and a tap on its ▸ brings it back from the rows last seen
+    # open. The bit is written all the same, and the first frame after the stall
+    # agrees with what was painted.
     kid_shown = lambda: '└ 修复侧栏' in tm('capture-pane', '-p', '-t', side)
     wait_for(kid_shown, 'the child row is not on the list before the fold leg')
     (bin_dir / 'tmux-dashboard-rows-real.sh').symlink_to(real_bin / 'tmux-dashboard-rows.sh')
@@ -712,34 +725,43 @@ try:
     stall.write_text('')
     os.replace(staged, rows_bin)
     time.sleep(1.5)  # the view's next refresh is now stuck in the producer
+    caret = sidebar.width_of(sidebar.row_left(' ', '·', '▾', '')) - 2
+    wait_for(lambda: refreshing(side), 'a stalled producer never showed 「刷新中…」')
+    time.sleep(.6)   # past the double-click window, THEN read where the row is
+    y = row_y(side, 'worker-one')
     started = time.monotonic()
-    os.write(terminal, b'\x1b[D')
-    wait_for(lambda: not kid_shown(), '← did not fold the child away before a producer frame')
+    click(side, y, column=caret, repeat=True)
+    wait_for(lambda: not kid_shown(), 'a tap on ▾ did not fold the child away before a producer frame')
     folded = time.monotonic() - started
-    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '', '← did not write the fold bit')
+    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '', 'the fold tap did not write the fold bit', 20)   # dash-fold-toggle.sh: bash 3.2 sourcing fleet-lib
+    check(refreshing(side), 'the stall ended before the unfold tap')
+    time.sleep(.6)   # past the double-click window, THEN read where the row is
+    y = row_y(side, 'worker-one')
     started = time.monotonic()
-    os.write(terminal, b'\x1b[C')
-    wait_for(kid_shown, '→ did not draw the child row before a producer frame')
+    click(side, y, column=caret, repeat=True)
+    wait_for(kid_shown, 'a tap on ▸ did not draw the child row before a producer frame')
     opened = time.monotonic() - started
-    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '1', '→ did not write the fold bit')
+    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '1', 'the unfold tap did not write the fold bit', 20)
+    check(bool(view_on(w1)), 'a tap on the caret switched windows')
     check(stall.exists(), 'the producer stall ended before the fold was checked')
-    print('sidebar timing: ← → painted in %.2fs / %.2fs with the producer stalled' % (folded, opened))
+    print('sidebar timing: ▾ ▸ taps painted in %.2fs / %.2fs with the producer stalled' % (folded, opened))
     stall.unlink()
     time.sleep(1.5)  # the stale run lands, is dropped, and a fresh one paints
     check(kid_shown(), 'the first frame after the stall disagrees with the fold the view painted')
     rows_bin.unlink()
     rows_bin.symlink_to(real_bin / 'tmux-dashboard-rows.sh')
     (bin_dir / 'tmux-dashboard-rows-real.sh').unlink()
-    wait_for(navigation, 'the fold leg left the sidebar key table')
 
     # Never frozen on the lock (issue #1536): a hook sync holding the view lock
-    # for 2s must not freeze the list — ↓ moves the highlight at once (the local
-    # state), the switch waits, and lands once the lock frees.
+    # for 2s must not freeze the list — a tap moves the highlight at once (the
+    # local state), the switch waits, and lands once the lock frees.
     held = open(str(conf) + '.sidebar.lock', 'w')
     fcntl.flock(held, fcntl.LOCK_EX)
     try:
+        time.sleep(.6)   # past the double-click window, THEN read where the row is
+        y = row_y(side, '修复侧栏')
         started = time.monotonic()
-        os.write(terminal, b'\x1b[B')
+        click(side, y, repeat=True)
         wait_for(lambda: any(l.startswith('›') and '修复侧栏' in l
                              for l in tm('capture-pane', '-p', '-t', side).splitlines()),
                  'a held lock froze the highlight')
@@ -752,9 +774,10 @@ try:
         held.close()
     wait_for(lambda: bool(view_on(w2)), 'the switch did not land after the lock freed')
     print('sidebar timing: highlight %.2fs under a 2s-held lock' % highlighted)
-    os.write(terminal, b'\x1b[A')
-    wait_for(lambda: bool(view_on(w1)), 'Up did not follow back after the lock leg')
-    wait_for(navigation, 'the lock leg left the sidebar key table')
+    wait_for(lambda: not refreshing(side), 'the list did not recover its frame')
+    time.sleep(.6)
+    click(side, row_y(side, 'worker-one'), repeat=True)
+    wait_for(lambda: bool(view_on(w1)), 'a tap did not go back after the lock leg')
 
     # The popup pause ends WITH the popup (issue #1536), not 30s later: a window
     # renamed under a live holder stays unpainted, and shows within a second of
@@ -809,7 +832,6 @@ try:
     rows_bin.unlink()
     rows_bin.symlink_to(real_bin / 'tmux-dashboard-rows.sh')
     (bin_dir / 'tmux-dashboard-rows-real.sh').unlink()
-    wait_for(navigation, 'the hung-producer leg left the sidebar key table')
 
     # Degenerate case (a one-repo fleet, no repos/ overlay): the async producer
     # paints exactly what the painter always has — `marker glyph tree label`,
@@ -829,15 +851,14 @@ try:
     def same_frame():
         lines = [spin(l.rstrip()) for l in tm('capture-pane', '-p', '-t', side).splitlines()]
         want = [spin(l) for l in painted_rows()]
-        return lines[:len(want)] == want and not any(l.strip() for l in lines[len(want):-2])
+        # nothing below the rows (issue #1950): no `? 快捷键` row, no input line
+        return lines[:len(want)] == want and not any(l.strip() for l in lines[len(want):])
     wait_for(same_frame, 'a one-repo sidebar frame differs from its rows: %r' % painted_rows())
 
-    # The right pane was already tmux-active: clicking it must still leave the
-    # navigation table. Actual typing then reaches that pane, not the sidebar.
+    # The right pane was already tmux-active: clicking it keeps it so. Actual
+    # typing then reaches that pane, not the sidebar.
     click(p1, row=3)
-    wait_for(lambda: not navigation(), 'clicking the already-active worker did not leave navigation')
-    wait_for(lambda: worker_cue(side),
-             'worker click left the sidebar highlighted')
+    check(not navigation(), 'clicking the worker entered a key table of the list')
     check(WORKER_FOCUS in border(p1),
           'worker click did not restore its input badge')
     check([border_text(p1), border_text(side)] == nav_text,
@@ -883,67 +904,22 @@ try:
              tm('display-message', '-p', '-t', side, '#{pane_pid}') == side_pid,
              'unzoom after a divider double-click lost the sidebar view')
 
-    # Blank space and rapid repeat clicks are focus targets too. The
-    # release/double-click events must not silently reset the custom key table.
+    # Blank space and rapid repeat clicks on the list do nothing (issue #1950:
+    # they were the keyboard's way onto it): no switch, no key table, no menu.
     click(side, row=8)
-    wait_for(navigation, 'clicking sidebar blank space did not enter navigation')
     click(side, row=8, repeat=True)
     click(side, row=8, repeat=True)
-    wait_for(lambda: tasks_cue(side),
-             'repeat/blank sidebar click lost the focus cue')
-    wait_for(navigation, 'repeat/blank sidebar click lost keyboard navigation')
-    os.write(terminal, b'\x1b[B\r')
-    wait_for(lambda: bool(view_on(w2)), 'click then Down/Enter did not open the selected worker')
-    wait_for(lambda: not navigation(), 'Enter after mouse navigation did not return input to worker')
-    tm('select-window', '-t', w1)
-    wait_for(lambda: bool(view_on(w1)), 'sidebar did not follow return to first worker')
-
-    os.write(terminal, b'\x02E')
-    wait_for(lambda: tasks_cue(side), 'second navigation entry lost focus cue')
-    os.write(terminal, b'\x1b')
-    wait_for(lambda: worker_cue(side), 'Escape did not restore input focus')
-    check(WORKER_FOCUS in border(p1),
-          'Escape left the worker border dimmed')
-
-    # A pointer MOVE keeps navigation (issue #925). Claude Code asks for
-    # any-motion tracking, so every nudge of the mouse arrives as a motion
-    # report — tmux has no bindable name for it, so it lands on `Any`. The
-    # worker requests 1003+SGR here (written to its pty as if it printed it).
-    def worker_tracking(on):
-        with open(tm('display-message', '-p', '-t', p1, '#{pane_tty}'), 'w') as tty:
-            tty.write('\x1b[?1003%s\x1b[?1006%s' % ((on and 'h') or 'l', (on and 'h') or 'l'))
-    worker_tracking(True)
-    wait_for(lambda: tm('display-message', '-p', '-t', p1, '#{mouse_all_flag}') == '1',
-             'the worker never turned on any-motion tracking')
-    os.write(terminal, b'\x02E')
-    wait_for(navigation, 'prefix E did not enter navigation before the mouse move')
-    # The key table flips at once; the view paints its cue on its own clock. Wait
-    # for the cue BEFORE the move, or a slow paint reads as the move dropping it.
-    wait_for(lambda: tasks_cue(side), 'prefix E did not paint the task highlight before the mouse move')
-    mx = int(tm('display-message', '-p', '-t', p1, '#{pane_left}')) + 10
-    for my in (3, 4, 5):
-        os.write(terminal, ('\x1b[<35;%d;%dM' % (mx, my)).encode())
     time.sleep(.5)
-    check(navigation(), 'a mouse move over the worker dropped sidebar navigation')
-    check(tasks_cue(side), 'a mouse move over the worker dropped the task highlight')
-    # A right-click on the worker still hands the keyboard back.
-    os.write(terminal, ('\x1b[<2;%d;4M\x1b[<2;%d;4m' % (mx, mx)).encode())
-    wait_for(lambda: not navigation(), 'a right-click on the worker did not leave navigation')
-    wait_for(lambda: worker_cue(side), 'a right-click on the worker left the sidebar highlighted')
-    worker_tracking(False)
-
-    # tmux <=3.6a discards top pane-status clicks before key lookup (its mouse
-    # hit test recognizes only right/bottom borders). 3.7+ exposes the top border.
-    # Use the server version: it is the server that dispatches mouse events.
-    version_text = tm('display-message', '-p', '#{version}')
+    check(not navigation(), 'a tap on blank list space took the keyboard')
+    check(view_on(w1) == [side], 'a tap on blank space moved the list')
+    os.write(terminal, b'\x1b[B\r')
+    time.sleep(1)
+    check(view_on(w1) == [side] and not view_on(w2), '↓ ↵ after a tap still drive the list')
+    # A top-border click (tmux 3.7+ exposes it) is no way onto the list either.
     if server_version() >= (3, 7):
         click(side, row=-1)
-        wait_for(navigation, 'clicking the top border did not enter sidebar navigation')
-    else:
-        print('selftest NOTE: tmux %s — top-border click unavailable; checking sidebar content click' %
-              version_text, flush=True)
-        click(side, row=8)
-        wait_for(navigation, 'clicking the sidebar did not enter navigation before resize')
+        time.sleep(.5)
+        check(not navigation(), 'clicking the top border entered a key table of the list')
     tm('resize-window', '-t', w1, '-x', '100', '-y', window_height)
     wait_for(lambda: not views(), 'narrow screen did not hide sidebar')
     check(not navigation(), 'auto-hidden sidebar retained keyboard focus')
@@ -956,395 +932,108 @@ try:
     check(view_on(w1) != [legacy] and len(view_on(w1)) == 1,
           'sync must replace a pre-upgrade renderer once before reusing panes')
     side = view_on(w1)[0]
-    wait_for(lambda: input_line(side).startswith('›'), 'upgraded view not ready')
+    wait_for(lambda: '修复侧栏' in tm('capture-pane', '-p', '-t', side), 'upgraded view not ready')
     screen = tm('capture-pane', '-p', '-t', side)
     check('Hide' not in screen and 'q hide' not in screen, 'sidebar still paints a click target for hide')
     check('new task' not in screen and 'Keyboard' not in screen and '↑↓' not in screen,
-          'the footer hint rows survived: the list must end in ONE input line: ' + repr(screen))
+          'the footer hint rows survived: ' + repr(screen))
+    check(list_only(side), 'the upgraded view draws a row that is not a session: ' + repr(screen))
 
-    # ONE input line closes the list (issue #896). Away from the sidebar it is a
-    # bare `›`; a tap on it only focuses (no popup, no hide) and shows the dim
-    # placeholder.
-    wait_for(lambda: worker_cue(side), 'away from the sidebar the input line must be a bare ›')
+    # A question opens on ONE line under the session (issue #1950 — it was the
+    # list's own last row, #1620): parked on the view like the row menu parks
+    # one, it is a pane of its own (`@stage_ask`) holding the keyboard; Esc
+    # cancels it, the pane goes and the keyboard is back on the session.
     height = int(tm('display-message', '-p', '-t', side, '#{pane_height}'))
     def popup_open():
         return tm('show-options', '-gqv', '@popup_open') not in ('', '0')
-    click(side, row=height - 1)
-    wait_for(navigation, 'tapping the input line did not put the keyboard on the sidebar')
-    wait_for(lambda: tasks_cue(side), 'the focused, empty input line must show its placeholder')
-    check(not popup_open() and bool(view_on(w1)) and 'FLEET_SIDEBAR=1' in conf.read_text(),
-          'tapping the input line opened a popup, hid the view or changed the saved preference')
-
-    # ⌃n (dash-keymap.sh --panel sidebar `new`, and its ⌥n fallback) asks for
-    # the new task's title on THIS input line (issue #1620 — it was the hub's
-    # new-task popup): no popup opens, the `?` row names where it goes, Esc
-    # cancels it and the keyboard stays here.
+    def park(verb):
+        tm('set-option', '-p', '-t', side, '@sidebar_ask', verb, ';', 'send-keys', '-t', side, 'F12')
     conf.write_text(fleet_conf + 'FLEET_REPO=example/repo\n')
-    for chord, label in ((b'\x0e', 'ctrl-n'), (b'\x1bn', 'alt-n (the prefix fallback)')):
-        os.write(terminal, chord)
-        wait_for(lambda: input_line(side) == '新任务› ▏', label + ' did not ask on the input line: %r' % input_line(side))
-        check(not popup_open() and bool(view_on(w1)), label + ' opened a popup or hid the sidebar')
-        check('→ repo' in tm('capture-pane', '-p', '-t', side).splitlines()[-2],
-              label + ': the ? row does not name the repo: %r' % tm('capture-pane', '-p', '-t', side))
-        type_keys('标题')
-        wait_for(lambda: input_line(side) == '新任务› 标题▏', label + ': the title did not type')
-        os.write(terminal, b'\x1b')
-        wait_for(lambda: tasks_cue(side), label + ': Esc did not cancel the title: %r' % input_line(side))
-        check(navigation(), label + ': Esc on the title took the keyboard off the sidebar')
-        check(not popup_open(), label + ' raised @popup_open')
+    park('new')
+    try:
+        wait_for(lambda: ask_pane(w1)[0], 'a parked `new` opened no question under the session')
+    except AssertionError as error:
+        raise AssertionError('%s\npanes: %s\nbar: %r' % (error, tm('list-panes', '-a', '-F',
+            '#{pane_id} #{window_id} #{@sidebar} #{@stage_ask} #{@sidebar_worker} #{pane_start_command}'),
+            painted_text()[-400:]))
+    pane_q, active = ask_pane(w1)
+    wait_for(lambda: '新任务›' in ask_line(w1) and '→ repo' in ask_line(w1),
+             'the question line does not ask for the title and name the repo: %r' % ask_line(w1))
+    check(active and not navigation(), 'the question line does not hold the keyboard')
+    check(int(tm('display-message', '-p', '-t', pane_q, '#{pane_height}')) == 1 and
+          tm('display-message', '-p', '-t', pane_q, '#{pane_left}') == tm('display-message', '-p', '-t', p1, '#{pane_left}'),
+          'the question is not one line under the session')
+    check(not popup_open() and view_on(w1) == [side] and list_only(side),
+          'the question opened a popup, moved the list or drew on it')
+    type_keys('标题')
+    wait_for(lambda: '新任务› 标题' in ask_line(w1), 'the title did not type on the question line: %r' % ask_line(w1))
+    check('标题' not in tm('capture-pane', '-p', '-t', p1), 'the title leaked into the session')
+    os.write(terminal, b'\x1b')
+    wait_for(lambda: not ask_pane(w1)[0], 'Esc did not close the question line')
+    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'the keyboard did not come back to the session')
+    check(not popup_open(), 'the question raised @popup_open')
     conf.write_text(fleet_conf)
 
-    # The `? 快捷键` row (issue #948) sits right above the input line. A tap on
-    # it, or `?` on an EMPTY input line, opens the sidebar's own key sheet
-    # (fleet-keys.sh --context sidebar) in a popup that raises @popup_open; q
-    # closes it, clears the flag, and the keyboard is still on the sidebar.
-    lines = tm('capture-pane', '-p', '-t', side).splitlines()
-    check(len(lines) >= 2 and lines[-2].strip() == '? 快捷键',
-          'the row above the input line is not the ? row: %r' % lines[-2:])
-    # A Chinese IME's full-width ？ is the same key (issue #965).
-    for how in ('a tap on the ? row', '? on an empty input line', '？ on an empty input line'):
-        del screen_out[:]
-        if how.startswith('a tap'):
-            click(side, row=height - 2)
-        else:
-            os.write(terminal, how.split()[0].encode())
-        wait_for(popup_open, how + ' did not open a popup')
-        wait_for(lambda: '任务栏快捷键' in bytes(screen_out).decode('utf-8', 'replace'),
-                 how + ' did not show the sidebar key sheet')
-        check(bool(view_on(w1)), how + ' hid the sidebar')
-        os.write(terminal, b'q')
-        wait_for(lambda: not popup_open(), 'q on the sidebar key sheet left @popup_open raised')
-        wait_for(lambda: navigation() and tasks_cue(side),
-                 'after ' + how + ' the keyboard did not return to the sidebar')
-        check(input_line(side) == '› 新会话名…', how + ' typed into the input line')
-    # Inside a name `?` is a character: it types, and nothing opens.
-    type_keys('ab?')
-    wait_for(lambda: input_line(side) == '› ab?▏', '? inside a name did not type: %r' % input_line(side))
-    time.sleep(.5)
-    check(not popup_open(), '? inside a name opened the key sheet')
-    os.write(terminal, b'\x1b')
-    wait_for(lambda: tasks_cue(side), 'Esc did not clear the ab? name')
-
-    # Typing (issue #896): a click on blank sidebar space, then plain keys, fill
-    # the input line — the worker pane stays active and never sees them.
-    click(side, row=height - 3)
-    wait_for(navigation, 'clicking sidebar blank space did not enter navigation')
-    worker_before = tm('capture-pane', '-p', '-t', p1)
-    type_keys('demo')
-    wait_for(lambda: input_line(side) == '› demo▏', 'typed d e m o did not reach the input line: %r' % input_line(side))
-    check(tm('show-options', '-pqv', '-t', side, '@sidebar_input') == '1', 'a typed name did not set @sidebar_input')
-    check(tm('capture-pane', '-p', '-t', p1) == worker_before, 'typing into the sidebar leaked into the worker')
-    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'typing made the sidebar the active pane')
-    # Esc clears a typed name and KEEPS the keyboard; letters that were commands
-    # (q hide, n new task, j/k move) type; backspace deletes.
-    os.write(terminal, b'\x1b')
-    wait_for(lambda: tasks_cue(side), 'Esc did not clear the typed name')
-    check(navigation(), 'Esc on a typed name gave the keyboard back instead of only clearing')
-    check(tm('show-options', '-pqv', '-t', side, '@sidebar_input') == '', 'clearing left @sidebar_input set')
-    type_keys('qnjk')
-    wait_for(lambda: input_line(side) == '› qnjk▏', 'q/n/j/k did not type: %r' % input_line(side))
-    check(bool(view_on(w1)) and 'FLEET_SIDEBAR=1' in conf.read_text() and not popup_open(),
-          'a letter still acted as a command (q hid / n opened a popup)')
-    type_keys('\x7f\x7f\x7f\x7f')
-    wait_for(lambda: tasks_cue(side), 'backspace did not delete the typed name')
-    # A cursor on the input line (issue #1097): ←→ Home End ⌥←→ ⌃a ⌃e ⌃w ⌃k
-    # edit in place, as on Claude's prompt — and the worker sees none of them.
-    worker_before = tm('capture-pane', '-p', '-t', p1)
-    def line_is(want, why):
-        wait_for(lambda: input_line(side) == ('› ' + want).rstrip(),
-                 why + ': %r' % input_line(side))
-    for keys, want, why in (
-            (b'ab', 'ab▏', 'a b did not type'),
-            (b'\x1b[D', 'a▏b', '← on a typed name did not move the cursor'),
-            (b'c', 'ac▏b', 'a key typed after ← did not insert at the cursor'),
-            (b'\x1b[H', '▏acb', 'Home on a typed name did not go to the line start'),
-            (b'\x1b[F', 'acb▏', 'End on a typed name did not go to the line end'),
-            (b'\x01', '▏acb', '⌃a did not go to the line start'),
-            (b'\x1b[C', 'a▏cb', '→ on a typed name did not move the cursor'),
-            (b'\x05', 'acb▏', '⌃e did not go to the line end'),
-            (b'\x15foo bar baz', 'foo bar baz▏', '⌃u + typing did not refill the line'),
-            (b'\x17', 'foo bar ▏', '⌃w did not delete the word before the cursor'),
-            (b'\x1bb', 'foo ▏bar ', '⌥← (ESC b) did not move a word left'),
-            (b'\x1b[1;3D', '▏foo bar ', '⌥← (ESC[1;3D) did not move a word left'),
-            (b'\x1bf', 'foo▏ bar ', '⌥→ (ESC f) did not move a word right'),
-            (b'\x1b[1;3C', 'foo bar▏ ', '⌥→ (ESC[1;3C) did not move a word right'),
-            (b'\x1bb\x0b', 'foo ▏', '⌃k did not delete to the line end')):
-        os.write(terminal, keys)
-        line_is(want, why)
-    check(navigation(), 'the editing keys gave the keyboard back')
-    check(tm('capture-pane', '-p', '-t', p1) == worker_before, 'an editing key leaked into the worker')
-    # CJK: the cursor lands between the right characters — the go-live evidence.
-    os.write(terminal, b'\x15')
-    type_keys('新会话 测试')
-    os.write(terminal, b'\x1bb')
-    line_is('新会话 ▏测试', '⌥← did not move over a CJK word')
-    type_keys('x')
-    line_is('新会话 x▏测试', 'a key typed mid-CJK landed in the wrong place')
-    if os.environ.get('FLEET_SIDEBAR_EVIDENCE'):
-        Path(os.environ['FLEET_SIDEBAR_EVIDENCE'], 'cursor.txt').write_text(
-            tm('capture-pane', '-p', '-t', side) + '\n')
-    os.write(terminal, b'\x15')
-    wait_for(lambda: tasks_cue(side), '⌃u did not clear the edited line')
-    # An IME commit (issue #1098): 「你好世界」 in ONE write lands whole on the
-    # input line and not a character of it on the worker — on tmux < 3.7 too,
-    # where only assume-paste-time 0 + the root `Any` keep the later keys here.
-    worker_before = tm('capture-pane', '-p', '-t', p1)
-    type_keys('你好世界')
-    wait_for(lambda: input_line(side) == '› 你好世界▏',
-             'an IME commit did not land whole on the input line: %r' % input_line(side))
-    time.sleep(.3)
-    worker_now = tm('capture-pane', '-p', '-t', p1)
-    # FLEET_SIDEBAR_EVIDENCE=<dir>: keep both panes as they stand (fleet-evidence.sh).
-    if os.environ.get('FLEET_SIDEBAR_EVIDENCE'):
-        for name, pane in (('sidebar', side), ('worker', p1)):
-            Path(os.environ['FLEET_SIDEBAR_EVIDENCE'], name + '.txt').write_text(
-                tm('capture-pane', '-p', '-t', pane) + '\n')
-    check(worker_now == worker_before and not any(c in worker_now for c in '你好世界'),
-          'an IME commit leaked into the worker: %r' % worker_now.splitlines()[-3:])
-    # Handed back (Esc clears, Esc again returns the keyboard), the root `Any`
-    # lets go: the same burst reaches the worker, and the input line stays empty.
-    os.write(terminal, b'\x1b')
-    wait_for(lambda: tasks_cue(side), 'Esc did not clear the IME commit')
-    os.write(terminal, b'\x1b')
-    wait_for(lambda: not navigation(), 'Esc on an empty input line kept the keyboard')
-    type_keys('你好世界')
-    wait_for(lambda: '你好世界' in tm('capture-pane', '-p', '-t', p1),
-             'after the hand-back an IME commit did not reach the worker')
-    # The view repaints its cue on a 1s poll of the key table — wait it out.
-    wait_for(lambda: worker_cue(side), 'the input line did not return to the worker cue: %r' % input_line(side))
-    check(not navigation() and not any(c in input_line(side) for c in '你好世界'),
-          'after the hand-back the root Any pulled a key into the sidebar: %r' % input_line(side))
-    tm('send-keys', '-t', p1, 'C-u')
-    click(side, row=height - 3)
-    wait_for(navigation, 'clicking sidebar blank space did not re-enter navigation')
-
-    # A terminal paste (issue #1105). Bracketed (ESC[200~ … ESC[201~), tmux
-    # forwards it to the CLIENT's pane before any key table — the two `Any`
-    # binds above never see it. While the keyboard is here the client's OWN pane
-    # is the view (`refresh-client -f active-pane` + a client-level select-pane,
-    # set by every take), so the paste lands on the input line; the WINDOW's
-    # active pane — what every background script resolves — stays the worker.
-    def paste(text):
-        os.write(terminal, b'\x1b[200~' + text.encode() + b'\x1b[201~')
-    def pinned():
-        return 'active-pane' in tm('list-clients', '-F', '#{client_flags}')
-    with open(tm('display-message', '-p', '-t', p1, '#{pane_tty}'), 'w') as tty:
-        tty.write('\x1b[?2004h')   # the worker asks for bracketed paste, as Claude does
-    wait_for(pinned, 'taking the keyboard did not pin the client to the view')
-    worker_before = tm('capture-pane', '-p', '-t', p1)
-    paste('issue 12 修登录')
-    wait_for(lambda: input_line(side) == '› issue 12 修登录▏',
-             'a paste did not land on the input line: %r' % input_line(side))
-    time.sleep(.3)
-    worker_now = tm('capture-pane', '-p', '-t', p1)
-    if os.environ.get('FLEET_SIDEBAR_EVIDENCE'):
-        for name, pane_ in (('paste-sidebar', side), ('paste-worker', p1)):
-            Path(os.environ['FLEET_SIDEBAR_EVIDENCE'], name + '.txt').write_text(
-                tm('capture-pane', '-p', '-t', pane_) + '\n')
-    check(worker_now == worker_before and 'issue 12' not in worker_now,
-          'a paste leaked into the worker: %r' % worker_now.splitlines()[-3:])
-    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1,
-          'routing the paste to the view changed the window\'s active pane')
-    check(navigation(), 'a paste gave the keyboard back')
-    # A pasted paragraph is ONE name: line breaks become spaces and nothing is
-    # submitted at them; the paste's own trailing newline is dropped.
-    os.write(terminal, b'\x15')
-    wait_for(lambda: tasks_cue(side), '⌃u did not clear the pasted line')
-    before = set(windows())
-    paste('issue 12\n修登录\n')
-    wait_for(lambda: input_line(side) == '› issue 12 修登录▏',
-             'a multi-line paste did not land as one line: %r' % input_line(side))
-    time.sleep(.3)
-    check(set(windows()) == before, 'a multi-line paste submitted the line')
-    # Handed back (⌃u, Esc), the pin goes with the keyboard: the same paste
-    # reaches the worker — still bracketed — and the input line stays empty.
-    os.write(terminal, b'\x15')
-    wait_for(lambda: tasks_cue(side), '⌃u did not clear the multi-line paste')
-    os.write(terminal, b'\x1b')
-    wait_for(lambda: not navigation(), 'Esc on an empty input line kept the keyboard (paste leg)')
-    wait_for(lambda: not pinned(), 'handing the keyboard back left the client pinned to the view')
-    paste('issue 12 修登录')
-    wait_for(lambda: 'issue 12 修登录' in tm('capture-pane', '-p', '-t', p1),
-             'after the hand-back a paste did not reach the worker')
-    check('200~' in tm('capture-pane', '-p', '-t', p1), 'the worker\'s paste lost its brackets')
-    wait_for(lambda: worker_cue(side), 'the input line did not return to the worker cue after the paste hand-back')
-    check('issue 12' not in input_line(side), 'after the hand-back a paste was pulled into the sidebar')
-    tm('send-keys', '-t', p1, 'C-u')
-    # A follow moves the view with join-pane, and tmux forgets a moved pane's
-    # client entries: the view re-pins itself after the jump, so a paste right
-    # after ↓ lands on it in the NEW window, not on that window's worker.
-    click(side, row=height - 3)
-    wait_for(navigation, 'clicking sidebar blank space did not re-enter navigation (follow paste leg)')
-    wait_for(pinned, 'a click on the sidebar did not pin the client to the view')
-    os.write(terminal, b'\x1b[B')
-    wait_for(lambda: bool(view_on(w2)), 'Down did not follow to the second worker (follow paste leg)')
-    wait_for(navigation, 'the follow left the sidebar key table (follow paste leg)')
-    time.sleep(.3)
-    paste('issue 12 修登录')
-    wait_for(lambda: input_line(side) == '› issue 12 修登录▏',
-             'after a follow the paste did not land on the moved view: %r' % input_line(side))
-    time.sleep(.3)
-    check('issue 12' not in tm('capture-pane', '-p', '-t', p2), 'after a follow the paste leaked into the new worker')
-    check(tm('display-message', '-p', '-t', w2, '#{pane_id}') == p2, 'the re-pin changed the new window\'s active pane')
-    os.write(terminal, b'\x15')
-    wait_for(lambda: tasks_cue(side), '⌃u did not clear the pasted line (follow paste leg)')
-    os.write(terminal, b'\x1b[A')
-    wait_for(lambda: bool(view_on(w1)), 'Up did not follow back (follow paste leg)')
-    wait_for(navigation, 'Up follow left the sidebar key table (follow paste leg)')
-    # prefix z from the sidebar zooms the WORKER and hands the keyboard back —
-    # tmux's stock resize-pane -Z would zoom the pinned view and, worse, make it
-    # the window's active pane. prefix [ is bound the same way.
-    os.write(terminal, b'\x02z')
-    wait_for(lambda: zoomed(w1) == '1', 'prefix z from the sidebar did not zoom')
-    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1,
-          'prefix z from the sidebar zoomed the view, not the worker')
-    wait_for(lambda: not navigation() and not pinned(), 'prefix z left the keyboard (or the pin) on the sidebar')
-    os.write(terminal, b'\x02z')
-    wait_for(lambda: zoomed(w1) == '0', 'prefix z did not unzoom')
-    wait_for(lambda: view_on(w1) == [side], 'unzoom after prefix z lost the sidebar view')
-    # A prefix command with no hand-back of its own (prefix i, display-message)
-    # leaves the table pinned; the view's 1s reconcile drops the pin, and the
-    # root `Any` drops it on the first key regardless — typing reaches the worker.
-    click(side, row=height - 3)
-    wait_for(navigation, 'clicking sidebar blank space did not re-enter navigation (prefix i leg)')
-    wait_for(pinned, 'a click on the sidebar did not pin the client (prefix i leg)')
-    os.write(terminal, b'\x02i')
-    wait_for(lambda: not navigation(), 'prefix i did not leave the sidebar key table')
-    wait_for(lambda: not pinned(), 'the reconcile did not drop the pin after prefix i')
-    type_keys('after-prefix-i')
-    wait_for(lambda: 'after-prefix-i' in tm('capture-pane', '-p', '-t', p1),
-             'after prefix i typing did not reach the worker')
-    check('after-prefix-i' not in input_line(side), 'after prefix i typing was pulled into the sidebar')
-    tm('send-keys', '-t', p1, 'C-u')
-    with open(tm('display-message', '-p', '-t', p1, '#{pane_tty}'), 'w') as tty:
-        tty.write('\x1b[?2004l')
-    click(side, row=height - 3)
-    wait_for(navigation, 'clicking sidebar blank space did not re-enter navigation (after the paste legs)')
-
-    # Enter on a name the fleet refuses (the per-fleet cap): the reason shows on
-    # the input line, the name stays, nothing spawns, the keyboard stays.
+    # Why a session could not open is on the BAR (issue #1950: it was the input
+    # line's, for 4 seconds): the per-fleet cap refuses a scratch — the reason is
+    # drawn on the client's status line, nothing spawns, the list stays sessions.
     before = set(windows())
     conf.write_text(fleet_conf + 'FLEET_MAX_SESSIONS=1\n')
-    type_keys('demo')
-    wait_for(lambda: input_line(side) == '› demo▏', 'typing after the popup test failed')
-    os.write(terminal, b'\r')
-    wait_for(lambda: input_line(side).startswith('› ✗') and 'capacity' in input_line(side),
-             'a refused spawn did not toast its reason: %r' % input_line(side))
+    del screen_out[:]
+    park('scratch')
+    wait_for(lambda: '✗' in painted_text() and 'capacity' in painted_text(),
+             'a refused spawn did not say why on the bar: %r' % painted_text()[-300:])
     check(set(windows()) == before, 'a refused spawn created a window')
-    check(navigation(), 'a refused spawn took the keyboard off the sidebar')
-    wait_for(lambda: input_line(side) == '› demo▏', 'the typed name was lost after the refusal toast')
+    check(list_only(side), 'the refusal was drawn on the list')
     conf.write_text(fleet_conf)
+    time.sleep(1.5)   # the refused spawn's script exits after its word (one spawn at a time, #1608)
 
-    # Enter on a name: a scratch session named after it, via the hub's own
-    # dash-raw-session.sh — it becomes current, the view moves there, the input
-    # line empties, and the NEW agent pane is active with the keyboard.
-    os.write(terminal, b'\r')
-    wait_for(lambda: set(windows()) - before, 'Enter on a typed name did not spawn a session')
-    new = (set(windows()) - before).pop()
-    wait_for(lambda: tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}') == new,
-             'the spawned session did not become the current window')
-    check('demo' in tm('display-message', '-p', '-t', new, '#{window_name}'), 'the new session is not named after the input')
-    check(tm('show-options', '-wqv', '-t', new, '@raw') == '1', 'the input line spawned something other than a scratch')
-    check(tm('show-options', '-wqv', '-t', new, '@origin') == '',
-          'a sidebar spawn nested under the worker it was typed in (must be the hub ⌃s: no @origin)')
-    wait_for(lambda: view_on(new) == [side], 'the view did not follow to the new session')
-    wait_for(lambda: worker_cue(side), 'the input line did not empty and hand the keyboard back: %r' % input_line(side))
-    agent = tm('display-message', '-p', '-t', new, '#{pane_id}')
-    check(agent != side and tm('show-options', '-wqv', '-t', new, '@sidebar_worker') == agent,
-          'the new session\'s agent pane is not the active one')
-    check(not navigation(), 'the keyboard stayed on the sidebar after the spawn')
-    check(tm('show-options', '-pqv', '-t', side, '@sidebar_input') == '', 'the spawn left @sidebar_input set')
-    spawned = [new]
-
-    # A CJK name arrives whole (UTF-8 bytes through the Any bind) and sits in
-    # place: `› ` then the name, no cell drift.
-    click(side, row=height - 3)
-    wait_for(navigation, 'clicking the moved view did not enter navigation')
-    before = set(windows())
-    type_keys('修复 demo')
-    wait_for(lambda: input_line(side) == '› 修复 demo▏', 'a CJK name was mangled: %r' % input_line(side))
-    os.write(terminal, b'\r')
-    wait_for(lambda: set(windows()) - before, 'Enter on a CJK name did not spawn a session')
-    spawned += list(set(windows()) - before)
-    wait_for(lambda: tm('display-message', '-p', '-t', 'fleet-test:', '#{window_name}') == '修复 demo',
-             'the CJK session is not current or lost its name')
-    # Wait for the spawn's SCRIPT to exit, not just its window (issue #1608): the
-    # line empties and @sidebar_input clears only then. On a loaded macOS runner
-    # the ⌃s leg below pressed its key while this line still read `› 修复 demo …`
-    # and the sidebar dropped it as «a spawn in flight» (three red macOS shards,
-    # green on ubuntu where the script's tail fits in the gap).
-    wait_for(lambda: not spawning(side) and tm('show-options', '-pqv', '-t', side, '@sidebar_input') == '',
-             'the CJK spawn did not finish (its script exit) before the next key: %r' % input_line(side))
-    tm('select-window', '-t', w1)
-    wait_for(lambda: view_on(w1) == [side], 'the view did not come back to the first worker')
-    wait_for(lambda: not navigation(), 'the CJK spawn left the keyboard on the sidebar')
-    for window in spawned:
-        tm('kill-window', '-t', window)
-
-    # The full-screen list's own actions (issue #1532), each pressed on the
-    # attached terminal. ⌃s: a scratch session NOW — the hub's ⌃s, unnamed
-    # (dash-raw-session.sh --selection) — and it becomes current. A bare ⌃s
-    # is XOFF to a tty with IXON on: only a view that switched IXON off ever
-    # sees the byte, which is what this pins.
+    # The list's own actions are verbs (issue #1950 — its ⌃s ⌃i ⌃t ⌃r ⌃o went
+    # with the keyboard): `scratch` a scratch session NOW — the hub's ⌃s, unnamed
+    # (dash-raw-session.sh --selection) — and it becomes current.
     def side_rows():
         return tm('capture-pane', '-p', '-t', side).splitlines()
     def row_line(text):
         return next((l.rstrip() for l in side_rows() if text in l), '')
-    click(side, row=height - 3)
-    wait_for(navigation, 'clicking the sidebar did not enter navigation before ⌃s')
+    tm('select-window', '-t', w1)
+    wait_for(lambda: view_on(w1) == [side], 'the view is not on the first worker before `scratch`')
     before = set(windows())
-    # Sequencing pin (issue #1608): a ⌃s pressed while an earlier spawn's script
-    # is still running is dropped by design (one spawn at a time), so a red here
-    # names the leg above, not a slow runner.
-    check(not spawning(side), '⌃s pressed while a spawn was still in flight: %r' % input_line(side))
-    os.write(terminal, b'\x13')
-    seen = set()
-    def spawned_or_seen():
-        seen.add(input_line(side))
-        return set(windows()) - before
-    try:
-        wait_for(spawned_or_seen, '⌃s did not spawn a scratch session')
-    except AssertionError as error:
-        raise AssertionError('%s — input lines seen: %r' % (error, sorted(seen)))
+    park('scratch')
+    wait_for(lambda: set(windows()) - before, '`scratch` did not spawn a scratch session')
     new = (set(windows()) - before).pop()
     wait_for(lambda: tm('show-options', '-wqv', '-t', new, '@raw') == '1',
-             '⌃s spawned something other than a scratch')
-    check(tm('show-options', '-wqv', '-t', new, '@origin') == '', '⌃s nested its scratch under the worker (must be the hub ⌃s)')
+             '`scratch` spawned something other than a scratch')
+    check(tm('show-options', '-wqv', '-t', new, '@origin') == '', '`scratch` nested its scratch under the worker (must be the hub ⌃s)')
     wait_for(lambda: tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}') == new,
-             'the ⌃s session did not become the current window')
-    wait_for(lambda: view_on(new) == [side], 'the view did not follow to the ⌃s session')
-    # The spawn hands the keyboard to the new session when it EXITS, which can be
-    # after its window shows: wait for that, or it lands after the click below.
-    wait_for(lambda: worker_cue(side) and not navigation(),
-             'the ⌃s spawn did not hand the keyboard back: %r' % input_line(side))
+             'the `scratch` session did not become the current window')
+    wait_for(lambda: view_on(new) == [side], 'the view did not follow to the `scratch` session')
+    check(not navigation(), 'the spawn left a client in a key table of the list')
+    time.sleep(1)  # the spawn's script exits after its window shows (issue #1608)
     tm('select-window', '-t', w1)
-    wait_for(lambda: view_on(w1) == [side], 'the view did not come back after ⌃s')
+    wait_for(lambda: view_on(w1) == [side], 'the view did not come back after `scratch`')
     tm('kill-window', '-t', new)
 
-    # ⌃i — the Tab key: the info column, the hub's issue · PR · ctx% cells right-
-    # aligned on each row (worker-one is issue 1, no PR, no ctx reading). Folded
-    # by default; open, the view widens for it but never past
-    # FLEET_SIDEBAR_WIDTH_MAX (44); Tab again folds it.
-    click(side, row=height - 3)
-    wait_for(navigation, 'clicking the sidebar did not enter navigation before ⌃i')
+    # `info`: the info column, the hub's issue · PR · ctx% cells right-aligned on
+    # each row (worker-one is issue 1, no PR, no ctx reading). Folded by default;
+    # open, the view widens for it but never past FLEET_SIDEBAR_WIDTH_MAX (44).
     # (The current row is worker-one's — `▶` — and open, the column clips its
     # name, so the row is found by its marker.)
     wait_for(lambda: 'worker-one' in row_line('▶'), 'worker-one is not the ▶ row')
     check(not re.search(r'#1 +— +·$', row_line('▶')), 'the info column is open by default: %r' % row_line('▶'))
-    os.write(terminal, b'\t')
+    park('info')
     wait_for(lambda: re.search(r'#1 +— +·$', row_line('▶')),
-             '⌃i did not open the info column: %r' % row_line('▶'))
+             '`info` did not open the info column: %r' % row_line('▶'))
     check(int(tm('display-message', '-p', '-t', side, '#{pane_width}')) <= 44,
           'the open info column widened the view past FLEET_SIDEBAR_WIDTH_MAX')
-    os.write(terminal, b'\t')
+    park('info')
     wait_for(lambda: row_line('▶') and not re.search(r'#1 +— +·$', row_line('▶')),
-             'a second ⌃i did not fold the info column: %r' % row_line('▶'))
+             'a second `info` did not fold the info column: %r' % row_line('▶'))
 
-    # ⌃t: running ⇄ landed, in place — the rows `fleet-history.sh rows` gives the
-    # hub's ⌃t (stubbed: the ledger is not this test's subject). ⌃r re-reads it at
-    # once (the view itself re-reads a landed list only every 10 s), and ↵ on a
-    # landed row restores it through `fleet-history.sh resume` — the hub's ⌃o —
-    # and puts the running list back.
+    # `view`: running ⇄ landed, in place — the rows `fleet-history.sh rows` gives
+    # the hub's ⌃t (stubbed: the ledger is not this test's subject). `reload`
+    # re-reads it at once (the view itself re-reads a landed list only every
+    # 10 s), and a second tap on a landed row restores it through
+    # `fleet-history.sh resume` — the hub's ⌃o — and puts the running list back.
     hist_log, hist_rows = work / 'history.log', work / 'history.rows'
     hist_rows.write_text('hdr\x1fhdr\x1fhead\nlanded:77\x1fk\x1f✓ #77      已落地一号' + ' ' * 16 + ' cf\n')
     (bin_dir / 'fleet-history.sh').unlink()
@@ -1352,65 +1041,46 @@ try:
         '#!/bin/sh\nprintf \'%%s\\n\' "$*" >> %s\n[ "$1" = rows ] && cat %s\nexit 0\n'
         % (shlex.quote(str(hist_log)), shlex.quote(str(hist_rows))))
     (bin_dir / 'fleet-history.sh').chmod(0o755)
-    os.write(terminal, b'\x14')
-    wait_for(lambda: row_line('已落地 (1)') and row_line('已落地一号'), '⌃t did not show the landed list')
+    park('view')
+    wait_for(lambda: row_line('已落地 (1)') and row_line('已落地一号'), '`view` did not show the landed list')
     check(not row_line('worker-one'), 'the running rows stayed up under the landed list')
     with hist_rows.open('a') as rows_file:
         rows_file.write('landed:78\x1fk\x1f✓ #78      第二个落地' + ' ' * 16 + ' cf\n')
-    os.write(terminal, b'\x12')
-    wait_for(lambda: row_line('已落地 (2)') and row_line('第二个落地'), '⌃r did not re-read the landed list')
-    os.write(terminal, b'\r')
+    park('reload')
+    wait_for(lambda: row_line('已落地 (2)') and row_line('第二个落地'), '`reload` did not re-read the landed list')
+    landed_y = next(y for y, l in enumerate(side_rows()) if '已落地一号' in l)
+    click(side, landed_y)
+    click(side, landed_y)
     wait_for(lambda: hist_log.exists() and re.search(r'^resume .*#77$', hist_log.read_text(), re.M),
-             '↵ on a landed row did not reach fleet-history.sh resume: %r' %
+             'a second tap on a landed row did not reach fleet-history.sh resume: %r' %
              (hist_log.read_text() if hist_log.exists() else ''))
     wait_for(lambda: row_line('worker-one') and not row_line('已落地'),
              'after the restore the running list did not come back')
-    # ⌃o (`restore`, issue #901) and its ⌥o fallback: the same landed list, in
-    # place — no popup (issue #1620: the restore popup was this list a second
-    # time). A bare ⌃o is VDISCARD to a macOS tty — only a view that switched it
-    # off ever sees the byte, which is what this pins too.
-    # ↵ on the landed row handed the keyboard back to the worker: tap the input
-    # line to put it on the sidebar again (a tap only focuses).
-    click(side, row=int(tm('display-message', '-p', '-t', side, '#{pane_height}')) - 1)
-    wait_for(navigation, 'tapping the input line did not put the keyboard back on the sidebar')
-    for chord, label in ((b'\x0f', 'ctrl-o'), (b'\x1bo', 'alt-o (the prefix fallback)')):
-        os.write(terminal, chord)
-        wait_for(lambda: row_line('已落地') and not row_line('worker-one'), label + ' did not show the landed list')
-        check(not popup_open(), label + ' opened a popup')
-        os.write(terminal, b'\x14')
-        wait_for(lambda: row_line('worker-one') and not row_line('已落地'), '⌃t did not come back from ' + label)
+    # `restore` (issue #901; the row menu's last item parks `landed`): the same
+    # landed list, in place — no popup (issue #1620).
+    for verb in ('restore', 'landed'):
+        park(verb)
+        wait_for(lambda: row_line('已落地') and not row_line('worker-one'), '`%s` did not show the landed list' % verb)
+        check(not popup_open(), '`%s` opened a popup' % verb)
+        park('view')
+        wait_for(lambda: row_line('worker-one') and not row_line('已落地'), '`view` did not come back from `%s`' % verb)
     (bin_dir / 'fleet-history.sh').unlink()
     (bin_dir / 'fleet-history.sh').symlink_to(real_bin / 'fleet-history.sh')
 
-    # The 要你处理 summary is a tap target (issue #1771): a tap on it is one ⌃k —
-    # onto the next row waiting on you, and over to it; prefix k does the same
-    # with the keyboard on the worker; nothing waiting, no line.
+    # A row waiting on you is its own red `!` (issue #1950: the 要你处理 summary
+    # line went); prefix k — and the `needs` verb — land on it and switch to it,
+    # with the keyboard on the session.
     was_on = tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}')
     was_state = tm('show-options', '-wqv', '-t', w2, '@claude_state')
     def on_window():
         return tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}')
-    def summary_y():
-        lines = tm('capture-pane', '-p', '-t', side).splitlines()
-        return next((y for y, l in enumerate(lines) if '个在问你' in l), None)
     tm('select-window', '-t', w1)
-    wait_for(lambda: bool(view_on(w1)), 'the summary-tap leg needs the sidebar on the first worker')
+    wait_for(lambda: bool(view_on(w1)), 'the prefix k leg needs the sidebar on the first worker')
     tm('set-option', '-w', '-t', w2, '@claude_state', 'needs')
     tm('set-option', '-w', '-t', w2, '@claude_needs', 'ask')
-    wait_for(lambda: summary_y() is not None, 'no 要你处理 summary line with a row waiting on you')
-    summary = tm('capture-pane', '-p', '-t', side).splitlines()[summary_y()]
-    check('点这里' in summary, 'the summary line lost 「点这里」 at the sidebar width: %r' % summary)
-    click(side, row=summary_y())
-    wait_for(lambda: bool(view_on(w2)) and on_window() == w2,
-             'a tap on the 要你处理 summary did not switch to the row waiting on you')
-    asked = next(r[3] for r in row_data() if r[0] == w2).strip()[:8]
-    wait_for(lambda: any(l.lstrip().startswith(('▶', '›')) and asked in l
-                         for l in tm('capture-pane', '-p', '-t', side).splitlines()),
-             'a tap on the 要你处理 summary did not land the list on the row waiting on you')
-    # prefix k: the keyboard on the worker pane, never the list's
-    tm('select-window', '-t', w1)
-    wait_for(lambda: bool(view_on(w1)), 'the sidebar did not come back to the first worker')
+    wait_for(lambda: any(l[2:3] == '!' for l in side_rows()), 'the row waiting on you lost its red !')
+    check(list_only(side), 'the list draws a 要你处理 summary with a row waiting on you')
     click(p1, row=3)
-    wait_for(lambda: not navigation(), 'a tap on the worker did not take the keyboard off the list')
     wait_for(lambda: tm('display-message', '-p', '-t', w1 + '.{top-left}', '#{pane_id}') == side and
              any(l.startswith('▶') and 'worker-one' in l for l in tm('capture-pane', '-p', '-t', side).splitlines()),
              'the list on the first worker did not settle')
@@ -1421,15 +1091,19 @@ try:
     os.write(terminal, b'k')
     wait_for(lambda: bool(view_on(w2)) and on_window() == w2,
              'prefix k did not switch to the row waiting on you')
+    tm('select-window', '-t', w1)
+    wait_for(lambda: bool(view_on(w1)), 'the sidebar did not come back to the first worker')
+    park('needs')
+    wait_for(lambda: bool(view_on(w2)) and on_window() == w2,
+             'the `needs` verb did not switch to the row waiting on you')
     tm('set-option', '-w', '-t', w2, '@claude_state', 'done')
     tm('set-option', '-uw', '-t', w2, '@claude_needs')
-    wait_for(lambda: summary_y() is None, 'the 要你处理 summary outlived the last row waiting on you')
     if was_state:
         tm('set-option', '-w', '-t', w2, '@claude_state', was_state)
     tm('select-window', '-t', was_on)
-    wait_for(lambda: bool(view_on(was_on)), 'the sidebar did not come back after the summary-tap leg')
+    wait_for(lambda: bool(view_on(was_on)), 'the sidebar did not come back after the prefix k leg')
 
-    # The row menu (issue #898): `.` on an EMPTY input line, or a tap on the
+    # The row menu (issue #898): a right-click on a row, or a tap on the
     # highlighted row (the second tap on a row the first one switched to), opens
     # a tmux display-menu of the hub's per-row actions — each the hub's own
     # script, handed the row's @id.
@@ -1468,8 +1142,8 @@ try:
     check(set('rtpavxnos') <= set(items), 'the row menu lacks an action: %r' % items)
     check(items['o'] == '恢复已收工…' and '@sidebar_ask' in menu_commands(w1)['o'] and 'landed' in menu_commands(w1)['o'],
           'the row menu\'s last item does not show the landed list in place (#901/#1620): %r' % items)
-    # Every item that takes input asks on the view's line (issue #1620): no row
-    # menu item opens a popup any more.
+    # Every item that takes input asks on one line under the session (issues
+    # #1620, #1950): no row menu item opens a popup any more.
     check(not any('dash-popup.sh' in c or 'fleet-restore-pick.sh' in c for c in menu_commands(w1).values()),
           'a row menu item still opens a popup: %r' % menu_commands(w1))
     check(items['p'].startswith('-') and items['a'].startswith('-'),
@@ -1491,61 +1165,51 @@ try:
     prmap.unlink()
     conf.write_text(fleet_conf)
 
-    os.write(terminal, b'\x02E')
-    wait_for(lambda: navigation() and tasks_cue(side), 'prefix E did not focus the sidebar for the menu')
-    type_keys('a.b')
-    wait_for(lambda: input_line(side) == '› a.b▏', '`.` inside a name did not type: %r' % input_line(side))
-    os.write(terminal, b'\x1b')
-    wait_for(lambda: tasks_cue(side), 'Esc did not clear the dotted name')
-    # A Chinese IME sends 。 (or ．) for the `.` key (issue #965): inside a
-    # name it types as itself; on an empty line it is the menu, like `.`.
-    type_keys('ab。')
-    wait_for(lambda: input_line(side) == '› ab。▏', '。 inside a name did not type: %r' % input_line(side))
-    time.sleep(.5)
-    check(not menu_open(), '。 inside a name opened the row menu')
-    os.write(terminal, b'\x1b')
-    wait_for(lambda: tasks_cue(side), 'Esc did not clear the ab。 name')
-    del screen_out[:]
-    os.write(terminal, b'.')
-    wait_for(menu_open, '`.` on an empty input line did not open the row menu')
-    check(tasks_cue(side), '`.` on an empty line typed a dot instead of opening the menu')
-    os.write(terminal, b't')
-    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@pin') == '1', 'the menu\'s pin did not pin the row')
-    check(current() == w1, 'pinning from the menu switched windows')
-    check(menu_items(w1)['t'] == '取消置顶', 'a pinned row does not offer unpin')
-    for wide, pin in (('。', ''), ('．', '1')):
+    # A right-click on a row opens its menu at once (issue #1950 — `.` went with
+    # the keyboard); the letter acts on that row and switches nothing.
+    def right_click(pane, row=0, column=2):
+        time.sleep(.6)
+        x = int(tm('display-message', '-p', '-t', pane, '#{pane_left}')) + column + 1
+        y = int(tm('display-message', '-p', '-t', pane, '#{pane_top}')) + row + 1
+        os.write(terminal, ('\x1b[<2;%d;%dM\x1b[<2;%d;%dm' % (x, y, x, y)).encode())
+    w1_row = lambda: next(i for i, line in enumerate(tm('capture-pane', '-p', '-t', side).splitlines())
+                          if 'worker-one' in line)
+    tm('select-window', '-t', w1)
+    wait_for(lambda: view_on(w1) == [side], 'the view is not on the first worker before the right-click leg')
+    for pin in ('1', ''):
         del screen_out[:]
-        os.write(terminal, wide.encode())
-        wait_for(menu_open, '%s on an empty input line did not open the row menu' % wide)
-        check(tasks_cue(side), '%s on an empty line typed instead of opening the menu' % wide)
-        print('ok: %s on an empty input line opened the row menu' % wide)
+        right_click(side, w1_row())
+        wait_for(menu_open, 'a right-click on a row did not open its menu')
         os.write(terminal, b't')
-        wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@pin') == pin,
-                 'the menu %s opened did not toggle the pin' % wide)
-    del screen_out[:]
-    os.write(terminal, b'.')
-    wait_for(menu_open, 'a second `.` did not reopen the menu')
-    os.write(terminal, b't')
-    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@pin') == '', 'the menu\'s unpin did not unpin')
-    # Rename: the input line becomes the name editor, pre-filled; Enter hands
-    # the name to dash-rename.sh --wid as argv — quotes, $, # and ; survive.
+        wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@pin') == pin, 'the menu\'s pin did not toggle the pin')
+        check(current() == w1, 'pinning from the menu switched windows')
+        if pin:
+            check(menu_items(w1)['t'] == '取消置顶', 'a pinned row does not offer unpin')
+        # the next tap reads the row off a frame that shows the pin as it is now
+        wait_for(lambda: ('置顶' in tm('capture-pane', '-p', '-t', side)) == bool(pin),
+                 'the list did not repaint the pin')
+    # Rename: the question line under the session, pre-filled; Enter hands the
+    # name to dash-rename.sh --wid as argv — quotes, $, # and ; survive. The
+    # line edits like Claude's prompt (issue #1097).
     odd = "名'$HOME\"#;x"
     del screen_out[:]
-    os.write(terminal, b'.')
+    right_click(side, w1_row())
     wait_for(menu_open, 'the menu did not open for rename')
     os.write(terminal, b'r')
-    wait_for(lambda: input_line(side) == '改名› worker-one▏',
-             'rename did not pre-fill the input line: %r' % input_line(side))
-    check(navigation(), 'rename did not keep the keyboard on the sidebar')
-    # The rename line edits like the typed one (issue #1097).
-    os.write(terminal, b'\x1b[D')
-    wait_for(lambda: input_line(side) == '改名› worker-on▏e', '← did not move the rename cursor: %r' % input_line(side))
-    os.write(terminal, b'\x1bb')
-    wait_for(lambda: input_line(side) == '改名› worker-▏one', '⌥← did not move the rename cursor a word: %r' % input_line(side))
+    wait_for(lambda: '改名› worker-one' in ask_line(w1),
+             'rename did not pre-fill the question line: %r' % ask_line(w1))
+    check(ask_pane(w1)[1] and not navigation(), 'the rename line does not hold the keyboard')
+    os.write(terminal, b'\x1b[DX')
+    wait_for(lambda: '改名› worker-onXe' in ask_line(w1), '← did not move the rename cursor: %r' % ask_line(w1))
+    os.write(terminal, b'\x1bbY')
+    wait_for(lambda: '改名› worker-YonXe' in ask_line(w1), '⌥← did not move the rename cursor a word: %r' % ask_line(w1))
     os.write(terminal, b'\x15')  # C-u: clear the pre-filled current name
-    wait_for(lambda: input_line(side) == '改名› ▏', '⌃u did not clear the rename line')
+    wait_for(lambda: 'worker' not in ask_line(w1), '⌃u did not clear the rename line')
     type_keys(odd)
-    wait_for(lambda: input_line(side) == '改名› ' + odd + '▏', 'the odd name did not type: %r' % input_line(side))
+    wait_for(lambda: odd in ask_line(w1), 'the odd name did not type: %r' % ask_line(w1))
+    if os.environ.get('FLEET_SIDEBAR_EVIDENCE'):
+        Path(os.environ['FLEET_SIDEBAR_EVIDENCE'], 'rename.txt').write_text(
+            tm('capture-pane', '-p', '-t', side) + '\n---\n' + ask_line(w1) + '\n')
     os.write(terminal, b'\r')
     # tmux <=3.4 vis-escapes a window name, and again in format output (`$`
     # reads back backslashed; the hub's own rename included). `odd` has no
@@ -1557,10 +1221,11 @@ try:
           and tm('show-options', '-pqv', '-t', side, '@sidebar_ask') == '',
           'rename switched windows or left its parked id behind')
     check(not popup_open(), 'the rename raised @popup_open (it must never be a popup, #1620)')
-    wait_for(lambda: tasks_cue(side), 'the input line did not return to the placeholder after rename')
+    wait_for(lambda: not ask_pane(w1)[0], 'the rename line did not close after ↵')
+    check(tm('display-message', '-p', '-t', w1, '#{pane_id}') == p1, 'the keyboard did not come back to the session after rename')
+    check(list_only(side), 'the rename left a line on the list')
     tm('rename-window', '-t', w1, 'worker-one')
-    os.write(terminal, b'\x1b')
-    wait_for(lambda: not navigation(), 'Esc after the menu did not hand input back')
+
 
     # Touch: a tap on another row only switches (no menu); a second tap on that
     # row, now highlighted, opens its menu and switches nothing.
@@ -1811,9 +1476,11 @@ try:
           'the remote row menu lacks an action: %r' % remote_items)
     for k in 'qcx':
         check('fleet-sidebar-remote.sh' in remote_cmds[k], 'remote %s does not go through fleet-sidebar-remote.sh: %r' % (k, remote_cmds[k]))
-    # message asks for its text on the view's line (issue #1620), not in a popup
-    check('@sidebar_ask' in remote_cmds['m'] and 'message' in remote_cmds['m'] and 'dash-popup.sh' not in remote_cmds['m'],
-          'remote m does not ask on the input line: %r' % remote_cmds['m'])
+    # message asks for its text on the line under the session (issues #1620,
+    # #1950), not in a popup — and parks it without moving the keyboard to the list
+    check('@sidebar_ask' in remote_cmds['m'] and 'message' in remote_cmds['m'] and 'dash-popup.sh' not in remote_cmds['m']
+          and 'switch-client' not in remote_cmds['m'],
+          'remote m does not ask on the question line: %r' % remote_cmds['m'])
     check(remote_items['a'].startswith('-'), 'a remote row that needs nothing greyed nothing: %r' % remote_items['a'])
     check('confirm-before' in remote_cmds['x'] and 'm4' in remote_cmds['x'], 'the remote reap does not confirm first, naming the machine: %r' % remote_cmds['x'])
     check(remote_items['1'] == '新建到 m4…' and '@sidebar_ask' in remote_cmds['1'] and 'new m4' in remote_cmds['1'],

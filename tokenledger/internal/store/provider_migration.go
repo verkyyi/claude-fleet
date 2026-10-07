@@ -17,7 +17,7 @@ import (
 //
 // Existing rows get ” -- NOT a provider inferred from source or model. Those
 // hours genuinely predate the dimension; a fabricated breakdown that adds up is
-// worse than an honest blank one that does not, and ProviderNote is what tells
+// worse than an honest blank one that does not, and ProviderNote was what told
 // a reader which is which.
 func migrateHourlyProvider(db *sql.DB) error {
 	has, err := hasColumn(db, "usage_hourly", "provider")
@@ -118,12 +118,3 @@ func commonColumns(tx *sql.Tx, from, to string) ([]string, error) {
 	}
 	return keep, nil
 }
-
-// ProviderNote explains an empty provider bucket, which has two causes that a
-// reader must not conflate with each other or with a vendor named "unknown".
-const ProviderNote = "An empty provider means the reporting side declared none: " +
-	"Claude transcripts carry no upstream, and hourly rows aggregated before this " +
-	"hub gained the provider dimension were not re-attributed — they are reported " +
-	"blank rather than assigned to a vendor they may not belong to. A vendor_bill " +
-	"row always has a vendor in principle, since it is read off that vendor's " +
-	"invoice; a blank one there means the collector did not state it."
