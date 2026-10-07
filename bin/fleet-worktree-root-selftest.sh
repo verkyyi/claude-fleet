@@ -151,11 +151,15 @@ fi
 # --- 8. ONE-EXIT: no fourth hand-built worktree path ---------------------------
 # `worktree add` outside fleet_worktree_create is allowed only in fleet-history.sh,
 # which RE-creates a worktree at the path the resume ledger recorded (a path this
-# exit produced in the first place), and in selftests.
+# exit produced in the first place), in fleet-install-sync.sh, whose
+# `git worktree add` checks a STABLE commit out into fleet.versions/<sha>/ for the
+# live install (#1909) — a version directory, never a session worktree, so it has
+# no fleet_worktree_dir path to take — and in selftests.
 fn="$(awk '/^fleet_worktree_create\(\) \{/{s=NR} s&&/^\}/{print s" "NR; exit}' "$LIB")"
 [ -n "$fn" ] || fail "8 cannot find fleet_worktree_create in $LIB"
 hits="$(cd "$BIN/.." && grep -n 'worktree add ' bin/*.sh shell/*.zsh 2>/dev/null \
   | grep -v -- '-selftest\.sh:' | grep -v '^bin/fleet-history\.sh:' \
+  | grep -v '^bin/fleet-install-sync\.sh:' \
   | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
   | awk -F: -v r="$fn" 'BEGIN{split(r,b," ")} !($1=="bin/fleet-lib.sh" && $2>b[1] && $2<b[2])')"
 [ -z "$hits" ] || fail "8 a worktree is created outside fleet_worktree_create" "$hits"
