@@ -429,6 +429,18 @@ collector as a fallback first thing in its tick when that unit stops ticking
 | ≥ `FLEET_ACCOUNT_WARN_PCT` (70%) | message every session running on it over its **peer inbox** (`fleet-peer-send.sh`, the `SendMessage` channel) that a move is coming, with the ETA at the current burn rate, so it can commit WIP; toast + `FLEET_NOTIFY_CMD` once |
 | ≥ `FLEET_ACCOUNT_CEILING` (85%) | **bench** it until ccquota's reset instant (`fleet-account.sh bench`), which rotates the active pointer at once, then **move** every session still on it (`migrate --account <label>`, per fleet, backgrounded) — the same close + `--resume` a banner triggers, minus the wall. **Nowhere to move** (issue #567: every other account is benched or at its ceiling too) ⇒ bench only, no fan-out — the toast/notify say so, and the sessions stay put until the reset; a walled session waiting for its own reset beats one cold-booted back into the same wall |
 
+**The ceiling and failover can come from the hub** (issue #2029). An admin sets
+`pool.skip_pct` / `pool.move_when_full` with `fleet hub set` (#1986); the hub
+hands them out as `FLEET_ACCOUNT_CEILING` / `FLEET_FAILOVER` in the `pool` block
+of `/v1/fleet/client-settings`, and the quota watch's tick runs
+`bin/fleet-hub-pool.sh fetch` (detached, at most every `FLEET_HUB_POOL_SECS`, 300)
+into `$FLEET_CONF_DIR/hub-pool.env`, which `fleet-lib.sh` sources first, beside
+`hub-defaults.conf`: a value this machine's `fleet.conf`, a fleet's own conf or
+the environment sets still wins; the hub only replaces the built-in 85 / 0. No
+hub (`FLEET_HUB_URL` / `CCQUOTA_HUB_URL`) ⇒ no file, as before.
+`fleet-hub-pool.sh status` prints each value and whether it is the hub's (入口),
+this machine's (本机) or the default.
+
 Each step fires once per (account, reset window). New sessions, meanwhile, go
 to the eligible account that **ranks best** (`fleet-account.sh active` reads the
 cached ccquota rows; the current account is kept while it is within

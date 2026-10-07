@@ -64,6 +64,9 @@ if [ -z "${_FLEET_GLOBAL_CONF_SOURCED:-}" ] && [ -z "${FLEET_SKIP_GLOBAL_CONF:-}
   # The team's defaults from the hub (issue #1722), FIRST so every file below
   # wins: written only by fleet-client-update.sh, each line fills a gap only.
   [ -f "$FLEET_CONF_DIR/hub-defaults.conf" ] && . "$FLEET_CONF_DIR/hub-defaults.conf"
+  # The pool's two settings from the hub (issue #2029) — FLEET_ACCOUNT_CEILING /
+  # FLEET_FAILOVER — same rule: written only by fleet-hub-pool.sh, a gap filler.
+  [ -z "${FLEET_SKIP_HUB_POOL:-}" ] && [ -f "$FLEET_CONF_DIR/hub-pool.env" ] && . "$FLEET_CONF_DIR/hub-pool.env"
   if [ -n "$_flib_dir" ] && [ -f "$_flib_dir/../fleet.conf" ]; then
     . "$_flib_dir/../fleet.conf"
   fi
