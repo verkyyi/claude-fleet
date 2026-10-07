@@ -501,13 +501,19 @@ export CCQUOTA_FLEET="*) export CCQUOTA_FLEET ;; esac
   return 0
 }
 
-# _fleet_conf_txt_names_repo <conf text> → 0 iff the text assigns FLEET_REPO: the
-# old layout, where the fleet conf held its first repo (issue #1937). Builtins only.
+# _fleet_conf_txt_names_repo <conf text> → 0 iff the text assigns FLEET_REPO,
+# FLEET_MAIN or FLEET_BASE_BRANCH: the old layout, where the fleet conf held its
+# first repo (issue #1937) — a conf with a checkout but no FLEET_REPO (its repo
+# read off the collector's cache) is one too. Builtins only.
 _fleet_conf_txt_names_repo() {
   case "
 ${1:-}" in *"
 FLEET_REPO="*|*"
-export FLEET_REPO="*) return 0 ;; esac
+export FLEET_REPO="*|*"
+FLEET_MAIN="*|*"
+export FLEET_MAIN="*|*"
+FLEET_BASE_BRANCH="*|*"
+export FLEET_BASE_BRANCH="*) return 0 ;; esac
   return 1
 }
 
@@ -592,14 +598,15 @@ fleet_repo_order_drop() {
 # fleet_repos lists exactly what it did), and then the lines leave the conf. Both
 # files are kept as .bak first. The fleet's identity is frozen BEFORE anything
 # moves (fleet_uuid, issue #1936): the UUID was computed from these very lines.
-# Idempotent: a conf that names no FLEET_REPO is left alone (rc 0, prints nothing);
+# Idempotent: a conf that names no FLEET_REPO is left alone (rc 0, prints nothing —
+# one with only a FLEET_MAIN stays the old layout, there is no slug to move it to);
 # one that moved prints `moved <repo>`. rc 1 = could not (nothing half-moved: the
 # conf is touched last), rc 2 = its FLEET_REPO is not owner/name (left as is).
 fleet_conf_repo_migrate() {
   local sess="${1:-}" conf repo f tmp re
   conf=$(fleet_conf_file "$sess")
   [ -f "$conf" ] || return 0
-  _fleet_conf_txt_names_repo "$(cat "$conf" 2>/dev/null)" || return 0
+  grep -Eq '^[[:space:]]*(export[[:space:]]+)?FLEET_REPO[[:space:]]*=' "$conf" || return 0
   repo=$(fleet_norm_repo "$( unset FLEET_REPO; . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )")
   case "$repo" in */*/*|/*|*/) return 2 ;; ?*/?*) ;; *) return 2 ;; esac
   fleet_uuid "$sess" >/dev/null 2>&1

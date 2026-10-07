@@ -282,8 +282,9 @@ if [ "$NOREPO" != 1 ]; then
     [ "$REPO_ARG" = none ] && { REPO_ARG=''; NOREPO=1; }
   fi
   [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ] && NOREPO=1
-  # A fleet with no repo at all (issue #1937): every session is a no-repo one.
-  [ -z "$REPO_ARG" ] && [ -z "${FLEET_REPO:-}" ] && [ -z "$(fleet_repos "$SESS")" ] && NOREPO=1
+  # A fleet with no repo at all (issue #1937) — no repo hosted and no checkout to
+  # branch from: every session is a no-repo one.
+  [ -z "$REPO_ARG" ] && [ -z "${FLEET_MAIN:-}" ] && [ -z "$(fleet_repos "$SESS")" ] && NOREPO=1
   if [ -n "$REPO_ARG" ]; then
     REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
     fleet_load_repo_conf "$SESS" "$REPO_ARG" \

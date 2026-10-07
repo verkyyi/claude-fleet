@@ -595,7 +595,7 @@ migrate_repos() {
   local DRY="$1" QUIET="$2" s c out rc moved=''
   while IFS=$'\t' read -r s c; do
     [ -n "$s" ] && [ -f "$c" ] || continue
-    _fleet_conf_txt_names_repo "$(cat "$c" 2>/dev/null)" || continue
+    grep -Eq '^[[:space:]]*(export[[:space:]]+)?FLEET_REPO[[:space:]]*=' "$c" || continue
     if [ "$DRY" = 1 ]; then
       printf 'fleet-conf: would move fleet %s'\''s repo %s out of %s into repos/\n' "$s" \
         "$( unset FLEET_REPO; . "$c" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-?}" )" "${c#$CD/}"
