@@ -1,0 +1,95 @@
+# Back to one replica on one SQLite file (see kustomization.yaml): Recreate,
+# the data disk, the disk-watch sidecar, readiness on /healthz, and
+# none of the replica / Postgres / graceful-stop settings.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-hub
+spec:
+  replicas: 1
+  minReadySeconds: null
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  template:
+    spec:
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints: null
+      containers:
+        - name: ccquota
+          env:
+            - { name: CCQUOTA_DB_URL, $patch: delete }
+            - { name: POD_NAME, $patch: delete }
+            - { name: POD_IP, $patch: delete }
+            - { name: CCQUOTA_REPLICA, $patch: delete }
+            - { name: CCQUOTA_REPLICA_URL, $patch: delete }
+            - { name: CCQUOTA_REPLICA_TOKEN, $patch: delete }
+            - { name: CCQUOTA_SHUTDOWN_GRACE, $patch: delete }
+          lifecycle: null
+          readinessProbe:
+            $patch: replace
+            httpGet:
+              path: /healthz
+              port: 8787
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        # Data-disk watermark: every 5 minutes `df /data`; ≥ THRESHOLD_PCT posts
+        # one alert (≥ 90% as error), and one recovery below THRESHOLD_PCT-5.
+        # NOTIFY_URL / NOTIFY_KEY come from the overlay; without them it only logs.
+        - name: disk-watch
+          image: busybox:1.36.1@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c"]
+          args:
+            - |
+              cat > /tmp/disk-watch.sh <<'EOF'
+              T="${THRESHOLD_PCT:-80}"; HIGH=0
+              P=""; K=""; [ -n "${DRILL:-}" ] && P="[演练] " && K="drill:"
+              post() { # severity title body recovery
+                [ -n "${NOTIFY_URL:-}" ] && [ -n "${NOTIFY_KEY:-}" ] || { echo "未配 NOTIFY_URL/NOTIFY_KEY，本条未发：$2"; return 1; }
+                wget -q -O /dev/null -T 10 --header "Authorization: Bearer $NOTIFY_KEY" --header 'Content-Type: application/json' \
+                  --post-data "{\"dest\":\"${NOTIFY_DEST:-alerts.prod}\",\"source\":\"ccquota:disk-watch\",\"dedupKey\":\"${K}ccquota:data-disk-high\",\"dedupWindowSec\":21600,\"severity\":\"$1\",\"title\":\"$P$2\",\"body\":\"$3\",\"recovery\":$4}" \
+                  "${NOTIFY_URL%/}/v1/notify" && echo "kf-notify ok：$2" || echo "kf-notify 失败：$2"
+              }
+              check() {
+                L=$(df -P /data | awk 'NR==2{u=$5; sub("%","",u); printf "%s %.1f %.1f %.1f", u, $2/1048576, $3/1048576, $4/1048576}')
+                [ -n "$L" ] || { echo "df /data 读不到"; return; }
+                set -- $L; pct=$1; size=$2; used=$3; free=$4
+                echo "$(date -u +%FT%TZ) /data ${pct}% used ${used}G / ${size}G free ${free}G (threshold ${T}%)"
+                if [ "$pct" -ge "$T" ]; then
+                  sev=warn; [ "$pct" -ge 90 ] && sev=error
+                  post "$sev" "ccquota hub 数据盘已用 ${pct}%" "ccquota hub 的 /data 已用 ${pct}%（${used}G / ${size}G，剩 ${free}G），阈值 ${T}%。库写满时入口停摆；发布前的 VACUUM INTO 快照要和库一样大的空间，可能已经放不下。处置：claude-fleet 仓 deploy/k8s/RUNBOOK.md 的「数据盘水位」一节（清旧快照、扩 PVC）。" false && HIGH=1
+                elif [ "$HIGH" = 1 ] && [ "$pct" -lt $((T - 5)) ]; then
+                  post info "ccquota hub 数据盘回落到 ${pct}%" "ccquota hub 的 /data 回落到 ${pct}%（${used}G / ${size}G，剩 ${free}G）。" true && HIGH=0
+                fi
+              }
+              if [ "${1:-loop}" = once ]; then check; exit 0; fi
+              trap 'exit 0' TERM INT
+              while true; do check; sleep "${INTERVAL_SECS:-300}" & wait $!; done
+              EOF
+              exec sh /tmp/disk-watch.sh loop
+          env:
+            - name: THRESHOLD_PCT
+              value: "80"
+          securityContext:
+            runAsUser: 10001
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 1m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ccquota-data

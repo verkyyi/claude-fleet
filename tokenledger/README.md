@@ -230,6 +230,17 @@ takes a per-account lock across replicas, so one account is never refreshed
 twice at once. Log lines and refresh audit rows carry `replica=<name>`
 (`CCQUOTA_REPLICA`, else `HOSTNAME`). On SQLite the one hub leads everything.
 
+**A release that is never down** (claude-fleet#2125): `GET /readyz` answers 200
+only while the database answers and has run every migration this build knows
+(a database AHEAD of the build — an old replica mid-rollout — is ready; one
+behind it is not); it is the readiness probe, while liveness stays `/healthz`,
+which never reads the database. `POST /v1/deploy-probe` makes one real write
+(one `rollup_meta` row, overwritten, at most two writes a second) — the release
+probe's write. `CCQUOTA_SHUTDOWN_GRACE` (default `10s`) is how long a stopping
+hub lets the requests it took finish; the rolling deployment sets `25s`
+(deploy/k8s/base, after a 5 s preStop). Both routes are public and say nothing
+beyond ready / not ready.
+
 **Enroll each endpoint** (on the hub — the token is shown once):
 
 ```bash

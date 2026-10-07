@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBindHosts(t *testing.T) {
@@ -61,6 +62,21 @@ func TestGitHubAuthFromEnv(t *testing.T) {
 	for _, half := range []map[string]string{{"CCQUOTA_GITHUB_CLIENT_ID": "Iv1.x"}, {"CCQUOTA_GITHUB_CLIENT_SECRET": "s"}} {
 		if _, err := githubAuthFromEnv(env(half)); err == nil {
 			t.Errorf("%v: half configured started", half)
+		}
+	}
+}
+
+// CCQUOTA_SHUTDOWN_GRACE (claude-fleet#2125): unset is the old 10s, byte for
+// byte; a rolling release's 25s is read; nonsense refuses to start.
+func TestShutdownGrace(t *testing.T) {
+	for _, c := range []struct {
+		v    string
+		want time.Duration
+		ok   bool
+	}{{"", 10 * time.Second, true}, {"25s", 25 * time.Second, true}, {"0s", 0, false}, {"6m", 0, false}, {"soon", 0, false}} {
+		got, err := shutdownGrace(func(string) string { return c.v })
+		if (err == nil) != c.ok || got != c.want {
+			t.Errorf("CCQUOTA_SHUTDOWN_GRACE=%q: %v, %v", c.v, got, err)
 		}
 	}
 }

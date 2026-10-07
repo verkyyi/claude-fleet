@@ -1,0 +1,28 @@
+# The single SQLite shape (claude-fleet#2125): what the hub was before EPIC
+# #2119, and what production runs until the switch — one replica, Recreate, one
+# SQLite file on one RWO cloud disk (`ccquota-data`), the disk-watch sidecar.
+# Applied on top of ../../base, it renders the Deployment exactly as it was
+# (hub-deploy's check job holds that: a render with a disk is replicas 1 +
+# Recreate + no CCQUOTA_DB_URL).
+#
+# ★ replicas: 1 + strategy: Recreate is a HARD requirement here. The database
+#   is a single-writer SQLite file; a RollingUpdate would open it from two pods
+#   at once — that is a corrupt database, not a brief double write. The price
+#   is a few tens of seconds down per deploy, and the occasional pod stuck
+#   attaching the disk (../../RUNBOOK.md) — which is why the base moved off it.
+#
+# The switch (../../RUNBOOK.md «换库») drops this component from the prod
+# overlay; the PVC is then no longer rendered but stays in the cluster (apply
+# never prunes) for the 7 days the rollback needs.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - pvc.yaml
+patches:
+  - path: deployment.yaml
+  - patch: |-
+      $patch: delete
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: ccquota-hub

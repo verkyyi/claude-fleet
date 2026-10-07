@@ -1,0 +1,31 @@
+# The rolling shape on a throwaway kind cluster (claude-fleet#2125): the base
+# exactly as production will run it after the switch — two replicas, Postgres,
+# /readyz, preStop, the PDB — minus the Ingress (no controller there) and with
+# small resource requests. Only .github/workflows/hub-rolling.yml uses it, via
+# drill.sh; never applied to a real cluster.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hub-e2e
+resources:
+  - ../../base
+patches:
+  - patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: ccquota-hub
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ccquota-hub
+      spec:
+        template:
+          spec:
+            containers:
+              - name: ccquota
+                imagePullPolicy: Never
+                resources:
+                  requests: { cpu: 50m, memory: 64Mi }
+                  limits: { cpu: "1", memory: 512Mi }

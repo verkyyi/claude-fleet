@@ -1,0 +1,21 @@
+# The drill's availability probe (drill.sh): probe.sh from inside the cluster,
+# through the hub's Service — kube-proxy sends each request to a READY replica,
+# the way ingress-nginx does in production. PROBE_STRICT: every image here has
+# /v1/deploy-probe, so a 404 is down too.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: prober
+spec:
+  restartPolicy: Never
+  containers:
+    - name: probe
+      image: curlimages/curl:8.10.1
+      command: [sh, /probe/probe.sh, http://ccquota-hub, /tmp/stop, "1800"]
+      env:
+        - { name: PROBE_STRICT, value: "1" }
+      volumeMounts:
+        - { name: probe, mountPath: /probe }
+  volumes:
+    - name: probe
+      configMap: { name: probe }

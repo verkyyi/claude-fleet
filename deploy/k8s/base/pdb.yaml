@@ -1,0 +1,15 @@
+# A voluntary disruption (a node drain, a cluster upgrade) never takes both hub
+# replicas at once (claude-fleet#2125). The single SQLite shape deletes it
+# (../components/sqlite-single): with one replica, minAvailable 1 would block
+# every drain instead.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ccquota-hub
+  labels:
+    app: ccquota-hub
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ccquota-hub
