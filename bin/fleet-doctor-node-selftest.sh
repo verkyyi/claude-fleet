@@ -136,4 +136,37 @@ printf 'FLEET_REPO="acme/widgets"\nCCQUOTA_FLEET=0\n' > "$WORK/conf/fleets/sessA
 l=$(node_lines)
 contains "CONF fleet: CCQUOTA_FLEET=0 is off" "$l" "不接入口"
 
+# TRUST (issue #1968): the `可信` row reads this machine's word off the hub
+# (GET /v1/node/self through fleet-node-trust.sh, the transport stubbed) — only
+# where the token row passed; no fleet-node-trust.sh / no hub → no row.
+trust_lines() {
+  env "$@" PATH="$WORK/ccq:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" \
+    FLEET_HUB_CURL="$WORK/trustcurl" bash "$WORK/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+可信([[:space:]]|$)'
+}
+rm -f "$WORK/conf/fleets/sessA/conf"; printf 'FLEET_REPO="acme/widgets"\n' > "$WORK/conf/fleets/sessA/conf"
+printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=fn_abc\n' > "$NE"; chmod 600 "$NE"
+l=$(trust_lines CCQUOTA_FLEET=1)
+[ -z "$l" ] && ok || fail "TRUST: a row without fleet-node-trust.sh" "$l"
+cp "$BIN/fleet-node-trust.sh" "$WORK/bin/"; chmod +x "$WORK/bin/fleet-node-trust.sh"
+cat > "$WORK/trustcurl" <<'FAKE'
+#!/bin/bash
+cat >/dev/null
+[ -n "${TRUST_RC:-}" ] && exit "$TRUST_RC"
+printf '{"hostname":"m9.local","status":"online","trust":"%s"}\n200' "$TRUST_WORD"
+FAKE
+chmod +x "$WORK/trustcurl"
+l=$(trust_lines CCQUOTA_FLEET=1 TRUST_WORD=trusted)
+contains "TRUST: trusted → PASS" "$l" "PASS  可信"
+contains "TRUST: names the machine" "$l" "m9 · 可信"
+l=$(trust_lines CCQUOTA_FLEET=1 TRUST_WORD=untrusted)
+contains "TRUST: untrusted → WARN" "$l" "WARN  可信"
+contains "TRUST: names the fix" "$l" "fleet-node-trust.sh set m9 trusted"
+l=$(trust_lines CCQUOTA_FLEET=1 TRUST_WORD=untrusted FLEET_CRED_PROXY=1)
+contains "TRUST: untrusted behind the proxy → INFO" "$l" "INFO  可信"
+l=$(trust_lines CCQUOTA_FLEET=1 TRUST_RC=7)
+contains "TRUST: hub down → INFO" "$l" "INFO  可信"
+not_contains "TRUST: the token's value is never printed" "$l" "fn_abc"
+l=$(trust_lines TRUST_WORD=trusted)
+[ -z "$l" ] && ok || fail "TRUST: a row with the hub off" "$l"
+
 printf 'fleet-doctor-node-selftest OK (%s checks)\n' "$CHECKS"

@@ -512,6 +512,10 @@ type NodeView struct {
 	// Maintenance is the 维护中 record when the machine is flagged
 	// (claude-fleet#1427); Status then reads maintenance while it is heard.
 	Maintenance *Maintenance `json:"maintenance,omitempty"`
+	// Trust is the operator's word on the machine (claude-fleet#1968):
+	// trusted | untrusted — only a trusted one leases credentials, and the
+	// node's own proxy reads it off /v1/node/self to pick its road.
+	Trust string `json:"trust,omitempty"`
 }
 
 // NodeFleetSummary is one fleet on a node, without its window list (C2 owns
@@ -612,7 +616,11 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	}
 	// 维护中 (claude-fleet#1427): the flag is a setting, read once per roster;
 	// an empty settings table leaves every status as the heartbeat said.
-	settings, _ := s.Store.FleetSettings()
+	// Trust (claude-fleet#1968) reads the same table, migrated once first.
+	settings, err := s.trustSettings(now)
+	if err != nil {
+		settings, _ = s.Store.FleetSettings()
+	}
 	machines := map[string]*MachineView{}
 	order := []string{}
 	for _, n := range rows {
@@ -625,6 +633,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			v.Kind = k
 		}
 		v.Spot = spotState[n.EndpointID]
+		v.Trust = trustOf(n.Hostname, settings)
 		if m, flagged := maintenanceOf(n.Hostname, settings); flagged {
 			v.Maintenance = &m
 			if v.Status == "online" {

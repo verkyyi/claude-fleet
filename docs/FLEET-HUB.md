@@ -1243,6 +1243,20 @@ single-use, and two refreshers lock each other out. The fleet's account gate
 (`bin/.fleet-account.py`) carries that source through: a lapsed lease is named
 as the node agent's, never as a re-login.
 
+**Only a trusted machine leases (claude-fleet#1968).** Each machine is
+`trusted` or `untrusted` on the hub — the fleet setting
+`fleet.node_trust.<machine>`, written only by the operator
+(`bin/fleet-node-trust.sh set <machine> trusted|untrusted`, `status`; the
+viewer token is read from `CCQUOTA_VIEWER_TOKEN` and never written down). No
+key reads untrusted, so a machine that joins later, or a computer holding only a
+connection certificate, leases nothing until the operator says so. When this
+shipped, every machine with an active fleet account was marked trusted once (the
+`fleet.node_trust_migrated` stamp), so their leases did not change. After the
+principal and revocation checks, an untrusted machine's lease is
+`403 untrusted_node` plus a `fleet_cred_audit` deny row. The roster and
+`GET /v1/node/self` carry `trust`. The doctor's `可信` row shows it for this
+machine (`fleet-node-trust.sh self`).
+
 Importing: `bin/fleet-creds-import.sh` for Claude setup tokens,
 `bin/fleet-creds-import.sh --codex [profile]` for a Codex refresh token (reads
 `~/.codex/auth.json`, or the home a ccquota-registered profile name points at —

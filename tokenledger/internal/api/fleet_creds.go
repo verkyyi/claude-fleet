@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
@@ -167,6 +168,20 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 		deny(http.StatusForbidden, LeaseRevoked, principal, what+" was revoked at "+rev.RevokedAt.Format(time.RFC3339)+
 			optional(" ("+rev.Reason+")", rev.Reason != ""))
+		return
+	}
+	// Trust (claude-fleet#1968): only a machine the operator marked trusted
+	// leases subscription credentials; one that joined later, or was marked
+	// untrusted, gets nothing — an untrusted machine's sessions borrow a
+	// session pass instead (C2), never the credential.
+	trustSet, err := s.trustSettings(time.Now())
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if trustOf(host, trustSet) != TrustTrusted {
+		deny(http.StatusForbidden, LeaseUntrusted, principal, firstLabel(host)+" is not a trusted machine — the operator marks it with fleet-node-trust.sh set "+
+			strings.ToLower(firstLabel(host))+" trusted")
 		return
 	}
 

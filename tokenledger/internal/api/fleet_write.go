@@ -1348,7 +1348,8 @@ func placementReason(c Candidate, all []Candidate) string {
 // or "" to fall back to the default; fleet.spot_weight a number 0–2;
 // fleet.node_maintenance.<machine> (claude-fleet#1427) a reason — any text,
 // "" to end the maintenance — stored as the dated record the roster shows;
-// fleet.client_defaults.<KEY> (claude-fleet#1722) a client's team default.
+// fleet.client_defaults.<KEY> (claude-fleet#1722) a client's team default;
+// fleet.node_trust.<machine> (claude-fleet#1968) trusted | untrusted.
 func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch r.Method {
@@ -1387,6 +1388,20 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			s.writeFleetSettings(w)
 			return
+		case strings.HasPrefix(body.Key, NodeTrustPrefix) && nodeNameRE.MatchString(body.Key[len(NodeTrustPrefix):]):
+			// Trust (claude-fleet#1968): trusted | untrusted, "" drops the
+			// key (= untrusted). The operator's only — no node route sets it.
+			v := strings.TrimSpace(body.Value)
+			if v != "" && v != TrustTrusted && v != TrustUntrusted {
+				httpError(w, http.StatusBadRequest, "a machine's trust is trusted | untrusted, or \"\" (untrusted)")
+				return
+			}
+			if _, err := s.setTrust(body.Key[len(NodeTrustPrefix):], v, time.Now()); err != nil {
+				httpError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			s.writeFleetSettings(w)
+			return
 		case strings.HasPrefix(body.Key, ClientDefaultsPrefix):
 			// A client's team default (claude-fleet#1722): whitelisted
 			// keys, plain one-line values, never a credential; "" clears.
@@ -1421,7 +1436,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+ClientDefaultsPrefix+"<KEY>, "+SpotWeightKey+" and "+ComputeAutoKey+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+ClientDefaultsPrefix+"<KEY>, "+SpotWeightKey+" and "+ComputeAutoKey+" are settable")
 			return
 		}
 		if err := s.Store.SetFleetSetting(body.Key, body.Value, time.Now()); err != nil {
@@ -1450,6 +1465,10 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 	for k, v := range settings {
 		if strings.HasPrefix(k, NodeMaintenancePrefix) {
 			eff[k] = parseMaintenance(k[len(NodeMaintenancePrefix):], v)
+			continue
+		}
+		if strings.HasPrefix(k, NodeTrustPrefix) {
+			eff[k] = v
 			continue
 		}
 		if n, err := strconv.Atoi(v); err == nil {

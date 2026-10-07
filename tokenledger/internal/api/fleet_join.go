@@ -351,5 +351,8 @@ func (s *Server) handleNodeSelf(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"endpoint_id": ep.ID, "status": "never"})
+	// Never connected: the enrollment's machine name is all there is, and
+	// trust (claude-fleet#1968) is read off it like the roster does.
+	settings, _ := s.trustSettings(time.Now())
+	writeJSON(w, http.StatusOK, map[string]string{"endpoint_id": ep.ID, "status": "never", "trust": trustOf(ep.Hostname, settings)})
 }
