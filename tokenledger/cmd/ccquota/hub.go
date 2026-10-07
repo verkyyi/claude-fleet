@@ -346,9 +346,17 @@ func runHub(args []string) error {
 			"way on a copy of the live database before it switches images, so a\n"+
 			"migration that cannot pass stops the release instead of the hub\n"+
 			"(claude-fleet#2050). Refuses a --db that does not exist")
+	check := fs.Bool("check", false,
+		"start up as far as serving and stop there: run the database's pending\n"+
+			"migrations, read every setting and secret the hub refuses to start\n"+
+			"without (GitHub sign-in pairs, the CA and credential keys, --pricing,\n"+
+			"...), then exit 0 = this image may be switched to -- no port is\n"+
+			"bound. hub-deploy runs the new image this way, with the live pod's\n"+
+			"environment, on a copy of the live database before it switches\n"+
+			"images (claude-fleet#2052). Refuses a --db that does not exist")
 	simulateMigrationFailure := fs.Bool("simulate-migration-failure", false,
-		"with --migrate-only, fail as a migration that cannot pass would: the\n"+
-			"drill that proves hub-deploy's rehearsal stops a release")
+		"with --migrate-only or --check, fail as a migration that cannot pass\n"+
+			"would: the drill that proves hub-deploy's rehearsal stops a release")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -372,11 +380,22 @@ func runHub(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *simulateMigrationFailure && !*migrateOnly {
-		return errors.New("--simulate-migration-failure without --migrate-only: it only drills the rehearsal")
+	if *simulateMigrationFailure && !*migrateOnly && !*check {
+		return errors.New("--simulate-migration-failure without --migrate-only or --check: it only drills the rehearsal")
+	}
+	if *migrateOnly && *check {
+		return errors.New("--migrate-only and --check: --check already runs the migrations")
 	}
 	if *migrateOnly {
 		return migrateOnlyRun(dbFile, os.Stdout, *simulateMigrationFailure)
+	}
+	if *check {
+		// The migrations first, on their own (same refusal of a missing file,
+		// same report); then the ordinary start below, which stops short of
+		// the listeners.
+		if err := migrateOnlyRun(dbFile, os.Stdout, *simulateMigrationFailure); err != nil {
+			return fmt.Errorf("--check: %w", err)
+		}
 	}
 	// The hub is the one command allowed to bring a database into being, so
 	// say when it does. A hub silently starting on an empty database looks
@@ -555,6 +574,12 @@ func runHub(args []string) error {
 		}
 	}
 	srv.MCP = mcp.Handler(srv)
+	if *check {
+		// Everything that can refuse a start has run; what is left (the
+		// listeners, the background loops) is not configuration.
+		fmt.Fprintf(os.Stdout, "check: ok — %s migrated and every startup setting read; this image may be switched to\n", dbFile)
+		return nil
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

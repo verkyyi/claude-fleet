@@ -1,0 +1,15 @@
+# The 「正在更新」 page (claude-fleet#2052): a tiny nginx the hub's Ingress
+# falls back to (annotation `nginx.ingress.kubernetes.io/default-backend`)
+# while the hub has no ready pod — the Recreate seconds of every release.
+# Environment-free; applied by a person (../README.md), never by hub-deploy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+configMapGenerator:
+  - name: ccquota-hub-updating
+    files:
+      - nginx.conf
+      - updating.html
+      - updating.json
