@@ -18,6 +18,15 @@ bin/fleet-credsep.sh installs; never from a login's own checkout.
         control socket, then drops to the login and execs the agent argv the
         install recorded.
 
+    fleet-credsep-launch.py shared
+        The machine's ONE credential proxy (issue #2217), as the role account:
+        every login whose store says `mode: shared` is a tenant — its settings
+        parsed from its conf the same way, its node-probe copied in — written to
+        /var/db/fleet-cred/.shared/tenants.json (0600, the role account's), then
+        fleet-cred-proxy.py serve --shared on FLEET_CRED_SHARED_PORT (18923),
+        its control socket in /var/run/fleet-cred/.shared/ (0666; the peer uid
+        names the login).
+
 <root> = /var/db/fleet-cred/<login> (FLEET_CREDSEP_ROOT_BASE overrides the
 /var/db/fleet-cred part — the selftest's sandbox; so do FLEET_CREDSEP_RUN_BASE
 and FLEET_CREDSEP_LOG_BASE). Not root ⇒ nothing is dropped and the run is
@@ -67,6 +76,17 @@ def env_lines(path):
     return out
 
 
+def getpw(name):
+    """pwd.getpwnam — or a FLEET_CREDSEP_PW row in the selftest's sandbox."""
+    f = os.environ.get("FLEET_CREDSEP_PW")
+    if os.environ.get("FLEET_CREDSEP_TEST") == "1" and f and os.path.isfile(f):
+        for line in open(f):
+            r = line.strip().split(":")
+            if len(r) == 4 and r[0] == name:
+                return pwd.struct_passwd((r[0], "*", int(r[1]), int(r[2]), "", r[3], "/bin/sh"))
+    return pwd.getpwnam(name)
+
+
 def drop_to(user):
     """setgroups → setgid → setuid, irreversibly. A no-op only in a sandbox."""
     pw = pwd.getpwnam(user)
@@ -82,9 +102,104 @@ def drop_to(user):
     return pw
 
 
+def tenant_settings(meta):
+    settings = {}
+    conf = meta["conf_dir"]
+    for f in (os.path.join(meta.get("install_dir", ""), "fleet.conf"),
+              os.path.join(conf, "fleet.settings"), os.path.join(conf, "fleet.conf"),
+              os.path.join(conf, "secrets.env")):
+        settings.update({k: v for k, v in env_lines(f).items() if CRED_KEYS.match(k)})
+    return settings
+
+
+def copy_probe(conf, probe, pw_role):
+    try:   # the probe the login measured; later ones arrive over ctl `probe`
+        shutil.copyfile(os.path.join(conf, "node-probe.json"), probe)
+        if os.geteuid() == 0:
+            os.chown(probe, pw_role.pw_uid, pw_role.pw_gid)
+        os.chmod(probe, 0o600)
+    except OSError:
+        pass
+
+
+def shared():
+    """The machine's one proxy (issue #2217): a tenant per joined login."""
+    import hashlib
+    rbase = base("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred")
+    run = os.path.join(base("FLEET_CREDSEP_RUN_BASE", "/var/run/fleet-cred"), ".shared")
+    sdir = os.path.join(rbase, ".shared")
+    logdir = base("FLEET_CREDSEP_LOG_BASE", "/var/log/fleet-cred")
+    test = os.environ.get("FLEET_CREDSEP_TEST") == "1"
+    try:
+        rec = json.load(open(os.path.join(rbase, ".shared.json")))
+    except (OSError, ValueError) as e:
+        die("%s/.shared.json: %s (not installed? fleet-credsep.sh machine install)" % (rbase, e))
+    role = rec.get("user") or ROLE
+    pw_role = pwd.getpwnam(role)
+    for d, mode in ((run, 0o755), (logdir, 0o755), (sdir, 0o700)):
+        os.makedirs(d, mode=mode, exist_ok=True)
+        os.chmod(d, mode)
+        if os.geteuid() == 0:
+            os.chown(d, pw_role.pw_uid, pw_role.pw_gid)
+    tenants = []
+    for login in sorted(os.listdir(rbase)):
+        if login.startswith(".") or not LOGIN_RE.match(login):
+            continue
+        root = os.path.join(rbase, login)
+        try:
+            with open(os.path.join(root, "meta.json")) as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if meta.get("mode") != "shared" or meta.get("login") != login:
+            continue
+        try:
+            pw = getpw(login)
+        except KeyError:
+            continue        # a login deleted under its store: never answered
+        state = os.path.join(root, "cred-proxy")
+        probe = os.path.join(state, "node-probe.json")
+        copy_probe(meta["conf_dir"], probe, pw_role)
+        tenants.append({"login": login, "uid": pw.pw_uid, "state": state,
+                        "accounts": os.path.join(root, "accounts"),
+                        "codex_auth": os.path.join(root, "codex", "default", "auth.json"),
+                        "codex_homes": os.path.join(root, "codex"),
+                        "node_env": os.path.join(root, "node.env"), "probe": probe,
+                        "log": os.path.join(logdir, login + ".log"),
+                        "legacy_port": int(meta.get("legacy_port") or 0),
+                        "settings": tenant_settings(meta)})
+    try:
+        version = hashlib.sha256(open(os.path.join(HERE, "fleet-cred-proxy.py"), "rb").read()).hexdigest()[:12]
+    except OSError:
+        version = ""
+    tf = os.path.join(sdir, "tenants.json")
+    tmp = tf + ".%d" % os.getpid()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"state": sdir, "run": run, "user": role, "version": version,
+                   "port": int(rec.get("port") or base("FLEET_CRED_SHARED_PORT", "18923")),
+                   "tenants": tenants}, f)
+    if os.geteuid() == 0:
+        os.chown(tmp, pw_role.pw_uid, pw_role.pw_gid)
+    os.replace(tmp, tf)
+    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": pw_role.pw_dir or "/var/empty",
+           "LANG": "en_US.UTF-8", "FLEET_CRED_PROXY_LOG": os.path.join(logdir, "shared.log")}
+    if test:    # the sandbox's fake upstreams and its peer-uid seam
+        env.update({k: v for k, v in os.environ.items()
+                    if k.startswith("FLEET_CRED_") and k not in ("FLEET_CRED_PROXY_LOG",)})
+        env["FLEET_CRED_SHARED_TEST"] = "1"
+    drop_to(role)
+    os.umask(0o077)
+    os.chdir("/")
+    py = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else shutil.which("python3") or "python3"
+    os.execve(py, [py, "-I", os.path.join(HERE, "fleet-cred-proxy.py"), "serve", "--shared", tf], env)
+
+
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "shared":
+        return shared()
     if len(sys.argv) != 3 or sys.argv[1] not in ("proxy", "agent"):
-        die("usage: fleet-credsep-launch.py proxy|agent <login>", 2)
+        die("usage: fleet-credsep-launch.py proxy|agent <login> · shared", 2)
     mode, login = sys.argv[1], sys.argv[2]
     if not LOGIN_RE.match(login):
         die("bad login name %r" % login, 2)
@@ -98,10 +213,12 @@ def main():
     if meta.get("login") != login:
         die("%s/meta.json names %r, not %r" % (root, meta.get("login"), login))
     role = meta.get("role") or ROLE
-    pw_login = pwd.getpwnam(login)
+    pw_login = getpw(login)
     login_home = os.environ["HOME"] if os.environ.get("FLEET_CREDSEP_TEST") == "1" else pw_login.pw_dir
 
     if mode == "proxy":
+        if meta.get("mode") == "shared":
+            die("%s is a tenant of the machine's shared proxy (fleet-credsep-launch.py shared)" % login)
         pw_role = pwd.getpwnam(role)
         # the login reads the port and connects to ctl.sock here; only the
         # proxy writes it. /var/run is emptied at boot, so make it every start.
@@ -159,7 +276,9 @@ def main():
            "PATH": meta.get("path") or "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"}
     env.update({k: v for k, v in ne.items() if k.startswith("CCQUOTA_")})
     env["CCQUOTA_TOKEN_FD"] = "3"
-    env["CCQUOTA_FLEET_CRED_STORE"] = os.path.join(run, "ctl.sock")
+    # a tenant of the shared proxy (issue #2217) hands its leases to that one's socket
+    env["CCQUOTA_FLEET_CRED_STORE"] = os.path.join(
+        os.path.dirname(run), ".shared", "ctl.sock") if meta.get("mode") == "shared" else os.path.join(run, "ctl.sock")
     r, w = os.pipe()
     os.write(w, (tok + "\n").encode())
     os.close(w)

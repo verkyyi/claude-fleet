@@ -105,6 +105,63 @@ are restored, and the store, the code copy and — with no other login left — 
 role account are deleted. The sandbox selftest compares the tree byte for byte
 before install and after uninstall.
 
+## One proxy for the whole machine (issue #2217)
+
+On a **managed node** (m4 mini2, m5 macmini) the per-login wiring above meant one
+LaunchDaemon and one sudo per login, credentials separated login by login, and
+every login on its own proxy version. There the machine runs **one** shared
+proxy instead; laptops and client-only computers keep a proxy per login.
+
+```sh
+fleet cred-proxy status  --machine        # shared · _fleetcred · on k/N logins · sessions a/b
+fleet cred-proxy enable  --machine        # every login with ~/.claude/fleet (or --logins a,b)
+fleet cred-proxy disable --machine        # back to a proxy per login, byte for byte
+```
+
+`enable --machine` is `fleet-credsep.sh machine install`: ONE sudo for the whole
+machine (with password-less sudo it runs; otherwise it prints the line an admin
+types). For each login it does what `install` above does — the store, the
+credentials and `node.env` moved, the agent through the launcher — and then:
+
+| | per login (today) | shared (`machine install`) |
+|---|---|---|
+| proxy process | one per login (its own or `com.claude-fleet.credsep.<login>`) | ONE, `com.claude-fleet.cred-proxy-shared` / `claude-fleet-cred-proxy-shared.service`, as `_fleetcred` |
+| port | one per login | one fixed `127.0.0.1:18923` (`FLEET_CRED_SHARED_PORT`) — plus each login's OLD port, answering that login only |
+| control socket | per login | `/var/run/fleet-cred/.shared/ctl.sock` (0666): the kernel's peer uid (`getpeereid` / `SO_PEERCRED`) names the login |
+| the login's proxy state (signing key, held passes, relay pass) | `~/.config/claude-fleet/cred-proxy/` | MOVED to `/var/db/fleet-cred/<login>/cred-proxy/` (binds / revocations / live sessions / trust copied) |
+| `FLEET_CRED_PROXY` | as the login set it | `1` — the line it had is remembered and put back by `disable` |
+| version | each login's install | the root-owned copy in `/Library/Application Support/claude-fleet/credsep/`; an admin login's sync runs `machine refresh` (`sudo -n`) to follow stable, else the doctor says to |
+
+**Each login is a tenant, and stays one.** Everything that was per-login — the
+signing key, binds, revocations, live sessions, hub passes, trust, the probe,
+the node token, the person's budget, the relay pass, the credentials, the log
+(`/var/log/fleet-cred/<login>.log`) — is that login's tenant's; nothing is
+shared between two. A session credential minted on the shared proxy carries its
+login (`lg`) and is verified with **that** login's key, so a credential relabelled
+to another login only fails the signature. A hub pass (the central route) is
+filed under the login whose session registered it (`fleet-cred-proxy.sh pass`,
+done by `fleet-session-cred.sh`). The control socket answers a login's uid with
+its own tenant and nothing else; root names one (`FLEET_CRED_AS`).
+
+**Running sessions do not break.** The signing key moves with the login, and
+the login's old port is served by the shared proxy for that login: the login's
+own launcher sees `credsep.json` appear, lets go of the port within 2 s, the
+shared proxy binds it, and a session minted before the switch goes on with its
+next request. `disable --machine` reverses it: the shared service stops, every
+login's key and state go back to `~/.config/claude-fleet/cred-proxy/`, its own
+proxy takes its old port back with the same key, credentials and the
+`FLEET_CRED_PROXY` line go back byte for byte. (A session started *under* the
+shared proxy carries the shared port and needs `/fleet-handoff` or a reopen
+after a disable.)
+
+A login on the shared proxy ignores its own `FLEET_CRED_SEPARATE`: the machine
+switch owns it (`fleet-credsep.sh apply` says `shared`). A login that was
+separated per login before joins as it is; after `disable --machine` it is
+per-login and unseparated, and `FLEET_CRED_SEPARATE=1` + a sync separates it
+again. The shared proxy dying is BREAK-IT `cred-shared-down`.
+`bin/fleet-cred-shared-selftest.sh` runs two logins through one proxy in a
+sandbox.
+
 ## What it does not stop
 
 - **Root.** A login with password-less sudo can `sudo cat` anything; the
@@ -123,4 +180,6 @@ status / check) · `bin/fleet-credsep-launch.py` (root launcher: `proxy` |
 `agent`) · `bin/fleet-cred-proxy.py` (separated mode: `store`, `probe`,
 `node-token`, `node-hash`, `/hub/` broker, peer-uid gate) ·
 `tokenledger/internal/agent/node_credstore.go` (the agent's `store` client) ·
-`bin/fleet-credsep-selftest.sh`.
+`bin/fleet-credsep-selftest.sh` · `bin/fleet-cred-shared-selftest.sh` (the
+machine's shared proxy, `machine install|uninstall|refresh|status`,
+`fleet-credsep-launch.py shared`, `fleet-cred-proxy.py serve --shared`).

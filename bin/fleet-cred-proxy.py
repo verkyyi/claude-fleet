@@ -22,6 +22,24 @@ request on, with the real credential put in on the way out (or none, centrally).
     node-token                  → a short-lived fcpn1.<…> for the hub broker
     node-hash                   → sha256 hex of the node token (the fleet-mcp
                                  worker assertion's key; the token never leaves)
+    pass                        (a hub pass, fcp-h1., on STDIN — the shared proxy
+                                 files it under the caller's login)
+    machine                     → the shared proxy's logins and live session counts
+
+THE SHARED PROXY (issue #2217 — bin/fleet-credsep.sh machine install): on a
+managed node ONE process, run by the role account, serves every login:
+`serve --shared <tenants.json>` (written by root's fleet-credsep-launch.py
+shared). Each login is a TENANT with everything above that is per-login — its
+signing key, binds, revocations, live sessions, hub passes, trust, probe, node
+token, budget, relay pass, credentials and log — and nothing is shared between
+two. One fixed 127.0.0.1 port (FLEET_CRED_SHARED_PORT) for all; a session
+credential minted there carries `lg` (its login) and is verified with THAT
+login's key, so naming another login only fails the signature; a hub pass is
+that login's once registered (`pass`). Each login's OLD port (a per-login
+proxy's, moved over) is served too, answering that login only, so a session
+started before the switch moves over on its next request. The control socket
+(0666) knows the caller from the kernel (getpeereid / SO_PEERCRED): a login's
+uid reaches its own tenant, nothing else; root names one (FLEET_CRED_AS).
 
 `serve` binds 127.0.0.1 (the port in <state>/port) and a control socket
 <state>/ctl.sock (0600); every other subcommand is a client of that socket.
@@ -157,11 +175,12 @@ def loopback_ok(url):
     return u.scheme == "https" or (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1"))
 
 
-def node_env():
-    """$FLEET_CONF_DIR/node.env as a dict — read here, never exported (issue #1491)."""
+def node_env(path=None):
+    """$FLEET_CONF_DIR/node.env as a dict — read here, never exported (issue #1491).
+    `path`: a tenant's own (the shared proxy, issue #2217)."""
     out = {}
     try:
-        for line in open(env("FLEET_CRED_NODE_ENV", os.path.join(conf_dir(), "node.env"))):
+        for line in open(path or env("FLEET_CRED_NODE_ENV", os.path.join(conf_dir(), "node.env"))):
             line = line.strip()
             if line.startswith("export "):
                 line = line[7:]
@@ -238,7 +257,8 @@ class Budget:
     """This login's person's standing, as the hub last said, and what is still
     to be reported."""
 
-    def __init__(self):
+    def __init__(self, cfg=None):
+        self.cfg = cfg
         self.lock = threading.Lock()
         self.pending = {}            # provider -> [tokens, requests]
         self.state, self.ts, self.err = {}, 0, ""
@@ -262,7 +282,7 @@ class Budget:
         """POST the pending usage (none = just ask); keep it on failure."""
         if env("FLEET_CRED_BUDGET", "1") == "0":
             return None
-        ne = node_env()
+        ne = node_env(getattr(self.cfg, "node_env", None))
         hub = (ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/")
         tok = ne.get("CCQUOTA_TOKEN", "")
         if not hub or not tok or not loopback_ok(hub):
@@ -318,9 +338,11 @@ class Keys:
                 pass
         self.key = open(p, "rb").read()
 
-    def mint(self, account, sid, ttl, tag=LOCAL_TAG):
-        payload = json.dumps({"sid": sid, "acct": account, "exp": int(time.time()) + ttl,
-                              "n": secrets.token_hex(4)}, separators=(",", ":")).encode()
+    def mint(self, account, sid, ttl, tag=LOCAL_TAG, lg=""):
+        c = {"sid": sid, "acct": account, "exp": int(time.time()) + ttl, "n": secrets.token_hex(4)}
+        if lg:      # the shared proxy (issue #2217): whose key signs it — never trusted alone
+            c["lg"] = lg
+        payload = json.dumps(c, separators=(",", ":")).encode()
         return tag + "." + b64e(payload) + "." + b64e(hmac.new(self.key, payload, hashlib.sha256).digest())
 
     def verify(self, tok, want=LOCAL_TAG, live=None):
@@ -370,7 +392,8 @@ class HubPasses:
     point (issue #1975). The session's own pass is the key; what goes out is
     whichever of the two lives longer."""
 
-    def __init__(self, state):
+    def __init__(self, state, cfg=None, log=None):
+        self.cfg, self.log = cfg, log
         self.path = os.path.join(state, "hub-passes.json")
         self.lock = threading.Lock()
         self.busy = set()
@@ -407,7 +430,7 @@ class HubPasses:
         return have
 
     def renew(self, pid, log=None):
-        log = log or Proxy.log
+        log = log or self.log or (lambda **kv: None)
         now = time.time()
         with self.lock:
             cur = self.held.get(pid, "")
@@ -415,7 +438,7 @@ class HubPasses:
                 return None
             self.busy.add(pid)
         try:
-            ne = node_env()
+            ne = node_env(getattr(self.cfg, "node_env", None))
             hub, tok = (ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/"), ne.get("CCQUOTA_TOKEN", "")
             if not hub or not tok:
                 raise RuntimeError("no hub / node token here")
@@ -522,7 +545,7 @@ class Router:
         a standalone login = trusted. A hub that does not answer keeps the cached
         word; with none cached the machine is `unknown`, which routes as untrusted
         (fail closed: a machine's own say-so never counts)."""
-        ne = node_env()
+        ne = node_env(getattr(self.cfg, "node_env", None))
         hub = (ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/")
         tok = ne.get("CCQUOTA_TOKEN", "")
         if not hub:
@@ -561,7 +584,7 @@ class Router:
         """reachable | unreachable | unsupported_region | none (never probed)."""
         if env("FLEET_PROBE_FORCE_UNREACHABLE") == "1":
             return "unreachable"
-        d = read_json(env("FLEET_CRED_PROBE", os.path.join(conf_dir(), "node-probe.json")), None)
+        d = read_json(getattr(self.cfg, "probe_path", "") or env("FLEET_CRED_PROBE", os.path.join(conf_dir(), "node-probe.json")), None)
         if not isinstance(d, dict):
             return "none"
         return str(d.get("anthropic" if provider == "claude" else "openai", "none")) or "none"
@@ -588,20 +611,29 @@ class Router:
         return order, why
 
 
-# ---- the proxy ---------------------------------------------------------------
-class Proxy(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-    cfg = keys = router = passes = None
-    budget = Budget()
-    lock = threading.Lock()
-    extended = set()   # sids whose fcp1 is past its stamp, kept by a live session
-    skip = {}       # sid -> {route: (until, why)}: a route that refused this session
-    hubcreds = {}   # sid -> fcp-h1.… handed in over ctl `attach` (memory only)
-    quota = {}      # sid -> its newest rate-limit reading (issue #1978; memory only)
-    push_due = False
+# ---- one login's half ----------------------------------------------------------
+class Tenant:
+    """One login's half of the proxy (issue #2217): its signing key, binds,
+    revocations, trust, hub passes, budget, quota readings and log. A per-login
+    proxy has exactly one; the machine's shared proxy has one per login, and a
+    request or a control call reaches only its own."""
 
-    @classmethod
-    def note_quota(cls, sid, provider, acct, route, headers):
+    def __init__(self, cfg, name=""):
+        self.cfg, self.name = cfg, name
+        self.keys = Keys(cfg.state)
+        self.router = Router(cfg)
+        self.passes = HubPasses(cfg.state, cfg, self.log)
+        self.budget = Budget(cfg)
+        self.extended = set()   # sids whose fcp1 is past its stamp, kept by a live session
+        self.skip = {}          # sid -> {route: (until, why)}: a route that refused this session
+        self.hubcreds = {}      # sid -> fcp-h1.… handed in over ctl `attach` (memory only)
+        self.quota = {}         # sid -> its newest rate-limit reading (issue #1978; memory only)
+        self.push_due = False
+
+    def log(self, **kv):
+        log_line(self.cfg, kv)
+
+    def note_quota(self, sid, provider, acct, route, headers):
         """Keep this answer's rate-limit reading for its session, then kick the push."""
         if sid in ("-", "node"):
             return
@@ -609,48 +641,104 @@ class Proxy(BaseHTTPRequestHandler):
         if not rd:
             return
         rd.update(provider=provider, acct=acct, route=route, ts=int(time.time()))
-        with cls.lock:
-            cls.quota[sid] = rd
-            if len(cls.quota) > 4096:   # a day of dead sessions, at most: oldest out
-                for k in sorted(cls.quota, key=lambda k: cls.quota[k]["ts"])[:len(cls.quota) - 4096]:
-                    del cls.quota[k]
+        with Proxy.lock:
+            self.quota[sid] = rd
+            if len(self.quota) > 4096:   # a day of dead sessions, at most: oldest out
+                for k in sorted(self.quota, key=lambda k: self.quota[k]["ts"])[:len(self.quota) - 4096]:
+                    del self.quota[k]
             # separated, the proxy is another uid: it cannot reach the login's tmux,
             # so the quota watch's tick pulls instead (fleet-proxy-quota.sh push)
-            kick = bool(cls.cfg.quota_push) and not cls.cfg.store and not cls.push_due
-            cls.push_due = cls.push_due or kick
+            kick = bool(self.cfg.quota_push) and not self.cfg.store and not self.push_due
+            self.push_due = self.push_due or kick
         if kick:
-            t = threading.Timer(cls.cfg.quota_push_secs, cls.run_push)
+            t = threading.Timer(self.cfg.quota_push_secs, self.run_push)
             t.daemon = True
             t.start()
 
-    @classmethod
-    def run_push(cls):
-        with cls.lock:
-            cls.push_due = False
+    def run_push(self):
+        with Proxy.lock:
+            self.push_due = False
         try:
             import subprocess
-            subprocess.Popen([cls.cfg.quota_push, "push"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            subprocess.Popen([self.cfg.quota_push, "push"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
         except OSError as e:
-            cls.log(ev="quota_push_err", err=type(e).__name__)
+            self.log(ev="quota_push_err", err=type(e).__name__)
+
+
+class LogSink:
+    """The shared proxy's own log, for what happens before a request has a login."""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def log(self, **kv):
+        log_line(self.cfg, kv)
+
+
+def log_line(cfg, kv):
+    kv = dict(t=round(time.time(), 3), **kv)
+    line = json.dumps(kv, ensure_ascii=False)
+    with Proxy.lock:
+        if cfg.log:
+            try:
+                fd = os.open(cfg.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                with os.fdopen(fd, "a") as f:
+                    f.write(line + "\n")
+            except OSError:
+                pass
+        if getattr(cfg, "verbose", False):
+            sys.stderr.write(line + "\n"); sys.stderr.flush()
+
+
+def tok_login(tok):
+    """The `lg` a shared-proxy credential names (read, NOT verified: it only
+    picks whose key verifies it)."""
+    try:
+        lg = json.loads(b64d(tok.split(".")[1])).get("lg")
+    except Exception:
+        return None
+    return lg if isinstance(lg, str) else None
+
+
+# ---- the proxy ---------------------------------------------------------------
+class Proxy(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    lock = threading.Lock()
+    T = None        # the one tenant of a per-login proxy
+    tenants = {}    # the shared proxy (issue #2217): login -> Tenant
+    sink = None     # where a request is logged before it has a tenant
+    fixed = None    # a login's old port on the shared proxy: that login's tenant
+    t = None
+
+    cfg = property(lambda self: self.t.cfg)
+    keys = property(lambda self: self.t.keys)
+    router = property(lambda self: self.t.router)
+    passes = property(lambda self: self.t.passes)
+    budget = property(lambda self: self.t.budget)
 
     def log_message(self, fmt, *a):
         pass
 
+    def log(self, **kv):
+        (self.t or Proxy.sink or Proxy.T).log(**kv)
+
+    @staticmethod
+    def log_any(**kv):
+        (Proxy.sink or Proxy.T).log(**kv)
+
     @classmethod
-    def log(cls, **kv):
-        kv = dict(t=round(time.time(), 3), **kv)
-        line = json.dumps(kv, ensure_ascii=False)
-        with cls.lock:
-            if cls.cfg.log:
-                try:
-                    fd = os.open(cls.cfg.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-                    with os.fdopen(fd, "a") as f:
-                        f.write(line + "\n")
-                except OSError:
-                    pass
-            if cls.cfg.verbose:
-                sys.stderr.write(line + "\n"); sys.stderr.flush()
+    def pick(cls, tok):
+        """-> the tenant a request is for (None: the shared proxy cannot tell)."""
+        if cls.fixed or not cls.tenants:
+            return cls.fixed or cls.T
+        if tok.startswith(HUB_TAG + "."):
+            c = hub_claims(tok)
+            for t in cls.tenants.values():
+                if c and c["id"] in t.passes.held:
+                    return t
+            return None
+        return cls.tenants.get(tok_login(tok) or "")
 
     def fail(self, code, msg, typ="authentication_error", ecode=""):
         err = {"type": typ, "message": "cred-proxy: " + msg}
@@ -693,7 +781,17 @@ class Proxy(BaseHTTPRequestHandler):
             tok = inbound["authorization"][7:].strip()
         tok = tok or inbound.get("x-api-key", "")
         if not tok and path.split("?")[0] in PUBLIC:
+            self.t = self.fixed or self.T or next((self.tenants[k] for k in sorted(self.tenants)), None)
+            if not self.t:
+                return self.fail(503, "no login has joined this machine's credential proxy", "api_error")
             return self.send(["direct"], provider, path, body, None, "-", "-", seen, t0, public=True)
+        self.t = self.pick(tok)
+        if not self.t:
+            # the shared proxy (issue #2217): the credential names no login it serves
+            why = ("hub pass not registered here (fleet-session-cred.sh mint registers it)"
+                   if tok.startswith(HUB_TAG + ".") else "session credential names no login served here")
+            self.log(ev="deny", path=path.split("?")[0], why=why, hdrs=seen)
+            return self.fail(401, why)
         if tok.startswith(HUB_TAG + "."):
             # a hub-issued session credential: only the cluster can check it
             sid = "h-" + hashlib.sha256(tok.encode()).hexdigest()[:10]
@@ -705,13 +803,13 @@ class Proxy(BaseHTTPRequestHandler):
         sid = claims["sid"]
         if claims.get("renewed"):
             with self.lock:
-                first = sid not in self.extended
-                self.extended.add(sid)
+                first = sid not in self.t.extended
+                self.t.extended.add(sid)
             if first:
                 self.passes.stats["local"] += 1
                 self.log(ev="renew", kind="local", sid=sid)
         acct = read_json(os.path.join(self.cfg.state, "bind.json"), {}).get(sid, claims["acct"])
-        hubcred = self.hubcreds.get(sid)
+        hubcred = self.t.hubcreds.get(sid)
         if hubcred:
             hubcred = self.passes.best(hubcred)
         order, _ = self.router.candidates(provider, bool(hubcred))
@@ -721,6 +819,10 @@ class Proxy(BaseHTTPRequestHandler):
         """/hub/<path> → the hub, with the node token put in (separated mode only)."""
         tok = inbound.get("authorization", "")[7:].strip() if inbound.get("authorization", "").lower().startswith("bearer ") else ""
         bare = path.split("?")[0].rstrip("/")
+        self.t = self.pick(tok)
+        if not self.t:
+            self.log(ev="deny", path="/hub" + bare, why="names no login served here")
+            return self.fail(401, "node credential names no login served here")
         if not self.cfg.broker:
             return self.fail(404, "no hub broker here (not separated)", "not_found_error")
         claims, why = self.keys.verify(tok, NODE_TAG)
@@ -736,7 +838,7 @@ class Proxy(BaseHTTPRequestHandler):
             self.log(ev="deny", path="/hub" + bare, why="the subscription pool never goes through the broker")
             return self.fail(403, "%s is not brokered: the subscription pool stays with the node agent" % bare,
                              "permission_error")
-        ne = node_env()
+        ne = node_env(self.cfg.node_env)
         hub, ntok = (ne.get("CCQUOTA_HUB_URL") or "").rstrip("/"), ne.get("CCQUOTA_TOKEN", "")
         if not hub or not ntok:
             return self.fail(403, "no node token here", "permission_error")
@@ -752,8 +854,8 @@ class Proxy(BaseHTTPRequestHandler):
         recently (all of them = try again); `skipped` says why, for a refusal."""
         now = time.time()
         with self.lock:
-            sk = {r: u for r, u in self.skip.get(sid, {}).items() if u[0] > now}
-            self.skip[sid] = sk
+            sk = {r: u for r, u in self.t.skip.get(sid, {}).items() if u[0] > now}
+            self.t.skip[sid] = sk
         left = [r for r in order if r not in sk]
         if not left:
             return order, []
@@ -833,7 +935,7 @@ class Proxy(BaseHTTPRequestHandler):
             tried.append("%s: %s" % (route, res))
             # a region refusal / a connection that never opened: next route, same request
             with self.lock:
-                self.skip.setdefault(sid, {})[route] = (time.time() + self.cfg.switch_ttl, res)
+                self.t.skip.setdefault(sid, {})[route] = (time.time() + self.cfg.switch_ttl, res)
             self.log(ev="route_switch", sid=sid, acct=acct, provider=provider, frm=route, to=nxt, why=res)
         code, msg, typ = last or (502, "no route answered", "api_error")
         self.fail(code, msg, typ)
@@ -869,7 +971,7 @@ class Proxy(BaseHTTPRequestHandler):
             return None
         ttfb = time.time() - t0
         if provider in ("claude", "codex"):
-            self.note_quota(sid, provider, acct, route, r.getheaders())
+            self.t.note_quota(sid, provider, acct, route, r.getheaders())
         first = b""
         if r.status == 403:
             first = r.read(65536)
@@ -1062,22 +1164,23 @@ def codex_verdict(seen, route, status, body):
 
 
 # ---- the control socket ------------------------------------------------------
-def ctl_handle(req, cfg):
+def ctl_handle(req, t):
+    cfg = t.cfg
     op = req.get("op")
     if op == "route":
         if req.get("refresh"):
-            Proxy.router.refresh(Proxy.log)
+            t.router.refresh(t.log)
         prov = req.get("provider") or "claude"
-        order, why = Proxy.router.candidates(prov, False)
+        order, why = t.router.candidates(prov, False)
         return {"ok": True, "route": order[0], "reason": why, "candidates": order,
-                "trust": Proxy.router.trust or "unknown", "probe": Proxy.router.probe(prov),
+                "trust": t.router.trust or "unknown", "probe": t.router.probe(prov),
                 "provider": prov}
     if op == "mint":
         acct = req.get("account") or ""
         if not acct or "/" in acct or acct.startswith("."):
             return {"ok": False, "err": "mint: --account LABEL"}
         sid = req.get("sid") or "s-" + secrets.token_hex(4)
-        tok = Proxy.keys.mint(acct, sid, int(req.get("ttl") or cfg.ttl))
+        tok = t.keys.mint(acct, sid, int(req.get("ttl") or cfg.ttl), lg=t.name)
         wrap = int(req.get("wrap") or 0)
         if wrap > 1:
             # the session's wrapper: while it lives, this credential outlives its stamp
@@ -1086,7 +1189,7 @@ def ctl_handle(req, cfg):
                 d = read_json(p, {})
                 d = {k: v for k, v in d.items() if pid_alive(v)}
                 d[sid] = wrap; write_json(p, d)
-        Proxy.log(ev="mint", sid=sid, acct=acct)
+        t.log(ev="mint", sid=sid, acct=acct)
         return {"ok": True, "token": tok, "sid": sid}
     if op == "rebind":
         sid, acct = req.get("sid") or "", req.get("account") or ""
@@ -1095,7 +1198,7 @@ def ctl_handle(req, cfg):
         p = os.path.join(cfg.state, "bind.json")
         with Proxy.lock:
             d = read_json(p, {}); d[sid] = acct; write_json(p, d)
-        Proxy.log(ev="rebind", sid=sid, acct=acct)
+        t.log(ev="rebind", sid=sid, acct=acct)
         return {"ok": True}
     if op == "revoke":
         sid = req.get("sid") or ""
@@ -1104,21 +1207,21 @@ def ctl_handle(req, cfg):
         with Proxy.lock:
             fd = os.open(os.path.join(cfg.state, "revoked"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             os.write(fd, (sid + "\n").encode()); os.close(fd)
-            Proxy.hubcreds.pop(sid, None)
-            Proxy.quota.pop(sid, None)
+            t.hubcreds.pop(sid, None)
+            t.quota.pop(sid, None)
             p = os.path.join(cfg.state, "live.json")
             d = read_json(p, {})
             if d.pop(sid, None) is not None:
                 write_json(p, d)
-        Proxy.log(ev="revoke", sid=sid)
+        t.log(ev="revoke", sid=sid)
         return {"ok": True}
     if op == "attach":
         sid, hc = req.get("sid") or "", (req.get("cred") or "").strip()
         if not sid or not hc.startswith(HUB_TAG + "."):
             return {"ok": False, "err": "attach: --sid and a %s. credential on stdin" % HUB_TAG}
         with Proxy.lock:
-            Proxy.hubcreds[sid] = hc
-        Proxy.log(ev="attach", sid=sid)
+            t.hubcreds[sid] = hc
+        t.log(ev="attach", sid=sid)
         return {"ok": True}
     if op == "store":
         # the node agent's lease (tokenledger agent/node_credstore.go): the
@@ -1138,7 +1241,7 @@ def ctl_handle(req, cfg):
         else:
             return {"ok": False, "err": "store: kind claude|codex"}
         write_private(dst, data)
-        Proxy.log(ev="store", kind=kind, acct=label, bytes=len(data))
+        t.log(ev="store", kind=kind, acct=label, bytes=len(data))
         return {"ok": True}
     if op == "probe":
         pp = env("FLEET_CRED_PROBE")
@@ -1157,34 +1260,60 @@ def ctl_handle(req, cfg):
         if not tok or len(tok) > 4096 or any(c.isspace() for c in tok):
             return {"ok": False, "err": "relay: one pass on stdin"}
         write_private(os.path.join(cfg.state, "relay.token"), tok.encode() + b"\n")
-        Proxy.log(ev="relay_pass")
+        t.log(ev="relay_pass")
         return {"ok": True}
     if op == "node-token":
         if not cfg.broker:
             return {"ok": False, "err": "node-token: no hub broker here (not separated)"}
-        ne = node_env()
+        ne = node_env(cfg.node_env)
         if not ne.get("CCQUOTA_TOKEN"):
             return {"ok": False, "err": "node-token: no node token here"}
         port = cfg.bound_port
-        return {"ok": True, "token": Proxy.keys.mint("-", "node", int(req.get("ttl") or 600), NODE_TAG),
+        return {"ok": True, "token": t.keys.mint("-", "node", int(req.get("ttl") or 600), NODE_TAG, lg=t.name),
                 "url": "http://127.0.0.1:%d/hub" % port}
     if op == "node-hash":
         if not cfg.broker:
             return {"ok": False, "err": "node-hash: no hub broker here (not separated)"}
-        t = node_env().get("CCQUOTA_TOKEN", "")
-        if not t:
+        nt = node_env(cfg.node_env).get("CCQUOTA_TOKEN", "")
+        if not nt:
             return {"ok": False, "err": "node-hash: no node token here"}
-        return {"ok": True, "hash": hashlib.sha256(t.encode()).hexdigest()}
+        return {"ok": True, "hash": hashlib.sha256(nt.encode()).hexdigest()}
     if op == "quota":
         with Proxy.lock:
-            q = {k: dict(v) for k, v in Proxy.quota.items() if v["ts"] > time.time() - 86400}
+            q = {k: dict(v) for k, v in t.quota.items() if v["ts"] > time.time() - 86400}
         return {"ok": True, "quota": q}
+    if op == "pass":
+        # the shared proxy (issue #2217): a session's hub pass is filed under its
+        # login here, so a request carrying it is that login's (renewal, log)
+        hc = (req.get("cred") or "").strip()
+        if not hc.startswith(HUB_TAG + ".") or not hub_claims(hc):
+            return {"ok": False, "err": "pass: a %s. credential on stdin" % HUB_TAG}
+        t.passes.best(hc)
+        t.log(ev="pass", pass_id=hub_claims(hc)["id"])
+        return {"ok": True}
+    if op == "machine":
+        # the shared proxy (issue #2217), to any login it serves: how many live
+        # sessions each login has on it — counts only, never a sid or an account
+        if not Proxy.tenants:
+            return {"ok": False, "err": "machine: not the shared proxy"}
+        now, logins = time.time(), {}
+        for name, tt in sorted(Proxy.tenants.items()):
+            live = read_json(os.path.join(tt.cfg.state, "live.json"), {})
+            n = sum(1 for p in live.values() if pid_alive(p))
+            n += sum(1 for v in list(tt.passes.held.values()) if (hub_claims(v) or {}).get("exp", 0) > now)
+            logins[name] = {"live": n, "legacy_port": tt.cfg.legacy_bound or None}
+        return {"ok": True, "port": cfg.bound_port, "user": cfg.run_user, "version": cfg.version,
+                "logins": logins}
     if op == "status":
-        return {"ok": True, "pid": os.getpid(), "port": cfg.bound_port, "separated": bool(cfg.store),
-                "trust": Proxy.router.trust or "unknown", "trust_why": Proxy.router.trust_why,
-                "relay": bool(cfg.relay_url), "relay_pass": bool(relay_pass(cfg)),
-                "central": cfg.central_url or "", "budget": Proxy.budget.view(),
-                "renew": dict(Proxy.passes.stats), "hub_passes": len(Proxy.passes.held)}
+        out = {"ok": True, "pid": os.getpid(), "port": cfg.bound_port, "separated": bool(cfg.store),
+               "trust": t.router.trust or "unknown", "trust_why": t.router.trust_why,
+               "relay": bool(cfg.relay_url), "relay_pass": bool(relay_pass(cfg)),
+               "central": cfg.central_url or "", "budget": t.budget.view(),
+               "renew": dict(t.passes.stats), "hub_passes": len(t.passes.held)}
+        if Proxy.tenants:
+            out.update(shared=True, login=t.name, logins=sorted(Proxy.tenants), user=cfg.run_user,
+                       version=cfg.version, legacy_port=cfg.legacy_bound or None)
+        return out
     return {"ok": False, "err": "unknown op %r" % op}
 
 
@@ -1207,18 +1336,41 @@ def peer_uid(c):
     return int.from_bytes(raw[4:8], sys.byteorder)
 
 
-def ctl_conn(c, cfg):
-    try:
+def ctl_tenant(c, req):
+    """-> (tenant, None), or (None, the refusal): whose control call this is.
+    A per-login proxy has one tenant; separated, its socket is 0666 and the peer
+    uid is the gate. The shared proxy (issue #2217) answers each login's uid with
+    that login's tenant and nothing else — the kernel's word (getpeereid /
+    SO_PEERCRED), never the caller's; root names the login (`as`)."""
+    if not Proxy.tenants:
+        cfg = Proxy.T.cfg
         if cfg.ctl_uid is not None:
-            # the socket is 0666 in separated mode: the peer's uid is the gate
             try:
                 u = peer_uid(c)
             except OSError:
                 u = -1
             if u not in (cfg.ctl_uid, 0):
-                Proxy.log(ev="deny", path="ctl", why="peer uid %d" % u)
-                c.sendall(b'{"ok": false, "err": "not this login\'s proxy"}\n')
-                return
+                return None, ("peer uid %d" % u, "not this login's proxy")
+        return Proxy.T, None
+    try:
+        u = peer_uid(c)
+    except OSError:
+        u = -1
+    if env("FLEET_CRED_SHARED_TEST") == "1" and isinstance(req.get("peer_uid"), int):
+        u = req["peer_uid"]     # the selftest's sandbox only: every login there is one uid
+    if u == 0:
+        t = Proxy.tenants.get(req.get("as") or "")
+        return (t, None) if t else (None, ("root, as %r" % req.get("as"), "root: say which login (--as)"))
+    mine = [t for t in Proxy.tenants.values() if t.cfg.uid == u]
+    if len(mine) != 1:
+        return None, ("peer uid %d" % u, "this login has not joined this machine's credential proxy")
+    if req.get("as") and req["as"] != mine[0].name:
+        return None, ("peer uid %d as %s" % (u, req["as"]), "not your login")
+    return mine[0], None
+
+
+def ctl_conn(c, cfg):
+    try:
         c.settimeout(10)
         buf = b""
         while b"\n" not in buf and len(buf) < 65536:
@@ -1227,7 +1379,17 @@ def ctl_conn(c, cfg):
                 break
             buf += d
         try:
-            res = ctl_handle(json.loads(buf.split(b"\n", 1)[0] or b"{}"), cfg)
+            req = json.loads(buf.split(b"\n", 1)[0] or b"{}")
+            req = req if isinstance(req, dict) else {}
+        except ValueError:
+            req = {}
+        t, why = ctl_tenant(c, req)
+        if not t:
+            Proxy.log_any(ev="deny", path="ctl", why=why[0])
+            c.sendall((json.dumps({"ok": False, "err": why[1]}) + "\n").encode())
+            return
+        try:
+            res = ctl_handle(req, t)
         except Exception as e:
             res = {"ok": False, "err": "%s: %s" % (type(e).__name__, e)}
         c.sendall((json.dumps(res) + "\n").encode())
@@ -1238,6 +1400,10 @@ def ctl_conn(c, cfg):
 
 
 def ctl_call(state, req):
+    if env("FLEET_CRED_AS"):                # root at the shared proxy: which login
+        req["as"] = env("FLEET_CRED_AS")
+    if env("FLEET_CRED_TEST_PEER_UID"):     # selftest seam (honoured only by a FLEET_CRED_SHARED_TEST proxy)
+        req["peer_uid"] = int(env("FLEET_CRED_TEST_PEER_UID"))
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(30)
     sockp = os.path.join(env("FLEET_CRED_CTL_DIR", state), "ctl.sock")
@@ -1275,8 +1441,55 @@ def relay_pass(cfg):
 
 
 # ---- serve ---------------------------------------------------------------------
+def tenant_cfg(base, spec):
+    """One login's settings on the shared proxy (issue #2217): the common ones
+    (upstreams, timeouts) from the process, the rest from the login's own spec
+    — written by root's launcher from the login's store and conf, never by the
+    login."""
+    import copy
+    c = copy.copy(base)
+    st = spec["settings"] if isinstance(spec.get("settings"), dict) else {}
+    c.name, c.uid = spec["login"], int(spec["uid"])
+    c.state = spec["state"]
+    c.log = spec.get("log") or base.log
+    c.accounts, c.codex_auth, c.codex_homes = spec["accounts"], spec["codex_auth"], spec["codex_homes"]
+    c.node_env, c.probe_path = spec["node_env"], spec.get("probe") or ""
+    c.relay_url = (st.get("FLEET_CRED_RELAY_URL") or "").rstrip("/")
+    c.relay_token = st.get("FLEET_CRED_RELAY_TOKEN") or ""
+    ne = node_env(c.node_env)
+    c.central_url = (st.get("FLEET_CRED_CENTRAL_URL") or ne.get("CCQUOTA_HUB_URL")
+                     or st.get("FLEET_HUB_URL") or "").rstrip("/")
+    c.legacy_port = int(spec.get("legacy_port") or 0)
+    c.legacy_bound = 0
+    c.quota_push, c.store, c.broker, c.ctl_uid = "", True, True, c.uid
+    return c
+
+
+def legacy_serve(t, cfg):
+    """A login's old port (issue #2217): the port its running sessions carry in
+    ANTHROPIC_BASE_URL. Bound as soon as the per-login proxy lets go of it, so a
+    session moves over on its next request; that port answers only that login."""
+    h = type("ProxyOld_" + t.name, (Proxy,), {"fixed": t})
+    while True:
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", t.cfg.legacy_port), h)
+            break
+        except OSError:
+            time.sleep(1)
+    srv.daemon_threads = True
+    t.cfg.legacy_bound = t.cfg.legacy_port
+    t.log(ev="legacy_port", port=t.cfg.legacy_port)
+    srv.serve_forever()
+
+
 def serve(a):
     cfg = a
+    shared = None
+    if a.shared:
+        shared = read_json(a.shared, None)
+        if not isinstance(shared, dict) or not isinstance(shared.get("tenants"), list):
+            sys.exit("fleet-cred-proxy: --shared %s: not a tenants file" % a.shared)
+        a.state = shared["state"]
     st = a.state
     os.makedirs(st, mode=0o700, exist_ok=True)
     lockf = open(os.path.join(st, "lock"), "w")
@@ -1287,39 +1500,68 @@ def serve(a):
         sys.exit(0)
     cfg.anthropic_url = env("FLEET_CRED_ANTHROPIC_URL", "https://api.anthropic.com").rstrip("/")
     cfg.codex_url = env("FLEET_CRED_CODEX_URL", "https://chatgpt.com/backend-api/codex").rstrip("/")
-    cfg.relay_url = env("FLEET_CRED_RELAY_URL").rstrip("/")
-    cfg.relay_token = env("FLEET_CRED_RELAY_TOKEN")
-    ne = node_env()
-    cfg.central_url = env("FLEET_CRED_CENTRAL_URL", ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/")
-    cfg.accounts = env("FLEET_CRED_ACCOUNTS", os.path.join(conf_dir(), "accounts"))
-    cfg.codex_auth = env("FLEET_CRED_CODEX_AUTH", os.path.expanduser("~/.codex/auth.json"))
-    cfg.codex_homes = env("FLEET_CRED_CODEX_HOMES", os.path.expanduser("~/.codex-accounts"))
     cfg.ttl = int(env("FLEET_CRED_PROXY_TTL", "86400"))
     cfg.switch_ttl = int(env("FLEET_CRED_PROXY_SWITCH_SECS", "1800"))
     cfg.timeout = int(env("FLEET_CRED_PROXY_TIMEOUT", "600"))
-    cfg.quota_push = env("FLEET_CRED_QUOTA_PUSH")
     cfg.quota_push_secs = float(env("FLEET_CRED_QUOTA_PUSH_SECS", "2"))
-    # separated mode (issue #1971): set by bin/fleet-credsep-launch.py only
-    cfg.store = env("FLEET_CRED_STORE") == "1"
-    cfg.broker = cfg.store
-    cfg.ctl_uid = int(env("FLEET_CRED_CTL_UID")) if env("FLEET_CRED_CTL_UID") else None
-    ctld = env("FLEET_CRED_CTL_DIR", st)
-    for name in ("anthropic_url", "codex_url", "relay_url", "central_url"):
-        v = getattr(cfg, name)
-        if v and not loopback_ok(v):
-            sys.exit("fleet-cred-proxy: %s=%s: https, or plain http on loopback only" % (name, v))
-    if cfg.relay_url and not relay_pass(cfg):
-        # not fatal: the launcher mints one (fleet-relay-cred.sh fetch); until
-        # then the relay road is simply not a candidate
-        sys.stderr.write("fleet-cred-proxy: FLEET_CRED_RELAY_URL set but no relay pass yet "
-                         "(FLEET_CRED_RELAY_TOKEN or %s) — relay road off\n" % os.path.join(cfg.state, "relay.token"))
     if not cfg.log:
         cfg.log = env("FLEET_CRED_PROXY_LOG", os.path.join(os.path.dirname(BIN), "logs", "cred-proxy.log"))
-    try:
-        os.makedirs(os.path.dirname(cfg.log), exist_ok=True)
-    except OSError:
-        pass
-    Proxy.cfg, Proxy.keys, Proxy.router, Proxy.passes = cfg, Keys(st), Router(cfg), HubPasses(st)
+    if shared:
+        cfg.run_user = shared.get("user") or ""
+        cfg.version = shared.get("version") or ""
+        cfg.legacy_bound = 0
+        cfg.uid = None
+        Proxy.sink = LogSink(cfg)
+        seen = {}
+        for spec in shared["tenants"]:
+            try:
+                tc = tenant_cfg(cfg, spec)
+            except (KeyError, TypeError, ValueError) as e:
+                sys.exit("fleet-cred-proxy: --shared: a bad tenant (%s)" % e)
+            if tc.uid in seen and env("FLEET_CRED_SHARED_TEST") != "1":
+                sys.exit("fleet-cred-proxy: --shared: logins %s and %s share uid %d" % (seen[tc.uid], tc.name, tc.uid))
+            seen[tc.uid] = tc.name
+            os.makedirs(tc.state, mode=0o700, exist_ok=True)
+            Proxy.tenants[tc.name] = Tenant(tc, tc.name)
+        everyone = [t.cfg for t in Proxy.tenants.values()]
+        ctld = shared["run"]
+        a.port = int(shared.get("port") or a.port or 0)
+    else:
+        cfg.relay_url = env("FLEET_CRED_RELAY_URL").rstrip("/")
+        cfg.relay_token = env("FLEET_CRED_RELAY_TOKEN")
+        cfg.node_env = env("FLEET_CRED_NODE_ENV", os.path.join(conf_dir(), "node.env"))
+        cfg.probe_path = env("FLEET_CRED_PROBE", os.path.join(conf_dir(), "node-probe.json"))
+        ne = node_env(cfg.node_env)
+        cfg.central_url = env("FLEET_CRED_CENTRAL_URL", ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/")
+        cfg.accounts = env("FLEET_CRED_ACCOUNTS", os.path.join(conf_dir(), "accounts"))
+        cfg.codex_auth = env("FLEET_CRED_CODEX_AUTH", os.path.expanduser("~/.codex/auth.json"))
+        cfg.codex_homes = env("FLEET_CRED_CODEX_HOMES", os.path.expanduser("~/.codex-accounts"))
+        cfg.quota_push = env("FLEET_CRED_QUOTA_PUSH")
+        # separated mode (issue #1971): set by bin/fleet-credsep-launch.py only
+        cfg.store = env("FLEET_CRED_STORE") == "1"
+        cfg.broker = cfg.store
+        cfg.ctl_uid = int(env("FLEET_CRED_CTL_UID")) if env("FLEET_CRED_CTL_UID") else None
+        cfg.uid = cfg.ctl_uid
+        ctld = env("FLEET_CRED_CTL_DIR", st)
+        everyone = [cfg]
+    for c in [cfg] + everyone:
+        for name in ("anthropic_url", "codex_url", "relay_url", "central_url"):
+            v = getattr(c, name, "")
+            if v and not loopback_ok(v):
+                sys.exit("fleet-cred-proxy: %s=%s: https, or plain http on loopback only" % (name, v))
+    for c in everyone:
+        if c.relay_url and not relay_pass(c):
+            # not fatal: the launcher mints one (fleet-relay-cred.sh fetch); until
+            # then the relay road is simply not a candidate
+            sys.stderr.write("fleet-cred-proxy: FLEET_CRED_RELAY_URL set but no relay pass yet "
+                             "(FLEET_CRED_RELAY_TOKEN or %s) — relay road off\n" % os.path.join(c.state, "relay.token"))
+    for c in [cfg] + everyone:
+        try:
+            os.makedirs(os.path.dirname(c.log), exist_ok=True)
+        except OSError:
+            pass
+    if not shared:
+        Proxy.T = Tenant(cfg)
 
     # the port: --port, else the last one used (live sessions carry it in
     # ANTHROPIC_BASE_URL — a restart must not move it), else any free one
@@ -1341,6 +1583,9 @@ def serve(a):
                 sys.exit("fleet-cred-proxy: 127.0.0.1:%d is taken" % p)
     srv.daemon_threads = True
     cfg.bound_port = srv.server_address[1]
+    gated = bool(shared) or cfg.ctl_uid is not None   # the login is another uid: 0666 + the peer-uid gate
+    for c in everyone:
+        c.bound_port = cfg.bound_port
 
     sockp, pidf = os.path.join(ctld, "ctl.sock"), os.path.join(ctld, "pid")
     try:
@@ -1353,8 +1598,8 @@ def serve(a):
         ctl.bind(sockp)
     finally:
         os.umask(old)
-    # 0666 only with the peer-uid gate (separated: the login is another uid)
-    os.chmod(sockp, 0o666 if cfg.ctl_uid is not None else 0o600)
+    # 0666 only with the peer-uid gate (separated / shared: the login is another uid)
+    os.chmod(sockp, 0o666 if gated else 0o600)
     ctl.listen(16)
 
     def bye(*_):
@@ -1369,18 +1614,29 @@ def serve(a):
     if a.max_seconds:
         signal.signal(signal.SIGALRM, bye); signal.alarm(a.max_seconds)
 
-    Proxy.router.refresh(Proxy.log)
-    try:
-        Proxy.budget.flush(Proxy.log)
-    except Exception:
-        pass
+    tenants = [Proxy.T] if Proxy.T else list(Proxy.tenants.values())
+    for t in tenants:
+        t.router.refresh(t.log)
+        try:
+            t.budget.flush(t.log)
+        except Exception:
+            pass
     with open(portf + ".tmp", "w") as f:
         f.write("%d\n" % cfg.bound_port)
     os.replace(portf + ".tmp", portf)
     with open(pidf, "w") as f:
         f.write("%d\n" % os.getpid())
-    if cfg.ctl_uid is not None:   # separated: the login (another uid) reads both
-        for p in (portf, pidf):
+    files = [portf, pidf]
+    if shared:      # what `status --machine` and the doctor read without asking
+        vf = os.path.join(ctld, "version")
+        with open(vf, "w") as f:
+            f.write("%s\n" % (cfg.version or "-"))
+        files.append(vf)
+        for t in tenants:
+            if t.cfg.legacy_port and t.cfg.legacy_port != cfg.bound_port:
+                threading.Thread(target=legacy_serve, args=(t, cfg), daemon=True).start()
+    if gated:   # separated / shared: the login (another uid) reads them
+        for p in files:
             os.chmod(p, 0o644)
 
     parent = os.getppid()
@@ -1395,28 +1651,38 @@ def serve(a):
                 bye()       # the launcher died: never outlive it as an orphan
             if time.time() - blast >= bevery:
                 blast = time.time()
-                try:
-                    Proxy.budget.flush(Proxy.log)
-                except Exception:
-                    pass
+                for t in tenants:
+                    try:
+                        t.budget.flush(t.log)
+                    except Exception:
+                        pass
             if time.time() - last >= every:
                 last = time.time()
-                try:
-                    Proxy.router.refresh(Proxy.log)
-                except Exception:
-                    pass
+                for t in tenants:
+                    try:
+                        t.router.refresh(t.log)
+                    except Exception:
+                        pass
             if time.time() - last_pass >= 60:
                 last_pass = time.time()
-                try:
-                    Proxy.passes.tick()
-                except Exception:
-                    pass
+                for t in tenants:
+                    try:
+                        t.passes.tick()
+                    except Exception:
+                        pass
     threading.Thread(target=tick, daemon=True).start()
     threading.Thread(target=ctl_serve, args=(ctl, cfg), daemon=True).start()
-    order, why = Proxy.router.candidates("claude", False)
     nofile = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
-    Proxy.log(ev="start", pid=os.getpid(), port=cfg.bound_port, route=order[0], reason=why, nofile=nofile)
-    sys.stderr.write("fleet-cred-proxy: 127.0.0.1:%d · route %s (%s) · nofile=%d\n" % (cfg.bound_port, order[0], why, nofile))
+    for t in tenants:
+        order, why = t.router.candidates("claude", False)
+        t.log(ev="start", pid=os.getpid(), port=cfg.bound_port, route=order[0], reason=why, nofile=nofile)
+    if shared:
+        Proxy.sink.log(ev="start", pid=os.getpid(), port=cfg.bound_port, shared=True, logins=sorted(Proxy.tenants),
+                       version=cfg.version, nofile=nofile)
+        sys.stderr.write("fleet-cred-proxy: shared 127.0.0.1:%d · %d login(s) · nofile=%d\n"
+                         % (cfg.bound_port, len(tenants), nofile))
+    else:
+        sys.stderr.write("fleet-cred-proxy: 127.0.0.1:%d · route %s (%s) · nofile=%d\n" % (cfg.bound_port, order[0], why, nofile))
     srv.serve_forever()
 
 
@@ -1429,6 +1695,7 @@ def main():
     s.add_argument("--max-seconds", type=int, default=0)
     s.add_argument("--log", default="")
     s.add_argument("--parent-watch", action="store_true")
+    s.add_argument("--shared", default="", help="the machine's shared proxy: its tenants file (issue #2217)")
     s.add_argument("--verbose", action="store_true")
     r = sub.add_parser("route")
     r.add_argument("--provider", default="claude", choices=("claude", "codex"))
@@ -1446,10 +1713,12 @@ def main():
     sub.add_parser("quota")
     u = sub.add_parser("status")
     u.add_argument("--json", action="store_true")
+    sub.add_parser("machine")
     o = sub.add_parser("store")
     o.add_argument("--kind", required=True, choices=("claude", "codex")); o.add_argument("--label", required=True)
     sub.add_parser("probe")
     sub.add_parser("relay")
+    sub.add_parser("pass")
     sub.add_parser("node-token")
     sub.add_parser("node-hash")
     a = ap.parse_args()
@@ -1479,11 +1748,17 @@ def main():
         ctl_call(a.state, {"op": "probe", "data": sys.stdin.read(65536)})
     elif a.cmd == "relay":
         ctl_call(a.state, {"op": "relay", "data": sys.stdin.read(4097)})
+    elif a.cmd == "pass":
+        ctl_call(a.state, {"op": "pass", "cred": sys.stdin.readline()})
     elif a.cmd == "node-token":
         res = ctl_call(a.state, {"op": "node-token"})
         print("%s\t%s" % (res["url"], res["token"]))
     elif a.cmd == "node-hash":
         print(ctl_call(a.state, {"op": "node-hash"})["hash"])
+    elif a.cmd == "machine":
+        res = ctl_call(a.state, {"op": "machine"})
+        res.pop("ok", None)
+        print(json.dumps(res, sort_keys=True))
     elif a.cmd == "quota":
         print(json.dumps(ctl_call(a.state, {"op": "quota"})["quota"], sort_keys=True))
     elif a.cmd == "status":

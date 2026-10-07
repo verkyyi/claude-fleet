@@ -19,7 +19,13 @@
 #                                 the control socket — see fleet-cred-proxy.py
 #                                 (`quota`: each session's last rate-limit reading,
 #                                 issue #1978 — bin/fleet-proxy-quota.sh stamps it)
+#   fleet-cred-proxy.sh pass         a session's hub pass (fcp-h1., on STDIN) filed
+#                                 under this login at the machine's shared proxy
+#                                 (issue #2217; fleet-session-cred.sh does it)
 #   fleet-cred-proxy.sh enable|disable [--all-logins] · status [--all-logins]
+#   fleet-cred-proxy.sh enable|disable|status --machine
+#                                 the machine's ONE shared proxy (issue #2217) —
+#                                 bin/fleet-cred-rollout.sh
 #                                 the switch for this login (and every other login
 #                                 on the machine): bin/fleet-cred-rollout.sh, issue
 #                                 #2134 — `fleet cred-proxy …`. `status --json` /
@@ -35,6 +41,11 @@
 # fleet-relay-cred.sh mints for this login, kept in the state dir — #1974),
 # FLEET_CRED_CENTRAL_URL (default: the hub). State: $FLEET_CONF_DIR/cred-proxy/ (port, ctl.sock 0600,
 # key, bind.json, revoked, trust.json). Log: logs/cred-proxy.log (redacted).
+#
+# Shared (issue #2217 — `fleet-credsep.sh machine install`; credsep.json says
+# "shared": true) is the same as separated below, with ONE proxy for the whole
+# machine: its run dir is /var/run/fleet-cred/.shared, and the proxy tells this
+# login from the others by our uid.
 #
 # Separated (issue #1971 — bin/fleet-credsep.sh; $FLEET_CONF_DIR/credsep.json
 # says so): the proxy is NOT this login's to run — the role account's service
@@ -151,6 +162,9 @@ case "$cmd" in
     # request on this login, so it comes back within seconds, not a minute.
     WATCH="${FLEET_CRED_PROXY_WATCH_SECS:-2}"
     while :; do
+      # this login just joined the machine's shared proxy (issue #2217): let go
+      # of the port now — the shared one takes it over for our sessions
+      [ -f "$CONF/credsep.json" ] && { stop_child; rm -f "$STATE/launcher.pid"; exec "$0" run "$@"; }
       if [ "$seen" -lt 0 ] || [ $(( $(date +%s) - seen )) -ge "$IDLE" ]; then
         on_now=$(switch_now); seen=$(date +%s)
         [ "$on_now" = 1 ] && relay_due && relay_fetch
@@ -192,12 +206,13 @@ case "$cmd" in
     ;;
   status)   # the person's one line (issue #2134); --json / --ctl = the control socket's
     case "${1:-}" in
+      --machine) exec bash "$BIN/fleet-cred-rollout.sh" status "$@" ;;
       --json) exec python3 -I "$PY" --state "$STATE" status "$@" ;;
       --ctl)  shift; exec python3 -I "$PY" --state "$STATE" status "$@" ;;
     esac
     exec bash "$BIN/fleet-cred-rollout.sh" status "$@"
     ;;
-  route|mint|rebind|revoke|attach|quota)
+  route|mint|rebind|revoke|attach|quota|pass|machine)
     exec python3 -I "$PY" --state "$STATE" "$cmd" "$@"
     ;;
   doctor)
@@ -211,6 +226,7 @@ case "$cmd" in
     st=$(python3 -I "$PY" --state "$STATE" status --json 2>&1) || { printf 'FAIL\t代理不回话：%s\n' "$st"; exit 0; }
     rc=$(python3 -I "$PY" --state "$STATE" route --provider claude --json 2>/dev/null)
     rx=$(python3 -I "$PY" --state "$STATE" route --provider codex --json 2>/dev/null)
+    FCD_MS=$(python3 -I "$BIN/fleet-credsep.py" machine status --json 2>/dev/null) \
     FCD_ST="$st" FCD_RC="$rc" FCD_RX="$rx" FCD_SEP="${FLEET_CRED_SEPARATE:-0}" python3 -I - <<'DOC'
 import json, os, time
 def j(k):
@@ -239,12 +255,25 @@ if any(r.get("route") == "central" for r in (rc, rx)) and not st.get("central"):
     lv = "WARN"
     notes.append("没有中心代理地址（FLEET_CRED_CENTRAL_URL / 入口）")
 parts.append("代理 pid %s 127.0.0.1:%s" % (st.get("pid"), st.get("port")))
-if st.get("separated"):
+ms = j("FCD_MS")
+if st.get("shared"):
+    # the machine's one proxy (issue #2217): whose it is, how many logins, its version
+    v, iv = st.get("version") or "-", ms.get("install_version") or ""
+    parts.append("shared 全机共享（%s 跑，%d 个登录，版本 %s%s）"
+                 % (st.get("user") or "?", len(st.get("logins") or []), v,
+                    "" if not iv or iv == v else "，本机安装 %s" % iv))
+    if iv and v != iv:
+        lv = "WARN"
+        notes.append("共享代理落后本安装：管理员登录 sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine refresh")
+elif st.get("separated"):
+    parts.append("per-login 每登录代理")
     parts.append("凭据隔离 开")
 elif os.environ.get("FCD_SEP") == "1":
     lv = "WARN"
+    parts.append("per-login 每登录代理")
     parts.append("凭据隔离 应开未开（看 credsep 行）")
 else:
+    parts.append("per-login 每登录代理")
     parts.append("凭据隔离 关")
 rn = st.get("renew") or {}
 if rn.get("err") and rn.get("last_err", 0) >= rn.get("last_ok", 0):

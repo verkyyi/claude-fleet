@@ -159,6 +159,13 @@ case "$cmd" in
       row=$(hub_pass "$provider") || exit 1
       rec_set "$sid" hub_id "${row%%	*}"
       cred="${row#*	}"
+      # the machine's shared proxy (issue #2217) serves every login on one port:
+      # it files this pass under OUR login (our uid, on its control socket) —
+      # how a request carrying it is told from another login's
+      if grep -q '"shared": true' "$CONF/credsep.json" 2>/dev/null; then
+        printf '%s\n' "$cred" | bash "$PROXY" pass >/dev/null 2>&1 \
+          || die "the shared credential proxy would not take this session's hub pass"
+      fi
       # the name the proxy files this pass's requests under (h-<hash>) — so its
       # quota reading finds this window (issue #1978); a hash, never the pass
       qs=$(printf '%s' "$cred" | python3 -I -c 'import hashlib,sys; print("h-" + hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:10])' 2>/dev/null)
