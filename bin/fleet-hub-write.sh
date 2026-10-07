@@ -162,10 +162,10 @@ if [ "$TOOL" = operation_get ]; then
 else
   case "$WRITE_TOOLS" in *" $TOOL "*) ;; *) note "'$TOOL' is not a hub write tool (see docs/FLEET-HUB.md «Tools»)"; exit 2 ;; esac
 fi
-# A client in standby sends nothing (issue #1715): another client of the same
-# person holds the lease — Enter on the standby screen takes it back first.
+# A client in standby sends nothing (issue #1715; #1932): its lease is no longer
+# held (asked to leave past the limit, or disconnected) — Enter takes one first.
 if [ "${FLEET_SHELL:-}" = 1 ] && [ -f "${TMPDIR:-/tmp}/client.standby" ]; then
-  note "客户端在待机：正在另一台设备上使用，按回车接回后再操作 — nothing was sent"
+  note "客户端在待机：这台已被请下线或断开，按回车重新连上后再操作 — nothing was sent"
   exit 1
 fi
 command -v python3 >/dev/null 2>&1 || { note "needs python3"; exit 1; }

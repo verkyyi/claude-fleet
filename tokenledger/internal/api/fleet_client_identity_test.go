@@ -87,8 +87,8 @@ func TestFleetClientTestIdentity(t *testing.T) {
 		t.Fatalf("a test lease reports no caps (it only looks): %v", tst.Lease.Caps)
 	}
 	code, tst2, raw := post(alice, control.ClientPath, "", ClientLeaseRequest{Action: "acquire", Device: "m4-drill-2", Identity: "test"})
-	if code != 200 || tst2.Identity != "test" || tst2.TookOver == nil || tst2.TookOver.ID != tst.Lease.ID {
-		t.Fatalf("a second test acquire takes over the first TEST lease only: HTTP %d %s", code, raw)
+	if code != 200 || tst2.Identity != "test" || tst2.TookOver != nil || tst2.Evicted != nil || len(tst2.Clients) != 2 {
+		t.Fatalf("a second test acquire sits beside the first TEST lease (#1932), never the person's: HTTP %d %s", code, raw)
 	}
 	if got := where(); got != before {
 		t.Fatalf("a test acquire moved the person's where: %q → %q", before, got)

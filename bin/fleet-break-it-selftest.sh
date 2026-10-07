@@ -1662,7 +1662,8 @@ drill_client_files_swapped() {
   until_ok 5 sh -c "p=\$(\"$REAL_TMUX\" -L $s-stage list-panes -s -F '#{pane_pid} #{pane_start_command}' 2>/dev/null | awk '/fleet-remote-view.sh/ { print \$1; exit }'); [ -n \"\$p\" ] && [ \"\$p\" != $pp ]" \
     || { WHY="the old proxy loop ($pp) was kept beside the new code"; return 1; }
   SECS=$(since "$t0")
-  grep -q '"phase": "done"' "$WORK/ucache/update.state" 2>/dev/null || { WHY="no trace of the update: update.state is not done"; return 1; }
+  # update.state is written after the reload returns: a beat after the proxy
+  until_ok 5 grep -q '"phase": "done"' "$WORK/ucache/update.state" || { WHY="no trace of the update: update.state is not done"; return 1; }
   WHAT="新文件载入正在跑的客户端，旧代理换掉，留下「已更新到」"
 }
 
@@ -1898,6 +1899,122 @@ PY2
         | env -u FLEET_WORKER_CRED -u FLEET_HUB FLEET_HEAVY=0 FLEET_LIB=/nonexistent python3 "$ROOT/hooks/bash-guard.py" 2>&1)
   [ $? = 0 ] || { WHY="bash-guard refused a person's own fleet: [$out]"; return 1; }
   SECS=$(since "$t0"); WHAT="执行会话的客户端只拿测试身份：运营者租约不变，要运营者租约被拒（403 + 原因），守卫拦没写 --test-identity 的启动"
+}
+
+# A second client pushes the first off (issue #1932, EPIC #1906 C13): until
+# 2026-10-06 a person held ONE client lease — the iPhone opening took it over and
+# the MacBook fell to its standby screen; on one machine a second `fleet` popped
+# the standby screen on the client already attached. The real client on its own
+# -L socket, its lease a fake keeping the hub's rules (a lease per client, the
+# primary = the latest input — TestClientLeaseTableSeveral pins the hub's own):
+# two terminals attached to the machine, then another device opening its own
+# lease — nobody on standby, this server still renewing — and typing here makes
+# it the primary again.
+drill_second_client() {
+  CAP=45; local t0 s="${CSESS}2" sc="$WORK/sc" out
+  client_setup
+  mkdir -p "$sc/cur"; : > "$sc/log"
+  cat > "$sc/lease" <<EOF
+#!/bin/bash
+h="$sc"; act=\$1; shift; lease=''; dev=''
+while [ \$# -gt 0 ]; do case "\$1" in --lease) lease=\$2; shift 2 ;; --device) dev=\$2; shift 2 ;; *) shift ;; esac; done
+[ "\$act" = device ] && { printf 'MacBook\tFakeTerm\n'; exit 0; }
+echo "\$act \$lease \$dev" >> "\$h/log"
+case "\$act" in
+  acquire) if [ -n "\$lease" ] && [ -f "\$h/cur/\$lease" ]; then n=\$lease; else n=L\$RANDOM\$\$; fi
+           echo "\$dev" > "\$h/cur/\$n"; printf 'active\t%s\t%s\t\t\n' "\$n" "\$dev" ;;
+  renew|input) if [ -f "\$h/cur/\$lease" ]; then
+             [ "\$act" = input ] && echo "\$lease" > "\$h/primary"
+             printf 'active\t%s\t\t\t\n' "\$lease"
+           else printf 'taken_over\t\tiPhone\t\t\n'; fi ;;
+  release) rm -f "\$h/cur/\$lease"; printf 'released\t\t\t\t\n' ;;
+  *) printf 'none\t\t\t\t\n' ;;
+esac
+EOF
+  chmod +x "$sc/lease"
+  # `fleet` again on this machine, as the person types it (the drive runs it
+  # while the first terminal is attached)
+  { printf '#!/bin/bash\n'; declare -f client_env client_start; printf 'WORK=%q\n' "$WORK"
+    # its own cache: the other client drills' keepers live in $WORK/ccache, and
+    # one keeper per cache is the rule
+    printf 'client_start %q FLEET_CLIENT_LEASE_CMD=%q FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_SHELL_CACHE=%q\n' \
+      "$s" "$sc/lease" "$sc/cache"
+  } > "$sc/fleet"; chmod +x "$sc/fleet"
+  t0=$(now)
+  "$sc/fleet" || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
+  out=$(python3 - "$REAL_TMUX" "$s" "$sc/cache/tmp" "$sc" <<'PY' 2>&1
+import fcntl, os, pty, select, signal, struct, subprocess, sys, termios, time
+tmux, sess, cl, h = sys.argv[1:5]
+signal.alarm(60)
+kids = []
+def attach():
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.environ.update(TERM="xterm-256color", LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
+        os.environ.pop("TMUX", None)
+        os.execvp(tmux, [tmux, "-L", sess, "attach-session", "-t", "=" + sess])
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
+    kids.append((pid, fd)); seen.append(b"")
+seen = []
+def pump(secs):
+    end = time.time() + secs
+    while time.time() < end:
+        r, _, _ = select.select([fd for _, fd in kids], [], [], 0.1)
+        for i, (_, fd) in enumerate(kids):
+            if fd in r:
+                try: seen[i] += os.read(fd, 65536)
+                except OSError: pass
+def until(secs, ok):   # pump while waiting: a slow runner's keeper ticks late
+    end = time.time() + secs
+    while time.time() < end:
+        if ok(): return True
+        pump(0.3)
+    return ok()
+def popped(i):   # the standby screen drawn on that terminal
+    return "按回车".encode() in seen[i]
+def standby():
+    return os.path.exists(os.path.join(cl, "client.standby"))
+def lease():
+    try: return open(os.path.join(cl, "client.lease")).read().strip()
+    except OSError: return ""
+def log():
+    return open(os.path.join(h, "log")).read()
+def die(why):
+    print("WHY=" + why); sys.exit(1)
+try:
+    attach(); pump(2.0)
+    subprocess.run([os.path.join(h, "fleet")], capture_output=True, timeout=20)   # `fleet` again
+    attach(); pump(3.0)
+    n = subprocess.run([tmux, "-L", sess, "list-clients", "-F", "x"], capture_output=True, text=True).stdout.count("x")
+    if n != 2: die("two terminals: %d attached" % n)
+    if standby() or popped(0): die("the second terminal sent the first to standby")
+    me = lease()
+    if not me: die("this server holds no lease")
+    # another device opens its own lease, and is the primary
+    r = subprocess.run([os.path.join(h, "lease"), "acquire", "--device", "iPhone"], capture_output=True, text=True).stdout
+    open(os.path.join(h, "primary"), "w").write(r.split("\t")[1] + "\n")
+    # a renewal, or an input (which renews too: tmux may bump a client's
+    # activity on its own, e.g. on attach)
+    held = lambda: log().count("renew " + me) + log().count("input " + me)
+    renews = held()
+    renewed = until(10, lambda: held() > renews)
+    if standby() or popped(0) or popped(1) or lease() != me: die("another device opening its lease put this one on standby")
+    if not renewed: die("this server stopped renewing (lease %s; hub saw: %s)" % (me, " ; ".join(log().splitlines()[-4:])))
+    # typing here (F12, a key nothing binds to an action): the input goes out
+    os.write(kids[0][1], b"\x1b[24~")
+    if not until(10, lambda: open(os.path.join(h, "primary")).read().strip() == me):
+        die("typing here sent no input (the iPhone still primary)")
+    print("OK")
+finally:
+    for pid, _ in kids:
+        try: os.kill(pid, signal.SIGTERM)
+        except OSError: pass
+PY
+)
+  "$REAL_TMUX" -L "$s" kill-server 2>/dev/null
+  [ "$(printf '%s\n' "$out" | tail -n 1)" = OK ] || { WHY=$(printf '%s\n' "$out" | sed -n 's/^WHY=//p' | tail -n 1)
+    WHY="${WHY:-the drive died: $(printf '%s\n' "$out" | tail -n 3 | tr '\n' ' ')}"; return 1; }
+  SECS=$(since "$t0"); WHAT="同一台两个终端 + 另一台设备各自的租约，谁也不进待机；在这里打字它又是主客户端"
 }
 
 # ================================================================ run ===========

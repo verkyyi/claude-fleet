@@ -94,14 +94,13 @@ type ClientPlaceResponse struct {
 	Placement   *Placement `json:"placement,omitempty"`
 }
 
-// checkActionMAC says whether lease is key's live current lease and mac is
+// checkActionMAC says whether lease is one of key's live leases and mac is
 // payload's HMAC under its action key.
 func (t *clientLeaseTable) checkActionMAC(key, lease, payload, mac string, now time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.init()
-	c := t.cur[key]
-	if !t.live(c, now) || c.ID != lease || lease == "" {
+	if c := t.holdsLocked(key, lease); !t.live(c, now) {
 		return false
 	}
 	k := t.keys[lease]
@@ -158,7 +157,7 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 	key := clientLeaseKey(id)
 	if !s.clientLeases.checkActionMAC(key, env.Lease, env.Payload, env.MAC, now) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
-		httpError(w, http.StatusUnauthorized, "not your current client: the lease is not current (taken over or lapsed) or the action key does not check")
+		httpError(w, http.StatusUnauthorized, "not your client: the lease is not held (asked to leave, disconnected or lapsed) or the action key does not check")
 		return
 	}
 	var req clientPlaceRequest

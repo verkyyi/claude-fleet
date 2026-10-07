@@ -124,28 +124,45 @@ func TestClientActionsReachTheOwnersLeaseSigned(t *testing.T) {
 		t.Fatalf("no token: HTTP %d", code)
 	}
 
-	// Takeover: what was queued for the old lease goes with it, the old lease
-	// polls taken_over, the next action is signed for the new one.
+	// A second client (#1932): the next action goes to the primary — the
+	// iPhone, just opened — signed with ITS key; the MacBook stays active and
+	// keeps what was queued for it; typing on the MacBook brings the next one
+	// back there; a notify with all reaches both.
 	send(n["verk4"].token, ClientActionSend{Kind: "notify", Body: "for the mac"})
 	var ph ClientLeaseResponse
+	time.Sleep(1100 * time.Millisecond) // the iPhone opens a second later
 	post(control.ClientPath, viewerToken, ClientLeaseRequest{Action: "acquire", Device: "iPhone", Caps: []string{"link"}}, &ph)
 	if ph.ActionKey == "" || ph.ActionKey == acq.ActionKey {
 		t.Fatalf("the new lease must get its own key")
 	}
-	if _, p := poll(acq.Lease.ID, 0); p.State != "taken_over" || len(p.Actions) != 0 {
-		t.Fatalf("old lease after takeover: %+v", p)
-	}
-	if _, p := poll(ph.Lease.ID, 0); len(p.Actions) != 0 {
-		t.Fatalf("the mac's action followed the takeover: %+v", p)
+	if _, p := poll(acq.Lease.ID, 0); p.State != "active" || len(p.Actions) != 1 {
+		t.Fatalf("the MacBook beside the iPhone: %+v, want active with its queued action", p)
 	}
 	send(n["verk4"].token, ClientActionSend{Kind: "show_file", File: "/tmp/shot.png", Size: 10})
 	_, p = poll(ph.Lease.ID, 0)
 	if len(p.Actions) != 1 || p.Actions[0].Sig != signClientAction(ph.ActionKey, []byte(p.Actions[0].Payload)) {
-		t.Fatalf("new lease: %+v", p)
+		t.Fatalf("primary (iPhone): %+v", p)
 	}
 	_ = json.Unmarshal([]byte(p.Actions[0].Payload), &a)
 	if a.Name != "shot.png" || a.Lease != ph.Lease.ID {
 		t.Fatalf("show_file payload %+v", a)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	post(control.ClientPath, viewerToken, ClientLeaseRequest{Action: "input", Lease: acq.Lease.ID}, nil)
+	send(n["verk4"].token, ClientActionSend{Kind: "open_url", URL: "https://example.com/x"})
+	if _, p := poll(acq.Lease.ID, 0); len(p.Actions) != 1 {
+		t.Fatalf("after typing on the MacBook, the action goes there: %+v", p)
+	}
+	send(n["verk4"].token, ClientActionSend{Kind: "notify", Body: "everyone", All: true})
+	_, pm := poll(acq.Lease.ID, 0)
+	_, pp := poll(ph.Lease.ID, 0)
+	if len(pm.Actions) != 1 || len(pp.Actions) != 1 || pp.Actions[0].Sig != signClientAction(ph.ActionKey, []byte(pp.Actions[0].Payload)) {
+		t.Fatalf("notify all: mac %+v phone %+v", pm, pp)
+	}
+	// Disconnected: its queue and key go, its poll reads taken_over.
+	post(control.ClientPath, viewerToken, ClientLeaseRequest{Action: "revoke", Target: ph.Lease.ID}, nil)
+	if _, p := poll(ph.Lease.ID, 0); p.State != "taken_over" {
+		t.Fatalf("a disconnected lease polls %+v", p)
 	}
 	// Answering another lease's action is refused.
 	if c := post(control.ClientPath+"/actions", viewerToken, ClientActionPoll{Action: "done", Lease: acq.Lease.ID, ID: a.ID, OK: true}, nil); c != 404 {

@@ -76,35 +76,52 @@ func TestFleetClientLeaseByCertificate(t *testing.T) {
 		t.Fatalf("bob's acquire took over %+v — another person's lease is not his", b.TookOver)
 	}
 
+	// A second client of the same person: both active, nobody to standby.
 	phone := call(alice, ClientLeaseRequest{Action: "acquire", Device: "iPhone", Terminal: "Termius"})
-	if phone.State != "active" || phone.TookOver == nil || phone.TookOver.Device != "MacBook" {
-		t.Fatalf("second acquire = %+v, want active + took_over MacBook", phone)
+	if phone.State != "active" || phone.TookOver != nil || phone.Evicted != nil || phone.Lease.ID == mac.Lease.ID {
+		t.Fatalf("second acquire = %+v, want a lease of its own, nobody pushed off", phone)
 	}
-	r := call(alice, ClientLeaseRequest{Action: "renew", Lease: mac.Lease.ID})
-	if r.State != "taken_over" || r.By == nil || r.By.Device != "iPhone" {
-		t.Fatalf("the MacBook's renewal = %+v, want taken_over by iPhone", r)
+	if len(phone.Clients) != 2 || phone.Primary != phone.Lease.ID {
+		t.Fatalf("second acquire lists %+v primary %q, want both, the iPhone primary (just opened)", phone.Clients, phone.Primary)
 	}
-	if g := call(alice, ClientLeaseRequest{Action: "get"}); g.Lease == nil || g.Lease.Device != "iPhone" {
-		t.Fatalf("get = %+v, want the iPhone's lease", g)
+	if r := call(alice, ClientLeaseRequest{Action: "renew", Lease: mac.Lease.ID}); r.State != "active" {
+		t.Fatalf("the MacBook's renewal = %+v, want still active", r)
 	}
-	if r := call(bob, ClientLeaseRequest{Action: "renew", Lease: b.Lease.ID}); r.State != "active" {
-		t.Fatalf("bob's renewal after alice's takeover = %+v", r)
+	if g := call(alice, ClientLeaseRequest{Action: "get"}); g.Lease == nil || g.Lease.Device != "iPhone" || len(g.Clients) != 2 {
+		t.Fatalf("get = %+v, want the iPhone as the lease, both listed", g)
 	}
-
-	// Enter on the MacBook's standby screen: an acquire carrying its old id.
-	back := call(alice, ClientLeaseRequest{Action: "acquire", Lease: mac.Lease.ID, Device: "MacBook"})
-	if back.TookOver == nil || back.TookOver.Device != "iPhone" {
-		t.Fatalf("taking it back = %+v, want took_over iPhone", back)
+	// Typing on the MacBook makes it the primary.
+	time.Sleep(1100 * time.Millisecond) // input is kept to the second
+	if r := call(alice, ClientLeaseRequest{Action: "input", Lease: mac.Lease.ID}); r.State != "active" || r.Primary != mac.Lease.ID {
+		t.Fatalf("input on the MacBook = %+v, want it primary", r)
 	}
-	if r := call(alice, ClientLeaseRequest{Action: "renew", Lease: phone.Lease.ID}); r.State != "taken_over" || r.By.Device != "MacBook" {
-		t.Fatalf("the iPhone's renewal = %+v, want taken_over by MacBook", r)
+	if g := call(alice, ClientLeaseRequest{Action: "get"}); g.Lease == nil || g.Lease.Device != "MacBook" {
+		t.Fatalf("get after typing on the MacBook = %+v", g.Lease)
 	}
-	// The same server opening again keeps its lease — no takeover of itself.
-	again := call(alice, ClientLeaseRequest{Action: "acquire", Lease: back.Lease.ID, Device: "MacBook"})
-	if again.TookOver != nil || again.Lease.ID != back.Lease.ID {
-		t.Fatalf("re-acquire with the current id = %+v, want the same lease, no takeover", again)
+	if r := call(bob, ClientLeaseRequest{Action: "renew", Lease: b.Lease.ID}); r.State != "active" || len(r.Clients) != 1 {
+		t.Fatalf("bob's renewal = %+v, want his one client only", r)
 	}
-	if r := call(alice, ClientLeaseRequest{Action: "release", Lease: back.Lease.ID}); r.State != "released" {
+	// list: every client, no lease handed out, no key.
+	if l := call(alice, ClientLeaseRequest{Action: "list"}); l.Lease != nil || l.ActionKey != "" || len(l.Clients) != 2 {
+		t.Fatalf("list = %+v", l)
+	}
+	// The same server opening again keeps its lease.
+	again := call(alice, ClientLeaseRequest{Action: "acquire", Lease: mac.Lease.ID, Device: "MacBook"})
+	if again.Lease.ID != mac.Lease.ID || len(again.Clients) != 2 {
+		t.Fatalf("re-acquire with its own id = %+v, want the same lease", again)
+	}
+	// Disconnect the iPhone from the MacBook: it reads taken_over/revoked, and
+	// bob cannot disconnect alice's.
+	if code, _, _ := postClient(t, h, nil, as(bob, ClientLeaseRequest{Action: "revoke", Target: phone.Lease.ID})); code != http.StatusNotFound {
+		t.Fatalf("bob revoking alice's client: HTTP %d, want 404", code)
+	}
+	if r := call(alice, ClientLeaseRequest{Action: "revoke", Target: phone.Lease.ID}); r.State != "revoked" || len(r.Clients) != 1 {
+		t.Fatalf("revoke = %+v", r)
+	}
+	if r := call(alice, ClientLeaseRequest{Action: "renew", Lease: phone.Lease.ID}); r.State != "taken_over" || r.Reason != "revoked" {
+		t.Fatalf("the iPhone after revoke = %+v, want taken_over revoked", r)
+	}
+	if r := call(alice, ClientLeaseRequest{Action: "release", Lease: mac.Lease.ID}); r.State != "released" {
 		t.Fatalf("release = %+v", r)
 	}
 	if g := call(alice, ClientLeaseRequest{Action: "get"}); g.State != "none" {
@@ -122,47 +139,125 @@ func TestFleetClientLeaseByCertificate(t *testing.T) {
 	}
 }
 
-// A lapsed lease is not taken over: the next client gets a fresh one with no
-// took_over, and the sleeper's renewal on waking reads taken_over. A lapsed
-// lease nobody replaced carries on; an id the hub forgot (a restart) is
-// re-adopted while nobody else holds one.
-func TestClientLeaseTableExpiry(t *testing.T) {
+// Several clients at once (claude-fleet#1932): two active side by side; the
+// primary follows the last input; one idle past FLEET_CLIENT_IDLE is not
+// primary while another is in use; the fifth asks the one used least
+// recently to leave; a lapsed lease carries on unless it was asked to leave;
+// an id the hub forgot is re-adopted while there is room.
+func TestClientLeaseTableSeveral(t *testing.T) {
 	var tb clientLeaseTable
 	t0 := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
-	mac := tb.acquire("p:a", ClientLeaseRequest{Device: "MacBook"}, t0)
+	at := func(s int) time.Time { return t0.Add(time.Duration(s) * time.Second) }
+	mac := tb.acquire("p:a", ClientLeaseRequest{Device: "MacBook"}, at(0))
+	ph := tb.acquire("p:a", ClientLeaseRequest{Device: "iPhone"}, at(1))
+	if ph.Evicted != nil || len(ph.Clients) != 2 {
+		t.Fatalf("second client = %+v", ph)
+	}
+	prim := func(now time.Time) string { return tb.get("p:a", now).Lease.Device }
+	if p := prim(at(2)); p != "iPhone" {
+		t.Fatalf("primary after opening the iPhone = %s", p)
+	}
+	tb.renew("p:a", ClientLeaseRequest{Lease: mac.Lease.ID, LastInput: at(5).Unix()}, at(6), false)
+	if p := prim(at(7)); p != "MacBook" {
+		t.Fatalf("primary after typing on the MacBook = %s", p)
+	}
+	tb.renew("p:a", ClientLeaseRequest{Lease: ph.Lease.ID}, at(8), true)
+	if p := prim(at(9)); p != "iPhone" {
+		t.Fatalf("primary after tapping the iPhone = %s", p)
+	}
+	// A renewal with no input moves nothing; a future last_input is held to now.
+	tb.renew("p:a", ClientLeaseRequest{Lease: mac.Lease.ID}, at(10), false)
+	if p := prim(at(11)); p != "iPhone" {
+		t.Fatalf("a plain renewal made the MacBook primary")
+	}
+	// Idle: the iPhone (last input at 8) sits 11 minutes; the MacBook, typed
+	// at 10m, is primary even though… then both idle → latest wins.
+	tb.renew("p:a", ClientLeaseRequest{Lease: mac.Lease.ID, LastInput: at(600).Unix()}, at(600), false)
+	tb.renew("p:a", ClientLeaseRequest{Lease: ph.Lease.ID}, at(600), false)
+	tb.renew("p:a", ClientLeaseRequest{Lease: ph.Lease.ID, LastInput: at(8).Unix()}, at(700), false)
+	tb.renew("p:a", ClientLeaseRequest{Lease: mac.Lease.ID}, at(700), false)
+	if p := prim(at(701)); p != "MacBook" {
+		t.Fatalf("primary = %s, want the MacBook (latest input)", p)
+	}
+	tb.idle = 5 * time.Minute
+	tb.renew("p:a", ClientLeaseRequest{Lease: ph.Lease.ID, LastInput: at(690).Unix()}, at(1000), false)
+	tb.renew("p:a", ClientLeaseRequest{Lease: mac.Lease.ID, LastInput: at(980).Unix()}, at(1000), false)
+	if p := prim(at(1001)); p != "MacBook" {
+		t.Fatalf("primary = %s, want the MacBook (the iPhone idle)", p)
+	}
+	tb.idle = 0
 
-	// Asleep a minute, nobody came: its renewal simply carries on.
-	if r := tb.renew("p:a", ClientLeaseRequest{Lease: mac.Lease.ID}, t0.Add(time.Minute)); r.State != "active" {
-		t.Fatalf("a lapsed lease nobody replaced = %+v, want active", r)
+	// Third and fourth fit; the fifth asks the one used least recently.
+	ipad := tb.acquire("p:a", ClientLeaseRequest{Device: "iPad"}, at(1002))
+	tb.acquire("p:a", ClientLeaseRequest{Device: "mini"}, at(1003))
+	if ipad.Evicted != nil {
+		t.Fatalf("the third client evicted %+v", ipad.Evicted)
 	}
-	// Asleep again past the TTL; the phone connects.
-	t1 := t0.Add(2 * time.Minute)
-	ph := tb.acquire("p:a", ClientLeaseRequest{Device: "iPhone"}, t1)
-	if ph.TookOver != nil {
-		t.Fatalf("an acquire after the lease lapsed took over %+v — that is not a takeover", ph.TookOver)
+	fifth := tb.acquire("p:a", ClientLeaseRequest{Device: "work-pc"}, at(1004))
+	if fifth.Evicted == nil || fifth.Evicted.Device != "iPhone" || len(fifth.Clients) != 4 {
+		t.Fatalf("the fifth = %+v, want the iPhone (used least recently) asked to leave, 4 left", fifth)
 	}
-	if r := tb.renew("p:a", ClientLeaseRequest{Lease: mac.Lease.ID}, t1.Add(time.Second)); r.State != "taken_over" || r.By.Device != "iPhone" {
-		t.Fatalf("the sleeper waking = %+v, want taken_over by iPhone", r)
+	if r := tb.renew("p:a", ClientLeaseRequest{Lease: ph.Lease.ID}, at(1005), false); r.State != "taken_over" || r.Reason != "evicted" || r.By.Device != "work-pc" {
+		t.Fatalf("the iPhone's renewal = %+v, want taken_over evicted by work-pc", r)
 	}
-	if r := tb.get("p:a", t1.Add(ClientLeaseTTL+time.Second)); r.State != "none" {
-		t.Fatalf("get after the phone's lease lapsed = %+v, want none", r)
+	// Enter on its screen: back in, the least recently used other one goes.
+	back := tb.acquire("p:a", ClientLeaseRequest{Lease: ph.Lease.ID, Device: "iPhone"}, at(1006))
+	if back.Evicted == nil || back.Evicted.Device != "MacBook" {
+		t.Fatalf("taking it back = %+v, want the MacBook (980) asked to leave", back.Evicted)
 	}
-	// A restart: the table is empty, the phone renews its id — re-adopted.
+
+	// A lapsed lease nobody asked to leave carries on.
+	var tl clientLeaseTable
+	m := tl.acquire("p:a", ClientLeaseRequest{Device: "MacBook"}, at(0))
+	tl.acquire("p:a", ClientLeaseRequest{Device: "iPhone"}, at(120))
+	if r := tl.renew("p:a", ClientLeaseRequest{Lease: m.Lease.ID}, at(180), false); r.State != "active" {
+		t.Fatalf("a lapsed MacBook waking = %+v, want active", r)
+	}
+	if r := tl.get("p:a", at(180+int(ClientLeaseTTL/time.Second)+1)); r.State != "none" {
+		t.Fatalf("get after every lease lapsed = %+v, want none", r)
+	}
+	// A lapsed lease makes room quietly: no eviction reported.
+	tl.max = 2
+	if r := tl.acquire("p:a", ClientLeaseRequest{Device: "iPad"}, at(400)); r.Evicted != nil {
+		t.Fatalf("a lapsed lease's room = %+v, want no eviction", r.Evicted)
+	}
+
+	// A restart: the table is empty, each client renews its id — re-adopted.
 	var fresh clientLeaseTable
-	if r := fresh.renew("p:a", ClientLeaseRequest{Lease: ph.Lease.ID, Device: "iPhone"}, t1); r.State != "active" || r.Lease.ID != ph.Lease.ID {
-		t.Fatalf("a renewal the hub forgot = %+v, want the same id active", r)
+	for _, id := range []string{"a1", "a2"} {
+		if r := fresh.renew("p:a", ClientLeaseRequest{Lease: id, Device: id}, at(0), false); r.State != "active" || r.Lease.ID != id {
+			t.Fatalf("a renewal the hub forgot = %+v", r)
+		}
 	}
-	// …but not while another client holds a live one.
-	if r := fresh.renew("p:a", ClientLeaseRequest{Lease: "stale"}, t1); r.State != "taken_over" || r.By.Device != "iPhone" {
-		t.Fatalf("an unknown id beside a live lease = %+v, want taken_over", r)
+	fresh.max = 2
+	if r := fresh.renew("p:a", ClientLeaseRequest{Lease: "a3"}, at(1), false); r.State != "taken_over" || r.Reason != "evicted" {
+		t.Fatalf("a forgotten id past the limit = %+v, want taken_over evicted", r)
 	}
 	// The device a client reports is held to a short printable word.
-	l := tb.acquire("p:b", ClientLeaseRequest{Device: "evil\x1b[2Jname"}, t1)
+	l := tb.acquire("p:b", ClientLeaseRequest{Device: "evil\x1b[2Jname"}, at(1))
 	if l.Lease.Device != "evil[2Jname" {
 		t.Fatalf("device = %q, want control bytes dropped", l.Lease.Device)
 	}
-	if l := tb.acquire("p:c", ClientLeaseRequest{}, t1); l.Lease.Device != "未知设备" {
+	if l := tb.acquire("p:c", ClientLeaseRequest{}, at(1)); l.Lease.Device != "未知设备" {
 		t.Fatalf("no device = %q, want 未知设备", l.Lease.Device)
+	}
+}
+
+// FLEET_CLIENT_MAX / FLEET_CLIENT_IDLE set the limit and the idle bound.
+func TestClientLeaseEnv(t *testing.T) {
+	t.Setenv("FLEET_CLIENT_MAX", "2")
+	t.Setenv("FLEET_CLIENT_IDLE", "90")
+	var tb clientLeaseTable
+	tb.init()
+	if tb.max != 2 || tb.idle != 90*time.Second {
+		t.Fatalf("max/idle = %d/%s", tb.max, tb.idle)
+	}
+	t.Setenv("FLEET_CLIENT_MAX", "")
+	t.Setenv("FLEET_CLIENT_IDLE", "")
+	var td clientLeaseTable
+	td.init()
+	if td.max != 4 || td.idle != 10*time.Minute {
+		t.Fatalf("defaults = %d/%s", td.max, td.idle)
 	}
 }
 
@@ -211,11 +306,13 @@ func TestNodeClientReadsOwnersLease(t *testing.T) {
 	if _, o := read(n["bob4"].token); o.State != "none" {
 		t.Fatalf("bob's node must not read alice's client: %+v", o)
 	}
-	// The phone takes over: the next read follows.
+	// The phone opens beside it: the read follows the primary (just opened),
+	// and lists both.
 	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "verkyyi-iphone", OS: "iOS", Terminal: "Termius",
 		Via: "tailnet", Host: "m5", Caps: []string{"link"}}, now.Add(time.Second))
-	if _, o := read(n["alice4"].token); o.Lease == nil || o.Lease.Device != "verkyyi-iphone" || o.Lease.Host != "m5" || o.Lease.Via != "tailnet" {
-		t.Fatalf("after takeover: %+v", o.Lease)
+	if _, o := read(n["alice4"].token); o.Lease == nil || o.Lease.Device != "verkyyi-iphone" || o.Lease.Host != "m5" || o.Lease.Via != "tailnet" ||
+		len(o.Clients) != 2 || o.Primary != o.Lease.ID {
+		t.Fatalf("after the phone opened: %+v", o)
 	}
 	// A bad via is dropped, not stored.
 	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "x", Via: "carrier-pigeon"}, now.Add(2*time.Second))

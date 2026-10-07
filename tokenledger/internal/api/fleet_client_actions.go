@@ -19,7 +19,9 @@ import (
 // Open it on the device in your hands (claude-fleet#1717, EPIC #1710 C7).
 //
 // A session anywhere asks to show the person a page, a file or a note; the
-// hub hands it to the ONE client that person holds right now (the C5 lease),
+// hub hands it to the client that person is using right now — the primary of
+// their leases (C5, #1715; several since #1932: the one typed into last) — or,
+// a notify with all, to every client they hold,
 // and that client does it on its own device: `open` / `xdg-open`, a page on
 // the session's machine forwarded over the client's ssh master first, iTerm2's
 // escapes where the terminal is iTerm2, a link to tap where the device cannot
@@ -40,9 +42,9 @@ import (
 // own client is told (ClientLeaseResponse.ActionKey, on acquire and renewal) —
 // and carries the lease id it was sent to. A client runs an action only when
 // the signature checks under its key and the lease is its own, so nothing the
-// network or another client injects is ever executed, and an action follows a
-// takeover to nobody: a send reaches the lease current at that moment, and a
-// lease that is taken over loses its queue.
+// network or another client injects is ever executed: a send reaches the
+// primary at that moment, and a lease that is asked to leave or disconnected
+// loses its queue and its key.
 //
 // The machine an action came from is the hub's word (the sending node's
 // roster name), never the body's: the client forwards a loopback page or
@@ -106,6 +108,9 @@ type ClientActionSend struct {
 	Title  string            `json:"title,omitempty"`
 	Body   string            `json:"body,omitempty"`
 	Links  ClientActionLinks `json:"links,omitempty"`
+	// All sends a notify to every client the person holds, not only the
+	// primary (#1932); the answer is the primary's.
+	All bool `json:"all,omitempty"`
 	// Wait is how many seconds the sender waits for the client's answer
 	// (at most clientActionWait); 0 = queued is the answer.
 	Wait int `json:"wait,omitempty"`
@@ -221,34 +226,52 @@ func signClientAction(key string, payload []byte) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// send queues a for key's current lease; nil lease = nobody is connected.
-func (t *clientLeaseTable) send(key string, a ClientAction, now time.Time) (*ClientLease, string, *clientActionResultRec) {
+// send queues a for key's primary lease — and, all, for every other live one
+// too, each signed under its own key; nil lease = nobody is connected. The
+// record waited on is the primary's.
+func (t *clientLeaseTable) send(key string, a ClientAction, all bool, now time.Time) (*ClientLease, string, *clientActionResultRec) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.init()
 	t.acts.init()
 	t.acts.prune(now)
-	c := t.cur[key]
-	if !t.live(c, now) {
+	p := t.primaryLocked(key, now)
+	if p == nil {
 		return nil, "", nil
 	}
-	a.ID, a.Lease, a.TS = newClientLeaseID(), c.ID, now.Unix()
-	payload, _ := json.Marshal(a)
-	sa := SignedClientAction{Payload: string(payload), Sig: signClientAction(t.actionKeyLocked(c.ID), payload)}
-	q := &t.acts
-	if len(q.wait[c.ID]) >= clientActionMax {
-		q.wait[c.ID], q.at[c.ID] = q.wait[c.ID][1:], q.at[c.ID][1:]
+	to := []*ClientLease{p}
+	if all {
+		for _, l := range t.liveLocked(key, now) {
+			if l.ID != p.ID {
+				to = append(to, l)
+			}
+		}
 	}
-	q.wait[c.ID] = append(q.wait[c.ID], sa)
-	q.at[c.ID] = append(q.at[c.ID], now)
-	rec := &clientActionResultRec{lease: c.ID, at: now, done: make(chan struct{})}
-	q.results[a.ID] = rec
+	var id string
+	var rec *clientActionResultRec
+	q := &t.acts
+	for i, c := range to {
+		b := a
+		b.ID, b.Lease, b.TS = newClientLeaseID(), c.ID, now.Unix()
+		payload, _ := json.Marshal(b)
+		sa := SignedClientAction{Payload: string(payload), Sig: signClientAction(t.actionKeyLocked(c.ID), payload)}
+		if len(q.wait[c.ID]) >= clientActionMax {
+			q.wait[c.ID], q.at[c.ID] = q.wait[c.ID][1:], q.at[c.ID][1:]
+		}
+		q.wait[c.ID] = append(q.wait[c.ID], sa)
+		q.at[c.ID] = append(q.at[c.ID], now)
+		r := &clientActionResultRec{lease: c.ID, at: now, done: make(chan struct{})}
+		q.results[b.ID] = r
+		if i == 0 {
+			id, rec = b.ID, r
+		}
+	}
 	close(q.wake)
 	q.wake = make(chan struct{})
-	return leaseCopy(c), a.ID, rec
+	return leaseCopy(p), id, rec
 }
 
-// take drains what waits for lease, if it is key's current one. state is
+// take drains what waits for lease, if it is one of key's. state is
 // active, or taken_over / none; wake is what to wait on when nothing waits.
 func (t *clientLeaseTable) take(key, lease string, now time.Time) (string, []SignedClientAction, chan struct{}) {
 	t.mu.Lock()
@@ -256,8 +279,7 @@ func (t *clientLeaseTable) take(key, lease string, now time.Time) (string, []Sig
 	t.init()
 	t.acts.init()
 	t.acts.prune(now)
-	c := t.cur[key]
-	if c == nil || c.ID != lease {
+	if t.holdsLocked(key, lease) == nil {
 		if g, ok := t.gone[lease]; ok && g.key == key {
 			return "taken_over", nil, nil
 		}
@@ -377,7 +399,7 @@ func (s *Server) handleNodeClientActions(w http.ResponseWriter, r *http.Request)
 	key := clientLeaseKey(sshRelayIdentity{Operator: owner == "", Principal: owner})
 	now := time.Now()
 	w.Header().Set("Cache-Control", "no-store")
-	c, id, rec := s.clientLeases.send(key, a, now)
+	c, id, rec := s.clientLeases.send(key, a, req.All && req.Kind == "notify", now)
 	if c == nil {
 		writeJSON(w, http.StatusOK, ClientActionSendResponse{State: "none"})
 		return

@@ -72,6 +72,21 @@ t, _ = tb.fit(rec, 100, route="relay", now=0); has("relay: 中转", t, "@m5 · �
 t, _ = tb.fit(dict(ask, lost=True), 100, now=0)
 eq("lost wins over asking: grey", tb.fit(dict(ask, lost=True), 100, now=0)[1], tb.BG_DOWN)
 t, _ = tb.fit(dict(rec, key="", title="scratch-5"), 60, now=0); has("no key: the title", t, "scratch-5")
+# also open on another of your clients (#1932): off client.list.json, wide only;
+# your own client and another session's viewers never count
+d = tempfile.mkdtemp()
+json.dump({"lease": "L1", "clients": [{"id": "L1", "device": "MacBook", "viewing": "f/w9"},
+          {"id": "L2", "device": "iPhone", "viewing": "f/w9"}, {"id": "L3", "device": "iPad", "viewing": "f/other"}]},
+          open(os.path.join(d, "client.list.json"), "w"))
+os.environ["FLEET_CLIENT_LIST_FILE"] = os.path.join(d, "client.list.json"); os.environ["FLEET_UI_LANG"] = "zh"
+also = tb.also_on(dict(rec, wid="f/w9"))
+eq("also: the other client viewing it", also, "也在 iPhone 上打开")
+eq("also: nobody else on this one", tb.also_on(dict(rec, wid="f/w1")), "")
+eq("also: no wid", tb.also_on(rec), "")
+t, _ = tb.fit(dict(rec, also=also), 150, now=0); has("also: shown wide", t, "也在 iPhone 上打开")
+eq("also: the line is still the width", tb.cells(t), 150)
+t, _ = tb.fit(dict(rec, also=also), 100, now=0); has("also: dropped first", t, "也在", False)
+del os.environ["FLEET_CLIENT_LIST_FILE"]; del os.environ["FLEET_UI_LANG"]
 eq("loop / done / idle glyphs", [tb.state_of({"state": s})[0] for s in ("looping", "done", "", "failed")],
    ["↻", "✓", "○", "✖"])
 # the record, off the list's rows (fleet-sidebar.py bar_record)
@@ -87,6 +102,8 @@ eq("record: place", (r["i"], r["n"]), (2, 3)); eq("record: perm", r["kind"], "pe
 eq("record: key / pr", (r["key"], r["pr"]), ("#2", "#9✓")); eq("record: lost", r["lost"], True)
 eq("record: machine", r["node"], "m4"); eq("record: repo in a fleet of two", r["repo"], "claude-fleet")
 eq("record: slug", r["slug"], "verkyyi/claude-fleet"); eq("record: waiting rows", r["ask"], 1)
+eq("record: a local row carries no wid", r["wid"], "")
+eq("record: a remote row's wid (#1932)", sb.bar_record([["wid:f/w9"] + rows[1][1:]], "wid:f/w9")["wid"], "f/w9")
 eq("record: none for a row not listed", sb.bar_record(rows, "@9"), None)
 eq("record: a one-repo fleet names no repo", sb.bar_record(rows[:3], "@1")["repo"], "")
 eq("record: no PR → empty", sb.bar_record(rows, "@1")["pr"], "")

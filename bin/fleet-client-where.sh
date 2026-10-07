@@ -6,7 +6,17 @@
 #
 #   fleet-client-where.sh           one line:  MacBook · macOS · iTerm2 3.6 · 能：打开网页、收文件、系统通知、iTerm2
 #                                              verkyyi-iphone · iOS · Termius（客户端在 m5 上运行）· 能：给链接
-#   fleet-client-where.sh --json    {"state","device","os","terminal","caps","since","via","host","source","hub"}
+#                                              MacBook · macOS · iTerm2 3.6 · 能：… · 也开着：verkyyi-iphone
+#   fleet-client-where.sh --json    {"state","device","os","terminal","caps","since","via","host","source","hub",
+#                                    "clients","primary"}
+#
+# A person may hold several clients at once (issue #1932, EPIC #1906 C13): where
+# they are is the PRIMARY — the one typed into or tapped last (a client idle past
+# FLEET_CLIENT_IDLE, 10 min, loses it to one in use). `clients` lists every one
+# ({id device os terminal via host caps last_input viewing primary}), `primary`
+# is its id; the line ends 「也开着：…」 when there is more than one. One client
+# (or an older hub): the line and the other keys exactly as before, clients
+# holding that one.
 #
 # Two sources, one output:
 #   hub    the person's client lease (#1715) — a node asks with its own token
@@ -75,6 +85,7 @@ def iso(t):
 
 
 HUB = "up"
+CLIENTS, PRIMARY = [], ""
 
 
 def from_hub():
@@ -95,6 +106,9 @@ def from_hub():
     lease = d.get("lease") or {}
     if st != "active" or not lease:
         return "none", {}
+    global CLIENTS, PRIMARY
+    CLIENTS = [c for c in (d.get("clients") or []) if isinstance(c, dict)] or [lease]
+    PRIMARY = d.get("primary") or lease.get("id") or ""
     return "active", lease
 
 
@@ -136,6 +150,9 @@ for k in KEYS:
     v = w.get(k)
     out[k] = list(v or []) if k == "caps" else (v or "")
 out["hub"] = HUB
+if state == "active" and not CLIENTS:
+    CLIENTS = [dict(w)]   # no hub: the client in use here
+out["clients"], out["primary"] = CLIENTS, PRIMARY
 if os.environ.get("JSON") == "1":
     print(json.dumps(out, ensure_ascii=False))
     sys.exit(0 if state == "active" else 3)
@@ -148,5 +165,8 @@ if out["via"] and out["via"] != "local" and out["host"]:
 caps = [CAPS.get(c, c) for c in out["caps"]]
 if caps:
     line += ("· " if line.endswith("）") else " · ") + "能：" + "、".join(caps)
+others = [c.get("device") or "未知设备" for c in CLIENTS if c.get("id") and c.get("id") != PRIMARY]
+if others:
+    line += " · 也开着：" + "、".join(others)
 print(line)
 PY

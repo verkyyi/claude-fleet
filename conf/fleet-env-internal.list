@@ -65,6 +65,8 @@ FLEET_CLIENT_FLEET_SHOW            seam: fleet-show.sh as the action loop runs i
 FLEET_CLIENT_KEY_FILE              path: the lease's action key, 0600 (fleet-shell.sh sets it; fleet-client-lease.py writes, fleet-client-actions.py reads, #1717)
 FLEET_CLIENT_LEASE_CMD             seam: the client-lease command fleet-shell.sh asks (default python3 fleet-client-lease.py; fleet-client-lease-selftest.sh swaps in a fake hub, #1715)
 FLEET_CLIENT_LEASE_EVERY           knob: seconds between the shell keeper's client-lease renewals (fleet-shell.sh keeper, 15, #1715)
+FLEET_CLIENT_INPUT_EVERY           knob: seconds between the shell keeper's looks at its clients' last input (fleet-shell.sh keeper, 5, #1932)
+FLEET_CLIENT_LIST_FILE             path: the person's clients as the hub last said (fleet-shell.sh sets it; fleet-client-lease.py writes, the top line reads, #1932)
 FLEET_CLIENT_NOTIFY_CMD            seam: the system notifier the action loop runs (default osascript / notify-send, #1717)
 FLEET_CLIENT_OPEN_CMD              seam: the opener the action loop runs (default open / xdg-open, #1717)
 FLEET_CLIENT_TTY                   seam: the terminal fleet-client-lease.py asks XTVERSION on (default /dev/tty; fleet-client-where-selftest.sh hands it a pty, #1716)

@@ -51,7 +51,8 @@ mk() { printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v a="$1" '$1 == a { print $2; e
 if [ "${1:-}" = --keys ]; then
   # the shell's menu has no row-less items (issue #1518), so its sheet lists none
   printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v sh="${FLEET_SHELL:-0}" \
-    'sh == 1 && ($1 == "new" || $1 == "newto" || $1 == "restore" || $1 == "repo") { next } { print $2 "\t" $3 }'
+    'sh == 1 && ($1 == "new" || $1 == "newto" || $1 == "restore" || $1 == "repo") { next }
+     sh != 1 && $1 == "clients" { next } { print $2 "\t" $3 }'
   exit 0
 fi
 
@@ -249,6 +250,11 @@ if [ -n "$remote" ]; then
   if [ "${FLEET_SHELL:-0}" != 1 ]; then
     group
     add_other
+  else
+    # 我的客户端 (issue #1932): the clients open at once, one to disconnect —
+    # a second menu, drawn by fleet-client-menu.sh on the same client
+    group
+    add "$(t menu_clients)" "$(mk clients)" "$(sh_run "bash $(sq "$BIN/fleet-client-menu.sh") menu $(sq "$sess")${client:+ $(sq "$client")}")"
   fi
   show "$title"
 fi
