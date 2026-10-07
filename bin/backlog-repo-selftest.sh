@@ -18,8 +18,9 @@
 #      current-repo file too); dash-issue-new.sh with no repo asks via
 #      fleet-repo-ask.sh, files into the pick, drops the optimistic row into THAT
 #      repo's cache, and its --spawn passes --repo.
-#   F. a one-repo fleet: rows carry their repo like any other (one path, #1938),
-#      no bind carries --repo, actions resolve the fleet's only repo.
+#   F. a one-repo fleet: one road (#1938, #1940) — rows carry their repo and every
+#      bind passes it on (--repo={4}), exactly as with 2+; ⌃n never asks, files into
+#      the only repo and spawns with --repo; only the `all repos` note is a count.
 # tmux runs on a PRIVATE socket via a PATH shim (run-shell runs its body inline, so
 # fleet_bg is synchronous); gh, fzf and the spawn/collector scripts are stubs.
 set -uo pipefail
@@ -183,7 +184,7 @@ a=$(cat "$WORK/fzf.args")
 has   "D: enter spawns with --repo={4}"       "$a" "dash-issue-session.sh {1} --async --repo={4}"
 has   "D: preview carries --repo={4}"         "$a" "tmux-issue-preview.sh {1} --repo={4}"
 has   "D: priority carries --repo={4}"        "$a" "cycle --repo={4}"
-has   "D: close sentinel carries {4}"         "$a" "printf 'close %s' {1} {4}"
+has   "D: close sentinel carries {4}"         "$a" "printf 'close %s %s' {1} {4}"
 has   "D: open uses the row's repo"           "$a" "https://github.com/{4}/issues/{1}"
 
 # --- E. new issue ----------------------------------------------------------------
@@ -222,8 +223,8 @@ echo o/bbb > "$FLEET_CONF_DIR/fleets/solo/current-repo"
 eq    "F: a stray current-repo file is ignored" "$(rows solo)" "$out"
 logs
 FAKE_CUR=solo POPUP=1 bash "$SB/tmux-issues.sh" all >/dev/null 2>&1
-hasnt "F: no bind carries --repo"             "$(cat "$WORK/fzf.args")" "--repo="
-has   "F: open keeps the fleet repo"          "$(cat "$WORK/fzf.args")" "https://github.com/o/sss/issues/{1}"
+has   "F: binds carry --repo={4}, as with 2+"  "$(cat "$WORK/fzf.args")" "dash-issue-session.sh {1} --async --repo={4}"
+has   "F: open uses the row's repo"           "$(cat "$WORK/fzf.args")" "https://github.com/{4}/issues/{1}"
 # a popup's border is the popup frame's (#1619): no inner border, no label
 hasnt "F: no inner border label"             "$(cat "$WORK/fzf.args")" "--border-label="
 hasnt "F: one repo, no all-repos note"       "$(cat "$WORK/fzf.args")" "all repos"
@@ -234,7 +235,7 @@ seed; logs
 FAKE_CUR=solo FZF_TITLE='solo thing' bash "$SB/dash-issue-new.sh" confirm --spawn >/dev/null 2>&1
 hasnt "F: ⌃n never asks"                      "$(cat "$WORK/fzf.args")" "which repo"
 has   "F: files into the fleet repo"          "$(cat "$WORK/gh.log")" "issue create --repo o/sss"
-eq    "F: spawn call unchanged (no --repo)"   "$(cat "$WORK/spawn.log")" "77 --title solo thing"
+eq    "F: spawn names the repo, as with 2+"   "$(cat "$WORK/spawn.log")" "77 --title solo thing --repo o/sss"
 
 if [ "$FAILS" -gt 0 ]; then
   printf 'backlog-repo-selftest: %d/%d checks FAILED\n' "$FAILS" "$CHECKS" >&2; exit 1
