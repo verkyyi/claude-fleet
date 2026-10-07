@@ -326,6 +326,10 @@ func (s *Server) routes() *routeMux {
 	// Who may sign in with GitHub (claude-fleet#1986): the admin's, with or
 	// without the fleet module.
 	mux.Handle("/v1/fleet/users", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetUsers))))
+	// Invites (claude-fleet#2261): an admin mints one; the newcomer's
+	// install command fetches /i/<code>, public — the code is the credential.
+	mux.Handle("/v1/fleet/invites", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetInvites))))
+	mux.HandleFunc(InvitePath, s.handleInviteInstall)
 
 	if s.Fleet {
 		// The control channel authenticates per endpoint, like ingest.
@@ -429,6 +433,9 @@ func (s *Server) routes() *routeMux {
 		mux.Handle("/v1/fleet/login/start", s.stateRouteFunc(s.handleDeviceStart))
 		mux.Handle("/v1/fleet/login/poll", s.stateRouteFunc(s.handleDevicePoll))
 		mux.Handle("/fleet/login", s.stateRoute(s.rememberLoginCode(s.viewerOnly(http.HandlerFunc(s.handleFleetLoginPage)))))
+		// A sign-in refused while a `fleet login` waits (claude-fleet#2261):
+		// a signed note, so the terminal hears why — public, like start/poll.
+		mux.Handle(LoginRefusedPath, s.stateRouteFunc(s.handleLoginRefused))
 		// Drill people (claude-fleet#2010): an approve code confirms a scan
 		// as the drill person — it is the whole credential, so outside the
 		// viewer gate; the invite authenticates itself (cert or gate).
@@ -765,7 +772,8 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 
 // logRequests logs method, path, status and duration, plus who it was when a
 // signed-in identity let the request in. Query strings are omitted: they can
-// carry the viewer token.
+// carry the viewer token. So is an invite's code (claude-fleet#2261): the
+// path /i/<code> is logged as /i/….
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -775,7 +783,11 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		var viewer string
 		r = r.WithContext(context.WithValue(r.Context(), viewerKey{}, &viewer))
 		next.ServeHTTP(sw, r)
-		line := fmt.Sprintf("%s %s %d %s", r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Millisecond))
+		path := r.URL.Path
+		if strings.HasPrefix(path, InvitePath) {
+			path = InvitePath + "…"
+		}
+		line := fmt.Sprintf("%s %s %d %s", r.Method, path, sw.status, time.Since(start).Round(time.Millisecond))
 		if viewer != "" {
 			line += " viewer=" + viewer
 		}

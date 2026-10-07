@@ -69,6 +69,8 @@
 #                                                   (go test, when a toolchain is here); the kind drill is
 #                                                   .github/workflows/hub-rolling.yml
 #   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single
+#   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
+#                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
@@ -3407,6 +3409,40 @@ drill_cold_fill_fails() {
   case " $(printf '%s ' $wins)" in *" 5 "*) WHY="the window of the failed checkout is still open"; return 1 ;; esac
   [ -z "$(ls -d "$d"/wt/*issue-5 2>/dev/null)" ] || { WHY="the half worktree is still there"; return 1; }
   WHAT="检出失败：会话窗口和半截 worktree 都收走，派发方得到 exit 1「worktree checkout」"
+}
+
+# ---- invite-expired (#2261, EPIC #2259 C2): a newcomer signs in with an invite
+# that cannot be used — expired, used, revoked, someone else's, never minted. The
+# whole change is the hub's, so the drill is its Go tests, run for real where a
+# toolchain is: each bad code is refused with its own reason and puts nobody on
+# the list; a good one lets the person in once and audits 「邀请已使用」; no code
+# is the list as before, saying the line to send an admin; the waiting
+# `fleet login` hears the refusal instead of waiting ten minutes. Without go the
+# tests must at least exist by name.
+drill_invite_expired() {
+  CAP=120; local t0 out rc tests f
+  tests='TestInviteRefusals TestInviteLetsANewcomerIn TestInviteNoCodeIsTheListAsBefore TestInviteRefusalReachesTheTerminal TestInviteOpensTheLoginWithAutoAssignOff'
+  f="$ROOT/tokenledger/internal/api/fleet_invites_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 'denyInvitePrefix + reason' "$ROOT/tokenledger/internal/api/fleet_invites.go" \
+    || { WHY="admitInvite no longer refuses a bad invite with its reason"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='过期 / 已用 / 撤销 / 别人的 / 没发过的码各被拒且说清原因、名单不变；好码进名单一次、审计「邀请已使用」；终端立刻听到拒绝（go test 五条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
 }
 
 # ================================================================ run ===========

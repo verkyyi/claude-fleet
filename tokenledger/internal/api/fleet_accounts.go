@@ -139,6 +139,14 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 		return moved
 	}
 	hosts := s.autoAssign()
+	if len(hosts) == 0 && s.invitedPrincipal(principal) {
+		// Came in on an invite (claude-fleet#2261): their login is opened
+		// whatever fleet.auto_assign says — on the least-busy machine when
+		// the setting names none.
+		if h := s.leastBusyMachine(now); h != "" {
+			hosts = []string{h}
+		}
+	}
 	if len(hosts) == 0 {
 		return nil
 	}
