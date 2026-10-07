@@ -2017,6 +2017,78 @@ PY
   SECS=$(since "$t0"); WHAT="同一台两个终端 + 另一台设备各自的租约，谁也不进待机；在这里打字它又是主客户端"
 }
 
+# ---- phone-squeezes-window (#1933): two clients of one fleet, 160 and 50 columns,
+# each through its own view session (#1489) on the same window, under the node
+# conf's own window-size lines. Typing on one sizes the window to it; a view's
+# `select` (fleet-remote-view.sh: switch-client -c) does the same for a window
+# it moves to. Red on `window-size smallest`: the phone held every window at 50.
+drill_phone_squeezes_window() {
+  CAP=20; local t0 out conf="$ROOT/conf/tmux-attention.conf"
+  out=$(grep -E '^set -g (window-size|aggressive-resize) ' "$conf")
+  [ -n "$out" ] || { WHY="conf/tmux-attention.conf sets no window-size"; return 1; }
+  printf '%s\n' "$out" > "$WORK/ws.conf"
+  t0=$(now)
+  out=$(python3 - "$REAL_TMUX" "$WORK/sock-ws" "$WORK/ws.conf" <<'PY' 2>&1
+import fcntl, os, pty, select, signal, struct, subprocess, sys, termios, time
+tmux, sock, conf = sys.argv[1:4]
+signal.alarm(30)
+def T(*a): return subprocess.run([tmux, "-S", sock] + list(a), capture_output=True, text=True).stdout.strip()
+def die(m): print("WHY=" + m); sys.exit(1)
+T("-f", "/dev/null", "new-session", "-d", "-s", "fl", "-x", "120", "-y", "30", "sleep 600")
+T("source-file", conf)
+w = T("display", "-p", "-t", "=fl:", "#{window_id}")
+kids, fds = [], []
+def attach(view, cols, rows):
+    T("new-session", "-d", "-t", "=fl", "-s", view); T("set", "-t", view, "status", "off")
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.environ.pop("TMUX", None); os.environ["TERM"] = "xterm-256color"
+        os.execvp(tmux, [tmux, "-S", sock, "attach-session", "-t", "=" + view])
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    kids.append(pid); fds.append(fd); return fd
+def pump(secs):
+    end = time.time() + secs
+    while time.time() < end:
+        r, _, _ = select.select(fds, [], [], 0.05)
+        for fd in r:
+            try: os.read(fd, 65536)
+            except OSError: pass
+def width(win):
+    return T("display", "-p", "-t", win, "#{window_width}")
+def until(want, win, what):
+    end = time.time() + 5
+    while time.time() < end:
+        if width(win) == want: return
+        pump(0.1)
+    die("%s: the window is %s columns, not %s" % (what, width(win), want))
+try:
+    mac = attach("fl@view-mac", 160, 40); pump(0.5)
+    phone = attach("fl@view-phone", 50, 30); pump(0.5)
+    if T("list-clients", "-F", "#{client_tty}").count("\n") != 1: die("two clients did not attach")
+    os.write(mac, b"x"); until("160", w, "typed on the Mac (160 columns)")
+    os.write(phone, b"y"); until("50", w, "typed on the phone (50 columns)")
+    os.write(mac, b"z"); until("160", w, "typed on the Mac again")
+    # the phone moves to a second window, then the Mac's view selects it the way
+    # fleet-remote-view.sh does: by its client
+    w2 = T("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "fl:", "sleep 600")
+    T("select-window", "-t", "=fl@view-phone:" + w2); os.write(phone, b"y"); until("50", w2, "the phone on window 2")
+    tty = T("list-clients", "-t", "=fl@view-mac", "-F", "#{client_tty}")
+    T("switch-client", "-c", tty, "-t", "=fl@view-mac:" + w2); until("160", w2, "the Mac's view selected window 2")
+    print("OK")
+finally:
+    for pid in kids:
+        try: os.kill(pid, signal.SIGTERM)
+        except OSError: pass
+PY
+)
+  "$REAL_TMUX" -S "$WORK/sock-ws" kill-server 2>/dev/null
+  [ "$(printf '%s\n' "$out" | tail -n 1)" = OK ] || { WHY=$(printf '%s\n' "$out" | sed -n 's/^WHY=//p' | tail -n 1)
+    WHY="${WHY:-the drive died: $(printf '%s\n' "$out" | tail -n 3 | tr '\n' ' ')}"; return 1; }
+  grep -q 'switch-client -c "$c"' "$BIN/fleet-remote-view.sh" \
+    || { WHY="fleet-remote-view.sh select no longer switches the view's own client"; return 1; }
+  SECS=$(since "$t0"); WHAT="160 列与 50 列两个客户端看同一窗口：谁打字跟谁；视图切窗口也按自己的宽度"
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
