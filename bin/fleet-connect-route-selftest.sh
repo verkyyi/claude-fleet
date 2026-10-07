@@ -176,11 +176,11 @@ def serve(c):
             return reply(c, 401, {"error": "bad signature", "code": "bad_signature"})
         with tempfile.TemporaryDirectory() as td:
             open(td + "/k.pub", "w").write(m["public_key"] + "\n")
-            subprocess.run(["ssh-keygen", "-q", "-s", W + "/ca", "-I", "wecom:wx-alice", "-n", "alice",
+            subprocess.run(["ssh-keygen", "-q", "-s", W + "/ca", "-I", "gh:alice", "-n", "alice",
                             "-V", "-1m:+12h", "-z", "7", td + "/k.pub"], check=True)
             cert = open(td + "/k-cert.pub").read()
         conf = "# fleet-ssh-config v1 — test\nHost m4 fleet-m4 fleet-m4-tailnet\n  HostName 127.0.0.1\n  Port %d\n  User alice\n" % sshd.getsockname()[1]
-        return reply(c, 200, {"certificate": cert, "serial": "7", "key_id": "wecom:wx-alice", "principals": ["alice"],
+        return reply(c, 200, {"certificate": cert, "serial": "7", "key_id": "gh:alice", "principals": ["alice"],
                               "valid_before": "later", "ssh_config": conf, "hub": "x"})
     if u.path == "/v1/fleet/home":
         # #1470: the pick, proven by the certificate under its own namespace.
@@ -265,7 +265,7 @@ FLEET_CONNECT_CACHE_SECS=0 FLEET_HUB_TOKEN=tok-1 "$BIN/fleet" connect --hub "$HU
 if command -v ssh-keygen >/dev/null 2>&1; then
   ssh-keygen -q -t ed25519 -N '' -f "$WORK/ca" >/dev/null
   ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert" >/dev/null
-  ssh-keygen -q -s "$WORK/ca" -I wecom:wx-alice -n alice -V +1h "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
+  ssh-keygen -q -s "$WORK/ca" -I gh:alice -n alice -V +1h "$HOME/.ssh/fleet-cert.pub" >/dev/null 2>&1
   mkdir -p "$XDG_CONFIG_HOME/claude-fleet"
   printf '{"url": "%s"}\n' "$HUB" > "$XDG_CONFIG_HOME/claude-fleet/hub.json"
   out=$("$BIN/fleet" connect m4 --retest --print 2>"$WORK/err6"); rc=$?

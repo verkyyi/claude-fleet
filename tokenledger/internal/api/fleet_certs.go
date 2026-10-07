@@ -474,6 +474,7 @@ type deviceLogin struct {
 	state      deviceState
 	issued     *CertResponse
 	err        string
+	code       string // why it was denied, for the poll (no_machine_login, claude-fleet#2090)
 }
 
 // deviceLogins is in memory on purpose: a pending login lives ten minutes,
@@ -677,6 +678,12 @@ func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 		if l.err != "" {
 			msg += ": " + l.err
 		}
+		if l.code != "" {
+			// A login the hub could not issue at all (claude-fleet#2090):
+			// the terminal prints the reason and stops, not waits ten minutes.
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": msg, "code": l.code, "reason": l.err})
+			return
+		}
 		httpError(w, http.StatusForbidden, msg)
 	default:
 		writeJSON(w, http.StatusOK, l.issued)
@@ -775,6 +782,20 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 			page.Who = p.ID
 		}
 	}
+	if errors.Is(err, errNoAccount) {
+		// Nothing the person can do here will issue it (claude-fleet#2090):
+		// deny the pending login with the reason, so the terminal's next
+		// poll prints it and stops instead of waiting out the ten minutes.
+		why := s.noMachineLoginReason(r, pid, p, loc)
+		s.devices.withUser(code, now, func(l *deviceLogin) {
+			if l.state == devicePending {
+				l.state, l.err, l.code = deviceDenied, why, codeNoMachineLogin
+			}
+		})
+		page.Error = i18n.Interpolate(pageT(loc, "login.err.nomachine"), map[string]string{"why": why})
+		renderLoginPage(w, page)
+		return
+	}
 	if err != nil {
 		page.Error = i18n.Interpolate(pageT(loc, "login.err.notyet"), map[string]string{"err": err.Error()})
 		renderLoginPage(w, page)
@@ -783,6 +804,30 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 	page.Login = strings.Join(logins, ",")
 	page.Confirm = true
 	renderLoginPage(w, page)
+}
+
+// codeNoMachineLogin is the poll's code for a login denied because the
+// person has no machine login to sign for (claude-fleet#2090).
+const codeNoMachineLogin = "no_machine_login"
+
+// noMachineLoginReason says who must do what when pid has no active login:
+// no machine login on record → an admin sets one on the 使用者 page; a login
+// on record but open on no machine yet → it is still being opened.
+func (s *Server) noMachineLoginReason(r *http.Request, pid string, p *store.Principal, loc string) string {
+	who := ""
+	if sess := sessionOf(r.Context()); sess != nil {
+		who = sess.Name
+	}
+	if who == "" && p != nil {
+		who = p.DisplayName
+	}
+	if who == "" {
+		who = pid
+	}
+	if login, ok := s.mappedLoginFor(pid); ok {
+		return i18n.Interpolate(pageT(loc, "login.why.notopen"), map[string]string{"who": who, "login": login})
+	}
+	return i18n.Interpolate(pageT(loc, "login.why.nologin"), map[string]string{"who": who})
 }
 
 // approveDeviceLogin confirms the pending login under code as pid: the

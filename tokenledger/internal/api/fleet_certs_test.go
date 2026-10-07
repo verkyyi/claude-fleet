@@ -266,6 +266,30 @@ func TestFleetCertNeedsAnActiveLogin(t *testing.T) {
 	}
 }
 
+// A person who cannot be issued a certificate is told so in the terminal at
+// the next poll, not after the ten-minute wait (claude-fleet#2090): opening
+// the confirm page denies the pending login with the reason.
+func TestFleetLoginNoMachineLoginEndsThePoll(t *testing.T) {
+	h, _ := certHarness(t)
+	_, body := postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)})
+	var st DeviceStart
+	json.Unmarshal(body, &st)
+	if code, _ := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code != http.StatusAccepted {
+		t.Fatalf("before the page: %d, want 202", code)
+	}
+	_, page := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, pCarol, nil)
+	if !strings.Contains(string(page), "machine login") || !strings.Contains(string(page), "has stopped") {
+		t.Fatalf("Carol's page does not say why / that the terminal stopped:\n%s", page)
+	}
+	code, body := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})
+	var res map[string]string
+	json.Unmarshal(body, &res)
+	if code != http.StatusForbidden || res["code"] != codeNoMachineLogin ||
+		!strings.Contains(res["reason"], "machine login") || !strings.HasPrefix(res["error"], "access_denied: ") {
+		t.Fatalf("poll after the page: %d %s, want 403 no_machine_login + reason", code, body)
+	}
+}
+
 // The 连接 page's paste-a-key door signs for the signed-in person, and its
 // connect info is narrowed to their machines.
 func TestFleetCertWebAndConnectInfo(t *testing.T) {
@@ -336,6 +360,36 @@ func TestFleetLoginSurvivesSignIn(t *testing.T) {
 	// A tampered cookie lands on "/", never on a path it names.
 	if loc := back(&http.Cookie{Name: loginCookie, Value: "//evil.example"}); loc != "/" {
 		t.Fatalf("tampered cookie → %q, want /", loc)
+	}
+}
+
+// A QR scanned inside an Android in-app browser (WeChat, WeCom — a WebView
+// that sends X-Requested-With: <package> on every navigation) is a browser,
+// not an API call: it is sent to the GitHub sign-in with the code remembered,
+// never the JSON 401 (claude-fleet#2090). A real XMLHttpRequest keeps its 401.
+func TestFleetLoginQRInAWebView(t *testing.T) {
+	h, _ := certHarness(t)
+	for _, pkg := range []string{"com.tencent.mm", "com.tencent.wework", "com.android.browser"} {
+		resp := h.raw(t, "/fleet/login?code=BCDF-GHJK", map[string]string{
+			"Accept":           "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+			"X-Requested-With": pkg,
+		})
+		if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/signin" {
+			t.Fatalf("%s: %d → %q, want 302 /signin", pkg, resp.StatusCode, resp.Header.Get("Location"))
+		}
+		remembered := false
+		for _, c := range resp.Cookies() {
+			remembered = remembered || (c.Name == loginCookie && c.Value == "BCDF-GHJK")
+		}
+		if !remembered {
+			t.Fatalf("%s: code not remembered across the sign-in: %+v", pkg, resp.Cookies())
+		}
+	}
+	for _, xrw := range []string{"XMLHttpRequest", "xmlhttprequest"} {
+		resp := h.raw(t, "/fleet/login?code=BCDF-GHJK", map[string]string{"Accept": "text/html", "X-Requested-With": xrw})
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("%s: %d, want 401", xrw, resp.StatusCode)
+		}
 	}
 }
 

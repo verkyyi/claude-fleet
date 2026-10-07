@@ -15,7 +15,8 @@
      the private key never leaves this computer;
   2. POSTs the public half to <hub>/v1/fleet/login/start and draws the
      returned QR code here;
-  3. you scan it in WeCom, sign in, and confirm the code on the page;
+  3. you scan it with a phone (or open the link), sign in with GitHub, and
+     confirm the code on the page;
   4. polls <hub>/v1/fleet/login/poll and writes
         ~/.ssh/fleet-cert-cert.pub   the certificate (12 hours)
         ~/.ssh/fleet-ssh-config      Host blocks for your machines
@@ -84,6 +85,13 @@ RENEW_PATH = "/v1/fleet/login/renew"
 RENEW_NAMESPACE = "fleet-renew@claude-fleet"
 # Exit code: this device has to scan again.
 NEEDS_SCAN = 3
+
+
+def show(*a):
+    """What the scan shows the person — the code, the QR, the link, the ✓
+    lines — goes to stderr: `fleet --pick` (fleet-shell.sh) captures stdout
+    for its one JSON line, and a scan printed there vanished (claude-fleet#2090)."""
+    print(*a, file=sys.stderr, flush=True)
 
 
 def die(msg, code=2):
@@ -197,7 +205,7 @@ def draw_qr(rows, invert):
             # ink = a light module (dark terminal) or a dark one (--invert)
             t, b = (top, bot) if invert else (not top, not bot)
             line.append("█" if t and b else "▀" if t else "▄" if b else " ")
-        print("  " + "".join(line))
+        show("  " + "".join(line))
 
 
 def write_file(path, text, mode):
@@ -434,16 +442,16 @@ def scan(hub, invert, purpose=""):
         body.update(purpose=purpose, os_user=getpass.getuser())
     code, st = post(hub + "/v1/fleet/login/start", body)
     if code == 404:
-        die("this hub does not issue certificates (no CA or no WeCom sign-in configured)", 1)
+        die("this hub does not issue certificates (no CA or no GitHub sign-in configured)", 1)
     if code != 200:
         die("start refused (HTTP %d): %s" % (code, st.get("error", "")), 1)
     if not purpose:
         remember_hub(hub)
 
-    print("\n用企业微信扫码，确认验证码 %s：\n" % st["user_code"])
+    show("\n用手机扫码或在浏览器打开下面的链接，用 GitHub 登录后点确认（验证码 %s）：\n" % st["user_code"])
     draw_qr(st.get("qr") or [], invert)
-    print("\n  或在已登录企业微信的浏览器打开：%s" % st["verification_uri"])
-    print("  密钥指纹 %s · %d 秒内有效\n" % (st.get("key_fingerprint", ""), st.get("expires_in", 600)))
+    show("\n  链接：%s" % st["verification_uri"])
+    show("  密钥指纹 %s · %d 秒内有效\n" % (st.get("key_fingerprint", ""), st.get("expires_in", 600)))
 
     deadline = time.time() + st.get("expires_in", 600)
     interval = max(1, int(st.get("interval", 3)))
@@ -457,6 +465,9 @@ def scan(hub, invert, purpose=""):
             continue  # a 5xx is the ingress / hub between two polls, not a «no» (#1901)
         if code == 200:
             return res
+        if res.get("code") == "no_machine_login":
+            # the hub cannot sign for this person yet (claude-fleet#2090)
+            die("✗ %s" % (res.get("reason") or res.get("error", "")), 1)
         die("not issued (HTTP %d): %s" % (code, res.get("error", "")), 1)
     die("timed out waiting for the scan — run it again", 1)
 
@@ -465,14 +476,14 @@ def cmd_login(argv):
     hub_arg, invert, include, _ = parse_scan_opts(argv)
     res = scan(hub_url(hub_arg), invert)
     added = write_cert(res, include)
-    print("✓ 证书已写入 %s（%s 前有效，账号 %s）" % (CERT, res["valid_before"], ",".join(res["principals"])))
-    print("✓ ssh 配置 %s%s" % (SSH_CONFIG_SNIPPET, "（已在 ~/.ssh/config 末尾 Include）" if added else ""))
+    show("✓ 证书已写入 %s（%s 前有效，账号 %s）" % (CERT, res["valid_before"], ",".join(res["principals"])))
+    show("✓ ssh 配置 %s%s" % (SSH_CONFIG_SNIPPET, "（已在 ~/.ssh/config 末尾 Include）" if added else ""))
     for n in NOTES:
-        print(n)
-    print("✓ 这台电脑已登记为设备：之后 fleet 自动续证书，连续 7 天不用才需再扫")
+        show(n)
+    show("✓ 这台电脑已登记为设备：之后 fleet 自动续证书，连续 7 天不用才需再扫")
     hosts = [l.split()[1] for l in res["ssh_config"].splitlines() if l.startswith("Host ")]
     if hosts:
-        print("  现在可以：fleet（或 ssh %s）" % hosts[0])
+        show("  现在可以：fleet（或 ssh %s）" % hosts[0])
     return 0
 
 
@@ -491,11 +502,11 @@ def cmd_node(argv):
     # compact, as the hub writes it: fleet-node-join.sh reads it with sed
     write_file(out, json.dumps(node, separators=(",", ":")) + "\n", 0o600)
     added = write_cert(res, include)
-    print("✓ 证书已写入 %s（%s 前有效，账号 %s）" % (CERT, res["valid_before"], ",".join(res["principals"])))
-    print("✓ ssh 配置 %s%s" % (SSH_CONFIG_SNIPPET, "（已在 ~/.ssh/config 末尾 Include）" if added else ""))
+    show("✓ 证书已写入 %s（%s 前有效，账号 %s）" % (CERT, res["valid_before"], ",".join(res["principals"])))
+    show("✓ ssh 配置 %s%s" % (SSH_CONFIG_SNIPPET, "（已在 ~/.ssh/config 末尾 Include）" if added else ""))
     for n in NOTES:
-        print(n)
-    print("✓ 已登记到入口：%s（%s）" % (node.get("label", "?"), node.get("endpoint_id", "?")))
+        show(n)
+    show("✓ 已登记到入口：%s（%s）" % (node.get("label", "?"), node.get("endpoint_id", "?")))
     return 0
 
 
