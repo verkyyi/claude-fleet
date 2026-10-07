@@ -451,7 +451,9 @@ lib_i 'fleet_repo_order_put fleet bbb/new'
 is "I: a repo recorded later lists after the others" "$(lib_i 'fleet_repos fleet' | tr '\n' ' ')" "aaa/first zzz/last bbb/new "
 
 # ---------------------------------------------------------------------------- J
-hub_row() { run bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+hub([[:space:]]|$)'; }
+# under a UTF-8 locale: a `$var，` there reads the full-width comma as part of the
+# name (unbound under set -u) — LANG=C hides it
+hub_row() { run LC_ALL=C.UTF-8 bash "$INS/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+hub([[:space:]]|$)'; }
 j_conf() {
   printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=1\n%s\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nFLEET_AUTOFILL_NODE=local\nfi  # ---- [node] end ----\n' "${1:-}" > "$CD/fleet.conf"
 }

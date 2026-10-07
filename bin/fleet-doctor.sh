@@ -279,16 +279,16 @@ if [ -r "$_hb_nenv" ]; then
   [ -n "$_hb_curl" ] || _hb_curl=$(_xconf_val "$(dirname "$0")/../fleet.conf" CCQUOTA_HUB_URL)
   _hb_miss=''
   [ "$_hb_non" = 1 ] && [ "$_hb_con" != 1 ] && _hb_miss="CCQUOTA_FLEET=1"
-  [ -n "$_hb_nurl" ] && [ -z "$_hb_curl" ] && _hb_miss="${_hb_miss:+$_hb_miss、}FLEET_HUB_URL"
+  [ -n "$_hb_nurl" ] && [ -z "$_hb_curl" ] && _hb_miss="${_hb_miss:+${_hb_miss}、}FLEET_HUB_URL"
   _hb_show=$(printf '%s' "${_hb_curl:-$_hb_nurl}" | sed 's#^[a-z]*://##; s#/$##')
   if [ -n "$_hb_miss" ]; then
     if [ "$_hb_non" = 1 ] && [ "$_hb_con" = 0 ]; then
-      warn hub "node.env 接着入口 $_hb_show，fleet.conf 却写着 CCQUOTA_FLEET=0 — 中转 / 可信 / 会话通行证都以为入口关着；是有意关的就把 node.env 也关掉，否则删掉那一行再跑 \`bash $(dirname "$0")/fleet-conf.sh migrate\`"
+      warn hub "node.env 接着入口 ${_hb_show}，fleet.conf 却写着 CCQUOTA_FLEET=0 — 中转 / 可信 / 会话通行证都以为入口关着；是有意关的就把 node.env 也关掉，否则删掉那一行再跑 \`bash $(dirname "$0")/fleet-conf.sh migrate\`"
     else
-      warn hub "node.env 接着入口 $_hb_show，fleet.conf 没写 $_hb_miss — fleet 工具（中转 / 可信 / 会话通行证）都以为入口关着；\`bash $(dirname "$0")/fleet-conf.sh migrate\` 补齐（同步时自动跑）"
+      warn hub "node.env 接着入口 ${_hb_show}，fleet.conf 没写 ${_hb_miss} — fleet 工具（中转 / 可信 / 会话通行证）都以为入口关着；\`bash $(dirname "$0")/fleet-conf.sh migrate\` 补齐（同步时自动跑）"
     fi
   elif [ "$_hb_non" = 1 ]; then
-    pass hub "接着入口 $_hb_show（fleet.conf 与 node.env 一致）"
+    pass hub "接着入口 ${_hb_show}（fleet.conf 与 node.env 一致）"
   fi
 fi
 
