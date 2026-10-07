@@ -141,6 +141,11 @@ func TestCodexRPCFixture(t *testing.T) {
 			}
 			result = map[string]any{"account": map[string]string{"type": "chatgpt"}}
 		case "account/rateLimits/read":
+			if os.Getenv("CCQUOTA_RPC_FIXTURE_LIMITS") == "revoked" {
+				// the shape codex app-server reports an upstream 401 in (claude-fleet#1920)
+				enc.Encode(map[string]any{"id": req.ID, "error": map[string]any{"code": -32000, "message": `failed to fetch codex rate limits: unexpected status 401 Unauthorized: {"error":{"message":"Your authentication token has been invalidated.","code":"token_revoked"}}`}})
+				continue
+			}
 			result = map[string]any{"rateLimits": map[string]any{"primary": map[string]any{"usedPercent": 10, "windowDurationMins": 300}}}
 		case "account/usage/read":
 			result = map[string]any{"summary": map[string]any{"lifetimeTokens": 123}, "dailyUsageBuckets": []any{}}
