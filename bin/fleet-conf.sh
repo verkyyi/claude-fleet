@@ -584,6 +584,46 @@ PY
   return 0
 }
 
+# ---- a machine config stranded as fleet `fleet` (issue #2059) ---------------------
+# Before #1887 the layout migrator took $FLEET_CONF_DIR/fleet.conf — the machine's
+# ONE file — for the legacy flat conf of a fleet named `fleet` and moved it to
+# fleets/fleet/conf. The next migrate found no fleet.conf and wrote an empty one,
+# so every setting in the stranded file stopped applying, and fleet_each_conf
+# listed a phantom fleet `fleet` (#1937 then moved its trailing FLEET_REPO into
+# fleets/fleet/repos/: the phantom "hosted" that repo and bridged it, while the
+# real fleet's repos went unbridged). rescue_stranded carries the stranded file's
+# keys into fleet.conf — fill only, section by section (_carry): a key fleet.conf
+# already sets keeps its value — and retires the phantom's directory to
+# fleets/.stranded-machine-conf-<time>/ (a dot dir: no fleet glob lists it). Never
+# while a live tmux server answers to `fleet`. Idempotent: nothing stranded, nothing done.
+STRANDED_HDR="# claude-fleet — this machine's ONE config file"
+rescue_stranded() {
+  local DRY="$1" QUIET="$2" d="$CD/fleets/fleet" sc l src dst
+  sc="$d/conf"
+  [ -f "$sc" ] || return 0
+  IFS= read -r l < "$sc" || true
+  case "$l" in "$STRANDED_HDR"*) ;; *) return 0 ;; esac
+  if tmux -L "$(fleet_socket fleet)" has-session 2>/dev/null; then
+    echo "fleet-conf: $sc is a stranded machine config, but a live fleet \`fleet\` is running — left as it is" >&2
+    return 0
+  fi
+  dst="$CD/fleets/.stranded-machine-conf-$(date +%Y%m%d-%H%M%S)"
+  if [ "$DRY" = 1 ]; then
+    echo "fleet-conf: would carry the machine config stranded in ${sc#$CD/} into $MC (fill only) and retire ${d#$CD/}/ as ${dst#$CD/}/"
+    return 0
+  fi
+  src="$MC.stranded.$$"
+  # FLEET_ROLE / FLEET_HOST belong to fleet.conf as it is; a credential never enters it.
+  grep -Ev "$ROLE_RE" "$sc" | grep -Ev "$HOST_RE" | grep -Ev "$SECRET_RE" > "$src" || true
+  _ensure_file 1 || { rm -f "$src"; die "cannot write $MC"; }
+  _bak_mc >/dev/null || { rm -f "$src"; die "cannot keep $MC"; }
+  _carry "$src" "$MC" || { rm -f "$src"; die "cannot carry ${sc#$CD/}'s keys into $MC — nothing moved"; }
+  rm -f "$src"
+  mv "$d" "$dst" || die "carried ${sc#$CD/}'s keys into $MC but could not retire ${d#$CD/}/"
+  echo "fleet-conf: the machine config stranded in ${sc#$CD/} is back in $MC (keys it lacked carried); ${d#$CD/}/ retired as ${dst#$CD/}/"
+  return 0
+}
+
 # ---- every repo in repos/ (issue #1937) -----------------------------------------
 # A fleet conf used to hold its first repo (FLEET_REPO / FLEET_MAIN / … ); every
 # repo now lives in fleets/<sess>/repos/<slug>.conf. Every fleet on this login —
@@ -641,6 +681,7 @@ case "$cmd" in
       case "$1" in --dry-run) DRY=1 ;; --quiet) QUIET=1 ;; *) usage ;; esac; shift
     done
     migrate "$DRY" "$QUIET"
+    rescue_stranded "$DRY" "$QUIET"
     migrate_repos "$DRY" "$QUIET" ;;
   add-role)
     case "${1:-}" in client|node) add_role "$1" ;; *) usage ;; esac ;;

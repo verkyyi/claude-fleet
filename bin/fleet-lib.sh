@@ -29,7 +29,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
 # in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_QUOTA_PCT FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_PROXY_IDLE_SECS FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_SIDEBAR_WIDTH_MAX FLEET_DASH_ORDER"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_QUOTA_PCT FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_PROXY_IDLE_SECS FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_SIDEBAR_WIDTH_MAX FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_DASH_ORDER"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -137,20 +137,70 @@ fleet_state_dir() {
   printf '%s' "$d"
 }
 
-# --- «an EPIC batch is running on this login» (issue #953) -----------------------
-# /fleet-epic-run stamps $FLEET_CONF_DIR/global/epic-running as the first command of
-# every tick (bin/fleet-epic-heartbeat.sh); bin/fleet-install-sync.sh defers while
-# it is fresh, so the live install is never fast-forwarded under a running batch —
+# --- «an EPIC batch is running on this login» (issue #953; one mark PER BATCH, #2062) --
+# /fleet-epic-run stamps $FLEET_CONF_DIR/global/epic-running.d/<repo slug>-<N> as
+# the first command of every tick (bin/fleet-epic-heartbeat.sh) — one file per
+# batch, so two loops on one login never overwrite each other's and a loop's
+# --clear <N> takes only its own (issue #2062: #1935 and #1982 shared one file;
+# whichever wrote last was the only batch anyone could see, and the first to end
+# cleared both). bin/fleet-install-sync.sh defers the whole version switch while
+# ANY mark is fresh, so the live install is never moved under a running batch —
 # the loop's pane and its workers are idle between ticks, so the busy-window gate
 # alone cannot see the batch. A LEASE, not a lock: fresh for its own `ttl:` (default
 # 2700 s) counted from its `epoch:`, else from the file's mtime (a bare `touch` is a
 # hand override). No gh, no tmux: the daemon that reads it has neither.
-fleet_epic_running_file() { printf '%s/global/epic-running' "$FLEET_CONF_DIR"; }
-# fleet_epic_running [<file>] — 0 fresh / 1 stale / 2 no mark; prints one line:
+# The pre-#2062 single file global/epic-running is still READ for one version
+# (fleet_epic_running_marks lists it last) and never written.
+fleet_epic_running_dir() { printf '%s/global/epic-running.d' "$FLEET_CONF_DIR"; }
+fleet_epic_running_file() { printf '%s/global/epic-running' "$FLEET_CONF_DIR"; }   # compat-1v: 下一批删
+# fleet_epic_mark_file <repo|-> <N> — the mark ONE batch writes.
+fleet_epic_mark_file() {
+  local slug
+  case "${1:-}" in ''|-) slug=_ ;; *) slug=$(fleet_slug "$1") ;; esac
+  printf '%s/%s-%s' "$(fleet_epic_running_dir)" "$slug" "${2:-}"
+}
+# fleet_epic_running_marks — every mark on this login, one path per line (the
+# directory's files, then the legacy single file); nothing when there is none.
+# find, not a glob: zsh (a skill sourcing this lib, #1633) errors on an empty one.
+fleet_epic_running_marks() {
+  local d f
+  d=$(fleet_epic_running_dir)
+  [ -d "$d" ] && find "$d" -maxdepth 1 -type f ! -name '*.tmp.*' 2>/dev/null | sort   # *.tmp.*: an atomic write in flight
+  f=$(fleet_epic_running_file); [ -f "$f" ] && printf '%s\n' "$f"   # compat-1v: 下一批删
+  return 0
+}
+# fleet_epic_running_fresh — the ONE read install-sync, apply and the doctor make:
+# 0 when ANY mark is fresh — prints every fresh one, youngest first, `; `-joined
+# (`epic=<N> session=<sess> tick=<n> age=<s>s ttl=<s>s`) — 1 when every mark is
+# stale (prints the youngest), 2 when there is none.
+fleet_epic_running_fresh() {
+  local f out rc age fresh='' stale='' stale_age=''
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    out=$(fleet_epic_running "$f"); rc=$?
+    age=${out##*age=}; age=${age%%s*}
+    case "$rc" in
+      0) fresh="$fresh$age	$out
+" ;;
+      1) if [ -z "$stale" ] || [ "$age" -lt "$stale_age" ]; then stale="$out"; stale_age="$age"; fi ;;
+    esac
+  done <<EOF_MARKS
+$(fleet_epic_running_marks)
+EOF_MARKS
+  if [ -n "$fresh" ]; then
+    printf '%s' "$fresh" | sort -n | cut -f2- | awk 'NR > 1 { printf "; " } { printf "%s", $0 }'
+    return 0
+  fi
+  if [ -n "$stale" ]; then printf '%s' "$stale"; return 1; fi
+  return 2
+}
+# fleet_epic_running [<file>] — ONE mark: 0 fresh / 1 stale / 2 no mark; prints
 #   epic=<N> session=<sess> tick=<n> age=<s>s ttl=<s>s
+# With no <file> it is every mark on the login (fleet_epic_running_fresh), so an
+# older caller that read "the" mark now sees every batch.
 fleet_epic_running() {
   local f="${1:-}" epoch ttl age epic sess tick
-  [ -n "$f" ] || f=$(fleet_epic_running_file)
+  [ -n "$f" ] || { fleet_epic_running_fresh; return; }
   [ -f "$f" ] || return 2
   epoch=$(sed -n 's/^epoch: //p' "$f" | head -1)
   case "$epoch" in ''|*[!0-9]*)
@@ -196,7 +246,7 @@ fleet_conf_file() {
 # that session has no new-layout dir yet — so a half-migrated estate lists each
 # fleet exactly once. Replaces every `for cf in "$FLEET_CONF_DIR"/*.conf` loop.
 fleet_each_conf() {
-  local d conf sess
+  local d conf sess hdr
   # An empty conf estate must expand to NOTHING, not abort. zsh's NOMATCH (on by
   # default) errors `no matches found` on an unmatched glob — so when this lib is
   # sourced into a zsh shell and the `fleets/*/` or legacy `*.conf` glob matches
@@ -210,6 +260,13 @@ fleet_each_conf() {
       [ -d "$d" ] || continue
       conf="${d}conf"; [ -f "$conf" ] || continue
       sess=${d%/}; sess=${sess##*/}
+      # The machine's own config stranded as fleets/fleet/conf by the pre-#1887
+      # migrator is not a fleet (issue #2059) — `fleet-conf.sh migrate` puts it
+      # back. Read with the `read` builtin: no fork on this hot path (#888).
+      if [ "$sess" = fleet ]; then
+        hdr=''; IFS= read -r hdr < "$conf" || true
+        case "$hdr" in "# claude-fleet — this machine's ONE config file"*) continue ;; esac
+      fi
       printf '%s\t%s\n' "$sess" "$conf"
     done
   fi
@@ -698,6 +755,44 @@ fleet_repo_hosted() {
   # pipeline — so the FIRST hosted repo read as not hosted (issue #793).
   all=$(fleet_repos "${1:-}")
   printf '%s\n' "$all" | grep -qxF "$want"
+}
+
+# fleet_bridge_rows [<floor> [<revive>]] → one `repo<TAB>floor<TAB>revive` line per
+# repo a configured fleet hosts with the issue-bridge ON in that repo's view (fleet
+# conf + its overlay; issues #798, #1941) and not a seed repo (#1167) — the per-fleet
+# half of the bridge's poll set, shared with fleet_bridge_covers so the two can never
+# disagree (issue #2059). <floor>/<revive> are the defaults a view leaves unset.
+# Each view is loaded in a subshell, so nothing leaks into the caller. Order: the
+# confs in fleet_each_conf order, each fleet's repos in fleet_repos order (dups kept;
+# the caller dedups).
+fleet_bridge_rows() {
+  local fl="${1:-OWNER MEMBER COLLABORATOR}" rv="${2:-0}" s cf rp
+  while IFS="$(printf '\t')" read -r s cf; do
+    [ -n "$s" ] && [ -f "$cf" ] || continue
+    fleet_repos "$s" | while IFS= read -r rp; do
+      [ -n "$rp" ] || continue
+      ( fleet_load_repo_conf "$s" "$rp" >/dev/null 2>&1 || exit 0
+        [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
+          "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$fl}" "${FLEET_ISSUE_BRIDGE_REVIVE:-$rv}" )
+    done
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  return 0
+}
+
+# fleet_bridge_covers <repo> → 0 iff the issue-bridge's poll relays <repo>'s
+# comments: the global switch with FLEET_REPO = <repo>, or a fleet hosting it with
+# the bridge on (fleet_bridge_rows). 1 = an unmarked comment there reaches no
+# worker through the bridge — `fleet-comment.sh --to-worker` says so and sends it
+# over the peer channel instead (issue #2059).
+fleet_bridge_covers() {
+  local want rows
+  want=$(fleet_norm_repo "${1:-}"); [ -n "$want" ] || return 1
+  [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] \
+    && [ "$(fleet_norm_repo "${FLEET_REPO:-}")" = "$want" ] && return 0
+  rows=$(fleet_bridge_rows | cut -f1 | while IFS= read -r r; do fleet_norm_repo "$r"; echo; done)
+  printf '%s\n' "$rows" | grep -qxF "$want"
 }
 
 # fleet_repo_mains <sess> → each hosted repo's base checkout (FLEET_MAIN), one per
@@ -6324,6 +6419,109 @@ fleet_from_marker() {
   [ -n "$f_issue" ]   && mk="$mk issue=$f_issue"
   mk="$mk -->"
   printf '%s' "$mk"
+}
+
+# --- breakage fingerprint: one issue per broken base branch (issue #2078) ------
+# On 2026-10-07 04:26Z master went red on one duplicate route and three sessions
+# filed three issues (#2039 #2040 #2041) and three fixes inside 16 seconds. The
+# fingerprint names the BREAKAGE, not the observer: the commit the red streak
+# started at (not the head — a merge landing while red must not mint a new one),
+# the first check that failed (by completion time, so a later observer who also
+# sees the second red check agrees), and the first error line of that job's log
+# with line numbers stripped (a half-fix that moves the lines is the same
+# breakage). REST only — `gh api` / `gh run view` — so it answers under a spent
+# GraphQL budget, the state a red master tends to come with.
+#
+# fleet_breakage_probe <repo> [<branch>] → one line `key<TAB>sha<TAB>check<TAB>line`,
+#   rc 0 · 1 the branch head has no failed check (not red) · 2 gh could not answer.
+#   No <branch> ⇒ the repo's default branch. key = `<sha7>-<sha12 of sha·check·line>`.
+# fleet_breakage_key <repo> [<branch>] → the key alone (same rc).
+# fleet_breakage_marker <key> → the invisible body marker bin/fleet-issue-file.sh
+#   stamps on the issue it files and fleet_breakage_find greps for.
+# fleet_breakage_find <repo> <key> → the URL of the newest OPEN issue whose body
+#   carries the marker (rc 1 = none). The REST issue list, NOT `gh search issues`:
+#   the search index lags a fresh issue by seconds to minutes — exactly the window
+#   this exists to close — while the list is consistent at once. One page, newest
+#   first: the issue a breakage is about was filed minutes ago.
+# fleet_breakage_lock_dir → $FLEET_CONF_DIR/global/breakage — the filer's per-key
+#   lock (`<key>/`, mkdir-atomic; `<key>/issue` = the number once filed) that
+#   serializes the same-second filers on ONE machine; across machines the marker
+#   is the dedup (a few seconds' window — two issues at worst, never three).
+fleet_breakage_marker()   { printf '<!-- fleet:breakage key=%s -->' "$1"; }
+fleet_breakage_lock_dir() { printf '%s/global/breakage' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; }
+
+# fleet_breakage_norm_line — stdin: a failed job's log (`gh run view --log-failed`:
+# `<job>\t<step>\t<ISO time> <text>`) → the first line that smells like an error
+# (else the first non-empty), text only, ANSI and ##[group] furniture dropped,
+# every `:<digits>` (line, column, port, a clock) stripped, whitespace folded, at
+# most 160 chars.
+fleet_breakage_norm_line() {
+  local esc; esc=$(printf '\033')
+  LC_ALL=C sed -e 's/^[^	]*	[^	]*	//' -e 's/^[0-9][0-9-]*T[0-9:.]*Z *//' -e "s/$esc\\[[0-9;]*[A-Za-z]//g" \
+    | grep -v '^##\[' | grep . | awk '
+        tolower($0) ~ /error|fail|panic|fatal|exception|duplicate|undefined|cannot|not found|exit code|assert/ { print; found = 1; exit }
+        !first { first = $0 }
+        END { if (!found && first != "") print first }' \
+    | sed -e 's/:[0-9][0-9]*//g' -e 's/[[:space:]][[:space:]]*/ /g' -e 's/^ //' -e 's/ $//' \
+    | cut -c1-160
+}
+
+fleet_breakage_probe() {
+  local repo="$1" branch="${2:-}" owner name head rows first cid cname curl ctitle rid='' wid='' sha line key streak s c
+  owner="${repo%%/*}"; name="${repo#*/}"
+  [ -n "$branch" ] || branch=$(gh api "repos/$owner/$name" --jq .default_branch 2>/dev/null)
+  [ -n "$branch" ] || branch=master
+  head=$(gh api "repos/$owner/$name/commits/$branch" --jq .sha 2>/dev/null) || return 2
+  [ -n "$head" ] || return 2
+  rows=$(gh api "repos/$owner/$name/commits/$head/check-runs?per_page=100" \
+           --jq '[.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled" or .conclusion == "action_required")]
+                 | sort_by(.completed_at // "") | .[] | "\(.id)\t\(.name)\t\(.details_url // "")\t\(.output.title // "")"' 2>/dev/null) || return 2
+  first=$(printf '%s\n' "$rows" | grep . | head -1)
+  [ -n "$first" ] || return 1
+  IFS=$'\t' read -r cid cname curl ctitle <<EOF
+$first
+EOF
+  # The commit the red streak started at: this check's workflow, its completed
+  # runs on the branch newest first, back to the last success. Fallback: the head.
+  sha="$head"
+  case "$curl" in */actions/runs/*) rid=${curl##*/actions/runs/}; rid=${rid%%/*} ;; esac
+  case "$rid" in ''|*[!0-9]*) rid='' ;; esac
+  [ -n "$rid" ] && wid=$(gh api "repos/$owner/$name/actions/runs/$rid" --jq .workflow_id 2>/dev/null)
+  case "$wid" in ''|*[!0-9]*) wid='' ;; esac
+  if [ -n "$wid" ]; then
+    streak=$(gh api "repos/$owner/$name/actions/workflows/$wid/runs?branch=$branch&per_page=50&status=completed" \
+               --jq '.workflow_runs[] | "\(.head_sha)\t\(.conclusion)"' 2>/dev/null)
+    while IFS=$'\t' read -r s c; do
+      [ -n "$s" ] || continue
+      [ "$c" = success ] && break
+      sha="$s"
+    done <<EOF
+$streak
+EOF
+  fi
+  line=''
+  case "$cid" in ''|*[!0-9]*) : ;; *) line=$(gh run view --job "$cid" --log-failed -R "$repo" 2>/dev/null | fleet_breakage_norm_line) ;; esac
+  [ -n "$line" ] || line=$(printf '%s\n' "$ctitle" | fleet_breakage_norm_line)
+  key="$(printf '%.7s' "$sha")-$(printf '%s\t%s\t%s' "$sha" "$cname" "$line" | fleet_sha12)"
+  printf '%s\t%s\t%s\t%s\n' "$key" "$sha" "$cname" "$line"
+}
+
+fleet_breakage_key() {
+  local out rc=0
+  out=$(fleet_breakage_probe "$@") || rc=$?
+  [ "$rc" = 0 ] || return "$rc"
+  printf '%s\n' "${out%%	*}"
+}
+
+fleet_breakage_find() {
+  local repo="$1" mk owner name rows n
+  mk=$(fleet_breakage_marker "$2")
+  owner="${repo%%/*}"; name="${repo#*/}"
+  rows=$(gh api "repos/$owner/$name/issues?state=open&per_page=100&sort=created&direction=desc" \
+           --jq '.[] | select(.pull_request == null) | "\(.number)\t\(.body // "" | gsub("[\r\n]"; " "))"' 2>/dev/null) || return 1
+  n=$(printf '%s\n' "$rows" | grep -F -- "$mk" | head -1 | cut -f1)
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  printf 'https://github.com/%s/issues/%s\n' "$repo" "$n"
 }
 
 # --- fleet label taxonomy: the fixed, curated set (issue #333) -----------------

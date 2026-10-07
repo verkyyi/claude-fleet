@@ -941,6 +941,15 @@ path-filtered, so a docs-only commit has none) is refused too unless you pass
 `--allow-no-checks`. The push uses `--force-with-lease` pinned to the value it
 read, so two concurrent moves cannot both win (the loser exits 4).
 
+It also replays an **old session** of the current `stable` against the target
+(issue #2075): `bin/fleet-oldcfg-replay.py` runs stable's hook table, the mod's
+tool list and the MCP servers against the target's tree in a sandbox, and a
+script gone, a hook erroring or hanging, or a tool left without a handler refuses
+the move with a reason prefixed `oldcfg:` — the findings name what an old session
+would hit; fix them per CONTRIBUTING «老会话兼容». `--force` moves anyway and
+appends one line to `logs/stable-move.log`. Same target as stable ⇒ nothing to
+replay, green at once.
+
 `fleet-doctor.sh`'s `install` row carries an INFO line with how many commits
 `stable` trails master — the cue to move it. The first placement was `0164208`,
 the version every login on the Mac mini was synced to on 2026-09-24.

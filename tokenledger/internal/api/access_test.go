@@ -15,7 +15,7 @@ import (
 // unconditional 404 exists to withhold.
 func TestAccess_NeedsTheViewerToken(t *testing.T) {
 	h := newHarness(t)
-	for _, path := range []string{"/v1/access", "/access", "/access/"} {
+	for _, path := range []string{"/v1/access"} {
 		resp, err := http.Get(h.http.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -109,7 +109,7 @@ func TestAccess_ReportsWhatIsActuallyTurnedOn(t *testing.T) {
 
 	// Now turn things on. The handler reads the Server at request time, so
 	// this is the same hub answering differently -- which is the claim.
-	h.srv.PublicBadges = true
+	setHubSetting(t, h.srv, PublicBadgesKey, "on")
 	h.srv.MCP = http.NotFoundHandler()
 	h.srv.GitHub = &GitHubAuth{ClientID: "Iv1.test", ClientSecret: "s", Admins: []string{"ada", "bob"}}
 	h.srv.Listeners = ListenerFacts{HTTP: []string{"127.0.0.1:8787"}, HTTPS: ":443", HTTPSURL: "https://hub.example.ts.net/"}
@@ -193,34 +193,21 @@ func TestAccess_SaysWhenAuthIsOff(t *testing.T) {
 	}
 }
 
-// The page is served, and it is served from the embedded UI rather than
-// rendered -- a binary built without a dashboard says so instead of 404-ing
-// mysteriously.
-func TestAccess_ServesItsPage(t *testing.T) {
+// The page retired with the admin pages (claude-fleet#1990): /access is a
+// 404 like any path the hub no longer has, and the door map still answers as
+// JSON — Settings reads it.
+func TestAccess_PageRetired(t *testing.T) {
 	h := newHarness(t)
 	h.srv.UI = fstest.MapFS{
-		"access.html": &fstest.MapFile{Data: []byte("<!doctype html><title>Ways in</title>")},
+		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><title>Overview</title>")},
 	}
-	resp, body := h.get(t, "/access")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /access = %d; want 200", resp.StatusCode)
+	for _, path := range []string{"/access", "/access/", "/credentials"} {
+		if code := h.getCode(t, path); code != http.StatusNotFound {
+			t.Errorf("GET %s = %d; want 404 — the page retired", path, code)
+		}
 	}
-	if !strings.Contains(string(body), "Ways in") {
-		t.Errorf("GET /access did not serve access.html: %q", body)
-	}
-	// /access/ must be the page too, not the SPA's index.html fallback.
-	if code := h.getCode(t, "/access/"); code != http.StatusOK {
-		t.Errorf("GET /access/ = %d; want 200", code)
-	}
-
-	h.srv.UI = nil
-	if code := h.getCode(t, "/access"); code != http.StatusNotFound {
-		t.Errorf("GET /access with no UI = %d; want 404", code)
-	}
-	// The data still answers: an operator on a UI-less build is exactly the
-	// person who needs the door map, and they can read it as JSON.
 	if code := h.getCode(t, "/v1/access"); code != http.StatusOK {
-		t.Errorf("GET /v1/access with no UI = %d; want 200", code)
+		t.Errorf("GET /v1/access = %d; want 200", code)
 	}
 }
 

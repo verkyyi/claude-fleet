@@ -188,9 +188,13 @@ def inventory_row(parts):
     scratch, or a title the node's cache does not hold), and the reader falls
     back to the name.
     Column 18 (issue #1902): `reap=<policy>`, the session's @reap_policy (empty =
-    its kind's default) — the other machines' sidebars draw 常驻 etc. off it."""
+    its kind's default) — the other machines' sidebars draw 常驻 etc. off it.
+    Column 19 (issue #1951): `detail=<question>`, what a session in `needs` asks
+    (@claude_needs_detail) — the client's bar and notification say it; empty = none."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 19 and parts[-1].startswith("detail="):
+        extra["detail"] = parts.pop()[7:][:120] or None
     if len(parts) >= 18 and parts[-1].startswith("reap="):
         r = parts.pop()[5:]
         extra["reap"] = r if r and REAP_RE.fullmatch(r) else None

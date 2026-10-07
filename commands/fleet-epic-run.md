@@ -76,14 +76,16 @@ that dies at the boundary. Therefore:
   bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh <N> --tick <n> --repo "$FLEET_REPO"
   ```
 
-  It rewrites `$FLEET_CONF_DIR/global/epic-running`, and the install-sync daemon
-  (`bin/fleet-install-sync.sh`, C3 of #1117) defers while that mark is fresh.
-  Without it the daemon cannot see this batch: between ticks this pane is idle and
-  the workers sit idle while CI runs, so its busy-window gate reads a quiet
-  machine and fast-forwards the live install under a batch that is still merging
-  onto it. A lease, not a lock — fresh for 45 min, past the longest planned gap in
-  step 3 — so a loop that dies without its closing tick holds nothing forever;
-  the closing tick clears it (step 4).
+  It rewrites THIS batch's mark, `$FLEET_CONF_DIR/global/epic-running.d/<repo
+  slug>-<N>` — one file per batch (issue #2062), so a second loop on this login
+  never overwrites yours — and the install-sync daemon (`bin/fleet-install-sync.sh`,
+  C3 of #1117) holds the whole version switch while ANY mark on this login is
+  fresh (`deferred`, never `switched`). Without it the daemon cannot see this
+  batch: between ticks this pane is idle and the workers sit idle while CI runs,
+  so no busy gate reads anything but a quiet machine, and the live install moves
+  under a batch that is still merging onto it. A lease, not a lock — fresh for
+  45 min, past the longest planned gap in step 3 — so a loop that dies without
+  its closing tick holds nothing forever; the closing tick clears it (step 4).
 - **Each tick begins by re-reading the EPIC** — the parent body (the charter), the
   sub-issue list and their states, and each member repo's open PRs. Never carry
   a plan from the previous tick.
@@ -207,7 +209,8 @@ and swapping the floor under running workers is how one bad merge takes the batc
 with it. Sync once, at the end (step 4). The same rule binds the workers through
 `/fleet-claim` (issue #953: on EPIC #883 one synced right after its own merge and
 reloaded a daemon under the rest of the batch), and the install-sync daemon holds
-off on its own while this loop's heartbeat is fresh (step 1).
+off on its own while this loop's heartbeat — or any other batch's on this login —
+is fresh (step 1; issue #2062).
 
 ### b. Reclaim finished slots
 
@@ -320,7 +323,13 @@ real-time budgets that only hold on an idle box (`CLAUDE.md`, issue #691/#693), 
 a red that names a timing assertion on a loaded machine may be the gate, not the
 change. Before spending the retry, re-read the failing check: if it is unrelated
 to the member's diff, say so on the parent and re-run the check rather than
-burning the one retry on a flake.
+burning the one retry on a flake. And if the base branch itself is red (the same
+check fails on `master`'s head), it is ONE breakage for every member and every
+loop: file it once through `~/.claude/fleet/bin/fleet-issue-file.sh --title …
+--breakage --spawn --repo "$MREPO"` (issue #2078) — exit 5 + a URL means someone
+already did, and a 「同一故障」 comment was left there — then wait for that issue
+before retrying any member. Three issues and three conflicting fixes for one
+duplicate route (2026-10-07, #2039 #2040 #2041) is what this replaces.
 
 ### e. Quota
 
@@ -385,8 +394,11 @@ survives a context boundary the same way everything else here does:
    carries the tailnet URL in place of `pending` — one grep now separates a
    reported EPIC from an unreported one. Then push the done notification, with
    the URL in it.
-4. **Clear the heartbeat** — `bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh --clear`
-   (issue #953). Only now may the live install move: the batch-end sync is
+4. **Clear the heartbeat** — `bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh --clear <N>`
+   (issue #953) — `<N>` is this EPIC: it removes THIS batch's mark and no other's
+   (issue #2062: a bare `--clear` once took the file every batch on the login
+   shared, and the other loop ran unprotected until its next tick). Only now —
+   once every batch on this login has cleared its own — may the live install move: the batch-end sync is
    `/fleet-sync-install` by hand, or `fleet-stable.sh move` and every login's
    install-sync daemon follows on its next tick. After the report, not before —
    the closing sequence is one tick, and a floor that moves while the report is

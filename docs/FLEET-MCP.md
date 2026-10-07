@@ -65,7 +65,7 @@ lints it): a script path appears only under a heading marked `运营者` or `排
 | tool | arguments | runs | exit codes |
 |---|---|---|---|
 | `brief` | `kind`? (`claim` default · `resume`), `issue`?, `repo`?, `no_comments`? (claim only) | `fleet-claim-brief.sh [--issue N] [--repo R] [--no-comments]` · `fleet-compact-resume.sh --brief` | claim: 0 go · 2 not in a fleet · 3 wrong seat · 4 no issue · 5 the read failed |
-| `file_issue` | `title`, `body`?, `labels`? (comma list), `priority`? (`p0`–`p3`), `parent`?, `spawn`? \| `bind`?, `repo`? | `fleet-issue-file.sh --title T [--body B] [--label L]… [--priority P] [--parent N] [--repo R] [--spawn\|--bind]` | 0 · 2 usage · 3 unknown label · 4 spawn with no live parent · 1 failure |
+| `file_issue` | `title`, `body`?, `labels`? (comma list), `priority`? (`p0`–`p3`), `parent`?, `spawn`? \| `bind`?, `breakage`? \| `breakage_key`?, `repo`? | `fleet-issue-file.sh --title T [--body B] [--label L]… [--priority P] [--parent N] [--repo R] [--spawn\|--bind] [--breakage\|--breakage-key K]` | 0 · 2 usage · 3 unknown label · 4 spawn with no live parent · 5 the breakage already has an open issue (its URL on stdout, a 「同一故障」 comment left on it; issue #2078) · 1 failure |
 | `gh` | `kind` (`issue` · `pr` · `checks`), `number`, `fields`?, `max_age`? (≥ 0), `repo`? | `fleet-gh.sh issue view\|pr view\|pr checks <N> [--repo R] [--json F] [--max-age S]` | the script's |
 | `context` | `json`? | `fleet-context.sh [--json]` | 0 OK · 1 another verdict · 2 nothing to read |
 | `transfer` | `action` (`check` · `arm` · `export_loop`); `to` (`claude` · `codex`) for check/arm; `handoff` + `loop`? for arm; `transcript` + `output` for export_loop | `fleet-transfer.sh --session S --window $TMUX_PANE --to T --dry-run` · `… --handoff DOC [--loop L] --after-turn` · `fleet-loop.py from-claude --transcript F --output F` | the script's |
@@ -278,6 +278,14 @@ the guard, Codex never had them) — in a session that HAS the service
 are the mod's fallback and its only road (issue #2057, «How a session gets it»):
 logged `fallback`, never blocked, whatever the mode.
 
+**The fallback is kept by a gate, not by memory** (issue #2075, EPIC #2074 C2):
+before `fleet-stable.sh move`, `bin/fleet-oldcfg-replay.py` replays what a session
+of the current stable registered — every mod tool of its `tools.ts` through the new
+`tools.ts`'s `TOOL_RE` and `fleet-mcp.py --call`, every tool its `fleet` server
+listed against the new server's `tools/list`, every hook command of its table —
+and a tool with no handler refuses the move (`oldcfg:`). #2068's rules say what a
+handler is: forward it, or answer how to reopen (CONTRIBUTING «老会话兼容»).
+
 | script | tool |
 |---|---|
 | `fleet-children.sh` · `fleet-repo.sh list` | `children` · `repos` |
@@ -398,6 +406,13 @@ forwarded to `--call`, no schema / check / script of its own, the retreat messag
 when the forward cannot run (issue #2057). `bin/fleet-mcp-selftest.sh` N — `--spec`
 is the `tools/list` entry byte for byte; `--call` runs the same argv, prints the
 same text, exit 0 / 1 / 2, logs `road=call`.
+`bin/fleet-oldcfg-replay-selftest.sh` — the release gate (issue #2075): a deleted
+hook script, a dropped `TOOL_RE` handler, a tool gone from the server, a hook
+erroring or hanging — each red and named, restored green, old == new green at
+once; J replays this repo's own table against its live tree. `fleet-stable-selftest.sh`
+I — the refusal (`oldcfg:`, tag untouched, `--dry-run` too) and `--force` + its log
+line; `fleet-break-it-selftest.sh` `oldcfg-deleted-hook` does it through the real
+`move` on a rig repo.
 `bin/bash-guard-selftest.sh` «direct-script rail» — the old road (above): a worker
 seat logged / blocked, the operator seat and the hatch passing, the MCP road with
 the service, the fallback without it (logged `fallback`, never blocked).

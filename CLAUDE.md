@@ -228,6 +228,19 @@ Do not install from memory: read the doc and work from it.
   rebuilds a fleet whose session vanished — admit-gated, unfinished sessions only,
   never one `fleet-down` took down (`restore.down`). claude / tmux are found off a
   bare PATH by `fleet_find_tool` / `fleet_path_fill`; `fleet-doctor`'s `tools` row.
+- **A running EPIC batch holds the live install still — one mark PER BATCH, any
+  fresh one is true** (issues #953, #2062; EPIC #2074 C1). `/fleet-epic-run`
+  stamps `$FLEET_CONF_DIR/global/epic-running.d/<repo slug>-<N>` every tick
+  (`bin/fleet-epic-heartbeat.sh`) and at its end clears ONLY its own
+  (`--clear <N>`; a bare `--clear` refuses while several batches are marked).
+  `fleet_epic_running_fresh` (`bin/fleet-lib.sh`) is the ONE reader — every
+  fresh mark, `; `-joined — and `fleet-install-sync.sh` defers the whole tick on
+  it BEFORE the switch (a fresh mark ⇒ `deferred`, never `switched`; #1894 had
+  left only the node-agent half behind the gate, and EPIC #1935's last member
+  ran on a new floor). Busy windows still never defer. The pre-#2062 single
+  file `global/epic-running` is read for one version, never written
+  (`# compat-1v: 下一批删`). `install-sync-selftest.sh` O, `fleet-update-selftest.sh`
+  E and the `epic-mark-overwritten` / `epic-fresh-switched` BREAK-IT drills pin it.
 - **A new way to break the fleet gets its row and its drill BEFORE its fix**
   (issue #1786). `docs/BREAK-IT.md` lists every known way (方式 · 后果 · 自愈方式 ·
   演练); `bin/fleet-break-it-selftest.sh` does each one for real on isolated
@@ -235,6 +248,39 @@ Do not install from memory: read the doc and work from it.
   one `drill_<id>` (the test reds on either side missing); a way fixed in another
   repo is `登记：<ticket>`, listed, never drilled. Found a new one: add the row
   + drill, watch it go red, then fix.
+- **A red base branch is ONE issue, filed through `--breakage`** (issue #2078,
+  EPIC #2074 C7). `fleet-issue-file.sh --breakage` (the `file_issue` tool's
+  `breakage: true`) fingerprints the breakage first — `fleet_breakage_probe`
+  (`bin/fleet-lib.sh`): the commit the red streak started at (not the head), the
+  first failed check, its first error line sans `:<digits>` — REST only, so it
+  answers under a spent GraphQL budget. One issue per fingerprint: a `<key>/`
+  lock under `$FLEET_CONF_DIR/global/breakage` (2 min) holds the same-second
+  filers on one machine, the `<!-- fleet:breakage key=… -->` marker in the body
+  is what another machine finds (`fleet_breakage_find`, the REST open-issue list,
+  never `gh search` — its index lags). A later sighting gets a record-only
+  「同一故障，来自 …」 comment on the first issue, its URL on stdout and **exit 5**;
+  the caller waits for that issue (`await`), never files or spawns a second. An
+  ordinary filing runs none of it, byte for byte. `docs/BREAK-IT.md`
+  `breakage-three-filers` + `fleet-issue-file-selftest.sh` O–R pin it.
+- **Stable moves only past the old-session replay** (issue #2075, EPIC #2074 C2).
+  A session launched before a release keeps what it read at its start — the hook
+  table, the mod's tool list, the MCP servers' tool lists — and runs everything
+  they name from the NEW `~/.claude/fleet`; a looping scheduler is never reopened.
+  `bin/fleet-oldcfg-replay.py` replays `stable`'s three files against the target
+  tree in a sandbox (every hook command once per event with a minimal event JSON,
+  every mod tool through the new `tools.ts`'s `TOOL_RE` + `fleet-mcp.py --call`,
+  `tools/list` of every server old against new), and `fleet-stable.sh move`
+  refuses on a finding (reason `oldcfg:`; `--force` moves anyway and logs one line
+  in `logs/stable-move.log`) — a replay that cannot run refuses too. So a change
+  to any «fixed at start» part keeps #2068's four rules for at least one version
+  (CONTRIBUTING «老会话兼容», the PR template's line): a deleted / renamed tool
+  keeps a handler (forward it, or say how to reopen), a deleted / renamed hook
+  script keeps a forwarding shell or exits 0 quietly, a new guard also works
+  through an entry the old table already calls, an MCP change as a tool.
+  `fleet-oldcfg-replay-selftest.sh` J replays the repo's own table against its
+  live tree on every PR, so a hook that cannot run in the sandbox is red there,
+  not at the operator's release; old == new is GREEN at once. docs/BREAK-IT.md
+  row `oldcfg-deleted-hook`.
 - **A session says when it may be closed: `@reap_policy`** (issue #1902). Chosen
   at spawn (`--reap` on both spawners, the `spawn` tool, the client's new-session
   question 「什么时候回收？」 → hub `reap` → the node's `worker_start`), changed by

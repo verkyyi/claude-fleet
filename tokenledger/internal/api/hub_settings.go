@@ -19,11 +19,12 @@ import (
 // running hub cannot change about itself (EPIC #1982 rule 2).
 //
 // Reading a setting goes through Server.setting(key) and nothing else: the
-// stored value, else — for ONE version — the old environment variable or
-// flag it replaces, else the default below. The hub copies each old value
-// into the database once at start (MigrateLegacySettings), so the list an
-// admin reads shows what applies; the next version stops reading the old
-// variables.
+// stored value, else the default below. One old value is still read where
+// the setting is unset — a configured SPOT image means fleet.spot on — and
+// copied into the database once at start (MigrateLegacySettings).
+// --public-badges, CCQUOTA_FLEET_AUTO_ASSIGN and
+// CCQUOTA_FLEET_PRINCIPAL_LOGINS are no longer read at all
+// (claude-fleet#2087): their copies are in the database since #1986.
 
 // The hub settings' keys.
 const (
@@ -42,7 +43,7 @@ const (
 	machineLoginSuffix = ".machine_login"
 
 	// noneValue clears a list or a login on purpose: "" means "back to the
-	// default", which for one version is still the old variable.
+	// default".
 	noneValue = "none"
 
 	// legacyMigratedPrefix marks a key whose old variable has been copied
@@ -76,14 +77,8 @@ func onOff(key, def string) func(*Server, string) (string, string) {
 var hubSettings = map[string]hubSetting{
 	MeterKey: {def: "on", help: "the public counter (/meter.json, /odometer.svg)",
 		check: onOff(MeterKey, "on")},
-	PublicBadgesKey: {def: "off", help: "badges and embeds readable without signing in (replaces --public-badges)",
-		check: onOff(PublicBadgesKey, "off"),
-		legacy: func(s *Server) string {
-			if s.PublicBadges {
-				return "on"
-			}
-			return ""
-		}},
+	PublicBadgesKey: {def: "off", help: "badges and embeds readable without signing in",
+		check: onOff(PublicBadgesKey, "off")},
 	PoolSkipPctKey: {def: "85", help: "a subscription at or above this % of a window is skipped (nodes: FLEET_ACCOUNT_CEILING)",
 		check: func(_ *Server, v string) (string, string) {
 			n, err := strconv.Atoi(strings.TrimSpace(v))
@@ -94,7 +89,7 @@ var hubSettings = map[string]hubSetting{
 		}},
 	PoolMoveFullKey: {def: "off", help: "move a session to another subscription when its own is full (nodes: FLEET_FAILOVER)",
 		check: onOff(PoolMoveFullKey, "off")},
-	AutoAssignKey: {def: "", help: "machines a new person gets a login opened on, comma-separated, or none (replaces CCQUOTA_FLEET_AUTO_ASSIGN)",
+	AutoAssignKey: {def: "", help: "machines a new person gets a login opened on, comma-separated, or none",
 		check: func(_ *Server, v string) (string, string) {
 			if strings.EqualFold(strings.TrimSpace(v), noneValue) {
 				return noneValue, ""
@@ -109,8 +104,7 @@ var hubSettings = map[string]hubSetting{
 				}
 			}
 			return strings.Join(hosts, ","), ""
-		},
-		legacy: func(s *Server) string { return strings.Join(s.FleetAutoAssign, ",") }},
+		}},
 	SpotKey: {def: "off", help: "rented SPOT machines when no machine has room (needs CCQUOTA_FLEET_SPOT_IMAGE)",
 		check: onOff(SpotKey, "off"),
 		legacy: func(s *Server) string {
@@ -162,8 +156,39 @@ func isHubSettingKey(key string) bool {
 	if _, ok := langKeyID(key); ok {
 		return true
 	}
+	if _, ok := poolPausedKey(key); ok {
+		return true
+	}
 	_, ok := machineLoginKey(key)
 	return ok
+}
+
+// PoolPausedPrefix makes pool.paused.<account> (claude-fleet#1990): a pool
+// subscription an admin paused — "on", or "" (the row is deleted) when it
+// runs. <account> is the credential's account as /v1/fleet/credentials
+// lists it. The hub still leases it, flagged paused, so a session already
+// on it finishes; a node that reads the flag starts no new one there.
+const PoolPausedPrefix = "pool.paused."
+
+// poolPausedKey parses pool.paused.<account>.
+func poolPausedKey(key string) (string, bool) {
+	acct, ok := strings.CutPrefix(key, PoolPausedPrefix)
+	if !ok || !validAccountLabel(acct) {
+		return "", false
+	}
+	return acct, true
+}
+
+// pausedAccounts is every pool account an admin paused, sorted.
+func pausedAccounts(settings map[string]string) []string {
+	out := []string{}
+	for k, v := range settings {
+		if acct, ok := poolPausedKey(k); ok && strings.EqualFold(v, "on") {
+			out = append(out, acct)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // machineLoginKey parses user.<id>.machine_login. <id> is a GitHub ID — bare
@@ -208,7 +233,7 @@ func machineLoginSettingKey(principal string) string {
 }
 
 // setting is the ONE reading of a hub setting: the stored value, else the
-// old variable (one version), else the default. An unreadable table reads
+// old value (a SPOT image), else the default. An unreadable table reads
 // as the old variable or the default.
 func (s *Server) setting(key string) string {
 	spec, ok := hubSettings[key]
@@ -274,8 +299,7 @@ func (s *Server) routesExtra() []FleetMachine {
 
 // settingMachineLogins is every user.<id>.machine_login stored in the
 // settings table (non-GitHub principals; a GitHub person's is on their hub_users
-// row), principal → login. "none" entries are kept: they mean "no login",
-// and they hide an old CCQUOTA_FLEET_PRINCIPAL_LOGINS entry.
+// row), principal → login. "none" entries are kept: they mean "no login".
 func (s *Server) settingMachineLogins() map[string]string {
 	out := map[string]string{}
 	if s.Store == nil {
@@ -294,18 +318,12 @@ func (s *Server) settingMachineLogins() map[string]string {
 	return out
 }
 
-// principalLogins is the whole person → machine login map placement reads:
-// the stored settings, then — one version — CCQUOTA_FLEET_PRINCIPAL_LOGINS
-// for a person the settings do not name. Keys are lower case; "none" is
-// dropped.
+// principalLogins is the stored person → machine login map placement reads
+// (a GitHub person's own login is on their hub_users row). Nothing else
+// names a login: CCQUOTA_FLEET_PRINCIPAL_LOGINS is no longer read
+// (claude-fleet#2087). Keys are lower case; "none" is dropped.
 func (s *Server) principalLogins() map[string]string {
-	out := map[string]string{}
-	for pid, login := range s.FleetPrincipalLogins {
-		out[strings.ToLower(pid)] = login
-	}
-	for pid, login := range s.settingMachineLogins() {
-		out[pid] = login
-	}
+	out := s.settingMachineLogins()
 	for pid, login := range out {
 		if login == noneValue {
 			delete(out, pid)
@@ -331,7 +349,7 @@ func (s *Server) checkMachineLogin(pid, v string) (string, string) {
 }
 
 // machineLoginOwner is the principal a machine login belongs to, "" when
-// nobody's: a GitHub person's row, a stored setting, or the old variable.
+// nobody's: a GitHub person's row or a stored setting.
 func (s *Server) machineLoginOwner(login string) string {
 	for pid, l := range s.principalLogins() {
 		if l == login {
@@ -394,6 +412,21 @@ func (s *Server) putHubSetting(actor, key, value string, now time.Time) (int, st
 	}
 	if pid, ok := machineLoginKey(key); ok {
 		return s.putMachineLogin(actor, pid, value, settings, now)
+	}
+	if _, ok := poolPausedKey(key); ok {
+		stored := ""
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "on":
+			stored = "on"
+		case "", "off":
+		default:
+			return http.StatusBadRequest, PoolPausedPrefix + "<account> is on, or \"\" (off) to resume"
+		}
+		if err := s.Store.SetFleetSetting(key, stored, now); err != nil {
+			return http.StatusInternalServerError, err.Error()
+		}
+		s.settingAudit(actor, key, settings[key], stored, now)
+		return http.StatusOK, ""
 	}
 	if id, ok := langKeyID(key); ok {
 		// The account language (claude-fleet#2033): zh-CN | en, or "".
@@ -512,9 +545,8 @@ func (s *Server) hubSettingsView(settings map[string]string) []hubSettingView {
 // MigrateLegacySettings copies each old variable the hub was started with
 // into the database, once per key: a key already set keeps its value, and a
 // key migrated before is never re-copied (so an admin who cleared it is not
-// overruled by the deploy at the next start). The per-person machine logins
-// of CCQUOTA_FLEET_PRINCIPAL_LOGINS go the same way, to
-// user.<id>.machine_login. Each copy is a hub_audit row by "deploy".
+// overruled by the deploy at the next start). Each copy is a hub_audit row
+// by "deploy".
 func (s *Server) MigrateLegacySettings(now time.Time) error {
 	if s.Store == nil {
 		return nil
@@ -548,42 +580,5 @@ func (s *Server) MigrateLegacySettings(now time.Time) error {
 			return err
 		}
 	}
-	const loginsMarker = legacyMigratedPrefix + "principal_logins"
-	if len(s.FleetPrincipalLogins) > 0 && settings[loginsMarker] == "" {
-		pids := make([]string, 0, len(s.FleetPrincipalLogins))
-		for pid := range s.FleetPrincipalLogins {
-			pids = append(pids, pid)
-		}
-		sort.Strings(pids)
-		for _, pid := range pids {
-			login := s.FleetPrincipalLogins[pid]
-			if code, why := s.migrateMachineLogin(pid, login, settings, now); code != http.StatusOK {
-				log.Printf("WARN hub settings: CCQUOTA_FLEET_PRINCIPAL_LOGINS %s=%s not copied: %s", pid, login, why)
-			}
-		}
-		if err := s.Store.SetFleetSetting(loginsMarker, now.UTC().Format(time.RFC3339), now); err != nil {
-			return err
-		}
-	}
 	return nil
-}
-
-// migrateMachineLogin copies one old map entry unless the person already
-// has a login on record.
-func (s *Server) migrateMachineLogin(pid, login string, settings map[string]string, now time.Time) (int, string) {
-	if id, ok := githubIDOf(pid); ok {
-		u, err := s.Store.HubUserByID(id)
-		if err != nil {
-			return http.StatusInternalServerError, err.Error()
-		}
-		if u == nil {
-			return http.StatusNotFound, "not on the list"
-		}
-		if u.MachineLogin != "" {
-			return http.StatusOK, ""
-		}
-	} else if settings[machineLoginSettingKey(pid)] != "" {
-		return http.StatusOK, ""
-	}
-	return s.putMachineLogin("deploy", pid, login, settings, now)
 }

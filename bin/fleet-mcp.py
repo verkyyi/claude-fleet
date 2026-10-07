@@ -887,6 +887,10 @@ def tool_file_issue(args):
         argv.append("--spawn")
     if args.get("bind"):
         argv.append("--bind")
+    if args.get("breakage"):
+        argv.append("--breakage")
+    if "breakage_key" in args:
+        argv += ["--breakage-key", args["breakage_key"]]
     return script(argv, FILE_TIMEOUT_S)
 
 
@@ -1141,8 +1145,13 @@ TOOLS = {
         "description": "File a GitHub issue through the ONE filer channel (bin/fleet-issue-file.sh): the "
                        "provenance marker, the label taxonomy, the default milestone. parent links it as a "
                        "sub-issue; spawn hands it to a new worker (caps + dedup apply; a cap refusal leaves it "
-                       "filed); bind makes THIS scratch session its worker (refused from a worker). Prints the "
-                       "issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · 1 failure.",
+                       "filed); bind makes THIS scratch session its worker (refused from a worker). breakage: the "
+                       "base branch is RED and this is its fix — the filer fingerprints the breakage (the commit it "
+                       "started at · the first failed check · its first error line) and files ONE issue per "
+                       "fingerprint: one already open gets a 「同一故障」 comment and comes back as exit 5 + its URL, "
+                       "nothing filed or spawned — wait for that issue (await), never file a second (issue #2078). "
+                       "Prints the issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · "
+                       "5 the breakage already has an open issue (URL printed) · 1 failure.",
         "inputSchema": {"type": "object", "properties": {
             "title": {"type": "string"},
             "body": {"type": "string", "description": "The issue body, Markdown."},
@@ -1151,6 +1160,10 @@ TOOLS = {
             "parent": dict(ISSUE, description="File it as a sub-issue of this issue."),
             "spawn": {"type": "boolean", "description": "Start a worker on it now."},
             "bind": {"type": "boolean", "description": "Scratch only: become its worker in place."},
+            "breakage": {"type": "boolean", "description": "The base branch is red and this issue is its fix: "
+                         "fingerprint it and file one issue per breakage (exit 5 + the URL when one is open)."},
+            "breakage_key": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$",
+                             "description": "A fingerprint already computed (fleet_breakage_key) instead of probing."},
             "repo": REPO},
             "required": ["title"], "additionalProperties": False}}),
     "gh": (tool_gh, {

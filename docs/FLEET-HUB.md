@@ -751,6 +751,30 @@ every candidate full refuses `AT_CAPACITY` `all-full: …` — the spawn says
 「都满了」. A beat without the fields filters nothing. See
 `tokenledger/README.md`, "Sessions on every machine".
 
+**A machine whose own gate is holding is never chosen either** (issue #1836,
+EPIC #2074 C5). Since #1831 that count cap defaults to 0, so `max_sessions:0`
+read as «never full» while `fleet_machine_admit` refused each placed start on
+arrival. `capacity` now also carries the gate's verdict — `admit` (false =
+holding), `admit_why` (`内存紧张` / `负载过高`, the gate's own tag) and `room`
+(`fleet_machine_headroom`: how many more fit in memory; left out with
+`FLEET_ADMIT=0`) — every beat (5 s); `judge` excludes `admit=false` or `room<1`
+as `机器暂停接新：<原因>`, named or auto, and it counts as full for the
+`AT_CAPACITY` `all-full: …` verdict. A beat without the fields (an agent or
+claude-fleet older than #1836) filters nothing on them, byte for byte. The
+verdict shows on `/v1/nodes` and on each `placement` candidate.
+
+**A burst of starts is spread across the machines** (issue #2077, EPIC #2074
+C6). A new session takes 10–30 s to show in its node's beat, and in that window
+every pick of a burst chose the same machine — one pressed full, the other
+idle. The hub now notes every start it sends (`worker_start` / `worker_resume`
+/ `worker_move_in`) against the target for 90 s, or until the node's session
+count has grown past it, and `judge` scores the candidate as if those sessions
+were already running (one core and 1.5 GiB each) — `recent` on the candidate,
+`N just placed` in the reason, and a reported `room` is theirs first. Nothing
+in flight ⇒ byte for byte the old placement; the table is memory only, so a
+hub restart only falls back to the old pick. See `tokenledger/README.md`,
+"A burst is spread, not stacked".
+
 **Which subscription a placed session runs on** (issue #1540). A spawn's
 `--account local|pool|any` (or the fleet conf's `FLEET_ACCOUNT_CLASS`) rides
 the placement as `ccquota place --account <c>` → `account_class` on the

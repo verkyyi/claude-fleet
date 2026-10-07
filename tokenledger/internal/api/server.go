@@ -37,14 +37,6 @@ type Server struct {
 	// made it.
 	LogWriter func(line string)
 
-	// PublicBadges is --public-badges, the old switch: read for one version
-	// as hub.public_badges's value when the setting is unset
-	// (claude-fleet#1986). PublicBadges serves /badge/... without a viewer token, so an internal
-	// README can actually render one (a README image sends no credential, and
-	// camo strips cookies). Off by default: an operator who upgrades must not
-	// silently start serving without auth.
-	PublicBadges bool
-
 	// LimitsPollIntervalS is echoed to agents so a noisy fleet can be backed
 	// off centrally without touching every machine.
 	LimitsPollIntervalS int
@@ -77,6 +69,7 @@ type Server struct {
 	meter          meterState
 	sourceCounters scopedCounters
 	quotaLeases    quotaLeases
+	loadHist       loadHistory
 
 	// LiveStore holds the seconds-scale view of running sessions. In memory
 	// only: it describes this minute, and a restart legitimately knows nothing
@@ -102,29 +95,6 @@ type Server struct {
 	// refuses the op itself if it was not started as one. Empty means no node
 	// is ever sent an account op.
 	FleetAdmins []string
-
-	// FleetAutoAssign is the machines (roster hostnames) a person gets a
-	// login on the first time they sign in with GitHub
-	// (CCQUOTA_FLEET_AUTO_ASSIGN). Empty means accounts are only ever opened
-	// by an explicit assignment. A person in FleetPrincipalLogins is never
-	// auto-assigned: their login already exists, and is adopted instead.
-	// The old variable: since claude-fleet#1986 the setting fleet.auto_assign
-	// decides (Server.autoAssign); this is read for one version when it is
-	// unset.
-	FleetAutoAssign []string
-
-	// FleetPrincipalLogins maps a person (gh:<GitHub ID>) to the OS login
-	// that is theirs on every machine
-	// (CCQUOTA_FLEET_PRINCIPAL_LOGINS=gh:2718137=verkyyi; claude-fleet#1458). At sign-in a mapped person is recorded under that
-	// login and the login is ADOPTED on every roster machine whose agent
-	// runs as it — nothing is ever created. A person not in the map gets no
-	// row and no op (unless FleetAutoAssign says otherwise). Empty means the
-	// map is not in use. Keys are matched case-insensitively
-	// (mappedLoginFor, claude-fleet#1472).
-	// The old variable: since claude-fleet#1986 user.<id>.machine_login
-	// decides (Server.principalLogins); an entry here applies for one version
-	// to a person the settings do not name.
-	FleetPrincipalLogins map[string]string
 
 	// FleetPersonScopes is the grant a person signed in with GitHub holds
 	// on their own logins (CCQUOTA_FLEET_PERSON_SCOPES, claude-fleet#1410);
@@ -216,6 +186,9 @@ type Server struct {
 
 	// nodes holds the open node control channels.
 	nodes nodeConns
+	// recent is the starts just sent to each node that its heartbeat may not
+	// show yet (claude-fleet#2077); judge counts them as running.
+	recent recentTable
 
 	// devices holds `fleet login` device-code logins in progress.
 	devices deviceLogins
@@ -321,7 +294,9 @@ func (s *Server) routes() *routeMux {
 		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
 		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
-		mux.Handle("/nodes", s.viewerOnly(http.HandlerFunc(s.serveNodesPage)))
+		// Machines (claude-fleet#1990): an admin's page; a user gets the
+		// shell's 403 (admin_pages.go).
+		mux.Handle("/nodes", s.viewerOnly(s.adminPage("machines", "nodes.html")))
 		// 我的会话 (claude-fleet#1429): the phone view of fleet_sessions.
 		mux.Handle("/sessions", s.viewerOnly(http.HandlerFunc(s.serveSessionsPage)))
 		mux.Handle("/v1/fleet/me", s.viewerOnly(http.HandlerFunc(s.handleFleetMe)))
@@ -412,7 +387,6 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(NodeRevokePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleNodeRevoke))))
 		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevoke))))
 		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredAudit))))
-		mux.Handle("/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveCredentialsPage))))
 		// Session passes for untrusted machines (claude-fleet#1969): issue /
 		// renew / revoke by the node's token, verify by the verifiers' token,
 		// the list by the operator — each route checks its own.
@@ -487,11 +461,16 @@ func (s *Server) routes() *routeMux {
 	// and what is actually turned on here. Behind the viewer gate like every
 	// other human surface -- it describes the configuration, and /signin's
 	// unconditional 404 exists precisely so an uncredentialled prober cannot
-	// learn that. Both spellings, so /access/ is the page rather than the SPA
-	// fallback. See access.go.
+	// learn that. Its page retired with claude-fleet#1990; Settings reads it.
+	// See access.go.
 	mux.Handle("/v1/access", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccess))))
-	mux.Handle("/access", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveAccessPage))))
-	mux.Handle("/access/", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveAccessPage))))
+
+	// The admin pages (claude-fleet#1990): Subscriptions, Users, Settings,
+	// Audit (Machines is /nodes, above). A user gets the 403 page.
+	for _, p := range adminPageRoutes {
+		mux.Handle(p.path, s.viewerOnly(s.adminPage(p.id, p.file)))
+	}
+	mux.Handle(AuditPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminAudit))))
 
 	// Badges are the one surface that may be unauthenticated, and only on
 	// purpose. Everything else on this hub stays behind the viewer token.

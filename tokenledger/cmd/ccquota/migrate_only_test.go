@@ -81,9 +81,11 @@ func TestHubCheck(t *testing.T) {
 		t.Error("an unreadable --pricing passed the check")
 	}
 
+	// claude-fleet#2087: the old login map is no longer read — a value that
+	// once refused the start is ignored.
 	t.Setenv("CCQUOTA_FLEET_PRINCIPAL_LOGINS", "gh:1=Not A Login")
-	if err := runHub(args()); err == nil || !strings.Contains(err.Error(), "PRINCIPAL_LOGINS") {
-		t.Errorf("a bad CCQUOTA_FLEET_PRINCIPAL_LOGINS passed the check: %v", err)
+	if err := runHub(args()); err != nil {
+		t.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS is still read: %v", err)
 	}
 	t.Setenv("CCQUOTA_FLEET_PRINCIPAL_LOGINS", "")
 

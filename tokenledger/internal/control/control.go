@@ -420,6 +420,17 @@ type Heartbeat struct {
 	// #1587: placement then filters nothing, as it always did.
 	MaxSessions int  `json:"max_sessions,omitempty"`
 	CapSessions *int `json:"cap_sessions,omitempty"`
+	// Admit is the login's own admission verdict (claude-fleet#1836): the
+	// answer its spawn gate (fleet_machine_admit) gives right now — false =
+	// new sessions are held there, AdmitWhy says why (内存紧张 / 负载过高) —
+	// and Room how many more sessions its memory has room for
+	// (fleet_machine_headroom). Since #1831 the count cap defaults to 0, so
+	// this is the gate a placed start actually meets. All absent from an
+	// agent or claude-fleet older than #1836, and Room absent with the gate
+	// switched off (FLEET_ADMIT=0): placement then holds on nothing here.
+	Admit    *bool  `json:"admit,omitempty"`
+	AdmitWhy string `json:"admit_why,omitempty"`
+	Room     *int   `json:"room,omitempty"`
 	// MachineID is the claude-fleet control identity (fleet-control.py's
 	// machine_id), when the login has claude-fleet installed.
 	MachineID string `json:"machine_id,omitempty"`
@@ -507,6 +518,22 @@ func (hb Heartbeat) Full() (bool, int, int) {
 	return *hb.CapSessions >= hb.MaxSessions, *hb.CapSessions, hb.MaxSessions
 }
 
+// Paused reports whether this login's own gate is holding new sessions
+// (claude-fleet#1836) — it said admit false, or room for fewer than one more —
+// and why, in the gate's words. false when the beat carries neither field.
+func (hb Heartbeat) Paused() (bool, string) {
+	switch {
+	case hb.Admit != nil && !*hb.Admit:
+		if hb.AdmitWhy != "" {
+			return true, hb.AdmitWhy
+		}
+		return true, "admit=false"
+	case hb.Room != nil && *hb.Room < 1:
+		return true, fmt.Sprintf("内存余量不够再开一个（room %d）", *hb.Room)
+	}
+	return false, ""
+}
+
 // NodeRoute is one way into a machine's sshd: a name people see ("tailnet",
 // "public"), a host and a port (0 = 22).
 type NodeRoute struct {
@@ -591,7 +618,7 @@ func ValidLogin(s string) bool {
 
 // ValidExistingLogin is the shape of a login the operator may NAME — one
 // that already exists on a machine and is adopted, mapped to a person
-// (CCQUOTA_FLEET_PRINCIPAL_LOGINS) or put on a certificate — as opposed to
+// (user.<id>.machine_login) or put on a certificate — as opposed to
 // one the hub would create. The same alphabet as ValidLogin, so it still
 // cannot be an option or a path, but a leading digit is allowed: macOS
 // permits it, and `24haowan` is a real login (claude-fleet#1458). A create

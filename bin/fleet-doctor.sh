@@ -1757,34 +1757,42 @@ EOF
   fi
 fi
 
-# --- epic: is a batch still being driven (issue #1846) --------------------------
-# /fleet-epic-run stamps global/epic-running every tick (fleet-epic-heartbeat.sh).
-# A lease that went stale while its EPIC is still OPEN means the loop's window
-# went away (killed, its machine down) and nobody is driving the batch: WARN with
-# the one way back. No mark → no row; a closed EPIC's leftover mark is history.
-_ep=$(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_running; printf "|%s" "$?"' _ "$(dirname "$0")" 2>/dev/null)
-_ep_rc=${_ep##*|}; _ep=${_ep%|*}
-if [ "$_ep_rc" = 0 ] || [ "$_ep_rc" = 1 ]; then
+# --- epic: which batches are being driven (issue #1846; one mark per batch, #2062) --
+# /fleet-epic-run stamps global/epic-running.d/<repo>-<N> every tick
+# (fleet-epic-heartbeat.sh), one file per batch. Every fresh mark is a batch in
+# flight: ONE row names them all — they are what holds install-sync still. A
+# lease that went stale while its EPIC is still OPEN means the loop's window went
+# away (killed, its machine down) and nobody is driving the batch: WARN with the
+# one way back, per batch. No mark → no row; a closed EPIC's leftover mark is history.
+_ep_run=''
+while IFS= read -r _ep_f; do
+  [ -n "$_ep_f" ] || continue
+  _ep=$(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_running "$2"; printf "|%s" "$?"' _ "$(dirname "$0")" "$_ep_f" 2>/dev/null)
+  _ep_rc=${_ep##*|}; _ep=${_ep%|*}
+  [ "$_ep_rc" = 0 ] || [ "$_ep_rc" = 1 ] || continue
   _ep_n=$(printf '%s' "$_ep" | sed -n 's/.*epic=\([0-9][0-9]*\).*/\1/p')
   _ep_age=$(printf '%s' "$_ep" | sed -n 's/.*age=\([0-9][0-9]*\)s.*/\1/p')
   _ep_tick=$(printf '%s' "$_ep" | sed -n 's/.*tick=\([^ ]*\).*/\1/p')
   _ep_m=$(( ${_ep_age:-0} / 60 ))
   if [ "$_ep_rc" = 0 ]; then
-    pass epic "批次 #${_ep_n:-?} 在跑（第 ${_ep_tick:--} 拍，${_ep_m} 分钟前）"
-  else
-    _ep_repo=$(sed -n 's/^repo: //p' "$conf_dir/global/epic-running" 2>/dev/null | head -1)
-    _ep_st=''
-    if [ -n "$_ep_n" ]; then
-      _ep_st=$(bash "$(dirname "$0")/fleet-gh.sh" issue view "$_ep_n" ${_ep_repo:+--repo "$_ep_repo"} --json state --max-age 600 2>/dev/null \
-               | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([A-Z]*\)".*/\1/p')
-    fi
-    case "$_ep_st" in
-      OPEN) warn epic "批次 #$_ep_n 没有人在跑：它的心跳 ${_ep_m} 分钟前就停了（第 ${_ep_tick:--} 拍），EPIC 还开着 — 在 hub 里重新运行 /fleet-epic-run $_ep_n" ;;
-      '')   info epic "批次 #${_ep_n:-?} 的心跳 ${_ep_m} 分钟前停了，EPIC 是否还开着读不到" ;;
-      *)    pass epic "批次 #$_ep_n 已结束（EPIC $_ep_st）" ;;
-    esac
+    _ep_run="${_ep_run:+$_ep_run · }#${_ep_n:-?}（第 ${_ep_tick:--} 拍，${_ep_m} 分钟前）"
+    continue
   fi
-fi
+  _ep_repo=$(sed -n 's/^repo: //p' "$_ep_f" 2>/dev/null | head -1); [ "$_ep_repo" = - ] && _ep_repo=''
+  _ep_st=''
+  if [ -n "$_ep_n" ]; then
+    _ep_st=$(bash "$(dirname "$0")/fleet-gh.sh" issue view "$_ep_n" ${_ep_repo:+--repo "$_ep_repo"} --json state --max-age 600 2>/dev/null \
+             | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([A-Z]*\)".*/\1/p')
+  fi
+  case "$_ep_st" in
+    OPEN) warn epic "批次 #$_ep_n 没有人在跑：它的心跳 ${_ep_m} 分钟前就停了（第 ${_ep_tick:--} 拍），EPIC 还开着 — 在 hub 里重新运行 /fleet-epic-run $_ep_n" ;;
+    '')   info epic "批次 #${_ep_n:-?} 的心跳 ${_ep_m} 分钟前停了，EPIC 是否还开着读不到" ;;
+    *)    pass epic "批次 #$_ep_n 已结束（EPIC $_ep_st）" ;;
+  esac
+done <<EP_MARKS
+$(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_running_marks' _ "$(dirname "$0")" 2>/dev/null)
+EP_MARKS
+[ -n "$_ep_run" ] && pass epic "批次 $_ep_run 在跑 — install-sync 整套不动，到批次都结束"
 
 # --- last crash + the record a crash would leave (issue #1294) -----------------
 # The diskguard tick harvests the system's panic / Jetsam reports into

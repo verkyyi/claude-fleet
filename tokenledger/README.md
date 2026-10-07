@@ -548,6 +548,7 @@ process, and they do not share a credential.
 | Door | What you need | What it gives you |
 |---|---|---|
 | The app (`/`, `/sessions`, `/connect`, `/config`) | a GitHub sign-in on this hub's list, or the viewer token | what the viewer's role lets them see (a user: their own) |
+| The admin pages (`/subscriptions`, `/nodes`, `/admin/users`, `/admin/settings`, `/admin/audit`) | an admin's sign-in, or the viewer token | the pool, machines, people, settings and the merged audit (`/v1/admin/audit`, CSV with `?format=csv`); a user gets 403 (claude-fleet#1990) |
 | `/signin`, `/auth/github/*` | a GitHub account whose numeric ID is on the list | exchanges a GitHub sign-in for this hub's session cookie, nothing else |
 | `POST /logout` | a same-origin form (the page header's 退出) | clears the cookies this hub minted and shows the signed-out page; GitHub's own session stays |
 | `/v1/...` | the viewer token, as a bearer header | the same figures as JSON |
@@ -567,8 +568,9 @@ Both sit behind the viewer gate, like every other human surface. That is
 deliberate rather than incidental: `/signin` is mounted unconditionally and
 404s when GitHub sign-in is unconfigured *precisely* so the route cannot tell an
 uncredentialled prober whether the feature is on, and a page that reports the
-configuration must not undo it. You read `/access` because you already came
-through a door.
+configuration must not undo it. You read it because you already came
+through a door. (Its page retired with claude-fleet#1990; Settings reads
+`/v1/access` for the deploy-set facts.)
 
 It is a description, not a control plane. Nothing on it mints, revokes or
 widens a credential, and no command has been moved from the hub's shell onto
@@ -651,8 +653,8 @@ the join-code button below stays, for the operator, one more version.
 
 ### A new machine — join codes (claude-fleet#1418, kept one version)
 
-The `/nodes` page has an **加一台机器** panel (the operator's; a user's session
-gets 403): one click mints a **join code** and prints the line to paste on the
+The `/nodes` page (Machines, an admin's — a user gets 403) has an **加机器**
+button: one click mints a **join code** and prints the line to paste on the
 new machine, as the login that will run the fleet:
 
 ```bash
@@ -765,8 +767,7 @@ admin is listed but read-only — it cannot be added as a user or removed. Every
 add, remove and refusal is a `hub_audit` row.
 
 The settings that used to be variables are in the database too, read through
-`Server.setting(key)` (the stored value, else — for one version — the old
-variable, else the default) and changed with `fleet hub set <key> <value>`
+`Server.setting(key)` (the stored value, else the default) and changed with `fleet hub set <key> <value>`
 (`PUT /v1/fleet/settings`); `fleet hub settings` lists what applies and where
 it comes from, `fleet hub unset <key>` goes back to the default. Every change
 is one `hub_audit` row: who, when, old → new.
@@ -774,19 +775,23 @@ is one `hub_audit` row: who, when, old → new.
 | key | default | replaces |
 |---|---|---|
 | `hub.public_meter` | on | — |
-| `hub.public_badges` | off | `--public-badges` |
+| `hub.public_badges` | off | `--public-badges` (no longer read, claude-fleet#2087) |
 | `pool.skip_pct` | 85 | a node's `FLEET_ACCOUNT_CEILING` (served at `/v1/fleet/client-settings` → `pool`) |
 | `pool.move_when_full` | off | a node's `FLEET_FAILOVER` (same) |
-| `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN` (`none` = no machines) |
+| `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN`, no longer read (`none` = no machines) |
 | `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
-| `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS` (`<id>` = a GitHub ID, `583231` or `gh:583231`; `none` = no login) |
+| `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS`, no longer read (`<id>` = a GitHub ID, `583231` or `gh:583231`; `none` = no login) |
 | `user.<GitHub ID>.lang` | — | the account's page language (claude-fleet#2033): `zh-CN` \| `en` |
 
-At start the hub copies each old value it was given into the database once
-(audited as `deploy`, marked `hub.legacy_migrated.<key>` so a value an admin
-clears later is not copied back) and logs a deprecation WARN; the next version
-stops reading the old variables. The CLI authenticates with
+The old flag and variables were copied into the database by the version
+that introduced the settings (claude-fleet#1986) and are **no longer read**
+(claude-fleet#2087): a deploy that still sets one changes nothing, and a
+machine login is someone's only while their hub_users row or a
+`user.<id>.machine_login` says so. The one old value still honoured is a set
+`CCQUOTA_FLEET_SPOT_IMAGE` meaning `fleet.spot` on, copied into the database
+once at start (audited as `deploy`, marked `hub.legacy_migrated.fleet.spot` so
+an admin's later clear is not copied back). The CLI authenticates with
 `CCQUOTA_VIEWER_TOKEN`, or `FLEET_HUB_SESSION` set to a signed-in admin's
 `ccq_sess` cookie — both read from the environment, never written down.
 
@@ -803,8 +808,8 @@ keeps, per (principal, machine), whether that login exists there:
 row, or null) and `accounts`.
 
 **Whose login is whose — the explicit map.** The setting
-`user.<GitHub ID>.machine_login` (claude-fleet#1986; for one version also
-`CCQUOTA_FLEET_PRINCIPAL_LOGINS=gh:2718137=verkyyi`) names the OS login that
+`user.<GitHub ID>.machine_login` (claude-fleet#1986 — `fleet users add
+<name> --machine-login <login>`, or `fleet hub set`) names the OS login that
 belongs to each person. At a mapped person's sign-in the hub records them under
 that login and **adopts** it (state `active`, op `adopt`) on every roster
 machine whose agent runs as that login — the roster is the evidence the login
@@ -813,8 +818,8 @@ in" and "machine joins" does not matter. Nothing is ever created for a mapped
 person, and no op is sent. A person **not** in the map leaves no row at all (no
 minted login name, no op) unless `fleet.auto_assign` below applies to
 them; the operator's `adopt` records them when there is somewhere to record them
-on. A malformed entry, a login outside `[a-z0-9]{2,16}` or one login claimed by
-two people refuses to start the hub. A mapped login may start with a digit; a
+on. A login outside `[a-z0-9]{2,16}` or one already someone else's is refused
+(400) when it is set. A mapped login may start with a digit; a
 login the hub *creates* still starts with a letter.
 
 **The placement runs at every door that needs the row, not only at sign-in**
@@ -840,8 +845,7 @@ only picks the login and display name, both re-validated there:
     create  ~/.claude/fleet/bin/fleet-login-new.sh <login> --full-name <name> --share-pool --apply
     remove  ~/.claude/fleet/bin/fleet-login-remove.sh <login> --keep-home --apply
 
-`fleet hub set fleet.auto_assign m4[,m5]` (roster hostnames; formerly
-`CCQUOTA_FLEET_AUTO_ASSIGN`) queues an *unmapped*
+`fleet hub set fleet.auto_assign m4[,m5]` (roster hostnames) queues an *unmapped*
 person's login on those machines at their first sign-in; anything else is the
 operator's `POST /v1/fleet/accounts` (`{"action":"assign|retry|remove|adopt|forget",
 "principal_id":…, "hostname":…, "login":… for adopt}`) — `adopt` records a
@@ -993,6 +997,38 @@ machine freed a slot since its last beat, in which case it opens here. A beat
 without the two fields (an agent or claude-fleet older than #1587) filters
 nothing, as before. Both show on `/v1/nodes` and on each `placement` candidate.
 
+**A login whose own gate is holding is never a candidate either**
+(claude-fleet#1836). The count cap defaults to 0 since claude-fleet#1831, so
+`max_sessions:0` never says full — while the machine's real gate,
+`fleet_machine_admit` (memory pressure, the room for one more session above the
+kept-back floor, CPU load), refused each placed start on arrival. `capacity`
+therefore also carries `admit` (false = holding), `admit_why` (the gate's own
+tag: `内存紧张` / `负载过高`) and `room` (`fleet_machine_headroom`'s count of
+how many more fit; absent with `FLEET_ADMIT=0`, the gate off). `admit=false` or
+`room<1` excludes the candidate as `机器暂停接新：<原因>`, auto or named, and
+counts as full: with every machine out that way the refusal is `AT_CAPACITY`
+`all-full: every machine is at its session cap or pausing new sessions — …`. A
+beat without the fields filters nothing on them, as before.
+
+**A burst is spread, not stacked** (claude-fleet#2077). A new session takes
+10–30 s to show in its node's beat — load, memory, session count — and in that
+window every pick of a burst chose the same machine. The hub keeps its own
+memory of what it just sent where (`recentTable`, in memory only): every
+`worker_start` / `worker_resume` / `worker_move_in` is noted against the target,
+with the session count its beat showed then, for **90 s** or until that count
+has grown past it (one beat is credited once; a count that fell credits
+nothing; a start the node refused outright is forgotten at once). `judge` folds
+the count in as `recent` on the candidate: the score is taken as if those
+sessions were already running — one core of load (`1/ncpu` per core) and
+1.5 GiB of memory each, a default share of a reading the beat did not give —
+so the next pick of the burst sees the first one's weight; a tie goes to fewer
+sessions *plus* in flight; and a reported `room` is spoken for by them
+(`room − recent < 1` holds the candidate as `机器暂停接新：内存余量不够再开一个
+（room R，刚派出 N 个还没算进去）`). The reason says `…, 3 sessions, 1 just
+placed)`; the candidate carries `recent` only when it is non-zero, so with
+nothing in flight every placement is byte for byte what it was. A hub restart
+forgets the table — the worst case is the old pick.
+
 **Grants.** Each tool has the Python hub's scope (`worker:start`,
 `worker:message`, `worker:stop`, `worker:resume`, `config:write` plus the key,
 `gh:read`, `gh:comment`; every call needs `fleet:read`). The operator's doors
@@ -1063,7 +1099,8 @@ stores, lists and revokes:
     #   {"principal_id":…} revokes a person everywhere; both = that person on that machine; "lift":true undoes
 
 Every issue, refusal, refresh, store and revocation is an audit row:
-`/v1/fleet/credentials/audit`, and the page **`/credentials`**. All of these
+`/v1/fleet/credentials/audit`, merged with every other audit on the admin
+page **`/admin/audit`** (claude-fleet#1990). All of these
 refuse a user's session. A Claude refresh token comes from an interactive
 `claude` login (`claudeAiOauth.refreshToken`); once it is in the hub, log that
 machine out — two holders of one refresh token rotate each other out.
@@ -1124,8 +1161,8 @@ It cannot be refreshed and does not rotate, so the hub stores it as kind
 any number of machines hold the same token without logging each other out),
 refuses to store or issue one past `expires_at`, and reminds the operator:
 a `cred_setup_token` finding on the hub page from **30 days** before the date
-(critical in the last week, and once it has passed), plus a banner on
-`/credentials`. The only remedy is a person minting a new one and importing it
+(critical in the last week, and once it has passed), and its card on
+`/subscriptions` says 「到期」. The only remedy is a person minting a new one and importing it
 again — there is nothing the hub can renew. `expires_at` is the operator's
 word: the token endpoint does not say.
 
@@ -1186,7 +1223,7 @@ every credential. With `CCQUOTA_FLEET_CRED_KMS_KEY_ID` set, the vault uses
 ciphertext (`fleet_cred_key`), and opening it is a KMS `Decrypt` call made with
 the hub's own cloud identity. The database and every Secret together open
 nothing, and every unwrap is a line in KMS's log — ActionTrail / the KMS
-console's call records; the hub's `/credentials` audit carries an `unlock` row
+console's call records; the hub's credential audit carries an `unlock` row
 with the same KMS request id.
 
 | where | setting | effect |
@@ -1746,7 +1783,7 @@ that re-fetches the badge every minute can pass the last value it showed.
 
 `/badge/u/<login>.json?format=raw` is the figure the embed polls:
 `{"tokens":…,"turns":…,"period":"30d"}`, never cached, behind the same
-`--public-badges` gate as everything else here.
+`hub.public_badges` gate as everything else here.
 
 **Publishing is up to you, and every route is serverless.** Which one works is
 decided by the content-type the host serves, so these were measured rather than
@@ -1780,7 +1817,7 @@ wrong for a week.
 
 ### Serving badges from your own hub
 
-`ccquota hub --public-badges` serves `/badge/u/<login>.svg` and
+`fleet hub set hub.public_badges on` makes the hub serve `/badge/u/<login>.svg` and
 `/badge/team/<team>.svg` (`?theme=dark|light|auto`, `?period=all|30d|7d`,
 `?size=full|compact`, `?style=tokenman|flat`, `?bg=transparent`, `?from=`,
 colour overrides; `.json` for shields data, `.json?format=raw` for the bare

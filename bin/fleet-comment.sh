@@ -143,6 +143,20 @@ fi
 [ -z "$repo" ] && { printf 'fleet-comment: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 1; }
 command -v gh >/dev/null 2>&1 || { printf 'fleet-comment: gh not on PATH\n' >&2; exit 1; }
 
+# --- --to-worker on a repo the bridge does not poll (issue #2059) ------------
+# `--to-worker` leaves the comment unmarked for the issue-bridge to relay — but only
+# a repo some fleet bridges (FLEET_ISSUE_BRIDGE=1 in that repo's view) is ever
+# polled. Anywhere else the comment used to sit unread while this script said
+# 「将转达」: an hour of instructions to a #1901 worker never arrived. So ask the
+# bridge's own reader (fleet_bridge_covers) first; not covered ⇒ the comment is
+# posted as a record (marked: a bridge switched on later must not replay it) and
+# the text goes to the worker over the peer channel instead.
+# FLEET_COMMENT_PEER_FALLBACK=0 keeps the post and says so, without the send.
+peer_fallback=0 raw_body=''
+if [ "$relay" -eq 1 ] && ! fleet_bridge_covers "$repo"; then
+  peer_fallback=1 relay=0 raw_body="$body"
+fi
+
 # --- per-role sender footer (issue #224) -------------------------------------
 # Assemble the footer TAIL once, then append it under one blank line so the block
 # reads: <body> · <blank> · <visible signature> · <fleet:from marker> · [no-relay].
@@ -198,6 +212,20 @@ fi
 # bound to this issue, yet the comment is record-only) — say it loudly.
 # stderr only: stdout stays exactly the `gh` URL so callers parsing it are unaffected.
 comment_verdict() {
+  if [ "$peer_fallback" -eq 1 ]; then
+    printf 'fleet-comment: 已发为记录 · issue-bridge 不轮询 %s，评论不会转达 #%s 的 worker\n' "$repo" "$num" >&2
+    if [ "${FLEET_COMMENT_PEER_FALLBACK:-1}" = 0 ]; then
+      printf '   要送达：fleet-peer-send.sh --repo %s issue:%s（或在该仓库的视图里开 FLEET_ISSUE_BRIDGE=1）\n' "$repo" "$num" >&2
+      return 0
+    fi
+    local out rc
+    out=$(printf '%s' "$raw_body" | "$BIN/fleet-peer-send.sh" --repo "$repo" "issue:$num" - 2>&1); rc=$?
+    printf '   改走 peer 通道：%s\n' "${out:-exit $rc}" >&2
+    # sent (0) or queued for the worker (3) is a delivery; anything else is not.
+    case "$rc" in 0|3) return 0 ;; esac
+    printf '   ⚠️  没有送达 #%s 的 worker（exit %s）\n' "$num" "$rc" >&2
+    return 1
+  fi
   if [ "$relay" -eq 1 ]; then
     printf 'fleet-comment: 已发并将转达 #%s 的 worker（bridge 下轮拾取；仍受 assoc 门与自发抑制约束）\n' "$num" >&2
     return 0
@@ -259,4 +287,4 @@ if [ "$do_close" -eq 1 ]; then
   close_issue; exit "$?"
 fi
 post_comment || exit "$?"
-comment_verdict
+comment_verdict || exit 1

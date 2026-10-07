@@ -61,10 +61,9 @@ if curl -sf -o /dev/null "http://127.0.0.1:$PORT/healthz" 2>/dev/null; then
 fi
 
 echo "→ starting hub on 127.0.0.1:$PORT"
-# --public-badges lets `ccquota badge` be fetched without a viewer token, which
-# is what a README image needs.
+# Badges are read with the viewer token exported above; a README image that
+# needs them without one is the hub setting hub.public_badges (claude-fleet#2087).
 "$BIN" hub --addr "127.0.0.1:$PORT" --db "$DB" \
-  --public-badges \
   >"$WORK/hub.log" 2>&1 &
 HUB_PID=$!
 

@@ -388,6 +388,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 				m.Proto, string(m.Payload), now); err != nil {
 				log.Printf("node %s: record heartbeat: %v", ep.ID, err)
 			}
+			s.loadHist.add(hb.Hostname, hb.Load1, hb.NCPU, now)
 			// The Fleet Hub registry (claude-fleet#1409): this login's
 			// fleets, re-derived and checked before they are registered.
 			s.nodeBack(*ep, now)
@@ -509,8 +510,14 @@ type NodeView struct {
 	SessionsUnknown []string `json:"sessions_unknown,omitempty"`
 	// MaxSessions is the login's own session cap and CapSessions the count
 	// its gate reads (claude-fleet#1587); absent when the node does not say.
-	MaxSessions  int                `json:"max_sessions,omitempty"`
-	CapSessions  *int               `json:"cap_sessions,omitempty"`
+	MaxSessions int  `json:"max_sessions,omitempty"`
+	CapSessions *int `json:"cap_sessions,omitempty"`
+	// Admit / AdmitWhy / Room are the login's own admission verdict
+	// (claude-fleet#1836): false = its gate is holding new sessions, and why;
+	// Room how many more fit in its memory. Absent when the node does not say.
+	Admit        *bool              `json:"admit,omitempty"`
+	AdmitWhy     string             `json:"admit_why,omitempty"`
+	Room         *int               `json:"room,omitempty"`
 	Fleets       []NodeFleetSummary `json:"fleets"`
 	FleetError   string             `json:"fleet_error,omitempty"`
 	FleetVersion string             `json:"fleet_version,omitempty"`
@@ -569,6 +576,10 @@ type MachineView struct {
 	// (claude-fleet#1427): Status reads maintenance while any login is heard,
 	// lost when none is.
 	Maintenance *Maintenance `json:"maintenance,omitempty"`
+	// LoadHist is load per core over the last two hours, one point per five
+	// minutes, oldest first (claude-fleet#1990, the Machines card's trend).
+	// Kept in memory since the hub started: empty after a restart.
+	LoadHist []float64 `json:"load_hist"`
 	// Repos is every repo a registered fleet on the machine hosts
 	// (store.FleetRow.HostedRepos, the list placement checks), over the
 	// logins the reader may see (claude-fleet#1927): a newcomer's empty list
@@ -723,6 +734,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	sort.Strings(order)
 	for _, h := range order {
 		sort.Strings(machines[h].Repos)
+		machines[h].LoadHist = s.loadHist.series(h, now)
 		out.Machines = append(out.Machines, *machines[h])
 	}
 	out.Spot = s.spotSummary(now, out.Nodes)
@@ -746,6 +758,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.MemFreeBytes, v.MemTotalBytes = hb.MemFreeBytes, hb.MemTotalBytes
 		v.Sessions, v.SessionsUnknown = hb.SessionsCount(), hb.UnreadableFleets()
 		v.MaxSessions, v.CapSessions = hb.MaxSessions, hb.CapSessions
+		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
 		for _, f := range hb.Fleets {
 			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count, Error: f.Error})
@@ -784,11 +797,6 @@ func (s *Server) serveConnectPage(w http.ResponseWriter, r *http.Request) {
 // team layer.
 func (s *Server) serveConfigPage(w http.ResponseWriter, r *http.Request) {
 	s.serveStandalonePage(w, r, "config.html")
-}
-
-// serveNodesPage serves the standalone roster page.
-func (s *Server) serveNodesPage(w http.ResponseWriter, r *http.Request) {
-	s.serveStandalonePage(w, r, "nodes.html")
 }
 
 // serveSessionsPage serves 我的会话 (claude-fleet#1429): every session the

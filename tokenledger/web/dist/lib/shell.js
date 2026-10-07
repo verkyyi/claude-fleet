@@ -6,8 +6,8 @@
 //
 // The menu is /v1/me's `pages` (claude-fleet#1985), never a role test here: a
 // page the hub does not list is not drawn, and an id this table does not know
-// is skipped. An admin page with no `href` yet is one C8 (#1990) has not built
-// — it is left out rather than linked to nothing.
+// is skipped. The admin group is C8's (#1990): Subscriptions, Machines, Users,
+// Settings, Audit.
 //
 // Every word goes through t() (lib/i18n.js), English and 简体中文 alike.
 import { t, fmtCompact, fmtAgo } from './i18n.js';
@@ -40,6 +40,12 @@ export const ICONS = Object.freeze({
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',
   fleet: '<path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  pause: '<path d="M9 5v14M15 5v14"/>',
+  play: '<path d="M7 5l12 7-12 7z"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  wrench: '<path d="M14.5 6.5a4 4 0 00-5.4 5L4 16.6 7.4 20l5.1-5.1a4 4 0 005-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
 });
 
 /** ic is one icon's <svg>. */
@@ -52,13 +58,12 @@ export const PAGES = Object.freeze([
   { id: 'sessions', label: 'ui.nav.sessions', icon: 'list', href: '/sessions' },
   { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: '/connect' },
   { id: 'config', label: 'ui.nav.config', icon: 'sliders', href: '/config' },
-  // The admin group: until C8 (#1990) replaces them, the older admin pages.
-  { id: 'subscriptions', label: 'ui.nav.subscriptions', icon: 'card', group: 'admin' },
+  // The admin group (claude-fleet#1990).
+  { id: 'subscriptions', label: 'ui.nav.subscriptions', icon: 'card', group: 'admin', href: '/subscriptions' },
   { id: 'machines', label: 'ui.nav.machines', icon: 'server', group: 'admin', href: '/nodes' },
-  { id: 'people', label: 'ui.nav.people', icon: 'users', group: 'admin' },
-  { id: 'credentials', label: 'ui.nav.credentials', icon: 'shield', group: 'admin', href: '/credentials' },
-  { id: 'audit', label: 'ui.nav.audit', icon: 'scroll', group: 'admin' },
-  { id: 'access', label: 'ui.nav.access', icon: 'gear', group: 'admin', href: '/access' },
+  { id: 'people', label: 'ui.nav.people', icon: 'users', group: 'admin', href: '/admin/users' },
+  { id: 'settings', label: 'ui.nav.settings', icon: 'gear', group: 'admin', href: '/admin/settings' },
+  { id: 'audit', label: 'ui.nav.audit', icon: 'scroll', group: 'admin', href: '/admin/audit' },
 ]);
 
 /** navFor turns /v1/me's pages into the menu: [{heading}|{id,label,icon,href}].

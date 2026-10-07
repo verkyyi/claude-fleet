@@ -158,6 +158,9 @@ case "$mode" in
     # top bar (#1904) show it instead of the window name's slug; empty for a
     # scratch, a no-repo window or an issue the cache does not hold (the reader
     # falls back to the name). Tabs inside a title become spaces: it is a column.
+    # Column 19 (issue #1951): `detail=<question>` — what a session in `needs`
+    # asks, in its own words (@claude_needs_detail, ≤120 characters), so the
+    # client's bar and its notification can say it; empty when it waits on nothing.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -169,7 +172,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load
     while IFS= read -r row; do
       [ -n "$row" ] || continue
@@ -177,7 +180,8 @@ case "$mode" in
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8; exit }')
+      wdet=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       wreap=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       case "$wreap" in *[!A-Za-z0-9:.+-]*) wreap='' ;; esac
       born=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -213,7 +217,7 @@ case "$mode" in
       esac
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet"
     done <<<"$rows"
     ;;
   ready)
@@ -263,9 +267,34 @@ case "$mode" in
     # refuses on — FLEET_GLOBAL_MAX_SESSIONS (default 0 = unlimited since #1831) against
     # the awake session windows of every fleet (a sleeper holds no slot). The
     # in-flight spawns are left out: the asker's own spawn is one of them.
+    # Since #1831 that cap is 0 by default, so the number alone never says
+    # "full" — and the machine's REAL gate, fleet_machine_admit, was invisible
+    # to the hub, which kept placing starts here to be refused on arrival
+    # (issue #1836, EPIC #2074 C5). So the object also carries the gate's own
+    # verdict, the same one a spawn here meets:
+    #   admit      may this machine take ONE MORE session right now
+    #   admit_why  the hold's tag without its 暂停开新： prefix — 内存紧张 / 负载过高
+    #              (only with admit false)
+    #   room       fleet_machine_headroom's count: how many more fit in memory.
+    #              Left out when memory is unreadable, or with FLEET_ADMIT=0 —
+    #              the gate is off, so there is nothing for the hub to hold on.
+    # The hub reads admit=false or room<1 as full (机器暂停接新：<原因>); a hub
+    # older than #1836 reads past the fields, a read script older than it says
+    # none and the hub filters nothing — byte for byte as before.
     gmax="${FLEET_GLOBAL_MAX_SESSIONS:-0}"
     case "$gmax" in ''|*[!0-9]*) gmax=0 ;; esac
-    printf '{"sessions":%d,"max_sessions":%d}\n' "$(fleet_session_count)" "$gmax"
+    admit=true; why=''; room=''
+    if why=$(fleet_machine_admit --short 2>/dev/null); then why=''
+    else admit=false; why="${why#暂停开新：}"; fi
+    if [ "${FLEET_ADMIT:-1}" != 0 ]; then
+      hr=$(fleet_machine_headroom 2>/dev/null) && room="${hr%% *}"
+      case "$room" in ''|*[!0-9]*) room='' ;; esac
+    fi
+    why=$(printf '%s' "$why" | sed 's/[\\"]/\\&/g')
+    printf '{"sessions":%d,"max_sessions":%d,"admit":%s' "$(fleet_session_count)" "$gmax" "$admit"
+    [ -n "$why" ] && printf ',"admit_why":"%s"' "$why"
+    [ -n "$room" ] && printf ',"room":%d' "$room"
+    printf '}\n'
     ;;
   config)
     fleet_load_conf "$sess"

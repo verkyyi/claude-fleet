@@ -19,8 +19,12 @@
 # physical path); the next call through ~/.claude/fleet reads the new version.
 # So a busy session no longer holds the machine back: this tick used to wait
 # for every window to go idle, and on 2026-10-06 the busiest machine sat 9h+ on
-# the old version while stable moved on. An EPIC batch running is no reason to
-# wait either (发起人拍板 2026-10-06: 跑批期间也换). What every version shares
+# the old version while stable moved on. A running EPIC batch IS a reason to
+# wait (issue #2062, EPIC #2074 C1 — the 10-06 call to switch under a batch was
+# taken back after EPIC #1935's last member ran on a new floor and its skill
+# text changed mid-batch): one mark per batch in global/epic-running.d/, and
+# while ANY is fresh the tick is `deferred` BEFORE the switch (the EPIC gate
+# below), never `switched`. What every version shares
 # — logs/, epic-pages/, the fleet.conf backups, anything else untracked at the
 # top level — lives once in fleet.versions/.shared/ and is linked into each
 # version. fleet.versions/.prev names the version before the last switch; a
@@ -54,7 +58,10 @@
 #   deferred   the disk gate is closed (fleet-diskguard.sh --gate) — a new
 #              version is a new checkout. `deferred_since` keeps the first
 #              deferral's time so the doctor (C7 #1123) can say "waiting 26h".
-#              Busy windows and a running EPIC batch no longer defer (#1894).
+#              Busy windows no longer defer (#1894); a fresh EPIC mark — any
+#              batch on this login, fleet_epic_running_fresh — does (#953,
+#              #2062), before the switch: the loop's pane and its workers are
+#              idle between ticks, so no busy gate can see a batch.
 #   switched   the new version checked out beside the old one
 #              (`git worktree add` → fleet.versions/<stable>/), checked (every
 #              bin/*.sh parses with `bash -n`, every bin/ + hooks/ *.py
@@ -86,8 +93,8 @@
 # this login's own LaunchAgent; a LaunchDaemon login needs `sudo -n`, so a login
 # that has it (the admin login) upgrades every behind login on the machine, its
 # own first, and one that has not leaves its own to that tick (`delegated`).
-# Only at an idle moment: the agent half keeps the EPIC / busy gates the
-# install switch dropped (#1894). A failure is `node_upgrade_failed`
+# Only at an idle moment: the agent half keeps the busy gate the install switch
+# dropped (#1894), and the EPIC gate both halves have (#2062). A failure is `node_upgrade_failed`
 # — ONE FLEET_NOTIFY_CMD per (login · stable), a `node-node_upgrade_failed` log
 # line, and no retry of that stable for FLEET_NODE_FOLLOW_RETRY_SECS (6h,
 # `backoff`) — so a broken machine never loops and the other logins never wait
@@ -299,7 +306,11 @@ notify_stuck() {
     say "stuck ($key) and no FLEET_NOTIFY_CMD — nobody to tell (fleet-doctor.sh → install shows it)"; return 0
   fi
   case "$1" in
-    deferred) hint="Waited $(( ($(now) - DEFERRED_SINCE) / 3600 ))h so far (since $(iso_of "$DEFERRED_SINCE")) — a session busy this long is usually a stuck one: check \`fleet-doctor.sh\`, or its dash." ;;
+    deferred)
+      case "$2" in
+        "EPIC batch running"*) hint="Waited $(( ($(now) - DEFERRED_SINCE) / 3600 ))h so far (since $(iso_of "$DEFERRED_SINCE")) — a batch marked running this long is usually a loop that died without its closing tick: \`fleet-epic-heartbeat.sh --status\` names it; a mark expires 45 min after its last tick, or \`--clear <N>\` it by hand." ;;
+        *) hint="Waited $(( ($(now) - DEFERRED_SINCE) / 3600 ))h so far (since $(iso_of "$DEFERRED_SINCE")) — a session busy this long is usually a stuck one: check \`fleet-doctor.sh\`, or its dash." ;;
+      esac ;;
     skipped)  hint="It rolled back after the doctor failed on this version; nothing is retried until stable moves (\`fleet-stable.sh move\`)." ;;
     *)        hint="The reason above says what to do; \`fleet-install-sync.sh --status\` has the whole record." ;;
   esac
@@ -366,9 +377,11 @@ node_follow() {
     NODE=backoff; NODE_REASON="the upgrade to prod-$(short "$STABLE_SHA") failed at $(iso_of "$NODE_FAILED_AT") — next try after $(iso_of $((NODE_FAILED_AT + NODE_RETRY)))"
     node_log; return 0
   fi
-  # The install switch no longer waits for idle (#1894); an agent restart still does.
+  # The install switch no longer waits for idle (#1894); an agent restart still
+  # does — and a fresh EPIC mark stops the switch itself above (#2062), so this
+  # read only matters on a `current` tick.
   local epic busy
-  if epic=$(fleet_epic_running 2>/dev/null); then
+  if epic=$(fleet_epic_running_fresh 2>/dev/null); then
     NODE=deferred; NODE_REASON="EPIC batch running ($epic) — the agent waits for the closing tick"; node_log; return 0
   fi
   busy=$(busy_fleets | tr '\n' ' ')
@@ -722,7 +735,22 @@ main() {
     finish refused "tracked local changes in $ROOT (${dirty% }$more) — not touching an edited install; commit or discard them, then the next tick follows" dirty
   fi
 
-  # --- the disk gate (busy windows and a running EPIC no longer wait, #1894) ------
+  # --- a running EPIC batch holds the switch (issue #953, back before the switch
+  # with #2062) ---------------------------------------------------------------------
+  # One mark per batch (global/epic-running.d/, fleet-epic-heartbeat.sh): ANY
+  # fresh one defers the whole tick here, before anything is checked out — not
+  # only the agent half below. The loop's pane and its workers are idle between
+  # ticks, so no busy gate can see a batch; and a version switched under one
+  # changes what its later members and its skill text run on (2026-10-07: EPIC
+  # #1935's last member ran on a new floor). Every fresh batch is named, so the
+  # log line shows who is holding the install.
+  local epic
+  if epic=$(fleet_epic_running_fresh 2>/dev/null); then
+    [ -n "$DEFERRED_SINCE" ] || DEFERRED_SINCE=$(now)
+    finish deferred "EPIC batch running on this login ($epic) — not switching the floor under a running batch (issues #953, #2062); each loop clears its own mark at its closing tick (fleet-epic-heartbeat.sh --clear <N>), else it expires"
+  fi
+
+  # --- the disk gate (busy windows no longer wait, #1894) ------------------------------
   if [ "$DRY" = 0 ] && [ -x "$ROOT/bin/fleet-diskguard.sh" ] \
      && ! "$ROOT/bin/fleet-diskguard.sh" --gate >/dev/null 2>&1; then
     [ -n "$DEFERRED_SINCE" ] || DEFERRED_SINCE=$(now)

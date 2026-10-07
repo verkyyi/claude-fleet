@@ -34,6 +34,9 @@ import { isOpen } from './gate'
 export const PLUGIN = 'fleet'
 // FLEET_MCP_SERVER=1 (set by bin/fleet-claude.sh, #1807) says the service is
 // mounted; lifecycle.ts reads it by its literal name, as the engine requires.
+// bin/fleet-oldcfg-replay.py reads the two below (issue #2075): FALLBACK is «the tools
+// this version registers», TOOL_RE «the names the tool.call hook answers». Rename
+// either and teach the replay the new spelling, or the release gate goes red.
 /** The service's tools the fallback carries, in registration order. */
 export const FALLBACK = ['status', 'spawn', 'await'] as const
 export type Fallback = (typeof FALLBACK)[number]

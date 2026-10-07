@@ -95,10 +95,10 @@ func (s *Server) isFleetAdmin(osUser string) bool {
 //
 // Three cases, in this order (claude-fleet#1458):
 //
-//   - mapped (user.<id>.machine_login, claude-fleet#1986 — for one version
-//     also CCQUOTA_FLEET_PRINCIPAL_LOGINS): the person is recorded under THAT login
-//     — a login already on the machines, never minted — and it is adopted
-//     wherever the roster shows an agent running as it. No op is ever sent.
+//   - mapped (user.<id>.machine_login, claude-fleet#1986): the person is
+//     recorded under THAT login — a login already on the machines, never
+//     minted — and it is adopted wherever the roster shows an agent running
+//     as it. No op is ever sent.
 //   - auto-assign (fleet.auto_assign, claude-fleet#1411): a login is minted and
 //     queued for creation on those machines, as before.
 //   - neither: nothing. Not even a principal row — a row mints a login name,
@@ -171,8 +171,7 @@ func (s *Server) ensurePerson(r *http.Request) string {
 }
 
 // mappedLoginFor is the machine login on record for principal: a GitHub
-// person's hub_users row, else user.<id>.machine_login, else (one version)
-// CCQUOTA_FLEET_PRINCIPAL_LOGINS (claude-fleet#1986).
+// person's hub_users row, else user.<id>.machine_login (claude-fleet#1986).
 //
 // The comparison folds case (claude-fleet#1472): the operator types the map
 // by hand, and two spellings of one principal are one person here. The map

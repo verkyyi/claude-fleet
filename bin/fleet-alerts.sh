@@ -264,6 +264,36 @@ _fa_row() {
     "$(_fa_clean "${9:-}")" "$(_fa_clean "${10:-}")"
 }
 
+# _fa_detail <text> → at most 120 characters (issue #1951: a needs row's question).
+# The writers cut already; this is the row's own bound, builtins only.
+_fa_detail() {
+  local t="${1:-}"
+  [ "${#t}" -gt 120 ] && t="${t:0:119}…"
+  printf '%s' "$t"
+}
+
+# _fa_client_needs — the client's needs rows (issue #1951): every
+# $G/needs_<sess> line fleet-hub-sessions.sh writes,
+# `<worker_id> US <subject> US <state|needs> US <node> US <detail>`, becomes
+# `● <subject> · question|permission|blocked|waiting|failed · <node>` with action
+# `jump` and target `wid:<worker_id>`. One file per shell session; a worker listed
+# twice is one row.
+_fa_client_needs() {
+  local f wid subj sub node dt cond seen="|"
+  for f in "$(fleet_usage_cache_dir)"/needs_*; do
+    [ -f "$f" ] || continue
+    while IFS=$_FA_US read -r wid subj sub node dt; do
+      [ -n "$wid" ] || continue
+      case "$seen" in *"|$wid|"*) continue ;; esac
+      seen="$seen$wid|"
+      case "$sub" in ask) cond=question ;; perm) cond=permission ;; blocked) cond=blocked ;; failed) cond=failed ;; *) cond=waiting ;; esac
+      # since=0: the writer carries the row's first sighting (or now)
+      _fa_row "needs-wid-$(_fa_stall_id "$wid")" needs "$subj" "$cond" "$node" 0 jump 0 "wid:$wid" "$(_fa_detail "$dt")"
+    done < "$f"
+  done
+  return 0
+}
+
 # _fa_json <tsv row> → the ndjson line.
 _fa_json() {
   local id sev su co va si ac he ta de
@@ -479,10 +509,18 @@ fleet_alerts_compute() {
   fi
 
   # --- needs: sessions waiting for a human, off each window's @claude_state.
-  if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
+  if [ "${FLEET_SHELL:-0}" = 1 ]; then
+    # The CLIENT (issue #1951): its own server holds no session window — the
+    # sessions are the hub's rows, every machine's. fleet-hub-sessions.sh leaves
+    # their needs beside its cache (`needs_<sess>`), and they become the same rows.
+    _fa_client_needs
+  elif [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
     # Every optional field has a `-`/0 sentinel: tab is IFS whitespace.
-    local s w n i st sub ts cond subj
-    while IFS=$'\t' read -r s w n i st sub ts; do
+    # `detail` is the question's own words (@claude_needs_detail, issue #1951 —
+    # set-claude-state.sh / fleet-codex-attention.py): the client's bar and its
+    # notification say WHAT is asked. Last, so a space in it survives the read.
+    local s w n i st sub ts dt cond subj
+    while IFS=$'\t' read -r s w n i st sub ts dt; do
       case "$n" in dash|backlog) continue ;; esac
       case "$st" in
         needs) case "$sub" in ask) cond=question ;; perm) cond=permission ;; blocked) cond=blocked ;; *) cond=waiting ;; esac ;;
@@ -491,9 +529,10 @@ fleet_alerts_compute() {
       esac
       case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
       subj="$n"; [ "$i" != - ] && subj="#$i"
-      _fa_row "needs-$s-$w" needs "$subj" "$cond" '' "$ts" jump 0 "$s:$w" "$n"
+      [ "$dt" = - ] && dt=''
+      _fa_row "needs-$s-$w" needs "$subj" "$cond" '' "$ts" jump 0 "$s:$w" "$(_fa_detail "$dt")"
     done <<EOF
-$(_fa_lw '#{session_name}	#{window_id}	#{window_name}	#{?@issue,#{@issue},-}	#{?@claude_state,#{@claude_state},-}	#{?@claude_needs,#{@claude_needs},-}	#{?@claude_state_ts,#{@claude_state_ts},0}')
+$(_fa_lw '#{session_name}	#{window_id}	#{window_name}	#{?@issue,#{@issue},-}	#{?@claude_state,#{@claude_state},-}	#{?@claude_needs,#{@claude_needs},-}	#{?@claude_state_ts,#{@claude_state_ts},0}	#{?@claude_needs_detail,#{@claude_needs_detail},-}')
 EOF
   else
     printf '#carry-needs\n'
@@ -629,6 +668,51 @@ fleet_alerts_bar() {
   FA_BAR=''
   [ "$a" -gt 0 ] && FA_BAR="#[range=user|alarm]${r}✖ ${a}#[nobold]#[norange]"
   [ "$w" -gt 0 ] && FA_BAR="${FA_BAR:+$FA_BAR }#[range=user|warning]${y}▲ ${w}#[norange]"
+  return 0
+}
+
+# fleet_alerts_notify — the CLIENT's notification (issue #1951, EPIC #1949 C2):
+# a needs row of the hub's (`needs-wid-*`, _fa_client_needs) that was not there
+# on the last look gets ONE notification — who, what they ask, a click that goes
+# there (fleet-client-actions.py notify). Dedup key = the alert id: a session is
+# told once while it waits, and again only for a new wait after it was answered.
+# The first look seeds the list silently (a client starting with three sessions
+# waiting is not three notifications). Builtins only until something is new; one
+# writer across the clients (a mkdir lock — the loser skips, the winner told).
+# FLEET_NOTIFY=0 turns it off. A node draws no bar and never gets here.
+fleet_alerts_notify() {
+  [ "${FLEET_NOTIFY:-1}" = 0 ] && return 0
+  [ "${FLEET_SHELL:-0}" = 1 ] || return 0
+  local f nf line cur="" old="" seeded=0 new="" id su co va ta de title body nl=$'\n'
+  f=$(fleet_alerts_file); nf="$f.notified"
+  [ -f "$f" ] || return 0
+  [ -f "$nf" ] && { seeded=1; old=$(<"$nf"); }
+  while IFS= read -r line; do
+    [[ $line =~ $_FA_RE ]] || continue
+    [ "${BASH_REMATCH[2]}" = needs ] || continue
+    id=${BASH_REMATCH[1]}
+    case "$id" in needs-wid-*) ;; *) continue ;; esac
+    cur="$cur$id$nl"
+    case "$nl$old$nl" in *"$nl$id$nl"*) continue ;; esac
+    new="$new$line$nl"
+  done < "$f"
+  cur=${cur%"$nl"}
+  [ "$seeded" = 1 ] && [ "$cur" = "$old" ] && return 0   # nothing moved: no write, no fork
+  mkdir "$nf.lock" 2>/dev/null || return 0
+  printf '%s\n' "$cur" > "$nf.$$" 2>/dev/null && mv -f "$nf.$$" "$nf" 2>/dev/null || rm -f "$nf.$$"
+  rmdir "$nf.lock" 2>/dev/null
+  [ "$seeded" = 1 ] && [ -n "$new" ] || return 0
+  while IFS= read -r line; do
+    [[ $line =~ $_FA_RE ]] || continue
+    su=${BASH_REMATCH[3]}; co=${BASH_REMATCH[4]}; va=${BASH_REMATCH[5]}; ta=${BASH_REMATCH[9]}; de=${BASH_REMATCH[10]}
+    case "$co" in
+      question) title="$su 在问你" ;; permission) title="$su 要你批准" ;;
+      blocked) title="$su 被卡住了" ;; failed) title="$su 失败了" ;; *) title="$su 在等你" ;;
+    esac
+    body=$de; [ -n "$va" ] && body="${body:+$body · }$va"
+    ( python3 "$_FA_BIN/fleet-client-actions.py" notify --title "$title" --body "$body" --jump "$ta" \
+        </dev/null >/dev/null 2>&1 & )
+  done <<< "$new"
   return 0
 }
 

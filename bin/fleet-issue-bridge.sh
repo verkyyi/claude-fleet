@@ -761,23 +761,14 @@ poll() {
   # A fleet queues EVERY repo it hosts (issues #798, #1941) — each through its own
   # view (fleet conf + that repo's overlay), so an overlay can turn the bridge off
   # (FLEET_ISSUE_BRIDGE=0) or retune its gate for its repo alone.
-  local _s cf
-  while IFS=$'\t' read -r _s cf; do
-    [ -f "$cf" ] || continue
-    local line rp fl rv
-    line=$(fleet_repos "$_s" | while IFS= read -r rp; do
-             ( fleet_load_repo_conf "$_s" "$rp" >/dev/null 2>&1 || exit 0
-               [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
-                 "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$ASSOC_FLOOR}" \
-                 "${FLEET_ISSUE_BRIDGE_REVIVE:-$REVIVE}" )
-           done)
-    [ -z "$line" ] && continue
-    while IFS=$'\t' read -r rp fl rv; do
-      queue "$rp" "$fl" "$rv"
-    done <<EOF
-$line
+  # fleet_bridge_rows (fleet-lib.sh) is the ONE reader of that set — fleet-comment's
+  # --to-worker asks fleet_bridge_covers the same question (issue #2059).
+  local rp fl rv
+  while IFS=$'\t' read -r rp fl rv; do
+    [ -n "$rp" ] && queue "$rp" "$fl" "$rv"
+  done <<EOF
+$(fleet_bridge_rows "$ASSOC_FLOOR" "$REVIVE")
 EOF
-  done < <(fleet_each_conf)
 
   if [ "${#REPOS[@]}" -eq 0 ]; then
     log "no fleet has FLEET_ISSUE_BRIDGE=1 — nothing to do"; exit 0

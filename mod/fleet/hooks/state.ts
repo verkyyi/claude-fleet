@@ -38,13 +38,14 @@ async function fleetBin($: EngineInterface): Promise<string | undefined> {
   return `${$.plugin.root}/../../bin`
 }
 
-/** `set-claude-state.sh --via mod <verb>`; a failed write leaves the hooks' value. */
-async function setState($: EngineInterface, verb: 'working' | 'done' | 'ask'): Promise<void> {
+/** `set-claude-state.sh --via mod <verb>`; a failed write leaves the hooks' value.
+ * `stdin`: the hook payload's shape, for a verb that reads one (`ask`'s question). */
+async function setState($: EngineInterface, verb: 'working' | 'done' | 'ask', stdin = ''): Promise<void> {
   try {
     const bin = await fleetBin($)
     if (bin === undefined) return
     await $.process.run(['sh', `${bin}/set-claude-state.sh`, '--via', 'mod', verb], {
-      stdin: '',
+      stdin,
       timeoutMs: WRITE_TIMEOUT_MS,
     })
   } catch {
@@ -88,7 +89,8 @@ export function registerState(on: On): void {
 
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     if (!isOpen() || e.agentId !== undefined) return next(e)
-    await setState($, 'ask')
+    // The question's own words ride along (issue #1951): @claude_needs_detail.
+    await setState($, 'ask', JSON.stringify({ tool_name: 'AskUserQuestion', tool_input: toolInput(e) }))
     try {
       return await next(e)
     } finally {

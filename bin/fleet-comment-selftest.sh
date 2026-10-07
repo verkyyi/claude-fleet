@@ -92,13 +92,15 @@ fc() {
   ( cd "${RUNDIR:-$WORK}" 2>/dev/null || exit 3
     PATH="$FAKEPATH:$PATH" \
     FLEET_REPO="test/repo" \
+    FLEET_ISSUE_BRIDGE="${FC_BRIDGE-1}" \
+    PEERFILE="$WORK/peer.txt" FAKE_PEER_RC="${FAKE_PEER_RC:-0}" \
     TMUX_PANE="${FAKE_PANE-%0}" \
     BODYFILE="$BODYFILE" \
     CLOSEFILE="$CLOSEFILE" \
     FAKE_ISSUE="${FAKE_ISSUE:-}" \
     FAKE_SESSION="${FAKE_SESSION:-}" \
     FLEET_HUB="${FLEET_HUB:-}" \
-      bash "$FCS" "$@" >/dev/null 2>&1
+      bash "$FCS" "$@" >/dev/null 2>"$WORK/fc.err"
   )
 }
 
@@ -224,6 +226,36 @@ grep -qxF 'close 10 comment-first=yes' "$CLOSEFILE" \
 fc 10 --note --body 'just a note' || fail "--note (close-guard) exited non-zero"
 [ -s "$CLOSEFILE" ] && fail "--close guard: a plain --note must never close the issue"
 printf 'selftest: --close leg PASS (marked comment first, then close; --note never closes)\n' >&2
+
+# ============================== --to-worker, repo not bridged (#2059) ========
+# fc runs with FLEET_ISSUE_BRIDGE=1 (FC_BRIDGE) and FLEET_REPO=test/repo: a bridged
+# repo, so every leg above is the old path byte for byte. With the bridge off the
+# unmarked comment would reach nobody: it is posted as a RECORD (no-relay marker —
+# a bridge switched on later must not replay it), the text goes over the peer
+# channel (fleet-peer-send.sh --repo <repo> issue:<N>), and stderr says so.
+cat > "$WORK/bin/fleet-peer-send.sh" <<'FAKE'
+#!/bin/bash
+{ printf 'argv: %s\n' "$*"; cat; } > "$PEERFILE"
+echo "sent → fake"; exit "${FAKE_PEER_RC:-0}"
+FAKE
+chmod +x "$WORK/bin/fleet-peer-send.sh"
+reset; FLEET_HUB=1; rm -f "$WORK/peer.txt"
+FC_BRIDGE=0 fc 41 --to-worker --body 'reach the worker' || fail "(#2059) unbridged --to-worker exited non-zero ($(cat "$WORK/fc.err"))"
+grep -qF "$MARKER" "$BODYFILE" || fail "(#2059) unbridged --to-worker must post a RECORD (no-relay marker)"
+grep -qF 'argv: --repo test/repo issue:41 -' "$WORK/peer.txt" 2>/dev/null \
+  || fail "(#2059) unbridged --to-worker must peer-send to issue:41 on test/repo ($(cat "$WORK/peer.txt" 2>/dev/null))"
+grep -qxF 'reach the worker' "$WORK/peer.txt" || fail "(#2059) the peer text must be the bare body, no footer"
+grep -q '不轮询 test/repo' "$WORK/fc.err" || fail "(#2059) stderr must say the bridge does not poll the repo ($(cat "$WORK/fc.err"))"
+grep -q '将转达' "$WORK/fc.err" && fail "(#2059) an unbridged repo must never read 「将转达」"
+# a send that fails is said, and the exit says it too
+reset; FLEET_HUB=1
+FAKE_PEER_RC=1 FC_BRIDGE=0 fc 42 --to-worker --body 'x' && fail "(#2059) an undelivered fallback must exit non-zero"
+# bridged: the old path, no peer send
+reset; FLEET_HUB=1; rm -f "$WORK/peer.txt"
+fc 43 --to-worker --body 'x' || fail "(#2059) bridged --to-worker exited non-zero"
+[ -e "$WORK/peer.txt" ] && fail "(#2059) a bridged repo must not peer-send"
+grep -q '将转达' "$WORK/fc.err" || fail "(#2059) a bridged repo keeps 「将转达」"
+printf 'selftest: unbridged --to-worker leg PASS (record + peer send, said on stderr; bridged unchanged)\n' >&2
 
 # ============================== body preserved verbatim ======================
 # The footer APPENDS — it must never rewrite the body. A multi-line body with `- `

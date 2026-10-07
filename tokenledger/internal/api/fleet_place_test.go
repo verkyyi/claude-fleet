@@ -427,6 +427,98 @@ func TestNodePlaceWithoutCapFieldsFiltersNothing(t *testing.T) {
 	}
 }
 
+// beatAdmit sends a beat that carries the login's own admission verdict
+// (claude-fleet#1836) and no count cap (max_sessions 0, the default since
+// #1831): admit nil leaves the field off, room < 0 leaves room off. Memory is
+// plentiful and CPU idle, so on score alone the machine would win.
+func beatAdmit(t *testing.T, h *harness, n *writeNode, host, machine string, load1 float64, admit *bool, why string, room int, f control.Fleet) {
+	t.Helper()
+	hb := control.Heartbeat{Hostname: host, OSUser: "verk", MachineID: machine, Load1: load1, NCPU: 10,
+		MemFreeBytes: 15 << 30, MemTotalBytes: 16 << 30, Sessions: 2, Fleets: []control.Fleet{f}, ObservedAt: time.Now(),
+		Admit: admit, AdmitWhy: why}
+	if room >= 0 {
+		hb.Room = &room
+	}
+	beat(t, n.conn, control.Proto, hb)
+	waitFor(t, 3*time.Second, host+"'s beat landed", func() bool {
+		got, _, _ := h.srv.nodeStatusOf("ep_"+host, time.Now())
+		return got.Load1 == load1 && got.AdmitWhy == why && (got.Room == nil) == (room < 0)
+	})
+}
+
+func boolp(b bool) *bool { return &b }
+
+// claude-fleet#1836: a login whose own gate is holding new sessions is no
+// candidate, however idle it looks and whatever its count cap (0 = unlimited)
+// says. m4 would win on score; it says admit false 内存紧张, so the start
+// stays on m5 and the reason names it 机器暂停接新：内存紧张. Then m4 says
+// admit true but room 0 — held the same way, on the room. Named, it is refused
+// AT_CAPACITY: its own gate would say no on arrival.
+func TestNodePlaceSkipsPausedNode(t *testing.T) {
+	h, m5, m4, f5, f4 := twoNodes(t)
+	beatAdmit(t, h, m5, "m5", machineA, 3, boolp(true), "", 4, f5) // 0.30/core, room 4
+	beatAdmit(t, h, m4, "m4", machineB, 1, boolp(false), "内存紧张", 0, f4)
+	wid5 := issueWID(f5.FleetID, 41)
+	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 41, "worker_id": wid5})
+	pl, _ := out["placement"].(map[string]any)
+	if st != 200 || out["local"] != true || pl["machine"] != "m5" ||
+		!strings.Contains(pl["reason"].(string), "m4 excluded: 机器暂停接新：内存紧张") {
+		t.Fatalf("place with m4 paused = %d %v; want LOCAL m5, m4 excluded as 机器暂停接新：内存紧张", st, out)
+	}
+	if m4.count() != 0 {
+		t.Fatal("a start was sent to the paused machine")
+	}
+	// The roster shows the verdict.
+	for _, c := range pl["candidates"].([]any) {
+		c := c.(map[string]any)
+		switch c["machine"] {
+		case "m4":
+			if c["admit"] != false || c["admit_why"] != "内存紧张" || c["room"] != 0.0 || c["eligible"] != false {
+				t.Fatalf("m4's candidate = %v; want admit false, admit_why 内存紧张, room 0, ineligible", c)
+			}
+		case "m5":
+			if c["admit"] != true || c["room"] != 4.0 || c["eligible"] != true {
+				t.Fatalf("m5's candidate = %v; want admit true, room 4, eligible", c)
+			}
+		}
+	}
+	// Named, it is refused the same way a full one is (AT_CAPACITY).
+	if st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 41, "worker_id": wid5, "node": "m4"}); st != 429 || m4.count() != 0 {
+		t.Fatalf("node=m4 while paused = %d %v; want AT_CAPACITY, nothing sent", st, out)
+	}
+	// admit true with no room for one more holds the same way, on the room.
+	beatAdmit(t, h, m4, "m4", machineB, 1, boolp(true), "", 0, f4)
+	st, out = placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 42, "worker_id": issueWID(f5.FleetID, 42)})
+	if pl, _ := out["placement"].(map[string]any); st != 200 || pl["machine"] != "m5" ||
+		!strings.Contains(pl["reason"].(string), "m4 excluded: 机器暂停接新：内存余量不够再开一个（room 0）") {
+		t.Fatalf("place with m4 at room 0 = %d %v; want m5, m4 excluded on its room", st, out)
+	}
+	// Recovered: admit true, room 3 — m4 wins on score again.
+	beatAdmit(t, h, m4, "m4", machineB, 1, boolp(true), "", 3, f4)
+	st, out = placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 43, "worker_id": issueWID(f5.FleetID, 43)})
+	if pl, _ := out["placement"].(map[string]any); st != 200 || out["local"] != false || pl["machine"] != "m4" {
+		t.Fatalf("place after m4 recovered = %d %v; want m4 on score", st, out)
+	}
+}
+
+// Every candidate holding (or full): AT_CAPACITY all-full, naming each
+// machine's reason in the gate's own words, and nothing is sent anywhere.
+func TestNodePlaceAllPausedRefuses(t *testing.T) {
+	h, m5, m4, f5, f4 := twoNodes(t)
+	beatAdmit(t, h, m5, "m5", machineA, 3, boolp(false), "负载过高", 5, f5)
+	beatAdmit(t, h, m4, "m4", machineB, 1, boolp(false), "内存紧张", 0, f4)
+	st, out := placeCall(t, h, h.tokens["m5"], map[string]any{"repo": writeRepo, "issue": 44, "worker_id": issueWID(f5.FleetID, 44)})
+	e, _ := out["error"].(map[string]any)
+	msg, _ := e["message"].(string)
+	if st != 429 || e["code"] != "AT_CAPACITY" || !strings.HasPrefix(msg, "all-full: every machine is at its session cap or pausing new sessions — ") ||
+		!strings.Contains(msg, "m5: 机器暂停接新：负载过高") || !strings.Contains(msg, "m4: 机器暂停接新：内存紧张") {
+		t.Fatalf("all paused = %d %v; want 429 AT_CAPACITY all-full naming both reasons", st, out)
+	}
+	if m5.count()+m4.count() != 0 {
+		t.Fatal("an all-paused placement sent a start")
+	}
+}
+
 // The asker's account class (claude-fleet#1540) rides with a REMOTE start:
 // local / pool reach the target's worker_start, any adds nothing, and anything
 // else is refused before any placement.

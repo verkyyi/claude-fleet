@@ -160,6 +160,8 @@ tf -f /dev/null new-session -d -s "$SESS" -n worker 'exec sleep 300' || fail "ca
 PANE=$(tf display-message -p -t "$SESS:worker" '#{pane_id}')
 WIN=$(tf display-message -p -t "$PANE" '#{window_id}')
 tf set-window-option -t "$PANE" @issue 1331
+# a member is (repo, issue) since #1943: the window carries its repo, as a spawn stamps it
+tf set-window-option -t "$PANE" @repo o/r
 TMUXV="$SOCK,1,0"
 loopv() { tf display-message -p -t "$PANE" '#{@loop}'; }
 st()    { tf display-message -p -t "$PANE" '#{@claude_state}'; }

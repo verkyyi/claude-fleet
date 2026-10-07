@@ -148,7 +148,7 @@ FLEET_EMIT_QUEUE_MAX               knob: internal pacing/limit, safe in-code def
 FLEET_EMIT_TIMEOUT                 knob: internal pacing/limit, safe in-code default (fleet-emit.sh)
 FLEET_EPIC_BACKSTOP_BUSY_CMD       seam: a fake "is the box busy" probe for the EPIC backstop
 FLEET_EPIC_BACKSTOP_FIND_CMD       seam: a fake local window lookup for the EPIC backstop (#1110)
-FLEET_EPIC_RUNNING_TTL             knob: how long the epic-running heartbeat stays fresh (2700 s, fleet-epic-heartbeat.sh / fleet_epic_running, #953)
+FLEET_EPIC_RUNNING_TTL             knob: how long an epic-running.d/ heartbeat stays fresh (2700 s, fleet-epic-heartbeat.sh / fleet_epic_running_fresh, #953 #2062)
 FLEET_FILES_PROBE_CMD              seam: a fake open-file-table reading for fleet_files_probe ("<used> <max>")
 FLEET_FOLD_POLL                    knob: internal pacing/limit, safe in-code default (fleet-repo.sh)
 FLEET_FOLD_WAIT                    knob: internal pacing/limit, safe in-code default (fleet-repo.sh)
@@ -337,6 +337,7 @@ FLEET_SPOT_EVACUATE_SECS           handoff: the SPOT reclaim deadline the ccquot
 FLEET_SPOT_EVACUATE_SESSIONS       seam: the fleets fleet-spot-evacuate.sh evacuates, space-separated, instead of fleet_sockets (no tmux in the selftest; #1428)
 FLEET_STABLE_API                   seam: the URL answering which commit refs/tags/stable names (default GitHub's API; fleet-update-selftest.sh's file, #1805)
 FLEET_STABLE_RAW                   seam: the raw host the client's files are fetched from at a commit (default raw.githubusercontent.com/verkyyi/claude-fleet; the selftest's tree, #1805)
+FLEET_STABLE_LOG                   path: where a FORCED stable move leaves its one line (fleet-stable.sh, logs/stable-move.log; the selftests' sandbox file, #2075)
 FLEET_STATUS_CACHE                 path: status-bar render cache file
 FLEET_STATUS_DISK                  knob: 0 drops the disk alert (fleet-alerts.sh; the bar has no disk segment since #1616)
 FLEET_STOP_CLOSE_WAIT              knob: internal pacing/limit, safe in-code default (fleet-worker-stop.sh)
@@ -400,6 +401,8 @@ FLEET_GH_SHARED_DIR                path: machine-wide dir the logins of one toke
 FLEET_GH_SHARE_ID                  seam: this login's name in the leader election, lets one test user play two logins (fleet-gh-lib.sh, #1271)
 FLEET_GH_WRITE_BACKOFF             knob: internal pacing, secondary-limit backoff base without Retry-After (fleet-gh-lib.sh write queue, #1264)
 FLEET_GH_WRITE_GAP                 knob: internal pacing, min seconds between write starts per token (fleet-gh-lib.sh write queue, #1264)
+FLEET_BREAKAGE_LOCK_SECS           knob: internal pacing, seconds a breakage lock under global/breakage/<key>/ is honoured before it is nobody's (fleet-issue-file.sh --breakage, #2078)
+FLEET_BREAKAGE_WAIT                knob: internal pacing, seconds a same-second filer of one breakage waits for the first filer's issue number (fleet-issue-file.sh --breakage, #2078)
 FLEET_GH_WRITE_LOCK_WAIT           knob: internal timeout, longest a writer queues before writing unqueued (fleet-gh-lib.sh, #1264)
 FLEET_GH_WH_MAX_AGE                knob: longest an event-quiet prmap still serves while the webhook is live (fleet-gh.sh, 300, #1272)
 FLEET_STATE_DIR                    path: state/log location override — the shared gh-limit marker dir (fleet-gh-lib.sh)
@@ -509,3 +512,4 @@ FLEET_CFG_RESTART_MIGRATE          seam: the fleet-migrate.sh a stale-config reo
 FLEET_WORKER_CRED                  handoff: the session's worker credential, minted per launch by fleet-session-wrap.sh for the fleet tool service — env only, never written down (fleet-mcp.py, #1809)
 FLEET_CODEX_LAUNCHER_PID           handoff: the Codex launcher's pid, exported by fleet-codex.sh — marks a Codex pane to its hooks (fleet-codex-session.py, fleet-where-hook.sh #1954)
 FLEET_WORKER_ASSERT                handoff: a session's own hub worker assertion (fleet-mcp.py, #1810); fleet-session-cred.sh borrows a hub pass with it (#1972)
+FLEET_COMMENT_PEER_FALLBACK        knob: 0 = fleet-comment.sh --to-worker on an unbridged repo posts the record and says so, without the peer send (#2059)

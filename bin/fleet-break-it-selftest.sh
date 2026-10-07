@@ -25,6 +25,8 @@
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
+#   epic-mark-overwritten / epic-fresh-switched     bin/fleet-epic-heartbeat.sh (one mark per batch),
+#                                                   fleet_epic_running_fresh, fleet-install-sync.sh (the EPIC gate)
 #   personal-tmux-conf                              conf/tmux-fleet-server.conf, fleet_server_new_session,
 #                                                   fleet_tmuxconf_check, reapply-tmux-attention.sh
 #   personal-hook-hangs / personal-hook-errors      bin/fleet-hook-personal.sh (timeout, strikes)
@@ -38,6 +40,12 @@
 #   loop-window-killed                              bin/fleet-restore.sh (loop re-arm), fleet_loop_mark.py rearm
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
+#   breakage-three-filers                           bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
+#                                                   fleet_breakage_find (fleet-lib.sh)
+#   node-paused-still-placed                        bin/fleet-control-read.sh capacity (admit / admit_why / room),
+#                                                   fleet_machine_admit, fleet_machine_headroom; the hub half is
+#                                                   tokenledger/internal/api judge() (go test, when a toolchain is here)
+#   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -641,6 +649,76 @@ drill_install_sync_killed() {
     || { WHY="the next tick did not follow stable: $(tail -2 "$d/tick2.out")"; return 1; }
   grep -q "holder pid=$pid is dead" "$d/tick2.out" || { WHY="the takeover left no log line naming pid=$pid"; return 1; }
   SECS=$(since "$t0"); WHAT="下一拍接管死掉那一跳（pid=${pid}）的锁，跟上 stable"
+}
+
+# epic_sandbox <dir> — a bare origin + a clone ONE commit behind stable, with
+# stub apply / doctor / diskguard; the heartbeat and the state live under
+# <dir>/conf. epic_tick runs one install-sync tick on it, epic_hb the heartbeat.
+epic_sandbox() {
+  local d="$1"
+  mkdir -p "$d/conf" "$d/home"
+  (
+    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/install" 2>/dev/null
+    mkdir -p "$d/install/bin" "$d/install/logs"
+    printf 'echo "apply: ok"\n' > "$d/install/bin/fleet-install-apply.sh"
+    printf 'exit 0\n' > "$d/install/bin/fleet-doctor.sh"
+    printf 'exit 0\n' > "$d/install/bin/fleet-diskguard.sh"; chmod +x "$d"/install/bin/*
+    printf 'logs/\n' > "$d/install/.gitignore"
+    git -C "$d/install" add -A && git -C "$d/install" commit -qm one && git -C "$d/install" push -q origin master
+    echo two > "$d/install/f"; git -C "$d/install" add -A; git -C "$d/install" commit -qm two
+    git -C "$d/install" push -q origin master; git -C "$d/install" reset -q --hard HEAD~1
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable master
+  ) >/dev/null 2>&1
+}
+epic_tick() { HOME="$1/home" FLEET_CONF_DIR="$1/conf" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-install-sync.sh" --root "$1/install"; }
+epic_hb()   { local d="$1"; shift; HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-epic-heartbeat.sh" "$@"; }
+epic_st()   { sed -n "s/^$2: //p" "$1/conf/global/install-sync.state" | head -1; }
+
+# epic-mark-overwritten (issue #2062): two /fleet-epic-run loops on one login,
+# each stamping its own batch. Before: one file, the second stamp replaced the
+# first and the first loop's --clear took the second's protection with it. Now
+# each batch has its own mark, --status shows both, --clear <N> takes one, and
+# the other still holds the install (deferred).
+drill_epic_mark_overwritten() {
+  CAP=20; local t0 d="$WORK/epic1" st r
+  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
+  epic_hb "$d" 1935 --tick 22 --repo o/r --session f1 >/dev/null 2>&1
+  epic_hb "$d" 1982 --tick 10 --repo o/r --session f1 >/dev/null 2>&1
+  t0=$(now)
+  st=$(epic_hb "$d" --status 2>&1)
+  case "$st" in *"epic=1935"*) ;; *) WHY="the second loop's heartbeat overwrote the first's: --status shows [$st]"; return 1 ;; esac
+  case "$st" in *"epic=1982"*) ;; *) WHY="--status does not show the second batch: [$st]"; return 1 ;; esac
+  epic_hb "$d" --clear 1935 >/dev/null 2>&1                   # the first batch ends
+  st=$(epic_hb "$d" --status 2>&1)
+  case "$st" in *"epic=1982"*) ;; *) WHY="--clear 1935 took #1982's mark too: [$st]"; return 1 ;; esac
+  epic_tick "$d" >"$d/tick.out" 2>&1
+  r=$(epic_st "$d" result)
+  [ "$r" = deferred ] || { WHY="with #1982 still fresh the tick was $r: $(epic_st "$d" reason)"; return 1; }
+  case "$(epic_st "$d" reason)" in *"epic=1982"*) ;; *) WHY="the deferral does not name #1982: $(epic_st "$d" reason)"; return 1 ;; esac
+  SECS=$(since "$t0"); WHAT="两个批次各一份标记；#1935 收尾只清自己的，#1982 仍拦住 install-sync（deferred）"
+}
+
+# epic-fresh-switched (issue #2062): a batch is mid-run (its mark fresh) and
+# stable moves. Before (#1894): the tick switched the version and only the
+# node-agent step said deferred. Now the tick is deferred before the switch —
+# no `switched` line, HEAD where it was — and follows once the batch clears.
+drill_epic_fresh_switched() {
+  CAP=20; local t0 d="$WORK/epic2" r head stable
+  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
+  epic_hb "$d" 1935 --tick 22 --repo o/r --session f1 >/dev/null 2>&1
+  t0=$(now)
+  epic_tick "$d" >"$d/tick1.out" 2>&1
+  r=$(epic_st "$d" result)
+  head=$(git -C "$d/install" rev-parse HEAD); stable=$(git --git-dir="$d/origin.git" rev-parse stable)
+  [ "$r" = deferred ] || { WHY="a fresh mark and the tick still ran: result=$r (install at $(printf '%.7s' "$head"), stable $(printf '%.7s' "$stable"))"; return 1; }
+  grep -q ' switched ' "$d/install/logs/install-sync.log" 2>/dev/null && { WHY="the log has a switched line under a fresh mark"; return 1; }
+  [ "$head" != "$stable" ] || { WHY="the install moved to stable under a fresh mark"; return 1; }
+  epic_hb "$d" --clear 1935 >/dev/null 2>&1                   # the batch ends
+  epic_tick "$d" >"$d/tick2.out" 2>&1
+  [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] || { WHY="after the clear the tick did not switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
+  SECS=$(since "$t0"); WHAT="标记新鲜那一拍只 deferred、版本不动；批次清掉标记后下一拍 switched"
 }
 
 # personal-tmux-conf (issue #1845): the person's ~/.tmux.conf has a syntax error
@@ -2621,6 +2699,272 @@ PY2
   kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
   [ "$rc" = 0 ] || { WHY="a whole entry failed the health check: $(printf '%s' "$out" | tr '\n' ' ')"; return 1; }
   WHAT="入口部署丢了配置（/install 404、/version 无 stable、login/start 404）：健康检查判不健康 → hub-deploy 回退"
+}
+
+# A machine config stranded as fleet `fleet` (issue #2059): before #1887 the layout
+# migrator moved fleet.conf — the machine's ONE file, which carried the fleet's
+# FLEET_ISSUE_BRIDGE=1 since #1623 folded the fleet conf into it — to
+# fleets/fleet/conf, and the next migrate wrote an empty fleet.conf. The phantom
+# fleet `fleet` (its trailing FLEET_REPO moved to repos/ by #1937) went on bridging
+# o/a; the real fleet `two` (o/a + o/b) bridged nothing, and `--to-worker` to an
+# o/b worker said 「将转达」 for an hour. The sandbox is that estate, with a real
+# isolated tmux server for `two` and a gh that logs every listing. Asserts:
+# before the sync the bridge does not cover o/b (so fleet-comment falls back to the
+# peer channel); one sync pass (`fleet-conf.sh migrate`) carries the stranded keys
+# back and retires the phantom; then the next ticks list o/b's comments — the
+# examined line on the second (the first seeds the watermark).
+drill_multirepo_bridge_second_repo() {
+  CAP=15; local d="$WORK/mb" t0 out r
+  mkdir -p "$d/conf/fleets/fleet/repos" "$d/conf/fleets/two/repos" "$d/home" "$d/tt" "$d/fp" "$d/tmp" "$d/main"
+  { printf "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
+    printf '# Migrated by fleet-conf.sh 2026-10-05 03:14:55 from: ~/.claude/fleet/fleet.conf fleets/two/conf\n'
+    printf '\n# ---- [common] ----\nFLEET_ROLE="node"\nexport FLEET_HUB_URL="https://hub.example"\nFLEET_UI_LANG="zh"\n'
+    printf '\n# ---- [client] — only the shell ----\nif [ "${FLEET_SHELL:-0}" = 1 ]; then\n:\nfi  # ---- [client] end ----\n'
+    printf '\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\n# ---- was fleets/two/conf (fleet two) ----\n'
+    printf 'FLEET_ISSUE_BRIDGE=1\nFLEET_MAX_SESSIONS=36\nfi  # ---- [node] end ----\n'
+  } > "$d/conf/fleets/fleet/conf"
+  printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$d/main" > "$d/conf/fleets/fleet/repos/o-a.conf"
+  printf 'o-a\n' > "$d/conf/fleets/fleet/repos/.order"
+  { printf "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
+    printf '# Migrated by fleet-conf.sh 2026-10-06 12:09:29 from: nothing — a new file\n'
+    printf '\n# ---- [common] ----\nFLEET_HOST=1\nexport FLEET_HUB_URL="https://hub.example"\n'
+    printf '\n# ---- [client] — only the shell ----\nif [ "${FLEET_SHELL:-0}" = 1 ]; then\n:\nfi  # ---- [client] end ----\n'
+    printf '\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nfi  # ---- [node] end ----\n'
+  } > "$d/conf/fleet.conf"
+  printf "# claude-fleet: fleet 'two' — written by fleet-up.sh\n" > "$d/conf/fleets/two/conf"
+  for r in a b; do
+    printf 'FLEET_REPO="o/%s"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$r" "$d/main" > "$d/conf/fleets/two/repos/o-$r.conf"
+  done
+  printf 'o-a\no-b\n' > "$d/conf/fleets/two/repos/.order"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/gh.log"\nexit 0\n' "$d" > "$d/fp/gh"; chmod +x "$d/fp/gh"
+  mb() { env -u TMUX -u TMUX_PANE -u FLEET_SKIP_GLOBAL_CONF HOME="$d/home" FLEET_CONF_DIR="$d/conf" TMUX_TMPDIR="$d/tt" TMPDIR="$d/tmp" \
+           PATH="$d/fp:$PATH" FLEET_ISSUE_BRIDGE_STATE_DIR="$d/state" FLEET_DISPATCH_LEASE_DIR="$d/leases" "$@"; }
+  covers() { mb bash -c '. "$1/fleet-lib.sh"; fleet_bridge_covers "$2"' _ "$BIN" "$1"; }
+  mb "$REAL_TMUX" -f /dev/null -L two new-session -d -s two -n home 'exec sleep 60' \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  covers o/b && { mb "$REAL_TMUX" -L two kill-server; WHY="before the sync o/b already reads as bridged — the sandbox is not the broken estate"; return 1; }
+  t0=$(now)
+  out=$(mb bash "$BIN/fleet-conf.sh" migrate 2>&1) || { mb "$REAL_TMUX" -L two kill-server; WHY="the sync pass failed: $out"; return 1; }
+  [ -e "$d/conf/fleets/fleet" ] && { mb "$REAL_TMUX" -L two kill-server; WHY="the phantom fleets/fleet/ is still there after the sync: $out"; return 1; }
+  grep -q '^FLEET_ISSUE_BRIDGE=1$' "$d/conf/fleet.conf" || { mb "$REAL_TMUX" -L two kill-server; WHY="fleet.conf did not get FLEET_ISSUE_BRIDGE=1 back: $out"; return 1; }
+  covers o/b || { mb "$REAL_TMUX" -L two kill-server; WHY="after the sync the bridge still does not cover o/b"; return 1; }
+  mb bash "$BIN/fleet-issue-bridge.sh" --poll > "$d/poll1.err" 2>&1
+  mb bash "$BIN/fleet-issue-bridge.sh" --poll > "$d/poll2.err" 2>&1
+  SECS=$(since "$t0")
+  mb "$REAL_TMUX" -L two kill-server 2>/dev/null
+  grep -q 'repos/o/b/issues/comments' "$d/gh.log" 2>/dev/null \
+    || { WHY="the second tick never listed o/b's comments (gh: $(tr '\n' ' ' < "$d/gh.log" 2>/dev/null); log: $(tail -2 "$d/poll2.err" | tr '\n' ' '))"; return 1; }
+  grep -q 'repos/o/a/issues/comments' "$d/gh.log" || { WHY="o/a stopped being listed"; return 1; }
+  WHAT="一次同步把被困的机器配置并回 fleet.conf、退役幽灵 fleet；下一拍起两个仓库都被 bridge 轮询"
+}
+
+drill_breakage_three_filers() {
+  CAP=25; local d="$WORK/bk" t0 i c n0 created zeros=0 fives=0
+  mkdir -p "$d/fp" "$d/conf" "$d/store" "$d/home" "$d/tmp"
+  # The fake GitHub: REST paths only (a red master tends to come with a spent
+  # GraphQL budget), a store on disk, and a 0.4 s pause inside `issue create` so
+  # three filers that start together all reach it before any number exists.
+  cat > "$d/fp/gh" <<'EOF'
+#!/bin/bash
+S="$BK_STORE"; printf '%s\n' "$*" >> "$S/gh.log"
+case "$1" in
+  issue)
+    case "$2" in
+      create)
+        sleep 0.4
+        n=$(( $(ls "$S"/issue-* 2>/dev/null | wc -l) + 101 ))
+        shift 2; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
+        printf '%s' "$b" > "$S/issue-$n"; printf 'https://github.com/o/w/issues/%s\n' "$n" ;;
+      comment)
+        shift 2; n="$1"; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
+        printf '%s' "$b" | tr '\n' ' ' >> "$S/comments-$n"; printf '\n' >> "$S/comments-$n"
+        printf 'https://github.com/o/w/issues/%s#issuecomment-1\n' "$n" ;;
+    esac ;;
+  api)
+    p=''; for a in "$@"; do case "$a" in repos/*) p="$a";; esac; done
+    case "$p" in
+      repos/o/w)                    printf 'main\n' ;;
+      repos/o/w/commits/main)       printf '%s\n' "$BK_HEAD" ;;
+      */check-runs*)                printf '501\tselftests / shard 3\thttps://github.com/o/w/actions/runs/9001/job/501\tProcess completed with exit code 1.\n' ;;
+      */actions/runs/9001)          printf '77\n' ;;
+      */actions/workflows/77/runs*) printf '%s\tfailure\n%s\tfailure\n%s\tsuccess\n' "$BK_HEAD" "$BK_RED" "$BK_GREEN" ;;
+      repos/o/w/issues\?*)          for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
+    esac ;;
+  run) cat "$BK_LOG" ;;
+esac
+exit 0
+EOF
+  chmod +x "$d/fp/gh"
+  # The failed job's log, the way `gh run view --log-failed` prints it.
+  printf 'selftests / shard 3\tRun tests\t2026-10-07T04:20:11.1234567Z ##[group]Run bash bin/run-selftests.sh\nselftests / shard 3\tRun tests\t2026-10-07T04:20:12.0000000Z FAIL  lint: internal/api/roles.go:88:2: duplicate key "/v1/admin/drill" in map literal\n' > "$d/log-a"
+  sed 's/:88:2:/:91:4:/' "$d/log-a" > "$d/log-a2"   # the same breakage after a half-fix moved the lines
+  printf 'selftests / shard 3\tRun tests\t2026-10-07T04:30:00.0000000Z FAIL  bash32-array-selftest: bin/x.sh:12: bare array on an empty array\n' > "$d/log-b"
+  bk() { env -u TMUX -u TMUX_PANE HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$d/tmp" PATH="$d/fp:$PATH" \
+           FLEET_GH_WRITE_GAP=0 BK_STORE="$d/store" BK_HEAD=aaaa111aaaa111 BK_RED=bbbb222bbbb222 BK_GREEN=cccc333cccc333 \
+           BK_LOG="${LOG:-$d/log-a}" "$@"; }
+  t0=$(now)
+  for i in 1 2 3; do
+    ( bk bash "$BIN/fleet-issue-file.sh" --title "master 红：routes 重复" --breakage --repo o/w --from "w$i" > "$d/out$i" 2> "$d/err$i"; echo $? > "$d/rc$i" ) &
+  done
+  wait
+  SECS=$(since "$t0")
+  created=$(ls "$d/store"/issue-* 2>/dev/null | wc -l | tr -d ' ')
+  [ "$created" = 1 ] || { WHY="3 filers of one breakage made $created issues (want 1): $(cat "$d"/err? 2>/dev/null | tr '\n' ' ' | cut -c1-300)"; return 1; }
+  n0=$(ls "$d/store"/issue-* | head -1); n0=${n0##*-}
+  grep -q '<!-- fleet:breakage key=' "$d/store/issue-$n0" || { WHY="the issue body carries no fleet:breakage marker"; return 1; }
+  for i in 1 2 3; do
+    case "$(cat "$d/rc$i")" in
+      0) zeros=$((zeros + 1)) ;;
+      5) fives=$((fives + 1))
+         grep -qx "https://github.com/o/w/issues/$n0" "$d/out$i" || { WHY="filer $i exited 5 but printed [$(cat "$d/out$i")], not #$n0"; return 1; } ;;
+      *) WHY="filer $i exited $(cat "$d/rc$i"): $(tr '\n' ' ' < "$d/err$i" | cut -c1-200)"; return 1 ;;
+    esac
+  done
+  [ "$zeros" = 1 ] && [ "$fives" = 2 ] || { WHY="exit codes: $zeros × 0, $fives × 5 (want 1 and 2)"; return 1; }
+  c=$(grep -c '同一故障' "$d/store/comments-$n0" 2>/dev/null)
+  [ "$c" = 2 ] || { WHY="issue #$n0 got $c 「同一故障」 comments, want 2"; return 1; }
+  # A later sighting with the lock gone (another machine, or two minutes on) and
+  # the lines moved: found on GitHub by the marker, same number.
+  rm -rf "$d/conf/global/breakage"
+  LOG="$d/log-a2" bk bash "$BIN/fleet-issue-file.sh" --title "又红了" --breakage --repo o/w --from w4 > "$d/out4" 2> "$d/err4"; c=$?
+  [ "$c" = 5 ] && grep -qx "https://github.com/o/w/issues/$n0" "$d/out4" \
+    || { WHY="a later sighting (lines :88→:91, lock gone) exited $c with [$(cat "$d/out4")]: $(tr '\n' ' ' < "$d/err4" | cut -c1-200)"; return 1; }
+  # A different breakage on the same head files its own issue.
+  LOG="$d/log-b" bk bash "$BIN/fleet-issue-file.sh" --title "另一个故障" --breakage --repo o/w --from w5 > "$d/out5" 2> "$d/err5"; c=$?
+  created=$(ls "$d/store"/issue-* | wc -l | tr -d ' ')
+  [ "$c" = 0 ] && [ "$created" = 2 ] || { WHY="a different breakage exited $c, issues now $created (want 0 and 2): $(tr '\n' ' ' < "$d/err5" | cut -c1-200)"; return 1; }
+  # The degenerate: an ordinary filing reads none of it and leaves no lock.
+  : > "$d/store/gh.log"; rm -rf "$d/conf/global/breakage"
+  bk bash "$BIN/fleet-issue-file.sh" --title "普通单" --repo o/w > "$d/out6" 2> "$d/err6"; c=$?
+  [ "$c" = 0 ] || { WHY="an ordinary filing exited $c: $(tr '\n' ' ' < "$d/err6" | cut -c1-200)"; return 1; }
+  grep -q 'issues?state=open\|check-runs' "$d/store/gh.log" && { WHY="an ordinary filing read a breakage path: $(grep 'issues?state=open\|check-runs' "$d/store/gh.log" | head -1)"; return 1; }
+  [ -e "$d/conf/global/breakage" ] && { WHY="an ordinary filing created the breakage lock dir"; return 1; }
+  WHAT="3 个并发开单：1 张单 + 2 个退出码 5 + 2 条「同一故障」；行号变了仍认得，换故障照常开新单，普通开单不碰"
+}
+
+# A machine whose own gate is holding new sessions (fleet_machine_admit: memory
+# tight / load high) while its heartbeat says nothing of it (issue #1836, EPIC
+# #2074 C5). Since #1831 FLEET_GLOBAL_MAX_SESSIONS defaults to 0, so the beat's
+# capacity read `max_sessions:0` = never full, and the hub kept placing starts
+# on a machine that refused each one on arrival (RC_CAP). Node half, for real:
+# `fleet-control-read.sh capacity` under stubbed readings — critical memory
+# pressure, then a load over the bound, then a healthy machine, then the gate
+# switched off — must say admit:false + the reason + room, admit:true + room,
+# and with FLEET_ADMIT=0 admit:true and no room (nothing for the hub to hold
+# on). Hub half: the Go tests that pin judge() (`TestNodePlace{SkipsPausedNode,
+# AllPausedRefuses,WithoutCapFieldsFiltersNothing}`), run here when a toolchain
+# and the module cache are present — GOPROXY=off, a drill never downloads;
+# otherwise the Go gate (tokenledger.yml) is where they run and WHAT says so.
+drill_node_paused_still_placed() {
+  CAP=120; local t0 d="$WORK/np" out gohalf rc
+  mkdir -p "$d/conf" "$d/tmp"
+  # cap <mem-stub> <load-stub> [VAR=val …] → the capacity object. 16000 MB of RAM,
+  # one agent of 400 MB (×3 growth ⇒ 1200 MB a session) — never this box's own ps.
+  # The gate is switched ON here explicitly: run-selftests.sh exports FLEET_ADMIT=0
+  # for the whole gate (so no selftest's spawn is held by the runner's memory),
+  # and with it off capacity says admit:true and no room — the drill's last leg,
+  # which passes its own FLEET_ADMIT=0 after the 1.
+  cap() {
+    local m="$1" l="$2"; shift 2
+    env FLEET_ADMIT=1 "$@" FLEET_CONF_DIR="$d/conf" TMPDIR="$d/tmp" HOME="$d" FLEET_MEM_TOTAL_MB=16000 \
+      FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 409600 01:00 claude\\n'" \
+      FLEET_MEM_PROBE_CMD="$m" FLEET_LOAD_PROBE_CMD="$l" \
+      bash "$BIN/fleet-control-read.sh" capacity 2>&1
+  }
+  t0=$(now)
+  out=$(cap 'echo 4 5 97 0' 'echo 0.5')
+  case "$out" in *'"admit":false'*'"admit_why":"内存紧张"'*'"room":0'*) ;; *)
+    WHY="capacity under critical memory pressure does not say admit:false, admit_why 内存紧张, room 0: $out"; return 1 ;; esac
+  out=$(cap 'echo 1 66 5 6' 'echo 1.9')
+  case "$out" in *'"admit":false'*'"admit_why":"负载过高"'*'"room":'[1-9]*) ;; *)
+    WHY="capacity under load 1.9/core does not say admit:false, admit_why 负载过高 with its room: $out"; return 1 ;; esac
+  out=$(cap 'echo 1 66 5 6' 'echo 0.5')
+  case "$out" in *'"max_sessions":0'*'"admit":true'*'"room":'[1-9]*) ;; *)
+    WHY="a healthy machine's capacity does not say admit:true with room ≥ 1: $out"; return 1 ;; esac
+  case "$out" in *admit_why*) WHY="a healthy machine carries an admit_why: $out"; return 1 ;; esac
+  out=$(cap 'echo 4 5 97 0' 'echo 9' FLEET_ADMIT=0)
+  case "$out" in *'"admit":true'*) ;; *) WHY="FLEET_ADMIT=0 (the gate off) must say admit:true: $out"; return 1 ;; esac
+  case "$out" in *'"room"'*) WHY="with FLEET_ADMIT=0 the beat still carries room — the hub would hold on it: $out"; return 1 ;; esac
+  gohalf='hub half: the Go gate (tokenledger.yml) runs judge()'"'"'s tests'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run 'TestNodePlace(SkipsPausedNode|AllPausedRefuses|WithoutCapFieldsFiltersNothing)$' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) gohalf='hub half: go test TestNodePlace{SkipsPausedNode,AllPausedRefuses,WithoutCapFieldsFiltersNothing} ok' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        gohalf='hub half: no go module cache / toolchain here — the Go gate (tokenledger.yml) runs judge()'"'"'s tests' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="机器暂停接新时心跳带 admit:false（内存紧张 / 负载过高）+ room，健康时 admit:true + room，FLEET_ADMIT=0 不带 room；$gohalf"
+}
+
+# A release that deletes a hook script an old session's table still calls: the
+# move must refuse BEFORE the tag moves, naming the script; --force moves it and
+# leaves one line (issue #2075, EPIC #2074 C2).
+drill_oldcfg_deleted_hook() {
+  CAP=30; local t0 d out rc c1 c2
+  d="$WORK/oldcfg"; mkdir -p "$d/shim" "$d/seed"
+  printf '#!/bin/sh\nprintf "completed success ci\\n"\n' > "$d/shim/gh"; chmod +x "$d/shim/gh"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/hooks" "$d/seed/bin"
+    printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"sh ~/.claude/fleet/bin/h.sh"}]}]}}\n' > "$d/seed/hooks/settings-hooks.json"
+    printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$d/seed/bin/h.sh"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm hooked && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    git -C "$d/seed" rm -q bin/h.sh && git -C "$d/seed" commit -qm 'drop h.sh' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  t0=$(now)
+  out=$(PATH="$d/shim:$PATH" FLEET_STABLE_LOG="$d/stable-move.log" sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 3 ] || { WHY="move exited $rc, want 3 (refused): $(printf '%s' "$out" | tail -3 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — oldcfg:'*) ;; *) WHY="the refusal is not prefixed oldcfg: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  case "$out" in *'bin/h.sh not in the new tree'*) ;; *) WHY="the refusal does not name bin/h.sh: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved despite the red replay"; return 1; }
+  out=$(PATH="$d/shim:$PATH" FLEET_STABLE_LOG="$d/stable-move.log" sh "$BIN/fleet-stable.sh" move "$c2" --force --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="--force did not move: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="--force left stable at the old commit"; return 1; }
+  grep -q "	forced	" "$d/stable-move.log" 2>/dev/null || { WHY="--force left no line in stable-move.log"; return 1; }
+  WHAT="删了 h.sh 的发版被拒（oldcfg: 点名 bin/h.sh，stable 没动）；--force 才挪并记一行"
+}
+
+# ---- burst-lands-on-one (#2077, EPIC #2074 C6): the hub counts the starts it just
+# sent and spreads a burst. The whole change is the hub's (judge + the journal), so
+# the drill is its Go tests, run for real where a toolchain is: four starts at two
+# machines reading the same land two and two; a noted start ages out at 90 s; the
+# node's beat showing the sessions clears them once; a reported room is theirs
+# first; a refused start is forgotten. Without go the tests must at least exist by
+# name, so the row cannot stay green on a deleted test.
+drill_burst_lands_on_one() {
+  CAP=120; local t0 out rc tests f
+  tests='TestPlacementBurstSpreads TestPlacementRecentExpires TestPlacementRecentReflectedByBeat TestPlacementRecentScoredUntilTheBeatShowsIt TestPlacementRecentTakesTheRoom TestPlacementRecentForgottenOnRefusal TestRecentScore'
+  f="$ROOT/tokenledger/internal/api/fleet_recent_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 'recent' "$ROOT/tokenledger/internal/api/fleet_write.go" || { WHY="judge() does not read the recent table"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='入口连续派 4 个 → 两台各 2（go test 七条：分摊、90 秒过期、心跳抵消一次、room 先扣、拒掉即忘）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；七条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
 }
 
 # ================================================================ run ===========

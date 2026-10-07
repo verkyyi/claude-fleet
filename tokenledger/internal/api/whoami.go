@@ -12,7 +12,7 @@ import (
 //
 // Every human page on this hub — the dashboard, 连接, 我的会话, 机器节点,
 // 凭据发放 — carries the same header: the signed-in person and a way out.
-// web/dist/whoami.js draws it on every page from ONE answer, /v1/me: the
+// web/dist/app-shell.js draws it on every page from ONE answer, /v1/me: the
 // door the gate let this request through, and the person when the door names
 // one. "Who am I" is a fact the gate records as it admits the request, never
 // something a page infers from which of its fetches happened to succeed.

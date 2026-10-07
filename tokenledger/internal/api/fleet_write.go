@@ -738,7 +738,18 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 
 	envelope := map[string]any{"operation_id": op.ID, "fleet_id": target.FleetID, "action": tool,
 		"params": w.params, "actor": p.Actor}
+	var noted uint64
+	if opensSession(tool) {
+		// Counted before the node's beat shows it (claude-fleet#2077), so a
+		// burst's next pick sees this one in flight — noted before the send,
+		// which may wait seconds for the node's acknowledgement.
+		hb, _, _ := s.nodeStatusOf(target.EndpointID, now)
+		noted = s.recent.note(target.EndpointID, hb.SessionsCount(), now)
+	}
 	status, result := s.sendWrite(ctx, c, target, op, envelope)
+	if noted != 0 && status == "failed" {
+		s.recent.forget(target.EndpointID, noted) // refused before anything opened
+	}
 	if err := s.Store.UpdateFleetOperation(op.ID, status, result, time.Now()); err != nil {
 		log.Printf("fleet operation %s: record %s: %v", op.ID, status, err)
 	}
@@ -748,6 +759,12 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	}
 	s.progressOp(stored) // the asking parent's stream (claude-fleet#1648)
 	return operationView(stored), nil
+}
+
+// opensSession reports whether a write puts one more session on its target —
+// a start, a resume from history, a move's arrival (claude-fleet#2077).
+func opensSession(tool string) bool {
+	return tool == "worker_start" || tool == "worker_resume" || tool == "worker_move_in"
 }
 
 // replayed answers a repeated idempotency key: the first operation, if the
@@ -981,6 +998,17 @@ type Candidate struct {
 	// absent from a node that does not say. Full there = never a candidate.
 	MaxSessions int  `json:"max_sessions,omitempty"`
 	CapSessions *int `json:"cap_sessions,omitempty"`
+	// Admit is the login's own admission verdict (claude-fleet#1836: its
+	// fleet_machine_admit — false = holding new sessions, AdmitWhy why) and
+	// Room how many more fit in its memory; absent from a node that does not
+	// say. admit false or room < 1 = never a candidate, as full is.
+	Admit    *bool  `json:"admit,omitempty"`
+	AdmitWhy string `json:"admit_why,omitempty"`
+	Room     *int   `json:"room,omitempty"`
+	// Recent is how many starts the hub sent this login in the last
+	// recentWindow that its heartbeat may not show yet (claude-fleet#2077):
+	// scored as if already running, and taken off Room. Absent when none.
+	Recent int `json:"recent,omitempty"`
 	// QuotaUsedPct is the busier of the 5-hour and 7-day windows of the
 	// account this login's Claude Code runs on; nil when unknown. Shown, never
 	// scored (claude-fleet#1994): every machine spends the same shared quota.
@@ -1020,8 +1048,9 @@ type Placement struct {
 // pressure, or at a cap set for the person there; score the rest by load
 // alone — min(cpu idle, memory idle), whichever resource is tighter
 // (claude-fleet#1994: account quota is shared by every machine, so it never
-// decides where); return the best, with every candidate's verdict. person ""
-// is the operator.
+// decides where), with the starts just sent there and not yet in its beat
+// counted as running (claude-fleet#2077); return the best, with every
+// candidate's verdict. person "" is the operator.
 func (s *Server) PickNode(person, repo string) (Placement, error) {
 	scope, err := s.scopeFor(person)
 	if err != nil {
@@ -1206,16 +1235,22 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 		}
 	}
 	if best < 0 {
-		reasons, full := []string{}, true
+		reasons, full, paused := []string{}, true, false
 		for _, c := range pl.Candidates {
 			reasons = append(reasons, c.Machine+": "+c.Excluded)
 			full = full && excludedForFullness(c.Excluded)
+			paused = paused || strings.HasPrefix(c.Excluded, excludedPaused)
 		}
 		msg := "No machine can take a new session now — " + strings.Join(reasons, "; ")
 		if full {
 			// Every candidate is at its own cap (claude-fleet#1587): say so
-			// as the refusal a full machine gives, not as "no machine".
+			// as the refusal a full machine gives, not as "no machine". One
+			// whose own gate is holding (claude-fleet#1836) is full the same
+			// way; with none such the wording is byte for byte the old one.
 			msg = "all-full: every machine is at its session cap — " + strings.Join(reasons, "; ")
+			if paused {
+				msg = "all-full: every machine is at its session cap or pausing new sessions — " + strings.Join(reasons, "; ")
+			}
 		}
 		if sp := s.spot(); sp != nil && node == "auto" {
 			// Peak: every fixed machine is out. Ask for a SPOT node
@@ -1257,6 +1292,14 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	}
 	full, used, own := hb.Full()
 	c.MaxSessions, c.CapSessions = hb.MaxSessions, hb.CapSessions
+	paused, pausedWhy := hb.Paused()
+	c.Admit, c.AdmitWhy, c.Room = hb.Admit, hb.AdmitWhy, hb.Room
+	c.Recent = s.recent.count(r.EndpointID, c.Sessions, now)
+	if !paused && c.Recent > 0 && hb.Room != nil && *hb.Room-c.Recent < 1 {
+		// The room the node reported is spoken for by what was just sent
+		// there (claude-fleet#2077): one more would be refused on arrival.
+		paused, pausedWhy = true, fmt.Sprintf("内存余量不够再开一个（room %d，刚派出 %d 个还没算进去）", *hb.Room, c.Recent)
+	}
 	if acct := accounts[r.EndpointID]; acct != "" {
 		if snap, err := s.Store.LatestLimits(acct); err == nil && snap != nil {
 			u := math.Max(snap.FiveHour.Utilization, snap.SevenDay.Utilization)
@@ -1298,10 +1341,16 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 		// The login's own cap (claude-fleet#1587): its spawn gate would refuse
 		// the start, so it is no candidate — named or auto.
 		c.Excluded = fmt.Sprintf("%s (%d/%d sessions, the login's own cap)", excludedFull, used, own)
+	case paused:
+		// The login's own gate is holding new sessions (claude-fleet#1836:
+		// memory tight, load high, or no room for one more) — a start placed
+		// there would be refused on arrival, so it is no candidate, named or
+		// auto, and counts as full for the all-full verdict.
+		c.Excluded = excludedPaused + "：" + pausedWhy
 	default:
 		c.Eligible = true
 	}
-	score := loadScore(c.LoadPerCore, hb.MemFreeBytes, hb.MemTotalBytes)
+	score := recentScore(c.LoadPerCore, hb.NCPU, hb.MemFreeBytes, hb.MemTotalBytes, c.Recent)
 	if c.Sessions == nil {
 		// A login whose fleet could not be read may run any number of
 		// sessions (claude-fleet#1465): never scored as the idle 0 the
@@ -1341,17 +1390,21 @@ func memPressureName(lv int) string {
 }
 
 // excludedFull opens the verdict on a login at its own session cap
-// (claude-fleet#1587); excludedPersonCap the one at the hub's per-person cap.
+// (claude-fleet#1587); excludedPersonCap the one at the hub's per-person cap;
+// excludedPaused the one whose own gate is holding new sessions
+// (claude-fleet#1836) — 「机器暂停接新：<原因>」, the reason in the gate's words.
 const (
 	excludedFull      = "full"
 	excludedPersonCap = "at the per-person cap"
+	excludedPaused    = "机器暂停接新"
 )
 
 // excludedForFullness reports whether a candidate is out only because it has
-// no free session slot: when every candidate is, placement refuses
+// no free session slot — its own cap, the per-person cap, or its own gate
+// holding (claude-fleet#1836): when every candidate is, placement refuses
 // AT_CAPACITY "all-full" (claude-fleet#1587) rather than NO_ELIGIBLE_NODE.
 func excludedForFullness(why string) bool {
-	return strings.HasPrefix(why, excludedFull) || strings.HasPrefix(why, excludedPersonCap)
+	return strings.HasPrefix(why, excludedFull) || strings.HasPrefix(why, excludedPersonCap) || strings.HasPrefix(why, excludedPaused)
 }
 
 // unknownSessionsWeight discounts the score of a candidate whose session count
@@ -1359,7 +1412,8 @@ func excludedForFullness(why string) bool {
 const unknownSessionsWeight = 0.5
 
 // better orders two eligible candidates: a known session count before an
-// unknown one (claude-fleet#1465), then score, then fewer sessions, then name.
+// unknown one (claude-fleet#1465), then score, then fewer sessions (those
+// just sent there counted, claude-fleet#2077), then name.
 func better(a, b Candidate) bool {
 	if (a.Sessions == nil) != (b.Sessions == nil) {
 		return a.Sessions != nil
@@ -1367,8 +1421,8 @@ func better(a, b Candidate) bool {
 	if a.Score != b.Score {
 		return a.Score > b.Score
 	}
-	if a.Sessions != nil && *a.Sessions != *b.Sessions {
-		return *a.Sessions < *b.Sessions
+	if a.Sessions != nil && *a.Sessions+a.Recent != *b.Sessions+b.Recent {
+		return *a.Sessions+a.Recent < *b.Sessions+b.Recent
 	}
 	return a.Machine+"/"+a.OSUser < b.Machine+"/"+b.OSUser
 }
@@ -1391,6 +1445,9 @@ func placementReason(c Candidate, all []Candidate) string {
 		parts = append(parts, fmt.Sprintf("%d/%d sessions", *c.Sessions, *c.Cap))
 	default:
 		parts = append(parts, fmt.Sprintf("%d sessions", *c.Sessions))
+	}
+	if c.Recent > 0 {
+		parts = append(parts, fmt.Sprintf("%d just placed", c.Recent))
 	}
 	out := strings.Join(parts, ", ") + ")"
 	others := []string{}
@@ -1448,14 +1505,14 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					httpError(w, http.StatusInternalServerError, err.Error())
 					return
 				}
-				s.maintenanceAudit("operator", machine, map[bool]string{true: "LEAVE", false: "NOT_FLAGGED"}[was], now)
+				s.maintenanceAudit(actorOf(r), machine, map[bool]string{true: "LEAVE", false: "NOT_FLAGGED"}[was], now)
 			} else {
-				m, already, err := s.enterMaintenance(machine, reason, "operator", now)
+				m, already, err := s.enterMaintenance(machine, reason, actorOf(r), now)
 				if err != nil {
 					httpError(w, http.StatusInternalServerError, err.Error())
 					return
 				}
-				s.maintenanceAudit("operator", machine, map[bool]string{true: "ALREADY", false: "ENTER"}[already]+": "+m.Reason, now)
+				s.maintenanceAudit(actorOf(r), machine, map[bool]string{true: "ALREADY", false: "ENTER"}[already]+": "+m.Reason, now)
 			}
 			s.writeFleetSettings(w)
 			return
