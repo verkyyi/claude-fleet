@@ -1472,9 +1472,11 @@ try:
     remote_wid = 'wid:' + F + '/issue-1423'
     remote_items = menu_items(remote_wid)
     remote_cmds = menu_commands(remote_wid)
-    check({'e', 'm', 'a', 'q', 'c', 'x', 'n', '1', 'o', 'g'} <= set(remote_items),
+    check({'e', 'm', 'a', 's', 'q', 'c', 'x', 'n', '1', 'o', 'g'} <= set(remote_items),
           'the remote row menu lacks an action: %r' % remote_items)
-    for k in 'qcx':
+    # s = 换到可用订阅 (issue #2102): the shell's way to move a walled row — the
+    # guide included — onto a subscription with headroom, a hub write like stop
+    for k in 'sqcx':
         check('fleet-sidebar-remote.sh' in remote_cmds[k], 'remote %s does not go through fleet-sidebar-remote.sh: %r' % (k, remote_cmds[k]))
     # message asks for its text on the line under the session (issues #1620,
     # #1950), not in a popup — and parks it without moving the keyboard to the list
@@ -1489,7 +1491,7 @@ try:
     check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}') + ' · m5',
           'with the hub on the local menu title does not name this machine: %r' % t1)
     _, rshape = menu_shape(remote_wid)
-    check(rshape == 'e|ma|qcx|n1oig|E',
+    check(rshape == 'e|ma|sqcx|n1oig|E',
           'the remote row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % rshape)
     # In the SHELL (issue #1518) the row-less group is gone — new task, new on
     # m4, restore, add repo run scripts its computer does not have — and the
@@ -1500,7 +1502,7 @@ try:
     sh_shape = ''.join('E' if l.split('\t')[1] == '-Esc 关闭' else (l.split('\t')[0] if l.split('\t')[1] else '|')
                        for l in sh_out.splitlines() if l.count('\t') == 2 and not l.startswith('title\t'))
     # …and its own group instead: 我的客户端 (issue #1932), d
-    check(sh_shape == 'e|ma|qcx|oid|E', 'the shell remote menu: not the row-less group gone + 已落地 · 详情列 · 我的客户端 (#1952): %r' % sh_shape)
+    check(sh_shape == 'e|ma|sqcx|oid|E', 'the shell remote menu: not the row-less group gone + 已落地 · 详情列 · 我的客户端 (#1952): %r' % sh_shape)
     check(not any(s in sh_out for s in ('dash-issue-new.sh', 'fleet-restore-pick.sh', 'dash-repo-add.sh')),
           'the shell remote menu names a machine-only script: %r' % sh_out)
     check(sh_out.split('\n', 1)[0] == 'title\t' + menu_shape(remote_wid)[0],
@@ -1531,7 +1533,7 @@ try:
     stub = ('printf "%s\\t%s\\n" "$1" "$2" >> ' + shlex.quote(str(writes)) +
             '; printf \'{"operation_id":"00000000-0000-4000-8000-000000000001","status":"succeeded","result":{"how":"stopped:exit"}}\\n\'')
     env_w = dict(env, FLEET_HUB_WRITE_CMD=stub, FLEET_SESSION='fleet-test')
-    for action in ('stop', 'reap'):
+    for action in ('stop', 'switch', 'reap'):
         r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), action, 'fleet-test', remote_wid],
                            env=env_w, text=True, capture_output=True, timeout=30)
         check(r.returncode == 0, 'fleet-sidebar-remote.sh %s failed: %s' % (action, r.stderr))
@@ -1539,17 +1541,17 @@ try:
                        env=env_w, text=True, input='y', capture_output=True, timeout=30)
     check(r.returncode == 0 and ('已完成' in r.stderr), 'the answer popup did not report the outcome: %s' % r.stderr)
     rows = [l.split('\t') for l in writes.read_text().splitlines()] if writes.exists() else []
-    check([r[0] for r in rows] == ['worker_stop', 'worker_reap', 'worker_answer'], 'hub writes = %r' % rows)
+    check([r[0] for r in rows] == ['worker_stop', 'worker_switch', 'worker_reap', 'worker_answer'], 'hub writes = %r' % rows)
     for tool, js in rows:
         import json as _json
         payload = _json.loads(js)
         check(payload.get('worker_id') == F + '/issue-1423' and payload.get('idempotency_key'),
               '%s was sent without the worker_id / an idempotency key: %r' % (tool, payload))
-    check(_json.loads(rows[2][1]).get('answer') == 'yes', 'y did not become answer=yes: %r' % rows[2])
+    check(_json.loads(rows[3][1]).get('answer') == 'yes', 'y did not become answer=yes: %r' % rows[3])
     # a local row never writes to the hub, whatever the stub says
     r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'stop', 'fleet-test', w1],
                        env=env_w, text=True, capture_output=True, timeout=30)
-    check(r.returncode == 0 and len(writes.read_text().splitlines()) == 3, 'a local @ id reached the hub write client')
+    check(r.returncode == 0 and len(writes.read_text().splitlines()) == 4, 'a local @ id reached the hub write client')
     # The sidebar's input line hands the text over in FLEET_SIDEBAR_TEXT (issue
     # #1620): no terminal is read, nothing waits on a key, the write carries it.
     r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'message', 'fleet-test', remote_wid],

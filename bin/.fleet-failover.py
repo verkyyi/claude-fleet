@@ -861,6 +861,45 @@ def reconcile(session, dry=False):
             runpy.run_path(str(BIN/'fleet-loop.py'))['recover'](session)
 
 
+NOREPO_RETRY = 600
+
+
+def norepo_one(session, window, data, dry):
+    """A no-repo session (`@norepo 1`: the pinned guide, a $HOME scratch) has no
+    worktree, so the transfer road above (fleet-transfer.sh) refuses it and it
+    used to sit on a walled account until the operator moved it by hand (issue
+    #2102). Its road is fleet-migrate.sh — close + `claude --resume` of the same
+    conversation in $HOME under the active account, @norepo/@norepo_sid carried —
+    taken when its account is benched or its screen shows a wall ccquota does not
+    overrule. Claude only (a Codex no-repo session keeps its own home). One try per
+    NOREPO_RETRY seconds per window, so a move that keeps failing is not retried
+    every tick; migrate itself refuses a target that is the source or benched."""
+    if tm(session,'display-message','-p','-t',window,'#{@cc_agent}') == 'codex':
+        return
+    label = run(['bash', BIN / 'fleet-account.sh', 'whoami', '--verified', '--session', session, window])
+    matches = [r for r in data['accounts'] if r['agent'] == 'claude' and r['label'] == label]
+    if len(matches) != 1:
+        raise ValueError('no-repo source Claude subscription cannot be verified')
+    pane = tm(session,'display-message','-p','-t',window,'#{pane_id}')
+    blocked = matches[0].get('limited_until',0) > time.time()
+    hard = not blocked and claude_wall(dict(session=session,window=window,pane=pane))
+    if not (blocked or hard):
+        return
+    if dry:
+        print(json.dumps(dict(source=window,decision={'state':'norepo-migrate','from':label,
+              'reason':'benched account' if blocked else 'subscription wall'})))
+        return
+    mark = root()/('norepo-'+session+'-'+window.replace('@','')+'.json')
+    if time.time() - read(mark,{}).get('at',0) < NOREPO_RETRY:
+        return
+    save(mark, dict(session=session,window=window,source=label,at=time.time()))
+    # Detached: a move is a cold `claude --resume` (~25 s) and must not hold this
+    # tick's lock; migrate takes its own transition lock and reports via --alert.
+    subprocess.Popen(['bash', str(BIN/'fleet-migrate.sh'), '--session', session, '--alert', window],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
 def reconcile_windows(session, dry):
     data = ACCOUNT['inventory']()
     # `|R` marks a proxy window onto another machine's session (#1424): not ours to fail over.
@@ -875,6 +914,9 @@ def reconcile_windows(session, dry):
         considered += 1
         try:
             if tm(session,'display-message','-p','-t',window,'#{@worker_lifecycle}'):
+                continue
+            if tm(session,'display-message','-p','-t',window,'#{@norepo}') == '1':
+                norepo_one(session,window,data,dry)
                 continue
             source=inspect(session,window)
             if opt(source,'@reported') == '1': continue

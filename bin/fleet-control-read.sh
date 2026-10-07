@@ -513,6 +513,26 @@ case "$mode" in
     # shellcheck disable=SC2086  # the split IS the grammar (one pick per question)
     exec bash "$BIN/fleet-answer.sh" --answer "wid:$key" --session "$sess" $ans
     ;;
+  # --- switch <sess> <window_id> [<account>] (issue #2102) ---------------------
+  # The hub's worker_switch: a sidebar on another machine's 「换到可用订阅」 on a
+  # row here. fleet_control resolved the worker (key or identity — a no-repo
+  # session has no key) to its window; dash-migrate.sh `to` runs the migrate's
+  # own dry-run first and refuses with ONE line and exit 1 (same account, a
+  # benched or unverifiable target, no Claude in the pane), else dispatches the
+  # move detached and exits 0. Bare tmux pointed at THIS fleet, as reap does.
+  switch)
+    fleet_load_conf "$sess"
+    win="${3:-}"; acct="${4:-}"
+    case "$win" in @[0-9]*) ;; *) exit 2 ;; esac
+    case "$win" in *[!@0-9]*) exit 2 ;; esac
+    case "$acct" in *[!A-Za-z0-9._@-]*) exit 2 ;; esac
+    sock=$(fleet_socket "$sess")
+    sp=$(tmux -L "$sock" display-message -p '#{socket_path}' 2>/dev/null)
+    [ -n "$sp" ] || { printf 'switch: fleet %s has no running tmux server\n' "$sess" >&2; exit 5; }
+    export TMUX="$sp,0,0"
+    unset TMUX_PANE
+    exec bash "$BIN/dash-migrate.sh" "$win" to ${acct:+"$acct"}
+    ;;
   # --- reap <sess> <key> (issue #1487) -----------------------------------------
   # The hub's worker_reap: `dash-reap.sh <key> --yes` — the dash's confirmed ⌃x,
   # unasked (a dirty worktree is still KEPT; a live agent still refuses). dash-reap

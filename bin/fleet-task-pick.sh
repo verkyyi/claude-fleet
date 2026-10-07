@@ -62,7 +62,7 @@ done
 # tmux display-message on the pressing client when we know it: without -c a
 # command from a run-shell job has no client of its own and would guess.
 tdm() { tmux display-message ${CLIENT:+-c "$CLIENT"} -p "$1" 2>/dev/null; }
-[ -n "$SESS" ] || SESS=$(tdm '#{session_name}')
+[ -n "$SESS" ] || SESS=$(tdm '#{session_name}')   # view-ok: the client shell's own server, never a node's view
 [ -n "$SESS" ] || { printf 'fleet-task-pick.sh: not inside a tmux session\n' >&2; exit 1; }
 
 # act <action line> — the one place a pick turns into a tmux change.

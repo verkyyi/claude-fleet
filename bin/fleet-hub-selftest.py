@@ -183,6 +183,13 @@ awk -F'\\t' -v n="$n" '!($2 == n)' "$FLEET_CONF_DIR/workers.tsv" > "$FLEET_CONF_
 mv "$FLEET_CONF_DIR/workers.new" "$FLEET_CONF_DIR/workers.tsv"
 if [ -f "$FLEET_CONF_DIR/reap-dirty" ]; then echo reaped:keep; else echo reaped:full; fi
 ''')
+        # worker_switch (issue #2102): dash-migrate.sh <window> to [<account>] —
+        # its own dry-run refuses with one line and exit 1, else dispatches.
+        self.script(self.bin / "dash-migrate.sh", '''#!/bin/bash
+printf '%s\\n' "$* TMUX=${TMUX:-}" >> "$FLEET_CONF_DIR/migrate.calls"
+[ ! -f "$FLEET_CONF_DIR/switch-same" ] || { echo 'guide: already on gmail'; exit 1; }
+exit 0
+''')
         self.script(self.bin / "fleet-history.sh", '''#!/bin/bash
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/history.calls"
 [ ! -f "$FLEET_CONF_DIR/not-resumable" ] || { printf 'REVIEW-ONLY\\tno ledger row\\n'; exit 0; }
@@ -520,6 +527,37 @@ class HubTests(HubFixture):
             self.lifecycle("worker_reap", "issue-125", idem="no-scope", token=reader["token"])
         with self.assertRaises(Fault):
             self.call("worker_reap", {"worker_id": self.worker("issue-125"), "answer": "yes", "idempotency_key": "extra"})
+
+    def test_switch_moves_the_window_by_key_or_identity(self):
+        # worker_switch (issue #2102): the Fleet Shell's 「换到可用订阅」. The worker
+        # resolves to its WINDOW — by key, or by identity alone (the no-repo guide
+        # has no key) — and dash-migrate.sh `to` runs on the fleet's own server;
+        # its one-line refusal comes back verbatim, a bad label never reaches it.
+        ident = str(uuid.uuid4())
+        self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@4", None, True, "/fixture/project-scratch-4", "", "", ident))
+        done = self.lifecycle("worker_switch")
+        self.assertEqual((done["status"], done["result"]["window"], done["result"]["to"]), ("succeeded", "@12", "active"), done)
+        named = self.lifecycle("worker_switch", ident, idem="guide", account="gmail")
+        self.assertEqual((named["status"], named["result"]["window"]), ("succeeded", "@4"), named)
+        self.assertEqual(self.node.calls("migrate"), ["@12 to TMUX=/tmp/fleet-hub-selftest.sock,0,0",
+                                                      "@4 to gmail TMUX=/tmp/fleet-hub-selftest.sock,0,0"])
+        (self.node.conf / "switch-same").touch()
+        same = self.lifecycle("worker_switch", ident, idem="same", account="gmail")
+        self.assertEqual((same["status"], same["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
+        self.assertIn("already on gmail", same["result"]["error"]["message"])
+        (self.node.conf / "switch-same").unlink()
+        n = len(self.node.calls("migrate"))
+        for bad in ("", "a b", "x;rm", "../x", 3, True):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                self.call("worker_switch", {"worker_id": self.worker(), "account": bad, "idempotency_key": "bad"})
+        with self.assertRaises(Fault):
+            self.call("worker_switch", {"worker_id": self.worker(), "text": "x", "idempotency_key": "extra"})
+        gone = self.lifecycle("worker_switch", str(uuid.uuid4()), idem="nobody")
+        self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        reader = self.hub.grant("answerer", [self.fleet], ["fleet:read", "worker:answer"])
+        with self.assertRaisesRegex(Fault, "outside this caller"):
+            self.lifecycle("worker_switch", idem="no-scope", token=reader["token"])
+        self.assertEqual(len(self.node.calls("migrate")), n)
 
     def test_message_goes_through_the_issue_bridge(self):
         self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@13", None, True, "/fixture/project-scratch-4"))

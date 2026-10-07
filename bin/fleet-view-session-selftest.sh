@@ -51,6 +51,16 @@ bad=$(grep -n 'display-message' "$BIN"/*.sh "$BIN"/*.py "$ROOT"/hooks/*.py 2>/de
   | grep -v -- '-selftest\.sh:' | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' \
   | grep '#{session_name}' | grep -v 'session_group' | grep -v 'view-ok:')
 eq "A2: no bare #{session_name} in a display-message of bin/ or hooks/ (use \$FLEET_SESSION_FMT)" "" "$bad"
+# A2b. …nor one handed to a helper that reads it (issue #2102): fleet-transfer.sh's
+# `opt '#{session_name}'` and fleet-loop.py's `pane(r, '#{session_name}|…')` never
+# spelled display-message on the line, so A2 missed them — and with a Fleet Shell
+# view attached every window read as another session's, so the quota failover
+# marked them all unsupported. A quoted format that STARTS with a bare
+# session_name is a window/pane read unless the line is a list-* scan.
+bad=$(grep -n -E "[\"']#\{session_name\}[\"'| ]" "$BIN"/*.sh "$BIN"/*.py "$ROOT"/hooks/*.py 2>/dev/null \
+  | grep -v -- '-selftest\.' | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*#' \
+  | grep -v -E 'list-sessions|list-clients|list-windows|fleet_lw|_fa_lw|lw_all|fleet_list_windows_all|WFMT=|_fmt=|session_group|view-ok:')
+eq "A2b: no bare #{session_name} format handed to a pane/window read helper (use \$FLEET_SESSION_FMT)" "" "$bad"
 # A3. a conf hook that hands a script the session names the fleet.
 bad=$(grep -n 'run-shell' "$ROOT"/conf/*.conf 2>/dev/null | grep '#{session_name}' | grep -v 'session_group' | grep -v 'view-ok:')
 eq "A3: no run-shell hook in conf/ passes a bare #{session_name}" "" "$bad"

@@ -340,6 +340,10 @@ class Control:
         fleet_id, key = parse_worker_id(params["worker_id"])
         if fleet_id != fleet["fleet_id"]:
             raise Unattempted("INVALID_ARGUMENT", "worker_id belongs to a different fleet")
+        if action == "worker_switch":
+            # By identity or key alike: a no-repo session (the pinned guide) has
+            # no key at all, only its @fleet_id (issue #2102).
+            return self.execute_switch(fleet, key, params.get("account", ""))
         if is_identity(key):
             # An identity-form worker_id (issue #1646): the session it names, under
             # the key it answers to NOW — every adapter below speaks keys.
@@ -443,6 +447,30 @@ class Control:
             raise Fault("UNKNOWN_OUTCOME", "Keys were sent but the answer was not confirmed: " + last_line(err))
         return {"answered": answer, "how": last_line(output) if output.strip() else "confirmed",
                 "worker": matches[0], "by": actor or "hub", "observed_at": now()}
+
+    def execute_switch(self, fleet, key, account=""):
+        """worker_switch (issue #2102): the sidebar's 「换到可用订阅」 on a row here.
+        dash-migrate.sh <window> to [<account>] — its own dry-run gates the move
+        (the same account, a benched or quota-unverified target, a window with no
+        Claude) and refuses with one line, touching nothing: a clean `failed`.
+        A plan that moves is dispatched detached (a cold `claude --resume` takes
+        ~25 s) and reports through the fleet's alerts, so success here means the
+        move started, never that it landed."""
+        matches, _ = self.target(fleet, key, "worker_switch")
+        if matches[0].get("lifecycle", "awake") != "awake":
+            raise Unattempted("INVALID_STATE", "Worker is hibernating; wake it on the fleet before switching it")
+        window = matches[0].get("window_id", "")
+        code, output, err = self.adapter("switch", fleet["name"], window, *([account] if account else []),
+                                         timeout=120)
+        said = last_line(output if (output or b"").strip() else err)
+        if code == 2:
+            raise Unattempted("INVALID_ARGUMENT", "Switch refused on the fleet: " + said)
+        if code:
+            raise Unattempted("INVALID_STATE", "Switch refused on the fleet: " + said)
+        return {"switching": matches[0], "to": account or "active", "window": window,
+                "how": "dispatched: closes the session and resumes the same conversation on the new "
+                       "subscription; the fleet's alerts report the outcome",
+                "observed_at": now()}
 
     def execute_reap(self, fleet, key):
         """worker_reap (issue #1487): dash-reap.sh --yes on the one live window

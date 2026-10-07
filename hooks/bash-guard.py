@@ -317,7 +317,9 @@ def _current_session():
     pane = os.environ.get("TMUX_PANE", "")
     if pane:
         cmd += ["-t", pane]
-    cmd.append("#{session_name}")
+    # group-or-name (issues #1489, #2102): a bare session_name names a Fleet
+    # Shell view session while one is attached, and the guard failed open.
+    cmd.append("#{?#{session_group},#{session_group},#{session_name}}")
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout.strip()
     except Exception:

@@ -312,6 +312,10 @@ if [ -n "$remote" ]; then
   group
   add "$(t menu_r_stop)" "$(mk stop)" "$(sh_run "$rmt stop $rargs")"
   add "$(t menu_r_resume)" "$(mk resume)" "$(sh_run "$rmt resume $rargs")"
+  # 换到可用订阅 (issue #2102): the shell's every row is remote, so this is the
+  # Fleet Shell's way to move a walled session — the guide included — onto a
+  # subscription with headroom; the node's dash-migrate.sh picks and gates it.
+  add "$(t menu_r_switch)" "$(mk sub)" "$(sh_run "$rmt switch $rargs")"
   m_r_reap_confirm=$(t menu_r_reap_confirm_fmt "$(fe "${name:-${wid##*/}}")" "$(fe "$node")")
   add "$(t menu_reap)" "$(mk reap)" "confirm-before -p $(sq "$m_r_reap_confirm") $(dq "$(sh_run "$rmt reap $rargs")")"
   # 其它 — not in the SHELL (issue #1518): its computer has no fleet conf, gh or
