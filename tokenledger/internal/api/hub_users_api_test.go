@@ -314,83 +314,23 @@ func TestHubSettings_PublicBadgesLive(t *testing.T) {
 	}
 }
 
-// The old variables are still read for one version, are copied into the
-// database once at start (audited as the deploy's), and a value an admin
-// clears afterwards is not brought back by the next start.
-func TestMigrateLegacySettings(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
+// setHubSetting stores one hub setting straight into the table (creating
+// it on a hub that is not a fleet), the way an admin's PUT leaves it.
+func setHubSetting(t *testing.T, s *Server, key, value string) {
+	t.Helper()
+	if err := s.Store.EnsureNodes(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.Close() })
-	if err := st.EnsureNodes(); err != nil {
+	if err := s.Store.SetFleetSetting(key, value, time.Now()); err != nil {
 		t.Fatal(err)
-	}
-	s := &Server{Store: st, Pricing: pricing.Default(), Fleet: true,
-		PublicBadges:         true,
-		FleetAutoAssign:      []string{"m4"},
-		FleetPrincipalLogins: map[string]string{"yilianghui": "verkyyi"}}
-
-	// Before the copy: the old values apply.
-	if got := s.setting(AutoAssignKey); got != "m4" {
-		t.Fatalf("legacy auto_assign = %q", got)
-	}
-	if !s.publicBadges() {
-		t.Fatal("legacy --public-badges not read")
-	}
-	if login, ok := s.mappedLoginFor("YiLiangHui"); !ok || login != "verkyyi" {
-		t.Fatalf("legacy map = %q %v", login, ok)
-	}
-
-	now := time.Now()
-	if err := s.MigrateLegacySettings(now); err != nil {
-		t.Fatal(err)
-	}
-	settings, _ := st.FleetSettings()
-	if settings[AutoAssignKey] != "m4" || settings[PublicBadgesKey] != "on" ||
-		settings["user.yilianghui.machine_login"] != "verkyyi" {
-		t.Fatalf("after migrate: %v", settings)
-	}
-	if settings[SpotKey] != "" {
-		t.Fatalf("fleet.spot copied with no SPOT image: %q", settings[SpotKey])
-	}
-	log, _ := st.HubAuditLog(50)
-	deployRows := 0
-	for _, e := range log {
-		if e.Action == "setting" && e.Actor == "deploy" {
-			deployRows++
-		}
-	}
-	if deployRows != 3 {
-		t.Fatalf("deploy audit rows = %d, want 3: %+v", deployRows, log)
-	}
-
-	// Without the old variables the database alone decides now.
-	s.FleetAutoAssign, s.PublicBadges, s.FleetPrincipalLogins = nil, false, nil
-	if got := s.setting(AutoAssignKey); got != "m4" {
-		t.Fatalf("auto_assign from the database = %q", got)
-	}
-	if login, ok := s.mappedLoginFor("yilianghui"); !ok || login != "verkyyi" {
-		t.Fatalf("map from the database = %q %v", login, ok)
-	}
-
-	// An admin clears auto_assign; the deploy still names m4; a restart
-	// does not bring it back.
-	s.FleetAutoAssign = []string{"m4"}
-	if code, why := s.putHubSetting("gh:100", AutoAssignKey, "", now); code != http.StatusOK {
-		t.Fatalf("clear = %d %s", code, why)
-	}
-	if err := s.MigrateLegacySettings(now); err != nil {
-		t.Fatal(err)
-	}
-	if got := s.autoAssign(); len(got) != 0 {
-		t.Fatalf("auto_assign after clear + restart = %v, want none", got)
 	}
 }
 
-// A non-GitHub principal (an old map entry)'s machine login set in the settings replaces the old map's
-// entry, and "none" takes them out of it.
-func TestMachineLoginSettingOverridesLegacy(t *testing.T) {
+// claude-fleet#2087: --public-badges, CCQUOTA_FLEET_AUTO_ASSIGN and
+// CCQUOTA_FLEET_PRINCIPAL_LOGINS are gone. A hub with nothing stored reads
+// the defaults, and the start's copy writes nothing for them — the
+// database is the only source.
+func TestMigrateLegacySettings_OnlyTheSpotImageIsLeft(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -399,8 +339,41 @@ func TestMachineLoginSettingOverridesLegacy(t *testing.T) {
 	if err := st.EnsureNodes(); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{Store: st, FleetPrincipalLogins: map[string]string{"caojian": "old24", "yilianghui": "verkyyi"}}
+	s := &Server{Store: st, Pricing: pricing.Default(), Fleet: true}
+	for k, spec := range hubSettings {
+		if spec.legacy != nil && k != SpotKey {
+			t.Errorf("%s still reads an old variable", k)
+		}
+	}
+	if s.publicBadges() || len(s.autoAssign()) != 0 || len(s.principalLogins()) != 0 {
+		t.Fatalf("defaults: badges %v, auto_assign %v, logins %v", s.publicBadges(), s.autoAssign(), s.principalLogins())
+	}
+	if err := s.MigrateLegacySettings(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if settings, _ := st.FleetSettings(); len(settings) != 0 {
+		t.Fatalf("the start copied something with no SPOT image: %v", settings)
+	}
+}
+
+// A non-GitHub principal's machine login lives in the settings; "none" takes
+// them out, and a login is someone's only while a stored record says so.
+func TestMachineLoginSetting(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.EnsureNodes(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Store: st}
 	now := time.Now()
+	for pid, login := range map[string]string{"caojian": "old24", "yilianghui": "verkyyi"} {
+		if code, why := s.putHubSetting("operator", "user."+pid+".machine_login", login, now); code != http.StatusOK {
+			t.Fatalf("%s = %d %s", pid, code, why)
+		}
+	}
 	if code, why := s.putHubSetting("operator", "user.caojian.machine_login", "verkyyi", now); code != http.StatusBadRequest {
 		t.Fatalf("another person's login = %d %s", code, why)
 	}
@@ -410,6 +383,9 @@ func TestMachineLoginSettingOverridesLegacy(t *testing.T) {
 	if login, _ := s.mappedLoginFor("caojian"); login != "cao24" {
 		t.Fatalf("caojian = %q, want cao24", login)
 	}
+	if s.mappedLogin("old24") {
+		t.Fatal("old24 still someone's after caojian moved off it")
+	}
 	if code, why := s.putHubSetting("operator", "user.yilianghui.machine_login", "none", now); code != http.StatusOK {
 		t.Fatalf("none = %d %s", code, why)
 	}
@@ -418,6 +394,32 @@ func TestMachineLoginSettingOverridesLegacy(t *testing.T) {
 	}
 	if s.mappedLogin("verkyyi") {
 		t.Fatal("verkyyi still someone's")
+	}
+}
+
+// The case that filed claude-fleet#2087: an old principal held 24haowan;
+// the admin cleared it in the settings, and a GitHub person added to the
+// list takes it. Nothing outside the database can still claim it.
+func TestHubSettings_ReleasedMachineLoginGoesToAGitHubPerson(t *testing.T) {
+	h := newUsersHarness(t)
+	h.call(t, http.MethodPost, "/v1/fleet/users", `{"login":"alice"}`, nil)
+	put := func(key, v string) (int, any) {
+		return h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"`+key+`","value":"`+v+`"}`, nil)
+	}
+	if code, body := put("user.caojian.machine_login", "24haowan"); code != http.StatusOK {
+		t.Fatalf("caojian = %d %v", code, body)
+	}
+	if code, _ := put("user.200.machine_login", "24haowan"); code != http.StatusBadRequest {
+		t.Fatalf("alice took caojian's login: %d", code)
+	}
+	if code, body := put("user.caojian.machine_login", ""); code != http.StatusOK {
+		t.Fatalf("clear caojian = %d %v", code, body)
+	}
+	if code, body := put("user.200.machine_login", "24haowan"); code != http.StatusOK {
+		t.Fatalf("alice after the clear = %d %v", code, body)
+	}
+	if u, _ := h.srv.Store.HubUserByID(200); u == nil || u.MachineLogin != "24haowan" {
+		t.Fatalf("alice = %+v", u)
 	}
 }
 

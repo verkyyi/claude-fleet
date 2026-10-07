@@ -302,7 +302,7 @@ func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 	const pZhang = "gh:2001" // their login is minted from the principal: gh2001
 	enablePeople(t, h, pZhang)
 	h.srv.FleetAdmins = []string{"verkyyi"}
-	h.srv.FleetAutoAssign = []string{"m4"}
+	setHubSetting(t, h.srv, AutoAssignKey, "m4")
 	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
 
 	// What the GitHub callback runs once the person is through.

@@ -37,14 +37,6 @@ type Server struct {
 	// made it.
 	LogWriter func(line string)
 
-	// PublicBadges is --public-badges, the old switch: read for one version
-	// as hub.public_badges's value when the setting is unset
-	// (claude-fleet#1986). PublicBadges serves /badge/... without a viewer token, so an internal
-	// README can actually render one (a README image sends no credential, and
-	// camo strips cookies). Off by default: an operator who upgrades must not
-	// silently start serving without auth.
-	PublicBadges bool
-
 	// LimitsPollIntervalS is echoed to agents so a noisy fleet can be backed
 	// off centrally without touching every machine.
 	LimitsPollIntervalS int
@@ -103,29 +95,6 @@ type Server struct {
 	// refuses the op itself if it was not started as one. Empty means no node
 	// is ever sent an account op.
 	FleetAdmins []string
-
-	// FleetAutoAssign is the machines (roster hostnames) a person gets a
-	// login on the first time they sign in with GitHub
-	// (CCQUOTA_FLEET_AUTO_ASSIGN). Empty means accounts are only ever opened
-	// by an explicit assignment. A person in FleetPrincipalLogins is never
-	// auto-assigned: their login already exists, and is adopted instead.
-	// The old variable: since claude-fleet#1986 the setting fleet.auto_assign
-	// decides (Server.autoAssign); this is read for one version when it is
-	// unset.
-	FleetAutoAssign []string
-
-	// FleetPrincipalLogins maps a person (gh:<GitHub ID>) to the OS login
-	// that is theirs on every machine
-	// (CCQUOTA_FLEET_PRINCIPAL_LOGINS=gh:2718137=verkyyi; claude-fleet#1458). At sign-in a mapped person is recorded under that
-	// login and the login is ADOPTED on every roster machine whose agent
-	// runs as it — nothing is ever created. A person not in the map gets no
-	// row and no op (unless FleetAutoAssign says otherwise). Empty means the
-	// map is not in use. Keys are matched case-insensitively
-	// (mappedLoginFor, claude-fleet#1472).
-	// The old variable: since claude-fleet#1986 user.<id>.machine_login
-	// decides (Server.principalLogins); an entry here applies for one version
-	// to a person the settings do not name.
-	FleetPrincipalLogins map[string]string
 
 	// FleetPersonScopes is the grant a person signed in with GitHub holds
 	// on their own logins (CCQUOTA_FLEET_PERSON_SCOPES, claude-fleet#1410);

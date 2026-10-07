@@ -109,7 +109,7 @@ func TestAccess_ReportsWhatIsActuallyTurnedOn(t *testing.T) {
 
 	// Now turn things on. The handler reads the Server at request time, so
 	// this is the same hub answering differently -- which is the claim.
-	h.srv.PublicBadges = true
+	setHubSetting(t, h.srv, PublicBadgesKey, "on")
 	h.srv.MCP = http.NotFoundHandler()
 	h.srv.GitHub = &GitHubAuth{ClientID: "Iv1.test", ClientSecret: "s", Admins: []string{"ada", "bob"}}
 	h.srv.Listeners = ListenerFacts{HTTP: []string{"127.0.0.1:8787"}, HTTPS: ":443", HTTPSURL: "https://hub.example.ts.net/"}

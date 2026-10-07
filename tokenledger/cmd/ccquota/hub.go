@@ -307,10 +307,6 @@ func runHub(args []string) error {
 			"an unprivileged process take :443 only on the wildcard address.\n"+
 			"The URL becomes https://<node>.<tailnet>.ts.net")
 	tlsHost := fs.String("tls-host", "", "the name to get a certificate for (default: detected from tailscale status)")
-	publicBadges := fs.Bool("public-badges", false, // deprecated: the setting hub.public_badges (claude-fleet#1986)
-		"serve /badge/... without a viewer token.\n"+
-			"Needed for a README image, which sends no credential and is\n"+
-			"proxied through a cache that strips cookies. Off by default")
 	insecurePublic := fs.Bool("insecure-public", false, "acknowledge binding to a public address without TLS in front")
 	pricingFile := fs.String("pricing", "", "path to a pricing override file")
 	pollInterval := fs.Int("limits-poll-interval", 120, "seconds between agents' limit polls")
@@ -514,25 +510,17 @@ func runHub(args []string) error {
 		return err
 	}
 
-	principalLogins, err := fleetPrincipalLogins(os.Getenv("CCQUOTA_FLEET_PRINCIPAL_LOGINS"))
-	if err != nil {
-		return err
-	}
 	srv := &api.Server{
 		Store:               st,
 		GitHub:              gh,
 		Pricing:             table,
 		ViewerToken:         *token,
-		PublicBadges:        *publicBadges,
 		LimitsPollIntervalS: *pollInterval,
 		Version:             Version,
 		UI:                  web.Assets(),
 		LiveStore:           api.NewLive(),
 		Fleet:               fleetOn,
 		FleetAdmins:         splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
-		FleetAutoAssign:     splitList(os.Getenv("CCQUOTA_FLEET_AUTO_ASSIGN")),
-		// Who owns which login, explicitly (claude-fleet#1458).
-		FleetPrincipalLogins: principalLogins,
 		// A person's grant on their own logins (claude-fleet#1410).
 		FleetPersonScopes:     fleetPersonScopes(),
 		FleetPersonConfigKeys: splitList(os.Getenv("CCQUOTA_FLEET_PERSON_CONFIG_KEYS")),
@@ -574,20 +562,12 @@ func runHub(args []string) error {
 		}
 	}
 	srv.MCP = mcp.Handler(srv)
-	// The settings an admin changes on the web (claude-fleet#1986): each old
-	// variable / flag above (--public-badges, CCQUOTA_FLEET_AUTO_ASSIGN,
-	// CCQUOTA_FLEET_PRINCIPAL_LOGINS, a SPOT image) is copied into the
-	// database once and read for this one version; the next drops them. The
-	// warnings print under --check too; the copy (a write, never a refusal —
-	// an unusable old value is a WARN) waits for a real start.
-	for _, v := range []string{"CCQUOTA_FLEET_AUTO_ASSIGN", "CCQUOTA_FLEET_PRINCIPAL_LOGINS"} {
-		if os.Getenv(v) != "" {
-			log.Printf("WARN %s is deprecated: copied into the hub's settings (fleet hub set / fleet users); remove it from the deploy", v)
-		}
-	}
-	if *publicBadges {
-		log.Printf("WARN --public-badges is deprecated: copied into the setting hub.public_badges; remove it from the deploy")
-	}
+	// The settings an admin changes on the web (claude-fleet#1986): the one
+	// old value still read is a SPOT image (fleet.spot), copied into the
+	// database once at a real start. --public-badges,
+	// CCQUOTA_FLEET_AUTO_ASSIGN and CCQUOTA_FLEET_PRINCIPAL_LOGINS are no
+	// longer read (claude-fleet#2087): hub.public_badges, fleet.auto_assign and
+	// user.<id>.machine_login are the only source.
 	if *check {
 		// Everything that can refuse a start has run; what is left (the
 		// listeners, the background loops) is not configuration.
@@ -729,39 +709,6 @@ func githubAuthFromEnv(getenv func(string) string) (*api.GitHubAuth, error) {
 	}
 	log.Printf("github sign-in: on, %d admin name(s) from CCQUOTA_GITHUB_ADMINS", len(admins))
 	return &api.GitHubAuth{ClientID: id, ClientSecret: secret, Admins: admins}, nil
-}
-
-// fleetPrincipalLogins parses CCQUOTA_FLEET_PRINCIPAL_LOGINS
-// (`gh:<GitHub ID>=<os login>,…`, claude-fleet#1458). A malformed entry, a
-// login the nodes would refuse, or one login claimed by two people refuses
-// to start the hub: this map is what decides whose machine a sign-in lands
-// on, and a half-read one would place someone silently wrong.
-//
-// The principal is folded to lower case (claude-fleet#1472), so two
-// spellings of one principal are one entry and mapping it twice is a
-// conflict. The hub compares the map case-insensitively either way; the fold
-// here is what makes the conflict checks see one person.
-func fleetPrincipalLogins(v string) (map[string]string, error) {
-	out := map[string]string{}
-	owners := map[string]string{}
-	for _, e := range splitList(v) {
-		pid, login, ok := strings.Cut(e, "=")
-		pid, login = strings.ToLower(strings.TrimSpace(pid)), strings.TrimSpace(login)
-		if !ok || pid == "" || login == "" {
-			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: %q is not <principal>=<login>", e)
-		}
-		if !control.ValidExistingLogin(login) {
-			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: %q is not a login (2-16 lowercase letters and digits, not reserved)", login)
-		}
-		if prev, dup := out[pid]; dup && prev != login {
-			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: %s is mapped to both %s and %s", pid, prev, login)
-		}
-		if who, taken := owners[login]; taken && who != pid {
-			return nil, fmt.Errorf("CCQUOTA_FLEET_PRINCIPAL_LOGINS: login %s is claimed by both %s and %s", login, who, pid)
-		}
-		out[pid], owners[login] = login, pid
-	}
-	return out, nil
 }
 
 func splitList(s string) []string {

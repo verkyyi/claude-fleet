@@ -19,9 +19,10 @@ import (
 )
 
 // Whose login is whose (claude-fleet#1458): the person is gh:<GitHub ID>;
-// the operator says whose login is whose in CCQUOTA_FLEET_PRINCIPAL_LOGINS; a
-// mapped login is adopted where an agent runs as it, never created; an
-// unmapped sign-in leaves no row.
+// the operator says whose login is whose in user.<id>.machine_login
+// (claude-fleet#1986 — the only source since #2087); a mapped login is
+// adopted where an agent runs as it, never created; an unmapped sign-in
+// leaves no row.
 
 // The people of these tests, by the logins the map gives them.
 const (
@@ -30,6 +31,16 @@ const (
 	pHuang = "gh:3002"    // vincent
 	pZhang = "gh:3003"    // in no map
 )
+
+// mapLogins records each person's machine login in the settings, as the
+// operator's user.<id>.machine_login would — straight into the table, so no
+// placement runs before the test asks for one.
+func mapLogins(t *testing.T, s *Server, m map[string]string) {
+	t.Helper()
+	for pid, login := range m {
+		setHubSetting(t, s, machineLoginSettingKey(strings.ToLower(pid)), login)
+	}
+}
 
 // enterAs is what the GitHub callback runs once uid is through.
 func enterAs(t *testing.T, h *harness, uid, name string) {
@@ -63,8 +74,8 @@ func TestFleetMappedPersonIsAdoptedWhereTheLoginRunsNeverCreated(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
 	h.srv.FleetAdmins = []string{"verkyyi"}
-	h.srv.FleetAutoAssign = []string{"macmini", "mini2"} // must NOT apply to a mapped person
-	h.srv.FleetPrincipalLogins = map[string]string{pYi: "verkyyi", pCao: "24haowan"}
+	setHubSetting(t, h.srv, AutoAssignKey, "macmini,mini2") // must NOT apply to a mapped person
+	mapLogins(t, h.srv, map[string]string{pYi: "verkyyi", pCao: "24haowan"})
 	admin := connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
 	connectNode(t, h, "m5-24h", "macmini", "24haowan", false)
 	m4admin := connectNode(t, h, "m4-op", "mini2", "verkyyi", true)
@@ -143,7 +154,7 @@ func TestFleetMappedPersonIsAdoptedWhereTheLoginRunsNeverCreated(t *testing.T) {
 func TestFleetUnmappedSignInLeavesNoRow(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
-	h.srv.FleetPrincipalLogins = map[string]string{pYi: "verkyyi"}
+	mapLogins(t, h.srv, map[string]string{pYi: "verkyyi"})
 	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
 
 	enterAs(t, h, pZhang, "zhangsan")
@@ -240,7 +251,7 @@ func TestFleetForgetDropsOnlyRowsThatNeverReachedAMachine(t *testing.T) {
 func TestFleetMapRefusesToRenameAnExistingLogin(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
-	h.srv.FleetPrincipalLogins = map[string]string{pYi: "verkyyi"}
+	mapLogins(t, h.srv, map[string]string{pYi: "verkyyi"})
 	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pYi, Hostname: "mini2", Login: "yilianghui"}); code != 200 {
 		t.Fatalf("adopt: HTTP %d", code)
 	}
@@ -261,7 +272,7 @@ func TestFleetNoMapIsTheOldBehaviour(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
 	h.srv.FleetAdmins = []string{"verkyyi"}
-	h.srv.FleetAutoAssign = []string{"m4"}
+	setHubSetting(t, h.srv, AutoAssignKey, "m4")
 	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
 	enterAs(t, h, pZhang, "张三")
 	_, op := expectAccountOp(t, admin.tnode)
@@ -294,7 +305,7 @@ func asUID(t *testing.T, h *harness, method, path, uid, name string, body []byte
 func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	h, _ := certHarness(t)
 	h.srv.FleetAdmins = []string{"verkyyi"}
-	h.srv.FleetPrincipalLogins = map[string]string{pYi: "verkyyi", pCao: "24haowan", pHuang: "vincent"}
+	mapLogins(t, h.srv, map[string]string{pYi: "verkyyi", pCao: "24haowan", pHuang: "vincent"})
 	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
 	connectNode(t, h, "m5-24h", "macmini", "24haowan", false)
 	connectNode(t, h, "m5-v", "macmini", "vincent", false)

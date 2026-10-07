@@ -767,8 +767,7 @@ admin is listed but read-only — it cannot be added as a user or removed. Every
 add, remove and refusal is a `hub_audit` row.
 
 The settings that used to be variables are in the database too, read through
-`Server.setting(key)` (the stored value, else — for one version — the old
-variable, else the default) and changed with `fleet hub set <key> <value>`
+`Server.setting(key)` (the stored value, else the default) and changed with `fleet hub set <key> <value>`
 (`PUT /v1/fleet/settings`); `fleet hub settings` lists what applies and where
 it comes from, `fleet hub unset <key>` goes back to the default. Every change
 is one `hub_audit` row: who, when, old → new.
@@ -776,19 +775,23 @@ is one `hub_audit` row: who, when, old → new.
 | key | default | replaces |
 |---|---|---|
 | `hub.public_meter` | on | — |
-| `hub.public_badges` | off | `--public-badges` |
+| `hub.public_badges` | off | `--public-badges` (no longer read, claude-fleet#2087) |
 | `pool.skip_pct` | 85 | a node's `FLEET_ACCOUNT_CEILING` (served at `/v1/fleet/client-settings` → `pool`) |
 | `pool.move_when_full` | off | a node's `FLEET_FAILOVER` (same) |
-| `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN` (`none` = no machines) |
+| `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN`, no longer read (`none` = no machines) |
 | `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
-| `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS` (`<id>` = a GitHub ID, `583231` or `gh:583231`; `none` = no login) |
+| `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS`, no longer read (`<id>` = a GitHub ID, `583231` or `gh:583231`; `none` = no login) |
 | `user.<GitHub ID>.lang` | — | the account's page language (claude-fleet#2033): `zh-CN` \| `en` |
 
-At start the hub copies each old value it was given into the database once
-(audited as `deploy`, marked `hub.legacy_migrated.<key>` so a value an admin
-clears later is not copied back) and logs a deprecation WARN; the next version
-stops reading the old variables. The CLI authenticates with
+The old flag and variables were copied into the database by the version
+that introduced the settings (claude-fleet#1986) and are **no longer read**
+(claude-fleet#2087): a deploy that still sets one changes nothing, and a
+machine login is someone's only while their hub_users row or a
+`user.<id>.machine_login` says so. The one old value still honoured is a set
+`CCQUOTA_FLEET_SPOT_IMAGE` meaning `fleet.spot` on, copied into the database
+once at start (audited as `deploy`, marked `hub.legacy_migrated.fleet.spot` so
+an admin's later clear is not copied back). The CLI authenticates with
 `CCQUOTA_VIEWER_TOKEN`, or `FLEET_HUB_SESSION` set to a signed-in admin's
 `ccq_sess` cookie — both read from the environment, never written down.
 
@@ -805,8 +808,8 @@ keeps, per (principal, machine), whether that login exists there:
 row, or null) and `accounts`.
 
 **Whose login is whose — the explicit map.** The setting
-`user.<GitHub ID>.machine_login` (claude-fleet#1986; for one version also
-`CCQUOTA_FLEET_PRINCIPAL_LOGINS=gh:2718137=verkyyi`) names the OS login that
+`user.<GitHub ID>.machine_login` (claude-fleet#1986 — `fleet users add
+<name> --machine-login <login>`, or `fleet hub set`) names the OS login that
 belongs to each person. At a mapped person's sign-in the hub records them under
 that login and **adopts** it (state `active`, op `adopt`) on every roster
 machine whose agent runs as that login — the roster is the evidence the login
@@ -815,8 +818,8 @@ in" and "machine joins" does not matter. Nothing is ever created for a mapped
 person, and no op is sent. A person **not** in the map leaves no row at all (no
 minted login name, no op) unless `fleet.auto_assign` below applies to
 them; the operator's `adopt` records them when there is somewhere to record them
-on. A malformed entry, a login outside `[a-z0-9]{2,16}` or one login claimed by
-two people refuses to start the hub. A mapped login may start with a digit; a
+on. A login outside `[a-z0-9]{2,16}` or one already someone else's is refused
+(400) when it is set. A mapped login may start with a digit; a
 login the hub *creates* still starts with a letter.
 
 **The placement runs at every door that needs the row, not only at sign-in**
@@ -842,8 +845,7 @@ only picks the login and display name, both re-validated there:
     create  ~/.claude/fleet/bin/fleet-login-new.sh <login> --full-name <name> --share-pool --apply
     remove  ~/.claude/fleet/bin/fleet-login-remove.sh <login> --keep-home --apply
 
-`fleet hub set fleet.auto_assign m4[,m5]` (roster hostnames; formerly
-`CCQUOTA_FLEET_AUTO_ASSIGN`) queues an *unmapped*
+`fleet hub set fleet.auto_assign m4[,m5]` (roster hostnames) queues an *unmapped*
 person's login on those machines at their first sign-in; anything else is the
 operator's `POST /v1/fleet/accounts` (`{"action":"assign|retry|remove|adopt|forget",
 "principal_id":…, "hostname":…, "login":… for adopt}`) — `adopt` records a
@@ -1762,7 +1764,7 @@ that re-fetches the badge every minute can pass the last value it showed.
 
 `/badge/u/<login>.json?format=raw` is the figure the embed polls:
 `{"tokens":…,"turns":…,"period":"30d"}`, never cached, behind the same
-`--public-badges` gate as everything else here.
+`hub.public_badges` gate as everything else here.
 
 **Publishing is up to you, and every route is serverless.** Which one works is
 decided by the content-type the host serves, so these were measured rather than
@@ -1796,7 +1798,7 @@ wrong for a week.
 
 ### Serving badges from your own hub
 
-`ccquota hub --public-badges` serves `/badge/u/<login>.svg` and
+`fleet hub set hub.public_badges on` makes the hub serve `/badge/u/<login>.svg` and
 `/badge/team/<team>.svg` (`?theme=dark|light|auto`, `?period=all|30d|7d`,
 `?size=full|compact`, `?style=tokenman|flat`, `?bg=transparent`, `?from=`,
 colour overrides; `.json` for shields data, `.json?format=raw` for the bare

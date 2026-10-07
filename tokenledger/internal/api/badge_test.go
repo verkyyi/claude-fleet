@@ -41,7 +41,11 @@ func badgeServer(t *testing.T, public bool) *Server {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	return &Server{Store: st, ViewerToken: "viewer-secret", PublicBadges: public}
+	s := &Server{Store: st, ViewerToken: "viewer-secret"}
+	if public {
+		setHubSetting(t, s, PublicBadgesKey, "on")
+	}
+	return s
 }
 
 func TestBadgeRoute_RendersSVG(t *testing.T) {
