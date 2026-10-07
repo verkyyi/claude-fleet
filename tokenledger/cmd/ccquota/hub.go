@@ -283,7 +283,7 @@ func runHub(args []string) error {
 			"an unprivileged process take :443 only on the wildcard address.\n"+
 			"The URL becomes https://<node>.<tailnet>.ts.net")
 	tlsHost := fs.String("tls-host", "", "the name to get a certificate for (default: detected from tailscale status)")
-	publicBadges := fs.Bool("public-badges", false,
+	publicBadges := fs.Bool("public-badges", false, // deprecated: the setting hub.public_badges (claude-fleet#1986)
 		"serve /badge/... without a viewer token.\n"+
 			"Needed for a README image, which sends no credential and is\n"+
 			"proxied through a cache that strips cookies. Off by default")
@@ -571,6 +571,21 @@ func runHub(args []string) error {
 		}
 	}
 	srv.MCP = mcp.Handler(srv)
+	// The settings an admin changes on the web (claude-fleet#1986): each old
+	// variable / flag above (--public-badges, CCQUOTA_FLEET_AUTO_ASSIGN,
+	// CCQUOTA_FLEET_PRINCIPAL_LOGINS, a SPOT image) is copied into the
+	// database once and read for this one version; the next drops them.
+	for _, v := range []string{"CCQUOTA_FLEET_AUTO_ASSIGN", "CCQUOTA_FLEET_PRINCIPAL_LOGINS"} {
+		if os.Getenv(v) != "" {
+			log.Printf("WARN %s is deprecated: copied into the hub's settings (fleet hub set / fleet users); remove it from the deploy", v)
+		}
+	}
+	if *publicBadges {
+		log.Printf("WARN --public-badges is deprecated: copied into the setting hub.public_badges; remove it from the deploy")
+	}
+	if err := srv.MigrateLegacySettings(time.Now()); err != nil {
+		log.Printf("WARN hub settings: copying the old variables: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -546,7 +546,7 @@ process, and they do not share a credential.
 | `POST /mcp` | the same viewer token again | the read tools, for an agent |
 | `/v1/ingest`, `/v1/ingest/repo`, `/v1/ingest/growth`, … | each shipper's own enrollment token | write: push usage, progress or the ledger |
 | `/share?token=…` | a share token from `ccquota share` | one redacted page |
-| `/badge/…`, `/embed/…` | nothing with `--public-badges`, the viewer token otherwise | one number, for a README |
+| `/badge/…`, `/embed/…` | nothing while the setting `hub.public_badges` is on, an admin's sign-in otherwise | one number, for a README |
 | `ccquota enroll / share / team / plan / name` | a shell on the hub machine | the only door that can change who gets in |
 
 That table is the software. The half it cannot tell you is *your* hub — whether
@@ -746,6 +746,46 @@ when its wall clock jumped past its monotonic one, or at start — it sends
 `leave` with `if_reason: sleep`, which never ends an operator's maintenance.
 No personal login = nothing changes (`TestPersonalUnsetAddsNothing`).
 
+### Who may sign in, and the hub's settings — no redeploy (claude-fleet#1986)
+
+The deploy names the **admins** (`CCQUOTA_GITHUB_ADMINS`) and nothing else
+about people. An admin adds and removes **users** on the hub, and they apply
+on the next request — no deploy file changes:
+
+    fleet users list
+    fleet users add alice [--machine-login alice]   # asks GitHub for alice's ID now and pins it
+    fleet users remove alice                        # next request refused; her devices revoked
+
+(`GET` / `POST {login, machine_login?}` / `DELETE ?login=` on `/v1/fleet/users`,
+admin only.) A name GitHub does not know is refused, never added; a deploy
+admin is listed but read-only — it cannot be added as a user or removed. Every
+add, remove and refusal is a `hub_audit` row.
+
+The settings that used to be variables are in the database too, read through
+`Server.setting(key)` (the stored value, else — for one version — the old
+variable, else the default) and changed with `fleet hub set <key> <value>`
+(`PUT /v1/fleet/settings`); `fleet hub settings` lists what applies and where
+it comes from, `fleet hub unset <key>` goes back to the default. Every change
+is one `hub_audit` row: who, when, old → new.
+
+| key | default | replaces |
+|---|---|---|
+| `hub.public_meter` | on | — |
+| `hub.public_badges` | off | `--public-badges` |
+| `pool.skip_pct` | 85 | a node's `FLEET_ACCOUNT_CEILING` (served at `/v1/fleet/client-settings` → `pool`) |
+| `pool.move_when_full` | off | a node's `FLEET_FAILOVER` (same) |
+| `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN` (`none` = no machines) |
+| `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
+| `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
+| `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS` (`<id>` = `gh:<GitHub ID>` or a WeCom userid; `none` = no login) |
+
+At start the hub copies each old value it was given into the database once
+(audited as `deploy`, marked `hub.legacy_migrated.<key>` so a value an admin
+clears later is not copied back) and logs a deprecation WARN; the next version
+stops reading the old variables. The CLI authenticates with
+`CCQUOTA_VIEWER_TOKEN`, or `FLEET_HUB_SESSION` set to a signed-in admin's
+`ccq_sess` cookie — both read from the environment, never written down.
+
 ### People and their logins — WeCom sign-in opens the account (claude-fleet#1411)
 
 With the fleet module on, a person signing in through WeCom (`/enter`) becomes
@@ -767,9 +807,10 @@ never an identity it opens accounts for. `/v1/fleet/me` says which it saw:
 before the hub has a row for them), `principal` (the row, or null) and
 `accounts`.
 
-**Whose login is whose — the explicit map.**
-`CCQUOTA_FLEET_PRINCIPAL_LOGINS=CaoJian=24haowan,YiLiangHui=verkyyi` names the
-OS login that belongs to each WeCom userid. At a mapped person's sign-in the
+**Whose login is whose — the explicit map.** The setting
+`user.<userid>.machine_login` (claude-fleet#1986; for one version also
+`CCQUOTA_FLEET_PRINCIPAL_LOGINS=CaoJian=24haowan,YiLiangHui=verkyyi`) names the
+OS login that belongs to each person. At a mapped person's sign-in the
 hub records them under that login and **adopts** it (state `active`, op
 `adopt`) on every roster machine whose agent runs as that login — the roster
 is the evidence the login exists there — and again at any later node hello,
@@ -815,7 +856,8 @@ only picks the login and display name, both re-validated there:
     create  ~/.claude/fleet/bin/fleet-login-new.sh <login> --full-name <name> --share-pool --apply
     remove  ~/.claude/fleet/bin/fleet-login-remove.sh <login> --keep-home --apply
 
-`CCQUOTA_FLEET_AUTO_ASSIGN=m4[,m5]` (roster hostnames) queues an *unmapped*
+`fleet hub set fleet.auto_assign m4[,m5]` (roster hostnames; formerly
+`CCQUOTA_FLEET_AUTO_ASSIGN`) queues an *unmapped*
 person's login on those machines at their first sign-in; anything else is the
 operator's `POST /v1/fleet/accounts` (`{"action":"assign|retry|remove|adopt|forget",
 "principal_id":…, "hostname":…, "login":… for adopt}`) — `adopt` records a

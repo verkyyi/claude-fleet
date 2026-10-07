@@ -151,6 +151,9 @@ func (g *GitHubAuth) sessionKey() string {
 
 // isAdminName reports whether login is one of CCQUOTA_GITHUB_ADMINS.
 func (g *GitHubAuth) isAdminName(login string) bool {
+	if g == nil {
+		return false
+	}
 	for _, a := range g.Admins {
 		if strings.EqualFold(strings.TrimSpace(a), login) {
 			return true
@@ -203,7 +206,7 @@ func roleOf(ctx context.Context) string {
 // "" when neither — refused. A hub_users row saying admin for an ID the
 // deploy no longer names grants nothing: the deploy decides who is admin.
 func (s *Server) githubRole(id int64) (string, error) {
-	for _, name := range s.GitHub.Admins {
+	for _, name := range s.githubAdmins() {
 		pinned, ok, err := s.Store.PinnedID(name)
 		if err != nil {
 			return "", err
@@ -414,8 +417,8 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		Secure:   isHTTPS(r),
 		MaxAge:   int(s.GitHub.ttl().Seconds()),
 	})
-	// The same placement a WeCom sign-in runs: CCQUOTA_FLEET_PRINCIPAL_LOGINS
-	// may name gh:<id> until C4 moves the map into the database.
+	// The same placement a WeCom sign-in runs: the machine login an admin set
+	// for them (claude-fleet#1986), adopted on every machine that runs it.
 	s.onPrincipalSignIn(principal, login)
 	// A `fleet login` code scanned while signed out comes back to its
 	// confirmation page; everything else goes to "/".
@@ -597,7 +600,12 @@ func (s *Server) githubLookup(ctx context.Context, name string) (int64, string, 
 }
 
 func (s *Server) githubUser(ctx context.Context, path, token string) (int64, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.GitHub.apiBase()+path, nil)
+	g := s.GitHub
+	if g == nil {
+		// The people list without GitHub sign-in configured: github.com.
+		g = &GitHubAuth{}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.apiBase()+path, nil)
 	if err != nil {
 		return 0, "", err
 	}
@@ -607,7 +615,7 @@ func (s *Server) githubUser(ctx context.Context, path, token string) (int64, str
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := s.GitHub.client().Do(req)
+	resp, err := g.client().Do(req)
 	if err != nil {
 		return 0, "", fmt.Errorf("GET %s: %w", path, err)
 	}

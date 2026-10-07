@@ -42,7 +42,9 @@ type Server struct {
 	// logged with who made it.
 	LogWriter func(line string)
 
-	// PublicBadges serves /badge/... without a viewer token, so an internal
+	// PublicBadges is --public-badges, the old switch: read for one version
+	// as hub.public_badges's value when the setting is unset
+	// (claude-fleet#1986). PublicBadges serves /badge/... without a viewer token, so an internal
 	// README can actually render one (a README image sends no credential, and
 	// camo strips cookies). Off by default: an operator who upgrades must not
 	// silently start serving without auth.
@@ -122,6 +124,9 @@ type Server struct {
 	// (CCQUOTA_FLEET_AUTO_ASSIGN). Empty means accounts are only ever opened
 	// by an explicit assignment. A person in FleetPrincipalLogins is never
 	// auto-assigned: their login already exists, and is adopted instead.
+	// The old variable: since claude-fleet#1986 the setting fleet.auto_assign
+	// decides (Server.autoAssign); this is read for one version when it is
+	// unset.
 	FleetAutoAssign []string
 
 	// FleetPrincipalLogins maps a person (WeCom userid, the ticket's `uid`)
@@ -134,6 +139,9 @@ type Server struct {
 	// map is not in use. Keys are matched to the userid case-insensitively
 	// (mappedLoginFor, claude-fleet#1472): WeCom's are, and `YiLiangHui` in
 	// the directory is `yilianghui` as the operator typed it.
+	// The old variable: since claude-fleet#1986 user.<id>.machine_login
+	// decides (Server.principalLogins); an entry here applies for one version
+	// to a person the settings do not name.
 	FleetPrincipalLogins map[string]string
 
 	// FleetPersonScopes is the grant a person signed in through WeCom holds
@@ -299,6 +307,9 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/signin", s.handleSignin)
 	mux.HandleFunc("/auth/github/start", s.handleGitHubStart)
 	mux.HandleFunc("/auth/github/callback", s.handleGitHubCallback)
+	// Who may sign in with GitHub (claude-fleet#1986): the admin's, with or
+	// without the fleet module.
+	mux.Handle("/v1/fleet/users", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetUsers))))
 
 	if s.Fleet {
 		// The control channel authenticates per endpoint, like ingest.
@@ -518,13 +529,18 @@ func (s *Server) routes() *routeMux {
 	// The live embed exposes exactly what a badge does, so it shares the gate.
 	badges.HandleFunc("/embed/u/", s.serveEmbed)
 	badges.HandleFunc("/embed/team/", s.serveEmbed)
-	if s.PublicBadges {
-		mux.Handle("/badge/", badges)
-		mux.Handle("/embed/", badges)
-	} else {
-		mux.Handle("/badge/", s.viewerOnly(s.adminOnly(badges)))
-		mux.Handle("/embed/", s.viewerOnly(s.adminOnly(badges)))
-	}
+	// hub.public_badges (claude-fleet#1986) is read per request, so an
+	// admin's switch applies at once.
+	gatedBadges := s.viewerOnly(s.adminOnly(badges))
+	badgeGate := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.publicBadges() {
+			badges.ServeHTTP(w, r)
+			return
+		}
+		gatedBadges.ServeHTTP(w, r)
+	})
+	mux.Handle("/badge/", badgeGate)
+	mux.Handle("/embed/", badgeGate)
 
 	// The public counter (claude-fleet#1988): the hub's one lifetime total,
 	// readable by anyone while hub.public_meter is on, so 24haowan.com's

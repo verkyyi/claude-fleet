@@ -46,6 +46,8 @@ var routeAccess = map[string]string{
 	"/enter": accessPublic, "/logout": accessPublic, "/signin": accessPublic,
 	"/auth/github/start": accessPublic, "/auth/github/callback": accessPublic,
 	"/healthz": accessPublic, "/version": accessPublic,
+	// The public counter (claude-fleet#1988), off with hub.public_meter.
+	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
 	"/install": accessPublic, "/install/": accessPublic,
 	"/v1/fleet/ssh-ca.pub":  accessPublic,
 	"/v1/fleet/login/start": accessPublic, "/v1/fleet/login/poll": accessPublic,
@@ -81,7 +83,7 @@ var routeAccess = map[string]string{
 	// audits, settings, the operator's own analytics.
 	"/v1/fleet/join-codes": accessAdmin, "/v1/fleet/peer-certs": accessAdmin,
 	"/v1/fleet/spot":     accessAdmin,
-	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin,
+	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/users": accessAdmin,
 	"/v1/fleet/credentials": accessAdmin, "/v1/fleet/credentials/revoke": accessAdmin,
 	"/v1/fleet/credentials/audit": accessAdmin, "/credentials": accessAdmin,
 	"/v1/fleet/ssh-relays": accessAdmin,

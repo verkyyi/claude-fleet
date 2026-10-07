@@ -96,10 +96,11 @@ func (s *Server) isFleetAdmin(osUser string) bool {
 //
 // Three cases, in this order (claude-fleet#1458):
 //
-//   - mapped (FleetPrincipalLogins): the person is recorded under THAT login
+//   - mapped (user.<id>.machine_login, claude-fleet#1986 — for one version
+//     also CCQUOTA_FLEET_PRINCIPAL_LOGINS): the person is recorded under THAT login
 //     — a login already on the machines, never minted — and it is adopted
 //     wherever the roster shows an agent running as it. No op is ever sent.
-//   - auto-assign (FleetAutoAssign, claude-fleet#1411): a login is minted and
+//   - auto-assign (fleet.auto_assign, claude-fleet#1411): a login is minted and
 //     queued for creation on those machines, as before.
 //   - neither: nothing. Not even a principal row — a row mints a login name,
 //     and AdoptPrincipal refuses to change one later, so a row for a person
@@ -121,7 +122,8 @@ func (s *Server) onPrincipalSignIn(principal, displayName string) {
 		s.adoptMappedLogins(now)
 		return
 	}
-	if len(s.FleetAutoAssign) == 0 {
+	hosts := s.autoAssign()
+	if len(hosts) == 0 {
 		return
 	}
 	p, err := s.Store.EnsurePrincipal(principal, displayName, control.MaxLoginLen, control.ValidLogin, now)
@@ -130,7 +132,7 @@ func (s *Server) onPrincipalSignIn(principal, displayName string) {
 		return
 	}
 	queued := false
-	for _, host := range s.FleetAutoAssign {
+	for _, host := range hosts {
 		created, err := s.Store.RequestAccount(p, host, false, now)
 		if err != nil {
 			log.Printf("fleet: queue %s on %s: %v", p.Login, host, err)
@@ -169,7 +171,9 @@ func (s *Server) ensurePerson(r *http.Request) string {
 	return pid
 }
 
-// mappedLoginFor is the login FleetPrincipalLogins names for principal.
+// mappedLoginFor is the machine login on record for principal: a GitHub
+// person's hub_users row, else user.<id>.machine_login, else (one version)
+// CCQUOTA_FLEET_PRINCIPAL_LOGINS (claude-fleet#1986).
 //
 // The comparison folds case (claude-fleet#1472): a WeCom userid is
 // case-insensitive — the directory lists `YiLiangHui`, the ticket carries it
@@ -177,7 +181,12 @@ func (s *Server) ensurePerson(r *http.Request) string {
 // — so the two spellings are one person here, whichever way the map and the
 // ticket happen to disagree. The map is a handful of entries; a scan is fine.
 func (s *Server) mappedLoginFor(principal string) (string, bool) {
-	for pid, login := range s.FleetPrincipalLogins {
+	if id, ok := githubIDOf(principal); ok && s.Store != nil {
+		if u, err := s.Store.HubUserByID(id); err == nil && u != nil && u.MachineLogin != "" {
+			return u.MachineLogin, true
+		}
+	}
+	for pid, login := range s.principalLogins() {
 		if strings.EqualFold(pid, principal) {
 			return login, true
 		}
@@ -185,17 +194,12 @@ func (s *Server) mappedLoginFor(principal string) (string, bool) {
 	return "", false
 }
 
-// mappedLogin reports whether login is anyone's in FleetPrincipalLogins.
+// mappedLogin reports whether login is anyone's on record.
 func (s *Server) mappedLogin(login string) bool {
 	if login == "" {
 		return false
 	}
-	for _, l := range s.FleetPrincipalLogins {
-		if l == login {
-			return true
-		}
-	}
-	return false
+	return s.machineLoginOwner(login) != ""
 }
 
 // adoptMappedLogins records, for every mapped person the hub already knows,
@@ -212,7 +216,7 @@ func (s *Server) mappedLogin(login string) bool {
 // and the map may spell it any way (claude-fleet#1472). A mapped person with
 // no row yet has not signed in; nothing to adopt for them until they do.
 func (s *Server) adoptMappedLogins(now time.Time) {
-	if !s.Fleet || len(s.FleetPrincipalLogins) == 0 {
+	if !s.Fleet {
 		return
 	}
 	nodes, err := s.Store.Nodes()
