@@ -249,7 +249,17 @@ func (s *Server) dispatchRelays(endpointID string) {
 		}
 	}
 	c := s.nodes.get(endpointID)
-	if c == nil || !c.canRelay {
+	if c == nil {
+		// Held by another replica (claude-fleet#2124): it pushes them now
+		// rather than at the node's next beat.
+		if peer, ok := s.peerOf(context.Background(), endpointID); ok && peer.HasCap(control.CapRelay) {
+			if _, err := s.forward(context.Background(), peer, nodeForward{Kind: "relays", Endpoint: endpointID}, 5*time.Second); err != nil {
+				log.Printf("fleet relay: hand %s's relays to replica %s: %v (its next beat sends them)", endpointID, peer.Replica, err)
+			}
+		}
+		return
+	}
+	if !c.canRelay {
 		return
 	}
 	rels, err := s.Store.PendingFleetRelays(endpointID)

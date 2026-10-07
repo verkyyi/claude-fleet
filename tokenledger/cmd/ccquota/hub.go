@@ -250,6 +250,23 @@ func envOrFile(name string) (string, error) {
 	return v, nil
 }
 
+// replicaConfig reads CCQUOTA_REPLICA (this replica's name — the pod name),
+// CCQUOTA_REPLICA_URL (where the other replicas reach this one, in-cluster) and
+// CCQUOTA_REPLICA_TOKEN[_FILE] (their shared token, from a k8s Secret). None
+// set: a single hub. Some but not all: refused (claude-fleet#2124).
+func replicaConfig(srv *api.Server) error {
+	tok, err := envOrFile("CCQUOTA_REPLICA_TOKEN")
+	if err != nil {
+		return err
+	}
+	r, err := api.ParseReplica(os.Getenv, tok)
+	if err != nil {
+		return err
+	}
+	srv.Replica = r
+	return nil
+}
+
 // loadSessionCreds wires session passes for untrusted machines
 // (claude-fleet#1969): CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE] is the signing
 // key (its own k8s Secret, never the database);
@@ -548,6 +565,12 @@ func runHub(args []string) error {
 		if err := fleetRefreshVia(srv, vault); err != nil {
 			return err
 		}
+		// One of several replicas behind one address (claude-fleet#2124):
+		// a node call for a link another replica holds is handed to it.
+		// Unset: a single hub, nothing forwarded and no table written.
+		if err := replicaConfig(srv); err != nil {
+			return err
+		}
 		// SPOT nodes (claude-fleet#1428): on only with an image to run.
 		// A configured image whose cluster cannot be reached refuses to
 		// start rather than run a hub that silently never scales.
@@ -577,6 +600,9 @@ func runHub(args []string) error {
 		// listeners, the background loops) is not configuration.
 		fmt.Fprintf(os.Stdout, "check: ok — %s migrated and every startup setting read; this image may be switched to\n", dbFile)
 		return nil
+	}
+	if err := srv.StartReplica(); err != nil {
+		return err
 	}
 	if err := srv.MigrateLegacySettings(time.Now()); err != nil {
 		log.Printf("WARN hub settings: copying the old variables: %v", err)
