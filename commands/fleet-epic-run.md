@@ -74,8 +74,17 @@ that dies at the boundary. Therefore:
 
   ```sh
   bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh <N> --tick <n> --repo "$FLEET_REPO" \
-    --landed <k> --members <m>
+    --landed <k> --members <m> --live <l> --inflight <p>
   ```
+
+  `<l>` is how many member sessions were alive at the LAST tick's read (a member
+  window still open, running or waiting), `<p>` how many member PRs were open and
+  not yet merged (issue #2247). They decide whether this batch holds the
+  machine's upgrade: a mark stamped `--live 0 --inflight 0` — the batch is only
+  waiting on the operator — does NOT hold install-sync, so an idle batch never
+  keeps the machine on an old version. Leave both off and the mark holds as it
+  always did. Never stamp `0 0` while a member is running or a PR is in flight:
+  that is exactly what lets the floor move under the batch.
 
   `<m>` is the charter's Core count, `<k>` how many of them are merged — as of
   the LAST tick's read (the first tick: `--landed 0`, or leave both off). They
@@ -95,6 +104,9 @@ that dies at the boundary. Therefore:
   under a batch that is still merging onto it. A lease, not a lock — fresh for
   45 min, past the longest planned gap in step 3 — so a loop that dies without
   its closing tick holds nothing forever; the closing tick clears it (step 4).
+  And capped: one mark holds the same stable at most 2 hours
+  (`FLEET_EPIC_HOLD_CAP_SECS`); past it install-sync switches anyway and leaves
+  a note on this EPIC saying who, when and from which version to which.
 - **Each tick begins by re-reading the EPIC** — the parent body (the charter), the
   sub-issue list and their states, and each member repo's open PRs. Never carry
   a plan from the previous tick.

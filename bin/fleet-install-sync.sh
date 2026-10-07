@@ -59,9 +59,18 @@
 #              version is a new checkout. `deferred_since` keeps the first
 #              deferral's time so the doctor (C7 #1123) can say "waiting 26h".
 #              Busy windows no longer defer (#1894); a fresh EPIC mark — any
-#              batch on this login, fleet_epic_running_fresh — does (#953,
-#              #2062), before the switch: the loop's pane and its workers are
-#              idle between ticks, so no busy gate can see a batch.
+#              batch on this login — does (#953, #2062), before the switch: the
+#              loop's pane and its workers are idle between ticks, so no busy
+#              gate can see a batch. Only a batch WITH WORK holds it (issue
+#              #2247, fleet_epic_holding): a mark stamped live 0 + inflight 0 is
+#              idle and switched under; a mark with no such reading (an older
+#              loop) still holds. And a hold is CAPPED: one mark holding the same
+#              stable longer than FLEET_EPIC_HOLD_CAP_SECS (7200 = 2h) is
+#              released — the tick goes on, and ONE record-only comment on that
+#              EPIC says who, when and from which version to which
+#              ($STATE_DIR/epic-hold.d/<mark> keeps since / stable / released).
+#              The state's `epic:` line says which kind: holding (有活·封顶前),
+#              released (已放行), idle (空转，不挡) or `-`.
 #   switched   the new version checked out beside the old one
 #              (`git worktree add` → fleet.versions/<stable>/), checked (every
 #              bin/*.sh parses with `bash -n`, every bin/ + hooks/ *.py
@@ -134,6 +143,7 @@
 #         none|off|check-failed>|-  node_reason: <text>|-
 #   node_failed_at: <epoch>|-  node_fail_stable: <sha>|-  node_notified: <key>|-
 #   team: <fleet-agent-team.py's last line>|-
+#   epic: <holding|released|idle …: what the EPIC gate saw this tick>|-
 # Log: $ROOT/logs/install-sync.log, ONE line per tick —
 #   <UTC> <result> <from>..<to> <reason>
 # — plus ONE `node-<node result>` line in the same shape when the agent step
@@ -184,6 +194,9 @@ LOCK_TTL=3600   # an apply + two doctor runs take well under a minute; older = a
 STUCK_SECS="${FLEET_INSTALL_FOLLOW_STUCK_SECS:-86400}"
 case "$STUCK_SECS" in ''|*[!0-9]*) STUCK_SECS=86400 ;; esac
 NOTIFY_BUDGET=30   # a notifier that hangs must not hold the tick lock
+# One EPIC mark holds the same stable at most this long (issue #2247).
+HOLD_CAP="${FLEET_EPIC_HOLD_CAP_SECS:-7200}"
+case "$HOLD_CAP" in ''|*[!0-9]*) HOLD_CAP=7200 ;; esac
 # A failed agent upgrade is not retried on the same stable for this long (#1723).
 NODE_RETRY="${FLEET_NODE_FOLLOW_RETRY_SECS:-21600}"
 case "$NODE_RETRY" in ''|*[!0-9]*) NODE_RETRY=21600 ;; esac
@@ -216,6 +229,7 @@ case "$VKEEP" in ''|*[!0-9]*) VKEEP=604800 ;; esac
 CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 STATE_DIR="$CONF_DIR/global"
 STATE="$STATE_DIR/install-sync.state"
+HOLDD="$STATE_DIR/epic-hold.d"
 LOCK="$STATE_DIR/install-sync.lock"
 LOGF="$ROOT/logs/install-sync.log"
 
@@ -259,6 +273,7 @@ write_state() { # $1 result $2 reason
     printf 'node_fail_stable: %s\n' "${NODE_FAIL_STABLE:--}"
     printf 'node_notified: %s\n' "${NODE_NOTIFIED:--}"
     printf 'team: %s\n' "${TEAM:--}"
+    printf 'epic: %s\n' "${EPIC_NOTE:--}"
   } > "$tmp" 2>/dev/null && mv -f "$tmp" "$STATE" 2>/dev/null
   rm -f "$tmp" 2>/dev/null
 }
@@ -381,7 +396,7 @@ node_follow() {
   # does — and a fresh EPIC mark stops the switch itself above (#2062), so this
   # read only matters on a `current` tick.
   local epic busy
-  if epic=$(fleet_epic_running_fresh 2>/dev/null); then
+  if epic=$(epic_holding_now); then
     NODE=deferred; NODE_REASON="EPIC batch running ($epic) — the agent waits for the closing tick"; node_log; return 0
   fi
   busy=$(busy_fleets | tr '\n' ' ')
@@ -439,6 +454,103 @@ team_follow() {
     0:*) ;;
     *) log_line team-failed "$TEAM" ;;
   esac
+}
+
+# --- the EPIC gate (issues #953, #2062, #2247) ---------------------------------------
+# epic_gate — sets EPIC_HOLD (what holds this tick, `; `-joined; '' = nothing)
+# and EPIC_NOTE (the state's `epic:` line). fleet_epic_holding classifies every
+# fresh mark: `idle` never holds; `active` holds until it has held THIS stable for
+# HOLD_CAP seconds, then it is released — once, with one comment on its EPIC.
+# The clock is $HOLDD/<mark name>: `since:` (first tick it held), `stable:` (the
+# version it held back — a new stable starts a new clock), `released:`. A mark
+# that is not active this tick loses its file: the hold has to be continuous.
+hold_get() { sed -n "s/^$2: //p" "$HOLDD/$1" 2>/dev/null | head -1; }
+epic_gate() {
+  EPIC_HOLD='' EPIC_NOTE=''
+  local rows kind f out key since st rel held keep='' notes=''
+  rows=$(fleet_epic_holding 2>/dev/null)
+  while IFS='	' read -r kind f out; do
+    [ -n "$f" ] || continue
+    key=${f##*/}
+    if [ "$kind" = idle ]; then notes="$notes; idle (空转，不挡) $out"; continue; fi
+    keep="$keep $key "
+    since=$(hold_get "$key" since); st=$(hold_get "$key" stable); rel=$(hold_get "$key" released)
+    case "$since" in ''|*[!0-9]*) since='' ;; esac
+    if [ -z "$since" ] || [ "$st" != "$STABLE_SHA" ]; then since=$(now); rel=''; fi
+    held=$(( $(now) - since ))
+    if [ "$rel" != "$STABLE_SHA" ] && [ "$held" -ge "$HOLD_CAP" ]; then
+      epic_release "$f" "$out" "$held"; rel="$STABLE_SHA"
+    fi
+    hold_put "$key" "$since" "$rel"
+    if [ "$rel" = "$STABLE_SHA" ]; then
+      notes="$notes; released (已放行：挡满 $((HOLD_CAP / 60))m 封顶) $out"
+    else
+      EPIC_HOLD="${EPIC_HOLD:+$EPIC_HOLD; }$out held=$((held / 60))m/$((HOLD_CAP / 60))m"
+      notes="$notes; holding (有活·封顶前 $((held / 60))m/$((HOLD_CAP / 60))m) $out"
+    fi
+  done <<EOF_ROWS
+$rows
+EOF_ROWS
+  hold_prune "$keep"
+  EPIC_NOTE=${notes#; }
+}
+# hold_put <key> <since> <released> — the clock, atomically (not under --dry-run).
+hold_put() {
+  [ "$DRY" = 1 ] && return 0
+  [ -d "$HOLDD" ] || mkdir -p "$HOLDD" 2>/dev/null || return 0
+  printf 'since: %s\nstable: %s\nreleased: %s\n' "$2" "$STABLE_SHA" "${3:--}" > "$HOLDD/$1.tmp.$$" 2>/dev/null \
+    && mv -f "$HOLDD/$1.tmp.$$" "$HOLDD/$1" 2>/dev/null
+  rm -f "$HOLDD/$1.tmp.$$" 2>/dev/null
+}
+# hold_prune "<keys>" — drop every clock whose mark is not holding this tick.
+hold_prune() {
+  [ "$DRY" = 1 ] && return 0
+  local c n
+  for c in "$HOLDD"/*; do
+    [ -f "$c" ] || continue
+    n=${c##*/}
+    case "$1" in *" $n "*) ;; *) rm -f "$c" ;; esac
+  done
+}
+# epic_release <mark> <its line> <held secs> — the cap fired: say so on the EPIC
+# (record-only, the daemon posts as `fleet`), one log line. Never under --dry-run.
+# A comment that cannot be posted is logged; the release stands either way — a
+# hub that cannot be reached must not hold the install forever.
+epic_release() {
+  local n r body cmd rc bf
+  n=$(sed -n 's/^epic: //p' "$1" 2>/dev/null | head -1); r=$(sed -n 's/^repo: //p' "$1" 2>/dev/null | head -1)
+  if [ "$DRY" = 1 ]; then printf 'epic: would release %s after %sm (cap %sm) and note it on #%s\n' "$2" "$(($3 / 60))" "$((HOLD_CAP / 60))" "${n:-?}"; return 0; fi
+  say "epic: releasing $2 — held $(short "$HEAD_SHA")..$(short "$STABLE_SHA") for $(($3 / 60))m (cap $((HOLD_CAP / 60))m)"
+  printf '%s epic-released %s..%s %s held=%ss cap=%ss\n' "$(utc)" "$(short "$HEAD_SHA")" "$(short "$STABLE_SHA")" "$2" "$3" "$HOLD_CAP" >> "$LOGF" 2>/dev/null
+  case "$n" in ''|*[!0-9]*) return 0 ;; esac
+  case "$r" in */*) ;; *) say "epic: #$n's mark names no repo — no comment"; return 0 ;; esac
+  body="⏱ install-sync 放行：本批次的心跳已连续挡住 **${LOGIN}@${HOST}** 的升级 $(($3 / 60)) 分钟（封顶 $((HOLD_CAP / 60)) 分钟，\`FLEET_EPIC_HOLD_CAP_SECS\`），$(utc) 起照常切换 \`$(short "$HEAD_SHA")\` → \`$(short "$STABLE_SHA")\`（stable）。
+
+批次之后的成员与 \`/fleet-epic-run\` 正文都在新版本上跑。心跳写上 \`--live 0 --inflight 0\` 的空转批次本来就不挡（#2247）。"
+  cmd="${FLEET_EPIC_HOLD_NOTE_CMD:-bash $BIN/fleet-comment.sh}"
+  # a file, not stdin: fleet_timebox runs the command in the background, where
+  # a non-interactive shell hands it /dev/null for stdin
+  bf=$(mktemp "${TMPDIR:-/tmp}/fleet-epic-release.XXXXXX") || { say "epic: no temp file — no comment on $r#$n"; return 0; }
+  printf '%s\n' "$body" > "$bf"
+  # shellcheck disable=SC2086  # a command line, split on purpose
+  fleet_timebox "$NOTIFY_BUDGET" $cmd "$n" --repo "$r" --note --from fleet --body-file "$bf" >/dev/null 2>&1 </dev/null; rc=$?
+  rm -f "$bf"
+  [ "$rc" = 0 ] || say "epic: could not note the release on $r#$n (exit $rc) — released anyway"
+}
+# epic_holding_now — the node half's read on a `current` tick: every active mark
+# that has not been released for the stable it held (rc 0 + their lines).
+epic_holding_now() {
+  local rows kind f out key hold=''
+  rows=$(fleet_epic_holding 2>/dev/null)
+  while IFS='	' read -r kind f out; do
+    [ "$kind" = active ] || continue
+    key=${f##*/}
+    [ -n "$(hold_get "$key" released | sed '/^-$/d')" ] && continue
+    hold="${hold:+$hold; }$out"
+  done <<EOF_ROWS
+$rows
+EOF_ROWS
+  [ -n "$hold" ] && printf '%s' "$hold"
 }
 
 # finish <result> <reason> [why] — notify if newly stuck, record, log, leave.
@@ -625,7 +737,7 @@ run_apply() { # $1 from $2 to → APPLY_LINE + rc; transcript to stderr
 
 main() {
   HEAD_SHA='' STABLE_SHA='' FROM='' TO='' DEFERRED_SINCE='' SKIP='' APPLY_LINE='' NOTIFIED='' NOTIFIED_AT=''
-  NODE='' NODE_REASON='' NODE_FAILED_AT='' NODE_FAIL_STABLE='' NODE_NOTIFIED=''
+  NODE='' NODE_REASON='' NODE_FAILED_AT='' NODE_FAIL_STABLE='' NODE_NOTIFIED='' EPIC_NOTE=''
   TEAM=$(state_get team); [ "$TEAM" = - ] && TEAM=''
 
   if [ "$STATUS" = 1 ]; then
@@ -745,10 +857,12 @@ main() {
   # changes what its later members and its skill text run on (2026-10-07: EPIC
   # #1935's last member ran on a new floor). Every fresh batch is named, so the
   # log line shows who is holding the install.
+  # Only a batch with work holds it, and only up to the cap (issue #2247).
   local epic
-  if epic=$(fleet_epic_running_fresh 2>/dev/null); then
+  epic_gate
+  if [ -n "$EPIC_HOLD" ]; then
     [ -n "$DEFERRED_SINCE" ] || DEFERRED_SINCE=$(now)
-    finish deferred "EPIC batch running on this login ($epic) — not switching the floor under a running batch (issues #953, #2062); each loop clears its own mark at its closing tick (fleet-epic-heartbeat.sh --clear <N>), else it expires"
+    finish deferred "EPIC batch running on this login ($EPIC_HOLD) — not switching the floor under a running batch (issues #953, #2062); each loop clears its own mark at its closing tick (fleet-epic-heartbeat.sh --clear <N>), else it expires; a batch with no live member and nothing in flight does not hold, and no batch holds longer than $((HOLD_CAP / 60))m (#2247)"
   fi
 
   # --- the disk gate (busy windows no longer wait, #1894) ------------------------------

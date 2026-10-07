@@ -39,7 +39,7 @@ ROLE = "_fleetcred" if sys.platform == "darwin" else "fleetcred"
 CRED_KEYS = re.compile(r"^(FLEET_CRED_(PROXY_PORT|PROXY_TTL|PROXY_SWITCH_SECS|PROXY_TIMEOUT|PROXY_TRUST_SECS|"
                        r"RELAY_URL|RELAY_TOKEN|CENTRAL_URL|ANTHROPIC_URL|CODEX_URL)|FLEET_HUB_URL|"
                        r"FLEET_PROBE_FORCE_UNREACHABLE)$")
-LOGIN_RE = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
+LOGIN_RE = re.compile(r"^[a-z0-9_][a-z0-9_.-]{0,31}$")
 
 
 def die(msg, rc=1):

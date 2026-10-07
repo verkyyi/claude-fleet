@@ -24,7 +24,9 @@ key_repo_split() { # <key> → sets krepo (hosted owner/name, or empty) + kbare
 # mid-turn is already `working`, and a Codex agent has no cheap answer (its
 # column stays empty — the hub then knows what it knew before).
 workers_busy() {
-  local sock="$1" s="$2" wid ppid st loop agent cands='' pairs
+  local sock="$1" s="$2" wid ppid st loop agent cands='' pairs lf=()
+  # $3 (issue #2237): one window id — the same read, scoped to it.
+  [ -n "${3:-}" ] && lf=(-f "#{==:#{window_id},$3}")
   # US-separated: a TAB is IFS whitespace, so `read` would collapse an empty @loop
   while IFS=$'\037' read -r wid ppid st loop agent; do
     [ -n "$wid" ] || continue
@@ -34,7 +36,7 @@ workers_busy() {
       printf '%s looping\n' "$wid"; continue
     fi
     [ "$agent" = codex ] || [ -z "$ppid" ] || cands="$cands $wid:$ppid"
-  done < <(tmux -u -L "$sock" list-windows -t "=$s" \
+  done < <(tmux -u -L "$sock" list-windows -t "=$s" ${lf[@]+"${lf[@]}"} \
              -F $'#{window_id}\037#{pane_pid}\037#{@claude_state}\037#{@loop}\037#{@cc_agent}' 2>/dev/null)
   [ -n "$cands" ] || return 0
   # `<pane pid> <claude pid>` pairs, then: does that Claude have a Bash-tool
@@ -42,9 +44,11 @@ workers_busy() {
   # shellcheck disable=SC2046,SC2086  # the pane pids are one word each
   pairs=$(fleet_pane_claude_pids $(printf '%s\n' $cands | sed 's/^.*://')) || pairs=''
   [ -n "$pairs" ] || return 0
-  ps -axo ppid=,command= 2>/dev/null | awk -v cands="$cands" -v pairs="$pairs" '
+  # The pairs ride the environment, not -v: BSD awk refuses a newline in a -v
+  # value ("newline in string") and printed nothing — no `bg` on any Mac.
+  ps -axo ppid=,command= 2>/dev/null | WB_PAIRS="$pairs" awk -v cands="$cands" '
     BEGIN {
-      n = split(pairs, pl, "\n")
+      n = split(ENVIRON["WB_PAIRS"], pl, "\n")
       for (i = 1; i <= n; i++) { split(pl[i], f, " "); cl[f[1]] = f[2] }
     }
     index($0, "/shell-snapshots/snapshot-") { bg[$1] = 1 }
@@ -84,6 +88,12 @@ case "$mode" in
     ;;
   workers)
     sock=$(fleet_socket "$sess")
+    # $3 (issue #2237): one window id — the rows of that window only, by the same
+    # reads (a start's post-condition check: the whole fleet's took 3.5 s at 30
+    # windows, between a window opening and the operation saying so). Nothing
+    # else differs; no $3 is byte for byte the whole list.
+    one=''; lwf=()
+    case "${3:-}" in @[0-9]*) case "${3#@}" in *[!0-9]*) ;; *) one=$3; lwf=(-f "#{==:#{window_id},$one}") ;; esac ;; esac
     if ! failure=$(tmux -L "$sock" has-session -t "=$sess" 2>&1); then
       case "$failure" in
         *'no server running'*|*'No such file or directory'*|*"can't find session"*) exit 3 ;;
@@ -115,7 +125,7 @@ case "$mode" in
     # another machine reads it off the hub (a worker mid-acceptance owns its
     # merge, #921). Always present and always `busy=`-prefixed, so a window name
     # holding a tab can never pass for it.
-    rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}$xfmt") || exit 1
+    rows=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F "$fmt#{@repo}$xfmt") || exit 1
     unk='?'; [ -z "$(fleet_repos "$sess")" ] && unk=''
     rows=$(while IFS= read -r row; do
       [ -n "$row" ] || continue
@@ -127,7 +137,7 @@ case "$mode" in
       [ -n "$r" ] || r=$(fleet_window_repo "$sess" "${row%%$'\t'*}")
       printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$row" "${r:-$unk}" "$nm" "$ow" "$nd" "$fi"
     done <<<"$rows")
-    busy=$(workers_busy "$sock" "$sess")
+    busy=$(workers_busy "$sock" "$sess" "$one")
     # Two fills (issue #1749), so every session the operator's own list shows is
     # one the other machines see too:
     # - an empty @worktree takes the pane cwd when — and only when — its basename
@@ -188,7 +198,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     estale=''
     while IFS=$'\t' read -r _sr _sn _sa _st; do
@@ -414,12 +424,14 @@ case "$mode" in
       printf '%s\n' "$url"
       num="${url##*/}"; num="${num//[^0-9]/}"
       [ -n "$num" ] || { printf 'start: the filed issue has no number: %s\n' "$url" >&2; exit 1; }
-      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"}
+      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"}
       rc=$?
       [ "$rc" = 0 ] || printf 'start: filed #%s but its session did not open — it is on the backlog\n' "$num" >&2
       exit "$rc"
     fi
-    exec bash "$BIN/dash-issue-session.sh" "$num" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"}
+    # --print (issue #2237): the window it opened, last on stdout — the controller
+    # reads that one window's row back instead of the whole fleet's.
+    exec bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"}
     ;;
   # --- worker lifecycle by DURABLE key (issue #834) ---------------------------
   # $3 is issue-<N> / scratch-<N>; the window is re-resolved on the fleet at

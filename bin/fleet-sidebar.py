@@ -1186,7 +1186,7 @@ def place_job(plan, rows, env):
     if plan.get("verb") == "compose":
         # The writing area's one way out (issue #1953): fleet-compose.py --send,
         # which says fleet-client-place.sh's line and code as they are.
-        how = {"none": ["--no-repo"], "multi": ["--multi"]}.get(plan.get("repo_mode", ""), ["--repo", plan["repo"]])
+        how = ["--no-repo"] if plan.get("repo_mode") == "none" else ["--repo", plan["repo"]]
         args = [sys.executable, str(BIN / "fleet-compose.py"), "--send", plan["payload"]] + how + \
             ["--node", plan["node"]]
         if plan.get("reap"):
@@ -2626,9 +2626,9 @@ def ui(screen, session, worker, lock):
     def compose_take(verbs):
         """The writing area's ↵ (issue #1953): `compose` on the queue means its
         payload waits in compose-send.json. Taken (renamed, so the next ↵ never
-        overwrites it), its repo resolved — the payload's, else the repo of the
-        row that was in view when the writing area opened (「自动」), else the only
-        one, else the place-repo question — and placed in the background, its
+        overwrites it), its repo resolved — the payload's (null: HOME), else the
+        repo of the row that was in view when the writing area opened, else the
+        only one, else the place-repo question — and placed in the background, its
         「开工中…」 row painted at once. The other verbs go on as they came."""
         rest = [v for v in verbs if v != "compose"]
         if len(rest) == len(verbs):
@@ -2649,10 +2649,11 @@ def ui(screen, session, worker, lock):
                 "node": data.get("node") or "auto",   # the machine picked in the area (#2232); null = auto
                 "cid": data.get("id", ""), "at": data.get("at", 0),
                 "label": data.get("node") or "", "repo": data.get("repo") or repo_of(base, data.get("prev") or "")}
-        if data.get("repo_mode") in ("none", "multi"):
-            # 「不关联仓库」 / 「多个仓库」 (issue #1956): no repo to resolve — a
-            # session of no repo, said to --send as --no-repo / --multi.
-            plan.update(what="scratch", repo="", repo_mode=data["repo_mode"])
+        if ("repo" in data and data["repo"] is None) or data.get("repo_mode") in ("none", "multi"):
+            # HOME (repo null, issue #2231; an older area's 「不关联仓库」 /
+            # 「多个仓库」 said repo_mode, #1956): no repo to resolve — a session
+            # of no repo, said to --send as --no-repo.
+            plan.update(what="scratch", repo="", repo_mode="none")
             place_step(None, "", True, plan)
             return rest
         if not plan["repo"]:

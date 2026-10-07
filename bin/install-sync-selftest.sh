@@ -43,6 +43,14 @@
 #                    (never written); a fresh mark + stable moving → deferred
 #                    ticks only, NEVER switched, until the batch clears its mark;
 #                    the heartbeat's CLI (stamp / --status 0/1/2 / usage) pinned
+#   O2. epic hold    (issue #2247) only a batch with work holds: live>0 or
+#                    inflight>0 → deferred, half a reading → deferred, live 0 +
+#                    inflight 0 → the tick goes on (idle beside an active one is
+#                    noted, not held); an active mark past
+#                    FLEET_EPIC_HOLD_CAP_SECS on one stable → switched + ONE
+#                    record-only note on its EPIC (who, from → to) + an
+#                    epic-released log line; the state's `epic:` line says
+#                    holding / idle / released
 #   F. rollback      a FAIL line the new doctor prints → the link back + the OLD
 #                    version's apply back; that version is skipped until stable
 #                    moves; the next stable move is followed
@@ -327,10 +335,70 @@ eq "O: no switched line while the mark is fresh" 0 "$(grep -c ' switched ' "$CO/
 eq "O: two ticks, two deferred lines" 2 "$(grep -c ' deferred ' "$CO/logs/install-sync.log")"
 run --dry-run
 contains "O: dry-run defers too" "$OUT" "deferred: EPIC batch running"
-# the batch ends: its loop clears its own mark; the next tick switches
-bash "$HB" --clear 1117 >/dev/null 2>&1; run
-eq "O: switched after the clear" switched "$(st result)"
-eq "O: …to stable" "$C3a" "$(hd)"
+# the batch ends: its loop clears its own mark; the next tick would switch
+bash "$HB" --clear 1117 >/dev/null 2>&1; run --dry-run
+contains "O: would switch after the clear" "$OUT" "would switch"
+# --- O2. only a batch WITH WORK holds, and only up to the cap (issue #2247) ------
+# a mark that says something is alive or in flight holds as before …
+OUT=$(bash "$HB" 1117 --tick 6 --repo o/r --session f1 --live 1 --inflight 0 2>&1)
+contains "O2: the stamp shows the reading" "$OUT" "live=1 inflight=0"
+eq "O2: the mark carries live" 1 "$(sed -n 's/^live: //p' "$EPD/o-r-1117")"
+eq "O2: …and inflight" 0 "$(sed -n 's/^inflight: //p' "$EPD/o-r-1117")"
+run
+eq "O2: a live member holds" deferred "$(st result)"
+contains "O2: the reason names it" "$(st reason)" "epic=1117 session=f1 tick=6"
+contains "O2: …with its reading" "$(st reason)" "live=1 inflight=0"
+contains "O2: --status says which kind of hold" "$(st epic)" "holding (有活·封顶前 0m/120m)"
+[ -f "$CONF/global/epic-hold.d/o-r-1117" ] || fail "O2: no hold clock written"; CHECKS=$((CHECKS + 1))
+bash "$HB" 1117 --tick 7 --repo o/r --session f1 --live 0 --inflight 1 >/dev/null 2>&1; run
+eq "O2: a PR in flight holds" deferred "$(st result)"
+# --live without --inflight is no reading: holds (conservative)
+bash "$HB" 1117 --tick 8 --repo o/r --session f1 --live 0 >/dev/null 2>&1
+[ -z "$(sed -n 's/^live: //p' "$EPD/o-r-1117")" ] || fail "O2: --live alone was written"; CHECKS=$((CHECKS + 1))
+run; eq "O2: half a reading still holds" deferred "$(st result)"
+# … an IDLE batch (live 0, nothing in flight) does not: the tick goes on
+bash "$HB" 1117 --tick 9 --repo o/r --session f1 --live 0 --inflight 0 >/dev/null 2>&1
+run --dry-run
+contains "O2: an idle batch does not hold" "$OUT" "would switch"
+not_contains "O2: …no deferral" "$OUT" "deferred"
+OUT=$(bash "$HB" --status 2>&1); contains "O2: --status still lists the idle batch" "$OUT" "fresh epic=1117 session=f1 tick=9"
+contains "O2: …with its reading" "$OUT" "live=0 inflight=0"
+# idle next to an active one: the active one holds, the idle one is noted
+bash "$HB" 1982 --tick 2 --repo o/r --session f1 --live 2 --inflight 1 >/dev/null 2>&1; run
+eq "O2: idle + active = deferred" deferred "$(st result)"
+contains "O2: …on the active one" "$(st reason)" "epic=1982"
+not_contains "O2: …not the idle one" "$(st reason)" "epic=1117"
+contains "O2: the state names the idle one" "$(st epic)" "idle (空转，不挡) epic=1117"
+[ -e "$CONF/global/epic-hold.d/o-r-1117" ] && fail "O2: an idle mark kept its hold clock"; CHECKS=$((CHECKS + 1))
+bash "$HB" --clear 1982 >/dev/null 2>&1
+# the cap: an active mark that has held THIS stable past FLEET_EPIC_HOLD_CAP_SECS
+# is released — once — with one note on its EPIC; the tick switches
+bash "$HB" 1117 --tick 10 --repo o/r --session f1 --live 1 --inflight 1 >/dev/null 2>&1
+export FLEET_EPIC_HOLD_CAP_SECS=600 FLEET_EPIC_HOLD_NOTE_CMD="sh $WORK/note.sh"
+cat > "$WORK/note.sh" <<NOTE
+#!/bin/sh
+printf 'note %s\n' "\$*" >> "$WORK/notes.log"
+while [ "\$#" -gt 0 ]; do [ "\$1" = --body-file ] && cat "\$2" >> "$WORK/notes.log"; shift; done
+NOTE
+: > "$WORK/notes.log"
+run; eq "O2: under the cap = deferred" deferred "$(st result)"
+contains "O2: …says before the cap" "$(st epic)" "holding (有活·封顶前 0m/10m)"
+eq "O2: no note before the cap" 0 "$(grep -c '^note ' "$WORK/notes.log")"
+printf 'since: %s\nstable: %s\nreleased: -\n' "$(( $(date +%s) - 700 ))" "$C3a" > "$CONF/global/epic-hold.d/o-r-1117"
+: > "$CO/logs/install-sync.log"; run
+eq "O2: past the cap = switched" switched "$(st result)"
+eq "O2: …to stable" "$C3a" "$(hd)"
+eq "O2: ONE note on the EPIC" 1 "$(grep -c '^note ' "$WORK/notes.log")"
+contains "O2: …on the EPIC, record-only" "$(cat "$WORK/notes.log")" "note 1117 --repo o/r --note --from fleet --body-file"
+contains "O2: …says from which version to which" "$(cat "$WORK/notes.log")" "\`$(short "$C3")\` → \`$(short "$C3a")\`"
+contains "O2: …and who" "$(cat "$WORK/notes.log")" "$(id -un)@"
+contains "O2: a released log line" "$(cat "$CO/logs/install-sync.log")" "epic-released $(short "$C3")..$(short "$C3a") epic=1117"
+contains "O2: the state says released" "$(st epic)" "released (已放行：挡满 10m 封顶) epic=1117"
+eq "O2: the clock records the release" "$C3a" "$(sed -n 's/^released: //p' "$CONF/global/epic-hold.d/o-r-1117")"
+run; eq "O2: then current" current "$(st result)"
+eq "O2: still one note" 1 "$(grep -c '^note ' "$WORK/notes.log")"
+unset FLEET_EPIC_HOLD_CAP_SECS FLEET_EPIC_HOLD_NOTE_CMD
+bash "$HB" --clear 1117 >/dev/null 2>&1
 stable "$C4"
 
 # --- F. rollback ----------------------------------------------------------------------------------

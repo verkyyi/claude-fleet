@@ -509,3 +509,74 @@ func TestFleetAssignMintedLoginNotExisting(t *testing.T) {
 		t.Fatalf("minted login marked existing: %+v", op)
 	}
 }
+
+// claude-fleet#2210: the operator's own login on a machine is the admin one
+// (verkyyi, passwordless sudo). relogin moves their row there to a fresh
+// standard login and queues its create on the admin node — never a remove of
+// the old one — and adopt of the old login undoes it without running anything.
+func TestFleetReloginCreatesNewLeavesOld(t *testing.T) {
+	h := newFleetHarness(t)
+	h.srv.FleetAdmins = []string{"verkyyi"}
+	admin := connectNode(t, h, "m5-op", "m5", "verkyyi", true)
+	const pid = "gh:2718137"
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m5", Login: "verkyyi"}); code != 200 {
+		t.Fatalf("adopt: HTTP %d", code)
+	}
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m4", Login: "verkyyi"}); code != 200 {
+		t.Fatalf("adopt m4: HTTP %d", code)
+	}
+
+	// Refused: an admin login, an invalid name, the same name, a machine with no row.
+	for name, req := range map[string]FleetAccountRequest{
+		"admin login": {Action: "relogin", PrincipalID: pid, Hostname: "m5", Login: "verkyyi"},
+		"bad name":    {Action: "relogin", PrincipalID: pid, Hostname: "m5", Login: "9dev"},
+		"reserved":    {Action: "relogin", PrincipalID: pid, Hostname: "m5", Login: "admin"},
+		"no row":      {Action: "relogin", PrincipalID: pid, Hostname: "m9", Login: "verkydev"},
+		"no host":     {Action: "relogin", PrincipalID: pid, Login: "verkydev"},
+	} {
+		if code := operatorPost(t, h, req); code == 200 {
+			t.Fatalf("%s: relogin accepted", name)
+		}
+	}
+	if got, ok := readMsg(admin.tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("a refused relogin sent %+v", got)
+	}
+
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "m5", Login: "verkydev"}); code != 200 {
+		t.Fatalf("relogin: HTTP %d", code)
+	}
+	m, op := expectAccountOp(t, admin.tnode)
+	if op.Op != control.AccountCreate || op.Login != "verkydev" {
+		t.Fatalf("relogin op = %+v", op)
+	}
+	// While in flight a second relogin refuses.
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "m5", Login: "verkyabc"}); code != http.StatusConflict {
+		t.Fatalf("relogin in flight: HTTP %d, want 409", code)
+	}
+	sendResult(t, admin.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	a := waitState(t, h, pid, "m5", store.AccountActive)
+	if a.Login != "verkydev" {
+		t.Fatalf("after relogin m5 = %+v", a)
+	}
+	// The other machine and the person's record are untouched.
+	if b := accountState(t, h, pid, "m4"); b.Login != "verkyyi" || b.State != store.AccountActive {
+		t.Fatalf("m4 moved: %+v", b)
+	}
+	if p, err := h.srv.Store.Principal(pid); err != nil || p.Login != "verkyyi" {
+		t.Fatalf("principal = %+v, %v", p, err)
+	}
+	if got, ok := readMsg(admin.tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("relogin sent a second op %+v", got)
+	}
+
+	// Undo: adopt the old login back, nothing run.
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m5", Login: "verkyyi"}); code != 200 {
+		t.Fatalf("undo adopt: HTTP %d", code)
+	}
+	if a := accountState(t, h, pid, "m5"); a.Login != "verkyyi" || a.State != store.AccountActive {
+		t.Fatalf("after undo m5 = %+v", a)
+	}
+	if got, ok := readMsg(admin.tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("undo sent %+v", got)
+	}
+}

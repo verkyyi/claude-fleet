@@ -198,11 +198,12 @@ EOF_MARKS
   return 2
 }
 # fleet_epic_running [<file>] — ONE mark: 0 fresh / 1 stale / 2 no mark; prints
-#   epic=<N> session=<sess> tick=<n> age=<s>s ttl=<s>s
+#   epic=<N> session=<sess> tick=<n> age=<s>s ttl=<s>s[ live=<n> inflight=<n>]
+# (the last two only when the mark carries them — issue #2247)
 # With no <file> it is every mark on the login (fleet_epic_running_fresh), so an
 # older caller that read "the" mark now sees every batch.
 fleet_epic_running() {
-  local f="${1:-}" epoch ttl age epic sess tick
+  local f="${1:-}" epoch ttl age epic sess tick live inflight
   [ -n "$f" ] || { fleet_epic_running_fresh; return; }
   [ -f "$f" ] || return 2
   epoch=$(sed -n 's/^epoch: //p' "$f" | head -1)
@@ -217,9 +218,38 @@ fleet_epic_running() {
   epic=$(sed -n 's/^epic: //p' "$f" | head -1)
   sess=$(sed -n 's/^session: //p' "$f" | head -1)
   tick=$(sed -n 's/^tick: //p' "$f" | head -1)
+  live=$(sed -n 's/^live: //p' "$f" | head -1); inflight=$(sed -n 's/^inflight: //p' "$f" | head -1)
+  case "$live$inflight" in *[!0-9]*) live='' ;; esac
+  [ -n "$inflight" ] || live=''
   age=$(( $(date +%s) - epoch )); [ "$age" -lt 0 ] && age=0
   printf 'epic=%s session=%s tick=%s age=%ss ttl=%ss' "${epic:--}" "${sess:--}" "${tick:--}" "$age" "$ttl"
+  [ -z "$live" ] || printf ' live=%s inflight=%s' "$live" "$inflight"   # #2247: only when stamped
   [ "$age" -lt "$ttl" ]
+}
+# fleet_epic_holding — which fresh batches HOLD the install (issue #2247). One
+# line per fresh mark, youngest first:
+#   <active|idle>\t<mark file>\t<fleet_epic_running's line>
+# `idle` = the mark says live 0 AND inflight 0 (no member session running, no
+# member PR in flight — the loop only waits on the operator); anything else is
+# `active`, and a mark with no live/inflight reading (an older loop, a bare
+# `touch`) is `active` — the conservative reading, what every fresh mark was
+# before. rc 0 when any line is `active`, 1 when every fresh mark is idle, 2 when
+# no mark is fresh. install-sync defers only on `active` (and caps that hold).
+fleet_epic_holding() {
+  local f out age kind rows='' act=1
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    out=$(fleet_epic_running "$f") || continue
+    age=${out##*age=}; age=${age%%s*}
+    case "$out" in *' live=0 inflight=0') kind=idle ;; *) kind=active; act=0 ;; esac
+    rows="$rows$age	$kind	$f	$out
+"
+  done <<EOF_HOLD
+$(fleet_epic_running_marks)
+EOF_HOLD
+  [ -n "$rows" ] || return 2
+  printf '%s' "$rows" | sort -n | cut -f2-
+  return "$act"
 }
 # fleet_epic_stale_list [<driven refs>] — the batches NOBODY is driving (issue
 # #1916): a mark gone stale whose EPIC is still OPEN, one line each,
@@ -4297,10 +4327,13 @@ _fleet_wt_of() {
 # dash, #401/#446); prints the worktree path on success, rc 1 on failure.
 # What a new worktree gets beyond the checkout is fleet_worktree_setup's (#885).
 fleet_worktree_create() {
-  local main="" slug="" base="" br="" reuse=0 n=0 wt
+  local main="" slug="" base="" br="" reuse=0 n=0 wt nco=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --reuse)  reuse=1 ;;
+      # --no-checkout (issue #2237): the worktree and its branch, no files and no
+      # setup hook — fleet_worktree_fill does both later, while the agent starts.
+      --no-checkout) nco=--no-checkout ;;
       --branch) br="${2:-}"; shift ;;
       *) n=$((n + 1)); case "$n" in 1) main="$1" ;; 2) slug="$1" ;; 3) base="$1" ;; esac ;;
     esac
@@ -4311,17 +4344,42 @@ fleet_worktree_create() {
   wt="$(fleet_worktree_dir "$main" "$slug")" || return 1
   mkdir -p "$(dirname "$wt")" 2>/dev/null
   if [ -n "$base" ]; then
-    git -C "$main" worktree add -b "$br" "$wt" "origin/$base" >/dev/null 2>&1 \
-      || git -C "$main" worktree add -b "$br" "$wt" "$base" >/dev/null 2>&1 \
-      || { [ "$reuse" = 1 ] && git -C "$main" worktree add "$wt" "$br" >/dev/null 2>&1; } \
+    git -C "$main" worktree add ${nco:+"$nco"} -b "$br" "$wt" "origin/$base" >/dev/null 2>&1 \
+      || git -C "$main" worktree add ${nco:+"$nco"} -b "$br" "$wt" "$base" >/dev/null 2>&1 \
+      || { [ "$reuse" = 1 ] && git -C "$main" worktree add ${nco:+"$nco"} "$wt" "$br" >/dev/null 2>&1; } \
       || return 1
   else
-    git -C "$main" worktree add -b "$br" "$wt" >/dev/null 2>&1 \
-      || { [ "$reuse" = 1 ] && git -C "$main" worktree add "$wt" "$br" >/dev/null 2>&1; } \
+    git -C "$main" worktree add ${nco:+"$nco"} -b "$br" "$wt" >/dev/null 2>&1 \
+      || { [ "$reuse" = 1 ] && git -C "$main" worktree add ${nco:+"$nco"} "$wt" "$br" >/dev/null 2>&1; } \
       || return 1
   fi
-  fleet_worktree_setup "$main" "$wt"
+  [ -n "$nco" ] || fleet_worktree_setup "$main" "$wt"
   printf '%s\n' "$wt"
+}
+
+# fleet_worktree_boot <wt> — after fleet_worktree_create --no-checkout: check out
+# only what an agent reads AS IT STARTS (issue #2237) — CLAUDE.md / AGENTS.md, the
+# project's .claude/ and .codex/, .mcp.json — so it can be launched now, before
+# the rest of the tree. Silent; rc of the checkout (0 when the repo has none).
+fleet_worktree_boot() {
+  local wt="${1:-}" f
+  [ -d "$wt" ] || return 1
+  f=$(git -C "$wt" ls-tree --name-only HEAD -- CLAUDE.md CLAUDE.local.md AGENTS.md .claude .codex .mcp.json 2>/dev/null)
+  [ -n "$f" ] || return 0
+  # shellcheck disable=SC2086  # one top-level name per line, none with a space
+  ( IFS=$'\n'; git -C "$wt" checkout -q HEAD -- $f ) >/dev/null 2>&1
+}
+
+# fleet_worktree_fill <main> <wt> — the rest of a --no-checkout worktree (issue
+# #2237): every file of its HEAD, then the per-worktree setup hook, exactly what
+# fleet_worktree_create does in one go. rc 1 when the checkout failed; no
+# directory = nothing to fill (rc 0 — the spawn's own worktree check stands).
+fleet_worktree_fill() {
+  local main="${1:-}" wt="${2:-}"
+  [ -d "$wt" ] || return 0
+  git -C "$wt" reset -q --hard >/dev/null 2>&1 || return 1
+  fleet_worktree_setup "$main" "$wt"
+  return 0
 }
 
 # fleet_worktree_setup <main> <wt> — the per-worktree setup hook (issue #885). When

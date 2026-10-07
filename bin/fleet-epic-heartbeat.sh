@@ -5,7 +5,8 @@
 #
 #   fleet-epic-heartbeat.sh <epic> [--tick <n>] [--repo <owner/name>]
 #                           [--session <sess>] [--ttl <seconds>]
-#                           [--landed <k> --members <n>]           # stamp — every tick
+#                           [--landed <k> --members <n>]
+#                           [--live <n> --inflight <n>]            # stamp — every tick
 #   fleet-epic-heartbeat.sh --clear <epic>                           # THIS batch ended
 #   fleet-epic-heartbeat.sh --status                                 # every mark, one line each
 #
@@ -46,6 +47,17 @@
 # File, one `key: value` per line:
 #   epoch: <n>  iso: <UTC>  ttl: <s>  epic: <N>  repo: <owner/name|->
 #   session: <sess|->  tick: <n|->  [landed: <k>  members: <n>]
+#   [live: <n>  inflight: <n>]
+#
+# ONLY A BATCH WITH WORK HOLDS THE INSTALL (issue #2247). An idle batch — no
+# member session running, no member PR in flight, the loop only waiting on the
+# operator's answer — still stamps every tick, and on 2026-10-07 EPIC #2140 held
+# m4 at an old version for hours that way. So the stamp carries --live (member
+# sessions alive this tick) and --inflight (member PRs open and not yet merged),
+# and fleet_epic_holding (bin/fleet-lib.sh) reads a fresh mark with live 0 AND
+# inflight 0 as `idle`: install-sync switches under it. A mark without the two
+# fields (an older loop) is `active` — the conservative reading, byte for byte
+# what it did before. install-sync also caps a hold (FLEET_EPIC_HOLD_CAP_SECS).
 #
 # ONE EPIC, ONE ROW (issue #1958). The mark is also what the task list reads to
 # draw a running batch as ONE row: the stamp marks the window it runs in — the
@@ -66,7 +78,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-EPIC='' TICK='' LANDED='' MEMBERS='' REPO="${FLEET_REPO:-}" SESS="${FLEET_SESSION:-}" TTL="${FLEET_EPIC_RUNNING_TTL:-2700}" MODE=stamp
+EPIC='' TICK='' LANDED='' MEMBERS='' LIVE='' INFLIGHT='' REPO="${FLEET_REPO:-}" SESS="${FLEET_SESSION:-}" TTL="${FLEET_EPIC_RUNNING_TTL:-2700}" MODE=stamp
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --tick)      shift; TICK="${1:-}" ;;
@@ -79,12 +91,16 @@ while [ "$#" -gt 0 ]; do
     --landed=*)  LANDED="${1#--landed=}" ;;
     --members)   shift; MEMBERS="${1:-}" ;;
     --members=*) MEMBERS="${1#--members=}" ;;
+    --live)      shift; LIVE="${1:-}" ;;
+    --live=*)    LIVE="${1#--live=}" ;;
+    --inflight)  shift; INFLIGHT="${1:-}" ;;
+    --inflight=*) INFLIGHT="${1#--inflight=}" ;;
     --ttl)       shift; TTL="${1:-}" ;;
     --ttl=*)     TTL="${1#--ttl=}" ;;
     --clear)     MODE=clear ;;
     --clear=*)   MODE=clear; EPIC="${1#--clear=}"; EPIC="${EPIC#\#}" ;;
     --status)    MODE=status ;;
-    -h|--help)   sed -n '2,61p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,74p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)          printf 'fleet-epic-heartbeat: unknown argument %s\n' "$1" >&2; exit 2 ;;
     *)           EPIC="${1#\#}" ;;
   esac
@@ -159,6 +175,10 @@ esac
 case "$TICK" in *[!0-9]*) TICK='' ;; esac
 case "$LANDED$MEMBERS" in *[!0-9]*) LANDED='' MEMBERS='' ;; esac
 { [ -n "$LANDED" ] && [ -n "$MEMBERS" ]; } || LANDED='' MEMBERS=''
+# live / inflight go together (#2247): one without the other is no reading, and a
+# mark with no reading holds the install as before.
+case "$LIVE$INFLIGHT" in *[!0-9]*) LIVE='' INFLIGHT='' ;; esac
+{ [ -n "$LIVE" ] && [ -n "$INFLIGHT" ]; } || LIVE='' INFLIGHT=''
 [ -n "$SESS" ] || SESS=$(fleet_current_session 2>/dev/null || :)
 
 F=$(fleet_epic_mark_file "$REPO" "$EPIC")
@@ -174,9 +194,11 @@ if ! {
   printf 'session: %s\n' "${SESS:--}"
   printf 'tick: %s\n' "${TICK:--}"
   [ -z "$MEMBERS" ] || printf 'landed: %s\nmembers: %s\n' "$LANDED" "$MEMBERS"
+  [ -z "$LIVE" ] || printf 'live: %s\ninflight: %s\n' "$LIVE" "$INFLIGHT"
 } > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$F" 2>/dev/null; then
   rm -f "$tmp" 2>/dev/null
   printf 'fleet-epic-heartbeat: cannot write %s\n' "$F" >&2; exit 1
 fi
 case "$REPO" in ''|-) win_epic set "#$EPIC" ;; *) win_epic set "$REPO#$EPIC" ;; esac
-printf 'stamped epic=%s session=%s tick=%s ttl=%ss (%s)\n' "$EPIC" "${SESS:--}" "${TICK:--}" "$TTL" "$F"
+printf 'stamped epic=%s session=%s tick=%s ttl=%ss%s (%s)\n' "$EPIC" "${SESS:--}" "${TICK:--}" "$TTL" \
+  "${LIVE:+ live=$LIVE inflight=$INFLIGHT}" "$F"

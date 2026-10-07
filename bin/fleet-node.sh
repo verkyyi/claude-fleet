@@ -36,6 +36,10 @@
 #       node already (joined by a scan or a code) shows the hub its token once
 #       per hub instead (node-login.ok): the hub ties that node to this device
 #       and records whose login it is (登录即认人) — no second node.
+#       A refused pass — or one whose login the hub did not record as the
+#       person's (account_refused, issue #2249) — writes no node-login.ok; the
+#       reason goes to node-join.log and node-login.why, and `fleet login`
+#       says it as its last line.
 #       No hub ⇒ nothing. Exit 0 a token is in node.env · 2 no hub · 3 not
 #       logged in · 4 the hub offers no such door · 1 anything else.
 #   fleet node status
@@ -159,12 +163,14 @@ cmd_ensure() {
     [ "$(cat "$CONF/node-login.ok" 2>/dev/null)" = "$hub" ] && return 0
     work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-node.XXXXXX") || return 0
     chmod 700 "$work"
-    if "$here/fleet-login.py" node-pass --hub "$hub" --out "$work/node.json" --quiet; then
+    if "$here/fleet-login.py" node-pass --hub "$hub" --out "$work/node.json" 2>"$work/err"; then
       local newtok
       newtok=$(jfield token < "$work/node.json")
       # the hub reissues only when the token here was dead: then it is the one
       [ -n "$newtok" ] && [ "$newtok" != "$(envval CCQUOTA_TOKEN)" ] && setenv CCQUOTA_TOKEN "$newtok"
-      printf '%s\n' "$hub" > "$CONF/node-login.ok"
+      passed "$hub" "$work/node.json"
+    else
+      notpassed "$(tail -n 1 "$work/err")"
     fi
     rm -rf "$work"
     return 0
@@ -173,19 +179,44 @@ cmd_ensure() {
   mkdir -p "$CONF" 2>/dev/null
   work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-node.XXXXXX") || return 1
   chmod 700 "$work"
-  "$here/fleet-login.py" node-pass --hub "$hub" --out "$work/node.json" --quiet
+  "$here/fleet-login.py" node-pass --hub "$hub" --out "$work/node.json" 2>"$work/err"
   rc=$?
-  if [ "$rc" != 0 ]; then rm -rf "$work"; return "$rc"; fi
+  if [ "$rc" != 0 ]; then notpassed "$(tail -n 1 "$work/err")"; rm -rf "$work"; return "$rc"; fi
+  cp "$work/node.json" "$work/pass.json"
   "$here/fleet-conf.sh" set-hub "$hub" >/dev/null 2>&1
   # shellcheck disable=SC2086
   FLEET_CONF_DIR="$CONF" "$here/fleet-node-join.sh" --hub "$hub" --joined "$work/node.json" \
     --no-fleet --no-deps --no-admin --wait 20 ${FLEET_NODE_JOIN_ARGS:-} >>"$CONF/node-join.log" 2>&1
-  rm -rf "$work"
-  [ -n "$(envval CCQUOTA_TOKEN)" ] || return 1
+  [ -n "$(envval CCQUOTA_TOKEN)" ] || { rm -rf "$work"; return 1; }
   # a computer that only coordinates is a person's own (#1721)
   [ "$fresh" = 1 ] && [ -z "$(envval CCQUOTA_FLEET_PERSONAL)" ] && setenv CCQUOTA_FLEET_PERSONAL 1
-  printf '%s\n' "$hub" > "$CONF/node-login.ok"   # tied to this device already
+  passed "$hub" "$work/pass.json"   # tied to this device already
+  rm -rf "$work"
   return 0
+}
+
+# passed <hub> <node.json> — the node pass came. node-login.ok only when the
+# hub also says this login is the person's (登录即认人): a pass whose
+# account_refused is set is the node without the person (issue #2249), and the
+# next ensure asks again.
+passed() {
+  local refused
+  refused=$(jfield account_refused < "$2")
+  if [ -n "$refused" ]; then notpassed "登录未认人：$refused"; return 0; fi
+  printf '%s\n' "$1" > "$CONF/node-login.ok"
+  rm -f "$CONF/node-login.why"
+}
+
+# notpassed <why> — the hub refused (or only half-answered) the node pass: no
+# node-login.ok, the reason in node-join.log and in node-login.why, which
+# `fleet login` says as its last line (issue #2249).
+notpassed() {
+  local why="${1#fleet login: }"
+  [ -n "$why" ] || why="没拿到节点通行证"
+  mkdir -p "$CONF" 2>/dev/null
+  rm -f "$CONF/node-login.ok"
+  printf '%s node pass: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$why" >> "$CONF/node-join.log"
+  printf '%s\n' "$why" > "$CONF/node-login.why"
 }
 
 # setenv <KEY> <value|''> — node.env's line for KEY replaced (or removed when

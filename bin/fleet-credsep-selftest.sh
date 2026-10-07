@@ -27,6 +27,8 @@
 #      the way back is read from credsep.json's `back` (paths, no secret)
 #   J  plan: every login under the homes dir, the ONE sudo line per login
 #      carries --login, a `sudo -u` line carries that login's HOME
+#   K  a login name may start with a digit (issue #2257): `machine install
+#      --dry-run --logins 24haowan` passes; `Bad Name` / `-x` are still exit 2
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "/tmp/credsep-st.XXXXXX")
@@ -285,6 +287,18 @@ if [ "$rc" = 0 ] && printf '%s' "$out" | grep -qF "sudo bash $SB/homes/ann/.clau
    && ! printf '%s' "$out" | grep -q '^bob\|^root'; then
   pass "J plan: one block per login with an install, the one sudo carries --login"
 else fail "J plan rc=$rc: $out"; fi
+
+# ── K: a login name may start with a digit (issue #2257) ───────────────────────
+mkdir -p "$SB/homes/24haowan/.config/claude-fleet"
+printf '24haowan:%s:%s:%s\n' "$(id -u)" "$(id -g)" "$SB/homes/24haowan" > "$SB/pw"
+out=$(FLEET_CREDSEP_PW="$SB/pw" bash "$BIN/fleet-credsep.sh" machine install --dry-run --logins 24haowan 2>&1); rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^== 24haowan' && [ ! -e "$SB/db/24haowan" ]; then
+  pass "K machine install --dry-run accepts 24haowan"
+else fail "K 24haowan rc=$rc: $out"; fi
+for bad in 'Bad Name' '-x' 'a/b'; do
+  out=$(FLEET_CREDSEP_PW="$SB/pw" bash "$BIN/fleet-credsep.sh" machine install --dry-run "--logins=$bad" 2>&1); rc=$?
+  case "$rc:$out" in 2:*"bad login"*) pass "K '$bad' still refused (exit 2)" ;; *) fail "K '$bad' rc=$rc: $out" ;; esac
+done
 
 # ── G: uninstall ───────────────────────────────────────────────────────────────
 kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null; LPID=''

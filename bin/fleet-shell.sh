@@ -928,6 +928,9 @@ portal)
     portal_fresh "$w"       # made by an older client: on the new code (issue #2113)
   fi
   TS select-window -t "$w" 2>/dev/null || exit 1
+  # ⌘N puts the three options back to their defaults (issue #2231): a private
+  # ESC[928~ the area reads as «brought up» — the session in view may have changed
+  TS send-keys -t "$w" -H 1b 5b 39 32 38 7e 2>/dev/null
   lp=$(T list-panes -a -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }')
   [ -n "$lp" ] && T send-keys -t "$lp" F12 2>/dev/null
   exit 0

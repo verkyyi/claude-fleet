@@ -162,7 +162,7 @@ stop_agent() {
 
 # ── 3. env ──────────────────────────────────────────────────────────────────
 if act rm -f "$ENVF"; then
-  [ "$DRY" = 1 ] || rm -f "$(dirname "$ENVF")/node-login.ok"   # 登录即登记's once-per-hub mark (#2212)
+  [ "$DRY" = 1 ] || rm -f "$(dirname "$ENVF")/node-login.ok" "$(dirname "$ENVF")/node-login.why"   # 登录即登记's once-per-hub mark (#2212) + its refusal (#2249)
   echo "✓ 已删 ${ENVF}（node token removed）"
 else
   echo "✗ 删不掉 ${ENVF}（cannot remove node.env）" >&2; LEFT=1

@@ -78,6 +78,23 @@ r=$(scr '  ● first  scratch            │ claude' | rowm first)
 if [ "$r" = '  ● first  scratch' ]; then ok 'scratch: a real row in the left column is found'
 else bad "scratch: the real row: got '$r'"; fi
 
+# --- the scan step's QR read (issue #2255) ---------------------------------------
+# the installer prints 「能力:」 BEFORE its QR: 能力: alone must not read as
+# 「no QR」, or scan SKIPs and client types fleet into the waiting QR screen
+qrs() { bash "$DRILL" --login drill1007c --qr-state; }
+P0='drill1007c@mini2 ~ % curl -fsSL https://hub.example/install | sh'
+CAP='能力: 基础 · 承载 未开 · 入口 接'
+st=$(printf '%s\n' "$P0" "$CAP" | qrs)
+[ "$st" = wait ] && ok 'qr: 「能力:」 alone is wait, not no-QR' || bad "qr: 能力: alone read '$st'"
+st=$(printf '%s\n' "$P0" "$CAP" 'fleet · 需要扫码登录' '█▀▀▀▀▀█' '验证码 VVKS-LCLT' | qrs)
+[ "$st" = qr ] && ok 'qr: 能力: then the QR (the #2255 screen) reads qr — scan confirms, never SKIP' || bad "qr: the #2255 screen read '$st'"
+st=$(printf '%s\n' "$P0" "$CAP" '  ● 新任务                 │ drill1007c@mini2 ~ %' | qrs)
+[ "$st" = none ] && ok 'qr: 能力: then the client, no code, reads none (SKIP)' || bad "qr: known computer read '$st'"
+st=$(printf '%s\n' "$P0" "$CAP" 'drill1007c@mini2 ~ % ' | qrs)
+[ "$st" = none ] && ok 'qr: 能力: then back at the prompt, no code, reads none' || bad "qr: back at prompt read '$st'"
+st=$(printf '%s\n' "$P0" | qrs)
+[ "$st" = wait ] && ok 'qr: the typed curl line is no prompt' || bad "qr: the curl line read '$st'"
+
 # nothing past the preflight ran: no run dir was made
 if ls -d "$T"/fleet-onboard-drill.* >/dev/null 2>&1; then bad 'a refused run left a run dir'; else ok 'no refused run made a run dir'; fi
 

@@ -169,7 +169,9 @@ err_has()     { grep -qF -- "$1" "$WORK/spawn.err"; }
 gh_has()      { grep -qF -- "$1" "$GH_LOG"; }
 tmux_has()    { grep -qF -- "$1" "$TMUX_LOG"; }
 lease_has()   { grep -qF -- "$1" "$LEASE_LOG"; }
-snap()        { cat "$WORK/spawn.rc" "$WORK/spawn.err" "$GH_LOG" "$TMUX_LOG" "$GIT_LOG"; }
+# The gh log sorted: the spawn's issue read and open-PR probe run side by side
+# (issue #2237), so their order is not part of what "nothing changed" means.
+snap()        { cat "$WORK/spawn.rc" "$WORK/spawn.err"; sort "$GH_LOG"; cat "$TMUX_LOG" "$GIT_LOG"; }
 
 unset FLEET_PRESPAWN_DEDUP CCQUOTA_FLEET FLEET_HUB_LEASE_CMD FLEET_HUB_STATUS_CMD FLEET_NODE_ALIASES
 # The operator's stop-gap before #1491 exported the node token into every pane:
