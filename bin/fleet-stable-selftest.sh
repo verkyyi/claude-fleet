@@ -18,6 +18,9 @@
 #   G. lease              a concurrent move between read and push → push rejected
 #                         (exit 4), the concurrent value survives
 #   H. doctor             the `install` INFO line carries the behind count
+#   I. oldcfg gate        a target that deletes a script stable's hook table still
+#                         calls is REFUSED (`oldcfg:`, the script named, tag untouched);
+#                         --force moves it and logs one line (issue #2075)
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -133,5 +136,26 @@ if [ -f "$BIN/fleet-doctor.sh" ]; then
   OUT=$(FLEET_LIVE_DIR="$CO" sh "$BIN/fleet-doctor.sh" 2>&1)
   contains "H: doctor INFO carries behind count" "$OUT" "is 1 commit(s) behind origin/master — installs follow stable"
 fi
+
+# --- I. the old-session replay gate (issue #2075) ----------------------------------
+# A stable whose hook table calls bin/h.sh, then a target that deletes the script.
+mkdir -p "$SEED/hooks" "$SEED/bin"
+printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"sh ~/.claude/fleet/bin/h.sh"}]}]}}\n' > "$SEED/hooks/settings-hooks.json"
+printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$SEED/bin/h.sh"
+git -C "$SEED" add -A; git -C "$SEED" commit -qm hooked; C7=$(git -C "$SEED" rev-parse HEAD); push
+green
+run move "$C7"
+eq "I: a table whose scripts exist moves" 0 "$RC"; contains "I: says GREEN" "$OUT" "oldcfg-replay: GREEN"; eq "I: tag at C7" "$C7" "$(tag)"
+git -C "$SEED" rm -q bin/h.sh; git -C "$SEED" commit -qm 'drop h.sh'; C8=$(git -C "$SEED" rev-parse HEAD); push
+run move "$C8"
+eq "I: a deleted hook script is refused" 3 "$RC"; contains "I: reason prefixed oldcfg:" "$OUT" "REFUSED — oldcfg:"
+contains "I: names the script" "$OUT" "bin/h.sh not in the new tree"; contains "I: names the event" "$OUT" "MISSING  Stop"
+eq "I: tag still C7" "$C7" "$(tag)"
+run move "$C8" --dry-run
+eq "I: --dry-run runs the gate too" 3 "$RC"; eq "I: tag still C7 after dry-run" "$C7" "$(tag)"
+OUT=$(FLEET_STABLE_LOG="$WORK/stable-move.log" sh "$ST" move "$C8" --force --dir "$CO" --repo o/r 2>&1); RC=$?
+eq "I: --force moves" 0 "$RC"; eq "I: tag at C8" "$C8" "$(tag)"; contains "I: says FORCED" "$OUT" "oldcfg: FORCED past the replay"
+contains "I: one line logged" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "	forced	old=$(git -C "$CO" rev-parse --short "$C7")	new=$(git -C "$CO" rev-parse --short "$C8")	by="
+contains "I: the log carries the replay's verdict" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "oldcfg=oldcfg-replay: RED — 1 finding(s)"
 
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"

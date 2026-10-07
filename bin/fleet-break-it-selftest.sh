@@ -45,6 +45,7 @@
 #   node-paused-still-placed                        bin/fleet-control-read.sh capacity (admit / admit_why / room),
 #                                                   fleet_machine_admit, fleet_machine_headroom; the hub half is
 #                                                   tokenledger/internal/api judge() (go test, when a toolchain is here)
+#   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -2660,6 +2661,40 @@ drill_node_paused_still_placed() {
   fi
   SECS=$(since "$t0")
   WHAT="机器暂停接新时心跳带 admit:false（内存紧张 / 负载过高）+ room，健康时 admit:true + room，FLEET_ADMIT=0 不带 room；$gohalf"
+}
+
+# A release that deletes a hook script an old session's table still calls: the
+# move must refuse BEFORE the tag moves, naming the script; --force moves it and
+# leaves one line (issue #2075, EPIC #2074 C2).
+drill_oldcfg_deleted_hook() {
+  CAP=30; local t0 d out rc c1 c2
+  d="$WORK/oldcfg"; mkdir -p "$d/shim" "$d/seed"
+  printf '#!/bin/sh\nprintf "completed success ci\\n"\n' > "$d/shim/gh"; chmod +x "$d/shim/gh"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/hooks" "$d/seed/bin"
+    printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"sh ~/.claude/fleet/bin/h.sh"}]}]}}\n' > "$d/seed/hooks/settings-hooks.json"
+    printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$d/seed/bin/h.sh"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm hooked && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    git -C "$d/seed" rm -q bin/h.sh && git -C "$d/seed" commit -qm 'drop h.sh' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  t0=$(now)
+  out=$(PATH="$d/shim:$PATH" FLEET_STABLE_LOG="$d/stable-move.log" sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 3 ] || { WHY="move exited $rc, want 3 (refused): $(printf '%s' "$out" | tail -3 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — oldcfg:'*) ;; *) WHY="the refusal is not prefixed oldcfg: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  case "$out" in *'bin/h.sh not in the new tree'*) ;; *) WHY="the refusal does not name bin/h.sh: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved despite the red replay"; return 1; }
+  out=$(PATH="$d/shim:$PATH" FLEET_STABLE_LOG="$d/stable-move.log" sh "$BIN/fleet-stable.sh" move "$c2" --force --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="--force did not move: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="--force left stable at the old commit"; return 1; }
+  grep -q "	forced	" "$d/stable-move.log" 2>/dev/null || { WHY="--force left no line in stable-move.log"; return 1; }
+  WHAT="删了 h.sh 的发版被拒（oldcfg: 点名 bin/h.sh，stable 没动）；--force 才挪并记一行"
 }
 
 # ================================================================ run ===========
