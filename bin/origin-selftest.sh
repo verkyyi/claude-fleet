@@ -343,4 +343,25 @@ mkdir -p "$IB/7"; printf '{"cmd":"/clear"}\n' > "$IB/7/2-2-2.json"
 ( . "$LIB"; fleet_mod_inbox_reset fleetD )
 eq "gen: the same server keeps a pending command" yes "$([ -e "$IB/7/2-2-2.json" ] && echo yes || echo no)"
 
+# ============================================================================
+# T. fleet_target_repo — ONE rule for one repo and two (issue #1938): a given
+#    repo must be hosted (1 otherwise), else the pane's, else the fleet's only
+#    repo, else 4. Hermetic: no $TMUX, so the pane step is skipped.
+# ============================================================================
+TR="$WORK/tr"; mkdir -p "$TR/fleets/one" "$TR/fleets/two/repos"
+printf 'FLEET_REPO=o/a\n' > "$TR/fleets/one/conf"
+printf 'FLEET_REPO=o/a\n' > "$TR/fleets/two/conf"
+printf 'FLEET_REPO=o/b\n' > "$TR/fleets/two/repos/o-b.conf"
+tr_run() { ( unset TMUX TMUX_PANE; FLEET_CONF_DIR="$TR"; . "$LIB"
+             out=$(fleet_target_repo "$@"); rc=$?; printf '%s rc=%s' "$out" "$rc" ); }
+for f in one two; do
+  eq "T: $f — a hosted --repo is itself"       "o/a rc=0" "$(tr_run "$f" o/a)"
+  eq "T: $f — an unhosted --repo is refused"   " rc=1"    "$(tr_run "$f" o/zzz)"
+done
+eq "T: one — no repo named → its only repo"  "o/a rc=0" "$(tr_run one)"
+eq "T: two — no repo named → ASK (4)"        " rc=4"    "$(tr_run two)"
+eq "T: two — the second repo named is itself" "o/b rc=0" "$(tr_run two o/b)"
+rm -f "$TR/fleets/two/repos/o-b.conf"
+eq "T: two minus its overlay answers like one" "$(tr_run one)" "$(tr_run two)"
+
 printf 'origin-selftest OK (%d checks)\n' "$CHECKS"

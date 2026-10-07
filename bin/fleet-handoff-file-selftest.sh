@@ -2,7 +2,9 @@
 # fleet-handoff-file-selftest.sh — bin/fleet-handoff-file.sh names and finds FILE
 # handoffs by repo in a multi-repo fleet, and by fleet alone in a one-repo fleet
 # (issue #992). Hermetic: a sandbox FLEET_CONF_DIR + handoff dir, no tmux, no gh.
-#   ONE-REPO-NAME     a one-repo fleet's path is `<sess>-<date>[-slug].md`, unchanged.
+#   ONE-REPO-NAME     a one-repo fleet's path carries its repo like any other
+#                     (`<sess>-<owner-name>-<date>[-slug].md`, issue #1938); its old
+#                     slug-less docs are still found (the fleet hosts one repo).
 #   ONE-REPO-FIND     it resumes the newest `<sess>-*.md`, attribution never consulted.
 #   MULTI-NAME        a 2-repo fleet puts the pane repo's slug in; a no-repo pane doesn't.
 #   MULTI-INTERLEAVED newest files interleave A's and B's → each pane gets its own.
@@ -36,11 +38,13 @@ TODAY=$(date +%Y-%m-%d)
 # ---- one-repo fleet ---------------------------------------------------------
 mkdir -p "$FLEET_CONF_DIR/fleets/fleet-one"
 echo 'FLEET_REPO=o/one' > "$FLEET_CONF_DIR/fleets/fleet-one/conf"
-eq ONE-REPO-NAME "$(run path --session fleet-one --repo o/one)" "$FLEET_HANDOFF_DIR/fleet-one-$TODAY.md"
-eq ONE-REPO-NAME-slug "$(run path --session fleet-one --repo o/one --slug x)" "$FLEET_HANDOFF_DIR/fleet-one-$TODAY-x.md"
+eq ONE-REPO-NAME "$(run path --session fleet-one --repo o/one)" "$FLEET_HANDOFF_DIR/fleet-one-o-one-$TODAY.md"
+eq ONE-REPO-NAME-slug "$(run path --session fleet-one --repo o/one --slug x)" "$FLEET_HANDOFF_DIR/fleet-one-o-one-$TODAY-x.md"
 doc fleet-one-2026-09-01.md 202609010000
 doc fleet-one-2026-09-02-b.md 202609020000 'Repo: o/elsewhere'
-eq ONE-REPO-FIND "$(run find --session fleet-one --repo o/one)" "$FLEET_HANDOFF_DIR/fleet-one-2026-09-02-b.md"
+# The same attribution as a 2-repo fleet: the newer doc says another repo, so the
+# slug-less older one (this fleet's only repo) is the pane's.
+eq ONE-REPO-FIND "$(run find --session fleet-one --repo o/one)" "$FLEET_HANDOFF_DIR/fleet-one-2026-09-01.md"
 
 # ---- two-repo fleet (with one folded fleet) ---------------------------------
 S=fleet-multi

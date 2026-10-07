@@ -18,8 +18,8 @@
 #      current-repo file too); dash-issue-new.sh with no repo asks via
 #      fleet-repo-ask.sh, files into the pick, drops the optimistic row into THAT
 #      repo's cache, and its --spawn passes --repo.
-#   F. DEGENERATE — a one-repo fleet: rows keep three fields and the per-session
-#      cache, no bind carries --repo, actions resolve the sessmap repo as before.
+#   F. a one-repo fleet: rows carry their repo like any other (one path, #1938),
+#      no bind carries --repo, actions resolve the fleet's only repo.
 # tmux runs on a PRIVATE socket via a PATH shim (run-shell runs its body inline, so
 # fleet_bg is synchronous); gh, fzf and the spawn/collector scripts are stubs.
 set -uo pipefail
@@ -216,7 +216,7 @@ rm -f "$FLEET_CONF_DIR/fleets/alpha/current-repo"
 
 # --- F. degenerate ---------------------------------------------------------------
 out=$(rows solo)
-eq    "F: one-repo rows keep 3 fields"        "$(printf '%s\n' "$out" | tail -n +2 | awk -F '\037' '{ print NF }')" "3"
+eq    "F: one-repo rows carry their repo (#1938)" "$(printf '%s\n' "$out" | tail -n +2 | awk -F '\037' '{ print NF ":" $4 }' | sort -u)" "4:o/sss"
 has   "F: its own issues"                     "$(strip "$out")" "SSS five"
 echo o/bbb > "$FLEET_CONF_DIR/fleets/solo/current-repo"
 eq    "F: a stray current-repo file is ignored" "$(rows solo)" "$out"
