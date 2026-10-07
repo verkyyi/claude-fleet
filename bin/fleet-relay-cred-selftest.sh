@@ -215,7 +215,7 @@ start_fake() {
   python3 "$WORK/fakes.py" "$WORK" "$1" >/dev/null 2>"$WORK/$1.err" &
   PIDS="$PIDS $!"
   local i=0
-  while [ ! -s "$WORK/$1.port" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+  while [ ! -s "$WORK/$1.port" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done   # a CI mac can take seconds
   [ -s "$WORK/$1.port" ] || fail "fake $1 did not start: $(cat "$WORK/$1.err")"
 }
 start_fake hub; HUB_PORT=$(cat "$WORK/hub.port")
@@ -286,8 +286,8 @@ if [ -n "$CADDY" ] && [ -x "$CADDY" ]; then
   PIDS="$PIDS $!"
   KIND=caddy
   i=0
-  until curl -fsS "http://127.0.0.1:$RELAY_PORT/healthz" >/dev/null 2>&1 || [ $i -ge 100 ]; do sleep 0.1; i=$((i + 1)); done
-  [ $i -lt 100 ] || fail "caddy did not come up: $(tail -5 "$WORK/caddy.out")"
+  until curl -fsS "http://127.0.0.1:$RELAY_PORT/healthz" >/dev/null 2>&1 || [ $i -ge 300 ]; do sleep 0.1; i=$((i + 1)); done
+  [ $i -lt 300 ] || fail "caddy did not come up: $(tail -5 "$WORK/caddy.out")"
 else
   start_fake relay; RELAY_PORT=$(cat "$WORK/relay.port")
   KIND=fake
