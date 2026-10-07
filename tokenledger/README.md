@@ -1010,6 +1010,25 @@ counts as full: with every machine out that way the refusal is `AT_CAPACITY`
 `all-full: every machine is at its session cap or pausing new sessions — …`. A
 beat without the fields filters nothing on them, as before.
 
+**A burst is spread, not stacked** (claude-fleet#2077). A new session takes
+10–30 s to show in its node's beat — load, memory, session count — and in that
+window every pick of a burst chose the same machine. The hub keeps its own
+memory of what it just sent where (`recentTable`, in memory only): every
+`worker_start` / `worker_resume` / `worker_move_in` is noted against the target,
+with the session count its beat showed then, for **90 s** or until that count
+has grown past it (one beat is credited once; a count that fell credits
+nothing; a start the node refused outright is forgotten at once). `judge` folds
+the count in as `recent` on the candidate: the score is taken as if those
+sessions were already running — one core of load (`1/ncpu` per core) and
+1.5 GiB of memory each, a default share of a reading the beat did not give —
+so the next pick of the burst sees the first one's weight; a tie goes to fewer
+sessions *plus* in flight; and a reported `room` is spoken for by them
+(`room − recent < 1` holds the candidate as `机器暂停接新：内存余量不够再开一个
+（room R，刚派出 N 个还没算进去）`). The reason says `…, 3 sessions, 1 just
+placed)`; the candidate carries `recent` only when it is non-zero, so with
+nothing in flight every placement is byte for byte what it was. A hub restart
+forgets the table — the worst case is the old pick.
+
 **Grants.** Each tool has the Python hub's scope (`worker:start`,
 `worker:message`, `worker:stop`, `worker:resume`, `config:write` plus the key,
 `gh:read`, `gh:comment`; every call needs `fleet:read`). The operator's doors
