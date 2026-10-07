@@ -253,6 +253,19 @@ def check_text(text, what="text"):
         raise Fault("INVALID_ARGUMENT", what + " must not contain HTML comments or control characters")
 
 
+MAX_ISSUE_TITLE = 256
+
+
+def check_issue_title(value):
+    """A new-issue start's title (issue #1953): one line of 1-256 characters
+    (GitHub's bound), no control characters, no comment marker. The hub's
+    checkIssueTitle, letter for letter."""
+    if not isinstance(value, str) or not value.strip() or len(value) > MAX_ISSUE_TITLE:
+        raise Fault("INVALID_ARGUMENT", "title must be one line of 1-%d characters" % MAX_ISSUE_TITLE)
+    if "<!--" in value or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise Fault("INVALID_ARGUMENT", "title must not contain HTML comments or control characters")
+
+
 MAX_SCRATCH_NAME = 64
 
 
@@ -289,13 +302,25 @@ def validate_gh_read(params):
 
 def validate_write(action, params):
     if action == "worker_start":
-        fields(params, (), ("issue", "kind", "name", "agent", "repo", "origin_wid", "account_class", "reap"))
+        fields(params, (), ("issue", "kind", "name", "title", "body", "agent", "repo", "origin_wid", "account_class", "reap"))
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
         # (tokenledger/internal/api/fleet_write.go), letter for letter.
         kind = params.get("kind", "issue")
-        if kind == "scratch":
+        if kind != "new" and ("title" in params or "body" in params):
+            raise Fault("INVALID_ARGUMENT", "title and body belong to a new-issue start (kind=new)")
+        if kind == "new":
+            # issue #1953: the client's writing area — this machine files the
+            # issue (a title, an optional body), then opens its worker.
+            if "issue" in params:
+                raise Fault("INVALID_ARGUMENT", "a new-issue start has no issue: the node files it")
+            if "name" in params:
+                raise Fault("INVALID_ARGUMENT", "name belongs to a scratch start (kind=scratch)")
+            check_issue_title(params.get("title"))
+            if params.get("body", "") != "":
+                check_text(params["body"], "body")
+        elif kind == "scratch":
             if "issue" in params:
                 raise Fault("INVALID_ARGUMENT", "a scratch start has no issue")
             check_scratch_name(params.get("name"))
@@ -304,7 +329,7 @@ def validate_write(action, params):
                 raise Fault("INVALID_ARGUMENT", "Missing or unsupported request fields")
             check_number(params["issue"])
         else:
-            raise Fault("INVALID_ARGUMENT", "kind must be issue or scratch")
+            raise Fault("INVALID_ARGUMENT", "kind must be issue, scratch or new")
         if params.get("agent", "") not in ("", "claude", "codex"):
             raise Fault("INVALID_ARGUMENT", "agent must be claude or codex")
         check_repo(params)

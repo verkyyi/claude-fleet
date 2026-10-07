@@ -250,6 +250,28 @@ func checkScratchName(v any) (string, error) {
 	return t, nil
 }
 
+// maxIssueTitle is GitHub's own bound on an issue title.
+const maxIssueTitle = 256
+
+// checkIssueTitle reads a new-issue start's title (claude-fleet#1953): one
+// line, 1–256 characters, nothing that could forge a <!-- fleet:… --> marker
+// or drive a pane — check_issue_title on the node, letter for letter.
+func checkIssueTitle(v any) (string, error) {
+	t, ok := v.(string)
+	if !ok || strings.TrimSpace(t) == "" || len([]rune(t)) > maxIssueTitle {
+		return "", fault("INVALID_ARGUMENT", fmt.Sprintf("title must be one line of 1-%d characters", maxIssueTitle))
+	}
+	if strings.Contains(t, "<!--") {
+		return "", fault("INVALID_ARGUMENT", "title must not contain HTML comments or control characters")
+	}
+	for _, c := range t {
+		if c < 32 || c == 127 {
+			return "", fault("INVALID_ARGUMENT", "title must not contain HTML comments or control characters")
+		}
+	}
+	return strings.TrimSpace(t), nil
+}
+
 // checkText is check_text: 1–4000 characters, not blank, and nothing that
 // could forge the bridge's <!-- fleet:… --> markers or drive a pane.
 func checkText(v any, what string) (string, error) {
@@ -340,12 +362,14 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "fleet_id", "agent", "repo", "node", "origin_wid", "account_class", "reap"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "node", "origin_wid", "account_class", "reap"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
 		// issue, `issue` required) or "scratch" (a raw scratch session: no
-		// issue, an optional name; it is dash-raw-session.sh that opens it).
+		// issue, an optional name; it is dash-raw-session.sh that opens it) or
+		// "new" (claude-fleet#1953: the client's writing area — a title and an
+		// optional body; the node files the issue, then opens its worker).
 		var kind string
 		if kind, err = argString(args, "kind"); err != nil {
 			break
@@ -361,13 +385,39 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			if _, ok := args["issue"]; ok {
 				err = fault("INVALID_ARGUMENT", "a scratch start has no issue")
 			}
+		case "new":
+			if _, ok := args["issue"]; ok {
+				err = fault("INVALID_ARGUMENT", "a new-issue start has no issue: the node files it")
+			} else if _, ok := args["name"]; ok {
+				err = fault("INVALID_ARGUMENT", "name belongs to a scratch start (kind=scratch)")
+			}
 		default:
-			err = fault("INVALID_ARGUMENT", "kind must be issue or scratch")
+			err = fault("INVALID_ARGUMENT", "kind must be issue, scratch or new")
+		}
+		if err == nil && kind != "new" {
+			if _, ok := args["title"]; ok {
+				err = fault("INVALID_ARGUMENT", "title belongs to a new-issue start (kind=new)")
+			} else if _, ok := args["body"]; ok {
+				err = fault("INVALID_ARGUMENT", "body belongs to a new-issue start (kind=new)")
+			}
 		}
 		if err != nil {
 			break
 		}
-		if kind == "scratch" {
+		if kind == "new" {
+			w.params["kind"] = "new"
+			var title, body string
+			if title, err = checkIssueTitle(args["title"]); err != nil {
+				break
+			}
+			w.params["title"] = title
+			if b, ok := args["body"]; ok && b != "" {
+				if body, err = checkText(b, "body"); err != nil {
+					break
+				}
+				w.params["body"] = body
+			}
+		} else if kind == "scratch" {
 			w.params["kind"] = "scratch"
 			var name string
 			if name, err = checkScratchName(args["name"]); err != nil {

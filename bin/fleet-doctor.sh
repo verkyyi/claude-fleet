@@ -1040,11 +1040,16 @@ EOF
   fi
   # The seed repo (issue #1167): `fleet-up.sh --seed` brought the fleet up on a
   # starter repo that only LOOKS — dispatch + issue-bridge skip it whatever its
-  # switches say. Said once per seeded fleet; a fleet without FLEET_SEED says nothing.
+  # switches say. Said once per seeded repo; a fleet without FLEET_SEED says nothing.
+  # The mark lives in the seed's overlay (issue #1937), or — the old layout, read
+  # for one version — in the fleet conf beside its own repo.
   while IFS= read -r cf; do
     [ -n "$cf" ] || continue
-    [ "$(_conf_val "$cf" FLEET_SEED)" = 1 ] || continue
-    info seed "$(_conf_val "$cf" FLEET_REPO) — 起步仓库，只读: no autofill, no issue-bridge (FLEET_SEED=1)"
+    for sd_f in "$cf" "${cf%/conf}/repos"/*.conf; do
+      [ -f "$sd_f" ] || continue
+      [ "$(_conf_val "$sd_f" FLEET_SEED)" = 1 ] || continue
+      info seed "$(_conf_val "$sd_f" FLEET_REPO) — 起步仓库，只读: no autofill, no issue-bridge (FLEET_SEED=1)"
+    done
   done <<EOF
 $(_fleet_confs "$conf_dir")
 EOF
@@ -3077,7 +3082,7 @@ EOF
 _repos_row() {
   rr_tag=''; [ "$2" -gt 1 ] && rr_tag=" ($1)"
   if [ "$rs_n" = 0 ]; then
-    warn repos "0 hosted$rr_tag — no conf FLEET_REPO and no repos/ overlay"
+    pass repos "0 hosted$rr_tag — a fleet with no repo yet (fleet-repo.sh add <owner/repo>)"
   elif [ "$rs_bad" = 0 ]; then
     pass repos "$rs_n hosted$rr_tag: $rs_list"
   else
@@ -3095,12 +3100,12 @@ if [ -d "$conf_dir" ]; then
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
     own=$(_norm_repo "$(_conf_val "$cf" FLEET_REPO)")
     seen=' '; rs_n=0; rs_bad=0; rs_list=''
+    # An old-layout conf still names its first repo (read for one version, issue
+    # #1937); a new one names none — every repo is an overlay below.
     if [ -n "$own" ]; then
       ov="$conf_dir/fleets/$sess/repos/$(_repo_slug "$own").conf"; [ -f "$ov" ] || ov=''
       _repo_block "$sess" "$cf" "$own" "$ov" 1
       seen=" $own "
-    else
-      warn repo "$sess: conf has no FLEET_REPO — its first repo cannot be checked"
     fi
     for ov in "$conf_dir/fleets/$sess/repos"/*.conf; do
       [ -f "$ov" ] || continue

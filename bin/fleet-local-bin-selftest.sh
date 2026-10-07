@@ -97,11 +97,14 @@ chmod +x "$WORK/spawn.sh"
 _wait() { local _; for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$WORK/win.path" ] && break; sleep 0.2; done; cat "$WORK/win.path" 2>/dev/null; }
 winpath()    { rm -f "$WORK/win.path"; tmux -L fleet run-shell -t fleet: "$WORK/spawn.sh"; _wait; }
 clientpath() { rm -f "$WORK/win.path"; "$WORK/spawn.sh"; _wait; }
-# fleet-up's output on this sandbox, as it has always been (the byte-for-byte leg)
+# fleet-up's output on this sandbox (the byte-for-byte leg; the repo goes in through
+# fleet_repo_register since issue #1937)
 want=$(printf '%s\n' \
-  "fleet-up: reusing existing checkout $WORK/src/a" \
   "fleet-up: wrote $FLEET_CONF_DIR/fleets/fleet/conf" \
-  "fleet-up: fleet 'fleet' is up (repo=o/a base=master [flag])" \
+  "fleet-repo: reusing existing checkout $WORK/src/a" \
+  "fleet-repo: fleet now hosts o/a (main=$WORK/src/a base=master) — $FLEET_CONF_DIR/fleets/fleet/repos/o-a.conf" \
+  "fleet-up: added o/a to fleet 'fleet'" \
+  "fleet-up: fleet 'fleet' is up (1 repo(s): o/a)" \
   "fleet-up: not attaching (--no-attach) — later: fleet")
 
 # ---- 1. the helper ----

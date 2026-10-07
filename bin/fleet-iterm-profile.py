@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """fleet-iterm-profile.py — the iTerm2 Dynamic Profile `fleet` (issue #1903,
 EPIC #1906 C10): the profile the client's window runs in on a Mac, whose ⌘ chords
-send the private codes conf/tmux-shell.conf catches (⌘↓ ⌘↑ ⌘[ ⌘] ⌘J ⌘↩ ⌘/ ⌘P).
+send the private codes conf/tmux-shell.conf catches (⌘↓ ⌘↑ ⌘[ ⌘] ⌘J ⌘↩ ⌘/ ⌘P ⌘N).
 
     fleet-iterm-profile.py write    write / refresh it (nothing when it is current)
     fleet-iterm-profile.py remove   delete it
@@ -15,7 +15,10 @@ it comes from its parent — the profile the window was in when it was written
 ($ITERM_PROFILE), else iTerm2's default — and its Keyboard Map is the parent's
 own map (read from iTerm2's preferences, when they can be read) with the fleet
 rows on top. The rows come from `dash-keymap.sh --panel switch list`, the one
-table: a ⌘ chord → «Send Escape Sequence» `[<code>~`.
+table: a ⌘ chord → «Send Escape Sequence» `[<code>~`. One more, not a table row
+(issue #1953): ⇧↵ → «Send Hex Code» 0x0a, the newline byte (⌃j) — the writing
+area's line break, and the one Claude Code and Codex already read as one; a bare
+↵ stays the carriage return that sends.
 
 bin/fleet-shell.sh writes it at each start and reload (so the install line and
 every update leave it current) and switches the window into it only around its
@@ -37,6 +40,11 @@ NAME = "fleet"
 GUID = "claude-fleet-client-keys"
 # iTerm2's «Send Escape Sequence» key action: ESC, then the Text.
 ACTION_ESCAPE = 10
+# ⇧↵ (issue #1953): «Send Hex Code» (action 11) 0x0a — tmux has no extended keys
+# here, so without it ⇧↵ arrives as a bare ↵ and a second line cannot be written.
+ACTION_HEX = 11
+SHIFT_RETURN = "0xd-0x20000"
+TEXT_KEYS = {SHIFT_RETURN: {"Action": ACTION_HEX, "Text": "0x0a"}}
 
 
 def iterm_home():
@@ -109,6 +117,7 @@ def build(existing=None):
             break
     for row in table():
         base[row["key"]] = {"Action": ACTION_ESCAPE, "Text": "[%s~" % row["code"]}
+    base.update(TEXT_KEYS)
     profile = {"Name": NAME, "Guid": GUID, "Keyboard Map": base,
                "Tags": ["claude-fleet"]}
     if parent:

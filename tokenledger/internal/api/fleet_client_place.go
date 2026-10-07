@@ -65,12 +65,13 @@ type clientPlaceRequest struct {
 	Action      string `json:"action"` // place | status
 	TS          int64  `json:"ts"`
 	Repo        string `json:"repo"`
-	Kind        string `json:"kind"` // issue | scratch | restore
+	Kind        string `json:"kind"` // issue | scratch | restore | new
 	Issue       int    `json:"issue"`
 	Key         string `json:"key"`
 	Name        string `json:"name"`
 	Node        string `json:"node"`
 	Title       string `json:"title"`
+	Body        string `json:"body"` // kind=new: the issue's body (claude-fleet#1953)
 	Agent       string `json:"agent"`
 	Reap        string `json:"reap"`
 	Idem        string `json:"idempotency_key"`
@@ -270,6 +271,29 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 			args["name"] = n
 		}
 		what = "scratch"
+	case "new":
+		// The writing area (claude-fleet#1953): the issue does not exist yet —
+		// the chosen machine files it (fleet-issue-file.sh) and opens its
+		// worker, so there is no number to lease here; the node's own spawn
+		// takes the lease as any spawn there does.
+		if req.Issue != 0 || req.Key != "" || req.Name != "" {
+			httpError(w, http.StatusBadRequest, "kind=new names a title (and a body), no issue, key or name")
+			return
+		}
+		title, err := checkIssueTitle(req.Title)
+		if err != nil {
+			httpError(w, http.StatusBadRequest, errorObject(err)["message"])
+			return
+		}
+		args["kind"], args["title"] = "new", title
+		if req.Body != "" {
+			if _, err := checkText(req.Body, "body"); err != nil {
+				httpError(w, http.StatusBadRequest, errorObject(err)["message"])
+				return
+			}
+			args["body"] = req.Body
+		}
+		what = "new"
 	case "restore":
 		if req.Issue != 0 || req.Name != "" || !clientPlaceKeyRE.MatchString(req.Key) {
 			httpError(w, http.StatusBadRequest, "kind=restore names key: a /fleet-history row's issue-<N> or scratch-<N>")
@@ -277,7 +301,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		}
 		what = req.Key
 	default:
-		httpError(w, http.StatusBadRequest, "kind must be issue, scratch or restore")
+		httpError(w, http.StatusBadRequest, "kind must be issue, scratch, restore or new")
 		return
 	}
 
@@ -304,7 +328,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 			return
 		}
 		args["fleet_id"] = pl.FleetID
-		if req.Kind != "scratch" {
+		if req.Kind != "scratch" && req.Kind != "new" {
 			args["issue"] = float64(req.Issue)
 			// The chosen machine's fleet takes the issue's lease, so the
 			// spawn that arrives there finds it its own and nobody else can

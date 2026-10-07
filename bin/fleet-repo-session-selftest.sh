@@ -20,6 +20,8 @@
 #      session by its own id in $HOME; an OLD row (no column) gets its repo derived
 #      from @worktree; the one-repo fleet's rows carry no column.
 #   F. degenerate: the one-repo fleet's spawn command carries no self-stamp.
+#   G. a fleet with no repo at all (issue #1937): a bare spawn is a no-repo session
+#      (@norepo=1, no @repo / @worktree, in $HOME) — never a refusal.
 #
 # Every tmux call goes to a private socket via a PATH shim (never the live server);
 # `gh` fails, `claude` is a recorder, and HOME / CLAUDE_CONFIG_DIR / FLEET_CONF_DIR
@@ -231,6 +233,20 @@ if [ -n "$rO" ]; then
 else
   fail "E old row not restored"
 fi
+
+# ---- G. a fleet with no repo (issue #1937): a bare spawn is a no-repo session ----
+Z=fz
+mkdir -p "$FLEET_CONF_DIR/fleets/$Z"
+printf '# a fleet with no repo\nFLEET_CTX_WINDOW="7"\n' > "$FLEET_CONF_DIR/fleets/$Z/conf"
+tmux new-session -d -s "$Z" -n plan
+eq "G no repo hosted" "$(fleet_repos "$Z")" ""
+raw "$Z" || fail "G a bare spawn in a fleet with no repo failed: $(cat "$WORK/err")"
+wZ=$(newest "$Z")
+eq "G @norepo" "$(opt "$wZ" @norepo)" 1
+eq "G no @repo" "$(opt "$wZ" @repo)" ""
+eq "G no @worktree" "$(opt "$wZ" @worktree)" ""
+wait_rec "$wZ" || fail "G the no-repo launcher never reached claude"
+eq "G it runs in \$HOME" "$(cat "$WORK/rec/$wZ.cwd" 2>/dev/null)" "$(cd "$HOME" && pwd -P)"
 
 [ "$FAILS" = 0 ] && { printf 'PASS fleet-repo-session-selftest\n'; exit 0; }
 printf '%s failure(s)\n' "$FAILS" >&2; exit 1

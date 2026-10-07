@@ -900,6 +900,40 @@ class HubTests(HubFixture):
         self.assertEqual((refused["status"], err["code"], err["exit"]), ("failed", "AT_CAPACITY", 2))
         self.assertEqual(err["stderr1"], "dash-raw-session: at capacity: 6/6 sessions")
 
+    def test_new_issue_start_files_then_spawns(self):
+        # issue #1953: the client's writing area — kind=new carries a title and a
+        # body; the node files the issue through the one filer channel (the body
+        # on its stdin, never an argv the controller builds), reads the number
+        # off the URL, then spawns as an issue start does.
+        self.node.script(self.node.bin / "fleet-issue-file.sh", '''#!/bin/bash
+printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/file.calls"
+[ ! -f "$FLEET_CONF_DIR/file-fail" ] || { echo 'fleet-issue-file: gh issue create failed' >&2; exit 1; }
+echo "https://github.com/example/project/issues/128"
+''')
+        for bad in ({"kind": "new"}, {"kind": "new", "title": " "}, {"kind": "new", "title": "a\nb"},
+                    {"kind": "new", "title": "x" * 257}, {"kind": "new", "title": "x", "issue": 3},
+                    {"kind": "new", "title": "x", "name": "n"}, {"kind": "new", "title": "<!-- x -->"},
+                    {"kind": "new", "title": "x", "body": "<!-- fleet:from -->"}, {"kind": "scratch", "title": "x"},
+                    {"issue": 1, "body": "x"}):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                validate_write("worker_start", bad)
+        validate_write("worker_start", {"kind": "new", "title": "侧栏的名字太长", "body": "两行\n正文"})
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="new-1",
+                                                 params={"kind": "new", "title": "侧栏的名字太长", "body": "两行\n正文"}))
+        op = self.node.wait(started["operation_id"])
+        self.assertEqual((op["status"], op["result"]["exit"]), ("succeeded", 0))
+        self.assertEqual(op["result"]["workers"][0]["issue"], 128)
+        self.assertEqual((self.node.conf / "file.calls").read_text(),
+                         "--repo example/project --from hub --title 侧栏的名字太长 --body 两行\n正文\n")
+        self.assertEqual((self.node.conf / "spawn.calls").read_text(),
+                         "128 demo --agent claude --origin hub --repo example/project\n")
+        # a filing that fails opens nothing
+        (self.node.conf / "file-fail").touch()
+        failed = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="new-2",
+                                                               params={"kind": "new", "title": "y"}))["operation_id"])
+        self.assertEqual((failed["status"], failed["result"]["error"]["exit"]), ("failed", 7))
+        self.assertEqual(len((self.node.conf / "spawn.calls").read_text().splitlines()), 1)
+
     def test_move_in_runs_the_target_half_and_maps_its_outcome(self):
         # issue #1426: a session moved here through the hub. Every value is held
         # to the hub's own rule before it can become an argv word…

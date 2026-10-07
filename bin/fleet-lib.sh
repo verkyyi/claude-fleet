@@ -248,7 +248,7 @@ fleet_sess_for_repo() {
   want=$(fleet_norm_repo "${1:-}"); [ -n "$want" ] || return 0
   while IFS="$tab" read -r sess conf; do
     [ -n "$sess" ] || continue
-    rp=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    rp=$(fleet_repo_first "$sess")    # the conf's own repo, wherever it is put (#1937)
     [ "$(fleet_norm_repo "$rp")" = "$want" ] && { printf '%s' "$sess"; return 0; }
   done <<EOF
 $(fleet_each_conf)
@@ -474,61 +474,217 @@ fleet_load_conf() {
 $_flc_txt" in *"
 CCQUOTA_FLEET="*|*"
 export CCQUOTA_FLEET="*) export CCQUOTA_FLEET ;; esac
+  # Every repo lives in repos/<slug>.conf (issue #1937): in a fleet that has a
+  # repos/ dir, a fleet conf naming no repo describes the fleet only, so a repo key
+  # the caller's environment or the global conf carries is not this fleet's —
+  # dropped before any overlay. A conf that still names one is the old layout (read
+  # for one version, until fleet_conf_repo_migrate moves it): its repo stays, as
+  # before. No repos/ dir and no repo in the conf: untouched, as it always was.
+  local _flc_old=0
+  _fleet_conf_txt_names_repo "$_flc_txt" && _flc_old=1
+  [ "$_flc_old" = 1 ] || [ ! -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || eval "unset $_FLEET_REPO_SCOPED"
   # Window-aware (issue #788): inside a pane of THIS fleet whose window belongs to a
   # hosted repo, that repo's overlay goes on top — so every in-pane consumer (hooks,
   # commands/*.md, the launcher, the claim brief) sees its own repo's MAIN/base/model
   # without learning about repos. A fleet with no repos/ dir returns HERE, before any
-  # tmux call: the degenerate case is byte-for-byte what it was. So does a caller
-  # outside tmux (daemons), or one loading ANOTHER fleet's conf from inside a pane.
+  # tmux call. So does a caller outside tmux (daemons), or one loading ANOTHER
+  # fleet's conf from inside a pane — except that a new-layout fleet then reads its
+  # FIRST repo (repos/.order), the one its conf used to name, so a caller that reads
+  # $FLEET_REPO sees what it always saw. No repo at all ⇒ every repo key empty.
   [ -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || return 0
-  [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
   local _wr
-  [ "$(tmux display-message -p -t "$TMUX_PANE" "$FLEET_SESSION_FMT" 2>/dev/null)" = "$1" ] || return 0
-  _wr=$(fleet_window_repo "$1" "$TMUX_PANE")
-  [ -n "$_wr" ] && _fleet_repo_overlay "$1" "$_wr"
+  if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
+     && [ "$(tmux display-message -p -t "$TMUX_PANE" "$FLEET_SESSION_FMT" 2>/dev/null)" = "$1" ]; then
+    _wr=$(fleet_window_repo "$1" "$TMUX_PANE")
+    [ -n "$_wr" ] && _fleet_repo_overlay "$1" "$_wr" && return 0
+  fi
+  [ "$_flc_old" = 1 ] || _fleet_repo_overlay_first "$1"
   return 0
 }
 
+# _fleet_conf_txt_names_repo <conf text> → 0 iff the text assigns FLEET_REPO,
+# FLEET_MAIN or FLEET_BASE_BRANCH: the old layout, where the fleet conf held its
+# first repo (issue #1937) — a conf with a checkout but no FLEET_REPO (its repo
+# read off the collector's cache) is one too. Builtins only.
+_fleet_conf_txt_names_repo() {
+  case "
+${1:-}" in *"
+FLEET_REPO="*|*"
+export FLEET_REPO="*|*"
+FLEET_MAIN="*|*"
+export FLEET_MAIN="*|*"
+FLEET_BASE_BRANCH="*|*"
+export FLEET_BASE_BRANCH="*) return 0 ;; esac
+  return 1
+}
+
 # ---- repos a fleet hosts (issue #788) ---------------------------------------
-# A fleet may host several repos, all equal (there is no main repo). The fleet
-# conf's own FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH lines ARE one registry entry —
-# no migration — and every further repo is an overlay at
+# A fleet may host any number of repos — none included — all equal, and every one
+# put the same way (issue #1937): an overlay at
 #   $FLEET_CONF_DIR/fleets/<sess>/repos/<slug>.conf
 # carrying FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH plus any per-repo override
-# (FLEET_MODEL, FLEET_AGENT, FLEET_MCP_CONFIG, FLEET_DEPLOY_*). The fleet conf keeps
-# the fleet-wide defaults an overlay may override. A window names its repo with the
-# window option @repo=<owner/name>; `@norepo 1` marks a session that deliberately
-# belongs to none. Every consumer resolves through the helpers below — never an
-# ad-hoc `git remote` parse.
+# (FLEET_MODEL, FLEET_AGENT, FLEET_MCP_CONFIG, FLEET_DEPLOY_*, FLEET_SEED). The
+# fleet conf holds only fleet-wide settings an overlay may override. Their order is
+# repos/.order (one slug a line; fleet_repo_order_put), then any overlay it does
+# not list. The OLD layout — the fleet conf naming its first repo — is read for one
+# version (that repo comes first) until fleet_conf_repo_migrate moves it out. A
+# window names its repo with the window option @repo=<owner/name>; `@norepo 1` marks
+# a session that deliberately belongs to none. Every consumer resolves through the
+# helpers below — never an ad-hoc `git remote` parse.
 
-# Keys that describe the fleet conf's OWN repo, so they must not leak into another
-# repo's view when its overlay is applied: identity, where it deploys, and whether
-# it is the login's seed repo (FLEET_SEED, issue #1167 — a later repo is the user's).
+# Keys that describe ONE repo, so they must not leak into another repo's view when
+# its overlay is applied: identity, where it deploys, and whether it is the login's
+# seed repo (FLEET_SEED, issue #1167). They live only in a repo's overlay.
 _FLEET_REPO_SCOPED="FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT FLEET_SEED"
+
+# _fleet_repo_first_file <sess> — sets _FLEET_FIRST_F to the fleet's first overlay
+# (repos/.order, else the first repos/*.conf); rc 1 (empty) when it has none. A
+# variable, not stdout: fleet_load_conf calls it on every load, without a fork.
+_fleet_repo_first_file() {
+  local d="$FLEET_CONF_DIR/fleets/${1:-_}/repos" s f
+  [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
+  _FLEET_FIRST_F=''
+  if [ -f "$d/.order" ]; then
+    while IFS= read -r s || [ -n "$s" ]; do
+      [ -n "$s" ] && [ -f "$d/$s.conf" ] && { _FLEET_FIRST_F="$d/$s.conf"; return 0; }
+    done < "$d/.order"
+  fi
+  for f in "$d"/*.conf; do
+    [ -f "$f" ] && { _FLEET_FIRST_F="$f"; return 0; }
+  done
+  return 1
+}
+
+# _fleet_repo_overlay_first <sess> — apply the fleet's first repo's overlay (in the
+# caller's shell): what a new-layout fleet conf loaded with no window resolves to,
+# the repo the conf itself used to name. No repo ⇒ nothing, rc 1.
+_fleet_repo_overlay_first() {
+  _fleet_repo_first_file "${1:-}" || return 1
+  eval "unset $_FLEET_REPO_SCOPED"
+  eval "$(_fleet_conf_sans_global "$_FLEET_FIRST_F")"
+  return 0
+}
+
+# fleet_repo_order_put <sess> <repo> [first] — record <repo> in repos/.order: at the
+# end (a repo added later), or first (the repo a fleet conf used to name). Moves it
+# when listed already. fleet_repo_order_drop <sess> <repo> — take it out.
+# The file is rewritten from the fleet's WHOLE current order (fleet_repos), so a
+# repo it never listed keeps its place ahead of the one put last.
+fleet_repo_order_put() {
+  local d="$FLEET_CONF_DIR/fleets/${1:-_}/repos" s tmp r
+  s=$(fleet_slug "$(fleet_norm_repo "${2:-}")"); [ -n "$s" ] || return 2
+  mkdir -p "$d" 2>/dev/null || return 1
+  tmp="$d/.order.tmp.$$"
+  { if [ "${3:-}" = first ]; then printf '%s\n' "$s"; fi
+    fleet_repos "${1:-}" | while IFS= read -r r; do
+      r=$(fleet_slug "$r"); [ -n "$r" ] && [ "$r" != "$s" ] && printf '%s\n' "$r"
+    done
+    if [ "${3:-}" != first ]; then printf '%s\n' "$s"; fi
+  } > "$tmp" 2>/dev/null
+  mv -f "$tmp" "$d/.order" 2>/dev/null || { rm -f "$tmp"; return 1; }
+}
+fleet_repo_order_drop() {
+  local d="$FLEET_CONF_DIR/fleets/${1:-_}/repos" s tmp
+  s=$(fleet_slug "$(fleet_norm_repo "${2:-}")"); [ -n "$s" ] || return 2
+  [ -f "$d/.order" ] || return 0
+  tmp="$d/.order.tmp.$$"
+  { grep -vxF -- "$s" "$d/.order" | grep . || true; } > "$tmp"
+  if [ -s "$tmp" ]; then mv -f "$tmp" "$d/.order"; else rm -f "$tmp" "$d/.order"; fi
+}
+
+# fleet_conf_repo_migrate <sess> — move the OLD layout's repo out of the fleet conf
+# (issue #1937): its repo-scoped lines (_FLEET_REPO_SCOPED) go into
+# repos/<slug>.conf — ahead of whatever overlay that repo already had, which was
+# always applied on top and so still wins — the repo goes first in repos/.order (so
+# fleet_repos lists exactly what it did), and then the lines leave the conf. Both
+# files are kept as .bak first. The fleet's identity is frozen BEFORE anything
+# moves (fleet_uuid, issue #1936): the UUID was computed from these very lines.
+# Idempotent: a conf that names no FLEET_REPO is left alone (rc 0, prints nothing —
+# one with only a FLEET_MAIN stays the old layout, there is no slug to move it to);
+# one that moved prints `moved <repo>`. rc 1 = could not (nothing half-moved: the
+# conf is touched last), rc 2 = its FLEET_REPO is not owner/name (left as is).
+fleet_conf_repo_migrate() {
+  local sess="${1:-}" conf repo f tmp re
+  conf=$(fleet_conf_file "$sess")
+  [ -f "$conf" ] || return 0
+  grep -Eq '^[[:space:]]*(export[[:space:]]+)?FLEET_REPO[[:space:]]*=' "$conf" || return 0
+  repo=$(fleet_norm_repo "$( unset FLEET_REPO; . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )")
+  case "$repo" in */*/*|/*|*/) return 2 ;; ?*/?*) ;; *) return 2 ;; esac
+  fleet_uuid "$sess" >/dev/null 2>&1
+  f=$(fleet_repo_conf_file "$sess" "$repo")
+  mkdir -p "${f%/*}" 2>/dev/null || return 1
+  re="^[[:space:]]*(export[[:space:]]+)?($(printf '%s' "$_FLEET_REPO_SCOPED" | tr ' ' '|'))[[:space:]]*="
+  tmp="$f.tmp.$$"
+  {
+    printf "# claude-fleet: repo '%s' hosted by fleet '%s' — moved out of the fleet conf %s\n" \
+      "$repo" "$sess" "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf '# Overlays the fleet conf for this repo'\''s windows. Optional overrides:\n'
+    printf '# FLEET_MODEL, FLEET_AGENT, FLEET_MCP_CONFIG, FLEET_DEPLOY_*.\n'
+    grep -E "$re" "$conf"
+    if [ -f "$f" ]; then
+      printf '# ---- the overlay this repo already had (it wins) ----\n'
+      grep -Ev '^# (claude-fleet: repo |Overlays the fleet conf|FLEET_MODEL, FLEET_AGENT)' "$f"
+    fi
+  } > "$tmp" 2>/dev/null && sh -n "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  if [ -f "$f" ]; then cp -p "$f" "$(_fleet_bak_path "$f")" 2>/dev/null || { rm -f "$tmp"; return 1; }; fi
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+  fleet_repo_order_put "$sess" "$repo" first || return 1
+  cp -p "$conf" "$(_fleet_bak_path "$conf")" 2>/dev/null || return 1
+  # shellcheck disable=SC2086  # the key list splits on purpose
+  fleet_conf_unset "$conf" $_FLEET_REPO_SCOPED || return 1
+  printf 'moved %s\n' "$repo"
+}
+
+# _fleet_bak_path <file> → <file>.bak, or <file>.bak.<time> when that is taken.
+_fleet_bak_path() {
+  if [ -e "$1.bak" ]; then printf '%s.bak.%s' "$1" "$(date +%Y%m%d%H%M%S)"; else printf '%s.bak' "$1"; fi
+}
 
 # fleet_repo_conf_file <sess> <repo> → the overlay path for <repo> (may not exist).
 fleet_repo_conf_file() {
   printf '%s/fleets/%s/repos/%s.conf' "$FLEET_CONF_DIR" "${1:-_}" "$(fleet_slug "$(fleet_norm_repo "${2:-}")")"
 }
 
-# fleet_repos <sess> → every repo the fleet hosts, owner/name, one per line: the
-# fleet conf's FLEET_REPO first (when set), then each repos/*.conf, deduplicated.
-# Reads confs in subshells, so the caller's env is untouched.
+# fleet_repos <sess> → every repo the fleet hosts, owner/name, one per line, in
+# order: an old-layout fleet conf's FLEET_REPO first (read for one version, issue
+# #1937), then repos/.order, then any other repos/*.conf, deduplicated. Nothing for a
+# fleet with no repo. Reads confs in subshells, so the caller's env is untouched.
 fleet_repos() {
-  local sess="${1:-}" conf f r seen=' '
+  local sess="${1:-}" conf d f s _fr_seen=' '
   [ -n "$sess" ] || return 0
   [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
-  conf=$(fleet_conf_file "$sess")
-  for f in "$conf" "$FLEET_CONF_DIR/fleets/$sess/repos"/*.conf; do
-    [ -f "$f" ] || continue
-    r=$( unset FLEET_REPO; . "$f" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-    r=$(fleet_norm_repo "$r")
-    case "$r" in ?*/?*) ;; *) continue ;; esac
-    case "$seen" in *" $r "*) continue ;; esac
-    seen="$seen$r "
-    printf '%s\n' "$r"
-  done
+  conf=$(fleet_conf_file "$sess"); d="$FLEET_CONF_DIR/fleets/$sess/repos"
+  _fleet_repos_one "$conf"
+  if [ -f "$d/.order" ]; then
+    while IFS= read -r s || [ -n "$s" ]; do
+      [ -n "$s" ] && _fleet_repos_one "$d/$s.conf"
+    done < "$d/.order"
+  fi
+  for f in "$d"/*.conf; do _fleet_repos_one "$f"; done
   return 0
+}
+# _fleet_repos_one <file> — fleet_repos' step: print <file>'s FLEET_REPO unless
+# already seen (the caller's _fr_seen).
+_fleet_repos_one() {
+  local r
+  [ -f "$1" ] || return 0
+  r=$( unset FLEET_REPO; . "$1" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+  r=$(fleet_norm_repo "$r")
+  case "$r" in ?*/?*) ;; *) return 0 ;; esac
+  case "$_fr_seen" in *" $r "*) return 0 ;; esac
+  _fr_seen="$_fr_seen$r "
+  printf '%s\n' "$r"
+}
+
+# fleet_repo_first <sess> → the fleet's FIRST repo (owner/name), or nothing for a
+# fleet with none: what "the fleet conf's own repo" meant before every repo moved
+# into repos/ (issue #1937) — a migrated fleet answers exactly the repo its conf
+# named, so a store keyed on it (the bridge's bridge/, the collector's sessmap,
+# restore's FLEET row) stays where it was.
+fleet_repo_first() {
+  local r; r=$(fleet_repos "${1:-}")
+  printf '%s' "${r%%
+*}"
 }
 
 # fleet_has_repo_overlays <sess> → 0 iff fleets/<sess>/repos/ holds an overlay —
@@ -646,9 +802,15 @@ fleet_load_repo_conf() {
   # overlay (a pane of B spawning for A), a key A's overlay leaves unset would keep
   # B's value instead of falling back to the fleet's. One-repo fleet: untouched.
   fleet_has_repo_overlays "${1:-}" && _fleet_repo_keys_reset
+  local _flr_txt=''
   if [ -f "$conf" ]; then
-    eval "$(_fleet_conf_sans_global "$conf")"
+    _flr_txt=$(_fleet_conf_sans_global "$conf")
+    eval "$_flr_txt"
   fi
+  # A new-layout conf names no repo (issue #1937): whatever repo keys the shell
+  # already held are not the fleet's, so <repo>'s overlay is required.
+  _fleet_conf_txt_names_repo "$_flr_txt" || [ ! -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] \
+    || eval "unset $_FLEET_REPO_SCOPED"
   _fleet_repo_overlay "${1:-}" "${2:-}"
 }
 
@@ -1390,9 +1552,13 @@ fleet_write_conf() {
     printf "# claude-fleet: fleet '%s' — written by fleet-up.sh %s\n" "$name" "$stamp"
     printf '# Overlays the global fleet.conf for this fleet'\''s tmux session. Add any other\n'
     printf '# FLEET_* keys (see fleet.conf.example) — e.g. FLEET_CTX_WINDOW, FLEET_PROTECTED_RE.\n'
-    printf 'FLEET_REPO="%s"\n' "$repo"
-    printf 'FLEET_MAIN="%s"\n' "$main"
-    printf 'FLEET_BASE_BRANCH="%s"\n' "$base"
+    # No repo (issue #1937): the fleet conf holds the fleet only — every repo
+    # lives in repos/<slug>.conf (fleet_repo_register).
+    if [ -n "$repo" ]; then
+      printf 'FLEET_REPO="%s"\n' "$repo"
+      printf 'FLEET_MAIN="%s"\n' "$main"
+      printf 'FLEET_BASE_BRANCH="%s"\n' "$base"
+    fi
     # `if` (not `&&`) so an empty $preserved doesn't make the group exit non-zero.
     if [ -n "$preserved" ]; then printf '%s\n' "$preserved"; fi
   } > "$tmp" || { rm -f "$tmp"; return 1; }
@@ -1445,13 +1611,15 @@ fleet_repo_trust_warn() {
   return 0
 }
 
-# fleet_repo_register <sess> <owner/name> [<dir>] [--base <branch>] — add a repo to
-# a fleet: validate, clone-or-reuse (<dir> defaults to ~/projects/<name>), resolve
-# the base branch (#603), write repos/<slug>.conf atomically, then the same follow-
-# through fleet-up gives the first repo — the trust warning, a daemon wake (#1077)
-# and a collector kick, so the daemons look at it within their next tick instead of
-# an idle cycle later. (No label seed: fleet-up seeds none either; doctor's labels
-# row names a repo that lacks them.)
+# fleet_repo_register <sess> <owner/name> [<dir>] [--base <branch>] [--seed] — add a
+# repo to a fleet, ANY repo, the first one included (issue #1937: fleet-up.sh and
+# fleet-repo.sh add both come here): validate, clone-or-reuse (<dir> defaults to
+# ~/projects/<name>), resolve the base branch (#603), write repos/<slug>.conf
+# atomically (--seed marks it the login's starter in the same write, #1167) and list
+# it last in repos/.order, then the follow-through — the trust warning, a daemon
+# wake (#1077) and a collector kick, so the daemons look at it within their next
+# tick instead of an idle cycle later. (No label seed: doctor's labels row names a
+# repo that lacks them.)
 # stdout is ONE result token — the contract the dash's add-repo popup reads (#1103),
 # the same shape as dash-reap.sh's; everything human goes to stderr:
 #   added:<slug>              0  overlay written, daemons woken
@@ -1463,10 +1631,11 @@ fleet_repo_trust_warn() {
 #   failed:write              1  the overlay could not be written
 # Nothing is written unless the token is added:*.
 fleet_repo_register() {
-  local sess="" repo="" dir="" base="" base_src="" base_default="" tab f bin rc
+  local sess="" repo="" dir="" base="" base_src="" base_default="" tab f bin rc seed=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --base) base="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+      --seed) seed=1; shift ;;
       *) if [ -z "$sess" ]; then sess="$1"; elif [ -z "$repo" ]; then repo="$1"
          elif [ -z "$dir" ]; then dir="$1"; fi; shift ;;
     esac
@@ -1514,11 +1683,19 @@ fleet_repo_register() {
       printf 'FLEET_REPO="%s"\n' "$repo"
       printf 'FLEET_MAIN="%s"\n' "$dir"
       printf 'FLEET_BASE_BRANCH="%s"\n' "$base"
+      # The seed only looks (issue #1167): marked in the same write, so no daemon
+      # tick ever reads it unmarked; its switches are its own, never the fleet's.
+      if [ "$seed" = 1 ]; then
+        printf 'FLEET_SEED="1"\nFLEET_AUTOFILL="0"\nFLEET_ISSUE_BRIDGE="0"\n'
+      fi
     } > "$f.tmp.$$" || ! mv -f "$f.tmp.$$" "$f"; then
     rm -f "$f.tmp.$$"; echo "fleet-repo: failed to write $f" >&2; echo "failed:write"; return 1
   fi
+  fleet_repo_order_put "$sess" "$repo" \
+    || echo "fleet-repo: WARNING — could not record $repo in $(dirname "$f")/.order (it lists after the others)" >&2
   echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base) — $f" >&2
-  # --- the follow-through fleet-up gives its first repo ---
+  [ "$seed" = 1 ] && echo "fleet-repo: $repo is this fleet's seed repo — no autofill, no issue-bridge (FLEET_SEED=1)" >&2
+  # --- the follow-through ---
   fleet_repo_trust_warn "$dir" fleet-repo
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   [ -f "$bin/fleet-daemon-lib.sh" ] && ( . "$bin/fleet-daemon-lib.sh" && fleet_daemon_wake "$bin/.." ) 2>/dev/null
@@ -6268,7 +6445,7 @@ fleet_resolve_repo_for_session() {
   local sess="$1" conf repo pth
   conf=$(fleet_conf_file "$sess")
   if [ -f "$conf" ]; then
-    repo=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    repo=$(fleet_repo_first "$sess")   # the conf's own repo, wherever it is put (#1937)
     [ -n "$repo" ] && { fleet_norm_repo "$repo"; return; }
   fi
   while IFS= read -r pth; do
