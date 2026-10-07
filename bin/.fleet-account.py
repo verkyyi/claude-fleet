@@ -19,6 +19,8 @@ import subprocess
 import sys
 import tempfile
 import time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fleet_iso  # noqa: E402  the one ISO reader (issue #2024)
 
 BIN = Path(__file__).absolute().parent  # Preserve the selftest shadow install root.
 
@@ -77,8 +79,8 @@ def epoch(value):
     if n is not None:
         return int(n)
     try:
-        return int(datetime.datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp())
-    except (AttributeError, TypeError, ValueError):
+        return int(fleet_iso.parse(value).timestamp())
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 

@@ -74,6 +74,8 @@ import re
 import subprocess
 import sys
 import time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fleet_iso  # noqa: E402  the one ISO reader (issue #2024)
 
 GRACE_MIN = 600                    # a wakeup may fire this late before we call it stopped
 CRON_LIFE = 7 * 86400 + 900        # recurring CronCreate auto-expires after 7 days (+ jitter)
@@ -207,7 +209,7 @@ def apply(value, payload, now=None):
 
 def _epoch(ts):
     try:
-        return int(datetime.datetime.fromisoformat(str(ts).replace('Z', '+00:00')).timestamp())
+        return int(fleet_iso.parse(ts).timestamp())
     except (TypeError, ValueError):
         return None
 

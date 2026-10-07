@@ -76,6 +76,11 @@ bin/fleet-show-send.py
 bin/fleet-remote-view.sh
 bin/fleet-hub-sessions.sh
 bin/fleet-hub-write.sh
+# the hub's address read one way, its timestamps on any python3 — macOS's own is
+# 3.9 (#2024); `fleet drill invite` mints an onboarding drill from any computer
+bin/fleet-hub-url.sh
+bin/fleet_iso.py
+bin/fleet-drill.sh
 bin/fleet-sidebar.sh
 bin/fleet-sidebar.py
 bin/fleet_reap_policy.py

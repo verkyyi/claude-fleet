@@ -497,8 +497,10 @@ quota_parse() {
   local map; map=$(quota_label_map)
   # the JSON rides the environment: `python3 -` takes its PROGRAM from stdin
   local js; js=$(cat)
-  QP_MAP="$map" QP_JSON="$js" python3 - <<'PY'
-import json, os, sys, datetime
+  QP_MAP="$map" QP_JSON="$js" QP_BIN="$BIN" python3 - <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ.get("QP_BIN") or ".")
+import fleet_iso  # the one ISO reader (issue #2024)
 try:
     d = json.loads(os.environ.get("QP_JSON", ""))
 except Exception:
@@ -525,7 +527,7 @@ def ep(v):
     if v is None or v == "" or isinstance(v, bool): return 0
     if isinstance(v, (int, float)): return int(v)
     try:
-        return int(datetime.datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp())
+        return int(fleet_iso.parse(v).timestamp())
     except Exception:
         return 0
 by_uuid = {a.get("account_uuid"): a for a in accts}
@@ -578,8 +580,10 @@ MODEL_CAP_PCT="${FLEET_MODEL_CAP_PCT:-100}"
 quota_models_parse() {
   local map; map=$(quota_label_map)
   local js; js=$(cat)
-  QP_MAP="$map" QP_JSON="$js" QP_CAP="$MODEL_CAP_PCT" python3 - <<'PY'
-import json, os, sys, datetime
+  QP_MAP="$map" QP_JSON="$js" QP_CAP="$MODEL_CAP_PCT" QP_BIN="$BIN" python3 - <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ.get("QP_BIN") or ".")
+import fleet_iso  # the one ISO reader (issue #2024)
 try:
     d = json.loads(os.environ.get("QP_JSON", ""))
 except Exception:
@@ -597,7 +601,7 @@ def ep(v):
     if v is None or v == "" or isinstance(v, bool): return 0
     if isinstance(v, (int, float)): return int(v)
     try:
-        return int(datetime.datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp())
+        return int(fleet_iso.parse(v).timestamp())
     except Exception:
         return 0
 accts = [a for a in accts if isinstance(a, dict)]

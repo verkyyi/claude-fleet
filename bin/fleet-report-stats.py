@@ -50,6 +50,8 @@ import os
 import re
 import subprocess
 import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fleet_iso  # noqa: E402  the one ISO reader (issue #2024)
 
 REPORT_RX = re.compile(r"\[child-report\] (.*?)\nstate: (\S+)(?: \(([^)\n]*)\))? · branch (\S+)")
 DIGEST = "[children-digest]"
@@ -62,7 +64,7 @@ VERIFY_CMDS = ("gh pr", "capture-pane", "gh run", "git log")
 
 def parse_ts(value):
     try:
-        t = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        t = fleet_iso.parse(value)
     except (TypeError, ValueError):
         return None
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)

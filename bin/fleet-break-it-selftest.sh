@@ -1971,6 +1971,75 @@ PY2
   SECS=$(since "$t0"); WHAT="演练的扫码以演练同事确认：入口上确认人是 drill person，不带运营者的 token / 证书，确认码只能用一次"
 }
 
+# `fleet drill invite` on a client-only computer (issue #2024, EPIC #1906 C17):
+# the MacBook keeps its hub in fleet.conf's guarded [client] section, which a
+# column-0 sed never saw ("no hub"); and macOS's own /usr/bin/python3 is 3.9,
+# whose datetime.fromisoformat rejects the hub's nanosecond `…Z` — the invite was
+# made on the hub and its one-time code died in a ValueError before it printed.
+# The drill: a client HOME (hub only in [client]), a hub answering a nanosecond
+# expires_at, PATH=/usr/bin:/bin — or a python3 that refuses what 3.9 refuses
+# when this box's /usr/bin/python3 is newer.
+drill_hub_time_py39() {
+  CAP=30; local t0 d py out rc
+  t0=$(now)
+  d="$WORK/py39-$$"; mkdir -p "$d/home/.config/claude-fleet" "$d/pybin" "$d/strict"
+  py=/usr/bin/python3
+  if ! "$py" -c 'import sys; sys.exit(0 if sys.version_info < (3, 11) else 1)' 2>/dev/null; then
+    # a python3 whose fromisoformat takes only what 3.9's does
+    cat > "$d/strict/sitecustomize.py" <<'PY2'
+import datetime as _d, re as _re
+class _D(_d.datetime):
+    @classmethod
+    def fromisoformat(cls, s):
+        if not isinstance(s, str) or s.endswith(("Z", "z")) or _re.search(r"\.(\d{1,2}|\d{4,5}|\d{7,})(?!\d)", s):
+            raise ValueError("Invalid isoformat string: %r" % (s,))
+        return super().fromisoformat(s)
+_d.datetime = _D
+PY2
+    printf '#!/bin/sh\nPYTHONPATH="%s" exec "%s" "$@"\n' "$d/strict" "$(command -v python3)" > "$d/pybin/python3"
+    chmod +x "$d/pybin/python3"
+  else
+    ln -s "$py" "$d/pybin/python3"
+  fi
+  cat > "$d/drive.py" <<'PY2'
+import json, os, signal, subprocess, sys, threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+signal.alarm(int(sys.argv[2]))
+DRILL, HOME, PYBIN = sys.argv[1], sys.argv[3], sys.argv[4]
+CODE = "fd_abcdefghijklmnopqrstuvwxyz"
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        out, st = {"error": "no such door"}, 404
+        if self.path == "/v1/admin/drill" and self.headers.get("Authorization"):
+            out, st = {"person_id": "drill-7", "kind": "drill", "login": "drill10070547", "host": "mbp",
+                       "approve_code": CODE, "expires_at": "2026-10-07T05:47:35.272044642Z"}, 200
+        b = json.dumps(out).encode()
+        self.send_response(st); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+srv = HTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+conf = os.path.join(HOME, ".config", "claude-fleet", "fleet.conf")
+with open(conf, "w") as f:
+    f.write('# ---- [common] ----\nFLEET_HOST=0\n\n# ---- [client] ----\n'
+            'if [ "${FLEET_SHELL:-0}" = 1 ]; then\n  CCQUOTA_HUB_URL="http://127.0.0.1:%d"\nfi\n'
+            '\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nfi\n' % srv.server_address[1])
+env = {k: v for k, v in os.environ.items() if not k.startswith(("FLEET_", "CCQUOTA_", "XDG_", "PYTHON"))}
+env.update(HOME=HOME, PATH=PYBIN + ":/usr/bin:/bin", TZ="UTC", CCQUOTA_VIEWER_TOKEN="admin-token")
+r = subprocess.run(["bash", DRILL, "invite", "--ttl", "5m"], env=env, capture_output=True, text=True, timeout=20)
+out = (r.stdout + r.stderr).strip()
+if r.returncode != 0 or CODE not in r.stdout:
+    print("WHY=no code printed (rc %d): %s" % (r.returncode, out.replace("\n", " | ")[:300])); sys.exit(1)
+if not any(l.startswith("到期") and "10-07 05:47" in l for l in r.stdout.splitlines()):
+    print("WHY=no expiry printed: %s" % out.replace("\n", " | ")[:300]); sys.exit(1)
+print("OK")
+PY2
+  out=$(python3 "$d/drive.py" "$BIN/fleet-drill.sh" "$((CAP + 10))" "$d/home" "$d/pybin" 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ "$out" = OK ] || { WHY=${out#WHY=}; WHY="${WHY:-the drive died}"; return 1; }
+  SECS=$(since "$t0"); WHAT="客户端（入口只写在 [client] 段）用 python 3.9 跑 fleet drill invite：找到入口，纳秒时间照样打出确认码和到期"
+}
+
 # A second client pushes the first off (issue #1932, EPIC #1906 C13): until
 # 2026-10-06 a person held ONE client lease — the iPhone opening took it over and
 # the MacBook fell to its standby screen; on one machine a second `fleet` popped

@@ -141,7 +141,7 @@ try: print(json.load(sys.stdin).get("error",""))
 except Exception: print("")' 2>/dev/null | head -c 300)" ;;
 esac
 
-login=$(printf '%s' "$json" | python3 -c '
+login=$(printf '%s' "$json" | FLEET_ISO_BIN="$BIN" python3 -c '
 import json, os, re, sys, time
 d = json.load(sys.stdin)
 cert, login = d.get("certificate", ""), d.get("login", "")
@@ -155,11 +155,11 @@ os.rename(tmp, sys.argv[1])
 # when it stops working: valid_before, else now + ttl_sec, else now + what was asked
 until = 0
 try:
-    from datetime import datetime
     vb = str(d.get("valid_before") or "")
     if vb:
-        vb = re.sub(r"(\.\d{6})\d+", r"\1", vb[:-1] + "+00:00" if vb.endswith("Z") else vb)
-        until = int(datetime.fromisoformat(vb).timestamp())
+        sys.path.insert(0, os.environ.get("FLEET_ISO_BIN") or ".")
+        import fleet_iso  # the one ISO reader (issue #2024)
+        until = int(fleet_iso.parse(vb).timestamp())
 except Exception:
     until = 0
 if until <= 0:

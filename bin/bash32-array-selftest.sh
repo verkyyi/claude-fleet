@@ -184,4 +184,11 @@ ok; [ -z "$(lint_file "$WORK/opted-out.sh")" ]   || fail "lint ignored the '# ba
 out=$(bash "$BIN/zsh-local-selftest.sh" 2>&1) || fail "zsh-local-selftest.sh: $out"
 ok
 
+# --- the python 3.9 sibling (issue #2024) -----------------------------------------
+# macOS's own /usr/bin/python3 is 3.9, whose fromisoformat cannot read the hub's
+# nanosecond `…Z`: iso-time-selftest.sh lints bin/ for a bare fromisoformat( and runs
+# bin/fleet_iso.py's cases on every python3 here. Same reason to ride along here.
+out=$(bash "$BIN/iso-time-selftest.sh" 2>&1) || fail "iso-time-selftest.sh: $out"
+ok
+
 printf 'bash32-array-selftest: OK (%d checks)\n' "$CHECKS"

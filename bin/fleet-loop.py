@@ -24,6 +24,8 @@ import subprocess
 import sys
 import time
 import uuid
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fleet_iso  # noqa: E402  the one ISO reader (issue #2024)
 
 
 def save(path, value):
@@ -583,7 +585,7 @@ def from_claude(a):
         raise ValueError('no successful self-paced ScheduleWakeup to import; inspect the source')
     value = {'prompt': last['prompt'], 'interval_seconds': last['delaySeconds']}
     if scheduled_at:
-        value['next_run_at'] = datetime.datetime.fromisoformat(scheduled_at.replace('Z', '+00:00')).timestamp() + last['delaySeconds']
+        value['next_run_at'] = fleet_iso.parse(scheduled_at).timestamp() + last['delaySeconds']
     value = spec(value)
     save(Path(a.output), value)
     print('Saved last successful self-paced loop. Verify it is still intended before passing --loop: ' + a.output)
