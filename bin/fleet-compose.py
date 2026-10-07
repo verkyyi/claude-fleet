@@ -67,6 +67,7 @@ import curses
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -633,6 +634,17 @@ def ui(screen, session):
             except OSError:
                 pass
         saved_text, saved_at, dirty_at = text, time.strftime("%H:%M") if text.strip() else "", None
+
+    def hangup(signum, frame):
+        # a respawn (the shell's portal / reload on a new client, issue #2113)
+        # or a closed window: what was typed since the last beat goes to disk first
+        try:
+            save(force=True)
+        finally:
+            raise SystemExit(0)
+
+    for sig in (signal.SIGHUP, signal.SIGTERM):
+        signal.signal(sig, hangup)
 
     def put(y, x, text, attr=0):
         h, w = screen.getmaxyx()
