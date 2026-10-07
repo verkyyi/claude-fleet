@@ -43,7 +43,7 @@ case "$sub" in
   *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
 
-sess=${1:-}; client=${2:-}; PRINT=''
+client=${2:-}; PRINT=''   # $1: the shell session (the caller's context)
 [ "${3:-}" = --print ] && PRINT=1
 [ "$client" = --print ] && { PRINT=1; client=''; }
 own=''; { read -r own < "$CL_DIR/client.lease"; } 2>/dev/null

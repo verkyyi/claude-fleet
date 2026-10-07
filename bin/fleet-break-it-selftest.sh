@@ -1910,12 +1910,12 @@ PY2
 # lease — nobody on standby, this server still renewing — and typing here makes
 # it the primary again.
 drill_second_client() {
-  CAP=45; local t0 s="${CSESS}2" h="$WORK/sc" out
+  CAP=45; local t0 s="${CSESS}2" sc="$WORK/sc" out
   client_setup
-  mkdir -p "$h/cur"; : > "$h/log"
-  cat > "$h/lease" <<EOF
+  mkdir -p "$sc/cur"; : > "$sc/log"
+  cat > "$sc/lease" <<EOF
 #!/bin/bash
-h="$h"; act=\$1; shift; lease=''; dev=''
+h="$sc"; act=\$1; shift; lease=''; dev=''
 while [ \$# -gt 0 ]; do case "\$1" in --lease) lease=\$2; shift 2 ;; --device) dev=\$2; shift 2 ;; *) shift ;; esac; done
 [ "\$act" = device ] && { printf 'MacBook\tFakeTerm\n'; exit 0; }
 echo "\$act \$lease \$dev" >> "\$h/log"
@@ -1930,18 +1930,18 @@ case "\$act" in
   *) printf 'none\t\t\t\t\n' ;;
 esac
 EOF
-  chmod +x "$h/lease"
+  chmod +x "$sc/lease"
   # `fleet` again on this machine, as the person types it (the drive runs it
   # while the first terminal is attached)
   { printf '#!/bin/bash\n'; declare -f client_env client_start; printf 'WORK=%q\n' "$WORK"
     # its own cache: the other client drills' keepers live in $WORK/ccache, and
     # one keeper per cache is the rule
     printf 'client_start %q FLEET_CLIENT_LEASE_CMD=%q FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_SHELL_CACHE=%q\n' \
-      "$s" "$h/lease" "$h/cache"
-  } > "$h/fleet"; chmod +x "$h/fleet"
+      "$s" "$sc/lease" "$sc/cache"
+  } > "$sc/fleet"; chmod +x "$sc/fleet"
   t0=$(now)
-  "$h/fleet" || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
-  out=$(python3 - "$REAL_TMUX" "$s" "$h/cache/tmp" "$h" <<'PY' 2>&1
+  "$sc/fleet" || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
+  out=$(python3 - "$REAL_TMUX" "$s" "$sc/cache/tmp" "$sc" <<'PY' 2>&1
 import fcntl, os, pty, select, signal, struct, subprocess, sys, termios, time
 tmux, sess, cl, h = sys.argv[1:5]
 signal.alarm(60)

@@ -206,7 +206,7 @@ sleep 2
 hasnt "B: the first client keeps working (no standby)" "$(screen "$p1")" "按回车接回"
 hasnt "B: the second client works" "$(screen "$p2")" "按回车接回"
 eq "B: the same lease kept" "$id1" "$(cat "$WORK/cache-$SX/tmp/client.lease" 2>/dev/null)"
-eq "B: one lease on the hub" 1 "$(ls "$H/cur" | grep -c .)"
+eq "B: one lease on the hub" 1 "$(find "$H/cur" -type f | grep -c .)"
 ok test ! -f "$WORK/cache-$SX/tmp/client.standby"
 # where (#1716): each acquire carries the client's saved where; the one in use is
 # client.where.json, what fleet-client-where.sh reads with no hub
@@ -222,7 +222,7 @@ ok test ! -f "$WORK/cache-$SX/tmp/client.standby"
 ok test ! -f "$WORK/cache-$SY/tmp/client.standby"
 hasnt "C: the MacBook keeps working" "$(screen "$p2")" "按回车接回"
 hasnt "C: the iPhone works" "$(screen "$p3")" "按回车接回"
-eq "C: two leases on the hub" 2 "$(ls "$H/cur" | grep -c .)"
+eq "C: two leases on the hub" 2 "$(find "$H/cur" -type f | grep -c .)"
 ok test ! -f "$H/evictions"
 n1=$(grep -c "^renew $id1" "$H/log"); sleep 2.5; n2=$(grep -c "^renew $id1" "$H/log")
 CHECKS=$((CHECKS + 1)); [ "$n2" -gt "$n1" ] || fail "C: the MacBook's machine stopped renewing" "$n1 → $n2"
