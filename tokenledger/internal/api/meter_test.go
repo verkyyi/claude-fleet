@@ -169,6 +169,10 @@ func TestMeter_WindowIsTheDifferenceOfTwoTotals(t *testing.T) {
 
 func TestMeter_SettingOffIs404(t *testing.T) {
 	s := meterServer(t)
+	// The settings table rides the fleet module's schema.
+	if err := s.Store.EnsureNodes(); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Store.SetFleetSetting(MeterKey, "off", time.Now()); err != nil {
 		t.Fatal(err)
 	}
