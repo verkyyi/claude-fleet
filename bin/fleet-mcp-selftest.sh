@@ -199,7 +199,7 @@ import json, sys
 rows = {r["id"]: r for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 want = {10: 'unknown argument "force"', 11: "must be an integer", 12: 'missing required argument "issue"',
         13: "≤ 570", 14: "owner/name", 15: "not hosted by this fleet", 16: "acme/app, acme/lib",
-        17: "takes no arguments", 18: "issue:<N>, scratch-<N> or parent", 19: "unknown tool",
+        17: "takes no arguments", 18: "issue:<N>, scratch-<N>, orchestrator or parent", 19: "unknown tool",
         20: "must be an integer"}
 for i, why in want.items():
     res = rows[i]["result"]

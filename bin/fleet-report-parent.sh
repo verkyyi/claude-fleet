@@ -236,6 +236,7 @@ fi
 case "$worigin" in
   issue-*|scratch-*) ;;
   ?*:issue-*|?*:scratch-*) ;;    # repo-qualified (issue #789) — a fleet hosting 2+ repos
+  orchestrator) ;;               # the fleet's orchestrating session (issue #2129)
   '') quiet 'hub-spawned (@origin empty)' ;;
   *)  quiet "@origin '$worigin' is not a window key (daemon / cross-fleet parent)" ;;
 esac
@@ -325,15 +326,19 @@ esac
 # row_json <child> <state> <pr> <verdict> <summary> <title> <tier> [<relayed_from>]
 # → one ledger row. `gen` is the parent generation the child was spawned under
 # (@origin_gen); a relayed row is filed in someone else's book and carries none.
-# `fid` is the child's own @fleet_id (issue #1351) — its identity, never its name.
+# `fid` is the child's own @fleet_id (issue #1351) — its identity, never its name;
+# `pfid` the parent's (@origin_fid), so a book can say which session it was
+# (issue #1955: fleet-history.sh drafts leaves out the writing area's).
 row_json() {
-  RJ_FID="$selffid" RJ_GEN="$wogen" RJ_CGEN="$selfgen" RJ_CKEY="$selfgkey" RJ_LINES="$DROWS" RJ_SAMPLE="$DSAMPLE" python3 -c 'import json, os, sys
+  RJ_PFID="$ofid" RJ_FID="$selffid" RJ_GEN="$wogen" RJ_CGEN="$selfgen" RJ_CKEY="$selfgkey" RJ_LINES="$DROWS" RJ_SAMPLE="$DSAMPLE" python3 -c 'import json, os, sys
 d = dict(zip(("child","state","pr","verdict","summary","title","tier","relayed_from"), sys.argv[1:]))
 for f in ("lines", "sample"):   # a DEGENERATE row (issue #1557); every other row is unchanged
     if os.environ.get("RJ_" + f.upper()):
         d[f] = os.environ["RJ_" + f.upper()]
 if os.environ.get("RJ_FID"):
     d["fid"] = os.environ["RJ_FID"]
+if os.environ.get("RJ_PFID") and "relayed_from" not in d:
+    d["pfid"] = os.environ["RJ_PFID"]
 if os.environ.get("RJ_GEN") and "relayed_from" not in d:
     d["gen"] = os.environ["RJ_GEN"]
 if os.environ.get("RJ_CGEN"):

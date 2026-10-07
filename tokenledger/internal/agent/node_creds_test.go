@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -294,4 +296,66 @@ func TestCredCycleSetupTokenIsWrittenLikeAnyLease(t *testing.T) {
 		t.Fatalf("label file = %q, want the hub marker", b)
 	}
 	mode(t, filepath.Join(acct, "icloud.hub", ".credentials.json"), 0o600)
+}
+
+// claude-fleet#2007: a hub-leased Codex home whose current access the
+// upstream refused (#1920's .ccquota-upstream.json) is reported on the next
+// lease by fingerprint — never the token — and only once wakes the loop.
+func TestCredLeaseReportsUpstreamRevoked(t *testing.T) {
+	home := t.TempDir()
+	exp := time.Now().Add(100 * time.Hour).UTC()
+	access := hubTestJWT(map[string]any{"exp": exp.Unix(), "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1", "chatgpt_user_id": "member"}})
+	cx := filepath.Join(home, ".codex-accounts", "work")
+	if err := writeCodexAuth(cx, access, "idt", "acct-1", time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	// An unmanaged home with a refusal of its own is not the hub's business.
+	own := filepath.Join(home, ".codex")
+	_ = os.MkdirAll(own, 0o700)
+	_ = os.WriteFile(filepath.Join(own, "auth.json"), []byte(`{"tokens":{"access_token":"x","refresh_token":"mine"}}`), 0o600)
+	verdict := func(dir, tok, refresh string) {
+		fp := fmt.Sprintf("%x", sha256.Sum256([]byte(tok+"\x00"+refresh)))
+		_ = os.WriteFile(filepath.Join(dir, ".ccquota-upstream.json"),
+			[]byte(`{"credential_version":"`+fp+`","state":"rejected","error":"token_revoked","at":"2026-10-07T00:00:00Z","by":"proxy"}`), 0o600)
+	}
+	verdict(cx, access, CodexRefreshPlaceholder)
+	verdict(own, "x", "mine")
+
+	var got []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		fmt.Fprint(w, `{"principal_id":"p","credentials":[]}`)
+	}))
+	t.Cleanup(srv.Close)
+	a := credAgent(srv, home)
+	if _, err := a.credCycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		UpstreamRejected []upstreamRejection `json:"upstream_rejected"`
+	}
+	if err := json.Unmarshal(got, &body); err != nil {
+		t.Fatalf("lease body %q: %v", got, err)
+	}
+	want := fmt.Sprintf("%x", sha256.Sum256([]byte(access)))
+	if len(body.UpstreamRejected) != 1 {
+		t.Fatalf("upstream_rejected = %+v, want the one hub-managed home", body.UpstreamRejected)
+	}
+	rj := body.UpstreamRejected[0]
+	if rj.Provider != "codex" || rj.Account != "work" || rj.Fingerprint != want || rj.Error != "token_revoked" {
+		t.Fatalf("report %+v", rj)
+	}
+	if strings.Contains(string(got), access) {
+		t.Fatal("the access token itself went to the hub")
+	}
+	if !a.credReported[want] {
+		t.Fatal("a carried refusal is not remembered: the wait would wake on it again")
+	}
+	// A renewed token (a new auth.json) outdates the refusal: nothing to say.
+	if err := writeCodexAuth(cx, access+"2", "idt", "acct-1", time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if rs := a.upstreamRejections(); len(rs) != 0 {
+		t.Fatalf("refusal of a replaced token still reported: %+v", rs)
+	}
 }

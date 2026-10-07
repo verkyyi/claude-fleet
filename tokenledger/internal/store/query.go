@@ -148,14 +148,29 @@ func (s *Store) listEndpoints(account string, withRetired bool, sources ...strin
 // this account's limits. Callers must render that as "unavailable", never as
 // zero utilization.
 func (s *Store) LatestLimits(account string) (*model.LimitsSnapshot, error) {
-	row := s.read.QueryRow(`
+	return s.LatestLimitsFrom(account, "")
+}
+
+// LatestLimitsFrom is LatestLimits restricted to one endpoint's readings
+// ("" = any): the hub's own reading (claude-fleet#2169) is looked up by its
+// endpoint so a fresh one wins over a newer node reading.
+func (s *Store) LatestLimitsFrom(account, endpoint string) (*model.LimitsSnapshot, error) {
+	const cols = `
 		SELECT account_uuid, endpoint_id, observed_at,
 		       five_hour_pct, five_hour_resets_at,
 		       seven_day_pct, seven_day_resets_at,
 		       scoped_json, extra_usage_json, spend_json
-		FROM limit_snapshots
+		FROM limit_snapshots`
+	var row *sql.Row
+	if endpoint == "" {
+		row = s.read.QueryRow(cols+`
 		WHERE account_uuid = ?
 		ORDER BY observed_at DESC LIMIT 1`, account)
+	} else {
+		row = s.read.QueryRow(cols+`
+		WHERE account_uuid = ? AND endpoint_id = ?
+		ORDER BY observed_at DESC LIMIT 1`, account, endpoint)
+	}
 
 	var snap model.LimitsSnapshot
 	var observed string

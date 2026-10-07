@@ -60,6 +60,22 @@ func TestSQLiteDialectChangesNothing(t *testing.T) {
 	if q, args := d.updateIgnoreAccount("t", []string{"k"}, "dst", "src"); q != `UPDATE OR IGNORE t SET account_uuid = ? WHERE account_uuid = ?` || len(args) != 2 {
 		t.Errorf("updateIgnoreAccount = %q %v", q, args)
 	}
+	// The fleet half (claude-fleet#2121).
+	if got := d.eqNocase("principal_id"); got != `principal_id = ? COLLATE NOCASE` {
+		t.Errorf("eqNocase = %q", got)
+	}
+	if q := `INSERT OR REPLACE INTO t (id, a) VALUES (?, ?)`; d.insertReplace(q, "id") != q {
+		t.Errorf("insertReplace = %q", d.insertReplace(q, "id"))
+	}
+	if got := d.deferForeignKeys(); got != `PRAGMA defer_foreign_keys = ON` {
+		t.Errorf("deferForeignKeys = %q", got)
+	}
+	if d.forUpdate() != "" {
+		t.Errorf("forUpdate = %q", d.forUpdate())
+	}
+	if q := `CREATE TABLE c (p TEXT REFERENCES par(id))`; d.ddl(q) != q {
+		t.Errorf("ddl rewrote a foreign key: %q", d.ddl(q))
+	}
 }
 
 func TestRebind(t *testing.T) {
@@ -100,5 +116,24 @@ func TestPostgresDDL(t *testing.T) {
 	}
 	if got := postgresDialect.insertIgnore(`INSERT OR IGNORE INTO x VALUES(?)`); got != `INSERT INTO x VALUES(?) ON CONFLICT DO NOTHING` {
 		t.Errorf("insertIgnore = %q", got)
+	}
+}
+
+func TestPostgresFleetSpellings(t *testing.T) {
+	d := postgresDialect
+	if got := d.eqNocase("principal_id"); got != `lower(principal_id) = lower(?)` {
+		t.Errorf("eqNocase = %q", got)
+	}
+	got := d.insertReplace(`INSERT OR REPLACE INTO t (id, a,
+		b) VALUES (?, ?, ?)`, "id")
+	if want := `INSERT INTO t (id, a,
+		b) VALUES (?, ?, ?) ON CONFLICT (id) DO UPDATE SET a = excluded.a, b = excluded.b`; got != want {
+		t.Errorf("insertReplace\n = %q\nwant %q", got, want)
+	}
+	if got := d.ddl(`p TEXT NOT NULL REFERENCES par(id),`); got != `p TEXT COLLATE "C" NOT NULL REFERENCES par(id) DEFERRABLE,` {
+		t.Errorf("ddl foreign key = %q", got)
+	}
+	if d.deferForeignKeys() != `SET CONSTRAINTS ALL DEFERRED` || d.forUpdate() != ` FOR UPDATE` {
+		t.Errorf("deferForeignKeys / forUpdate = %q / %q", d.deferForeignKeys(), d.forUpdate())
 	}
 }

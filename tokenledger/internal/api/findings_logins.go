@@ -101,16 +101,22 @@ func (s *Server) loginStates(accts []store.Account, eps []store.Endpoint, creds 
 	// Vault credentials the hub could not refresh, once the access they
 	// backed has run out. A setup token is never refreshed (it expires, and
 	// setupTokens says so); a token kind has nothing to refresh either.
+	// reauth_required (claude-fleet#2007) counts at once, whatever access is
+	// left: the provider refused the credential itself, so no retry helps.
 	for _, c := range creds {
+		who := c.PrincipalID
+		if who == "" {
+			who = "pool"
+		}
+		if c.ReauthRequired {
+			note(key{c.Provider, c.Account}, "hub · "+who, "reauth_required: "+firstNonEmpty(c.RefreshError, "the provider refused this credential"))
+			continue
+		}
 		if c.RefreshError == "" || c.Kind == credvault.KindSetupToken {
 			continue
 		}
 		if c.AccessExpiresAt != nil && c.AccessExpiresAt.After(now) {
 			continue
-		}
-		who := c.PrincipalID
-		if who == "" {
-			who = "pool"
 		}
 		note(key{c.Provider, c.Account}, "hub · "+who, "refresh failed: "+c.RefreshError)
 	}

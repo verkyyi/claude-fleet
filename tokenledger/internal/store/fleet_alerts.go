@@ -46,7 +46,7 @@ type FleetAlert struct {
 }
 
 func (s *Store) ensureFleetAlerts() error {
-	if _, err := s.write.Exec(fleetAlertsSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetAlertsSchema)); err != nil {
 		return fmt.Errorf("create fleet_alerts table: %w", err)
 	}
 	return nil

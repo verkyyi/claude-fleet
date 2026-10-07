@@ -35,6 +35,7 @@ import (
 	"sync"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -83,6 +84,7 @@ var (
 	ddlBlob    = regexp.MustCompile(`\bBLOB\b`)
 	ddlText    = regexp.MustCompile(`\bTEXT\b`)
 	ddlComment = regexp.MustCompile(`--[^\n]*`)
+	ddlFK      = regexp.MustCompile(`\bREFERENCES\s+\w+\s*\([^)]*\)`)
 )
 
 // ddl is a CREATE / ALTER written for SQLite, in this dialect's column types.
@@ -96,6 +98,9 @@ var (
 //   - INTEGER PRIMARY KEY [AUTOINCREMENT] is SQLite's rowid alias, which fills
 //     itself in on an insert that leaves it out: an identity column.
 //   - REAL is 8 bytes in SQLite and 4 in Postgres: DOUBLE PRECISION.
+//   - a foreign key is DEFERRABLE (still checked per statement unless a
+//     transaction defers it — deferForeignKeys), so a parent and its children
+//     can change key together, as SQLite's defer_foreign_keys pragma lets them.
 //   - TEXT is compared byte by byte in SQLite (BINARY): COLLATE "C", so an
 //     RFC 3339 timestamp, a key and an ORDER BY sort the same on both no matter
 //     which locale the database was created with.
@@ -112,6 +117,7 @@ func (d dialect) ddl(s string) string {
 	s = ddlReal.ReplaceAllString(s, "DOUBLE PRECISION")
 	s = ddlBlob.ReplaceAllString(s, "BYTEA")
 	s = ddlText.ReplaceAllString(s, `TEXT COLLATE "C"`)
+	s = ddlFK.ReplaceAllString(s, `$0 DEFERRABLE`)
 	return s
 }
 
@@ -129,6 +135,29 @@ func (d dialect) insertIgnore(q string) string {
 		panic("insertIgnore: no INSERT OR IGNORE INTO in " + q)
 	}
 	return q[:i] + "INSERT INTO" + q[i+len("INSERT OR IGNORE INTO"):] + " ON CONFLICT DO NOTHING"
+}
+
+// insertReplace is an `INSERT OR REPLACE INTO t (cols…) VALUES …` statement in
+// this dialect, for a table whose only unique key is key: Postgres has no OR
+// REPLACE, so a row already holding key has every listed column overwritten
+// (ON CONFLICT … DO UPDATE), which is what SQLite's delete-and-insert leaves.
+func (d dialect) insertReplace(q, key string) string {
+	if !d.pg() {
+		return q
+	}
+	const verb = "INSERT OR REPLACE INTO"
+	i := strings.Index(q, verb)
+	open, shut := strings.Index(q, "("), strings.Index(q, ")")
+	if i < 0 || open < 0 || shut < open {
+		panic("insertReplace: no INSERT OR REPLACE INTO t (cols) in " + q)
+	}
+	var set []string
+	for _, c := range strings.Split(q[open+1:shut], ",") {
+		if c = strings.TrimSpace(c); c != key {
+			set = append(set, c+" = excluded."+c)
+		}
+	}
+	return q[:i] + "INSERT INTO" + q[i+len(verb):] + " ON CONFLICT (" + key + ") DO UPDATE SET " + strings.Join(set, ", ")
 }
 
 // hourOf is SQLite's strftime('%Y-%m-%dT%H:00:00Z', expr): the UTC hour an
@@ -206,6 +235,68 @@ func (d dialect) nocase(expr string) string {
 		return expr + ` COLLATE NOCASE`
 	}
 	return `lower(` + expr + `)`
+}
+
+// eqNocase is `col = ? COLLATE NOCASE`: col equals the next argument, ASCII
+// case folded (a principal id, a settings key). The ids it compares are ASCII,
+// so Postgres's lower() folds them the same way.
+func (d dialect) eqNocase(col string) string {
+	if !d.pg() {
+		return col + ` = ? COLLATE NOCASE`
+	}
+	return `lower(` + col + `) = lower(?)`
+}
+
+// deferForeignKeys is the statement that, run first in a transaction, holds
+// its foreign-key checks until the commit.
+func (d dialect) deferForeignKeys() string {
+	if !d.pg() {
+		return `PRAGMA defer_foreign_keys = ON`
+	}
+	return `SET CONSTRAINTS ALL DEFERRED`
+}
+
+// isUniqueViolation says whether err is a duplicate-key refusal, from either
+// database: SQLite's "UNIQUE constraint failed", Postgres's SQLSTATE 23505.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) {
+		return pe.Code == "23505"
+	}
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+// ---- read-then-write claims ----------------------------------------------
+//
+// A claim (a lease, a hand-over) reads a row and writes it back in one
+// transaction, and two hubs on one database may run it at once. SQLite's
+// writer takes the database's write lock at its first write, so a claim takes
+// it FIRST (claimWrites): the second hub's claim waits on busy_timeout and
+// then reads what the first committed. Postgres locks rows: the SELECT holds
+// the row it read (forUpdate), and an insert that finds no row stays one
+// statement (INSERT … ON CONFLICT DO NOTHING) the caller re-reads after when
+// it lost the race.
+
+// claimWrites makes tx the database's one writer until it ends, before
+// anything is read. Postgres: nothing — forUpdate holds the rows instead.
+func (d dialect) claimWrites(tx *sql.Tx, table string) error {
+	if d.pg() {
+		return nil
+	}
+	_, err := tx.Exec(`DELETE FROM ` + table + ` WHERE 0`)
+	return err
+}
+
+// forUpdate is the suffix that makes a SELECT inside a claim hold the rows it
+// read until the commit.
+func (d dialect) forUpdate() string {
+	if !d.pg() {
+		return ""
+	}
+	return ` FOR UPDATE`
 }
 
 // ---- catalog --------------------------------------------------------------

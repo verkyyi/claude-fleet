@@ -1306,6 +1306,23 @@ any machine's memory and no admin node has to be online.
   answer (`invalid_grant`, its 403) is the answer, never a reason to fall back.
 - A Claude refresh keeps the node path: the relay's token route is OpenAI's.
 
+**The hub reads the pool's quota itself (claude-fleet#2169).** With
+`CCQUOTA_FLEET_HUB_QUOTA=relay` (plus the relay URL and the session pass key;
+`CCQUOTA_FLEET_HUB_QUOTA_INTERVAL`, default 5m) the hub reads every pool
+credential in its vault — Claude through the relay's `/anthropic/v1/messages`
+(the node probe's one-token request), Codex through `/chatgpt/wham/usage` with
+the vault's access token — and files each reading under the credential's own
+`account_uuid` (Codex: id_token; Claude: as imported, or set with
+`POST /v1/fleet/credentials` `action: bind`), else the one account its label
+names, else nowhere (never a new `win_`). Readings are rows with
+`endpoint_id = hub:quota`; a fresh one (two rounds, ≥10 min) is what
+`/v1/limits` shows, else the newest node reading with `read_via: node` and a
+`read_note` saying why. Its relay pass is `frq1.` — two routes only, accepted
+only while this is on. Unset/`off`: nothing read, nothing signed, no
+`read_via` — byte for byte as before. The Codex quota lease is no longer
+renewed to a collector that reports ≥3 failed reads in a row or delivered no
+complete read for 15 minutes (or two lease terms); it is benched for 30.
+
 **A hub-leased Codex home is refreshed by nobody on the machine
 (claude-fleet#1666).** Its `auth.json` carries the `hub-managed` placeholder in
 place of a refresh token; `ccquota codex list --json` reports it as
@@ -1344,6 +1361,23 @@ are revoked in the retire's transaction; its relay credential is dropped; one
 `node_revoke` row lands in `fleet_audit`. There is no un-revoke — re-enroll the
 machine with a join code. Revocation state is never a field on `Endpoint`
 (the #43 rule for `EnrollKind`).
+
+**A machine can be taken off the hub — by its person, or by itself
+(claude-fleet#1928).** The revoke keeps the roster row (a lost machine may come
+back); a computer whose person changed machines, left, or was a drill's should
+not stay on /nodes forever. `POST /v1/fleet/nodes/retire {endpoint_id[,
+reason]}` runs the revoke above AND drops the roster row: an admin (or the
+viewer token) any machine, a signed-in user only one `FleetScope` gives them —
+anything else, a missing id included, is 403. The machines page's 「移除」
+(behind a confirm) calls it for each enrollment on the card.
+`POST /v1/node/leave [{reason}]` is the same retire for the CALLER's own
+enrollment token — `fleet node leave` (`bin/fleet-node-leave.sh`): ask the hub,
+then stop the agent and remove its service file, then delete `node.env`; a hub
+that cannot be asked or refuses changes nothing local (rerun). Both audit one
+`node_revoke` row under who asked (`gh:<id>`, `node:<login>@<machine>`, the
+viewer). `fleet-login-remove.sh` runs `fleet node leave --hub-only` as the login
+it deletes, so the onboard drill's teardown needs no kubectl
+(`fleet_node_retire_test.go`, `bin/fleet-node-leave-selftest.sh`).
 
 **An untrusted machine's session borrows a pass (claude-fleet#1969).** Instead
 of a credential, a session asks `POST /v1/fleet/session-cred` (the node's
@@ -1390,6 +1424,22 @@ status, bytes — never a header). A refused pass or no account is a 403; a hub
 that cannot answer is ridden out on the cached answer for up to `--stale`
 (15 min, never past the token's expiry), and only a pass it has never seen gets
 a 503.
+
+**An account at its limit is not picked** (claude-fleet#2115, EPIC #2133 C2).
+The first pick puts last any account known to be full — its latest
+`limit_snapshots` reading (by the account its vault label names) has the 5h or
+the 7d window at 100% and not yet reset, or the proxy reported a quota 429 on
+it — and every account full is the old order. A quota 429 (Claude's unified
+limit — `anthropic-ratelimit-unified-status: rejected`, a window at 100%, a
+"weekly / usage / session limit" message — or Codex's `usage_limit_reached`;
+never a request-rate 429) makes the proxy `POST /v1/fleet/credproxy/rebind
+{cred, provider, owner, account, reset_at}` (same token): the hub remembers the
+account as full until `reset_at` (else an hour), and while the session is
+still bound to it moves it to the first account with room (`set_by
+credproxy:429`, a `session_bind` audit row) — so two 429s at once move it once.
+The proxy resends that request once on the new account and logs
+`rebind_from`; no account with room, or a second 429, reaches the client
+unchanged.
 
 **Per-person budgets** (claude-fleet#1977, EPIC #1967 R2). Both proxies count
 what each 2xx answer's own `usage` says — input + cache writes + output; cache

@@ -44,6 +44,14 @@ type LimitsView struct {
 	// than a few minutes rather than pretending it is current.
 	StaleSeconds int64 `json:"stale_seconds,omitempty"`
 
+	// ReadVia names who took the reading shown — "hub" (the hub's own read
+	// through the relay) or "node" — and ReadNote why a node's is shown when
+	// the hub's failed (claude-fleet#2169). Both stay empty unless the hub
+	// reads quota itself (CCQUOTA_FLEET_HUB_QUOTA), so the view is unchanged
+	// without it.
+	ReadVia  string `json:"read_via,omitempty"`
+	ReadNote string `json:"read_note,omitempty"`
+
 	FiveHour *WindowView `json:"five_hour,omitempty"`
 	SevenDay *WindowView `json:"seven_day,omitempty"`
 
@@ -157,7 +165,22 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 	if err != nil {
 		return nil, err
 	}
+	var readNote string
+	if s.HubQuota != nil {
+		// A fresh hub reading is the one shown (claude-fleet#2169); without
+		// one the newest node reading is, with why the hub has none.
+		hs, err := s.Store.LatestLimitsFrom(account, HubQuotaEndpoint)
+		if err != nil {
+			return nil, err
+		}
+		if hs != nil && time.Since(hs.ObservedAt) <= s.HubQuota.Fresh() {
+			snap = hs
+		} else {
+			readNote = s.HubQuota.noteFor(account)
+		}
+	}
 	if snap == nil {
+		view.ReadNote = readNote
 		source, err := s.Store.SourceForAccount(account)
 		if err != nil {
 			return nil, err
@@ -186,6 +209,9 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 
 	now := time.Now().UTC()
 	view.Available = true
+	if s.HubQuota != nil {
+		view.ReadVia, view.ReadNote = readVia(snap.EndpointID), readNote
+	}
 	view.ObservedAt = &snap.ObservedAt
 	view.StaleSeconds = int64(now.Sub(snap.ObservedAt).Seconds())
 
@@ -223,6 +249,14 @@ func (s *Server) LimitsFor(account string) (*LimitsView, error) {
 	}
 	view.EndpointShares, _ = recon.EndpointShares(snap, evs, s.Pricing, labels)
 	return view, nil
+}
+
+// readVia is LimitsView.ReadVia for a reading's endpoint.
+func readVia(endpoint string) string {
+	if endpoint == HubQuotaEndpoint {
+		return HubQuotaVia
+	}
+	return NodeQuotaVia
 }
 
 // LimitsForAll builds one reading per subscription.

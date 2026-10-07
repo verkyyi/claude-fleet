@@ -3,8 +3,10 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -47,7 +49,33 @@ type NodeCredential struct {
 	ExpiresAt *time.Time        `json:"expires_at,omitempty"`
 	Access    *credvault.Access `json:"access,omitempty"`
 	Error     string            `json:"error,omitempty"`
+	// State is CredStateReauth when nothing is leased because the account
+	// needs a new login (claude-fleet#2007); "" otherwise.
+	State string `json:"state,omitempty"`
 }
+
+// NodeCredentialsRequest is the (optional) body of POST /v1/node/credentials.
+// An agent that predates it sends none, and is answered exactly as before.
+type NodeCredentialsRequest struct {
+	// UpstreamRejected: leased access tokens the upstream has refused since
+	// (claude-fleet#2007) — token_revoked keeps its exp, so without this the
+	// hub would hand the same dead token back until it ran out.
+	UpstreamRejected []UpstreamRejected `json:"upstream_rejected,omitempty"`
+}
+
+// UpstreamRejected names one refused access token — by its fingerprint
+// (credvault.AccessFingerprint), never the token — for one leased account.
+type UpstreamRejected struct {
+	Provider    string     `json:"provider"`
+	Account     string     `json:"account"`
+	Fingerprint string     `json:"fingerprint"`
+	Error       string     `json:"error,omitempty"`
+	At          *time.Time `json:"at,omitempty"`
+}
+
+// CredStateReauth is NodeCredential.State for an account the provider has
+// refused (store.Credential.ReauthRequired): log in again and store it.
+const CredStateReauth = "reauth_required"
 
 // NodeCredentialsResponse is the answer to POST /v1/node/credentials.
 type NodeCredentialsResponse struct {
@@ -127,6 +155,11 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.vaultOff(w) {
+		return
+	}
+	var body NodeCredentialsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		httpError(w, http.StatusBadRequest, "malformed request: "+err.Error())
 		return
 	}
 	host, osUser := s.nodeIdentity(ep)
@@ -212,6 +245,18 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 			paused[a] = true
 		}
 	}
+	// Refusals first, so the lease below already answers with what replaced
+	// the refused token. Only a row this login may lease can be named.
+	for _, rj := range body.UpstreamRejected {
+		for _, c := range creds {
+			if c.Provider != rj.Provider || c.Account != rj.Account {
+				continue
+			}
+			if _, err := s.Vault.RejectUpstream(c.PrincipalID, c.Provider, c.Account, rj.Fingerprint, rj.Error, osUser+"@"+host); err != nil {
+				log.Printf("credentials: upstream rejection of %s/%s from %s@%s: %v", c.Provider, c.Account, osUser, host, err)
+			}
+		}
+	}
 	resp := NodeCredentialsResponse{PrincipalID: principal, IssuedAt: time.Now().UTC(), Credentials: []NodeCredential{}}
 	for _, c := range creds {
 		isPool := c.PrincipalID == store.PoolPrincipal
@@ -226,6 +271,9 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			nc.Error = err.Error()
+			if errors.Is(err, credvault.ErrReauthRequired) {
+				nc.State = CredStateReauth
+			}
 			audit.Action, audit.Detail = store.CredDeny, optional("pool · ", isPool)+"lease failed: "+err.Error()
 		} else {
 			a := acc
@@ -263,11 +311,31 @@ func optional(s string, ok bool) string {
 // PrincipalID is a person, or store.PoolPrincipal ("pool") for a shared-pool
 // account every active principal may lease.
 type FleetCredentialRequest struct {
-	Action      string           `json:"action"` // put | delete
+	Action      string           `json:"action"` // put | delete | bind
 	PrincipalID string           `json:"principal_id"`
 	Provider    string           `json:"provider"`
 	Account     string           `json:"account"`
 	Secret      credvault.Secret `json:"secret"`
+	// AccountUUID is bind's one argument (claude-fleet#2169): which usage
+	// account an existing credential belongs to. No secret travels with it.
+	AccountUUID string `json:"account_uuid,omitempty"`
+}
+
+var (
+	claudeAccountUUIDRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	codexAccountUUIDRE  = regexp.MustCompile(`^codex:account:[0-9a-f]{32}$`)
+)
+
+// validBindUUID is an account_uuid of the shape the usage side names that
+// provider's accounts — never a win_ fingerprint or a pool stand-in.
+func validBindUUID(provider, uuid string) bool {
+	switch provider {
+	case credvault.Claude:
+		return claudeAccountUUIDRE.MatchString(uuid)
+	case credvault.Codex:
+		return codexAccountUUIDRE.MatchString(uuid)
+	}
+	return false
 }
 
 // handleFleetCredentials lists credential metadata (GET — never a secret) or
@@ -353,12 +421,37 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			audit.Action = store.CredDelete
+		case "bind":
+			// Record which usage account an existing credential belongs to
+			// (claude-fleet#2169): the hub's own quota reading files it under
+			// this. No secret in the request, none in the audit.
+			uuid := strings.TrimSpace(req.AccountUUID)
+			if !validBindUUID(req.Provider, uuid) {
+				httpError(w, http.StatusBadRequest, "bind needs account_uuid: a Claude account's UUID, or a Codex codex:account:<32 hex>")
+				return
+			}
+			if s.vaultLocked(w) {
+				return
+			}
+			if err := s.Vault.BindAccountUUID(req.PrincipalID, req.Provider, req.Account, uuid); err != nil {
+				code := http.StatusInternalServerError
+				switch {
+				case errors.Is(err, store.ErrNoCredential):
+					code = http.StatusNotFound
+				case errors.Is(err, credvault.ErrLocked):
+					code = http.StatusServiceUnavailable
+				}
+				httpError(w, code, err.Error())
+				return
+			}
+			audit.Action = store.CredBind
+			audit.Detail = "account_uuid=" + uuid + " · "
 		default:
-			httpError(w, http.StatusBadRequest, "action must be put or delete")
+			httpError(w, http.StatusBadRequest, "action must be put, delete or bind")
 			return
 		}
 		// Who did it (claude-fleet#1990): the audit page names the admin.
-		audit.Detail = "by " + actorOf(r)
+		audit.Detail += "by " + actorOf(r)
 		_ = s.Store.AddCredAudit(audit)
 		writeJSON(w, http.StatusOK, map[string]string{"ok": req.Action})
 	default:

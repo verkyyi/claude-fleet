@@ -60,7 +60,7 @@ type FleetMove struct {
 }
 
 func (s *Store) ensureFleetMoves() error {
-	if _, err := s.write.Exec(fleetMoveSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetMoveSchema)); err != nil {
 		return fmt.Errorf("create fleet_moves: %w", err)
 	}
 	return nil

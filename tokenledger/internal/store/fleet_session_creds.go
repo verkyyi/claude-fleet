@@ -65,7 +65,7 @@ const sessRFC = "2006-01-02T15:04:05Z"
 var ErrNoSessionCred = errors.New("no such session pass")
 
 func (s *Store) ensureFleetSessionCreds() error {
-	if _, err := s.write.Exec(fleetSessionCredsSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetSessionCredsSchema)); err != nil {
 		return fmt.Errorf("create fleet session pass table: %w", err)
 	}
 	return nil

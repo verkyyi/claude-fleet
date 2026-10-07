@@ -17,6 +17,31 @@ func (s *Store) InsertQuota(q model.QuotaSnapshot) error {
 	return err
 }
 
+// completeRead is an observation that read every pool of the account at once:
+// a node's app-server call, or the hub's own account-API read through the
+// relay (claude-fleet#2169, codex.ObservationAccountAPI).
+func completeRead(observation string) bool {
+	return observation == "app_server" || observation == "account_api"
+}
+
+// LatestQuotaFrom is the newest quota row one endpoint wrote for an account,
+// or nil — the hub's own reading (claude-fleet#2169) is looked up this way.
+func (s *Store) LatestQuotaFrom(account, endpoint string) (*model.QuotaSnapshot, error) {
+	var b string
+	err := s.read.QueryRow(`SELECT data_json FROM quota_snapshots WHERE account_uuid=? AND endpoint_id=? ORDER BY observed_at DESC LIMIT 1`, account, endpoint).Scan(&b)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var q model.QuotaSnapshot
+	if err := json.Unmarshal([]byte(b), &q); err != nil {
+		return nil, err
+	}
+	return &q, nil
+}
+
 func (s *Store) LatestQuota(account string) (*model.QuotaSnapshot, error) {
 	var b string
 	err := s.read.QueryRow(`SELECT data_json FROM quota_snapshots WHERE account_uuid=? ORDER BY observed_at DESC, observation ASC LIMIT 1`, account).Scan(&b)
@@ -30,7 +55,7 @@ func (s *Store) LatestQuota(account string) (*model.QuotaSnapshot, error) {
 	if err = json.Unmarshal([]byte(b), &q); err != nil {
 		return nil, err
 	}
-	if q.Observation == "app_server" || time.Since(q.ObservedAt) > 10*time.Minute {
+	if completeRead(q.Observation) || time.Since(q.ObservedAt) > 10*time.Minute {
 		return &q, nil
 	}
 	// A log update may cover one model pool while the account API covers all
@@ -71,7 +96,7 @@ func (s *Store) LatestQuota(account string) (*model.QuotaSnapshot, error) {
 				}
 			}
 		}
-		if row.Observation == "app_server" {
+		if completeRead(row.Observation) {
 			break
 		}
 	}

@@ -15,12 +15,12 @@ func TestFleetCredsColumnsAddedToOldTable(t *testing.T) {
 	if old == fleetCredsSchema {
 		t.Fatal("test no longer strips the new columns from the schema")
 	}
-	if _, err := s.write.Exec(old); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(old)); err != nil {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	if _, err := s.write.Exec(`INSERT INTO fleet_credentials (principal_id, provider, account, secret_sealed, created_at, updated_at)
-		VALUES ('gh:1001', 'claude', 'main', X'01', ?, ?)`, fmtTime(at), fmtTime(at)); err != nil {
+		VALUES ('gh:1001', 'claude', 'main', ?, ?, ?)`, []byte{1}, fmtTime(at), fmtTime(at)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.EnsureNodes(); err != nil {

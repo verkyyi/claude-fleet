@@ -85,11 +85,11 @@ func (s *Store) RekeyPrincipal(from, to, displayName, actor string, at time.Time
 	defer tx.Rollback()
 	// fleet_accounts references fleet_principals; the parent and its children
 	// change together, so the check waits for the commit.
-	if _, err := tx.Exec(`PRAGMA defer_foreign_keys = ON`); err != nil {
+	if _, err := tx.Exec(s.d.deferForeignKeys()); err != nil {
 		return nil, err
 	}
 	var oldID, login string
-	err = tx.QueryRow(`SELECT principal_id, login FROM fleet_principals WHERE principal_id = ? COLLATE NOCASE`, from).
+	err = tx.QueryRow(`SELECT principal_id, login FROM fleet_principals WHERE `+s.d.eqNocase("principal_id"), from).
 		Scan(&oldID, &login)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -98,7 +98,7 @@ func (s *Store) RekeyPrincipal(from, to, displayName, actor string, at time.Time
 		return nil, err
 	}
 	var held string
-	switch err := tx.QueryRow(`SELECT login FROM fleet_principals WHERE principal_id = ? COLLATE NOCASE`, to).Scan(&held); {
+	switch err := tx.QueryRow(`SELECT login FROM fleet_principals WHERE `+s.d.eqNocase("principal_id"), to).Scan(&held); {
 	case err == nil:
 		return nil, fmt.Errorf("%w: %s is already recorded with login %s — forget that row first", ErrRekeyTarget, to, held)
 	case !errors.Is(err, sql.ErrNoRows):
@@ -123,19 +123,13 @@ func (s *Store) RekeyPrincipal(from, to, displayName, actor string, at time.Time
 		return nil, err
 	}
 	have := map[string]bool{}
-	trows, err := tx.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+	names, err := s.d.tables(tx)
 	if err != nil {
 		return nil, err
 	}
-	for trows.Next() {
-		var n string
-		if err := trows.Scan(&n); err != nil {
-			trows.Close()
-			return nil, err
-		}
+	for _, n := range names {
 		have[n] = true
 	}
-	trows.Close()
 
 	r, err := tx.Exec(`UPDATE fleet_principals SET principal_id = ?,
 		display_name = CASE WHEN ? <> '' THEN ? ELSE display_name END
@@ -148,7 +142,7 @@ func (s *Store) RekeyPrincipal(from, to, displayName, actor string, at time.Time
 		if !have[tc[0]] {
 			continue
 		}
-		r, err := tx.Exec(`UPDATE `+tc[0]+` SET `+tc[1]+` = ? WHERE `+tc[1]+` = ? COLLATE NOCASE`, to, oldID)
+		r, err := tx.Exec(`UPDATE `+tc[0]+` SET `+tc[1]+` = ? WHERE `+s.d.eqNocase(tc[1]), to, oldID)
 		if err != nil {
 			return nil, fmt.Errorf("rekey %s: %w", tc[0], err)
 		}
@@ -160,12 +154,12 @@ func (s *Store) RekeyPrincipal(from, to, displayName, actor string, at time.Time
 		// Usage buckets add up: the person's tokens in a window are theirs
 		// under either id.
 		if _, err := tx.Exec(`INSERT INTO fleet_person_usage (principal, provider, bucket, tokens, requests)
-			SELECT ?, provider, bucket, tokens, requests FROM fleet_person_usage WHERE principal = ? COLLATE NOCASE
+			SELECT ?, provider, bucket, tokens, requests FROM fleet_person_usage WHERE `+s.d.eqNocase("principal")+`
 			ON CONFLICT(principal, provider, bucket) DO UPDATE SET
-			  tokens = tokens + excluded.tokens, requests = requests + excluded.requests`, to, oldID); err != nil {
+			  tokens = fleet_person_usage.tokens + excluded.tokens, requests = fleet_person_usage.requests + excluded.requests`, to, oldID); err != nil {
 			return nil, fmt.Errorf("rekey fleet_person_usage: %w", err)
 		}
-		r, err := tx.Exec(`DELETE FROM fleet_person_usage WHERE principal = ? COLLATE NOCASE`, oldID)
+		r, err := tx.Exec(`DELETE FROM fleet_person_usage WHERE `+s.d.eqNocase("principal"), oldID)
 		if err != nil {
 			return nil, err
 		}
@@ -175,9 +169,9 @@ func (s *Store) RekeyPrincipal(from, to, displayName, actor string, at time.Time
 	}
 	if have["fleet_settings"] {
 		var budget string
-		err := tx.QueryRow(`SELECT value FROM fleet_settings WHERE key = ? COLLATE NOCASE`, rekeyBudgetPrefix+oldID).Scan(&budget)
+		err := tx.QueryRow(`SELECT value FROM fleet_settings WHERE `+s.d.eqNocase("key"), rekeyBudgetPrefix+oldID).Scan(&budget)
 		if err == nil {
-			if _, err := tx.Exec(`DELETE FROM fleet_settings WHERE key = ? COLLATE NOCASE`, rekeyBudgetPrefix+oldID); err != nil {
+			if _, err := tx.Exec(`DELETE FROM fleet_settings WHERE `+s.d.eqNocase("key"), rekeyBudgetPrefix+oldID); err != nil {
 				return nil, err
 			}
 			if _, err := tx.Exec(`INSERT INTO fleet_settings (key, value, updated) VALUES (?, ?, ?)
@@ -188,7 +182,7 @@ func (s *Store) RekeyPrincipal(from, to, displayName, actor string, at time.Time
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		r, err := tx.Exec(`DELETE FROM fleet_settings WHERE key = ? COLLATE NOCASE AND value = ?`,
+		r, err := tx.Exec(`DELETE FROM fleet_settings WHERE `+s.d.eqNocase("key")+` AND value = ?`,
 			rekeyMapKeyPrefix+oldID+rekeyMapKeySuffix, login)
 		if err != nil {
 			return nil, err

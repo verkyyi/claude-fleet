@@ -98,7 +98,7 @@ var ErrAccountState = errors.New("account is not in a state that allows this")
 var ErrNoPrincipal = errors.New("no such principal")
 
 func (s *Store) ensureFleetAccounts() error {
-	if _, err := s.write.Exec(fleetAccountsSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetAccountsSchema)); err != nil {
 		return fmt.Errorf("create fleet account tables: %w", err)
 	}
 	// A hub that restarted has no open links, so nothing it sent is still
@@ -213,10 +213,6 @@ func (s *Store) insertPrincipal(id, login, displayName string, at time.Time) err
 	return err
 }
 
-func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
-}
-
 // Principal reads one person. id is matched case-insensitively; the row's
 // own spelling comes back in p.ID.
 func (s *Store) Principal(id string) (*Principal, error) {
@@ -224,7 +220,7 @@ func (s *Store) Principal(id string) (*Principal, error) {
 	var created string
 	var last sql.NullString
 	err := s.read.QueryRow(`SELECT principal_id, login, display_name, created_at, last_login_at
-		FROM fleet_principals WHERE principal_id = ? COLLATE NOCASE`, id).Scan(&p.ID, &p.Login, &p.DisplayName, &created, &last)
+		FROM fleet_principals WHERE `+s.d.eqNocase("principal_id"), id).Scan(&p.ID, &p.Login, &p.DisplayName, &created, &last)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoPrincipal
 	}
@@ -283,7 +279,7 @@ func scanFleetAccounts(rows *sql.Rows) ([]FleetAccount, error) {
 func (s *Store) FleetAccounts(principalID string) ([]FleetAccount, error) {
 	q, args := fleetAccountColumns+` ORDER BY principal_id, hostname`, []any{}
 	if principalID != "" {
-		q, args = fleetAccountColumns+` WHERE principal_id = ? COLLATE NOCASE ORDER BY hostname`, []any{principalID}
+		q, args = fleetAccountColumns+` WHERE `+s.d.eqNocase("principal_id")+` ORDER BY hostname`, []any{principalID}
 	}
 	rows, err := s.read.Query(q, args...)
 	if err != nil {
@@ -401,7 +397,7 @@ func (s *Store) ForgetPrincipal(principalID, hostname string) error {
 		return err
 	}
 	defer tx.Rollback()
-	q, args := `SELECT hostname, state FROM fleet_accounts WHERE principal_id = ? COLLATE NOCASE`, []any{principalID}
+	q, args := `SELECT hostname, state FROM fleet_accounts WHERE `+s.d.eqNocase("principal_id"), []any{principalID}
 	if hostname != "" {
 		q, args = q+` AND hostname = ?`, append(args, hostname)
 	}
@@ -432,15 +428,15 @@ func (s *Store) ForgetPrincipal(principalID, hostname string) error {
 		if found == 0 {
 			return fmt.Errorf("%w: no account on %s", ErrAccountState, hostname)
 		}
-		if _, err := tx.Exec(`DELETE FROM fleet_accounts WHERE principal_id = ? COLLATE NOCASE AND hostname = ?`, principalID, hostname); err != nil {
+		if _, err := tx.Exec(`DELETE FROM fleet_accounts WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ?`, principalID, hostname); err != nil {
 			return err
 		}
 		return tx.Commit()
 	}
-	if _, err := tx.Exec(`DELETE FROM fleet_accounts WHERE principal_id = ? COLLATE NOCASE`, principalID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM fleet_accounts WHERE `+s.d.eqNocase("principal_id"), principalID); err != nil {
 		return err
 	}
-	res, err := tx.Exec(`DELETE FROM fleet_principals WHERE principal_id = ? COLLATE NOCASE`, principalID)
+	res, err := tx.Exec(`DELETE FROM fleet_principals WHERE `+s.d.eqNocase("principal_id"), principalID)
 	if err != nil {
 		return err
 	}
@@ -455,7 +451,7 @@ func (s *Store) RequestAccountRemoval(principalID, hostname string, at time.Time
 	ts := at.UTC().Format(rfc)
 	res, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, op = 'remove', op_id = '', endpoint_id = '',
 		detail = '', requested_at = ?, updated_at = ?
-		WHERE principal_id = ? COLLATE NOCASE AND hostname = ? AND state IN (?, ?, ?)`,
+		WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ? AND state IN (?, ?, ?)`,
 		AccountRemovePending, ts, ts, principalID, hostname, AccountActive, AccountFailed, AccountUnknown)
 	if err != nil {
 		return err

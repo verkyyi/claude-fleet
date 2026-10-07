@@ -84,6 +84,7 @@ test('the credential line says what is wrong with it', () => {
   useLocale('en');
   assert.equal(credState(null).tone, 'warn');
   assert.equal(credState({ refresh_error: 'x' }).tone, 'bad');
+  assert.equal(credState({ refresh_error: 'invalid_grant', reauth_required: true }).text, 'Needs a new login');
   assert.equal(credState({ secret_expires_at: iso(NOW - 1) }, NOW).text, 'Expired');
   assert.equal(credState({ secret_expires_at: iso(NOW + 5 * 86400000), created_at: iso(NOW) }, NOW).tone, 'warn');
   assert.equal(credState({ created_at: iso(NOW) }, NOW).tone, 'ok');
@@ -139,12 +140,15 @@ test('machines: lost last, load per core, trend and version carried', () => {
     { hostname: 'm5.lan', status: 'lost', load1: 0, ncpu: 8, sessions: 0, kind: 'fixed' },
     { hostname: 'mini2.tail.ts.net', status: 'online', load1: 4, ncpu: 8, sessions: 3, kind: 'fixed', load_hist: [0.1, 0.5] },
     { hostname: 'm4', status: 'maintenance', load1: 1, ncpu: 4, sessions: null, kind: 'ephemeral', maintenance: { reason: 'upgrade', by: 'verkyyi' } },
-  ], nodes: [{ hostname: 'mini2.tail.ts.net', fleet_version: '0.4.1' }, { hostname: 'mini2.tail.ts.net', agent_version: '0.3.9' }] });
+  ], nodes: [{ hostname: 'mini2.tail.ts.net', fleet_version: '0.4.1', endpoint_id: 'ep_a' }, { hostname: 'mini2.tail.ts.net', agent_version: '0.3.9', endpoint_id: 'ep_b' }] });
   assert.deepEqual(ms.map((m) => [m.name, m.status]), [['mini2', 'online'], ['m4', 'maintenance'], ['m5', 'lost']]);
   assert.equal(ms[0].loadCore, 0.5);
   assert.deepEqual(ms[0].hist, [0.1, 0.5]);
   assert.equal(ms[0].version, '0.4.1');
   assert.equal(ms[1].sessions, null);
+  // Every enrollment on the machine: 「移除」 retires them all (claude-fleet#1928).
+  assert.deepEqual(ms[0].eps, ['ep_a', 'ep_b']);
+  assert.deepEqual(ms[2].eps, []);
   assert.deepEqual(machineCards(null), []);
 });
 
@@ -194,7 +198,7 @@ test('audit: grouped by day, newest first; actors without their principal', () =
 // The pages themselves, read as source: what a DOM test would pin, without a DOM.
 const PAGES = [
   { file: 'subscriptions.js', id: 'subscriptions', confirms: 2, empty: 'ui.sub.empty' },
-  { file: 'nodes.js', id: 'machines', confirms: 1, empty: 'ui.mach.empty' },
+  { file: 'nodes.js', id: 'machines', confirms: 2, empty: 'ui.mach.empty' },
   { file: 'users.js', id: 'people', confirms: 1, empty: 'ui.usr.empty' },
   { file: 'settings.js', id: 'settings', confirms: 0, empty: null },
   { file: 'audit.js', id: 'audit', confirms: 0, empty: 'ui.aud.empty' },
@@ -307,4 +311,20 @@ test('a vault guess that fits two accounts, or a stand-in row, matches nothing',
     accounts: [{ account_uuid: 'codex:account:z', email: 'z@gmail.com', source: 'codex' }],
     creds: { credentials: [{ principal_id: 'pool', provider: 'claude', account: 'z' }] } });
   assert.equal(x.find((c) => c.id === 'codex:account:z').cred, null);
+});
+
+test('a card says when its reading was taken and by whom (claude-fleet#2169)', () => {
+  const at = iso(NOW - 120000);
+  const limits = { per_account: [{ account_uuid: 'u-h', limits: { available: true, observed_at: at, read_via: 'hub',
+    five_hour: { utilization: 10 }, seven_day: { utilization: 5 } } },
+  { account_uuid: 'u-n', limits: { available: true, observed_at: at, read_via: 'node', read_note: 'hub reading failed (x); showing a node\'s reading',
+    five_hour: { utilization: 10 } } }] };
+  const accounts = [{ account_uuid: 'u-h', email: 'h@x.io' }, { account_uuid: 'u-n', email: 'n@x.io' }];
+  const [h, n] = subscriptions({ limits, accounts });
+  assert.deepEqual([h.readAt, h.readVia, h.readNote], [at, 'hub', '']);
+  assert.equal(n.readVia, 'node');
+  assert.match(n.readNote, /hub reading failed/);
+  // Without the hub's own reading the fields are simply empty.
+  const [old] = subscriptions({ limits: LIMITS, accounts: ACCOUNTS, creds: CREDS, live: LIVE });
+  assert.equal(old.readVia, '');
 });
