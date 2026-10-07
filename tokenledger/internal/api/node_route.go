@@ -37,7 +37,7 @@ import (
 //     ops, waiting relays) run on the holder at the node's next beat, because
 //     the beat handler is where they are triggered; at most one beat late.
 //   - an SSH relay is a byte stream spliced onto the link: it cannot be handed
-//     across per call (#2151 proxies the client's websocket to the holder).
+//     across per call; ssh_relay_replica.go (#2151) proxies the websocket.
 //   - a revoked token closes its link on the holder at the node's next message
 //     (the read loop checks it), not at once.
 //

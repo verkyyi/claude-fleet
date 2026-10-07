@@ -227,6 +227,12 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, "a session, a viewer token or a connection certificate is required")
 		return
 	}
+	// Two replicas (claude-fleet#2151): the machine's link is held by the
+	// other one — hand it the whole websocket, before the upgrade here.
+	if peer, ok := s.sshRelayPeer(r, host); ok {
+		s.proxyRelay(w, r, peer, "a relay to "+host)
+		return
+	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
@@ -360,6 +366,14 @@ func (s *Server) handleSSHRelayData(w http.ResponseWriter, r *http.Request) {
 	// The relay must be the one THIS endpoint was asked for, with the
 	// secret it was given: another login on the same machine holding its
 	// own token cannot step into someone else's stream.
+	if p == nil && s.Replica != nil && !s.relayHopped(r) {
+		// The agent's data half landed on the replica that did not ask for
+		// it (claude-fleet#2151): the one holding its link did.
+		if peer, ok := s.peerOf(r.Context(), ep.ID); ok {
+			s.proxyRelay(w, r, peer, "the data half of a relay")
+			return
+		}
+	}
 	if p == nil || p.endpointID != ep.ID || !constantTimeEqual(r.Header.Get("X-Relay-Secret"), p.secret) {
 		httpError(w, http.StatusNotFound, "no such relay for this node")
 		return
