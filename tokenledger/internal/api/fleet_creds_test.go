@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	iofs "io/fs"
@@ -16,15 +17,23 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-type stubRefresher struct{ n atomic.Int64 }
+type stubRefresher struct {
+	n atomic.Int64
+	// refuse: answer every refresh with the provider's invalid_grant.
+	refuse atomic.Bool
+}
 
 func (r *stubRefresher) Refresh(_ context.Context, provider string, s credvault.Secret) (credvault.Access, credvault.Secret, error) {
 	n := r.n.Add(1)
+	if r.refuse.Load() {
+		return credvault.Access{}, s, &credvault.ProviderRefusal{Status: http.StatusBadRequest, Code: "invalid_grant", Body: `{"error":"invalid_grant"}`}
+	}
 	exp := time.Now().Add(8 * time.Hour).UTC()
 	next := s
 	next.RefreshToken = fmt.Sprintf("rotated-%d", n)
@@ -503,3 +512,119 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// GET /v1/fleet/credentials names the usage account a credential belongs
+// to — a Codex one's from its id_token (never the token itself), a Claude
+// one's as recorded at import — so the subscriptions page pairs them by
+// identity (claude-fleet#2127).
+func TestFleetCredentialsNameCodexAccount(t *testing.T) {
+	h, _, _ := newVaultHarness(t)
+	claims, _ := json.Marshal(map[string]any{"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1", "chatgpt_user_id": "user-1"}})
+	idTok := "e30." + base64.RawURLEncoding.EncodeToString(claims) + ".IDSIG"
+	putCred(t, h, credvault.Codex, "default", credvault.Secret{RefreshToken: "rt-SECRET", AccountID: "acct-1", IDToken: idTok})
+	putCred(t, h, credvault.Codex, "bare", credvault.Secret{RefreshToken: "rt-SECRET", AccountID: "acct-2"})
+	putCred(t, h, credvault.Claude, "gmail", credvault.Secret{RefreshToken: "sk-ant-ort01-SECRET"})
+	// A setup token cannot say whose it is: the import records it.
+	exp := time.Now().Add(300 * 24 * time.Hour)
+	putCred(t, h, credvault.Claude, "icloud", credvault.Secret{SetupToken: "sk-ant-oat01-SECRET", ExpiresAt: &exp,
+		AccountUUID: "6f1c2d3e-0000-4000-8000-000000000001"})
+	if code, _ := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: pAlice, Provider: credvault.Claude,
+		Account: "bad", Secret: credvault.Secret{RefreshToken: "rt", AccountUUID: "no spaces <here>"}}); code != http.StatusBadRequest {
+		t.Fatalf("a malformed account_uuid was stored: %d", code)
+	}
+	res, raw := h.get(t, "/v1/fleet/credentials")
+	body := string(raw)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET: %d %s", res.StatusCode, body)
+	}
+	if strings.Contains(body, "SECRET") || strings.Contains(body, "IDSIG") {
+		t.Fatalf("a secret left the hub: %s", body)
+	}
+	var got struct {
+		Credentials []struct {
+			Account     string `json:"account"`
+			AccountUUID string `json:"account_uuid"`
+		} `json:"credentials"`
+	}
+	_ = json.Unmarshal([]byte(body), &got)
+	by := map[string]string{}
+	for _, c := range got.Credentials {
+		by[c.Account] = c.AccountUUID
+	}
+	if len(by) != 4 || by["default"] != codex.AccountUUID("acct-1", "user-1") || by["bare"] != "" || by["gmail"] != "" ||
+		by["icloud"] != "6f1c2d3e-0000-4000-8000-000000000001" {
+		t.Fatalf("account_uuid = %v", by)
+	}
+}
+
+func leaseWith(t *testing.T, h *harness, tok string, body any) NodeCredentialsResponse {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/node/credentials", bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	res, err := h.http.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out NodeCredentialsResponse
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("lease with body: %d", res.StatusCode)
+	}
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return out
+}
+
+func codexOf(t *testing.T, r NodeCredentialsResponse) NodeCredential {
+	t.Helper()
+	for _, c := range r.Credentials {
+		if c.Provider == credvault.Codex {
+			return c
+		}
+	}
+	t.Fatalf("no codex credential in %+v", r)
+	return NodeCredential{}
+}
+
+// claude-fleet#2007: a node that saw the upstream refuse its leased access
+// says so on the next lease, and gets a new one — or a plain reauth_required
+// — never the refused token again.
+func TestNodeLeaseUpstreamRevokedGetsNewAccess(t *testing.T) {
+	h, tok, ref := newVaultHarness(t)
+	putCred(t, h, credvault.Codex, "work", credvault.Secret{RefreshToken: "rt-SECRET", AccountID: "acct-1"})
+	_, first, _ := lease(t, h, tok)
+	old := codexOf(t, first)
+	if old.Access == nil || old.Access.AccessToken != "codex-access-1" {
+		t.Fatalf("first lease %+v", old)
+	}
+	// An empty body (an agent that predates the field) is the old answer.
+	if _, again, _ := lease(t, h, tok); codexOf(t, again).Access.AccessToken != "codex-access-1" {
+		t.Fatal("a plain renewal did not come from the cache")
+	}
+	rejected := func(token string) map[string]any {
+		return map[string]any{"upstream_rejected": []UpstreamRejected{{Provider: credvault.Codex, Account: "work",
+			Fingerprint: credvault.AccessFingerprint(token), Error: "token_revoked", At: ptrTime(time.Now())}}}
+	}
+	next := codexOf(t, leaseWith(t, h, tok, rejected("codex-access-1")))
+	if next.Access == nil || next.Access.AccessToken == "codex-access-1" || next.Access.AccessToken != "codex-access-2" {
+		t.Fatalf("lease after the upstream refused codex-access-1: %+v", next)
+	}
+	// The grant is gone at the provider too: a new refusal ends in reauth.
+	ref.refuse.Store(true)
+	dead := codexOf(t, leaseWith(t, h, tok, rejected("codex-access-2")))
+	if dead.Access != nil || dead.State != CredStateReauth || !strings.HasPrefix(dead.Error, "reauth_required") {
+		t.Fatalf("lease after a revoked grant: %+v, want state reauth_required and no access", dead)
+	}
+	res, raw := h.get(t, "/v1/fleet/credentials")
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(raw), `"reauth_required":true`) {
+		t.Fatalf("credentials list: %d %s, want reauth_required", res.StatusCode, raw)
+	}
+	audit, _ := h.srv.Store.CredAuditLog(pAlice, 100)
+	var seen []string
+	for _, a := range audit {
+		seen = append(seen, a.Action)
+	}
+	if !strings.Contains(strings.Join(seen, ","), store.CredUpstreamRejected) || !strings.Contains(strings.Join(seen, ","), store.CredReauth) {
+		t.Fatalf("audit actions %v, want %s and %s", seen, store.CredUpstreamRejected, store.CredReauth)
+	}
+}

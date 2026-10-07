@@ -69,7 +69,16 @@ export const credKey = (c) => `${c.provider}/${c.account}`;
  * credential no usage names yet is a card of its own. Claude first, then
  * Codex, each by label.
  *
- * A vault label is whatever the operator typed at import — "gmail" for
+ * The hub manages what its vault holds (claude-fleet#2127): every card says
+ * `managed` — true for a pool credential's card, false for an account the
+ * agents report usage for but no vault credential pairs with (a teammate's
+ * own login, a win_… fingerprint, codex:local). The page counts only the
+ * managed ones and files the rest under 未纳管.
+ *
+ * A credential the hub could name the account of (account_uuid — a Codex
+ * credential's, from its id_token) goes on that card first (claude-fleet#2127:
+ * a second Codex account broke the guess below). The rest is by label, which
+ * is whatever the operator typed at import — "gmail" for
  * verky.yi@gmail.com, "default" for the one Codex login — so it is matched to
  * an account of the SAME provider in three passes (claude-fleet#2104: four
  * real subscriptions showed as eight cards beside their own credentials):
@@ -94,8 +103,15 @@ export function subscriptions({ limits, accounts, creds, paused, live } = {}) {
   });
   const take = (r, c) => { r.cred = c; used.add(credKey(c)); };
   const free = (prov) => pool.filter((c) => !used.has(credKey(c)) && (c.provider === 'codex' ? 'codex' : 'claude') === prov);
+  // 0. by identity: the account the hub says the credential belongs to (a
+  //    Codex credential's from its id_token; a Claude one's recorded at import)
+  for (const r of rows) {
+    const c = free(r.prov).find((x) => x.account_uuid && x.account_uuid === r.pa.account_uuid);
+    if (c) take(r, c);
+  }
   // 1. exact
   for (const r of rows) {
+    if (r.cred) continue;
     const email = r.a.email;
     const keys = [norm(r.label), norm(email), norm(String(email || '').split('@')[0]), norm(r.pa.account_uuid)];
     const c = free(r.prov).find((x) => keys.includes(norm(x.account)));
@@ -122,13 +138,13 @@ export function subscriptions({ limits, accounts, creds, paused, live } = {}) {
       id: pa.account_uuid, label, prov,
       plan: (pa.limits && pa.limits.plan) || a.subscription_type || '',
       h5: w.h5, h7: w.h7, available: !!(pa.limits && pa.limits.available !== false), reason: (pa.limits && pa.limits.reason) || '',
-      sessions: n[pa.account_uuid] || 0, cred: cred || null, paused: !!(cred && pausedSet.has(cred.account)),
+      sessions: n[pa.account_uuid] || 0, cred: cred || null, paused: !!(cred && pausedSet.has(cred.account)), managed: !!cred,
     });
   }
   for (const c of pool) {
     if (used.has(credKey(c))) continue;
     out.push({ id: 'cred:' + credKey(c), label: c.account, prov: c.provider === 'codex' ? 'codex' : 'claude', plan: '',
-      h5: null, h7: null, available: false, reason: '', sessions: 0, cred: c, paused: pausedSet.has(c.account) });
+      h5: null, h7: null, available: false, reason: '', sessions: 0, cred: c, paused: pausedSet.has(c.account), managed: true });
   }
   return out.sort((x, y) => (x.prov === y.prov ? String(x.label).localeCompare(String(y.label)) : x.prov === 'claude' ? -1 : 1));
 }
@@ -143,6 +159,7 @@ export function subState(s, skip = 85) {
 /** credState is the credential line on a card. */
 export function credState(c, now = Date.now()) {
   if (!c) return { tone: 'warn', text: t('ui.sub.credNone') };
+  if (c.reauth_required) return { tone: 'bad', text: t('ui.sub.credReauth') };
   if (c.refresh_error) return { tone: 'bad', text: t('ui.sub.credError') };
   const end = toMs(c.secret_expires_at);
   if (Number.isFinite(end) && end > 0) {

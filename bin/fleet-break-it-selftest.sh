@@ -50,6 +50,8 @@
 #   node-paused-still-placed                        bin/fleet-control-read.sh capacity (admit / admit_why / room),
 #                                                   fleet_machine_admit, fleet_machine_headroom; the hub half is
 #                                                   tokenledger/internal/api judge() (go test, when a toolchain is here)
+#   dispatch-wrong-replica                          tokenledger/internal/api node_route.go (fleet_node_conns +
+#                                                   /internal/v1/node-write; go test, when a toolchain is here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
@@ -68,6 +70,7 @@
 #   reconnect-stale-view / reconnect-mouse          bin/fleet-remote-view.sh (run, open, select)
 #   view-reconnect-shared                           bin/fleet-remote-view.sh (attach, rv_prune)
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
+#   client-unversioned-drift                        bin/fleet-client-update.sh (tick, digest), fleet-shell.sh stamp_ver
 #   hub-restart-where                               bin/fleet-shell.sh (keeper renew), fleet-client-lease.py renew,
 #                                                   fleet-client-where.sh
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
@@ -1969,6 +1972,37 @@ drill_client_files_swapped() {
   WHAT="新文件载入正在跑的客户端，旧代理换掉，留下「已更新到」"
 }
 
+# (issue #2145) The same drift on a home with NO .client-version — a client the
+# line put down before the mark existed, or one that lost it: every check above
+# reads the mark, so the running server kept the conf it loaded, silently (the
+# operator's MacBook ran a pre-#1951 tmux.conf: no key hints on the bar, the
+# files on disk new). The break: the client starts on a conf without the hints,
+# then the conf on disk is the new one. Self-heal: the keeper's tick sees the
+# running @client_digest differ from the files' and reloads once idle.
+drill_client_unversioned_drift() {
+  CAP=15; local s="${CSESS}n" H="$WORK/nhome" t0 f
+  client_setup
+  mkdir -p "$H/bin" "$H/conf"
+  cp -P "$WORK"/sbin/* "$H/bin/"
+  for f in fleet-shell.sh fleet-client-update.sh; do rm -f "$H/bin/$f"; cp "$BIN/$f" "$H/bin/$f"; done
+  for f in "$WORK"/conf/*; do cp -L "$f" "$H/conf/${f##*/}"; done
+  grep -v fleet_hint "$ROOT/conf/tmux-shell.conf" > "$H/conf/tmux-shell.conf"   # the old conf: no key hints
+  rm -f "$H/.client-version"
+  ( client_env
+    export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/ncache" FLEET_CLIENT_LEASE_CMD=false \
+           FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_IDLE_SECS=0 FLEET_CLIENT_CHECK_SECS=999999
+    bash "$H/bin/fleet-shell.sh" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
+  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ] || { WHY="the unversioned client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
+  [ -z "$("$REAL_TMUX" -L "$s" show-options -gqv @fleet_hint 2>/dev/null)" ] || { WHY="the old conf already carries @fleet_hint"; return 1; }
+  t0=$(now)
+  cp "$ROOT/conf/tmux-shell.conf" "$H/conf/tmux-shell.conf"   # the break: new files under the running client
+  until_ok "$CAP" sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s show-options -gqv @fleet_hint 2>/dev/null)\" ]" \
+    || { WHY="the running client still runs the conf it loaded (no @fleet_hint) ${CAP}s after the files changed"; return 1; }
+  SECS=$(since "$t0")
+  until_ok 5 grep -q '"phase": "reloaded"' "$WORK/ncache/update.state" || { WHY="no trace of the reload: update.state is not reloaded"; return 1; }
+  WHAT="没有 .client-version 的客户端：按内容认出新文件，空闲时重新载入，留下「已重新载入新文件」"
+}
+
 # ============================================ a fleet's tmux, deleted from a shell ======
 # (issue #1841, EPIC #1851 C2) A fleet is `-L <its label>` since #159, so the old
 # guard's "a -L means an isolated test server" let every fleet through; and only an
@@ -2943,6 +2977,39 @@ drill_burst_lands_on_one() {
     esac
   else
     WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- dispatch-wrong-replica (#2124, EPIC #2119 C5): with two hub replicas a node's
+# link ends in one of them; a write that lands on the other is handed across
+# (fleet_node_conns + /internal/v1/node-write). The whole change is the hub's, so
+# the drill is its Go tests, run for real where a toolchain is: two replicas × two
+# nodes × 100 starts all delivered, a reconnect to the other replica keeps them
+# coming, a dead holder is failed (not unknown), the route admits only the
+# replicas' token, a single hub never forwards. Without go the tests must at
+# least exist by name.
+drill_dispatch_wrong_replica() {
+  CAP=120; local t0 out rc tests f
+  tests='TestNodeRouteTwoReplicas TestNodeRouteHolderGone TestNodeRouteNeedsReplicaToken TestNodeRouteSingleNeverForwards TestParseReplica'
+  f="$ROOT/tokenledger/internal/api/node_route_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 'peerOf' "$ROOT/tokenledger/internal/api/fleet_write.go" || { WHY="the write path does not look for the replica holding the link"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='两份入口 × 两台机器 × 100 次派活全送达，重连到另一份照样送达（go test 五条：转发、持有方不在、令牌、单份不转发、配置）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }

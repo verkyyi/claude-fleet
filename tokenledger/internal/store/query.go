@@ -702,15 +702,16 @@ func (s *Store) History(account string, g Granularity, start, end time.Time) ([]
 		return nil, err
 	}
 
+	bucket, f := s.d.timeFormat(f, "ts")
 	q := fmt.Sprintf(`
-		SELECT strftime(?, ts) AS k,
+		SELECT %s AS k,
 		       COUNT(*),
 		       %s,
 		       0,
 		       %s
 		FROM usage_events
 		WHERE %s ts >= ? AND ts < ?
-		GROUP BY k ORDER BY k`, tokenSumExpr, eventCostSplit.sel, accountClause(account))
+		GROUP BY k ORDER BY k`, bucket, tokenSumExpr, eventCostSplit.sel, accountClause(account))
 
 	// The strftime pattern is the first placeholder, so it leads the argument
 	// list ahead of the optional account scope.

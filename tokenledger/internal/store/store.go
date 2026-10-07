@@ -44,6 +44,10 @@ type Store struct {
 	read  *sql.DB
 	write *sql.DB
 
+	// d is which database this is; every SQL difference goes through it
+	// (dialect.go).
+	d dialect
+
 	// BackfilledRollup is how many usage_hourly rows Open rebuilt from
 	// usage_events on this open, 0 when the rollup was already current. The
 	// hub logs it so an operator can see a first-run backfill happen.
@@ -51,20 +55,54 @@ type Store struct {
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
+//
+// With CCQUOTA_DB_URL set (a postgres:// connection string) the store is that
+// Postgres database instead and path is not touched (claude-fleet#2120); unset,
+// it is SQLite at path exactly as it always was.
 func Open(path string) (*Store, error) {
+	if url := dbURL(path); url != "" {
+		if !isPostgresURL(url) {
+			return nil, fmt.Errorf("%s must be a postgres:// connection string", envDBURL)
+		}
+		return openStore(postgresDialect, url, "postgres")
+	}
+	return openStore(sqliteDialect, path, "sqlite "+path)
+}
+
+// openPool opens one pool on the database: the writer, or (readOnly) the
+// readers.
+func openPool(d dialect, src string, readOnly bool) (*sql.DB, error) {
+	if d.pg() {
+		return openPostgres(src, readOnly)
+	}
 	// WAL lets the dashboard read while agents are pushing. busy_timeout turns
 	// the single-writer contention into a short wait instead of an immediate
 	// "database is locked" error under a fleet of agents.
-	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	write, err := sql.Open("sqlite", dsn)
+	dsn := src + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	if readOnly {
+		dsn += "&_pragma=query_only(1)"
+	}
+	return sql.Open("sqlite", dsn)
+}
+
+func openStore(d dialect, src, name string) (*Store, error) {
+	write, err := openPool(d, src, false)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
+		return nil, fmt.Errorf("open %s: %w", name, err)
 	}
 	// modernc's driver is not safe to hammer with many concurrent writers;
-	// one connection plus WAL is both correct and fast enough here.
+	// one connection plus WAL is both correct and fast enough here. Postgres
+	// keeps the same one writer, so every write is serialised exactly as it is
+	// on SQLite — nothing in the store has to be re-proven for concurrency.
 	write.SetMaxOpenConns(1)
+	if d.pg() {
+		if err := write.Ping(); err != nil {
+			write.Close()
+			return nil, fmt.Errorf("open %s: %w", name, err)
+		}
+	}
 
-	if _, err := write.Exec(schemaSQL); err != nil {
+	if _, err := write.Exec(d.ddl(schemaSQL)); err != nil {
 		write.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
@@ -86,14 +124,14 @@ func Open(path string) (*Store, error) {
 
 	// The schema exists by now, so the read pool opens against a database that
 	// is already complete — query_only cannot create or alter anything.
-	read, err := sql.Open("sqlite", dsn+"&_pragma=query_only(1)")
+	read, err := openPool(d, src, true)
 	if err != nil {
 		write.Close()
-		return nil, fmt.Errorf("open sqlite %s for reading: %w", path, err)
+		return nil, fmt.Errorf("open %s for reading: %w", name, err)
 	}
 	read.SetMaxOpenConns(readPoolSize)
 
-	st := &Store{read: read, write: write}
+	st := &Store{read: read, write: write, d: d}
 	if st.BackfilledRollup, err = ensureRollup(st); err != nil {
 		st.Close()
 		return nil, err
@@ -158,7 +196,7 @@ func migrate(db *sql.DB) error {
 		if has {
 			continue
 		}
-		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.column, a.spec)); err != nil {
+		if _, err := db.Exec(dialectOf(db).ddl(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.column, a.spec))); err != nil {
 			return fmt.Errorf("add %s.%s: %w", a.table, a.column, err)
 		}
 	}
@@ -172,24 +210,16 @@ func migrate(db *sql.DB) error {
 }
 
 func hasColumn(db *sql.DB, table, column string) (bool, error) {
-	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	cols, err := dialectOf(db).columns(db, table)
 	if err != nil {
-		return false, fmt.Errorf("inspect %s: %w", table, err)
+		return false, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notnull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			return false, err
-		}
-		if name == column {
+	for _, c := range cols {
+		if c.name == column {
 			return true, nil
 		}
 	}
-	return false, rows.Err()
+	return false, nil
 }
 
 // RecordAttribution stores what an endpoint excluded and why.
@@ -708,19 +738,19 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
+	stmt, err := tx.Prepare(s.d.insertIgnore(`
 		INSERT OR IGNORE INTO usage_events (
 		  account_uuid, endpoint_id, session_id, message_uuid, request_id, ts, model,
 		  input_tokens, output_tokens, cache_create_5m_tokens, cache_create_1h_tokens,
 		  cache_read_tokens, thinking_tokens, web_search_requests, web_fetch_requests,
 		  cost_usd, cwd, os_user, git_branch, entrypoint, effort, is_sidechain, source,details_json,cache_write_tokens,cache_write_known_events,provider,issue_number,git_repo
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 	if err != nil {
 		return 0, 0, fmt.Errorf("prepare insert: %w", err)
 	}
 	defer stmt.Close()
 
-	rstmt, err := tx.Prepare(rollupInsertSQL)
+	rstmt, err := tx.Prepare(s.d.rollupInsertSQL())
 	if err != nil {
 		return 0, 0, fmt.Errorf("prepare rollup upsert: %w", err)
 	}
@@ -735,7 +765,7 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 			e.Provider = e.Details.Provider
 		}
 		if e.Source == model.SourceCodex {
-			res, err := tx.Exec(`INSERT OR IGNORE INTO codex_request_keys(message_uuid) VALUES(?)`, e.MessageUUID)
+			res, err := tx.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO codex_request_keys(message_uuid) VALUES(?)`), e.MessageUUID)
 			if err != nil {
 				return 0, 0, err
 			}
@@ -745,7 +775,7 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 			}
 			if n == 0 || e.EnrichOnly {
 				deduped++
-				if err := enrichCodex(tx, e); err != nil {
+				if err := enrichCodex(s.d, tx, e); err != nil {
 					return 0, 0, err
 				}
 				continue
@@ -774,7 +804,7 @@ func (s *Store) InsertEvents(evs []model.UsageEvent) (inserted, deduped int, err
 			}
 		} else {
 			deduped++
-			if err := enrichCodex(tx, e); err != nil {
+			if err := enrichCodex(s.d, tx, e); err != nil {
 				return 0, 0, err
 			}
 		}

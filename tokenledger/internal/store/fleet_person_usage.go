@@ -30,7 +30,7 @@ const PersonUsageBucket = 10 * time.Minute
 const personUsageKeep = 8 * 24 * time.Hour
 
 func (s *Store) ensureFleetPersonUsage() error {
-	if _, err := s.write.Exec(fleetPersonUsageSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetPersonUsageSchema)); err != nil {
 		return fmt.Errorf("create fleet person usage table: %w", err)
 	}
 	return nil

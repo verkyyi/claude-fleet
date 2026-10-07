@@ -175,6 +175,42 @@ The database defaults to `~/.ccquota/ccquota.db`, or `$CCQUOTA_DB`. If you point
 `--db` somewhere else, set `CCQUOTA_DB` to the same path for the shell you run
 `enroll` and `name` from — they act on that same file.
 
+**Postgres instead of the file** (claude-fleet#2120): set `CCQUOTA_DB_URL` to a
+`postgres://user:pass@host:5432/db?sslmode=require` connection string and the
+hub (and every `ccquota` command run with the same environment) uses that
+database; `--db` / `CCQUOTA_DB` are then not read. Unset — the default — it is
+the SQLite file above, exactly as before. The tables are created on first open,
+in the connection's current schema; text compares byte for byte (`COLLATE "C"`)
+whatever locale the database was created with. Moving an existing file's data
+across is a separate step (EPIC #2119).
+
+**Two hub replicas — 两份入口** (claude-fleet#2124): with the fleet module on, a
+node's control channel ends in whichever replica the load balancer handed it
+to, and only that process can write down it. Give each replica
+`CCQUOTA_REPLICA` (its own name — the pod name), `CCQUOTA_REPLICA_URL` (where
+the OTHER replicas reach it in-cluster, e.g. `http://$(POD_IP):8787`) and
+`CCQUOTA_REPLICA_TOKEN` / `CCQUOTA_REPLICA_TOKEN_FILE` (one secret all replicas
+share, from a k8s Secret — never the database); all three or none, a half set
+refuses to start. Each replica then records the links it holds in
+`fleet_node_conns` and hands a call for a node it does not hold to the one that
+does, over `POST /internal/v1/node-write` (never route it through the public
+ingress). Unset — the default — the hub is a single process exactly as before:
+no table, no route, nothing forwarded.
+
+What each replica keeps in its own memory, and why that is acceptable:
+
+| State | Where | With two replicas |
+|---|---|---|
+| node links (`nodes`), replies in flight (`pending`) | `nodes.go` | the reason for `fleet_node_conns`: a call for another replica's link is forwarded — session start/resume/move, live reads, relays, the SSH CA, a relayed token refresh; the roster, placement and `move plan` count those links as connected |
+| beat-driven pushes: worker map, team version, queued account ops, waiting relays | `pushWorkers` / `pushTeam` / `dispatchAccounts` / `dispatchRelays` | run by the holder on the node's next beat (≤ one heartbeat late); a relay accepted elsewhere also kicks the holder at once |
+| SSH relays (`sshRelays`) | `ssh_relay.go`, `ssh_relay_replica.go` | a byte stream on the link — not forwardable per call, so a replica that holds no link able to relay to the machine reverse-proxies the client's whole websocket to the one that does (claude-fleet#2151), and an agent's data half that lands on the wrong replica is proxied to its link's holder the same way; the holder checks, audits and caps it as its own. The connect page counts the other replica's `ssh_relay` links as relayable |
+| starts just sent (`recent`, #2077) | `fleet_recent.go` | each replica counts its own: a burst split across both is spread a little less well until the beats show it (≤ 90 s); never a lost write |
+| session-pass verify cache (`sessCred`) | `fleet_session_cred.go` | ≤ 30 s: a revocation made through the other replica is seen within the TTL (one made here at once) |
+| load history (`loadHist`) | `nodes.go` | each replica charts the beats it receives; display only, empty after a restart anyway |
+| SSH CA answers (`sshCAStatus`) | `fleet_certs.go` | the holder's; the other replica's roster leaves it blank |
+| client leases, device logins, live sessions, counters | `fleet_client.go`, `fleet_certs.go`, `live.go` | outside the node links; EPIC #2119's other members |
+| a revoked node token | `fleet_node_revoke.go` | the holder closes the link at the node's next message (every message re-checks the token) |
+
 **Enroll each endpoint** (on the hub — the token is shown once):
 
 ```bash

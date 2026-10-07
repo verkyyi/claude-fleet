@@ -48,7 +48,7 @@ type SSHRelay struct {
 }
 
 func (s *Store) ensureFleetSSHRelays() error {
-	if _, err := s.write.Exec(fleetSSHRelaysSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetSSHRelaysSchema)); err != nil {
 		return fmt.Errorf("create fleet relay table: %w", err)
 	}
 	// A restarted hub carries no relay: whatever was open ended with it.

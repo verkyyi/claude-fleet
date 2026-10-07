@@ -198,7 +198,7 @@ func newCostSplit(eventsExpr, unpricedExpr string) costSplit {
 
 // The two tables every cost aggregate in this package reads.
 var (
-	eventCostSplit  = newCostSplit("1", "(cost_usd IS NULL)")
+	eventCostSplit  = newCostSplit("1", "(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END)")
 	hourlyCostSplit = newCostSplit("events", "unpriced_events")
 )
 

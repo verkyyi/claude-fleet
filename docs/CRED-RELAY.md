@@ -7,15 +7,16 @@
 ## 一句话
 
 转发机**不存、不解析、不记录**任何订阅凭据。每个请求它都先问入口
-`GET /v1/relay/check`（Caddy `forward_auth`）：请求头 `X-Fleet-Relay` 里的通行证对，才放行；
-订阅的 `Authorization` 原样透传给上游，通行证和所有 `X-Forwarded-*` 在出门前剥掉。
+`GET /v1/relay/check`（Caddy `forward_auth` → 本机核验进程 → 入口）：请求头 `X-Fleet-Relay`
+里的通行证对，才放行；订阅的 `Authorization` 原样透传给上游，通行证和所有 `X-Forwarded-*`
+在出门前剥掉。入口重启那几十秒里，入口最近核过的通行证照常放行（见「入口重启时」）。
 
 ```
 会话 ──fcp1.──▶ 本机代理 ──Authorization: <订阅>──────────────▶ 转发机 ──▶ api.anthropic.com
                     │       X-Fleet-Relay: frl1.…                │        chatgpt.com/backend-api
                     │                                            │        auth.openai.com
-                    └── 入口 POST /v1/node/relay-credential      └── forward_auth ─▶ 入口 GET /v1/relay/check
-                        （节点令牌换本登录的通行证）                     （只带 X-Fleet-Relay + 路径，不带 Authorization）
+                    └── 入口 POST /v1/node/relay-credential      └── forward_auth ─▶ 127.0.0.1:2091 ─▶ 入口 GET /v1/relay/check
+                        （节点令牌换本登录的通行证）                     （核验进程；只带 X-Fleet-Relay + 路径，不带 Authorization）
 ```
 
 ## 入口自己刷新 OpenAI 凭据（R1，issue #1976）
@@ -44,6 +45,39 @@
 
 入口对同一张 `frl1.` 的判断缓存 30 秒（按哈希，不按原文）；领新证、撤销、改可信、撤销机器凭据都会
 清空本副本的缓存，其它副本最多 30 秒后跟上。
+
+## 入口重启时（issue #2048）
+
+入口发布、Pod 重建的那几十秒，入口对 `/v1/relay/check` 回 503 或连不上（2026-10-07 05:24Z 实测整站
+503）。Caddy 若直接问入口，这段时间经转发的请求全被拒：可信但不能直连的 relay 路、集群中心代理（C6）
+的出口一起断。所以 Caddy 不直接问入口，问转发机上一个只听 `127.0.0.1:2091` 的小进程
+[`extras/cred-relay/fleet-relay-check.py`](../extras/cred-relay/fleet-relay-check.py)
+（python3 标准库，systemd 单元 [`fleet-relay-check.service`](../extras/cred-relay/fleet-relay-check.service)），
+它再问入口。按（通行证的 SHA-256, 路由前缀）记一张表，只在内存里：
+
+| 入口怎么答 | 核验进程怎么做 |
+|---|---|
+| 2xx，且距上次 2xx 不到 `RELAY_CHECK_CACHE_S`（30 秒） | 不问入口，直接放行 |
+| 2xx | 放行，记下这一刻 |
+| 4xx（不认、吊销、不可信、路径不对） | 原样拒，并**删掉**这条——吊销最多 `RELAY_CHECK_CACHE_S` 秒生效 |
+| 5xx / 连不上 / 超过 `RELAY_CHECK_TIMEOUT_S`（5 秒） | 入口 `RELAY_CHECK_GRACE_S`（600 秒）内对这张证、这个前缀说过 2xx → 放行，日志记 `grace`；否则 503，日志记 `refused-unavailable` |
+
+- 宽限放行**不续期**：窗口从入口最后一次真说 2xx 算起，入口一直不回来，10 分钟后照样拒。
+- 没核过的、入口最后一次说不的、只在别的前缀上核过的（`fcp-h1.` 只覆盖一家），入口不在时一律拒。
+- **吊销的边界**：入口在线时吊销 ≤ 30 秒生效（与入口自己的 30 秒缓存同一口径）。只有一种情况更长：
+  吊销后 30 秒内入口恰好也停了，核验进程还没机会听到「不」——这张证在入口停着的这段里最多按宽限放行到
+  它上次 2xx 后 10 分钟。入口一回来，第一次缓存到期就拒。
+- 核验进程只转给入口 `X-Fleet-Relay`、`X-Forwarded-Uri`、`X-Forwarded-Method`；表里只有哈希和时间，
+  不落盘；日志只有事件、前缀、入口怎么了、年龄（`hub-down` / `hub-up` 记入口状态的变化），没有通行证。
+- 核验进程自己重启会忘掉这张表（重启后第一次问入口时补上），所以别在入口发布时重启它。
+
+上线证据（入口发布期间、之后在转发机上）：
+
+```sh
+journalctl -u fleet-relay-check --since '-15 min' | grep -c ' grace '                 # 放行的
+journalctl -u fleet-relay-check --since '-15 min' | grep ' refused-unavailable ' | grep -c 'seen=expired'  # 核过却被拒（应为 0）
+journalctl -u fleet-relay-check --since '-15 min' | grep -E ' hub-(down|up) '         # 入口停了多久
+```
 
 ## 凭据在哪
 
@@ -94,9 +128,9 @@ fleet-node-trust.sh set m9 untrusted   # 标为不可信，同样立即拒绝（
 `bin/fleet-relay-cred-selftest.sh` 跑的就是这份文件（PATH 上有 `caddy` 或设
 `FLEET_RELAY_CADDY` 时；否则用同规则的假转发）。要点：
 
-- `forward_auth @fleet {$FLEET_HUB_URL} { uri /v1/relay/check … header_up -Authorization … }` ——
-  核验子请求**不带**订阅、Cookie、`Chatgpt-Account-Id`、`X-Api-Key`；`forward_auth` 默认补
-  `X-Forwarded-Uri`（原始路径，入口按它查前缀）。
+- `forward_auth @fleet {$FLEET_RELAY_CHECK:127.0.0.1:2091} { uri /v1/relay/check … header_up -Authorization … }` ——
+  先到本机核验进程（上一节），它再问入口；核验子请求**不带**订阅、Cookie、`Chatgpt-Account-Id`、
+  `X-Api-Key`；`forward_auth` 默认补 `X-Forwarded-Uri`（原始路径，入口按它查前缀）。
 - `request_header @fleet -X-Fleet-Relay` —— 通行证不出门。
 - 每条 `reverse_proxy` 都 `header_up -X-Forwarded-For/-Host/-Proto`：**机器自己的地址不能递给上游**
   ——它所在的地区正是要绕开的。
@@ -105,8 +139,9 @@ fleet-node-trust.sh set m9 untrusted   # 标为不可信，同样立即拒绝（
 - 日志 `format filter`：删掉全部请求 / 响应头、地址、TLS 信息，`request>uri` 只留前缀
   （`/anthropic/` 等，未路由的留空）——只剩前缀、状态、字节数、耗时。
 
-占位符都不是密钥（`FLEET_RELAY_SITE`、`FLEET_HUB_URL`、`FLEET_RELAY_LOG`、`FLEET_RELAY_ADMIN`，
-以及只给测试用的上游覆盖），可以放在 systemd 的 `Environment=` 里。
+占位符都不是密钥（`FLEET_RELAY_SITE`、`FLEET_RELAY_CHECK`、`FLEET_RELAY_LOG`、`FLEET_RELAY_ADMIN`，
+以及只给测试用的上游覆盖），可以放在 systemd 的 `Environment=` 里。入口地址 `FLEET_HUB_URL`
+现在是核验进程的设置（它的 systemd 单元里），不再是 Caddy 的。
 
 ## 上线步骤（在 monorepo 建单，由有转发机钥匙的人执行）
 
@@ -117,14 +152,26 @@ fleet-node-trust.sh set m9 untrusted   # 标为不可信，同样立即拒绝（
    （`*.24haowan.com` 有通配，理由同 `doc/review/2026-09-12-ai-gateway-overseas-relay.md`）。
 2. 防火墙：22 ← 运维本机 /32；80、443 ← any（fleet 机器在各处、集群出口也要进，门禁靠通行证，不靠来源 IP；
    80 只为 ACME）。
-3. 装 Caddy ≥ 2.10（官方 apt 源），把 `extras/cred-relay/Caddyfile` 放到 `/etc/caddy/Caddyfile`；
+3. **先**装核验进程（Debian 12 自带 python3；没有就 `apt install python3`）：
+
+   ```sh
+   sudo install -D -m 0755 fleet-relay-check.py /usr/local/lib/fleet-relay/fleet-relay-check.py
+   sudo install -m 0644 fleet-relay-check.service /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now fleet-relay-check
+   curl -s http://127.0.0.1:2091/healthz                                         # ok
+   ```
+
+   再装 Caddy ≥ 2.10（官方 apt 源），把 `extras/cred-relay/Caddyfile` 放到 `/etc/caddy/Caddyfile`；
    `sudo systemctl edit caddy` 写：
 
    ```ini
    [Service]
-   Environment=FLEET_HUB_URL=https://ccquota.24haowan.com
    Environment=FLEET_RELAY_SITE=fleet-relay.24hw.cn
    ```
+
+   **已经在跑的转发机升级到 #2048**：同样先装、启动核验进程，`curl` 它的 `/healthz` 得 `ok`，
+   再换 Caddyfile、reload——顺序反了，Caddy 问一个不存在的 2091，所有请求被拒。
+   旧的 `Environment=FLEET_HUB_URL=…` 留在 caddy 里无害，可删。
 
 4. `sudo -u caddy caddy validate --config /etc/caddy/Caddyfile`（**用 caddy 用户**：root 跑会建出
    root 属主的日志文件，caddy 随后起不来——ai-relay 踩过），`sudo systemctl reload caddy`。

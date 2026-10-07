@@ -69,7 +69,7 @@ func (s *Store) HubUserByID(id int64) (*HubUser, error) {
 // HubUsers is the whole list, admins first, then by username.
 func (s *Store) HubUsers() ([]HubUser, error) {
 	rows, err := s.read.Query(`SELECT github_id FROM hub_users
-		ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, login COLLATE NOCASE`)
+		ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, ` + s.d.nocase("login"))
 	if err != nil {
 		return nil, err
 	}

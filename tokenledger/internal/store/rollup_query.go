@@ -275,7 +275,7 @@ var sessionSorts = map[string]string{
 	"tokens":   "tokens DESC",
 	"cost":     "cost_usd DESC",
 	"started":  "started DESC",
-	"duration": "(julianday(ended) - julianday(started)) DESC",
+	"duration": "duration DESC", // sessionOrder spells it per dialect
 	"turns":    "turns DESC",
 }
 
@@ -304,6 +304,9 @@ func (s *Store) Sessions(f Filter, sortBy string, limit, offset int) ([]SessionR
 	order, ok := sessionSorts[sortBy]
 	if sortBy == "" {
 		order, ok = sessionSorts["tokens"], true
+	}
+	if sortBy == "duration" {
+		order = "(" + s.d.epochSeconds("ended") + " - " + s.d.epochSeconds("started") + ") DESC"
 	}
 	if !ok {
 		return nil, fmt.Errorf("%w %q", ErrUnknownSort, sortBy)

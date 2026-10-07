@@ -1391,6 +1391,22 @@ that cannot answer is ridden out on the cached answer for up to `--stale`
 (15 min, never past the token's expiry), and only a pass it has never seen gets
 a 503.
 
+**An account at its limit is not picked** (claude-fleet#2115, EPIC #2133 C2).
+The first pick puts last any account known to be full — its latest
+`limit_snapshots` reading (by the account its vault label names) has the 5h or
+the 7d window at 100% and not yet reset, or the proxy reported a quota 429 on
+it — and every account full is the old order. A quota 429 (Claude's unified
+limit — `anthropic-ratelimit-unified-status: rejected`, a window at 100%, a
+"weekly / usage / session limit" message — or Codex's `usage_limit_reached`;
+never a request-rate 429) makes the proxy `POST /v1/fleet/credproxy/rebind
+{cred, provider, owner, account, reset_at}` (same token): the hub remembers the
+account as full until `reset_at` (else an hour), and while the session is
+still bound to it moves it to the first account with room (`set_by
+credproxy:429`, a `session_bind` audit row) — so two 429s at once move it once.
+The proxy resends that request once on the new account and logs
+`rebind_from`; no account with room, or a second 429, reaches the client
+unchanged.
+
 **Per-person budgets** (claude-fleet#1977, EPIC #1967 R2). Both proxies count
 what each 2xx answer's own `usage` says — input + cache writes + output; cache
 reads are left out — and report it under the person: a login's local proxy

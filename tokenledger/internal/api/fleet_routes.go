@@ -91,18 +91,6 @@ func (s *Server) fleetMachines() []FleetMachine {
 	return out
 }
 
-// sshRelayReady reports whether a relay to host could be carried right now.
-func (s *Server) sshRelayReady(host string) bool {
-	s.nodes.mu.Lock()
-	defer s.nodes.mu.Unlock()
-	for _, c := range s.nodes.conns {
-		if c.canSSHRelay && c.hostname() == host && control.Compatible(int(c.proto.Load())) {
-			return true
-		}
-	}
-	return false
-}
-
 // RoutesRequest proves a connection certificate: Sig is `ssh-keygen -Y sign
 // -n fleet-routes@claude-fleet` over control.RoutesSigMessage(TS) by the
 // certificate's key.
@@ -179,11 +167,12 @@ func (s *Server) handleFleetRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Login, hosts = p.Login, h
 	}
+	relayReady := s.sshRelayReadiness()
 	for _, m := range s.fleetMachines() {
 		if hosts != nil && !hosts[m.Hostname] {
 			continue
 		}
-		out.Machines = append(out.Machines, RouteMachine{FleetMachine: m, Relay: s.sshRelayReady(m.Hostname)})
+		out.Machines = append(out.Machines, RouteMachine{FleetMachine: m, Relay: relayReady(m.Hostname)})
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, out)

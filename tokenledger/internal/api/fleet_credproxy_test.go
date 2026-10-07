@@ -29,6 +29,8 @@ const (
 	fidB = "bbbbbbbb-0000-4000-8000-00000000000b"
 )
 
+// cpRig.full is Authorization → the 429 body the upstream answers it with
+// (claude-fleet#2115).
 type cpRig struct {
 	h        *harness
 	tok5, f5 string
@@ -39,6 +41,7 @@ type cpRig struct {
 	upAcct   []string
 	audit    []string
 	skew     atomic.Int64 // the proxy's clock runs this far ahead (pastCache)
+	full     map[string]string
 }
 
 // cpCacheTTL is the rig proxy's verdict cache. It runs on the rig's clock and
@@ -71,7 +74,16 @@ func newCPRig(t *testing.T) *cpRig {
 		r.mu.Lock()
 		r.upAuth = append(r.upAuth, req.Header.Get("Authorization"))
 		r.upAcct = append(r.upAcct, req.Header.Get("Chatgpt-Account-Id"))
+		full, isFull := r.full[req.Header.Get("Authorization")]
 		r.mu.Unlock()
+		if isFull {
+			if strings.Contains(full, "weekly limit") { // a quota 429, not a request rate
+				w.Header().Set("Anthropic-Ratelimit-Unified-Status", "rejected")
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, full)
+			return
+		}
 		// usage: 150 counted tokens a request (claude-fleet#1977)
 		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"PONG"}],"usage":{"input_tokens":100,"cache_read_input_tokens":9000,"output_tokens":50}}`)
 	}))

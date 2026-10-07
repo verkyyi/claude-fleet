@@ -52,6 +52,59 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
+  # The Postgres leg (claude-fleet#2120, #2121; EPIC #2119): the same
+  # internal/store AND internal/api tests — the api ones are where the fleet
+  # half (machines, sessions, leases, the vault, device certificates, the
+  # audit) is read and written — run against a real Postgres. CCQUOTA_DB_URL is
+  # what switches the store over; with it set, each package's TestMain
+  # (store.TestMainPostgres) gives every test database its own schema and
+  # prints the tests the leg does not run (SKIP-PG …) — none since #2121, and
+  # the job fails if one comes back or a test calls t.Skip on this leg. The
+  # server is the image's default locale on purpose: the store must sort TEXT
+  # byte for byte (COLLATE "C") without help from how the database was made.
+  tokenledger-pg:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      CCQUOTA_DB_URL: postgres://postgres:ci-only@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: tokenledger/go.sum
+      - run: ../bin/fleet-client-pack.sh
+      - name: store + api tests on Postgres
+        run: |
+          set -o pipefail
+          go test -race -count=1 -v ./internal/store/... ./internal/api/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)'
+      - name: skip 0
+        run: |
+          if grep -E '^ *(SKIP-PG|--- SKIP)' /tmp/pg.log; then
+            echo '::error::the Postgres leg skipped a test (above) — claude-fleet#2121 keeps it at 0'
+            exit 1
+          fi
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo '### tokenledger-pg'
+            echo
+            echo "passed: $(grep -c '^ *--- PASS' /tmp/pg.log) · failed: $(grep -c '^ *--- FAIL' /tmp/pg.log) · skipped: $(grep -cE '^ *(--- SKIP|SKIP-PG)' /tmp/pg.log)"
+            echo
+            echo '```'
+            grep -E '^(pg leg|  SKIP-PG|ok|FAIL)' /tmp/pg.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   web:
     runs-on: ubuntu-latest
     steps:

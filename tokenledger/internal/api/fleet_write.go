@@ -717,8 +717,7 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 
 	// Refuse what cannot be sent BEFORE journalling: there is no queue, and
 	// a refused call leaves the key free for a retry once the node is back.
-	c, err := s.writableConn(target.EndpointID)
-	if err != nil {
+	if err := s.writableAnywhere(ctx, target.EndpointID); err != nil {
 		return nil, err
 	}
 	if tool == "worker_start" || tool == "worker_resume" {
@@ -764,7 +763,7 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		hb, _, _ := s.nodeStatusOf(target.EndpointID, now)
 		noted = s.recent.note(target.EndpointID, hb.SessionsCount(), now)
 	}
-	status, result := s.sendWrite(ctx, c, target, op, envelope)
+	status, result := s.sendWrite(ctx, target, op, envelope)
 	if noted != 0 && status == "failed" {
 		s.recent.forget(target.EndpointID, noted) // refused before anything opened
 	}
@@ -809,10 +808,25 @@ func (s *Server) writableConn(endpointID string) (*nodeConn, error) {
 	return c, nil
 }
 
+// writableAnywhere is writableConn's verdict across replicas
+// (claude-fleet#2124): nil when this replica holds a writable link, or another
+// one holds a link whose hello offered writes — that replica's own
+// writableConn then refuses what it cannot send.
+func (s *Server) writableAnywhere(ctx context.Context, endpointID string) error {
+	_, err := s.writableConn(endpointID)
+	if err == nil {
+		return nil
+	}
+	if peer, ok := s.peerOf(ctx, endpointID); ok && peer.HasCap(control.CapWrite) {
+		return nil
+	}
+	return err
+}
+
 // sendWrite sends one journalled operation and returns the status and result
 // to record. It never returns succeeded: the node's answer is that it TOOK the
 // operation (accepted/running), or an executor's outcome if it was quick.
-func (s *Server) sendWrite(ctx context.Context, c *nodeConn, target store.FleetRow, op store.FleetOperation, envelope map[string]any) (string, string) {
+func (s *Server) sendWrite(ctx context.Context, target store.FleetRow, op store.FleetOperation, envelope map[string]any) (string, string) {
 	errResult := func(code, msg string) string {
 		b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": msg}})
 		return string(b)
@@ -824,11 +838,13 @@ func (s *Server) sendWrite(ctx context.Context, c *nodeConn, target store.FleetR
 	}
 	// The connection checked a moment ago may have been replaced or dropped
 	// since; the one in the map now is the one to use, or nothing was sent.
-	if cur, err := s.writableConn(target.EndpointID); err != nil {
+	c, err := s.writableConn(target.EndpointID)
+	if err != nil {
+		if peer, ok := s.peerOf(ctx, target.EndpointID); ok {
+			return s.forwardWrite(ctx, peer, target, op, envelope)
+		}
 		e := errorObject(err)
 		return "failed", errResult(e["code"], "before the write was sent: "+e["message"])
-	} else {
-		c = cur
 	}
 	ch := c.pending.add(msg.OpID)
 	defer c.pending.remove(msg.OpID)
@@ -1324,7 +1340,7 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 			c.QuotaUsedPct = &u
 		}
 	}
-	_, connErr := s.writableConn(r.EndpointID)
+	connErr := s.writableAnywhere(context.Background(), r.EndpointID)
 	maint, flagged := maintenanceOf(r.Hostname, settings)
 	cv := s.computeOf(r.EndpointID, hb, settings, now)
 	switch {

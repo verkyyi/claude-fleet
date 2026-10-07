@@ -41,54 +41,84 @@ const oauthRefreshTimeout = 20 * time.Second
 // why none can take it — the roster's /nodes answer and fleet-doctor read it,
 // and NodeOAuthRefresh picks the same way.
 func (s *Server) OAuthRefreshNode(now time.Time) (endpointID, name string, err error) {
-	c, id, name, err := s.pickOAuthRefreshNode(now)
+	p, err := s.pickOAuthRefreshNode(now)
 	if err != nil {
 		return "", "", err
 	}
-	_ = c
-	return id, name, nil
+	return p.id, p.name, nil
+}
+
+// refreshPick is the node a refresh goes to: a link this replica holds (c), or
+// one another replica holds (peer, claude-fleet#2124).
+type refreshPick struct {
+	id, name string
+	c        *nodeConn
+	peer     *store.NodeConn
+	load     float64
 }
 
 // pickOAuthRefreshNode chooses the connected admin node that offered the relay
 // and is online (fresh heartbeat), is not a SPOT pod (whose egress is the
 // cluster's own, the one being avoided), and carries the least load per
-// core; ties break on endpoint id, so the pick is deterministic.
-func (s *Server) pickOAuthRefreshNode(now time.Time) (*nodeConn, string, string, error) {
+// core; ties break on endpoint id, so the pick is deterministic. With several
+// replicas, a node another one holds is a candidate on the same terms.
+func (s *Server) pickOAuthRefreshNode(now time.Time) (refreshPick, error) {
 	rows, err := s.Store.Nodes()
 	if err != nil {
-		return nil, "", "", fmt.Errorf("%w: read the node roster: %v", credvault.ErrRefreshUnavailable, err)
+		return refreshPick{}, fmt.Errorf("%w: read the node roster: %v", credvault.ErrRefreshUnavailable, err)
 	}
 	byID := make(map[string]store.Node, len(rows))
 	for _, n := range rows {
 		byID[n.EndpointID] = n
 	}
 	kinds, _ := s.Store.EphemeralEndpoints()
-	type cand struct {
-		id, name string
-		c        *nodeConn
-		load     float64
-	}
-	var cands []cand
-	s.nodes.each(func(id string, c *nodeConn) {
-		if !c.admin || !c.canOAuthRefresh || !control.Compatible(int(c.proto.Load())) {
-			return
-		}
+	var cands []refreshPick
+	consider := func(id string, n store.Node, ok bool) (float64, bool) {
 		if kinds[id] == store.NodeKindEphemeral {
-			return
+			return 0, false
 		}
-		n, ok := byID[id]
 		if !ok || NodeStatus(n.LastHeartbeat, n.HeartbeatMS, now) != "online" {
-			return
+			return 0, false
 		}
 		v := nodeView(n, now)
 		load := v.Load1
 		if v.NCPU > 0 {
 			load /= float64(v.NCPU)
 		}
-		cands = append(cands, cand{id: id, name: c.user() + "@" + c.hostname(), c: c, load: load})
+		return load, true
+	}
+	held := map[string]bool{}
+	s.nodes.each(func(id string, c *nodeConn) {
+		held[id] = true
+		if !c.admin || !c.canOAuthRefresh || !control.Compatible(int(c.proto.Load())) {
+			return
+		}
+		n, ok := byID[id]
+		load, ok := consider(id, n, ok)
+		if !ok {
+			return
+		}
+		cands = append(cands, refreshPick{id: id, name: c.user() + "@" + c.hostname(), c: c, load: load})
 	})
+	for id, pc := range s.peerConns() {
+		pc := pc
+		// The holder's hello offered it to an admin login: the same
+		// two-sided test as a link held here.
+		if held[id] || !pc.Admin || !pc.HasCap(control.CapOAuthRefresh) {
+			continue
+		}
+		n, ok := byID[id]
+		if ok && !control.Compatible(n.Proto) {
+			continue
+		}
+		load, ok := consider(id, n, ok)
+		if !ok {
+			continue
+		}
+		cands = append(cands, refreshPick{id: id, name: n.OSUser + "@" + n.Hostname, peer: &pc, load: load})
+	}
 	if len(cands) == 0 {
-		return nil, "", "", fmt.Errorf("%w: no admin node is online to relay the refresh", credvault.ErrRefreshUnavailable)
+		return refreshPick{}, fmt.Errorf("%w: no admin node is online to relay the refresh", credvault.ErrRefreshUnavailable)
 	}
 	sort.Slice(cands, func(i, j int) bool {
 		if cands[i].load != cands[j].load {
@@ -96,7 +126,7 @@ func (s *Server) pickOAuthRefreshNode(now time.Time) (*nodeConn, string, string,
 		}
 		return cands[i].id < cands[j].id
 	})
-	return cands[0].c, cands[0].id, cands[0].name, nil
+	return cands[0], nil
 }
 
 // NodeOAuthRefresh is credvault.ProxyRefresher.Via: it carries one token
@@ -105,10 +135,29 @@ func (s *Server) pickOAuthRefreshNode(now time.Time) (*nodeConn, string, string,
 // that word, not a 403 page); the node's name is set on the answer whenever
 // one was asked, so the audit says which.
 func (s *Server) NodeOAuthRefresh(ctx context.Context, provider string, form map[string]string) (credvault.ProxyAnswer, error) {
-	c, _, name, err := s.pickOAuthRefreshNode(time.Now())
+	p, err := s.pickOAuthRefreshNode(time.Now())
 	if err != nil {
 		return credvault.ProxyAnswer{}, err
 	}
+	if p.peer != nil {
+		// Asked once, through the replica that holds it (claude-fleet#2124).
+		return s.forwardOAuth(ctx, *p.peer, p.name, provider, form)
+	}
+	return s.oauthRefreshVia(ctx, p.c, p.name, provider, form)
+}
+
+// oauthRefreshOn is a refresh another replica handed over, through the link
+// this one holds to endpointID.
+func (s *Server) oauthRefreshOn(ctx context.Context, endpointID, provider string, form map[string]string) (credvault.ProxyAnswer, error) {
+	c := s.nodes.get(endpointID)
+	if c == nil || !c.admin || !c.canOAuthRefresh {
+		return credvault.ProxyAnswer{}, fmt.Errorf("%w: %s no longer holds an admin link to %s", credvault.ErrRefreshUnavailable, s.Replica.Name, endpointID)
+	}
+	return s.oauthRefreshVia(ctx, c, c.user()+"@"+c.hostname(), provider, form)
+}
+
+// oauthRefreshVia carries the refresh down c, named name in the audit.
+func (s *Server) oauthRefreshVia(ctx context.Context, c *nodeConn, name, provider string, form map[string]string) (credvault.ProxyAnswer, error) {
 	ans := credvault.ProxyAnswer{Via: name}
 	unavailable := func(format string, a ...any) (credvault.ProxyAnswer, error) {
 		return ans, fmt.Errorf("%w: %s", credvault.ErrRefreshUnavailable, fmt.Sprintf(format, a...))

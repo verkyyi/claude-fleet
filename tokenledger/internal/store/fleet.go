@@ -342,37 +342,34 @@ func (s *Store) UpdateFleetOperation(id, status, resultJSON string, at time.Time
 // ensureFleetColumns adds the columns later issues gave the fleet tables to a
 // database created before them. Additive only.
 func (s *Store) ensureFleetColumns() error {
-	var n int
-	if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('fleet_operations') WHERE name = 'placement'`).Scan(&n); err != nil {
+	if err := s.addColumn("fleet_operations", "placement", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
-	}
-	if n == 0 {
-		if _, err := s.write.Exec(`ALTER TABLE fleet_operations ADD COLUMN placement TEXT NOT NULL DEFAULT ''`); err != nil {
-			return fmt.Errorf("add fleet_operations.placement: %w", err)
-		}
 	}
 	// claude-fleet#1512: every repo a fleet hosts, "" = the agent did not say.
-	if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('fleet_fleets') WHERE name = 'repos_json'`).Scan(&n); err != nil {
+	if err := s.addColumn("fleet_fleets", "repos_json", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
-	}
-	if n == 0 {
-		if _, err := s.write.Exec(`ALTER TABLE fleet_fleets ADD COLUMN repos_json TEXT NOT NULL DEFAULT ''`); err != nil {
-			return fmt.Errorf("add fleet_fleets.repos_json: %w", err)
-		}
 	}
 	// claude-fleet#1810: the session a node's call was made for (a verified
 	// worker assertion) — in the journal and in the audit.
 	for _, c := range []struct{ table, col string }{
 		{"fleet_operations", "worker_id"}, {"fleet_audit", "worker_id"}, {"fleet_audit", "worker_key"},
 	} {
-		if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('`+c.table+`') WHERE name = ?`, c.col).Scan(&n); err != nil {
+		if err := s.addColumn(c.table, c.col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
 		}
-		if n == 0 {
-			if _, err := s.write.Exec(`ALTER TABLE ` + c.table + ` ADD COLUMN ` + c.col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
-				return fmt.Errorf("add %s.%s: %w", c.table, c.col, err)
-			}
-		}
+	}
+	return nil
+}
+
+// addColumn adds table.col (spec, in SQLite's spelling) to a database created
+// before it. Additive only; a column already there is left as it is.
+func (s *Store) addColumn(table, col, spec string) error {
+	has, err := hasColumn(s.write, table, col)
+	if err != nil || has {
+		return err
+	}
+	if _, err := s.write.Exec(s.d.ddl(`ALTER TABLE ` + table + ` ADD COLUMN ` + col + ` ` + spec)); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, col, err)
 	}
 	return nil
 }

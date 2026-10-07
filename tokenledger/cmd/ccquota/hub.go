@@ -250,6 +250,23 @@ func envOrFile(name string) (string, error) {
 	return v, nil
 }
 
+// replicaConfig reads CCQUOTA_REPLICA (this replica's name — the pod name),
+// CCQUOTA_REPLICA_URL (where the other replicas reach this one, in-cluster) and
+// CCQUOTA_REPLICA_TOKEN[_FILE] (their shared token, from a k8s Secret). None
+// set: a single hub. Some but not all: refused (claude-fleet#2124).
+func replicaConfig(srv *api.Server) error {
+	tok, err := envOrFile("CCQUOTA_REPLICA_TOKEN")
+	if err != nil {
+		return err
+	}
+	r, err := api.ParseReplica(os.Getenv, tok)
+	if err != nil {
+		return err
+	}
+	srv.Replica = r
+	return nil
+}
+
 // loadSessionCreds wires session passes for untrusted machines
 // (claude-fleet#1969): CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE] is the signing
 // key (its own k8s Secret, never the database);
@@ -396,7 +413,11 @@ func runHub(args []string) error {
 	// The hub is the one command allowed to bring a database into being, so
 	// say when it does. A hub silently starting on an empty database looks
 	// exactly like a hub that has lost everything.
-	if _, statErr := os.Stat(dbFile); errors.Is(statErr, os.ErrNotExist) {
+	if store.UsesPostgres() {
+		// --db names no file then: the database is the server CCQUOTA_DB_URL
+		// points at (claude-fleet#2120), and Open creates its tables.
+		log.Printf("database: Postgres (%s); --db %s is not used", "CCQUOTA_DB_URL", dbFile)
+	} else if _, statErr := os.Stat(dbFile); errors.Is(statErr, os.ErrNotExist) {
 		if err := os.MkdirAll(filepath.Dir(dbFile), 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(dbFile), err)
 		}
@@ -544,6 +565,12 @@ func runHub(args []string) error {
 		if err := fleetRefreshVia(srv, vault); err != nil {
 			return err
 		}
+		// One of several replicas behind one address (claude-fleet#2124):
+		// a node call for a link another replica holds is handed to it.
+		// Unset: a single hub, nothing forwarded and no table written.
+		if err := replicaConfig(srv); err != nil {
+			return err
+		}
 		// SPOT nodes (claude-fleet#1428): on only with an image to run.
 		// A configured image whose cluster cannot be reached refuses to
 		// start rather than run a hub that silently never scales.
@@ -574,8 +601,16 @@ func runHub(args []string) error {
 		fmt.Fprintf(os.Stdout, "check: ok — %s migrated and every startup setting read; this image may be switched to\n", dbFile)
 		return nil
 	}
+	if err := srv.StartReplica(); err != nil {
+		return err
+	}
 	if err := srv.MigrateLegacySettings(time.Now()); err != nil {
 		log.Printf("WARN hub settings: copying the old variables: %v", err)
+	}
+	if err := srv.DropLegacyMachineLogins(time.Now()); err != nil {
+		// An old identity's machine-login map with no reader left
+		// (claude-fleet#2108).
+		log.Printf("WARN hub settings: dropping old machine-login maps: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -1068,7 +1103,7 @@ func sshRelayConfig(srv *api.Server) error {
 // way a broken one would — the caller exits non-zero and the copy is thrown
 // away.
 func migrateOnlyRun(dbFile string, out io.Writer, simulate bool) error {
-	if _, err := os.Stat(dbFile); err != nil {
+	if _, err := os.Stat(dbFile); err != nil && !store.UsesPostgres() {
 		return fmt.Errorf("--migrate-only: %w", err)
 	}
 	st, err := store.Open(dbFile)

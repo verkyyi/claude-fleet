@@ -128,7 +128,8 @@ func (s *Store) MergeAccount(src, dst string) (moved, folded int64, err error) {
 		return 0, 0, err
 	}
 
-	res, err := tx.Exec(`UPDATE OR IGNORE usage_events SET account_uuid = ? WHERE account_uuid = ?`, dst, src)
+	q, args := s.d.updateIgnoreAccount("usage_events", accountKeys["usage_events"], dst, src)
+	res, err := tx.Exec(q, args...)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -136,7 +137,7 @@ func (s *Store) MergeAccount(src, dst string) (moved, folded int64, err error) {
 	if _, err := tx.Exec(`DELETE FROM usage_events WHERE account_uuid = ?`, src); err != nil {
 		return 0, 0, err
 	}
-	if _, err := tx.Exec(hourlyFoldSQL, dst, src); err != nil {
+	if _, err := tx.Exec(s.d.minMaxTS(hourlyFoldSQL), dst, src); err != nil {
 		return 0, 0, err
 	}
 	if _, err := tx.Exec(`DELETE FROM usage_hourly WHERE account_uuid = ?`, src); err != nil {
@@ -148,7 +149,8 @@ func (s *Store) MergeAccount(src, dst string) (moved, folded int64, err error) {
 	// Keyed by account, so the destination may already hold the same reading;
 	// keep one and drop the duplicate rather than orphan it.
 	for _, t := range []string{"quota_snapshots", "account_usage_observations", "endpoint_accounts"} {
-		if _, err := tx.Exec(`UPDATE OR IGNORE `+t+` SET account_uuid = ? WHERE account_uuid = ?`, dst, src); err != nil {
+		q, args := s.d.updateIgnoreAccount(t, accountKeys[t], dst, src)
+		if _, err := tx.Exec(q, args...); err != nil {
 			return 0, 0, err
 		}
 		if _, err := tx.Exec(`DELETE FROM `+t+` WHERE account_uuid = ?`, src); err != nil {
@@ -182,6 +184,16 @@ func (s *Store) MergeAccount(src, dst string) (moved, folded int64, err error) {
 	return moved, folded, tx.Commit()
 }
 
+// accountKeys is, for each table MergeAccount moves with UPDATE OR IGNORE, the
+// rest of the unique key account_uuid is part of (schema.sql; for usage_events
+// idx_events_source_dedup) — what Postgres, which has no OR IGNORE, checks for.
+var accountKeys = map[string][]string{
+	"usage_events":               {"source", "message_uuid"},
+	"quota_snapshots":            {"source", "profile_id", "endpoint_id", "observed_at", "observation"},
+	"account_usage_observations": {"source", "endpoint_id", "observed_at"},
+	"endpoint_accounts":          {"endpoint_id"},
+}
+
 // hourlyFoldSQL moves one account's hour-rows onto another account, ADDING to
 // any row the destination already has for the same hour and shape.
 //
@@ -205,23 +217,23 @@ SELECT hour, ?, endpoint_id, session_id, os_user, cwd, model, provider, git_bran
   FROM usage_hourly WHERE account_uuid = ?
 ON CONFLICT(hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, provider,
             git_branch, effort, entrypoint, is_sidechain, source) DO UPDATE SET
-  events                   = events + excluded.events,
-  input_tokens             = input_tokens + excluded.input_tokens,
-  output_tokens            = output_tokens + excluded.output_tokens,
-  cache_create_5m_tokens   = cache_create_5m_tokens + excluded.cache_create_5m_tokens,
-  cache_create_1h_tokens   = cache_create_1h_tokens + excluded.cache_create_1h_tokens,
-  cache_read_tokens        = cache_read_tokens + excluded.cache_read_tokens,
-  thinking_tokens          = thinking_tokens + excluded.thinking_tokens,
-  cost_usd                 = cost_usd + excluded.cost_usd,
-  unpriced_events          = unpriced_events + excluded.unpriced_events,
-  cache_write_tokens       = cache_write_tokens + excluded.cache_write_tokens,
-  cache_write_known_events = cache_write_known_events + excluded.cache_write_known_events,
-  min_ts                   = min(min_ts, excluded.min_ts),
-  max_ts                   = max(max_ts, excluded.max_ts),
+  events                   = usage_hourly.events + excluded.events,
+  input_tokens             = usage_hourly.input_tokens + excluded.input_tokens,
+  output_tokens            = usage_hourly.output_tokens + excluded.output_tokens,
+  cache_create_5m_tokens   = usage_hourly.cache_create_5m_tokens + excluded.cache_create_5m_tokens,
+  cache_create_1h_tokens   = usage_hourly.cache_create_1h_tokens + excluded.cache_create_1h_tokens,
+  cache_read_tokens        = usage_hourly.cache_read_tokens + excluded.cache_read_tokens,
+  thinking_tokens          = usage_hourly.thinking_tokens + excluded.thinking_tokens,
+  cost_usd                 = usage_hourly.cost_usd + excluded.cost_usd,
+  unpriced_events          = usage_hourly.unpriced_events + excluded.unpriced_events,
+  cache_write_tokens       = usage_hourly.cache_write_tokens + excluded.cache_write_tokens,
+  cache_write_known_events = usage_hourly.cache_write_known_events + excluded.cache_write_known_events,
+  min_ts                   = min(usage_hourly.min_ts, excluded.min_ts),
+  max_ts                   = max(usage_hourly.max_ts, excluded.max_ts),
   -- Same rule as ingest (rollupInsertSQL): a declaration wins over silence.
   -- A merge folds two accounts' rows for one hour, and one of them may predate
   -- the agent that could declare -- keeping '' would lose the other's.
-  git_repo                 = CASE WHEN excluded.git_repo != '' THEN excluded.git_repo ELSE git_repo END`
+  git_repo                 = CASE WHEN excluded.git_repo != '' THEN excluded.git_repo ELSE usage_hourly.git_repo END`
 
 // DuplicateAccountsBySchedule groups accounts that share a seven-day reset
 // phase, returning src -> dst merges. A real uuid always wins over a

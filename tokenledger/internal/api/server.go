@@ -186,9 +186,18 @@ type Server struct {
 
 	// nodes holds the open node control channels.
 	nodes nodeConns
+	// Replica is this process as one of several hub replicas
+	// (claude-fleet#2124): a call for a node whose link another replica
+	// holds is handed to it. Nil — a single hub — forwards nothing.
+	Replica *Replica
+	// forwarded counts the calls handed to another replica.
+	forwarded atomic.Int64
 	// recent is the starts just sent to each node that its heartbeat may not
 	// show yet (claude-fleet#2077); judge counts them as running.
 	recent recentTable
+	// limits is the accounts the cluster proxy saw a quota 429 on
+	// (claude-fleet#2115); the session pick puts them last.
+	limits limitMemo
 
 	// devices holds `fleet login` device-code logins in progress.
 	devices deviceLogins
@@ -254,6 +263,11 @@ func (s *Server) routes() *routeMux {
 	if s.Fleet {
 		// The control channel authenticates per endpoint, like ingest.
 		mux.HandleFunc(control.Path, s.handleNodeConnect)
+		if s.Replica != nil {
+			// A node call another replica hands over (claude-fleet#2124);
+			// in-cluster, behind the replicas' shared token.
+			mux.HandleFunc(NodeRoutePath, s.handleNodeRoute)
+		}
 		// Issue leases (claude-fleet#1422) authenticate the same way.
 		mux.HandleFunc("/v1/node/lease", s.handleNodeLease)
 		// Placement for a node's own spawn (claude-fleet#1425), the same way.
@@ -395,6 +409,9 @@ func (s *Server) routes() *routeMux {
 		// The cluster credential proxy's one question (claude-fleet#1973):
 		// its own token, checked by the handler.
 		mux.HandleFunc(CredProxyResolvePath, s.handleCredProxyResolve)
+		// …and its quota 429s (claude-fleet#2115): the hub moves the
+		// session to an account with room, once.
+		mux.HandleFunc(CredProxyRebindPath, s.handleCredProxyRebind)
 		// Per-person budgets (claude-fleet#1977): what a person used,
 		// reported by both proxies, each with its own token; the list is
 		// the operator's.
