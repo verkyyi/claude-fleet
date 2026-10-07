@@ -74,7 +74,6 @@ type orchState struct {
 	seen map[string]orchSeen // owner key + "\x1f" + machine → last ask
 }
 
-
 // orchOwnerKey is the setting suffix for an owner: the principal id, or — an
 // unowned login — "login:<name>".
 func orchOwnerKey(owner, login string) string {
