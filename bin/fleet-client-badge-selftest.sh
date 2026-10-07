@@ -56,7 +56,7 @@ eq "B2 English" "$R$WARN ⌂ MacBook · the hub refused this computer · scan ag
   "$(FLEET_UI_LANG=en FLEET_CLIENT_WHERE_CMD="$WORK/hubrefused" badge)"
 eq "B2 narrow → ⌂ + machine, no range" "$WARN ⌂ MacBook $TAIL" "$(CW=40 FLEET_CLIENT_WHERE_CMD="$WORK/hubrefused" badge)"
 case "$(cat "$ROOT/conf/tmux-shell.conf")" in
-  *"#{==:#{mouse_status_range},rescan}' { display-popup -c '#{client_name}' -E"*"__BIN__/fleet login"*) eq "B2 a tap on it runs fleet login" 1 1 ;;
+  *"#{==:#{mouse_status_range},rescan}' { run-shell -b \"bash __BIN__/dash-popup.sh --client '#{client_name}'"*"-- bash __BIN__/fleet login"*) eq "B2 a tap on it runs fleet login" 1 1 ;;
   *) eq "B2 a tap on it runs fleet login" "rescan bind" "missing" ;;
 esac
 

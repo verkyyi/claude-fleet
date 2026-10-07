@@ -195,6 +195,8 @@ fleet_ui_t() {
     en:popup_config)            printf 'Config' ;;
     zh:popup_keys)              printf '快捷键' ;;
     en:popup_keys)              printf 'Keys' ;;
+    zh:popup_rescan)            printf '重新扫码' ;;
+    en:popup_rescan)            printf 'Scan again' ;;
     zh:popup_quickopen)         printf '跳到会话' ;;
     en:popup_quickopen)         printf 'Go to session' ;;
     # ⌘P's commands (issue #1952): `>` lists the row menu's items
