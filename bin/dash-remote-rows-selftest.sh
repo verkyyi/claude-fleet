@@ -600,7 +600,7 @@ eq   "E: one #node per other machine from the hub's list: YOUR session count, it
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }')"
 eq   "E: parent in THIS fleet → its bare key"  "m4|online|working|侧边栏|issue-1419|" "$(rrow issue-1423)"
 eq   "E: parent elsewhere → its worker_id"     "m4|online|working|孙|$F/issue-1423|" "$(rrow issue-1500)"
-eq   "E: no @origin_wid → the sub-issue parent (local)"  "m4|online|working|epic-kid|issue-1419|" "$(rrow issue-1600)"
+eq   "E: no @origin_wid → the sub-issue parent (local)"  "m4|online|working|epic-kid|acme-app:issue-1419|" "$(rrow issue-1600)"
 eq   "E: the node's busy word rides as field 14 (#1607), empty where it has none" "bg|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v a="wid:$F/issue-1600" -v b="wid:$F/issue-1423" '$1 == a { x = $14 } $1 == b { y = $14 } END { print x "|" y }')"
 eq   "E: no @origin_wid → the sub-issue parent (remote)" "m4|online|working|remote-sub|$F/issue-1500|" "$(rrow issue-1501)"
