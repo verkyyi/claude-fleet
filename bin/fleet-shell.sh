@@ -846,6 +846,15 @@ portal)
   s="${2:-$SESS}"
   SESS=$s; STAGE="$s-stage"; SHADOW=$BIN
   stage_up || exit 1
+  # ⌘N again ON the writing area (issue #2146): the orchestrating session, no
+  # draft — fleet-compose.py --orch, carry()'s own jump to orch_<sess>'s window.
+  # From the orchestrator (or anywhere else) ⌘N is the writing area, as below. No
+  # orchestrator: nothing changes — the writing area stays, no line.
+  if [ "$(TS display-message -p -t "=$STAGE:" '#{@fleet_role}' 2>/dev/null)" = portal ] \
+     && [ -s "${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}/orch_$s" ] \
+     && python3 "$BIN/fleet-compose.py" --orch "$s" >/dev/null 2>&1; then
+    exit 0
+  fi
   w=$(TS list-windows -t "=$STAGE" -F '#{window_id} #{@fleet_role}' 2>/dev/null | awk '$2 == "portal" { print $1; exit }')
   if [ -z "$w" ]; then
     w=$(TS new-window -d -P -F '#{window_id}' -t "=$STAGE:" -n "$(sh "$BIN/fleet-ui-lang.sh" t compose_title 2>/dev/null || echo 新任务)" -c "$HOME" \

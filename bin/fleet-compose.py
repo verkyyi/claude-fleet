@@ -20,9 +20,11 @@
                                           the draft is handed over on the stage —
                                           carry(), issue #1957.)
     fleet-compose.py --orch <session> [--client C]
-                                          ⌘E / prefix e (issue #2146): the stage
-                                          straight onto the orchestrating session,
-                                          no draft — carry()'s own switch; with
+                                          ⌘N again on the writing area (issue
+                                          #2146, fleet-shell.sh portal) and
+                                          「新任务」's menu: the stage straight
+                                          onto the orchestrating session, no
+                                          draft — carry()'s own switch; with
                                           none (no orch_<session>), or no list to
                                           jump with, one line on the client C and
                                           exit 1
@@ -419,7 +421,7 @@ class Shell:
 
 
 def to_orch(session, client=""):
-    """⌘E / prefix e (issue #2146): carry() with no text — the list's jump to
+    """⌘N on the writing area / 进编排会话 (issue #2146): carry() with no text — the list's jump to
     orch_<session>'s window, the road ⇧⇥ takes. Nothing to go to says so on
     the client's line instead (never an error). 0 switched, 1 not."""
     shell = Shell(session)

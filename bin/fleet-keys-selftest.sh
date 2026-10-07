@@ -440,16 +440,11 @@ fi
 # the ⌘ chord. On the client server of leg 8's kind the codes are live.
 sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --panel switch list exited non-zero"
 # `new` (⌘N / prefix c, issue #1953): the writing area — private code 928.
-# `orch` (⌘E / prefix e, issue #2146): the orchestrating session — private code 929.
-[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 10 ] || fail "10: the switch table is not the 8 actions of #1903 + #1953's new + #2146's orch: $sw_table"
-[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd needs zoom help quickopen new orch " ] \
-  || fail "10: the switch actions are not next prev back fwd needs zoom help quickopen new orch"
+[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 9 ] || fail "10: the switch table is not the 8 actions of #1903 + #1953's new: $sw_table"
+[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd needs zoom help quickopen new " ] \
+  || fail "10: the switch actions are not next prev back fwd needs zoom help quickopen new"
 printf '%s\n' "$sw_table" | awk '$1 == "new" && $2 == "⌘N" && $4 == 928 && $5 == "c"' | grep -q . \
   || fail "10: new is not ⌘N · code 928 · prefix c"
-printf '%s\n' "$sw_table" | awk '$1 == "orch" && $2 == "⌘E" && $3 == "0x65-0x100000" && $4 == 929 && $5 == "e"' | grep -q . \
-  || fail "10: orch is not ⌘E · 0x65-0x100000 · code 929 · prefix e"
-grep -E '^bind -n User929 ' "$CONF" | grep -q 'fleet-compose.py --orch __SESS__' \
-  || fail "10: ⌘E does not take the writing area's road to the orchestrator (fleet-compose.py --orch)"
 sw_block="$(printf '%s\n' "$FULL_SHEET" | awk '/^switch sessions /{f=1;next} f && NF && /^[^ ]/{f=0} f')"
 [ -n "$sw_block" ] || fail "10: the full sheet has no 'switch sessions' group"
 body_of() {   # the body of the conf's bind for key $2 in table $1 (root / prefix)
@@ -490,8 +485,8 @@ PY
 done <<EOF
 $sw_table
 EOF
-# the table's 10 + ⇧↵ → 0x0a (the writing area's newline, issue #1953)
-[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 11 ] \
+# the table's 9 + ⇧↵ → 0x0a (the writing area's newline, issue #1953)
+[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 10 ] \
   || fail "10: the profile maps keys beyond the table + ⇧↵ (no parent map to keep here)"
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]; assert m["0xd-0x20000"] == {"Action": 11, "Text": "0x0a"}, m' "$SW_PROF/fleet.json" \
   || fail "10: the profile does not send 0x0a for ⇧↵"
@@ -518,7 +513,7 @@ fi
 # fleet-keys.sh --page is what ⌘/ and prefix ? open on the stage: it fits a
 # 38-row window and the stage's 119 columns, in both languages; it names every
 # chord of the switch table with that action's key for any other terminal on the
-# same line (⌘↑ ⌘↓ and ⌘[ ⌘] a pair each — 8 lines for the 10 actions); its three
+# same line (⌘↑ ⌘↓ and ⌘[ ⌘] a pair each — 7 lines for the 9 actions); its three
 # groups are the ⌘ keys, the writing area's and the mouse's; and it lists no ⌃
 # key — the list has none (leg 7). Both binds open it (leg 10 holds them equal).
 for lang in zh en; do
@@ -538,8 +533,8 @@ print(max(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in l.rst
   done <<EOF
 $sw_table
 EOF
-  [ "$(grep -c '⌘' <<< "$(printf '%s\n' "$PG" | awk '/^    ⌘/')")" = 8 ] \
-    || fail "11: the $lang page's ⌘ group is not 8 lines: $(printf '%s\n' "$PG" | awk '/^    ⌘/')"
+  [ "$(grep -c '⌘' <<< "$(printf '%s\n' "$PG" | awk '/^    ⌘/')")" = 7 ] \
+    || fail "11: the $lang page's ⌘ group is not 7 lines: $(printf '%s\n' "$PG" | awk '/^    ⌘/')"
 done
 PG="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --page --plain)"
 [ "$(printf '%s\n' "$PG" | grep -E '^  [^ ]' | sed -e 1d -e 's/^  //' | tr '\n' '|')" = '⌘ 键|写作区|鼠标|面板里的按键：在那个面板里按 ?|' ] \

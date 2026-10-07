@@ -176,7 +176,7 @@ $(bash "$BIN/dash-keymap.sh" --panel switch list 2>/dev/null)
 EOF
   # the prototype's order: new, quick open, the two pairs, the rest; a table
   # action this list does not know still gets its line (the sheet's words)
-  for sa in new orch quickopen prev back needs zoom help $acts; do
+  for sa in new quickopen prev back needs zoom help $acts; do
     case " $done_acts " in *" $sa "*) continue ;; esac
     done_acts="$done_acts $sa"
     sg="G_$sa"; sp="P_$sa"
@@ -186,7 +186,7 @@ EOF
             pkey "$G_prev $G_next" "$(fleet_ui_t keys_page_prevnext)" "$P_prev / ${P_next#prefix }" ;;
       back) done_acts="$done_acts fwd"
             pkey "$G_back $G_fwd" "$(fleet_ui_t keys_page_backfwd)" "$P_back / ${P_fwd#prefix }" ;;
-      new|orch|quickopen|needs|zoom|help) pkey "${!sg}" "$(fleet_ui_t "keys_page_$sa")" "${!sp}" ;;
+      new|quickopen|needs|zoom|help) pkey "${!sg}" "$(fleet_ui_t "keys_page_$sa")" "${!sp}" ;;
       *) pkey "${!sg}" "$(fleet_ui_t "keys_switch_$sa")" "${!sp}" ;;
     esac
   done

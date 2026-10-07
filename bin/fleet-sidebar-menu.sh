@@ -266,7 +266,7 @@ add_other() {
   adda "$(t menu_repo)" "$(mk repo)" "$(ask repo)"
 }
 
-# 进编排会话 (issue #2146): ⌘E's road — fleet-compose.py --orch, the list's own
+# 进编排会话 (issue #2146): ⌘N-on-the-writing-area's road — fleet-compose.py --orch, the list's own
 # jump to the window orch_<session> names (fleet-hub-sessions.sh). Listed where
 # that file is, or in the client (greyed with the reason: none on this machine).
 add_orch() {
