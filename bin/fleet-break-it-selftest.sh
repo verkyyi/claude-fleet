@@ -1662,7 +1662,8 @@ drill_client_files_swapped() {
   until_ok 5 sh -c "p=\$(\"$REAL_TMUX\" -L $s-stage list-panes -s -F '#{pane_pid} #{pane_start_command}' 2>/dev/null | awk '/fleet-remote-view.sh/ { print \$1; exit }'); [ -n \"\$p\" ] && [ \"\$p\" != $pp ]" \
     || { WHY="the old proxy loop ($pp) was kept beside the new code"; return 1; }
   SECS=$(since "$t0")
-  grep -q '"phase": "done"' "$WORK/ucache/update.state" 2>/dev/null || { WHY="no trace of the update: update.state is not done"; return 1; }
+  # update.state is written after the reload returns: a beat after the proxy
+  until_ok 5 grep -q '"phase": "done"' "$WORK/ucache/update.state" || { WHY="no trace of the update: update.state is not done"; return 1; }
   WHAT="新文件载入正在跑的客户端，旧代理换掉，留下「已更新到」"
 }
 
