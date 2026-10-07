@@ -7,6 +7,9 @@
 #   fleet-conf.sh migrate [--dry-run] [--quiet]   fold the old files into it (each kept as .bak);
 #                                        fills CCQUOTA_FLEET / FLEET_HUB_URL from node.env (#2116)
 #   fleet-conf.sh set-hub <url> [--host] write FLEET_HUB_URL (+ FLEET_HOST=1 with --host)
+#   fleet-conf.sh line <KEY>             print KEY's assignment line(s) as written (exit 1 = none)
+#   fleet-conf.sh set-line <KEY> <line>  put <line> where KEY's line is, else under [common] (#2134)
+#   fleet-conf.sh drop-line <KEY>        delete KEY's assignment line(s) — the undo of a set-line that added one
 #   fleet-conf.sh role [--why] · add-role client|node · set-hub … --role client|node — the
 #                                        FLEET_ROLE spellings, read for ONE more version (issue #1806)
 #
@@ -56,7 +59,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 FLEET_SKIP_GLOBAL_CONF=1 . "$BIN/fleet-lib.sh"
 
 die()   { echo "fleet-conf: $*" >&2; exit 1; }
-usage() { sed -n '4,10p' "$0" | sed 's/^# //' >&2; exit 2; }
+usage() { sed -n '4,13p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 CD="$FLEET_CONF_DIR"
 MC="$CD/fleet.conf"
@@ -731,6 +734,22 @@ case "$cmd" in
     [ -f "$MC" ] || migrate 0 1 >/dev/null
     add_role "$r"
     _set_common "$MC" FLEET_HUB_URL "export FLEET_HUB_URL=\"$url\"" || die "cannot write $MC" ;;
+  line)   # issue #2134: what fleet-cred-rollout.sh records before it edits
+    k="${1:-}"; case "$k" in ''|*[!A-Za-z0-9_]*) usage ;; esac
+    [ -f "$MC" ] || exit 1
+    grep -E "^[[:space:]]*(export[[:space:]]+)?$k=" "$MC" || exit 1 ;;
+  set-line)
+    k="${1:-}"; case "$k" in ''|*[!A-Za-z0-9_]*) usage ;; esac
+    [ $# -ge 2 ] || usage
+    [ -f "$MC" ] || die "no $MC (fleet-conf.sh migrate makes one)"
+    _set_common "$MC" "$k" "$2" || die "cannot write $MC" ;;
+  drop-line)
+    k="${1:-}"; case "$k" in ''|*[!A-Za-z0-9_]*) usage ;; esac
+    [ -f "$MC" ] || exit 0
+    tmp="$MC.tmp.$$"
+    grep -Ev "^[[:space:]]*(export[[:space:]]+)?$k=" "$MC" > "$tmp"
+    [ $? -le 1 ] && { chmod "$(stat -c '%a' "$MC" 2>/dev/null || stat -f '%Lp' "$MC")" "$tmp" 2>/dev/null; mv -f "$tmp" "$MC"; } \
+      || { rm -f "$tmp"; die "cannot write $MC"; } ;;
   -h|--help) usage ;;
   *) usage ;;
 esac
