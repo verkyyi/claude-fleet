@@ -180,7 +180,7 @@ has 'B: …acme/web new, the title, --node auto' "$(head -1 "$LOG")" 'acme/web n
 has 'B: …--node auto' "$(head -1 "$LOG")" ' --node auto'
 eq 'B: the body is both lines' $'侧栏里 FLEET SKILLS 的名字太长被截了\n附上截图。' "$(cat "$BODY" 2>/dev/null)"
 hasnt 'B: 「开工中…」 gone once the row is there' "$(screen)" '开工中'
-eq 'B: the payload files are cleaned up' '' "$(ls "$FLEET_SWITCH_STATE" | grep compose-send || :)"
+eq 'B: the payload files are cleaned up' '' "$(find "$FLEET_SWITCH_STATE" -name 'compose-send*')"
 hasnt 'B: the draft is empty after a send' "$(compose)" '附上截图'
 
 # C. ⌘N again: the same window; esc keeps the draft and goes back
