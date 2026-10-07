@@ -25,15 +25,21 @@
 //
 // Where (issue #1716): the same module reads bin/fleet-client-where.sh at the
 // start and every WHERE_POLL_MS; where.ts puts the line in the context.
+//
+// Tools (issue #2057): a session the launcher gave no fleet tool service (no
+// FLEET_MCP_SERVER=1 — launched before #1828) gets the mod's three fallback tools
+// at the start, from the service's own specs (tools.ts); a served session gets
+// none — status / spawn / await are the service's there.
 
 import { atom, update } from 'claude-code'
-import type { EngineInterface, On, Timer } from 'claude-code'
+import type { EngineInterface, On, Timer, ToolSpec } from 'claude-code'
 
 import type { FleetModStatus } from '../types'
 import { isOpen, openGate } from './gate'
 import { INBOX_MS, inboxDir, pollInbox } from './inbox'
 import type { InboxIo } from './inbox'
 import { TMUX_TIMEOUT_MS, windowOptionsArgv } from './tmux'
+import { SPEC_TIMEOUT_MS, binDir, fallbackSpecs, specArgv } from './tools'
 import { MODEL_POLL_MS, STATUSLINE_TIMEOUT_MS, claimModelFeed, feedArgv, modelMoved, resetModelFeed } from './usage'
 import { MOD_VERSION, isSupported } from './version'
 import { WHERE_POLL_MS, WHERE_TIMEOUT_MS, takeWhere, whereArgv } from './where'
@@ -131,11 +137,37 @@ async function pollOnce($: EngineInterface): Promise<void> {
   }
 }
 
+// The fallback tools (tools.ts explains them; the run is here because the engine
+// follows `$` only within one file): the specs from the service itself; a spec
+// read that fails registers nothing (an old session's list already carries them),
+// and one tool that will not register costs that tool only, never the session.
+async function registerFallbackTools($: EngineInterface): Promise<void> {
+  let specs: ToolSpec[]
+  try {
+    const r = await $.process.run(specArgv(binDir($.plugin.root)), { timeoutMs: SPEC_TIMEOUT_MS })
+    if (r.exitCode !== 0) return
+    specs = fallbackSpecs(r.stdout)
+  } catch {
+    return
+  }
+  for (const spec of specs) {
+    try {
+      await $.tool.register(spec)
+    } catch {
+      // Already listed (a reload), or refused: this tool only.
+    }
+  }
+}
+
 /** Start-up work of every feature, run once the gate is open. */
 async function onReady($: EngineInterface): Promise<void> {
-  // No tools here (issue #1812, EPIC #1813 C10): fleet_status / fleet_spawn /
-  // fleet_await retired — the fleet tool service (bin/fleet-mcp.py, issue #1807)
-  // serves status / spawn / await, and more, to Claude and Codex alike.
+  // The fallback tools (tools.ts, issue #2057) — only for a fleet session the
+  // launcher did not give the tool service: FLEET_MCP_SERVER=1 says it did (issue
+  // #1807), and then status / spawn / await are the service's and the mod
+  // registers nothing (#1812). Without it — a pane launched before #1828, whose
+  // tool list still carries the mod's three — register them from the service's
+  // own specs, so a reload of this code never leaves a listed tool unanswered.
+  if (pane !== undefined && (await $.env.get('FLEET_MCP_SERVER')) !== '1') await registerFallbackTools($)
   await beat($)
   timer?.cancel()
   timer = $.clock.every(HEARTBEAT_MS, () => {

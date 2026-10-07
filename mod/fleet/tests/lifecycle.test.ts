@@ -7,6 +7,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { HEARTBEAT_MS } from '../hooks/lifecycle'
+import { isToolsRun } from '../hooks/tools'
 import { SUPPORTED, isSupported } from '../hooks/version'
 import { isWhereRun } from '../hooks/where'
 
@@ -16,7 +17,7 @@ function engine(on: On, version: string, env: Record<string, string> = { TMUX_PA
   const runs: string[][] = []
   on('session.version', () => ({ value: { version, base: version } }))
   on('process.run', (_$, e) => {
-    if (!isWhereRun(e.argv)) runs.push([...e.argv])
+    if (!isWhereRun(e.argv) && !isToolsRun(e.argv)) runs.push([...e.argv])
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -58,7 +59,23 @@ test('in range: @mod_state on, @mod_ver, and a heartbeat every 15s', async ($, o
   expect(option(runs, '@mod_alive')).toEqual(['1000000000', '1000000015', '1000000030'])
 })
 
-test('retired tools (#1812): in range, with or without the tool service, the mod registers no tool', async ($, on) => {
+test('fallback tools (#2057): with the tool service (FLEET_MCP_SERVER=1) the mod registers no tool (#1812), and the rest starts', async ($, on) => {
+  const names: string[] = []
+  on('tool.register', (_$, e) => {
+    names.push(e.name)
+    return { value: { tool: `mcp__fleet__${e.name}` } }
+  })
+  const { runs } = engine(on, SUPPORTED.min, { TMUX_PANE: '%7', FLEET_MCP_SERVER: '1' })
+  await $.session.start(START)
+  expect(names).toEqual([])
+  expect(option(runs, '@mod_state')).toEqual(['on'])
+  expect(option(runs, '@mod_alive')).toEqual(['1000000000'])
+})
+
+test('fallback tools (#2057): without the service, a spec read the service does not answer registers nothing — and the rest still starts', async ($, on) => {
+  // This engine stubs every run with '' (no specs), so nothing registers; the
+  // gate still opens and the heartbeat is written. tools.test.ts drives the
+  // registration with the service's own specs.
   const names: string[] = []
   on('tool.register', (_$, e) => {
     names.push(e.name)
@@ -67,7 +84,6 @@ test('retired tools (#1812): in range, with or without the tool service, the mod
   const { runs } = engine(on, SUPPORTED.min, { TMUX_PANE: '%7' })
   await $.session.start(START)
   expect(names).toEqual([])
-  // Everything else still starts: the gate opens and the heartbeat is written.
   expect(option(runs, '@mod_state')).toEqual(['on'])
   expect(option(runs, '@mod_alive')).toEqual(['1000000000'])
 })

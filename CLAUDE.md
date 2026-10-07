@@ -136,8 +136,16 @@ Do not install from memory: read the doc and work from it.
   that runs one (or calls the mod's retired `mcp__fleet__fleet_*`) is logged to
   `logs/mcp-bypass.log` (`FLEET_DIRECT_SCRIPTS=log`, the default) or refused with
   the tool's name (`block`); `FLEET_ALLOW_DIRECT_SCRIPTS=1` is the hatch, the
-  operator / scratch / a person's shell are never touched. The mod registers no
-  tool (0.4.0). Spec: `docs/FLEET-MCP.md` «The old road».
+  operator / scratch / a person's shell are never touched. **With the service
+  mounted the mod registers no tool** (0.4.0); **a session launched without it**
+  (`--plugin-dir` only, before #1828 — no `FLEET_MCP_SERVER=1`) keeps the mod's
+  `fleet_status` / `fleet_spawn` / `fleet_await` as the FALLBACK (issue #2057,
+  mod 0.4.1): registered from `fleet-mcp.py --spec`, every call forwarded to
+  `fleet-mcp.py --call <tool> <json>` — the one implementation; the guard logs
+  those `fallback`, never blocks them; a forward that cannot run answers «reopen
+  the session (/fleet-handoff · claude --resume), or run the script by hand».
+  Never write a second copy of a tool's schema or logic in the mod. Spec:
+  `docs/FLEET-MCP.md` «How a session gets it» / «The old road».
 - **A spawn's parent is a LIVE session, or the spawn refuses** (issue #1355,
   EPIC #1645 C2). `fleet_origin_gate` (`bin/fleet-lib.sh`) runs in both spawners
   after `fleet_origin_canon`, before any window: a key no window answers to

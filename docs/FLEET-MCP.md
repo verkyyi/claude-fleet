@@ -109,9 +109,23 @@ The definition lives once, in **`conf/mcp-worker.json`**:
   `FLEET_MCP_CONFIG` is unset, next to the allowlist when it is set (`none`
   included), and not added again when the allowlist already names a `fleet`
   server. It exports `FLEET_MCP_BIN=<install>/bin` (the server runs THIS
-  install's scripts) and `FLEET_MCP_SERVER=1`. (The mod's own `fleet_status` /
-  `fleet_spawn` / `fleet_await` stayed one version as the fallback, decision 8, and
-  retired in mod 0.4.0 — issue #1812: the mod registers no tool.)
+  install's scripts) and `FLEET_MCP_SERVER=1` — which tells the mod the service is
+  here, so it registers no tool of its own (decision 8; mod 0.4.0, issue #1812).
+  **A session launched before the service** (`--plugin-dir` only, no
+  `--mcp-config`; every pane from before #1828 that was never reopened) has no
+  `FLEET_MCP_SERVER`, and its tool list — registered once at ITS start — still
+  carries the mod's `fleet_status` / `fleet_spawn` / `fleet_await`: a hot reload of
+  the mod swaps the code, never the list. So the mod keeps them as the **fallback**
+  (issue #2057, mod 0.4.1, `mod/fleet/hooks/tools.ts`): without `FLEET_MCP_SERVER=1`
+  it registers the three from `fleet-mcp.py --spec status spawn await` (the service's
+  own schemas, so there is one copy) and forwards every call to
+  `fleet-mcp.py --call <tool> <json>` — the same identity check, argument check,
+  script and call log as a `tools/call` (logged `road=call`). When the forward
+  itself cannot run (no `python3`, the install's `bin/` gone, a usage exit) the
+  answer is one actionable line: reopen the session (`/fleet-handoff`, or `claude
+  --resume`) so it mounts the service, or run the script by hand meanwhile. A served
+  session sees nothing of this — no spec read, nothing registered, no second
+  `fleet` tool.
 - **Codex** — `bin/fleet-codex.sh` adds `-c "$(fleet-mcp.py --mount codex)"`:
   `mcp_servers.fleet={command, args, env_vars, tool_timeout_sec}` derived from the
   same file, after any allowlist policy and before the caller's `-c`. Codex hands a
@@ -257,9 +271,12 @@ script a tool wraps. `hooks/bash-guard.py` holds ONE table (`_DIRECT_TOOLS`,
 script → tool) and judges two roads with it: a Bash statement whose **command**
 is one of the scripts below (the live install's copy or a bare name — a `grep`
 of it, or a worktree's own `bin/` under test, is not a call), and a call to one
-of the mod's retired tools by its MCP name (`mcp__fleet__fleet_status|spawn|await`
+of the mod's old tools by its MCP name (`mcp__fleet__fleet_status|spawn|await`
 → `status` / `spawn` / `await`; `hooks/settings-hooks.json` routes those names to
-the guard, Codex never had them).
+the guard, Codex never had them) — in a session that HAS the service
+(`FLEET_MCP_SERVER=1`). In a session with none (launched before #1828) those three
+are the mod's fallback and its only road (issue #2057, «How a session gets it»):
+logged `fallback`, never blocked, whatever the mode.
 
 | script | tool |
 |---|---|
@@ -375,6 +392,12 @@ relay; `TestPlaceCarriesWorkerAssertion` (`cmd/ccquota`).
 `bin/session-wrap-selftest.sh` B' — the wrapper mints per launch and revokes on exit.
 `bin/fleet-claude-selftest.sh` #1807 and `bin/fleet-codex-selftest.sh` I — the
 launch command lines carry the server. `mod/fleet/tests/lifecycle.test.ts`
-«retired tools» + `bin/fleet-mod-selftest.sh` E — the mod registers no tool.
+«fallback tools» + `tests/tools.test.ts` + `bin/fleet-mod-selftest.sh` E — with the
+service the mod registers no tool; without it the three, from `--spec`, every call
+forwarded to `--call`, no schema / check / script of its own, the retreat message
+when the forward cannot run (issue #2057). `bin/fleet-mcp-selftest.sh` N — `--spec`
+is the `tools/list` entry byte for byte; `--call` runs the same argv, prints the
+same text, exit 0 / 1 / 2, logs `road=call`.
 `bin/bash-guard-selftest.sh` «direct-script rail» — the old road (above): a worker
-seat logged / blocked, the operator seat and the hatch passing, the MCP road.
+seat logged / blocked, the operator seat and the hatch passing, the MCP road with
+the service, the fallback without it (logged `fallback`, never blocked).

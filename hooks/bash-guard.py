@@ -999,7 +999,11 @@ def _run_overlay(seg):
 # wraps — while the old road stays open, new skills and old habits mix and the
 # call log cannot say which session did what. ONE table, two roads: a Bash
 # statement whose COMMAND is one of these scripts, and a call to one of the mod's
-# retired tools (mod/fleet/hooks/tools.ts, gone in mod 0.4.0) by its MCP name.
+# old tools by its MCP name (mcp__fleet__fleet_status|spawn|await) — in a session
+# that HAS the service (FLEET_MCP_SERVER=1). In one that has none — launched
+# before #1828, `--plugin-dir` only — those three are the mod's FALLBACK (issue
+# #2057, mod 0.4.1: forwarded to fleet-mcp.py --call, the same implementation) and
+# the only road the session has: logged `fallback`, never blocked.
 #
 #   FLEET_DIRECT_SCRIPTS=log    (default) allow, and append a line to
 #                               logs/mcp-bypass.log — the week of record
@@ -1033,7 +1037,7 @@ _DIRECT_TOOLS = {
     "fleet-gh.sh": ("gh", None),
     "fleet-reap-policy.sh": ("set_reap", ("set",)),
 }
-# The mod's retired tools, by the name Claude showed them under.
+# The mod's tools, by the name Claude shows them under (the fallback since #2057).
 _RETIRED_TOOLS = {
     "mcp__fleet__fleet_status": "status",
     "mcp__fleet__fleet_spawn": "spawn",
@@ -1172,6 +1176,19 @@ def _bypass_log(verdict, issue, script, tool):
             f.write(line)
     except OSError:
         pass
+
+
+def check_fallback(script, tool, cwd):
+    """The MCP road in a session with NO tool service (no FLEET_MCP_SERVER=1 —
+    launched before #1828): the mod's fleet_* is the one road it has, and the mod
+    forwards it to fleet-mcp.py (issue #2057). Logged `fallback` so the operator
+    can count the sessions still to reopen; never blocked, whatever the mode."""
+    if _direct_mode() == "off":
+        return
+    seat, issue = _direct_seat(cwd)
+    if seat != "worker":
+        return
+    _bypass_log("fallback", issue, script, tool)
 
 
 def check_direct(script, tool, masked_cmd, cwd):
@@ -1321,8 +1338,12 @@ def main():
     name = data.get("tool_name") or ""
     if name in _RETIRED_TOOLS:          # the same rule on the MCP road (#1812)
         try:
-            check_direct(name, "mcp__fleet__" + _RETIRED_TOOLS[name], "",
-                         data.get("cwd") or os.getcwd())
+            if os.environ.get("FLEET_MCP_SERVER", "").strip() == "1":
+                check_direct(name, "mcp__fleet__" + _RETIRED_TOOLS[name], "",
+                             data.get("cwd") or os.getcwd())
+            else:                       # no service here: the mod's fallback (#2057)
+                check_fallback(name, "mcp__fleet__" + _RETIRED_TOOLS[name],
+                               data.get("cwd") or os.getcwd())
         except SystemExit:
             raise
         except Exception:
