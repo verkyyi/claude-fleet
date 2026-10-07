@@ -45,11 +45,11 @@ esac
 bash "$BIN/fleet-session-cred.sh" on \
   || die 'FLEET_CRED_PROXY is off — put FLEET_CRED_PROXY=1 in fleet.conf [common] (or the environment) first' 3
 exe=$(command -v "$agent") || die "$agent is not on PATH"
-# 登录即登记 (issue #2212): a computer logged in before it has no node.env yet —
-# take its node pass now, by the device key, no scan. A token already there is
-# left alone; no hub / not logged in leaves the refusal below as it was.
-grep -q '^CCQUOTA_TOKEN=.' "$CONF/node.env" 2>/dev/null \
-  || FLEET_CONF_DIR="$CONF" bash "$BIN/fleet-node.sh" ensure >/dev/null 2>&1
+# 登录即登记 / 登录即认人 (issue #2212): a computer logged in before it has no
+# node.env yet — take its node pass now, by the device key, no scan; one that is
+# a node already shows the hub its token once (node-login.ok), so its login is
+# known as this person's. No hub / not logged in leaves the refusal below as it was.
+FLEET_CONF_DIR="$CONF" bash "$BIN/fleet-node.sh" ensure >/dev/null 2>&1
 
 # The assertion: this session, in this computer's client fleet. Five minutes is
 # enough — the hub reads it once, at the pass's issue.

@@ -179,3 +179,14 @@ func (s *Store) RotateEndpointToken(endpointID, tokenHash string) error {
 	}
 	return nil
 }
+
+// LinkDeviceEndpoint ties a device to a node it already is (claude-fleet#2212):
+// a node joined before 登录即登记 (by a scan or a code) presents its own token
+// once, and from then on DeviceNodeEndpoint finds it — a used code row, the
+// same audit trail every enrollment leaves.
+func (s *Store) LinkDeviceEndpoint(codeHash, deviceFP, endpointID string, now time.Time) error {
+	ts := fmtTime(now)
+	_, err := s.write.Exec(`INSERT INTO fleet_join_codes (code_hash, label, kind, created_at, expires_at, used_at, endpoint_id, device_fp)
+		VALUES (?, '', ?, ?, ?, ?, ?, ?)`, codeHash, NodeKindFixed, ts, ts, ts, endpointID, deviceFP)
+	return err
+}

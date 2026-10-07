@@ -105,7 +105,7 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = dev.Name
 	}
-	out, enrolled, err := s.deviceNode(r, fp, host, req.OSUser, now)
+	out, what, err := s.deviceNode(r, fp, host, req.OSUser, now)
 	var tn *trustedNameErr
 	switch {
 	case errors.As(err, &tn):
@@ -117,10 +117,7 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	what := "reissued"
-	if enrolled {
-		what = "enrolled"
-	}
+	s.recordLoginAccount(pid, fp, out, req.OSUser, now)
 	s.deviceAudit(store.DeviceNodePass, fp, pid, pid, fmt.Sprintf("%s %s (%s) · untrusted · 随登录登记", what, out.Label, out.EndpointID), now)
 	log.Printf("fleet: device %s of %s %s node %s (%s) at login", fp, pid, what, out.Label, out.EndpointID)
 	w.Header().Set("Cache-Control", "no-store")
@@ -135,47 +132,117 @@ func (e *trustedNameErr) Error() string {
 	return fmt.Sprintf("a machine named %s is trusted on this hub; a login cannot register under its name — on that machine run: fleet node join", e.name)
 }
 
-// deviceNode is the device's node pass: its live endpoint with a fresh token,
-// or — none yet — a new fixed-kind enrollment tagged with the device.
-func (s *Server) deviceNode(r *http.Request, fp, hostname, osUser string, now time.Time) (*NodeJoinResponse, bool, error) {
+// deviceNode is the device's node pass, and what it did ("linked" ·
+// "reissued" · "enrolled"):
+//
+//   - the request carries this computer's live node token (a node joined
+//     before 登录即登记, by a scan or a code): that node is tied to the device
+//     and its token handed back unchanged — never a second node;
+//   - the device's live endpoint: the same endpoint with a fresh token;
+//   - none yet: a new fixed-kind enrollment tagged with the device.
+func (s *Server) deviceNode(r *http.Request, fp, hostname, osUser string, now time.Time) (*NodeJoinResponse, string, error) {
+	if tok := bearer(r); tok != "" {
+		if ep, err := s.Store.EndpointByTokenHash(HashToken(tok)); err == nil &&
+			(ep.OSUser == "" || ep.OSUser == sanitizeJoinField(osUser)) {
+			if id, err := s.Store.DeviceNodeEndpoint(fp); err != nil || id != ep.ID {
+				code, err := MintJoinCode()
+				if err != nil {
+					return nil, "", err
+				}
+				if err := s.Store.LinkDeviceEndpoint(HashToken(code), fp, ep.ID, s.joinNow()); err != nil {
+					return nil, "", err
+				}
+				if err := s.Store.FleetAudit("device:"+fp, "node_join", "endpoint:"+ep.ID, "LINKED "+ep.Label+" 随登录登记", "", now); err != nil {
+					log.Printf("join audit: %v", err)
+				}
+			}
+			return s.joinResponse(r, ep.ID, ep.Label, tok, ep.OSUser), "linked", nil
+		}
+	}
 	if id, err := s.Store.DeviceNodeEndpoint(fp); err == nil {
 		tok, err := MintToken()
 		if err != nil {
-			return nil, false, err
+			return nil, "", err
 		}
 		if err := s.Store.RotateEndpointToken(id, HashToken(tok)); err != nil {
-			return nil, false, err
+			return nil, "", err
 		}
 		ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
 		if err != nil {
-			return nil, false, err
+			return nil, "", err
 		}
 		if err := s.Store.FleetAudit("device:"+fp, "node_join", "endpoint:"+id, "REISSUED "+ep.Label+" 随登录登记", "", now); err != nil {
 			log.Printf("join audit: %v", err)
 		}
-		return s.joinResponse(r, id, ep.Label, tok, ep.OSUser), false, nil
+		return s.joinResponse(r, id, ep.Label, tok, ep.OSUser), "reissued", nil
 	} else if !errors.Is(err, store.ErrNoSuchEndpoint) {
-		return nil, false, err
+		return nil, "", err
 	}
 	if host := sanitizeJoinField(hostname); host != "" {
 		settings, _ := s.trustSettings(now)
 		if trustOf(host, settings) == TrustTrusted {
-			return nil, false, &trustedNameErr{host}
+			return nil, "", &trustedNameErr{host}
 		}
 	}
-	code, err := MintJoinCode()
+	out, err := s.enrollDeviceNode(r, fp, hostname, osUser)
 	if err != nil {
-		return nil, false, err
-	}
-	if err := s.Store.CreateJoinCodeForDevice(HashToken(code), fp, s.joinNow(), JoinCodeTTL); err != nil {
-		return nil, false, err
-	}
-	out, err := s.redeemJoin(r, code, hostname, osUser)
-	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
 	if err := s.Store.FleetAudit("device:"+fp, "node_join", "endpoint:"+out.EndpointID, "JOINED "+out.Label+" 随登录登记 · untrusted", "", now); err != nil {
 		log.Printf("join audit: %v", err)
 	}
-	return out, true, nil
+	return out, "enrolled", nil
+}
+
+// enrollDeviceNode enrolls a fixed-kind node through a code the hub mints and
+// spends at once, tagged with the device that asked (fp) — the login's road
+// and the `fleet node join` scan alike, so either finds the other's node.
+func (s *Server) enrollDeviceNode(r *http.Request, fp, hostname, osUser string) (*NodeJoinResponse, error) {
+	code, err := MintJoinCode()
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Store.CreateJoinCodeForDevice(HashToken(code), fp, s.joinNow(), JoinCodeTTL); err != nil {
+		return nil, err
+	}
+	return s.redeemJoin(r, code, hostname, osUser)
+}
+
+// principalOnNode is the person behind login on a node: the machine's
+// account (PrincipalForLogin), else the login row 登录即认人 bound to this
+// very endpoint — the computer's name is the agent's own word and may not be
+// the one it registered under.
+func (s *Server) principalOnNode(endpointID, host, login string) (string, error) {
+	p, err := s.Store.PrincipalForLogin(host, login)
+	if errors.Is(err, store.ErrNoPrincipal) {
+		return s.Store.PrincipalForEndpointLogin(endpointID, login)
+	}
+	return p, err
+}
+
+// recordLoginAccount is 登录即认人 (claude-fleet#2212): the system login the
+// person ran `fleet login` under, on the computer they confirmed it on, is
+// theirs — one active fleet_accounts row, by computer (never the global
+// machine-login mapping, never another machine). A row someone else holds is
+// left alone and audited; it never fails the node pass.
+func (s *Server) recordLoginAccount(pid, fp string, out *NodeJoinResponse, osUser string, now time.Time) {
+	osUser = sanitizeJoinField(osUser)
+	if osUser == "" || !control.ValidExistingLogin(osUser) {
+		return
+	}
+	ep, err := s.Store.EndpointByTokenHash(HashToken(out.Token))
+	if err != nil || ep.Hostname == "" {
+		return
+	}
+	p, err := s.Store.Principal(pid)
+	if err != nil {
+		return
+	}
+	wrote, err := s.Store.RecordLoginAccount(p, ep.Hostname, osUser, ep.ID, "登录即认人 · device "+fp, now)
+	switch {
+	case err != nil:
+		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, "account not recorded: "+err.Error(), now)
+	case wrote:
+		s.deviceAudit(store.DeviceNodePass, fp, pid, pid, fmt.Sprintf("account %s on %s is %s · 登录即认人", osUser, ep.Hostname, pid), now)
+	}
 }

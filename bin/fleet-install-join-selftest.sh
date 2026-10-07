@@ -35,7 +35,9 @@
 #   F. no tty     stderr not a terminal (CI, a log): no scan, no wait — the
 #                 same line: the login registers it
 #   G. old login  logged in, node.env gone: `fleet node ensure` takes the pass
-#                 again by the device key — no scan, the same hub endpoint asked
+#                 again by the device key — no scan, the same hub endpoint asked;
+#                 a node from before (token, no node-login.ok) shows the hub its
+#                 token once (link + 登录即认人), node.env unchanged
 #   H. logout     `fleet logout`: the node leaves the hub (/v1/node/leave),
 #                 node.env, the certificate and the device key are gone
 set -uo pipefail
@@ -119,7 +121,8 @@ class H(BaseHTTPRequestHandler):
             # 登录即登记 (#2212): the device key's signature buys the pass
             if not (body.get("public_key", "").startswith("ssh-ed25519 ") and "SSH SIGNATURE" in body.get("sig", "")):
                 return self.reply(401, {"error": "bad signature", "code": "bad_signature"})
-            state["lnode"].append({"hostname": body.get("hostname"), "os_user": body.get("os_user")}); save()
+            state["lnode"].append({"hostname": body.get("hostname"), "os_user": body.get("os_user"),
+                                   "bearer": self.headers.get("Authorization") == "Bearer " + TOKEN}); save()
             return self.reply(200, {"endpoint_id": "ep_1", "label": body["hostname"] + "-" + body["os_user"], "token": TOKEN,
                 "hub": "x", "admin": False, "dist": ["darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"], "kind": "fixed"})
         if self.path == "/v1/node/leave":
@@ -304,6 +307,17 @@ else bad "G rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")";
 fleet_in h1 node ensure
 python3 -c 'import json,sys; sys.exit(0 if len(json.load(open(sys.argv[1]))["lnode"]) == 2 else 1)' "$WORK/state.json" \
   && ok "G a node.env with a token: ensure asks nothing" || bad "G ensure asked again: $(cat "$WORK/state.json")"
+# a node from before 登录即登记 (no node-login.ok): ensure shows the hub its token
+# once — the hub ties that node to the device and records whose login it is
+rm -f "$CONF/node-login.ok"; cp "$ENVF" "$WORK/env.g"
+fleet_in h1 node ensure
+if python3 -c 'import json,sys; l=json.load(open(sys.argv[1]))["lnode"]; sys.exit(0 if len(l) == 3 and l[2]["bearer"] else 1)' "$WORK/state.json" \
+   && cmp -s "$ENVF" "$WORK/env.g" && [ "$(cat "$CONF/node-login.ok")" = "$HUB" ]; then
+  ok "G an existing node: one ask with its token (link + 认人), node.env unchanged, marked"
+else bad "G link: $(cat "$WORK/state.json")"; fi
+fleet_in h1 node ensure
+python3 -c 'import json,sys; sys.exit(0 if len(json.load(open(sys.argv[1]))["lnode"]) == 3 else 1)' "$WORK/state.json" \
+  && ok "G linked once: no second ask" || bad "G asked again after the link"
 
 # ── H. logout ───────────────────────────────────────────────────────────────
 fleet_in h1 logout

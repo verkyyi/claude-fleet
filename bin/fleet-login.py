@@ -190,9 +190,10 @@ def remember_hub(url):
     write_file(HUB_FILE, json.dumps(d, indent=2) + "\n", 0o600)
 
 
-def post(url, body, timeout=20):
-    req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+def post(url, body, timeout=20, headers=None):
+    h = {"Content-Type": "application/json"}
+    h.update(headers or {})
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=h, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read() or b"{}")
@@ -491,9 +492,16 @@ def node_pass(hub, out, quiet=False):
     except (OSError, subprocess.CalledProcessError) as e:
         say("ssh-keygen -Y sign failed: %s" % e)
         return 1
+    # A node already (joined by a scan or a code, before 登录即登记): its own
+    # token says so, and the hub ties that node to this device rather than
+    # enrolling a second one — read here, sent in the header, never printed.
+    hdr = {}
+    ne = node_env()
+    if ne.get("CCQUOTA_TOKEN") and ne.get("CCQUOTA_HUB_URL", "").rstrip("/") == hub:
+        hdr["Authorization"] = "Bearer " + ne["CCQUOTA_TOKEN"]
     try:
         code, res = post(hub + LOGIN_NODE_PATH, {"public_key": pub, "ts": ts, "sig": sig,
-                                                 "hostname": device_name(), "os_user": getpass.getuser()})
+                                                 "hostname": device_name(), "os_user": getpass.getuser()}, headers=hdr)
     except (urllib.error.URLError, OSError) as e:
         say("hub unreachable (%s)" % getattr(e, "reason", e))
         return 1
@@ -511,6 +519,21 @@ def node_pass(hub, out, quiet=False):
         return NO_DOOR
     say("没拿到节点通行证（HTTP %d）：%s" % (code, why))
     return 1
+
+
+def node_env():
+    """node.env's KEY=value lines ({} when there is none)."""
+    out = {}
+    try:
+        with open(NODE_ENV) as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    out[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return out
 
 
 def ensure_node(hub):

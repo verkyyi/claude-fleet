@@ -90,6 +90,12 @@ type FleetAccount struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// Managed reports whether the hub manages this login (it opened, adopted or
+// may close it) — false for a 登录即认人 row (AccountOpLogin, claude-fleet#2212),
+// which only records who uses a computer and is never a certificate principal,
+// an ssh host, a trusted machine or a relay route.
+func (a FleetAccount) Managed() bool { return a.Op != AccountOpLogin }
+
 // ErrAccountState is returned when an account is not in a state the requested
 // change can start from.
 var ErrAccountState = errors.New("account is not in a state that allows this")
@@ -546,4 +552,53 @@ func (s *Store) LoseAccountOps(endpointID string, at time.Time) error {
 		updated_at = ? WHERE endpoint_id = ? AND state IN (?, ?)`,
 		AccountUnknown, at.UTC().Format(rfc), endpointID, AccountCreating, AccountRemoving)
 	return err
+}
+
+// AccountOpLogin marks an account row written by 登录即认人 (claude-fleet#2212):
+// the computer the person confirmed `fleet login` on, as the system login they
+// ran it under. It records who uses THIS computer — for the hub's per-node
+// reads (PrincipalForLogin, PrincipalForEndpointLogin) — and is never a login
+// the hub manages: no op is ever sent for it, and it is never a principal on
+// a connection certificate (the hub's fleetLoginsOf skips it).
+const AccountOpLogin = "login"
+
+// RecordLoginAccount writes p's system login osUser on hostname as active,
+// bound to the node endpointID its login registered. It never takes a row
+// another person holds (that is an error), never overwrites p's own row there
+// unless that row is itself a login row or never reached the machine, and
+// reports whether it wrote.
+func (s *Store) RecordLoginAccount(p *Principal, hostname, osUser, endpointID, detail string, at time.Time) (bool, error) {
+	ts := at.UTC().Format(rfc)
+	res, err := s.write.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, endpoint_id, detail, requested_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(principal_id, hostname) DO UPDATE SET login = excluded.login, state = excluded.state, op = excluded.op,
+		  op_id = '', endpoint_id = excluded.endpoint_id, detail = excluded.detail, updated_at = excluded.updated_at
+		  WHERE fleet_accounts.op = ? OR fleet_accounts.state IN (?, ?, ?)`,
+		p.ID, hostname, osUser, AccountActive, AccountOpLogin, endpointID, detail, ts, ts,
+		AccountOpLogin, AccountPending, AccountFailed, AccountRemoved)
+	if isUniqueViolation(err) {
+		return false, fmt.Errorf("login %q on %s already belongs to someone else", osUser, hostname)
+	}
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// PrincipalForEndpointLogin is the person a login row binds to one node's
+// system login (claude-fleet#2212): the node's own answer when the machine name
+// it reports now is not the one it was registered under (a hostname is the
+// agent's word, `m.local` vs `m`). ErrNoPrincipal when there is none.
+func (s *Store) PrincipalForEndpointLogin(endpointID, login string) (string, error) {
+	if endpointID == "" {
+		return "", ErrNoPrincipal
+	}
+	var id string
+	err := s.write.QueryRow(`SELECT principal_id FROM fleet_accounts WHERE endpoint_id = ? AND login = ? AND op = ? AND state = ?`,
+		endpointID, login, AccountOpLogin, AccountActive).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNoPrincipal
+	}
+	return id, err
 }

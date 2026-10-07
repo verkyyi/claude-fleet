@@ -32,8 +32,10 @@
 #       holds no token for the hub and this computer is logged in, it takes the
 #       node pass by the device key and joins coordinate-only (--no-fleet
 #       --no-deps --no-admin; a first node.env gets COMPUTE=0 and PERSONAL=1) —
-#       no scan, no output (the detail in node-join.log). A token already there
-#       is never replaced, even one the hub refuses (that is `fleet node join`'s).
+#       no scan, no output (the detail in node-join.log). A computer that is a
+#       node already (joined by a scan or a code) shows the hub its token once
+#       per hub instead (node-login.ok): the hub ties that node to this device
+#       and records whose login it is (登录即认人) — no second node.
 #       No hub ⇒ nothing. Exit 0 a token is in node.env · 2 no hub · 3 not
 #       logged in · 4 the hub offers no such door · 1 anything else.
 #   fleet node status
@@ -149,9 +151,24 @@ cmd_ensure() {
   done
   if [ -n "$hub_arg" ]; then hub=$("$here/fleet-login.py" hub --hub "$hub_arg" 2>/dev/null) || return 2
   else hub=$("$here/fleet-login.py" hub 2>/dev/null) || return 2; fi
-  # a token already here — working or not — is never replaced from here
-  [ -n "$(envval CCQUOTA_TOKEN)" ] && return 0
-  [ -f "$CERT" ] || return 3
+  [ -f "$CERT" ] || { [ -n "$(envval CCQUOTA_TOKEN)" ] && return 0; return 3; }
+  if [ -n "$(envval CCQUOTA_TOKEN)" ]; then
+    # A node already (a scan / code join, before #2212): once per hub, show
+    # the hub its token by the device key — it ties that node to this device
+    # and records whose login this is (登录即认人), no new node, no scan.
+    [ "$(cat "$CONF/node-login.ok" 2>/dev/null)" = "$hub" ] && return 0
+    work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-node.XXXXXX") || return 0
+    chmod 700 "$work"
+    if "$here/fleet-login.py" node-pass --hub "$hub" --out "$work/node.json" --quiet; then
+      local newtok
+      newtok=$(jfield token < "$work/node.json")
+      # the hub reissues only when the token here was dead: then it is the one
+      [ -n "$newtok" ] && [ "$newtok" != "$(envval CCQUOTA_TOKEN)" ] && setenv CCQUOTA_TOKEN "$newtok"
+      printf '%s\n' "$hub" > "$CONF/node-login.ok"
+    fi
+    rm -rf "$work"
+    return 0
+  fi
   [ -f "$ENVF" ] || fresh=1
   mkdir -p "$CONF" 2>/dev/null
   work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-node.XXXXXX") || return 1
@@ -167,6 +184,7 @@ cmd_ensure() {
   [ -n "$(envval CCQUOTA_TOKEN)" ] || return 1
   # a computer that only coordinates is a person's own (#1721)
   [ "$fresh" = 1 ] && [ -z "$(envval CCQUOTA_FLEET_PERSONAL)" ] && setenv CCQUOTA_FLEET_PERSONAL 1
+  printf '%s\n' "$hub" > "$CONF/node-login.ok"   # tied to this device already
   return 0
 }
 
