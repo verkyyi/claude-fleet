@@ -108,10 +108,22 @@ func TestCredProxyRebindsOnQuota429(t *testing.T) {
 	}
 	r.mu.Lock()
 	sent := append([]string(nil), r.upAuth[1:]...)
-	line := r.audit[len(r.audit)-1]
 	r.mu.Unlock()
 	if len(sent) != 2 || sent[0] != a1 || sent[1] != a2 {
 		t.Fatalf("upstream saw %d (%v); want acct1 then acct2", len(sent), sent)
+	}
+	// the audit line is written once the handler returns, which can be just
+	// after the client has read the whole answer
+	line := ""
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		r.mu.Lock()
+		if len(r.audit) == 2 {
+			line = r.audit[1]
+		}
+		r.mu.Unlock()
+		if line != "" {
+			break
+		}
 	}
 	if !strings.Contains(line, `"rebind_from":"acct1"`) || !strings.Contains(line, `"account":"acct2"`) {
 		t.Fatalf("audit: %s", line)
