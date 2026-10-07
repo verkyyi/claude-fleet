@@ -217,7 +217,7 @@ try:
     # C. ⌃c / ⌃\ / ⌃z reaching the list — no key does since
     # issue #1950 (it takes none), so the bytes go to its pane directly, as a
     # client a running server still holds in its old key table would send them
-
+    pump(0.8)   # the right-clicks above settled (the old prefix E's pause)
     lst, lpid = frame()[:2]
     for b in ("C-c", "C-\\", "C-z"):
         t("send-keys", "-t", lst, b)
@@ -225,6 +225,7 @@ try:
     pump(1.0)
     f = frame()
     say("cc_same", "1" if f[0] == lst and f[1] == lpid else "0")
+    say("cc_why", "%s/%s -> %s/%s" % (lst, lpid, f[0], f[1]))
     say("cc_state", subprocess.run(["ps", "-o", "stat=", "-p", lpid], capture_output=True, text=True).stdout.strip())
     # D. kill -9 the list; kill -9 the right pane
     kill_tree(lpid)
@@ -267,7 +268,7 @@ for tag in x amp rc_list rc_right rc_status; do
   eq "B: $tag — the right pane is there" 1 "$(r ${tag}_right)"
   eq "B: $tag — the stage keeps its window" "$s0" "$(r ${tag}_stage)"
 done
-eq 'C: ⌃c / ⌃\ / ⌃z leave the same list process' 1 "$(r cc_same)"
+eq "C: ⌃c / ⌃\\ / ⌃z leave the same list process ($(r cc_why))" 1 "$(r cc_same)"
 CHECKS=$((CHECKS + 1)); case "$(r cc_state)" in T*) fail 'C: ⌃z stopped the list' "$(r cc_state)" ;; esac
 eq 'D: kill -9 the list → a new one within 5 s' 1 "$(r list_back)"
 eq 'D: kill -9 the right pane → respawned within 5 s' 1 "$(r right_back)"

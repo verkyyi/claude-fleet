@@ -1208,6 +1208,7 @@ try:
     # issue #1950 (it takes none), so the bytes go to its pane directly, as a
     # client a running server still holds in its old key table would send them
 
+    pump(0.8)   # the right-clicks above settled (the old prefix E's pause)
     lst, lpid = frame()[:2]
     t0 = time.time()
     for b in ("C-c", "C-\\", "C-z"):
