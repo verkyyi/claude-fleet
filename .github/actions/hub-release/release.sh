@@ -7,6 +7,12 @@
 #   release.sh health <commit>            /healthz = 200 AND /version's commit =
 #                                         <commit> on every $HUB_URLS address,
 #                                         retried up to $HEALTH_SECS (120) each.
+#                                         Plus the entry (issue #2060): GET
+#                                         /install = 200 with a `#!` first line,
+#                                         /version names `stable`, POST
+#                                         /v1/fleet/login/start is not 404 — a
+#                                         deploy that lost its config otherwise
+#                                         looks healthy. HEALTH_ENTRY=0 skips it.
 #                                         HUB_DEPLOY_SIMULATE_UNHEALTHY=true fails
 #                                         it on purpose (the rollback drill).
 #   release.sh changes <old> <new>        Markdown for the job summary: the
@@ -38,18 +44,47 @@ try: print(json.load(sys.stdin).get("commit",""))
 except Exception: print("")'
 }
 
+version_stable() { # the stable field of a /version body on stdin, or ""
+  python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("stable") or "")
+except Exception: print("")'
+}
+
+# What people reach first (issue #2060): prod-e2be8bb answered /healthz and its
+# commit while /install and `fleet login` were 404 and /version had dropped
+# `stable` — nobody could install, and clients followed the image's own pack
+# past stable. Prints the faults, one per line; nothing = the entry is whole.
+entry_faults() { # <url> <version body>
+  local url=$1 ver=$2 code body first
+  [ "${HEALTH_ENTRY:-1}" = 0 ] && return 0
+  body=$(curl -sS -m 10 -w '\n%{http_code}' "$url/install" 2>/dev/null || true)
+  code=${body##*$'\n'}; first=${body%%$'\n'*}
+  case "$code:$first" in 200:'#!'*) ;; *) echo "/install=${code:-none} first line '${first:0:30}' (want 200, '#!')" ;; esac
+  [ -n "$(printf '%s' "$ver" | version_stable)" ] || echo "/version has no stable (CCQUOTA_FLEET_STABLE_REPO lost? clients would skip stable)"
+  code=$(curl -sS -o /dev/null -m 10 -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+         -d '{}' "$url/v1/fleet/login/start" 2>/dev/null || true)
+  case "$code" in 4??) [ "$code" != 404 ] && [ "$code" != 405 ] ;; *) false ;; esac \
+    || echo "/v1/fleet/login/start=${code:-none} (want a 4xx refusal of the empty body, not 404)"
+}
+
 health_one() { # <url> <want> → 0 when healthy within HEALTH_SECS
-  local url=$1 want=$2 code got deadline
+  local url=$1 want=$2 code ver got faults deadline
   deadline=$(( $(date +%s) + HEALTH_SECS ))
   while :; do
     code=$(curl -sS -o /dev/null -m 10 -w '%{http_code}' "$url/healthz" 2>/dev/null || true)
-    got=$(curl -fsS -m 10 "$url/version" 2>/dev/null | version_commit || true)
+    ver=$(curl -fsS -m 10 "$url/version" 2>/dev/null || true)
+    got=$(printf '%s' "$ver" | version_commit)
+    faults=''
     if [ "$code" = 200 ] && [ "$got" = "$want" ]; then
-      echo "ok   $url  /healthz=200  /version commit=$got"
-      return 0
+      faults=$(entry_faults "$url" "$ver")
+      if [ -z "$faults" ]; then
+        echo "ok   $url  /healthz=200  /version commit=$got  entry ok"
+        return 0
+      fi
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
       echo "FAIL $url  /healthz=${code:-none}  /version commit='${got}' (want '$want')"
+      [ -z "$faults" ] || printf '%s\n' "$faults" | sed "s|^|FAIL $url  |"
       return 1
     fi
     sleep "$HEALTH_STEP"
@@ -248,6 +283,15 @@ B=2
 envFrom {"secretRef":{"name":"hub"}}' ] && ok "env: ccquota only, sorted, secret refs by name" || no "env: $t"
   t=$(printf '{"kind":"Deployment","spec":{"template":{"spec":{"containers":[{"name":"ccquota","env":[{"name":"Z","value":"9"}]}]}}}}\n{"kind":"Service"}\n' | cmd_env -)
   [ "$t" = 'Z=9' ] && ok "env: several documents back to back" || no "env multi-doc: $t"
+
+  t=$(printf '{"commit":"abc1234","stable":"644641e"}' | version_stable)
+  [ "$t" = 644641e ] && ok "version_stable reads stable" || no "version_stable: '$t'"
+  t=$(printf '{"commit":"abc1234"}' | version_stable)
+  [ -z "$t" ] && ok "version_stable: none → empty" || no "version_stable none: '$t'"
+  t=$(entry_faults http://127.0.0.1:9 '{"commit":"abc1234"}')
+  [ "$(printf '%s\n' "$t" | grep -c .)" = 3 ] && ok "entry_faults: an unreachable entry names all three" || no "entry_faults: $t"
+  t=$(HEALTH_ENTRY=0 entry_faults http://127.0.0.1:9 '{}')
+  [ -z "$t" ] && ok "entry_faults: HEALTH_ENTRY=0 skips" || no "entry_faults skip: $t"
 
   t=$(HUB_DEPLOY_SIMULATE_UNHEALTHY=true HUB_URLS=http://127.0.0.1:9 cmd_health abc1234 2>&1) && no "simulated health passed" || ok "health: simulate_unhealthy fails at once"
   t=$(HEALTH_SECS=0 HUB_URLS=http://127.0.0.1:9 cmd_health abc1234 2>&1) && no "unreachable health passed" || ok "health: an unreachable address fails"

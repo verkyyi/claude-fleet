@@ -2563,6 +2563,60 @@ drill_cred_session_expire() {
   WHAT="会话中途凭据到期：入口通行证由代理续签（会话还拿着旧的照常 200），本地会话凭据随会话续期；会话结束即失效"
 }
 
+drill_hub_deploy_lost_config() {
+  # A hub release whose overlay lost its config (#2060): /healthz 200 and the
+  # right commit, while /install and `fleet login` are 404 and /version has no
+  # stable. The release's own health check (hub-release/release.sh, which the
+  # workflow rolls back on) must call that unhealthy — and a whole entry healthy.
+  CAP=20; local t0 sc="$WORK/hdl" rel="$ROOT/.github/actions/hub-release/release.sh" port='' _ hpid out rc
+  mkdir -p "$sc"
+  cat > "$sc/hub.py" <<'PY2'
+import json, signal, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+signal.alarm(int(sys.argv[2]))
+mode = lambda: open(sys.argv[3]).read().strip()
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def reply(self, code, body, ctype="application/json"):
+        d = body.encode(); self.send_response(code); self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(d))); self.end_headers(); self.wfile.write(d)
+    def do_GET(self):
+        whole = mode() == "whole"
+        if self.path == "/healthz": return self.reply(200, "ok", "text/plain")
+        if self.path == "/version":
+            v = {"commit": "abc1234", "version": "prod-abc1234", "client_version": "c3e295c85d66"}
+            if whole: v["stable"] = "644641e0c0d2d12fdbba3c7b3d8d7e517062fa1a"
+            return self.reply(200, json.dumps(v))
+        if self.path == "/install" and whole: return self.reply(200, "#!/bin/sh\necho fleet\n", "text/x-shellscript")
+        self.reply(404, "404 page not found\n", "text/plain")
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path == "/v1/fleet/login/start" and mode() == "whole": return self.reply(400, '{"error":"no public key"}')
+        self.reply(404, "404 page not found\n", "text/plain")
+srv = HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1] + ".tmp", "w").write(str(srv.server_address[1])); __import__("os").replace(sys.argv[1] + ".tmp", sys.argv[1])
+srv.serve_forever()
+PY2
+  echo lost > "$sc/mode"
+  python3 "$sc/hub.py" "$sc/port" "$((CAP + 60))" "$sc/mode" 2>"$sc/hub.err" & hpid=$!
+  for _ in $(seq 1 300); do [ -s "$sc/port" ] && break; sleep 0.1; done
+  { read -r port < "$sc/port"; } 2>/dev/null
+  [ -n "$port" ] || { kill "$hpid" 2>/dev/null; WHY="the fake hub did not start in 30s: $(tail -2 "$sc/hub.err" | tr '\n' ' ')"; return 1; }
+  t0=$(now)
+  out=$(HUB_URLS="http://127.0.0.1:$port" HEALTH_SECS=0 HUB_DEPLOY_SIMULATE_UNHEALTHY=false bash "$rel" health abc1234 2>&1); rc=$?
+  SECS=$(since "$t0")
+  if [ "$rc" = 0 ]; then
+    kill "$hpid" 2>/dev/null; WHY="a release with /install 404, no stable, login 404 passed the health check: $out"; return 1
+  fi
+  case "$out" in *'/install=404'*'no stable'*'login/start=404'*) ;; *)
+    kill "$hpid" 2>/dev/null; WHY="the health check failed without naming the three faults: $(printf '%s' "$out" | tr '\n' ' ')"; return 1 ;; esac
+  echo whole > "$sc/mode"
+  out=$(HUB_URLS="http://127.0.0.1:$port" HEALTH_SECS=0 HUB_DEPLOY_SIMULATE_UNHEALTHY=false bash "$rel" health abc1234 2>&1); rc=$?
+  kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+  [ "$rc" = 0 ] || { WHY="a whole entry failed the health check: $(printf '%s' "$out" | tr '\n' ' ')"; return 1; }
+  WHAT="入口部署丢了配置（/install 404、/version 无 stable、login/start 404）：健康检查判不健康 → hub-deploy 回退"
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"

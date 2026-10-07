@@ -69,4 +69,5 @@
 | 集群中心代理全挂（不可信机器走 central） | 不可信机器的会话没路可走；万一退回 direct 就等于在不可信机器上用凭据文件 | 不可信只有 central 一条路：会话收到代理写明「central 连不上」的 502，不会退化成读凭据文件直连；本地会话凭据在不可信机器上一律 403（#1975） | `cred-central-down` |
 | 探测误判：探测说能直连，上游却按地区拒 | 每个请求先吃一个地区 403 | 地区 403 → 同一请求切 relay，这条会话 30 分钟内不再先试 direct（`FLEET_CRED_PROXY_SWITCH_SECS`）（#1975） | `cred-probe-wrong` |
 | 会话凭据在会话中途到期（入口通行证最长一天、本机会话凭据默认一天） | 会话环境里的凭据换不了：到点后每个请求 401，长会话只能关窗重开 | 入口通行证：代理在 `renew_after`（到期前 2 小时或半衰期）向入口续签，之后替会话转发新的那张，会话还拿着旧的照常用；本机会话凭据：会话的包装进程还活着就由代理续期，会话结束（包装退出、被撤销）即失效；续签成败记在 `status` 里，`fleet doctor` 的 `cred` 行报出来（#1975） | `cred-session-expire` |
+| 入口部署丢了配置（overlay 漏了 env / Secret：GitHub 登录、`CCQUOTA_FLEET_STABLE_REPO`） | `/healthz` 200、commit 对，部署判健康；实际 `GET /install`、`POST /v1/fleet/login/start` 都 404——新同事装不了；`/version` 不报 `stable`，客户端把镜像自带的包当新版，绕过稳定版（2026-10-06 prod-e2be8bb） | hub-deploy 的健康检查（`.github/actions/hub-release/release.sh health`）对每个地址另查三条：`/install` 200 且首行 `#!`、`/version` 带 `stable`、`login/start` 对空请求回 4xx 而不是 404；缺一条即判不健康，工作流自动回退到上一版（#2060） | `hub-deploy-lost-config` |
 | 入口数据盘满 | 入口写不进，租约、会话表都停 | 在入口仓库修 | 登记：monorepo #11641 |

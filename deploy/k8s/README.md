@@ -60,7 +60,10 @@ Once it goes, the deploy job:
    (3 minutes — with `Recreate` the old pod is already gone, so a longer wait is
    a longer 503 before the rollback);
 6. checks every address for `/healthz` = 200 **and** `/version` naming this
-   commit (up to ~2 minutes each);
+   commit **and** a whole entry — `GET /install` 200 with a `#!` first line,
+   `/version` naming `stable`, `POST /v1/fleet/login/start` not 404 (issue
+   #2060: a deploy that lost its overlay config otherwise passes) — up to ~2
+   minutes each;
 7. writes the run's summary page and, when repo variable
    `HUB_DEPLOY_NOTIFY_ISSUE` names an issue, comments there. The summary is
    reporting only: if it fails, the job stays green and the notice still says
