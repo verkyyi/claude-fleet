@@ -493,7 +493,7 @@ HENV=FLEET_INSTALL_NO_NODE=1 hinstall "$H1" "$WORK/install.sh"
 echo "$out" | grep -q -e '这台电脑要做什么' -e '接入口吗' && bad "H1 a question was printed: $out" || ok "H1 neither old question is printed"
 [ -f "$H1/.claude/fleet/bin/fleet" ] && [ ! -e "$H1/.claude/fleet/.git" ] && [ "$(hval "$H1" FLEET_HUB_URL)" = "$HUB" ] && [ "$(hval "$H1" FLEET_HOST)" = 0 ] \
   && ok "H1 the base in ~/.claude/fleet, the address written, FLEET_HOST=0" || bad "H1 state: host=$(hval "$H1" FLEET_HOST) hub=$(hval "$H1" FLEET_HUB_URL) $(ls -a "$H1/.claude/fleet" | head -3)"
-[ "$(hval "$H1" FLEET_CLIENT_LAYOUT)" = solo ] && (FLEET_SHELL=1; . "$H1/.config/claude-fleet/fleet.conf"; [ "${FLEET_CLIENT_LAYOUT:-}" = solo ]) \
+[ "$(hval "$H1" FLEET_CLIENT_LAYOUT)" = solo ] && (export FLEET_SHELL=1; . "$H1/.config/claude-fleet/fleet.conf"; [ "${FLEET_CLIENT_LAYOUT:-}" = solo ]) \
   && ok "H1 a computer the fleet was never on: FLEET_CLIENT_LAYOUT=solo, read by the shell ([client])" || bad "H1 layout: $(grep -n LAYOUT "$H1/.config/claude-fleet/fleet.conf" 2>&1)"
 before=$(hsnap "$H1"); HENV=FLEET_INSTALL_NO_NODE=1 hinstall "$H1" "$WORK/install.sh"
 [ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H1")" ] && ok "H1 again → not one file changes" \
