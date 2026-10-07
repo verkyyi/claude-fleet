@@ -1489,7 +1489,7 @@ try:
     check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}') + ' · m5',
           'with the hub on the local menu title does not name this machine: %r' % t1)
     _, rshape = menu_shape(remote_wid)
-    check(rshape == 'e|ma|qcx|n1og|E',
+    check(rshape == 'e|ma|qcx|n1oig|E',
           'the remote row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % rshape)
     # In the SHELL (issue #1518) the row-less group is gone — new task, new on
     # m4, restore, add repo run scripts its computer does not have — and the
@@ -1500,7 +1500,7 @@ try:
     sh_shape = ''.join('E' if l.split('\t')[1] == '-Esc 关闭' else (l.split('\t')[0] if l.split('\t')[1] else '|')
                        for l in sh_out.splitlines() if l.count('\t') == 2 and not l.startswith('title\t'))
     # …and its own group instead: 我的客户端 (issue #1932), d
-    check(sh_shape == 'e|ma|qcx|d|E', 'the shell remote menu: not the row-less group gone + 我的客户端: %r' % sh_shape)
+    check(sh_shape == 'e|ma|qcx|oid|E', 'the shell remote menu: not the row-less group gone + 已落地 · 详情列 · 我的客户端 (#1952): %r' % sh_shape)
     check(not any(s in sh_out for s in ('dash-issue-new.sh', 'fleet-restore-pick.sh', 'dash-repo-add.sh')),
           'the shell remote menu names a machine-only script: %r' % sh_out)
     check(sh_out.split('\n', 1)[0] == 'title\t' + menu_shape(remote_wid)[0],
@@ -1603,7 +1603,7 @@ try:
     # One frame (issue #1535): 进入 / 消息 / 控制 / 其它, a rule between, Esc last;
     # with the hub off the title is the row's name alone — no machine to name.
     t1, shape1 = menu_shape(w1)
-    check(shape1 == 'p|a|rtsklx|vnog|E', 'the local row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % shape1)
+    check(shape1 == 'p|a|rtsklx|vnoig|E', 'the local row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % shape1)
     check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}'), 'the hub-off menu title is not the bare row name: %r' % t1)
     tm('select-window', '-t', w1)
     wait_for(lambda: bool(view_on(w1)), 'the view did not return after the hub-source leg')

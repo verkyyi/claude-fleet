@@ -15,11 +15,17 @@
 #      still steps from there, the list hidden), and ⌘P
 #      opens the popup where 「thr」 ↵ switches to «three» — and finds a session
 #      folded under its parent, which ⌘[ steps back onto too.
+#   D  commands (issue #1952): ONE table, fleet-quickopen.py COMMANDS — every
+#      action of the row menu's letter table is in it and nothing else; `>` lists
+#      the menu's own items for the row in view in the table's order, filters
+#      them (`>pin`), and for real ⌘P `>pin` ↵ pins the row in view, the way the
+#      menu's 置顶 does; ⌘/ with no stage opens the page in a popup, q closes it.
 #   C  no iTerm2: the profile writer writes nothing, and fleet-shell.sh's attach is
 #      the bare `exec tmux … attach` it always was, byte for byte; in iTerm2 with
 #      the profile there, the window wears `fleet` only around the attach.
 #
 # Drives: bin/fleet-quickopen.py, bin/fleet-sidebar.py, conf/tmux-shell.conf,
+# bin/fleet-sidebar-menu.sh, bin/fleet-keys.sh, bin/fleet-ui-lang.sh,
 # bin/fleet-iterm-profile.py, bin/fleet-shell.sh, bin/dash-keymap.sh.
 set -uo pipefail
 export FLEET_SIDEBAR_NODE=1   # the drawer's selftest seam (fleet-sidebar.sh)
@@ -83,9 +89,24 @@ eq("at stays on the top", h["stack"][h["at"]], "@x79")
 text = q.rows_text([["hdr", "verkyyi/claude-fleet", "", "verkyyi/claude-fleet", ""],
                     ["@9", "needs", "!", " nine", "", "b", "0", "", "m4", "", "", "", ""]])
 eq("rows_text", text, "@9\tneeds\t!\tnine\tm4\tverkyyi/claude-fleet\tb\n")
+# D (the table half): COMMANDS ⇔ the menu's letter table, action for action
+table = [a for a, _ in q.COMMANDS]
+eq("COMMANDS has no action twice", len(table), len(set(table)))
+keyed = sorted({a for a, _ in q.menu_keys().values()})
+eq("COMMANDS ⇔ menu_keys", sorted(table), keyed)
+eq("COMMANDS groups", sorted({g for _, g in q.COMMANDS}), ["control", "enter", "message", "other"])
+eq("the digits are newto's", q.menu_keys().get("5", ("",))[0], "newto")
+items = [("rename", "改名…", "在会话下面一行改", "c1"), ("pin", "置顶", "置顶 / 取消置顶", "c2"),
+         ("reap", "回收…", "先确认 y/n", "c3"), ("info", "-详情列", "issue · PR · ctx%", "")]
+eq("> lists every command for an empty query", [i[0] for i in q.rank_cmds(items, "")], ["rename", "pin", "reap", "info"])
+eq(">pin finds pin by its action", [i[0] for i in q.rank_cmds(items, "pin")], ["pin"])
+eq(">改 finds rename by its name", [i[0] for i in q.rank_cmds(items, "改")][:1], ["rename"])
+eq(">详情 finds a greyed one too", [i[0] for i in q.rank_cmds(items, "详情")], ["info"])
+eq("a target the menu has no row for is row-less", (q.target_of("new"), q.target_of("@3"), q.target_of("wid:f/issue-1")),
+   ("-", "@3", "wid:f/issue-1"))
 if errs:
     print("FAIL A:\n  " + "\n  ".join(errs)); sys.exit(1)
-print("A: ranking + history: %d checks" % 22)
+print("A: ranking + history + the command table: %d checks" % 31)
 PY
 
 # --- B ---------------------------------------------------------------------------
@@ -270,6 +291,39 @@ try:
     check(wait(lambda: 'five' not in tm('capture-pane', '-p', '-t', side), 4), '«five» did not fold away again')
     press(922, 'five', '⌘[ back onto a folded row')
     print('B: a folded child: ⌘P finds it, ⌘[ comes back to it (%d checks)' % checks)
+    # D: `>` — the row menu's items for the row in view, in the table's order
+    qo = lambda *a: subprocess.run(['python3', str(bin_dir / 'fleet-quickopen.py'), *a], env=dict(env, FLEET_SESSION='ft'),
+                                   capture_output=True, text=True, timeout=20).stdout
+    listed = [l.split('\t') for l in qo('cmds').splitlines()]
+    acts = [l[0] for l in listed]
+    check({'rename', 'pin', 'reap', 'restore', 'info'} <= set(acts), '> lacks a command: %r' % acts)
+    order = [a for a in qo('commands').split() if a in acts]
+    check(acts == [a for a in order if a in acts], '> is not in the table order: %r' % acts)
+    names = {l[0]: l[1] for l in listed}
+    check(names['rename'].lstrip('-') == '改名…' and names['pin'] == '置顶', '> names are not the menu\'s: %r' % names)
+    menu = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'ft', W['five'], '--print'], env=env,
+                          capture_output=True, text=True, timeout=20).stdout
+    check(all(('\t' + n + '\t') in menu for n in names.values()), '> lists an item the menu does not draw: %r' % menu)
+    check([l[0] for l in (x.split('\t') for x in qo('cmds', 'pin').splitlines())][:1] == ['pin'], '>pin does not put pin first')
+    check(tm('show-options', '-wqv', '-t', W['five'], '@pin') != '1', 'five is pinned before the test')
+    os.write(master, b'\x1b[927~')
+    check(wait(lambda: tm('show-options', '-gqv', '@popup_open') not in ('', '0'), 4), '⌘P opened no popup (3)')
+    time.sleep(.6)
+    os.write(master, b'>pin')
+    time.sleep(2)   # the menu's items, read once on the first `>`
+    os.write(master, b'\r')
+    check(wait(lambda: tm('show-options', '-wqv', '-t', W['five'], '@pin') == '1', 6),
+          '⌘P >pin ↵ did not pin the row in view')
+    check(wait(lambda: tm('show-options', '-gqv', '@popup_open') in ('', '0'), 4), 'the popup did not close (3)')
+    check(current() == W['five'], '>pin switched windows: on %s' % current())
+    print('B: ⌘P > lists the row menu\'s items in the table order; >pin ↵ pins the row in view')
+    # ⌘/ with no stage (not the shell): the page in the popup, q closes it
+    os.write(master, b'\x1b[926~')
+    check(wait(lambda: tm('show-options', '-gqv', '@popup_open') not in ('', '0'), 6), '⌘/ opened nothing')
+    time.sleep(.6)
+    os.write(master, b'q')
+    check(wait(lambda: tm('show-options', '-gqv', '@popup_open') in ('', '0'), 4), 'q did not close the keys page')
+    print('B: ⌘/ with no stage: the page in a popup, q closes it (%d checks)' % checks)
 except AssertionError as e:
     print('FAIL B: %s' % e)
     cleanup()
