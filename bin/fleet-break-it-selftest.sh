@@ -31,6 +31,8 @@
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
 #   epic-mark-overwritten / epic-fresh-switched     bin/fleet-epic-heartbeat.sh (one mark per batch),
 #                                                   fleet_epic_running_fresh, fleet-install-sync.sh (the EPIC gate)
+#   epic-idle-held / epic-hold-uncapped             fleet_epic_holding (live/inflight), fleet-install-sync.sh
+#                                                   (epic_gate: idle never holds, FLEET_EPIC_HOLD_CAP_SECS caps a hold)
 #   personal-tmux-conf                              conf/tmux-fleet-server.conf, fleet_server_new_session,
 #                                                   fleet_tmuxconf_check, reapply-tmux-attention.sh
 #   personal-hook-hangs / personal-hook-errors      bin/fleet-hook-personal.sh (timeout, strikes)
@@ -813,6 +815,47 @@ drill_epic_fresh_switched() {
   epic_tick "$d" >"$d/tick2.out" 2>&1
   [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] || { WHY="after the clear the tick did not switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
   SECS=$(since "$t0"); WHAT="标记新鲜那一拍只 deferred、版本不动；批次清掉标记后下一拍 switched"
+}
+
+# epic-idle-held (issue #2247): a batch is idle — 0 member sessions, nothing in
+# flight, the loop only waiting on the operator — and still stamps every tick.
+# Before: any fresh mark held the switch, so an idle batch held the machine's
+# upgrade for as long as it waited (EPIC #2140 held m4 for hours). Now a mark
+# stamped --live 0 --inflight 0 does not hold: the tick switches under it.
+drill_epic_idle_held() {
+  CAP=20; local t0 d="$WORK/epic3" stable
+  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
+  epic_hb "$d" 2140 --tick 18 --repo o/r --session f1 --live 0 --inflight 0 >/dev/null 2>&1
+  stable=$(git --git-dir="$d/origin.git" rev-parse stable)
+  t0=$(now)
+  epic_tick "$d" >"$d/tick1.out" 2>&1
+  [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] \
+    || { WHY="an idle batch (live 0, nothing in flight) still held the switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
+  case "$(epic_st "$d" epic)" in *"idle (空转，不挡) epic=2140"*) ;;
+    *) WHY="the state's epic: line does not say the batch was idle: [$(epic_st "$d" epic)]"; return 1 ;; esac
+  SECS=$(since "$t0"); WHAT="空转批次（live 0、无在途）的新鲜标记不挡：那一拍照常 switched，state 的 epic: 行写 idle"
+}
+
+# epic-hold-uncapped (issue #2247): a batch with work that never finishes (or a
+# loop stamping live 1 forever) held the install with no end. Now one mark holds
+# the same stable at most FLEET_EPIC_HOLD_CAP_SECS: past it the tick switches and
+# ONE record-only note goes on the EPIC.
+drill_epic_hold_uncapped() {
+  CAP=20; local t0 d="$WORK/epic4" stable
+  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
+  epic_hb "$d" 2140 --tick 30 --repo o/r --session f1 --live 1 --inflight 1 >/dev/null 2>&1
+  stable=$(git --git-dir="$d/origin.git" rev-parse stable)
+  mkdir -p "$d/conf/global/epic-hold.d"
+  printf 'since: %s\nstable: %s\nreleased: -\n' "$(( $(date +%s) - 7300 ))" "$stable" > "$d/conf/global/epic-hold.d/o-r-2140"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/notes.log"\n' "$d" > "$d/note.sh"
+  t0=$(now)
+  FLEET_EPIC_HOLD_NOTE_CMD="sh $d/note.sh" epic_tick "$d" >"$d/tick1.out" 2>&1
+  [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] \
+    || { WHY="a batch past the cap still held the switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
+  [ "$(grep -c '^2140 --repo o/r --note' "$d/notes.log" 2>/dev/null)" = 1 ] \
+    || { WHY="the release was not noted once on the EPIC: [$(cat "$d/notes.log" 2>/dev/null)]"; return 1; }
+  grep -q ' epic-released ' "$d/install/logs/install-sync.log" 2>/dev/null || { WHY="no epic-released log line"; return 1; }
+  SECS=$(since "$t0"); WHAT="有活的批次挡同一 stable 满 2 小时：放行 switched，EPIC 上一条记录型说明，日志 epic-released"
 }
 
 # personal-tmux-conf (issue #1845): the person's ~/.tmux.conf has a syntax error
