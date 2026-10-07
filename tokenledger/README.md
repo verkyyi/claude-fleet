@@ -217,7 +217,9 @@ What each replica keeps in its own memory, and why that is acceptable:
 | session-pass verify cache (`sessCred`) | `fleet_session_cred.go` | ≤ 30 s: a revocation made through the other replica is seen within the TTL (one made here at once) |
 | load history (`loadHist`) | `nodes.go` | each replica charts the beats it receives; display only, empty after a restart anyway |
 | SSH CA answers (`sshCAStatus`) | `fleet_certs.go` | the holder's; the other replica's roster leaves it blank |
-| client leases, device logins, live sessions, counters | `fleet_client.go`, `fleet_certs.go`, `live.go` | outside the node links; EPIC #2119's other members |
+| device logins in progress (`devices`), client leases and their queued actions (`clientLeases`) | `fleet_certs.go`, `fleet_client*.go`, `replica_state.go` | kept by ONE replica, the state holder — the one up the longest in `fleet_replicas` (each replica beats its row every 5 s). A `fleet login` start / poll / QR confirmation, a client's lease, actions and place that land on the other replica are reverse-proxied there whole, and `ClientLeaseOf` asks it over `/internal/v1/client-lease` (claude-fleet#2190). Nothing credential-shaped enters the database. A holder silent for 15 s hands over with an empty table — what a restart always cost: a login in progress is scanned again, a live client re-adopts its lease on its next renewal |
+| live sessions (`LiveStore`) | `live.go`, `replica_state.go` | every replica holds the whole picture: a report is applied where it lands and handed to the other replicas up (`/internal/v1/live-report`), so `/v1/live`, its stream and `/mcp` read every session on either (claude-fleet#2190) |
+| the hero counter's cache (`counter`) | `counter.go` | each replica's own: an ingest invalidates only the replica that took it, the other recomputes within 30 s (`counterTTL`); display only |
 | a revoked node token | `fleet_node_revoke.go` | the holder closes the link at the node's next message (every message re-checks the token) |
 
 **Two hubs on one Postgres** (claude-fleet#2123): each background loop — the

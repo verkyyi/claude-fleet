@@ -80,7 +80,9 @@ const activeWindow = 3 * time.Minute
 // Nothing here is persisted: it describes what is happening this minute, and a
 // hub restart legitimately knows nothing until the agents report again.
 // Writing it to SQLite would add write amplification on a seconds-scale
-// heartbeat for data whose value expires in minutes.
+// heartbeat for data whose value expires in minutes. With two hub replicas
+// each holds the whole picture: a report is handed to the others
+// (fanoutLive, claude-fleet#2190).
 type Live struct {
 	mu       sync.RWMutex
 	sessions map[string]*LiveSession
@@ -444,6 +446,8 @@ func (s *Server) handleLiveReport(w http.ResponseWriter, r *http.Request) {
 		label = ep.Hostname
 	}
 	s.liveStore().report(ep.ID, label, body.Sessions, body.Complete)
+	// The other replicas' viewers see it too (claude-fleet#2190).
+	s.fanoutLive(liveFanout{EndpointID: ep.ID, Label: label, Sessions: body.Sessions, Complete: body.Complete})
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": len(body.Sessions)})
 }
 
