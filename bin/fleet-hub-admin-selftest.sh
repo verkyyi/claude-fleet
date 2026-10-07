@@ -26,7 +26,7 @@ LOG="$WORK/requests.ndjson"; PORTF="$WORK/port"
 # Written to a file and run from it: a heredoc on a backgrounded command is
 # not something bash 3.2 (macOS) can be trusted with.
 cat > "$WORK/hub.py" <<'PY'
-import json, os, signal, sys
+import json, os, signal, socketserver, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 signal.alarm(60)
@@ -68,7 +68,13 @@ class H(BaseHTTPRequestHandler):
             return self.answer(200, {"settings": settings, "hub": hub})
         self.answer(404, {"error": "no such route"})
     do_GET = do_POST = do_PUT = do_DELETE = handle_any
-s = HTTPServer(("127.0.0.1", 0), H)
+class Server(HTTPServer):
+    # HTTPServer.server_bind asks socket.getfqdn() — a reverse-DNS lookup
+    # that stalls for tens of seconds on a macOS CI runner. Not needed here.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+s = Server(("127.0.0.1", 0), H)
 with open(portf + ".tmp", "w") as f:
     f.write(str(s.server_address[1]))
 os.rename(portf + ".tmp", portf)
