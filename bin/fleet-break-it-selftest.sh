@@ -2797,7 +2797,7 @@ drill_oldcfg_broken_unmarked() {
     [ -n "$3" ] && nt set-option -w -t "$id" @agent_cfg_manifest "$3"
     printf '%s' "$id"
   }
-  wb=$(ocw w-broken done "$d/m-broken.json"); wl=$(ocw w-loop looping "$d/m-stale.json"); wn=$(ocw w-old done '')
+  wb=$(ocw w-broken 'done' "$d/m-broken.json"); wl=$(ocw w-loop looping "$d/m-stale.json"); wn=$(ocw w-old 'done' '')
   t0=$(now)
   out=$(PATH="$WORK/tbin:$PATH" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" bash "$BIN/fleet-oldcfg-check.sh" --sweep --list --new-dir "$d/new" -- oc3 2>&1); rc=$?
   SECS=$(since "$t0")
