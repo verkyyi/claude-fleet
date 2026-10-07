@@ -456,7 +456,7 @@ eq 'M: a hang-up mid-typing saves the draft first' '升级前写的半句，再�
 
 # N. ⌘N twice (issue #2146): the writing area ⇄ the orchestrator, no draft carried
 settled
-orch done
+orch 'done'
 st_ select-window -t "$pw"
 st_ send-keys -t "$pw" C-u
 st_ send-keys -t "$pw" -l '留在写作区的半句'
