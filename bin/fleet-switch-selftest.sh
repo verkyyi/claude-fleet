@@ -314,6 +314,13 @@ try:
     check(wait(lambda: any(l.startswith('›') and 'three' in l for l in painted().splitlines()), 4),
           '⌘. on the child did not leave the highlight on its parent: %r' % painted())
     check(current() == W['five'], '⌘. switched windows: on %s' % current())
+    # leave the list as the next leg expects it: «three» open, the highlight
+    # back on the row in view
+    press(921, 'three', '⌘↑ back to the parent')
+    os.write(master, b'\x1b[929~')
+    check(wait(lambda: expand() == '1', 10), '⌘. did not reopen «three»')
+    check(wait(lambda: 'five' in painted(), 4), 'the reopened «three» does not paint «five»')
+    press(920, 'five', '⌘↓ back onto the child')
     print('B: ⌘. opens and shuts the parent in view; on its child it shuts the parent (%d checks)' % checks)
     # D: `>` — the row menu's items for the row in view, in the table's order
     qo = lambda *a: subprocess.run(['python3', str(bin_dir / 'fleet-quickopen.py'), *a], env=dict(env, FLEET_SESSION='ft'),
