@@ -6479,16 +6479,32 @@ fleet_from_marker() {
 # filed three issues (#2039 #2040 #2041) and three fixes inside 16 seconds. The
 # fingerprint names the BREAKAGE, not the observer: the commit the red streak
 # started at (not the head — a merge landing while red must not mint a new one),
-# the first check that failed (by completion time, so a later observer who also
-# sees the second red check agrees), and the first error line of that job's log
-# with line numbers stripped (a half-fix that moves the lines is the same
-# breakage). REST only — `gh api` / `gh run view` — so it answers under a spent
-# GraphQL budget, the state a red master tends to come with.
+# the first job that failed IN THAT RUN (by completion time — a finished run never
+# changes, so every later observer agrees), and the first error line of that
+# job's log with line numbers and durations stripped (a half-fix that moves the
+# lines is the same breakage). REST only — `gh api` / `gh run view` — so it
+# answers under a spent GraphQL budget, the state a red master tends to come with.
 #
-# fleet_breakage_probe <repo> [<branch>] → one line `key<TAB>sha<TAB>check<TAB>line`,
-#   rc 0 · 1 the branch head has no failed check (not red) · 2 gh could not answer.
+# RED IS PER WORKFLOW, judged on its last FINISHED run (issue #2175). The first
+# probe read the head commit's check-runs, and at 11:22 / 11:29Z on 2026-10-07
+# it would have called master green while tokenledger-pg was red: the head was a
+# commit the path-filtered workflow never ran on (a6dd7c9b), then one whose run
+# had not finished yet (bb7da505). Now: the branch's completed runs (no
+# pull_request event), per workflow newest first — a cancelled / skipped /
+# neutral run is no verdict and is passed over, the first verdict decides
+# (success = green), a red one is walked back to the last success to find where
+# its streak started. A workflow whose newest verdict is red but older than
+# FLEET_BREAKAGE_MAX_AGE (2 days) is not "red now" — a nightly that stopped
+# running on the branch weeks ago is nobody's breakage today.
+#
+# fleet_breakage_probe <repo> [<branch>] → one line per RED workflow, the oldest
+#   streak first: `key<TAB>sha<TAB>check<TAB>line<TAB>names` — names = the
+#   workflow, every failed job of the streak's first run and every Go test the
+#   error line names, `|`-joined (what a filer's text is matched against).
+#   rc 0 · 1 no workflow is red · 2 gh could not answer.
 #   No <branch> ⇒ the repo's default branch. key = `<sha7>-<sha12 of sha·check·line>`.
-# fleet_breakage_key <repo> [<branch>] → the key alone (same rc).
+# fleet_breakage_key <repo> [<branch>] → the first row's key alone (same rc).
+# fleet_breakage_pick <text> [<base>] → the row a filing's text is about (rc 1 none).
 # fleet_breakage_marker <key> → the invisible body marker bin/fleet-issue-file.sh
 #   stamps on the issue it files and fleet_breakage_find greps for.
 # fleet_breakage_find <repo> <key> → the URL of the newest OPEN issue whose body
@@ -6504,66 +6520,129 @@ fleet_breakage_marker()   { printf '<!-- fleet:breakage key=%s -->' "$1"; }
 fleet_breakage_lock_dir() { printf '%s/global/breakage' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; }
 
 # fleet_breakage_norm_line — stdin: a failed job's log (`gh run view --log-failed`:
-# `<job>\t<step>\t<ISO time> <text>`) → the first line that smells like an error
-# (else the first non-empty), text only, ANSI and ##[group] furniture dropped,
-# every `:<digits>` (line, column, port, a clock) stripped, whitespace folded, at
-# most 160 chars.
+# `<job>\t<step>\t<ISO time> <text>`) → a Go `--- FAIL:` line if there is one,
+# else the first line that smells like an error, else the first non-empty; text
+# only — a byte-order mark, ANSI, ##[…] furniture and the step's echoed script
+# (GitHub prints it in cyan, ESC[36;1m — `gh run view` spells the ESC as a
+# literal `^[`, so both forms go: its `grep -E '--- FAIL|…'` is not an
+# error) dropped, a ##[error] line kept as a fallback — every
+# `:<digits>` (line, column, port, a clock) and every `(1.12s)` duration
+# stripped, whitespace folded, at most 160 chars.
 fleet_breakage_norm_line() {
-  local esc; esc=$(printf '\033')
-  LC_ALL=C sed -e 's/^[^	]*	[^	]*	//' -e 's/^[0-9][0-9-]*T[0-9:.]*Z *//' -e "s/$esc\\[[0-9;]*[A-Za-z]//g" \
-    | grep -v '^##\[' | grep . | awk '
-        tolower($0) ~ /error|fail|panic|fatal|exception|duplicate|undefined|cannot|not found|exit code|assert/ { print; found = 1; exit }
-        !first { first = $0 }
-        END { if (!found && first != "") print first }' \
-    | sed -e 's/:[0-9][0-9]*//g' -e 's/[[:space:]][[:space:]]*/ /g' -e 's/^ //' -e 's/ $//' \
+  local esc bom; esc=$(printf '\033'); bom=$(printf '\357\273\277')
+  LC_ALL=C sed -e 's/^[^	]*	[^	]*	//' -e "s/^$bom//" -e 's/^[0-9][0-9-]*T[0-9:.]*Z *//' \
+                -e "/^$esc\\[36;1m/d" -e '/^\^\[\[36;1m/d' -e "s/$esc\\[[0-9;]*[A-Za-z]//g" -e 's/\^\[\[[0-9;]*[A-Za-z]//g' \
+    | LC_ALL=C awk '
+        /^##\[error\]/ && !/Process completed with exit code/ { if (gherr == "") gherr = substr($0, 10) }
+        /^##\[/ || /^[[:space:]]*$/ { next }
+        /^[[:space:]]*--- FAIL:/ { strong = $0; exit }
+        strong == "" && /(^|[^A-Za-z])(FAIL|FAILED|ERROR|Error|error|panic|fatal)[: ]/ && !/^[[:space:]]*(ok|PASS)[[:space:]]/ { strong = $0 }
+        err == "" && !/^[[:space:]]*(ok|PASS)[[:space:]]/ && !/[0-9]+ (assertions )?passed/ \
+          && tolower($0) ~ /error|fail|panic|fatal|exception|duplicate|undefined|cannot|not found|exit code/ { err = $0 }
+        first == "" { first = $0 }
+        END { if (strong != "") print strong; else if (gherr != "") print gherr; else if (err != "") print err; else if (first != "") print first }' \
+    | sed -e 's/:[0-9][0-9]*//g' -e 's/ *([0-9][0-9.]*m*s)//g' -e 's/[[:space:]][[:space:]]*/ /g' -e 's/^ //' -e 's/ $//' \
     | cut -c1-160
 }
 
 fleet_breakage_probe() {
-  local repo="$1" branch="${2:-}" owner name head rows first cid cname curl ctitle rid='' wid='' sha line key streak s c
+  local repo="$1" branch="${2:-}" owner name runs starts rid sha wname jobs jid jname line key names out=''
   owner="${repo%%/*}"; name="${repo#*/}"
   [ -n "$branch" ] || branch=$(gh api "repos/$owner/$name" --jq .default_branch 2>/dev/null)
   [ -n "$branch" ] || branch=master
-  head=$(gh api "repos/$owner/$name/commits/$branch" --jq .sha 2>/dev/null) || return 2
-  [ -n "$head" ] || return 2
-  rows=$(gh api "repos/$owner/$name/commits/$head/check-runs?per_page=100" \
-           --jq '[.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled" or .conclusion == "action_required")]
-                 | sort_by(.completed_at // "") | .[] | "\(.id)\t\(.name)\t\(.details_url // "")\t\(.output.title // "")"' 2>/dev/null) || return 2
-  first=$(printf '%s\n' "$rows" | grep . | head -1)
-  [ -n "$first" ] || return 1
-  IFS=$'\t' read -r cid cname curl ctitle <<EOF
-$first
-EOF
-  # The commit the red streak started at: this check's workflow, its completed
-  # runs on the branch newest first, back to the last success. Fallback: the head.
-  sha="$head"
-  case "$curl" in */actions/runs/*) rid=${curl##*/actions/runs/}; rid=${rid%%/*} ;; esac
-  case "$rid" in ''|*[!0-9]*) rid='' ;; esac
-  [ -n "$rid" ] && wid=$(gh api "repos/$owner/$name/actions/runs/$rid" --jq .workflow_id 2>/dev/null)
-  case "$wid" in ''|*[!0-9]*) wid='' ;; esac
-  if [ -n "$wid" ]; then
-    streak=$(gh api "repos/$owner/$name/actions/workflows/$wid/runs?branch=$branch&per_page=50&status=completed" \
-               --jq '.workflow_runs[] | "\(.head_sha)\t\(.conclusion)"' 2>/dev/null)
-    while IFS=$'\t' read -r s c; do
-      [ -n "$s" ] || continue
-      [ "$c" = success ] && break
-      sha="$s"
-    done <<EOF
-$streak
-EOF
-  fi
-  line=''
-  case "$cid" in ''|*[!0-9]*) : ;; *) line=$(gh run view --job "$cid" --log-failed -R "$repo" 2>/dev/null | fleet_breakage_norm_line) ;; esac
-  [ -n "$line" ] || line=$(printf '%s\n' "$ctitle" | fleet_breakage_norm_line)
-  key="$(printf '%.7s' "$sha")-$(printf '%s\t%s\t%s' "$sha" "$cname" "$line" | fleet_sha12)"
-  printf '%s\t%s\t%s\t%s\n' "$key" "$sha" "$cname" "$line"
+  runs=$(gh api "repos/$owner/$name/actions/runs?branch=$branch&status=completed&per_page=100" \
+           --jq '.workflow_runs[] | select((.event // "") | startswith("pull_request") | not)
+                 | "\(.workflow_id)\t\(.id)\t\(.head_sha)\t\(.conclusion // "")\t\(.created_at // "")\t\(.name // "")\t\(now - ((.created_at // "1970-01-01T00:00:00Z") | fromdateiso8601) | floor)"' 2>/dev/null) || return 2
+  # Newest first (the API's order): per workflow the first verdict decides; a red
+  # one is walked back to the last success. Each red workflow's streak start,
+  # oldest first.
+  starts=$(printf '%s\n' "$runs" | awk -F'\t' -v maxage="${FLEET_BREAKAGE_MAX_AGE:-172800}" '
+      NF < 4 || done[$1] { next }
+      $4 == "success" { done[$1] = 1; next }
+      !($1 in st) && ($4 == "failure" || $4 == "timed_out" || $4 == "startup_failure") && $7 != "" && $7 + 0 > maxage + 0 { done[$1] = 1; next }
+      $4 == "failure" || $4 == "timed_out" || $4 == "startup_failure" { if (!($1 in st)) ord[++n] = $1; st[$1] = $0 }
+      END { for (i = 1; i <= n; i++) print st[ord[i]] }' | sort -t '	' -k5,5)
+  [ -n "$starts" ] || return 1
+  while IFS=$'\t' read -r _ rid sha _ _ wname _; do
+    case "$rid" in ''|*[!0-9]*) continue ;; esac
+    jobs=$(gh api "repos/$owner/$name/actions/runs/$rid/jobs?per_page=100" \
+             --jq '[.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out")]
+                   | sort_by(.completed_at // "") | .[] | "\(.id)\t\(.name)"' 2>/dev/null)
+    jid=''; jname=''
+    IFS=$'\t' read -r jid jname <<JOBS
+$(printf '%s\n' "$jobs" | grep . | head -1)
+JOBS
+    [ -n "$jname" ] || jname="$wname"
+    line=''
+    case "$jid" in ''|*[!0-9]*) : ;; *) line=$(gh run view --job "$jid" --log-failed -R "$repo" 2>/dev/null | fleet_breakage_norm_line) ;; esac
+    key="$(printf '%.7s' "$sha")-$(printf '%s\t%s\t%s' "$sha" "$jname" "$line" | fleet_sha12)"
+    names=$( { printf '%s\n' "$wname"; printf '%s\n' "$jobs" | cut -f2; printf '%s\n' "$line" | grep -oE 'Test[A-Za-z0-9_]+'; } \
+               | grep . | awk '!seen[$0]++' | paste -sd '|' -)
+    out="$out$key	$sha	$jname	$line	$names
+"
+  done <<STARTS
+$starts
+STARTS
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
 }
 
 fleet_breakage_key() {
   local out rc=0
   out=$(fleet_breakage_probe "$@") || rc=$?
   [ "$rc" = 0 ] || return "$rc"
+  out=${out%%
+*}
   printf '%s\n' "${out%%	*}"
+}
+
+# fleet_breakage_pick <text> [<base branch>] — stdin: the probe's rows → the row
+# this filing is about, or nothing (rc 1). A row whose name (workflow, failed
+# job, Go test; ≥4 chars, not a generic word like `test` or `ubuntu`) appears in
+# the text wins; else, when the text says the base branch is red, the first
+# (oldest) row. It is the auto-mode trigger (issue #2175) and, for an explicit
+# --breakage, the choice between two red workflows.
+fleet_breakage_pick() {
+  local text="$1" base="${2:-}" lc row nms nm first=''
+  lc=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    [ -n "$first" ] || first="$row"
+    nms=$(printf '%s' "$row" | cut -f5 | tr '|' '\n' | tr '[:upper:]' '[:lower:]')
+    while IFS= read -r nm; do
+      [ "${#nm}" -ge 4 ] || continue
+      case "$nm" in test|tests|build|lint|check|checks|ubuntu|macos|linux|windows|node|unit) continue ;; esac
+      case "$lc" in *"$nm"*) printf '%s\n' "$row"; return 0 ;; esac
+    done <<NAMES
+$nms
+NAMES
+  done
+  [ -n "$first" ] || return 1
+  fleet_breakage_text_says_red "$text" "$base" || return 1
+  printf '%s\n' "$first"
+}
+
+# fleet_breakage_text_red_word <text> — the cheap, offline gate before any probe:
+# rc 0 when the text has a red word at all (红 失败 挂 坏 故障 报错 · red fail
+# broken breakage panic). An ordinary filing without one costs no gh read.
+fleet_breakage_text_red_word() {
+  printf '%s' "$1" | grep -Eiq '红|失败|挂了|坏了|故障|报错|(^|[^a-z])red([^a-z]|$)|fail|broken|breakage|panic'
+}
+
+# fleet_breakage_text_says_red <text> [<base branch>] — rc 0 when the text has a
+# red word AND names the base branch (its name — else master/main — or
+# 基础分支 / 主干 / base branch / default branch).
+fleet_breakage_text_says_red() {
+  local lc base
+  lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]'); base=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')
+  fleet_breakage_text_red_word "$lc" || return 1
+  case "$lc" in *基础分支*|*主干*|*'base branch'*|*'default branch'*) return 0 ;; esac
+  if [ -n "$base" ]; then
+    case "$lc" in *"$base"*) return 0 ;; esac
+  else
+    case "$lc" in *master*|*main*) return 0 ;; esac
+  fi
+  return 1
 }
 
 fleet_breakage_find() {

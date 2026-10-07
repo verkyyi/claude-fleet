@@ -314,7 +314,10 @@ override them):
        issue, a 「同一故障，来自 …」 comment was left on it for you, nothing was
        filed. Either way the next step is the same: **wait for that issue** —
        `mcp__fleet__await` with its number — then re-read your own verdict. Never
-       a second issue, never a second fixer.
+       a second issue, never a second fixer. (Forget the flag and the filer
+       still catches it when your title names the red base or check — issue
+       #2175 — but say `breakage: true`; `breakage: false` is for a different
+       problem that merely mentions the red.)
      - **`BLOCKED`** → branch protection (a required review) refuses the merge.
        That is a real gate, not a hedge — you can't and shouldn't force it: say so
        on the issue (blocked, below) and stop.

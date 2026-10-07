@@ -35,10 +35,18 @@
 #      FLEET_BREAKAGE_LOCK_SECS) is nobody's.
 #   Q. the degenerate: no --breakage ⇒ no lock dir, no open-issue list, no
 #      check-run read — the argv and body are what they were.
-#   R. fleet_breakage_probe: the key is the red streak's FIRST commit (not the
-#      head), the first failed check by completion time, and the error line sans
-#      line numbers — two logs that differ only in `:88:2:` vs `:91:4:` give one
-#      key; a different error line gives another; a green head is rc 1.
+#   R. fleet_breakage_probe: red is per workflow on its last FINISHED run
+#      (cancelled passed over, a stale one too old to count); the key is the red
+#      streak's FIRST commit, that run's first failed job by completion time, and
+#      the error line sans line numbers — two logs that differ only in `:88:2:`
+#      vs `:91:4:` give one key; a different error line gives another; green is rc 1.
+#   S. the real 2026-10-07 tokenledger-pg logs (issue #2175): #2163's and
+#      #2170's sightings (11:22:55 and 11:29:30Z, head a6dd7c9b then an
+#      unfinished bb7da505) and the one after bb7da505 went red too all give ONE
+#      key; the two pg logs normalize to the same `--- FAIL:` line.
+#   T. auto (issue #2175): no flag + a red base + a text naming it ⇒ filed as
+#      breakage (marker, dedup → exit 5); --no-breakage files plain; a red word
+#      on a green base, or a text naming neither base nor check, files plain.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -119,9 +127,12 @@ case "$1" in
     fi
     ;;
   run)
-    # `gh run view --job <id> --log-failed`: the failed job's log (test R).
+    # `gh run view --job <id> --log-failed`: the failed job's log (tests R–T) —
+    # $BRK_LOGS_DIR/<job id> when there is one, else $BRK_LOG.
     printf '%s\n' "$*" >> "$GH_LOG"
-    [ -n "${BRK_LOG:-}" ] && cat "$BRK_LOG"
+    j=''; while [ "$#" -gt 0 ]; do [ "$1" = --job ] && j="${2:-}"; shift; done
+    if [ -n "${BRK_LOGS_DIR:-}" ] && [ -f "$BRK_LOGS_DIR/$j" ]; then cat "$BRK_LOGS_DIR/$j"
+    elif [ -n "${BRK_LOG:-}" ]; then cat "$BRK_LOG"; fi
     ;;
   api)
     printf 'api %s\n' "$*" >> "$GH_LOG"
@@ -142,11 +153,10 @@ case "$1" in
     p=''; for a in "$@"; do case "$a" in repos/*) p="$a";; esac; done
     case "$p" in
       repos/acme/widgets)                    echo main; exit 0 ;;
-      repos/acme/widgets/commits/main)       echo "${BRK_HEAD:-}"; exit 0 ;;
-      */check-runs*)                         [ "${BRK_GREEN:-0}" = 1 ] || printf '%s\n' "${BRK_CHECKS:-}"; exit 0 ;;
-      */actions/runs/9001)                   echo 77; exit 0 ;;
-      */actions/workflows/77/runs*)          printf '%s\n' "${BRK_STREAK:-}"; exit 0 ;;
-      repos/acme/widgets/issues\?*)          for f in "${BRK_STORE:-/nonexistent}"/issue-*; do [ -e "$f" ] || continue
+      */actions/runs\?*)                     [ -n "${BRK_RUNS_FILE:-}" ] && cat "$BRK_RUNS_FILE"; exit 0 ;;
+      */actions/runs/*/jobs*)                r=${p#*/actions/runs/}; r=${r%%/*}
+                                             [ -n "${BRK_JOBS_DIR:-}" ] && [ -f "$BRK_JOBS_DIR/$r" ] && cat "$BRK_JOBS_DIR/$r"; exit 0 ;;
+      repos/*/issues\?*)                     for f in "${BRK_STORE:-/nonexistent}"/issue-*; do [ -e "$f" ] || continue
                                                printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done; exit 0 ;;
     esac
     case "$2" in
@@ -392,48 +402,150 @@ ok "P another key files; a stale lock is dropped; a live lock without a number r
 rm -rf "$WORK/conf/global/breakage"
 run_fif --title "普通单"
 [ "$RC" -eq 0 ]                               || fail "Q an ordinary filing must still succeed" "$(cat "$WORK/err")"
-grep -q 'issues?state=open\|check-runs\|commits/' "$GH_LOG" && fail "Q an ordinary filing must read no breakage path" "$(cat "$GH_LOG")"
+grep -q 'issues?state=open\|actions/runs' "$GH_LOG" && fail "Q an ordinary filing must read no breakage path" "$(cat "$GH_LOG")"
 grep -q 'fleet:breakage' "$BODY"                && fail "Q an ordinary filing's body carries no breakage marker" "$(cat "$BODY")"
 [ -e "$WORK/conf/global/breakage" ]             && fail "Q an ordinary filing creates no lock dir"
-ok "Q no --breakage: no probe, no list, no lock, no marker — unregressed"
+ok "Q no --breakage and no red word: no probe, no list, no lock, no marker — unregressed"
 
 # ============================ R: the fingerprint itself =======================
-# Head aaaa…, red since bbbb… (cccc… was the last green); one failed check whose
-# log's first error line names roles.go:88:2.
-printf 'selftests / shard 3\tRun tests\t2026-10-07T04:20:11.1234567Z ##[group]Run bash bin/run-selftests.sh\nselftests / shard 3\tRun tests\t2026-10-07T04:20:12.0000000Z FAIL  lint: internal/api/roles.go:88:2: duplicate key "/v1/admin/drill" in map literal\n' > "$WORK/log-a"
+# Workflow 77 (selftests): red at aaaa…, red since bbbb… (run 9002), cccc… the
+# last green. Workflow 78 (docs): its newest run was cancelled, the one before it
+# green — not red. Rows are what the lib's --jq shapes: wid rid sha conclusion
+# created name age.
+FX="$WORK/fx"; mkdir -p "$FX/jobs" "$FX/logs"
+printf 'selftests / shard 3\tRun tests\t2026-10-07T04:20:11.1234567Z ##[group]Run bash bin/run-selftests.sh\nselftests / shard 3\tRun tests\t2026-10-07T04:20:11.2234567Z ^[[36;1mbash bin/run-selftests.sh | grep -E "FAIL|error"^[[0m\nselftests / shard 3\tRun tests\t2026-10-07T04:20:11.3234567Z ##[endgroup]\nselftests / shard 3\tRun tests\t2026-10-07T04:20:11.5234567Z ok   all good: 5 assertions passed\nselftests / shard 3\tRun tests\t2026-10-07T04:20:12.0000000Z FAIL  lint: internal/api/roles.go:88:2: duplicate key "/v1/admin/drill" in map literal\n' > "$WORK/log-a"
 sed 's/:88:2:/:91:4:/' "$WORK/log-a" > "$WORK/log-a2"
 printf 'selftests / shard 3\tRun tests\t2026-10-07T04:30:00.0000000Z FAIL  bash32-array-selftest: bin/x.sh:12: bare array on an empty array\n' > "$WORK/log-b"
-probe() {  # probe <log> [VAR=val…] → the probe's line
-  local lg="$1"; shift
-  env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_HEAD=aaaa111aaaa111 BRK_LOG="$lg" \
-      BRK_CHECKS="$(printf '501\tselftests / shard 3\thttps://github.com/acme/widgets/actions/runs/9001/job/501\tProcess completed with exit code 1.')" \
-      BRK_STREAK="$(printf 'aaaa111aaaa111\tfailure\nbbbb222bbbb222\tfailure\ncccc333cccc333\tsuccess')" "$@" \
+printf '501\tselftests / shard 3\n' > "$FX/jobs/9002"
+red_runs() {  # red_runs [age of the newest red] [a cancelled run on top: 1]
+  [ "${2:-0}" = 1 ] && printf '77\t9004\tdddd444dddd444\tcancelled\t2026-10-07T04:40:00Z\tselftests\t60\n'
+  printf '77\t9003\taaaa111aaaa111\tfailure\t2026-10-07T04:35:00Z\tselftests\t%s\n' "${1:-100}"
+  printf '78\t8002\taaaa111aaaa111\tcancelled\t2026-10-07T04:35:00Z\tdocs\t100\n'
+  printf '77\t9002\tbbbb222bbbb222\tfailure\t2026-10-07T04:10:00Z\tselftests\t1600\n'
+  printf '78\t8001\tbbbb222bbbb222\tsuccess\t2026-10-07T04:10:00Z\tdocs\t1600\n'
+  printf '77\t9001\tcccc333cccc333\tsuccess\t2026-10-07T04:00:00Z\tselftests\t2200\n'
+}
+red_runs > "$FX/runs-red"; red_runs 100 1 > "$FX/runs-cancel-on-top"; red_runs 999999 > "$FX/runs-stale"
+grep -v failure "$FX/runs-red" > "$FX/runs-green"
+probe() {  # probe <runs file> <log> [VAR=val…] → the probe's lines
+  local rf="$1" lg="$2"; shift 2
+  env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_RUNS_FILE="$rf" BRK_JOBS_DIR="$FX/jobs" BRK_LOG="$lg" "$@" \
       bash -c '. "$1/fleet-lib.sh"; fleet_breakage_probe acme/widgets' _ "$WORK/bin"
 }
 : > "$GH_LOG"
-pa=$(probe "$WORK/log-a");  rca=$?
-pa2=$(probe "$WORK/log-a2")
-pb=$(probe "$WORK/log-b")
-[ "$rca" = 0 ] && [ -n "$pa" ]                       || fail "R the probe must answer on a red head" "$(cat "$GH_LOG")"
-ka=${pa%%	*}; ka2=${pa2%%	*}; kb=${pb%%	*}
+pa=$(probe "$FX/runs-red" "$WORK/log-a");  rca=$?
+pa2=$(probe "$FX/runs-red" "$WORK/log-a2")
+pb=$(probe "$FX/runs-red" "$WORK/log-b")
+pc=$(probe "$FX/runs-cancel-on-top" "$WORK/log-a")
+[ "$rca" = 0 ] && [ -n "$pa" ]                       || fail "R the probe must answer on a red workflow" "$(cat "$GH_LOG")"
+[ "$(printf '%s\n' "$pa" | grep -c .)" = 1 ]         || fail "R one red workflow = one row (docs: cancelled over a green is not red)" "$pa"
+ka=${pa%%	*}; ka2=${pa2%%	*}; kb=${pb%%	*}; kc=${pc%%	*}
 case "$ka" in bbbb222-*) ;; *) fail "R the key must start with the red streak's FIRST commit (bbbb222), got [$ka]" "$pa" ;; esac
 [ "$ka" = "$ka2" ]                                   || fail "R two logs that differ only in line numbers must give one key" "$pa"$'\n'"$pa2"
 [ "$ka" != "$kb" ]                                   || fail "R a different error line must give a different key" "$pa"$'\n'"$pb"
-printf '%s' "$pa" | cut -f3 | grep -qx 'selftests / shard 3' || fail "R field 3 is the failed check's name" "$pa"
-printf '%s' "$pa" | cut -f4 | grep -q 'roles.go: duplicate key' || fail "R field 4 is the error line with :line:col stripped" "$pa"
-printf '%s' "$pa" | cut -f4 | grep -q ':88'          && fail "R the line number must be gone" "$pa"
-grep -q 'run view --job 501 --log-failed' "$GH_LOG"  || fail "R the log is read with gh run view --job <check-run id> --log-failed" "$(cat "$GH_LOG")"
+[ "$ka" = "$kc" ]                                    || fail "R a cancelled run on top is no verdict — same key" "$pa"$'\n'"$pc"
+printf '%s' "$pa" | cut -f3 | grep -qx 'selftests / shard 3' || fail "R field 3 is the failed job's name" "$pa"
+printf '%s' "$pa" | cut -f4 | grep -qx 'FAIL lint: internal/api/roles.go: duplicate key "/v1/admin/drill" in map literal' \
+                                                     || fail "R field 4 is the FAIL line, :line:col stripped, the echoed script and an ok line skipped" "$pa"
+printf '%s' "$pa" | cut -f5 | grep -q '^selftests|selftests / shard 3$' || fail "R field 5 names the workflow + its failed jobs" "$pa"
+grep -q 'run view --job 501 --log-failed' "$GH_LOG"  || fail "R the log is read with gh run view --job <job id> --log-failed" "$(cat "$GH_LOG")"
+grep -q 'actions/runs/9002/jobs' "$GH_LOG"           || fail "R the jobs are the streak's FIRST run's (9002)" "$(cat "$GH_LOG")"
 grep -q 'graphql' "$GH_LOG"                          && fail "R the probe must be REST only" "$(cat "$GH_LOG")"
-# a green head: rc 1, no key
-pg=$(probe "$WORK/log-a" BRK_GREEN=1); rcg=$?
-[ "$rcg" = 1 ] && [ -z "$pg" ]                       || fail "R a head with no failed check is rc 1 (not red)" "rc=$rcg [$pg]"
-# the key alone
-kk=$(env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_HEAD=aaaa111aaaa111 BRK_LOG="$WORK/log-a" \
-      BRK_CHECKS="$(printf '501\tselftests / shard 3\thttps://github.com/acme/widgets/actions/runs/9001/job/501\tx')" \
-      BRK_STREAK="$(printf 'aaaa111aaaa111\tfailure\nbbbb222bbbb222\tfailure\ncccc333cccc333\tsuccess')" \
+pg=$(probe "$FX/runs-green" "$WORK/log-a"); rcg=$?
+[ "$rcg" = 1 ] && [ -z "$pg" ]                       || fail "R no red workflow is rc 1 (not red)" "rc=$rcg [$pg]"
+ps_=$(probe "$FX/runs-stale" "$WORK/log-a"); rcs=$?
+[ "$rcs" = 1 ] && [ -z "$ps_" ]                      || fail "R a red older than FLEET_BREAKAGE_MAX_AGE is not red now" "rc=$rcs [$ps_]"
+kk=$(env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_RUNS_FILE="$FX/runs-red" BRK_JOBS_DIR="$FX/jobs" BRK_LOG="$WORK/log-a" \
       bash -c '. "$1/fleet-lib.sh"; fleet_breakage_key acme/widgets' _ "$WORK/bin")
 [ "$kk" = "$ka" ]                                    || fail "R fleet_breakage_key is the probe's first field" "[$kk] vs [$ka]"
-ok "R fingerprint = red streak's first commit + first failed check + error line sans line numbers; green head rc 1"
+ok "R fingerprint = per-workflow last finished verdict; streak's first commit + its first failed job + error line sans line numbers"
+
+# ============================ S: the real 2026-10-07 tokenledger-pg red =========
+# Issue #2175: master went red at c902bf83 (tokenledger run 37611916613: `test`
+# failed 11:21:10, `tokenledger-pg` 11:22:24); #2163 filed at 11:22:55 and #2170
+# at 11:29:30 — the head was a6dd7c9b (tokenledger never ran on it) and then
+# bb7da505 (its run unfinished until 11:31:43). The old probe read the head's
+# check-runs and called master green both times. The logs are excerpts of the
+# real `gh run view --log-failed` output: a BOM on line 1, the echoed script in
+# literal `^[[36;1m` (its own `--- FAIL` in a grep), the go test lines.
+pglog() {  # pglog <time> → the tokenledger-pg job log
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t\357\273\2772026-10-07T%s.0341145Z ##[group]Run set -o pipefail\n' "$1"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.0342114Z ^[[36;1mgo test -race -count=1 -v ./internal/store/... ./internal/api/... 2>&1 | tee /tmp/pg.log | grep -E '"'"'^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok  |FAIL)'"'"'^[[0m\n' "$1"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.0413598Z shell: /usr/bin/bash -e {0}\n' "$1"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.0414807Z ##[endgroup]\n' "$1"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7563648Z pg leg: 0 test(s) not run on Postgres\n' "$1"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7564433Z ok  \tgithub.com/verkyyi/claude-fleet/tokenledger/internal/store\t151.640s\n' "$1"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7565667Z --- FAIL: TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey (%s)\n' "$1" "$2"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7566367Z --- FAIL: TestDropLegacyMachineLogins (%s)\n' "$1" "$3"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7567287Z FAIL\tgithub.com/verkyyi/claude-fleet/tokenledger/internal/api\t442.700s\n' "$1"
+  printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T%s.7581745Z ##[error]Process completed with exit code 1.\n' "$1"
+}
+pglog 11:14:03 1.12s 0.92s > "$FX/logs/112763377741"     # c902bf83's run
+pglog 11:24:40 1.31s 0.88s > "$FX/logs/112766631835"     # bb7da505's run
+printf 'test\tRun go test -race ./...\t2026-10-07T11:21:08.0158841Z --- FAIL: TestNodePlaceIdleNodeStaysLocal (1.19s)\ntest\tRun go test -race ./...\t2026-10-07T11:21:08.0495450Z FAIL\tgithub.com/verkyyi/claude-fleet/tokenledger/internal/api\t342.280s\n' > "$FX/logs/112763377674"
+printf '112763377674\ttest\n112763377741\ttokenledger-pg\n' > "$FX/jobs/37611916613"
+printf '112766631871\ttest\n112766631835\ttokenledger-pg\n' > "$FX/jobs/37613311153"
+tl_runs() {  # tl_runs <age> [bb7da505 finished: 1] — newest first, as the REST list
+  [ "${2:-0}" = 1 ] && printf '100\t37613311153\tbb7da5050000\tfailure\t2026-10-07T11:19:36Z\ttokenledger\t%s\n' "$1"
+  printf '200\t37611990000\ta6dd7c9b0000\tsuccess\t2026-10-07T11:07:45Z\tselftests\t%s\n' "$1"
+  printf '100\t37611916613\tc902bf830000\tfailure\t2026-10-07T11:07:06Z\ttokenledger\t%s\n' "$1"
+  printf '100\t37611854715\t6ff6f3850000\tcancelled\t2026-10-07T11:06:33Z\ttokenledger\t%s\n' "$1"
+  printf '100\t37611774149\t38ae532a0000\tsuccess\t2026-10-07T11:05:50Z\ttokenledger\t%s\n' "$1"
+}
+tl_runs 900 > "$FX/runs-2163"; tl_runs 1300 > "$FX/runs-2170"; tl_runs 1500 1 > "$FX/runs-later"
+sp() { env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_RUNS_FILE="$1" BRK_JOBS_DIR="$FX/jobs" BRK_LOGS_DIR="$FX/logs" \
+         bash -c '. "$1/fleet-lib.sh"; fleet_breakage_probe verkyyi/claude-fleet master' _ "$WORK/bin"; }
+s63=$(sp "$FX/runs-2163"); s70=$(sp "$FX/runs-2170"); slt=$(sp "$FX/runs-later")
+[ -n "$s63" ] && [ -n "$s70" ] && [ -n "$slt" ]      || fail "S master WAS red at #2163's and #2170's filing — the probe must say so" "[$s63] [$s70] [$slt]"
+k63=${s63%%	*}; k70=${s70%%	*}; klt=${slt%%	*}
+[ "$k63" = "$k70" ] && [ "$k70" = "$klt" ]           || fail "S #2163, #2170 and a later sighting are ONE breakage" "$s63"$'\n'"$s70"$'\n'"$slt"
+case "$k63" in c902bf8-*) ;; *) fail "S the streak started at c902bf83, got [$k63]" "$s63" ;; esac
+printf '%s' "$s63" | cut -f5 | grep -q 'tokenledger-pg' || fail "S the names carry the failed tokenledger-pg job" "$s63"
+l1=$(env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_norm_line' < "$FX/logs/112763377741")
+l2=$(env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_norm_line' < "$FX/logs/112766631835")
+[ "$l1" = '--- FAIL: TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey' ] && [ "$l1" = "$l2" ] \
+                                                     || fail "S both real pg logs normalize to the same first --- FAIL line (BOM, ^[ echo, durations dropped)" "[$l1] [$l2]"
+for t in 'tokenledger-pg 红：hub_settings_legacy 两个测试在 Postgres 上报 collation "nocase" 不存在' \
+         'master 红：tokenledger-pg 上 TestDropLegacyMachineLogins / TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey 失败'; do
+  pk=$(printf '%s\n' "$s63" | env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_pick "$1" master' _ "$t")
+  [ "${pk%%	*}" = "$k63" ]                         || fail "S the real issue title must pick the red row: $t" "[$pk]"
+done
+pk=$(printf '%s\n' "$s63" | env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_pick "$1" master' _ '登录页按钮点了没反应，报错 undefined')
+[ -z "$pk" ]                                         || fail "S a text naming neither the base branch nor a red check picks nothing" "[$pk]"
+ok "S the real 2026-10-07 red: #2163 / #2170 / later = one key at c902bf8; both pg logs → one --- FAIL line; both titles pick it"
+
+# ============================ T: auto — no flag, a red base the text names =====
+rm -rf "$WORK/conf/global/breakage"; BRK2="$WORK/brk2"; mkdir -p "$BRK2"
+run_auto() {  # run_auto <sfx> <runs file> <args…>
+  local sfx="$1" rf="$2"; shift 2
+  PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" SPAWN_LOG="$SPAWN_LOG" BIND_LOG="$BIND_LOG" BODY="$WORK/body-$sfx" \
+  FLEET_REPO="verkyyi/claude-fleet" FLEET_BASE_BRANCH=master FLEET_CONF_DIR="$WORK/conf" BRK_STORE="$BRK2" \
+  BRK_RUNS_FILE="$rf" BRK_JOBS_DIR="$FX/jobs" BRK_LOGS_DIR="$FX/logs" \
+    bash "$WORK/bin/fleet-issue-file.sh" "$@" >"$WORK/out-$sfx" 2>"$WORK/err-$sfx"
+  echo $? > "$WORK/rc-$sfx"
+}
+: > "$GH_LOG"
+run_auto t1 "$FX/runs-2163" --title 'master 红：tokenledger-pg 上 TestDropLegacyMachineLogins 失败' --from w1
+[ "$(cat "$WORK/rc-t1")" = 0 ]                       || fail "T1 an auto breakage filing must file" "$(cat "$WORK/err-t1")"
+nt=$(ls "$BRK2"/issue-*); nt=${nt##*-}
+grep -q "<!-- fleet:breakage key=$k63 -->" "$BRK2/issue-$nt" || fail "T1 no flag, red base, text names it ⇒ the breakage marker" "$(cat "$BRK2/issue-$nt")"
+grep -q 'auto, issue #2175' "$WORK/err-t1"           || fail "T1 the filer says it went auto" "$(cat "$WORK/err-t1")"
+rm -rf "$WORK/conf/global/breakage"
+run_auto t2 "$FX/runs-2170" --title 'tokenledger-pg 红：hub_settings_legacy 两个测试' --from w2 --spawn
+[ "$(cat "$WORK/rc-t2")" = 5 ]                       || fail "T2 a second auto sighting dedups (exit 5)" "$(cat "$WORK/err-t2")"
+grep -q -- '--no-breakage' "$WORK/err-t2"            || fail "T2 an auto exit 5 names the way out (--no-breakage)" "$(cat "$WORK/err-t2")"
+[ "$(ls "$BRK2"/issue-* | wc -l | tr -d ' ')" = 1 ]  || fail "T2 no second issue"
+run_auto t3 "$FX/runs-2170" --title 'master 红：tokenledger-pg 另一个问题' --no-breakage
+[ "$(cat "$WORK/rc-t3")" = 0 ] && ! grep -q 'fleet:breakage' "$WORK/body-t3" \
+                                                     || fail "T3 --no-breakage files plain" "$(cat "$WORK/err-t3")"
+run_auto t4 "$FX/runs-green" --title 'master 红了？其实是绿的' --repo acme/widgets
+[ "$(cat "$WORK/rc-t4")" = 0 ] && ! grep -q 'fleet:breakage' "$WORK/body-t4" \
+                                                     || fail "T4 a red word on a green base files plain" "$(cat "$WORK/err-t4")"
+[ -s "$WORK/err-t4" ] && grep -q breakage "$WORK/err-t4" && fail "T4 auto on a green base says nothing" "$(cat "$WORK/err-t4")"
+run_auto t5 "$FX/runs-2170" --title '登录按钮报错 undefined'
+[ "$(cat "$WORK/rc-t5")" = 0 ] && ! grep -q 'fleet:breakage' "$WORK/body-t5" \
+                                                     || fail "T5 a red base the text does not name files plain" "$(cat "$WORK/err-t5")"
+ok "T auto: no flag + red base the text names ⇒ breakage (marker, exit 5 dedup); --no-breakage / green base / unrelated text file plain"
 
 printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn · bind · breakage)\n' "$pass"
 exit 0

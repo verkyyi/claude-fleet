@@ -49,6 +49,8 @@
 #                                                   fleet-restore.sh --undo
 #   breakage-three-filers                           bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
 #                                                   fleet_breakage_find (fleet-lib.sh)
+#   breakage-no-flag                                bin/fleet-issue-file.sh (auto), fleet_breakage_pick /
+#                                                   fleet_breakage_text_red_word (fleet-lib.sh), fleet-mcp.py file_issue
 #   node-paused-still-placed                        bin/fleet-control-read.sh capacity (admit / admit_why / room),
 #                                                   fleet_machine_admit, fleet_machine_headroom; the hub half is
 #                                                   tokenledger/internal/api judge() (go test, when a toolchain is here)
@@ -2836,10 +2838,8 @@ case "$1" in
     p=''; for a in "$@"; do case "$a" in repos/*) p="$a";; esac; done
     case "$p" in
       repos/o/w)                    printf 'main\n' ;;
-      repos/o/w/commits/main)       printf '%s\n' "$BK_HEAD" ;;
-      */check-runs*)                printf '501\tselftests / shard 3\thttps://github.com/o/w/actions/runs/9001/job/501\tProcess completed with exit code 1.\n' ;;
-      */actions/runs/9001)          printf '77\n' ;;
-      */actions/workflows/77/runs*) printf '%s\tfailure\n%s\tfailure\n%s\tsuccess\n' "$BK_HEAD" "$BK_RED" "$BK_GREEN" ;;
+      */actions/runs\?*)            printf '77\t9003\t%s\tfailure\t2026-10-07T04:35:00Z\tselftests\t60\n77\t9002\t%s\tfailure\t2026-10-07T04:10:00Z\tselftests\t1600\n77\t9001\t%s\tsuccess\t2026-10-07T04:00:00Z\tselftests\t2200\n' "$BK_HEAD" "$BK_RED" "$BK_GREEN" ;;
+      */actions/runs/9002/jobs*)    printf '501\tselftests / shard 3\n' ;;
       repos/o/w/issues\?*)          for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
     esac ;;
   run) cat "$BK_LOG" ;;
@@ -2889,9 +2889,72 @@ EOF
   : > "$d/store/gh.log"; rm -rf "$d/conf/global/breakage"
   bk bash "$BIN/fleet-issue-file.sh" --title "普通单" --repo o/w > "$d/out6" 2> "$d/err6"; c=$?
   [ "$c" = 0 ] || { WHY="an ordinary filing exited $c: $(tr '\n' ' ' < "$d/err6" | cut -c1-200)"; return 1; }
-  grep -q 'issues?state=open\|check-runs' "$d/store/gh.log" && { WHY="an ordinary filing read a breakage path: $(grep 'issues?state=open\|check-runs' "$d/store/gh.log" | head -1)"; return 1; }
+  grep -q 'issues?state=open\|actions/runs' "$d/store/gh.log" && { WHY="an ordinary filing read a breakage path: $(grep 'issues?state=open\|actions/runs' "$d/store/gh.log" | head -1)"; return 1; }
   [ -e "$d/conf/global/breakage" ] && { WHY="an ordinary filing created the breakage lock dir"; return 1; }
   WHAT="3 个并发开单：1 张单 + 2 个退出码 5 + 2 条「同一故障」；行号变了仍认得，换故障照常开新单，普通开单不碰"
+}
+
+# Three sessions see master red and file its fix — and none passes --breakage
+# (issue #2175). On 2026-10-07 11:18–11:29Z #2159 #2163 #2170 were filed that
+# way for one red tokenledger-pg: the dedup lived in a skill's prose, so it ran
+# only for a caller that remembered it. Now the filer itself notices: a red
+# word in the text, a red base branch (per workflow, its last FINISHED run — the
+# head then was a commit the workflow never ran on), and the text naming the
+# base branch or the red check ⇒ --breakage all the same. Each filer words it
+# differently, like the real three (one names only the Go test, in its title).
+drill_breakage_no_flag() {
+  CAP=25; local d="$WORK/bkn" t0 i c n0 created fives=0
+  mkdir -p "$d/fp" "$d/conf" "$d/store" "$d/home" "$d/tmp"
+  cat > "$d/fp/gh" <<'EOF'
+#!/bin/bash
+S="$BK_STORE"; printf '%s\n' "$*" >> "$S/gh.log"
+case "$1" in
+  issue)
+    case "$2" in
+      create)
+        sleep 0.4
+        n=$(( $(ls "$S"/issue-* 2>/dev/null | wc -l) + 2159 ))
+        shift 2; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
+        printf '%s' "$b" > "$S/issue-$n"; printf 'https://github.com/o/w/issues/%s\n' "$n" ;;
+      comment)
+        shift 2; n="$1"; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
+        printf '%s' "$b" | tr '\n' ' ' >> "$S/comments-$n"; printf '\n' >> "$S/comments-$n" ;;
+    esac ;;
+  api)
+    p=''; for a in "$@"; do case "$a" in repos/*) p="$a";; esac; done
+    case "$p" in
+      # master: tokenledger red since c902bf83 (a cancelled run before it, then
+      # green); the head a6dd7c9b only ran selftests, green.
+      */actions/runs\?*)  printf '200\t3002\ta6dd7c9b\tsuccess\t2026-10-07T11:07:45Z\tselftests\t900\n100\t3001\tc902bf83\tfailure\t2026-10-07T11:07:06Z\ttokenledger\t900\n100\t3000\t6ff6f385\tcancelled\t2026-10-07T11:06:33Z\ttokenledger\t960\n100\t2999\t38ae532a\tsuccess\t2026-10-07T11:05:50Z\ttokenledger\t1000\n' ;;
+      */actions/runs/3001/jobs*) printf '7741\ttokenledger-pg\n' ;;
+      repos/o/w/issues\?*) for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
+    esac ;;
+  run) printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T11:22:21.7565667Z --- FAIL: TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey (1.12s)\n' ;;
+esac
+exit 0
+EOF
+  chmod +x "$d/fp/gh"
+  bk() { env -u TMUX -u TMUX_PANE HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$d/tmp" PATH="$d/fp:$PATH" \
+           FLEET_GH_WRITE_GAP=0 FLEET_BASE_BRANCH=master BK_STORE="$d/store" "$@"; }
+  t0=$(now)
+  ( bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w1 --title 'tokenledger-pg 红：hub_settings_legacy 两个测试在 Postgres 上报 collation "nocase" 不存在' > "$d/out1" 2> "$d/err1"; echo $? > "$d/rc1" ) &
+  ( bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w2 --title 'master 红：tokenledger-pg 上 TestDropLegacyMachineLogins / TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey 失败' > "$d/out2" 2> "$d/err2"; echo $? > "$d/rc2" ) &
+  ( bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w3 --title 'TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey 失败' --body 'master 的 tokenledger 工作流在 c902bf83 起红' > "$d/out3" 2> "$d/err3"; echo $? > "$d/rc3" ) &
+  wait
+  SECS=$(since "$t0")
+  created=$(ls "$d/store"/issue-* 2>/dev/null | wc -l | tr -d ' ')
+  [ "$created" = 1 ] || { WHY="3 filers with NO --breakage made $created issues (want 1): $(cat "$d"/err? 2>/dev/null | tr '\n' ' ' | cut -c1-300)"; return 1; }
+  n0=$(ls "$d/store"/issue-* | head -1); n0=${n0##*-}
+  grep -q '<!-- fleet:breakage key=c902bf8-' "$d/store/issue-$n0" || { WHY="the one issue carries no fleet:breakage marker at c902bf8: $(tr '\n' ' ' < "$d/store/issue-$n0" | cut -c1-200)"; return 1; }
+  for i in 1 2 3; do [ "$(cat "$d/rc$i")" = 5 ] && fives=$((fives + 1)); done
+  [ "$fives" = 2 ] || { WHY="want 2 × exit 5, got $fives: $(cat "$d"/rc? | tr '\n' ' ')"; return 1; }
+  # The way out: --no-breakage files a second one plain, and so does a filing
+  # that has nothing to do with the red.
+  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --title 'master 红：另一个问题' --no-breakage > "$d/out4" 2> "$d/err4"; c=$?
+  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --title '登录页报错 undefined' > "$d/out5" 2> "$d/err5"; i=$?
+  created=$(ls "$d/store"/issue-* | wc -l | tr -d ' ')
+  [ "$c" = 0 ] && [ "$i" = 0 ] && [ "$created" = 3 ] || { WHY="--no-breakage exited $c, an unrelated filing $i, issues now $created (want 0, 0, 3)"; return 1; }
+  WHAT="3 个都不带 --breakage 的并发开单（措辞各异）：只建 1 张单 + 2 个退出码 5；--no-breakage 与无关的单照常开"
 }
 
 # A machine whose own gate is holding new sessions (fleet_machine_admit: memory

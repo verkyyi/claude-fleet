@@ -891,8 +891,10 @@ def tool_file_issue(args):
         argv.append("--spawn")
     if args.get("bind"):
         argv.append("--bind")
-    if args.get("breakage"):
+    if args.get("breakage") is True:
         argv.append("--breakage")
+    elif args.get("breakage") is False:
+        argv.append("--no-breakage")
     if "breakage_key" in args:
         argv += ["--breakage-key", args["breakage_key"]]
     return script(argv, FILE_TIMEOUT_S)
@@ -1154,6 +1156,9 @@ TOOLS = {
                        "started at · the first failed check · its first error line) and files ONE issue per "
                        "fingerprint: one already open gets a 「同一故障」 comment and comes back as exit 5 + its URL, "
                        "nothing filed or spawned — wait for that issue (await), never file a second (issue #2078). "
+                       "Left out, it is AUTOMATIC: a title/body that says the base branch is red, or names the red "
+                       "check, while it IS red is filed as breakage all the same; breakage: false files it plain "
+                       "(issue #2175). "
                        "Prints the issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · "
                        "5 the breakage already has an open issue (URL printed) · 1 failure.",
         "inputSchema": {"type": "object", "properties": {
@@ -1165,7 +1170,8 @@ TOOLS = {
             "spawn": {"type": "boolean", "description": "Start a worker on it now."},
             "bind": {"type": "boolean", "description": "Scratch only: become its worker in place."},
             "breakage": {"type": "boolean", "description": "The base branch is red and this issue is its fix: "
-                         "fingerprint it and file one issue per breakage (exit 5 + the URL when one is open)."},
+                         "fingerprint it and file one issue per breakage (exit 5 + the URL when one is open). "
+                         "Omitted = auto (the text names the red base / check); false = never."},
             "breakage_key": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$",
                              "description": "A fingerprint already computed (fleet_breakage_key) instead of probing."},
             "repo": REPO},
