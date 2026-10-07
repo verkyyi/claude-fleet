@@ -196,7 +196,7 @@ fleet_conf_file() {
 # that session has no new-layout dir yet — so a half-migrated estate lists each
 # fleet exactly once. Replaces every `for cf in "$FLEET_CONF_DIR"/*.conf` loop.
 fleet_each_conf() {
-  local d conf sess
+  local d conf sess hdr
   # An empty conf estate must expand to NOTHING, not abort. zsh's NOMATCH (on by
   # default) errors `no matches found` on an unmatched glob — so when this lib is
   # sourced into a zsh shell and the `fleets/*/` or legacy `*.conf` glob matches
@@ -210,6 +210,13 @@ fleet_each_conf() {
       [ -d "$d" ] || continue
       conf="${d}conf"; [ -f "$conf" ] || continue
       sess=${d%/}; sess=${sess##*/}
+      # The machine's own config stranded as fleets/fleet/conf by the pre-#1887
+      # migrator is not a fleet (issue #2059) — `fleet-conf.sh migrate` puts it
+      # back. Read with the `read` builtin: no fork on this hot path (#888).
+      if [ "$sess" = fleet ]; then
+        hdr=''; IFS= read -r hdr < "$conf" || true
+        case "$hdr" in "# claude-fleet — this machine's ONE config file"*) continue ;; esac
+      fi
       printf '%s\t%s\n' "$sess" "$conf"
     done
   fi
@@ -698,6 +705,44 @@ fleet_repo_hosted() {
   # pipeline — so the FIRST hosted repo read as not hosted (issue #793).
   all=$(fleet_repos "${1:-}")
   printf '%s\n' "$all" | grep -qxF "$want"
+}
+
+# fleet_bridge_rows [<floor> [<revive>]] → one `repo<TAB>floor<TAB>revive` line per
+# repo a configured fleet hosts with the issue-bridge ON in that repo's view (fleet
+# conf + its overlay; issues #798, #1941) and not a seed repo (#1167) — the per-fleet
+# half of the bridge's poll set, shared with fleet_bridge_covers so the two can never
+# disagree (issue #2059). <floor>/<revive> are the defaults a view leaves unset.
+# Each view is loaded in a subshell, so nothing leaks into the caller. Order: the
+# confs in fleet_each_conf order, each fleet's repos in fleet_repos order (dups kept;
+# the caller dedups).
+fleet_bridge_rows() {
+  local fl="${1:-OWNER MEMBER COLLABORATOR}" rv="${2:-0}" s cf rp
+  while IFS="$(printf '\t')" read -r s cf; do
+    [ -n "$s" ] && [ -f "$cf" ] || continue
+    fleet_repos "$s" | while IFS= read -r rp; do
+      [ -n "$rp" ] || continue
+      ( fleet_load_repo_conf "$s" "$rp" >/dev/null 2>&1 || exit 0
+        [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
+          "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$fl}" "${FLEET_ISSUE_BRIDGE_REVIVE:-$rv}" )
+    done
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  return 0
+}
+
+# fleet_bridge_covers <repo> → 0 iff the issue-bridge's poll relays <repo>'s
+# comments: the global switch with FLEET_REPO = <repo>, or a fleet hosting it with
+# the bridge on (fleet_bridge_rows). 1 = an unmarked comment there reaches no
+# worker through the bridge — `fleet-comment.sh --to-worker` says so and sends it
+# over the peer channel instead (issue #2059).
+fleet_bridge_covers() {
+  local want rows
+  want=$(fleet_norm_repo "${1:-}"); [ -n "$want" ] || return 1
+  [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] \
+    && [ "$(fleet_norm_repo "${FLEET_REPO:-}")" = "$want" ] && return 0
+  rows=$(fleet_bridge_rows | cut -f1 | while IFS= read -r r; do fleet_norm_repo "$r"; echo; done)
+  printf '%s\n' "$rows" | grep -qxF "$want"
 }
 
 # fleet_repo_mains <sess> → each hosted repo's base checkout (FLEET_MAIN), one per
