@@ -16,6 +16,7 @@ keyboard on the list.
 | zoom the right pane | ⌘↩ | F9 | again to restore |
 | every key | ⌘/ | prefix ? | |
 | quick open | ⌘P | prefix / | type a few letters, ↵ |
+| a new task: the writing area on the right | ⌘N | prefix c | below |
 
 **Quick open** lists every session — one folded under its parent too. An empty
 query lists the most recent first and the one in view last, so ⌘P ↵ is «the one
@@ -29,6 +30,19 @@ From a zoomed session, ⌘↓ ⌘↑ ⌘[ ⌘] ⌘J unzoom first (⌘P keeps the
 pick). With no task list on screen they do nothing — prefix h is then still
 «the machine before», as prefix q.
 
+**A new task** (issue #1953): ⌘N — or prefix c, or a tap on the list's first row
+「+ 新任务」 — turns the right pane into the writing area (`bin/fleet-compose.py`,
+the stage's `@fleet_role portal` window, made once). Write as many lines as you
+like (⇧↵ — the `fleet` profile sends it as 0x0a — ⌃j or ⌥↵ start a new one);
+drop a file on the window and its path is an attachment. ↵ sends: the first line
+is the issue's title, the whole text its body. The repo is 「自动」 — the one of
+the session you were on. The list draws 「开工中…」 under 「新任务」 at once, the
+machine the hub picks files the issue (`fleet-issue-file.sh`) and opens its
+worker, and the right pane switches to it when its row appears — no token spent
+on the way. Tab to 「记成 issue」 and space unticks it: ↵ then opens a scratch
+session instead. esc goes back to the session before; the draft is kept on disk
+(`~/.local/state/claude-fleet/compose-draft`) until it is sent.
+
 ## How a ⌘ chord reaches the client
 
 A terminal sends nothing for ⌘ — macOS keeps it. So the client installs an
@@ -38,7 +52,8 @@ A terminal sends nothing for ⌘ — macOS keeps it. So the client installs an
 **private code**:
 
     ESC [ <code> ~        code 920 next · 921 prev · 922 back · 923 fwd ·
-                               924 needs · 925 zoom · 926 help · 927 quickopen
+                               924 needs · 925 zoom · 926 help · 927 quickopen ·
+                               928 new
 
 No terminal sends `ESC [ 92x ~` for a real key. `conf/tmux-shell.conf` catches
 each as `user-keys[<code>]` → `User<code>`, bound to the same body as the prefix

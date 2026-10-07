@@ -320,6 +320,44 @@ fleet_ui_t() {
     en:sidebar_place_declined_fmt) printf '%s did not open it: %s' "${1:-}" "${2:-}" ;;
     zh:sidebar_place_unknown_fmt) printf '%s 还没回话：稍后看侧栏' "${1:-}" ;;
     en:sidebar_place_unknown_fmt) printf '%s has not answered yet — watch the list' "${1:-}" ;;
+    # the writing area's row and its in-flight row (issue #1953)
+    zh:sidebar_portal)          printf '新任务' ;;
+    en:sidebar_portal)          printf 'New task' ;;
+    zh:sidebar_portal_placing_fmt) printf '开工中… %s' "${1:-}" ;;
+    en:sidebar_portal_placing_fmt) printf 'starting… %s' "${1:-}" ;;
+    # the writing area itself (issue #1953, bin/fleet-compose.py)
+    zh:compose_title)           printf '新任务' ;;
+    en:compose_title)           printf 'New task' ;;
+    zh:compose_head)            printf '写下要做的事' ;;
+    en:compose_head)            printf 'What needs doing' ;;
+    zh:compose_saved_fmt)       printf '草稿已保存 %s' "${1:-}" ;;
+    en:compose_saved_fmt)       printf 'draft saved %s' "${1:-}" ;;
+    zh:compose_placeholder)     printf '一行就够，多写几行也行。文件拖进来就是附件。' ;;
+    en:compose_placeholder)     printf 'One line is enough; more is fine. Drop a file in to attach it.' ;;
+    zh:compose_repo)            printf '仓库' ;;
+    en:compose_repo)            printf 'repo' ;;
+    zh:compose_repo_auto_fmt)   printf '自动 · %s' "${1:-}" ;;
+    en:compose_repo_auto_fmt)   printf 'auto · %s' "${1:-}" ;;
+    zh:compose_repo_auto)       printf '自动' ;;
+    en:compose_repo_auto)       printf 'auto' ;;
+    zh:compose_issue)           printf '记成 issue' ;;
+    en:compose_issue)           printf 'file an issue' ;;
+    zh:compose_attach)          printf '附件' ;;
+    en:compose_attach)          printf 'attached' ;;
+    zh:compose_go_issue)        printf '↵ 开工' ;;
+    en:compose_go_issue)        printf '↵ start' ;;
+    zh:compose_go_draft)        printf '↵ 开草稿会话' ;;
+    en:compose_go_draft)        printf '↵ open a scratch' ;;
+    zh:compose_keys)            printf '↵ 发出 · ⇧↵ 换行 · Tab 到选项 · 空格 勾/不勾 · esc 回上一个会话' ;;
+    en:compose_keys)            printf '↵ send · ⇧↵ new line · Tab options · space toggles · esc back' ;;
+    zh:compose_sent_fmt)        printf '已发出：%s · 开工中…' "${1:-}" ;;
+    en:compose_sent_fmt)        printf 'sent: %s · starting…' "${1:-}" ;;
+    zh:compose_empty)           printf '先写一行再 ↵' ;;
+    en:compose_empty)           printf 'write a line first' ;;
+    zh:compose_nolist)          printf '没找到任务列表：直接发给入口' ;;
+    en:compose_nolist)          printf 'no task list found: sending straight to the hub' ;;
+    zh:compose_result_fmt)      printf '入口回话：%s' "${1:-}" ;;
+    en:compose_result_fmt)      printf 'the hub says: %s' "${1:-}" ;;
     # the questions asked on the input line instead of a popup (issue #1620)
     zh:sidebar_ask_new)         printf '新任务› ' ;;
     en:sidebar_ask_new)         printf 'task› ' ;;
@@ -585,6 +623,8 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:keys_switch_help)       printf %s 'every key' ;;
     zh:keys_switch_quickopen)  printf %s '快速跳转：打几个字（名字、机器、状态都算），↵ 切过去；不打字 ↵ = 上一个看的' ;;
     en:keys_switch_quickopen)  printf %s 'quick open: type a few letters (name, machine, state), ↵ switches; ↵ on nothing = the one you saw before' ;;
+    zh:keys_switch_new)        printf %s '新任务：右边打开写作区，多行、附件，↵ 开 issue 和会话' ;;
+    en:keys_switch_new)        printf %s 'new task: the writing area on the right — several lines, attachments; ↵ files the issue and opens its session' ;;
     zh:keys_single_f1)         printf %s '窄屏（手机）：全屏切换器 —— 在等你的 · 最近 1–9 · 全部，点一行切过去；顶栏点名字同此' ;;
     en:keys_single_f1)         printf %s 'narrow (a phone): the full-screen switcher — waiting on you · recent 1–9 · all, tap a row; tapping the name on the top line too' ;;
     zh:keys_single_f23)        printf %s '窄屏：上一个 / 下一个会话（顶栏 ‹ › 同此）' ;;

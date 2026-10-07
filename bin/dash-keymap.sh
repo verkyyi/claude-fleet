@@ -151,7 +151,9 @@ kill_eol ctrl-k alt-k' ;;
 # + 0x200000 for an arrow), private code, prefix key. A tmux prefix never
 # collides with a ⌘ chord, so nothing here remaps; `list` prints the table as is.
 # bin/fleet-keys-selftest.sh holds it in lockstep with the conf, the sheet and
-# the profile.
+# the profile. `new` (issue #1953, EPIC #1949 C4): ⌘N opens the writing area on
+# the right (bin/fleet-compose.py, the stage's `@fleet_role portal` window) —
+# prefix c elsewhere, tmux's own new-window key, which the client has no use for.
 switch) TABLE='next ⌘↓ 0xf701-0x300000 920 n
 prev ⌘↑ 0xf700-0x300000 921 p
 back ⌘[ 0x5b-0x100000 922 h
@@ -159,7 +161,8 @@ fwd ⌘] 0x5d-0x100000 923 l
 needs ⌘J 0x6a-0x100000 924 k
 zoom ⌘↩ 0xd-0x100000 925 F9
 help ⌘/ 0x2f-0x100000 926 ?
-quickopen ⌘P 0x70-0x100000 927 /'
+quickopen ⌘P 0x70-0x100000 927 /
+new ⌘N 0x6e-0x100000 928 c'
   cmd="${1:-list}"
   case "$cmd" in
     list)    printf '%s\n' "$TABLE" ;;

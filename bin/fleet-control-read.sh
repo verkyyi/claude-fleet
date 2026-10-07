@@ -322,7 +322,28 @@ case "$mode" in
       sname="${8:-}"
       exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"}
     fi
-    exec bash "$BIN/dash-issue-session.sh" "${3:-}" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"}
+    num="${3:-}"
+    if [ "$num" = new ]; then
+      # The client's writing area (issue #1953): the issue does not exist yet.
+      # $8 is its title (validated by the controller), the body is stdin. File
+      # it through the one filer channel AFTER the gates above (a refused start
+      # files nothing), print its URL first — the controller reads the number
+      # off it — then spawn exactly as an issue start does. A spawn refused after
+      # the filing leaves the issue on the backlog, and says so last; a filing
+      # that fails opens nothing (exit 7).
+      [ -n "$srepo" ] || { printf 'start: no repo to file the new issue in\n' >&2; exit 6; }
+      nbody=$(cat)
+      url=$(FLEET_SESSION="$sess" bash "$BIN/fleet-issue-file.sh" --repo "$srepo" --from hub --title "${8:-}" ${nbody:+--body "$nbody"}) \
+        || { printf 'start: filing the new issue in %s failed\n' "$srepo" >&2; exit 7; }
+      printf '%s\n' "$url"
+      num="${url##*/}"; num="${num//[^0-9]/}"
+      [ -n "$num" ] || { printf 'start: the filed issue has no number: %s\n' "$url" >&2; exit 1; }
+      bash "$BIN/dash-issue-session.sh" "$num" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${9:+--reap "$9"}
+      rc=$?
+      [ "$rc" = 0 ] || printf 'start: filed #%s but its session did not open — it is on the backlog\n' "$num" >&2
+      exit "$rc"
+    fi
+    exec bash "$BIN/dash-issue-session.sh" "$num" "$sess" --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"}
     ;;
   # --- worker lifecycle by DURABLE key (issue #834) ---------------------------
   # $3 is issue-<N> / scratch-<N>; the window is re-resolved on the fleet at
