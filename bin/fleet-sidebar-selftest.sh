@@ -207,7 +207,8 @@ work = Path(tempfile.mkdtemp(prefix='sidebar-selftest.'))
 # A sandbox install root (issue #896): the input line spawns through the REAL
 # dash-raw-session.sh, so every script is the shipped one except the agent
 # launcher, which only holds its window open. Its fleet.conf lifts the machine-
-# wide session cap — the operator's own live sessions must not refuse this test.
+# wide session cap and the memory admit gate — the operator's own live sessions
+# must not refuse this test.
 root = work / 'root'
 bin_dir = root / 'bin'
 bin_dir.mkdir(parents=True)
@@ -217,7 +218,7 @@ for source in real_bin.iterdir():
 (bin_dir / 'fleet-claude.sh').write_text('#!/bin/sh\nexec sleep 600\n')
 (bin_dir / 'fleet-claude.sh').chmod(0o755)
 (root / 'conf').symlink_to(real_bin.parent / 'conf')
-(root / 'fleet.conf').write_text('FLEET_GLOBAL_MAX_SESSIONS=0\n')
+(root / 'fleet.conf').write_text('FLEET_GLOBAL_MAX_SESSIONS=0\nFLEET_ADMIT=0\n')   # nor a busy box's memory gate
 main = work / 'main'
 main.mkdir()
 for git in (['init', '-q'], ['config', 'user.email', 't@t'], ['config', 'user.name', 't'],
@@ -313,6 +314,11 @@ def list_only(pane):
     lines = [l.rstrip() for l in text.splitlines()]
     return (not any(l == '›' or l.startswith('› ') or l.startswith('改名›') for l in lines)
             and '快捷键' not in text and '在问你' not in text)
+
+def row_y(pane, text):
+    """The painted row of the list that shows `text` — a 「刷新中…」 top row
+    (issue #1536) moves every row down one."""
+    return next(i for i, line in enumerate(tm('capture-pane', '-p', '-t', pane).splitlines()) if text in line)
 
 def ask_pane(window):
     """The question open under the session (bin/fleet-ask.py, `@stage_ask`)."""
@@ -426,8 +432,9 @@ try:
           'session-window-changed sync lost its already-there fast path')
     selected = [line for line in shell_conf.splitlines() if not line.startswith('#') and
                 ('fleet-sidebar' in line or 'after-select-pane[71]' in line or 'client-detached' in line or
-                 'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or
+                 'MouseDown1Pane' in line or 'MouseDown1Border' in line or 'DoubleClick1Pane' in line or 'DoubleClick1Border' in line or
                  'MouseDown3Pane' in line or line.startswith('bind -n Any ') or
+                 line in ('unbind E', 'unbind g', 'unbind Space') or
                  line.startswith('bind -n F9 ') or
                  line.startswith('bind z ') or line.startswith('bind [ ') or line.startswith('bind k '))]
     selected += [line for line in node_conf.splitlines() if
@@ -606,7 +613,7 @@ try:
     tm('set-hook', '-g', 'session-window-changed[73]', "set-option -gaF @switches '#{window_id} '")
     switches = lambda: tm('show-options', '-gv', '@switches').split()
     started = time.monotonic()
-    click(side, 1)
+    click(side, row_y(side, "修复侧栏"))
     wait_for(lambda: bool(view_on(w2)), 'a tap did not move to the second worker')
     # Informational (issue #1033): the tap → switched latency on this box.
     print('sidebar timing: tap → view on the next worker in %.2fs' % (time.monotonic() - started))
@@ -675,8 +682,10 @@ try:
     stall.write_text('')
     os.replace(staged, rows_bin)
     time.sleep(1.5)  # the view's next refresh is now stuck in the producer
+    y = row_y(side, '修复侧栏')
+    time.sleep(.6)
     started = time.monotonic()
-    click(side, 1)
+    click(side, y, repeat=True)
     wait_for(lambda: bool(view_on(w2)), 'a stalled producer blocked the tap')
     moved = time.monotonic() - started
     wait_for(lambda: any(l.startswith('▶') and '修复侧栏' in l
@@ -689,7 +698,7 @@ try:
     rows_bin.unlink()
     rows_bin.symlink_to(real_bin / 'tmux-dashboard-rows.sh')
     (bin_dir / 'tmux-dashboard-rows-real.sh').unlink()
-    click(side, 0)
+    click(side, row_y(side, 'worker-one'))
     wait_for(lambda: bool(view_on(w1)), 'a tap did not go back after the stalled-producer leg')
 
     # A fold AT ONCE (issue #1530; a tap on the caret since #1950 took ←/→):
@@ -707,13 +716,17 @@ try:
     os.replace(staged, rows_bin)
     time.sleep(1.5)  # the view's next refresh is now stuck in the producer
     caret = sidebar.width_of(sidebar.row_left(' ', '·', '▾', '')) - 2
+    y = row_y(side, 'worker-one')
+    time.sleep(.6)
     started = time.monotonic()
-    click(side, 0, column=caret)
+    click(side, y, column=caret, repeat=True)
     wait_for(lambda: not kid_shown(), 'a tap on ▾ did not fold the child away before a producer frame')
     folded = time.monotonic() - started
     wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '', 'the fold tap did not write the fold bit')
+    y = row_y(side, 'worker-one')   # a 「刷新中…」 row may have come up meanwhile
+    time.sleep(.6)
     started = time.monotonic()
-    click(side, 0, column=caret)
+    click(side, y, column=caret, repeat=True)
     wait_for(kid_shown, 'a tap on ▸ did not draw the child row before a producer frame')
     opened = time.monotonic() - started
     wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '1', 'the unfold tap did not write the fold bit')
@@ -733,8 +746,10 @@ try:
     held = open(str(conf) + '.sidebar.lock', 'w')
     fcntl.flock(held, fcntl.LOCK_EX)
     try:
+        y = row_y(side, '修复侧栏')
+        time.sleep(.6)
         started = time.monotonic()
-        click(side, 1)
+        click(side, y, repeat=True)
         wait_for(lambda: any(l.startswith('›') and '修复侧栏' in l
                              for l in tm('capture-pane', '-p', '-t', side).splitlines()),
                  'a held lock froze the highlight')
@@ -747,7 +762,7 @@ try:
         held.close()
     wait_for(lambda: bool(view_on(w2)), 'the switch did not land after the lock freed')
     print('sidebar timing: highlight %.2fs under a 2s-held lock' % highlighted)
-    click(view_on(w2)[0], 0)
+    click(side, row_y(side, 'worker-one'))
     wait_for(lambda: bool(view_on(w1)), 'a tap did not go back after the lock leg')
 
     # The popup pause ends WITH the popup (issue #1536), not 30s later: a window
@@ -952,6 +967,7 @@ try:
     check(set(windows()) == before, 'a refused spawn created a window')
     check(list_only(side), 'the refusal was drawn on the list')
     conf.write_text(fleet_conf)
+    time.sleep(1.5)   # the refused spawn's script exits after its word (one spawn at a time, #1608)
 
     # The list's own actions are verbs (issue #1950 — its ⌃s ⌃i ⌃t ⌃r ⌃o went
     # with the keyboard): `scratch` a scratch session NOW — the hub's ⌃s, unnamed
@@ -1139,6 +1155,8 @@ try:
         os.write(terminal, ('\x1b[<2;%d;%dM\x1b[<2;%d;%dm' % (x, y, x, y)).encode())
     w1_row = lambda: next(i for i, line in enumerate(tm('capture-pane', '-p', '-t', side).splitlines())
                           if 'worker-one' in line)
+    tm('select-window', '-t', w1)
+    wait_for(lambda: view_on(w1) == [side], 'the view is not on the first worker before the right-click leg')
     for pin in ('1', ''):
         del screen_out[:]
         right_click(side, w1_row())
@@ -1148,6 +1166,9 @@ try:
         check(current() == w1, 'pinning from the menu switched windows')
         if pin:
             check(menu_items(w1)['t'] == '取消置顶', 'a pinned row does not offer unpin')
+        # the next tap reads the row off a frame that shows the pin as it is now
+        wait_for(lambda: ('置顶' in tm('capture-pane', '-p', '-t', side)) == bool(pin),
+                 'the list did not repaint the pin')
     # Rename: the question line under the session, pre-filled; Enter hands the
     # name to dash-rename.sh --wid as argv — quotes, $, # and ; survive. The
     # line edits like Claude's prompt (issue #1097).

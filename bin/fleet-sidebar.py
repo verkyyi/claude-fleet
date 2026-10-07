@@ -2231,7 +2231,7 @@ def ui(screen, session, worker, lock):
         issue #1950 it takes no keys, so they are VERBS, parked in @sidebar_ask
         like a question (fleet-sidebar-menu.sh `ask`, the switcher's commands):
         `new [machine]` a new task · `restore` · `scratch` a scratch session now ·
-        `view` the running list ⇄ the landed one · `reload` · `info` the issue ·
+        `view` the running list or the landed one · `reload` · `info` the issue ·
         PR · ctx% column · `needs` onto the next row waiting on you."""
         nonlocal follow_at, refresh_at, producer, view, live_rows, rows, landed_at
         nonlocal selected, wide, spawning
@@ -2255,7 +2255,7 @@ def ui(screen, session, worker, lock):
             elif spawning is None:
                 spawning = spawn_scratch("", env, selection=anchor)
         elif verb in ("view", "restore"):
-            # the running list ⇄ the landed one, in place — the hub's ⌃t (restore:
+            # the running list or the landed one, in place — the hub's ⌃t (restore:
             # the landed list, issue #1620). Either side paints what it last had
             # at once; the run in flight for the other one is dropped.
             drop_rows(producer)
@@ -2848,7 +2848,7 @@ def ui(screen, session, worker, lock):
                 # A landed row (issue #1532): a tap highlights it, a tap on the
                 # highlighted one restores it — the session row's two-tap grammar.
                 action = "restore" if action == "menu" else "select"
-            if buttons & curses.BUTTON3_PRESSED:
+            if buttons & (curses.BUTTON3_PRESSED | curses.BUTTON3_CLICKED):
                 # A right-click (a long press on an iPad) on a row (issue #1950):
                 # its menu at once, the row in view or not — a heading's is a new
                 # session in that repo, as its second tap.
