@@ -398,6 +398,9 @@ def renew(hub, quiet=False, include=True):
                 say(n)
         return 0
     why = res.get("error", "HTTP %d" % code)
+    if code == 503 and why == "updating":
+        say("入口正在更新，一分钟内回来 — 稍后再试")
+        return 1
     if code in (403, 404) or res.get("code") in ("unknown_device", "device_revoked", "device_idle", "no_account"):
         say("需要重新扫码：%s" % why)
         return NEEDS_SCAN
@@ -432,7 +435,15 @@ def scan(hub, invert, purpose=""):
     body = {"public_key": pub, "device_name": device_name()}
     if purpose:
         body.update(purpose=purpose, os_user=getpass.getuser())
-    code, st = post(hub + "/v1/fleet/login/start", body)
+    try:
+        code, st = post(hub + "/v1/fleet/login/start", body)
+    except (urllib.error.URLError, OSError) as e:
+        # a newcomer's first contact: one line, not a traceback (claude-fleet#2096)
+        die("入口 %s 连不上（%s）— 查网络，或地址对不对：fleet login --hub <入口地址>"
+            % (hub, getattr(e, "reason", e)), 1)
+    if code == 503 and st.get("error") == "updating":
+        # the release's 「正在更新」 backend (claude-fleet#2052) answers for the hub
+        die("入口正在更新，一分钟内回来 — 稍后再敲一次", 1)
     if code == 404:
         die("this hub does not issue certificates (no CA or no WeCom sign-in configured)", 1)
     if code != 200:

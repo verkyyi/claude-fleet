@@ -10,6 +10,10 @@ name: client-e2e
 # install line into a fresh HOME (its tmux step included), `fleet` opened
 # headless on its own tmux socket, the node's sessions in its list, and one row
 # opened in the right pane. Any step red = this job red, with the logs.
+# bin/newcomer-e2e.sh (issue #2096) then walks the road BEFORE that, holding no
+# operator credential: `fleet users add`, a clean HOME's install, `fleet login`
+# confirmed by a drill code, `fleet` on the certificate alone, the renewal and
+# the removal.
 #
 # ubuntu on every PR and every push to master (a merge); macOS nightly (and on
 # demand) — the BSD / bash 3.2 / Homebrew-tmux half, on its own clock so it
@@ -61,10 +65,15 @@ jobs:
         run: ../bin/fleet-client-pack.sh && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/ccquota" ./cmd/ccquota
       - name: Install from the hub, open, list, switch
         run: bin/client-e2e.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/client-e2e.log"
+      - name: A newcomer — added, installed, signed in, opened, renewed, removed
+        # claude-fleet#2096: the road before the client, with no operator credential
+        if: success() || failure()
+        run: bin/newcomer-e2e.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/newcomer-e2e.log"
       - name: Summary
         if: always()
         run: |
           { echo '### client-e2e (ubuntu)'; echo '```'; tail -n 20 "$RUNNER_TEMP/client-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '### newcomer-e2e (ubuntu)'; echo '```'; tail -n 20 "$RUNNER_TEMP/newcomer-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   macos:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -84,7 +93,11 @@ jobs:
       - name: Install from the hub, open, list, switch
         # /bin/bash is 3.2 here: the script runs on the operator's own shell
         run: /bin/bash bin/client-e2e.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/client-e2e.log"
+      - name: A newcomer — added, installed, signed in, opened, renewed, removed
+        if: success() || failure()
+        run: /bin/bash bin/newcomer-e2e.sh --ccquota "$RUNNER_TEMP/ccquota" 2>&1 | tee "$RUNNER_TEMP/newcomer-e2e.log"
       - name: Summary
         if: always()
         run: |
           { echo '### client-e2e (macOS)'; echo '```'; tail -n 20 "$RUNNER_TEMP/client-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '### newcomer-e2e (macOS)'; echo '```'; tail -n 20 "$RUNNER_TEMP/newcomer-e2e.log" 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

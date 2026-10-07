@@ -12,7 +12,10 @@
 #   1. hub     — `ccquota hub` on 127.0.0.1 with the fleet module, a throwaway
 #                SSH CA and placeholder GitHub sign-in settings (the two things
 #                /install needs before it serves the installer — never a real
-#                secret)
+#                secret), and CCQUOTA_FLEET_STABLE_REPO=off: it serves the
+#                client packed from THIS checkout — following GitHub's stable
+#                (#1805) it had been installing stable's, never the change
+#                under test (#2096)
 #   2. node    — a FAKE node: a join code from the operator API, redeemed at
 #                /v1/node/join, and the REAL `ccquota agent` with that token in a
 #                home of its own whose ~/.claude/fleet/bin/fleet-control.py
@@ -122,6 +125,7 @@ mkdir -p "$WORK/dist"
 env CCQUOTA_FLEET=1 CCQUOTA_VIEWER_TOKEN="$VT" CCQUOTA_FLEET_DIST_DIR="$WORK/dist" \
     CCQUOTA_FLEET_SSH_CA_KEY="$WORK/ca" CCQUOTA_GITHUB_CLIENT_ID=client-e2e \
     CCQUOTA_GITHUB_CLIENT_SECRET="placeholder-$RANDOM$RANDOM" \
+    CCQUOTA_FLEET_STABLE_REPO=off \
   "$CCQ" hub --addr "127.0.0.1:$PORT" --db "$WORK/hub.db" >"$WORK/hub.log" 2>&1 &
 HUB_PID=$!
 waitfor 20 curl -fs -m 2 -o /dev/null "$HUB/healthz" || die 'the hub never answered /healthz'
