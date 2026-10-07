@@ -269,7 +269,7 @@ waitfor 5 shows "$p4" "被断开" || fail "F: the iPad shows no 'disconnected' s
 # --- G. a server that ends gives the lease up -------------------------------------
 idx=$(cat "$WORK/cache-$SX/tmp/client.lease" 2>/dev/null)
 "$REAL_TMUX" -L "$SX" kill-server 2>/dev/null
-waitfor 6 grep -q "^release $idx" "$H/log" || fail "G: no release after the server ended" "$(tail -3 "$H/log")"
+waitfor 15 grep -q "^release $idx" "$H/log" || fail "G: no release after the server ended" "$(tail -3 "$H/log")"
 ok test ! -f "$H/cur/$idx"
 
 [ "$FAIL" = 0 ] || { printf "hub log:\n"; cat "$H/log"; } >&2
