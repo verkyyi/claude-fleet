@@ -104,6 +104,7 @@ type HubFacts struct {
 	SSO            SSOFacts       `json:"sso"`
 	TailnetViewers []string       `json:"tailnet_viewers"`
 	PublicBadges   bool           `json:"public_badges"`
+	PublicMeter    bool           `json:"public_meter"`
 	MCP            bool           `json:"mcp"`
 	Dashboard      bool           `json:"dashboard"`
 	Listeners      ListenerFacts  `json:"listeners"`
@@ -155,6 +156,7 @@ func (s *Server) hubFacts() HubFacts {
 		ViewerAuth:     "token",
 		TailnetViewers: tailnet,
 		PublicBadges:   s.PublicBadges,
+		PublicMeter:    s.publicMeter(),
 		MCP:            s.MCP != nil,
 		Dashboard:      s.UI != nil,
 		Listeners:      s.Listeners,
@@ -353,6 +355,17 @@ func (s *Server) doors(f HubFacts) []Door {
 			Note: pick(f.PublicBadges,
 				"Here: PUBLIC. Anything that can reach this hub can read these numbers with no credential.",
 				"Here: behind the viewer token — the default. An operator who upgrades never starts serving without auth by surprise."),
+		},
+		{
+			ID: "meter", Name: "Front page and public counter", Via: "http",
+			Where:      []string{"/ (signed out)", "/meter.json", "/odometer.svg"},
+			Credential: "nothing",
+			Can: "Read what claudefleet is, and the hub's one lifetime token total with its last replay window. " +
+				"No person, machine, account or repository is named; a signed-out \"/\" is the front page, every other path still asks.",
+			State: pick(f.PublicMeter, "public", "off"),
+			Note: pick(f.PublicMeter,
+				"Here: PUBLIC — "+MeterKey+" is on (the default). 24haowan.com reads /meter.json from the browser.",
+				"Here: "+MeterKey+" is off, so /meter.json and /odometer.svg answer 404; the front page shows no figure."),
 		},
 		{
 			ID: "healthz", Name: "Liveness", Via: "http",
