@@ -45,6 +45,21 @@ spec:
                   name: ccquota
                   key: credproxy-token
                   optional: true
+            # Session passes (C2, #1969 — #2092): the 32-byte signing key, its
+            # own key in Secret `ccquota`. Optional: missing = the hub logs
+            # "session passes are off" and those routes answer 503.
+            - name: CCQUOTA_FLEET_SESSION_CRED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: session-cred-key
+                  optional: true
+            # The Singapore relay (#1976, docs/CRED-RELAY.md). Read only when
+            # CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay — the base keeps `node`
+            # until the relay is accepted, so setting it here changes nothing
+            # yet and the hub never dials it at startup.
+            - name: CCQUOTA_FLEET_CRED_RELAY_URL
+              value: "https://fleet-relay.24hw.cn"
             - name: CCQUOTA_FLEET_ROUTES
               value: |-
                 [{"hostname":"macmini","alias":"m5"},{"hostname":"mini2","alias":"m4"}]

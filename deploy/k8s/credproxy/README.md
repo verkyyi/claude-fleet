@@ -27,8 +27,9 @@ prod/   new-deploy 命名空间、ACR 镜像、两个入口域名、新加坡转
 
 部署 job（`hub-deploy`）**不碰这里**：它的 Role 只管入口自己的对象，也不能写 Secret。
 
-1. **入口先打开会话通行证（C2）**——prod 现在没设 `CCQUOTA_FLEET_SESSION_CRED_KEY`，
-   没有通行证就没有中心路。照 `docs/FLEET-HUB.md`「会话通行证」一节建 Secret 并接上环境变量。
+1. **入口先打开会话通行证（C2）**——`overlays/prod` 已经引用 Secret `ccquota` 的
+   `session-cred-key`（#2092，`optional: true`）；键在 Secret 里、入口发布过一次，
+   入口日志就不再有「session passes are off」。没有通行证就没有中心路。
 2. **中心代理的令牌**，写进 Secret `ccquota` 的 `credproxy-token`（值不进仓库、不进 argv）：
 
    ```sh
@@ -57,10 +58,12 @@ prod/   new-deploy 命名空间、ACR 镜像、两个入口域名、新加坡转
 
 ## 之后
 
-- **升级**：镜像跟入口走。入口发布后
+- **升级**：镜像跟入口走——`hub-deploy` 入口发布成功后自己
   `kubectl -n new-deploy set image deploy/ccquota-credproxy credproxy=<入口新镜像>`
-  （滚动、`maxUnavailable: 0`，流在旧 pod 上跑完再走，宽限 120 s）。让 `hub-deploy`
-  一起滚它要给部署 Role 加这个 Deployment——另单。
+  （#2092；滚动、`maxUnavailable: 0`，流在旧 pod 上跑完再走，宽限 120 s）。这个
+  Deployment 还没部署就跳过；部署 Role 还没加 `ccquota-credproxy`（`../README.md`
+  «Who may do what» 那一行）也跳过并在发布摘要里写明——两种都不变红。只改镜像，
+  这里的清单改了仍由人 apply。
 - **换令牌**：改 Secret 的 `credproxy-token`，重启入口和中心代理。
 - **换绑账号**：`PUT /v1/fleet/session-cred/bind {worker_id, provider, account}`
   （签发通行证的那台机器的节点令牌，或运营者），下一次 resolve（≤ 30 s）生效。
