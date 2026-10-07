@@ -3,7 +3,8 @@ name: hub-deploy
 # The ONE way the hub (tokenledger/, the ccquota image) goes live — EPIC #1982
 # C1, issue #1983. A merge to master that touches tokenledger/** or
 # deploy/k8s/** builds the image, pushes it as `prod-<sha7>`, snapshots the
-# database, applies deploy/k8s/overlays/prod with that tag, waits for the
+# database, rehearses the new image's migrations on a copy of it (issue #2050),
+# applies deploy/k8s/overlays/prod with that tag, waits for the
 # rollout and checks /healthz + /version on every address. A manual rollback =
 # `workflow_dispatch` with the old tag (no build; the snapshot step still runs).
 #
@@ -51,6 +52,10 @@ on:
         default: true
       simulate_unhealthy:
         description: "Rollback drill: treat the health check as failed, so the job rolls back to the live image and goes red"
+        type: boolean
+        default: false
+      simulate_migration_failure:
+        description: "Rehearsal drill: the new image's migrations fail on the copy, so the release stops before the apply and goes red"
         type: boolean
         default: false
 
@@ -241,6 +246,8 @@ jobs:
           from=${from##*:}
           ts=$(date -u +%Y%m%dT%H%M%SZ)
           echo "path=/data/backup-hubdeploy-$ts-$from.db (pod $pod, PVC ccquota-data)" >> "$GITHUB_OUTPUT"
+          echo "file=/data/backup-hubdeploy-$ts-$from.db" >> "$GITHUB_OUTPUT"
+          echo "pod=${pod#pod/}" >> "$GITHUB_OUTPUT"
           kubectl -n "$NS" exec "$pod" -c ccquota -- sh -c '
             set -e
             ls -1t /data/backup-hubdeploy-*.db 2>/dev/null | tail -n +3 | while read -r f; do rm -f "$f"; echo "pruned $f"; done
@@ -253,6 +260,65 @@ jobs:
             ls -la "$out"
           ' _ "$ts" "$from"
 
+      # Before anything changes, part two (issue #2050): the NEW image runs its
+      # migrations on a copy of that snapshot, and a migration that cannot pass
+      # stops the release here — the live pod keeps serving. C5's migration died
+      # on a foreign key only production had, after Recreate had already stopped
+      # the old pod: ten minutes of 503. The PVC is ReadWriteOnce and a file
+      # moves in or out of the pod at ~9 KB/s (RUNBOOK.md), so neither the
+      # database nor the binary can travel: the new image goes INTO the live pod
+      # as an ephemeral container (the kubelet pulls it as it would for the
+      # release), mounts /data and runs `ccquota hub --migrate-only` on
+      # /data/rehearse-<run>.db, which is deleted afterwards. Needs the deploy
+      # Role to patch pods/ephemeralcontainers; without it the step refuses —
+      # a release no rehearsal vouched for does not go out.
+      - name: Rehearse the migrations on a copy
+        id: rehearse
+        if: steps.snapshot.outcome == 'success'
+        env:
+          POD: ${{ steps.snapshot.outputs.pod }}
+          SNAP: ${{ steps.snapshot.outputs.file }}
+          SIMULATE: ${{ github.event.inputs.simulate_migration_failure || 'false' }}
+        run: |
+          set -uo pipefail
+          image=$(yq 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "ccquota") | .image' "$RUNNER_TEMP/hub.yaml")
+          [ -n "$image" ] || { echo "::error::no ccquota image in the render"; exit 1; }
+          name="rehearse-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          copy="/data/$name.db"
+          if [ "$(kubectl -n "$NS" auth can-i patch pods --subresource=ephemeralcontainers)" != yes ]; then
+            echo "::error::the deploy role cannot patch pods/ephemeralcontainers in $NS — the rehearsal cannot run, so nothing is released (deploy/k8s/README.md «Who may do what»)"
+            exit 1
+          fi
+          cleanup() { kubectl -n "$NS" exec "$POD" -c ccquota -- sh -c 'rm -f "$1" "$1-wal" "$1-shm"' _ "$copy" || echo "::warning::could not delete $copy from /data"; }
+          kubectl -n "$NS" exec "$POD" -c ccquota -- sh -c '
+            set -e
+            db_kb=$(du -k "$1" | cut -f1)
+            free_kb=$(df -Pk /data | awk "NR==2{print \$4}")
+            [ "$free_kb" -gt $((db_kb * 12 / 10)) ] || { echo "not enough room on /data for the rehearsal copy (db ${db_kb}K, free ${free_kb}K)"; exit 1; }
+            cp "$1" "$2"
+          ' _ "$SNAP" "$copy" || { echo "::error::could not copy the snapshot for the rehearsal"; cleanup; exit 1; }
+          cmd='["ccquota", "hub", "--migrate-only", "--db", "'"$copy"'"'
+          [ "$SIMULATE" != true ] || cmd="$cmd"', "--simulate-migration-failure"'
+          cmd="$cmd]"
+          patch='{"spec":{"ephemeralContainers":[{"name":"'"$name"'","image":"'"$image"'","command":'"$cmd"',"volumeMounts":[{"name":"data","mountPath":"/data"}],"securityContext":{"runAsUser":10001}}]}}'
+          echo "rehearsing $image on $copy (pod $POD, container $name)"
+          kubectl -n "$NS" patch pod "$POD" --subresource ephemeralcontainers --type strategic -p "$patch" >/dev/null \
+            || { echo "::error::could not start the rehearsal container"; cleanup; exit 1; }
+          code=''
+          for _ in $(seq 1 100); do   # ≤ ~5 minutes: the pull plus the migrations
+            code=$(kubectl -n "$NS" get pod "$POD" -o jsonpath="{.status.ephemeralContainerStatuses[?(@.name==\"$name\")].state.terminated.exitCode}" 2>/dev/null || true)
+            [ -z "$code" ] || break
+            sleep 3
+          done
+          kubectl -n "$NS" logs "$POD" -c "$name" 2>/dev/null | tee "$RUNNER_TEMP/rehearse.log" || echo "(no log access — the exit code decides)"
+          cleanup
+          if [ -z "$code" ]; then
+            kubectl -n "$NS" get pod "$POD" -o jsonpath="{.status.ephemeralContainerStatuses[?(@.name==\"$name\")].state}" || true; echo
+            echo "::error::the rehearsal did not finish within ~5 minutes — nothing released"; exit 1
+          fi
+          [ "$code" = 0 ] || { echo "::error::the new image's migrations FAILED on a copy of the live database (exit $code) — nothing released, the live hub is untouched"; exit 1; }
+          echo "rehearsal passed: the migrations ran on a copy of the live database"
+
       - name: Apply
         id: apply
         run: kubectl apply -f "$RUNNER_TEMP/hub.yaml"
@@ -260,7 +326,10 @@ jobs:
       - name: Rollout
         id: rollout
         run: |
-          if ! kubectl -n "$NS" rollout status deploy/ccquota-hub --timeout=10m; then
+          # 3 minutes, not 10 (issue #2050): with Recreate the old pod is already
+          # gone, so every minute waited here is a minute of 503 before the
+          # rollback below starts.
+          if ! kubectl -n "$NS" rollout status deploy/ccquota-hub --timeout=3m; then
             kubectl -n "$NS" get pod -l app=ccquota-hub -o wide || true
             echo "::error::rollout did not finish — a pod stuck in ContainerCreating is the disk attach (deploy/k8s/RUNBOOK.md)"
             exit 1
@@ -314,6 +383,8 @@ jobs:
           PREV_COMMIT: ${{ steps.live.outputs.commit }}
           SNAPSHOT: ${{ steps.snapshot.outputs.path }}
           SNAPSHOT_OUTCOME: ${{ steps.snapshot.outcome }}
+          REHEARSE: ${{ steps.rehearse.outcome }}
+          SIMULATE_MIGRATION: ${{ github.event.inputs.simulate_migration_failure || 'false' }}
           APPLY: ${{ steps.apply.outcome }}
           ROLLOUT: ${{ steps.rollout.outcome }}
           HEALTH: ${{ steps.health.outcome }}
@@ -329,6 +400,8 @@ jobs:
             result=rollback-failed head="🔥 回退失败 — 线上可能不健康，照 deploy/k8s/RUNBOOK.md 手工处理"
           elif [ "$APPLY" = success ] || [ "$APPLY" = failure ]; then
             result=failed head="❌ 发布失败"
+          elif [ "$REHEARSE" = failure ]; then
+            result=rehearsal-failed head="❌ 没部署：新镜像的迁移在线上库副本上没跑过（线上没动）"
           else
             result=not-applied head="❌ 没部署（在 apply 之前失败，线上没动）"
           fi
@@ -347,9 +420,11 @@ jobs:
             echo "| 线上旧版本 | \`${PREV_TAG:-（无）}\` |"
             echo "| 新版本 | \`$NEW_TAG\` |"
             echo "| 快照 | $snap |"
+            echo "| 迁移演练（副本） | $( [ "$REHEARSE" = skipped ] && echo '没做（没有快照可用）' || echo "$REHEARSE" ) |"
             echo "| apply · rollout · 健康检查 | $APPLY · $ROLLOUT · $HEALTH |"
             echo "| 回退 | $( [ "$ROLLBACK" = skipped ] && echo 没回退 || echo "$ROLLBACK（只回镜像；数据库要恢复照 RUNBOOK.md 用上面的快照手工做）" ) |"
             [ "$HUB_DEPLOY_SIMULATE_UNHEALTHY" != true ] || echo "| 演练 | simulate_unhealthy=true：健康检查按失败处理 |"
+            [ "$SIMULATE_MIGRATION" != true ] || echo "| 演练 | simulate_migration_failure=true：副本上的迁移按失败处理 |"
             echo
             echo "### 环境变量（ccquota 容器，线上 → 这次的渲染）"
             echo
