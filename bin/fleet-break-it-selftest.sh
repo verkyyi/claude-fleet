@@ -1934,11 +1934,14 @@ EOF
   # `fleet` again on this machine, as the person types it (the drive runs it
   # while the first terminal is attached)
   { printf '#!/bin/bash\n'; declare -f client_env client_start; printf 'WORK=%q\n' "$WORK"
-    printf 'client_start %q FLEET_CLIENT_LEASE_CMD=%q FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1\n' "$s" "$h/lease"
+    # its own cache: the other client drills' keepers live in $WORK/ccache, and
+    # one keeper per cache is the rule
+    printf 'client_start %q FLEET_CLIENT_LEASE_CMD=%q FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_SHELL_CACHE=%q\n' \
+      "$s" "$h/lease" "$h/cache"
   } > "$h/fleet"; chmod +x "$h/fleet"
   t0=$(now)
   "$h/fleet" || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
-  out=$(python3 - "$REAL_TMUX" "$s" "$WORK/ccache/tmp" "$h" <<'PY' 2>&1
+  out=$(python3 - "$REAL_TMUX" "$s" "$h/cache/tmp" "$h" <<'PY' 2>&1
 import fcntl, os, pty, select, signal, struct, subprocess, sys, termios, time
 tmux, sess, cl, h = sys.argv[1:5]
 signal.alarm(60)
