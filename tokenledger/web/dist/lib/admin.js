@@ -69,7 +69,10 @@ export const credKey = (c) => `${c.provider}/${c.account}`;
  * credential no usage names yet is a card of its own. Claude first, then
  * Codex, each by label.
  *
- * A vault label is whatever the operator typed at import — "gmail" for
+ * A credential the hub could name the account of (account_uuid — a Codex
+ * credential's, from its id_token) goes on that card first (claude-fleet#2127:
+ * a second Codex account broke the guess below). The rest is by label, which
+ * is whatever the operator typed at import — "gmail" for
  * verky.yi@gmail.com, "default" for the one Codex login — so it is matched to
  * an account of the SAME provider in three passes (claude-fleet#2104: four
  * real subscriptions showed as eight cards beside their own credentials):
@@ -94,8 +97,14 @@ export function subscriptions({ limits, accounts, creds, paused, live } = {}) {
   });
   const take = (r, c) => { r.cred = c; used.add(credKey(c)); };
   const free = (prov) => pool.filter((c) => !used.has(credKey(c)) && (c.provider === 'codex' ? 'codex' : 'claude') === prov);
+  // 0. by identity: the account the hub says the credential belongs to
+  for (const r of rows) {
+    const c = free(r.prov).find((x) => x.account_uuid && x.account_uuid === r.pa.account_uuid);
+    if (c) take(r, c);
+  }
   // 1. exact
   for (const r of rows) {
+    if (r.cred) continue;
     const email = r.a.email;
     const keys = [norm(r.label), norm(email), norm(String(email || '').split('@')[0]), norm(r.pa.account_uuid)];
     const c = free(r.prov).find((x) => keys.includes(norm(x.account)));

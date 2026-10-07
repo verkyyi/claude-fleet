@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	iofs "io/fs"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -503,3 +505,37 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// GET /v1/fleet/credentials names the usage account a Codex credential
+// belongs to — from its id_token, never the token itself — so the
+// subscriptions page pairs them by identity (claude-fleet#2127).
+func TestFleetCredentialsNameCodexAccount(t *testing.T) {
+	h, _, _ := newVaultHarness(t)
+	claims, _ := json.Marshal(map[string]any{"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1", "chatgpt_user_id": "user-1"}})
+	idTok := "e30." + base64.RawURLEncoding.EncodeToString(claims) + ".IDSIG"
+	putCred(t, h, credvault.Codex, "default", credvault.Secret{RefreshToken: "rt-SECRET", AccountID: "acct-1", IDToken: idTok})
+	putCred(t, h, credvault.Codex, "bare", credvault.Secret{RefreshToken: "rt-SECRET", AccountID: "acct-2"})
+	putCred(t, h, credvault.Claude, "gmail", credvault.Secret{RefreshToken: "sk-ant-ort01-SECRET"})
+	res, raw := h.get(t, "/v1/fleet/credentials")
+	body := string(raw)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET: %d %s", res.StatusCode, body)
+	}
+	if strings.Contains(body, "SECRET") || strings.Contains(body, "IDSIG") {
+		t.Fatalf("a secret left the hub: %s", body)
+	}
+	var got struct {
+		Credentials []struct {
+			Account     string `json:"account"`
+			AccountUUID string `json:"account_uuid"`
+		} `json:"credentials"`
+	}
+	_ = json.Unmarshal([]byte(body), &got)
+	by := map[string]string{}
+	for _, c := range got.Credentials {
+		by[c.Account] = c.AccountUUID
+	}
+	if len(by) != 3 || by["default"] != codex.AccountUUID("acct-1", "user-1") || by["bare"] != "" || by["gmail"] != "" {
+		t.Fatalf("account_uuid = %v", by)
+	}
+}

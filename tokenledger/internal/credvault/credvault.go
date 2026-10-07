@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -366,6 +367,25 @@ func (v *Vault) Put(principal, provider, account string, s Secret) error {
 		return err
 	}
 	return v.Store.PutCredential(principal, provider, account, blob, s.Kind(provider), s.SecretExpiry(provider), v.now())
+}
+
+// AccountUUID is the usage account a stored credential belongs to, as the
+// usage side names it — today a Codex credential's codex:account:<…>, from
+// its account_id and id_token — or "" when it cannot say (another provider,
+// a locked vault, a secret with no id_token). Nothing secret leaves here.
+func (v *Vault) AccountUUID(c store.Credential) string {
+	if c.Provider != Codex || len(c.SecretSealed) == 0 {
+		return ""
+	}
+	sl, err := v.sealer()
+	if err != nil {
+		return ""
+	}
+	var s Secret
+	if sl.Open(c.SecretSealed, &s, c.PrincipalID, c.Provider, c.Account, "secret") != nil || s.IDToken == "" {
+		return ""
+	}
+	return codex.AccountUUIDFromIDToken(s.IDToken, s.AccountID)
 }
 
 // ErrRefreshFailed wraps a refresh that failed with no usable token left.

@@ -246,6 +246,31 @@ test('vault labels find their own account — four Claude + one Codex is five ca
   assert.deepEqual(by, { 'u-icloud': 'icloud', 'u-gmail': 'gmail', 'u-24h': '24helpful', 'codex:account:a0': 'default', 'u-gu': 'ly297' });
 });
 
+test('a Codex credential goes on the account it belongs to — two Codex accounts, one "default" (claude-fleet#2127)', () => {
+  // The hub's shape on 2026-10-07 10:11: a second Codex account appeared
+  // (a teammate's), so "one credential, one real account" no longer held.
+  const limits = { per_account: [
+    { account_uuid: 'u-gmail', label: 'verky.yi@gmail.com', limits: { available: true } },
+    { account_uuid: 'codex:account:a0', label: 'verky.yi@gmail.com', limits: { available: true, source: 'codex' } },
+    { account_uuid: 'codex:account:98', label: 'keep.cj@gmail.com', limits: { available: true, source: 'codex' } },
+  ] };
+  const accounts = [{ account_uuid: 'u-gmail', email: 'verky.yi@gmail.com', source: 'claude' },
+    { account_uuid: 'codex:account:a0', email: 'verky.yi@gmail.com', source: 'codex' },
+    { account_uuid: 'codex:account:98', email: 'keep.cj@gmail.com', source: 'codex' }];
+  const creds = { credentials: [{ principal_id: 'pool', provider: 'claude', account: 'gmail' },
+    { principal_id: 'pool', provider: 'codex', account: 'default', account_uuid: 'codex:account:a0' }] };
+  const cards = subscriptions({ limits, accounts, creds });
+  assert.equal(cards.filter((c) => c.prov === 'codex').length, 2);
+  const by = Object.fromEntries(cards.map((c) => [c.id, c.cred && c.cred.account]));
+  assert.deepEqual(by, { 'u-gmail': 'gmail', 'codex:account:a0': 'default', 'codex:account:98': null });
+  // with no account_uuid (no id_token in the vault) it is the label guess again:
+  // two real Codex accounts, so "default" fits neither and is a card of its own
+  delete creds.credentials[1].account_uuid;
+  const guess = subscriptions({ limits, accounts, creds });
+  assert.ok(guess.some((c) => c.id === 'cred:codex/default'));
+  assert.equal(guess.filter((c) => c.prov === 'codex').length, 3);
+});
+
 test('a vault guess that fits two accounts, or a stand-in row, matches nothing', () => {
   const limits = { per_account: [
     { account_uuid: 'u-1', label: 'a@gmail.com', limits: {} },

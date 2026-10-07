@@ -99,19 +99,48 @@ func ReadAuth(home string) (*Auth, error) {
 	if exp, ok := claims["exp"].(float64); ok {
 		a.ExpiresAt = time.Unix(int64(exp), 0).UTC()
 	}
-	// A workspace ID alone is not a seat's quota. Keep the member in the key.
-	key := fmt.Sprintf("%x", sha256.Sum256([]byte(account+"\x00"+user)))
 	email := str(idClaims["email"])
 	if profile, ok := claims["https://api.openai.com/profile"].(map[string]any); ok && email == "" {
 		email = str(profile["email"])
 	}
-	a.Identity = model.Identity{Source: model.SourceCodex, AccountUUID: "codex:account:" + key[:32], Email: email,
+	a.Identity = model.Identity{Source: model.SourceCodex, AccountUUID: AccountUUID(account, user), Email: email,
 		OrgUUID: account, SubscriptionType: str(meta["chatgpt_plan_type"]), DisplayName: "Codex account"}
 	// refresh_token is a required string in some CLI versions. Empty disables
 	// refresh without making the entire credential file fail deserialization.
 	a.snapshot, _ = json.Marshal(map[string]any{"auth_mode": "chatgpt", "OPENAI_API_KEY": nil, "last_refresh": doc.LastRefresh,
 		"tokens": map[string]string{"id_token": doc.Tokens.ID, "access_token": doc.Tokens.Access, "refresh_token": "", "account_id": account}})
 	return a, nil
+}
+
+// AccountUUID is a Codex seat's account uuid: a workspace ID alone is not a
+// seat's quota, so the member is in the key.
+func AccountUUID(account, user string) string {
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(account+"\x00"+user)))
+	return "codex:account:" + key[:32]
+}
+
+// AccountUUIDFromIDToken is the account uuid a stored Codex credential
+// belongs to — its account_id plus the member its id_token names — or ""
+// when the token does not say (claude-fleet#2127: the hub's subscriptions
+// page pairs a vault credential with its usage by this, not by its label).
+// The token's signature is not checked: it came out of our own vault.
+func AccountUUIDFromIDToken(idToken, accountID string) string {
+	meta, _ := decodeClaims(idToken)["https://api.openai.com/auth"].(map[string]any)
+	user := str(meta["chatgpt_user_id"])
+	if user == "" {
+		user = str(meta["user_id"])
+	}
+	account := str(meta["chatgpt_account_id"])
+	if accountID != "" {
+		if account != "" && account != accountID {
+			return ""
+		}
+		account = accountID
+	}
+	if account == "" || user == "" {
+		return ""
+	}
+	return AccountUUID(account, user)
 }
 
 func decodeClaims(token string) map[string]any {
