@@ -220,6 +220,36 @@ func loadFleetCerts(srv *api.Server) error {
 	return nil
 }
 
+// loadSessionCreds wires session passes for untrusted machines
+// (claude-fleet#1969): CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE] is the signing
+// key (its own k8s Secret, never the database);
+// CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE] admits the cluster
+// credential proxy and the relay to /verify. No key: the routes answer 503
+// and nothing else changes. A key that is set but unreadable is fatal.
+func loadSessionCreds(srv *api.Server) error {
+	key, ok, err := api.LoadSessionCredKey(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		log.Printf("fleet: no CCQUOTA_FLEET_SESSION_CRED_KEY — session passes are off")
+		return nil
+	}
+	srv.SessionCredKey = key
+	vt := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN"))
+	if path := os.Getenv("CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN_FILE"); path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN_FILE: %w", err)
+		}
+		vt = strings.TrimSpace(string(b))
+	}
+	srv.SessionCredVerifyToken = vt
+	log.Printf("fleet: session passes on — /v1/fleet/session-cred (verify: %s)",
+		map[bool]string{true: "verifier token + operator", false: "operator only"}[vt != ""])
+	return nil
+}
+
 func runHub(args []string) error {
 	fs := flag.NewFlagSet("hub", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8787",
@@ -474,6 +504,11 @@ func runHub(args []string) error {
 		httpsURL = "https://" + tlsName + "/"
 	}
 
+	gh, err := githubAuthFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+
 	principalLogins, err := fleetPrincipalLogins(os.Getenv("CCQUOTA_FLEET_PRINCIPAL_LOGINS"))
 	if err != nil {
 		return err
@@ -482,6 +517,7 @@ func runHub(args []string) error {
 		Store:               st,
 		FX:                  feed,
 		SSO:                 sso,
+		GitHub:              gh,
 		Pricing:             table,
 		ViewerToken:         *token,
 		Tailnet:             tailnet,
@@ -512,6 +548,9 @@ func runHub(args []string) error {
 			return err
 		}
 		if err := fleetRefreshVia(srv, vault); err != nil {
+			return err
+		}
+		if err := loadSessionCreds(srv); err != nil {
 			return err
 		}
 		// SPOT nodes (claude-fleet#1428): on only with an image to run.
@@ -558,6 +597,10 @@ func runHub(args []string) error {
 	} else {
 		log.Printf("findings: push off (set CCQUOTA_NOTIFY_URL + CCQUOTA_NOTIFY_KEY to turn it on)")
 	}
+
+	// Pin each CCQUOTA_GITHUB_ADMINS name to its GitHub ID (claude-fleet#1984).
+	// In the background: GitHub being slow must not hold the hub's start.
+	go srv.ResolveGitHubAdmins(ctx)
 
 	// Reads the feed once now, then on the interval. Failure is not fatal: a hub
 	// with no route to an FX feed is a working hub that shows every figure in
@@ -657,6 +700,29 @@ func fleetPersonScopes() []string {
 		out = append(out, sc)
 	}
 	return out
+}
+
+// githubAuthFromEnv wires the GitHub sign-in (claude-fleet#1984) from its
+// three settings: CCQUOTA_GITHUB_CLIENT_ID and CCQUOTA_GITHUB_CLIENT_SECRET
+// (the k8s Secret only — never a flag, which `ps` shows) and
+// CCQUOTA_GITHUB_ADMINS (comma-separated usernames). Neither client value:
+// off, nil. One without the other refuses to start — half a sign-in is a
+// door the operator thinks is there.
+func githubAuthFromEnv(getenv func(string) string) (*api.GitHubAuth, error) {
+	id, secret := strings.TrimSpace(getenv("CCQUOTA_GITHUB_CLIENT_ID")), getenv("CCQUOTA_GITHUB_CLIENT_SECRET")
+	admins := splitList(getenv("CCQUOTA_GITHUB_ADMINS"))
+	if id == "" && secret == "" {
+		if len(admins) > 0 {
+			log.Printf("WARN github sign-in: CCQUOTA_GITHUB_ADMINS is set but the client is not — GitHub sign-in is off")
+		}
+		return nil, nil
+	}
+	if id == "" || secret == "" {
+		return nil, errors.New("GitHub sign-in is half configured: " +
+			"CCQUOTA_GITHUB_CLIENT_ID and CCQUOTA_GITHUB_CLIENT_SECRET are both required")
+	}
+	log.Printf("github sign-in: on, %d admin name(s) from CCQUOTA_GITHUB_ADMINS", len(admins))
+	return &api.GitHubAuth{ClientID: id, ClientSecret: secret, Admins: admins}, nil
 }
 
 // fleetPrincipalLogins parses CCQUOTA_FLEET_PRINCIPAL_LOGINS

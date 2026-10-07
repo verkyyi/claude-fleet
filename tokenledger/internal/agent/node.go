@@ -370,6 +370,7 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	}
 	si := readSysInfo()
 	hb.Load1, hb.MemFreeBytes, hb.MemTotalBytes = si.Load1, si.MemFree, si.MemTotal
+	hb.MemPressure = si.MemPressure
 
 	snap, err := readFleets(ctx, a.cfg.Home)
 	switch {
@@ -448,6 +449,9 @@ type sysInfo struct {
 	Load1    float64
 	MemFree  uint64
 	MemTotal uint64
+	// MemPressure is the kernel's memory-pressure level (darwin: 1 normal,
+	// 2 warn, 4 critical); 0 where the platform does not say.
+	MemPressure int
 }
 
 // errNoFleet means this login has no claude-fleet install: not an error, the

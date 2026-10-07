@@ -87,3 +87,21 @@ func TestFleetPrincipalLogins(t *testing.T) {
 		t.Errorf("one person spelled two ways: %v, %v", m, err)
 	}
 }
+
+// The three GitHub settings (claude-fleet#1984): off, on, half refuses.
+func TestGitHubAuthFromEnv(t *testing.T) {
+	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	if g, err := githubAuthFromEnv(env(nil)); g != nil || err != nil {
+		t.Errorf("unset = %v, %v; want off", g, err)
+	}
+	g, err := githubAuthFromEnv(env(map[string]string{"CCQUOTA_GITHUB_CLIENT_ID": "Iv1.x",
+		"CCQUOTA_GITHUB_CLIENT_SECRET": "s", "CCQUOTA_GITHUB_ADMINS": " verkyyi , alice,"}))
+	if err != nil || g == nil || g.ClientID != "Iv1.x" || len(g.Admins) != 2 || g.Admins[0] != "verkyyi" {
+		t.Errorf("set = %+v, %v", g, err)
+	}
+	for _, half := range []map[string]string{{"CCQUOTA_GITHUB_CLIENT_ID": "Iv1.x"}, {"CCQUOTA_GITHUB_CLIENT_SECRET": "s"}} {
+		if _, err := githubAuthFromEnv(env(half)); err == nil {
+			t.Errorf("%v: half configured started", half)
+		}
+	}
+}

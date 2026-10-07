@@ -42,6 +42,7 @@ func TestAccess_ListsEveryDoorIncludingTheOneThatIsNotHTTP(t *testing.T) {
 	want := map[string]string{
 		"dashboard": "http",
 		"enter":     "http",
+		"github":    "http",
 		"api":       "http",
 		"mcp":       "http",
 		"ingest":    "http",

@@ -69,7 +69,7 @@ type JoinCodeView struct {
 }
 
 // handleFleetJoinCodes: GET lists recent codes (never the codes themselves),
-// POST mints one. The operator's (operatorOnly wraps it).
+// POST mints one. The operator's (adminOnly wraps it).
 func (s *Server) handleFleetJoinCodes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch r.Method {

@@ -13,6 +13,10 @@ import (
 // can hand out without swapping, which is the number "can this machine take
 // another session" actually asks about. page_free_count alone reads near zero
 // on any Mac that has been up a while, because macOS fills idle RAM with cache.
+//
+// MemPressure is kern.memorystatus_vm_pressure_level (1 normal, 2 warn, 4
+// critical — claude-fleet#1994): the kernel's own verdict, which placement
+// reads beside the free-memory floor.
 func readSysInfo() sysInfo {
 	var si sysInfo
 	if b, err := unix.SysctlRaw("vm.loadavg"); err == nil && len(b) >= 24 {
@@ -21,6 +25,9 @@ func readSysInfo() sysInfo {
 		if fscale := binary.LittleEndian.Uint64(b[16:24]); fscale > 0 {
 			si.Load1 = float64(ld) / float64(fscale)
 		}
+	}
+	if lv, err := unix.SysctlUint32("kern.memorystatus_vm_pressure_level"); err == nil {
+		si.MemPressure = int(lv)
 	}
 	if total, err := unix.SysctlUint64("hw.memsize"); err == nil {
 		si.MemTotal = total

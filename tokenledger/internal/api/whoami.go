@@ -29,6 +29,7 @@ const (
 	doorToken   = "token"   // the viewer token, as a bearer or its cookie
 	doorWeCom   = "wecom"   // a session this hub minted from a ticket (/enter)
 	doorTailnet = "tailnet" // a named tailnet peer, on the local tailscaled's word
+	doorGitHub  = "github"  // a GitHub sign-in on the list (claude-fleet#1984)
 )
 
 // viewerCookie is where viewerOnly parks the viewer token once a browser
@@ -59,8 +60,10 @@ func sessionOf(ctx context.Context) *authz.Session {
 
 // Me is the body of /v1/me.
 type Me struct {
-	// Via is the door: open | token | wecom | tailnet.
+	// Via is the door: open | token | wecom | tailnet | github.
 	Via string `json:"via"`
+	// Role is roleOf: admin | user | operator (claude-fleet#1984).
+	Role string `json:"role,omitempty"`
 	// Person is the WeCom userid behind a wecom session — or the role subject
 	// when the ticket named no person (authz.Session.Principal).
 	Person string `json:"person,omitempty"`
@@ -84,8 +87,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "GET only")
 		return
 	}
-	out := Me{Via: doorOf(r.Context())}
+	out := Me{Via: doorOf(r.Context()), Role: roleOf(r.Context())}
 	switch out.Via {
+	case doorGitHub:
+		// The person is gh:<id>; the name is their GitHub username.
+		sess := sessionOf(r.Context())
+		out.Person, out.Name, out.CanLogout = sess.Principal(), sess.Name, true
 	case doorWeCom:
 		sess := sessionOf(r.Context())
 		out.Person, out.Name, out.CanLogout = sess.Principal(), sess.Name, true
@@ -149,7 +156,9 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/logout", http.StatusSeeOther)
 	case http.MethodGet:
 		page := logoutPage{Again: "/"}
-		if u, ok := s.ssoGateURL(); ok {
+		if s.GitHub.ready() {
+			page.Again, page.GitHub = "/signin", true
+		} else if u, ok := s.ssoGateURL(); ok {
 			page.Again, page.SSO = u, true
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -164,8 +173,9 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 type logoutPage struct {
 	// Again is where 重新登录 goes: the gate, or "/" without SSO.
-	Again string
-	SSO   bool
+	Again  string
+	SSO    bool
+	GitHub bool
 }
 
 var logoutTmpl = template.Must(template.New("logout").Parse(`<!doctype html>
@@ -185,7 +195,8 @@ p{margin:0 0 10px}.mut{color:var(--mut);font-size:13px}
 </style></head><body><main>
 <h1>已退出登录</h1>
 <p>这个入口自己的登录状态已经清除。</p>
-{{if .SSO}}<p class="mut">企业微信那边的登录仍然有效：点「重新登录」会直接签一张新票进来，一般不用再扫码。</p>
+{{if .GitHub}}<p class="mut">GitHub 那边的登录仍然有效：点「重新登录」用同一个 GitHub 账号再进来。</p>
+{{else if .SSO}}<p class="mut">企业微信那边的登录仍然有效：点「重新登录」会直接签一张新票进来，一般不用再扫码。</p>
 {{else}}<p class="mut">这台入口没有接企业微信登录；带上查看令牌重新打开即可。</p>{{end}}
 <a class="btn" href="{{.Again}}">重新登录</a>
 </main></body></html>`))

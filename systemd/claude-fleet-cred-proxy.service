@@ -1,0 +1,22 @@
+# claude-fleet cred-proxy — Linux systemd user unit (parity with launchd
+# com.claude-fleet.cred-proxy, issue #1970). Always-on: the launchd plist uses
+# KeepAlive, here Restart=always. With FLEET_CRED_PROXY!=1 the launcher only
+# re-reads the config once a minute and runs no proxy. Install: substitute
+# __HOME__, drop into ~/.config/systemd/user/, then
+# `systemctl --user enable --now claude-fleet-cred-proxy.service`.
+[Unit]
+Description=claude-fleet cred-proxy (this login's credential proxy, picks direct / relay / central)
+
+[Service]
+Type=simple
+ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-cred-proxy.sh run
+Environment=LANG=en_US.UTF-8
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Restart=always
+LimitNOFILE=65536
+RestartSec=2
+StandardOutput=null
+StandardError=append:__HOME__/.claude/fleet/logs/cred-proxy.systemd.log
+
+[Install]
+WantedBy=default.target

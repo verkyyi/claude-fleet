@@ -50,7 +50,9 @@ func principalOf(ctx context.Context) string {
 // never assigned them is not theirs.
 func (s *Server) FleetScope(r *http.Request) (func(hostname, osUser string) bool, error) {
 	pid := principalOf(r.Context())
-	if pid == "" {
+	// An admin (claude-fleet#1984) sees the whole fleet, as the operator's
+	// shared doors always have.
+	if pid == "" || roleOf(r.Context()) == roleAdmin {
 		return nil, nil
 	}
 	accts, err := s.Store.FleetAccounts(pid)
@@ -66,12 +68,16 @@ func (s *Server) FleetScope(r *http.Request) (func(hostname, osUser string) bool
 	return func(hostname, osUser string) bool { return mine[[2]string{hostname, osUser}] }, nil
 }
 
-// operatorOnly refuses a signed-in person: account assignment is the
-// operator's, not something a colleague can widen for themselves. Mounted
-// INSIDE viewerOnly, so it only ever sees an already-admitted request.
-func (s *Server) operatorOnly(next http.Handler) http.Handler {
+// adminOnly refuses a user: account assignment is an admin's, not something
+// a colleague can widen for themselves. It lets through an admin (a GitHub
+// person CCQUOTA_GITHUB_ADMINS names) and the operator's shared doors (the
+// viewer token, a tailnet peer), and refuses everyone else roleOf calls a
+// user — a GitHub user, a WeCom person (EPIC #1982 rule 3; adminOnly
+// before claude-fleet#1984). Mounted INSIDE viewerOnly, so it only ever sees
+// an already-admitted request.
+func (s *Server) adminOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if principalOf(r.Context()) != "" {
+		if roleOf(r.Context()) == roleUser {
 			httpError(w, http.StatusForbidden, "only the operator can change accounts")
 			return
 		}

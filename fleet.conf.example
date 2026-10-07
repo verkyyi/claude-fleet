@@ -2180,6 +2180,22 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Memory notify cooldown @group=disk @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_MEM_NOTIFY_COOLDOWN=1800
 
+# --- credential proxy (issue #1970, EPIC #1967 C3) ---------------------------
+# com.claude-fleet.cred-proxy: this login's one credential proxy. A session holds
+# a session credential and talks to 127.0.0.1; the proxy picks direct / relay /
+# central from the hub's trust record × the last fleet-node-probe.sh result and
+# puts the subscription credential in on the way out (central: none at all).
+# Off = today's wiring byte for byte, and no proxy process runs.
+# FLEET_CRED_RELAY_TOKEN (the relay credential) lives in secrets.env, never here.
+# @label=Credential proxy @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_CRED_PROXY=0                # 1 = run the proxy (bin/fleet-cred-proxy.sh)
+# @label=Credential proxy idle check @group=disk @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_CRED_PROXY_IDLE_SECS=60     # how often the launcher re-reads the switch
+# @label=Singapore relay URL @group=disk @tier=internal @scope=global @edit=str
+#FLEET_CRED_RELAY_URL=             # the relay route's base (…/anthropic, …/chatgpt/codex); empty = no relay route
+# @label=Central credential proxy URL @group=disk @tier=internal @scope=global @edit=str
+#FLEET_CRED_CENTRAL_URL=           # the central route's base (…/v1/proxy/{anthropic,codex}); empty = the hub
+
 # `fleet-doctor`'s `spotlight` line (host section, macOS only, issue #1075): WARNs
 # while Spotlight still indexes the data volume, naming `sudo mdutil -a -i off`
 # (docs/HOST.md#spotlight). Report-only — the doctor never changes system state.

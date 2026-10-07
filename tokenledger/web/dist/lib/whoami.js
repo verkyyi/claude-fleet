@@ -15,10 +15,12 @@
 export const STRINGS = Object.freeze({
   'zh-CN': Object.freeze({
     wecom: '企业微信', admin: '管理员', token: '令牌', tailnet: '内网',
+    github: 'GitHub', roleAdmin: '管理员', roleUser: '使用者',
     name: '姓名', userid: '企微账号', via: '登录方式', logout: '退出', title: '当前用户 / 退出',
   }),
   en: Object.freeze({
     wecom: 'WeCom', admin: 'Operator', token: 'token', tailnet: 'tailnet',
+    github: 'GitHub', roleAdmin: 'Admin', roleUser: 'User',
     name: 'Name', userid: 'WeCom userid', via: 'Signed in via', logout: 'Sign out', title: 'Who am I / sign out',
   }),
 });
@@ -33,6 +35,8 @@ export const strings = (lang) => STRINGS[lang] || STRINGS['zh-CN'];
  *                                                whether 退出 is offered
  *
  *  - no answer / an open hub (--no-auth)       → nothing: there is no one
+ *  - a GitHub person (claude-fleet#1984)       → their username, Admin/User ·
+ *                                                GitHub under it, 退出
  *  - a WeCom person                            → their name, else their userid
  *  - the viewer token                          → 管理员 · 令牌, 退出 when the
  *                                                token is parked in a cookie
@@ -42,6 +46,12 @@ export function whoami(me, lang = 'zh-CN') {
   if (!me || typeof me !== 'object') return null;
   const s = strings(lang);
   switch (me.via) {
+    case 'github': {
+      const name = String(me.name || '').trim();
+      if (!name) return null;
+      const role = me.role === 'admin' ? s.roleAdmin : s.roleUser;
+      return { name, sub: `${role} · ${s.github}`, person: '', via: s.github, logout: !!me.can_logout };
+    }
     case 'wecom': {
       const person = String(me.person || '').trim();
       const name = String(me.name || '').trim() || person;
