@@ -12,6 +12,8 @@
     fleet hub accounts rekey <from> <to> hand an old identity's logins to <to>
                                          (gh:<id> or a bare GitHub ID); runs nothing
     fleet hub accounts forget <principal> drop a record that never reached a machine
+    fleet hub accounts relogin <principal> <machine> <login>
+                                         give them a new login there (the old one stays)
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
 fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names
@@ -238,6 +240,17 @@ def accounts_main(a):
         else:
             print(moved_line(resp))
         return
+    if a.action == "relogin":
+        if not a.principal or not a.to or not a.login:
+            die("fleet hub accounts relogin <principal> <machine> <login>", 2)
+        resp = call(a, "POST", ACCOUNTS_PATH, {"action": "relogin", "principal_id": a.principal,
+                                               "hostname": a.to, "login": a.login})
+        if a.json:
+            print(json.dumps(resp, indent=2, ensure_ascii=False))
+        else:
+            print("relogin %s on %s → %s: create queued (the old login is left as is; undo: adopt it back)"
+                  % (a.principal, a.to, a.login))
+        return
     if not a.principal:
         die("fleet hub accounts forget <principal> [--host <machine>]", 2)
     body = {"action": "forget", "principal_id": a.principal}
@@ -270,9 +283,10 @@ def main(argv):
     us.add_argument("name", nargs="?")
     us.add_argument("--machine-login", help="the OS login that is theirs on the machines")
     ac = sub.add_parser("accounts", parents=[common], help="the people the hub records and their logins")
-    ac.add_argument("action", choices=["list", "rekey", "forget"], nargs="?", default="list")
+    ac.add_argument("action", choices=["list", "rekey", "forget", "relogin"], nargs="?", default="list")
     ac.add_argument("principal", nargs="?")
-    ac.add_argument("to", nargs="?")
+    ac.add_argument("to", nargs="?", help="rekey: the new id · relogin: the machine")
+    ac.add_argument("login", nargs="?", help="relogin: the new login")
     ac.add_argument("--host", help="forget: only the record on this machine")
     a = ap.parse_args(argv)
     if a.cmd in (None, "settings"):

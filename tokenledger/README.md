@@ -928,13 +928,21 @@ create runs, `/v1/nodes` and `/v1/fleet/summary` carry `account`
 active), and `/v1/fleet/home` answers 503 `{"code":"opening","state":"opening","eta_s":…}`
 — the client's sidebar holds 「正在为你开机器」 on the bar and opens the session
 by itself when the login is ready. Anything else is the
-operator's `POST /v1/fleet/accounts` (`{"action":"assign|retry|remove|adopt|forget",
+operator's `POST /v1/fleet/accounts` (`{"action":"assign|retry|remove|adopt|forget|relogin",
 "principal_id":…, "hostname":…, "login":… for adopt}`) — `adopt` records a
 login that already existed (a colleague onboarded by hand) without running
 anything; `forget` drops the hub's record of a row that never reached a
 machine (`pending` / `failed` / `removed`), or — with no `hostname` — of the
 person and every such row of theirs, and refuses (409) while any row is
 active, in flight or unknown: an active login is `remove`d, not forgotten.
+`relogin` (`"login"`, `fleet hub accounts relogin <principal> <machine> <login>`,
+claude-fleet#2210) moves a person's settled row on one machine to a NEW login
+and queues its create there — the same fixed create, so a standard user — and
+never sends a remove: the old login stays on the machine as it is. It is for a
+person whose login there must not run their sessions (an admin login with
+passwordless sudo); an admin login, a reserved name or another person's login
+is refused, an op in flight is 409. Undo is `adopt` of the old login (which now
+writes the row's login back too). Audited as `account.relogin`.
 `rekey` (`"to_principal_id": gh:<id> | <GitHub ID>`, `fleet hub accounts rekey
 <from> <to>`) hands a person's row — every account, credential, certificate,
 device, usage and budget row with it — to another id in one transaction,

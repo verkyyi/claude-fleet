@@ -660,7 +660,16 @@ func (s *Server) handleFleetAccounts(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusBadRequest, "display_name must be 1-64 printable characters")
 			return
 		}
-		if err := s.changeAccount(req); err != nil {
+		if req.Action == "relogin" {
+			if err := s.relogin(req, actorOf(r)); err != nil {
+				code := http.StatusBadRequest
+				if errors.Is(err, store.ErrAccountState) {
+					code = http.StatusConflict
+				}
+				httpError(w, code, err.Error())
+				return
+			}
+		} else if err := s.changeAccount(req); err != nil {
 			code := http.StatusBadRequest
 			if errors.Is(err, store.ErrAccountState) {
 				code = http.StatusConflict
@@ -746,6 +755,38 @@ func (s *Server) loginHeldElsewhere(principal, login, hostname string) bool {
 	return false
 }
 
+// relogin moves a person's login on one machine to a new name and queues its
+// creation there (claude-fleet#2210): the admin node runs the same fixed create
+// it runs for any assign, so the new login is a standard user, and the old one
+// is never touched — no remove is ever sent. It exists for the person whose
+// existing login there must not run their sessions (an admin login with
+// passwordless sudo). The new name passes the node's own create rule, is never
+// an admin login or a machine's reserved name, and never another person's
+// (UNIQUE (hostname, login)). Undo: `adopt` of the old login. Audited.
+func (s *Server) relogin(req FleetAccountRequest, actor string) error {
+	login := strings.TrimSpace(req.Login)
+	switch {
+	case req.Hostname == "":
+		return errors.New("relogin needs a hostname")
+	case !control.ValidLogin(login) || reservedLogins[login]:
+		return fmt.Errorf("login %q cannot be created: a node makes only 2-16 lowercase letters and digits, starting with a letter", login)
+	case s.isFleetAdmin(login):
+		return fmt.Errorf("login %q is an admin login: a person's sessions never run there", login)
+	}
+	if _, err := s.Store.Principal(req.PrincipalID); err != nil {
+		return err
+	}
+	now := time.Now()
+	from, err := s.Store.RequestRelogin(req.PrincipalID, req.Hostname, login, now)
+	if err != nil {
+		_ = s.Store.HubAudit(actor, "account.relogin", req.PrincipalID+"@"+req.Hostname, "refused", err.Error(), now)
+		return err
+	}
+	_ = s.Store.HubAudit(actor, "account.relogin", req.PrincipalID+"@"+req.Hostname, "ok", from+" → "+login, now)
+	log.Printf("fleet: relogin %s on %s: %s → %s (create queued; %s left as is)", req.PrincipalID, req.Hostname, from, login, from)
+	return nil
+}
+
 func (s *Server) changeAccount(req FleetAccountRequest) error {
 	now := time.Now()
 	switch req.Action {
@@ -773,6 +814,6 @@ func (s *Server) changeAccount(req FleetAccountRequest) error {
 	case "forget":
 		return s.Store.ForgetPrincipal(req.PrincipalID, req.Hostname)
 	default:
-		return errors.New("action must be assign, retry, remove, adopt, forget or rekey")
+		return errors.New("action must be assign, retry, remove, adopt, forget, relogin or rekey")
 	}
 }
