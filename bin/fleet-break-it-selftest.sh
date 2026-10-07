@@ -1031,7 +1031,7 @@ PY
   # the one judge that reopens an idle session refuses it even when a writer that
   # never asked stamped it `done` long ago
   printf 'claude fp-new x\n' > "$d/conf/global/agent-cfg.expected"
-  nt set-option -w -t "$w" @agent_cfg fp-old \; set-option -w -t "$w" @claude_state done \; set-option -w -t "$w" @claude_state_ts 1
+  nt set-option -w -t "$w" @agent_cfg fp-old \; set-option -w -t "$w" @claude_state 'done' \; set-option -w -t "$w" @claude_state_ts 1
   why=$(tw_env bash -c '. "$1/fleet-lib.sh"; fleet_cfg_restart_why tw "$2"' _ "$BIN" "$w")
   [ "$why" = tool ] || { WHY="cfg-restart would reopen it: fleet_cfg_restart_why said [$why], want tool"; return 1; }
   # the call returns: the next re-ask (the sleep tick's fleet-wait-reeval.sh) reads done
