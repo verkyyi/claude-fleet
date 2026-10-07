@@ -391,21 +391,22 @@ printf 'FLEET_REPO="o/a"\nFLEET_MODEL="sonnet"\nFLEET_DEPLOY_CHECK="actions"\n' 
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-# One-repo fleet (no repos/ overlay): one repo scope, for its one repo, so ⌃s is
-# fleet ⇄ repo:o-a — and that repo layer IS the fleet conf: an edit there writes
-# F2 and never creates repos/, so the degenerate fleet stays a degenerate fleet.
+# One-repo fleet (old layout, no repos/ overlay): one repo scope, for its one repo,
+# so ⌃s is fleet ⇄ repo:o-a — and that repo layer is the repo's overlay, as in
+# any fleet (issue #1943): an edit there writes repos/o-a.conf, never F2.
 eq 'one-repo: one repo scope' "$(fcfg_repo_scopes s2 | cut -d"$FCFG_US" -f1)" repo:o-a
 fcfg_wscope_toggle s2; eq 'one-repo toggle → repo' "$(fcfg_wscope s2)" repo:o-a
 eq 'one-repo scope label' "$(fcfg_wscope_label s2)" 'REPO o/a'
-eq 'one-repo repo target = fleet conf' "$(fcfg_target_conf s2 repo:o-a)" "$F2"
+eq 'one-repo repo target = its overlay' "$(fcfg_target_conf s2 repo:o-a)" "$FLEET_CONF_DIR/fleets/s2/repos/o-a.conf"
 eq 'one-repo per-repo key → repo'      "$(fcfg_key_wscope s2 FLEET_MODEL)" repo:o-a
 eq 'one-repo non-repo key → fleet'     "$(fcfg_key_wscope s2 FLEET_MAX_SESSIONS)" fleet
 eq 'one-repo global-only key → global' "$(fcfg_key_wscope s2 FLEET_GLOBAL_MAX_SESSIONS)" global
 cp "$F2" "$WORK/F2.keep"
-eq 'one-repo repo write' "$(fcfg_repo_write s2 o-a FLEET_AGENT codex enum)" updated
-eq 'one-repo write lands in fleet conf' "$(fcfg_file_value "$F2" FLEET_AGENT)" codex
-[ -e "$FLEET_CONF_DIR/fleets/s2/repos" ] && fail 'one-repo repo write created repos/'; ok
-mv "$WORK/F2.keep" "$F2"; rm -f "$F2.bak"
+eq 'one-repo repo write' "$(fcfg_repo_write s2 o-a FLEET_AGENT codex enum)" created
+eq 'one-repo write lands in its overlay' "$(fcfg_file_value "$FLEET_CONF_DIR/fleets/s2/repos/o-a.conf" FLEET_AGENT)" codex
+cmp -s "$F2" "$WORK/F2.keep" || fail 'one-repo repo write touched the fleet conf'; ok
+eq 'one-repo fleet still hosts one repo' "$(fleet_repos s2 | tr '\n' ' ')" "o/a "
+mv "$WORK/F2.keep" "$F2"; rm -f "$F2.bak"; rm -rf "$FLEET_CONF_DIR/fleets/s2/repos"
 fcfg_wscope_toggle s2; eq 'one-repo toggle → fleet' "$(fcfg_wscope s2)" fleet
 
 # Shim tmux so the modal resolves session s2 with no server.

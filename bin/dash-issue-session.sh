@@ -216,8 +216,12 @@ case "$_rc" in
          || { refuse "#$num: $REPO_ARG is not a repo this fleet hosts"; exit "$RC_INFRA"; }
      fi ;;
   4) refuse "#$num: this fleet hosts several repos — pass --repo <owner/name>"; exit "$RC_INFRA" ;;
-  *) if [ -n "$REPO_ARG" ]; then refuse "#$num: $(fleet_norm_repo "$REPO_ARG") is not a repo this fleet hosts"; exit "$RC_INFRA"; fi
-     REPO_ARG='' ;;   # compat-1v: 下一批删 — no repo listed: the conf's FLEET_MAIN, as before
+  # compat-1v: 下一批删 — no repo listed (a conf naming only FLEET_MAIN, or none):
+  # the loaded FLEET_REPO / FLEET_MAIN, as before; a --repo must name that one.
+  *) if [ -n "$REPO_ARG" ] && [ "$(fleet_norm_repo "$REPO_ARG")" != "$(fleet_norm_repo "${FLEET_REPO:-}")" ]; then
+       refuse "#$num: $(fleet_norm_repo "$REPO_ARG") is not a repo this fleet hosts"; exit "$RC_INFRA"
+     fi
+     REPO_ARG='' ;;
 esac
 unset _r _rc
 

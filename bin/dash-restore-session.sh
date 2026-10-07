@@ -113,7 +113,10 @@ case "$_rc" in
          || { refuse "restore: $REPO_ARG is not a repo this fleet hosts"; exit 1; }
      fi ;;
   4) refuse "restore: this fleet hosts several repos and the row names none — pass --repo"; exit 1 ;;
-  *) if [ -n "$REPO_ARG" ]; then refuse "restore: $(fleet_norm_repo "$REPO_ARG") is not a repo this fleet hosts"; exit 1; fi
+  # compat-1v: 下一批删 — no repo listed: the loaded FLEET_REPO, as before.
+  *) if [ -n "$REPO_ARG" ] && [ "$(fleet_norm_repo "$REPO_ARG")" != "$(fleet_norm_repo "${FLEET_REPO:-}")" ]; then
+       refuse "restore: $(fleet_norm_repo "$REPO_ARG") is not a repo this fleet hosts"; exit 1
+     fi
      REPO_ARG='' ;;
 esac
 unset _r _rc
