@@ -251,7 +251,7 @@ class Router:
         """-> ([route, …] best first, reason)."""
         with self.lock:
             trust, twhy = self.trust or "unknown", self.trust_why
-        relay = bool(self.cfg.relay_url)
+        relay = bool(self.cfg.relay_url and relay_pass(self.cfg))
         if trust != "trusted":
             return ["central"], "%s (%s) → central, no credential file is read" % (trust, twhy)
         p = self.probe(provider)
@@ -262,7 +262,8 @@ class Router:
         if not relay:
             order.remove("relay")
             if order[0] == "direct" and p not in ("reachable", "none"):
-                why += ", no relay configured (FLEET_CRED_RELAY_URL)"
+                why += (", no relay pass (fleet-relay-cred.sh fetch)" if self.cfg.relay_url
+                        else ", no relay configured (FLEET_CRED_RELAY_URL)")
         if has_hub_cred:
             order.append("central")
         return order, why
@@ -400,7 +401,7 @@ class Proxy(BaseHTTPRequestHandler):
             upath = urlsplit(base).path.rstrip("/") + path
         put, drop = {}, {"authorization", "x-api-key"}
         if route == "relay":
-            put["X-Fleet-Relay"] = c.relay_token
+            put["X-Fleet-Relay"] = relay_pass(c)
         if public:
             return base, upath, put, set(), "none"
         if route == "central":
@@ -421,7 +422,7 @@ class Proxy(BaseHTTPRequestHandler):
 
     def send(self, order, provider, path, body, hubcred, sid, acct, seen, t0, public=False):
         order = [r for r in self.plan(order, sid)
-                 if (r != "relay" or self.cfg.relay_url) and (r != "central" or (self.cfg.central_url and hubcred))]
+                 if (r != "relay" or (self.cfg.relay_url and relay_pass(self.cfg))) and (r != "central" or (self.cfg.central_url and hubcred))]
         if not order:
             # permanent: 403, which neither client retries (never a 503)
             self.log(ev="deny", sid=sid, path=path.split("?")[0], why="no usable route")
@@ -683,6 +684,16 @@ def ctl_handle(req, cfg):
             return {"ok": False, "err": "probe: a JSON object"}
         write_json(pp, d)
         return {"ok": True}
+    if op == "relay":
+        # separated: the relay pass fleet-relay-cred.sh minted for the login
+        if not cfg.store:
+            return {"ok": False, "err": "relay: not separated"}
+        tok = (req.get("data") or "").strip()
+        if not tok or len(tok) > 4096 or any(c.isspace() for c in tok):
+            return {"ok": False, "err": "relay: one pass on stdin"}
+        write_private(os.path.join(cfg.state, "relay.token"), tok.encode() + b"\n")
+        Proxy.log(ev="relay_pass")
+        return {"ok": True}
     if op == "node-token":
         if not cfg.broker:
             return {"ok": False, "err": "node-token: no hub broker here (not separated)"}
@@ -702,7 +713,8 @@ def ctl_handle(req, cfg):
     if op == "status":
         return {"ok": True, "pid": os.getpid(), "port": cfg.bound_port, "separated": bool(cfg.store),
                 "trust": Proxy.router.trust or "unknown", "trust_why": Proxy.router.trust_why,
-                "relay": bool(cfg.relay_url), "central": cfg.central_url or ""}
+                "relay": bool(cfg.relay_url), "relay_pass": bool(relay_pass(cfg)),
+                "central": cfg.central_url or ""}
     return {"ok": False, "err": "unknown op %r" % op}
 
 
@@ -779,6 +791,19 @@ def ctl_call(state, req):
     return res
 
 
+def relay_pass(cfg):
+    """The relay pass (#1974): FLEET_CRED_RELAY_TOKEN, else the one
+    fleet-relay-cred.sh minted for this login (<state>/relay.token, 0600) —
+    read per request, so a re-mint needs no restart."""
+    if cfg.relay_token:
+        return cfg.relay_token
+    try:
+        with open(os.path.join(cfg.state, "relay.token")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 # ---- serve ---------------------------------------------------------------------
 def serve(a):
     cfg = a
@@ -811,8 +836,11 @@ def serve(a):
         v = getattr(cfg, name)
         if v and not loopback_ok(v):
             sys.exit("fleet-cred-proxy: %s=%s: https, or plain http on loopback only" % (name, v))
-    if cfg.relay_url and not cfg.relay_token:
-        sys.exit("fleet-cred-proxy: FLEET_CRED_RELAY_URL set without FLEET_CRED_RELAY_TOKEN")
+    if cfg.relay_url and not relay_pass(cfg):
+        # not fatal: the launcher mints one (fleet-relay-cred.sh fetch); until
+        # then the relay road is simply not a candidate
+        sys.stderr.write("fleet-cred-proxy: FLEET_CRED_RELAY_URL set but no relay pass yet "
+                         "(FLEET_CRED_RELAY_TOKEN or %s) — relay road off\n" % os.path.join(cfg.state, "relay.token"))
     if not cfg.log:
         cfg.log = env("FLEET_CRED_PROXY_LOG", os.path.join(os.path.dirname(BIN), "logs", "cred-proxy.log"))
     try:
@@ -931,6 +959,7 @@ def main():
     o = sub.add_parser("store")
     o.add_argument("--kind", required=True, choices=("claude", "codex")); o.add_argument("--label", required=True)
     sub.add_parser("probe")
+    sub.add_parser("relay")
     sub.add_parser("node-token")
     sub.add_parser("node-hash")
     a = ap.parse_args()
@@ -957,6 +986,8 @@ def main():
                            "data": base64.b64encode(sys.stdin.buffer.read(65537)).decode()})
     elif a.cmd == "probe":
         ctl_call(a.state, {"op": "probe", "data": sys.stdin.read(65536)})
+    elif a.cmd == "relay":
+        ctl_call(a.state, {"op": "relay", "data": sys.stdin.read(4097)})
     elif a.cmd == "node-token":
         res = ctl_call(a.state, {"op": "node-token"})
         print("%s\t%s" % (res["url"], res["token"]))

@@ -2186,7 +2186,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # central from the hub's trust record × the last fleet-node-probe.sh result and
 # puts the subscription credential in on the way out (central: none at all).
 # Off = today's wiring byte for byte, and no proxy process runs.
-# FLEET_CRED_RELAY_TOKEN (the relay credential) lives in secrets.env, never here.
+# The relay pass is minted per login by fleet-relay-cred.sh (issue #1974,
+# docs/CRED-RELAY.md) and kept 0600 in $FLEET_CONF_DIR/cred-proxy/; a hand-set
+# FLEET_CRED_RELAY_TOKEN overrides it and lives in secrets.env, never here.
 # @label=Credential proxy @group=disk @tier=internal @scope=global @edit=bool
 #FLEET_CRED_PROXY=0                # 1 = run the proxy (bin/fleet-cred-proxy.sh)
 # @label=Credential proxy idle check @group=disk @tier=internal @scope=global @edit=int @unit=sec

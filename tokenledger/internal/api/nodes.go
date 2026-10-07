@@ -770,6 +770,12 @@ func (s *Server) serveConnectPage(w http.ResponseWriter, r *http.Request) {
 	s.serveStandalonePage(w, r, "connect.html")
 }
 
+// serveConfigPage serves Config (claude-fleet#1989): my settings and the
+// team layer.
+func (s *Server) serveConfigPage(w http.ResponseWriter, r *http.Request) {
+	s.serveStandalonePage(w, r, "config.html")
+}
+
 // serveNodesPage serves the standalone roster page.
 func (s *Server) serveNodesPage(w http.ResponseWriter, r *http.Request) {
 	s.serveStandalonePage(w, r, "nodes.html")

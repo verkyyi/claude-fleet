@@ -188,6 +188,9 @@ grep -q "POST /v1/messages auth=Bearer sk-ant-oat01-MAIN" "$SB/fake.log" 2>/dev/
 printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-RENEWED"}}' | bash "$BIN/fleet-cred-proxy.sh" store --kind claude --label main
 grep -q RENEWED "$R/accounts/main.hub/.credentials.json" && [ ! -e "$C/accounts/main.hub/.credentials.json" ] \
   && pass "C store: the agent's lease lands in the store, not the login" || fail "C store"
+printf 'rp-PASS-1\n' | bash "$BIN/fleet-cred-proxy.sh" relay
+[ "$(cat "$R/cred-proxy/relay.token" 2>/dev/null)" = rp-PASS-1 ] \
+  && pass "C relay: the login's minted relay pass lands in the proxy's state" || fail "C relay pass"
 printf 'x' | bash "$BIN/fleet-cred-proxy.sh" store --kind claude --label ../evil 2>/dev/null \
   && fail "C store accepted ../evil" || pass "C store refuses a path-like label"
 

@@ -87,6 +87,8 @@ FLEET_CREDSEP_RUN_BASE             seam: fleet-credsep sandbox — the proxy's r
 FLEET_CREDSEP_SUDO                 seam: fleet-credsep — the privilege prefix (default `sudo -n`; empty = run directly, the sandbox)
 FLEET_CREDSEP_SVC                  seam: fleet-credsep sandbox — 0 = print launchctl/systemctl commands instead of running them
 FLEET_CREDSEP_TEST                 seam: fleet-credsep sandbox — allow a non-root install/launch into the sandbox paths
+FLEET_CRED_RELAY_RECHECK_SECS      knob: how often the proxy launcher re-checks / re-mints its relay pass (1800, #1974)
+FLEET_CRED_RELAY_TOKEN             handoff: a hand-set relay pass, read from secrets.env only — never a setting; unset = the one fleet-relay-cred.sh mints (#1970, #1974)
 FLEET_DRILL_POLL_SECS              knob: how often fleet-onboard-drill.sh reads its pane (2 s)
 FLEET_DRILL_RETIRE_CMD             seam: the command fleet-onboard-drill.sh retires a drill node with (no HTTP way yet, #1928)
 FLEET_DRILL_SCAN_SECS              knob: how long fleet-onboard-drill.sh waits for the QR scan (600 s, the code's life)

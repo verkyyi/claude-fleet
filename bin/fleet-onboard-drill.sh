@@ -15,6 +15,8 @@
 #   1 open      a bare login: sysadminctl -addUser, createhomedir, Remote Login
 #               (com.apple.access_ssh), a temporary key — NO fleet clone, no
 #               daemons, nothing of the fleet's: this is the colleague's computer.
+#               One line of ~/.zshenv, FLEET_CLIENT_IDENTITY=test (#1931): the
+#               client the drill opens holds a TEST lease, never the person's.
 #   2 ssh       `ssh -tt <login>@<host>` with that key, inside a tmux server of
 #               the run's own (-L fleet-drill-<login>, never a fleet's).
 #   3 paste     types `curl -fsSL <hub>/install | sh` — the one line the person has.
@@ -24,7 +26,8 @@
 #               line on the way is counted — each one is noise on their screen.
 #   6 scan      the person's OWN step, never 「要人帮」: the QR's confirm URL is
 #               printed (and handed to --scan-cmd <cmd> as $1, e.g. a notifier);
-#               waits for 「✓ 已登记到入口」 then 「能力:」. A refusal the page
+#               waits for 「✓ 已登记到入口」 (「能力:」 alone also follows an
+#               expired code). A refusal the page
 #               gives (no login on any machine yet, …) IS 要人帮 — a FAIL naming it.
 #               With --invite <code> (issue #2010) nobody scans: the code `fleet
 #               drill invite` printed confirms it (POST /fleet/login/approve) as
@@ -189,6 +192,22 @@ wait_for() {
     sleep "$POLL"
   done
 }
+# ask_wait <answered>: 1 when a question beyond the <answered> ones is on the
+# pane, 2 when the install went on past the questions (QR, 能力:, an error);
+# rc 1 on the deadline
+ask_wait() {
+  local answered=$1 deadline n p
+  deadline=$((SECONDS + STEP_SECS))
+  while :; do
+    keep_sudo
+    p=$(pane)
+    n=$(printf '%s\n' "$p" | grep -Ec '回车 = [0-9]+ ›')
+    if [ "$n" -gt "$answered" ]; then printf 1; return 0; fi
+    if printf '%s\n' "$p" | grep -Eq '验证码 [A-Z]{4}-[A-Z]{4}|^能力:|fleet-install: |✗ |command not found|Could not resolve'; then printf 2; return 0; fi
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep "$POLL"
+  done
+}
 tail_pane() { pane | sed '/^[[:space:]]*$/d' | tail -n "${1:-12}" | sed 's/^/        │ /'; }
 kill_own_tmux() {
   [ "$TMUX_UP" = 1 ] || return 0
@@ -228,9 +247,14 @@ step_open() {
   ( cd / && sudo -n install -d -o "$LOGIN" -g staff -m 700 "$H/.ssh" \
       && sudo -n install -o "$LOGIN" -g staff -m 600 "$key.pub" "$H/.ssh/authorized_keys" ) >> "$RUN/open.log" 2>&1 \
     || { failstep open "authorized_keys for $LOGIN: $(tail -n 1 "$RUN/open.log")"; return 1; }
+  # the drill's client is the TEST identity (#1931): its own lease slot at the
+  # hub's test door, never the operator's one-client lease (2026-10-06, #1901)
+  printf 'export FLEET_CLIENT_IDENTITY=test\n' > "$RUN/zshenv"
+  ( cd / && sudo -n install -o "$LOGIN" -g staff -m 644 "$RUN/zshenv" "$H/.zshenv" ) >> "$RUN/open.log" 2>&1 \
+    || { failstep open "$H/.zshenv for $LOGIN: $(tail -n 1 "$RUN/open.log")"; return 1; }
   UIDN=$(id -u "$LOGIN" 2>/dev/null || :)
   GUID=$(dscl . -read "/Users/$LOGIN" GeneratedUID 2>/dev/null | awk '$1=="GeneratedUID:" {print $2; exit}')
-  pass open "login $LOGIN (uid ${UIDN:-?}): a bare account, a temporary key — nothing of the fleet's · $(elapsed)"
+  pass open "login $LOGIN (uid ${UIDN:-?}): a bare account, a temporary key, the test identity — nothing of the fleet's · $(elapsed)"
 }
 
 # --- 2 ssh ---------------------------------------------------------------------------
@@ -258,15 +282,16 @@ step_install() {
   shot paste
   row "终端提示符" "粘贴 \`$line\`，回车" 否
   pass paste "typed: $line"
-  # 4 ask: each question is answered with Enter, until no question is left
+  # 4 ask: each question is answered with Enter, until no question is left. A
+  # question is NEW only while the pane holds more 「回车 =」 prompts than were
+  # answered: an answered one stays in the scrollback (the 「→」 echo is on the
+  # next line), and matching it again pressed Enter forever past the QR.
   while :; do
-    got=$(wait_for "$STEP_SECS" '回车 = [0-9]+ › *$' '验证码 [A-Z]{4}-[A-Z]{4}' '^能力:' 'fleet-install: |✗ |command not found|Could not resolve')
+    got=$(ask_wait "$asked")
     case "$got" in
       1) asked=$((asked + 1)); shot "ask-$asked"
-         row "问题 $asked：$(pane | grep -B4 '回车 = [0-9]* ›' | grep -v '^ \|回车 =' | tail -n 1 | sed 's/|/／/g')" "回车（默认）" 否
+         row "问题 ${asked}：$(pane | grep -B4 '回车 = [0-9]* ›' | grep -v '^ \|回车 =' | tail -n 1 | sed 's/|/／/g')" "回车（默认）" 否
          keys Enter
-         # the answer echoes as 「→ …」: wait for it, so this prompt is not read twice
-         wait_for 20 "→ .*" >/dev/null || :
          sleep 1 ;;
       *) break ;;
     esac
@@ -313,14 +338,16 @@ step_scan() {
     printf '\n  >>> 扫码（同事本人的一步）：%s  (验证码 %s, %ss 内有效)\n\n' "${SCAN_URL:-?}" "$code" "$SCAN_SECS"
     [ -z "$SCAN_CMD" ] || [ -z "$SCAN_URL" ] || sh -c "$SCAN_CMD \"\$1\"" _ "$SCAN_URL" > "$RUN/scan-cmd.log" 2>&1 || :
   fi
-  k=$(wait_for "$SCAN_SECS" '^能力:' '✗ |还不能签发|access_denied|已过期')
+  # 「已登记到入口」 only: the installer goes on to 「能力:」 after a refused or
+  # expired scan too (「not issued (HTTP 410)」), so 能力: is no confirmation
+  k=$(wait_for "$SCAN_SECS" '已登记到入口' '✗ |还不能签发|access_denied|已过期|not issued|没登记成')
   EPID=$(pane | grep -Eo '已登记到入口：[^（]*（ep_[0-9]+）' | grep -Eo 'ep_[0-9]+' | tail -n 1)
   shot joined
   case "$k" in
     1) row "企业微信二维码 + 验证码 $code" "$([ -n "$INVITE" ] && echo '演练确认码代扫（演练同事）' || echo '用企业微信扫码、点确认')" "本人"
        pass scan "confirmed: device ${FPR:-?} · node ${EPID:-none} · $(elapsed)" ;;
-    2) row "扫码后：$(pane | grep -E '✗ |还不能签发|access_denied|已过期' | tail -n 1)" "扫码" "是 — 入口不肯签发"
-       failstep scan "the hub refused:"; tail_pane; return 1 ;;
+    2) row "扫码后：$(pane | grep -E '✗ |还不能签发|access_denied|已过期|not issued|没登记成' | head -n 1)" "扫码" "是 — 入口不肯签发"
+       failstep scan "the hub did not issue (refused, or the code expired):"; tail_pane; return 1 ;;
     *) row "二维码 ${SCAN_SECS}s 内没人扫" "—" "本人（没扫）"
        failstep scan "nobody confirmed within ${SCAN_SECS}s"; return 1 ;;
   esac
@@ -355,18 +382,18 @@ step_scratch() {
   k=$(wait_for "$STEP_SECS" '开在哪' '还没有仓库|入口连不上|没有 fleet' "$NAME")
   shot scratch-ask
   case "$k" in
-    1) row "「开在哪」：自动 在最上" "prefix 空格 到列表，敲名字 $NAME，回车；再回车（自动）" 否
+    1) row "「开在哪」：自动 在最上" "prefix 空格 到列表，敲名字 ${NAME}，回车；再回车（自动）" 否
        keys Enter ;;
-    3) row "列表里出现 $NAME" "prefix 空格 到列表，敲名字 $NAME，回车" 否 ;;
+    3) row "列表里出现 $NAME" "prefix 空格 到列表，敲名字 ${NAME}，回车" 否 ;;
     2) said=$(pane | grep -Eo '还没有仓库[^│]*|入口连不上[^│]*|没有 fleet[^│]*' | tail -n 1)
-       row "提示：$said" "prefix 空格 到列表，敲名字 $NAME，回车" "是 — 开不出会话（#1927）"
+       row "提示：$said" "prefix 空格 到列表，敲名字 ${NAME}，回车" "是 — 开不出会话（#1927）"
        failstep scratch "the list refused a new session: $said"; return 1 ;;
     *) row "敲名字后没反应" "prefix 空格，敲名字，回车" "是 — 不知道怎么开会话"
        failstep scratch "no 「开在哪」 and no new row within ${STEP_SECS}s:"; tail_pane; return 1 ;;
   esac
   if wait_for 90 "^[^│]*$NAME" >/dev/null; then
     shot scratch
-    row "列表里新的一行 $NAME，右边切到它" "等" 否
+    row "列表里新的一行 ${NAME}，右边切到它" "等" 否
     pass scratch "the new session's row: $(pane | grep -E "^[^│]*$NAME" | head -n 1 | cut -d'│' -f1 | sed 's/ *$//') · $(elapsed)"
   else
     shot scratch
@@ -438,7 +465,7 @@ step_offboard() {
   elif [ -n "$INVITE" ]; then
     pass offboard "login removed (fleet-login-remove.sh --delete-home) · drill person, device and node deleted on the hub"
   else
-    pass offboard "login removed (fleet-login-remove.sh --delete-home) · device revoked · node retired"
+    pass offboard "login removed (fleet-login-remove.sh --delete-home)$([ -n "$FPR" ] && printf ' · device revoked')$([ -n "$EPID" ] && printf ' · node retired')"
   fi
 }
 
@@ -478,7 +505,7 @@ else: print("gone")' "$FPR" 2>/dev/null)
     esac
   fi
   if [ -z "$left" ]; then
-    pass residue "none: no login, no home, no process, no access-group entry$([ -n "$FPR" ] && printf ', device revoked')$([ -n "$INVITE" ] && printf ', no drill person on the hub')"
+    pass residue "none: no login, no home, no process, no access-group entry$([ -n "$FPR" ] && [ -n "$VIEWER" ] && printf ', device revoked')$([ -n "$INVITE" ] && printf ', no drill person on the hub')"
   else
     failstep residue "left behind:$left"
     return 1
@@ -516,6 +543,8 @@ finish() {
 }
 on_signal() { trap - INT TERM HUP; printf '\n%s: interrupted — tearing down\n' "$PROG" >&2; finish; }
 trap on_signal INT TERM HUP
+# a step that dies (set -u, a typo) still tears the login down: finish is idempotent
+trap '[ "$SUMMARISED" = 1 ] || { printf "\\n%s: a step died — tearing down\\n" "$PROG" >&2; finish; }' EXIT
 
 if [ "$TEARDOWN" = 1 ]; then
   UIDN=$(id -u "$LOGIN" 2>/dev/null || :)

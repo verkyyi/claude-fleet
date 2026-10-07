@@ -18,8 +18,9 @@
 #
 # Config (fleet.conf [common], or the environment): FLEET_CRED_PROXY (0 = today's
 # wiring byte for byte, the default), FLEET_CRED_PROXY_PORT, FLEET_CRED_RELAY_URL,
-# FLEET_CRED_RELAY_TOKEN (secrets.env — never fleet.conf), FLEET_CRED_CENTRAL_URL
-# (default: the hub). State: $FLEET_CONF_DIR/cred-proxy/ (port, ctl.sock 0600,
+# FLEET_CRED_RELAY_TOKEN (secrets.env — never fleet.conf; unset = the pass
+# fleet-relay-cred.sh mints for this login, kept in the state dir — #1974),
+# FLEET_CRED_CENTRAL_URL (default: the hub). State: $FLEET_CONF_DIR/cred-proxy/ (port, ctl.sock 0600,
 # key, bind.json, revoked, trust.json). Log: logs/cred-proxy.log (redacted).
 #
 # Separated (issue #1971 — bin/fleet-credsep.sh; $FLEET_CONF_DIR/credsep.json
@@ -56,6 +57,18 @@ SEP_RUN=''   # separated: the role account's run dir (ctl.sock, port, pid)
 if [ -f "$CONF/credsep.json" ]; then
   SEP_RUN=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run",""))' "$CONF/credsep.json" 2>/dev/null)
 fi
+# relay_fetch — with a relay configured and no pass in the environment, keep
+# this login's minted pass alive (#1974): KEPT while the hub accepts it, a new
+# one when it does not. Best effort and quiet — an untrusted machine is refused
+# (it routes central anyway), a hub that is down leaves the old pass in place.
+RELAY_AT=0
+relay_fetch() {
+  [ -n "${FLEET_CRED_RELAY_URL:-}" ] && [ -z "${FLEET_CRED_RELAY_TOKEN:-}" ] || return 0
+  [ "${CCQUOTA_FLEET:-0}" = 1 ] || return 0
+  "$BIN/fleet-relay-cred.sh" fetch >/dev/null 2>&1
+  RELAY_AT=$(date +%s)
+}
+relay_due() { [ $(( $(date +%s) - RELAY_AT )) -ge "${FLEET_CRED_RELAY_RECHECK_SECS:-1800}" ]; }
 
 switch_now() { # → 1 / 0, read fresh in a subshell (the conf may have changed under us)
   ( unset FLEET_CRED_PROXY; [ -n "${_FCP_ENV_SWITCH:-}" ] && FLEET_CRED_PROXY="$_FCP_ENV_SWITCH"; load_conf; printf '%s' "${FLEET_CRED_PROXY:-0}" )
@@ -84,12 +97,20 @@ if [ -n "$SEP_RUN" ]; then
   case "$cmd" in
     run)   # the role account's service runs the proxy; this one has nothing to start
       trap 'exit 0' TERM INT
-      while :; do sleep "$IDLE" & wait $! 2>/dev/null; [ -f "$CONF/credsep.json" ] || exec "$0" run "$@"; done ;;
+      # it still keeps the relay pass (#1974): minted as this login, handed over
+      # by fleet-relay-cred.sh's separated push
+      while :; do
+        [ "$(switch_now)" = 1 ] && relay_due && relay_fetch
+        sleep "$IDLE" & wait $! 2>/dev/null
+        [ -f "$CONF/credsep.json" ] || exec "$0" run "$@"
+      done ;;
     ensure|port)
       live_pid >/dev/null || { echo "fleet-cred-proxy: separated, and its service is not running ($SEP_RUN)" >&2; exit 1; }
       cat "$SEP_RUN/port"; exit 0 ;;
     node-token|node-hash|store)
       exec python3 -I "$PY" --state "$STATE" "$cmd" "$@" ;;
+    relay)   # the minted relay pass on stdin → the proxy's own state (#1974)
+      exec python3 -I "$PY" --state "$STATE" relay ;;
     probe)
       [ -f "${1:-}" ] || { echo "fleet-cred-proxy: probe <node-probe.json>" >&2; exit 2; }
       exec python3 -I "$PY" --state "$STATE" probe < "$1" ;;
@@ -97,7 +118,7 @@ if [ -n "$SEP_RUN" ]; then
 fi
 
 case "$cmd" in
-  node-token|node-hash|probe|store)
+  node-token|node-hash|probe|store|relay)
     echo "fleet-cred-proxy: $cmd: not separated (bin/fleet-credsep.sh)" >&2; exit 3 ;;
   run)
     child=''
@@ -105,6 +126,7 @@ case "$cmd" in
     trap 'stop_child; exit 0' TERM INT
     while :; do
       if [ "$(switch_now)" = 1 ]; then
+        relay_due && relay_fetch
         if [ -z "$child" ] || ! kill -0 "$child" 2>/dev/null; then
           [ -n "$child" ] && { wait "$child" 2>/dev/null; sleep 2; }   # crashed: a short breath, then again
           python3 -I "$PY" serve --parent-watch "$@" &
@@ -121,6 +143,7 @@ case "$cmd" in
     on || { echo "fleet-cred-proxy: off (FLEET_CRED_PROXY=${FLEET_CRED_PROXY:-0})" >&2; exit 3; }
     if ! live_pid >/dev/null; then
       mkdir -p "$STATE" && chmod 700 "$STATE"
+      relay_fetch
       nohup python3 -I "$PY" serve "$@" </dev/null >/dev/null 2>&1 &
       i=0
       while [ "$i" -lt "$((${FLEET_CRED_PROXY_START_SECS:-30} * 10))" ] && ! { live_pid >/dev/null && [ -S "$STATE/ctl.sock" ]; }; do sleep 0.1; i=$((i + 1)); done

@@ -133,12 +133,12 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 	pc, raw := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "Alice", nil)
 	page := html.UnescapeString(string(raw))
 	if pc != 200 || !strings.Contains(page, st.UserCode) || !strings.Contains(page, "alice") ||
-		!strings.Contains(page, st.KeyFingerprint) || !strings.Contains(page, "确认签发") {
+		!strings.Contains(page, st.KeyFingerprint) || !strings.Contains(page, ">Confirm</button>") {
 		t.Fatalf("confirm page %d:\n%s", pc, page)
 	}
 
 	pc, done := personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
-	if pc != 200 || !strings.Contains(done, "已签发") {
+	if pc != 200 || !strings.Contains(done, "valid until") {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
 
@@ -241,7 +241,7 @@ func TestFleetCertNeedsAnActiveLogin(t *testing.T) {
 	var st DeviceStart
 	json.Unmarshal(body, &st)
 	_, page := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "Carol", nil)
-	if !strings.Contains(string(page), "还不能签发") || strings.Contains(string(page), "确认签发") {
+	if !strings.Contains(string(page), "issue yet") || strings.Contains(string(page), ">Confirm</button>") {
 		t.Fatalf("Carol's confirm page:\n%s", page)
 	}
 	req, _ := json.Marshal(map[string]string{"public_key": newUserKey(t)})
@@ -449,12 +449,12 @@ func TestFleetNodeJoinByScan(t *testing.T) {
 
 	pc, raw := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "Alice", nil)
 	page := html.UnescapeString(string(raw))
-	if pc != 200 || !strings.Contains(page, "<title>把 newbox 加为节点</title>") || !strings.Contains(page, "<h1>把 newbox 加为节点</h1>") ||
-		!strings.Contains(page, st.UserCode) || !strings.Contains(page, "确认签发") {
+	if pc != 200 || !strings.Contains(page, "<title>Add newbox as a node</title>") || !strings.Contains(page, "<h1>Add newbox as a node</h1>") ||
+		!strings.Contains(page, st.UserCode) || !strings.Contains(page, ">Confirm</button>") {
 		t.Fatalf("node confirm page %d:\n%s", pc, page)
 	}
 	pc, done := personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
-	if pc != 200 || !strings.Contains(html.UnescapeString(done), "已把 <b>newbox</b> 加为节点") {
+	if pc != 200 || !strings.Contains(html.UnescapeString(done), "Added <b>newbox</b> as a node") {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
 

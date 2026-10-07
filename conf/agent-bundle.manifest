@@ -65,3 +65,5 @@ bin/fleet-daemon-lib.sh             tool
 # a client-only computer runs it too (`fleet-cred-proxy.sh ensure`)
 bin/fleet-cred-proxy.sh             tool
 bin/fleet-cred-proxy.py             tool
+# its pass for the Singapore relay, minted when the relay road is configured (#1974)
+bin/fleet-relay-cred.sh             tool
