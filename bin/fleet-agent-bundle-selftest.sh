@@ -119,7 +119,17 @@ printf '%s\n' "$chk" | grep >/dev/null "^github .*\$HOME/.claude/fleet/bin/mcp-g
 n=$(grep -c '^\[mcp_servers\.' "$H/.codex/config.toml" 2>/dev/null)
 [ "$n" = 4 ] && grep -q '\.claude/fleet/bin/mcp-fetch.sh' "$H/.codex/config.toml" && ok "B Codex MCP: 4 servers, fetch at the package's bin/" || bad "B codex mcp: $n $(cat "$H/.codex/config.toml" 2>&1)"
 [ -f "$R/mod/fleet/.claude-plugin/plugin.json" ] && ok "B the mod (mod/fleet/.claude-plugin/plugin.json) is in the package" || bad "B no mod"
-doc=$(env -i PATH="$SYS_PATH" HOME="$H" "$H/.local/bin/fleet" doctor 2>&1); rc=$?
+# The sandbox install names no version (FLEET_INSTALL_SRC, no .client-version —
+# the installer's selftest seam), and the doctor rightly WARNs on that (#2145):
+# that WARN must be the ONLY thing short of PASS (#2183) ...
+doc=$(env -i PATH="$SYS_PATH" HOME="$H" FLEET_STABLE_API="file://$WORK/stable-api" "$H/.local/bin/fleet" doctor 2>&1); rc=$?
+[ "$rc" = 1 ] && [ "$(printf '%s\n' "$doc" | grep -cv '^ *PASS ')" = 1 ] && printf '%s\n' "$doc" | grep >/dev/null '^ *WARN  fleet .*没有 .client-version' \
+  && ok "B unversioned sandbox: the doctor's one WARN is the missing .client-version (#2145)" || bad "B unversioned doctor rc=$rc: $doc"
+# ... and with the mark a line install writes (following a fake stable over
+# file://, never the network) the doctor is all PASS.
+printf '%s\n' 0123456789abcdef0123456789abcdef01234567 > "$WORK/stable-api"
+printf 'version=0123456789abcdef0123456789abcdef01234567\ncompat=\ncommit=0123456\nhub=\nat=%s\n' "$(date +%s)" > "$R/.client-version"
+doc=$(env -i PATH="$SYS_PATH" HOME="$H" FLEET_STABLE_API="file://$WORK/stable-api" "$H/.local/bin/fleet" doctor 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$doc" | grep >/dev/null 'PASS  agents   4/4 · hooks .* · skills .* · mcp ok · mod ' \
   && ok "B fleet doctor: $(printf '%s' "$doc" | sed 's/^ *//')" || bad "B fleet doctor rc=$rc: $doc"
 
