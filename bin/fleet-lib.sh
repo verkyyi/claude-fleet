@@ -2148,12 +2148,19 @@ fleet_path_fill() {
 }
 
 # fleet_find_tool <claude|tmux> — the binary to run: $FLEET_CLAUDE_BIN /
-# $FLEET_TMUX_BIN when it is executable, else the bare name when PATH (or a
+# $FLEET_TMUX_BIN (unset: the install line's static tmux,
+# ~/.local/share/claude-fleet-vendor/bin/tmux, when there is one — #2260) when it is executable, else the bare name when PATH (or a
 # function) answers — byte for byte the old `exec claude` — else the first
 # FLEET_TOOL_DIRS hit. rc 1 + one stderr line naming every place tried.
 fleet_find_tool() {
   local name="$1" pin='' dir tried=''
-  case "$name" in claude) pin=${FLEET_CLAUDE_BIN:-} ;; tmux) pin=${FLEET_TMUX_BIN:-} ;; esac
+  case "$name" in
+    claude) pin=${FLEET_CLAUDE_BIN:-} ;;
+    # no pin: the static tmux the install line put here (#2260), when it did
+    tmux) pin=${FLEET_TMUX_BIN:-}
+      [ -n "$pin" ] || [ ! -x "${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet-vendor/bin/tmux" ] \
+        || pin="${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet-vendor/bin/tmux" ;;
+  esac
   if [ -n "$pin" ]; then
     [ -x "$pin" ] && { printf '%s\n' "$pin"; return 0; }
     tried="$pin "

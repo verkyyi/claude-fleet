@@ -1,0 +1,17 @@
+# vendor-tmux.lock — the static tmux a computer with none gets (claude-fleet#2260).
+#
+# tmux's own release builds (github.com/tmux/tmux-builds): one statically linked
+# binary per platform, no Homebrew, no apt. bin/fleet-client-pack.sh downloads
+# each archive below, checks its SHA-256 and packs the binary into the hub's
+# build (pack/vendor/tmux-<platform>), so the hub's /install/bundle.tar.gz carries
+# it; bin/fleet-install.sh, when the bundle had none, downloads the archive for
+# its own platform from the URL here and checks the same SHA-256. Either way it
+# lands at ~/.local/share/claude-fleet-vendor/bin/tmux, which `fleet` puts first
+# on PATH and fleet_find_tool tries first. No line for a platform → Homebrew /
+# apt-get as before. Bumping tmux = new lines here, nothing else.
+#
+# <platform>      <sha256 of the archive>                                          <url>
+macos-arm64   0a763dd0380aa980d239509654da1bc7455843706a3c050f6709c8cd2e13d12d  https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-macos-arm64.tar.gz
+macos-x86_64  1c21f9ade964e4a539be05ffe3a4e95854ab76a0a9c4c05d0ffbe7fc6c4d783f  https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-macos-x86_64.tar.gz
+linux-x86_64  cc56bd1cc873eb6089c615f0496b072385bda8a6d944069f38564a5d49c128aa  https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-linux-x86_64.tar.gz
+linux-arm64   29dcb978da2a4b0cf6790f9e004865dac239a3ba03bbf776dddacce23d03831b  https://github.com/tmux/tmux-builds/releases/download/v3.7c/tmux-3.7c-linux-arm64.tar.gz

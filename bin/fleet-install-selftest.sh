@@ -43,17 +43,18 @@
 #                 file installed, NO hub address written anywhere, no git, the
 #                 one line on adding 承载; the same with --no-hub (one version's
 #                 alias); FLEET_INSTALL_HUB=1 with no address → exit 2
-#   H. asked      (issue #1804) the two questions on a pseudo-terminal, against
-#                 a fake `stable` (a git repo of this tree with a stub bootstrap
-#                 and a fake fleet-node.sh): 只看只派 + 接 (Enter, Enter) →
-#                 the base, the address, FLEET_HOST=0, no git; again → no file
-#                 changes; the answer changed to 承载 → only the 承载 part:
+#   H. not asked  (issues #1804, #2260) on a pseudo-terminal, against a fake
+#                 `stable` (a git repo of this tree with a stub bootstrap and a
+#                 fake fleet-node.sh), and NOTHING is asked: the hub's copy →
+#                 只看只派 + 接 — the base, the address, FLEET_HOST=0, no git, the
+#                 one-session view (solo) on a computer the fleet was never on;
+#                 again → no file changes; --host → only the 承载 part:
 #                 ~/.claude/fleet becomes the checkout in place, the bootstrap
-#                 runs once, join + compute on, FLEET_HOST=1; again → nothing;
-#                 承载 + 不接 from the stable copy → the checkout, FLEET_HOST=1,
-#                 no address, the account hint; again → nothing; the same
-#                 answers given ahead (FLEET_INSTALL_HOST=1 FLEET_INSTALL_HUB=0,
-#                 no terminal) → the same computer
+#                 runs once, join + compute on, FLEET_HOST=1; again with no flag
+#                 → nothing; --host from the stable copy (no address) → 承载 +
+#                 不接, the account hint; again → nothing; the same given ahead
+#                 (FLEET_INSTALL_HOST=1 FLEET_INSTALL_HUB=0, no terminal) → the
+#                 same computer
 #   I. two trees  (issue #1804) a computer with the client's
 #                 ~/.local/share/claude-fleet beside a ~/.claude/fleet checkout:
 #                 after the line only one remains (the old path a symlink to it),
@@ -67,6 +68,17 @@
 #                 `tick` switches to it (v1 → .prev); v3 with the client closed →
 #                 the line switches itself in one rename (v2 → .prev, v1 pruned);
 #                 a run that fails half way stays on v3; .prev rolls back
+#   K. one go     (issue #2260) a hub serving /install/bundle.tar.gz: a fresh
+#                 sandbox HOME, a PATH with no brew and no tmux, NOTHING given —
+#                 one request for the whole client (no file by file), every file
+#                 identical, the bundle's static tmux in
+#                 ~/.local/share/claude-fleet-vendor/bin, which fleet_find_tool
+#                 finds and `fleet` starts the shell with; FLEET_CLIENT_LAYOUT=solo
+#                 in fleet.conf's [client] and the invitation the line carried
+#                 kept 0600 (never printed); the time it took printed; a computer
+#                 with an earlier install → no solo; a bundle that does not match
+#                 its SHA-256 → file by file, still exit 0; a bundle with no tmux
+#                 → the archive conf/vendor-tmux.lock pins, SHA-256 checked
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-selftest.XXXXXX") || exit 2
@@ -74,6 +86,7 @@ HUB_PID=""
 cleanup() {
   if [ -n "$HUB_PID" ]; then kill "$HUB_PID" 2>/dev/null; fi
   if [ -n "${JHUB_PID:-}" ]; then kill "$JHUB_PID" 2>/dev/null; fi
+  if [ -n "${KHUB_PID:-}" ]; then kill "$KHUB_PID" 2>/dev/null; fi
   rm -rf "${WORK:?}"
 }
 trap cleanup EXIT INT TERM HUP
@@ -105,7 +118,7 @@ cp "$REPO/bin/fleet-client-pack.sh" "$SB/bin/"; cp "$MANIFEST" "$SBC/manifest"; 
 for f in $(awk '!/^[[:space:]]*#/ && NF { print $1 }' "$MANIFEST"); do mkdir -p "$SB/$(dirname "$f")"; cp "$REPO/$f" "$SB/$f"; done
 out=$(bash "$SB/bin/fleet-client-pack.sh" --check 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q '^not packed: bin/fleet ' && ok "A an empty pack is not packed (--check exit 1)" || bad "A empty pack: rc=$rc $out"
-bash "$SB/bin/fleet-client-pack.sh" >/dev/null 2>&1; out=$(bash "$SB/bin/fleet-client-pack.sh" --check 2>&1); rc=$?
+FLEET_PACK_VENDOR=0 bash "$SB/bin/fleet-client-pack.sh" >/dev/null 2>&1; out=$(bash "$SB/bin/fleet-client-pack.sh" --check 2>&1); rc=$?
 n=$(cd "$SBC/pack" && find . -type f ! -name doc.go | wc -l | tr -d ' ')
 [ "$rc" = 0 ] && [ "$n" = "$(awk '!/^[[:space:]]*#/ && NF' "$MANIFEST" | wc -l | tr -d ' ')" ] && [ -f "$SBC/pack/doc.go" ] \
   && cmp -s "$SB/bin/fleet" "$SBC/pack/bin/fleet" && ok "A pack: exactly the manifest's $n files, byte for byte, doc.go kept" || bad "A pack: rc=$rc n=$n $out"
@@ -113,7 +126,7 @@ echo '# edited' >> "$SB/bin/fleet"
 out=$(bash "$SB/bin/fleet-client-pack.sh" --check 2>&1) && bad "A an edit after packing passed --check" \
   || { printf '%s\n' "$out" | grep -q '^stale: pack/bin/fleet ' && ok "A an edit after packing is stale (--check)" || bad "A stale: $out"; }
 grep -vx 'bin/fleet-lang.sh' "$SBC/manifest" > "$SBC/m.tmp" && mv "$SBC/m.tmp" "$SBC/manifest"
-bash "$SB/bin/fleet-client-pack.sh" >/dev/null 2>&1
+FLEET_PACK_VENDOR=0 bash "$SB/bin/fleet-client-pack.sh" >/dev/null 2>&1
 [ ! -e "$SBC/pack/bin/fleet-lang.sh" ] && bash "$SB/bin/fleet-client-pack.sh" --check >/dev/null 2>&1 \
   && ok "A a file the manifest dropped leaves the pack" || bad "A a dropped file stayed in the pack"
 for must in bin/fleet bin/fleet-login.py bin/fleet-connect.py bin/fleet-shell.sh bin/fleet-sidebar.py bin/tmux-status.sh conf/tmux-shell.conf; do
@@ -162,8 +175,8 @@ grep -q "$HUB" "$WORK/install.sh" || { bad "placeholder __FLEET_HUB_URL__ missin
 
 export HOME="$WORK/home" XDG_CONFIG_HOME="$WORK/home/.config" SHELL=/bin/zsh
 export FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1   # leg F drives the tmux step
-export FLEET_INSTALL_ASK=0     # never ask here, even run from a terminal; leg H asks on a pty
-unset FLEET_CONF_DIR FLEET_HUB_URL FLEET_INSTALL_BIN FLEET_INSTALL_HOME FLEET_INSTALL_ROOT FLEET_INSTALL_RC XDG_DATA_HOME XDG_CACHE_HOME \
+export FLEET_INSTALL_STATIC_TMUX=0   # leg K drives the static tmux; elsewhere no download from GitHub
+unset FLEET_INVITE FLEET_INSTALL_BUNDLE FLEET_INSTALL_VENDOR FLEET_CONF_DIR FLEET_HUB_URL FLEET_INSTALL_BIN FLEET_INSTALL_HOME FLEET_INSTALL_ROOT FLEET_INSTALL_RC XDG_DATA_HOME XDG_CACHE_HOME \
       FLEET_INSTALL_HOST FLEET_INSTALL_HUB FLEET_INSTALL_NO_HUB FLEET_INSTALL_NO_NODE FLEET_BOOTSTRAP_GIT_BASE
 ROOT="$HOME/.claude/fleet"
 mkdir -p "$HOME/.config/claude-fleet" "$ROOT/bin" "$HOME/.local/bin"
@@ -211,6 +224,8 @@ grep -qx "export FLEET_HUB_URL=\"$HUB\"" "$HOME/.config/claude-fleet/fleet.conf"
   && ok "B fleet.conf: the hub URL + FLEET_HOST=0 (#1806)" || bad "B fleet.conf: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"
 [ "$(grep -c 'claude-fleet#1470' "$HOME/.zshrc")" = 1 ] && grep -q "$HOME/.local/bin" "$HOME/.zshrc" && ok "B one PATH line in ~/.zshrc" || bad "B zshrc: $(cat "$HOME/.zshrc" 2>&1)"
 echo "$out" | grep -q '已安装 fleet' && echo "$out" | grep -q '之后每次只敲：fleet' && ok "B says what to type next" || bad "B output: $out"
+grep -q FLEET_CLIENT_LAYOUT "$HOME/.config/claude-fleet/fleet.conf" && bad "B a computer that had the fleet got a layout: $(grep FLEET_CLIENT_LAYOUT "$HOME/.config/claude-fleet/fleet.conf")" \
+  || ok "B a computer with an earlier install keeps its layout (no solo)"
 echo "$out" | grep -q '能力: 基础 · 承载 未开 · 入口 接' && ok "B says 能力 in one line (#1806, #1804)" || bad "B no 能力 line: $out"
 echo "$out" | grep -q '要承载：再跑一次本命令，或 fleet host on' && ok "B no terminal → the base, and the one line on adding 承载" || bad "B no 承载 hint: $out"
 [ ! -e "$ROOT/.git" ] && [ ! -e "$HOME/.local/share/claude-fleet" ] && ok "B one directory, no git" || bad "B layout: $(ls -a "$ROOT" "$HOME/.local/share" 2>&1 | head -5)"
@@ -298,7 +313,7 @@ lib_fn=$(fnbody "$BIN/fleet-client-lib.sh")
 [ -n "$lib_fn" ] && [ "$lib_fn" = "$(fnbody "$BIN/fleet-node-join.sh")" ] \
   && ok "F fleet-node-join.sh's fc_tmux_ok is fleet-client-lib.sh's, byte for byte" || bad "F fc_tmux_ok copies differ"
 F="$WORK/f"; FARM="$F/farm"; mkdir -p "$FARM"
-for t in sh bash curl python3 ssh ssh-keygen uname tr awk sed mkdir mktemp rm mv chmod dirname basename head tail cat grep od id env pwd cmp true; do
+for t in sh bash curl python3 ssh ssh-keygen uname tr awk sed mkdir mktemp rm mv chmod dirname basename head tail cat grep od id env pwd cmp true date sleep wc tar ls; do
   p=$(type -P "$t") && ln -sf "$p" "$FARM/$t"   # a path, not a builtin
 done
 # fakes: brew (logs, `install tmux` puts a tmux 3.5a in its own bin, which its
@@ -456,34 +471,36 @@ if sent < len(ans):
     sys.stdout.write("\n[pty: %d answer(s) never asked for]\n" % (len(ans) - sent)); sys.exit(98)
 sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 97)
 PYEOF
-# hinstall <home> <answers> <script> [env…] — one install on the pty; $out, $rc
+# hinstall <home> <script> [args…] — one install on the pty, nothing to
+# answer (a prompt fails the run); env from $HENV; $out, $rc
+HENV=''
 hinstall() {
-  local h="$1" a="$2" sc="$3"; shift 3
+  local h="$1" sc="$2"; shift 2
+  # shellcheck disable=SC2086  # HENV is a list of NAME=value words
   out=$(env -i HOME="$h" PATH="$FT:$SYSPATH" SHELL=/bin/zsh TMPDIR="$WORK" FAKE_HUB="$HUB" \
         FLEET_INSTALL_SRC="file://$REPO" FLEET_BOOTSTRAP_GIT_BASE="file://$WORK/gitbase" \
-        FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_NO_AGENTS=1 "$@" \
-        python3 -I "$WORK/ptydrive.py" "$a" "$sc" 2>&1); rc=$?
+        FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_NO_AGENTS=1 $HENV \
+        python3 -I "$WORK/ptydrive.py" - "$sc" "$@" 2>&1); rc=$?
 }
 # hsnap <home> — every file but the git internals, with its checksum
 hsnap() { (cd "$1" && find . -path ./.claude/fleet/.git -prune -o -type f -print | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$(cksum < "$f")" "$f"; done); }
 hval() { sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$2=//p" "$1/.config/claude-fleet/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' "; }
 
-# H1 只看只派 + 接: Enter, Enter (the hub's copy: 接 is the default)
+# H1 the hub's copy on a terminal: nothing asked → 只看只派 + 接
 H1="$WORK/h1/home"; mkdir -p "$H1"
-hinstall "$H1" "," "$WORK/install.sh" FLEET_INSTALL_NO_NODE=1
-[ "$rc" = 0 ] && ok "H1 view + hub on a pty → exit 0" || bad "H1 rc=$rc: $out"
-echo "$out" | grep -q '这台电脑要做什么？' && echo "$out" | grep -q '1 只看、只派 *推荐' && echo "$out" | grep -q '接入口吗？' \
-  && echo "$out" | grep -q "命令是从入口复制来的" && ok "H1 both questions asked, 只看只派 recommended, 接 because the line came from the hub" || bad "H1 prompts: $out"
+HENV=FLEET_INSTALL_NO_NODE=1 hinstall "$H1" "$WORK/install.sh"
+[ "$rc" = 0 ] && ok "H1 the hub's copy on a pty → exit 0, nothing asked (#2260)" || bad "H1 rc=$rc: $out"
+echo "$out" | grep -q -e '这台电脑要做什么' -e '接入口吗' && bad "H1 a question was printed: $out" || ok "H1 neither old question is printed"
 [ -f "$H1/.claude/fleet/bin/fleet" ] && [ ! -e "$H1/.claude/fleet/.git" ] && [ "$(hval "$H1" FLEET_HUB_URL)" = "$HUB" ] && [ "$(hval "$H1" FLEET_HOST)" = 0 ] \
   && ok "H1 the base in ~/.claude/fleet, the address written, FLEET_HOST=0" || bad "H1 state: host=$(hval "$H1" FLEET_HOST) hub=$(hval "$H1" FLEET_HUB_URL) $(ls -a "$H1/.claude/fleet" | head -3)"
-before=$(hsnap "$H1"); hinstall "$H1" "," "$WORK/install.sh" FLEET_INSTALL_NO_NODE=1
-[ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H1")" ] && ok "H1 again (Enter, Enter) → not one file changes" \
+[ "$(hval "$H1" FLEET_CLIENT_LAYOUT)" = solo ] && (FLEET_SHELL=1; . "$H1/.config/claude-fleet/fleet.conf"; [ "${FLEET_CLIENT_LAYOUT:-}" = solo ]) \
+  && ok "H1 a computer the fleet was never on: FLEET_CLIENT_LAYOUT=solo, read by the shell ([client])" || bad "H1 layout: $(grep -n LAYOUT "$H1/.config/claude-fleet/fleet.conf" 2>&1)"
+before=$(hsnap "$H1"); HENV=FLEET_INSTALL_NO_NODE=1 hinstall "$H1" "$WORK/install.sh"
+[ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H1")" ] && ok "H1 again → not one file changes" \
   || bad "H1 again rc=$rc: $(diff <(printf '%s\n' "$before") <(hsnap "$H1") | head -5) $out"
-# H2 the answer changed: 承载 (2, confirm, Enter = 接)
-hinstall "$H1" "2,," "$WORK/install.sh"
-[ "$rc" = 0 ] && ok "H2 view → 承载 on a pty → exit 0" || bad "H2 rc=$rc: $out"
-echo "$out" | grep -q '承载要多装这些' && echo "$out" | grep -q 'git、tmux' && echo "$out" | grep -q '后台程序' \
-  && ok "H2 承载 lists what it adds (git, tmux, 后台程序) and asks once more" || bad "H2 plan: $out"
+# H2 --host: 承载 too, still nothing asked
+HENV='' hinstall "$H1" "$WORK/install.sh" --host
+[ "$rc" = 0 ] && ok "H2 --host on a pty → exit 0, nothing asked" || bad "H2 rc=$rc: $out"
 [ -d "$H1/.claude/fleet/.git" ] && [ -f "$H1/.claude/fleet/bin/fleet-up.sh" ] && [ ! -e "$H1/.local/share/claude-fleet" ] \
   && [ -z "$(ls -d "$H1/.claude/fleet".* 2>/dev/null)" ] \
   && ok "H2 ~/.claude/fleet became the stable checkout in place — still one directory" || bad "H2 layout: $(ls -a "$H1/.claude" "$H1/.local/share" 2>&1)"
@@ -493,20 +510,20 @@ echo "$out" | grep -q '承载要多装这些' && echo "$out" | grep -q 'git、tm
   || bad "H2 boot=$(cat "$H1/boot.log" 2>&1) calls=$(cat "$H1/node-calls" 2>&1) host=$(hval "$H1" FLEET_HOST): $out"
 echo "$out" | grep -q '去掉了' && bad "H2 something was removed: $out" || ok "H2 nothing removed"
 echo "$out" | grep -q '能力: 基础 · 承载 已开 · 入口 接' && ok "H2 says 能力 基础 · 承载 已开 · 入口 接" || bad "H2 能力: $out"
-before=$(hsnap "$H1"); hinstall "$H1" "," "$WORK/install.sh"
+before=$(hsnap "$H1"); HENV='' hinstall "$H1" "$WORK/install.sh"
 [ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H1")" ] && echo "$out" | grep -q '承载: 已开，不重装' \
-  && ok "H2 again (Enter = what it answered) → nothing changes, no setup, no join" \
+  && ok "H2 again with no flag (承载 is what it had) → nothing changes, no setup, no join" \
   || bad "H2 again rc=$rc: $(diff <(printf '%s\n' "$before") <(hsnap "$H1") | head -5) $out"
-# H3 承载 + 不接, from the stable copy (no address: 不接 is the default)
+# H3 --host from the stable copy (no address: 不接)
 H3="$WORK/h3/home"; mkdir -p "$H3"
-hinstall "$H3" "2,2," "$BIN/fleet-install.sh"
+HENV='' hinstall "$H3" "$BIN/fleet-install.sh" --host
 [ "$rc" = 0 ] && [ -d "$H3/.claude/fleet/.git" ] && [ "$(hval "$H3" FLEET_HOST)" = 1 ] && [ -z "$(hval "$H3" FLEET_HUB_URL)" ] \
   && [ "$(cat "$H3/boot.log" 2>/dev/null)" = ran ] && [ ! -e "$H3/node-calls" ] \
-  && ok "H3 承载 + 不接 → the checkout, the setup once, FLEET_HOST=1, no address, no hub call" \
+  && ok "H3 --host, no address → the checkout, the setup once, FLEET_HOST=1, no address, no hub call" \
   || bad "H3 rc=$rc host=$(hval "$H3" FLEET_HOST) hub=$(hval "$H3" FLEET_HUB_URL): $out"
-echo "$out" | grep -q '2 不接（单机） *推荐' && echo "$out" | grep -q 'claude setup-token' && echo "$out" | grep -q '能力: 基础 · 承载 已开 · 入口 不接' \
-  && ok "H3 不接 recommended with no address; the account hint; 能力 says so" || bad "H3 output: $out"
-before=$(hsnap "$H3"); hinstall "$H3" "," "$BIN/fleet-install.sh"
+echo "$out" | grep -q 'claude setup-token' && echo "$out" | grep -q '能力: 基础 · 承载 已开 · 入口 不接' \
+  && ok "H3 the account hint; 能力 says 承载 + 不接" || bad "H3 output: $out"
+before=$(hsnap "$H3"); HENV='' hinstall "$H3" "$BIN/fleet-install.sh"
 [ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H3")" ] && ok "H3 again → nothing changes" \
   || bad "H3 again rc=$rc: $(diff <(printf '%s\n' "$before") <(hsnap "$H3") | head -5) $out"
 # H4 the same answers given ahead, no terminal → the same computer
@@ -663,6 +680,137 @@ ln -sfn "$JV/$(cat "$JV/.prev")" "$JR"
 [ "$(jtail)" = '# v2' ] && grep -qx version=v2 "$JR/.client-version" \
   && ok "J .prev rolls back: ln -sfn <versions>/<.prev> <home> → v2" || bad "J rollback: $(jtail)"
 kill "$JHUB_PID" 2>/dev/null; wait "$JHUB_PID" 2>/dev/null
+
+# ── K — the whole client in one go, and a tmux that needs no Homebrew (#2260) ─
+# Its own fake hub: /install/bundle.tar.gz is the manifest + every file it lists
+# + vendor/tmux (a fake static tmux) as one tar, SHA-256 in the header, like the
+# real one (tokenledger/internal/api/fleet_bundle.go); every request is logged.
+# $K/corrupt → the body no longer matches its header; $K/novendor → no tmux in it.
+K="$WORK/k"; mkdir -p "$K/vt"
+cat > "$K/vt/tmux" <<EOT
+#!/bin/sh
+printf '%s\\n' "\$*" >> "$K/tmux.log"
+case " \$* " in
+  *" -V "*) echo 'tmux 3.7c' ;;
+  *" has-session "*) exit 1 ;;
+  *" new-session "*) echo '@0' ;;
+esac
+exit 0
+EOT
+chmod +x "$K/vt/tmux"
+cat > "$K/hub.py" <<'PYK'
+import hashlib, io, os, sys, tarfile
+from http.server import BaseHTTPRequestHandler, HTTPServer
+REPO, MAN, W = sys.argv[1:4]
+names = [l.split()[0] for l in open(MAN) if l.strip() and not l.lstrip().startswith("#")
+         and not (len(l.split()) > 1 and l.split()[1] == "installer")]
+def body(name):
+    if name == "conf/vendor-tmux.lock" and os.path.exists(os.path.join(W, "lock")):
+        return open(os.path.join(W, "lock"), "rb").read()
+    return open(os.path.join(REPO, name), "rb").read()
+def bundle():
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        def add(n, b, mode):
+            i = tarfile.TarInfo(n); i.size = len(b); i.mode = mode; t.addfile(i, io.BytesIO(b))
+        add("manifest", open(MAN, "rb").read(), 0o644)
+        for n in names:
+            b = body(n); add(n, b, 0o755 if n.startswith("bin/") or b[:2] == b"#!" else 0o644)
+        if not os.path.exists(os.path.join(W, "novendor")):
+            add("vendor/tmux", open(os.path.join(W, "vt", "tmux"), "rb").read(), 0o755)
+    return buf.getvalue()
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        open(os.path.join(W, "requests"), "a").write(self.path + "\n")
+        p = self.path.split("?")[0]
+        name = p[len("/install/"):] if p.startswith("/install/") else ""
+        if name == "bundle.tar.gz":
+            b = bundle()
+        elif name == "manifest":
+            b = open(MAN, "rb").read()
+        elif name in names:
+            b = body(name)
+        else:
+            self.send_response(404); self.end_headers(); return
+        sha = hashlib.sha256(b).hexdigest()
+        if name == "bundle.tar.gz" and os.path.exists(os.path.join(W, "corrupt")):
+            b = b[:-10] + b"0123456789"
+        self.send_response(200); self.send_header("X-Ccquota-Sha256", sha)
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+s = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(W, "port.tmp"), "w").write(str(s.server_port)); os.rename(os.path.join(W, "port.tmp"), os.path.join(W, "port"))
+s.serve_forever()
+PYK
+python3 "$K/hub.py" "$REPO" "$MANIFEST" "$K" & KHUB_PID=$!
+for _ in $(seq 1 300); do [ -s "$K/port" ] && break; sleep 0.1; done
+KHUB="http://127.0.0.1:$(cat "$K/port" 2>/dev/null)"
+# as the hub's /i/<code> would serve it: the address and an invitation filled in
+sed -e "s|__FLEET_HUB_URL__|$KHUB|g" -e "s|__FLEET_INVITE__|inv-K2260abc|g" "$BIN/fleet-install.sh" > "$K/install.sh"
+# a PATH a stock computer has: no brew, no tmux (only what the install itself runs)
+KP="$K/path"; mkdir -p "$KP"
+for t in sh bash curl python3 ssh ssh-keygen uname tr awk sed mkdir mktemp rm mv chmod dirname basename head tail cat grep od id env pwd cmp true date sleep wc tar ls find ps cut sort stat; do
+  p=$(type -P "$t") && ln -sf "$p" "$KP/$t"
+done
+# kinstall <home> — one install with nothing given; $out, $rc, $secs
+kinstall() {
+  local h="$1" t0
+  : > "$K/requests"; t0=$(date +%s)
+  out=$(env -i HOME="$h" PATH="$KP" SHELL=/bin/zsh TMPDIR="$WORK" FC_BREW_DIRS= \
+        FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_NO_AGENTS=1 sh < "$K/install.sh" 2>&1); rc=$?
+  secs=$(( $(date +%s) - t0 ))
+}
+KH="$K/home"; mkdir -p "$KH"
+kinstall "$KH"
+[ "$rc" = 0 ] && ok "K fresh HOME, no brew, no tmux, nothing given → exit 0 in ${secs}s" || bad "K rc=$rc: $out"
+echo "$out" | grep -q '^用时 [0-9]* 秒' && ok "K the installer prints the time it took ($(echo "$out" | grep '^用时'))" || bad "K no time line: $out"
+nb=$(grep -c '^/install/bundle.tar.gz?os=' "$K/requests"); nf=$(grep -c '^/install/bin/' "$K/requests")
+[ "$nb" = 1 ] && [ "$nf" = 0 ] && ! echo "$out" | grep -q '逐个文件' \
+  && ok "K one request for the whole client, none file by file" || bad "K requests: bundle=$nb files=$nf $(head -5 "$K/requests") $out"
+kmiss=''
+for f in $FILES; do cmp -s "$KH/.claude/fleet/$f" "$REPO/$f" || kmiss="$kmiss $f"; done
+[ -z "$kmiss" ] && [ -x "$KH/.claude/fleet/bin/fleet" ] && ok "K every manifest file from the bundle, identical, bin/ executable" || bad "K files:$kmiss"
+KV="$KH/.local/share/claude-fleet-vendor/bin/tmux"
+[ -x "$KV" ] && cmp -s "$KV" "$K/vt/tmux" && echo "$out" | grep -q '^tmux: 3.7c 已就绪（随包带的' \
+  && ok "K the bundle's static tmux is in ~/.local/share/claude-fleet-vendor/bin — no Homebrew" || bad "K vendor tmux: $(ls -la "$(dirname "$KV")" 2>&1) $out"
+ft=$(env -i HOME="$KH" PATH="$KP" bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_find_tool tmux' _ "$KH/.claude/fleet/bin" 2>&1)
+[ "$ft" = "$KV" ] && ok "K fleet_find_tool tmux → the static one" || bad "K fleet_find_tool tmux: $ft"
+: > "$K/tmux.log"
+kout=$(cd "$KH" && env -i HOME="$KH" PATH="$KP" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_SHELL_NO_ATTACH=1 "$KH/.local/bin/fleet" 2>"$K/fleet.err" </dev/null); krc=$?
+[ "$krc" = 0 ] && [ "$kout" = fleet-shell ] && grep -q 'new-session' "$K/tmux.log" && ! grep -q 'install tmux' "$K/fleet.err" \
+  && ok "K \`fleet\` finds the static tmux (nothing else on PATH) and starts the shell" || bad "K fleet: rc=$krc out=$kout err=$(tail -3 "$K/fleet.err") log=$(head -3 "$K/tmux.log")"
+[ "$(hval "$KH" FLEET_CLIENT_LAYOUT)" = solo ] && ok "K a computer the fleet was never on → FLEET_CLIENT_LAYOUT=solo" || bad "K layout: $(cat "$KH/.config/claude-fleet/fleet.conf" 2>&1)"
+inv="$KH/.config/claude-fleet/invite"
+[ "$(cat "$inv" 2>/dev/null)" = inv-K2260abc ] && [ "$(ls -l "$inv" | cut -c1-10)" = '-rw-------' ] && ! echo "$out" | grep -q inv-K2260abc \
+  && ok "K the invitation the line carried is kept 0600, never printed" || bad "K invite: $(ls -l "$inv" 2>&1) $out"
+# a computer that had the fleet (its config directory is there): no solo
+KH2="$K/home2"; mkdir -p "$KH2/.config/claude-fleet"; echo '{}' > "$KH2/.config/claude-fleet/hub.json"
+kinstall "$KH2"
+[ "$rc" = 0 ] && ! grep -q FLEET_CLIENT_LAYOUT "$KH2/.config/claude-fleet/fleet.conf" \
+  && ok "K an earlier install → no FLEET_CLIENT_LAYOUT written" || bad "K earlier: rc=$rc $(grep LAYOUT "$KH2/.config/claude-fleet/fleet.conf") $out"
+# a bundle that does not match its SHA-256 → file by file, still installed
+touch "$K/corrupt"; KH3="$K/home3"; mkdir -p "$KH3"
+kinstall "$KH3"; rm -f "$K/corrupt"
+nf=$(grep -c '^/install/bin/' "$K/requests")
+[ "$rc" = 0 ] && echo "$out" | grep -q '整包没下成（校验不符），改为逐个文件下载' && [ "$nf" -gt 0 ] && cmp -s "$KH3/.claude/fleet/bin/fleet" "$REPO/bin/fleet" \
+  && ok "K a bundle failing its SHA-256 → file by file ($nf files), exit 0" || bad "K corrupt bundle: rc=$rc files=$nf $out"
+# a bundle with no tmux → the archive the lock pins (here a file:// one), SHA-256 checked
+touch "$K/novendor"; mkdir -p "$K/arc"; cp "$K/vt/tmux" "$K/arc/tmux"
+(cd "$K/arc" && tar -czf "$K/tmux.tgz" tmux)
+ksum=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$K/tmux.tgz")
+for pl in macos-arm64 macos-x86_64 linux-x86_64 linux-arm64; do printf '%s %s file://%s\n' "$pl" "$ksum" "$K/tmux.tgz"; done > "$K/lock"
+KH4="$K/home4"; mkdir -p "$KH4"
+kinstall "$KH4"
+[ "$rc" = 0 ] && echo "$out" | grep -q '下载 tmux 的静态版' && cmp -s "$KH4/.local/share/claude-fleet-vendor/bin/tmux" "$K/vt/tmux" \
+  && ok "K no tmux in the bundle → the lock's archive, checked, installed" || bad "K lock tmux: rc=$rc $out"
+printf '%s %s file://%s\n' "$(sh -c 'case $(uname -s) in Darwin) printf macos;; *) printf linux;; esac; case $(uname -m) in arm64|aarch64) printf -- -arm64;; *) printf -- -x86_64;; esac')" \
+  0000000000000000000000000000000000000000000000000000000000000000 "$K/tmux.tgz" > "$K/lock"
+KH5="$K/home5"; mkdir -p "$KH5"
+kinstall "$KH5"
+[ "$rc" = 0 ] && echo "$out" | grep -q '静态版校验不符' && [ ! -e "$KH5/.local/share/claude-fleet-vendor/bin/tmux" ] \
+  && ok "K a lock archive failing its SHA-256 is not installed (→ the Homebrew hint), exit 0" || bad "K bad lock sum: rc=$rc $out"
+rm -f "$K/novendor" "$K/lock"
+kill "$KHUB_PID" 2>/dev/null
 
 [ "$fail" = 0 ] && echo "PASS fleet-install-selftest" || echo "FAIL fleet-install-selftest"
 exit "$fail"
