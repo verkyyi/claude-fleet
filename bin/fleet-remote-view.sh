@@ -51,6 +51,8 @@
 #                           Exit 3 when the worker is not live here.
 #   watch <view>            (runs ON <node>, over the same ssh connection) — the
 #                           fleet-open back channel, below.
+#   live                    (ON <node>, issue #2219) — exit 0 when this login has a
+#                           live fleet session here (what `attach -` lands on), 1 not.
 #   health / prune          (ON <node>, issue #1907) — `shared=<n> orphans=<m>`:
 #                           remote clients on the fleet session instead of a view
 #                           session of their own, attaches whose tmux client is
@@ -1031,6 +1033,12 @@ back)
   ;;
 
 # ---------------------------------------------------------------------------------
+live)
+  # ON <node> (issue #2219): exit 0 when this login has a live fleet session here
+  # — what `attach -` would land on — else 1. The client asks it before it opens
+  # its first window on THIS computer: no fleet here, no connection to fail.
+  [ -n "$(fleet_sockets | head -n 1)" ]
+  ;;
 health)
   # ON <node> (issue #1907): `shared=<n> orphans=<m>` — registered remote clients
   # sitting on a fleet session instead of a view session of their own, and

@@ -148,6 +148,9 @@ case "\${1:-}" in
     esac ;;
   display-message)
     case "\$*" in
+      # fleet_window_repo's one read (#1943): spawners always stamp @repo, and a
+      # window whose repo is unknown is never matched — window @7 is acme/widgets'.
+      *'#{@repo}|'*) echo 'acme/widgets||'; exit 0 ;;
       *reap_state_ts*|*claude_state_ts*) echo 1; exit 0 ;;
       *reap_seen*) echo \$(( \$(date -u +%s) - 2 )); exit 0 ;;
       *reap_due*) echo 1; exit 0 ;;
@@ -281,7 +284,7 @@ tok="$(FAKE_MERGED_AT="$(iso_ago 60)" run_clean merged --auto --dry-run)"
 [ "$tok" = skip:grace ] || fail 'automatic dry-run must report the grace'
 ok 'automatic dry-run observes merged grace'
 tok="$(run_clean merged --auto)"
-case "$tok" in cleaned:*) ;; *) fail "expired automatic grace should clean, got '$tok'" ;; esac
+case "$tok" in cleaned:*) ;; *) fail "expired automatic grace should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
 ok 'expired automatic grace proceeds through normal cleanup'
 tok="$(FAKE_NOW=1767226199 FAKE_MERGED_AT=2026-01-01T00:00:00Z run_clean merged --auto --dry-run)"
 [ "$tok" = skip:grace ] || fail '599 seconds must still defer'

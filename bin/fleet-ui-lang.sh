@@ -352,6 +352,8 @@ fleet_ui_t() {
     en:shell_wait_failed_fmt)   printf 'opening a machine for you failed: ask the hub admin (%s).' "${1:-}" ;;
     zh:shell_wait_none_fmt)     printf '你还没有能开会话的机器：请找入口管理员 %s 给你分一台。' "${1:-}" ;;
     en:shell_wait_none_fmt)     printf 'no machine of yours hosts a session yet: ask the hub admin (%s) for one.' "${1:-}" ;;
+    zh:shell_wait_home_fmt)     printf '这台电脑（%s）上没有你的 fleet 会话——这个客户端只看、只派，正常。\n  开第一个会话：⌘N 新任务（或 prefix c），写下要做的事，入口交给有空的机器去做。\n  左边是你在各台机器上的会话：点一行就进去。' "${1:-}" ;;
+    en:shell_wait_home_fmt)     printf 'this computer (%s) holds no fleet session of yours — normal for a client that only looks and hands out work.\n  Your first session: ⌘N new task (or prefix c), write what to do, and the hub hands it to a free machine.\n  The list on the left is your sessions on every machine: tap a row to enter.' "${1:-}" ;;
     zh:shell_wait_leave)        printf 'prefix d 离开；再敲 fleet 回来。' ;;
     en:shell_wait_leave)        printf 'prefix d to leave; type fleet to come back.' ;;
     zh:sidebar_place_account_slow_fmt) printf '机器还没开好：稍后再回车一次，或找入口管理员 %s' "${1:-}" ;;

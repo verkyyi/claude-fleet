@@ -6,6 +6,20 @@
 #   fleet cred-proxy enable  [--relay-url <url>] [--all-logins [--logins a,b]]
 #   fleet cred-proxy disable [--all-logins [--logins a,b]]
 #   fleet cred-proxy status  [--all-logins [--logins a,b]]
+#   fleet cred-proxy enable|disable|status --machine [--logins a,b]
+#
+# --machine  the machine's ONE shared credential proxy (issue #2217) — a managed
+#          node, not a laptop: the role account (_fleetcred / fleetcred) runs it,
+#          every login is a tenant of it, the credentials live where no login's
+#          session can read them. enable = `fleet-credsep.sh machine install`
+#          (every login with ~/.claude/fleet, or --logins): ONE sudo for the
+#          machine — run with password-less sudo, else the line to type is
+#          printed (exit 4). disable = `machine uninstall`: every login back on
+#          its own proxy, each fleet.conf line and credential file where it was.
+#          status = ONE line `shared · <user> · on k/N logins · sessions a/b`
+#          (N logins with a fleet install, k of them on it; b live claude /
+#          codex processes on the machine, a of them on the shared proxy) —
+#          `per-login · …` when there is none.
 #
 # enable   writes `export FLEET_CRED_PROXY=1` (and, with --relay-url, the relay
 #          route's FLEET_CRED_RELAY_URL) into fleet.conf [common] — remembering
@@ -61,12 +75,13 @@ usage() { sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
 say() { printf 'cred-proxy: %s\n' "$*"; }
 
 verb="${1:-}"; [ $# -gt 0 ] && shift
-relay='' all=0 logins=''
+relay='' all=0 logins='' machine=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --relay-url)   relay="${2:-}"; shift; [ -n "$relay" ] || { usage >&2; exit 2; } ;;
     --relay-url=*) relay="${1#--relay-url=}" ;;
     --all-logins)  all=1 ;;
+    --machine)     machine=1 ;;
     --logins)      logins="${2:-}"; shift ;;
     --logins=*)    logins="${1#--logins=}" ;;
     -h|--help)     usage; exit 0 ;;
@@ -342,6 +357,65 @@ do_disable() {
   printf '%s\n' "$(status_line)"
   return "$rc"
 }
+
+# ---- the machine's shared proxy (issue #2217) -----------------------------------------
+CREDSEP="${FLEET_CRED_ROLLOUT_CREDSEP:-$BIN/fleet-credsep.sh}"
+machine_line() {
+  local ms mc
+  ms=$(bash "$CREDSEP" machine status --json 2>/dev/null)
+  mc=$(env -u FLEET_CRED_PROXY bash "$BIN/fleet-cred-proxy.sh" machine 2>/dev/null)
+  FCR_MS="$ms" FCR_MC="$mc" FCR_PROCS="${FLEET_CRED_ROLLOUT_PROCS:-}" python3 -I - <<'PY'
+import json, os, subprocess
+def j(k):
+    try:
+        return json.loads(os.environ.get(k) or "{}")
+    except ValueError:
+        return {}
+ms, mc = j("FCR_MS"), j("FCR_MC")
+src = os.environ.get("FCR_PROCS")
+if src:
+    names = [ln.split("\t", 1)[0] for ln in open(src, encoding="utf-8", errors="replace")]
+else:
+    try:   # every user's — names only: another login's environment is not ours to read
+        names = subprocess.run(["ps", "-A", "-o", "comm="], capture_output=True, text=True, timeout=20).stdout.split("\n")
+    except (OSError, subprocess.SubprocessError):
+        names = []
+b = sum(1 for n in names if os.path.basename(n.strip()) in ("claude", "codex"))
+every = ms.get("machine_logins") or []
+if not ms.get("shared"):
+    print("per-login · no shared proxy · %d login(s) with a fleet install" % len(every))
+else:
+    on = ms.get("logins") or []
+    n = len(set(every) | set(on))
+    a = sum(v.get("live", 0) for v in (mc.get("logins") or {}).values())
+    up = "" if ms.get("live_port") else " · DOWN"
+    print("shared · %s · on %d/%d logins · sessions %d/%d%s" % (ms.get("user") or "?", len(on), n, a, max(a, b), up))
+PY
+}
+
+do_machine() {
+  local rc out i
+  case "$verb" in
+    status) machine_line; return 0 ;;
+    enable)  bash "$CREDSEP" machine install --logins "${logins:-all}"; rc=$? ;;
+    disable) bash "$CREDSEP" machine uninstall; rc=$? ;;
+  esac
+  [ "$rc" = 4 ] && return 4    # no password-less sudo: the line to type was printed
+  if [ "$verb" = enable ] && [ "$rc" = 0 ]; then
+    i=0; while [ "$i" -lt "$((WAIT * 2))" ]; do
+      out=$(bash "$CREDSEP" machine status --json 2>/dev/null)
+      case "$out" in *'"live_port": null'*|'') ;; *) break ;; esac
+      sleep 0.5; i=$((i + 1))
+    done
+  fi
+  machine_line
+  return "$rc"
+}
+
+if [ "$machine" = 1 ]; then
+  [ "$all" = 0 ] && [ -z "$relay" ] || { echo 'fleet cred-proxy: --machine goes alone (with --logins)' >&2; exit 2; }
+  do_machine; exit $?
+fi
 
 # ---- one login, or all of them ------------------------------------------------------
 if [ "$all" = 0 ]; then
