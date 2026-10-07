@@ -251,7 +251,7 @@ step_open() {
   # hub's test door, never the operator's one-client lease (2026-10-06, #1901)
   printf 'export FLEET_CLIENT_IDENTITY=test\n' > "$RUN/zshenv"
   ( cd / && sudo -n install -o "$LOGIN" -g staff -m 644 "$RUN/zshenv" "$H/.zshenv" ) >> "$RUN/open.log" 2>&1 \
-    || { failstep open "~/.zshenv for $LOGIN: $(tail -n 1 "$RUN/open.log")"; return 1; }
+    || { failstep open "$H/.zshenv for $LOGIN: $(tail -n 1 "$RUN/open.log")"; return 1; }
   UIDN=$(id -u "$LOGIN" 2>/dev/null || :)
   GUID=$(dscl . -read "/Users/$LOGIN" GeneratedUID 2>/dev/null | awk '$1=="GeneratedUID:" {print $2; exit}')
   pass open "login $LOGIN (uid ${UIDN:-?}): a bare account, a temporary key, the test identity — nothing of the fleet's · $(elapsed)"
