@@ -481,7 +481,7 @@ def scratch_key(path):
     return "scratch-" + value if value.isdigit() else ""
 
 
-def window_key(row, one_repo):
+def window_key(row, one_repo, no_repo=False):
     """fleet_window_okey's key: `<slug>:issue-N` / `<slug>:scratch-N` in every
     fleet (issue #1939); a window with no @repo is the fleet's ONE repo's
     (<one_repo>, fleet_window_repo's fallback), and nothing when that is unknown."""
@@ -491,6 +491,8 @@ def window_key(row, one_repo):
         key = scratch_key(row["worktree"]) or scratch_key(row["path"])
         if not key:
             return ""
+    if no_repo and not row["repo"]:
+        return key                      # a fleet hosting no repo: bare is its only spelling
     if row["norepo"] == "1":
         return ""
     repo = row["repo"] or one_repo
@@ -525,6 +527,7 @@ def list_agents():
     kids = child_keys()
     one = lib("fleet_repos " + shquote(session), check=False).stdout.split()
     one_repo = one[0] if len(one) == 1 else ""
+    no_repo = not one
     fmt = "#{window_id}\t#{session_name}\t#{window_name}\t#{@issue}\t#{@cc_agent}\t" \
           "#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}\t#{@claude_needs}\t" \
           "#{@origin}\t#{@repo}\t#{@norepo}\t#{@worktree}\t#{pane_current_path}"
@@ -536,7 +539,7 @@ def list_agents():
             continue
         row = dict(zip(("window_id", "session", "window_name", "issue", "agent", "state", "needs",
                         "origin", "repo", "norepo", "worktree", "path"), parts))
-        key = window_key(row, one_repo)
+        key = window_key(row, one_repo, no_repo)
         state = row["needs"] or row["state"] or "unknown"
         agent = "codex" if row["agent"] == "codex" else "claude"
         agents.append({

@@ -221,9 +221,11 @@ okey_v() { okey=''
 okp=''
 RONLY=''
 [ -n "$SESS" ] && command -v fleet_repos >/dev/null 2>&1 && RONLY=$(fleet_repos "$SESS")
+RZERO=0; [ -z "$RONLY" ] && RZERO=1                 # no repo at all: keys stay bare
 case "$RONLY" in *$'\n'*) RONLY='' ;; esac          # 2+ repos: no default
 okp_v() { okp=''
   local r="$1"
+  [ "$RZERO" = 1 ] && [ -z "$r" ] && return 0
   if [ "${2:-}" != 1 ] && [ -z "$r" ]; then r=$RONLY; fi
   if [ "${2:-}" != 1 ] && [ -n "$r" ]; then r=${r//\//-}; okp="${r//[^[:alnum:]._-]/}:"; else okp='?:'; fi
 }

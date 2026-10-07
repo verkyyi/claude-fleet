@@ -118,7 +118,7 @@ CA=$(win "$M" CA @issue 20 @repo o/a @origin o-a:issue-12)
 CB=$(win "$M" CB @issue 21 @repo o/b @origin o-b:issue-12)
 D12=$(win "$D" D12 @issue 12)
 D14=$(win "$D" D14 @issue 14)
-DC=$(win "$D" DC @issue 20 @origin issue-12)
+DC=$(win "$D" DC @issue 20 @origin o-c:issue-12)   # a spawn stamps the repo-qualified key (#1939)
 
 paneOf() { tmx "$1" display-message -p -t "$2" '#{pane_id}'; }
 in_pane() { # in_pane <sess> <window-id> <cmd…>
@@ -134,23 +134,23 @@ printf '%s\t%s\t%s\n' "$M" o-a o/a "$D" o-c o/c > "$FLEET_C/global/sessmap"
 fleet_multirepo "$M" || fail "keys: M hosts two repos"
 fleet_multirepo "$D" && fail "keys: D hosts one repo"
 eq "keys: issue key, multi"  "$(fleet_issue_key "$M" https://github.com/o/b.git 12)" "o/b#12"
-eq "keys: issue key, one-repo" "$(fleet_issue_key "$D" o/c 12)" "12"
+eq "keys: issue key, one-repo carries its repo too (#1939)" "$(fleet_issue_key "$D" o/c 12)" "o/c#12"
 eq "keys: window key A12" "$(fleet_window_key "$M" "$A12")" "o/a#12"
 eq "keys: window key B12" "$(fleet_window_key "$M" "$B12")" "o/b#12"
 eq "keys: unknown repo is #N, not a guess" "$(fleet_window_key "$M" "$U16")" "#16"
-eq "keys: one-repo window key stays bare" "$(fleet_window_key "$D" "$D12")" "12"
+eq "keys: one-repo window key carries its repo" "$(fleet_window_key "$D" "$D12")" "o/c#12"
 eq "keys: window key CB" "$(fleet_window_key "$M" "$CB")" "o/b#21"
-eq "keys: one-repo D14 / DC stay bare" "$(fleet_window_key "$D" "$D14") $(fleet_window_key "$D" "$DC")" "14 20"
+eq "keys: one-repo D14 / DC carry it" "$(fleet_window_key "$D" "$D14") $(fleet_window_key "$D" "$DC")" "o/c#14 o/c#20"
 eq "keys: panel has no key" "$(fleet_window_key "$M" "$M:plan")" ""
 iw=$(fleet_bound_windows "$M" | cut -f1 | sort | tr '\n' ' ')
 eq "keys: issue windows, multi" "$iw" "#16 o/a#12 o/a#20 o/b#12 o/b#14 o/b#21 "
 iw=$(fleet_bound_windows "$D" | cut -f1 | sort | tr '\n' ' ')
-eq "keys: issue windows, one-repo" "$iw" "12 14 20 "
+eq "keys: issue windows, one-repo" "$iw" "o/c#12 o/c#14 o/c#20 "
 eq "keys: repo by slug"  "$(fleet_repo_for_slug "$M" o-b)" "o/b"
 eq "keys: repo by name"  "$(fleet_repo_for_slug "$M" a)" "o/a"
 fleet_repo_for_slug "$M" o-z >/dev/null && fail "keys: an unhosted slug resolves"
 eq "keys: okey prefix, multi" "$(fleet_okey_prefix "$M" o/b)" "o-b:"
-eq "keys: okey prefix, one-repo" "$(fleet_okey_prefix "$D" o/c)" ""
+eq "keys: okey prefix, one-repo" "$(fleet_okey_prefix "$D" o/c)" "o-c:"
 leg keys
 
 # --- dispatch: autofill dedup ------------------------------------------------------
@@ -272,7 +272,7 @@ o=$(order "$M")
 has "dash: CB under B12" "$o" "B12 CB "
 has "dash: CA under A12" "$o" "A12 CA "
 o=$(order "$D")
-has "dash: one-repo child under its bare issue-12 parent" "$o" "D12 DC "
+has "dash: one-repo child under its issue-12 parent" "$o" "D12 DC "
 # fold: ← from INSIDE A12's block (on CA) shuts A12's block — and only A12's
 in_pane "$M" "$CA" env FLEET_SESSION="$M" bash "$BIN/dash-fold-toggle.sh" collapse "$CA" >/dev/null
 eq "dash: fold from CA shut A12" "$(tmx "$M" display-message -p -t "$A12" '#{@expand}')" ""

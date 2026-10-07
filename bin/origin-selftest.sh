@@ -5,8 +5,8 @@
 #   A. fleet_origin_key (fleet-lib.sh) against a REAL isolated tmux server:
 #      an @issue window resolves to issue-<N>, an @raw window to its
 #      scratch-<N> (from @worktree), a plain window / no-$TMUX caller to EMPTY —
-#      `<slug>:`-qualified in a ONE-repo fleet too (issue #1939), and nothing in
-#      a fleet with no repo (the window's repo is unknown, so no key is guessed).
+#      `<slug>:`-qualified in a ONE-repo fleet too (issue #1939), and bare in a
+#      fleet hosting no repo (nothing to qualify with).
 #   B. the HISTORY half, fully hermetic (no tmux): record-closed --origin writes
 #      ledger col 11; an origin-less record writes '-'; fleet_reap_record threads
 #      its 11th arg through; `rows` renders the ↳ tag only on tagged rows; `meta`
@@ -180,8 +180,8 @@ p_plain=$(mk_pane w-plain)
 p_bare=$(mk_pane w-bare "$WORK/wt/repo-scratch-9")
 
 og() { TMUX="fake,1,1" TMUX_PANE="$1" bash -c ". '$LIB'; fleet_origin_key"; }
-# No repo: a window's repo is unknown, so no key is minted (never a guess).
-eq "origin_key: a fleet with no repo mints no key" "" "$(og "$p_iss")"
+# No repo at all: nothing to qualify with, nothing to confuse — the bare key.
+eq "origin_key: a fleet hosting no repo keys bare" "issue-42" "$(og "$p_iss")"
 mkdir -p "$FLEET_CONF_DIR/fleets/ok"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/ok/conf"
 eq "origin_key: @issue pane" "acme-app:issue-42" "$(og "$p_iss")"
 eq "origin_key: @raw pane (from @worktree)" "acme-app:scratch-7" "$(og "$p_raw")"

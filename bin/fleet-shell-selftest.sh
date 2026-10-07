@@ -544,7 +544,7 @@ tn new-window -d -t "=$NODE:" -n issue-7 "sleep 600"; tn set-window-option -t "=
 tn new-window -d -t "=$NODE:" -n issue-8 "sleep 600"; tn set-window-option -t "=$NODE:issue-8" @issue 8
 tn select-window -t "=$NODE:hub"
 ( export TMPDIR="$WORK/node-tmp"; unset TMUX TMUX_PANE
-  CCQUOTA_FLEET=1 bash "$SB/fleet-remote-view.sh" select "wid:$U/issue-8" >/dev/null 2>&1 ); rc=$?
+  CCQUOTA_FLEET=1 bash "$SB/fleet-remote-view.sh" select "wid:$U/acme-app:issue-8" >/dev/null 2>&1 ); rc=$?
 eq 'I: select exits 0 for a live worker' 0 "$rc"
 eq 'I: the worker window is now current on the node' 'issue-8' "$(tn display-message -p -t "=$NODE:" '#{window_name}')"
 ( export TMPDIR="$WORK/node-tmp"; unset TMUX TMUX_PANE
@@ -558,8 +558,8 @@ eq 'I: fleet_sockets names the node session (what attach - picks)' "$NODE" "$out
 # sessions (issue #1488): what the node says of itself over the shell's connection
 out=$( export TMPDIR="$WORK/node-tmp"; unset TMUX TMUX_PANE; CCQUOTA_FLEET=1 bash "$SB/fleet-remote-view.sh" sessions 2>"$WORK/sessions.err" ); rc=$?
 eq 'I: sessions exits 0' 0 "$rc"
-has 'I: sessions names a worker by worker_id (<fleet UUID>/<key>)' "$out" "\"worker_id\": \"$U/issue-7\""
-has 'I: …and the other' "$out" "\"worker_id\": \"$U/issue-8\""
+has 'I: sessions names a worker by worker_id (<fleet UUID>/<key>)' "$out" "\"worker_id\": \"$U/acme-app:issue-7\""
+has 'I: …and the other' "$out" "\"worker_id\": \"$U/acme-app:issue-8\""
 hasnt 'I: the hub window (no key) is not a session' "$out" '"hub"'
 has 'I: machine_name is this host' "$out" "\"machine_name\": \"$(hostname -s | cut -d. -f1)\""
 has 'I: the fleet'"'"'s repo fills a one-repo window'"'"'s repo' "$out" '"repo": "acme/app"'
@@ -600,8 +600,8 @@ CHECKS=$((CHECKS + 1)); waitfor 15 nodeclient || fail 'K: the right pane attache
 GK="$WORK/cacheK/tmp/.claude-dash/global"
 CHECKS=$((CHECKS + 1)); waitfor 15 grep -q "issue-8" "$GK/remote_$SESSK" 2>/dev/null || fail 'K: the loop wrote this machine'"'"'s rows' "$(ls "$GK" 2>/dev/null)"
 cachek=$(tr '\037' '|' < "$GK/remote_$SESSK" 2>/dev/null)
-has 'K: the issue-7 row, on this computer, via=node' "$cachek" "wid:$U/issue-7|$ME|online|7|acme/app|"
-has 'K: …and issue-8' "$cachek" "wid:$U/issue-8|$ME|online|8|acme/app|"
+has 'K: the issue-7 row, on this computer, via=node' "$cachek" "wid:$U/acme-app:issue-7|$ME|online|7|acme/app|"
+has 'K: …and issue-8' "$cachek" "wid:$U/acme-app:issue-8|$ME|online|8|acme/app|"
 has 'K: a #node line for this computer, via=node' "$cachek" "#node|$ME|online|2|"
 CHECKS=$((CHECKS + 1)); [ -e "$GK/hub_nodes" ] && fail 'K: no hub summary asked for'
 rowsk=$( cd "$WORK/cacheK/bin" && TMUX="$(tk display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SESSION="$SESSK" FLEET_SIDEBAR_CURRENT="$wk" \
@@ -613,9 +613,9 @@ hasnt 'K: no row reads lost (there is no hub to be silent)' "$rowsk" "$ME!"
 # pick a row: the right pane switches to it on this machine
 okk=$( TMUX="$(tk display-message -p '#{socket_path}'),0,0" FLEET_SHELL=1 FLEET_SHELL_STAGE="$SESSK-stage" FLEET_SESSION="$SESSK" CCQUOTA_FLEET=1 TMPDIR="$WORK/cacheK/tmp" \
        FLEET_HUB_SESSIONS_LOCAL=1 FLEET_REMOTE_SSH_CMD="$WORK/cacheK/bin/fleet-shell.sh ssh" \
-       bash "$WORK/cacheK/bin/fleet-remote-view.sh" open "wid:$U/issue-8" 2>&1 )
+       bash "$WORK/cacheK/bin/fleet-remote-view.sh" open "wid:$U/acme-app:issue-8" 2>&1 )
 eq 'K: open answered the same window' "$wk" "$okk"
-eq 'K: @remote retargeted to issue-8' "$ME:$U/issue-8" "$(tkg show-options -wqv -t "$wk" @remote 2>/dev/null)"
+eq 'K: @remote retargeted to issue-8' "$ME:$U/acme-app:issue-8" "$(tkg show-options -wqv -t "$wk" @remote 2>/dev/null)"
 nodeon8() { tn list-clients -F '#{window_name}' 2>/dev/null | grep -qx issue-8; }
 CHECKS=$((CHECKS + 1)); waitfor 15 nodeon8 || fail 'K: the right pane now shows issue-8' "$(tn list-clients -F '#{client_session} #{window_name}' 2>/dev/null)"
 "$REAL_TMUX" -L "$SESSK" kill-server 2>/dev/null

@@ -145,7 +145,7 @@ w() { printf '%s\n' "$S$US$1$US$2$US$3$US$4$US$US$5$US$6$US$7$US$3$US$US$8$US$US
 : > "$WLIST_FILE"
 #  idx name  path                 state    wid  issue origin      handle expand
 w 1  EPIC  /w/app-issue-1419    looping  @1   1419  ''          a1     1
-w 2  C1    /w/app-issue-1420    working  @2   1420  issue-1419  a2
+w 2  C1    /w/app-issue-1420    working  @2   1420  acme-app:issue-1419  a2
 w 3  solo  /w/app-issue-1430    working  @3   1430  ''          a3
 
 # colours off, and the working spinner's frame (it turns every quarter second) → `*`
@@ -168,7 +168,7 @@ remote_cache() {   # $1 = the #ts epoch; $2 = m4's #node line availability; $3 =
   { printf '#ts\037%s\n' "$1"
     printf '#me\037m5\n'
     printf '#node\037m4\037%s\0372\037%s\n' "${2:-online}" "${3:-$1}"
-    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037issue-1419\037\n' "$F"
+    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037acme-app:issue-1419\037\n' "$F"
     printf 'wid:%s/issue-1500\037m4\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\037\n' "$F" "$F"
     printf 'wid:%s/scratch-2\037m4\037lost\037\037\037working\037claude\037草稿\037\037\n' "$F"
   } > "$G/remote_$S"
@@ -327,11 +327,11 @@ eq "D: the producer's code names no network tool and not the refresher" "0" \
 L=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee            # this machine's fleet
 new_cache() {   # the #1480 shape: `local` + `wid` on every row, this machine's rows included
   { printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
-    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037issue-1419\037\0370\037\n' "$F"
+    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037acme-app:issue-1419\037\0370\037\n' "$F"
     printf 'wid:%s/issue-1500\037m4\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\037\0370\037\n' "$F" "$F"
     printf 'wid:%s/scratch-2\037m4\037lost\037\037\037working\037claude\037草稿\037\037\0370\037\n' "$F"
     printf 'wid:%s/issue-1419\037m5\037online\0371419\037acme/app\037done\037claude\037EPIC\037\037\0371\037@1\n' "$L"
-    printf 'wid:%s/issue-1420\037m5\037online\0371420\037acme/app\037done\037claude\037C1\037issue-1419\037\0371\037@2\n' "$L"
+    printf 'wid:%s/issue-1420\037m5\037online\0371420\037acme/app\037done\037claude\037C1\037acme-app:issue-1419\037\0371\037@2\n' "$L"
     printf 'wid:%s/issue-1499\037m5\037online\0371499\037acme/app\037working\037claude\037gone\037\037\0371\037@9\n' "$L"
     printf 'wid:%s/scratch-7\037m5\037online\037\037\037working\037claude\037nowin\037\037\0371\037\n' "$L"
   } > "$G/remote_$S"

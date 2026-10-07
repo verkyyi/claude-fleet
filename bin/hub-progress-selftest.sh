@@ -52,7 +52,7 @@ U=$(lib fleet_uuid "$L")
 F=11111111-2222-3333-4444-555555555555          # a fleet on another machine ("m4")
 O1=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee         # the placement's operation id
 CD="$(bash -c '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"; children_dir "$2"' _ "$BIN" "$L")"
-LEDGER="$CD/issue-7.ndjson"; DISP="$CD/issue-7.dispatch"
+LEDGER="$CD/acme-app:issue-7.ndjson"; DISP="$CD/acme-app:issue-7.dispatch"   # one book per parent, its repo in the key (#1939)
 nlines() { [ -f "$1" ] && grep -c . "$1" || echo 0; }
 
 # The fake hub: prints $WORK/answer.json then the status line, logs its argv.
@@ -74,7 +74,7 @@ pull() { run bash "$BIN/fleet-hub-node.sh" progress; }
 kid() { # → `<total>|<bucket>|<progress>|<rows naming issue-42>` off fleet-children.sh --json
   env -u TMUX FLEET_HUB_PROGRESS=0 bash "$BIN/fleet-children.sh" -L "$L" issue-7 --json 2>/dev/null | python3 -c 'import json, sys
 d = json.load(sys.stdin)
-k = [c for c in d["children"] if c["child"] == "issue-42"]
+k = [c for c in d["children"] if c["child"] == "acme-app:issue-42"]
 print("%d|%s|%s|%d" % (d["summary"]["total"], k[0]["bucket"] if k else "", k[0].get("progress", "") if k else "", len(k)))'; }
 
 # --- A: degenerate ----------------------------------------------------------------------
@@ -96,7 +96,7 @@ answer 9 \
 pull
 ok; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 1 ] || fail "B: the hub's MERGED lands in the parent's book" "rc=$rc lines=$(nlines "$LEDGER") $out $err"
 ok; python3 -c 'import json, sys; e = json.loads(open(sys.argv[1]).readline())
-sys.exit(0 if (e["child"], e["state"], e["pr"], e["node"], e["rid"]) == ("issue-42", "MERGED", "50", "m4", sys.argv[2]) else 1)' \
+sys.exit(0 if (e["child"], e["state"], e["pr"], e["node"], e["rid"]) == ("acme-app:issue-42", "MERGED", "50", "m4", sys.argv[2]) else 1)' \
   "$LEDGER" "$F/issue-42#1.1" || fail "B: the row carries node + rid" "$(cat "$LEDGER")"
 ok; case "$out" in *'1 new row(s), 1 parent(s) not here'*) ;; *) fail "B: a parent of a fleet not here is skipped, said once" "$out" ;; esac
 ok; [ "$(cat "$FLEET_CONF_DIR/hub-progress/seq")" = 9 ] || fail "B: the cursor moves to the answer's seq" "$(cat "$FLEET_CONF_DIR/hub-progress/seq")"
@@ -125,10 +125,10 @@ ok; [ "$(nlines "$LEDGER")" = 2 ] && [ -z "$out" ] || fail "C: a pull from seq 0
 # --- D + E: a placement advances in one row -------------------------------------------------
 : > "$LEDGER"; rm -f "$DISP" "$FLEET_CONF_DIR/hub-progress/seq"
 # The spawn's own row, as dash-issue-session.sh writes it for an --async placement.
-python3 "$BIN/fleet-children.py" dispatch --file "$DISP" --child issue-42 --state accepted --node m4 --op "$O1" >/dev/null
+python3 "$BIN/fleet-children.py" dispatch --file "$DISP" --child acme-app:issue-42 --state accepted --node m4 --op "$O1" >/dev/null
 ok; [ "$(kid)" = "1|▸|accepted|1" ] || fail "D: placed, nothing more ⇒ one working row, progress accepted" "$(kid)"
 txt=$(env -u TMUX FLEET_HUB_PROGRESS=0 bash "$BIN/fleet-children.sh" -L "$L" issue-7)
-ok; case "$txt" in *'↗ issue-42'*) fail "D: no ↗ line of its own" "$txt" ;; *'▸ issue-42'*'gone ↗m4'*'accepted'*'0/1 ✓') ;; *) fail "D: the text row says where and how far" "$txt" ;; esac
+ok; case "$txt" in *'↗ acme-app:issue-42'*) fail "D: no ↗ line of its own" "$txt" ;; *'▸ acme-app:issue-42'*'gone ↗m4'*'accepted'*'0/1 ✓') ;; *) fail "D: the text row says where and how far" "$txt" ;; esac
 step() { # <seq> <rid> <kind> <state> <event-json> <want kid()> <what>
   answer "$1" "$(ev "$1" "$2" "$U/issue-7" "$3" "$4" "$5")"; : > "$WORK/curl.log"; pull
   ok; [ "$(kid)" = "$6" ] || fail "D: $7" "$(kid) (rc=$rc $err)"

@@ -175,9 +175,10 @@ case "$NUM" in wid:*)
         [ -n "$RWID" ] && rorigin=$(awk -F'\t' -v w="$RWID" '$1 == w { print $3; exit }' "$(fleet_hub_cache)" 2>/dev/null)
         me=$(fleet_uuid "$sess" 2>/dev/null)/$KEY
         mefid=$(fleet_key_wid "$sess" "$KEY" 2>/dev/null) || mefid=$me   # by identity (#1646)
+        meal=$(fleet_key_alias "$sess" "$KEY"); [ -n "$meal" ] && meal=${me%/*}/$meal   # the bare key, pre-#1939
         case "${k##*:}" in issue-*) NUM=${k##*:issue-} ;; *) note="'$WID' is a scratch session — fleet-await waits on an issue worker" ;; esac
         if [ -z "$note" ] && [ -z "$RWID" ]; then note="'$WID' lives on $RNODE, but the hub map has no full worker_id for it"
-        elif [ -z "$note" ] && [ "$rorigin" != "$me" ] && [ "$rorigin" != "$mefid" ]; then
+        elif [ -z "$note" ] && [ "$rorigin" != "$me" ] && [ "$rorigin" != "$mefid" ] && { [ -z "$meal" ] || [ "$rorigin" != "$meal" ]; }; then
           note="'$WID' lives on $RNODE and reports to ${rorigin:-nobody (hub-spawned)}, not to $KEY — its outcome is not pushed here"
         fi
         [ -n "$note" ] || REMOTE=$k ;;
@@ -199,7 +200,10 @@ elif [ -n "$REPO_ARG" ]; then
   CKEY="$(fleet_okey_prefix "$sess" "$REPO_ARG")issue-$NUM"
 else
   CKEY=$(fleet_key_qualify "$sess" "issue-$NUM")
-  case "$CKEY" in ?*:*) ;; *) die "this fleet hosts several repos — pass --repo <owner/name>" ;; esac
+  case "$CKEY" in
+    ?*:*) ;;
+    *) [ -z "$(fleet_repos "$sess")" ] || die "this fleet hosts several repos — pass --repo <owner/name>" ;;   # no repo: bare
+  esac
 fi
 
 # `wid|@origin` of #N's live window on this fleet, or nothing — through the ONE
@@ -224,8 +228,12 @@ try:
     d = json.load(sys.stdin)
 except ValueError:
     sys.exit(0)
+k = sys.argv[1]
 for c in d.get("children") or []:
-    if c.get("child") != sys.argv[1]:
+    # a bare key (a remote child as its machine spells it) is booked under the
+    # parent book repo (fleet-children.py canon_child, #1351/#1939)
+    ch = str(c.get("child") or "")
+    if ch != k and (":" in k or not ch.endswith(":" + k)):
         continue
     l = c.get("last") or {}
     f = [1 if c.get("live") else 0, c.get("state", ""), c.get("needs", ""), l.get("seq") or 0,

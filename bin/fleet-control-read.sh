@@ -116,6 +116,8 @@ case "$mode" in
     # merge, #921). Always present and always `busy=`-prefixed, so a window name
     # holding a tab can never pass for it.
     rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}$xfmt") || exit 1
+    # A fleet hosting NO repo keeps column 9 empty (bare keys): nothing to qualify with.
+    unk='?'; [ -z "$(fleet_repos "$sess")" ] && unk=''
     rows=$(while IFS= read -r row; do
       [ -n "$row" ] || continue
       fi=${row##*$'\t'}; row=${row%$'\t'*}
@@ -124,7 +126,7 @@ case "$mode" in
       nm=${row##*$'\t'}; row=${row%$'\t'*}
       r=${row##*$'\t'}; row=${row%$'\t'*}
       [ -n "$r" ] || r=$(fleet_window_repo "$sess" "${row%%$'\t'*}")
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$row" "${r:-?}" "$nm" "$ow" "$nd" "$fi"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$row" "${r:-$unk}" "$nm" "$ow" "$nd" "$fi"
     done <<<"$rows")
     busy=$(workers_busy "$sock" "$sess")
     # Two fills (issue #1749), so every session the operator's own list shows is
@@ -331,6 +333,9 @@ case "$mode" in
     repo=${FLEET_REPO:-}
     if ! fleet_multirepo "$sess"; then
       [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] || exit 5
+      # A one-repo fleet's key carries its repo too (issue #1939): `<slug>:issue-N`.
+      key_repo_split "${3:-}"; [ -n "$krepo" ] && repo=$krepo
+      set -- "$1" "$2" "${kbare#issue-}"
     else
       key_repo_split "${3:-}"; n=${kbare#issue-}
       case "$n" in ''|*[!0-9]*) exit 2 ;; esac
@@ -443,6 +448,8 @@ case "$mode" in
     sp=$(tmux -L "$sock" display-message -p '#{socket_path}' 2>/dev/null)
     [ -n "$sp" ] || { printf 'reap: fleet %s has no running tmux server\n' "$sess" >&2; exit 5; }
     target="$key"
+    # The one repo's `<slug>:issue-N` (issue #1939) is the reaper's own bare key.
+    _a=$(fleet_key_alias "$sess" "$key"); [ -n "$_a" ] && { key=$_a; target=$_a; }
     case "$key" in *:*)
       target=$(fleet_win_for_key "$key" "$sock") && [ -n "$target" ] \
         || { printf 'reap: no live window holds %s on %s\n' "$key" "$sess" >&2; exit 5; } ;;
@@ -480,6 +487,8 @@ case "$mode" in
     if fleet_multirepo "$sess"; then
       multi=1; key_repo_split "${3:-}"; rrepo=$krepo
       set -- "$1" "$2" "$kbare"
+    else                      # `<slug>:issue-N` names the one repo too (issue #1939)
+      key_repo_split "${3:-}"; set -- "$1" "$2" "$kbare"
     fi
     case "${3:-}" in
       issue-*)   rkey="${3#issue-}";  target="landed:issue:$rkey" ;;

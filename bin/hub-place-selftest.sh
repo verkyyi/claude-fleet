@@ -214,7 +214,7 @@ UUID=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" FLEET_REPO=acme/widgets FLEET_M
 [ -n "$UUID" ] || fail "setup: fleet_uuid derived nothing from the fake control database"
 
 
-WID="$UUID/issue-258"
+WID="$UUID/acme-widgets:issue-258"   # keys carry the repo (issue 1939)
 REMOTE_LINE=$'REMOTE m4 op_42 accepted\tchose m4 (score 0.875, load 0.10/core); m5 excluded: load 1.00/core > 0.8'
 
 # ===== OFF: CCQUOTA_FLEET unset ⇒ nothing runs, byte-identical ====================
@@ -413,7 +413,7 @@ err_has '#258 → m4 已开窗 @42 (hub operation op_43)' || fail "DONE names th
 place_has '--wait'                               && fail "DONE a sync spawn leaves the wait to the hub's default"
 tmux_has 'new-window'                            && fail "DONE must not open a window here"
 lease_has release                                && fail "DONE the lease is the remote's"
-grep -q '"child": "issue-258".*"op": "op_43".*"state": "done".*"window": "@42"' "$DISPATCH" \
+grep -q '"child": "acme-widgets:issue-258".*"op": "op_43".*"state": "done".*"window": "@42"' "$DISPATCH" \
                                                  || fail "DONE the parent's dispatch file records the window" "$(cat "$DISPATCH" 2>/dev/null)"
 ok "DONE m4 opened it → exit 0, window @42 on stderr and in the dispatch file"
 

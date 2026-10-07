@@ -148,7 +148,7 @@ echo "sent → pid 4242 (issue-123 · /fixture/issue-123)"
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/stop.calls"
 [ ! -f "$FLEET_CONF_DIR/stop-hang" ] || { echo failed:no-exit; exit 7; }
 k="${2##*:}"; n="${k#issue-}"; p=''; case "$2" in *:*) p="${2%%:*}" ;; esac
-awk -F'\t' -v n="$n" -v p="$p" '{ s = $9; gsub("/", "-", s) } !($2 == n && (p == "" || s == p))' \
+awk -F'\t' -v n="$n" -v p="$p" '{ s = $9; gsub("/", "-", s) } !($2 == n && (p == "" || s == p || s == ""))' \
   "$FLEET_CONF_DIR/workers.tsv" > "$FLEET_CONF_DIR/workers.new"
 mv "$FLEET_CONF_DIR/workers.new" "$FLEET_CONF_DIR/workers.tsv"
 echo stopped:exit
@@ -279,6 +279,12 @@ class HubFixture(unittest.TestCase):
         return code, json.loads(out.getvalue()) if out.getvalue().strip() else None
 
     def worker(self, key="issue-123"):
+        # Every key carries its repo, a one-repo fleet's too (issue #1939);
+        # `bare:<key>` is the old unqualified spelling, sent as it is.
+        if key.startswith("bare:"):
+            return self.fleet + "/" + key[len("bare:"):]
+        if ":" not in key and key.startswith(("issue-", "scratch-")):
+            key = "example-project:" + key
         return self.fleet + "/" + key
 
     def lifecycle(self, tool, key="issue-123", idem=None, token=None, **extra):
@@ -366,12 +372,12 @@ class HubTests(HubFixture):
         done = self.lifecycle("worker_stop", ident)
         self.assertEqual(done["status"], "succeeded")
         self.assertEqual(done["result"]["stopped"]["window_id"], "@12")
-        self.assertEqual(self.node.calls("stop"), ["demo issue-123"])
+        self.assertEqual(self.node.calls("stop"), ["demo example-project:issue-123"])
         # An identity no live window carries is NOT_FOUND — never a key guess.
         gone = self.lifecycle("worker_stop", str(uuid.uuid4()), idem="stop-nobody")
         self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
         # The old <fleet UUID>/<key> form still resolves (one version's alias).
-        alias = self.lifecycle("worker_stop", "issue-124", idem="stop-alias")
+        alias = self.lifecycle("worker_stop", "bare:issue-124", idem="stop-alias")
         self.assertEqual(alias["result"]["stopped"]["window_id"], "@13")
 
     def test_stop_targets_identity_never_a_window_number(self):
@@ -379,7 +385,7 @@ class HubTests(HubFixture):
         done = self.lifecycle("worker_stop")
         self.assertEqual(done["status"], "succeeded")
         self.assertEqual(done["result"]["stopped"]["window_id"], "@12")
-        self.assertEqual(self.node.calls("stop"), ["demo issue-123"])
+        self.assertEqual(self.node.calls("stop"), ["demo example-project:issue-123"])
         self.assertEqual([w["issue"] for w in self.call("fleet_status", {"fleet_id": self.fleet})["workers"]], [124])
         # Same key ⇒ the journal answers; a fresh key on an ended worker ⇒ a clear
         # failure, and the window that now sits where @12 was is never touched.
@@ -394,7 +400,7 @@ class HubTests(HubFixture):
         self.node.windows(("@12", 124, False, "/fixture/issue-124", "sleeping"))
         asleep = self.lifecycle("worker_stop", "issue-124", idem="stop-asleep")
         self.assertEqual((asleep["status"], asleep["result"]["error"]["code"]), ("failed", "INVALID_STATE"))
-        self.assertEqual(self.node.calls("stop"), ["demo issue-123"])
+        self.assertEqual(self.node.calls("stop"), ["demo example-project:issue-123"])
         self.node.windows(("@12", 124, False, "/fixture/issue-124"))
         (self.node.conf / "stop-hang").touch()
         hung = self.lifecycle("worker_stop", "issue-124", idem="stop-hang")
@@ -424,15 +430,15 @@ class HubTests(HubFixture):
         self.assertIn("approved", done["result"]["how"])
         calls = self.node.calls("perm")
         self.assertEqual(len(calls), 1)
-        self.assertTrue(calls[0].startswith("--allow wid:issue-123 --session demo --by "), calls)
+        self.assertTrue(calls[0].startswith("--allow wid:example-project:issue-123 --session demo --by "), calls)
         self.assertEqual(calls[0].split("--by ")[1], done["result"]["by"])
         self.assertNotEqual(done["result"]["by"], "hub", "the journal's actor, never a placeholder")
         no = self.lifecycle("worker_answer", idem="no", answer="no")
         self.assertEqual(no["status"], "succeeded", no)
-        self.assertTrue(self.node.calls("perm")[1].startswith("--deny wid:issue-123 --session demo --by "))
+        self.assertTrue(self.node.calls("perm")[1].startswith("--deny wid:example-project:issue-123 --session demo --by "))
         picks = self.lifecycle("worker_answer", idem="picks", answer="2 1,3")
         self.assertEqual(picks["status"], "succeeded", picks)
-        self.assertEqual(self.node.calls("answer"), ["--answer wid:issue-123 --session demo 2 1,3"])
+        self.assertEqual(self.node.calls("answer"), ["--answer wid:example-project:issue-123 --session demo 2 1,3"])
         self.assertEqual(self.lifecycle("worker_answer", idem="picks", answer="2 1,3")["operation_id"], picks["operation_id"])
         # refusals come back as the script said them
         (self.node.conf / "perm-none").touch()
@@ -541,7 +547,7 @@ class HubTests(HubFixture):
         self.assertIn("sent → pid 4242", off["result"]["how"])
         self.assertEqual(len(self.node.calls("comment")), 1)
         self.assertEqual(len(self.node.calls("peer")), 1)
-        self.assertRegex(self.node.calls("peer")[0], r"^-L \S+ issue:123 -$")
+        self.assertRegex(self.node.calls("peer")[0], r"^-L \S+ --repo example/project issue:123 -$")
         self.assertEqual((self.node.conf / "peer.body").read_text(), "anyone?\n第二行")
         (self.node.conf / "peer-down").touch()
         down = self.lifecycle("worker_message", idem="msg-peer-down", text="anyone?")
@@ -663,7 +669,7 @@ class HubTests(HubFixture):
             again = self.call("worker_stop", {"worker_id": self.worker(), "idempotency_key": "stop-lost"})
             self.assertEqual(again["operation_id"], first["operation_id"])
             self.assertEqual(self.call("operation_get", {"operation_id": first["operation_id"]})["status"], "succeeded")
-        self.assertEqual(self.node.calls("stop"), ["demo issue-123"])
+        self.assertEqual(self.node.calls("stop"), ["demo example-project:issue-123"])
 
     def test_service_manifest_and_registry_migration(self):
         spec = importlib.util.spec_from_file_location("hub_service", BIN / "fleet-hub-service.py")
@@ -881,7 +887,7 @@ class HubTests(HubFixture):
         op = self.node.wait(started["operation_id"])
         self.assertEqual((op["status"], op["result"]["exit"], op["result"]["window"]), ("succeeded", 0, "@13"))
         worker = op["result"]["workers"][0]
-        self.assertEqual((worker["key"], worker["scratch"], worker["issue"]), ("scratch-3", True, None))
+        self.assertEqual((worker["key"], worker["scratch"], worker["issue"]), ("example-project:scratch-3", True, None))
         self.assertEqual((self.node.conf / "scratch.calls").read_text(),
                          "demo --origin hub --print --agent claude --origin-wid %s --name 试一下\n" % parent)
         self.assertFalse((self.node.conf / "spawn.calls").exists())
@@ -986,7 +992,7 @@ printf '@9\\t4242\\t/fixture/moved\\n'
                          (self.worker("example-other:issue-123"), "example/other"))
         self.assertEqual((status["@14"]["worker_id"], status["@14"]["repo"]), (None, None))
         # A bare key is held by both repos' windows: refused, never a pick.
-        bare = self.lifecycle("worker_stop", "issue-123", idem="stop-bare")
+        bare = self.lifecycle("worker_stop", "bare:issue-123", idem="stop-bare")
         self.assertEqual((bare["status"], bare["result"]["error"]["code"]), ("failed", "AMBIGUOUS"))
         self.assertEqual(self.node.calls("stop"), [])
         done = self.lifecycle("worker_stop", "example-other:issue-123")

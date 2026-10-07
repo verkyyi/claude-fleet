@@ -83,7 +83,7 @@ r=$(gate "$INTMUX" '' "$L" '' issue-5 "abc/issue-5"); ok; [ "$r" = '0|' ] || fai
 
 # --- B: fleet_epic_parent_key -----------------------------------------------------
 pk() { TMUX="$1" TMUX_PANE="$2" bash -c '. "$1/fleet-lib.sh"; fleet_epic_parent_key "$2" acme/app 1645' _ "$BIN" "$L" 2>"$WORK/pk.err"; }
-out=$(pk "$INTMUX" "$p7"); rc=$?;  ok; [ "$rc:$out" = '0:issue-7' ] || fail "B: a worker pane → its own key" "$rc:$out"
+out=$(pk "$INTMUX" "$p7"); rc=$?;  ok; [ "$rc:$out" = '0:acme-app:issue-7' ]   # keys carry the repo (#1939) || fail "B: a worker pane → its own key" "$rc:$out"
 out=$(pk "$INTMUX" "$phub"); rc=$?; ok; [ "$rc:$out" = '1:' ] || fail "B: a hub pane → rc 1, never the EPIC's key" "$rc:$out"
 ok; grep -q 'scratch or worker pane' "$WORK/pk.err" || fail "B: the refusal says where to run it" "$(cat "$WORK/pk.err")"
 out=$(pk "$INTMUX" ''); rc=$?;     ok; [ "$rc:$out" = '1:' ] || fail "B: no \$TMUX_PANE → rc 1" "$rc:$out"
@@ -98,7 +98,7 @@ ok; grep -q 'cannot tell who is spawning' "$WORK/dis.err" || fail "C: … and sa
 ok; [ "$(nwin)" = "$n0" ] || fail "C: … and opens no window" "$(nwin) vs $n0"
 dis '' '' 41 "$L" --title t --origin issue-99; rc=$?
 ok; [ "$rc" = 4 ] || fail "C: a closed parent → exit 4" "rc=$rc $(cat "$WORK/dis.err")"
-ok; grep -q '上级 issue-99 不是活着的会话' "$WORK/dis.err" || fail "C: … naming the parent" "$(cat "$WORK/dis.err")"
+ok; grep -q '上级 acme-app:issue-99 不是活着的会话' "$WORK/dis.err" || fail "C: … naming the parent" "$(cat "$WORK/dis.err")"
 ok; [ "$(nwin)" = "$n0" ] || fail "C: … and opens no window" "$(nwin) vs $n0"
 dis "$INTMUX" '' 41 "$L" --title t --origin hub; rc=$?
 ok; [ "$rc" = 1 ] && grep -q 'FLEET_MAIN is not a git checkout' "$WORK/dis.err" \
@@ -112,7 +112,7 @@ TMUX="$INTMUX" TMUX_PANE='' bash "$BIN/dash-raw-session.sh" --name x "$L" >/dev/
 ok; [ "$rc" = 4 ] && grep -q 'cannot tell who is spawning' "$WORK/raw.err" || fail "D: no \$TMUX_PANE → exit 4" "rc=$rc $(cat "$WORK/raw.err")"
 ok; [ "$(nwin)" = "$n0" ] || fail "D: … and opens no window" "$(nwin) vs $n0"
 TMUX='' bash "$BIN/dash-raw-session.sh" --name x --origin scratch-88 "$L" >/dev/null 2>"$WORK/raw.err"; rc=$?
-ok; [ "$rc" = 4 ] && grep -q '上级 scratch-88' "$WORK/raw.err" || fail "D: a closed parent → exit 4" "rc=$rc $(cat "$WORK/raw.err")"
+ok; [ "$rc" = 4 ] && grep -q '上级 acme-app:scratch-88' "$WORK/raw.err" || fail "D: a closed parent → exit 4" "rc=$rc $(cat "$WORK/raw.err")"
 TMUX="$INTMUX" TMUX_PANE='' bash "$BIN/dash-raw-session.sh" --name x --origin hub "$L" >/dev/null 2>"$WORK/raw.err"; rc=$?
 ok; [ "$rc" != 4 ] || fail "D: --origin hub passes the gate" "rc=$rc $(cat "$WORK/raw.err")"
 ok; grep -q -- "--origin='\${ORIGIN:-hub}'" "$BIN/dash-raw-session.sh" || fail "D: the --bg re-exec always states its origin (run-shell -b has no pane)"

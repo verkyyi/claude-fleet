@@ -12,7 +12,7 @@
 #      --session-id = @norepo_sid. A repo scratch carries @repo + a worktree under
 #      that repo's checkout; under current repo `all` a bare spawn is no-repo, under
 #      a current repo it is that repo.
-#   D. keys: fleet_origin_key is `<slug>:issue-N` in the two-repo fleet and bare in
+#   D. keys: fleet_origin_key is `<slug>:issue-N` in the two-repo fleet and (issue #1939) in
 #      the one-repo fleet; fleet_win_for_key resolves a qualified key to the RIGHT
 #      repo's window; fleet_origin_canon keeps a qualified key.
 #   E. restore round-trip: the snapshot writes the repo column (and `-` for the
@@ -183,8 +183,9 @@ eq "D canon: plain keys unchanged" "$(fleet_origin_canon cd-scratch-52 '')" scra
 
 spawn 5 "$D" || fail "D one-repo spawn failed: $(cat "$WORK/err")"
 wD=$(wins_for "$D" 5 | head -1)
-eq "D origin key, one-repo fleet (bare)" "$(inpane "$wD" fleet_origin_key)" issue-5
-eq "D bare key still resolves" "$(fleet_win_for_key issue-5 "$D")" "$wD"
+eq "D origin key, one-repo fleet (qualified too, issue #1939)" "$(inpane "$wD" fleet_origin_key)" o-d:issue-5
+eq "D bare key still resolves (the one repo's alias)" "$(fleet_win_for_key issue-5 "$D")" "$wD"
+eq "D …and so does the qualified one" "$(fleet_win_for_key o-d:issue-5 "$D")" "$wD"
 
 # ---- F. degenerate ---------------------------------------------------------------------
 case "$(opt "$wD" pane_start_command)" in *set-option*) fail "F one-repo spawn command carries a self-stamp" ;;

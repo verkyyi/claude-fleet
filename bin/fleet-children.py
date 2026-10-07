@@ -850,6 +850,13 @@ def cmd_show(a):
         for w in wins.values():
             if is_key(w['origin']) and ':' not in w['origin']:
                 w['origin'] = a.one_slug + ':' + w['origin']
+    # A child on another machine as ITS machine spells it — bare from one that
+    # predates issue #1939 — is the same child its reports are booked as in this
+    # qualified book (canon_child): one key, one row.
+    ppre = book_prefix(parent + '.ndjson')
+    for k in [k for k, w in wins.items() if w.get('node') and ppre and ':' not in k and is_key(k)]:
+        if ppre + k not in wins:
+            wins[ppre + k] = wins.pop(k)
     # ledger side: the parent's own file, plus each descendant's (≤4 levels), so a
     # grandchild whose window is gone is still counted under the root — the same
     # "ultimate parent" attribution the live side gets from descends().

@@ -1140,8 +1140,9 @@ fleet_okey_prefix() {
 
 # fleet_key_qualify <sess> <key> → <key> in its canonical spelling: a bare
 # `issue-<N>` / `scratch-<N>` takes the slug of the fleet's ONE repo; anything
-# else — a qualified key, a bare key in a fleet of 0 or 2+ repos (it names no
-# one repo; fleet_win_for_key refuses it), a non-key — comes back as it went in.
+# else — a qualified key, a bare key in a fleet of 2+ repos (it names no one
+# repo; fleet_win_for_key refuses it) or of NO repo (bare is its only spelling:
+# nothing to qualify with), a non-key — comes back as it went in.
 fleet_key_qualify() {
   local k="${2:-}" r
   case "$k" in issue-[0-9]*|scratch-[0-9]*) ;; *) printf '%s' "$k"; return 0 ;; esac
@@ -4266,11 +4267,12 @@ _fleet_hosts_many() { fleet_multirepo "$@"; }   # one rule for every key (#790)
 
 # _fleet_key_prefix <sess> <window-target> → "<slug>:" of the window's repo, in
 # every fleet (issue #1939); exit 1 when the window's repo is unknown or it is a
-# no-repo session — the caller then mints no key rather than guess.
+# no-repo session — the caller then mints no key rather than guess. A fleet that
+# hosts NO repo has nothing to qualify with and nothing to confuse: "" (bare).
 _fleet_key_prefix() {
   local r
   r=$(fleet_window_repo "${1:-}" "${2:-}")
-  [ -n "$r" ] || return 1
+  if [ -z "$r" ]; then [ -z "$(fleet_repos "${1:-}")" ] && return 0; return 1; fi
   printf '%s:' "$(fleet_slug "$r")"
 }
 
@@ -5660,7 +5662,7 @@ fleet_hub_wait_sent() {
 # hub gone that long is a one-machine fleet again (EPIC #1419 rule 6). A child
 # whose node is lost carries `<node>:lost`.
 fleet_remote_children() {
-  local sess="${1:-}" key="${2:-}" u f m ttl pf
+  local sess="${1:-}" key="${2:-}" u f m ttl pf al
   fleet_hub_on "$sess" && [ -n "$key" ] || return 1
   f=$(fleet_hub_cache); [ -f "$f" ] || return 1
   ttl="${FLEET_HUB_RETAIN_SECS:-600}"; case "$ttl" in ''|*[!0-9]*) ttl=600 ;; esac
@@ -5671,8 +5673,10 @@ fleet_remote_children() {
   # `<fleet UUID>/<fleet_id>`, whatever key the parent answers to now. The map
   # lists a child under both its worker_ids; only the key-form row is printed.
   pf=$(_fleet_key_fid "$sess" "$key" "$(fleet_socket "$sess")" 2>/dev/null) || pf=''
-  awk -F'\t' -v me="$u/$key" -v mef="${pf:+$u/$pf}" -v mine="$u/" '
-    ($3 == me || (mef != "" && $3 == mef)) && $2 != "" && index($1, mine) != 1 {
+  # …or by the bare key it wore before issue #1939 (the one repo's alias).
+  al=$(fleet_key_alias "$sess" "$key")
+  awk -F'\t' -v me="$u/$key" -v mef="${pf:+$u/$pf}" -v mea="${al:+$u/$al}" -v mine="$u/" '
+    ($3 == me || (mef != "" && $3 == mef) || (mea != "" && $3 == mea)) && $2 != "" && index($1, mine) != 1 {
       k = $1; sub(/^[^\/]*\//, "", k)
       if (length(k) == 36 && k !~ /[^0-9a-f-]/) next   # the identity-form row
       print k "\t" $2 "\t" $1; n++ }
@@ -5885,7 +5889,8 @@ fleet_scratch_gen_new() {
   if [ -n "$r" ]; then key="$(fleet_slug "$r"):$2"
   else key=$(fleet_key_qualify "$1" "$2")       # the window's own fallback: the fleet's one repo
   fi
-  case "$key" in ?*:*) ;; *) return 0 ;; esac
+  # Still bare: 2+ repos and the worktree's unknown ⇒ no key; NO repo ⇒ bare is the key.
+  case "$key" in ?*:*) ;; *) [ -z "$(fleet_repos "$1")" ] || return 0 ;; esac
   old=$(fleet_key_gen "$1" "$key"); [ -n "$old" ] || old=0
   al=$(fleet_key_alias "$1" "$key")             # a child stamped bare before #1939 is one too
   fleet_key_gen_new "$1" "$key" >/dev/null || return 0
@@ -7483,7 +7488,7 @@ fleet_window_okey() {
 # no live direct child — the common case on every Stop.
 fleet_window_waiting_children() {
   local sess="${1:-}" t="${2:-}" key all line ws wid st loop iss wt repo norepo origin pth name
-  local tab='' pre slug k tot=0 dn=0 bin direct=0
+  local tab='' pre slug k tot=0 dn=0 bin direct=0 zero='' 
   [ -n "$t" ] || return 1
   [ -n "$sess" ] || sess=$(fleet_current_session)
   key=$(fleet_window_okey "$sess" "$t"); [ -n "$key" ] || return 1
@@ -7521,10 +7526,14 @@ EOF
     case "$name" in dash|plan|backlog|home) continue ;; esac
     case "$origin" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) continue ;; esac
     # The window's repo slug (issue #1939: every fleet); unknown → `?:`, a key no
-    # @origin names.
+    # @origin names — bare in a fleet hosting no repo (_fleet_key_prefix's rule).
     [ -n "$repo" ] || repo=$(fleet_window_repo "$sess" "$wid")
     slug=''; [ "$norepo" != 1 ] && [ -n "$repo" ] && slug=$(fleet_slug "$repo")
     pre="${slug:-?}:"
+    if [ -z "$slug" ]; then
+      [ -n "$zero" ] || { zero=n; [ -z "$(fleet_repos "$sess")" ] && zero=y; }
+      [ "$zero" = y ] && pre=''
+    fi
     case "$iss" in
       ''|*[!0-9]*) k=$(fleet_scratch_key "$wt"); [ -n "$k" ] || k=$(fleet_scratch_key "$pth")
                    [ -n "$k" ] && k="$pre$k" ;;
@@ -7570,22 +7579,25 @@ EOF
 # is MERGED (or REAPED as merged). rc 1 (nothing) when there are none — or the hub
 # is off, or its map is stale: then the parent is the one-machine parent it was.
 _fleet_remote_tally() {
-  local rows f
+  local rows f d al
   rows=$(fleet_remote_children "${1:-}" "${2:-}") || return 1
-  f=$(printf '%s/children/%s.ndjson' "$(fleet_state_dir "${1:-}")" "$(printf '%s' "${2:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-')")
+  d="$(fleet_state_dir "${1:-}")/children"
+  f=$(printf '%s/%s.ndjson' "$d" "$(printf '%s' "${2:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-')")
+  al=$(fleet_key_alias "${1:-}" "${2:-}")      # its bare book, read first (issue #1939)
   printf '%s\n' "$rows" | python3 -c '
 import json, sys
 last = {}
-try:
-    for l in open(sys.argv[1], encoding="utf-8"):
-        try:
-            e = json.loads(l)
-        except ValueError:
-            continue
-        if isinstance(e, dict) and e.get("child") and e.get("type") != "wake":
-            last[e["child"]] = e
-except OSError:
-    pass
+for path in sys.argv[2:] + sys.argv[1:2]:
+    try:
+        for l in open(path, encoding="utf-8"):
+            try:
+                e = json.loads(l)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("child") and e.get("type") != "wake":
+                last[e["child"]] = e
+    except OSError:
+        pass
 dn = tot = 0
 for line in sys.stdin:
     p = line.rstrip("\n").split("\t")
@@ -7600,7 +7612,7 @@ for line in sys.stdin:
     if e.get("state") == "MERGED" or (e.get("state") == "REAPED" and str(e.get("verdict") or "").startswith("merged")):
         dn += 1
 print(dn, tot)
-sys.exit(0 if tot else 1)' "$f" 2>/dev/null
+sys.exit(0 if tot else 1)' "$f" ${al:+"$d/$al.ndjson"} 2>/dev/null
 }
 
 # fleet_window_wait <session> <win> — WHY an idle <win> is not finished (issue

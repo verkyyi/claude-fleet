@@ -437,6 +437,7 @@ fi
 fleet_load_conf "$home"
 # shellcheck source=/dev/null
 . "$BIN/fleet-children-lib.sh"
+pkey=$(fleet_key_qualify "$home" "$pkey")   # a bare parent key is the one repo's (#1939)
 lf=$(children_file "$pkey" "$home") || die 1 "no ledger for parent $pkey"
 res=$(python3 "$BIN/fleet-children.py" append --file "$lf" < "$WORK/row" 2>&1) || die 1 "ledger refused it: ${res##*$'\n'}"
 # A relay pushed again is ledgered once; it is DELIVERED once too — the rids this

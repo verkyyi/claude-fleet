@@ -237,8 +237,13 @@ okey_v() { okey=''
 # Takes the window's @repo + @norepo; resolution is rslug_v's (below), one rule for
 # the PR cell and the grouping key.
 okp=''
+RZERO=''                               # 1 = the fleet hosts NO repo: its keys stay bare
 okp_v() { okp=''
-  rslug_v "$1" "$2"                    # the window's repo slug, fork-free (#792)
+  rslug_v "$1" "$2"
+  if [ -z "$rslug" ]; then
+    [ -n "$RZERO" ] || { RZERO=0; [ -z "$(fleet_repos "${FLEET_SESSION:-}")" ] && RZERO=1; }
+    [ "$RZERO" = 1 ] && return 0
+  fi                    # the window's repo slug, fork-free (#792)
   if [ -n "$rslug" ]; then okp="$rslug:"; else okp='?:'; fi
 }
 

@@ -76,6 +76,7 @@ dir=$(children_dir "$sess") || dir="$FLEET_CONF_DIR/fleets/_/children"
 # and is read merged into its `<slug>:issue-N` book — one parent, one book (#982).
 one_slug=$(fleet_key_qualify "$sess" issue-0); one_slug=${one_slug%:issue-0}
 [ "$one_slug" = issue-0 ] && one_slug=''
+zero=0; [ -n "$sess" ] && [ -z "$(fleet_repos "$sess")" ] && zero=1
 prmap=''; prdir=''
 if [ -n "$sess" ]; then
   prmap=$(fleet_cache prmap "$sess"); prdir="$FLEET_C/fleets"
@@ -108,6 +109,7 @@ rows() {
     [ -n "$repo" ] || repo=$(fleet_window_repo "$sess" "$wid")
     slug=''; [ "$norepo" != 1 ] && [ -n "$repo" ] && slug=$(fleet_slug "$repo")
     pre="${slug:-?}:"
+    [ -z "$slug" ] && [ "$zero" = 1 ] && pre=''   # a fleet hosting no repo: bare keys
     key=''
     case "$iss" in
       ''|*[!0-9]*) key=$(fleet_scratch_key "$wt"); [ -n "$key" ] || key=$(fleet_scratch_key "$pth")

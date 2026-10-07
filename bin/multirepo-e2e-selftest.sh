@@ -399,7 +399,7 @@ wD=$(tmux list-windows -t "$D" -F '#{@issue} #{window_id}' | awk '$1==12 {print 
 if [ -n "$wD" ]; then
   case "$(opt "$wD" window_name)" in *·*) fail "(z) one-repo window name carries a repo tag: $(opt "$wD" window_name)" ;;
     *) ok "(z) one-repo window name has no repo tag" ;; esac
-  [ "$(inpane "$wD" fleet_origin_key)" = issue-12 ] && ok "(z) one-repo origin key is bare" || fail "(z) one-repo origin key: $(inpane "$wD" fleet_origin_key)"
+  [ "$(inpane "$wD" fleet_origin_key)" = o-solo:issue-12 ] && ok "(z) one-repo origin key carries its repo (#1939)" || fail "(z) one-repo origin key: $(inpane "$wD" fleet_origin_key)"
   case "$(opt "$wD" @worktree)" in "$WORK/d/solo-issue-12") ok "(z) one-repo worktree in the sibling layout" ;;
     *) fail "(z) one-repo worktree: $(opt "$wD" @worktree)" ;; esac
 else fail "(z) no one-repo #12 window"; fi

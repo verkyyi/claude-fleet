@@ -404,7 +404,8 @@ latest() {   # latest <child-key> → STATE|tier|verdict of that child's newest 
   python3 - "$LEDGER" "$1" <<'LAST'
 import json, sys
 ev = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-ev = [e for e in ev if e.get("child") == sys.argv[2]]
+# A child whose repo is known is booked `<slug>:issue-N` (issue #1939).
+ev = [e for e in ev if e.get("child") == sys.argv[2] or e.get("child", "").endswith(":" + sys.argv[2])]
 print("%s|%s|%s" % (ev[-1]["state"], ev[-1].get("tier", ""), ev[-1].get("verdict", "")) if ev else "none")
 LAST
 }

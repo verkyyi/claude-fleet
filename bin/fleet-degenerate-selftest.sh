@@ -114,9 +114,9 @@ check '[ "$(escs "$WORK/keys-br")" = 1 ]' 'B: pass 2 agreeing with pass 1 sends 
 check '[ -n "$(dts w-br)" ]' 'B: the interrupt stamps @degenerate_ts'
 i=0; until TM capture-pane -p -t w-br | grep -q 'Request interrupted'; do i=$((i + 1)); [ "$i" -lt 50 ] || break; sleep 0.1; done
 check 'TM capture-pane -p -t w-br | grep -q "Request interrupted"' 'B: the pane shows the interrupt after the Escape'
-LEDGER="$FLEET_CONF_DIR/fleets/$LBL/children/issue-77.ndjson"
+LEDGER="$FLEET_CONF_DIR/fleets/$LBL/children/acme-degen:issue-77.ndjson"   # keys carry the repo (#1939)
 check 'grep -q "\"state\": \"DEGENERATE\"" "$LEDGER" 2>/dev/null' 'B: a DEGENERATE row lands in the parent (issue-77) ledger' "$(cat "$LEDGER" 2>/dev/null)"
-check 'python3 -c "import json,sys; e=json.loads(open(sys.argv[1]).read().splitlines()[-1]); sys.exit(0 if e[\"child\"]==\"issue-1557\" and int(e[\"lines\"])>=12 and e[\"sample\"]==\"‹br›\" and e[\"tier\"]==\"silent\" else 1)" "$LEDGER" 2>/dev/null' \
+check 'python3 -c "import json,sys; e=json.loads(open(sys.argv[1]).read().splitlines()[-1]); sys.exit(0 if e[\"child\"]==\"acme-degen:issue-1557\" and int(e[\"lines\"])>=12 and e[\"sample\"]==\"‹br›\" and e[\"tier\"]==\"silent\" else 1)" "$LEDGER" 2>/dev/null' \
   'B: the row carries child / lines / sample and is tier silent' "$(tail -1 "$LEDGER" 2>/dev/null)"
 # The sidebar row ends in ⟲ (the producer reads the window through $TMUX).
 SOCKP="$TMUX_TMPDIR/tmux-$(id -u)/$LBL"

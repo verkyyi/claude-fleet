@@ -70,7 +70,7 @@ U=$(lib fleet_uuid "$L")
 F=11111111-2222-3333-4444-555555555555          # a fleet on another machine ("m4")
 CACHE="$FLEET_CONF_DIR/control/hub-workers.tsv"
 OUTBOX="$FLEET_CONF_DIR/control/hub-outbox"
-LEDGER="$(bash -c '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"; children_dir "$2"' _ "$BIN" "$L")/issue-7.ndjson"
+LEDGER="$(bash -c '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"; children_dir "$2"' _ "$BIN" "$L")/acme-app:issue-7.ndjson"   # keys carry the repo (#1939)
 mkdir -p "${CACHE%/*}"
 nlines() { [ -f "$1" ] && grep -c . "$1" || echo 0; }
 
@@ -96,7 +96,7 @@ deliver() { out=$(printf '%s' "$1" | env -u TMUX bash "$BIN/fleet-hub-node.sh" d
 R1=$(relay 1700000000.1 child_report "$F/issue-42" "$U/issue-7" '{"child":"issue-42","state":"BLOCKED","pr":"","summary":"stuck","title":"kid","tier":"loud","msg":"[child-report] issue #42\nstate: BLOCKED"}')
 deliver "$R1"
 ok; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 1 ] || fail "C: a remote report lands in the parent's ledger" "rc=$rc lines=$(nlines "$LEDGER") $err"
-ok; python3 -c 'import json,sys; e=json.loads(open(sys.argv[1]).readline()); sys.exit(0 if e["child"]=="issue-42" and e["node"]=="m4" and e["rid"]==sys.argv[2]+"#1700000000.1" and e["state"]=="BLOCKED" else 1)' "$LEDGER" "$F/issue-42" \
+ok; python3 -c 'import json,sys; e=json.loads(open(sys.argv[1]).readline()); sys.exit(0 if e["child"]=="acme-app:issue-42" and e["node"]=="m4" and e["rid"]==sys.argv[2]+"#1700000000.1" and e["state"]=="BLOCKED" else 1)' "$LEDGER" "$F/issue-42" \
   || fail "C: the row carries node + rid" "$(cat "$LEDGER")"
 deliver "$R1"
 ok; [ "$rc" = 0 ] && [ "$(nlines "$LEDGER")" = 1 ] || fail "C: the same relay pushed again is ONE row" "rc=$rc lines=$(nlines "$LEDGER")"
@@ -148,7 +148,7 @@ f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
 ok; [ "$rc" = 3 ] && [ -n "$f" ] && [ "$(ls "$OUTBOX"/*.json | wc -l | tr -d ' ')" = 1 ] \
   && case "$out" in *"queued → issue-7 on m4"*) true ;; *) false ;; esac \
   || fail "D: one relay in the outbox; no agent took it ⇒ queued, exit 3" "rc=$rc out=$out err=$err"
-ok; python3 - "$f" "$U/issue-20" "$F/issue-7" <<'PY' || fail "D: the relay's id/from/to/payload" "$(cat "$f" 2>/dev/null)"
+ok; python3 - "$f" "$U/acme-app:issue-20" "$F/issue-7" <<'PY' || fail "D: the relay's id/from/to/payload" "$(cat "$f" 2>/dev/null)"
 import json, sys
 r = json.load(open(sys.argv[1]))
 p = r["payload"]
@@ -172,7 +172,7 @@ pane=$(tf display-message -p -t "$wc" '#{pane_id}')
 out=$(TMUX="$sockpath,1,0" TMUX_PANE="$pane" bash "$BIN/fleet-peer-send.sh" "wid:$F/issue-7" 'ping from m5' 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
 f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
 ok; [ "$rc" = 3 ] && [ -n "$f" ] && case "$out" in *"queued → issue-7 on m4"*) true ;; *) false ;; esac \
-  && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["kind"]=="message" and r["from"]==sys.argv[2] and r["to"]==sys.argv[3] and r["payload"]["text"]=="ping from m5" else 1)' "$f" "$U/issue-20" "$F/issue-7" \
+  && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["kind"]=="message" and r["from"]==sys.argv[2] and r["to"]==sys.argv[3] and r["payload"]["text"]=="ping from m5" else 1)' "$f" "$U/acme-app:issue-20" "$F/issue-7" \
   || fail "E: a message relay from the pane's worker_id" "rc=$rc out=$out err=$err $(cat "$f" 2>/dev/null)"
 rm -f "$OUTBOX"/*.json
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$F/issue-7" hi
@@ -223,7 +223,7 @@ deliver "$(python3 -c 'import json,sys; t=sys.argv[2]+"/issue-20"; rid=t+"#1"; p
 ok; [ "$rc" = 1 ] || fail "K: a receipt for a fleet not on this machine is refused" "rc=$rc $err"
 
 # --- L: a parent not live here is «not now», delivered once it is back --------------------
-L8="$(dirname "$LEDGER")/issue-8.ndjson"
+L8="$(dirname "$LEDGER")/acme-app:issue-8.ndjson"
 R8=$(relay 1700000001.1 child_report "$F/issue-43" "$U/issue-8" '{"child":"issue-43","state":"MERGED","pr":"5","tier":"quiet","msg":"[child-report] issue #43\nstate: MERGED"}')
 deliver "$R8"
 ok; [ "$rc" = 75 ] && [ "$(nlines "$L8")" = 1 ] || fail "L: parent not live ⇒ 75, ledgered" "rc=$rc lines=$(nlines "$L8") $err"
@@ -263,7 +263,7 @@ ok; [ "$rc" = 4 ] && [ "$(printf '%s\n' "$out" | head -1)" = GONE ] || fail "G: 
 inv=$(cd "$BIN" && python3 -c 'import json, sys, fleet_control as c
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 print(json.dumps({w["key"]: w.get("origin_wid") for w in ctl.workers(f)["workers"]}))' "$FLEET_CONF_DIR" "$L" 2>&1)
-ok; printf '%s' "$inv" | python3 -c 'import json,sys; m=json.load(sys.stdin); sys.exit(0 if m.get("issue-20")==sys.argv[1] and m.get("issue-7") is None else 1)' "$F/issue-7" \
+ok; printf '%s' "$inv" | python3 -c 'import json,sys; m=json.load(sys.stdin); sys.exit(0 if m.get("acme-app:issue-20")==sys.argv[1] and m.get("acme-app:issue-7") is None else 1)' "$F/issue-7" \
   || fail "H: origin_wid on the child, absent on a window without one" "$inv"
 
 if [ "$FAIL" -eq 0 ]; then printf 'hub-relay selftest: PASS (%d checks)\n' "$CHECKS"; exit 0; fi
