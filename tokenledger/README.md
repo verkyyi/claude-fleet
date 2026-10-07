@@ -831,7 +831,7 @@ is one `hub_audit` row: who, when, old → new.
 | `hub.public_badges` | off | `--public-badges` (no longer read, claude-fleet#2087) |
 | `pool.skip_pct` | 85 | a node's `FLEET_ACCOUNT_CEILING` (served at `/v1/fleet/client-settings` → `pool`) |
 | `pool.move_when_full` | off | a node's `FLEET_FAILOVER` (same) |
-| `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN`, no longer read (`none` = no machines) |
+| `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN`, no longer read (`none` = no machines; `least-busy` = the hub picks, claude-fleet#2069) |
 | `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
 | `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS`, no longer read (`<id>` = a GitHub ID, `583231` or `gh:583231`; `none` = no login) |
@@ -899,7 +899,21 @@ only picks the login and display name, both re-validated there:
     remove  ~/.claude/fleet/bin/fleet-login-remove.sh <login> --keep-home --apply
 
 `fleet hub set fleet.auto_assign m4[,m5]` (roster hostnames) queues an *unmapped*
-person's login on those machines at their first sign-in; anything else is the
+person's login on those machines at their first sign-in; `least-busy`
+(claude-fleet#2069) queues it on ONE machine the hub picks at that moment —
+online (not 维护中, not lost), not only-coordinating, not a person's own
+computer, not SPOT, with a connected admin agent — fewest sessions first (a
+machine already hosting a repo before one that hosts none, then load per core,
+then name); none fit = nothing queued, and the next look retries. The login is
+the person's **GitHub username**, lowercased, when a node would make it
+(`[a-z][a-z0-9]{1,15}`), it is no system name, and no roster login, admin,
+mapped login or other person holds it — else `gh<id>` as before. While the
+create runs, `/v1/nodes` and `/v1/fleet/summary` carry `account`
+`{"state":"opening","eta_s":…,"machine":…,"ask":…}` for that person (`failed` /
+`none` when nothing is coming, `ask` = the admin logins; absent once a login is
+active), and `/v1/fleet/home` answers 503 `{"code":"opening","state":"opening","eta_s":…}`
+— the client's sidebar holds 「正在为你开机器」 on the bar and opens the session
+by itself when the login is ready. Anything else is the
 operator's `POST /v1/fleet/accounts` (`{"action":"assign|retry|remove|adopt|forget",
 "principal_id":…, "hostname":…, "login":… for adopt}`) — `adopt` records a
 login that already existed (a colleague onboarded by hand) without running

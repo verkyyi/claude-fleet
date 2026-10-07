@@ -229,6 +229,7 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 		{PoolSkipPctKey, "101", http.StatusBadRequest, "90"},
 		{PoolMoveFullKey, "on", http.StatusOK, "on"},
 		{PoolMoveFullKey, "maybe", http.StatusBadRequest, "on"},
+		{AutoAssignKey, " Least-Busy ", http.StatusOK, "least-busy"}, // claude-fleet#2069
 		{AutoAssignKey, "m4, macmini", http.StatusOK, "m4,macmini"},
 		{AutoAssignKey, "bad host!", http.StatusBadRequest, "m4,macmini"},
 		{SpotKey, "on", http.StatusOK, "on"},
@@ -257,8 +258,8 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 			n++
 		}
 	}
-	if n != 8 { // one per accepted change
-		t.Errorf("setting audit rows = %d, want 8", n)
+	if n != 9 { // one per accepted change
+		t.Errorf("setting audit rows = %d, want 9", n)
 	}
 	// The readers follow at once.
 	if got := h.srv.autoAssign(); strings.Join(got, ",") != "m4,macmini" {

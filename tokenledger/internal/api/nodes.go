@@ -604,6 +604,10 @@ type NodesSnapshot struct {
 	// Spot is the SPOT nodes block (claude-fleet#1428): absent on a hub
 	// that never started one.
 	Spot *SpotSummary `json:"spot,omitempty"`
+	// Account is a signed-in person's login while they have no active one
+	// (claude-fleet#2069): opening / failed / none. Absent for the operator
+	// and for anyone already holding a login.
+	Account *AccountState `json:"account,omitempty"`
 }
 
 // NodeStatus judges a node: lost after lostAfterBeats missed heartbeats. Lost
@@ -788,11 +792,13 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	snap, err := s.nodesWhere(time.Now(), visible)
+	now := time.Now()
+	snap, err := s.nodesWhere(now, visible)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	snap.Account = s.accountStateOf(principalOf(r.Context()), now)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, snap)
 }

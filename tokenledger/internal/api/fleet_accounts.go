@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -141,7 +142,8 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 	if len(hosts) == 0 {
 		return nil
 	}
-	p, err := s.Store.EnsurePrincipal(principal, displayName, control.MaxLoginLen, control.ValidLogin, now)
+	p, err := s.Store.EnsurePrincipalAs(principal, displayName, s.preferredLogin(principal, displayName),
+		control.MaxLoginLen, control.ValidLogin, now)
 	if err != nil {
 		log.Printf("fleet: record principal %q: %v", principal, err)
 		return nil
@@ -166,6 +168,111 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 		go s.dispatchAccounts()
 	}
 	return nil
+}
+
+// reservedLogins are names a machine already has for itself: a GitHub
+// username that spells one is never the login opened for a person
+// (claude-fleet#2069) — the create would meet the system's own account.
+var reservedLogins = map[string]bool{
+	"root": true, "admin": true, "administrator": true, "daemon": true, "nobody": true,
+	"guest": true, "shared": true, "system": true, "staff": true, "wheel": true,
+	"operator": true, "support": true, "fleet": true, "claude": true, "sudo": true,
+	"bin": true, "sys": true, "sync": true, "games": true, "mail": true, "www": true,
+	"ftp": true, "sshd": true, "git": true, "user": true, "test": true,
+}
+
+// preferredLogin is the login a GitHub person's first auto-assigned account
+// is opened under (claude-fleet#2069): their GitHub username, lowercased —
+// the name they already answer to — when it is a login a node makes
+// (control.ValidLogin), not a system name, and no machine or person already
+// has it: an OS login on the roster, an admin login, or a name the operator
+// mapped to someone. "" otherwise, and the hub mints gh<id> as before (a
+// username another principal already holds falls back there too, in the
+// store). Only a GitHub principal: any other id has no username to borrow.
+func (s *Server) preferredLogin(principal, displayName string) string {
+	id, ok := githubIDOf(principal)
+	if !ok {
+		return ""
+	}
+	name := displayName
+	if s.Store != nil {
+		if u, err := s.Store.HubUserByID(id); err == nil && u != nil && u.Login != "" {
+			name = u.Login
+		}
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if len(name) > control.MaxLoginLen || !control.ValidLogin(name) || reservedLogins[name] {
+		return ""
+	}
+	if hasString(s.FleetAdmins, name) {
+		return ""
+	}
+	for _, l := range s.principalLogins() {
+		if strings.EqualFold(l, name) {
+			return ""
+		}
+	}
+	if nodes, err := s.Store.Nodes(); err == nil {
+		for _, n := range nodes {
+			if strings.EqualFold(n.OSUser, name) {
+				return ""
+			}
+		}
+	}
+	return name
+}
+
+// leastBusyMachine is fleet.auto_assign=least-busy's pick
+// (claude-fleet#2069): among the machines the roster hears right now —
+// online (not 维护中, not lost), not only-coordinating, not a person's own
+// computer, not a SPOT node, with a connected admin node to open the login
+// and a session count it can read — the one with the fewest sessions; a
+// machine whose fleets already host a repo first (a newcomer's first session
+// opens in one), then the lower load per core, then the name. "" when none
+// is fit.
+func (s *Server) leastBusyMachine(now time.Time) string {
+	snap, err := s.Nodes(now)
+	if err != nil {
+		log.Printf("fleet: least-busy: roster: %v", err)
+		return ""
+	}
+	admin := map[string]bool{}
+	for _, n := range snap.Nodes {
+		if n.Admin && n.Connected && n.Status == "online" {
+			admin[strings.ToLower(n.Hostname)] = true
+		}
+	}
+	var fit []MachineView
+	for _, m := range snap.Machines {
+		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
+			m.Sessions == nil || !admin[strings.ToLower(m.Hostname)] {
+			continue
+		}
+		fit = append(fit, m)
+	}
+	if len(fit) == 0 {
+		return ""
+	}
+	perCore := func(m MachineView) float64 {
+		if m.NCPU <= 0 {
+			return m.Load1
+		}
+		return m.Load1 / float64(m.NCPU)
+	}
+	sort.SliceStable(fit, func(a, b int) bool {
+		fa, fb := fit[a], fit[b]
+		if ra, rb := len(fa.Repos) > 0, len(fb.Repos) > 0; ra != rb {
+			return ra
+		}
+		if *fa.Sessions != *fb.Sessions {
+			return *fa.Sessions < *fb.Sessions
+		}
+		if la, lb := perCore(fa), perCore(fb); la != lb {
+			return la < lb
+		}
+		return fa.Hostname < fb.Hostname
+	})
+	return fit[0].Hostname
 }
 
 // takeOverLegacyLogin moves login to the GitHub person principal when the

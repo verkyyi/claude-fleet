@@ -949,7 +949,9 @@ EOF
 #     is that version's word against the stable mark — issue #644, below)
 #   $G/hub_repos   #ts<US><epoch>, then one owner/name per line: the repos those
 #     machines' fleets host (`repos`, issue #1927) — the sidebar's candidates
-#     for a first session while its list has no repo heading
+#     for a first session while its list has no repo heading; a person with no
+#     active login yet gets a `#account<US>state<US>eta_s<US>machine<US>ask<US>epoch`
+#     line after #ts (issue #2069: opening | failed | none)
 #   $G/hub_limits  #ts<US><epoch>, then one line per subscription with a reading:
 #     label<US>pct5h<US>pctweek<US>account_uuid<US>hub_label
 #     (/v1/limits?account=all; `label` is this login's accounts/<label>.conf name
@@ -1138,9 +1140,20 @@ if machines and not any(isinstance(m, dict) and "repos" in m for m in machines):
     sys.exit(0)
 repos = sorted({r for m in machines if isinstance(m, dict) for r in (m.get("repos") or [])
                 if isinstance(r, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", r)})
+# #account (issue #2069): a person with no active login yet — the hub's
+# `account` {state opening|failed|none, eta_s, machine, ask}. The sidebar
+# reads it beside an empty repo list: 正在为你开机器 / 该找谁. No key (a login
+# they already hold, or an older hub) = no line.
+acct = data.get("account") if isinstance(data.get("account"), dict) else None
+aline = ""
+if acct and acct.get("state") in ("opening", "failed", "none"):
+    eta = acct.get("eta_s")
+    aline = "#account\x1f" + "\x1f".join(clean(v) for v in (
+        acct["state"], eta if isinstance(eta, int) else "", acct.get("machine") or "",
+        acct.get("ask") or "", now)) + "\n"
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), prefix=".hubrepos.")
 with os.fdopen(fd, "w", encoding="utf-8") as f:
-    f.write("#ts\x1f%d\n" % now + "".join(r + "\n" for r in repos))
+    f.write("#ts\x1f%d\n" % now + aline + "".join(r + "\n" for r in repos))
 os.replace(tmp, hub_repos)
 PY
   fi
