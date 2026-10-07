@@ -194,9 +194,16 @@ if [[ "$CTX_PCT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
 fi
 
 # ── one read of what is on the bus now; queue only what differs ─────────────
+# The quota writer + time lead as two space-separated words (`-` = unset): an
+# older tmux prints a control character as `_` to a client it does not take for
+# UTF-8, so the proxy-wins rule below must not hang on the \x1f split.
 CUR=$(tmux display-message -p -t "$TMUX_PANE" \
-        "#{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}${US}#{@rl_src}${US}#{@rl_ts}" 2>/dev/null)
-IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort cur_src cur_rlsrc cur_rlts <<< "$CUR"
+        "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}" 2>/dev/null)
+cur_rlsrc='' cur_rlts=''
+if [[ "$CUR" =~ ^([^ ]+)\ ([^ ]+)\ (.*)$ ]]; then
+  cur_rlsrc=${BASH_REMATCH[1]}; cur_rlts=${BASH_REMATCH[2]}; CUR=${BASH_REMATCH[3]}
+fi
+IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort cur_src <<< "$CUR"
 
 # The proxy's quota reading wins while it is fresh (issue #1978): a status-line
 # render or a mod measure then leaves the @rl* set as the proxy stamped it.
