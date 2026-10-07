@@ -222,7 +222,7 @@ CHECKS=$((CHECKS + 1)); waitfor 8 '已在 m4 上开好，已切过去' bar || fa
 has 'A: the bar said where it was opening' "$(bar)" '正在'
 eq 'A: the place ran: repo, issue, --node auto' 'acme/web 42 --node auto' "$(tail -n1 "$LOG")"
 eq 'A: the switch stepped into the new row' 'wid:U/issue-42' "$(tail -n1 "$VIEW")"
-has 'A: the new row is in the list' "$(screen)" 'forty-two'
+CHECKS=$((CHECKS + 1)); waitfor 5 'forty-two' screen || fail 'A: the new row is in the list' "$(screen)"
 CHECKS=$((CHECKS + 1)); [ -z "$(askp)" ] || fail 'A: the question line outlived its last answer' "$(aline)"
 
 # B. scratch → repo → where → m4

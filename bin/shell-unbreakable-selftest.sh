@@ -269,6 +269,7 @@ for tag in x amp rc_list rc_right rc_status; do
   eq "B: $tag — the stage keeps its window" "$s0" "$(r ${tag}_stage)"
 done
 eq "C: ⌃c / ⌃\\ / ⌃z leave the same list process ($(r cc_why))" 1 "$(r cc_same)"
+[ "$(r cc_same)" = 1 ] || find "$WORK" -name 'sidebar-*.log' -exec sh -c 'echo "--- $1"; tail -40 "$1"' _ {} \; >&2
 CHECKS=$((CHECKS + 1)); case "$(r cc_state)" in T*) fail 'C: ⌃z stopped the list' "$(r cc_state)" ;; esac
 eq 'D: kill -9 the list → a new one within 5 s' 1 "$(r list_back)"
 eq 'D: kill -9 the right pane → respawned within 5 s' 1 "$(r right_back)"

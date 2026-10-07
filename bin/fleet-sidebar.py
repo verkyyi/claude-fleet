@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
@@ -2126,6 +2127,19 @@ def stall_log(session, pane, reason, result):
         pass
 
 
+def crash_log(text):
+    """One entry per ui() exception (issue #1950), beside the stall log."""
+    path = Path(os.environ.get("FLEET_SIDEBAR_STALL_LOG") or BIN.parent / "logs" / "sidebar-stall.log")
+    path = path.with_name("sidebar-crash.log")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as log:
+            log.write("%s · %s\n%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                         os.environ.get("TMUX_PANE", ""), text.rstrip()))
+    except OSError:
+        pass
+
+
 def ui(screen, session, worker, lock):
     pane = os.environ["TMUX_PANE"]
     window, remote = (fields(worker, US.join(("#{window_id}", "#{@remote}"))) + ["", ""])[:2]
@@ -3008,7 +3022,9 @@ def main():
                 # Paint again rather than leave the pane (issue #1785): a list
                 # that died on one bad frame took the keyboard's target with it.
                 # A pane that is gone, or one failing over and over, exits — the
-                # hooks' sync draws a fresh one.
+                # hooks' sync draws a fresh one. Each one is logged beside the
+                # stall log (issue #1950): a list that restarts says why.
+                crash_log(traceback.format_exc())
                 now = time.monotonic()
                 restarts = [t for t in restarts if now - t < 60] + [now]
                 pane = os.environ.get("TMUX_PANE", "")
