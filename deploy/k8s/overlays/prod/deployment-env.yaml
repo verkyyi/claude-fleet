@@ -34,6 +34,24 @@ spec:
                   key: sso-session-secret
             - name: CCQUOTA_FLEET_ADMIN_USERS
               value: "verkyyi"
+            # GitHub sign-in (#1984, wired by #2002). The client pair comes from
+            # the GitHub App, written into Secret `ccquota` by hand; optional so
+            # the pod still starts before they exist (both missing ⇒ sign-in off,
+            # one WARN line). One without the other refuses to start.
+            - name: CCQUOTA_GITHUB_ADMINS
+              value: "verkyyi"
+            - name: CCQUOTA_GITHUB_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: github-client-id
+                  optional: true
+            - name: CCQUOTA_GITHUB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: github-client-secret
+                  optional: true
             - name: CCQUOTA_FLEET_PRINCIPAL_LOGINS
               value: "YiLiangHui=verkyyi,CaoJian=24haowan,zx=zx,HuangYongSheng=vincent"
             - name: CCQUOTA_NOTIFY_URL
