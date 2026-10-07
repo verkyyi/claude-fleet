@@ -328,3 +328,50 @@ func TestNodeClientReadsOwnersLease(t *testing.T) {
 		t.Fatalf("no token: HTTP %d", code)
 	}
 }
+
+// TestClientLeaseRenewRefillsAfterRestart (claude-fleet#1995): the table lives
+// in memory, so a restart forgets every lease; each client's next renewal
+// re-adopts its own id AND carries its where, so where the person is reads the
+// device, terminal and caps again with no reopening — each lease its own.
+func TestClientLeaseRenewRefillsAfterRestart(t *testing.T) {
+	var tb clientLeaseTable
+	t0 := time.Date(2026, 10, 6, 19, 50, 0, 0, time.UTC)
+	at := func(s int) time.Time { return t0.Add(time.Duration(s) * time.Second) }
+	macW := ClientLeaseRequest{Device: "Verky's Mac", Terminal: "iTerm2 3.6", OS: "macOS", Via: "tailnet",
+		Host: "m5", Caps: []string{"link", "iterm2"}}
+	phW := ClientLeaseRequest{Device: "iPhone", Terminal: "Termius", OS: "iOS", Via: "tailnet", Host: "m5",
+		Caps: []string{"link"}}
+	mac := tb.acquire("p:a", macW, at(0))
+	ph := tb.acquire("p:a", phW, at(1))
+	tb = clientLeaseTable{} // the hub restarts
+	if r := tb.get("p:a", at(2)); r.State != "none" {
+		t.Fatalf("a restarted hub still knows a client: %+v", r)
+	}
+	renew := func(id string, w ClientLeaseRequest, now time.Time, input int64) ClientLeaseResponse {
+		w.Action, w.Lease, w.LastInput = "renew", id, input
+		return tb.renew("p:a", w, now, false)
+	}
+	if r := renew(ph.Lease.ID, phW, at(3), 0); r.State != "active" || r.Lease.ID != ph.Lease.ID || r.Lease.Device != "iPhone" {
+		t.Fatalf("the iPhone's renewal after a restart = %+v", r)
+	}
+	r := renew(mac.Lease.ID, macW, at(4), at(4).Unix())
+	if r.State != "active" || r.Lease.ID != mac.Lease.ID {
+		t.Fatalf("the Mac's renewal after a restart = %+v", r)
+	}
+	got, _ := json.Marshal(tb.get("p:a", at(5)).Lease)
+	var l ClientLease
+	_ = json.Unmarshal(got, &l)
+	if l.Device != "Verky's Mac" || l.Terminal != "iTerm2 3.6" || l.OS != "macOS" || l.Via != "tailnet" ||
+		l.Host != "m5" || strings.Join(l.Caps, ",") != "link,iterm2" {
+		t.Fatalf("where after one renewal = %s", got)
+	}
+	if n := len(tb.get("p:a", at(5)).Clients); n != 2 {
+		t.Fatalf("clients after both renewed = %d, want 2", n)
+	}
+	// An older client's bare renewal (the id alone) still re-adopts the lease —
+	// it just cannot say where it is.
+	tb = clientLeaseTable{}
+	if r := tb.renew("p:a", ClientLeaseRequest{Action: "renew", Lease: mac.Lease.ID}, at(6), false); r.State != "active" || r.Lease.Device != "未知设备" {
+		t.Fatalf("a bare renewal after a restart = %+v", r)
+	}
+}
