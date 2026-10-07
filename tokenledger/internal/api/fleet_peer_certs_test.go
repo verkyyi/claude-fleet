@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 )
 
@@ -164,4 +165,68 @@ func mustParsePub(t *testing.T, line string) ssh.PublicKey {
 		t.Fatal(err)
 	}
 	return pk
+}
+
+// claude-fleet#2249: an old node joined by a code — enrolled as mini2.local,
+// on the roster as mini2 — and the person's laptop, a node by `fleet login`
+// alone. Each login is the person's only through the 登录即认人 row bound to
+// its node, so both ends of a peer certificate must read that row: the same
+// person's two logins reach each other, another person's login is refused.
+func TestPeerCertLoginBoundOnBothEnds(t *testing.T) {
+	h, _, n := peerHarness(t)
+
+	// The old node: its enrollment hostname is not the one its agent reports.
+	oldTok, _ := MintToken()
+	code, _ := MintJoinCode()
+	now := time.Now()
+	if err := h.srv.Store.CreateJoinCode(HashToken(code), "", now, JoinCodeTTL); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.RedeemJoinCode(HashToken(code), now, "ep_mini2", "mini2", HashToken(oldTok), "mini2.local", "alicem"); err != nil {
+		t.Fatal(err)
+	}
+	old := &fleetNode{token: oldTok, id: "ep_mini2"}
+	old.tnode = dialAdmin(t, h, oldTok, false)
+	beat(t, old.c, control.Proto, control.Heartbeat{Hostname: "mini2", OSUser: "alicem"})
+	d1 := newDevice(t)
+	d1.scan(t, h, pAlice, "mini2")
+	if c, out := d1.loginNodeAs(t, h, "mini2", "alicem", oldTok); c != 200 || out["endpoint_id"] != "ep_mini2" || out["account_refused"] != nil {
+		t.Fatalf("old node pass: %d %v", c, out)
+	}
+	if _, err := h.srv.Store.PrincipalForLogin("mini2", "alicem"); err == nil {
+		t.Fatal("the fixture lost its point: the roster name answers by itself")
+	}
+
+	// The laptop: a node by its login only.
+	d2 := newDevice(t)
+	d2.scan(t, h, pAlice, "MacBookPro")
+	c, out := d2.loginNode(t, h, "MacBookPro", "alicelap")
+	if c != 200 || out["account_refused"] != nil {
+		t.Fatalf("laptop node pass: %d %v", c, out)
+	}
+	lap := &fleetNode{token: out["token"].(string), id: out["endpoint_id"].(string)}
+	lap.tnode = dialAdmin(t, h, lap.token, false)
+	beat(t, lap.c, control.Proto, control.Heartbeat{Hostname: "MacBookPro", OSUser: "alicelap"})
+	waitFor(t, 3*time.Second, "both on the roster", func() bool {
+		for _, x := range []*fleetNode{old, lap} {
+			if r := h.srv.nodeRow(x.id); r == nil || r.Hostname == "" {
+				return false
+			}
+		}
+		return true
+	})
+
+	key := newUserKey(t)
+	if st, g, raw := peerPost(t, h, oldTok, map[string]any{"target": "MacBookPro", "purpose": "view", "public_key": key}); st != 200 || g.Login != "alicelap" {
+		t.Fatalf("alicem@mini2 → MacBookPro: HTTP %d login %q %s; want alicelap", st, g.Login, raw)
+	}
+	if st, g, raw := peerPost(t, h, lap.token, map[string]any{"target": "mini2", "purpose": "view", "public_key": key}); st != 200 || g.Login != "alicem" {
+		t.Fatalf("alicelap@MacBookPro → mini2: HTTP %d login %q %s; want alicem", st, g.Login, raw)
+	}
+	// Another person's login (Bob's on m4, the operator's unowned verk) is not.
+	for _, src := range []string{"bob4", "verk4"} {
+		if st, _, raw := peerPost(t, h, n[src].token, map[string]any{"target": "MacBookPro", "purpose": "view", "public_key": key}); st != 403 {
+			t.Errorf("%s → MacBookPro: HTTP %d %s; want 403", src, st, raw)
+		}
+	}
 }

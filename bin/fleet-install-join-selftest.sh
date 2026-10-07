@@ -37,7 +37,9 @@
 #   G. old login  logged in, node.env gone: `fleet node ensure` takes the pass
 #                 again by the device key — no scan, the same hub endpoint asked;
 #                 a node from before (token, no node-login.ok) shows the hub its
-#                 token once (link + 登录即认人), node.env unchanged
+#                 token once (link + 登录即认人), node.env unchanged; a pass
+#                 the hub refused, or whose login it did not bind
+#                 (account_refused, #2249), leaves no node-login.ok and says why
 #   H. logout     `fleet logout`: the node leaves the hub (/v1/node/leave),
 #                 node.env, the certificate and the device key are gone
 set -uo pipefail
@@ -123,8 +125,15 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(401, {"error": "bad signature", "code": "bad_signature"})
             state["lnode"].append({"hostname": body.get("hostname"), "os_user": body.get("os_user"),
                                    "bearer": self.headers.get("Authorization") == "Bearer " + TOKEN}); save()
-            return self.reply(200, {"endpoint_id": "ep_1", "label": body["hostname"] + "-" + body["os_user"], "token": TOKEN,
-                "hub": "x", "admin": False, "dist": ["darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"], "kind": "fixed"})
+            # lnode.mode (#2249): refused = the pass without the person; 500 = no pass
+            mode = open(os.path.join(W, "lnode.mode")).read().strip() if os.path.exists(os.path.join(W, "lnode.mode")) else ""
+            if mode == "500":
+                return self.reply(500, {"error": "store is down"})
+            res = {"endpoint_id": "ep_1", "label": body["hostname"] + "-" + body["os_user"], "token": TOKEN,
+                "hub": "x", "admin": False, "dist": ["darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"], "kind": "fixed"}
+            if mode == "refused":
+                res["account_refused"] = "login alice on box already belongs to someone else"
+            return self.reply(200, res)
         if self.path == "/v1/node/leave":
             if self.headers.get("Authorization") != "Bearer " + TOKEN:
                 return self.reply(401, {"error": "unrecognised enrollment token"})
@@ -318,6 +327,27 @@ else bad "G link: $(cat "$WORK/state.json")"; fi
 fleet_in h1 node ensure
 python3 -c 'import json,sys; sys.exit(0 if len(json.load(open(sys.argv[1]))["lnode"]) == 3 else 1)' "$WORK/state.json" \
   && ok "G linked once: no second ask" || bad "G asked again after the link"
+# a pass that does not bind the login (#2249): no node-login.ok, the reason in
+# node-join.log + node-login.why — and the next ensure asks again; a refused
+# pass the same; a good one marks and clears the reason
+lnodes() { python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["lnode"]))' "$WORK/state.json"; }
+rm -f "$CONF/node-login.ok"; echo refused > "$WORK/lnode.mode"
+fleet_in h1 node ensure
+if [ "$(cat "$WORK/rc")" = 0 ] && [ ! -e "$CONF/node-login.ok" ] && grep -q 'someone else' "$CONF/node-login.why" \
+   && grep -q 'node pass: 登录未认人：login alice on box already belongs to someone else' "$CONF/node-join.log" \
+   && [ "$(lnodes)" = 4 ] && [ ! -s "$WORK/out" ]; then
+  ok "G an unbound login: no mark, the reason in node-join.log + node-login.why, silent"
+else bad "G unbound: rc=$(cat "$WORK/rc") lnode=$(lnodes) why=$(cat "$CONF/node-login.why" 2>&1): $(cat "$WORK/out")"; fi
+echo 500 > "$WORK/lnode.mode"
+fleet_in h1 node ensure
+if [ ! -e "$CONF/node-login.ok" ] && [ "$(lnodes)" = 5 ] && grep -q 'store is down' "$CONF/node-login.why" \
+   && grep -q 'node pass: .*store is down' "$CONF/node-join.log"; then
+  ok "G a refused pass: asked again, no mark, the hub's reason kept"
+else bad "G refused: lnode=$(lnodes) why=$(cat "$CONF/node-login.why" 2>&1)"; fi
+rm -f "$WORK/lnode.mode"
+fleet_in h1 node ensure
+[ "$(cat "$CONF/node-login.ok" 2>/dev/null)" = "$HUB" ] && [ ! -e "$CONF/node-login.why" ] && [ "$(lnodes)" = 6 ] \
+  && ok "G bound at last: marked, the reason cleared" || bad "G bound: lnode=$(lnodes) ok=$(cat "$CONF/node-login.ok" 2>&1)"
 
 # ── H. logout ───────────────────────────────────────────────────────────────
 fleet_in h1 logout

@@ -171,6 +171,11 @@ type NodeJoinResponse struct {
 	// ephemeral — the join script then runs the agent as a SPOT node, which
 	// on SIGTERM tells the hub and moves its idle sessions off.
 	Kind string `json:"kind"`
+	// AccountRefused is the login node pass's word on 登录即认人
+	// (claude-fleet#2249): why this system login is NOT recorded as the
+	// person's, empty when it is. The client keeps no node-login.ok then and
+	// says the reason, rather than believe it is bound.
+	AccountRefused string `json:"account_refused,omitempty"`
 }
 
 // handleNodeJoin trades a join code for an enrollment token. No credential
