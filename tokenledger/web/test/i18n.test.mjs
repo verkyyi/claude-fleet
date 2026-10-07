@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { en } from '../dist/lib/i18n/en.js';
 import { zhCN } from '../dist/lib/i18n/zh-CN.js';
+import { normalizeLocale, readCookie, langURL } from '../dist/lib/i18n.js';
 import { pickLocale, interpolate, lookup, t, tIn, useLocale, withLocale,
          LOCALES, LOCALE_LABEL, DICTS, FALLBACK, punct, LOCALE_PUNCT } from '../dist/lib/i18n.js';
 
@@ -154,4 +155,26 @@ test('the limits banner joins onto a finished sentence without ASCII punctuation
     assert.ok(!DICTS[loc]['wall.noReading'].includes('{'),
       `${loc}/wall.noReading interpolates — it is used as a bare fallback`);
   }
+});
+
+// #2023: the link and the cookie join the rule, in the hub's order —
+// ?lang= > cf_lang cookie > the older stored choice > the browser.
+test('a link beats the cookie, the cookie beats the browser', () => {
+  assert.equal(pickLocale(null, ['en-US'], { query: 'zh' }), 'zh-CN');
+  assert.equal(pickLocale('zh-CN', ['zh-CN'], { query: 'en', cookie: 'zh-CN' }), 'en');
+  assert.equal(pickLocale(null, ['zh-CN'], { cookie: 'en' }), 'en');
+  assert.equal(pickLocale('en', ['en'], { cookie: 'zh-CN' }), 'zh-CN');
+  // An unknown value on any rung is skipped, not obeyed.
+  assert.equal(pickLocale(null, ['zh-TW'], { query: 'fr', cookie: 'xx' }), 'zh-CN');
+  assert.equal(normalizeLocale('ZH'), 'zh-CN');
+  assert.equal(normalizeLocale('en-GB'), 'en');
+  assert.equal(normalizeLocale('fr'), null);
+});
+
+test('readCookie and langURL', () => {
+  assert.equal(readCookie('a=1; cf_lang=zh-CN; b=2', 'cf_lang'), 'zh-CN');
+  assert.equal(readCookie('a=1', 'cf_lang'), null);
+  assert.equal(readCookie('', 'cf_lang'), null);
+  assert.equal(langURL('https://h/x?scope=a&lang=en#f', 'zh-CN'), 'https://h/x?scope=a&lang=zh#f');
+  assert.equal(langURL('https://h/', 'en'), 'https://h/?lang=en');
 });

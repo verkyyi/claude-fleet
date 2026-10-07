@@ -1,15 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>claudefleet</title>
-<meta name="description" content="Run a fleet of Claude Code sessions: GitHub issues in, pull requests out, on every machine you own, sharing one pool of subscriptions.">
+<meta name="description" content="{{t "landing.description"}}">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230e6e5e'/%3E%3Cpath d='M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
 <!--
   The signed-out front page (claude-fleet#1988), after the prototype's Front
   page. Self-contained on purpose: it sends no request anywhere but this hub
   (no web fonts, no CDN) — the hub serves it with a same-origin CSP.
+
+  A Go html/template (claude-fleet#2023): serveLanding fills every t "key" from
+  internal/api/pagetext.go in the language pageLocale picked, so the page
+  arrives already in 中文 or English with <html lang> set — no English flash.
 -->
 <style>
 :root {
@@ -102,6 +106,18 @@ svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-widt
   .meterband { grid-template-columns: minmax(0,1fr); }
   .pub-links .hide-sm { display: none; }
 }
+.meterband small { display: block; margin-top: 6px; font: 500 13px var(--f-mono); color: var(--muted); }
+.langsw { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; flex: none; }
+.langsw a { padding: 4px 9px; font-size: 12.5px; color: var(--ink-2); line-height: 1.4; }
+.langsw a[aria-current] { background: var(--ink); color: var(--bg); }
+/* Chinese set as Chinese: the system's Chinese faces (no web font — a Chinese
+   one is megabytes), no tracking or case change on labels, a taller line. */
+:root:lang(zh) { --f-ui: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif; --f-display: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif; }
+html:lang(zh) body { line-height: 1.75; }
+:lang(zh) .hero h1 { letter-spacing: -.01em; line-height: 1.2; }
+:lang(zh) .sec-head h2 { letter-spacing: 0; line-height: 1.25; }
+:lang(zh) .eyebrow { letter-spacing: 0; text-transform: none; }
+:lang(zh) .hero .sub { line-height: 1.8; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
@@ -110,72 +126,75 @@ svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-widt
   <nav class="pub-nav">
     <a class="logo" href="/"><span class="logo-mark"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></span>claudefleet</a>
     <div class="pub-links">
-      <a class="btn ghost hide-sm" href="#how">How it works</a>
+      <a class="btn ghost hide-sm" href="#how">{{t "landing.nav.how"}}</a>
       <a class="btn ghost hide-sm" href="https://github.com/verkyyi/claude-fleet" rel="noopener">GitHub</a>
-      <a class="btn dark" href="/signin">Sign in</a>
+      <span class="langsw" role="group" aria-label="{{t "lang.label"}}"><a href="{{.ZhHref}}" lang="zh-CN" hreflang="zh-CN"{{if .IsZh}} aria-current="true"{{end}}>中文</a><a href="{{.EnHref}}" lang="en" hreflang="en"{{if not .IsZh}} aria-current="true"{{end}}>EN</a></span>
+      <a class="btn dark" href="/signin">{{t "landing.signin"}}</a>
     </div>
   </nav>
   <main class="pub-main" id="landing">
     <section class="hero">
       <div>
-        <h1>Run a <em>fleet</em> of Claude Code sessions. One task per window.</h1>
-        <p class="sub">claudefleet turns GitHub issues into parallel coding sessions, each in its own git worktree, on every machine you own, sharing one pool of subscriptions. Every task ends as its own pull request.</p>
+        <h1>{{t "landing.h1.pre"}}<em>{{t "landing.h1.em"}}</em>{{t "landing.h1.post"}}</h1>
+        <p class="sub">{{t "landing.sub"}}</p>
         <div class="ctas">
-          <a class="btn primary lg" href="/signin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg>Sign in with GitHub</a>
-          <a class="btn lg" href="#how">How it works <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+          <a class="btn primary lg" href="/signin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg>{{t "landing.cta.signin"}}</a>
+          <a class="btn lg" href="#how">{{t "landing.cta.how"}} <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
         </div>
-        <div class="installline" id="install"><span id="installcmd">curl -fsSL https://claudefleet.24haowan.com/install | sh</span><button class="btn sm" type="button" id="copy"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg><span id="copylabel">Copy</span></button></div>
+        <div class="installline" id="install"><span id="installcmd">curl -fsSL https://claudefleet.24haowan.com/install | sh</span><button class="btn sm" type="button" id="copy"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg><span id="copylabel">{{t "landing.copy"}}</span></button></div>
       </div>
-      <div class="term" aria-label="Example of the fleet session list">
-        <div class="term-bar"><i></i><i></i><i></i><span>fleet · 5 sessions · 3 machines</span></div>
+      <div class="term" aria-label="{{t "landing.term.aria"}}">
+        <div class="term-bar"><i></i><i></i><i></i><span>{{t "landing.term.bar"}}</span></div>
         <div class="term-body">
-          <div class="term-head"><span>session</span><span>machine</span></div>
-          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1950</span><span class="m">Team settings reach every machine</span><span class="t-dim">mini2</span></div>
-          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1939</span><span class="m">Install sync keeps fleet.conf</span><span class="t-dim">m4</span></div>
-          <div class="term-row"><span class="t-warn">?</span><span class="k">issue-1953</span><span class="m">Doctor row for the team layer</span><span class="t-dim">mini2</span></div>
-          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1961</span><span class="m">Front page for the hub</span><span class="t-dim">spot</span></div>
-          <div class="term-row"><span class="t-dim">·</span><span class="k">scratch-6</span><span class="m">Portal plan</span><span class="t-dim">m4</span></div>
-          <div class="term-line t-dim" style="margin-top:10px">pool  A 62% · B 18% · C full · Codex 30%</div>
+          <div class="term-head"><span>{{t "landing.term.session"}}</span><span>{{t "landing.term.machine"}}</span></div>
+          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1950</span><span class="m">{{t "landing.term.r1"}}</span><span class="t-dim">mini2</span></div>
+          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1939</span><span class="m">{{t "landing.term.r2"}}</span><span class="t-dim">m4</span></div>
+          <div class="term-row"><span class="t-warn">?</span><span class="k">issue-1953</span><span class="m">{{t "landing.term.r3"}}</span><span class="t-dim">mini2</span></div>
+          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1961</span><span class="m">{{t "landing.term.r4"}}</span><span class="t-dim">spot</span></div>
+          <div class="term-row"><span class="t-dim">·</span><span class="k">scratch-6</span><span class="m">{{t "landing.term.r5"}}</span><span class="t-dim">m4</span></div>
+          <div class="term-line t-dim" style="margin-top:10px">{{t "landing.term.pool"}}</div>
           <div class="term-line"><span class="t-brand">❯</span> fleet spawn 1961<span class="t-dim">  → issue-1961 on m4 · Max 20× · B</span></div>
         </div>
       </div>
     </section>
 
     <section class="meterband" id="meterband" hidden>
-      <b id="meter" aria-live="off">0</b>
-      <p>Claude and Codex tokens this fleet has run so far, counted live by the hub.</p>
+      <div><b id="meter" aria-live="off">0</b><small id="meterhuman"></small></div>
+      <p>{{t "landing.meter.caption"}}</p>
     </section>
 
     <section>
-      <div class="sec-head"><span class="eyebrow">What it does</span><h2>Many sessions, many machines, one place to see them</h2></div>
+      <div class="sec-head"><span class="eyebrow">{{t "landing.what.eyebrow"}}</span><h2>{{t "landing.what.h2"}}</h2></div>
       <div class="features">
-        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg></div><h3>Issues in, pull requests out</h3><p>Hand an issue to a worker. It claims it, works in its own worktree, runs the related tests and opens the PR. You answer questions when it asks.</p></div>
-        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c2 0 2-1.5 4.5-1.5S10 17 12 17s2.5-1.5 4.5-1.5S19 17 21 17"/><path d="M3 12c2 0 2-1.5 4.5-1.5S10 12 12 12s2.5-1.5 4.5-1.5S19 12 21 12"/><path d="M7 7l5-4 5 4"/></svg></div><h3>Subscriptions, pooled</h3><p>New sessions start on whichever Claude or Codex subscription has the most headroom. A full one is skipped until its window resets.</p></div>
-        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div><h3>Every machine you have</h3><p>Macs, Linux boxes, a rented machine when you run out of room. Sessions move between them; you reach any of them over SSH with a 12-hour certificate.</p></div>
+        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg></div><h3>{{t "landing.f1.h"}}</h3><p>{{t "landing.f1.p"}}</p></div>
+        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c2 0 2-1.5 4.5-1.5S10 17 12 17s2.5-1.5 4.5-1.5S19 17 21 17"/><path d="M3 12c2 0 2-1.5 4.5-1.5S10 12 12 12s2.5-1.5 4.5-1.5S19 12 21 12"/><path d="M7 7l5-4 5 4"/></svg></div><h3>{{t "landing.f2.h"}}</h3><p>{{t "landing.f2.p"}}</p></div>
+        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div><h3>{{t "landing.f3.h"}}</h3><p>{{t "landing.f3.p"}}</p></div>
       </div>
     </section>
 
     <section id="how">
-      <div class="sec-head"><span class="eyebrow">How it works</span><h2>Three steps to your first fleet session</h2></div>
+      <div class="sec-head"><span class="eyebrow">{{t "landing.how.eyebrow"}}</span><h2>{{t "landing.how.h2"}}</h2></div>
       <div class="steps3">
-        <div><h3>Install the client</h3><p>Run <code>curl … /install | sh</code> on the computer you work from.</p></div>
-        <div><h3>Sign in with GitHub</h3><p><code>fleet login</code> shows a code; confirm it in the browser. Only people on this hub's list get in.</p></div>
-        <div><h3>Hand it an issue</h3><p><code>fleet spawn 1961</code> starts a worker on the best machine and subscription, and it lands as a PR.</p></div>
+        <div><h3>{{t "landing.s1.h"}}</h3><p>{{t "landing.s1.pre"}}<code>curl … /install | sh</code>{{t "landing.s1.post"}}</p></div>
+        <div><h3>{{t "landing.s2.h"}}</h3><p><code>fleet login</code>{{t "landing.s2.post"}}</p></div>
+        <div><h3>{{t "landing.s3.h"}}</h3><p><code>fleet spawn 1961</code>{{t "landing.s3.post"}}</p></div>
       </div>
     </section>
   </main>
-  <footer class="pub-foot"><div><span>claudefleet · open source, MIT · <a href="https://github.com/verkyyi/claude-fleet" rel="noopener">github.com/verkyyi/claude-fleet</a></span><span id="hosted">Hosted at claudefleet.24haowan.com</span></div></footer>
+  <footer class="pub-foot"><div><span>{{t "landing.foot.oss"}} · <a href="https://github.com/verkyyi/claude-fleet" rel="noopener">github.com/verkyyi/claude-fleet</a></span><span id="hosted">{{.Hosted}}</span></div></footer>
 </div>
 <script>
 (function () {
   'use strict';
+  // Words the script writes later, in the page's language.
+  var L = { lang: {{.Lang}}, copy: {{t "landing.copy"}}, copied: {{t "landing.copied"}}, hosted: {{t "landing.foot.hosted"}} };
   // The install line names THIS hub, whatever it is called.
   var cmd = 'curl -fsSL ' + location.origin + '/install | sh';
   document.getElementById('installcmd').textContent = cmd;
-  document.getElementById('hosted').textContent = 'Hosted at ' + location.host;
+  document.getElementById('hosted').textContent = L.hosted.replace('{host}', location.host);
   document.getElementById('copy').addEventListener('click', function () {
     var label = document.getElementById('copylabel');
-    var done = function () { label.textContent = 'Copied'; setTimeout(function () { label.textContent = 'Copy'; }, 1600); };
+    var done = function () { label.textContent = L.copied; setTimeout(function () { label.textContent = L.copy; }, 1600); };
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(cmd).then(done, function () {});
   });
 
@@ -188,7 +207,22 @@ svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-widt
   var PULL_MS = 15000;
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var base = null, baseAt = 0, lastTs = 0, shown = 0;
+  var human = document.getElementById('meterhuman');
   function fmt(n) { return Math.floor(n).toLocaleString('en-US'); }
+  // The same rule as fmtCompact in lib/i18n.js (inlined: this page loads no
+  // module): English 218.72B, Chinese by 万 / 亿 to three figures.
+  function compact(n) {
+    var trim0 = function (s) { return s.indexOf('.') >= 0 ? s.replace(/\.?0+$/, '') : s; };
+    var sig3 = function (v) { return v >= 100 ? String(Math.round(v)) : trim0(v.toPrecision(3)); };
+    if (L.lang === 'zh-CN') {
+      if (n >= 1e8) return '约 ' + sig3(n / 1e8) + ' 亿';
+      if (n >= 1e4) return '约 ' + sig3(n / 1e4) + ' 万';
+      return '';
+    }
+    if (n >= 1e9) return '≈ ' + trim0((n / 1e9).toFixed(2)) + 'B';
+    if (n >= 1e6) return '≈ ' + trim0((n / 1e6).toFixed(1)) + 'M';
+    return '';
+  }
   function value(now) {
     if (!base) return 0;
     var from = base.total - base.windowTokens;
@@ -213,6 +247,7 @@ svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-widt
       var first = !base;
       base = { total: d.total, windowTokens: Math.max(0, Math.min(d.total, Number(d.windowTokens) || 0)), windowSecs: Number(d.windowSecs) || 0 };
       baseAt = performance.now();
+      human.textContent = compact(d.total);
       if (reduce) { shown = Math.max(shown, d.total); el.textContent = fmt(shown); }
       band.hidden = false;
       if (first) { shown = value(baseAt); if (!reduce) requestAnimationFrame(frame); else el.textContent = fmt(shown); }

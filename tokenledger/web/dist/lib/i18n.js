@@ -29,24 +29,53 @@ export const LOCALE_LABEL = { en: 'English', 'zh-CN': '简体中文' };
 export const DICTS = { en, 'zh-CN': zhCN };
 export const STORAGE_KEY = 'ccquota-locale';
 
-/** pickLocale resolves the locale to use from a stored choice and the
- *  browser's language list, in that order of authority. Pure, so the choice
- *  rule is testable without a browser.
+/** LANG_COOKIE is the choice this browser remembers — the same cookie the hub
+ *  reads to draw its public pages (internal/api/pagelang.go, #2023). */
+export const LANG_COOKIE = 'cf_lang';
+
+/** normalizeLocale maps a tag onto a locale this build ships, or null:
+ *  `zh`, `zh-CN`, `zh-TW`, `zh-HK` → zh-CN (no Traditional dictionary, and
+ *  Simplified is far closer than English); `en*` → en; anything else null. */
+export function normalizeLocale(tag) {
+  if (!tag) return null;
+  const s = String(tag).trim();
+  if (LOCALES.includes(s)) return s;
+  const primary = s.toLowerCase().split('-')[0];
+  return LOCALES.find((l) => l.toLowerCase().split('-')[0] === primary) || null;
+}
+
+/** pickLocale resolves the locale to use. Pure, so the rule is testable
+ *  without a browser. The same rule the hub applies (#2023):
  *
- *  A stored choice always wins — it is the viewer saying so explicitly. Failing
- *  that, an exact tag match, then a primary-subtag match: `zh-TW` and `zh-HK`
- *  resolve to `zh-CN` on purpose. This build ships no Traditional dictionary,
- *  and Simplified is far closer to what that reader wants than English is. */
-export function pickLocale(stored, languages) {
-  if (stored && LOCALES.includes(stored)) return stored;
+ *    ?lang= in the link  >  the cf_lang cookie  >  a stored choice  >  the browser
+ *
+ *  The link wins so a shared link opens in the language it was sent in. The
+ *  signed-in account's choice is folded in by the SERVER, which writes it into
+ *  the cookie on every page it serves — so a new device already has it here.
+ *  `stored` is the older localStorage choice, read for browsers that made it
+ *  before the cookie existed. A value this build has no dictionary for is
+ *  ignored rather than obeyed. */
+export function pickLocale(stored, languages, { query, cookie } = {}) {
+  for (const explicit of [query, cookie, stored]) {
+    const hit = normalizeLocale(explicit);
+    if (hit) return hit;
+  }
   for (const tag of languages || []) {
-    if (!tag) continue;
-    if (LOCALES.includes(tag)) return tag;
-    const primary = String(tag).toLowerCase().split('-')[0];
-    const hit = LOCALES.find((l) => l.toLowerCase().split('-')[0] === primary);
+    const hit = normalizeLocale(tag);
     if (hit) return hit;
   }
   return FALLBACK;
+}
+
+/** readCookie is one cookie's value from a document.cookie string. */
+export function readCookie(all, name) {
+  for (const part of String(all || '').split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) {
+      try { return decodeURIComponent(v.join('=')); } catch { return v.join('='); }
+    }
+  }
+  return null;
 }
 
 /** interpolate fills `{name}` placeholders. An unknown placeholder is left
@@ -80,7 +109,9 @@ if (typeof document !== 'undefined') {
   let stored = null;
   try { stored = localStorage.getItem(STORAGE_KEY); } catch {}
   const langs = (typeof navigator !== 'undefined' && (navigator.languages || [navigator.language])) || [];
-  current = pickLocale(stored, langs);
+  let query = null;
+  try { query = new URLSearchParams(location.search).get('lang'); } catch {}
+  current = pickLocale(stored, langs, { query, cookie: readCookie(document.cookie, LANG_COOKIE) });
   document.documentElement.setAttribute('lang', current);
 }
 
@@ -128,7 +159,7 @@ export function useLocale(loc) {
   return current;
 }
 
-/** chooseLocale is the viewer's own switch: persist, then reload.
+/** chooseLocale is the viewer's own switch: remember, then reload.
  *
  *  A reload rather than a re-render, and that is not laziness. Several modules
  *  build their label maps at module-eval time (consumption.js's BILLING,
@@ -137,13 +168,30 @@ export function useLocale(loc) {
  *  in the old language while everything around them changed — a half-switched
  *  page, which is worse than a one-second reload. The scope is in the URL and
  *  every fold state is in localStorage, so a reload lands the viewer exactly
- *  where they were. */
+ *  where they were.
+ *
+ *  The reload carries ?lang= (#2023): that is what tells the hub to save the
+ *  choice on a signed-in account, so it follows the person to their next
+ *  device. Without it the account's OLD choice would outrank the new cookie on
+ *  the very next page. The cookie is written here too, so a hub that does not
+ *  know the parameter still remembers it for this browser. */
 export function chooseLocale(loc) {
   const next = LOCALES.includes(loc) ? loc : FALLBACK;
   try { localStorage.setItem(STORAGE_KEY, next); } catch {}
-  if (typeof location !== 'undefined' && location.reload) location.reload();
+  if (typeof document !== 'undefined') {
+    document.cookie = `${LANG_COOKIE}=${encodeURIComponent(next)}; path=/; max-age=31536000; samesite=lax`;
+  }
+  if (typeof location !== 'undefined' && location.replace) location.replace(langURL(location.href, next));
   else useLocale(next);
   return next;
+}
+
+/** langURL is href with its ?lang= set to loc's short form (zh / en), every
+ *  other parameter and the hash kept. */
+export function langURL(href, loc) {
+  const u = new URL(href);
+  u.searchParams.set('lang', loc === 'zh-CN' ? 'zh' : 'en');
+  return u.toString();
 }
 
 /** t translates one key in the current locale.

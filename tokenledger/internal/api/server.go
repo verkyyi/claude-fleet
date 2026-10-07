@@ -541,7 +541,8 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("/odometer.svg", s.handleOdometer)
 
 	// Signed out, "/" is the front page; signed in, the app.
-	mux.Handle("/", s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding))
+	// Every page under it settles its language first (claude-fleet#2023).
+	mux.Handle("/", s.withPageLang(s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding)))
 
 	return mux
 }

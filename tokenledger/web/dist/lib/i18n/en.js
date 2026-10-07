@@ -683,6 +683,7 @@ export const en = {
   'ui.door.wecom': 'WeCom',
   'ui.door.open': 'open',
   'ui.me.signout': 'Sign out',
+  'ui.lang': 'Language',
   'ui.me.you': 'you',
   'ui.fleet': '{name} fleet',
   'ui.loading': 'Loading…',
