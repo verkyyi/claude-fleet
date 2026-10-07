@@ -114,22 +114,39 @@ func fleetVault(fleetOn bool, st *store.Store) (*credvault.Vault, error) {
 // whose network the provider accepts — the hub in Shenzhen cannot refresh a
 // Codex token itself (auth.openai.com answers 403
 // unsupported_country_region_territory) and must not keep trying from there.
-// Unset or "direct" keeps the hub posting from its own network, exactly as
-// before; anything else refuses to start rather than guess.
+// =relay (claude-fleet#1976) posts a Codex refresh to the Singapore relay's
+// /openai-auth/ route (CCQUOTA_FLEET_CRED_RELAY_URL) with the hub's own pass,
+// so no machine's memory ever holds the refresh token and no machine needs to
+// be online; a relay that cannot be asked — and a Claude refresh — falls back
+// to the node path. Unset or "direct" keeps the hub posting from its own
+// network, exactly as before; anything else refuses to start rather than guess.
 func fleetRefreshVia(srv *api.Server, vault *credvault.Vault) error {
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_OAUTH_REFRESH_VIA"))); v {
 	case "", "direct":
 		return nil
-	case "node":
+	case "node", "relay":
 		if vault == nil {
-			log.Printf("fleet: CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node set, but the credential vault is off — nothing to relay")
+			log.Printf("fleet: CCQUOTA_FLEET_OAUTH_REFRESH_VIA=%s set, but the credential vault is off — nothing to relay", v)
 			return nil
 		}
-		vault.Refresher = &credvault.ProxyRefresher{Via: srv.NodeOAuthRefresh}
-		log.Printf("fleet: credential refreshes are relayed through an online admin node (CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node); none online = refresh_unavailable")
+		node := &credvault.ProxyRefresher{Via: srv.NodeOAuthRefresh}
+		if v == "node" {
+			vault.Refresher = node
+			log.Printf("fleet: credential refreshes are relayed through an online admin node (CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node); none online = refresh_unavailable")
+			return nil
+		}
+		url := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_CRED_RELAY_URL"))
+		if url == "" {
+			return errors.New("CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay needs CCQUOTA_FLEET_CRED_RELAY_URL (the Singapore relay, docs/CRED-RELAY.md)")
+		}
+		if len(srv.SessionCredKey) == 0 {
+			return errors.New("CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay needs CCQUOTA_FLEET_SESSION_CRED_KEY — the hub signs its relay pass with it")
+		}
+		vault.Refresher = &credvault.RelayRefresher{URL: url, Pass: srv.HubRelayPass, Fallback: node}
+		log.Printf("fleet: OpenAI credential refreshes go through the relay %s (CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay); relay down = an admin node, Claude = an admin node", url)
 		return nil
 	default:
-		return fmt.Errorf("CCQUOTA_FLEET_OAUTH_REFRESH_VIA: %q is not node or direct", v)
+		return fmt.Errorf("CCQUOTA_FLEET_OAUTH_REFRESH_VIA: %q is not relay, node or direct", v)
 	}
 }
 
@@ -513,10 +530,11 @@ func runHub(args []string) error {
 		if err := sshRelayConfig(srv); err != nil {
 			return err
 		}
-		if err := fleetRefreshVia(srv, vault); err != nil {
+		if err := loadSessionCreds(srv); err != nil {
 			return err
 		}
-		if err := loadSessionCreds(srv); err != nil {
+		// After the session pass key: the relay path signs its pass with it.
+		if err := fleetRefreshVia(srv, vault); err != nil {
 			return err
 		}
 		// SPOT nodes (claude-fleet#1428): on only with an image to run.
