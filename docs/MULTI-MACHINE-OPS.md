@@ -244,7 +244,7 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 
 | `login.source` | 谁刷新 | `~/.codex/auth.json` 里 | 本机 `ccquota codex refresh` |
 |---|---|---|---|
-| `hub` 入口托管 | 入口（保险箱里的 refresh token；入口所在地被拒时经一台管理节点转发） | `refresh_token` 是占位符 `hub-managed`，节点程序 `ccquota agent`（`CCQUOTA_FLEET_CREDS=1`）到期前 2 小时续写 | **拒绝**，什么都不跑；登录状态只会是 `valid`，或续租没续上时的 `access_expired`（原因写明是节点程序，不是让你重登） |
+| `hub` 入口托管 | 入口（保险箱里的 refresh token；入口所在地被拒时经一台管理节点转发） | `refresh_token` 是占位符 `hub-managed`，节点程序 `ccquota agent`（`CCQUOTA_FLEET_CREDS=1`）到期前 2 小时续写 | **拒绝**，什么都不跑；登录状态只会是 `valid`，或续租没续上时的 `access_expired`（原因写明是节点程序，不是让你重登），或上游已拒绝这份租约时的 `access_rejected`（`upstream_error` 是上游的原话代码，如 `token_revoked`；得由入口重发一份，#1920） |
 | `local` 本机自管 | 本机官方 Codex CLI（ccquota 到期前 24 小时催它） | 真的 refresh token | 照旧 |
 
 **把一台机器切为入口托管**（批后、你点头后，**一台一台**；入口已部署含本单的版本）：

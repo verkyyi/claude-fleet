@@ -16,6 +16,9 @@
 #   G  rails: ctl.sock 0600, 127.0.0.1 only, no token in the log
 #   H  the daemon entry (`run`): starts the proxy when on, stops it when the
 #      config turns off, and a SIGKILLed launcher takes the proxy with it
+#   I  an upstream 401 (token_revoked) on a Codex home's token lands in that
+#      home's .ccquota-upstream.json for `ccquota codex list` (issue #1920), a
+#      2xx clears it, and the record holds no token
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "${TMPDIR:-/tmp}/cred-proxy-st.XXXXXX")
@@ -86,6 +89,9 @@ class H(BaseHTTPRequestHandler):
                 if prov == "codex":
                     return self.reply(403, {"detail": {"code": "unsupported_country_region_territory"}})
                 return self.reply(403, {"type": "error", "error": {"type": "forbidden", "message": "Request not allowed"}})
+            if prov == "codex" and os.path.exists(os.path.join(SB, "revoked-codex")):
+                return self.reply(401, {"error": {"message": "Your authentication token has been invalidated.",
+                                                  "code": "token_revoked"}})
             via = "direct"
         elif via == "relay":
             if h.get("x-fleet-relay") != "relaytok":
@@ -192,6 +198,21 @@ if check B direct claude "$jc" a1 && check B direct codex "$jx" a1; then
   [ "$(jf "$jc" _chunks)" -ge 2 ] && pass "route direct: Claude + Codex (real token in, x-api-key out, account id pinned, body intact, streamed)" \
     || fail "B direct: response not streamed (chunks=$(jf "$jc" _chunks))"
 fi
+
+# ── I: the upstream's word on a Codex token (issue #1920) ───────────────────────
+vf="$SB/codex-homes/a1/.ccquota-upstream.json"
+vfp=$(python3 -c 'import hashlib; print(hashlib.sha256(b"cx-REAL-a1\0").hexdigest())')
+vread() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("state",""), d.get("error",""), d.get("credential_version","")==sys.argv[2], d.get("by",""))' "$vf" "$vfp" 2>/dev/null; }
+touch "$SB/revoked-codex"
+j=$(R /codex/responses "$T1")
+if [ "$(jf "$j" _status)" = 401 ] && [ "$(vread)" = "rejected token_revoked True proxy" ]; then
+  pass "I upstream 401 token_revoked → recorded for that exact credential, the 401 still reaches the session"
+else fail "I rejection: status=$(jf "$j" _status) verdict=$(vread)"; fi
+grep -q 'REAL-a\|invalidated' "$vf" && fail "I the verdict file holds a token or the upstream's message"
+rm -f "$SB/revoked-codex"
+j=$(R /codex/responses "$T1")
+[ "$(jf "$j" _status)" = 200 ] && [ "$(vread)" = "accepted  True proxy" ] \
+  && pass "I a 2xx on the same credential clears the refusal" || fail "I clear: $(vread)"
 
 # ── C: relay ─────────────────────────────────────────────────────────────────
 probe unreachable

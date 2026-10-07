@@ -112,6 +112,11 @@ type LoginHealth struct {
 	LastRefreshAt    *time.Time `json:"last_refresh_at,omitempty"`
 	RefreshAttemptAt *time.Time `json:"refresh_attempt_at,omitempty"`
 	RetryAt          *time.Time `json:"retry_at,omitempty"`
+	// UpstreamError / UpstreamRejectedAt: the upstream refused this exact
+	// access token (claude-fleet#1920) — state access_rejected, whatever its
+	// exp says. The code is the upstream's own (token_revoked, …) or "401".
+	UpstreamError      string     `json:"upstream_error,omitempty"`
+	UpstreamRejectedAt *time.Time `json:"upstream_rejected_at,omitempty"`
 }
 
 type DailyUsage struct {
