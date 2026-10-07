@@ -263,6 +263,7 @@ if command -v tmux >/dev/null 2>&1; then
   tm set-option -w -t mg:w1 @cred_sid sF; tm set-option -w -t mg:w1 @cred_route direct
   tm set-option -w -t mg:w2 @cred_sid sX; tm set-option -w -t mg:w2 @cred_route central
   before=$(tm display-message -p -t mg:w1 '#{window_id} #{@fleet_id} #{pane_pid}')
+  # shellcheck disable=SC2034  # the globals migrate_rebind reads, set for the sourced script
   out=$(
     # shellcheck source=/dev/null
     . "$BIN/fleet-migrate.sh"
