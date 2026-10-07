@@ -24,6 +24,7 @@ func personalM4(t *testing.T) (*harness, *writeNode, *writeNode, control.Fleet, 
 	t.Helper()
 	h, m5, m4, f5, f4 := twoNodes(t)
 	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
+	waitLoad(t, h, "m5", 5)
 	m4.beatPersonal("m4", "verk", machineB, 0.5, true, f4)
 	waitFor(t, 3*time.Second, "m4 reports personal", func() bool {
 		hb, _, _ := h.srv.nodeStatusOf("ep_m4", time.Now())
