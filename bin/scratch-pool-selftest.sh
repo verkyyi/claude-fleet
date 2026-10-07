@@ -407,6 +407,8 @@ ok "W --status (no session): a slot line per repo and HOME"
 # X: a warm worktree is brought to origin/<base> before it is handed out; one git
 # cannot fast-forward (commits of its own) is retired, never handed out.
 CL="$WORK/clone"; git clone -q "$MAIN" "$CL" 2>/dev/null || fail "X clone failed"
+git -C "$CL" config user.email t@t; git -C "$CL" config user.name t
+git -C "$CL" config user.email t@t; git -C "$CL" config user.name t
 git -C "$CL" worktree add -q -b scratch-9 "$WORK/wt-x" origin/master 2>/dev/null || fail "X worktree add failed"
 ( cd "$MAIN" && echo two > g && git add g && git commit -qm two ) && git -C "$CL" fetch -q origin 2>/dev/null
 reset_state; mkfleet; mkconf 1; warm '@19' o/a "$WORK/wt-x"
