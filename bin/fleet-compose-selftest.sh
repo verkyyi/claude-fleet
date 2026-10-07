@@ -49,6 +49,13 @@
 #   M. a portal window an older client made (@portal_ver) is respawned on ⌘N — same
 #      window, new process, draft kept; the same version is left alone; a SIGHUP
 #      mid-typing saves the draft first
+# How it is used (issue #1955, EPIC #1949 R2) — logs/compose.ndjson:
+#   N. B's send wrote `sent` (how issue, the repo) · `placed` (rc 0, REMOTE, m4,
+#      the worker_id) · `started` (the list found its row: session, fid, secs), one id;
+#      D's is how scratch; J's hand-over is how orchestrate
+#   O. (pure) fleet-history.sh drafts: a scratch book generation that holds a
+#      child's report is a draft of its day — unless its pfid is a session the
+#      writing area opened; a relayed row is no child; sends / started / the median
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -61,6 +68,7 @@ export HOME="$WORK/home"; mkdir -p "$HOME"
 export FLEET_CONF_DIR="$HOME/.config/claude-fleet" FLEET_UI_LANG=zh
 export FLEET_STATUS_G="$WORK/g"; mkdir -p "$FLEET_STATUS_G"
 export FLEET_SWITCH_STATE="$WORK/state"; mkdir -p "$FLEET_SWITCH_STATE"
+export FLEET_COMPOSE_LOG="$WORK/logs/compose.ndjson"   # issue #1955
 unset TMUX TMUX_PANE FLEET_SESSION FLEET_SHELL_STAGE FLEET_HUB_URL FLEET_NODE_ALIASES FLEET_COMPOSE_SHELL_SOCK
 FAIL=0; CHECKS=0
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
@@ -253,6 +261,16 @@ has 'B: …--node auto' "$(head -1 "$LOG")" ' --node auto'
 eq 'B: the body is both lines' $'侧栏里 FLEET SKILLS 的名字太长被截了\n附上截图。' "$(cat "$BODY" 2>/dev/null)"
 hasnt 'B: 「开工中…」 gone once the row is there' "$(screen)" '开工中'
 eq 'B: the payload files are cleaned up' '' "$(find "$FLEET_SWITCH_STATE" -name 'compose-send*')"
+# N. the send's three lines, one id (issue #1955)
+clog() { python3 -c 'import json, sys
+for l in open(sys.argv[1]):
+    r = json.loads(l)
+    print(" ".join("%s=%s" % (k, r[k]) for k in sys.argv[2:] if k in r))' "$FLEET_COMPOSE_LOG" "$@" 2>/dev/null; }
+CHECKS=$((CHECKS + 1)); n=0; while ! grep -q '"started"' "$FLEET_COMPOSE_LOG" 2>/dev/null && [ $n -lt 30 ]; do sleep .1; n=$((n + 1)); done
+eq 'N: sent · placed · started' $'ev=sent how=issue repo=acme/web\nev=placed rc=0 result=REMOTE machine=m4 session=U/issue-43\nev=started session=U/issue-43 state=working' \
+  "$(clog ev how repo rc result machine session state)"
+eq 'N: …one id' 1 "$(clog id | sort -u | grep -c .)"
+has 'N: started says the seconds since the ↵' "$(clog ev secs | tail -1)" 'secs='
 hasnt 'B: the draft is empty after a send' "$(compose)" '附上截图'
 
 # C. ⌘N again: the same window; esc keeps the draft and goes back
@@ -351,6 +369,10 @@ has 'I: …and asks it to split by repo' "$(cat "$BODY" 2>/dev/null)" '按仓库
 # --- the orchestrator (issue #1957) ------------------------------------------------
 orch() { printf 'U/orch%sm4%sonline%s%s%s%s%s%s\n' "$US" "$US" "$US" "$1" "$US" "${2:-}" "$US" "${3:-}" > "$FLEET_STATUS_G/orch_fcs"; }
 newtask() { screen | grep -F '新任务' | head -1; }
+has 'N: D'"'"'s send is a scratch' "$(clog ev how | grep 'ev=sent')" 'ev=sent how=scratch'
+has 'N: H'"'"'s is no repo' "$(clog ev how | grep 'ev=sent')" 'ev=sent how=norepo'
+has 'N: I'"'"'s is several' "$(clog ev how | grep 'ev=sent')" 'ev=sent how=multi'
+
 # J. free: 编排 by default; ⇧⇥ carries the draft over
 settled
 orch 'done'
@@ -374,6 +396,8 @@ st_ select-window -t "$pw"
 CHECKS=$((CHECKS + 1)); waitfor 4 '已交给编排：活页里加一张' compose || fail 'J: the area says it went over' "$(compose)"
 hasnt 'J: …and is empty' "$(compose | sed -n '/╭/,/╰/p')" '状态卡'
 eq 'J: nothing placed' "$nlog" "$(grep -c . "$LOG")"
+
+eq 'N: J'"'"'s hand-over is how orchestrate' 'ev=sent how=orchestrate' "$(clog ev how | tail -1)"
 
 # K. working: 开工 by default, the line says why
 orch working '' '跑 #1935 的批'
@@ -448,6 +472,27 @@ st_ respawn-pane -k -t "$pw"
 CHECKS=$((CHECKS + 1)); n=0; while [ "$(ppid_)" = "$p1" ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
 sleep .3
 eq 'M: a hang-up mid-typing saves the draft first' '升级前写的半句，再补一句' "$(cat "$FLEET_SWITCH_STATE/compose-draft" 2>/dev/null)"
+# O. (pure) fleet-history.sh drafts (issue #1955): its own conf dir and log
+DC="$WORK/drafts"; CH="$DC/fleets/f/children"; mkdir -p "$CH"
+now=$(date +%s); today=$(date +%Y-%m-%d); iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+yday=$(python3 -c 'import time; print(time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400)))')
+ygen="$((now - 86400)).77"
+{ printf '{"ts": "%s", "child": "r:issue-1", "state": "MERGED", "pfid": "P-hand", "gen": "%s.1"}\n' "$iso" "$now"
+  printf '{"ts": "%s", "child": "r:issue-2", "state": "MERGED", "pfid": "P-hand", "gen": "%s.1"}\n' "$iso" "$now"
+  printf '{"ts": "%s", "child": "r:issue-3", "state": "MERGED", "pfid": "P-old", "gen": "%s"}\n' "$iso" "$ygen"; } > "$CH/r:scratch-1.ndjson"
+printf '{"ts": "%s", "child": "r:issue-4", "state": "MERGED", "pfid": "p-area"}\n' "$iso" > "$CH/r:scratch-2.ndjson"
+printf '{"ts": "%s", "child": "r:issue-5", "state": "MERGED", "relayed_from": "r:issue-9"}\n' "$iso" > "$CH/r:scratch-3.ndjson"
+printf '{"ts": "%s", "child": "r:issue-6", "state": "MERGED"}\n' "$iso" > "$CH/r:issue-50.ndjson"
+printf '{"ts": "%s", "child": "r:issue-7", "state": "MERGED"}\n' "$iso" > "$CH/orchestrator.ndjson"
+{ printf '{"ev": "sent", "id": "a", "at": %s}\n{"ev": "started", "id": "a", "secs": 10, "fid": "p-area"}\n' "$now"
+  printf '{"ev": "sent", "id": "b", "at": %s}\n{"ev": "started", "id": "b", "secs": 30}\n' "$now"
+  printf '{"ev": "sent", "id": "c", "at": %s}\n{"ev": "placed", "id": "c", "rc": 4}\n' "$now"; } > "$DC/compose.ndjson"
+out=$(FLEET_CONF_DIR="$DC" FLEET_COMPOSE_LOG="$DC/compose.ndjson" bash "$BIN/fleet-history.sh" drafts --days 2)
+eq 'O: today — one hand draft (the area'"'"'s, a relayed row, an issue and the orchestrator are not), 3 sends, 2 started, median 20s' \
+  "$today	drafts=1	sends=3	started=2	start_median=20s" "$(printf '%s\n' "$out" | sed -n 1p)"
+eq 'O: yesterday — the recycled number'"'"'s earlier generation, dated by its allocation' \
+  "$yday	drafts=1	sends=0	started=0	start_median=-" "$(printf '%s\n' "$out" | sed -n 2p)"
+has 'O: --json' "$(FLEET_CONF_DIR="$DC" FLEET_COMPOSE_LOG="$DC/compose.ndjson" bash "$BIN/fleet-history.sh" drafts --days 1 --json)" '"drafts": 1, "sends": 3'
 
 [ "$FAIL" = 0 ] || { printf 'fleet-compose selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS"; exit 1; }
 printf 'fleet-compose selftest: PASS (%d checks)\n' "$CHECKS"

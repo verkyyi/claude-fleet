@@ -137,6 +137,31 @@ def switch_lib():
     return _SWITCH[0]
 
 
+_COMPOSE = []
+
+
+def compose_started(plan, row):
+    """The writing area's new session is in the list (issue #1955): its
+    `started` line in logs/compose.ndjson — fleet-compose.py's one writer, the
+    seconds since the ↵. Never stops the list."""
+    try:
+        if not _COMPOSE:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("fleet_compose", str(BIN / "fleet-compose.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _COMPOSE.append(mod)
+        wid = row[0] if row else plan.get("key", "")
+        wid = wid[len("wid:"):] if wid.startswith("wid:") else wid
+        at = int(plan.get("at") or 0)
+        _COMPOSE[0].compose_log("started", id=plan.get("cid", ""), session=wid,
+                                fid=wid.rsplit("/", 1)[-1] if "/" in wid else "",
+                                state=row[1] if row and len(row) > 1 else "",
+                                secs=max(0, int(time.time()) - at) if at else None)
+    except Exception:   # a log line is never worth the list
+        pass
+
+
 def switch_visit(row):
     """The row in view became `row`: one step in the history (a step ⌘[ / ⌘]
     already stands on moves only its recency)."""
@@ -2443,6 +2468,7 @@ def ui(screen, session, worker, lock):
         base = [row for row in rows if row[0] not in (PORTAL_KEY, PLACING_KEY)]
         plan = {"verb": "compose", "what": "new" if data.get("issue", True) else "scratch",
                 "title": data.get("title", ""), "name": "", "payload": str(dst), "node": "auto",
+                "cid": data.get("id", ""), "at": data.get("at", 0),
                 "label": "", "repo": data.get("repo") or repo_of(base, data.get("prev") or "")}
         if data.get("repo_mode") in ("none", "multi"):
             # 「不关联仓库」 / 「多个仓库」 (issue #1956): no repo to resolve — a
@@ -2553,6 +2579,8 @@ def ui(screen, session, worker, lock):
             hit = place_found(rows, placing) if loaded else ""
             if hit:
                 selected, follow_at = hit, None
+                if placing.get("verb") == "compose":
+                    compose_started(placing, next((r for r in rows if r[0] == hit), None))
                 say(session, tr("sidebar_place_opened_fmt", placing["machine"]))
                 placing = None
                 if not jump(session, selected, pane, lock):

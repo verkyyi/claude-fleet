@@ -229,6 +229,11 @@ def append_row(path, raw):
     # only when set.
     fid = str(raw.get('fid') or '').lower()
     fid = fid if is_fid(fid) else ''
+    # pfid (issue #1955): the PARENT's @fleet_id (the child's @origin_fid) — which
+    # session this book's generation was, so fleet-history.sh drafts can leave
+    # out the ones the writing area opened. Kept only when set.
+    pfid = str(raw.get('pfid') or '').lower()
+    pfid = pfid if is_fid(pfid) else ''
     deg = {'lines': ''.join(ch for ch in str(raw.get('lines') or '') if ch.isdigit())[:8],
            'sample': clean(str(raw.get('sample') or '').replace('<', '‹').replace('>', '›'), 1, 64)}
     if not ev['child'] or ev['state'] not in STATES:
@@ -273,6 +278,8 @@ def append_row(path, raw):
             ev['rid'] = rid
         if fid:
             ev['fid'] = fid
+        if pfid:
+            ev['pfid'] = pfid
         ev.update((f, v) for f, v in gens.items() if v)
         ev.update((f, v) for f, v in deg.items() if v)
         fh.seek(0, os.SEEK_END)
