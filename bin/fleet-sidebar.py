@@ -2154,6 +2154,11 @@ def ui(screen, session, worker, lock):
         curses.curs_set(0)   # the list takes no keys: no cursor to show (issue #1950)
     except curses.error:
         pass
+    # Nor does its tty make signals (issue #1950): a ⌃c / ⌃\ / ⌃z that reaches
+    # this pane anyway is a byte, never a SIGINT / SIGQUIT / SIGTSTP to the
+    # pane's process group — which holds this view's own tmux calls and row
+    # producers, and a tmux call killed mid-read reads as «the worker is gone».
+    curses.raw()
     curses.use_default_colors()
     pal = palette_colors(palette(), curses.COLORS)
     for number, (fg, bg) in PAIRS.items():
