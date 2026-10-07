@@ -26,7 +26,8 @@ name: hub-deploy
 # (.github/actions/hub-acr, .github/actions/hub-kubeconfig). In the cluster that
 # role is Role new-deploy/claudefleet-deployer: the hub's own Deployment,
 # Service, Ingress and pricing ConfigMap, a read of its PVC, pod exec for the
-# snapshot — no secrets, no RBAC. The runbook is deploy/k8s/README.md.
+# snapshot, `set image` on the credential proxy's Deployment (issue #2092) —
+# no secrets, no RBAC. The runbook is deploy/k8s/README.md.
 #
 # The `check` job runs on every PR that touches any of it and needs no
 # credential: the actions' selftests, the overlay renders, the base names no
@@ -457,6 +458,41 @@ jobs:
         id: health
         run: .github/actions/hub-release/release.sh health "${{ steps.tag.outputs.commit }}"
 
+      # The cluster credential proxy (#1973, deploy/k8s/credproxy) runs the
+      # hub's image, so a good release rolls it too (issue #2092): the same
+      # image, `set image` only — its manifests stay a person's to apply. Not
+      # applied yet (NotFound), or the Role not yet granted it (Forbidden) ⇒
+      # skipped with a notice. It never paints the release red and never
+      # touches the hub: a proxy that will not roll is a warning + the
+      # summary's 中心代理 row (its old pods keep serving, maxUnavailable 0).
+      - name: Roll the credential proxy to the same image
+        id: credproxy
+        if: steps.health.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          image=$(kubectl -n "$NS" get deploy ccquota-hub -o jsonpath='{.spec.template.spec.containers[?(@.name=="ccquota")].image}')
+          [ -n "$image" ] || { echo "::warning::could not read the hub's image — the credential proxy was not rolled"; echo "result=error" >> "$GITHUB_OUTPUT"; exit 1; }
+          if ! kubectl -n "$NS" get deploy ccquota-credproxy -o name >/dev/null 2>"$RUNNER_TEMP/credproxy.err"; then
+            if grep -q NotFound "$RUNNER_TEMP/credproxy.err"; then
+              echo "::notice::no ccquota-credproxy deployment in $NS — skipped (deploy/k8s/credproxy/README.md applies it)"
+              echo "result=absent" >> "$GITHUB_OUTPUT"; exit 0
+            elif grep -qi forbidden "$RUNNER_TEMP/credproxy.err"; then
+              echo "::warning::Role claudefleet-deployer may not read deploy/ccquota-credproxy — skipped (deploy/k8s/README.md «Who may do what»)"
+              echo "result=forbidden" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            cat "$RUNNER_TEMP/credproxy.err"; echo "result=error" >> "$GITHUB_OUTPUT"; exit 1
+          fi
+          kubectl -n "$NS" set image deploy/ccquota-credproxy "credproxy=$image" \
+            || { echo "::warning::could not set the credential proxy's image"; echo "result=error" >> "$GITHUB_OUTPUT"; exit 1; }
+          if ! kubectl -n "$NS" rollout status deploy/ccquota-credproxy --timeout=5m; then
+            kubectl -n "$NS" get pod -l app=ccquota-credproxy -o wide || true
+            echo "::warning::the credential proxy's rollout to $image did not finish — its old pods keep serving"
+            echo "result=error" >> "$GITHUB_OUTPUT"; exit 1
+          fi
+          echo "result=rolled" >> "$GITHUB_OUTPUT"
+          echo "credential proxy now on $image"
+
       # Anything after the apply went wrong ⇒ put the live image back. Only the
       # image: the manifests stay master's, and a migration the new image ran
       # stays run (the snapshot is in the summary; restoring it is a person's,
@@ -512,6 +548,7 @@ jobs:
           ROLLOUT: ${{ steps.rollout.outcome }}
           HEALTH: ${{ steps.health.outcome }}
           ROLLBACK: ${{ steps.rollback.outcome }}
+          CREDPROXY: ${{ steps.credproxy.outputs.result || steps.credproxy.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -546,6 +583,13 @@ jobs:
             echo "| 启动检查（真实配置 + 库副本） | $( [ "$REHEARSE" = skipped ] && echo '没做（没有快照可用）' || echo "$REHEARSE" ) |"
             echo "| apply · rollout · 健康检查 | $APPLY · $ROLLOUT · $HEALTH |"
             echo "| 回退 | $( [ "$ROLLBACK" = skipped ] && echo 没回退 || echo "$ROLLBACK（只回镜像；数据库要恢复照 RUNBOOK.md 用上面的快照手工做）" ) |"
+            case "$CREDPROXY" in
+              rolled) echo "| 中心代理 | 已滚到 \`$NEW_TAG\` |" ;;
+              absent) echo "| 中心代理 | 跳过（还没部署 ccquota-credproxy） |" ;;
+              forbidden) echo "| 中心代理 | 跳过（部署 Role 还没有 ccquota-credproxy，deploy/k8s/README.md） |" ;;
+              skipped|'') ;;
+              *) echo "| 中心代理 | ⚠️ 没滚成（$CREDPROXY；旧 pod 继续服务，看这次运行的日志） |" ;;
+            esac
             [ "$HUB_DEPLOY_SIMULATE_UNHEALTHY" != true ] || echo "| 演练 | simulate_unhealthy=true：健康检查按失败处理 |"
             [ "$SIMULATE_MIGRATION" != true ] || echo "| 演练 | simulate_migration_failure=true：副本上的迁移按失败处理 |"
             [ "$SIMULATE_CHECK" != true ] || echo "| 演练 | simulate_check_failure=true：检查容器只拿到一半 GitHub 登录键 |"

@@ -144,9 +144,22 @@ exist, and with `Recreate` the hub would go down. To redeploy, run the workflow.
   `pods/ephemeralcontainers` for the pre-switch check (issues #2050, #2052 —
   without it the check refuses and nothing is released; the Secrets the check
   container reads are resolved by the kubelet, never by the Role), and `list`
-  on pods (which is how it sees whether the updating page runs). No Secret, no
+  on pods (which is how it sees whether the updating page runs), and the
+  credential proxy's Deployment `ccquota-credproxy`, which a good release rolls
+  to the same image (issue #2092). No Secret, no
   RBAC. The updating page's own objects are not in the Role: a person applies
   them (updating/README.md).
+  The Role lives in 24haowan-monorepo, not here. The credential-proxy line it
+  needs (until it has it, the release skips the proxy with a warning) is the
+  name added to its first rule:
+
+  ```yaml
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [ccquota-hub, ccquota-credproxy]
+    verbs: [get, list, watch, patch, update]
+  ```
+
   So a change to the PVC (growing the disk) or to a Secret is a person's, with
   an admin kubeconfig — RUNBOOK.md.
 
