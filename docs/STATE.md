@@ -656,11 +656,18 @@ quota watch runs it every tick before its read; the merge counts `proxy` like
 `mod`. While that stamp is younger than `FLEET_RL_PROXY_FRESH` (300 s) the
 status line and the mod leave `@rl*` alone.
 
-**Tools** — none since mod 0.4.0 (issue #1812, EPIC #1813 C10). The mod's
-`fleet_status` / `fleet_spawn` / `fleet_await` (issue #1340) retired: the fleet
-tool service (`bin/fleet-mcp.py`, `docs/FLEET-MCP.md`) serves `status` / `spawn` /
-`await` and the rest to Claude and Codex alike, and `hooks/bash-guard.py` logs or
-refuses a worker that still calls the old names.
+**Tools** — none with the service mounted (mod 0.4.0, issue #1812, EPIC #1813
+C10): the fleet tool service (`bin/fleet-mcp.py`, `docs/FLEET-MCP.md`) serves
+`status` / `spawn` / `await` and the rest to Claude and Codex alike, and
+`hooks/bash-guard.py` logs or refuses a worker that still calls the old names
+there. **The fallback** (mod 0.4.1, issue #2057): a session launched before the
+service (`--plugin-dir` only, no `FLEET_MCP_SERVER=1`) still lists the mod's
+`fleet_status` / `fleet_spawn` / `fleet_await` (issue #1340) — a hot reload swaps
+the code, never the list — so `mod/fleet/hooks/tools.ts` keeps them there:
+registered from `fleet-mcp.py --spec`, each call forwarded to `fleet-mcp.py --call`
+(one implementation, logged `road=call`; the guard logs them `fallback`), and one
+actionable message — reopen the session, or run the script by hand — when the
+forward itself cannot run.
 
 **The state, said by the session (#1336).** `mod/fleet/hooks/state.ts` writes
 the same `@claude_state` the settings hooks do, as the engine knows it:

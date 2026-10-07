@@ -49,6 +49,11 @@
 #      holds (via=cred), nothing of the handover leaks to a script or $TMPDIR; a new
 #      version that fails its --probe is refused and the old one keeps serving; a
 #      quiet client is reloaded on the poll; FLEET_MCP_RELOAD=0 never reloads
+#   N  the mod's fallback road (issue #2057): `--spec status spawn await` prints
+#      exactly the tools/list entries; `--call <tool> <json>` is one tools/call
+#      from a command line — the same argv to the script, the byte-identical text
+#      on stdout, exit 0 answered (the script's exit is in the text) / 1 refused
+#      (the reason on stdout, nothing ran) / 2 usage; the call log says road=call
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -900,5 +905,81 @@ rm -f "$M/home"; ln -s "$M/v1" "$M/home"
 out=$(DRIVE=off FLEET_MCP_RELOAD=0 mrun "$M/off.log") && [ "$out" = off-ok ] || fail "M: FLEET_MCP_RELOAD=0 still reloaded" "$out"
 grep -q 'tool=(reload)' "$M/off.log" && fail "M: FLEET_MCP_RELOAD=0 logged a reload" "$(cat "$M/off.log")"
 ok "M a new version between calls: in-flight call finishes on the old, exec keeps pid + connection + credential, list_changed, new tool listed; broken version refused; quiet poll; off switch"
+
+# --- N: the mod's fallback road — --spec and --call (issue #2057) ------------------
+# A session launched before the service was mounted (--plugin-dir only) still carries
+# the mod's fleet_status / fleet_spawn / fleet_await; the mod registers them from
+# --spec and forwards every call to --call. Same identity, check, script, log.
+# (K replaced spawn / await with its assertion tripwires: the plain fakes again.)
+fake dash-issue-session.sh 'echo "spawned issue-$1"; echo "cap note" >&2; exit 2'
+fake fleet-await.sh 'echo "MERGED #$1 pr=42"; exit 0'
+cli() { # cli <out> <args…> — one command line in the sandbox (no hub, no credential)
+  out=$1; shift
+  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u CCQUOTA_HUB_URL -u CCQUOTA_URL -u FLEET_WORKER_CRED \
+    PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 FLEET_MCP_LOG="$WORK/n.log" python3 "$WORK/bin/fleet-mcp.py" "$@" > "$out" 2> "$out.err"
+}
+cli "$WORK/n.spec" --spec status spawn await; rc=$?
+[ "$rc" = 0 ] || fail "N: --spec status spawn await exited $rc" "$(cat "$WORK/n.spec.err")"
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | serve "$WORK/n.list"
+python3 - "$WORK/n.spec" "$WORK/n.list" <<'PY2' || fail "N: --spec is not the tools/list entry, byte for byte" "$(cat "$WORK/n.spec")"
+import json, sys
+spec = json.load(open(sys.argv[1]))
+listed = {t["name"]: t for t in json.loads(open(sys.argv[2]).readline())["result"]["tools"]}
+assert [s["name"] for s in spec] == ["status", "spawn", "await"], spec
+for s in spec:
+    assert s == listed[s["name"]], (s, listed[s["name"]])
+    assert s["inputSchema"]["additionalProperties"] is False, s
+PY2
+cli "$WORK/n.bad" --spec status nope; rc=$?
+[ "$rc" = 2 ] && grep -q 'unknown tool nope' "$WORK/n.bad.err" || fail "N: --spec of an unknown tool: exit $rc, want 2 naming it" "$(cat "$WORK/n.bad.err")"
+cli "$WORK/n.bad" --spec; rc=$?
+[ "$rc" = 2 ] || fail "N: a bare --spec exited $rc, want 2"
+ok "N --spec status spawn await = the tools/list entries byte for byte, closed schemas; an unknown name exits 2"
+
+# --call spawn: the script ran once with exactly the MCP argv; the text is the MCP
+# text; exit 0 even though the script exited 2 (that exit is IN the text).
+: > "$LOG"; : > "$WORK/n.log"
+cli "$WORK/n.spawn" --call spawn '{"issue":12,"repo":"acme/lib"}'; rc=$?
+[ "$rc" = 0 ] || fail "N: --call spawn exited $rc (the script's exit belongs in the text)" "$(cat "$WORK/n.spawn" "$WORK/n.spawn.err")"
+grep -qx 'dash-issue-session.sh 12 --repo acme/lib' "$LOG" || fail "N: --call spawn ran the wrong argv" "$(cat "$LOG"; echo ---; cat "$WORK/n.spawn" "$WORK/n.spawn.err")"
+[ "$(grep -c '^dash-issue-session.sh' "$LOG")" = 1 ] || fail "N: --call spawn ran the script more than once" "$(cat "$LOG")"
+call 40 spawn '{"issue":12,"repo":"acme/lib"}' | serve "$WORK/n.mcp"
+python3 - "$WORK/n.spawn" "$WORK/n.mcp" <<'PY2' || fail "N: --call's text differs from the tools/call text" "$(cat "$WORK/n.spawn" "$WORK/n.mcp")"
+import json, sys
+cli = open(sys.argv[1]).read()
+mcp = json.loads(open(sys.argv[2]).readline())["result"]["content"][0]["text"]
+assert cli == mcp + "\n", (cli, mcp)
+assert cli.startswith("exit 2 · dash-issue-session.sh\nspawned issue-12\n[stderr]\ncap note"), cli
+PY2
+cli "$WORK/n.aw" --call await '{"issue":12}'; rc=$?
+[ "$rc" = 0 ] && grep -qx 'fleet-await.sh 12 --timeout 540' "$LOG" || fail "N: --call await did not run fleet-await.sh 12 --timeout 540 (exit $rc)" "$(cat "$LOG")"
+cli "$WORK/n.st" --call status '{}'; rc=$?
+[ "$rc" = 0 ] && grep -q '^window: window issue-1807 · issue=1807' "$WORK/n.st" && grep -q 'acme/lib' "$WORK/n.st" \
+  || fail "N: --call status did not print the status text (exit $rc)" "$(cat "$WORK/n.st" "$WORK/n.st.err")"
+cli "$WORK/n.st0" --call status; rc=$?
+[ "$rc" = 0 ] || fail "N: --call status with no arguments exited $rc"
+grep -q 'tool=spawn via=marker who=- verdict=exit=2 road=call' "$WORK/n.log" || fail "N: the call log does not say road=call" "$(cat "$WORK/n.log")"
+ok "N --call spawn/await/status: the script's exact argv once, the byte-identical tools/call text, exit 0 with the script's exit in the text; log road=call"
+
+# Refusals: exit 1, the reason on stdout as the model reads it, nothing ran. Usage: exit 2.
+: > "$LOG"
+cli "$WORK/n.r1" --call spawn '{"issue":"12"}'; rc=$?
+[ "$rc" = 1 ] && grep -q 'fleet.spawn: "issue" must be an integer' "$WORK/n.r1" || fail "N: a wrong type: exit $rc, want 1 with the reason" "$(cat "$WORK/n.r1" "$WORK/n.r1.err")"
+cli "$WORK/n.r2" --call spawn '{"issue":12,"repo":"other/repo"}'; rc=$?
+[ "$rc" = 1 ] && grep -q 'not hosted by this fleet' "$WORK/n.r2" || fail "N: an unhosted repo: exit $rc, want 1 with the reason" "$(cat "$WORK/n.r2")"
+cli "$WORK/n.r3" --call spawn '{"issue":12,"force":true}'; rc=$?
+[ "$rc" = 1 ] && grep -q 'unknown argument "force"' "$WORK/n.r3" || fail "N: an unknown argument: exit $rc, want 1" "$(cat "$WORK/n.r3")"
+cli "$WORK/n.r4" --call nope '{}'; rc=$?
+[ "$rc" = 1 ] && grep -q 'unknown tool' "$WORK/n.r4" || fail "N: an unknown tool: exit $rc, want 1" "$(cat "$WORK/n.r4")"
+grep -q '^dash-issue-session.sh\|^fleet-await.sh' "$LOG" && fail "N: a refused --call ran a script" "$(cat "$LOG")"
+cli "$WORK/n.u1" --call spawn 'not json'; rc=$?
+[ "$rc" = 2 ] && grep -q 'not JSON' "$WORK/n.u1.err" || fail "N: non-JSON arguments: exit $rc, want 2" "$(cat "$WORK/n.u1.err")"
+cli "$WORK/n.u2" --call spawn '[1]'; rc=$?
+[ "$rc" = 2 ] || fail "N: a JSON list as arguments exited $rc, want 2"
+cli "$WORK/n.u3" --call; rc=$?
+[ "$rc" = 2 ] || fail "N: a bare --call exited $rc, want 2"
+cli "$WORK/n.u4" --call spawn '{}' extra; rc=$?
+[ "$rc" = 2 ] || fail "N: --call with a fourth word exited $rc, want 2"
+ok "N --call refusals (type · unhosted repo · unknown argument · unknown tool): exit 1, the reason on stdout, nothing ran; non-JSON / a list / no tool / an extra word: exit 2"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

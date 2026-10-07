@@ -7,6 +7,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { SUPPORTED } from '../hooks/version'
+import { isToolsRun } from '../hooks/tools'
 import { isWhereRun } from '../hooks/where'
 
 const START = { cwd: '/tmp', surface: 'terminal', isInteractive: true } as const
@@ -17,7 +18,7 @@ function engine(on: On, version: string = SUPPORTED.min, env: Record<string, str
   const runs: Run[] = []
   on('session.version', () => ({ value: { version, base: version } }))
   on('process.run', (_$, e) => {
-    if (!isWhereRun(e.argv)) runs.push({ argv: [...e.argv], stdin: e.init?.stdin })
+    if (!isWhereRun(e.argv) && !isToolsRun(e.argv)) runs.push({ argv: [...e.argv], stdin: e.init?.stdin })
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))

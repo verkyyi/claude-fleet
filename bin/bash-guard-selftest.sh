@@ -423,10 +423,12 @@ assert_exit 0 "kill <pid>"                 "$GUARD" "$(bash_json "$(jstr 'kill 1
 assert_exit 0 "FLEET_ALLOW_BROAD_PKILL=1"  "$GUARD" "$(bash_json "$(jstr 'FLEET_ALLOW_BROAD_PKILL=1 pkill -f cat')")"
 
 # --- direct-script rail (issue #1812, EPIC #1813 C10) --------------------------
-# A WORKER seat that runs a script the fleet tool service wraps (or calls one of
-# the mod's retired tools) is logged — and, with FLEET_DIRECT_SCRIPTS=block,
-# refused with the tool to use. fleet-lib is a stub: fleet_seat answers $STUB_SEAT,
-# fleet_pane_fmt answers $STUB_ISSUE. The log goes to FLEET_MCP_BYPASS_LOG.
+# A WORKER seat that runs a script the fleet tool service wraps (or, with the
+# service mounted, calls one of the mod's old tools) is logged — and, with
+# FLEET_DIRECT_SCRIPTS=block, refused with the tool to use. fleet-lib is a stub:
+# fleet_seat answers $STUB_SEAT, fleet_pane_fmt answers $STUB_ISSUE. The log goes
+# to FLEET_MCP_BYPASS_LOG. In a session with NO service (no FLEET_MCP_SERVER=1) the
+# mod's tools are its fallback (#2057): logged `fallback`, never blocked.
 mkdir -p "$TMP/direct-stub" "$TMP/direct-home/.claude/fleet/bin" "$TMP/direct-wt/bin" "$TMP/direct-conf"
 cat > "$TMP/direct-stub/fleet-lib.sh" <<'STUB'
 fleet_seat() { printf '%s' "${STUB_SEAT:-}"; }
@@ -440,7 +442,7 @@ direct() {   # direct <want-exit> <label> <json> [<mode>] — a worker seat unle
   ( export HOME="$TMP/direct-home" FLEET_LIB="$TMP/direct-stub/fleet-lib.sh" \
            FLEET_MCP_BYPASS_LOG="$DLOG" FLEET_CONF_DIR="$TMP/direct-conf" \
            STUB_SEAT="${STUB_SEAT-worker}" STUB_ISSUE=1812
-    unset FLEET_HUB FLEET_ALLOW_DIRECT_SCRIPTS FLEET_DIRECT_SCRIPTS
+    unset FLEET_HUB FLEET_ALLOW_DIRECT_SCRIPTS FLEET_DIRECT_SCRIPTS FLEET_MCP_SERVER
     [ -n "${4:-}" ] && export FLEET_DIRECT_SCRIPTS="$4"
     # shellcheck disable=SC2163  # DIRECT_ENV holds NAME=value — export the assignment it carries
     [ -n "${DIRECT_ENV:-}" ] && export "$DIRECT_ENV"
@@ -492,15 +494,26 @@ direct 0 "fleet-repo.sh add"           "$(bash_json "$(jstr "$LIVE/fleet-repo.sh
 direct 0 "a script in a commit message" "$(bash_json "$(jstr "git commit -m 'drop fleet-comment.sh 3'")")" block
 direct 0 "mode off"                    "$(bash_json "$(jstr "$CMT")")" off
 logged "nothing above is logged" 0 'script='
-# The MCP road — the same table: the mod's retired tools by their MCP name.
+# The MCP road — the same table: the mod's old tools by their MCP name, in a
+# session that HAS the service (FLEET_MCP_SERVER=1).
 : > "$DLOG"
-direct 0 "mcp: fleet_spawn, log mode"  "$(mcp_json mcp__fleet__fleet_spawn)"
-logged "mcp: logged against its new tool" 1 $'script=mcp__fleet__fleet_spawn\ttool=mcp__fleet__spawn'
-direct 2 "mcp: fleet_await, block mode" "$(mcp_json mcp__fleet__fleet_await)" block
-direct 2 "mcp: fleet_status, block mode" "$(mcp_json mcp__fleet__fleet_status)" block
-STUB_SEAT='' direct 0 "mcp: operator seat passes" "$(mcp_json mcp__fleet__fleet_spawn)" block
-DIRECT_ENV=FLEET_ALLOW_DIRECT_SCRIPTS=1 direct 0 "mcp: hatch in env" "$(mcp_json mcp__fleet__fleet_spawn)" block
-direct 0 "mcp: the service's own tool passes" "$(mcp_json mcp__fleet__spawn)" block
+DIRECT_ENV=FLEET_MCP_SERVER=1 direct 0 "mcp: fleet_spawn, log mode"  "$(mcp_json mcp__fleet__fleet_spawn)"
+logged "mcp: logged against its new tool" 1 $'\tlogged\tissue=1812\tscript=mcp__fleet__fleet_spawn\ttool=mcp__fleet__spawn'
+DIRECT_ENV=FLEET_MCP_SERVER=1 direct 2 "mcp: fleet_await, block mode" "$(mcp_json mcp__fleet__fleet_await)" block
+DIRECT_ENV=FLEET_MCP_SERVER=1 direct 2 "mcp: fleet_status, block mode" "$(mcp_json mcp__fleet__fleet_status)" block
+DIRECT_ENV=FLEET_MCP_SERVER=1 STUB_SEAT='' direct 0 "mcp: operator seat passes" "$(mcp_json mcp__fleet__fleet_spawn)" block
+DIRECT_ENV=FLEET_MCP_SERVER=1 direct 0 "mcp: the service's own tool passes" "$(mcp_json mcp__fleet__spawn)" block
+# No service in this session (FLEET_MCP_SERVER unset — launched before #1828): the
+# mod's fleet_* is its fallback (#2057) — logged `fallback`, never blocked, any mode.
+: > "$DLOG"
+direct 0 "mcp fallback: fleet_spawn, block mode" "$(mcp_json mcp__fleet__fleet_spawn)" block
+direct 0 "mcp fallback: fleet_await, block mode" "$(mcp_json mcp__fleet__fleet_await)" block
+direct 0 "mcp fallback: fleet_status, log mode"  "$(mcp_json mcp__fleet__fleet_status)"
+logged "mcp fallback: three lines, verdict fallback" 3 $'\tfallback\tissue=1812\tscript=mcp__fleet__fleet_'
+logged "mcp fallback: never logged or blocked" 0 $'\t\(logged\|blocked\)\t'
+STUB_SEAT='' direct 0 "mcp fallback: operator seat passes, unlogged" "$(mcp_json mcp__fleet__fleet_spawn)" block
+direct 0 "mcp fallback: mode off, unlogged" "$(mcp_json mcp__fleet__fleet_spawn)" off
+logged "mcp fallback: operator seat / off add no line" 3 $'\tfallback\t'
 # Wiring: the Claude hook table routes the retired names here; Codex drops the group.
 "$PY" - "$BIN/../hooks/settings-hooks.json" "$BIN/../hooks/codex-map.json" <<'PY' || fails=$((fails + 1))
 import json, sys
