@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-stable.sh show | move [<sha>] [--dry-run] [--allow-no-checks]
+# fleet-stable.sh show | move [<sha>] [--dry-run] [--allow-no-checks] [--force]
 #                 [--dir <checkout>] [--remote <name>] [--branch <trunk>]
 #                 [--repo <owner/name>] [--timeout <s>]
 #   — the "stable" mark every install follows (issue #1118, EPIC #1117 C1).
@@ -20,7 +20,16 @@
 #               repos/<repo>/commits/<sha>/check-runs) is completed with
 #               success / neutral / skipped. Pending = not green. ZERO check runs
 #               is refused too — push CI is path-filtered, so a docs-only commit
-#               has none; `--allow-no-checks` accepts that deliberately.
+#               has none; `--allow-no-checks` accepts that deliberately;
+#            4. an old session of the current stable keeps working on the target
+#               (issue #2075, EPIC #2074 C2): bin/fleet-oldcfg-replay.py replays
+#               stable's hook table, the mod's tool list and the MCP servers
+#               against the target's tree in a sandbox — a script gone, a hook
+#               erroring or hanging, a tool with no handler REFUSES (reason
+#               `oldcfg:`), and so does a replay that cannot run (no evidence is
+#               not green). --force moves anyway and appends one line to
+#               logs/stable-move.log (FLEET_STABLE_LOG): the operator's call, on
+#               the record (EPIC #2074 决定 2).
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
 #          loser's push is rejected and nothing is overwritten.
@@ -37,38 +46,39 @@
 # Exit codes:
 #   show  0 tag read (CURRENT/BEHIND/OFFTRUNK) · 1 NONE · 2 UNKNOWN / usage
 #   move  0 moved (or already there, or dry-run passed) · 2 usage / read error
-#         3 refused (not on trunk / backward / CI not green) · 4 push failed
+#         3 refused (not on trunk / backward / CI not green / oldcfg red) · 4 push failed
 #           (lease lost to a concurrent move, or no push rights)
 set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 dir="$(cd "$BIN_DIR/.." && pwd)"
-remote=origin branch=master repo="" timeout=15 dry=0 allow_nochecks=0
+remote=origin branch=master repo="" timeout=15 dry=0 allow_nochecks=0 force=0
 cmd="" target=""
 TAG=stable
 
 die() { printf 'fleet-stable: %s\n' "$*" >&2; exit 2; }
 refuse() { printf 'fleet-stable: REFUSED — %s\n' "$*" >&2; exit 3; }
 
-[ "$#" -gt 0 ] || { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ "$#" -gt 0 ] || { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     show|move)         [ -z "$cmd" ] || die "one subcommand only"; cmd="$1" ;;
     --dry-run|-n)      dry=1 ;;
     --allow-no-checks) allow_nochecks=1 ;;
+    --force)           force=1 ;;
     --dir)             shift; dir="${1:-}" ;;
     --remote)          shift; remote="${1:-}" ;;
     --branch)          shift; branch="${1:-}" ;;
     --repo)            shift; repo="${1:-}" ;;
     --timeout)         shift; timeout="${1:-15}" ;;
-    -h|--help)         sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)         sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)                die "unknown flag $1" ;;
     *)                 [ "$cmd" = move ] && [ -z "$target" ] || die "unexpected argument $1"
                        target="$1" ;;
   esac
   shift
 done
-[ -n "$cmd" ] || die "usage: fleet-stable.sh show | move [<sha>] [--dry-run]"
+[ -n "$cmd" ] || die "usage: fleet-stable.sh show | move [<sha>] [--dry-run] [--force]"
 case "$timeout" in ''|*[!0-9]*|0) timeout=15 ;; esac
 git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git checkout (--dir)"
 
@@ -142,6 +152,30 @@ check_runs() {
     --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"'
 }
 
+# 4. An old session of the current stable, run on the target (issue #2075): the
+# replay's findings are printed as they came; one line per FORCED move is kept.
+oldcfg_log() {   # oldcfg_log <old> <new> <the replay's last line>
+  _log="${FLEET_STABLE_LOG:-$BIN_DIR/../logs/stable-move.log}"
+  mkdir -p "$(dirname "$_log")" 2>/dev/null
+  printf '%s\tforced\told=%s\tnew=%s\tby=%s\toldcfg=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$(short "$1")" "$(short "$2")" "${USER:-?}" "$3" >> "$_log" 2>/dev/null
+  printf 'oldcfg: FORCED past the replay — one line in %s\n' "$_log" >&2
+}
+oldcfg_gate() {   # oldcfg_gate <old> <new>
+  _rep="$BIN_DIR/fleet-oldcfg-replay.py"
+  if [ ! -f "$_rep" ] || ! command -v python3 >/dev/null 2>&1; then
+    _why="cannot replay an old session (bin/fleet-oldcfg-replay.py or python3 missing) — no evidence it keeps working"
+    if [ "$force" -eq 1 ]; then oldcfg_log "$1" "$2" "not run: $_why"; return 0; fi
+    refuse "oldcfg: $_why; --force moves anyway (logged)"
+  fi
+  _out=$(python3 "$_rep" --dir "$dir" --old "$1" --new "$2" -q 2>&1); _rc=$?
+  _last=$(printf '%s\n' "$_out" | tail -n 1)
+  if [ "$_rc" -eq 0 ]; then printf '%s\n' "$_last"; return 0; fi
+  printf '%s\n' "$_out" | sed 's/^/  /' >&2
+  if [ "$force" -eq 1 ]; then oldcfg_log "$1" "$2" "$_last"; return 0; fi
+  refuse "oldcfg: an old session of stable $(short "$1") would break on $(short "$2") — fix the findings above (CONTRIBUTING «老会话兼容», #2068), or --force to move anyway (logged)"
+}
+
 do_move() {
   old=$(remote_stable) || die "could not read refs/tags/$TAG from $remote — not moving blind"
   fetch_trunk || die "could not fetch $remote/$branch"
@@ -174,10 +208,12 @@ do_move() {
   if [ "$total" -eq 0 ] && [ "$allow_nochecks" -ne 1 ]; then
     refuse "$(short "$new") has NO check runs (path-filtered CI?) — no evidence it is green; pick a commit CI ran on, or pass --allow-no-checks"
   fi
+  [ -z "$old" ] || oldcfg_gate "$old" "$new"
 
   # Lease: the tag must still hold exactly what we read ("" = must not exist).
   lease="refs/tags/$TAG:$old"
-  printf 'stable: %s -> %s  (%s)\n' "${old:+$(short "$old")}${old:-none}" "$(short "$new")" "$(subject "$new")"
+  if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
+  printf 'stable: %s -> %s  (%s)\n' "$from" "$(short "$new")" "$(subject "$new")"
   printf 'checks: %s green on %s\n' "$total" "$slug"
   if [ "$old" ]; then printf 'forward: +%s commit(s)\n' "$(git -C "$dir" rev-list --count "$old..$new")"; fi
   if [ "$dry" -eq 1 ]; then
