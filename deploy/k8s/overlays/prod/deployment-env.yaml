@@ -54,12 +54,19 @@ spec:
                   name: ccquota
                   key: session-cred-key
                   optional: true
-            # The Singapore relay (#1976, docs/CRED-RELAY.md). Read only when
-            # CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay — the base keeps `node`
-            # until the relay is accepted, so setting it here changes nothing
-            # yet and the hub never dials it at startup.
+            # The Singapore relay (#1976, docs/CRED-RELAY.md).
             - name: CCQUOTA_FLEET_CRED_RELAY_URL
               value: "https://fleet-relay.24hw.cn"
+            # Codex refreshes go through the relay above (#2137, EPIC #2133):
+            # no admin node has to be online for a Codex token to be renewed.
+            # The relay unreachable / refusing = an admin node (the base's
+            # `node`), and a Claude refresh always takes the node path. Needs
+            # the relay URL above and CCQUOTA_FLEET_SESSION_CRED_KEY (the hub
+            # signs its relay pass with it — without it the hub refuses to
+            # start). The audit row reads refresh_via=relay. Roll back: delete
+            # this entry (the base's `node` comes back).
+            - name: CCQUOTA_FLEET_OAUTH_REFRESH_VIA
+              value: "relay"
             # The hub reads every pool subscription's quota itself through the
             # relay above (#2169 code, switched on by #2182): readings no longer
             # depend on a node being online. Needs the relay URL above and
