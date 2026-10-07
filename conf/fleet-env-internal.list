@@ -404,6 +404,8 @@ FLEET_GH_WRITE_BACKOFF             knob: internal pacing, secondary-limit backof
 FLEET_GH_WRITE_GAP                 knob: internal pacing, min seconds between write starts per token (fleet-gh-lib.sh write queue, #1264)
 FLEET_BREAKAGE_LOCK_SECS           knob: internal pacing, seconds a breakage lock under global/breakage/<key>/ is honoured before it is nobody's (fleet-issue-file.sh --breakage, #2078)
 FLEET_BREAKAGE_WAIT                knob: internal pacing, seconds a same-second filer of one breakage waits for the first filer's issue number (fleet-issue-file.sh --breakage, #2078)
+FLEET_BREAKAGE_AUTO                knob: 0 turns off the filer's auto breakage road — a filing whose text names a red base branch / check is fingerprinted even without --breakage (fleet-issue-file.sh, #2175)
+FLEET_BREAKAGE_MAX_AGE             knob: seconds; a workflow whose newest finished verdict is red but older than this is not "red now" (fleet_breakage_probe, default 172800, #2175)
 FLEET_GH_WRITE_LOCK_WAIT           knob: internal timeout, longest a writer queues before writing unqueued (fleet-gh-lib.sh, #1264)
 FLEET_GH_WH_MAX_AGE                knob: longest an event-quiet prmap still serves while the webhook is live (fleet-gh.sh, 300, #1272)
 FLEET_STATE_DIR                    path: state/log location override — the shared gh-limit marker dir (fleet-gh-lib.sh)
