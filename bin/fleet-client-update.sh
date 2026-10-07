@@ -471,8 +471,8 @@ running_ver() { tmux -L "$1" show-options -gqv @client_version 2>/dev/null; }
 # when the home has no client conf.
 client_digest() {
   [ -f "$1/conf/tmux-shell.conf" ] || return 0
-  cat "$1/conf/tmux-shell.conf" "$1/conf/tmux-shell-stage.conf" "$1/bin/fleet-shell.sh" 2>/dev/null \
-    | cksum | awk '{ print $1 "-" $2 }'
+  { cat "$1/conf/tmux-shell.conf" "$1/conf/tmux-shell-stage.conf" "$1/bin/fleet-shell.sh" \
+      | cksum | awk '{ print $1 "-" $2 }'; } 2>/dev/null
 }
 # running_digest <sess> — the digest the RUNNING server was loaded from
 running_digest() { tmux -L "$1" show-options -gqv @client_digest 2>/dev/null; }
@@ -493,8 +493,9 @@ run_ver() {
 # opens connections of its own — the second connection of #1775.
 drifted() {
   local v
+  shell_live "$1" || return 1                         # nothing running: nothing read
   v=$(disk_ver)
-  [ -n "$v" ] && shell_live "$1" && [ "$(run_ver "$1")" != "$v" ]
+  [ -n "$v" ] && [ "$(run_ver "$1")" != "$v" ]
 }
 # reconcile <sess> [--in-keeper] — the files on disk into the running servers,
 # with EVERY proxy pane respawned and every loop restarted (`reload --all`):
