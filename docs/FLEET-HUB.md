@@ -345,7 +345,10 @@ wakes unless it was asked to leave. A server that ends releases its lease. An
 older hub (one lease a person) still answers `taken_over` with no reason, and the
 old screen 「正在 <device> 上使用 · 按回车接回」 shows. A hub restart forgets
 every lease and each live client's next renewal re-adopts its own id while there
-is room; no hub URL (or a hub without the route, a 404) → no lease.
+is room — and, since every renewal carries the where in use on that server
+(`client.where.json`: device, terminal, os, via, host, caps, plus the version),
+the re-adopted lease knows its device again at once, each client its own (#1995;
+`TestClientLeaseRenewRefillsAfterRestart`, BREAK-IT `hub-restart-where`); no hub URL (or a hub without the route, a 404) → no lease.
 `TestFleetClientLeaseByCertificate` / `TestClientLeaseTableSeveral` and
 `bin/fleet-client-lease-selftest.sh` pin it.
 

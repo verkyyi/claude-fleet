@@ -214,7 +214,9 @@ this_machine() {
 # typed into last: every FLEET_CLIENT_INPUT_EVERY (5 s) the keeper reads tmux's
 # #{client_activity} of the clients attached here and, when it moved, reports it
 # (`input`, at most once per 5 s) with that client's where; a renewal carries
-# the session the stage is showing (`viewing`, the top line's 「也在 iPhone 上打开」).
+# the session the stage is showing (`viewing`, the top line's 「也在 iPhone 上打开」)
+# and the where in use here (client.where.json — a hub restart forgets every
+# lease, and the renewal that re-adopts ours tells it the device again, #1995).
 # Only two things send this server to STANDBY now: a fifth client asked this one,
 # the least recently used, to leave (reason evicted), or you disconnected it from
 # another client's 我的客户端 (revoked). Then every attached client gets a
@@ -591,6 +593,9 @@ keeper)
         fi
         if [ -n "$what" ]; then
           wf=''; [ "$what" = input ] && [ -n "$c" ] && wf=$(where_file "$c") && [ -s "$wf" ] || wf=''
+          # a renewal carries the where in use here too: the hub keeps leases
+          # in memory, and one that restarted learns the device from it (#1995)
+          [ "$what" = renew ] && [ -s "$CL_DIR/client.where.json" ] && wf="$CL_DIR/client.where.json"
           v=$(viewing "$s")
           # an older hub knows no `input`: the renewal it does know, so the
           # lease never lapses under someone typing
@@ -961,10 +966,12 @@ client_open() {
   case "$tt" in /dev/*) ;; *) tt='' ;; esac
   mkdir -p "$CL_DIR/client.where" 2>/dev/null
   # the whole where saved for this tty (#1716): the lease carries it, and a
-  # take-back from the standby screen hands the same again
-  dev=$($LEASE_CMD device ${tt:+--save "$(where_file "$tt")"} 2>/dev/null) || dev=''
+  # take-back from the standby screen hands the same again. No tty: saved all
+  # the same (under notty), so client.where.json — what every renewal carries
+  # (#1995) — is the whole of it, not the device alone
+  dev=$($LEASE_CMD device --save "$(where_file "${tt:-notty}")" 2>/dev/null) || dev=''
   rm -f "$CL_DIR/client.nohub"
-  client_take "$tt" "${dev%%$'\t'*}" "$(printf '%s' "$dev" | cut -f2 -s)" && return 0
+  client_take "${tt:-notty}" "${dev%%$'\t'*}" "$(printf '%s' "$dev" | cut -f2 -s)" && return 0
   rm -f "$CL_DIR/client.standby"
   mkdir -p "$CL_DIR/client.dev" 2>/dev/null
   [ -n "$tt" ] && printf '%s\n' "${dev%%$'\t'*}" > "$CL_DIR/client.dev/$(cl_key "$tt")"
