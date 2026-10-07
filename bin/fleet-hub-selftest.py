@@ -1055,9 +1055,9 @@ echo "https://github.com/example/project/issues/131"
                                                                params=params))["operation_id"])
             self.assertEqual(op["status"], "succeeded", key)
         self.assertEqual((self.node.conf / "spawn.calls").read_text(),
-                         "130 demo --agent codex --origin hub --repo example/project\n"
-                         "131 demo --agent codex --origin hub --repo example/project\n"
-                         "132 demo --agent claude --origin hub --repo example/project\n")
+                         "130 demo --print --agent codex --origin hub --repo example/project\n"
+                         "131 demo --print --agent codex --origin hub --repo example/project\n"
+                         "132 demo --print --agent claude --origin hub --repo example/project\n")
         self.assertEqual((self.node.conf / "scratch.calls").read_text(),
                          "demo --origin hub --print --agent codex --repo example/project --name codex 试试\n")
 
