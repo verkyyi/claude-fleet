@@ -26,6 +26,10 @@
 #                   same order, same nesting, no heading of their own — the frame is the
 #                   online one line by line but for the `!`; never vanish
 #   N. needs      — a remote row that is asking its person draws the local `!` + detail
+#   O. orchestrator — issue #1957: a worker the hub marks `role: orchestrator` keeps
+#                   its line in the cache (fleet-remote-view.sh open finds it there)
+#                   and is named in orch_<sess> (worker_id · machine · online · state ·
+#                   needs · question), but the sidebar draws NO row for it
 #   D. no network — rendering with the hub on runs no curl/wget/nc/ccquota, and the
 #                   producer names none of them (nor the refresher)
 #   H. hub source — FLEET_SIDEBAR_SOURCE=hub (issue #1480, EPIC #1479 C1): the
@@ -636,6 +640,32 @@ FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-blank.json'" PATH="$SHIMPATH" bash "
 eq   "E: …round after round while it stays unread" "$M4" "$(m4rows)"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-gone.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (read empty) failed"
 eq   "E: …and a read that stands with no rows takes them away" "" "$(m4rows)"
+# O. orchestrator (issue #1957): in the cache and orch_<sess>, never a sidebar row
+python3 - "$WORK/sessions.json" "$WORK/sessions-orch.json" "$F" <<'PY'
+import json, sys
+src, dst, f = sys.argv[1:4]
+d = json.load(open(src, encoding="utf-8"))
+oid = "0d1e2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b"
+w = dict(key=None, identity=oid, state="needs", lifecycle="awake", agent="claude", repo=None, name="编排",
+         needs="ask", detail="开一个 EPIC 还是三个快任务？", role="orchestrator")
+d["sessions"].append(dict(worker_id=f + "/" + oid, machine_name="mini2.local", os_user=d["sessions"][1]["os_user"],
+                          fleet_id=f, fleet_name="x", availability="online", worker=w,
+                          observed_at="2026-10-04T10:06:00Z"))
+json.dump(d, open(dst, "w"), ensure_ascii=False)
+PY
+OID=0d1e2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (orchestrator) failed"
+eq   "O: the orchestrator keeps its line in the cache (open finds it there)" "m4|编排" \
+     "$(LC_ALL=C awk -F"$US" -v w="wid:$F/$OID" '$1 == w { print $2 "|" $8 }' "$G/remote_$S")"
+eq   "O: orch_<sess> names it: worker_id, machine, online, state, needs, its question" \
+     "$F/$OID${US}m4${US}online${US}needs${US}ask${US}开一个 EPIC 还是三个快任务？" "$(cat "$G/orch_$S" 2>/dev/null)"
+s=$(side)
+hasnt "O: the sidebar draws no row for it" "$s" "编排"
+has  "O: …the other rows are all there" "$s" "侧边栏"
+hasnt "O: …nor does the hub list" "$(hub)" "编排"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
+eq   "O: no orchestrator: orch_<sess> is empty" "" "$(cat "$G/orch_$S" 2>/dev/null)"
+
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null; R=$(cat "$G/remote_$S")
 OK=$(cat "$G/hub_ok" 2>/dev/null)
 case "$OK" in

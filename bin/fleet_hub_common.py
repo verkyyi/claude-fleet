@@ -190,9 +190,16 @@ def inventory_row(parts):
     Column 18 (issue #1902): `reap=<policy>`, the session's @reap_policy (empty =
     its kind's default) — the other machines' sidebars draw 常驻 etc. off it.
     Column 19 (issue #1951): `detail=<question>`, what a session in `needs` asks
-    (@claude_needs_detail) — the client's bar and notification say it; empty = none."""
+    (@claude_needs_detail) — the client's bar and notification say it; empty = none.
+    Column 20 (issue #1957): `role=orchestrator` — the fleet's one orchestrating
+    session (bin/fleet-orchestrator.sh): its key is `orchestrator`, and the client
+    wears it on 「新任务」 instead of listing it; empty on every other window."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 20 and parts[-1].startswith("role="):
+        r = parts.pop()[5:]
+        if r == "orchestrator":
+            extra["role"] = r
     if len(parts) >= 19 and parts[-1].startswith("detail="):
         extra["detail"] = parts.pop()[7:][:120] or None
     if len(parts) >= 18 and parts[-1].startswith("reap="):

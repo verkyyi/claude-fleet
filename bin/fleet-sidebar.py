@@ -26,7 +26,7 @@ import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "28"  # #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
+VIEW_VERSION = "29"  # #1957: 「新任务」 wears the orchestrator · #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -658,17 +658,43 @@ def open_portal(session):
     run(["bash", str(BIN / "fleet-shell.sh"), "portal", session], stdin=subprocess.DEVNULL)
 
 
-def with_portal(rows, placing):
+ORCH_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def orch_state(session):
+    """The orchestrating session's state (issue #1957) — the first line of
+    fleet-hub-sessions.sh's orch_<session> (online first): "" when no machine
+    runs one. The orchestrator is no row of the list: 「新任务」 wears it."""
+    try:
+        with open(os.path.join(status_dir(), "orch_" + (session or "")), encoding="utf-8") as f:
+            for line in f:
+                p = line.rstrip("\n").split("\x1f")
+                if len(p) >= 4 and "/" in p[0]:
+                    return p[3]
+    except OSError:
+        pass
+    return ""
+
+
+def with_portal(rows, placing, session=""):
     """The rows as painted in the shell (issue #1953): 「新任务」, the 「开工中…」 row
     of a task ↵ just sent, a rule — then the list. Built again every frame from
     the list without them, so a fresh producer frame and a place ending both
-    show at once."""
+    show at once. 「新任务」 is where the orchestrator lives (issue #1957): its
+    glyph is the orchestrator's state — a red `!` while it waits on you, the
+    working spinner while it works, `+` while it is free (or there is none)."""
     if not STAGE:
         return rows
     body = [row for row in rows if row[0] not in (PORTAL_KEY, PLACING_KEY) and
             not (row[0] == "hdr" and row[1] == "" and row[2] == "─")]
     pad = [""] * (ROW_FIELDS - 9)
-    top = [[PORTAL_KEY, "portal", "+", tr("sidebar_portal"), " ", "", "0", "", ""] + pad]
+    state, glyph = "portal", "+"
+    ost = orch_state(session) if session else ""
+    if ost in ("needs", "failed"):
+        state, glyph = "needs", "!"
+    elif ost in ("working", "preparing", "waking"):
+        state, glyph = "working", ORCH_SPIN[int(time.time() * 4) % len(ORCH_SPIN)]
+    top = [[PORTAL_KEY, state, glyph, tr("sidebar_portal"), " ", "", "0", "", ""] + pad]
     if placing is not None and placing.get("verb") == "compose" and placing.get("state") in ("placing", "await"):
         title = placing.get("title", "")
         if cells_of(title) > PLACING_TITLE:   # never the row that widens the list
@@ -2671,7 +2697,7 @@ def ui(screen, session, worker, lock):
         # whole repo group (`folds`, issue #1037). `where` is the selection's
         # place in the PAINTED list, which the scroll offset is measured in.
         if view == "live":
-            rows = with_portal(rows, placing)   # 「新任务」 on top (issue #1953)
+            rows = with_portal(rows, placing, session)   # 「新任务」 on top (issue #1953)
         ids = selectable(rows)
         # Rows still in flight for a window just jumped to may not hold it yet (a
         # folded child shows only as the current row): keep the selection until

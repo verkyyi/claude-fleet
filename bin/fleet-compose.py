@@ -16,7 +16,9 @@
                                           the text as its seed (「不关联仓库」 /
                                           「多个仓库」, issue #1956). Prints the
                                           place's one line and returns its code.
-                                          C7 (the orchestrator) adds its route here
+                                          (The orchestrator's route is no --send:
+                                          the draft is handed over on the stage —
+                                          carry(), issue #1957.)
     fleet-compose.py payload <text-file> [--no-issue] [--repo R | --no-repo | --multi]
                                           the payload a ↵ on that text would write
                                           (title · body · attachments · repo), as
@@ -31,13 +33,25 @@ session that was in view. The 「仓库」 option (issue #1956, Tab to it, space
 what most sends want — / each repo the hub says this person's machines host /
 不关联仓库 (a session in $HOME, `@norepo`, no issue: it goes under the list's
 no repo heading) / 多个仓库 (a session can work in one repo only, so the send
-becomes 「编排」: until the orchestrator (C7) exists, a no-repo session seeded with
-the text and a line asking it to split the work by repo). The repo is never
+becomes 「编排」: the orchestrator takes it — below — and with none running, a
+no-repo session seeded with the text and a line asking it to split the work by
+repo). The repo is never
 resolved here: 自动 travels as no repo, and the one rule (#1938 — named → the
 session's → the only one → ask) runs where the rows are. The draft is on disk the whole time —
 $XDG_STATE_HOME/claude-fleet/compose-draft (FLEET_SWITCH_STATE overrides the
 directory, as for the switch history), so leaving and coming back, or the client
 restarting, loses nothing.
+
+The orchestrator (issue #1957, EPIC #1949 C7): the fleet's one orchestrating
+session (bin/fleet-orchestrator.sh on the machine; fleet-hub-sessions.sh's
+orch_<session> here — its machine, state and question). With one running, the
+area grows a 「发法」 option — 编排 (hand the text to it: it talks it through with
+you first, then files and dispatches) or 开工 (as before) — that defaults to 编排
+while it is free and to 开工 while it is working or waits on you, a line under the
+options saying which. ⇧⇥ hands the draft over whatever 发法 says: the stage
+switches to it (the list's own jump) and the text is PASTED into its input, never
+sent — once the stage shows it with an agent reading bracketed paste; a draft
+that could not be pasted in time stays here. An empty draft: ⇧⇥ just goes there.
 
 ↵ writes the payload (compose-send.json beside the draft: the first line is the
 title, the whole text the body, every attachment's path listed under it) and
@@ -179,13 +193,17 @@ def scratch_name(title):
     return name[:MAX_SCRATCH].strip()
 
 
+def status_dir():
+    """The refresh loop's cache dir (fleet-status-lib.sh FLEET_STATUS_G)."""
+    return os.environ.get("FLEET_STATUS_G") or os.path.join(os.environ.get("TMPDIR") or "/tmp",
+                                                             ".claude-dash", "global")
+
+
 def hub_repos():
     """The repos the hub says this person's machines host (the sidebar's
     hub_repos cache) — None when it was never read."""
-    g = os.environ.get("FLEET_STATUS_G") or os.path.join(os.environ.get("TMPDIR") or "/tmp",
-                                                          ".claude-dash", "global")
     try:
-        with open(os.path.join(g, "hub_repos"), encoding="utf-8") as f:
+        with open(os.path.join(status_dir(), "hub_repos"), encoding="utf-8") as f:
             return [r for r in f.read().splitlines() if r and not r.startswith("#") and "/" in r]
     except OSError:
         return None
@@ -226,8 +244,9 @@ def send(path, repo="", node="auto", reap="", mode=""):
     else:
         # A scratch. 「不关联仓库」 / 「多个仓库」 (issue #1956): a session of no repo
         # — never an issue, which belongs to one repo — that starts working on
-        # the text; 「多个仓库」 is 「编排」, and until C7's orchestrator takes this
-        # route the session is asked to split the work by repo itself. A repo's
+        # the text; 「多个仓库」 is 「编排」, and with no orchestrator to take it
+        # (issue #1957 — with one, the writing area hands the draft over and
+        # never comes here) the session is asked to split the work by repo itself. A repo's
         # scratch (「记成 issue」 off) keeps its line as an unsent draft, as before.
         args += ["scratch"]
         name = scratch_name(title)
@@ -257,6 +276,65 @@ def send(path, repo="", node="auto", reap="", mode=""):
                 pass
     sys.stdout.write(out.stdout)
     return out.returncode
+
+
+# --- the orchestrating session (issue #1957) ----------------------------------------
+
+BUSY = ("working", "preparing", "waking", "needs", "failed")
+
+
+def orchestrator(session):
+    """The fleet's one orchestrating session, as fleet-hub-sessions.sh's
+    orch_<session> says: {wid, node, av, state, needs, detail} — the first line
+    (online first, then by machine), None when no machine runs one."""
+    try:
+        with open(os.path.join(status_dir(), "orch_" + (session or "")), encoding="utf-8") as f:
+            for line in f:
+                p = line.rstrip("\n").split("\x1f")
+                if len(p) >= 4 and "/" in p[0] and p[1]:
+                    p += [""] * (6 - len(p))
+                    return dict(zip(("wid", "node", "av", "state", "needs", "detail"), p[:6]))
+    except OSError:
+        pass
+    return None
+
+
+def orch_busy(o):
+    """It is working, or waits on you: the writing area then starts the work
+    itself (开工) unless the person hands it over (⇧⇥)."""
+    return bool(o) and o.get("state") in BUSY
+
+
+def carry(shell, o, text, wait=None):
+    """⇧⇥ / 发法 编排: the stage onto the orchestrator (the list's own jump), and
+    the half-written text into its input — pasted, never sent: ↵ there is the
+    person's. The paste waits until the stage shows that session with an agent
+    reading bracketed paste (a line break must never send half of it), at most
+    FLEET_COMPOSE_CARRY_SECS (8 s). Returns (switched, carried)."""
+    if not o or not shell.hand("jump=wid:" + o["wid"]):
+        return False, False
+    if not text.strip():
+        return True, True
+    want = o["node"] + ":" + o["wid"]
+    wait = float(os.environ.get("FLEET_COMPOSE_CARRY_SECS") or 8) if wait is None else wait
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        for line in shell.stage("list-windows", "-F",
+                                "#{window_id}\t#{window_active}\t#{@remote}\t#{@remote_down}\t#{bracket_paste_flag}"
+                                ).splitlines():
+            w = (line.split("\t") + [""] * 5)[:5]
+            if w[1] == "1" and w[2] == want and not w[3] and w[4] == "1":
+                buf = "fleet-compose-carry"
+                try:
+                    subprocess.run(shell.stage_cmd + ["load-buffer", "-b", buf, "-"], input=text.encode("utf-8"),
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=True)
+                    subprocess.run(shell.stage_cmd + ["paste-buffer", "-p", "-d", "-b", buf, "-t", w[0]],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=True)
+                except (OSError, subprocess.SubprocessError):
+                    return True, False
+                return True, True
+        time.sleep(0.2)
+    return True, False
 
 
 # --- where the writing area came from ----------------------------------------------
@@ -290,6 +368,17 @@ class Shell:
     def __init__(self, session):
         sock = os.environ.get("FLEET_COMPOSE_SHELL_SOCK", "")
         self.cmd = ["tmux", "-S", sock] if sock else (["tmux", "-L", session] if session else [])
+        # the stage — the server this pane is on (its $TMUX); the selftest's
+        # FLEET_COMPOSE_STAGE_SOCK names its socket
+        stage = os.environ.get("FLEET_COMPOSE_STAGE_SOCK", "")
+        self.stage_cmd = ["tmux", "-S", stage] if stage else ["tmux"]
+
+    def stage(self, *args):
+        try:
+            return subprocess.run(self.stage_cmd + list(args), stdin=subprocess.DEVNULL, capture_output=True,
+                                  text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
 
     def run(self, *args):
         if not self.cmd:
@@ -516,6 +605,7 @@ def ui(screen, session):
     ed = Editor(draft)
     issue, focus, pasting = True, "body", False
     mode, chosen = "auto", ""          # the 「仓库」 choice (issue #1956)
+    via = ""                           # 发法 (issue #1957): "" = by the orchestrator's state
     menu, menu_at = None, 0            # its menu while open: repo_menu() rows
     saved_text, saved_at, dirty_at = draft, (time.strftime("%H:%M") if draft else ""), None
     toast = ""
@@ -546,7 +636,29 @@ def ui(screen, session):
             except curses.error:
                 pass
 
+    def hand_over(o):
+        """⇧⇥ / ↵ on 编排: the draft to the orchestrator (carry), the area
+        emptied only when the text arrived there."""
+        nonlocal issue, focus, mode, chosen, via, toast
+        text = clean(ed.text()).strip("\n")
+        save(force=True)
+        switched, carried = carry(shell, o, text)
+        if not switched:
+            toast = tr("compose_orch_nolist")
+        elif not carried:
+            toast = tr("compose_orch_kept")
+        else:
+            if text.strip():
+                toast = tr("compose_orch_sent_fmt", payload(text).get("title", ""))
+                ed.clear()
+                issue, focus, mode, chosen, via = True, "body", "auto", "", ""
+                save(force=True)
+
     while True:
+        orch = orchestrator(session)
+        # 发法 (issue #1957): 编排 while the orchestrator is free, 开工 while it is
+        # working or waits on you (and with none at all); a choice made stands
+        eff = (via or ("work" if orch_busy(orch) else "orch")) if orch else "work"
         h, w = screen.getmaxyx()
         screen.erase()
         x0, bw = 3, max(10, w - 7)
@@ -592,16 +704,37 @@ def ui(screen, session):
             put(y, x, box, curses.color_pair(PAIR_ON) | curses.A_BOLD if focus == "issue" else curses.A_REVERSE)
             toggle_x = x
             x += cells(box) + 4
+        via_x = x
+        if orch and mode in ("auto", "repo", "none"):
+            put(y, x, tr("compose_via") + " ", dim)
+            x += cells(tr("compose_via")) + 1
+            via_x = x
+            box = " " + tr("compose_via_" + eff) + " "
+            put(y, x, box, curses.color_pair(PAIR_ON) | curses.A_BOLD if focus == "via" else curses.A_REVERSE)
+            x += cells(box) + 4
         files = attachments(ed.text())
         if files:
             put(y, x, tr("compose_attach") + " ", dim)
             put(y, x + cells(tr("compose_attach")) + 1, ", ".join(os.path.basename(f) for f in files))
         go = {"none": tr("compose_go_session"), "multi": tr("compose_go_orch")}.get(
             mode, tr("compose_go_issue") if issue else tr("compose_go_draft"))
+        if orch and (eff == "orch" or mode == "multi"):
+            go = tr("compose_go_handover")
         put(y, max(x, x0 + bw - cells(go)), go, curses.color_pair(PAIR_GO) | curses.A_BOLD)
         if mode in ("none", "multi"):
             put(y + 1, x0 + 2, tr("compose_why_" + mode), curses.color_pair(PAIR_TOAST) if mode == "multi" else dim)
-        put(y + 3 + len(menu) if menu else y + 2, x0 + 2, tr("compose_menu_keys") if menu else tr("compose_keys"), dim)
+        elif orch and not menu:
+            # what the orchestrator is doing (issue #1957): busy — this one starts
+            # on its own, ⇧⇥ still hands it over; free — ⇧⇥ goes there
+            what = orch.get("detail") or tr("compose_orch_state_" + orch.get("state", ""))
+            if orch.get("state") in ("needs", "failed"):
+                put(y + 1, x0 + 2, tr("compose_orch_needs_fmt", what), curses.color_pair(PAIR_TOAST))
+            elif orch_busy(orch):
+                put(y + 1, x0 + 2, tr("compose_orch_busy_fmt", what), curses.color_pair(PAIR_TOAST))
+            else:
+                put(y + 1, x0 + 2, tr("compose_orch_idle"), dim)
+        keys = tr("compose_keys_orch") if orch else tr("compose_keys")
+        put(y + 3 + len(menu) if menu else y + 2, x0 + 2, tr("compose_menu_keys") if menu else keys, dim)
         if toast and not menu:
             put(y + 3, x0 + 2, toast, curses.color_pair(PAIR_TOAST))
         if menu:
@@ -624,6 +757,8 @@ def ui(screen, session):
             cy, cx = y + 2 + menu_at, repo_x + 1
         elif focus == "repo":
             cy, cx = y, repo_x + 1
+        elif focus == "via":
+            cy, cx = y, via_x + 1
         else:
             cy, cx = y, toggle_x + 1
         try:
@@ -632,7 +767,8 @@ def ui(screen, session):
             pass
         screen.refresh()
 
-        screen.timeout(int(SAVE_EVERY * 1000) if dirty_at is not None else -1)
+        # a beat while typing (the draft), every 2 s with an orchestrator (its line)
+        screen.timeout(int(SAVE_EVERY * 1000) if dirty_at is not None else (2000 if orch else -1))
         try:
             kind, k = read_key(screen)
         except curses.error:
@@ -641,6 +777,9 @@ def ui(screen, session):
             kind, k = "key", "esc"
         if kind == "none":
             save(force=True)   # idle a beat: the draft is on disk
+            continue
+        if k == "btab" and orch and menu is None:
+            hand_over(orch)    # ⇧⇥ (issue #1957): to the orchestrator, the draft along
             continue
         if menu is not None:
             # the 「仓库」 menu has the keys while it is open
@@ -655,6 +794,9 @@ def ui(screen, session):
         if kind == "text":
             if focus == "issue" and k == " " and not pasting:
                 issue = not issue
+                continue
+            if focus == "via" and k == " " and not pasting:
+                via = "work" if eff == "orch" else "orch"
                 continue
             if focus == "repo" and k == " " and not pasting:
                 menu = repo_menu(group)
@@ -678,6 +820,9 @@ def ui(screen, session):
             if not data:
                 toast = tr("compose_empty")
                 continue
+            if orch and (eff == "orch" or mode == "multi"):
+                hand_over(orch)   # 编排 (issue #1957): it talks first, then dispatches
+                continue
             if not write_atomic(send_path(), json.dumps(data, ensure_ascii=False) + "\n"):
                 toast = "✗ " + str(send_path())
                 continue
@@ -691,7 +836,8 @@ def ui(screen, session):
             issue, focus, mode, chosen = True, "body", "auto", ""
             save(force=True)
         elif k == "tab" or k == "btab":
-            ring = ["body", "repo"] + (["issue"] if mode in ("auto", "repo") else [])
+            ring = ["body", "repo"] + (["issue"] if mode in ("auto", "repo") else []) + \
+                (["via"] if orch and mode in ("auto", "repo", "none") else [])
             at = ring.index(focus) if focus in ring else 0
             focus = ring[(at + (1 if k == "tab" else -1)) % len(ring)]
         elif k == "esc":
