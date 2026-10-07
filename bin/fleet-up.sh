@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-attach]
+# fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-repo] [--no-attach]
 # fleet-up.sh --undo [<session>]
 #
 # ONE FLEET PER LOGIN (issue #979). A login runs exactly one fleet holding all its
@@ -8,24 +8,25 @@
 # means a second login. A brand-new fleet is named "fleet"; an existing fleet keeps
 # its name (fleet-claude-fleet stays fleet-claude-fleet).
 #
-# Bringing a fleet up: a tmux session with its first repo's local checkout (reused
-# if it exists, cloned if it doesn't). With no <owner/repo>,
-# infers it from the current checkout: run it from inside a git worktree and it
-# uses that repo's 'origin' and that worktree as the checkout dir. Writes the per-fleet conf
-# ($FLEET_CONF_DIR/<session>.conf) the rest of the tooling reads, builds the
-# 'plan' hub (a dash+hub split — the embedded dash self-marks @dash=1 and is
-# reached via prefix+g; there is no standalone 'dash' window), and kicks the
-# collector so the dash has data immediately. See docs/ARCHITECTURE.md.
+# Bringing a fleet up: a tmux session, its conf (fleets/<session>/conf — the
+# fleet's settings, no repo) and the hub. A repo — named, or inferred from the
+# current checkout (its 'origin', that worktree as the checkout dir) — is added
+# exactly as `fleet-repo.sh add` adds one (fleet_repo_register: reuse or clone the
+# checkout, resolve the base branch, write repos/<slug>.conf): there is no first
+# repo put any other way (issue #1937). With no repo (outside a checkout, or
+# --no-repo) the fleet comes up with what it hosts — a brand-new one with none, its
+# hub in $HOME; new sessions are then no-repo sessions until one is added. The
+# collector is kicked so the sidebar has data at once. See docs/ARCHITECTURE.md.
 #
 # A fleet ≡ a tmux session ≡ one login. Run it for every repo you want to work:
 # the first brings the fleet up, each further one adds its repo.
 #
 # --seed (issue #1167): this repo is only the login's STARTER — the fleet comes up
-# on it so it works at once, but it never takes work: the conf also gets
+# on it so it works at once, but it never takes work: its overlay also gets
 # FLEET_SEED=1 + FLEET_AUTOFILL=0 + FLEET_ISSUE_BRIDGE=0, so the dispatcher never
 # auto-spawns from its backlog and the issue-bridge never relays its comments (see
-# fleet_repo_is_seed). It marks the fleet conf's OWN repo only — a --seed for a repo
-# the fleet would merely ADD is refused. Without --seed the conf is byte-identical.
+# fleet_repo_is_seed). It marks the fleet's ONLY repo — a --seed for a repo added
+# beside others is refused.
 #
 # --no-attach (issue #1165): bring the fleet up and stop — no attach, no client
 # switch. For a script that sets a login up (fleet-login-bootstrap.sh) and must
@@ -40,10 +41,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die() { echo "fleet-up: $*" >&2; exit 1; }
-usage() { echo "usage: fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-attach] | --undo [<session>]" >&2; }
+usage() { echo "usage: fleet-up.sh [<owner/repo>] [<checkout-dir>] [--name <session>] [--base <branch>] [--seed] [--no-repo] [--no-attach] | --undo [<session>]" >&2; }
 need_arg() { [ "$1" -ge 2 ] || { usage; die "$2 needs an argument"; }; }   # $1=$#, $2=flag
 
-REPO=""; DIR=""; NAME=""; BASE=""; FROM_CONF=0; SEED=0; NOATTACH=0
+REPO=""; DIR=""; NAME=""; BASE=""; SEED=0; NOATTACH=0; NOREPO=0
 if [ "${1:-}" = --undo ]; then
   shift
   exec bash "$BIN/fleet-restore.sh" --undo "${1:-}"
@@ -54,6 +55,7 @@ while [ $# -gt 0 ]; do
     --base) need_arg "$#" --base; BASE="$2"; shift 2;;
     --seed) SEED=1; shift;;
     --no-attach) NOATTACH=1; shift;;
+    --no-repo) NOREPO=1; shift;;
     -h|--help) usage; exit 0;;
     -*) usage; die "unknown flag $1";;
     *) if [ -z "$REPO" ]; then REPO="$1"; elif [ -z "$DIR" ]; then DIR="$1"; else die "extra arg $1"; fi; shift;;
@@ -72,34 +74,30 @@ fi
 
 # No <owner/repo> given: infer it from the current checkout ($PWD in a git
 # worktree), and default the checkout dir to that worktree so we reuse it.
-# Outside any checkout, `cf` still means "take me to my fleet" (issue #979): with
-# the login's fleet configured, bring THAT fleet up on its own repo.
-if [ -z "$REPO" ]; then
+# Outside any checkout — or with --no-repo — no repo is added (issue #1937): the
+# login's fleet comes up with the repos it has, and a brand-new one with none
+# (`cf` still means "take me to my fleet", issue #979).
+if [ -z "$REPO" ] && [ "$NOREPO" = 0 ]; then
   if top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null); then
     REPO=$(git -C "$top" remote get-url origin 2>/dev/null) \
-      || die "$top has no 'origin' remote — pass <owner/repo> explicitly"
+      || die "$top has no 'origin' remote — pass <owner/repo> explicitly, or --no-repo"
     DIR="${DIR:-$top}"
     echo "fleet-up: inferred $(fleet_norm_repo "$REPO") from $top"
-  elif lf=$(fleet_login_fleet) && [ -n "$lf" ]; then
-    REPO=$( . "$(fleet_conf_file "$lf")" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-    [ -n "$REPO" ] || die "fleet '$lf' has no FLEET_REPO in $(fleet_conf_file "$lf")"
-    NAME="${NAME:-$lf}"; FROM_CONF=1
-  else
-    die "no <owner/repo> given and $PWD is not a git checkout"
   fi
 fi
+[ "$NOREPO" = 1 ] && { REPO=""; DIR=""; }
 
-REPO=$(fleet_norm_repo "$REPO")
-# Shape-check owner/repo before it reaches `gh repo clone`/`git clone`: exactly
-# one slash, both halves non-empty, and only chars GitHub allows (no spaces or
-# shell metacharacters). Catches typos and non-GitHub URLs up front.
-case "$REPO" in
-  *[!A-Za-z0-9_./-]* | */*/* | /* | */) die "invalid repo '$REPO' — expected owner/repo";;
-  ?*/?*) : ;;
-  *) die "invalid repo '$REPO' — expected owner/repo";;
-esac
-DIR_ARG="$DIR"
-DIR="${DIR:-$HOME/projects/$(basename "$REPO")}"
+if [ -n "$REPO" ]; then
+  REPO=$(fleet_norm_repo "$REPO")
+  # Shape-check owner/repo before it reaches `gh repo clone`/`git clone`: exactly
+  # one slash, both halves non-empty, and only chars GitHub allows (no spaces or
+  # shell metacharacters). Catches typos and non-GitHub URLs up front.
+  case "$REPO" in
+    *[!A-Za-z0-9_./-]* | */*/* | /* | */) die "invalid repo '$REPO' — expected owner/repo";;
+    ?*/?*) : ;;
+    *) die "invalid repo '$REPO' — expected owner/repo";;
+  esac
+fi
 
 # --- which fleet: the login's one (issue #979) ---
 # The session name no longer derives from a repo. With a fleet configured, THAT is
@@ -112,7 +110,7 @@ if [ -n "$NAME" ]; then
   LOGIN=$(fleet_login_fleet); lrc=$?
   if [ ! -f "$(fleet_conf_file "$NAME")" ] && [ "$lrc" -ne 1 ]; then
     [ "$lrc" -eq 0 ] || LOGIN="$(fleet_each_conf | cut -f1 | tr '\n' ' ')"
-    die "refusing a second fleet '$NAME' — this login already has '${LOGIN% }'. One fleet per login: \`fleet-up $REPO\` adds the repo to it; a second fleet needs a second login."
+    die "refusing a second fleet '$NAME' — this login already has '${LOGIN% }'. One fleet per login: \`fleet-up ${REPO:-<owner/repo>}\` adds the repo to it; a second fleet needs a second login."
   fi
 else
   NAME=$(fleet_login_fleet); lrc=$?
@@ -120,13 +118,15 @@ else
     NAME=fleet
   elif [ "$lrc" -eq 2 ]; then
     NAME=""
-    while IFS=$'\t' read -r s _; do
-      [ -n "$s" ] && fleet_repo_hosted "$s" "$REPO" && { NAME="$s"; break; }
-    done < <(fleet_each_conf)
+    if [ -n "$REPO" ]; then
+      while IFS=$'\t' read -r s _; do
+        [ -n "$s" ] && fleet_repo_hosted "$s" "$REPO" && { NAME="$s"; break; }
+      done < <(fleet_each_conf)
+    fi
     if [ -z "$NAME" ]; then
       live=$(fleet_sockets)
       case "$live" in
-        *$'\n'*|'') die "this login has several fleets ($(fleet_each_conf | cut -f1 | tr '\n' ' ')) and none hosts $REPO — fold them into one (fleet-repo.sh fold <from> --into <fleet>), or pass --name <fleet>" ;;
+        *$'\n'*|'') die "this login has several fleets ($(fleet_each_conf | cut -f1 | tr '\n' ' ')) and none hosts ${REPO:-the repo you named} — fold them into one (fleet-repo.sh fold <from> --into <fleet>), or pass --name <fleet>" ;;
         *) NAME="$live" ;;
       esac
     fi
@@ -144,101 +144,72 @@ SOCK=$(fleet_socket "$NAME")
 fleet_socket_heal "$SOCK" >&2 || true
 LIVE=0; tmux -L "$SOCK" has-session -t "$NAME" 2>/dev/null && LIVE=1
 
-# The fleet already exists (configured) and this is not its conf's own repo: bring
-# the fleet up on its OWN repo (when it is down), then add this one. The fleet
-# conf's FLEET_REPO/MAIN/BASE_BRANCH stay the fleet's — rewriting them to the new
-# repo would re-home every window it already has.
-ADD_REPO=""; ADD_DIR=""; ADD_BASE=""; KEEP_BASE=0
-CONF_R=$(fleet_conf_file "$NAME")
-if [ -f "$CONF_R" ]; then
-  own_repo=$(fleet_norm_repo "$( . "$CONF_R" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )")
-  own_main=$( . "$CONF_R" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}" )
-  own_base=$( . "$CONF_R" >/dev/null 2>&1; printf '%s' "${FLEET_BASE_BRANCH:-}" )
-  if [ -n "$own_repo" ] && [ "$own_repo" != "$REPO" ]; then
-    ADD_REPO="$REPO"; ADD_DIR="$DIR_ARG"; ADD_BASE="$BASE"
-    REPO="$own_repo"; DIR="${own_main:-$HOME/projects/$(basename "$own_repo")}"
-    BASE="${own_base:-}"; [ -n "$BASE" ] && KEEP_BASE=1
-  elif [ -z "$DIR_ARG" ] && [ -n "${own_main:-}" ]; then
-    DIR="$own_main"                                # its own repo: its own checkout
-    # Named by nothing but the conf (cf from outside a checkout): keep its base too.
-    if [ "$FROM_CONF" = 1 ] && [ -z "$BASE" ] && [ -n "${own_base:-}" ]; then
-      BASE="$own_base"; KEEP_BASE=1
-    fi
+# Every repo is put one way (issue #1937): repos/<slug>.conf, the first one too.
+# An old-layout conf still naming its first repo moves it there before anything
+# else reads it (fleet_conf_repo_migrate — identity frozen first, both files kept
+# as .bak), so the repo named here is either hosted already or added below,
+# through the one implementation fleet-repo.sh add uses (fleet_repo_register).
+migrate_conf_repo() {
+  local out
+  out=$(fleet_conf_repo_migrate "$NAME") \
+    || die "could not move the repo out of $(fleet_conf_file "$NAME") into repos/ — nothing changed (rc $?)"
+  [ -n "$out" ] && echo "fleet-up: $out — out of the fleet conf into repos/ (kept as .bak)"
+  return 0
+}
+[ -f "$(fleet_conf_file "$NAME")" ] && migrate_conf_repo
+
+ADD_REPO=""; ADD_DIR=""; ADD_BASE=""
+if [ -n "$REPO" ]; then
+  if fleet_repo_hosted "$NAME" "$REPO"; then
+    echo "fleet-up: fleet '$NAME' already hosts $REPO"
+    [ -n "$DIR" ] && [ "$DIR" != "$(fleet_repo_conf_get "$NAME" "$REPO" FLEET_MAIN)" ] \
+      && echo "fleet-up: '$NAME' already hosts $REPO at $(fleet_repo_conf_get "$NAME" "$REPO" FLEET_MAIN) — keeping it (fleet-repo.sh remove + add to move it)"
+  else
+    ADD_REPO="$REPO"; ADD_DIR="$DIR"; ADD_BASE="$BASE"
   fi
 fi
-# --seed marks the fleet conf's own repo, never one it would add (issue #1167).
-[ "$SEED" = 1 ] && [ -n "$ADD_REPO" ] \
-  && die "--seed marks a fleet's OWN repo — '$NAME' is on $REPO, so $ADD_REPO would only be added; drop --seed"
+# --seed marks the login's starter (issue #1167): the fleet's only repo, never one
+# added beside others.
+if [ "$SEED" = 1 ]; then
+  [ -n "$REPO" ] || die "--seed needs the starter's <owner/repo>"
+  [ -z "$(fleet_repos "$NAME" | grep -vxF "$REPO")" ] \
+    || die "--seed marks a fleet's only repo — '$NAME' already hosts $(fleet_repos "$NAME" | grep -vxF "$REPO" | tr '\n' ' ')so $REPO would only be added; drop --seed"
+fi
 
-# The seed repo only looks (issue #1167): mark it in the conf the moment the conf
-# exists — before the hub, so no daemon tick ever reads it unmarked.
-seed_conf() {
-  local conf kv; conf="$(fleet_state_dir "$NAME")/conf"
+# add_repo — the repo named here, when the fleet does not host it yet.
+add_repo() {
+  [ -n "$ADD_REPO" ] || return 0
+  # fleet_repo_register (issue #1104): its token on stdout is for scripts — here
+  # the human lines on stderr already say what happened.
+  local seedarg=''; [ "$SEED" = 1 ] && seedarg=--seed
+  fleet_repo_register "$NAME" "$ADD_REPO" ${ADD_DIR:+"$ADD_DIR"} ${ADD_BASE:+--base "$ADD_BASE"} \
+      ${seedarg:+"$seedarg"} >/dev/null \
+    || die "could not add $ADD_REPO to fleet '$NAME'"
+  echo "fleet-up: added $ADD_REPO to fleet '$NAME'"
+  ADD_REPO=""
+}
+# mark_seed — --seed on a repo the fleet already hosts (its only one): in its overlay.
+mark_seed() {
+  local f kv
+  [ "$SEED" = 1 ] && [ -z "$ADD_REPO" ] || return 0
+  f=$(fleet_repo_conf_file "$NAME" "$REPO")
+  [ -f "$f" ] || return 0
   for kv in FLEET_SEED=1 FLEET_AUTOFILL=0 FLEET_ISSUE_BRIDGE=0; do
-    fleet_conf_set "$conf" "${kv%%=*}" "${kv#*=}" || die "failed to write ${kv%%=*} to $conf"
+    fleet_conf_set "$f" "${kv%%=*}" "${kv#*=}" || die "failed to write ${kv%%=*} to $f"
   done
   echo "fleet-up: $REPO is this fleet's seed repo — no autofill, no issue-bridge (FLEET_SEED=1)"
 }
 
 if [ "$LIVE" = 1 ]; then
   echo "fleet-up: fleet '$NAME' is already up"
-  [ "$SEED" = 1 ] && seed_conf
+  mark_seed
 else
-# --- checkout: reuse if it's already that repo, else clone ---
-# The one clone-or-reuse, shared with fleet-repo.sh add (fleet-lib.sh, issue #1104).
-fleet_repo_checkout "$REPO" "$DIR" fleet-up || exit 1
-
-# --- base branch: the repo's TRUNK, not "whatever branch we're standing on" ---
-# Order + the full why: fleet_resolve_base_branch() in fleet-lib.sh (issue #603).
-# Picking this wrong is the fleet's most expensive silent failure — every worker
-# works perfectly onto a branch nobody ships from — so the ONLY answer we accept
-# quietly is the repo's authoritative GitHub default. Everything else speaks up.
-# Bringing an existing fleet up only to add ANOTHER repo: its conf already names
-# its base — use it as is, never re-resolve (or prompt) about a repo you didn't name.
-if [ "$KEEP_BASE" = 1 ]; then
-  BASE_SRC=default; BASE_DEFAULT="$BASE"
-else
-  IFS=$'\t' read -r BASE BASE_SRC BASE_DEFAULT \
-    < <(fleet_resolve_base_branch "$REPO" "$DIR" "$BASE")
-fi
-
-case "$BASE_SRC" in
-  default) : ;;   # authoritative — nothing to say
-  flag)
-    # An explicit --base that disagrees with the repo's default is either a
-    # deliberate choice or the bug. We cannot tell them apart, so make the
-    # operator own it out loud. fleet-restore.sh re-runs us with --base taken
-    # from the existing conf, so a base that was wrong ONCE arrives here on
-    # every restore — this is where it finally gets said.
-    if [ -n "$BASE_DEFAULT" ] && [ "$BASE" != "$BASE_DEFAULT" ]; then
-      echo "fleet-up: WARNING — --base '$BASE' is NOT $REPO's default branch ('$BASE_DEFAULT')." >&2
-      echo "          Every worker in this fleet will branch from and open PRs against '$BASE'." >&2
-      echo "          If that is not your trunk, the whole fleet's work lands where nobody ships from." >&2
-      # Prompt only with a human on both ends: fleet-restore.sh runs us with
-      # stdout in a log file, and a prompt there would hang the restore forever.
-      if [ -t 0 ] && [ -t 1 ]; then
-        printf '          use base branch '"'"'%s'"'"' anyway? [y/N] ' "$BASE" >&2
-        read -r ans
-        case "$ans" in
-          [yY]|[yY][eE][sS]) ;;
-          *) die "aborted — re-run with --base '$BASE_DEFAULT' (or no --base at all)";;
-        esac
-      else
-        echo "          (not a tty — proceeding; check it with: fleet-doctor.sh)" >&2
-      fi
-    fi ;;
-  *)
-    # gh could not tell us the default branch, so whatever we picked is a guess.
-    echo "fleet-up: WARNING — could not read $REPO's default branch from GitHub (gh missing, unauthed, or offline)." >&2
-    echo "          falling back to '$BASE' (source: $BASE_SRC) — VERIFY it is this repo's trunk." >&2
-    echo "          if it is not:  fleet-up.sh ... --base <trunk>   (or fix the conf and re-run fleet-doctor.sh)" >&2 ;;
-esac
-
 # --- write the per-fleet conf ---
 # PRESERVE any custom FLEET_* keys already in the conf (issue #170): a crash + `cf`
 # restore re-runs fleet-up, and a truncating rewrite would silently drop the
 # operator's FLEET_ISSUE_BRIDGE / FLEET_CLEANUP / FLEET_MAX_SESSIONS / … Only the
-# derived three (repo/main/base) are refreshed; the rest survive. Atomic write.
+# header is refreshed — the conf holds the fleet's settings, no repo (#1937).
+# Atomic write.
 # One directory per fleet (issue #181): the conf lives at fleets/<sess>/conf. If an
 # un-migrated legacy flat <sess>.conf exists, adopt it into the per-fleet dir FIRST
 # so fleet_write_conf preserves its custom FLEET_* keys (issue #170) at the new path.
@@ -248,20 +219,28 @@ fleet_conf_reserved "$NAME" && legacy=''   # fleet.conf is the machine's, never 
 # A fleet this login has never had (no conf, not even a legacy one): the one
 # moment the onboarding guide may open (issue #1169, below).
 NEWFLEET=0; [ ! -f "$CONF" ] && [ ! -f "$legacy" ] && NEWFLEET=1
-[ ! -f "$CONF" ] && [ -f "$legacy" ] && { mv "$legacy" "$CONF" 2>/dev/null || cp "$legacy" "$CONF"; }
-fleet_write_conf "$CONF" "$NAME" "$REPO" "$DIR" "$BASE" "$(date '+%Y-%m-%d %H:%M:%S')" \
+if [ ! -f "$CONF" ] && [ -f "$legacy" ]; then
+  { mv "$legacy" "$CONF" 2>/dev/null || cp "$legacy" "$CONF"; }
+  migrate_conf_repo
+  if [ -n "$ADD_REPO" ] && fleet_repo_hosted "$NAME" "$ADD_REPO"; then ADD_REPO=""; fi
+fi
+fleet_write_conf "$CONF" "$NAME" "" "" "" "$(date '+%Y-%m-%d %H:%M:%S')" \
   || die "failed to write $CONF"
 echo "fleet-up: wrote $CONF"
-[ "$SEED" = 1 ] && seed_conf
+# The repo goes in before the session exists, so the hub's first paint has it;
+# register does the checkout (reuse or clone), the base branch (#603), the trust
+# warning (#563), and wakes the daemons.
+add_repo
+mark_seed
 
-# --- project trust (issue #563) ---
-# Claude Code asks "trust this folder?" once per project root and a worktree
-# resolves to its MAIN checkout — so an untrusted $DIR means every worker this
-# fleet spawns parks on that dialog with nobody to answer it. The launcher
-# pre-trusts at spawn, but a live install predating #563 (or FLEET_PRETRUST=0) does
-# not: say it loudly here, at the one moment the operator is watching, with the fix.
-# Shared with every repo added later (fleet_repo_trust_warn, issue #1104).
-fleet_repo_trust_warn "$DIR" fleet-up
+# Where the hub opens: its repo's checkout when the fleet hosts exactly one, else
+# $HOME — a fleet with no repo, or several, has no main checkout (#795, #1937).
+HUB_DIR="$HOME"
+_repos=$(fleet_repos "$NAME")
+if [ -n "$_repos" ] && [ "$(printf '%s\n' "$_repos" | grep -c .)" = 1 ]; then
+  _m=$(fleet_repo_conf_get "$NAME" "$_repos" FLEET_MAIN)
+  [ -n "$_m" ] && [ -d "$_m" ] && HUB_DIR="$_m"
+fi
 
 # --- create the session + the HUB ---
 # 'work' is the plain work shell; the 'plan' hub (the dash, and ONLY the dash —
@@ -277,7 +256,7 @@ PATH=$(fleet_local_bin_path); PATH=$(fleet_path_fill); export PATH
 # The server starts from conf/tmux-fleet-server.conf, never bare: the fleet layer
 # loads first and the person's ~/.tmux.conf after it with -q, so an error in theirs
 # no longer drops the reaper hooks and the rename guard (issue #1845).
-workwin=$(fleet_server_new_session "$SOCK" -d -P -F '#{window_id}' -s "$NAME" -c "$DIR" -n work) \
+workwin=$(fleet_server_new_session "$SOCK" -d -P -F '#{window_id}' -s "$NAME" -c "$HUB_DIR" -n work) \
   || die "tmux new-session failed for '$NAME'$(fleet_wedged_note)"
 # A fresh server recycles pane ids: drop the last server's unrun mod commands
 # before any pane exists to take them (issue #1538).
@@ -287,7 +266,7 @@ fleet_mod_inbox_reset "$SOCK"
 [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
 # hub-session.sh builds the hub against this fleet's socket. It resolves the
 # same SOCK from the session name, so it needs no explicit socket argument.
-HUB_SESSION="$NAME" HUB_CWD="$DIR" bash "$BIN/hub-session.sh"
+HUB_SESSION="$NAME" HUB_CWD="$HUB_DIR" bash "$BIN/hub-session.sh"
 # The 'plan' hub is the whole fleet UI — retire the throwaway 'work' shell so the
 # session starts with ONLY the hub (hub-session.sh already selected it). tmux
 # needs an initial window to create the session; we drop it once the hub exists.
@@ -320,7 +299,8 @@ fi
 # --- populate caches now so the dash isn't empty on first paint ---
 ( GH_TTL=0 bash "$BIN/tmux-dash-collect.sh" >/dev/null 2>&1 & )
 
-echo "fleet-up: fleet '$NAME' is up (repo=$REPO base=$BASE [$BASE_SRC])"
+_rl=$(fleet_repos "$NAME" | tr '\n' ' '); _rl=${_rl% }
+echo "fleet-up: fleet '$NAME' is up ($(fleet_repos "$NAME" | grep -c .) repo(s): ${_rl:-none — fleet-repo.sh add <owner/repo>})"
 fi
 # A server already running — an older fleet-up, or one a daemon started from its
 # own PATH — gets ~/.local/bin stamped onto its global environment, so the next
@@ -331,18 +311,8 @@ fleet_server_local_bin "$SOCK"
 fleet_server_resident "$SOCK" "$NAME"
 rm -f "$FLEET_CONF_DIR/fleets/$NAME/restore.down" 2>/dev/null   # up again: --auto may restore it (#1784)
 
-# --- a repo the fleet does not host yet: add it ---
-if [ -n "$ADD_REPO" ]; then
-  if fleet_repo_hosted "$NAME" "$ADD_REPO"; then
-    echo "fleet-up: fleet '$NAME' already hosts $ADD_REPO"
-  else
-    # fleet_repo_register (issue #1104): its token on stdout is for scripts — here
-    # the human lines on stderr already say what happened.
-    fleet_repo_register "$NAME" "$ADD_REPO" ${ADD_DIR:+"$ADD_DIR"} ${ADD_BASE:+--base "$ADD_BASE"} >/dev/null \
-      || die "could not add $ADD_REPO to fleet '$NAME'"
-    echo "fleet-up: added $ADD_REPO to fleet '$NAME'"
-  fi
-fi
+# --- a repo the fleet does not host yet (a fleet that was already up): add it ---
+add_repo
 # Whose fleet this is (issue #1099): the footer and the hub's border title draw
 # the login name from the server-level @login, stamped once here instead of a
 # `#(id -un)` fork every status-interval (#888). tmux's own #{user} would do it,

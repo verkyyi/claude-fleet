@@ -50,7 +50,7 @@ CONF="$(fleet_conf_file "$NAME")"     # new fleets/<sess>/conf, or a legacy flat
 # resolve this fleet's repo/slug BEFORE deleting the conf (for cache purge)
 SLUG=""
 if [ -f "$CONF" ]; then
-  r=$( . "$CONF" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+  r=$(fleet_repo_first "$NAME")       # the conf's own repo, wherever it is put (#1937)
   [ -n "$r" ] && SLUG=$(fleet_slug "$(fleet_norm_repo "$r")")
 fi
 

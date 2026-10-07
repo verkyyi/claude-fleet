@@ -22,9 +22,10 @@ emit() {  # $1=name $2=repo $3=main
 }
 
 # configured fleets (one conf each — new fleets/<sess>/conf or a legacy flat one)
-while IFS=$'\t' read -r name cf; do
+while IFS=$'\t' read -r name _; do
   [ -n "$name" ] || continue
-  IFS=$'\t' read -r r m < <( . "$cf" >/dev/null 2>&1; printf '%s\t%s' "${FLEET_REPO:-}" "${FLEET_MAIN:-}" )
+  r=$(fleet_repo_first "$name")       # the first repo, wherever it is put (#1937)
+  m=$( fleet_load_repo_conf "$name" "$r" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}" )
   emit "$name" "$r" "$m"
   # further hosted repos (the fleet conf's FLEET_REPO is the row above)
   while IFS= read -r hr; do

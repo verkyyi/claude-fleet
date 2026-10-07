@@ -38,6 +38,13 @@
 #                     ONCE — --dry-run only says so, a later set-host 1 is not
 #                     undone; _carry moves every key a file that appeared mid-
 #                     rewrite set into the same section of the new one
+#   I. repos/       — (issue #1937) migrate moves an old-layout fleet conf's repo
+#                     into repos/<slug>.conf (ahead of the overlay it had, which
+#                     still wins; first in repos/.order): fleet_repos, every
+#                     repo's view, a no-window caller's FLEET_REPO and fleet_uuid
+#                     are unchanged, both files kept as .bak, --dry-run moves
+#                     nothing, a second run changes nothing; the original first
+#                     repo then removes like any (no promotion)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 for f in fleet-conf.sh fleet-lib.sh fleet-doctor.sh fleet_config_write.py fleet-connect.py fleet-login.py; do
@@ -143,8 +150,11 @@ is "B: fleet.conf is 0600" "$(stat -c '%a' "$CD/fleet.conf" 2>/dev/null || stat 
 [ -f "$CD/fleets/fleet/conf.bak" ] && ok || bad "B: fleet conf kept as .bak"
 fc=$(grep -v '^#' "$CD/fleets/fleet/conf")
 hasnt "B: fleet conf trimmed (FLEET_AUTOFILL moved)" "$fc" FLEET_AUTOFILL
-has "B: fleet conf keeps its identity" "$fc" 'FLEET_REPO="acme/app"'
-has "B: …and FLEET_SEED" "$fc" 'FLEET_SEED="1"'
+# …and its repo moved into repos/ like every repo (issue #1937; leg I pins it)
+hasnt "B: the fleet conf names no repo" "$fc" 'FLEET_REPO='
+ov=$(cat "$CD/fleets/fleet/repos/acme-app.conf" 2>/dev/null)
+has "B: the repo's overlay holds its identity" "$ov" 'FLEET_REPO="acme/app"'
+has "B: …and FLEET_SEED" "$ov" 'FLEET_SEED="1"'
 is "B: node.env untouched" "$(cat "$CD/node.env")" "$(printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=node-tok')"
 sh -n "$CD/fleet.conf" && ok || bad "B: the file parses under sh"
 snap=$(cat "$CD/fleet.conf")
@@ -363,6 +373,76 @@ FLEET_X=1
 fi  # ---- [node] end ----
 EOF
 )"
+
+# ---- I. every repo in repos/ (issue #1937) ----------------------------------------
+# An old-layout fleet: the conf names acme/app (+ a deploy key and a fleet-wide
+# key), repos/ holds aaa/first (sorts BEFORE it) and zzz/last, and acme/app has an
+# overlay of its own carrying an override. The fleet's UUID is NOT frozen yet.
+mkbox i
+# One file already (leg B covers the fold): only the repo move runs here.
+printf '# one file\nFLEET_HOST=1\n' > "$CD/fleet.conf"
+mkdir -p "$CD/fleets/fleet/repos" "$CD/control" "$H/p/app" "$H/p/app2" "$H/p/first" "$H/p/last"
+cat > "$CD/fleets/fleet/conf" <<EOF
+# claude-fleet: fleet 'fleet' — written by fleet-up.sh 2026-10-04 07:23:29
+FLEET_REPO="acme/app"
+FLEET_MAIN="$H/p/app"
+FLEET_BASE_BRANCH="main"
+FLEET_DEPLOY_REF="origin/prod"
+FLEET_CTX_WINDOW="7"
+EOF
+printf 'FLEET_REPO="acme/app"\nFLEET_MODEL="sonnet"\n' > "$CD/fleets/fleet/repos/acme-app.conf"
+printf 'FLEET_REPO="aaa/first"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$H/p/first" > "$CD/fleets/fleet/repos/aaa-first.conf"
+printf 'FLEET_REPO="zzz/last"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="dev"\n' "$H/p/last" > "$CD/fleets/fleet/repos/zzz-last.conf"
+python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT)"); c.execute("INSERT INTO metadata VALUES(?,?)", ("machine_id","5b1c0a52-6a1e-4c55-9d27-0f3a4c2d9e10")); c.commit()' "$CD/control/state.sqlite3"
+lib_i() { run bash -c ". '$INS/bin/fleet-lib.sh'; $1"; }
+# what each repo resolves to, and what a caller with no window (a daemon) reads
+rview() { lib_i 'for r in $(fleet_repos fleet); do ( fleet_load_repo_conf fleet "$r" >/dev/null 2>&1
+  printf "%s main=%s base=%s deploy=%s model=%s ctx=%s\n" "$r" "$FLEET_MAIN" "$FLEET_BASE_BRANCH" "${FLEET_DEPLOY_REF:-}" "${FLEET_MODEL:-}" "${FLEET_CTX_WINDOW:-}" ); done
+  fleet_load_conf fleet; printf "nowindow=%s %s %s\n" "$FLEET_REPO" "$FLEET_MAIN" "$FLEET_BASE_BRANCH"'; }
+repos0=$(lib_i 'fleet_repos fleet')
+is "I: old layout lists the conf's repo first" "$(printf '%s\n' "$repos0" | tr '\n' ' ')" "acme/app aaa/first zzz/last "
+uuid0=$(lib_i 'fleet_uuid fleet'); rm -f "$CD/fleets/fleet/identity"   # computed, then un-frozen again
+case "$uuid0" in ????????-????-????-????-????????????) ok ;; *) bad "I: no UUID computed before ($uuid0)" ;; esac
+rv0=$(rview)
+list0=$(run bash "$INS/bin/fleet-repo.sh" list --session fleet 2>&1)
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate --dry-run 2>&1)
+has "I: --dry-run says it would move" "$out" "would move fleet fleet's repo acme/app"
+has "I: --dry-run moves nothing" "$(cat "$CD/fleets/fleet/conf")" 'FLEET_REPO="acme/app"'
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
+is "I: migrate exits 0" "$rc" 0
+has "I: says it moved" "$out" "every repo in repos/ — fleet:acme/app"
+is "I: fleet_repos unchanged, order too" "$(lib_i 'fleet_repos fleet')" "$repos0"
+is "I: fleet_uuid unchanged" "$(lib_i 'fleet_uuid fleet')" "$uuid0"
+[ -f "$CD/fleets/fleet/identity" ] && ok || bad "I: the identity was not frozen by the move"
+is "I: every repo resolves as before (and a caller with no window reads the first)" "$(rview)" "$rv0"
+fc=$(grep -v '^#' "$CD/fleets/fleet/conf")
+is "I: the fleet conf keeps only the fleet's setting" "$fc" 'FLEET_CTX_WINDOW="7"'
+ov=$(grep -v '^#' "$CD/fleets/fleet/repos/acme-app.conf")
+has "I: the overlay took the identity" "$ov" "FLEET_MAIN=\"$H/p/app\""
+has "I: …and the repo-scoped deploy key" "$ov" 'FLEET_DEPLOY_REF="origin/prod"'
+has "I: …and kept its own override" "$ov" 'FLEET_MODEL="sonnet"'
+is "I: repos/.order puts it first, the rest as they were" "$(cat "$CD/fleets/fleet/repos/.order" | tr '\n' ' ')" "acme-app aaa-first zzz-last "
+[ -f "$CD/fleets/fleet/conf.bak" ] && [ -f "$CD/fleets/fleet/repos/acme-app.conf.bak" ] && ok \
+  || bad "I: the conf and the old overlay are kept as .bak"
+list1=$(run bash "$INS/bin/fleet-repo.sh" list --session fleet 2>&1)
+is "I: fleet-repo.sh list names the same repos" "$(printf '%s\n' "$list1" | awk 'NR>1{print $1}')" "$(printf '%s\n' "$list0" | awk 'NR>1{print $1}')"
+has "I: …each from repos/" "$list1" "[repos/acme-app.conf]"
+snap=$(cat "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/acme-app.conf" "$CD/fleets/fleet/repos/.order")
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1)
+hasnt "I: a second migrate moves nothing" "$out" "every repo in repos/"
+is "I: …and changes nothing" "$(cat "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/acme-app.conf" "$CD/fleets/fleet/repos/.order")" "$snap"
+# the original first repo is removed like any other — no promotion, nothing else moves
+out=$(run bash "$INS/bin/fleet-repo.sh" remove --session fleet acme/app 2>&1); rc=$?
+is "I: removing the original first repo exits 0" "$rc" 0
+hasnt "I: …with no promotion" "$out" "promot"
+is "I: …the others stay, in order" "$(lib_i 'fleet_repos fleet' | tr '\n' ' ')" "aaa/first zzz/last "
+is "I: …the fleet conf untouched" "$(grep -v '^#' "$CD/fleets/fleet/conf")" 'FLEET_CTX_WINDOW="7"'
+is "I: …fleet_uuid still unchanged" "$(lib_i 'fleet_uuid fleet')" "$uuid0"
+is "I: …a caller with no window reads the new first" "$(lib_i 'fleet_load_conf fleet; printf %s "$FLEET_REPO|$FLEET_BASE_BRANCH|${FLEET_DEPLOY_REF:-}"')" "aaa/first|master|"
+# a new repo lists last
+printf 'FLEET_REPO="bbb/new"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$H/p/app2" > "$CD/fleets/fleet/repos/bbb-new.conf"
+lib_i 'fleet_repo_order_put fleet bbb/new'
+is "I: a repo recorded later lists after the others" "$(lib_i 'fleet_repos fleet' | tr '\n' ' ')" "aaa/first zzz/last bbb/new "
 
 printf 'fleet-conf-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"
 [ "$FAILS" = 0 ]

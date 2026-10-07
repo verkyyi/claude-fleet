@@ -3,13 +3,14 @@
 # login (its own HOME, FLEET_CONF_DIR, install root and tmux sockets):
 #   1. a login with no fleet: `fleet-up o/a` creates the fleet, named "fleet".
 #   2. `fleet-up o/b` with that fleet up ADDS o/b (repos/ overlay), makes it the
-#      current repo, and opens no second server; the fleet conf keeps o/a.
+#      current repo, and opens no second server; o/a stays first. Every repo is
+#      repos/<slug>.conf (issue #1937) — the fleet conf names none.
 #   3. a second fleet is refused: `fleet-up o/c --name other` exits 1, writes no
 #      conf and starts no server.
 #   4. an existing fleet keeps its name: a down `fleet-cf` comes back up as
 #      fleet-cf on its OWN repo when `fleet-up o/d` names another, then adds o/d.
-#   5. degenerate: a one-fleet, one-repo login re-running `fleet-up o/a` on the
-#      live fleet is a no-op attach — conf byte-identical, no repo filter written.
+#   5. a one-fleet, one-repo login re-running `fleet-up o/a` on the live fleet is
+#      a no-op attach — conf and overlay byte-identical, no repo filter written.
 #   6. settings: the old two-file config (install fleet.conf + fleet conf) loads as
 #      it always has; fleet-settings.sh merge folds it into fleet.settings with
 #      every value unchanged, drops the fleet conf's (never-read) global-only key,
@@ -106,9 +107,10 @@ lib()  { bash -c ". '$SB/fleet-lib.sh'; $1"; }
 # ---- 1. a login with no fleet: the new fleet is called "fleet" ----
 out=$(up o/a "$WORK/src/a"); rc=$?
 eq "1 rc" "$rc" 0
-has "1 up" "$out" "fleet 'fleet' is up (repo=o/a"
+has "1 up" "$out" "fleet 'fleet' is up (1 repo(s): o/a"
 [ -f "$FLEET_CONF_DIR/fleets/fleet/conf" ] || fail "1: no fleets/fleet/conf"
-eq "1 conf repo" "$(val "$FLEET_CONF_DIR/fleets/fleet/conf" FLEET_REPO)" o/a
+eq "1 conf names no repo" "$(val "$FLEET_CONF_DIR/fleets/fleet/conf" FLEET_REPO)" ""
+eq "1 the repo's overlay" "$(val "$(lib 'fleet_repo_conf_file fleet o/a')" FLEET_REPO)" o/a
 eq "1 servers" "$(live)" 1
 leg "1 new login → fleet named 'fleet'"
 
@@ -121,7 +123,7 @@ has "2 added" "$out" "added o/b to fleet 'fleet'"
 hasnt "2 no current-repo pick" "$out" "current repo →"
 [ -e "$FLEET_CONF_DIR/fleets/fleet/current-repo" ] && fail "2: fleet-up left the stale current-repo file (#1034)"
 eq "2 hosts" "$(lib 'fleet_repos fleet' | tr '\n' ' ')" "o/a o/b "
-eq "2 conf keeps its repo" "$(val "$FLEET_CONF_DIR/fleets/fleet/conf" FLEET_REPO)" o/a
+eq "2 conf still names no repo" "$(val "$FLEET_CONF_DIR/fleets/fleet/conf" FLEET_REPO)" ""
 eq "2 overlay main" "$(val "$(lib 'fleet_repo_conf_file fleet o/b')" FLEET_MAIN)" "$WORK/src/b"
 eq "2 servers" "$(live)" 1
 out=$(up o/b "$WORK/src/b"); rc=$?
@@ -144,15 +146,17 @@ leg "3 second fleet refused"
 export FLEET_CONF_DIR="$WORK/conf5"
 out=$(up o/a "$WORK/src/a"); eq "5 first rc" "$?" 0
 c5="$FLEET_CONF_DIR/fleets/fleet/conf"; before=$(cat "$c5")
+o5=$(lib 'fleet_repo_conf_file fleet o/a'); obefore=$(cat "$o5")
 out=$(up o/a "$WORK/src/a"); rc=$?
 eq "5 rc" "$rc" 0
 has "5 already up" "$out" "fleet 'fleet' is already up"
 hasnt "5 no add" "$out" "added"
 eq "5 conf unchanged" "$(cat "$c5")" "$before"
 [ -e "$FLEET_CONF_DIR/fleets/fleet/current-repo" ] && fail "5: a repo filter was written for a one-repo fleet"
-[ -d "$FLEET_CONF_DIR/fleets/fleet/repos" ] && fail "5: a repos/ overlay appeared"
+eq "5 overlay unchanged" "$(cat "$o5")" "$obefore"
+eq "5 one repo" "$(lib 'fleet_repos fleet')" o/a
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
-leg "5 degenerate one-fleet one-repo unchanged"
+leg "5 one-fleet one-repo re-run unchanged"
 
 # ---- 4. an existing fleet keeps its name, even when down ----
 export FLEET_CONF_DIR="$WORK/conf4"
@@ -161,10 +165,11 @@ printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="trunk"\nFLEET_MODE
   "$WORK/src/a" > "$FLEET_CONF_DIR/fleets/fleet-cf/conf"
 out=$(cd "$WORK/src/d" && bash "$UP" </dev/null 2>&1); rc=$?
 eq "4 rc" "$rc" 0
-has "4 own name" "$out" "fleet 'fleet-cf' is up (repo=o/a base=trunk"
+has "4 own name" "$out" "fleet 'fleet-cf' is up (2 repo(s): o/a o/d"
+has "4 its repo moved into repos/ first" "$out" "moved o/a"
 has "4 added" "$out" "added o/d to fleet 'fleet-cf'"
 [ -S "$SOCKD/fleet-cf" ] || fail "4: fleet-cf's server is not up"
-eq "4 conf keeps repo" "$(val "$FLEET_CONF_DIR/fleets/fleet-cf/conf" FLEET_REPO)" o/a
+eq "4 its repo kept, first" "$(lib 'fleet_repos fleet-cf' | head -1)" o/a
 eq "4 conf keeps its keys" "$(val "$FLEET_CONF_DIR/fleets/fleet-cf/conf" FLEET_MODEL)" opus
 [ -d "$FLEET_CONF_DIR/fleets/fleet" ] && fail "4: a fleet named 'fleet' was created"
 out=$(cd "$WORK/tmp" && bash "$UP" </dev/null 2>&1); rc=$?
@@ -173,8 +178,8 @@ has "4 outside a checkout" "$out" "fleet 'fleet-cf' is already up"
 "$REAL_TMUX" -S "$SOCKD/fleet-cf" kill-server 2>/dev/null
 out=$(cd "$WORK/tmp" && bash "$UP" </dev/null 2>&1); rc=$?
 eq "4 down, outside a checkout rc" "$rc" 0
-has "4 down, outside a checkout" "$out" "fleet 'fleet-cf' is up (repo=o/a base=trunk"
-eq "4 base kept" "$(val "$FLEET_CONF_DIR/fleets/fleet-cf/conf" FLEET_BASE_BRANCH)" trunk
+has "4 down, outside a checkout" "$out" "fleet 'fleet-cf' is up (2 repo(s): o/a o/d"
+eq "4 base kept" "$(lib 'fleet_repo_conf_get fleet-cf o/a FLEET_BASE_BRANCH')" trunk
 leg "4 existing fleet keeps its name"
 
 # ---- 6. one settings file per login ----
@@ -267,7 +272,7 @@ rm -f "$marker"; rm -rf "$FLEET_CONF_DIR/fleets"
 out3=$(FLEET_ONBOARD=0 up o/g "$g" | nohms)
 eq "7 off: no guide" "$(wins '#{window_name}' | grep -cx guide)" 0
 [ -e "$marker" ] && fail "7: FLEET_ONBOARD=0 wrote the marker"
-has "7 off: up" "$out3" "fleet 'fleet' is up (repo=o/g"
+has "7 off: up" "$out3" "fleet 'fleet' is up (1 repo(s): o/g"
 eq "7 second == off, byte for byte" "$out2" "$out3"
 hasnt "7 off: silent" "$out3" "guide"
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
