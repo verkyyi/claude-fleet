@@ -315,6 +315,12 @@ def list_only(pane):
     return (not any(l == '›' or l.startswith('› ') or l.startswith('改名›') for l in lines)
             and '快捷键' not in text and '在问你' not in text)
 
+def refreshing(pane):
+    """The 「刷新中…」 top row is up (issue #1536): a stalled producer's frame is
+    past STALE_SECS. A tap during a stall waits for it, so the row it aims at
+    does not move down under the press."""
+    return tm('capture-pane', '-p', '-t', pane).splitlines()[:1] == ['刷新中…']
+
 def row_y(pane, text):
     """The painted row of the list that shows `text` — a 「刷新中…」 top row
     (issue #1536) moves every row down one."""
@@ -613,7 +619,8 @@ try:
     tm('set-hook', '-g', 'session-window-changed[73]', "set-option -gaF @switches '#{window_id} '")
     switches = lambda: tm('show-options', '-gv', '@switches').split()
     started = time.monotonic()
-    click(side, row_y(side, "修复侧栏"))
+    time.sleep(.6)
+    click(side, row_y(side, "修复侧栏"), repeat=True)
     wait_for(lambda: bool(view_on(w2)), 'a tap did not move to the second worker')
     # Informational (issue #1033): the tap → switched latency on this box.
     print('sidebar timing: tap → view on the next worker in %.2fs' % (time.monotonic() - started))
@@ -682,8 +689,9 @@ try:
     stall.write_text('')
     os.replace(staged, rows_bin)
     time.sleep(1.5)  # the view's next refresh is now stuck in the producer
+    wait_for(lambda: refreshing(side), 'a stalled producer never showed 「刷新中…」')
+    time.sleep(.6)   # past the double-click window, THEN read where the row is
     y = row_y(side, '修复侧栏')
-    time.sleep(.6)
     started = time.monotonic()
     click(side, y, repeat=True)
     wait_for(lambda: bool(view_on(w2)), 'a stalled producer blocked the tap')
@@ -698,7 +706,9 @@ try:
     rows_bin.unlink()
     rows_bin.symlink_to(real_bin / 'tmux-dashboard-rows.sh')
     (bin_dir / 'tmux-dashboard-rows-real.sh').unlink()
-    click(side, row_y(side, 'worker-one'))
+    wait_for(lambda: not refreshing(side), 'the list did not recover its frame')
+    time.sleep(.6)
+    click(side, row_y(side, 'worker-one'), repeat=True)
     wait_for(lambda: bool(view_on(w1)), 'a tap did not go back after the stalled-producer leg')
 
     # A fold AT ONCE (issue #1530; a tap on the caret since #1950 took ←/→):
@@ -716,15 +726,17 @@ try:
     os.replace(staged, rows_bin)
     time.sleep(1.5)  # the view's next refresh is now stuck in the producer
     caret = sidebar.width_of(sidebar.row_left(' ', '·', '▾', '')) - 2
+    wait_for(lambda: refreshing(side), 'a stalled producer never showed 「刷新中…」')
+    time.sleep(.6)   # past the double-click window, THEN read where the row is
     y = row_y(side, 'worker-one')
-    time.sleep(.6)
     started = time.monotonic()
     click(side, y, column=caret, repeat=True)
     wait_for(lambda: not kid_shown(), 'a tap on ▾ did not fold the child away before a producer frame')
     folded = time.monotonic() - started
     wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '', 'the fold tap did not write the fold bit')
-    y = row_y(side, 'worker-one')   # a 「刷新中…」 row may have come up meanwhile
-    time.sleep(.6)
+    check(refreshing(side), 'the stall ended before the unfold tap')
+    time.sleep(.6)   # past the double-click window, THEN read where the row is
+    y = row_y(side, 'worker-one')
     started = time.monotonic()
     click(side, y, column=caret, repeat=True)
     wait_for(kid_shown, 'a tap on ▸ did not draw the child row before a producer frame')
@@ -746,8 +758,8 @@ try:
     held = open(str(conf) + '.sidebar.lock', 'w')
     fcntl.flock(held, fcntl.LOCK_EX)
     try:
+        time.sleep(.6)   # past the double-click window, THEN read where the row is
         y = row_y(side, '修复侧栏')
-        time.sleep(.6)
         started = time.monotonic()
         click(side, y, repeat=True)
         wait_for(lambda: any(l.startswith('›') and '修复侧栏' in l
@@ -762,7 +774,9 @@ try:
         held.close()
     wait_for(lambda: bool(view_on(w2)), 'the switch did not land after the lock freed')
     print('sidebar timing: highlight %.2fs under a 2s-held lock' % highlighted)
-    click(side, row_y(side, 'worker-one'))
+    wait_for(lambda: not refreshing(side), 'the list did not recover its frame')
+    time.sleep(.6)
+    click(side, row_y(side, 'worker-one'), repeat=True)
     wait_for(lambda: bool(view_on(w1)), 'a tap did not go back after the lock leg')
 
     # The popup pause ends WITH the popup (issue #1536), not 30s later: a window
