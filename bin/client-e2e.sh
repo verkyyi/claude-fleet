@@ -244,8 +244,14 @@ chmod +x "$SHIM/ssh"
 # A unix socket path must fit in 104 bytes: the client's cache (its control
 # sockets) goes under a short dir, not the work dir.
 SC=$(mktemp -d /tmp/cfe2e-c.XXXXXX) || die 'no short cache dir'
+# The agent reports this computer's own hostname as the node's: the client must
+# not take itself for that machine (with no fleet of this login here it would
+# show the home page instead of connecting — issue #2219). Its own dir, not
+# $SHIM: an `ssh` on the PATH would answer fleet-connect's `ssh -G` too.
+HSHIM="$WORK/hshim"; mkdir -p "$HSHIM"
+printf '#!/bin/sh\necho client-laptop\n' > "$HSHIM/hostname"; chmod +x "$HSHIM/hostname"
 cenv() {
-  env -i PATH="$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
+  env -i PATH="$HSHIM:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
     FLEET_SHELL_SESSION="$SESS" FLEET_SHELL_CACHE="$SC" FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_WARM=0 \
     FLEET_HUB_TOKEN="$VT" CCQUOTA_VIEWER_TOKEN="$VT" FLEET_REMOTE_SSH_CMD="$SHIM/ssh" \
     FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_LOOP_SECS=8 "$@"
