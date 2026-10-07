@@ -223,11 +223,26 @@ win_gone wk4 || fail "worker window wk4 should be gone after a FLEET_HUB=1 kill 
 if guard "$PANE_W1" send-keys -t "$PANE_W1" -l x 2>/dev/null; then
   fail "send-keys must be REFUSED by the shell guard (#437)"
 fi
-# refused on an ISOLATED socket too — send-keys has no cross-fleet blast radius, so
-# the isolated-server exemption the kill-* rails use does NOT apply to it.
-if guard "$PANE_W1" -L "sk-iso-$$" send-keys -t "$PANE_W1" -l x 2>/dev/null; then
-  fail "send-keys on an isolated -L socket must STILL be REFUSED (#437)"
-fi
+# An ISOLATED test server is not a pane and is not guarded (issue #1919): a -L
+# label owning no fleet conf and a -S path pass; a -L that IS a fleet's label, or
+# a -S to that label's socket in this user's tmux dir, stays refused — the same
+# rule as bin/tmux-shim/tmux and bash-guard.py's _sendkeys_targets_fleet.
+SKCONF="$WORK/conf"; mkdir -p "$SKCONF/fleets/skfleet$$" "$WORK/tmux-$(id -u)"
+: > "$SKCONF/fleets/skfleet$$/conf"
+: > "$SKCONF/sklegacy$$.conf"
+for iso_args in "-L sk-iso-$$" "-Lsk-iso-$$" "-S $WORK/sk-iso.sock" "-S$WORK/sk-iso.sock"; do
+  # shellcheck disable=SC2086  # word-split on purpose: a global option + its value
+  skiso="$(FLEET_CONF_DIR="$SKCONF" guard "$PANE_W1" $iso_args send-keys -t "$PANE_W1" -l x 2>&1 1>/dev/null || true)"
+  case "$skiso" in
+    *refusing*) fail "send-keys on an isolated socket ($iso_args) must NOT be refused (#1919; got: $skiso)" ;;
+  esac
+done
+for fl_args in "-L skfleet$$" "-Lsklegacy$$" "-S $WORK/tmux-$(id -u)/skfleet$$"; do
+  # shellcheck disable=SC2086
+  if FLEET_CONF_DIR="$SKCONF" guard "$PANE_W1" $fl_args send-keys -t "$PANE_W1" -l x 2>/dev/null; then
+    fail "send-keys on a FLEET's socket ($fl_args) must STILL be REFUSED (#437/#1919)"
+  fi
+done
 # the refusal names the FLEET_ALLOW_SENDKEYS escape hatch (one-line explanation)
 skmsg="$(guard "$PANE_W1" send-keys -t "$PANE_W1" -l x 2>&1 1>/dev/null || true)"
 case "$skmsg" in
