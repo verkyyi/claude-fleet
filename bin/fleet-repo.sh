@@ -47,7 +47,7 @@ usage() { sed -n '4,8p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
 SESS=""; REPO=""; DIR=""; BASE=""; FORCE=0; KEY=""; WIN=""; WT=""; TSV=0
-INTO=""; DRY=0; WAIT=0; PROMOTE=""
+INTO=""; DRY=0; WAIT=0
 if [ "$cmd" = get ]; then KEY="${1:-}"; [ -n "$KEY" ] || usage; shift; fi
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -58,7 +58,7 @@ while [ $# -gt 0 ]; do
     --tsv)     TSV=1; shift ;;
     --force)   FORCE=1; shift ;;
     --into)    [ $# -ge 2 ] || usage; INTO="$2"; shift 2 ;;
-    --promote) [ $# -ge 2 ] || usage; PROMOTE="$2"; shift 2 ;;
+    --promote) [ $# -ge 2 ] || usage; shift 2 ;;   # retired with the seed promotion (#1937): ignored
     --dry-run) DRY=1; shift ;;
     --wait)    WAIT=1; shift ;;
     -h|--help) usage ;;

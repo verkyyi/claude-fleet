@@ -181,8 +181,9 @@ add_repo() {
   [ -n "$ADD_REPO" ] || return 0
   # fleet_repo_register (issue #1104): its token on stdout is for scripts — here
   # the human lines on stderr already say what happened.
+  local seedarg=''; [ "$SEED" = 1 ] && seedarg=--seed
   fleet_repo_register "$NAME" "$ADD_REPO" ${ADD_DIR:+"$ADD_DIR"} ${ADD_BASE:+--base "$ADD_BASE"} \
-      $( [ "$SEED" = 1 ] && printf -- --seed ) >/dev/null \
+      ${seedarg:+"$seedarg"} >/dev/null \
     || die "could not add $ADD_REPO to fleet '$NAME'"
   echo "fleet-up: added $ADD_REPO to fleet '$NAME'"
   ADD_REPO=""
