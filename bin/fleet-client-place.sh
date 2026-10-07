@@ -10,6 +10,10 @@
 # yet — --title (required) and --body-file are its title and body; the machine
 # that takes it files it (fleet-issue-file.sh) and opens its worker.
 #
+# <repo> `-` (issue #1956, the writing area's 「不关联仓库」): a scratch of no repo
+# — opened in $HOME, `@norepo 1`, on any of this person's machines; only a
+# scratch. A scratch's --body-file is its seed: the session starts working on it.
+#
 # <issue> is a number (or issue-<N>); restore:<key> resumes a /fleet-history row
 # (issue-<N> / scratch-<N>, a multi-repo fleet's <slug>: prefix allowed). A
 # computer that runs only the `fleet` client has no fleet to open anything in:
@@ -65,7 +69,7 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
-case "$REPO" in */*) ;; *) printf 'fleet-client-place: repo must be owner/name\n' >&2; exit 2 ;; esac
+case "$REPO" in */*|-) ;; *) printf 'fleet-client-place: repo must be owner/name (or - for none)\n' >&2; exit 2 ;; esac
 [ -n "$NODE" ] || NODE=auto
 case "$AGENT" in ''|claude|codex) ;; *) printf 'fleet-client-place: --agent is claude or codex\n' >&2; exit 2 ;; esac
 if [ -n "$REAP" ]; then
@@ -83,8 +87,10 @@ case "$ISSUE" in *[!0-9]*) KIND='' ;; esac
 [ -n "$KIND" ] || { printf 'fleet-client-place: %s is not an issue number, scratch, restore:<key> or new\n' "$WHAT" >&2; exit 2; }
 if [ "$KIND" = new ]; then
   [ -n "$TITLE" ] || { printf 'fleet-client-place: new needs --title\n' >&2; exit 2; }
-  [ -z "$BODYF" ] || [ -r "$BODYF" ] || { printf 'fleet-client-place: cannot read %s\n' "$BODYF" >&2; exit 2; }
 fi
+[ "$REPO" != - ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: only a scratch belongs to no repo (-)\n' >&2; exit 2; }
+[ -z "$BODYF" ] || [ "$KIND" = new ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: --body-file is for new or scratch\n' >&2; exit 2; }
+[ -z "$BODYF" ] || [ -r "$BODYF" ] || { printf 'fleet-client-place: cannot read %s\n' "$BODYF" >&2; exit 2; }
 
 # --- the hub ----------------------------------------------------------------------
 # rc 10 = not applicable here (no hub URL, or no lease / key to sign with).
@@ -149,7 +155,11 @@ def rnd():
     return max(0, min(20, int(deadline - time.time())))
 
 
-req = {"action": "place", "repo": repo, "kind": kind, "node": node, "idempotency_key": idem, "wait": rnd()}
+req = {"action": "place", "kind": kind, "node": node, "idempotency_key": idem, "wait": rnd()}
+if repo == "-":
+    req["no_repo"] = True   # issue #1956: a scratch of no repo
+else:
+    req["repo"] = repo
 if issue:
     req["issue"] = int(issue)
 for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap), ("body", body)):
@@ -200,7 +210,8 @@ fi
 ef=$(mktemp "${TMPDIR:-/tmp}/fcp-err.XXXXXX" 2>/dev/null) || ef=/dev/null
 case "$KIND" in
   issue)   out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" "$ISSUE" "$AGENT" "$REPO" '' '' ${REAP:+'' "$REAP"} 2>"$ef"); src=$? ;;
-  scratch) out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" scratch "$AGENT" "$REPO" '' '' "${NAME:-$TITLE}" ${REAP:+"$REAP"} 2>"$ef"); src=$? ;;
+  scratch) out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" scratch "$AGENT" "$REPO" '' '' "${NAME:-$TITLE}" ${REAP:+"$REAP"} \
+                   < "${BODYF:-/dev/null}" 2>"$ef"); src=$? ;;
   restore) out=$(bash "$BIN/fleet-control-read.sh" resume "$SESS" "$KEY" 2>"$ef"); src=$? ;;
   new)     out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" new "$AGENT" "$REPO" '' '' "$TITLE" ${REAP:+"$REAP"} \
                    < "${BODYF:-/dev/null}" 2>"$ef"); src=$? ;;

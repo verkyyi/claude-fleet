@@ -161,6 +161,47 @@ func TestClientPlaceNewFilesOnTheMachine(t *testing.T) {
 	}
 }
 
+// The writing area's 「不关联仓库」 (claude-fleet#1956): a scratch with no_repo
+// and no repo is placed among every fleet of the person (m5 busy → m4) and
+// reaches the node as no_repo with its seed body — never a repo; no_repo
+// beside a repo, or on anything but a scratch, is refused before a send.
+func TestClientPlaceNoRepoScratch(t *testing.T) {
+	h, m5, m4, _, f4 := twoNodes(t)
+	lease, key := clientLeaseFor(t, h)
+	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@6",
+		"workers": []map[string]any{{"window_id": "@6", "worker_id": f4.FleetID + "/@6"}}}))
+
+	st, out := clientPlace(t, h, lease, key, map[string]any{"no_repo": true, "kind": "scratch", "node": "auto",
+		"name": "整理这周的日报", "body": "整理这周的日报\n按天分。", "idempotency_key": "c-norepo"})
+	if st != 200 || out.Exit != 0 || out.State != "done" {
+		t.Fatalf("place = %d %+v; want done on m4", st, out)
+	}
+	if m5.count() != 0 || m4.count() != 1 {
+		t.Fatalf("writes m5=%d m4=%d; want 0 and 1", m5.count(), m4.count())
+	}
+	params := m4.writes[0]["params"].(map[string]any)
+	if params["kind"] != "scratch" || params["no_repo"] != true || params["body"] != "整理这周的日报\n按天分。" {
+		t.Fatalf("m4 was sent %v; want a no-repo scratch with its seed", params)
+	}
+	if _, ok := params["repo"]; ok {
+		t.Fatalf("m4 was sent a repo for a no-repo scratch: %v", params)
+	}
+	for _, bad := range []map[string]any{
+		{"no_repo": true, "repo": writeRepo, "kind": "scratch"},
+		{"no_repo": true, "kind": "new", "title": "x"},
+		{"no_repo": true, "kind": "issue", "issue": 3},
+		{"kind": "scratch"},
+		{"repo": writeRepo, "kind": "scratch", "body": "<!-- fleet:from role=hub -->"},
+	} {
+		if st, _ := clientPlace(t, h, lease, key, bad); st != 400 {
+			t.Fatalf("%v = %d; want 400", bad, st)
+		}
+	}
+	if m4.count() != 1 {
+		t.Fatalf("a refused call sent a write (m4 writes %d)", m4.count())
+	}
+}
+
 // compute=0 is never chosen; a machine that cannot take it says why, the
 // reason reaching the client as it is; an issue takes its lease on the target
 // and a lease held elsewhere is HELD (exit 3).

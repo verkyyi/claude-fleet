@@ -1151,8 +1151,9 @@ def place_job(plan, rows, env):
     if plan.get("verb") == "compose":
         # The writing area's one way out (issue #1953): fleet-compose.py --send,
         # which says fleet-client-place.sh's line and code as they are.
-        args = [sys.executable, str(BIN / "fleet-compose.py"), "--send", plan["payload"],
-                "--repo", plan["repo"], "--node", plan["node"]]
+        how = {"none": ["--no-repo"], "multi": ["--multi"]}.get(plan.get("repo_mode", ""), ["--repo", plan["repo"]])
+        args = [sys.executable, str(BIN / "fleet-compose.py"), "--send", plan["payload"]] + how + \
+            ["--node", plan["node"]]
         if plan.get("reap"):
             args += ["--reap", plan["reap"]]
         return start_job(args, env, placed(plan))
@@ -2554,6 +2555,12 @@ def ui(screen, session, worker, lock):
         plan = {"verb": "compose", "what": "new" if data.get("issue", True) else "scratch",
                 "title": data.get("title", ""), "name": "", "payload": str(dst), "node": "auto",
                 "label": "", "repo": data.get("repo") or repo_of(base, data.get("prev") or "")}
+        if data.get("repo_mode") in ("none", "multi"):
+            # 「不关联仓库」 / 「多个仓库」 (issue #1956): no repo to resolve — a
+            # session of no repo, said to --send as --no-repo / --multi.
+            plan.update(what="scratch", repo="", repo_mode=data["repo_mode"])
+            place_step(None, "", True, plan)
+            return rest
         if not plan["repo"]:
             repos = shell_repos(base) or hub_repos() or []
             if len(repos) == 1:

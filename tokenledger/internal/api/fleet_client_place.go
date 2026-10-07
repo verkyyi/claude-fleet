@@ -34,6 +34,9 @@ import (
 // status. place names repo, kind issue | scratch | restore (issue N /
 // key <fleet-history row key> / an optional name), node auto | a machine,
 // title, agent, idempotency_key, wait (seconds, at most clientPlaceWaitMax).
+// A scratch may carry a body (its seed) and no_repo instead of a repo — a
+// session of no repo, opened in $HOME on any of the person's fleets
+// (claude-fleet#1956, the writing area's 「不关联仓库」).
 // status names the operation_id a place answered and waits on it again — the
 // client polls this way, so no one request outlives a proxy's patience.
 //
@@ -71,7 +74,8 @@ type clientPlaceRequest struct {
 	Name        string `json:"name"`
 	Node        string `json:"node"`
 	Title       string `json:"title"`
-	Body        string `json:"body"` // kind=new: the issue's body (claude-fleet#1953)
+	Body        string `json:"body"` // kind=new: the issue's body (claude-fleet#1953); kind=scratch: its seed (#1956)
+	NoRepo      bool   `json:"no_repo"`
 	Agent       string `json:"agent"`
 	Reap        string `json:"reap"`
 	Idem        string `json:"idempotency_key"`
@@ -200,7 +204,14 @@ func refusedAnswer(err error, pl *Placement) ClientPlaceResponse {
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrincipal, lease string, req clientPlaceRequest, wait time.Duration, now time.Time) {
-	if !leaseRepoRE.MatchString(req.Repo) {
+	if req.NoRepo {
+		// The writing area's 「不关联仓库」 (claude-fleet#1956): a scratch only,
+		// and it names no repo — any of this person's fleets may open it.
+		if req.Kind != "scratch" || req.Repo != "" {
+			httpError(w, http.StatusBadRequest, "no_repo is a scratch that names no repo")
+			return
+		}
+	} else if !leaseRepoRE.MatchString(req.Repo) {
 		httpError(w, http.StatusBadRequest, "repo must be owner/name")
 		return
 	}
@@ -227,7 +238,12 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	if idem == "" {
 		idem = "client-" + lease[:min(8, len(lease))] + "-" + strconv.FormatInt(now.UnixNano(), 36)
 	}
-	args := map[string]any{"repo": req.Repo, "node": node, "idempotency_key": idem}
+	args := map[string]any{"node": node, "idempotency_key": idem}
+	if req.NoRepo {
+		args["no_repo"] = true
+	} else {
+		args["repo"] = req.Repo
+	}
 	if req.Agent != "" {
 		args["agent"] = req.Agent
 	}
@@ -268,6 +284,15 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		args["kind"] = "scratch"
 		if n != "" {
 			args["name"] = n
+		}
+		if req.Body != "" {
+			// The writing area's text (claude-fleet#1956): the scratch
+			// starts working on it.
+			if _, err := checkText(req.Body, "body"); err != nil {
+				httpError(w, http.StatusBadRequest, errorObject(err)["message"])
+				return
+			}
+			args["body"] = req.Body
 		}
 		what = "scratch"
 	case "new":
