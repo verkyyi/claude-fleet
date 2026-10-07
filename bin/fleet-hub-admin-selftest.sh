@@ -72,10 +72,13 @@ s.serve_forever()
 PY
 HUBPID=$!
 trap 'kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null; rm -rf "$WORK"' EXIT
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-  [ -s "$PORTF" ] && break
-  python3 -c 'import time; time.sleep(0.1)'
-done
+# up to 15s: a busy CI runner can take seconds to start python3
+python3 - "$PORTF" <<'PY'
+import os, sys, time
+end = time.time() + 15
+while time.time() < end and not (os.path.exists(sys.argv[1]) and os.path.getsize(sys.argv[1]) > 0):
+    time.sleep(0.05)
+PY
 [ -s "$PORTF" ] || { echo "FAIL the fake hub did not start"; exit 1; }
 HUB="http://127.0.0.1:$(cat "$PORTF")"
 
