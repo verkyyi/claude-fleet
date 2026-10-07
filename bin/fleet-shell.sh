@@ -855,25 +855,44 @@ warm)
 # ---------------------------------------------------------------------------------
 wait)
   s="${2:-$SESS}"
-  if [ -n "${3:-}" ]; then
-    # the home page (issue #2219): the pick was THIS computer and this login has
-    # no fleet here — a client that only looks and hands out work. Not a failed
-    # connection: how to start, instead.
-    printf '\n  这台电脑（%s）上没有你的 fleet 会话——这个客户端只看、只派，正常。\n  开第一个会话：⌘N 新任务，写下要做的事，入口交给有空的机器去做。\n  左边是你在各台机器上的会话：点一行就进去。\n  prefix d 离开；再敲 fleet 回来。\n' "$3"
-  else
-    printf '\n  入口没有在线的机器，或者连不上入口。\n  左边是入口给的列表（缓存也算）：点一行就进那台机器；底下一栏说入口通不通。\n  prefix d 离开；再敲 fleet 回来。\n'
-  fi
-  # its own server's windows: the stage's (issue #1759), or — a shell started
-  # before it — the shell's own. The stage comes up BEFORE the shell's server
-  # (issue #2219): a shell not there yet is not a shell gone — up to 10 s of
-  # grace, else this page closed at once and the viewer's restart showed another.
-  seen='' n=0
-  while [ "$(tmux list-windows -F x 2>/dev/null | grep -c x)" -le 1 ]; do
+  # What it says follows the hub's word on the person's login (issue #2220):
+  # the `#account` line fleet-hub-sessions.sh writes into hub_repos — a login
+  # being opened for a newcomer (#2069) is 「正在为你开机器」, a failed or
+  # missing one names who to ask. No line (a login they hold, no hub, an older
+  # hub): the note as before. Read again every second, redrawn on a change.
+  hr="${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}/hub_repos"
+  said='' seen='' n=0
+  while :; do
+    st='' eta='' mach='' ask=''
+    acct=$(awk -F $'\037' '$1 == "#account" { print $2 FS $3 FS $4 FS $5; exit }' "$hr" 2>/dev/null)
+    [ -n "$acct" ] && IFS=$'\037' read -r st eta mach ask <<EOF
+$acct
+EOF
+    case "$st" in
+      opening) note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_opening_fmt "${mach:-…}" "${eta:-60}") ;;
+      failed)  note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_failed_fmt "${ask:-?}") ;;
+      none)    note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_none_fmt "${ask:-?}") ;;
+      # the home page (issue #2219): the pick was THIS computer and this login
+      # has no fleet here — a client that only looks and hands out work, not a
+      # failed connection: how to start, instead
+      *)       if [ -n "${3:-}" ]; then note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_home_fmt "$3")
+               else note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_nohost); fi ;;
+    esac
+    note="$note
+  $(sh "$BIN/fleet-ui-lang.sh" t shell_wait_leave)"
+    if [ "$note" != "$said" ]; then
+      printf '\033[H\033[2J\n  %s\n' "$note"
+      said=$note
+    fi
+    # its own server's windows: the stage's (issue #1759), or — a shell started
+    # before it — the shell's own. The stage comes up BEFORE the shell's server
+    # (issue #2219): a shell not there yet is not a shell gone — up to 10 s of
+    # grace, else this page closed at once and the viewer's restart showed another
+    [ "$(tmux list-windows -F x 2>/dev/null | grep -c x)" -le 1 ] || exit 0
     if tmux -L "$s" has-session -t "=$s" 2>/dev/null; then seen=1
     elif [ -n "$seen" ] || [ "$n" -ge 10 ]; then exit 0; fi
     n=$((n + 1)); sleep 1
   done
-  exit 0
   ;;
 # ---------------------------------------------------------------------------------
 # The writing area (issue #1953, EPIC #1949 C4): ONE stage window, told by its
@@ -1177,6 +1196,9 @@ client_open
 ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
 ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
 ( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
+# 登录即登记 (issue #2212): a logged-in computer with no node token yet takes
+# its node pass by the device key, in the background — no scan, no output
+[ -f "$BIN/fleet-node.sh" ] && ( nohup bash "$BIN/fleet-node.sh" ensure </dev/null >/dev/null 2>&1 & )
 client_where
 [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
 attach_client

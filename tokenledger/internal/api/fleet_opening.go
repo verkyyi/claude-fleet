@@ -65,6 +65,9 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 	var opening, failed *store.FleetAccount
 	for i := range accts {
 		a := &accts[i]
+		if !a.Managed() {
+			continue // a computer the person logged in on, not a machine opened for them (#2212)
+		}
 		switch a.State {
 		case store.AccountActive:
 			return nil

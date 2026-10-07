@@ -103,6 +103,10 @@ func (s *Store) ensureFleetSpot() error {
 	for _, c := range []struct{ table, column, spec string }{
 		{"fleet_join_codes", "kind", "TEXT NOT NULL DEFAULT 'fixed'"},
 		{"endpoints", "node_kind", "TEXT NOT NULL DEFAULT 'fixed'"},
+		// The device a login-registered node belongs to (claude-fleet#2212):
+		// the fingerprint of the `fleet login` key that asked, so the same
+		// device is never enrolled twice. '' for every other code.
+		{"fleet_join_codes", "device_fp", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.addColumn(c.table, c.column, c.spec); err != nil {
 			return err

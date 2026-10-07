@@ -11,6 +11,8 @@
 # subscription credential in the session:
 #
 #   1. `fleet-cred-proxy.sh ensure` — the local proxy, on 127.0.0.1
+#   1b. no node token yet on a logged-in computer: `fleet-node.sh ensure` takes
+#      it by the device key (登录即登记, issue #2212) — no scan
 #   2. a worker assertion for this session, signed with this computer's node
 #      token hash (node.env, read inside python, never exported — #1491) and
 #      naming the computer's client fleet (uuid5(NAMESPACE_URL,
@@ -43,6 +45,11 @@ esac
 bash "$BIN/fleet-session-cred.sh" on \
   || die 'FLEET_CRED_PROXY is off — put FLEET_CRED_PROXY=1 in fleet.conf [common] (or the environment) first' 3
 exe=$(command -v "$agent") || die "$agent is not on PATH"
+# 登录即登记 / 登录即认人 (issue #2212): a computer logged in before it has no
+# node.env yet — take its node pass now, by the device key, no scan; one that is
+# a node already shows the hub its token once (node-login.ok), so its login is
+# known as this person's. No hub / not logged in leaves the refusal below as it was.
+FLEET_CONF_DIR="$CONF" bash "$BIN/fleet-node.sh" ensure >/dev/null 2>&1
 
 # The assertion: this session, in this computer's client fleet. Five minutes is
 # enough — the hub reads it once, at the pass's issue.
@@ -61,7 +68,7 @@ except OSError:
     pass
 tok = ne.get("CCQUOTA_TOKEN", "")
 if not tok:
-    sys.exit("fleet run: this computer has no node token (node.env) — run `fleet node join` first")
+    sys.exit("fleet run: this computer has no node token (node.env) — run `fleet login` (or `fleet node join`) first")
 h = hashlib.sha256(tok.encode()).hexdigest()
 fleet = str(uuid.uuid5(uuid.NAMESPACE_URL, "fleet-client:" + h))
 fid = str(uuid.uuid4())

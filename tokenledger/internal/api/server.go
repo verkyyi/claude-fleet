@@ -445,6 +445,9 @@ func (s *Server) routes() *routeMux {
 		// live certificate. The device list and revocation are a person's
 		// own (or the operator's), behind the gate.
 		mux.HandleFunc(control.RenewPath, s.handleDeviceRenew)
+		// 登录即登记 (claude-fleet#2212): the same device signature buys the
+		// device's node pass — untrusted, coordinate-only — with no second scan.
+		mux.HandleFunc(control.LoginNodePath, s.handleLoginNode)
 		mux.Handle("/v1/fleet/devices", s.viewerOnly(http.HandlerFunc(s.handleFleetDevices)))
 		mux.Handle("/v1/fleet/devices/revoke", s.viewerOnly(http.HandlerFunc(s.handleFleetDeviceRevoke)))
 		// Which machine to enter (claude-fleet#1470): admits a certificate by a

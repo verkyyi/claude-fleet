@@ -140,3 +140,53 @@ func (s *Store) JoinCodes(limit int) ([]JoinCode, error) {
 	}
 	return out, rows.Err()
 }
+
+// CreateJoinCodeForDevice stores a fixed-kind code the hub mints for a
+// login-registered node (claude-fleet#2212), tagged with the device key that
+// asked — the dedup key DeviceNodeEndpoint reads.
+func (s *Store) CreateJoinCodeForDevice(codeHash, deviceFP string, now time.Time, ttl time.Duration) error {
+	_, err := s.write.Exec(`INSERT INTO fleet_join_codes (code_hash, label, kind, created_at, expires_at, device_fp)
+		VALUES (?, '', ?, ?, ?, ?)`, codeHash, NodeKindFixed, fmtTime(now), fmtTime(now.Add(ttl)), deviceFP)
+	return err
+}
+
+// DeviceNodeEndpoint is the live (not retired) endpoint a device's login
+// registered, newest first; ErrNoSuchEndpoint when it has none — never
+// registered, or retired since (`fleet node leave`, the /nodes card).
+func (s *Store) DeviceNodeEndpoint(deviceFP string) (string, error) {
+	var id string
+	err := s.read.QueryRow(`SELECT c.endpoint_id FROM fleet_join_codes c
+		JOIN endpoints e ON e.endpoint_id = c.endpoint_id
+		WHERE c.device_fp = ? AND c.used_at IS NOT NULL AND e.retired_at IS NULL
+		ORDER BY c.used_at DESC LIMIT 1`, deviceFP).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && id == "") {
+		return "", ErrNoSuchEndpoint
+	}
+	return id, err
+}
+
+// RotateEndpointToken gives a live endpoint a new enrollment token: the old
+// one stops resolving at once (EndpointByTokenHash reads token_hash).
+// ErrNoSuchEndpoint when the endpoint is unknown or retired.
+func (s *Store) RotateEndpointToken(endpointID, tokenHash string) error {
+	res, err := s.write.Exec(`UPDATE endpoints SET token_hash = ? WHERE endpoint_id = ? AND retired_at IS NULL`,
+		tokenHash, endpointID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNoSuchEndpoint
+	}
+	return nil
+}
+
+// LinkDeviceEndpoint ties a device to a node it already is (claude-fleet#2212):
+// a node joined before 登录即登记 (by a scan or a code) presents its own token
+// once, and from then on DeviceNodeEndpoint finds it — a used code row, the
+// same audit trail every enrollment leaves.
+func (s *Store) LinkDeviceEndpoint(codeHash, deviceFP, endpointID string, now time.Time) error {
+	ts := fmtTime(now)
+	_, err := s.write.Exec(`INSERT INTO fleet_join_codes (code_hash, label, kind, created_at, expires_at, used_at, endpoint_id, device_fp)
+		VALUES (?, '', ?, ?, ?, ?, ?, ?)`, codeHash, NodeKindFixed, ts, ts, ts, endpointID, deviceFP)
+	return err
+}

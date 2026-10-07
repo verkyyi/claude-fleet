@@ -50,6 +50,10 @@ const (
 	DeviceRenewRefused = "renew_refused" // the detail says why
 	DeviceRevoke       = "revoke"
 	DeviceHome         = "home" // the hub picked a machine for this device
+	// A login-registered node pass (claude-fleet#2212): issued (detail says
+	// enrolled or reissued), or refused (detail says why).
+	DeviceNodePass        = "node_pass"
+	DeviceNodePassRefused = "node_pass_refused"
 )
 
 // ErrNoDevice: no device with that fingerprint.

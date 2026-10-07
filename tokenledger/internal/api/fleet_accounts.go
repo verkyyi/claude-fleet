@@ -739,7 +739,7 @@ func (s *Server) loginHeldElsewhere(principal, login, hostname string) bool {
 		return false
 	}
 	for _, a := range as {
-		if a.State == store.AccountActive && a.Login == login && !strings.EqualFold(a.Hostname, hostname) {
+		if a.State == store.AccountActive && a.Managed() && a.Login == login && !strings.EqualFold(a.Hostname, hostname) {
 			return true
 		}
 	}

@@ -3271,7 +3271,7 @@ PY2
 # ---- hub-disk-attach-stuck (#2125): a release or a rebuilt pod stuck in
 # ContainerCreating on the cloud disk's detach/attach (RUNBOOK, 2026-09-13).
 # The rolling shape mounts no disk at all; the disk lives only in the single
-# SQLite shape's component, which production drops at the switch.
+# SQLite shape's component, which production dropped at the switch (#2215).
 drill_hub_disk_attach_stuck() {
   CAP=30; local t0 b="$ROOT/deploy/k8s/base" c="$ROOT/deploy/k8s/components/sqlite-single" r
   t0=$(now)
@@ -3282,8 +3282,8 @@ drill_hub_disk_attach_stuck() {
   if command -v kubectl >/dev/null 2>&1 && r=$(kubectl kustomize "$b" 2>/dev/null); then
     case "$r" in *PersistentVolumeClaim*|*claimName*) WHY="the base render mounts a disk"; return 1 ;; esac
     r=$(kubectl kustomize "$ROOT/deploy/k8s/overlays/prod" 2>/dev/null) || { WHY="the prod overlay does not render"; return 1; }
-    case "$r" in *'claimName: ccquota-data'*) ;; *) WHY="prod lost its disk before the switch"; return 1 ;; esac
-    WHAT='base 的渲染没有盘（库在 Postgres），盘只在单份形态的组件里；切换前的生产渲染仍挂 ccquota-data'
+    case "$r" in *PersistentVolumeClaim*|*claimName*) WHY="prod still mounts a disk after the switch"; return 1 ;; esac
+    WHAT='base 与生产的渲染都没有盘（库在 Postgres），盘只在单份形态的组件里（回滚用）'
   else
     WHAT='base 没有盘（按文件核对；没有 kubectl 不渲染），盘只在单份形态的组件里'
   fi

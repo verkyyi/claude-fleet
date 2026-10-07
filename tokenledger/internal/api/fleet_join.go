@@ -210,7 +210,8 @@ func (s *Server) handleNodeJoin(w http.ResponseWriter, r *http.Request) {
 // redeemJoin spends a join code for a machine and enrolls its agent endpoint:
 // the one place a node token is minted, for the code a person pasted
 // (handleNodeJoin) and for the code the hub mints itself when a scan adds a
-// node (enrollNode, `fleet node join`, claude-fleet#1627).
+// node (enrollDeviceNode: `fleet node join`, claude-fleet#1627, and the
+// login's node pass, claude-fleet#2212).
 func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*NodeJoinResponse, error) {
 	host := sanitizeJoinField(hostname)
 	osUser = sanitizeJoinField(osUser)
@@ -236,6 +237,11 @@ func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*No
 	if err := s.Store.FleetAudit("node:"+host+"/"+osUser, "node_join", "endpoint:"+id, "JOINED "+label, "", now); err != nil {
 		log.Printf("join audit: %v", err)
 	}
+	return s.joinResponse(r, id, label, tok, osUser), nil
+}
+
+// joinResponse is the node pass for an enrolled endpoint and its token.
+func (s *Server) joinResponse(r *http.Request, id, label, tok, osUser string) *NodeJoinResponse {
 	out := &NodeJoinResponse{
 		EndpointID: id, Label: label, Token: tok, Hub: s.hubURL(r),
 		Admin: s.isFleetAdmin(osUser), Dist: s.distNames(), Kind: store.NodeKindFixed,
@@ -246,22 +252,7 @@ func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*No
 	if s.SSHCA != nil {
 		out.SSHCA = s.SSHCA.PublicKey()
 	}
-	return out, nil
-}
-
-// enrollNode is the scan's half of adding a machine (claude-fleet#1627): the
-// person confirmed `fleet node join` on the same page as `fleet login`, so the
-// hub mints a fixed-kind code for that confirmation and spends it at once.
-// The code row stays as the audit trail — who added which machine, when.
-func (s *Server) enrollNode(r *http.Request, hostname, osUser string) (*NodeJoinResponse, error) {
-	code, err := MintJoinCode()
-	if err != nil {
-		return nil, err
-	}
-	if err := s.Store.CreateJoinCodeKind(HashToken(code), "", store.NodeKindFixed, s.joinNow(), JoinCodeTTL); err != nil {
-		return nil, err
-	}
-	return s.redeemJoin(r, code, hostname, osUser)
+	return out
 }
 
 // sanitizeJoinField keeps a reported hostname / login to a label-safe form.
