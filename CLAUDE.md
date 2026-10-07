@@ -228,6 +228,19 @@ Do not install from memory: read the doc and work from it.
   rebuilds a fleet whose session vanished — admit-gated, unfinished sessions only,
   never one `fleet-down` took down (`restore.down`). claude / tmux are found off a
   bare PATH by `fleet_find_tool` / `fleet_path_fill`; `fleet-doctor`'s `tools` row.
+- **A running EPIC batch holds the live install still — one mark PER BATCH, any
+  fresh one is true** (issues #953, #2062; EPIC #2074 C1). `/fleet-epic-run`
+  stamps `$FLEET_CONF_DIR/global/epic-running.d/<repo slug>-<N>` every tick
+  (`bin/fleet-epic-heartbeat.sh`) and at its end clears ONLY its own
+  (`--clear <N>`; a bare `--clear` refuses while several batches are marked).
+  `fleet_epic_running_fresh` (`bin/fleet-lib.sh`) is the ONE reader — every
+  fresh mark, `; `-joined — and `fleet-install-sync.sh` defers the whole tick on
+  it BEFORE the switch (a fresh mark ⇒ `deferred`, never `switched`; #1894 had
+  left only the node-agent half behind the gate, and EPIC #1935's last member
+  ran on a new floor). Busy windows still never defer. The pre-#2062 single
+  file `global/epic-running` is read for one version, never written
+  (`# compat-1v: 下一批删`). `install-sync-selftest.sh` O, `fleet-update-selftest.sh`
+  E and the `epic-mark-overwritten` / `epic-fresh-switched` BREAK-IT drills pin it.
 - **A new way to break the fleet gets its row and its drill BEFORE its fix**
   (issue #1786). `docs/BREAK-IT.md` lists every known way (方式 · 后果 · 自愈方式 ·
   演练); `bin/fleet-break-it-selftest.sh` does each one for real on isolated

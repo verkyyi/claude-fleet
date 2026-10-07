@@ -194,10 +194,14 @@ else bad "E follow: rc=$RC result=$(hst result) reason=$(hst reason) head=$(git 
 env FLEET_CONF_DIR="$HCONF" bash "$BIN/fleet-epic-heartbeat.sh" 1813 --tick 1 --repo o/r --session f1 >/dev/null 2>&1
 git --git-dir="$BARE" update-ref refs/tags/stable "$H3"
 htick
-if [ "$(hst result)" = switched ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H3" ]; then
-  ok "E an EPIC heartbeat no longer holds the install back (#1894): switched to $H3"
+if [ "$(hst result)" = deferred ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H2" ]; then
+  ok "E a fresh EPIC heartbeat holds the install at $H2 (#953, #2062): deferred, not switched"
 else bad "E epic: result=$(hst result) reason=$(hst reason) head=$(git -C "$CO" rev-parse HEAD)"; fi
-env FLEET_CONF_DIR="$HCONF" bash "$BIN/fleet-epic-heartbeat.sh" --clear >/dev/null 2>&1
+env FLEET_CONF_DIR="$HCONF" bash "$BIN/fleet-epic-heartbeat.sh" --clear 1813 >/dev/null 2>&1
+htick
+if [ "$(hst result)" = switched ] && [ "$(git -C "$CO" rev-parse HEAD)" = "$H3" ]; then
+  ok "E the batch cleared its mark: the next tick switches to $H3"
+else bad "E after the clear: result=$(hst result) reason=$(hst reason) head=$(git -C "$CO" rev-parse HEAD)"; fi
 htick
 [ "$(hst result)" = current ] && ok "E next tick: current at $H3" || bad "E after epic: $(hst result) $(hst reason)"
 s=$(env HOME="$WORK/host" FLEET_CONF_DIR="$HCONF" FLEET_UPDATE_ROOT="$CO" FLEET_STABLE_API="file://$WORK/nothing" bash "$BIN/fleet-update.sh" 2>&1)
