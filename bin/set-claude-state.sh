@@ -40,6 +40,22 @@ if [ "${1:-}" = --via ]; then
   [ "$via" = mod ] && [ "${1:-}" != ask ] && exec </dev/null
 fi
 
+# The tree is still being checked out (issue #2237): dash-issue-session.sh opened
+# this window on a worktree whose files fill in beside the agent's start, and
+# FLEET_WT_PENDING is the marker holding the filler's pid. Every hook edge before
+# the first turn's work — the first prompt (UserPromptSubmit) and each tool call
+# (PreToolUse) — waits here until the marker is gone or its filler has died, at
+# most 50 s (under the hook timeout). Afterwards it is one stat; unset, nothing.
+if [ "$via" != mod ] && [ -n "${FLEET_WT_PENDING:-}" ] && [ -f "$FLEET_WT_PENDING" ]; then
+  _wn=0
+  while [ -f "$FLEET_WT_PENDING" ] && [ "$_wn" -lt 500 ]; do
+    _wp=$(cat "$FLEET_WT_PENDING" 2>/dev/null)
+    case "$_wp" in ''|*[!0-9]*) break ;; esac
+    kill -0 "$_wp" 2>/dev/null || break
+    sleep 0.1; _wn=$((_wn + 1))
+  done
+fi
+
 handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330)
 wstate=''         # what a clean Stop WRITES when it is not `done` (issue #1331: looping)
 wwait=''          # WHY it is looping (issue #1370): @claude_wait, loop|children|bg|tool

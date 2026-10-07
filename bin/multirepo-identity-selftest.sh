@@ -328,10 +328,10 @@ out=$(hub resume "$D" issue-12);     eq "hub: one-repo resume names its only rep
 # start (issue #984): a 2+ repo fleet needs the repo, resolved before any gate
 hub start "$M" 12 claude >/dev/null; eq "hub: start with no repo in a 2-repo fleet is refused" "$?" 6
 hub start "$M" 12 claude o/zz >/dev/null; eq "hub: start naming an unhosted repo is refused" "$?" 6
-out=$(hub start "$M" 12 claude o-b); has "hub: start o-b → --repo o/b" "$out" "spawn 12 $M --agent claude --origin hub --repo o/b"
+out=$(hub start "$M" 12 claude o-b); has "hub: start o-b → --repo o/b" "$out" "spawn 12 $M --print --agent claude --origin hub --repo o/b"
 out=$(hub start "$M" 12 "" o/a);     has "hub: start o/a → --repo o/a" "$out" "--origin hub --repo o/a"
-out=$(hub start "$D" 12 claude);     eq "hub: one-repo start names its only repo (#1938)" "$out" "spawn 12 $D --agent claude --origin hub --repo o/c"
-out=$(hub start "$D" 12 claude o/c); eq "hub: one-repo start naming its repo" "$out" "spawn 12 $D --agent claude --origin hub --repo o/c"
+out=$(hub start "$D" 12 claude);     eq "hub: one-repo start names its only repo (#1938)" "$out" "spawn 12 $D --print --agent claude --origin hub --repo o/c"
+out=$(hub start "$D" 12 claude o/c); eq "hub: one-repo start naming its repo" "$out" "spawn 12 $D --print --agent claude --origin hub --repo o/c"
 hub start "$D" 12 claude o/a >/dev/null; eq "hub: one-repo start naming another repo is refused" "$?" 6
 leg hub
 
