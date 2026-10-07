@@ -1344,7 +1344,7 @@ func placementReason(c Candidate, all []Candidate) string {
 // --- settings ----------------------------------------------------------
 
 // handleFleetSettings serves GET/PUT /v1/fleet/settings — the operator's
-// (mounted behind operatorOnly). fleet.node_cap.<machine> is an integer 0–256,
+// (mounted behind adminOnly). fleet.node_cap.<machine> is an integer 0–256,
 // or "" to fall back to the default; fleet.spot_weight a number 0–2;
 // fleet.node_maintenance.<machine> (claude-fleet#1427) a reason — any text,
 // "" to end the maintenance — stored as the dated record the roster shows;

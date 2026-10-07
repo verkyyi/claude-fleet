@@ -40,6 +40,12 @@ type Session struct {
 	// a cookie minted before this field existed parses the same way.
 	UID  string `json:"uid,omitempty"`
 	Name string `json:"nam,omitempty"`
+	// Role is the hub role a GitHub sign-in was admitted as
+	// (claude-fleet#1984): admin or user. A record of the sign-in, never the
+	// authority: the gate re-reads the list on every request, so a person
+	// taken off it or demoted is refused on their next one whatever the
+	// cookie says. Empty on a WeCom session.
+	Role string `json:"role,omitempty"`
 }
 
 // Principal is the person this session is for: the WeCom userid when the
@@ -64,7 +70,13 @@ func SignSession(sub, secret string, now time.Time, ttl time.Duration) string {
 // ttl is this hub's own session length, unrelated to the ticket's 90 seconds:
 // the ticket's job ends the moment it is exchanged.
 func SignPerson(sub, uid, name, secret string, now time.Time, ttl time.Duration) string {
-	body, _ := json.Marshal(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name})
+	return SignRole(sub, uid, name, "", secret, now, ttl)
+}
+
+// SignRole is SignPerson with the role the person was admitted as
+// (claude-fleet#1984: a GitHub sign-in).
+func SignRole(sub, uid, name, role, secret string, now time.Time, ttl time.Duration) string {
+	body, _ := json.Marshal(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role})
 	enc := base64.RawURLEncoding.EncodeToString(body)
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(enc))

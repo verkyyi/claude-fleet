@@ -94,6 +94,10 @@ type ShareFacts struct {
 
 // HubFacts is the configuration a reader cannot infer from the software.
 type HubFacts struct {
+	// GitHub is whether GitHub sign-in is wired up (claude-fleet#1984), and
+	// how many admin names the deploy gives it. Never the client values.
+	GitHub       bool `json:"github"`
+	GitHubAdmins int  `json:"github_admins"`
 	// ViewerAuth is "token" or "off (--no-auth)". The token itself never
 	// appears, here or anywhere else this package writes.
 	ViewerAuth     string         `json:"viewer_auth"`
@@ -159,6 +163,9 @@ func (s *Server) hubFacts() HubFacts {
 	if s.ViewerToken == "" {
 		f.ViewerAuth = "off (--no-auth)"
 	}
+	if s.GitHub.ready() {
+		f.GitHub, f.GitHubAdmins = true, len(s.GitHub.Admins)
+	}
 	if s.SSO.ready() {
 		f.SSO = SSOFacts{
 			Enabled:      true,
@@ -206,6 +213,9 @@ func (f HubFacts) enrolled(kinds ...string) int {
 // router the first time someone adds a route.
 func (s *Server) doors(f HubFacts) []Door {
 	ways := []string{}
+	if f.GitHub {
+		ways = append(ways, "a GitHub sign-in on this hub's list (/signin)")
+	}
 	if f.ViewerAuth == "token" {
 		ways = append(ways, "the viewer token (`?token=` once, then a 30-day cookie)")
 	}
@@ -215,7 +225,7 @@ func (s *Server) doors(f HubFacts) []Door {
 	if n := len(f.TailnetViewers); n > 0 {
 		ways = append(ways, plural(n, "named tailnet login", "named tailnet logins")+" with no token")
 	}
-	dashCred := "the viewer token, a WeCom session, or a named tailnet peer"
+	dashCred := "a GitHub sign-in on the list, the viewer token, a WeCom session, or a named tailnet peer"
 	dashNote := "Here: " + joinAnd(ways) + "."
 	if f.ViewerAuth != "token" {
 		dashCred = "nothing — this hub runs with --no-auth"
@@ -239,6 +249,19 @@ func (s *Server) doors(f HubFacts) []Door {
 				"figures in this binary, behind the same gate as the rest.",
 			State: pick(f.Dashboard, "open", "off"),
 			Note:  dashNote + pick(f.Dashboard, "", " This binary was built without the dashboard, so / answers JSON instead."),
+		},
+		{
+			ID: "github", Name: "Sign in with GitHub", Via: "http",
+			Where:      []string{"/signin", "/auth/github/start", "/auth/github/callback", "/logout"},
+			Credential: "a GitHub account whose numeric ID is on this hub's list",
+			Can: "Exchange a GitHub sign-in for this hub's own session cookie. GitHub is asked only who " +
+				"you are (no scope); its token is used once and dropped. Admins come from the deploy " +
+				"(CCQUOTA_GITHUB_ADMINS), users from the list; a username is pinned to the first ID seen " +
+				"holding it, and the list is re-read on every request, so removal takes effect at once.",
+			State: pick(f.GitHub, "open", "off"),
+			Note: pick(f.GitHub,
+				"Here: wired up, "+plural(f.GitHubAdmins, "admin name", "admin names")+" from the deploy. Signed-out browsers are sent to /signin.",
+				"Here: NOT configured, so /signin answers 404."),
 		},
 		{
 			ID: "enter", Name: "The SSO way in", Via: "http",

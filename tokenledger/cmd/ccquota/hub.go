@@ -474,6 +474,11 @@ func runHub(args []string) error {
 		httpsURL = "https://" + tlsName + "/"
 	}
 
+	gh, err := githubAuthFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+
 	principalLogins, err := fleetPrincipalLogins(os.Getenv("CCQUOTA_FLEET_PRINCIPAL_LOGINS"))
 	if err != nil {
 		return err
@@ -482,6 +487,7 @@ func runHub(args []string) error {
 		Store:               st,
 		FX:                  feed,
 		SSO:                 sso,
+		GitHub:              gh,
 		Pricing:             table,
 		ViewerToken:         *token,
 		Tailnet:             tailnet,
@@ -558,6 +564,10 @@ func runHub(args []string) error {
 	} else {
 		log.Printf("findings: push off (set CCQUOTA_NOTIFY_URL + CCQUOTA_NOTIFY_KEY to turn it on)")
 	}
+
+	// Pin each CCQUOTA_GITHUB_ADMINS name to its GitHub ID (claude-fleet#1984).
+	// In the background: GitHub being slow must not hold the hub's start.
+	go srv.ResolveGitHubAdmins(ctx)
 
 	// Reads the feed once now, then on the interval. Failure is not fatal: a hub
 	// with no route to an FX feed is a working hub that shows every figure in
@@ -657,6 +667,29 @@ func fleetPersonScopes() []string {
 		out = append(out, sc)
 	}
 	return out
+}
+
+// githubAuthFromEnv wires the GitHub sign-in (claude-fleet#1984) from its
+// three settings: CCQUOTA_GITHUB_CLIENT_ID and CCQUOTA_GITHUB_CLIENT_SECRET
+// (the k8s Secret only — never a flag, which `ps` shows) and
+// CCQUOTA_GITHUB_ADMINS (comma-separated usernames). Neither client value:
+// off, nil. One without the other refuses to start — half a sign-in is a
+// door the operator thinks is there.
+func githubAuthFromEnv(getenv func(string) string) (*api.GitHubAuth, error) {
+	id, secret := strings.TrimSpace(getenv("CCQUOTA_GITHUB_CLIENT_ID")), getenv("CCQUOTA_GITHUB_CLIENT_SECRET")
+	admins := splitList(getenv("CCQUOTA_GITHUB_ADMINS"))
+	if id == "" && secret == "" {
+		if len(admins) > 0 {
+			log.Printf("WARN github sign-in: CCQUOTA_GITHUB_ADMINS is set but the client is not — GitHub sign-in is off")
+		}
+		return nil, nil
+	}
+	if id == "" || secret == "" {
+		return nil, errors.New("GitHub sign-in is half configured: " +
+			"CCQUOTA_GITHUB_CLIENT_ID and CCQUOTA_GITHUB_CLIENT_SECRET are both required")
+	}
+	log.Printf("github sign-in: on, %d admin name(s) from CCQUOTA_GITHUB_ADMINS", len(admins))
+	return &api.GitHubAuth{ClientID: id, ClientSecret: secret, Admins: admins}, nil
 }
 
 // fleetPrincipalLogins parses CCQUOTA_FLEET_PRINCIPAL_LOGINS

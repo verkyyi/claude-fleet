@@ -185,6 +185,12 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 	if c, err := r.Cookie("ccquota_token"); err == nil && constantTimeEqual(c.Value, s.ViewerToken) {
 		return sshRelayIdentity{Operator: true, Actor: "operator"}, true
 	}
+	// A GitHub person (claude-fleet#1984), on the list right now.
+	if sess, id, ok := s.githubSession(r); ok {
+		if role, err := s.githubRole(id); err == nil && role != "" {
+			return sshRelayIdentity{Principal: sess.UID, Actor: sess.UID}, true
+		}
+	}
 	if sub, ok := s.ssoViewer(r); ok {
 		return sshRelayIdentity{Principal: sub, Actor: sub}, true
 	}

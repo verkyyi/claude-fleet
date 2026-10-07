@@ -128,6 +128,12 @@ func (s *Server) ssoSession(r *http.Request) (*authz.Session, bool) {
 	if err != nil {
 		return nil, false
 	}
+	// gh:<id> is the GitHub sign-in's namespace (claude-fleet#1984), checked
+	// against the list on every request; a WeCom ticket naming one is not a
+	// way around that list.
+	if strings.HasPrefix(sess.Principal(), githubPrincipalPrefix) {
+		return nil, false
+	}
 	return sess, true
 }
 
