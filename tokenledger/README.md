@@ -1009,7 +1009,11 @@ is no principal parameter to forge — and only on a machine the operator marked
 trusted|untrusted`). No key = untrusted → `403 untrusted_node` + a deny audit
 row, checked after the principal and the revocation. Every machine with an
 active account when it shipped was marked trusted once
-(`fleet.node_trust_migrated`), so their leases are unchanged. The operator
+(`fleet.node_trust_migrated`), so their leases are unchanged. A session on an
+untrusted machine borrows a revocable `fcp-h1.` session pass instead
+(claude-fleet#1969, `/v1/fleet/session-cred` — issue / renew / verify / revoke;
+key `CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]`, verifiers
+`CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]`; docs/FLEET-HUB.md). The operator
 stores, lists and revokes:
 
     # store (or replace) — the secret never comes back out of the hub
