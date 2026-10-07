@@ -749,8 +749,7 @@ win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:"
 # - @fleet_id is the session's lifelong identity (issue #1646): minted once, here,
 #   and carried by every restore / migrate / move after — the address its children
 #   report to (stamped last with -o; fleet_window_fid mints one if this mint failed);
-# - @born is its place on the list (#1750); @fleet_role what it IS, whatever it is
-#   renamed to (#1844);
+# - @born is its place on the list (#1750);
 # - @reap_policy says when the fleet may close it on its own (issue #1902): the one
 #   asked for, else an issue session's default — after its PR merged;
 # - @repo + @worktree (issue #789) — every worker carries both, so any consumer
@@ -763,7 +762,6 @@ win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:"
 _fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''
 _sw=(set-window-option -t "$win" @issue "$num")
 _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
-_sw+=(\; set-window-option -t "$win" @fleet_role worker)
 _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
 [ -n "$REPO" ] && _sw+=(\; set-window-option -t "$win" @repo "$REPO")
 _sw+=(\; set-window-option -t "$win" @worktree "$wt")
@@ -774,6 +772,7 @@ _sw+=(\; set-window-option -t "$win" @worktree "$wt")
 [ -n "$_fid" ] && _sw+=(\; set-window-option -o -t "$win" @fleet_id "$_fid")
 TM "${_sw[@]}" 2>/dev/null
 [ -n "$_fid" ] || fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
+fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844) — every opener's one stamper
 unset _sw _fid
 # Window handle (issue #566): the fleet's own short, typeable name for this window
 # (`a1`…`z9`), unique among the fleet's live windows and accepted wherever a window
