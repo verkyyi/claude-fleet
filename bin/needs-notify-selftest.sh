@@ -199,7 +199,16 @@ T set-option -uw -t "$PANE" @fleet_view
 eq "E: …and in a session, ⌘N is still 新任务" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘. 展开/收起  ⌘/ 按键" "$(hint)"
 T set-option -uw -t "$PANE" @fleet_orch
 sl=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
-case "$sl" in "B ⌘N 新任务  ⌘P 跳转"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the hint after the badge" "$sl" ;; esac
+case "$sl" in "B   ⌘N 新任务  ⌘P 跳转"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the slot, then the hint, after the badge" "$sl" ;; esac
+# The refresh slot (issue #2228): ⟳ lights in a two-cell slot the bar always
+# keeps, so the keys start on the same column lit or not.
+T set-option -w -t "$PANE" @fleet_refreshing 1
+lit=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
+case "$lit" in "B⟳  ⌘N 新任务  ⌘P 跳转"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: a waiting list lights ⟳ in the slot" "$lit" ;; esac
+col() { python3 -c 'import sys; print(sys.argv[1].index("⌘N"))' "$1"; }
+eq "E: the keys start on the same column, lit or not" "$(col "$sl")" "$(col "$lit")"
+T set-option -uw -t "$PANE" @fleet_refreshing
+eq "E: …and the slot goes back to two blanks" "$sl" "$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')"
 T resize-window -t "=$L:" -x 90 2>/dev/null; "$REAL_TMUX" -L "${L}o" resize-window -t =o -x 90 2>/dev/null; sleep 0.2
 eq "E: narrower than 100 columns → the badge alone" "B" "$(T display-message -p -c "$CL" '#{E:status-left}')"
 "$REAL_TMUX" -L "${L}o" kill-server 2>/dev/null
