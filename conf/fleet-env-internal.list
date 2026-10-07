@@ -12,6 +12,8 @@
 # Adding a line here is a decision: a knob an operator would plausibly change
 # belongs in fleet.conf.example (with a tag line) instead.
 
+FLEET_ACCOUNT_ADD_CLAUDE_BIN       seam: the claude binary `fleet account add` runs for `setup-token` (#2084)
+FLEET_ACCOUNT_ADD_CODEX_BIN        seam: the codex binary `fleet account add` runs for `login` (#2084)
 FLEET_ACCOUNT_LABEL                handoff: the Claude account label a launch was assigned
 FLEET_ACCOUNT_PHASE_WINDOW         knob: internal pacing/limit, safe in-code default (fleet-account.sh)
 FLEET_ACCOUNT_SELECTED             handoff: the account pick already ran for this launch
@@ -87,6 +89,7 @@ FLEET_CRED_QUOTA_PUSH              handoff: what the proxy runs after a fresh qu
 FLEET_CRED_QUOTA_PUSH_SECS         knob: the proxy's debounce before that push (2 s, #1978)
 FLEET_RL_PROXY_FRESH               knob: how long a proxy quota stamp holds against the status line and the mod (300 s; statusline.sh reads the env only, #1978)
 FLEET_CRED_SID                     handoff: the per-launch credential-proxy session id fleet-session-wrap.sh hands the launcher (#1972)
+FLEET_CREDS_IMPORT_NO_HOLDER       handoff: `fleet account add` tells fleet-creds-import.sh no Codex home here holds the account, so no «stop refreshing» reminder (#2084)
 FLEET_DRILL_INVITE                 handoff: the drill's approve code, fleet-onboard-drill.sh → fleet-drill.sh approve (never an argv, #2010)
 FLEET_DRILL_LOGIN_REMOVE           seam: the login-remove script fleet-onboard-drill.sh tears down with (selftest sandbox, #2010)
 FLEET_CRED_CTL_DIR                 handoff: separated (#1971) — the run dir of the role account's proxy (ctl.sock, port); fleet-cred-proxy.sh sets it for its ctl client
