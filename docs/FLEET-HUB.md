@@ -1389,7 +1389,9 @@ route `503 session_cred_off`). It is issued only when the assertion verifies
 under this node's token, names a fleet this node runs, and the login is an
 active, unrevoked person. `POST …/renew {cred}` (the issuing node, from
 `renew_after` = 2 h before expiry) hands back the same pass id with a new
-expiry; `DELETE …/<id>` (the issuing node — the session wrapper at exit — or the
+expiry — a pass that lapsed unrevoked (the machine asleep through the renew
+window) is still renewed for 7 days past its newest expiry
+(`SessionCredRenewGrace`, claude-fleet#2012), though verify refuses it; `DELETE …/<id>` (the issuing node — the session wrapper at exit — or the
 operator) revokes it; `GET …` is the operator's list (`?all=1`). The cluster
 credential proxy and the relay call `POST …/verify {cred, principal?, provider?}`
 with `CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE]` (or the operator's token)

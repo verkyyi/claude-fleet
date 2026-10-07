@@ -61,9 +61,14 @@ renewed with the hub (POST /v1/fleet/session-cred/renew, the node token) once
 it reaches its renew point — 2h before exp, or half-life for a short one — on
 the session's next request or the background tick, whichever comes first; the
 session keeps sending the pass it was born with and the proxy forwards the
-newest one it holds for that id (<state>/hub-passes.json, 0600). A pass the hub
-refuses (revoked, the session over) is dropped; any other failure is counted in
-`status` (renew.hub_err, the doctor's `cred` row).
+newest one it holds for that id (<state>/hub-passes.json, 0600). A pass that
+LAPSED — the machine asleep, or this proxy down, through its renew window — is
+renewed on the session's next request: the hub takes one back for
+HUB_RENEW_GRACE (7 days) past its newest expiry unless revoked (issue #2012);
+the background tick never renews a lapsed pass (only a live session asks), and
+forgets it past the grace. A pass the hub refuses (revoked, the session over,
+past the grace) is dropped; any other failure is counted in `status`
+(renew.hub_err, the doctor's `cred` row).
 
 Rails (共同约定 4/5): loopback + unix socket only; only Authorization is
 rewritten (Claude: x-api-key dropped; Codex: chatgpt-account-id overwritten),
@@ -111,6 +116,9 @@ HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding",
 PUBLIC = {"/api/hello"}
 OAUTH_BETA = "oauth-2025-04-20"
 LOCAL_TAG, HUB_TAG, NODE_TAG = "fcp1", "fcp-h1", "fcpn1"
+# how long past its newest expiry the hub still renews a never-revoked pass —
+# SessionCredRenewGrace in tokenledger/internal/api/fleet_session_cred.go (#2012)
+HUB_RENEW_GRACE = 7 * 86400
 # never through the hub broker (EPIC #1967 route ④): the subscription pool
 HUB_DENY = ("/v1/node/credentials",)
 REGION_MARKS = ("unsupported_country_region_territory", "unsupported_country",
@@ -446,14 +454,15 @@ class HubPasses:
                 self.busy.discard(pid)
 
     def tick(self):
-        """Renew every held pass that is due; forget the ones long over."""
+        """Renew every held pass that is due; forget the ones past the hub's
+        renewal grace (a lapsed one is kept: its session's next request renews it)."""
         now = time.time()
         with self.lock:
             items = list(self.held.items())
         gone = False
         for pid, tok in items:
             c = hub_claims(tok)
-            if not c or c["exp"] < now - 86400:
+            if not c or c["exp"] < now - HUB_RENEW_GRACE:
                 with self.lock:
                     self.held.pop(pid, None)
                 gone = True

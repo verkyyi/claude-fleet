@@ -398,3 +398,69 @@ func TestSessionCredClientComputer(t *testing.T) {
 		}
 	}
 }
+
+// A lapsed pass (claude-fleet#2012): the machine slept through the renew
+// window, so the session's pass ran out while the session lives. Verify
+// still refuses it; its issuing node may renew it within the grace — from
+// the string the session was born with, too — and not past it, nor once
+// revoked.
+func TestSessionCredRenewLapsed(t *testing.T) {
+	h, tok5, tok4, f5, _ := sessHarness(t)
+	out := sessIssue(t, h, tok5, f5, map[string]any{"ttl_seconds": 600})
+	born, id := out["cred"].(string), out["id"].(string)
+	lapse := func(ago time.Duration) string {
+		t.Helper()
+		exp := time.Now().Add(-ago).Truncate(time.Second)
+		if _, err := h.srv.Store.DB().Exec(`UPDATE fleet_session_creds SET expires_at = ? WHERE id = ?`,
+			exp.UTC().Format("2006-01-02T15:04:05Z"), id); err != nil {
+			t.Fatal(err)
+		}
+		h.srv.sessCred.drop(id)
+		parts := strings.Split(born, ".")
+		raw, _ := base64.RawURLEncoding.DecodeString(parts[1])
+		var c sessionCredClaims
+		_ = json.Unmarshal(raw, &c)
+		c.Iat, c.Exp = exp.Add(-600*time.Second).Unix(), exp.Unix()
+		return signSessionCred(c, h.srv.SessionCredKey)
+	}
+	renew := func(tok, cred string) (int, map[string]any) {
+		return sessDo(t, h, http.MethodPost, "/v1/fleet/session-cred/renew", tok, "", map[string]any{"cred": cred})
+	}
+
+	cred := lapse(10 * time.Hour)
+	if v := sessVerify(t, h, map[string]any{"cred": cred}); v["valid"] != false {
+		t.Fatalf("a lapsed pass verifies: %v", v)
+	}
+	if st, _ := renew(tok4, cred); st != 404 {
+		t.Fatalf("lapsed, renewed by another node: %d; want 404", st)
+	}
+	st, r := renew(tok5, cred)
+	if st != 200 || r["id"] != id {
+		t.Fatalf("renew a pass lapsed 10 h ago: %d %v; want 200", st, r)
+	}
+	if v := sessVerify(t, h, map[string]any{"cred": r["cred"]}); v["valid"] != true {
+		t.Fatalf("the renewed lapsed pass: %v", v)
+	}
+	if row, _ := h.srv.Store.SessionCredByID(id); time.Until(row.ExpiresAt) < 9*time.Minute {
+		t.Fatalf("row after renewing a lapsed pass: %+v", row)
+	}
+	if a := sessAudits(t, h); !strings.Contains(a[len(a)-1].outcome, "(lapsed)") {
+		t.Fatalf("audit = %+v; want the renewal marked lapsed", a)
+	}
+
+	// The string the session was born with: the grace runs from the record.
+	_ = lapse(time.Hour)
+	if st, r := renew(tok5, born); st != 200 || r["id"] != id {
+		t.Fatalf("renew from the born string, record lapsed 1 h: %d %v", st, r)
+	}
+
+	if st, _ := renew(tok5, lapse(SessionCredRenewGrace+time.Hour)); st != 403 {
+		t.Fatalf("renew a pass lapsed past the grace: %d; want 403", st)
+	}
+
+	cred = lapse(time.Hour)
+	_, _ = sessDo(t, h, http.MethodDelete, "/v1/fleet/session-cred/"+id, tok5, "", nil)
+	if st, _ := renew(tok5, cred); st != 403 {
+		t.Fatalf("renew a revoked lapsed pass: %d; want 403", st)
+	}
+}
