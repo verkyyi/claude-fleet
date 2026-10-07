@@ -522,7 +522,9 @@ stage_up() {
   local cmd="${1:-}" remote="${2:--:}" title="${3:-fleet}" w
   TS has-session -t "=$STAGE" 2>/dev/null && return 0
   [ -f "$CACHE/tmux-stage.conf" ] || return 1
-  [ -n "$cmd" ] || cmd="exec bash $(sq "$SHADOW/fleet-shell.sh") wait $(sq "$SESS")"
+  # the home page's machine (issue #2219), so a stage started again shows the same
+  local hm=''; { read -r hm < "$CACHE/home-machine"; } 2>/dev/null
+  [ -n "$cmd" ] || cmd="exec bash $(sq "$SHADOW/fleet-shell.sh") wait $(sq "$SESS")${hm:+ $(sq "$hm")}"
   w=$(TS -f "$CACHE/tmux-stage.conf" new-session -d -P -F '#{window_id}' -s "$STAGE" -n "$title" -c "$HOME" -x 180 -y 50 "$cmd") \
     || return 1
   TS set-window-option -t "$w" @remote "$remote" \; set-window-option -t "$w" automatic-rename off 2>/dev/null
@@ -862,10 +864,14 @@ wait)
     printf '\n  入口没有在线的机器，或者连不上入口。\n  左边是入口给的列表（缓存也算）：点一行就进那台机器；底下一栏说入口通不通。\n  prefix d 离开；再敲 fleet 回来。\n'
   fi
   # its own server's windows: the stage's (issue #1759), or — a shell started
-  # before it — the shell's own
+  # before it — the shell's own. The stage comes up BEFORE the shell's server
+  # (issue #2219): a shell not there yet is not a shell gone — up to 10 s of
+  # grace, else this page closed at once and the viewer's restart showed another.
+  seen='' n=0
   while [ "$(tmux list-windows -F x 2>/dev/null | grep -c x)" -le 1 ]; do
-    tmux -L "$s" has-session -t "=$s" 2>/dev/null || exit 0
-    sleep 1
+    if tmux -L "$s" has-session -t "=$s" 2>/dev/null; then seen=1
+    elif [ -n "$seen" ] || [ "$n" -ge 10 ]; then exit 0; fi
+    n=$((n + 1)); sleep 1
   done
   exit 0
   ;;
@@ -1133,6 +1139,7 @@ home=''
 if [ -n "$node" ] && this_machine "$node" && ! bash "$SHADOW/fleet-remote-view.sh" live >/dev/null 2>&1; then
   home=$node; node=''
 fi
+if [ -n "$home" ]; then printf '%s\n' "$home" > "$CACHE/home-machine"; else rm -f "$CACHE/home-machine"; fi
 if [ -n "$node" ]; then
   title="$node"
   cmd="exec bash $(sq "$SHADOW/fleet-remote-view.sh") run --shell $(sq "$node") -"
