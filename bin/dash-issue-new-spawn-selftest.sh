@@ -154,8 +154,7 @@ wait_spawn() { # $1 = grep -E pattern
 # ============================ A: happy quick-dispatch =========================
 # title accepted via the fzf query; spawn succeeds in the background (SPAWN_RC unset → 0).
 FZF_QUERY='Add a widget' run_new confirm --spawn
-grep -q create "$GH_LOG"          || fail "A gh issue create was not called" \
-  "$(cat "$WORK/err"; echo '--- toasts ---'; cat "$DISPLAY_LOG"; echo '--- run-shell ---'; cat "$RS_LOG")"
+grep -q create "$GH_LOG"          || fail "A gh issue create was not called" "$(cat "$WORK/err")"
 wait_spawn '^205( |$)'            || fail "A spawn not invoked for the new issue #205" "$(cat "$SPAWN_LOG")"
 # The spawn must carry the descriptive title so the window is named after the WORK,
 # not the bare issue-<N> slug (issue #216). The stub logs $* → the quoted title
