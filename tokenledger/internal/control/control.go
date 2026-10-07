@@ -618,7 +618,7 @@ func ValidLogin(s string) bool {
 
 // ValidExistingLogin is the shape of a login the operator may NAME — one
 // that already exists on a machine and is adopted, mapped to a person
-// (CCQUOTA_FLEET_PRINCIPAL_LOGINS) or put on a certificate — as opposed to
+// (user.<id>.machine_login) or put on a certificate — as opposed to
 // one the hub would create. The same alphabet as ValidLogin, so it still
 // cannot be an option or a path, but a leading digit is allowed: macOS
 // permits it, and `24haowan` is a real login (claude-fleet#1458). A create

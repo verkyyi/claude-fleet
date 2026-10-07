@@ -45,8 +45,6 @@ spec:
                   name: ccquota
                   key: credproxy-token
                   optional: true
-            - name: CCQUOTA_FLEET_PRINCIPAL_LOGINS
-              value: "YiLiangHui=verkyyi,CaoJian=24haowan,zx=zx,HuangYongSheng=vincent"
             - name: CCQUOTA_FLEET_ROUTES
               value: |-
                 [{"hostname":"macmini","alias":"m5"},{"hostname":"mini2","alias":"m4"}]

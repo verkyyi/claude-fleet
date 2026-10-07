@@ -18,7 +18,7 @@ import (
 // GitHub's camo proxy strips cookies. So a badge that actually works in a
 // README has to be readable without a credential. Whether an internal hub
 // should expose ANY unauthenticated route is an open question, so this is
-// opt-in (`ccquota hub --public-badges`) and off by default -- an operator who
+// opt-in (the setting hub.public_badges) and off by default -- an operator who
 // upgrades does not silently start publishing.
 const badgeMaxAge = "public, max-age=300"
 

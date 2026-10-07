@@ -17,7 +17,7 @@ import (
 // difference. Nothing here extrapolates; if the hub has not measured a new
 // number, nothing moves except the character.
 //
-// It lives behind the same gate as the badges (--public-badges), because it
+// It lives behind the same gate as the badges (hub.public_badges), because it
 // exposes exactly what they do and nothing more.
 
 const embedPage = `<!doctype html>
