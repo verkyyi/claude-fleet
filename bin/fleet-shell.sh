@@ -80,6 +80,11 @@
 #                          stage's writing-area window (`@fleet_role portal`,
 #                          `@remote new`, bin/fleet-compose.py) made once and
 #                          selected — the right pane shows it, the list its row
+#   keys <session>         ⌘/ / prefix ? (issue #1952): the one page of keys
+#                          (fleet-keys.sh --page) as a stage window of its own
+#                          (`@fleet_role keys`) — the right pane shows it, q / esc
+#                          closes it and the stage is back on what it showed.
+#                          Exit 1: no stage (the caller pops the sheet up instead)
 #   reload <session> [--from <old home>]   a newer client into the running one,
 #                          same servers (issue #1781) — see `reload` below
 #   ask <kind> [arg…]      a short question on ONE line at the bottom of the stage
@@ -832,6 +837,26 @@ portal)
   TS select-window -t "$w" 2>/dev/null || exit 1
   lp=$(T list-panes -a -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }')
   [ -n "$lp" ] && T send-keys -t "$lp" F12 2>/dev/null
+  exit 0
+  ;;
+# ---------------------------------------------------------------------------------
+# The one page of keys (issue #1952, EPIC #1949 C3): a stage window, told by its
+# `@fleet_role keys`, running fleet-keys.sh --page — a whole page on the right,
+# where the old popup could not scroll (#1570). One at a time: a second ⌘/ just
+# shows it again. Its `@remote -:` names no machine and no row, as the `wait`
+# note's, so no machine's `open` retargets it and the list keeps its rows.
+keys)
+  s="${2:-$SESS}"
+  SESS=$s; STAGE="$s-stage"; SHADOW=$BIN
+  TS has-session -t "=$STAGE" 2>/dev/null || exit 1
+  w=$(TS list-windows -t "=$STAGE" -F '#{window_id} #{@fleet_role}' 2>/dev/null | awk '$2 == "keys" { print $1; exit }')
+  if [ -z "$w" ]; then
+    w=$(TS new-window -d -P -F '#{window_id}' -t "=$STAGE:" -n "$(sh "$BIN/fleet-ui-lang.sh" t keys_page_title 2>/dev/null || echo 按键)" -c "$HOME" \
+          "exec bash $(sq "$BIN/fleet-keys.sh") --page") || exit 1
+    TS set-window-option -t "$w" @fleet_role keys \; set-window-option -t "$w" @remote -: \; \
+      set-window-option -t "$w" automatic-rename off 2>/dev/null
+  fi
+  TS select-window -t "$w" 2>/dev/null || exit 1
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
