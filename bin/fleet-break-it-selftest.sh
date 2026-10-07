@@ -1995,7 +1995,7 @@ try:
     renews = held()
     renewed = until(10, lambda: held() > renews)
     if standby() or popped(0) or popped(1) or lease() != me: die("another device opening its lease put this one on standby")
-    if not renewed: die("this server stopped renewing")
+    if not renewed: die("this server stopped renewing (lease %s; hub saw: %s)" % (me, " ; ".join(log().splitlines()[-4:])))
     # typing here (F12, a key nothing binds to an action): the input goes out
     os.write(kids[0][1], b"\x1b[24~")
     if not until(10, lambda: open(os.path.join(h, "primary")).read().strip() == me):
