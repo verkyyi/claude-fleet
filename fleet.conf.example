@@ -1792,6 +1792,13 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_ACCOUNT_CEILING=85
 # @label=Warn sessions at @group=accounts @tier=advanced @scope=global @edit=int @unit=%
 #FLEET_ACCOUNT_WARN_PCT=70
+# Pool accounts no NEW session may land on (issue #2083), space-separated: the
+# hub's 「暂停订阅」 (pool.paused.<account>, #1990) arrives on its own — the quota
+# tick fetches the hub's client-settings `pool` list into account.paused — so set
+# this only to pause one on THIS machine by hand. Only a hub-managed (`hub:`)
+# account can be paused; a session already on it runs to its end.
+# @label=Paused pool accounts @group=accounts @tier=internal @scope=global @edit=str
+#FLEET_ACCOUNT_PAUSED=
 # @label=ccquota cache TTL @group=accounts @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ACCOUNT_QUOTA_TTL=60
 # Staleness alarm for the watch (issue #551): every fleet-quotawatch tick restamps

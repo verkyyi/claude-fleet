@@ -13,6 +13,7 @@
 # belongs in fleet.conf.example (with a tag line) instead.
 
 FLEET_ACCOUNT_LABEL                handoff: the Claude account label a launch was assigned
+FLEET_ACCOUNT_PAUSED_CMD           seam: prints the hub client-settings JSON instead of curl (fleet-account.sh quota_paused_fetch, #2083)
 FLEET_ACCOUNT_PHASE_WINDOW         knob: internal pacing/limit, safe in-code default (fleet-account.sh)
 FLEET_ACCOUNT_SELECTED             handoff: the account pick already ran for this launch
 FLEET_ACCOUNT_TARGET               handoff: the account a migrate/move relaunches on
