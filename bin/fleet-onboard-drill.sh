@@ -1,7 +1,7 @@
 #!/bin/bash
-# fleet-onboard-drill.sh [--login <name>] [--hub <url>] [--scan-cmd <cmd>] [--keep]
-#                        [--timeout <secs>] [--ssh-host <h>] [--ssh-port <p>]
-#                        [--name <scratch>] | --teardown <login>
+# fleet-onboard-drill.sh [--login <name>] [--invite <code>] [--hub <url>] [--scan-cmd <cmd>]
+#                        [--keep] [--timeout <secs>] [--ssh-host <h>] [--ssh-port <p>]
+#                        [--name <scratch>] | --teardown <login> [--invite <code>]
 #   — a new colleague's first time, from nothing, as ONE command (issue #1901,
 #     EPIC #1906 C8): a throwaway OS login gets only the hub's install line,
 #     answers what it asks with Enter, joins, opens the client and starts a
@@ -26,6 +26,10 @@
 #               printed (and handed to --scan-cmd <cmd> as $1, e.g. a notifier);
 #               waits for 「✓ 已登记到入口」 then 「能力:」. A refusal the page
 #               gives (no login on any machine yet, …) IS 要人帮 — a FAIL naming it.
+#               With --invite <code> (issue #2010) nobody scans: the code `fleet
+#               drill invite` printed confirms it (POST /fleet/login/approve) as
+#               the DRILL PERSON the hub minted — never as you, so the run walks
+#               a new colleague's first time, not your second computer's.
 #   7 client    the installer execs `fleet`: the task list must come up — `open
 #               terminal failed` there is a FAIL (fixed in #1901).
 #   8 scratch   the keyboard onto the list (prefix Space — the key the client's
@@ -36,8 +40,12 @@
 #               environment), retire its node (FLEET_DRILL_RETIRE_CMD <ep_id>;
 #               none → a WARN with the command, #1928), then
 #               fleet-login-remove.sh <login> --delete-home --apply.
+#               With --invite: the drill person deletes ITSELF instead — person,
+#               device, node (DELETE /v1/self, signed by the login's own
+#               certificate, else the code) — no operator token needed.
 #  10 residue   no login record, home, process, access group entry; the device
-#               revoked on the hub.
+#               revoked on the hub. With --invite: the hub no longer knows the
+#               drill person (its answer is kept as hub-residue.txt).
 #
 # The reading: 「要人帮的步骤」 = the FAILs a person would have had to be asked
 # about. The scan is the colleague's own and is not counted.
@@ -63,7 +71,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 usage() { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 
-LOGIN='' HUB='' SCAN_CMD='' KEEP=0 TEARDOWN=0 NAME=drill
+LOGIN='' HUB='' SCAN_CMD='' KEEP=0 TEARDOWN=0 NAME=drill INVITE=''
+DRILL_NS=fleet-drill@claude-fleet
 HOST=127.0.0.1 PORT=22
 TIMEOUT=${FLEET_DRILL_TIMEOUT:-900} SCAN_SECS=${FLEET_DRILL_SCAN_SECS:-600}
 STEP_SECS=${FLEET_DRILL_STEP_SECS:-120} POLL=${FLEET_DRILL_POLL_SECS:-2}
@@ -77,11 +86,17 @@ while [ $# -gt 0 ]; do
     --ssh-port) [ $# -ge 2 ] || usage; PORT=$2; shift 2 ;;
     --name)     [ $# -ge 2 ] || usage; NAME=$2; shift 2 ;;
     --teardown) [ $# -ge 2 ] || usage; LOGIN=$2; TEARDOWN=1; shift 2 ;;
+    --invite)   [ $# -ge 2 ] || usage; INVITE=$2; shift 2 ;;
     --keep)     KEEP=1; shift ;;
     -h|--help)  sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *)          die2 "unknown argument: $1" ;;
   esac
 done
+if [ -n "$INVITE" ]; then
+  printf '%s' "$INVITE" | grep -Eq '^fd_[a-z2-7]{26}$' || die2 "--invite: not an approve code (fd_… from fleet drill invite)"
+  # the drill person's certificate names ITS login: the OS login must be it
+  [ -n "$LOGIN" ] || die2 "--invite needs --login <the login fleet drill invite printed>"
+fi
 [ -n "$LOGIN" ] || LOGIN="drill-$(date +%m%d%H%M)"
 printf '%s' "$LOGIN" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' \
   || die2 "bad login name '$LOGIN' (lowercase letters, digits, _ and -; at most 32)"
@@ -100,7 +115,7 @@ HOMES=${FLEET_LOGIN_HOMES:-/Users}
 H="$HOMES/$LOGIN"
 SOCK="fleet-drill-$LOGIN"        # this run's own tmux server (label), never a fleet's
 TSESS=drill
-RM_SH="$BIN/fleet-login-remove.sh"
+RM_SH="${FLEET_DRILL_LOGIN_REMOVE:-$BIN/fleet-login-remove.sh}"   # the env is the selftest's seam
 TMUXB=$(command -v tmux 2>/dev/null || :)
 [ -n "$TMUXB" ] || for t in /opt/homebrew/bin/tmux /usr/local/bin/tmux; do [ -x "$t" ] && TMUXB=$t && break; done
 
@@ -123,7 +138,8 @@ fi
 
 RUN=$(mktemp -d "${TMPDIR:-/tmp}/fleet-onboard-drill.$LOGIN.XXXXXX") || die2 'mktemp failed'
 chmod 700 "$RUN"
-printf '%s: login=%s  hub=%s  ssh=%s:%s  log dir %s\n' "$PROG" "$LOGIN" "$HUB" "$HOST" "$PORT" "$RUN"
+printf '%s: login=%s  hub=%s  ssh=%s:%s  confirm=%s  log dir %s\n' "$PROG" "$LOGIN" "$HUB" "$HOST" "$PORT" \
+  "$([ -n "$INVITE" ] && echo 'drill person (--invite)' || echo 'a person scans')" "$RUN"
 
 # --- bookkeeping -----------------------------------------------------------------
 T0=$SECONDS TS=$SECONDS
@@ -180,6 +196,20 @@ kill_own_tmux() {
   tmux_own kill-server >/dev/null 2>&1 || :
   TMUX_UP=0
 }
+
+# hub_json <method> <path> <json>: the hub's answer, its HTTP code on the LAST
+# line ('' = no answer). The body travels on stdin — an approve code never
+# reaches an argv.
+hub_json() {
+  local out code
+  out=$(mktemp "$RUN/hub.XXXXXX") || return 1
+  code=$(printf '%s' "$3" | curl -sS --max-time 20 -o "$out" -w '%{http_code}' -X "$1" \
+         -H 'Content-Type: application/json' --data-binary @- "$HUB$2" 2>/dev/null)
+  cat "$out"; rm -f "$out"
+  printf '\n%s' "$code"
+}
+hub_code() { printf '%s' "${1##*$'\n'}"; }
+hub_body() { case "$1" in *$'\n'*) printf '%s' "${1%$'\n'*}" ;; esac; }
 
 # --- 1 open ------------------------------------------------------------------------
 step_open() {
@@ -268,13 +298,26 @@ step_scan() {
   SCAN_URL=$(pane | grep -Eo 'https?://[^ ]+/fleet/login\?code=[A-Z-]+' | tail -n 1)
   FPR=$(pane | grep -Eo 'SHA256:[A-Za-z0-9+/]+' | tail -n 1)
   shot scan
-  printf '\n  >>> 扫码（同事本人的一步）：%s  (验证码 %s, %ss 内有效)\n\n' "${SCAN_URL:-?}" "$code" "$SCAN_SECS"
-  [ -z "$SCAN_CMD" ] || [ -z "$SCAN_URL" ] || sh -c "$SCAN_CMD \"\$1\"" _ "$SCAN_URL" > "$RUN/scan-cmd.log" 2>&1 || :
+  if [ -n "$INVITE" ]; then
+    # bin/fleet-drill.sh approve: the code is the only credential it sends
+    if ! FLEET_DRILL_INVITE=$INVITE FLEET_HUB_URL=$HUB CCQUOTA_HUB_URL='' \
+         bash "$BIN/fleet-drill.sh" approve "$code" > "$RUN/approve.json" 2> "$RUN/approve.err"; then
+      shot scan
+      row "二维码 + 验证码 $code" "演练确认码代扫" "是 — 入口不肯确认（$(tail -n 1 "$RUN/approve.err")）"
+      failstep scan "the hub refused the drill's approve code: $(tail -n 1 "$RUN/approve.err") $(head -c 200 "$RUN/approve.json")"
+      return 1
+    fi
+    printf '\n  >>> 扫码由演练确认码代办：确认人是演练同事 %s（%s），不是运营者\n\n' \
+      "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("person_id","?"))' "$RUN/approve.json" 2>/dev/null)" "$LOGIN"
+  else
+    printf '\n  >>> 扫码（同事本人的一步）：%s  (验证码 %s, %ss 内有效)\n\n' "${SCAN_URL:-?}" "$code" "$SCAN_SECS"
+    [ -z "$SCAN_CMD" ] || [ -z "$SCAN_URL" ] || sh -c "$SCAN_CMD \"\$1\"" _ "$SCAN_URL" > "$RUN/scan-cmd.log" 2>&1 || :
+  fi
   k=$(wait_for "$SCAN_SECS" '^能力:' '✗ |还不能签发|access_denied|已过期')
   EPID=$(pane | grep -Eo '已登记到入口：[^（]*（ep_[0-9]+）' | grep -Eo 'ep_[0-9]+' | tail -n 1)
   shot joined
   case "$k" in
-    1) row "企业微信二维码 + 验证码 $code" "用企业微信扫码、点确认" "本人"
+    1) row "企业微信二维码 + 验证码 $code" "$([ -n "$INVITE" ] && echo '演练确认码代扫（演练同事）' || echo '用企业微信扫码、点确认')" "本人"
        pass scan "confirmed: device ${FPR:-?} · node ${EPID:-none} · $(elapsed)" ;;
     2) row "扫码后：$(pane | grep -E '✗ |还不能签发|access_denied|已过期' | tail -n 1)" "扫码" "是 — 入口不肯签发"
        failstep scan "the hub refused:"; tail_pane; return 1 ;;
@@ -341,12 +384,36 @@ hub_revoke() {
         --data-binary @- "$HUB/v1/fleet/devices/revoke" 2>&1) || { printf '%s' "$out"; return 1; }
   printf '%s' "$out"
 }
+# hub_self_delete: the drill person removes itself — person, devices, nodes —
+# signed by the login's own certificate, else proven by the approve code (a
+# scan that never finished left no certificate). Prints the hub's answer.
+hub_self_delete() {
+  local ts sig cert body resp
+  if cert=$(as_login head -n 1 "$H/.ssh/fleet-cert-cert.pub" 2>/dev/null) && [ -n "$cert" ]; then
+    ts=$(date +%s)
+    if sig=$(printf 'fleet-drill %s delete-self' "$ts" | as_login ssh-keygen -Y sign -f "$H/.ssh/fleet-cert" -n "$DRILL_NS" 2>/dev/null); then
+      body=$(python3 -c 'import json,sys; print(json.dumps({"cert":sys.argv[1],"sig":sys.argv[2],"ts":int(sys.argv[3])}))' "$cert" "$sig" "$ts")
+      resp=$(hub_json DELETE /v1/self "$body")
+      if [ "$(hub_code "$resp")" = 200 ]; then printf 'by its certificate: %s' "$(hub_body "$resp")"; return 0; fi
+    fi
+  fi
+  resp=$(hub_json DELETE /v1/self "$(printf '{"approve_code":"%s"}' "$INVITE")")
+  if [ "$(hub_code "$resp")" = 200 ]; then printf 'by the approve code: %s' "$(hub_body "$resp")"; return 0; fi
+  printf 'HTTP %s %s' "$(hub_code "$resp")" "$(hub_body "$resp" | head -c 200)"
+  return 1
+}
 step_offboard() {
   local fp rc warn='' out
   # what to take back on the hub, read off the login before it goes
   fp=$(as_login ssh-keygen -lf "$H/.ssh/fleet-cert.pub" 2>/dev/null | awk '{print $2}')
   FPR=${fp:-$FPR}
   [ -n "$EPID" ] || EPID=$(as_login cat "$H/.config/claude-fleet/node-join.log" 2>/dev/null | grep -Eo 'ep_[0-9]+' | tail -n 1)
+  if [ -n "$INVITE" ]; then
+    # the drill person's own way off the hub (#2010) — before its files go
+    if out=$(hub_self_delete); then note "drill person deleted itself on the hub $out"
+    else warn="$warn · the drill person did not delete itself ($out) — the hub deletes it when its life ends"; fi
+    FPR='' EPID=''   # its device and node went with it
+  fi
   kill_own_tmux
   ( cd / && sudo -n pkill -u "$LOGIN" ) >/dev/null 2>&1 || :
   if [ -n "$FPR" ]; then
@@ -368,6 +435,8 @@ step_offboard() {
   fi
   if [ -n "$warn" ]; then
     pass offboard "login removed (fleet-login-remove.sh --delete-home) · WARN$warn"
+  elif [ -n "$INVITE" ]; then
+    pass offboard "login removed (fleet-login-remove.sh --delete-home) · drill person, device and node deleted on the hub"
   else
     pass offboard "login removed (fleet-login-remove.sh --delete-home) · device revoked · node retired"
   fi
@@ -396,8 +465,20 @@ for d in json.load(sys.stdin).get("devices") or []:
 else: print("gone")' "$FPR" 2>/dev/null)
     case "$st" in revoked|gone) ;; *) left="$left · device $FPR ${st:-unreadable} on the hub" ;; esac
   fi
+  if [ -n "$INVITE" ]; then
+    # the hub's own word (kept as evidence): a 401 = it knows no such drill
+    # person. A 200 means it was still there — deleted now, but a leftover.
+    local resp
+    resp=$(hub_json DELETE /v1/self "$(printf '{"approve_code":"%s"}' "$INVITE")")
+    printf 'DELETE %s/v1/self (approve code) → HTTP %s %s\n' "$HUB" "$(hub_code "$resp")" "$(hub_body "$resp")" > "$RUN/hub-residue.txt"
+    case "$(hub_code "$resp")" in
+      401) note "hub: $(hub_body "$resp" | head -c 120) — the drill person is gone" ;;
+      200) left="$left · the drill person was still on the hub (deleted by this check)" ;;
+      *)   left="$left · the hub's answer on the drill person: HTTP $(hub_code "$resp")" ;;
+    esac
+  fi
   if [ -z "$left" ]; then
-    pass residue "none: no login, no home, no process, no access-group entry$([ -n "$FPR" ] && printf ', device revoked')"
+    pass residue "none: no login, no home, no process, no access-group entry$([ -n "$FPR" ] && printf ', device revoked')$([ -n "$INVITE" ] && printf ', no drill person on the hub')"
   else
     failstep residue "left behind:$left"
     return 1

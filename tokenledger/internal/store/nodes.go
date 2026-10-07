@@ -93,6 +93,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetDevices(); err != nil {
 		return err
 	}
+	// Drill people (claude-fleet#2010) — after the devices they own.
+	if err := s.ensureFleetDrill(); err != nil {
+		return err
+	}
 	if err := s.ensureFleetCreds(); err != nil {
 		return err
 	}

@@ -891,17 +891,30 @@ opens a real OS login and runs sudo, so never from a fleet worker on that same m
 
 ```sh
 sudo -v
-CCQUOTA_VIEWER_TOKEN=… ~/.claude/fleet/bin/fleet-onboard-drill.sh --hub https://<入口> \
-  --scan-cmd '~/.claude/fleet/bin/fleet-open.sh'      # the QR's confirm page to whoever scans
-~/.claude/fleet/bin/fleet-onboard-drill.sh --teardown <login>   # a run left up with --keep
+~/.claude/fleet/bin/fleet drill invite              # a DRILL PERSON: prints its login + approve code
+~/.claude/fleet/bin/fleet-onboard-drill.sh --login <login> --invite <code>   # the line it printed
+~/.claude/fleet/bin/fleet-onboard-drill.sh --teardown <login> --invite <code>   # a run left up with --keep
 ```
+
+**Confirm as a drill person, never as yourself** (issue #2010). Without `--invite`, whoever
+opens the QR's page confirms it — on 2026-10-06 that was the operator's own browser, so the
+run signed the drill's login as him and walked "his second computer", not a new colleague's
+first time. `fleet drill invite [--ttl 2h] [--login drill<x>] [--host <machine>]` (an admin,
+signed with your own connection certificate; else `CCQUOTA_VIEWER_TOKEN`) has the hub mint a
+`kind=drill` person — its one login is the drill's throwaway OS login on this machine, it
+borrows no credential, gets no session pass, sees only its own sessions — and a one-time
+approve code. The drill's scan step then confirms with that code (`fleet drill approve`,
+`POST /fleet/login/approve`: the code is the only credential sent), and its teardown has the
+drill person delete itself with its device and node (`DELETE /v1/self`, signed by the login's
+own certificate) — no operator token needed. The hub deletes it anyway when its life ends.
 
 It opens a bare login (no fleet clone, no daemons — a colleague's computer), types the line,
 answers every question with Enter, waits for the scan, opens a scratch session from the list,
-then revokes the device, retires the node (`FLEET_DRILL_RETIRE_CMD <ep_id>`, until #1928) and
-deletes the login; one PASS/FAIL line a step, `steps.md` (the table above) and one
+then revokes the device, retires the node (`FLEET_DRILL_RETIRE_CMD <ep_id>`, until #1928) — or,
+with `--invite`, has the drill person delete itself — and deletes the login; one PASS/FAIL line a step, `steps.md` (the table above) and one
 `screen-NN-<step>.txt` per screen in its log dir. Its selftest
-(`fleet-onboard-drill-selftest.sh`) drives only the refusals, against PATH shims.
+(`fleet-onboard-drill-selftest.sh`) drives only the refusals and the `--invite` teardown's hub
+half, against PATH shims; `fleet-drill-selftest.sh` pins `fleet drill`.
 
 ## Publishing to installs — the `stable` tag (发布到各安装)
 
