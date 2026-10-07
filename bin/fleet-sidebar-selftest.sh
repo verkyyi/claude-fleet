@@ -260,8 +260,8 @@ def check(condition, message):
     assert condition, message
     checks += 1
 
-def wait_for(predicate, message):
-    deadline = time.monotonic() + 8
+def wait_for(predicate, message, secs=8):
+    deadline = time.monotonic() + secs
     while time.monotonic() < deadline:
         if predicate():
             return
@@ -733,7 +733,7 @@ try:
     click(side, y, column=caret, repeat=True)
     wait_for(lambda: not kid_shown(), 'a tap on ▾ did not fold the child away before a producer frame')
     folded = time.monotonic() - started
-    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '', 'the fold tap did not write the fold bit')
+    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '', 'the fold tap did not write the fold bit', 20)   # dash-fold-toggle.sh: bash 3.2 sourcing fleet-lib
     check(refreshing(side), 'the stall ended before the unfold tap')
     time.sleep(.6)   # past the double-click window, THEN read where the row is
     y = row_y(side, 'worker-one')
@@ -741,7 +741,7 @@ try:
     click(side, y, column=caret, repeat=True)
     wait_for(kid_shown, 'a tap on ▸ did not draw the child row before a producer frame')
     opened = time.monotonic() - started
-    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '1', 'the unfold tap did not write the fold bit')
+    wait_for(lambda: tm('show-options', '-wqv', '-t', w1, '@expand') == '1', 'the unfold tap did not write the fold bit', 20)
     check(bool(view_on(w1)), 'a tap on the caret switched windows')
     check(stall.exists(), 'the producer stall ended before the fold was checked')
     print('sidebar timing: ▾ ▸ taps painted in %.2fs / %.2fs with the producer stalled' % (folded, opened))
