@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -28,7 +29,9 @@ import (
 //   - only when started with CCQUOTA_FLEET_ADMIN=1 (Config.FleetAdmin); any
 //     other agent refuses every account op with NOT_ADMIN;
 //   - only two ops, each one fixed argv — the hub picks the login and the
-//     display name, and both must pass control.ValidLogin / ValidFullName;
+//     display name, and both must pass control.ValidCreateLogin / ValidFullName
+//     (a create the hub marks existing may reuse a digit-leading login the
+//     person already holds elsewhere — macOS only, claude-fleet#2105);
 //   - never this agent's own login;
 //   - one op at a time, each op_id at most once.
 //
@@ -48,6 +51,9 @@ var (
 	loginNewScript    = filepath.Join(".claude", "fleet", "bin", "fleet-login-new.sh")
 	loginRemoveScript = filepath.Join(".claude", "fleet", "bin", "fleet-login-remove.sh")
 )
+
+// accountGOOS is the platform the digit-leading rule is judged on; a test seam.
+var accountGOOS = runtime.GOOS
 
 // accountCommand is the injection point for tests.
 var accountCommand = exec.CommandContext
@@ -179,8 +185,17 @@ func validateAccountOp(op control.AccountOp) error {
 	if op.Op != control.AccountCreate && op.Op != control.AccountRemove {
 		return errors.New("op must be create or remove")
 	}
-	if !control.ValidLogin(op.Login) {
+	existing := op.Op == control.AccountCreate && op.Existing
+	if !control.ValidCreateLogin(op.Login, existing) {
+		if existing {
+			return errors.New("login is not 2-16 lowercase letters and digits with at least one letter")
+		}
 		return errors.New("login is not 2-16 lowercase letters and digits starting with a letter")
+	}
+	if existing && !control.ValidLogin(op.Login) && accountGOOS != "darwin" {
+		// useradd's default NAME_REGEX (and Debian adduser's) wants a
+		// leading letter or _; fleet-login-new.sh is macOS-only anyway.
+		return errors.New("a login starting with a digit can only be opened on macOS, not " + accountGOOS)
 	}
 	if u, err := user.Current(); err == nil && u.Username == op.Login {
 		return errors.New("refusing to touch this agent's own login")
