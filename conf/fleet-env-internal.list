@@ -292,9 +292,14 @@ FLEET_PULLBACK                     knob: 0 turns off --auto pulling back a sessi
 FLEET_PULLBACK_RETIRED_DIR         seam: where fleet_win_retire marks the fleet's own closes (default $FLEET_CONF_DIR/global/retired; #1840)
 FLEET_PICK_MODEL                   handoff: the model an account pick is evaluated for
 FLEET_PLUGIN_NAME                  knob: the Claude plugin namespace fleet commands resolve under
+FLEET_POOL_CLAIM_REFILL_DELAY      knob: seconds a node claim (`claim --agent`) waits before refilling its slot (scratch-pool.sh, 5, #2233)
+FLEET_POOL_DISK_PROBE_CMD          seam: prints a fake free-GB reading for the pool's grow gate (scratch-pool.sh, #2233)
+FLEET_POOL_LOAD_PER_CORE           knob: load per core above which a warm-pool slot only shrinks (scratch-pool.sh, 1, #2233)
+FLEET_POOL_LOCK_WAIT               knob: seconds a non-tick ensure waits for a slot another ensure is warming (scratch-pool.sh, 300, #2233)
 FLEET_POOL_PROBE_TIMEOUT           knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
 FLEET_POOL_SETTLE_MIN              knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
 FLEET_POOL_STABLE_HITS             knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
+FLEET_POOL_TICK                    knob: 0 keeps the diskguard tick from refilling the warm pool (fleet-diskguard.sh pool_watch, #2233)
 FLEET_POOL_WARM_TIMEOUT            knob: internal pacing/limit, safe in-code default (scratch-pool.sh)
 FLEET_POPUP                        handoff: 1 inside a fleet popup, so an fzf there draws no border of its own (fleet-popup-lib.sh, #1619)
 FLEET_POPUP_NARROW                 knob: a client this many columns or narrower gets the 96%×90% popup (fleet-popup-lib.sh, 80, #1619)

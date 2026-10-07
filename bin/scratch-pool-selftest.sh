@@ -25,7 +25,11 @@
 #   K–P. one pool per hosted repo (#797): a B claim gets a B window and never A's;
 #        untagged entries by worktree origin; per-repo FLEET_SCRATCH_POOL; the
 #        dash-raw-session claim; fan-out reap/status; a one-repo fleet the same road
-#   Q. a fleet with no repo has no pool
+#   Q. a fleet with no repo has no repo pool, only the HOME slot (#2233)
+#   R–X. the slots of #2233: the node's claim (`--repo <slug|-> --agent`, exit 3),
+#        old-config entries never handed out, no refill on a busy machine, shrink,
+#        pool off, `--status`, the claim's fast-forward to origin/<base>
+#   (scratch-pool-live-selftest.sh runs the same pool on a real tmux server.)
 #
 # Exit 0 = pass; non-zero = fail.
 set -uo pipefail
@@ -307,13 +311,114 @@ out=$(bash "$POOL" status tf 2>&1)
 printf '%s\n' "$out" | grep -q "^@11 .* repo=o/a want=1$" || fail "P one-repo status names its repo, like a 2-repo fleet" "$out"
 ok "P one-repo fleet: the same per-repo pool (claim by repo, status names it)"
 
-# Q: a fleet with no repo has no pool — claim / status / ensure are silent no-ops.
+# Q: a fleet with no repo has no REPO pool — a repo claim / the bare claim are
+# silent no-ops — but it has the HOME slot (#2233): an ensure there warms $HOME.
 reset_state; mkfleet; printf 'FLEET_SCRATCH_POOL=1\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
 warm '@11' o/a "$WORK/wt-a"
 out=$(bash "$POOL" claim tf 2>&1); [ -z "$out" ] || fail "Q a no-repo fleet must claim nothing" "$out"
-out=$(bash "$POOL" ensure tf 2>&1); [ -z "$out" ] || fail "Q a no-repo fleet must warm nothing" "$out"
-grep -q "new-window" "$STATE/log" && fail "Q a no-repo fleet must not open a window" "$(cat "$STATE/log")"
-ok "Q no-repo fleet: no pool"
+out=$(bash "$POOL" claim tf --repo o/a 2>&1); [ -z "$out" ] || fail "Q a no-repo fleet must claim no repo entry" "$out"
+FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$POOL" ensure tf >/dev/null 2>&1
+grep -q "new-window .* -n warm-home -c $HOME " "$STATE/log" || fail "Q the HOME slot must warm a window in \$HOME" "$(cat "$STATE/log")"
+grep -q "new-window .* -n warm-[0-9]" "$STATE/log" && fail "Q a no-repo fleet must not warm a repo entry" "$(cat "$STATE/log")"
+grep -q "@norepo '1'" "$STATE/log" || fail "Q the HOME entry stamps @norepo before its launcher reads the conf" "$(cat "$STATE/log")"
+ok "Q no-repo fleet: no repo pool, the HOME slot warms in \$HOME"
+
+# ---- R–X: the slots of #2233 (HOME, the node's claim, config, load, shrink) ----
+git -C "$MAIN" remote set-url origin "$MAIN"       # a spawn's fetch stays offline
+home() {  # home <wid> — a ready HOME entry
+  addwin "$1" 'tf-pool' 'warm-home' 100 30
+  setopt_ "$1" pool 1; setopt_ "$1" pool_ready 1; setopt_ "$1" norepo 1
+  setopt_ "$1" pool_account ""; setopt_ "$1" pool_born "$(date +%s)"
+}
+# R: the node's claim — `--repo <slug|-> --agent <a>` prints the window id alone,
+# exit 3 on an empty slot; the 3-field form is untouched.
+reset_state; mkfleet; mkconf 1
+home '@21'; warm '@11' o/a "$WORK/wt-a"
+out=$(bash "$POOL" claim tf --repo - --agent claude 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$out" = '@21' ] || fail "R a HOME claim must print the window id alone" "rc=$rc out=$out"
+[ "$(in_sess '@21')" = tf ] && [ "$(in_sess '@11')" = tf-pool ] || fail "R the HOME claim moves the HOME entry only" "$(cat "$STATE/windows")"
+grep -q "run-shell -b .*ensure 'tf' --repo '-' --agent 'claude' --soon" "$STATE/log" || fail "R the node's claim must ask for its slot's refill" "$(cat "$STATE/log")"
+out=$(bash "$POOL" claim tf --repo - --agent claude 2>&1); rc=$?
+[ "$rc" = 3 ] && [ -z "$out" ] || fail "R an empty slot answers exit 3" "rc=$rc out=$out"
+out=$(bash "$POOL" claim tf --repo o/a --agent codex 2>&1); rc=$?
+[ "$rc" = 3 ] || fail "R a claude entry is not a codex slot's" "rc=$rc out=$out"
+out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$out" = '@11' ] || fail "R a repo claim by slug + agent" "rc=$rc out=$out"
+out=$(bash "$POOL" claim tf 2>&1); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] || fail "R the old claim on an empty pool stays a silent exit 0" "rc=$rc out=$out"
+ok "R claim --repo <slug|-> --agent: window id, exit 3 when the slot is empty, refill asked"
+
+# S: an entry started on an older configuration (an upgrade) is never handed out,
+# and the next reap retires it; one on the current configuration is.
+reset_state; mkfleet; mkconf 1
+mkdir -p "$FLEET_CONF_DIR/global"; printf 'claude NEW x\nver v2\n' > "$FLEET_CONF_DIR/global/agent-cfg.expected"
+warm '@11' o/a "$WORK/wt-a"; setopt_ '@11' agent_cfg OLD; setopt_ '@11' agent_ver v2
+out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1); rc=$?
+[ "$rc" = 3 ] || fail "S a 配置旧 entry must not be handed out" "rc=$rc out=$out"
+setopt_ '@11' agent_cfg NEW; setopt_ '@11' agent_ver v1
+out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1); rc=$?
+[ "$rc" = 3 ] || fail "S a 待换新 entry (older fleet version) must not be handed out" "rc=$rc out=$out"
+bash "$POOL" reap tf >/dev/null 2>&1
+grep -q "kill-window -t @11" "$STATE/log" || fail "S the reap must retire the old-config entry" "$(cat "$STATE/log")"
+reset_state; mkfleet; mkconf 1
+warm '@12' o/a "$WORK/wt-a"; setopt_ '@12' agent_cfg NEW; setopt_ '@12' agent_ver v2
+out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1)
+[ "$out" = '@12' ] || fail "S a current-config entry is handed out" "$out"
+rm -f "$FLEET_CONF_DIR/global/agent-cfg.expected"
+ok "S upgrade: old-config entries are never claimed and are reaped"
+
+# T: a busy machine only shrinks — load per core over 1, or the disk under the
+# warn line, and an empty slot is not refilled; status says why.
+reset_state; mkfleet; mkconf 1
+FLEET_LOAD_PROBE_CMD='echo 3.00' FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$POOL" ensure tf >/dev/null 2>&1
+grep -q "new-window\|new-session" "$STATE/log" && fail "T a loaded machine must not warm" "$(cat "$STATE/log")"
+out=$(FLEET_LOAD_PROBE_CMD='echo 3.00' bash "$POOL" status tf 2>&1)
+printf '%s\n' "$out" | grep -q '^slot o/a agent=claude want=1 ready=0 hold=load 3.00/core > 1$' || fail "T status names the load hold" "$out"
+: > "$STATE/log"
+FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 3' bash "$POOL" ensure tf >/dev/null 2>&1
+grep -q "new-window\|new-session" "$STATE/log" && fail "T a disk under the warn line must not warm" "$(cat "$STATE/log")"
+FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$POOL" ensure tf >/dev/null 2>&1
+grep -q "new-session -d -s tf-pool .* -n warm-home" "$STATE/log" || fail "T a quiet machine warms" "$(cat "$STATE/log")"
+ok "T load over 1/core or a low disk: no refill (status: hold=…); quiet: refill"
+
+# U: shrink — a slot holding more than FLEET_SCRATCH_POOL retires the excess.
+reset_state; mkfleet; mkconf 1
+warm '@11' o/a "$WORK/wt-a"; warm '@12' o/a "$WORK/wt-b"
+FLEET_LOAD_PROBE_CMD='echo 3.00' bash "$POOL" ensure tf --repo o/a >/dev/null 2>&1
+[ "$(grep -c "kill-window -t @1[12]" "$STATE/log")" = 1 ] || fail "U one of the two entries must be retired" "$(cat "$STATE/log")"
+ok "U a slot over its size shrinks, even while growth is held"
+
+# V: pool off — nothing warms, the node's claim says exit 3, status says want=0.
+reset_state; mkfleet; mkconf 0
+FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$POOL" ensure tf >/dev/null 2>&1
+grep -q "new-window\|new-session" "$STATE/log" && fail "V FLEET_SCRATCH_POOL=0 must warm nothing" "$(cat "$STATE/log")"
+out=$(bash "$POOL" claim tf --repo - --agent claude 2>&1); rc=$?
+[ "$rc" = 3 ] || fail "V pool off: the node's claim is exit 3" "rc=$rc out=$out"
+ok "V FLEET_SCRATCH_POOL=0: no slot warms, no claim"
+
+# W: `--status` with no session reads the caller's fleet: one slot line per repo + HOME.
+reset_state; mkfleet; mkconf 1; warm '@11' o/a "$WORK/wt-a"; home '@21'
+out=$(FLEET_SESSION=tf FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' bash "$POOL" --status 2>&1)
+printf '%s\n' "$out" | grep -qx 'slot o/a agent=claude want=1 ready=1' \
+  && printf '%s\n' "$out" | grep -qx 'slot HOME agent=claude want=1 ready=1' \
+  && printf '%s\n' "$out" | grep -q '^@21 .* repo=HOME want=1$' || fail "W --status lists every slot" "$out"
+ok "W --status (no session): a slot line per repo and HOME"
+
+# X: a warm worktree is brought to origin/<base> before it is handed out; one git
+# cannot fast-forward (commits of its own) is retired, never handed out.
+CL="$WORK/clone"; git clone -q "$MAIN" "$CL" 2>/dev/null || fail "X clone failed"
+git -C "$CL" worktree add -q -b scratch-9 "$WORK/wt-x" origin/master 2>/dev/null || fail "X worktree add failed"
+( cd "$MAIN" && echo two > g && git add g && git commit -qm two ) && git -C "$CL" fetch -q origin 2>/dev/null
+reset_state; mkfleet; mkconf 1; warm '@19' o/a "$WORK/wt-x"
+out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1)
+[ "$out" = '@19' ] || fail "X the entry must be claimed" "$out"
+[ "$(git -C "$WORK/wt-x" rev-parse HEAD)" = "$(git -C "$CL" rev-parse origin/master)" ] || fail "X the claimed worktree must sit on origin/master"
+( cd "$WORK/wt-x" && echo mine > h && git add h && git commit -qm mine ) 
+( cd "$MAIN" && echo three > g && git add g && git commit -qm three ) && git -C "$CL" fetch -q origin 2>/dev/null
+reset_state; mkfleet; mkconf 1; warm '@19' o/a "$WORK/wt-x"
+out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1); rc=$?
+[ "$rc" = 3 ] && grep -q "kill-window -t @19" "$STATE/log" || fail "X a worktree that cannot fast-forward is retired, not handed out" "rc=$rc out=$out"
+ok "X claim fast-forwards the worktree to origin/<base>; a diverged one is retired"
 
 printf '\n%s tests passed\n' "$pass"
 exit 0

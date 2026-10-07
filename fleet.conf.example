@@ -2471,8 +2471,14 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # scratch only ever claims one of its own repo's. A repo overlay
 # (fleets/<sess>/repos/<slug>.conf) may set its own FLEET_SCRATCH_POOL; unset
 # there, it takes this fleet value — so N here means N per hosted repo.
+#
+# ON by default (issue #2233): 1 per hosted repo plus 1 for HOME (a no-repo
+# session warmed in $HOME), refilled on the diskguard tick within seconds of a
+# claim. A slot only grows while the machine is quiet — load per core at most
+# FLEET_POOL_LOAD_PER_CORE (1) and the disk above FLEET_DISK_WARN_GB — and an entry
+# warmed before an upgrade is retired, never handed out. 0 turns it off.
 # @label=Warm scratch sessions @group=spawn @tier=common @scope=fleet @edit=int
-#FLEET_SCRATCH_POOL=0
+#FLEET_SCRATCH_POOL=1
 
 # Seconds before an unclaimed warm entry is retired and rebuilt. Its worktree is a
 # snapshot of origin/<base> taken when it was created, so handing out an old one
