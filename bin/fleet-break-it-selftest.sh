@@ -2463,9 +2463,13 @@ drill_node_paused_still_placed() {
   mkdir -p "$d/conf" "$d/tmp"
   # cap <mem-stub> <load-stub> [VAR=val …] → the capacity object. 16000 MB of RAM,
   # one agent of 400 MB (×3 growth ⇒ 1200 MB a session) — never this box's own ps.
+  # The gate is switched ON here explicitly: run-selftests.sh exports FLEET_ADMIT=0
+  # for the whole gate (so no selftest's spawn is held by the runner's memory),
+  # and with it off capacity says admit:true and no room — the drill's last leg,
+  # which passes its own FLEET_ADMIT=0 after the 1.
   cap() {
     local m="$1" l="$2"; shift 2
-    env "$@" FLEET_CONF_DIR="$d/conf" TMPDIR="$d/tmp" HOME="$d" FLEET_MEM_TOTAL_MB=16000 \
+    env FLEET_ADMIT=1 "$@" FLEET_CONF_DIR="$d/conf" TMPDIR="$d/tmp" HOME="$d" FLEET_MEM_TOTAL_MB=16000 \
       FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 409600 01:00 claude\\n'" \
       FLEET_MEM_PROBE_CMD="$m" FLEET_LOAD_PROBE_CMD="$l" \
       bash "$BIN/fleet-control-read.sh" capacity 2>&1
