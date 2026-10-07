@@ -428,7 +428,7 @@ refresh() {
     fi
     u=$(fleet_uuid "$sess" 2>/dev/null) || u=''
     repos=$(fleet_repos "$sess" 2>/dev/null | tr '\n' ' ')
-    if fleet_multirepo "$sess" 2>/dev/null; then m=1; else m=0; fi
+    m=1   # every key carries its repo (issue #1939) — the bit stays for an older reader
     printf '%s\t%s\t%s\t%s\n' "$sess" "$u" "$m" "$repos"
     bash "$BIN/fleet-control-read.sh" workers "$sess" 2>/dev/null \
       | while IFS= read -r line; do [ -n "$line" ] && printf '%s\t%s\n' "$sess" "$line"; done >> "$mf"
@@ -516,6 +516,7 @@ try:
 except Exception:
     worker_key = None
 windows = {}
+one_repo = {f["sess"]: f["repos"] for f in local}
 if worker_key is not None:
     try:
         for line in open(mpath, encoding="utf-8"):
@@ -526,6 +527,10 @@ if worker_key is not None:
             k = worker_key(issue, p[3] == "1", p[4], p[9] if len(p) > 9 else "")
             if k:
                 windows[(p[0], k)] = p[1]
+                # …and by the bare key a one-repo fleet's worker_id wore before
+                # issue #1939 (the one repo's alias, read for one version)
+                if ":" in k and len(one_repo.get(p[0]) or []) == 1:
+                    windows.setdefault((p[0], k.split(":", 1)[1]), p[1])
     except OSError:
         pass
 slug = lambda r: re.sub(r"[^A-Za-z0-9._-]", "", (r or "").replace("/", "-"))

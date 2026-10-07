@@ -1242,21 +1242,20 @@ fleet_target_repo() {
   printf '%s\n' "$all"; return 0
 }
 
-# fleet_issue_key <sess> <repo> <N> → the join key for issue N of <repo>.
+# fleet_issue_key <sess> <repo> <N> → the join key for issue N of <repo>:
+# `<owner/name>#<N>`, however many repos the fleet hosts (issue #1939).
 fleet_issue_key() {
-  if fleet_multirepo "${1:-}"; then printf '%s#%s' "$(fleet_norm_repo "${2:-}")" "${3:-}"
-  else printf '%s' "${3:-}"; fi
+  printf '%s#%s' "$(fleet_norm_repo "${2:-}")" "${3:-}"
 }
 
 # fleet_window_key <sess> <window-target> → the window's join key, the same
 # spelling fleet_issue_key gives its (repo, N): nothing for a window with no
-# @issue; `#<N>` for a multi-repo window whose repo is unknown (see below).
+# @issue; `#<N>` for a window whose repo is unknown (see below).
 fleet_window_key() {
   local n
   n=$(_fleet_tmux "${1:-}" display-message -p -t "${2:-}" '#{@issue}' 2>/dev/null)
   [ -n "$n" ] || return 0
-  if fleet_multirepo "${1:-}"; then printf '%s#%s' "$(fleet_window_repo "$1" "$2")" "$n"
-  else printf '%s' "$n"; fi
+  printf '%s#%s' "$(fleet_window_repo "$1" "$2")" "$n"
 }
 
 # fleet_repo_for_slug <sess> <repo|slug|name> → the hosted owner/name it names,
@@ -1275,25 +1274,61 @@ EOF
   printf '%s' "$hit"
 }
 
-# fleet_okey_prefix <sess> <repo> → `<slug>:` in a multi-repo fleet, else nothing:
-# what goes in front of `issue-<N>` / `scratch-<N>` in a dash grouping key, so a
-# key built here equals the @origin a multi-repo spawn stamps (issue #789).
+# fleet_okey_prefix <sess> <repo> → `<slug>:`: what goes in front of `issue-<N>` /
+# `scratch-<N>` in a dash grouping key, so a key built here equals the @origin a
+# spawn stamps (issue #789) — in every fleet, however many repos (issue #1939).
+# No repo ⇒ nothing.
 fleet_okey_prefix() {
-  fleet_multirepo "${1:-}" || return 0
-  printf '%s:' "$(fleet_slug "$(fleet_norm_repo "${2:-}")")"
+  local r; r=$(fleet_norm_repo "${2:-}")
+  [ -n "$r" ] || return 0
+  printf '%s:' "$(fleet_slug "$r")"
+}
+
+# ---- one spelling of a session key (issue #1939, EPIC #1935 C4) ---------------
+# A key is ALWAYS written `<slug>:issue-<N>` / `<slug>:scratch-<N>`, whether the
+# fleet hosts one repo or five: before this a one-repo fleet wrote `issue-921` and
+# the same session became `<slug>:issue-921` the moment a second repo was added —
+# one parent's ledger split into two books, and a child counted twice (#982). A
+# BARE key is read for ONE version as an alias of the fleet's only repo — never
+# written again. These two helpers are the alias rule; nothing else spells it.
+
+# fleet_key_qualify <sess> <key> → <key> in its canonical spelling: a bare
+# `issue-<N>` / `scratch-<N>` takes the slug of the fleet's ONE repo; anything
+# else — a qualified key, a bare key in a fleet of 2+ repos (it names no one
+# repo; fleet_win_for_key refuses it) or of NO repo (bare is its only spelling:
+# nothing to qualify with), a non-key — comes back as it went in.
+fleet_key_qualify() {
+  local k="${2:-}" r
+  case "$k" in issue-[0-9]*|scratch-[0-9]*) ;; *) printf '%s' "$k"; return 0 ;; esac
+  r=$(fleet_repos "${1:-}")
+  case "$r" in ?*/?*) [ "$(printf '%s\n' "$r" | grep -c .)" = 1 ] && k="$(fleet_slug "$r"):$k" ;; esac
+  printf '%s' "$k"
+}
+
+# fleet_key_alias <sess> <key> → the bare key a qualified <key> was spelled as
+# before issue #1939 — printed only while <key>'s repo is the fleet's ONE repo
+# (bare keys were only ever written in a one-repo fleet, so in a 2+ repo fleet a
+# bare book could be any repo's); nothing otherwise. Readers merge its book.
+fleet_key_alias() {
+  local k="${2:-}" r
+  case "$k" in ?*:issue-[0-9]*|?*:scratch-[0-9]*) ;; *) return 0 ;; esac
+  r=$(fleet_repos "${1:-}")
+  case "$r" in ?*/?*) ;; *) return 0 ;; esac
+  [ "$(printf '%s\n' "$r" | grep -c .)" = 1 ] || return 0
+  [ "$(fleet_slug "$r")" = "${k%%:*}" ] || return 0
+  printf '%s' "${k#*:}"
 }
 
 # fleet_bound_windows <sess> → one `<key>\t<window_id>\t<window_name>` line per
 # window of the fleet bound to an issue — by @issue, else by a bare `issue-<N>`
 # window NAME (a window whose binding was cleared is still that issue's session).
-# <key> is fleet_issue_key's spelling; a multi-repo window whose repo is unknown
+# <key> is fleet_issue_key's spelling; a window whose repo is unknown
 # gets `#<N>` — equal to no real key, so a join never picks it by guesswork (a
 # caller that must be conservative, e.g. spawn dedup, matches `#<N>` on purpose).
 # (fleet_issue_windows, #791, answers the narrower question: the ids bound to ONE
 # given (repo, issue).)
 fleet_bound_windows() {
-  local sess="${1:-}" multi=0 wid iss name r n
-  fleet_multirepo "$sess" && multi=1
+  local sess="${1:-}" wid iss name r n
   while IFS='|' read -r wid iss name; do
     [ -n "$wid" ] || continue
     n=$iss
@@ -1301,12 +1336,8 @@ fleet_bound_windows() {
       case "$name" in issue-*) n=${name#issue-} ;; *) continue ;; esac
     fi
     case "$n" in ''|*[!0-9]*) continue ;; esac
-    if [ "$multi" = 1 ]; then
-      r=$(fleet_window_repo "$sess" "$wid")
-      printf '%s#%s\t%s\t%s\n' "$r" "$n" "$wid" "$name"
-    else
-      printf '%s\t%s\t%s\n' "$n" "$wid" "$name"
-    fi
+    r=$(fleet_window_repo "$sess" "$wid")
+    printf '%s#%s\t%s\t%s\n' "$r" "$n" "$wid" "$name"
   done <<EOF
 $(_fleet_tmux "$sess" list-windows -t "$sess" -F '#{window_id}|#{@issue}|#{window_name}' 2>/dev/null)
 EOF
@@ -4403,14 +4434,14 @@ fleet_scratch_key() {
 # reading any conf, so a one-repo fleet pays nothing (the degenerate case).
 _fleet_hosts_many() { fleet_multirepo "$@"; }   # one rule for every key (#790)
 
-# _fleet_key_prefix <sess> <window-target> → "" in a one-repo fleet, "<slug>:" of the
-# window's repo in a 2+ repo fleet; exit 1 there when the window's repo is unknown or
-# it is a no-repo session — the caller then mints no key rather than guess.
+# _fleet_key_prefix <sess> <window-target> → "<slug>:" of the window's repo, in
+# every fleet (issue #1939); exit 1 when the window's repo is unknown or it is a
+# no-repo session — the caller then mints no key rather than guess. A fleet that
+# hosts NO repo has nothing to qualify with and nothing to confuse: "" (bare).
 _fleet_key_prefix() {
   local r
-  _fleet_hosts_many "${1:-}" || return 0
   r=$(fleet_window_repo "${1:-}" "${2:-}")
-  [ -n "$r" ] || return 1
+  if [ -z "$r" ]; then [ -z "$(fleet_repos "${1:-}")" ] && return 0; return 1; fi
   printf '%s:' "$(fleet_slug "$r")"
 }
 
@@ -4442,11 +4473,11 @@ fleet_win_stamp_cmd() {
 # any backgrounded re-invocation. Bare tmux on purpose: inside a pane $TMUX
 # already names the right per-fleet socket (the CLAUDE.md socket rail).
 #
-# In a fleet that hosts 2+ repos (issue #789) the key is repo-qualified —
-# `<slug>:issue-<N>` / `<slug>:scratch-<N>`, slug = fleet_slug(owner/name) — since
-# issue-12 and scratch-4 exist once PER REPO there. A window whose repo is unknown
-# yields NOTHING (≡ hub) rather than a bare key that could name the other repo's
-# window. A one-repo fleet's keys are unchanged.
+# The key is repo-qualified (issue #789) — `<slug>:issue-<N>` / `<slug>:scratch-<N>`,
+# slug = fleet_slug(owner/name) — in EVERY fleet (issue #1939): issue-12 and
+# scratch-4 exist once per repo, and a one-repo fleet that gains a second repo must
+# not rename its sessions. A window whose repo is unknown yields NOTHING (≡ hub)
+# rather than a bare key that could name another repo's window.
 fleet_origin_key() {
   [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
   local o iss owt pth k pre
@@ -4586,7 +4617,11 @@ fleet_origin_canon() {
       *issue-*) n=${ex##*issue-}; case "$n" in ''|*[!0-9]*) : ;; *) k="issue-$n" ;; esac ;;
     esac
   fi
-  if [ -n "$k" ]; then printf '%s' "$k"; return 0; fi
+  if [ -n "$k" ]; then
+    # A bare key is the one repo's (issue #1939): written qualified, never bare.
+    # No target and no pane: no fleet to read a repo from — the key as it is.
+    fleet_key_qualify "${tgt:-$([ -n "${TMUX:-}" ] && fleet_current_session 2>/dev/null)}" "$k"; return 0
+  fi
   if [ -n "$det" ]; then
     printf 'fleet: --origin %s is not a provenance key (issue-<N> / scratch-<N>); stamping the detected %s instead\n' "$ex" "$det" >&2
     printf '%s' "$det"; return 0
@@ -4644,7 +4679,8 @@ _fleet_wfk_repo_ok() {
 #   ② @worktree, once stamped, is the scratch's identity; the pane cwd is read ONLY
 #     when no @worktree exists (a crash-restored scratch) — never as a second chance
 #     for a window whose stamp said otherwise
-# A one-repo fleet with one window per key behaves byte for byte as before.
+# A bare key in a fleet of ONE repo is read as that repo's (issue #1939, one
+# version): it matches the windows a qualified key would, never written again.
 fleet_win_for_key() {
   local key="${1:-}" sock="${2:-}" wl line wid rest iss wt pth cand bn sn pre='' wsess pool fleet hits='' n names
   # `<slug>:<key>` (issue #789): match the bare key, then require the window's repo.
@@ -5296,7 +5332,7 @@ fleet_hub_lease() {
   fi
   u=$(fleet_uuid "$sess") && [ -n "$u" ] || {
     printf 'fleet: hub lease unavailable (no fleet UUID for %s on this machine) — only the GitHub claim guards #%s\n' "$sess" "$num" >&2; return 1; }
-  _fleet_hosts_many "$sess" && pre="$(fleet_slug "$(fleet_norm_repo "$repo")"):"
+  pre=$(fleet_okey_prefix "$sess" "$repo")
   ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" lease "$act" ${force:+"$force"} "$repo" "$num" "$u/${pre}issue-$num" </dev/null 2>"$ef"); rc=$?
   # Name machines the way the sidebar does (FLEET_NODE_ALIASES, `macmini=m5`): the
@@ -5373,7 +5409,7 @@ fleet_hub_place() {
   u=$(fleet_uuid "$sess") && [ -n "$u" ] || {
     printf 'fleet: hub placement unavailable (no fleet UUID for %s on this machine) — opening %s here\n' "$sess" "$what" >&2; return 1; }
   if [ "$num" = scratch ]; then wid="$u"; name=$(printf '%s' "$name" | LC_ALL=C tr -d '[:cntrl:]#')
-  else _fleet_hosts_many "$sess" && pre="$(fleet_slug "$(fleet_norm_repo "$repo")"):"; wid="$u/${pre}issue-$num"; name=''; fi
+  else pre=$(fleet_okey_prefix "$sess" "$repo"); wid="$u/${pre}issue-$num"; name=''; fi
   # An alias the operator typed (`m5`) is the hub's hostname (`macmini`).
   [ "$node" != auto ] && node=$(printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$node" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }')
   ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-err.XXXXXX" 2>/dev/null) || ef=/dev/null
@@ -5645,10 +5681,13 @@ fleet_restore_wins() {
 # @origin_gen, which belonged to the old key — are rewritten. So every reader that
 # joins on keys (the sidebar's nesting, the k/N badge, fleet-children.sh, the
 # report digest) follows the parent without learning about identities. A child
-# with no @origin_fid, or whose parent is not live here, is left alone. Prints one
-# `healed <window> <old> → <new>` line per rewrite; never fails.
+# with no @origin_fid, or whose parent is not live here, is left alone — except a
+# BARE @origin (issue #1939), stamped before keys always carried the repo: in a
+# fleet of one repo it is that repo's, so it is rewritten `<slug>:<key>` with its
+# @origin_gen kept (the generation is the same key's, read through the alias).
+# Prints one `healed <window> <old> → <new>` line per rewrite; never fails.
 fleet_origin_heal() {
-  local sess="${1:-}" sock="${2:-}" wl line wid rest wsess pool f of o ids='' pw pk
+  local sess="${1:-}" sock="${2:-}" wl line wid rest wsess pool f of o ids='' pw pk one=''
   [ -n "$sess" ] || return 0
   if [ -n "$sock" ]; then
     wl=$(fleet_lw '#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}|#{@origin_fid}|#{@origin}' tmux -L "$sock")
@@ -5656,7 +5695,14 @@ fleet_origin_heal() {
     wl=$(fleet_lw '#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}|#{@origin_fid}|#{@origin}' _fleet_tmux "$sess")
   fi
   [ -n "$wl" ] || return 0
-  case "$wl" in *'|'????????-????-????-????-????????????'|'*) ;; *) return 0 ;; esac   # nobody has an @origin_fid
+  # A bare @origin anywhere ⇒ the one repo's prefix, read once (nothing in a 0/2+ repo fleet).
+  case "$wl" in *'|issue-'[0-9]*|*'|scratch-'[0-9]*)
+    one=$(fleet_key_qualify "$sess" issue-0)
+    case "$one" in ?*:issue-0) one=${one%issue-0} ;; *) one='' ;; esac ;;
+  esac
+  if [ -z "$one" ]; then
+    case "$wl" in *'|'????????-????-????-????-????????????'|'*) ;; *) return 0 ;; esac   # nobody has an @origin_fid
+  fi
   while IFS= read -r line; do               # pass 1: identity → window, this fleet's own
     [ -n "$line" ] || continue
     wid=${line%%|*}; rest=${line#*|}; wsess=${rest%%|*}; rest=${rest#*|}
@@ -5669,19 +5715,27 @@ EOF
     [ -n "$line" ] || continue
     wid=${line%%|*}; rest=${line#*|}; wsess=${rest%%|*}; rest=${rest#*|}
     rest=${rest#*|}; rest=${rest#*|}; of=${rest%%|*}; o=${rest#*|}
-    [ "$wsess" = "$sess" ] && fleet_is_fid "$of" || continue
-    pw=$(printf '%s' "$ids" | awk -v f="$of" '$1 == f { print $2; n++ } END { exit n != 1 }') || continue
-    [ "$pw" != "$wid" ] || continue
-    pk=$(fleet_window_okey "$sess" "$pw" 2>/dev/null)
+    [ "$wsess" = "$sess" ] || continue
+    pk=''
+    if fleet_is_fid "$of" \
+       && pw=$(printf '%s' "$ids" | awk -v f="$of" '$1 == f { print $2; n++ } END { exit n != 1 }') \
+       && [ "$pw" != "$wid" ]; then
+      pk=$(fleet_window_okey "$sess" "$pw" 2>/dev/null)
+    fi
+    if [ -z "$pk" ] && [ -n "$one" ]; then
+      case "$o" in issue-[0-9]*|scratch-[0-9]*) pk="$one$o" ;; esac
+    fi
     [ -n "$pk" ] && [ "$pk" != "$o" ] || continue
     if [ -n "$sock" ]; then
       tmux -L "$sock" set-window-option -t "$wid" @origin "$pk" 2>/dev/null || continue
-      tmux -L "$sock" set-window-option -u -t "$wid" @origin_gen 2>/dev/null
     else
       _fleet_tmux "$sess" set-window-option -t "$wid" @origin "$pk" 2>/dev/null || continue
-      _fleet_tmux "$sess" set-window-option -u -t "$wid" @origin_gen 2>/dev/null
     fi
-    fleet_stamp_origin_gen "$sess" "$wid" "$pk" "$sock"
+    if [ "$pk" != "$one$o" ]; then           # a new key, not the old one spelled whole
+      if [ -n "$sock" ]; then tmux -L "$sock" set-window-option -u -t "$wid" @origin_gen 2>/dev/null
+      else _fleet_tmux "$sess" set-window-option -u -t "$wid" @origin_gen 2>/dev/null; fi
+      fleet_stamp_origin_gen "$sess" "$wid" "$pk" "$sock"
+    fi
     printf 'healed %s %s → %s\n' "$wid" "${o:--}" "$pk"
   done <<EOF
 $wl
@@ -5777,7 +5831,7 @@ fleet_hub_wait_sent() {
 # hub gone that long is a one-machine fleet again (EPIC #1419 rule 6). A child
 # whose node is lost carries `<node>:lost`.
 fleet_remote_children() {
-  local sess="${1:-}" key="${2:-}" u f m ttl pf
+  local sess="${1:-}" key="${2:-}" u f m ttl pf al
   fleet_hub_on "$sess" && [ -n "$key" ] || return 1
   f=$(fleet_hub_cache); [ -f "$f" ] || return 1
   ttl="${FLEET_HUB_RETAIN_SECS:-600}"; case "$ttl" in ''|*[!0-9]*) ttl=600 ;; esac
@@ -5788,8 +5842,10 @@ fleet_remote_children() {
   # `<fleet UUID>/<fleet_id>`, whatever key the parent answers to now. The map
   # lists a child under both its worker_ids; only the key-form row is printed.
   pf=$(_fleet_key_fid "$sess" "$key" "$(fleet_socket "$sess")" 2>/dev/null) || pf=''
-  awk -F'\t' -v me="$u/$key" -v mef="${pf:+$u/$pf}" -v mine="$u/" '
-    ($3 == me || (mef != "" && $3 == mef)) && $2 != "" && index($1, mine) != 1 {
+  # …or by the bare key it wore before issue #1939 (the one repo's alias).
+  al=$(fleet_key_alias "$sess" "$key")
+  awk -F'\t' -v me="$u/$key" -v mef="${pf:+$u/$pf}" -v mea="${al:+$u/$al}" -v mine="$u/" '
+    ($3 == me || (mef != "" && $3 == mef) || (mea != "" && $3 == mea)) && $2 != "" && index($1, mine) != 1 {
       k = $1; sub(/^[^\/]*\//, "", k)
       if (length(k) == 36 && k !~ /[^0-9a-f-]/) next   # the identity-form row
       print k "\t" $2 "\t" $1; n++ }
@@ -5921,17 +5977,24 @@ fleet_live_ancestor() {
 # `child_gen` / `child_key` (the child's own) — fields added, none renamed.
 
 # fleet_key_gen <sess> <key> → the key's current generation; nothing for gen 0.
+# A qualified key with no row of its own reads its bare alias's (issue #1939):
+# a generation minted before keys always carried the repo is still the current one.
 fleet_key_gen() {
-  local f="$FLEET_CONF_DIR/fleets/${1:-_}/children/.gen"
+  local f="$FLEET_CONF_DIR/fleets/${1:-_}/children/.gen" g a
   [ -n "${2:-}" ] && [ -f "$f" ] || return 0
-  awk -F'\t' -v k="$2" '$1 == k { g = $2 } END { if (g != "") print g }' "$f" 2>/dev/null
+  g=$(awk -F'\t' -v k="$2" '$1 == k { g = $2 } END { if (g != "") print g }' "$f" 2>/dev/null)
+  if [ -z "$g" ] && a=$(fleet_key_alias "${1:-}" "$2") && [ -n "$a" ]; then
+    g=$(awk -F'\t' -v k="$a" '$1 == k { g = $2 } END { if (g != "") print g }' "$f" 2>/dev/null)
+  fi
+  [ -n "$g" ] && printf '%s\n' "$g"
+  return 0
 }
 
 # fleet_key_gen_new <sess> <key> → mint the next generation of <key> (printed):
 # its book and digest cursor are retired to `.<old-gen>` first, so the new holder
 # starts with an empty ledger and the old one stays readable.
 fleet_key_gen_new() {
-  local sess="${1:-}" key d old g
+  local sess="${1:-}" key d old g a
   key=$(printf '%s' "${2:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-')
   case "$key" in ''|.*) return 1 ;; esac
   [ -n "$sess" ] || return 1
@@ -5942,6 +6005,13 @@ fleet_key_gen_new() {
     cat "$d/$key.ndjson" >> "$d/$key.ndjson.$old" 2>/dev/null && rm -f "$d/$key.ndjson"
   fi
   [ -f "$d/$key.cursor" ] && mv -f "$d/$key.cursor" "$d/$key.cursor.$old" 2>/dev/null
+  # …and its bare alias's (issue #1939): readers merge that book into this key's,
+  # so a new holder would otherwise inherit the last bare holder's children.
+  a=$(fleet_key_alias "$sess" "$key")
+  if [ -n "$a" ] && [ -f "$d/$a.ndjson" ]; then
+    cat "$d/$a.ndjson" >> "$d/$a.ndjson.$old" 2>/dev/null && rm -f "$d/$a.ndjson"
+  fi
+  [ -n "$a" ] && [ -f "$d/$a.cursor" ] && mv -f "$d/$a.cursor" "$d/$a.cursor.$old" 2>/dev/null
   g="$(date +%s).$$"
   printf '%s\t%s\n' "$key" "$g" >> "$d/.gen" || return 1
   printf '%s' "$g"
@@ -5971,8 +6041,8 @@ fleet_stamp_origin_gen() {
 
 # fleet_scratch_gen_new <sess> <slug> <worktree> — mint the generation of a freshly
 # allocated scratch under the key a spawn from it will stamp as @origin
-# (fleet_origin_key): bare in a one-repo fleet, `<repo-slug>:scratch-N` in a 2+
-# repo one — and nothing there when the worktree's repo cannot be told.
+# (fleet_origin_key): `<repo-slug>:scratch-N` in every fleet (issue #1939) — and
+# nothing when the worktree's repo cannot be told.
 #
 # A child of the RETIRED generation may still be running (its parent closed, its
 # own work did not). Every reader of @origin — the dash and sidebar nesting,
@@ -5982,20 +6052,21 @@ fleet_stamp_origin_gen() {
 # report goes to the retired book (fleet-report-parent.sh). The new holder was
 # allocated a moment ago, so no window can be ITS child yet.
 fleet_scratch_gen_new() {
-  local pre='' r key old sock w o
+  local r key old sock w o al
   [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
-  if fleet_multirepo "$1"; then
-    r=$(fleet_worktree_repo "$1" "${3:-}"); r=${r%%$'\t'*}
-    [ -n "$r" ] || return 0
-    pre="$(fleet_slug "$r"):"
+  r=$(fleet_worktree_repo "$1" "${3:-}"); r=${r%%$'\t'*}
+  if [ -n "$r" ]; then key="$(fleet_slug "$r"):$2"
+  else key=$(fleet_key_qualify "$1" "$2")       # the window's own fallback: the fleet's one repo
   fi
-  key="$pre$2"
+  # Still bare: 2+ repos and the worktree's unknown ⇒ no key; NO repo ⇒ bare is the key.
+  case "$key" in ?*:*) ;; *) [ -z "$(fleet_repos "$1")" ] || return 0 ;; esac
   old=$(fleet_key_gen "$1" "$key"); [ -n "$old" ] || old=0
+  al=$(fleet_key_alias "$1" "$key")             # a child stamped bare before #1939 is one too
   fleet_key_gen_new "$1" "$key" >/dev/null || return 0
   sock=$(fleet_socket "$1")
   [ -n "$sock" ] || return 0
   fleet_lw '#{window_id}|#{@origin}' tmux -L "$sock" | while IFS='|' read -r w o; do
-    [ -n "$w" ] && [ "$o" = "$key" ] || continue
+    [ -n "$w" ] && { [ "$o" = "$key" ] || { [ -n "$al" ] && [ "$o" = "$al" ]; }; } || continue
     tmux -L "$sock" set-window-option -t "$w" @origin_retired "$key#$old" \; \
       set-window-option -u -t "$w" @origin \; \
       set-window-option -u -t "$w" @origin_wid \; \
@@ -7562,8 +7633,8 @@ fleet_window_bg_busy() {
     >/dev/null 2>&1 </dev/null
 }
 
-# fleet_window_okey <session> <win> → <win>'s own ledger key — `issue-<N>` /
-# `scratch-<N>` (`<slug>:`-qualified in a 2+ repo fleet) — the key its children's
+# fleet_window_okey <session> <win> → <win>'s own ledger key — `<slug>:issue-<N>` /
+# `<slug>:scratch-<N>` (issue #1939: in every fleet) — the key its children's
 # @origin carries; nothing when it has none. fleet_origin_key's rule, for any
 # window rather than only the caller's pane.
 fleet_window_okey() {
@@ -7594,7 +7665,7 @@ fleet_window_okey() {
 # no live direct child — the common case on every Stop.
 fleet_window_waiting_children() {
   local sess="${1:-}" t="${2:-}" key all line ws wid st loop iss wt repo norepo origin pth name
-  local tab='' pre slug k tot=0 dn=0 bin direct=0
+  local tab='' pre slug k tot=0 dn=0 bin direct=0 zero='' 
   [ -n "$t" ] || return 1
   [ -n "$sess" ] || sess=$(fleet_current_session)
   key=$(fleet_window_okey "$sess" "$t"); [ -n "$key" ] || return 1
@@ -7631,11 +7702,14 @@ EOF
     [ "$wid" = "$t" ] && continue
     case "$name" in dash|plan|backlog|home) continue ;; esac
     case "$origin" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) continue ;; esac
-    pre=''
-    if _fleet_hosts_many "$sess"; then
-      [ -n "$repo" ] || repo=$(fleet_window_repo "$sess" "$wid")
-      slug=''; [ "$norepo" != 1 ] && [ -n "$repo" ] && slug=$(fleet_slug "$repo")
-      pre="${slug:-?}:"
+    # The window's repo slug (issue #1939: every fleet); unknown → `?:`, a key no
+    # @origin names — bare in a fleet hosting no repo (_fleet_key_prefix's rule).
+    [ -n "$repo" ] || repo=$(fleet_window_repo "$sess" "$wid")
+    slug=''; [ "$norepo" != 1 ] && [ -n "$repo" ] && slug=$(fleet_slug "$repo")
+    pre="${slug:-?}:"
+    if [ -z "$slug" ]; then
+      [ -n "$zero" ] || { zero=n; [ -z "$(fleet_repos "$sess")" ] && zero=y; }
+      [ "$zero" = y ] && pre=''
     fi
     case "$iss" in
       ''|*[!0-9]*) k=$(fleet_scratch_key "$wt"); [ -n "$k" ] || k=$(fleet_scratch_key "$pth")
@@ -7682,22 +7756,25 @@ EOF
 # is MERGED (or REAPED as merged). rc 1 (nothing) when there are none — or the hub
 # is off, or its map is stale: then the parent is the one-machine parent it was.
 _fleet_remote_tally() {
-  local rows f
+  local rows f d al
   rows=$(fleet_remote_children "${1:-}" "${2:-}") || return 1
-  f=$(printf '%s/children/%s.ndjson' "$(fleet_state_dir "${1:-}")" "$(printf '%s' "${2:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-')")
+  d="$(fleet_state_dir "${1:-}")/children"
+  f=$(printf '%s/%s.ndjson' "$d" "$(printf '%s' "${2:-}" | LC_ALL=C tr -cd 'A-Za-z0-9._:-')")
+  al=$(fleet_key_alias "${1:-}" "${2:-}")      # its bare book, read first (issue #1939)
   printf '%s\n' "$rows" | python3 -c '
 import json, sys
 last = {}
-try:
-    for l in open(sys.argv[1], encoding="utf-8"):
-        try:
-            e = json.loads(l)
-        except ValueError:
-            continue
-        if isinstance(e, dict) and e.get("child") and e.get("type") != "wake":
-            last[e["child"]] = e
-except OSError:
-    pass
+for path in sys.argv[2:] + sys.argv[1:2]:
+    try:
+        for l in open(path, encoding="utf-8"):
+            try:
+                e = json.loads(l)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("child") and e.get("type") != "wake":
+                last[e["child"]] = e
+    except OSError:
+        pass
 dn = tot = 0
 for line in sys.stdin:
     p = line.rstrip("\n").split("\t")
@@ -7712,7 +7789,7 @@ for line in sys.stdin:
     if e.get("state") == "MERGED" or (e.get("state") == "REAPED" and str(e.get("verdict") or "").startswith("merged")):
         dn += 1
 print(dn, tot)
-sys.exit(0 if tot else 1)' "$f" 2>/dev/null
+sys.exit(0 if tot else 1)' "$f" ${al:+"$d/$al.ndjson"} 2>/dev/null
 }
 
 # fleet_window_wait <session> <win> — WHY an idle <win> is not finished (issue

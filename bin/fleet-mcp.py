@@ -152,10 +152,6 @@ def origin_option():
     return tmux("display-message", "-p", "-t", pane, "#{@origin}") if pane else ""
 
 
-def fleet_hosts_many(session):
-    return lib("_fleet_hosts_many " + shquote(session), check=False).returncode == 0
-
-
 # --- the worker credential (issue #1809, EPIC #1813 C7) -------------------------
 #
 # fwc1.<base64url claims JSON>.<base64url HMAC-SHA256> — signed with this login's
@@ -485,19 +481,24 @@ def scratch_key(path):
     return "scratch-" + value if value.isdigit() else ""
 
 
-def window_key(row, multi):
+def window_key(row, one_repo, no_repo=False):
+    """fleet_window_okey's key: `<slug>:issue-N` / `<slug>:scratch-N` in every
+    fleet (issue #1939); a window with no @repo is the fleet's ONE repo's
+    (<one_repo>, fleet_window_repo's fallback), and nothing when that is unknown."""
     if row["issue"].isdigit():
         key = "issue-" + row["issue"]
     else:
         key = scratch_key(row["worktree"]) or scratch_key(row["path"])
         if not key:
             return ""
-    if multi:
-        repo = row["repo"]
-        if not repo or row["norepo"] == "1":
-            return ""
-        key = slug(repo) + ":" + key
-    return key
+    if no_repo and not row["repo"]:
+        return key                      # a fleet hosting no repo: bare is its only spelling
+    if row["norepo"] == "1":
+        return ""
+    repo = row["repo"] or one_repo
+    if not repo:
+        return ""
+    return slug(repo) + ":" + key
 
 
 def child_keys():
@@ -524,7 +525,9 @@ def list_agents():
     me = origin_key()
     parent = origin_option()
     kids = child_keys()
-    multi = fleet_hosts_many(session)
+    one = lib("fleet_repos " + shquote(session), check=False).stdout.split()
+    one_repo = one[0] if len(one) == 1 else ""
+    no_repo = not one
     fmt = "#{window_id}\t#{session_name}\t#{window_name}\t#{@issue}\t#{@cc_agent}\t" \
           "#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}\t#{@claude_needs}\t" \
           "#{@origin}\t#{@repo}\t#{@norepo}\t#{@worktree}\t#{pane_current_path}"
@@ -536,7 +539,7 @@ def list_agents():
             continue
         row = dict(zip(("window_id", "session", "window_name", "issue", "agent", "state", "needs",
                         "origin", "repo", "norepo", "worktree", "path"), parts))
-        key = window_key(row, multi)
+        key = window_key(row, one_repo, no_repo)
         state = row["needs"] or row["state"] or "unknown"
         agent = "codex" if row["agent"] == "codex" else "claude"
         agents.append({

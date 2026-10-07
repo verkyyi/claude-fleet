@@ -259,10 +259,11 @@ EOF
       pkey=''; [ -n "$pwin" ] && pkey=$(fleet_window_okey "$home" "$pwin" 2>/dev/null)
       [ -n "$pkey" ] || { skip=$((skip + 1)); continue; }
     fi
+    pkey=$(fleet_key_qualify "$home" "$pkey")   # a bare parent key is the one repo's (#1939)
     book=$(fleet_load_conf "$home" >/dev/null 2>&1; . "$BIN/fleet-children-lib.sh"; children_file "$pkey" "$home") \
       || { skip=$((skip + 1)); continue; }
     got=$(python3 "$BIN/fleet-children.py" merge --file "$book" --parent "$parent" \
-      --multi "$(_fleet_hosts_many "$home" && echo 1)" < "$pd/last.json" 2>/dev/null) || got=0
+      < "$pd/last.json" 2>/dev/null) || got=0
     case "$got" in ''|*[!0-9]*) got=0 ;; esac
     n=$((n + got))
   done <<EOF
@@ -436,6 +437,7 @@ fi
 fleet_load_conf "$home"
 # shellcheck source=/dev/null
 . "$BIN/fleet-children-lib.sh"
+pkey=$(fleet_key_qualify "$home" "$pkey")   # a bare parent key is the one repo's (#1939)
 lf=$(children_file "$pkey" "$home") || die 1 "no ledger for parent $pkey"
 res=$(python3 "$BIN/fleet-children.py" append --file "$lf" < "$WORK/row" 2>&1) || die 1 "ledger refused it: ${res##*$'\n'}"
 # A relay pushed again is ledgered once; it is DELIVERED once too — the rids this

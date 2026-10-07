@@ -191,10 +191,10 @@ ok "OFF CCQUOTA_FLEET unset → no lease call, byte-identical spawn"
 
 # ===== HELD: another node holds it ⇒ exit 3, names the holder, no claim/spawn ====
 CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" \
-  LEASE_RC=3 LEASE_ANSWER="HELD m5 $UUID/issue-258 2026-10-03T12:00:00Z" run_spawn 258
+  LEASE_RC=3 LEASE_ANSWER="HELD m5 $UUID/acme-widgets:issue-258 2026-10-03T12:00:00Z" run_spawn 258
 [ "$(rc)" = 3 ]                                  || fail "HELD exits 3 (the claimed class)" "rc=$(rc)"
 err_has '已被 m5 认领'                            || fail "HELD stderr must say 已被 m5 认领"
-lease_has "acquire acme/widgets 258 $UUID/issue-258" || fail "HELD acquire must name the repo, issue and worker_id"
+lease_has "acquire acme/widgets 258 $UUID/acme-widgets:issue-258" || fail "HELD acquire must name the repo, issue and worker_id"
 gh_has '--add-assignee'                          && fail "HELD the lease is checked BEFORE the GitHub claim — no assign"
 gh_has 'assignees,state'                         && fail "HELD must not even read the GitHub claim"
 tmux_has 'new-window'                            && fail "HELD must not spawn"
@@ -202,7 +202,7 @@ ok "HELD lease on m5 → exit 3, 已被 m5 认领, no GitHub claim, no spawn"
 
 # The hub names a machine by its hostname; the operator's FLEET_NODE_ALIASES names it m5.
 CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" FLEET_NODE_ALIASES="macmini=m5 mini2=m4" \
-  LEASE_RC=3 LEASE_ANSWER="HELD macmini $UUID/issue-258 2026-10-03T12:00:00Z" run_spawn 258
+  LEASE_RC=3 LEASE_ANSWER="HELD macmini $UUID/acme-widgets:issue-258 2026-10-03T12:00:00Z" run_spawn 258
 [ "$(rc)" = 3 ] && err_has '已被 m5 认领'          || fail "ALIAS the holder must be named through FLEET_NODE_ALIASES"
 ok "ALIAS HELD by macmini + FLEET_NODE_ALIASES=macmini=m5 → 已被 m5 认领"
 
@@ -220,7 +220,7 @@ ok "GRANT lease granted → GitHub claim + spawn, lease kept"
 CLAIM_STATE=$'1\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" \
   LEASE_ANSWER="GRANTED m4" run_spawn 258
 [ "$(rc)" = 3 ]                                  || fail "BACK the GitHub refusal still exits 3" "rc=$(rc)"
-lease_has "release acme/widgets 258 $UUID/issue-258" || fail "BACK a refused spawn must release the lease it took"
+lease_has "release acme/widgets 258 $UUID/acme-widgets:issue-258" || fail "BACK a refused spawn must release the lease it took"
 ok "BACK granted then GitHub-refused → lease released"
 
 # ===== DOWN: hub unreachable ⇒ note + today's path ===============================
@@ -262,7 +262,7 @@ ok "NOUUID no fleet UUID → stderr note, today's path"
 
 # ===== FORCE: --force ⇒ acquire --force, takeover announced ======================
 CLAIM_STATE=$'1\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" \
-  LEASE_ANSWER="FORCED m4 m5 $UUID/issue-258" run_spawn 258 --force
+  LEASE_ANSWER="FORCED m4 m5 $UUID/acme-widgets:issue-258" run_spawn 258 --force
 [ "$(rc)" = 0 ]                                  || fail "FORCE spawns" "$(cat "$WORK/spawn.err")"
 lease_has "acquire --force acme/widgets 258"     || fail "FORCE the acquire must carry --force"
 err_has '强制从 m5 收回'                          || fail "FORCE must announce whom the lease was taken from"
@@ -312,7 +312,7 @@ err_has "$NODE_ENV has no CCQUOTA_TOKEN= line"   || fail "NOTOKEN a token-less n
 printf 'CCQUOTA_HUB_URL=http://hub.test\nCCQUOTA_TOKEN=tok-node\n' > "$NODE_ENV"; chmod 600 "$NODE_ENV"
 PATH="$WORK/ccqbin:$PATH" CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "NOTOKEN+node.env spawns" "$(cat "$WORK/spawn.err")"
-grep -qF "lease acquire acme/widgets 258 $UUID/issue-258" "$WORK/ccq.log" 2>/dev/null || fail "NOTOKEN+node.env the default ccquota lease must run" "$(cat "$WORK/ccq.log" 2>/dev/null)"
+grep -qF "lease acquire acme/widgets 258 $UUID/acme-widgets:issue-258" "$WORK/ccq.log" 2>/dev/null || fail "NOTOKEN+node.env the default ccquota lease must run" "$(cat "$WORK/ccq.log" 2>/dev/null)"
 [ "$(cat "$WORK/ccq.env" 2>/dev/null)" = tok-node ] || fail "NOTOKEN+node.env ccquota must see node.env's token" "ccquota saw: $(cat "$WORK/ccq.env" 2>/dev/null)"
 [ "$(cat "$WORK/tmux.env" 2>/dev/null)" = '<unset>' ] || fail "NOTOKEN+node.env the window still never inherits it"
 [ "$(cat "$WORK/spawn.err")" = "dash-issue-session: #258 的入口租约已拿到 (m5)" ] || fail "NOTOKEN+node.env prints only the grant on stderr" "$(cat "$WORK/spawn.err")"

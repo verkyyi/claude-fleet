@@ -95,10 +95,11 @@ case "$mode" in
     # @worker_lifecycle (issue #808): empty = awake; preparing|sleeping|waking|failed
     # while hibernation owns the pane — a stop must not type into a parked pane.
     fmt=$'#{window_id}\t#{@issue}\t#{@raw}\t#{@worktree}\t#{@claude_state}\t#{@cc_agent}\t#{@wid}\t#{@worker_lifecycle}\t'
-    # Column 9 = the window's repo (issue #1018), so a multi-repo fleet's keys
-    # carry it: two hosted repos can both have an issue-12. EMPTY in a one-repo
-    # fleet (its keys stay bare `issue-N`, as always); `?` = a multi-repo window
-    # whose repo is unknown or @norepo — the controller never guesses one.
+    # Column 9 = the window's repo (issue #1018), so every key carries it: two
+    # hosted repos can both have an issue-12, and since issue #1939 a one-repo
+    # fleet's keys are `<slug>:issue-N` too — adding a second repo renames no
+    # session. `?` = a window whose repo is unknown or @norepo — the controller
+    # never guesses one; a fleet hosting NO repo leaves it empty (bare keys).
     # Columns 10-11 (issue #1423): the window name and @origin_wid, for the other
     # machines' sidebars (a remote row's label, and which parent it nests under).
     # Column 12 (issue #1475): what the window needs of its person (@claude_needs:
@@ -114,21 +115,18 @@ case "$mode" in
     # another machine reads it off the hub (a worker mid-acceptance owns its
     # merge, #921). Always present and always `busy=`-prefixed, so a window name
     # holding a tab can never pass for it.
-    if ! fleet_multirepo "$sess"; then
-      rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt$xfmt") || exit 1
-    else
-      rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}$xfmt") || exit 1
-      rows=$(while IFS= read -r row; do
-        [ -n "$row" ] || continue
-        fi=${row##*$'\t'}; row=${row%$'\t'*}
-        nd=${row##*$'\t'}; row=${row%$'\t'*}
-        ow=${row##*$'\t'}; row=${row%$'\t'*}
-        nm=${row##*$'\t'}; row=${row%$'\t'*}
-        r=${row##*$'\t'}; row=${row%$'\t'*}
-        [ -n "$r" ] || r=$(fleet_window_repo "$sess" "${row%%$'\t'*}")
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$row" "${r:-?}" "$nm" "$ow" "$nd" "$fi"
-      done <<<"$rows")
-    fi
+    rows=$(tmux -u -L "$sock" list-windows -t "=$sess" -F "$fmt#{@repo}$xfmt") || exit 1
+    unk='?'; [ -z "$(fleet_repos "$sess")" ] && unk=''
+    rows=$(while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      fi=${row##*$'\t'}; row=${row%$'\t'*}
+      nd=${row##*$'\t'}; row=${row%$'\t'*}
+      ow=${row##*$'\t'}; row=${row%$'\t'*}
+      nm=${row##*$'\t'}; row=${row%$'\t'*}
+      r=${row##*$'\t'}; row=${row%$'\t'*}
+      [ -n "$r" ] || r=$(fleet_window_repo "$sess" "${row%%$'\t'*}")
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$row" "${r:-$unk}" "$nm" "$ow" "$nd" "$fi"
+    done <<<"$rows")
     busy=$(workers_busy "$sock" "$sess")
     # Two fills (issue #1749), so every session the operator's own list shows is
     # one the other machines see too:
@@ -467,6 +465,8 @@ case "$mode" in
     sp=$(tmux -L "$sock" display-message -p '#{socket_path}' 2>/dev/null)
     [ -n "$sp" ] || { printf 'reap: fleet %s has no running tmux server\n' "$sess" >&2; exit 5; }
     target="$key"
+    # The one repo's `<slug>:issue-N` (issue #1939) is the reaper's own bare key.
+    _a=$(fleet_key_alias "$sess" "$key"); [ -n "$_a" ] && { key=$_a; target=$_a; }
     case "$key" in *:*)
       target=$(fleet_win_for_key "$key" "$sock") && [ -n "$target" ] \
         || { printf 'reap: no live window holds %s on %s\n' "$key" "$sess" >&2; exit 5; } ;;

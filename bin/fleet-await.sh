@@ -142,7 +142,7 @@ sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
 [ -n "$sess" ] || die "not inside a fleet — run it from a fleet pane, or pass -L <socket>"
 [ -n "$KEY" ] || KEY=$(fleet_origin_key)
 [ -n "$KEY" ] || die "no parent key — run it from a scratch or worker pane (the hub has none), or pass --parent issue-N|scratch-N"
-KEY=$(fleet_origin_canon "$KEY" '')
+KEY=$(fleet_origin_canon "$KEY" '' "$sess")
 
 # A worker_id target (issue #1420) → this fleet's issue number, or a refusal.
 case "$NUM" in wid:*)
@@ -175,9 +175,10 @@ case "$NUM" in wid:*)
         [ -n "$RWID" ] && rorigin=$(awk -F'\t' -v w="$RWID" '$1 == w { print $3; exit }' "$(fleet_hub_cache)" 2>/dev/null)
         me=$(fleet_uuid "$sess" 2>/dev/null)/$KEY
         mefid=$(fleet_key_wid "$sess" "$KEY" 2>/dev/null) || mefid=$me   # by identity (#1646)
+        meal=$(fleet_key_alias "$sess" "$KEY"); [ -n "$meal" ] && meal=${me%/*}/$meal   # the bare key, pre-#1939
         case "${k##*:}" in issue-*) NUM=${k##*:issue-} ;; *) note="'$WID' is a scratch session — fleet-await waits on an issue worker" ;; esac
         if [ -z "$note" ] && [ -z "$RWID" ]; then note="'$WID' lives on $RNODE, but the hub map has no full worker_id for it"
-        elif [ -z "$note" ] && [ "$rorigin" != "$me" ] && [ "$rorigin" != "$mefid" ]; then
+        elif [ -z "$note" ] && [ "$rorigin" != "$me" ] && [ "$rorigin" != "$mefid" ] && { [ -z "$meal" ] || [ "$rorigin" != "$meal" ]; }; then
           note="'$WID' lives on $RNODE and reports to ${rorigin:-nobody (hub-spawned)}, not to $KEY — its outcome is not pushed here"
         fi
         [ -n "$note" ] || REMOTE=$k ;;
@@ -191,13 +192,18 @@ case "$NUM" in wid:*)
   fi ;;
 esac
 
-# The child's key, spelled the way its @origin-keyed ledger rows spell it.
-CKEY="issue-$NUM"
+# The child's key, spelled the way its @origin-keyed ledger rows spell it:
+# `<slug>:issue-N` in every fleet (issue #1939).
 if [ -n "${REMOTE:-}" ]; then
   CKEY=$REMOTE      # as the child's own machine spells it — what its reports carry
-elif _fleet_hosts_many "$sess"; then
-  [ -n "$REPO_ARG" ] || die "this fleet hosts several repos — pass --repo <owner/name>"
-  CKEY="$(fleet_slug "$(fleet_norm_repo "$REPO_ARG")"):issue-$NUM"
+elif [ -n "$REPO_ARG" ]; then
+  CKEY="$(fleet_okey_prefix "$sess" "$REPO_ARG")issue-$NUM"
+else
+  CKEY=$(fleet_key_qualify "$sess" "issue-$NUM")
+  case "$CKEY" in
+    ?*:*) ;;
+    *) [ -z "$(fleet_repos "$sess")" ] || die "this fleet hosts several repos — pass --repo <owner/name>" ;;   # no repo: bare
+  esac
 fi
 
 # `wid|@origin` of #N's live window on this fleet, or nothing — through the ONE
@@ -222,8 +228,12 @@ try:
     d = json.load(sys.stdin)
 except ValueError:
     sys.exit(0)
+k = sys.argv[1]
 for c in d.get("children") or []:
-    if c.get("child") != sys.argv[1]:
+    # a bare key (a remote child as its machine spells it) is booked under the
+    # parent book repo (fleet-children.py canon_child, #1351/#1939)
+    ch = str(c.get("child") or "")
+    if ch != k and (":" in k or not ch.endswith(":" + k)):
         continue
     l = c.get("last") or {}
     f = [1 if c.get("live") else 0, c.get("state", ""), c.get("needs", ""), l.get("seq") or 0,
@@ -442,7 +452,7 @@ if [ -n "$wid" ]; then
     fleet_stamp_origin_gen "$sess" "$wid" "$KEY" "$SOCK"
     worigin=$KEY
   fi
-  LEDGER=$(fleet_origin_canon "$worigin" '')
+  LEDGER=$(fleet_origin_canon "$worigin" '' "$sess")
   [ "$LEDGER" = "$KEY" ] || printf 'fleet-await: #%s belongs to %s — reading its ledger\n' "$NUM" "$LEDGER" >&2
 else
   LEDGER=$KEY

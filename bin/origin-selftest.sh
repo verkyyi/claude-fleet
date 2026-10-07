@@ -4,7 +4,9 @@
 # Three parts:
 #   A. fleet_origin_key (fleet-lib.sh) against a REAL isolated tmux server:
 #      an @issue window resolves to issue-<N>, an @raw window to its
-#      scratch-<N> (from @worktree), a plain window / no-$TMUX caller to EMPTY.
+#      scratch-<N> (from @worktree), a plain window / no-$TMUX caller to EMPTY —
+#      `<slug>:`-qualified in a ONE-repo fleet too (issue #1939), and bare in a
+#      fleet hosting no repo (nothing to qualify with).
 #   B. the HISTORY half, fully hermetic (no tmux): record-closed --origin writes
 #      ledger col 11; an origin-less record writes '-'; fleet_reap_record threads
 #      its 11th arg through; `rows` renders the ↳ tag only on tagged rows; `meta`
@@ -101,6 +103,11 @@ eq "canon: explicit key honoured across fleets (#516)"   "issue-77"   "$(canon i
 eq "canon: nothing anywhere ≡ hub"                       ""           "$(canon '' '')"
 eq "canon: explicit hub beats a detected worker (#896)"  ""           "$(canon hub issue-42)"
 eq "canon: explicit hub, cross-fleet → still hub"        ""           "$(canon hub scratch-5 dstfleet srcfleet)"
+# Issue #1939: in a fleet of ONE repo a bare key is written qualified, never bare.
+mkdir -p "$FLEET_CONF_DIR/fleets/onerepo"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/onerepo/conf"
+eq "canon: a bare explicit key in a one-repo fleet → qualified" "acme-app:issue-77" "$(canon issue-77 '' onerepo)"
+eq "canon: a worktree basename too"                      "acme-app:scratch-52" "$(canon cd-conductor-scratch-52 '' onerepo)"
+eq "canon: a qualified key passes through"               "acme-lib:issue-77" "$(canon acme-lib:issue-77 '' onerepo)"
 
 # rows: the ↳ tag renders on tagged rows only (strip ANSI + the US field bytes).
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g' -e $'s/\x1f/ /g'; }
@@ -173,10 +180,13 @@ p_plain=$(mk_pane w-plain)
 p_bare=$(mk_pane w-bare "$WORK/wt/repo-scratch-9")
 
 og() { TMUX="fake,1,1" TMUX_PANE="$1" bash -c ". '$LIB'; fleet_origin_key"; }
-eq "origin_key: @issue pane" "issue-42" "$(og "$p_iss")"
-eq "origin_key: @raw pane (from @worktree)" "scratch-7" "$(og "$p_raw")"
+# No repo at all: nothing to qualify with, nothing to confuse — the bare key.
+eq "origin_key: a fleet hosting no repo keys bare" "issue-42" "$(og "$p_iss")"
+mkdir -p "$FLEET_CONF_DIR/fleets/ok"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/ok/conf"
+eq "origin_key: @issue pane" "acme-app:issue-42" "$(og "$p_iss")"
+eq "origin_key: @raw pane (from @worktree)" "acme-app:scratch-7" "$(og "$p_raw")"
 eq "origin_key: plain pane ≡ hub (empty)" "" "$(og "$p_plain")"
-eq "origin_key: unstamped scratch pane (cwd only)" "scratch-9" "$(og "$p_bare")"
+eq "origin_key: unstamped scratch pane (cwd only)" "acme-app:scratch-9" "$(og "$p_bare")"
 noenv=$(env -u TMUX -u TMUX_PANE bash -c ". '$LIB'; fleet_origin_key")
 eq "origin_key: no \$TMUX ≡ hub (empty)" "" "$noenv"
 # The same calls from ZSH (issue #1633): a skill's `source fleet-lib.sh` in Claude
@@ -185,9 +195,9 @@ eq "origin_key: no \$TMUX ≡ hub (empty)" "" "$noenv"
 # with the EPIC's key. zsh-local-selftest.sh lints the cause repo-wide.
 if command -v zsh >/dev/null 2>&1; then
   ogz() { TMUX="fake,1,1" TMUX_PANE="$1" zsh -fc ". '$LIB'; fleet_origin_key"; }
-  eq "origin_key (zsh): @issue pane" "issue-42" "$(ogz "$p_iss")"
-  eq "origin_key (zsh): @raw pane (from @worktree)" "scratch-7" "$(ogz "$p_raw")"
-  eq "origin_key (zsh): unstamped scratch pane (cwd only)" "scratch-9" "$(ogz "$p_bare")"
+  eq "origin_key (zsh): @issue pane" "acme-app:issue-42" "$(ogz "$p_iss")"
+  eq "origin_key (zsh): @raw pane (from @worktree)" "acme-app:scratch-7" "$(ogz "$p_raw")"
+  eq "origin_key (zsh): unstamped scratch pane (cwd only)" "acme-app:scratch-9" "$(ogz "$p_bare")"
 else
   printf 'origin-selftest: zsh not installed — zsh legs of part A SKIPPED\n'
 fi
@@ -202,6 +212,9 @@ mkdir -p "$WORK/wt/repo-scratch-5"
 # selftest from a checkout whose dir name happens to end `-scratch-<N>` would give
 # that window the same scratch key as scrP and shadow the parent lookup.
 tmux new-session -d -s fleetC -x 220 -y 50 -c "$WORK" 'sleep 300' || fail "could not start 'fleetC' session"
+# One repo (issue #1939): the grouping keys and the @origins a spawn stamps are
+# `acme-app:`-qualified, the same spelling in a fleet of one repo or five.
+mkdir -p "$FLEET_CONF_DIR/fleets/fleetC"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/fleetC/conf"
 # @expand=1 on every fixture window: a subtree is COLLAPSED BY DEFAULT (the ←/→
 # fold, bin/dash-fold-toggle.sh), and this part is about the #503 GROUPING — where
 # a child sorts and how it is tagged and indented — which you can only read on an
@@ -216,10 +229,10 @@ mk_win() { # <name> [issue] [origin] [cwd] → window id
 }
 mk_win rootA 100 ''            >/dev/null
 mk_win rootB 101 ''            >/dev/null
-mk_win kidA  102 issue-100     >/dev/null
-mk_win orphX 103 issue-999     >/dev/null
+mk_win kidA  102 acme-app:issue-100 >/dev/null
+mk_win orphX 103 acme-app:issue-999 >/dev/null
 mk_win scrP  ''  ''  "$WORK/wt/repo-scratch-5" >/dev/null
-mk_win kidS  104 scratch-5     >/dev/null
+mk_win kidS  104 acme-app:scratch-5 >/dev/null
 
 out=$(FLEET_SESSION=fleetC FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null | strip)
 [ -n "$out" ] || fail "grouping: rows produced no output"

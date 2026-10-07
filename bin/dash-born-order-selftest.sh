@@ -73,8 +73,8 @@ fixture() {   # $1..$5 = the states of A P C1 C2 Z; $6 = drop this name (closed)
     case "$n" in
       A)  w "$i" A  "$st" @1 101 ''        $((B + 10)) ;;
       P)  w "$i" P  "$st" @2 102 ''        $((B + 20)) "${PEXP-1}" ;;
-      C1) w "$i" C1 "$st" @3 103 issue-102 $((B + 40)) ;;
-      C2) w "$i" C2 "$st" @4 104 issue-102 $((B + 30)) ;;
+      C1) w "$i" C1 "$st" @3 103 acme-app:issue-102 $((B + 40)) ;;
+      C2) w "$i" C2 "$st" @4 104 acme-app:issue-102 $((B + 30)) ;;
       Z)  w "$i" Z  "$st" @5 105 ''        $((B + 50)) ;;
     esac
     i=$((i + 1))

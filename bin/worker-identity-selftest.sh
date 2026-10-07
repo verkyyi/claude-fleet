@@ -122,6 +122,7 @@ tf kill-window -t "$POOLW"
 ok; lib fleet_win_for_fid 00000000-0000-4000-8000-000000000000 "$L" >/dev/null; [ $? = 1 ] || fail "A: an identity nobody carries → rc 1"
 
 # --- B: the rename — reported, then reported again to the same window ---------------
+Q=acme-app:   # every key carries the fleet's repo, one repo or five (issue #1939)
 C=$(tf new-window -d -P -F '#{window_id}' -n kid 'while :; do sleep 300; done')
 tf set-window-option -t "$C" @issue 600; tf set-window-option -t "$C" @origin scratch-5
 lib fleet_stamp_origin_wid "$L" "$C" scratch-5 "$L"
@@ -129,19 +130,19 @@ ok; [ "$(opt "$C" @origin_fid)" = "$PF" ] || fail "B: a spawn stamps the parent'
 rp() { out=$(env -u TMUX bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$C" --state blocked --summary "$1" 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err"); }
 before=$(frames)
 rp 'first: before the rename'
-ok; [ "$rc" = 0 ] && case "$out" in "reported → scratch-5 ($P)"*) true ;; *) false ;; esac \
+ok; [ "$rc" = 0 ] && case "$out" in "reported → ${Q}scratch-5 ($P)"*) true ;; *) false ;; esac \
   || fail "B: before the rename the child reports to scratch-5" "rc=$rc out=$out err=$err"
 R1=$out
 # fleet-bind.sh's re-mark: the scratch becomes the worker for #99.
 tf set-window-option -t "$P" @issue 99; tf set-window-option -u -t "$P" @raw
-ok; [ "$(lib fleet_window_okey "$L" "$P")" = issue-99 ] || fail "B: after the bind the parent's key is issue-99"
+ok; [ "$(lib fleet_window_okey "$L" "$P")" = "${Q}issue-99" ] || fail "B: after the bind the parent's key is issue-99"
 rp 'second: after the rename'
-ok; [ "$rc" = 0 ] && case "$out" in "reported → issue-99 ($P)"*) true ;; *) false ;; esac \
+ok; [ "$rc" = 0 ] && case "$out" in "reported → ${Q}issue-99 ($P)"*) true ;; *) false ;; esac \
   || fail "B: after the rename the child STILL reports to the same window (now issue-99)" "rc=$rc out=$out err=$err"
 R2=$out
 ok; [ "$(frames)" = $((before + 2)) ] || fail "B: two frames reached the parent's inbox" "$(frames) (was $before)"
-ok; [ "$(opt "$C" @origin)" = issue-99 ] || fail "B: the report re-pointed the child's @origin at the parent's current key" "$(opt "$C" @origin)"
-ok; [ -s "$FLEET_CONF_DIR/fleets/$L/children/issue-99.ndjson" ] && grep -q 'second: after the rename' "$FLEET_CONF_DIR/fleets/$L/children/issue-99.ndjson" \
+ok; [ "$(opt "$C" @origin)" = "${Q}issue-99" ] || fail "B: the report re-pointed the child's @origin at the parent's current key" "$(opt "$C" @origin)"
+ok; [ -s "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson" ] && grep -q 'second: after the rename' "$FLEET_CONF_DIR/fleets/$L/children/${Q}issue-99.ndjson" \
   || fail "B: the second report is booked under the key the parent answers to now"
 # The contrast — a child from before #1646 (no @origin_fid) still books under the
 # name its parent wore, scratch-5: a book the parent (issue-99 now) never reads,
@@ -149,7 +150,7 @@ ok; [ -s "$FLEET_CONF_DIR/fleets/$L/children/issue-99.ndjson" ] && grep -q 'seco
 C0=$(tf new-window -d -P -F '#{window_id}' -n oldkid 'while :; do sleep 300; done')
 tf set-window-option -t "$C0" @issue 601; tf set-window-option -t "$C0" @origin scratch-5
 out=$(env -u TMUX bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$C0" --state blocked --summary x --dry-run 2>&1)
-ok; case "$out" in *"would send to scratch-5 "*) true ;; *) false ;; esac || fail "B: a key-only child of a renamed parent is booked under the stale key (the contrast)" "$out"
+ok; case "$out" in *"would send to ${Q}scratch-5 "*) true ;; *) false ;; esac || fail "B: a key-only child of a renamed parent is booked under the stale key (the contrast)" "$out"
 tf kill-window -t "$C0"
 printf '%s\n%s\n' "$R1" "$R2" > "$WORK/evidence.txt"
 [ -n "${WORKER_IDENTITY_EVIDENCE:-}" ] && cp "$WORK/evidence.txt" "$WORKER_IDENTITY_EVIDENCE"
@@ -162,9 +163,11 @@ C3=$(tf new-window -d -P -F '#{window_id}' -n kid3 'while :; do sleep 300; done'
 tf set-window-option -t "$C3" @issue 603; tf set-window-option -t "$C3" @origin scratch-5
 tf set-window-option -t "$C3" @origin_fid 00000000-0000-4000-8000-000000000000
 hout=$(lib fleet_origin_heal "$L" "$L")
-ok; [ "$hout" = "healed $C2 scratch-5 → issue-99" ] || fail "C: heal names exactly the one child it re-pointed" "$hout"
-ok; [ "$(opt "$C2" @origin)" = issue-99 ] && [ -z "$(opt "$C2" @origin_gen)" ] || fail "C: @origin re-pointed, the old key's @origin_gen dropped" "$(opt "$C2" @origin)|$(opt "$C2" @origin_gen)"
-ok; [ "$(opt "$C3" @origin)" = scratch-5 ] || fail "C: a child whose parent is not live is left alone"
+# C3's parent is not live: its bare @origin is only spelled whole (issue #1939), gen kept.
+ok; [ "$hout" = "healed $C2 scratch-5 → ${Q}issue-99
+healed $C3 scratch-5 → ${Q}scratch-5" ] || fail "C: heal re-points the one child, and spells the other's bare key whole" "$hout"
+ok; [ "$(opt "$C2" @origin)" = "${Q}issue-99" ] && [ -z "$(opt "$C2" @origin_gen)" ] || fail "C: @origin re-pointed, the old key's @origin_gen dropped" "$(opt "$C2" @origin)|$(opt "$C2" @origin_gen)"
+ok; [ "$(opt "$C3" @origin)" = "${Q}scratch-5" ] || fail "C: a child whose parent is not live keeps its parent's key" "$(opt "$C3" @origin)"
 ok; [ -z "$(lib fleet_origin_heal "$L" "$L")" ] || fail "C: a second heal has nothing to do"
 tf kill-window -t "$C2"; tf kill-window -t "$C3"
 
@@ -173,7 +176,7 @@ tf kill-window -t "$C2"; tf kill-window -t "$C3"
 U=$(lib fleet_uuid "$L")
 if is_uuid "$U"; then
   ok; [ "$(lib fleet_worker_id "$L" "$P")" = "$U/$PF" ] || fail "D: worker_id is <fleet UUID>/<fleet_id>" "$(lib fleet_worker_id "$L" "$P")"
-  ok; [ "$(lib fleet_worker_id_key "$L" "$P")" = "$U/issue-99" ] || fail "D: the key-form alias" "$(lib fleet_worker_id_key "$L" "$P")"
+  ok; [ "$(lib fleet_worker_id_key "$L" "$P")" = "$U/${Q}issue-99" ] || fail "D: the key-form alias" "$(lib fleet_worker_id_key "$L" "$P")"
   ok; [ "$(lib fleet_worker_locate "wid:$U/$PF" "$L")" = "local $P $L" ] || fail "D: locate by the identity form"
   ok; [ "$(lib fleet_worker_locate "wid:$U/issue-99" "$L")" = "local $P $L" ] || fail "D: the old <uuid>/<key> form still resolves"
   ok; [ "$(lib fleet_worker_locate "wid:$PF" "$L")" = "local $P $L" ] || fail "D: a bare identity names this fleet's session"
@@ -229,7 +232,7 @@ if command -v zsh >/dev/null 2>&1; then
     ok; [ "$zw" = "$U/$PF" ] || fail "F: zsh's fleet_worker_id = bash's" "zsh=$zw"
   fi
   ok; [ "$(TMUX="$(tf display-message -p '#{socket_path},0,0')" TMUX_PANE="$(tf display-message -p -t "$P" '#{pane_id}')" \
-          zsh -c '. "$1/fleet-lib.sh"; fleet_origin_key' _ "$BIN" 2>/dev/null)" = issue-99 ] \
+          zsh -c '. "$1/fleet-lib.sh"; fleet_origin_key' _ "$BIN" 2>/dev/null)" = "${Q}issue-99" ] \
     || fail "F: zsh's fleet_origin_key in the renamed parent's pane = issue-99"
   zn=$(zsh -c '. "$1/fleet-lib.sh"; fleet_fid_mint' _ "$BIN" 2>/dev/null)
   ok; is_uuid "$zn" || fail "F: zsh's fleet_fid_mint mints a canonical UUID" "$zn"

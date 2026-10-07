@@ -216,15 +216,18 @@ okey_v() { okey=''
   done
 }
 # okp_v — the renderer's repo key prefix (issue #790), byte-for-byte: `<slug>:` of
-# @repo in a fleet hosting 2+ repos, `?:` when @repo is unset (unknown/@norepo;
-# pr-refresh stamps a derivable one within a tick), else nothing.
+# @repo — in every fleet (issue #1939) —, an unstamped window taking the fleet's
+# only repo (rslug_v's fallback), `?:` when there is none (unknown/@norepo).
 okp=''
-MULTI=0
-[ -n "$SESS" ] && command -v fleet_multirepo >/dev/null 2>&1 && fleet_multirepo "$SESS" && MULTI=1
+RONLY=''
+[ -n "$SESS" ] && command -v fleet_repos >/dev/null 2>&1 && RONLY=$(fleet_repos "$SESS")
+RZERO=0; [ -z "$RONLY" ] && RZERO=1                 # no repo at all: keys stay bare
+case "$RONLY" in *$'\n'*) RONLY='' ;; esac          # 2+ repos: no default
 okp_v() { okp=''
-  [ "$MULTI" = 1 ] || return 0
   local r="$1"
-  if [ -n "$r" ]; then r=${r//\//-}; okp="${r//[^[:alnum:]._-]/}:"; else okp='?:'; fi
+  [ "$RZERO" = 1 ] && [ -z "$r" ] && return 0
+  if [ "${2:-}" != 1 ] && [ -z "$r" ]; then r=$RONLY; fi
+  if [ "${2:-}" != 1 ] && [ -n "$r" ]; then r=${r//\//-}; okp="${r//[^[:alnum:]._-]/}:"; else okp='?:'; fi
 }
 
 # self's window_id, so the table lookup below is by identity, not by index.
@@ -233,11 +236,11 @@ selfwid=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null) || ex
 
 KEYTAB=''      # key \t window_id \t origin \t expand
 selfkey=''
-while IFS=$US read -r wsess wid wname wpath wiss worig wwt wexp wrepo _; do
+while IFS=$US read -r wsess wid wname wpath wiss worig wwt wexp wrepo wnorepo _; do
   [ -n "$wname" ] || continue
   [ -n "$SESS" ] && [ "$wsess" != "$SESS" ] && continue
   case "$wname" in dash|plan|backlog|home) continue ;; esac
-  okp_v "$wrepo"
+  okp_v "$wrepo" "$wnorepo"
   okey_v "$wiss" "$wwt" "$wpath"
   [ -n "$okey" ] || continue
   KEYTAB+="$okey"$'\t'"$wid"$'\t'"$worig"$'\t'"$wexp"$'\n'

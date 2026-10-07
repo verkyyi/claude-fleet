@@ -226,21 +226,24 @@ okey_v() { okey=''
   done
 }
 
-# the window's key PREFIX (issue #790) → $okp. In a fleet hosting 2+ repos, repo
-# A's issue-12 and repo B's issue-12 are two different parents, so the key carries
-# the repo: `<slug>:issue-<N>` — the spelling a multi-repo spawn stamps into
-# @origin (#789). @repo is read in the one list-windows format (pr-refresh stamps
-# an unstamped window within a tick, #792), so this costs no fork. Unknown
-# (or @norepo) → `?:`, a key no @origin ever names: its row renders, nothing
-# groups under it by guesswork. A one-repo fleet: $okp stays empty, keys as today.
+# the window's key PREFIX (issue #790) → $okp. Repo A's issue-12 and repo B's
+# issue-12 are two different parents, so the key carries the repo:
+# `<slug>:issue-<N>` — the spelling a spawn stamps into @origin (#789), in every
+# fleet however many repos it hosts (issue #1939). @repo is read in the one
+# list-windows format, so a stamped window costs no fork; an unstamped one falls
+# back to the fleet's only repo (rslug_v, one fleet_repos a frame). Unknown (or
+# @norepo) → `?:`, a key no @origin ever names: its row renders, nothing groups
+# under it by guesswork.
 # Takes the window's @repo + @norepo; resolution is rslug_v's (below), one rule for
 # the PR cell and the grouping key.
 okp=''
-MULTI=0
-[ -n "${FLEET_SESSION:-}" ] && fleet_multirepo "$FLEET_SESSION" && MULTI=1
+RZERO=''                               # 1 = the fleet hosts NO repo: its keys stay bare
 okp_v() { okp=''
-  [ "$MULTI" = 1 ] || return 0
-  rslug_v "$1" "$2"                    # the window's repo slug, fork-free (#792)
+  rslug_v "$1" "$2"
+  if [ -z "$rslug" ]; then
+    [ -n "$RZERO" ] || { RZERO=0; [ -z "$(fleet_repos "${FLEET_SESSION:-}")" ] && RZERO=1; }
+    [ "$RZERO" = 1 ] && return 0
+  fi                    # the window's repo slug, fork-free (#792)
   if [ -n "$rslug" ]; then okp="$rslug:"; else okp='?:'; fi
 }
 

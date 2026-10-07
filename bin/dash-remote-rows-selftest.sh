@@ -145,7 +145,7 @@ w() { printf '%s\n' "$S$US$1$US$2$US$3$US$4$US$US$5$US$6$US$7$US$3$US$US$8$US$US
 : > "$WLIST_FILE"
 #  idx name  path                 state    wid  issue origin      handle expand
 w 1  EPIC  /w/app-issue-1419    looping  @1   1419  ''          a1     1
-w 2  C1    /w/app-issue-1420    working  @2   1420  issue-1419  a2
+w 2  C1    /w/app-issue-1420    working  @2   1420  acme-app:issue-1419  a2
 w 3  solo  /w/app-issue-1430    working  @3   1430  ''          a3
 
 # colours off, and the working spinner's frame (it turns every quarter second) → `*`
@@ -168,7 +168,7 @@ remote_cache() {   # $1 = the #ts epoch; $2 = m4's #node line availability; $3 =
   { printf '#ts\037%s\n' "$1"
     printf '#me\037m5\n'
     printf '#node\037m4\037%s\0372\037%s\n' "${2:-online}" "${3:-$1}"
-    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037issue-1419\037\n' "$F"
+    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037acme-app:issue-1419\037\n' "$F"
     printf 'wid:%s/issue-1500\037m4\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\037\n' "$F" "$F"
     printf 'wid:%s/scratch-2\037m4\037lost\037\037\037working\037claude\037草稿\037\037\n' "$F"
   } > "$G/remote_$S"
@@ -327,11 +327,11 @@ eq "D: the producer's code names no network tool and not the refresher" "0" \
 L=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee            # this machine's fleet
 new_cache() {   # the #1480 shape: `local` + `wid` on every row, this machine's rows included
   { printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
-    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037issue-1419\037\0370\037\n' "$F"
+    printf 'wid:%s/issue-1423\037m4\037online\0371423\037acme/app\037working\037claude\037侧边栏\037acme-app:issue-1419\037\0370\037\n' "$F"
     printf 'wid:%s/issue-1500\037m4\037online\0371500\037acme/app\037done\037claude\037孙\037%s/issue-1423\037\0370\037\n' "$F" "$F"
     printf 'wid:%s/scratch-2\037m4\037lost\037\037\037working\037claude\037草稿\037\037\0370\037\n' "$F"
     printf 'wid:%s/issue-1419\037m5\037online\0371419\037acme/app\037done\037claude\037EPIC\037\037\0371\037@1\n' "$L"
-    printf 'wid:%s/issue-1420\037m5\037online\0371420\037acme/app\037done\037claude\037C1\037issue-1419\037\0371\037@2\n' "$L"
+    printf 'wid:%s/issue-1420\037m5\037online\0371420\037acme/app\037done\037claude\037C1\037acme-app:issue-1419\037\0371\037@2\n' "$L"
     printf 'wid:%s/issue-1499\037m5\037online\0371499\037acme/app\037working\037claude\037gone\037\037\0371\037@9\n' "$L"
     printf 'wid:%s/scratch-7\037m5\037online\037\037\037working\037claude\037nowin\037\037\0371\037\n' "$L"
   } > "$G/remote_$S"
@@ -600,7 +600,7 @@ eq   "E: one #node per other machine from the hub's list: YOUR session count, it
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '$1 == "#node" { printf "%s;", $0 }')"
 eq   "E: parent in THIS fleet → its bare key"  "m4|online|working|侧边栏|issue-1419|" "$(rrow issue-1423)"
 eq   "E: parent elsewhere → its worker_id"     "m4|online|working|孙|$F/issue-1423|" "$(rrow issue-1500)"
-eq   "E: no @origin_wid → the sub-issue parent (local)"  "m4|online|working|epic-kid|issue-1419|" "$(rrow issue-1600)"
+eq   "E: no @origin_wid → the sub-issue parent (local)"  "m4|online|working|epic-kid|acme-app:issue-1419|" "$(rrow issue-1600)"
 eq   "E: the node's busy word rides as field 14 (#1607), empty where it has none" "bg|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v a="wid:$F/issue-1600" -v b="wid:$F/issue-1423" '$1 == a { x = $14 } $1 == b { y = $14 } END { print x "|" y }')"
 eq   "E: no @origin_wid → the sub-issue parent (remote)" "m4|online|working|remote-sub|$F/issue-1500|" "$(rrow issue-1501)"
@@ -765,7 +765,7 @@ if [ -n "$REAL_TMUX" ] && "$REAL_TMUX" -L "$S" -f /dev/null new-session -d -s "$
 ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
 w = [x for x in ctl.workers(f)["workers"] if x["issue"] == 1423][0]
 print(w["name"] + "|" + str(w["origin_wid"]) + "|" + w["key"] + "|" + str(w["needs"]))' "$FLEET_CONF_DIR" "$S" 2>&1)
-  eq "G: the adapter hands over the window name, @origin_wid and @claude_needs" "侧边栏 x|$F/issue-1419|issue-1423|ask" "$got"
+  eq "G: the adapter hands over the window name, @origin_wid and @claude_needs" "侧边栏 x|$F/issue-1419|acme-app:issue-1423|ask" "$got"   # the internal key carries the repo (#1939); the name is unchanged
   # The shell's road while the hub is silent (#1488): fleet-remote-view.sh
   # sessions reads the SAME adapter on this machine. Its hand copy of the column
   # rule missed #1607's `busy=` and glued @origin_wid onto the name (issue
@@ -811,7 +811,7 @@ print(str(g.get("key")) + "|" + str(g.get("worker_id")) + "|" + str(r.get("key")
   gfid=$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wg" @fleet_id)
   case "$gfid" in ????????-????-????-????-????????????) ;; *) fail "G: the adapter minted no @fleet_id for a keyless window (got '$gfid')" ;; esac
   eq "G: a keyless no-repo window is listed under its minted identity; a raw scratch keys off its cwd; no panel" \
-     "None|$U/$gfid|scratch-21|False" "$got"
+     "None|$U/$gfid|acme-app:scratch-21|False" "$got"   # the scratch key carries the repo (#1939)
   got=$(bash "$BIN/fleet-remote-view.sh" sessions 2>&1 | python3 -c 'import json, sys
 d = json.load(sys.stdin); print(";".join(sorted(s["worker_id"].split("/", 1)[1] for s in d["sessions"])))' 2>&1)
   has "G: remote-view sessions lists the keyless window too" "$got" "$gfid"

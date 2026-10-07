@@ -275,9 +275,9 @@ grep -q -- "--resume $SID1" "$WORK/dst-launched" || fail "the target must resume
 denc="$WORK/dst-home/.claude/projects/$(printf '%s' "$dwt" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
 cmp -s "$PD1/$SID1.jsonl" "$denc/$SID1.jsonl" || fail "the transcript did not arrive byte-identical at $denc"
 [ -f "$denc/$SID1/note.txt" ] || fail "the transcript's sidecar dir did not travel"
-[ "$(cat "$WORK/hub/lease.42")" = "$DST_UUID/issue-42" ] || fail "the lease must now be the target's"
+[ "$(cat "$WORK/hub/lease.42")" = "$DST_UUID/o-n:issue-42" ] || fail "the lease must now be the target's (keys carry the repo, #1939)" "$(cat "$WORK/hub/lease.42")"
 [ -z "$(ls "$WORK/dst-home/.config/claude-fleet/control/move-in" 2>/dev/null)" ] || fail "the bundle must be removed once used"
-grep -q '^send .* o/n [0-9a-f-]*/issue-42$' "$WORK/hub/calls" || fail "send must name the source worker_id"
+grep -q '^send .* o/n [0-9a-f-]*/o-n:issue-42$' "$WORK/hub/calls" || fail "send must name the source worker_id"
 ok
 
 # ============================================================ 5: a target that fails

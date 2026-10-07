@@ -17,6 +17,10 @@
 #   DEFAULT   with no argument the key is the calling pane's own (fleet_origin_key).
 #   JOIN      one row per child (issue #1351): a bare-key report, the qualified live
 #             window and a placement are one child; two repos' same number are two.
+#   ONE BOOK  (issue #1939, #982) a ONE-repo fleet keys `acme-app:scratch-7` too; a
+#             parent's old bare book (`scratch-7.ndjson`) and a child's bare
+#             @origin are read as that repo's — one book, each child once — and
+#             fleet_origin_heal rewrites the bare @origin so the dash agrees.
 #
 # Runs on a DEDICATED tmux server on its own -L label (never the live server,
 # issue #159). The dash half replays that server's window list through a PATH shim,
@@ -88,7 +92,16 @@ eq "append keeps a valid tier and blanks an invalid one" 'silent|' \
 command -v tmux >/dev/null 2>&1 || { printf 'fleet-children selftest: tmux absent — pure layer only (%d checks)\n' "$CHECKS"; rm -rf "$WORK"; exit 0; }
 
 # --- 2. end to end on a dedicated server ----------------------------------------
+# A ONE-repo fleet (issue #1939): every key carries `acme-app:`, a bare key is its alias.
 LBL="fch-selftest-$$"
+mkdir -p "$FLEET_CONF_DIR/fleets/$LBL"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+P=acme-app:
+# …so a merged report is checked against GitHub's `.merged` (issue #1247) and a
+# stopped one for an open PR (#864): a gh shim says every PR merged and none is
+# open, and nothing here reaches the network.
+mkdir -p "$WORK/ghshim"
+printf '#!/bin/sh\ncase "$*" in *pulls?state=open*) echo 0 ;; *pulls/*) echo "true closed false" ;; esac\nexit 0\n' > "$WORK/ghshim/gh"
+chmod +x "$WORK/ghshim/gh"; export PATH="$WORK/ghshim:$PATH"
 trap 'tmux -L "$LBL" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT
 TM() { tmux -L "$LBL" "$@"; }
 TM new-session -d -s "$LBL" -n dash -c "$WORK" "sleep 600" 2>/dev/null || fail "could not start the selftest tmux server"
@@ -98,12 +111,12 @@ opt() { TM set-window-option -t "$1" "$2" "$3" 2>/dev/null; }
 
 mkdir -p "$WORK/repo-scratch-7"
 new_win '分拆方案'; PARENT="$WID"; opt "$PARENT" @raw 1; opt "$PARENT" @worktree "$WORK/repo-scratch-7"; opt "$PARENT" @claude_state idle
-new_win kid-merged; K1="$WID"; opt "$K1" @issue 101; opt "$K1" @origin scratch-7; opt "$K1" @claude_state 'done'
-new_win kid-failed; K2="$WID"; opt "$K2" @issue 102; opt "$K2" @origin scratch-7; opt "$K2" @claude_state needs
-new_win kid-stopped; K3="$WID"; opt "$K3" @issue 103; opt "$K3" @origin scratch-7; opt "$K3" @claude_state 'done'
+new_win kid-merged; K1="$WID"; opt "$K1" @issue 101; opt "$K1" @origin "${P}scratch-7"; opt "$K1" @claude_state 'done'
+new_win kid-failed; K2="$WID"; opt "$K2" @issue 102; opt "$K2" @origin "${P}scratch-7"; opt "$K2" @claude_state needs
+new_win kid-stopped; K3="$WID"; opt "$K3" @issue 103; opt "$K3" @origin "${P}scratch-7"; opt "$K3" @claude_state 'done'
 new_win stranger; opt "$WID" @issue 900; opt "$WID" @claude_state 'done'      # hub-spawned: nobody's child
 
-LEDGER="$FLEET_CONF_DIR/fleets/$LBL/children/scratch-7.ndjson"
+LEDGER="$FLEET_CONF_DIR/fleets/$LBL/children/${P}scratch-7.ndjson"
 RUN() { bash "$RP" -L "$LBL" "$@" >/dev/null 2>&1; }
 RUN --win "$K1" --state merged --pr 501 --summary 'landed'
 RUN --win "$K2" --state failed --pr 502 --summary 'CI red'
@@ -117,8 +130,8 @@ python3 - "$LEDGER" <<'PY' || fail "ledger events are not what was reported (see
 import json, sys
 ev = [json.loads(l) for l in open(sys.argv[1])]
 got = [(e["seq"], e["child"], e["state"], e["pr"]) for e in ev]
-assert got == [(1, "issue-101", "MERGED", "501"), (2, "issue-102", "FAILED", "502"),
-               (3, "issue-103", "STOPPED", "")], got
+assert got == [(1, "acme-app:issue-101", "MERGED", "501"), (2, "acme-app:issue-102", "FAILED", "502"),
+               (3, "acme-app:issue-103", "STOPPED", "")], got
 assert ev[0]["title"] == "kid-merged" and ev[0]["summary"] == "landed", ev[0]
 PY
 CHECKS=$((CHECKS + 1))
@@ -141,9 +154,10 @@ exit 0
 SHIM
   chmod +x "$WORK/shim/tmux"
   WLIST_FILE="$WORK/wlist" PATH="$WORK/shim:$PATH" FLEET_SESSION="$LBL" FZF_COLUMNS=140 bash "$ROWS" 2>/dev/null \
-    | grep -F "$LBL:$(TM display-message -p -t "$PARENT" '#{window_index}')$US" \
+    | grep -F "$LBL:$(TM display-message -p -t "${1:-$PARENT}" '#{window_index}')$US" \
     | perl -pe 's/\e\[[0-9;]*m//g' | grep -oE '[0-9]+/[0-9]+' | head -1
 }
+dash_badge_of() { dash_badge "$1"; }
 # The dash badge is the bare `k/N` since issue #1328 (no ✓, no `· n!` — a child
 # that needs you is red on its own row); this CLI's summary keeps both, so the
 # two AGREE on the count they share: the summary's leading `k/N`.
@@ -154,7 +168,7 @@ want=$(dash_badge)
 eq "the dash parent row shows the expected badge" "2/3" "$want"
 eq "fleet-children's summary == the dash parent row's badge" "$want" "$(kn "$(summ scratch-7)")"
 out=$(bash "$CLI" -L "$LBL" scratch-7 2>&1)
-has "a row per child: the FAILED one is loud" '! issue-102' "$out"
+has "a row per child: the FAILED one is loud" '! acme-app:issue-102' "$out"
 has "…the MERGED one is done, with its PR"   'MERGED #501' "$out"
 case "$out" in *issue-900*) fail "a hub-spawned window is nobody's child" "$out" ;; esac
 CHECKS=$((CHECKS + 1))
@@ -163,17 +177,17 @@ CHECKS=$((CHECKS + 1))
 bash "$CLI" -L "$LBL" scratch-7 --json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-assert d["parent"] == "scratch-7" and d["seq"] == 3, d
+assert d["parent"] == "acme-app:scratch-7" and d["seq"] == 3, d
 s = d["summary"]
 assert (s["total"], s["done"], s["needs"], s["text"]) == (3, 2, 1, "2/3 ✓ · 1!"), s
 k = {c["child"]: c for c in d["children"]}
-assert k["issue-101"]["last"]["state"] == "MERGED" and k["issue-101"]["live"], k
+assert k["acme-app:issue-101"]["last"]["state"] == "MERGED" and k["acme-app:issue-101"]["live"], k
 ' || fail "--json shape"
 CHECKS=$((CHECKS + 1))
 bash "$CLI" -L "$LBL" scratch-7 --json --since 2 | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-assert [c["child"] for c in d["children"]] == ["issue-103"], d["children"]
+assert [c["child"] for c in d["children"]] == ["acme-app:issue-103"], d["children"]
 assert [e["seq"] for e in d["events"]] == [3], d["events"]
 assert d["summary"]["total"] == 3, d["summary"]
 ' || fail "--since filters children + lists events, summary stays whole"
@@ -199,7 +213,7 @@ eq "no argument ⇒ the calling pane's own key" "2/3 ✓ · 1!" \
 TM kill-window -t "$K1"
 out=$(bash "$CLI" -L "$LBL" scratch-7 2>&1)
 eq "a reaped merged child still counts" "2/3 ✓ · 1!" "$(printf '%s\n' "$out" | tail -1)"
-has "…shown as gone" 'issue-101        gone' "$out"
+has "…shown as gone" 'acme-app:issue-101 gone' "$out"
 
 # QUIET IS NOT FINISHED (issue #1331): the stopped child K3 now has a /loop
 # between rounds (a live @loop on a `done` window) — not a ✓ any more; a sleeper
@@ -235,12 +249,12 @@ alloc=$( . "$BIN/fleet-lib.sh"; fleet_scratch_alloc "$GR" master "$LBL" )
 eq "gen: the free number is allocated" scratch-1 "${alloc%%$'\t'*}"
 eq "gen: the last holder's book is moved aside" no "$([ -e "$CD/scratch-1.ndjson" ] && echo yes || echo no)"
 has "gen: …and kept, readable, in its retired book" '"child": "issue-501"' "$(cat "$CD/scratch-1.ndjson.0" 2>/dev/null)"
-G1=$(awk -F'\t' '$1 == "scratch-1" { g = $2 } END { print g }' "$CD/.gen" 2>/dev/null)
+G1=$(awk -F'\t' -v k="${P}scratch-1" '$1 == k { g = $2 } END { print g }' "$CD/.gen" 2>/dev/null)
 case "$G1" in [0-9]*.[0-9]*) CHECKS=$((CHECKS + 1)) ;; *) fail "gen: no generation minted for scratch-1" "$(cat "$CD/.gen" 2>/dev/null)" ;; esac
 NEWOUT=$(bash "$CLI" -L "$LBL" scratch-1 --json 2>&1)
 eq "gen: the new scratch-1 has no children" 0 \
   "$(printf '%s' "$NEWOUT" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
-eq "gen: a running child of the last holder no longer names scratch-1" "|scratch-1#0|" \
+eq "gen: a running child of the last holder no longer names scratch-1" "|${P}scratch-1#0|" \
   "$(TM display-message -p -t "$GK" '#{@origin}|#{@origin_retired}|#{@origin_wid}')"
 # Evidence (issue #1538 上线证据): fleet-children.sh on the recycled number + the archive.
 if [ -n "${GEN_EVIDENCE:-}" ]; then
@@ -254,14 +268,55 @@ printf '%s' '{"child":"issue-503","state":"BLOCKED"}' \
 alloc=$( . "$BIN/fleet-lib.sh"; fleet_scratch_alloc "$GR" master "$LBL" )
 eq "gen: recycled again" scratch-1 "${alloc%%$'\t'*}"
 has "gen: generation $G1's book retires under $G1" '"child": "issue-503"' "$(cat "$CD/scratch-1.ndjson.$G1" 2>/dev/null)"
-eq "gen: two generations minted" 2 "$(grep -c '^scratch-1	' "$CD/.gen")"
+eq "gen: two generations minted" 2 "$(grep -c "^${P}scratch-1	" "$CD/.gen")"
 # Degenerate: no session ⇒ nothing minted, nothing moved.
 printf '%s' '{"child":"issue-504","state":"MERGED"}' \
   | python3 "$BIN/fleet-children.py" append --file "$CD/scratch-2.ndjson" >/dev/null
 alloc=$( . "$BIN/fleet-lib.sh"; fleet_scratch_alloc "$GR" master )
 eq "gen: (no session) scratch-2 allocated" scratch-2 "${alloc%%$'\t'*}"
 eq "gen: (no session) its book is untouched" 1 "$(wc -l < "$CD/scratch-2.ndjson" | tr -d ' ')"
-eq "gen: (no session) no generation minted" 0 "$(grep -c '^scratch-2	' "$CD/.gen")"
+eq "gen: (no session) no generation minted" 0 "$(grep -c 'scratch-2	' "$CD/.gen")"
+
+# --- 3b. ONE BOOK (issue #1939, #982): a bare book and a bare @origin are the one
+# repo's. Before #1939 a one-repo fleet wrote `scratch-12.ndjson` and stamped bare
+# @origins; the same parent's key is `acme-app:scratch-12` now. Read together they
+# are one parent: each child once, no bare key on a row, the count whole; a report
+# from a bare-@origin child lands in the qualified book; fleet_origin_heal rewrites
+# the bare @origin, after which the dash nests it too.
+mkdir -p "$WORK/repo-scratch-12"
+new_win '合账'; OB="$WID"; opt "$OB" @raw 1; opt "$OB" @worktree "$WORK/repo-scratch-12"; opt "$OB" @claude_state idle
+printf '%s\n' '{"seq": 1, "ts": "2026-10-05T00:00:00Z", "child": "issue-201", "state": "WAITING", "pr": "61"}' \
+  '{"seq": 2, "ts": "2026-10-05T00:01:00Z", "child": "issue-204", "state": "MERGED", "pr": "64"}' > "$CD/scratch-12.ndjson"
+printf '%s\n' '{"seq": 1, "ts": "2026-10-06T00:00:00Z", "child": "acme-app:issue-202", "state": "WAITING", "pr": "62"}' > "$CD/${P}scratch-12.ndjson"
+new_win kid-201; B1="$WID"; opt "$B1" @issue 201; opt "$B1" @origin scratch-12; opt "$B1" @claude_state 'done'
+new_win kid-202; B2="$WID"; opt "$B2" @issue 202; opt "$B2" @origin "${P}scratch-12"; opt "$B2" @claude_state working
+new_win kid-203; B3="$WID"; opt "$B3" @issue 203; opt "$B3" @origin scratch-12; opt "$B3" @claude_state working
+OBJ=$(bash "$CLI" -L "$LBL" scratch-12 --json 2>&1)
+python3 - "$OBJ" <<'PY' || fail "one book: the bare and qualified books must read as one parent (see above)" "$OBJ"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["parent"] == "acme-app:scratch-12", d["parent"]
+kids = sorted(k["child"] for k in d["children"])
+assert kids == ["acme-app:issue-201", "acme-app:issue-202", "acme-app:issue-203", "acme-app:issue-204"], kids
+k = {c["child"]: c for c in d["children"]}
+assert k["acme-app:issue-201"]["live"] and k["acme-app:issue-201"]["pr"] == "61", k["acme-app:issue-201"]
+assert k["acme-app:issue-204"]["last"]["state"] == "MERGED" and not k["acme-app:issue-204"]["live"], k["acme-app:issue-204"]
+assert d["summary"]["total"] == 4, d["summary"]
+PY
+CHECKS=$((CHECKS + 1))
+eq "one book: the qualified key reads the same" "$(summ scratch-12)" "$(summ "${P}scratch-12")"
+RUN --win "$B1" --state merged --pr 61 --summary landed
+has "one book: a bare-@origin child's report is booked under the qualified key" '"child": "acme-app:issue-201"' \
+  "$(tail -1 "$CD/${P}scratch-12.ndjson")"
+eq "one book: …and never in the bare book again" 2 "$(wc -l < "$CD/scratch-12.ndjson" | tr -d ' ')"
+eq "one book: the newer report wins over the bare book's" MERGED \
+  "$(bash "$CLI" -L "$LBL" scratch-12 --json | python3 -c 'import json,sys; print({c["child"]: c for c in json.load(sys.stdin)["children"]}["acme-app:issue-201"]["last"]["state"])')"
+healed=$( . "$BIN/fleet-lib.sh"; fleet_origin_heal "$LBL" "$LBL" )
+has "one book: heal rewrites a bare @origin" "$B3 scratch-12 → ${P}scratch-12" "$healed"
+eq "one book: …every bare one" "${P}scratch-12|${P}scratch-12" \
+  "$(TM display-message -p -t "$B1" '#{@origin}')|$(TM display-message -p -t "$B3" '#{@origin}')"
+eq "one book: after the heal the dash nests them all" "1/3" "$(dash_badge_of "$OB")"
+TM kill-window -t "$B1"; TM kill-window -t "$B2"; TM kill-window -t "$B3"; TM kill-window -t "$OB"
 
 # --- 4. ONE ROW PER CHILD (issue #1351): three sources, one key -----------------
 # A report filed before it carried its repo says bare `issue-N`; the live window

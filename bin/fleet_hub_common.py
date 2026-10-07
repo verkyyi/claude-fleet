@@ -139,9 +139,10 @@ def repo_named(repo, want):
 def worker_key(issue, scratch, worktree, repo=""):
     """The durable key of one window: issue-<N>, scratch-<N> (strict: the worktree
     basename must end in scratch-<digits>, as fleet_scratch_key), or None. `repo`
-    is the adapter's column 9 (issue #1018): empty in a one-repo fleet (the key
-    stays bare), the window's owner/name in a multi-repo one (the key becomes
-    <slug>:issue-<N>), `?` when that repo is unknown — None, never a guess."""
+    is the adapter's column 9 (issue #1018): the window's owner/name (the key
+    becomes <slug>:issue-<N> — in every fleet since issue #1939; an older adapter
+    leaves it empty and the key bare), `?` when that repo is unknown — None,
+    never a guess."""
     key = None
     if issue is not None:
         key = "issue-%d" % issue
