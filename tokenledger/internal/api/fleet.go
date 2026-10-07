@@ -279,6 +279,10 @@ func (s *Server) NodeRead(ctx context.Context, endpointID, method string, params
 	}
 	c := s.nodes.get(endpointID)
 	if c == nil {
+		// Held by another replica (claude-fleet#2124): its NodeRead answers.
+		if peer, ok := s.peerOf(ctx, endpointID); ok {
+			return s.forwardRead(ctx, peer, method, params)
+		}
 		return nil, "", ErrNodeOffline
 	}
 	if !control.Compatible(int(c.proto.Load())) {

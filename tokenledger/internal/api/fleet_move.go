@@ -333,6 +333,8 @@ func (s *Server) handleNodeMove(w http.ResponseWriter, r *http.Request) {
 	movable := false
 	if c := s.nodes.get(endpointOf(pl)); c != nil {
 		movable = c.canMove
+	} else if peer, ok := s.peerOf(r.Context(), endpointOf(pl)); ok {
+		movable = peer.HasCap(control.CapMove) // another replica's link (claude-fleet#2124)
 	}
 	switch req.Action {
 	case "plan":

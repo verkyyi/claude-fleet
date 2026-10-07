@@ -198,6 +198,12 @@ var ErrNodeOffline = errors.New("node has no open control channel")
 func (s *Server) SendNodeWrite(ctx context.Context, endpointID string, msg control.Message) error {
 	c := s.nodes.get(endpointID)
 	if c == nil {
+		if peer, ok := s.peerOf(ctx, endpointID); ok {
+			if msg.Proto == 0 {
+				msg.Proto = control.Proto
+			}
+			return s.forwardSend(ctx, peer, msg)
+		}
 		return ErrNodeOffline
 	}
 	if !control.Compatible(int(c.proto.Load())) {
@@ -303,6 +309,8 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	s.nodes.put(ep.ID, nc)
 	defer s.nodes.drop(ep.ID, nc)
+	// Where this link ends, for the other replicas (claude-fleet#2124).
+	defer s.claimLink(ep.ID, nc, hp.Capabilities)()
 	s.auditComputeForce(*ep, nc, hp.ComputeForce, hp.Probe, time.Now())
 	if nc.canRelay {
 		// Relays that waited for this node while it was away go now
@@ -642,6 +650,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	if err != nil {
 		settings, _ = s.Store.FleetSettings()
 	}
+	peers := s.peerConns() // nil on a single hub (claude-fleet#2124)
 	machines := map[string]*MachineView{}
 	order := []string{}
 	for _, n := range rows {
@@ -674,6 +683,10 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			if c.admin {
 				v.SSHCA = s.sshCAStatusOf(n.EndpointID)
 			}
+		} else if pc, ok := peers[n.EndpointID]; ok {
+			// Held by another replica (claude-fleet#2124): connected all
+			// the same. The CA answer is that replica's to keep.
+			v.Connected, v.Admin = true, pc.Admin
 		}
 		out.Nodes = append(out.Nodes, v)
 
