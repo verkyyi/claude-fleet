@@ -374,7 +374,8 @@ w1=$(tp list-windows -t "=$P" -F '#{window_id}' | head -1)
 remote=$(tp show-options -wqv -t "$w1" @remote)
 [ "$remote" = '-:' ] || die "the right pane connects to this computer ($NODE) with no fleet here" "@remote=$remote"
 homepg() { tp capture-pane -p -t "$w1" 2>/dev/null | grep -q '没有你的 fleet 会话'; }
-waitfor 10 homepg || die 'the right pane is not the home page' "$(tp capture-pane -p -t "$w1" 2>/dev/null | grep -v '^$')"
+waitfor 10 homepg || die 'the right pane is not the home page' "$(tp capture-pane -p -t "$w1" 2>/dev/null | grep -v '^$'
+  tp list-windows -t "=$P" -F '#{window_id} @remote=#{@remote} #{pane_start_command}' 2>/dev/null)"
 pg=$(tp capture-pane -p -t "$w1" 2>/dev/null)
 case "$pg" in *正在连接*|*没有活着的*) die 'the right pane still tries this computer' "$pg" ;; esac
 ok "@remote=-: · the home page, no 正在连接 $NODE, no 没有活着的 fleet 会话"
