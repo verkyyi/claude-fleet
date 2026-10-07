@@ -38,6 +38,8 @@
 #   loop-window-killed                              bin/fleet-restore.sh (loop re-arm), fleet_loop_mark.py rearm
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
+#   breakage-three-filers                           bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
+#                                                   fleet_breakage_find (fleet-lib.sh)
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -2440,6 +2442,90 @@ drill_multirepo_bridge_second_repo() {
     || { WHY="the second tick never listed o/b's comments (gh: $(tr '\n' ' ' < "$d/gh.log" 2>/dev/null); log: $(tail -2 "$d/poll2.err" | tr '\n' ' '))"; return 1; }
   grep -q 'repos/o/a/issues/comments' "$d/gh.log" || { WHY="o/a stopped being listed"; return 1; }
   WHAT="一次同步把被困的机器配置并回 fleet.conf、退役幽灵 fleet；下一拍起两个仓库都被 bridge 轮询"
+}
+
+drill_breakage_three_filers() {
+  CAP=25; local d="$WORK/bk" t0 i c n0 created zeros=0 fives=0
+  mkdir -p "$d/fp" "$d/conf" "$d/store" "$d/home" "$d/tmp"
+  # The fake GitHub: REST paths only (a red master tends to come with a spent
+  # GraphQL budget), a store on disk, and a 0.4 s pause inside `issue create` so
+  # three filers that start together all reach it before any number exists.
+  cat > "$d/fp/gh" <<'EOF'
+#!/bin/bash
+S="$BK_STORE"; printf '%s\n' "$*" >> "$S/gh.log"
+case "$1" in
+  issue)
+    case "$2" in
+      create)
+        sleep 0.4
+        n=$(( $(ls "$S"/issue-* 2>/dev/null | wc -l) + 101 ))
+        shift 2; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
+        printf '%s' "$b" > "$S/issue-$n"; printf 'https://github.com/o/w/issues/%s\n' "$n" ;;
+      comment)
+        shift 2; n="$1"; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
+        printf '%s' "$b" | tr '\n' ' ' >> "$S/comments-$n"; printf '\n' >> "$S/comments-$n"
+        printf 'https://github.com/o/w/issues/%s#issuecomment-1\n' "$n" ;;
+    esac ;;
+  api)
+    p=''; for a in "$@"; do case "$a" in repos/*) p="$a";; esac; done
+    case "$p" in
+      repos/o/w)                    printf 'main\n' ;;
+      repos/o/w/commits/main)       printf '%s\n' "$BK_HEAD" ;;
+      */check-runs*)                printf '501\tselftests / shard 3\thttps://github.com/o/w/actions/runs/9001/job/501\tProcess completed with exit code 1.\n' ;;
+      */actions/runs/9001)          printf '77\n' ;;
+      */actions/workflows/77/runs*) printf '%s\tfailure\n%s\tfailure\n%s\tsuccess\n' "$BK_HEAD" "$BK_RED" "$BK_GREEN" ;;
+      repos/o/w/issues\?*)          for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
+    esac ;;
+  run) cat "$BK_LOG" ;;
+esac
+exit 0
+EOF
+  chmod +x "$d/fp/gh"
+  # The failed job's log, the way `gh run view --log-failed` prints it.
+  printf 'selftests / shard 3\tRun tests\t2026-10-07T04:20:11.1234567Z ##[group]Run bash bin/run-selftests.sh\nselftests / shard 3\tRun tests\t2026-10-07T04:20:12.0000000Z FAIL  lint: internal/api/roles.go:88:2: duplicate key "/v1/admin/drill" in map literal\n' > "$d/log-a"
+  sed 's/:88:2:/:91:4:/' "$d/log-a" > "$d/log-a2"   # the same breakage after a half-fix moved the lines
+  printf 'selftests / shard 3\tRun tests\t2026-10-07T04:30:00.0000000Z FAIL  bash32-array-selftest: bin/x.sh:12: bare array on an empty array\n' > "$d/log-b"
+  bk() { env -u TMUX -u TMUX_PANE HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$d/tmp" PATH="$d/fp:$PATH" \
+           FLEET_GH_WRITE_GAP=0 BK_STORE="$d/store" BK_HEAD=aaaa111aaaa111 BK_RED=bbbb222bbbb222 BK_GREEN=cccc333cccc333 \
+           BK_LOG="${LOG:-$d/log-a}" "$@"; }
+  t0=$(now)
+  for i in 1 2 3; do
+    ( bk bash "$BIN/fleet-issue-file.sh" --title "master 红：routes 重复" --breakage --repo o/w --from "w$i" > "$d/out$i" 2> "$d/err$i"; echo $? > "$d/rc$i" ) &
+  done
+  wait
+  SECS=$(since "$t0")
+  created=$(ls "$d/store"/issue-* 2>/dev/null | wc -l | tr -d ' ')
+  [ "$created" = 1 ] || { WHY="3 filers of one breakage made $created issues (want 1): $(cat "$d"/err? 2>/dev/null | tr '\n' ' ' | cut -c1-300)"; return 1; }
+  n0=$(ls "$d/store"/issue-* | head -1); n0=${n0##*-}
+  grep -q '<!-- fleet:breakage key=' "$d/store/issue-$n0" || { WHY="the issue body carries no fleet:breakage marker"; return 1; }
+  for i in 1 2 3; do
+    case "$(cat "$d/rc$i")" in
+      0) zeros=$((zeros + 1)) ;;
+      5) fives=$((fives + 1))
+         grep -qx "https://github.com/o/w/issues/$n0" "$d/out$i" || { WHY="filer $i exited 5 but printed [$(cat "$d/out$i")], not #$n0"; return 1; } ;;
+      *) WHY="filer $i exited $(cat "$d/rc$i"): $(tr '\n' ' ' < "$d/err$i" | cut -c1-200)"; return 1 ;;
+    esac
+  done
+  [ "$zeros" = 1 ] && [ "$fives" = 2 ] || { WHY="exit codes: $zeros × 0, $fives × 5 (want 1 and 2)"; return 1; }
+  c=$(grep -c '同一故障' "$d/store/comments-$n0" 2>/dev/null)
+  [ "$c" = 2 ] || { WHY="issue #$n0 got $c 「同一故障」 comments, want 2"; return 1; }
+  # A later sighting with the lock gone (another machine, or two minutes on) and
+  # the lines moved: found on GitHub by the marker, same number.
+  rm -rf "$d/conf/global/breakage"
+  LOG="$d/log-a2" bk bash "$BIN/fleet-issue-file.sh" --title "又红了" --breakage --repo o/w --from w4 > "$d/out4" 2> "$d/err4"; c=$?
+  [ "$c" = 5 ] && grep -qx "https://github.com/o/w/issues/$n0" "$d/out4" \
+    || { WHY="a later sighting (lines :88→:91, lock gone) exited $c with [$(cat "$d/out4")]: $(tr '\n' ' ' < "$d/err4" | cut -c1-200)"; return 1; }
+  # A different breakage on the same head files its own issue.
+  LOG="$d/log-b" bk bash "$BIN/fleet-issue-file.sh" --title "另一个故障" --breakage --repo o/w --from w5 > "$d/out5" 2> "$d/err5"; c=$?
+  created=$(ls "$d/store"/issue-* | wc -l | tr -d ' ')
+  [ "$c" = 0 ] && [ "$created" = 2 ] || { WHY="a different breakage exited $c, issues now $created (want 0 and 2): $(tr '\n' ' ' < "$d/err5" | cut -c1-200)"; return 1; }
+  # The degenerate: an ordinary filing reads none of it and leaves no lock.
+  : > "$d/store/gh.log"; rm -rf "$d/conf/global/breakage"
+  bk bash "$BIN/fleet-issue-file.sh" --title "普通单" --repo o/w > "$d/out6" 2> "$d/err6"; c=$?
+  [ "$c" = 0 ] || { WHY="an ordinary filing exited $c: $(tr '\n' ' ' < "$d/err6" | cut -c1-200)"; return 1; }
+  grep -q 'issues?state=open\|check-runs' "$d/store/gh.log" && { WHY="an ordinary filing read a breakage path: $(grep 'issues?state=open\|check-runs' "$d/store/gh.log" | head -1)"; return 1; }
+  [ -e "$d/conf/global/breakage" ] && { WHY="an ordinary filing created the breakage lock dir"; return 1; }
+  WHAT="3 个并发开单：1 张单 + 2 个退出码 5 + 2 条「同一故障」；行号变了仍认得，换故障照常开新单，普通开单不碰"
 }
 
 # ================================================================ run ===========

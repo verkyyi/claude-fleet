@@ -320,7 +320,13 @@ real-time budgets that only hold on an idle box (`CLAUDE.md`, issue #691/#693), 
 a red that names a timing assertion on a loaded machine may be the gate, not the
 change. Before spending the retry, re-read the failing check: if it is unrelated
 to the member's diff, say so on the parent and re-run the check rather than
-burning the one retry on a flake.
+burning the one retry on a flake. And if the base branch itself is red (the same
+check fails on `master`'s head), it is ONE breakage for every member and every
+loop: file it once through `~/.claude/fleet/bin/fleet-issue-file.sh --title …
+--breakage --spawn --repo "$MREPO"` (issue #2078) — exit 5 + a URL means someone
+already did, and a 「同一故障」 comment was left there — then wait for that issue
+before retrying any member. Three issues and three conflicting fixes for one
+duplicate route (2026-10-07, #2039 #2040 #2041) is what this replaces.
 
 ### e. Quota
 
