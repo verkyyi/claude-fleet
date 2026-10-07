@@ -376,8 +376,10 @@ def row_y(pane, text):
     return next(i for i, line in enumerate(tm('capture-pane', '-p', '-t', pane).splitlines()) if text in line)
 
 def row_ys(pane):
-    """Every painted line's y, by its text — refreshing must move none (issue #2228)."""
-    return {line.strip(): i for i, line in enumerate(tm('capture-pane', '-p', '-t', pane).splitlines()) if line.strip()}
+    """Every painted line's y, by its text — refreshing must move none (issue #2228).
+    The ⠋ spinner's frame is dropped from the key: it turns between two reads."""
+    spin = re.compile('[\u2800-\u28ff]')
+    return {spin.sub('', line).strip(): i for i, line in enumerate(tm('capture-pane', '-p', '-t', pane).splitlines()) if line.strip()}
 
 def ask_pane(window):
     """The question open under the session (bin/fleet-ask.py, `@stage_ask`)."""
