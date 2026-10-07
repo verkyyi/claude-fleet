@@ -10,6 +10,8 @@
 #   fleet-client-update.sh apply <sess>  switch the RUNNING client to the staged one now
 #   fleet-client-update.sh doctor [--root <home>]   the doctor's `client` row:
 #                                   `PASS|WARN|INFO<TAB><text>` on stdout
+#   fleet-client-update.sh digest [--root <home>]   the client's files by content
+#                                   (@client_digest, issue #2145)
 #
 # An installed client (the one line, `curl <hub>/install | sh`) lives in one
 # directory, ~/.claude/fleet (#1804; ~/.local/share/claude-fleet before) — the
@@ -41,6 +43,12 @@
 # differ from .client-version and run `fleet-shell.sh reload --all`: every proxy
 # pane respawned, every loop and the keeper restarted, update.state `done`, and
 # every attached client told 「fleet 客户端已更新到 <version>（入口 <commit>）」.
+# A home with NO .client-version (issue #2145 — installed before the mark, or it
+# was lost) is told by CONTENT instead: the server carries @client_digest (the
+# files `client_digest` names, stamped beside @client_version), and `start` /
+# `tick` reload it the same way when that differs from the files on disk — the
+# ⌂ badge says 「✓ 已重新载入新文件」. Nothing else touches such a home: no
+# check, no stage, no switch; `doctor` WARNs that it follows no update.
 #
 # `start`, at most once per FLEET_CLIENT_CHECK_SECS (3600; the stamp is in
 # ~/.cache/claude-fleet/client/), asks the hub two things, each with a short
@@ -446,6 +454,7 @@ announce() {
   local s="$1" v c m
   v=$(mark_get "$ROOT/.client-version" version); c=$(mark_get "$ROOT/.client-version" commit)
   m="fleet 客户端已更新到 ${v:-新版}${c:+（入口 ${c}）}"
+  [ -f "$ROOT/.client-version" ] || m="fleet 客户端已重新载入新文件"   # #2145
   tmux -L "$s" list-clients -F '#{client_name}' 2>/dev/null | while IFS= read -r cl; do
     tmux -L "$s" display-message -c "$cl" -d 10000 "$m" 2>/dev/null
   done
@@ -455,6 +464,28 @@ announce() {
 # fleet-shell.sh stamps it on its server (@client_version) at start and on every
 # reload (issue #1829). Empty: a server started before the stamp existed.
 running_ver() { tmux -L "$1" show-options -gqv @client_version 2>/dev/null; }
+# client_digest <home> — the client by CONTENT (issue #2145): what a server
+# loads at start / reload and keeps until the next — the two conf templates and
+# the script that writes them and runs the loops. The ONE list: fleet-shell.sh
+# stamps it as @client_digest through `fleet-client-update.sh digest`. Empty
+# when the home has no client conf.
+client_digest() {
+  [ -f "$1/conf/tmux-shell.conf" ] || return 0
+  cat "$1/conf/tmux-shell.conf" "$1/conf/tmux-shell-stage.conf" "$1/bin/fleet-shell.sh" 2>/dev/null \
+    | cksum | awk '{ print $1 "-" $2 }'
+}
+# running_digest <sess> — the digest the RUNNING server was loaded from
+running_digest() { tmux -L "$1" show-options -gqv @client_digest 2>/dev/null; }
+# disk_ver / run_ver <sess> — what drift compares: the .client-version's version
+# with @client_version where the mark is (byte for byte #1829), the files'
+# content with @client_digest where it is not (#2145)
+disk_ver() {
+  if [ -f "$ROOT/.client-version" ]; then mark_get "$ROOT/.client-version" version
+  else client_digest "$ROOT"; fi
+}
+run_ver() {
+  if [ -f "$ROOT/.client-version" ]; then running_ver "$1"; else running_digest "$1"; fi
+}
 # drifted <sess> — the client is running, and its files are not the ones it
 # loaded: swapped under it by a client that could not reload it (a pre-#1781
 # `start` moved the whole home aside while the shell ran), or written in place
@@ -462,8 +493,8 @@ running_ver() { tmux -L "$1" show-options -gqv @client_version 2>/dev/null; }
 # opens connections of its own — the second connection of #1775.
 drifted() {
   local v
-  v=$(mark_get "$ROOT/.client-version" version)
-  [ -n "$v" ] && shell_live "$1" && [ "$(running_ver "$1")" != "$v" ]
+  v=$(disk_ver)
+  [ -n "$v" ] && shell_live "$1" && [ "$(run_ver "$1")" != "$v" ]
 }
 # reconcile <sess> [--in-keeper] — the files on disk into the running servers,
 # with EVERY proxy pane respawned and every loop restarted (`reload --all`):
@@ -471,9 +502,10 @@ drifted() {
 # keeper's own tick passes --in-keeper (it restarts itself, exit 4). Exit 4
 # reloaded · 1 failed (said in update.state; not retried for the same pair).
 reconcile() {
-  local s="$1" from to why
-  from=$(vkey "$(running_ver "$s")"); [ -n "$from" ] || from='?'
-  to=$(vkey "$(mark_get "$ROOT/.client-version" version)")
+  local s="$1" from to why done=done
+  from=$(vkey "$(run_ver "$s")"); [ -n "$from" ] || from='?'
+  to=$(vkey "$(disk_ver)")
+  [ -f "$ROOT/.client-version" ] || done=reloaded     # no version to name (#2145)
   if [ "$(state_get phase)" = failed ] && [ "$(state_get from)" = "$from" ] && [ "$(state_get to)" = "$to" ]; then
     return 1
   fi
@@ -484,7 +516,7 @@ reconcile() {
     set_state failed "$from" "$to" "$why"
     return 1
   fi
-  set_state "done" "$from" "$to"
+  set_state "$done" "$from" "$to"
   ulog "reconciled $to"
   announce "$s"
   return 4
@@ -546,9 +578,23 @@ stage_bg() {
   ( nohup bash "$SELF" stage "${HV:-}" </dev/null >"$STATE/stage.log" 2>&1 & )
 }
 
+# unversioned <sess> [--in-keeper] — a home with no .client-version (issue
+# #2145): only the drift check, by content — the files on disk into the running
+# client. Exit 4 reloaded · 0 nothing to do · 1 failed.
+unversioned() {
+  mkdir -p "$STATE" 2>/dev/null || return 0
+  drifted "$1" || return 0
+  reconcile "$@"
+}
+
 cmd_start() {
   local mark="$ROOT/.client-version" new sess rc
-  [ -f "$mark" ] || return 0                          # not an installed client
+  if [ ! -f "$mark" ]; then                           # not an installed client: no update,
+    load_conf                                         # only what runs ≡ what is on disk
+    unversioned "$(shell_sess)"
+    [ $? -eq 4 ] && note "客户端已重新载入新文件（正在运行的连接已换成磁盘上的）"
+    return 0
+  fi
   load_conf
   HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
   mkdir -p "$STATE" 2>/dev/null || return 0
@@ -690,7 +736,13 @@ apply() {
 # the background), then apply a staged client once nobody is typing
 cmd_tick() {
   local s="$1" k idle rc
-  [ -f "$ROOT/.client-version" ] || return 0
+  if [ ! -f "$ROOT/.client-version" ]; then           # no update here (#2145): the drift, once idle
+    load_conf
+    drifted "$s" || return 0
+    [ "$(idle_secs "$s")" -ge "${FLEET_CLIENT_IDLE_SECS:-30}" ] || return 0
+    unversioned "$s" --in-keeper
+    return $?
+  fi
   load_conf
   mkdir -p "$STATE" 2>/dev/null || return 0
   # files that moved under this running client (issue #1829) — hub or no hub,
@@ -726,6 +778,19 @@ cmd_doctor() {
   done
   mark="$ROOT/.client-version"
   if [ ! -f "$mark" ]; then
+    # a client is here, it just cannot say which (issue #2145): it follows no
+    # update, and what runs may not be what is on disk — say both. A checkout
+    # (承载) is install-sync's, not the line's: as before.
+    if [ -f "$ROOT/conf/tmux-shell.conf" ] && [ ! -e "$ROOT/.git" ]; then
+      load_conf; HUB=$(hub_url)
+      parts="没有 .client-version（${ROOT}）：不跟${HUB:+入口}${HUB:-stable}自动更新 · 修法：重跑安装行 curl -fsSL ${HUB:-<入口>}/install | sh"
+      f=$(shell_sess)
+      if shell_live "$f" && [ "$(running_digest "$f")" != "$(client_digest "$ROOT")" ]; then
+        parts="$parts · 正在运行的客户端不是磁盘上的文件（空闲时自动重新载入；现在就要：fleet-shell.sh reload $f --all）"
+      fi
+      printf 'WARN\t%s\n' "$parts"
+      return 0
+    fi
     printf 'INFO\t这台电脑没有安装行装的客户端（%s）\n' "$ROOT"
     return 0
   fi
@@ -791,6 +856,7 @@ $up
 EOF
     case "${uph:-}" in
       done)   parts="$parts · 上次更新 ${uat} → ${uto}" ;;
+      reloaded) parts="$parts · 上次重新载入新文件 ${uat}" ;;
       failed) parts="$parts · 上次更新没成功（${uat}）：${uwhy}"; lvl=WARN ;;
       later)  parts="$parts · 新版 ${uto} 下次打开生效" ;;
     esac
@@ -812,5 +878,6 @@ case "${1:-}" in
   tick)   shift; HUB=''; cmd_tick "${1:-fleet-shell}"; exit $? ;;
   apply)  shift; load_conf; HUB=$(hub_url); mkdir -p "$STATE" 2>/dev/null; apply "${1:-$(shell_sess)}"; exit $? ;;
   doctor) shift; HUB=''; cmd_doctor "$@"; exit 0 ;;
+  digest) shift; [ "${1:-}" = --root ] && ROOT="${2:-$ROOT}"; client_digest "$ROOT"; exit 0 ;;
   *) sed -n '4,12p' "$SELF" | sed 's/^# //' >&2; exit 2 ;;
 esac

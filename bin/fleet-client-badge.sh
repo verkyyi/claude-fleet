@@ -21,7 +21,7 @@
 # PAL_YELLOW).
 #
 # After it, the client's own update (issue #1781, fleet-client-update.sh's
-# update.state): `✓ 已更新到 <commit>` or the one-line failure for
+# update.state): `✓ 已更新到 <commit>` (`✓ 已重新载入新文件` for a home with no .client-version, #2145) or the one-line failure for
 # FLEET_CLIENT_UPDATE_SHOW seconds (60; 4 before #1829 — too short to notice) after it happened, and
 # `新版已就绪 · 下次打开生效` for as long as a change waits for a restart.
 #
@@ -135,6 +135,7 @@ case "$uage" in ''|*[!0-9]*) uage=999999 ;; esac
 utext=''; ucol=$OK
 case "$uph" in
   done)   [ "$uage" -lt "$SHOW" ] && utext=$(fleet_ui_t badge_updated_fmt "${uto:-?}") ;;
+  reloaded) [ "$uage" -lt "$SHOW" ] && utext=$(fleet_ui_t badge_reloaded) ;;   # no .client-version (#2145)
   failed) [ "$uage" -lt "$SHOW" ] && { utext=$(fleet_ui_t badge_update_failed_fmt "${uwhy:-?}"); ucol=$WARN; } ;;
   later)  utext=$(fleet_ui_t badge_update_later); ucol=$WARN ;;
 esac
