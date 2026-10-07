@@ -98,7 +98,7 @@ func (s *Server) trustMigrate(settings map[string]string, now time.Time) error {
 	done := map[string]bool{}
 	for _, a := range accts {
 		key := trustKey(a.Hostname)
-		if a.Hostname == "" || done[key] {
+		if a.Hostname == "" || done[key] || !a.Managed() {
 			continue
 		}
 		done[key] = true

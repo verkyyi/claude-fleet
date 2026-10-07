@@ -204,7 +204,7 @@ func (s *Server) fleetLoginsOf(pid string) (*store.Principal, []string, map[stri
 	seen, hosts := map[string]bool{}, map[string]bool{}
 	var logins []string
 	for _, a := range accts {
-		if a.State != store.AccountActive || !control.ValidExistingLogin(a.Login) {
+		if a.State != store.AccountActive || !a.Managed() || !control.ValidExistingLogin(a.Login) {
 			continue
 		}
 		hosts[a.Hostname] = true
@@ -852,8 +852,14 @@ func (s *Server) approveDeviceLogin(r *http.Request, pid, code string, now time.
 		// Same eligibility as the certificate (an active login), then
 		// the node pass the old join code used to buy (#1627).
 		var node *NodeJoinResponse
-		if node, err = s.enrollNode(r, devName, osUser); err == nil {
+		fp := ""
+		if k, kerr := sshca.ParseUserKey(keyLine); kerr == nil {
+			fp = ssh.FingerprintSHA256(k)
+		}
+		if node, err = s.enrollDeviceNode(r, fp, devName, osUser); err == nil {
 			resp.Node = node
+			// 登录即认人 (claude-fleet#2212): the scanned computer's login is theirs
+			s.recordLoginAccount(pid, fp, node, osUser, now)
 			log.Printf("fleet: %s added node %s (%s) by scan", pid, node.Label, node.EndpointID)
 		}
 	}

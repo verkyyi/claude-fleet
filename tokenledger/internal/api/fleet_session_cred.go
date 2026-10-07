@@ -472,7 +472,7 @@ func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 			return
 		}
 	}
-	principal, err := s.Store.PrincipalForLogin(host, user)
+	principal, err := s.principalOnNode(ep.ID, host, user)
 	if errors.Is(err, store.ErrNoPrincipal) {
 		audit(c, fl.FleetID, "refused:"+LeaseNoPrincipal)
 		sessionCredRefuse(w, http.StatusForbidden, LeaseNoPrincipal, "no active fleet account is "+user+" on "+host)
@@ -557,7 +557,7 @@ func (s *Server) renewSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 		sessionCredRefuse(w, http.StatusNotFound, "not_found", "no such pass on this node")
 		return
 	}
-	if p, err := s.Store.PrincipalForLogin(row.Machine, row.OSUser); err != nil || p != row.PrincipalID {
+	if p, err := s.principalOnNode(row.EndpointID, row.Machine, row.OSUser); err != nil || p != row.PrincipalID {
 		sessionCredRefuse(w, http.StatusForbidden, LeaseNoPrincipal, row.OSUser+" on "+row.Machine+" is no longer "+row.PrincipalID)
 		return
 	}

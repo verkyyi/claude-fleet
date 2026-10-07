@@ -420,7 +420,17 @@ ours() { [ ! -e "$1" ] || grep -q "$MARK" "$1" 2>/dev/null; }
 refuse_foreign() {
   ours "$1" && return 0
   [ "$FORCE" = 1 ] && { cp "$1" "$1.bak-$(date +%Y%m%d%H%M%S)" 2>/dev/null || priv cp "$1" "$1.bak-$(date +%Y%m%d%H%M%S)"; return 0; }
-  say "service: FAIL — $1 exists and was not written by this script (another agent for this login?). Rerun with --force to replace it (a backup is kept)"
+  # say WHAT is there (issue #2212): an older ccquota's own agent service (it
+  # installed com.ccquota.agent itself, before this script) is the usual one,
+  # and replacing it is safe — say so; anything else, say what it runs
+  local runs
+  runs=$(grep -Eo '<string>[^<]*(ccquota|agent)[^<]*</string>' "$1" 2>/dev/null | sed 's/<[^>]*>//g' | tr '\n' ' ' | sed 's/ *$//')
+  [ -n "$runs" ] || runs=$(grep -m1 -Eo '(ExecStart=|exec ).*' "$1" 2>/dev/null)
+  if grep -q 'ccquota' "$1" 2>/dev/null && grep -qw 'agent' "$1" 2>/dev/null; then
+    say "service: FAIL — $1 is an older ccquota agent service, installed by ccquota itself rather than this script (runs: ${runs:-?}). Two agents would share this login: if you no longer run that one by hand, rerun with --force — it is replaced and a backup is kept"
+  else
+    say "service: FAIL — $1 exists and was not written by this script (runs: ${runs:-?}) — not a ccquota agent, so it is left alone. Move it aside, or rerun with --force to replace it (a backup is kept)"
+  fi
   return 1
 }
 

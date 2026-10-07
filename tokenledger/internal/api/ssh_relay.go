@@ -406,7 +406,7 @@ func (s *Server) sshRelayAllowed(id sshRelayIdentity, host string) error {
 		return err
 	}
 	for _, a := range accts {
-		if a.Hostname == host && a.State == store.AccountActive {
+		if a.Hostname == host && a.State == store.AccountActive && a.Managed() {
 			return nil
 		}
 	}

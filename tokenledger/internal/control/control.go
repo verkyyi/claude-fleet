@@ -803,7 +803,19 @@ const (
 	// over HomeSigMessage(ts).
 	HomePath         = "/v1/fleet/home"
 	HomeSigNamespace = "fleet-home@claude-fleet"
+	// LoginNodePath is where a registered device asks for its node pass
+	// (claude-fleet#2212, 登录即登记): POST {public_key, ts, sig, hostname,
+	// os_user} signed like RenewPath, under LoginNodeSigNamespace over
+	// LoginNodeSigMessage(ts). The hub enrolls the device ONCE as an
+	// untrusted, coordinate-only node and reissues that node's token after.
+	LoginNodePath         = "/v1/fleet/login/node"
+	LoginNodeSigNamespace = "fleet-login-node@claude-fleet"
 )
+
+// LoginNodeSigMessage is what a device signs to ask for its node pass.
+func LoginNodeSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-login-node %d", unix)
+}
 
 // RenewSigMessage is what a device signs to renew its certificate.
 func RenewSigMessage(unix int64) string {

@@ -648,15 +648,17 @@ fi
 if [ "$HUB_ANS" = 1 ] && [ "$HOST_ANS" = 0 ] && [ "$CUR_HOST" = 0 ] && [ "${FLEET_INSTALL_NO_NODE:-}" != 1 ]; then
   if is_node_here; then
     say "入口: 这台已登记在 ${HUBURL}（${NODE_ENV}），不重登记"
-  elif [ ! -t 2 ] && [ "${FLEET_INSTALL_NODE_FORCE:-}" != 1 ]; then
-    say "入口: 这里没有终端可显示二维码，先不登记 — 在终端里敲 fleet node join 补上"
   else
-    say "入口: 登记这台电脑（只看只派：不在本机跑别人派的会话、不借入口的账号）…"
-    if FLEET_CONF_DIR="$CONF" "$ROOT/bin/fleet" node join --no-fleet --no-deps --no-admin </dev/null >&2; then
-      :
-    else
-      say "入口: 没登记成（上面一行说了哪步）— fleet 照样能用；再跑一次这行，或敲 fleet node join 补上"
-    fi
+    # 登录即登记 (issue #2212): no second scan, and no terminal needed — a
+    # computer already logged in takes its node pass by the device key now;
+    # one not logged in yet is registered by its `fleet login` (the one scan)
+    _erc=0
+    FLEET_CONF_DIR="$CONF" bash "$ROOT/bin/fleet-node.sh" ensure --hub "$HUBURL" </dev/null >/dev/null 2>&1 || _erc=$?
+    case "$_erc" in
+      0) say "入口: 已随登录登记这台电脑（不可信 · 只协调：不在本机跑别人派的会话、不借入口的账号）" ;;
+      3) say "入口: 登录（fleet login，扫一次码）时自动登记为只协调的节点，不用另外扫码" ;;
+      *) say "入口: 这次没登记成 — fleet 照样能用；登录后 fleet run / fleet 会自己补上（或敲 fleet node join）" ;;
+    esac
   fi
 fi
 

@@ -89,7 +89,13 @@ func (s *Server) activeAccounts() []store.FleetAccount {
 		log.Printf("fleet relay: read accounts: %v", err)
 		return nil
 	}
-	return accts
+	out := accts[:0]
+	for _, a := range accts {
+		if a.Managed() { // a login-recorded computer is no relay route (#2212)
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // shortNode is the machine as claude-fleet names it: the roster hostname's
