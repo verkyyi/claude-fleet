@@ -1,0 +1,28 @@
+# The relay's local gate (claude-fleet#2048) — Caddy's forward_auth asks it on
+# 127.0.0.1:2091, it asks the hub. docs/CRED-RELAY.md «入口重启时» is the runbook.
+# Install: /usr/local/lib/fleet-relay/fleet-relay-check.py (0755) + this file as
+# /etc/systemd/system/fleet-relay-check.service, then
+#   sudo systemctl daemon-reload && sudo systemctl enable --now fleet-relay-check
+# Nothing here is a secret.
+[Unit]
+Description=fleet relay check — forward_auth cache in front of the hub's /v1/relay/check
+After=network-online.target
+Wants=network-online.target
+Before=caddy.service
+
+[Service]
+Environment=FLEET_HUB_URL=https://ccquota.24haowan.com
+Environment=FLEET_RELAY_CHECK_LISTEN=127.0.0.1:2091
+Environment=RELAY_CHECK_CACHE_S=30
+Environment=RELAY_CHECK_GRACE_S=600
+ExecStart=/usr/bin/python3 -I /usr/local/lib/fleet-relay/fleet-relay-check.py
+Restart=always
+RestartSec=1
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

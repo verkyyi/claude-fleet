@@ -4,7 +4,8 @@
 # relay itself — extras/cred-relay/Caddyfile under a real Caddy when one is on
 # PATH (or FLEET_RELAY_CADDY names it), else a fake forwarder with the same
 # rules — in front of a fake upstream. Everything binds 127.0.0.1; no network,
-# no tmux. The hub's real check is pinned by Go (fleet_relay_cred_test.go).
+# no tmux. The hub's real check is pinned by Go (fleet_relay_cred_test.go);
+# the relay asks it through its local checker (extras/cred-relay/fleet-relay-check.py).
 #
 # What it pins:
 #   A. usage     no action / unknown / extra args / bad machine: exit 2
@@ -165,7 +166,7 @@ class Relay(Base):
             return self.send(200, raw=b"ok")
         if not path.startswith(PREFIXES):
             return self.send(404, raw=b"")
-        hub = http.client.HTTPConnection("127.0.0.1", int(os.environ["HUB_PORT"]), timeout=10)
+        hub = http.client.HTTPConnection("127.0.0.1", int(os.environ["CHECK_PORT"]), timeout=10)
         h = {k: v for k, v in self.headers.items()
              if k.lower() not in ("authorization", "cookie", "chatgpt-account-id", "x-api-key", "content-length")}
         h["X-Forwarded-Uri"] = path
@@ -220,8 +221,20 @@ start_fake() {
 }
 start_fake hub; HUB_PORT=$(cat "$WORK/hub.port")
 start_fake up; UP_PORT=$(cat "$WORK/up.port")
-export HUB_PORT UP_PORT
 HUB="http://127.0.0.1:$HUB_PORT"
+# The relay's local checker (issue #2048) between the forwarder and the hub, as
+# deployed. Its yes-cache is OFF here: E pins that a revoked pass is refused on
+# the very next request; the cache and the restart grace are drilled by
+# bin/fleet-break-it-cred-selftest.sh (cred-relay-hub-restart).
+CHECK_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+FLEET_HUB_URL="$HUB" FLEET_RELAY_CHECK_LISTEN="127.0.0.1:$CHECK_PORT" RELAY_CHECK_CACHE_S=0 \
+  FLEET_RELAY_CHECK_LOG="$WORK/check.log" FLEET_RELAY_CHECK_MAX_SECONDS=180 \
+  python3 -I "$BIN/../extras/cred-relay/fleet-relay-check.py" 2>"$WORK/check.err" &
+PIDS="$PIDS $!"
+i=0
+until curl -fsS "http://127.0.0.1:$CHECK_PORT/healthz" >/dev/null 2>&1 || [ $i -ge 300 ]; do sleep 0.1; i=$((i + 1)); done
+[ $i -lt 300 ] || fail "the relay checker did not start: $(cat "$WORK/check.err")"
+export HUB_PORT UP_PORT CHECK_PORT
 export RELAY_LOG="$WORK/relay.log"
 
 # A curl that logs its argv, so B can prove no token rides in one.
@@ -279,7 +292,7 @@ CADDY=${FLEET_RELAY_CADDY:-$(command -v caddy 2>/dev/null)}
 if [ -n "$CADDY" ] && [ -x "$CADDY" ]; then
   RELAY_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
   mkdir -p "$WORK/xdg/data" "$WORK/xdg/config"
-  FLEET_RELAY_SITE="http://127.0.0.1:$RELAY_PORT" FLEET_HUB_URL="$HUB" FLEET_RELAY_LOG="$RELAY_LOG" FLEET_RELAY_ADMIN=off \
+  FLEET_RELAY_SITE="http://127.0.0.1:$RELAY_PORT" FLEET_RELAY_CHECK="127.0.0.1:$CHECK_PORT" FLEET_RELAY_LOG="$RELAY_LOG" FLEET_RELAY_ADMIN=off \
     FLEET_RELAY_ANTHROPIC="http://127.0.0.1:$UP_PORT" FLEET_RELAY_CHATGPT="http://127.0.0.1:$UP_PORT" \
     FLEET_RELAY_OPENAI_AUTH="http://127.0.0.1:$UP_PORT" XDG_DATA_HOME="$WORK/xdg/data" XDG_CONFIG_HOME="$WORK/xdg/config" \
     "$CADDY" run --config "$CADDYFILE" --adapter caddyfile >"$WORK/caddy.out" 2>&1 &
