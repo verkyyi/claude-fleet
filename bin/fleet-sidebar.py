@@ -273,7 +273,10 @@ def fields(target, fmt):
 def panes(session):
     fmt = US.join(("#{pane_id}", "#{window_id}", "#{@sidebar}",
                    "#{pane_active}", "#{pane_dead}", "#{@sidebar_worker}",
-                   "#{@sidebar_version}", "#{@sidebar_slot}", "#{@stage_ask}"))
+                   "#{@sidebar_version}", "#{@sidebar_slot}",
+                   # a question's pane (bin/fleet-ask.py): its mark, or — the
+                   # moment before the mark lands — its program
+                   "#{?#{@stage_ask},1,#{?#{m:*fleet-ask.py run*,#{pane_start_command}},1,}}"))
     return [line.split(US) for line in tmux(
         "list-panes", "-s", "-t", session, "-F", fmt).splitlines()
         if len(line.split(US)) == 9]

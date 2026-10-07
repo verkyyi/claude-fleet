@@ -291,11 +291,15 @@ def open_ask(below, spec):
         # must never take the new pane for the window's content.
         made = tmux("split-window", "-v", "-l", str(height_of(spec)), "-t", below,
                     "-c", os.path.expanduser("~"), "-P", "-F", "#{pane_id}", cmd, ";",
-                    "set-option", "-p", "@stage_ask", "1", ";",
-                    "set-option", "-p", "remain-on-exit", "off")
+                    "set-option", "-p", "@stage_ask", "1")
         pane = made.stdout.strip()
         if made.returncode != 0 or not pane.startswith("%"):
             return 2, {}
+        # …and by its id too: an older tmux (3.4) keeps the list's pane as the
+        # command list's target after a split, so the mark above can miss. The
+        # sync knows the pane by its program meanwhile (fleet-sidebar.py panes).
+        tmux("set-option", "-p", "-t", pane, "@stage_ask", "1", ";",
+             "set-option", "-p", "-t", pane, "remain-on-exit", "off")
         deadline = time.monotonic() + WAIT_SECS
         while not os.path.exists(result):
             gone = tmux("display-message", "-p", "-t", pane, "#{pane_id}")
