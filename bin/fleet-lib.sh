@@ -137,20 +137,70 @@ fleet_state_dir() {
   printf '%s' "$d"
 }
 
-# --- «an EPIC batch is running on this login» (issue #953) -----------------------
-# /fleet-epic-run stamps $FLEET_CONF_DIR/global/epic-running as the first command of
-# every tick (bin/fleet-epic-heartbeat.sh); bin/fleet-install-sync.sh defers while
-# it is fresh, so the live install is never fast-forwarded under a running batch —
+# --- «an EPIC batch is running on this login» (issue #953; one mark PER BATCH, #2062) --
+# /fleet-epic-run stamps $FLEET_CONF_DIR/global/epic-running.d/<repo slug>-<N> as
+# the first command of every tick (bin/fleet-epic-heartbeat.sh) — one file per
+# batch, so two loops on one login never overwrite each other's and a loop's
+# --clear <N> takes only its own (issue #2062: #1935 and #1982 shared one file;
+# whichever wrote last was the only batch anyone could see, and the first to end
+# cleared both). bin/fleet-install-sync.sh defers the whole version switch while
+# ANY mark is fresh, so the live install is never moved under a running batch —
 # the loop's pane and its workers are idle between ticks, so the busy-window gate
 # alone cannot see the batch. A LEASE, not a lock: fresh for its own `ttl:` (default
 # 2700 s) counted from its `epoch:`, else from the file's mtime (a bare `touch` is a
 # hand override). No gh, no tmux: the daemon that reads it has neither.
-fleet_epic_running_file() { printf '%s/global/epic-running' "$FLEET_CONF_DIR"; }
-# fleet_epic_running [<file>] — 0 fresh / 1 stale / 2 no mark; prints one line:
+# The pre-#2062 single file global/epic-running is still READ for one version
+# (fleet_epic_running_marks lists it last) and never written.
+fleet_epic_running_dir() { printf '%s/global/epic-running.d' "$FLEET_CONF_DIR"; }
+fleet_epic_running_file() { printf '%s/global/epic-running' "$FLEET_CONF_DIR"; }   # compat-1v: 下一批删
+# fleet_epic_mark_file <repo|-> <N> — the mark ONE batch writes.
+fleet_epic_mark_file() {
+  local slug
+  case "${1:-}" in ''|-) slug=_ ;; *) slug=$(fleet_slug "$1") ;; esac
+  printf '%s/%s-%s' "$(fleet_epic_running_dir)" "$slug" "${2:-}"
+}
+# fleet_epic_running_marks — every mark on this login, one path per line (the
+# directory's files, then the legacy single file); nothing when there is none.
+# find, not a glob: zsh (a skill sourcing this lib, #1633) errors on an empty one.
+fleet_epic_running_marks() {
+  local d f
+  d=$(fleet_epic_running_dir)
+  [ -d "$d" ] && find "$d" -maxdepth 1 -type f ! -name '*.tmp.*' 2>/dev/null | sort   # *.tmp.*: an atomic write in flight
+  f=$(fleet_epic_running_file); [ -f "$f" ] && printf '%s\n' "$f"   # compat-1v: 下一批删
+  return 0
+}
+# fleet_epic_running_fresh — the ONE read install-sync, apply and the doctor make:
+# 0 when ANY mark is fresh — prints every fresh one, youngest first, `; `-joined
+# (`epic=<N> session=<sess> tick=<n> age=<s>s ttl=<s>s`) — 1 when every mark is
+# stale (prints the youngest), 2 when there is none.
+fleet_epic_running_fresh() {
+  local f out rc age fresh='' stale='' stale_age=''
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    out=$(fleet_epic_running "$f"); rc=$?
+    age=${out##*age=}; age=${age%%s*}
+    case "$rc" in
+      0) fresh="$fresh$age	$out
+" ;;
+      1) if [ -z "$stale" ] || [ "$age" -lt "$stale_age" ]; then stale="$out"; stale_age="$age"; fi ;;
+    esac
+  done <<EOF_MARKS
+$(fleet_epic_running_marks)
+EOF_MARKS
+  if [ -n "$fresh" ]; then
+    printf '%s' "$fresh" | sort -n | cut -f2- | awk 'NR > 1 { printf "; " } { printf "%s", $0 }'
+    return 0
+  fi
+  if [ -n "$stale" ]; then printf '%s' "$stale"; return 1; fi
+  return 2
+}
+# fleet_epic_running [<file>] — ONE mark: 0 fresh / 1 stale / 2 no mark; prints
 #   epic=<N> session=<sess> tick=<n> age=<s>s ttl=<s>s
+# With no <file> it is every mark on the login (fleet_epic_running_fresh), so an
+# older caller that read "the" mark now sees every batch.
 fleet_epic_running() {
   local f="${1:-}" epoch ttl age epic sess tick
-  [ -n "$f" ] || f=$(fleet_epic_running_file)
+  [ -n "$f" ] || { fleet_epic_running_fresh; return; }
   [ -f "$f" ] || return 2
   epoch=$(sed -n 's/^epoch: //p' "$f" | head -1)
   case "$epoch" in ''|*[!0-9]*)

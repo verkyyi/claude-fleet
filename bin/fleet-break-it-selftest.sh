@@ -25,6 +25,8 @@
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
+#   epic-mark-overwritten / epic-fresh-switched     bin/fleet-epic-heartbeat.sh (one mark per batch),
+#                                                   fleet_epic_running_fresh, fleet-install-sync.sh (the EPIC gate)
 #   personal-tmux-conf                              conf/tmux-fleet-server.conf, fleet_server_new_session,
 #                                                   fleet_tmuxconf_check, reapply-tmux-attention.sh
 #   personal-hook-hangs / personal-hook-errors      bin/fleet-hook-personal.sh (timeout, strikes)
@@ -638,6 +640,76 @@ drill_install_sync_killed() {
     || { WHY="the next tick did not follow stable: $(tail -2 "$d/tick2.out")"; return 1; }
   grep -q "holder pid=$pid is dead" "$d/tick2.out" || { WHY="the takeover left no log line naming pid=$pid"; return 1; }
   SECS=$(since "$t0"); WHAT="下一拍接管死掉那一跳（pid=${pid}）的锁，跟上 stable"
+}
+
+# epic_sandbox <dir> — a bare origin + a clone ONE commit behind stable, with
+# stub apply / doctor / diskguard; the heartbeat and the state live under
+# <dir>/conf. epic_tick runs one install-sync tick on it, epic_hb the heartbeat.
+epic_sandbox() {
+  local d="$1"
+  mkdir -p "$d/conf" "$d/home"
+  (
+    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/install" 2>/dev/null
+    mkdir -p "$d/install/bin" "$d/install/logs"
+    printf 'echo "apply: ok"\n' > "$d/install/bin/fleet-install-apply.sh"
+    printf 'exit 0\n' > "$d/install/bin/fleet-doctor.sh"
+    printf 'exit 0\n' > "$d/install/bin/fleet-diskguard.sh"; chmod +x "$d"/install/bin/*
+    printf 'logs/\n' > "$d/install/.gitignore"
+    git -C "$d/install" add -A && git -C "$d/install" commit -qm one && git -C "$d/install" push -q origin master
+    echo two > "$d/install/f"; git -C "$d/install" add -A; git -C "$d/install" commit -qm two
+    git -C "$d/install" push -q origin master; git -C "$d/install" reset -q --hard HEAD~1
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable master
+  ) >/dev/null 2>&1
+}
+epic_tick() { HOME="$1/home" FLEET_CONF_DIR="$1/conf" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-install-sync.sh" --root "$1/install"; }
+epic_hb()   { local d="$1"; shift; HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-epic-heartbeat.sh" "$@"; }
+epic_st()   { sed -n "s/^$2: //p" "$1/conf/global/install-sync.state" | head -1; }
+
+# epic-mark-overwritten (issue #2062): two /fleet-epic-run loops on one login,
+# each stamping its own batch. Before: one file, the second stamp replaced the
+# first and the first loop's --clear took the second's protection with it. Now
+# each batch has its own mark, --status shows both, --clear <N> takes one, and
+# the other still holds the install (deferred).
+drill_epic_mark_overwritten() {
+  CAP=20; local t0 d="$WORK/epic1" st r
+  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
+  epic_hb "$d" 1935 --tick 22 --repo o/r --session f1 >/dev/null 2>&1
+  epic_hb "$d" 1982 --tick 10 --repo o/r --session f1 >/dev/null 2>&1
+  t0=$(now)
+  st=$(epic_hb "$d" --status 2>&1)
+  case "$st" in *"epic=1935"*) ;; *) WHY="the second loop's heartbeat overwrote the first's: --status shows [$st]"; return 1 ;; esac
+  case "$st" in *"epic=1982"*) ;; *) WHY="--status does not show the second batch: [$st]"; return 1 ;; esac
+  epic_hb "$d" --clear 1935 >/dev/null 2>&1                   # the first batch ends
+  st=$(epic_hb "$d" --status 2>&1)
+  case "$st" in *"epic=1982"*) ;; *) WHY="--clear 1935 took #1982's mark too: [$st]"; return 1 ;; esac
+  epic_tick "$d" >"$d/tick.out" 2>&1
+  r=$(epic_st "$d" result)
+  [ "$r" = deferred ] || { WHY="with #1982 still fresh the tick was $r: $(epic_st "$d" reason)"; return 1; }
+  case "$(epic_st "$d" reason)" in *"epic=1982"*) ;; *) WHY="the deferral does not name #1982: $(epic_st "$d" reason)"; return 1 ;; esac
+  SECS=$(since "$t0"); WHAT="两个批次各一份标记；#1935 收尾只清自己的，#1982 仍拦住 install-sync（deferred）"
+}
+
+# epic-fresh-switched (issue #2062): a batch is mid-run (its mark fresh) and
+# stable moves. Before (#1894): the tick switched the version and only the
+# node-agent step said deferred. Now the tick is deferred before the switch —
+# no `switched` line, HEAD where it was — and follows once the batch clears.
+drill_epic_fresh_switched() {
+  CAP=20; local t0 d="$WORK/epic2" r head stable
+  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
+  epic_hb "$d" 1935 --tick 22 --repo o/r --session f1 >/dev/null 2>&1
+  t0=$(now)
+  epic_tick "$d" >"$d/tick1.out" 2>&1
+  r=$(epic_st "$d" result)
+  head=$(git -C "$d/install" rev-parse HEAD); stable=$(git --git-dir="$d/origin.git" rev-parse stable)
+  [ "$r" = deferred ] || { WHY="a fresh mark and the tick still ran: result=$r (install at $(printf '%.7s' "$head"), stable $(printf '%.7s' "$stable"))"; return 1; }
+  grep -q ' switched ' "$d/install/logs/install-sync.log" 2>/dev/null && { WHY="the log has a switched line under a fresh mark"; return 1; }
+  [ "$head" != "$stable" ] || { WHY="the install moved to stable under a fresh mark"; return 1; }
+  epic_hb "$d" --clear 1935 >/dev/null 2>&1                   # the batch ends
+  epic_tick "$d" >"$d/tick2.out" 2>&1
+  [ "$(git -C "$d/install" rev-parse HEAD)" = "$stable" ] || { WHY="after the clear the tick did not switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
+  SECS=$(since "$t0"); WHAT="标记新鲜那一拍只 deferred、版本不动；批次清掉标记后下一拍 switched"
 }
 
 # personal-tmux-conf (issue #1845): the person's ~/.tmux.conf has a syntax error

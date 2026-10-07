@@ -32,10 +32,17 @@
 #                    removed (worktree + branch); the current, .prev and the
 #                    repository's checkout never are
 #   M. disk gate     gate closed → deferred
-#   O. epic running  a fresh epic-running mark (fleet-epic-heartbeat.sh, #953)
-#                    no longer defers the install (发起人拍板 2026-10-06, #1894):
-#                    the disk gate is the only one; the heartbeat's own CLI
-#                    (stamp / --status 0/1/2 / --clear / usage) still pinned
+#   O. epic running  (issue #953; one mark per batch, #2062) a fresh mark —
+#                    global/epic-running.d/<repo>-<N>, fleet-epic-heartbeat.sh —
+#                    defers the tick BEFORE the disk gate and before the switch:
+#                    two batches A, B on one login each keep their own mark and
+#                    the reason names both; A expired + B fresh → deferred on B;
+#                    --clear <N> takes one mark, never the other's (a bare
+#                    --clear refuses with two, clears with one); all expired →
+#                    the disk gate decides; the legacy single file is still read
+#                    (never written); a fresh mark + stable moving → deferred
+#                    ticks only, NEVER switched, until the batch clears its mark;
+#                    the heartbeat's CLI (stamp / --status 0/1/2 / usage) pinned
 #   F. rollback      a FAIL line the new doctor prints → the link back + the OLD
 #                    version's apply back; that version is skipped until stable
 #                    moves; the next stable move is followed
@@ -236,42 +243,95 @@ eq "M: the link untouched" "$V/$C3" "$(readlink "$CO")"
 contains "M: says disk gate" "$(st reason)" "disk gate closed"
 eq "M: HEAD untouched" "$C3" "$(hd)"; eq "M: no apply" "$n" "$(applies)"
 
-# --- O. a running EPIC batch (issue #953) ------------------------------------------------------
+# --- O. a running EPIC batch (issue #953; one mark per batch, #2062) -----------------------------
 # stable C4 is still ahead and M's disk gate is still closed, so WHICH reason wins
 # is the assertion: a fresh mark defers for the EPIC before the disk gate is even
 # asked; a stale or cleared one falls through to it — HEAD never moves either way.
-HB="$BIN/fleet-epic-heartbeat.sh"
+HB="$BIN/fleet-epic-heartbeat.sh"; EPD="$CONF/global/epic-running.d"
 T1=$(st deferred_since)
 OUT=$(bash "$HB" 1117 --tick 3 --repo o/r --session f1 2>&1); RC=$?
 eq "O: stamp exits 0" 0 "$RC"; contains "O: stamp says what it wrote" "$OUT" "stamped epic=1117 session=f1 tick=3 ttl=2700s"
-[ -f "$CONF/global/epic-running" ] || fail "O: no epic-running mark written"; CHECKS=$((CHECKS + 1))
-eq "O: mark carries the epic" 1117 "$(sed -n 's/^epic: //p' "$CONF/global/epic-running")"
+[ -f "$EPD/o-r-1117" ] || fail "O: no per-batch mark written (epic-running.d/o-r-1117)"; CHECKS=$((CHECKS + 1))
+[ -e "$CONF/global/epic-running" ] && fail "O: the legacy single file was written"; CHECKS=$((CHECKS + 1))
+eq "O: mark carries the epic" 1117 "$(sed -n 's/^epic: //p' "$EPD/o-r-1117")"
 n=$(applies); run
-eq "O: result deferred (the disk gate)" deferred "$(st result)"
-not_contains "O: a fresh EPIC mark is no reason any more" "$(st reason)" "EPIC"
-contains "O: the disk gate is the reason" "$(st reason)" "disk gate closed"
+eq "O: result deferred" deferred "$(st result)"
+contains "O: the EPIC is the reason, before the disk gate" "$(st reason)" "EPIC batch running on this login (epic=1117 session=f1 tick=3"
+not_contains "O: …not the disk gate" "$(st reason)" "disk gate"
 eq "O: HEAD untouched" "$C3" "$(hd)"; eq "O: no apply" "$n" "$(applies)"
 eq "O: deferred_since kept from the disk-gate deferral" "$T1" "$(st deferred_since)"
+contains "O: log line" "$(lastlog)" "deferred $(short "$C3")..$(short "$C4") EPIC batch running"
+# a second batch on the same login: its own file, the first one's untouched (#2062)
+OUT=$(bash "$HB" 1982 --tick 10 --repo o/r --session f1 2>&1)
+[ -f "$EPD/o-r-1982" ] || fail "O: the second batch has no mark of its own"; CHECKS=$((CHECKS + 1))
+eq "O: the first batch's mark is untouched" 3 "$(sed -n 's/^tick: //p' "$EPD/o-r-1117")"
+run
+eq "O: still deferred" deferred "$(st result)"
+contains "O: the reason names the first batch" "$(st reason)" "epic=1117"
+contains "O: …and the second" "$(st reason)" "epic=1982"
 OUT=$(bash "$HB" --status 2>&1); RC=$?
-eq "O: --status fresh exits 0" 0 "$RC"; contains "O: --status prints the mark" "$OUT" "fresh epic=1117 session=f1 tick=3"
-# a LEASE: written with a 1 s ttl it expires
-bash "$HB" 1117 --ttl 1 --session f1 >/dev/null 2>&1; sleep 2
+eq "O: --status fresh exits 0" 0 "$RC"; contains "O: --status lists the first" "$OUT" "fresh epic=1117 session=f1 tick=3"
+contains "O: --status lists the second" "$OUT" "fresh epic=1982 session=f1 tick=10"
+# a LEASE: the first, rewritten with a 1 s ttl, expires; the second still holds
+bash "$HB" 1117 --ttl 1 --tick 4 --repo o/r --session f1 >/dev/null 2>&1; sleep 2
+run
+eq "O: one stale + one fresh = deferred" deferred "$(st result)"
+contains "O: …on the fresh one" "$(st reason)" "epic=1982"
+not_contains "O: …not the stale one" "$(st reason)" "epic=1117"
 OUT=$(bash "$HB" --status 2>&1); RC=$?
-eq "O: --status stale exits 1" 1 "$RC"; contains "O: --status says stale" "$OUT" "stale epic=1117"
-# --clear lifts it outright
-bash "$HB" 1117 --session f1 >/dev/null 2>&1; OUT=$(bash "$HB" --clear 2>&1); RC=$?
-eq "O: --clear exits 0" 0 "$RC"; contains "O: --clear says so" "$OUT" "cleared"
-[ -f "$CONF/global/epic-running" ] && fail "O: --clear left the mark"; CHECKS=$((CHECKS + 1))
+eq "O: --status with one fresh exits 0" 0 "$RC"; contains "O: --status says stale for the first" "$OUT" "stale epic=1117"
+# --clear <N> takes ONE batch's mark, never the other's (#2062)
+OUT=$(bash "$HB" --clear 1982 2>&1); RC=$?
+eq "O: --clear <N> exits 0" 0 "$RC"; contains "O: --clear says so" "$OUT" "cleared $EPD/o-r-1982"
+[ -e "$EPD/o-r-1982" ] && fail "O: --clear 1982 left its mark"; CHECKS=$((CHECKS + 1))
+[ -f "$EPD/o-r-1117" ] || fail "O: --clear 1982 took the other batch's mark"; CHECKS=$((CHECKS + 1))
+OUT=$(bash "$HB" --status 2>&1); RC=$?
+eq "O: --status all stale exits 1" 1 "$RC"; contains "O: --status says stale" "$OUT" "stale epic=1117"
+# every mark stale → the tick falls through to the disk gate
+run
+eq "O: all stale = the disk gate decides" deferred "$(st result)"
+contains "O: the disk gate is the reason" "$(st reason)" "disk gate closed"
+not_contains "O: no EPIC in the reason" "$(st reason)" "EPIC"
+# a bare --clear (the pre-#2062 form) refuses with two batches marked, clears with one
+bash "$HB" 1982 --repo o/r --session f1 >/dev/null 2>&1
+OUT=$(bash "$HB" --clear 2>&1); RC=$?
+eq "O: a bare --clear with two batches marked refuses" 2 "$RC"; contains "O: …and says how" "$OUT" "--clear <epic> clears ONE"
+{ [ -f "$EPD/o-r-1117" ] && [ -f "$EPD/o-r-1982" ]; } || fail "O: the refused --clear removed a mark"; CHECKS=$((CHECKS + 1))
+bash "$HB" --clear 1117 >/dev/null 2>&1
+OUT=$(bash "$HB" --clear 2>&1); RC=$?
+eq "O: a bare --clear with one mark clears it" 0 "$RC"
+[ -e "$EPD/o-r-1982" ] && fail "O: the bare --clear left the one mark"; CHECKS=$((CHECKS + 1))
 OUT=$(bash "$HB" --status 2>&1); RC=$?; eq "O: --status with no mark exits 2" 2 "$RC"
+OUT=$(bash "$HB" --clear 1117 2>&1); RC=$?; eq "O: --clear of nothing exits 0" 0 "$RC"; contains "O: …says nothing to clear" "$OUT" "nothing to clear for epic=1117"
+# the pre-#2062 single file is still read for one version (compat-1v), never written
+printf 'epoch: %s\nttl: 2700\nepic: 883\nsession: f1\ntick: 1\n' "$(date +%s)" > "$CONF/global/epic-running"
+OUT=$(bash "$HB" --status 2>&1); RC=$?
+eq "O: a legacy mark still reads fresh" 0 "$RC"; contains "O: …as its epic" "$OUT" "fresh epic=883"
+run; contains "O: …and still defers" "$(st reason)" "epic=883"
+bash "$HB" --clear 883 >/dev/null 2>&1
+[ -e "$CONF/global/epic-running" ] && fail "O: --clear 883 left the legacy mark"; CHECKS=$((CHECKS + 1))
 # usage
 OUT=$(bash "$HB" 2>&1); RC=$?; eq "O: no epic is a usage error" 2 "$RC"
 OUT=$(bash "$HB" 1117 --ttl 0 2>&1); RC=$?; eq "O: --ttl 0 is a usage error" 2 "$RC"
-[ -f "$CONF/global/epic-running" ] && fail "O: a usage error must not stamp"; CHECKS=$((CHECKS + 1))
-# with the disk gate open, a fresh EPIC mark does not hold the switch back
-rm "$WORK/gate-closed"; bash "$HB" 1117 --session f1 >/dev/null 2>&1; stable "$C3a"; run
-eq "O: switched while an EPIC batch runs" switched "$(st result)"
+OUT=$(bash "$HB" --clear x 2>&1); RC=$?; eq "O: --clear x is a usage error" 2 "$RC"
+[ -n "$(ls "$EPD" 2>/dev/null)" ] && fail "O: a usage error must not stamp"; CHECKS=$((CHECKS + 1))
+# the whole point (#2062): the disk gate open, stable moving, a fresh mark → the
+# tick is deferred and the version does not move — on every tick, never switched
+rm "$WORK/gate-closed"; bash "$HB" 1117 --tick 5 --repo o/r --session f1 >/dev/null 2>&1; stable "$C3a"
+: > "$CO/logs/install-sync.log"; run; run
+eq "O: a fresh mark holds the switch" deferred "$(st result)"
+eq "O: HEAD still at C3" "$C3" "$(hd)"
+eq "O: the link untouched" "$V/$C3" "$(readlink "$CO")"
+[ -e "$V/$C3a" ] && fail "O: a version was checked out under a fresh mark"; CHECKS=$((CHECKS + 1))
+eq "O: no switched line while the mark is fresh" 0 "$(grep -c ' switched ' "$CO/logs/install-sync.log")"
+eq "O: two ticks, two deferred lines" 2 "$(grep -c ' deferred ' "$CO/logs/install-sync.log")"
+run --dry-run
+contains "O: dry-run defers too" "$OUT" "deferred: EPIC batch running"
+# the batch ends: its loop clears its own mark; the next tick switches
+bash "$HB" --clear 1117 >/dev/null 2>&1; run
+eq "O: switched after the clear" switched "$(st result)"
 eq "O: …to stable" "$C3a" "$(hd)"
-bash "$HB" --clear >/dev/null 2>&1; stable "$C4"
+stable "$C4"
 
 # --- F. rollback ----------------------------------------------------------------------------------
 : > "$LOG"; run

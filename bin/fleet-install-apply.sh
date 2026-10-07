@@ -296,14 +296,14 @@ run() { if [ "$DRY" = 1 ]; then say "    would: $*"; return 0; fi; "$@" >/dev/nu
 
 # --- a running EPIC batch? (issue #953) — a warning, never a gate ---------------
 # The batch-end /fleet-sync-install is exactly this call, made after the run loop
-# cleared its heartbeat. The install-sync daemon switches versions in one link
-# move under a batch too (issue #1894) and lands here, so this line is only a
-# note; a FRESH mark is otherwise a hand sync under a batch that is still
-# running — a worker /fleet-claim told not to, or a hub that skipped the clear.
-# Say so; the operator decides. An older version's lib has no reader → quiet.
+# cleared its own heartbeat. The install-sync daemon never reaches here under a
+# FRESH mark (it defers before the switch, issue #2062), so a fresh mark — any
+# batch on this login, one mark each — is a hand sync under a batch that is
+# still running: a worker /fleet-claim told not to, or a hub that skipped the
+# clear. Say so; the operator decides. An older version's lib has no reader → quiet.
 if [ -f "$ROOT/bin/fleet-lib.sh" ] \
    && er=$( . "$ROOT/bin/fleet-lib.sh" >/dev/null 2>&1 && fleet_epic_running 2>/dev/null ); then
-  say "epic: WARN a batch is running on this login ($er) — syncing mid-batch swaps the floor under its workers (issue #953); the run loop syncs once, at its closing tick (fleet-epic-heartbeat.sh --clear lifts the mark)"
+  say "epic: WARN a batch is running on this login ($er) — syncing mid-batch swaps the floor under its workers (issue #953); the run loop syncs once, at its closing tick (fleet-epic-heartbeat.sh --clear <N> lifts that batch's mark)"
 fi
 
 # --- logins (issue #1122) — the last step, on both paths below ---------------

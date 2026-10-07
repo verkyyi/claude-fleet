@@ -95,7 +95,7 @@ cmd_status() {
       if [ -z "$st" ]; then printf 'stable 问不到'
       elif [ "$st" = "$v" ]; then printf '跟 stable 同版'
       else printf 'stable %.7s（上次：%s）' "$st" "${res:-还没跑过}"; fi
-      printf ' · 由 install-sync 每 30 分钟跟上（整版一次切换，有会话在忙也照样换）\n' ;;
+      printf ' · 由 install-sync 每 30 分钟跟上（整版一次切换，有会话在忙也照样换，有批次在跑就等它结束）\n' ;;
     client)
       v=$(mark_get "$ROOT/.client-version" version)
       st=$(stable_sha) || st=''
