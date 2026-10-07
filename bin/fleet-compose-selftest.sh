@@ -22,29 +22,31 @@
 #      under 「新任务」 at once; then the new row is selected and switched to
 #   C. ⌘N again: the same window (never a second); a line, esc: the draft file
 #      holds it, and the list is asked back to the row before (`jump=`)
-#   D. 「记成 issue」 off (Tab Tab, space) + ↵: a scratch — `acme/web scratch --name …`
+#   D. (issue #2231) none of 记成 issue / 发法 / 多个仓库 / 编排 on the area; the
+#      three options at their defaults — 仓库 the row in view (web), 节点 the
+#      fewest running (m4, 推荐), Agent FLEET_AGENT (codex, 默认), the greyed
+#      维护中 machine never picked; 节点 m5 + Agent claude by hand: `acme/web new …
+#      --node m5host --agent claude`; after the send all three are back to default
 #   E. (pure) payload: title = the first line, body = the whole text, a dropped
 #      file listed as an attachment, a forged marker defused; dash-keymap's
 #      `new` row is ⌘N · 928 · prefix c and the conf binds both to fleet-shell.sh portal
-# The 「仓库」 option (issue #1956), one leg per choice:
-#   F. (pure) the payload of each: auto (no repo named — resolved where the rows
-#      are), --repo (named), --no-repo (none: no issue), --multi (orchestrate)
-#   G. a repo: Tab to 「仓库」, space opens the menu (自动 · each hub repo ·
-#      不关联仓库 · 多个仓库), ↓ ↵ picks acme/app: `acme/app new …`
-#   H. 不关联仓库: no 「记成 issue」, its why-line; ↵ → `- scratch --name … --body-file`
-#      (the text is the seed), and the session's row lands under the list's no repo heading
-#   I. 多个仓库: 「编排」 and its why-line; ↵ → a no-repo scratch whose seed asks
-#      it to split the work by repo (no orchestrator running: the old road)
-# The orchestrator (issue #1957) — orch_fcs in the status dir names one (m4, U/orch);
-# the faked fleet-remote-view.sh opens it as a stage window @remote m4:U/orch whose
-# program turns bracketed paste on and logs what it is sent:
-#   J. free: the area says so (编排空闲), 发法 编排, the go word ↵ 交给编排; a draft
-#      and ⇧⇥ → the list's jump (wid:U/orch), the stage on it, the draft PASTED there
-#      (bracketed, never sent), the area emptied — nothing placed
-#   K. working: 「新任务」 wears the spinner, the area says what it is busy with,
-#      发法 开工 — ↵ starts the work itself (acme/web new …)
-#   L. waiting on you: 「新任务」 turns red `!`, the area's line says its question;
-#      Tab to 发法 + space flips it to 编排; an empty ⇧⇥ just goes there
+#   F. (pure) the payload's fields {title, body, attachments, repo, node, agent}:
+#      repo named, --no-repo → null with the WHOLE text; node / agent null unless named
+# The 「仓库」 option:
+#   G. Tab to 「仓库」, space opens the menu (each hub repo, the one in view
+#      marked 你刚才在这, 无仓库 · HOME — no 自动 / 不关联仓库 / 多个仓库), ↑ ↵ picks
+#      acme/app: `acme/app new …`; back to web after the send
+#   H. 无仓库 · HOME: ↵ → `- scratch --name … --body-file`, the body BOTH lines
+#      (nothing dropped), its row under the list's no repo heading
+#   I. a hand-picked option, then ⌘N from elsewhere: the defaults again (the last
+#      send's repo, acme/app, when the row in view names none)
+# The orchestrator (issue #1957) is no longer reached from the area — orch_fcs in
+# the status dir names one (m4, U/orch); the faked fleet-remote-view.sh opens it as
+# a stage window @remote m4:U/orch whose program logs what it is sent:
+#   J. free: the area says nothing of it; ↵ starts the work (acme/web new …); ⇧⇥
+#      carries nothing anywhere
+#   K. working: 「新任务」 wears the spinner
+#   L. waiting on you: 「新任务」 turns red `!`
 # A client update (issue #2113):
 #   M. a portal window an older client made (@portal_ver) is respawned on ⌘N — same
 #      window, new process, draft kept; the same version is left alone; a SIGHUP
@@ -52,7 +54,7 @@
 # How it is used (issue #1955, EPIC #1949 R2) — logs/compose.ndjson:
 #   N. B's send wrote `sent` (how issue, the repo) · `placed` (rc 0, REMOTE, m4,
 #      the worker_id) · `started` (the list found its row: session, fid, secs), one id;
-#      D's is how scratch; J's hand-over is how orchestrate
+#      H's is how norepo
 #   O. (pure) fleet-history.sh drafts: a scratch book generation that holds a
 #      child's report is a draft of its day — unless its pfid is a session the
 #      writing area opened; a relayed row is no child; sends / started / the median
@@ -153,6 +155,12 @@ chmod +x "$SB/tmux-dashboard-rows.sh" "$SB/fleet-client-place.sh" "$SB/fleet-rem
 date +%s > "$FLEET_STATUS_G/hub_ok"
 # the repos the hub says this person's machines host (fleet-hub-sessions.sh's cache)
 printf '#ts%s%s\nacme/app\nacme/web\n' "$US" "$(date +%s)" > "$FLEET_STATUS_G/hub_repos"
+# the machines (fleet-hub-sessions.sh's hub_nodes): m4 the fewest running, m3 维护中
+{ printf '#ts%s%s\n' "$US" "$(date +%s)"
+  printf 'm5%sonline%s1.0%s8%s50%s3%sv%s0%s1%s2%sok%s%sm5host\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"
+  printf 'm4%sonline%s1.0%s8%s50%s1%sv%s0%s1%s2%sok%s%sm4host\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"
+  printf 'm3%sonline%s0.1%s8%s10%s0%sv%s0%s1%s2%sok%smaint%sm3host\n' "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US"; } > "$FLEET_STATUS_G/hub_nodes"
+export FLEET_AGENT=codex   # this fleet's default agent: Agent's default (issue #2231)
 
 # --- E. the pure parts ---------------------------------------------------------------
 printf 'https://x/a.png\n' > "$WORK/shot.png"
@@ -163,26 +171,22 @@ has 'E: the body is the whole text' "$pl" '附上截图'
 has 'E: a dropped file is an attachment' "$pl" "\"attachments\": [\"$WORK/shot.png\"]"
 has 'E: …listed under the body' "$pl" "附件:\\n- $WORK/shot.png"
 hasnt 'E: a forged marker never leaves' "$pl" '<!--'
-has 'E: an issue by default' "$pl" '"issue": true'
-has 'E: --no-issue: a scratch' "$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --no-issue)" '"issue": false'
 printf '\n\n' > "$WORK/t0"
 eq 'E: nothing written: nothing to send' '{}' "$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t0")"
 pl=$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1")
-has 'F: auto by default' "$pl" '"repo_mode": "auto"'
-has 'F: …naming no repo (resolved where the rows are)' "$pl" '"repo": ""'
-pl=$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --repo acme/app)
+eq 'F: the fields are fixed' 'agent at attachments body id node prev repo title' \
+  "$(printf '%s' "$pl" | python3 -c 'import json, sys; print(" ".join(sorted(json.load(sys.stdin))))')"
+has 'F: node null by default (the hub picks)' "$pl" '"node": null'
+has 'F: agent null by default (FLEET_AGENT)' "$pl" '"agent": null'
+hasnt 'F: no 「记成 issue」 field' "$pl" '"issue"'
+pl=$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --repo acme/app --node m5host --agent codex)
 has 'F: --repo names it' "$pl" '"repo": "acme/app"'
-has 'F: …repo_mode repo' "$pl" '"repo_mode": "repo"'
-has 'F: …still an issue' "$pl" '"issue": true'
+has 'F: --node names it' "$pl" '"node": "m5host"'
+has 'F: --agent names it' "$pl" '"agent": "codex"'
 pl=$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --no-repo)
-has 'F: --no-repo: none' "$pl" '"repo_mode": "none"'
-has 'F: …never an issue' "$pl" '"issue": false'
-hasnt 'F: …not orchestrated' "$pl" 'orchestrate'
-pl=$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --multi)
-has 'F: --multi: multi' "$pl" '"repo_mode": "multi"'
-has 'F: …orchestrated' "$pl" '"orchestrate": true'
-has 'F: …never an issue' "$pl" '"issue": false'
-eq 'F: one choice only' 2 "$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --no-repo --multi >/dev/null 2>&1; echo $?)"
+has 'F: --no-repo: HOME is repo null' "$pl" '"repo": null'
+has 'F: …with the whole text' "$pl" '附上截图'
+eq 'F: one choice only' 2 "$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1" --no-repo --repo acme/app >/dev/null 2>&1; echo $?)"
 eq 'E: the keymap row' 'new ⌘N 0x6e-0x100000 928 c' "$(bash "$SB/dash-keymap.sh" --panel switch list | awk '$1 == "new"')"
 CONF="$BIN/../conf/tmux-shell.conf"
 for k in 'bind -n User928 ' 'bind c '; do
@@ -248,7 +252,7 @@ eq 'A: the portal window is @remote new' 'new' "$(portal | awk '{print $3}')"
 eq 'A: …and the stage shows it' "$pw" "$(st_ display-message -p -t fcs-stage: '#{window_id}')"
 compose() { st_ capture-pane -p -t "$pw" 2>/dev/null; }
 CHECKS=$((CHECKS + 1)); waitfor 6 '写下要做的事' compose || fail 'A: the writing area painted' "$(compose)"
-has 'A: 「自动」 names the repo of the row before' "$(compose)" '自动 · web'
+has 'A: 「仓库」 is the repo of the row before' "$(compose)" '仓库  web ▾'
 CHECKS=$((CHECKS + 1)); waitfor 4 '▶ +   新任务' || fail 'A: the list paints 「新任务」 in view' "$(screen)"
 first=$(screen | grep -v '^ *$' | head -2)
 has 'A: 「新任务」 is the first row' "$(printf '%s' "$first" | head -1)" '新任务'
@@ -299,18 +303,51 @@ eq 'C: esc keeps the draft on disk' '看一下 m5 为什么慢' "$(cat "$FLEET_S
 CHECKS=$((CHECKS + 1)); n=0; while ! grep -qx 'wid:U/issue-9' "$VIEW" && [ $n -lt 30 ]; do sleep .1; n=$((n + 1)); done
 grep -qx 'wid:U/issue-9' "$VIEW" || fail 'C: esc goes back to the row before' "$(cat "$VIEW")"
 
-# D. 「记成 issue」 off: a scratch
+# D. (issue #2231) the three options, their defaults, a hand-picked send
 st_ select-window -t "$pw"
-st_ send-keys -t "$pw" Tab      # 「仓库」 (issue #1956)
-st_ send-keys -t "$pw" Tab      # 「记成 issue」
+c=$(compose)
+for gone in '记成 issue' '发法' '多个仓库' '编排'; do hasnt "D: no $gone on the area" "$c" "$gone"; done
+has 'D: 仓库 — the row in view' "$c" '仓库  web ▾'
+has 'D: 节点 — the fewest running' "$c" '节点  m4 ▾'
+has 'D: Agent — FLEET_AGENT' "$c" 'Agent  codex ▾'
+has 'D: the go word' "$c" '↵ 开工'
+has 'D: one short keys line' "$c" '⇧↵ 换行 · Tab 改选项 · esc 返回'
+st_ send-keys -t "$pw" Tab; st_ send-keys -t "$pw" Tab   # 「节点」
+st_ send-keys -t "$pw" Enter
+sleep .4
+c=$(compose)
+has 'D: the machines, the default marked 推荐' "$c" 'm4  推荐 · 1 个在跑'
+has 'D: …the others by their count' "$c" 'm5  3 个在跑'
+has 'D: …维护中 listed' "$c" 'm3  维护中'
+st_ send-keys -t "$pw" Down; st_ send-keys -t "$pw" Down   # m5, then m3 (greyed: skipped) → m4
+st_ send-keys -t "$pw" Down                                 # → m5
+st_ send-keys -t "$pw" Enter
+sleep .3
+has 'D: a greyed machine is never picked' "$(compose)" '节点  m5 ▾'
+st_ send-keys -t "$pw" Tab                                  # 「Agent」
 st_ send-keys -t "$pw" Space
 sleep .3
-has 'D: the go word says 草稿会话' "$(compose)" '开草稿会话'
+has 'D: the agents, the default marked' "$(compose | grep -F '✓ codex')" '默认'
+st_ send-keys -t "$pw" Up; st_ send-keys -t "$pw" Enter
+sleep .3
+has 'D: Agent picked by hand' "$(compose)" 'Agent  claude ▾'
+st_ send-keys -t "$pw" Enter                                # ↵ on an option opens it…
+sleep .3
+st_ send-keys -t "$pw" Escape                               # …esc closes only the menu
+sleep .3                                                    # (ESC then Tab at once reads as one key)
+st_ send-keys -t "$pw" Tab                                  # back to the text
+sleep .2
 st_ send-keys -t "$pw" Enter
 CHECKS=$((CHECKS + 1)); n=0; while [ "$(grep -c . "$LOG")" -lt 2 ] && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
-eq 'D: a scratch, named by the line' 'acme/web scratch --name 看一下 m5 为什么慢 --node auto' "$(sed -n 2p "$LOG")"
+line=$(sed -n 2p "$LOG")
+has 'D: an issue in the repo, the whole text' "$line" 'acme/web new --title 看一下 m5 为什么慢 --body-file '
+has 'D: …the machine picked' "$line" ' --node m5host'
+has 'D: …the agent picked' "$line" ' --agent claude'
+eq 'D: the text travelled' '看一下 m5 为什么慢' "$(cat "$BODY" 2>/dev/null)"
+CHECKS=$((CHECKS + 1)); waitfor 3 '节点  m4 ▾' compose || fail 'D: the machine back to its default after the send' "$(compose)"
+has 'D: …the agent too' "$(compose)" 'Agent  codex ▾'
 
-# The 「仓库」 option (issue #1956). Each send waits for the one before it to land.
+# The 「仓库」 option. Each send waits for the one before it to land.
 settled() { n=0; while screen | grep -qF '开工中' && [ $n -lt 80 ]; do sleep .1; n=$((n + 1)); done; }
 placed_n() { n=0; while [ "$(grep -c . "$LOG")" -lt "$1" ] && [ $n -lt 60 ]; do sleep .1; n=$((n + 1)); done; sed -n "$1p" "$LOG"; }
 # G. a repo, picked from the menu
@@ -319,132 +356,97 @@ st_ send-keys -t "$pw" Tab
 st_ send-keys -t "$pw" Space
 sleep .4
 menu=$(compose)
-for want in '自动' 'web · 你刚才在这' 'app' 'acme' '不关联仓库' '多个仓库' '↑↓ 选'; do has "G: the menu lists $want" "$menu" "$want"; done
-st_ send-keys -t "$pw" Down
+for want in 'web' '你刚才在这' 'app' 'acme' '无仓库 · HOME' '在主目录开会话' '↑↓ 选'; do has "G: the menu lists $want" "$menu" "$want"; done
+for gone in '自动' '不关联仓库' '多个仓库'; do hasnt "G: the menu has no $gone" "$menu" "$gone"; done
+st_ send-keys -t "$pw" Up
 st_ send-keys -t "$pw" Enter
 sleep .3
-has 'G: the field names the repo picked' "$(compose)" ' app ▾'
+has 'G: the field names the repo picked' "$(compose)" '仓库  app ▾'
 st_ send-keys -t "$pw" -l '修一下 app 的登录页'
 sleep .2
 st_ send-keys -t "$pw" Enter
 line=$(placed_n 3)
 has 'G: the picked repo, an issue' "$line" 'acme/app new --title 修一下 app 的登录页 --body-file '
-CHECKS=$((CHECKS + 1)); waitfor 3 '自动 · web' compose || fail 'G: back to 自动 after a send' "$(compose)"
+has 'G: …machine and agent left to their defaults' "$line" ' --node auto'
+hasnt 'G: …no --agent' "$line" '--agent'
+CHECKS=$((CHECKS + 1)); waitfor 3 '仓库  web ▾' compose || fail 'G: back to the row in view after a send' "$(compose)"
 
-# H. 不关联仓库: a session of no repo, its row under the no repo heading
+# H. 无仓库 · HOME: a session of no repo with the WHOLE text, under no repo
 settled
 st_ send-keys -t "$pw" Tab
 st_ send-keys -t "$pw" Space
 sleep .3
-st_ send-keys -t "$pw" Down Down Down
+st_ send-keys -t "$pw" Down
 st_ send-keys -t "$pw" Enter
 sleep .3
-c=$(compose)
-has 'H: the field says 不关联仓库' "$c" '不关联仓库 ▾'
-has 'H: …and why' "$c" '开一个会话，不开 issue，进 no repo 组'
-has 'H: …the go word' "$c" '↵ 开会话'
-hasnt 'H: no 「记成 issue」 (an issue belongs to a repo)' "$c" '记成 issue'
+has 'H: the field says HOME' "$(compose)" '无仓库 · HOME ▾'
 st_ send-keys -t "$pw" -l '整理一下这周的日报'
+st_ send-keys -t "$pw" C-j
+st_ send-keys -t "$pw" -l '按项目分组。'
 sleep .2
 st_ send-keys -t "$pw" Enter
 line=$(placed_n 4)
 has 'H: no repo, a scratch named by the line' "$line" '- scratch --name 整理一下这周的日报 --body-file '
 has 'H: …--node auto' "$line" ' --node auto'
-eq 'H: the text is its seed' '整理一下这周的日报' "$(cat "$BODY" 2>/dev/null)"
+eq 'H: the WHOLE text is its seed' $'整理一下这周的日报\n按项目分组。' "$(cat "$BODY" 2>/dev/null)"
 CHECKS=$((CHECKS + 1)); waitfor 8 'no repo (1)' || fail 'H: the session row arrived' "$(screen)"
 grp=$(screen | awk '/no repo/ { on = 1 } on && /整理一下/ { print "under"; exit }')
 eq 'H: …under the no repo heading' under "$grp"
 
-# I. 多个仓库: 「编排」
+# I. a hand-picked option, then ⌘N from elsewhere: the defaults again; with no
+# row in view that names a repo, the one the last send went to (acme/app, G)
 settled
-st_ send-keys -t "$pw" Tab
+st_ send-keys -t "$pw" Tab; st_ send-keys -t "$pw" Tab; st_ send-keys -t "$pw" Tab
 st_ send-keys -t "$pw" Space
 sleep .3
-st_ send-keys -t "$pw" Up
-st_ send-keys -t "$pw" Enter
+st_ send-keys -t "$pw" Up; st_ send-keys -t "$pw" Enter
 sleep .3
-c=$(compose)
-has 'I: the field says 多个仓库' "$c" '多个仓库 ▾'
-has 'I: …why it is orchestrated' "$c" '跨仓库的事交给编排会话，由它按仓库拆'
-has 'I: …the go word is 编排' "$c" '↵ 编排'
-hasnt 'I: no 「记成 issue」' "$c" '记成 issue'
-st_ send-keys -t "$pw" -l '活页里加一张 fleet 状态卡'
-sleep .2
-st_ send-keys -t "$pw" Enter
-line=$(placed_n 5)
-has 'I: a session of no repo' "$line" '- scratch --name 活页里加一张 fleet 状态卡 --body-file '
-has 'I: the seed is the text…' "$(cat "$BODY" 2>/dev/null)" '活页里加一张 fleet 状态卡'
-has 'I: …and asks it to split by repo' "$(cat "$BODY" 2>/dev/null)" '按仓库各开 issue'
+has 'I: Agent changed by hand' "$(compose)" 'Agent  claude ▾'
+printf '{"stack": [], "at": 0, "mru": []}\n' > "$FLEET_SWITCH_STATE/switch-history.json"
+st_ select-window -t fcs-stage:0
+type_ '\033[928~'
+CHECKS=$((CHECKS + 1)); waitfor 4 'Agent  codex ▾' compose || fail 'I: ⌘N puts the agent back' "$(compose)"
+has 'I: …and 仓库 to the last send'"'"'s repo' "$(compose)" '仓库  app ▾'
+printf '{"stack": ["wid:U/issue-9"], "at": 0, "mru": ["wid:U/issue-9"]}\n' > "$FLEET_SWITCH_STATE/switch-history.json"
+st_ select-window -t fcs-stage:0
+type_ '\033[928~'
+CHECKS=$((CHECKS + 1)); waitfor 4 '仓库  web ▾' compose || fail 'I: ⌘N: the row in view again' "$(compose)"
 
-# --- the orchestrator (issue #1957) ------------------------------------------------
+# --- the orchestrator (issue #1957): its row, not the area ---------------------------
 orch() { printf 'U/orch%sm4%sonline%s%s%s%s%s%s\n' "$US" "$US" "$US" "$1" "$US" "${2:-}" "$US" "${3:-}" > "$FLEET_STATUS_G/orch_fcs"; }
 newtask() { screen | grep -F '新任务' | head -1; }
-has 'N: D'"'"'s send is a scratch' "$(clog ev how | grep 'ev=sent')" 'ev=sent how=scratch'
 has 'N: H'"'"'s is no repo' "$(clog ev how | grep 'ev=sent')" 'ev=sent how=norepo'
-has 'N: I'"'"'s is several' "$(clog ev how | grep 'ev=sent')" 'ev=sent how=multi'
+hasnt 'N: nothing is a scratch of a repo any more' "$(clog ev how | grep 'ev=sent')" 'how=scratch'
 
-# J. free: 编排 by default; ⇧⇥ carries the draft over
+# J. free: the area says nothing of it, ↵ starts the work, ⇧⇥ carries nothing
 settled
 orch 'done'
 st_ select-window -t "$pw"
-st_ send-keys -t "$pw" -l '活页里加一张 fleet 状态卡：在跑几个会话'
-CHECKS=$((CHECKS + 1)); waitfor 4 '编排空闲' compose || fail 'J: the area says the orchestrator is free' "$(compose)"
-c=$(compose)
-has 'J: 发法 编排 by default while it is free' "$c" '发法  编排 '
-has 'J: …the go word hands it over' "$c" '↵ 交给编排'
-has 'J: the keys line names ⇧⇥' "$c" '⇧⇥ 交给编排'
-has 'J: 「新任务」 is no busy row' "$(newtask)" '+'
-nlog=$(grep -c . "$LOG"); : > "$VIEW"
+st_ send-keys -t "$pw" -l '活页里加一张 fleet 状态卡'
+sleep 2.5
+hasnt 'J: the area says nothing of the orchestrator' "$(compose)" '编排'
+nlog=$(grep -c . "$LOG"); : > "$VIEW"; : > "$WORK/orch-in"
 st_ send-keys -t "$pw" BTab
-CHECKS=$((CHECKS + 1)); n=0; while ! grep -qx 'wid:U/orch' "$VIEW" && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
-grep -qx 'wid:U/orch' "$VIEW" || fail 'J: ⇧⇥ asked the list to jump to the orchestrator' "$(cat "$VIEW")"
-CHECKS=$((CHECKS + 1)); n=0; while ! grep -qF '状态卡' "$WORK/orch-in" 2>/dev/null && [ $n -lt 60 ]; do sleep .1; n=$((n + 1)); done
-got=$(cat "$WORK/orch-in" 2>/dev/null)
-eq 'J: the draft pasted into it, bracketed, not sent' $'\e[200~活页里加一张 fleet 状态卡：在跑几个会话\e[201~' "$got"
-eq 'J: the stage shows the orchestrator' m4:U/orch "$(st_ display-message -p -t fcs-stage: '#{@remote}')"
-st_ select-window -t "$pw"
-CHECKS=$((CHECKS + 1)); waitfor 4 '已交给编排：活页里加一张' compose || fail 'J: the area says it went over' "$(compose)"
-hasnt 'J: …and is empty' "$(compose | sed -n '/╭/,/╰/p')" '状态卡'
-eq 'J: nothing placed' "$nlog" "$(grep -c . "$LOG")"
+sleep .8
+eq 'J: ⇧⇥ goes nowhere' '' "$(cat "$VIEW")"
+st_ send-keys -t "$pw" Tab      # ⇧⇥ walked the options backwards: back to the text
+st_ send-keys -t "$pw" Enter
+line=$(placed_n $((nlog + 1)))
+has 'J: ↵ starts the work itself' "$line" 'acme/web new --title 活页里加一张 fleet 状态卡 --body-file '
+eq 'J: nothing pasted to it' '' "$(cat "$WORK/orch-in" 2>/dev/null)"
 
-eq 'N: J'"'"'s hand-over is how orchestrate' 'ev=sent how=orchestrate' "$(clog ev how | tail -1)"
-
-# K. working: 开工 by default, the line says why
+# K. working: 「新任务」 wears the spinner
+settled
 orch working '' '跑 #1935 的批'
-st_ send-keys -t "$pw" -l '修一下 web 的页脚'
-CHECKS=$((CHECKS + 1)); waitfor 4 '编排在忙：跑 #1935 的批' compose || fail 'K: the area says what it is busy with' "$(compose)"
-c=$(compose)
-has 'K: 发法 开工 while it works' "$c" '发法  开工 '
-has 'K: …the go word starts it' "$c" '↵ 开工'
 spun() { newtask | grep -q '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]'; }
 CHECKS=$((CHECKS + 1)); n=0; while ! spun && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
 spun || fail 'K: 「新任务」 wears the spinner' "$(newtask)"
-st_ send-keys -t "$pw" Enter
-line=$(placed_n $((nlog + 1)))
-has 'K: ↵ started the work itself' "$line" 'acme/web new --title 修一下 web 的页脚 --body-file '
 
-# L. waiting on you: red 「新任务」, its question; 发法 can be flipped; an empty ⇧⇥ goes there
-settled
+# L. waiting on you: 「新任务」 turns red
 orch needs ask '开一个 EPIC 还是三个快任务？'
-st_ select-window -t "$pw"
-st_ send-keys -t "$pw" -l '再看一眼'
-CHECKS=$((CHECKS + 1)); waitfor 4 '! 编排在等你回答：开一个 EPIC 还是三个快任务？' compose || fail 'L: the area says its question' "$(compose)"
 red() { newtask | grep -q '!'; }
 CHECKS=$((CHECKS + 1)); n=0; while ! red && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
 red || fail 'L: 「新任务」 turns red !' "$(newtask)"
-st_ send-keys -t "$pw" Tab Tab Tab
-st_ send-keys -t "$pw" Space
-sleep .3
-has 'L: Tab to 发法, space: 编排' "$(compose)" '↵ 交给编排'
-st_ send-keys -t "$pw" Tab      # back to the text
-st_ send-keys -t "$pw" C-u
-sleep .2
-: > "$VIEW"; : > "$WORK/orch-in"
-st_ send-keys -t "$pw" BTab
-CHECKS=$((CHECKS + 1)); n=0; while ! grep -qx 'wid:U/orch' "$VIEW" && [ $n -lt 40 ]; do sleep .1; n=$((n + 1)); done
-grep -qx 'wid:U/orch' "$VIEW" || fail 'L: an empty ⇧⇥ goes there' "$(cat "$VIEW")"
-sleep .5
-eq 'L: …pasting nothing' '' "$(cat "$WORK/orch-in")"
 
 # M. a client update under a running writing area (issue #2113): the window made
 # by an older client (@portal_ver not this code's) is respawned on ⌘N — same

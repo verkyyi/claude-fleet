@@ -35,14 +35,20 @@ pick). With no task list on screen they do nothing — prefix h is then still
 「+ 新任务」 — turns the right pane into the writing area (`bin/fleet-compose.py`,
 the stage's `@fleet_role portal` window, made once). Write as many lines as you
 like (⇧↵ — the `fleet` profile sends it as 0x0a — ⌃j or ⌥↵ start a new one);
-drop a file on the window and its path is an attachment. ↵ sends: the first line
-is the issue's title, the whole text its body. The repo is 「自动」 — the one of
-the session you were on. The list draws 「开工中…」 under 「新任务」 at once, the
-machine the hub picks files the issue (`fleet-issue-file.sh`) and opens its
+drop a file on the window and its path is an attachment. Under the box sit three
+options, already picked, so ↵ needs none of them (issue #2231; Tab walks to them,
+↵ or space opens one): **仓库** — the repo of the session you were on, else the
+one your last task went to; or 「无仓库 · HOME」, a session in your home directory
+with no issue — **节点** — the machine the hub would pick (fewest running);
+维护中 / 失联 machines are greyed — and **Agent** — this fleet's default
+(`FLEET_AGENT`). A change is for this send only: the next ⌘N shows the defaults
+again. ↵ sends: the first line is the issue's title, the whole text its body (a
+HOME session starts on the whole text). The list draws 「开工中…」 under 「新任务」
+at once, the machine files the issue (`fleet-issue-file.sh`) and opens its
 worker, and the right pane switches to it when its row appears — no token spent
-on the way. Tab to 「记成 issue」 and space unticks it: ↵ then opens a scratch
-session instead. esc goes back to the session before; the draft is kept on disk
-(`~/.local/state/claude-fleet/compose-draft`) until it is sent.
+on the way. esc goes back to the session before; the draft is kept on disk
+(`~/.local/state/claude-fleet/compose-draft`) until it is sent. The orchestrating
+session is reached from its own row, not from the writing area.
 
 ## How a ⌘ chord reaches the client
 
