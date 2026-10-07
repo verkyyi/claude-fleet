@@ -103,6 +103,8 @@ MOVED = []      # [store path, login path] of every credential install moved (cr
 CUR = {}        # what install has done so far for the login it is on: a rollback's meta.json
 SOFT = None     # a rollback in progress (issue #2273): a failed command is noted here, not fatal
 BOOT_TRIES = max(1, int(E("FLEET_CREDSEP_BOOT_TRIES", "3")))
+# the preflight (issue #2273) — off only in the selftest's sandbox, which runs no proxy
+PREFLIGHT = not (TEST and os.environ.get("FLEET_CREDSEP_PREFLIGHT") == "0")
 
 
 def say(*a):
@@ -697,6 +699,59 @@ def store_files(R, conf, home, ch):
     return out
 
 
+# ---- preflight (issue #2273) ----------------------------------------------------------
+def own_tool(pw, name):
+    """The login's own copy of a fleet script (another login's install is not readable to it)."""
+    own = os.path.join(pw.pw_dir, ".claude", "fleet", "bin", name)
+    return own if os.path.isfile(own) and not TEST else os.path.join(HERE, name)
+
+
+def preflight(login, conf):
+    """-> [why not] for a login about to have its credentials moved. The order is
+    the whole point (#2135): its proxy runs FIRST and every live session already
+    talks to it, else the move takes the subscription from under them — m4,
+    2026-10-07. And never under a running EPIC batch: its members are sessions
+    on this login. Read AS the login, with the login's own scripts."""
+    pw = getpw(login)
+    why = []
+    rc, line = as_login(pw, conf, ["/bin/bash", own_tool(pw, "fleet-cred-rollout.sh"), "status"])
+    line = (line or "").strip().splitlines()[-1:] or [""]
+    line = line[0]
+    m = re.match(r"^(on|off) · (\S+) · sessions (\d+)/(\d+)$", line)
+    if rc or not m:
+        why.append("the proxy's status could not be read (%s)" % (line or "rc %d" % rc))
+    else:
+        sw, route, n, t = m.group(1), m.group(2), int(m.group(3)), int(m.group(4))
+        if sw != "on":
+            why.append("its credential proxy is off — first, as %s: fleet cred-proxy enable" % login)
+        elif route in ("down", "-", "?"):
+            why.append("its credential proxy is on but not running (route %s) — fleet cred-proxy status / doctor" % route)
+        if n < t:
+            why.append("%d of its %d live sessions do not talk to the proxy yet — they would lose the "
+                       "subscription (fleet-account.sh migrate, or reopen them)" % (t - n, t))
+    rc, out = as_login(pw, conf, ["/bin/bash", "-c", '. "$1" >/dev/null 2>&1; fleet_epic_running_fresh',
+                                  "_", own_tool(pw, "fleet-lib.sh")])
+    if rc == 0 and out.strip():
+        why.append("an EPIC batch is running on it (%s) — wait for it to end" % out.strip())
+    return why
+
+
+def preflight_gate(logins, force):
+    """Refuse (exit 6) when any login fails the preflight; --force goes on, and says so."""
+    if DRY or not PREFLIGHT:
+        return
+    bad = [(l, w) for l, c in logins for w in preflight(l, c)]
+    if not bad:
+        say("preflight: ok — %s" % ", ".join(l for l, _ in logins))
+        return
+    for l, w in bad:
+        say("preflight: %s — %s" % (l, w))
+    if force:
+        say("preflight: --force — going on anyway")
+        return
+    die("preflight refused: nothing was moved (fix the above, or --force)", 6)
+
+
 # ---- rollback (issue #2273) -----------------------------------------------------------
 def rollback_login(login, conf, home):
     """Put a login an install has just half-done back the way it was, from the
@@ -879,8 +934,7 @@ def as_login(pw, conf, argv):
 
 def conf_tool(pw, conf):
     """The login's own fleet-conf.sh (another login's install is not readable to it)."""
-    own = os.path.join(pw.pw_dir, ".claude", "fleet", "bin", "fleet-conf.sh")
-    return own if os.path.isfile(own) and not TEST else os.path.join(HERE, "fleet-conf.sh")
+    return own_tool(pw, "fleet-conf.sh")
 
 
 def conf_switch_on(login, conf, pw):
@@ -993,6 +1047,7 @@ def machine_install(a):
     rows = machine_logins(a.logins)
     if not rows:
         die("machine install: no login to join (--logins a,b, or a login with ~/.claude/fleet)", 2)
+    preflight_gate([(l, c) for l, c, _ in rows if not os.path.lexists(paths(l)[0])], a.force)
     created = ensure_role()
     say("role:", ROLE, "(created)" if created else "(exists)")
     pre = {"service": os.path.exists(SHARED_PATH), "rec": shared_rec() is not None}
@@ -1307,6 +1362,7 @@ def main():
         p.add_argument("--conf-dir", required=True)
         p.add_argument("--install-dir", default="")
         p.add_argument("--dry-run", action="store_true")
+        p.add_argument("--force", action="store_true")
     s = sub.add_parser("status"); s.add_argument("--conf-dir", required=True); s.add_argument("--json", action="store_true")
     c = sub.add_parser("check"); c.add_argument("--conf-dir", required=True)
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
@@ -1314,6 +1370,7 @@ def main():
     mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status"))
     mc.add_argument("--logins", default="all")
     mc.add_argument("--dry-run", action="store_true")
+    mc.add_argument("--force", action="store_true")
     mc.add_argument("--json", action="store_true")
     a = ap.parse_args()
     if a.cmd == "plan":
@@ -1336,6 +1393,8 @@ def main():
         if a.cmd == "uninstall":
             return uninstall(a)
         fresh = not DRY and not os.path.lexists(paths(a.login)[0])
+        if fresh:
+            preflight_gate([(a.login, os.path.abspath(a.conf_dir))], a.force)
         try:
             return install(a)
         except BaseException as e:  # noqa: B036

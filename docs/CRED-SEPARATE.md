@@ -164,11 +164,13 @@ sandbox.
 
 ## A step fails halfway (issue #2273)
 
-The one sudo is the person's — `hooks/bash-guard.py` refuses `install` /
-`uninstall` / `apply` / `machine install|uninstall` from any session, even
-with password-less sudo (`--dry-run`, `plan`, `status` pass;
-`FLEET_ALLOW_CREDSEP_SUDO=1` in the session's start environment is the
-person's hatch).
+Before it moves anything, `install` / `machine install` checks each login it
+is about to take from nothing, as that login: `fleet cred-proxy status` must be
+`on`, its route not `down`, and `sessions n/n` — every live session already on
+the proxy — and no fresh EPIC batch mark (`fleet_epic_running_fresh`). Any miss
+is listed, nothing moves, exit 6; `--force` goes on anyway. (Password-less sudo
+on an admin login is meant for the agent — #2197; m4 broke on the ORDER: the
+files moved before the proxy was on.)
 
 `install` and `machine install` are all-or-nothing for a login that had
 nothing in the store: when a step fails — on 2026-10-07 m4's agent bootstrap
