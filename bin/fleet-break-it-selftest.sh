@@ -1980,7 +1980,7 @@ PY2
 # expires_at, PATH=/usr/bin:/bin — or a python3 that refuses what 3.9 refuses
 # when this box's /usr/bin/python3 is newer.
 drill_hub_time_py39() {
-  CAP=30; local t0 d py out rc
+  CAP=90; local t0 d py out rc   # a macOS runner's cold /usr/bin/python3 took 36s once
   t0=$(now)
   d="$WORK/py39-$$"; mkdir -p "$d/home/.config/claude-fleet" "$d/pybin" "$d/strict"
   py=/usr/bin/python3
@@ -2027,7 +2027,7 @@ with open(conf, "w") as f:
             '\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nfi\n' % srv.server_address[1])
 env = {k: v for k, v in os.environ.items() if not k.startswith(("FLEET_", "CCQUOTA_", "XDG_", "PYTHON"))}
 env.update(HOME=HOME, PATH=PYBIN + ":/usr/bin:/bin", TZ="UTC", CCQUOTA_VIEWER_TOKEN="admin-token")
-r = subprocess.run(["bash", DRILL, "invite", "--ttl", "5m"], env=env, capture_output=True, text=True, timeout=20)
+r = subprocess.run(["bash", DRILL, "invite", "--ttl", "5m"], env=env, capture_output=True, text=True, timeout=80)
 out = (r.stdout + r.stderr).strip()
 if r.returncode != 0 or CODE not in r.stdout:
     print("WHY=no code printed (rc %d): %s" % (r.returncode, out.replace("\n", " | ")[:300])); sys.exit(1)
