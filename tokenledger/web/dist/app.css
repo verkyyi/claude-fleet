@@ -237,6 +237,7 @@ pre.out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/
 
 @media (max-width: 1100px) { .g4 { grid-template-columns: repeat(2, minmax(0,1fr)); } .g21 { grid-template-columns: minmax(0,1fr); } }
 /* admin pages (claude-fleet#1990): subscriptions, machines, users, settings, audit */
+.modal-b > * { min-width: 0; }
 .big-ic { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center; flex: none; }
 .big-ic svg { width: 24px; height: 24px; }
 .big-ic.ok { background: var(--ok-soft); color: var(--ok); }

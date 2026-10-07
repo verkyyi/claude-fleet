@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -438,13 +439,21 @@ type FleetAuditEntry struct {
 }
 
 // FleetAuditLog is the newest fleet_audit rows, newest first (limit ≤ 0 =
-// 200).
-func (s *Store) FleetAuditLog(limit int) ([]FleetAuditEntry, error) {
+// 200), leaving out the actions skip names — the read tools, which a page
+// polling the fleet writes a row for every half minute.
+func (s *Store) FleetAuditLog(limit int, skip ...string) ([]FleetAuditEntry, error) {
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := s.read.Query(`SELECT id, created, actor, worker_key, action, fleet_id, outcome, operation_id
-		FROM fleet_audit ORDER BY id DESC LIMIT ?`, limit)
+	q := `SELECT id, created, actor, worker_key, action, fleet_id, outcome, operation_id FROM fleet_audit`
+	args := []any{}
+	if len(skip) > 0 {
+		q += ` WHERE action NOT IN (?` + strings.Repeat(`, ?`, len(skip)-1) + `)`
+		for _, a := range skip {
+			args = append(args, a)
+		}
+	}
+	rows, err := s.read.Query(q+` ORDER BY id DESC LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}

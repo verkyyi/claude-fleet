@@ -226,7 +226,15 @@ func (s *Server) auditEvents(since time.Time) ([]AuditEvent, error) {
 			Action: h.Action, Target: h.Target, Outcome: h.Outcome, Detail: h.Detail})
 	}
 	if s.Fleet {
-		fa, err := s.Store.FleetAuditLog(auditPerSource)
+		// A Fleet read (fleet_sessions, gh_pr_view, …) is traffic: every
+		// open page polls one. The writes and everything else stay.
+		var reads []string
+		for _, tool := range FleetTools {
+			if !fleetWriteTools[tool] {
+				reads = append(reads, tool)
+			}
+		}
+		fa, err := s.Store.FleetAuditLog(auditPerSource, reads...)
 		if err != nil {
 			return nil, err
 		}

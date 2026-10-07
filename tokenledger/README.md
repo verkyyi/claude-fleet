@@ -548,6 +548,7 @@ process, and they do not share a credential.
 | Door | What you need | What it gives you |
 |---|---|---|
 | The app (`/`, `/sessions`, `/connect`, `/config`) | a GitHub sign-in on this hub's list, or the viewer token | what the viewer's role lets them see (a user: their own) |
+| The admin pages (`/subscriptions`, `/nodes`, `/admin/users`, `/admin/settings`, `/admin/audit`) | an admin's sign-in, or the viewer token | the pool, machines, people, settings and the merged audit (`/v1/admin/audit`, CSV with `?format=csv`); a user gets 403 (claude-fleet#1990) |
 | `/signin`, `/auth/github/*` | a GitHub account whose numeric ID is on the list | exchanges a GitHub sign-in for this hub's session cookie, nothing else |
 | `POST /logout` | a same-origin form (the page header's 退出) | clears the cookies this hub minted and shows the signed-out page; GitHub's own session stays |
 | `/v1/...` | the viewer token, as a bearer header | the same figures as JSON |
@@ -567,8 +568,9 @@ Both sit behind the viewer gate, like every other human surface. That is
 deliberate rather than incidental: `/signin` is mounted unconditionally and
 404s when GitHub sign-in is unconfigured *precisely* so the route cannot tell an
 uncredentialled prober whether the feature is on, and a page that reports the
-configuration must not undo it. You read `/access` because you already came
-through a door.
+configuration must not undo it. You read it because you already came
+through a door. (Its page retired with claude-fleet#1990; Settings reads
+`/v1/access` for the deploy-set facts.)
 
 It is a description, not a control plane. Nothing on it mints, revokes or
 widens a credential, and no command has been moved from the hub's shell onto
@@ -651,8 +653,8 @@ the join-code button below stays, for the operator, one more version.
 
 ### A new machine — join codes (claude-fleet#1418, kept one version)
 
-The `/nodes` page has an **加一台机器** panel (the operator's; a user's session
-gets 403): one click mints a **join code** and prints the line to paste on the
+The `/nodes` page (Machines, an admin's — a user gets 403) has an **加机器**
+button: one click mints a **join code** and prints the line to paste on the
 new machine, as the login that will run the fleet:
 
 ```bash
@@ -1063,7 +1065,8 @@ stores, lists and revokes:
     #   {"principal_id":…} revokes a person everywhere; both = that person on that machine; "lift":true undoes
 
 Every issue, refusal, refresh, store and revocation is an audit row:
-`/v1/fleet/credentials/audit`, and the page **`/credentials`**. All of these
+`/v1/fleet/credentials/audit`, merged with every other audit on the admin
+page **`/admin/audit`** (claude-fleet#1990). All of these
 refuse a user's session. A Claude refresh token comes from an interactive
 `claude` login (`claudeAiOauth.refreshToken`); once it is in the hub, log that
 machine out — two holders of one refresh token rotate each other out.
@@ -1124,8 +1127,8 @@ It cannot be refreshed and does not rotate, so the hub stores it as kind
 any number of machines hold the same token without logging each other out),
 refuses to store or issue one past `expires_at`, and reminds the operator:
 a `cred_setup_token` finding on the hub page from **30 days** before the date
-(critical in the last week, and once it has passed), plus a banner on
-`/credentials`. The only remedy is a person minting a new one and importing it
+(critical in the last week, and once it has passed), and its card on
+`/subscriptions` says 「到期」. The only remedy is a person minting a new one and importing it
 again — there is nothing the hub can renew. `expires_at` is the operator's
 word: the token endpoint does not say.
 
@@ -1186,7 +1189,7 @@ every credential. With `CCQUOTA_FLEET_CRED_KMS_KEY_ID` set, the vault uses
 ciphertext (`fleet_cred_key`), and opening it is a KMS `Decrypt` call made with
 the hub's own cloud identity. The database and every Secret together open
 nothing, and every unwrap is a line in KMS's log — ActionTrail / the KMS
-console's call records; the hub's `/credentials` audit carries an `unlock` row
+console's call records; the hub's credential audit carries an `unlock` row
 with the same KMS request id.
 
 | where | setting | effect |

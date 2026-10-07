@@ -53,6 +53,18 @@ func TestAdminAudit_EveryWriteHasItsRow(t *testing.T) {
 			t.Fatalf("set %s: %d %v", kv[0], code, out)
 		}
 	}
+	// A page polls the fleet: a read, audited by the fleet, not shown.
+	if err := h.srv.Store.FleetAudit("operator", "fleet_sessions", "", "OK", "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.FleetAudit("operator", "worker_start", "f1", "OK", "op1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	// Add a machine: the minted code is a row, the code itself is not.
+	code, jc := h.post(t, "/v1/fleet/join-codes", map[string]string{"label": "web-1"})
+	if code != http.StatusOK {
+		t.Fatalf("join code: %d %v", code, jc)
+	}
 	// Leased, flagged: a session on it finishes, a node starts no new one.
 	_, got, _ := lease(t, h, tok)
 	var pooled *NodeCredential
@@ -91,6 +103,8 @@ func TestAdminAudit_EveryWriteHasItsRow(t *testing.T) {
 		{auditMachines, "setting", SpotKey},
 		{auditSubs, "setting", PoolSkipPctKey},
 		{auditSubs, store.CredDelete, "icloud"},
+		{auditMachines, "node_join_code", "join:web-1"},
+		{auditSessions, "worker_start", "f1"},
 	} {
 		e := findEvent(evs, want.kind, want.action, want.target)
 		if e == nil {
@@ -115,6 +129,15 @@ func TestAdminAudit_EveryWriteHasItsRow(t *testing.T) {
 		if evs[i].At.After(evs[i-1].At) {
 			t.Fatalf("not newest first at %d", i)
 		}
+	}
+	for _, e := range evs {
+		if s, _ := jc["code"].(string); s != "" && strings.Contains(e.Target+e.Outcome+e.Detail, s) {
+			t.Fatalf("the join code itself is in the audit: %+v", e)
+		}
+	}
+	// A Fleet read is traffic too.
+	if findEvent(evs, auditSessions, "fleet_sessions", "") != nil {
+		t.Error("a fleet_sessions read is in the admin audit")
 	}
 	// A lease is traffic, not a change: not in the page's audit.
 	if findEvent(evs, auditSubs, store.CredIssue, "") != nil {
