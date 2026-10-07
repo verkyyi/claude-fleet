@@ -902,7 +902,18 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.assertEqual(self.opt('@worker_lifecycle'),'')
         self.assertEqual(json.loads(record.read_text())['state'],'awake')
         self.pid=int(self.opt('pane_pid'))
-        self.assertEqual(len(child()),1)
+        # a wake relaunches through fleet-session-wrap.sh (issue #1784), so the
+        # agent is a GRANDchild of the pane now: one fake MCP anywhere below it
+        def mcp_below(top):
+            rows=LIB['TRANSFER']['process_rows']();seen={top};grew=True
+            while grew:
+                grew=False
+                for pid,(pp,_) in rows.items():
+                    if pp in seen and pid not in seen:seen.add(pid);grew=True
+            return [pid for pid in seen if rows.get(pid,(0,''))[1]==server.name]
+        until=time.monotonic()+5
+        while time.monotonic()<until and not mcp_below(self.pid):time.sleep(.05)
+        self.assertEqual(len(mcp_below(self.pid)),1)
         self.assertIn('--mcp-config='+str(config),(self.root/'launch.args').read_text().splitlines())
 
     def test_bundled_code_host_is_idle_infrastructure_but_its_jobs_are_not(self):
