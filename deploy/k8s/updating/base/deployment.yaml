@@ -1,0 +1,79 @@
+# Two replicas of stock nginx serving one static answer (nginx.conf): it holds
+# no state and needs no secret, so it can stay up while the hub restarts — its
+# whole job is the moments the hub is not there.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-hub-updating
+  labels:
+    app: ccquota-hub-updating
+spec:
+  replicas: 2
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: ccquota-hub-updating
+  template:
+    metadata:
+      labels:
+        app: ccquota-hub-updating
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: ccquota-hub-updating
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["nginx", "-g", "daemon off;", "-c", "/etc/nginx/updating/nginx.conf"]
+          ports:
+            - containerPort: 8080
+          securityContext:
+            runAsUser: 101   # the image's nginx user
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 8080
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/ready
+              port: 8080
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/updating
+              readOnly: true
+            - name: page
+              mountPath: /usr/share/nginx/updating
+              readOnly: true
+      volumes:
+        - name: conf
+          configMap:
+            name: ccquota-hub-updating
+            items:
+              - key: nginx.conf
+                path: nginx.conf
+        - name: page
+          configMap:
+            name: ccquota-hub-updating
+            items:
+              - key: updating.html
+                path: updating.html
+              - key: updating.json
+                path: updating.json

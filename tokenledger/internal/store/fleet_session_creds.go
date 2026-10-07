@@ -171,3 +171,24 @@ func (s *Store) RevokeSessionCred(id, by, reason string, at time.Time) (bool, er
 	n, _ := res.RowsAffected()
 	return n == 1, nil
 }
+
+// SessionCredsForWorker is a session's live passes (not revoked, not
+// expired as of now), newest first.
+func (s *Store) SessionCredsForWorker(workerID string, now time.Time) ([]SessionCred, error) {
+	rows, err := s.write.Query(`SELECT `+sessionCredCols+` FROM fleet_session_creds
+		WHERE worker_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY issued_at DESC, id`,
+		workerID, now.UTC().Format(sessRFC))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SessionCred{}
+	for rows.Next() {
+		c, err := scanSessionCred(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}

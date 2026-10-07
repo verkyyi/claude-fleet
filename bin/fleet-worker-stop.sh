@@ -168,7 +168,9 @@ cpid=$(fleet_pane_claude_pid "$wid" "$SOCK" 2>/dev/null) || cpid=''
 # + branch + issue stay, the row stays resumable (issue #466/#471).
 record_row() {
   [ -n "$KEY" ] || return 0   # a no-repo session (fid:) has no ledger row to write
-  [ -n "${FLEET_REPO:-}" ] || ! fleet_has_repo_overlays "$SESS" || return 0
+  # A window of no known repo writes no row (issue #791). compat-1v: 下一批删 — a
+  # pre-#1937 conf naming only FLEET_MAIN lists no repo and still writes its row.
+  [ -n "${FLEET_REPO:-}" ] || [ -z "$(fleet_repos "$SESS")" ] || return 0
   fleet_reap_record unmerged "${FLEET_REPO:-}" "${FLEET_MAIN:-}" "$iss" "$wt" "$wid" \
     "$SESS" "" "$KEY" "$wname" "$origin" >/dev/null 2>&1 || :
 }

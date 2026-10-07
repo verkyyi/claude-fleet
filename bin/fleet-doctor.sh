@@ -204,6 +204,10 @@ if [ "$_hub_on" = 1 ]; then
     else
       _tok_lv=WARN _tok_msg="CCQUOTA_TOKEN is exported into this environment and $_nenv is missing — the hub is reached only while the export stays, and every worker inherits a node credential; write the file, then drop the export: $_nfix"
     fi
+  elif [ -L "$_nenv" ] && [ ! -r "$_nenv" ] && [ -f "$conf_dir/credsep.json" ]; then
+    # separated (issue #1971): the token is in the role account's store, the
+    # broker hands this login a short-lived stand-in — the credsep row checks it
+    _tok_lv=PASS _tok_msg="通行证在单独账号的保管处（这个登录读不到，经本机代理用）"
   elif [ -f "$_nenv" ] && grep -q '^CCQUOTA_TOKEN=.' "$_nenv" 2>/dev/null; then
     # ls -ld perms: char 5 = group-read, char 8 = other-read (as the account check)
     _nm=$(ls -ld "$_nenv" 2>/dev/null | cut -c1-10)
@@ -282,6 +286,19 @@ if [ "$_hub_on" = 1 ] && [ "${_tok_lv:-}" = PASS ] && [ -f "$(dirname "$0")/flee
   esac
 fi
 
+# --- credsep: the credentials out of this login's reach (issue #1971) --------------
+# FLEET_CRED_SEPARATE=1 → the role account's store must be unreadable here, no
+# credential back at a login path, its proxy up; =0 and not separated → no row.
+if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
+  _cs=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-credsep.sh" check 2>&1 | tail -n 1)
+  _cs_m=${_cs#credsep: }; _cs_lv=${_cs_m%% —*}; _cs_m=${_cs_m#* — }
+  case "$_cs_lv" in
+    OK)   pass credsep "$_cs_m" ;;
+    WARN) warn credsep "$_cs_m" ;;
+    INFO) case "$_cs_m" in off*) ;; *) info credsep "$_cs_m" ;; esac ;;   # off: no row, as before
+    *)    info credsep "$_cs_m" ;;
+  esac
+fi
 
 # --- tmux ≥ 3.2 (core) ---
 if command -v tmux >/dev/null 2>&1; then
@@ -1066,6 +1083,7 @@ EOF
   # The seed repo (issue #1167): `fleet-up.sh --seed` brought the fleet up on a
   # starter repo that only LOOKS — dispatch + issue-bridge skip it whatever its
   # switches say. Said once per seeded repo; a fleet without FLEET_SEED says nothing.
+  # compat-1v: 下一批删 (the old layout, below)
   # The mark lives in the seed's overlay (issue #1937), or — the old layout, read
   # for one version — in the fleet conf beside its own repo.
   while IFS= read -r cf; do
@@ -3125,6 +3143,7 @@ if [ -d "$conf_dir" ]; then
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
     own=$(_norm_repo "$(_conf_val "$cf" FLEET_REPO)")
     seen=' '; rs_n=0; rs_bad=0; rs_list=''
+    # compat-1v: 下一批删
     # An old-layout conf still names its first repo (read for one version, issue
     # #1937); a new one names none — every repo is an overlay below.
     if [ -n "$own" ]; then

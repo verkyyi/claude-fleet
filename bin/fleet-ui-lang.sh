@@ -191,6 +191,15 @@ fleet_ui_t() {
     en:popup_keys)              printf 'Keys' ;;
     zh:popup_quickopen)         printf '跳到会话' ;;
     en:popup_quickopen)         printf 'Go to session' ;;
+    # ⌘P's commands (issue #1952): `>` lists the row menu's items
+    zh:quickopen_cmd_hint)      printf '输入 > 是命令' ;;
+    en:quickopen_cmd_hint)      printf 'type > for commands' ;;
+    zh:quickopen_cmd_for_fmt)   printf '对 %s' "${1:-}" ;;
+    en:quickopen_cmd_for_fmt)   printf 'on %s' "${1:-}" ;;
+    zh:quickopen_cmd_none)      printf '这里没有能做的事' ;;
+    en:quickopen_cmd_none)      printf 'nothing to do here' ;;
+    zh:quickopen_cmd_loading)   printf '读命令…' ;;
+    en:quickopen_cmd_loading)   printf 'reading commands…' ;;
     zh:popup_tasks)             printf '任务' ;;
     en:popup_tasks)             printf 'Tasks' ;;
     zh:popup_new_task)          printf '新建任务' ;;
@@ -419,7 +428,8 @@ agent	v	新会话 claude ⇄ codex
 reap	x	回收 — 先确认 y/n（别机行：经入口让那台机器回收）
 new	n	新任务 — 在输入行写标题（多仓库 Tab 换仓库），↵ 建 issue 并启动 worker
 newto	1-9	新建到 <机器>… — 入口在线的别的机器各一项：建 issue，worker 开在那台机器上
-restore	o	恢复已收工任务 — 任务栏就地换成已落地列表（同 ⌃t）
+restore	o	已落地 — 任务栏就地换成已落地列表，点一行恢复（再选一次回到运行中）
+info	i	详情列 — 任务栏右边显示 issue · PR · ctx%（再选一次收起）
 repo	g	添加仓库到这个 fleet — 在输入行写 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）
 open	e	进入 — 打开代理窗口（只有另一台机器上的行有；菜单标题写着「· m4」）
 message	m	发消息… — 只有别机行有：在输入行写，经入口送到那台机器的 issue 桥，作为它的下一轮
@@ -438,7 +448,8 @@ agent	v	flip new sessions claude ⇄ codex
 reap	x	reap it — asks y/n first (a row on another machine: through the hub, there)
 new	n	new task — its title on the input line (Tab picks the repo in a 2+ repo fleet), ↵ files the issue AND spawns its worker
 newto	1-9	new task on <machine>… — one per other machine the hub says is online: file the issue, open the worker there
-restore	o	restore a finished task — the sidebar shows the landed list in place (as ⌃t)
+restore	o	landed — the sidebar shows the landed list in place; tap a row to restore it (again: back to the running list)
+info	i	detail column — issue · PR · ctx% on the right of the sidebar (again to fold it)
 repo	g	add a repo to this fleet — owner/name on the input line; ~/projects/<name>, cloned if missing (the hub ⌃z)
 open	e	enter — open the proxy window (a row on another machine only; the menu title says · m4)
 message	m	message… — a row on another machine only: typed on the input line, through the hub to the issue bridge on that machine, as its next turn
@@ -572,10 +583,10 @@ clients	d	my clients — in the client only: every device you have open, its ter
     en:menu_answer)             printf 'Answer question…' ;;
     zh:menu_answer_none)        printf '回答它的提问（没有）' ;;
     en:menu_answer_none)        printf 'Answer question (none)' ;;
-    zh:menu_sub)                printf '切换 sub（选账号）…' ;;
-    en:menu_sub)                printf 'Switch subscription (choose account)…' ;;
-    zh:menu_sub_none)           printf '切换 sub（先选运行中的 Claude worker）' ;;
-    en:menu_sub_none)           printf 'Switch subscription (select a running Claude worker)' ;;
+    zh:menu_sub)                printf '迁移到…（换账号）' ;;
+    en:menu_sub)                printf 'Move to… (another account)' ;;
+    zh:menu_sub_none)           printf '迁移到…（只有运行中的 Claude 会话能迁）' ;;
+    en:menu_sub_none)           printf 'Move to… (a running Claude session only)' ;;
     zh:menu_wake)               printf '唤醒' ;;
     en:menu_wake)               printf 'Wake' ;;
     zh:menu_allow_sleep)        printf '允许休眠' ;;
@@ -592,6 +603,8 @@ clients	d	my clients — in the client only: every device you have open, its ter
     en:menu_new)                printf 'New task (file issue)…' ;;
     zh:menu_restore)            printf '恢复已收工…' ;;
     en:menu_restore)            printf 'Restore finished task…' ;;
+    zh:menu_info)               printf '详情列（issue · PR · ctx%%）' ;;
+    en:menu_info)               printf 'Detail column (issue · PR · ctx%%)' ;;
     zh:menu_repo)               printf '＋ 仓库…' ;;
     en:menu_repo)               printf 'Add repo…' ;;
     # --- the key sheet (fleet-keys.sh): its frame, then one entry per row
@@ -656,6 +669,46 @@ clients	d	my clients — in the client only: every device you have open, its ter
     en:keys_single_f23)        printf %s 'narrow: the session above / below (the top line ‹ › too)' ;;
     zh:keys_single_f4)         printf %s '窄屏：下一个在等你的会话' ;;
     en:keys_single_f4)         printf %s 'narrow: the next session waiting on you' ;;
+    # --- ⌘/ — the one page of keys (issue #1952, fleet-keys.sh --page): three
+    # groups, the ⌘ chord on the left and the other terminals' key on the right
+    zh:keys_page_title)        printf %s '按键' ;;
+    en:keys_page_title)        printf %s 'Keys' ;;
+    zh:keys_page_sub)          printf %s 'Mac · iTerm2 按 ⌘ 键；别的终端用右边那一列' ;;
+    en:keys_page_sub)          printf %s 'the ⌘ chord in iTerm2 on a Mac; any other terminal: the right column' ;;
+    zh:keys_page_cmd)          printf %s '⌘ 键' ;;
+    en:keys_page_cmd)          printf %s '⌘ keys' ;;
+    zh:keys_page_new)          printf %s '新任务（写作区）' ;;
+    en:keys_page_new)          printf %s 'new task (the writing area)' ;;
+    zh:keys_page_quickopen)    printf %s '跳到任意会话；输入 > 是命令' ;;
+    en:keys_page_quickopen)    printf %s 'go to any session; type > for commands' ;;
+    zh:keys_page_prevnext)     printf %s '上一个 / 下一个会话' ;;
+    en:keys_page_prevnext)     printf %s 'previous / next session' ;;
+    zh:keys_page_backfwd)      printf %s '后退 / 前进' ;;
+    en:keys_page_backfwd)      printf %s 'back / forward' ;;
+    zh:keys_page_needs)        printf %s '去在问你的' ;;
+    en:keys_page_needs)        printf %s 'to the one asking you' ;;
+    zh:keys_page_zoom)         printf %s '放大右边，再按复原' ;;
+    en:keys_page_zoom)         printf %s 'zoom the right side; again to restore' ;;
+    zh:keys_page_help)         printf %s '这一页' ;;
+    en:keys_page_help)         printf %s 'this page' ;;
+    zh:keys_page_compose)      printf %s '写作区' ;;
+    en:keys_page_compose)      printf %s 'writing area' ;;
+    zh:keys_page_c_send)       printf %s '发出' ;;
+    en:keys_page_c_send)       printf %s 'send' ;;
+    zh:keys_page_c_nl)         printf %s '换行' ;;
+    en:keys_page_c_nl)         printf %s 'new line' ;;
+    zh:keys_page_c_tab)        printf %s '下一项（记成 issue · 仓库）' ;;
+    en:keys_page_c_tab)        printf %s 'next option (file an issue · repo)' ;;
+    zh:keys_page_c_space)      printf %s '切换选中的那一项' ;;
+    en:keys_page_c_space)      printf %s 'flip the option it is on' ;;
+    zh:keys_page_c_esc)        printf %s '回去，草稿留着' ;;
+    en:keys_page_c_esc)        printf %s 'back; the draft is kept' ;;
+    zh:keys_page_mouse)        printf %s '鼠标' ;;
+    en:keys_page_mouse)        printf %s 'mouse' ;;
+    zh:keys_page_m_menu)       printf %s '这一行的菜单，和 ⌘P 的 > 命令是同一张表' ;;
+    en:keys_page_m_menu)       printf %s 'the row'"'"'s menu — the same list as ⌘P'"'"'s > commands' ;;
+    zh:keys_page_more)         printf %s '面板里的按键：在那个面板里按 ?' ;;
+    en:keys_page_more)         printf %s 'a panel'"'"'s own keys: press ? inside it' ;;
     zh:keys_g_sidebar)         printf %s '任务栏' ;;
     en:keys_g_sidebar)         printf %s 'task sidebar' ;;
     zh:keys_g_sidebar_sub)     printf %s '— 只点，不收键盘；按键都在上面一组' ;;

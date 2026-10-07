@@ -75,19 +75,9 @@ if [ -n "$LOGIN" ] && ! printf '%s' "$LOGIN" | grep -Eq '^drill[a-z0-9]{1,11}$';
 fi
 [ -n "$HOST" ] || HOST=$(hostname -s 2>/dev/null || hostname)
 
-hub_url() {
-  local u="${CCQUOTA_HUB_URL:-${FLEET_HUB_URL:-}}"
-  if [ -z "$u" ]; then
-    u=$(sed -n 's/^export FLEET_HUB_URL="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.conf" 2>/dev/null | head -n 1)
-  fi
-  if [ -z "$u" ]; then
-    u=$(python3 -c 'import json,sys
-try: print(str(json.load(open(sys.argv[1])).get("url") or ""))
-except Exception: pass' "${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet/hub.json" 2>/dev/null)
-  fi
-  case "$u" in http://*|https://*) printf '%s' "${u%/}" ;; *) return 1 ;; esac
-}
-HUB=$(hub_url) || { note "no hub (FLEET_HUB_URL in fleet.conf, CCQUOTA_HUB_URL)"; exit 2; }
+BIN="$(cd "$(dirname "$0")" && pwd)"
+# the one hub-address reader (issue #2024): env, fleet.conf's every section, the old files
+HUB=$(bash "$BIN/fleet-hub-url.sh") || { note "no hub (FLEET_HUB_URL / CCQUOTA_HUB_URL: env, fleet.conf, hub.json — fleet login --hub <url>)"; exit 2; }
 
 CERT_KEY="${FLEET_CERT:-$HOME/.ssh/fleet-cert}"; CERT_PUB="$CERT_KEY-cert.pub"
 cert_live() {
@@ -140,13 +130,21 @@ try: print(json.load(open(sys.argv[1])).get("error",""))
 except Exception: print(open(sys.argv[1]).read()[:200])' "$OUT" 2>/dev/null)"; exit 1 ;;
 esac
 if [ "$JSON" = 1 ]; then cat "$OUT"; echo; exit 0; fi
-python3 - "$OUT" "$(cd "$(dirname "$0")" && pwd)" <<'PY'
-import json, sys, datetime
+# The code first, the formatting after (issue #2024): the invite already exists on
+# the hub, so a line that cannot be formatted prints raw — never loses the code.
+python3 - "$OUT" "$BIN" <<'PY' || { note "could not format the hub's answer — as it came:"; cat "$OUT"; echo; exit 1; }
+import json, sys
 d = json.load(open(sys.argv[1]))
-exp = datetime.datetime.fromisoformat(d["expires_at"].replace("Z", "+00:00")).astimezone()
-print("演练同事  %s（kind=%s）· 登录名 %s @ %s" % (d["person_id"], d["kind"], d["login"], d["host"]))
-print("确认码    %s  （只能用一次）" % d["approve_code"])
-print("到期      %s（到期入口自动删除这个人、设备和节点）" % exp.strftime("%m-%d %H:%M"))
+print("确认码    %s  （只能用一次）" % d["approve_code"], flush=True)
+print("演练同事  %s（kind=%s）· 登录名 %s @ %s" % (d.get("person_id"), d.get("kind"), d.get("login"), d.get("host")))
+raw = str(d.get("expires_at") or "")
+try:
+    sys.path.insert(0, sys.argv[2])
+    import fleet_iso
+    when = fleet_iso.parse(raw).astimezone().strftime("%m-%d %H:%M")
+except Exception:
+    when = raw or "?"
+print("到期      %s（到期入口自动删除这个人、设备和节点）" % when)
 print()
-print("下一步：  %s/fleet-onboard-drill.sh --login %s --invite %s" % (sys.argv[2], d["login"], d["approve_code"]))
+print("下一步：  %s/fleet-onboard-drill.sh --login %s --invite %s" % (sys.argv[2], d.get("login"), d["approve_code"]))
 PY

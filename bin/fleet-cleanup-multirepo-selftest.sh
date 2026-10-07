@@ -198,7 +198,7 @@ tmux kill-window -t "$wS"; tmux kill-window -t "$wNS"
 has_win "$wUNK" && fail "E: SessionEnd left the unknown-repo window open"
 registered "$WORK/main-b" "$WORK/b-issue-12" || fail "E: SessionEnd on an unknown window touched B's worktree"
 
-# --- F. degenerate: no repos/ dir -------------------------------------------------------------
+# --- F. one road: a one-repo fleet (old layout, no repos/ dir) joins on (repo, N) too (#1943) --
 D=fd
 mkdir -p "$FLEET_CONF_DIR/fleets/$D"
 printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\n' "$WORK/main-a" > "$FLEET_CONF_DIR/fleets/$D/conf"
@@ -206,10 +206,11 @@ tmux new-session -d -s "$D" -n plan
 d1=$(tmux new-window -d -P -F '#{window_id}' -t "$D" -n x); tmux set-option -w -t "$d1" @issue 7
 d2=$(tmux new-window -d -P -F '#{window_id}' -t "$D" -n y); tmux set-option -w -t "$d2" @issue 7
 tmux set-option -w -t "$d2" @repo o/other
-eq "F: degenerate matches every @issue window" "$(fleet_issue_windows "$D" o/a 7 | tr '\n' ' ')" "$d1 $d2 "
-got=$( fleet_load_window_conf "$D" "$d2"; printf '%s|%s' "$?" "$FLEET_MAIN" )
-eq "F: degenerate window conf is the fleet conf" "$got" "0|$WORK/main-a"
-fleet_has_repo_overlays "$D" && fail "F: fd reported multi-repo"
+eq "F: only the window of the fleet's repo matches" "$(fleet_issue_windows "$D" o/a 7 | tr '\n' ' ')" "$d1 "
+got=$( fleet_load_window_conf "$D" "$d1"; printf '%s|%s' "$?" "$FLEET_MAIN" )
+eq "F: its only repo's window conf is the fleet conf" "$got" "0|$WORK/main-a"
+got=$( fleet_load_window_conf "$D" "$d2"; printf '%s|%s' "$?" "${FLEET_MAIN:-}" )
+eq "F: a window of a repo the fleet does not host reaches no checkout" "$got" "1|"
 
 [ "$FAILS" -eq 0 ] && { echo "fleet-cleanup-multirepo-selftest: PASS"; exit 0; }
 echo "fleet-cleanup-multirepo-selftest: $FAILS failure(s)" >&2; exit 1

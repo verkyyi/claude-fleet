@@ -81,6 +81,13 @@ TIMEOUT=${FLEET_HUB_TIMEOUT:-15}
 DIR="$FLEET_CONF_DIR/cred-proxy"
 FILE="$DIR/relay.token"
 
+# _sep_push — separated (#1971): the proxy runs as the role account and reads its
+# OWN state dir; hand it the pass this login keeps. Quiet, best effort.
+_sep_push() {
+  [ -f "$FLEET_CONF_DIR/credsep.json" ] && [ -s "$FILE" ] || return 0
+  bash "$(dirname "$0")/fleet-cred-proxy.sh" relay < "$FILE" >/dev/null 2>&1 || true
+}
+
 if [ "$ACTION" = path ]; then
   printf '%s\n' "$FILE"
   exit 0
@@ -130,7 +137,7 @@ if [ "$ACTION" = fetch ] || [ "$ACTION" = check ]; then
       case "$code" in
         200)
           if [ "$ACTION" = check ]; then printf 'relay: OK %s\n' "$(hostname -s | tr A-Z a-z)"
-          else printf 'relay: KEPT %s (passes)\n' "$(hostname -s | tr A-Z a-z)"; fi
+          else _sep_push; printf 'relay: KEPT %s (passes)\n' "$(hostname -s | tr A-Z a-z)"; fi
           exit 0 ;;
         403)
           [ "$ACTION" = check ] && { printf 'relay: REFUSED %s\n' "$(_msg "$(printf '%s\n' "$resp" | sed '$d')")"; exit 3; } ;;
@@ -173,6 +180,7 @@ with open(sys.argv[1], "w") as f:
 print("%s/%s" % (d.get("machine") or "?", d.get("login") or "?"))
 ' "$tmp" )) || { rm -f "$tmp"; die 4 "the hub answered without a relay credential — it predates issue #1974"; }
   chmod 600 "$tmp" && mv -f "$tmp" "$FILE" || { rm -f "$tmp"; die 1 "cannot write $FILE"; }
+  _sep_push
   printf 'relay: ISSUED %s → %s\n' "$line" "$FILE"
   exit 0
 fi

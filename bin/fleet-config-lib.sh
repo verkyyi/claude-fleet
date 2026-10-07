@@ -697,12 +697,11 @@ EOF
 }
 
 # fcfg_repo_conf SESS SLUG → that repo's overlay path (may not exist yet — the
-# first write creates it), or nothing when the fleet does not host it. A fleet
-# with no repos/ overlay hosts one repo, whose repo layer IS the fleet conf.
+# first write creates it), or nothing when the fleet does not host it — every
+# repo's layer is its overlay, however many the fleet hosts (issues #1937, #1943).
 fcfg_repo_conf() {
   local r; r=$(fcfg_scope_repo "${1:-}" "repo:${2:-}") || return 0
-  if fleet_has_repo_overlays "$1"; then fleet_repo_conf_file "$1" "$r"
-  else fcfg_fleet_conf "$1"; fi
+  fleet_repo_conf_file "$1" "$r"
 }
 
 # fcfg_repo_effective KEY SESS REPO → "<value><US>repo|fleet|global|default": what
@@ -729,11 +728,10 @@ fcfg_repo_effective() {
 
 # fcfg_repo_write SESS SLUG KEY VALUE TYPE — fcfg_write into the repo's overlay.
 # A brand-new overlay is seeded with its FLEET_REPO first, so fleet_repos still
-# lists it (the conf repo's own overlay is created this way on its first edit in
-# a multi-repo fleet). A one-repo fleet writes its fleet conf (fcfg_repo_conf).
+# lists it (an old-layout conf repo's own overlay is created this way on its first
+# edit). Every fleet writes the repo's overlay (fcfg_repo_conf, issue #1943).
 fcfg_repo_write() {
   local r f; r=$(fcfg_scope_repo "${1:-}" "repo:${2:-}") || return 1
-  fleet_has_repo_overlays "$1" || { fcfg_write "$(fcfg_fleet_conf "$1")" "$3" "$4" "$5"; return; }
   f=$(fleet_repo_conf_file "$1" "$r")
   [ -f "$f" ] && { fcfg_write "$f" "$3" "$4" "$5"; return; }
   fcfg_write "$f" FLEET_REPO "$r" str >/dev/null || return 1

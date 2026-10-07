@@ -1,0 +1,12 @@
+# Production: beside the hub in new-deploy. Stock nginx from the account's ACR
+# mirror (repository dify-nginx holds the unmodified nginx:1.27-alpine), pinned
+# by digest. Applied by a person (../README.md), never by hub-deploy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: new-deploy
+resources:
+  - ../base
+images:
+  - name: nginx
+    newName: registry-vpc.cn-shenzhen.aliyuncs.com/24haowan/dify-nginx
+    digest: sha256:91fc9c3924b93f76adc9cd36a0bb93e53885ff8e97df10233caa45bb432789a5

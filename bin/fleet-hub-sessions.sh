@@ -486,6 +486,8 @@ map_write() {
 import json, os, re, sys, tempfile, time
 from datetime import datetime, timezone
 jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir, client, via = sys.argv[1:14]
+sys.path.insert(0, bindir)
+import fleet_iso  # the one ISO reader (issue #2024)
 try:
     data = json.load(open(jpath, encoding="utf-8"))
     sessions = data["sessions"]
@@ -527,6 +529,7 @@ if worker_key is not None:
             k = worker_key(issue, p[3] == "1", p[4], p[9] if len(p) > 9 else "")
             if k:
                 windows[(p[0], k)] = p[1]
+                # compat-1v: 下一批删
                 # …and by the bare key a one-repo fleet's worker_id wore before
                 # issue #1939 (the one repo's alias, read for one version)
                 if ":" in k and len(one_repo.get(p[0]) or []) == 1:
@@ -537,31 +540,11 @@ slug = lambda r: re.sub(r"[^A-Za-z0-9._-]", "", (r or "").replace("/", "-"))
 
 def epoch(iso):
     """A hub timestamp (RFC 3339, any precision) → epoch seconds, 0 when unreadable."""
-    try:
-        s = str(iso or "")
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        s = re.sub(r"(\.\d{6})\d+", r"\1", s)
-        d = datetime.fromisoformat(s)
-        if d.tzinfo is None:
-            d = d.replace(tzinfo=timezone.utc)
-        return int(d.timestamp())
-    except Exception:
-        return 0
+    return fleet_iso.epoch(iso, utc=True)
 
 def fepoch(iso):
     """As epoch(), to the millisecond (the end-to-end log, issue #1631)."""
-    try:
-        s = str(iso or "")
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        s = re.sub(r"(\.\d{6})\d+", r"\1", s)
-        d = datetime.fromisoformat(s)
-        if d.tzinfo is None:
-            d = d.replace(tzinfo=timezone.utc)
-        return d.timestamp()
-    except Exception:
-        return 0.0
+    return fleet_iso.fepoch(iso, 0.0, utc=True)
 
 def write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -992,10 +975,12 @@ refresh_summaries() {
   SUMJ=''; SUMRC=''
   nj=$(mktemp "$G/hubnodes.json.XXXXXX") || return 1
   if fetch_nodes >"$nj" && [ -s "$nj" ]; then
-    python3 - "$nj" "$G/hub_nodes" "${FLEET_NODE_ALIASES:-}" "$now" "${FLEET_LIVE_DIR:-$HOME/.claude/fleet}" <<'PY' || printf 'fleet-hub-sessions: /v1/nodes did not answer a machine list — keeping the last hub_nodes\n' >&2
+    python3 - "$nj" "$G/hub_nodes" "${FLEET_NODE_ALIASES:-}" "$now" "${FLEET_LIVE_DIR:-$HOME/.claude/fleet}" "$BIN" <<'PY' || printf 'fleet-hub-sessions: /v1/nodes did not answer a machine list — keeping the last hub_nodes\n' >&2
 import json, os, re, subprocess, sys, tempfile
 from datetime import datetime, timezone
-jpath, out, aliases, now, live = sys.argv[1:6]
+jpath, out, aliases, now, live, bindir = sys.argv[1:7]
+sys.path.insert(0, bindir)
+import fleet_iso  # the one ISO reader (issue #2024)
 now = int(now)
 data = json.load(open(jpath, encoding="utf-8"))
 machines = data.get("machines")
@@ -1006,17 +991,7 @@ short = lambda h: (h or "").split(".", 1)[0]
 label = lambda h: alias.get(h) or alias.get(short(h)) or short(h) or "?"
 clean = lambda v: re.sub(r"[\t\n\r\x1f]", " ", str(v if v is not None else ""))
 def epoch(iso):
-    try:
-        s = str(iso or "")
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        s = re.sub(r"(\.\d{6})\d+", r"\1", s)
-        d = datetime.fromisoformat(s)
-        if d.tzinfo is None:
-            d = d.replace(tzinfo=timezone.utc)
-        return int(d.timestamp())
-    except Exception:
-        return 0
+    return fleet_iso.epoch(iso, utc=True)
 version = {}
 for n in data.get("nodes") or []:
     if not isinstance(n, dict) or not n.get("hostname") or not n.get("fleet_version"):

@@ -30,6 +30,8 @@ done
 case "${CURL_ANSWER:-ok}" in
   ok)  printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"macmini-m4","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"2026-10-07T14:00:00Z"}' > "$out"; printf 200 ;;
   403) printf '{"error":"only an admin can invite a drill person"}' > "$out"; printf 403 ;;
+  ns)  printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"m4","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"2026-10-07T05:47:35.272044642Z"}' > "$out"; printf 200 ;;
+  junk) printf '{"person_id":"drill-ab12","kind":"drill","login":"drill10071200","host":"m4","approve_code":"fd_abcdefghijklmnopqrstuvwxyz","expires_at":"next tuesday"}' > "$out"; printf 200 ;;
 esac
 EOF
 chmod +x "$T/shim/curl"
@@ -63,6 +65,14 @@ if grep '^ARGV' "$T/curl.log" | grep -q tok-secret; then bad 'the token reached 
 grep -q '^BODY .*"host": "macmini-m4".*"ttl_seconds": 5400' "$T/curl.log" && ok '--ttl 90m → 5400 s, the host in the body' || bad "body: $(grep ^BODY "$T/curl.log")"
 run 1 'only an admin'        'the hub refusing is exit 1'  CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=403 -- invite --host m4
 run 0 '"approve_code"'       '--json prints the raw answer' CCQUOTA_VIEWER_TOKEN=tok -- invite --host m4 --json
+# the hub's nanosecond time (issue #2024): read on any python3, and an expiry
+# that will not parse never costs the code — it prints first, the time raw
+run 0 '到期 +10-07 05:47'      'a nanosecond …Z expiry formats' TZ=UTC CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=ns -- invite --host m4
+if [ -x /usr/bin/python3 ]; then
+  run 0 '到期 +10-07 05:47'    'and with /usr/bin/python3 first on PATH' PATH="$T/shim:/usr/bin:/bin" TZ=UTC CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=ns -- invite --host m4
+fi
+run 0 '^确认码 +fd_abcdefghijklmnopqrstuvwxyz' 'the code line prints' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=ns -- invite --host m4
+run 0 '到期 +next tuesday'     'an unreadable expiry prints raw, the code kept' CCQUOTA_VIEWER_TOKEN=tok CURL_ANSWER=junk -- invite --host m4
 
 # the certificate door: a live cert → signed, no token sent
 printf 'k\n' > "$T/home/.ssh/fleet-cert"; printf 'ssh-ed25519-cert-v01@openssh.com AAAA cert\n' > "$T/home/.ssh/fleet-cert-cert.pub"

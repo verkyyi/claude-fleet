@@ -14,13 +14,15 @@ import re
 import shlex
 import statistics
 import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fleet_iso  # noqa: E402  the one ISO reader (issue #2024)
 
 
 def timestamp(value):
     try:
-        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
-    except (AttributeError, TypeError, ValueError):
+        return fleet_iso.parse(value, utc=True)
+    except (TypeError, ValueError):
         return None
 
 

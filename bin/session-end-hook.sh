@@ -173,7 +173,8 @@ if [ "${1:-}" = "--exec" ]; then
       # @origin rides along as the row's provenance (issue #503) — read while the
       # window is still alive, exactly like the name.
       worigin=$(tmux display-message -p -t "$win" '#{@origin}' 2>/dev/null)
-      { [ -n "$REPO" ] || ! fleet_has_repo_overlays "$sess"; } && fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key" "$wname" "$worigin"
+      # compat-1v: 下一批删 — the empty-repo row is a pre-#1937 FLEET_MAIN-only conf's.
+      { [ -n "$REPO" ] || [ -z "$(fleet_repos "$sess")" ]; } && fleet_reap_record "$verdict" "$REPO" "$MAIN" "" "$wtdir" "$win" "$sess" "" "$key" "$wname" "$worigin"
 
       # Child-report BACKSTOP (issue #574). The ship path in /fleet-claim reports the
       # outcome to the spawning session itself and stamps @reported, so --only-once

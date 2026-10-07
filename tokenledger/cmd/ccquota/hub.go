@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -113,22 +114,39 @@ func fleetVault(fleetOn bool, st *store.Store) (*credvault.Vault, error) {
 // whose network the provider accepts — the hub in Shenzhen cannot refresh a
 // Codex token itself (auth.openai.com answers 403
 // unsupported_country_region_territory) and must not keep trying from there.
-// Unset or "direct" keeps the hub posting from its own network, exactly as
-// before; anything else refuses to start rather than guess.
+// =relay (claude-fleet#1976) posts a Codex refresh to the Singapore relay's
+// /openai-auth/ route (CCQUOTA_FLEET_CRED_RELAY_URL) with the hub's own pass,
+// so no machine's memory ever holds the refresh token and no machine needs to
+// be online; a relay that cannot be asked — and a Claude refresh — falls back
+// to the node path. Unset or "direct" keeps the hub posting from its own
+// network, exactly as before; anything else refuses to start rather than guess.
 func fleetRefreshVia(srv *api.Server, vault *credvault.Vault) error {
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_OAUTH_REFRESH_VIA"))); v {
 	case "", "direct":
 		return nil
-	case "node":
+	case "node", "relay":
 		if vault == nil {
-			log.Printf("fleet: CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node set, but the credential vault is off — nothing to relay")
+			log.Printf("fleet: CCQUOTA_FLEET_OAUTH_REFRESH_VIA=%s set, but the credential vault is off — nothing to relay", v)
 			return nil
 		}
-		vault.Refresher = &credvault.ProxyRefresher{Via: srv.NodeOAuthRefresh}
-		log.Printf("fleet: credential refreshes are relayed through an online admin node (CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node); none online = refresh_unavailable")
+		node := &credvault.ProxyRefresher{Via: srv.NodeOAuthRefresh}
+		if v == "node" {
+			vault.Refresher = node
+			log.Printf("fleet: credential refreshes are relayed through an online admin node (CCQUOTA_FLEET_OAUTH_REFRESH_VIA=node); none online = refresh_unavailable")
+			return nil
+		}
+		url := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_CRED_RELAY_URL"))
+		if url == "" {
+			return errors.New("CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay needs CCQUOTA_FLEET_CRED_RELAY_URL (the Singapore relay, docs/CRED-RELAY.md)")
+		}
+		if len(srv.SessionCredKey) == 0 {
+			return errors.New("CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay needs CCQUOTA_FLEET_SESSION_CRED_KEY — the hub signs its relay pass with it")
+		}
+		vault.Refresher = &credvault.RelayRefresher{URL: url, Pass: srv.HubRelayPass, Fallback: node}
+		log.Printf("fleet: OpenAI credential refreshes go through the relay %s (CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay); relay down = an admin node, Claude = an admin node", url)
 		return nil
 	default:
-		return fmt.Errorf("CCQUOTA_FLEET_OAUTH_REFRESH_VIA: %q is not node or direct", v)
+		return fmt.Errorf("CCQUOTA_FLEET_OAUTH_REFRESH_VIA: %q is not relay, node or direct", v)
 	}
 }
 
@@ -219,11 +237,26 @@ func loadFleetCerts(srv *api.Server) error {
 	return nil
 }
 
+// envOrFile reads a secret from NAME_FILE (a Secret mount) or NAME.
+func envOrFile(name string) (string, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if path := os.Getenv(name + "_FILE"); path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("%s_FILE: %w", name, err)
+		}
+		v = strings.TrimSpace(string(b))
+	}
+	return v, nil
+}
+
 // loadSessionCreds wires session passes for untrusted machines
 // (claude-fleet#1969): CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE] is the signing
 // key (its own k8s Secret, never the database);
 // CCQUOTA_FLEET_SESSION_CRED_VERIFY_TOKEN[_FILE] admits the cluster
-// credential proxy and the relay to /verify. No key: the routes answer 503
+// credential proxy and the relay to /verify;
+// CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE] admits `ccquota credproxy` to
+// resolve (claude-fleet#1973). No key: the routes answer 503
 // and nothing else changes. A key that is set but unreadable is fatal.
 func loadSessionCreds(srv *api.Server) error {
 	key, ok, err := api.LoadSessionCredKey(os.Getenv)
@@ -244,6 +277,14 @@ func loadSessionCreds(srv *api.Server) error {
 		vt = strings.TrimSpace(string(b))
 	}
 	srv.SessionCredVerifyToken = vt
+	pt, err := envOrFile("CCQUOTA_FLEET_CREDPROXY_TOKEN")
+	if err != nil {
+		return err
+	}
+	srv.CredProxyToken = pt
+	if pt != "" {
+		log.Printf("fleet: cluster credential proxy admitted — %s", api.CredProxyResolvePath)
+	}
 	log.Printf("fleet: session passes on — /v1/fleet/session-cred (verify: %s)",
 		map[bool]string{true: "verifier token + operator", false: "operator only"}[vt != ""])
 	return nil
@@ -299,6 +340,23 @@ func runHub(args []string) error {
 			"rows are left exactly as they are (not deleted, not rebuilt).\n"+
 			"Read the refusal error before reaching for this: it says how many\n"+
 			"hours are at stake")
+	migrateOnly := fs.Bool("migrate-only", false,
+		"open the database, run its pending migrations, print what they did,\n"+
+			"and exit -- no port is bound. hub-deploy runs the new image this\n"+
+			"way on a copy of the live database before it switches images, so a\n"+
+			"migration that cannot pass stops the release instead of the hub\n"+
+			"(claude-fleet#2050). Refuses a --db that does not exist")
+	check := fs.Bool("check", false,
+		"start up as far as serving and stop there: run the database's pending\n"+
+			"migrations, read every setting and secret the hub refuses to start\n"+
+			"without (GitHub sign-in pairs, the CA and credential keys, --pricing,\n"+
+			"...), then exit 0 = this image may be switched to -- no port is\n"+
+			"bound. hub-deploy runs the new image this way, with the live pod's\n"+
+			"environment, on a copy of the live database before it switches\n"+
+			"images (claude-fleet#2052). Refuses a --db that does not exist")
+	simulateMigrationFailure := fs.Bool("simulate-migration-failure", false,
+		"with --migrate-only or --check, fail as a migration that cannot pass\n"+
+			"would: the drill that proves hub-deploy's rehearsal stops a release")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -321,6 +379,23 @@ func runHub(args []string) error {
 	dbFile, err := resolveDB(*dbPath)
 	if err != nil {
 		return err
+	}
+	if *simulateMigrationFailure && !*migrateOnly && !*check {
+		return errors.New("--simulate-migration-failure without --migrate-only or --check: it only drills the rehearsal")
+	}
+	if *migrateOnly && *check {
+		return errors.New("--migrate-only and --check: --check already runs the migrations")
+	}
+	if *migrateOnly {
+		return migrateOnlyRun(dbFile, os.Stdout, *simulateMigrationFailure)
+	}
+	if *check {
+		// The migrations first, on their own (same refusal of a missing file,
+		// same report); then the ordinary start below, which stops short of
+		// the listeners.
+		if err := migrateOnlyRun(dbFile, os.Stdout, *simulateMigrationFailure); err != nil {
+			return fmt.Errorf("--check: %w", err)
+		}
 	}
 	// The hub is the one command allowed to bring a database into being, so
 	// say when it does. A hub silently starting on an empty database looks
@@ -474,10 +549,11 @@ func runHub(args []string) error {
 		if err := sshRelayConfig(srv); err != nil {
 			return err
 		}
-		if err := fleetRefreshVia(srv, vault); err != nil {
+		if err := loadSessionCreds(srv); err != nil {
 			return err
 		}
-		if err := loadSessionCreds(srv); err != nil {
+		// After the session pass key: the relay path signs its pass with it.
+		if err := fleetRefreshVia(srv, vault); err != nil {
 			return err
 		}
 		// SPOT nodes (claude-fleet#1428): on only with an image to run.
@@ -501,7 +577,9 @@ func runHub(args []string) error {
 	// The settings an admin changes on the web (claude-fleet#1986): each old
 	// variable / flag above (--public-badges, CCQUOTA_FLEET_AUTO_ASSIGN,
 	// CCQUOTA_FLEET_PRINCIPAL_LOGINS, a SPOT image) is copied into the
-	// database once and read for this one version; the next drops them.
+	// database once and read for this one version; the next drops them. The
+	// warnings print under --check too; the copy (a write, never a refusal —
+	// an unusable old value is a WARN) waits for a real start.
 	for _, v := range []string{"CCQUOTA_FLEET_AUTO_ASSIGN", "CCQUOTA_FLEET_PRINCIPAL_LOGINS"} {
 		if os.Getenv(v) != "" {
 			log.Printf("WARN %s is deprecated: copied into the hub's settings (fleet hub set / fleet users); remove it from the deploy", v)
@@ -509,6 +587,12 @@ func runHub(args []string) error {
 	}
 	if *publicBadges {
 		log.Printf("WARN --public-badges is deprecated: copied into the setting hub.public_badges; remove it from the deploy")
+	}
+	if *check {
+		// Everything that can refuse a start has run; what is left (the
+		// listeners, the background loops) is not configuration.
+		fmt.Fprintf(os.Stdout, "check: ok — %s migrated and every startup setting read; this image may be switched to\n", dbFile)
+		return nil
 	}
 	if err := srv.MigrateLegacySettings(time.Now()); err != nil {
 		log.Printf("WARN hub settings: copying the old variables: %v", err)
@@ -827,6 +911,15 @@ func runAgent(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *token == "" {
+		// Separated (claude-fleet#1971): the root launcher hands the token
+		// down a pipe, never the environment a session could `ps -E`.
+		t, err := tokenFromFD(os.Getenv("CCQUOTA_TOKEN_FD"))
+		if err != nil {
+			return err
+		}
+		*token = t
+	}
 
 	h, err := homeDir(*home)
 	if err != nil {
@@ -885,6 +978,8 @@ func runAgent(args []string) error {
 		// Lease this login's credentials from the hub's vault (#1415).
 		FleetCreds:         fleetEnabled() && os.Getenv("CCQUOTA_FLEET_CREDS") == "1",
 		FleetCodexHomesDir: os.Getenv("CCQUOTA_FLEET_CODEX_HOMES"),
+		// Separated (claude-fleet#1971): the lease goes to the proxy's socket.
+		FleetCredStore: os.Getenv("CCQUOTA_FLEET_CRED_STORE"),
 		// The relay rides the control channel, so it is on wherever that is
 		// unless explicitly refused (claude-fleet#1413).
 		FleetSSHRelay: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
@@ -1010,5 +1105,35 @@ func sshRelayConfig(srv *api.Server) error {
 		kv.set(n)
 	}
 	log.Printf("fleet relay at %s (%d CA key(s) for certificates)", control.SSHRelayPath, len(srv.SSHRelayCA))
+	return nil
+}
+
+// migrateOnlyRun is `ccquota hub --migrate-only`: Open runs every pending
+// numbered migration in its own transaction, so a failing one returns here
+// with the database as it was. A missing file is refused rather than created —
+// a rehearsal on an empty database proves nothing.
+// simulate is the drill: a migration that fails, after the real ones ran, the
+// way a broken one would — the caller exits non-zero and the copy is thrown
+// away.
+func migrateOnlyRun(dbFile string, out io.Writer, simulate bool) error {
+	if _, err := os.Stat(dbFile); err != nil {
+		return fmt.Errorf("--migrate-only: %w", err)
+	}
+	st, err := store.Open(dbFile)
+	if err != nil {
+		return fmt.Errorf("--migrate-only %s: %w", dbFile, err)
+	}
+	defer st.Close()
+	ms, err := st.Migrations()
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		fmt.Fprintf(out, "migration %d %s applied %s %s\n", m.ID, m.Name, m.AppliedAt, m.Detail)
+	}
+	if simulate {
+		return errors.New("--migrate-only: simulated migration failure (--simulate-migration-failure)")
+	}
+	fmt.Fprintf(out, "migrate-only: %s ok (%d migrations recorded)\n", dbFile, len(ms))
 	return nil
 }

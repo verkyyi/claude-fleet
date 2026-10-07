@@ -382,6 +382,13 @@ def node_token_hash():
             '[ -n "$t" ] || t=$(_fleet_node_env_val CCQUOTA_TOKEN 2>/dev/null); '
             '[ -n "$t" ] || exit 11; printf %s "$t"', check=False, args=[current_session()])
     token = r.stdout.strip() if r.returncode == 0 else ""
+    if token.startswith("fcpn1."):
+        # separated (issue #1971): that is the broker's credential, not the node
+        # token — the proxy that holds the token hands over its hash alone
+        h = subprocess.run(["bash", os.path.join(BIN, "fleet-cred-proxy.sh"), "node-hash"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=15)
+        token = ""
+        return h.stdout.strip() if h.returncode == 0 and len(h.stdout.strip()) == 64 else None
     return hashlib.sha256(token.encode()).hexdigest() if token else None
 
 

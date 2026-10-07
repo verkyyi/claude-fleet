@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -88,5 +90,32 @@ func TestNoTokenFlagDefaultsFromEnv(t *testing.T) {
 				t.Errorf("%s:%d: credential flag default printed by -h; use secretEnvFlag: %s", f, i+1, strings.TrimSpace(line))
 			}
 		}
+	}
+}
+
+// claude-fleet#1971: the separated launcher passes the node token down a pipe.
+func TestTokenFromFD(t *testing.T) {
+	if tok, err := tokenFromFD(""); tok != "" || err != nil {
+		t.Fatalf("empty fd = %q, %v", tok, err)
+	}
+	if _, err := tokenFromFD("1"); err == nil {
+		t.Fatal("stdout accepted as a token fd")
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("ccq_piped\n"))
+	w.Close()
+	// tokenFromFD closes the fd it is given: hand it a dup, never r's own —
+	// r's finalizer would close that number again, by then another test's file
+	fd, err := syscall.Dup(int(r.Fd()))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := tokenFromFD(strconv.Itoa(fd))
+	if err != nil || tok != "ccq_piped" {
+		t.Fatalf("token = %q, %v", tok, err)
 	}
 }

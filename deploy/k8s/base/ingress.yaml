@@ -13,6 +13,15 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/limit-rps: "20"
+    # While the hub has no ready pod (the Recreate seconds of a release) the
+    # 「正在更新」 page answers instead of ingress-nginx's bare 503 — a browser
+    # gets the bilingual page, the API / MCP / node channel a 503 + Retry-After
+    # (deploy/k8s/updating, issue #2052). Not `custom-http-errors`: the hub
+    # answers 502 / 503 itself on purpose (a feature off, a locked vault, an
+    # upstream down) and those bodies must reach the client. hub-deploy drops
+    # this line from its render while no ccquota-hub-updating pod runs, so an
+    # Ingress never names a backend that is not there.
+    nginx.ingress.kubernetes.io/default-backend: ccquota-hub-updating
 spec:
   ingressClassName: nginx
   rules:

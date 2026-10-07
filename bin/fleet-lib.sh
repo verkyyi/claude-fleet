@@ -29,7 +29,7 @@ FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 # global-scoped key into a per-fleet conf (bin/dash-config-edit.sh). Keep this list
 # in step with the @scope=global tags in fleet.conf.example — tmux-config-selftest.sh
 # cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_QUOTA_PCT FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_PROXY_IDLE_SECS FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_SIDEBAR_WIDTH_MAX FLEET_DASH_ORDER"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_STATUS_CONTAINER FLEET_STATUS_QUOTA_PCT FLEET_STATUS_CACHE_SECS FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_SPAWN_GUARD_MS FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_PROXY_IDLE_SECS FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_SIDEBAR_WIDTH_MAX FLEET_DASH_ORDER"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -474,6 +474,7 @@ fleet_load_conf() {
 $_flc_txt" in *"
 CCQUOTA_FLEET="*|*"
 export CCQUOTA_FLEET="*) export CCQUOTA_FLEET ;; esac
+  # compat-1v: 下一批删 (the old layout, below)
   # Every repo lives in repos/<slug>.conf (issue #1937): in a fleet that has a
   # repos/ dir, a fleet conf naming no repo describes the fleet only, so a repo key
   # the caller's environment or the global conf carries is not this fleet's —
@@ -645,6 +646,7 @@ fleet_repo_conf_file() {
   printf '%s/fleets/%s/repos/%s.conf' "$FLEET_CONF_DIR" "${1:-_}" "$(fleet_slug "$(fleet_norm_repo "${2:-}")")"
 }
 
+# compat-1v: 下一批删 (the old layout's FLEET_REPO, below)
 # fleet_repos <sess> → every repo the fleet hosts, owner/name, one per line, in
 # order: an old-layout fleet conf's FLEET_REPO first (read for one version, issue
 # #1937), then repos/.order, then any other repos/*.conf, deduplicated. Nothing for a
@@ -685,20 +687,6 @@ fleet_repo_first() {
   local r; r=$(fleet_repos "${1:-}")
   printf '%s' "${r%%
 *}"
-}
-
-# fleet_has_repo_overlays <sess> → 0 iff fleets/<sess>/repos/ holds an overlay —
-# the CHEAP "might this fleet host more than one repo?" gate for hot paths (the
-# dash's 4Hz row producer, pr-refresh's per-window pass; issue #792). Builtins
-# only, no fork. 1 = the degenerate one-repo fleet: callers keep today's
-# per-session code path byte for byte.
-fleet_has_repo_overlays() {
-  local f
-  [ -n "${ZSH_VERSION:-}" ] && setopt local_options null_glob
-  for f in "$FLEET_CONF_DIR/fleets/${1:-_}/repos"/*.conf; do
-    [ -f "$f" ] && return 0
-  done
-  return 1
 }
 
 # fleet_repo_hosted <sess> <repo> → 0 iff the fleet hosts <repo>.
@@ -797,11 +785,11 @@ _fleet_repo_overlay() {
 # when the fleet does not host <repo> (the fleet conf is still loaded).
 fleet_load_repo_conf() {
   local conf; conf=$(fleet_conf_file "${1:-}")
-  # A multi-repo fleet first puts the per-repo keys back to what they were before
-  # ANY conf was loaded (issue #978): else, in a shell that already applied repo B's
-  # overlay (a pane of B spawning for A), a key A's overlay leaves unset would keep
-  # B's value instead of falling back to the fleet's. One-repo fleet: untouched.
-  fleet_has_repo_overlays "${1:-}" && _fleet_repo_keys_reset
+  # First the per-repo keys go back to what they were before ANY conf was loaded
+  # (issue #978): else, in a shell that already applied repo B's overlay (a pane of
+  # B spawning for A), a key A's overlay leaves unset would keep B's value instead
+  # of falling back to the fleet's.
+  _fleet_repo_keys_reset
   local _flr_txt=''
   if [ -f "$conf" ]; then
     _flr_txt=$(_fleet_conf_sans_global "$conf")
@@ -918,20 +906,19 @@ fleet_repo_conf_file_for() {
 # janitor) and every mover that decides "is this worktree ours" resolves its repo
 # from the WINDOW it acts on, never from the fleet conf alone, and joins windows on
 # (repo, issue) — never a bare issue number. A window whose repo is unknown or
-# deliberately none (@norepo) is never reaped automatically. A fleet with no
-# overlay (fleet_has_repo_overlays) takes the historic single-repo path in every
-# caller, byte for byte.
+# deliberately none (@norepo) is never reaped automatically — however many repos
+# the fleet hosts (issue #1943).
 
 # fleet_load_window_conf <sess> <window> — for a caller acting ON <window> (a
 # reaper, not the window's own pane): the fleet conf with THAT window's repo
-# overlay on top. Degenerate (no overlay): exactly fleet_load_conf. Otherwise
-# returns 1 when the window's repo is unknown, none (@norepo) or no longer hosted —
-# with FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH UNSET, so a caller that ignores the
-# status still cannot reach any repo's worktrees.
+# overlay on top. Returns 1 when the window's repo is unknown, none (@norepo) or no
+# longer hosted — with FLEET_REPO/FLEET_MAIN/FLEET_BASE_BRANCH UNSET, so a caller
+# that ignores the status still cannot reach any repo's worktrees.
 fleet_load_window_conf() {
   local sess="${1:-}" r
   fleet_load_conf "$sess"
-  fleet_has_repo_overlays "$sess" || return 0
+  # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN lists no repo: its own.
+  [ -n "$(fleet_repos "$sess")" ] || return 0
   r=$(fleet_window_repo "$sess" "${2:-}")
   if [ -z "$r" ] || ! fleet_load_repo_conf "$sess" "$r"; then
     eval "unset $_FLEET_REPO_SCOPED"
@@ -941,32 +928,28 @@ fleet_load_window_conf() {
 }
 
 # fleet_resolved_repo <sess> — the repo a reaper acts on, read AFTER a
-# fleet_load_*conf. A one-repo fleet keeps the historic rule (the collector's
-# sessmap wins over FLEET_REPO); a multi-repo fleet must not: the sessmap holds ONE
-# repo per session and would drag every window back to the conf's own repo.
+# fleet_load_*conf: the loaded FLEET_REPO. Never the collector's sessmap, which
+# holds ONE repo per session and would drag every window back to the conf's own
+# (issue #1943) — except, compat-1v: 下一批删, for a pre-#1937 conf naming only
+# FLEET_MAIN, which lists no repo and has none other.
 fleet_resolved_repo() {
-  local r=''
-  fleet_has_repo_overlays "${1:-}" || r=$(fleet_repo_cached "${1:-}")
-  printf '%s' "${r:-${FLEET_REPO:-}}"
+  local r="${FLEET_REPO:-}"
+  [ -n "$r" ] || [ -n "$(fleet_repos "${1:-}")" ] || r=$(fleet_repo_cached "${1:-}")
+  printf '%s' "$r"
 }
 
 # fleet_issue_windows <sess> <repo> <issue> → the window ids bound to (repo,
-# issue), one per line. In a multi-repo fleet a window matches only when its own
-# repo (fleet_window_repo) IS <repo> — an unknown/@norepo window never matches, so
-# repo B's #12 is invisible to repo A's cleanup. Degenerate: every window whose
-# @issue is <issue>, as before.
+# issue), one per line. A window matches only when its own repo
+# (fleet_window_repo) IS <repo> — an unknown/@norepo window never matches, so
+# repo B's #12 is invisible to repo A's cleanup.
 fleet_issue_windows() {
-  local sess="${1:-}" want i w wi multi=0
+  local sess="${1:-}" want i w wi
   want=$(fleet_norm_repo "${2:-}"); i="${3:-}"
-  [ -n "$i" ] || return 0
-  fleet_has_repo_overlays "$sess" && multi=1
+  [ -n "$i" ] && [ -n "$want" ] || return 0
   _fleet_tmux "$sess" list-windows -t "$sess" -F '#{window_id} #{@issue}' 2>/dev/null |
   while read -r w wi; do
     [ "$wi" = "$i" ] || continue
-    if [ "$multi" = 1 ]; then
-      [ -n "$want" ] || continue
-      [ "$(fleet_norm_repo "$(fleet_window_repo "$sess" "$w")")" = "$want" ] || continue
-    fi
+    [ "$(fleet_norm_repo "$(fleet_window_repo "$sess" "$w")")" = "$want" ] || continue
     printf '%s\n' "$w"
   done
   return 0
@@ -1206,13 +1189,6 @@ fleet_backlog_repo() {
 # snapshot and ledger row still matches. (The dash's grouping keys are a
 # different spelling of the same idea, `<slug>:issue-<N>`, because they must equal
 # what a spawn stamps into @origin — see fleet_okey_prefix.)
-
-# fleet_multirepo <sess> → 0 iff the fleet hosts 2+ repos. A fleet with no repos/
-# dir answers from one [ -d ] — no fork, no tmux — so a 4Hz path may ask it.
-fleet_multirepo() {
-  [ -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || return 1
-  [ "$(fleet_repos "$1" | grep -c .)" -ge 2 ]
-}
 
 # fleet_target_repo <sess> [<repo>] → the ONE repo a repo-wide command (the EPIC
 # trio, fleet-epic-preflight.sh, fleet-evidence.sh, the PR / comment wrappers;
@@ -4501,10 +4477,6 @@ fleet_scratch_key() {
 }
 
 # ---- repo-qualified keys + self-stamping windows (issue #789) ----------------
-# _fleet_hosts_many <sess> → 0 iff the fleet hosts 2+ repos. No repos/ dir ⇒ 1 before
-# reading any conf, so a one-repo fleet pays nothing (the degenerate case).
-_fleet_hosts_many() { fleet_multirepo "$@"; }   # one rule for every key (#790)
-
 # _fleet_key_prefix <sess> <window-target> → "<slug>:" of the window's repo, in
 # every fleet (issue #1939); exit 1 when the window's repo is unknown or it is a
 # no-repo session — the caller then mints no key rather than guess. A fleet that
@@ -4762,8 +4734,9 @@ fleet_win_for_key() {
   esac
   fleet="$sock"; [ -n "$fleet" ] || fleet=$(fleet_current_session 2>/dev/null)
   if [ -z "$pre" ] && [ -n "$fleet" ]; then
+    # compat-1v: 下一批删 — a bare key is the old spelling, read in a one-repo fleet.
     case "$key" in issue-*)
-      if fleet_multirepo "$fleet"; then
+      if [ "$(fleet_repos "$fleet" | grep -c .)" -ge 2 ]; then
         printf 'fleet: %s is ambiguous in %s — the fleet hosts several repos and each may bind #%s; qualify the key with the repo slug (<slug>:%s)\n' \
           "$key" "$fleet" "${key#issue-}" "$key" >&2
         return 2
@@ -5294,10 +5267,35 @@ fleet_node_env_file() { printf '%s/node.env' "$FLEET_CONF_DIR"; }
 
 # _fleet_node_env_val <KEY> → the value node.env assigns KEY ('' when none; rc 1
 # when there is no readable file). READ, never sourced: it holds a credential.
+#
+# Separated (issue #1971, bin/fleet-credsep.sh) node.env is a symlink into the
+# role account's store and unreadable here: CCQUOTA_TOKEN is then a short-lived
+# fcpn1. credential for the credential proxy's hub broker (_fleet_node_broker),
+# every other key comes from node.pub.env — the token-less copy.
 _fleet_node_env_val() {
   local f; f=$(fleet_node_env_file)
+  if [ ! -r "$f" ] && _fleet_node_separated; then
+    if [ "$1" = CCQUOTA_TOKEN ]; then
+      f=$(_fleet_node_broker) || return 1
+      printf '%s\n' "${f#*	}"; return 0
+    fi
+    f="$FLEET_CONF_DIR/node.pub.env"
+  fi
   [ -r "$f" ] || return 1
   sed -n "s/^$1=//p" "$f" | head -n 1
+}
+
+# _fleet_node_separated → rc 0 when this login's credentials live in the role
+# account's store (bin/fleet-credsep.sh wrote $FLEET_CONF_DIR/credsep.json).
+_fleet_node_separated() { [ -f "$FLEET_CONF_DIR/credsep.json" ]; }
+
+# _fleet_node_broker → `<broker url>TAB<fcpn1.…>`: the hub through the credential
+# proxy, which puts the node token in on the way out and never forwards
+# POST /v1/node/credentials. rc 1 = the proxy did not answer.
+_fleet_node_broker() {
+  local out
+  out=$(bash "${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}/fleet-cred-proxy.sh" node-token 2>/dev/null) || return 1
+  case "$out" in http://127.0.0.1:*"	"fcpn1.*) printf '%s\n' "$out" ;; *) return 1 ;; esac
 }
 
 # fleet_spawn_node_default → what a spawn follows when neither --node nor
@@ -5320,6 +5318,11 @@ fleet_spawn_node_default() {
 # never reach the caller, nor anything the caller spawns.
 _fleet_hub_env() {
   local v
+  if [ -z "${CCQUOTA_TOKEN:-}" ] && [ ! -r "$(fleet_node_env_file)" ] && _fleet_node_separated; then
+    # separated (issue #1971): URL and token are ONE pair — the broker's
+    v=$(_fleet_node_broker) && { export CCQUOTA_HUB_URL="${v%%	*}" CCQUOTA_TOKEN="${v#*	}"; }
+    return 0
+  fi
   if [ -z "${CCQUOTA_TOKEN:-}" ]; then v=$(_fleet_node_env_val CCQUOTA_TOKEN); [ -n "$v" ] && export CCQUOTA_TOKEN="$v"; fi
   if [ -z "${CCQUOTA_HUB_URL:-}" ]; then v=$(_fleet_node_env_val CCQUOTA_HUB_URL); [ -n "$v" ] && export CCQUOTA_HUB_URL="$v"; fi
   return 0

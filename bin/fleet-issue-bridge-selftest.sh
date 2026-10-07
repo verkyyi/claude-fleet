@@ -436,7 +436,7 @@ for spawn_rc in 2 3 1 0; do
   : > "$WORK/log"; : > "$WORK/spawn.log"
   FLEET_ISSUE_BRIDGE_REVIVE=1 SPAWN_RC="$spawn_rc" SPAWN_REASON="$reason" runbridge --poll \
     || fail "revive poll failed for spawn rc=$spawn_rc"
-  grep -qxF '12 s1 --origin bridge' "$WORK/spawn.log" || fail "revive must attempt the missing worker"
+  grep -qxF '12 s1 --repo fake/repo --origin bridge' "$WORK/spawn.log" || fail "revive must attempt the missing worker, naming its repo (#1943)"
   expected="revive-failed(#12: ${reason//$'\n'/ | })"
   [ "$spawn_rc" = 0 ] && expected='revived(#12->s1)'
   grep -qF "$expected" "$WORK/log" || fail "revive log lost the spawn outcome: $expected"

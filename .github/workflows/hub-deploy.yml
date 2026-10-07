@@ -2,8 +2,11 @@ name: hub-deploy
 
 # The ONE way the hub (tokenledger/, the ccquota image) goes live — EPIC #1982
 # C1, issue #1983. A merge to master that touches tokenledger/** or
-# deploy/k8s/** builds the image, pushes it as `prod-<sha7>`, snapshots the
-# database, applies deploy/k8s/overlays/prod with that tag, waits for the
+# deploy/k8s/** — once master has been quiet for QUIET_MINUTES and
+# MIN_GAP_MINUTES have passed since the last release (issue #2052) — builds the
+# image, pushes it as `prod-<sha7>`, snapshots the database, starts the new
+# image with the real config on a copy of it (`ccquota hub --check`, issues
+# #2050 #2052), applies deploy/k8s/overlays/prod with that tag, waits for the
 # rollout and checks /healthz + /version on every address. A manual rollback =
 # `workflow_dispatch` with the old tag (no build; the snapshot step still runs).
 #
@@ -53,6 +56,14 @@ on:
         description: "Rollback drill: treat the health check as failed, so the job rolls back to the live image and goes red"
         type: boolean
         default: false
+      simulate_migration_failure:
+        description: "Rehearsal drill: the new image's migrations fail on the copy, so the release stops before the apply and goes red"
+        type: boolean
+        default: false
+      simulate_check_failure:
+        description: "Check drill: the new image starts with half a GitHub sign-in pair (what a Secret holding only github-client-id does), so --check fails and the release stops before the apply"
+        type: boolean
+        default: false
 
 # One deploy at a time, never cancelled half-way (a cancelled Recreate rollout
 # leaves the hub down until the next one): a newer run waits, and replaces any
@@ -65,6 +76,11 @@ permissions:
   contents: read
 
 env:
+  # The release cadence (issue #2052): a push ships once master has been quiet
+  # this long, and never sooner than this after the last successful release.
+  # workflow_dispatch ignores both.
+  QUIET_MINUTES: 10
+  MIN_GAP_MINUTES: 30
   NS: new-deploy
   PUSH_REPO: registry.cn-shenzhen.aliyuncs.com/24haowan/ccquota
   PLACEHOLDER: set-by-hub-deploy
@@ -92,21 +108,53 @@ jobs:
           # Nothing beyond what Role claudefleet-deployer may touch.
           extra=$(grep '^kind: ' "$RUNNER_TEMP/hub.yaml" | grep -vE '^kind: (Deployment|Service|Ingress|PersistentVolumeClaim|ConfigMap)$' || true)
           [ -z "$extra" ] || { echo "::error::the deploy role cannot apply: $extra"; exit 1; }
+      - name: The 正在更新 page renders, and the Ingress names its Service
+        run: |
+          set -euo pipefail
+          kubectl kustomize deploy/k8s/updating/prod > "$RUNNER_TEMP/updating.yaml"
+          svc=$(yq 'select(.kind == "Service") | .metadata.name' "$RUNNER_TEMP/updating.yaml")
+          want=$(yq 'select(.kind == "Ingress") | .metadata.annotations."nginx.ingress.kubernetes.io/default-backend"' "$RUNNER_TEMP/hub.yaml")
+          [ "$svc" = "$want" ] || { echo "::error::the hub Ingress's default-backend ($want) is not the updating Service ($svc)"; exit 1; }
+          for f in nginx.conf updating.html updating.json; do
+            grep -q "^  $f: " "$RUNNER_TEMP/updating.yaml" || { echo "::error::the updating ConfigMap has no $f"; exit 1; }
+          done
       - name: The base names no environment
         run: |
-          if grep -rn '24haowan' deploy/k8s/base; then
-            echo "::error::deploy/k8s/base must stay environment-free — move it to an overlay"; exit 1
+          if grep -rn '24haowan' deploy/k8s/base deploy/k8s/credproxy/base deploy/k8s/updating/base; then
+            echo "::error::a base must stay environment-free — move it to an overlay"; exit 1
           fi
+      # The cluster credential proxy (#1973) is applied by a person, never by
+      # the deploy job (deploy/k8s/credproxy/README.md) — but it must render.
+      - name: The credential proxy renders, with one placeholder tag
+        run: |
+          set -euo pipefail
+          kubectl kustomize deploy/k8s/credproxy/prod > "$RUNNER_TEMP/credproxy.yaml"
+          n=$(grep -c ":$PLACEHOLDER\$" "$RUNNER_TEMP/credproxy.yaml" || true)
+          [ "$n" = 1 ] || { echo "::error::expected one image tagged :$PLACEHOLDER, found $n"; exit 1; }
+          grep -q 'value: https://' "$RUNNER_TEMP/credproxy.yaml" || { echo "::error::no relay URL in the prod render"; exit 1; }
 
   # The pause switch (issue #2013): repo variable HUB_DEPLOY_PAUSED=1 and a push
   # deploys nothing — this job goes green, says 已暂停 on the summary, and the
   # deploy job is skipped. A person's workflow_dispatch is never paused: that
   # is how you deploy (or roll back) by hand while automatic releases are off.
+  #
+  # The batching (issue #2052): a push does not deploy at once. This job holds
+  # until master has been quiet for QUIET_MINUTES (no newer tokenledger/ or
+  # deploy/k8s/ commit) AND MIN_GAP_MINUTES have passed since the last
+  # successful release (the newest success of environment prod); when a newer
+  # such commit lands meanwhile, this run stands down green (已合并到后面) —
+  # that commit's run is already queued behind this one in the `prod`
+  # concurrency group and ships both. Fifteen merges in an evening are one
+  # release, not fifteen restarts. workflow_dispatch never holds.
   gate:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      deployments: read   # when the last release went out
     outputs:
-      paused: ${{ steps.pause.outputs.paused }}
+      go: ${{ steps.pause.outputs.paused != 'true' && (github.event_name != 'push' || steps.hold.outputs.verdict == 'go') }}
     steps:
       - name: Paused?
         id: pause
@@ -125,8 +173,31 @@ jobs:
             echo "paused=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: actions/checkout@v4
+        if: steps.pause.outputs.paused != 'true' && github.event_name == 'push'
+        with:
+          fetch-depth: 0
+
+      - name: Hold for a quiet master (${{ env.QUIET_MINUTES }} min) and the release gap (${{ env.MIN_GAP_MINUTES }} min)
+        id: hold
+        if: steps.pause.outputs.paused != 'true' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          out=$(.github/actions/hub-release/release.sh hold)
+          echo "$out" >> "$GITHUB_OUTPUT"
+          if grep -q '^verdict=superseded' <<<"$out"; then
+            newer=$(sed -n 's/^newer=//p' <<<"$out")
+            { echo "## hub-deploy · ⏭ 已合并到后面的发布"
+              echo
+              echo "这次 push（\`${GITHUB_SHA:0:7}\`）没有单独发布：master 上又来了 \`${newer:0:7}\`，它的运行排在这次后面，会把两者一起发出去（合并发布，issue #2052）。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::superseded by ${newer:0:7} — its run ships this commit too"
+          fi
+
   deploy:
-    if: github.event_name != 'pull_request' && needs.gate.outputs.paused != 'true'
+    if: github.event_name != 'pull_request' && needs.gate.outputs.go == 'true'
     needs: [check, gate]
     runs-on: ubuntu-latest
     environment: prod
@@ -214,7 +285,14 @@ jobs:
           kubectl kustomize deploy/k8s/overlays/prod \
             | sed "s#:$PLACEHOLDER\$#:${{ steps.tag.outputs.tag }}#" > "$RUNNER_TEMP/hub.yaml"
           ! grep -q "$PLACEHOLDER" "$RUNNER_TEMP/hub.yaml" || { echo "::error::placeholder left in the render"; exit 1; }
-          grep -n 'image:' "$RUNNER_TEMP/hub.yaml"
+          # The 「正在更新」 page (issue #2052) is installed by a person
+          # (deploy/k8s/updating): until a pod of it runs, the Ingress must not
+          # name it as its default backend.
+          if [ -z "$(kubectl -n "$NS" get pod -l app=ccquota-hub-updating --field-selector=status.phase=Running -o name 2>/dev/null)" ]; then
+            yq -i '(select(.kind == "Ingress") | .metadata.annotations) |= del(."nginx.ingress.kubernetes.io/default-backend")' "$RUNNER_TEMP/hub.yaml"
+            echo "::warning::no ccquota-hub-updating pod runs in $NS — released without the 正在更新 page (deploy/k8s/updating/README.md installs it)"
+          fi
+          grep -n 'image:\|default-backend' "$RUNNER_TEMP/hub.yaml"
 
       # Before anything changes: a transaction-consistent copy of the live
       # database (VACUUM INTO via /data/snapshot-tool — never a raw copy, the
@@ -232,6 +310,8 @@ jobs:
           from=${from##*:}
           ts=$(date -u +%Y%m%dT%H%M%SZ)
           echo "path=/data/backup-hubdeploy-$ts-$from.db (pod $pod, PVC ccquota-data)" >> "$GITHUB_OUTPUT"
+          echo "file=/data/backup-hubdeploy-$ts-$from.db" >> "$GITHUB_OUTPUT"
+          echo "pod=${pod#pod/}" >> "$GITHUB_OUTPUT"
           kubectl -n "$NS" exec "$pod" -c ccquota -- sh -c '
             set -e
             ls -1t /data/backup-hubdeploy-*.db 2>/dev/null | tail -n +3 | while read -r f; do rm -f "$f"; echo "pruned $f"; done
@@ -244,6 +324,114 @@ jobs:
             ls -la "$out"
           ' _ "$ts" "$from"
 
+      # Before anything changes, part two (issues #2050, #2052): the NEW image
+      # starts up on a copy of that snapshot with the environment it is about
+      # to get — `ccquota hub --check` runs the pending migrations AND every
+      # startup check the hub dies on (a GitHub pair with one half, an
+      # unreadable CA or credential key, a --pricing that does not parse, …),
+      # then exits without binding a port. Non-zero stops the release here —
+      # the live pod keeps serving. C5's migration died on a foreign key only
+      # production had, after Recreate had already stopped the old pod: ten
+      # minutes of 503; a Secret with half a GitHub pair would have been the
+      # same. The PVC is ReadWriteOnce and a file moves in or out of the pod at
+      # ~9 KB/s (RUNBOOK.md), so neither the database nor the binary can
+      # travel: the new image goes INTO the live pod as an ephemeral container
+      # (the kubelet pulls it as it would for the release) with the render's
+      # env / envFrom / args and the live pod's volume mounts (a running pod
+      # takes no new volume — a mount only the render has is named as a
+      # warning, unchecked), on /data/rehearse-<run>.db, deleted afterwards.
+      # A Secret key the env names but the Secret lacks fails the container's
+      # start (CreateContainerConfigError) — that is a red check too. Needs the
+      # deploy Role to patch pods/ephemeralcontainers; without it the step
+      # refuses — a release nothing vouched for does not go out.
+      - name: Check the new image (real config, a copy of the database)
+        id: rehearse
+        if: steps.snapshot.outcome == 'success'
+        env:
+          POD: ${{ steps.snapshot.outputs.pod }}
+          SNAP: ${{ steps.snapshot.outputs.file }}
+          SIMULATE_MIGRATION: ${{ github.event.inputs.simulate_migration_failure || 'false' }}
+          SIMULATE_CHECK: ${{ github.event.inputs.simulate_check_failure || 'false' }}
+        run: |
+          set -uo pipefail
+          yq -o=json 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "ccquota")' "$RUNNER_TEMP/hub.yaml" > "$RUNNER_TEMP/new-container.json"
+          image=$(jq -r '.image // ""' "$RUNNER_TEMP/new-container.json")
+          [ -n "$image" ] || { echo "::error::no ccquota image in the render"; exit 1; }
+          name="rehearse-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          copy="/data/$name.db"
+          if [ "$(kubectl -n "$NS" auth can-i patch pods --subresource=ephemeralcontainers)" != yes ]; then
+            echo "::error::the deploy role cannot patch pods/ephemeralcontainers in $NS — the check cannot run, so nothing is released (deploy/k8s/README.md «Who may do what»)"
+            exit 1
+          fi
+          kubectl -n "$NS" get pod "$POD" -o json > "$RUNNER_TEMP/pod.json" || { echo "::error::cannot read pod $POD"; exit 1; }
+          missing=$(jq -r --slurpfile p "$RUNNER_TEMP/pod.json" '
+            ([$p[0].spec.containers[] | select(.name == "ccquota") | .volumeMounts[]?.name]) as $live
+            | [.volumeMounts[]?.name | select(. as $n | $live | index($n) | not)] | join(" ")' "$RUNNER_TEMP/new-container.json")
+          [ -z "$missing" ] || echo "::warning::the render mounts volume(s) the live pod does not have ($missing) — the check runs without them; whatever reads them is first tried by the real start"
+          cleanup() { kubectl -n "$NS" exec "$POD" -c ccquota -- sh -c 'rm -f "$1" "$1-wal" "$1-shm"' _ "$copy" || echo "::warning::could not delete $copy from /data"; }
+          kubectl -n "$NS" exec "$POD" -c ccquota -- sh -c '
+            set -e
+            db_kb=$(du -k "$1" | cut -f1)
+            free_kb=$(df -Pk /data | awk "NR==2{print \$4}")
+            [ "$free_kb" -gt $((db_kb * 12 / 10)) ] || { echo "not enough room on /data for the check copy (db ${db_kb}K, free ${free_kb}K)"; exit 1; }
+            cp "$1" "$2"
+          ' _ "$SNAP" "$copy" || { echo "::error::could not copy the snapshot for the check"; cleanup; exit 1; }
+          # The ephemeral container: the image's entrypoint (`ccquota hub
+          # --addr … --db /data/ccquota.db`) + the render's args + `--check
+          # --db <copy>` (the later --db wins). simulate_check_failure is the
+          # drill for a Secret holding half a GitHub pair. An image older than
+          # --check (a rollback to a tag before #2052) gets --migrate-only.
+          attempt() { # <container name> <--check | --migrate-only> → $code $why $state
+            jq -c --slurpfile p "$RUNNER_TEMP/pod.json" --arg name "$1" --arg mode "$2" --arg copy "$copy" \
+              --argjson simmig "$( [ "$SIMULATE_MIGRATION" = true ] && echo true || echo false )" \
+              --argjson simgh "$( [ "$SIMULATE_CHECK" = true ] && echo true || echo false )" '
+              {spec: {ephemeralContainers: [
+                {name: $name, image: .image,
+                 args: ((.args // []) + [$mode, "--db", $copy] + (if $simmig then ["--simulate-migration-failure"] else [] end)),
+                 env: ((.env // [])
+                   | if $simgh then map(select(.name != "CCQUOTA_GITHUB_CLIENT_ID" and .name != "CCQUOTA_GITHUB_CLIENT_SECRET"))
+                       + [{name: "CCQUOTA_GITHUB_CLIENT_ID", value: "simulated-half-pair"}, {name: "CCQUOTA_GITHUB_CLIENT_SECRET", value: ""}]
+                     else . end),
+                 envFrom: (.envFrom // []),
+                 volumeMounts: ([$p[0].spec.containers[] | select(.name == "ccquota") | .volumeMounts[]?]),
+                 securityContext: {runAsUser: 10001}}
+                + (if .command then {command: .command} else {} end)
+              ]}}' "$RUNNER_TEMP/new-container.json" > "$RUNNER_TEMP/patch.json" \
+              || { echo "::error::could not build the check container"; return 1; }
+            echo "checking $image on $copy (pod $POD, container $1): $(jq -c '.spec.ephemeralContainers[0].args' "$RUNNER_TEMP/patch.json")"
+            kubectl -n "$NS" patch pod "$POD" --subresource ephemeralcontainers --type strategic --patch-file "$RUNNER_TEMP/patch.json" >/dev/null \
+              || { echo "::error::could not start the check container"; return 1; }
+            code='' why='' state=''
+            for _ in $(seq 1 100); do   # ≤ ~5 minutes: the pull plus the migrations
+              state=$(kubectl -n "$NS" get pod "$POD" -o json 2>/dev/null | jq -c --arg n "$1" '.status.ephemeralContainerStatuses[]? | select(.name == $n) | .state' || true)
+              code=$(jq -r '.terminated.exitCode // empty' <<<"$state" 2>/dev/null || true)
+              [ -z "$code" ] || break
+              why=$(jq -r '.waiting.reason // empty' <<<"$state" 2>/dev/null || true)
+              case "$why" in
+                CreateContainerConfigError|CreateContainerError|InvalidImageName) break ;;
+              esac
+              sleep 3
+            done
+            kubectl -n "$NS" logs "$POD" -c "$1" 2>/dev/null | tee "$RUNNER_TEMP/rehearse.log" || echo "(no log access — the exit code decides)"
+          }
+          attempt "$name" --check || { cleanup; exit 1; }
+          if [ "$code" = 2 ] && grep -q 'flag provided but not defined: -check' "$RUNNER_TEMP/rehearse.log" 2>/dev/null; then
+            echo "::warning::$image predates --check (#2052) — only its migrations are rehearsed, not its config"
+            attempt "$name-m" --migrate-only || { cleanup; exit 1; }
+          fi
+          cleanup
+          if [ -z "$code" ]; then
+            echo "$state"
+            case "$why" in
+              CreateContainerConfigError|CreateContainerError)
+                echo "::error::the new image could not even start with this config ($why: $(jq -r '.waiting.message // ""' <<<"$state")) — a Secret key the env names is missing? Nothing released, the live hub is untouched" ;;
+              *) echo "::error::the check did not finish within ~5 minutes${why:+ ($why)} — nothing released" ;;
+            esac
+            exit 1
+          fi
+          [ "$code" = 0 ] || { echo "::error::the new image's startup check FAILED (exit $code: a migration on the copy of the live database, or a setting it refuses to start without — the log above) — nothing released, the live hub is untouched"; exit 1; }
+          echo "check passed: the new image migrated a copy of the live database and read every startup setting"
+
       - name: Apply
         id: apply
         run: kubectl apply -f "$RUNNER_TEMP/hub.yaml"
@@ -251,7 +439,10 @@ jobs:
       - name: Rollout
         id: rollout
         run: |
-          if ! kubectl -n "$NS" rollout status deploy/ccquota-hub --timeout=10m; then
+          # 3 minutes, not 10 (issue #2050): with Recreate the old pod is already
+          # gone, so every minute waited here is a minute of 503 before the
+          # rollback below starts.
+          if ! kubectl -n "$NS" rollout status deploy/ccquota-hub --timeout=3m; then
             kubectl -n "$NS" get pod -l app=ccquota-hub -o wide || true
             echo "::error::rollout did not finish — a pod stuck in ContainerCreating is the disk attach (deploy/k8s/RUNBOOK.md)"
             exit 1
@@ -295,9 +486,15 @@ jobs:
           echo "::error::release ${NEW_TAG} failed its checks — rolled back to ${PREV_IMAGE##*:}"
 
       # What happened, on the run's summary page — every run, red or green.
+      # Its first lines decide the verdict (result / head, read by Notify);
+      # everything after is reporting, and a reporting failure must never
+      # paint a release red or turn its notice into 发布失败 — run 37578256836
+      # released fine and went red on a SIGPIPE in the commit list. So the
+      # step may fail without failing the job, and Notify keys on the head.
       - name: Summary
         id: summary
         if: always() && steps.tag.outcome == 'success'
+        continue-on-error: true
         env:
           NEW_TAG: ${{ steps.tag.outputs.tag }}
           NEW_COMMIT: ${{ steps.tag.outputs.commit }}
@@ -305,6 +502,9 @@ jobs:
           PREV_COMMIT: ${{ steps.live.outputs.commit }}
           SNAPSHOT: ${{ steps.snapshot.outputs.path }}
           SNAPSHOT_OUTCOME: ${{ steps.snapshot.outcome }}
+          REHEARSE: ${{ steps.rehearse.outcome }}
+          SIMULATE_MIGRATION: ${{ github.event.inputs.simulate_migration_failure || 'false' }}
+          SIMULATE_CHECK: ${{ github.event.inputs.simulate_check_failure || 'false' }}
           APPLY: ${{ steps.apply.outcome }}
           ROLLOUT: ${{ steps.rollout.outcome }}
           HEALTH: ${{ steps.health.outcome }}
@@ -320,6 +520,8 @@ jobs:
             result=rollback-failed head="🔥 回退失败 — 线上可能不健康，照 deploy/k8s/RUNBOOK.md 手工处理"
           elif [ "$APPLY" = success ] || [ "$APPLY" = failure ]; then
             result=failed head="❌ 发布失败"
+          elif [ "$REHEARSE" = failure ]; then
+            result=rehearsal-failed head="❌ 没部署：新镜像没过启动检查（真实配置 + 线上库副本，\`--check\`；线上没动）"
           else
             result=not-applied head="❌ 没部署（在 apply 之前失败，线上没动）"
           fi
@@ -338,9 +540,12 @@ jobs:
             echo "| 线上旧版本 | \`${PREV_TAG:-（无）}\` |"
             echo "| 新版本 | \`$NEW_TAG\` |"
             echo "| 快照 | $snap |"
+            echo "| 启动检查（真实配置 + 库副本） | $( [ "$REHEARSE" = skipped ] && echo '没做（没有快照可用）' || echo "$REHEARSE" ) |"
             echo "| apply · rollout · 健康检查 | $APPLY · $ROLLOUT · $HEALTH |"
             echo "| 回退 | $( [ "$ROLLBACK" = skipped ] && echo 没回退 || echo "$ROLLBACK（只回镜像；数据库要恢复照 RUNBOOK.md 用上面的快照手工做）" ) |"
             [ "$HUB_DEPLOY_SIMULATE_UNHEALTHY" != true ] || echo "| 演练 | simulate_unhealthy=true：健康检查按失败处理 |"
+            [ "$SIMULATE_MIGRATION" != true ] || echo "| 演练 | simulate_migration_failure=true：副本上的迁移按失败处理 |"
+            [ "$SIMULATE_CHECK" != true ] || echo "| 演练 | simulate_check_failure=true：检查容器只拿到一半 GitHub 登录键 |"
             echo
             echo "### 环境变量（ccquota 容器，线上 → 这次的渲染）"
             echo
@@ -359,7 +564,8 @@ jobs:
               echo '```'
             fi
             echo
-            .github/actions/hub-release/release.sh changes "$PREV_COMMIT" "$NEW_COMMIT"
+            .github/actions/hub-release/release.sh changes "$PREV_COMMIT" "$NEW_COMMIT" \
+              || echo "_变更列表没生成出来（exit $?）— 看这次运行的日志。_"
             echo
             echo "[这次运行]($RUN_URL)"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -367,7 +573,7 @@ jobs:
       # One comment per release on the fixed issue (repo variable
       # HUB_DEPLOY_NOTIFY_ISSUE; unset = no comment), with this job's token.
       - name: Notify
-        if: always() && vars.HUB_DEPLOY_NOTIFY_ISSUE != '' && steps.summary.outcome == 'success'
+        if: always() && vars.HUB_DEPLOY_NOTIFY_ISSUE != '' && steps.summary.outputs.head != ''
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ vars.HUB_DEPLOY_NOTIFY_ISSUE }}

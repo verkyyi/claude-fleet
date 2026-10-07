@@ -13,6 +13,12 @@ request on, with the real credential put in on the way out (or none, centrally).
     attach  --sid NAME          (a hub session credential, fcp-h1.…, on STDIN —
                                  what the central route forwards for this sid)
     status  [--json]
+    store   --kind claude|codex --label LABEL   (the file's bytes on STDIN — the
+                                 node agent's lease, separated mode only)
+    probe                       (node-probe.json on STDIN — separated mode only)
+    node-token                  → a short-lived fcpn1.<…> for the hub broker
+    node-hash                   → sha256 hex of the node token (the fleet-mcp
+                                 worker assertion's key; the token never leaves)
 
 `serve` binds 127.0.0.1 (the port in <state>/port) and a control socket
 <state>/ctl.sock (0600); every other subcommand is a client of that socket.
@@ -40,6 +46,20 @@ the request body first; a permanent failure (no credential for the account,
 an untrusted machine with no hub credential) answers 403, which neither Claude
 Code nor Codex retries; every credential-shaped header is logged as
 <redacted:len>.
+
+SEPARATED MODE (issue #1971, EPIC #1967 C4 — bin/fleet-credsep.sh): the proxy
+runs as the role account _fleetcred, launched by bin/fleet-credsep-launch.py,
+and every credential lives under /var/db/fleet-cred/<login>/ (0700, its own):
+FLEET_CRED_ACCOUNTS / FLEET_CRED_CODEX_* / FLEET_CRED_NODE_ENV point there. The
+control socket moves to FLEET_CRED_CTL_DIR (/var/run/fleet-cred/<login>/, which
+the login can read) at mode 0666, and FLEET_CRED_CTL_UID is then the ONE peer
+uid it answers (getpeereid — no group to manage). Three more things only make
+sense there: `store` (the agent hands its lease over instead of writing a file
+the session could read), `probe`, and the HUB BROKER — /hub/<path> forwards to
+the hub with the node token put in, for a fcpn1. credential minted over the
+control socket. The broker refuses POST /v1/node/credentials: a session that
+asks for the node token gets something that can place, move and lease issues,
+never something that can lease the subscription pool (EPIC route ④).
 """
 import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, secrets
 import resource, signal, socket, ssl, sys, threading, time, urllib.request
@@ -52,7 +72,9 @@ HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding",
        "te", "trailer", "upgrade", "host", "content-length"}
 PUBLIC = {"/api/hello"}
 OAUTH_BETA = "oauth-2025-04-20"
-LOCAL_TAG, HUB_TAG = "fcp1", "fcp-h1"
+LOCAL_TAG, HUB_TAG, NODE_TAG = "fcp1", "fcp-h1", "fcpn1"
+# never through the hub broker (EPIC #1967 route ④): the subscription pool
+HUB_DENY = ("/v1/node/credentials",)
 REGION_MARKS = ("unsupported_country_region_territory", "unsupported_country",
                 "unsupported_region", "request not allowed",
                 "not available in your country", "not available in your region")
@@ -93,7 +115,7 @@ def node_env():
     """$FLEET_CONF_DIR/node.env as a dict — read here, never exported (issue #1491)."""
     out = {}
     try:
-        for line in open(os.path.join(conf_dir(), "node.env")):
+        for line in open(env("FLEET_CRED_NODE_ENV", os.path.join(conf_dir(), "node.env"))):
             line = line.strip()
             if line.startswith("export "):
                 line = line[7:]
@@ -118,16 +140,16 @@ class Keys:
                 pass
         self.key = open(p, "rb").read()
 
-    def mint(self, account, sid, ttl):
+    def mint(self, account, sid, ttl, tag=LOCAL_TAG):
         payload = json.dumps({"sid": sid, "acct": account, "exp": int(time.time()) + ttl,
                               "n": secrets.token_hex(4)}, separators=(",", ":")).encode()
-        return LOCAL_TAG + "." + b64e(payload) + "." + b64e(hmac.new(self.key, payload, hashlib.sha256).digest())
+        return tag + "." + b64e(payload) + "." + b64e(hmac.new(self.key, payload, hashlib.sha256).digest())
 
-    def verify(self, tok):
+    def verify(self, tok, want=LOCAL_TAG):
         """-> (claims, None) or (None, reason)."""
         try:
             tag, p, s = tok.split(".")
-            if tag != LOCAL_TAG:
+            if tag != want:
                 return None, "not a session credential"
             payload = b64d(p)
             if not hmac.compare_digest(hmac.new(self.key, payload, hashlib.sha256).digest(), b64d(s)):
@@ -220,7 +242,7 @@ class Router:
         """reachable | unreachable | unsupported_region | none (never probed)."""
         if env("FLEET_PROBE_FORCE_UNREACHABLE") == "1":
             return "unreachable"
-        d = read_json(os.path.join(conf_dir(), "node-probe.json"), None)
+        d = read_json(env("FLEET_CRED_PROBE", os.path.join(conf_dir(), "node-probe.json")), None)
         if not isinstance(d, dict):
             return "none"
         return str(d.get("anthropic" if provider == "claude" else "openai", "none")) or "none"
@@ -302,6 +324,8 @@ class Proxy(BaseHTTPRequestHandler):
         if path.startswith("http://") or path.startswith("https://"):
             self.log(ev="deny", path=path.split("?")[0], why="absolute-URI proxying disabled")
             return self.fail(403, "absolute-URI proxying disabled", "permission_error")
+        if path.startswith("/hub/"):
+            return self.hub_broker(inbound, path[len("/hub"):], body, t0)
         provider = "codex" if path.startswith("/codex/") else "claude"
         seen = sorted("%s=%s" % (k, red(k, v)) for k, v in inbound.items())
         tok = ""
@@ -323,6 +347,36 @@ class Proxy(BaseHTTPRequestHandler):
         hubcred = self.hubcreds.get(sid)
         order, _ = self.router.candidates(provider, bool(hubcred))
         self.send(order, provider, path, body, hubcred, sid, acct, seen, t0)
+
+    def hub_broker(self, inbound, path, body, t0):
+        """/hub/<path> → the hub, with the node token put in (separated mode only)."""
+        tok = inbound.get("authorization", "")[7:].strip() if inbound.get("authorization", "").lower().startswith("bearer ") else ""
+        bare = path.split("?")[0].rstrip("/")
+        if not self.cfg.broker:
+            return self.fail(404, "no hub broker here (not separated)", "not_found_error")
+        claims, why = self.keys.verify(tok, NODE_TAG)
+        if not claims:
+            self.log(ev="deny", path="/hub" + bare, why=why)
+            return self.fail(401, why)
+        import posixpath
+        if not bare.startswith("/v1/") or "%" in bare or "\\" in bare or posixpath.normpath(bare) != bare:
+            # one spelling per path: no //, ./, ../ or escapes to slip past HUB_DENY
+            self.log(ev="deny", path="/hub" + bare, why="not a plain /v1/ path")
+            return self.fail(403, "the broker forwards plain /v1/ paths only", "permission_error")
+        if any(bare.lower() == d or bare.lower().startswith(d + "/") for d in HUB_DENY):
+            self.log(ev="deny", path="/hub" + bare, why="the subscription pool never goes through the broker")
+            return self.fail(403, "%s is not brokered: the subscription pool stays with the node agent" % bare,
+                             "permission_error")
+        ne = node_env()
+        hub, ntok = (ne.get("CCQUOTA_HUB_URL") or "").rstrip("/"), ne.get("CCQUOTA_TOKEN", "")
+        if not hub or not ntok:
+            return self.fail(403, "no node token here", "permission_error")
+        if not loopback_ok(hub):
+            return self.fail(403, "hub URL is neither https nor loopback", "permission_error")
+        out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() != "authorization"}
+        out["Authorization"] = "Bearer " + ntok
+        self.upstream(hub, urlsplit(hub).path.rstrip("/") + path, out, body, "hub", "node", "-", "node",
+                      [], t0, "hub", can_switch=False)
 
     def plan(self, order, sid):
         """Drop the routes that refused this session recently; all of them = try again."""
@@ -491,6 +545,24 @@ def codex_auth_path(cfg, label):
     return os.path.join(cfg.codex_homes, label, "auth.json")
 
 
+def SAFE_LABEL(s):
+    import re
+    return bool(re.match(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$", s or ""))
+
+
+def write_private(path, data):
+    """0600, via a same-directory rename (a reader sees old or new, never half)."""
+    d = os.path.dirname(path)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    tmp = os.path.join(d, ".%s.%s" % (os.path.basename(path), secrets.token_hex(4)))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+
+
 def codex_tokens(path):
     """-> (access token, account id, credential fingerprint). The fingerprint is
     ccquota's credential_version (sha256 of access NUL refresh), so a verdict
@@ -583,8 +655,63 @@ def ctl_handle(req, cfg):
             Proxy.hubcreds[sid] = hc
         Proxy.log(ev="attach", sid=sid)
         return {"ok": True}
+    if op == "store":
+        # the node agent's lease (tokenledger agent/node_credstore.go): the
+        # bytes it would have written itself, written here where only we read
+        if not cfg.store:
+            return {"ok": False, "err": "store: not separated (FLEET_CRED_STORE unset)"}
+        kind, label = req.get("kind") or "", req.get("label") or ""
+        if not SAFE_LABEL(label):
+            return {"ok": False, "err": "store: unsafe label %r" % label}
+        data = base64.b64decode(req.get("data") or "")
+        if not data or len(data) > 65536:
+            return {"ok": False, "err": "store: empty or oversized"}
+        if kind == "claude":
+            dst = os.path.join(cfg.accounts, label + ".hub", ".credentials.json")
+        elif kind == "codex":
+            dst = codex_auth_path(cfg, label)
+        else:
+            return {"ok": False, "err": "store: kind claude|codex"}
+        write_private(dst, data)
+        Proxy.log(ev="store", kind=kind, acct=label, bytes=len(data))
+        return {"ok": True}
+    if op == "probe":
+        pp = env("FLEET_CRED_PROBE")
+        if not cfg.store or not pp:
+            return {"ok": False, "err": "probe: not separated"}
+        d = json.loads(req.get("data") or "null")
+        if not isinstance(d, dict):
+            return {"ok": False, "err": "probe: a JSON object"}
+        write_json(pp, d)
+        return {"ok": True}
+    if op == "relay":
+        # separated: the relay pass fleet-relay-cred.sh minted for the login
+        if not cfg.store:
+            return {"ok": False, "err": "relay: not separated"}
+        tok = (req.get("data") or "").strip()
+        if not tok or len(tok) > 4096 or any(c.isspace() for c in tok):
+            return {"ok": False, "err": "relay: one pass on stdin"}
+        write_private(os.path.join(cfg.state, "relay.token"), tok.encode() + b"\n")
+        Proxy.log(ev="relay_pass")
+        return {"ok": True}
+    if op == "node-token":
+        if not cfg.broker:
+            return {"ok": False, "err": "node-token: no hub broker here (not separated)"}
+        ne = node_env()
+        if not ne.get("CCQUOTA_TOKEN"):
+            return {"ok": False, "err": "node-token: no node token here"}
+        port = cfg.bound_port
+        return {"ok": True, "token": Proxy.keys.mint("-", "node", int(req.get("ttl") or 600), NODE_TAG),
+                "url": "http://127.0.0.1:%d/hub" % port}
+    if op == "node-hash":
+        if not cfg.broker:
+            return {"ok": False, "err": "node-hash: no hub broker here (not separated)"}
+        t = node_env().get("CCQUOTA_TOKEN", "")
+        if not t:
+            return {"ok": False, "err": "node-hash: no node token here"}
+        return {"ok": True, "hash": hashlib.sha256(t.encode()).hexdigest()}
     if op == "status":
-        return {"ok": True, "pid": os.getpid(), "port": cfg.bound_port,
+        return {"ok": True, "pid": os.getpid(), "port": cfg.bound_port, "separated": bool(cfg.store),
                 "trust": Proxy.router.trust or "unknown", "trust_why": Proxy.router.trust_why,
                 "relay": bool(cfg.relay_url), "relay_pass": bool(relay_pass(cfg)),
                 "central": cfg.central_url or ""}
@@ -600,8 +727,28 @@ def ctl_serve(sock, cfg):
         threading.Thread(target=ctl_conn, args=(c, cfg), daemon=True).start()
 
 
+def peer_uid(c):
+    """The connecting process's uid: LOCAL_PEERCRED's xucred (macOS) and
+    SO_PEERCRED's ucred (Linux) both carry it at byte 4."""
+    if sys.platform == "darwin":
+        raw = c.getsockopt(0, 0x001, 76)        # SOL_LOCAL, LOCAL_PEERCRED
+    else:
+        raw = c.getsockopt(socket.SOL_SOCKET, getattr(socket, "SO_PEERCRED", 17), 12)
+    return int.from_bytes(raw[4:8], sys.byteorder)
+
+
 def ctl_conn(c, cfg):
     try:
+        if cfg.ctl_uid is not None:
+            # the socket is 0666 in separated mode: the peer's uid is the gate
+            try:
+                u = peer_uid(c)
+            except OSError:
+                u = -1
+            if u not in (cfg.ctl_uid, 0):
+                Proxy.log(ev="deny", path="ctl", why="peer uid %d" % u)
+                c.sendall(b'{"ok": false, "err": "not this login\'s proxy"}\n')
+                return
         c.settimeout(10)
         buf = b""
         while b"\n" not in buf and len(buf) < 65536:
@@ -623,10 +770,11 @@ def ctl_conn(c, cfg):
 def ctl_call(state, req):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(30)
+    sockp = os.path.join(env("FLEET_CRED_CTL_DIR", state), "ctl.sock")
     try:
-        s.connect(os.path.join(state, "ctl.sock"))
+        s.connect(sockp)
     except OSError as e:
-        sys.stderr.write("fleet-cred-proxy: not running (%s: %s)\n" % (os.path.join(state, "ctl.sock"), e.strerror))
+        sys.stderr.write("fleet-cred-proxy: not running (%s: %s)\n" % (sockp, e.strerror))
         sys.exit(3)
     s.sendall((json.dumps(req) + "\n").encode())
     buf = b""
@@ -679,6 +827,11 @@ def serve(a):
     cfg.ttl = int(env("FLEET_CRED_PROXY_TTL", "86400"))
     cfg.switch_ttl = int(env("FLEET_CRED_PROXY_SWITCH_SECS", "1800"))
     cfg.timeout = int(env("FLEET_CRED_PROXY_TIMEOUT", "600"))
+    # separated mode (issue #1971): set by bin/fleet-credsep-launch.py only
+    cfg.store = env("FLEET_CRED_STORE") == "1"
+    cfg.broker = cfg.store
+    cfg.ctl_uid = int(env("FLEET_CRED_CTL_UID")) if env("FLEET_CRED_CTL_UID") else None
+    ctld = env("FLEET_CRED_CTL_DIR", st)
     for name in ("anthropic_url", "codex_url", "relay_url", "central_url"):
         v = getattr(cfg, name)
         if v and not loopback_ok(v):
@@ -698,7 +851,7 @@ def serve(a):
 
     # the port: --port, else the last one used (live sessions carry it in
     # ANTHROPIC_BASE_URL — a restart must not move it), else any free one
-    portf = os.path.join(st, "port")
+    portf = os.path.join(ctld, "port")
     want = [a.port] if a.port else []
     try:
         prev = int(open(portf).read().strip())
@@ -717,7 +870,7 @@ def serve(a):
     srv.daemon_threads = True
     cfg.bound_port = srv.server_address[1]
 
-    sockp, pidf = os.path.join(st, "ctl.sock"), os.path.join(st, "pid")
+    sockp, pidf = os.path.join(ctld, "ctl.sock"), os.path.join(ctld, "pid")
     try:
         os.unlink(sockp)
     except OSError:
@@ -728,7 +881,8 @@ def serve(a):
         ctl.bind(sockp)
     finally:
         os.umask(old)
-    os.chmod(sockp, 0o600)
+    # 0666 only with the peer-uid gate (separated: the login is another uid)
+    os.chmod(sockp, 0o666 if cfg.ctl_uid is not None else 0o600)
     ctl.listen(16)
 
     def bye(*_):
@@ -749,6 +903,9 @@ def serve(a):
     os.replace(portf + ".tmp", portf)
     with open(pidf, "w") as f:
         f.write("%d\n" % os.getpid())
+    if cfg.ctl_uid is not None:   # separated: the login (another uid) reads both
+        for p in (portf, pidf):
+            os.chmod(p, 0o644)
 
     parent = os.getppid()
 
@@ -799,6 +956,12 @@ def main():
     t.add_argument("--sid", required=True)
     u = sub.add_parser("status")
     u.add_argument("--json", action="store_true")
+    o = sub.add_parser("store")
+    o.add_argument("--kind", required=True, choices=("claude", "codex")); o.add_argument("--label", required=True)
+    sub.add_parser("probe")
+    sub.add_parser("relay")
+    sub.add_parser("node-token")
+    sub.add_parser("node-hash")
     a = ap.parse_args()
     a.state = a.state or default_state()
     if a.cmd == "serve":
@@ -818,6 +981,18 @@ def main():
     elif a.cmd == "attach":
         ctl_call(a.state, {"op": "attach", "sid": a.sid, "cred": sys.stdin.readline()})
         print("attached %s" % a.sid)
+    elif a.cmd == "store":
+        ctl_call(a.state, {"op": "store", "kind": a.kind, "label": a.label,
+                           "data": base64.b64encode(sys.stdin.buffer.read(65537)).decode()})
+    elif a.cmd == "probe":
+        ctl_call(a.state, {"op": "probe", "data": sys.stdin.read(65536)})
+    elif a.cmd == "relay":
+        ctl_call(a.state, {"op": "relay", "data": sys.stdin.read(4097)})
+    elif a.cmd == "node-token":
+        res = ctl_call(a.state, {"op": "node-token"})
+        print("%s\t%s" % (res["url"], res["token"]))
+    elif a.cmd == "node-hash":
+        print(ctl_call(a.state, {"op": "node-hash"})["hash"])
     elif a.cmd == "status":
         res = ctl_call(a.state, {"op": "status"})
         res.pop("ok", None)

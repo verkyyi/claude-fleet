@@ -1,0 +1,10 @@
+# A node drain never takes both replicas at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ccquota-credproxy
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ccquota-credproxy

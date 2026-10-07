@@ -133,3 +133,84 @@ func TestMigration1_FreshDatabase(t *testing.T) {
 		t.Fatalf("hub_migrations on a fresh database = %+v, %v", ms, err)
 	}
 }
+
+// Migration 1 on a database with its foreign keys enforced and a child row
+// under every removed-source account (claude-fleet#2050): production's
+// endpoints still pointed at the gateway / voice accounts, and the bare
+// DELETE FROM accounts died on FOREIGN KEY constraint failed (787). The
+// migration walks PRAGMA foreign_key_list itself — a nullable reference lets
+// go of the removed account, a NOT NULL one goes with it, its own children
+// first — and every row that belongs to Claude or Codex stays.
+func TestMigration1_ForeignKeysHold(t *testing.T) {
+	s := newStore(t)
+	seedAccount(t, s, "acct", "ep-claude")
+	db := s.DB()
+	now := fmtTime(time.Now())
+	for _, q := range []string{
+		`INSERT INTO accounts (account_uuid, source, first_seen, last_seen) VALUES
+			('gw', 'gateway', '` + now + `', '` + now + `'),
+			('bill', 'vendor_bill', '` + now + `', '` + now + `'),
+			('vox', 'voice', '` + now + `', '` + now + `')`,
+		// Every table that references accounts gets a child of a removed one:
+		// endpoints (nullable, in schema.sql) and one with a NOT NULL reference
+		// that has a grandchild of its own.
+		`CREATE TABLE acct_children (id TEXT PRIMARY KEY, account_uuid TEXT NOT NULL REFERENCES accounts(account_uuid))`,
+		`CREATE TABLE acct_grandchildren (id TEXT PRIMARY KEY, child_id TEXT NOT NULL REFERENCES acct_children(id))`,
+		`INSERT INTO acct_children VALUES ('c-claude', 'acct'), ('c-gw', 'gw'), ('c-vox', 'vox')`,
+		`INSERT INTO acct_grandchildren VALUES ('g-claude', 'c-claude'), ('g-gw', 'c-gw')`,
+		`DELETE FROM hub_migrations`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	for ep, acct := range map[string]string{"ep-gw": "gw", "ep-bill": "bill", "ep-vox": "vox"} {
+		if err := s.Enroll(ep, ep, "hash-"+ep); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE endpoints SET account_uuid = ? WHERE endpoint_id = ?`, acct, ep); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(q string) int {
+		t.Helper()
+		var n int
+		if err := db.QueryRow(q).Scan(&n); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		return n
+	}
+	before := map[string]int{
+		"endpoints": count(`SELECT COUNT(*) FROM endpoints`),
+		"claude":    count(`SELECT COUNT(*) FROM accounts WHERE source = 'claude'`),
+	}
+
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := count(`SELECT COUNT(*) FROM accounts WHERE source IN ('gateway', 'vendor_bill', 'voice')`); n != 0 {
+		t.Errorf("%d removed-source accounts survived", n)
+	}
+	if got := count(`SELECT COUNT(*) FROM accounts WHERE source = 'claude'`); got != before["claude"] {
+		t.Errorf("claude accounts: %d after, %d before", got, before["claude"])
+	}
+	if got := count(`SELECT COUNT(*) FROM endpoints`); got != before["endpoints"] {
+		t.Errorf("endpoints: %d after, %d before — a nullable reference must let go, not delete", got, before["endpoints"])
+	}
+	if n := count(`SELECT COUNT(*) FROM endpoints WHERE endpoint_id IN ('ep-gw', 'ep-bill', 'ep-vox') AND account_uuid IS NOT NULL`); n != 0 {
+		t.Errorf("%d endpoints still point at a removed account", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM endpoints WHERE endpoint_id = 'ep-claude' AND account_uuid = 'acct'`); n != 1 {
+		t.Error("the claude endpoint lost its account")
+	}
+	if got := count(`SELECT COUNT(*) FROM acct_children`); got != 1 {
+		t.Errorf("acct_children: %d rows, want only c-claude", got)
+	}
+	if got := count(`SELECT COUNT(*) FROM acct_grandchildren`); got != 1 {
+		t.Errorf("acct_grandchildren: %d rows, want only g-claude", got)
+	}
+	if n := count(`SELECT COUNT(*) FROM pragma_foreign_key_check`); n != 0 {
+		t.Errorf("%d foreign key violations after the migration", n)
+	}
+}

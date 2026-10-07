@@ -1251,6 +1251,24 @@ issues exactly as before.
 - No admin node online → the leasing machine gets `refresh_unavailable`, not
   the provider's 403; a still-valid cached access token is issued meanwhile.
 
+**Through the Singapore relay, no machine at all (claude-fleet#1976).** With
+`CCQUOTA_FLEET_OAUTH_REFRESH_VIA=relay` the hub posts a Codex refresh itself to
+the relay's `/openai-auth/oauth/token` (`CCQUOTA_FLEET_CRED_RELAY_URL`, the C7
+forwarder of docs/CRED-RELAY.md), so the long-lived refresh token is never in
+any machine's memory and no admin node has to be online.
+
+- The relay's forward_auth asks `/v1/relay/check` as for every request; the hub
+  answers for its own with a pass only it signs — `frh1.<exp>.<HMAC>`, keyed
+  from `CCQUOTA_FLEET_SESSION_CRED_KEY` (the same Secret on every replica), five
+  minutes, minted per refresh, stored nowhere, and good for `/openai-auth/`
+  only. `relay` refuses to start without the URL or the key.
+- The audit row says `refresh_via=relay`.
+- The relay cannot be asked — unreachable, its own 502/503/504, a 404 (no
+  route), or `relay_refused` for the pass — → the node path above, and the row
+  says `refresh_via=<login>@<host> (relay unavailable: <why>)`. A provider's own
+  answer (`invalid_grant`, its 403) is the answer, never a reason to fall back.
+- A Claude refresh keeps the node path: the relay's token route is OpenAI's.
+
 **A hub-leased Codex home is refreshed by nobody on the machine
 (claude-fleet#1666).** Its `auth.json` carries the `hub-managed` placeholder in
 place of a refresh token; `ccquota codex list --json` reports it as
@@ -1294,6 +1312,32 @@ verify caches a pass's row ≤ 30 s, and a revocation through the hub — the pa
 DELETE, or a machine / person revoke — is seen at once. Every issue, renewal and
 revocation is a `fleet_audit` row (`session_cred`) carrying the `worker_id`. A
 trusted machine may ask for one too; by default it leases as before.
+
+**The cluster credential proxy** (claude-fleet#1973, EPIC #1967 C6) is what
+takes those passes: `ccquota credproxy`, the hub's image as its own stateless
+Deployment (`deploy/k8s/credproxy`, ≥ 2 replicas, applied by a person — its
+README is the runbook), behind the same front door at `/v1/proxy/anthropic/…`
+and `/v1/proxy/codex/…` (an untrusted machine's `FLEET_CRED_CENTRAL_URL`
+defaults to the hub URL, so nothing on the machine changes). It asks the hub
+one question per pass, `POST /v1/fleet/credproxy/resolve {cred, provider}`
+with `CCQUOTA_FLEET_CREDPROXY_TOKEN[_FILE]` (unset = `503 credproxy_off`; the
+verifier's token is not enough — resolve hands out an access token) →
+`{valid, reason, principal, worker_id, owner, account, bind_rev, access_token,
+account_id, expires_at}`: verify as above, then the session's account binding
+(`fleet_session_binds`, by `worker_id`: the first resolve picks the person's
+own account for the provider, else a shared-pool one, and keeps it), then the
+vault's lease of that account. `GET|PUT /v1/fleet/session-cred/bind
+{worker_id, provider, account, owner?}` (the node that issued the session a
+live pass, or the operator) lists / rebinds — a `fleet_audit` `session_bind`
+row; the proxy sees it within its ≤ 30 s cache. The proxy swaps the pass for
+the token (Claude: `Authorization` + the oauth beta, `x-api-key` dropped; Codex:
+`Authorization` + `chatgpt-account-id`), forwards the session's pass to the
+Singapore relay as `X-Fleet-Relay`, passes the body byte for byte, streams the
+answer, and writes one audit line per request (principal, worker_id, account,
+status, bytes — never a header). A refused pass or no account is a 403; a hub
+that cannot answer is ridden out on the cached answer for up to `--stale`
+(15 min, never past the token's expiry), and only a pass it has never seen gets
+a 503.
 
 Importing: `bin/fleet-creds-import.sh` for Claude setup tokens,
 `bin/fleet-creds-import.sh --codex [profile]` for a Codex refresh token (reads

@@ -36,6 +36,15 @@ spec:
                   name: ccquota
                   key: github-client-secret
                   optional: true
+            # The cluster credential proxy's token (#1973, ../../credproxy):
+            # admits `ccquota credproxy` to /v1/fleet/credproxy/resolve.
+            # Optional: the key missing = that route answers 503, nothing else.
+            - name: CCQUOTA_FLEET_CREDPROXY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ccquota
+                  key: credproxy-token
+                  optional: true
             - name: CCQUOTA_FLEET_PRINCIPAL_LOGINS
               value: "YiLiangHui=verkyyi,CaoJian=24haowan,zx=zx,HuangYongSheng=vincent"
             - name: CCQUOTA_FLEET_ROUTES

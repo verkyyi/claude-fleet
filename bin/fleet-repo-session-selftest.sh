@@ -18,8 +18,8 @@
 #   E. restore round-trip: the snapshot writes the repo column (and `-` for the
 #      no-repo session), restore brings @repo / @norepo back and resumes the no-repo
 #      session by its own id in $HOME; an OLD row (no column) gets its repo derived
-#      from @worktree; the one-repo fleet's rows carry no column.
-#   F. degenerate: the one-repo fleet's spawn command carries no self-stamp.
+#      from @worktree; the one-repo fleet's rows carry their repo too (#1943).
+#   F. one road: the one-repo fleet's spawn command self-stamps its repo (#1943).
 #   G. a fleet with no repo at all (issue #1937): a bare spawn is a no-repo session
 #      (@norepo=1, no @repo / @worktree, in $HOME) — never a refusal.
 #
@@ -189,9 +189,10 @@ eq "D origin key, one-repo fleet (qualified too, issue #1939)" "$(inpane "$wD" f
 eq "D bare key still resolves (the one repo's alias)" "$(fleet_win_for_key issue-5 "$D")" "$wD"
 eq "D …and so does the qualified one" "$(fleet_win_for_key o-d:issue-5 "$D")" "$wD"
 
-# ---- F. degenerate ---------------------------------------------------------------------
-case "$(opt "$wD" pane_start_command)" in *set-option*) fail "F one-repo spawn command carries a self-stamp" ;;
-  *) ok "F one-repo spawn command unchanged (no self-stamp)" ;; esac
+# ---- F. one road (issue #1943): a one-repo spawn stamps itself like any other -----------
+case "$(opt "$wD" pane_start_command)" in *set-option*@repo*o/d*) ok "F one-repo spawn command self-stamps its repo" ;;
+  *) fail "F one-repo spawn command carries no self-stamp: $(opt "$wD" pane_start_command)" ;; esac
+eq "F one-repo window's @repo" "$(opt "$wD" @repo)" o/d
 eq "F one-repo worktree" "$(opt "$wD" @worktree)" "$WORK/mainD-issue-5"
 
 # ---- E. restore round-trip -------------------------------------------------------------
@@ -203,7 +204,7 @@ eq "E B row's repo column" "$(printf '%s' "$rowB" | awk -F'\t' '{print $16}')" o
 rowN=$(awk -F'\t' '$1=="WIN" && $16=="-"' "$MS" | head -1)
 [ -n "$rowN" ] || fail "E no no-repo row (column 16 = -)"
 eq "E no-repo row carries its own session id" "$(printf '%s' "$rowN" | awk -F'\t' '{print $4}' | grep -c "$nsid")" 1
-eq "E one-repo rows carry no repo column" "$(awk -F'\t' '$1=="WIN" && NF>15' "$MD" | wc -l | tr -d ' ')" 0
+eq "E one-repo rows carry their repo too (#1943)" "$(awk -F'\t' '$1=="WIN" {print $16}' "$MD" | sort -u)" o/d
 
 # An OLD row (pre-#789, no column 16) for B's worktree: its repo comes from @worktree.
 mkdir -p "$WORK/mainB-issue-77"; git -C "$WORK/mainB" worktree add -q -b issue-77 "$WORK/mainB-issue-77" master 2>/dev/null

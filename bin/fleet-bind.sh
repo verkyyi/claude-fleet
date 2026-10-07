@@ -113,15 +113,15 @@ cur_branch=$(git -C "$WT" symbolic-ref --short HEAD 2>/dev/null)
 SESS=$(fleet_current_session)
 fleet_load_conf "$SESS"
 REPO="${FLEET_REPO:-}"
-# The sessmap caches ONE repo per session; a fleet hosting 2+ repos (issue #789)
-# must keep the WINDOW's repo, which fleet_load_conf already resolved in this pane.
-MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
-if [ "$MULTI" = 1 ]; then
-  REPO=$(fleet_window_repo "$SESS" "$WIN")
+# The WINDOW's repo, however many repos the fleet hosts (issue #1943): the sessmap
+# caches ONE repo per session and would drag a scratch of another repo back to it.
+REPO=$(fleet_window_repo "$SESS" "$WIN")
+if [ -z "$REPO" ] && [ -z "$(fleet_repos "$SESS")" ]; then
+  # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN: the collector's repo.
+  _r=$(fleet_repo_cached "$SESS"); REPO="${_r:-${FLEET_REPO:-}}"
+else
   [ -n "$REPO" ] || die "this scratch's repo is unknown — cannot tell which repo's #$num to bind" 3
   fleet_load_repo_conf "$SESS" "$REPO" || die "$REPO is not a repo this fleet hosts" 1
-else
-  _r=$(fleet_repo_cached "$SESS"); [ -n "$_r" ] && REPO="$_r"
 fi
 MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || die "FLEET_MAIN is not a git checkout — set it in fleet.conf" 1
@@ -136,18 +136,14 @@ git -C "$MAIN" show-ref --verify --quiet "refs/heads/$branch" \
 # A live window in THIS fleet already bound to #N (the local half of the dedup
 # dash-issue-session.sh does). Our own window is excluded — it has no @issue yet,
 # but the id compare keeps this honest if that ever changes.
-dup=$(tmux list-windows -F '#{@issue} #{window_id}' 2>/dev/null \
-        | awk -v n="$num" -v self="$WIN" '$1==n && $2!=self {print $2; exit}')
-# 2+ repos (issue #789): identity is (repo, N) — only a window of THIS repo, or of an
-# unknown one (never guess), is a duplicate.
-if [ "$MULTI" = 1 ]; then
-  dup=''
-  for _w in $(tmux list-windows -F '#{@issue} #{window_id}' 2>/dev/null \
-                | awk -v n="$num" -v self="$WIN" '$1==n && $2!=self {print $2}'); do
-    _wr=$(fleet_window_repo "$SESS" "$_w")
-    if [ -z "$_wr" ] || [ "$_wr" = "$REPO" ]; then dup=$_w; break; fi
-  done
-fi
+# Identity is (repo, N) (issue #789): only a window of THIS repo, or of an unknown
+# one (never guess), is a duplicate.
+dup=''
+for _w in $(tmux list-windows -F '#{@issue} #{window_id}' 2>/dev/null \
+              | awk -v n="$num" -v self="$WIN" '$1==n && $2!=self {print $2}'); do
+  _wr=$(fleet_window_repo "$SESS" "$_w")
+  if [ -z "$_wr" ] || [ -z "$REPO" ] || [ "$_wr" = "$REPO" ]; then dup=$_w; break; fi
+done
 [ -n "$dup" ] && die "#$num is already bound to a live window in this fleet — nothing to bind" 4
 
 # Cross-machine claim gate — the same read dash-issue-session.sh makes at spawn.
