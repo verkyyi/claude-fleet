@@ -272,7 +272,40 @@ if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ];
 fi
 unset _fc_mw
 
-if [ -n "$label" ]; then                                 # (resolved above, with the model)
+# Through this login's credential proxy (issue #1972, EPIC #1967 C5): the wrapper
+# handed this launch a FLEET_CRED_SID because FLEET_CRED_PROXY=1. The proxy mints a
+# SESSION credential for it (fcp1. bound to $label; on an untrusted machine an
+# fcp-h1. pass from the hub) and the session talks to 127.0.0.1 — the EPIC's one
+# wiring (共同约定 2): ANTHROPIC_BASE_URL + CLAUDE_CODE_OAUTH_TOKEN=<that> +
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1, never CLAUDE_SECURESTORAGE_CONFIG_DIR.
+# fleet_claude_export_auth is not called: no subscription credential enters this
+# environment. A migrate is then the proxy's rebind of the sid. Exit 4 = nothing to
+# bind (no account here: the ambient login) → the launch below, as before. Any other
+# failure refuses: a session never quietly falls back to holding the credential.
+_fc_route=''
+if [ -n "${FLEET_CRED_SID:-}" ]; then
+  _fc_px=$(bash "$BIN/fleet-session-cred.sh" mint --provider claude --sid "$FLEET_CRED_SID" ${label:+--account "$label"})
+  _fc_rc=$?
+  case "$_fc_rc" in
+    0)
+      IFS=$'\t' read -r _fc_route _fc_port _fc_cred <<< "$_fc_px"
+      unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_SECURESTORAGE_CONFIG_DIR
+      unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
+      export ANTHROPIC_BASE_URL="http://127.0.0.1:$_fc_port" CLAUDE_CODE_OAUTH_TOKEN="$_fc_cred"
+      export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+      unset _fc_cred _fc_port
+      if [ -n "${TMUX_PANE:-}" ]; then
+        tmux set-option -w -t "$TMUX_PANE" @cred_route "$_fc_route" 2>/dev/null || true
+        [ "$_fc_route" = central ] || tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true
+      fi ;;
+    4) : ;;
+    *) echo 'fleet-claude: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)' >&2
+       exit 1 ;;
+  esac
+  unset _fc_px _fc_rc
+fi
+
+if [ -n "$label" ] && [ -z "$_fc_route" ]; then          # (resolved above, with the model)
   tok=$("$BIN/fleet-account.sh" token "$label" 2>/dev/null)
   if [ -n "$tok" ]; then
     if [ -n "${FLEET_ACCOUNT_TARGET:-}" ]; then
