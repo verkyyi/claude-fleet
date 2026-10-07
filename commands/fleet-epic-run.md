@@ -73,8 +73,17 @@ that dies at the boundary. Therefore:
 - **The first command of every tick stamps the heartbeat** (issue #953):
 
   ```sh
-  bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh <N> --tick <n> --repo "$FLEET_REPO"
+  bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh <N> --tick <n> --repo "$FLEET_REPO" \
+    --landed <k> --members <m>
   ```
+
+  `<m>` is the charter's Core count, `<k>` how many of them are merged — as of
+  the LAST tick's read (the first tick: `--landed 0`, or leave both off). They
+  are the badge of this batch's ONE row in the task list (issue #1958): the
+  stamp also marks THIS pane's window `@epic <owner/name>#<N>`, so the row is
+  named `#<N> <the EPIC's title>` with its members hanging under it by their
+  `@origin` — another repo's member too, tagged with its repo. `--clear <N>`
+  unmarks the window.
 
   It rewrites THIS batch's mark, `$FLEET_CONF_DIR/global/epic-running.d/<repo
   slug>-<N>` — one file per batch (issue #2062), so a second loop on this login

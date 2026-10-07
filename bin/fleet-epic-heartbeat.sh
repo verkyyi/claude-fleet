@@ -4,7 +4,8 @@
 # mark PER BATCH (issue #2062, EPIC #2074 C1).
 #
 #   fleet-epic-heartbeat.sh <epic> [--tick <n>] [--repo <owner/name>]
-#                           [--session <sess>] [--ttl <seconds>]   # stamp — every tick
+#                           [--session <sess>] [--ttl <seconds>]
+#                           [--landed <k> --members <n>]           # stamp — every tick
 #   fleet-epic-heartbeat.sh --clear <epic>                           # THIS batch ended
 #   fleet-epic-heartbeat.sh --status                                 # every mark, one line each
 #
@@ -44,7 +45,16 @@
 #
 # File, one `key: value` per line:
 #   epoch: <n>  iso: <UTC>  ttl: <s>  epic: <N>  repo: <owner/name|->
-#   session: <sess|->  tick: <n|->
+#   session: <sess|->  tick: <n|->  [landed: <k>  members: <n>]
+#
+# ONE EPIC, ONE ROW (issue #1958). The mark is also what the task list reads to
+# draw a running batch as ONE row: the stamp marks the window it runs in — the
+# driver's own pane ($TMUX_PANE) — `@epic <owner/name>#<N>` (`#<N>` with no repo),
+# and tmux-dashboard-rows.sh names that row after the parent issue and badges it
+# `landed/members` off this file (--landed / --members, the loop's count of the
+# core members that merged / it has). The members already hang under it by their
+# @origin. `--clear <N>` unsets the window's @epic again when it names <N>. No
+# pane (a daemon, a test) ⇒ no window is touched; no counts ⇒ no badge.
 # A bare `touch` of a mark (no epoch:) counts from its mtime — a hand override
 # for «hold the install still for the next 45 min».
 #
@@ -56,7 +66,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-EPIC='' TICK='' REPO="${FLEET_REPO:-}" SESS="${FLEET_SESSION:-}" TTL="${FLEET_EPIC_RUNNING_TTL:-2700}" MODE=stamp
+EPIC='' TICK='' LANDED='' MEMBERS='' REPO="${FLEET_REPO:-}" SESS="${FLEET_SESSION:-}" TTL="${FLEET_EPIC_RUNNING_TTL:-2700}" MODE=stamp
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --tick)      shift; TICK="${1:-}" ;;
@@ -65,12 +75,16 @@ while [ "$#" -gt 0 ]; do
     --repo=*)    REPO="${1#--repo=}" ;;
     --session)   shift; SESS="${1:-}" ;;
     --session=*) SESS="${1#--session=}" ;;
+    --landed)    shift; LANDED="${1:-}" ;;
+    --landed=*)  LANDED="${1#--landed=}" ;;
+    --members)   shift; MEMBERS="${1:-}" ;;
+    --members=*) MEMBERS="${1#--members=}" ;;
     --ttl)       shift; TTL="${1:-}" ;;
     --ttl=*)     TTL="${1#--ttl=}" ;;
     --clear)     MODE=clear ;;
     --clear=*)   MODE=clear; EPIC="${1#--clear=}"; EPIC="${EPIC#\#}" ;;
     --status)    MODE=status ;;
-    -h|--help)   sed -n '2,51p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,61p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)          printf 'fleet-epic-heartbeat: unknown argument %s\n' "$1" >&2; exit 2 ;;
     *)           EPIC="${1#\#}" ;;
   esac
@@ -79,6 +93,18 @@ done
 
 # mark_epic <file> — the `epic:` line of one mark ('' when it has none).
 mark_epic() { sed -n 's/^epic: //p' "$1" 2>/dev/null | head -1; }
+
+# The driver's own window (issue #1958): only from inside a pane — bare tmux is
+# that pane's own fleet server. Never fatal: the mark is the heartbeat's job.
+win_epic() {
+  [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
+  if [ "$1" = set ]; then
+    tmux set-option -wq -t "$TMUX_PANE" @epic "$2" 2>/dev/null || :
+  else
+    local cur; cur=$(tmux display-message -p -t "$TMUX_PANE" '#{@epic}' 2>/dev/null) || return 0
+    case "$cur" in *"#$2") tmux set-option -wqu -t "$TMUX_PANE" @epic 2>/dev/null || : ;; esac
+  fi
+}
 
 case "$MODE" in
   status)
@@ -118,6 +144,7 @@ MARKS
     done <<MARKS
 $marks
 MARKS
+    [ -n "$EPIC" ] && win_epic unset "$EPIC"
     if [ -n "$cleared" ]; then printf 'cleared%s\n' "$cleared"
     else printf 'nothing to clear%s (%s/)\n' "${EPIC:+ for epic=$EPIC}" "$(fleet_epic_running_dir)"; fi
     exit 0 ;;
@@ -130,6 +157,8 @@ case "$TTL" in ''|*[!0-9]*|0)
   printf 'fleet-epic-heartbeat: --ttl must be a positive seconds count, got [%s]\n' "$TTL" >&2; exit 2 ;;
 esac
 case "$TICK" in *[!0-9]*) TICK='' ;; esac
+case "$LANDED$MEMBERS" in *[!0-9]*) LANDED='' MEMBERS='' ;; esac
+{ [ -n "$LANDED" ] && [ -n "$MEMBERS" ]; } || LANDED='' MEMBERS=''
 [ -n "$SESS" ] || SESS=$(fleet_current_session 2>/dev/null || :)
 
 F=$(fleet_epic_mark_file "$REPO" "$EPIC")
@@ -144,8 +173,10 @@ if ! {
   printf 'repo: %s\n' "${REPO:--}"
   printf 'session: %s\n' "${SESS:--}"
   printf 'tick: %s\n' "${TICK:--}"
+  [ -z "$MEMBERS" ] || printf 'landed: %s\nmembers: %s\n' "$LANDED" "$MEMBERS"
 } > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$F" 2>/dev/null; then
   rm -f "$tmp" 2>/dev/null
   printf 'fleet-epic-heartbeat: cannot write %s\n' "$F" >&2; exit 1
 fi
+case "$REPO" in ''|-) win_epic set "#$EPIC" ;; *) win_epic set "$REPO#$EPIC" ;; esac
 printf 'stamped epic=%s session=%s tick=%s ttl=%ss (%s)\n' "$EPIC" "${SESS:--}" "${TICK:--}" "$TTL" "$F"

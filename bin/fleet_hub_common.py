@@ -161,6 +161,10 @@ def worker_identity(fleet_id, key):
     return fleet_id + "/" + key if key else None
 
 
+# An EPIC driver's cell (issue #1958): `[<owner/name>]#<N>[:<landed>/<members>]`.
+EPIC_RE = re.compile(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?")
+
+
 def inventory_row(parts):
     """One row of `fleet-control-read.sh workers`, split on tabs → (the first 9
     columns, the optional extras), or None when it is not a row. The ONE reader of
@@ -193,9 +197,16 @@ def inventory_row(parts):
     (@claude_needs_detail) — the client's bar and notification say it; empty = none.
     Column 20 (issue #1957): `role=orchestrator` — the fleet's one orchestrating
     session (bin/fleet-orchestrator.sh): its key is `orchestrator`, and the client
-    wears it on 「新任务」 instead of listing it; empty on every other window."""
+    wears it on 「新任务」 instead of listing it; empty on every other window.
+    Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` — the
+    window that drives a running EPIC, so every machine's list draws the batch as
+    ONE row named after its parent, badged landed/members; empty elsewhere."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 21 and parts[-1].startswith("epic="):
+        e = parts.pop()[5:]
+        if EPIC_RE.fullmatch(e):
+            extra["epic"] = e
     if len(parts) >= 20 and parts[-1].startswith("role="):
         r = parts.pop()[5:]
         if r == "orchestrator":

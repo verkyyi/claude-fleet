@@ -78,7 +78,10 @@ R="${E}0m"; US=$'\x1f'
 # (#1921 — a local one is looked up below), then @reap_policy.
 # The orchestrating session (issue #1957, `@fleet_role orchestrator`) reads as
 # `home` in the name field: no row, as a panel — 「新任务」 wears it instead.
-WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{?#{==:#{@fleet_role},orchestrator},home,#{window_name}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}${US}#{@reap_policy}"
+# After @reap_policy (issue #1958): @epic, `<owner/name>#<N>` on the window that
+# drives a running EPIC (fleet-epic-heartbeat.sh stamps it) — the row is then the
+# EPIC's: its parent issue's number + title, badged landed/members (epic_v).
+WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{?#{==:#{@fleet_role},orchestrator},home,#{window_name}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}${US}#{@reap_policy}${US}#{@epic}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -295,6 +298,48 @@ cslug_v() {
   return 0
 }
 
+# ONE EPIC, ONE ROW (issue #1958). The window that drives a running EPIC carries
+# @epic (fleet-epic-heartbeat.sh stamps its own pane every tick): `<owner/name>#<N>`,
+# `#<N>` with no repo; a row from another machine carries its node's cell
+# (the inventory's `epic=`, fleet-control-read.sh), `<ref>[:<landed>/<members>]`.
+# epic_ref_v <cell> → $en (the EPIC's number), $eslug (its repo's cache slug, ''
+# for none); 1 when the cell names no EPIC. Fork-free (the rslug_v spelling).
+epic_ref_v() { en='' eslug=''
+  local ref=${1%%:*} r
+  en=${ref##*#}
+  case "$ref:$en" in *'#'*:[0-9]*) ;; *) en=''; return 1 ;; esac
+  case "$en" in *[!0-9]*) en=''; return 1 ;; esac
+  r=${ref%#*}; r=${r//\//-}; eslug=${r//[^[:alnum:]._-]/}
+}
+# epic_v <@epic cell> <window id> <the row's title cell> → $en, $ettl (the parent
+# issue's title: a local row's off the EPIC repo's issue cache, ITTL; a remote
+# one's is its node's, the title cell), $ebadge (`landed/members`: a local row's
+# off THIS batch's heartbeat mark — epic-running.d/<slug>-<N>, read with builtins
+# only, so the frame forks nothing — a remote one's off its cell). All empty on
+# every other row, which therefore renders byte for byte as before.
+epic_v() { en='' ettl='' ebadge=''
+  [ -n "$1" ] || return 0
+  epic_ref_v "$1" || return 0
+  local f k l m _l
+  case "$2" in
+    wid:*) ettl=$3
+           case "$1" in *:*/*) ebadge=${1#*:} ;; esac
+           case "$ebadge" in *[!0-9/]*) ebadge='' ;; esac ;;
+    *) if [ -n "$eslug" ]; then
+         k="$eslug"$'\t#'"$en"
+         case "$ITTL" in *$'\n'"$k"$'\t'*) ettl=${ITTL#*$'\n'"$k"$'\t'}; ettl=${ettl%%$'\n'*} ;; esac
+       fi
+       f="$FLEET_CONF_DIR/global/epic-running.d/${eslug:-_}-$en"
+       if [ -f "$f" ]; then
+         l='' m=''
+         while IFS= read -r _l || [ -n "$_l" ]; do
+           case "$_l" in 'landed: '*) l=${_l#landed: } ;; 'members: '*) m=${_l#members: } ;; esac
+         done < "$f"
+         case "$l:$m" in *[!0-9:]*|:*|*:) ;; *) ebadge="$l/$m" ;; esac
+       fi ;;
+  esac
+}
+
 # The repos this dash shows (issue #793): every hosted one, under `all` (#1034).
 # RMANY=1 only in a fleet hosting 2+ repos; then RHEADS is its group headings
 # (fleet_dash_repo_frame, once a frame); a fleet hosting one repo counts RMANY=0.
@@ -457,7 +502,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   if [ -s "$G/orch_$FLEET_SESSION" ]; then
     while IFS=$US read -r _ow _; do [ -n "$_ow" ] && _orchw+="wid:$_ow "; done < "$G/orch_$FLEET_SESSION"
   fi
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic; do
     case "$_orchw" in *" $r_wid "*) continue ;; esac
     case "$r_wid" in
       '#ts'|'#me') continue ;;
@@ -486,13 +531,13 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
       # about the row changes (its place, its nesting, its colour)
       r_node="$r_node~"
     fi
-    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap")
+    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
-    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap <<< "$_rr"
+    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap r_epic <<< "$_rr"
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
-    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap"$'\n'
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic"$'\n'
   done
   unset _rrows _rr _rexpd _rexp
   WLIST="$RLIST$WLIST"
@@ -546,7 +591,7 @@ KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
 # The issue titles this frame needs (issue #1921, --sidebar only): a local row's
 # (repo, #issue) key, looked up once below in its repo's issue cache.
 ITWANT=''; ISLUGS=' '
-while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn _; do
+while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn _ _ _ wepic; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   RFOLD=$rfold
@@ -573,6 +618,14 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
                            case "$ISLUGS" in *" $rslug "*) ;; *) ISLUGS+="$rslug " ;; esac; } ;; esac ;;
     esac
   fi
+  # An EPIC driver's row (issue #1958) is named after its parent issue: that
+  # title too, from the EPIC's own repo's cache — in the hub list as well.
+  case "$rwid" in wid:*) ;; *)
+    if [ -n "$wepic" ] && epic_ref_v "$wepic" && [ -n "$eslug" ]; then
+      ITWANT+="$eslug"$'\t#'"$en"$'\n'
+      case "$ISLUGS" in *" $eslug "*) ;; *) ISLUGS+="$eslug " ;; esac
+    fi ;;
+  esac
   okp_v "$wrepo" "$wnorepo"
   okey_v "$iss" "$wt" "$path"
   # A remote row: its worker_id (#1423). The row's id is `wid:<worker_id>`, its
@@ -777,8 +830,9 @@ buf=""
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load
 CFG_STALE_T='' CFG_RENEW_T=''
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic; do
   [ -z "$name" ] && continue
+  epic_v "$wepic" "$wid" "$wittl"
   # Is this session's configuration the one it would get now? A local row
   # compares its @agent_cfg (fleet_cfg_state); a row on another machine carries
   # that machine's own verdict (the hub cache's `cfg`, judged there against ITS
@@ -798,7 +852,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   if [ "$SIDEBAR" = 1 ]; then
     case "$wid" in
       wid:*) ;;
-      *) wittl=''
+      *) wittl=$ettl                                  # an EPIC row: its title (#1958)
          case "$iss" in ''|*[!0-9]*) ;; *)
            _ik=''
            cslug_v "$wrepo" "$wnorepo"; [ -n "$rslug" ] && _ik="$rslug"$'\t#'"$iss"
@@ -1004,6 +1058,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # deeper; a row that owns a subtree swaps its free cell for the fold caret
   # (`▾ ` a root, `└▾`, ` ▾`, `┊▾`). The name keeps all 26 of its cells.
   dname=$name; treed=''
+  [ -n "$en" ] && dname="#$en${ettl:+ $ettl}"           # an EPIC row (issue #1958)
   # agent tag (issue #547): a window running a non-Claude agent (@cc_agent, stamped
   # by bin/fleet-codex.sh) shows its agent name in the flex span — a Claude window
   # carries no @cc_agent and draws nothing. ASCII only, so the ${#tagd} width math
@@ -1074,6 +1129,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       if [ "$exp" = 1 ]; then carg='▾'; else carg='▸'; fi
     fi
   fi
+  [ -n "$ebadge" ] && kidd=$ebadge                    # an EPIC row: landed/members (#1958)
   # --- @title_info: the worker pane's header line (issue #1377) --------------
   # What the sidebar's selected-row line used to say, moved to where there is
   # room: the worker pane's top border (conf/tmux-attention.conf reads

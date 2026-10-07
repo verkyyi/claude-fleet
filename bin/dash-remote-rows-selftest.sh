@@ -30,6 +30,16 @@
 #                   its line in the cache (fleet-remote-view.sh open finds it there)
 #                   and is named in orch_<sess> (worker_id · machine · online · state ·
 #                   needs · question), but the sidebar draws NO row for it
+#   Q. one EPIC, one row — issue #1958: the window that drives a running EPIC
+#                   (@epic, in a 2-repo fleet) is ONE row named `#<N> <the EPIC's
+#                   title>`, badged landed/members off its heartbeat mark; its three
+#                   members (one in the other repo, tagged ⇢too, never listed twice)
+#                   are three rows under it; no mark ⇒ the subtree k/N; no @epic ⇒
+#                   the window's own name, byte for byte; a row from another machine
+#                   carries the same off the cache's 19th field (refresher + render);
+#                   leg G: the stamp marks its own pane's window, the adapter's
+#                   column 21 carries `epic=<ref>:<k>/<n>` + the EPIC's title, and
+#                   --clear unmarks the window
 #   D. no network — rendering with the hub on runs no curl/wget/nc/ccquota, and the
 #                   producer names none of them (nor the refresher)
 #   H. hub source — FLEET_SIDEBAR_SOURCE=hub (issue #1480, EPIC #1479 C1): the
@@ -784,6 +794,85 @@ hasnt "F: fold/pin/migrate on a remote row set no tmux option" "$(cat "$TMUX_LOG
 mv "$WORK/remote.f" "$G/remote_$S"; rm -f "$G/remote_fold_$S"
 
 # ============================================================================
+# Q. one EPIC, one row (issue #1958)
+# ============================================================================
+QS="epicq$$"
+mkdir -p "$WORK/conf/fleets/$QS/repos" "$WORK/.claude-dash/fleets/acme-app" "$WORK/conf/global/epic-running.d"
+printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$QS/conf"
+printf 'FLEET_REPO=acme/tool\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$QS/repos/acme-tool.conf"
+printf '\t#1949\t\t侧栏改版\n\t#1950\t\t只看只点\n' > "$WORK/.claude-dash/fleets/acme-app/issues"
+# WFMT, every field: 1 session · 2 idx · 3 name · 4 path · 5 state · 7 window id ·
+# 8 @issue · 9 @origin · 10 @worktree · 14 @expand · 20 @repo · 30 @epic
+we() { printf '%s\n' "$QS$US$1$US$2$US$3$US$4$US$US$5$US${6:-}$US${7:-}$US$3$US$US$US$US${10:-}$US$US$US$US$US$US${8:-}$US$US$US$US$US$US$US$US$US$US${9:-}" >> "$WLIST_FILE"; }
+cp "$WLIST_FILE" "$WORK/wlist.q"; : > "$WLIST_FILE"
+#  idx name       path                  state    wid issue origin               repo       epic           expand
+we 1  scratch-7  /w/app-scratch-7      looping  @1  ''    ''                   acme/app   acme/app#1949  1
+we 2  只看只点   /w/app-issue-1950     done     @2  1950  acme-app:scratch-7   acme/app
+we 3  底栏       /w/app-issue-1951     working  @3  1951  acme-app:scratch-7   acme/app
+we 4  工具活     /w/tool-issue-31      working  @4  31    acme-app:scratch-7   acme/tool
+we 5  单干       /w/app-issue-1960     working  @5  1960  ''                   acme/app
+qside() { PATH="$SHIMPATH" FLEET_SESSION=$QS bash "$ROWS" --sidebar 2>/dev/null | strip; }
+qhub()  { PATH="$SHIMPATH" FLEET_SESSION=$QS FZF_COLUMNS=140 bash "$ROWS" 2>/dev/null | strip; }
+MARK="$WORK/conf/global/epic-running.d/acme-app-1949"
+printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: acme/app\nlanded: 1\nmembers: 3\n' "$NOW" > "$MARK"
+q=$(unset CCQUOTA_FLEET; qside)
+eq "Q: the EPIC is one row, its three members right under it" \
+   "单干;#1949 侧栏改版;只看只点;底栏;工具活 ⇢too;" "$(sorder "$q")" "$q"
+eq "Q: …badged landed/members off its heartbeat mark, a root with its caret" "@1|▾|1/3|0|" "$(srow "$q" '#1949 侧栏改版')"
+eq "Q: …the member in the other repo hangs under it, tagged with its repo" "@4|└||1|" "$(srow "$q" '工具活 ⇢too')"
+eq "Q: …once — never again in its own repo's group" "1" "$(printf '%s\n' "$q" | LC_ALL=C grep -c '工具活')"
+eq "Q: …its title travels as the row's title field" "侧栏改版" \
+   "$(printf '%s\n' "$q" | LC_ALL=C awk -F"$US" '$4 == "#1949 侧栏改版" { print $14; exit }')"
+has "Q: the hub list names it the same way" "$(unset CCQUOTA_FLEET; qhub)" "#1949 侧栏改版"
+rm -f "$MARK"
+eq "Q: no mark — the subtree's own k/N" "@1|▾|1/3|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '#1949 侧栏改版')"
+printf 'epoch: %s\nlanded: 2\nmembers: 8\n' "$NOW" > "$MARK"
+eq "Q: the mark's count wins over the live subtree" "@1|▾|2/8|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '#1949 侧栏改版')"
+LC_ALL=C sed "s/${US}acme\/app#1949\$/$US/" "$WLIST_FILE" > "$WORK/wl.noepic"; cp "$WLIST_FILE" "$WORK/wl.epic"; cp "$WORK/wl.noepic" "$WLIST_FILE"
+q0=$(unset CCQUOTA_FLEET; qside)
+eq "Q: no @epic — the window's own name, the members nested as ever" "单干;scratch-7;只看只点;底栏;工具活 ⇢too;" "$(sorder "$q0")"
+eq "Q: …byte for byte the frame with no @epic field at all" "$q0" \
+   "$(LC_ALL=C sed "s/$US\$//" "$WORK/wl.noepic" > "$WLIST_FILE"; unset CCQUOTA_FLEET; qside)"
+cp "$WORK/wl.epic" "$WLIST_FILE"
+# another machine's driver: the cache's 19th field, its title the 17th
+FQ=44444444-5555-6666-7777-999999999999
+{ printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
+  printf 'wid:%s/acme-app:scratch-9\037m4\037online\037\037acme/app\037looping\037claude\037scratch-9\037\037\0370\037\037\037\037\037\037另一批\037\037acme/app#1982:2/5\n' "$FQ"
+  printf 'wid:%s/acme-app:issue-1983\037m4\037online\0371983\037acme/app\037working\037claude\037成员甲\037%s/acme-app:scratch-9\037\0370\037\n' "$FQ" "$FQ"
+} > "$G/remote_$QS"
+printf '%s\n' "$NOW" > "$G/hub_ok"
+printf '%s/acme-app:scratch-9\n' "$FQ" > "$G/remote_fold_$QS"
+qr=$(CCQUOTA_FLEET=1 qside)
+eq "Q: a remote driver is one row too, named and badged off its node's cell" "wid:$FQ/acme-app:scratch-9|▾|2/5|0|m4" "$(srow "$qr" '#1982 另一批')"
+eq "Q: …its member under it" "wid:$FQ/acme-app:issue-1983|└||1|m4" "$(srow "$qr" '成员甲')"
+# the refresher writes the cell: the worker's `epic` → field 19, title + reap kept before it
+python3 - "$WORK/sessions.json" "$WORK/sessions-epic.json" "$F" <<'PY2'
+import json, sys
+src, dst, f = sys.argv[1:4]
+d = json.load(open(src, encoding="utf-8"))
+w = dict(key="acme-app:scratch-5", identity=None, state="looping", lifecycle="awake", agent="claude", repo="acme/app",
+         name="scratch-5", title="第三批", epic="acme/app#1990:0/4")
+d["sessions"].append(dict(worker_id=f + "/acme-app:scratch-5", machine_name="mini2.local", os_user=d["sessions"][1]["os_user"],
+                          fleet_id=f, fleet_name="x", availability="online", worker=w, observed_at="2026-10-04T10:06:00Z"))
+w2 = dict(w, key="acme-app:scratch-6", name="scratch-6", title="", epic="acme/app#1;rm -rf")
+d["sessions"].append(dict(d["sessions"][-1], worker_id=f + "/acme-app:scratch-6", worker=w2))
+json.dump(d, open(dst, "w"), ensure_ascii=False)
+PY2
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-epic.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || fail "Q: --refresh (epic) failed"
+eq "Q: the refresher carries the cell as field 19, the title before it" "第三批||acme/app#1990:0/4" \
+   "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-5" '$1 == w { print $17 "|" $18 "|" $19 }' "$G/remote_$S")"
+eq "Q: …and drops a cell that is not one" "" \
+   "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-6" '$1 == w { print $19 }' "$G/remote_$S")"
+got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
+p = ["@5", "", "1", "/w/app-scratch-7", "looping", "claude", "a1", "", "acme/app", "scratch-7", "", "", "", "busy=", "born=", "cfg=", "title=侧栏改版", "reap=", "detail=", "role="]
+print(h.inventory_row(p + ["epic=acme/app#1949:1/3"])[1].get("epic"), h.inventory_row(p + ["epic=#7"])[1].get("epic"),
+      h.inventory_row(p + ["epic=x;y"])[1].get("epic"), h.inventory_row(p)[1].get("epic"), h.inventory_row(p)[1].get("title"))' 2>&1)
+eq "Q: inventory column 21 — a cell, a bare #N, junk dropped, absent on a 20-column row" "acme/app#1949:1/3 #7 None None 侧栏改版" "$got"
+rm -f "$G/remote_$QS" "$G/remote_fold_$QS" "$G/hub_ok" "$MARK"; rm -rf "$WORK/conf/fleets/$QS"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null   # leave leg E's cache as it was
+cp "$WORK/wlist.q" "$WLIST_FILE"
+
+# ============================================================================
 # G. inventory columns 10-12
 # ============================================================================
 if [ -n "$REAL_TMUX" ] && "$REAL_TMUX" -L "$S" -f /dev/null new-session -d -s "$S" -n plan 'while :; do sleep 300; done' 2>/dev/null; then
@@ -846,6 +935,35 @@ print(str(g.get("key")) + "|" + str(g.get("worker_id")) + "|" + str(r.get("key")
 d = json.load(sys.stdin); print(";".join(sorted(s["worker_id"].split("/", 1)[1] for s in d["sessions"])))' 2>&1)
   has "G: remote-view sessions lists the keyless window too" "$got" "$gfid"
   has "G: …and the cwd-keyed scratch" "$got" "scratch-21"
+  # Issue #1958: the heartbeat marks the driver's OWN window, the adapter's column
+  # 21 hands its EPIC (+ the mark's counts) on, its title is the EPIC's; --clear
+  # unmarks it. The pane is the one the stamp runs in ($TMUX/$TMUX_PANE).
+  mkdir -p "$WORK/wt/acme-scratch-22" "$WORK/.claude-dash/fleets/acme-app"
+  printf '\t#1949\t\t侧栏改版\n' > "$WORK/.claude-dash/fleets/acme-app/issues"
+  wd=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{window_id}' -n 'scratch-22' -c "$WORK/wt/acme-scratch-22" 'while :; do sleep 300; done')
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wd" @raw 1
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wd" @worktree "$WORK/wt/acme-scratch-22"
+  pd=$("$REAL_TMUX" -L "$S" display-message -p -t "$wd" '#{pane_id}')
+  sp=$("$REAL_TMUX" -L "$S" display-message -p '#{socket_path}')
+  tdir=$(dirname "$REAL_TMUX")
+  hb() { TMUX="$sp,1,0" TMUX_PANE="$pd" PATH="$tdir:$PATH" bash "$BIN/fleet-epic-heartbeat.sh" "$@" >/dev/null 2>&1; }
+  hb 1949 --repo acme/app --landed 1 --members 3 || fail "G: the heartbeat stamp failed"
+  eq "G: the stamp marks its own pane's window @epic <repo>#<N>" "acme/app#1949" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
+  has "G: …and writes the counts into this batch's mark" "$(cat "$FLEET_CONF_DIR/global/epic-running.d/acme-app-1949")" "landed: 1"
+  got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
+ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
+w = [x for x in ctl.workers(f)["workers"] if x["name"] == "scratch-22"][0]
+print(str(w.get("epic")) + "|" + str(w.get("title")) + "|" + str(w.get("key")))' "$FLEET_CONF_DIR" "$S" 2>&1)
+  eq "G: column 21 carries the EPIC + its counts; the title is the EPIC's" "acme/app#1949:1/3|侧栏改版|acme-app:scratch-22" "$got"
+  got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
+ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
+print(";".join(sorted(str(w.get("epic")) for w in ctl.workers(f)["workers"] if w["name"] != "scratch-22")))' "$FLEET_CONF_DIR" "$S" 2>&1)
+  hasnt "G: …no other window carries one" "$got" "#"
+  hb --clear 1950
+  eq "G: --clear of another EPIC leaves the window marked" "acme/app#1949" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
+  hb --clear 1949
+  eq "G: --clear <N> unmarks it" "" "$("$REAL_TMUX" -L "$S" show-options -wqv -t "$wd" @epic)"
+  "$REAL_TMUX" -L "$S" kill-window -t "$wd" 2>/dev/null
 else
   printf 'dash-remote-rows selftest: no isolated tmux server — leg G (live adapter) skipped\n' >&2
 fi
