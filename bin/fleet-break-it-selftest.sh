@@ -50,6 +50,8 @@
 #   reconnect-stale-view / reconnect-mouse          bin/fleet-remote-view.sh (run, open, select)
 #   view-reconnect-shared                           bin/fleet-remote-view.sh (attach, rv_prune)
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
+#   hub-restart-where                               bin/fleet-shell.sh (keeper renew), fleet-client-lease.py renew,
+#                                                   fleet-client-where.sh
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
 #   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
 #   zsh-guard-fleet-label                           shell/cw.zsh tmux()
@@ -72,7 +74,7 @@ cleanup() {
   for s in "$WORK"/sock-*; do [ -S "$s" ] && "$REAL_TMUX" -S "$s" kill-server 2>/dev/null; done
   for s in kf "kscr$$"; do TMUX_TMPDIR="$WORK/ktt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   for s in vrn vrc; do TMUX_TMPDIR="$WORK/vt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
-  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}o" "${CSESS}o-stage" "${CSESS}u" "${CSESS}u-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
+  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}o" "${CSESS}o-stage" "${CSESS}u" "${CSESS}u-stage" "${CSESS}w" "${CSESS}w-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   pkill -f "fleet-shell.sh keeper $CSESS" 2>/dev/null
   pkill -f "$WORK/" 2>/dev/null
   [ -n "${BREAK_KEEP:-}" ] && { printf 'kept %s\n' "$WORK" >&2; return; }
@@ -2157,6 +2159,103 @@ PY
   grep -q 'switch-client -c "$c"' "$BIN/fleet-remote-view.sh" \
     || { WHY="fleet-remote-view.sh select no longer switches the view's own client"; return 1; }
   SECS=$(since "$t0"); WHAT="160 列与 50 列两个客户端看同一窗口：谁打字跟谁；视图切窗口也按自己的宽度"
+}
+
+# ---- hub-restart-where (#1995): the hub keeps the client leases in memory, so a
+# deploy forgets them; each live client's next renewal re-adopts its own id — but
+# until 2026-10-06 a renewal carried only the lease id, so the re-adopted lease
+# had no device, terminal or caps and fleet-client-where.sh said 未知设备 until
+# the client was opened again. The real client (bin/fleet → fleet-shell.sh's
+# keeper → fleet-client-lease.py) against a fake hub keeping the hub's rules (a
+# renewal of an unknown id is adopted and filled from its body — Go's
+# TestClientLeaseRenewRefillsAfterRestart pins the hub's own): where before, the
+# hub's memory wiped, where after ONE renewal.
+drill_hub_restart_where() {
+  CAP=20; local t0 s="${CSESS}w" sc="$WORK/hrw" out port='' _ hpid
+  client_setup
+  mkdir -p "$sc"
+  cat > "$sc/hub.py" <<'PY'
+import json, signal, sys, threading, time, uuid
+from http.server import BaseHTTPRequestHandler, HTTPServer
+signal.alarm(int(sys.argv[2]))
+cur, log = {}, open(sys.argv[3], "a", buffering=1)
+def fill(l, b):
+    for k in ("device", "terminal", "os", "via", "host", "version"):
+        if (b.get(k) or "").strip(): l[k] = b[k].strip()
+    if b.get("caps") is not None: l["caps"] = b["caps"]
+    l.setdefault("device", "未知设备")
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        b = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        if self.path == "/_restart":
+            cur.clear(); log.write("RESTART\n"); out = {}
+        elif self.path in ("/v1/fleet/client", "/v1/fleet/client/test"):
+            act, lid = b.get("action") or "get", b.get("lease") or ""
+            log.write("%s %s %s\n" % (act, lid, json.dumps({k: v for k, v in b.items() if k not in ("action", "lease")}, ensure_ascii=False)))
+            if act == "acquire":
+                lid = lid if lid in cur else uuid.uuid4().hex[:12]
+                cur.setdefault(lid, {"id": lid})
+            elif act in ("renew", "input"):
+                cur.setdefault(lid, {"id": lid})   # a restart: the same id, adopted
+            if act in ("acquire", "renew", "input"):
+                fill(cur[lid], b); cur[lid]["at"] = time.time()
+                out = {"state": "active", "lease": cur[lid]}
+            elif act == "release":
+                cur.pop(lid, None); out = {"state": "released"}
+            else:
+                p = max(cur.values(), key=lambda l: l["at"], default=None)
+                out = {"state": "active", "lease": p, "clients": [p], "primary": p["id"]} if p else {"state": "none"}
+            if "/test" in self.path: out["identity"] = "test"
+        else:
+            self.send_response(404); self.end_headers(); return
+        d = json.dumps(out).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(d))); self.end_headers(); self.wfile.write(d)
+    do_GET = lambda self: (self.send_response(404), self.end_headers())
+srv = HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1] + ".tmp", "w").write(str(srv.server_address[1])); __import__("os").replace(sys.argv[1] + ".tmp", sys.argv[1])
+srv.serve_forever()
+PY
+  : > "$sc/log"
+  # a busy macOS runner takes seconds to start a python: the start is not timed
+  python3 "$sc/hub.py" "$sc/port" "$((CAP + 90))" "$sc/log" 2>"$sc/hub.err" & hpid=$!
+  for _ in $(seq 1 300); do [ -s "$sc/port" ] && break; sleep 0.1; done
+  { read -r port < "$sc/port"; } 2>/dev/null
+  [ -n "$port" ] || { kill "$hpid" 2>/dev/null; WHY="the fake hub did not start in 30s: $(tail -2 "$sc/hub.err" | tr '\n' ' ')"; return 1; }
+  local hub="http://127.0.0.1:$port" before
+  # where, as a session on this machine reads it
+  hw() { ( client_env; export FLEET_HUB_URL="$hub" FLEET_HUB_TOKEN=tok FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$sc/cache"
+           unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_WORKER_CRED FLEET_WORKER_ASSERT FLEET_SEAT FLEET_CLIENT_IDENTITY
+           bash "$BIN/fleet-client-where.sh" 2>&1 ); }
+  if ! client_start "$s" FLEET_HUB_URL="$hub" FLEET_HUB_TOKEN=tok FLEET_CLIENT_DEVICE="Verky's Mac" \
+       LC_TERMINAL=iTerm2 LC_TERMINAL_VERSION=3.6 FLEET_CLIENT_XTVERSION=0 FLEET_CLIENT_IDENTITY=person \
+       FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_SHELL_CACHE="$sc/cache"; then
+    kill "$hpid" 2>/dev/null; WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1
+  fi
+  out=''
+  for _ in $(seq 1 100); do out=$(hw); case "$out" in *"Verky's Mac"*iTerm2*) break ;; esac; sleep 0.1; done
+  before=$out
+  printf '入口重启前：%s\n' "$out" > "$sc/where.txt"
+  case "$out" in *"Verky's Mac"*iTerm2*) ;; *)
+    kill "$hpid" 2>/dev/null; "$REAL_TMUX" -L "$s" kill-server 2>/dev/null
+    WHY="before the restart where said [$out] (hub saw: $(tail -3 "$sc/log" | tr '\n' ' '))"; return 1 ;; esac
+  # the hub restarts: every lease forgotten
+  curl -s -X POST -d '{}' "$hub/_restart" >/dev/null
+  t0=$(now)
+  printf '入口重启后：%s\n' "$(hw)" >> "$sc/where.txt"
+  for _ in $(seq 1 $((CAP * 10))); do
+    grep -q '^RESTART' "$sc/log" && sed -n '/^RESTART/,$p' "$sc/log" | grep -q '^renew ' && { out=$(hw); [ "$out" = "$before" ] && break; }
+    sleep 0.1
+  done
+  SECS=$(since "$t0")
+  printf '一次续租后：%s\n' "$out" >> "$sc/where.txt"
+  [ -n "${BREAK_WHERE_OUT:-}" ] && cp "$sc/where.txt" "$BREAK_WHERE_OUT"
+  "$REAL_TMUX" -L "$s" kill-server 2>/dev/null
+  sleep 0.3; kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+  case "$out" in "$before") ;; *)
+    WHY="after the hub restarted and the client renewed, where said [$out] (renewal sent: $(sed -n '/^RESTART/,$p' "$sc/log" | grep -m1 '^renew '))"; return 1 ;; esac
+  WHAT="入口重启（清空租约）后，客户端下一次续租补上设备 / 终端 / 能力：where 回到 Verky's Mac · iTerm2"
 }
 
 # ================================================================ run ===========
