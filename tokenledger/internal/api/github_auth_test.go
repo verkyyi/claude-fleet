@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -100,6 +101,13 @@ type ghHarness struct {
 
 func newGitHubHarness(t *testing.T, admins ...string) *ghHarness {
 	t.Helper()
+	return newGitHubHarnessWith(t, nil, admins...)
+}
+
+// newGitHubHarnessWith lets a test set more of the Server (the fleet module,
+// /mcp) before its routes are mounted.
+func newGitHubHarnessWith(t *testing.T, more func(*Server), admins ...string) *ghHarness {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +118,9 @@ func newGitHubHarness(t *testing.T, admins ...string) *ghHarness {
 		GitHub: &GitHubAuth{ClientID: "Iv1.test", ClientSecret: "shh", Admins: admins,
 			AuthorizeURL: gh.srv.URL + "/login/oauth/authorize", TokenURL: gh.srv.URL + "/login/oauth/access_token",
 			APIBase: gh.srv.URL}}
+	if more != nil {
+		more(srv)
+	}
 	mux := http.NewServeMux()
 	// A route behind adminOnly that needs no fleet module, for the role table.
 	mux.Handle("/test/admin", srv.viewerOnly(srv.adminOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -273,8 +284,9 @@ func TestGitHubSignIn_WhoGetsIn(t *testing.T) {
 			if code != http.StatusOK {
 				t.Fatalf("/v1/me = %d", code)
 			}
-			want := Me{Via: "github", Role: tc.wantRole, Person: githubPrincipal(tc.as.ID), Name: tc.as.Login, CanLogout: true}
-			if m != want {
+			want := Me{Via: "github", Role: tc.wantRole, Person: githubPrincipal(tc.as.ID), Name: tc.as.Login, CanLogout: true,
+				Pages: pagesFor(tc.wantRole)}
+			if !reflect.DeepEqual(m, want) {
 				t.Errorf("/v1/me = %+v; want %+v", m, want)
 			}
 			if !hasAudit(h.audit(t), "ok", "as "+tc.wantRole) {

@@ -224,6 +224,9 @@ func (s *Server) handleFleetDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pid := principalOf(r.Context())
+	if seesAll(r) {
+		pid = "" // an admin sees everyone's, as the operator's doors do (claude-fleet#1985)
+	}
 	devs, err := s.Store.Devices(pid, 200)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
@@ -269,7 +272,9 @@ func (s *Server) handleFleetDeviceRevoke(w http.ResponseWriter, r *http.Request)
 	}
 	pid := principalOf(r.Context())
 	actor := "operator"
-	if pid != "" {
+	if pid != "" && seesAll(r) {
+		actor = pid // an admin revokes any device, under their own name
+	} else if pid != "" {
 		if dev.PrincipalID != pid {
 			httpError(w, http.StatusForbidden, "not your device")
 			return

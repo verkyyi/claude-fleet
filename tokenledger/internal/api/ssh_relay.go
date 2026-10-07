@@ -187,7 +187,11 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 	}
 	// A GitHub person (claude-fleet#1984), on the list right now.
 	if sess, id, ok := s.githubSession(r); ok {
-		if role, err := s.githubRole(id); err == nil && role != "" {
+		if role, err := s.githubRole(id); err == nil && role == roleAdmin {
+			// An admin sees every machine, as the operator's doors do
+			// (claude-fleet#1985).
+			return sshRelayIdentity{Operator: true, Actor: sess.UID}, true
+		} else if err == nil && role != "" {
 			return sshRelayIdentity{Principal: sess.UID, Actor: sess.UID}, true
 		}
 	}

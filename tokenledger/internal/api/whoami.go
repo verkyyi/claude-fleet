@@ -71,8 +71,13 @@ type Me struct {
 	// hub has on record for them (an earlier ticket, the operator's adopt);
 	// else empty, and the header shows the userid.
 	Name string `json:"name,omitempty"`
-	// Login is the tailnet login a tailnet door admitted.
+	// Login is the tailnet login a tailnet door admitted — or, for a GitHub
+	// or WeCom person, the machine login the hub knows as theirs: the os_user
+	// a user's rows are cut to (claude-fleet#1985). Empty when none is set.
 	Login string `json:"login,omitempty"`
+	// Pages is what the menu shows this role (claude-fleet#1985): a user's
+	// overview, sessions, devices, config; an admin's every page.
+	Pages []string `json:"pages"`
 	// CanLogout says a cookie THIS hub minted is behind the request, so
 	// POST /logout has something to clear. A bearer header has none.
 	CanLogout bool `json:"can_logout"`
@@ -88,6 +93,15 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := Me{Via: doorOf(r.Context()), Role: roleOf(r.Context())}
+	out.Pages = pagesFor(out.Role)
+	if pid := principalOf(r.Context()); pid != "" {
+		login, err := s.machineLoginOf(pid)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out.Login = login
+	}
 	switch out.Via {
 	case doorGitHub:
 		// The person is gh:<id>; the name is their GitHub username.

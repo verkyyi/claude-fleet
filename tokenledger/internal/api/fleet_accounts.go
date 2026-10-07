@@ -65,24 +65,17 @@ func (s *Server) FleetScope(r *http.Request) (func(hostname, osUser string) bool
 			mine[[2]string{a.Hostname, a.Login}] = true
 		}
 	}
-	return func(hostname, osUser string) bool { return mine[[2]string{hostname, osUser}] }, nil
-}
-
-// adminOnly refuses a user: account assignment is an admin's, not something
-// a colleague can widen for themselves. It lets through an admin (a GitHub
-// person CCQUOTA_GITHUB_ADMINS names) and the operator's shared doors (the
-// viewer token, a tailnet peer), and refuses everyone else roleOf calls a
-// user — a GitHub user, a WeCom person (EPIC #1982 rule 3; adminOnly
-// before claude-fleet#1984). Mounted INSIDE viewerOnly, so it only ever sees
-// an already-admitted request.
-func (s *Server) adminOnly(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if roleOf(r.Context()) == roleUser {
-			httpError(w, http.StatusForbidden, "only the operator can change accounts")
-			return
+	// A GitHub user (claude-fleet#1985) has no assigned logins; theirs is the
+	// one machine login an admin set for them, on whichever machine has it.
+	var login string
+	if _, gh := githubIDOf(pid); gh {
+		if login, err = s.machineLoginOf(pid); err != nil {
+			return nil, err
 		}
-		next.ServeHTTP(w, r)
-	})
+	}
+	return func(hostname, osUser string) bool {
+		return mine[[2]string{hostname, osUser}] || (login != "" && osUser == login)
+	}, nil
 }
 
 func (s *Server) isFleetAdmin(osUser string) bool {
