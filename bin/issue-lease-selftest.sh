@@ -273,7 +273,6 @@ ok "FORCE --force → acquire --force, takeover announced, spawn"
 out=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" \
   CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_ANSWER="GRANTED m4" bash -c '
     . "$1/fleet-lib.sh"
-    _fleet_hosts_many() { return 0; }
     fleet_slug() { printf "wd"; }
     : > "$2"; fleet_hub_lease acquire testsess acme/widgets 12' _ "$BIN" "$LEASE_LOG")
 lease_has "acquire acme/widgets 12 $UUID/wd:issue-12" || fail "MULTI a multi-repo lease must use the <slug>:issue-<N> key"

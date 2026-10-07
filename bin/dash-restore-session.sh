@@ -101,15 +101,22 @@ refuse() { printf 'dash-restore-session: %s\n' "${1#restore: }" >&2; TM display-
 # Session cap (issues #28/#70): a restored session holds a slot like any spawn.
 if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then refuse "$cap_msg"; exit 2; fi
 
-MULTI=0; _fleet_hosts_many "$SESS" && MULTI=1
-if [ -z "$REPO_ARG" ] && [ "$MULTI" = 1 ]; then
-  refuse "restore: this fleet hosts several repos and the row names none — pass --repo"; exit 1
-fi
-if [ -n "$REPO_ARG" ]; then
-  REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
-  fleet_load_repo_conf "$SESS" "$REPO_ARG" \
-    || { refuse "restore: $REPO_ARG is not a repo this fleet hosts"; exit 1; }
-fi
+# Which repo — ONE rule, however many repos the fleet hosts (issue #1943): --repo
+# (the row's), which must be hosted; else the fleet's only repo; several ⇒ refuse.
+# Asked with no pane: the caller's window says nothing about the row restored.
+_rc=0; _r=$(unset TMUX_PANE; fleet_target_repo "$SESS" "$REPO_ARG") || _rc=$?
+case "$_rc" in
+  0) REPO_ARG=$_r
+     # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN: nothing to overlay.
+     if [ -n "$(fleet_repos "$SESS")" ]; then
+       fleet_load_repo_conf "$SESS" "$REPO_ARG" \
+         || { refuse "restore: $REPO_ARG is not a repo this fleet hosts"; exit 1; }
+     fi ;;
+  4) refuse "restore: this fleet hosts several repos and the row names none — pass --repo"; exit 1 ;;
+  *) if [ -n "$REPO_ARG" ]; then refuse "restore: $(fleet_norm_repo "$REPO_ARG") is not a repo this fleet hosts"; exit 1; fi
+     REPO_ARG='' ;;
+esac
+unset _r _rc
 MAIN="${FLEET_MAIN:-}"; REPO="${FLEET_REPO:-}"
 [ -d "$MAIN/.git" ] || { refuse "restore: FLEET_MAIN is not a git checkout"; exit 1; }
 
@@ -183,8 +190,8 @@ bind_marks() {  # $1 = window-id, $2 = worktree (may be empty) — mark the rest
 # Spawn is non-invasive by default: -d keeps the active window put; opt into the
 # jump with FLEET_SPAWN_FOCUS=1 on an interactive (no TARGET_SESS) restore.
 detach=(-d); [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ] && detach=()
-# 2+ repos: the window stamps @repo before its launcher reads the conf (issue #789).
-stamp=''; [ "$MULTI" = 1 ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO")
+# The window stamps @repo before its launcher reads the conf (issue #789).
+stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO")
 
 announce() {  # $1 = window-id, $2 = message
   if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then TM select-window -t "$1"

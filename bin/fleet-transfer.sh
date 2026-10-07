@@ -232,13 +232,11 @@ if [ -z "$WT" ]; then
 fi
 [ -n "$WT" ] && [ -d "$WT" ] || die 'window has no existing @worktree'
 WT=$(cd "$WT" && pwd -P) || die 'cannot resolve worktree'
-if fleet_has_repo_overlays "$SESS"; then
-  # "Registered to this fleet" = registered to ANY repo it hosts (issue #791); the
-  # repo that registers it is the one the handoff records.
-  IFS=$'\t' read -r _wrepo _wmain <<< "$(fleet_worktree_repo "$SESS" "$WT")"
-  [ -n "${_wmain:-}" ] || die 'worktree is not registered to this fleet'
-  FLEET_REPO=$_wrepo; FLEET_MAIN=$_wmain
-fi
+# "Registered to this fleet" = registered to ANY repo it hosts (issue #791); the
+# repo that registers it is the one the handoff records. None does ⇒ the check
+# below refuses (compat-1v: 下一批删 — or a pre-#1937 conf's own FLEET_MAIN does).
+IFS=$'\t' read -r _wrepo _wmain <<< "$(fleet_worktree_repo "$SESS" "$WT")"
+[ -n "${_wmain:-}" ] && { FLEET_REPO=$_wrepo; FLEET_MAIN=$_wmain; }
 MAIN=$(cd "${FLEET_MAIN:-/nonexistent}" && pwd -P) || die 'fleet base checkout not found'
 [ "$WT" != "$MAIN" ] && [ -f "$WT/.git" ] || die 'source must own a linked worktree, never the base checkout'
 [ "$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null)" = "$WT" ] || die 'invalid worktree'

@@ -159,6 +159,7 @@ watch_fleet() { (
     exit 0
   fi
 
+  # compat-1v: 下一批删
   # The fleet's first repo names the lease and the ledger a bare (pre-#1941)
   # snapshot key belongs to; every live window is keyed by its own repo below.
   repo=$(fleet_repo_first "$sess")

@@ -598,8 +598,8 @@ repo*. A key's `@scope=global` tag still picks the FILE (such keys go to
 `fleet.settings`, because `fleet_load_conf` strips them from a fleet `conf`), but
 it is never a scope to switch to nor a reason to refuse an edit. The install's
 `fleet.conf` is a read-only legacy layer: read, so an old install loads unchanged,
-never written. In a one-repo fleet the repo layer IS the fleet `conf`, so a repo
-edit never creates `repos/` and the degenerate fleet stays byte for byte.
+never written. A repo edit writes that repo's overlay (`repos/<slug>.conf`) however
+many repos the fleet hosts (issue #1943).
 
 ### A fleet can host several repos (issue #788)
 
@@ -659,22 +659,22 @@ origin and stamps it, else takes the fleet's only repo, else answers **nothing**
 window resolves to a hosted repo, that repo's overlay is applied on top (the conf
 repo's identity + deploy keys are dropped first, so they never leak across). That
 one change moves every in-pane consumer — hooks, `commands/*.md`, the launcher's
-trust/model/MCP, the claim brief. **Degenerate case:** with no `repos/` dir it
-returns before any tmux call, byte-for-byte what it did before
+trust/model/MCP, the claim brief. An old-layout fleet with no `repos/` dir (read
+for one version, issue #1937) still returns before any tmux call
 (`bin/fleet-repo-selftest.sh` pins it). The collector and pr-refresh fetch
 `issues`/`prmap` for every hosted repo, and `hooks/base-readonly-guard.py`
 protects every hosted repo's `FLEET_MAIN`.
 
 PR status joins on **(repo, branch)**, never the branch alone (issue #792) — two
-hosted repos can each have an `issue-3`. Once a fleet has a `repos/` overlay
-(`fleet_has_repo_overlays`, builtins only), pr-refresh matches each window against
+hosted repos can each have an `issue-3`. In every fleet (issues #1940, #1941),
+pr-refresh matches each window against
 its own repo's `fleets/<slug>/prmap` (stamping `@repo` through `fleet_window_repo`
 for a window that has none), and the dash's row producer reads `@repo`/`@norepo`
 off its one `list-windows` and keys the frame's narrowed haystack
 `<slug>\t<branch>` — still one awk per frame, so #662's bound holds. `deploy_<sha>`
 is read from the window repo's dir. A window with no repo, or an unknown one in a
-2+ repo fleet, gets no PR cell. No overlay → the per-session prmap exactly as
-before (`bin/dash-rows-multirepo-pr-selftest.sh`).
+2+ repo fleet, gets no PR cell. A second repo arriving changes no row of the first
+(`bin/dash-rows-multirepo-pr-selftest.sh`).
 
 **Cleanup stays inside its own repo (issue #791).** A reaper acts on a window,
 so it takes its repo FROM that window (`fleet_load_window_conf`), never from the
@@ -690,17 +690,18 @@ unknown, or `@norepo 1`, is **never reaped automatically** — its worktree is l
 alone. ⌃x still closes a `@norepo` session (there is no worktree to drop); ⌃x on
 an issue window whose repo cannot be told is refused until its `@repo` is set,
 and a SessionEnd there closes the window without touching any worktree.
-Degenerate: every caller takes its historic path when the fleet has no overlay (`fleet_has_repo_overlays`);
+One road (issue #1943): a one-repo fleet joins on (repo, issue) too —
 `bin/fleet-cleanup-multirepo-selftest.sh` pins both.
 
 **Every session is born knowing its repo (issue #789).** Each spawner takes
 `--repo owner/name` and loads that repo's overlay (`fleet_load_repo_conf`), so the
-worktree comes off that repo's checkout: `dash-issue-session.sh` requires it once
-the fleet hosts 2+ repos (a one-repo fleet defaults to its only repo);
+worktree comes off that repo's checkout: `dash-issue-session.sh` takes `--repo`,
+else the fleet's only repo, and refuses (asks) when there are several
+(`fleet_target_repo` asked with no pane, issue #1943);
 `dash-raw-session.sh` takes the highlighted row's or heading's repo, else makes
 a **no-repo** session; `dash-restore-session.sh` takes the row's repo.
-Every worker window is stamped `@repo` + `@worktree`. In a 2+ repo fleet the window
-stamps them on ITSELF as the first thing its command runs (`fleet_win_stamp_cmd`),
+Every worker window is stamped `@repo` + `@worktree`, and stamps them on ITSELF as
+the first thing its command runs (`fleet_win_stamp_cmd`),
 because the launcher's window-aware `fleet_load_conf` would otherwise race a
 set-option from the spawner and pick up the wrong repo's trust, model and MCP.
 Spawn dedup is keyed on (repo, N); a window whose repo is unknown still blocks.
@@ -711,18 +712,18 @@ resolve a worktree to remove, and no ledger row is written. A Claude one launche
 with `--session-id <uuid>` (`@norepo_sid`), so restore resumes exactly that
 conversation rather than whatever else ran last in `$HOME`.
 
-`restore.map` WIN rows gain column 16, the repo (`-` = no-repo). It is written only
-in a 2+ repo fleet or for a no-repo session, so a one-repo fleet's map is
-byte-identical; an old row without it gets `@worktree` stamped, and
-`fleet_window_repo` derives the repo from that. In a 2+ repo fleet provenance keys
-are repo-qualified: `<slug>:issue-N` / `<slug>:scratch-N` (slug = `fleet_slug
-owner/name`). `fleet_origin_key` mints them, `fleet_origin_canon` keeps them and
-`fleet_win_for_key` resolves them only to a window of that repo. A one-repo fleet's
-keys are unchanged. `bin/fleet-repo-session-selftest.sh` pins all of it.
+`restore.map` WIN rows gain column 16, the repo (`-` = no-repo), in every fleet
+(issue #1943); an old row without it gets `@worktree` stamped, and
+`fleet_window_repo` derives the repo from that. Provenance keys are
+repo-qualified in every fleet (issue #1939): `<slug>:issue-N` / `<slug>:scratch-N`
+(slug = `fleet_slug owner/name`). `fleet_origin_key` mints them, `fleet_origin_canon`
+keeps them and `fleet_win_for_key` resolves them only to a window of that repo; a
+bare `issue-N` is read in a one-repo fleet for one version.
+`bin/fleet-repo-session-selftest.sh` pins all of it.
 
 **Identity is (repo, issue), never a bare number (issue #790).** Two hosted repos
 can both have an issue #12, so every join that finds a session by its issue
-number keys on the pair once the fleet hosts 2+ repos (`fleet_multirepo`):
+number keys on the pair, however many repos the fleet hosts (issue #1939):
 `fleet_issue_key` / `fleet_window_key` spell it `<owner/name>#<N>`, and
 `fleet_bound_windows` lists a fleet's bound windows by that key. A window whose
 repo is unknown gets `#<N>` — equal to no real key, so no join picks it by
@@ -820,7 +821,9 @@ runs the whole path on one throwaway fleet hosting two repos — `fleet-repo.sh 
 (no gate), issue #12 and a scratch in both repos plus a no-repo session, a real
 collector + pr-refresh tick, A's PR merging, one cleanup tick, the dash and backlog
 under `all` (a stale `current-repo` file changing nothing), and a snapshot → kill → restore round-trip —
-with a one-repo fleet beside it as the degenerate control. It gives each of the nine
+with a one-repo fleet beside it on the same road, and (issue #1943) a one-repo
+fleet that gains a second repo and loses it again while its sessions' keys, rows,
+working directories, restore rows and child ledger stay byte for byte. It gives each of the nine
 leak classes EPIC #787 counted (PR/CI by branch, cleanup by bare number, issue-number
 collisions, scratch/origin keys, one MAIN per reaper, worktree-name clash,
 guard/trust, collector/backlog/hub, restore) at least one assertion, and prints

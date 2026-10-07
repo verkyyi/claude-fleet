@@ -91,14 +91,13 @@ case "$max_age" in *[!0-9]*) die "--max-age must be whole seconds (got $max_age)
 
 repo="${repo:-${CF_REPO:-}}"
 _fs=$(fleet_current_session)
-if [ -z "$repo" ] && [ -n "$_fs" ] && _fleet_hosts_many "$_fs"; then
-  [ -n "${TMUX_PANE:-}" ] && repo=$(fleet_window_repo "$_fs" "$TMUX_PANE")
-  [ -n "$repo" ] || die "this fleet hosts several repos — pass --repo <owner/name>"
+# The one rule (issue #1943): the calling window's repo, else the fleet's only
+# one; several and no window repo ⇒ refuse rather than guess.
+if [ -z "$repo" ] && [ -n "$_fs" ]; then
+  _rc=0; repo=$(fleet_target_repo "$_fs") || _rc=$?
+  [ "$_rc" = 4 ] && die "this fleet hosts several repos — pass --repo <owner/name>"
 fi
-if [ -z "$repo" ]; then
-  repo="${FLEET_REPO:-}"
-  _r=$(fleet_repo_cached "$_fs"); [ -n "$_r" ] && repo="$_r"
-fi
+[ -n "$repo" ] || repo="${FLEET_REPO:-}"   # outside a fleet: the conf's
 [ -n "$repo" ] || die "no repo resolved (set --repo or FLEET_REPO)"
 repo=$(fleet_norm_repo "$repo")
 

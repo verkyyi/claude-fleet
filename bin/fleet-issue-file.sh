@@ -100,22 +100,17 @@ if [ -n "$priority" ]; then
   esac
 fi
 
-# Repo resolution mirrors bin/fleet-comment.sh / bin/dash-issue-new.sh: an explicit
-# --repo wins, else $CF_REPO (passed through a popup), else this fleet's cached
-# repo, else the global FLEET_REPO.
-# A fleet hosting 2+ repos (issue #789) caches no single repo worth trusting: the
-# CALLING window's repo is the default there, else (a hub / no-repo pane, issue
-# #794) it refuses — an issue belongs to one repo.
+# Repo resolution: an explicit --repo wins, else $CF_REPO (passed through a popup),
+# else the one rule (fleet_target_repo, issue #1943): the CALLING window's repo,
+# else the fleet's only one — several and a hub / no-repo pane (issue #794) ⇒
+# refuse, an issue belongs to one repo. Outside a fleet: the conf's FLEET_REPO.
 repo="${repo:-${CF_REPO:-}}"
 _fs=$(fleet_current_session)
-if [ -z "$repo" ] && [ -n "$_fs" ] && _fleet_hosts_many "$_fs"; then
-  [ -n "${TMUX_PANE:-}" ] && repo=$(fleet_window_repo "$_fs" "$TMUX_PANE")
-  [ -z "$repo" ] && { printf 'fleet-issue-file: this fleet hosts several repos and shows all — pass --repo <owner/name>\n' >&2; exit 1; }
+if [ -z "$repo" ] && [ -n "$_fs" ]; then
+  _rc=0; repo=$(fleet_target_repo "$_fs") || _rc=$?
+  [ "$_rc" = 4 ] && { printf 'fleet-issue-file: this fleet hosts several repos and shows all — pass --repo <owner/name>\n' >&2; exit 1; }
 fi
-if [ -z "$repo" ]; then
-  repo="${FLEET_REPO:-}"
-  _r=$(fleet_repo_cached "$_fs"); [ -n "$_r" ] && repo="$_r"
-fi
+[ -n "$repo" ] || repo="${FLEET_REPO:-}"
 [ -z "$repo" ] && { printf 'fleet-issue-file: no repo resolved (set --repo or FLEET_REPO)\n' >&2; exit 1; }
 command -v gh >/dev/null 2>&1 || { printf 'fleet-issue-file: gh not on PATH\n' >&2; exit 1; }
 
@@ -215,9 +210,8 @@ fi
 # below, say on stderr that the number is on the backlog, so a headless caller
 # that only reads the URL on stdout still learns no worker took it.
 if [ "$spawn" = 1 ] && [ -n "$num" ]; then
-  # --repo only where it is needed (issue #789): a one-repo fleet's call is unchanged.
-  _sr=''; [ -n "$_fs" ] && _fleet_hosts_many "$_fs" && _sr=$repo
-  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" ${_sr:+--repo "$_sr"}; _rc=$?
+  # The spawn always names the repo the issue was filed in (issues #789, #1943).
+  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" --repo "$repo"; _rc=$?
   if [ "$_rc" -ne 0 ]; then
     printf 'fleet-issue-file: filed #%s but the spawn was refused — it is on the backlog\n' "$num" >&2
     # 4 = no live parent (issue #1355): not a backlog-and-move-on refusal — the

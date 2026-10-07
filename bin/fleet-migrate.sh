@@ -424,10 +424,11 @@ migrate_one_body() {
   else
     sid=$(session_id_for "$cpid" "$cwd") || sid=""
   fi
-  # A multi-repo fleet has one base checkout per hosted repo (issue #791): a raw
-  # pane sitting in ANY of them is the "main-cwd" case, not only the conf repo's.
-  local wmain="${FLEET_MAIN:-}"
-  fleet_has_repo_overlays "$SESS" && wmain=$(fleet_repo_mains "$SESS" | grep -Fx -- "${cwd%/}" | head -n 1)
+  # A fleet has one base checkout per hosted repo (issue #791): a raw pane sitting
+  # in ANY of them is the "main-cwd" case. (FLEET_MAIN too — compat-1v: 下一批删,
+  # a pre-#1937 conf naming only a checkout lists no repo.)
+  local wmain
+  wmain=$( { fleet_repo_mains "$SESS"; printf '%s\n' "${FLEET_MAIN:-}"; } | grep -Fx -- "${cwd%/}" | head -n 1)
   if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{@hub}' 2>/dev/null)" "$raw" "$cwd" "$wmain" "$sid"; then
     say "  – $name ($wid): not eligible (panel/hub/main-cwd) — skipped"; skipped=$((skipped+1)); return 0
   fi
@@ -637,7 +638,7 @@ migrate_one_body() {
     TM display-message -p -t "$wid" '' >/dev/null 2>&1 && TM kill-window -t "$wid" 2>/dev/null
     # 4. a NEW window, same name + cwd, resumed under the active account.
     local stamp=''
-    [ -n "$wrepo" ] && _fleet_hosts_many "$SESS" && stamp=$(fleet_win_stamp_cmd @repo "$wrepo")
+    [ -n "$wrepo" ] && stamp=$(fleet_win_stamp_cmd @repo "$wrepo")
     [ "$norepo" = 1 ] && stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
     nw=$(TM new-window -d -t "$SESS:" -n "$name" -c "$cwd" -P -F '#{window_id}' "$stamp$cmd" 2>/dev/null)
     # Stamped first thing (issue #870): a cold `claude --resume` takes seconds to

@@ -116,13 +116,12 @@ run --session "$S" --bogus; eq "A: an unknown flag → usage" "$RC" 2
 # --- B. degenerate first: the fleet conf is never touched; the entries exist anyway ----
 eq "B: the fleet conf is byte-identical after three adds" "$(cat "$FLEET_CONF_DIR/fleets/$S/conf")" "$conf_before"
 # a fresh one-repo fleet (no repos/ dir) still lists the key and the menu item —
-# neither is gated on fleet_multirepo, which is the whole point of the entry
+# neither depends on how many repos the fleet hosts, which is the whole point
 S1=one; mkdir -p "$FLEET_CONF_DIR/fleets/$S1"; cp "$FLEET_CONF_DIR/fleets/$S/conf" "$FLEET_CONF_DIR/fleets/$S1/conf"
-fleet_multirepo "$S1" && fail "B: the one-repo fixture reads as multi-repo"
+eq "B: the one-repo fixture hosts one repo" "$(fleet_repos "$S1" | grep -c .)" 1
 eq "B: a one-repo fleet's dash keymap has repo-add on ctrl-z" \
    "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$BIN/dash-keymap.sh" key repo-add)" "ctrl-z"
 has "B: a one-repo fleet's row menu lists the item" "$(bash "$BIN/fleet-sidebar-menu.sh" --keys | cut -f1 | tr '\n' ' ')" " g "
-grep -q 'fleet_multirepo' "$ADD" && fail "B: dash-repo-add.sh gates on fleet_multirepo — a one-repo fleet must get the popup"
 mkrepo "$HOME/projects/two" o/two
 OUT=$(bash "$ADD" --session "$S1" o/two 2>/dev/null); eq "B: the first add on a one-repo fleet" "$OUT" "added:o-two"
 eq "B: … and it is a two-repo fleet now" "$(fleet_repos "$S1" | tr '\n' ' ')" "o/a o/two "

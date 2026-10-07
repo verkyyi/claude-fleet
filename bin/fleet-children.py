@@ -150,7 +150,7 @@ def read_events(path, pre=None):
     return [e for e in read_rows(path, pre) if not is_wake(e)]
 
 
-def alias_of(key, one_slug):
+def alias_of(key, one_slug):  # compat-1v: 下一批删
     """The bare key a qualified <key> was spelled as before issue #1939 — only
     while its repo is the fleet's ONE repo (<one_slug>, fleet_key_alias's rule);
     '' otherwise. Its book is the same parent's, read for one version."""
