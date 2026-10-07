@@ -1741,8 +1741,78 @@ def is_attn_summary(row):
 
 
 def sessions(rows):
-    """The window ids alone — what a close lands on (#900), never a heading."""
-    return [row[0] for row in rows if row[0] != "hdr"]
+    """The window ids alone — what a close lands on (#900), never a heading, nor
+    a batch nobody drives (issue #1916: it has no window)."""
+    return [row[0] for row in rows if row[0] != "hdr" and not row[0].startswith(EPIC_STALE)]
+
+
+# A batch NOBODY drives (issue #1916): the producer's grey row for a stale EPIC
+# heartbeat whose EPIC is still open — `epicstale:<owner/name>#<N>[@<machine>]`,
+# no window behind it (tmux-dashboard-rows.sh ESTALE). Its one action is to reopen
+# its driver: a tap highlights it, a second asks 「重开驱动会话？」, ↵ opens it.
+EPIC_STALE = "epicstale:"
+
+
+def epic_stale_ref(key):
+    """An `epicstale:` key → (owner/name, N, machine label — "" for this one), or
+    None for anything else."""
+    m = re.fullmatch(r"epicstale:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]{0,9})(?:@([A-Za-z0-9_.-]+))?", key or "")
+    return (m.group(1), m.group(2), m.group(3) or "") if m else None
+
+
+def ask_epic(key, row=None):
+    """The question a stale batch's second tap asks: one menu line, ↵ reopens."""
+    ref = epic_stale_ref(key)
+    if ref is None:
+        return None
+    name = (row[3] if row is not None and len(row) > 3 else "") or "#" + ref[1]
+    return Ask("epic", tr("sidebar_ask_epic_fmt", ref[1]), arg=key, hint=tr("sidebar_epic_reopen_keys"),
+               menu=[("reopen", tr("sidebar_epic_reopen"), name, False)])
+
+
+def node_host(label):
+    """A row's machine label (`m4`) → the hostname the hub resolves (hub_nodes'
+    13th field, as where_menu reads it); the label itself when it is not there."""
+    try:
+        with open(os.path.join(status_dir(), "hub_nodes"), encoding="utf-8") as f:
+            for line in f.read().splitlines():
+                p = line.split(US)
+                if len(p) >= 13 and p[0] == label and p[12]:
+                    return p[12]
+    except OSError:
+        pass
+    return label
+
+
+def reopen_epic(key, env):
+    """↵ on 「重开驱动会话」: the batch's driver again — a scratch seeded
+    `/fleet-epic-run <N> --repo <owner/name>`, the way the orchestrator opens one
+    (skills/fleet-orchestrate), named `EPIC <N>` (a scratch name holds no `#`).
+    On the machine whose marks say it
+    stopped: through the hub (fleet-client-place.sh, the seed as its body) from
+    the shell or for another machine's row; on this machine with a fleet,
+    dash-raw-session.sh --prompt. Its next tick stamps the heartbeat, and the
+    grey row becomes the batch's own row. None for a key that is not one."""
+    ref = epic_stale_ref(key)
+    if ref is None:
+        return None
+    repo, n, node = ref
+    seed = "/fleet-epic-run %s --repo %s" % (n, repo)
+    if SHELL or node:
+        handle, path = tempfile.mkstemp(prefix="epic-seed.", dir=os.environ.get("TMPDIR") or "/tmp")
+        with os.fdopen(handle, "w") as out:
+            out.write(seed)
+
+        def done(rc, text):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            return failed(rc, text)
+        return start_job(["bash", str(BIN / "fleet-client-place.sh"), repo, "scratch", "--name", "EPIC " + n,
+                          "--node", node_host(node) if node else "auto", "--body-file", path], env, done)
+    return start_job(["bash", str(BIN / "dash-raw-session.sh"), "--origin", "hub", "--name", "EPIC " + n,
+                      "--prompt", seed, "--repo", repo], dict(env, FLEET_SPAWN_FOCUS="1"), failed)
 
 
 def target_name(key):
@@ -1772,6 +1842,8 @@ def tap(hit, highlighted):
         return "select"  # a fold stop only (issue #1170): no repo to open a session in
     if hit.startswith("hdr:"):
         return "new" if hit == highlighted else "select"
+    if hit.startswith(EPIC_STALE):
+        return "epic" if hit == highlighted else "select"   # no window to jump to (#1916)
     return "menu" if hit == highlighted else "jump"
 
 
@@ -1780,15 +1852,17 @@ def acts(key):
     a heading (`hdr:…`) is none — jump, menu, tap all stay no-ops on it (EPIC #994)
     — and so is a landed row (`landed:…`, issue #1532): its one action is ↵,
     restore, which the landed view handles itself."""
-    return "" if key.startswith(("hdr", "landed:")) or key == PLACING_KEY else key
+    return "" if key.startswith(("hdr", "landed:", EPIC_STALE)) or key == PLACING_KEY else key
 
 
 def folds(key):
     """The highlighted row as a ←/→ target: a session row (its subtree), or a repo
     heading with a spawn target — `hdr:<target>`, which dash-fold-toggle.sh reads
     as that repo's whole group (issue #1037). A bare `hdr` (the `?` heading, the
-    empty-state hint) or no row at all: nothing to fold."""
-    return key if key and key != "hdr" and key not in (PORTAL_KEY, PLACING_KEY) else ""
+    empty-state hint), a batch nobody drives (issue #1916) or no row at all:
+    nothing to fold."""
+    return key if key and key != "hdr" and key not in (PORTAL_KEY, PLACING_KEY) \
+        and not key.startswith(EPIC_STALE) else ""
 
 
 # ←/→ fold AT ONCE (issue #1530): the view applies the fold to the rows it has
@@ -2428,6 +2502,14 @@ def ui(screen, session, worker, lock):
                 if job is not None:
                     jobs.append(job)
             return
+        if ask.kind == "epic":
+            # 「重开驱动会话」 (issue #1916): ↵ on its one line reopens the driver
+            if answer.get("choice") == "reopen":
+                job = reopen_epic(ask.arg, env)
+                if job is not None:
+                    jobs.append(job)
+                    say(session, tr("sidebar_epic_reopening_fmt", epic_stale_ref(ask.arg)[1]), 3)
+            return
         if ask.menu:
             place_step(*place_answer(ask, answer.get("choice", "")), ask.plan)
             return
@@ -2795,9 +2877,9 @@ def ui(screen, session, worker, lock):
             # The text is one colour; the glyph alone says the state (issue #1622).
             raised = wid == current_row or wid == selected
             attr = curses.color_pair(PAIR_SEL if raised else PAIR_FG)
-            lost = node.endswith("!") and not raised
+            lost = (node.endswith("!") or state == "epicstale") and not raised
             if lost:
-                attr = dim_attr  # a lost machine's row (issue #1475)
+                attr = dim_attr  # a lost machine's row (issue #1475); a batch nobody drives (#1916)
             if wid == PORTAL_KEY:
                 attr |= curses.A_BOLD   # 「新任务」 (issue #1953)
             pair = STATE_PAIR.get(state)
@@ -3000,6 +3082,9 @@ def ui(screen, session, worker, lock):
                 follow_at, armed = None, None
                 if hit and acts(hit) and view == "live":
                     open_menu(session, hit, env)
+                elif hit and hit.startswith(EPIC_STALE):
+                    selected = hit   # a batch nobody drives (#1916): its one question
+                    ask_now(ask_epic(hit, hit_row))
                 elif hit and hit.startswith("hdr:") and hit != PIN_HEADING:
                     selected = hit
                     nxt = open_tap(session, "new", hit, env)
@@ -3053,6 +3138,14 @@ def ui(screen, session, worker, lock):
                         view, rows, selected = "live", live_rows, current_row
                     else:
                         armed = hit
+                elif action == "epic":
+                    # A batch nobody drives, tapped again (issue #1916): ask to
+                    # reopen its driver — on the release, as a menu opens.
+                    follow_at = None
+                    if buttons & curses.BUTTON1_CLICKED:
+                        ask_now(ask_epic(hit, hit_row))
+                    else:
+                        armed = hit
                 elif action == "select":
                     # A repo heading (issue #1032): highlight it, switch nothing.
                     # A second tap opens a new session there; a tap on a session
@@ -3070,6 +3163,9 @@ def ui(screen, session, worker, lock):
                     if job is not None:
                         jobs.append(job)
                     view, rows, selected = "live", live_rows, current_row
+                    refresh_at = 0
+                elif armed is not None and hit == armed and armed.startswith(EPIC_STALE):
+                    ask_now(ask_epic(armed, hit_row))
                     refresh_at = 0
                 elif armed is not None and hit == armed:
                     nxt = open_tap(session, "new" if armed.startswith("hdr:") else "menu", armed, env)
