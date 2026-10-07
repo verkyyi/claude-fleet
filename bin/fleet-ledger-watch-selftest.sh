@@ -119,10 +119,10 @@ windows '@1|10|0||/wk/issue-10|fix-ten' \
 run s1
 [ -z "$(recorded_list)" ] || fail "first tick must record nothing, got [$(recorded_list)]"
 [ -f "$SNAP" ] || fail "first tick must seed the durable snapshot"
-grep -q '^10	' "$SNAP" || fail "snapshot must contain worker issue 10"
-grep -q '^11	' "$SNAP" || fail "snapshot must contain worker issue 11"
-grep -q '^scratch-3	' "$SNAP" || fail "snapshot must contain the @raw scratch under its slug (#466)"
-grep -q '^44	' "$SNAP" && fail "@raw window with no scratch worktree must NOT be snapshotted"
+grep -q '^fake/repo#10	' "$SNAP" || fail "snapshot must contain worker issue 10"
+grep -q '^fake/repo#11	' "$SNAP" || fail "snapshot must contain worker issue 11"
+grep -q '^fake/repo#scratch-3	' "$SNAP" || fail "snapshot must contain the @raw scratch under its slug (#466)"
+grep -q '^fake/repo#44	' "$SNAP" && fail "@raw window with no scratch worktree must NOT be snapshotted"
 grep -qi 'dash' "$SNAP" && fail "panel window (dash) must NOT be snapshotted"
 
 # 2) VANISHED→RECORD + STILL-LIVE: tick 2 drops 11 (and the @raw 44); 10 and the
@@ -136,9 +136,9 @@ run s1
 [ "$(recorded_list)" = "11" ] || fail "vanished worker 11 must be recorded once (10 + scratch live, 44 @raw), got [$(recorded_list)]"
 grep -q 'recorded 1 closed-unlanded' "$WORK/log" || fail "log should report 1 recorded row"
 # snapshot now reflects the live set: 10 + the scratch present, 11 gone.
-grep -q '^10	' "$SNAP" || fail "snapshot must still contain live issue 10"
-grep -q '^scratch-3	' "$SNAP" || fail "snapshot must still contain the live scratch"
-grep -q '^11	' "$SNAP" && fail "snapshot must drop the vanished issue 11"
+grep -q '^fake/repo#10	' "$SNAP" || fail "snapshot must still contain live issue 10"
+grep -q '^fake/repo#scratch-3	' "$SNAP" || fail "snapshot must still contain the live scratch"
+grep -q '^fake/repo#11	' "$SNAP" && fail "snapshot must drop the vanished issue 11"
 
 # 2b) SCRATCH VANISHED→RECORD (#466): the scratch window closes → one record-closed
 #     keyed by its `scratch-<N>` slug, carrying the worktree the row is built from.
@@ -149,7 +149,7 @@ run s1
 # recorded_list is cumulative until the next reset_all, so 11 (tick 2) is still in it.
 [ "$(recorded_list)" = "11 scratch-3" ] || fail "vanished scratch must be recorded under its slug, got [$(recorded_list)]"
 grep -q 'closed-unlanded scratch-3' "$WORK/log" || fail "log should name the recorded scratch row"
-grep -q '^scratch-3	' "$SNAP" && fail "snapshot must drop the vanished scratch"
+grep -q '^fake/repo#scratch-3	' "$SNAP" && fail "snapshot must drop the vanished scratch"
 
 # 3) DEDUP TOKEN: a landed/prior session (issue 20) that vanishes is handed to
 #    record-closed, but the "already in ledger" token means it is NOT counted as a
@@ -172,7 +172,7 @@ windows                                    # empty read (session gone / glitch)
 run s1
 [ -z "$(recorded_list)" ] || fail "an empty window read must record nothing, got [$(recorded_list)]"
 grep -q 'skip tick' "$WORK/log" || fail "empty read should log a skipped tick"
-grep -q '^11	' "$SNAP" || fail "empty read must NOT clobber the prior snapshot (11 lost)"
+grep -q '^fake/repo#11	' "$SNAP" || fail "empty read must NOT clobber the prior snapshot (11 lost)"
 # and a following real tick with only 10 still detects 11 vanished (snapshot intact).
 reset_log
 windows '@1|10|0||/wk/issue-10|fix-ten'
@@ -188,7 +188,7 @@ windows '@1|10|0||/wk/issue-10|fix-ten'   # 11 vanished
 run --dry-run s1
 [ -z "$(recorded_list)" ] || fail "--dry-run must not call record-closed, got [$(recorded_list)]"
 grep -q 'would record closed-unlanded #11' "$WORK/log" || fail "--dry-run should log the would-record"
-grep -q '^11	' "$SNAP" || fail "--dry-run must NOT overwrite the snapshot (11 must remain)"
+grep -q '^fake/repo#11	' "$SNAP" || fail "--dry-run must NOT overwrite the snapshot (11 must remain)"
 ls "$WORK/leases"/ledgerwatch-*.lock >/dev/null 2>&1 && fail "--dry-run must not take a lease"
 
 # 6) OFF SWITCH: FLEET_LEDGER_WATCH=0 → no-op.

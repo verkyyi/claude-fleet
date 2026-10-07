@@ -198,6 +198,11 @@ eq "…ahead of the state and age gates" "1 retained:loop" "$rc $out"
 out=$(bash "$BIN/fleet-epic-loopers.sh" --session "$SESS" --repo o/r 1331 4242)
 eq "the EPIC report's probe: looping member + a gone one" \
    "1331	looping	cron:ab12cd34"$'\n'"4242	gone	-" "$out"
+# an EPIC spanning repos (issue #1942): a member may be spelled owner/name#N, and
+# is looked up in ITS repo and echoed back as given
+out=$(bash "$BIN/fleet-epic-loopers.sh" --session "$SESS" --repo o/b o/r#1331 o/b#4242)
+eq "the EPIC probe: members spelled owner/name#N" \
+   "o/r#1331	looping	cron:ab12cd34"$'\n'"o/b#4242	gone	-" "$out"
 
 hookpost '{"tool_name":"CronDelete","tool_input":{"id":"ab12cd34"}}'
 eq "CronDelete of the last job clears @loop" "" "$(loopv)"

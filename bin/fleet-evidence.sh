@@ -33,7 +33,12 @@
 # A repo other than the conf's own FLEET_REPO (a second hosted repo) puts
 # both under fleets/<sess>/by-repo/<slug>/ instead — issue numbers repeat across
 # repos, and B's #12 must never read as A's (issue #803).
-# E is resolved from GitHub's parent link (GET …/issues/M/parent) unless given;
+# An EPIC may span repos (issue #1942): its parent is in repo A, a member M in
+# repo B. Every member's evidence lands under the EPIC's tree (A's), so the report
+# collects one directory — a member of another repo as `<slug-of-B>.<M>/`, with
+# `.repo` / `.epic-repo` beside its manifest, and listed as `owner/B#M`.
+# E is resolved from GitHub's parent link (GET …/issues/M/parent, which names the
+# parent's repo too) unless given;
 # an already-populated member dir under some epic/ wins, so a second capture
 # needs no gh round-trip and works offline. Inside: the files, named
 # `<stage>-<UTC>-<name>` so the stage and the order survive a plain `ls`, plus
@@ -46,7 +51,8 @@
 #   --issue M     the member issue (default: the pane's @issue, else the issue-<M>
 #                 worktree in cwd — the same two reads fleet-claim-brief.sh makes)
 #   --epic E      the EPIC parent (default: as above; `--epic none` forces the
-#                 non-EPIC path without asking GitHub)
+#                 non-EPIC path without asking GitHub). `owner/name#E` names a
+#                 parent in another repo than the member's (issue #1942)
 #   --session S   fleet session (default: the tmux session this pane is in)
 #   --repo R      GitHub repo, one the fleet hosts (default: the pane's repo, else
 #                 the fleet's only repo — fleet_target_repo, issue #1938)
@@ -104,7 +110,12 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 issue_arg="${issue_arg//[^0-9]/}"
-case "$epic_arg" in none|NONE|-) epic_arg=none ;; *) epic_arg="${epic_arg//[^0-9]/}" ;; esac
+epic_arg_repo=''
+case "$epic_arg" in
+  none|NONE|-) epic_arg=none ;;
+  ?*/?*#*) epic_arg_repo=$(fleet_norm_repo "${epic_arg%%#*}"); epic_arg="${epic_arg##*#}"; epic_arg="${epic_arg//[^0-9]/}" ;;
+  *) epic_arg="${epic_arg//[^0-9]/}" ;;
+esac
 
 # ---- fleet -------------------------------------------------------------------
 sess="${sess_arg:-$(fleet_current_session)}"
@@ -126,7 +137,13 @@ case "$_rc" in
      repo='' ;;   # a fleet with no repo: before/after still capture; post/line refuse
 esac
 _first=$(fleet_repos "$sess" | head -n1)
-[ -z "$_first" ] || [ "$repo" = "$_first" ] || state="$state/by-repo/$(fleet_slug "$repo")"
+# repo_state <repo> → the store root of <repo>: the conf repo's is the fleet's own
+# dir, every other repo's is by-repo/<slug>/ (issue #803)
+repo_state() {
+  if [ -z "$_first" ] || [ -z "${1:-}" ] || [ "$1" = "$_first" ]; then printf '%s' "$FLEET_CONF_DIR/fleets/$sess"
+  else printf '%s/by-repo/%s' "$FLEET_CONF_DIR/fleets/$sess" "$(fleet_slug "$1")"; fi
+}
+state=$(repo_state "$repo")
 
 # ---- the member issue: @issue wins, the issue-<M> worktree in cwd is the fallback
 resolve_issue() {
@@ -142,26 +159,46 @@ resolve_issue() {
 }
 
 # ---- the EPIC parent: explicit → an existing populated dir → GitHub → none ----
-# Prints the epic number, or nothing. Never fails: "no parent" is a normal answer.
+# Prints `<epic-repo>\t<epic>`, or nothing. Never fails: "no parent" is a normal
+# answer. The parent may live in another repo than the member (issue #1942).
 resolve_epic() {
-  local m="$1" hit='' d n
+  local m="$1" hit='' hrepo='' d n r cross
   [ "$epic_arg" = none ] && return 0
-  [ -n "$epic_arg" ] && { printf '%s' "$epic_arg"; return 0; }
+  [ -n "$epic_arg" ] && { printf '%s\t%s' "${epic_arg_repo:-$repo}" "$epic_arg"; return 0; }
   for d in "$state"/epic/*/evidence/"$m"; do
     [ -d "$d" ] || continue
-    [ -n "$hit" ] && { hit=''; break; }   # two epics claim it — ask GitHub
-    hit="$d"
+    [ -n "$hit" ] && { hit=''; hrepo=''; break; }   # two epics claim it — ask GitHub
+    hit="$d"; hrepo="$repo"
   done
+  if [ -n "$repo" ] && [ -z "$hrepo" ] && [ -z "$hit" ]; then   # a member of another repo's EPIC
+    cross="$(fleet_slug "$repo").$m"
+    for d in "$FLEET_CONF_DIR/fleets/$sess"/epic/*/evidence/"$cross" "$FLEET_CONF_DIR/fleets/$sess"/by-repo/*/epic/*/evidence/"$cross"; do
+      [ -f "$d/.epic-repo" ] || continue
+      [ -n "$hit" ] && { hit=''; break; }
+      hit="$d"; hrepo=$(head -n1 "$d/.epic-repo")
+    done
+  fi
   if [ -n "$hit" ]; then
-    n="${hit#"$state"/epic/}"; n="${n%%/*}"; printf '%s' "$n"; return 0
+    n="${hit%/evidence/*}"; n="${n##*/}"; printf '%s\t%s' "$hrepo" "$n"; return 0
   fi
   [ -n "$repo" ] && command -v gh >/dev/null 2>&1 || return 0
-  n=$(gh api "repos/$repo/issues/$m/parent" --jq .number 2>/dev/null) || n=''
-  printf '%s' "${n//[^0-9]/}"
+  n=$(gh api "repos/$repo/issues/$m/parent" \
+        --jq '"\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)"' 2>/dev/null) || n=''
+  r=''; case "$n" in *$'\t'*) r="${n%%$'\t'*}"; n="${n##*$'\t'}" ;; esac
+  n="${n//[^0-9]/}"
+  [ -n "$n" ] && printf '%s\t%s' "${r:-$repo}" "$n"
+  return 0
 }
 
-evidence_dir() {   # $1 member, $2 epic-or-empty
-  if [ -n "$2" ]; then printf '%s/epic/%s/evidence/%s' "$state" "$2" "$1"
+# member_dir <member-repo> <epic-repo> <M> → M's dir name under the EPIC's tree:
+# `<M>` when both are the same repo (every one-repo EPIC), `<slug>.<M>` otherwise
+member_dir() {
+  if [ -z "$1" ] || [ "$1" = "$2" ]; then printf '%s' "$3"
+  else printf '%s.%s' "$(fleet_slug "$1")" "$3"; fi
+}
+
+evidence_dir() {   # $1 member, $2 epic-or-empty, $3 epic repo
+  if [ -n "$2" ]; then printf '%s/epic/%s/evidence/%s' "$(repo_state "${3:-$repo}")" "$2" "$(member_dir "$repo" "${3:-$repo}" "$1")"
   else printf '%s/evidence/%s' "$state" "$1"; fi
 }
 
@@ -174,9 +211,11 @@ append_row() {   # $1 dir, $2 stage, $3 ts, $4 file, $5 note
 # print a member's rows as `member stage ts path note`, or ONE `none` row.
 # Looks in the epic dir first, then the non-EPIC dir (a member whose parent
 # link was added after its worker captured — the evidence must not go missing).
-member_rows() {   # $1 member, $2 epic-or-empty
+# A member of another repo (issue #1942) passes its label (`owner/name#M`), its
+# dir under the EPIC's tree and its own repo's non-EPIC dir.
+member_rows() {   # $1 member, $2 epic-or-empty, $3 epic repo · or: $1 label, $4 epic dir, $5 non-EPIC dir
   local d f
-  for d in "$(evidence_dir "$1" "$2")" "$(evidence_dir "$1" "")"; do
+  for d in "${4:-$(evidence_dir "$1" "$2" "${3:-}")}" "${5:-$(evidence_dir "$1" "")}"; do
     f="$d/manifest.tsv"
     [ -s "$f" ] || continue
     while IFS=$'\t' read -r st ts fn nt; do
@@ -238,27 +277,48 @@ if [ "$cmd" = list ] || [ "$cmd" = export ]; then
     dest="${files[0]}"
     [ -n "$epic_arg" ] && [ "$epic_arg" != none ] || die "export needs --epic <E>" 2
   fi
+  erepo="$repo"
   if [ -n "$epic_arg" ] && [ "$epic_arg" != none ]; then
-    e="$epic_arg"
+    e="$epic_arg"; erepo="${epic_arg_repo:-$repo}"
+    eroot="$(repo_state "$erepo")/epic/$e/evidence"
+    subs=''
+    if [ -n "$erepo" ] && command -v gh >/dev/null 2>&1; then subs=$(fleet_sub_issues "$erepo" "$e") || subs=''; fi
     # members = every sub-issue GitHub knows of ∪ every dir already on disk, so a
-    # member reads `none` rather than vanishing, and evidence never needs gh to show
-    members=$( {
-      for d in "$state/epic/$e/evidence"/*/; do
+    # member reads `none` rather than vanishing, and evidence never needs gh to show.
+    # The EPIC's own repo's members are bare numbers (as always); a member filed in
+    # another repo (issue #1942) is `owner/name#M`, its dir `<slug>.<M>`.
+    own=$( {
+      for d in "$eroot"/*/; do
         [ -d "$d" ] || continue
         n="${d%/}"; n="${n##*/}"; [ "$n" = "${n//[^0-9]/}" ] && printf '%s\n' "$n"
       done
-      if [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then
-        gh api "repos/$repo/issues/$e/sub_issues" --paginate --jq '.[].number' 2>/dev/null || true
-      fi
+      [ -z "$subs" ] || printf '%s\n' "$subs" | awk -F '\t' -v r="$erepo" 'NF == 1 { print $1; next } $1 == r { print $2 }'
     } | grep -E '^[0-9]+$' | sort -un)
-    [ -n "$members" ] || { printf '# epic %s: no members and no evidence on disk\n' "$e"; exit 0; }
-    printf '# member\tstage\tts\tpath\tnote   (epic %s · %s)\n' "$e" "$state/epic/$e/evidence"
-    rows=$(printf '%s\n' "$members" | while read -r m; do member_rows "$m" "$e"; done)
+    other=$( {   # `<label>\t<dir>\t<member repo>`
+      for d in "$eroot"/*/; do
+        [ -f "$d.repo" ] || continue
+        n="${d%/}"; n="${n##*/}"; r=$(head -n1 "$d.repo")
+        [ -n "$r" ] && printf '%s#%s\t%s\t%s\n' "$r" "${n##*.}" "$n" "$r"
+      done
+      [ -z "$subs" ] || printf '%s\n' "$subs" | while IFS=$'\t' read -r r n _; do
+        [ -n "$n" ] && [ -n "$r" ] && [ "$r" != "$erepo" ] || continue   # a bare number is the EPIC's own
+        printf '%s#%s\t%s\t%s\n' "$r" "$n" "$(member_dir "$r" "$erepo" "$n")" "$r"
+      done
+    } | sort -t $'\t' -u -k1,1)
+    [ -n "$own$other" ] || { printf '# epic %s: no members and no evidence on disk\n' "$e"; exit 0; }
+    printf '# member\tstage\tts\tpath\tnote   (epic %s · %s)\n' "$e" "$eroot"
+    rows=$( {
+      [ -z "$own" ] || printf '%s\n' "$own" | while read -r m; do member_rows "$m" "$e" "$erepo"; done
+      [ -z "$other" ] || printf '%s\n' "$other" | while IFS=$'\t' read -r lb dn r; do
+        member_rows "$lb" '' '' "$eroot/$dn" "$(repo_state "$r")/evidence/${lb##*#}"
+      done
+    } )
   else
     m=$(resolve_issue); [ -n "$m" ] || die "no issue bound — pass --issue <M> or --epic <E>" 4
-    e=$(resolve_epic "$m")
-    printf '# member\tstage\tts\tpath\tnote   (issue %s%s)\n' "$m" "${e:+ · epic $e}"
-    rows=$(member_rows "$m" "$e")
+    er=$(resolve_epic "$m"); e="${er##*$'\t'}"; erepo="${er%%$'\t'*}"; [ -n "$er" ] || erepo="$repo"
+    elabel="$e"; [ -z "$e" ] || [ "$erepo" = "$repo" ] || elabel="$erepo#$e"
+    printf '# member\tstage\tts\tpath\tnote   (issue %s%s)\n' "$m" "${e:+ · epic $elabel}"
+    rows=$(member_rows "$m" "$e" "$erepo")
   fi
   # A member with nothing HERE may have run on another machine of this owner
   # (issue #1609): its worker's machine handed the files to the hub at its ship
@@ -270,7 +330,7 @@ if [ "$cmd" = list ] || [ "$cmd" = export ]; then
     *$'\tnone\t'*)
       if [ -f "$BIN/fleet-worker-records.sh" ] && [ -n "$repo" ]; then
         if [ -n "$epic_arg" ] && [ "$epic_arg" != none ]; then set -- --epic "$e"; else set -- --issue "$m"; fi
-        rem=$(bash "$BIN/fleet-worker-records.sh" fetch --session "$sess" --repo "$repo" "$@" 2>/dev/null); rrc=$?
+        rem=$(bash "$BIN/fleet-worker-records.sh" fetch --session "$sess" --repo "${erepo:-$repo}" "$@" 2>/dev/null); rrc=$?
         if [ "$rrc" -eq 0 ] || [ "$rrc" -eq 1 ]; then
           rows=$(FE_ROWS="$rows" FE_REM="$rem" FE_RC="$rrc" python3 -c '
 import os
@@ -303,8 +363,9 @@ for l in os.environ["FE_ROWS"].split("\n"):
     # a none row's ts/path are empty, and a tab IFS folds empty fields — so its
     # note (issue #1609) lands in whichever of the three read it
     if [ "$st" = none ] || [ -z "$p" ]; then printf '%s\t%s\t\t\t%s\n' "$m" "$st" "$ts$p$nt"; continue; fi
-    rel="evidence/$m/${p##*/}"
-    mkdir -p "$dest/evidence/$m" && cp -p "$p" "$dest/$rel" \
+    md=$(printf '%s' "$m" | tr '/#' '-.')   # owner/name#M → owner-name.M, a path-safe dir
+    rel="evidence/$md/${p##*/}"
+    mkdir -p "$dest/evidence/$md" && cp -p "$p" "$dest/$rel" \
       || { printf 'fleet-evidence: copy failed: %s\n' "$p" >&2; continue; }
     printf '%s\t%s\t%s\t%s\t%s\n' "$m" "$st" "$ts" "$rel" "$nt"
   done
@@ -313,8 +374,10 @@ fi
 
 # ---- everything below is about ONE member ------------------------------------
 m=$(resolve_issue); [ -n "$m" ] || die "no issue bound (no @issue, cwd isn't an issue-<N> worktree) — pass --issue" 4
-e=$(resolve_epic "$m")
-dir=$(evidence_dir "$m" "$e")
+er=$(resolve_epic "$m"); e="${er##*$'\t'}"; erepo="${er%%$'\t'*}"; [ -n "$er" ] || erepo="$repo"
+dir=$(evidence_dir "$m" "$e" "$erepo")
+eref="#$e"; [ "$erepo" = "$repo" ] || eref="$erepo#$e"   # an EPIC in another repo (issue #1942)
+emark="${eref#\#}"; [ -n "$e" ] || emark=none
 
 if [ "$cmd" = dir ]; then printf '%s\n' "$dir"; exit 0; fi
 
@@ -323,14 +386,14 @@ post_comment() {
   [ -s "$f" ] || die "nothing to post — no evidence captured for #$m yet" 2
   [ -n "$repo" ] || die "no repo resolved (set --repo or FLEET_REPO)" 2
   body=$( {
-    printf '📎 上线证据 · #%s%s\n\n' "$m" "${e:+ (EPIC #$e)}"
+    printf '📎 上线证据 · #%s%s\n\n' "$m" "${e:+ (EPIC $eref)}"
     printf 'dir: `%s`\n\n' "$dir"
     while IFS=$'\t' read -r st ts fn nt; do
       [ -n "$st" ] || continue
       printf -- '- **%s** · %s · `%s`%s\n' "$st" "$ts" "$fn" "${nt:+ — $nt}"
     done < "$f"
     printf '\n_Files stay on this machine (gh cannot attach an image to a comment); the EPIC report collects them from the path above._\n'
-    printf '<!-- fleet:evidence issue=%s epic=%s dir=%s -->\n' "$m" "${e:-none}" "$dir"
+    printf '<!-- fleet:evidence issue=%s epic=%s dir=%s -->\n' "$m" "$emark" "$dir"
   } )
   printf '%s\n' "$body" | "$BIN/fleet-comment.sh" "$m" --repo "$repo" --note --body-file -
 }
@@ -341,6 +404,9 @@ if [ "$cmd" = post ]; then post_comment; exit $?; fi
 stage="$cmd"
 [ -n "$pane" ] || [ "${#files[@]}" -gt 0 ] || die "$stage: give one or more files, '-' for stdin, or --pane <target>" 2
 mkdir -p "$dir" || die "cannot create $dir" 1
+if [ -n "$e" ] && [ "$erepo" != "$repo" ]; then   # a member of another repo's EPIC: say whose
+  printf '%s\n' "$repo" > "$dir/.repo"; printf '%s\n' "$erepo" > "$dir/.epic-repo"
+fi
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 
 # `<stage>-<UTC>-<name>`, unique within the dir (two captures in one second)

@@ -21,6 +21,7 @@
 #      END-TO-END round trip of /fleet-epic-plan's own template through the reader
 #   G. issue resolution: --issue › @issue › issue-<N> worktree in cwd; usage codes
 #   H. a 2+ repo fleet: the EPIC's repo, by-repo/<slug>/ stores, ask under `all`
+#   I. an EPIC spanning repos (#1942): a member of repo B under repo A's EPIC tree
 # The whole file re-runs itself once under /bin/bash when that is a 3.x bash (the
 # operator's macOS), because #703's class of bug is only observable there.
 set -uo pipefail
@@ -53,9 +54,18 @@ cat > "$WORK/fakebin/gh" <<'GHFAKE'
 #!/bin/bash
 printf '%s\n' "$*" >> "$GH_LOG"
 case "$*" in
-  *"/parent"*)     [ -n "${GH_PARENT:-}" ] && { printf '%s\n' "$GH_PARENT"; exit 0; }
-                   echo 'gh: No parent issue found (HTTP 404)' >&2; exit 1 ;;
-  *"/sub_issues"*) printf '%b' "${GH_SUBS:-}"; exit 0 ;;
+  *"/parent"*)     [ -n "${GH_PARENT:-}" ] || { echo 'gh: No parent issue found (HTTP 404)' >&2; exit 1; }
+                   # the --jq the script asks for: `<repo>\t<num>`; a bare number is a
+                   # parent in the member's own repo (the one in the request path)
+                   case "$GH_PARENT" in *$'\t'*) printf '%s\n' "$GH_PARENT" ;;
+                     *) a="$*"; r="${a#*repos/}"; r="${r%%/issues/*}"; printf '%s\t%s\n' "$r" "$GH_PARENT" ;; esac
+                   exit 0 ;;
+  *"/sub_issues"*) # `<repo>\t<num>\t<state>` per member; a bare number is the parent's repo's
+                   a="$*"; r="${a#*repos/}"; r="${r%%/issues/*}"
+                   printf '%b' "${GH_SUBS:-}" | while IFS= read -r l || [ -n "$l" ]; do
+                     [ -n "$l" ] || continue
+                     case "$l" in *$'\t'*) printf '%s\n' "$l" ;; *) printf '%s\t%s\topen\n' "$r" "$l" ;; esac
+                   done; exit 0 ;;
   "issue view"*)   printf '%b' "${GH_BODY:-}"; exit 0 ;;
 esac
 exit 0
@@ -307,6 +317,64 @@ has "H6 stored under B's store" "$OUT" "$MC/by-repo/$bslug/epic/7/evidence/42/"
 run TMUX= -- dir --session fevmulti --repo o/r --issue 42
 eq "H6 A's #42 never picks up B's populated dir" "$MC/evidence/42" "$OUT"
 rm -f "$MC/current-repo"
+
+# ---------- I. an EPIC spanning repos (issue #1942) ----------------------------
+# The parent is A's (o/r#7), a member is B's (o/b#42): GitHub names the parent's
+# repo, the capture lands under the EPIC's tree as `<slug-of-B>.42/`, and the
+# report's ONE list reads A's own members by number and B's as `o/b#42` — never
+# B's #42 as A's #42 (both repos have one).
+rm -rf "$MC/epic" "$MC/evidence" "$MC/by-repo"
+xdir="$MC/epic/7/evidence/$bslug.42"
+run TMUX= GH_PARENT="$(printf 'o/r\t7')" -- dir --session fevmulti --repo o/b --issue 42
+eq "I1 B's member of A's EPIC → under the EPIC's tree" "$xdir" "$OUT"
+printf 'XSHOT' > "$WORK/src/x.png"
+run TMUX= GH_PARENT="$(printf 'o/r\t7')" -- before --session fevmulti --repo o/b --issue 42 --note 'b before' "$WORK/src/x.png"
+eq "I2 capture exits 0" 0 "$RC"
+has "I2 stored under the EPIC's tree" "$OUT" "$xdir/"
+eq "I2 .repo names the member's repo" o/b "$(cat "$xdir/.repo")"
+eq "I2 .epic-repo names the parent's" o/r "$(cat "$xdir/.epic-repo")"
+: > "$GH_LOG"
+run TMUX= -- dir --session fevmulti --repo o/b --issue 42
+eq "I3 populated cross-repo dir wins, offline" "$xdir" "$OUT"
+eq "I3 no gh call" "" "$(cat "$GH_LOG")"
+run TMUX= -- dir --session fevmulti --repo o/r --issue 42
+eq "I4 A's own #42 never picks up B's member dir" "$MC/evidence/42" "$OUT"
+run TMUX= -- dir --session fevmulti --repo o/b --issue 42 --epic o/r#7
+eq "I5 --epic owner/name#E names the parent's repo" "$xdir" "$OUT"
+printf 'ASHOT' > "$WORK/src/a.png"
+run TMUX= GH_PARENT=7 -- after --session fevmulti --repo o/r --issue 5 --note 'a after' "$WORK/src/a.png"
+eq "I6 A's own member captures as always" 0 "$RC"
+has "I6 at its historic path" "$OUT" "$MC/epic/7/evidence/5/"
+run TMUX= -- post --session fevmulti --repo o/b --issue 42
+eq "I7 post from B exits 0" 0 "$RC"
+eq "I7 posts on B's issue" "42 --repo o/b --note --body-file -" "$(cat "$CMT_ARGS")"
+has "I7 names A's EPIC with its repo" "$(cat "$CMT_BODY")" "📎 上线证据 · #42 (EPIC o/r#7)"
+has "I7 marker carries the EPIC's repo" "$(cat "$CMT_BODY")" "<!-- fleet:evidence issue=42 epic=o/r#7 dir=$xdir -->"
+: > "$GH_LOG"
+run TMUX= GH_SUBS="$(printf '5\\no/b\\t42\\topen\\no/b\\t43\\topen\\n')" -- list --session fevmulti --repo o/r --epic 7
+eq "I8 list exits 0" 0 "$RC"
+has "I8 sub-issues read from the EPIC's repo" "$(cat "$GH_LOG")" "repos/o/r/issues/7/sub_issues"
+has "I8 A's member by number" "$OUT" "$(printf '5\tafter\t')"
+has "I8 B's member as o/b#42" "$OUT" "$(printf 'o/b#42\tbefore\t')"
+has "I8 B's member with nothing reads none" "$OUT" "$(printf 'o/b#43\tnone')"
+hasnt "I8 B's #42 never reads as A's #42" "$OUT" "$(printf '\n42\t')"
+run TMUX= -- list --session fevmulti --repo o/r --epic 7
+has "I9 offline: B's member found from its dir" "$OUT" "$(printf 'o/b#42\tbefore\t')"
+run TMUX= GH_SUBS="$(printf '5\\no/b\\t42\\topen\\n')" -- export --session fevmulti --repo o/r --epic 7 "$WORK/xrep"
+eq "I10 export exits 0" 0 "$RC"
+has "I10 B's member exported to a path-safe dir" "$OUT" "evidence/o-b.42/"
+ls "$WORK/xrep/evidence/o-b.42/"before-*-x.png >/dev/null 2>&1 && ok || fail "I10 file copied beside the page"
+run TMUX= -- list --session fevmulti --repo o/b --issue 42
+has "I11 one member's list names its EPIC with the repo" "$OUT" "epic o/r#7"
+# the one spelling of a member, fleet_member_ref (fleet-lib.sh): `#N` / `N` is the
+# EPIC's own repo, `owner/name#N` its own; anything else is not a member
+mref() { ( . "$WORK/bin/fleet-lib.sh"; fleet_member_ref "$@" ); }
+eq "I12 fleet_member_ref #N → the EPIC's repo" "$(printf 'o/r\t12')" "$(mref o/r '#12')"
+eq "I12 fleet_member_ref owner/name#N → its own" "$(printf 'o/b\t42')" "$(mref o/r 'o/b#42')"
+mref o/r 'C1' >/dev/null && fail "I12 fleet_member_ref must refuse a non-member" || ok
+# fleet_sub_issues carries each member's repo (the fake gh answers as gh's --jq would)
+eq "I13 fleet_sub_issues names each member's repo" "$(printf 'o/r\t5\topen\no/b\t42\topen')" \
+   "$(PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" GH_SUBS="$(printf '5\no/b\t42\topen\n')" "$SH" -c '. "$1"; fleet_sub_issues o/r 7' _ "$WORK/bin/fleet-lib.sh")"
 
 printf 'fleet-evidence-selftest OK (%d checks, %s)\n' "$pass" "$SH"
 

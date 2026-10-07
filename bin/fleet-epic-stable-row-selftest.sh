@@ -14,7 +14,7 @@
 #   C. behind    tag on an older commit → `behind`, target = the NEWEST merge
 #                whatever order --merged came in, count right, cmd names it
 #   D. current   tag AT the last merge, or AHEAD of it → exit 1, no row
-#   E. --epic    members from `sub_issues`, each merge from `pr list --head
+#   E. --epic    members from `sub_issues` (this repo's only, #1942), each merge from `pr list --head
 #                issue-<M>`; an unfinished member is ignored; none merged →
 #                `nomerge`, no row
 #   F. unknown   the remote cannot be read → says so (NOT 0), still exit 0
@@ -141,6 +141,18 @@ eq "E: kind nomerge" nomerge "$(kind)"
 lacks "E: no row" "$OUT" "row:"
 run --epic x
 eq "E: --epic wants a number → exit 2" 2 "$RC"
+# an EPIC spanning repos (issue #1942): another repo's member #12 is NOT this
+# repo's issue-12 branch — only o/r's own members name a merge here
+printf 'o/r\t10\no/b\t12\n' > "$WORK/subs"
+printf '%s\n' "$C4" > "$WORK/prs/issue-12"
+run --epic 7
+eq "E: cross-repo EPIC → exit 0" 0 "$RC"
+contains "E: target = this repo's member merge" "$OUT" "target:  $(sh3 "$C2")"
+lacks "E: o/b#12 never read as o/r's issue-12" "$OUT" "$(sh3 "$C4")"
+run --epic o/b#7                                  # the parent lives in o/b
+eq "E: --epic owner/name#N (a parent in another repo) → exit 0" 0 "$RC"
+contains "E: …still only this repo's members" "$OUT" "target:  $(sh3 "$C2")"
+rm -f "$WORK/prs/issue-12"
 
 # --- F. unknown ------------------------------------------------------------------
 settag "$C1"

@@ -22,6 +22,10 @@
 #   4. a failed report is a stall, never a done notification.
 #   5. the report command knows it has a non-human caller and says it is
 #      re-runnable, which is what makes check 3's re-entry safe.
+#   6. an EPIC spanning repos (issue #1942): the trio treats a member as (repo,
+#      issue) — plan files it in its own repo and writes `owner/name#N` in the
+#      list, run spawns / judges / merges / reaps it in ITS repo, report reads
+#      evidence and stable per repo — and the one-repo wording of #803 is gone.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
@@ -61,5 +65,29 @@ hasF "$RUN" 'and the report has run' "run §4: done requires the report to have 
 hasF "$REPORT" 'usual caller is not a human' "report: documents its run-loop caller"
 hasF "$REPORT" 're-runnable' "report: states it is re-runnable (makes check 3 safe)"
 hasF "$REPORT" '#852' "report: cites the seam's issue"
+
+# 6. an EPIC spanning repos (issue #1942) — every reader keys a member on (repo,
+#    issue). The regression to catch is a doc that goes back to «an EPIC lives in
+#    ONE repo» and a run that spawns or merges a repo-B member in repo A.
+PLAN="$ROOT/commands/fleet-epic-plan.md"
+[ -f "$PLAN" ] || fail "commands/fleet-epic-plan.md is missing"
+for f in "$PLAN" "$RUN" "$REPORT"; do
+  lacksF "$f" 'and an EPIC lives in' "the one-repo EPIC wording (#803) is retired"
+  hasF "$f" '#1942' "cites the cross-repo EPIC issue"
+done
+hasF "$PLAN" '**C1** owner/name#N — title' "plan: a member in another repo is listed as owner/name#N"
+hasF "$PLAN" 'the one holding the MOST' "plan: the parent goes to the repo with the most members"
+hasF "$PLAN" 'repos/<the member'"'"'s repo>/issues/<child>' "plan: the child's id is read from ITS repo"
+hasF "$PLAN" '--member-repo' "plan: preflight checks every other member repo"
+hasF "$PLAN" 'IS the member list then' "plan: a refused cross-repo link falls back to the list (ruling 4)"
+hasF "$RUN" 'Members are (repo, issue)' "run: a member is (repo, issue)"
+hasF "$RUN" 'fleet_member_ref "$FLEET_REPO"' "run: list lines parse through fleet_member_ref"
+hasF "$RUN" 'dash-issue-session.sh <N> --repo "$MREPO"' "run: the spawn opens in the member's repo"
+hasF "$RUN" 'fleet-pr-verdict.sh <PR> --repo "$MREPO"' "run: the verdict reads the member's repo"
+hasF "$RUN" 'fleet-pr-merge.sh <PR> --repo "$MREPO"' "run: the merge lands in the member's repo"
+hasF "$RUN" 'dash-reap.sh <slug>:issue-<N>' "run: the reap names the member's key"
+lacksF "$RUN" 'fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO"' "run: no member verdict on the parent's repo"
+hasF "$REPORT" '--epic "$FLEET_REPO#<N>"' "report: a member in another repo names the parent with its repo"
+hasF "$REPORT" 'once per repo its members landed in' "report: the stable row is asked per repo"
 
 printf 'epic-autoreport-selftest OK (%d checks)\n' "$CHECKS"

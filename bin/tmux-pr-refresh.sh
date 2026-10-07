@@ -275,47 +275,40 @@ done
 #
 # WHICH prmap a window is matched against (issue #792): identity is (repo, branch),
 # never a bare branch — two repos can each have an `issue-3`, and joining on the
-# name alone painted repo A's green check on repo B's unfinished work. So a window
-# in a fleet that hosts more than one repo (a repos/ overlay exists) reads its OWN
-# repo's prmap, resolved through fleet_window_repo — @repo, else derived once from
-# @worktree and STAMPED (which is also what lets the dash's fork-free producer
-# read @repo straight off the window list), else the fleet's only repo, else
+# name alone painted repo A's green check on repo B's unfinished work. So every
+# window reads its OWN repo's prmap, however many repos the fleet hosts (#1941):
+# fleet_window_repo's rule, with the hot path's forks taken out (#792): @repo,
+# else derived once from @worktree and STAMPED (which is also what lets the
+# dash's fork-free producer read @repo straight off the window list), else the
+# fleet's only repo — its repo list read ONCE per session per pass — else
 # unknown → no glyph, never a guess. `@norepo 1` → no repo → no glyph.
-# A fleet with no overlay (every fleet today) keeps the per-session prmap exactly
-# as before, with no extra tmux call.
 US=$'\x1f'
-MR_SEEN=' ' MR_MULTI=' '
+NL='
+'
 # Per window, builtins only except the one awk lookup (issue #888: this loop was
 # ~10 execs a window every 15s — a `cut` for the branch, and an `echo | cut` per
-# field of the hit). The single-repo prmap resolves once per SESSION: `list-windows
-# -a` lists a session's windows together.
-last_sess=$US; sess_prmf=''
+# field of the hit). The repo list resolves once per SESSION: `list-windows -a`
+# lists a session's windows together.
+last_sess=$US; sess_only=''
 for sock in $SOCKETS; do
-wl=$(fleet_lw "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}${US}#{@repo}${US}#{@norepo}${US}#{@pr_num}${US}#{@pr_ci}${US}#{@pr_fail}" tmux -L "$sock")
+wl=$(fleet_lw "#{session_name}${US}#{session_name}:#{window_index}${US}#{pane_current_path}${US}#{@prci}${US}#{@repo}${US}#{@norepo}${US}#{@pr_num}${US}#{@pr_ci}${US}#{@pr_fail}${US}#{@worktree}" tmux -L "$sock")
 # tmux 3.4 escapes a control separator as the literal four bytes `\037`;
 # newer versions return the byte. Accept both (same as tmux-dashboard-rows.sh).
 wl=${wl//\\037/$US}
-while IFS="$US" read -r sess win path cur wrepo wnorepo cnum cci cfail; do
+while IFS="$US" read -r sess win path cur wrepo wnorepo cnum cci cfail wwt; do
   [ -z "$path" ] && continue
-  case "$MR_SEEN" in *" $sess "*) ;; *)
-    MR_SEEN="$MR_SEEN$sess "
-    fleet_has_repo_overlays "$sess" && MR_MULTI="$MR_MULTI$sess " ;;
-  esac
-  case "$MR_MULTI" in
-    *" $sess "*)
-      # multi-repo fleet: this window's OWN repo's prmap, or none at all
-      prmf=''
-      if [ "$wnorepo" != 1 ]; then
-        [ -n "$wrepo" ] || wrepo=$(fleet_window_repo "$sess" "$win")
-        [ -n "$wrepo" ] && prmf="$FLEET_C/fleets/$(fleet_slug "$(fleet_norm_repo "$wrepo")")/prmap"
-      fi ;;
-    *)
-      # each window matches against ITS fleet's prmap — routed through fleet_cache so
-      # the read side has a single slug-resolution truth (issue #180). Cold-start
-      # fallback is the un-slug'd name, which simply won't exist ⇒ no glyph.
-      if [ "$sess" != "$last_sess" ]; then sess_prmf=$(fleet_cache prmap "$sess"); last_sess=$sess; fi
-      prmf=$sess_prmf ;;
-  esac
+  if [ "$sess" != "$last_sess" ]; then
+    sess_only=$(fleet_repos "$sess"); last_sess=$sess
+    case "$sess_only" in *"$NL"*) sess_only='' ;; esac   # 2+ repos: no default
+  fi
+  prmf=''
+  if [ "$wnorepo" != 1 ]; then
+    # fleet_window_repo's own order, forking only where it must: a @worktree to
+    # derive from (once — it stamps @repo), else the fleet's only repo.
+    [ -z "$wrepo" ] && [ -n "$wwt" ] && wrepo=$(fleet_window_repo "$sess" "$win")
+    [ -n "$wrepo" ] || wrepo=$sess_only
+    [ -n "$wrepo" ] && prmf="$FLEET_C/fleets/$(fleet_slug "$(fleet_norm_repo "$wrepo")")/prmap"
+  fi
   key=$(cache_key "$path")
   branch=''; [ -f "$G/git_$key" ] && IFS= read -r branch < "$G/git_$key" 2>/dev/null
   branch=${branch%%$'\t'*}                       # field 1, no `cut`

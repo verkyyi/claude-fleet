@@ -213,7 +213,7 @@ grep -Eq 'repos +1 hosted \(fd\): o/solo .' "$WORK/doctor.repos" \
 hub_cwd() { HUB_SESSION="$1" HUB_PRINT_CMD=cwd bash "$BIN/hub-session.sh" 2>/dev/null; }
 [ "$(hub_cwd "$S")" = "$HOME" ] && ok "setup: a 2-repo fleet's hub opens in \$HOME (no main repo)" \
   || fail "setup: 2-repo hub cwd [$(hub_cwd "$S")]"
-[ "$(hub_cwd "$D")" = "$MD" ] && ok "(z) a one-repo fleet's hub still opens in its checkout" \
+[ "$(hub_cwd "$D")" = "$HOME" ] && ok "(z) a one-repo fleet's hub opens in \$HOME too — one road (#1941)" \
   || fail "(z) one-repo hub cwd [$(hub_cwd "$D")]"
 
 # ==== spawn: #12 in both repos, a scratch in both, a no-repo session ================

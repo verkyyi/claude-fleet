@@ -1901,6 +1901,76 @@ PY2
   SECS=$(since "$t0"); WHAT="执行会话的客户端只拿测试身份：运营者租约不变，要运营者租约被拒（403 + 原因），守卫拦没写 --test-identity 的启动"
 }
 
+# The drill's scan confirmed as the operator (issue #2010, EPIC #1906 C16): on
+# 2026-10-06 (#1901) the QR's confirm page opened in the operator's browser and
+# confirmed the drill's login AS HIM — the run walked "his second computer",
+# never a new colleague's first time. Now the drill confirms with the approve
+# code `fleet drill invite` minted (bin/fleet-drill.sh approve): a fake hub
+# keeping the real one's rule (a request carrying a session / token / cert is
+# the signed-in admin; POST /fleet/login/approve with the code is the drill
+# person — TestDrillApproveIsTheDrillPerson pins the hub's own), the operator's
+# token AND a certificate sitting right there: the confirmer must be the drill
+# person, and a used code must not confirm a second time.
+drill_drill_confirms_as_operator() {
+  CAP=60; local t0 hub out
+  t0=$(now)
+  hub="$WORK/drillhub-$$"; mkdir -p "$hub/home/.ssh"
+  printf 'k\n' > "$hub/home/.ssh/fleet-cert"; printf 'ssh-ed25519-cert-v01@openssh.com AAAA admin\n' > "$hub/home/.ssh/fleet-cert-cert.pub"
+  cat > "$hub/drive.py" <<'PY2'
+import json, os, signal, subprocess, sys, threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+signal.alarm(int(sys.argv[2]))
+DRILL, HOME = sys.argv[1], sys.argv[3]
+CODE = "fd_abcdefghijklmnopqrstuvwxyz"
+used, confirmed, log = [False], {}, []
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        admin = bool(self.headers.get("Authorization") or self.headers.get("Cookie") or body.get("cert"))
+        log.append("%s admin=%s code=%s" % (self.path, admin, "yes" if body.get("approve_code") else "no"))
+        out, st = {"error": "no such door"}, 404
+        if self.path in ("/fleet/login", "/fleet/login/approve"):
+            if body.get("approve_code"):
+                if body["approve_code"] != CODE or used[0]:
+                    out, st = {"error": "approve code unknown, already used or expired"}, 403
+                else:
+                    used[0] = True
+                    confirmed[body.get("code")] = "drill-person"
+                    out, st = {"status": "approved", "person_id": "drill-1", "kind": "drill"}, 200
+            elif admin:
+                confirmed[body.get("code")] = "admin"
+                out, st = {"status": "approved", "person_id": "admin"}, 200
+            else:
+                out, st = {"error": "nothing to confirm"}, 400
+        b = json.dumps(out).encode()
+        self.send_response(st); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+srv = HTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+def approve(ucode):
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("FLEET_", "CCQUOTA_"))}
+    env.update(HOME=HOME, FLEET_HUB_URL="http://127.0.0.1:%d" % srv.server_address[1],
+               CCQUOTA_VIEWER_TOKEN="admin-token", FLEET_DRILL_INVITE=CODE)
+    r = subprocess.run(["bash", DRILL, "approve", ucode], env=env, capture_output=True, text=True, timeout=20)
+    return r.returncode, (r.stdout + r.stderr).strip()
+def die(why):
+    print("WHY=" + why + " | hub saw: " + " ; ".join(log)); sys.exit(1)
+rc, out = approve("ABCD-EFGH")
+if rc or confirmed.get("ABCD-EFGH") != "drill-person":
+    die("the drill's login was confirmed as %s (rc %d): %s" % (confirmed.get("ABCD-EFGH"), rc, out))
+if any("admin=True" in l for l in log):
+    die("the approve carried the operator's token / cookie / certificate")
+rc, out = approve("WXYZ-WXYZ")
+if rc != 1 or "WXYZ-WXYZ" in confirmed:
+    die("a used approve code confirmed a second login (rc %d): %s" % (rc, out))
+print("OK")
+PY2
+  out=$(python3 "$hub/drive.py" "$BIN/fleet-drill.sh" "$((CAP + 10))" "$hub/home" 2>&1)
+  [ "$out" = OK ] || { WHY=${out#WHY=}; WHY="${WHY:-the drive died}"; return 1; }
+  SECS=$(since "$t0"); WHAT="演练的扫码以演练同事确认：入口上确认人是 drill person，不带运营者的 token / 证书，确认码只能用一次"
+}
+
 # A second client pushes the first off (issue #1932, EPIC #1906 C13): until
 # 2026-10-06 a person held ONE client lease — the iPhone opening took it over and
 # the MacBook fell to its standby screen; on one machine a second `fleet` popped

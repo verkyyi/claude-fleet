@@ -1,6 +1,8 @@
 #!/bin/bash
 # fleet-epic-loopers.sh [--session <sess>] [--repo <owner/name>] <issue>... — which
-#   EPIC members still hold a pending Loop (issue #1331). Read-only.
+#   EPIC members still hold a pending Loop (issue #1331). Read-only. A member is
+#   `N` / `#N` (--repo's, the EPIC's own) or `owner/name#N` — a member filed in
+#   another repo of an EPIC that spans repos (issue #1942); it is echoed back as given.
 #
 # The operator's ruling on EPIC #1312 (option A): a member whose PR merged is
 # DELIVERED — the batch may close — but a window still running its /loop is KEPT
@@ -30,7 +32,7 @@ while [ $# -gt 0 ]; do
     --repo)    repo="${2:-}"; shift 2 ;;
     -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     -*)        printf 'fleet-epic-loopers: unknown argument %s\n' "$1" >&2; exit 2 ;;
-    *)         case "$1" in *[!0-9#]*|'') printf 'fleet-epic-loopers: not an issue number: %s\n' "$1" >&2; exit 2 ;; esac
+    *)         case "$1" in ?*/?*#[0-9]*) ;; *[!0-9#]*|'') printf 'fleet-epic-loopers: not an issue number: %s\n' "$1" >&2; exit 2 ;; esac
                issues+=("${1#\#}"); shift ;;
   esac
 done
@@ -39,7 +41,8 @@ done
 [ -n "$repo" ] || { fleet_load_conf "$sess" >/dev/null 2>&1 || :; repo="${FLEET_REPO:-}"; }
 
 for i in ${issues[@]+"${issues[@]}"}; do
-  w=$(fleet_issue_windows "$sess" "$repo" "$i" | head -n 1)
+  ref=$(fleet_member_ref "$repo" "$i") || { printf 'fleet-epic-loopers: not an issue number: %s\n' "$i" >&2; exit 2; }
+  w=$(fleet_issue_windows "$sess" "${ref%%$'\t'*}" "${ref##*$'\t'}" | head -n 1)
   if [ -z "$w" ]; then printf '%s\tgone\t-\n' "$i"; continue; fi
   out=$(fleet_window_loop "$sess" "$w"); rc=$?
   why=${out#* }

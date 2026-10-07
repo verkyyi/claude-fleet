@@ -8,7 +8,8 @@ proposes a bounded batch as **one design page** you open in a browser (hosted vi
 doc-preview, issue #809), and — **only after you say yes** — files ONE parent
 `epic` issue whose body is the batch charter, with every member linked as a real
 GitHub sub-issue whose body is that member's section of the page. It mutates this
-fleet's `$FLEET_REPO` and nothing else, and it mutates **nothing at all** until
+fleet's repos and nothing else — the parent's `$FLEET_REPO`, plus any hosted repo
+a member is filed in (issue #1942) — and it mutates **nothing at all** until
 you confirm: before the nod the plan exists only in your scratchpad and on the
 tailnet.
 
@@ -18,10 +19,14 @@ one and stop. Never infer a theme from the backlog; the whole point of a theme i
 that it is the operator's judgment about what matters this week, and a cluster the
 model picks is a cluster nobody chose.
 
-**Which repo** (issue #803): a fleet may host several repos, and an EPIC lives in
-ONE of them. `--repo <owner/name>` anywhere in `$ARGUMENTS` names it; without it
+**Which repo** (issues #803, #1942): a fleet may host several repos. An EPIC's
+**parent** lives in ONE of them; its **members** may live in any repo the fleet
+hosts — each member is filed in the repo its code changes in and linked under the
+parent as a cross-repo sub-issue (GitHub allows it; probed 2026-10-06). `--repo
+<owner/name>` anywhere in `$ARGUMENTS` names the repo to start from; without it
 the preamble resolves the pane's own repo, else refuses and lists the choices. A
-one-repo fleet always gets its repo — nothing to pass, nothing changes.
+one-repo fleet always gets its repo — nothing to pass, nothing changes. Where the
+parent finally goes is decided in step 5 (the repo with the most members).
 
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
 
@@ -60,6 +65,13 @@ assume nothing about the target repo. Ask before planning, not at 03:00:
 bash ~/.claude/fleet/bin/fleet-epic-preflight.sh --repo "$FLEET_REPO"; echo "verdict=$?"
 ```
 
+**Members in other repos** (issue #1942): once step 3 has put a member in another
+repo, re-run it against the parent's repo (step 5 decides which) with one
+`--member-repo <owner/name>` per OTHER repo — its `members` row blocks on a repo
+this fleet does not host (the run cannot open a session there) or cannot write
+to — and carry that screen to `#preflight` instead. Seeding labels stays per
+repo: `--repo <that repo> --fix`.
+
 Branch on the exit code — it is the whole point of the script:
 
 - **0 READY** → carry the screen forward to the page's `#preflight` section (step 4) and plan.
@@ -88,6 +100,11 @@ set.
 gh issue list --repo "$FLEET_REPO" --state open --limit 100 \
   --json number,title,labels,createdAt,body
 ```
+
+A theme that reaches into another hosted repo (`fleet_repos "$S"` lists them —
+*"活页里显示 fleet 状态"* touches claude-fleet and the monorepo at once) reads
+that repo's backlog the same way, `--repo <that repo>`. Every candidate is noted
+as `owner/name#N` from here on: numbers repeat across repos.
 
 Select the ones the theme actually covers. Two rules:
 
@@ -300,8 +317,11 @@ The sections, as the template lays them out:
      that row and this line must not disagree.
 
    **下层 — 技术细节** (tap 2), inside `<details class="fold">`, default closed:
-   first **编号 / 来源** — the key and where it came from (`C1 · 已有 #N` /
-   `C2 · 拆自 #N` / `C3 · 新建`, a proposed split from step 3) — then the five
+   first **编号 / 来源** — the key, **the repo it is filed in**, and where it came
+   from (`C1 · 已有 owner/name#N` / `C2 · 拆自 owner/name#N` / `C3 · 新建 ·
+   owner/name`, a proposed split from step 3; issue #1942). A member's repo is
+   the one its code changes in — one member, one repo, one worker; work that
+   changes two repos is two members. Then the five
    fields exactly as before, none of them shortened:
    - **方案** — 改哪里、怎么改: the files / scripts / surfaces and the shape of the
      change. Enough that a worker starts from the code, not from a re-read.
@@ -389,10 +409,16 @@ the bodies they always did. Only now, and in this order:
    date, and any change they asked for goes into the page first
    (`share.sh --refresh`).
 2. **Seed labels** if the operator approved it: `fleet-epic-preflight.sh --repo "$FLEET_REPO" --fix`.
-3. **Create the parent**, labelled `epic`, titled after the theme. Its body is
+3. **Create the parent**, labelled `epic`, titled after the theme. **Which repo**
+   (issue #1942; the operator's ruling on EPIC #1935): the one holding the MOST
+   members; a tie goes to the repo the plan was started in (`$FLEET_REPO`). From
+   here on `<P>` is the parent and `$PREPO` its repo — run step 0's block again
+   with `--repo "$PREPO"` when it differs, so `$FLEET_REPO` names it. Its body is
    the charter, in this shape — the **page URL pinned at the top**, and the
    Core / Reserve list lines in exactly the form `/fleet-epic-run` reads
-   (`- [ ] **C1** #N — title`; a proposed split is `#new` until step 4 fills it):
+   (`- [ ] **C1** #N — title` for a member in the parent's own repo,
+   `- [ ] **C1** owner/name#N — title` for one filed in another repo; a proposed
+   split is `#new` until step 4 fills it):
 
    ```markdown
    > 设计方案页：<READY url>（tailnet 内可达，重启即失效；页面内容已全部写回本 issue 与各子单，页面失效不丢信息）
@@ -413,6 +439,7 @@ the bodies they always did. Only now, and in this order:
    ## 共同约定
    ## Core — definition of done (the run stops when all are merged)
    - [ ] **C1** #N — title
+   - [ ] **C2** owner/other#N — title      ← a member filed in another repo (#1942)
    ## Reserve — promoted only when the core is done and quota remains
    - [ ] **R1** #N — title
    ## 依赖顺序
@@ -437,10 +464,12 @@ the bodies they always did. Only now, and in this order:
      --title "EPIC: <theme>" --body-file <charter.md>
    ```
 
-   The `fleet:epic repo=` marker records which repo the batch belongs to
+   The `fleet:epic repo=` marker records which repo the PARENT is in
    (issue #803): `/fleet-epic-run` and `/fleet-epic-report` check it against the
    repo they resolved, so a run started against the wrong repo stops at tick 0
-   instead of spawning repo A's workers for repo B's issue numbers.
+   instead of spawning repo A's workers for repo B's issue numbers. A member in
+   another repo is named by its own `owner/name#N` in the list, never by the
+   marker — the parent is in one repo, the members may be in several.
 
    The charter body is load-bearing. `/fleet-epic-run` seeds each worker to read
    the parent before it starts, so a charter edited mid-batch reaches every worker
@@ -478,6 +507,11 @@ the bodies they always did. Only now, and in this order:
    <!-- fleet:epic-member epic=<P> key=C1 -->
    ```
 
+   A member filed in ANOTHER repo than the parent (issue #1942) names the parent
+   with its repo, both in the footer and the marker — a bare `#<P>` there would
+   link the member's own repo's issue: `Part of EPIC <owner/name>#<P>.` and
+   `<!-- fleet:epic-member epic=<owner/name>#<P> key=C2 -->`.
+
    Two shapes that are load-bearing, not cosmetic:
    - **Write `上线证据` as a LABELLED LINE, not a heading.** `bin/fleet-evidence.sh
      line` reads `上线证据：…` / `evidence: …` (the label, then a colon, then the
@@ -494,21 +528,32 @@ the bodies they always did. Only now, and in this order:
      `<details>` in an issue body, but without a blank line after `<summary>` the
      markdown inside stops being parsed as markdown.
 
-   - A **proposed split** (`new`) is created with this body (titles in the repo's
-     own language — CJK titles survive into window names, issue #579), then its
-     number replaces `#new` in the parent's list (`gh issue edit <P> --body-file`).
+   - A **proposed split** (`new`) is created with this body **in its card's repo**
+     (`gh issue create --repo <the member's repo>`; titles in the repo's own
+     language — CJK titles survive into window names, issue #579), then its
+     number replaces `#new` in the parent's list (`gh issue edit <P> --repo "$PREPO"
+     --body-file`) — as `owner/name#N` when that repo is not the parent's.
    - An **existing issue** keeps its own body: **append** the section below it
-     (`gh issue view <N> --json body -q .body`, append, `gh issue edit <N>
-     --body-file`). The `<!-- fleet:epic-member … -->` marker makes a second
+     (`gh issue view <N> --repo <its repo> --json body -q .body`, append,
+     `gh issue edit <N> --repo <its repo> --body-file`). The `<!-- fleet:epic-member … -->` marker makes a second
      round replace the section rather than stack another one — never overwrite
      an issue somebody else wrote.
 5. **Link every member** as a real sub-issue. The API takes the child's database
-   **id**, not its number:
+   **id**, not its number — read it from the CHILD's repo, post it to the
+   PARENT's (the same call links across repos, issue #1942):
 
    ```sh
-   cid=$(gh api "repos/$FLEET_REPO/issues/<child>" --jq .id)
-   gh api --method POST "repos/$FLEET_REPO/issues/<parent>/sub_issues" -f sub_issue_id="$cid"
+   cid=$(gh api "repos/<the member's repo>/issues/<child>" --jq .id)
+   gh api --method POST "repos/$PREPO/issues/<parent>/sub_issues" -F sub_issue_id="$cid"
    ```
+
+   **GitHub refuses a cross-repo link** (an Enterprise without it, a repo in an
+   org that forbids it): don't stop the batch — the operator's ruling 4 on
+   EPIC #1935 is that the parent's Core / Reserve list, which already names
+   every member as `owner/name#N`, IS the member list then. Say so in the
+   parent's 待决 (「<owner/name>#N 未能挂成子单，以总单列表为准」); `/fleet-epic-run`
+   and `/fleet-epic-report` read members from the list, never from the
+   sub-issues alone.
 
    Sub-issues are what make the batch visible: the dash nests them under the
    parent and shows subtree progress, and `run` re-derives its entire state from
@@ -524,14 +569,16 @@ the bodies they always did. Only now, and in this order:
 
 One line: the EPIC number and URL, the design page URL, core/reserve counts, the
 preflight verdict, and the single next command — `/fleet-epic-run <N>` (in a
-fleet hosting 2+ repos: `/fleet-epic-run <N> --repo <owner/name>`). If you
+fleet hosting 2+ repos: `/fleet-epic-run <N> --repo <owner/name>` — the
+PARENT's repo, however many repos its members are in). If you
 stopped at step 1 (BLOCKED) or step 4 (awaiting the nod — the page URL is the
 whole report then), say that instead, with the reason.
 
 ---
 
-Rails: operate on YOUR fleet's `$FLEET_REPO` only — never another fleet's repo,
-sessions, or ledgers. The design page is hosted with doc-preview, never the
+Rails: operate on YOUR fleet's repos only — the parent's `$FLEET_REPO` and the
+other repos this fleet hosts that its members are filed in — never another
+fleet's repo, sessions, or ledgers. The design page is hosted with doc-preview, never the
 Artifact tool (hook-blocked in fleet sessions, issue #526), and lives in your
 scratchpad, never in the repo. This skill files issues; it never edits code,
 opens a PR, or spawns a worker — spawning is `/fleet-epic-run`'s job, and the

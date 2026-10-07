@@ -6,16 +6,21 @@ PHASE 2 of the EPIC trio. Takes an EPIC filed by `/fleet-epic-plan` and pushes i
 to completion across many hours and many workers: keeps 4–6 workers busy, answers
 what it is allowed to answer, lands green PRs, reclaims finished slots, rides out
 quota ceilings, and stops when the core layer is empty. It mutates this fleet's
-`$FLEET_REPO` (issues, PRs, merges) and this fleet's tmux session (windows).
+repos — the parent's `$FLEET_REPO` and each hosted repo a member is filed in
+(issues, PRs, merges) — and this fleet's tmux session (windows).
 
 **Argument** (`$ARGUMENTS`): the EPIC issue number. Optional — with none, resolve
 the newest OPEN issue labelled `epic` in this fleet; if there is more than one,
 list them and ask rather than guessing which batch the operator meant.
 
-**Which repo** (issue #803): a fleet may host several repos, and an EPIC lives in
-ONE of them. `--repo <owner/name>` anywhere in `$ARGUMENTS` names it; without it
-the preamble resolves the pane's own repo, else refuses and lists the choices. A
-one-repo fleet always gets its repo — nothing to pass, nothing changes.
+**Which repo** (issues #803, #1942): a fleet may host several repos. An EPIC's
+parent lives in ONE of them — `--repo <owner/name>` anywhere in `$ARGUMENTS`
+names it; without it the preamble resolves the pane's own repo, else refuses and
+lists the choices. Its **members may live in other repos** the fleet hosts: each
+is the pair (repo, issue), read off the charter's list (§1 «Members are (repo,
+issue)»), and everything done to a member — spawn, verdict, merge, reap, label —
+names the member's OWN repo. A one-repo fleet always gets its repo — nothing to
+pass, nothing changes.
 
 ## 0. Resolve fleet + guard seat (run FIRST, every time)
 
@@ -43,9 +48,10 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   (`fleet_repos "$S"`) and ASK which one in an `AskUserQuestion` menu — never
   guess — then re-run this block with the answer as `--repo`.
 - **`RC=1`** — the named `--repo` is not one this fleet hosts: ABORT in one line.
-- From here on **every** `$FLEET_REPO` below is the resolved repo, and every
-  `gh` call names it with `--repo` — the hub pane of a multi-repo fleet sits in
-  `$HOME`, where a bare `gh` has no repo to infer.
+- From here on **every** `$FLEET_REPO` below is the resolved repo — the
+  PARENT's; a member's own repo is `$MREPO` (§1 «Members are (repo, issue)»).
+  Every `gh` call names its repo with `--repo` — the hub pane of a multi-repo
+  fleet sits in `$HOME`, where a bare `gh` has no repo to infer.
 - **The charter's `<!-- fleet:epic repo=… -->` marker** (an EPIC planned since
   #803 has one) must equal `$FLEET_REPO`; a mismatch means this run resolved the
   wrong repo — stop and say so, spawn nothing. No marker: an older EPIC; go on.
@@ -79,8 +85,20 @@ that dies at the boundary. Therefore:
   step 3 — so a loop that dies without its closing tick holds nothing forever;
   the closing tick clears it (step 4).
 - **Each tick begins by re-reading the EPIC** — the parent body (the charter), the
-  sub-issue list and their states, and the repo's open PRs. Never carry a plan
-  from the previous tick.
+  sub-issue list and their states, and each member repo's open PRs. Never carry
+  a plan from the previous tick.
+- **Members are (repo, issue)** (issue #1942). The charter's Core / Reserve lines
+  are the member list: `- [ ] **C1** #N — title` is a member in the parent's own
+  repo, `- [ ] **C1** owner/name#N — title` one filed in another hosted repo.
+  `fleet_member_ref "$FLEET_REPO" "<#N | owner/name#N>"` turns either into
+  `<repo>\t<N>` — call that repo `$MREPO` below — and the sub-issues come back
+  with their repo too (`fleet_sub_issues "$FLEET_REPO" <EPIC>` →
+  `<repo>\t<N>\t<state>`; never `.[].number` alone: numbers repeat across repos).
+  When the two disagree the LIST wins — a member GitHub would not link across
+  repos is still in it (the operator's ruling 4 on EPIC #1935). A member's
+  session key is `<slug>:issue-<N>` with ITS repo's slug
+  (`fleet_okey_prefix "$S" "$MREPO"`) — what the ledger, the backstop and the
+  reap all take.
 - **Member state is ONE read: the children ledger** (issue #937/#940). Every
   worker this loop spawns carries `<PKEY>` as its `@origin`, and every
   report it sends is written to this loop's ledger — so the per-member picture is
@@ -141,7 +159,7 @@ that finished and went idle without merging.
 For each EPIC member with an open PR (the ledger read above names them):
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO" -q
+bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$MREPO" -q    # the member's own repo
 ```
 
 - `READY` → first ask whether the worker still owns it (issue #921):
@@ -170,11 +188,11 @@ bash ~/.claude/fleet/bin/fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO" -q
   cannot see it`) rather than reading as gone. Exit `0`
   (`clear: …` — idle / done, no window here and none on the hub (`hub says
   gone`), or its own MERGED ship report is in the ledger) → merge it, **one command, never chained**:
-  `~/.claude/fleet/bin/fleet-pr-merge.sh <PR> --repo "$FLEET_REPO" --squash` (re-reads the gate,
+  `~/.claude/fleet/bin/fleet-pr-merge.sh <PR> --repo "$MREPO" --squash` (re-reads the gate,
   merges with the branch deleted, confirms `MERGED`; under a GraphQL rate limit it merges over
   REST instead of failing, issue #1042). A chained `push --delete` once
   closed the wrong issue and got the worker reaped.
-- `BEHIND` → `gh pr update-branch <PR> --repo "$FLEET_REPO"`.
+- `BEHIND` → `gh pr update-branch <PR> --repo "$MREPO"`.
 - `PENDING` → nothing; next tick.
 - `FAILING` / `CONFLICT` → step 2d (it is a failure, not a merge decision).
 - `BLOCKED` → branch protection said no. Not yours to force: note it on the
@@ -196,9 +214,9 @@ off on its own while this loop's heartbeat is fresh (step 1).
 A finished worker holds a slot until something reaps it. Don't wait to be told:
 for each member whose PR is MERGED (and deploy-green, if applicable) while its
 window still exists, reap it —
-`bash ~/.claude/fleet/bin/dash-reap.sh issue-<N> --yes` (in a multi-repo fleet
-`<slug>:issue-<N>`; never a `session:index` or a window name — those are
-`refused:target`, exit 4, issue #869) — which records a
+`bash ~/.claude/fleet/bin/dash-reap.sh <slug>:issue-<N> --yes` (the member's key,
+with its own repo's slug — issue #1942; never a `session:index` or a window
+name — those are `refused:target`, exit 4, issue #869) — which records a
 `/fleet-history` row before disposing of anything. A member whose window lives
 on ANOTHER machine is reaped by the same command (issue #1589): with the hub on,
 `dash-reap.sh` asks that machine's node to run the reap there and answers with
@@ -237,12 +255,15 @@ bash -c 'source ~/.claude/fleet/bin/fleet-lib.sh; fleet_machine_admit' || echo '
 ```
 
 ```sh
-bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$FLEET_REPO" --origin "<PKEY>" --title "<the issue's own title>"
+bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$MREPO" --origin "<PKEY>" --title "<the issue's own title>"
 ```
 
-`--repo` is not optional: a fleet hosting 2+ repos refuses a spawn without it
-(exit 1 — `this fleet hosts several repos`, issue #972), and in a one-repo fleet
-it names the only repo, so it is always correct to pass.
+`--repo` is not optional, and it is the MEMBER's repo (issue #1942): a member
+filed in repo B opens its session in B even though the parent is A's. A fleet
+hosting 2+ repos refuses a spawn without it (exit 1 — `this fleet hosts several
+repos`, issue #972), and in a one-repo fleet `$MREPO` is the only repo, so it is
+always correct to pass. The child still reports to `<PKEY>` — one loop drives
+every repo's members.
 
 **Exit 4 = no live parent** (issue #1355): `<PKEY>` names no live session (this
 pane's window closed or lost its key) or the shell lost `$TMUX_PANE`. Nothing was
@@ -291,7 +312,8 @@ treatment:
 
 - **A failed worker** (PR red, conflicted, or the window died) → **retry once**,
   seeding the new worker with what went wrong. Second failure: label the member
-  `blocked`, write the reason on the parent, free the slot.
+  `blocked` (`gh issue edit <N> --repo "$MREPO" --add-label blocked`), write the
+  reason on the parent, free the slot.
 
 One caution on red: a red check is not always the code's fault. This suite carries
 real-time budgets that only hold on an idle box (`CLAUDE.md`, issue #691/#693), so
@@ -404,7 +426,8 @@ URL, because that is the one thing the operator will want to click.
 
 ---
 
-Rails: operate on YOUR fleet's `$FLEET_REPO` only. This skill merges to the base
+Rails: operate on YOUR fleet's repos only — the parent's `$FLEET_REPO` and the
+hosted repos its members are filed in. This skill merges to the base
 branch unattended — that is the operator's standing decision, and CI green is its
 only gate; `git revert` is the undo. It does **not** run `/fleet-sync-install`
 mid-batch. The base checkout is read-only (hook-enforced): workers edit inside

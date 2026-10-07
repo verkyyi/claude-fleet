@@ -48,6 +48,7 @@ func TestAccess_ListsEveryDoorIncludingTheOneThatIsNotHTTP(t *testing.T) {
 		"ingest":    "http",
 		"share":     "http",
 		"badges":    "http",
+		"meter":     "http",
 		"healthz":   "http",
 		"version":   "http",
 		"cli":       "hub-shell",

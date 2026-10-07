@@ -211,11 +211,14 @@ fetch_issues_for() {
     # fleet_cache's new-layout fallback serves it exactly like labels). Writes
     # child<TAB>parent for every open issue that HAS a parent; the reader nests a
     # child under its parent row. The <name>.$$ temp is swept by the EXIT trap.
+    # Only a parent in THIS repo (issue #1942): an EPIC may span repos, and a member
+    # of repo B whose parent is A's #7 must not nest under B's own #7 — numbers
+    # repeat across repos. Such a member renders flat in B's backlog.
     owner="${rp%%/*}"; name="${rp#*/}"
     if gh api graphql --paginate \
-      -f query='query($owner:String!,$name:String!,$endCursor:String){repository(owner:$owner,name:$name){issues(first:100,states:OPEN,after:$endCursor){pageInfo{hasNextPage endCursor}nodes{number parent{number}}}}}' \
+      -f query='query($owner:String!,$name:String!,$endCursor:String){repository(owner:$owner,name:$name){issues(first:100,states:OPEN,after:$endCursor){pageInfo{hasNextPage endCursor}nodes{number parent{number repository{nameWithOwner}}}}}}' \
       -F owner="$owner" -F name="$name" \
-      --jq '.data.repository.issues.nodes[]|select(.parent!=null)|"\(.number)\t\(.parent.number)"' \
+      --jq '.data.repository.issues.nodes[]|select(.parent!=null and ((.parent.repository.nameWithOwner // "")|ascii_downcase) == ("'"$rp"'"|ascii_downcase))|"\(.number)\t\(.parent.number)"' \
       > "$FD/parents.$$" 2>/dev/null; then
       mv "$FD/parents.$$" "$FD/parents"
     else

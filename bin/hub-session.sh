@@ -20,8 +20,8 @@
 # 'operator' provenance stamp. Nothing about those rails changed.
 #
 # Multi-fleet (a fleet ≡ a tmux session, hosting one or more repos): SESS defaults to the CURRENT
-# session so every fleet gets its OWN hub, and BASE defaults to that fleet's
-# FLEET_MAIN (its per-session conf). Both overridable via HUB_SESSION / HUB_CWD —
+# session so every fleet gets its OWN hub, and BASE defaults to $HOME (issue
+# #1941 — a fleet has no main repo). Both overridable via HUB_SESSION / HUB_CWD —
 # fleet-up.sh passes them explicitly when it builds a fresh fleet.
 #
 # IMPORTANT: window names are NOT unique in tmux, so we NEVER target "$SESS:plan"
@@ -43,22 +43,12 @@ SESS="${HUB_SESSION:-$(fleet_current_session)}"
 # from fleet-up (no $TMUX) or from a zoom bind inside the fleet ($TMUX set) — the
 # explicit -L resolves to the same socket either way.
 SOCK=$(fleet_socket "$SESS")
-# BASE: explicit override → this fleet's FLEET_MAIN (per-session conf) →
-# the session's first window cwd → HOME. A fleet hosting 2+ repos has no main
-# repo (issue #795), so its hub starts in $HOME — a shell or claude the operator
-# opens beside the dash lands there, not inside one repo's base checkout.
-if fleet_multirepo "$SESS"; then
-  BASE="$HOME"
-  fleet_load_conf "$SESS"
-elif [ -n "${HUB_CWD:-}" ]; then
-  BASE="$HUB_CWD"
-  fleet_load_conf "$SESS"   # per-fleet conf; BASE stays pinned above
-else
-  fleet_load_conf "$SESS"
-  BASE="${FLEET_MAIN:-}"
-  [ -z "$BASE" ] && BASE=$(tmux -L "$SOCK" list-windows -t "$SESS" -F '#{pane_current_path}' 2>/dev/null | awk 'NF{print; exit}')
-  [ -z "$BASE" ] && BASE="$HOME"
-fi
+# BASE: the explicit override, else $HOME — however many repos the fleet hosts
+# (issues #795, #1941). A fleet has no main repo, so a shell or claude the
+# operator opens beside the task list lands in $HOME, never inside one repo's
+# base checkout — and adding a second repo moves nothing.
+fleet_load_conf "$SESS"
+BASE="${HUB_CWD:-$HOME}"
 
 # The full-screen list retired (issue #1533). Unless FLEET_DASH_WINDOW=1 brings
 # it back, the fleet's resting window is `home`: a plain shell in BASE that the

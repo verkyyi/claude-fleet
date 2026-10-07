@@ -67,7 +67,10 @@ Do not install from memory: read the doc and work from it.
   `fleet_repos` / `fleet_window_repo` / `fleet_load_repo_conf` — never an
   ad-hoc `git remote` parse — and every join is
   on (repo, issue) or (repo, branch), never a bare number or branch name. A
-  window whose repo is unknown is skipped, never guessed. In a 2+ repo fleet the
+  window whose repo is unknown is skipped, never guessed. **An EPIC's parent is
+  in one repo, its members may be in any hosted repo** (issue #1942): a member is
+  (repo, issue) — `owner/name#N` in the charter's list, read through
+  `fleet_member_ref` / `fleet_sub_issues`, never a sub-issue's `.number` alone. In a 2+ repo fleet the
   hub opens in `$HOME`. **Degenerate case is sacred:** a fleet with no `repos/`
   overlay must behave byte for byte as a one-repo fleet always has, and any
   change here ships a selftest leg that asserts it. `bin/multirepo-e2e-selftest.sh`

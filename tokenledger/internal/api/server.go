@@ -88,6 +88,7 @@ type Server struct {
 	// query is a full scan and the SSE stream pushes several times a second,
 	// so it is recomputed on a timer rather than per push.
 	counter        Counter
+	meter          meterState
 	sourceCounters scopedCounters
 	quotaLeases    quotaLeases
 
@@ -245,7 +246,13 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+	return s.logRequests(s.routes())
+}
+
+// routes mounts every route; roles.go's routeAccess names each one
+// (claude-fleet#1985).
+func (s *Server) routes() *routeMux {
+	mux := &routeMux{ServeMux: http.NewServeMux()}
 
 	// Every snapshot that leaves the hub carries the counter and each
 	// session's os_user, including the ones broadcast from inside Live.
@@ -383,6 +390,12 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/v1/fleet/login/start", s.handleDeviceStart)
 		mux.HandleFunc("/v1/fleet/login/poll", s.handleDevicePoll)
 		mux.Handle("/fleet/login", s.rememberLoginCode(s.viewerOnly(http.HandlerFunc(s.handleFleetLoginPage))))
+		// Drill people (claude-fleet#2010): an approve code confirms a scan
+		// as the drill person — it is the whole credential, so outside the
+		// viewer gate; the invite authenticates itself (cert or gate).
+		mux.HandleFunc(LoginApprovePath, s.handleLoginApprove)
+		mux.HandleFunc(DrillPath, s.handleAdminDrill)
+		mux.HandleFunc(DrillSelfPath, s.handleSelf)
 		mux.Handle("/connect", s.viewerOnly(http.HandlerFunc(s.serveConnectPage)))
 		// Registered devices (claude-fleet#1470): a renewal is proven by the
 		// device's own key, so it authenticates itself, outside the viewer
@@ -437,40 +450,40 @@ func (s *Server) Handler() http.Handler {
 	// refs/tags/stable from any machine, with no cluster access and no token.
 	mux.HandleFunc("/version", s.handleVersion)
 
-	mux.Handle("/v1/accounts", s.viewerOnly(http.HandlerFunc(s.handleAccounts)))
+	mux.Handle("/v1/accounts", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccounts))))
 	// Who the gate admitted, for the shared page header (claude-fleet#1467).
 	// Unconditional: the header is on every hub's dashboard, fleet module or not.
 	mux.Handle("/v1/me", s.viewerOnly(http.HandlerFunc(s.handleMe)))
 	mux.Handle("/v1/fx", s.viewerOnly(http.HandlerFunc(s.handleFX)))
-	mux.Handle("/v1/collectors", s.viewerOnly(http.HandlerFunc(s.handleCollectors)))
-	mux.Handle("/v1/account-usage", s.viewerOnly(http.HandlerFunc(s.handleAccountUsage)))
-	mux.Handle("/v1/limits", s.viewerOnly(http.HandlerFunc(s.handleLimits)))
-	mux.Handle("/v1/endpoints", s.viewerOnly(http.HandlerFunc(s.handleEndpoints)))
+	mux.Handle("/v1/collectors", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCollectors))))
+	mux.Handle("/v1/account-usage", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccountUsage))))
+	mux.Handle("/v1/limits", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleLimits))))
+	mux.Handle("/v1/endpoints", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleEndpoints))))
 	mux.Handle("/v1/usage", s.viewerOnly(http.HandlerFunc(s.handleUsage)))
 	mux.Handle("/v1/history", s.viewerOnly(http.HandlerFunc(s.handleHistory)))
-	mux.Handle("/v1/account-switches", s.viewerOnly(http.HandlerFunc(s.handleSwitches)))
-	mux.Handle("/v1/endpoint-accounts", s.viewerOnly(http.HandlerFunc(s.handleEndpointAccounts)))
-	mux.Handle("/v1/accounts/label", s.viewerOnly(http.HandlerFunc(s.handleAccountLabel)))
+	mux.Handle("/v1/account-switches", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleSwitches))))
+	mux.Handle("/v1/endpoint-accounts", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleEndpointAccounts))))
+	mux.Handle("/v1/accounts/label", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccountLabel))))
 	mux.Handle("/v1/live", s.viewerOnly(http.HandlerFunc(s.handleLiveSnapshot)))
 	mux.Handle("/v1/live/stream", s.viewerOnly(http.HandlerFunc(s.handleLiveStream)))
 	mux.Handle("/v1/summary", s.viewerOnly(http.HandlerFunc(s.handleSummary)))
 	mux.Handle("/v1/sessions", s.viewerOnly(http.HandlerFunc(s.handleSessions)))
 	mux.Handle("/v1/sessions/", s.viewerOnly(http.HandlerFunc(s.handleSession)))
-	mux.Handle("/v1/limits/history", s.viewerOnly(http.HandlerFunc(s.handleLimitsHistory)))
+	mux.Handle("/v1/limits/history", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleLimitsHistory))))
 	// The quota windows on their own. /v1/limits/history still folds a copy in
 	// for the dashboard, which draws both series on one axis; this is for a
 	// caller that wants only the windows -- see handleQuotaHistory.
-	mux.Handle("/v1/quota/history", s.viewerOnly(http.HandlerFunc(s.handleQuotaHistory)))
-	mux.Handle("/v1/findings", s.viewerOnly(http.HandlerFunc(s.handleFindings)))
+	mux.Handle("/v1/quota/history", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleQuotaHistory))))
+	mux.Handle("/v1/findings", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFindings))))
 	// The hub's second viewer-facing WRITE, behind the same gate as the
 	// first (/v1/accounts/label) and deliberately not behind a new one --
 	// see internal/api/finding_mutes.go on the trust boundary.
-	mux.Handle("/v1/findings/mutes", s.viewerOnly(http.HandlerFunc(s.handleFindingMutes)))
-	mux.Handle("/v1/repos", s.viewerOnly(http.HandlerFunc(s.handleRepos)))
-	mux.Handle("/v1/repo/flow", s.viewerOnly(http.HandlerFunc(s.handleRepoFlow)))
-	mux.Handle("/v1/repo/issues", s.viewerOnly(http.HandlerFunc(s.handleRepoIssues)))
-	mux.Handle("/v1/repo/cost", s.viewerOnly(http.HandlerFunc(s.handleRepoCost)))
-	mux.Handle("/v1/repo/human-debt", s.viewerOnly(http.HandlerFunc(s.handleRepoHumanDebt)))
+	mux.Handle("/v1/findings/mutes", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFindingMutes))))
+	mux.Handle("/v1/repos", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleRepos))))
+	mux.Handle("/v1/repo/flow", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleRepoFlow))))
+	mux.Handle("/v1/repo/issues", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleRepoIssues))))
+	mux.Handle("/v1/repo/cost", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleRepoCost))))
+	mux.Handle("/v1/repo/human-debt", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleRepoHumanDebt))))
 
 	if s.MCP != nil {
 		mux.Handle("/mcp", s.viewerOnly(s.MCP))
@@ -491,17 +504,17 @@ func (s *Server) Handler() http.Handler {
 	// unconditional 404 exists precisely so an uncredentialled prober cannot
 	// learn that. Both spellings, so /access/ is the page rather than the SPA
 	// fallback. See access.go.
-	mux.Handle("/v1/access", s.viewerOnly(http.HandlerFunc(s.handleAccess)))
-	mux.Handle("/access", s.viewerOnly(http.HandlerFunc(s.serveAccessPage)))
-	mux.Handle("/access/", s.viewerOnly(http.HandlerFunc(s.serveAccessPage)))
+	mux.Handle("/v1/access", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccess))))
+	mux.Handle("/access", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveAccessPage))))
+	mux.Handle("/access/", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveAccessPage))))
 
 	// The business board. Gated like every other human surface -- these are
 	// the most sensitive figures this binary holds -- and mounted at a fixed
 	// path rather than inside the dashboard's hash router because it is
 	// server-rendered; see serveGrowthPage. Both spellings, so /growth/ is the
 	// board rather than the SPA's index.html fallback.
-	mux.Handle("/growth", s.viewerOnly(http.HandlerFunc(s.serveGrowthPage)))
-	mux.Handle("/growth/", s.viewerOnly(http.HandlerFunc(s.serveGrowthPage)))
+	mux.Handle("/growth", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveGrowthPage))))
+	mux.Handle("/growth/", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveGrowthPage))))
 
 	// Badges are the one surface that may be unauthenticated, and only on
 	// purpose. Everything else on this hub stays behind the viewer token.
@@ -515,13 +528,20 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/badge/", badges)
 		mux.Handle("/embed/", badges)
 	} else {
-		mux.Handle("/badge/", s.viewerOnly(badges))
-		mux.Handle("/embed/", s.viewerOnly(badges))
+		mux.Handle("/badge/", s.viewerOnly(s.adminOnly(badges)))
+		mux.Handle("/embed/", s.viewerOnly(s.adminOnly(badges)))
 	}
 
-	mux.Handle("/", s.viewerOnly(http.HandlerFunc(s.serveUI)))
+	// The public counter (claude-fleet#1988): the hub's one lifetime total,
+	// readable by anyone while hub.public_meter is on, so 24haowan.com's
+	// homepage takes it straight from here instead of through a token.
+	mux.HandleFunc("/meter.json", s.handleMeter)
+	mux.HandleFunc("/odometer.svg", s.handleOdometer)
 
-	return s.logRequests(mux)
+	// Signed out, "/" is the front page; signed in, the app.
+	mux.Handle("/", s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding))
+
+	return mux
 }
 
 // viewerOnly gates a handler behind the viewer token.
@@ -530,6 +550,15 @@ func (s *Server) Handler() http.Handler {
 // `ccquota_token` cookie, which is what lets a browser follow ?token=... once
 // and then navigate normally.
 func (s *Server) viewerOnly(next http.Handler) http.Handler {
+	return s.viewerOr(next, nil)
+}
+
+// viewerOr is viewerOnly with a say in what a request holding NO credential
+// gets: signedOut answers it when it returns true, else the gate's usual
+// sign-in redirect or 401 follows. Only the front page uses it
+// (claude-fleet#1988): a stranger opening "/" reads what claudefleet is
+// instead of a refusal, while everyone the gate admits still gets the app.
+func (s *Server) viewerOr(next http.Handler, signedOut func(http.ResponseWriter, *http.Request) bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every admitting branch below records WHICH door let the request in
 		// (withDoor), so /v1/me can say so and the page header can show it
@@ -588,6 +617,9 @@ func (s *Server) viewerOnly(next http.Handler) http.Handler {
 		// of the local tailscaled, never of anything in the request.
 		if login, ok := s.Tailnet.Lookup(r.RemoteAddr); ok {
 			next.ServeHTTP(w, r.WithContext(withDoor(withViewer(r.Context(), login), doorTailnet)))
+			return
+		}
+		if signedOut != nil && signedOut(w, r) {
 			return
 		}
 		// A browser with no credential is someone who has not signed in yet;

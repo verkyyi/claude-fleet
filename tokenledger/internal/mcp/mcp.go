@@ -149,6 +149,16 @@ func (s *mcpServer) dispatch(hr *http.Request, req *request) *response {
 		if s.api.Fleet {
 			tools = append(tools, fleetToolSpecs()...)
 		}
+		// A user is shown only what they may call (claude-fleet#1985).
+		if _, scoped, err := s.api.UserScope(hr); err != nil || scoped {
+			mine := []toolSpec{}
+			for _, t := range tools {
+				if err == nil && api.IsUserTool(t.Name) {
+					mine = append(mine, t)
+				}
+			}
+			tools = mine
+		}
 		out.Result = map[string]any{"tools": tools}
 	case "tools/call":
 		out.Result, out.Error = s.callTool(hr, req.Params)
@@ -707,6 +717,10 @@ func (s *mcpServer) callTool(hr *http.Request, raw json.RawMessage) (any, *rpcEr
 		// Scoped to the caller, so it needs the request's identity — which
 		// is why it is not one more case in run.
 		payload, err = s.api.CallFleetTool(hr, p.Name, p.Arguments)
+	} else if login, scoped, serr := s.api.UserScope(hr); serr != nil {
+		err = serr
+	} else if scoped {
+		payload, err = s.runUser(login, p.Name, p.Arguments)
 	} else {
 		payload, err = s.run(p.Name, p.Arguments)
 	}
@@ -725,6 +739,53 @@ func (s *mcpServer) callTool(hr *http.Request, raw json.RawMessage) (any, *rpcEr
 		"content":           []any{map[string]any{"type": "text", "text": string(pretty)}},
 		"structuredContent": payload,
 	}, nil
+}
+
+// runUser is run for a user (claude-fleet#1985): only the tools IsUserTool
+// names, every one cut to their machine login across every subscription, and
+// no subscription named in the answer.
+func (s *mcpServer) runUser(login, name string, args map[string]any) (any, error) {
+	if !api.IsUserTool(name) {
+		return nil, fmt.Errorf("%s is an admin's tool: only an admin can use it", name)
+	}
+	a := map[string]any{}
+	for k, v := range args {
+		a[k] = v
+	}
+	a["user"], a["account"] = login, "all"
+	if name == "get_live" {
+		if source := str(a, "source"); source != "" && !model.KnownSource(source) {
+			return nil, fmt.Errorf("source must be one of: %s", strings.Join(model.Sources, ", "))
+		}
+		l := s.api.LiveStore
+		if l == nil {
+			l = api.NewLive()
+		}
+		return s.api.FilterLiveFor(l.Snapshot(), store.AllAccounts, str(a, "source"), login), nil
+	}
+	out, err := s.run(name, a)
+	if err != nil {
+		return nil, err
+	}
+	m, _ := out.(map[string]any)
+	switch name {
+	case "get_session":
+		if head, _ := m["session"].(*store.SessionRow); head == nil || head.OSUser != login {
+			return nil, fmt.Errorf("unknown session %q", str(a, "session_id"))
+		} else {
+			head.AccountUUID = ""
+		}
+	case "list_sessions":
+		if rows, ok := m["sessions"].([]store.SessionRow); ok {
+			for i := range rows {
+				rows[i].AccountUUID = ""
+			}
+		}
+	case "usage_summary":
+		m["subscription_spend"] = []store.SubscriptionSpend{}
+		delete(m, "real_spend")
+	}
+	return out, nil
 }
 
 func (s *mcpServer) run(name string, args map[string]any) (any, error) {

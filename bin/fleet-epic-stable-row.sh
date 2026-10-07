@@ -20,6 +20,10 @@
 # members' MERGED PRs resolved with `gh` from --epic <N> (sub-issues →
 # `gh pr list --head issue-<M> --state merged`, the fleet's one-issue-one-branch
 # convention), or handed in as --merged <sha> (repeatable, any order).
+# An EPIC may span repos (issue #1942): only the members filed in <repo> count
+# (stable is per repo), and `--epic <owner/name>#<N>` names a parent that lives in
+# another repo — so the report asks every repo its batch touched, not only the
+# parent's.
 #
 # Output, line-anchored `key: value` (like fleet-stable.sh show):
 #   kind:    behind|none|offtrunk|unknown  → a row is due (exit 0)
@@ -35,10 +39,10 @@
 set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
-repo="" main="" epic="" merged="" base=master remote=origin timeout=15
+repo="" main="" epic="" epic_repo="" merged="" base=master remote=origin timeout=15
 
 die() { printf 'fleet-epic-stable-row: %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
 
 [ "$#" -gt 0 ] || { usage; exit 2; }
 while [ "$#" -gt 0 ]; do
@@ -59,7 +63,9 @@ done
 [ -n "$repo" ] || die "--repo <owner/name> is required"
 [ -n "$main" ] || die "--main <checkout> is required"
 [ -n "$epic" ] || [ -n "$merged" ] || die "need --epic <N> or --merged <sha>"
+case "$epic" in ?*/?*'#'*) epic_repo="${epic%%#*}"; epic="${epic##*#}" ;; esac   # owner/name#N (#1942)
 case "$epic" in *[!0-9]*) die "--epic wants a number, got $epic" ;; esac
+[ -n "$epic_repo" ] || epic_repo="$repo"
 git -C "$main" rev-parse --git-dir >/dev/null 2>&1 || die "$main is not a git checkout (--main)"
 
 # ── 1. the convention gate ────────────────────────────────────────────────────
@@ -86,8 +92,12 @@ have_commit() {
 
 # ── 3. the batch's last merge ─────────────────────────────────────────────────
 if [ -n "$epic" ]; then
-  members=$(gh api "repos/$repo/issues/$epic/sub_issues" --paginate --jq '.[].number' 2>/dev/null) ||
-    die "could not read #$epic's sub-issues on $repo (gh auth?)"
+  # only the members filed in THIS repo (issue #1942): an EPIC may span repos, and
+  # another repo's #N is not this repo's issue-N branch — stable is per repo
+  members=$(gh api "repos/$epic_repo/issues/$epic/sub_issues" --paginate \
+      --jq '.[] | "\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)"' 2>/dev/null) ||
+    die "could not read #$epic's sub-issues on $epic_repo (gh auth?)"
+  members=$(printf '%s\n' "$members" | awk -F '\t' -v r="$repo" 'NF == 1 || $1 == r { print $NF }')
   for m in $members; do
     case "$m" in ''|*[!0-9]*) continue ;; esac
     sha=$(gh pr list --repo "$repo" --state merged --head "issue-$m" --limit 5 \

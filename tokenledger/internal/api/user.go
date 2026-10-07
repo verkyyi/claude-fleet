@@ -26,6 +26,14 @@ type UserView struct {
 
 func (s *Server) handleUserData(w http.ResponseWriter, r *http.Request) {
 	login := r.URL.Query().Get("user")
+	// A user's page is their own (claude-fleet#1985), whatever was asked.
+	own, scoped, ok := s.userScope(w, r)
+	if !ok {
+		return
+	}
+	if scoped {
+		login = own
+	}
 	if login == "" {
 		httpError(w, http.StatusBadRequest, "a user is required: /v1/user?user=<os login>")
 		return
