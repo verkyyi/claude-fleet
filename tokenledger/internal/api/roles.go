@@ -82,11 +82,6 @@ var routeAccess = map[string]string{
 	control.RoutesPath: accessSelf,
 	"/v1/share":        accessSelf, "/share": accessSelf, "/share/": accessSelf,
 
-	// Drill people (claude-fleet#2010): the invite is a certificate signature
-	// or the viewer gate + adminOnly inside the handler; the approve code is
-	// the whole credential; a drill person deletes itself by cert or code.
-	DrillPath: accessSelf, LoginApprovePath: accessSelf, DrillSelfPath: accessSelf,
-
 	// An admin's: subscriptions, machines, join codes, SPOT, credentials,
 	// audits, settings, the operator's own analytics.
 	"/v1/fleet/join-codes": accessAdmin, "/v1/fleet/peer-certs": accessAdmin,
