@@ -121,6 +121,7 @@
 #                          [--sync-logins[=a,b]] [--no-daemons]
 #   fleet-install-apply.sh --bundle [--root <dir>] [--dry-run]
 #   fleet-install-apply.sh --is-command <file>    # exit 0 iff the #858 gate passes
+#   fleet-install-apply.sh --is-skill <dir>       # exit 0 iff the skills pass installs it
 #   fleet-install-apply.sh --render-system <unit> [--root <dir>]
 #                            # the system-shape plist for <unit> on stdout (#1192):
 #                            # Label com.claude-fleet.$FLEET_INSTALL_LOGIN.<unit>,
@@ -171,6 +172,12 @@ is_command() {
     END { exit found ? 0 : 1 }
   ' "$1"
 }
+# A fleet SKILL (skills/<name>/) carries the plain `<!-- fleet skill -->` marker in
+# its SKILL.md — never the commands' `· owner:` form, which this gate does not
+# take (issue #2110: fleet-orchestrate wore the owner form and never installed).
+# The ONE skill gate: the skills and codex-skills passes both ask it, and
+# fleet-agent-bundle.py's SKILL_MARK is the same string.
+is_skill() { [ -f "$1/SKILL.md" ] && grep -qF '<!-- fleet skill -->' "$1/SKILL.md"; }
 
 # --- rendering a daemon template (used by the daemons step and --render-system) --
 brew_prefix() {
@@ -213,6 +220,7 @@ while [ $# -gt 0 ]; do
     --bundle) BUNDLE=1; shift ;;
     --root) ROOT="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     --is-command) is_command "${2:-}"; exit $? ;;
+    --is-skill)   is_skill "${2:-}"; exit $? ;;
     --render-system) RENDER="${2:-}"; shift 2 || { usage >&2; exit 2; } ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'fleet-install-apply: unknown arg %s\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -721,7 +729,6 @@ PY
   } | sed '/^$/d' | awk '!seen[$0]++'
 }
 codex_skill_marked() { [ -f "$1/SKILL.md" ] && grep -qF '<!-- fleet codex command skill -->' "$1/SKILL.md"; }
-codex_base_marked() { [ -f "$1/SKILL.md" ] && grep -qF '<!-- fleet skill -->' "$1/SKILL.md"; }
 codex_command_skill() { # $1 source command.md $2 skill-name
   local src="$1" name="$2" title desc
   title=$(sed -n '1s/^# //p' "$src" | sed 's/[[:space:]]\{1,\}/ /g; s/:/ -/g')
@@ -781,13 +788,13 @@ else
         src="$ROOT/skills/$n" dst="$home/skills/$n"
         if [ ! -f "$src/SKILL.md" ]; then
           [ -d "$dst" ] || continue
-          if ! codex_base_marked "$dst"; then warn=$((warn + 1)); say "codex-skills: WARN $n is retired upstream but the Codex skill is personal — left alone"; continue; fi
+          if ! is_skill "$dst"; then warn=$((warn + 1)); say "codex-skills: WARN $n is retired upstream but the Codex skill is personal — left alone"; continue; fi
           if [ "$DRY" = 1 ]; then rem=$((rem + 1)); say "codex-skills: would remove $home/skills/$n"; continue; fi
           rm -rf "$dst" && rem=$((rem + 1)) || fail codex-skills "remove $dst"
           continue
         fi
-        codex_base_marked "$src" || continue
-        if [ -f "$dst/SKILL.md" ] && ! codex_base_marked "$dst" && ! cmp -s "$src/SKILL.md" "$dst/SKILL.md"; then
+        is_skill "$src" || continue
+        if [ -f "$dst/SKILL.md" ] && ! is_skill "$dst" && ! cmp -s "$src/SKILL.md" "$dst/SKILL.md"; then
           warn=$((warn + 1)); say "codex-skills: WARN $n is a personal Codex skill — left alone"; continue
         fi
         if [ -d "$dst" ] && diff -rq "$src" "$dst" >/dev/null 2>&1; then continue; fi
@@ -813,16 +820,15 @@ elif [ "$COPY" = 1 ]; then
     inst=0 rem=0
     for n in $names; do
       src="$ROOT/skills/$n" dst="$CDIR/skills/$n"
-      marked() { [ -f "$1/SKILL.md" ] && grep -qF '<!-- fleet skill -->' "$1/SKILL.md"; }
       if [ ! -f "$src/SKILL.md" ]; then                  # retired
         [ -d "$dst" ] || continue
-        if ! marked "$dst"; then say "skills: WARN $n is retired upstream but the installed copy is personal — left alone"; continue; fi
+        if ! is_skill "$dst"; then say "skills: WARN $n is retired upstream but the installed copy is personal — left alone"; continue; fi
         if [ "$DRY" = 1 ]; then say "skills: would remove $n"; rem=$((rem + 1)); continue; fi
         rm -rf "$dst" && rem=$((rem + 1)) || fail skills "remove $n"
         continue
       fi
-      marked "$src" || continue
-      if [ -f "$dst/SKILL.md" ] && ! marked "$dst" && ! cmp -s "$src/SKILL.md" "$dst/SKILL.md"; then
+      is_skill "$src" || continue
+      if [ -f "$dst/SKILL.md" ] && ! is_skill "$dst" && ! cmp -s "$src/SKILL.md" "$dst/SKILL.md"; then
         say "skills: WARN $n is a personal skill that diverges from the repo copy — left alone; reconcile by hand"
         continue
       fi

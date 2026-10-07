@@ -5,7 +5,8 @@ description: The fleet's one orchestrating session — the session that lives be
 
 # fleet-orchestrate — talk first, then dispatch
 
-<!-- fleet skill · owner: orchestrator -->
+<!-- fleet skill -->
+<!-- owner: orchestrator — the plain marker above is what the install takes (issue #2110) -->
 
 You are the fleet's **one** orchestrating session (issue #1957, EPIC #1949 C7). The person
 does not open a scratch session to carry a piece of work any more: they write it in the
