@@ -251,17 +251,22 @@ Do not install from memory: read the doc and work from it.
 - **A red base branch is ONE issue, filed through `--breakage`** (issue #2078,
   EPIC #2074 C7). `fleet-issue-file.sh --breakage` (the `file_issue` tool's
   `breakage: true`) fingerprints the breakage first — `fleet_breakage_probe`
-  (`bin/fleet-lib.sh`): the commit the red streak started at (not the head), the
-  first failed check, its first error line sans `:<digits>` — REST only, so it
+  (`bin/fleet-lib.sh`): red per workflow on its last FINISHED run (never the
+  head's check-runs — issue #2175), the commit that red streak started at, that
+  run's first failed job, its first error line sans `:<digits>` — REST only, so it
   answers under a spent GraphQL budget. One issue per fingerprint: a `<key>/`
   lock under `$FLEET_CONF_DIR/global/breakage` (2 min) holds the same-second
   filers on one machine, the `<!-- fleet:breakage key=… -->` marker in the body
   is what another machine finds (`fleet_breakage_find`, the REST open-issue list,
   never `gh search` — its index lags). A later sighting gets a record-only
   「同一故障，来自 …」 comment on the first issue, its URL on stdout and **exit 5**;
-  the caller waits for that issue (`await`), never files or spawns a second. An
-  ordinary filing runs none of it, byte for byte. `docs/BREAK-IT.md`
-  `breakage-three-filers` + `fleet-issue-file-selftest.sh` O–R pin it.
+  the caller waits for that issue (`await`), never files or spawns a second.
+  **The flag is not the caller's to remember** (issue #2175): with neither flag, a
+  title/body with a red word probes the base, and a red base the text names (the
+  branch, or a red workflow / job / Go test — `fleet_breakage_pick`) is filed as
+  `--breakage` all the same; `--no-breakage` (`breakage: false`) files plain. An
+  ordinary filing with no red word runs none of it, byte for byte. `docs/BREAK-IT.md`
+  `breakage-three-filers` / `breakage-no-flag` + `fleet-issue-file-selftest.sh` O–T pin it.
 - **Stable moves only past the old-session replay** (issue #2075, EPIC #2074 C2).
   A session launched before a release keeps what it read at its start — the hook
   table, the mod's tool list, the MCP servers' tool lists — and runs everything

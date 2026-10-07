@@ -754,6 +754,7 @@ grep -v '^fleet-repo.sh list$' "$LOG" > "$WORK/j1.ran"
   call 124 file_issue '{"title":"scratch req","bind":true,"repo":"acme/lib"}'
   call 1241 file_issue '{"title":"master red","breakage":true,"spawn":true}'
   call 1242 file_issue '{"title":"same red","breakage_key":"aaaa111-0123456789ab"}'
+  call 1243 file_issue '{"title":"master red, other bug","breakage":false}'
   call 125 gh '{"kind":"issue","number":5,"fields":"title,state"}'
   call 126 gh '{"kind":"pr","number":42,"fields":"state,mergeStateStatus","max_age":0}'
   call 127 gh '{"kind":"checks","number":42,"repo":"acme/app"}'
@@ -792,6 +793,7 @@ fleet-repo.sh list
 fleet-issue-file.sh --title scratch req --repo acme/lib --bind
 fleet-issue-file.sh --title master red --spawn --breakage
 fleet-issue-file.sh --title same red --breakage-key aaaa111-0123456789ab
+fleet-issue-file.sh --title master red, other bug --no-breakage
 fleet-gh.sh issue view 5 --json title,state
 fleet-gh.sh pr view 42 --json state,mergeStateStatus --max-age 0
 fleet-repo.sh list

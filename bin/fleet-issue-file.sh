@@ -28,6 +28,14 @@
 #      fixes inside 16 seconds for one duplicate route. --breakage-key K takes a
 #      key already computed (a selftest, a caller holding the probe's answer).
 #      A base that is not red files an ordinary issue and says so.
+#      AUTO (issue #2175): with neither flag, a filing whose title/body has a red
+#      word (红 失败 报错 · red fail broken …) probes the base branch, and when it
+#      IS red and the text names the red check (a workflow, failed job or Go test
+#      of it) or says the base branch is red, the filing runs as --breakage —
+#      fleet_breakage_pick. On 2026-10-07 three sessions filed #2159 #2163 #2170
+#      for one red tokenledger-pg without the flag: a rule the caller has to
+#      remember is no rule. --no-breakage files plain; FLEET_BREAKAGE_AUTO=0 turns
+#      the auto road off. A text with no red word reads nothing.
 #   2. STAMP the invisible `<!-- fleet:from role=… session=… issue=… -->`
 #      provenance marker into the body via the shared fleet_from_marker helper —
 #      the byte-identical marker bin/fleet-comment.sh puts on a comment (the
@@ -54,13 +62,13 @@
 # Exit codes: 0 ok · 2 usage · 3 unknown label · 1 no-repo / create failure ·
 # 4 --spawn with no live parent (issue #1355; filed first when the spawn said it) — so a
 # caller records an honest FAIL rather than a false success ·
-# 5 --breakage: the breakage already has an open issue — its URL is on stdout, a
+# 5 --breakage (or auto): the breakage already has an open issue — its URL is on stdout, a
 # 「同一故障」 comment is on it, nothing was filed or spawned (issue #2078).
 #
 # Usage:
 #   fleet-issue-file.sh --title T [--body B] [--label L,...]… [--priority pN] \
 #                       [--parent N] [--from ROLE] [--milestone M] \
-#                       [--repo R] [--spawn | --bind] [--breakage | --breakage-key K]
+#                       [--repo R] [--spawn | --bind] [--breakage | --breakage-key K | --no-breakage]
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -69,7 +77,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-gh-lib.sh"   # fleet_gh_write: every write below is queued (issue #1264)
 
 title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0 bind=0
-breakage=0 breakage_key='' bk_sha='' bk_check='' bk_line='' bk_lock='' bk_held=0
+breakage='' bk_auto=0 breakage_key='' bk_sha='' bk_check='' bk_line='' bk_lock='' bk_held=0
 labels=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -90,8 +98,9 @@ while [ "$#" -gt 0 ]; do
     --spawn)     spawn=1 ;;
     --bind)      bind=1 ;;
     --breakage)  breakage=1 ;;
+    --no-breakage) breakage=0 ;;
     --breakage-key) shift; breakage_key="${1:-}" ;;
-    -h|--help)   sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,71p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)         printf 'fleet-issue-file: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)           printf 'fleet-issue-file: unexpected argument %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -157,8 +166,13 @@ if [ "${#labels[@]}" -gt 0 ]; then
 fi
 
 # --- 1b. one issue per breakage (issue #2078) -----------------------------------
-# Only with --breakage / --breakage-key: an ordinary filing runs none of this —
-# no probe, no lock, no list read (the drill's degenerate leg pins it).
+# With --breakage / --breakage-key, or AUTO (issue #2175): no flag and a red word
+# in the title/body. An ordinary filing with no red word runs none of this — no
+# probe, no lock, no list read (the drill's degenerate leg pins it).
+if [ -z "$breakage" ] && [ -z "$breakage_key" ] && [ "${FLEET_BREAKAGE_AUTO:-1}" != 0 ] \
+   && fleet_breakage_text_red_word "$title"$'\n'"$body"; then
+  breakage=1 bk_auto=1
+fi
 if [ "$breakage" = 1 ] && [ -z "$breakage_key" ]; then
   # The base branch: the window's repo overlay (FLEET_BASE_BRANCH), else the
   # probe asks GitHub for the repo's default branch.
@@ -166,14 +180,26 @@ if [ "$breakage" = 1 ] && [ -z "$breakage_key" ]; then
     fleet_load_repo_conf "$_fs" "$repo" 2>/dev/null
   fi
   _probe=$(fleet_breakage_probe "$repo" "${FLEET_BASE_BRANCH:-}"); _prc=$?
-  case "$_prc" in
-    0) IFS=$'\t' read -r breakage_key bk_sha bk_check bk_line <<EOF
-$_probe
+  _row=''
+  if [ "$_prc" = 0 ]; then
+    # The row this filing is about: a red check its text names, else (the base
+    # branch said red) the oldest red. Explicit --breakage with no match: the
+    # oldest red all the same — the caller said it is the base branch's.
+    _row=$(printf '%s\n' "$_probe" | fleet_breakage_pick "$title"$'\n'"$body" "${FLEET_BASE_BRANCH:-}")
+    [ -n "$_row" ] || [ "$bk_auto" = 1 ] || _row=${_probe%%$'\n'*}
+  fi
+  if [ -n "$_row" ]; then
+    IFS=$'\t' read -r breakage_key bk_sha bk_check bk_line _ <<EOF
+$_row
 EOF
-       printf 'fleet-issue-file: breakage %s — %s @ %.7s: %s\n' "$breakage_key" "$bk_check" "$bk_sha" "$bk_line" >&2 ;;
-    1) printf 'fleet-issue-file: --breakage: %s has no failed check at its head — not red; filing an ordinary issue\n' "${FLEET_BASE_BRANCH:-the default branch}" >&2 ;;
-    *) printf 'fleet-issue-file: --breakage: gh could not read the checks of %s — filing without a fingerprint\n' "${FLEET_BASE_BRANCH:-the default branch}" >&2 ;;
-  esac
+    [ "$bk_auto" = 1 ] && printf 'fleet-issue-file: the base branch is red and this issue names it — filing it as --breakage (auto, issue #2175; --no-breakage files it plain)\n' >&2
+    printf 'fleet-issue-file: breakage %s — %s @ %.7s: %s\n' "$breakage_key" "$bk_check" "$bk_sha" "$bk_line" >&2
+  elif [ "$bk_auto" = 0 ]; then
+    case "$_prc" in
+      0|1) printf 'fleet-issue-file: --breakage: no workflow on %s is red (its last finished run) — filing an ordinary issue\n' "${FLEET_BASE_BRANCH:-the default branch}" >&2 ;;
+      *)   printf 'fleet-issue-file: --breakage: gh could not read the runs of %s — filing without a fingerprint\n' "${FLEET_BASE_BRANCH:-the default branch}" >&2 ;;
+    esac
+  fi
 fi
 bk_existing=''
 if [ -n "$breakage_key" ]; then
@@ -223,6 +249,7 @@ if [ -n "$breakage_key" ]; then
       rm -f "${_cf:-}"
     fi
     printf 'fleet-issue-file: breakage %s already has an open issue: %s — commented there, not filing (exit 5)\n' "$breakage_key" "$bk_existing" >&2
+    [ "$bk_auto" = 1 ] && printf 'fleet-issue-file: (taken as that breakage because the base branch is red and the text names it — a different problem? re-file with --no-breakage)\n' >&2
     printf '%s\n' "$bk_existing"
     exit 5
   fi
