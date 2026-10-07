@@ -1475,8 +1475,9 @@ func fleetToolSpecs() []toolSpec {
 			Description: "Start an existing issue through the fleet's headless launcher (its caps and claim " +
 				"checks apply). Give fleet_id to choose the fleet; or give repo and leave node=auto (the " +
 				"default) for the hub to place it: among your machines with a fleet hosting repo, those " +
-				"offline, above 0.8 load per core, short of memory or at your per-person cap are excluded, " +
-				"the rest scored on account headroom and load — the reasoning is in the operation's " +
+				"offline, above 0.8 load per core, short of memory, under memory pressure or at a per-person " +
+				"cap set for you are excluded, the rest scored on load (the tighter of CPU and memory idle; " +
+				"account quota is shared and never scored) — the reasoning is in the operation's " +
 				"placement. node=<machine> restricts it to that machine. kind=scratch opens a raw " +
 				"scratch session instead (no issue, no lease; an optional name) — issue is required " +
 				"otherwise. Needs worker:start." + fleetWriteCaveat,

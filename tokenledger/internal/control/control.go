@@ -400,6 +400,11 @@ type Heartbeat struct {
 	// machine's total. Zero when unknown.
 	MemFreeBytes  uint64 `json:"mem_free_bytes"`
 	MemTotalBytes uint64 `json:"mem_total_bytes"`
+	// MemPressure is the kernel's memory-pressure level (claude-fleet#1994):
+	// darwin's kern.memorystatus_vm_pressure_level — 1 normal, 2 warn,
+	// 4 critical. 0 (absent) is unknown: Linux and an older agent; placement
+	// excludes a machine at warn (2) or above, and never one for being unknown.
+	MemPressure int `json:"mem_pressure,omitempty"`
 
 	// Sessions is how many fleet sessions (worker + scratch windows) this
 	// login runs across all its fleets. It sums only the fleets that were
