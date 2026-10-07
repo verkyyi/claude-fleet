@@ -107,7 +107,8 @@ srv.serve_forever()
 PY
 echo trusted > "$SB/trust"
 python3 -I "$SB/fake.py" "$SB" & disown
-i=0; while [ ! -s "$SB/fake.port" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+i=0; while [ ! -s "$SB/fake.port" ] && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done   # a CI mac can take seconds
+[ -s "$SB/fake.port" ] || { fail "start: the fake far end never came up"; exit 1; }
 FP=$(cat "$SB/fake.port")
 U="http://127.0.0.1:$FP"
 
@@ -278,7 +279,7 @@ else pass "G no credential in the log (redacted)"; fi
 kill "$PROXY_PID" 2>/dev/null; PROXY_PID=''
 i=0; while [ -e "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 up() { [ -S "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ] && kill -0 "$(cat "$FLEET_CONF_DIR/cred-proxy/pid" 2>/dev/null)" 2>/dev/null; }
-waitfor() { local i=0; while [ "$i" -lt 60 ]; do "$@" && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+waitfor() { local i=0; while [ "$i" -lt 300 ]; do "$@" && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
 FLEET_CRED_PROXY_IDLE_SECS=1 bash "$BIN/fleet-cred-proxy.sh" run --max-seconds 120 >/dev/null 2>&1 & RUNPID=$!
 if waitfor up && [ "$(cat "$FLEET_CONF_DIR/cred-proxy/port")" = "$PORT" ]; then
   pass "H run: on → proxy up, on the same port as before ($PORT)"

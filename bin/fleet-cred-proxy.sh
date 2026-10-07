@@ -83,7 +83,7 @@ case "$cmd" in
       mkdir -p "$STATE" && chmod 700 "$STATE"
       nohup python3 -I "$PY" serve "$@" </dev/null >/dev/null 2>&1 &
       i=0
-      while [ "$i" -lt 50 ] && ! { live_pid >/dev/null && [ -S "$STATE/ctl.sock" ]; }; do sleep 0.1; i=$((i + 1)); done
+      while [ "$i" -lt "$((${FLEET_CRED_PROXY_START_SECS:-30} * 10))" ] && ! { live_pid >/dev/null && [ -S "$STATE/ctl.sock" ]; }; do sleep 0.1; i=$((i + 1)); done
       live_pid >/dev/null || { echo "fleet-cred-proxy: did not start (see logs/cred-proxy.log)" >&2; exit 1; }
     fi
     cat "$STATE/port"
