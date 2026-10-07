@@ -1248,6 +1248,8 @@ def cells_of(text):
 
 
 PRESS = curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED
+# A right-click (issue #1950) is held the same way: its menu is the row's.
+PRESS |= curses.BUTTON3_PRESSED | curses.BUTTON3_CLICKED
 # A press acts on what the view read at most this long before it (issue #1756).
 FRESH_SECS = 0.05
 
@@ -2798,10 +2800,15 @@ def ui(screen, session, worker, lock):
                 # One spawn at a time: what is parked stays parked, and the
                 # tick after the spawn ends takes it (the re-arm above).
                 continue
-            parked = tmux("show-options", "-pqv", "-t", pane, "@sidebar_ask")
-            wid = tmux("show-options", "-pqv", "-t", pane, "@sidebar_rename")
-            tmux("set-option", "-up", "-t", pane, "@sidebar_ask", ";",
-                 "set-option", "-up", "-t", pane, "@sidebar_rename")
+            # Read and cleared in ONE tmux call (as take_switch): a verb parked
+            # between a read and its clear would be cleared unread.
+            got = run(["tmux", "show-options", "-pqv", "-t", pane, "@sidebar_ask", ";",
+                       "display-message", "-p", "-t", pane, US, ";",
+                       "show-options", "-pqv", "-t", pane, "@sidebar_rename", ";",
+                       "set-option", "-up", "-t", pane, "@sidebar_ask", ";",
+                       "set-option", "-up", "-t", pane, "@sidebar_rename"]).stdout
+            parked, _, wid = got.partition(US + "\n")
+            parked, wid = parked.strip(), wid.strip()
             if wid and not parked:
                 parked = "rename " + wid
             kind, _, rest = parked.strip().partition(" ")
