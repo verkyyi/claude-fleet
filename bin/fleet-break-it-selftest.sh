@@ -3337,6 +3337,34 @@ drill_oldcfg_broken_unmarked() {
   WHAT="删了 gone.sh / await 的发版后：w-broken 红「会坏·需重开」并点名（窗口·仓库·单号·状态），只缺 new.sh 的 w-loop 黄且列为循环中，没 manifest 的 w-old 照旧黄；三个都没被重开"
 }
 
+drill_cold_fill_fails() {
+  # issue #2237: the cold start opens the agent's window before the tree is
+  # checked out; a checkout that fails must take that window (and the worktree)
+  # with it, and the spawn must say so — never a session on half a tree.
+  CAP=10; local d="$WORK/cf" lbl="brkcf-$$" t0 rc
+  mkdir -p "$d/o.git" "$d/main" "$d/conf" "$d/tmp" "$d/fb"
+  git init -q --bare "$d/o.git"
+  ( cd "$d/main" && git init -q -b master . && git config user.email t@t && git config user.name t \
+      && printf 'x\n' > CLAUDE.md && git add -A && git commit -qm i && git remote add origin "$d/o.git" \
+      && git push -q origin master ) || { WHY="cannot build the repo"; return 1; }
+  printf '#!/bin/sh\nexit 0\n' > "$d/fb/gh"; printf '#!/bin/sh\nexec sleep 60\n' > "$d/fb/agent"; chmod +x "$d/fb/gh" "$d/fb/agent"
+  env PATH="$d/fb:$PATH" FLEET_WRAP_LAUNCH="$d/fb/agent" "$REAL_TMUX" -L "$lbl" -f /dev/null new-session -d -s "$lbl" -n home \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  t0=$(now)
+  env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET PATH="$d/fb:$PATH" FLEET_CONF_DIR="$d/conf" TMPDIR="$d/tmp" \
+    FLEET_ORIGIN_GATE=0 FLEET_PRESPAWN_DEDUP=0 FLEET_REPO=acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master \
+    FLEET_WORKTREE_ROOT="$d/wt" FLEET_SPAWN_FILL_CMD='sleep 1; exit 1' \
+    bash "$BIN/dash-issue-session.sh" 5 "$lbl" --title t --origin hub --print > "$d/out" 2> "$d/err"; rc=$?
+  SECS=$(since "$t0")
+  local wins; wins=$("$REAL_TMUX" -L "$lbl" list-windows -t "$lbl" -F '#{@issue}' 2>/dev/null)
+  "$REAL_TMUX" -L "$lbl" kill-server >/dev/null 2>&1
+  [ "$rc" = 1 ] || { WHY="the spawn exited $rc, want 1"; return 1; }
+  grep -q 'worktree checkout' "$d/err" || { WHY="the spawn did not say the checkout failed: $(tr '\n' '|' < "$d/err")"; return 1; }
+  case " $(printf '%s ' $wins)" in *" 5 "*) WHY="the window of the failed checkout is still open"; return 1 ;; esac
+  [ -z "$(ls -d "$d"/wt/*issue-5 2>/dev/null)" ] || { WHY="the half worktree is still there"; return 1; }
+  WHAT="检出失败：会话窗口和半截 worktree 都收走，派发方得到 exit 1「worktree checkout」"
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"

@@ -164,8 +164,10 @@ class Control:
                 return fleet
         raise Fault("NOT_FOUND", "Fleet is no longer configured on this machine")
 
-    def workers(self, fleet):
-        code, output, err = self.adapter("workers", fleet["name"])
+    def workers(self, fleet, window=""):
+        # window (issue #2237): that one window's rows by the same reads — a start's
+        # post-condition check, which over the whole fleet cost seconds.
+        code, output, err = self.adapter("workers", fleet["name"], *([window] if window else []))
         if code == 3:
             return {"state": "down", "workers": [], "observed_at": now()}
         if code:
@@ -627,16 +629,26 @@ class Control:
                     # what a refusal here would.
                     raise Refused(reasons.get(code, "EXECUTION_FAILED"),
                                   "Fleet refused to start the worker: " + refusal_line(err), code, refusal_line(err))
-                snapshot = self.workers(fleet)
-                if scratch:
-                    # The receipt names the window: that row, and only that row.
-                    window = output.decode("utf-8", "replace").split("\n", 1)[0].split("\t", 1)[0].strip()
-                    matches = [w for w in snapshot["workers"] if window and w["window_id"] == window and w["scratch"]]
-                else:
+                # The window the spawn opened (issue #2237): an issue start prints it
+                # last (dash-issue-session.sh --print), a scratch first — its row
+                # alone is read. No id (an older spawn), or the window it names is
+                # not the worker: the whole fleet, as before.
+                lines = output.decode("utf-8", "replace").split("\n")
+                window = (lines[0] if scratch else ([l for l in lines if l.strip()] or [""])[-1]).split("\t", 1)[0].strip()
+
+                def started(snapshot):
+                    if scratch:
+                        # The receipt names the window: that row, and only that row.
+                        return [w for w in snapshot["workers"] if window and w["window_id"] == window and w["scratch"]]
                     # Match the spawned repo too (issue #1018): another repo's issue-N
                     # is a different worker.
-                    matches = [w for w in snapshot["workers"] if w["issue"] == params["issue"]
-                               and (not params.get("repo") or repo_named(w["repo"], params["repo"]))]
+                    return [w for w in snapshot["workers"] if w["issue"] == params["issue"]
+                            and (not params.get("repo") or repo_named(w["repo"], params["repo"]))]
+                snapshot = self.workers(fleet, window if re.fullmatch(r"@[0-9]+", window) else "")
+                matches = started(snapshot)
+                if not matches and re.fullmatch(r"@[0-9]+", window):
+                    snapshot = self.workers(fleet)
+                    matches = started(snapshot)
                 if not matches:
                     raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible")
                 result = {"workers": matches, "observed_at": snapshot["observed_at"],

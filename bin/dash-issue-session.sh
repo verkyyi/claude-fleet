@@ -24,6 +24,8 @@
 #      --origin key no live session answers to (issue #1355); `--origin hub` = you
 # Every refusal ALSO prints its one-line reason on stderr, `dash-issue-session: …`,
 # beside the sticky tmux toast a human at the client sees.
+# --print (issue #2237): on 0, the window id (`@N`) it opened or found, last on
+# stdout — the start adapter's receipt, so the controller reads that row alone.
 set -uo pipefail
 # Parse: <issue-number> [<target-session>] [--title <t>] [--force].
 # The two positionals keep their historic order (num, target-session). --title <t>
@@ -44,7 +46,7 @@ set -uo pipefail
 # GATE (cap / dedup / claim) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; FORCE_FLAG=0; ASYNC_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
@@ -64,6 +66,7 @@ for _a in "$@"; do
   case "$_a" in
     --force|--reclaim) FORCE_FLAG=1 ;;
     --async|--detach-spawn) ASYNC_FLAG=1 ;;
+    --print) PRINT_FLAG=1 ;;
     --title) _want=title ;;      # value is the NEXT arg
     --title=*) WIN_TITLE="${_a#--title=}" ;;
     # --origin (issue #503): spawn provenance — who asked for this worker. A
@@ -257,6 +260,7 @@ if [ -n "$existing" ]; then
   elif [ -z "$TARGET_SESS" ]; then
     FLEET_UI_SOCK=$SOCK fleet_ui_fail "$(fleet_ui_t ui_already_open_fmt "$num")" "$(fleet_ui_t ui_already_open_next)"
   fi
+  [ "$PRINT_FLAG" = 1 ] && printf '%s\n' "$existing"
   exit 0
 fi
 
@@ -500,6 +504,15 @@ if [ -n "$CAP_HELD" ]; then refuse "$CAP_HELD"; exit "$RC_CAP"; fi
 # synchronous + authoritative; only the slow worktree/window tail goes async). On
 # the tail re-entry this already ran, and re-reading would see OUR OWN assignee and
 # false-refuse.
+# The base branch's fetch runs BESIDE the gate's GitHub reads (issue #2237): it
+# was the first step of the tail, ~0.5 s on its own; the tail waits for it before
+# the worktree is made. Not on the --async dispatch (its tail fetches for itself).
+# Its streams go nowhere: a headless caller reads this script's stdout to EOF.
+FETCH_PID=''
+if ! { [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; }; then
+  git -C "$MAIN" fetch origin "$BASE" --quiet </dev/null >/dev/null 2>&1 &
+  FETCH_PID=$!
+fi
 issue_json=''; issue_fetched_at=0
 if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
    && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
@@ -514,6 +527,13 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   # Keep the same gate header, followed by compact JSON from the SAME read (#459).
   # A failed pre-claim must never cache the pre-edit empty assignee as authoritative.
   issue_fetched_at=$(date +%s)
+  # The open-PR probe runs beside the issue read (issue #2237): two reads, one wait.
+  _prf=$(mktemp "${TMPDIR:-/tmp}/dis-pr.XXXXXX") || _prf=''
+  _prp=''
+  if [ -n "$_prf" ]; then
+    gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' </dev/null >"$_prf" 2>/dev/null &
+    _prp=$!
+  fi
   cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
         --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || cs=''
   case "$cs" in
@@ -521,7 +541,10 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   esac
   n_assignee=${cs%%$'\t'*}; st=${cs#*$'\t'}
   n_assignee="${n_assignee//[^0-9]/}"
-  n_open_pr=$(gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' 2>/dev/null)
+  if [ -n "$_prp" ]; then wait "$_prp" 2>/dev/null; n_open_pr=$(cat "$_prf" 2>/dev/null)
+  else n_open_pr=$(gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' 2>/dev/null); fi
+  [ -n "$_prf" ] && rm -f "$_prf"
+  unset _prf _prp
   n_open_pr="${n_open_pr//[^0-9]/}"
   why=''
   if [ "${n_assignee:-0}" -gt 0 ]; then why='assigned'
@@ -637,15 +660,40 @@ tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
 # the seed would land as literal text and the worker would never claim. fleet_cmd
 # probes which install path this machine has and types the form that resolves.
 printf '%s' "$(fleet_cmd fleet-claim)" > "$tf"
-git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null
+if [ -n "$FETCH_PID" ]; then wait "$FETCH_PID" 2>/dev/null
+else git -C "$MAIN" fetch origin "$BASE" --quiet 2>/dev/null; fi
+# The agent starts WHILE the tree is checked out (issue #2237): on a big repo the
+# checkout alone was 3 s, and the agent's own start ~2.5 s more, one after the
+# other. A new worktree is made with no files, the few an agent reads as it
+# starts (CLAUDE.md, .claude/ …) are checked out, the window opens, and the rest
+# fills in the background (FILL_PID). The agent's hooks hold its first prompt and
+# every tool call until the fill is done (set-claude-state.sh, FLEET_WT_PENDING =
+# the marker holding the filler's pid), and this script waits for it before it
+# says the window is open — a failed fill closes the window and gives the issue
+# back. Codex runs the same hook table (hooks/codex-map.json), so it waits the
+# same way. FLEET_SPAWN_OVERLAP=0 = the old order.
+# FLEET_SPAWN_FILL_CMD is the selftest seam (`sh -c "$cmd" fill <wt>`).
+FILL_PID=''; FILL_MARK=''
 if [ ! -d "$wt" ]; then
   # >/dev/null: `git worktree add` prints "HEAD is now at …" to STDOUT, and under
   # --async this runs in the run-shell -b tail whose stdout tmux surfaces as an
   # Esc-to-dismiss view (issue #401). fleet_worktree_create is silent on both
   # streams itself; this discards the path it prints. --reuse: a respawn whose
   # issue-<N> branch survived checks that branch out again.
-  fleet_worktree_create "$MAIN" "$slug" "$BASE" --reuse >/dev/null \
-    || { refuse "spawn failed for #$num: worktree add"; exit "$RC_INFRA"; }
+  if [ "${FLEET_SPAWN_OVERLAP:-1}" != 0 ]; then
+    fleet_worktree_create "$MAIN" "$slug" "$BASE" --reuse --no-checkout >/dev/null \
+      || { refuse "spawn failed for #$num: worktree add"; exit "$RC_INFRA"; }
+    fleet_worktree_boot "$wt"
+    FILL_MARK="$(dirname "$tf")/fill_$slug.pid"
+    # The marker goes once the tree is whole; a failed fill leaves it to us.
+    ( if [ -n "${FLEET_SPAWN_FILL_CMD:-}" ]; then sh -c "$FLEET_SPAWN_FILL_CMD" fill "$wt"
+      else fleet_worktree_fill "$MAIN" "$wt"; fi && rm -f "$FILL_MARK" ) </dev/null >/dev/null 2>&1 &
+    FILL_PID=$!
+    printf '%s\n' "$FILL_PID" > "$FILL_MARK"
+  else
+    fleet_worktree_create "$MAIN" "$slug" "$BASE" --reuse >/dev/null \
+      || { refuse "spawn failed for #$num: worktree add"; exit "$RC_INFRA"; }
+  fi
 fi
 # Machine-local, per-worktree Git metadata, never repo/charter content (#459).
 # Clear on EVERY spawn (including force/opt-out/tail-only) so an old snapshot
@@ -687,42 +735,55 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 # the window before fleet-claude.sh reads it, and it is the window's — a conf
 # default changed later does not move a running session.
 [ -n "$ACCOUNT" ] && stamp="$stamp$(fleet_win_stamp_cmd @account_class "$ACCOUNT")"
-win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
-  || { _why=''; fleet_socket_wedged "$SOCK" && _why=" — this fleet's tmux server is gone: its socket $(fleet_socket_path "$SOCK") is held by a dying server that drops every client (tmux says \"server exited unexpectedly\"); fleet-up.sh clears it and brings the fleet back"  # issue #1729
+pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
+win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
+  || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
+       _why=''; fleet_socket_wedged "$SOCK" && _why=" — this fleet's tmux server is gone: its socket $(fleet_socket_path "$SOCK") is held by a dying server that drops every client (tmux says \"server exited unexpectedly\"); fleet-up.sh clears it and brings the fleet back"  # issue #1729
        refuse "spawn failed for #$num: new-window$_why"; exit "$RC_INFRA"; }
-CLAIMED_HERE=0   # a window holds the issue now: its claim is the worker's
+[ -n "$FILL_PID" ] || CLAIMED_HERE=0   # a window holds the issue now: its claim is the worker's
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
 [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
-TM set-window-option -t "$win" @issue "$num" 2>/dev/null   # bind window ↔ issue
-# The session's lifelong identity (issue #1646): minted once, here, and carried by
-# every restore / migrate / move after — the address its children report to.
-fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
-fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
-fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
-# When the fleet may close it on its own (issue #1902): the one asked for, else an
-# issue session's default — after its PR merged, the rule it always had.
-TM set-window-option -t "$win" @reap_policy "${REAP:-merged}" 2>/dev/null
-# The window's repo + worktree (issue #789) — every worker carries both, so any
-# consumer resolves its repo via fleet_window_repo without a git read.
-[ -n "$REPO" ] && TM set-window-option -t "$win" @repo "$REPO" 2>/dev/null
-TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null
+# Every plain stamp in ONE tmux call (issue #2237) — it was one call each:
+# - @issue binds window ↔ issue;
+# - @fleet_id is the session's lifelong identity (issue #1646): minted once, here,
+#   and carried by every restore / migrate / move after — the address its children
+#   report to (stamped last with -o; fleet_window_fid mints one if this mint failed);
+# - @born is its place on the list (#1750); @fleet_role what it IS, whatever it is
+#   renamed to (#1844);
+# - @reap_policy says when the fleet may close it on its own (issue #1902): the one
+#   asked for, else an issue session's default — after its PR merged;
+# - @repo + @worktree (issue #789) — every worker carries both, so any consumer
+#   resolves its repo via fleet_window_repo without a git read;
+# - @origin (issue #503): WHO spawned it. Unset ≡ hub-spawned (the default,
+#   untagged in the dash); the dash groups a tagged child under its live parent,
+#   and the reapers copy it into the history ledger's origin column before the
+#   window dies. @origin_wid: a hub-placed start (issue #1425) was handed its
+#   parent's worker_id outright — the parent lives on another machine.
+_fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''
+_sw=(set-window-option -t "$win" @issue "$num")
+_sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
+_sw+=(\; set-window-option -t "$win" @fleet_role worker)
+_sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
+[ -n "$REPO" ] && _sw+=(\; set-window-option -t "$win" @repo "$REPO")
+_sw+=(\; set-window-option -t "$win" @worktree "$wt")
+[ -n "$ORIGIN" ] && _sw+=(\; set-window-option -t "$win" @origin "$ORIGIN")
+[ -n "$ORIGIN_WID" ] && _sw+=(\; set-window-option -t "$win" @origin_wid "$ORIGIN_WID")
+# Last, and -o: an identity something minted first is kept (-o refuses to
+# overwrite; a refusal stops only the rest of the list, which is nothing).
+[ -n "$_fid" ] && _sw+=(\; set-window-option -o -t "$win" @fleet_id "$_fid")
+TM "${_sw[@]}" 2>/dev/null
+[ -n "$_fid" ] || fleet_window_fid "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :
+unset _sw _fid
 # Window handle (issue #566): the fleet's own short, typeable name for this window
 # (`a1`…`z9`), unique among the fleet's live windows and accepted wherever a window
 # target is. Best-effort by design — a lock timeout or an exhausted alphabet just
 # leaves it unstamped and the dash's render-time backfill assigns one.
 fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
-# Spawn provenance (issue #503): stamp WHO spawned this worker beside the binding.
-# Unset ≡ hub-spawned (the default, untagged in the dash); the dash groups a
-# tagged child under its live parent, and the reapers copy it into the history
-# ledger's origin column before the window dies.
-[ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
-# …and the parent's worker_id (issue #1420), the address that survives a machine
-# boundary. Nothing when this machine has no fleet UUID or the origin is no key.
-# A hub-placed start (issue #1425) was handed its parent's worker_id outright —
-# the parent lives on another machine, so it cannot be derived from --origin.
-if [ -n "$ORIGIN_WID" ]; then TM set-window-option -t "$win" @origin_wid "$ORIGIN_WID" 2>/dev/null
-elif [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"; fi
+# The parent's worker_id (issue #1420), the address that survives a machine
+# boundary — derived from --origin when no start handed it over (stamped above).
+# Nothing when this machine has no fleet UUID or the origin is no key.
+if [ -z "$ORIGIN_WID" ] && [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"; fi
 # …and the generation of that key it was spawned under (issue #1538), so a
 # recycled scratch number never takes this child's report as its own. A parent on
 # another machine (ORIGIN_WID) has no generation here.
@@ -736,6 +797,22 @@ elif [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SO
 # list row are the confirmation, so a success draws no line (issue #1618). Only
 # jump to the new worker when the user opted in (FLEET_SPAWN_FOCUS=1) on an
 # interactive spawn.
+# The tree the agent is starting in is whole before this says it opened (issue
+# #2237). A fill that failed takes its window and worktree with it — a session
+# with half a checkout is no session — and the exit gives the issue back (the
+# EXIT trap: lease, and the GitHub claim this spawn took).
+if [ -n "$FILL_PID" ]; then
+  wait "$FILL_PID" 2>/dev/null; _frc=$?
+  if [ "$_frc" != 0 ]; then
+    fleet_win_retire "$win" "$SOCK"
+    TM kill-window -t "$win" 2>/dev/null
+    rm -f "$FILL_MARK"
+    git -C "$MAIN" worktree remove --force "$wt" >/dev/null 2>&1
+    refuse "spawn failed for #$num: worktree checkout"; exit "$RC_INFRA"
+  fi
+  CLAIMED_HERE=0   # a window holds the issue now: its claim is the worker's
+fi
 if [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && [ -z "$TARGET_SESS" ]; then
   TM select-window -t "$win"
 fi
+[ "$PRINT_FLAG" = 1 ] && printf '%s\n' "$win"
