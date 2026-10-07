@@ -177,7 +177,7 @@ hasnt 'E: a forged marker never leaves' "$pl" '<!--'
 printf '\n\n' > "$WORK/t0"
 eq 'E: nothing written: nothing to send' '{}' "$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t0")"
 pl=$(cd "$SB" && python3 fleet-compose.py payload "$WORK/t1")
-eq 'F: the fields are fixed' 'agent at attachments body id node prev repo title' \
+eq 'F: the fields are fixed (+ t_enter, the ↵ in ms — #2238)' 'agent at attachments body id node prev repo t_enter title' \
   "$(printf '%s' "$pl" | python3 -c 'import json, sys; print(" ".join(sorted(json.load(sys.stdin))))')"
 has 'F: node null by default (the hub picks)' "$pl" '"node": null'
 has 'F: agent null by default (FLEET_AGENT)' "$pl" '"agent": null'
