@@ -738,7 +738,18 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 
 	envelope := map[string]any{"operation_id": op.ID, "fleet_id": target.FleetID, "action": tool,
 		"params": w.params, "actor": p.Actor}
+	var noted uint64
+	if opensSession(tool) {
+		// Counted before the node's beat shows it (claude-fleet#2077), so a
+		// burst's next pick sees this one in flight — noted before the send,
+		// which may wait seconds for the node's acknowledgement.
+		hb, _, _ := s.nodeStatusOf(target.EndpointID, now)
+		noted = s.recent.note(target.EndpointID, hb.SessionsCount(), now)
+	}
 	status, result := s.sendWrite(ctx, c, target, op, envelope)
+	if noted != 0 && status == "failed" {
+		s.recent.forget(target.EndpointID, noted) // refused before anything opened
+	}
 	if err := s.Store.UpdateFleetOperation(op.ID, status, result, time.Now()); err != nil {
 		log.Printf("fleet operation %s: record %s: %v", op.ID, status, err)
 	}
@@ -748,6 +759,12 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	}
 	s.progressOp(stored) // the asking parent's stream (claude-fleet#1648)
 	return operationView(stored), nil
+}
+
+// opensSession reports whether a write puts one more session on its target —
+// a start, a resume from history, a move's arrival (claude-fleet#2077).
+func opensSession(tool string) bool {
+	return tool == "worker_start" || tool == "worker_resume" || tool == "worker_move_in"
 }
 
 // replayed answers a repeated idempotency key: the first operation, if the
@@ -988,6 +1005,10 @@ type Candidate struct {
 	Admit    *bool  `json:"admit,omitempty"`
 	AdmitWhy string `json:"admit_why,omitempty"`
 	Room     *int   `json:"room,omitempty"`
+	// Recent is how many starts the hub sent this login in the last
+	// recentWindow that its heartbeat may not show yet (claude-fleet#2077):
+	// scored as if already running, and taken off Room. Absent when none.
+	Recent int `json:"recent,omitempty"`
 	// QuotaUsedPct is the busier of the 5-hour and 7-day windows of the
 	// account this login's Claude Code runs on; nil when unknown. Shown, never
 	// scored (claude-fleet#1994): every machine spends the same shared quota.
@@ -1027,8 +1048,9 @@ type Placement struct {
 // pressure, or at a cap set for the person there; score the rest by load
 // alone — min(cpu idle, memory idle), whichever resource is tighter
 // (claude-fleet#1994: account quota is shared by every machine, so it never
-// decides where); return the best, with every candidate's verdict. person ""
-// is the operator.
+// decides where), with the starts just sent there and not yet in its beat
+// counted as running (claude-fleet#2077); return the best, with every
+// candidate's verdict. person "" is the operator.
 func (s *Server) PickNode(person, repo string) (Placement, error) {
 	scope, err := s.scopeFor(person)
 	if err != nil {
@@ -1272,6 +1294,12 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	c.MaxSessions, c.CapSessions = hb.MaxSessions, hb.CapSessions
 	paused, pausedWhy := hb.Paused()
 	c.Admit, c.AdmitWhy, c.Room = hb.Admit, hb.AdmitWhy, hb.Room
+	c.Recent = s.recent.count(r.EndpointID, c.Sessions, now)
+	if !paused && c.Recent > 0 && hb.Room != nil && *hb.Room-c.Recent < 1 {
+		// The room the node reported is spoken for by what was just sent
+		// there (claude-fleet#2077): one more would be refused on arrival.
+		paused, pausedWhy = true, fmt.Sprintf("内存余量不够再开一个（room %d，刚派出 %d 个还没算进去）", *hb.Room, c.Recent)
+	}
 	if acct := accounts[r.EndpointID]; acct != "" {
 		if snap, err := s.Store.LatestLimits(acct); err == nil && snap != nil {
 			u := math.Max(snap.FiveHour.Utilization, snap.SevenDay.Utilization)
@@ -1322,7 +1350,7 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	default:
 		c.Eligible = true
 	}
-	score := loadScore(c.LoadPerCore, hb.MemFreeBytes, hb.MemTotalBytes)
+	score := recentScore(c.LoadPerCore, hb.NCPU, hb.MemFreeBytes, hb.MemTotalBytes, c.Recent)
 	if c.Sessions == nil {
 		// A login whose fleet could not be read may run any number of
 		// sessions (claude-fleet#1465): never scored as the idle 0 the
@@ -1384,7 +1412,8 @@ func excludedForFullness(why string) bool {
 const unknownSessionsWeight = 0.5
 
 // better orders two eligible candidates: a known session count before an
-// unknown one (claude-fleet#1465), then score, then fewer sessions, then name.
+// unknown one (claude-fleet#1465), then score, then fewer sessions (those
+// just sent there counted, claude-fleet#2077), then name.
 func better(a, b Candidate) bool {
 	if (a.Sessions == nil) != (b.Sessions == nil) {
 		return a.Sessions != nil
@@ -1392,8 +1421,8 @@ func better(a, b Candidate) bool {
 	if a.Score != b.Score {
 		return a.Score > b.Score
 	}
-	if a.Sessions != nil && *a.Sessions != *b.Sessions {
-		return *a.Sessions < *b.Sessions
+	if a.Sessions != nil && *a.Sessions+a.Recent != *b.Sessions+b.Recent {
+		return *a.Sessions+a.Recent < *b.Sessions+b.Recent
 	}
 	return a.Machine+"/"+a.OSUser < b.Machine+"/"+b.OSUser
 }
@@ -1416,6 +1445,9 @@ func placementReason(c Candidate, all []Candidate) string {
 		parts = append(parts, fmt.Sprintf("%d/%d sessions", *c.Sessions, *c.Cap))
 	default:
 		parts = append(parts, fmt.Sprintf("%d sessions", *c.Sessions))
+	}
+	if c.Recent > 0 {
+		parts = append(parts, fmt.Sprintf("%d just placed", c.Recent))
 	}
 	out := strings.Join(parts, ", ") + ")"
 	others := []string{}

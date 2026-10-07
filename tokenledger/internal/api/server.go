@@ -217,6 +217,9 @@ type Server struct {
 
 	// nodes holds the open node control channels.
 	nodes nodeConns
+	// recent is the starts just sent to each node that its heartbeat may not
+	// show yet (claude-fleet#2077); judge counts them as running.
+	recent recentTable
 
 	// devices holds `fleet login` device-code logins in progress.
 	devices deviceLogins
