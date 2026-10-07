@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // The hub's settings live in the database (claude-fleet#1986, EPIC #1982 C4):
@@ -345,7 +346,30 @@ func (s *Server) checkMachineLogin(pid, v string) (string, string) {
 	if who := s.machineLoginOwner(v); who != "" && !strings.EqualFold(who, pid) {
 		return "", fmt.Sprintf("machine login %s is already %s's", v, who)
 	}
+	if s.Store != nil {
+		// The hub's own record. An identity from before GitHub sign-in that
+		// no map names any more is handed over at placement
+		// (claude-fleet#2094); another GitHub person keeps it (an admin the
+		// deploy names has no list row to carry a map).
+		if p, err := s.Store.PrincipalByLogin(v); err == nil && !strings.EqualFold(p.ID, pid) && !s.legacyHolder(pid, p.ID) {
+			return "", fmt.Sprintf("machine login %s is already %s's", v, s.personName(p.ID))
+		}
+	}
 	return v, ""
+}
+
+// legacyHolder reports whether a GitHub person pid may take a login over
+// from holder: an identity from before GitHub sign-in (an enterprise-WeChat
+// id), which takeOverLegacyLogin re-keys to them (claude-fleet#2094). Another
+// GitHub person — or a non-GitHub pid — never takes anything over.
+func (s *Server) legacyHolder(pid, holder string) bool {
+	if _, ok := githubIDOf(pid); !ok {
+		return false
+	}
+	if _, gh := githubIDOf(holder); gh {
+		return false
+	}
+	return s.Store == nil || !s.Store.IsDrill(holder)
 }
 
 // machineLoginOwner is the principal a machine login belongs to, "" when
@@ -462,18 +486,25 @@ func (s *Server) putHubSetting(actor, key, value string, now time.Time) (int, st
 // row for a GitHub person (who must be on the list), in the settings table
 // for anyone else.
 func (s *Server) putMachineLogin(actor, pid, value string, settings map[string]string, now time.Time) (int, string) {
+	code, why, _ := s.putMachineLoginMoved(actor, pid, value, settings, now)
+	return code, why
+}
+
+// putMachineLoginMoved is putMachineLogin, also returning the login it moved
+// off an old identity onto the person (claude-fleet#2094), nil when none.
+func (s *Server) putMachineLoginMoved(actor, pid, value string, settings map[string]string, now time.Time) (int, string, *store.RekeyResult) {
 	if id, ok := githubIDOf(pid); ok {
 		if u, err := s.Store.HubUserByID(id); err != nil {
-			return http.StatusInternalServerError, err.Error()
+			return http.StatusInternalServerError, err.Error(), nil
 		} else if u == nil {
-			return http.StatusNotFound, pid + " is not on the list — add them first (fleet users add <name>)"
+			return http.StatusNotFound, pid + " is not on the list — add them first (fleet users add <name>)", nil
 		}
 	}
 	stored := ""
 	if strings.TrimSpace(value) != "" {
 		var why string
 		if stored, why = s.checkMachineLogin(pid, value); why != "" {
-			return http.StatusBadRequest, why
+			return http.StatusBadRequest, why, nil
 		}
 	}
 	if _, gh := githubIDOf(pid); !gh {
@@ -485,10 +516,10 @@ func (s *Server) putMachineLogin(actor, pid, value string, settings map[string]s
 	if id, ok := githubIDOf(pid); ok {
 		u, err := s.Store.HubUserByID(id)
 		if err != nil {
-			return http.StatusInternalServerError, err.Error()
+			return http.StatusInternalServerError, err.Error(), nil
 		}
 		if u == nil {
-			return http.StatusNotFound, pid + " is not on the list — add them first (fleet users add <name>)"
+			return http.StatusNotFound, pid + " is not on the list — add them first (fleet users add <name>)", nil
 		}
 		if stored == noneValue {
 			stored = ""
@@ -496,24 +527,26 @@ func (s *Server) putMachineLogin(actor, pid, value string, settings map[string]s
 		old := u.MachineLogin
 		u.MachineLogin = stored
 		if err := s.Store.UpsertHubUser(*u); err != nil {
-			return http.StatusInternalServerError, err.Error()
+			return http.StatusInternalServerError, err.Error(), nil
 		}
 		s.settingAudit(actor, key, old, stored, now)
+		var moved *store.RekeyResult
 		if stored != "" {
 			// Placed now, as their sign-in would: the login is theirs on
-			// every machine an agent runs as it.
-			s.onPrincipalSignIn(pid, u.Login)
+			// every machine an agent runs as it — taken over from an old
+			// identity first when the hub still has it there.
+			moved = s.placePrincipal(pid, u.Login, actor)
 		}
-		return http.StatusOK, ""
+		return http.StatusOK, "", moved
 	}
 	if err := s.Store.SetFleetSetting(key, stored, now); err != nil {
-		return http.StatusInternalServerError, err.Error()
+		return http.StatusInternalServerError, err.Error(), nil
 	}
 	s.settingAudit(actor, key, settings[key], stored, now)
 	if stored != "" && stored != noneValue {
 		s.adoptMappedLogins(now)
 	}
-	return http.StatusOK, ""
+	return http.StatusOK, "", nil
 }
 
 // hubSettingsView is what GET /v1/fleet/settings adds: every hub setting,

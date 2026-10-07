@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,7 +100,9 @@ func (s *Server) isFleetAdmin(osUser string) bool {
 //   - mapped (user.<id>.machine_login, claude-fleet#1986): the person is
 //     recorded under THAT login — a login already on the machines, never
 //     minted — and it is adopted wherever the roster shows an agent running
-//     as it. No op is ever sent.
+//     as it. A login the hub still has under an identity from before GitHub
+//     sign-in (an enterprise-WeChat id) is moved to the person first
+//     (takeOverLegacyLogin, claude-fleet#2094). No op is ever sent.
 //   - auto-assign (fleet.auto_assign, claude-fleet#1411): a login is minted and
 //     queued for creation on those machines, as before.
 //   - neither: nothing. Not even a principal row — a row mints a login name,
@@ -107,28 +111,40 @@ func (s *Server) isFleetAdmin(osUser string) bool {
 //     to close. The operator's `adopt` on /v1/fleet/accounts records them
 //     when there is somewhere to record them on.
 func (s *Server) onPrincipalSignIn(principal, displayName string) {
+	s.placePrincipal(principal, displayName, principal)
+}
+
+// placePrincipal is onPrincipalSignIn with the actor the audit names (the
+// person at their sign-in, the operator mapping them). It returns the login
+// it moved off an old identity (claude-fleet#2094), nil when none moved.
+func (s *Server) placePrincipal(principal, displayName, actor string) *store.RekeyResult {
 	if !s.Fleet {
-		return
+		return nil
 	}
 	now := time.Now()
 	if login, ok := s.mappedLoginFor(principal); ok {
+		moved, err := s.takeOverLegacyLogin(principal, login, displayName, actor, now)
+		if err != nil {
+			log.Printf("fleet: sign-in of %s: mapped to login %s but %v", principal, login, err)
+			return nil
+		}
 		if _, err := s.Store.AdoptPrincipal(principal, login, displayName, now); err != nil {
 			// The usual cause: a row minted for this person before the map
 			// named them. The operator `forget`s it; nothing is guessed.
 			log.Printf("fleet: sign-in of %s: mapped to login %s but %v", principal, login, err)
-			return
+			return moved
 		}
 		s.adoptMappedLogins(now)
-		return
+		return moved
 	}
 	hosts := s.autoAssign()
 	if len(hosts) == 0 {
-		return
+		return nil
 	}
 	p, err := s.Store.EnsurePrincipal(principal, displayName, control.MaxLoginLen, control.ValidLogin, now)
 	if err != nil {
 		log.Printf("fleet: record principal %q: %v", principal, err)
-		return
+		return nil
 	}
 	queued := false
 	for _, host := range hosts {
@@ -145,6 +161,70 @@ func (s *Server) onPrincipalSignIn(principal, displayName string) {
 	if queued {
 		go s.dispatchAccounts()
 	}
+	return nil
+}
+
+// takeOverLegacyLogin moves login to the GitHub person principal when the
+// hub has it recorded under an identity from before GitHub sign-in — an
+// enterprise-WeChat id like CaoJian (claude-fleet#2094). Record-only: the old
+// principal row and everything naming it is re-keyed in one transaction
+// (store.RekeyPrincipal), no op is sent. Idempotent: nothing to move ⇒ nil,
+// nil. Refuses — the login stays where it is — when it is another GitHub
+// person's (errLoginHeld names them) or principal already has a login of its
+// own.
+func (s *Server) takeOverLegacyLogin(principal, login, displayName, actor string, now time.Time) (*store.RekeyResult, error) {
+	if _, ok := githubIDOf(principal); !ok {
+		return nil, nil
+	}
+	owner, err := s.Store.PrincipalByLogin(login)
+	if errors.Is(err, store.ErrNoPrincipal) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(owner.ID, principal) {
+		return nil, nil
+	}
+	if _, gh := githubIDOf(owner.ID); gh {
+		return nil, &errLoginHeld{login: login, owner: s.personName(owner.ID)}
+	}
+	if l, ok := s.principalLogins()[strings.ToLower(owner.ID)]; ok && l == login {
+		// The operator still maps the old identity to it: their word stands
+		// until they clear it.
+		return nil, fmt.Errorf("login %s is still mapped to %s (%s) — clear that first",
+			login, owner.ID, machineLoginSettingKey(strings.ToLower(owner.ID)))
+	}
+	res, err := s.Store.RekeyPrincipal(owner.ID, principal, displayName, actor, now)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("fleet: moved login %s (%s) from the old identity %s to %s (by %s)",
+		login, strings.Join(res.Hosts, ","), res.From, principal, actor)
+	return res, nil
+}
+
+// errLoginHeld: the mapped login is another GitHub person's on the hub.
+type errLoginHeld struct{ login, owner string }
+
+func (e *errLoginHeld) Error() string {
+	return fmt.Sprintf("login %s belongs to another GitHub person, %s", e.login, e.owner)
+}
+
+// personName is how a principal reads to a person: a GitHub person's
+// username and id, else the id.
+func (s *Server) personName(pid string) string {
+	if id, ok := githubIDOf(pid); ok && s.Store != nil {
+		if u, err := s.Store.HubUserByID(id); err == nil && u != nil && u.Login != "" {
+			return u.Login + " (" + pid + ")"
+		}
+	}
+	if s.Store != nil {
+		if p, err := s.Store.Principal(pid); err == nil && p.DisplayName != "" && !strings.EqualFold(p.DisplayName, pid) {
+			return p.DisplayName + " (" + pid + ")"
+		}
+	}
+	return pid
 }
 
 // ensurePerson is onPrincipalSignIn for a request that arrived on a session
@@ -415,12 +495,18 @@ type FleetAccountsView struct {
 //	        never reached a machine (pending / failed / removed) can be
 //	        forgotten; an active login is `remove`d, an op in flight or
 //	        unknown is waited out or `retry`d. Runs nothing (claude-fleet#1458).
+//	rekey   move the person principal_id — their row and every account,
+//	        credential, certificate, device and usage row — to
+//	        to_principal_id, logins and states unchanged: an identity from
+//	        before GitHub sign-in handed to its GitHub person. Runs nothing
+//	        (claude-fleet#2094). to_principal_id must have no row of its own.
 type FleetAccountRequest struct {
-	Action      string `json:"action"`
-	PrincipalID string `json:"principal_id"`
-	Hostname    string `json:"hostname"`
-	Login       string `json:"login,omitempty"`
-	DisplayName string `json:"display_name,omitempty"`
+	Action        string `json:"action"`
+	PrincipalID   string `json:"principal_id"`
+	Hostname      string `json:"hostname"`
+	Login         string `json:"login,omitempty"`
+	DisplayName   string `json:"display_name,omitempty"`
+	ToPrincipalID string `json:"to_principal_id,omitempty"`
 }
 
 // handleFleetAccounts is the operator's view and control of every account.
@@ -446,6 +532,10 @@ func (s *Server) handleFleetAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.PrincipalID, req.Hostname = strings.TrimSpace(req.PrincipalID), strings.TrimSpace(req.Hostname)
+		if req.Action == "rekey" {
+			s.rekeyAccount(w, r, req)
+			return
+		}
 		if req.PrincipalID == "" || (req.Hostname == "" && req.Action != "forget") {
 			httpError(w, http.StatusBadRequest, "principal_id and hostname are required")
 			return
@@ -475,6 +565,37 @@ func (s *Server) handleFleetAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// rekeyAccount is the operator's hand on a re-key (claude-fleet#2094): the
+// same move a mapped GitHub person's sign-in makes, for any pair the
+// automatic one would not reach. Audited with the caller as the actor.
+func (s *Server) rekeyAccount(w http.ResponseWriter, r *http.Request, req FleetAccountRequest) {
+	to := strings.TrimSpace(req.ToPrincipalID)
+	if req.PrincipalID == "" || to == "" {
+		httpError(w, http.StatusBadRequest, "rekey needs principal_id (from) and to_principal_id")
+		return
+	}
+	if id, err := strconv.ParseInt(to, 10, 64); err == nil && id > 0 {
+		to = githubPrincipal(id) // a bare GitHub ID, as user.<id>.* spells it
+	}
+	if req.DisplayName != "" && !control.ValidFullName(req.DisplayName) {
+		httpError(w, http.StatusBadRequest, "display_name must be 1-64 printable characters")
+		return
+	}
+	res, err := s.Store.RekeyPrincipal(req.PrincipalID, to, req.DisplayName, actorOf(r), time.Now())
+	switch {
+	case errors.Is(err, store.ErrNoPrincipal):
+		httpError(w, http.StatusNotFound, "no such principal: "+req.PrincipalID)
+		return
+	case errors.Is(err, store.ErrRekeyTarget):
+		httpError(w, http.StatusConflict, err.Error())
+		return
+	case err != nil:
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) changeAccount(req FleetAccountRequest) error {
 	now := time.Now()
 	switch req.Action {
@@ -499,6 +620,6 @@ func (s *Server) changeAccount(req FleetAccountRequest) error {
 	case "forget":
 		return s.Store.ForgetPrincipal(req.PrincipalID, req.Hostname)
 	default:
-		return errors.New("action must be assign, retry, remove, adopt or forget")
+		return errors.New("action must be assign, retry, remove, adopt, forget or rekey")
 	}
 }

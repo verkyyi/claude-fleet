@@ -189,17 +189,31 @@ func (s *Server) addFleetUser(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.HubAudit(actor, "user.add", target, "ok", "as user", now)
 		log.Printf("hub users: %s added by %s", target, actor)
 	}
+	var moved *store.RekeyResult
 	if machineLogin != "" {
-		if code, why := s.putHubSetting(actor, machineLoginSettingKey(githubPrincipal(id)), machineLogin, now); code != http.StatusOK {
+		settings, err := s.Store.FleetSettings()
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		code, why, m := s.putMachineLoginMoved(actor, githubPrincipal(id), machineLogin, settings, now)
+		if code != http.StatusOK {
 			httpError(w, code, "added "+canonical+", but the machine login was refused: "+why)
 			return
 		}
+		moved = m
 	}
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
 	}
-	s.writeFleetUsers(w, status, map[string]any{"added": canonical, "github_id": id, "created": created})
+	extra := map[string]any{"added": canonical, "github_id": id, "created": created}
+	if moved != nil {
+		// The login was the hub's under an identity from before GitHub
+		// sign-in; it is theirs now (claude-fleet#2094).
+		extra["moved_login"] = map[string]any{"login": moved.Login, "hosts": moved.Hosts, "from": moved.From, "to": moved.To}
+	}
+	s.writeFleetUsers(w, status, extra)
 }
 
 func (s *Server) removeFleetUser(w http.ResponseWriter, r *http.Request) {
