@@ -304,6 +304,28 @@ def claude_login(label, now=None):
     return 'valid'
 
 
+def claude_is_pool(label):
+    """A `hub:<label>` file — the pool class fleet-account.sh acct_class() names."""
+    try:
+        first = (claude_accounts_dir() / label).read_text().splitlines()[:1]
+    except (OSError, UnicodeDecodeError):
+        return False
+    return bool(first) and first[0].strip().startswith('hub:')
+
+
+def claude_paused():
+    """The pool accounts an admin paused at the hub (issue #2083): FLEET_ACCOUNT_PAUSED
+    (space-separated) unioned with global/account.paused, the hub's list as the quota
+    tick last fetched it — fleet-account.sh acct_paused() is the shell twin. A pool
+    row in it is never eligible; a session already on it is not touched."""
+    names = set(os.environ.get('FLEET_ACCOUNT_PAUSED', '').split())
+    try:
+        names.update((state_dir() / 'account.paused').read_text().split())
+    except (OSError, UnicodeDecodeError):
+        pass
+    return names
+
+
 def claude_profile(label=''):
     """profile() for Claude: the pool label a launch would run on (given, else
     FLEET_ACCOUNT_LABEL, else the active account), or ValueError. An empty label
@@ -498,7 +520,9 @@ def inventory(refresh=False):
         args = ['bash', BIN / 'fleet-account.sh', '_claude-inventory']
         if refresh:
             args.append('--refresh')
-        for line in run(args, timeout=20).splitlines():
+        out = run(args, timeout=20)
+        paused = claude_paused()   # after the run: a --refresh re-fetched the hub's list
+        for line in out.splitlines():
             fields = line.split('\t')
             if len(fields) not in (10, 11, 13):
                 continue
@@ -520,6 +544,10 @@ def inventory(refresh=False):
                 login = claude_login(label)
                 if login == 'no_credentials':
                     login = 'valid'
+            # a paused pool account (issue #2083) is out like a dead login, but
+            # says `paused`, never «log in again»; only a `hub:` label can be.
+            if login in LOGIN_OK and label in paused and claude_is_pool(label):
+                login = 'paused'
             accounts.append(dict(agent='claude', label=label, account=account or label,
                 key='claude/' + (account or label), available=available, utilization=number(used),
                 score=number(score), limited_until=int(limited), hold_until=int(hold), reset_at=int(reset),
@@ -585,7 +613,8 @@ def auth_excluded(data, allowed=('claude', 'codex')):
     what `failover-status` lists, so a waiting session says WHICH login to fix."""
     return [dict(state='excluded', agent=a.get('agent'), key=a.get('key'),
                  label=a.get('label') or a.get('profile') or '',
-                 reason='auth:' + (a.get('login') or 'unknown'), detail=a.get('login_reason') or '')
+                 reason='paused' if a.get('login') == 'paused' else 'auth:' + (a.get('login') or 'unknown'),
+                 detail=a.get('login_reason') or '')
             for a in data.get('accounts', []) if a.get('agent') in allowed and a.get('login') not in LOGIN_OK]
 
 
@@ -627,7 +656,7 @@ def _choose(data, agent, exclude=(), current='', allowed=('claude', 'codex')):
     # so — in ccquota's words — is the difference between waiting for a window
     # to reset and going to sign in (claude-fleet#1404).
     needs = [a for a in data['accounts'] if a.get('agent') in allowed and a.get('key') not in excluded
-             and a.get('login') not in ('valid', 'refresh_due')]
+             and a.get('login') not in ('valid', 'refresh_due', 'paused')]
     if needs:
         reason += ' · login needed: ' + '; '.join(
             '%s %s%s' % (a.get('key'), a.get('login') or 'unknown',

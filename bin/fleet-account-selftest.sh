@@ -35,6 +35,11 @@
 #                  every unparseable form falling back instead of guessing.
 #   • cmd_mark_limited — benches to that instant (+RESET_BUFFER) when there is
 #                  one, and to now+LIMIT_TTL (per-account conf included) when not.
+#   • acct_paused — a PAUSED pool account (issue #2083): FLEET_ACCOUNT_PAUSED or
+#                  the fetched account.paused takes a `hub:` label out of every
+#                  automatic pick (rr, rotate, ranking), a local label is never
+#                  paused, un-pausing brings it back, the hub fetch keeps the
+#                  list across a blink, and with nothing paused nothing moves.
 #   • acct_class / FLEET_ACCOUNT_CLASS — the account CLASS (issue #1540): a
 #                  `hub:<label>` file is `pool`, anything else `local`; the filter
 #                  narrows acct_labels (pinned list and directory listing alike),
@@ -81,6 +86,8 @@ STATE_PHASE="$FLEET_C/account.phase"
 # both onto the scratch tree from the first pick on, never the operator's.
 STATE_REAUTH="$FLEET_C/account.reauth"
 STATE_AUTH_ALERT="$FLEET_C/account.auth-alert"
+# …and the hub's paused list (issue #2083) — never the operator's.
+STATE_PAUSED="$FLEET_C/account.paused"
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
@@ -785,6 +792,54 @@ cmd_clear_reauth a
 eq "auth: a re-login brings a back" a "$(pick_active b)"
 rm -rf "$ACCT_DIR/d" "$ACCT_DIR/d.hub"; : > "$STATE_REAUTH"; : > "$STATE_LIMITED"
 printf 'tok-c\n' > "$ACCT_DIR/c"; export FLEET_ACCOUNTS="a b c"
+
+# ============================================================================
+# a PAUSED pool account (issue #2083) — the hub's pool.paused.<account> keeps a
+# new session off it; a session already there is not the pick's business
+# ============================================================================
+rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS" "$STATE_AUTH_ALERT" "$STATE_PAUSED"; : > "$STATE_LIMITED"; : > "$STATE_REAUTH"
+for h in h1 h2; do
+  printf 'hub:%s\n' "$h" > "$ACCT_DIR/$h"; mkdir -p "$ACCT_DIR/$h.hub"
+  printf '{"claudeAiOauth":{"accessToken":"at","expiresAt":%s000}}\n' "$(( $(date +%s) + 86400 ))" > "$ACCT_DIR/$h.hub/.credentials.json"
+done
+export FLEET_ACCOUNTS="a h1 h2"; unset FLEET_ACCOUNT_PAUSED
+eq "paused: nothing paused — h1 stays" h1 "$(pick_active h1)"
+eq "paused: nothing paused — h1 is valid" valid "$(acct_login h1)"
+eq "paused: nothing paused — no exclusion" "" "$(acct_auth_excluded)"
+# the conf / environment name (the hub's client-settings pool key)
+export FLEET_ACCOUNT_PAUSED="h1 a"
+eq "paused: FLEET_ACCOUNT_PAUSED pauses a hub label" paused "$(acct_login h1)"
+eq "paused: a LOCAL label is never paused" valid "$(acct_login a)"
+eq "paused: current h1 paused → the next one, h2" h2 "$(pick_active h1)"
+printf 'h1\n' > "$STATE_ACTIVE"
+eq "paused: rotate from h1 never stops on it" h2 "$(cmd_rotate)"
+eq "paused: rotate from a skips h1 → h2" h2 "$(printf 'a\n' > "$STATE_ACTIVE"; cmd_rotate)"
+eq "paused: excluded row says paused, not auth" "h1 paused" "$(acct_auth_excluded)"
+printf '%s\n%s\n%s\n' "$(_q a 80 80)" "$(_q h1 1 1)" "$(_q h2 50 50)" > "$STATE_QUOTA"; date +%s > "$STATE_QUOTA_TS"
+eq "paused: ranking — h1 has the most headroom, never picked" h2 "$(pick_active h1)"
+rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
+cmd_list 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g" | grep -q '^h1 .*paused' || fail "paused: list must show h1 paused"
+unset FLEET_ACCOUNT_PAUSED
+# the hub's list as the quota tick fetched it — through the seam, never the network
+_fetch() { FLEET_ACCOUNT_PAUSED_CMD="$1" quota_paused_fetch; }
+_fetch "printf '%s' '{\"pool\":{\"FLEET_ACCOUNT_PAUSED\":\"h2 ghost\"}}'"
+eq "paused: the fetch writes the hub's list" "h2 ghost" "$(tr '\n' ' ' < "$STATE_PAUSED" | sed 's/ $//')"
+eq "paused: fetched h2 is paused" paused "$(acct_login h2)"
+eq "paused: current h2 paused → wraps to a" a "$(pick_active h2)"
+_fetch "exit 7"
+eq "paused: a hub that does not answer keeps the list" "h2 ghost" "$(tr '\n' ' ' < "$STATE_PAUSED" | sed 's/ $//')"
+_fetch "printf 'not json'"
+eq "paused: a garbled answer keeps the list" "h2 ghost" "$(tr '\n' ' ' < "$STATE_PAUSED" | sed 's/ $//')"
+_fetch "printf '%s' '{\"pool\":{\"FLEET_ACCOUNT_CEILING\":\"85\"}}'"
+eq "paused: a hub with no key (pre-#1990) empties it" "" "$(cat "$STATE_PAUSED")"
+eq "paused: un-paused h2 is picked again" h2 "$(pick_active h2)"
+# every pool label paused and the local one out: stay, and say so once
+export FLEET_ACCOUNTS="h1 h2" FLEET_ACCOUNT_PAUSED="h1 h2"
+eq "paused: all paused — current h2 stays (no hard switch)" h2 "$(pick_active h2 2>/dev/null)"
+grep -q 'h1 paused; h2 paused' "$STATE_AUTH_ALERT" || fail "paused: the alert stamp must name the paused accounts"
+unset FLEET_ACCOUNT_PAUSED
+rm -rf "$ACCT_DIR/h1" "$ACCT_DIR/h2" "$ACCT_DIR/h1.hub" "$ACCT_DIR/h2.hub" "$STATE_PAUSED" "$STATE_AUTH_ALERT"
+export FLEET_ACCOUNTS="a b c"
 if [ -n "$_tmpd" ]; then export TMPDIR="$_tmpd"; else unset TMPDIR; fi
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace, #1540 account class, #1670 login filter)\n' "$CHECKS"
+printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace, #1540 account class, #1670 login filter, #2083 paused pool)\n' "$CHECKS"

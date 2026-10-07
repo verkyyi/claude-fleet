@@ -46,7 +46,7 @@
 #   token [label]        — print the OAuth token for <label> (default: active)
 #   env                  — print `CLAUDE_CODE_OAUTH_TOKEN=…` for the active acct (or nothing)
 #   list                 — aligned table: label · active(●) · rotation window · state
-#                          (state = ok | limited · back in ~Nm | NO TOKEN; a hub-managed
+#                          (state = ok | limited · back in ~Nm | paused | NO TOKEN; a hub-managed
 #                          account, #1415, adds `· hub · expires in ~Nh`), then the
 #                          ccquota columns: 5h/7d %, the live 5h window, and the
 #                          weekly `pace ±N` (issue #1231; red = held, yellow = ahead)
@@ -180,6 +180,7 @@ STATE_ACTIVE="$STATE_DIR/account.active"
 STATE_LIMITED="$STATE_DIR/account.limited"
 STATE_MODEL_LIMITED="$STATE_DIR/account.model-limited"   # label<TAB>model<TAB>until<TAB>banner (#524)
 STATE_REAUTH="$STATE_DIR/account.claude-reauth"          # label<TAB>since<TAB>reason (#1667; account.reauth is C2's stamp)
+STATE_PAUSED="$STATE_DIR/account.paused"                 # the hub's paused pool accounts, one per line (#2083)
 LOCK="$STATE_DIR/account.lock"
 # ccquota-driven pre-emptive rotation (issue #513): quota cache + policy knobs.
 # CEILING: bench + move sessions at/above this utilization (5h OR 7d, whichever is
@@ -687,6 +688,37 @@ quota_fetch() {
   now | atomic_write "$STATE_QUOTA_TS"
   quota_empty_streak "$rows"
   model_quota_sync "$raw"
+  quota_paused_fetch
+}
+# quota_paused_fetch — the hub's paused pool accounts (issue #2083), from the
+# public client-settings `pool` segment, into $STATE_PAUSED, on the same TTL'd
+# tick as the quota reading, so a pause reaches the next spawn within a minute.
+# A hub that does not answer leaves the file as it was (a blink never un-pauses);
+# one that answers without the key (older than #1990) empties it.
+# FLEET_ACCOUNT_PAUSED_CMD is the selftest seam: its stdout is the JSON.
+quota_paused_fetch() {
+  local hub raw names
+  hub="${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}"; hub="${hub%/}"
+  if [ -n "${FLEET_ACCOUNT_PAUSED_CMD:-}" ]; then
+    raw=$(bash -c "$FLEET_ACCOUNT_PAUSED_CMD" 2>/dev/null) || return 0
+  else
+    [ -n "$hub" ] && command -v curl >/dev/null 2>&1 || return 0
+    raw=$(curl -fsS --max-time 5 "$hub/v1/fleet/client-settings" 2>/dev/null) || return 0
+  fi
+  names=$(printf '%s' "$raw" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+pool = d.get("pool") if isinstance(d, dict) else None
+v = pool.get("FLEET_ACCOUNT_PAUSED", "") if isinstance(pool, dict) else ""
+for n in (v if isinstance(v, str) else "").split():
+    print(n)
+' 2>/dev/null) || return 0
+  mkdir -p "$STATE_DIR"
+  printf '%s' "${names:+$names
+}" | atomic_write "$STATE_PAUSED"
 }
 
 # Metadata-only adapter for the provider-aware selector. Keep Claude's scores,
@@ -937,6 +969,30 @@ pick_score() {
   esac
 }
 
+# --- a PAUSED pool account is never picked (issue #2083) ------------------------
+# An admin pauses a pool subscription at the hub (`pool.paused.<account>`, #1990):
+# the hub still leases it — a session already on it runs to its end — but no NEW
+# session may land there. Two sources, unioned: FLEET_ACCOUNT_PAUSED (space-
+# separated, the conf / environment — the name the hub's client-settings `pool`
+# segment gives it) and $STATE_PAUSED, that same segment as the quota tick last
+# fetched it (quota_paused_fetch). Only a `hub:` label can be paused: a local
+# account is this login's own subscription, the hub's pause is not about it. The
+# login filter below carries it as the state `paused`, so every automatic pick —
+# active, rotate, the round-robin, the ranking — skips it the way it skips a dead
+# login, and the python selector's eligible() mirrors it. Nothing listed ⇒ no
+# label is paused and every pick is byte for byte the pre-#2083 one.
+acct_paused_names() {
+  # shellcheck disable=SC2086  # deliberate word-split of the space-separated list
+  printf '%s\n' ${FLEET_ACCOUNT_PAUSED:-}
+  [ -f "$STATE_PAUSED" ] && cat "$STATE_PAUSED"
+  return 0
+}
+acct_paused() {  # <label> → 0 iff it is a pool label the hub (or the conf) paused
+  [ -n "${FLEET_ACCOUNT_PAUSED:-}" ] || [ -s "$STATE_PAUSED" ] || return 1
+  [ "$(acct_class "$1")" = pool ] || return 1
+  acct_paused_names | awk -v l="$1" '$1==l{f=1} END{exit !f}'
+}
+
 # --- the LOGIN filter on every automatic pick (issue #1670, EPIC #1665 C6) ------
 # A switch at night chose by quota alone, so a login that had gone bad — a
 # `mark-reauth`, a hub token past its expiry, a token file emptied — was handed
@@ -952,6 +1008,7 @@ acct_login() {  # <label> → valid | reauth_required | no_credentials | expired
   row=$(printf '%s\n' "${_ACCT_AUTH:-}" | awk -F'\t' -v l="$l" '$1==l{print $2; exit}')
   [ -n "$row" ] && { printf '%s' "$row"; return 0; }
   [ "$(acct_reauth_since "$l")" -gt 0 ] && { printf reauth_required; return 0; }
+  acct_paused "$l" && { printf paused; return 0; }
   t=$(acct_token "$l")
   case "$t" in
     '') printf no_credentials ;;
@@ -969,6 +1026,7 @@ acct_auth_scan() {
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     if [ "$(acct_reauth_since "$l")" -gt 0 ]; then st=reauth_required
+    elif acct_paused "$l"; then st=paused
     else
       case "$(acct_token "$l")" in
         '') st=no_credentials ;;
@@ -995,12 +1053,14 @@ $l	unknown"
   _ACCT_AUTH=$(printf '%s' "$rows" | awk 'NF')
 }
 acct_auth_ok() { [ "$(acct_login "$1")" = valid ]; }
-# acct_auth_excluded — `label auth:<state>` per excluded label, `; `-joined (empty = none)
+# acct_auth_excluded — `label auth:<state>` per excluded label (`label paused` for
+# a paused pool account, #2083), `; `-joined (empty = none)
 acct_auth_excluded() {
   local l out="" st
   while IFS= read -r l; do
     [ -n "$l" ] || continue
     st=$(acct_login "$l"); [ "$st" = valid ] && continue
+    [ "$st" = paused ] && { out="${out:+$out; }$l paused"; continue; }
     out="${out:+$out; }$l auth:$st"
   done <<EOF
 $(acct_labels)
@@ -1024,7 +1084,7 @@ STATE_AUTH_ALERT="$STATE_DIR/account.auth-alert"
 acct_auth_alert() {
   local why text last="" lt=0 live="${FLEET_ALERTS_EVENT_LIVE:-3600}"
   why=$(acct_auth_excluded); [ -n "$why" ] || return 0
-  text="自动切换：没有登录有效的账号，原地等待，不切换 · no account has a valid login — not switching: $why"
+  text="自动切换：没有可用的账号（登录无效或已暂停），原地等待，不切换 · no account is usable (login not valid, or paused) — not switching: $why"
   echo "fleet-account: $text" >&2
   case "$live" in ''|*[!0-9]*) live=3600 ;; esac
   [ -f "$STATE_AUTH_ALERT" ] && IFS='	' read -r lt last < "$STATE_AUTH_ALERT"
@@ -1675,6 +1735,9 @@ EOF
     if [ "$(acct_reauth_since "$l")" -gt 0 ]; then
       # the login itself is rejected (#1667): red, and the fix is a login, not a wait
       state="${A_RED}needs login${A_RST} ${A_DIM}· marked $(human_dur $(( now_s - $(acct_reauth_since "$l") ))) ago · clear-reauth after logging in${A_RST}"
+    elif acct_paused "$l"; then
+      # an admin paused it at the hub (#2083): running sessions finish, no new one lands
+      state="${A_YEL}paused${A_RST} ${A_DIM}· 已暂停 · no new session lands here${A_RST}"
     elif [ "$until" -gt "$now_s" ]; then
       state="${A_YEL}limited${A_RST} ${A_DIM}· back in ~$(human_dur $(( until - now_s )))${A_RST}"
     else

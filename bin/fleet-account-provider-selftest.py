@@ -170,6 +170,48 @@ class Providers(unittest.TestCase):
             a5 = accounts.normalize_codex(dict(self.profile, account='a'), ahead, now=now)
         self.assertEqual((a5['score'], a5['pace'], a5['pace_held']), (200 + 35, 0, False))
 
+    def test_a_paused_pool_account_is_never_chosen(self):
+        # issue #2083: the hub's pool.paused.<account> (FLEET_ACCOUNT_PAUSED, or
+        # global/account.paused as the quota tick fetched it) takes a `hub:` label
+        # out of choose(); a local label of the same name is never paused; with
+        # nothing paused the inventory is what it was.
+        acct = self.root/'accounts'; acct.mkdir()
+        (acct/'local').write_text('tok-secret\n')
+        for name in ('h1', 'h2'):
+            (acct/name).write_text('hub:%s\n' % name); (acct/(name+'.hub')).mkdir()
+            (acct/(name+'.hub')/'.credentials.json').write_text(json.dumps(
+                {'claudeAiOauth': {'accessToken': 'x', 'expiresAt': (time.time()+3600)*1000}}))
+        line = lambda l, used: '%s\tuuid\t%d\t%d\t0\t0\t0\t1\t1\t1\t1\t0\t0' % (l, used, (100-used)*2)
+        out = '\n'.join([line('h1', 0), line('h2', 50), line('local', 60)])
+
+        def inv(**over):
+            env = dict({'FLEET_ACCOUNT_PAUSED': ''}, **over)
+            with patch.dict(os.environ, dict(env, FLEET_ACCOUNTS_DIR=str(acct))), \
+                 patch.object(accounts, 'run', return_value=out), \
+                 patch.object(accounts, 'profiles', return_value=[]), \
+                 patch.object(accounts, 'codex_reading', return_value={'accounts': [], 'reason': ''}):
+                return accounts.inventory()
+        data = inv()
+        self.assertEqual({r['label']: r['login'] for r in data['accounts']}, {'h1': 'valid', 'h2': 'valid', 'local': 'valid'})
+        self.assertEqual(accounts.choose(data, 'claude')['target']['label'], 'h1')
+        data = inv(FLEET_ACCOUNT_PAUSED='h1 local')
+        self.assertEqual({r['label']: r['login'] for r in data['accounts']}, {'h1': 'paused', 'h2': 'valid', 'local': 'valid'})
+        r = accounts.choose(data, 'claude')
+        self.assertEqual(r['target']['label'], 'h2')
+        self.assertEqual([(e['label'], e['reason']) for e in r['excluded']], [('h1', 'paused')])
+        state = accounts.state_dir(); state.mkdir(parents=True)
+        (state/'account.paused').write_text('h1\nh2\n')
+        r = accounts.choose(inv(), 'claude')
+        self.assertEqual(r['target']['label'], 'local')
+        (state/'account.paused').write_text('h1\nh2\nlocal\n')
+        r = accounts.choose(inv(), 'claude')
+        self.assertEqual(r['target']['label'], 'local')   # a local label is never paused
+        # every pool label paused and nothing else: waiting, never «login needed»
+        rows = [x for x in inv()['accounts'] if x['label'] != 'local']
+        r = accounts.choose({'accounts': rows}, 'claude')
+        self.assertEqual((r['state'], r['target']), ('waiting-quota', None))
+        self.assertNotIn('login needed', r['reason'])
+
     def test_claude_inventory_reads_pace_fields(self):
         # fleet-account.sh _claude-inventory grew fields 12–13 (pace, held); a pre-#1231
         # 11-field row still parses, with no hold.
