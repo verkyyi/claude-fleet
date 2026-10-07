@@ -84,7 +84,7 @@ type DeviceAudit struct {
 }
 
 func (s *Store) ensureFleetDevices() error {
-	if _, err := s.write.Exec(fleetDevicesSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetDevicesSchema)); err != nil {
 		return fmt.Errorf("create fleet_devices tables: %w", err)
 	}
 	return nil

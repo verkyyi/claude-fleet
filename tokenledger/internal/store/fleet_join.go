@@ -50,7 +50,7 @@ type JoinCode struct {
 var ErrJoinCode = errors.New("join code is unknown, used or expired")
 
 func (s *Store) ensureFleetJoin() error {
-	if _, err := s.write.Exec(fleetJoinSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetJoinSchema)); err != nil {
 		return fmt.Errorf("create fleet_join_codes table: %w", err)
 	}
 	return nil

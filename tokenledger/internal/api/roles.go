@@ -140,8 +140,9 @@ func (m *routeMux) HandleFunc(p string, h func(http.ResponseWriter, *http.Reques
 }
 
 // noLogin is the os_user a user without a machine login is scoped to: no row
-// carries it, so they see nothing rather than everything.
-const noLogin = "\x00no machine login"
+// carries it, so they see nothing rather than everything. A '/' and spaces no
+// OS login can hold, and no NUL byte: Postgres refuses one in a text argument.
+const noLogin = "/no machine login/"
 
 // errNoPerson is a user whose principal the hub cannot read.
 var errNoPerson = errors.New("could not read who you are")

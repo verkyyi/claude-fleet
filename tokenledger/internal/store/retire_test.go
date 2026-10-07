@@ -333,7 +333,7 @@ func TestMigrate_AddsRetiredAtToAnOlderDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := Open(path)
+	s, err := openSQLite(path)
 	if err != nil {
 		t.Fatalf("opening a pre-#42 database must migrate it, not fail: %v", err)
 	}
