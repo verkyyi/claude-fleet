@@ -137,7 +137,7 @@ if grep -q "^ExecStart=.*fleet-credsep-launch.py.* agent $ME\$" "$AGENT_DEF.d/cr
    || python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); sys.exit(0 if "UserName" not in p and p["ProgramArguments"][-2:]==["agent",sys.argv[2]] else 1)' "$AGENT_DEF" "$ME" 2>/dev/null; then
   pass "B the agent's service starts the launcher (root, no UserName)"
 else fail "B agent service: $(cat "$AGENT_DEF" "$AGENT_DEF.d/credsep.conf" 2>/dev/null | head -20)"; fi
-ls "$SB/daemons" | grep -q credsep && pass "B the proxy service is written" || fail "B proxy service"
+{ [ -e "$SB/daemons/com.claude-fleet.credsep.$ME.plist" ] || [ -e "$SB/daemons/claude-fleet-credsep-$ME.service" ]; } && pass "B the proxy service is written" || fail "B proxy service"
 out=$(FLEET_CRED_SEPARATE=1 bash "$BIN/fleet-credsep.sh" apply 2>&1)
 case "$out" in *"credsep: ON"*) pass "B apply again: idempotent" ;; *) fail "B re-apply: $out" ;; esac
 grep -q at-DEFAULT "$R/codex/default/auth.json" && [ -L "$C/node.env" ] && pass "B re-apply moved nothing twice" || fail "B re-apply damage"
