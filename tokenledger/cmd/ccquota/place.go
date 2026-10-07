@@ -94,6 +94,7 @@ func place(args []string, stdout, stderr io.Writer) (int, error) {
 	key := fs.String("key", "", "idempotency key (default: one per call)")
 	wait := fs.Int("wait", -1, "seconds the hub waits on a remote start's outcome (default: the hub's, 60; 0 = answer on acceptance)")
 	name := fs.String("name", "", "a scratch session's name (with `scratch` in place of the issue)")
+	reap := fs.String("reap", "", "when the session may be closed on its own: merged[:<dur>], done[:<dur>], loop-end, at:<time> or keep (claude-fleet#1902; default: its kind's)")
 	fs.Usage = func() {
 		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] <owner/repo> <issue> <worker_id>
        ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] [--name <n>] <owner/repo> scratch <fleet UUID>
@@ -138,6 +139,9 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	}
 	if *account != "" {
 		ask["account_class"] = *account
+	}
+	if *reap != "" {
+		ask["reap"] = *reap
 	}
 	timeout := placeTimeout + placeWaitDefault*time.Second
 	if *wait >= 0 {

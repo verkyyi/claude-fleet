@@ -1118,7 +1118,8 @@ for line in open(ipath, encoding="utf-8"):
                                 "agent": agent or None, "name": name, "origin_wid": owid or None,
                                 "needs": needs or None, "identity": ident,
                                 "busy": extra.get("busy"), "born": extra.get("born"),
-                                "cfg": extra.get("cfg"), "title": extra.get("title")}})
+                                "cfg": extra.get("cfg"), "title": extra.get("title"),
+                                "reap": extra.get("reap")}})
 print(json.dumps({"sessions": sessions,
                   "nodes": [{"machine_name": host, "availability": "online",
                              "sessions": len(sessions), "observed_at": now}]}, ensure_ascii=False))

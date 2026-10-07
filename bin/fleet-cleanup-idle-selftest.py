@@ -73,8 +73,8 @@ class NoticeTests(unittest.TestCase):
         self.assertNotIn("@reap_hold", opts)
 
 
-@unittest.skipUnless(shutil.which("tmux"), "tmux absent")
-class RoundTrip(unittest.TestCase):
+class Rig(unittest.TestCase):
+    """An isolated tmux server + repo + scratch worktree (no tests of its own)."""
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="idle-reap-")
         self.root = Path(self.tmp.name).resolve()
@@ -147,6 +147,10 @@ class RoundTrip(unittest.TestCase):
     def mature_notice(self):
         self.clean()
         self.set("@reap_due", str(int(time.time()) - 1))
+
+
+@unittest.skipUnless(shutil.which("tmux"), "tmux absent")
+class RoundTrip(Rig):
 
     def test_real_close_and_restore(self):
         self.assertEqual(self.clean(), "")
@@ -279,6 +283,127 @@ class RoundTrip(unittest.TestCase):
         self.assertEqual(caught.exception.returncode, 75)
         self.assertEqual(log.read_text().splitlines(), ["call"])
         self.assertTrue(self.exists())
+
+
+class PolicyGrammar(unittest.TestCase):
+    """bin/fleet_reap_policy.py — the one parser (issue #1902)."""
+    def test_norm_default_label(self):
+        import fleet_reap_policy as rp
+        self.assertEqual(rp.norm("merged"), "merged")
+        self.assertEqual(rp.norm("merged:48h"), "merged:48h")
+        self.assertEqual(rp.norm("done"), "done:2h")
+        self.assertEqual(rp.norm("done:30m"), "done:30m")
+        self.assertEqual(rp.norm("loop-end"), "loop-end")
+        self.assertEqual(rp.norm("keep"), "keep")
+        self.assertEqual(rp.norm("at:2026-10-06T18:00Z"), "at:2026-10-06T18:00:00Z")
+        self.assertEqual(rp.norm("at:1791320000"), "at:" + rp.iso(1791320000))
+        self.assertRegex(rp.norm("at:18:00"), r"^at:\d{4}-\d\d-\d\dT\d\d:\d\d:00Z$")
+        for bad in ("", "never", "merged:", "done:0", "done:-1h", "keep:1", "at:soon", "at:25:00",
+                    "merged:1y", "loop-end:1h", "done:9999999d"):
+            self.assertIsNone(rp.norm(bad), bad)
+        self.assertEqual((rp.default("issue"), rp.default("scratch"), rp.default("loop")),
+                         ("merged", "done:2h", "loop-end"))
+        self.assertEqual(rp.parse("done:2h"), ("done", 7200))
+        self.assertEqual([rp.label(p) for p in ("merged", "done:2h", "loop-end", "keep")],
+                         ["合并后回收", "做完就回收", "循环停了回收", "常驻"])
+        self.assertEqual(rp.label("merged:48h"), "合并后留 2 天")
+        self.assertEqual([rp.merged_grace(p) for p in ("", "merged", "merged:48h", "keep", "done:2h", "junk")],
+                         ["", "", "172800", "keep", "other", ""])
+        r = subprocess.run(["python3", str(BIN / "fleet_reap_policy.py"), "norm", "nope"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+
+    def test_restore_map_carries_policy_by_identity(self):
+        fid = "12345678-1234-4123-8123-123456789abc"
+        line = "keep|" + fid + "||acme/app|w|/nonexistent|7|done|-|-||-|claude|\n"
+        out = subprocess.run(["python3", str(BIN / ".fleet-restore-resolve.py"), "", "--lead", "--sid", "--fid", "--reap"],
+                             input=line, capture_output=True, text=True).stdout.splitlines()
+        self.assertEqual(out[0], "REAP\t" + fid + "\tkeep")
+        self.assertEqual(out[1], "FID\t" + fid)
+        self.assertTrue(out[2].startswith("WIN\tw\t"))
+        with tempfile.NamedTemporaryFile("w", suffix=".map", delete=False) as f:
+            f.write("\n".join(out) + "\n")
+        wins = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh"; fleet_restore_wins "$2"', "x", str(BIN), f.name],
+                              capture_output=True, text=True).stdout
+        os.unlink(f.name)
+        self.assertTrue(wins.startswith("WIN:" + fid + "\tw\t"), wins)
+        # no policy: no REAP row, the rows exactly as before
+        out = subprocess.run(["python3", str(BIN / ".fleet-restore-resolve.py"), "", "--lead", "--sid", "--fid", "--reap"],
+                             input="|" + line.split("|", 1)[1], capture_output=True, text=True).stdout.splitlines()
+        self.assertEqual(out[0], "FID\t" + fid)
+
+
+@unittest.skipUnless(shutil.which("tmux"), "tmux absent")
+class ReapPolicy(Rig):
+    """Each reap policy (issue #1902): reaped once due, kept before it, kept while
+    working, and its unpushed work stays on disk."""
+    def due(self):
+        self.clean()
+        if self.tm("display-message", "-p", "-t", self.win, "#{@reap_due}").strip().isdigit():
+            self.set("@reap_due", str(int(time.time()) - 1))
+        return self.clean()
+
+    def policy(self, p):
+        out = self.call("bash", str(self.ibin / "fleet-reap-policy.sh"), "set", p, "--win", self.win,
+                        "--session", self.label)
+        self.assertIn("reap_policy=", out)
+
+    def test_done_waits_its_own_idle_then_reaps_keeping_unpushed_work(self):
+        self.policy("done:2h")
+        self.assertEqual(self.call("bash", str(self.ibin / "fleet-reap-policy.sh"), "get", "--win", self.win,
+                                   "--session", self.label).strip(), "done:2h")
+        self.due()                                   # idle 4000 s < 2 h: not yet
+        self.assertTrue(self.exists())
+        self.assertGreater(int(self.tm("display-message", "-p", "-t", self.win, "#{@reap_due}")), int(time.time()) + 3000)
+        self.set("@claude_state", "working")
+        self.set("@claude_state_ts", str(int(time.time()) - 9000))
+        self.due()
+        self.assertTrue(self.exists())               # working: never
+        self.set("@claude_state", "done")
+        self.call("git", "-C", str(self.wt), "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                  "commit", "-qm", "unpushed", "--allow-empty")
+        out = self.due()
+        self.assertIn("reaped-idle:" + self.win + " policy=done:2h", out)
+        self.assertFalse(self.exists())
+        self.assertTrue(self.wt.is_dir())            # the worktree and its branch stay
+        self.assertIn("unpushed", self.call("git", "-C", str(self.main), "log", "-1", "--format=%s", "scratch-7"))
+        self.assertIn("reap policy done:2h", (self.root / "ledger.tsv").read_text())
+
+    def test_keep_and_merged_are_never_this_pass(self):
+        for p in ("keep", "merged", "merged:48h"):
+            self.policy(p)
+            self.set("@claude_state_ts", str(int(time.time()) - 900000))
+            self.due()
+            self.assertTrue(self.exists(), p)
+
+    def test_at_only_once_the_time_has_come_and_never_while_working(self):
+        self.policy("at:" + str(int(time.time()) + 3600))
+        self.due()
+        self.assertTrue(self.exists())
+        self.policy("at:" + str(int(time.time()) - 60))
+        self.set("@claude_state", "working")
+        self.due()
+        self.assertTrue(self.exists())
+        self.set("@claude_state", "done")
+        self.assertIn("reaped-idle:", self.due())
+        self.assertFalse(self.exists())
+
+    def test_loop_end_waits_for_the_loop(self):
+        self.policy("loop-end")
+        self.set("@loop", "kind=wakeup next=%d ttl=600" % (int(time.time()) + 600))
+        self.due()
+        self.assertTrue(self.exists())               # a round still pending
+        self.set("@loop", "kind=wakeup next=%d ttl=600" % (int(time.time()) - 4000))
+        self.assertIn("reaped-idle:", self.due())
+
+    def test_sleep_on_considers_only_windows_with_a_policy(self):
+        conf = self.root / "conf" / (self.label + ".conf")
+        conf.write_text(conf.read_text() + "FLEET_SLEEP=on\n")
+        self.set("@claude_state_ts", str(int(time.time()) - 9000))
+        self.due()
+        self.assertTrue(self.exists())               # no policy, sleep on: the old rule, not closed
+        self.policy("done:2h")
+        self.assertIn("reaped-idle:", self.due())
 
 
 if __name__ == "__main__":

@@ -254,11 +254,15 @@ snapshot() {
     fi
     # A PROXY window (@remote, #1424) prints no name, so the resolver drops it:
     # it is another machine's session, never one to `claude --resume` here.
-    # Leading-most field (issue #1296): @cc_session_id, the pane's own session id as
+    # Leading-most field (issue #1902): @reap_policy — when the fleet may close the
+    # session. The resolver writes it as a `REAP<TAB><fleet_id><TAB><policy>` row
+    # before the window's FID row (identity-keyed; fleet_restore_wins skips it), and
+    # restore() stamps it back. A window with no policy writes no row.
+    # Then (issue #1296): @cc_session_id, the pane's own session id as
     # its hooks recorded it — the resolver resumes THAT before guessing by mtime.
-    { tmux -L "$sock" list-windows -t "$sess" -F "#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{window_name}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
-      [ -n "$spath" ] && printf '|||__HUB__|%s|-\n' "$spath"
-    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid >> "$tmp" 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{window_name}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
+      [ -n "$spath" ] && printf '||||__HUB__|%s|-\n' "$spath"
+    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap >> "$tmp" 2>/dev/null
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
     # hub-only — fleet-up has rebuilt its panels but restore hasn't reopened the
     # work windows yet — so a snapshot taken in that window has FEWER WIN rows
@@ -708,6 +712,13 @@ restore() {
         # The session's lifelong identity (issue #1646), as the snapshot saw it —
         # never re-minted: its children's @origin_fid still names it.
         case "$wtag" in WIN:?*) tmux -L "$sock" set-window-option -t "$nw" @fleet_id "${wtag#WIN:}" 2>/dev/null ;; esac
+        # When the fleet may close it (issue #1902): the map's `REAP<TAB><fleet_id>
+        # <TAB><policy>` row, keyed by that identity. No row (an older map, a
+        # window with no policy) stamps nothing — its kind decides, as before.
+        case "$wtag" in WIN:?*)
+          _rp=$(awk -F'\t' -v f="${wtag#WIN:}" '$1 == "REAP" && $2 == f { print $3; exit }' "$mf" 2>/dev/null)
+          case "$_rp" in ''|*[!A-Za-z0-9:.+-]*) ;; *) tmux -L "$sock" set-window-option -t "$nw" @reap_policy "$_rp" 2>/dev/null ;; esac ;;
+        esac
         fleet_win_role_stamp "$nw" worker "$sock"   # by role, not name (#1844)
         # Re-stamp the spawn provenance too (issue #503) so a crash-restored
         # worker keeps its dash grouping; old maps (pre-#503, 8-field WIN rows)

@@ -536,6 +536,9 @@ class Control:
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True
                 scratch = params.get("kind") == "scratch"
+                # The reap policy (issue #1902) as the adapter's $9, only when one
+                # was chosen — with none the argv is exactly what it was.
+                reap_arg = [params["reap"]] if params.get("reap") else []
                 if scratch:
                     # issue #1541: a raw scratch session the hub placed here — the
                     # adapter's start with `scratch` for the issue, the account class
@@ -544,11 +547,13 @@ class Control:
                     # (`<window_id>\t<name>\t<worktree>\t<fleet_id>`).
                     code, output, err = self.adapter("start", fleet["name"], "scratch", params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
-                                                     params.get("account_class", ""), params.get("name", "").strip(), timeout=180)
+                                                     params.get("account_class", ""), params.get("name", "").strip(),
+                                                     *reap_arg, timeout=180)
                 else:
                     code, output, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
-                                                     params.get("account_class", ""), timeout=180)
+                                                     params.get("account_class", ""), *([""] + reap_arg if reap_arg else []),
+                                                     timeout=180)
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
                     reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT"}

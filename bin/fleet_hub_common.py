@@ -49,6 +49,9 @@ MAX_MESSAGE = 4000
 TOOL_DIRS = ("$HOME/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
 
+# A session's reap policy (issue #1902) — tokenledger's reapPolicyRE, letter for letter.
+REAP_RE = re.compile(r"(?:(?:merged|done)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})")
+
 def tool_path(inherited, home=None):
     """`inherited` PATH with every TOOL_DIRS entry present. The missing ones are
     prepended in TOOL_DIRS order; the ones already there keep their place, so a
@@ -182,9 +185,14 @@ def inventory_row(parts):
     the node's own issue cache — what the other machines' sidebars and a
     session's top bar show instead of the window name's slug; empty = none (a
     scratch, or a title the node's cache does not hold), and the reader falls
-    back to the name."""
+    back to the name.
+    Column 18 (issue #1902): `reap=<policy>`, the session's @reap_policy (empty =
+    its kind's default) — the other machines' sidebars draw 常驻 etc. off it."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 18 and parts[-1].startswith("reap="):
+        r = parts.pop()[5:]
+        extra["reap"] = r if r and REAP_RE.fullmatch(r) else None
     if len(parts) >= 17 and parts[-1].startswith("title="):
         extra["title"] = parts.pop()[6:] or None
     if len(parts) >= 16 and parts[-1].startswith("cfg="):
@@ -280,7 +288,7 @@ def validate_gh_read(params):
 
 def validate_write(action, params):
     if action == "worker_start":
-        fields(params, (), ("issue", "kind", "name", "agent", "repo", "origin_wid", "account_class"))
+        fields(params, (), ("issue", "kind", "name", "agent", "repo", "origin_wid", "account_class", "reap"))
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
@@ -308,6 +316,10 @@ def validate_write(action, params):
         # a window option on the machine that opens it).
         if params.get("account_class", "") not in ("", "any", "local", "pool"):
             raise Fault("INVALID_ARGUMENT", "account_class must be local, pool or any")
+        # The reap policy (issue #1902): the hub's reapPolicyRE, letter for
+        # letter — one argv word; dash-*-session.sh --reap canonicalizes it.
+        if not isinstance(params.get("reap", ""), str) or not REAP_RE.fullmatch(params.get("reap", "") or "keep"):
+            raise Fault("INVALID_ARGUMENT", "reap must be merged[:<dur>], done[:<dur>], loop-end, at:<time> or keep")
     elif action == "worker_move_in":
         validate_move_in(params)
     elif action == "gh_comment":

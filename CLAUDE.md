@@ -213,6 +213,18 @@ Do not install from memory: read the doc and work from it.
   one `drill_<id>` (the test reds on either side missing); a way fixed in another
   repo is `登记：<ticket>`, listed, never drilled. Found a new one: add the row
   + drill, watch it go red, then fix.
+- **A session says when it may be closed: `@reap_policy`** (issue #1902). Chosen
+  at spawn (`--reap` on both spawners, the `spawn` tool, the client's new-session
+  question 「什么时候回收？」 → hub `reap` → the node's `worker_start`), changed by
+  `bin/fleet-reap-policy.sh` (the `set_reap` tool, the sidebar's 改回收方式…):
+  `merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<time>` · `keep`.
+  `bin/fleet_reap_policy.py` is the ONE grammar. `fleet-cleanup.sh` honours
+  keep / merged:<dur> and leaves the rest to `fleet-cleanup-idle.py`, which closes
+  them through the same gates (history first, worktree kept, never while working,
+  looping or holding a background job) — with `FLEET_SLEEP=on` too. The map
+  carries it as a `REAP<TAB><fleet_id><TAB><policy>` row, the inventory as
+  `reap=`. **No @reap_policy = the kind's old rule, byte for byte** —
+  `fleet-cleanup-idle-selftest.py` (`ReapPolicy`, `PolicyGrammar`) pins both.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).

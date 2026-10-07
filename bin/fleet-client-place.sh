@@ -4,6 +4,7 @@
 #
 #   fleet-client-place.sh <repo> <issue|scratch|restore:<key>> [--node <m>|auto]
 #                         [--title <t>] [--name <n>] [--agent claude|codex]
+#                         [--reap <policy>]
 #
 # <issue> is a number (or issue-<N>); restore:<key> resumes a /fleet-history row
 # (issue-<N> / scratch-<N>, a multi-repo fleet's <slug>: prefix allowed). A
@@ -42,23 +43,29 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
-usage() { sed -n '5,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '5,7p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 REPO=$1; WHAT=$2; shift 2
-NODE=auto; TITLE=''; NAME=''; AGENT=''
+NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)  [ $# -ge 2 ] || usage; NODE=$2; shift 2 ;;
     --title) [ $# -ge 2 ] || usage; TITLE=$2; shift 2 ;;
     --name)  [ $# -ge 2 ] || usage; NAME=$2; shift 2 ;;
     --agent) [ $# -ge 2 ] || usage; AGENT=$2; shift 2 ;;
+    # when the fleet may close it on its own (issue #1902) — the new-session
+    # question's answer; canonical here, held to its shape by the hub too
+    --reap)  [ $# -ge 2 ] || usage; REAP=$2; shift 2 ;;
     *) usage ;;
   esac
 done
 case "$REPO" in */*) ;; *) printf 'fleet-client-place: repo must be owner/name\n' >&2; exit 2 ;; esac
 [ -n "$NODE" ] || NODE=auto
 case "$AGENT" in ''|claude|codex) ;; *) printf 'fleet-client-place: --agent is claude or codex\n' >&2; exit 2 ;; esac
+if [ -n "$REAP" ]; then
+  REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$REAP") || exit 2
+fi
 KIND=''; ISSUE=''; KEY=''
 case "$WHAT" in
   scratch) KIND=scratch ;;
@@ -71,10 +78,10 @@ case "$ISSUE" in *[!0-9]*) KIND='' ;; esac
 
 # --- the hub ----------------------------------------------------------------------
 # rc 10 = not applicable here (no hub URL, or no lease / key to sign with).
-python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" <<'PY'
+python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" <<'PY'
 import hashlib, hmac, importlib.util, json, os, sys, time, urllib.error, urllib.request
 
-here, repo, kind, issue, key, node, title, name, agent = sys.argv[1:10]
+here, repo, kind, issue, key, node, title, name, agent, reap = sys.argv[1:11]
 
 
 def connect_module():
@@ -131,7 +138,7 @@ def rnd():
 req = {"action": "place", "repo": repo, "kind": kind, "node": node, "idempotency_key": idem, "wait": rnd()}
 if issue:
     req["issue"] = int(issue)
-for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent)):
+for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap)):
     if v:
         req[k] = v
 try:
@@ -178,8 +185,8 @@ if [ "$NODE" != auto ] && ! fleet_node_is_self "$NODE"; then
 fi
 ef=$(mktemp "${TMPDIR:-/tmp}/fcp-err.XXXXXX" 2>/dev/null) || ef=/dev/null
 case "$KIND" in
-  issue)   out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" "$ISSUE" "$AGENT" "$REPO" '' '' 2>"$ef"); src=$? ;;
-  scratch) out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" scratch "$AGENT" "$REPO" '' '' "${NAME:-$TITLE}" 2>"$ef"); src=$? ;;
+  issue)   out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" "$ISSUE" "$AGENT" "$REPO" '' '' ${REAP:+'' "$REAP"} 2>"$ef"); src=$? ;;
+  scratch) out=$(bash "$BIN/fleet-control-read.sh" start "$SESS" scratch "$AGENT" "$REPO" '' '' "${NAME:-$TITLE}" ${REAP:+"$REAP"} 2>"$ef"); src=$? ;;
   restore) out=$(bash "$BIN/fleet-control-read.sh" resume "$SESS" "$KEY" 2>"$ef"); src=$? ;;
 esac
 why=$(tail -n1 "$ef" 2>/dev/null | tr '\t' ' ')

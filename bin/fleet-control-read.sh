@@ -150,6 +150,9 @@ case "$mode" in
     # gets on THIS machine now, on this machine's fleet version (@agent_ver,
     # `renew` = 待换新, #1895)? Judged here, where the expected file lives, so the
     # other machines' sidebars (the client's included) draw 配置旧 off the hub.
+    # Column 18 (issue #1902): `reap=<policy>` — when the fleet may close the
+    # session (@reap_policy, the cwds list's last field); empty = its kind's
+    # default. Always present.
     # Column 17 (issue #1921): `title=<issue title>` — the bound issue's title off
     # THIS machine's issue cache (fleets/<repo slug>/issues, `milestone\t#num\t
     # assignee\ttitle`, what fleet-gh.sh's cache_issue reads), joined on (repo,
@@ -168,7 +171,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     fleet_multirepo "$sess" && drepo=''
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load
     while IFS= read -r row; do
       [ -n "$row" ] || continue
@@ -176,7 +179,9 @@ case "$mode" in
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7; exit }')
+      wreap=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      case "$wreap" in *[!A-Za-z0-9:.+-]*) wreap='' ;; esac
       born=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       case "$born" in *[!0-9]*) born='' ;; esac
       wfp=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -210,7 +215,7 @@ case "$mode" in
       esac
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap"
     done <<<"$rows"
     ;;
   ready)

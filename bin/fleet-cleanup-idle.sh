@@ -9,8 +9,12 @@ fleet_load_conf "$FLEET_SESSION"
 # A multi-repo fleet switches this per repo (issue #978) — in the loop below.
 fleet_has_repo_overlays "$FLEET_SESSION" || [ "${FLEET_CLEANUP:-1}" != 0 ] || exit 0
 # Automatic sleep retains idle tasks in their original windows. Do not race its
-# observation/exit policy with the older raw-window disposal timer.
-[ "${FLEET_SLEEP:-observe}" != on ] || exit 0
+# observation/exit policy with the older raw-window disposal timer — but a session
+# that chose WHEN it is closed (@reap_policy, issue #1902) chose it over sleep:
+# with sleep on, only those are considered (--policy-only).
+only=()
+[ "${FLEET_SLEEP:-observe}" != on ] || only=(--policy-only)
+set -- ${only[@]+"${only[@]}"} "$@"
 export FLEET_SESSION
 export FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}"
 export FLEET_REAP_IDLE_DONE_MIN="${FLEET_REAP_IDLE_DONE_MIN:-30}"

@@ -188,6 +188,10 @@ key Down; key Down; key Down
 has 'A: ↓↓↓ wraps past mbp, never onto it' "$(screen)" '› 自动'
 hasnt 'A: mbp never highlighted' "$(screen)" '› mbp'
 key Enter
+# 「什么时候回收？」 (issue #1902): an issue's default highlighted, ↵ takes it
+CHECKS=$((CHECKS + 1)); waitfor 5 '什么时候回收' || fail 'A: the reap question after 「开在哪」' "$(screen)"
+has 'A: 合并后回收 highlighted for an issue' "$(screen)" '› 合并后回收'
+key Enter
 CHECKS=$((CHECKS + 1)); waitfor 8 '已在 m4 上开好，已切过去' || fail 'A: the toast says it switched' "$(screen)"
 eq 'A: the place ran: repo, issue, --node auto' 'acme/web 42 --node auto' "$(tail -n1 "$LOG")"
 eq 'A: the switch stepped into the new row' 'wid:U/issue-42' "$(tail -n1 "$VIEW")"
@@ -201,8 +205,12 @@ key Enter
 CHECKS=$((CHECKS + 1)); waitfor 5 '开在哪' || fail 'B: a scratch goes straight to 「开在哪」' "$(screen)"
 has 'B: it names a scratch' "$(screen)" '草稿'
 key Down; key Enter
+CHECKS=$((CHECKS + 1)); waitfor 5 '什么时候回收' || fail 'B: the reap question' "$(screen)"
+has 'B: 做完就回收 highlighted for a scratch' "$(screen)" '› 做完就回收'
+key Down; key Down; key Down; key Enter
 sleep 1
 has 'B: a scratch on m4, by its hostname' "$(tail -n1 "$LOG")" ' scratch --node mac-mini-m4.local'
+has 'B: 常驻 rides along as --reap keep' "$(tail -n1 "$LOG")" '--reap keep'
 
 # C. ⌃o → repo → key → where
 rows_reset; echo unknown > "$SCEN"
@@ -224,17 +232,17 @@ CHECKS=$((CHECKS + 1)); waitfor 5 '入口连不上，暂时不能新建' || fail
 hasnt 'D: no menu' "$(screen)" '选仓库'
 eq 'D: nothing run' "$n" "$(wc -l < "$LOG")"
 hub_fresh; echo down > "$SCEN"; sleep 4   # the toast passes
-key C-s; key Enter; key Enter
+key C-s; key Enter; key Enter; key Enter
 CHECKS=$((CHECKS + 1)); waitfor 5 '入口连不上，暂时不能新建' || fail 'D: the place unreachable (exit 1) says the same' "$(screen)"
 
 # E. full
 echo full > "$SCEN"; sleep 4
-key C-s; key Enter; key Enter
+key C-s; key Enter; key Enter; key Enter
 CHECKS=$((CHECKS + 1)); waitfor 5 '开不了：m4: 满了 (6/6)' || fail 'E: the hub reason, as it said it' "$(screen)"
 
 # F. held elsewhere → y
 echo held > "$SCEN"; : > "$VIEW"; sleep 4
-key C-n; key Enter; key 7; key Enter; key Enter
+key C-n; key Enter; key 7; key Enter; key Enter; key Enter
 CHECKS=$((CHECKS + 1)); waitfor 5 '已在 m5 上跑 · y 切过去' || fail 'F: HELD asks to switch' "$(screen)"
 key y
 sleep .5

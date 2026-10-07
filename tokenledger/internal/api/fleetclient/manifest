@@ -78,6 +78,8 @@ bin/fleet-hub-sessions.sh
 bin/fleet-hub-write.sh
 bin/fleet-sidebar.sh
 bin/fleet-sidebar.py
+bin/fleet_reap_policy.py
+bin/fleet-reap-policy.sh
 bin/fleet-sidebar-menu.sh
 bin/fleet-sidebar-remote.sh
 bin/tmux-dashboard-rows.sh

@@ -3,7 +3,7 @@
 #
 # bin/fleet-mcp.py is the ONE stdio MCP server Claude and Codex sessions both mount
 # (docs/FLEET-MCP.md). Driven against fake scripts in a sandbox bin/:
-#   A  initialize + tools/list: server `fleet`, exactly the twenty-three tools, every
+#   A  initialize + tools/list: server `fleet`, exactly the twenty-four tools, every
 #      schema closed (additionalProperties false)
 #   B  refusals: an unknown argument, a wrong type, a missing argument, an
 #      out-of-range timeout, a malformed repo, a repo this fleet does not host,
@@ -159,7 +159,8 @@ assert rows[0]["result"]["protocolVersion"] == "2025-06-18", rows[0]
 tools = {t["name"]: t for t in rows[1]["result"]["tools"]}
 assert set(tools) == {"status", "children", "repos", "agents", "spawn", "await", "send",
                       "report", "ask", "comment", "evidence", "handoff", "pr_verdict", "pr_merge",
-                      "brief", "file_issue", "gh", "context", "transfer", "where", "whats_new", "show", "open"}, sorted(tools)
+                      "brief", "file_issue", "gh", "context", "transfer", "where", "whats_new", "show", "open",
+                      "set_reap"}, sorted(tools)
 for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
     assert t["description"], t
@@ -172,7 +173,7 @@ for n in ("report", "evidence", "handoff"):
 for n in ("pr_verdict", "pr_merge"):
     assert tools[n]["inputSchema"]["required"] == ["pr"], n
 PY
-ok "A server \`fleet\`, the twenty-three tools, every schema closed"
+ok "A server \`fleet\`, the twenty-four tools, every schema closed"
 
 # --- B: refusals — nothing runs -----------------------------------------------
 : > "$LOG"
@@ -265,12 +266,12 @@ ok "C status · children · repos · agents · spawn · await · send each ran i
 python3 - "$WORK/d" <<'PY' || fail "D: with no hub a tool was missing or failed" "$(cat "$WORK/d")"
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
-assert len(rows[1]["tools"]) == 23, rows[1]
+assert len(rows[1]["tools"]) == 24, rows[1]
 assert rows[40]["structuredContent"]["exit"] == 2 and not rows[40].get("isError"), rows[40]
 assert rows[41]["structuredContent"]["exit"] == 0, rows[41]
 PY
 grep -qx 'fleet-await.sh 3 --timeout 540' "$LOG" || fail "D: await's default timeout is not 540" "$(cat "$LOG")"
-ok "D no hub configured: all twenty-three tools listed, spawn/await run locally (await default 540s)"
+ok "D no hub configured: all twenty-four tools listed, spawn/await run locally (await default 540s)"
 
 # --- E: the legacy fleet-peer shim --------------------------------------------
 env -u FLEET_WORKER_CRED PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 python3 "$WORK/bin/fleet-peer-mcp.py" > "$WORK/e" <<'EOF'

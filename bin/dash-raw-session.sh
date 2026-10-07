@@ -110,7 +110,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -163,6 +163,11 @@ while [ "$#" -gt 0 ]; do
     # exists, ONE stdout line `<window_id>\t<name>\t<worktree>\t<fleet_id>`. Foreground pass
     # only (the --bg pass's stdout is silenced, #446). The hub's node reads it.
     --print)       PRINT_WIN=1; shift ;;
+    # --reap <policy> (issue #1902): when the fleet may close this session on its
+    # own — merged[:<dur>] | done[:<dur>] | loop-end | at:<time> | keep. None =
+    # the kind's default, stamped below: done:2h, or loop-end for a /loop seed.
+    --reap)        REAP="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --reap=*)      REAP="${1#--reap=}"; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
@@ -176,6 +181,10 @@ case "$AGENT" in
 esac
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# The reap policy, canonical or refused before anything opens (issue #1902).
+if [ -n "$REAP" ]; then
+  REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$REAP") || exit 2
+fi
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
@@ -325,6 +334,8 @@ if [ "$BG" = 1 ]; then
   # as is --origin-wid.
   nodearg=''; [ -n "$NODE" ] && nodearg=" --node=$NODE"
   owarg=''; [ -n "$ORIGIN_WID" ] && owarg=" --origin-wid=$ORIGIN_WID"
+  # canonical (checked above): no quote or space can be in it
+  [ -n "$REAP" ] && owarg="$owarg --reap=$REAP"
   fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"
          refuse "raw: background dispatch failed"; exit 1; }
@@ -367,7 +378,7 @@ if [ "$PLACING" = 1 ]; then
     _pw=$(fleet_key_wid "$SESS" "$ORIGIN") || _pw=''   # by identity (#1646)
   fi
   _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
-  place_out=$(fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME"); place_rc=$?
+  place_out=$(fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP"); place_rc=$?
   _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
   case "$place_rc:$_pv" in
     0:REMOTE\ *)
@@ -558,6 +569,14 @@ fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is rename
 [ "$NOREPO" != 1 ] && [ "$MULTI" = 0 ] && [ -n "${FLEET_REPO:-}" ] \
   && TM set-window-option -t "$win" @repo "$(fleet_norm_repo "$FLEET_REPO")" 2>/dev/null
 [ "$PIN" = 1 ] && TM set-window-option -t "$win" @pin 1 2>/dev/null
+# When the fleet may close it on its own (issue #1902): the one asked for, else the
+# kind's default — a /loop seed until its loop stops, any other scratch once done
+# and idle 2 hours. A no-repo session is never closed automatically (#791), so it
+# carries only an explicit one.
+if [ -z "$REAP" ] && [ "$NOREPO" != 1 ]; then
+  case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:2h ;; esac
+fi
+[ -n "$REAP" ] && TM set-window-option -t "$win" @reap_policy "$REAP" 2>/dev/null
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
 # pre-warmed with no requester, so its origin is decided at CLAIM time, here.
 [ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null

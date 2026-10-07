@@ -57,6 +57,12 @@ SID = "--sid" in sys.argv[2:]
 # `FID<TAB><fleet_id>` row immediately BEFORE that window's WIN row, so every reader
 # that keeps to `$1=="WIN"` reads the map it always did, and restore() re-stamps it.
 FID = "--fid" in sys.argv[2:]
+# --reap (issue #1902): one more leading field, BEFORE the --fid one: the window's
+# @reap_policy. A window with both a fleet_id and a policy gets a
+# `REAP<TAB><fleet_id><TAB><policy>` row before its FID row — identity-keyed, so
+# fleet_restore_wins (which resets on any other row) reads the map it always did.
+REAP = "--reap" in sys.argv[2:]
+REAP_RE = re.compile(r"[A-Za-z0-9:.+-]{1,48}")
 FID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 HELPER_MARKERS = (
     # fleet_internal_transcript's rubrics + the sleep digest's — keep in lockstep
@@ -127,6 +133,10 @@ for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
         continue
+    reap = ''
+    if REAP:
+        reap, _, line = line.partition(SEP)
+        reap = reap if REAP_RE.fullmatch(reap) else ''
     fid = ''
     if FID:
         fid, _, line = line.partition(SEP)
@@ -242,6 +252,8 @@ for line in sys.stdin:
         row += "\t-" * (14 - len(row.split("\t"))) + "\t" + sleep_record
     if lead:
         row += "\t-" * (15 - len(row.split("\t"))) + "\t" + lead
+    if fid and reap:
+        print(f"REAP\t{fid}\t{reap}")
     if fid:
         print(f"FID\t{fid}")
     print(row)

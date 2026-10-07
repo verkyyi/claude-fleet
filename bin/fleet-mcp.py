@@ -663,8 +663,14 @@ def tool_repos(_args):
 
 def tool_spawn(args):
     repo = check_repo(args)
-    return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo, SPAWN_TIMEOUT_S,
+    reap = ["--reap", args["reap"]] if args.get("reap") else []   # issue #1902
+    return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap, SPAWN_TIMEOUT_S,
                   env=hub_env(ASSERT_TTL_S))
+
+
+def tool_set_reap(args):
+    """When the fleet may close THIS session on its own (issue #1902)."""
+    return script([str(BIN / "fleet-reap-policy.sh"), "set", args["policy"]], STATUS_TIMEOUT_S)
 
 
 def tool_await(args):
@@ -939,6 +945,10 @@ def tool_open(args):
     return script([str(BIN / "fleet-open.sh"), "--", args["target"]], STATUS_TIMEOUT_S)
 
 
+# A session's reap policy (issue #1902) — bin/fleet_reap_policy.py is the grammar;
+# the script canonicalizes or refuses (exit 2), this is only its shape.
+REAP_POLICY = {"type": "string", "maxLength": 48,
+               "pattern": r"^(?:(?:merged|done)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})$"}
 ISSUE = {"type": "integer", "minimum": 1, "description": 'The GitHub issue number (a positive integer, no "#").'}
 REPO = {"type": "string", "pattern": r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
         "description": "owner/name of a repo THIS fleet hosts (the repos tool lists them). "
@@ -966,8 +976,20 @@ TOOLS = {
                        "implements and lands the issue itself). Runs bin/dash-issue-session.sh, so the session "
                        "caps and the claim dedup apply. Exit 0 spawned (or the window already exists), 2 at "
                        "capacity, 3 already claimed, 1 infrastructure. Returns at once — await waits for it.",
-        "inputSchema": {"type": "object", "properties": {"issue": ISSUE, "repo": REPO},
-                        "required": ["issue"], "additionalProperties": False}}),
+        "inputSchema": {"type": "object", "properties": {
+            "issue": ISSUE, "repo": REPO,
+            "reap": dict(REAP_POLICY, description="When the fleet may close it on its own (default merged: "
+                                                  "after its PR merged) — see set_reap.")},
+            "required": ["issue"], "additionalProperties": False}}),
+    "set_reap": (tool_set_reap, {
+        "description": "When the fleet may close THIS session on its own (bin/fleet-reap-policy.sh set; issue "
+                       "#1902): merged (after its PR merged + the fleet's grace) · merged:48h (keep it 48 hours "
+                       "after the merge, e.g. to wait for a read-back) · done:2h (its turn over and idle 2 hours) "
+                       "· loop-end (once its /loop stops) · at:18:00 or at:<ISO time> · keep (never; it may still "
+                       "sleep). Every automatic close records history first and keeps unpushed work. Exit 0 set, "
+                       "2 not a policy, 1 no window.",
+        "inputSchema": {"type": "object", "properties": {"policy": REAP_POLICY},
+                        "required": ["policy"], "additionalProperties": False}}),
     "await": (tool_await, {
         "description": "Hand an issue to a worker (spawning one if none is live) and BLOCK until it lands, "
                        "blocks or is reaped; prints the verdict (MERGED / BLOCKED / FAILED / TIMEOUT / REAPED / "

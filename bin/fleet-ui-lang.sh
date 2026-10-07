@@ -356,6 +356,7 @@ answer	a	回答提问 — 跳到那个会话，在它自己的提问里答（红
 sub	s	切换 sub — 在输入行写账号，Tab 逐个看额度，↵ 迁移
 wake	w	唤醒睡眠中的 z 行（仅睡眠时显示）
 awake	k	保持唤醒 ⇄ 允许再次休眠
+reappol	l	改回收方式 — 合并后 / 做完就收 / 循环停了 / 到点 / 常驻
 agent	v	新会话 claude ⇄ codex
 reap	x	回收 — 先确认 y/n（别机行：经入口让那台机器回收）
 new	n	新任务 — 在输入行写标题（多仓库 Tab 换仓库），↵ 建 issue 并启动 worker
@@ -373,6 +374,7 @@ answer	a	answer its question — jumps to that session, to answer in its own pic
 sub	s	switch subscription — the account on the input line, Tab through them with their quota, ↵ moves
 wake	w	wake a sleeping (z) row now — only listed on one
 awake	k	keep it awake ⇄ allow it to sleep again
+reappol	l	reap policy — after merge / when done / after the loop / at a time / keep
 agent	v	flip new sessions claude ⇄ codex
 reap	x	reap it — asks y/n first (a row on another machine: through the hub, there)
 new	n	new task — its title on the input line (Tab picks the repo in a 2+ repo fleet), ↵ files the issue AND spawns its worker
@@ -403,6 +405,74 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:menu_rename)             printf 'Rename…' ;;
     zh:menu_unpin)              printf '取消置顶' ;;
     en:menu_unpin)              printf 'Unpin' ;;
+    # --- the reap policy (issue #1902): the row menu's submenu and the shell's
+    # new-session question 「什么时候回收？」 — the prototype's words.
+    zh:menu_reap_policy)        printf '改回收方式…' ;;
+    en:menu_reap_policy)        printf 'Reap policy…' ;;
+    zh:reap_menu_title)         printf '什么时候回收' ;;
+    en:reap_menu_title)         printf 'When to reap' ;;
+    zh:reap_menu_merged)        printf '合并后回收 — PR 合并 10 分钟后' ;;
+    en:reap_menu_merged)        printf 'After merge — 10 min after the PR merges' ;;
+    zh:reap_menu_done_2h)       printf '做完就回收 — 闲满 2 小时' ;;
+    en:reap_menu_done_2h)       printf 'When done — idle 2 hours' ;;
+    zh:reap_menu_loop_end)      printf '循环停了回收 — /loop 停了以后' ;;
+    en:reap_menu_loop_end)      printf 'After the loop — once /loop stops' ;;
+    zh:reap_menu_at)            printf '到点回收…' ;;
+    en:reap_menu_at)            printf 'At a time…' ;;
+    zh:reap_menu_keep)          printf '常驻 — 永不自动回收，只睡眠' ;;
+    en:reap_menu_keep)          printf 'Keep — never reaped, only sleeps' ;;
+    zh:reap_menu_at_prompt)     printf '几点回收（HH:MM 或 2026-10-06T18:00Z）:' ;;
+    en:reap_menu_at_prompt)     printf 'Reap at (HH:MM or 2026-10-06T18:00Z):' ;;
+    # the row's reap-policy word (issue #1902), left of the @ mark; _narrow when tight
+    zh:sidebar_reap_merged)     printf '合并后回收' ;;
+    en:sidebar_reap_merged)     printf 'after merge' ;;
+    zh:sidebar_reap_merged_narrow) printf '合并收' ;;
+    en:sidebar_reap_merged_narrow) printf 'merge' ;;
+    zh:sidebar_reap_merged_for) printf '合并后留 %s' "${1:-}" ;;
+    en:sidebar_reap_merged_for) printf 'merge+%s' "${1:-}" ;;
+    zh:sidebar_reap_merged_for_narrow) printf '留%s' "${1:-}" ;;
+    en:sidebar_reap_merged_for_narrow) printf '+%s' "${1:-}" ;;
+    zh:sidebar_reap_done)       printf '做完就回收' ;;
+    en:sidebar_reap_done)       printf 'when done' ;;
+    zh:sidebar_reap_done_narrow) printf '做完收' ;;
+    en:sidebar_reap_done_narrow) printf 'done' ;;
+    zh:sidebar_reap_done_for)   printf '做完闲 %s' "${1:-}" ;;
+    en:sidebar_reap_done_for)   printf 'done+%s' "${1:-}" ;;
+    zh:sidebar_reap_done_for_narrow) printf '闲%s' "${1:-}" ;;
+    en:sidebar_reap_done_for_narrow) printf 'idle%s' "${1:-}" ;;
+    zh:sidebar_reap_loop_end)   printf '循环停了回收' ;;
+    en:sidebar_reap_loop_end)   printf 'after loop' ;;
+    zh:sidebar_reap_loop_end_narrow) printf '循环收' ;;
+    en:sidebar_reap_loop_end_narrow) printf 'loop' ;;
+    zh:sidebar_reap_at)         printf '到点 %s' "${1:-}" ;;
+    en:sidebar_reap_at)         printf 'at %s' "${1:-}" ;;
+    zh:sidebar_reap_at_narrow)  printf '%s' "${1:-}" ;;
+    en:sidebar_reap_at_narrow)  printf '%s' "${1:-}" ;;
+    zh:sidebar_reap_keep)       printf '常驻' ;;
+    en:sidebar_reap_keep)       printf 'keep' ;;
+    zh:sidebar_reap_keep_narrow) printf '常驻' ;;
+    en:sidebar_reap_keep_narrow) printf 'keep' ;;
+    # the five choices of 「什么时候回收？」 (issue #1902): `label<TAB>note`
+    zh:sidebar_place_reap_merged) printf '合并后回收\tPR 合并 10 分钟后' ;;
+    en:sidebar_place_reap_merged) printf 'After merge\t10 min after the PR merges' ;;
+    zh:sidebar_place_reap_done) printf '做完就回收\t闲满 2 小时' ;;
+    en:sidebar_place_reap_done) printf 'When done\tidle 2 hours' ;;
+    zh:sidebar_place_reap_loop_end) printf '循环停了回收\t/loop 停了以后' ;;
+    en:sidebar_place_reap_loop_end) printf 'After the loop\tonce /loop stops' ;;
+    zh:sidebar_place_reap_at)   printf '到点回收\t下一步写时间' ;;
+    en:sidebar_place_reap_at)   printf 'At a time\tthe time comes next' ;;
+    zh:sidebar_place_reap_keep) printf '常驻\t永不自动回收，只睡眠' ;;
+    en:sidebar_place_reap_keep) printf 'Keep\tnever reaped, only sleeps' ;;
+    zh:sidebar_place_reap_fmt)  printf '%s → 什么时候回收？' "${1:-}" ;;
+    en:sidebar_place_reap_fmt)  printf '%s → when to reap?' "${1:-}" ;;
+    zh:sidebar_place_reap_keys) printf '↑↓ 选 · ↵ 确认（默认：%s）· esc 取消' "${1:-}" ;;
+    en:sidebar_place_reap_keys) printf '↑↓ pick · ↵ ok (default: %s) · esc cancel' "${1:-}" ;;
+    zh:sidebar_place_reap_default) printf '默认' ;;
+    en:sidebar_place_reap_default) printf 'default' ;;
+    zh:sidebar_place_reap_at_ask) printf '几点回收？HH:MM 或 2026-10-06T18:00Z› ' ;;
+    en:sidebar_place_reap_at_ask) printf 'Reap at? HH:MM or 2026-10-06T18:00Z› ' ;;
+    zh:sidebar_place_reap_bad)  printf '不是一个时间：HH:MM 或 2026-10-06T18:00Z' ;;
+    en:sidebar_place_reap_bad)  printf 'not a time: HH:MM or 2026-10-06T18:00Z' ;;
     zh:menu_pin)                printf '置顶' ;;
     en:menu_pin)                printf 'Pin' ;;
     zh:menu_open_pr)            printf '打开 PR' ;;

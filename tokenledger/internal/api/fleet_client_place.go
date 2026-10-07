@@ -72,6 +72,7 @@ type clientPlaceRequest struct {
 	Node        string `json:"node"`
 	Title       string `json:"title"`
 	Agent       string `json:"agent"`
+	Reap        string `json:"reap"`
 	Idem        string `json:"idempotency_key"`
 	OperationID string `json:"operation_id"`
 	Wait        *int   `json:"wait"`
@@ -229,6 +230,13 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	args := map[string]any{"repo": req.Repo, "node": node, "idempotency_key": idem}
 	if req.Agent != "" {
 		args["agent"] = req.Agent
+	}
+	if !reapPolicyOK(req.Reap) {
+		httpError(w, http.StatusBadRequest, "reap must be merged[:<dur>], done[:<dur>], loop-end, at:<time> or keep")
+		return
+	}
+	if req.Reap != "" {
+		args["reap"] = req.Reap
 	}
 	tool := "worker_start"
 	var pl Placement

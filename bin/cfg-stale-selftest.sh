@@ -116,7 +116,7 @@ out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="macmini=m5 mini2
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 w = m.width_of
-assert m.ROW_FIELDS == 14
+assert m.ROW_FIELDS == 15   # 14: title (#1921), 15: reap (#1902)
 t0, g0 = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "m4")
 t1, g1 = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "m4", "ok")
 assert (t0, g0) == (t1, g1), "ok draws nothing"
