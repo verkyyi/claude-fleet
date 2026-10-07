@@ -14,6 +14,9 @@
 # The real dash-issue-new.sh + fleet-lib.sh are symlinked into a temp bin so the
 # script computes BIN=<tempbin> and reaches our STUB dash-issue-session.sh /
 # tmux-dash-collect.sh — letting us assert what it spawns without a tmux server.
+# The fixture fleet has NO conf (only the env's FLEET_REPO): the repo comes through
+# fleet_backlog_repo / fleet_target_repo, whose "a fleet that knows no repo" path
+# this pins (issue #1938 broke it once — keep naming them so --changed selects us).
 #
 #   A. --spawn + query + spawn-ok: files the issue, then BACKGROUND-spawns the
 #      worker for the new issue number; the fzf header verb reads "New issue + worker"
