@@ -562,8 +562,9 @@ qw_rl_socket() { fleet_lw "$FLEET_QUOTA_RL_FMT" tmux -L "$1"; }
 # this tick is the only road. Off ⇒ not run, nothing changes.
 if [ "${FLEET_CRED_PROXY:-0}" = 1 ] && [ -n "$SOCKETS" ] && [ -x "$BIN/fleet-proxy-quota.sh" ] && tick_room; then
   qpb=$(qw_left "$SECONDS" "$TMUX_BUDGET")
-  # shellcheck disable=SC2086  # SOCKETS: one label per word
-  [ "$qpb" -ge 1 ] && fleet_timebox "$qpb" "$BIN/fleet-proxy-quota.sh" push $(printf -- '--socket %s ' $SOCKETS) >/dev/null 2>&1
+  qpa=()
+  for qs in $SOCKETS; do qpa+=(--socket "$qs"); done
+  [ "$qpb" -ge 1 ] && fleet_timebox "$qpb" "$BIN/fleet-proxy-quota.sh" push ${qpa[@]+"${qpa[@]}"} >/dev/null 2>&1
 fi
 qsl=""
 for qs in $SOCKETS; do
