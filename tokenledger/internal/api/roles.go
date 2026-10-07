@@ -46,8 +46,6 @@ var routeAccess = map[string]string{
 	"/enter": accessPublic, "/logout": accessPublic, "/signin": accessPublic,
 	"/auth/github/start": accessPublic, "/auth/github/callback": accessPublic,
 	"/healthz": accessPublic, "/version": accessPublic,
-	// The public counter (claude-fleet#1988), off with hub.public_meter.
-	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
 	"/install": accessPublic, "/install/": accessPublic,
 	// The public counter (claude-fleet#1988); the handler 404s it when off.
 	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
