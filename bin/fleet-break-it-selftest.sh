@@ -1910,7 +1910,7 @@ PY2
 # lease — nobody on standby, this server still renewing — and typing here makes
 # it the primary again.
 drill_second_client() {
-  CAP=30; local t0 s="${CSESS}2" h="$WORK/sc" out
+  CAP=45; local t0 s="${CSESS}2" h="$WORK/sc" out
   client_setup
   mkdir -p "$h/cur"; : > "$h/log"
   cat > "$h/lease" <<EOF
@@ -1941,7 +1941,7 @@ EOF
   out=$(python3 - "$REAL_TMUX" "$s" "$WORK/ccache/tmp" "$h" <<'PY' 2>&1
 import fcntl, os, pty, select, signal, struct, subprocess, sys, termios, time
 tmux, sess, cl, h = sys.argv[1:5]
-signal.alarm(40)
+signal.alarm(60)
 kids = []
 def attach():
     pid, fd = pty.fork()
@@ -1960,6 +1960,12 @@ def pump(secs):
             if fd in r:
                 try: seen[i] += os.read(fd, 65536)
                 except OSError: pass
+def until(secs, ok):   # pump while waiting: a slow runner's keeper ticks late
+    end = time.time() + secs
+    while time.time() < end:
+        if ok(): return True
+        pump(0.3)
+    return ok()
 def popped(i):   # the standby screen drawn on that terminal
     return "按回车".encode() in seen[i]
 def standby():
@@ -1984,12 +1990,13 @@ try:
     r = subprocess.run([os.path.join(h, "lease"), "acquire", "--device", "iPhone"], capture_output=True, text=True).stdout
     open(os.path.join(h, "primary"), "w").write(r.split("\t")[1] + "\n")
     renews = log().count("renew " + me)
-    pump(3.0)
+    renewed = until(10, lambda: log().count("renew " + me) > renews)
     if standby() or popped(0) or popped(1) or lease() != me: die("another device opening its lease put this one on standby")
-    if log().count("renew " + me) <= renews: die("this server stopped renewing")
+    if not renewed: die("this server stopped renewing")
     # typing here (F12, a key nothing binds to an action): the input goes out
-    os.write(kids[0][1], b"\x1b[24~"); pump(3.0)
-    if open(os.path.join(h, "primary")).read().strip() != me: die("typing here sent no input (the iPhone still primary)")
+    os.write(kids[0][1], b"\x1b[24~")
+    if not until(10, lambda: open(os.path.join(h, "primary")).read().strip() == me):
+        die("typing here sent no input (the iPhone still primary)")
     print("OK")
 finally:
     for pid, _ in kids:
