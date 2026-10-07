@@ -42,7 +42,7 @@ fi
 
 handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330)
 wstate=''         # what a clean Stop WRITES when it is not `done` (issue #1331: looping)
-wwait=''          # WHY it is looping (issue #1370): @claude_wait, loop|children|bg
+wwait=''          # WHY it is looping (issue #1370): @claude_wait, loop|children|bg|tool
 wprev=''          # the @claude_wait already on the window (cleared when it lapses)
 
 # @claude_needs — WHY this window is red (issues #640, #704):
@@ -177,6 +177,10 @@ case "${1:-}" in
     #             before the hook existed) or a fleet-loop.py ledger holds one;
     #   children  a sub-task it spawned is not finished — the k/N its own row shows;
     #   bg        its agent still owns a Bash-tool job (a run_in_background command).
+    #   tool      a fleet tool call it made is still running (issue #1880): Claude
+    #             Code moves an MCP call past 120 s to a background task and the
+    #             turn ends before the `await` / `pr_verdict --wait` answers — the
+    #             fleet's MCP server still has the tool's subprocess under it.
     # Only the WRITTEN state changes: everything below keyed on a clean Stop
     # (`sem=done`) still runs. The transcript comes off the Stop payload; the mod's
     # report (`--via mod`) has none, and never needs the backfill (it writes @loop).

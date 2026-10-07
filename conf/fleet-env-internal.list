@@ -421,6 +421,7 @@ FLEET_OPEN_SECRET_FILE             seam: the shared secret's path (fleet-open-se
 FLEET_OPEN_URL_BIN                 seam: the fallback opener instead of bin/open-url.sh (fleet-open-selftest.sh, #1379)
 FLEET_LOOP_BACKFILL_BYTES          knob: internal budget, transcript tail bytes the Stop hook replays to backfill a pre-hook @loop (fleet_stop_wait, 262144, #1370)
 FLEET_WAIT_REEVAL                  knob: 0 turns off the idle-window re-ask of done ↔ looping + @claude_wait (fleet-wait-reeval.sh, on, #1376)
+FLEET_TOOL_WAIT                    knob: 0 turns off the `tool` wait reason — a fleet tool call in flight no longer holds a window busy (fleet_window_tool_busy, on, #1880)
 FLEET_HUB_CACHE_SECS               knob: internal budget, seconds the hub worker cache (control/hub-workers.tsv) stays fresh for fleet_worker_locate (30, #1420)
 FLEET_HUB_STATUS_CMD               seam: command printing `<worker_id>\t<node>` that refreshes the hub worker cache; the ccquota agent now writes the cache itself (#1421); kept for a hub reached some other way (fleet_worker_locate, #1420)
 FLEET_HUB_SESSIONS_CMD             seam: command printing the hub's fleet_sessions JSON instead of GET $CCQUOTA_HUB_URL/v1/fleet/fleet_sessions (fleet-hub-sessions.sh, #1423)

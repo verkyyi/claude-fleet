@@ -26,6 +26,14 @@ rung's word — registry idle/gone demotes at once, registry busy keeps `working
 Each contradiction is logged once while it lasts (cache-dir/reconcile.rung);
 fleet-doctor's `state` line counts them.
 
+Two things a long FLEET TOOL CALL taught it (issue #1880, EPIC #2074 C4): a
+registry record names the session its Claude started under, which may be a
+viewer's grouped `<fleet>@view-<id>` session (#1489) — the lookup strips that, so
+a `busy` record is found and outranks the screen; and a window whose fleet MCP
+server (fleet-mcp.py) still runs a tool as its child is work, never demoted,
+whatever an absent record or an empty input line say (`kept working …` in the
+log, `kept=` in the heartbeat).
+
 Usage: fleet-state-reconcile.py [--dry-run] [--cache-dir DIR] [--idle-secs N]
                                 [--exited-secs N] [--hook-trust-secs N]
                                 [--tmux-idle-secs N] -- <fleet-session>...
@@ -35,6 +43,7 @@ import argparse
 import calendar
 import json
 import os
+import re
 import runpy
 import subprocess
 import sys
@@ -135,6 +144,20 @@ def has_agent_process(rows, root):
     return False
 
 
+def registry_target(target):
+    """The record's tmux target under the FLEET's session name (issue #1880).
+
+    Claude Code records the session name of the client it started under. A shell
+    or proxy viewer attaches a grouped `<fleet>@view-<id>` session of its own
+    (issue #1489), so a window opened while one was active is recorded as
+    `<fleet>@view-<id>:@N.%P` — and the lookup by `<fleet>:@N.%P` missed it. The
+    miss was silent: the window fell to the no-record screen fallback, which read
+    a long tool call's empty input line as an idle prompt and demoted a `working`
+    window mid-call (2026-10-07: 84 s into a `pr_verdict --wait`).
+    """
+    return re.sub(r'^([^:]*?)@view-[^:]*:', r'\1:', target)
+
+
 def registry(directory):
     """{tmux target: record} for every live registry record that names its pane."""
     found = {}
@@ -150,8 +173,40 @@ def registry(directory):
         target = record.get('tmux') if isinstance(record, dict) else None
         if not target or not str(record.get('pid', '')).isdigit():
             continue
-        found[target] = record
+        found[registry_target(str(target))] = record
     return found
+
+
+def tool_call_in_flight(session, window):
+    """A fleet tool call still running under the window (issue #1880).
+
+    fleet_window_tool_busy (bin/fleet-lib.sh): the fleet's MCP server runs every
+    tool as a subprocess, so a fleet-mcp.py under the pane with a live child is a
+    call in flight — an `await`, a `pr_verdict --wait`, in the foreground or moved
+    to a background task. The agent is silent for its whole length (no hook stamp,
+    an empty input line), which is exactly what every rule below reads as idle;
+    it is work, and is never demoted. The lib absent ⇒ False (decided as before).
+    """
+    lib = BIN / 'fleet-lib.sh'
+    if not lib.is_file():
+        return False
+    try:
+        return subprocess.run(['bash', '-c', '. "$1" >/dev/null 2>&1; TMUX=; fleet_window_tool_busy "$2" "$3"',
+                               '_', str(lib), session, window], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def kept(session, row, reason, log):
+    """Log a `working` window the rules would have demoted but a fleet tool call holds."""
+    line = '%s  %-10s kept working (fleet tool call in flight; was: %s)' % (
+        time.strftime('%H:%M:%S'), session + ':' + row['window'], reason)
+    try:
+        with open(log, 'a') as out:
+            out.write(line + '\n')
+    except OSError:
+        pass
 
 
 def claude_verdict(record, state_ts, now, idle_secs):
@@ -317,8 +372,11 @@ def reconcile(session, args, records, rows, now, stats):
                 rung_health(session, row, registry_says, tmux_idle, state_ts, now, args, stats)
                 if registry_says not in ('idle', 'gone'):
                     continue        # the registry says a turn runs: it outranks a silent pane
-                if demote(session, row, 'rung_health: registry %s, hook stale %ds, tmux idle %ds'
-                          % (registry_says, now - state_ts, tmux_idle), args.dry_run, args.log):
+                reason = 'rung_health: registry %s, hook stale %ds, tmux idle %ds' % (registry_says, now - state_ts, tmux_idle)
+                if tool_call_in_flight(session, row['window']):
+                    kept(session, row, reason, args.log); stats['kept'] += 1
+                    continue
+                if demote(session, row, reason, args.dry_run, args.log):
                     stats['demoted'] += 1
                 continue
             if verdict == 'idle':
@@ -351,6 +409,11 @@ def reconcile(session, args, records, rows, now, stats):
                 reason = 'prompt idle %ds; no native record for the live process' % (now - state_ts)
             else:
                 continue
+        # Whatever the rule above read — a native idle, an empty prompt, a pid that
+        # went away — a fleet tool call still running under the pane is work (#1880).
+        if tool_call_in_flight(session, row['window']):
+            kept(session, row, reason, args.log); stats['kept'] += 1
+            continue
         if demote(session, row, reason, args.dry_run, args.log):
             stats['demoted'] += 1
 
@@ -370,7 +433,7 @@ def main():
     if args.idle_secs < 1:
         return 0
     started = time.time(); now = started
-    stats = {'windows': 0, 'working': 0, 'demoted': 0, 'skipped': [],
+    stats = {'windows': 0, 'working': 0, 'demoted': 0, 'kept': 0, 'skipped': [],
              'contested': 0, 'rung_health': 0, 'seen': {}, 'seen_before': {}}
     seen_path = Path(args.cache_dir) / 'reconcile.rung'
     try:
@@ -393,9 +456,9 @@ def main():
         try:
             Path(args.cache_dir).mkdir(parents=True, exist_ok=True)
             hb = Path(args.cache_dir) / 'reconcile.heartbeat'
-            hb.write_text('at=%d\nwindows=%d\nworking=%d\ndemoted=%d\ncontested=%d\nrung_health=%d\ndur=%d\nskipped=%s\n' % (
+            hb.write_text('at=%d\nwindows=%d\nworking=%d\ndemoted=%d\ncontested=%d\nrung_health=%d\ndur=%d\nskipped=%s\nkept=%d\n' % (
                 int(time.time()), stats['windows'], stats['working'], stats['demoted'], stats['contested'],
-                stats['rung_health'], int(time.time() - started), ' '.join(stats['skipped'])))
+                stats['rung_health'], int(time.time() - started), ' '.join(stats['skipped']), stats['kept']))
             tmp = seen_path.with_suffix('.tmp')
             tmp.write_text(json.dumps(stats['seen']))
             os.replace(tmp, seen_path)

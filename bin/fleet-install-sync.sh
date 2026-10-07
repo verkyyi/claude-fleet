@@ -486,7 +486,8 @@ doctor_fail_tags() {
 # `working` — so it is busy only while a round may start within LOOP_MARGIN
 # (fleet_loop_mark.py due, issue #1690): a cron that fires tomorrow morning no
 # longer pins the install for the night. Unknown (a pre-#1690 mark, a loop
-# ledger, a children / bg wait, a classifier `looping` with no wait) stays busy.
+# ledger, a children / bg / tool wait (#1880), a classifier `looping` with no
+# wait) stays busy.
 busy_fleets() {
   local sess n st wt lp mf
   while IFS= read -r sess; do

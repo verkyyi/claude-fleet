@@ -22,6 +22,11 @@
 #   E. degenerate— no children, no bg job, no Loop: the Stop writes exactly what it
 #                  always did — `done`, an empty needs, a timestamp, and NO
 #                  @claude_wait / @loop option at all
+#   F. tool      — a fleet tool call still running under the agent (issue #1880: an
+#                  MCP call Claude Code backgrounded past 120 s, the turn over) →
+#                  `looping` + tool, retained:tool, fleet_child_busy / the
+#                  cfg-restart judge say tool; an idle fleet-mcp.py, or one probing
+#                  a new version, → done; the call returns → the re-ask writes done
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -37,7 +42,7 @@ SOCK="$WORK/s"
 tf() { "$REAL_TMUX" -S "$SOCK" "$@"; }
 # kill-server takes the fake agents; the tool-shell children are reaped by name,
 # and every one of them is bounded by its own `sleep 120` anyway.
-trap 'tf kill-server 2>/dev/null; pkill -f "snapshot-fleetwait-$$" 2>/dev/null; rm -rf "$WORK"' EXIT
+trap 'tf kill-server 2>/dev/null; pkill -f "snapshot-fleetwait-$$" 2>/dev/null; for p in $(pgrep -f "$WORK/fbin/fleet-mcp.py" 2>/dev/null); do kill "$p" 2>/dev/null; done; rm -rf "$WORK"' EXIT
 trap 'exit 130' INT TERM HUP
 mkdir -p "$WORK/path" "$WORK/conf" "$WORK/proj/-w" "$WORK/sessions"
 cat > "$WORK/path/tmux" <<SH
@@ -55,10 +60,38 @@ unset TMUX TMUX_PANE FLEET_MOD
 # The fake agent: `bg` leaves a Bash-tool shell (the shell-snapshot argv Claude's
 # Bash tool runs every command under) as its direct child, as a run_in_background
 # job would. The trailing `:` keeps sh from exec'ing sleep over the marker.
+# `tool <mode> [pidfile]` (F, issue #1880) leaves a fleet MCP server under it — a
+# fake bin/fleet-mcp.py, found by its argv shape (python + …/fleet-mcp.py), which
+# runs its one call as a child the way the real server runs every tool:
+#   call <pidfile>  one call (a sleep, its pid in <pidfile>); idle once it returns
+#   idle            a server between calls — no child at all
+#   probe           a server checking a new version: its child is `--probe`, no call
+mkdir -p "$WORK/fbin"
+cat > "$WORK/fbin/fleet-mcp.py" <<'PY'
+import signal, subprocess, sys, time
+mode = sys.argv[1] if len(sys.argv) > 1 else 'idle'
+child = None
+def bye(*_):
+    if child is not None and child.poll() is None: child.kill()
+    sys.exit(0)
+signal.signal(signal.SIGTERM, bye); signal.signal(signal.SIGHUP, bye)
+if mode == '--probe': time.sleep(120); sys.exit(0)
+if mode == 'call':
+    child = subprocess.Popen(['sleep', '120'])
+    with open(sys.argv[2], 'w') as fh: fh.write(str(child.pid))
+    child.wait(); child = None
+elif mode == 'probe':
+    child = subprocess.Popen([sys.executable, __file__, '--probe'])
+time.sleep(120)
+bye()
+PY
 FAKE="$WORK/$FLEET_CLAUDE_COMM.sh"
 cat > "$FAKE" <<SH
 #!/bin/bash
-if [ "\${1:-}" = bg ]; then sh -c ': /shell-snapshots/snapshot-fleetwait-$$; sleep 120; :' & fi
+case "\${1:-}" in
+  bg)   sh -c ': /shell-snapshots/snapshot-fleetwait-$$; sleep 120; :' & ;;
+  tool) python3 "$WORK/fbin/fleet-mcp.py" "\${2:-idle}" "\${3:-}" & ;;
+esac
 sleep 120 &
 wait
 SH
@@ -260,5 +293,52 @@ got="$(tf show-options -w -t "$E" | grep '^@' | cut -d' ' -f1 | sort | tr '\n' '
 eq "E: …with a payload too" "$want" "$got"
 out=$(fleet_window_wait "$SESS" "$E"); rc=$?
 eq "E: fleet_window_wait answers nothing" "1 " "$rc $out"
+
+# --- F. tool (issue #1880) -------------------------------------------------------------
+# Claude Code moves an MCP call past 120 s to a background task and the turn ends
+# with the call in flight: #1876's worker read `done` for 2m44s while its
+# pr_verdict --wait ran on. The fact is the fleet MCP server's live child.
+rm -f "$WORK/tw.pid"
+TW=$(win tw 150 '' "exec bash $FAKE tool call $WORK/tw.pid")
+TI=$(win ti 151 '' "exec bash $FAKE tool idle")
+TP=$(win tp 152 '' "exec bash $FAKE tool probe")
+for _ in $(seq 1 50); do
+  [ -s "$WORK/tw.pid" ] && pgrep -f "fbin/fleet-mcp.py --probe" >/dev/null 2>&1 && break
+  sleep 0.1
+done
+fleet_window_tool_busy "$SESS" "$TW"; eq "F: a server with a live call is busy" 0 $?
+fleet_window_tool_busy "$SESS" "$TI"; eq "F: an idle server is not a call" 1 $?
+fleet_window_tool_busy "$SESS" "$TP"; eq "F: a server probing a new version is not" 1 $?
+FLEET_TOOL_WAIT=0 fleet_window_tool_busy "$SESS" "$TW"; eq "F: FLEET_TOOL_WAIT=0 turns it off" 1 $?
+stop "$TW"
+eq "F: a fleet tool call in flight → looping + tool" "looping tool" "$(opt "$TW" @claude_state) $(opt "$TW" @claude_wait)"
+out=$(fleet_child_busy "$SESS" "$TW"); rc=$?
+eq "F: fleet_child_busy says tool (gh never asked)" "0 tool" "$rc $out"
+tf set-window-option -t "$TW" @claude_state 'done'
+out=$(reap "$TW"); rc=$?
+eq "F: reap-live retains it" "1 retained:tool" "$rc $out"
+# the cfg-restart judge: a stale session stamped `done` by a writer that never asked
+# is still not reopened while its call runs
+mkdir -p "$WORK/conf/global"; printf 'claude fp-new x\n' > "$WORK/conf/global/agent-cfg.expected"
+tf set-window-option -t "$TW" @agent_cfg fp-old \; set-window-option -t "$TW" @claude_state_ts 1
+out=$(fleet_cfg_restart_why "$SESS" "$TW"); rc=$?
+eq "F: cfg-restart refuses: tool" "1 tool" "$rc $out"
+rm -f "$WORK/conf/global/agent-cfg.expected"
+stop "$TI"
+eq "F: an idle server → done" 'done' "$(opt "$TI" @claude_state)"
+hasopt "$TI" @claude_wait && fail "F: no reason, no option" "$(tf show-options -w -t "$TI")"
+CHECKS=$((CHECKS+1))
+stop "$TP"
+eq "F: a probing server → done" 'done' "$(opt "$TP" @claude_state)"
+# the call returns: the re-ask (the sleep tick's fleet-wait-reeval.sh) writes done
+stop "$TW"
+eq "F: still in flight → still looping" "looping tool" "$(opt "$TW" @claude_state) $(opt "$TW" @claude_wait)"
+kill "$(cat "$WORK/tw.pid")" 2>/dev/null
+for _ in $(seq 1 50); do kill -0 "$(cat "$WORK/tw.pid")" 2>/dev/null || break; sleep 0.1; done
+out=$(fleet_window_reeval "$SESS" "$TW"); rc=$?
+eq "F: the call returned → the re-ask writes done" "0 looping (tool) -> done" "$rc $out"
+hasopt "$TW" @claude_wait && fail "F: the reason goes with it" "$(tf show-options -w -t "$TW")"
+CHECKS=$((CHECKS+1))
+tf kill-window -t "$TW"; tf kill-window -t "$TI"; tf kill-window -t "$TP"
 
 printf 'fleet-wait-selftest: OK (%d checks)\n' "$CHECKS"

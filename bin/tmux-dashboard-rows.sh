@@ -1339,6 +1339,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
         *,children,*) [ -n "${WD_children-}" ] || WD_children=$(fleet_ui_t wait_children)
                       ndet="$WD_children${kidd:+ $kidd}" ;;
         *,bg,*)       [ -n "${WD_bg-}" ] || WD_bg=$(fleet_ui_t wait_bg); ndet=$WD_bg ;;
+        *,tool,*)     [ -n "${WD_tool-}" ] || WD_tool=$(fleet_ui_t wait_tool); ndet=$WD_tool ;;   # #1880
       esac
     fi
     # field 9 (issue #1475): the machine of a row on another machine — `m4`,

@@ -34,6 +34,17 @@ class ReconcileTest(unittest.TestCase):
         # ps reports the symlink's own name as comm on both platforms.
         for name in ('claude', 'codex'):
             os.symlink(shutil.which('sleep'), cls.root / name)
+        # tool_call_in_flight (issue #1880) sources the lib beside the script; the
+        # fleet's MCP server with one call in flight is a fake fleet-mcp.py that
+        # runs its tool as a child, the way bin/fleet-mcp.py runs every tool.
+        shutil.copyfile(BIN / 'fleet-lib.sh', cls.bin / 'fleet-lib.sh')
+        (cls.root / 'fleet-mcp.py').write_text(
+            'import signal, subprocess, sys, time\n'
+            "child = subprocess.Popen(['sleep', '300'])\n"
+            'def bye(*_):\n    child.kill(); sys.exit(0)\n'
+            'signal.signal(signal.SIGTERM, bye); signal.signal(signal.SIGHUP, bye)\n'
+            "open(sys.argv[1], 'w').write(str(child.pid))\n"
+            'child.wait(); time.sleep(300)\n')
         cls.registry = cls.root / 'sessions'; cls.registry.mkdir()
         cls.cache = cls.root / 'cache'; cls.log = cls.root / 'reconcile.log'
         cls.tm('-f', '/dev/null', 'new-session', '-d', '-s', cls.socket, '-x', '80', '-y', '24', 'sleep 300')
@@ -41,6 +52,7 @@ class ReconcileTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         subprocess.run(['tmux', '-L', cls.socket, 'kill-server'], stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-f', str(cls.root / 'fleet-mcp.py')], stderr=subprocess.DEVNULL)
         cls.tmp.cleanup()
 
     @classmethod
@@ -76,16 +88,17 @@ class ReconcileTest(unittest.TestCase):
         pane = self.tm('display-message', '-p', '-t', wid, '#{pane_id}')
         return wid, pane
 
-    def record(self, wid, pane, status='idle', since=None, pid=None, started=None):
+    def record(self, wid, pane, status='idle', since=None, pid=None, started=None, view=None):
         # Claude records startedAt (ms) and procStart (UTC text); ps prints lstart in
         # local time, so the fixture writes what the TUI would, from this process's ps row.
+        # view=<id>: the client it started under was a viewer's grouped session (#1880).
         pid = pid or os.getpid()
         if started is None:
             lstart = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart='], text=True, capture_output=True).stdout
             started = time.mktime(time.strptime(' '.join(lstart.split()), MOD['LSTART'])) if lstart.strip() else time.time()
         data = {'pid': str(pid), 'sessionId': 'aaaaaaaa-0000-4000-8000-000000000000',
                 'startedAt': str(int(started * 1000)), 'procStart': time.strftime(MOD['LSTART'], time.gmtime(started)),
-                'tmux': '%s:%s.%s' % (self.socket, wid, pane), 'status': status,
+                'tmux': '%s%s:%s.%s' % (self.socket, '@view-' + view if view else '', wid, pane), 'status': status,
                 'statusUpdatedAt': str(int((since if since is not None else time.time() - 10) * 1000))}
         (self.registry / ('%s.json' % pid)).write_text(json.dumps(data))
 
@@ -154,6 +167,46 @@ class ReconcileTest(unittest.TestCase):
         while time.time() < until and MOD['INPUT']['snapshot'](self.socket, pane, agent='claude').get('state') != 'empty':
             time.sleep(0.1)
         self.assertEqual(MOD['INPUT']['snapshot'](self.socket, pane, agent='claude').get('state'), 'empty')
+        self.run_cli()
+        self.assertEqual(self.state(wid)[0], 'done')
+        self.assertIn('prompt idle', self.log.read_text())
+
+    def test_a_record_under_a_view_session_name_is_this_window(self):
+        # Issue #1880: Claude recorded `<fleet>@view-<id>:@N.%P` because a viewer's
+        # grouped session was the active client. Found all the same: busy keeps the
+        # window (a bare `sleep` pane would otherwise read exited), idle demotes.
+        wid, pane = self.window(age=300)
+        self.record(wid, pane, status='busy', view='mbp-1')
+        self.run_cli()
+        self.assertEqual(self.state(wid)[0], 'working')
+        self.record(wid, pane, status='idle', since=time.time() - 60, view='mbp-1')
+        self.run_cli()
+        self.assertEqual(self.state(wid)[0], 'done')
+        self.assertIn('native idle', self.log.read_text())
+
+    def test_a_fleet_tool_call_in_flight_is_never_demoted(self):
+        # Issue #1880: a long `await` / `pr_verdict --wait` leaves no hook stamp and
+        # an empty input line — the no-record screen rule read exactly that as idle
+        # 84 s into a live call. The fleet MCP server's live child says otherwise;
+        # once the call returns, the same rule decides as before.
+        pidfile = self.root / 'call.pid'; pidfile.unlink(missing_ok=True)
+        drawn = ("sh -c 'printf \"\\033[2J\\033[H> \"; python3 %s %s & exec %s 300'"
+                 % (self.root / 'fleet-mcp.py', pidfile, self.root / 'claude'))
+        wid, pane = self.window(age=300, command=drawn)
+        until = time.time() + 5
+        while time.time() < until and not (pidfile.is_file() and pidfile.read_text()
+                                           and MOD['INPUT']['snapshot'](self.socket, pane, agent='claude').get('state') == 'empty'):
+            time.sleep(0.1)
+        self.assertEqual(MOD['INPUT']['snapshot'](self.socket, pane, agent='claude').get('state'), 'empty')
+        self.run_cli()
+        self.assertEqual(self.state(wid)[0], 'working')
+        self.assertIn('kept working (fleet tool call in flight; was: prompt idle', self.log.read_text())
+        self.assertEqual(self.heartbeat().get('kept'), '1')
+        call = int(pidfile.read_text())
+        os.kill(call, 15)
+        until = time.time() + 5
+        while time.time() < until and call in MOD['process_tree']():
+            time.sleep(0.1)
         self.run_cli()
         self.assertEqual(self.state(wid)[0], 'done')
         self.assertIn('prompt idle', self.log.read_text())

@@ -27,22 +27,25 @@ LIB = next((d / "fleet-lib.sh" for d in (_HERE, Path(__file__).resolve().parent)
 
 
 def waiting(target, socket_name=None):
-    """fleet_window_wait's other two reasons (issue #1370) — '' | 'children' | 'bg'.
+    """fleet_window_wait's other reasons (issue #1370) — '' | 'children' | 'bg' | 'tool'.
 
-    A parent whose sub-task is not finished, or whose agent still owns a Bash-tool
-    job, is idle but not done: the same answer its Stop hook stamps `looping` +
-    @claude_wait from. Asked here too, because a window stamped `done` before the
-    sync (or by any writer that never asked) must not be reaped out from under it."""
+    A parent whose sub-task is not finished, whose agent still owns a Bash-tool
+    job, or whose fleet tool call is still running (issue #1880: an MCP call Claude
+    Code backgrounded past 120 s), is idle but not done: the same answer its Stop
+    hook stamps `looping` + @claude_wait from. Asked here too, because a window
+    stamped `done` before the sync (or by any writer that never asked) must not be
+    reaped out from under it."""
     script = ('. "$1"; t=$2; L=$3\n'
               's=$(tmux ${L:+-L "$L"} display-message -p -t "$t" "#{?#{session_group},#{session_group},#{session_name}}" 2>/dev/null)\n'
               '[ -n "$L" ] && TMUX=\n'
               'fleet_window_waiting_children "$s" "$t" >/dev/null 2>&1 && { echo children; exit 0; }\n'
-              'fleet_window_bg_busy "$s" "$t" 1 && echo bg\n'
+              'fleet_window_bg_busy "$s" "$t" 1 && { echo bg; exit 0; }\n'
+              'fleet_window_tool_busy "$s" "$t" && echo tool\n'
               'exit 0\n')
     out = subprocess.run(["bash", "-c", script, "reap-live", str(LIB), target, socket_name or ""],
                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                          text=True, timeout=30).stdout.strip()
-    return out if out in ("children", "bg") else ""
+    return out if out in ("children", "bg", "tool") else ""
 
 
 def read(*args):

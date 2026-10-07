@@ -18,7 +18,8 @@ sockets=$(fleet_sockets)
 fleet_timebox 15 python3 "$BIN/fleet-state-reconcile.py" --cache-dir "$(fleet_cache_global)" -- $sockets || :
 # …and the other half of that truth (issue #1376): an IDLE window's `done` ↔
 # `looping` + @claude_wait, decided once at its Stop, is re-asked here — a child
-# that finished, a background job that ended, a window that stopped before #1370.
+# that finished, a background job that ended, a fleet tool call that returned
+# (#1880), a window that stopped before #1370.
 # shellcheck disable=SC2086
 fleet_timebox 15 bash "$BIN/fleet-wait-reeval.sh" --quiet -- $sockets >/dev/null 2>&1 || :
 # A session on an OLD configuration (issue #1783) that has been idle long enough

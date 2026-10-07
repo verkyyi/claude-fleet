@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-wait-reeval.sh — re-ask every IDLE window "are you still waiting?" (issue #1376).
 #
-# The Stop hook decides `looping` + @claude_wait (loop|children|bg) once, at the
+# The Stop hook decides `looping` + @claude_wait (loop|children|bg|tool) once, at the
 # edge (issue #1370). An idle window never Stops again on its own, so without this a
 # parent whose children are still running reads `done` ✓ if it stopped before #1370
 # was synced, and a parent whose children all finished reads `looping` ↻ until its
