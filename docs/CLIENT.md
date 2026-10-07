@@ -148,3 +148,30 @@ own title (the list's 14th field, carried from the session's machine — #1921),
 else the row's name.
 `bin/fleet-client-layout-selftest.sh` pins the layout, the keys, a real tap on
 the line through the nested client, and the widths.
+
+## A session on this computer — `fleet run` (issue #2136)
+
+A computer with only the client runs no fleet, so a host's launchers never
+apply here. `fleet run claude|codex [args…]` is the one way to open a Claude
+Code or Codex session on it without a subscription credential in the session:
+
+1. `FLEET_CRED_PROXY=1` in `fleet.conf` `[common]` (off ⇒ `fleet run` refuses,
+   exit 3; nothing else changes);
+2. `fleet run` starts the local proxy (`fleet-cred-proxy.sh ensure`), signs a
+   worker assertion with this computer's node token (`node.env`, from the
+   install's `fleet node join`) for its **client fleet** —
+   `uuid5(NAMESPACE_URL, "fleet-client:" + sha256(token))`, which the hub
+   derives the same way (`fleetid.ClientFleetID`) since no fleet row exists —
+   and borrows an `fcp-h1.` pass (`fleet-session-cred.sh mint`);
+3. the agent talks to `127.0.0.1:<port>` with that pass; an untrusted computer
+   (the default — `fleet-node-trust.sh status`) is routed **central**, so the
+   real credential never leaves the cluster. At exit the pass is revoked.
+
+`fleet cred-scan scan [--hashes FILE]`, run inside such a session, tries the
+four routes to a credential (accounts files · `~/.codex/auth.json` · the
+environment of the session and its ancestors · `node.env` → `POST
+/v1/node/credentials`) plus the session's own directories and prints **counts
+only**. `fleet-cred-scan.py hashes` on a host that holds the pool's credentials
+prints their sha256 digests for `--hashes`, so a person's own login is told
+apart from a pool credential. ⚠️ On a trusted host `④` is a real lease call —
+pass `--no-hub` there.

@@ -28,6 +28,10 @@
 #                               who may sign in to the hub with GitHub (#1986)
 #   fleet hub set <key> <value> the hub's settings, at once, audited (#1986);
 #                               fleet hub settings | get <key> | unset <key>
+#   fleet run claude|codex [args]
+#                               a session on THIS computer through its
+#                               credential proxy, no credential in it (#2136)
+#   fleet cred-scan scan        counts what a session here can reach (#2136)
 #   fleet doctor                with only the client here: its `fleet` row
 #                               (version, hub, tmux, cert — #1722) and its
 #                               `能力` row (基础 · 承载, #1806), then this

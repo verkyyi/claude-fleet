@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -415,6 +416,12 @@ func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 		return
 	}
 	fl, err := s.Store.Fleet(c.FleetUUID)
+	if errors.Is(err, sql.ErrNoRows) && c.FleetUUID == fleetid.ClientFleetID(HashToken(tok)) {
+		// A client-only computer's own session (claude-fleet#2136): it runs no
+		// fleet, so no registry row — its fleet UUID is derived from this node's
+		// token, and the machine / login are the node's own.
+		fl, err = store.FleetRow{FleetID: c.FleetUUID, EndpointID: ep.ID}, nil
+	}
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && fl.EndpointID != ep.ID) {
 		audit(c, c.FleetUUID, "refused:NOT_FOUND")
 		sessionCredRefuse(w, http.StatusNotFound, "not_found", "no such session on this node")

@@ -67,3 +67,9 @@ bin/fleet-cred-proxy.sh             tool
 bin/fleet-cred-proxy.py             tool
 # its pass for the Singapore relay, minted when the relay road is configured (#1974)
 bin/fleet-relay-cred.sh             tool
+# a session on a client-only computer, through that proxy (#2136): `fleet run
+# claude|codex` mints the hub pass with fleet-session-cred.sh; `fleet cred-scan`
+# counts what a session there can reach
+bin/fleet-run.sh                    tool
+bin/fleet-session-cred.sh           tool
+bin/fleet-cred-scan.py              tool
