@@ -19,19 +19,18 @@
 # newest `<session>-*.md`" resumes ANOTHER repo's task in a scratch of this one,
 # and never finds a handoff written under a folded fleet's old name.
 #
-# NAMING. A one-repo fleet keeps `<session>-<YYYY-MM-DD>[-<slug>].md` byte for
-# byte. A 2+ repo fleet, for a pane whose repo is known, puts the repo's slug in:
-# `<session>-<owner-name>-<YYYY-MM-DD>[-<slug>].md`. Every doc also carries a
-# `Repo: <owner/name|none>` line (skills/handoff/SKILL.md).
+# NAMING. ONE rule however many repos the fleet hosts (issue #1938): a pane whose
+# repo is known puts the repo's slug in — `<session>-<owner-name>-<YYYY-MM-DD>[-<slug>].md`;
+# a pane with none keeps `<session>-<YYYY-MM-DD>[-<slug>].md`. Every doc also
+# carries a `Repo: <owner/name|none>` line (skills/handoff/SKILL.md).
 #
 # FIND. Candidates are `<session>-*.md` plus `<from>-*.md` for every fleet folded
 # into this one — the fold archives `$FLEET_CONF_DIR/archive/<from>-folded-into-
 # <session without fleet->-<YYYYMMDD>[-HHMMSS]`, whose conf says which repo(s)
-# <from> hosted. A one-repo fleet takes the newest of them all (today's rule).
-# A 2+ repo fleet attributes each file to a repo, first hit wins:
+# <from> hosted. Each file is attributed to a repo, first hit wins:
 #   1. a hosted repo's slug right after the fleet prefix (the new name);
 #   2. the doc's `Repo:` line;
-#   3. a folded fleet that hosted exactly one repo → that repo;
+#   3. a fleet (this one or a folded one) that hosts exactly one repo → that repo;
 #   4. exactly one hosted repo's owner/name named in the doc;
 #   5. else unknown.
 # and walks newest-first: another repo's file is skipped, the pane's is taken —
@@ -150,15 +149,13 @@ fi
 [ "$REPO_SET" = 1 ] || REPO=$(fleet_window_repo "$SESS" "${TMUX_PANE:-}")
 DIR="${FLEET_HANDOFF_DIR:-$HOME/.claude/handoff}"
 
-MULTI=0; fleet_multirepo "$SESS" && MULTI=1
-
 if [ "$cmd" = repo ]; then
   printf '%s\n' "${REPO:-none}"; exit 0
 fi
 
 if [ "$cmd" = path ]; then
   name="$SESS"
-  [ "$MULTI" = 1 ] && [ -n "$REPO" ] && name="$name-$(fleet_slug "$REPO")"
+  [ -n "$REPO" ] && name="$name-$(fleet_slug "$REPO")"
   name="$name-$(date +%Y-%m-%d)"
   [ -n "$SLUG" ] && name="$name-$(fleet_slug "$SLUG")"
   printf '%s/%s.md\n' "$DIR" "$name"; exit 0
@@ -199,10 +196,6 @@ EOF
 
 newest=$(ls -1t -- ${cands[@]+"${cands[@]}"} 2>/dev/null)
 
-if [ "$MULTI" = 0 ]; then
-  printf '%s\n' "$newest" | head -n1; exit 0
-fi
-
 # attr <file> → the repo it belongs to, `none`, or `?`.
 attr() {
   local f="$1" b rest p repos r best='' hits='' n=0 line
@@ -231,11 +224,10 @@ EOF
     *) r=$(fleet_norm_repo "$line"); case "$r" in ?*/?*) printf '%s' "$r"; return ;; esac ;;
   esac
   case "$line" in none|-|—) printf 'none'; return ;; esac
-  # 3. a folded fleet that hosted one repo: its files are that repo's.
-  if [ "$p" != "$SESS" ]; then
-    set -- $repos
-    [ $# = 1 ] && { printf '%s' "$1"; return; }
-  fi
+  # 3. a fleet (this one, or one folded into it) that hosts exactly one repo: its
+  #    files are that repo's — so a one-repo fleet's old `<session>-<date>.md` is found.
+  set -- $repos
+  [ $# = 1 ] && { printf '%s' "$1"; return; }
   # 4. content: exactly one known repo named in the doc.
   while IFS= read -r r; do
     [ -n "$r" ] || continue

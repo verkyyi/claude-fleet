@@ -320,29 +320,19 @@ bridge_lease_acquire() { # $1 = lease path
 # a control separator back as the literal four bytes `\037`; normalize it the way
 # tmux-dashboard-rows.sh does.
 bridge_find_window() {
-  local issue="$1" repo="$2" want_slug sess win st bissue slug line us=$'\037'
+  local issue="$1" repo="$2" want_slug sess win st bissue line us=$'\037'
   want_slug=$(fleet_slug "$(fleet_norm_repo "$repo")")
   while IFS= read -r line; do
     line=${line//\\037/$us}
     IFS=$us read -r sess win st bissue <<<"$line"
     [ "$bissue" = "$issue" ] || continue
-    # A fleet hosting 2+ repos (issue #790): the SESSION's repo says nothing about
-    # which repo this window works — A#12 and B#12 share a session. Match the
-    # WINDOW's own repo; an unknown one (empty) never matches, so B#12's comment
-    # is never typed into A#12's pane.
-    if fleet_multirepo "$sess"; then
-      [ -n "$want_slug" ] && [ "$(fleet_slug "$(fleet_window_repo "$sess" "$win")")" = "$want_slug" ] || continue
-      printf '%s\t%s\t%s' "$sess" "$win" "$st"; return 0
-    fi
-    slug=$(fleet_slug_cached "$sess")
-    # Cold cache (no sessmap entry yet) → don't blindly trust the @issue-number
-    # match: a DIFFERENT fleet may have its own same-numbered issue open, and
-    # injecting there would drive the wrong worker. Resolve the session's repo live
-    # (a git fork, but only on the cold-cache path) and require it to match.
-    [ -z "$slug" ] && slug=$(fleet_slug "$(fleet_resolve_repo_for_session "$sess")")
-    if [ "$slug" = "$want_slug" ]; then
-      printf '%s\t%s\t%s' "$sess" "$win" "$st"; return 0
-    fi
+    # Match the WINDOW's own repo (issues #790, #1938) — however many repos the
+    # fleet hosts: the SESSION's repo says nothing about which repo this window
+    # works (A#12 and B#12 share a session), and a DIFFERENT fleet may have its own
+    # same-numbered issue open. An unknown repo (empty) never matches, so B#12's
+    # comment is never typed into A#12's pane.
+    [ -n "$want_slug" ] && [ "$(fleet_slug "$(fleet_window_repo "$sess" "$win")")" = "$want_slug" ] || continue
+    printf '%s\t%s\t%s' "$sess" "$win" "$st"; return 0
   done < <(fleet_list_windows_all '#{session_name}'"$us"'#{window_id}'"$us"'#{@claude_state}'"$us"'#{@issue}')
   return 0
 }

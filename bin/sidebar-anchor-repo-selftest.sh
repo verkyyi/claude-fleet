@@ -2,9 +2,9 @@
 # sidebar-anchor-repo-selftest.sh — under `all`, a session started from the
 # sidebar takes the selected/focused row's repo (issue #1009).
 #
-#   A. DEGENERATE — a one-repo fleet: fleet_selection_repo prints nothing for any
-#      window, and the sidebar's Enter / ⌃n spawn exactly as before (no --repo,
-#      no CF_REPO).
+#   A. a one-repo fleet runs the SAME rule as B (issue #1938): a row's own hosted
+#      repo, `none` for a @norepo row, else the fleet's only repo (an unknown
+#      window, the hub) — and a repo the fleet does not host anchors nothing.
 #   B. 2-repo fleet viewing `all`: a row in repo B (@repo, or @worktree derived)
 #      → the scratch gets `--repo o/b` and ⌃n's title `CF_REPO=o/b`; a @norepo
 #      row → `--no-repo` ($HOME, issue #997), and ⌃n's title line offers the
@@ -154,16 +154,20 @@ open(os.environ["CHOICES"], "w").write("%s %d" % (ask.repo or "-", len(ask.choic
 PY
   cat "$CHOICES" 2>/dev/null
 }
-PLAIN="--name n --origin hub|CF_REPO=unset confirm --spawn 0"
 TO_B="--name n --origin hub --repo o/b|CF_REPO=o/b confirm --spawn 0"
 PICK="CF_REPO=o/a confirm --spawn 2"   # no anchor in a 2-repo fleet: Tab, first repo by default
 
-# --- A. degenerate: one repo ------------------------------------------------------
-for w in wA wB wWT wNO wUNK plan; do
-  eq "A: one-repo fleet anchors nothing ($w)" "$(fleet_selection_repo "$S" "$(wid $w)")" ""
+# --- A. one repo: the same rule, one candidate (issue #1938) ----------------------
+for w in wA wUNK plan; do
+  eq "A: one-repo fleet anchors its only repo ($w)" "$(fleet_selection_repo "$S" "$(wid $w)")" o/a
 done
-eq "A: one-repo sidebar spawns unchanged" "$(sidebar wA)" "$PLAIN"
-eq "A: one-repo sidebar spawns unchanged (norepo row)" "$(sidebar wNO)" "$PLAIN"
+for w in wB wWT; do
+  eq "A: an unhosted repo's row anchors nothing ($w)" "$(fleet_selection_repo "$S" "$(wid $w)")" ""
+done
+eq "A: @norepo row resolves to none, as in B" "$(fleet_selection_repo "$S" "$(wid wNO)")" none
+eq "A: no window anchors nothing, as in B" "$(fleet_selection_repo "$S" "")" ""
+eq "A: one-repo sidebar on an A row → scratch + ⌃n go to A" "$(sidebar wA)" "--name n --origin hub --repo o/a|CF_REPO=o/a confirm --spawn 0"
+eq "A: one-repo sidebar on a norepo row → --no-repo scratch, as in B" "$(sidebar wNO)" "--name n --origin hub --no-repo|CF_REPO=unset confirm --spawn 0"
 T_A="$(taps wA)"
 [ -n "$T_A" ] || fail "T: one-repo sidebar produced no rows"
 eq "T: one-repo fleet has no heading key or heading tap" \
