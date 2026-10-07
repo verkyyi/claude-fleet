@@ -126,6 +126,43 @@ assert lrows[0][3] == '已落地 (2) · ↵ 恢复' and lrows[1][2:4] == ['✓',
 assert sidebar.selectable(lrows) == ['landed:1548@o/r', 'landed:scratch:scratch-5']
 assert sidebar.landed_rows('hdr\x1fhdr\x1fx\n')[1][3] == '（还没有已落地的会话）'
 assert sidebar.acts('landed:1548') == '' and sidebar.tap('landed:7', 'landed:7') == 'menu'
+# A batch nobody drives (issue #1916): the producer's grey `epicstale:` row has
+# no window — a tap highlights it, a second asks 「重开驱动会话？」 (one menu line),
+# ↵ reopens the driver seeded `/fleet-epic-run <N> --repo <repo>`: on this
+# machine through dash-raw-session.sh, from the shell / for another machine's row
+# through fleet-client-place.sh (the seed as its body, the row's machine).
+ek, ekr = 'epicstale:acme/app#1949', 'epicstale:acme/tool#77@m4'
+assert sidebar.epic_stale_ref(ek) == ('acme/app', '1949', '') and sidebar.epic_stale_ref(ekr) == ('acme/tool', '77', 'm4')
+assert sidebar.epic_stale_ref('epicstale:x;y#1') is None and sidebar.epic_stale_ref('@1') is None
+assert sidebar.tap(ek, '@1') == 'select' and sidebar.tap(ek, ek) == 'epic', 'two taps: select, then ask'
+assert sidebar.acts(ek) == '' and sidebar.folds(ek) == '' and ek in sidebar.selectable([[ek, 'epicstale']])
+assert sidebar.sessions([['@1', 'working'], [ek, 'epicstale']]) == ['@1'], 'no window: never a place a close lands'
+erow = sidebar.row_fields('\x1f'.join([ek, 'epicstale', '○', '#1949 侧栏改版', ' ', '没人在跑', '0', 'd', '', '#1949']))
+ea = sidebar.ask_epic(ek, erow)
+assert ea.kind == 'epic' and ea.prompt == '#1949 没人在跑 — 重开驱动会话？' and ea.menu[0][0] == 'reopen' \
+    and ea.menu[0][2] == '#1949 侧栏改版' and not ea.menu[0][3], vars(ea)
+assert sidebar.ask_epic('@1') is None
+got = []
+real_start, real_shell = sidebar.start_job, sidebar.SHELL
+sidebar.start_job = lambda args, env, done: got.append((args, env)) or 'job'
+try:
+    sidebar.SHELL = False
+    assert sidebar.reopen_epic(ek, {'X': '1'}) == 'job'
+    assert got[-1][0][1:] == [str(real_bin / 'dash-raw-session.sh'), '--origin', 'hub', '--name', 'EPIC 1949',
+                              '--prompt', '/fleet-epic-run 1949 --repo acme/app', '--repo', 'acme/app'], got[-1][0]
+    assert got[-1][1].get('FLEET_SPAWN_FOCUS') == '1'
+    for shell, key, node in ((False, ekr, 'm4'), (True, ek, 'auto')):
+        sidebar.SHELL = shell
+        sidebar.reopen_epic(key, {})
+        a = got[-1][0]
+        assert a[1:5] == [str(real_bin / 'fleet-client-place.sh'), sidebar.epic_stale_ref(key)[0], 'scratch', '--name'] \
+            and a[5].startswith('EPIC ') and '#' not in a[5] and a[a.index('--node') + 1] == node, a
+        seed = open(a[a.index('--body-file') + 1]).read()
+        n, repo = sidebar.epic_stale_ref(key)[1], sidebar.epic_stale_ref(key)[0]
+        assert seed == '/fleet-epic-run %s --repo %s' % (n, repo), seed
+    assert sidebar.reopen_epic('@1', {}) is None
+finally:
+    sidebar.start_job, sidebar.SHELL = real_start, real_shell
 # The question's line editor (issue #1097 — the list's input line's until #1950,
 # bin/fleet-ask.py now): a cursor, readline's moves and kills.
 aspec = importlib.util.spec_from_file_location('fleet_ask', real_bin / 'fleet-ask.py')

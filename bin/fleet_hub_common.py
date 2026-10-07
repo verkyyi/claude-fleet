@@ -173,6 +173,23 @@ def worker_identity(fleet_id, key):
 
 # An EPIC driver's cell (issue #1958): `[<owner/name>]#<N>[:<landed>/<members>]`.
 EPIC_RE = re.compile(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?")
+# A batch nobody drives (issue #1916): `<owner/name>#<N>` — always with its repo.
+EPIC_STALE_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]{0,9}")
+
+
+def epic_stale_cell(cell):
+    """Column 22's cell → [{epic, age, title}], what is left of it valid: each
+    entry `<owner/name>#<N>\x1f<age s>\x1f<title>`, entries \x1e-joined; at most
+    20, a title at most 200 characters with no control character. Junk is dropped,
+    never a protocol error."""
+    out = []
+    for entry in (cell or "").split("\x1e")[:20]:
+        ref, _, rest = entry.partition("\x1f")
+        age, _, title = rest.partition("\x1f")
+        if not EPIC_STALE_RE.fullmatch(ref) or not age.isdigit():
+            continue
+        out.append(dict(epic=ref, age=int(age), title=re.sub(r"[\x00-\x1f\x7f]", " ", title)[:200]))
+    return out
 
 
 def inventory_row(parts):
@@ -210,9 +227,17 @@ def inventory_row(parts):
     wears it on 「新任务」 instead of listing it; empty on every other window.
     Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` — the
     window that drives a running EPIC, so every machine's list draws the batch as
-    ONE row named after its parent, badged landed/members; empty elsewhere."""
+    ONE row named after its parent, badged landed/members; empty elsewhere.
+    Column 22 (issue #1916): `epicstale=` — the batches on the node's login that
+    nobody drives (a stale heartbeat, the EPIC still open, no window wearing its
+    @epic): `epic_stale`, a list (epic_stale_cell), on every row alike — it is the
+    login's, and a batch nobody drives has no window of its own; absent when empty."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 22 and parts[-1].startswith("epicstale="):
+        st = epic_stale_cell(parts.pop()[10:])
+        if st:
+            extra["epic_stale"] = st
     if len(parts) >= 21 and parts[-1].startswith("epic="):
         e = parts.pop()[5:]
         if EPIC_RE.fullmatch(e):

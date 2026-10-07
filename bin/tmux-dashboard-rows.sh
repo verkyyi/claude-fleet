@@ -593,7 +593,7 @@ fi
 KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
 # The issue titles this frame needs (issue #1921, --sidebar only): a local row's
 # (repo, #issue) key, looked up once below in its repo's issue cache.
-ITWANT=''; ISLUGS=' '
+ITWANT=''; ISLUGS=' '; DRIVEN=' '
 while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn _ _ _ wepic; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
@@ -621,6 +621,9 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
                            case "$ISLUGS" in *" $rslug "*) ;; *) ISLUGS+="$rslug " ;; esac; } ;; esac ;;
     esac
   fi
+  # A window still wearing an EPIC (issue #1916): its batch has a row of its own,
+  # so no 「没人在跑」 row is drawn for it (ESTALE below).
+  [ -n "$wepic" ] && DRIVEN+="${wepic%%:*} "
   # An EPIC driver's row (issue #1958) is named after its parent issue: that
   # title too, from the EPIC's own repo's cache — in the hub list as well.
   case "$rwid" in wid:*) ;; *)
@@ -668,6 +671,41 @@ if [ "${#PRFILES[@]}" -gt 0 ] && [ -n "$PRWANT" ]; then
     BEGIN { n = split(ENVIRON["PRWANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 }
     { d = FILENAME; sub(/\/prmap$/, "", d); sub(/.*\//, "", d); if ((d "\t" $1) in want) print d "\t" $0 }' \
     ${PRFILES[@]+"${PRFILES[@]}"} 2>/dev/null)
+fi
+
+# THE BATCHES NOBODY DRIVES (issue #1916, sidebar only). A heartbeat mark
+# (epic-running.d/<slug>-<N>, fleet-epic-heartbeat.sh) gone stale while its EPIC
+# is still OPEN — on the collector's open-issue list, looked up in the title
+# haystack below, so a closed EPIC or an unread repo draws nothing — and no window
+# wearing its @epic (DRIVEN): the loop that drove it stopped. THIS machine's marks
+# are read here with builtins only (the frame forks nothing for them); another
+# machine's come from its node, off the hub cache's epicstale_<sess>
+# (fleet-hub-sessions.sh). Each becomes ONE grey row at the top of its repo's
+# group, `#<N> <title>` badged 没人在跑, keyed `epicstale:<ref>[@<machine>]` — a tap
+# asks to reopen its driver (fleet-sidebar.py). No stale mark ⇒ not one line more.
+ESTALE=''                       # ref US machine US age US slug US N, one a line
+# The shell (FLEET_SHELL=1) reads none here: every row there is a machine's, its
+# marks too — they come off the hub cache like the rest.
+if [ "$SIDEBAR" = 1 ] && [ "${FLEET_SHELL:-0}" != 1 ] && [ -d "$FLEET_CONF_DIR/global/epic-running.d" ]; then
+  for _ef in "$FLEET_CONF_DIR/global/epic-running.d/"*; do
+    [ -f "$_ef" ] || continue
+    case "$_ef" in *.tmp.*) continue ;; esac
+    _ee='' _et='' _en='' _er=''
+    while IFS= read -r _l || [ -n "$_l" ]; do
+      case "$_l" in 'epoch: '*) _ee=${_l#epoch: } ;; 'ttl: '*) _et=${_l#ttl: } ;;
+                    'epic: '*) _en=${_l#epic: } ;; 'repo: '*) _er=${_l#repo: } ;; esac
+    done < "$_ef"
+    case "$_ee:$_en" in *[!0-9:]*|:*|*:) continue ;; esac   # a bare touch: a hand hold, never stale here
+    case "$_et" in ''|*[!0-9]*|0) _et=${FLEET_EPIC_RUNNING_TTL:-2700} ;; esac
+    case "$_er" in */*) ;; *) continue ;; esac
+    case "$_er" in *[!A-Za-z0-9/._-]*) continue ;; esac
+    [ $(( NOW - _ee )) -ge "$_et" ] || continue
+    case "$DRIVEN" in *" $_er#$_en "*) continue ;; esac
+    _es=${_ef##*/}; _es=${_es%-"$_en"}
+    ESTALE+="$_er#$_en$US$US$(( NOW - _ee ))$US$_es$US$_en"$'\n'
+    ITWANT+="$_es"$'\t#'"$_en"$'\n'
+    case "$ISLUGS" in *" $_es "*) ;; *) ISLUGS+="$_es " ;; esac
+  done
 fi
 
 # The issue-title haystack (issue #1921): one awk over each on-screen repo's
@@ -1453,6 +1491,44 @@ fld 4  "ctx";    h_c=$fld_out
 h_pad=$(( USABLE - LEFTW - RIGHTW )); [ "$h_pad" -lt 1 ] && h_pad=1
 printf -v h_gap '%*s' "$h_pad" ''
 printf '%s\n' "hdr${US}hdr${US}${GYU}  ${h_i}    ${h_n} ${h_gap}${h_a} ${h_p} ${h_c}${R}"
+fi
+
+# The batches nobody drives (issue #1916, ESTALE above): this machine's when its
+# EPIC's title is in the open-issue haystack (= still open), then each other
+# machine's off the hub cache (`<ref> US <machine> US <online|lost> US <age> US
+# <title> US <local>`; local rows are the marks read above). One per EPIC.
+if [ "$SIDEBAR" = 1 ]; then
+  _eseen=' '; _erows=''
+  while IFS=$US read -r _ref _ _eage _es _en; do
+    [ -n "$_ref" ] || continue
+    _k="$_es"$'\t#'"$_en"
+    case "$ITTL" in *$'\n'"$_k"$'\t'*) _et=${ITTL#*$'\n'"$_k"$'\t'}; _et=${_et%%$'\n'*} ;; *) continue ;; esac
+    _eseen+="$_ref "
+    _erows+="$_ref$US$US$_eage$US$_et"$'\n'
+  done <<< "$ESTALE"
+  if [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/epicstale_$FLEET_SESSION" ] && fleet_hub_on "$FLEET_SESSION"; then
+    while IFS=$US read -r _ref _enode _eav _eage _et _eloc; do
+      case "$_ref" in */*'#'[1-9]*) ;; *) continue ;; esac
+      [ "$_eloc" = 1 ] && continue
+      case "$_eseen$DRIVEN" in *" $_ref "*) continue ;; esac
+      case "$_eage" in ''|*[!0-9]*) _eage=0 ;; esac
+      [ "$_eav" = lost ] || { [ "${_rstale:-0}" = 1 ] && _eav=lost; }
+      [ "$_eav" = lost ] && _enode="$_enode!"
+      _eseen+="$_ref "
+      _erows+="$_ref$US$_enode$US$_eage$US$_et"$'\n'
+    done < "$G/epicstale_$FLEET_SESSION"
+  fi
+  if [ -n "$_erows" ]; then
+    [ -n "${ES_BADGE-}" ] || ES_BADGE=$(fleet_ui_t sidebar_epic_stale)
+    while IFS=$US read -r _ref _enode _eage _et; do
+      [ -n "$_ref" ] || continue
+      _er=${_ref%#*}; _en=${_ref##*#}
+      rgrp_v "$_er" ''
+      _ed=$(fleet_ui_t sidebar_epic_stale_detail_fmt "$(( _eage / 60 ))")
+      buf+="$rgrp	1	0	epicstale:$_ref${_enode:+@${_enode%!}}${US}epicstale${US}○${US}#$_en${_et:+ $_et}${US} ${US}$ES_BADGE${US}0${US}$_ed${US}$_enode${US}#$_en"$'\n'
+    done <<< "$_erows"
+  fi
+  unset _eseen _erows _ref _enode _eav _eage _et _eloc _er _en _es _k _ed
 fi
 
 # the 置顶 group's frame (issue #1170): a `置顶 (n)` heading above the pinned rows

@@ -77,6 +77,18 @@
 #           child renders under its parent (`↳` tag + `└` indent) and the parent
 #           carries a `<landed>/<total> ✓` tally for the block. Blocks are FOLDED by
 #           default — see `fold`.
+#   drafts  [--days N] [--json]   How the writing area is doing, per local day,
+#           newest first (issue #1955, EPIC #1949 R2): `drafts` = scratch sessions
+#           opened BY HAND that went on to spawn a child — counted from the child
+#           ledgers (`children/*scratch-*.ndjson*`, a recycled number's retired
+#           books too), one per (key, generation), dated by the generation (its
+#           allocation) else its first report; a book whose `pfid` is a session
+#           the writing area opened (logs/compose.ndjson) is not by hand, and the
+#           orchestrator's book is never a scratch. `sends` / `started` /
+#           `start_median` = logs/compose.ndjson: sends that left the area, how
+#           many saw their session appear, the median seconds from ↵ to it.
+#           A child that has not reported yet is not counted (its report is the
+#           ledger row). FLEET_COMPOSE_LOG overrides the log's path.
 #   fold    <expand|collapse> <landed:… target>
 #           The landed view's ←/→. Prints fzf ACTIONS (nothing = a dead keystroke);
 #           bin/dash-fold-toggle.sh delegates every `landed:*` target here. The live
@@ -1476,6 +1488,106 @@ EOF
   return 0
 }
 
+# drafts — the writing area's two numbers (issue #1955): see the header.
+cmd_drafts() {
+  local days=7 json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --days) days="${2:-}"; shift 2;;
+      --json) json=1; shift;;
+      *) echo "fleet-history drafts: unknown argument $1" >&2; return 2;;
+    esac
+  done
+  case "$days" in ''|*[!0-9]*) echo "fleet-history drafts: --days is a number" >&2; return 2;; esac
+  DR_CONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" \
+  DR_LOG="${FLEET_COMPOSE_LOG:-$BIN/../logs/compose.ndjson}" \
+  python3 - "$days" "$json" <<'PY'
+import calendar, glob, json, os, re, statistics, sys, time
+days, as_json = int(sys.argv[1]), sys.argv[2] == "1"
+
+def day(ts):
+    return time.strftime("%Y-%m-%d", time.localtime(ts))
+
+def rows(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict):
+                    yield r
+    except OSError:
+        return
+
+def epoch(iso):
+    try:
+        return calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return None
+
+# the writing area's log: its sends, and the sessions it opened
+sent, started, mine = {}, {}, set()
+for r in rows(os.environ["DR_LOG"]):
+    ev, cid = r.get("ev"), r.get("id") or ""
+    if ev == "sent":
+        sent[cid] = int(r.get("at") or r.get("ts") or 0)
+    elif ev == "started":
+        if r.get("secs") is not None:
+            started.setdefault(cid, int(r["secs"]))
+        if r.get("fid"):
+            mine.add(r["fid"].lower())
+    elif ev == "placed" and "/" in (r.get("session") or ""):
+        mine.add(r["session"].rsplit("/", 1)[-1].lower())
+
+# the drafts: one per scratch book generation that holds a child's report
+books = {}
+for path in glob.glob(os.path.join(os.environ["DR_CONF"], "fleets", "*", "children", "*scratch-*.ndjson*")):
+    name = os.path.basename(path)
+    m = re.fullmatch(r"(.*scratch-[0-9]+)\.ndjson(?:\.(.+))?", name)
+    if not m:
+        continue
+    for r in rows(path):
+        if r.get("relayed_from"):
+            continue                        # someone else's child, filed here
+        gen = r.get("gen") or m.group(2) or "0"
+        b = books.setdefault((path.split(os.sep)[-3], m.group(1), gen), {"first": None, "hand": True})
+        ts = epoch(r.get("ts"))
+        if ts is not None and (b["first"] is None or ts < b["first"]):
+            b["first"] = ts
+        if r.get("pfid") and r["pfid"] in mine:
+            b["hand"] = False
+drafts = {}
+for (_, _, gen), b in books.items():
+    if not b["hand"]:
+        continue
+    try:
+        opened = float(gen.split(".")[0])
+    except ValueError:
+        opened = 0
+    when = opened if opened > 1e9 else b["first"]
+    if when:
+        drafts[day(when)] = drafts.get(day(when), 0) + 1
+
+now = time.time()
+out = []
+for n in range(days):
+    d = day(now - n * 86400)
+    ids = [c for c, at in sent.items() if at and day(at) == d]
+    secs = [started[c] for c in ids if c in started]
+    out.append({"day": d, "drafts": drafts.get(d, 0), "sends": len(ids), "started": len(secs),
+                "start_median": int(statistics.median(secs)) if secs else None})
+if as_json:
+    print(json.dumps(out, ensure_ascii=False))
+else:
+    for r in out:
+        print("%s\tdrafts=%d\tsends=%d\tstarted=%d\tstart_median=%s" % (
+            r["day"], r["drafts"], r["sends"], r["started"],
+            "-" if r["start_median"] is None else "%ds" % r["start_median"]))
+PY
+}
+
 cmd="${1:-}"; shift 2>/dev/null || true
 case "$cmd" in
   record)        cmd_record "$@";;
@@ -1489,6 +1601,7 @@ case "$cmd" in
   ended)  cmd_ended "$@";;
   row)    cmd_row "$@";;
   fold)   cmd_fold "$@";;
+  drafts) cmd_drafts "$@";;
   ''|-h|--help|help) usage;;
-  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|resumed|list|rows|resume|path|meta|row|fold)" >&2; exit 2;;
+  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|resumed|list|rows|resume|path|meta|row|fold|drafts)" >&2; exit 2;;
 esac
