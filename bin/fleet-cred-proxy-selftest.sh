@@ -19,6 +19,10 @@
 #   I  an upstream 401 (token_revoked) on a Codex home's token lands in that
 #      home's .ccquota-upstream.json for `ccquota codex list` (issue #1920), a
 #      2xx clears it, and the record holds no token
+#   J  per-person budget (issue #1977): every answer's usage (cache reads left
+#      out) is reported to the hub's /v1/node/usage; over the person's budget the
+#      next request is refused 403 person_budget_exceeded with the hub's line and
+#      reaches nothing; the window passing lets them back in
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "${TMPDIR:-/tmp}/cred-proxy-st.XXXXXX")
@@ -82,6 +86,23 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(401, {"error": "node token"})
             t = open(os.path.join(SB, "trust")).read().strip()
             return self.reply(200, {"endpoint_id": "e1"} if t == "absent" else {"endpoint_id": "e1", "trust": t})
+        if p == "/v1/node/usage":
+            # the hub's budget (issue #1977): usage.total accumulates the
+            # reports, budget.limit (absent = none) is the person's 5h budget
+            if h.get("authorization") != "Bearer nodetok":
+                return self.reply(401, {"error": "node token"})
+            tf, lf = os.path.join(SB, "usage.total"), os.path.join(SB, "budget.limit")
+            tot = int(open(tf).read() or 0) if os.path.exists(tf) else 0
+            for u in json.loads(body or b"{}").get("usage", []):
+                tot += int(u["tokens"])
+            open(tf, "w").write(str(tot))
+            lim = int(open(lf).read()) if os.path.exists(lf) else 0
+            over = bool(lim) and tot >= lim
+            st = {"principal": "gh:1", "used_5h": tot, "limit_5h": lim, "over": over}
+            if over:
+                st.update(window="5h", error="person_budget_exceeded",
+                          message="已达个人额度：近 5 小时已用 %d / 上限 %d token（person_budget_exceeded）" % (tot, lim))
+            return self.reply(200, st)
         via = p.split("/")[1]
         prov = "codex" if ("codex" in p) else "claude"
         if via == "direct-anthropic" or via == "direct-codex":
@@ -104,7 +125,8 @@ class H(BaseHTTPRequestHandler):
         self.reply(200, {"via": via, "prov": prov, "path": p, "auth": h.get("authorization", ""),
                          "xkey": "x-api-key" in h, "acct_id": h.get("chatgpt-account-id", ""),
                          "relay_hdr": h.get("x-fleet-relay", ""), "beta": h.get("anthropic-beta", ""),
-                         "sha": hashlib.sha256(body).hexdigest()}, chunks=4)
+                         "sha": hashlib.sha256(body).hexdigest(),
+                         "usage": {"input_tokens": 100, "cache_read_input_tokens": 9000, "output_tokens": 50}}, chunks=4)
 srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
 srv.daemon_threads = True
 open(os.path.join(SB, "fake.port"), "w").write(str(srv.server_address[1]))
@@ -135,6 +157,7 @@ FLEET_CRED_RELAY_URL=$U/relay
 FLEET_CRED_CENTRAL_URL=$U/central
 FLEET_CRED_CODEX_HOMES=$SB/codex-homes
 FLEET_CRED_PROXY_LOG=$SB/proxy.log
+FLEET_CRED_BUDGET_SECS=1
 EOF
 printf 'FLEET_CRED_RELAY_TOKEN=relaytok\n' > "$FLEET_CONF_DIR/secrets.env"
 printf '. "%s/secrets.env"\n' "$FLEET_CONF_DIR" >> "$FLEET_CONF_DIR/fleet.conf"
@@ -295,6 +318,33 @@ fi
 if grep -Eq 'REAL-a|relaytok|nodetok|fcp1\.|fcp-h1\.' "$SB/proxy.log"; then
   fail "G a credential reached the log"; grep -Eo '.{40}(REAL-a|relaytok|nodetok|fcp1\.|fcp-h1\.).{10}' "$SB/proxy.log" | head -3
 else pass "G no credential in the log (redacted)"; fi
+
+# ── J: per-person budget (issue #1977) ──────────────────────────────────────
+bwait() { local i=0; while [ "$i" -lt 100 ]; do CP status --json | grep -q "$1" && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+utot() { cat "$SB/usage.total" 2>/dev/null; }
+waitn() { local i=0; while [ "$i" -lt 100 ]; do [ "$(utot)" = "$1" ] && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+bwait '"pending": 0' || fail "J the earlier legs' usage never reached the hub"
+[ "$(utot)" -gt 0 ] 2>/dev/null && pass "J usage reported to the hub with no budget set, nothing refused" || fail "J no usage reported ($(utot))"
+rm -f "$SB/usage.total"; echo 300 > "$SB/budget.limit"
+TJ=$(CP mint --account a2 --sid sj)
+j1=$(R /v1/messages "$TJ"); j2=$(R /codex/responses "$TJ")
+if [ "$(jf "$j1" _status)" = 200 ] && [ "$(jf "$j2" _status)" = 200 ] && waitn 300; then
+  pass "J two answers under budget → 300 tokens reported (input + output; cache reads left out)"
+else fail "J under budget: $(jf "$j1" _status)/$(jf "$j2" _status) total=$(utot)"; fi
+bwait '"over": true' || fail "J the proxy never learned the person is over"
+n0=$(grep -c '"ev": "fwd"' "$SB/proxy.log")
+j=$(R /v1/messages "$TJ"); jx=$(R /codex/responses "$TJ")
+n1=$(grep -c '"ev": "fwd"' "$SB/proxy.log")
+jerr() { python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("error",{}); print(e.get("code",""), e.get("message",""))' "$1"; }
+if [ "$(jf "$j" _status)" = 403 ] && [ "$(jf "$jx" _status)" = 403 ] && [ "$n0" = "$n1" ] \
+   && case "$(jerr "$j")" in "person_budget_exceeded cred-proxy: 已达个人额度"*) true ;; *) false ;; esac; then
+  pass "J over budget → 403 person_budget_exceeded「已达个人额度…」, nothing sent upstream"
+else fail "J over: $j / $jx (fwd $n0→$n1)"; fi
+rm -f "$SB/usage.total"      # the window passes
+bwait '"over": false' || fail "J the proxy never learned the window passed"
+j=$(R /v1/messages "$TJ")
+[ "$(jf "$j" _status)" = 200 ] && pass "J the window passes → the person is back in" || fail "J after reset: $j"
+rm -f "$SB/budget.limit"
 
 # ── H: the daemon entry ──────────────────────────────────────────────────────
 kill "$PROXY_PID" 2>/dev/null; PROXY_PID=''

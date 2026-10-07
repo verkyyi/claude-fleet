@@ -1339,6 +1339,30 @@ that cannot answer is ridden out on the cached answer for up to `--stale`
 (15 min, never past the token's expiry), and only a pass it has never seen gets
 a 503.
 
+**Per-person budgets** (claude-fleet#1977, EPIC #1967 R2). Both proxies count
+what each 2xx answer's own `usage` says — input + cache writes + output; cache
+reads are left out — and report it under the person: a login's local proxy
+(`bin/fleet-cred-proxy.py`, direct / relay answers only) every
+`FLEET_CRED_BUDGET_SECS` (15 s) as `POST /v1/node/usage {usage:[{provider,
+tokens, requests}]}` with the node token (the person is the login's ACTIVE
+fleet account — `PrincipalForLogin`; a login with none is counted against
+nobody), the cluster proxy per answer as `POST /v1/fleet/credproxy/usage
+{principal, usage}` with its own token. Both answer the person's standing.
+Rows live in `fleet_person_usage` (ten-minute buckets, eight days kept). The
+operator sets `fleet.person_budget.<principal>` = `5h=<tokens>,week=<tokens>`
+(either half may be left out; `200k`, `2M`; `""` = no limit) through
+`PUT /v1/fleet/settings` — `fleet config budget <person> 5h=200k week=2M`.
+Over either rolling window, resolve answers `{valid:false, error:
+"person_budget_exceeded", reason: "已达个人额度：近 5 小时已用 … 约 … 后恢复"}`
+and both proxies refuse with 403 + `error.code person_budget_exceeded` and that
+line — neither client retries a 403; nobody else's sessions are touched. The
+local proxy's verdict lapses (open) when the hub has not renewed it for
+`FLEET_CRED_BUDGET_STALE` (600 s); the cluster proxy drops a person's cached
+answers as soon as a report says they are over. `GET /v1/fleet/person-usage
+[?principal=]` (operator) lists everyone with a budget or usage this week —
+`fleet config people` prints it as two more columns (`⛔` = over). No budget
+set ⇒ nothing is ever refused; `FLEET_CRED_PROXY=0` ⇒ nothing is reported.
+
 Importing: `bin/fleet-creds-import.sh` for Claude setup tokens,
 `bin/fleet-creds-import.sh --codex [profile]` for a Codex refresh token (reads
 `~/.codex/auth.json`, or the home a ccquota-registered profile name points at —

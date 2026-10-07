@@ -165,6 +165,8 @@ type Server struct {
 	sessCred sessionCredCache
 	// leaseNow replaces the lease clock in tests (claude-fleet#1422).
 	leaseNow func() time.Time
+	// budgetNow replaces the per-person budget clock in tests (claude-fleet#1977).
+	budgetNow func() time.Time
 
 	// NodeLostAfter is how long a node may be silent before the hub records a
 	// node_lost alert (FLEET_NODE_LOST_ALERT_SECS, claude-fleet#1630); zero =
@@ -405,6 +407,12 @@ func (s *Server) routes() *routeMux {
 		// The cluster credential proxy's one question (claude-fleet#1973):
 		// its own token, checked by the handler.
 		mux.HandleFunc(CredProxyResolvePath, s.handleCredProxyResolve)
+		// Per-person budgets (claude-fleet#1977): what a person used,
+		// reported by both proxies, each with its own token; the list is
+		// the operator's.
+		mux.HandleFunc(CredProxyUsagePath, s.handleCredProxyUsage)
+		mux.HandleFunc("/v1/node/usage", s.handleNodeUsage)
+		mux.Handle("/v1/fleet/person-usage", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetPersonUsage))))
 		// The relay (claude-fleet#1413). Both halves authenticate
 		// themselves: the client by session, token or certificate (the
 		// last proven in-band, so outside the viewer gate), the agent by

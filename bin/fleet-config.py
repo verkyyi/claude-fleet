@@ -41,7 +41,17 @@ itself stays in fleet-agent-team.py, which it imports — no second set of rules
         current version, last change (when, by whom), item count; never the
         content (`history --person ID`, then read a version on the hub). Help
         someone back with `restore N --person ID`: the version row and the
-        hub's audit name you.
+        hub's audit name you. Two more columns (issue #1977): each person's
+        tokens through the credential proxies in the last 5 hours and 7 days,
+        against their budget (`⛔` = over: their sessions are refused).
+  budget [PERSON [5h=N] [week=N] | PERSON off] [--json]
+        the operator's (CCQUOTA_VIEWER_TOKEN): per-person budgets (issue #1977).
+        No PERSON = everyone's usage and budget; PERSON alone = theirs; with
+        limits = set fleet.person_budget.<principal> on the hub (tokens; 200k,
+        2M; either window may be left out); `off` = no limit. Over a window,
+        the person's next request is refused「已达个人额度」(person_budget_exceeded);
+        nobody else is touched. PERSON is a principal (gh:<id>) or a display
+        name `people` prints.
   export [--personal|--team] > f.json
         the layer's bundle as one JSON file, plus a `"_from": "personal vN"`
         note key (issue #1865). Personal is the default; --team reads the team
@@ -62,7 +72,9 @@ Credentials, as the team fetch: the node token ($FLEET_CONF_DIR/node.env, read,
 never exported) as Bearer, else the connection certificate (~/.ssh/fleet-cert,
 signed under fleet-person@claude-fleet). The seam FLEET_PERSON_HUB_CMD replaces
 the hub: run as `bash -c "$FLEET_PERSON_HUB_CMD" - METHOD QUERY` with the request
-JSON on stdin, it prints {"status": N, …response}. No local state is added.
+JSON on stdin, it prints {"status": N, …response}. FLEET_BUDGET_HUB_CMD is the
+same for the operator's budget calls, run as `- METHOD PATH`. No local state is
+added.
 
 Exit: 0 ok · 1 the hub refused / did not answer · 2 usage / refused here ·
 3 no hub (show still works) · 4 promote / import needs --yes.
@@ -80,6 +92,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PERSON_PATH = "/v1/fleet/person-bundle"
+USAGE_PATH = "/v1/fleet/person-usage"
+BUDGET_PREFIX = "fleet.person_budget."
 PERSON_SIG_NS = "fleet-person@claude-fleet"
 KINDS = {"mcp": "mcp", "settings": "claude_settings", "claude_settings": "claude_settings",
          "codex": "codex_config", "codex_config": "codex_config", "skills": "skills", "skill": "skills",
@@ -569,22 +583,154 @@ def people(a):
             die("入口拒绝：只有操作者（viewer token）能看每个人的版本", 1)
         hub_err(code, resp)
     rows = resp.get("people") or []
+    usage = usage_rows(a)          # None = a hub with no budgets (before #1977)
     if a.json:
+        if usage is not None:
+            by = {u.get("principal"): u for u in usage}
+            for r in rows:
+                if r.get("principal") in by:
+                    r["usage"] = by[r["principal"]]
         print(json.dumps(rows, ensure_ascii=False, indent=2))
         return 0
-    if not rows:
+    if not rows and not usage:
         print("入口上还没有人")
         return 0
-    print("%-20s %-6s %-5s %-20s %s" % ("人", "版本", "条目", "最近修改", "改的人"))
+    by = {u.get("principal"): u for u in usage or []}
+    # no usage (a hub before #1977) = the old table, byte for byte
+    fmt = "%-20s %-6s %-5s %-20s %-10s" if usage is not None else "%-20s %-6s %-5s %-20s %s"
+    head = fmt % ("人", "版本", "条目", "最近修改", "改的人")
+    print(head + "  %-14s %s" % ("近5小时/额度", "近7天/额度") if usage is not None else head)
+    seen = set()
     for r in rows:
         who = r.get("principal") or "?"
+        seen.add(who)
         if r.get("display_name") and r["display_name"] != who:
             who = "%s (%s)" % (who, r["display_name"])
         v = int(r.get("version") or 0)
         when = (r.get("updated") or "")[:19].replace("T", " ") if v else "—"
-        print("%-20s %-6s %-5s %-20s %s" % (who, "v%d" % v if v else "未写过", r.get("items") or 0,
-                                          when, r.get("actor") or "" if v else ""))
+        line = fmt % (who, "v%d" % v if v else "未写过", r.get("items") or 0, when, r.get("actor") or "" if v else "")
+        print((line + usage_cols(by.get(r.get("principal")))) if usage is not None else line)
+    for u in usage or []:
+        if u.get("principal") not in seen:
+            print("%-20s %-6s %-5s %-20s %-10s" % (person_name(u), "—", "—", "—", "") + usage_cols(u))
     print("帮人退回：fleet config restore N --person <人>（先 fleet config history --person <人> 看版本）")
+    if usage is not None:
+        print("设额度：fleet config budget <人> 5h=200k week=2M（off = 不限）")
+    return 0
+
+
+# --- per-person budgets (issue #1977) --------------------------------------------------------
+
+def ops_call(a, method, path, body=None):
+    """(status, response) for an operator call (CCQUOTA_VIEWER_TOKEN); (0, {}) when
+    there is no hub or no token — the caller decides whether that is fatal."""
+    if os.environ.get("FLEET_BUDGET_HUB_CMD"):
+        p = subprocess.run(["bash", "-c", os.environ["FLEET_BUDGET_HUB_CMD"], "-", method, path],
+                           input=json.dumps(body or {}).encode(), capture_output=True)
+        resp = decode(p.stdout or b"{}")
+        return int(resp.pop("status", 0 if p.returncode else 200)), resp
+    if os.environ.get("FLEET_PERSON_HUB_CMD"):
+        return 0, {}               # a seamed run never reaches a real hub
+    url, viewer = T.hub_url(a.hub), os.environ.get("CCQUOTA_VIEWER_TOKEN") or ""
+    if not url or not viewer:
+        return 0, {}
+    code, raw = T.http(url + path, method, {"Accept": "application/json", "Content-Type": "application/json",
+                                            "Authorization": "Bearer " + viewer},
+                       json.dumps(body).encode() if body is not None else None, a.timeout)
+    return code, decode(raw)
+
+
+def usage_rows(a):
+    code, resp = ops_call(a, "GET", USAGE_PATH)
+    return (resp.get("people") or []) if code == 200 else None
+
+
+def human_tokens(n):
+    n = int(n or 0)
+    if n >= 1000000:
+        return "%.1fM" % (n / 1e6)
+    if n >= 10000:
+        return "%dk" % (n // 1000)
+    return str(n)
+
+
+def usage_cols(u):
+    if not u:
+        return "  %-14s %s" % ("0", "0")
+    def col(used, limit, window):
+        s = human_tokens(used) + ("/" + human_tokens(limit) if limit else "")
+        return ("⛔" + s) if u.get("over") and u.get("window") == window else s
+    return "  %-14s %s" % (col(u.get("used_5h"), u.get("limit_5h"), "5h"),
+                           col(u.get("used_week"), u.get("limit_week"), "week"))
+
+
+def person_name(u):
+    who = u.get("principal") or "?"
+    if u.get("display_name") and u["display_name"] != who:
+        who = "%s (%s)" % (who, u["display_name"])
+    return who
+
+
+def budget(a):
+    if not (os.environ.get("CCQUOTA_VIEWER_TOKEN") or os.environ.get("FLEET_BUDGET_HUB_CMD")):
+        die("fleet config budget 是操作者的用法：要 CCQUOTA_VIEWER_TOKEN 在环境里")
+    if not os.environ.get("FLEET_BUDGET_HUB_CMD") and not T.hub_url(a.hub):
+        no_hub()
+    code, resp = ops_call(a, "GET", USAGE_PATH)
+    if code != 200:
+        if code == 404 or (code == 400 and "Unknown" in str(resp)):
+            die("这个入口还不认按人额度（入口版本早于 #1977，先升级入口）", 1)
+        hub_err(code, resp)
+    rows = resp.get("people") or []
+    if not a.args:
+        if a.json:
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
+            return 0
+        if not rows:
+            print("还没有人有用量或额度")
+            return 0
+        print("%-30s %-14s %s" % ("人", "近5小时/额度", "近7天/额度"))
+        for u in rows:
+            print("%-30s" % person_name(u) + usage_cols(u))
+        return 0
+    who = a.args[0]
+    principal = who
+    if ":" not in who and who != "pool":
+        # a display name / login as `people` prints it → the principal
+        _, pr = person_call(argparse.Namespace(**dict(vars(a), action="people")), "GET", None, "all=1") \
+            if not os.environ.get("FLEET_BUDGET_HUB_CMD") else (0, {})
+        cands = [r for r in (pr.get("people") or []) + rows
+                 if who in (r.get("display_name"), r.get("principal"), r.get("login"))]
+        ids = sorted({r.get("principal") for r in cands if r.get("principal")})
+        if len(ids) > 1:
+            die("「%s」对得上不止一个人：%s — 用 principal" % (who, " ".join(ids)))
+        if ids:
+            principal = ids[0]
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9:._@-]{0,127}$", principal):
+        die("不像一个人：%s（fleet config people 列出每个人）" % who)
+    limits = a.args[1:]
+    if limits:
+        value = "" if limits == ["off"] else ",".join(limits)
+        code, out = ops_call(a, "PUT", "/v1/fleet/settings", {"key": BUDGET_PREFIX + principal, "value": value})
+        if code != 200:
+            die("入口拒收：%s" % (out.get("error") or out), 1)
+        code, resp = ops_call(a, "GET", USAGE_PATH + "?principal=" + principal)
+        rows = resp.get("people") or [] if code == 200 else []
+    else:
+        rows = [u for u in rows if u.get("principal") == principal]
+    u = rows[0] if rows else {"principal": principal}
+    if a.json:
+        print(json.dumps(u, ensure_ascii=False, indent=2))
+        return 0
+    lim = []
+    if u.get("limit_5h"):
+        lim.append("5 小时 %s" % human_tokens(u["limit_5h"]))
+    if u.get("limit_week"):
+        lim.append("7 天 %s" % human_tokens(u["limit_week"]))
+    print("%s · 额度：%s" % (person_name(u), "，".join(lim) if lim else "不限"))
+    print("  用量：近 5 小时 %s · 近 7 天 %s" % (human_tokens(u.get("used_5h")), human_tokens(u.get("used_week"))))
+    if u.get("over"):
+        print("  ⛔ %s" % u.get("message", "已达个人额度"))
     return 0
 
 
@@ -796,7 +942,7 @@ def main():
     ap = argparse.ArgumentParser(prog="fleet config", description=__doc__.split("\n")[0])
     ap.add_argument("action", nargs="?", default="show",
                     choices=("show", "add", "set", "rm", "promote", "history", "restore", "people",
-                             "export", "import"))
+                             "export", "import", "budget"))
     ap.add_argument("args", nargs="*")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--personal", action="store_true")
@@ -815,7 +961,7 @@ def main():
         die("--person 只用于 history / restore（操作者只能帮人退回到他自己的某一版）")
     return {"show": show, "add": edit, "set": edit, "rm": edit, "promote": promote,
             "history": history, "restore": restore, "people": people, "export": export,
-            "import": import_}[a.action](a)
+            "import": import_, "budget": budget}[a.action](a)
 
 
 if __name__ == "__main__":

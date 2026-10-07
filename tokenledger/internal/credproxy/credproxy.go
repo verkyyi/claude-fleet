@@ -347,6 +347,13 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		return
 	}
 	a.principal, a.worker, a.pass = res.Principal, res.WorkerID, res.ID
+	if !res.Valid && res.Error == PersonBudgetExceeded {
+		// the person is over their budget (claude-fleet#1977): the hub's
+		// own line, under its own code, with a status no client retries
+		a.status, _ = refuseCode(w, provider, http.StatusForbidden, "permission_error", PersonBudgetExceeded, res.Reason)
+		a.why = PersonBudgetExceeded
+		return
+	}
 	if !res.Valid {
 		msg := "session pass refused: " + res.Reason
 		if res.Error == "no_credential" {
@@ -431,7 +438,14 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	a.status = resp.StatusCode
-	a.out = stream(w, resp.Body)
+	if resp.StatusCode/100 != 2 {
+		a.out = stream(w, resp.Body)
+		return
+	}
+	m := newMeter()
+	a.out = stream(w, io.TeeReader(resp.Body, m))
+	a.tokens = m.Tokens()
+	p.report(res.Principal, provider, a.tokens)
 }
 
 // target is where a request goes, and by which road.
@@ -480,12 +494,20 @@ func stream(w http.ResponseWriter, body io.Reader) int64 {
 
 // refuse answers in the provider's own error shape.
 func refuse(w http.ResponseWriter, provider string, code int, typ, msg string) (int, string) {
+	return refuseCode(w, provider, code, typ, typ, msg)
+}
+
+// refuseCode is refuse with a code of its own (Claude's shape carries it only
+// when it differs from the type, so every older refusal is byte for byte).
+func refuseCode(w http.ResponseWriter, provider string, code int, typ, ecode, msg string) (int, string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	var v any
 	if provider == Codex {
-		v = map[string]any{"error": map[string]string{"type": typ, "code": typ, "message": msg}}
+		v = map[string]any{"error": map[string]string{"type": typ, "code": ecode, "message": msg}}
+	} else if ecode != typ {
+		v = map[string]any{"type": "error", "error": map[string]string{"type": typ, "code": ecode, "message": msg}}
 	} else {
 		v = map[string]any{"type": "error", "error": map[string]string{"type": typ, "message": msg}}
 	}
@@ -524,7 +546,7 @@ type audit struct {
 	principal, worker, pass string
 	account, why            string
 	status                  int
-	in, out, ms             int64
+	in, out, ms, tokens     int64
 	stale                   bool
 }
 
@@ -533,7 +555,7 @@ func (a audit) line() string {
 		"ev": "credproxy", "provider": a.provider, "m": a.method, "route": a.route,
 		"principal": a.principal, "worker_id": a.worker, "pass": a.pass, "account": a.account,
 		"status": a.status, "bytes_in": a.in, "bytes_out": a.out, "ms": a.ms, "stale": a.stale,
-		"why": a.why,
+		"why": a.why, "tokens": a.tokens,
 	})
 	return string(b)
 }
