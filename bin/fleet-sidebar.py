@@ -1939,15 +1939,26 @@ def owns_fold(row):
 
 def on_caret(row, x):
     """Whether a tap at column `x` is on `row`'s fold caret (issue #1950: the
-    mouse's ←/→): a session row's ▸ / ▾ — the last cell of its tree, laid out
-    as `row_left` does with any marker — or a heading's first two cells, where
-    its folded ▸ sits (`› ` when it is tapped)."""
+    mouse's ←/→): on a session row with a ▸ / ▾, anywhere left of its name —
+    the marker, the glyph, the tree and the gap before the name, laid out as
+    `row_left` does with any marker (issue #2167: the caret's own two cells
+    were too small a target, and the gap right of ▸ switched to the session
+    instead) — or a heading's first two cells, where its folded ▸ sits (`› `
+    when it is tapped)."""
     if not owns_fold(row):
         return False
     if row[0] == "hdr":
         return 0 <= x < 2
-    at = width_of(row_left(" ", row[2], row[4], "")) - 2
-    return at - 1 <= x <= at
+    return 0 <= x < width_of(row_left(" ", row[2], row[4], ""))
+
+
+# A second press on the same caret this soon after the first one folded is the same tap
+# (issue #2167): a double-click reaches the list as two presses or more
+# (DoubleClick1Pane forwards its own), and the second folded straight back.
+CARET_REPEAT_SECS = 0.3
+# ncurses may hand the presses of a fast double / triple click over as ONE event
+# (issue #2167): on the caret that is one tap, which the list used to drop.
+MULTI_CLICK = curses.BUTTON1_DOUBLE_CLICKED | curses.BUTTON1_TRIPLE_CLICKED
 
 
 def fold_open(row):
@@ -2018,6 +2029,33 @@ def fold_now(rows, key, verb, current, cache):
         cache[key_of(rows[j])] = hidden
     keep = [row for row in hidden if row[1] in FOLD_KEEP or row[0] == current]
     return rows[:j] + [with_fold(rows[j], False)] + keep + rows[end:], key_of(rows[j])
+
+
+def fold_key(rows, current):
+    """⌘. (issue #2167): (verb, key) for one press, from wherever the keyboard
+    is — the session in view opens or shuts its own block when it has one;
+    otherwise `collapse` on it shuts the innermost open block it sits in
+    (fold_now and dash-fold-toggle.sh walk up to it). None: not on the list."""
+    row = next((r for r in rows if key_of(r) == current), None) if current else None
+    if row is None or row[0] == "hdr":
+        return None
+    if owns_fold(row):
+        return ("collapse" if fold_open(row) else "expand"), current
+    return "collapse", current
+
+
+def fold_write(folding, verb, key, env):
+    """Write the fold bit behind a fold already painted (fold_now): the toggle
+    before it finished first, then dash-fold-toggle.sh in the background. The
+    running toggle, which no producer starts before."""
+    if folding is not None:
+        try:
+            folding.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            folding.kill()
+    return subprocess.Popen(["bash", str(BIN / "dash-fold-toggle.sh"), verb, key],
+                            env=dict(env, DASH_FOLD_PLAIN="1"), stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def current_of(env):
@@ -2424,6 +2462,9 @@ def ui(screen, session, worker, lock):
     # open — no producer starts until the toggle has written, so the next frame
     # is the first one read after it.
     folding, fold_cache = None, {}
+    # The last caret press (row key, when): a second one inside
+    # CARET_REPEAT_SECS is the same tap (issue #2167).
+    caret_tap = (None, NEVER)
     # Never blank, never frozen (issue #1536): when the painted rows landed, when
     # the view last became visible (a hidden view's frame does not age), why the
     # last refresh gave nothing, whether one empty frame was held back, the
@@ -2835,6 +2876,21 @@ def ui(screen, session, worker, lock):
                 # may come with the session zoomed (issue #1903): a hidden view
                 # still switches for the queue — never for a stray key.
                 todo = compose_take(take_switch(pane))
+                if "fold" in todo:
+                    # ⌘. with the list off screen (#2167): written now, painted
+                    # by the frame that follows the write
+                    base = rows if view == "live" else live_rows
+                    for _ in range(todo.count("fold")):
+                        what = fold_key(base, current_row)
+                        if what is not None:
+                            base, holder = fold_now(base, what[1], what[0], current_row, fold_cache)
+                            if holder is not None:
+                                folding = fold_write(folding, what[0], what[1], env)
+                    if view == "live":
+                        rows = base
+                    else:
+                        live_rows = base
+                    todo = [v for v in todo if v != "fold"]
                 if todo and spawning is None:
                     base = rows if view == "live" else live_rows
                     nxt = switch_target(todo, base, current_row, sessions(base), session)
@@ -3064,6 +3120,22 @@ def ui(screen, session, worker, lock):
             # ⌘↓ ⌘↑ ⌘[ ⌘] ⌘P (issue #1903): the verbs queued on @sidebar_do since
             # the last wake, read and cleared in one tmux call — every press a step.
             todo = compose_take(take_switch(pane))
+            if "fold" in todo:
+                # ⌘. (issue #2167): the session in view opens or shuts its own
+                # block, or — a child — shuts its nearest open parent, which then
+                # holds the highlight. Painted at once, written in the background,
+                # as a tap on the caret is.
+                if view != "live":
+                    view, rows, selected = "live", live_rows, current_row
+                for _ in range(todo.count("fold")):
+                    what = fold_key(rows, current_row)
+                    if what is None:
+                        continue
+                    rows, holder = fold_now(rows, what[1], what[0], current_row, fold_cache)
+                    if holder is not None:
+                        selected, follow_at, refresh_at = holder, None, 0
+                        folding = fold_write(folding, what[0], what[1], env)
+                todo = [v for v in todo if v != "fold"]
             if todo and spawning is None:
                 if view != "live":
                     view, rows, selected = "live", live_rows, current_row
@@ -3163,26 +3235,28 @@ def ui(screen, session, worker, lock):
                     elif spawning is None:
                         ask_now(nxt)
                 refresh_at = 0
-            elif buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
+            elif buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED | MULTI_CLICK):
                 refresh_at = 0
                 armed = None
                 if hit_row is not None and view == "live" and folds(hit) and on_caret(hit_row, x):
-                    # A tap on a row's caret (▸ / ▾, or a heading's first cells)
-                    # folds or opens its block (issue #1950: ←/→ went with the
-                    # keyboard). Painted at once (fold_now), written in the
-                    # background; the producer waits for the write, so its frame
-                    # is never the old one.
+                    # A tap on a row's caret (▸ / ▾ and the tree left of the name,
+                    # or a heading's first cells) folds or opens its block (issue
+                    # #1950: ←/→ went with the keyboard). Painted at once
+                    # (fold_now), written in the background; the producer waits
+                    # for the write, so its frame is never the old one. The
+                    # double-click's second press is the same tap (#2167).
                     follow_at = None
+                    if caret_tap[0] == hit and _when - caret_tap[1] < CARET_REPEAT_SECS:
+                        continue
+                    # from when THIS fold ran, not when its press was read: a
+                    # press read stale waits for a fresh tmux read first (#1756),
+                    # and its double-click's second press is read after that
+                    caret_tap = (hit, time.monotonic())
                     verb = "collapse" if fold_open(hit_row) else "expand"
                     rows, holder = fold_now(rows, hit, verb, window, fold_cache)
-                    if folding is not None:
-                        try:
-                            folding.wait(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            folding.kill()
-                    folding = subprocess.Popen(["bash", str(BIN / "dash-fold-toggle.sh"), verb, hit],
-                                               env=dict(env, DASH_FOLD_PLAIN="1"), stdin=subprocess.DEVNULL,
-                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    folding = fold_write(folding, verb, hit, env)
+                elif not buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
+                    pass   # a double / triple click off the caret: nothing, as ever
                 elif action in ("menu", "new"):
                     # The second tap on a row (the first switched to it), or a tap
                     # on the row already in view: its action menu (issue #898). On

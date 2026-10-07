@@ -247,7 +247,7 @@ stock keys and one line at the top saying to use `fleet`.
 
 | Key | Action |
 |---|---|
-| tap / right-click | the task list takes no keys (issue #1950): a tap on a row switches to it, a second tap or a right-click opens its menu, a tap on ▸ / ▾ folds; a rename, an answer or a message is asked on one line under the session (↵ ok · esc cancel) |
+| tap / right-click | the task list takes no keys (issue #1950): a tap on a row switches to it, a second tap or a right-click opens its menu, a tap on ▸ / ▾ — or anywhere left of the row's name — folds (issue #2167), and `⌘.` / `prefix .` folds the session in view from wherever the keyboard is; a rename, an answer or a message is asked on one line under the session (↵ ok · esc cancel) |
 | `prefix q` / `prefix h` | back to the machine you were on (the previous window) |
 | `prefix z` | zoom the session pane — from the task list too: it zooms the session and hands the keyboard back, never the list |
 | `prefix [` | scroll back the session (tmux copy-mode) — from the task list too |
@@ -266,8 +266,8 @@ screens. It shares the hub's live statuses, pins and parent/child grouping,
 highlights the current worker, and keeps that worker visible even in a folded
 group. Rows use your task descriptions, without internal worker IDs or a second
 title row inside the sidebar. The current task has a `▶` marker. Click the
-sidebar (or press `prefix E`) to give it the arrow keys: an amber
-**TASKS** pane border and selection show keyboard focus. ↑↓ (and
+sidebar (or press `prefix E`) to give it the arrow keys: the selection shows
+keyboard focus (the list's border carries no label — issue #2167). ↑↓ (and
 Home/End) switch to the highlighted task without Enter, once the highlight has
 rested for about a quarter second: a held key is one switch, not one per row,
 and a row you only passed over is never selected — nor woken, since a sleeping

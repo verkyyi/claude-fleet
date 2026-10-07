@@ -9,8 +9,8 @@
 #
 #   • pane-active-border-style is the same as pane-border-style
 #   • pane-border-indicators is off (tmux's half-coloured split, 3.3+)
-#   • the TASKS label in pane-border-format has no focus-dependent background
-#     (no client_key_table branch, no bg=)
+#   • the task list's border draws nothing (issue #2167 took its TASKS label
+#     away), so nothing on it can depend on focus
 #
 # Then it sources each conf's border lines on a private tmux server (when tmux is
 # there) and checks the options as tmux reads them, so a quoting slip that the
@@ -40,16 +40,9 @@ for rel in $CONFS; do
   [ "$pa" = "$ps" ] || fail "$rel: pane-active-border-style [$pa] differs from pane-border-style [$ps]"
   [ "$(optval "$f" pane-border-indicators)" = off ] || fail "$rel: pane-border-indicators is not off"
   fmt="$(optval "$f" pane-border-format)"
-  case "$fmt" in *TASKS*) : ;; *) fail "$rel: pane-border-format lost its TASKS label" ;; esac
-  # what the @sidebar branch draws before its TASKS word — a style, never a focus test
-  tasks="$(printf '%s' "$fmt" | sed -n 's/.*#{==:#{@sidebar},1},\(.*\)TASKS.*/\1/p')"
-  case "$tasks" in
-    *'#['*) : ;;
-    *) fail "$rel: could not find the TASKS branch of pane-border-format" ;;
-  esac
-  case "$tasks" in
-    *bg=*|*client_key_table*) fail "$rel: TASKS label is focus-dependent: [$tasks]" ;;
-  esac
+  # the @sidebar branch is empty (issue #2167): no label, no style, no focus test
+  case "$fmt" in *'#{?#{==:#{@sidebar},1},,'*) : ;; *) fail "$rel: the task list's border still draws something: [$fmt]" ;; esac
+  case "$fmt" in *TASKS*) fail "$rel: pane-border-format still names TASKS" ;; esac
 
   REAL_TMUX="$(command -v tmux 2>/dev/null)"
   [ -n "$REAL_TMUX" ] || continue
@@ -66,4 +59,4 @@ if [ -x "$BIN/fleet-client-mirror.sh" ] && [ -d "$ROOT/tokenledger/internal/api/
   "$BIN/fleet-client-mirror.sh" --check >/dev/null || fail "fleet-client-mirror.sh --check: the client manifest drifted"
 fi
 
-printf 'selftest OK: no pane border paints keyboard focus — active = inactive, indicators off, TASKS dim (#1764)\n'
+printf 'selftest OK: no pane border paints keyboard focus — active = inactive, indicators off, the task list border empty (#1764, #2167)\n'

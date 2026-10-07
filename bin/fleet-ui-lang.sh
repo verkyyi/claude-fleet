@@ -743,6 +743,8 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:keys_switch_quickopen)  printf %s 'quick open: type a few letters (name, machine, state), ↵ switches; ↵ on nothing = the one you saw before' ;;
     zh:keys_switch_new)        printf %s '新任务：右边打开写作区，多行、附件，↵ 开 issue 和会话；在写作区再按一次：去编排会话，再按回来' ;;
     en:keys_switch_new)        printf %s 'new task: the writing area on the right — several lines, attachments; ↵ files the issue and opens its session; again in it: the orchestrating session, and back' ;;
+    zh:keys_switch_fold)       printf %s '展开/收起当前会话的子任务；在子任务上按：收起它的父任务' ;;
+    en:keys_switch_fold)       printf %s 'open / shut the sub-tasks of the session in view; on a sub-task: shut its parent' ;;
     zh:keys_single_f1)         printf %s '窄屏（手机）：全屏切换器 —— 在等你的 · 最近 1–9 · 全部，点一行切过去；顶栏点名字同此' ;;
     en:keys_single_f1)         printf %s 'narrow (a phone): the full-screen switcher — waiting on you · recent 1–9 · all, tap a row; tapping the name on the top line too' ;;
     zh:keys_single_f23)        printf %s '窄屏：上一个 / 下一个会话（顶栏 ‹ › 同此）' ;;
@@ -761,6 +763,8 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:keys_page_new)          printf %s 'new task; again: orchestrator, and back' ;;
     zh:keys_page_quickopen)    printf %s '跳到任意会话；输入 > 是命令' ;;
     en:keys_page_quickopen)    printf %s 'go to any session; type > for commands' ;;
+    zh:keys_page_fold)         printf %s '展开/收起子任务（子任务上：收起父任务）' ;;
+    en:keys_page_fold)         printf %s 'open / shut sub-tasks (on one: its parent)' ;;
     zh:keys_page_prevnext)     printf %s '上一个 / 下一个会话' ;;
     en:keys_page_prevnext)     printf %s 'previous / next session' ;;
     zh:keys_page_backfwd)      printf %s '后退 / 前进' ;;

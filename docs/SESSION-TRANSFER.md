@@ -75,7 +75,7 @@ Run from the hub, another pane or an external terminal. The source must be idle
 worktree. The base checkout and panel windows are refused. A source agent may
 use `--prepare-only` itself, or `--after-turn --handoff <notes>` as the final tool
 call of a handoff turn. An immediate cutover cannot run inside its own source.
-There must be exactly one worker pane. A marked TASKS sidebar is allowed and
+There must be exactly one worker pane. A marked task-list sidebar (`@sidebar 1`) is allowed and
 stays in the window; another ordinary pane still prevents transfer.
 
 ```sh

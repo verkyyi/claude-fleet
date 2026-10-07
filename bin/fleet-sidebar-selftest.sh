@@ -218,11 +218,13 @@ assert sidebar.Ask('sub', '').spec().get('choices') is None and sq.spec()['fill'
 q = fask.Question(sq.spec()); q.step(); assert q.line.text == 'acct1' and q.answer() == {'text': 'acct1', 'choice': 'acct1'}
 q = fask.Question(sidebar.Ask('place-where', '', menu=[('m4', 'm4', '', True), ('m5', 'm5', '', False)]).spec())
 q.move(1); assert q.answer() == {'choice': 'm5'}, 'a greyed item is never picked'
-# A tap on a row's caret folds it (issue #1950: the mouse's ←/→) — a session
-# row's ▸ / ▾ cell, a heading's first two cells; a row with no block never.
+# A tap on a row's caret folds it (issue #1950: the mouse's ←/→) — on a session
+# row anywhere left of its name (issue #2167: ▸ / ▾, the gap after it, the glyph,
+# the marker), a heading's first two cells; a row with no block never.
 crow = ['@1', 'working', '·', 'x', '▾', '', '0', '', '']
 cx = sidebar.width_of(sidebar.row_left(' ', '·', '▾', '')) - 2
 assert sidebar.row_left(' ', '·', '▾', 'x')[cx] == '▾' and sidebar.on_caret(crow, cx)
+assert all(sidebar.on_caret(crow, c) for c in range(cx + 2)), 'the prefix left of the name is the caret'
 assert not sidebar.on_caret(crow, cx + 2) and not sidebar.on_caret(crow[:4] + [' '] + crow[5:], cx)
 assert sidebar.on_caret(['hdr', 'o/a', '', '▸ a (2)', ''] + [''] * 4, 0) and not sidebar.on_caret(['hdr', 'o/a', '', 'a (2)', ''] + [''] * 4, 5)
 R = lambda k, st: [k, st, '', k] + [''] * 8
@@ -320,7 +322,9 @@ def call(verb='sync', *args):
 def view_on(window):
     return [p[0] for p in views() if p[1] == window]
 
-def click(pane, row=0, column=2, repeat=False, count=1):
+def click(pane, row=0, column=8, repeat=False, count=1):
+    # A row tap lands on the row's NAME (column 8): everything left of it is a
+    # parent's fold caret since issue #2167.
     # Separate ordinary single clicks from tmux's delayed double-click zoom.
     # The repeat-click regression below deliberately stays inside that interval.
     # count=2 is a deliberate double-click: both press/release pairs go out in

@@ -218,9 +218,9 @@ tmux set-option -p -t "$sbp" @sidebar 1
 tmux set-window-option -t "$sw" @ctx_pct 62 \; set-window-option -t "$sw" @model 'Opus 5.5'
 case "$(render "$sbp")" in
   *%*|*Opus*) fail "the sidebar pane must not show the segment — got [$(render "$sbp")]" ;;
-  *TASKS*) : ;;
-  *) fail "the sidebar pane lost its TASKS cue — got [$(render "$sbp")]" ;;
 esac
+# its border says nothing at all (issue #2167 took the TASKS label away)
+[ -z "$(render "$sbp" | tr -d '[:space:]')" ] || fail "the sidebar pane's border must be empty — got [$(render "$sbp")]"
 for nm in dash plan backlog; do
   pw="$(tmux new-window -P -F '#{window_id}' -t s: -n "$nm")"
   tmux set-window-option -t "$pw" @ctx_pct 62 \; set-window-option -t "$pw" @model 'Opus 5.5' \; set-window-option -t "$pw" @effort high \; set-window-option -t "$pw" @pr_num '#1' \; set-window-option -t "$pw" @pr_ci '✓'
