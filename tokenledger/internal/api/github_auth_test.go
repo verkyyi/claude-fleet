@@ -458,11 +458,11 @@ func TestGitHubSignIn_ResolveAdminsPins(t *testing.T) {
 	}
 }
 
-// A WeCom session can never carry a gh: principal past the list.
-func TestGitHubSignIn_WeComCannotClaimGitHubPrincipal(t *testing.T) {
+// Only a session GitHub sign-in minted is a GitHub person: one signed with
+// the right key for another subject is refused.
+func TestGitHubSignIn_OtherSubjectCannotClaimGitHubPrincipal(t *testing.T) {
 	h := newGitHubHarness(t, "verkyyi")
-	h.srv.SSO = &SSO{AppID: "ccquota", TicketSecret: "t", SessionSecret: "wecom-key", EnterURL: "https://ai.example/enter"}
-	forged := authz.SignPerson("staff", "gh:100", "verkyyi", "wecom-key", time.Now(), time.Hour)
+	forged := authz.SignRole("staff", "gh:100", "verkyyi", roleAdmin, h.srv.GitHub.sessionKey(), time.Now(), time.Hour)
 	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/me", nil)
 	req.Header.Set("Accept", "application/json")
 	req.AddCookie(&http.Cookie{Name: authz.CookieName, Value: forged})
@@ -472,11 +472,11 @@ func TestGitHubSignIn_WeComCannotClaimGitHubPrincipal(t *testing.T) {
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("WeCom session naming gh:100 = %d; want 401", resp.StatusCode)
+		t.Errorf("a non-github session naming gh:100 = %d; want 401", resp.StatusCode)
 	}
 }
 
-// Not configured: the routes 404, like /enter without SSO.
+// Not configured: the routes 404, so their existence says nothing.
 func TestGitHubSignIn_OffIs404(t *testing.T) {
 	h := newHarness(t)
 	for _, p := range []string{"/signin", "/auth/github/start", "/auth/github/callback"} {

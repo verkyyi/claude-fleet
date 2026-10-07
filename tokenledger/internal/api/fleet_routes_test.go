@@ -113,7 +113,7 @@ func TestFleetRoutesEndpoint(t *testing.T) {
 	h.srv.Store.AdoptAccount(p, "mini", time.Now())
 
 	now := time.Now()
-	good := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
+	good := k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
 	signed := func(c *ssh.Certificate, ns string, ts int64) RoutesRequest {
 		return RoutesRequest{Cert: string(ssh.MarshalAuthorizedKey(c)), TS: ts,
 			Sig: sshsig(t, k.user, ns, []byte(control.RoutesSigMessage(ts)))}
@@ -149,7 +149,7 @@ func TestFleetRoutesEndpoint(t *testing.T) {
 
 	// Someone with no account anywhere is told so, not handed an empty list.
 	h.srv.Store.AdoptPrincipal("wx-bob", "bob", "Bob", time.Now())
-	bob := k.cert(t, "wecom:wx-bob", []string{"bob"}, now.Add(-time.Minute), now.Add(time.Hour))
+	bob := k.cert(t, "person:wx-bob", []string{"bob"}, now.Add(-time.Minute), now.Add(time.Hour))
 	if code, _, raw := postRoutes(t, h, nil, signed(bob, control.RoutesSigNamespace, now.Unix())); code != http.StatusForbidden {
 		t.Errorf("no account: HTTP %d %s, want 403", code, raw)
 	}

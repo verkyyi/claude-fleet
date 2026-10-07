@@ -18,8 +18,7 @@ import (
 var (
 	realSpendNote = i18n.Text{
 		i18n.EN: RealSpendNote,
-		i18n.ZhCN: "真实支出 = 订阅发票 + 网关按量计费 + 那些网关根本看不到的路径的厂商账单" +
-			"（视频生成、文件转写这类异步任务 API）。" +
+		i18n.ZhCN: "真实支出就是订阅发票。" +
 			"按 token 折算的假想成本不在其中：订阅制下没有人按 token 被收费，" +
 			"把那个数字加进来等于凭空造出一笔从未发生的支出。",
 	}
@@ -82,18 +81,12 @@ func scopeNoteIn(account, locale string) string {
 const (
 	ReasonCodexNoLimits     = "codex_no_limits"
 	ReasonNoEndpointReading = "no_endpoint_reading"
-	// ReasonMeteredNoWindow is "there is nothing to read", not "we failed to
-	// read it". A gateway caller, a voice application and a vendor invoice are
-	// billed per call and have no quota window at all, so
-	// ReasonNoEndpointReading — which blames a collector gap — was describing a
-	// problem that does not exist. See model.HasQuotaWindow.
-	ReasonMeteredNoWindow  = "metered_no_window"
-	ReasonEndpointReports  = "endpoint_reports"
-	ReasonWrongSource      = "wrong_source"
-	ReasonCodexUnassigned  = "codex_unassigned"
-	ReasonCodexUnverified  = "codex_unverified"
-	ReasonCodexStale       = "codex_stale"
-	ReasonCodexWindowReset = "codex_window_reset"
+	ReasonEndpointReports   = "endpoint_reports"
+	ReasonWrongSource       = "wrong_source"
+	ReasonCodexUnassigned   = "codex_unassigned"
+	ReasonCodexUnverified   = "codex_unverified"
+	ReasonCodexStale        = "codex_stale"
+	ReasonCodexWindowReset  = "codex_window_reset"
 )
 
 // Every entry is a COMPLETE SENTENCE in its own language: it starts the way a
@@ -116,10 +109,6 @@ var limitsReasons = map[string]i18n.Text{
 	ReasonNoEndpointReading: {
 		i18n.EN:   "No endpoint on this subscription has been able to read its account-wide limits.",
 		i18n.ZhCN: "这个订阅下没有任何端点能读到它的账号级额度。",
-	},
-	ReasonMeteredNoWindow: {
-		i18n.EN:   "This account is billed per call; there is no quota window to read.",
-		i18n.ZhCN: "这个账号按调用计费，没有额度窗口可读。",
 	},
 	ReasonWrongSource: {
 		i18n.EN:   "This account does not belong to the selected source.",
@@ -218,17 +207,4 @@ func localizedReasons(rows []store.UnpricedReason, locale string) []store.Unpric
 		out[i] = r
 	}
 	return out
-}
-
-// fxNote is what every converted figure has to say for itself.
-//
-// It is the counterpart of pricing.GatewayPriceNote: that one says a gateway
-// figure IS the charge, this one says a converted figure is NOT. Both exist
-// because the number alone cannot tell a reader which it is looking at.
-var fxNote = i18n.Text{
-	i18n.EN: "Converted for display only. The ledger keeps every figure in the currency it was " +
-		"billed in, and no total is computed through this rate — a converted amount is an " +
-		"approximation of an invoice, never the invoice.",
-	i18n.ZhCN: "仅为显示而折算。账本里每个数字都保留它被计费时的币种，" +
-		"也没有任何合计是经由这个汇率算出来的 —— 折算出来的金额是对账单的近似，永远不是账单本身。",
 }

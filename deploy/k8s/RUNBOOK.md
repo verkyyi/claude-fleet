@@ -120,7 +120,22 @@ PVC 备用。394MB 的库约 15 秒。**不要**用 `kubectl cp` 直接拷 `ccqu
 （停写：`kubectl -n new-deploy scale deploy/ccquota-hub --replicas=0` 后用一个挂同一 PVC 的临时 pod
 `mv` 文件，再 scale 回 1）。这一步要管理员 kubeconfig，发布角色做不了。
 
-## 数据盘水位（#11641）
+### 库迁移
+
+编号迁移在 hub 启动时各跑一次，记在库里的 `hub_migrations` 表（`id`、`name`、`applied_at`、
+`detail` = 每张表删了 / 丢了多少行）。跑的那次启动会在日志里留一行：
+
+```bash
+kubectl -n new-deploy logs deploy/ccquota-hub -c ccquota | grep 'store: migration'
+```
+
+| 编号 | 名字 | 做什么 | 回滚 |
+|---|---|---|---|
+| 1 | `remove-company-business`（#1987） | 删 `usage_events` / `usage_hourly` / `accounts` / `subscription_plans` 等带 `source` 列的表里 **source = gateway / vendor_bill / voice** 的行（Claude、Codex 的行一行不动）；丢掉 `growth_facts`、`repo_*`、`share_links`、`finding_notices` 这些表；把 repo / growth 的上报令牌标成已退役 | 镜像换回迁移前的 tag + 用 `hub-deploy` 在这次发布前拍的快照恢复（上面「恢复」一节） |
+
+迁移没有反向脚本：回滚只走「旧镜像 + 快照」。删掉的公司业务数据只在那份快照里还有。
+
+
 
 **保留策略：盘里只留最近 2 份 `backup-*`，更早的挪到 `oss://haowan24-archive/ccquota-hub-backups/`**
 （私有桶、IA 存储；`SHA256SUMS.txt` 第一列是解压后 `.db` 的 sha256）。一条命令，先校验再删：

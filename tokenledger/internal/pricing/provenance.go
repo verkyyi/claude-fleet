@@ -4,8 +4,7 @@ import "github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 
 // ClaudePriceNote is the caveat the built-in Anthropic table carries.
 //
-// It exists as a named constant for the same reason OpenAIPriceNote and
-// GatewayPriceNote do: every surface showing this source's figure has to say
+// It exists as a named constant for the same reason OpenAIPriceNote does: every surface showing this source's figure has to say
 // what the figure is, and a note written inline on one surface is a note the
 // next surface forgets.
 const ClaudePriceNote = "Claude: API equivalent at " + RatesAsOf + " published rates. " +
@@ -17,10 +16,9 @@ const ClaudePriceNote = "Claude: API equivalent at " + RatesAsOf + " published r
 //
 // Not a disclaimer bolted onto a blended total — there is no blended total.
 // It says why the cost column has more than one number in it.
-const MixedSourceNote = "This scope spans more than one source, and cost_usd means a different thing " +
-	"in each: Claude and Codex figures are API-equivalent estimates for work billed by subscription, " +
-	"gateway figures are actual per-call charges. They are reported apart and never added. " +
-	"Real spend is subscription + gateway; the notional figure is not part of it."
+const MixedSourceNote = "This scope spans more than one source: Claude and Codex figures are each " +
+	"API-equivalent estimates at their own published rates, for work billed by subscription, and are " +
+	"reported apart. Real spend is the subscriptions; the notional figure is not part of it."
 
 // SourceProvenance is everything a surface must show beside ONE source's cost
 // figure: which source it is, which kind of money, when the rates behind it
@@ -46,20 +44,6 @@ func ProvenanceFor(source string) SourceProvenance {
 		p.RatesAsOf, p.Note = RatesAsOf, ClaudePriceNote
 	case model.SourceCodex:
 		p.RatesAsOf, p.Note = OpenAIRatesAsOf, OpenAIPriceNote
-	case model.SourceGateway:
-		p.RatesAsOf, p.Note = GatewayRatesAsOf, GatewayPriceNote
-	case model.SourceVendorBill:
-		// RatesAsOf stays empty on purpose: there is no rate table behind these
-		// rows, so there is no review date to state. Putting today's date here
-		// would claim a review that never happened; borrowing the gateway's
-		// would attribute these figures to rates that did not produce them.
-		// Each row's own billing period travels with it (TS + Model).
-		p.Note = VendorBillPriceNote
-	case model.SourceVoice:
-		// Same reason as the vendor bill above: no rate table, so no review
-		// date to state. The engine that served each session travels with the
-		// row (Model), and the charge, when there is one, came from elsewhere.
-		p.Note = VoicePriceNote
 	default:
 		p.Note = unknownSourceNoteEN
 	}
@@ -90,8 +74,7 @@ func Provenance(sources ...string) []SourceProvenance {
 // when it is not.
 //
 // This replaces the older "anything that is not Claude gets the Codex note"
-// test, which attached OpenAI's wording to gateway figures (the opposite of
-// true for a source that is billed) and to unfiltered ones (which have no
+// test, which attached OpenAI's wording to unfiltered figures (which have no
 // single basis at all).
 func Note(source string) string {
 	if source == "" {

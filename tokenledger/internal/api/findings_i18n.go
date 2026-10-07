@@ -59,14 +59,6 @@ var findingTitles = map[string]i18n.Text{
 		i18n.EN:   "live session {session} has {tokens} tokens in flight",
 		i18n.ZhCN: "实时会话 {session} 有 {tokens} token 正在处理中",
 	},
-	findings.TmplFreeAllowanceGone: {
-		i18n.EN:   "{model} has used its whole free monthly allowance ({used} of {allowance} tokens)",
-		i18n.ZhCN: "{model} 已经用完了它整个月的免费额度（{allowance} token 里用了 {used}）",
-	},
-	findings.TmplFreeAllowanceNear: {
-		i18n.EN:   "{model} is at {pct}% of its free monthly allowance ({used} of {allowance} tokens)",
-		i18n.ZhCN: "{model} 已经用掉免费额度的 {pct}%（{allowance} token 里用了 {used}）",
-	},
 	findings.TmplCredVaultLocked: {
 		i18n.EN:   "credential vault locked for {ago} — no machine is issued a credential",
 		i18n.ZhCN: "凭据库已锁 {ago} —— 没有任何机器能领到凭据",
@@ -125,16 +117,6 @@ var findingDetails = map[string]i18n.Text{
 	findings.TmplLiveRunaway: {
 		i18n.EN:   "{project}",
 		i18n.ZhCN: "{project}",
-	},
-	findings.TmplFreeAllowanceGone: {
-		i18n.EN: "Calls beyond the allowance are charged, and this build still reports them as free — " +
-			"its cost for this model is a floor, not a bill. Set a rate for it in --pricing.",
-		i18n.ZhCN: "超出额度的调用是要收钱的，而这个版本仍然把它们当免费报 —— " +
-			"这个模型的费用是个下界，不是账单。在 --pricing 里给它配一个费率。",
-	},
-	findings.TmplFreeAllowanceNear: {
-		i18n.EN:   "Past it the vendor charges, and this build would keep reporting the calls as free.",
-		i18n.ZhCN: "过了这条线厂商就开始收费，而这个版本还会继续把这些调用当免费报。",
 	},
 	findings.TmplCredVaultLocked: {
 		i18n.EN:   "{reason}",

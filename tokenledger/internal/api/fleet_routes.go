@@ -113,7 +113,7 @@ type RoutesResponse struct {
 
 // handleFleetRoutes serves control.RoutesPath: the machines the caller may
 // reach and every way in. Admitted like the relay: the operator's doors or a
-// WeCom session over HTTP (GET or POST), or a connection certificate proven by
+// GitHub session over HTTP (GET or POST), or a connection certificate proven by
 // a signed timestamp (POST RoutesRequest) — the one `fleet connect` holds.
 func (s *Server) handleFleetRoutes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {

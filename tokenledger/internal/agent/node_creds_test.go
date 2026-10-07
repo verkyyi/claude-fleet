@@ -262,7 +262,7 @@ func mode(t *testing.T, path string, want os.FileMode) {
 func TestCredCycleSetupTokenIsWrittenLikeAnyLease(t *testing.T) {
 	home := t.TempDir()
 	exp := time.Now().Add(365 * 24 * time.Hour).UTC().Truncate(time.Second)
-	body := fmt.Sprintf(`{"principal_id":"wecom-alice","credentials":[
+	body := fmt.Sprintf(`{"principal_id":"gh:1001","credentials":[
 	 {"provider":"claude","account":"icloud","kind":"setup_token","pool":true,"expires_at":%q,
 	  "access":{"access_token":"sk-ant-oat01-POOLTOKEN","scopes":["user:inference"],"expires_at":%q}}]}`,
 		exp.Format(time.RFC3339), exp.Format(time.RFC3339))

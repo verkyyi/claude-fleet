@@ -32,8 +32,8 @@ import (
 // target to the (machine, login) pairs of their ACTIVE accounts (another
 // person's worker is NOT_FOUND, as for every person), authorize checks their
 // grant, and the journal and the audit row carry their principal. The viewer
-// token, a WeCom session and a tailnet peer still work here too (an operator's
-// shell), as on every fleet door.
+// token and a GitHub session still work here too (an operator's shell), as on
+// every fleet door.
 
 // WriteRequest is the body of POST control.WritePath.
 type WriteRequest struct {
@@ -103,11 +103,9 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !id.Operator {
 		// A person: the fleet principal (FleetScope narrows the target to their
-		// own logins; the journal's actor is their principal), as a WeCom
+		// own logins; the journal's actor is their principal), as a GitHub
 		// sign-in sets it.
 		ctx = context.WithValue(withViewer(ctx, id.Principal), principalKey{}, id.Principal)
-	} else if login := strings.TrimPrefix(id.Actor, "tailnet:"); login != id.Actor {
-		ctx = withViewer(ctx, login)
 	}
 	out, err := s.CallFleetTool(r.WithContext(ctx), req.Tool, args)
 	writeFleetResult(w, r, out, err)

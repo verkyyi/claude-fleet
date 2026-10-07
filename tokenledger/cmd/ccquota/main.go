@@ -43,8 +43,6 @@ func main() {
 		err = runName(os.Args[2:])
 	case "budget":
 		err = runBudget(os.Args[2:])
-	case "share":
-		err = runShare(os.Args[2:])
 	case "badge":
 		err = runBadge(os.Args[2:])
 	case "team":
@@ -90,7 +88,6 @@ Usage:
   ccquota name   [flags]    List subscriptions, or name one permanently
   ccquota budget [flags]    Is there headroom to start more work? (--gate for
                             a scheduler: exit 0 proceed, 3 hold)
-  ccquota share  [flags]    Mint/list/revoke a redacted public link
   ccquota badge  [flags]    Render this hub's totals as an SVG badge (local,
                             no network) or as shields.io endpoint JSON
   ccquota team   [flags]    Allocate an endpoint's spend to a team

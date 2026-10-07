@@ -30,7 +30,7 @@ import (
 // Connection certificates (claude-fleet#1412).
 //
 // The hub is the fleet's SSH certificate authority. A person who has signed in
-// through WeCom gets a 12-hour user certificate for their own key, whose only
+// with GitHub gets a 12-hour user certificate for their own key, whose only
 // principal is their login (the one C4 opened for them on every machine), and
 // every machine trusts the CA (the admin agent installs it, node_sshca.go).
 // So nobody's key is copied to any machine, and a certificate that runs out
@@ -41,7 +41,7 @@ import (
 //   - `fleet login` (bin/fleet-login.py): the device-code
 //     flow. The client generates its key, POSTs the public half to
 //     /v1/fleet/login/start, draws the returned QR in the terminal, and polls
-//     /v1/fleet/login/poll. Scanning the QR in WeCom opens /fleet/login on
+//     /v1/fleet/login/poll. Scanning the QR opens /fleet/login on
 //     the hub, which signs the person in and asks them to confirm the code
 //     their terminal shows; the next poll carries the certificate.
 //   - the 连接 page (/connect): paste a public key, download the certificate.
@@ -301,7 +301,7 @@ type ConnectInfo struct {
 	CAFingerprint string         `json:"ca_fingerprint,omitempty"`
 	CertTTLSec    int            `json:"cert_ttl_sec"`
 	Login         string         `json:"login,omitempty"`
-	Signed        bool           `json:"signed_in"` // a WeCom person, not an operator door
+	Signed        bool           `json:"signed_in"` // a signed-in person, not an operator door
 	Machines      []FleetMachine `json:"machines"`
 	SSHConfig     string         `json:"ssh_config"`
 	KeyPath       string         `json:"key_path"`
@@ -311,7 +311,7 @@ type ConnectInfo struct {
 	Problem string            `json:"problem,omitempty"`
 	Recent  []store.FleetCert `json:"recent_certs"`
 	// InstallCommand is the one line a colleague runs (claude-fleet#1470);
-	// InstallReady says whether this hub serves it (a CA and WeCom sign-in).
+	// InstallReady says whether this hub serves it (a CA and GitHub sign-in).
 	InstallCommand string `json:"install_command"`
 	InstallReady   bool   `json:"install_ready"`
 }
@@ -372,7 +372,7 @@ func (s *Server) handleFleetCert(w http.ResponseWriter, r *http.Request) {
 	}
 	pid := s.ensurePerson(r)
 	if pid == "" {
-		httpError(w, http.StatusForbidden, "a certificate is issued to a person: sign in through WeCom")
+		httpError(w, http.StatusForbidden, "a certificate is issued to a person: sign in with GitHub")
 		return
 	}
 	var req struct {
@@ -561,7 +561,7 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "POST")
 		return
 	}
-	if s.SSHCA == nil || !s.SSO.ready() {
+	if s.SSHCA == nil || !s.GitHub.ready() {
 		http.NotFound(w, r)
 		return
 	}
@@ -653,9 +653,9 @@ func (s *Server) handleDevicePoll(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFleetLoginPage is what the QR opens. It sits behind viewerOnly; a
-// browser that is not signed in yet is sent to WeCom by viewerOnly, and the
-// code rides a short cookie so /enter can bring it back here. A browser that
-// IS signed in never passes /enter again, so the person is placed here too
+// browser that is not signed in yet is sent to /signin by viewerOnly, and the
+// code rides a short cookie so the GitHub callback can bring it back here. A
+// browser that IS signed in never passes the callback again, so the person is placed here too
 // (ensurePerson, claude-fleet#1472) — before the page reads their logins.
 func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 	if s.SSHCA == nil {
@@ -798,7 +798,7 @@ func (s *Server) approveDeviceLogin(r *http.Request, pid, code string, now time.
 }
 
 // rememberLoginCode is mounted in front of viewerOnly on /fleet/login: a
-// signed-out browser is about to be sent to WeCom and loses the query string
+// signed-out browser is about to be sent to /signin and loses the query string
 // on the way back, so the code waits in a short host-only cookie.
 func (s *Server) rememberLoginCode(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -813,7 +813,7 @@ func (s *Server) rememberLoginCode(next http.Handler) http.Handler {
 	})
 }
 
-// loginReturn is where /enter sends the browser after sign-in: back to the
+// loginReturn is where the GitHub callback sends the browser after sign-in: back to the
 // confirmation page when a fleet login is waiting, else "/". Only a fixed
 // path and a validated code — not a redirect target anyone can choose.
 func loginReturn(w http.ResponseWriter, r *http.Request) string {

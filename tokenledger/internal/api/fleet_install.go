@@ -24,7 +24,7 @@ import (
 //
 // Public on purpose, like the CA's public key: scripts anyone could read on
 // GitHub, carrying no credential. They are served only when the hub can
-// actually sign someone in without them having anything yet — a CA and WeCom
+// actually sign someone in without them having anything yet — a CA and GitHub
 // sign-in — because that is what the first `fleet` needs.
 
 // InstallCommand is the line people copy, for this hub.
@@ -33,7 +33,7 @@ func (s *Server) InstallCommand(r *http.Request) string {
 }
 
 func (s *Server) installReady() bool {
-	return s.SSHCA != nil && s.SSO.ready()
+	return s.SSHCA != nil && s.GitHub.ready()
 }
 
 // handleInstall serves GET /install: the installer, hub URL filled in.

@@ -152,7 +152,6 @@ func filterSince(evs []model.UsageEvent, since time.Time) []model.UsageEvent {
 // cost nothing and cannot be added by accident; see model.CostKind.
 type costs struct {
 	Notional     float64 `json:"notional_usd"`
-	Billed       float64 `json:"billed_usd"`
 	Unclassified float64 `json:"unclassified_usd,omitempty"`
 }
 
@@ -163,21 +162,14 @@ func (c *costs) add(e *model.UsageEvent) {
 	switch model.CostKind(e.Source) {
 	case model.CostNotional:
 		c.Notional += *e.CostUSD
-	case model.CostBilled:
-		c.Billed += *e.CostUSD
 	default:
 		c.Unclassified += *e.CostUSD
 	}
 }
 
-// text renders the row for a human. Billed money is named as such and only
-// shown when there is some -- a machine running Claude alone should not have
-// to read a column of zeroes to find its one figure.
+// text renders the row for a human.
 func (c costs) text() string {
 	out := fmt.Sprintf("$%.2f notional", c.Notional)
-	if c.Billed != 0 {
-		out += fmt.Sprintf(" + $%.2f billed", c.Billed)
-	}
 	if c.Unclassified != 0 {
 		out += fmt.Sprintf(" + $%.2f unclassified", c.Unclassified)
 	}

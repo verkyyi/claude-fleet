@@ -72,7 +72,7 @@ func TestFleetSessionsByCertificate(t *testing.T) {
 	h.srv.Store.AdoptAccount(p, "m5", time.Now())
 
 	now := time.Now()
-	good := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
+	good := k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
 	signed := func(c *ssh.Certificate, ns string, ts int64) SessionsRequest {
 		return SessionsRequest{Cert: string(ssh.MarshalAuthorizedKey(c)), TS: ts,
 			Sig: sshsig(t, k.user, ns, []byte(control.SessionsSigMessage(ts)))}
@@ -112,7 +112,7 @@ func TestFleetSessionsByCertificate(t *testing.T) {
 
 	// Someone with no account anywhere sees nothing — not someone else's.
 	h.srv.Store.AdoptPrincipal("wx-bob", "bob", "Bob", time.Now())
-	bob := k.cert(t, "wecom:wx-bob", []string{"bob"}, now.Add(-time.Minute), now.Add(time.Hour))
+	bob := k.cert(t, "person:wx-bob", []string{"bob"}, now.Add(-time.Minute), now.Add(time.Hour))
 	if code, out, raw := postSessions(t, h, nil, signed(bob, control.SessionsSigNamespace, now.Unix())); code != 200 || out["count"].(float64) != 0 || len(nodeRows(out)) != 0 {
 		t.Errorf("no account: HTTP %d %s, want 200 with nothing in it", code, raw)
 	}
@@ -168,7 +168,7 @@ func TestFleetSessionsByDeviceOwnRowsOnly(t *testing.T) {
 	}
 
 	a := newDevice(t)
-	a.scan(t, h, "Alice", "alices-mbp")
+	a.scan(t, h, pAlice, "alices-mbp")
 	code, out, raw := read(a)
 	if code != 200 {
 		t.Fatalf("alice's device: HTTP %d %s", code, raw)
@@ -197,11 +197,11 @@ func TestFleetSessionsByDeviceOwnRowsOnly(t *testing.T) {
 
 	// Bob, carol's person (a device scan needs an active login somewhere): his
 	// device sees carol's one session on m6 and nothing of verk's.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: "Bob", Hostname: "m6", Login: "carol"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "m6", Login: "carol"}); code != 200 {
 		t.Fatalf("adopt bob as carol: HTTP %d", code)
 	}
 	b := newDevice(t)
-	b.scan(t, h, "Bob", "bobs-laptop")
+	b.scan(t, h, pBob, "bobs-laptop")
 	code, out, raw = read(b)
 	if code != 200 || out["count"].(float64) != 1 {
 		t.Fatalf("bob's device: HTTP %d %s, want carol's one session", code, raw)

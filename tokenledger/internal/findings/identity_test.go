@@ -13,8 +13,7 @@ func everyRule() (Inputs, NowInputs) {
 		Sessions: append(sessions(10, 10, 10, 10), SessionStat{
 			SessionID: "big-session-id-0001", CWD: "/srv/proj/alpha", Model: "m",
 			Tokens: 150_000_000, Turns: 400, Duration: 6 * time.Hour}),
-		Models:         []ModelStat{{Model: "mystery-model", Tokens: 5_000, Unpriced: 7}},
-		FreeAllowances: []FreeAllowanceStat{{Model: "free-model", Tokens: 1_000_001, Allowance: 1_000_000}},
+		Models: []ModelStat{{Model: "mystery-model", Tokens: 5_000, Unpriced: 7}},
 		Critical: []AccountCritical{
 			{AccountUUID: "acct-a", Label: "Team A", Seconds: 3600, PrevSeconds: 0, Episodes: 2},
 		},

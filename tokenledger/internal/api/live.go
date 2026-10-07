@@ -222,10 +222,8 @@ type Snapshot struct {
 	StartedAt    time.Time `json:"started_at"`
 	EverReported bool      `json:"ever_reported"`
 
-	// USDPerHour is the notional burn rate; USDPerHourBilled is the metered
-	// one. See SessionCost below for why they are two fields.
-	USDPerHour       float64 `json:"usd_per_hour"`
-	USDPerHourBilled float64 `json:"usd_per_hour_billed"`
+	// USDPerHour is the notional burn rate.
+	USDPerHour float64 `json:"usd_per_hour"`
 
 	LinesAdded   int64 `json:"lines_added"`
 	LinesRemoved int64 `json:"lines_removed"`
@@ -239,15 +237,8 @@ type Snapshot struct {
 	// totals live in the store.
 	SessionTokens int64 `json:"session_tokens"`
 
-	// SessionCost and SessionCostBilled are the live picture's two kinds of
-	// money, kept apart for the same reason the stored ledger keeps them
-	// apart: Claude and Codex heartbeats carry a notional API-equivalent
-	// figure, and a pay-per-call source's would be an actual charge. Only
-	// notional sources report live today, so the billed field is normally
-	// zero — which is precisely why it exists. A single accumulator would
-	// have absorbed the first billed heartbeat without a word.
-	SessionCost       float64 `json:"session_cost_usd"`
-	SessionCostBilled float64 `json:"session_cost_billed_usd"`
+	// SessionCost is the live sessions' notional API-equivalent figure.
+	SessionCost float64 `json:"session_cost_usd"`
 
 	UnpricedSessions int `json:"unpriced_sessions"`
 
@@ -261,21 +252,14 @@ type Snapshot struct {
 
 const liveNote = "Claude statusLine heartbeats and Codex log observations. Codex is recent activity, not a continuous liveness guarantee. Session totals overlap the durable ledger and are never added to it."
 
-// addCost folds one live session's money into the snapshot, under the kind of
-// money it is.
+// addCost folds one live session's money into the snapshot.
 //
-// The live view is an overlapping counter that is already never added to the
-// stored ledger; this is the same rule one level down. A source with no cost
-// kind this build recognises is counted in neither total and left visible on
-// its own session row, rather than being guessed into one of them.
+// A source with no cost kind this build recognises is counted in no total and
+// left visible on its own session row, rather than being guessed into one.
 func (o *Snapshot) addCost(l LiveSession) {
-	switch model.CostKind(l.Source) {
-	case model.CostNotional:
+	if model.CostKind(l.Source) == model.CostNotional {
 		o.SessionCost += l.CostUSD
 		o.USDPerHour += l.USDPerHour
-	case model.CostBilled:
-		o.SessionCostBilled += l.CostUSD
-		o.USDPerHourBilled += l.USDPerHour
 	}
 }
 

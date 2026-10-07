@@ -95,7 +95,6 @@ var pageText = map[string]i18n.Text{
 		i18n.EN:   "claudefleet asks GitHub only who you are. It gets no access to your repositories or organizations.",
 		i18n.ZhCN: "claudefleet 只向 GitHub 了解你是谁，拿不到你的仓库和组织。",
 	},
-	"signin.wecom": {i18n.EN: "Sign in with WeCom instead", i18n.ZhCN: "改用企业微信登录"},
 	"signin.note.expired": {
 		i18n.EN:   "That sign-in took too long or was started in another tab. Try again.",
 		i18n.ZhCN: "这次登录太久了，或者是在另一个标签页里开始的。请再试一次。",
@@ -173,7 +172,7 @@ var pageText = map[string]i18n.Text{
 	"login.err.issue":  {i18n.EN: "Couldn't issue: {err}", i18n.ZhCN: "签发失败：{err}"},
 	"login.err.notyet": {i18n.EN: "Can't issue yet: {err}", i18n.ZhCN: "还不能签发：{err}"},
 	"login.err.noperson": {
-		i18n.EN:   "A connection certificate needs a personal sign-in (the operator token and a tailnet identity belong to no one).",
-		i18n.ZhCN: "领取连接证书需要用个人身份登录（运营者令牌与 tailnet 身份不对应任何人）。",
+		i18n.EN:   "A connection certificate needs a personal GitHub sign-in (the operator token belongs to no one).",
+		i18n.ZhCN: "领取连接证书需要用 GitHub 登录（运营者令牌不对应任何人）。",
 	},
 }

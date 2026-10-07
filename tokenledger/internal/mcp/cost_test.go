@@ -10,15 +10,15 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-// seedGatewayEvent puts real, per-call money next to the notional kind, so an
-// agent calling these tools is looking at both at once.
-func seedGatewayEvent(t *testing.T, st *store.Store) {
+// seedCodexEvent puts a Codex figure next to the Claude one, so an agent
+// calling these tools is looking at both sources at once.
+func seedCodexEvent(t *testing.T, st *store.Store) {
 	t.Helper()
 	c := 100.0
 	if _, _, err := st.InsertEvents([]model.UsageEvent{{
-		Source: model.SourceGateway, AccountUUID: "acct", EndpointID: "ep",
-		MessageUUID: "gw1", SessionID: "s-gw", TS: time.Now().UTC().Add(-time.Minute),
-		Model: "qwen3-max", OutputTokens: 500, CostUSD: &c, CWD: "/w",
+		Source: model.SourceCodex, AccountUUID: "acct", EndpointID: "ep",
+		MessageUUID: "cx1", SessionID: "s-cx", TS: time.Now().UTC().Add(-time.Minute),
+		Model: "gpt-5", OutputTokens: 500, CostUSD: &c, CWD: "/w",
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func costOf(t *testing.T, bucket map[string]any, source string) map[string]any {
 func TestUsageToolsReturnCostPerSource(t *testing.T) {
 	ts, st := newMCP(t)
 	seed(t, st, "acct", "ep", "/w", "u1", "u2")
-	seedGatewayEvent(t, st)
+	seedCodexEvent(t, st)
 
 	for _, tool := range []string{"usage_by_account", "usage_by_endpoint", "usage_by_project", "usage_by_source"} {
 		out := structured(t, call(t, ts, tool, map[string]any{"account": "all"}))
@@ -63,7 +63,7 @@ func TestUsageToolsReturnCostPerSource(t *testing.T) {
 		if len(buckets) == 0 {
 			t.Fatalf("%s returned no buckets: %+v", tool, out)
 		}
-		var claude, gateway float64
+		var claude, codex float64
 		for _, b := range buckets {
 			bucket := b.(map[string]any)
 			entries, ok := bucket["cost"].([]any)
@@ -85,16 +85,16 @@ func TestUsageToolsReturnCostPerSource(t *testing.T) {
 					if kind != model.CostNotional {
 						t.Errorf("%s calls claude money %q", tool, kind)
 					}
-				case model.SourceGateway:
-					gateway += m["cost_usd"].(float64)
-					if kind != model.CostBilled {
-						t.Errorf("%s calls gateway money %q, want billed", tool, kind)
+				case model.SourceCodex:
+					codex += m["cost_usd"].(float64)
+					if kind != model.CostNotional {
+						t.Errorf("%s calls codex money %q", tool, kind)
 					}
 				}
 			}
 		}
-		if claude != 2 || gateway != 100 {
-			t.Errorf("%s: claude=%v gateway=%v, want 2 and 100", tool, claude, gateway)
+		if claude != 2 || codex != 100 {
+			t.Errorf("%s: claude=%v codex=%v, want 2 and 100", tool, claude, codex)
 		}
 		// And the envelope says where each figure's rates come from.
 		if _, ok := out["pricing"].([]any); !ok {
@@ -109,10 +109,10 @@ func TestUsageToolsReturnCostPerSource(t *testing.T) {
 // usage_summary is the tool an agent reaches for when asked "what did this
 // cost", so it has to make the difference between an estimate and an invoice
 // impossible to miss.
-func TestUsageSummaryReportsBothKindsAndRealSpend(t *testing.T) {
+func TestUsageSummaryReportsNotionalAndRealSpend(t *testing.T) {
 	ts, st := newMCP(t)
 	seed(t, st, "acct", "ep", "/w", "u1", "u2")
-	seedGatewayEvent(t, st)
+	seedCodexEvent(t, st)
 	if err := st.SetPlanPrice(model.SubscriptionPlan{
 		Plan: "max", Source: model.SourceClaude, MonthlyCost: 200, Currency: "USD",
 		EffectiveFrom: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -121,32 +121,26 @@ func TestUsageSummaryReportsBothKindsAndRealSpend(t *testing.T) {
 	}
 
 	out := structured(t, call(t, ts, "usage_summary", map[string]any{"account": "all"}))
-	if out["cost_notional"].(float64) != 2 {
-		t.Errorf("cost_notional = %v, want 2", out["cost_notional"])
+	if out["cost_notional"].(float64) != 102 {
+		t.Errorf("cost_notional = %v, want 102 (claude 2 + codex 100)", out["cost_notional"])
 	}
-	if out["cost_billed"].(float64) != 100 {
-		t.Errorf("cost_billed = %v, want 100", out["cost_billed"])
+	if _, billed := out["cost_billed"]; billed {
+		t.Errorf("usage_summary still carries cost_billed: %+v", out)
 	}
 	summary := out["summary"].(map[string]any)
 	if _, blended := summary["cost_usd"]; blended {
 		t.Errorf("usage_summary still emits a blended cost_usd: %+v", summary)
 	}
-	if costOf(t, summary, model.SourceGateway)["kind"] != model.CostBilled {
-		t.Errorf("summary does not mark gateway money as billed: %+v", summary["cost"])
+	if costOf(t, summary, model.SourceCodex)["kind"] != model.CostNotional {
+		t.Errorf("summary does not mark codex money as notional: %+v", summary["cost"])
 	}
 
 	rs := out["real_spend"].(map[string]any)
-	if rs["gateway"].(float64) != 100 {
-		t.Errorf("real_spend.gateway = %v, want 100", rs["gateway"])
-	}
 	if rs["subscription"].(float64) <= 0 {
 		t.Fatalf("real_spend has no subscription term: %+v", rs)
 	}
-	if rs["total"].(float64) != rs["subscription"].(float64)+rs["gateway"].(float64) {
-		t.Errorf("real_spend.total is not its two terms: %+v", rs)
-	}
-	if rs["total"].(float64) == rs["subscription"].(float64)+rs["gateway"].(float64)+2 {
-		t.Error("the notional figure entered real_spend")
+	if rs["total"].(float64) != rs["subscription"].(float64) {
+		t.Errorf("real_spend.total is not its subscription term (the notional figure entered it?): %+v", rs)
 	}
 	if len(out["subscription_spend"].([]any)) == 0 {
 		t.Error("usage_summary reports no subscription spend")
@@ -159,12 +153,11 @@ func TestUsageSummaryReportsBothKindsAndRealSpend(t *testing.T) {
 func TestUsageToolsCostNoteFollowsTheSource(t *testing.T) {
 	ts, st := newMCP(t)
 	seed(t, st, "acct", "ep", "/w", "u1")
-	seedGatewayEvent(t, st)
+	seedCodexEvent(t, st)
 
 	for _, tc := range []struct{ source, want string }{
 		{model.SourceClaude, pricing.ClaudePriceNote},
 		{model.SourceCodex, pricing.OpenAIPriceNote},
-		{model.SourceGateway, pricing.GatewayPriceNote},
 	} {
 		out := structured(t, call(t, ts, "usage_summary", map[string]any{"account": "all", "source": tc.source}))
 		if got, _ := out["cost_note"].(string); got != tc.want {
@@ -181,14 +174,14 @@ func TestUsageToolsCostNoteFollowsTheSource(t *testing.T) {
 func TestUsageHistoryKeepsTheSplitThroughTheFold(t *testing.T) {
 	ts, st := newMCP(t)
 	seed(t, st, "acct", "ep", "/w", "u1", "u2")
-	seedGatewayEvent(t, st)
+	seedCodexEvent(t, st)
 
 	out := structured(t, call(t, ts, "usage_history", map[string]any{"account": "all", "granularity": "day"}))
 	series := out["series"].([]any)
 	if len(series) == 0 {
 		t.Fatalf("no series: %+v", out)
 	}
-	var claude, gateway float64
+	var claude, codex float64
 	for _, b := range series {
 		bucket := b.(map[string]any)
 		if _, blended := bucket["cost_usd"]; blended {
@@ -197,18 +190,18 @@ func TestUsageHistoryKeepsTheSplitThroughTheFold(t *testing.T) {
 		if c := costOf(t, bucket, model.SourceClaude); c != nil {
 			claude += c["cost_usd"].(float64)
 		}
-		if g := costOf(t, bucket, model.SourceGateway); g != nil {
-			gateway += g["cost_usd"].(float64)
+		if c := costOf(t, bucket, model.SourceCodex); c != nil {
+			codex += c["cost_usd"].(float64)
 		}
 	}
-	if claude != 2 || gateway != 100 {
-		t.Errorf("folded series: claude=%v gateway=%v, want 2 and 100", claude, gateway)
+	if claude != 2 || codex != 100 {
+		t.Errorf("folded series: claude=%v codex=%v, want 2 and 100", claude, codex)
 	}
 }
 
 // The descriptions are the only thing standing between an agent and a
 // confident sentence about money it misread, so pin the rule into them.
-func TestToolDescriptionsStateWhichFiguresAreBilled(t *testing.T) {
+func TestToolDescriptionsStateWhatTheFiguresAre(t *testing.T) {
 	specs := map[string]string{}
 	for _, s := range toolSpecs() {
 		specs[s.Name] = s.Description
@@ -221,60 +214,16 @@ func TestToolDescriptionsStateWhichFiguresAreBilled(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is no longer registered", name)
 		}
-		for _, want := range []string{"PER SOURCE", "NOTIONAL", "BILLED", "never be summed across sources"} {
+		for _, want := range []string{"PER SOURCE", "NOTIONAL", "Real spend is the subscription"} {
 			if !strings.Contains(d, want) {
 				t.Errorf("%s's description does not say %q:\n%s", name, want, d)
 			}
 		}
 	}
-	// The source chip must offer every source, or the one scope that makes a
-	// billed figure readable on its own stays unreachable.
+	// The source chip must offer every source.
 	chip := chipProps["source"].(map[string]any)
 	enum, _ := chip["enum"].([]string)
 	if len(enum) != len(model.Sources) {
 		t.Fatalf("source chip enum = %v, want every source in model.Sources (%v)", enum, model.Sources)
-	}
-}
-
-// The provider chip gained a third state (issue #134). Two things must hold at
-// once, and a regression in either is silent: the sentinel has to REACH the
-// filter through the same passthrough every chip uses, and the sentence that
-// says what a blank provider MEANS in a result must survive -- an agent that
-// loses it starts reading "" as a vendor called unknown.
-func TestChipsCarryTheUndeclaredSentinelWithoutLosingProviderSemantics(t *testing.T) {
-	s := &mcpServer{}
-	f, err := s.filter(map[string]any{"account": "all", "provider": store.Undeclared})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if f.Provider != store.Undeclared {
-		t.Errorf("provider = %q; the sentinel must reach store.Filter verbatim", f.Provider)
-	}
-	// Omitted is still no constraint. This is the distinction the sentinel was
-	// added to preserve, not to replace.
-	f, err = s.filter(map[string]any{"account": "all"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if f.Provider != "" {
-		t.Errorf("provider = %q; an omitted chip must place no constraint", f.Provider)
-	}
-
-	prov := chipProps["provider"].(map[string]any)["description"].(string)
-	for _, want := range []string{
-		"An empty value in a result means the reporting side declared none",
-		store.Undeclared,
-	} {
-		if !strings.Contains(prov, want) {
-			t.Errorf("the provider chip no longer says %q:\n%s", want, prov)
-		}
-	}
-	// The source chip is the one dimension deliberately left out: it is NOT
-	// NULL DEFAULT 'claude' and never blank, and its schema pins an enum that
-	// the sentinel is not a member of. Advertising a value the enum rejects
-	// would be a contradiction a strict client refuses.
-	src := chipProps["source"].(map[string]any)["description"].(string)
-	if strings.Contains(src, store.Undeclared) {
-		t.Errorf("the source chip must not advertise the sentinel:\n%s", src)
 	}
 }

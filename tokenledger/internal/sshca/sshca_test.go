@@ -37,7 +37,7 @@ func userKey(t *testing.T) (ssh.PublicKey, string) {
 }
 
 // The certificate says exactly what the issue fixes: the person's login as
-// its only principal, twelve hours, a key id naming the WeCom userid — and an
+// its only principal, twelve hours, a key id naming the person — and an
 // sshd trusting the CA admits it as that login and nobody else.
 func TestSignPrincipalsValidityKeyID(t *testing.T) {
 	ca := newCA(t)
@@ -64,7 +64,7 @@ func TestSignPrincipalsValidityKeyID(t *testing.T) {
 	if after := time.Unix(int64(c.ValidAfter), 0); !after.Before(now) || now.Sub(after) > 2*time.Minute {
 		t.Fatalf("valid_after %v: want a small back-date from %v", after, now)
 	}
-	if c.KeyId != "wecom:WangXiaoMing" || iss.KeyID != c.KeyId {
+	if c.KeyId != "person:WangXiaoMing" || iss.KeyID != c.KeyId {
 		t.Fatalf("key id %q", c.KeyId)
 	}
 	if len(c.CriticalOptions) != 0 {

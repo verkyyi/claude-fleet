@@ -4,18 +4,11 @@ import "testing"
 
 // The axis exists because "no window" and "no reading" are different facts, and
 // the card that asks "am I about to hit the wall?" may only list accounts that
-// can HAVE a wall. A gateway caller, a voice application and a vendor invoice
-// are billed per call: there is no ceiling, no percentage and no reset.
+// can HAVE a wall.
 func TestHasQuotaWindow_OnlySubscriptionsHaveACeiling(t *testing.T) {
 	for _, src := range []string{SourceClaude, SourceCodex} {
 		if !HasQuotaWindow(src) {
 			t.Errorf("%s is a subscription with a real quota pool; it must have a window", src)
-		}
-	}
-	for _, src := range []string{SourceGateway, SourceVendorBill, SourceVoice} {
-		if HasQuotaWindow(src) {
-			t.Errorf("%s is billed per call; claiming it has a quota window is how "+
-				"a caller ends up on the wall card saying \"no reading available\"", src)
 		}
 	}
 }
@@ -44,7 +37,6 @@ func TestHasQuotaWindow_UnknownSourceHasNone(t *testing.T) {
 func TestHasQuotaWindow_CoversEverySource(t *testing.T) {
 	want := map[string]bool{
 		SourceClaude: true, SourceCodex: true,
-		SourceGateway: false, SourceVendorBill: false, SourceVoice: false,
 	}
 	for _, src := range Sources {
 		w, ok := want[src]

@@ -173,7 +173,7 @@ TrustedUserCAKeys %s
 	if err := try(opKey, ""); err != nil {
 		t.Fatalf("the operator's plain key no longer gets in: %v", err)
 	}
-	if !strings.Contains(log.String(), "wecom:Tester") {
+	if !strings.Contains(log.String(), "person:Tester") {
 		t.Errorf("sshd's log does not name the key id: %s", log.String())
 	}
 }

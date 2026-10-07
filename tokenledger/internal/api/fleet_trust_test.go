@@ -82,7 +82,7 @@ func TestTrustOffAddsNothing(t *testing.T) {
 	}
 	var got NodeCredentialsResponse
 	_ = json.Unmarshal(body, &got)
-	if got.PrincipalID != "wecom-alice" || len(got.Credentials) != 2 {
+	if got.PrincipalID != pAlice || len(got.Credentials) != 2 {
 		t.Fatalf("lease = %+v", got)
 	}
 	for _, c := range got.Credentials {
@@ -135,7 +135,7 @@ func TestTrustUntrustedRefusedAndAudited(t *testing.T) {
 	}
 
 	// alice gets a login on a new machine, m9, after the migration ran.
-	p, err := h.srv.Store.Principal("wecom-alice")
+	p, err := h.srv.Store.Principal(pAlice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestTrustUntrustedRefusedAndAudited(t *testing.T) {
 	for _, a := range rows {
 		if a.Action == store.CredDeny && strings.HasPrefix(a.Detail, LeaseUntrusted) {
 			denies++
-			if a.PrincipalID != "wecom-alice" || a.EndpointID == "" {
+			if a.PrincipalID != pAlice || a.EndpointID == "" {
 				t.Fatalf("deny row lacks who / which node: %+v", a)
 			}
 		}
@@ -226,8 +226,8 @@ func TestTrustClientCertNeverLeases(t *testing.T) {
 			t.Fatalf("%s leased: %d %s", name, code, body)
 		}
 	}
-	enableSSO(h)
-	if code, body := asPerson(t, h, http.MethodPost, "/v1/node/credentials", "wecom-alice", nil); code != http.StatusUnauthorized {
+	enablePeople(t, h, pAlice, pBob, pCarol)
+	if code, body := asPerson(t, h, http.MethodPost, "/v1/node/credentials", pAlice, nil); code != http.StatusUnauthorized {
 		t.Fatalf("a signed-in person leased: %d %s", code, body)
 	}
 }
@@ -237,9 +237,9 @@ func TestTrustClientCertNeverLeases(t *testing.T) {
 // migration stamp is not a setting anyone writes.
 func TestTrustSettingOperatorOnly(t *testing.T) {
 	h, m4, _ := newVaultHarness(t)
-	enableSSO(h)
+	enablePeople(t, h, pAlice, pBob, pCarol)
 	body, _ := json.Marshal(map[string]string{"key": NodeTrustPrefix + "m9", "value": TrustTrusted})
-	if code, _ := asPerson(t, h, http.MethodPut, "/v1/fleet/settings", "wecom-alice", body); code != http.StatusForbidden {
+	if code, _ := asPerson(t, h, http.MethodPut, "/v1/fleet/settings", pAlice, body); code != http.StatusForbidden {
 		t.Fatalf("a person set trust: HTTP %d, want 403", code)
 	}
 	req, _ := http.NewRequest(http.MethodPut, h.http.URL+"/v1/fleet/settings", bytes.NewReader(body))

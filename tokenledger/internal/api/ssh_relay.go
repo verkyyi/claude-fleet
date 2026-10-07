@@ -22,8 +22,8 @@ import (
 	"github.com/coder/websocket/wsjson"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -40,8 +40,8 @@ import (
 // end inside it: the hub sees ciphertext, and sshd still decides who logs in.
 //
 // What the hub does decide is who may ask. A relay is admitted for:
-//   - the operator: the viewer token, a tailnet identity — any machine;
-//   - a person: a WeCom session (cookie, or the session token as a bearer) or
+//   - the operator: the viewer token — any machine;
+//   - a person: a GitHub session (cookie, or the session token as a bearer) or
 //     an SSH user certificate signed by the hub's CA proven by a signature
 //     over a fresh challenge — only to a machine where the hub opened them a
 //     login, and only while that login is active.
@@ -172,7 +172,7 @@ func (t *sshRelayTable) open() int {
 }
 
 // sshRelayHTTPIdentity admits a request on what it carries over HTTP: the
-// operator's doors, or a WeCom session as a cookie or a bearer. ok=false
+// operator's doors, or a GitHub session as a cookie or a bearer. ok=false
 // means it carried nothing this hub accepts — the caller may still prove a
 // certificate in-band.
 func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) {
@@ -185,8 +185,13 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 	if c, err := r.Cookie("ccquota_token"); err == nil && constantTimeEqual(c.Value, s.ViewerToken) {
 		return sshRelayIdentity{Operator: true, Actor: "operator"}, true
 	}
-	// A GitHub person (claude-fleet#1984), on the list right now.
-	if sess, id, ok := s.githubSession(r); ok {
+	// A GitHub person (claude-fleet#1984), on the list right now — the
+	// session as a cookie, or (a CLI holds no cookie jar) as a bearer.
+	sess, id, ok := s.githubSession(r)
+	if !ok {
+		sess, id, ok = s.githubSessionValue(bearer(r))
+	}
+	if ok {
 		if role, err := s.githubRole(id); err == nil && role == roleAdmin {
 			// An admin sees every machine, as the operator's doors do
 			// (claude-fleet#1985).
@@ -194,20 +199,6 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 		} else if err == nil && role != "" {
 			return sshRelayIdentity{Principal: sess.UID, Actor: sess.UID}, true
 		}
-	}
-	if sub, ok := s.ssoViewer(r); ok {
-		return sshRelayIdentity{Principal: sub, Actor: sub}, true
-	}
-	// A CLI holds the session token, not a browser cookie jar.
-	if s.SSO.ready() {
-		if tok := bearer(r); tok != "" {
-			if sess, err := authz.VerifySession(tok, s.SSO.SessionSecret, time.Now()); err == nil {
-				return sshRelayIdentity{Principal: sess.Principal(), Actor: sess.Principal()}, true
-			}
-		}
-	}
-	if login, ok := s.Tailnet.Lookup(r.RemoteAddr); ok {
-		return sshRelayIdentity{Operator: true, Actor: "tailnet:" + login}, true
 	}
 	return sshRelayIdentity{}, false
 }
@@ -601,8 +592,7 @@ func (s *Server) sshRelayCertChallenge(ctx context.Context, conn *websocket.Conn
 // for one is never accepted by the other.
 //
 // The certificate must be a user certificate signed by one of SSHRelayCA, valid
-// now, whose key id is the person's WeCom userid (the principal; a
-// "<scheme>:" prefix is allowed) and whose principals include the login the
+// now, whose key id names the person (sshca.KeyIDPrefix + their principal) and whose principals include the login the
 // hub minted for them — so a certificate for one person can never be read as
 // another's, even if its key id were spoofed by a compromised signer of a
 // different scheme.
@@ -632,12 +622,7 @@ func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce, namespace string,
 		return bad("not signed by this hub")
 	}
 	checker := ssh.CertChecker{Clock: func() time.Time { return now }}
-	// Only the scheme is cut: a GitHub person's id is itself "gh:<id>", so
-	// "wecom:gh:123" names gh:123 (claude-fleet#2010), never 123.
-	pid := cert.KeyId
-	if scheme, rest, ok := strings.Cut(pid, ":"); ok && scheme != githubPrincipalPrefix[:len(githubPrincipalPrefix)-1] {
-		pid = rest
-	}
+	pid := sshca.PrincipalOfKeyID(cert.KeyId)
 	p, err := s.Store.Principal(pid)
 	if err != nil {
 		return bad("its key id names no one this hub knows")

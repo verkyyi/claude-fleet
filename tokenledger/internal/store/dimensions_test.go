@@ -32,7 +32,7 @@ func TestDimensionsMatchesTheColumnWhitelist(t *testing.T) {
 	// which is the point at which someone notices the slice.
 	for _, d := range []Dimension{
 		BySource, ByAccount, ByEndpoint, ByProject, BySession, ByModel,
-		ByProvider, ByBranch, ByUser, ByTeam, ByEffort, ByEntrypoint,
+		ByBranch, ByUser, ByTeam, ByEffort, ByEntrypoint,
 	} {
 		if !seen[d] {
 			t.Errorf("column() accepts %q but Dimensions does not list it", d)

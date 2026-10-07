@@ -58,13 +58,11 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		// cost_usd beside it. A single figure here would have to answer "which
 		// kind of money", and over a scope spanning sources there is no answer.
 		"cost": sum.Cost,
-		// The two folds that mean something, named for what they mean. Their
-		// sum is not a figure this hub reports anywhere.
+		// The fold that means something, named for what it means.
 		"cost_notional": sum.Cost.Notional(),
-		"cost_billed":   sum.Cost.Billed(),
 		// The only total that is money owed.
 		"subscription_spend": nonNilSpend(plans),
-		"real_spend":         RealSpendOver(sum.Cost, plans),
+		"real_spend":         RealSpendOver(plans),
 		"real_spend_note":    RealSpendNoteIn(localeOf(r)),
 		// Provenance per source: rate date and the note each figure carries.
 		// One entry when the scope is filtered to a source, every known source
@@ -98,10 +96,9 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// PlansForSource narrows subscription spend to the scope's source. A gateway-
-// scoped page must not show a Claude plan's invoice next to its own charges:
-// the gateway has no subscription, and the honest answer to "what does this
-// source cost" is its metered bill alone.
+// PlansForSource narrows subscription spend to the scope's source. A
+// Codex-scoped page must not show a Claude plan's invoice: the honest answer
+// to "what does this source cost" is its own subscriptions alone.
 func PlansForSource(in []store.SubscriptionSpend, source string) []store.SubscriptionSpend {
 	if source == "" {
 		return in

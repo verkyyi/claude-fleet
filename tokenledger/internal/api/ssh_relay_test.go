@@ -26,7 +26,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -184,9 +183,11 @@ func sshRelayDial(t *testing.T, h *harness, node string, auth func(http.Header),
 
 func asOperator(hdr http.Header) { hdr.Set("Authorization", "Bearer "+viewerToken) }
 
-func asSession(sub string) func(http.Header) {
+// asSession presents principal's GitHub session as a bearer, the way a CLI
+// holds it.
+func asSession(principal string) func(http.Header) {
 	return func(hdr http.Header) {
-		hdr.Set("Authorization", "Bearer "+authz.SignSession(sub, ssoSessionKey, time.Now(), time.Hour))
+		hdr.Set("Authorization", "Bearer "+personSession(principal, ""))
 	}
 }
 
@@ -256,26 +257,26 @@ func TestRelaySSHTenMegabytes(t *testing.T) {
 // only a machine where they hold an active login.
 func TestRelayOnlyYourOwnMachines(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
+	enablePeople(t, h, pAlice, pBob)
 	host, _ := startSSHRelayAgent(t, h, "m4", testSSHD(t))
 
 	if _, code := sshRelayDial(t, h, host, nil, nil); code != "HTTP 401" {
 		t.Fatalf("no credential: %s, want HTTP 401", code)
 	}
-	if _, code := sshRelayDial(t, h, host, asSession("Bob"), nil); code != "NOT_FOUND" {
+	if _, code := sshRelayDial(t, h, host, asSession(pBob), nil); code != "NOT_FOUND" {
 		t.Fatalf("a person with no login there: %s, want NOT_FOUND", code)
 	}
-	p, err := h.srv.Store.AdoptPrincipal("Alice", "alice", "Alice", time.Now())
+	p, err := h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := h.srv.Store.AdoptAccount(p, host, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, code := sshRelayDial(t, h, "m9", asSession("Alice"), nil); code != "NOT_FOUND" {
+	if _, code := sshRelayDial(t, h, "m9", asSession(pAlice), nil); code != "NOT_FOUND" {
 		t.Fatalf("someone else's machine: %s, want NOT_FOUND", code)
 	}
-	conn, code := sshRelayDial(t, h, host, asSession("Alice"), nil)
+	conn, code := sshRelayDial(t, h, host, asSession(pAlice), nil)
 	if conn == nil {
 		t.Fatalf("Alice to her own machine refused: %s", code)
 	}
@@ -291,14 +292,14 @@ func TestRelayOnlyYourOwnMachines(t *testing.T) {
 	waitFor(t, 5*time.Second, "Alice's last relay released", func() bool {
 		h.srv.sshRelays.mu.Lock()
 		defer h.srv.sshRelays.mu.Unlock()
-		return h.srv.sshRelays.perUser["Alice"] == 0
+		return h.srv.sshRelays.perUser[pAlice] == 0
 	})
 	h.srv.SSHRelayMaxPerUser = 1
-	c1, _ := sshRelayDial(t, h, host, asSession("Alice"), nil)
+	c1, _ := sshRelayDial(t, h, host, asSession(pAlice), nil)
 	if c1 == nil {
 		t.Fatal("first relay refused")
 	}
-	if _, code := sshRelayDial(t, h, host, asSession("Alice"), nil); code != "TOO_MANY" {
+	if _, code := sshRelayDial(t, h, host, asSession(pAlice), nil); code != "TOO_MANY" {
 		t.Fatalf("second concurrent relay: %s, want TOO_MANY", code)
 	}
 	c1.Close()
@@ -404,12 +405,13 @@ func TestRelayCertificate(t *testing.T) {
 	k := newCertKit(t)
 	h.srv.SSHRelayCA = []ssh.PublicKey{k.ca.PublicKey()}
 	host, _ := startSSHRelayAgent(t, h, "m4", testSSHD(t))
-	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", time.Now())
+	p, _ := h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
 	h.srv.Store.AdoptAccount(p, host, time.Now())
 
 	now := time.Now()
-	// The key id as #1412's signer writes it: "wecom:<userid>".
-	good := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
+	// The key id as #1412's signer writes it: "person:gh:<id>" — the
+	// principal keeps its own ':'.
+	good := k.cert(t, sshca.KeyIDPrefix+pAlice, []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
 	answer := func(c *ssh.Certificate, signer ssh.Signer, ns string) func(string) control.SSHRelayHello {
 		return func(nonce string) control.SSHRelayHello {
 			return control.SSHRelayHello{Type: "auth", Cert: string(ssh.MarshalAuthorizedKey(c)), Sig: sshsig(t, signer, ns, []byte(nonce))}
@@ -426,8 +428,8 @@ func TestRelayCertificate(t *testing.T) {
 	}
 	cl.Close()
 	rows, _ := h.srv.Store.SSHRelays(10)
-	if len(rows) == 0 || rows[0].Actor != "wx-alice" {
-		t.Fatalf("audit names %+v, want wx-alice", rows)
+	if len(rows) == 0 || rows[0].Actor != pAlice {
+		t.Fatalf("audit names %+v, want %s", rows, pAlice)
 	}
 
 	_, other, _ := ed25519.GenerateKey(rand.Reader)
@@ -437,12 +439,12 @@ func TestRelayCertificate(t *testing.T) {
 		node   string
 		answer func(string) control.SSHRelayHello
 	}{
-		"expired":        {host, answer(k.cert(t, "wx-alice", []string{"alice"}, now.Add(-13*time.Hour), now.Add(-time.Hour)), k.user, control.SSHRelaySigNamespace)},
-		"foreign CA":     {host, answer(foreign.cert(t, "wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(time.Hour)), foreign.user, control.SSHRelaySigNamespace)},
+		"expired":        {host, answer(k.cert(t, sshca.KeyIDPrefix+pAlice, []string{"alice"}, now.Add(-13*time.Hour), now.Add(-time.Hour)), k.user, control.SSHRelaySigNamespace)},
+		"foreign CA":     {host, answer(foreign.cert(t, sshca.KeyIDPrefix+pAlice, []string{"alice"}, now.Add(-time.Minute), now.Add(time.Hour)), foreign.user, control.SSHRelaySigNamespace)},
 		"other key":      {host, answer(good, otherSigner, control.SSHRelaySigNamespace)},
 		"wrong ns":       {host, answer(good, k.user, "git")},
-		"not her login":  {host, answer(k.cert(t, "wx-alice", []string{"bob"}, now.Add(-time.Minute), now.Add(time.Hour)), k.user, control.SSHRelaySigNamespace)},
-		"unknown person": {host, answer(k.cert(t, "wx-carol", []string{"carol"}, now.Add(-time.Minute), now.Add(time.Hour)), k.user, control.SSHRelaySigNamespace)},
+		"not her login":  {host, answer(k.cert(t, sshca.KeyIDPrefix+pAlice, []string{"bob"}, now.Add(-time.Minute), now.Add(time.Hour)), k.user, control.SSHRelaySigNamespace)},
+		"unknown person": {host, answer(k.cert(t, sshca.KeyIDPrefix+pCarol, []string{"carol"}, now.Add(-time.Minute), now.Add(time.Hour)), k.user, control.SSHRelaySigNamespace)},
 	} {
 		if _, code := sshRelayDial(t, h, tc.node, nil, tc.answer); code != "UNAUTHORIZED" {
 			t.Errorf("%s: %s, want UNAUTHORIZED", name, code)

@@ -172,14 +172,13 @@ func TestSpendByIssue_LimitTruncatesRowsNotTotals(t *testing.T) {
 	}
 }
 
-// Cost comes back split, and the two kinds of money stay apart even when one
-// issue carries both.
+// Cost comes back split by source even when one issue carries both.
 func TestSpendByIssue_KeepsSourcesApart(t *testing.T) {
 	s := newStore(t)
 	seedAccount(t, s, "acc", "ep")
 	seedIssueSpend(t, s,
 		evSpend("acc", "ep", "u1", "issue-57", "claude", 10),
-		evSpend("acc", "ep", "u2", "issue-57", "gateway", 10),
+		evSpend("acc", "ep", "u2", "issue-57", "codex", 10),
 	)
 
 	page, err := s.SpendByIssue(spendWindow(), 0)
@@ -193,12 +192,9 @@ func TestSpendByIssue_KeepsSourcesApart(t *testing.T) {
 	if !ok || claude.Events != 1 {
 		t.Errorf("claude = %+v, want one event", claude)
 	}
-	gw, ok := page.Issues[0].Cost.Of("gateway")
-	if !ok || gw.Events != 1 {
-		t.Errorf("gateway = %+v, want one event", gw)
-	}
-	if claude.Kind == gw.Kind {
-		t.Errorf("claude and gateway both report kind %q; notional and billed money must not read alike", claude.Kind)
+	codex, ok := page.Issues[0].Cost.Of("codex")
+	if !ok || codex.Events != 1 {
+		t.Errorf("codex = %+v, want one event", codex)
 	}
 }
 
@@ -262,34 +258,6 @@ func TestIssueLifetimeSpend_RefusesTheEmptyAccount(t *testing.T) {
 	got, err := s.IssueLifetimeSpend("", "", nil)
 	if err != nil || len(got) != 0 {
 		t.Errorf("IssueLifetimeSpend(\"\", nil) = %v, %v; want an empty map and no error", got, err)
-	}
-}
-
-// The join back from the spend side: the numbers come from branch names, and
-// the backlog query has to answer for exactly those.
-func TestRepoIssues_FilterByNumbers(t *testing.T) {
-	s := newStore(t)
-	now := time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)
-	if _, err := s.UpsertRepoSnapshot(model.RepoSnapshot{
-		Repo: "o/r", ObservedAt: now,
-		Issues: []model.RepoIssue{
-			{Number: 57, Title: "seam", State: model.RepoStateOpen, CreatedAt: now.AddDate(0, 0, -3)},
-			{Number: 58, Title: "axis", State: model.RepoStateOpen, CreatedAt: now.AddDate(0, 0, -2)},
-			{Number: 59, Title: "other", State: model.RepoStateOpen, CreatedAt: now.AddDate(0, 0, -1)},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	rows, err := s.RepoIssues(RepoIssueFilter{Repo: "o/r", Numbers: []int64{57, 59, 4059}, Now: now})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want 2 (#4059 is not in this repo and is simply absent)", len(rows))
-	}
-	if rows[0].Number != 57 || rows[1].Number != 59 {
-		t.Errorf("got #%d, #%d; want #57, #59 oldest first", rows[0].Number, rows[1].Number)
 	}
 }
 

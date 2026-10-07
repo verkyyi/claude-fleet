@@ -13,8 +13,8 @@ import (
 // Admin and user see different hubs (claude-fleet#1985, EPIC #1982 C3).
 //
 // An admin — a GitHub person CCQUOTA_GITHUB_ADMINS names, or the operator's
-// shared doors (the viewer token, a tailnet peer) — sees and runs
-// everything. A user — a GitHub person on the list, or a WeCom person — sees
+// shared door (the viewer token) — sees and runs everything. A user — a
+// GitHub person on the list — sees
 // only their own: the usage, sessions and live rows whose os_user is the
 // machine login the hub knows as theirs, their own devices, and the fleet
 // through FleetScope. Subscriptions, machines, join codes, maintenance, SPOT
@@ -43,7 +43,7 @@ const (
 // added to Handler without a row here fails roles_test.go.
 var routeAccess = map[string]string{
 	// The way in, and what a signed-out machine must reach.
-	"/enter": accessPublic, "/logout": accessPublic, "/signin": accessPublic,
+	"/logout": accessPublic, "/signin": accessPublic,
 	"/auth/github/start": accessPublic, "/auth/github/callback": accessPublic,
 	"/healthz": accessPublic, "/version": accessPublic,
 	"/install": accessPublic, "/install/": accessPublic,
@@ -53,8 +53,7 @@ var routeAccess = map[string]string{
 	"/v1/fleet/login/start": accessPublic, "/v1/fleet/login/poll": accessPublic,
 
 	// Their own credential, checked by the handler.
-	"/v1/ingest": accessSelf, "/v1/ingest/repo": accessSelf, "/v1/ingest/growth": accessSelf,
-	"/v1/growth/latest": accessSelf, "/v1/live/report": accessSelf,
+	"/v1/ingest": accessSelf, "/v1/live/report": accessSelf,
 	"/v1/collectors/quota-lease": accessSelf,
 	// The onboarding drill (claude-fleet#2010): each request signed by the
 	// inviting machine, the drill person's certificate or its approve code.
@@ -80,7 +79,6 @@ var routeAccess = map[string]string{
 	"/v1/fleet/session-cred":    accessSelf, "/v1/fleet/session-cred/": accessSelf,
 	control.SSHRelayPath: accessSelf, control.SSHRelayDataPath: accessSelf,
 	control.RoutesPath: accessSelf,
-	"/v1/share":        accessSelf, "/share": accessSelf, "/share/": accessSelf,
 
 	// An admin's: subscriptions, machines, join codes, SPOT, credentials,
 	// audits, settings, the operator's own analytics.
@@ -95,15 +93,12 @@ var routeAccess = map[string]string{
 	"/v1/limits": accessAdmin, "/v1/limits/history": accessAdmin, "/v1/quota/history": accessAdmin,
 	"/v1/endpoints": accessAdmin, "/v1/account-switches": accessAdmin, "/v1/endpoint-accounts": accessAdmin,
 	"/v1/findings": accessAdmin, "/v1/findings/mutes": accessAdmin,
-	"/v1/repos": accessAdmin, "/v1/repo/flow": accessAdmin, "/v1/repo/issues": accessAdmin,
-	"/v1/repo/cost": accessAdmin, "/v1/repo/human-debt": accessAdmin,
 	"/v1/access": accessAdmin, "/access": accessAdmin, "/access/": accessAdmin,
-	"/growth": accessAdmin, "/growth/": accessAdmin,
 	"/badge/": accessAdmin, "/embed/": accessAdmin,
 
 	// A user's own: scoped to their machine login, their principal, or
 	// FleetScope.
-	"/": accessUser, "/v1/me": accessUser, "/v1/fx": accessUser,
+	"/": accessUser, "/v1/me": accessUser,
 	"/v1/usage": accessUser, "/v1/history": accessUser, "/v1/summary": accessUser,
 	"/v1/sessions": accessUser, "/v1/sessions/": accessUser,
 	"/v1/live": accessUser, "/v1/live/stream": accessUser,
@@ -141,7 +136,7 @@ const noLogin = "\x00no machine login"
 var errNoPerson = errors.New("could not read who you are")
 
 // machineLoginOf is the OS login the hub knows as principal's: a GitHub
-// user's machine_login (set by an admin), a WeCom person's minted login.
+// user's machine_login (set by an admin), else the login minted for them.
 // "" when there is none yet.
 func (s *Server) machineLoginOf(principal string) (string, error) {
 	if s.Store == nil || principal == "" {
@@ -214,8 +209,7 @@ func seesAll(r *http.Request) bool { return roleOf(r.Context()) != roleUser }
 // and the rest are an admin's, not something a colleague can read or widen
 // for themselves. It lets through an admin (a GitHub person
 // CCQUOTA_GITHUB_ADMINS names) and the operator's shared doors (the viewer
-// token, a tailnet peer), and refuses everyone else roleOf calls a user — a
-// GitHub user, a WeCom person (EPIC #1982 rule 3). Each refusal lands in the
+// token), and refuses everyone else roleOf calls a user (EPIC #1982 rule 3). Each refusal lands in the
 // fleet audit. Mounted INSIDE viewerOnly, so it only ever sees an
 // already-admitted request.
 func (s *Server) adminOnly(next http.Handler) http.Handler {

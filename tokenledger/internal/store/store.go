@@ -72,6 +72,10 @@ func Open(path string) (*Store, error) {
 		write.Close()
 		return nil, err
 	}
+	if err := runMigrations(write); err != nil {
+		write.Close()
+		return nil, err
+	}
 	// Fills issue_number wherever the stored rule version is not the current
 	// one: a database that just acquired the column, or a changed rule. Reads
 	// only git_branch, so it never needs raw events retention has pruned.
@@ -119,7 +123,6 @@ func migrate(db *sql.DB) error {
 		{"usage_events", "source", "TEXT NOT NULL DEFAULT 'claude'"},
 		{"usage_events", "provider", "TEXT NOT NULL DEFAULT ''"},
 		{"endpoints", "kind", "TEXT NOT NULL DEFAULT 'agent'"},
-		{"growth_facts", "okr_kill_switch_date", "TEXT NOT NULL DEFAULT ''"},
 		// Nullable with no default: NULL is "the branch did not say", which is
 		// the correct state for every row written before the column existed,
 		// and ensureIssueNumbers fills in the ones whose branch does say.
@@ -384,11 +387,6 @@ type Endpoint struct {
 }
 
 // Enroll registers a new endpoint and stores only the hash of its token.
-//
-// The enrollment is born an agent. Every nightly job that is not one says so
-// later, on its first push (MarkRepoShipper, MarkGrowthShipper) -- which works
-// because a shipper pushes. A credential that only ever READS has no such
-// moment, so it has to be born with its kind: see EnrollKind.
 func (s *Store) Enroll(endpointID, label, tokenHash string) error {
 	return s.EnrollKind(endpointID, label, tokenHash, "agent")
 }
@@ -412,8 +410,8 @@ func (s *Store) EnrollKind(endpointID, label, tokenHash, kind string) error {
 	return nil
 }
 
-// EndpointKind reports what an enrollment is: "agent", "repo_shipper",
-// "growth_shipper", "growth_reader".
+// EndpointKind reports what an enrollment is: "agent", or a retired
+// shipper kind migration 1 left on the row.
 //
 // Deliberately its own query rather than a field on Endpoint: the kind gates
 // access to the revenue ledger, and a value that rides along inside a struct
@@ -437,7 +435,7 @@ func (s *Store) EndpointKind(endpointID string) (string, error) {
 // ride along inside a struct a dozen read paths share, because that is how an
 // authorisation gate silently widens. A count is not a kind attached to an
 // endpoint — no caller can decide anything about one endpoint from it — so the
-// page can say "three agents, one growth shipper" without handing anyone a
+// page can say "three agents" without handing anyone a
 // kind to mistake for a credential.
 // Retired enrollments are NOT counted. The sentence above is the reason: this
 // page says how open each ingest door is, and a retired token cannot push
@@ -470,8 +468,8 @@ func (s *Store) EnrollmentCounts() (map[string]int, error) {
 //
 // A RETIRED endpoint does not resolve. This one filter is what makes retiring
 // a revocation rather than a label: every path that authenticates an
-// enrollment token -- /v1/ingest, /v1/ingest/repo, /v1/growth in both
-// directions, the live report, the quota lease -- reaches the endpoint through
+// enrollment token -- /v1/ingest, the live report, the quota lease -- reaches
+// the endpoint through
 // this query and nowhere else, so they all stop accepting the token at the
 // same instant, and a path added later inherits it without having to know.
 //
@@ -483,35 +481,6 @@ func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
 	row := s.read.QueryRow(endpointColumns+
 		` FROM endpoints WHERE token_hash = ? AND retired_at IS NULL`, hash)
 	return scanEndpoint(row)
-}
-
-// MarkRepoShipper records that this enrollment pushes repo progress rather
-// than usage, so the fleet surfaces stop reading its silence as a failure.
-//
-// Called on every repo push rather than once: it is a cheap idempotent write,
-// and making it conditional would mean reading the row first on a path whose
-// whole job is to be a sink.
-func (s *Store) MarkRepoShipper(endpointID string) error {
-	return s.markShipper(endpointID, "repo_shipper")
-}
-
-// MarkGrowthShipper is the same for a business-facts shipper. It gets its own
-// kind rather than borrowing the repo one: the roster only cares that this is
-// not an agent, but an operator staring at a silent enrollment wants to know
-// WHICH nightly job stopped running.
-func (s *Store) MarkGrowthShipper(endpointID string) error {
-	return s.markShipper(endpointID, "growth_shipper")
-}
-
-// markShipper moves an enrollment out of the agent roster. Every surface that
-// hunts for stale agents filters on kind = 'agent', so this is what keeps a
-// cron job that never reports usage from being reported as a broken machine.
-func (s *Store) markShipper(endpointID, kind string) error {
-	_, err := s.write.Exec(`UPDATE endpoints SET kind = ? WHERE endpoint_id = ?`, kind, endpointID)
-	if err != nil {
-		return fmt.Errorf("mark %s: %w", kind, err)
-	}
-	return nil
 }
 
 // endpointColumns keeps the SELECT list and scanEndpoint in lockstep; they

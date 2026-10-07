@@ -12,7 +12,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -155,11 +154,12 @@ func operatorPost(t *testing.T, h *harness, req FleetAccountRequest) int {
 	return resp.StatusCode
 }
 
-// asPerson makes a request with a WeCom session cookie for sub.
-func asPerson(t *testing.T, h *harness, method, path, sub string, body []byte) (int, []byte) {
+// asPerson makes a request with principal's GitHub session cookie.
+func asPerson(t *testing.T, h *harness, method, path, principal string, body []byte) (int, []byte) {
 	t.Helper()
+	listPerson(t, h, principal, "")
 	r, _ := http.NewRequest(method, h.http.URL+path, bytes.NewReader(body))
-	r.AddCookie(&http.Cookie{Name: authz.CookieName, Value: authz.SignSession(sub, ssoSessionKey, time.Now(), time.Hour)})
+	r.AddCookie(personCookie(principal, ""))
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
 		t.Fatal(err)
@@ -174,8 +174,8 @@ func asPerson(t *testing.T, h *harness, method, path, sub string, body []byte) (
 // assign themselves anything.
 func TestFleetPrincipalSeesOnlyOwnNodes(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
-	for _, p := range [][2]string{{"Alice", "alice"}, {"Bob", "bob"}} {
+	enablePeople(t, h, pAlice, pBob, pCarol)
+	for _, p := range [][2]string{{pAlice, "alice"}, {pBob, "bob"}} {
 		if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: p[0], Hostname: "m4", Login: p[1]}); code != 200 {
 			t.Fatalf("adopt %s: HTTP %d", p[0], code)
 		}
@@ -185,7 +185,7 @@ func TestFleetPrincipalSeesOnlyOwnNodes(t *testing.T) {
 	connectNode(t, h, "m4-op", "m4", "verkyyi", false)
 	waitFor(t, 3*time.Second, "three nodes", func() bool { return len(roster(t, h).Nodes) == 3 })
 
-	for sub, want := range map[string]string{"Alice": "alice", "Bob": "bob"} {
+	for sub, want := range map[string]string{pAlice: "alice", pBob: "bob"} {
 		code, body := asPerson(t, h, http.MethodGet, "/v1/nodes", sub, nil)
 		if code != 200 {
 			t.Fatalf("%s /v1/nodes: HTTP %d", sub, code)
@@ -208,14 +208,14 @@ func TestFleetPrincipalSeesOnlyOwnNodes(t *testing.T) {
 
 		req, _ := json.Marshal(FleetAccountRequest{Action: "adopt", PrincipalID: sub, Hostname: "m5", Login: want})
 		if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/accounts", sub, req); code != http.StatusForbidden {
-			t.Fatalf("%s changed accounts with a WeCom session: HTTP %d, want 403", sub, code)
+			t.Fatalf("%s changed accounts with a GitHub session: HTTP %d, want 403", sub, code)
 		}
 		if code, _ := asPerson(t, h, http.MethodGet, "/v1/fleet/accounts", sub, nil); code != http.StatusForbidden {
 			t.Fatalf("%s listed everyone's accounts: HTTP %d, want 403", sub, code)
 		}
 	}
 	// A signed-in person with no account sees no node at all.
-	_, body := asPerson(t, h, http.MethodGet, "/v1/nodes", "Carol", nil)
+	_, body := asPerson(t, h, http.MethodGet, "/v1/nodes", pCarol, nil)
 	var snap NodesSnapshot
 	json.Unmarshal(body, &snap)
 	if len(snap.Nodes) != 0 {
@@ -293,31 +293,28 @@ func TestFleetAssignGoesToAdminNodeOnly(t *testing.T) {
 	waitState(t, h, "WangXiaoMing", "m4", store.AccountRemoved)
 }
 
-// The success criterion's path: a person's first WeCom sign-in queues their
+// The success criterion's path: a person's first GitHub sign-in queues their
 // login on the auto-assigned machine and the admin node gets it at once. A link
 // that drops mid-op leaves it unknown (never re-sent), and the node's late
 // answer on its next connection settles it.
 func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
+	const pZhang = "gh:2001" // their login is minted from the principal: gh2001
+	enablePeople(t, h, pZhang)
 	h.srv.FleetAdmins = []string{"verkyyi"}
 	h.srv.FleetAutoAssign = []string{"m4"}
 	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
 
-	enter := func() {
-		resp := h.raw(t, "/enter?ticket="+mintTicket(t, "ccquota", "zhangsan", time.Now().Add(60*time.Second).Unix()), nil)
-		if resp.StatusCode != http.StatusFound {
-			t.Fatalf("/enter: HTTP %d", resp.StatusCode)
-		}
-	}
+	// What the GitHub callback runs once the person is through.
+	enter := func() { h.srv.onPrincipalSignIn(pZhang, "zhangsan") }
 	enter()
 	m, op := expectAccountOp(t, admin.tnode)
-	if op.Op != control.AccountCreate || op.Login != "zhangsan" {
+	if op.Op != control.AccountCreate || op.Login != "gh2001" {
 		t.Fatalf("op = %+v", op)
 	}
 
 	admin.c.Close(websocket.StatusGoingAway, "link lost")
-	a := waitState(t, h, "zhangsan", "m4", store.AccountUnknown)
+	a := waitState(t, h, pZhang, "m4", store.AccountUnknown)
 	if a.OpID != m.OpID {
 		t.Fatalf("unknown row lost its op_id: %+v", a)
 	}
@@ -330,7 +327,7 @@ func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 	}
 	// ...and the node's late answer settles it.
 	sendResult(t, c.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
-	waitState(t, h, "zhangsan", "m4", store.AccountActive)
+	waitState(t, h, pZhang, "m4", store.AccountActive)
 
 	// A second sign-in queues nothing.
 	enter()

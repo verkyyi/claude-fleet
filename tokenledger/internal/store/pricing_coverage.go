@@ -68,12 +68,6 @@ func (s *Store) SummaryWithPricing(f Filter) (*Summary, []UnpricedReason, error)
 			r.Code = UnpricedLegacyFast
 		case "unpriced: unsupported service tier", "unpriced: unknown service tier":
 			r.Code = UnpricedServiceTier
-		case "unpriced: no gateway rate configured":
-			r.Code = UnpricedNoGatewayRate
-		case "unpriced: gateway rates cover input and output only":
-			r.Code = UnpricedGatewayCacheToken
-		case "unpriced: no usable CNY/USD rate":
-			r.Code = UnpricedGatewayFX
 		case "unpriced: implausible token counts":
 			r.Code = UnpricedImplausibleTokens
 		default:
