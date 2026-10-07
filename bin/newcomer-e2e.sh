@@ -27,10 +27,13 @@
 #                certificate (a PATH `ssh` stand-in: a fake node has no sshd);
 #                a second `fleet` asks for no scan; under the renew threshold
 #                it renews with the device key, no scan (the 12-hour roll)
-#   5. leave   — the person deleted (DELETE /v1/self, the drill's own
+#   5. opening — the same person with no login yet and fleet.auto_assign on
+#                (a newcomer's first look, #2069): the right pane says
+#                正在为你开机器, never 入口没有在线的机器 (issue #2220)
+#   6. leave   — the person deleted (DELETE /v1/self, the drill's own
 #                teardown): `fleet login renew` says scan again (exit 3), and
 #                the list no longer carries them after `fleet users remove`
-#   6. edges   — `fleet login` on a hub that is down, or mid-release (the
+#   7. edges   — `fleet login` on a hub that is down, or mid-release (the
 #                「正在更新」 backend's 503): one line that says so, no traceback
 #
 # Every temp server binds 127.0.0.1; the run is bounded
@@ -350,6 +353,38 @@ after=$(ssh-keygen -L -f "$CERT" | awk '/Serial:/{print $2}')
 [ "$(grep -c '>>> fleet login' "$CH/.ssh/config")" = 1 ] || die 'renewal added a second Include' "$(cat "$CH/.ssh/config")"
 ok "no scan the second time; renewed by key (serial $before → $after)"
 ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+
+# =============================================================================
+step 'opening: no login yet — the right pane says 正在为你开机器, never 没有在线的机器'
+# A newcomer has no login anywhere until fleet.auto_assign opens one (#2069). A
+# drill person is minted WITH its own login (CreateDrill's adopt row), so the
+# row is taken off the hub's db here: from now on it is a person the hub has
+# nothing for. The fake node is no admin node, so the create the hub queues
+# stays pending — 「opening」 for as long as this step looks (issue #2220: the
+# client's right pane said 「入口没有在线的机器」 all the same).
+api -X PUT -H 'Content-Type: application/json' -d "{\"key\":\"fleet.auto_assign\",\"value\":\"$NODE\"}" \
+    "$HUB/v1/fleet/settings" >"$WORK/aa.out" 2>&1 || die 'the operator could not set fleet.auto_assign' "$(cat "$WORK/aa.out")"
+python3 -c 'import sqlite3, sys
+c = sqlite3.connect(sys.argv[1], timeout=10)
+n = c.execute("DELETE FROM fleet_accounts WHERE principal_id = ?", (sys.argv[2],)).rowcount
+c.commit()
+sys.exit(0 if n else 1)' "$WORK/hub.db" "$DPID" || die "the drill person's login row was not on the hub's db"
+out=$(fenv "$FLEET" 2>"$WORK/fleet4.err" </dev/null); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$SESS" ] || die "fleet with no login yet exited $rc" "$(tail -n 8 "$WORK/fleet4.err")"
+mkfifo "$WORK/client4.fifo"
+"$REAL_TMUX" -L "$SESS" -C attach-session -t "=$SESS" <"$WORK/client4.fifo" >/dev/null 2>&1 &
+exec 7>"$WORK/client4.fifo"
+P="$SESS"; waitfor 5 "$REAL_TMUX" -L "$SESS-stage" has-session -t "=$SESS-stage" && P="$SESS-stage"
+right() { "$REAL_TMUX" -L "$P" capture-pane -p -t "=$P:" 2>/dev/null; }
+opening() { right | grep -q '正在为你开机器'; }
+waitfor 30 opening || die 'the right pane never said 正在为你开机器 for a person whose login is being opened' \
+  "$(right | sed '/^ *$/d' | head -n 8) · $(grep -a '#account' "$SC"/*/global/hub_repos "$SC"/tmp/.claude-dash/global/hub_repos 2>/dev/null | tr '\037' ' ')"
+right | grep -q '没有在线的机器' && die 'the right pane says 没有在线的机器 beside 正在为你开机器' "$(right | sed '/^ *$/d' | head -n 8)"
+ok "right pane: $(right | grep -o '正在为你开机器[^。]*' | head -n 1)"
+ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+exec 7>&-
+api -X PUT -H 'Content-Type: application/json' -d '{"key":"fleet.auto_assign","value":"none"}' \
+    "$HUB/v1/fleet/settings" >"$WORK/aa.out" 2>&1 || die 'fleet.auto_assign could not be set back to none' "$(cat "$WORK/aa.out")"
 
 # =============================================================================
 step 'leave: the person removed — renew says scan again, the list forgets them'

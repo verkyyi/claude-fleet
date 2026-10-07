@@ -35,15 +35,19 @@
 #               a new colleague's first time, not your second computer's.
 #   7 client    the installer execs `fleet`: the task list must come up — `open
 #               terminal failed` there is a FAIL (fixed in #1901).
-#   8 scratch   the keyboard onto the list (prefix Space — the key the client's
-#               own hint names), a name typed, Enter; the repo question and
+#   8 scratch   the writing area (prefix c — ⌘N, the key the client's bar
+#               names, is iTerm2's spelling of it; the list itself takes no
+#               keys since #1950), a name typed, Enter; the repo question and
 #               「开在哪」 each Enter (the default, 自动); a new ROW — never the
 #               input line 「› <name>」, never a line outside the split (the
 #               shell prompt 「<login>@host % …」 above it, #2221) — must
 #               appear, the name a whole word (default `first`: never a part
-#               of the login, which is refused). The sidebar's refusal
-#               toast (no repo / no machine of yours / hub down, zh or en) is
-#               要人帮 — a FAIL naming it. The row's line is the evidence.
+#               of the login, which is refused). Before any key: the right
+#               pane's 「入口没有在线的机器」 is a FAIL (issue #2220 — a
+#               newcomer is told 「正在为你开机器」 or who to ask). The
+#               sidebar's refusal (no repo / no machine of yours / hub down,
+#               zh or en) is 要人帮 — a FAIL naming it. The row's line is the
+#               evidence.
 #   9 offboard  stop the login's processes, revoke its device on the hub
 #               (POST /v1/fleet/devices/revoke, viewer token from the
 #               environment), then fleet-login-remove.sh <login> --delete-home
@@ -402,6 +406,9 @@ step_client() {
 # --- 8 scratch ----------------------------------------------------------------------
 # row_named <name>: list_row_named (top of this file) on the drill's screen
 row_named() { pane | list_row_named "$1"; }
+# the right pane's note while no machine is up (fleet-shell.sh wait): the
+# generic one is what a newcomer must never be left with (issue #2220)
+SCRATCH_NOHOST='入口没有在线的机器|no machine of yours is online'
 # the sidebar's refusals (fleet-ui-lang.sh sidebar_place_*, zh + en): held on
 # the bar until a key since #2069 (a 4 s toast before), polled every second
 SCRATCH_NO='还没有仓库|还没有能开会话的机器|入口连不上|开机器没成功|机器还没开好|no repo yet|no machine of yours|hub is unreachable|machine for you failed|machine is not ready yet'
@@ -411,7 +418,13 @@ SCRATCH_NO='还没有仓库|还没有能开会话的机器|入口连不上|开�
 SCRATCH_OPENING='正在为你开机器|opening a machine for you'
 step_scratch() {
   local k said deadline p answered=0 r opening=
-  keys C-b Space
+  if pane | grep -Eq -- "$SCRATCH_NOHOST"; then
+    shot scratch-nohost
+    said=$(pane | grep -Eo -- "($SCRATCH_NOHOST)[^│]*" | head -n 1 | sed 's/ *$//')
+    row "右边：$said" "—" "是 — 新人没机器，入口没说在开、也没说找谁"
+    failstep scratch "the right pane says no machine and nothing about opening one: $said"; return 1
+  fi
+  keys C-b c
   sleep 1
   keys -l "$NAME"; keys Enter
   deadline=$((SECONDS + STEP_SECS)); k=''
@@ -435,11 +448,11 @@ step_scratch() {
   case "$k" in
     no)  shot scratch-refused
          said=$(printf '%s\n' "$p" | grep -Eo -- "($SCRATCH_NO)[^│]*" | head -n 1 | sed 's/ *$//')
-         row "提示：$said" "prefix 空格 到列表，敲名字 ${NAME}，回车" "是 — 开不出会话：$said"
+         row "提示：$said" "prefix c 新任务，敲名字 ${NAME}，回车" "是 — 开不出会话：$said"
          failstep scratch "the list refused a new session: $said"; return 1 ;;
     row) : ;;
     *)   shot scratch-none
-         row "敲名字回车后没有问题、没有新行、也没有提示" "prefix 空格，敲名字，回车" "是 — 不知道怎么开会话"
+         row "敲名字回车后没有问题、没有新行、也没有提示" "prefix c 新任务，敲名字，回车" "是 — 不知道怎么开会话"
          failstep scratch "no question, no row named $NAME and no refusal within ${STEP_SECS}s:"; tail_pane; return 1 ;;
   esac
   [ -z "$opening" ] || row "提示：$opening" "等（入口在开机器，开好自动接着开）" 否
