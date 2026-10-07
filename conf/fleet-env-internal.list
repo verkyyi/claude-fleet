@@ -530,3 +530,6 @@ FLEET_WORKER_CRED                  handoff: the session's worker credential, min
 FLEET_CODEX_LAUNCHER_PID           handoff: the Codex launcher's pid, exported by fleet-codex.sh — marks a Codex pane to its hooks (fleet-codex-session.py, fleet-where-hook.sh #1954)
 FLEET_WORKER_ASSERT                handoff: a session's own hub worker assertion (fleet-mcp.py, #1810); fleet-session-cred.sh borrows a hub pass with it (#1972)
 FLEET_COMMENT_PEER_FALLBACK        knob: 0 = fleet-comment.sh --to-worker on an unbridged repo posts the record and says so, without the peer send (#2059)
+FLEET_HUB_POOL_SECS                knob: seconds between a node's asks for the hub's pool settings (fleet-hub-pool.sh, 300, #2029)
+FLEET_HUB_POOL_TIMEOUT             knob: curl timeout for that ask (fleet-hub-pool.sh, 5s, #2029)
+FLEET_SKIP_HUB_POOL                seam: fleet-lib skips hub-pool.env (fleet-hub-pool.sh status: what this machine sets alone)
