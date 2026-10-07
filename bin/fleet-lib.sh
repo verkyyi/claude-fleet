@@ -1021,12 +1021,18 @@ fleet_backlog_cache() {
 # NOTHING (the caller refuses, or a new issue asks — fleet-repo-ask.sh) — never a
 # guess. fleet_target_repo's one rule (issue #1938): the row's repo, else $CF_REPO
 # (carried through a popup) — either must be hosted — else the caller pane's own
-# repo, else the fleet's only repo.
+# repo, else the fleet's only repo. A fleet that knows NO repo (no conf repo, no
+# cached one — outside a fleet) has nothing to check against: the named repo,
+# else the global FLEET_REPO, as fleet-comment.sh / fleet-pr-verdict.sh do.
 fleet_backlog_repo() {
-  local sess="${1:-}" r
-  r=$(fleet_norm_repo "${2:-}")
-  [ -n "$r" ] || r=$(fleet_norm_repo "${CF_REPO:-}")
-  r=$(fleet_target_repo "$sess" "$r" 2>/dev/null) && printf '%s' "$r"
+  local sess="${1:-}" want r rc
+  want=$(fleet_norm_repo "${2:-}")
+  [ -n "$want" ] || want=$(fleet_norm_repo "${CF_REPO:-}")
+  r=$(fleet_target_repo "$sess" "$want" 2>/dev/null); rc=$?
+  if [ "$rc" = 1 ] && [ -z "$(fleet_repos "$sess")" ] && [ -z "$(fleet_repo_cached "$sess" 2>/dev/null)" ]; then
+    r=${want:-$(fleet_norm_repo "${FLEET_REPO:-}")}; rc=0
+  fi
+  [ "$rc" = 0 ] && [ -n "$r" ] && printf '%s' "$r"
   return 0
 }
 
