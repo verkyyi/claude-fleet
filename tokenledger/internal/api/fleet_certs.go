@@ -135,6 +135,37 @@ func sshToken(s string) bool {
 // certificate would admit them nowhere.
 var errNoAccount = errors.New("no active login on any machine yet — ask the operator to open one")
 
+// noAccountErr is errNoAccount with the reason the person can act on
+// (claude-fleet#2094): mapped to a login the hub holds under someone else, or
+// one no machine has reported yet. errors.Is(err, errNoAccount) still holds.
+type noAccountErr struct{ why string }
+
+func (e *noAccountErr) Error() string        { return e.why }
+func (e *noAccountErr) Is(target error) bool { return target == errNoAccount }
+
+// noAccountReason is why pid has no active login, as precisely as the hub
+// knows: errNoAccount itself when nobody mapped them.
+func (s *Server) noAccountReason(pid string) error {
+	login, ok := s.mappedLoginFor(pid)
+	if !ok || login == noneValue {
+		return errNoAccount
+	}
+	if owner, err := s.Store.PrincipalByLogin(login); err == nil && !strings.EqualFold(owner.ID, pid) {
+		if _, gh := githubIDOf(owner.ID); gh {
+			return &noAccountErr{fmt.Sprintf("you are mapped to machine login %s, but the hub has it as another GitHub person's, %s — ask the operator to fix the mapping",
+				login, s.personName(owner.ID))}
+		}
+		return &noAccountErr{fmt.Sprintf("you are mapped to machine login %s, but the hub still has it under the old identity %s and could not move it to you — ask the operator to run: fleet hub accounts rekey %s %s",
+			login, s.personName(owner.ID), owner.ID, pid)}
+	}
+	if p, err := s.Store.Principal(pid); err == nil && p.Login != login {
+		return &noAccountErr{fmt.Sprintf("you are mapped to machine login %s, but the hub recorded you as %s before the mapping — ask the operator to forget that record (fleet hub accounts forget %s)",
+			login, p.Login, p.ID)}
+	}
+	return &noAccountErr{fmt.Sprintf("you are mapped to machine login %s, but no machine has reported it active yet — it becomes yours once a fleet agent runs as %s on a machine",
+		login, login)}
+}
+
 // CertResponse is a signed certificate and everything the client writes.
 type CertResponse struct {
 	Certificate string    `json:"certificate"` // the content of FleetCertPath
@@ -161,7 +192,7 @@ type CertResponse struct {
 func (s *Server) fleetLoginsOf(pid string) (*store.Principal, []string, map[string]bool, error) {
 	p, err := s.Store.Principal(pid)
 	if errors.Is(err, store.ErrNoPrincipal) {
-		return nil, nil, nil, errNoAccount
+		return nil, nil, nil, s.noAccountReason(pid)
 	}
 	if err != nil {
 		return nil, nil, nil, err
@@ -183,7 +214,7 @@ func (s *Server) fleetLoginsOf(pid string) (*store.Principal, []string, map[stri
 		}
 	}
 	if len(logins) == 0 {
-		return p, nil, hosts, errNoAccount
+		return p, nil, hosts, s.noAccountReason(pid)
 	}
 	sort.Strings(logins)
 	return p, logins, hosts, nil

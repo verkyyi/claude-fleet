@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fleet hub set|get|unset|settings|users — the hub's settings and people list (claude-fleet#1986).
+"""fleet hub set|get|unset|settings|users|accounts — the hub's settings, people list and login records (claude-fleet#1986).
 
     fleet hub settings                   every hub setting: what applies, from where
     fleet hub get <key>                  one setting's value
@@ -8,6 +8,10 @@
     fleet users list                     who may sign in with GitHub (= fleet hub users)
     fleet users add <name> [--machine-login <login>]
     fleet users remove <name>
+    fleet hub accounts                   every person the hub records and their logins
+    fleet hub accounts rekey <from> <to> hand an old identity's logins to <to>
+                                         (gh:<id> or a bare GitHub ID); runs nothing
+    fleet hub accounts forget <principal> drop a record that never reached a machine
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
 fleet.auto_assign fleet.spot fleet.routes_extra user.<id>.machine_login (and the
@@ -33,6 +37,7 @@ import urllib.request
 CONF_DIR = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")
 SETTINGS_PATH = "/v1/fleet/settings"
 USERS_PATH = "/v1/fleet/users"
+ACCOUNTS_PATH = "/v1/fleet/accounts"
 MIGRATED = "hub.legacy_migrated."
 
 
@@ -183,6 +188,11 @@ def users_main(a):
         if not a.json:
             print("%s %s (GitHub ID %s) — they can sign in now" %
                   ("added" if resp.get("created") else "already on the list:", resp.get("added"), resp.get("github_id")))
+            moved = resp.get("moved_login")
+            if isinstance(moved, dict):
+                # The login was the hub's under an identity from before GitHub
+                # sign-in (claude-fleet#2094).
+                print(moved_line(moved, resp.get("added")))
         users_print(resp, a.json)
     else:
         resp = call(a, "DELETE", USERS_PATH + "?login=" + urllib.parse.quote(a.name))
@@ -190,6 +200,49 @@ def users_main(a):
             print("removed %s (GitHub ID %s) — their next request is refused; %s device(s) revoked" %
                   (resp.get("removed"), resp.get("github_id"), resp.get("devices_revoked", 0)))
         users_print(resp, a.json)
+
+
+def moved_line(m, to_name=None):
+    hosts = "、".join(m.get("hosts") or []) or "无机器"
+    return "已把 %s（%s）从旧身份 %s 转给 %s" % (m.get("login"), hosts, m.get("from"), to_name or m.get("to"))
+
+
+# --- login records -------------------------------------------------------------
+
+def accounts_main(a):
+    if a.action == "list":
+        resp = call(a, "GET", ACCOUNTS_PATH)
+        if a.json:
+            print(json.dumps(resp, indent=2, ensure_ascii=False))
+            return
+        by = {}
+        for ac in resp.get("accounts") or []:
+            by.setdefault(ac.get("principal_id"), []).append("%s:%s" % (ac.get("hostname"), ac.get("state")))
+        fmt = "%-24s %-16s %-16s %s"
+        print(fmt % ("principal", "login", "name", "machines"))
+        for p in resp.get("principals") or []:
+            pid = p.get("principal_id", "")
+            print(fmt % (pid, p.get("login", ""), p.get("display_name", "") or "-", " ".join(by.get(pid, [])) or "-"))
+        return
+    if a.action == "rekey":
+        if not a.principal or not a.to:
+            die("fleet hub accounts rekey <from principal> <to: gh:<id> | GitHub ID>", 2)
+        resp = call(a, "POST", ACCOUNTS_PATH, {"action": "rekey", "principal_id": a.principal, "to_principal_id": a.to})
+        if a.json:
+            print(json.dumps(resp, indent=2, ensure_ascii=False))
+        else:
+            print(moved_line(resp))
+        return
+    if not a.principal:
+        die("fleet hub accounts forget <principal> [--host <machine>]", 2)
+    body = {"action": "forget", "principal_id": a.principal}
+    if a.host:
+        body["hostname"] = a.host
+    resp = call(a, "POST", ACCOUNTS_PATH, body)
+    if a.json:
+        print(json.dumps(resp, indent=2, ensure_ascii=False))
+    else:
+        print("forgot %s%s" % (a.principal, " on " + a.host if a.host else ""))
 
 
 def main(argv):
@@ -211,6 +264,11 @@ def main(argv):
     us.add_argument("action", choices=["list", "add", "remove", "rm"], nargs="?", default="list")
     us.add_argument("name", nargs="?")
     us.add_argument("--machine-login", help="the OS login that is theirs on the machines")
+    ac = sub.add_parser("accounts", parents=[common], help="the people the hub records and their logins")
+    ac.add_argument("action", choices=["list", "rekey", "forget"], nargs="?", default="list")
+    ac.add_argument("principal", nargs="?")
+    ac.add_argument("to", nargs="?")
+    ac.add_argument("--host", help="forget: only the record on this machine")
     a = ap.parse_args(argv)
     if a.cmd in (None, "settings"):
         settings_list(a)
@@ -220,6 +278,8 @@ def main(argv):
         settings_set(a, a.value)
     elif a.cmd == "unset":
         settings_set(a, "")
+    elif a.cmd == "accounts":
+        accounts_main(a)
     else:
         if a.action == "rm":
             a.action = "remove"

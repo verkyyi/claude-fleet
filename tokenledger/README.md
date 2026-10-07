@@ -854,7 +854,16 @@ anything; `forget` drops the hub's record of a row that never reached a
 machine (`pending` / `failed` / `removed`), or — with no `hostname` — of the
 person and every such row of theirs, and refuses (409) while any row is
 active, in flight or unknown: an active login is `remove`d, not forgotten.
-That route, and its `GET`, refuse a user's session (403): only the viewer
+`rekey` (`"to_principal_id": gh:<id> | <GitHub ID>`, `fleet hub accounts rekey
+<from> <to>`) hands a person's row — every account, credential, certificate,
+device, usage and budget row with it — to another id in one transaction,
+logins and states unchanged, nothing run (claude-fleet#2094). The same move
+happens on its own when a GitHub person is mapped (`user.<id>.machine_login`,
+`fleet users add … --machine-login`) to a login the hub still has under an
+identity from before GitHub sign-in (an enterprise-WeChat id): at the map and
+at their next sign-in, idempotent, audited in `hub_audit` as
+`principal.rekey`. A login that is another GitHub person's is never taken
+over — the map is refused and names them. That route, and its `GET`, refuse a user's session (403): only the viewer
 token or an admin can change accounts.
 
 An op is recorded before it is sent; a link that drops with one in flight

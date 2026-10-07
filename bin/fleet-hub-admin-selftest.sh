@@ -52,10 +52,23 @@ class H(BaseHTTPRequestHandler):
                 b = json.loads(body)
                 if b["login"] == "ghost":
                     return self.answer(400, {"error": "GitHub has no user named ghost — nobody was added"})
+                if b.get("machine_login") == "24haowan":
+                    return self.answer(200, dict(users, added=b["login"], github_id=300, created=False,
+                                                 moved_login={"login": "24haowan", "hosts": ["macmini"],
+                                                              "from": "CaoJian", "to": "gh:300"}))
                 return self.answer(201, dict(users, added=b["login"], github_id=200, created=True))
             if self.command == "DELETE":
                 return self.answer(200, dict(users, removed=parse_qs(u.query)["login"][0], github_id=200, devices_revoked=2))
             return self.answer(200, users)
+        if u.path == "/v1/fleet/accounts":
+            if self.command == "POST":
+                b = json.loads(body)
+                if b.get("action") == "rekey":
+                    return self.answer(200, {"from": b["principal_id"], "to": "gh:" + b["to_principal_id"].replace("gh:", ""),
+                                             "login": "zx", "hosts": ["macmini", "mini2"], "moved": {}})
+                return self.answer(200, {"accounts": []})
+            return self.answer(200, {"principals": [{"principal_id": "zx", "login": "zx", "display_name": ""}],
+                                     "accounts": [{"principal_id": "zx", "hostname": "macmini", "state": "active"}]})
         if u.path == "/v1/fleet/settings":
             if self.command == "PUT":
                 b = json.loads(body)
@@ -151,6 +164,23 @@ else bad "G rc=$rc req=$r"; fi
 run CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" users list >"$WORK/out" 2>"$WORK/err"; rc=$?
 if [ "$rc" = 3 ] && grep -q 'no hub configured' "$WORK/err"; then ok "H no hub → exit 3"
 else bad "H rc=$rc err=$(cat "$WORK/err")"; fi
+
+# I — add onto a login an old identity held (claude-fleet#2094): the move is printed
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" users add cjilyy --machine-login 24haowan >"$WORK/out" 2>"$WORK/err"; rc=$?
+if [ "$rc" = 0 ] && grep -q '已把 24haowan（macmini）从旧身份 CaoJian 转给 cjilyy' "$WORK/out"; then
+  ok "I users add onto an old identity's login → the move is printed"
+else bad "I rc=$rc out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
+
+# J — fleet hub accounts rekey / list (through bin/fleet-hub.py's forward)
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts rekey zx 4001 >"$WORK/out" 2>"$WORK/err"; rc=$?
+r=$(last)
+l=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts 2>&1)
+if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/accounts ] \
+   && [ "$(field "$r" body)" = '{"action": "rekey", "principal_id": "zx", "to_principal_id": "4001"}' ] \
+   && grep -q '已把 zx（macmini、mini2）从旧身份 zx 转给 gh:4001' "$WORK/out" \
+   && printf '%s\n' "$l" | grep -q '^zx .*macmini:active$'; then
+  ok "J fleet hub accounts rekey → POST {action: rekey}; accounts lists the records"
+else bad "J rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l"; fi
 
 echo "fleet-hub-admin-selftest: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
