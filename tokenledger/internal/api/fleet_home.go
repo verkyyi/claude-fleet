@@ -103,11 +103,12 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 	settings, _ := s.Store.FleetSettings()
 	accounts := s.loginAccounts()
 
+	relayReady := s.sshRelayReadiness()
 	for _, m := range s.fleetMachines() {
 		if hosts != nil && !hosts[m.Hostname] {
 			continue
 		}
-		out.Machines = append(out.Machines, RouteMachine{FleetMachine: m, Relay: s.sshRelayReady(m.Hostname)})
+		out.Machines = append(out.Machines, RouteMachine{FleetMachine: m, Relay: relayReady(m.Hostname)})
 		c := HomeCandidate{Machine: m.Hostname, Alias: m.alias(), Sessions: sessions[strings.ToLower(m.Hostname)]}
 		// The endpoint that speaks for this machine: the person's own login
 		// when it reports, else any online one — they share the box.

@@ -161,6 +161,18 @@ func (n *writeNode) beatLoad(host, user, machine string, load1 float64, sessions
 		Fleets: fleets, ObservedAt: time.Now()})
 }
 
+// waitLoad blocks until the hub has stored host's beat at load1. Each node is
+// its own connection, so waiting on one machine's beat says nothing about
+// another's: a test that re-beats two machines and then places waits on both
+// (claude-fleet#2168 — PickNode read m5's load from twoNodes).
+func waitLoad(t *testing.T, h *harness, host string, load1 float64) {
+	t.Helper()
+	waitFor(t, 3*time.Second, host+" reports load "+strconv.FormatFloat(load1, 'f', -1, 64), func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_"+host, time.Now())
+		return hb.Load1 == load1
+	})
+}
+
 func postFleet(t *testing.T, h *harness, tool string, args map[string]any, wantStatus int) map[string]any {
 	t.Helper()
 	body, _ := json.Marshal(args)

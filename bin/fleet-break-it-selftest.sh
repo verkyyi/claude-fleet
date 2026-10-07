@@ -67,6 +67,7 @@
 #   reconnect-stale-view / reconnect-mouse          bin/fleet-remote-view.sh (run, open, select)
 #   view-reconnect-shared                           bin/fleet-remote-view.sh (attach, rv_prune)
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
+#   client-unversioned-drift                        bin/fleet-client-update.sh (tick, digest), fleet-shell.sh stamp_ver
 #   hub-restart-where                               bin/fleet-shell.sh (keeper renew), fleet-client-lease.py renew,
 #                                                   fleet-client-where.sh
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
@@ -1861,6 +1862,37 @@ drill_client_files_swapped() {
   # update.state is written after the reload returns: a beat after the proxy
   until_ok 5 grep -q '"phase": "done"' "$WORK/ucache/update.state" || { WHY="no trace of the update: update.state is not done"; return 1; }
   WHAT="新文件载入正在跑的客户端，旧代理换掉，留下「已更新到」"
+}
+
+# (issue #2145) The same drift on a home with NO .client-version — a client the
+# line put down before the mark existed, or one that lost it: every check above
+# reads the mark, so the running server kept the conf it loaded, silently (the
+# operator's MacBook ran a pre-#1951 tmux.conf: no key hints on the bar, the
+# files on disk new). The break: the client starts on a conf without the hints,
+# then the conf on disk is the new one. Self-heal: the keeper's tick sees the
+# running @client_digest differ from the files' and reloads once idle.
+drill_client_unversioned_drift() {
+  CAP=15; local s="${CSESS}n" H="$WORK/nhome" t0 f
+  client_setup
+  mkdir -p "$H/bin" "$H/conf"
+  cp -P "$WORK"/sbin/* "$H/bin/"
+  for f in fleet-shell.sh fleet-client-update.sh; do rm -f "$H/bin/$f"; cp "$BIN/$f" "$H/bin/$f"; done
+  for f in "$WORK"/conf/*; do cp -L "$f" "$H/conf/${f##*/}"; done
+  grep -v fleet_hint "$ROOT/conf/tmux-shell.conf" > "$H/conf/tmux-shell.conf"   # the old conf: no key hints
+  rm -f "$H/.client-version"
+  ( client_env
+    export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/ncache" FLEET_CLIENT_LEASE_CMD=false \
+           FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_IDLE_SECS=0 FLEET_CLIENT_CHECK_SECS=999999
+    bash "$H/bin/fleet-shell.sh" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
+  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ] || { WHY="the unversioned client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
+  [ -z "$("$REAL_TMUX" -L "$s" show-options -gqv @fleet_hint 2>/dev/null)" ] || { WHY="the old conf already carries @fleet_hint"; return 1; }
+  t0=$(now)
+  cp "$ROOT/conf/tmux-shell.conf" "$H/conf/tmux-shell.conf"   # the break: new files under the running client
+  until_ok "$CAP" sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s show-options -gqv @fleet_hint 2>/dev/null)\" ]" \
+    || { WHY="the running client still runs the conf it loaded (no @fleet_hint) ${CAP}s after the files changed"; return 1; }
+  SECS=$(since "$t0")
+  until_ok 5 grep -q '"phase": "reloaded"' "$WORK/ncache/update.state" || { WHY="no trace of the reload: update.state is not reloaded"; return 1; }
+  WHAT="没有 .client-version 的客户端：按内容认出新文件，空闲时重新载入，留下「已重新载入新文件」"
 }
 
 # ============================================ a fleet's tmux, deleted from a shell ======

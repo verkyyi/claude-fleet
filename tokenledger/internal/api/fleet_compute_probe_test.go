@@ -60,6 +60,7 @@ func computeFindings(t *testing.T, h *harness) []findings.Finding {
 func TestComputeRegionClosesAndAlerts(t *testing.T) {
 	h, m5, m4, f5, f4 := twoNodes(t)
 	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
+	waitLoad(t, h, "m5", 5)
 	m4.beatProbe("m4", "verk", machineB, nil, false, probe("CN", control.ProbeUnsupportedRegion), f4)
 	waitProbe(t, h, "ep_m4", control.ProbeUnsupportedRegion, false)
 
@@ -97,6 +98,7 @@ func TestComputeRegionClosesAndAlerts(t *testing.T) {
 func TestComputeAutoOpensOnlyByPolicy(t *testing.T) {
 	h, m5, m4, f5, f4 := twoNodes(t)
 	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
+	waitLoad(t, h, "m5", 5)
 	m4.beatProbe("m4", "verk", machineB, computeOff(), false, probe("US", control.ProbeOK), f4)
 	waitProbe(t, h, "ep_m4", control.ProbeOK, false)
 	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m5" {
@@ -148,6 +150,7 @@ func TestComputeAutoOpensOnlyByPolicy(t *testing.T) {
 func TestComputeUnreachableAndForce(t *testing.T) {
 	h, m5, m4, f5, f4 := twoNodes(t)
 	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
+	waitLoad(t, h, "m5", 5)
 	m4.beatProbe("m4", "verk", machineB, computeOn(), false, probe("US", control.ProbeUnreachable), f4)
 	waitProbe(t, h, "ep_m4", control.ProbeUnreachable, false)
 	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "m4" {
@@ -180,6 +183,7 @@ func TestComputeBeatOverridesHello(t *testing.T) {
 	f5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1)
 	f4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet", 2)
 	m5.beatLoad("m5", "verk", machineA, 5, 1, f5)
+	waitLoad(t, h, "m5", 5)
 	m4.beatProbe("m4", "verk", machineB, computeOff(), false, nil, f4)
 	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
 		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2

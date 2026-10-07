@@ -150,6 +150,48 @@ func fleetRefreshVia(srv *api.Server, vault *credvault.Vault) error {
 	}
 }
 
+// fleetHubQuota wires the hub reading every pool subscription's quota itself
+// through the Singapore relay (claude-fleet#2169):
+//
+//	CCQUOTA_FLEET_HUB_QUOTA=relay           on; needs CCQUOTA_FLEET_CRED_RELAY_URL
+//	                                        and CCQUOTA_FLEET_SESSION_CRED_KEY
+//	CCQUOTA_FLEET_HUB_QUOTA_INTERVAL=5m     between reads (at least 1m)
+//
+// Unset or "off" leaves srv.HubQuota nil: nothing is read, no quota pass is
+// signed or accepted, and every reading on the page is a node's — exactly as
+// before. Anything else refuses to start rather than guess.
+func fleetHubQuota(srv *api.Server, vault *credvault.Vault) error {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_HUB_QUOTA"))); v {
+	case "", "off":
+		return nil
+	case "relay":
+		if vault == nil {
+			log.Printf("fleet: CCQUOTA_FLEET_HUB_QUOTA=relay set, but the credential vault is off — no credential to read")
+			return nil
+		}
+		url := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_CRED_RELAY_URL"))
+		if url == "" {
+			return errors.New("CCQUOTA_FLEET_HUB_QUOTA=relay needs CCQUOTA_FLEET_CRED_RELAY_URL (the Singapore relay, docs/CRED-RELAY.md)")
+		}
+		if len(srv.SessionCredKey) == 0 {
+			return errors.New("CCQUOTA_FLEET_HUB_QUOTA=relay needs CCQUOTA_FLEET_SESSION_CRED_KEY — the hub signs its quota pass with it")
+		}
+		every := api.DefaultHubQuotaInterval
+		if raw := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_HUB_QUOTA_INTERVAL")); raw != "" {
+			d, err := time.ParseDuration(raw)
+			if err != nil || d < api.MinHubQuotaInterval {
+				return fmt.Errorf("CCQUOTA_FLEET_HUB_QUOTA_INTERVAL: %q is not a duration of at least %s", raw, api.MinHubQuotaInterval)
+			}
+			every = d
+		}
+		srv.HubQuota = &api.HubQuota{RelayURL: url, Interval: every}
+		log.Printf("fleet: the hub reads every pool subscription's quota itself through the relay %s every %s (CCQUOTA_FLEET_HUB_QUOTA=relay)", url, every)
+		return nil
+	default:
+		return fmt.Errorf("CCQUOTA_FLEET_HUB_QUOTA: %q is not relay or off", v)
+	}
+}
+
 // kmsEnvelope builds the KMS client from CCQUOTA_FLEET_CRED_KMS_ENDPOINT (or
 // _REGION) and the hub's Aliyun identity (credvault.CredsFromEnv). An identity
 // that is missing does not stop the hub: every unlock fails with that reason,
@@ -530,6 +572,15 @@ func runHub(args []string) error {
 	if err != nil {
 		return err
 	}
+	// CCQUOTA_READONLY=1 (claude-fleet#2122): hold the database still while
+	// `ccquota db migrate` copies it. Last of the startup writes above.
+	readOnly := os.Getenv("CCQUOTA_READONLY") == "1"
+	if readOnly {
+		if err := st.SetReadOnly(); err != nil {
+			return err
+		}
+		log.Printf("read-only (CCQUOTA_READONLY=1): writes answer 503 + Retry-After, reads as usual")
+	}
 
 	srv := &api.Server{
 		Store:               st,
@@ -541,6 +592,7 @@ func runHub(args []string) error {
 		UI:                  web.Assets(),
 		LiveStore:           api.NewLive(),
 		Fleet:               fleetOn,
+		ReadOnly:            readOnly,
 		FleetAdmins:         splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
 		// A person's grant on their own logins (claude-fleet#1410).
 		FleetPersonScopes:     fleetPersonScopes(),
@@ -563,6 +615,10 @@ func runHub(args []string) error {
 		}
 		// After the session pass key: the relay path signs its pass with it.
 		if err := fleetRefreshVia(srv, vault); err != nil {
+			return err
+		}
+		// The hub reads the pool's quota itself (claude-fleet#2169).
+		if err := fleetHubQuota(srv, vault); err != nil {
 			return err
 		}
 		// One of several replicas behind one address (claude-fleet#2124):
@@ -623,6 +679,8 @@ func runHub(args []string) error {
 		// Node-lost / lease-conflict alerts (claude-fleet#1630).
 		srv.NodeLostAfter = api.NodeLostAfterFromEnv()
 		go srv.RunNodeAlerts(ctx)
+		// Off (srv.HubQuota nil): returns at once.
+		go srv.RunHubQuota(ctx)
 	}
 	// Pin each CCQUOTA_GITHUB_ADMINS name to its GitHub ID (claude-fleet#1984).
 	// In the background: GitHub being slow must not hold the hub's start.

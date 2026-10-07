@@ -51,6 +51,9 @@ import (
 //   - The check also takes the hub's own pass (`frh1.`, claude-fleet#1976),
 //     for the vault's refreshes through /openai-auth/ only
 //     (fleet_relay_refresh.go).
+//   - And the hub's quota pass (`frq1.`, claude-fleet#2169), for the hub's
+//     own quota reads — /anthropic/v1/messages and /chatgpt/wham/usage only,
+//     and only while CCQUOTA_FLEET_HUB_QUOTA is on (fleet_hub_quota.go).
 //   - A relay credential's verdict is cached for relayCheckTTL (keyed by the
 //     token's hash, never the token), and every write that can change one — a
 //     relay credential minted or dropped, a trust change, a credential
@@ -301,6 +304,8 @@ func tokPrefix(tok string) string {
 		return hubPassPrefix
 	case strings.HasPrefix(tok, hubRelayPassPrefix):
 		return hubRelayPassPrefix
+	case strings.HasPrefix(tok, hubQuotaPassPrefix):
+		return hubQuotaPassPrefix
 	}
 	return ""
 }
@@ -313,6 +318,9 @@ func (s *Server) relayVerdictFor(tok, uri string, now time.Time) relayVerdict {
 	}
 	if strings.HasPrefix(tok, hubRelayPassPrefix) {
 		return s.verifyHubRelayPass(tok, uri, now)
+	}
+	if strings.HasPrefix(tok, hubQuotaPassPrefix) {
+		return s.verifyHubQuotaPass(tok, uri, now)
 	}
 	hash := HashToken(tok)
 	c := s.relayCache()

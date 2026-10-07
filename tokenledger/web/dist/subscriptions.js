@@ -38,7 +38,10 @@ function card(s, skip) {
     `<div class="t"><b>${esc(s.label)}</b><span>${esc(s.plan || (s.prov === 'codex' ? 'Codex' : 'Claude'))}</span></div>${chip}</div>` +
     (s.available || s.h5 || s.h7 ? win(t('ui.sub.h5'), s.h5, skip) + win(t('ui.sub.h7'), s.h7, skip)
       : `<div class="win-h"><span>${esc(s.reason || t('ui.sub.noUsage'))}</span></div>`) +
-    `<div class="sub-meta"><div><span>${esc(t('ui.sub.sessionsNow'))}</span>${s.sessions}</div><div><span>${esc(t('ui.sub.cred'))}</span><span class="chip ${cs.tone}">${ic('shield')}${esc(cs.text)}</span></div></div>` +
+    `<div class="sub-meta"><div><span>${esc(t('ui.sub.sessionsNow'))}</span>${s.sessions}</div>` +
+    (s.readAt ? `<div title="${esc(s.readNote)}"><span>${esc(t('ui.sub.lastRead'))}</span>${esc(relTime(s.readAt))}` +
+      (s.readVia ? ` · ${esc(t(s.readVia === 'hub' ? 'ui.sub.viaHub' : 'ui.sub.viaNode'))}` : '') + '</div>' : '') +
+    `<div><span>${esc(t('ui.sub.cred'))}</span><span class="chip ${cs.tone}">${ic('shield')}${esc(cs.text)}</span></div></div>` +
     acts + '</div>';
 }
 
