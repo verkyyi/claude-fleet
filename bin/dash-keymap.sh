@@ -20,7 +20,7 @@
 #      the help never names a key the terminal cannot deliver.
 #
 # Usage:
-#   dash-keymap.sh --panel dash|backlog|config|sidebar <command>  # default panel: dash
+#   dash-keymap.sh --panel dash|backlog|config|switch <command>  # default panel: dash
 #   dash-keymap.sh --panel switch list|actions   # the ⌘ / prefix switch keys (#1903):
 #                                   #   action ⌘glyph iterm-key code prefix-key
 #                                   # env names stay DASH_KEY_* within each panel
@@ -96,50 +96,11 @@ reload ctrl-r alt-r' ;;
 config) TABLE='scope ctrl-s alt-s
 reload ctrl-r alt-r
 preview ctrl-p alt-p' ;;
-# The worker task sidebar's navigation keys (issue #896). NOT fzf: a tmux key
-# table (conf/tmux-shell.conf, fleet-sidebar — the client's, issue #1714) whose `Any` bind types every
-# other key into the input line — so a letter can never be an action here, and
-# an action is a ⌃-chord the view reads as a byte (⌃n = 0x0e). The prefix rule
-# is the same: tmux honours its prefix in that table too, so a colliding key
-# takes its ⌥ fallback, which the conf rewrites to the ⌃ byte (`bind -T
-# fleet-sidebar M-n … send-keys C-n`). Later EPIC #894 members add rows here.
-# `hide` is NOT a row: it left this table for prefix e (a global prefix bind),
-# since `q` types now.
-# `menu` (issue #898) is the one printable default: `.` opens the highlighted
-# row's action menu ONLY while the input line is empty — inside a name it types
-# a dot. One tap on an iPad keyboard, where a ⌃-chord is three. It arrives
-# through the `Any` bind like any typed key (no conf bind), and no tmux prefix is
-# a bare `.`, so it never remaps.
-# `restore` (issue #901) is the hub's own ⌃o: the landed list + restore as one
-# popup (fleet-restore-pick.sh). macOS's tty eats a bare ⌃o as VDISCARD, so the
-# view switches that off before curses starts (fleet-sidebar.py main).
-# `help` (issue #948) follows the same rule: `?` on an EMPTY input line opens
-# the sidebar's own key sheet (fleet-keys.sh --context sidebar), the task list's
-# answer to Claude Code's "? for shortcuts"; inside a name it types a `?`.
-# Aliases, not rows (issue #965): a Chinese IME sends full-width 。/． for `.`
-# and ？ for `?`; the view folds them onto `menu` / `help` on an empty line
-# (fleet-sidebar.py KEY_ALIASES), so no second key is registered here.
-# The input line's editing keys (issue #1097), readline's and Claude's prompt's:
-# `bol`/`eol` cursor to the start/end, `kill_word` deletes the word before it,
-# `kill_eol` everything after it. ⌃a is a common tmux prefix, so each takes its
-# ⌥ fallback the same way. ←→ Home End ⌥←→ ⌃u are not rows: they are named
-# keys (or, for ⌃u, predate this table), handled in fleet-sidebar.py edit_of.
-# The full-screen list's own actions (issue #1532), so the sidebar can stand in
-# for it: `scratch` / `view` / `reload` are the hub's ⌃s / ⌃t / ⌃r, same chords,
-# and `info` (⌃i — the Tab key, one press) opens the issue · PR · ctx% column.
-# Chords, not the letters t / i: a letter types (a name may start with either).
-sidebar) TABLE='new ctrl-n alt-n
-menu . .
-restore ctrl-o alt-o
-scratch ctrl-s alt-s
-view ctrl-t alt-t
-reload ctrl-r alt-r
-info ctrl-i alt-i
-help ? ?
-bol ctrl-a alt-a
-eol ctrl-e alt-e
-kill_word ctrl-w alt-w
-kill_eol ctrl-k alt-k' ;;
+# The task list's keys (issue #896 → #1950): none. The list only shows and taps
+# (EPIC #1949 C1) — its ⌃n ⌃o ⌃s ⌃t ⌃r ⌃i ⌃k, `.`, `?`, the input line and its
+# editing keys went with the `fleet-sidebar` key table; what they did is a verb
+# the list takes off @sidebar_ask (fleet-sidebar.py `act`), and the switcher's
+# commands reach it there (EPIC #1949 C3). So there is no `sidebar` panel.
 # Switching sessions from anywhere in the client (issue #1903, EPIC #1906 C10).
 # NOT fzf and not ⌃-chords: on the Mac each row is a ⌘ chord that the iTerm2
 # Dynamic Profile `fleet` (bin/fleet-iterm-profile.py, written from THIS table)
@@ -170,7 +131,7 @@ new ⌘N 0x6e-0x100000 928 c'
     *) echo "usage: dash-keymap.sh --panel switch list|actions" >&2; exit 2 ;;
   esac
   exit 0 ;;
-*) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|sidebar|switch)" >&2; exit 2 ;;
+*) echo "dash-keymap.sh: unknown panel '$PANEL' (dash|backlog|config|switch)" >&2; exit 2 ;;
 esac
 
 # tmux_to_fzf <tmux key name> → the fzf spelling, lowercase, modifiers ordered
@@ -298,5 +259,5 @@ case "$cmd" in
       esac
     done
     ;;
-  *) echo "usage: dash-keymap.sh [--panel dash|backlog|config|sidebar] env|key <action>|glyph <action>|list|collisions|prefixes|actions" >&2; exit 2 ;;
+  *) echo "usage: dash-keymap.sh [--panel dash|backlog|config|switch] env|key <action>|glyph <action>|list|collisions|prefixes|actions" >&2; exit 2 ;;
 esac

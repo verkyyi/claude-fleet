@@ -12,16 +12,15 @@
 # that panel's own binds plus the global `tmux prefix` binds (which fire from any
 # pane, the dash included), not the other panels' inner binds. Pass the panel via
 # `--context dash|backlog` (default `all` = every group). `--context sidebar`
-# (issue #948, cut to one screen by #963) is the task sidebar's own `?` sheet:
-# the six keys an operator actually uses there, in short Chinese, so the popup
-# never needs scrolling. Everything else — the full task sidebar group and the
-# `.` row menu's letters — stays in the full sheet, prefix ? away.
+# (issue #948, cut to one screen by #963) is the task list's own short sheet —
+# since issue #1950 the list takes no keys, so it is its four taps. The `.` row
+# menu's letters stay in the full sheet, prefix ? away.
 #
 # Usage:
 #   fleet-keys.sh                    # full sheet, wait for q/esc (popup mode)
 #   fleet-keys.sh --context dash     # dashboard-scoped sheet (+ tmux prefix)
 #   fleet-keys.sh --context backlog  # backlog-scoped sheet (+ tmux prefix)
-#   fleet-keys.sh --context sidebar  # the task sidebar's sheet (its `?` / ? row)
+#   fleet-keys.sh --context sidebar  # the task list's short sheet (its taps)
 #   fleet-keys.sh --plain            # print once and exit (no wait) — pipes/tests
 #                                    #   also implied when stdout is not a tty
 #
@@ -110,33 +109,27 @@ want() {
   esac
 }
 
-# The task sidebar's `?` sheet (issue #963): the seven keys an operator uses on
-# the sidebar (the input line's editing keys share one row, #1097), one short
-# line each, so the whole sheet fits its popup
-# (fleet-sidebar.py's open_help sizes it to this) — the popup cannot scroll.
+# The task list's short sheet (issue #963): one short line each, so it fits a
+# popup that cannot scroll. Since issue #1950 the list takes no keys — the
+# lines are its taps, the same four the full sheet's group lists.
 # `skey <key> <desc>`: the key column is 14 CELLS. ${#k} counts a CJK character
 # once though it takes two, so wide() counts those: their UTF-8 lead bytes
 # (U+3000–U+9FFF: E3–E9, the full-width forms: EF). The arrows and ⌃ ⌥ ⌂ glyphs
 # lead with E2 and stay one cell.
-# Keymap-resolved keys still come from `--panel sidebar` (dg), never hardcoded.
 wide() { printf '%s' "$1" | LC_ALL=C tr -cd '\343-\351\357' | wc -c | tr -d ' '; }
 skey() {
   local k="$1" pad n
-  n=$((14 - ${#k} - $(wide "$k"))); [ "$n" -lt 1 ] && n=1
+  n=$((16 - ${#k} - $(wide "$k"))); [ "$n" -lt 1 ] && n=1
   printf -v pad '%*s' "$n" ''
   printf '  %s%s%s%s%s\n' "$YEL" "$k" "$R" "$pad" "$2"
 }
 print_sidebar_sheet() {
-  eval "$(bash "$BIN/dash-keymap.sh" --panel sidebar env 2>/dev/null)"
   printf '%s%s %s %s  %s%s%s\n\n' "$B" "$CYAN" "$(fleet_ui_t keys_sidebar_title)" "$R" "$DIM" "$(fleet_ui_t keys_close)" "$R"
-  skey "$(fleet_ui_t keys_sb_type_k)" "$(fleet_ui_t keys_sb_type)"
-  skey "↑ ↓" "$(fleet_ui_t keys_sb_switch)"
-  skey "$(fleet_ui_t keys_sb_edit_k)" "←→ Home End ⌥←→ $(dg bol) $(dg eol) $(dg kill_word) $(dg kill_eol) ⌃u" # ui-lang-ok: key glyphs, no words
-  skey "$(fleet_ui_t keys_sb_menu_k_fmt "$(dg menu)")" "$(fleet_ui_t keys_sb_menu)$(dn menu)"
-  skey "esc" "$(fleet_ui_t keys_sb_esc)"
-  skey "$(dg scratch) $(dg view) $(dg reload) $(dg info)" "$(fleet_ui_t keys_sb_more)"
-  skey "F9" "$(fleet_ui_t keys_sb_home)"
-  skey "prefix ?" "$(fleet_ui_t keys_sb_all_fmt "${DASH_KEYMAP_PREFIX:-C-b}")"
+  skey "$(fleet_ui_t keys_sidebar_m1k)" "$(fleet_ui_t keys_sidebar_m1)"
+  skey "$(fleet_ui_t keys_sidebar_m2k)" "$(fleet_ui_t keys_sidebar_m2)"
+  skey "$(fleet_ui_t keys_sidebar_m3k)" "$(fleet_ui_t keys_sidebar_m3)"
+  skey "$(fleet_ui_t keys_sidebar_12k)" "$(fleet_ui_t keys_sidebar_12)"
+  skey "$(fleet_ui_t keys_sidebar_m4k)" "$(fleet_ui_t keys_sidebar_m4)"
 }
 
 # THE sheet — one structure, every string from fleet-ui-lang.sh (issue #1535:
@@ -153,9 +146,6 @@ print_sheet() {
 
   if want prefix; then
   group "$(fleet_ui_t keys_g_prefix)" "$(fleet_ui_t keys_g_prefix_sub)"
-  key "prefix E" "$(fleet_ui_t keys_prefix_04)"
-  key "prefix g" "$(fleet_ui_t keys_prefix_02)"
-  key "prefix Space" "$(fleet_ui_t keys_prefix_06)"
   key "prefix q" "$(fleet_ui_t keys_prefix_05)"
   key "prefix k" "$(fleet_ui_t keys_prefix_16)"
   key "prefix z" "$(fleet_ui_t keys_prefix_09)"
@@ -186,28 +176,13 @@ EOF
   fi
 
   if want sidebar; then
-  eval "$(bash "$BIN/dash-keymap.sh" --panel sidebar env 2>/dev/null)"
+  # the task list takes no keys (issue #1950): its group is its taps
   group "$(fleet_ui_t keys_g_sidebar)" "$(fleet_ui_t keys_g_sidebar_sub)"
-  key "$(fleet_ui_t keys_sidebar_01k)" "$(fleet_ui_t keys_sidebar_01)"
-  key "$(fleet_ui_t keys_sidebar_02k)" "$(fleet_ui_t keys_sidebar_02)"
-  key "enter" "$(fleet_ui_t keys_sidebar_03)"
-  key "esc" "$(fleet_ui_t keys_sidebar_04)"
-  key "↑ / ↓" "$(fleet_ui_t keys_sidebar_05)"
-  key "← / →" "$(fleet_ui_t keys_sidebar_06)"
-  key "⌥← / ⌥→" "$(fleet_ui_t keys_sidebar_07)"
-  key "$(dg bol)" "$(fleet_ui_t keys_sidebar_08)$(dn bol)"
-  key "$(dg eol)" "$(fleet_ui_t keys_sidebar_09)$(dn eol)"
-  key "$(dg kill_word)" "$(fleet_ui_t keys_sidebar_10)$(dn kill_word)"
-  key "$(dg kill_eol)" "$(fleet_ui_t keys_sidebar_11)$(dn kill_eol)"
+  key "$(fleet_ui_t keys_sidebar_m1k)" "$(fleet_ui_t keys_sidebar_m1)"
+  key "$(fleet_ui_t keys_sidebar_m2k)" "$(fleet_ui_t keys_sidebar_m2)"
+  key "$(fleet_ui_t keys_sidebar_m3k)" "$(fleet_ui_t keys_sidebar_m3)"
   key "$(fleet_ui_t keys_sidebar_12k)" "$(fleet_ui_t keys_sidebar_12)"
-  key "$(dg new)" "$(fleet_ui_t keys_sidebar_13)$(dn new)"
-  key "$(dg menu)" "$(fleet_ui_t keys_sidebar_14)$(dn menu)"
-  key "$(dg restore)" "$(fleet_ui_t keys_sidebar_15)$(dn restore)"
-  key "$(dg help)" "$(fleet_ui_t keys_sidebar_16)$(dn help)"
-  key "$(dg scratch)" "$(fleet_ui_t keys_sidebar_18)$(dn scratch)"
-  key "$(dg view)" "$(fleet_ui_t keys_sidebar_19)$(dn view)"
-  key "$(dg reload)" "$(fleet_ui_t keys_sidebar_20)$(dn reload)"
-  key "$(dg info)" "$(fleet_ui_t keys_sidebar_21)$(dn info)"
+  key "$(fleet_ui_t keys_sidebar_m4k)" "$(fleet_ui_t keys_sidebar_m4)"
   fi
 
   if want menu; then

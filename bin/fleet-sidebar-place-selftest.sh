@@ -4,23 +4,26 @@
 # #1776 C2).
 #
 # The real list (bin/fleet-sidebar.py ui, FLEET_SHELL=1) in a pane of an ISOLATED
-# tmux server (-S, a socket under the work dir), keys typed into it with
-# send-keys. Around it a sandbox bin/ of symlinks to the shipped scripts, three
+# tmux server (-S, a socket under the work dir). The list takes no keys (issue
+# #1950): its actions are verbs parked in @sidebar_ask (`new` `scratch`
+# `restore`), every question opens on ONE line under the session
+# (bin/fleet-ask.py, `@stage_ask`) and is answered there with send-keys, and
+# what the list says is on the bar — read off the attached client's terminal. Around it a sandbox bin/ of symlinks to the shipped scripts, three
 # faked: tmux-dashboard-rows.sh prints a rows file (two repo headings, an m5 row),
 # fleet-client-place.sh is the hub — it logs its argv and answers per a scenario
 # file (C1's exit codes), adding the new session's row to the rows file when it
 # «opens» one — and fleet-remote-view.sh logs the row a switch steps into. The
 # hub's /v1/nodes is a hub_nodes cache under FLEET_STATUS_G: m4 (1 running), m5
 # (3 running), mbp (only coordinates).
-#   A. ⌃n: the repo menu (both repos) → ↵ → the issue line → 42 ↵ → 「开在哪」:
+#   A. `new`: the repo menu (both repos) → ↵ → the issue line → 42 ↵ → 「开在哪」:
 #      自动 first and highlighted, m4 before m5 (fewer running), mbp greyed
 #      只协调; ↓↓↓ never lands on mbp; ↵ on 自动 runs the place with
-#      `acme/web 42 --node auto`; the top row says 正在…开; the new row appears,
-#      is selected, and the switch stepped into it; the toast says 已切过去
-#   B. ⌃s: a scratch — repo (the highlighted row's preselected), then 「开在哪」
-#      → m4: `<repo> scratch --node <m4's hostname>`
-#   C. ⌃o: restore — the key line takes issue-9 → `restore:issue-9`
-#   D. the hub unreachable (hub_ok stale): ⌃n says 入口连不上，暂时不能新建 — no
+#      `acme/web 42 --node auto`; the bar says 正在…开; the new row appears,
+#      is selected, and the switch stepped into it; the bar says 已切过去
+#   B. `scratch`: a scratch — repo (the highlighted row's preselected), then
+#      「开在哪」 → m4: `<repo> scratch --node <m4's hostname>`
+#   C. `restore`: the key line takes issue-9 → `restore:issue-9`
+#   D. the hub unreachable (hub_ok stale): `new` says 入口连不上，暂时不能新建 — no
 #      menu, nothing run; the place itself unreachable (exit 1) says the same
 #   E. no machine can take it (REFUSED, exit 4): the hub's reason, as it said it
 #   F. held elsewhere (HELD, exit 3): 已在 m5 上跑 · y 切过去 → y steps into the
@@ -138,46 +141,69 @@ vst=$(FLEET_STATUS_G="$FLEET_STATUS_G" bash -c '. "$1/fleet-status-lib.sh"; flee
 eq 'fleet_status_hub_node: ver_state off a 13-field line' 'ok|0' "$vst"
 
 # --- the list, live ------------------------------------------------------------------
-ts -f /dev/null new-session -d -s shell -x 70 -y 24 "sleep 600" || { printf 'cannot start tmux\n' >&2; exit 2; }
+ts -f /dev/null new-session -d -s shell -x 130 -y 30 "sleep 600" || { printf 'cannot start tmux\n' >&2; exit 2; }
 worker=$(ts display-message -p -t shell: '#{pane_id}')
 side=$(ts split-window -h -b -l 40 -t "$worker" -P -F '#{pane_id}' \
-  "cd '$SB' && env FLEET_SHELL=1 FLEET_STATUS_G='$FLEET_STATUS_G' FLEET_UI_LANG=zh TERM=xterm-256color python3 fleet-sidebar.py ui shell '$worker' '$WORK/lock'")
+  "cd '$SB' && env FLEET_SHELL=1 FLEET_STATUS_G='$FLEET_STATUS_G' FLEET_UI_LANG=zh FLEET_SIDEBAR_TOAST_SECS=1 TERM=xterm-256color python3 fleet-sidebar.py ui shell '$worker' '$WORK/lock'")
 # A client on a pty (the view paints only while a client shows it): a python
-# parent that drains the pty, with its own alarm(2) so it cannot outlive the
-# test; the server's end goes with cleanup's kill-server.
-python3 - "$REAL_TMUX" "$SOCK" <<'PY' &
+# parent that drains the pty into TTY (the bar's words are read there), with its
+# own alarm(2) so it cannot outlive the test; the server's end goes with
+# cleanup's kill-server.
+TTY="$WORK/tty.out"; : > "$TTY"
+python3 - "$REAL_TMUX" "$SOCK" "$TTY" <<'PY' &
 import fcntl, os, pty, signal, struct, sys, termios
-tmux, sock = sys.argv[1:3]
+tmux, sock, out = sys.argv[1:4]
 signal.alarm(240)
 pid, fd = pty.fork()
 if pid == 0:
     os.environ["TERM"] = "xterm-256color"
     os.execvp(tmux, [tmux, "-S", sock, "attach", "-t", "shell"])
-fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 70, 0, 0))
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 31, 130, 0, 0))
 try:
-    while os.read(fd, 65536):
-        pass
+    with open(out, "ab", buffering=0) as log:
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            log.write(chunk)
 except OSError:
     pass
 PY
 screen() { ts capture-pane -p -t "$side" 2>/dev/null; }
-waitfor() {  # waitfor <secs> <needle>
-  local n=0; while [ "$n" -lt $(( $1 * 10 )) ]; do screen | grep -qF -- "$2" && return 0; sleep .1; n=$((n + 1)); done; return 1
+# the question open under the session, and what it shows
+askp() { ts list-panes -t "$worker" -F '#{pane_id} #{@stage_ask}' 2>/dev/null | awk '$2 == 1 { print $1; exit }'; }
+aline() { local p; p=$(askp); [ -n "$p" ] && ts capture-pane -p -t "$p" 2>/dev/null; }
+bar() { LC_ALL=C tr -d '\000' < "$TTY"; }
+waitfor() {  # waitfor <secs> <needle> [screen|aline|bar]
+  local n=0; while [ "$n" -lt $(( $1 * 10 )) ]; do "${3:-aline}" | grep -qaF -- "$2" && return 0; sleep .1; n=$((n + 1)); done; return 1
 }
-key() { ts send-keys -t "$side" "$@"; sleep .3; }
-CHECKS=$((CHECKS + 1)); waitfor 10 'seven' || fail 'the list painted its rows' "$(screen)"
+park() { ts set-option -p -t "$side" @sidebar_ask "$1" \; send-keys -t "$side" F12; sleep .3; }
+# key <keys…> → into the question open now (waited for: the next one opens once
+# the list has run the last answer); an answer (↵, y) waits for its line to close
+key() {
+  local p n=0
+  while [ -z "$(askp)" ] && [ "$n" -lt 50 ]; do sleep .1; n=$((n + 1)); done
+  p=$(askp); [ -n "$p" ] || return 0
+  ts send-keys -t "$p" "$@"
+  case " $* " in
+    *" Enter "*|" y ") n=0; while [ "$(askp)" = "$p" ] && [ "$n" -lt 50 ]; do sleep .1; n=$((n + 1)); done ;;
+    *) sleep .3 ;;
+  esac
+}
+CHECKS=$((CHECKS + 1)); waitfor 10 'seven' screen || fail 'the list painted its rows' "$(screen)"
 
-# A. ⌃n → repo → issue → where → auto
+# A. new → repo → issue → where → auto
 echo ok > "$SCEN"
-key C-n
-CHECKS=$((CHECKS + 1)); waitfor 5 '新会话 → 选仓库' || fail 'A: ⌃n opens the repo menu' "$(screen)"
-s=$(screen); has 'A: the repo menu lists app' "$s" 'app'; has 'A: …and web' "$s" 'web'
+park new
+CHECKS=$((CHECKS + 1)); waitfor 5 '新会话 → 选仓库' || fail 'A: `new` opens the repo menu under the session' "$(aline)"
+s=$(aline); has 'A: the repo menu lists app' "$s" 'app'; has 'A: …and web' "$s" 'web'
 hasnt 'A: never the old refusal' "$s" '没有 fleet'
+hasnt 'A: the list draws no question' "$(screen)" '选仓库'
 key Down; key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 'issue #›' || fail 'A: the issue line after the repo' "$(screen)"
+CHECKS=$((CHECKS + 1)); waitfor 5 'issue #›' || fail 'A: the issue line after the repo' "$(aline)"
 key 4 2; key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 '开在哪' || fail 'A: 「开在哪」 after the issue' "$(screen)"
-s=$(screen)
+CHECKS=$((CHECKS + 1)); waitfor 5 '开在哪' || fail 'A: 「开在哪」 after the issue' "$(aline)"
+s=$(aline)
 has 'A: 「开在哪」 names the repo and the issue' "$s" 'web #42 → 开在哪'
 has 'A: 自动 highlighted' "$s" '› 自动（入口挑最闲的）'
 has 'A: mbp greyed 只协调' "$s" '只协调'
@@ -185,65 +211,68 @@ order=$(printf '%s\n' "$s" | grep -nE '自动|  m4|  m5|  mbp' | cut -d: -f1 | t
 m4l=$(printf '%s\n' "$s" | grep -n ' m4 ' | head -1 | cut -d: -f1); m5l=$(printf '%s\n' "$s" | grep -n ' m5 ' | head -1 | cut -d: -f1)
 CHECKS=$((CHECKS + 1)); [ -n "$m4l" ] && [ -n "$m5l" ] && [ "$m4l" -lt "$m5l" ] || fail 'A: m4 (1 running) above m5 (3 running)' "$order"
 key Down; key Down; key Down
-has 'A: ↓↓↓ wraps past mbp, never onto it' "$(screen)" '› 自动'
-hasnt 'A: mbp never highlighted' "$(screen)" '› mbp'
+has 'A: ↓↓↓ wraps past mbp, never onto it' "$(aline)" '› 自动'
+hasnt 'A: mbp never highlighted' "$(aline)" '› mbp'
 key Enter
 # 「什么时候回收？」 (issue #1902): an issue's default highlighted, ↵ takes it
-CHECKS=$((CHECKS + 1)); waitfor 5 '什么时候回收' || fail 'A: the reap question after 「开在哪」' "$(screen)"
-has 'A: 合并后回收 highlighted for an issue' "$(screen)" '› 合并后回收'
+CHECKS=$((CHECKS + 1)); waitfor 5 '什么时候回收' || fail 'A: the reap question after 「开在哪」' "$(aline)"
+has 'A: 合并后回收 highlighted for an issue' "$(aline)" '› 合并后回收'
 key Enter
-CHECKS=$((CHECKS + 1)); waitfor 8 '已在 m4 上开好，已切过去' || fail 'A: the toast says it switched' "$(screen)"
+CHECKS=$((CHECKS + 1)); waitfor 8 '已在 m4 上开好，已切过去' bar || fail 'A: the bar says it switched' "$(bar | tail -c 400)"
+has 'A: the bar said where it was opening' "$(bar)" '正在'
 eq 'A: the place ran: repo, issue, --node auto' 'acme/web 42 --node auto' "$(tail -n1 "$LOG")"
 eq 'A: the switch stepped into the new row' 'wid:U/issue-42' "$(tail -n1 "$VIEW")"
-has 'A: the new row is in the list' "$(screen)" 'forty-two'
+CHECKS=$((CHECKS + 1)); waitfor 5 'forty-two' screen || fail 'A: the new row is in the list' "$(screen)"
+CHECKS=$((CHECKS + 1)); [ -z "$(askp)" ] || fail 'A: the question line outlived its last answer' "$(aline)"
 
-# B. ⌃s → repo → where → m4
+# B. scratch → repo → where → m4
 rows_reset; : > "$VIEW"
-key C-s
-CHECKS=$((CHECKS + 1)); waitfor 5 '新会话 → 选仓库' || fail 'B: ⌃s opens the repo menu' "$(screen)"
+park scratch
+CHECKS=$((CHECKS + 1)); waitfor 5 '新会话 → 选仓库' || fail 'B: `scratch` opens the repo menu' "$(aline)"
 key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 '开在哪' || fail 'B: a scratch goes straight to 「开在哪」' "$(screen)"
-has 'B: it names a scratch' "$(screen)" '草稿'
+CHECKS=$((CHECKS + 1)); waitfor 5 '开在哪' || fail 'B: a scratch goes straight to 「开在哪」' "$(aline)"
+has 'B: it names a scratch' "$(aline)" '草稿'
 key Down; key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 '什么时候回收' || fail 'B: the reap question' "$(screen)"
-has 'B: 做完就回收 highlighted for a scratch' "$(screen)" '› 做完就回收'
+CHECKS=$((CHECKS + 1)); waitfor 5 '什么时候回收' || fail 'B: the reap question' "$(aline)"
+has 'B: 做完就回收 highlighted for a scratch' "$(aline)" '› 做完就回收'
 key Down; key Down; key Down; key Enter
 sleep 1
 has 'B: a scratch on m4, by its hostname' "$(tail -n1 "$LOG")" ' scratch --node mac-mini-m4.local'
 has 'B: 常驻 rides along as --reap keep' "$(tail -n1 "$LOG")" '--reap keep'
 
-# C. ⌃o → repo → key → where
-rows_reset; echo unknown > "$SCEN"
-key C-o
-CHECKS=$((CHECKS + 1)); waitfor 5 '新会话 → 选仓库' || fail 'C: ⌃o opens the repo menu' "$(screen)"
+# C. restore → repo → key → where
+rows_reset; echo unknown > "$SCEN"; sleep 1.5; : > "$TTY"
+park restore
+CHECKS=$((CHECKS + 1)); waitfor 5 '新会话 → 选仓库' || fail 'C: `restore` opens the repo menu' "$(aline)"
 key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 '恢复›' || fail 'C: the key line' "$(screen)"
+CHECKS=$((CHECKS + 1)); waitfor 5 '恢复›' || fail 'C: the key line' "$(aline)"
 key i s s u e - 9; key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 '开在哪' || fail 'C: 「开在哪」 after the key' "$(screen)"
+CHECKS=$((CHECKS + 1)); waitfor 5 '开在哪' || fail 'C: 「开在哪」 after the key' "$(aline)"
 key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 'm4 还没回话' || fail 'C: an UNKNOWN says it has not answered' "$(screen)"
+CHECKS=$((CHECKS + 1)); waitfor 5 'm4 还没回话' bar || fail 'C: an UNKNOWN says it has not answered' "$(bar | tail -c 400)"
 has 'C: restore:issue-9' "$(tail -n1 "$LOG")" ' restore:issue-9 --node auto'
 
 # D. the hub unreachable
-n=$(wc -l < "$LOG")
+n=$(wc -l < "$LOG"); sleep 1.5; : > "$TTY"
 echo $(( $(date +%s) - 600 )) > "$FLEET_STATUS_G/hub_ok"
-key C-n
-CHECKS=$((CHECKS + 1)); waitfor 5 '入口连不上，暂时不能新建' || fail 'D: a stale hub refuses at once' "$(screen)"
-hasnt 'D: no menu' "$(screen)" '选仓库'
+park new
+CHECKS=$((CHECKS + 1)); waitfor 5 '入口连不上，暂时不能新建' bar || fail 'D: a stale hub refuses at once' "$(bar | tail -c 400)"
+CHECKS=$((CHECKS + 1)); [ -z "$(askp)" ] || fail 'D: no menu' "$(aline)"
 eq 'D: nothing run' "$n" "$(wc -l < "$LOG")"
-hub_fresh; echo down > "$SCEN"; sleep 4   # the toast passes
-key C-s; key Enter; key Enter; key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 '入口连不上，暂时不能新建' || fail 'D: the place unreachable (exit 1) says the same' "$(screen)"
+hub_fresh; echo down > "$SCEN"; sleep 1.5; : > "$TTY"   # the word on the bar passes
+park scratch; key Enter; key Enter; key Enter
+CHECKS=$((CHECKS + 1)); waitfor 5 '入口连不上，暂时不能新建' bar || fail 'D: the place unreachable (exit 1) says the same' "$(bar | tail -c 400)"
 
 # E. full
-echo full > "$SCEN"; sleep 4
-key C-s; key Enter; key Enter; key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 '开不了：m4: 满了 (6/6)' || fail 'E: the hub reason, as it said it' "$(screen)"
+echo full > "$SCEN"; sleep 1.5; : > "$TTY"
+park scratch; key Enter; key Enter; key Enter
+CHECKS=$((CHECKS + 1)); waitfor 5 '开不了：m4: 满了 (6/6)' bar || fail 'E: the hub reason, as it said it' "$(bar | tail -c 400)"
 
 # F. held elsewhere → y
-echo held > "$SCEN"; : > "$VIEW"; sleep 4
-key C-n; key Enter; key 7; key Enter; key Enter; key Enter
-CHECKS=$((CHECKS + 1)); waitfor 5 '已在 m5 上跑 · y 切过去' || fail 'F: HELD asks to switch' "$(screen)"
+echo held > "$SCEN"; : > "$VIEW"
+park new; key Enter; key 7; key Enter; key Enter; key Enter
+CHECKS=$((CHECKS + 1)); waitfor 5 '已在 m5 上跑' || fail 'F: HELD asks to switch' "$(aline)"
+has 'F: …with y' "$(aline)" 'y 切过去'
 key y
 sleep .5
 eq 'F: y stepped into the m5 row of #7' 'wid:U/issue-7' "$(tail -n1 "$VIEW")"

@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """A compact live hub list. One view per attached fleet; no hidden render loops.
 
-The worker keeps tmux's active-pane identity even during keyboard navigation.
-That matters: collectors, messages and recovery tools resolve a window to its
-active agent pane. Mouse forwarding and the fleet-sidebar key table deliver
-input explicitly to this view without changing that identity. A terminal paste
-is the one input tmux forwards with no table lookup, to the CLIENT's pane: while
-the keyboard is here that pane is this view (issue #1105, PIN_KEY below) — a
-per-client pointer, so the window's active pane is still the worker.
+The worker keeps tmux's active-pane identity: collectors, messages and
+recovery tools resolve a window to its active agent pane. The list only shows
+and taps (issue #1950, EPIC #1949 C1): mouse forwarding delivers a tap or a
+right-click to this view, and no key table ever routes the keyboard here — a
+question it asks opens on one line under the session (bin/fleet-ask.py), and
+what it has to say goes on the bar (`say`, tmux display-message).
 """
-import codecs
 import curses
 import errno
 import fcntl
@@ -22,13 +20,13 @@ import signal
 import subprocess
 import sys
 import tempfile
-import termios
 import time
+import traceback
 import unicodedata
 
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
-VIEW_VERSION = "27"  # #1953: 「新任务」 on top, its 「开工中…」 row, the `compose` verb
+VIEW_VERSION = "28"  # #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -56,9 +54,9 @@ STALL_SECS = 5
 # retried after LOCK_RETRY.
 LOCK_WAIT = 0.5
 LOCK_RETRY = 0.25
-# The input line (issue #896): a refused spawn's reason stays this long, then
-# the typed name — which is kept — shows again.
-TOAST_SECS = 4
+# What the list has to say — a refusal, 「正在 m5 上开…」 — is on the bar this
+# long (issue #1950: it was the input line's, for 4s).
+TOAST_SECS = 10
 
 
 def load_text():
@@ -90,20 +88,9 @@ def tr(key, *args):
     return text.replace("\x01", "")
 
 
-PLACEHOLDER = tr("sidebar_placeholder")
 # The 置顶 group's heading key (issue #1170): selectable so ←/→ can fold it, but
 # it names no repo — a tap only highlights it, never opens the new-session popup.
 PIN_HEADING = "hdr:pin"
-# The one row above the input line (issue #948): a tap on it, or `?` on an empty
-# input line, opens this sidebar's key sheet — Claude Code's "? for shortcuts".
-# An explicit exception to EPIC #894 convention 5 (no resident rows), chosen by
-# the operator: on an iPad a whole row is a tap target a hint glyph is not.
-HELP_ROW = tr("sidebar_help_row")
-# A Chinese IME turns the `.` and `?` keys into full-width 。/． and ？ (issue
-# #965). On an EMPTY input line they are the same keys — the row menu and the
-# key sheet — so the operator need not switch to English first; inside a name
-# they type as themselves, like `.` and `?` do.
-KEY_ALIASES = {"。": ".", "．": ".", "？": "?"}
 # The SHELL (bin/fleet-shell.sh, issue #1484) runs this view on a computer with
 # no fleet: no conf, no gh, no worktree, and its install ships none of the
 # scripts a new task / restore / scratch spawn runs. There every row is on a
@@ -270,17 +257,6 @@ def stage_remote():
                 "#{@remote}"]).stdout.strip()
 
 
-# The paste route's PIN (issue #1105). tmux forwards a bracketed paste to the
-# CLIENT's pane before any key table, so no bind can catch one; under the
-# `active-pane` client flag `select-pane` moves that client's own pane instead of
-# the window's. Only a command run AS the client can do that — a `select-pane`
-# from this process is a session-less CLI client and would move the window's —
-# so the conf binds this unpressable key in the fleet-sidebar table to set the
-# flag and pin `{top-left}`, and `send-keys -K -c <client> PIN_KEY` runs it as
-# the client. `join-pane` forgets a moved pane's client entries: re-pin after a
-# follow. In root the same key only drops a stale flag (conf/tmux-shell.conf).
-PIN_KEY = "C-M-S-F12"
-
 
 def run(args, **kwargs):
     return subprocess.run(args, text=True, stdout=subprocess.PIPE,
@@ -298,15 +274,19 @@ def fields(target, fmt):
 def panes(session):
     fmt = US.join(("#{pane_id}", "#{window_id}", "#{@sidebar}",
                    "#{pane_active}", "#{pane_dead}", "#{@sidebar_worker}",
-                   "#{@sidebar_version}", "#{@sidebar_slot}"))
+                   "#{@sidebar_version}", "#{@sidebar_slot}",
+                   # a question's pane (bin/fleet-ask.py): its mark, or — the
+                   # moment before the mark lands — its program
+                   "#{?#{@stage_ask},1,#{?#{m:*fleet-ask.py run*,#{pane_start_command}},1,}}"))
     return [line.split(US) for line in tmux(
         "list-panes", "-s", "-t", session, "-F", fmt).splitlines()
-        if len(line.split(US)) == 8]
+        if len(line.split(US)) == 9]
 
 
 def is_worker(pane):
-    """A panes() row that is the window's own content: not the view, not a slot."""
-    return pane[2] != "1" and pane[7] != "1" and pane[4] != "1"
+    """A panes() row that is the window's own content: not the view, not a slot,
+    not a question open under the session (`@stage_ask`, bin/fleet-ask.py)."""
+    return pane[2] != "1" and pane[7] != "1" and pane[4] != "1" and pane[8] != "1"
 
 
 def remove_view(pane):
@@ -417,49 +397,10 @@ def clients(session):
     return out
 
 
-_pin_bound = None
-
-
-def pin_bound():
-    """Whether the server's conf binds PIN_KEY. Unbound — a live server not yet
-    reloaded after an upgrade, a selftest fixture — the key would fall through
-    to root and reach the worker as bytes, so nothing injects it. Read once: a
-    conf reload also replaces this view (VIEW_VERSION)."""
-    global _pin_bound
-    if _pin_bound is None:
-        _pin_bound = run(["tmux", "list-keys", "-T", "fleet-sidebar", PIN_KEY]).returncode == 0
-    return _pin_bound
-
-
-def pin_view(session):
-    """Point each navigating client's own pane at the view again (issue #1105):
-    the view just moved (join-pane) or was just created, and tmux keeps no
-    client entry for either. Run as the client, through PIN_KEY (see it)."""
-    if not pin_bound():
-        return
-    for client, table, _ in clients(session):
-        if table == "fleet-sidebar":
-            tmux("send-keys", "-K", "-c", client, PIN_KEY)
-
-
-def route_input(session):
-    """The 1s reconcile of the paste route (issue #1105). The binds set the pin
-    on every take and drop it on every hand-back they own; a prefix command
-    (prefix i, a popup) leaves the table with neither, and its stale pin would
-    send a paste — and the first typed key — to this view: drop it. A client
-    that is navigating unpinned (an older bind, a hand-rolled switch-client)
-    gets pinned, so its paste lands here."""
-    for client, table, pinned in clients(session):
-        if table == "fleet-sidebar" and not pinned:
-            if pin_bound():
-                tmux("send-keys", "-K", "-c", client, PIN_KEY)
-        elif table == "root" and pinned:
-            tmux("refresh-client", "-t", client, "-f", "!active-pane")
-
-
 def leave_navigation(session):
-    # A hidden sidebar must not keep intercepting a client's arrow keys — nor
-    # keep its pane pinned as the client's own (issue #1105).
+    # No client is ever left in the list's old key table, nor with its pane
+    # pinned to the list (issue #1105's paste route, retired with the input line
+    # by #1950): a client a since-upgraded conf left there is handed back.
     for client, table, pinned in clients(session):
         if table == "fleet-sidebar":
             tmux("switch-client", "-c", client, "-T", "root")
@@ -476,7 +417,7 @@ def heal_frame(session, window):
     list's own pane becomes the viewer, and the sync below draws the list again
     beside it. Returns whether anything was respawned."""
     frame = [p for p in panes(session) if p[1] == window]
-    content = [p for p in frame if p[2] != "1" and p[7] != "1"]
+    content = [p for p in frame if p[2] != "1" and p[7] != "1" and p[8] != "1"]
     if not frame or any(p[4] != "1" for p in content):
         return False
     target = content[0][0] if content else next(
@@ -514,17 +455,19 @@ def single_layout(frame, cols, width):
     return int(cols) < width + 1 + 80
 
 
-def fit_single(window, workers, single, wanted, zoomed):
+def fit_single(window, workers, single, wanted, zoomed, asking=False):
     """Hold the one-pane layout (issue #1904) on the client's `home`: single →
     the session pane zoomed and `@fleet_single` on the window (the conf's keys
     and F1–F4 read it); not single → `@fleet_single` off and the zoom it made
-    undone — a zoom the person made (F9) is theirs and stays. Returns the
+    undone — a zoom the person made (F9) is theirs and stays. A question open
+    under the session (`asking`, bin/fleet-ask.py — its split unzoomed the
+    window) is not zoomed away: the zoom comes back when it closes. Returns the
     window's zoom flag after it, as sync reads it."""
     was = fields(window, "#{@fleet_single}") == ["1"]
     if single and wanted and workers:
         if not was:
             tmux("set-option", "-w", "-t", window, "@fleet_single", "1")
-        if zoomed != "1":
+        if zoomed != "1" and not asking:
             worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
             tmux("resize-pane", "-Z", "-t", worker)
         return "1"
@@ -567,8 +510,8 @@ def sync(session, enabled, width, lock):
               # or a proxy window onto another machine's session (`@remote`, #1475):
               # the list stays on the left, the other machine's pane on the right.
               # `home` — the fleet's resting window once the full-screen list
-              # retired (issue #1533): a shell, but the list's input line is how
-              # a fleet with no task yet starts one, so the list shows there too.
+              # retired (issue #1533): a shell, but the list is how a fleet with
+              # no task yet starts one (a heading's tap), so it shows there too.
               bool(issue or raw == "1" or worktree or norepo == "1" or remote or
                    name == "home") and
               bool(workers) and (single or int(cols) >= width + 1 + 80))
@@ -603,7 +546,8 @@ def sync(session, enabled, width, lock):
         for pane in reusable:
             remove_view(pane[0])
     if single and wanted and current:
-        zoomed = fit_single(window, workers, True, wanted, zoomed)
+        asking = any(p[1] == window and p[8] == "1" for p in all_panes)
+        zoomed = fit_single(window, workers, True, wanted, zoomed, asking)
     if not wanted or current or zoomed == "1":
         # The window on screen shows no list: its slot would be a blank column.
         if here and zoomed != "1":
@@ -612,7 +556,6 @@ def sync(session, enabled, width, lock):
     worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
     if reusable:
         if move_view(reusable[0][0], worker, width):
-            pin_view(session)
             return
         remove_view(reusable[0][0])
     # A reused view must not keep its first worker's worktree alive after moving.
@@ -639,7 +582,6 @@ def sync(session, enabled, width, lock):
          "set-option", "-p", "-t", pane, "remain-on-exit", "off")
     if single:
         fit_single(window, workers, True, wanted, "0")
-    pin_view(session)
 
 
 def send_key(session, key):
@@ -705,8 +647,6 @@ def jump(session, window, pane, lock):
             worker = next((p[0] for p in workers if p[3] == "1"), workers[0][0])
             width = fields(pane, "#{pane_width}")[0]
             if width.isdigit() and move_view(pane, worker, int(width), select=True):
-                # join-pane forgot the client's pin on the moved view (#1105).
-                pin_view(session)
                 return True
             tmux("select-window", "-t", window, ";", "select-pane", "-t", worker)
     return True
@@ -768,50 +708,51 @@ def selection_repo(session, key, env):
 
 
 class Ask:
-    """One question on the input line (issue #1620, EPIC #1615 C5): what used to
-    be a popup with one field — a rename, a new task's title, a repo to add, a
-    message or an answer for a row on another machine, the account to switch a
-    worker to, the #543 restore question — is asked HERE, on the line the list
-    already has, so nothing covers the session being looked at. `kind` picks
-    what ↵ runs (submit); `prompt` leads the line; `hint` takes the `?` row
-    above it; `choices` ((value, label) pairs) are what Tab steps through — a
-    new task's repo in a 2+ repo fleet, a subscription's account; `keys` makes
-    it a one-key question (restore: y / r, anything else cancels)."""
+    """One short question (issue #1620, EPIC #1615 C5): a rename, a new task's
+    title, a repo to add, a message or an answer for a row on another machine,
+    the account to switch a worker to, the #543 restore question, a step of the
+    shell's open-a-session flow. Asked on ONE line under the session since
+    issue #1950 (bin/fleet-ask.py — the list has no input line any more): `kind`
+    picks what the answer runs (`answered` in ui); `prompt` leads the line,
+    `text` is what it starts with (a rename's old name), `hint` sits at its
+    right; `choices` ((value, label) pairs) are what Tab steps through — a new
+    task's repo in a 2+ repo fleet, a subscription's account; `keys` makes it a
+    one-key question (restore: y / r, anything else cancels); a `menu` is
+    (value, label, note, greyed) lines above it, ↑↓ / Tab between the ones that
+    are not greyed, ↵ picks."""
 
-    def __init__(self, kind, prompt, arg="", hint="", node="", repo="", keys="", menu=None, plan=None):
+    def __init__(self, kind, prompt, arg="", hint="", node="", repo="", keys="", menu=None, plan=None, text=""):
         self.kind, self.prompt, self.arg, self.hint = kind, prompt, arg, hint
-        self.node, self.repo, self.keys = node, repo, keys
+        self.node, self.repo, self.keys, self.text = node, repo, keys, text
         self.choices, self.at, self.where = [], -1, ""
-        # A menu (issue #1778): (value, label, note, greyed) lines painted above
-        # the input line, ↑↓ / Tab between the ones that are not greyed, ↵ picks.
-        # `plan` is the shell's open-a-session flow it is one step of.
+        # `plan` is the shell's open-a-session flow a menu is one step of.
         self.menu, self.plan = menu, plan
         if menu:
             self.at = next((i for i, item in enumerate(menu) if not item[3]), 0)
 
-    def move(self, step):
-        """↑↓ on a menu: the next line that is not greyed, wrapping round."""
-        n = len(self.menu or [])
-        i = self.at
-        for _ in range(n):
-            i = (i + step) % n
-            if not self.menu[i][3]:
-                self.at = i
-                return
-
-    def step(self):
-        """Tab: the next choice. A repo choice re-targets the task; an account
-        choice fills the line (it can still be edited)."""
-        if not self.choices:
-            return ""
-        self.at = (self.at + 1) % len(self.choices)
-        value, label = self.choices[self.at]
-        if self.kind == "new":
-            self.repo = value
-            self.hint = new_hint(self)
-            return ""
-        self.hint = label
-        return value
+    def spec(self):
+        """What bin/fleet-ask.py draws: the question as JSON. A new task's
+        choices are its repos, each with the hint that names it (`new_hint`);
+        an account's fill the line."""
+        out = {"kind": self.kind, "prompt": self.prompt.rstrip(), "text": self.text,
+               "hint": self.hint or ("" if self.keys or self.menu else tr("sidebar_ask_keys")),
+               "keys": self.keys}
+        if self.menu:
+            out["menu"] = [list(item) for item in self.menu]
+            out["at"] = self.at
+        elif self.choices:
+            if self.kind == "new":
+                was = self.repo
+                out["choices"] = []
+                for value, _label in self.choices:
+                    self.repo = value
+                    out["choices"].append([value, new_hint(self)])
+                self.repo = was
+            else:
+                out["choices"] = [list(c) for c in self.choices]
+                out["fill"] = True
+            out["at"] = self.at
+        return out
 
 
 def new_hint(ask):
@@ -844,8 +785,8 @@ def ask_new(session, env, repo="", node=""):
 
 def start_job(args, env, done):
     """A submitted question's work, off this view's loop: the poll in ui() calls
-    `done(rc, output)` when it exits, which answers (toast, next ask) — a
-    refusal is one line on the input line, a success says nothing (EPIC #1615).
+    `done(rc, output)` when it exits, which answers (a word, the next ask) — a
+    refusal is one line on the bar, a success says nothing (EPIC #1615).
     Its own session, so the create or the clone in flight outlives a view that
     is restarted under it."""
     out = tempfile.TemporaryFile("w+")
@@ -882,16 +823,16 @@ def repo_added(rc, text):
 
 def sub_choices(ask):
     """fleet-manual-sub.sh list → the accounts Tab steps through, each with its
-    fresh quota on the `?` row; a refusal (no fresh quota) is the row itself."""
+    fresh quota as the hint; the question opens once they are read. A refusal
+    (no fresh quota) is said on the bar instead."""
     def done(rc, text):
         rows = [l.split("\t") for l in text.splitlines()[1:] if l.count("\t") >= 3]
         if rc != 0 or not rows:
-            ask.hint = "✗ " + (last_line(text) or tr("sidebar_spawn_failed"))
-            return "", None
+            return "✗ " + (last_line(text) or tr("sidebar_spawn_failed")), None
         ask.choices = [(r[0], " · ".join(x for x in (r[0], "5h " + r[1] if r[1] else "", "7d " + r[2] if r[2] else "", r[3]) if x))
                        for r in rows]
         ask.hint = tr("sidebar_ask_sub_hint")
-        return "", None
+        return "", ask
     return done
 
 
@@ -1274,46 +1215,9 @@ def submit(ask, text, session, env):
     return None
 
 
-def no_discard():
-    """macOS's line discipline eats ⌃o as VDISCARD (flush output) even in cbreak
-    mode, so the `restore` byte never reached getch. Switch that one character
-    off before curses saves the tty modes, so an endwin/refresh keeps it off.
-    The same for ⌃s (`scratch`, issue #1532): with IXON on it is XOFF and
-    freezes this pane's output until a ⌃q — and ⌃t (`view`), BSD's VSTATUS."""
-    try:
-        attrs = termios.tcgetattr(0)
-        attrs[0] &= ~termios.IXON
-        try:
-            off = os.fpathconf(0, "PC_VDISABLE")
-        except (OSError, ValueError):
-            off = 0  # POSIX _POSIX_VDISABLE on Linux; IXON stays off either way
-        for char in ("VDISCARD", "VSTATUS"):
-            if hasattr(termios, char):
-                attrs[6][getattr(termios, char)] = off
-        termios.tcsetattr(0, termios.TCSANOW, attrs)
-    except (AttributeError, OSError, ValueError, termios.error):
-        pass
-
-
-def open_help(screen, env):
-    """The sidebar's `?` sheet (issue #948): fleet-keys.sh --context sidebar in
-    a popup via dash-popup.sh (explicit client, the @popup_open epoch), exactly
-    as the hub's `?` opens its own. Blocks until q/Esc closes it, which is the
-    pause: nothing repaints under the popup. Leave curses meanwhile: with no
-    client dash-popup.sh runs the sheet INLINE, in this pane.
-    Sized to the sheet (issue #963): title + blank + eight rows (#1532) + the border,
-    as wide as the editing row (#1097)."""
-    curses.endwin()
-    subprocess.call(["bash", str(BIN / "dash-popup.sh"), "-w", "50", "-h", "12", "--title", "popup_keys", "--",
-                     "bash", str(BIN / "fleet-keys.sh"), "--context", "sidebar"], env=env)
-    screen.clear()
-    global _cursor_shown
-    _cursor_shown = None  # endwin reset the cursor: set it again on the next paint
-
-
 def open_tap(session, action, key, env):
     """A second tap (issue #1032): a session row's menu, or — on a selected
-    heading — a new task's title on the input line with that repo pinned
+    heading — a new task's title asked under the session with that repo pinned
     (selection_repo resolves `hdr:…` exactly as it does for a typed name, so both
     paths agree on the target). Returns that Ask; "refused" in the shell, which
     has no fleet to file into — the caller asks there instead (place_start,
@@ -1347,33 +1251,20 @@ def cells_of(text):
     return sum(map(cells, text))
 
 
-_cursor_shown = None
-
-
 PRESS = curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED
+# A right-click (issue #1950) is held the same way: its menu is the row's.
+PRESS |= curses.BUTTON3_PRESSED | curses.BUTTON3_CLICKED
 # A press acts on what the view read at most this long before it (issue #1756).
 FRESH_SECS = 0.05
 
 
 def held_press():
-    """The mouse event behind a KEY_MOUSE as (y, buttons, when), or None."""
+    """The mouse event behind a KEY_MOUSE as (y, buttons, when, x), or None."""
     try:
-        _, _, y, _, buttons = curses.getmouse()
+        _, x, y, _, buttons = curses.getmouse()
     except curses.error:
         return None
-    return y, buttons, time.monotonic()
-
-
-def show_cursor(on):
-    """The view's terminal cursor on or off (issue #1756) — a mode change only
-    when it flips, so an idle repaint writes nothing."""
-    global _cursor_shown
-    if on != _cursor_shown:
-        _cursor_shown = on
-        try:
-            curses.curs_set(1 if on else 0)
-        except curses.error:
-            pass
+    return y, buttons, time.monotonic(), x
 
 
 def tail(text, width):
@@ -1672,217 +1563,17 @@ def hint_line(row, width, info=False):
     return None
 
 
-def wordy(char):
-    # A word is a run of letters/digits — CJK included — or `_`, as Claude's
-    # prompt and readline's ⌥b/⌥f see one; spaces and punctuation separate.
-    return char.isalnum() or char == "_"
-
-
-class Line:
-    """The input line as a line editor (issue #1097): the text and a cursor on it.
-    Typing, rename and the typed-name spawn all edit through this, so ←→ Home End
-    ⌥←→ ⌃a ⌃e ⌃w ⌃k ⌃u behave the same in each. The keys' double meaning (an
-    EMPTY line keeps ←→ fold and Home/End first/last row) is the caller's."""
-
-    def __init__(self, text=""):
-        self.set(text)
-
-    def set(self, text):
-        self.text, self.pos = text, len(text)
-
-    def clear(self):
-        self.set("")
-
-    def insert(self, chars):
-        self.text = self.text[:self.pos] + chars + self.text[self.pos:]
-        self.pos += len(chars)
-
-    def backspace(self):
-        if self.pos:
-            self.text = self.text[:self.pos - 1] + self.text[self.pos:]
-            self.pos -= 1
-
-    def delete(self):
-        self.text = self.text[:self.pos] + self.text[self.pos + 1:]
-
-    def left(self):
-        self.pos = max(0, self.pos - 1)
-
-    def right(self):
-        self.pos = min(len(self.text), self.pos + 1)
-
-    def home(self):
-        self.pos = 0
-
-    def end(self):
-        self.pos = len(self.text)
-
-    def _word_start(self):
-        at = self.pos
-        while at and not wordy(self.text[at - 1]):
-            at -= 1
-        while at and wordy(self.text[at - 1]):
-            at -= 1
-        return at
-
-    def word_left(self):
-        self.pos = self._word_start()
-
-    def word_right(self):
-        at, size = self.pos, len(self.text)
-        while at < size and not wordy(self.text[at]):
-            at += 1
-        while at < size and wordy(self.text[at]):
-            at += 1
-        self.pos = at
-
-    def kill_word(self):
-        at = self._word_start()
-        self.text, self.pos = self.text[:at] + self.text[self.pos:], at
-
-    def kill_eol(self):
-        self.text = self.text[:self.pos]
-
-    def view(self, width, cursor="▏"):
-        """`width` cells of the line around the cursor, `cursor` drawn at it.
-        Wide (CJK) characters take two cells. Short text shows whole; a long one
-        keeps the cursor in view, text after it getting at least half the room."""
-        left, right = self.halves(width - len(cursor))
-        return left + cursor + right
-
-    def halves(self, room):
-        """The text shown left and right of the cursor in `room` cells — what
-        view() draws around its glyph; the terminal cursor (issue #1756) sits
-        after the left half instead."""
-        room = max(0, room)
-        before, after = self.text[:self.pos], self.text[self.pos:]
-        right = head(after, max(room // 2, room - sum(map(cells, before))))
-        return tail(before, room - sum(map(cells, right))), right
-
-
-# ⌥←/⌥→ read off the raw escape sequence (issue #1097): the pseudo-keys
-# escape_word returns for them, next to curses' own codes.
-WORD_LEFT, WORD_RIGHT = -2, -3
-
-
-def escape_word(screen):
-    """After an ESC byte: ⌥← / ⌥→ as the terminal spelled them, else the ESC.
-    They reach this pane through the fleet-sidebar table's `Any` as whatever tmux
-    writes for M-b / M-f / M-Left / M-Right (⌃← / ⌃→ too): ESC b, ESC f,
-    ESC[1;3D … — which keypad parsing only knows when the terminfo does. A lone
-    Escape (the Escape bind's) has nothing behind it and stays 27; an unknown
-    CSI sequence is swallowed (-1) rather than typed as `[1;2A`. ESC[200~ opens
-    a bracketed paste (issue #1105; the view asks for it): its text, up to the
-    ESC[201~ tmux writes after the last byte, comes back as a str."""
-    screen.nodelay(True)
-    try:
-        nxt = screen.getch()
-        if nxt in (ord("b"), ord("f")):
-            return WORD_LEFT if nxt == ord("b") else WORD_RIGHT
-        if nxt != ord("["):
-            if nxt != -1:
-                curses.ungetch(nxt)
-            return 27
-        seq = ""
-        while len(seq) < 8:
-            nxt = screen.getch()
-            if not 0 <= nxt < 128:
-                break
-            seq += chr(nxt)
-            if chr(nxt).isalpha() or seq.endswith("~"):
-                break
-        if re.fullmatch(r"1;[3579][CD]", seq):
-            return WORD_LEFT if seq.endswith("D") else WORD_RIGHT
-        if seq == "200~":
-            return pasted(screen)
-        return -1
-    finally:
-        screen.nodelay(False)
-
-
-PASTE_END = b"\x1b[201~"
-
-
-def pasted(screen):
-    """The body of a bracketed paste, read to its end marker. tmux writes the
-    paste in pieces (one per key on 3.4), so wait a little between them; a paste
-    with no end within a second is taken as it stands."""
-    body, deadline = bytearray(), time.monotonic() + 1.0
-    screen.nodelay(False)
-    screen.timeout(100)
-    while not body.endswith(PASTE_END) and time.monotonic() < deadline:
-        nxt = screen.getch()
-        if nxt == -1:
-            if body:
-                break
-            continue
-        if 0 <= nxt < 256:
-            body.append(nxt)
-        if len(body) > 1 << 16:
-            break
-    if body.endswith(PASTE_END):
-        del body[-len(PASTE_END):]
-    return body.decode("utf-8", "ignore")
-
-
-def paste_text(text):
-    """A paste as ONE name for the input line: line breaks and tabs become
-    spaces (a pasted paragraph must not submit at its first newline), the end
-    of the paste loses its newline, other controls are dropped."""
-    text = text.rstrip("\r\n")
-    text = re.sub(r"[\r\n\t]+", " ", text)
-    return "".join(c for c in text if typed(c))
-
-
-def edit_of(key, text):
-    """The Line method `key` runs on the input line (issue #1097), or "" when the
-    key is the list's. The ⌃ bytes are dash-keymap.sh --panel sidebar `bol`
-    `eol` `kill_word` `kill_eol` (their ⌥ fallbacks are rewritten to these bytes
-    by the conf); ⌃u clears, as before. ←→ and Home/End edit only while the line
-    holds text: on an EMPTY line they stay the list's fold and first/last row —
-    the hub's rule (dash-fold-toggle.sh), shared on purpose. ↑↓ never edit."""
-    if key == 1:
-        return "home"
-    if key == 5:
-        return "end"
-    if key == 23:
-        return "kill_word"
-    if key == 11:
-        # ⌃k on an EMPTY line is the list's: the next row waiting on you (issue
-        # #1750, next_attention) — there is nothing after the cursor to delete
-        return "kill_eol" if text else ""
-    if key == 21:
-        return "clear"
-    if key in (curses.KEY_BACKSPACE, 8, 127):
-        return "backspace"
-    if key == curses.KEY_DC:
-        return "delete"
-    try:
-        name = curses.keyname(key) if key > 255 else b""
-    except (curses.error, ValueError):
-        name = b""
-    if key == WORD_LEFT or name in (b"kLFT3", b"kLFT5"):
-        return "word_left"
-    if key == WORD_RIGHT or name in (b"kRIT3", b"kRIT5"):
-        return "word_right"
+def say(session, text, secs=None):
+    """What the list has to say, on the BAR of every client looking at it (issue
+    #1950): a refusal's reason, 「正在 m5 上开…」 — tmux's display-message, so
+    the whole window shows it and the list keeps every row. A literal: `#`
+    would start a format."""
     if not text:
-        return ""
-    return {curses.KEY_LEFT: "left", curses.KEY_RIGHT: "right",
-            curses.KEY_HOME: "home", curses.KEY_END: "end"}.get(key, "")
-
-
-def typed(char):
-    """A character the input line takes: printable text, CJK included."""
-    return not unicodedata.category(char).startswith("C")
-
-
-def mark_input(pane, text):
-    # @sidebar_input=1 while the line holds text: the Enter/Escape binds (and
-    # C4's ⌂ / R2) read it to keep the keyboard here instead of handing it back.
-    if text:
-        tmux("set-option", "-p", "-t", pane, "@sidebar_input", "1")
-    else:
-        tmux("set-option", "-up", "-t", pane, "@sidebar_input")
+        return
+    if secs is None:
+        secs = env_float("FLEET_SIDEBAR_TOAST_SECS", TOAST_SECS)
+    for client, _table, _pinned in clients(session):
+        tmux("display-message", "-c", client, "-d", str(int(secs * 1000)), text.replace("#", "##"))
 
 
 def spawn_scratch(name, env, repo="", selection="", node=""):
@@ -1976,13 +1667,6 @@ def target_name(key):
     return tr("no_repo") if repo == "none" else repo.rsplit("/", 1)[-1]
 
 
-def placeholder(key):
-    """The empty input line's hint: it names the destination whenever a heading
-    is selected (issue #1032), so where a typed name goes is never a guess."""
-    name = target_name(key)
-    return tr("sidebar_new_to_fmt", name) if name else PLACEHOLDER
-
-
 def tap(hit, highlighted):
     """What a tap on list key `hit` does, given the highlighted key (issue #1032):
     the same two-tap grammar for both kinds of row. A session row: 1st tap
@@ -2038,6 +1722,19 @@ def row_depth(row):
 def owns_fold(row):
     """A row with a block to fold: a heading, or a session row with a caret."""
     return row[0] == "hdr" or row[4].endswith(("▾", "▸"))
+
+
+def on_caret(row, x):
+    """Whether a tap at column `x` is on `row`'s fold caret (issue #1950: the
+    mouse's ←/→): a session row's ▸ / ▾ — the last cell of its tree, laid out
+    as `row_left` does with any marker — or a heading's first two cells, where
+    its folded ▸ sits (`› ` when it is tapped)."""
+    if not owns_fold(row):
+        return False
+    if row[0] == "hdr":
+        return 0 <= x < 2
+    at = width_of(row_left(" ", row[2], row[4], "")) - 2
+    return at - 1 <= x <= at
 
 
 def fold_open(row):
@@ -2430,6 +2127,19 @@ def stall_log(session, pane, reason, result):
         pass
 
 
+def crash_log(text):
+    """One entry per ui() exception (issue #1950), beside the stall log."""
+    path = Path(os.environ.get("FLEET_SIDEBAR_STALL_LOG") or BIN.parent / "logs" / "sidebar-stall.log")
+    path = path.with_name("sidebar-crash.log")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as log:
+            log.write("%s · %s\n%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                         os.environ.get("TMUX_PANE", ""), text.rstrip()))
+    except OSError:
+        pass
+
+
 def ui(screen, session, worker, lock):
     pane = os.environ["TMUX_PANE"]
     window, remote = (fields(worker, US.join(("#{window_id}", "#{@remote}"))) + ["", ""])[:2]
@@ -2440,7 +2150,15 @@ def ui(screen, session, worker, lock):
     # in a proxy window onto another machine those differ (`@12` vs `wid:…`).
     env = dict(os.environ, FLEET_SESSION=session, FLEET_SIDEBAR_CURRENT=window,
                FLEET_SIDEBAR_CURRENT_ROW=current_row)
-    show_cursor(False)
+    try:
+        curses.curs_set(0)   # the list takes no keys: no cursor to show (issue #1950)
+    except curses.error:
+        pass
+    # Nor does its tty make signals (issue #1950): a ⌃c / ⌃\ / ⌃z that reaches
+    # this pane anyway is a byte, never a SIGINT / SIGQUIT / SIGTSTP to the
+    # pane's process group — which holds this view's own tmux calls and row
+    # producers, and a tmux call killed mid-read reads as «the worker is gone».
+    curses.raw()
     curses.use_default_colors()
     pal = palette_colors(palette(), curses.COLORS)
     for number, (fg, bg) in PAIRS.items():
@@ -2451,18 +2169,9 @@ def ui(screen, session, worker, lock):
     curses.mousemask(curses.ALL_MOUSE_EVENTS)
     curses.mouseinterval(0)
     screen.keypad(True)
-    curses.meta(True)
-    # Bracketed paste (issue #1105): with it on, tmux writes a paste as
-    # ESC[200~ … ESC[201~ (input_key drops the markers for a pane without it),
-    # so a pasted paragraph is one insert, not a line typed and submitted per
-    # newline. Written past curses: it never touches this private mode.
-    os.write(1, b"\x1b[?2004h")
-    # The input line's cursor (issue #1756) is a blinking bar, as an editor's
-    # (DECSCUSR 5): tmux keeps the style per pane, so the session's own stays.
-    os.write(1, b"\x1b[5 q")
     rows, selected, offset, refresh_at = [], current_row, 0, 0.0
-    help_shown, sized = True, None
-    shown, navigation, follow_at = False, False, None
+    sized = None
+    shown, follow_at = False, None
     # A press read before it is acted on (issue #1756): what this view knows of
     # tmux — the window in view, the row it stands for, whether it is shown —
     # is up to a refresh (1s) old, and a window switched from the session side
@@ -2471,22 +2180,20 @@ def ui(screen, session, worker, lock):
     # dropped. `pressed` holds (y, buttons, when) until a read newer than it;
     # `read_at` is when the last one ran. Only a press pays it, never a tick.
     pressed, read_at = None, NEVER
-    # The input line (issue #896). Keys arrive as BYTES through the fleet-sidebar
-    # table's Any bind; decode them here, so a CJK name survives whatever locale
-    # tmux started this pane under.
-    line, toast, toast_until, spawning = Line(), "", 0.0, None
+    # A scratch session started from here (⌃s, issue #1532), polled below.
+    spawning = None
     # A press on the already-highlighted row arms the menu; its RELEASE opens it
     # (issue #898). Opening on the press would lose the menu at once: tmux closes
     # a menu on a button release outside it, and that release is this tap's own.
     armed = None
-    # A question on the input line (issue #1620, the Ask class): the menu's 改名
-    # (issue #898 — the name goes to dash-rename.sh as an argv word; no tmux or
-    # shell parser ever sees it), ⌃n's title, 加仓库, a remote row's message or
-    # answer, 切换 sub, the #543 restore question. `jobs`: what a submitted one
-    # runs, polled below — its refusal comes back as a toast.
+    # The question open under the session (the Ask class, bin/fleet-ask.py — one
+    # at a time): the menu's 改名 (issue #898 — the name goes to dash-rename.sh
+    # as an argv word; no tmux or shell parser ever sees it), a new task's
+    # title, 加仓库, a remote row's message or answer, 切换 sub, the #543 restore
+    # question, a step of the shell's open-a-session flow. `jobs`: the question's
+    # pane while it is open, then what its answer runs — polled below; a refusal
+    # comes back on the bar (`say`).
     asking, jobs = None, []
-    decoder = codecs.getincrementaldecoder("utf-8")("ignore")
-    mark_input(pane, "")
     published = None  # the (window, candidates) last written to @sidebar_next
     switch_rows = None  # the switch-rows.tsv last written (issue #1903)
     bar_gen = None  # the stage top line's record last published (issue #1904)
@@ -2514,21 +2221,135 @@ def ui(screen, session, worker, lock):
     # fleet-client-place.sh runs, then waits for its row — one at a time.
     placing = None
 
+    def ask_now(nxt):
+        """Open `nxt` on the line under the session (bin/fleet-ask.py): its pane
+        is a job, and its answer comes back to `answered`. One at a time — a
+        question asked while another is open is dropped, as a second popup was."""
+        nonlocal asking
+        if nxt is None or asking is not None:
+            return
+        asking = nxt
+        job = start_job(["python3", str(BIN / "fleet-ask.py"), "open", "--below", worker,
+                         "--wake", pane, "--spec-json", json.dumps(nxt.spec(), ensure_ascii=False)],
+                        env, None)
+        job.ask = nxt
+        jobs.append(job)
+
     def place_step(nxt, said, go, plan):
-        """One answered step of the shell's flow: the next question, a toast,
-        or — 「开在哪」 answered — the place itself, in the background."""
-        nonlocal asking, toast, toast_until, placing
+        """One answered step of the shell's flow: the next question, a word on
+        the bar, or — 「开在哪」 answered — the place itself, in the background."""
+        nonlocal placing
         if said:
-            toast, toast_until = said, time.monotonic() + TOAST_SECS
+            say(session, said)
         if go and placing is None:
             placing = plan
             jobs.append(place_job(plan, rows, env))
+            say(session, plan.get("note", ""))   # 「正在 m5 上开…」 (issue #1778)
         elif go:
-            toast, toast_until = placing.get("note", ""), time.monotonic() + TOAST_SECS
+            say(session, placing.get("note", ""))
         elif nxt is not None:
-            asking = nxt
-            line.clear()
-            mark_input(pane, "1")
+            ask_now(nxt)
+
+    def act(verb, arg=""):
+        """The list's own actions (issue #1532), each once a ⌃ key on it; since
+        issue #1950 it takes no keys, so they are VERBS, parked in @sidebar_ask
+        like a question (fleet-sidebar-menu.sh `ask`, the switcher's commands):
+        `new [machine]` a new task · `restore` · `scratch` a scratch session now ·
+        `view` the running list or the landed one · `reload` · `info` the issue ·
+        PR · ctx% column · `needs` onto the next row waiting on you."""
+        nonlocal follow_at, refresh_at, producer, view, live_rows, rows, landed_at
+        nonlocal selected, wide, spawning
+        follow_at = None
+        if verb == "new":
+            if SHELL:
+                # new: repo, then the issue, then 「开在哪」 (issue #1778)
+                place_step(*place_start("new", rows, selected or window), False, None)
+            elif spawning is None:
+                ask_now(ask_new(session, env, selection_repo(session, selected or window, env), node=arg))
+        elif verb == "restore" and SHELL:
+            # restore: repo, then the key, then 「开在哪」 (issue #1778) — the
+            # landed list is the machines' ledger, not this computer's
+            place_step(*place_start("restore", rows, selected or window), False, None)
+        elif verb == "scratch":
+            # the hub's ⌃s (issue #1532): a scratch session NOW, unnamed, its
+            # repo the highlighted row's; it becomes current, a refusal is said
+            anchor = window if not selected or selected.startswith("landed:") else selected
+            if SHELL:
+                place_step(*place_start("scratch", rows, anchor), False, None)
+            elif spawning is None:
+                spawning = spawn_scratch("", env, selection=anchor)
+        elif verb in ("view", "restore"):
+            # the running list or the landed one, in place — the hub's ⌃t (restore:
+            # the landed list, issue #1620). Either side paints what it last had
+            # at once; the run in flight for the other one is dropped.
+            drop_rows(producer)
+            producer = None
+            if view == "live":
+                view, live_rows, rows = "landed", rows, landed or [
+                    ["hdr", "", "", tr("sidebar_landed_loading")] + [""] * (ROW_FIELDS - 4)]
+                landed_at = NEVER
+            elif verb == "view":
+                view, rows, selected = "live", live_rows, current_row
+        elif verb == "reload":
+            landed_at = NEVER   # the shown list now, landed included
+        elif verb == "info":
+            # issue · PR · ctx%, right-aligned; the width follows at once, within
+            # FLEET_SIDEBAR_WIDTH_MAX. Folded is the default, names come first.
+            wide = not wide
+        elif verb == "needs" and view == "live":
+            nxt = next_attention(rows, selected)
+            if nxt:
+                selected = nxt
+                if not jump(session, selected, pane, lock):
+                    follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
+        refresh_at = 0
+
+    def answered(ask, rc, out):
+        """The answer from the question's line (bin/fleet-ask.py's JSON): run
+        what it answers, through the path its kind always had. Cancelled (Esc,
+        an empty one-key answer, the pane closed) does nothing."""
+        nonlocal asking, selected, follow_at
+        asking = None
+        if rc == 2:
+            # the line could not open: why, on the bar
+            say(session, "✗ " + (last_line(out) or tr("sidebar_spawn_failed")))
+            return
+        try:
+            answer = json.loads(out.strip().splitlines()[-1]) if rc == 0 and out.strip() else {}
+        except ValueError:
+            answer = {}
+        if not answer:
+            return
+        if ask.keys:
+            press = answer.get("key", "")
+            if press and press in ask.keys and ask.kind == "place-held":
+                # 「已在别处跑」→ y: over to the row that runs it (issue #1778)
+                hit = held_row(rows, ask.plan, ask.node)
+                if hit:
+                    selected, follow_at = hit, None
+                    if not jump(session, selected, pane, lock):
+                        follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
+            elif press and press in ask.keys:
+                job = submit(ask, press, session, env)
+                if job is not None:
+                    jobs.append(job)
+            return
+        if ask.menu:
+            place_step(*place_answer(ask, answer.get("choice", "")), ask.plan)
+            return
+        text = answer.get("text", "").strip()
+        if ask.kind == "new" and answer.get("choice"):
+            ask.repo = answer["choice"]   # the repo Tab stepped to
+        if ask.kind == "rename":
+            # An empty rename still goes to dash-rename.sh, which decides (an
+            # empty name cancels, as in the hub).
+            run(["bash", str(BIN / "dash-rename.sh"), "--wid", ask.arg, text], env=env)
+        elif ask.kind.startswith("place-"):
+            place_step(*place_answer(ask, text), ask.plan)
+        else:
+            job = submit(ask, text, session, env)
+            if job is not None:
+                jobs.append(job)
 
     def compose_take(verbs):
         """The writing area's ↵ (issue #1953): `compose` on the queue means its
@@ -2537,12 +2358,11 @@ def ui(screen, session, worker, lock):
         row that was in view when the writing area opened (「自动」), else the only
         one, else the place-repo question — and placed in the background, its
         「开工中…」 row painted at once. The other verbs go on as they came."""
-        nonlocal asking, toast, toast_until
         rest = [v for v in verbs if v != "compose"]
         if len(rest) == len(verbs):
             return verbs
         if placing is not None:
-            toast, toast_until = placing.get("note", ""), time.monotonic() + TOAST_SECS
+            say(session, placing.get("note", ""))
             return rest
         src = switch_lib().state_dir() / "compose-send.json"
         dst = src.with_name("compose-send.%d.json" % time.time_ns())
@@ -2566,12 +2386,11 @@ def ui(screen, session, worker, lock):
             if len(repos) == 1:
                 plan["repo"] = repos[0]
             elif not repos:
-                toast, toast_until = tr("sidebar_place_norepo"), time.monotonic() + TOAST_SECS
+                say(session, tr("sidebar_place_norepo"))
                 return rest
             else:
-                asking = Ask("place-repo", tr("sidebar_place_repo"), hint=tr("sidebar_place_keys"), plan=plan,
-                             menu=[(r, r.rsplit("/", 1)[-1], r.split("/", 1)[0], False) for r in repos])
-                mark_input(pane, "1")
+                ask_now(Ask("place-repo", tr("sidebar_place_repo"), hint=tr("sidebar_place_keys"), plan=plan,
+                            menu=[(r, r.rsplit("/", 1)[-1], r.split("/", 1)[0], False) for r in repos]))
                 return rest
         place_step(None, "", True, plan)
         return rest
@@ -2606,6 +2425,11 @@ def ui(screen, session, worker, lock):
                 # nothing. Keep the rows; the next run, at once, decides.
                 empty_held, failure, refresh_at = True, "empty frame", 0
             elif fresh is not None:
+                # The 要你处理 summary row (issue #1750) is not drawn any more
+                # (issue #1950): the list is sessions only, and a row waiting on
+                # you is its own red `!`. The producer still writes it (EPIC
+                # #1949 convention 3: it goes there after #1940).
+                fresh = [row for row in fresh if not is_attn_summary(row)]
                 rows, loaded, frame_at, failure, empty_held, stalled = fresh, True, now, "", False, False
                 remember_folds(rows, fold_cache)
                 if SWITCH_ON:
@@ -2629,52 +2453,49 @@ def ui(screen, session, worker, lock):
             spawning.log.seek(0)
             error = spawning.log.read().strip().splitlines()
             spawning.log.close()
-            if spawning.returncode == 0:
-                line.clear()
-                mark_input(pane, line.text)
-                leave_navigation(session)
-            else:
-                # Keep the name: a cap refusal is retried once a slot frees.
+            if spawning.returncode != 0:
+                # Why it could not open, on the bar (issue #1950).
                 reason = error[-1] if error else tr("sidebar_spawn_failed")
-                toast = "✗ " + reason.split(": ", 1)[-1]
-                toast_until = now + TOAST_SECS
+                say(session, "✗ " + reason.split(": ", 1)[-1])
             spawning = None
             refresh_at = 0
         for job in [j for j in jobs if j.poll() is not None]:
             jobs.remove(job)
             job.out.seek(0)
-            said, nxt = job.done(job.returncode, job.out.read())
+            out = job.out.read()
             job.out.close()
-            if said:
-                toast, toast_until = said, now + TOAST_SECS
-            if nxt is not None and asking is None and spawning is None:
-                asking = nxt
-                line.clear()
-                mark_input(pane, "1")
+            if getattr(job, "ask", None) is not None:
+                answered(job.ask, job.returncode, out)
+            else:
+                said, nxt = job.done(job.returncode, out)
+                if said:
+                    say(session, said)
+                if spawning is None:
+                    ask_now(nxt)
             refresh_at = 0
         if placing is not None and placing.get("state") == "end":
             placing = None
         elif placing is not None and placing.get("state") == "await" and view == "live":
             # The hub said done: the new session is selected and switched to as
             # soon as the list carries it (issue #1778) — read every second meanwhile.
+            if not placing.get("said"):
+                placing["said"] = True
+                say(session, placing.get("note", ""))   # 「正在 m5 上开…」
             hit = place_found(rows, placing) if loaded else ""
             if hit:
                 selected, follow_at = hit, None
-                toast, toast_until = tr("sidebar_place_opened_fmt", placing["machine"]), now + TOAST_SECS
+                say(session, tr("sidebar_place_opened_fmt", placing["machine"]))
                 placing = None
                 if not jump(session, selected, pane, lock):
                     follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
                 refresh_at = 0
             elif now >= placing["until"]:
-                toast, toast_until = tr("sidebar_place_notyet_fmt", placing["machine"]), now + TOAST_SECS
+                say(session, tr("sidebar_place_notyet_fmt", placing["machine"]))
                 placing = None
             else:
                 refresh_at = min(refresh_at, now + 1)
         if follow_at is not None and now >= follow_at:
-            # The highlight settled: switch once. Nothing here touches the
-            # client's key table, and the Up/Down binds re-enter fleet-sidebar
-            # before their key arrives, so ↑↓ keep browsing after the switch;
-            # Enter/Escape (whose binds do not re-enter) still hand input back.
+            # A switch the view lock held back (issue #1536): try it again.
             follow_at = None
             if acts(selected) and selected != current_row:
                 if jump(session, selected, pane, lock):
@@ -2696,8 +2517,9 @@ def ui(screen, session, worker, lock):
                                              "#{session_attached}", "#{@popup_open}",
                                              "#{window_id}", "#{@sidebar_worker}",
                                              "#{client_key_table}", "#{@remote}",
-                                             "#{@popup_pid}", "#{@fleet_single}")))
-                if len(info) != 10:
+                                             "#{@popup_pid}", "#{@fleet_single}",
+                                             "#{@sidebar_ask}")))
+                if len(info) != 11:
                     return
                 if info[9] == "1":
                     # The one-pane layout (issue #1904): zoomed away behind the
@@ -2715,13 +2537,16 @@ def ui(screen, session, worker, lock):
                     env["FLEET_SIDEBAR_CURRENT_ROW"] = current_row
                     switch_visit(current_row)
                 worker = info[5] or worker
-                navigation = info[6] == "fleet-sidebar"
-                route_input(session)
+                leave_navigation(session)
                 # kill-pane does not emit pane-exited on every supported tmux.
                 # Never let this view keep an otherwise closed worker window alive.
                 if fields(worker, "#{pane_dead}") != ["0"]:
                     return
                 shown = visible(info[:4] + info[8:9], time.time())
+                if shown and info[10]:
+                    # A question or verb parked while this view was hidden (its F12
+                    # landed mid-move): take it now, as its F12 would have.
+                    curses.ungetch(curses.KEY_F12)
                 if not shown and info[3] not in ("", "0"):
                     # Under a popup: look again soon, so its close repaints the
                     # list within a second (issue #1536), not at the next tick.
@@ -2813,11 +2638,11 @@ def ui(screen, session, worker, lock):
                 continue
         height, width = screen.getmaxyx()
         # A repo group heading (issue #974) is inert to every action: `hdr` in the
-        # id field. One with a spawn target is a cursor stop since #997 — ↑/↓ land
-        # on it so a typed name starts THERE — but a tap, Enter, `.` and the
-        # follow all ignore it (`acts`); ←/→ on it fold and unfold its whole repo
-        # group (`folds`, issue #1037). `where` is the selection's place in the
-        # PAINTED list, which the scroll offset is measured in.
+        # id field. One with a spawn target is a tap stop since #997 — a tap
+        # highlights it, a second one opens a new session THERE — but a jump and
+        # the menu ignore it (`acts`); a tap on its caret folds and unfolds its
+        # whole repo group (`folds`, issue #1037). `where` is the selection's
+        # place in the PAINTED list, which the scroll offset is measured in.
         if view == "live":
             rows = with_portal(rows, placing)   # 「新任务」 on top (issue #1953)
         ids = selectable(rows)
@@ -2828,16 +2653,13 @@ def ui(screen, session, worker, lock):
             selected = current_row if current_row in ids else (ids[0] if ids else "")
         index = ids.index(selected) if selected in ids else 0
         where = next((i for i, row in enumerate(rows) if key_of(row) == selected), 0)
-        # The `? 快捷键` row sits above the input line whenever a task row
-        # still fits above it; the list loses that one row.
-        help_y = height - 2 if height >= 3 else None
         # The 「刷新中…」 row (issue #1536): the list waits on a frame that has not
         # come — the first, or one past STALE_SECS. The rows it has stay painted
-        # one row lower; the top row says what the view is waiting for.
-        # a task the writing area sent says so in its own row (issue #1953)
-        noted = placing is not None and placing.get("verb") != "compose"
-        waiting = 1 if height >= 4 and (not loaded or age > STALE_SECS or noted) else 0
-        page = max(1, height - waiting - (1 if help_y is None else 2))
+        # one row lower; the top row says what the view is waiting for. Nothing
+        # else is ever a row here (issue #1950): no summary, no `?` row, no
+        # input line — the whole height is the list's.
+        waiting = 1 if height >= 4 and (not loaded or age > STALE_SECS) else 0
+        page = max(1, height - waiting)
         offset = max(0, min(offset, max(0, len(rows) - page)))
         if index == 0:
             where = 0  # the top row keeps the heading above it in view
@@ -2856,33 +2678,20 @@ def ui(screen, session, worker, lock):
                     pass  # a resize may race this paint
 
         screen.erase()
-        if waiting and noted:
-            put(0, placing.get("note", ""), curses.color_pair(PAIR_TOAST))  # 「正在 m5 上开…」
-        elif waiting:
+        if waiting:
             put(0, tr("sidebar_refreshing"), dim_attr)
         for y, row in enumerate(rows[offset:offset + page], waiting):
             wid, state, glyph, label, tree, badge, _depth, _detail, node = row[:9]
             if wid == "hdr":
-                if navigation and key_of((wid, state)) == selected:
+                if key_of((wid, state)) == selected:
+                    # a tapped heading (issue #1032): its second tap opens a new
+                    # session in that repo
                     put(y, "› " + label, curses.color_pair(PAIR_SEL) | curses.A_BOLD, fill=True)
-                elif is_attn_summary(row):
-                    # the 要你处理 summary (issue #1750), never a cursor stop: drawn
-                    # like a row — its `!` alone red in the glyph column, the text
-                    # plain (issue #1622: only a state glyph has a colour). Too
-                    # narrow for all of it: the trailing key goes first, so 「点这里」
-                    # (the tap, issue #1771) is what stays.
-                    if label.endswith(" ⌃K") and 2 + cells_of(label) > width - 1:
-                        label = label[:-3]
-                    put(y, "  " + label, curses.color_pair(PAIR_FG) | curses.A_BOLD)
-                    try:
-                        screen.addstr(y, 2, "!", curses.color_pair(STATE_PAIR["needs"]) | curses.A_BOLD)
-                    except curses.error:
-                        pass  # a resize may race this paint
                 else:
                     put(y, label, dim_attr | curses.A_BOLD)
                 continue
             # The text is one colour; the glyph alone says the state (issue #1622).
-            raised = wid == current_row or (navigation and wid == selected)
+            raised = wid == current_row or wid == selected
             attr = curses.color_pair(PAIR_SEL if raised else PAIR_FG)
             lost = node.endswith("!") and not raised
             if lost:
@@ -2893,7 +2702,7 @@ def ui(screen, session, worker, lock):
             glyph_attr = curses.color_pair(pair + SEL_GLYPH if raised else pair) if pair else attr
             if lost:
                 glyph_attr |= curses.A_DIM
-            marker = "▶" if wid == current_row else "›" if navigation and wid == selected else " "
+            marker = "▶" if wid == current_row else "›" if wid == selected else " "
             # `marker glyph tree label` (issue #836): the hierarchy glyph is its own
             # fixed cell between the state glyph and the name, so at 30 columns every
             # name starts in the same place instead of a child's text sitting two
@@ -2938,87 +2747,14 @@ def ui(screen, session, worker, lock):
                             PAIR_HERE + SEL_GLYPH if raised else PAIR_HERE))
                 except curses.error:
                     pass
-        # The selected row's whole name takes the `?` row while the keyboard is
-        # here and the list clipped it (issue #1328); its status words live in
-        # the worker pane's header now (issue #1377), so `? 快捷键` stays put.
-        info = None
-        if help_y is not None and asking is not None:
-            info = asking.hint or None  # a rename has none: `? 快捷键` stays
-        elif help_y is not None and navigation:
-            row = next((r for r in rows if r[0] == selected and r[0] != "hdr"), None)
-            info = hint_line(row, width, wide)
-        help_shown = help_y is not None and info is None
-        if asking is not None and asking.menu:
-            # A menu (issue #1778): its lines over the bottom of the list, just
-            # above the `?` row — the highlighted one raised, a greyed one dim.
-            bottom = help_y if help_y is not None else height - 1
-            fit = max(0, bottom - waiting)
-            items = list(enumerate(asking.menu))
-            if len(items) > fit:  # too short for all: the highlighted one stays in view
-                first = min(max(0, asking.at - fit + 1), len(items) - fit)
-                items = items[first:first + fit]
-            span = max(0, width - 1)
-            for y, (i, (_value, label, note, greyed)) in enumerate(items, bottom - len(items)):
-                text = ("› " if i == asking.at else "  ") + label
-                if note and width_of(text) + 2 + width_of(note) <= span:
-                    text += " " * (span - width_of(text) - width_of(note)) + note
-                attr = (curses.color_pair(PAIR_SEL) | curses.A_BOLD if i == asking.at else
-                        dim_attr if greyed else curses.color_pair(PAIR_FG))
-                put(y, text, attr, fill=True)
-        if info is not None:
-            put(help_y, info, curses.color_pair(PAIR_FG) | curses.A_BOLD)
-        elif help_y is not None:
-            put(help_y, HELP_ROW, dim_attr)
-        # ONE input line closes the list (issue #896): the hints moved to the
-        # `?` sheet. Typing while the keyboard is here fills it; Enter starts a
-        # scratch session named after it. Away from the sidebar only `›` shows.
-        # Hide is keyboard-only (prefix e): no tap here hides anything (#821).
-        room = max(0, width - 3)
-        # The terminal cursor (issue #1756): while the keyboard is here it
-        # blinks on the input line, where the ▏ is — Claude Code's input box.
-        # tmux draws only the cursor of the client's own pane, which the pin
-        # (PIN_KEY) makes this view exactly while the client navigates, so it
-        # shows here with the keyboard and goes back to the session with it.
-        caret = None
-        if asking is not None and asking.menu:
-            put(height - 1, asking.prompt, curses.A_BOLD)  # the menu's title; no caret
-        elif asking is not None:
-            prefix = asking.prompt
-            glyph = "" if asking.keys else "▏"
-            put(height - 1, prefix + line.view(max(0, room - sum(map(cells, prefix))), glyph),
-                curses.A_BOLD)
-            caret = cells_of(prefix) + cells_of(
-                line.halves(max(0, room - cells_of(prefix)) - len(glyph))[0])
-        elif spawning is not None:
-            put(height - 1, "› " + line.view(max(0, room - 2), "") + " …", dim_attr)
-        elif toast and time.monotonic() < toast_until:
-            put(height - 1, "› " + toast, curses.color_pair(PAIR_TOAST))
-        elif line.text:
-            put(height - 1, "› " + line.view(room if navigation else room - 1,
-                                             "▏" if navigation else ""),
-                curses.color_pair(PAIR_FG) | curses.A_BOLD if navigation else dim_attr)
-            if navigation:
-                caret = 2 + cells_of(line.halves(room - 1)[0])
-        else:
-            put(height - 1, "› " + placeholder(selected) if navigation else "›", dim_attr)
-            if navigation:
-                caret = 2
-        if caret is not None and not 0 <= caret < width - 1:
-            caret = None
-        show_cursor(caret is not None)
-        if caret is not None:
-            try:
-                screen.move(height - 1, caret)
-            except curses.error:
-                pass
         screen.refresh()
         # Wake for whichever comes first: the next repaint, a pending follow or
         # a finished spawn.
         wait = refresh_at - time.monotonic()
         if follow_at is not None:
             wait = min(wait, follow_at - time.monotonic())
-        if spawning is not None or jobs:
-            wait = min(wait, 0.2)
+        if spawning is not None or any(getattr(j, "ask", None) is None for j in jobs):
+            wait = min(wait, 0.2)   # an open question wakes us itself (F11)
         if producer is not None or folding is not None:
             wait = min(wait, PRODUCER_POLL)
         mouse = None
@@ -3047,14 +2783,21 @@ def ui(screen, session, worker, lock):
             continue
         if key == curses.KEY_F11:
             # A menu action finished (fleet-sidebar-menu.sh wakes the view with
-            # F11, issue #1530): read the rows now, not at the next tick.
+            # F11, issue #1530): read the rows now, not at the next tick. A
+            # question's line sends it too, its answer printed, as it exits
+            # (bin/fleet-ask.py --wake): reap it now, the loop's top runs it.
+            for job in jobs:
+                if getattr(job, "ask", None) is not None:
+                    try:
+                        job.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        pass
             refresh_at = 0
             continue
         if key == curses.KEY_F10:
             # prefix k (issue #1771, conf/tmux-shell.conf): the 要你处理 jump from
             # wherever the keyboard is — onto the next row waiting on you and
-            # over to it, as a tap on the summary line does. Whatever is typed on
-            # the input line stays.
+            # over to it.
             if view != "live":
                 view, rows, selected = "live", live_rows, current_row
             nxt = next_attention(rows, selected)
@@ -3075,26 +2818,38 @@ def ui(screen, session, worker, lock):
                     selected, follow_at, refresh_at = nxt, None, 0
                     if not jump(session, nxt, pane, lock):
                         follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
-            # A menu item that asks here (issue #1620): it parked
-            # `<kind> <arg>…` in @sidebar_ask on this pane (a rename: the row's
-            # @id in @sidebar_rename, as since #898), switched the client to the
-            # sidebar table and sent F12 to wake us.
-            parked = tmux("show-options", "-pqv", "-t", pane, "@sidebar_ask")
-            wid = tmux("show-options", "-pqv", "-t", pane, "@sidebar_rename")
-            tmux("set-option", "-up", "-t", pane, "@sidebar_ask", ";",
-                 "set-option", "-up", "-t", pane, "@sidebar_rename")
+            # A menu item that asks (issue #1620): it parked `<kind> <arg>…` in
+            # @sidebar_ask on this pane (a rename: the row's @id in
+            # @sidebar_rename, as since #898) and sent F12 to wake us. The
+            # question opens under the session (issue #1950, `ask_now`).
+            if spawning is not None:
+                # One spawn at a time: what is parked stays parked, and the
+                # tick after the spawn ends takes it (the re-arm above).
+                continue
+            # Read and cleared in ONE tmux call (as take_switch): a verb parked
+            # between a read and its clear would be cleared unread.
+            got = run(["tmux", "show-options", "-pqv", "-t", pane, "@sidebar_ask", ";",
+                       "display-message", "-p", "-t", pane, "@@", ";",
+                       "show-options", "-pqv", "-t", pane, "@sidebar_rename", ";",
+                       "set-option", "-up", "-t", pane, "@sidebar_ask", ";",
+                       "set-option", "-up", "-t", pane, "@sidebar_rename"]).stdout
+            # (a printable separator: tmux 3.4 vis-escapes a control one)
+            parked, _, wid = got.partition("@@\n")
+            parked, wid = parked.strip(), wid.strip()
             if wid and not parked:
                 parked = "rename " + wid
             kind, _, rest = parked.strip().partition(" ")
             arg, _, extra = rest.partition(" ")
-            if spawning is not None or not kind:
+            if not kind:
                 continue
-            follow_at, toast, nxt = None, "", None
+            follow_at, nxt = None, None
             if kind == "rename" and arg.startswith("@"):
-                nxt = Ask("rename", tr("sidebar_rename"), arg=arg)
-                line.set(fields(arg, "#{window_name}")[0])
-            elif kind == "new" and not SHELL:
-                nxt = ask_new(session, env, selection_repo(session, selected or window, env), node=arg)
+                nxt = Ask("rename", tr("sidebar_rename"), arg=arg,
+                          text=fields(arg, "#{window_name}")[0])
+            elif kind in ("new", "restore", "scratch", "view", "reload", "info", "needs"):
+                act(kind, arg)
+            elif kind == "landed" and not SHELL:
+                act("view")   # the menu's 恢复已落地 (issue #1532)
             elif kind == "repo" and not SHELL:
                 nxt = Ask("repo", tr("sidebar_ask_repo"), hint=tr("sidebar_ask_repo_hint"))
             elif kind in ("message", "answer") and arg.startswith("wid:"):
@@ -3104,293 +2859,20 @@ def ui(screen, session, worker, lock):
                 nxt = Ask(kind, tr("sidebar_ask_answer" if kind == "answer" else "sidebar_ask_message"),
                           arg=arg, hint=hint)
             elif kind == "sub" and arg.startswith("@"):
-                nxt = Ask("sub", tr("sidebar_ask_sub"), arg=arg, hint=tr("sidebar_ask_sub_loading"))
+                # the accounts first: the question opens once they are read
+                say(session, tr("sidebar_ask_sub_loading"), 3)
                 jobs.append(start_job(["bash", str(BIN / "fleet-manual-sub.sh"), "list", session],
-                                      env, sub_choices(nxt)))
-            elif kind == "landed" and view == "live" and not SHELL:
-                curses.ungetch(20)  # ⌃t: the landed list, in place (issue #1532)
+                                      env, sub_choices(Ask("sub", tr("sidebar_ask_sub"), arg=arg))))
             elif kind == "jump" and acts(arg):
                 # 回答 on a row of this machine: its own question, in its own
                 # pane — the window the answer popup only copied.
                 selected = arg
                 if not jump(session, arg, pane, lock):
                     follow_at = time.monotonic() + LOCK_RETRY
-            if nxt is not None:
-                if kind != "rename":
-                    line.clear()
-                asking = nxt
-                mark_input(pane, "1")
+            ask_now(nxt)
             refresh_at = 0
             continue
-        if key == 27:
-            key = escape_word(screen)
-        if asking is not None and asking.menu and key != curses.KEY_MOUSE:
-            # A menu (issue #1778) takes every key: ↑↓ / Tab move, ↵ picks,
-            # Esc cancels; what is typed meanwhile is dropped.
-            if key in (curses.KEY_UP, curses.KEY_BTAB):
-                asking.move(-1)
-            elif key in (curses.KEY_DOWN, 9):
-                asking.move(1)
-            elif key in (10, 13, curses.KEY_ENTER):
-                ask, asking = asking, None
-                mark_input(pane, line.text)
-                place_step(*place_answer(ask, ask.menu[ask.at][0]), ask.plan)
-                refresh_at = 0
-            elif key == 27:
-                asking = None
-                mark_input(pane, line.text)
-            decoder.reset()
-            continue
-        if isinstance(key, str):
-            # A bracketed paste (issue #1105): one insert at the cursor, on the
-            # name or the rename alike. A spawn in flight owns the name.
-            chars = paste_text(key)
-            if chars and spawning is None:
-                was, toast = line.text, ""
-                line.insert(chars)
-                if not was:
-                    mark_input(pane, line.text)
-            continue
-        op = edit_of(key, line.text)
-        if op:
-            # The input line's own keys (issue #1097). A spawn in flight owns
-            # the name, so they wait like typing does.
-            if spawning is None:
-                was, toast = line.text, ""
-                getattr(line, op)()
-                if bool(was) != bool(line.text):
-                    mark_input(pane, "1" if asking is not None else line.text)
-            continue
-        # A typed key is a byte; a multi-byte one (。 ？, CJK) completes over
-        # several getch calls, and only the last one yields its character.
-        byte = 0 <= key < 256 and key not in (8, 9, 10, 13, 14, 15, 18, 19, 20, 27, 127)
-        chars = "".join(c for c in decoder.decode(bytes([key])) if typed(c)) if byte else ""
-        press = KEY_ALIASES.get(chars, chars)
-        if asking is not None and asking.keys and (byte or key in (10, 13, curses.KEY_ENTER)):
-            # A one-key question (restore: y / r): the key IS the answer; any
-            # other key — Enter included — cancels it.
-            if not chars and byte:
-                continue  # the first byte of a multi-byte key: wait for it
-            ask, asking = asking, None
-            mark_input(pane, line.text)
-            decoder.reset()
-            if press and press in ask.keys and ask.kind == "place-held":
-                # 「已在别处跑」→ y: over to the row that runs it (issue #1778)
-                hit = held_row(rows, ask.plan, ask.node)
-                if hit:
-                    selected, follow_at = hit, None
-                    if not jump(session, selected, pane, lock):
-                        follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
-            elif press and press in ask.keys:
-                jobs.append(submit(ask, press, session, env))
-            refresh_at = 0
-            continue
-        if press == "." and not line.text and asking is None and spawning is None and acts(selected):
-            # `.` on an EMPTY line is the row menu (dash-keymap.sh --panel sidebar
-            # `menu`); inside a name it types. The follow is dropped: the menu
-            # acts on the highlighted row and the window in view stays put.
-            follow_at = None
-            open_menu(session, selected, env)
-            continue
-        if press == "?" and not line.text and asking is None and spawning is None:
-            # `?` on an EMPTY line is the sidebar's key sheet (dash-keymap.sh
-            # --panel sidebar `help`, issue #948); inside a name it types.
-            follow_at = None
-            open_help(screen, env)
-            refresh_at = 0
-            continue
-        if byte:
-            # A (piece of a) typed character. Every letter types — j k q n
-            # included; movement is ↑↓ only, hide is prefix e.
-            if chars and spawning is None:
-                was, toast = line.text, ""
-                line.insert(chars)
-                if not was:
-                    mark_input(pane, line.text)
-            continue
-        decoder.reset()
-        if key == curses.KEY_UP and ids:
-            selected = ids[max(0, index - 1)]
-            follow_at = time.monotonic() + FOLLOW_SECS
-        elif key == curses.KEY_DOWN and ids:
-            selected = ids[min(len(ids) - 1, index + 1)]
-            follow_at = time.monotonic() + FOLLOW_SECS
-        elif key == curses.KEY_HOME and ids:
-            selected = ids[0]
-            follow_at = time.monotonic() + FOLLOW_SECS
-        elif key == curses.KEY_END and ids:
-            selected = ids[-1]
-            follow_at = time.monotonic() + FOLLOW_SECS
-        elif key == 11 and ids and view == "live":
-            # ⌃k on an empty line (issue #1750): onto the next row waiting on
-            # you, and the view follows it there like any move does
-            nxt = next_attention(rows, selected)
-            if nxt:
-                selected = nxt
-                follow_at = time.monotonic() + FOLLOW_SECS
-        elif key in (10, 13, curses.KEY_ENTER) and asking is not None:
-            # ↵ answers the question (submit). An empty rename still goes to
-            # dash-rename.sh, which decides (an empty name cancels, as in the
-            # hub); any other empty answer cancels here.
-            ask, text, asking = asking, line.text.strip(), None
-            line.clear()
-            mark_input(pane, line.text)
-            if ask.kind == "rename":
-                run(["bash", str(BIN / "dash-rename.sh"), "--wid", ask.arg, text], env=env)
-            elif ask.kind.startswith("place-"):
-                place_step(*place_answer(ask, text), ask.plan)
-            else:
-                job = submit(ask, text, session, env)
-                if job is not None:
-                    jobs.append(job)
-            refresh_at = 0
-        elif key == 27 and asking is not None:
-            asking = None
-            line.clear()
-            mark_input(pane, line.text)
-        elif key == 9 and asking is not None:
-            # Tab steps a question's choices (a new task's repo, an account);
-            # ⌃i's info column waits until the question is answered.
-            value = asking.step()
-            if value:
-                line.set(value)
-        elif key in (10, 13, curses.KEY_ENTER) and line.text.strip():
-            # A typed name: start its scratch session (the bind kept the
-            # keyboard here while @sidebar_input was set). One spawn at a time.
-            follow_at = None
-            if SHELL and asking is None:
-                # a scratch session by that name, on a machine (issue #1778)
-                nxt, said = place_start("scratch", rows, selected or window, name=line.text.strip())
-                place_step(nxt, said, False, None)
-            elif spawning is None and not SHELL:
-                toast = ""
-                spawning = spawn_scratch(line.text.strip(), env,
-                                         selection_repo(session, selected or window, env))
-        elif key in (10, 13, curses.KEY_ENTER) and view == "landed":
-            # ↵ on a landed row restores it (issue #1532) — the hub's ⌃o, as the
-            # current window — and the list goes back to the running one, where
-            # the restored session shows up as ▶.
-            follow_at = None
-            if selected.startswith("landed:"):
-                job = restore_landed(session, selected, env)
-                if job is not None:
-                    jobs.append(job)
-                view, rows, selected = "live", live_rows, current_row
-            refresh_at = 0
-        elif key in (10, 13, curses.KEY_ENTER):
-            # The Enter bind already returned the client to root and sent the key
-            # straight here (issue #1530). If the follow (or anyone) has moved the
-            # session since, a switch back to the row it was read against would
-            # yank the operator — with nothing to jump to, Enter only hands over.
-            follow_at = None
-            if acts(selected) and selected != current_row and not jump(session, selected, pane, lock):
-                follow_at = time.monotonic() + LOCK_RETRY  # lock busy: retried (#1536)
-            refresh_at = 0
-        elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and view == "landed":
-            pass  # the landed list folds in the hub (⌃t there); here it is flat
-        elif key in (curses.KEY_LEFT, curses.KEY_RIGHT) and folds(selected):
-            # A session row folds its subtree; a repo heading its whole group
-            # (issue #1037) — one helper, the hub's, for both.
-            # Painted at once (fold_now), written in the background; the
-            # producer waits for the write, so its frame is never the old one.
-            verb = "collapse" if key == curses.KEY_LEFT else "expand"
-            target = folds(selected)
-            rows, holder = fold_now(rows, target, verb, window, fold_cache)
-            if holder and verb == "collapse":
-                selected = holder
-            if folding is not None:
-                try:
-                    folding.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    folding.kill()
-            folding = subprocess.Popen(["bash", str(BIN / "dash-fold-toggle.sh"), verb, target],
-                                       env=dict(env, DASH_FOLD_PLAIN="1"), stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            refresh_at = 0
-        elif key == 14:
-            # ⌃n (dash-keymap.sh --panel sidebar `new`; its ⌥n fallback is
-            # rewritten to ⌃n by the bind). The popup blocks; a follow scheduled
-            # just before must not fire after it and switch away from the window
-            # the spawn made current.
-            follow_at = None
-            if SHELL and asking is None:
-                # new: repo, then the issue, then 「开在哪」 (issue #1778)
-                place_step(*place_start("new", rows, selected or window), False, None)
-            elif asking is None and spawning is None and not SHELL:
-                # The title on the input line (issue #1620; it was a popup) —
-                # whatever is typed already starts it.
-                asking = ask_new(session, env, selection_repo(session, selected or window, env))
-                mark_input(pane, "1")
-            refresh_at = 0
-        elif key == 15:
-            # ⌃o (`restore`; its ⌥o fallback is rewritten to ⌃o by the bind). The
-            # restored window becomes current; the hook moves this view there.
-            follow_at = None
-            if SHELL and asking is None:
-                # restore: repo, then the key, then 「开在哪」 (issue #1778) — the
-                # landed list is the machines' ledger, not this computer's
-                place_step(*place_start("restore", rows, selected or window), False, None)
-            elif view == "live" and not SHELL:
-                # The landed list, in place — ⌃t's (issue #1620: the restore
-                # popup was the same list a second time).
-                curses.ungetch(20)
-            refresh_at = 0
-        elif key == 19:
-            # ⌃s (`scratch`, issue #1532): the hub's ⌃s — a scratch session NOW,
-            # unnamed (a typed name, if any, names it), its repo the highlighted
-            # row's. It becomes current like a typed ↵'s; a refusal toasts.
-            follow_at = None
-            if SHELL and asking is None:
-                # a scratch session, unnamed unless a name is typed: repo, then
-                # 「开在哪」 (issue #1778)
-                anchor = window if not selected or selected.startswith("landed:") else selected
-                place_step(*place_start("scratch", rows, anchor, name=line.text.strip()), False, None)
-            elif SHELL:
-                pass
-            elif spawning is None and asking is not None and asking.kind == "new":
-                # ⌃s on a new task's title: a scratch session by that name
-                # instead, there (its repo, its machine) — the popup's ⌃s (#1541).
-                ask, asking, toast = asking, None, ""
-                spawning = spawn_scratch(line.text.strip(), env, ask.repo, node=ask.node)
-            elif spawning is None and asking is None:
-                toast = ""
-                anchor = window if not selected or selected.startswith("landed:") else selected
-                spawning = spawn_scratch(line.text.strip(), env, selection=anchor)
-        elif key == 20:
-            # ⌃t (`view`, issue #1532): the running list ⇄ the landed one, in
-            # place — the hub's ⌃t. Either side paints what it last had at once,
-            # and the run in flight for the other one is dropped, not waited on.
-            follow_at = None
-            drop_rows(producer)
-            producer = None
-            if view == "live":
-                view, live_rows, rows = "landed", rows, landed or [
-                    ["hdr", "", "", tr("sidebar_landed_loading")] + [""] * (ROW_FIELDS - 4)]
-                landed_at = NEVER
-            else:
-                view, rows, selected = "live", live_rows, current_row
-            refresh_at = 0
-        elif key == 18:
-            # ⌃r (`reload`, issue #1532): read the shown list now, landed included.
-            landed_at = NEVER
-            refresh_at = 0
-        elif key == 9:
-            # ⌃i / Tab (`info`, issue #1532): open or fold the info column —
-            # issue · PR · ctx%, right-aligned. The width follows at once, within
-            # FLEET_SIDEBAR_WIDTH_MAX; folded is the default, names come first.
-            wide = not wide
-            refresh_at = 0
-        elif key == 27 and line.text and spawning is None:
-            # Escape clears a typed name first; the keyboard stays here.
-            line.clear()
-            toast = ""
-            mark_input(pane, line.text)
-        elif key == 27:
-            # Escape bails out of a pending follow too: the worker in view keeps input.
-            follow_at = None
-            selected = current_row  # the row in view: a proxy window is its `wid:` row
-            refresh_at = 0
-        elif key == curses.KEY_MOUSE:
+        if key == curses.KEY_MOUSE:
             if mouse is None:
                 mouse = held_press()
                 if mouse is None:
@@ -3398,7 +2880,7 @@ def ui(screen, session, worker, lock):
                 if mouse[1] & PRESS and mouse[2] - read_at > FRESH_SECS:
                     pressed, refresh_at = mouse, 0  # read tmux first (above)
                     continue
-            y, buttons = mouse[:2]
+            y, buttons, _when, x = mouse
             ry = y - waiting  # below the 「刷新中…」 row when it shows (issue #1536)
             hit_row = rows[offset + ry] if 0 <= ry < page and offset + ry < len(rows) else None
             hit = key_of(hit_row) if hit_row is not None else None
@@ -3409,42 +2891,55 @@ def ui(screen, session, worker, lock):
                 # A landed row (issue #1532): a tap highlights it, a tap on the
                 # highlighted one restores it — the session row's two-tap grammar.
                 action = "restore" if action == "menu" else "select"
-            if buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
+            if buttons & (curses.BUTTON3_PRESSED | curses.BUTTON3_CLICKED):
+                # A right-click (a long press on an iPad) on a row (issue #1950):
+                # its menu at once, the row in view or not — a heading's is a new
+                # session in that repo, as its second tap.
+                follow_at, armed = None, None
+                if hit and acts(hit) and view == "live":
+                    open_menu(session, hit, env)
+                elif hit and hit.startswith("hdr:") and hit != PIN_HEADING:
+                    selected = hit
+                    nxt = open_tap(session, "new", hit, env)
+                    if nxt == "refused":
+                        place_step(*place_start("new", rows, hit, pin=True), False, None)
+                    elif spawning is None:
+                        ask_now(nxt)
+                refresh_at = 0
+            elif buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
                 refresh_at = 0
                 armed = None
-                if help_y is not None and y == help_y and help_shown:
-                    # The `? 快捷键` row (issue #948). Opened on the release, like
-                    # the menu: the popup must not swallow this tap's own release.
+                if hit_row is not None and view == "live" and folds(hit) and on_caret(hit_row, x):
+                    # A tap on a row's caret (▸ / ▾, or a heading's first cells)
+                    # folds or opens its block (issue #1950: ←/→ went with the
+                    # keyboard). Painted at once (fold_now), written in the
+                    # background; the producer waits for the write, so its frame
+                    # is never the old one.
                     follow_at = None
-                    if buttons & curses.BUTTON1_CLICKED:
-                        open_help(screen, env)
-                    else:
-                        armed = HELP_ROW
-                elif is_attn_summary(hit_row):
-                    # The 要你处理 summary (issue #1771): a tap is one ⌃k — the next
-                    # row waiting on you, and over to it; tap again for the next.
-                    nxt = next_attention(rows, selected)
-                    if nxt:
-                        selected, follow_at = nxt, None
-                        if not jump(session, selected, pane, lock):
-                            follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
+                    verb = "collapse" if fold_open(hit_row) else "expand"
+                    rows, holder = fold_now(rows, hit, verb, window, fold_cache)
+                    if folding is not None:
+                        try:
+                            folding.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            folding.kill()
+                    folding = subprocess.Popen(["bash", str(BIN / "dash-fold-toggle.sh"), verb, hit],
+                                               env=dict(env, DASH_FOLD_PLAIN="1"), stdin=subprocess.DEVNULL,
+                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 elif action in ("menu", "new"):
                     # The second tap on a row (the first switched to it), or a tap
-                    # on the row already in view: its action menu — the touch
-                    # path to what `.` opens (issue #898). On a selected heading
-                    # it is ⌃n pinned to that repo (issue #1032). Both open on
-                    # the release, for the same reason as the key sheet.
+                    # on the row already in view: its action menu (issue #898). On
+                    # a selected heading it is a new session in that repo (issue
+                    # #1032). Both open on the release: tmux closes a menu on a
+                    # release outside it, and this tap's own would be one.
                     follow_at = None
                     if buttons & curses.BUTTON1_CLICKED:
                         nxt = open_tap(session, action, hit, env)
-                        if nxt == "refused" and asking is None:
+                        if nxt == "refused":
                             # a heading's second tap: new, its repo pinned (#1778)
                             place_step(*place_start("new", rows, hit, pin=True), False, None)
-                        elif nxt == "refused":
-                            pass
-                        elif nxt is not None and asking is None and spawning is None:
-                            asking = nxt
-                            mark_input(pane, "1")
+                        elif spawning is None:
+                            ask_now(nxt)
                     else:
                         armed = hit
                 elif action == "restore":
@@ -3458,8 +2953,8 @@ def ui(screen, session, worker, lock):
                         armed = hit
                 elif action == "select":
                     # A repo heading (issue #1032): highlight it, switch nothing.
-                    # A typed name / ⌃n now starts there; Esc or a tap on a
-                    # session row clears it.
+                    # A second tap opens a new session there; a tap on a session
+                    # row clears it.
                     follow_at = None
                     selected = hit
                 elif action == "jump":
@@ -3467,12 +2962,8 @@ def ui(screen, session, worker, lock):
                     if not jump(session, selected, pane, lock):
                         follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
                     refresh_at = 0  # re-read where it landed: ▶ follows (#1697)
-                # Anywhere else (the input line included) the click only focuses:
-                # the bind already moved the keyboard here, so typing follows.
             elif buttons & curses.BUTTON1_RELEASED:
-                if armed == HELP_ROW and y == help_y and help_shown:
-                    open_help(screen, env)
-                elif armed is not None and hit == armed and armed.startswith("landed:"):
+                if armed is not None and hit == armed and armed.startswith("landed:"):
                     job = restore_landed(session, armed, env)
                     if job is not None:
                         jobs.append(job)
@@ -3480,13 +2971,10 @@ def ui(screen, session, worker, lock):
                     refresh_at = 0
                 elif armed is not None and hit == armed:
                     nxt = open_tap(session, "new" if armed.startswith("hdr:") else "menu", armed, env)
-                    if nxt == "refused" and asking is None:
+                    if nxt == "refused":
                         place_step(*place_start("new", rows, armed, pin=True), False, None)
-                    elif nxt == "refused":
-                        pass
-                    elif nxt is not None and asking is None and spawning is None:
-                        asking = nxt
-                        mark_input(pane, "1")
+                    elif spawning is None:
+                        ask_now(nxt)
                     refresh_at = 0
                 armed = None
             elif buttons & curses.BUTTON4_PRESSED and ids:
@@ -3529,9 +3017,6 @@ def conf_enabled(conf, enabled):
 
 def main():
     if sys.argv[1] == "ui":
-        # A lone Escape clears the input line; don't wait ncurses' default 1s.
-        os.environ.setdefault("ESCDELAY", "25")
-        no_discard()
         steady()
         restarts = []
         while True:
@@ -3542,7 +3027,9 @@ def main():
                 # Paint again rather than leave the pane (issue #1785): a list
                 # that died on one bad frame took the keyboard's target with it.
                 # A pane that is gone, or one failing over and over, exits — the
-                # hooks' sync draws a fresh one.
+                # hooks' sync draws a fresh one. Each one is logged beside the
+                # stall log (issue #1950): a list that restarts says why.
+                crash_log(traceback.format_exc())
                 now = time.monotonic()
                 restarts = [t for t in restarts if now - t < 60] + [now]
                 pane = os.environ.get("TMUX_PANE", "")

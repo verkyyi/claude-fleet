@@ -11,9 +11,11 @@
 #      row just left still switches back. Before #1756 it read as the SECOND tap
 #      on the row the list still thought current (the menu), or fell in the
 #      hidden branch and was dropped.
-#   C  the keyboard on the list puts the terminal cursor on its input line —
-#      visible, on the last row, where typing goes; the keyboard back on the
-#      session takes it away.
+#   C  the list never takes the keyboard (issue #1950 — its input line and the
+#      cursor on it, #1756, went): after a tap on a row the client stays in the
+#      root table, unpinned, the list shows no cursor, and typing reaches the
+#      session. (#1761: nothing here rests on the `active-pane` client flag
+#      tmux 3.8 removes.)
 set -uo pipefail
 export FLEET_SIDEBAR_NODE=1   # the drawer's selftest seam (fleet-sidebar.sh)
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -213,25 +215,25 @@ try:
                   'B %s: one tap on «%s» right after a switch from the session side did not switch back' % (kind, name))
         print('B %s: the first tap after a switch from the session side switches' % kind)
 
-        # C: the cursor follows the keyboard.
+        # C: a tap on the list leaves the keyboard on the session.
         def cursor(pane):
             return tm('display-message', '-p', '-t', pane, '#{cursor_flag} #{cursor_x} #{cursor_y} #{pane_height}').split()
-        check(wait(lambda: table() == 'fleet-sidebar', 3), kind + ': a tap on the list did not give it the keyboard')
-        check(wait(lambda: 'active-pane' in tm('list-clients', '-F', '#{client_flags}'), 3),
-              kind + ': the client was not pinned to the list (its cursor would not show)')
-        check(wait(lambda: (lambda c: c[0] == '1' and c[2] == str(int(c[3]) - 1) and c[1] == '2')(cursor(side)), 3),
-              'C %s: the keyboard on the list did not put the cursor after › on the input line: %r' % (kind, cursor(side)))
-        os.write(terminal, 'ab修'.encode())
-        check(wait(lambda: cursor(side)[1] == '6', 3),
-              'C %s: the cursor did not follow typing (› ab修 → column 6): %r' % (kind, cursor(side)))
-        os.write(terminal, b'\x15')  # ⌃u: the line empty again
-        tap(*cell(tm('display-message', '-p', '#{pane_id}'), 5, 10))
-        check(wait(lambda: table() == 'root', 3), kind + ': a tap on the session kept the keyboard on the list')
-        check(wait(lambda: cursor(side)[0] == '0', 3),
-              'C %s: the keyboard back on the session left the cursor on in the list: %r' % (kind, cursor(side)))
+        left = current()
+        other = w2 if left == w1 else w1
+        tap(*cell(side, row_of(side, 'two' if other == w2 else 'one')))
+        check(wait(lambda: current() == other, 3), kind + ': a tap on a row did not switch to it')
+        time.sleep(1.2)  # past the list's 1s read: nothing re-pins or re-takes the keyboard
+        check(table() == 'root', 'C %s: a tap on the list moved the client into its key table: %r' % (kind, table()))
         check('active-pane' not in tm('list-clients', '-F', '#{client_flags}'),
-              kind + ': the client is still pinned to the list after the session took the keyboard')
-        print('C %s: the cursor is on the input line exactly while the list has the keyboard' % kind)
+              'C %s: a tap on the list pinned the client to it' % kind)
+        check(cursor(side)[0] == '0', 'C %s: the list shows a cursor: %r' % (kind, cursor(side)))
+        session = tm('display-message', '-p', '#{pane_id}')
+        check(session != side, 'C %s: the list became the active pane' % kind)
+        os.write(terminal, b'zq')
+        check(wait(lambda: 'zq' in tm('capture-pane', '-p', '-t', session), 3),
+              'C %s: typing after a tap on the list did not reach the session' % kind)
+        check('zq' not in tm('capture-pane', '-p', '-t', side), 'C %s: typing reached the list' % kind)
+        print('C %s: a tap on the list leaves the keyboard, and no cursor, with the session' % kind)
 
         client.kill()
         client.wait()
