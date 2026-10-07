@@ -182,5 +182,14 @@ if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" 
   ok "J fleet hub accounts rekey → POST {action: rekey}; accounts lists the records"
 else bad "J rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l"; fi
 
+# K — fleet hub accounts relogin (claude-fleet#2210): one POST, the machine and the new login
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts relogin gh:2718137 macmini verkydev >"$WORK/out" 2>"$WORK/err"; rc=$?
+r=$(last)
+if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/accounts ] \
+   && [ "$(field "$r" body)" = '{"action": "relogin", "principal_id": "gh:2718137", "hostname": "macmini", "login": "verkydev"}' ] \
+   && grep -q 'relogin gh:2718137 on macmini → verkydev: create queued' "$WORK/out"; then
+  ok "K fleet hub accounts relogin → POST {action: relogin, hostname, login}"
+else bad "K rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
+
 echo "fleet-hub-admin-selftest: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

@@ -370,13 +370,57 @@ func (s *Store) AdoptAccount(p *Principal, hostname string, at time.Time) error 
 	ts := at.UTC().Format(rfc)
 	_, err := s.write.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, detail, requested_at, updated_at)
 		VALUES (?, ?, ?, ?, 'adopt', 'adopted: existed before the hub', ?, ?)
-		ON CONFLICT(principal_id, hostname) DO UPDATE SET state = excluded.state, op = excluded.op,
+		ON CONFLICT(principal_id, hostname) DO UPDATE SET login = excluded.login, state = excluded.state, op = excluded.op,
 		  detail = excluded.detail, op_id = '', updated_at = excluded.updated_at`,
 		p.ID, hostname, p.Login, AccountActive, ts, ts)
 	if isUniqueViolation(err) {
 		return fmt.Errorf("login %q is already assigned to someone else on %s", p.Login, hostname)
 	}
 	return err
+}
+
+// RequestRelogin moves p's row on hostname to a NEW login and queues its
+// creation there (claude-fleet#2210): the person keeps their record, the
+// machine gets a fresh standard login, and the old one is left exactly as it
+// is on the machine — nothing is removed. Only a settled row moves (active,
+// failed, removed, unknown); an op in flight refuses with ErrAccountState, and
+// so does a person with no row there (assign them instead). Undo is `adopt`
+// of the old login, which writes the row back without running anything.
+func (s *Store) RequestRelogin(principalID, hostname, login string, at time.Time) (from string, err error) {
+	ts := at.UTC().Format(rfc)
+	tx, err := s.write.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var st string
+	err = tx.QueryRow(`SELECT login, state FROM fleet_accounts WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ?`,
+		principalID, hostname).Scan(&from, &st)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("%w: no account on %s", ErrAccountState, hostname)
+	}
+	if err != nil {
+		return "", err
+	}
+	switch st {
+	case AccountActive, AccountFailed, AccountRemoved, AccountUnknown:
+	default:
+		return from, fmt.Errorf("%w: login on %s is %s", ErrAccountState, hostname, st)
+	}
+	if from == login {
+		return from, fmt.Errorf("%w: the login on %s is already %s", ErrAccountState, hostname, login)
+	}
+	_, err = tx.Exec(`UPDATE fleet_accounts SET login = ?, state = ?, op = 'create', op_id = '', endpoint_id = '',
+		detail = ?, requested_at = ?, updated_at = ?
+		WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ?`,
+		login, AccountPending, "relogin: was "+from, ts, ts, principalID, hostname)
+	if isUniqueViolation(err) {
+		return from, fmt.Errorf("login %q is already assigned to someone else on %s", login, hostname)
+	}
+	if err != nil {
+		return from, err
+	}
+	return from, tx.Commit()
 }
 
 // AdoptAccountIfOpen is AdoptAccount for the roster-driven path
