@@ -439,6 +439,7 @@ FLEET_HUB_LEASE_CMD                seam: the hub issue-lease command (default `c
 FLEET_HUB_RETAIN_SECS              knob: internal budget, seconds a hub worker map may age before remote children stop holding their parent (600, #1421)
 FLEET_HUB_CURL                     seam: the transport fleet-node-maintenance.sh calls the hub with (default `curl`; the selftest's fake records argv + body; #1427)
 FLEET_HUB_TIMEOUT                  knob: seconds fleet-node-maintenance.sh waits on one hub call (curl --max-time), default 15 (#1427)
+FLEET_CRED_PROXY                   handoff: EPIC #1967's session-proxy switch (C3/C5 own it; 0 = today). fleet-doctor's 可信 row only reads it to say whether an untrusted machine is a WARN (no proxy) or the central road (#1968)
 FLEET_HUB_PLACE_CMD                seam: the hub placement command (default `ccquota place`), run as `<cmd> --node <n> [--origin-wid <w>] [--agent <a>] <repo> <issue> <worker_id>` (fleet_hub_place, #1425)
 FLEET_HUB_MOVE_CMD                 seam: the hub session-move command (default `ccquota move`), run as `<cmd> plan|send [<flag>…] <repo> <worker_id>` (fleet_hub_move, #1426)
 FLEET_HUB_WRITE_CMD                seam: command run as `<cmd> <tool> <args_json>` in place of the hub write doors (viewer-token POST /v1/fleet/<tool>, device-signed POST /v1/fleet/write) — the sidebar selftest records what the remote-row menu writes (fleet-hub-write.sh, #1487)

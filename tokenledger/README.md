@@ -1003,7 +1003,14 @@ What a machine can do with only the short-lived half was **measured first**
 
 A lease (`POST /v1/node/credentials`, the node's enrollment token) is answered
 only for the person whose ACTIVE fleet account is that (machine, login) — there
-is no principal parameter to forge. The operator stores, lists and revokes:
+is no principal parameter to forge — and only on a machine the operator marked
+**trusted** (claude-fleet#1968): the setting `fleet.node_trust.<machine>`
+(`PUT /v1/fleet/settings`, operator only; `bin/fleet-node-trust.sh set <m>
+trusted|untrusted`). No key = untrusted → `403 untrusted_node` + a deny audit
+row, checked after the principal and the revocation. Every machine with an
+active account when it shipped was marked trusted once
+(`fleet.node_trust_migrated`), so their leases are unchanged. The operator
+stores, lists and revokes:
 
     # store (or replace) — the secret never comes back out of the hub
     curl -H "Authorization: Bearer $VIEWER" -d '{"action":"put","principal_id":"<wecom userid>",

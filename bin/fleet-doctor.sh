@@ -257,6 +257,31 @@ if [ "$_ho_on" = 1 ] || [ "$_hub_on" = 1 ]; then
   fi
 fi
 
+# --- 可信: does the hub hand this machine subscription credentials (issue #1968) ---
+# The operator's word on the hub (fleet.node_trust.<machine>), read as this
+# login's node sees it (GET /v1/node/self). Only where the node token row
+# passed: no hub, no token → no row. (The `trust` row is
+# Claude Code's folder trust, #563 — a different word.) Untrusted is a WARN while sessions here
+# still lease credentials directly (FLEET_CRED_PROXY≠1): the hub refuses them,
+# so nothing here borrows the subscription until the operator trusts the
+# machine; with the proxy on it is the central road, an INFO. A hub that
+# cannot be asked, or predates #1968, is an INFO.
+if [ "$_hub_on" = 1 ] && [ "${_tok_lv:-}" = PASS ] && [ -f "$(dirname "$0")/fleet-node-trust.sh" ]; then
+  _tr=$(CCQUOTA_FLEET=1 FLEET_CONF_DIR="$conf_dir" FLEET_HUB_TIMEOUT="${FLEET_HUB_TIMEOUT:-5}" \
+        bash "$(dirname "$0")/fleet-node-trust.sh" self 2>&1); _trc=$?
+  _tr_m=$(printf '%s' "$_tr" | sed -n 's/^trust: \([^ ]*\) .*/\1/p' | head -n 1)
+  case "$_trc:$_tr" in
+    0:*' trusted') pass 可信 "${_tr_m:-本机} · 可信 — 入口给这台发订阅凭据" ;;
+    0:*' untrusted')
+      if [ "${FLEET_CRED_PROXY:-0}" = 1 ]; then
+        info 可信 "${_tr_m:-本机} · 不可信 — 入口不给这台发订阅凭据，会话走中心代理"
+      else
+        warn 可信 "${_tr_m:-本机} · 不可信 — 入口不给这台发订阅凭据，这里的会话用不上订阅（操作者：fleet-node-trust.sh set ${_tr_m:-<machine>} trusted）"
+      fi ;;
+    *) info 可信 "问不到入口: $(printf '%s' "$_tr" | tail -n 1 | sed 's/^fleet-node-trust: //')" ;;
+  esac
+fi
+
 
 # --- tmux ≥ 3.2 (core) ---
 if command -v tmux >/dev/null 2>&1; then
