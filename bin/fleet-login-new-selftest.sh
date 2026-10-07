@@ -576,7 +576,7 @@ not_contains "K no step 1" "$OUT" "[1]"
 not_contains "K no addUser" "$OUT" "sysadminctl"
 not_contains "K no letter" "$OUT" "welcome letter"
 eq "K dry run nothing executed" 0 "$(mutations)"
-eq "K dry run no daemon written" "" "$(ls "$FLEET_INSTALL_DAEMON_DIR" | grep '\.kai\.')"
+for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kai.*; do [ -e "$f" ] && fail "K dry run wrote $f"; done
 if [ -z "$DAEMONS" ]; then
   konly kai --daemons-only --apply
   eq "K apply exit" 0 "$RC"
