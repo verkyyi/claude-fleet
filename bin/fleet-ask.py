@@ -268,7 +268,7 @@ POLL = 0.05
 
 def tmux(*args):
     return subprocess.run(["tmux", *args], text=True, stdout=subprocess.PIPE,
-                          stderr=subprocess.DEVNULL, timeout=10)
+                          stderr=subprocess.PIPE, timeout=10)
 
 
 def height_of(spec):
@@ -294,6 +294,7 @@ def open_ask(below, spec):
                     "set-option", "-p", "@stage_ask", "1")
         pane = made.stdout.strip()
         if made.returncode != 0 or not pane.startswith("%"):
+            print("fleet-ask: split-window: " + (made.stderr.strip() or pane or "failed"), file=sys.stderr)
             return 2, {}
         # …and by its id too: an older tmux (3.4) keeps the list's pane as the
         # command list's target after a split, so the mark above can miss. The
@@ -313,6 +314,9 @@ def open_ask(below, spec):
             answer = json.loads(Path(result).read_text())
         except (OSError, ValueError):
             return 1, {}
+        if "error" in answer:
+            print("fleet-ask: " + answer["error"], file=sys.stderr)
+            return 2, {}
         return (0 if answer else 1), answer
     finally:
         for name in (path, result):
@@ -490,6 +494,9 @@ def main():
             curses.wrapper(ui, args[1], args[2])
         except KeyboardInterrupt:
             pass
+        except Exception as error:   # the asker says why, rather than a pane that vanished
+            Path(args[2]).write_text(json.dumps({"error": "%s: %s" % (type(error).__name__, error)}))
+            return 1
         return 0
     if args[:1] != ["open"]:
         print(__doc__.split("\n\n", 2)[1], file=sys.stderr)

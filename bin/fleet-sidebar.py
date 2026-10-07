@@ -2291,6 +2291,10 @@ def ui(screen, session, worker, lock):
         an empty one-key answer, the pane closed) does nothing."""
         nonlocal asking, selected, follow_at
         asking = None
+        if rc == 2:
+            # the line could not open: why, on the bar
+            say(session, "✗ " + (last_line(out) or tr("sidebar_spawn_failed")))
+            return
         try:
             answer = json.loads(out.strip().splitlines()[-1]) if rc == 0 and out.strip() else {}
         except ValueError:

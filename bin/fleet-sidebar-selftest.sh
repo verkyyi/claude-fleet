@@ -950,7 +950,12 @@ try:
         tm('set-option', '-p', '-t', side, '@sidebar_ask', verb, ';', 'send-keys', '-t', side, 'F12')
     conf.write_text(fleet_conf + 'FLEET_REPO=example/repo\n')
     park('new')
-    wait_for(lambda: ask_pane(w1)[0], 'a parked `new` opened no question under the session')
+    try:
+        wait_for(lambda: ask_pane(w1)[0], 'a parked `new` opened no question under the session')
+    except AssertionError as error:
+        raise AssertionError('%s\npanes: %s\nbar: %r' % (error, tm('list-panes', '-a', '-F',
+            '#{pane_id} #{window_id} #{@sidebar} #{@stage_ask} #{@sidebar_worker} #{pane_start_command}'),
+            painted_text()[-400:]))
     pane_q, active = ask_pane(w1)
     wait_for(lambda: '新任务›' in ask_line(w1) and '→ repo' in ask_line(w1),
              'the question line does not ask for the title and name the repo: %r' % ask_line(w1))
