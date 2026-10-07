@@ -55,9 +55,14 @@ Do not install from memory: read the doc and work from it.
   `Explore` / `Plan` / `claude-code-guide`, and never `isolation: worktree`
   (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
   is the operator's escape hatch.
-- **A fleet hosts one or more GitHub repos** (issue #788, switched on in #795).
-  The fleet conf's `FLEET_REPO` is the first; `bin/fleet-repo.sh add` registers
-  more as `fleets/<sess>/repos/<slug>.conf`. **There is no main repo.** A window's
+- **A fleet hosts zero or more GitHub repos** (issue #788, switched on in #795),
+  **every one put the same way** (issue #1937): `fleets/<sess>/repos/<slug>.conf`,
+  ordered by `repos/.order` — `fleet-up.sh` and `bin/fleet-repo.sh add` both go
+  through `fleet_repo_register`, `remove` is one road for any repo (the last too),
+  and the fleet conf holds fleet-wide settings only. An old conf that still names
+  `FLEET_REPO` is read for one version (that repo first) until
+  `fleet_conf_repo_migrate` (`fleet-conf.sh migrate`) moves it; a caller with no
+  window reads the first repo. **There is no main repo.** A window's
   repo is `@repo` (`@norepo 1` = deliberately none), resolved ONLY through
   `fleet_repos` / `fleet_window_repo` / `fleet_load_repo_conf` — never an
   ad-hoc `git remote` parse — and every join is

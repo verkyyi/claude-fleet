@@ -175,25 +175,33 @@ snapshot() {
     conf=$(fleet_conf_file "$sess")
     repo=""; main=""; base=""
     if [ -f "$conf" ]; then
-      # shellcheck source=/dev/null
-      repo=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-      # shellcheck source=/dev/null
-      main=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}" )
-      # shellcheck source=/dev/null
-      base=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_BASE_BRANCH:-}" )
+      # The fleet's first repo, wherever it is put (#1937): what its conf named.
+      # None (a fleet with no repo) leaves the row's repo empty — fleet-up brings
+      # such a fleet up with none.
+      repo=$(fleet_repo_first "$sess")
+      if [ -n "$repo" ]; then
+        IFS=$'\t' read -r main base < <( fleet_load_repo_conf "$sess" "$repo" >/dev/null 2>&1
+                                         printf '%s\t%s\n' "${FLEET_MAIN:-}" "${FLEET_BASE_BRANCH:-}" )
+      fi
     fi
+    # A configured fleet with no repo is a fleet all the same (#1937): its row
+    # carries an empty repo and restore brings it up with none.
+    local norepo=0
+    [ -f "$conf" ] && [ -z "$repo" ] && [ -z "$(fleet_repos "$sess")" ] && norepo=1
+    if [ "$norepo" = 0 ]; then
     [ -z "$repo" ] && repo=$(fleet_repo_cached "$sess")
     [ -z "$repo" ] && repo=$(fleet_resolve_repo_for_session "$sess")
     repo=$(fleet_norm_repo "$repo")
     [ -z "$repo" ] && continue        # can't rebuild a fleet with no repo
+    fi
     # main checkout: conf FLEET_MAIN, else a live window whose path basename ==
     # repo basename (the base checkout, not a worktree suffix), else skip.
-    if [ -z "$main" ]; then
+    if [ -z "$main" ] && [ "$norepo" = 0 ]; then
       local rb; rb=$(basename "$repo")
       main=$(tmux -L "$sock" list-windows -t "$sess" -F '#{pane_current_path}' 2>/dev/null \
              | awk -v rb="$rb" 'NF && (($0 ~ ("/" rb "$"))) {print; exit}')
     fi
-    [ -z "$base" ] && base="${FLEET_BASE_BRANCH:-}"
+    [ -z "$base" ] && [ "$norepo" = 0 ] && base="${FLEET_BASE_BRANCH:-}"
 
     local sdir; sdir="$(fleet_state_dir "$sess")"       # fleets/<sess>/ (issue #181)
     tmp="$sdir/.restore.$$.map"
@@ -521,6 +529,7 @@ restore() {
       else
         # rebuild the hub (dash only). fleet-up refuses if the session exists (it doesn't).
         local args; args=("$repo"); [ -n "$main" ] && args+=("$main")
+        [ -n "$repo" ] || args=(--no-repo)     # a fleet with no repo (#1937)
         args+=(--name "$sess"); [ -n "$base" ] && args+=(--base "$base")
         env -u TMUX bash "$BIN/fleet-up.sh" "${args[@]}" >>"$LOG" 2>&1 \
           || { say "    ✗ fleet-up failed for $sess (see $LOG)"; continue; }

@@ -204,7 +204,7 @@ bridge_state_subdir() {
   [ -n "$want" ] || return 0
   [ "$want" = "$_BR_SLUG" ] && { printf '%s' "$_BR_SUB"; return; }
   while IFS=$'\t' read -r sess conf; do
-    rp=$( . "$conf" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
+    rp=$(fleet_repo_first "$sess")    # the conf's own repo, wherever it is put (#1937)
     [ "$(fleet_slug "$(fleet_norm_repo "$rp")")" = "$want" ] && { found="$sess/bridge"; break; }
   done < <(fleet_each_conf)
   if [ -z "$found" ]; then

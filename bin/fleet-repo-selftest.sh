@@ -14,7 +14,8 @@
 #      the fleet conf; a one-repo fleet's window resolves to its only repo.
 #   E. base-readonly guard — refuses an edit in B's base checkout (and A's), allows
 #      the worktree, including when the seat exports FLEET_MAIN=A.
-#   F. remove — refused while a live window belongs to the repo, --force removes.
+#   F. remove — refused while a live window belongs to the repo, --force removes;
+#      the fleet conf's own repo removes the same way (issue #1937).
 #
 # Every tmux call goes to a private socket via a PATH shim (never the live
 # server); `gh` is shimmed to fail so nothing touches the network.
@@ -170,10 +171,13 @@ fi
 # --- F. remove ----------------------------------------------------------------------
 bash "$BIN/fleet-repo.sh" remove --session "$S" o/b >/dev/null 2>&1 && fail "F: remove with live @repo windows accepted"
 [ -f "$f" ] || fail "F: refused remove deleted the overlay"
-# A NON-seed conf repo is never removable (the seed is: fleet-seed-selftest, #1172).
-bash "$BIN/fleet-repo.sh" remove --session "$S" o/a >/dev/null 2>&1 && fail "F: removed the fleet conf's own (non-seed) repo"
 bash "$BIN/fleet-repo.sh" remove --session "$S" o/b --force >/dev/null 2>&1 || fail "F: --force remove failed"
 eq "F: after remove" "$(fleet_repos "$S")" "o/a"
+# The fleet conf's own repo (old layout) goes the same road (issue #1937): moved
+# into repos/ first, then removed — no refusal, no promotion — leaving no repo.
+bash "$BIN/fleet-repo.sh" remove --session "$S" o/a --force >/dev/null 2>&1 || fail "F: the conf's own repo did not remove"
+eq "F: after removing the conf's own repo" "$(fleet_repos "$S")" ""
+grep -q '^FLEET_REPO=' "$(fleet_conf_file "$S")" && fail "F: the fleet conf still names a repo"
 
 [ "$FAILS" -eq 0 ] && { echo "fleet-repo-selftest: PASS"; exit 0; }
 echo "fleet-repo-selftest: $FAILS failure(s)" >&2; exit 1

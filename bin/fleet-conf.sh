@@ -37,7 +37,8 @@
 # version (decision 11 of EPIC #1615), so a machine that never migrates loads byte
 # for byte as it did. The fleet conf is folded only when the login has exactly one
 # fleet, and keeps its identity (FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH /
-# FLEET_SEED — fleet-up.sh's registry entry, like repos/*.conf).
+# FLEET_SEED) — which migrate_repos then moves into repos/<slug>.conf like every
+# other repo (issue #1937).
 #
 # One capability key (issue #1806, EPIC #1813 C4): every machine has the fleet —
 # the part everyone has — and FLEET_HOST=1 says it also 承载 (hosts) sessions. It
@@ -373,6 +374,13 @@ _carry() {
     || { rm -f "$tmp"; return 1; }
 }
 
+# _keep_scoped <old conf> <new conf> — the trimmed conf keeps the old one's other
+# repo-scoped lines (deploy, short name) beside its identity.
+_keep_scoped() {
+  grep -E "^[[:space:]]*(export[[:space:]]+)?(FLEET_DEPLOY_REF|FLEET_DEPLOY_CHECK|FLEET_REPO_SHORT)[[:space:]]*=" "$1" >> "$2"
+  return 0
+}
+
 migrate() {
   local DRY="$1" QUIET="$2"
   local SET="$CD/fleet.settings" SH="$CD/shell.conf" HJ="$CD/hub.json"
@@ -430,7 +438,10 @@ except Exception: print("")' "$HJ" 2>/dev/null)
   # The node section takes the old files in their old read order; the fleet conf
   # loses its identity (it stays there) and any global-only key (its copy there
   # was never read — fleet_load_conf strips it, #237).
-  local identity='^[[:space:]]*(export[[:space:]]+)?FLEET_(REPO|MAIN|BASE_BRANCH|SEED)='
+  # identity = every repo-scoped key (_FLEET_REPO_SCOPED): it describes the conf's
+  # repo, so it stays with it — migrate_repos then moves it into repos/ (#1937).
+  # A machine-wide FLEET_DEPLOY_REF would apply to no repo there.
+  local identity="^[[:space:]]*(export[[:space:]]+)?(${_FLEET_REPO_SCOPED// /|})[[:space:]]*="
   local globals="^[[:space:]]*(export[[:space:]]+)?(${_FLEET_GLOBAL_ONLY// /|})="
   local tmp="$MC.tmp.$$"
   local nodesec=node; _role_has "$role" node || nodesec=common
@@ -542,6 +553,7 @@ except Exception: print("")' "$HJ" 2>/dev/null)
     rm -f "$FC.new.$$"
     fleet_write_conf "$FC.new.$$" "$sess" "$repo" "$main" "$base" "$(date '+%Y-%m-%d %H:%M:%S')" \
       && { [ "$seed" != 1 ] || fleet_conf_set "$FC.new.$$" FLEET_SEED 1; } \
+      && _keep_scoped "$FC" "$FC.new.$$" \
       && mv -f "$FC.new.$$" "$FC" || { rm -f "$FC.new.$$"; die "wrote $MC but could not trim $FC"; }
     moved="$moved ${FC#$CD/}(trimmed)"
   fi
@@ -572,6 +584,36 @@ PY
   return 0
 }
 
+# ---- every repo in repos/ (issue #1937) -----------------------------------------
+# A fleet conf used to hold its first repo (FLEET_REPO / FLEET_MAIN / … ); every
+# repo now lives in fleets/<sess>/repos/<slug>.conf. Every fleet on this login —
+# not only a one-fleet login's — gets its conf's repo moved there by
+# fleet_conf_repo_migrate (identity frozen first, both files kept as .bak, the repo
+# first in repos/.order so fleet_repos lists what it did). Idempotent; readers
+# still read the old place for one version.
+migrate_repos() {
+  local DRY="$1" QUIET="$2" s c out rc moved=''
+  while IFS=$'\t' read -r s c; do
+    [ -n "$s" ] && [ -f "$c" ] || continue
+    _fleet_conf_txt_names_repo "$(cat "$c" 2>/dev/null)" || continue
+    if [ "$DRY" = 1 ]; then
+      printf 'fleet-conf: would move fleet %s'\''s repo %s out of %s into repos/\n' "$s" \
+        "$( unset FLEET_REPO; . "$c" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-?}" )" "${c#$CD/}"
+      continue
+    fi
+    out=$(fleet_conf_repo_migrate "$s"); rc=$?
+    case "$rc" in
+      0) [ -n "$out" ] && moved="$moved $s:${out#moved }" ;;
+      2) echo "fleet-conf: fleet $s's conf names a FLEET_REPO that is not owner/name — left where it is" >&2 ;;
+      *) die "could not move fleet $s's repo out of $c into repos/ — nothing half-moved" ;;
+    esac
+  done <<EOF
+$(fleet_each_conf)
+EOF
+  [ -n "$moved" ] && echo "fleet-conf: every repo in repos/ —$moved (each conf kept as .bak)"
+  return 0
+}
+
 # ---- dispatch ------------------------------------------------------------------
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
 case "$cmd" in
@@ -598,7 +640,8 @@ case "$cmd" in
     while [ $# -gt 0 ]; do
       case "$1" in --dry-run) DRY=1 ;; --quiet) QUIET=1 ;; *) usage ;; esac; shift
     done
-    migrate "$DRY" "$QUIET" ;;
+    migrate "$DRY" "$QUIET"
+    migrate_repos "$DRY" "$QUIET" ;;
   add-role)
     case "${1:-}" in client|node) add_role "$1" ;; *) usage ;; esac ;;
   set-hub)
