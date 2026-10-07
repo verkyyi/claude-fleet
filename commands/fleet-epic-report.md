@@ -11,9 +11,14 @@ Read-only against the repo except for that one closing comment.
 the most recently updated `epic` issue in this fleet. Works on any past EPIC, not
 just the one that just ended, so a report can be re-run after the fact.
 
-**Which repo** (issue #803): a fleet may host several repos, and an EPIC lives in
-ONE of them. `--repo <owner/name>` anywhere in `$ARGUMENTS` names it; without it
-the preamble resolves the pane's own repo, else refuses and lists the choices. A
+**Which repo** (issues #803, #1942): a fleet may host several repos. An EPIC's
+parent lives in ONE of them — `--repo <owner/name>` anywhere in `$ARGUMENTS`
+names it; without it the preamble resolves the pane's own repo, else refuses and
+lists the choices. Its members may live in other hosted repos: a member is the
+pair (repo, issue) — `#N` in the charter's list is the parent's repo,
+`owner/name#N` another one (`fleet_member_ref`, `fleet_sub_issues`; see
+`/fleet-epic-run` §1) — and every per-member read below (its PR, its deploy
+state, its evidence) names the member's own repo. One page covers them all. A
 one-repo fleet always gets its repo — nothing to pass, nothing changes.
 
 **Its usual caller is not a human.** `/fleet-epic-run`'s closing tick runs this
@@ -70,8 +75,9 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
   diagnosis, has **no table** — report 「本批未声明指标」 and stop there. **Never
   reconstruct a baseline after the fact**: a "现在" measured today against a
   "之前" nobody wrote down is a number the next batch would be planned against.
-- **The members**: every sub-issue — state, labels (`blocked` and why), its PR,
-  merge time, and deploy state where the fleet has one. A member filed by
+- **The members**: every member of the charter's Core / Reserve list ∪ every
+  sub-issue, each as (repo, issue) — state, labels (`blocked` and why), its PR
+  (`--repo <its repo>`), merge time, and deploy state where its repo has one. A member filed by
   `/fleet-epic-plan` carries a **上线证据** line in its body (issue #809): that
   line names the evidence the worker was asked to leave — a URL, a command's
   output, a pane — and is what to look for per member (issue #810).
@@ -81,7 +87,9 @@ echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master
 - **The evidence**: what each member looks like live, as its own worker captured
   it (issue #810) — `~/.claude/fleet/bin/fleet-evidence.sh list --repo "$FLEET_REPO" --epic <N>`
   prints one row per capture (`member · stage · ts · path · note`) and a `none`
-  row for a member with nothing. The stages are `before` / `after` — the
+  row for a member with nothing — a member of the parent's repo as `N`, one filed
+  in another repo as `owner/name#N` (its worker stored it under this EPIC's tree,
+  issue #1942). The stages are `before` / `after` — the
   worker's, taken at the same URL / command / pane the member's `上线证据:` line
   named, before touching code and after the PR was open — and `live`, which is
   yours (step 2). **Collect, never create**: a missing before/after is not
@@ -152,7 +160,7 @@ Merged is delivered — it counts as done in the band — but the reader must se
 that something of this batch is still running. ONE read, for every merged member:
 
 ```sh
-~/.claude/fleet/bin/fleet-epic-loopers.sh --repo "$FLEET_REPO" <member>...   # → <N>\tlooping|idle|gone\t<reason>
+~/.claude/fleet/bin/fleet-epic-loopers.sh --repo "$FLEET_REPO" <member>...   # → <N>\tlooping|idle|gone\t<reason>; a member in another repo as owner/name#N
 ```
 
 `looping` → pill 「已合并，仍在循环」, and the card's sentence says what it is
@@ -218,6 +226,11 @@ What earns its place, in page order:
    ~/.claude/fleet/bin/fleet-epic-stable-row.sh --repo "$FLEET_REPO" --main "$FLEET_MAIN" --base "$FLEET_BASE_BRANCH" --epic <N>
    ```
 
+   An EPIC spanning repos asks once per repo its members landed in (issue
+   #1942) — `--repo <that repo> --main <its checkout> --epic "$FLEET_REPO#<N>"`:
+   stable is per repo, and only the repo carrying `bin/fleet-stable.sh` answers
+   with a row.
+
    Exit 0 prints a `row:` line (the two cells, TAB-separated) and its `tr:` —
    add that row to the table **verbatim** (the `tr:` on the page, the two cells
    in the durable comment). Exit 1 prints `kind: current` / `skip` / `nomerge`
@@ -266,6 +279,8 @@ Item 3 in detail — the evidence grid (issue #810):
     is green, capture ONE shot from prod along the same line the worker followed,
     and store it where a re-run of this report finds it again:
     `~/.claude/fleet/bin/fleet-evidence.sh live --repo "$FLEET_REPO" --issue <M> --epic <N> --note '…' <file>`
+    — for a member filed in another repo, `--repo <its repo> --epic "$FLEET_REPO#<N>"`
+    (issue #1942), so the shot lands beside its worker's before/after
     (`-` for a command's output on stdin, `--pane <t>` for a TUI). No deploy
     signal, not yet green, or prod unreachable from this machine → a `.none` cell
     reading **未取到** and the reason. Reachability is an egress fact, not a
@@ -274,7 +289,8 @@ Item 3 in detail — the evidence grid (issue #810):
     happened.
   - **Getting the files into the page**:
     `~/.claude/fleet/bin/fleet-evidence.sh export --repo "$FLEET_REPO" --epic <N> <dir-of-the-report-html>`
-    copies every file to `<dir>/evidence/<M>/…` and prints the same rows with
+    copies every file to `<dir>/evidence/<M>/…` (`<dir>/evidence/<owner>-<name>.<M>/…`
+    for a member in another repo) and prints the same rows with
     RELATIVE paths — reference those (`<img src="evidence/42/after-….png">`).
     doc-preview copies a relative `<img src>` file beside the served page (as it
     already did for Markdown images), so the pictures ride along to the tailnet
@@ -320,7 +336,8 @@ One line: the URL, what the batch delivered, where the metrics stand (filled /
 
 ---
 
-Rails: operate on YOUR fleet's `$FLEET_REPO` only. Read-only except for one
+Rails: operate on YOUR fleet's repos only — the parent's `$FLEET_REPO` and the
+hosted repos its members are filed in. Read-only except for one
 comment (and closing the EPIC when it is genuinely done). Never invent a number
 the fleet cannot measure — an honest worker-hours figure labelled as such beats a
 token attribution this fleet has no way to compute.

@@ -16,9 +16,9 @@ printf '#!/bin/sh\nexit 0\n' > "$WORK/fakepath/tmux"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/fakepath/git"
 cat > "$WORK/fakepath/gh" <<'FAKE'
 #!/bin/bash
-mode="$1"; name=''
+mode="$1"; name=''; jqx=''
 while [ "$#" -gt 0 ]; do
-  case "$1" in --repo) shift; name=${1##*/} ;; name=*) name=${1#name=} ;; esac
+  case "$1" in --repo) shift; name=${1##*/} ;; name=*) name=${1#name=} ;; --jq) shift; jqx=$1 ;; esac
   shift
 done
 printf '%s %s\n' "$mode" "$name" >> "$TEST_GH_LOG"
@@ -28,7 +28,8 @@ if [ "$name:$mode" = "${TEST_HANG:-}" ]; then
 fi
 case "$mode" in
   issue) printf 'bug\tMilestone\t#1\t·\tFresh %s\n' "$name" ;;
-  api) printf '2\t1\n' ;;
+  api) if [ -n "${TEST_GQL_JSON:-}" ]; then printf '%s' "$TEST_GQL_JSON" | jq -r "$jqx"   # the collector's own --jq
+       else printf '2\t1\n'; fi ;;
 esac
 FAKE
 chmod +x "$WORK/fakepath/"*
@@ -104,4 +105,16 @@ eq 'resume after identity in reordered queue' 'b c a ' "$(order)"
 : > "$G/collect.repoqueue"
 REPOS='' BUDGET=0 run || fail 'empty queue tick failed'
 eq 'empty queue makes no calls' '' "$(cat "$LOG")"
-echo 'collect-issues: OK (timeout fairness, caches, TTL, targeted refresh, queue changes)'
+# An EPIC spanning repos (issue #1942): a child whose parent lives in ANOTHER repo
+# never nests under this repo's same-numbered issue — the collector's own --jq,
+# run by a real jq over a GraphQL page with one same-repo and one cross-repo parent.
+if command -v jq >/dev/null 2>&1; then
+  TEST_GQL_JSON='{"data":{"repository":{"issues":{"nodes":[
+    {"number":5,"parent":{"number":4,"repository":{"nameWithOwner":"Acme/A"}}},
+    {"number":6,"parent":{"number":4,"repository":{"nameWithOwner":"acme/other"}}},
+    {"number":7,"parent":null}]}}}}' REPOS='acme/a' BUDGET=0 run || fail 'cross-repo parents tick failed'
+  eq 'only a same-repo parent nests (cross-repo child stays flat)' $'5\t4' "$(cat "$C/acme-a/parents")"
+else
+  echo 'collect-issues: jq absent — cross-repo parent check SKIPPED'
+fi
+echo 'collect-issues: OK (timeout fairness, caches, TTL, targeted refresh, queue changes, cross-repo parents)'
