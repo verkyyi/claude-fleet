@@ -157,7 +157,10 @@ kill "$RUNPID" 2>/dev/null; wait "$RUNPID" 2>/dev/null; RUNPID=''
 # ── F: --all-logins ────────────────────────────────────────────────────────
 SRC="$SB/src"; mkdir -p "$SRC"
 cp -R "$BIN" "$SRC/bin"
-( cd "$SRC" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm src ) || fail "F source repo"
+# no background auto-gc: it packs the loose objects away while the clones below
+# copy them ("failed to copy file … No such file") and a login went missing
+( cd "$SRC" && git init -q && git config gc.auto 0 && git config maintenance.auto false && git add -A \
+  && git -c user.email=t@t -c user.name=t commit -qm src ) || fail "F source repo"
 for u in alice bob; do
   mkdir -p "$SB/homes/$u/.claude"
   git clone -q "$SRC" "$SB/homes/$u/.claude/fleet" 2>/dev/null

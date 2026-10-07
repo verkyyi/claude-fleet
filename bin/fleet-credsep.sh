@@ -19,6 +19,15 @@
 # the doctor print), the login is SUDO_USER's — or `--login <login>` — and its
 # conf dir is under THAT login's home: never root's (issue #2135, BREAK-IT
 # `cred-sep-sudo-root`). Root with neither is refused (exit 2).
+#   fleet-credsep.sh machine install|uninstall|refresh [--logins a,b] [--dry-run]
+#                                           the machine's ONE shared proxy (issue
+#                                           #2217): every login (default: each with
+#                                           ~/.claude/fleet) a tenant of it — one
+#                                           sudo for the machine; uninstall = back
+#                                           to a proxy per login, byte for byte;
+#                                           refresh = follow this install's code
+#   fleet-credsep.sh machine status [--json]  anyone: shared or per-login, as whom,
+#                                           which logins, the version
 #   fleet-credsep.sh apply [--dry-run]      the install pass: converge on the
 #                                           switch — FLEET_CRED_SEPARATE=1 and not
 #                                           separated → install; 0 and separated →
@@ -104,6 +113,23 @@ root_py() { # the privileged half, through sudo (env seams passed explicitly)
 }
 can_sudo() { [ -z "$SUDO" ] || $SUDO true 2>/dev/null; }
 separated() { [ -f "$CONF/credsep.json" ]; }
+shared() { grep -q '"shared": true' "$CONF/credsep.json" 2>/dev/null; }
+root_machine() { # the machine verbs (issue #2217): no --login, the logins are named
+  # shellcheck disable=SC2086
+  $SUDO env ${FLEET_CREDSEP_ROOT_BASE:+FLEET_CREDSEP_ROOT_BASE="$FLEET_CREDSEP_ROOT_BASE"} \
+    ${FLEET_CREDSEP_RUN_BASE:+FLEET_CREDSEP_RUN_BASE="$FLEET_CREDSEP_RUN_BASE"} \
+    ${FLEET_CREDSEP_LOG_BASE:+FLEET_CREDSEP_LOG_BASE="$FLEET_CREDSEP_LOG_BASE"} \
+    ${FLEET_CREDSEP_LIB:+FLEET_CREDSEP_LIB="$FLEET_CREDSEP_LIB"} \
+    ${FLEET_CREDSEP_DAEMON_DIR:+FLEET_CREDSEP_DAEMON_DIR="$FLEET_CREDSEP_DAEMON_DIR"} \
+    ${FLEET_CREDSEP_ROLE:+FLEET_CREDSEP_ROLE="$FLEET_CREDSEP_ROLE"} \
+    ${FLEET_CREDSEP_SVC:+FLEET_CREDSEP_SVC="$FLEET_CREDSEP_SVC"} \
+    ${FLEET_CREDSEP_TEST:+FLEET_CREDSEP_TEST="$FLEET_CREDSEP_TEST"} \
+    ${FLEET_CREDSEP_PW:+FLEET_CREDSEP_PW="$FLEET_CREDSEP_PW"} \
+    ${FLEET_CREDSEP_USERS:+FLEET_CREDSEP_USERS="$FLEET_CREDSEP_USERS"} \
+    ${FLEET_CREDSEP_HOMES:+FLEET_CREDSEP_HOMES="$FLEET_CREDSEP_HOMES"} \
+    ${FLEET_CRED_SHARED_PORT:+FLEET_CRED_SHARED_PORT="$FLEET_CRED_SHARED_PORT"} \
+    python3 -I "$BIN/fleet-credsep.py" machine "$@"
+}
 
 case "$cmd" in
   install|uninstall)
@@ -117,11 +143,35 @@ case "$cmd" in
     root_py "$cmd" "$@"
     ;;
   plan) python3 -I "$BIN/fleet-credsep.py" plan --bin "$BIN" ;;
+  machine)
+    verb="${1:-}"
+    case "$verb" in
+      status) exec python3 -I "$BIN/fleet-credsep.py" machine "$@" ;;
+      install|uninstall|refresh) ;;
+      *) echo "fleet-credsep: machine install|uninstall|refresh|status" >&2; exit 2 ;;
+    esac
+    case " $* " in
+      *" --dry-run "*) [ "$(id -u)" = 0 ] || { python3 -I "$BIN/fleet-credsep.py" machine "$@"; exit $?; } ;;
+    esac
+    can_sudo || { echo "fleet-credsep: machine $verb needs root once — run: sudo bash $BIN/fleet-credsep.sh machine $*" >&2; exit 4; }
+    root_machine "$@"
+    ;;
   status) py status --conf-dir "$CONF" "$@" ;;
   check)  py check --conf-dir "$CONF" ;;
   apply)
     dry=''; [ "${1:-}" = --dry-run ] && dry=--dry-run
-    if [ "$FLEET_CRED_SEPARATE" = 1 ]; then
+    if shared; then
+      # a tenant of the machine's shared proxy (issue #2217): the machine switch
+      # owns it, never this login's FLEET_CRED_SEPARATE. An admin login keeps the
+      # root-owned code on this install's version (follows stable).
+      if can_sudo; then
+        out=$(root_machine refresh ${dry:+"$dry"} 2>&1); rc=$?
+        [ "$rc" = 0 ] && echo "credsep: ok — shared · $(printf '%s\n' "$out" | tail -1)" \
+                      || { echo "credsep: WARN — shared, refresh failed: $(printf '%s\n' "$out" | tail -1)"; exit 1; }
+      else
+        echo "credsep: ok — shared (the machine's proxy; its code follows an admin's sync: sudo bash $BIN/fleet-credsep.sh machine refresh)"
+      fi
+    elif [ "$FLEET_CRED_SEPARATE" = 1 ]; then
       if ! can_sudo; then
         separated && echo "credsep: ok — separated (code copy not refreshed: no password-less sudo)" \
                   || echo "credsep: WARN — FLEET_CRED_SEPARATE=1 needs root once: sudo bash $BIN/fleet-credsep.sh install"

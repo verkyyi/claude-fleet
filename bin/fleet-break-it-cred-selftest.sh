@@ -16,6 +16,9 @@
 #                                                   on the next request; HUB_RENEW_GRACE)
 #   cred-relay-hub-restart                          extras/cred-relay/fleet-relay-check.py (the relay's
 #                                                   forward_auth gate: cache + grace while the hub restarts)
+#   cred-shared-down                                in bin/fleet-break-it-cred-shared-selftest.sh, which
+#                                                   sources this file's helpers (BREAK_CRED_LIB=1): this
+#                                                   run is at the macOS per-test cap already
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # python3 / curl absent → SKIP. BREAK_KEEP=1 keeps the work dir; BREAK_ONLY
@@ -427,8 +430,10 @@ EOF
 }
 
 # ================================================================ run ===========
+# cred_run_drills <file> — every drill_cred_* in <file>, each checked for its row
+cred_run_drills() {
 FAILS=0; PASSES=0
-for fn in $(sed -n 's/^\(drill_cred_[a-z0-9_]*\)() *{.*/\1/p' "$0"); do
+for fn in $(sed -n 's/^\(drill_cred_[a-z0-9_]*\)() *{.*/\1/p' "$1"); do
   r=$(printf '%s' "${fn#drill_}" | tr _ -)
   grep -qF -- "| \`$r\` |" "$DOC" || { FAILS=$((FAILS + 1)); printf 'FAIL  lint: %s has no row in docs/BREAK-IT.md\n' "$fn"; continue; }
   if [ -n "${BREAK_ONLY:-}" ]; then case " $BREAK_ONLY " in *" $r "*) ;; *) continue ;; esac; fi
@@ -443,7 +448,10 @@ for fn in $(sed -n 's/^\(drill_cred_[a-z0-9_]*\)() *{.*/\1/p' "$0"); do
   fi
 done
 if [ "$FAILS" -gt 0 ]; then
-  printf 'fleet-break-it-cred selftest: %d FAILED, %d passed\n' "$FAILS" "$PASSES" >&2
+  printf '%s selftest: %d FAILED, %d passed\n' "$(basename "$1" -selftest.sh)" "$FAILS" "$PASSES" >&2
   exit 1
 fi
-printf 'fleet-break-it-cred selftest: OK (%d drills green)\n' "$PASSES"
+printf '%s selftest: OK (%d drills green)\n' "$(basename "$1" -selftest.sh)" "$PASSES"
+}
+[ -n "${BREAK_CRED_LIB:-}" ] && return 0
+cred_run_drills "$0"
