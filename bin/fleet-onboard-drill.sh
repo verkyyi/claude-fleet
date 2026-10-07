@@ -97,7 +97,22 @@ list_row_named() {
     | grep -E -- "(^|[^[:alnum:]@_-])$1(\$|[^[:alnum:]@_-])" | head -n 1 | sed 's/ *$//'
 }
 
-LOGIN='' HUB='' SCAN_CMD='' KEEP=0 TEARDOWN=0 NAME=first INVITE='' ROW_ONLY=''
+# qr_state <login> (a screen on stdin): qr — a 验证码 is up; none — the
+# installer is past 「能力:」 AND finished with no code (the client is up, it
+# could not open, or the person is back at a prompt); wait — anything else.
+# The installer prints 「能力:」 BEFORE its QR (#2255): 能力: alone is no proof
+# that this computer was already known, so it never reads none by itself.
+CLIENT_UP='新任务|New task'
+qr_state() {
+  local p
+  p=$(cat)
+  if printf '%s\n' "$p" | grep -Eq '验证码 [A-Z]{4}-[A-Z]{4}'; then echo qr
+  elif printf '%s\n' "$p" | grep -Eq '^能力:' \
+       && printf '%s\n' "$p" | grep -Eq -- "$CLIENT_UP|open terminal failed|not a terminal|$1@[^ ]+ [^ ]* ?[%\$#] *\$"; then echo none
+  else echo wait; fi
+}
+
+LOGIN='' HUB='' SCAN_CMD='' KEEP=0 TEARDOWN=0 NAME=first INVITE='' ROW_ONLY='' QR_ONLY=0
 DRILL_NS=fleet-drill@claude-fleet
 HOST=127.0.0.1 PORT=22
 TIMEOUT=${FLEET_DRILL_TIMEOUT:-900} SCAN_SECS=${FLEET_DRILL_SCAN_SECS:-600}
@@ -115,10 +130,12 @@ while [ $# -gt 0 ]; do
     --invite)   [ $# -ge 2 ] || usage; INVITE=$2; shift 2 ;;
     --keep)     KEEP=1; shift ;;
     --row-named) [ $# -ge 2 ] || usage; ROW_ONLY=$2; shift 2 ;;   # selftest seam: screen on stdin
+    --qr-state) QR_ONLY=1; shift ;;                                 # selftest seam: screen on stdin
     -h|--help)  sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *)          die2 "unknown argument: $1" ;;
   esac
 done
+if [ "$QR_ONLY" = 1 ]; then qr_state "$LOGIN"; exit 0; fi
 if [ -n "$ROW_ONLY" ]; then r=$(list_row_named "$ROW_ONLY"); [ -n "$r" ] && printf '%s\n' "$r"; [ -n "$r" ]; exit; fi
 if [ -n "$INVITE" ]; then
   printf '%s' "$INVITE" | grep -Eq '^fd_[a-z2-7]{26}$' || die2 "--invite: not an approve code (fd_… from fleet drill invite)"
@@ -216,6 +233,17 @@ wait_for() {
       if printf '%s\n' "$p" | grep -Eq -- "$re"; then printf '%s' "$i"; return 0; fi
     done
     [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep "$POLL"
+  done
+}
+# qr_wait <secs>: qr_state on the pane until it is not wait, or the deadline
+qr_wait() {
+  local deadline st
+  deadline=$((SECONDS + $1))
+  while :; do
+    keep_sudo
+    st=$(pane | qr_state "$LOGIN")
+    [ "$st" = wait ] && [ "$SECONDS" -lt "$deadline" ] || { printf '%s' "$st"; return 0; }
     sleep "$POLL"
   done
 }
@@ -342,11 +370,14 @@ step_install() {
 # --- 6 scan -------------------------------------------------------------------------
 step_scan() {
   local code k
+  # SKIP only once the installer has finished with no code: it prints
+  # 「能力:」 before the QR, and download stops at whichever comes first (#2255)
+  case $(qr_wait "$STEP_SECS") in
+    none) skip scan 'no QR: this computer was already known to the hub'; return 0 ;;
+    wait) shot scan; row "「能力:」之后 ${STEP_SECS}s 既没有二维码、也没装完" "等" "是 — 装到一半停住"
+          failstep scan "past 能力: but no QR and no client/prompt within ${STEP_SECS}s:"; tail_pane; return 1 ;;
+  esac
   code=$(pane | grep -Eo '验证码 [A-Z]{4}-[A-Z]{4}' | tail -n 1 | awk '{print $2}')
-  if [ -z "$code" ]; then
-    skip scan 'no QR: this computer was already known to the hub'
-    return 0
-  fi
   SCAN_URL=$(pane | grep -Eo 'https?://[^ ]+/fleet/login\?code=[A-Z-]+' | tail -n 1)
   FPR=$(pane | grep -Eo 'SHA256:[A-Za-z0-9+/]+' | tail -n 1)
   shot scan
@@ -381,7 +412,6 @@ step_scan() {
 }
 
 # --- 7 client -----------------------------------------------------------------------
-CLIENT_UP='新任务|New task'
 step_client() {
   local k
   # the list is up once its 「新任务」 row is (the list's border has no label
