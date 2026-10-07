@@ -43,7 +43,7 @@ func newCPRig(t *testing.T) *cpRig {
 	h, tok5, _, f5, _ := sessHarness(t)
 	h.srv.CredProxyToken = cpToken
 	for _, acct := range []string{"acct1", "acct2"} {
-		if err := h.srv.Vault.Put("wecom-verk", credvault.Claude, acct, credvault.Secret{RefreshToken: "rt-" + acct}); err != nil {
+		if err := h.srv.Vault.Put("gh:1005", credvault.Claude, acct, credvault.Secret{RefreshToken: "rt-" + acct}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -133,7 +133,7 @@ func TestCredProxyEndToEnd(t *testing.T) {
 	if st, body := r.call(t, credvault.Claude, cred); st != 200 || !strings.Contains(body, "PONG") {
 		t.Fatalf("claude → %d %s", st, body)
 	}
-	if got, want := r.lastAuth(), r.leased(t, "wecom-verk", credvault.Claude, "acct1"); got != want {
+	if got, want := r.lastAuth(), r.leased(t, "gh:1005", credvault.Claude, "acct1"); got != want {
 		t.Fatalf("upstream Authorization = %q; want acct1's lease %q", got, want)
 	}
 	if st, _ := r.call(t, credvault.Codex, cred); st != 200 {
@@ -214,7 +214,7 @@ func TestCredProxyBindAndRebind(t *testing.T) {
 		map[string]any{"worker_id": widB, "provider": "claude", "account": "acct2"}); st != 200 || out["rev"] != float64(1) {
 		t.Fatalf("bind B: %d %v", st, out)
 	}
-	a1, a2 := r.leased(t, "wecom-verk", credvault.Claude, "acct1"), r.leased(t, "wecom-verk", credvault.Claude, "acct2")
+	a1, a2 := r.leased(t, "gh:1005", credvault.Claude, "acct1"), r.leased(t, "gh:1005", credvault.Claude, "acct2")
 	for i := 0; i < 3; i++ {
 		r.call(t, credvault.Claude, credA)
 		if got := r.lastAuth(); got != a1 {

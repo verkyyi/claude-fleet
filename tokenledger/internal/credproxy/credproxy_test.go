@@ -49,6 +49,8 @@ func (h *fakeHub) Resolve(_ context.Context, pass, provider string) (Resolution,
 
 func (h *fakeHub) set(f func()) { h.mu.Lock(); f(); h.mu.Unlock() }
 
+func (h *fakeHub) count() int { h.mu.Lock(); defer h.mu.Unlock(); return h.calls }
+
 // seen is one request as the upstream received it.
 type seen struct {
 	path, query string
@@ -139,21 +141,21 @@ func (h *harness) upstreamCount() int { h.mu.Lock(); defer h.mu.Unlock(); return
 // without asking the hub.
 func TestRefusals(t *testing.T) {
 	h := newHarness(t, false, nil)
-	h.hub.bad[PassPrefix+"expired"] = "expired"
-	h.hub.bad[PassPrefix+"revoked"] = "revoked at 2026-10-06T00:00:00Z by operator"
+	h.hub.set(func() { h.hub.bad[PassPrefix+"expired"] = "expired" })
+	h.hub.set(func() { h.hub.bad[PassPrefix+"revoked"] = "revoked at 2026-10-06T00:00:00Z by operator" })
 	for _, pass := range []string{PassPrefix + "forged", PassPrefix + "expired", PassPrefix + "revoked"} {
 		st, body := h.do(t, "/v1/proxy/anthropic/v1/messages", pass, `{"x":1}`, nil)
 		if st != http.StatusForbidden || !strings.Contains(body, "permission_error") {
 			t.Fatalf("%s → %d %s; want 403 permission_error", pass, st, body)
 		}
 	}
-	calls := h.hub.calls
+	calls := h.hub.count()
 	for _, pass := range []string{"", "sk-ant-oat01-real", "fcp1.local.sig"} {
 		if st, _ := h.do(t, "/v1/proxy/codex/responses", pass, `{}`, nil); st != http.StatusForbidden {
 			t.Fatalf("%q → %d; want 403", pass, st)
 		}
 	}
-	if h.hub.calls != calls {
+	if h.hub.count() != calls {
 		t.Fatalf("a non-pass reached the hub")
 	}
 	if n := h.upstreamCount(); n != 0 {
@@ -176,7 +178,7 @@ func TestRefusals(t *testing.T) {
 // X-Fleet-Relay and the path under /anthropic.
 func TestClaudeRewrite(t *testing.T) {
 	h := newHarness(t, false, nil)
-	h.hub.bind[PassPrefix+"a"] = "acct1"
+	h.hub.set(func() { h.hub.bind[PassPrefix+"a"] = "acct1" })
 	body := `{"model":"claude","messages":[{"role":"user","content":"PING ü"}]}`
 	st, out := h.do(t, "/v1/proxy/anthropic/v1/messages?beta=true", PassPrefix+"a", body, map[string]string{
 		"X-Api-Key": "leak", "Anthropic-Beta": "foo-1,bar-2", "X-Forwarded-For": "10.0.0.9", "Anthropic-Version": "2023-06-01"})
@@ -206,7 +208,7 @@ func TestClaudeRewrite(t *testing.T) {
 func TestCodexRewrite(t *testing.T) {
 	for _, direct := range []bool{false, true} {
 		h := newHarness(t, direct, nil)
-		h.hub.bind[PassPrefix+"c"] = "cx"
+		h.hub.set(func() { h.hub.bind[PassPrefix+"c"] = "cx" })
 		if st, _ := h.do(t, "/v1/proxy/codex/responses", PassPrefix+"c", `{"input":"PING"}`,
 			map[string]string{"Chatgpt-Account-Id": "someone-else"}); st != 200 {
 			t.Fatalf("direct=%v → %d", direct, st)
@@ -243,8 +245,8 @@ func TestSessionsDoNotCross(t *testing.T) {
 		mu.Unlock()
 		_, _ = io.WriteString(w, "ok")
 	})
-	h.hub.bind[PassPrefix+"one"] = "acctA"
-	h.hub.bind[PassPrefix+"two"] = "acctB"
+	h.hub.set(func() { h.hub.bind[PassPrefix+"one"] = "acctA" })
+	h.hub.set(func() { h.hub.bind[PassPrefix+"two"] = "acctB" })
 	var wg sync.WaitGroup
 	for i := 0; i < 40; i++ {
 		who := []string{"one", "two"}[i%2]
@@ -281,7 +283,7 @@ func TestStreamingNotTruncated(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, "event: message_stop\ndata: {}\n\n")
 	})
-	h.hub.bind[PassPrefix+"s"] = "acct"
+	h.hub.set(func() { h.hub.bind[PassPrefix+"s"] = "acct" })
 	req, _ := http.NewRequest(http.MethodPost, h.proxy.URL+"/v1/proxy/anthropic/v1/messages", strings.NewReader(`{"stream":true}`))
 	req.Header.Set("Authorization", "Bearer "+PassPrefix+"s")
 	res, err := http.DefaultClient.Do(req)
@@ -314,7 +316,7 @@ func TestStreamingNotTruncated(t *testing.T) {
 // out (≤ CacheTTL); before that the old account stands.
 func TestRebind(t *testing.T) {
 	h := newHarness(t, false, nil)
-	h.hub.bind[PassPrefix+"r"] = "old"
+	h.hub.set(func() { h.hub.bind[PassPrefix+"r"] = "old" })
 	h.do(t, "/v1/proxy/anthropic/v1/messages", PassPrefix+"r", "1", nil)
 	h.hub.set(func() { h.hub.bind[PassPrefix+"r"] = "new" })
 	h.do(t, "/v1/proxy/anthropic/v1/messages", PassPrefix+"r", "2", nil)
@@ -333,8 +335,8 @@ func TestRebind(t *testing.T) {
 // a 503 (retry), never a 403. Past StaleFor, 503 too.
 func TestHubDown(t *testing.T) {
 	h := newHarness(t, false, nil)
-	h.hub.bind[PassPrefix+"k"] = "acct"
-	h.hub.bind[PassPrefix+"u"] = "acct"
+	h.hub.set(func() { h.hub.bind[PassPrefix+"k"] = "acct" })
+	h.hub.set(func() { h.hub.bind[PassPrefix+"u"] = "acct" })
 	if st, _ := h.do(t, "/v1/proxy/anthropic/v1/messages", PassPrefix+"k", "1", nil); st != 200 {
 		t.Fatal(st)
 	}
@@ -355,6 +357,8 @@ func TestHubDown(t *testing.T) {
 		t.Fatalf("hub back → %d", st)
 	}
 	stale := 0
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	for _, l := range h.audit {
 		if strings.Contains(l, `"stale":true`) {
 			stale++
@@ -369,9 +373,11 @@ func TestHubDown(t *testing.T) {
 // and never a pass, a token or a body.
 func TestAuditCarriesNoSecret(t *testing.T) {
 	h := newHarness(t, false, nil)
-	h.hub.bind[PassPrefix+"secretpass"] = "acct"
+	h.hub.set(func() { h.hub.bind[PassPrefix+"secretpass"] = "acct" })
 	h.do(t, "/v1/proxy/anthropic/v1/messages", PassPrefix+"secretpass", "private body", nil)
 	h.do(t, "/v1/proxy/anthropic/v1/messages", PassPrefix+"forged", "x", nil)
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if len(h.audit) != 2 {
 		t.Fatalf("audit lines = %d", len(h.audit))
 	}
