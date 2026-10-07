@@ -630,7 +630,7 @@ loop_tr sid-loop "/loop check CI, it's slow" 1200
 loop_tr sid-noloop "/loop gone" 1200
 printf '' > "$FLEET_CC_PROJECTS_DIR/loopproj/sid-noloop.jsonl"     # nothing pending
 wl=$(spawn wloop runner-hook sid-loop "$WORK/wtl"); wn=$(spawn wnoloop runner-hook sid-noloop "$WORK/wtn")
-TM set-window-option -t "$wl" @claude_state done; TM set-window-option -t "$wn" @claude_state done
+TM set-window-option -t "$wl" @claude_state 'done'; TM set-window-option -t "$wn" @claude_state 'done'
 sleep 1.5
 : > "$WORK/launched"
 out=$(bash "$SCRIPT" --session "$SESS" --target-account acctB "$wl" 2>&1)
