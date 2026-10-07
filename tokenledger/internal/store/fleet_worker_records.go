@@ -152,7 +152,7 @@ func (s *Store) WorkerRecords(q WorkerRecordQuery) ([]FleetWorkerRecord, error) 
 			&r.Key, &r.Epic, &r.Kind, &r.Name, &r.Stage, &r.TS, &r.Note, &blob, &r.Size, &created); err != nil {
 			return nil, err
 		}
-		if blob != nil {
+		if len(blob) > 0 { // empty reads as none on both stores: SQLite says nil, Postgres []byte{}
 			r.Content = blob
 		}
 		r.CreatedAt, _ = time.Parse(rfc, created)
