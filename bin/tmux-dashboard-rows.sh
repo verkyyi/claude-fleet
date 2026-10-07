@@ -828,20 +828,22 @@ fi
 buf=""
 # 配置旧 (issue #1783): the fingerprint a fresh session would get NOW, read once a
 # frame — every row below is a compare against it, no fork.
-fleet_cfg_expected_load
-CFG_STALE_T='' CFG_RENEW_T=''
+fleet_cfg_expected_load; fleet_cfg_broken_load
+CFG_STALE_T='' CFG_RENEW_T='' CFG_BROKEN_T=''
 while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic; do
   [ -z "$name" ] && continue
   epic_v "$wepic" "$wid" "$wittl"
   # Is this session's configuration the one it would get now? A local row
   # compares its @agent_cfg (fleet_cfg_state); a row on another machine carries
   # that machine's own verdict (the hub cache's `cfg`, judged there against ITS
-  # expected file). stale | renew | ok | unknown — stale draws 配置旧, renew 待换新
-  # (issue #1895: the same configuration on an older fleet version).
+  # expected file). broken | stale | renew | ok | unknown — stale draws 配置旧, renew
+  # 待换新 (issue #1895: the same configuration on an older fleet version), broken a
+  # red 会坏·需重开 (issue #2076: its start names something the install no longer
+  # has — fleet_cfg_broken_load's list, written by fleet-oldcfg-check.sh --sweep).
   case "$wid" in
-    wid:*) case "$wcfg" in stale|renew|ok) cfgst=$wcfg ;; *) cfgst=unknown ;; esac ;;
+    wid:*) case "$wcfg" in broken|stale|renew|ok) cfgst=$wcfg ;; *) cfgst=unknown ;; esac ;;
     *)     case "$wcfg" in */*) wver=${wcfg#*/}; wcfg=${wcfg%%/*} ;; *) wver='' ;; esac
-           fleet_cfg_state "$agent" "$wcfg" "$wver"; cfgst=$FCFG_STATE ;;
+           fleet_cfg_state "$agent" "$wcfg" "$wver" "$sess" "$wid"; cfgst=$FCFG_STATE ;;
   esac
   cfgf=''; [ "$cfgst" = unknown ] || cfgf="$US$cfgst"
   # The session's issue title (issue #1921): a row on another machine carries its
@@ -1346,9 +1348,10 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # fields 10-12 (issue #1532): the hub's issue · PR · ctx% cells, bare text
     # (`#1532` · `#1552✓` · `45%`; `—` / `·` when there is none). The view draws
     # them only while its info column is open (⌃i), right-aligned.
-    # field 13 (issue #1783): `stale` / `renew` / `ok` — whether the session's
-    # configuration is the one it would get now; the view draws a yellow 配置旧
-    # left of the @ mark on a stale one, 待换新 on a renew one (issue #1895). Absent when unknown, so a login with no expected file
+    # field 13 (issue #1783): `stale` / `renew` / `ok` / `broken` — whether the
+    # session's configuration is the one it would get now; the view draws a yellow
+    # 配置旧 left of the @ mark on a stale one, 待换新 on a renew one (issue #1895),
+    # a red 会坏·需重开 on a broken one (issue #2076). Absent when unknown, so a login with no expected file
     # (or a session from before #1782) emits its rows byte for byte as before.
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct$cfgf"$'\n'
     continue
@@ -1397,17 +1400,23 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # 配置旧 (issue #1783), amber, just before the @ mark: the session runs an older
   # configuration than a fresh one would get (fleet_cfg_state above).
   # 待换新 (issue #1895) the same way: same configuration, older fleet version.
-  if [ "$cfgst" = stale ] || [ "$cfgst" = renew ]; then
+  # 会坏·需重开 (issue #2076) in RED: its start names something the install no
+  # longer has — it will fail, not merely lack a feature.
+  if [ "$cfgst" = stale ] || [ "$cfgst" = renew ] || [ "$cfgst" = broken ]; then
+    _cc=$AM
     if [ "$cfgst" = stale ]; then
       [ -n "$CFG_STALE_T" ] || CFG_STALE_T=$(fleet_ui_t sidebar_cfg_stale)
       _ct=$CFG_STALE_T
+    elif [ "$cfgst" = broken ]; then
+      [ -n "$CFG_BROKEN_T" ] || CFG_BROKEN_T=$(fleet_ui_t sidebar_cfg_broken)
+      _ct=$CFG_BROKEN_T; _cc=$RD
     else
       [ -n "$CFG_RENEW_T" ] || CFG_RENEW_T=$(fleet_ui_t sidebar_cfg_renew)
       _ct=$CFG_RENEW_T
     fi
     _a=${_ct//[![:ascii:]]/}
     [ -n "$tagpfx" ] && { tagpfx+=' '; dwidth=$((dwidth+1)); }
-    tagpfx+="${AM}${_ct}${R}"; dwidth=$(( dwidth + ${#_ct} * 2 - ${#_a} ))
+    tagpfx+="${_cc}${_ct}${R}"; dwidth=$(( dwidth + ${#_ct} * 2 - ${#_a} ))
   fi
   # A row on another machine ends its tags in that machine's `@m4` (issue #1780,
   # the sidebar's mark): `@m4!` once it is lost (the row dims too), `@m5~` heard

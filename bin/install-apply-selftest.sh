@@ -349,6 +349,33 @@ ok 'G reeval ran each fleet' "grep -q '^fleet-wait-reeval.sh --quiet -- f1' '$LO
 STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8" --dry-run
 contains 'G reeval dry-run' "$OUT" 'reeval: would re-ask idle windows on 2 live fleet(s)'
 rm -f "$R/bin/fleet-wait-reeval.sh"
+# oldcfg (issue #2076): the sessions this version BREAKS and the looping stale ones,
+# named with window · repo · issue · state, never reopened; the idle stale ones not listed
+contains 'G oldcfg absent → skip' "$OUT" 'oldcfg: skip — no fleet-oldcfg-check.sh in this version'
+cat > "$R/bin/fleet-oldcfg-check.sh" <<EOF
+echo "fleet-oldcfg-check.sh \$*" >> "$LOG"
+printf 'broken\tf1\tissue-12\tacme/app\t#12\tdone\ttool mcp__fleet__fleet_await\n'
+printf 'looping\tf1\tscratch-3\tacme/app\t-\tlooping\tstale, in a loop\n'
+printf 'stale\tf2\tissue-9\tacme/app\t#9\tdone\t\n'
+exit 2
+EOF
+STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8"
+contains 'G oldcfg counts' "$OUT" 'oldcfg: 会坏·需重开 1 · 循环中的配置旧 1 — not reopened (#2068 B)'
+contains 'G oldcfg names the broken window' "$OUT" '    会坏  f1:issue-12  acme/app  #12  done  — tool mcp__fleet__fleet_await'
+contains 'G oldcfg names the looping one' "$OUT" '    循环  f1:scratch-3  acme/app  -  looping  — stale, in a loop'
+ok 'G oldcfg never names the idle stale one' "! printf '%s' \"\$OUT\" | grep -q issue-9"
+ok 'G oldcfg swept the live fleets against the new tree' "grep -q '^fleet-oldcfg-check.sh --sweep --list --new-dir ' '$LOG'"
+eq 'G oldcfg: a broken session never fails the apply' 0 "$RC"
+printf 'exit 0\n' > "$R/bin/fleet-oldcfg-check.sh"
+STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8"
+contains 'G oldcfg nothing → ok' "$OUT" 'oldcfg: ok — no open session breaks on this version; none looping on an old configuration'
+STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8" --dry-run
+contains 'G oldcfg dry-run' "$OUT" 'oldcfg: would name the open sessions this version breaks'
+printf 'echo "fleet-oldcfg-check: cannot run — no python3" >&2; exit 3\n' > "$R/bin/fleet-oldcfg-check.sh"
+STUB_SOCKS='f1 f2' run_ap --from "$C7" --to "$C8"
+contains 'G oldcfg cannot run → WARN' "$OUT" 'oldcfg: WARN — fleet-oldcfg-check: cannot run — no python3'
+eq 'G oldcfg WARN never fails the apply' 0 "$RC"
+rm -f "$R/bin/fleet-oldcfg-check.sh"
 
 # --- I. failure -----------------------------------------------------------------------
 sed -i.bak 's/<integer>90</<integer>45</' "$R/launchd/com.claude-fleet.collect.plist.tmpl" && rm -f "$R/launchd/"*.bak

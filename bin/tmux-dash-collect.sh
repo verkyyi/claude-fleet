@@ -372,7 +372,7 @@ PHASE_MIN=5     # less headroom than this left in the tick ⇒ don't start a pha
 # cadence never rides the tick's gh/git latency, and rotating it would hand it back
 # the variable position it was moved out of. It runs in the head, budgeted like
 # everything else, and the tick budget still bounds it.
-PHASE_LIST=(guide sessmap issues git ctx usage scrape banner escalate snapshot)
+PHASE_LIST=(guide sessmap issues git ctx usage scrape banner escalate agentcfg snapshot)
 # hubsess (issue #1423) exists only with the cross-machine hub on (CCQUOTA_FLEET=1)
 # for at least one fleet — read per fleet since #1539 (fleet_hub_any: a fleet
 # conf's own line wins over the environment); off everywhere, the list — and so the
@@ -394,6 +394,7 @@ phase_budget() {
     scrape)     printf '%s' "${FLEET_COLLECT_SCRAPE_BUDGET:-30}" ;;
     banner)     banner_budget ;;
     escalate)   printf '%s' "${FLEET_COLLECT_ESCALATE_BUDGET:-30}" ;;
+    agentcfg)   printf '%s' "${FLEET_COLLECT_AGENTCFG_BUDGET:-20}" ;;
     snapshot)   printf '%s' "${FLEET_COLLECT_SNAPSHOT_BUDGET:-30}" ;;
     hubsess)    printf '%s' "${FLEET_COLLECT_HUBSESS_BUDGET:-10}" ;;
     *)          printf '30' ;;
@@ -1263,6 +1264,19 @@ if [ -n "${FLEET_NOTIFY_CMD:-}" ]; then
   done
 fi
 
+}
+
+# --- the old sessions a release breaks (every run, issue #2076) -------------------
+# Every stale / renew window's START (@agent_cfg_manifest) against the live install,
+# with the release gate's own rule (fleet-oldcfg-check.sh --sweep → fleet-oldcfg-
+# replay.py --manifest, static): the broken ones land in global/agent-cfg.broken,
+# which the rows producer reads per frame (red 会坏·需重开 instead of the yellow
+# 配置旧), the doctor counts and the idle reopen honours. Judged here, off the render
+# path; install-apply's oldcfg: step runs the same sweep right after a move. No
+# fleet-oldcfg-check.sh (an older install) ⇒ nothing, byte for byte.
+ph_agentcfg() {
+  [ -f "$BIN/fleet-oldcfg-check.sh" ] || return 0
+  bash "$BIN/fleet-oldcfg-check.sh" --sweep >/dev/null 2>&1 || true
 }
 
 # --- crash-recovery snapshot (every run) ---

@@ -281,6 +281,24 @@ Do not install from memory: read the doc and work from it.
   live tree on every PR, so a hook that cannot run in the sandbox is red there,
   not at the operator's release; old == new is GREEN at once. docs/BREAK-IT.md
   row `oldcfg-deleted-hook`.
+- **An old session is either 会坏 or merely 旧, and the fleet can tell which**
+  (issue #2076, EPIC #2074 C3). Every launch writes its START down — the hook
+  table it was handed, the mod tools it registered, its MCP servers —
+  content-addressed as `$FLEET_CONF_DIR/agentcfg/<sha>.json` (`@agent_cfg_manifest`,
+  written by `fleet-agent-team.py session` beside the `@agent_cfg` fingerprint).
+  `bin/fleet-oldcfg-check.sh <manifest>` judges it against the live install with
+  the release gate's OWN functions (`fleet-oldcfg-replay.py --manifest`:
+  `hook_paths_missing` / `tool_handler` / `mcp_scripts_missing`, static): gone ⇒
+  `broken` (exit 2), merely new ⇒ `stale` (1), identical ⇒ `ok` (0); no manifest ⇒
+  `stale`, never broken. `--sweep` (the collector's `agentcfg` phase, install-apply's
+  `oldcfg:` step) writes `global/agent-cfg.broken`, the ONE list `fleet_cfg_state`
+  consults (`fleet_cfg_broken_load`; a 4th/5th arg `<session> <window id>`): a
+  stale/renew window on it reads `broken` — red 会坏·需重开 on the sidebar and the
+  hub list, the doctor's `agentcfg` row counts it apart and WARNs, the idle reopen
+  treats it as stale. Never compute broken anywhere else, and never from an `ok` /
+  `unknown` window. The `oldcfg:` step NAMES the broken and the looping stale
+  sessions (window · repo · issue · state) and reopens none (#2068 B). BREAK-IT
+  row `oldcfg-broken-unmarked`; `fleet-oldcfg-check-selftest.sh`.
 - **A session says when it may be closed: `@reap_policy`** (issue #1902). Chosen
   at spawn (`--reap` on both spawners, the `spawn` tool, the client's new-session
   question 「什么时候回收？」 → hub `reap` → the node's `worker_start`), changed by

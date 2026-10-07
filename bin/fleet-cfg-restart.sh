@@ -37,8 +37,10 @@
 #        fleet-cfg-restart.sh --list  [<session>...]   one `sess wid name verdict` row
 #                                                      per stale session
 #        fleet-cfg-restart.sh --count [<session>...]   how many sessions are stale
-#                                                      (配置旧 + 待换新)
-#        fleet-cfg-restart.sh --counts [<session>...]  `<配置旧> <待换新>` (#1895)
+#                                                      (配置旧 + 待换新 + 会坏)
+#        fleet-cfg-restart.sh --counts [<session>...]  `<配置旧> <待换新> <会坏>` (#1895,
+#                                                      #2076: a broken one is counted
+#                                                      ONCE, here, not as 配置旧 too)
 # No session = every live fleet (fleet_sockets). Always exits 0 except on a usage
 # error (2).
 set -uo pipefail
@@ -69,8 +71,8 @@ MIGRATE="${FLEET_CFG_RESTART_MIGRATE:-$BIN/fleet-migrate.sh}"   # selftest seam
 LOG="$BIN/../logs/cfg-restart.log"
 
 if [ $# -gt 0 ]; then sockets=$*; else sockets=$(fleet_sockets); fi
-fleet_cfg_expected_load
-total=0 nstale=0 nrenew=0
+fleet_cfg_expected_load; fleet_cfg_broken_load
+total=0 nstale=0 nrenew=0 nbroken=0
 say() { [ -n "$QUIET" ] || printf '%s\n' "$*"; }
 
 for sess in $sockets; do
@@ -79,8 +81,9 @@ for sess in $sockets; do
   stale=''
   while IFS='|' read -r wid ag fp av ts; do
     [ -n "$wid" ] || continue
-    fleet_cfg_state "$ag" "$fp" "$av"
-    case "$FCFG_STATE" in stale|renew) stale+="$wid|$fp${av:+/$av}|$ts|$FCFG_STATE"$'\n' ;; esac
+    fleet_cfg_state "$ag" "$fp" "$av" "$sess" "$wid"
+    # broken (#2076) is a stale session that will fail too: reopened the same way
+    case "$FCFG_STATE" in stale|renew|broken) stale+="$wid|$fp${av:+/$av}|$ts|$FCFG_STATE"$'\n' ;; esac
   done < <(tmux -L "$sess" list-windows -t "=$sess" \
              -F '#{window_id}|#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@cfg_restart_ts}' 2>/dev/null)
   [ -n "$stale" ] || continue
@@ -90,7 +93,7 @@ for sess in $sockets; do
     nm=$(tmux -L "$sess" display-message -p -t "$wid" '#{window_name}' 2>/dev/null)
     case "$nm" in dash|plan|backlog|home) continue ;; esac
     total=$((total + 1))
-    if [ "$st" = renew ]; then nrenew=$((nrenew + 1)); else nstale=$((nstale + 1)); fi
+    case "$st" in renew) nrenew=$((nrenew + 1)) ;; broken) nbroken=$((nbroken + 1)) ;; *) nstale=$((nstale + 1)) ;; esac
     case "$MODE" in count|counts) continue ;; esac
     why=$(FLEET_CFG_RESTART_IDLE=$IDLE fleet_cfg_restart_why "$sess" "$wid" "$IDLE") && why=reopen
     if [ "$MODE" = list ]; then printf '%s\t%s\t%s\t%s\n' "$sess" "$wid" "$nm" "$why"; continue; fi
@@ -119,5 +122,5 @@ for sess in $sockets; do
   done <<< "$stale"
 done
 [ "$MODE" = count ] && printf '%s\n' "$total"
-[ "$MODE" = counts ] && printf '%s %s\n' "$nstale" "$nrenew"
+[ "$MODE" = counts ] && printf '%s %s %s\n' "$nstale" "$nrenew" "$nbroken"
 exit 0

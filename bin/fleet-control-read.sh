@@ -143,7 +143,7 @@ case "$mode" in
     # Column 15 (issue #1750): `born=<epoch>` — the session's birth (@born, stamped
     # at spawn and carried by move/migrate; else tmux's window_created), the one
     # ruler every machine's list orders its rows by. Read off this same list.
-    # Column 16 (issue #1783): `cfg=<stale|renew|ok|unknown>` — is the session's
+    # Column 16 (issue #1783): `cfg=<broken|stale|renew|ok|unknown>` — is the session's
     # configuration (@agent_cfg, stamped at launch, #1782) the one a fresh session
     # gets on THIS machine now, on this machine's fleet version (@agent_ver,
     # `renew` = 待换新, #1895)? Judged here, where the expected file lives, so the
@@ -182,7 +182,7 @@ case "$mode" in
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
     cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}' 2>/dev/null) || cwds=''
-    fleet_cfg_expected_load
+    fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     while IFS= read -r row; do
       [ -n "$row" ] || continue
       wid=${row%%$'\t'*}; rest=${row#*$'\t'}
@@ -201,7 +201,7 @@ case "$mode" in
       wfp=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       wag=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       case "$wfp" in */*) wav=${wfp#*/}; wfp=${wfp%%/*} ;; *) wav='' ;; esac
-      fleet_cfg_state "$wag" "$wfp" "$wav"
+      fleet_cfg_state "$wag" "$wfp" "$wav" "$sess" "$wid"
       if [ -z "$wt" ]; then
         cwd=${wrow%%$'\t'*}
         case "${cwd##*/}" in scratch-[1-9]*|*-scratch-[1-9]*)

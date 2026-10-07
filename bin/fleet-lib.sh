@@ -7838,15 +7838,36 @@ fleet_cfg_expected_load() {
   done < "$f"
   return 0
 }
-# fleet_cfg_state <agent> <fp> <ver> → FCFG_STATE = stale | renew | ok | unknown
-# (no fork, nothing printed). <agent> is @cc_agent (`codex`, `codex:…` as the rows
-# format spells it, else Claude); <fp> the window's @agent_cfg, <ver> its
-# @agent_ver. No fingerprint on the window (a session from before #1782,
-# FLEET_AGENT_CFG=0, a plain shell) or none expected ⇒ unknown — never stale: a
-# window we cannot judge is never reopened. A different fingerprint ⇒ stale
-# (配置旧: the definition changed). The same one on an older fleet version ⇒ renew
-# (待换新, issue #1895) — a window with no @agent_ver was launched before #1895,
-# so it is older than any expected ver; no `ver` line expected ⇒ never renew.
+# fleet_cfg_broken_load — read $FLEET_CONF_DIR/global/agent-cfg.broken ONCE into
+# FCFG_BROKEN (issue #2076, EPIC #2074 C3): one `<session>\t<window id>\t<manifest
+# sha>\t<what>` row per open window whose START names something the live install
+# no longer has — a hook script, a mod tool's handler, an MCP server's script —
+# judged off its @agent_cfg_manifest by bin/fleet-oldcfg-check.sh --sweep (the
+# collector's agentcfg phase every tick, install-apply's oldcfg: step right after a
+# move) with the release gate's own rule (fleet-oldcfg-replay.py). Pair with
+# fleet_cfg_expected_load. No file ⇒ nothing broken, byte for byte as before.
+fleet_cfg_broken_load() {
+  FCFG_BROKEN=''
+  local f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/agent-cfg.broken" s w _rest
+  [ -f "$f" ] || return 0
+  while IFS=$'\t' read -r s w _rest; do
+    [ -n "$s" ] && [ -n "$w" ] && FCFG_BROKEN="$FCFG_BROKEN|$s/$w|"
+  done < "$f"
+  return 0
+}
+# fleet_cfg_state <agent> <fp> <ver> [<session> <window id>] → FCFG_STATE =
+# broken | stale | renew | ok | unknown (no fork, nothing printed). <agent> is
+# @cc_agent (`codex`, `codex:…` as the rows format spells it, else Claude); <fp>
+# the window's @agent_cfg, <ver> its @agent_ver. No fingerprint on the window (a
+# session from before #1782, FLEET_AGENT_CFG=0, a plain shell) or none expected ⇒
+# unknown — never stale: a window we cannot judge is never reopened. A different
+# fingerprint ⇒ stale (配置旧: the definition changed). The same one on an older
+# fleet version ⇒ renew (待换新, issue #1895) — a window with no @agent_ver was
+# launched before #1895, so it is older than any expected ver; no `ver` line
+# expected ⇒ never renew. A stale / renew window that fleet_cfg_broken_load listed
+# (<session> <window id> given, issue #2076) ⇒ broken (会坏·需重开: it WILL fail,
+# not merely lack a feature) — never from ok / unknown, and never without the
+# list: a window with no manifest stays stale, the yellow it always was.
 fleet_cfg_state() {
   local exp
   case "${1:-}" in codex|codex:*) exp=${FCFG_EXP_CODEX:-} ;; *) exp=${FCFG_EXP_CLAUDE:-} ;; esac
@@ -7854,6 +7875,10 @@ fleet_cfg_state() {
   elif [ "$2" != "$exp" ]; then FCFG_STATE=stale
   elif [ -n "${FCFG_EXP_VER:-}" ] && [ "${3:-}" != "$FCFG_EXP_VER" ]; then FCFG_STATE=renew
   else FCFG_STATE=ok; fi
+  case "$FCFG_STATE" in stale|renew)
+    [ -n "${4:-}" ] && [ -n "${5:-}" ] && case "${FCFG_BROKEN:-}" in *"|$4/$5|"*) FCFG_STATE=broken ;; esac ;;
+  esac
+  return 0
 }
 # fleet_cfg_restart_why <session> <win> [idle-secs] — may <win> be reopened onto
 # the current configuration NOW (issue #1783)? Exit 0 = yes. Else exit 1 and ONE
@@ -7879,8 +7904,9 @@ fleet_cfg_restart_why() {
   rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; nm=${o#*|}
   case "$nm" in dash|plan|backlog|home) echo panel; return 1 ;; esac
   [ -z "$rem" ] && [ "$hub" != 1 ] || { echo remote; return 1; }
-  fleet_cfg_expected_load; fleet_cfg_state "$ag" "$fp" "$av"
-  case "$FCFG_STATE" in stale|renew) ;; *) echo "$FCFG_STATE"; return 1 ;; esac
+  fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state "$ag" "$fp" "$av" "$sess" "$win"
+  # broken (#2076) is a stale session that will fail too: reopened the same way
+  case "$FCFG_STATE" in stale|renew|broken) ;; *) echo "$FCFG_STATE"; return 1 ;; esac
   [ -z "$slp" ] || { echo asleep; return 1; }
   [ "$st" = "done" ] || { echo "state:${st:-none}"; return 1; }
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac

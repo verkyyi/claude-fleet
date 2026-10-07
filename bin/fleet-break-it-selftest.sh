@@ -48,6 +48,8 @@
 #                                                   fleet_machine_admit, fleet_machine_headroom; the hub half is
 #                                                   tokenledger/internal/api judge() (go test, when a toolchain is here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
+#   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
+#                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -2768,6 +2770,53 @@ drill_burst_lands_on_one() {
     WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
+}
+
+# A release that deletes what an OPEN session's start still names (a hook script,
+# a mod tool's handler): the list must tell that session — red 会坏·需重开 — from
+# one that merely lacks a new hook (yellow 配置旧, as before) and from one with no
+# manifest at all (yellow too), name the broken one and the looping stale one with
+# window · repo · issue · state, and reopen none of them (issue #2076, EPIC #2074 C3).
+drill_oldcfg_broken_unmarked() {
+  CAP=20; BREAK_SOCK="$WORK/sock-oc3"; local d="$WORK/oc3" t0 out rc st wb wl wn word
+  mkdir -p "$d/conf/global" "$d/new/bin" "$d/new/hooks" "$d/new/mod/fleet/hooks" "$d/new/conf"
+  # the new install: h.sh kept, new.sh added, the mod's `await` dropped from TOOL_RE
+  printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"sh ~/.claude/fleet/bin/h.sh"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"sh ~/.claude/fleet/bin/new.sh"}]}]}}\n' > "$d/new/hooks/settings-hooks.json"
+  : > "$d/new/bin/h.sh"; : > "$d/new/bin/new.sh"; : > "$d/new/bin/fleet-mcp.py"
+  printf "export const FALLBACK = ['status', 'spawn'] as const\nexport const TOOL_RE = /^mcp__fleet__fleet_(status|spawn)\$/\n" > "$d/new/mod/fleet/hooks/tools.ts"
+  printf '{"mcpServers":{"fleet":{"command":"bash","args":["-c","exec python3 $HOME/.claude/fleet/bin/fleet-mcp.py"]}}}\n' > "$d/new/conf/mcp-worker.json"
+  # two old sessions' starts: one named gone.sh and the dropped tool, one only lacks new.sh
+  printf '{"agent":"claude","fp":"OLD","hooks":{"Stop":[{"hooks":[{"type":"command","command":"sh ~/.claude/fleet/bin/gone.sh"}]}]},"tools":["mcp__fleet__fleet_status","mcp__fleet__fleet_await"],"mcp":{}}\n' > "$d/m-broken.json"
+  printf '{"agent":"claude","fp":"OLD","hooks":{"Stop":[{"hooks":[{"type":"command","command":"sh ~/.claude/fleet/bin/h.sh"}]}]},"tools":["mcp__fleet__fleet_status","mcp__fleet__fleet_spawn"],"mcp":{}}\n' > "$d/m-stale.json"
+  printf 'claude NEW x\nver v2\n' > "$d/conf/global/agent-cfg.expected"
+  nt -f /dev/null new-session -d -s oc3 -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  ocw() {   # <name> <state> <manifest> → window id: a Claude session on the OLD fingerprint
+    local id; id=$(nt new-window -d -t oc3: -n "$1" -P -F '#{window_id}' 'exec sleep 600')
+    nt set-option -w -t "$id" @claude_state "$2"; nt set-option -w -t "$id" @agent_cfg OLD; nt set-option -w -t "$id" @agent_ver v2
+    nt set-option -w -t "$id" @issue 7; nt set-option -w -t "$id" @repo acme/app
+    [ -n "$3" ] && nt set-option -w -t "$id" @agent_cfg_manifest "$3"
+    printf '%s' "$id"
+  }
+  wb=$(ocw w-broken done "$d/m-broken.json"); wl=$(ocw w-loop looping "$d/m-stale.json"); wn=$(ocw w-old done '')
+  t0=$(now)
+  out=$(PATH="$WORK/tbin:$PATH" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$d/conf" bash "$BIN/fleet-oldcfg-check.sh" --sweep --list --new-dir "$d/new" -- oc3 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 2 ] || { WHY="the sweep exited $rc, want 2 (something is broken): $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
+  case "$out" in *"broken	oc3	w-broken	acme/app	#7	done	"*) ;; *) WHY="the list does not name w-broken as broken with window · repo · issue · state: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
+  case "$out" in *"looping	oc3	w-loop	acme/app	#7	looping	"*) ;; *) WHY="the list does not name the looping stale one: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
+  case "$out" in *"stale	oc3	w-old	"*) ;; *) WHY="a window with no manifest is not listed stale (the degenerate): $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
+  case "$out" in *"broken	oc3	w-loop"*|*"broken	oc3	w-old"*) WHY="a session that only lacks a new hook, or has no manifest, is marked broken"; return 1 ;; esac
+  [ "$(grep -c . "$d/conf/global/agent-cfg.broken")" = 1 ] || { WHY="agent-cfg.broken holds $(grep -c . "$d/conf/global/agent-cfg.broken" 2>/dev/null) row(s), want 1"; return 1; }
+  for w in "$wb" "$wl" "$wn"; do
+    [ "$(nt display-message -p -t "$w" '#{window_id}')" = "$w" ] || { WHY="window $w was closed — nothing here may reopen a session"; return 1; }
+  done
+  # the rows producer's judge (fleet_cfg_state) and the word the sidebar draws
+  st=$(FLEET_CONF_DIR="$d/conf" bash -c '. "$1/fleet-lib.sh"; fleet_cfg_expected_load; fleet_cfg_broken_load
+         for w in "$2" "$3" "$4"; do fleet_cfg_state claude OLD v2 oc3 "$w"; printf "%s " "$FCFG_STATE"; done' _ "$BIN" "$wb" "$wl" "$wn")
+  [ "$st" = "broken stale stale " ] || { WHY="fleet_cfg_state says [$st], want [broken stale stale ]"; return 1; }
+  word=$(FLEET_UI_LANG=zh bash -c '. "$1/fleet-ui-lang.sh"; fleet_ui_t sidebar_cfg_broken' _ "$BIN")
+  [ "$word" = '会坏·需重开' ] || { WHY="the broken row's word is [$word], not 会坏·需重开"; return 1; }
+  WHAT="删了 gone.sh / await 的发版后：w-broken 红「会坏·需重开」并点名（窗口·仓库·单号·状态），只缺 new.sh 的 w-loop 黄且列为循环中，没 manifest 的 w-old 照旧黄；三个都没被重开"
 }
 
 # ================================================================ run ===========

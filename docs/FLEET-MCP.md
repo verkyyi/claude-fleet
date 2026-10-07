@@ -286,6 +286,18 @@ listed against the new server's `tools/list`, every hook command of its table �
 and a tool with no handler refuses the move (`oldcfg:`). #2068's rules say what a
 handler is: forward it, or answer how to reopen (CONTRIBUTING «老会话兼容»).
 
+**And after the move, the sessions it would still break are named** (issue #2076,
+EPIC #2074 C3): every launch writes its start down — the hook table it was handed,
+the mod tools it registered (the `FALLBACK` list), its MCP servers — as
+`$FLEET_CONF_DIR/agentcfg/<sha>.json` (`@agent_cfg_manifest`), and
+`bin/fleet-oldcfg-check.sh` judges it against the live install with the gate's own
+functions (`fleet-oldcfg-replay.py --manifest`, static): a tool with no handler in
+the new `TOOL_RE`, a hook script gone, an MCP script gone ⇒ `broken`, the sidebar's
+red 会坏·需重开; anything merely new ⇒ `stale`, the yellow 配置旧 as before. The
+collector sweeps it every tick, `fleet-install-apply.sh`'s `oldcfg:` step names the
+broken and the looping stale sessions right after a move, and nothing reopens them
+for you (#2068 B).
+
 | script | tool |
 |---|---|
 | `fleet-children.sh` · `fleet-repo.sh list` | `children` · `repos` |
@@ -413,6 +425,14 @@ once; J replays this repo's own table against its live tree. `fleet-stable-selft
 I — the refusal (`oldcfg:`, tag untouched, `--dry-run` too) and `--force` + its log
 line; `fleet-break-it-selftest.sh` `oldcfg-deleted-hook` does it through the real
 `move` on a rig repo.
+`bin/fleet-oldcfg-check-selftest.sh` — the per-session half (issue #2076): a launch
+writes its manifest (Claude with the mod's tools, Codex without), a manifest naming a
+dropped tool / a deleted hook script / a gone MCP script is `broken` and names it, one
+that only lacks a new hook is `stale`, a missing manifest is `stale` with a note; the
+sweep on an isolated socket writes exactly the broken windows, `fleet_cfg_state` reads
+`broken` for them, the rows producer's field 13 and the sidebar's word follow, the
+cfg-restart counts and the idle reopen include them; `fleet-break-it-selftest.sh`
+`oldcfg-broken-unmarked` is the drill.
 `bin/bash-guard-selftest.sh` «direct-script rail» — the old road (above): a worker
 seat logged / blocked, the operator seat and the hatch passing, the MCP road with
 the service, the fallback without it (logged `fallback`, never blocked).

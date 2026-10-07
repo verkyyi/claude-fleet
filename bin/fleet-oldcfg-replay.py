@@ -46,9 +46,32 @@ is touched, nothing leaves the machine):
 
 Prints one line per item — `<kind> <verdict> <name> — <detail>` — and a last line
 `oldcfg-replay: GREEN …` or `oldcfg-replay: RED — N finding(s) …`; `-q` prints the
-findings and the last line only; `--json` prints one object instead (C3, #2076, reads
-it: {old, new, items[{kind, verdict, name, detail, …}], findings, verdict}).
+findings and the last line only; `--json` prints one object instead
+({old, new, items[{kind, verdict, name, detail, …}], findings, verdict}).
 Exit 0 green · 1 red · 2 cannot run (usage, no git, an unknown ref).
+
+  fleet-oldcfg-replay.py --manifest <file>… [--new-dir <dir>] [--json]
+
+The per-SESSION half (issue #2076, EPIC #2074 C3), STATIC — nothing is run, so the
+dash can tick it: <file> is what one session recorded at ITS start
+(fleet-agent-team.py `session` writes $FLEET_CONF_DIR/agentcfg/<sha>.json — the hook
+table it was handed, the mod tools it registered, the MCP servers; the window's
+@agent_cfg_manifest names it), --new-dir the live install (default: this script's own
+tree). The SAME rule as the gate above decides, through the same functions
+(hook_paths_missing · tool_handler · mcp_scripts_missing):
+
+  broken  something its start named is GONE: a hook command's ~/.claude/fleet path,
+          a mod tool's tool.call handler, an MCP server's script — it WILL fail
+          (every turn / every spawn), reopen it;
+  stale   nothing gone, but the new tree has (or dropped) a fleet hook / tool / MCP
+          server it does not know — it only lacks a new feature (#2068);
+  ok      the three are exactly what it recorded.
+
+One manifest: line 1 is the bare verdict, then one `<kind> <verdict> <name> — <detail>`
+per item that is not ok. Several: `--json`, one object per line ({manifest, sha,
+verdict, items, findings, note}). A manifest that is missing or unreadable is `stale`
+with a note (a window from before #2076 has none, and is never red for it). Exit 0 ok
+· 1 stale · 2 broken · 3 cannot run. `bin/fleet-oldcfg-check.sh` is the shell road.
 
 The degenerate case: --old and --new the same commit ⇒ nothing changed, GREEN at
 once, nothing run. A tree with none of the three files has nothing to replay and is
@@ -187,6 +210,190 @@ def read_text(tree, rel):
         return fh.read()
 
 
+# ---------------------------------------------------------------- the judgment --
+# ONE rule for «an old session would break on this tree», asked by the release gate
+# (Replay, which also RUNS everything — #2075) and by the per-session check
+# (check_manifest, static — #2076). broken = a thing the old session's start named is
+# GONE from the new tree. Everything else is at worst stale: it lacks a new feature.
+
+def hook_paths_missing(command, new_tree):
+    """The ~/.claude/fleet/<rel> paths a hook command names that the new tree lacks."""
+    return [rel for rel in FLEET_PATH.findall(command) if not os.path.exists(os.path.join(new_tree, rel))]
+
+
+def tool_handler(tool, handler):
+    """The forward name the new mod's TOOL_RE answers `tool` with; None = no handler
+    (an old session that lists it dies with «no tool.call hook answered»)."""
+    m = handler.search(tool) if handler is not None else None
+    if m is None:
+        return None
+    return m.group(1) if m.lastindex else tool
+
+
+def mcp_scripts_missing(words, new_tree):
+    """The *.py / *.sh an MCP server's command names that neither bin/ nor hooks/ of
+    the new tree has."""
+    return [s for s in sorted(set(SCRIPT_NAME.findall(words)))
+            if not any(os.path.isfile(os.path.join(new_tree, d, s)) for d in ("bin", "hooks"))]
+
+
+def mcp_is_ours(srv):
+    """A server whose command runs a fleet script (anything else is not ours to break)."""
+    return ".claude/fleet" in mcp_words(srv)
+
+
+def mcp_words(srv):
+    return " ".join([(srv or {}).get("command", "")] + [str(a) for a in (srv or {}).get("args") or []])
+
+
+def hook_rows(table):
+    """settings-hooks.json's `hooks` value → sorted [(event, matcher, command)]."""
+    out = []
+    for event, entries in (table or {}).items():
+        for entry in entries or []:
+            matcher = entry.get("matcher") or ""
+            for hook in entry.get("hooks") or []:
+                if hook.get("type", "command") == "command":
+                    out.append((event, matcher, hook.get("command", "")))
+    return sorted(set(out))
+
+
+def tree_start(tree):
+    """What a session launched from <tree> reads at its start — the three files, as
+    a manifest records them: {hooks, tools, mcp}; a missing file is None."""
+    hooks = tools = mcp = None
+    text = read_text(tree, HOOK_TABLE)
+    if text is not None:
+        try:
+            hooks = json.loads(text).get("hooks", {})
+        except ValueError:
+            hooks = {}
+    src = read_text(tree, MOD_TOOLS)
+    if src is not None:
+        tools = Replay.registered_tools(src) or []
+    text = read_text(tree, MCP_CONF)
+    if text is not None:
+        try:
+            mcp = json.loads(text).get("mcpServers", {})
+        except ValueError:
+            mcp = {}
+    return {"hooks": hooks, "tools": tools, "mcp": mcp}
+
+
+def check_manifest(man, new_tree):
+    """One session's recorded start against the new tree → (verdict, items).
+    broken: a MISSING / ERROR item; stale: a `changed` item; ok: none."""
+    items = []
+
+    def item(kind, verdict, name, detail):
+        items.append({"kind": kind, "verdict": verdict, "name": name, "detail": detail})
+
+    now = tree_start(new_tree)
+    # hooks: every command the session was handed must still find its scripts
+    old_rows = hook_rows(man.get("hooks") or {})
+    for event, matcher, command in old_rows:
+        label = "%s[%s]" % (event, matcher) if matcher else event
+        missing = hook_paths_missing(command, new_tree)
+        if missing:
+            item("hook", "MISSING", label, "%s — %s not in the new tree: the session runs it every turn "
+                 "and gets «not found» (a PreToolUse one BLOCKS the call)" % (command, ", ".join(missing)))
+    new_rows = hook_rows(now["hooks"]) if now["hooks"] is not None else []
+    old_set, new_set = set(old_rows), set(new_rows)
+    for event, matcher, command in new_rows:
+        if (event, matcher, command) not in old_set:
+            item("hook", "changed", "%s[%s]" % (event, matcher) if matcher else event,
+                 "%s — a fleet hook the session does not run (new in this version)" % command)
+    for event, matcher, command in old_rows:
+        if (event, matcher, command) not in new_set and FLEET_PATH.search(command) and not hook_paths_missing(command, new_tree):
+            item("hook", "changed", "%s[%s]" % (event, matcher) if matcher else event,
+                 "%s — no longer in the fleet table (the session still runs it; its script is there)" % command)
+    # the mod's tools: every tool it registered must still have a tool.call handler
+    old_tools = man.get("tools")
+    if old_tools:
+        new_src = read_text(new_tree, MOD_TOOLS)
+        handler = Replay.handler_re(new_src) if new_src is not None else None
+        if new_src is not None and handler is None:
+            item("tool", "ERROR", MOD_TOOLS, "cannot read the new mod's tool.call handler (no TOOL_RE = /…/) "
+                 "— teach fleet-oldcfg-replay.py its shape")
+        else:
+            for tool in old_tools:
+                if tool_handler(tool, handler) is None:
+                    item("tool", "MISSING", tool, "no tool.call handler in the new %s (TOOL_RE) — the session "
+                         "lists it and every call dies with «no tool.call hook answered» (#2068 rule 1)" % MOD_TOOLS)
+        if now["tools"] is not None:
+            for tool in now["tools"]:
+                if tool not in old_tools:
+                    item("tool", "changed", tool, "registered by the new mod, not by the session's (new in this version)")
+    elif old_tools is not None and now["tools"]:
+        for tool in now["tools"]:
+            item("tool", "changed", tool, "registered by the new mod, not by the session's (new in this version)")
+    # the MCP servers: a fleet server's scripts must still be there
+    old_mcp = man.get("mcp") or {}
+    for name, srv in sorted(old_mcp.items()):
+        if not mcp_is_ours(srv):
+            continue
+        missing = mcp_scripts_missing(mcp_words(srv), new_tree)
+        if missing:
+            item("mcp", "MISSING", name, "%s not in the new tree — the server the session restarts (or the "
+                 "version link execs into, #1898) is gone" % ", ".join(missing))
+    if now["mcp"] is not None:
+        for name, srv in sorted(now["mcp"].items()):
+            if mcp_is_ours(srv) and name not in old_mcp:
+                item("mcp", "changed", name, "a fleet server the session was not handed (new in this version)")
+            elif mcp_is_ours(srv) and name in old_mcp and mcp_words(srv) != mcp_words(old_mcp[name]):
+                item("mcp", "changed", name, "the server's command changed (%s)" % mcp_words(srv)[:80])
+    if any(i["verdict"] in ("MISSING", "ERROR") for i in items):
+        return "broken", items
+    if any(i["verdict"] == "changed" for i in items):
+        return "stale", items
+    return "ok", items
+
+
+def read_manifest(path):
+    """→ (manifest dict | None, note). None = missing / unreadable: the caller says
+    `stale` — a window from before the manifests has none, and is never red for it."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            man = json.load(fh)
+    except OSError as exc:
+        return None, "no manifest at %s (%s) — judged stale, never broken" % (path, exc.strerror or "unreadable")
+    except ValueError as exc:
+        return None, "manifest %s is not JSON (%s) — judged stale, never broken" % (path, exc)
+    if not isinstance(man, dict):
+        return None, "manifest %s is not an object — judged stale, never broken" % path
+    return man, ""
+
+
+def manifest_sha(path):
+    base = os.path.basename(path)
+    return base[:-5] if base.endswith(".json") else base
+
+
+def run_manifests(paths, new_tree, as_json):
+    """The --manifest road: one verdict per file; exit 0 ok · 1 stale · 2 broken."""
+    worst = 0
+    rank = {"ok": 0, "stale": 1, "broken": 2}
+    for path in paths:
+        man, note = read_manifest(path)
+        if man is None:
+            verdict, items = "stale", []
+        else:
+            verdict, items = check_manifest(man, new_tree)
+        worst = max(worst, rank[verdict])
+        findings = [i for i in items if i["verdict"] != "ok"]
+        if as_json:
+            print(json.dumps({"manifest": path, "sha": manifest_sha(path), "agent": (man or {}).get("agent"),
+                              "fp": (man or {}).get("fp"), "verdict": verdict, "items": items,
+                              "findings": len(findings), "note": note}, ensure_ascii=False))
+            continue
+        print(verdict)
+        if note:
+            print("note  %s" % note)
+        for it in findings:
+            print("%-5s %-8s %-28s %s" % (it["kind"], it["verdict"], it["name"], it["detail"]))
+    return worst
+
+
 # ---------------------------------------------------------------- the sandbox ---
 
 class Sandbox:
@@ -292,7 +499,7 @@ class Replay:
 
     def one_hook(self, label, command, stdin_text):
         self.counts["hook"] += 1
-        missing = [rel for rel in FLEET_PATH.findall(command) if not os.path.exists(os.path.join(self.new, rel))]
+        missing = hook_paths_missing(command, self.new)
         if missing:
             self.item("hook", "MISSING", label, "%s — %s not in the new tree: the old table runs it every "
                       "turn and gets «not found» (a PreToolUse one BLOCKS the call)"
@@ -348,13 +555,12 @@ class Replay:
         fwd_script = os.path.join(self.new, "bin", "fleet-mcp.py")
         for tool in old_tools:
             self.counts["tool"] += 1
-            m = handler.search(tool) if handler is not None else None
-            if m is None:
+            fwd = tool_handler(tool, handler)
+            if fwd is None:
                 self.item("tool", "MISSING", tool, "no tool.call handler in the new %s (TOOL_RE) — an old session "
                           "that lists it dies with «no tool.call hook answered» (#2068 rule 1: forward it, or answer "
                           "how to reopen)" % MOD_TOOLS)
                 continue
-            fwd = m.group(1) if m.lastindex else tool
             if not os.path.isfile(fwd_script):
                 self.item("tool", "ERROR", tool, "handler present, but its forward bin/fleet-mcp.py is not in the new tree")
                 continue
@@ -414,12 +620,11 @@ class Replay:
             return
         for name, srv in servers.items():
             self.counts["mcp"] += 1
-            words = " ".join([srv.get("command", "")] + [str(a) for a in srv.get("args") or []])
-            if ".claude/fleet" not in words:
+            words = mcp_words(srv)
+            if not mcp_is_ours(srv):
                 self.item("mcp", "ok", name, "not a fleet script (%s) — nothing of ours to break" % words[:80])
                 continue
-            missing = [s for s in sorted(set(SCRIPT_NAME.findall(words)))
-                       if not any(os.path.isfile(os.path.join(self.new, d, s)) for d in ("bin", "hooks"))]
+            missing = mcp_scripts_missing(words, self.new)
             if missing:
                 self.item("mcp", "MISSING", name, "%s not in the new tree — the server an old session restarts "
                           "(or the version link execs into, #1898) is gone" % ", ".join(missing))
@@ -463,6 +668,7 @@ def main(argv):
     ap.add_argument("--old", default="stable")
     ap.add_argument("--new", default="HEAD")
     ap.add_argument("--new-dir")
+    ap.add_argument("--manifest", action="append", default=[])
     ap.add_argument("--timeout", type=float, default=10.0)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("-q", "--quiet", action="store_true")
@@ -475,6 +681,16 @@ def main(argv):
     if a.help:
         print(__doc__.strip())
         return 0
+    if a.manifest:
+        # the per-session check (#2076): static, against a tree — no git, no sandbox
+        if a.new_dir:
+            new_dir = os.path.abspath(a.new_dir)
+        else:
+            new_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+        if not os.path.isdir(new_dir):
+            print("oldcfg-replay: --new-dir %s is not a directory" % new_dir, file=sys.stderr)
+            return 3
+        return run_manifests(a.manifest, new_dir, a.json)
     if shutil.which("git") is None or shutil.which("python3") is None:
         print("oldcfg-replay: git and python3 are needed", file=sys.stderr)
         return 2

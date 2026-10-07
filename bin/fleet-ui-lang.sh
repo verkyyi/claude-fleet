@@ -262,6 +262,10 @@ fleet_ui_t() {
     en:sidebar_cfg_renew)       printf 'renew' ;;
     zh:sidebar_cfg_renew_narrow) printf '换' ;;
     en:sidebar_cfg_renew_narrow) printf 'rn' ;;
+    zh:sidebar_cfg_broken)      printf '会坏·需重开' ;;
+    en:sidebar_cfg_broken)      printf 'breaks·reopen' ;;
+    zh:sidebar_cfg_broken_narrow) printf '坏' ;;
+    en:sidebar_cfg_broken_narrow) printf 'brk' ;;
     zh:sidebar_refreshing)      printf '刷新中…' ;;
     en:sidebar_refreshing)      printf 'refreshing…' ;;
     zh:sidebar_landed_heading_fmt) printf '已落地 (%s) · ↵ 恢复' "${1:-}" ;;
