@@ -267,7 +267,8 @@ func TestFleetMapRefusesToRenameAnExistingLogin(t *testing.T) {
 }
 
 // Nothing in this change touches a hub that sets no map: a sign-in with
-// auto-assign still mints and queues as claude-fleet#1411 shipped it.
+// auto-assign still mints and queues as claude-fleet#1411 shipped it — under
+// the GitHub username since claude-fleet#2069.
 func TestFleetNoMapIsTheOldBehaviour(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
@@ -276,7 +277,7 @@ func TestFleetNoMapIsTheOldBehaviour(t *testing.T) {
 	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
 	enterAs(t, h, pZhang, "张三")
 	_, op := expectAccountOp(t, admin.tnode)
-	if op.Op != control.AccountCreate || op.Login != "gh3003" || op.FullName != "张三" {
+	if op.Op != control.AccountCreate || op.Login != "user3003" || op.FullName != "张三" {
 		t.Fatalf("op = %+v", op)
 	}
 }

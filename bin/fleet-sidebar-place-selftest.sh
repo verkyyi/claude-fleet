@@ -31,7 +31,9 @@
 #   G. degenerate: nothing in the list says 这台电脑上没有 fleet any more
 #   (pure) an empty list (issue #1927): no hub_repos → the old toast; one repo
 #      in it → straight to 「开在哪」; two → the repo menu; none → who to ask;
-#      headings present → hub_repos is never read
+#      headings present → hub_repos is never read; a `#account` line (issue
+#      #2069): opening → a sticky word and the ↵ held for a retry, failed /
+#      none → sticky, naming who to ask
 # Plus the pure parts, imported: where_menu with an 11-field hub_nodes (an older
 # loop: nothing greyed but what is lost), fleet_status_hub_node still reading
 # ver_state off a 13-field line.
@@ -125,7 +127,20 @@ first("e2", "scratch")
 with open(g + "/hub_repos", "w") as f:
     f.write("#ts\x1f1\n")
 first("e3", "new")
+# A login being opened for them (issue #2069): sticky, ↵ held for a retry;
+# failed / none name who to ask; a repo next to the line is no newcomer.
+def acct(label, line, repos=""):
+    with open(g + "/hub_repos", "w") as f:
+        f.write("#ts\x1f1\n#account\x1f" + line + "\x1f1\n" + repos)
+    ask, toast = m.place_start("scratch", [], "a", name="tea")
+    print(label, ask and ask.kind, type(toast).__name__, getattr(toast, "retry", None), toast)
+acct("a1", "opening\x1f42\x1fm4.local\x1fverkyyi")
+acct("a2", "failed\x1f\x1fm4.local\x1fverkyyi")
+acct("a3", "none\x1f\x1f\x1fverkyyi")
+acct("a4", "opening\x1f42\x1fm4.local\x1fverkyyi", "acme/solo\n")
+print("a5", m.hub_repos(), m.hub_account())
 os.unlink(g + "/hub_repos")
+print("a6", m.hub_account())
 PY
 )
 has 'pure: 自动 first' "$pure" "menu [('auto', '自动（入口挑最闲的）', '推荐', False)"
@@ -137,6 +152,12 @@ has 'empty list + one hub repo: straight to 「开在哪」' "$pure" "e1 place-w
 has 'headings present: the repo menu from them, hub_repos unread' "$pure" "e1rows place-repo  ['acme/app', 'acme/web'] "
 has 'empty list + two hub repos: the repo menu' "$pure" "e2 place-repo  ['acme/a', 'acme/b'] "
 has 'the hub says none: who to ask' "$pure" "e3 None None None 你还没有能开会话的机器：请入口管理员给你分一台"
+has '#2069 opening: sticky, the ↵ held for a retry' "$pure" "a1 None Sticky ('scratch', 'a', 'tea', False) 正在为你开机器（m4.local），约 42 秒 — 开好后自动接着开"
+has '#2069 failed: sticky, who to ask, no retry' "$pure" "a2 None Sticky None 给你开机器没成功：请找入口管理员 verkyyi"
+has '#2069 none: sticky, names the admin' "$pure" "a3 None Sticky None 你还没有能开会话的机器：请找入口管理员 verkyyi 给你分一台"
+has '#2069 a repo beside the line: straight to 「开在哪」' "$pure" "a4 place-where str None "
+has '#2069 the #account line is never a repo' "$pure" "a5 ['acme/solo'] {'state': 'opening', 'eta': '42', 'machine': 'm4.local', 'ask': 'verkyyi'}"
+has '#2069 no file: no account word' "$pure" "a6 None"
 vst=$(FLEET_STATUS_G="$FLEET_STATUS_G" bash -c '. "$1/fleet-status-lib.sh"; fleet_status_hub_node mbp; printf "%s|%s" "$HN_VST" "$HN_SESS"' _ "$SB")
 eq 'fleet_status_hub_node: ver_state off a 13-field line' 'ok|0' "$vst"
 

@@ -299,7 +299,7 @@ func TestFleetAssignGoesToAdminNodeOnly(t *testing.T) {
 // answer on its next connection settles it.
 func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 	h := newFleetHarness(t)
-	const pZhang = "gh:2001" // their login is minted from the principal: gh2001
+	const pZhang = "gh:2001" // their login is their GitHub username, user2001 (claude-fleet#2069)
 	enablePeople(t, h, pZhang)
 	h.srv.FleetAdmins = []string{"verkyyi"}
 	setHubSetting(t, h.srv, AutoAssignKey, "m4")
@@ -309,7 +309,7 @@ func TestFleetFirstSignInProvisionsAutoAssigned(t *testing.T) {
 	enter := func() { h.srv.onPrincipalSignIn(pZhang, "zhangsan") }
 	enter()
 	m, op := expectAccountOp(t, admin.tnode)
-	if op.Op != control.AccountCreate || op.Login != "gh2001" {
+	if op.Op != control.AccountCreate || op.Login != "user2001" {
 		t.Fatalf("op = %+v", op)
 	}
 

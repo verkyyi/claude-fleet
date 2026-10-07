@@ -57,6 +57,9 @@ LOCK_RETRY = 0.25
 # What the list has to say — a refusal, 「正在 m5 上开…」 — is on the bar this
 # long (issue #1950: it was the input line's, for 4s).
 TOAST_SECS = 10
+# How long a ↵ waits for the login the hub is opening for a newcomer (issue
+# #2069) before it says who to ask instead: a create is about a minute.
+ACCOUNT_WAIT = float(os.environ.get("FLEET_SIDEBAR_ACCOUNT_WAIT") or 300)
 
 
 def load_text():
@@ -960,6 +963,46 @@ def hub_repos():
     return [r for r in lines if r and not r.startswith("#") and "/" in r]
 
 
+def hub_account():
+    """The hub's word on a person with no active login yet (issue #2069):
+    the `#account` line fleet-hub-sessions.sh writes into global/hub_repos —
+    {state: opening|failed|none, eta, machine, ask} — or None (a login they
+    already hold, no file, an older hub)."""
+    try:
+        with open(os.path.join(status_dir(), "hub_repos"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        if line.startswith("#account\x1f"):
+            f = (line.split("\x1f") + [""] * 6)[1:6]
+            return {"state": f[0], "eta": f[1], "machine": f[2], "ask": f[3]}
+    return None
+
+
+class Sticky(str):
+    """A word that stays on the bar until the next key (issue #2069: a
+    newcomer missed a 4-second toast and thought ↵ did nothing). `retry` is
+    the place_start call to run again once the hub has a repo for them — the
+    login it is opening is ready."""
+    retry = None
+
+
+def nohost_word(retry):
+    """What an empty list says when the hub knows no repo of this person's
+    (issue #2069): their login being opened (sticky, and ↵ is retried once it
+    is ready), it failed, or nothing is coming — each naming who to ask."""
+    acct = hub_account() or {}
+    ask = acct.get("ask") or ""
+    if acct.get("state") == "opening":
+        word = Sticky(tr("sidebar_place_account_opening_fmt", acct.get("machine") or "…", acct.get("eta") or "60"))
+        word.retry = retry
+        return word
+    if acct.get("state") == "failed" and ask:
+        return Sticky(tr("sidebar_place_account_failed_fmt", ask))
+    return Sticky(tr("sidebar_place_nohost_ask_fmt", ask) if ask else tr("sidebar_place_nohost"))
+
+
 def repo_of(rows, key):
     """The repo a highlighted row is in: a heading's own, else the nearest
     heading above the row. "" when neither names one."""
@@ -990,7 +1033,7 @@ def place_start(verb, rows, anchor, name="", pin=False):
         if repos is None:
             return None, tr("sidebar_place_norepo")
         if not repos:
-            return None, tr("sidebar_place_nohost")
+            return None, nohost_word((verb, anchor, name, pin))
     plan = {"verb": verb, "name": name, "repo": repo_of(rows, anchor)}
     if (pin and plan["repo"]) or len(repos) == 1:
         plan["repo"] = plan["repo"] or repos[0]
@@ -1634,6 +1677,8 @@ def say(session, text, secs=None):
     would start a format."""
     if not text:
         return
+    if isinstance(text, Sticky):
+        secs = 0   # tmux: a 0 delay holds the message until a key is pressed
     if secs is None:
         secs = env_float("FLEET_SIDEBAR_TOAST_SECS", TOAST_SECS)
     for client, _table, _pinned in clients(session):
@@ -2289,6 +2334,9 @@ def ui(screen, session, worker, lock):
     # The shell's open-a-session flow in flight (issue #1778): the plan whose
     # fleet-client-place.sh runs, then waits for its row — one at a time.
     placing = None
+    # A ↵ held while the hub opens this person's first login (issue #2069):
+    # place_start's arguments, run again as soon as hub_repos names a repo.
+    held_enter = None
 
     def ask_now(nxt):
         """Open `nxt` on the line under the session (bin/fleet-ask.py): its pane
@@ -2307,9 +2355,11 @@ def ui(screen, session, worker, lock):
     def place_step(nxt, said, go, plan):
         """One answered step of the shell's flow: the next question, a word on
         the bar, or — 「开在哪」 answered — the place itself, in the background."""
-        nonlocal placing
+        nonlocal placing, held_enter
         if said:
             say(session, said)
+            if getattr(said, "retry", None):
+                held_enter = {"retry": said.retry, "until": time.monotonic() + ACCOUNT_WAIT}
         if go and placing is None:
             placing = plan
             jobs.append(place_job(plan, rows, env))
@@ -2455,7 +2505,7 @@ def ui(screen, session, worker, lock):
             if len(repos) == 1:
                 plan["repo"] = repos[0]
             elif not repos:
-                say(session, tr("sidebar_place_norepo"))
+                say(session, nohost_word(None) if hub_repos() == [] else tr("sidebar_place_norepo"))
                 return rest
             else:
                 ask_now(Ask("place-repo", tr("sidebar_place_repo"), hint=tr("sidebar_place_keys"), plan=plan,
@@ -2542,6 +2592,20 @@ def ui(screen, session, worker, lock):
                 if spawning is None:
                     ask_now(nxt)
             refresh_at = 0
+        if held_enter is not None and placing is None and asking is None:
+            # The login being opened for this person (issue #2069): its repo
+            # shows up in hub_repos once it is ready — then the ↵ goes on by
+            # itself; past ACCOUNT_WAIT, say so and who to ask.
+            if hub_repos():
+                verb_, anchor_, name_, pin_ = held_enter["retry"]
+                held_enter = None
+                place_step(*place_start(verb_, rows, anchor_, name_, pin_), False, None)
+            elif now >= held_enter["until"]:
+                held_enter = None
+                say(session, Sticky(tr("sidebar_place_account_slow_fmt", (hub_account() or {}).get("ask") or "?")))
+            elif (hub_account() or {}).get("state") == "failed":
+                held_enter = None
+                say(session, nohost_word(None))
         if placing is not None and placing.get("state") == "end":
             placing = None
         elif placing is not None and placing.get("state") == "await" and view == "live":

@@ -315,6 +315,14 @@ fleet_ui_t() {
     en:sidebar_place_norepo)    printf 'no repo yet: the list shows none to open in' ;;
     zh:sidebar_place_nohost)    printf '你还没有能开会话的机器：请入口管理员给你分一台' ;;
     en:sidebar_place_nohost)    printf 'no machine of yours hosts a repo yet: ask the hub admin for one' ;;
+    zh:sidebar_place_nohost_ask_fmt) printf '你还没有能开会话的机器：请找入口管理员 %s 给你分一台' "${1:-}" ;;
+    en:sidebar_place_nohost_ask_fmt) printf 'no machine of yours hosts a repo yet: ask the hub admin (%s) for one' "${1:-}" ;;
+    zh:sidebar_place_account_opening_fmt) printf '正在为你开机器（%s），约 %s 秒 — 开好后自动接着开' "${1:-}" "${2:-}" ;;
+    en:sidebar_place_account_opening_fmt) printf 'opening a machine for you (%s), about %ss — your session opens once it is ready' "${1:-}" "${2:-}" ;;
+    zh:sidebar_place_account_failed_fmt) printf '给你开机器没成功：请找入口管理员 %s' "${1:-}" ;;
+    en:sidebar_place_account_failed_fmt) printf 'opening a machine for you failed: ask the hub admin (%s)' "${1:-}" ;;
+    zh:sidebar_place_account_slow_fmt) printf '机器还没开好：稍后再回车一次，或找入口管理员 %s' "${1:-}" ;;
+    en:sidebar_place_account_slow_fmt) printf 'your machine is not ready yet: press enter again later, or ask the hub admin (%s)' "${1:-}" ;;
     zh:sidebar_place_hubdown)   printf '入口连不上，暂时不能新建' ;;
     en:sidebar_place_hubdown)   printf 'the hub is unreachable — nothing can be opened now' ;;
     zh:sidebar_place_opening_fmt) printf '正在 %s 上开…' "${1:-}" ;;

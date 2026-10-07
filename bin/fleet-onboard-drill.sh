@@ -381,11 +381,15 @@ step_client() {
 # never the input line 「› <name>」 (the typed name is not a session; matching
 # it passed the #1901 final run while the list said 「No sessions」)
 row_named() { pane | cut -d'│' -f1 | grep -Ev '^[[:space:]]*›' | grep -E -- "$1" | head -n 1 | sed 's/ *$//'; }
-# the sidebar's refusals (fleet-ui-lang.sh sidebar_place_*, zh + en): a 4 s
-# toast, so the scratch step polls every second
-SCRATCH_NO='还没有仓库|还没有能开会话的机器|入口连不上|no repo yet|no machine of yours|hub is unreachable'
+# the sidebar's refusals (fleet-ui-lang.sh sidebar_place_*, zh + en): held on
+# the bar until a key since #2069 (a 4 s toast before), polled every second
+SCRATCH_NO='还没有仓库|还没有能开会话的机器|入口连不上|开机器没成功|机器还没开好|no repo yet|no machine of yours|hub is unreachable|machine for you failed|machine is not ready yet'
+# the hub opening the person's first login (issue #2069): not a refusal — the
+# sidebar holds the Enter and opens the session itself once the login is up,
+# so the step waits (FLEET_DRILL_OPENING_SECS, default 360) and it is no 要人帮
+SCRATCH_OPENING='正在为你开机器|opening a machine for you'
 step_scratch() {
-  local k said deadline p answered=0 r
+  local k said deadline p answered=0 r opening=
   keys C-b Space
   sleep 1
   keys -l "$NAME"; keys Enter
@@ -395,6 +399,11 @@ step_scratch() {
     p=$(pane)
     if printf '%s\n' "$p" | grep -Eq -- "$SCRATCH_NO"; then k=no; break; fi
     if [ -n "$(row_named "$NAME")" ]; then k=row; break; fi
+    if [ -z "$opening" ] && printf '%s\n' "$p" | grep -Eq -- "$SCRATCH_OPENING"; then
+      opening=$(printf '%s\n' "$p" | grep -Eo -- "($SCRATCH_OPENING)[^│]*" | head -n 1 | sed 's/ *$//')
+      shot scratch-opening
+      deadline=$((SECONDS + ${FLEET_DRILL_OPENING_SECS:-360}))
+    fi
     if printf '%s\n' "$p" | grep -Eq '→ 开在哪|→ where|→ 选仓库|New session → repo'; then
       # the repo question, then 「开在哪」: Enter takes the highlighted default
       answered=$((answered + 1)); [ "$answered" -le 3 ] || { k=stuck; break; }
@@ -412,6 +421,7 @@ step_scratch() {
          row "敲名字回车后没有问题、没有新行、也没有提示" "prefix 空格，敲名字，回车" "是 — 不知道怎么开会话"
          failstep scratch "no question, no row named $NAME and no refusal within ${STEP_SECS}s:"; tail_pane; return 1 ;;
   esac
+  [ -z "$opening" ] || row "提示：$opening" "等（入口在开机器，开好自动接着开）" 否
   [ "$answered" = 0 ] || row "问题（选仓库 / 开在哪）×$answered" "回车（默认，自动）" 否
   shot scratch
   r=$(row_named "$NAME")

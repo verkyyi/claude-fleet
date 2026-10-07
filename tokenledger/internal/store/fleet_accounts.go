@@ -138,6 +138,14 @@ func LoginBase(userid string, maxLen int) string {
 // reserved name) is skipped like a taken one. The login never changes after
 // the first call: it is what every machine has, or will have, under that name.
 func (s *Store) EnsurePrincipal(id, displayName string, maxLen int, valid func(string) bool, at time.Time) (*Principal, error) {
+	return s.EnsurePrincipalAs(id, displayName, "", maxLen, valid, at)
+}
+
+// EnsurePrincipalAs is EnsurePrincipal with a preferred login for the first
+// call (claude-fleet#2069: a GitHub person's username): tried before the
+// name minted from id, and skipped — never suffixed — when valid refuses it
+// or another principal holds it. An existing principal keeps its login.
+func (s *Store) EnsurePrincipalAs(id, displayName, preferred string, maxLen int, valid func(string) bool, at time.Time) (*Principal, error) {
 	if id == "" {
 		return nil, errors.New("empty principal id")
 	}
@@ -151,6 +159,16 @@ func (s *Store) EnsurePrincipal(id, displayName string, maxLen int, valid func(s
 		return s.Principal(p.ID)
 	} else if !errors.Is(err, ErrNoPrincipal) {
 		return nil, err
+	}
+	if preferred != "" && len(preferred) <= maxLen && valid(preferred) {
+		if err := s.insertPrincipal(id, preferred, displayName, at); err == nil {
+			return s.Principal(id)
+		} else if !isUniqueViolation(err) {
+			return nil, err
+		}
+		if p, err := s.Principal(id); err == nil {
+			return p, nil // a concurrent first login won the insert
+		}
 	}
 	base := LoginBase(id, maxLen)
 	for i := 0; i < 100; i++ {

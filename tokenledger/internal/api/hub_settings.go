@@ -47,6 +47,9 @@ const (
 	// noneValue clears a list or a login on purpose: "" means "back to the
 	// default".
 	noneValue = "none"
+	// leastBusyValue is fleet.auto_assign's "pick for me" (claude-fleet#2069):
+	// the online, unflagged host machine with the fewest sessions.
+	leastBusyValue = "least-busy"
 
 	// legacyMigratedPrefix marks a key whose old variable has been copied
 	// into the database once, so clearing it later is not undone at the
@@ -91,14 +94,17 @@ var hubSettings = map[string]hubSetting{
 		}},
 	PoolMoveFullKey: {def: "off", help: "move a session to another subscription when its own is full (nodes: FLEET_FAILOVER)",
 		check: onOff(PoolMoveFullKey, "off")},
-	AutoAssignKey: {def: "", help: "machines a new person gets a login opened on, comma-separated, or none",
+	AutoAssignKey: {def: "", help: "machines a new person gets a login opened on: least-busy, names comma-separated, or none",
 		check: func(_ *Server, v string) (string, string) {
 			if strings.EqualFold(strings.TrimSpace(v), noneValue) {
 				return noneValue, ""
 			}
+			if strings.EqualFold(strings.TrimSpace(v), leastBusyValue) {
+				return leastBusyValue, ""
+			}
 			hosts := splitHosts(v)
 			if len(hosts) == 0 {
-				return "", AutoAssignKey + " is machine names, comma-separated, or none"
+				return "", AutoAssignKey + " is least-busy, machine names comma-separated, or none"
 			}
 			for _, h := range hosts {
 				if !nodeNameRE.MatchString(h) {
@@ -267,13 +273,28 @@ func (s *Server) settingOn(key string) bool { return strings.EqualFold(s.setting
 // publicBadges reports whether /badge/ and /embed/ answer without a sign-in.
 func (s *Server) publicBadges() bool { return s.settingOn(PublicBadgesKey) }
 
-// autoAssign is the machines a new person gets a login queued on.
+// autoAssign is the machines a new person gets a login queued on:
+// fleet.auto_assign's list, or for least-busy the one leastBusyMachine picks
+// right now (nil when none is fit — the person is told who to ask).
 func (s *Server) autoAssign() []string {
 	v := s.setting(AutoAssignKey)
-	if strings.EqualFold(v, noneValue) {
+	switch {
+	case strings.EqualFold(v, noneValue):
+		return nil
+	case strings.EqualFold(v, leastBusyValue):
+		if h := s.leastBusyMachine(time.Now()); h != "" {
+			return []string{h}
+		}
 		return nil
 	}
 	return splitHosts(v)
+}
+
+// autoAssignOn says fleet.auto_assign would open a login for a new person at
+// all — what the client's 「正在为你开」 versus 「请找管理员」 turns on.
+func (s *Server) autoAssignOn() bool {
+	v := strings.TrimSpace(s.setting(AutoAssignKey))
+	return v != "" && !strings.EqualFold(v, noneValue)
 }
 
 // spot is the SPOT controller while fleet.spot is on, else nil.

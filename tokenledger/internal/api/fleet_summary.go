@@ -47,6 +47,8 @@ type SummaryResponse struct {
 	At         time.Time       `json:"at"`
 	Machines   []MachineView   `json:"machines"`
 	PerAccount []AccountLimits `json:"per_account"`
+	// Account: as NodesSnapshot.Account (claude-fleet#2069).
+	Account *AccountState `json:"account,omitempty"`
 }
 
 // handleFleetSummary serves control.SummaryPath outside the viewer gate.
@@ -121,6 +123,9 @@ func (s *Server) fleetSummary(r *http.Request, id sshRelayIdentity, now time.Tim
 		return SummaryResponse{}, err
 	}
 	out := SummaryResponse{At: snap.At, Machines: snap.Machines, PerAccount: []AccountLimits{}}
+	if !id.Operator {
+		out.Account = s.accountStateOf(id.Principal, now)
+	}
 	var mine map[string]bool
 	if visible != nil {
 		eps, err := s.Store.ListEndpoints("")

@@ -908,6 +908,11 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
             home = fetch_home(hub, token, cache.get("last"))
             break
         except Refused as e:
+            if e.code == "opening":
+                # The hub is opening this person's first login (issue #2069):
+                # nothing to enter yet, and nothing to ask anyone for.
+                sys.stderr.write("fleet · %s，稍后再运行 fleet\n" % (e.body.get("error") or "正在为你开机器，约 1 分钟"))
+                sys.exit(1)
             if e.code == "no_machine_online":
                 sys.stderr.write("fleet · %s\n" % (e.body.get("error") or "你的机器都不在线"))
                 print_candidates(e.body.get("home") or {})

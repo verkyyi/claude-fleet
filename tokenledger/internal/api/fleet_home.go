@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -278,6 +279,18 @@ func (s *Server) handleFleetHome(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.homePick(pid, req.Last, now)
 	out.Hub = s.hubURL(r)
+	if err != nil && pid != "" {
+		// No active login (claude-fleet#2069): one being opened is "wait a
+		// minute", not "forbidden" — the client holds and asks again.
+		if st := s.accountStateOf(pid, now); st != nil && st.State == "opening" {
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error": "正在为你开机器，约 " + strconv.Itoa(st.EtaS) + " 秒",
+				"code":  "opening", "state": st.State, "eta_s": st.EtaS, "account": st,
+			})
+			return
+		}
+	}
 	switch {
 	case errors.Is(err, errNoAccount):
 		httpError(w, http.StatusForbidden, err.Error())

@@ -27,7 +27,8 @@
 #      → nothing; an unreadable hub_ok → the #ts
 #   F  the window list: blank on entering hub mode (formats saved), restored on
 #      leaving; no tmux call when there is nothing to do — on an ISOLATED server
-#   G  fleet-hub-sessions.sh --refresh writes hub_nodes / hub_limits (+ hub_repos, #1927) from the
+#   G  fleet-hub-sessions.sh --refresh writes hub_nodes / hub_limits (+ hub_repos, #1927; its
+#      #account line, #2069) from the
 #      seams: the alias, mem %, newest login's version, the uuid → local label
 #      map, rounding, skipped rows; a failed fetch keeps the last file; off
 #      (CCQUOTA_FLEET unset) writes nothing; their own cadence (FLEET_HUB_SUMMARY_EVERY);
@@ -330,6 +331,11 @@ NCMD="printf '%s' '{\"machines\":[{\"hostname\":\"a\",\"status\":\"online\",\"re
 eq "G: hub_repos — #ts, then each repo once, sorted, a malformed one dropped" "#ts|acme/api|acme/web" "$(tr '\037' '|' < "$G/hub_repos" | sed '1s/|[0-9]*$//' | tr '\n' '|' | sed 's/|$//')"
 NCMD="printf '%s' '{\"machines\":[{\"hostname\":\"a\",\"status\":\"online\",\"repos\":[]}]}'" hubs
 eq "G: a hub that says none → hub_repos holds only #ts" "1" "$(grep -c . "$G/hub_repos")"
+# a newcomer whose login the hub is opening (issue #2069): no machine yet, the #account line
+NCMD="printf '%s' '{\"machines\":[],\"account\":{\"state\":\"opening\",\"eta_s\":42,\"machine\":\"m4\",\"ask\":\"verkyyi\"}}'" hubs
+eq "G: #2069 an opening login → #ts, then #account state|eta|machine|ask" "#ts|#account|opening|42|m4|verkyyi" "$(tr '\037' '|' < "$G/hub_repos" | sed 's/|[0-9]*$//' | tr '\n' '|' | sed 's/|$//')"
+NCMD="printf '%s' '{\"machines\":[{\"hostname\":\"a\",\"status\":\"online\",\"repos\":[\"acme/web\"]}]}'" hubs
+eq "G: #2069 no account key → no #account line" "0" "$(grep -c '^#account' "$G/hub_repos")"
 hubs; [ -e "$G/hub_repos" ] && fail "G: back to an older hub → hub_repos removed"; CHECKS=$((CHECKS+1))
 hubs; rows=$(tr '\037' '|' < "$G/hub_nodes")
 lrows=$(tr '\037' '|' < "$G/hub_limits")
