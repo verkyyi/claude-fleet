@@ -36,8 +36,11 @@
 #   7 client    the installer execs `fleet`: the task list must come up — `open
 #               terminal failed` there is a FAIL (fixed in #1901).
 #   8 scratch   the keyboard onto the list (prefix Space — the key the client's
-#               own hint names), a name typed, Enter; 「开在哪」 Enter (自动); the
-#               new row must appear in the list. Its line is the evidence.
+#               own hint names), a name typed, Enter; the repo question and
+#               「开在哪」 each Enter (the default, 自动); a new ROW — never the
+#               input line 「› <name>」 — must appear. The sidebar's refusal
+#               toast (no repo / no machine of yours / hub down, zh or en) is
+#               要人帮 — a FAIL naming it. The row's line is the evidence.
 #   9 offboard  stop the login's processes, revoke its device on the hub
 #               (POST /v1/fleet/devices/revoke, viewer token from the
 #               environment), retire its node (FLEET_DRILL_RETIRE_CMD <ep_id>;
@@ -374,32 +377,46 @@ step_client() {
 }
 
 # --- 8 scratch ----------------------------------------------------------------------
+# row_named <name>: a list ROW carrying the name — the left column before 「│」,
+# never the input line 「› <name>」 (the typed name is not a session; matching
+# it passed the #1901 final run while the list said 「No sessions」)
+row_named() { pane | cut -d'│' -f1 | grep -Ev '^[[:space:]]*›' | grep -E -- "$1" | head -n 1 | sed 's/ *$//'; }
+# the sidebar's refusals (fleet-ui-lang.sh sidebar_place_*, zh + en): a 4 s
+# toast, so the scratch step polls every second
+SCRATCH_NO='还没有仓库|还没有能开会话的机器|入口连不上|no repo yet|no machine of yours|hub is unreachable'
 step_scratch() {
-  local k said
+  local k said deadline p answered=0 r
   keys C-b Space
   sleep 1
   keys -l "$NAME"; keys Enter
-  k=$(wait_for "$STEP_SECS" '开在哪' '还没有仓库|入口连不上|没有 fleet' "$NAME")
-  shot scratch-ask
+  deadline=$((SECONDS + STEP_SECS)); k=''
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    keep_sudo
+    p=$(pane)
+    if printf '%s\n' "$p" | grep -Eq -- "$SCRATCH_NO"; then k=no; break; fi
+    if [ -n "$(row_named "$NAME")" ]; then k=row; break; fi
+    if printf '%s\n' "$p" | grep -Eq '→ 开在哪|→ where|→ 选仓库|New session → repo'; then
+      # the repo question, then 「开在哪」: Enter takes the highlighted default
+      answered=$((answered + 1)); [ "$answered" -le 3 ] || { k=stuck; break; }
+      shot "scratch-ask-$answered"; keys Enter; sleep 2; continue
+    fi
+    sleep 1
+  done
   case "$k" in
-    1) row "「开在哪」：自动 在最上" "prefix 空格 到列表，敲名字 ${NAME}，回车；再回车（自动）" 否
-       keys Enter ;;
-    3) row "列表里出现 $NAME" "prefix 空格 到列表，敲名字 ${NAME}，回车" 否 ;;
-    2) said=$(pane | grep -Eo '还没有仓库[^│]*|入口连不上[^│]*|没有 fleet[^│]*' | tail -n 1)
-       row "提示：$said" "prefix 空格 到列表，敲名字 ${NAME}，回车" "是 — 开不出会话（#1927）"
-       failstep scratch "the list refused a new session: $said"; return 1 ;;
-    *) row "敲名字后没反应" "prefix 空格，敲名字，回车" "是 — 不知道怎么开会话"
-       failstep scratch "no 「开在哪」 and no new row within ${STEP_SECS}s:"; tail_pane; return 1 ;;
+    no)  shot scratch-refused
+         said=$(printf '%s\n' "$p" | grep -Eo -- "($SCRATCH_NO)[^│]*" | head -n 1 | sed 's/ *$//')
+         row "提示：$said" "prefix 空格 到列表，敲名字 ${NAME}，回车" "是 — 开不出会话：$said"
+         failstep scratch "the list refused a new session: $said"; return 1 ;;
+    row) : ;;
+    *)   shot scratch-none
+         row "敲名字回车后没有问题、没有新行、也没有提示" "prefix 空格，敲名字，回车" "是 — 不知道怎么开会话"
+         failstep scratch "no question, no row named $NAME and no refusal within ${STEP_SECS}s:"; tail_pane; return 1 ;;
   esac
-  if wait_for 90 "^[^│]*$NAME" >/dev/null; then
-    shot scratch
-    row "列表里新的一行 ${NAME}，右边切到它" "等" 否
-    pass scratch "the new session's row: $(pane | grep -E "^[^│]*$NAME" | head -n 1 | cut -d'│' -f1 | sed 's/ *$//') · $(elapsed)"
-  else
-    shot scratch
-    row "开会话超时" "等" "是 — 会话没开出来"
-    failstep scratch "no row named $NAME within 90s:"; tail_pane; return 1
-  fi
+  [ "$answered" = 0 ] || row "问题（选仓库 / 开在哪）×$answered" "回车（默认，自动）" 否
+  shot scratch
+  r=$(row_named "$NAME")
+  row "列表里新的一行 ${NAME}，右边切到它" "等" 否
+  pass scratch "the new session's row: $r · $(elapsed)"
 }
 
 # --- 9 offboard ---------------------------------------------------------------------
