@@ -45,8 +45,8 @@ func TestFleetClientLeaseByCertificate(t *testing.T) {
 	now := time.Now()
 	h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
 	h.srv.Store.AdoptPrincipal("wx-bob", "bob", "Bob", now)
-	alice := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
-	bob := k.cert(t, "wecom:wx-bob", []string{"bob"}, now.Add(-time.Minute), now.Add(12*time.Hour))
+	alice := k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
+	bob := k.cert(t, "person:wx-bob", []string{"bob"}, now.Add(-time.Minute), now.Add(12*time.Hour))
 	as := func(c *ssh.Certificate, r ClientLeaseRequest) ClientLeaseRequest {
 		r.Cert, r.TS = string(ssh.MarshalAuthorizedKey(c)), time.Now().Unix()
 		r.Sig = sshsig(t, k.user, control.ClientSigNamespace, []byte(control.ClientSigMessage(r.TS)))
@@ -285,7 +285,7 @@ func TestNodeClientReadsOwnersLease(t *testing.T) {
 	if code, out := read(n["alice4"].token); code != 200 || out.State != "none" {
 		t.Fatalf("nobody connected: HTTP %d %+v", code, out)
 	}
-	alice := clientLeaseKey(sshRelayIdentity{Principal: "Alice"})
+	alice := clientLeaseKey(sshRelayIdentity{Principal: pAlice})
 	now := time.Now()
 	h.srv.clientLeases.acquire(alice, ClientLeaseRequest{Device: "MacBook", OS: "macOS", Terminal: "iTerm2 3.6.1",
 		Via: "local", Host: "MacBook", Caps: []string{"open_url", "show_file", "notify", "iterm2", "rm -rf"}}, now)

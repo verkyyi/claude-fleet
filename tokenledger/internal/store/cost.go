@@ -28,16 +28,15 @@ type SourceCost struct {
 //
 // Every cost aggregate in this package returns one of these instead of a
 // float64, and that is the point: there is deliberately NO Total() method and
-// no blended field. The three kinds of money this hub holds — subscription
-// spend, notional token cost, and metered gateway cost — produce a number that
-// means nothing when any two are added, and the failure is silent because the
+// no blended field. Subscription spend and notional token cost produce a
+// number that means nothing when added, and the failure is silent because the
 // result is always plausible. Removing the single-figure accessor is what turns
 // that runtime hazard into a compile error.
 //
-// The two folds that ARE legitimate are named for what they mean rather than
-// for the arithmetic: Notional (Claude + Codex, both answering "what would this
-// have cost at API rates") and Billed (the gateway, an actual charge). Real
-// spend is Billed plus SubscriptionSpend; Notional is never part of it.
+// The one fold that IS legitimate is named for what it means rather than for
+// the arithmetic: Notional (Claude + Codex, both answering "what would this
+// have cost at API rates"). Real spend is SubscriptionSpend; Notional is never
+// part of it.
 type CostBySource []SourceCost
 
 // Of returns one source's figure, and whether the scope knew about that source
@@ -56,13 +55,8 @@ func (c CostBySource) Of(source string) (SourceCost, bool) {
 //
 // Summing Claude and Codex is legitimate because they are the SAME kind of
 // money — both answer "what would this have cost at API rates" for work nobody
-// is billed per token for. Nothing billed can enter this sum, and an
-// unclassified source cannot either.
+// is billed per token for. An unclassified source cannot enter this sum.
 func (c CostBySource) Notional() float64 { return c.sumKind(model.CostNotional) }
-
-// Billed totals the sources that are actually invoiced per call. This is the
-// only cost figure from this column that may be added to subscription spend.
-func (c CostBySource) Billed() float64 { return c.sumKind(model.CostBilled) }
 
 func (c CostBySource) sumKind(kind string) float64 {
 	var out float64

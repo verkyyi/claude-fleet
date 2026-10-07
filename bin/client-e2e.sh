@@ -10,8 +10,9 @@
 # mocked between the install line and the list:
 #
 #   1. hub     — `ccquota hub` on 127.0.0.1 with the fleet module, a throwaway
-#                SSH CA and placeholder SSO settings (the two things /install
-#                needs before it serves the installer — never a real secret)
+#                SSH CA and placeholder GitHub sign-in settings (the two things
+#                /install needs before it serves the installer — never a real
+#                secret)
 #   2. node    — a FAKE node: a join code from the operator API, redeemed at
 #                /v1/node/join, and the REAL `ccquota agent` with that token in a
 #                home of its own whose ~/.claude/fleet/bin/fleet-control.py
@@ -116,12 +117,11 @@ api() { curl -fsS -m 10 -H "Authorization: Bearer $VT" "$@"; }
 step 'hub: ccquota hub on 127.0.0.1 with the fleet module'
 ssh-keygen -q -t ed25519 -N '' -C client-e2e-ca -f "$WORK/ca" || die 'ssh-keygen could not make the CA key'
 mkdir -p "$WORK/dist"
-# /install is served only once the hub can sign someone in (an SSH CA + SSO);
-# these are placeholders for a hub that never meets a person.
+# /install is served only once the hub can sign someone in (an SSH CA + GitHub
+# sign-in); these are placeholders for a hub that never meets a person.
 env CCQUOTA_FLEET=1 CCQUOTA_VIEWER_TOKEN="$VT" CCQUOTA_FLEET_DIST_DIR="$WORK/dist" \
-    CCQUOTA_FLEET_SSH_CA_KEY="$WORK/ca" CCQUOTA_SSO_APP=client-e2e \
-    CCQUOTA_SSO_TICKET_SECRET="t-$RANDOM$RANDOM" CCQUOTA_SSO_SESSION_SECRET="s-$RANDOM$RANDOM" \
-    CCQUOTA_SSO_ENTER_URL="http://127.0.0.1:9/enter" \
+    CCQUOTA_FLEET_SSH_CA_KEY="$WORK/ca" CCQUOTA_GITHUB_CLIENT_ID=client-e2e \
+    CCQUOTA_GITHUB_CLIENT_SECRET="placeholder-$RANDOM$RANDOM" \
   "$CCQ" hub --addr "127.0.0.1:$PORT" --db "$WORK/hub.db" >"$WORK/hub.log" 2>&1 &
 HUB_PID=$!
 waitfor 20 curl -fs -m 2 -o /dev/null "$HUB/healthz" || die 'the hub never answered /healthz'

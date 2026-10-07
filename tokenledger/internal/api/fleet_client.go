@@ -595,7 +595,7 @@ func (s *Server) ClientLeasesOf(principal string, now time.Time) ([]ClientLease,
 
 // handleFleetClient serves control.ClientPath outside the viewer gate: a
 // connection certificate proven by a signed timestamp (POST), or the
-// operator's doors / a WeCom session (GET reads the current lease; POST acts).
+// operator's doors / a GitHub session (GET reads the current lease; POST acts).
 func (s *Server) handleFleetClient(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		w.Header().Set("Allow", "GET, POST")

@@ -89,8 +89,7 @@ const (
 
 	// githubPrincipalPrefix makes a GitHub person's principal: gh:<id>.
 	githubPrincipalPrefix = "gh:"
-	// githubSessionSub is the session's subject: the issuer, as a WeCom
-	// session's is the role the ticket admitted.
+	// githubSessionSub is the session's subject: the issuer.
 	githubSessionSub = "github"
 	// githubFlowCookie carries the state and the PKCE verifier from start to
 	// callback, and nowhere else.
@@ -100,8 +99,8 @@ const (
 )
 
 // Roles, as roleOf names them. admin and user are a GitHub person's (and the
-// list's); operator is the shared doors — the viewer token, a tailnet peer,
-// a hub with no auth — which have always seen everything.
+// list's); operator is the shared doors — the viewer token, a hub with no
+// auth — which have always seen everything.
 const (
 	roleAdmin    = store.RoleAdmin
 	roleUser     = store.RoleUser
@@ -183,9 +182,8 @@ func withRole(ctx context.Context, role string) context.Context {
 }
 
 // roleOf is the ONE reading of what the caller may do (EPIC #1982 rule 3):
-// admin or user for a GitHub person, user for a WeCom person, operator for
-// the shared doors (viewer token, tailnet, --no-auth). "" only for a request
-// no gate has admitted.
+// admin or user for a GitHub person, operator for the shared doors (viewer
+// token, --no-auth). "" only for a request no gate has admitted.
 func roleOf(ctx context.Context) string {
 	if r, _ := ctx.Value(roleKey{}).(string); r != "" {
 		return r
@@ -233,7 +231,16 @@ func (s *Server) githubSession(r *http.Request) (*authz.Session, int64, bool) {
 	if err != nil {
 		return nil, 0, false
 	}
-	sess, err := authz.VerifySession(c.Value, s.GitHub.sessionKey(), time.Now())
+	return s.githubSessionValue(c.Value)
+}
+
+// githubSessionValue verifies one session value — a cookie's, or a CLI's
+// bearer (sshRelayHTTPIdentity) — and parses the person's ID out of it.
+func (s *Server) githubSessionValue(v string) (*authz.Session, int64, bool) {
+	if !s.GitHub.ready() || v == "" {
+		return nil, 0, false
+	}
+	sess, err := authz.VerifySession(v, s.GitHub.sessionKey(), time.Now())
 	if err != nil || sess.Sub != githubSessionSub {
 		return nil, 0, false
 	}
@@ -295,9 +302,6 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 	page := signinPage{pageView: newPageView(r, loc)}
 	if e := r.URL.Query().Get("e"); signinNotes[e] {
 		page.Note = pageT(loc, "signin.note."+e)
-	}
-	if u, ok := s.ssoGateURL(); ok {
-		page.WeCom = u
 	}
 	writeAuthPage(w, http.StatusOK, signinTmpl, loc, page)
 }
@@ -410,14 +414,15 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		Name:  authz.CookieName,
 		Value: authz.SignRole(githubSessionSub, principal, login, role, s.GitHub.sessionKey(), now, s.GitHub.ttl()),
 		Path:  "/",
-		// Host-only, like the WeCom session: no Domain.
+		// Host-only: no Domain.
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   isHTTPS(r),
 		MaxAge:   int(s.GitHub.ttl().Seconds()),
 	})
-	// The same placement a WeCom sign-in runs: CCQUOTA_FLEET_PRINCIPAL_LOGINS
-	// may name gh:<id> until C4 moves the map into the database.
+	// The first sign-in records the person and places their logins:
+	// CCQUOTA_FLEET_PRINCIPAL_LOGINS may name gh:<id> until C4 moves the map
+	// into the database.
 	s.onPrincipalSignIn(principal, login)
 	// A `fleet login` code scanned while signed out comes back to its
 	// confirmation page; everything else goes to "/".
@@ -698,8 +703,6 @@ type signinPage struct {
 	pageView
 	// Note is one of signinNotes, or "".
 	Note string
-	// WeCom is the WeCom gate while that way in still exists, else "".
-	WeCom string
 }
 
 type denyPage struct {
@@ -758,7 +761,6 @@ var signinTmpl = template.Must(template.New("signin").Funcs(pageFuncs(i18n.EN)).
 {{if .Note}}<p class="note" role="status">{{.Note}}</p>{{end}}
 <a class="btn gh lg" href="/auth/github/start">` + gitIcon + `{{t "signin.button"}}</a>
 <p class="fine">{{t "signin.fine"}}</p>
-{{if .WeCom}}<a class="alt" href="{{.WeCom}}">{{t "signin.wecom"}}</a>{{end}}
 </main></div></div></body></html>`))
 
 var denyTmpl = template.Must(template.New("deny").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `

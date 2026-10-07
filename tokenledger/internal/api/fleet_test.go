@@ -332,7 +332,7 @@ func TestFleetStatusLiveThenHeartbeat(t *testing.T) {
 }
 
 // The scope seam: whatever fleetScope returns decides every read. Here a
-// caller naming itself in a test header stands in for a WeCom principal whose
+// caller naming itself in a test header stands in for a signed-in principal whose
 // active account is alice@m5 (C4's FleetScope gives exactly this shape).
 func TestFleetScopedToPrincipal(t *testing.T) {
 	h := newFleetHarness(t)
@@ -407,9 +407,9 @@ func TestFleetScopeOperatorDoors(t *testing.T) {
 	}
 }
 
-// Through C4's real FleetScope: a WeCom principal with an ACTIVE account on
+// Through C4's real FleetScope: a signed-in principal with an ACTIVE account on
 // m5 sees m5's fleet for that login and nothing else.
-func TestFleetScopeWeComPrincipal(t *testing.T) {
+func TestFleetScopeSignedInPrincipal(t *testing.T) {
 	h := newFleetHarness(t)
 	a := connectFakeNode(t, h, "m5", false)
 	b := connectFakeNode(t, h, "m4", false)

@@ -323,15 +323,7 @@ const (
 	BySession  Dimension = "session"
 	ByModel    Dimension = "model"
 
-	// ByProvider is the upstream that actually served the request.
-	//
-	// It is derivable from neither the model id nor the source: a gateway with
-	// failover reaches one model id through several upstreams at several
-	// contracted prices, and one source fronts all of them. This is the axis
-	// that answers "which contract did this money go to". The empty bucket
-	// means the reporting side declared none -- see ProviderNote.
-	ByProvider Dimension = "provider"
-	ByBranch   Dimension = "branch"
+	ByBranch Dimension = "branch"
 
 	// ByAccount makes the subscription an ordinary axis rather than a mode the
 	// whole page is stuck in. "Which of my subscriptions is this spend on" is
@@ -374,7 +366,7 @@ const (
 // or tested against, THIS list rather than a hand-written one.
 var Dimensions = []Dimension{
 	BySource, ByAccount, ByEndpoint, ByProject, BySession, ByModel,
-	ByProvider, ByBranch, ByUser, ByTeam, ByEffort, ByEntrypoint,
+	ByBranch, ByUser, ByTeam, ByEffort, ByEntrypoint,
 }
 
 // dimensionNames is Dimensions as prose, for an error that tells the caller
@@ -411,8 +403,6 @@ func (d Dimension) column() (string, error) {
 		return "session_id", nil
 	case ByModel:
 		return "model", nil
-	case ByProvider:
-		return "provider", nil
 	case ByBranch:
 		return "git_branch", nil
 	case ByUser:
@@ -534,11 +524,10 @@ const noLoginLabel = "non-login source"
 //
 // The blank os_user is not missing data and not a person. Every OS agent path
 // stamps the login it runs as (internal/model/identity.go), so a row can only
-// be blank when the sender had no OS login to stamp -- on this hub, a gateway
-// shipper. Left unlabelled it reached the page as the empty string, and both
-// the bars and the table fell through to their own "(unknown)", which reads as
-// "the hub lost track of somebody" about the one row in this breakdown
-// carrying a real invoice.
+// be blank when the sender had no OS login to stamp. Left unlabelled it
+// reached the page as the empty string, and both the bars and the table fell
+// through to their own "(unknown)", which reads as "the hub lost track of
+// somebody".
 //
 // Kept in the breakdown rather than filtered out, for labelTeams' reason: a
 // by-login card whose rows do not add up to the period's total is worse than
@@ -564,7 +553,7 @@ func (s *Store) labelUsers(bs []Bucket, table, where string, args []any) {
 // loginlessLabel says WHO reported without a login, when the events can prove
 // it: exactly one endpoint behind the blank bucket means that endpoint IS the
 // answer, and its own label is already the operator's name for it
-// ("ai-gateway-shipper"). Two or more and the hub says only the thing it can
+// ("ci-runner"). Two or more and the hub says only the thing it can
 // stand behind, because picking one would attribute another's spend to it.
 //
 // Proven per query, not once: the same hub can answer "one shipper" for last
@@ -575,11 +564,10 @@ func (s *Store) labelUsers(bs []Bucket, table, where string, args []any) {
 // question instead of carrying the wider one's answer into it.
 //
 // The endpoint name is qualified rather than used bare, and the qualifier goes
-// FIRST. A by-login row reading `ai-gateway-shipper` invites the reader to
-// take it for a login; and the label column is narrow enough to clip -- at the
-// card's real width `ai-gateway-shipper (non-login source)` renders as
-// `ai-gateway-shipper …`, which is the bare name again with the correction
-// thrown away. Leading with the kind means the part that must survive
+// FIRST. A by-login row reading `ci-runner` invites the reader to take it
+// for a login; and the label column is narrow enough to clip -- at the card's
+// real width `ci-runner (non-login source)` can render as `ci-runner …`,
+// which is the bare name again with the correction thrown away. Leading with the kind means the part that must survive
 // truncation is the part that always does; the full string stays in the row's
 // hover either way.
 func (s *Store) loginlessLabel(table, where string, args []any) string {
@@ -912,8 +900,8 @@ type UserSummary struct {
 	Tokens int64    `json:"tokens"`
 
 	// Cost is split by source for the same reason Bucket.Cost is: a person
-	// who ran Claude and gateway work in the same week has two figures, and
-	// one of them is a real invoice.
+	// who ran Claude and Codex in the same week has two figures, each at its
+	// own rates.
 	Cost     CostBySource `json:"cost"`
 	Projects int          `json:"projects"`
 	Machines int          `json:"machines"`

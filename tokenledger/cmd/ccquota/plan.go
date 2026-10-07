@@ -33,8 +33,7 @@ attests to it, so an operator has to say. Without it the only money figure
 available is the notional token cost, which is precisely the figure that is
 NOT an invoice.
 
-This is REAL money. It may be added to a metered gateway bill; it must never
-be added to the notional token cost. A plan nobody has priced is reported as
+This is REAL money. It must never be added to the notional token cost. A plan nobody has priced is reported as
 unpriced, never as free.
 
 Prices are effective-dated and appended, never overwritten: recording a change

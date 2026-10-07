@@ -13,38 +13,35 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-// Who a person is, and whose login is whose (claude-fleet#1458).
-//
-// The authorization service signs ONE `sub` per app — the role "staff" — so
-// every colleague's ticket carries the same subject, and a hub that keyed the
-// person on it filed everyone as one principal. The person is the ticket's
-// `uid`; the operator says whose login is whose in CCQUOTA_FLEET_PRINCIPAL_LOGINS;
-// a mapped login is adopted where an agent runs as it, never created; an
+// Whose login is whose (claude-fleet#1458): the person is gh:<GitHub ID>;
+// the operator says whose login is whose in CCQUOTA_FLEET_PRINCIPAL_LOGINS; a
+// mapped login is adopted where an agent runs as it, never created; an
 // unmapped sign-in leaves no row.
 
-const staffSub = "ccquota-staff"
+// The people of these tests, by the logins the map gives them.
+const (
+	pYi    = "gh:2718137" // verkyyi
+	pCao   = "gh:3001"    // 24haowan
+	pHuang = "gh:3002"    // vincent
+	pZhang = "gh:3003"    // in no map
+)
 
+// enterAs is what the GitHub callback runs once uid is through.
 func enterAs(t *testing.T, h *harness, uid, name string) {
 	t.Helper()
-	resp := h.raw(t, "/enter?ticket="+mintTicketFor(t, "ccquota", staffSub, uid, name, time.Now().Add(time.Minute).Unix()), nil)
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("/enter as %q: HTTP %d", uid, resp.StatusCode)
-	}
+	listPerson(t, h, uid, "")
+	h.srv.onPrincipalSignIn(uid, name)
 }
 
-func meFor(t *testing.T, h *harness, resp *http.Response) FleetMe {
+func meFor(t *testing.T, h *harness, uid string) FleetMe {
 	t.Helper()
-	c := sessionCookie(t, resp)
-	if c == nil {
-		t.Fatal("no session cookie")
-	}
 	r, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/fleet/me", nil)
-	r.AddCookie(c)
+	r.AddCookie(personCookie(uid, ""))
 	res, err := http.DefaultClient.Do(r)
 	if err != nil {
 		t.Fatal(err)
@@ -57,29 +54,26 @@ func meFor(t *testing.T, h *harness, resp *http.Response) FleetMe {
 	return me
 }
 
-// The acceptance line of #1458: the operator signs in, /v1/fleet/me says
-// `yilianghui`, and their login `verkyyi` is active on the two machines whose
+// The acceptance line of #1458: the operator signs in, /v1/fleet/me names
+// them, and their login `verkyyi` is active on the two machines whose
 // agents run as it — recorded by adoption, with no create op ever sent to the
 // admin node. A colleague mapped to a login that exists on ONE machine gets
 // exactly that one.
 func TestFleetMappedPersonIsAdoptedWhereTheLoginRunsNeverCreated(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
+	enablePeople(t, h)
 	h.srv.FleetAdmins = []string{"verkyyi"}
 	h.srv.FleetAutoAssign = []string{"macmini", "mini2"} // must NOT apply to a mapped person
-	h.srv.FleetPrincipalLogins = map[string]string{"yilianghui": "verkyyi", "caojian": "24haowan"}
+	h.srv.FleetPrincipalLogins = map[string]string{pYi: "verkyyi", pCao: "24haowan"}
 	admin := connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
 	connectNode(t, h, "m5-24h", "macmini", "24haowan", false)
 	m4admin := connectNode(t, h, "m4-op", "mini2", "verkyyi", true)
 	waitFor(t, 3*time.Second, "three nodes", func() bool { return len(roster(t, h).Nodes) == 3 })
 
-	resp := h.raw(t, "/enter?ticket="+mintTicketFor(t, "ccquota", staffSub, "yilianghui", "易良辉", time.Now().Add(time.Minute).Unix()), nil)
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("/enter: HTTP %d", resp.StatusCode)
-	}
-	me := meFor(t, h, resp)
-	if !me.Signed || me.Person != "yilianghui" || me.Principal == nil || me.Principal.ID != "yilianghui" ||
-		me.Principal.Login != "verkyyi" || me.Principal.DisplayName != "易良辉" {
+	enterAs(t, h, pYi, "verkyyi")
+	me := meFor(t, h, pYi)
+	if !me.Signed || me.Person != pYi || me.Principal == nil || me.Principal.ID != pYi ||
+		me.Principal.Login != "verkyyi" || me.Principal.DisplayName != "verkyyi" {
 		t.Fatalf("/v1/fleet/me = %+v", me)
 	}
 	hosts := map[string]string{}
@@ -96,17 +90,17 @@ func TestFleetMappedPersonIsAdoptedWhereTheLoginRunsNeverCreated(t *testing.T) {
 	}
 
 	// A colleague whose login exists on one machine only.
-	enterAs(t, h, "caojian", "")
-	p, err := h.srv.Store.Principal("caojian")
+	enterAs(t, h, pCao, "")
+	p, err := h.srv.Store.Principal(pCao)
 	if err != nil || p.Login != "24haowan" {
 		t.Fatalf("caojian → %+v %v", p, err)
 	}
-	accts, _ := h.srv.Store.FleetAccounts("caojian")
+	accts, _ := h.srv.Store.FleetAccounts(pCao)
 	if len(accts) != 1 || accts[0].Hostname != "macmini" || accts[0].State != store.AccountActive {
 		t.Fatalf("caojian's accounts = %+v, want 24haowan adopted on macmini only", accts)
 	}
 	// ...and only sees that machine's own login, never the operator's.
-	_, body := asPerson(t, h, http.MethodGet, "/v1/nodes", "caojian", nil)
+	_, body := asPerson(t, h, http.MethodGet, "/v1/nodes", pCao, nil)
 	var snap NodesSnapshot
 	json.Unmarshal(body, &snap)
 	if len(snap.Nodes) != 1 || snap.Nodes[0].OSUser != "24haowan" || snap.Nodes[0].Hostname != "macmini" {
@@ -115,7 +109,7 @@ func TestFleetMappedPersonIsAdoptedWhereTheLoginRunsNeverCreated(t *testing.T) {
 
 	// A machine that joins AFTER the sign-in is adopted at its hello.
 	connectNode(t, h, "m6-op", "mini3", "verkyyi", true)
-	waitState(t, h, "yilianghui", "mini3", store.AccountActive)
+	waitState(t, h, pYi, "mini3", store.AccountActive)
 	// A machine joining as somebody else's login adopts nothing for anyone.
 	connectNode(t, h, "m6-x", "mini3", "mallory", false)
 	time.Sleep(100 * time.Millisecond)
@@ -148,25 +142,25 @@ func TestFleetMappedPersonIsAdoptedWhereTheLoginRunsNeverCreated(t *testing.T) {
 // machine, and cannot act as the operator.
 func TestFleetUnmappedSignInLeavesNoRow(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
-	h.srv.FleetPrincipalLogins = map[string]string{"yilianghui": "verkyyi"}
+	enablePeople(t, h)
+	h.srv.FleetPrincipalLogins = map[string]string{pYi: "verkyyi"}
 	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
 
-	resp := h.raw(t, "/enter?ticket="+mintTicketFor(t, "ccquota", staffSub, "zhangsan", "张三", time.Now().Add(time.Minute).Unix()), nil)
-	me := meFor(t, h, resp)
-	if !me.Signed || me.Person != "zhangsan" || me.Principal != nil || len(me.Accounts) != 0 {
+	enterAs(t, h, pZhang, "zhangsan")
+	me := meFor(t, h, pZhang)
+	if !me.Signed || me.Person != pZhang || me.Principal != nil || len(me.Accounts) != 0 {
 		t.Fatalf("/v1/fleet/me = %+v", me)
 	}
 	if ps, _ := h.srv.Store.Principals(); len(ps) != 0 {
 		t.Fatalf("an unmapped sign-in minted %+v", ps)
 	}
-	_, body := asPerson(t, h, http.MethodGet, "/v1/nodes", "zhangsan", nil)
+	_, body := asPerson(t, h, http.MethodGet, "/v1/nodes", pZhang, nil)
 	var snap NodesSnapshot
 	json.Unmarshal(body, &snap)
 	if len(snap.Nodes) != 0 {
 		t.Fatalf("zhangsan sees %+v", snap.Nodes)
 	}
-	if code, _ := asPerson(t, h, http.MethodGet, "/v1/fleet/accounts", "zhangsan", nil); code != http.StatusForbidden {
+	if code, _ := asPerson(t, h, http.MethodGet, "/v1/fleet/accounts", pZhang, nil); code != http.StatusForbidden {
 		t.Fatalf("a person listed accounts: HTTP %d", code)
 	}
 	// The operator's door is not a person: /v1/fleet/me says so.
@@ -184,91 +178,59 @@ func TestFleetUnmappedSignInLeavesNoRow(t *testing.T) {
 	}
 }
 
-// The bug itself: a ticket with no `uid` names the role, and two colleagues
-// exchanging such tickets are the SAME subject. The hub must not file that
-// subject as a person — even when the map names people — and must say which
-// subject it fell back to, so the misconfiguration (the issuer's
-// AUTHZ_UID_APPS) is visible rather than everyone silently sharing one
-// identity.
-func TestFleetTicketWithoutUIDIsARoleNotAPerson(t *testing.T) {
-	h := newFleetHarness(t)
-	enableSSO(h)
-	h.srv.FleetPrincipalLogins = map[string]string{"yilianghui": "verkyyi"}
-	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
-
-	for i := 0; i < 2; i++ {
-		resp := h.raw(t, "/enter?ticket="+mintTicket(t, "ccquota", staffSub, time.Now().Add(time.Minute).Unix()), nil)
-		me := meFor(t, h, resp)
-		if !me.Signed || me.Person != staffSub || me.Principal != nil || len(me.Accounts) != 0 {
-			t.Fatalf("/v1/fleet/me = %+v", me)
-		}
-	}
-	if ps, _ := h.srv.Store.Principals(); len(ps) != 0 {
-		t.Fatalf("the role subject was filed as a person: %+v", ps)
-	}
-	// Once the issuer names the person, the same subject becomes them.
-	enterAs(t, h, "yilianghui", "")
-	if p, err := h.srv.Store.Principal("yilianghui"); err != nil || p.Login != "verkyyi" {
-		t.Fatalf("yilianghui → %+v %v", p, err)
-	}
-	if _, err := h.srv.Store.Principal(staffSub); err == nil {
-		t.Fatal("the role subject got a row")
-	}
-}
-
-// Cleaning up the wrong identity: a principal filed under the role, with a
-// create still queued for a node that never connected. `forget` drops the
+// Cleaning up a wrong identity: a principal with a create still queued for
+// a node that never connected. `forget` drops the
 // hub's record without sending anything; it refuses a row that reached a
 // machine, so an active login cannot be forgotten into a ghost.
 func TestFleetForgetDropsOnlyRowsThatNeverReachedAMachine(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
+	enablePeople(t, h, pAlice)
 	h.srv.FleetAdmins = []string{"verkyyi"}
 
-	// The bad data, as production had it: a row minted for the role and a
-	// create queued on a machine with no admin connected.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: staffSub, Hostname: "mini2"}); code != 200 {
+	// The bad data: a row minted for someone and a create queued on a
+	// machine with no admin connected.
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pZhang, Hostname: "mini2"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
-	if a := accountState(t, h, staffSub, "mini2"); a.State != store.AccountPending {
+	if a := accountState(t, h, pZhang, "mini2"); a.State != store.AccountPending {
 		t.Fatalf("queued row = %+v", a)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: staffSub}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: pZhang}); code != 200 {
 		t.Fatalf("forget: HTTP %d", code)
 	}
-	if _, err := h.srv.Store.Principal(staffSub); err == nil {
+	if _, err := h.srv.Store.Principal(pZhang); err == nil {
 		t.Fatal("forget left the principal")
 	}
-	if as, _ := h.srv.Store.FleetAccounts(staffSub); len(as) != 0 {
+	if as, _ := h.srv.Store.FleetAccounts(pZhang); len(as) != 0 {
 		t.Fatalf("forget left %+v", as)
 	}
 	// Forgetting what is not there is a state error, not a success.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: staffSub}); code != http.StatusBadRequest {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: pZhang}); code != http.StatusBadRequest {
 		t.Fatalf("forget of nobody: HTTP %d", code)
 	}
 
 	// An adopted (active) login refuses to be forgotten; `remove` is the
 	// path that actually closes it. A pending row beside it can still go,
 	// by hostname, leaving the active one.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: "Alice", Hostname: "macmini", Login: "alice"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pAlice, Hostname: "macmini", Login: "alice"}); code != 200 {
 		t.Fatalf("adopt: HTTP %d", code)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: "Alice", Hostname: "mini2"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "assign", PrincipalID: pAlice, Hostname: "mini2"}); code != 200 {
 		t.Fatalf("assign: HTTP %d", code)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: "Alice"}); code != http.StatusConflict {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: pAlice}); code != http.StatusConflict {
 		t.Fatalf("forget with an active login: HTTP %d, want 409", code)
 	}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: "Alice", Hostname: "mini2"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: pAlice, Hostname: "mini2"}); code != 200 {
 		t.Fatalf("forget pending row: HTTP %d", code)
 	}
-	as, _ := h.srv.Store.FleetAccounts("Alice")
+	as, _ := h.srv.Store.FleetAccounts(pAlice)
 	if len(as) != 1 || as[0].Hostname != "macmini" || as[0].State != store.AccountActive {
 		t.Fatalf("after forgetting mini2: %+v", as)
 	}
-	// A WeCom session can no more forget than assign.
-	req, _ := json.Marshal(FleetAccountRequest{Action: "forget", PrincipalID: "Alice"})
-	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/accounts", "Alice", req); code != http.StatusForbidden {
+	// A signed-in person can no more forget than assign.
+	req, _ := json.Marshal(FleetAccountRequest{Action: "forget", PrincipalID: pAlice})
+	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/accounts", pAlice, req); code != http.StatusForbidden {
 		t.Fatalf("a person forgot an account: HTTP %d", code)
 	}
 }
@@ -277,18 +239,18 @@ func TestFleetForgetDropsOnlyRowsThatNeverReachedAMachine(t *testing.T) {
 // row from before the map (or from auto-assign) is reported, not overwritten.
 func TestFleetMapRefusesToRenameAnExistingLogin(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
-	h.srv.FleetPrincipalLogins = map[string]string{"yilianghui": "verkyyi"}
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: "yilianghui", Hostname: "mini2", Login: "yilianghui"}); code != 200 {
+	enablePeople(t, h)
+	h.srv.FleetPrincipalLogins = map[string]string{pYi: "verkyyi"}
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pYi, Hostname: "mini2", Login: "yilianghui"}); code != 200 {
 		t.Fatalf("adopt: HTTP %d", code)
 	}
 	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
-	enterAs(t, h, "yilianghui", "")
-	p, _ := h.srv.Store.Principal("yilianghui")
+	enterAs(t, h, pYi, "")
+	p, _ := h.srv.Store.Principal(pYi)
 	if p.Login != "yilianghui" {
 		t.Fatalf("sign-in renamed the login: %+v", p)
 	}
-	if a := accountState(t, h, "yilianghui", "macmini"); a.State != "" {
+	if a := accountState(t, h, pYi, "macmini"); a.State != "" {
 		t.Fatalf("a mismatched row was adopted onto macmini: %+v", a)
 	}
 }
@@ -297,29 +259,24 @@ func TestFleetMapRefusesToRenameAnExistingLogin(t *testing.T) {
 // auto-assign still mints and queues as claude-fleet#1411 shipped it.
 func TestFleetNoMapIsTheOldBehaviour(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
+	enablePeople(t, h)
 	h.srv.FleetAdmins = []string{"verkyyi"}
 	h.srv.FleetAutoAssign = []string{"m4"}
 	admin := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
-	enterAs(t, h, "zhangsan", "张三")
+	enterAs(t, h, pZhang, "张三")
 	_, op := expectAccountOp(t, admin.tnode)
-	if op.Op != control.AccountCreate || op.Login != "zhangsan" || op.FullName != "张三" {
+	if op.Op != control.AccountCreate || op.Login != "gh3003" || op.FullName != "张三" {
 		t.Fatalf("op = %+v", op)
 	}
 }
 
-// uidCookie is a session cookie the way /enter mints one (claude-fleet#1458):
-// the role subject plus the WeCom userid and display name — a browser that
-// signed in earlier and will not pass /enter again.
-func uidCookie(uid, name string) *http.Cookie {
-	return &http.Cookie{Name: authz.CookieName, Value: authz.SignPerson(staffSub, uid, name, ssoSessionKey, time.Now(), time.Hour)}
-}
-
-// asUID makes a request on such a cookie.
+// asUID makes a request on uid's GitHub session cookie, carrying name — a
+// browser that signed in earlier.
 func asUID(t *testing.T, h *harness, method, path, uid, name string, body []byte) (int, []byte) {
 	t.Helper()
+	listPerson(t, h, uid, "")
 	r, _ := http.NewRequest(method, h.http.URL+path, bytes.NewReader(body))
-	r.AddCookie(uidCookie(uid, name))
+	r.AddCookie(personCookie(uid, name))
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
 		t.Fatal(err)
@@ -329,87 +286,20 @@ func asUID(t *testing.T, h *harness, method, path, uid, name string, body []byte
 	return resp.StatusCode, b
 }
 
-// The first half of claude-fleet#1472: the directory spells the userid
-// `YiLiangHui`, the ticket carries it so, and the operator typed the map as
-// `yilianghui`. WeCom userids are case-insensitive, so that is one person:
-// the sign-in is placed by the lowercase map, the row keeps the directory's
-// spelling, every lookup by any spelling finds it, a node joining later is
-// adopted at its hello, and the operator's `adopt` by another spelling is the
-// same person — never a second row.
-func TestFleetMapMatchesTheUseridCaseInsensitively(t *testing.T) {
-	h := newFleetHarness(t)
-	enableSSO(h)
-	h.srv.FleetAdmins = []string{"verkyyi"}
-	h.srv.FleetPrincipalLogins = map[string]string{"yilianghui": "verkyyi", "caojian": "24haowan"}
-	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
-	connectNode(t, h, "m5-24h", "macmini", "24haowan", false)
-	waitFor(t, 3*time.Second, "two nodes", func() bool { return len(roster(t, h).Nodes) == 2 })
-
-	resp := h.raw(t, "/enter?ticket="+mintTicketFor(t, "ccquota", staffSub, "YiLiangHui", "易良辉", time.Now().Add(time.Minute).Unix()), nil)
-	me := meFor(t, h, resp)
-	if !me.Signed || me.Person != "YiLiangHui" || me.Principal == nil || me.Principal.ID != "YiLiangHui" ||
-		me.Principal.Login != "verkyyi" || me.Principal.DisplayName != "易良辉" {
-		t.Fatalf("/v1/fleet/me = %+v", me)
-	}
-	if len(me.Accounts) != 1 || me.Accounts[0].Hostname != "macmini" || me.Accounts[0].State != store.AccountActive || me.Accounts[0].Op != "adopt" {
-		t.Fatalf("accounts = %+v, want verkyyi adopted on macmini", me.Accounts)
-	}
-	// Any spelling reads the row; the row keeps its own.
-	for _, id := range []string{"yilianghui", "YILIANGHUI", "YiLiangHui"} {
-		p, err := h.srv.Store.Principal(id)
-		if err != nil || p.ID != "YiLiangHui" || p.Login != "verkyyi" {
-			t.Fatalf("Principal(%q) = %+v, %v", id, p, err)
-		}
-		if as, _ := h.srv.Store.FleetAccounts(id); len(as) != 1 || as[0].PrincipalID != "YiLiangHui" {
-			t.Fatalf("FleetAccounts(%q) = %+v", id, as)
-		}
-	}
-	// A machine joining after the sign-in: adopted at its hello, the map
-	// key lowercase and the row not.
-	connectNode(t, h, "m4-op", "mini2", "verkyyi", true)
-	waitState(t, h, "YiLiangHui", "mini2", store.AccountActive)
-
-	// The operator's adopt by the spelling they are used to is this person.
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: "yilianghui", Hostname: "mini3", Login: "verkyyi"}); code != 200 {
-		t.Fatalf("adopt by another spelling: HTTP %d", code)
-	}
-	if a := accountState(t, h, "YiLiangHui", "mini3"); a.State != store.AccountActive || a.PrincipalID != "YiLiangHui" {
-		t.Fatalf("adopted row = %+v", a)
-	}
-	if ps, _ := h.srv.Store.Principals(); len(ps) != 1 {
-		t.Fatalf("one person became %+v", ps)
-	}
-	// ...and so are remove and forget by it: the row on mini3 was adopted,
-	// so forget refuses it (409) rather than failing to find it (400).
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "forget", PrincipalID: "YILIANGHUI", Hostname: "mini3"}); code != http.StatusConflict {
-		t.Fatalf("forget of an adopted row by another spelling: HTTP %d, want 409", code)
-	}
-	// A second mapped person, spelled the directory's way, is their own row
-	// with their own login — the fold never merges two people.
-	enterAs(t, h, "CaoJian", "曹健")
-	if p, err := h.srv.Store.Principal("caojian"); err != nil || p.ID != "CaoJian" || p.Login != "24haowan" {
-		t.Fatalf("CaoJian → %+v %v", p, err)
-	}
-	if ps, _ := h.srv.Store.Principals(); len(ps) != 2 {
-		t.Fatalf("principals = %+v", ps)
-	}
-}
-
-// The second half of claude-fleet#1472: only /enter ran the placement, so a
-// browser that signed in BEFORE the operator mapped them — its cookie good
-// for eight hours — reached the `fleet login` confirmation, 连接 and the
+// claude-fleet#1472: only the sign-in ran the placement, so a browser that
+// signed in BEFORE the operator mapped them — its cookie still good — reached the `fleet login` confirmation, 连接 and the
 // certificate with no row and was told "no active login on any machine yet".
 // Each of those doors now places the person first; an unmapped person is
 // still recorded nowhere by any of them.
 func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	h, _ := certHarness(t)
 	h.srv.FleetAdmins = []string{"verkyyi"}
-	h.srv.FleetPrincipalLogins = map[string]string{"yilianghui": "verkyyi", "caojian": "24haowan", "huangyongsheng": "vincent"}
+	h.srv.FleetPrincipalLogins = map[string]string{pYi: "verkyyi", pCao: "24haowan", pHuang: "vincent"}
 	connectNode(t, h, "m5-op", "macmini", "verkyyi", true)
 	connectNode(t, h, "m5-24h", "macmini", "24haowan", false)
 	connectNode(t, h, "m5-v", "macmini", "vincent", false)
 	waitFor(t, 3*time.Second, "three nodes", func() bool { return len(roster(t, h).Nodes) == 3 })
-	for _, uid := range []string{"YiLiangHui", "CaoJian", "HuangYongSheng"} {
+	for _, uid := range []string{pYi, pCao, pHuang} {
 		if _, err := h.srv.Store.Principal(uid); !errors.Is(err, store.ErrNoPrincipal) {
 			t.Fatalf("%s has a row before any door: %v", uid, err)
 		}
@@ -419,38 +309,38 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	_, body := postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)})
 	var st DeviceStart
 	json.Unmarshal(body, &st)
-	pc, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "YiLiangHui", "易良辉", nil)
+	pc, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, pYi, "易良辉", nil)
 	page := html.UnescapeString(string(raw))
 	if pc != 200 || strings.Contains(page, "issue yet") || !strings.Contains(page, ">Confirm</button>") || !strings.Contains(page, "verkyyi") {
 		t.Fatalf("confirm page %d:\n%s", pc, page)
 	}
-	p, err := h.srv.Store.Principal("YiLiangHui")
+	p, err := h.srv.Store.Principal(pYi)
 	if err != nil || p.Login != "verkyyi" || p.DisplayName != "易良辉" {
 		t.Fatalf("the page did not place them: %+v %v", p, err)
 	}
-	if a := accountState(t, h, "YiLiangHui", "macmini"); a.State != store.AccountActive || a.Op != "adopt" {
+	if a := accountState(t, h, pYi, "macmini"); a.State != store.AccountActive || a.Op != "adopt" {
 		t.Fatalf("verkyyi on macmini = %+v", a)
 	}
-	pc, done := cookieForm(t, h, uidCookie("YiLiangHui", "易良辉"), h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	pc, done := cookieForm(t, h, personCookie(pYi, "易良辉"), h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
 	if pc != 200 || !strings.Contains(done, "valid until") {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
 	code, body := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})
 	var cr CertResponse
 	json.Unmarshal(body, &cr)
-	if code != 200 || strings.Join(cr.Principals, ",") != "verkyyi" || parseCert(t, cr.Certificate).KeyId != "wecom:YiLiangHui" {
+	if code != 200 || strings.Join(cr.Principals, ",") != "verkyyi" || parseCert(t, cr.Certificate).KeyId != sshca.KeyIDPrefix+pYi {
 		t.Fatalf("poll: %d %s", code, body)
 	}
 
 	// /connect and its data.
 	h.srv.UI = fstest.MapFS{"connect.html": &fstest.MapFile{Data: []byte("<!doctype html><title>连接</title>")}}
-	if code, b := asUID(t, h, http.MethodGet, "/connect", "CaoJian", "曹健", nil); code != 200 || !strings.Contains(string(b), "连接") {
+	if code, b := asUID(t, h, http.MethodGet, "/connect", pCao, "曹健", nil); code != 200 || !strings.Contains(string(b), "连接") {
 		t.Fatalf("/connect: %d %s", code, b)
 	}
-	if p, err := h.srv.Store.Principal("CaoJian"); err != nil || p.Login != "24haowan" || p.DisplayName != "曹健" {
+	if p, err := h.srv.Store.Principal(pCao); err != nil || p.Login != "24haowan" || p.DisplayName != "曹健" {
 		t.Fatalf("/connect did not place them: %+v %v", p, err)
 	}
-	code, body = asUID(t, h, http.MethodGet, "/v1/fleet/connect", "CaoJian", "", nil)
+	code, body = asUID(t, h, http.MethodGet, "/v1/fleet/connect", pCao, "", nil)
 	var ci ConnectInfo
 	json.Unmarshal(body, &ci)
 	if code != 200 || !ci.Signed || ci.Login != "24haowan" || ci.Problem != "" || len(ci.Machines) != 1 || ci.Machines[0].Hostname != "macmini" {
@@ -459,7 +349,7 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 
 	// The paste-a-key door.
 	req, _ := json.Marshal(map[string]string{"public_key": newUserKey(t)})
-	code, body = asUID(t, h, http.MethodPost, "/v1/fleet/cert", "HuangYongSheng", "黄永胜", req)
+	code, body = asUID(t, h, http.MethodPost, "/v1/fleet/cert", pHuang, "黄永胜", req)
 	cr = CertResponse{}
 	json.Unmarshal(body, &cr)
 	if code != 200 || strings.Join(cr.Principals, ",") != "vincent" {
@@ -469,22 +359,22 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	// An unmapped person knocks on every door and is placed by none.
 	_, body = postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)})
 	json.Unmarshal(body, &st)
-	if _, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "zhangsan", "张三", nil); !strings.Contains(string(raw), "issue yet") {
+	if _, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, pZhang, "张三", nil); !strings.Contains(string(raw), "issue yet") {
 		t.Fatalf("zhangsan's confirm page:\n%s", raw)
 	}
-	if code, _ := asUID(t, h, http.MethodGet, "/connect", "zhangsan", "张三", nil); code != 200 {
+	if code, _ := asUID(t, h, http.MethodGet, "/connect", pZhang, "张三", nil); code != 200 {
 		t.Fatalf("zhangsan /connect: %d", code)
 	}
-	code, body = asUID(t, h, http.MethodGet, "/v1/fleet/connect", "zhangsan", "张三", nil)
+	code, body = asUID(t, h, http.MethodGet, "/v1/fleet/connect", pZhang, "张三", nil)
 	ci = ConnectInfo{}
 	json.Unmarshal(body, &ci)
 	if code != 200 || ci.Login != "" || ci.Problem == "" || len(ci.Machines) != 0 {
 		t.Fatalf("zhangsan's connect info %d %+v", code, ci)
 	}
-	if code, _ := asUID(t, h, http.MethodPost, "/v1/fleet/cert", "zhangsan", "张三", req); code != http.StatusConflict {
+	if code, _ := asUID(t, h, http.MethodPost, "/v1/fleet/cert", pZhang, "张三", req); code != http.StatusConflict {
 		t.Fatalf("zhangsan /v1/fleet/cert: %d, want 409", code)
 	}
-	if _, err := h.srv.Store.Principal("zhangsan"); !errors.Is(err, store.ErrNoPrincipal) {
+	if _, err := h.srv.Store.Principal(pZhang); !errors.Is(err, store.ErrNoPrincipal) {
 		t.Fatalf("an unmapped person was placed: %v", err)
 	}
 	if ps, _ := h.srv.Store.Principals(); len(ps) != 4 { // Alice from the harness + three mapped people

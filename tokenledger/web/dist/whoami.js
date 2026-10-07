@@ -5,7 +5,7 @@
 // credentials.html, which each carry a `<div id="whoami" class="whoami"
 // hidden>` slot. It asks /v1/me once, hands the answer to lib/whoami.js, and
 // draws the decision: the name top-right with how they got in under it, a
-// <details> popover with 姓名 / 企微账号 / 登录方式, and 退出 as a plain
+// <details> popover with 姓名 / 登录方式, and 退出 as a plain
 // same-origin form POST to /logout -- no script needed for the way out, the
 // same as OPS. Fails closed: no answer, nothing drawn, the slot stays hidden.
 import { whoami, strings } from './lib/whoami.js';
@@ -18,7 +18,6 @@ function render(root, me) {
   if (!v) { root.hidden = true; root.replaceChildren(); return; }
   const s = strings(lang);
   const rows = [[s.name, v.name, false]];
-  if (v.person) rows.push([s.userid, v.person, true]);
   rows.push([s.via, v.via, false]);
   root.innerHTML = `<details class="whoami-fold">
     <summary class="whoami-user" title="${esc(s.title)}">

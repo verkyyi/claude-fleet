@@ -163,10 +163,7 @@ func TestListEnrollments_ShowsShippersToo(t *testing.T) {
 	if err := s.Enroll("ep-agent", "web-01", "hash-a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Enroll("ep-ship", "verify-health-shipper", "hash-s"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.MarkRepoShipper("ep-ship"); err != nil {
+	if err := s.EnrollKind("ep-ship", "verify-health-shipper", "hash-s", "repo_shipper"); err != nil {
 		t.Fatal(err)
 	}
 

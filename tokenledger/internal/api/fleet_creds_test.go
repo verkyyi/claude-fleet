@@ -44,7 +44,7 @@ func newVaultHarness(t *testing.T) (*harness, string, *stubRefresher) {
 	ref := &stubRefresher{}
 	h.srv.Vault = &credvault.Vault{Store: h.srv.Store, Sealer: sealer, Refresher: ref}
 	tok := enrollAs(t, h, "alice-m4", "m4", "alice")
-	p, err := h.srv.Store.AdoptPrincipal("wecom-alice", "alice", "Alice", time.Now())
+	p, err := h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func lease(t *testing.T, h *harness, tok string) (int, NodeCredentialsResponse, 
 func putCred(t *testing.T, h *harness, provider, account string, s credvault.Secret) {
 	t.Helper()
 	code, out := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put",
-		PrincipalID: "wecom-alice", Provider: provider, Account: account, Secret: s})
+		PrincipalID: pAlice, Provider: provider, Account: account, Secret: s})
 	if code != http.StatusOK {
 		t.Fatalf("put %s/%s: %d %v", provider, account, code, out)
 	}
@@ -120,7 +120,7 @@ func TestNodeLeaseGetsOnlyShortLivedHalf(t *testing.T) {
 	}
 	var got NodeCredentialsResponse
 	_ = json.Unmarshal(raw.Bytes(), &got)
-	if got.PrincipalID != "wecom-alice" || len(got.Credentials) != 3 {
+	if got.PrincipalID != pAlice || len(got.Credentials) != 3 {
 		t.Fatalf("lease = %+v", got)
 	}
 	by := map[string]NodeCredential{}
@@ -140,7 +140,7 @@ func TestNodeLeaseGetsOnlyShortLivedHalf(t *testing.T) {
 	if code, _, _ := lease(t, h, tok); code != http.StatusOK || ref.n.Load() != 2 {
 		t.Fatalf("second lease: %d, refreshes=%d (want 2: claude + codex once)", code, ref.n.Load())
 	}
-	audit, _ := h.srv.Store.CredAuditLog("wecom-alice", 100)
+	audit, _ := h.srv.Store.CredAuditLog(pAlice, 100)
 	issues := 0
 	for _, a := range audit {
 		if a.Action == store.CredIssue {
@@ -179,7 +179,7 @@ func TestRevokedNodeCannotLease(t *testing.T) {
 	if code, _, _ := lease(t, h, tok); code != http.StatusOK {
 		t.Fatalf("before revoke: %d", code)
 	}
-	for _, rev := range []FleetRevokeRequest{{Hostname: "m4"}, {PrincipalID: "wecom-alice"}, {Hostname: "m4", PrincipalID: "wecom-alice"}} {
+	for _, rev := range []FleetRevokeRequest{{Hostname: "m4"}, {PrincipalID: pAlice}, {Hostname: "m4", PrincipalID: pAlice}} {
 		rev.Reason = "laptop lost"
 		if code, out := h.post(t, "/v1/fleet/credentials/revoke", rev); code != http.StatusOK {
 			t.Fatalf("revoke %+v: %d %v", rev, code, out)
@@ -221,11 +221,11 @@ func TestCredentialRoutesAreOperatorOnlyAndVaultGated(t *testing.T) {
 	if res.StatusCode != http.StatusOK || strings.Contains(string(body), "SECRET") || strings.Contains(string(body), "sealed") {
 		t.Fatalf("list: %d %s", res.StatusCode, body)
 	}
-	if code, _ := h2.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: "wecom-alice",
+	if code, _ := h2.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: pAlice,
 		Provider: "claude", Account: "../etc", Secret: credvault.Secret{RefreshToken: "x"}}); code != http.StatusBadRequest {
 		t.Fatalf("path-like account accepted: %d", code)
 	}
-	if code, _ := h2.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: "wecom-alice",
+	if code, _ := h2.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: pAlice,
 		Provider: "claude", Account: "main"}); code != http.StatusBadRequest {
 		t.Fatalf("claude without refresh_token accepted: %d", code)
 	}
@@ -258,7 +258,7 @@ func TestCredentialLeaseIntegration(t *testing.T) {
 	if err != nil {
 		t.Skip("no current user")
 	}
-	p, err := h.srv.Store.AdoptPrincipal("wecom-it", u.Username, "IT", time.Now())
+	p, err := h.srv.Store.AdoptPrincipal("gh:1010", u.Username, "IT", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestCredentialLeaseIntegration(t *testing.T) {
 		{Provider: "claude", Account: "main", Secret: credvault.Secret{RefreshToken: "sk-ant-ort01-HUBONLY", SubscriptionType: "max"}},
 		{Provider: "codex", Account: "work", Secret: credvault.Secret{RefreshToken: "rt-HUBONLY", AccountID: "acct-it"}},
 	} {
-		c.Action, c.PrincipalID = "put", "wecom-it"
+		c.Action, c.PrincipalID = "put", "gh:1010"
 		if code, out := h.post(t, "/v1/fleet/credentials", c); code != http.StatusOK {
 			t.Fatalf("put: %d %v", code, out)
 		}
@@ -318,7 +318,7 @@ func TestCredentialLeaseIntegration(t *testing.T) {
 		}
 		return nil
 	})
-	audit, _ := h.srv.Store.CredAuditLog("wecom-it", 50)
+	audit, _ := h.srv.Store.CredAuditLog("gh:1010", 50)
 	issued := 0
 	for _, r := range audit {
 		if r.Action == store.CredIssue && r.Hostname == hostname && r.OSUser == u.Username {
@@ -354,7 +354,7 @@ func TestLockedVaultRefusesAndAlerts(t *testing.T) {
 	if len(audit) == 0 || audit[0].Action != store.CredDeny || !strings.Contains(audit[0].Detail, LeaseVaultLocked) {
 		t.Fatalf("no deny audit: %+v", audit)
 	}
-	code, out := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: "wecom-alice",
+	code, out := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: pAlice,
 		Provider: "claude", Account: "other", Secret: credvault.Secret{RefreshToken: "x"}})
 	if code != http.StatusServiceUnavailable || out["error"] != LeaseVaultLocked {
 		t.Fatalf("locked put: %d %v", code, out)
@@ -422,13 +422,13 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 	if code, _, refusal := lease(t, h, bob); code != http.StatusForbidden || refusal["error"] != LeaseNoPrincipal {
 		t.Fatalf("bob: %d %v", code, refusal)
 	}
-	if code, _ := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{PrincipalID: "wecom-alice", Reason: "left"}); code != http.StatusOK {
+	if code, _ := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{PrincipalID: pAlice, Reason: "left"}); code != http.StatusOK {
 		t.Fatal("revoke")
 	}
 	if code, _, refusal := lease(t, h, tok); code != http.StatusForbidden || refusal["error"] != LeaseRevoked {
 		t.Fatalf("revoked alice: %d %v", code, refusal)
 	}
-	if code, _ := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{PrincipalID: "wecom-alice", Lift: true}); code != http.StatusOK {
+	if code, _ := h.post(t, "/v1/fleet/credentials/revoke", FleetRevokeRequest{PrincipalID: pAlice, Lift: true}); code != http.StatusOK {
 		t.Fatal("lift")
 	}
 
@@ -453,7 +453,7 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 	for _, a := range audit {
 		if a.Action == store.CredIssue && a.Account == "icloud" {
 			issued++
-			if a.PrincipalID != "wecom-alice" || a.Detail != "pool" || a.Hostname != "m4" {
+			if a.PrincipalID != pAlice || a.Detail != "pool" || a.Hostname != "m4" {
 				t.Fatalf("pool issue audit = %+v", a)
 			}
 		}
@@ -468,9 +468,9 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x", ExpiresAt: ptrTime(time.Now().Add(-time.Hour))}},
 		"no expiry": {Action: "put", PrincipalID: store.PoolPrincipal, Provider: credvault.Claude, Account: "x",
 			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x"}},
-		"both": {Action: "put", PrincipalID: "wecom-alice", Provider: credvault.Claude, Account: "x",
+		"both": {Action: "put", PrincipalID: pAlice, Provider: credvault.Claude, Account: "x",
 			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x", RefreshToken: "rt", ExpiresAt: &exp}},
-		"unknown person": {Action: "put", PrincipalID: "wecom-nobody", Provider: credvault.Claude, Account: "x",
+		"unknown person": {Action: "put", PrincipalID: "gh:1099", Provider: credvault.Claude, Account: "x",
 			Secret: credvault.Secret{SetupToken: "sk-ant-oat01-x", ExpiresAt: &exp}},
 	} {
 		if code, _ := h.post(t, "/v1/fleet/credentials", req); code != http.StatusBadRequest {

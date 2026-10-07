@@ -3,9 +3,8 @@
 // Issue #60: three doors lead to this hub -- the web dashboard, the HTTP API
 // and MCP -- and they had drifted apart in both directions. Five of the twelve
 // grouping axes were reachable over MCP only as filters, so "what did each team
-// spend this week" was unanswerable there; and /v1/limits/history, /v1/fx and
-// /v1/user had no MCP equivalent at all, which left an agent reading a plan
-// priced in CNY with no way to reach an exchange rate.
+// spend this week" was unanswerable there; and /v1/limits/history and /v1/user
+// had no MCP equivalent at all.
 //
 // These are the guards that keep them level. They are deliberately written
 // against the HTTP surface's own output rather than against expected values:
@@ -245,42 +244,6 @@ func TestGetUserMatchesV1User(t *testing.T) {
 	}
 }
 
-// TestGetFXMatchesV1FX. Without this tool an agent reading a CNY-priced plan
-// has no way to reach a rate, nor to learn how stale it is.
-func TestGetFXMatchesV1FX(t *testing.T) {
-	ts, st := newMCP(t)
-	httpSrv := httpBeside(t, st)
-
-	// No feed is wired up in these servers, so USD->USD is the identity rate
-	// and USD->CNY is unavailable. Both are answers, and an agent must be able
-	// to tell them apart -- that is what is being pinned.
-	var want map[string]any
-	getJSON(t, httpSrv, "/v1/fx?base=USD&target=USD", &want)
-	sc := toolPayload(t, call(t, ts, "get_fx", map[string]any{"base": "USD", "target": "USD"}), "get_fx")
-	if sc["available"] != true || want["available"] != true {
-		t.Fatalf("identity rate must be available: mcp=%v http=%v", sc["available"], want["available"])
-	}
-	if sc["rate"] != want["rate"] {
-		t.Fatalf("get_fx rate = %v, /v1/fx has %v", sc["rate"], want["rate"])
-	}
-	if sc["note"] == "" || sc["note"] == nil {
-		t.Error("get_fx must carry the display-only note")
-	}
-
-	var unavailable map[string]any
-	getJSON(t, httpSrv, "/v1/fx?base=USD&target=XYZ", &unavailable)
-	miss := toolPayload(t, call(t, ts, "get_fx", map[string]any{"base": "USD", "target": "XYZ"}), "get_fx")
-	if miss["available"] != false || unavailable["available"] != false {
-		t.Fatalf("an unknown pair must report available:false: mcp=%v http=%v",
-			miss["available"], unavailable["available"])
-	}
-	// Unavailable is an answer, not a failure: the caller shows each figure in
-	// its own currency. It must not come back as a tool error.
-	if _, ok := miss["reason"]; !ok {
-		t.Error("an unavailable pair must say why")
-	}
-}
-
 // TestGetLimitsHistoryMatchesV1 pins the third missing tool, and the rule that
 // survives it: the series are per subscription and are never merged.
 func TestGetLimitsHistoryMatchesV1(t *testing.T) {
@@ -337,7 +300,7 @@ func seedAxes(t *testing.T, st *store.Store) {
 	if err := st.SetEndpointTeam("ep-1", "platform"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetEndpointTeam("ep-2", "growth"); err != nil {
+	if err := st.SetEndpointTeam("ep-2", "research"); err != nil {
 		t.Fatal(err)
 	}
 

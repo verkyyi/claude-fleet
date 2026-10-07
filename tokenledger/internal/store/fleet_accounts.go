@@ -11,17 +11,15 @@ import (
 
 // Principals and their per-machine OS logins (claude-fleet#1411).
 //
-// A principal is one person, keyed by the WeCom userid the SSO ticket names
-// (its `uid`, claude-fleet#1458). Each principal has ONE login name, generated
+// A principal is one person, keyed by gh:<their GitHub ID> (claude-fleet#1984). Each principal has ONE login name, generated
 // here once and used on every machine — so "alice on m4" and "alice on m5" are
 // the same person and a client can ssh to either without a lookup. An account
 // row is (principal, machine): the hub's record of whether that login exists
 // there yet.
 //
-// A WeCom userid is case-insensitive (`YiLiangHui` and `yilianghui` are one
-// person, claude-fleet#1472), so every lookup by principal id here folds
-// case (`COLLATE NOCASE`) while the row keeps the spelling it was first
-// written with — the directory's own, when the ticket wrote it. A write that
+// Every lookup by principal id here folds case (`COLLATE NOCASE`,
+// claude-fleet#1472) while the row keeps the spelling it was first written
+// with. A write that
 // takes a *Principal uses its ID, the row's spelling, so a caller that
 // resolved the person first never needs to fold anything itself.
 //
@@ -112,7 +110,7 @@ func (s *Store) ensureFleetAccounts() error {
 	return err
 }
 
-// LoginBase turns a WeCom userid into a login stem: lowercase letters and
+// LoginBase turns a principal into a login stem: lowercase letters and
 // digits only, starting with a letter, at most maxLoginLen.
 func LoginBase(userid string, maxLen int) string {
 	var b strings.Builder

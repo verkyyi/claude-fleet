@@ -55,7 +55,7 @@ func (s *Server) scope(w http.ResponseWriter, r *http.Request) (store.Filter, bo
 	f := store.Filter{
 		Account: account, Start: start, End: end,
 		Endpoint: q.Get("endpoint"), OSUser: q.Get("user"), CWD: q.Get("project"),
-		Model: q.Get("model"), Provider: q.Get("provider"),
+		Model:  q.Get("model"),
 		Branch: q.Get("branch"), Team: q.Get("team"), Session: q.Get("session"),
 		Source: q.Get("source"),
 	}

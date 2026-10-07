@@ -43,7 +43,7 @@ func peerPost(t *testing.T, h *harness, tok string, body map[string]any) (int, P
 func peerHarness(t *testing.T) (*harness, *sshca.CA, map[string]*fleetNode) {
 	t.Helper()
 	h, ca := certHarness(t)
-	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: "Bob", Hostname: "macmini-m4", Login: "bob"}); code != 200 {
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "macmini-m4", Login: "bob"}); code != 200 {
 		t.Fatalf("adopt bob: HTTP %d", code)
 	}
 	nodes := map[string]*fleetNode{

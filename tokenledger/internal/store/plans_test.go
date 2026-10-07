@@ -274,7 +274,7 @@ func TestSubscriptionSpendNeverEntersTheNotionalCostTotal(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, r := range rows {
-			if r.Cost.Notional() >= 99999 || r.Cost.Billed() >= 99999 {
+			if r.Cost.Notional() >= 99999 {
 				t.Errorf("subscription spend leaked into the notional %v breakdown: %+v", dim, r)
 			}
 		}

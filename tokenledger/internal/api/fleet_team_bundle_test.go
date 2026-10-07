@@ -54,11 +54,11 @@ var teamV1 = map[string]any{"bundle": map[string]any{
 // certificate are refused; every PUT is a version; a rollback is a PUT.
 func TestTeamBundlePutOperatorOnlyVersionsRollback(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
+	enablePeople(t, h, pAlice, pBob, pCarol)
 	node := h.enroll(t, "m5")
 
 	// nothing yet: version 0, an empty layer, for every reader
-	for name, auth := range map[string]func(http.Header){"operator": asOperator, "person": asSession("wecom:wx-alice"), "node": asNode(node)} {
+	for name, auth := range map[string]func(http.Header){"operator": asOperator, "person": asSession(pAlice), "node": asNode(node)} {
 		code, out, raw, _ := teamCall(t, h, http.MethodGet, auth, nil, "")
 		if code != 200 || out.Version != 0 || string(out.Bundle) != "{}" {
 			t.Fatalf("%s before any PUT: HTTP %d %s, want version 0 and {}", name, code, raw)
@@ -68,7 +68,7 @@ func TestTeamBundlePutOperatorOnlyVersionsRollback(t *testing.T) {
 		t.Fatalf("no credential: HTTP %d, want 401", code)
 	}
 
-	for name, auth := range map[string]func(http.Header){"person": asSession("wecom:wx-alice"), "node": asNode(node)} {
+	for name, auth := range map[string]func(http.Header){"person": asSession(pAlice), "node": asNode(node)} {
 		if code, _, raw, _ := teamCall(t, h, http.MethodPut, auth, teamV1, ""); code != http.StatusForbidden {
 			t.Fatalf("%s PUT: HTTP %d %s, want 403", name, code, raw)
 		}
@@ -157,11 +157,11 @@ func TestTeamBundleByCertificate(t *testing.T) {
 	k := newCertKit(t)
 	h.srv.SSHCA = sshca.New(k.ca)
 	now := time.Now()
-	h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
+	h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", now)
 	if code, _, raw, _ := teamCall(t, h, http.MethodPut, asOperator, teamV1, ""); code != 200 {
 		t.Fatalf("seed: HTTP %d %s", code, raw)
 	}
-	good := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(time.Hour))
+	good := k.cert(t, sshca.KeyIDPrefix+pAlice, []string{"alice"}, now.Add(-time.Minute), now.Add(time.Hour))
 	signed := func(ns string, msg func(int64) string, ts int64) TeamBundleRequest {
 		return TeamBundleRequest{Cert: string(ssh.MarshalAuthorizedKey(good)), TS: ts,
 			Sig: sshsig(t, k.user, ns, []byte(msg(ts)))}

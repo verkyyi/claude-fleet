@@ -7,27 +7,10 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
-// ratelessSources derive no figure from a rate table, so they have no review
-// date to state. Listing them here — rather than letting an empty RatesAsOf
-// pass for everyone — keeps the staleness guard sharp for every source that
-// DOES carry rates: adding one of those and forgetting its date still fails.
-//
-// A source earns a place here only by answering "where did this number come
-// from" some other way, and its note has to say so in words (asserted below).
-var ratelessSources = map[string]bool{
-	// The invoice is the basis. There is no rate to review, and stamping a date
-	// here would claim a review that never happened.
-	model.SourceVendorBill: true,
-	// Nobody has priced these rows at all: the app reports usage, the invoice
-	// carries the money. A rate date would be a review of a table that does
-	// not exist.
-	model.SourceVoice: true,
-}
-
-// Every source this build knows must have a stated basis: a rate review date,
-// or — for the rateless ones — a note that says where the number came from
-// instead. A figure with neither is a figure nobody can check, and a wrong note
-// is worse than none: it tells the reader the number is something it is not.
+// Every source this build knows must have a stated basis: a rate review date
+// and a note. A figure with neither is a figure nobody can check, and a wrong
+// note is worse than none: it tells the reader the number is something it is
+// not.
 func TestEverySourceHasAStatedBasis(t *testing.T) {
 	for _, s := range model.Sources {
 		p := ProvenanceFor(s)
@@ -37,16 +20,7 @@ func TestEverySourceHasAStatedBasis(t *testing.T) {
 		if p.Kind != model.CostKind(s) || p.Kind == model.CostUnknown {
 			t.Errorf("%s: kind = %q, want %q", s, p.Kind, model.CostKind(s))
 		}
-		switch {
-		case ratelessSources[s]:
-			if p.RatesAsOf != "" {
-				t.Errorf("%s: has rates_as_of %q but is listed as rateless — one of the two is wrong", s, p.RatesAsOf)
-			}
-			// The escape hatch costs a sentence: say what the basis IS.
-			if !strings.Contains(strings.ToLower(p.Note), "invoice") {
-				t.Errorf("%s: rateless sources must name their basis in the note (no rate date to fall back on); got %q", s, p.Note)
-			}
-		case p.RatesAsOf == "":
+		if p.RatesAsOf == "" {
 			t.Errorf("%s: no rates_as_of — a stale rate is a reporting bug and this is what exposes it", s)
 		}
 		if p.Note == "" {
@@ -55,17 +29,9 @@ func TestEverySourceHasAStatedBasis(t *testing.T) {
 	}
 }
 
-// The bug this replaced: "anything that is not Claude" got the Codex note, so
-// a gateway figure — an actual per-call charge — was described as an
-// API-equivalent estimate, and an unfiltered scope was described as one
-// source's basis when it has none (issue #4).
+// Each source carries its own note, and an unfiltered scope is never
+// described as one source's basis when it has none (issue #4).
 func TestNoteDoesNotMisdescribeASource(t *testing.T) {
-	if got := Note(model.SourceGateway); got != GatewayPriceNote {
-		t.Errorf("gateway note = %q", got)
-	}
-	if strings.Contains(Note(model.SourceGateway), "API equivalent") {
-		t.Error("the gateway note calls a real charge an API equivalent")
-	}
 	if got := Note(model.SourceCodex); got != OpenAIPriceNote {
 		t.Errorf("codex note = %q", got)
 	}
@@ -76,17 +42,13 @@ func TestNoteDoesNotMisdescribeASource(t *testing.T) {
 		t.Errorf("unfiltered note = %q, want the mixed-source note", got)
 	}
 
-	// A billed source's note has to say so in a word a reader cannot miss,
-	// and a notional one has to disclaim the invoice reading.
-	if !strings.Contains(GatewayPriceNote, "billed per call") {
-		t.Error("the gateway note does not say it is billed")
-	}
+	// A notional note has to disclaim the invoice reading.
 	for _, n := range []string{ClaudePriceNote, OpenAIPriceNote} {
 		if !strings.Contains(n, "API equivalent") {
 			t.Errorf("a notional note does not say what the figure is: %q", n)
 		}
 	}
-	if !strings.Contains(MixedSourceNote, "never added") {
+	if !strings.Contains(MixedSourceNote, "reported apart") {
 		t.Error("the mixed-source note does not state the rule")
 	}
 }
@@ -100,7 +62,7 @@ func TestProvenanceCountMatchesTheScope(t *testing.T) {
 	if got := Provenance(); len(got) != len(model.Sources) {
 		t.Errorf("no-arg provenance has %d entries, want %d", len(got), len(model.Sources))
 	}
-	if got := Provenance(model.SourceGateway); len(got) != 1 || got[0].Source != model.SourceGateway {
+	if got := Provenance(model.SourceCodex); len(got) != 1 || got[0].Source != model.SourceCodex {
 		t.Errorf("filtered provenance = %+v", got)
 	}
 }

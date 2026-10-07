@@ -56,7 +56,7 @@ var ErrNoSuchEndpoint = errors.New("no such endpoint")
 // holds, of EVERY kind, retired or not.
 //
 // Deliberately not store.Endpoint. The fleet-facing list filters to
-// kind = 'agent', because a repo or growth shipper is not a machine and every
+// kind = 'agent', because a shipper is not a machine and every
 // surface fed from there would report one as an agent that stopped reporting.
 // `ccquota endpoint` is the opposite question -- "what tokens exist, so I can
 // take one back" -- and a shipper is exactly the thing an operator most often

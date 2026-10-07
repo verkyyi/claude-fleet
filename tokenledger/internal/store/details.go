@@ -32,8 +32,7 @@ func migrateDetails(db *sql.DB) error {
 		}
 	}
 	// Lift the provider out of details_json for rows written before the column
-	// existed. The value has been arriving since the gateway shipper's first
-	// run; it was simply not groupable. Idempotent, and it never overwrites a
+	// existed (Codex's model_provider). Idempotent, and it never overwrites a
 	// provider a sender stated directly.
 	if _, err := db.Exec(`UPDATE usage_events
 		   SET provider = json_extract(details_json, '$.model_provider')

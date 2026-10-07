@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -104,7 +105,7 @@ func pollCert(t *testing.T, h *harness, st DeviceStart) CertResponse {
 // token is not. The life is bounded and the host must be on the roster.
 func TestDrillInviteIsAdminOnly(t *testing.T) {
 	h, _ := drillHarness(t)
-	if code, _ := asPerson(t, h, http.MethodPost, DrillPath, "Alice", []byte(`{"host":"macmini-m4"}`)); code != http.StatusForbidden {
+	if code, _ := asPerson(t, h, http.MethodPost, DrillPath, pAlice, []byte(`{"host":"macmini-m4"}`)); code != http.StatusForbidden {
 		t.Fatalf("a colleague invited a drill person: %d, want 403", code)
 	}
 	if code, _ := drillReq(t, h, http.MethodPost, DrillPath, "", map[string]any{"host": "macmini-m4"}); code != http.StatusUnauthorized && code != http.StatusForbidden {
@@ -132,19 +133,19 @@ func TestDrillApproveIsTheDrillPerson(t *testing.T) {
 	st := startLogin(t, h, key, nil)
 
 	// The QR page, Alice signed in, approve_code in the form.
-	pc, done := personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}, "approve_code": {inv.ApproveCode}})
+	pc, done := personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}, "approve_code": {inv.ApproveCode}})
 	if pc != 200 || !strings.Contains(done, "valid until") || !strings.Contains(done, inv.Login) {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
 	cr := pollCert(t, h, st)
 	c := parseCert(t, cr.Certificate)
-	if strings.Join(c.ValidPrincipals, ",") != inv.Login || c.KeyId != "wecom:"+inv.PersonID {
+	if strings.Join(c.ValidPrincipals, ",") != inv.Login || c.KeyId != sshca.KeyIDPrefix+inv.PersonID {
 		t.Fatalf("certificate principals %v key id %q — want the drill person's", c.ValidPrincipals, c.KeyId)
 	}
 	if devs, _ := h.srv.Store.Devices(inv.PersonID, 10); len(devs) != 1 {
 		t.Fatalf("drill devices = %+v", devs)
 	}
-	if devs, _ := h.srv.Store.Devices("Alice", 10); len(devs) != 0 {
+	if devs, _ := h.srv.Store.Devices(pAlice, 10); len(devs) != 0 {
 		t.Fatalf("the signed-in admin got the device: %+v", devs)
 	}
 
@@ -184,7 +185,7 @@ func TestDrillApproveByScriptThenSelfDelete(t *testing.T) {
 	// Alice (not a drill) signing the delete is refused.
 	ak, asigner := drillKey(t)
 	ast := startLogin(t, h, ak, nil)
-	personForm(t, h, "Alice", h.http.URL, url.Values{"code": {ast.UserCode}, "action": {"approve"}})
+	personForm(t, h, pAlice, h.http.URL, url.Values{"code": {ast.UserCode}, "action": {"approve"}})
 	acr := pollCert(t, h, ast)
 	ts := time.Now().Unix()
 	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{
@@ -220,7 +221,7 @@ func TestDrillApproveByScriptThenSelfDelete(t *testing.T) {
 		t.Fatalf("accounts left: %+v", accts)
 	}
 	// Alice is untouched.
-	if devs, _ := h.srv.Store.Devices("Alice", 10); len(devs) != 1 {
+	if devs, _ := h.srv.Store.Devices(pAlice, 10); len(devs) != 1 {
 		t.Fatalf("Alice's devices = %+v", devs)
 	}
 }
@@ -282,7 +283,7 @@ func TestDrillGetsNoCredentials(t *testing.T) {
 func TestDrillWrongCodeOnPageDoesNotFallBackToAdmin(t *testing.T) {
 	h, _ := drillHarness(t)
 	st := startLogin(t, h, newUserKey(t), nil)
-	pc, page := personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}, "approve_code": {"fd_wrong"}})
+	pc, page := personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}, "approve_code": {"fd_wrong"}})
 	if pc != 200 || !strings.Contains(html.UnescapeString(page), "drill approval code is invalid") {
 		t.Fatalf("page %d:\n%s", pc, page)
 	}
@@ -298,7 +299,7 @@ func TestDrillInviteByCertificate(t *testing.T) {
 	h, _ := drillHarness(t)
 	key, signer := drillKey(t)
 	st := startLogin(t, h, key, nil)
-	personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
 	cr := pollCert(t, h, st)
 	ask := func(host, login string, ttl int, signedHost string) (int, []byte) {
 		ts := time.Now().Unix()
@@ -308,7 +309,11 @@ func TestDrillInviteByCertificate(t *testing.T) {
 	if code, body := ask("macmini-m4", "drillcert1", 600, "macmini-m4"); code != http.StatusForbidden {
 		t.Fatalf("a non-admin's certificate invited: %d %s", code, body)
 	}
-	h.srv.FleetAdmins = []string{"alice"}
+	// Alice becomes an admin: CCQUOTA_GITHUB_ADMINS names her, pinned to her ID.
+	if _, err := h.srv.Store.PinLogin("alice-gh", 1001, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.GitHub.Admins = []string{"alice-gh"}
 	if code, body := ask("macmini-m4", "drillcert1", 600, "macmini-m4"); code != 200 || !bytes.Contains(body, []byte(`"login":"drillcert1"`)) {
 		t.Fatalf("the admin's certificate: %d %s", code, body)
 	}

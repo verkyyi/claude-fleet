@@ -74,13 +74,13 @@ func TestFilterPrevAndAlign(t *testing.T) {
 // reach SQL as a predicate.
 func TestFilterWhereUndeclaredConstrainsToTheBlankSide(t *testing.T) {
 	f := Filter{Account: AllAccounts, Start: time.Unix(0, 0).UTC(), End: time.Unix(3600, 0).UTC(),
-		Provider: Undeclared}
+		Model: Undeclared}
 	clause, args, err := f.where("ts")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(clause, "provider = ''") {
-		t.Fatalf("clause lacks the blank-provider predicate: %s", clause)
+	if !strings.Contains(clause, "model = ''") {
+		t.Fatalf("clause lacks the blank-model predicate: %s", clause)
 	}
 	// The sentinel is this package's own literal, never a bind argument: it is
 	// written into the SQL, so only the two time bounds are bound.
@@ -98,12 +98,12 @@ func TestFilterWhereUndeclaredConstrainsToTheBlankSide(t *testing.T) {
 // no constraint; set to Undeclared it places one. Conflating them is the bug.
 func TestFilterWhereEmptyStringIsStillNoConstraint(t *testing.T) {
 	f := Filter{Account: AllAccounts, Start: time.Unix(0, 0).UTC(), End: time.Unix(3600, 0).UTC(),
-		Provider: ""}
+		Model: ""}
 	clause, _, err := f.where("ts")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(clause, "provider") {
+	if strings.Contains(clause, "model") {
 		t.Fatalf("an unset dimension must not be constrained: %s", clause)
 	}
 }
@@ -122,7 +122,6 @@ func TestFilterWhereUndeclaredWorksOnEveryDimension(t *testing.T) {
 		{"user", func(f *Filter) { f.OSUser = Undeclared }, "os_user = ''"},
 		{"project", func(f *Filter) { f.CWD = Undeclared }, "cwd = ''"},
 		{"model", func(f *Filter) { f.Model = Undeclared }, "model = ''"},
-		{"provider", func(f *Filter) { f.Provider = Undeclared }, "provider = ''"},
 		{"source", func(f *Filter) { f.Source = Undeclared }, "source = ''"},
 		{"branch", func(f *Filter) { f.Branch = Undeclared }, "git_branch = ''"},
 		{"repo", func(f *Filter) { f.Repo = Undeclared }, "git_repo = ''"},

@@ -13,31 +13,28 @@ import (
 
 const costScope = "account=all&since=2026-08-31T12:00:00Z&until=2026-08-31T15:00:00Z"
 
-// seedGateway pushes one gateway event alongside the Claude fixture, so the
-// review surface holds two kinds of money at once. Its cost is stamped
-// directly rather than derived: gateway rates are per-deployment and this
-// repo ships none (see pricing/gateway.go), so a fixture that relied on the
-// built-in table would price at nil.
-func seedGateway(t *testing.T, h *harness) {
+// seedCodex puts one Codex event beside the Claude fixture, so the review
+// surface holds both sources at once. Its cost is stamped directly: the
+// store takes it as given, which keeps the figure exact.
+func seedCodex(t *testing.T, h *harness) {
 	t.Helper()
 	c := 100.0
 	if _, _, err := h.srv.Store.InsertEvents([]model.UsageEvent{{
-		Source: model.SourceGateway, AccountUUID: "acct-a", EndpointID: "ep_mac",
-		SessionID: "s-gw", MessageUUID: "gw1",
+		Source: model.SourceCodex, AccountUUID: "acct-a", EndpointID: "ep_mac",
+		SessionID: "s-cx", MessageUUID: "cx1",
 		TS:    time.Date(2026, 8, 31, 12, 30, 0, 0, time.UTC),
-		Model: "qwen3-max", OutputTokens: 50, CostUSD: &c, CWD: "/p/alpha", OSUser: "verkyyi",
+		Model: "gpt-5", OutputTokens: 50, CostUSD: &c, CWD: "/p/alpha", OSUser: "verkyyi",
 	}}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// A gateway-scoped request used to be a 400: querySource listed claude and
-// codex literally, so the one scope in which a billed figure can be read
-// alone was unreachable from the dashboard and from MCP (issue #4).
+// Every source this build knows is addressable on every query surface, and an
+// unknown one is a 400 that names the valid ones (issue #4).
 func TestQuerySourceAcceptsEveryKnownSource(t *testing.T) {
 	h := newHarness(t)
 	seedReviewHarness(t, h)
-	seedGateway(t, h)
+	seedCodex(t, h)
 
 	for _, src := range model.Sources {
 		for _, path := range []string{"/v1/summary?", "/v1/usage?by=source&", "/v1/sessions?", "/v1/history?"} {
@@ -48,26 +45,49 @@ func TestQuerySourceAcceptsEveryKnownSource(t *testing.T) {
 			}
 		}
 	}
-	res, body := h.get(t, "/v1/summary?"+costScope+"&source=not-a-source")
-	res.Body.Close()
-	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("an unknown source was accepted: %d %s", res.StatusCode, body)
-	}
-	for _, src := range model.Sources {
-		if !strings.Contains(string(body), src) {
-			t.Errorf("the 400 does not name %q, so a caller cannot tell what IS valid: %s", src, body)
+	for _, gone := range []string{"not-a-source", "gateway", "vendor_bill", "voice"} {
+		res, body := h.get(t, "/v1/summary?"+costScope+"&source="+gone)
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("source=%s was accepted: %d %s", gone, res.StatusCode, body)
+		}
+		for _, src := range model.Sources {
+			if !strings.Contains(string(body), src) {
+				t.Errorf("the 400 does not name %q, so a caller cannot tell what IS valid: %s", src, body)
+			}
 		}
 	}
 }
 
-// handleSummary used to attach the Codex note to everything that was not
-// Claude — which meant a gateway summary carried "API equivalent estimate",
-// the exact opposite of true for a source billed per call, and an unfiltered
-// summary carried it too despite having no single basis at all (issue #4).
+// Only Claude and Codex usage is taken (claude-fleet#1987): a batch from a
+// gateway, vendor-bill or voice shipper is refused and nothing is stored.
+func TestIngestRefusesRemovedSources(t *testing.T) {
+	h := newHarness(t)
+	tok := h.enroll(t, "shipper")
+	for _, src := range []string{"gateway", "vendor_bill", "voice"} {
+		res := h.push(t, tok, model.Batch{
+			Identity: model.Identity{Source: src, AccountUUID: "app-" + src, Hostname: "box", OSUser: "svc"},
+			Events: []model.UsageEvent{{MessageUUID: "m-" + src, SessionID: "s", Model: "m",
+				TS: time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC), OutputTokens: 5}},
+		})
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest {
+			t.Errorf("source=%s batch: HTTP %d, want 400", src, res.StatusCode)
+		}
+	}
+	var n int
+	if err := h.srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("usage_events holds %d rows after refused batches (%v)", n, err)
+	}
+}
+
+// The summary's pricing note names the basis of the scope's figures: one
+// source's own note when filtered to it, the mixed-source note when not
+// (issue #4).
 func TestSummaryPricingNoteFollowsTheSource(t *testing.T) {
 	h := newHarness(t)
 	seedReviewHarness(t, h)
-	seedGateway(t, h)
+	seedCodex(t, h)
 
 	type prov struct {
 		Source, Kind, RatesAsOf, Note string
@@ -98,7 +118,6 @@ func TestSummaryPricingNoteFollowsTheSource(t *testing.T) {
 	}{
 		{model.SourceClaude, pricing.ClaudePriceNote, model.CostNotional, pricing.RatesAsOf},
 		{model.SourceCodex, pricing.OpenAIPriceNote, model.CostNotional, pricing.OpenAIRatesAsOf},
-		{model.SourceGateway, pricing.GatewayPriceNote, model.CostBilled, pricing.GatewayRatesAsOf},
 	} {
 		note, provs := get(tc.source)
 		if note != tc.wantNote {
@@ -126,12 +145,12 @@ func TestSummaryPricingNoteFollowsTheSource(t *testing.T) {
 	}
 }
 
-// The summary's money: split by source, folded only two ways, and with a real
-// spend figure the notional number cannot enter.
+// The summary's money: split by source, one legitimate fold, and a real spend
+// figure the notional number cannot enter.
 func TestSummarySplitsCostAndReportsRealSpend(t *testing.T) {
 	h := newHarness(t)
 	seedReviewHarness(t, h)
-	seedGateway(t, h)
+	seedCodex(t, h)
 	if err := h.srv.Store.SetPlanPrice(model.SubscriptionPlan{
 		Plan: "max", Source: model.SourceClaude, MonthlyCost: 200, Currency: "USD",
 		EffectiveFrom: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -142,7 +161,6 @@ func TestSummarySplitsCostAndReportsRealSpend(t *testing.T) {
 	type summaryCost struct {
 		Cost         store.CostBySource `json:"cost"`
 		CostNotional float64            `json:"cost_notional"`
-		CostBilled   float64            `json:"cost_billed"`
 		RealSpend    RealSpend          `json:"real_spend"`
 		Subscription []struct {
 			Plan   string  `json:"plan"`
@@ -153,33 +171,21 @@ func TestSummarySplitsCostAndReportsRealSpend(t *testing.T) {
 	var got summaryCost
 	h.getJSON(t, "/v1/summary?"+costScope, &got)
 
-	gw, ok := got.Cost.Of(model.SourceGateway)
-	if !ok || gw.CostUSD != 100 || gw.Kind != model.CostBilled {
-		t.Fatalf("gateway cost = %+v, want $100 billed", gw)
+	cx, ok := got.Cost.Of(model.SourceCodex)
+	if !ok || cx.CostUSD != 100 || cx.Kind != model.CostNotional {
+		t.Fatalf("codex cost = %+v, want $100 notional", cx)
 	}
 	cl, _ := got.Cost.Of(model.SourceClaude)
 	if cl.CostUSD == 0 || cl.Kind != model.CostNotional {
 		t.Fatalf("claude cost = %+v, want a notional figure", cl)
 	}
-	if got.CostBilled != 100 {
-		t.Errorf("cost_billed = %v, want 100", got.CostBilled)
-	}
-	if got.CostNotional != cl.CostUSD {
-		t.Errorf("cost_notional = %v, want the claude figure %v", got.CostNotional, cl.CostUSD)
-	}
-	if got.CostNotional == 0 {
-		t.Fatal("fixture produced no notional cost; the checks below would pass vacuously")
+	if got.CostNotional != cl.CostUSD+cx.CostUSD {
+		t.Errorf("cost_notional = %v, want claude %v + codex %v", got.CostNotional, cl.CostUSD, cx.CostUSD)
 	}
 
-	// Real spend is subscription + gateway, and NOT the notional figure.
-	if got.RealSpend.Gateway != 100 {
-		t.Errorf("real_spend.gateway = %v, want 100", got.RealSpend.Gateway)
-	}
-	if got.RealSpend.Total != got.RealSpend.Subscription+got.RealSpend.Gateway {
-		t.Errorf("real_spend.total = %v, want subscription + gateway", got.RealSpend.Total)
-	}
-	if got.RealSpend.Total >= got.CostNotional && got.CostNotional > got.RealSpend.Gateway {
-		t.Errorf("real_spend %v looks like it absorbed the notional figure %v", got.RealSpend.Total, got.CostNotional)
+	// Real spend is the subscriptions, and NOT the notional figure.
+	if got.RealSpend.Total != got.RealSpend.Subscription {
+		t.Errorf("real_spend.total = %v, want the subscription term %v", got.RealSpend.Total, got.RealSpend.Subscription)
 	}
 
 	// The subscription term itself, over a window the account was actually
@@ -190,11 +196,8 @@ func TestSummarySplitsCostAndReportsRealSpend(t *testing.T) {
 	if len(live.Subscription) == 0 {
 		t.Fatalf("the summary reports no subscription spend at all: %+v", live.RealSpend)
 	}
-	if live.RealSpend.Subscription <= 0 {
-		t.Fatalf("real_spend carries no subscription term: %+v (rows %+v)", live.RealSpend, live.Subscription)
-	}
-	if live.RealSpend.Total != live.RealSpend.Subscription+live.RealSpend.Gateway {
-		t.Errorf("real_spend.total = %+v is not its two terms", live.RealSpend)
+	if live.RealSpend.Subscription <= 0 || live.RealSpend.Total != live.RealSpend.Subscription {
+		t.Fatalf("real_spend = %+v (rows %+v), want exactly its subscription term", live.RealSpend, live.Subscription)
 	}
 }
 
@@ -206,13 +209,9 @@ func TestRealSpendReportsWhatItCouldNotAdd(t *testing.T) {
 		{Plan: "team", Source: model.SourceClaude, Priced: false, Seats: 4},
 		{Plan: "pro", Source: model.SourceCodex, Currency: "CNY", Amount: 999, Priced: true, Seats: 1},
 	}
-	cost := store.CostBySource{
-		{Source: model.SourceClaude, Kind: model.CostNotional, CostUSD: 5000},
-		{Source: model.SourceGateway, Kind: model.CostBilled, CostUSD: 10},
-	}
-	rs := RealSpendOver(cost, plans)
-	if rs.Subscription != 200 || rs.Gateway != 10 || rs.Total != 210 {
-		t.Fatalf("real spend = %+v, want 200 + 10", rs)
+	rs := RealSpendOver(plans)
+	if rs.Subscription != 200 || rs.Total != 200 {
+		t.Fatalf("real spend = %+v, want 200", rs)
 	}
 	if rs.Complete {
 		t.Error("real spend claims to be complete with an unpriced plan and a foreign currency in it")
@@ -220,65 +219,29 @@ func TestRealSpendReportsWhatItCouldNotAdd(t *testing.T) {
 	if len(rs.Missing) != 2 {
 		t.Errorf("missing = %v, want both the unpriced plan and the CNY one", rs.Missing)
 	}
-	if rs.Total >= 5000 {
-		t.Error("the notional figure reached real spend")
-	}
 }
 
-// Every billed source has to reach real spend on its own term. The bug this
-// guards is the cheap one: adding a source to the fold but forgetting the
-// switch in RealSpendOver, which drops its money out of Total silently — and
-// Total being too low is the direction nobody double-checks.
-func TestRealSpendCarriesEveryBilledSourceOnItsOwnTerm(t *testing.T) {
-	cost := store.CostBySource{
-		{Source: model.SourceGateway, Kind: model.CostBilled, CostUSD: 1},
-		{Source: model.SourceVendorBill, Kind: model.CostBilled, CostUSD: 2},
-		{Source: model.SourceVoice, Kind: model.CostBilled, CostUSD: 4},
-		// Notional money must not reach any of it.
-		{Source: model.SourceClaude, Kind: model.CostNotional, CostUSD: 9000},
-	}
-	rs := RealSpendOver(cost, nil)
-	if rs.Gateway != 1 || rs.VendorBill != 2 || rs.Voice != 4 {
-		t.Fatalf("real spend terms = %+v, want gateway 1 / vendor_bill 2 / voice 4", rs)
-	}
-	if rs.Total != 7 {
-		t.Errorf("total = %v, want 7 — a billed source is missing from the sum", rs.Total)
-	}
-}
-
-// Live sessions are an overlapping counter with its own never-add rule; the
-// same rule applies one level down, between the kinds of money in it.
-func TestLiveSnapshotKeepsBilledCostApart(t *testing.T) {
+// A live session from a source this build has no cost kind for is counted in
+// no total; it stays visible on its own row.
+func TestLiveSnapshotCountsOnlyKnownMoney(t *testing.T) {
 	now := time.Now().UTC()
 	l := NewLive()
-	// Only Claude heartbeats get an ObservedAt filled in for them; every
-	// other source states its own or is dropped as stale.
 	l.Report("ep1", "web-01", []LiveSession{
 		{SessionID: "s1", Source: model.SourceClaude, ObservedAt: now, CostUSD: 1, USDPerHour: 2},
-		{SessionID: "s2", Source: model.SourceGateway, ObservedAt: now, CostUSD: 100, USDPerHour: 50},
+		{SessionID: "s2", Source: "some-future-thing", ObservedAt: now, CostUSD: 100, USDPerHour: 50},
 	})
 	snap := l.Snapshot()
-	if snap.SessionCost != 1 {
-		t.Errorf("notional live cost = %v, want 1", snap.SessionCost)
-	}
-	if snap.SessionCostBilled != 100 {
-		t.Errorf("billed live cost = %v, want 100", snap.SessionCostBilled)
-	}
-	if snap.USDPerHour != 2 || snap.USDPerHourBilled != 50 {
-		t.Errorf("burn rates blended: %v / %v", snap.USDPerHour, snap.USDPerHourBilled)
-	}
-	if snap.SessionCost == 101 {
-		t.Error("live costs were summed across sources")
+	if snap.SessionCost != 1 || snap.USDPerHour != 2 {
+		t.Errorf("live money = %v / %v per hour, want 1 / 2", snap.SessionCost, snap.USDPerHour)
 	}
 }
 
-// A gateway-scoped page must not show a Claude plan's invoice next to its own
-// charges: that source has no subscription, and the honest answer to "what
-// does this source cost" is its metered bill alone.
+// A source-scoped page must not show another source's plan: a Codex-scoped
+// summary carries no Claude invoice.
 func TestSubscriptionSpendHonoursTheSourceChip(t *testing.T) {
 	h := newHarness(t)
 	seedReviewHarness(t, h)
-	seedGateway(t, h)
+	seedCodex(t, h)
 	if err := h.srv.Store.SetPlanPrice(model.SubscriptionPlan{
 		Plan: "max", Source: model.SourceClaude, MonthlyCost: 200, Currency: "USD",
 		EffectiveFrom: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -291,19 +254,16 @@ func TestSubscriptionSpendHonoursTheSourceChip(t *testing.T) {
 		} `json:"subscription_spend"`
 		RealSpend RealSpend `json:"real_spend"`
 	}
-	h.getJSON(t, "/v1/summary?account=all&since=72h&source=gateway", &got)
+	h.getJSON(t, "/v1/summary?account=all&since=72h&source=codex", &got)
 	if len(got.Subscription) != 0 {
-		t.Errorf("a gateway-scoped summary carries subscription rows: %+v", got.Subscription)
+		t.Errorf("a codex-scoped summary carries claude subscription rows: %+v", got.Subscription)
 	}
 	if got.RealSpend.Subscription != 0 {
-		t.Errorf("real_spend for source=gateway includes %v of subscription money", got.RealSpend.Subscription)
+		t.Errorf("real_spend for source=codex includes %v of claude subscription money", got.RealSpend.Subscription)
 	}
 
 	h.getJSON(t, "/v1/summary?account=all&since=72h&source=claude", &got)
 	if len(got.Subscription) != 1 || got.Subscription[0].Source != model.SourceClaude {
 		t.Fatalf("claude-scoped subscription rows = %+v", got.Subscription)
-	}
-	if got.RealSpend.Gateway != 0 {
-		t.Errorf("real_spend for source=claude includes %v of gateway money", got.RealSpend.Gateway)
 	}
 }

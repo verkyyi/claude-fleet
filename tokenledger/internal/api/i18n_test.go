@@ -3,10 +3,8 @@ package api
 import (
 	"strings"
 	"testing"
-	"time"
 	"unicode"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fx"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -25,7 +23,6 @@ func TestDashboardNotes_EnglishIsTheConstant(t *testing.T) {
 		"disclaimer": {shareDisclaimerText, shareDisclaimer},
 		"live":       {liveNoteText, liveNote},
 		"acct_usage": {accountUsageNote, accountUsageNoteEN},
-		"provider":   {providerNoteText(), store.ProviderNote},
 	} {
 		if pair.text[i18n.EN] != pair.original {
 			t.Errorf("%s: the English entry has drifted from its constant", name)
@@ -37,15 +34,6 @@ func TestDashboardNotes_EnglishIsTheConstant(t *testing.T) {
 		if zh == pair.original {
 			t.Errorf("%s: the Chinese entry is just the English text", name)
 		}
-	}
-}
-
-// providerNoteText re-derives store's pair through its public accessors, since
-// the map itself is that package's business.
-func providerNoteText() i18n.Text {
-	return i18n.Text{
-		i18n.EN:   store.ProviderNoteIn(i18n.EN),
-		i18n.ZhCN: store.ProviderNoteIn(i18n.ZhCN),
 	}
 }
 
@@ -231,7 +219,7 @@ func TestEndpointReports_FinishesTheSentenceItStarted(t *testing.T) {
 
 func TestUnpricedReasons_TranslatedWithoutTouchingIdentifiers(t *testing.T) {
 	rows := []store.UnpricedReason{
-		{Source: "gateway", Model: "qwen-plus", Code: store.UnpricedNoGatewayRate, Events: 3},
+		{Source: "codex", Model: "gpt-5", Code: store.UnpricedServiceTier, Events: 3},
 		{Source: "claude", Model: "claude-opus-5", Code: store.UnpricedPruned, Events: 7},
 	}
 	got := localizedReasons(rows, i18n.ZhCN)
@@ -252,86 +240,5 @@ func TestUnpricedReasons_TranslatedWithoutTouchingIdentifiers(t *testing.T) {
 	// The input is not mutated: the caller may still hold the English rows.
 	if rows[0].Reason != "" {
 		t.Error("localizedReasons wrote through to its input")
-	}
-}
-
-// /v1/fx is the one endpoint whose whole job is disclosure: a converted figure
-// is not the invoice, and the response has to carry enough for a surface to say
-// so. A rate with no date, or no note, cannot be presented honestly.
-func TestFX_AnswersWithEnoughToDiscloseIt(t *testing.T) {
-	h := newHarness(t)
-	h.srv.FX = fx.New("", time.Hour, map[string]float64{"CNY": 7.09}, "pinned in this build")
-
-	var got struct {
-		Base      string  `json:"base"`
-		Target    string  `json:"target"`
-		Rate      float64 `json:"rate"`
-		Source    string  `json:"source"`
-		Available bool    `json:"available"`
-		Fallback  bool    `json:"fallback"`
-		Stale     bool    `json:"stale"`
-		Note      string  `json:"note"`
-	}
-	h.getJSON(t, "/v1/fx?base=USD&target=CNY", &got)
-	if !got.Available || got.Rate != 7.09 {
-		t.Fatalf("fx = %+v", got)
-	}
-	// No feed configured, so this is the pinned rate and must say so.
-	if !got.Fallback {
-		t.Error("a pinned rate was not marked as a fallback")
-	}
-	if got.Source == "" {
-		t.Error("no source: a converted figure with unstated provenance is the thing this guards against")
-	}
-	if got.Note == "" {
-		t.Error("no note saying the figure is converted rather than billed")
-	}
-	if !got.Stale {
-		t.Error("a rate with no feed timestamp must read as stale")
-	}
-}
-
-func TestFX_UnknownPairIsAnAnswerNotAnError(t *testing.T) {
-	h := newHarness(t)
-	h.srv.FX = fx.New("", time.Hour, map[string]float64{"CNY": 7.09}, "pinned")
-	var got struct {
-		Available bool   `json:"available"`
-		Reason    string `json:"reason"`
-	}
-	// The page responds by showing each figure in its billed currency, which is
-	// truthful — so this is a 200 with available:false, not a 4xx.
-	h.getJSON(t, "/v1/fx?base=USD&target=XYZ", &got)
-	if got.Available {
-		t.Error("invented a rate for a currency this hub has none for")
-	}
-	if got.Reason == "" {
-		t.Error("no reason given")
-	}
-}
-
-func TestFX_NoteFollowsTheLocale(t *testing.T) {
-	h := newHarness(t)
-	h.srv.FX = fx.New("", time.Hour, map[string]float64{"CNY": 7.09}, "pinned")
-	var en, zh struct {
-		Note string `json:"note"`
-	}
-	h.getJSON(t, "/v1/fx?base=USD&target=CNY", &en)
-	h.getJSON(t, "/v1/fx?base=USD&target=CNY&locale=zh-CN", &zh)
-	if en.Note == zh.Note {
-		t.Error("the fx note was not translated")
-	}
-}
-
-// A hub with no FX configured at all must still serve the endpoint rather than
-// panic: FX is an optional field on Server.
-func TestFX_NilFeedIsServedNotCrashed(t *testing.T) {
-	h := newHarness(t)
-	h.srv.FX = nil
-	var got struct {
-		Available bool `json:"available"`
-	}
-	h.getJSON(t, "/v1/fx?base=USD&target=CNY", &got)
-	if got.Available {
-		t.Error("a hub with no feed produced a rate")
 	}
 }

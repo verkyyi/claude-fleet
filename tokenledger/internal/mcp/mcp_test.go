@@ -113,8 +113,8 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 	if !ok {
 		t.Fatalf("no tools: %v", out)
 	}
-	if len(tools) != 33 {
-		t.Fatalf("tools = %d, want 33", len(tools))
+	if len(tools) != 27 {
+		t.Fatalf("tools = %d, want 27", len(tools))
 	}
 
 	want := map[string]bool{
@@ -122,16 +122,14 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 		"list_accounts": false, "get_limits": false, "list_endpoints": false,
 		"list_account_switches": false, "list_endpoint_accounts": false,
 		"usage_by_account": false, "usage_by_endpoint": false,
-		"usage_by_source": false, "usage_by_provider": false,
-		"usage_by_user": false, "usage_by_project": false,
+		"usage_by_source": false,
+		"usage_by_user":   false, "usage_by_project": false,
 		"usage_by_session": false, "usage_by_model": false,
 		"usage_by_team": false, "usage_by_branch": false,
 		"usage_by_effort": false, "usage_by_entrypoint": false,
 		"usage_history":      false,
-		"get_limits_history": false, "get_fx": false, "get_user": false,
+		"get_limits_history": false, "get_user": false,
 		"usage_summary": false, "list_sessions": false, "get_session": false, "get_findings": false,
-		"list_repos": false, "repo_progress": false, "list_repo_issues": false,
-		"repo_issue_cost": false,
 	}
 	for _, raw := range tools {
 		tool := raw.(map[string]any)
@@ -376,16 +374,13 @@ func TestAllToolsAreReadOnly(t *testing.T) {
 	ts, st := newMCP(t)
 	seed(t, st, "acct-a", "ep-1", "/a", "a1", "a2", "a3")
 
-	seedRepo(t, st)
-
-	countRows := func() (int, int, int) {
-		var ev, ep, ri int
+	countRows := func() (int, int) {
+		var ev, ep int
 		st.DB().QueryRow(`SELECT COUNT(*) FROM usage_events`).Scan(&ev)
 		st.DB().QueryRow(`SELECT COUNT(*) FROM endpoints`).Scan(&ep)
-		st.DB().QueryRow(`SELECT COUNT(*) FROM repo_issues`).Scan(&ri)
-		return ev, ep, ri
+		return ev, ep
 	}
-	beforeEv, beforeEp, beforeRI := countRows()
+	beforeEv, beforeEp := countRows()
 
 	for _, tool := range []string{
 		"list_accounts", "get_limits", "list_endpoints",
@@ -393,14 +388,11 @@ func TestAllToolsAreReadOnly(t *testing.T) {
 	} {
 		call(t, ts, tool, map[string]any{"account": "acct-a"})
 	}
-	call(t, ts, "list_repos", nil)
-	call(t, ts, "repo_progress", map[string]any{"repo": "o/r"})
-	call(t, ts, "list_repo_issues", map[string]any{"repo": "o/r"})
 
-	afterEv, afterEp, afterRI := countRows()
-	if beforeEv != afterEv || beforeEp != afterEp || beforeRI != afterRI {
-		t.Fatalf("a tool mutated the store: events %d->%d, endpoints %d->%d, repo issues %d->%d",
-			beforeEv, afterEv, beforeEp, afterEp, beforeRI, afterRI)
+	afterEv, afterEp := countRows()
+	if beforeEv != afterEv || beforeEp != afterEp {
+		t.Fatalf("a tool mutated the store: events %d->%d, endpoints %d->%d",
+			beforeEv, afterEv, beforeEp, afterEp)
 	}
 }
 

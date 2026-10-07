@@ -133,10 +133,10 @@ func TestJoinCodeExpires(t *testing.T) {
 	}
 }
 
-// Minting is the operator's: no credential → 401, a WeCom person → 403.
+// Minting is the operator's: no credential → 401, a signed-in person → 403.
 func TestJoinCodesOperatorOnly(t *testing.T) {
 	h := newFleetHarness(t)
-	enableSSO(h)
+	enablePeople(t, h, pAlice, pBob, pCarol)
 	resp, err := http.Post(h.http.URL+"/v1/fleet/join-codes", "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +145,7 @@ func TestJoinCodesOperatorOnly(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("anonymous mint: HTTP %d; want 401", resp.StatusCode)
 	}
-	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/join-codes", "Alice", []byte("{}")); code != http.StatusForbidden {
+	if code, _ := asPerson(t, h, http.MethodPost, "/v1/fleet/join-codes", pAlice, []byte("{}")); code != http.StatusForbidden {
 		t.Fatalf("person mint: HTTP %d; want 403", code)
 	}
 	r, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/fleet/join-codes", strings.NewReader(`{"label":"bad label!"}`))

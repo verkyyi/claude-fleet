@@ -61,12 +61,10 @@ if curl -sf -o /dev/null "http://127.0.0.1:$PORT/healthz" 2>/dev/null; then
 fi
 
 echo "→ starting hub on 127.0.0.1:$PORT"
-# --pricing carries the gateway rates; without it the metered events ingest
-# fine but price as nil and the consumption table shows one subscription row.
 # --public-badges lets `ccquota badge` be fetched without a viewer token, which
 # is what a README image needs.
 "$BIN" hub --addr "127.0.0.1:$PORT" --db "$DB" \
-  --pricing "$ROOT/docs/img/demo-pricing.json" --public-badges \
+  --public-badges \
   >"$WORK/hub.log" 2>&1 &
 HUB_PID=$!
 
@@ -113,7 +111,7 @@ assign() { # $1=machine name  $2=team
 }
 assign mac-mini platform
 assign web-01   platform
-assign laptop   growth
+assign laptop   research
 
 # What a plan costs is the one figure the hub cannot observe.
 #

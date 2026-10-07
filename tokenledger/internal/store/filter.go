@@ -35,7 +35,7 @@ type Filter struct {
 	Account    string
 	Start, End time.Time
 
-	Endpoint, OSUser, CWD, Model, Provider, Branch, Team, Session, Source string
+	Endpoint, OSUser, CWD, Model, Branch, Team, Session, Source string
 
 	// Repo scopes to rows whose endpoint DECLARED that repository
 	// (`owner/name`, see internal/store/gitrepo.go). Rows that declared nothing
@@ -106,7 +106,6 @@ func (f Filter) where(tsCol string) (string, []any, error) {
 	eq("os_user", f.OSUser)
 	eq("cwd", f.CWD)
 	eq("model", f.Model)
-	eq("provider", f.Provider)
 	eq("source", f.Source)
 	eq("git_branch", f.Branch)
 	eq("git_repo", f.Repo)

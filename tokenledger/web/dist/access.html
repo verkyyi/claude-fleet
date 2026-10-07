@@ -7,7 +7,7 @@
 <title>Ways in</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232a78d6'/%3E%3Crect x='3' y='7' width='10' height='3' rx='1.5' fill='%23fff'/%3E%3C/svg%3E">
 <!--
-  The door map. A standalone page, like share.html and user.html: it is the
+  The door map. A standalone page, like user.html: it is the
   page you read when you cannot get in somewhere, so it must not itself depend
   on the dashboard's twenty-module boot.
 
@@ -156,10 +156,9 @@ function hubFacts(h) {
   const addrs = [...(l.http || [])];
   if (l.https) addrs.push(l.https + " (https, tailnet peers only)");
 
-  const tailnet = (h.tailnet_viewers || []);
   // "2 agent" is a column heading with a number stuck to it; "2 agents" is an
-  // answer. The kinds are storage identifiers (growth_reader), so they get
-  // spelled out here rather than shown as the column name they are.
+  // answer. The kinds are storage identifiers, so they get spelled out here
+  // rather than shown as the column name they are.
   const kinds = Object.entries(h.enrollments || {})
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([k, n]) => `${n} ${k.replace(/_/g, " ")}${n === 1 ? "" : "s"}`);
@@ -167,28 +166,15 @@ function hubFacts(h) {
   const rows = [
     fact("Viewer credential", h.viewer_auth,
       h.viewer_auth === "token" ? "on" : "hot"),
-    fact("WeCom SSO", h.sso && h.sso.enabled ? "on" : "not configured",
-      h.sso && h.sso.enabled ? "on" : "off"),
-    // The logins are deliberately NOT tinted: they are names, and the accent
-    // colour on this page means "a setting is on". A blue email address reads
-    // as a link to somewhere, which is the one thing it is not.
-    fact("Tokenless tailnet logins",
-      tailnet.length ? tailnet.join(", ") : "none — everyone needs a token",
-      tailnet.length ? null : "off"),
+    fact("GitHub sign-in", h.github ? `on — ${h.github_admins} admin name(s) from the deploy` : "not configured",
+      h.github ? "on" : "off"),
     fact("Public badges", h.public_badges ? "ON — no credential needed" : "off (behind the viewer token)",
       h.public_badges ? "hot" : "off"),
     fact("MCP endpoint", h.mcp ? "mounted at /mcp" : "not wired up", h.mcp ? "on" : "off"),
     fact("Dashboard", h.dashboard ? "built into this binary" : "not built in", h.dashboard ? "on" : "off"),
     fact("Listening on", addrs.length ? addrs.join(" · ") : "not reported"),
-    fact("Share links",
-      h.share_links.total
-        ? `${h.share_links.active} active of ${h.share_links.total} minted`
-        : "none minted"),
     fact("Enrolled shippers", kinds.length ? kinds.join(" · ") : "none enrolled"),
   ];
-  if (h.sso && h.sso.enabled) {
-    rows.push(fact("Sign-in sends you to", el("span", { class: "mono" }, h.sso.enter_url), null, true));
-  }
   return el("dl", { class: "facts" }, rows);
 }
 
@@ -239,8 +225,8 @@ function render(d) {
         el("li", {}, el("b", {}, "It adds no way in. "),
           "Every door listed above already existed; this page only writes them down in one place for the first time."),
         el("li", {}, el("b", {}, "It is behind the viewer gate, on purpose. "),
-          "It reports what is configured — SSO on or off, who the tailnet allowlist names. ",
-          el("code", {}, "/enter"), " is mounted unconditionally and 404s when SSO is off precisely so the route cannot tell that to someone with no credential. This page does not change that: you are reading it because you already came through a door."))),
+          "It reports what is configured — GitHub sign-in on or off, how many admins the deploy names. ",
+          el("code", {}, "/signin"), " is mounted unconditionally and 404s when GitHub sign-in is off precisely so the route cannot tell that to someone with no credential. This page does not change that: you are reading it because you already came through a door."))),
 
     el("footer", {}, "Served by this hub from /access · the same data as JSON at /v1/access"));
 }

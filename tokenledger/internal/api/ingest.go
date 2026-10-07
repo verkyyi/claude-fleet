@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
@@ -47,6 +48,13 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	if batch.Identity.AccountUUID == "" {
 		httpError(w, http.StatusBadRequest, "batch has no identity.account_uuid")
+		return
+	}
+	// Claude and Codex only (claude-fleet#1987): a gateway, vendor-bill or
+	// voice shipper is refused here rather than stored under a source no
+	// surface reads.
+	if src := model.UsageSource(batch.Identity.Source); !model.KnownSource(src) {
+		httpError(w, http.StatusBadRequest, "source "+strconv.Quote(src)+" is not taken by this hub")
 		return
 	}
 

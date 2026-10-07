@@ -93,7 +93,7 @@ func proxyVaultHarness(t *testing.T) (*harness, string) {
 	}
 	h.srv.Vault = &credvault.Vault{Store: h.srv.Store, Sealer: sealer, Refresher: &credvault.ProxyRefresher{Via: h.srv.NodeOAuthRefresh}}
 	tok := enrollAs(t, h, "alice-m4", "m4", "alice")
-	p, err := h.srv.Store.AdoptPrincipal("wecom-alice", "alice", "Alice", time.Now())
+	p, err := h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

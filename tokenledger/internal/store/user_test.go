@@ -146,12 +146,12 @@ func loginlessBucket(t *testing.T, bs []Bucket) Bucket {
 
 // The blank login is a REPORTER, not a person the hub lost track of, and when
 // one endpoint is behind it the hub can say which one (issue #132). On this
-// deployment every one of those 6,204 turns came from `ai-gateway-shipper`, a
-// gateway shipper that has no OS login to send -- and the row carried the only
+// deployment every one of those 6,204 turns came from `ci-runner`, a
+// shipper that has no OS login to send -- and the row carried the only
 // real invoice on the card while rendering as "(unknown)".
 func TestUsageBy_LoginlessBucketIsNamedAfterItsOneReporter(t *testing.T) {
 	s := newStore(t)
-	enrollLabelled(t, s, "acct-1", "ep_1789272199291316987", "ai-gateway-shipper")
+	enrollLabelled(t, s, "acct-1", "ep_1789272199291316987", "ci-runner")
 	seedAccount(t, s, "acct-1", "ep-laptop")
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
 		userEv("acct-1", "ep_1789272199291316987", "g1", "", "/w", 900),
@@ -168,7 +168,7 @@ func TestUsageBy_LoginlessBucketIsNamedAfterItsOneReporter(t *testing.T) {
 		t.Fatal(err)
 	}
 	blank := loginlessBucket(t, bs)
-	if want := "non-login source: ai-gateway-shipper"; blank.Label != want {
+	if want := "non-login source: ci-runner"; blank.Label != want {
 		t.Errorf("login-less bucket label = %q, want %q", blank.Label, want)
 	}
 	// Named, not hidden: it is the row with the real money on it.
@@ -188,7 +188,7 @@ func TestUsageBy_LoginlessBucketIsNamedAfterItsOneReporter(t *testing.T) {
 // them would put the other's spend under its name.
 func TestUsageBy_LoginlessBucketStaysGenericWhenSeveralReported(t *testing.T) {
 	s := newStore(t)
-	enrollLabelled(t, s, "acct-1", "ep-gw", "ai-gateway-shipper")
+	enrollLabelled(t, s, "acct-1", "ep-gw", "ci-runner")
 	enrollLabelled(t, s, "acct-1", "ep-voice", "voice-shipper")
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
 		userEv("acct-1", "ep-gw", "g1", "", "/w", 900),
@@ -212,7 +212,7 @@ func TestUsageBy_LoginlessBucketStaysGenericWhenSeveralReported(t *testing.T) {
 // "two" for a wide one, and the label has to follow the rows it is on.
 func TestUsageBy_LoginlessLabelFollowsTheWindow(t *testing.T) {
 	s := newStore(t)
-	enrollLabelled(t, s, "acct-1", "ep-gw", "ai-gateway-shipper")
+	enrollLabelled(t, s, "acct-1", "ep-gw", "ci-runner")
 	enrollLabelled(t, s, "acct-1", "ep-voice", "voice-shipper")
 	gw := userEv("acct-1", "ep-gw", "g1", "", "/w", 900)
 	old := userEv("acct-1", "ep-voice", "v1", "", "/w", 100)
@@ -226,7 +226,7 @@ func TestUsageBy_LoginlessLabelFollowsTheWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := loginlessBucket(t, narrow).Label; got != "non-login source: ai-gateway-shipper" {
+	if got := loginlessBucket(t, narrow).Label; got != "non-login source: ci-runner" {
 		t.Errorf("narrow window label = %q, want the one reporter inside it", got)
 	}
 	wide, err := s.UsageBy(AllAccounts, ByUser,
@@ -246,7 +246,7 @@ func TestUsageBy_LoginlessLabelFollowsTheWindow(t *testing.T) {
 // labeler wired into one of them is not wired in.
 func TestUsageByFiltered_LoginlessBucketIsNamedOnTheDashboardPath(t *testing.T) {
 	s := newStore(t)
-	enrollLabelled(t, s, "acct-1", "ep_1789272199291316987", "ai-gateway-shipper")
+	enrollLabelled(t, s, "acct-1", "ep_1789272199291316987", "ci-runner")
 	seedAccount(t, s, "acct-1", "ep-laptop")
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
 		userEv("acct-1", "ep_1789272199291316987", "g1", "", "/w", 900),
@@ -263,7 +263,7 @@ func TestUsageByFiltered_LoginlessBucketIsNamedOnTheDashboardPath(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "non-login source: ai-gateway-shipper"; loginlessBucket(t, bs).Label != want {
+	if want := "non-login source: ci-runner"; loginlessBucket(t, bs).Label != want {
 		t.Errorf("rollup login-less label = %q, want %q -- the page reads THIS query",
 			loginlessBucket(t, bs).Label, want)
 	}
@@ -273,7 +273,7 @@ func TestUsageByFiltered_LoginlessBucketIsNamedOnTheDashboardPath(t *testing.T) 
 // two reporters on the hub, one inside the filter, and the row says which.
 func TestUsageByFiltered_LoginlessLabelFollowsTheDrilldown(t *testing.T) {
 	s := newStore(t)
-	enrollLabelled(t, s, "acct-1", "ep-gw", "ai-gateway-shipper")
+	enrollLabelled(t, s, "acct-1", "ep-gw", "ci-runner")
 	enrollLabelled(t, s, "acct-1", "ep-voice", "voice-shipper")
 	if _, _, err := s.InsertEvents([]model.UsageEvent{
 		userEv("acct-1", "ep-gw", "g1", "", "/w", 900),

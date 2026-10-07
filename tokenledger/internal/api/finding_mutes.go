@@ -24,7 +24,7 @@
 //     muted can say so to a person, who has this endpoint.
 //
 // So the blast radius of a mute is exactly the blast radius of a rename:
-// whoever holds the viewer token, a tailnet identity, or an SSO session. What
+// whoever holds the viewer token or a GitHub session. What
 // is new is that a write can now make the hub QUIETER, which a rename cannot
 // — hence the expiry, the ceiling, and the fact that muted findings keep
 // being rendered rather than dropped.

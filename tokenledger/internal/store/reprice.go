@@ -44,8 +44,8 @@ type RepriceResult struct {
 	//
 	// Measured against a snapshot of production (443,452 events, 2026-09-13):
 	// Changed was 24,926 of which only 38 were newly priced, NetUSD was +0.007194
-	// — matching, to six decimals, a gateway-only delta measured independently
-	// from the API — and MaxAbsUSD was 0.000589, itself one of those 38. So the
+	// — matching, to six decimals, a delta measured independently from the
+	// API — and MaxAbsUSD was 0.000589, itself one of those 38. So the
 	// other 24,888 rows moved by amounts too small to reach any total: they are
 	// events stored by an older build whose arithmetic rounded a hair differently,
 	// not money changing hands. An operator seeing only "changed 24,926" against a
@@ -130,23 +130,6 @@ func (s *Store) Reprice(p Pricer, since time.Time) (RepriceResult, error) {
 
 		for i := range batch {
 			old, now := before[i], batch[i].CostUSD
-
-			// ── THE GUARD ────────────────────────────────────────────────
-			// A supplied figure is an invoice, not a derivation: no rate table
-			// could reproduce it, and repricing must never be the thing that
-			// edits one. Today the pricing functions for these sources return
-			// the event's own CostUSD, so this holds by construction — which is
-			// exactly why it is asserted rather than assumed. If a later change
-			// makes one of them derive a number, the failure mode without this
-			// check is silent and unrecoverable: an invoice overwritten by an
-			// estimate, in the ledger whose whole job is to be the real one.
-			if model.CostIsSupplied(batch[i].Source) && !sameCost(old, now) {
-				return out, fmt.Errorf(
-					"refusing to reprice: source %q carries a supplied cost that must not be recomputed, "+
-						"but repricing event id %d (%s) moved it from %s to %s — "+
-						"a rate table has started deriving a figure that is an invoice",
-					batch[i].Source, ids[i], batch[i].MessageUUID, fmtCost(old), fmtCost(now))
-			}
 
 			details := raw[i]
 			if batch[i].Details != nil {
@@ -248,7 +231,7 @@ func readRepriceBatch(tx *sql.Tx, afterID int64, since string) ([]model.UsageEve
 			e.CostUSD = &c
 		}
 		// Preserve whether the row HAS details. A row stored without them must
-		// not acquire an empty set here: gateway and Codex pricing return
+		// not acquire an empty set here: Codex pricing returns
 		// unpriced when Details is nil, so inventing one would make reprice
 		// compute a figure ingest would not have — a different answer to the
 		// same question, from the same data.

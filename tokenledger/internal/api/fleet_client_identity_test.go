@@ -26,7 +26,7 @@ func TestFleetClientTestIdentity(t *testing.T) {
 	h.srv.SSHCA = sshca.New(k.ca)
 	now := time.Now()
 	h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", now)
-	alice := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
+	alice := k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
 	post := func(c *ssh.Certificate, path, worker string, r ClientLeaseRequest) (int, ClientLeaseResponse, string) {
 		t.Helper()
 		r.Cert, r.TS = string(ssh.MarshalAuthorizedKey(c)), time.Now().Unix()

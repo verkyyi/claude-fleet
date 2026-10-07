@@ -29,7 +29,7 @@ func sessHarness(t *testing.T) (*harness, string, string, string, string) {
 		t.Fatal(err)
 	}
 	h.srv.Vault = &credvault.Vault{Store: h.srv.Store, Sealer: sealer, Refresher: &stubRefresher{}}
-	p, err := h.srv.Store.AdoptPrincipal("wecom-verk", "verk", "Verk", time.Now())
+	p, err := h.srv.Store.AdoptPrincipal("gh:1005", "verk", "Verk", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +111,8 @@ func TestSessionCredIssueAndVerify(t *testing.T) {
 	out := sessIssue(t, h, tok5, f5, nil)
 	cred, _ := out["cred"].(string)
 	wid := assertClaims(f5, time.Now()).WorkerID
-	if !strings.HasPrefix(cred, "fcp-h1.") || out["principal_id"] != "wecom-verk" || out["worker_id"] != wid || out["machine"] != "m5" {
-		t.Fatalf("issue = %v; want an fcp-h1. pass for wecom-verk / %s on m5", out, wid)
+	if !strings.HasPrefix(cred, "fcp-h1.") || out["principal_id"] != "gh:1005" || out["worker_id"] != wid || out["machine"] != "m5" {
+		t.Fatalf("issue = %v; want an fcp-h1. pass for gh:1005 / %s on m5", out, wid)
 	}
 	exp, _ := time.Parse(time.RFC3339, out["expires_at"].(string))
 	if d := time.Until(exp); d < 23*time.Hour || d > 24*time.Hour+time.Minute {
@@ -122,10 +122,10 @@ func TestSessionCredIssueAndVerify(t *testing.T) {
 	if exp.Sub(renew) != 2*time.Hour {
 		t.Fatalf("renew_after %v is %v before exp; want 2 h", renew, exp.Sub(renew))
 	}
-	v := sessVerify(t, h, map[string]any{"cred": cred, "principal": "wecom-verk", "provider": "claude"})
-	if v["valid"] != true || v["revoked"] != false || v["principal"] != "wecom-verk" || v["worker_id"] != wid ||
+	v := sessVerify(t, h, map[string]any{"cred": cred, "principal": "gh:1005", "provider": "claude"})
+	if v["valid"] != true || v["revoked"] != false || v["principal"] != "gh:1005" || v["worker_id"] != wid ||
 		v["machine"] != "m5" || v["exp"] == nil || len(v["providers"].([]any)) != 2 {
-		t.Fatalf("verify = %v; want a valid pass for wecom-verk", v)
+		t.Fatalf("verify = %v; want a valid pass for gh:1005", v)
 	}
 	// The operator may verify too; a node's token, or none, may not.
 	if st, v := sessDo(t, h, http.MethodPost, "/v1/fleet/session-cred/verify", viewerToken, "", map[string]any{"cred": cred}); st != 200 || v["valid"] != true {
@@ -223,11 +223,11 @@ func TestSessionCredVerifyRefuses(t *testing.T) {
 	unknown.ID = "sc_nosuch"
 	cases := map[string]map[string]any{
 		"another key":            {"cred": signSessionCred(c, bytes.Repeat([]byte{1}, 32))},
-		"principal rewritten":    {"cred": reclaim(t, cred, func(c *sessionCredClaims) { c.Principal = "wecom-mallory" })},
+		"principal rewritten":    {"cred": reclaim(t, cred, func(c *sessionCredClaims) { c.Principal = "gh:1006" })},
 		"exp rewritten":          {"cred": reclaim(t, cred, func(c *sessionCredClaims) { c.Exp += 3600 })},
 		"expired":                {"cred": signSessionCred(expired, h.srv.SessionCredKey)},
 		"never issued":           {"cred": signSessionCred(unknown, h.srv.SessionCredKey)},
-		"another principal":      {"cred": cred, "principal": "wecom-mallory"},
+		"another principal":      {"cred": cred, "principal": "gh:1006"},
 		"provider not covered":   {"cred": cred, "provider": "codex"},
 		"malformed":              {"cred": "fcp-h1.e30"},
 		"the node's prefix only": {"cred": "fcp1." + parts[1] + "." + parts[2]},

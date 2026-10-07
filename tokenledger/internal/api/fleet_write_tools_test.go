@@ -147,7 +147,7 @@ func TestFleetWriteByCertificate(t *testing.T) {
 	p, _ := h.srv.Store.AdoptPrincipal("wx-alice", "alice", "Alice", time.Now())
 	h.srv.Store.AdoptAccount(p, "m5", time.Now())
 	now := time.Now()
-	good := k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
+	good := k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-time.Minute), now.Add(12*time.Hour))
 
 	signed := func(c *ssh.Certificate, ns string, ts int64, tool, signedArgs, sentArgs string) WriteRequest {
 		sum := sha256.Sum256([]byte(signedArgs))
@@ -208,7 +208,7 @@ func TestFleetWriteByCertificate(t *testing.T) {
 		}(),
 		"sessions namespace": signed(good, control.SessionsSigNamespace, now.Unix(), "worker_answer", mine, mine),
 		"stale timestamp":    signed(good, control.WriteSigNamespace, now.Add(-10*time.Minute).Unix(), "worker_answer", mine, mine),
-		"expired cert":       signed(k.cert(t, "wecom:wx-alice", []string{"alice"}, now.Add(-13*time.Hour), now.Add(-time.Hour)), control.WriteSigNamespace, now.Unix(), "worker_answer", mine, mine),
+		"expired cert":       signed(k.cert(t, "person:wx-alice", []string{"alice"}, now.Add(-13*time.Hour), now.Add(-time.Hour)), control.WriteSigNamespace, now.Unix(), "worker_answer", mine, mine),
 		"no signature":       {Cert: string(ssh.MarshalAuthorizedKey(good)), TS: now.Unix(), Tool: "worker_answer", ArgsJSON: mine},
 	} {
 		if code, got := post(req, ""); code != 401 {

@@ -47,12 +47,10 @@ const caveat = " The account-wide utilization is exact and already covers every 
 
 // costCaveat is the cost half, split out so tools that return no cost can take
 // the utilization half alone.
-const costCaveat = "Cost is reported PER SOURCE and must never be summed across sources: " +
-	"claude and codex figures are NOTIONAL (what the tokens would have cost at API rates — " +
-	"nobody is billed them, the plan is), while gateway figures are BILLED (an actual " +
-	"per-call charge). Each entry carries its own kind. Real spend is subscription " +
-	"invoices plus gateway charges; the notional figure is not part of it and adding it in " +
-	"invents spending that never happened."
+const costCaveat = "Cost is reported PER SOURCE: claude and codex figures are NOTIONAL (what the " +
+	"tokens would have cost at API rates — nobody is billed them, the plan is). Each entry " +
+	"carries its own kind. Real spend is the subscription invoices; the notional figure is " +
+	"not part of it and adding it in invents spending that never happened."
 
 // Handler returns the /mcp handler.
 func Handler(srv *api.Server) http.Handler {
@@ -215,20 +213,6 @@ var limitProp = map[string]any{
 	"description": "Maximum rows to return (default 50).",
 }
 
-var repoProp = map[string]any{
-	"type":        "string",
-	"description": `Repository as "owner/name", exactly as GitHub spells it. Required: a backlog blended across repositories would be scaled by one repo's percentiles and read as if it applied to all of them. list_repos names the ones this hub holds.`,
-}
-
-// repoCaveat is the repo-progress counterpart of caveat. It says the two
-// things an agent reading these rows can get wrong: that the hub collected
-// them (it did not — a shipper pushed them, and they are only as fresh as that
-// shipper), and that an age can be judged without the repo's own distribution.
-const repoCaveat = " These rows are SHIPPED to the hub by an external collector, not gathered by it: " +
-	"observed_at is when that shipper read GitHub, and a stalled shipper shows a stale backlog " +
-	"rather than an empty one. Age is only ever meaningful against the same repo's close-time " +
-	"percentiles, never against a fixed number of days."
-
 // undeclaredChip is the one sentence every chip says about the third state.
 //
 // Omitting a chip means NO CONSTRAINT on that dimension, so an empty string
@@ -245,15 +229,13 @@ var chipProps = map[string]any{
 	"source": map[string]any{
 		"type": "string", "enum": model.Sources,
 		"description": "Limit to one collector source. claude and codex are billed by " +
-			"subscription and their cost is notional; gateway is billed per call and its cost " +
-			"is a real charge. Filtering to one source is what makes a single cost figure " +
-			"meaningful — unfiltered, cost comes back split.",
+			"subscription and their cost is notional, each at its own published rates. " +
+			"Unfiltered, cost comes back split by source.",
 	},
 	"endpoint": map[string]any{"type": "string", "description": "Limit to one machine, by endpoint id." + undeclaredChip},
 	"user":     map[string]any{"type": "string", "description": "Limit to one OS login." + undeclaredChip},
 	"project":  map[string]any{"type": "string", "description": "Limit to one working directory (cwd)." + undeclaredChip},
 	"model":    map[string]any{"type": "string", "description": "Limit to one model id." + undeclaredChip},
-	"provider": map[string]any{"type": "string", "description": "Limit to one upstream provider. With a gateway that fails over between vendors this is NOT derivable from the model id: one model id is reachable through several upstreams at several contracted prices. An empty value in a result means the reporting side declared none." + undeclaredChip},
 	"branch":   map[string]any{"type": "string", "description": "Limit to one git branch." + undeclaredChip},
 	"team":     map[string]any{"type": "string", "description": "Limit to one operator-assigned team." + undeclaredChip},
 	"session":  map[string]any{"type": "string", "description": "Limit to one Claude Code session id." + undeclaredChip},
@@ -298,31 +280,6 @@ func toolSpecs() []toolSpec {
 				"points": map[string]any{
 					"type":        "integer",
 					"description": "Maximum points per series (default 400).",
-				},
-			}),
-		},
-		{
-			Name:  "get_fx",
-			Title: "Exchange rate, with its provenance",
-			Description: "One currency conversion rate, with where it came from, when the feed last " +
-				"moved and whether it is stale. Needed because some figures on this hub are billed in a " +
-				"currency other than the one a question is asked in — a plan priced in CNY beside " +
-				"gateway charges in USD — and an agent that converts at a rate it invented, or compares " +
-				"two currencies without converting at all, produces a figure nobody can check. " +
-				"available: false means this hub cannot convert that pair; report each figure in its " +
-				"own currency rather than substituting a rate. fallback: true means the rate is pinned " +
-				"in the binary because the feed has not answered — say so when quoting it. CONVERSION " +
-				"IS FOR DISPLAY ONLY: the ledger keeps every figure in the currency it was billed in, " +
-				"no total is computed through this rate, and a converted amount is an approximation of " +
-				"an invoice, never the invoice.",
-			InputSchema: obj(map[string]any{
-				"base": map[string]any{
-					"type":        "string",
-					"description": `Currency to convert FROM, as an ISO code. Defaults to "USD".`,
-				},
-				"target": map[string]any{
-					"type":        "string",
-					"description": "Currency to convert TO, as an ISO code. Defaults to base, which is the identity rate.",
 				},
 			}),
 		},
@@ -384,24 +341,8 @@ func toolSpecs() []toolSpec {
 		{
 			Name:  "usage_by_source",
 			Title: "Token usage by source",
-			Description: "Token and cost totals grouped by collector source — Claude Code, Codex or a " +
-				"pay-per-call gateway. This is the one breakdown whose rows are each a single kind of " +
-				"money, so it is the right tool for \"what did each source cost\"; the rows are still " +
-				"not addable to each other." + caveat,
-			InputSchema: obj(withChips(map[string]any{
-				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
-			})),
-		},
-		{
-			Name:  "usage_by_provider",
-			Title: "Spend by upstream provider",
-			Description: "Token and cost totals grouped by the upstream that actually served each " +
-				"call. Use it to answer \"which contract did this money go to\" — a question the model " +
-				"breakdown cannot answer, because failover sends one model id to several upstreams at " +
-				"several prices. Gateway rows are BILLED (a real per-call charge); rows from " +
-				"subscription sources are NOTIONAL and must never be added to them. An empty provider " +
-				"means the reporting side declared none — Claude transcripts carry no upstream — and " +
-				"is never a vendor called \"unknown\"." + caveat,
+			Description: "Token and cost totals grouped by collector source — Claude Code or Codex. " +
+				"The right tool for \"what did each source cost\"." + caveat,
 			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
 			})),
@@ -468,9 +409,7 @@ func toolSpecs() []toolSpec {
 			Name:  "usage_by_model",
 			Title: "Spend by model",
 			Description: "Token and cost totals grouped by model id — which model the period's spend " +
-				"went to. Answers \"is the expensive model earning its keep\"; it cannot answer which " +
-				"contract the money went to, because failover reaches one model id through several " +
-				"upstreams at several prices — that is usage_by_provider." + caveat,
+				"went to. Answers \"is the expensive model earning its keep\"." + caveat,
 			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp, "limit": limitProp,
 			})),
@@ -544,8 +483,8 @@ func toolSpecs() []toolSpec {
 				"subagent share, the split by reasoning effort and by entrypoint, " +
 				"and the same figures for the previous period of equal length. " +
 				"Also the two figures that ARE real money — subscription_spend (what the plans cost over " +
-				"the period, billed whether or not a token was spent) and real_spend (subscriptions plus " +
-				"metered gateway charges). Quote real_spend when asked what something cost; quote " +
+				"the period, billed whether or not a token was spent) and real_spend (the subscriptions, " +
+				"with what could not be priced). Quote real_spend when asked what something cost; quote " +
 				"cost_notional only as \"what this would have cost at API rates\"." + caveat,
 			InputSchema: obj(withChips(map[string]any{
 				"account": accountProp, "since": sinceProp, "until": untilProp,
@@ -609,93 +548,6 @@ func toolSpecs() []toolSpec {
 					"description": `"review" (default) evaluates the period rules; "now" evaluates live alerts.`,
 				},
 			})),
-		},
-
-		// Repo progress. Agents read backlogs, humans read dashboards — one
-		// source, two renderers. Without these tools the agent side grows a
-		// second, drifting copy of the same rows.
-		{
-			Name:  "list_repos",
-			Title: "Repositories with progress data",
-			Description: "Repositories a shipper has pushed progress for, most recently observed first, " +
-				"with the open-issue count and the span of daily history held. Repo rows carry no " +
-				"account: a repository is not owned by a subscription, and the join back to spend " +
-				"goes through the ISSUE NUMBER." + repoCaveat,
-			InputSchema: obj(map[string]any{}),
-		},
-		{
-			Name:  "repo_progress",
-			Title: "Issue flow and the repo's own close-time scale",
-			Description: "Daily flow for one repository — opened, closed, open-at-end, merged PRs — plus " +
-				"the close-time percentiles measured on that repo. ALWAYS read the scale before " +
-				"judging any age: p50/p90/p95 differ by orders of magnitude between repositories, " +
-				"and a fixed threshold like \"stale after 30 days\" is meaningless where the median " +
-				"issue closes in three hours. A null scale means nobody has computed percentiles; " +
-				"say so rather than substituting one." + repoCaveat,
-			InputSchema: obj(map[string]any{
-				"repo":  repoProp,
-				"since": sinceProp,
-				"until": untilProp,
-			}, "repo"),
-		},
-		{
-			Name:  "list_repo_issues",
-			Title: "One repository's backlog, oldest first",
-			Description: "Per-issue rows for one repository, oldest first, each with age_seconds and the " +
-				"scale it should be read against. stale: true keeps only issues older than that " +
-				"repo's OWN p95 — there is deliberately no way to pass a day count. shipped: true " +
-				"keeps only issues whose work already landed in a merged commit while the issue " +
-				"stayed open; those are closes, not investigations. Per-issue rows are BOUNDED by " +
-				"retention (open issues plus recently-closed ones); the daily aggregates behind " +
-				"repo_progress are the complete long-term record." + repoCaveat,
-			InputSchema: obj(map[string]any{
-				"repo": repoProp,
-				"state": map[string]any{
-					"type": "string", "enum": []string{"open", "closed"},
-					"description": "Limit to open or closed issues. Omitted means both.",
-				},
-				"stale": map[string]any{
-					"type":        "boolean",
-					"description": "Keep only issues older than this repo's own p95 close time. Errors when no percentiles have been shipped, rather than picking a threshold.",
-				},
-				"shipped": map[string]any{
-					"type":        "boolean",
-					"description": "Keep only issues whose work already shipped in a merged commit.",
-				},
-				"limit": limitProp,
-			}, "repo"),
-		},
-		{
-			Name:  "repo_issue_cost",
-			Title: "What the money landed on, per issue",
-			Description: "Spend for one repository on the ISSUE axis: the window's tokens and cost per " +
-				"issue, each issue's LIFETIME cost (every hour ever attributed to it, unbounded " +
-				"by the window), and the issue's own progress beside it. " +
-				"ALWAYS report the unattributed bucket: an issue number is read from the branch " +
-				"name by one anchored rule (`issue-<N>`), so work whose branch never said what it " +
-				"was for is NOT attributed -- measured at 63.5% of events on a real corpus. " +
-				"attributed + unattributed = total, and `unattributed.branches` says which branches " +
-				"it was. An answer that quotes only the attributed share is wrong by a factor of " +
-				"three, in the flattering direction. " +
-				"Cost is split by source and must never be added across them. `stale` is null when " +
-				"the repo has shipped no close-time percentiles -- say the scale is unknown, do not " +
-				"substitute one. " +
-				"`binding` says how the numbers were bound to the repo, and it changes what you may " +
-				"claim. \"declared\": the endpoints reported which repository they run in, the figures " +
-				"are this repo's, and `declaration` says what the scope left out -- ALWAYS report " +
-				"`declaration.undeclared` when it is non-zero, because that spend is invisible to this " +
-				"repo's answer and a small figure beside a large undeclared bucket means \"not yet " +
-				"measured\", never \"cheap\". \"sole_repo\": nothing declares yet, so these are the whole " +
-				"hub's numbers, answerable only because the hub holds this repository and no other. " +
-				"Errors while nothing declares AND the hub holds other repositories: a spend row would " +
-				"name an issue NUMBER without a repository, and every repo starts at #1." +
-				repoCaveat,
-			InputSchema: obj(map[string]any{
-				"repo":  repoProp,
-				"since": sinceProp,
-				"until": untilProp,
-				"limit": limitProp,
-			}, "repo"),
 		},
 	}
 }
@@ -790,10 +642,7 @@ func (s *mcpServer) runUser(login, name string, args map[string]any) (any, error
 
 func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 	// Validated against the sources this build knows, not a hand-written
-	// pair. The pair left the gateway unaddressable over MCP -- an agent
-	// could not ask for the one scope in which a BILLED cost figure stands
-	// alone, which is the scope it most needs when asked what something
-	// actually cost (issue #4). api.querySource keeps the same rule.
+	// list (issue #4). api.querySource keeps the same rule.
 	if source := str(args, "source"); source != "" && !model.KnownSource(source) {
 		return nil, fmt.Errorf("source must be one of: %s", strings.Join(model.Sources, ", "))
 	}
@@ -898,8 +747,6 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		return s.usage(args, store.ByEndpoint)
 	case "usage_by_source":
 		return s.usage(args, store.BySource)
-	case "usage_by_provider":
-		return s.usage(args, store.ByProvider)
 	case "usage_by_user":
 		return s.usage(args, store.ByUser)
 	case "usage_by_project":
@@ -928,9 +775,6 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"since": start, "until": end, "user": view}, nil
-
-	case "get_fx":
-		return s.api.FXView(str(args, "base"), str(args, "target")), nil
 
 	case "get_limits_history":
 		f, err := s.filter(args)
@@ -1030,9 +874,8 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 			"summary": sum, "prev": psum,
 			"effort": nonNil(effort), "entrypoint": nonNil(entry),
 			"cost_notional":      sum.Cost.Notional(),
-			"cost_billed":        sum.Cost.Billed(),
 			"subscription_spend": api.PlansForSource(plans, f.Source),
-			"real_spend":         api.RealSpendOver(sum.Cost, api.PlansForSource(plans, f.Source)),
+			"real_spend":         api.RealSpendOver(api.PlansForSource(plans, f.Source)),
 			"pricing":            pricing.Provenance(f.Source),
 			"cost_note":          pricing.Note(f.Source),
 			"disclaimer":         strings.TrimSpace(caveat),
@@ -1123,125 +966,9 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		}
 		return out, nil
 
-	case "list_repos":
-		rows, err := s.api.Store.Repos()
-		if err != nil {
-			return nil, err
-		}
-		if rows == nil {
-			rows = []store.Repo{}
-		}
-		return map[string]any{"repos": rows, "disclaimer": strings.TrimSpace(repoCaveat)}, nil
-
-	case "repo_progress":
-		repo := str(args, "repo")
-		if err := model.ValidRepoName(repo); err != nil {
-			return nil, err
-		}
-		start, end := repoRange(args)
-		days, err := s.api.Store.RepoDays(repo, start, end)
-		if err != nil {
-			return nil, err
-		}
-		if days == nil {
-			days = []model.RepoDay{}
-		}
-		scale, err := s.api.Store.RepoCloseScale(repo)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{
-			"repo":  repo,
-			"since": start.UTC().Format(model.RepoDayLayout),
-			"until": end.UTC().Format(model.RepoDayLayout),
-			"days":  days,
-			// Null on purpose when nobody has computed percentiles. An agent
-			// must report the scale as unknown, not invent one.
-			"scale":      scale,
-			"disclaimer": strings.TrimSpace(repoCaveat),
-		}, nil
-
-	case "list_repo_issues":
-		repo := str(args, "repo")
-		if err := model.ValidRepoName(repo); err != nil {
-			return nil, err
-		}
-		state := str(args, "state")
-		if state != "" && state != model.RepoStateOpen && state != model.RepoStateClosed {
-			return nil, fmt.Errorf("state must be %q or %q", model.RepoStateOpen, model.RepoStateClosed)
-		}
-		limit := intArg(args, "limit")
-		if limit <= 0 {
-			limit = 50
-		}
-		scale, err := s.api.Store.RepoCloseScale(repo)
-		if err != nil {
-			return nil, err
-		}
-		f := store.RepoIssueFilter{
-			Repo: repo, State: state, Limit: limit,
-			ShippedOnly: boolArg(args, "shipped"), Now: time.Now(),
-		}
-		stale := boolArg(args, "stale")
-		if stale {
-			// Refusing beats answering. An agent handed a stalled list built
-			// from a threshold nobody measured cannot tell it from a measured
-			// one, and will report it as fact.
-			if scale == nil || scale.P95Seconds == nil {
-				return nil, fmt.Errorf("no close-time percentiles have been shipped for %s: "+
-					"staleness has no scale to be measured against", repo)
-			}
-			f.MinAgeSeconds = *scale.P95Seconds
-		}
-		rows, err := s.api.Store.RepoIssues(f)
-		if err != nil {
-			return nil, err
-		}
-		if rows == nil {
-			rows = []store.RepoIssueRow{}
-		}
-		return map[string]any{
-			"repo": repo, "stale": stale, "issues": rows, "scale": scale,
-			"disclaimer": strings.TrimSpace(repoCaveat),
-		}, nil
-
-	case "repo_issue_cost":
-		repo := str(args, "repo")
-		if err := model.ValidRepoName(repo); err != nil {
-			return nil, err
-		}
-		start, end := repoRange(args)
-		// The same body /v1/repo/cost serves, including the §5 refusal. An
-		// agent that could get a blended answer where the browser gets a 409
-		// would report the blend as measured.
-		out, err := s.api.IssueCost(repo, start, end, intArg(args, "limit"))
-		if err != nil {
-			return nil, err
-		}
-		out["disclaimer"] = strings.TrimSpace(repoCaveat)
-		return out, nil
-
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
-}
-
-// repoRange mirrors timeRange but in whole days: repo flow is stored per UTC
-// day, and an hour-resolution window would silently clip the first and last.
-func repoRange(args map[string]any) (time.Time, time.Time) {
-	now := time.Now().UTC()
-	end := now.AddDate(0, 0, 1) // exclusive, so today's own row is included
-	if t, ok := parseWhen(str(args, "until"), now); ok {
-		end = t
-	}
-	start := end.AddDate(0, 0, -90)
-	if t, ok := parseWhen(str(args, "since"), now); ok {
-		start = t
-	}
-	if !start.Before(end) {
-		start = end.AddDate(0, 0, -90)
-	}
-	return start, end
 }
 
 // nonNil renders an empty breakdown as [] rather than null. A model reading
@@ -1277,7 +1004,7 @@ func (s *mcpServer) filter(args map[string]any) (store.Filter, error) {
 	f := store.Filter{
 		Account: account, Start: start, End: end,
 		Endpoint: str(args, "endpoint"), OSUser: str(args, "user"), CWD: str(args, "project"),
-		Model: str(args, "model"), Provider: str(args, "provider"),
+		Model:  str(args, "model"),
 		Branch: str(args, "branch"), Team: str(args, "team"), Session: str(args, "session"),
 		Source: str(args, "source"),
 	}
@@ -1293,13 +1020,6 @@ func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
 	buckets, err := s.api.Store.UsageByFiltered(f, d, intArg(args, "limit"))
 	if err != nil {
 		return nil, err
-	}
-	// Same method the dashboard's /v1/usage calls, deliberately: an operator who
-	// names an upstream in --pricing named it once, and an agent reading this
-	// breakdown must not be told a different name -- or, as it was until now, no
-	// name at all while the dashboard shows one.
-	if d == store.ByProvider {
-		s.api.LabelProviders(buckets)
 	}
 	out := map[string]any{
 		"account_uuid": account, "by": string(d),
