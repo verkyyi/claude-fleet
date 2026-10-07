@@ -2385,6 +2385,63 @@ PY2
   WHAT="入口部署丢了配置（/install 404、/version 无 stable、login/start 404）：健康检查判不健康 → hub-deploy 回退"
 }
 
+# A machine config stranded as fleet `fleet` (issue #2059): before #1887 the layout
+# migrator moved fleet.conf — the machine's ONE file, which carried the fleet's
+# FLEET_ISSUE_BRIDGE=1 since #1623 folded the fleet conf into it — to
+# fleets/fleet/conf, and the next migrate wrote an empty fleet.conf. The phantom
+# fleet `fleet` (its trailing FLEET_REPO moved to repos/ by #1937) went on bridging
+# o/a; the real fleet `two` (o/a + o/b) bridged nothing, and `--to-worker` to an
+# o/b worker said 「将转达」 for an hour. The sandbox is that estate, with a real
+# isolated tmux server for `two` and a gh that logs every listing. Asserts:
+# before the sync the bridge does not cover o/b (so fleet-comment falls back to the
+# peer channel); one sync pass (`fleet-conf.sh migrate`) carries the stranded keys
+# back and retires the phantom; then the next ticks list o/b's comments — the
+# examined line on the second (the first seeds the watermark).
+drill_multirepo_bridge_second_repo() {
+  CAP=15; local d="$WORK/mb" t0 out r
+  mkdir -p "$d/conf/fleets/fleet/repos" "$d/conf/fleets/two/repos" "$d/home" "$d/tt" "$d/fp" "$d/tmp" "$d/main"
+  { printf "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
+    printf '# Migrated by fleet-conf.sh 2026-10-05 03:14:55 from: ~/.claude/fleet/fleet.conf fleets/two/conf\n'
+    printf '\n# ---- [common] ----\nFLEET_ROLE="node"\nexport FLEET_HUB_URL="https://hub.example"\nFLEET_UI_LANG="zh"\n'
+    printf '\n# ---- [client] — only the shell ----\nif [ "${FLEET_SHELL:-0}" = 1 ]; then\n:\nfi  # ---- [client] end ----\n'
+    printf '\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\n# ---- was fleets/two/conf (fleet two) ----\n'
+    printf 'FLEET_ISSUE_BRIDGE=1\nFLEET_MAX_SESSIONS=36\nfi  # ---- [node] end ----\n'
+  } > "$d/conf/fleets/fleet/conf"
+  printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$d/main" > "$d/conf/fleets/fleet/repos/o-a.conf"
+  printf 'o-a\n' > "$d/conf/fleets/fleet/repos/.order"
+  { printf "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
+    printf '# Migrated by fleet-conf.sh 2026-10-06 12:09:29 from: nothing — a new file\n'
+    printf '\n# ---- [common] ----\nFLEET_HOST=1\nexport FLEET_HUB_URL="https://hub.example"\n'
+    printf '\n# ---- [client] — only the shell ----\nif [ "${FLEET_SHELL:-0}" = 1 ]; then\n:\nfi  # ---- [client] end ----\n'
+    printf '\n# ---- [node] ----\nif [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nfi  # ---- [node] end ----\n'
+  } > "$d/conf/fleet.conf"
+  printf "# claude-fleet: fleet 'two' — written by fleet-up.sh\n" > "$d/conf/fleets/two/conf"
+  for r in a b; do
+    printf 'FLEET_REPO="o/%s"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$r" "$d/main" > "$d/conf/fleets/two/repos/o-$r.conf"
+  done
+  printf 'o-a\no-b\n' > "$d/conf/fleets/two/repos/.order"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/gh.log"\nexit 0\n' "$d" > "$d/fp/gh"; chmod +x "$d/fp/gh"
+  mb() { env -u TMUX -u TMUX_PANE -u FLEET_SKIP_GLOBAL_CONF HOME="$d/home" FLEET_CONF_DIR="$d/conf" TMUX_TMPDIR="$d/tt" TMPDIR="$d/tmp" \
+           PATH="$d/fp:$PATH" FLEET_ISSUE_BRIDGE_STATE_DIR="$d/state" FLEET_DISPATCH_LEASE_DIR="$d/leases" "$@"; }
+  covers() { mb bash -c '. "$1/fleet-lib.sh"; fleet_bridge_covers "$2"' _ "$BIN" "$1"; }
+  mb "$REAL_TMUX" -f /dev/null -L two new-session -d -s two -n home 'exec sleep 60' \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  covers o/b && { mb "$REAL_TMUX" -L two kill-server; WHY="before the sync o/b already reads as bridged — the sandbox is not the broken estate"; return 1; }
+  t0=$(now)
+  out=$(mb bash "$BIN/fleet-conf.sh" migrate 2>&1) || { mb "$REAL_TMUX" -L two kill-server; WHY="the sync pass failed: $out"; return 1; }
+  [ -e "$d/conf/fleets/fleet" ] && { mb "$REAL_TMUX" -L two kill-server; WHY="the phantom fleets/fleet/ is still there after the sync: $out"; return 1; }
+  grep -q '^FLEET_ISSUE_BRIDGE=1$' "$d/conf/fleet.conf" || { mb "$REAL_TMUX" -L two kill-server; WHY="fleet.conf did not get FLEET_ISSUE_BRIDGE=1 back: $out"; return 1; }
+  covers o/b || { mb "$REAL_TMUX" -L two kill-server; WHY="after the sync the bridge still does not cover o/b"; return 1; }
+  mb bash "$BIN/fleet-issue-bridge.sh" --poll > "$d/poll1.err" 2>&1
+  mb bash "$BIN/fleet-issue-bridge.sh" --poll > "$d/poll2.err" 2>&1
+  SECS=$(since "$t0")
+  mb "$REAL_TMUX" -L two kill-server 2>/dev/null
+  grep -q 'repos/o/b/issues/comments' "$d/gh.log" 2>/dev/null \
+    || { WHY="the second tick never listed o/b's comments (gh: $(tr '\n' ' ' < "$d/gh.log" 2>/dev/null); log: $(tail -2 "$d/poll2.err" | tr '\n' ' '))"; return 1; }
+  grep -q 'repos/o/a/issues/comments' "$d/gh.log" || { WHY="o/a stopped being listed"; return 1; }
+  WHAT="一次同步把被困的机器配置并回 fleet.conf、退役幽灵 fleet；下一拍起两个仓库都被 bridge 轮询"
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"
