@@ -3,7 +3,7 @@
 # file limit and say so in their logs (issue #1080).
 #
 # launchd starts a job at the machine's default file limit, 256 on macOS. The
-# hub, the webhook supervisor and the spinner are long-lived and hold sockets,
+# hub, the webhook supervisor, the spinner and the credential proxy (#1970) are long-lived and hold sockets,
 # pipes and files for every live session; running out shows up only as events
 # that silently stop arriving. So each one carries NumberOfFiles 65536 (soft AND
 # hard) in its launchd plist, LimitNOFILE=65536 in its systemd unit, and prints
@@ -21,7 +21,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 ok()   { CHECKS=$((CHECKS + 1)); }
 WANT=65536
 
-for u in webhook spinner; do
+for u in webhook spinner cred-proxy; do
   f="$ROOT/launchd/com.claude-fleet.$u.plist.tmpl"
   [ -f "$f" ] || fail "$f missing"
   for k in SoftResourceLimits HardResourceLimits; do
@@ -51,6 +51,7 @@ PY
 grep -q 'nofile=.*ulimit -n' "$ROOT/bin/tmux-spinner.sh"  || fail "tmux-spinner.sh: no nofile= start line"; ok
 grep -q 'log "nofile=\$(ulimit -n' "$ROOT/bin/fleet-webhook.sh" || fail "fleet-webhook.sh: no nofile= start line"; ok
 grep -q '"nofile=".*RLIMIT_NOFILE' "$ROOT/bin/fleet_hub.py" || fail "fleet_hub.py: no nofile= start line"; ok
+grep -q 'nofile=%d.*nofile)' "$ROOT/bin/fleet-cred-proxy.py" || fail "fleet-cred-proxy.py: no nofile= start line"; ok
 
 # The spinner's line really prints, and reports the limit it was started with.
 line=$(cd "$ROOT/bin" && ( ulimit -n 1000 2>/dev/null; sh -c 'BIN=.; eval "$(sed -n "/nofile=/p" tmux-spinner.sh)"' 2>&1 >/dev/null ))

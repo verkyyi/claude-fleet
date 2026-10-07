@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# fleet-cred-proxy.sh — this login's credential proxy, started and kept (issue #1970,
+# EPIC #1967 C3). The proxy itself is bin/fleet-cred-proxy.py; this reads the
+# machine's config and decides whether it runs at all.
+#
+#   fleet-cred-proxy.sh run       the daemon's entry (com.claude-fleet.cred-proxy,
+#                                 KeepAlive / claude-fleet-cred-proxy.service).
+#                                 FLEET_CRED_PROXY!=1 → no proxy process: the
+#                                 launcher only re-reads the config every
+#                                 FLEET_CRED_PROXY_IDLE_SECS (60) and starts one
+#                                 when it turns on; turned off → the proxy stops.
+#   fleet-cred-proxy.sh ensure    start it detached when it is on and not running
+#                                 (a computer with no daemon — a client-only one);
+#                                 prints the port. Exit 3 = switched off.
+#   fleet-cred-proxy.sh port      the port sessions use (exit 1 = not running)
+#   fleet-cred-proxy.sh route|mint|rebind|revoke|attach|status …
+#                                 the control socket — see fleet-cred-proxy.py
+#
+# Config (fleet.conf [common], or the environment): FLEET_CRED_PROXY (0 = today's
+# wiring byte for byte, the default), FLEET_CRED_PROXY_PORT, FLEET_CRED_RELAY_URL,
+# FLEET_CRED_RELAY_TOKEN (secrets.env — never fleet.conf), FLEET_CRED_CENTRAL_URL
+# (default: the hub). State: $FLEET_CONF_DIR/cred-proxy/ (port, ctl.sock 0600,
+# key, bind.json, revoked, trust.json). Log: logs/cred-proxy.log (redacted).
+set -uo pipefail
+
+BIN="$(cd "$(dirname "$0")" && pwd)"
+PY="$BIN/fleet-cred-proxy.py"
+CONF="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
+STATE="$CONF/cred-proxy"
+IDLE="${FLEET_CRED_PROXY_IDLE_SECS:-60}"
+
+load_conf() { # the machine's one file (#1623) + the install's; the env wins over neither — same order as every daemon
+  local f
+  set -a
+  for f in "$BIN/../fleet.conf" "$CONF/fleet.settings" "$CONF/fleet.conf"; do
+    # shellcheck source=/dev/null
+    [ -f "$f" ] && . "$f" >/dev/null 2>&1
+  done
+  set +a
+}
+
+on() { [ "${FLEET_CRED_PROXY:-0}" = 1 ]; }
+
+switch_now() { # → 1 / 0, read fresh in a subshell (the conf may have changed under us)
+  ( unset FLEET_CRED_PROXY; [ -n "${_FCP_ENV_SWITCH:-}" ] && FLEET_CRED_PROXY="$_FCP_ENV_SWITCH"; load_conf; printf '%s' "${FLEET_CRED_PROXY:-0}" )
+}
+
+live_pid() { # the serving proxy's pid, if any
+  local p
+  p=$(cat "$STATE/pid" 2>/dev/null) || return 1
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  kill -0 "$p" 2>/dev/null && printf '%s' "$p"
+}
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift
+_FCP_ENV_SWITCH="${FLEET_CRED_PROXY:-}"   # an explicit environment value outranks the conf
+load_conf
+[ -n "$_FCP_ENV_SWITCH" ] && FLEET_CRED_PROXY="$_FCP_ENV_SWITCH"
+export FLEET_CONF_DIR="$CONF"
+
+case "$cmd" in
+  run)
+    child=''
+    stop_child() { [ -n "$child" ] && kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; child=''; }
+    trap 'stop_child; exit 0' TERM INT
+    while :; do
+      if [ "$(switch_now)" = 1 ]; then
+        if [ -z "$child" ] || ! kill -0 "$child" 2>/dev/null; then
+          [ -n "$child" ] && { wait "$child" 2>/dev/null; sleep 2; }   # crashed: a short breath, then again
+          python3 -I "$PY" serve --parent-watch "$@" &
+          child=$!
+        fi
+      else
+        stop_child
+      fi
+      sleep "$IDLE" &
+      wait $! 2>/dev/null
+    done
+    ;;
+  ensure)
+    on || { echo "fleet-cred-proxy: off (FLEET_CRED_PROXY=${FLEET_CRED_PROXY:-0})" >&2; exit 3; }
+    if ! live_pid >/dev/null; then
+      mkdir -p "$STATE" && chmod 700 "$STATE"
+      nohup python3 -I "$PY" serve "$@" </dev/null >/dev/null 2>&1 &
+      i=0
+      while [ "$i" -lt 50 ] && ! { live_pid >/dev/null && [ -S "$STATE/ctl.sock" ]; }; do sleep 0.1; i=$((i + 1)); done
+      live_pid >/dev/null || { echo "fleet-cred-proxy: did not start (see logs/cred-proxy.log)" >&2; exit 1; }
+    fi
+    cat "$STATE/port"
+    ;;
+  port)
+    live_pid >/dev/null || { echo "fleet-cred-proxy: not running" >&2; exit 1; }
+    cat "$STATE/port"
+    ;;
+  route|mint|rebind|revoke|attach|status)
+    exec python3 -I "$PY" --state "$STATE" "$cmd" "$@"
+    ;;
+  -h|--help|'')
+    sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+    [ -n "$cmd" ]; exit $?
+    ;;
+  *) echo "fleet-cred-proxy: unknown command $cmd (see --help)" >&2; exit 2 ;;
+esac
