@@ -98,6 +98,7 @@ func TestPersonBudgetCentral(t *testing.T) {
 	if st != http.StatusForbidden || !strings.Contains(body, PersonBudgetExceeded) || !strings.Contains(body, "已达个人额度") {
 		t.Fatalf("over budget → %d %s; want 403 person_budget_exceeded", st, body)
 	}
+	t.Logf("over budget, the session sees: %d %s", st, body)
 	if st, body := r.call(t, credvault.Codex, verk); st != http.StatusForbidden || !strings.Contains(body, `"code":"`+PersonBudgetExceeded+`"`) {
 		t.Fatalf("over budget (codex) → %d %s", st, body)
 	}
