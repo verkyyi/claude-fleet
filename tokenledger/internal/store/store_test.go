@@ -417,3 +417,77 @@ func TestAccount_LabelPrecedence(t *testing.T) {
 		t.Error("a login-identified account must not report as inferred")
 	}
 }
+
+// TestPruneObservations (claude-fleet#1818): limit_snapshots and
+// account_usage_observations are pruned on the retention cut, except each
+// group's latest row — the one every non-window read path asks for.
+func TestPruneObservations(t *testing.T) {
+	s := newStore(t)
+	now := time.Now().UTC()
+	old, older, recent := now.AddDate(0, 0, -100), now.AddDate(0, 0, -120), now.Add(-time.Hour)
+	reset := now.AddDate(0, 0, -95)
+	snap := func(acct, ep string, at time.Time, withReset bool) {
+		t.Helper()
+		sn := &model.LimitsSnapshot{AccountUUID: acct, EndpointID: ep, ObservedAt: at}
+		if withReset {
+			sn.SevenDay.ResetsAt = &reset
+		}
+		if err := s.InsertLimits(sn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap("acct-a", "ep-1", older, false) // pruned
+	snap("acct-a", "ep-1", old, false)   // pruned
+	snap("acct-a", "ep-1", recent, false)
+	snap("acct-a", "ep-2", older, false) // pruned
+	snap("acct-a", "ep-2", old, false)   // kept: latest of (acct-a, ep-2)
+	snap("acct-b", "ep-1", older, true)  // kept: latest of acct-b with a weekly reset
+	snap("acct-b", "ep-1", recent, false)
+
+	use := func(acct, src string, at time.Time) {
+		t.Helper()
+		if err := s.InsertAccountUsage(model.AccountUsage{AccountUUID: acct, Source: src, EndpointID: "ep-1", ObservedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	use("acct-a", "claude", older) // pruned
+	use("acct-a", "claude", recent)
+	use("acct-a", "codex", older) // pruned
+	use("acct-a", "codex", old)   // kept: latest of (acct-a, codex)
+
+	ls, obs, err := s.PruneObservations(now.AddDate(0, 0, -60))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ls != 3 || obs != 2 {
+		t.Fatalf("pruned %d snapshots, %d observations; want 3, 2", ls, obs)
+	}
+	count := func(q string) int {
+		t.Helper()
+		var n int
+		if err := s.DB().QueryRow(q).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := count(`SELECT COUNT(*) FROM limit_snapshots`); n != 4 {
+		t.Errorf("%d limit snapshots left, want 4", n)
+	}
+	if n := count(`SELECT COUNT(*) FROM account_usage_observations`); n != 2 {
+		t.Errorf("%d account usage observations left, want 2", n)
+	}
+	if l, err := s.LatestLimitsFrom("acct-a", "ep-2"); err != nil || l == nil {
+		t.Errorf("acct-a/ep-2 lost its latest reading: %v %v", l, err)
+	}
+	if u, err := s.AccountUsage("acct-a", "codex"); err != nil || len(u) != 1 {
+		t.Errorf("acct-a/codex lost its latest observation: %v %v", u, err)
+	}
+	if count(`SELECT COUNT(*) FROM limit_snapshots WHERE account_uuid='acct-b' AND seven_day_resets_at IS NOT NULL`) != 1 {
+		t.Errorf("acct-b's last weekly reset reading was pruned")
+	}
+
+	// A second pass on the same cut finds nothing: the survivors are latest rows.
+	if ls, obs, err := s.PruneObservations(now.AddDate(0, 0, -60)); err != nil || ls+obs != 0 {
+		t.Errorf("second pass pruned %d+%d (err %v), want 0", ls, obs, err)
+	}
+}
