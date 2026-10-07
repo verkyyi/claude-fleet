@@ -243,6 +243,10 @@ pre.out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/
 .big-ic.ok { background: var(--ok-soft); color: var(--ok); }
 .big-ic.bad { background: var(--bad-soft); color: var(--bad); }
 .subcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; }
+.unmanaged { margin-top: 16px; }
+.unmanaged > summary { cursor: pointer; list-style: revert; }
+.unmanaged[open] > summary { margin-bottom: 8px; }
+.unmanaged .sub.panel { opacity: .8; }
 .sub { padding: 18px; display: grid; gap: 16px; align-content: start; }
 .sub.paused { opacity: .72; }
 .sub-top { display: flex; gap: 12px; align-items: flex-start; }

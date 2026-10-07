@@ -293,9 +293,10 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// account_uuid: the usage account a Codex credential belongs to,
-		// so the subscriptions page pairs them by identity, not by label
-		// (claude-fleet#2127). Computed here, never stored or a secret.
+		// account_uuid: the usage account a credential belongs to (a Codex
+		// one's from its id_token, a Claude one's as recorded at import), so
+		// the subscriptions page pairs them by identity, not by label
+		// (claude-fleet#2127). Never a secret.
 		type credRow struct {
 			store.Credential
 			AccountUUID string `json:"account_uuid,omitempty"`

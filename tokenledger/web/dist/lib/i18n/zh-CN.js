@@ -733,6 +733,8 @@ export const zhCN = {
   'ui.sub.resume': '恢复',
   'ui.sub.remove': '移除',
   'ui.sub.notPool': '不在订阅池',
+  'ui.sub.unmanaged': '未纳管 · {n} 个',
+  'ui.sub.unmanagedHint': '各机器上报了这些账号的用量，但保险箱里没有它们的凭据：入口不管理它们，也不计入订阅数。留在这里供排查（例如 win_… 幽灵）。',
   'ui.sub.notPoolHint': '入口看得到这个订阅的用量，但保险箱里没有它的共享凭据；是某台机器自己登录的。',
   'ui.sub.pauseQ': '暂停 {label}？',
   'ui.sub.pauseBody': '新会话不再开在它上面。正在跑的 {n} 个会话照常跑完。',

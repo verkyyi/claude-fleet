@@ -57,6 +57,11 @@ func ValidProvider(p string) bool { return p == Claude || p == Codex || p == Git
 //	codex:  refresh_token, account_id (+ id_token, kept current by refreshes)
 //	github: token, user — phase one hands the person's existing token down as
 //	        is (it has no refresh); R1 replaces it with a short-lived one.
+//
+// account_uuid (optional, any provider) is the usage account the credential
+// belongs to, as the importing login knows it (oauthAccount.accountUuid): a
+// setup token cannot say whose it is (claude-fleet#2127). Not a secret — it
+// rides in the sealed half only so a refresh carries it along unchanged.
 type Secret struct {
 	RefreshToken     string     `json:"refresh_token,omitempty"`
 	SetupToken       string     `json:"setup_token,omitempty"`
@@ -67,6 +72,7 @@ type Secret struct {
 	SubscriptionType string     `json:"subscription_type,omitempty"`
 	Token            string     `json:"token,omitempty"`
 	User             string     `json:"user,omitempty"`
+	AccountUUID      string     `json:"account_uuid,omitempty"`
 }
 
 // Kinds — what the long-lived half IS, kept beside the row as metadata (the
@@ -101,6 +107,9 @@ func (s Secret) SecretExpiry(provider string) *time.Time {
 
 // Validate checks that s carries what provider needs.
 func (s Secret) Validate(provider string) error {
+	if s.AccountUUID != "" && !validAccountUUID(s.AccountUUID) {
+		return errors.New("account_uuid must be 1-128 of [A-Za-z0-9:._-]")
+	}
 	switch provider {
 	case Claude:
 		switch {
@@ -125,6 +134,18 @@ func (s Secret) Validate(provider string) error {
 		return fmt.Errorf("unknown provider %q", provider)
 	}
 	return nil
+}
+
+func validAccountUUID(u string) bool {
+	if len(u) > 128 {
+		return false
+	}
+	for _, r := range u {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune(":._-", r)) {
+			return false
+		}
+	}
+	return true
 }
 
 // Access is the short-lived half: everything a node writes to disk, and
@@ -370,11 +391,12 @@ func (v *Vault) Put(principal, provider, account string, s Secret) error {
 }
 
 // AccountUUID is the usage account a stored credential belongs to, as the
-// usage side names it — today a Codex credential's codex:account:<…>, from
-// its account_id and id_token — or "" when it cannot say (another provider,
-// a locked vault, a secret with no id_token). Nothing secret leaves here.
+// usage side names it — a Codex credential's codex:account:<…> from its
+// account_id and id_token, else the account_uuid recorded at import (a Claude
+// setup token's) — or "" when it cannot say (GitHub, a locked vault, an
+// older import). Nothing secret leaves here.
 func (v *Vault) AccountUUID(c store.Credential) string {
-	if c.Provider != Codex || len(c.SecretSealed) == 0 {
+	if c.Provider == GitHub || len(c.SecretSealed) == 0 {
 		return ""
 	}
 	sl, err := v.sealer()
@@ -382,10 +404,15 @@ func (v *Vault) AccountUUID(c store.Credential) string {
 		return ""
 	}
 	var s Secret
-	if sl.Open(c.SecretSealed, &s, c.PrincipalID, c.Provider, c.Account, "secret") != nil || s.IDToken == "" {
+	if sl.Open(c.SecretSealed, &s, c.PrincipalID, c.Provider, c.Account, "secret") != nil {
 		return ""
 	}
-	return codex.AccountUUIDFromIDToken(s.IDToken, s.AccountID)
+	if c.Provider == Codex && s.IDToken != "" {
+		if u := codex.AccountUUIDFromIDToken(s.IDToken, s.AccountID); u != "" {
+			return u
+		}
+	}
+	return s.AccountUUID
 }
 
 // ErrRefreshFailed wraps a refresh that failed with no usable token left.

@@ -506,9 +506,10 @@ func TestPoolSetupTokenLeasedByEveryActivePrincipal(t *testing.T) {
 
 func ptrTime(t time.Time) *time.Time { return &t }
 
-// GET /v1/fleet/credentials names the usage account a Codex credential
-// belongs to — from its id_token, never the token itself — so the
-// subscriptions page pairs them by identity (claude-fleet#2127).
+// GET /v1/fleet/credentials names the usage account a credential belongs
+// to — a Codex one's from its id_token (never the token itself), a Claude
+// one's as recorded at import — so the subscriptions page pairs them by
+// identity (claude-fleet#2127).
 func TestFleetCredentialsNameCodexAccount(t *testing.T) {
 	h, _, _ := newVaultHarness(t)
 	claims, _ := json.Marshal(map[string]any{"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1", "chatgpt_user_id": "user-1"}})
@@ -516,6 +517,14 @@ func TestFleetCredentialsNameCodexAccount(t *testing.T) {
 	putCred(t, h, credvault.Codex, "default", credvault.Secret{RefreshToken: "rt-SECRET", AccountID: "acct-1", IDToken: idTok})
 	putCred(t, h, credvault.Codex, "bare", credvault.Secret{RefreshToken: "rt-SECRET", AccountID: "acct-2"})
 	putCred(t, h, credvault.Claude, "gmail", credvault.Secret{RefreshToken: "sk-ant-ort01-SECRET"})
+	// A setup token cannot say whose it is: the import records it.
+	exp := time.Now().Add(300 * 24 * time.Hour)
+	putCred(t, h, credvault.Claude, "icloud", credvault.Secret{SetupToken: "sk-ant-oat01-SECRET", ExpiresAt: &exp,
+		AccountUUID: "6f1c2d3e-0000-4000-8000-000000000001"})
+	if code, _ := h.post(t, "/v1/fleet/credentials", FleetCredentialRequest{Action: "put", PrincipalID: pAlice, Provider: credvault.Claude,
+		Account: "bad", Secret: credvault.Secret{RefreshToken: "rt", AccountUUID: "no spaces <here>"}}); code != http.StatusBadRequest {
+		t.Fatalf("a malformed account_uuid was stored: %d", code)
+	}
 	res, raw := h.get(t, "/v1/fleet/credentials")
 	body := string(raw)
 	if res.StatusCode != http.StatusOK {
@@ -535,7 +544,8 @@ func TestFleetCredentialsNameCodexAccount(t *testing.T) {
 	for _, c := range got.Credentials {
 		by[c.Account] = c.AccountUUID
 	}
-	if len(by) != 3 || by["default"] != codex.AccountUUID("acct-1", "user-1") || by["bare"] != "" || by["gmail"] != "" {
+	if len(by) != 4 || by["default"] != codex.AccountUUID("acct-1", "user-1") || by["bare"] != "" || by["gmail"] != "" ||
+		by["icloud"] != "6f1c2d3e-0000-4000-8000-000000000001" {
 		t.Fatalf("account_uuid = %v", by)
 	}
 }
