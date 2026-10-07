@@ -7,8 +7,8 @@
 # (issue #1051), plus the row-less "new task (file an issue)", "restore a finished
 # task" (#901) and "add a repo" (#1103). Every item calls the SAME
 # script the hub binds (EPIC #894 convention 1) with the window's stable `@id`,
-# never an index or a name. The view (fleet-sidebar.py) opens it on `.` (empty
-# input line) or a second tap on the highlighted row; this file owns the tmux
+# never an index or a name. The view (fleet-sidebar.py) opens it on a second tap
+# on the highlighted row or a right-click (issue #1950); this file owns the tmux
 # syntax so the Python never spells a tmux command string.
 #
 # A row on ANOTHER machine (`wid:<worker_id>`, issue #1487 / EPIC #1479 C8) gets
@@ -74,15 +74,16 @@ sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 dq() { printf '"%s"' "$(printf '%s' "$1" | sed 's/["\\]/\\&/g')"; }
 # fe <text> → literal inside a tmux FORMAT (menu names/title, -I input): ## = #.
 fe() { printf '%s' "$1" | sed 's/#/##/g'; }
-# ask <kind> [arg…] → the tmux command that asks on the sidebar's input line
-# instead of a popup (issue #1620): park `<kind> <arg>…` on the view
-# (@sidebar_ask), keep the keyboard there, wake it with F12 — the path rename
-# took since #898 (fleet-sidebar.py `Ask`). Every arg is a token (@id, wid:…,
-# a machine, a needs word), so a space separates them. Empty when no view is on
-# screen; the caller greys the item then.
+# ask <kind> [arg…] → the tmux command that asks on one line under the session
+# instead of a popup (issues #1620, #1950): park `<kind> <arg>…` on the view
+# (@sidebar_ask) and wake it with F12 — the path rename took since #898
+# (fleet-sidebar.py `Ask`, bin/fleet-ask.py); the question's line takes the
+# keyboard. Every arg is a token (@id, wid:…, a machine, a needs word), so a
+# space separates them. Empty when no view is on screen; the caller greys the
+# item then.
 ask() {
   [ -n "${side:-}" ] || return 0
-  printf 'set-option -p -t %s @sidebar_ask %s ; switch-client -T fleet-sidebar ; send-keys -t %s F12' \
+  printf 'set-option -p -t %s @sidebar_ask %s ; send-keys -t %s F12' \
     "$side" "$(sq "$*")" "$side"
 }
 

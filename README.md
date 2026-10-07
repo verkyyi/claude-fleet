@@ -247,8 +247,7 @@ stock keys and one line at the top saying to use `fleet`.
 
 | Key | Action |
 |---|---|
-| `prefix E` | focus the task list (or click it): ↑↓ switch tasks (follows once you pause), ↵ enter, `.` the row menu, `?` its short key sheet; on an empty input line Home/End go to the ends and ←→ fold, on a typed name they move its cursor (with ⌥←→ ⌃a ⌃e ⌃w ⌃k to jump and delete); Enter/Esc give input back to the session |
-| `prefix g` / `prefix Space` | the same as `prefix E` |
+| tap / right-click | the task list takes no keys (issue #1950): a tap on a row switches to it, a second tap or a right-click opens its menu, a tap on ▸ / ▾ folds; a rename, an answer or a message is asked on one line under the session (↵ ok · esc cancel) |
 | `prefix q` / `prefix h` | back to the machine you were on (the previous window) |
 | `prefix z` | zoom the session pane — from the task list too: it zooms the session and hands the keyboard back, never the list |
 | `prefix [` | scroll back the session (tmux copy-mode) — from the task list too |
@@ -787,6 +786,7 @@ degrading to a pane-content heuristic.
 | warm scratch pool | ✅ | ✅ | A Codex-specific stable-screen probe checks the current launcher, echoes and clears one unsubmitted character, and never makes a model request. Claims require the matching agent, account home, dimensions and age; startup/trust failures use the cold path. |
 | PR + check status in the session header (`PR #N ✓ 检查通过` · `… 检查中` · `✗ <check>`) | ✅ | ✅ | tmux draws it, not the agent: `conf/tmux-attention.conf`'s `pane-border-format` reads `@pr_num` / `@pr_ci` / `@pr_fail`, which `bin/tmux-pr-refresh.sh` stamps on every window from the PR map (issue #1954). The mod's progress band above Claude Code's input stays as a mirror. |
 | knows where the person is from the first turn (device · terminal · what it can do) | ✅ | ✅ | One reader, `bin/fleet-client-where.sh`. Claude Code gets the line from the mod (`where.ts`, every request); Codex gets the same text as SessionStart `additionalContext` from `bin/fleet-where-hook.sh`, in the shared hook table and gated to a Codex pane so Claude never reads it twice (issue #1954). A takeover mid-session reaches Codex through the `where` tool. |
+| the task list only shows and taps · its short questions (rename · answer · message) on one line under the session | ✅ | ✅ | Not agent code: the client's list (`bin/fleet-sidebar.py`) takes no keys, and a question opens as a one-line pane of the client's own tmux under the session pane (`bin/fleet-ask.py`, issue #1950) — whichever agent runs in that session, it is resized by one line and keeps its own screen. |
 <!-- codex-matrix:end -->
 
 That table is **generated** from the `MATRIX` block in

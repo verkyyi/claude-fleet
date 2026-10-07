@@ -1204,12 +1204,15 @@ try:
         key(b"X", 1.0); key(b"\x1b", 0.3)
         if not whole() or stage() != s0: broke.append(tag)
     say("keys_broke", ",".join(broke)); say("keys_secs", "%.1f" % (time.time() - t0))
-    # sidebar-ctrl-c: ⌃c / ⌃\ / ⌃z with the keyboard on the list
+    # sidebar-ctrl-c: ⌃c / ⌃\ / ⌃z reaching the list — no key does since
+    # issue #1950 (it takes none), so the bytes go to its pane directly, as a
+    # client a running server still holds in its old key table would send them
+
     lst, lpid = frame()[:2]
     t0 = time.time()
-    key(b"\x02E", 0.8)
-    for b in (b"\x03", b"\x1c", b"\x1a"): key(b, 0.8)
-    key(b"\x1b", 0.5); pump(1.0)
+    for b in ("C-c", "C-\\", "C-z"):
+        t("send-keys", "-t", lst, b); time.sleep(0.8)
+    pump(1.0)
     f = frame()
     say("cc_same", "1" if f[0] == lst and f[1] == lpid else "0")
     say("cc_state", subprocess.run(["ps", "-o", "stat=", "-p", lpid], capture_output=True, text=True).stdout.strip())

@@ -12,11 +12,12 @@
 #      an unknown window → nothing anchored, the same Tab choice.
 #   C. a stale current-repo file (the retired picker's, #1034) changes no anchor.
 #   T. Heading taps (issue #1032), over the REAL sidebar rows: in a one-repo
-#      fleet no row is a heading key, so every tap is today's jump/menu and the
-#      input line keeps its plain hint (byte for byte). Under `all`, a repo
-#      heading's 1st tap selects it (no switch), the 2nd asks ⌃n's title with
-#      the repo pinned; the line names the target; `no repo` selects (⌃n offers
-#      the repos on Tab); the `?` heading stays inert.
+#      fleet no row is a heading key, so every tap is today's jump/menu and no
+#      row names a target (byte for byte). Under `all`, a repo heading's 1st tap
+#      selects it (no switch), the 2nd asks ⌃n's title with the repo pinned; it
+#      names its target; `no repo` selects (⌃n offers the repos on Tab); the `?`
+#      heading stays inert. (The list's input line, whose hint named the target,
+#      went in issue #1950.)
 #
 # The sidebar half imports fleet-sidebar.py and runs its real selection_repo /
 # spawn_scratch / ask_new + submit against a shadow bin/ whose
@@ -131,7 +132,7 @@ for line in out.split("\n"):
     if len(row) != 5:
         continue
     key = mod.key_of(row)
-    print(key, mod.tap(key, sys.argv[2]), mod.tap(key, key), mod.placeholder(key))
+    print(key, mod.tap(key, sys.argv[2]), mod.tap(key, key), mod.target_name(key) or "-")
 PY
 }
 # tapnew <window> <heading key> → the repo + Tab choices of the title a 2nd tap
@@ -172,8 +173,8 @@ T_A="$(taps wA)"
 [ -n "$T_A" ] || fail "T: one-repo sidebar produced no rows"
 eq "T: one-repo fleet has no heading key or heading tap" \
    "$(printf '%s\n' "$T_A" | grep -c 'hdr:\| select \| new ')" 0
-eq "T: one-repo input hint unchanged" \
-   "$(printf '%s\n' "$T_A" | awk '$4 != "新会话名…"' | wc -l | tr -d ' ')" 0
+eq "T: one-repo rows name no target" \
+   "$(printf '%s\n' "$T_A" | awk '$4 != "-"' | wc -l | tr -d ' ')" 0
 eq "T: one-repo row taps jump, then menu" \
    "$(printf '%s\n' "$T_A" | grep '^@' | grep -v "^$(wid wA) " | awk '{print $2, $3}' | sort -u)" "jump menu"
 tmux set-option -wu -t "$S:wWT" @repo
@@ -198,13 +199,13 @@ eq "B: sidebar on an unknown row → nothing anchored, ⌃n offers the repos" "$
 
 T_B="$(taps wA)"
 eq "T: heading B — 1st tap selects, 2nd opens new, hint names it" \
-   "$(printf '%s\n' "$T_B" | grep '^hdr:o/b ')" "hdr:o/b select new 新会话 → b…"
+   "$(printf '%s\n' "$T_B" | grep '^hdr:o/b ')" "hdr:o/b select new b"
 eq "T: no-repo heading selects as \$HOME" \
-   "$(printf '%s\n' "$T_B" | grep '^hdr:none ')" "hdr:none select new 新会话 → 无仓库…"
+   "$(printf '%s\n' "$T_B" | grep '^hdr:none ')" "hdr:none select new 无仓库"
 eq "T: the ? heading stays inert" \
-   "$(printf '%s\n' "$T_B" | grep -c '^hdr None None 新会话名…$')" 1
+   "$(printf '%s\n' "$T_B" | grep -c '^hdr None None -$')" 1
 eq "T: a session row still jumps, then opens its menu" \
-   "$(printf '%s\n' "$T_B" | grep "^$(wid wB) " | awk '{print $2, $3, $4}')" "jump menu 新会话名…"
+   "$(printf '%s\n' "$T_B" | grep "^$(wid wB) " | awk '{print $2, $3, $4}')" "jump menu -"
 eq "T: 2nd tap on heading B → ⌃n pinned to B" "$(tapnew wA hdr:o/b)" "o/b 0"
 eq "T: 2nd tap on no-repo heading → ⌃n offers the repos" "$(tapnew wA hdr:none)" "o/a 2"
 
