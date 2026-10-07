@@ -50,11 +50,11 @@ type Node struct {
 // (claude-fleet#1412), the credential vault (claude-fleet#1415), the issue
 // leases (claude-fleet#1422) and the relay audit (claude-fleet#1413). Idempotent.
 func (s *Store) EnsureNodes() error {
-	if _, err := s.write.Exec(nodesSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(nodesSchema)); err != nil {
 		return fmt.Errorf("create nodes table: %w", err)
 	}
 	// The Fleet Hub registry rides the same switch (claude-fleet#1409).
-	if _, err := s.write.Exec(fleetSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetSchema)); err != nil {
 		return fmt.Errorf("create fleet registry tables: %w", err)
 	}
 	if err := s.ensureFleetColumns(); err != nil {

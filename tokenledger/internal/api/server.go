@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,6 +62,12 @@ type Server struct {
 
 	// MCP handles /mcp when wired up.
 	MCP http.Handler
+
+	// ReadOnly is CCQUOTA_READONLY=1 (claude-fleet#2122): the hub's database
+	// is being moved, so every write request is answered 503 + Retry-After and
+	// every read is served as usual. The caller has also put the store itself
+	// read-only (Store.SetReadOnly), which catches the writes no request makes.
+	ReadOnly bool
 
 	// counter caches the all-time token total behind the hero counter. Its
 	// query is a full scan and the SSE stream pushes several times a second,
@@ -127,6 +134,12 @@ type Server struct {
 	// as short-lived tokens. nil (no key configured) leaves every credential
 	// route answering 503 and the rest of the fleet module unaffected.
 	Vault *credvault.Vault
+	// HubQuota is the hub reading every pool subscription's quota itself
+	// through the Singapore relay (claude-fleet#2169,
+	// CCQUOTA_FLEET_HUB_QUOTA=relay). Nil: the hub reads none, signs no
+	// quota pass and the subscriptions page shows the nodes' readings —
+	// exactly as before.
+	HubQuota *HubQuota
 	// SessionCredKey signs session passes for untrusted machines
 	// (claude-fleet#1969, CCQUOTA_FLEET_SESSION_CRED_KEY[_FILE]); it never
 	// leaves the hub. Nil: /v1/fleet/session-cred answers 503.
@@ -186,9 +199,18 @@ type Server struct {
 
 	// nodes holds the open node control channels.
 	nodes nodeConns
+	// Replica is this process as one of several hub replicas
+	// (claude-fleet#2124): a call for a node whose link another replica
+	// holds is handed to it. Nil — a single hub — forwards nothing.
+	Replica *Replica
+	// forwarded counts the calls handed to another replica.
+	forwarded atomic.Int64
 	// recent is the starts just sent to each node that its heartbeat may not
 	// show yet (claude-fleet#2077); judge counts them as running.
 	recent recentTable
+	// limits is the accounts the cluster proxy saw a quota 429 on
+	// (claude-fleet#2115); the session pick puts them last.
+	limits limitMemo
 
 	// devices holds `fleet login` device-code logins in progress.
 	devices deviceLogins
@@ -215,7 +237,37 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.logRequests(s.routes())
+	return s.logRequests(s.readOnlyGate(s.routes()))
+}
+
+// readOnlyRetryAfter is the Retry-After a write gets while the hub is
+// read-only: the runbook's write stop is under a minute, so a client that
+// waits this long and retries lands on the moved database or one more 503.
+const readOnlyRetryAfter = 15
+
+// readOnlyGate answers every write request 503 + Retry-After while the hub is
+// read-only. A write is any method but GET / HEAD / OPTIONS — a WebSocket
+// upgrade is a GET and stays up — except /mcp, whose POSTs are JSON-RPC reads
+// (a tool that writes fails at the read-only store instead). Off, it is not in
+// the chain at all.
+func (s *Server) readOnlyGate(next http.Handler) http.Handler {
+	if !s.ReadOnly {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet, r.Method == http.MethodHead, r.Method == http.MethodOptions,
+			r.URL.Path == "/mcp":
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(readOnlyRetryAfter))
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error":       "read_only",
+			"message":     "the hub is read-only while its database is moved; retry shortly",
+			"retry_after": readOnlyRetryAfter,
+		})
+	})
 }
 
 // routes mounts every route; roles.go's routeAccess names each one
@@ -258,6 +310,11 @@ func (s *Server) routes() *routeMux {
 	if s.Fleet {
 		// The control channel authenticates per endpoint, like ingest.
 		mux.HandleFunc(control.Path, s.handleNodeConnect)
+		if s.Replica != nil {
+			// A node call another replica hands over (claude-fleet#2124);
+			// in-cluster, behind the replicas' shared token.
+			mux.HandleFunc(NodeRoutePath, s.handleNodeRoute)
+		}
 		// Issue leases (claude-fleet#1422) authenticate the same way.
 		mux.HandleFunc("/v1/node/lease", s.handleNodeLease)
 		// Placement for a node's own spawn (claude-fleet#1425), the same way.
@@ -392,6 +449,11 @@ func (s *Server) routes() *routeMux {
 		// Take a machine's enrollment back (claude-fleet#1403): the token,
 		// its open link, its session passes and relay credential at once.
 		mux.Handle(NodeRevokePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleNodeRevoke))))
+		// Take a machine off the hub (claude-fleet#1928): the revoke plus its
+		// roster row — an admin any machine, a person their own; a node itself
+		// with its own token (`fleet node leave`).
+		mux.Handle(NodeRetirePath, s.viewerOnly(http.HandlerFunc(s.handleNodeRetire)))
+		mux.HandleFunc(NodeLeavePath, s.handleNodeLeave)
 		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevoke))))
 		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredAudit))))
 		// Session passes for untrusted machines (claude-fleet#1969): issue /
@@ -402,6 +464,9 @@ func (s *Server) routes() *routeMux {
 		// The cluster credential proxy's one question (claude-fleet#1973):
 		// its own token, checked by the handler.
 		mux.HandleFunc(CredProxyResolvePath, s.handleCredProxyResolve)
+		// …and its quota 429s (claude-fleet#2115): the hub moves the
+		// session to an account with room, once.
+		mux.HandleFunc(CredProxyRebindPath, s.handleCredProxyRebind)
 		// Per-person budgets (claude-fleet#1977): what a person used,
 		// reported by both proxies, each with its own token; the list is
 		// the operator's.
@@ -422,7 +487,11 @@ func (s *Server) routes() *routeMux {
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		body := map[string]string{"status": "ok"}
+		if s.ReadOnly {
+			body["mode"] = "read-only"
+		}
+		writeJSON(w, http.StatusOK, body)
 	})
 	// Which commit this image was built from (claude-fleet#1696): public like
 	// /healthz, so `fleet-doctor`'s hub-image row can compare it with

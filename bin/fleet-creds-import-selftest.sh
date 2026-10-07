@@ -17,6 +17,9 @@
 #   • DRY       --dry-run sends nothing
 #   • FAIL      a hub 400 → exit 1, the hub's message shown
 #   • NOAUTH    no viewer token → exit 2, nothing sent
+#   • UUID      (issue #2127) one label sends this login's oauthAccount.accountUuid
+#               as secret.account_uuid and names it; --account-uuid as given,
+#               `none` none; several labels none; --account-uuid needs one label
 #   • CODEX     --codex reads ~/.codex/auth.json (tokens.refresh_token +
 #               account_id + id_token) into one `put` of pool/codex/default; a
 #               named profile reads <codex-homes>/<profile>/auth.json under its
@@ -185,6 +188,32 @@ out=$(env -u CCQUOTA_VIEWER_TOKEN bash "$IMPORT" alpha 2>&1); rc=$?
 [ "$rc" = 2 ] && [ "$(nreq)" = 0 ] || fail "no viewer token: rc=$rc n=$(nreq)" "$out"
 case "$out" in *"no viewer token"*) ;; *) fail "noauth message" "$out" ;; esac
 ok "NOAUTH no viewer token → exit 2, nothing sent"
+
+# --- UUID (issue #2127) ---------------------------------------------------------
+# One label: the importing login's oauthAccount.accountUuid rides along, printed.
+U1='6f1c2d3e-0000-4000-8000-000000000001'
+printf '{"oauthAccount":{"accountUuid":"%s","emailAddress":"a@example.com"}}\n' "$U1" > "$HOME/.claude.json"
+: > "$LOG"
+out=$(bash "$IMPORT" alpha 2>&1); rc=$?
+no_token "uuid run" "$out"
+[ "$rc" = 0 ] && [ "$(nreq)" = 1 ] || fail "uuid: rc=$rc n=$(nreq)" "$out"
+[ "$(field 0 'b["secret"].get("account_uuid","")')" = "$U1" ] || fail "login's account uuid not sent" "$(field 0 'b["secret"].keys()')"
+case "$out" in *"uuid   alpha"*"$U1"*".claude.json"*) ;; *) fail "assumed uuid not printed" "$out" ;; esac
+ok "UUID  one label: this login's oauthAccount.accountUuid sent and named"
+: > "$LOG"
+out=$(bash "$IMPORT" --account-uuid u-given alpha 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(field 0 'b["secret"].get("account_uuid","")')" = "u-given" ] || fail "--account-uuid not sent as given" "$out"
+: > "$LOG"
+out=$(bash "$IMPORT" --account-uuid none alpha 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(field 0 '"account_uuid" in b["secret"]')" = "False" ] || fail "--account-uuid none still sent one" "$out"
+: > "$LOG"
+out=$(bash "$IMPORT" alpha beta 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(field 0 '"account_uuid" in b["secret"]')" = "False" ] && [ "$(field 1 '"account_uuid" in b["secret"]')" = "False" ] || fail "several labels each got the login's uuid" "$out"
+: > "$LOG"
+out=$(bash "$IMPORT" --account-uuid u-x alpha beta 2>&1); rc=$?
+[ "$rc" = 2 ] && [ "$(nreq)" = 0 ] || fail "--account-uuid with two labels: rc=$rc n=$(nreq)" "$out"
+rm -f "$HOME/.claude.json"
+ok "UUID  --account-uuid as given · none sends none · several labels send none · --account-uuid needs one label"
 
 # --- CODEX (issue #1490) --------------------------------------------------------
 RT='rt-CODEXSECRETCODEXSECRETCODEXSECRET'

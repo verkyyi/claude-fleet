@@ -2,6 +2,7 @@
 # fleet-login-new.sh <login> --full-name <name> [--pubkey <file>] [--share-pool]
 #                    [--pool-src <dir>] [--password-file <file>] [--no-daemons]
 #                    [--machine <name>] [--no-welcome] [--lang zh|en] [--apply]
+# fleet-login-new.sh <login> --daemons-only [--apply]
 #   — open a new person's OS login on a shared machine in ONE command
 #     (issue #1164, EPIC #1163; no GUI sign-in needed since #1192, EPIC #1190;
 #     writes the person's welcome letter since #1195, EPIC #1212).
@@ -87,6 +88,14 @@
 # --pool-src / --password-file are made absolute first, so a relative
 # `--pubkey alice.pub` (docs/SHARED-MACHINE.md's example) is still found.
 #
+# --daemons-only (issue #1223): step 8 ALONE, for a login that already exists
+# but has no com.claude-fleet.<login>.* under /Library/LaunchDaemons — the
+# bootstrap's `daemons: WARN` names this command. Steps 1–7 and 9 are skipped
+# (their options are refused), the login AND its home must exist (else exit 4),
+# the templates are read from the login's own clone as the login exactly as in
+# a full run (#1213), a unit whose plist is already in place is left alone, and
+# it still prints `installed N/N`. A dry run previews from this install.
+
 # Only ever ADDS: it refuses (exit 3) when the login or its home already exists,
 # never overwrites, and writes nothing in the new home outside `.ssh/`,
 # `.config/claude-fleet/accounts/` (plus owning the `.config` dirs it creates),
@@ -94,7 +103,8 @@
 # (password.txt, the temporary key pair, welcome.txt — all yours only).
 #
 # Exit: 0 ok · 1 a step failed under --apply · 2 bad arguments · 3 the login
-#       (or its home) already exists
+#       (or its home) already exists · 4 --daemons-only: no such login (or
+#       no home)
 #
 # Conf: FLEET_SSH_PUBLIC_HOST / FLEET_SSH_PUBLIC_PORT (global; fleet.conf.example)
 #      — the public SSH entry the welcome letter names.
@@ -106,12 +116,12 @@ set -u
 PROG=fleet-login-new
 FLEET_REPO_SELF=verkyyi/claude-fleet
 usage() {
-  sed -n '2,4p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 
-LOGIN='' FULL='' PUBKEY='' SHARE=0 APPLY=0 MACHINE=mini POOL_SRC='' PWFILE='' DAEMONS=1 WELCOME=1 WLANG=zh
+LOGIN='' FULL='' PUBKEY='' SHARE=0 APPLY=0 MACHINE=mini POOL_SRC='' PWFILE='' DAEMONS=1 WELCOME=1 WLANG=zh DONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --full-name) [ $# -ge 2 ] || usage; FULL=$2; shift 2 ;;
@@ -122,6 +132,7 @@ while [ $# -gt 0 ]; do
     --lang)      [ $# -ge 2 ] || usage; WLANG=$2; shift 2 ;;
     --share-pool) SHARE=1; shift ;;
     --no-daemons) DAEMONS=0; shift ;;
+    --daemons-only) DONLY=1; shift ;;
     --welcome)   WELCOME=1; shift ;;
     --no-welcome) WELCOME=0; shift ;;
     --apply)     APPLY=1; shift ;;
@@ -138,11 +149,25 @@ done
 printf '%s' "$LOGIN" | grep -Eq '^[a-z0-9_][a-z0-9_-]{0,31}$' \
   && printf '%s' "$LOGIN" | grep -q '[a-z_-]' \
   || die2 "bad login name '$LOGIN' (lowercase letters, digits, _ and -, not all digits; at most 32)"
-[ -n "$FULL" ] || die2 "--full-name is required"
+if [ "$DONLY" = 1 ]; then
+  # --daemons-only (issue #1223): step 8 for a login that already exists — the
+  # options of steps 1–7 and 9 have nothing to act on, so they are refused, not
+  # silently dropped (--full-name is accepted and unused: a caller may pass the
+  # create argv it already has).
+  [ "$DAEMONS" = 1 ] || die2 "--daemons-only and --no-daemons contradict each other"
+  [ "$SHARE" = 0 ] || die2 "--daemons-only installs the background services only; --share-pool is step 5 (docs/SHARED-MACHINE.md 2b for an existing login)"
+  [ -z "$PUBKEY" ] || die2 "--daemons-only installs the background services only; --pubkey is step 4"
+  [ -z "$PWFILE" ] || die2 "--daemons-only installs the background services only; --password-file is step 1"
+  WELCOME=0
+else
+  [ -n "$FULL" ] || die2 "--full-name is required"
+fi
 case "$WLANG" in zh|en) ;; *) die2 "--lang: zh or en (got '$WLANG')" ;; esac
 # No --pubkey ⇒ a temporary pair, carried by the welcome letter (issue #1195).
 TMPKEY=0
-if [ -z "$PUBKEY" ]; then
+if [ "$DONLY" = 1 ]; then
+  :
+elif [ -z "$PUBKEY" ]; then
   [ "$WELCOME" = 1 ] || die2 "--pubkey <file> is required with --no-welcome (no letter would carry a temporary key)"
   TMPKEY=1
 else
@@ -150,7 +175,7 @@ else
 fi
 [ "$EUID" != 0 ] || die2 "run this as the admin login, not under sudo — it sudo's each step itself"
 
-if [ "$TMPKEY" = 1 ]; then
+if [ "$TMPKEY" = 1 ] || [ "$DONLY" = 1 ]; then
   KEYS=1
 else
   KEYS=$(grep -Ec '^(ssh-|ecdsa-|sk-)' "$PUBKEY" 2>/dev/null) || KEYS=0
@@ -208,7 +233,9 @@ HOST_SHOWN=${SSH_HOST:-'<HOST>'}
 # ~/<login>-onboard/password.txt under --apply. The person signs in with their
 # key; the file is for the admin (and a password reset), so it stays 600.
 PW='' PWGEN=0
-if [ -n "$PWFILE" ]; then
+if [ "$DONLY" = 1 ]; then
+  :
+elif [ -n "$PWFILE" ]; then
   [ -r "$PWFILE" ] || die2 "--password-file: cannot read '$PWFILE'"
   PW=$(head -n 1 "$PWFILE")
   [ -n "$PW" ] || die2 "--password-file: '$PWFILE' is empty"
@@ -232,18 +259,28 @@ if [ "$SHARE" = 1 ]; then
 fi
 
 # Refuse, never overwrite (exit 3) — checked in both modes, so a dry run that
-# looks clean is one --apply will actually carry out.
-if id "$LOGIN" >/dev/null 2>&1; then
+# looks clean is one --apply will actually carry out. --daemons-only is the
+# mirror image (issue #1223): it needs the login AND its home, else exit 4.
+if [ "$DONLY" = 1 ]; then
+  if ! id "$LOGIN" >/dev/null 2>&1; then
+    printf '%s: --daemons-only: no login %s — refusing (open it first: fleet-login-new.sh %s --full-name <name> --apply)\n' "$PROG" "$LOGIN" "$LOGIN" >&2
+    exit 4
+  fi
+  if [ ! -d "$H" ]; then
+    printf '%s: --daemons-only: login %s has no home at %s — refusing\n' "$PROG" "$LOGIN" "$H" >&2
+    exit 4
+  fi
+elif id "$LOGIN" >/dev/null 2>&1; then
   printf '%s: login %s already exists — refusing (this script only adds)\n' "$PROG" "$LOGIN" >&2
   exit 3
-fi
-if [ -e "$H" ]; then
+elif [ -e "$H" ]; then
   printf '%s: %s already exists (no such login) — refusing to write into it\n' "$PROG" "$H" >&2
   exit 3
 fi
 
 if [ "$APPLY" = 1 ]; then
-  for t in sudo sysadminctl createhomedir git; do
+  if [ "$DONLY" = 1 ]; then NEED='sudo'; else NEED='sudo sysadminctl createhomedir git'; fi
+  for t in $NEED; do
     command -v "$t" >/dev/null 2>&1 || { printf '%s: %s not found — nothing was changed\n' "$PROG" "$t" >&2; exit 1; }
   done
   if [ "$DAEMONS" = 1 ] && ! command -v plutil >/dev/null 2>&1; then
@@ -281,92 +318,103 @@ append() {
 }
 step() { N=$((N + 1)); say ""; say "[$N] $*"; }
 
-if [ "$APPLY" = 1 ]; then
+if [ "$DONLY" = 1 ]; then
+  if [ "$APPLY" = 1 ]; then
+    say "fleet-login-new: installing the background services of existing login '$LOGIN' (step 8 only) — running it:"
+  else
+    say "fleet-login-new: DRY RUN — nothing below is executed. Re-run with --apply to do it."
+  fi
+  say "  login=$LOGIN  home=$H  daemons-only=yes (steps 1–7 and 9 skipped)"
+  N=7
+elif [ "$APPLY" = 1 ]; then
   say "fleet-login-new: creating login '$LOGIN' ($FULL) — running each step:"
 else
   say "fleet-login-new: DRY RUN — nothing below is executed. Re-run with --apply to do it."
 fi
-say "  login=$LOGIN  full-name=$FULL  home=$H  share-pool=$([ "$SHARE" = 1 ] && echo yes || echo no)  daemons=$([ "$DAEMONS" = 1 ] && echo system || echo 'no (gui, after a GUI sign-in)')  key=$([ "$TMPKEY" = 1 ] && echo 'temporary (generated)' || echo "$PUBKEY")  welcome=$([ "$WELCOME" = 1 ] && echo "$WLANG" || echo no)"
+[ "$DONLY" = 1 ] || say "  login=$LOGIN  full-name=$FULL  home=$H  share-pool=$([ "$SHARE" = 1 ] && echo yes || echo no)  daemons=$([ "$DAEMONS" = 1 ] && echo system || echo 'no (gui, after a GUI sign-in)')  key=$([ "$TMPKEY" = 1 ] && echo 'temporary (generated)' || echo "$PUBKEY")  welcome=$([ "$WELCOME" = 1 ] && echo "$WLANG" || echo no)"
 [ "$KEYS" -gt 0 ] || say "  WARN: --pubkey '$PUBKEY' holds no public key line; --apply will refuse it"
 
-if [ "$PWGEN" = 1 ]; then
-  step "create the OS login (password: random, written to $PWFILE — mode 600, never printed)"
-  if [ "$APPLY" = 1 ]; then
-    PW=$(gen_password)
-    [ "${#PW}" -ge 16 ] || { printf '%s: could not generate a password\n' "$PROG" >&2; fail; }
-    ( umask 077 && mkdir -p "$(dirname "$PWFILE")" && printf '%s\n' "$PW" > "$PWFILE" ) || fail
-    say "  (wrote $PWFILE)"
-  else
-    say "  (would write a random password to $PWFILE, mode 600)"
-  fi
-else
-  step "create the OS login (password: the first line of $PWFILE — never printed)"
-fi
-run_shown "sudo sysadminctl -addUser $(printf %q "$LOGIN") -fullName $(printf %q "$FULL") -password <redacted: $PWFILE>" \
-  -- sudo sysadminctl -addUser "$LOGIN" -fullName "$FULL" -password "$PW"
-step "create its home directory"
-run sudo createhomedir -c -u "$LOGIN"
-
-step "allow SSH (Remote Login)"
-if [ "$HAVE_SSH_GROUP" = 1 ]; then
-  run sudo dseditgroup -o edit -a "$LOGIN" -t user "$SSH_GROUP"
-else
-  say "  (skipped: no $SSH_GROUP group — Remote Login is open to all users)"
-fi
-
-if [ "$TMPKEY" = 1 ]; then
-  # A temporary pair (issue #1195): generated HERE, in the admin's onboard dir,
-  # never printed — its private half is for the welcome letter (step 9) only.
-  # A stale pair from an earlier failed run of this same login is worthless
-  # (the login did not exist — we refused above if it did), so it is replaced;
-  # ssh-keygen would otherwise stop to ask "Overwrite?" on a non-tty and hang.
-  step "install the public key (no --pubkey: a temporary ed25519 pair → $KEYFILE, mode 600 — public half installed now, private half goes in the welcome letter)"
-  if [ "$APPLY" = 1 ]; then
-    ( umask 077 && mkdir -p "$ONBOARD" && rm -f "$KEYFILE" "$KEYFILE.pub" \
-      && ssh-keygen -q -t ed25519 -N '' -C "$LOGIN-onboard-temp" -f "$KEYFILE" ) || fail
-    say "  (generated $KEYFILE + .pub)"
-  else
-    say "  (would run: ssh-keygen -q -t ed25519 -N '' -C $LOGIN-onboard-temp -f $KEYFILE)"
-  fi
-else
-  step "install the public key ($KEYS key line(s) from $PUBKEY)"
-fi
-run sudo mkdir -p "$H/.ssh"
-append "$PUBKEY" "$H/.ssh/authorized_keys"
-run sudo chown -R "$LOGIN:staff" "$H/.ssh"
-run sudo chmod 700 "$H/.ssh"
-run sudo chmod 600 "$H/.ssh/authorized_keys"
-
-if [ "$SHARE" = 1 ]; then
-  D="$H/.config/claude-fleet/accounts"
-  step "join the shared Claude pool (${#POOL[@]} files from $POOL_SRC — SHARED-MACHINE 2b)"
-  DST=()
-  for f in ${POOL[@]+"${POOL[@]}"}; do DST+=("$D/${f##*/}"); done
-  run sudo mkdir -p "$D"
-  run sudo cp -p ${POOL[@]+"${POOL[@]}"} "$D/"
-  run sudo chown "$LOGIN:staff" "$H/.config" "$H/.config/claude-fleet"
-  run sudo chown -R "$LOGIN:staff" "$D"
-  run sudo chmod 700 "$D"
-  run sudo chmod 600 ${DST[@]+"${DST[@]}"}
-fi
-
-step "set up claude-fleet on first login (~/.zshrc — ~/.local/bin PATH line + fleet-login-bootstrap.sh)"
-ZRC="$TMPD/zshrc"
-BS="$BIN/fleet-login-bootstrap.sh"
-# The PATH line first (issue #1191) — unless the file already carries one — then
-# the block: the block's bootstrap call must already see ~/.local/bin.
-{ grep -qF '.local/bin' "$H/.zshrc" 2>/dev/null || bash "$BS" --print-path-line; bash "$BS" --print-zshrc; } > "$ZRC" \
-  || { printf '%s: fleet-login-bootstrap.sh --print-zshrc failed\n' "$PROG" >&2; exit 1; }
-append "$ZRC" "$H/.zshrc"
-run sudo chown "$LOGIN:staff" "$H/.zshrc"
-run sudo chmod 644 "$H/.zshrc"
-
-# 7. the clone, as the login — its daemons (8) reference ~<login>/.claude/fleet/bin
+# Steps 1–7 open the login; --daemons-only (issue #1223) skips straight to 8.
 ROOT="$H/.claude/fleet"
-step "install claude-fleet for $LOGIN (clone at stable → $ROOT, as $LOGIN — the services below run its scripts)"
-run sudo -u "$LOGIN" -H mkdir -p "$H/.claude"
-run sudo -u "$LOGIN" -H git -c advice.detachedHead=false clone -q -b stable "$GITURL" "$ROOT"
-run sudo -u "$LOGIN" -H mkdir -p "$ROOT/logs"
+if [ "$DONLY" = 0 ]; then
+  if [ "$PWGEN" = 1 ]; then
+    step "create the OS login (password: random, written to $PWFILE — mode 600, never printed)"
+    if [ "$APPLY" = 1 ]; then
+      PW=$(gen_password)
+      [ "${#PW}" -ge 16 ] || { printf '%s: could not generate a password\n' "$PROG" >&2; fail; }
+      ( umask 077 && mkdir -p "$(dirname "$PWFILE")" && printf '%s\n' "$PW" > "$PWFILE" ) || fail
+      say "  (wrote $PWFILE)"
+    else
+      say "  (would write a random password to $PWFILE, mode 600)"
+    fi
+  else
+    step "create the OS login (password: the first line of $PWFILE — never printed)"
+  fi
+  run_shown "sudo sysadminctl -addUser $(printf %q "$LOGIN") -fullName $(printf %q "$FULL") -password <redacted: $PWFILE>" \
+    -- sudo sysadminctl -addUser "$LOGIN" -fullName "$FULL" -password "$PW"
+  step "create its home directory"
+  run sudo createhomedir -c -u "$LOGIN"
+
+  step "allow SSH (Remote Login)"
+  if [ "$HAVE_SSH_GROUP" = 1 ]; then
+    run sudo dseditgroup -o edit -a "$LOGIN" -t user "$SSH_GROUP"
+  else
+    say "  (skipped: no $SSH_GROUP group — Remote Login is open to all users)"
+  fi
+
+  if [ "$TMPKEY" = 1 ]; then
+    # A temporary pair (issue #1195): generated HERE, in the admin's onboard dir,
+    # never printed — its private half is for the welcome letter (step 9) only.
+    # A stale pair from an earlier failed run of this same login is worthless
+    # (the login did not exist — we refused above if it did), so it is replaced;
+    # ssh-keygen would otherwise stop to ask "Overwrite?" on a non-tty and hang.
+    step "install the public key (no --pubkey: a temporary ed25519 pair → $KEYFILE, mode 600 — public half installed now, private half goes in the welcome letter)"
+    if [ "$APPLY" = 1 ]; then
+      ( umask 077 && mkdir -p "$ONBOARD" && rm -f "$KEYFILE" "$KEYFILE.pub" \
+        && ssh-keygen -q -t ed25519 -N '' -C "$LOGIN-onboard-temp" -f "$KEYFILE" ) || fail
+      say "  (generated $KEYFILE + .pub)"
+    else
+      say "  (would run: ssh-keygen -q -t ed25519 -N '' -C $LOGIN-onboard-temp -f $KEYFILE)"
+    fi
+  else
+    step "install the public key ($KEYS key line(s) from $PUBKEY)"
+  fi
+  run sudo mkdir -p "$H/.ssh"
+  append "$PUBKEY" "$H/.ssh/authorized_keys"
+  run sudo chown -R "$LOGIN:staff" "$H/.ssh"
+  run sudo chmod 700 "$H/.ssh"
+  run sudo chmod 600 "$H/.ssh/authorized_keys"
+
+  if [ "$SHARE" = 1 ]; then
+    D="$H/.config/claude-fleet/accounts"
+    step "join the shared Claude pool (${#POOL[@]} files from $POOL_SRC — SHARED-MACHINE 2b)"
+    DST=()
+    for f in ${POOL[@]+"${POOL[@]}"}; do DST+=("$D/${f##*/}"); done
+    run sudo mkdir -p "$D"
+    run sudo cp -p ${POOL[@]+"${POOL[@]}"} "$D/"
+    run sudo chown "$LOGIN:staff" "$H/.config" "$H/.config/claude-fleet"
+    run sudo chown -R "$LOGIN:staff" "$D"
+    run sudo chmod 700 "$D"
+    run sudo chmod 600 ${DST[@]+"${DST[@]}"}
+  fi
+
+  step "set up claude-fleet on first login (~/.zshrc — ~/.local/bin PATH line + fleet-login-bootstrap.sh)"
+  ZRC="$TMPD/zshrc"
+  BS="$BIN/fleet-login-bootstrap.sh"
+  # The PATH line first (issue #1191) — unless the file already carries one — then
+  # the block: the block's bootstrap call must already see ~/.local/bin.
+  { grep -qF '.local/bin' "$H/.zshrc" 2>/dev/null || bash "$BS" --print-path-line; bash "$BS" --print-zshrc; } > "$ZRC" \
+    || { printf '%s: fleet-login-bootstrap.sh --print-zshrc failed\n' "$PROG" >&2; exit 1; }
+  append "$ZRC" "$H/.zshrc"
+  run sudo chown "$LOGIN:staff" "$H/.zshrc"
+  run sudo chmod 644 "$H/.zshrc"
+
+  # 7. the clone, as the login — its daemons (8) reference ~<login>/.claude/fleet/bin
+  step "install claude-fleet for $LOGIN (clone at stable → $ROOT, as $LOGIN — the services below run its scripts)"
+  run sudo -u "$LOGIN" -H mkdir -p "$H/.claude"
+  run sudo -u "$LOGIN" -H git -c advice.detachedHead=false clone -q -b stable "$GITURL" "$ROOT"
+  run sudo -u "$LOGIN" -H mkdir -p "$ROOT/logs"
+fi
 
 # 8. the background services, system shape, as the admin
 if [ "$DAEMONS" = 1 ]; then
@@ -397,6 +445,7 @@ if [ "$DAEMONS" = 1 ]; then
       err=$(sed 's/^/: /' "$TMPD/ls.err" | head -n 1)
       printf '%s: no launchd/com.claude-fleet.*.plist.tmpl in %s (read as %s)%s — 0 background services to install: the clone at stable carries no daemon templates\n' \
         "$PROG" "$TMPL_DIR" "$LOGIN" "$err" >&2
+      [ "$DONLY" = 0 ] || printf '%s: --daemons-only needs %s'"'"'s own clone at %s — its first login installs it (fleet-login-bootstrap.sh), then re-run this\n' "$PROG" "$LOGIN" "$ROOT" >&2
       fail
     fi
     say "  (the clone is in $LOGIN's 700 home: $NU templates + bin/fleet-install-apply.sh read as $LOGIN, rendered here as the admin)"
@@ -418,9 +467,16 @@ if [ "$DAEMONS" = 1 ]; then
   elif [ "$NU" = 0 ]; then
     say "  WARN: no launchd/*.plist.tmpl in $TMPL_DIR — nothing to preview here; --apply reads the clone's (as $LOGIN) and fails on 0"
   fi
-  NI=0
+  NI=0 NK=0
   for u in $UNITS; do
     label=$(fleet_daemon_label "$u" system "$LOGIN"); dst="$DDIR/$label.plist"; src="$TMPD/plists/$label.plist"
+    # --daemons-only fills what is missing (issue #1223): a unit already in
+    # place is left alone — a second `launchctl bootstrap` of a loaded label
+    # fails, and replacing a live one is the login's own apply's job.
+    if [ "$DONLY" = 1 ] && [ -e "$dst" ]; then
+      say "  (already in place: $dst — left alone)"
+      NK=$((NK + 1)); continue
+    fi
     if [ "$APPLY" = 1 ]; then
       FLEET_INSTALL_LOGIN="$LOGIN" FLEET_INSTALL_HOME="$H" bash "$APPLY_SH" --render-system "$u" --root "$STAGE" > "$src" \
         || { printf '%s: render %s failed (%s --render-system)\n' "$PROG" "$u" "$APPLY_SH" >&2; fail; }
@@ -430,7 +486,17 @@ if [ "$DAEMONS" = 1 ]; then
     run sudo launchctl bootstrap system "$dst"
     NI=$((NI + 1))
   done
-  [ "$APPLY" = 1 ] && say "  installed $NI/$NU"
+  [ "$APPLY" = 1 ] && say "  installed $((NI + NK))/$NU$([ "$NK" = 0 ] || echo " ($NK already in place)")"
+fi
+
+if [ "$DONLY" = 1 ]; then
+  say ""
+  if [ "$APPLY" = 1 ]; then
+    say "done: $LOGIN's background services are in place — check with: sudo launchctl list | grep -c com.claude-fleet.$LOGIN."
+  else
+    say "after --apply: $LOGIN's background services run its own ~/.claude/fleet; nothing on its side needs re-running"
+  fi
+  exit 0
 fi
 
 # 9. the welcome letter (issue #1195) — everything the person needs to connect,

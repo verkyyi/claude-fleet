@@ -57,7 +57,7 @@ type FleetProgress struct {
 }
 
 func (s *Store) ensureFleetProgress() error {
-	if _, err := s.write.Exec(fleetProgressSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetProgressSchema)); err != nil {
 		return fmt.Errorf("create fleet_progress: %w", err)
 	}
 	return nil

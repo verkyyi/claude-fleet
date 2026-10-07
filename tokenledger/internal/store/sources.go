@@ -42,7 +42,7 @@ func migrateSources(db *sql.DB) error {
 		}
 		start := strings.Index(schemaSQL, "CREATE TABLE IF NOT EXISTS usage_hourly (")
 		end := start + strings.Index(schemaSQL[start:], ";") + 1
-		if _, err := tx.Exec(schemaSQL[start:end]); err != nil {
+		if _, err := tx.Exec(dialectOf(db).ddl(schemaSQL[start:end])); err != nil {
 			return err
 		}
 		const columns = `hour, account_uuid, endpoint_id, session_id, os_user, cwd, model, git_branch,

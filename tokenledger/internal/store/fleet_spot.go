@@ -97,21 +97,15 @@ type SpotNode struct {
 func (n SpotNode) Live() bool { return n.State != SpotReleased }
 
 func (s *Store) ensureFleetSpot() error {
-	if _, err := s.write.Exec(fleetSpotSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetSpotSchema)); err != nil {
 		return fmt.Errorf("create fleet_spot_nodes table: %w", err)
 	}
 	for _, c := range []struct{ table, column, spec string }{
 		{"fleet_join_codes", "kind", "TEXT NOT NULL DEFAULT 'fixed'"},
 		{"endpoints", "node_kind", "TEXT NOT NULL DEFAULT 'fixed'"},
 	} {
-		var n int
-		if err := s.write.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, c.table, c.column).Scan(&n); err != nil {
+		if err := s.addColumn(c.table, c.column, c.spec); err != nil {
 			return err
-		}
-		if n == 0 {
-			if _, err := s.write.Exec(`ALTER TABLE ` + c.table + ` ADD COLUMN ` + c.column + ` ` + c.spec); err != nil {
-				return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
-			}
 		}
 	}
 	return nil
@@ -262,7 +256,7 @@ func (s *Store) SpotNodeOnline(id string, at time.Time) error {
 // SpotNodeBusy records a heartbeat that listed sessions on the node: the idle
 // clock restarts, and the peak is kept for the record.
 func (s *Store) SpotNodeBusy(endpointID string, sessions int, at time.Time) error {
-	_, err := s.write.Exec(`UPDATE fleet_spot_nodes SET last_busy_at = ?, peak_sessions = MAX(peak_sessions, ?)
+	_, err := s.write.Exec(`UPDATE fleet_spot_nodes SET last_busy_at = ?, peak_sessions = `+s.d.greatest("peak_sessions", "?")+`
 		WHERE endpoint_id = ? AND state <> ?`, fmtTime(at), sessions, endpointID, SpotReleased)
 	return err
 }
@@ -292,7 +286,10 @@ func (s *Store) ReleaseLeasesOfEndpoint(endpointID string) ([]Lease, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT `+leaseCols+` FROM fleet_leases WHERE endpoint_id = ?`, endpointID)
+	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(`SELECT `+leaseCols+` FROM fleet_leases WHERE endpoint_id = ?`+s.d.forUpdate(), endpointID)
 	if err != nil {
 		return nil, err
 	}

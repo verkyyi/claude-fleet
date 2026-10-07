@@ -222,7 +222,7 @@ fi
 # a step that fails here is what kept every tool out (#1210 ②).
 if [ -n "$nodaemons" ]; then
   t='~'   # the two markers, ~-relative, for the human reading the line
-  say "daemons: WARN — not installed: no system LaunchDaemons com.claude-fleet.$login.* and no GUI session for $login (no gui/$(id -u) launchd domain). The commands and the guide work without them; the background services (dash refresh, cleanup, dispatch, install-sync, …) do not run until an admin installs them for $login — fleet-login-new.sh --apply's step 8, or docs/SHARED-MACHINE.md «Add the daemons to an existing login» — or you sign in once at the console (or Screen Sharing), then \`rm -f ${APPLIED/#$HOME/$t} ${DONE/#$HOME/$t}\` and log in again"
+  say "daemons: WARN — not installed: no system LaunchDaemons com.claude-fleet.$login.* and no GUI session for $login (no gui/$(id -u) launchd domain). The commands and the guide work without them; the background services (dash refresh, cleanup, dispatch, install-sync, …) do not run until an admin installs them for $login — \`~/.claude/fleet/bin/fleet-login-new.sh $login --daemons-only --apply\` (docs/SHARED-MACHINE.md «Add the daemons to an existing login») — or you sign in once at the console (or Screen Sharing), then \`rm -f ${APPLIED/#$HOME/$t} ${DONE/#$HOME/$t}\` and log in again"
 fi
 
 # --- zshrc --------------------------------------------------------------------

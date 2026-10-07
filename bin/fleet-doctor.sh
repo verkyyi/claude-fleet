@@ -261,6 +261,37 @@ if [ "$_ho_on" = 1 ] || [ "$_hub_on" = 1 ]; then
   fi
 fi
 
+# --- hub: does fleet.conf say what node.env says (issue #2116) ----------------
+# The node agent reads node.env and uses the hub; every fleet script reads the
+# config files. When node.env has CCQUOTA_FLEET=1 / a hub URL and the files do
+# not, the relay / trust / worker-assertion roads all answer "the hub module is
+# off" while the agent is plainly on it. Read from the FILES only — an export in
+# this shell is exactly the hand fix that hides it. No node.env ⇒ no row.
+_hb_nenv="$conf_dir/node.env"; [ -r "$_hb_nenv" ] || _hb_nenv="$conf_dir/node.pub.env"
+if [ -r "$_hb_nenv" ]; then
+  _hb_non=$(sed -n 's/^CCQUOTA_FLEET=//p' "$_hb_nenv" | head -n 1 | tr -d "\"' ")
+  _hb_nurl=$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$_hb_nenv" | head -n 1 | tr -d "\"' ")
+  _hb_con=$(_xconf_val "$conf_dir/fleet.conf" CCQUOTA_FLEET)
+  [ -n "$_hb_con" ] || _hb_con=$(_xconf_val "$conf_dir/fleet.settings" CCQUOTA_FLEET)
+  [ -n "$_hb_con" ] || _hb_con=$(_xconf_val "$(dirname "$0")/../fleet.conf" CCQUOTA_FLEET)
+  _hb_curl=$(_xconf_val "$conf_dir/fleet.conf" FLEET_HUB_URL)
+  [ -n "$_hb_curl" ] || _hb_curl=$(_xconf_val "$conf_dir/fleet.conf" CCQUOTA_HUB_URL)
+  [ -n "$_hb_curl" ] || _hb_curl=$(_xconf_val "$(dirname "$0")/../fleet.conf" CCQUOTA_HUB_URL)
+  _hb_miss=''
+  [ "$_hb_non" = 1 ] && [ "$_hb_con" != 1 ] && _hb_miss="CCQUOTA_FLEET=1"
+  [ -n "$_hb_nurl" ] && [ -z "$_hb_curl" ] && _hb_miss="${_hb_miss:+${_hb_miss}、}FLEET_HUB_URL"
+  _hb_show=$(printf '%s' "${_hb_curl:-$_hb_nurl}" | sed 's#^[a-z]*://##; s#/$##')
+  if [ -n "$_hb_miss" ]; then
+    if [ "$_hb_non" = 1 ] && [ "$_hb_con" = 0 ]; then
+      warn hub "node.env 接着入口 ${_hb_show}，fleet.conf 却写着 CCQUOTA_FLEET=0 — 中转 / 可信 / 会话通行证都以为入口关着；是有意关的就把 node.env 也关掉，否则删掉那一行再跑 \`bash $(dirname "$0")/fleet-conf.sh migrate\`"
+    else
+      warn hub "node.env 接着入口 ${_hb_show}，fleet.conf 没写 ${_hb_miss} — fleet 工具（中转 / 可信 / 会话通行证）都以为入口关着；\`bash $(dirname "$0")/fleet-conf.sh migrate\` 补齐（同步时自动跑）"
+    fi
+  elif [ "$_hb_non" = 1 ]; then
+    pass hub "接着入口 ${_hb_show}（fleet.conf 与 node.env 一致）"
+  fi
+fi
+
 # --- 可信: does the hub hand this machine subscription credentials (issue #1968) ---
 # The operator's word on the hub (fleet.node_trust.<machine>), read as this
 # login's node sees it (GET /v1/node/self). Only where the node token row
@@ -468,6 +499,18 @@ fi
 skills_dir="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
 if [ "$plug" = 0 ] && [ -f "$cmd_dir/fleet-handoff.md" ] && [ ! -f "$skills_dir/handoff/SKILL.md" ]; then
   warn skills "/fleet-handoff installed but its base skill $skills_dir/handoff/SKILL.md is missing — handoff will have nothing to delegate to (run /fleet-sync-install to install skills/*)"
+fi
+# The orchestrating session (issue #1957) is seeded `/fleet-orchestrate`; with
+# the skill missing it opens on `Unknown command` and sits there empty (issue
+# #2110). Same switch fleet-orchestrator.sh reads: FLEET_ORCHESTRATOR, default 承载.
+_orch_on=${FLEET_ORCHESTRATOR:-$(_gconf_val FLEET_ORCHESTRATOR)}
+[ -n "$_orch_on" ] || _orch_on=$(bash "$(dirname "$0")/fleet-conf.sh" host 2>/dev/null)
+case "$_orch_on" in 1|on|yes|true) _orch_on=1 ;; *) _orch_on=0 ;; esac
+_orch_agent=${FLEET_AGENT:-$(_gconf_val FLEET_AGENT)}
+if [ "$_orch_agent" = codex ]; then _orch_sk="${CODEX_HOME:-$HOME/.codex}/skills/fleet-orchestrate/SKILL.md"
+else _orch_sk="$skills_dir/fleet-orchestrate/SKILL.md"; fi
+if [ "$_orch_on" = 1 ] && [ "$plug" = 0 ] && [ ! -f "$_orch_sk" ]; then
+  warn skills "the orchestrator is on here but $_orch_sk is missing — its session opens on \`Unknown command: /fleet-orchestrate\` and sits empty (run /fleet-sync-install; or FLEET_ORCHESTRATOR=0 to turn it off)"
 fi
 
 # doc-preview is a soft/opt dep on tailscale: it hosts Markdown docs on the

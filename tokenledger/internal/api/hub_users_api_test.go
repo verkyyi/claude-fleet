@@ -398,8 +398,9 @@ func TestMachineLoginSetting(t *testing.T) {
 }
 
 // The case that filed claude-fleet#2087: an old principal held 24haowan;
-// the admin cleared it in the settings, and a GitHub person added to the
-// list takes it. Nothing outside the database can still claim it.
+// a GitHub person added to the list takes it. Nothing outside the database
+// can still claim it, and the old identity's map entry gives way at once —
+// no clearing by hand first (claude-fleet#2108).
 func TestHubSettings_ReleasedMachineLoginGoesToAGitHubPerson(t *testing.T) {
 	h := newUsersHarness(t)
 	h.call(t, http.MethodPost, "/v1/fleet/users", `{"login":"alice"}`, nil)
@@ -409,17 +410,18 @@ func TestHubSettings_ReleasedMachineLoginGoesToAGitHubPerson(t *testing.T) {
 	if code, body := put("user.caojian.machine_login", "24haowan"); code != http.StatusOK {
 		t.Fatalf("caojian = %d %v", code, body)
 	}
-	if code, _ := put("user.200.machine_login", "24haowan"); code != http.StatusBadRequest {
-		t.Fatalf("alice took caojian's login: %d", code)
-	}
-	if code, body := put("user.caojian.machine_login", ""); code != http.StatusOK {
-		t.Fatalf("clear caojian = %d %v", code, body)
-	}
 	if code, body := put("user.200.machine_login", "24haowan"); code != http.StatusOK {
-		t.Fatalf("alice after the clear = %d %v", code, body)
+		t.Fatalf("alice over caojian's old entry = %d %v", code, body)
 	}
 	if u, _ := h.srv.Store.HubUserByID(200); u == nil || u.MachineLogin != "24haowan" {
 		t.Fatalf("alice = %+v", u)
+	}
+	if set, _ := h.srv.Store.FleetSettings(); set["user.caojian.machine_login"] != "" {
+		t.Fatalf("caojian's entry is still there: %v", set)
+	}
+	// Now a GitHub person's: the old identity cannot have it back.
+	if code, _ := put("user.caojian.machine_login", "24haowan"); code != http.StatusBadRequest {
+		t.Fatalf("caojian took alice's login back: %d", code)
 	}
 }
 

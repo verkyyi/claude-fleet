@@ -114,3 +114,34 @@ func TestLiveAccountRead(t *testing.T) {
 		t.Logf("client=%s windows=%d usage=%s auth_unchanged=true", r.Version, len(r.Quota.Windows), r.UsageError)
 	}
 }
+
+// A stored credential's id_token names the same account uuid the usage side
+// derives from the live auth file (claude-fleet#2127).
+func TestAccountUUIDFromIDTokenMatchesReadAuth(t *testing.T) {
+	home := t.TempDir()
+	auth := map[string]any{"chatgpt_account_id": "workspace", "chatgpt_user_id": "one", "chatgpt_plan_type": "pro"}
+	idTok := fakeJWT(map[string]any{"email": "one@example.test", "https://api.openai.com/auth": auth})
+	b, _ := json.Marshal(map[string]any{"auth_mode": "chatgpt", "tokens": map[string]string{
+		"access_token": fakeJWT(map[string]any{"https://api.openai.com/auth": auth}), "id_token": idTok, "account_id": "workspace"}})
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := ReadAuth(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, aid := range []string{"workspace", ""} {
+		if got := AccountUUIDFromIDToken(idTok, aid); got != a.Identity.AccountUUID {
+			t.Fatalf("account_id %q: %q, want %q", aid, got, a.Identity.AccountUUID)
+		}
+	}
+	for name, got := range map[string]string{
+		"no token":          AccountUUIDFromIDToken("", "workspace"),
+		"no member":         AccountUUIDFromIDToken(fakeJWT(map[string]any{"email": "x"}), "workspace"),
+		"accounts disagree": AccountUUIDFromIDToken(idTok, "elsewhere"),
+	} {
+		if got != "" {
+			t.Fatalf("%s: %q, want none", name, got)
+		}
+	}
+}

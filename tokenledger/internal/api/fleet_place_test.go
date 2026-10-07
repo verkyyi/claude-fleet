@@ -121,6 +121,7 @@ func TestNodePlaceIdleNodeStaysLocal(t *testing.T) {
 	h, m5, m4, f5, f4 := twoNodes(t)
 	m5.beatLoad("m5", "verk", machineA, 0.5, 3, f5) // 0.05/core
 	m4.beatLoad("m4", "verk", machineB, 6, 1, f4)   // 0.60/core
+	waitLoad(t, h, "m4", 6)
 	waitFor(t, 3*time.Second, "m5 cooled down", func() bool {
 		hb, _, _ := h.srv.nodeStatusOf("ep_m5", time.Now())
 		return hb.Load1 == 0.5
@@ -615,6 +616,7 @@ func TestNodePlaceScratchIdleNodeStaysLocal(t *testing.T) {
 	h, m5, m4, f5, f4 := twoNodes(t)
 	m5.beatLoad("m5", "verk", machineA, 0.5, 3, f5)
 	m4.beatLoad("m4", "verk", machineB, 6, 1, f4)
+	waitLoad(t, h, "m4", 6)
 	waitFor(t, 3*time.Second, "m5 cooled down", func() bool {
 		hb, _, _ := h.srv.nodeStatusOf("ep_m5", time.Now())
 		return hb.Load1 == 0.5

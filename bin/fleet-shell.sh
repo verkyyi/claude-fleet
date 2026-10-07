@@ -79,7 +79,9 @@
 #   portal <session>       ⌘N / prefix c / a tap on 「新任务」 (issue #1953): the
 #                          stage's writing-area window (`@fleet_role portal`,
 #                          `@remote new`, bin/fleet-compose.py) made once and
-#                          selected — the right pane shows it, the list its row
+#                          selected — the right pane shows it, the list its row;
+#                          one an older client started (`@portal_ver`) is
+#                          respawned on the new code first (issue #2113)
 #   keys <session>         ⌘/ / prefix ? (issue #1952): the one page of keys
 #                          (fleet-keys.sh --page) as a stage window of its own
 #                          (`@fleet_role keys`) — the right pane shows it, q / esc
@@ -440,10 +442,34 @@ mirror() {
 # checkout): fleet-client-update.sh compares it with the files on disk, and
 # files that moved under a running client are reloaded into it (issue #1829).
 # Set at a new start and by `reload` — never on a re-attach, which loads nothing.
+# Beside it @client_digest, the same client by CONTENT (issue #2145): a home
+# with no .client-version is told apart by that — fleet-client-update.sh's
+# client_digest is the one list of files.
 stamp_ver() {
   local v
   v=$(sed -n 's/^version=//p' "$REAL_BIN/../.client-version" 2>/dev/null | head -n 1)
   [ -n "$v" ] && T set-option -g @client_version "$v" 2>/dev/null
+  v=$(bash "$REAL_BIN/fleet-client-update.sh" digest --root "$REAL_BIN/.." 2>/dev/null)
+  [ -n "$v" ] && T set-option -g @client_digest "$v" 2>/dev/null
+  return 0
+}
+# portal_ver — the code the writing area runs (issue #2113): fleet-compose.py and
+# the texts it loads, by content — so a checkout (no .client-version) and a
+# reload that moved nothing else are told apart the same way.
+portal_ver() {
+  cat "${SHADOW:-$BIN}/fleet-compose.py" "${SHADOW:-$BIN}/fleet-ui-lang.sh" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }'
+}
+# portal_fresh <window id> [--force] — the stage's portal window on the code on
+# disk: a window started by another version (@portal_ver differs, or none) has
+# its pane respawned in place — same window id, same @fleet_role / @remote, so
+# the list's row stays put. The draft is on disk (fleet-compose.py saves it on
+# the SIGHUP the respawn sends), so nothing typed is lost.
+portal_fresh() {
+  local w="$1" force="${2:-}" v
+  v=$(portal_ver)
+  [ -z "$force" ] && [ "$(TS show-window-option -v -t "$w" @portal_ver 2>/dev/null)" = "$v" ] && return 0
+  TS respawn-pane -k -t "$w" "exec python3 $(sq "${SHADOW:-$BIN}/fleet-compose.py") --session $(sq "$SESS")" 2>/dev/null || return 1
+  TS set-window-option -t "$w" @portal_ver "$v" 2>/dev/null
   return 0
 }
 # iterm_keys — the iTerm2 profile `fleet` (issue #1903): its ⌘ chords send the
@@ -832,7 +858,10 @@ portal)
     # fleet_win_role_stamp's write, on the stage's socket (fleet-lib.sh is the
     # node's whole library; the one option is all this needs of it)
     TS set-window-option -t "$w" @fleet_role portal \; set-window-option -t "$w" @remote new \; \
+      set-window-option -t "$w" @portal_ver "$(portal_ver)" \; \
       set-window-option -t "$w" automatic-rename off 2>/dev/null
+  else
+    portal_fresh "$w"       # made by an older client: on the new code (issue #2113)
   fi
   TS select-window -t "$w" 2>/dev/null || exit 1
   lp=$(T list-panes -a -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }')
@@ -924,6 +953,16 @@ reload)
           case "$c" in *fleet-remote-view.sh*) TS respawn-pane -k -t "$p" 2>/dev/null ;; esac
         done
   fi
+  # the stage's long-lived windows (issue #2113): the writing area on the new
+  # code when what it runs moved (its draft is on disk), the keys page when
+  # fleet-keys.sh did — told by @fleet_role, never a name
+  TS list-windows -t "=$STAGE" -F '#{window_id} #{@fleet_role}' 2>/dev/null \
+    | while read -r w r; do
+        case "$r" in
+          portal) portal_fresh "$w" ${all:+--force} ;;
+          keys) changed fleet-keys.sh && TS respawn-pane -k -t "$w" 2>/dev/null ;;
+        esac
+      done
   # restart_loop <pid-file> <start command…> — that loop, on the new code
   restart_loop() {
     local pf="$1" p=''

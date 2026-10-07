@@ -55,7 +55,7 @@ type DrillDeleted struct {
 }
 
 func (s *Store) ensureFleetDrill() error {
-	if _, err := s.write.Exec(fleetDrillSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetDrillSchema)); err != nil {
 		return fmt.Errorf("create fleet_drill_people table: %w", err)
 	}
 	return nil
@@ -117,7 +117,7 @@ func scanDrill(row interface{ Scan(...any) error }) (*DrillPerson, error) {
 // Drill reads the drill row of pid; nil, nil when pid is not a drill person.
 func (s *Store) Drill(pid string) (*DrillPerson, error) {
 	d, err := scanDrill(s.read.QueryRow(`SELECT `+drillCols+` FROM fleet_drill_people
-		WHERE principal_id = ? COLLATE NOCASE`, pid))
+		WHERE `+s.d.eqNocase("principal_id"), pid))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -216,7 +216,7 @@ func (s *Store) DeleteDrill(pid, actor string, now time.Time) (*DrillDeleted, er
 		return nil, err
 	}
 	defer tx.Rollback()
-	devs, err := tx.Query(`SELECT fingerprint FROM fleet_devices WHERE principal_id = ? COLLATE NOCASE`, d.PrincipalID)
+	devs, err := tx.Query(`SELECT fingerprint FROM fleet_devices WHERE `+s.d.eqNocase("principal_id"), d.PrincipalID)
 	if err != nil {
 		return nil, err
 	}
@@ -240,13 +240,13 @@ func (s *Store) DeleteDrill(pid, actor string, now time.Time) (*DrillDeleted, er
 		}
 	}
 	out.Devices = len(fps)
-	res, err := tx.Exec(`DELETE FROM fleet_accounts WHERE principal_id = ? COLLATE NOCASE`, d.PrincipalID)
+	res, err := tx.Exec(`DELETE FROM fleet_accounts WHERE `+s.d.eqNocase("principal_id"), d.PrincipalID)
 	if err != nil {
 		return nil, err
 	}
 	n, _ := res.RowsAffected()
 	out.Accounts = int(n)
-	if _, err := tx.Exec(`DELETE FROM fleet_principals WHERE principal_id = ? COLLATE NOCASE`, d.PrincipalID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM fleet_principals WHERE `+s.d.eqNocase("principal_id"), d.PrincipalID); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(`DELETE FROM fleet_drill_people WHERE principal_id = ?`, d.PrincipalID); err != nil {

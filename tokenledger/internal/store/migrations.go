@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 )
@@ -21,7 +22,7 @@ import (
 type migration struct {
 	ID   int
 	Name string
-	Run  func(tx *sql.Tx) (map[string]int64, error)
+	Run  func(d dialect, tx *sql.Tx) (map[string]int64, error)
 }
 
 // migrations is every numbered step, in order. Never renumber or edit one
@@ -52,23 +53,22 @@ var sourceTables = []string{
 	"account_usage_observations", "subscription_plans",
 }
 
-func removeCompanyBusiness(tx *sql.Tx) (map[string]int64, error) {
+func removeCompanyBusiness(d dialect, tx *sql.Tx) (map[string]int64, error) {
 	done := map[string]int64{}
 	in := "'" + RemovedSources[0] + "'"
 	for _, src := range RemovedSources[1:] {
 		in += ", '" + src + "'"
 	}
 	for _, t := range sourceTables {
-		if err := deleteRows(tx, t, fmt.Sprintf(`source IN (%s)`, in), done, map[string]bool{}); err != nil {
+		if err := deleteRows(d, tx, t, fmt.Sprintf(`source IN (%s)`, in), done, map[string]bool{}); err != nil {
 			return nil, fmt.Errorf("delete removed sources from %s: %w", t, err)
 		}
 	}
 	for _, t := range removedTables {
 		var n int64
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, t).Scan(&n); err != nil {
+		if ok, err := d.tableExists(tx, t); err != nil {
 			return nil, err
-		}
-		if n == 0 {
+		} else if !ok {
 			continue
 		}
 		if err := tx.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, t)).Scan(&n); err != nil {
@@ -97,19 +97,19 @@ func removeCompanyBusiness(tx *sql.Tx) (map[string]int64, error) {
 // row elsewhere that references one of them (claude-fleet#2050: production's
 // endpoints pointed at the gateway / voice accounts, and the bare DELETE died
 // on FOREIGN KEY constraint failed). The references come from PRAGMA
-// foreign_key_list over every table, not from a list written here, so a table
+// foreign_key_list (Postgres: pg_constraint) over every table, not from a list written here, so a table
 // added later is covered: a nullable reference is set NULL (an endpoint goes
 // back to "enrolled, never reported" and keeps its row), a NOT NULL one is
 // deleted with its own dependents first. Counts land in done as
 // "deleted.<table>" / "unlinked.<table>.<column>".
-func deleteRows(tx *sql.Tx, table, where string, done map[string]int64, visiting map[string]bool) error {
+func deleteRows(d dialect, tx *sql.Tx, table, where string, done map[string]int64, visiting map[string]bool) error {
 	if visiting[table] {
 		return fmt.Errorf("foreign keys cycle through %s", table)
 	}
 	visiting[table] = true
 	defer delete(visiting, table)
 
-	refs, err := referencesTo(tx, table)
+	refs, err := referencesTo(d, tx, table)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func deleteRows(tx *sql.Tx, table, where string, done map[string]int64, visiting
 			}
 			continue
 		}
-		if err := deleteRows(tx, r.child, match, done, visiting); err != nil {
+		if err := deleteRows(d, tx, r.child, match, done, visiting); err != nil {
 			return err
 		}
 	}
@@ -153,70 +153,41 @@ type fkRef struct {
 }
 
 // referencesTo lists every foreign key, in any table, that points at parent.
-func referencesTo(tx *sql.Tx, parent string) ([]fkRef, error) {
-	rows, err := tx.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+func referencesTo(d dialect, tx *sql.Tx, parent string) ([]fkRef, error) {
+	tables, err := d.tables(tx)
 	if err != nil {
 		return nil, err
 	}
-	var tables []string
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		tables = append(tables, n)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
 	var parentPK []string
 	var out []fkRef
 	for _, child := range tables {
-		fks, err := tx.Query(`SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(?) ORDER BY id, seq`, child)
+		fks, err := d.foreignKeys(tx, child)
 		if err != nil {
-			return nil, fmt.Errorf("foreign keys of %s: %w", child, err)
-		}
-		byID := map[int]*fkRef{}
-		var ids []int
-		for fks.Next() {
-			var id int
-			var tbl, from string
-			var to sql.NullString
-			if err := fks.Scan(&id, &tbl, &from, &to); err != nil {
-				fks.Close()
-				return nil, err
-			}
-			if !strings.EqualFold(tbl, parent) {
-				continue
-			}
-			r := byID[id]
-			if r == nil {
-				r = &fkRef{child: child, nullable: true}
-				byID[id] = r
-				ids = append(ids, id)
-			}
-			r.from = append(r.from, from)
-			r.to = append(r.to, to.String) // "" = the parent's primary key, filled below
-		}
-		fks.Close()
-		if err := fks.Err(); err != nil {
 			return nil, err
 		}
-		if len(ids) == 0 {
+		var mine []fkRef
+		for _, fk := range fks {
+			if strings.EqualFold(fk.table, parent) {
+				mine = append(mine, fkRef{child: child, from: fk.from, to: fk.to, nullable: true})
+			}
+		}
+		if len(mine) == 0 {
 			continue
 		}
-		notnull, err := notNullColumns(tx, child)
+		cols, err := d.columns(tx, child)
 		if err != nil {
 			return nil, err
 		}
-		for _, id := range ids {
-			r := byID[id]
-			if r.to[0] == "" {
+		// A primary-key column counts as NOT NULL: SQLite would let a
+		// non-integer one hold NULL, the hub never does.
+		notnull := map[string]bool{}
+		for _, c := range cols {
+			notnull[c.name] = c.notNull || c.pk != 0
+		}
+		for _, r := range mine {
+			if r.to[0] == "" { // "" = the parent's primary key
 				if parentPK == nil {
-					if parentPK, err = primaryKey(tx, parent); err != nil {
+					if parentPK, err = primaryKey(d, tx, parent); err != nil {
 						return nil, err
 					}
 				}
@@ -230,51 +201,29 @@ func referencesTo(tx *sql.Tx, parent string) ([]fkRef, error) {
 					r.nullable = false
 				}
 			}
-			out = append(out, *r)
+			out = append(out, r)
 		}
 	}
 	return out, nil
 }
 
-// notNullColumns names table's columns that refuse NULL (a primary-key column
-// counts: SQLite would let a non-integer one hold NULL, the hub never does).
-func notNullColumns(tx *sql.Tx, table string) (map[string]bool, error) {
-	rows, err := tx.Query(`SELECT name, "notnull", pk FROM pragma_table_info(?)`, table)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]bool{}
-	for rows.Next() {
-		var name string
-		var nn, pk int
-		if err := rows.Scan(&name, &nn, &pk); err != nil {
-			return nil, err
-		}
-		out[name] = nn != 0 || pk != 0
-	}
-	return out, rows.Err()
-}
-
 // primaryKey lists table's primary-key columns in key order.
-func primaryKey(tx *sql.Tx, table string) ([]string, error) {
-	rows, err := tx.Query(`SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk`, table)
+func primaryKey(d dialect, tx *sql.Tx, table string) ([]string, error) {
+	cols, err := d.columns(tx, table)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	sort.SliceStable(cols, func(i, j int) bool { return cols[i].pk < cols[j].pk })
 	var out []string
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			return nil, err
+	for _, c := range cols {
+		if c.pk > 0 {
+			out = append(out, c.name)
 		}
-		out = append(out, n)
 	}
 	if len(out) == 0 {
 		out = []string{"rowid"}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // runMigrations applies every numbered migration this database has not run.
@@ -299,7 +248,7 @@ func runMigrations(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		done, err := m.Run(tx)
+		done, err := m.Run(dialectOf(db), tx)
 		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("migration %d (%s): %w", m.ID, m.Name, err)

@@ -58,7 +58,7 @@ func parseRefresh(provider string, s Secret, status int, raw []byte, now time.Ti
 	if status != http.StatusOK {
 		// The body names the reason (invalid_grant = the refresh token was
 		// revoked or already used) and never echoes the token back.
-		return Access{}, s, fmt.Errorf("token endpoint answered %d: %s", status, truncate(strings.TrimSpace(string(raw)), 200))
+		return Access{}, s, &ProviderRefusal{Status: status, Code: refusalCode(raw), Body: truncate(strings.TrimSpace(string(raw)), 200)}
 	}
 	var tr tokenResponse
 	if err := json.Unmarshal(raw, &tr); err != nil {
@@ -102,6 +102,68 @@ func parseRefresh(provider string, s Secret, status int, raw []byte, now time.Ti
 		return acc, next, nil
 	}
 	return Access{}, s, fmt.Errorf("provider %q has no refresh", provider)
+}
+
+// ProviderRefusal is a token endpoint's own non-200 answer to a refresh —
+// however it travelled (the hub, an admin node, the relay). Code is the
+// OAuth error the body names (invalid_grant, refresh_token_reused, …), ""
+// when it names none.
+type ProviderRefusal struct {
+	Status int
+	Code   string
+	Body   string
+}
+
+func (e *ProviderRefusal) Error() string {
+	return fmt.Sprintf("token endpoint answered %d: %s", e.Status, e.Body)
+}
+
+// refusalCode reads the error code an OAuth / OpenAI error body names: a bare
+// {"error":"invalid_grant"} or OpenAI's {"error":{"code":"refresh_token_reused"}}.
+func refusalCode(raw []byte) string {
+	var b struct {
+		Error json.RawMessage `json:"error"`
+		Code  string          `json:"code"`
+	}
+	if json.Unmarshal(raw, &b) != nil {
+		return ""
+	}
+	var code string
+	if json.Unmarshal(b.Error, &code) == nil && code != "" {
+		return code
+	}
+	var obj struct {
+		Code string `json:"code"`
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(b.Error, &obj) == nil {
+		if obj.Code != "" {
+			return obj.Code
+		}
+		if obj.Type != "" {
+			return obj.Type
+		}
+	}
+	return b.Code
+}
+
+// reauthCodes are the refusals that mean the refresh token itself is dead —
+// revoked, already rotated elsewhere, or expired — so no retry can help and
+// only a new login can (claude-fleet#2007).
+var reauthCodes = map[string]bool{
+	"invalid_grant":             true,
+	"refresh_token_reused":      true,
+	"refresh_token_expired":     true,
+	"refresh_token_invalidated": true,
+	"token_revoked":             true,
+}
+
+// NeedsReauth reports whether err is the provider refusing the refresh token
+// itself. A relay or a node that could not ask (ErrRefreshUnavailable), a
+// network error or a 5xx are NOT: they say nothing about the account.
+func NeedsReauth(err error) bool {
+	var pr *ProviderRefusal
+	return errors.As(err, &pr) && pr.Status < 500 && reauthCodes[pr.Code]
 }
 
 // HTTPRefresher refreshes against the providers' token endpoints from the

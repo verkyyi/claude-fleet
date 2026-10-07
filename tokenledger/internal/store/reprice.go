@@ -170,7 +170,7 @@ func (s *Store) Reprice(p Pricer, since time.Time) (RepriceResult, error) {
 	// events can no longer reconstruct, and refusing the whole reprice over
 	// hours it was never going to rewrite would block a rate correction for a
 	// reason that does not apply to it.
-	rows, err := rebuildRollupTx(tx, true)
+	rows, err := rebuildRollupTx(s.d, tx, true)
 	if err != nil {
 		return out, fmt.Errorf("refold rollup after reprice: %w", err)
 	}

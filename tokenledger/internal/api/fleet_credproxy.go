@@ -189,6 +189,7 @@ func (s *Server) sessionBind(workerID, principal, provider string, now time.Time
 	if len(choices) == 0 {
 		return b, errors.New("no " + provider + " account in the vault for " + principal + " (nor a shared-pool one)")
 	}
+	choices = s.byHeadroom(choices, now) // one at its limit last (claude-fleet#2115)
 	pick := store.SessionBind{WorkerID: workerID, Provider: provider, Owner: choices[0].PrincipalID,
 		Account: choices[0].Account, SetBy: "auto"}
 	if err == nil { // the bound account went away: re-pick, counted as a rebind

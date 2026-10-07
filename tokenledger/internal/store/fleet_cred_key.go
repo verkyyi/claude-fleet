@@ -39,7 +39,7 @@ type VaultKey struct {
 var ErrNoVaultKey = errors.New("no wrapped vault key yet")
 
 func (s *Store) ensureFleetCredKey() error {
-	if _, err := s.write.Exec(fleetCredKeySchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetCredKeySchema)); err != nil {
 		return fmt.Errorf("create fleet credential key table: %w", err)
 	}
 	return nil

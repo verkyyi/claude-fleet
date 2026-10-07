@@ -123,7 +123,7 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 	}
 	now := time.Now()
 	if login, ok := s.mappedLoginFor(principal); ok {
-		moved, err := s.takeOverLegacyLogin(principal, login, displayName, actor, now)
+		moved, err := s.takeOverLegacyLogin(principal, login, displayName, actor, now, false)
 		if err != nil {
 			log.Printf("fleet: sign-in of %s: mapped to login %s but %v", principal, login, err)
 			return nil
@@ -175,8 +175,10 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 // (store.RekeyPrincipal), no op is sent. Idempotent: nothing to move ⇒ nil,
 // nil. Refuses — the login stays where it is — when it is another GitHub
 // person's (errLoginHeld names them) or principal already has a login of its
-// own.
-func (s *Server) takeOverLegacyLogin(principal, login, displayName, actor string, now time.Time) (*store.RekeyResult, error) {
+// own. remap is the operator mapping principal to login right now
+// (handOverLegacyMap, claude-fleet#2108): an old map entry naming the old
+// identity gives way, and the re-key drops it.
+func (s *Server) takeOverLegacyLogin(principal, login, displayName, actor string, now time.Time, remap bool) (*store.RekeyResult, error) {
 	if _, ok := githubIDOf(principal); !ok {
 		return nil, nil
 	}
@@ -193,7 +195,7 @@ func (s *Server) takeOverLegacyLogin(principal, login, displayName, actor string
 	if _, gh := githubIDOf(owner.ID); gh {
 		return nil, &errLoginHeld{login: login, owner: s.personName(owner.ID)}
 	}
-	if l, ok := s.principalLogins()[strings.ToLower(owner.ID)]; ok && l == login {
+	if l, ok := s.principalLogins()[strings.ToLower(owner.ID)]; ok && l == login && !remap {
 		// The operator still maps the old identity to it: their word stands
 		// until they clear it.
 		return nil, fmt.Errorf("login %s is still mapped to %s (%s) — clear that first",

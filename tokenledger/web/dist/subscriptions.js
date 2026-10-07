@@ -38,7 +38,10 @@ function card(s, skip) {
     `<div class="t"><b>${esc(s.label)}</b><span>${esc(s.plan || (s.prov === 'codex' ? 'Codex' : 'Claude'))}</span></div>${chip}</div>` +
     (s.available || s.h5 || s.h7 ? win(t('ui.sub.h5'), s.h5, skip) + win(t('ui.sub.h7'), s.h7, skip)
       : `<div class="win-h"><span>${esc(s.reason || t('ui.sub.noUsage'))}</span></div>`) +
-    `<div class="sub-meta"><div><span>${esc(t('ui.sub.sessionsNow'))}</span>${s.sessions}</div><div><span>${esc(t('ui.sub.cred'))}</span><span class="chip ${cs.tone}">${ic('shield')}${esc(cs.text)}</span></div></div>` +
+    `<div class="sub-meta"><div><span>${esc(t('ui.sub.sessionsNow'))}</span>${s.sessions}</div>` +
+    (s.readAt ? `<div title="${esc(s.readNote)}"><span>${esc(t('ui.sub.lastRead'))}</span>${esc(relTime(s.readAt))}` +
+      (s.readVia ? ` · ${esc(t(s.readVia === 'hub' ? 'ui.sub.viaHub' : 'ui.sub.viaNode'))}` : '') + '</div>' : '') +
+    `<div><span>${esc(t('ui.sub.cred'))}</span><span class="chip ${cs.tone}">${ic('shield')}${esc(cs.text)}</span></div></div>` +
     acts + '</div>';
 }
 
@@ -98,7 +101,10 @@ Shell.mount('subscriptions', async (ctx) => {
   if (lim.status === 'rejected' && cr.status === 'rejected') throw lim.reason;
   const skipRow = val(set) && (val(set).hub || []).find((h) => h.key === 'pool.skip_pct');
   const skip = Number(skipRow && skipRow.value) || 85;
-  const cards = subscriptions({ limits: val(lim), accounts: val(acc), creds: val(cr), live: val(live) });
+  // Only what the vault holds is the hub's to count and manage (claude-fleet#2127);
+  // the rest of the reported accounts wait, collapsed, under 未纳管.
+  const all = subscriptions({ limits: val(lim), accounts: val(acc), creds: val(cr), live: val(live) });
+  const cards = all.filter((c) => c.managed), other = all.filter((c) => !c.managed);
   ctx.setCount('subscriptions', cards.length);
   const nC = cards.filter((c) => c.prov === 'claude').length, nX = cards.length - nC;
   const h5 = headroom(cards, 'h5'), h7 = headroom(cards, 'h7');
@@ -115,19 +121,24 @@ Shell.mount('subscriptions', async (ctx) => {
   const body = cards.length ? cards.map((c) => card(c, skip)).join('')
     : `<div class="panel"><div class="empty">${ic('card')}<b>${esc(t('ui.sub.empty'))}</b><span>${esc(t('ui.sub.emptySub'))}</span></div></div>`;
   const grid = `<div class="subcards">${body}<button class="addcard" data-act="add"><span class="plus">${ic('plus')}</span><b>${esc(t('ui.sub.addOne'))}</b><span style="font-size:12.5px">${esc(t('ui.sub.addKinds'))}</span></button></div>`;
+  const unmanaged = other.length
+    ? `<details class="panel unmanaged"><summary><b>${esc(t('ui.sub.unmanaged', { n: other.length }))}</b></summary>` +
+      `<p style="font-size:12.5px;color:var(--muted);margin:0 0 12px">${esc(t('ui.sub.unmanagedHint'))}</p>` +
+      `<div class="subcards">${other.map((c) => card(c, skip)).join('')}</div></details>`
+    : '';
 
-  const rows = leaseRows(val(live), cards, val(us));
+  const rows = leaseRows(val(live), all, val(us));
   const leases = rows.length
     ? `<div class="tw"><table class="t"><thead><tr><th>${esc(t('ui.sub.th.session'))}</th><th>${esc(t('ui.sub.th.person'))}</th><th>${esc(t('ui.sub.th.sub'))}</th><th class="r">${esc(t('ui.sub.th.since'))}</th></tr></thead><tbody>` +
       rows.map((r) => `<tr><td class="sname mono">${esc(r.session)}</td><td>${esc(r.person)}</td><td>${esc(r.sub)}</td><td class="mono r">${esc(relTime(r.since))}</td></tr>`).join('') + '</tbody></table></div>'
     : live.status === 'rejected' ? failed(live.reason) : `<div class="empty"><span>${esc(t('ui.sub.noLeases'))}</span></div>`;
-  const sws = switchRows(val(sw), cards);
+  const sws = switchRows(val(sw), all);
   const switches = sws.length
     ? '<div class="attn">' + sws.map((x) => `<div><span class="ic ok">${ic('refresh')}</span><div><b>${esc(x.from)} → ${esc(x.to)}</b><span>${esc(relTime(x.at))}${x.where ? ' · ' + esc(x.where) : ''}</span></div></div>`).join('') + '</div>'
     : sw.status === 'rejected' ? failed(sw.reason) : `<div class="empty"><span>${esc(t('ui.sub.noSwitches'))}</span></div>`;
 
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.sub.lead', { skip }))}</p></div><div class="acts"><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.sub.addOne'))}</button></div></div>` +
-    vaultNote + kpis + grid +
+    vaultNote + kpis + grid + unmanaged +
     `<div class="grid g21"><div class="panel"><div class="panel-h"><h3>${esc(t('ui.sub.who'))}</h3><span class="sub">${esc(t('ui.sub.live'))}</span></div>${leases}</div>` +
     `<div class="panel"><div class="panel-h"><h3>${esc(t('ui.sub.switches'))}</h3></div>${switches}</div></div>`;
 

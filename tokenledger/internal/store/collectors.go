@@ -13,8 +13,33 @@ func (s *Store) InsertQuota(q model.QuotaSnapshot) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.write.Exec(`INSERT OR IGNORE INTO quota_snapshots VALUES(?,?,?,?,?,?,?)`, q.AccountUUID, q.Source, q.ProfileID, q.EndpointID, observationTime(q.ObservedAt), q.Observation, string(b))
+	_, err = s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO quota_snapshots VALUES(?,?,?,?,?,?,?)`), q.AccountUUID, q.Source, q.ProfileID, q.EndpointID, observationTime(q.ObservedAt), q.Observation, string(b))
 	return err
+}
+
+// completeRead is an observation that read every pool of the account at once:
+// a node's app-server call, or the hub's own account-API read through the
+// relay (claude-fleet#2169, codex.ObservationAccountAPI).
+func completeRead(observation string) bool {
+	return observation == "app_server" || observation == "account_api"
+}
+
+// LatestQuotaFrom is the newest quota row one endpoint wrote for an account,
+// or nil — the hub's own reading (claude-fleet#2169) is looked up this way.
+func (s *Store) LatestQuotaFrom(account, endpoint string) (*model.QuotaSnapshot, error) {
+	var b string
+	err := s.read.QueryRow(`SELECT data_json FROM quota_snapshots WHERE account_uuid=? AND endpoint_id=? ORDER BY observed_at DESC LIMIT 1`, account, endpoint).Scan(&b)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var q model.QuotaSnapshot
+	if err := json.Unmarshal([]byte(b), &q); err != nil {
+		return nil, err
+	}
+	return &q, nil
 }
 
 func (s *Store) LatestQuota(account string) (*model.QuotaSnapshot, error) {
@@ -30,7 +55,7 @@ func (s *Store) LatestQuota(account string) (*model.QuotaSnapshot, error) {
 	if err = json.Unmarshal([]byte(b), &q); err != nil {
 		return nil, err
 	}
-	if q.Observation == "app_server" || time.Since(q.ObservedAt) > 10*time.Minute {
+	if completeRead(q.Observation) || time.Since(q.ObservedAt) > 10*time.Minute {
 		return &q, nil
 	}
 	// A log update may cover one model pool while the account API covers all
@@ -71,7 +96,7 @@ func (s *Store) LatestQuota(account string) (*model.QuotaSnapshot, error) {
 				}
 			}
 		}
-		if row.Observation == "app_server" {
+		if completeRead(row.Observation) {
 			break
 		}
 	}
@@ -163,7 +188,7 @@ func (s *Store) UpsertCollector(c model.CollectorStatus) error {
 		return err
 	}
 	if prev != "" && prev != c.AccountUUID {
-		if _, err = tx.Exec(`INSERT OR IGNORE INTO source_account_switches VALUES(?,?,?,?,?,?)`, c.EndpointID, c.Source, c.ProfileID, prev, c.AccountUUID, observationTime(c.ObservedAt)); err != nil {
+		if _, err = tx.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO source_account_switches VALUES(?,?,?,?,?,?)`), c.EndpointID, c.Source, c.ProfileID, prev, c.AccountUUID, observationTime(c.ObservedAt)); err != nil {
 			return err
 		}
 	}
@@ -214,7 +239,7 @@ func (s *Store) InsertAccountUsage(u model.AccountUsage) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.write.Exec(`INSERT OR IGNORE INTO account_usage_observations VALUES(?,?,?,?,?)`, u.AccountUUID, u.Source, u.EndpointID, observationTime(u.ObservedAt), string(b))
+	_, err = s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO account_usage_observations VALUES(?,?,?,?,?)`), u.AccountUUID, u.Source, u.EndpointID, observationTime(u.ObservedAt), string(b))
 	return err
 }
 

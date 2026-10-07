@@ -62,6 +62,7 @@ var routeAccess = map[string]string{
 	"/v1/node/move": accessSelf, "/v1/node/move/bundle": accessSelf, "/v1/node/move/bundle/": accessSelf,
 	"/v1/node/join": accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf,
 	"/v1/node/reclaim": accessSelf, "/v1/node/maintenance": accessSelf, "/v1/node/orchestrator": accessSelf, "/v1/node/peer-cert": accessSelf,
+	NodeLeavePath:     accessSelf,
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
 	"/v1/node/worker-records": accessSelf, "/v1/node/progress": accessSelf,
 	"/v1/node/credentials": accessSelf,
@@ -80,7 +81,7 @@ var routeAccess = map[string]string{
 	control.RenewPath: accessSelf, control.HomePath: accessSelf,
 	"/v1/fleet/client-settings": accessSelf,
 	"/v1/fleet/session-cred":    accessSelf, "/v1/fleet/session-cred/": accessSelf,
-	CredProxyResolvePath: accessSelf,
+	CredProxyResolvePath: accessSelf, CredProxyRebindPath: accessSelf,
 	// Per-person budgets (claude-fleet#1977): each proxy reports with its own
 	// token; the list is the operator's.
 	CredProxyUsagePath: accessSelf, "/v1/node/usage": accessSelf, "/v1/fleet/person-usage": accessAdmin,
@@ -121,6 +122,8 @@ var routeAccess = map[string]string{
 	"/v1/fleet/connect": accessUser, "/v1/fleet/cert": accessUser,
 	"/fleet/login": accessUser, "/connect": accessUser, "/config": accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,
+	// Take a machine off the hub (claude-fleet#1928): a user only their own.
+	NodeRetirePath: accessUser,
 }
 
 // routeMux records every pattern Handler mounts, so roles_test.go can hold
@@ -140,8 +143,9 @@ func (m *routeMux) HandleFunc(p string, h func(http.ResponseWriter, *http.Reques
 }
 
 // noLogin is the os_user a user without a machine login is scoped to: no row
-// carries it, so they see nothing rather than everything.
-const noLogin = "\x00no machine login"
+// carries it, so they see nothing rather than everything. A '/' and spaces no
+// OS login can hold, and no NUL byte: Postgres refuses one in a text argument.
+const noLogin = "/no machine login/"
 
 // errNoPerson is a user whose principal the hub cannot read.
 var errNoPerson = errors.New("could not read who you are")

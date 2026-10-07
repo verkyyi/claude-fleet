@@ -36,7 +36,7 @@ func TestMigrateProvider_PreservesRollupHistory(t *testing.T) {
 	}
 	db.Close()
 
-	s, err := Open(path) // runs migrate()
+	s, err := openSQLite(path) // runs migrate()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,7 +44,7 @@ var ErrNoTeamBundle = errors.New("no such team bundle version")
 var ErrTeamBundleBase = errors.New("the team bundle changed since that version")
 
 func (s *Store) ensureFleetTeamBundles() error {
-	if _, err := s.write.Exec(fleetTeamBundleSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetTeamBundleSchema)); err != nil {
 		return fmt.Errorf("create fleet_team_bundles table: %w", err)
 	}
 	return nil
@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS fleet_person_bundles (
 `
 
 func (s *Store) ensureFleetPersonBundles() error {
-	if _, err := s.write.Exec(fleetPersonBundleSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetPersonBundleSchema)); err != nil {
 		return fmt.Errorf("create fleet_person_bundles table: %w", err)
 	}
 	return nil

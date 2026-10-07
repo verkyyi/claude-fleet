@@ -97,8 +97,8 @@ func TestMigration1_RemovesOnlyTheCompanyBusiness(t *testing.T) {
 		}
 	}
 	for _, tbl := range removedTables {
-		if n := count(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '` + tbl + `'`); n != 0 {
-			t.Errorf("table %s survived", tbl)
+		if ok, err := s.d.tableExists(db, tbl); err != nil || ok {
+			t.Errorf("table %s survived (%v)", tbl, err)
 		}
 	}
 	if n := count(`SELECT COUNT(*) FROM endpoints WHERE kind != 'agent' AND retired_at IS NULL`); n != 0 {
@@ -209,6 +209,11 @@ func TestMigration1_ForeignKeysHold(t *testing.T) {
 	}
 	if got := count(`SELECT COUNT(*) FROM acct_grandchildren`); got != 1 {
 		t.Errorf("acct_grandchildren: %d rows, want only g-claude", got)
+	}
+	// Postgres checks every foreign key on every write, so only SQLite (which
+	// checks them only while foreign_keys is on) has anything to ask.
+	if s.d.pg() {
+		return
 	}
 	if n := count(`SELECT COUNT(*) FROM pragma_foreign_key_check`); n != 0 {
 		t.Errorf("%d foreign key violations after the migration", n)

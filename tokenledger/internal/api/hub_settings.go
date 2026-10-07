@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -343,7 +344,10 @@ func (s *Server) checkMachineLogin(pid, v string) (string, string) {
 	if !control.ValidExistingLogin(v) {
 		return "", fmt.Sprintf("%q is not a machine login (2-16 lowercase letters and digits, not reserved)", v)
 	}
-	if who := s.machineLoginOwner(v); who != "" && !strings.EqualFold(who, pid) {
+	if who := s.machineLoginOwner(v); who != "" && !strings.EqualFold(who, pid) && !s.legacyHolder(pid, who) {
+		// An old identity's map entry (user.<old id>.machine_login, copied in
+		// from the enterprise-WeChat era) gives way to a GitHub person: the
+		// mapping hands it over (handOverLegacyMap, claude-fleet#2108).
 		return "", fmt.Sprintf("machine login %s is already %s's", v, who)
 	}
 	if s.Store != nil {
@@ -370,6 +374,120 @@ func (s *Server) legacyHolder(pid, holder string) bool {
 		return false
 	}
 	return s.Store == nil || !s.Store.IsDrill(holder)
+}
+
+// handOverLegacyMap is the mapping of a GitHub person pid to login when an
+// identity from before GitHub sign-in still holds it in the settings
+// (user.<old id>.machine_login — the enterprise-WeChat map C4 copied in,
+// claude-fleet#2108). The old principal row, when it has the login, is
+// re-keyed to pid (takeOverLegacyLogin), and RekeyPrincipal drops the map
+// entry in that same transaction; an entry with no row behind it is deleted
+// here. Each drop is a hub_audit row (actor, the key, old id → pid, login).
+// Nothing to hand over ⇒ nil, nil; a refusal changes nothing.
+func (s *Server) handOverLegacyMap(actor, pid, displayName, login string, now time.Time) (*store.RekeyResult, error) {
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return nil, err
+	}
+	var key, holder string
+	for k, v := range settings {
+		if id, ok := machineLoginKey(k); ok && v == login && !strings.EqualFold(id, pid) && s.legacyHolder(pid, id) {
+			key, holder = k, id
+			break
+		}
+	}
+	if key == "" {
+		return nil, nil
+	}
+	var moved *store.RekeyResult
+	if p, err := s.Store.PrincipalByLogin(login); err == nil && strings.EqualFold(p.ID, holder) {
+		if moved, err = s.takeOverLegacyLogin(pid, login, displayName, actor, now, true); err != nil {
+			return nil, err
+		}
+	} else if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
+		return nil, err
+	}
+	if moved == nil {
+		if err := s.Store.SetFleetSetting(key, "", now); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.Store.HubAudit(actor, "setting", key, "ok",
+		fmt.Sprintf("%s → (default): login %s handed from the old identity %s to %s", login, login, holder, pid), now); err != nil {
+		log.Printf("WARN hub settings: audit %s: %v", key, err)
+	}
+	log.Printf("hub settings: %s cleared — login %s handed from %s to %s (by %s)", key, login, holder, pid, actor)
+	return moved, nil
+}
+
+// DropLegacyMachineLogins deletes every user.<old id>.machine_login (an
+// identity from before GitHub sign-in) that no longer means anything
+// (claude-fleet#2108): its login is a GitHub person's — on their hub_users
+// row or their principal row — or the old identity holds no login under it
+// ("none", a login nobody or someone else holds). An entry whose old
+// principal still holds its login, and no GitHub person is mapped to, is
+// kept: it is that person's until their GitHub account is mapped
+// (handOverLegacyMap). Each drop is a hub_audit row by "deploy". Run at
+// every start; once the entries are gone it does nothing.
+func (s *Server) DropLegacyMachineLogins(now time.Time) error {
+	if s.Store == nil {
+		return nil
+	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return err
+	}
+	ghMapped := map[string]string{}
+	if users, err := s.Store.HubUsers(); err != nil {
+		return err
+	} else {
+		for _, u := range users {
+			if u.MachineLogin != "" {
+				ghMapped[u.MachineLogin] = githubPrincipal(u.GitHubID)
+			}
+		}
+	}
+	keys := make([]string, 0, len(settings))
+	for k := range settings {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		pid, ok := machineLoginKey(k)
+		if !ok {
+			continue
+		}
+		if _, gh := githubIDOf(pid); gh || s.Store.IsDrill(pid) {
+			continue
+		}
+		login := settings[k]
+		why := ""
+		switch p, err := s.Store.PrincipalByLogin(login); {
+		case ghMapped[login] != "":
+			why = "login " + login + " is " + ghMapped[login] + "'s"
+		case err == nil:
+			if _, gh := githubIDOf(p.ID); gh {
+				why = "login " + login + " is " + p.ID + "'s"
+			} else if !strings.EqualFold(p.ID, pid) {
+				why = "login " + login + " is " + p.ID + "'s, not " + pid + "'s"
+			}
+		case errors.Is(err, store.ErrNoPrincipal):
+			why = "no account holds login " + login
+		default:
+			return err
+		}
+		if why == "" {
+			continue
+		}
+		if err := s.Store.SetFleetSetting(k, "", now); err != nil {
+			return err
+		}
+		if err := s.Store.HubAudit("deploy", "setting", k, "ok", login+" → (default): old identity, "+why, now); err != nil {
+			log.Printf("WARN hub settings: audit %s: %v", k, err)
+		}
+		log.Printf("hub settings: dropped %s=%s (old identity, %s)", k, login, why)
+	}
+	return nil
 }
 
 // machineLoginOwner is the principal a machine login belongs to, "" when
@@ -524,18 +642,29 @@ func (s *Server) putMachineLoginMoved(actor, pid, value string, settings map[str
 		if stored == noneValue {
 			stored = ""
 		}
+		var moved *store.RekeyResult
+		if stored != "" {
+			// An old identity mapped to it in the settings hands it over
+			// first; a refusal leaves everything as it was.
+			m, err := s.handOverLegacyMap(actor, pid, u.Login, stored, now)
+			if err != nil {
+				return http.StatusConflict, err.Error(), nil
+			}
+			moved = m
+		}
 		old := u.MachineLogin
 		u.MachineLogin = stored
 		if err := s.Store.UpsertHubUser(*u); err != nil {
 			return http.StatusInternalServerError, err.Error(), nil
 		}
 		s.settingAudit(actor, key, old, stored, now)
-		var moved *store.RekeyResult
 		if stored != "" {
 			// Placed now, as their sign-in would: the login is theirs on
 			// every machine an agent runs as it — taken over from an old
 			// identity first when the hub still has it there.
-			moved = s.placePrincipal(pid, u.Login, actor)
+			if m := s.placePrincipal(pid, u.Login, actor); m != nil {
+				moved = m
+			}
 		}
 		return http.StatusOK, "", moved
 	}

@@ -9,8 +9,11 @@ import (
 )
 
 func migrateDetails(db *sql.DB) error {
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS codex_request_keys(message_uuid TEXT PRIMARY KEY);
-	INSERT OR IGNORE INTO codex_request_keys SELECT message_uuid FROM usage_events WHERE source='codex'`); err != nil {
+	d := dialectOf(db)
+	if _, err := db.Exec(d.ddl(`CREATE TABLE IF NOT EXISTS codex_request_keys(message_uuid TEXT PRIMARY KEY)`)); err != nil {
+		return err
+	}
+	if _, err := db.Exec(d.insertIgnore(`INSERT OR IGNORE INTO codex_request_keys SELECT message_uuid FROM usage_events WHERE source='codex'`)); err != nil {
 		return err
 	}
 	for _, a := range []struct{ table, col, spec string }{
@@ -27,17 +30,18 @@ func migrateDetails(db *sql.DB) error {
 		if has {
 			continue
 		}
-		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.col, a.spec)); err != nil {
+		if _, err := db.Exec(d.ddl(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.col, a.spec))); err != nil {
 			return err
 		}
 	}
 	// Lift the provider out of details_json for rows written before the column
 	// existed (Codex's model_provider). Idempotent, and it never overwrites a
 	// provider a sender stated directly.
+	provider := d.jsonText("details_json", "model_provider")
 	if _, err := db.Exec(`UPDATE usage_events
-		   SET provider = json_extract(details_json, '$.model_provider')
+		   SET provider = ` + provider + `
 		 WHERE provider = ''
-		   AND json_extract(details_json, '$.model_provider') IS NOT NULL`); err != nil {
+		   AND ` + provider + ` IS NOT NULL`); err != nil {
 		return fmt.Errorf("backfill usage_events.provider: %w", err)
 	}
 	return nil
@@ -53,7 +57,7 @@ func cacheWrite(e *model.UsageEvent) (int64, int) {
 // A parser upgrade enriches the original request in place. Its account,
 // endpoint, hour, event count and token totals remain exactly as ingested.
 // Apply deltas only to the original hourly row; never rebuild pruned history.
-func enrichCodex(tx *sql.Tx, e *model.UsageEvent) error {
+func enrichCodex(d dialect, tx *sql.Tx, e *model.UsageEvent) error {
 	if e.Source != model.SourceCodex || e.Details == nil {
 		return nil
 	}
@@ -110,6 +114,6 @@ func enrichCodex(tx *sql.Tx, e *model.UsageEvent) error {
 	if _, err = tx.Exec(`UPDATE usage_events SET details_json=?,cost_usd=?,cache_write_tokens=?,cache_write_known_events=? WHERE source='codex' AND message_uuid=?`, string(b), cost, write, known, e.MessageUUID); err != nil {
 		return err
 	}
-	_, err = tx.Exec(`UPDATE usage_hourly SET cost_usd=cost_usd+?,unpriced_events=unpriced_events+?,cache_write_tokens=cache_write_tokens+?,cache_write_known_events=cache_write_known_events+? WHERE hour=strftime('%Y-%m-%dT%H:00:00Z',?) AND account_uuid=? AND endpoint_id=? AND session_id=? AND os_user=? AND cwd=? AND model=? AND provider=? AND git_branch=? AND effort=? AND entrypoint=? AND is_sidechain=? AND source='codex'`, nextCost-oldCost.Float64, nextUnpriced-oldUnpriced, write-oldWrite, int64(known)-oldKnown, ts, account, endpoint, session, user, cwd, m, provider, branch, effort, entry, side)
+	_, err = tx.Exec(`UPDATE usage_hourly SET cost_usd=cost_usd+?,unpriced_events=unpriced_events+?,cache_write_tokens=cache_write_tokens+?,cache_write_known_events=cache_write_known_events+? WHERE hour=`+d.hourOf("?")+` AND account_uuid=? AND endpoint_id=? AND session_id=? AND os_user=? AND cwd=? AND model=? AND provider=? AND git_branch=? AND effort=? AND entrypoint=? AND is_sidechain=? AND source='codex'`, nextCost-oldCost.Float64, nextUnpriced-oldUnpriced, write-oldWrite, int64(known)-oldKnown, ts, account, endpoint, session, user, cwd, m, provider, branch, effort, entry, side)
 	return err
 }

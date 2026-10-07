@@ -94,7 +94,7 @@ func TestFleetMappedGitHubPersonTakesOverALegacyLogin(t *testing.T) {
 		{`SELECT count(*) FROM fleet_certs WHERE principal_id = 'gh:3001'`, 1},
 		{`SELECT count(*) FROM fleet_person_usage WHERE principal = 'gh:3001' AND tokens = 100`, 1},
 		{`SELECT count(*) FROM fleet_settings WHERE key = 'fleet.person_budget.gh:3001'`, 1},
-		{`SELECT count(*) FROM fleet_accounts WHERE principal_id = 'CaoJian' COLLATE NOCASE`, 0},
+		{`SELECT count(*) FROM fleet_accounts WHERE lower(principal_id) = 'caojian'`, 0},
 		{`SELECT count(*) FROM fleet_devices WHERE principal_id = 'CaoJian'`, 0},
 		{`SELECT count(*) FROM fleet_settings WHERE key LIKE '%CaoJian%'`, 0},
 		{`SELECT count(*) FROM hub_audit WHERE action = 'principal.rekey' AND target = '24haowan' AND detail LIKE 'CaoJian → gh:3001%'`, 1},

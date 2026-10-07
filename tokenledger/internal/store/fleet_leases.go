@@ -11,8 +11,9 @@ import (
 // Issue leases (claude-fleet#1422, EPIC #1419 C3): before a node opens a
 // session on (repo, issue) it takes that pair's lease here, and only the holder
 // may open it. GitHub's assignee check stays behind it as the second guard —
-// GitHub has no compare-and-swap, this table does (the store has one writer
-// connection, and Acquire is one transaction on it).
+// GitHub has no compare-and-swap, this table does: Acquire is one transaction
+// that holds the row it judges (claimWrites / forUpdate, dialect.go), so two
+// hubs on one database still grant a lease once (TestLeaseRaceTwoWriters).
 //
 // A lease lives as long as its holder keeps reporting the session:
 //
@@ -83,7 +84,7 @@ func NormRepo(repo string) string {
 }
 
 func (s *Store) ensureFleetLeases() error {
-	if _, err := s.write.Exec(fleetLeasesSchema); err != nil {
+	if _, err := s.write.Exec(s.d.ddl(fleetLeasesSchema)); err != nil {
 		return fmt.Errorf("create fleet_leases table: %w", err)
 	}
 	return nil
@@ -118,53 +119,68 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 		return false, Lease{}, nil, err
 	}
 	defer tx.Rollback()
-
-	cur, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`, c.Repo, c.Issue))
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		err = nil
-	case err != nil:
+	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
 		return false, Lease{}, nil, err
-	default:
-		live := cur.ExpiresAt.After(at)
-		// The same fleet asking is the same worker: within one fleet (repo,
-		// issue) names exactly one window, whatever key prefix the asker's
-		// repo layout gives it. That is how a lease handed to the fleet a
-		// start was placed on (HandOverLease, claude-fleet#1425) is taken up
-		// by the spawn that arrives there.
-		mine := cur.WorkerID == c.WorkerID || (cur.FleetID != "" && cur.FleetID == c.FleetID)
-		if live && !mine {
-			if !c.Force {
-				return false, cur, nil, nil
-			}
-			d := cur
-			displaced = &d
-		}
-		if live && mine {
-			// The same worker asking again (a retried spawn, a resume on
-			// the same machine) keeps its lease and its history; only the
-			// grace is refreshed, never shortened.
-			exp := at.Add(grace)
-			if cur.ExpiresAt.After(exp) {
-				exp = cur.ExpiresAt
-			}
-			if _, err := tx.Exec(`UPDATE fleet_leases SET worker_id = ?, endpoint_id = ?, hostname = ?, os_user = ?,
-				renewed_at = ?, expires_at = ? WHERE repo = ? AND issue = ?`,
-				c.WorkerID, c.EndpointID, c.Hostname, c.OSUser, at.UTC().Format(rfc), exp.UTC().Format(rfc), c.Repo, c.Issue); err != nil {
-				return false, Lease{}, nil, err
-			}
-			cur.WorkerID, cur.ExpiresAt = c.WorkerID, exp
-			return true, cur, nil, tx.Commit()
-		}
 	}
+
 	ts := at.UTC().Format(rfc)
+	l := Lease{Repo: c.Repo, Issue: c.Issue, WorkerID: c.WorkerID, FleetID: c.FleetID, EndpointID: c.EndpointID,
+		Hostname: c.Hostname, OSUser: c.OSUser, AcquiredAt: at.UTC(), RenewedAt: at.UTC(),
+		ExpiresAt: at.Add(grace).UTC()}
+	cur, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`+s.d.forUpdate(), c.Repo, c.Issue))
+	if errors.Is(err, sql.ErrNoRows) {
+		// Free: one statement takes it. Losing it here means another hub's
+		// claim inserted the row since the read (Postgres; SQLite's claim
+		// already waited for it) — read that one, now committed, and judge it.
+		res, ierr := tx.Exec(`INSERT INTO fleet_leases (`+leaseCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+			ON CONFLICT(repo, issue) DO NOTHING`,
+			l.Repo, l.Issue, l.WorkerID, l.FleetID, l.EndpointID, l.Hostname, l.OSUser, ts, ts, l.ExpiresAt.Format(rfc))
+		if ierr != nil {
+			return false, Lease{}, nil, ierr
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			return true, l, nil, tx.Commit()
+		}
+		cur, err = scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`+s.d.forUpdate(), c.Repo, c.Issue))
+	}
+	if err != nil {
+		return false, Lease{}, nil, err
+	}
+	live := cur.ExpiresAt.After(at)
+	// The same fleet asking is the same worker: within one fleet (repo,
+	// issue) names exactly one window, whatever key prefix the asker's
+	// repo layout gives it. That is how a lease handed to the fleet a
+	// start was placed on (HandOverLease, claude-fleet#1425) is taken up
+	// by the spawn that arrives there.
+	mine := cur.WorkerID == c.WorkerID || (cur.FleetID != "" && cur.FleetID == c.FleetID)
+	if live && !mine {
+		if !c.Force {
+			return false, cur, nil, nil
+		}
+		d := cur
+		displaced = &d
+	}
+	if live && mine {
+		// The same worker asking again (a retried spawn, a resume on
+		// the same machine) keeps its lease and its history; only the
+		// grace is refreshed, never shortened.
+		exp := at.Add(grace)
+		if cur.ExpiresAt.After(exp) {
+			exp = cur.ExpiresAt
+		}
+		if _, err := tx.Exec(`UPDATE fleet_leases SET worker_id = ?, endpoint_id = ?, hostname = ?, os_user = ?,
+			renewed_at = ?, expires_at = ? WHERE repo = ? AND issue = ?`,
+			c.WorkerID, c.EndpointID, c.Hostname, c.OSUser, at.UTC().Format(rfc), exp.UTC().Format(rfc), c.Repo, c.Issue); err != nil {
+			return false, Lease{}, nil, err
+		}
+		cur.WorkerID, cur.ExpiresAt = c.WorkerID, exp
+		return true, cur, nil, tx.Commit()
+	}
 	forced := 0
 	if displaced != nil {
 		forced = 1
 	}
-	l := Lease{Repo: c.Repo, Issue: c.Issue, WorkerID: c.WorkerID, FleetID: c.FleetID, EndpointID: c.EndpointID,
-		Hostname: c.Hostname, OSUser: c.OSUser, AcquiredAt: at.UTC(), RenewedAt: at.UTC(),
-		ExpiresAt: at.Add(grace).UTC(), Forced: forced == 1}
+	l.Forced = forced == 1
 	if _, err := tx.Exec(`INSERT INTO fleet_leases (`+leaseCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
 		ON CONFLICT(repo, issue) DO UPDATE SET worker_id = excluded.worker_id, fleet_id = excluded.fleet_id,
 		  endpoint_id = excluded.endpoint_id, hostname = excluded.hostname, os_user = excluded.os_user,
@@ -210,7 +226,10 @@ func (s *Store) RenewLeases(endpointID string, readFleets map[string]bool, sessi
 		return 0, 0, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT `+leaseCols+` FROM fleet_leases WHERE endpoint_id = ?`, endpointID)
+	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
+		return 0, 0, err
+	}
+	rows, err := tx.Query(`SELECT `+leaseCols+` FROM fleet_leases WHERE endpoint_id = ?`+s.d.forUpdate(), endpointID)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -294,7 +313,10 @@ func (s *Store) HandOverLease(repo string, issue int, from string, to LeaseClaim
 		return false, err
 	}
 	defer tx.Rollback()
-	cur, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`, repo, issue))
+	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
+		return false, err
+	}
+	cur, err := scanLease(tx.QueryRow(`SELECT `+leaseCols+` FROM fleet_leases WHERE repo = ? AND issue = ?`+s.d.forUpdate(), repo, issue))
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
