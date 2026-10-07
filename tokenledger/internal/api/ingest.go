@@ -107,6 +107,20 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 			return nil, err
 		} else if named != "" {
 			log.Printf("fingerprint %s is %s (credential %q)", id.AccountUUID, named, batch.Limits.CredentialLabel)
+			// A phantom minted before this reading (an older hub, or an agent
+			// that sent no label) holds the same schedule under the same key:
+			// it IS this account, so fold it in rather than leave it counted
+			// as a subscription of its own. A failed fold is repaired by the
+			// next reading; the reading itself still lands where it belongs.
+			if had, err := s.Store.AccountExists(id.AccountUUID); err != nil {
+				return nil, err
+			} else if had {
+				if _, _, err := s.Store.MergeAccount(id.AccountUUID, named); err != nil {
+					log.Printf("could not fold phantom %s into %s: %v", id.AccountUUID, named, err)
+				} else {
+					log.Printf("folded phantom %s into %s", id.AccountUUID, named)
+				}
+			}
 			id.AccountUUID = named
 			id.Email, id.DisplayName = "", ""
 		}

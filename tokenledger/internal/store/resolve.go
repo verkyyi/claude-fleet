@@ -436,3 +436,13 @@ func (s *Store) ResolveCredentialLabel(source, label string) (string, error) {
 	}
 	return "", nil
 }
+
+// AccountExists reports whether the hub holds an account row under uuid.
+func (s *Store) AccountExists(uuid string) (bool, error) {
+	var one int
+	err := s.read.QueryRow(`SELECT 1 FROM accounts WHERE account_uuid = ?`, uuid).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}

@@ -18,12 +18,14 @@ func TestIngest_ProbeLabelFoldsAnUnmatchedFingerprintOntoItsAccount(t *testing.T
 	cases := []struct {
 		name, label string
 		phantom     bool
+		fold        bool
 	}{
-		{"label is the mail domain", "icloud", false},
-		{"label is the local part", "ylianghui", false},
-		{"no label: the old phantom", "", true},
-		{"label fits two accounts: no guess", "lee", true},
-		{"label fits nothing", "spare", true},
+		{"label is the mail domain", "icloud", false, false},
+		{"label is the local part", "ylianghui", false, false},
+		{"an existing phantom is folded in", "icloud", false, true},
+		{"no label: the old phantom", "", true, false},
+		{"label fits two accounts: no guess", "lee", true, false},
+		{"label fits nothing", "spare", true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -43,6 +45,18 @@ func TestIngest_ProbeLabelFoldsAnUnmatchedFingerprintOntoItsAccount(t *testing.T
 			login("u-gmail", "verky.yi@gmail.com", time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC))
 
 			key := sessions.FingerprintFor(&moved)
+			if tc.fold {
+				// The phantom an older hub already minted for this schedule.
+				r := h.push(t, tok, model.Batch{
+					Identity:      model.Identity{Source: "claude", AccountUUID: key, MachineID: "m", Hostname: "mini"},
+					AccountOrigin: model.OriginSession,
+					Limits:        &model.LimitsSnapshot{ObservedAt: time.Now().UTC().Add(-time.Hour), SevenDay: model.Window{Utilization: 9, ResetsAt: &moved}},
+				})
+				r.Body.Close()
+				if had, _ := h.srv.Store.AccountExists(key); !had {
+					t.Fatalf("setup: no phantom %s", key)
+				}
+			}
 			resp := h.push(t, tok, model.Batch{
 				Identity:      model.Identity{Source: "claude", AccountUUID: key, MachineID: "m", Hostname: "mini"},
 				AccountOrigin: model.OriginSession,
