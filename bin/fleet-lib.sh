@@ -6546,7 +6546,7 @@ fleet_breakage_norm_line() {
 }
 
 fleet_breakage_probe() {
-  local repo="$1" branch="${2:-}" owner name runs starts wid rid sha wname jobs jid jname line key names out='' r_c r_t r_age
+  local repo="$1" branch="${2:-}" owner name runs starts rid sha wname jobs jid jname line key names out=''
   owner="${repo%%/*}"; name="${repo#*/}"
   [ -n "$branch" ] || branch=$(gh api "repos/$owner/$name" --jq .default_branch 2>/dev/null)
   [ -n "$branch" ] || branch=master
@@ -6563,7 +6563,7 @@ fleet_breakage_probe() {
       $4 == "failure" || $4 == "timed_out" || $4 == "startup_failure" { if (!($1 in st)) ord[++n] = $1; st[$1] = $0 }
       END { for (i = 1; i <= n; i++) print st[ord[i]] }' | sort -t '	' -k5,5)
   [ -n "$starts" ] || return 1
-  while IFS=$'\t' read -r wid rid sha r_c r_t wname r_age; do
+  while IFS=$'\t' read -r _ rid sha _ _ wname _; do
     case "$rid" in ''|*[!0-9]*) continue ;; esac
     jobs=$(gh api "repos/$owner/$name/actions/runs/$rid/jobs?per_page=100" \
              --jq '[.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out")]
