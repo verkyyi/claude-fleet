@@ -1053,6 +1053,86 @@ reload)
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
+# A HOME session (issue #2264, EPIC #2259 共同约定 2) — `fleet claude` / `fleet codex`
+# (bin/fleet-home-session.sh) and a newcomer's first session (`--first`, below):
+# a session of no repo, in the machine's $HOME, with that agent. ONE road —
+# fleet-client-place.sh `- home`, the hub's scratch + no_repo, which the node
+# takes from its pool (#2233) or opens cold — signed by the lease THIS client
+# holds, so the client must be up (rc 1 when it is not). The ask runs in the
+# foreground and says what it is waiting for; once it is placed, a background
+# step turns the stage onto it as soon as the list has its row. `--first` also
+# puts the first-screen hint on the client's line.
+#   home-session <claude|codex> [--node <m>] [--body-file <f>] [--first]
+# Exit: fleet-client-place.sh's code (0 placed); 1 no client here; 2 usage.
+home-session)
+  shift
+  hagent="${1:-}"; [ $# -gt 0 ] && shift
+  hnode=auto; hbody=''; hfirst=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --node)      [ $# -ge 2 ] || exit 2; hnode="${2:-auto}"; shift 2 ;;
+      --body-file) [ $# -ge 2 ] || exit 2; hbody="$2"; shift 2 ;;
+      --first)     hfirst=1; shift ;;
+      *) note "home-session: unknown $1"; exit 2 ;;
+    esac
+  done
+  case "$hagent" in claude|codex) ;; *) note 'home-session: claude or codex'; exit 2 ;; esac
+  T has-session -t "=$SESS" 2>/dev/null || { note "客户端没在运行（$SESS）"; exit 1; }
+  # the server's environment (write_conf's set-environment lines): the hub, the
+  # cache's TMPDIR (so $FLEET_C is the shell's), the stage — what a row's own
+  # jump runs with
+  while IFS= read -r line; do
+    case "$line" in FLEET_*=*|CCQUOTA_*=*|TMPDIR=*|XDG_*=*) export "$line" ;; esac
+  done <<EOF
+$(T show-environment -g 2>/dev/null)
+EOF
+  export FLEET_CLIENT_DIR="$CL_DIR" FLEET_SESSION="$SESS"
+  note "$(sh "$BIN/fleet-ui-lang.sh" t home_opening_fmt "$hagent" 2>/dev/null)"
+  hout=$(bash "$BIN/fleet-client-place.sh" - home --agent "$hagent" --node "$hnode" ${hbody:+--body-file "$hbody"}); hrc=$?
+  hline=$(printf '%s\n' "$hout" | tail -n1)
+  if [ "$hrc" != 0 ]; then
+    note "$(sh "$BIN/fleet-ui-lang.sh" t home_failed_fmt "${hline:-—}" 2>/dev/null)"
+    exit "$hrc"
+  fi
+  printf '%s\n' "$hline"
+  # a HOME session made: the newcomer's first is no longer owed (below)
+  mkdir -p "$CONF_DIR" 2>/dev/null && : > "$CONF_DIR/home-session.first"
+  # its row key: `REMOTE <m> <op> done <worker_id>` → wid:<worker_id>; with no hub
+  # (`LOCAL <host>\t<window id> …`) the local list's own @<id>
+  hkey=''
+  case "$hline" in
+    REMOTE\ *) hkey=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $5 }'); case "$hkey" in */*) hkey="wid:$hkey" ;; *) hkey='' ;; esac ;;
+    LOCAL\ *)  hkey=$(printf '%s' "${hline#*$'\t'}" | awk '{ print $1 }'); case "$hkey" in @[0-9]*) ;; *) hkey='' ;; esac ;;
+  esac
+  # the stage onto it, in the background: a placed session reaches the list on
+  # the hub loop's next read; give up after FLEET_HOME_OPEN_WAIT (60 s), leaving
+  # it on the list. FLEET_HOME_OPEN_CMD is the selftests' seam.
+  (
+    cd "$HOME" 2>/dev/null; trap '' HUP
+    rf="${TMPDIR:-/tmp}/.claude-dash/global/remote_$SESS"
+    n=$(( ${FLEET_HOME_OPEN_WAIT:-60} * 4 )); i=0
+    case "$hkey" in
+      wid:*)
+        while [ "$i" -lt "$n" ]; do
+          LC_ALL=C awk -F $'\037' -v k="$hkey" '$1 == k { f = 1; exit } END { exit !f }' "$rf" 2>/dev/null && break
+          sleep 0.25; i=$((i + 1))
+        done
+        [ "$i" -lt "$n" ] && ${FLEET_HOME_OPEN_CMD:-bash "$BIN/fleet-remote-view.sh" open} "$hkey" >/dev/null 2>&1 ;;
+    esac
+    # the list: woken so its ▶ follows at once — and, for a local row, told the
+    # jump itself (fleet-compose.py's hand: @sidebar_do + F12)
+    lp=$(T list-panes -a -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }')
+    if [ -n "$lp" ]; then
+      case "$hkey" in @*) T set-option -pa -t "$lp" @sidebar_do "jump=$hkey " 2>/dev/null ;; esac
+      T send-keys -t "$lp" F12 2>/dev/null
+    fi
+    if [ "$hfirst" = 1 ]; then
+      T display-message -d 15000 "$(sh "$BIN/fleet-ui-lang.sh" t home_first_hint 2>/dev/null)" 2>/dev/null
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+  exit 0
+  ;;
+# ---------------------------------------------------------------------------------
 env) machine="${2:-}" ;;
 '')  machine='' ;;
 -*)  note "unknown option $mode"; exit 2 ;;
@@ -1131,6 +1211,28 @@ client_open() {
   where_now "$tt" "${dev%%$'\t'*}" "$(printf '%s' "$dev" | cut -f2 -s)"
 }
 
+# first_home — a newcomer's first session (issue #2264, EPIC #2259 共同约定 1 + 2):
+# a client set to `solo` (what a fresh install writes) opens ONE HOME Claude
+# session, in the background, the first time it starts — `home-session.first` in
+# the conf dir says it is done, and any HOME session made (`fleet claude` too)
+# writes it. An existing install (no `solo`) never sees it; fleet-home-session.sh
+# opens its own and says FLEET_SHELL_NO_FIRST. One at a time: a lock dir, taken
+# over once it is older than a place can take.
+first_home() {
+  local lock="$CACHE/home-first.lock"
+  [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] || return 0
+  [ "${FLEET_SHELL_NO_FIRST:-0}" != 1 ] || return 0
+  [ ! -e "$CONF_DIR/home-session.first" ] || return 0
+  mkdir -p "$CACHE" 2>/dev/null
+  if ! mkdir "$lock" 2>/dev/null; then
+    [ -n "$(find "$lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] || return 0
+    rm -rf "$lock"; mkdir "$lock" 2>/dev/null || return 0
+  fi
+  ( trap '' HUP; cd "$HOME" 2>/dev/null
+    bash "$SHADOW/fleet-shell.sh" home-session claude --first; rmdir "$lock" 2>/dev/null
+  ) </dev/null >"$CACHE/home-first.log" 2>&1 &
+}
+
 # 2. already running? Re-attach — onto the named machine's window when there is one.
 if T has-session -t "=$SESS" 2>/dev/null; then
   if [ -n "$(T show-options -wqv -t "=$SESS:" @shell_frame 2>/dev/null)" ]; then
@@ -1145,7 +1247,9 @@ if T has-session -t "=$SESS" 2>/dev/null; then
   ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
   ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
   ( nohup bash "$SHADOW/fleet-shell.sh" actions "$SESS" </dev/null >/dev/null 2>&1 & )
+  first_home
   client_where
+  [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
   attach_client
 fi
 
@@ -1202,6 +1306,7 @@ client_open
 # 登录即登记 (issue #2212): a logged-in computer with no node token yet takes
 # its node pass by the device key, in the background — no scan, no output
 [ -f "$BIN/fleet-node.sh" ] && ( nohup bash "$BIN/fleet-node.sh" ensure </dev/null >/dev/null 2>&1 & )
+first_home
 client_where
 [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
 attach_client

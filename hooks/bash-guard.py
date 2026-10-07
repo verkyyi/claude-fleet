@@ -1240,6 +1240,10 @@ def _client_start(toks, i):
     rest = toks[i + 1:]
     if word == "fleet-shell.sh":
         return "--test-identity" not in rest
+    # `fleet claude|codex` (issue #2264) starts the client too, before its attach;
+    # with --here it is `fleet run`, this computer's own session — no client
+    if word == "fleet-home-session.sh":
+        return "--here" not in rest
     if word != "fleet":
         return False
     if rest and rest[0] == "--test-identity":
@@ -1247,6 +1251,8 @@ def _client_start(toks, i):
     sub = rest[0] if rest else ""
     if sub in ("", "shell"):
         return True
+    if sub in ("claude", "codex"):
+        return "--here" not in rest[1:]
     if sub.startswith("-") or sub in _FLEET_NOT_CLIENT:
         return False
     # a word naming a command this install has is a command (over ssh too: the
