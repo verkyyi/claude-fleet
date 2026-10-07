@@ -32,7 +32,8 @@ class LiveTests(unittest.TestCase):
     def test_waiting_parent_or_bg_job_retains(self):
         # Issue #1370: an unfinished sub-task / a Bash-tool job still running keeps a
         # `done`-stamped window — after a hold and a Loop, ahead of age and state.
-        for wait in ("children", "bg"):
+        # Issue #1880: so does a fleet tool call still in flight (`tool`).
+        for wait in ("children", "bg", "tool"):
             for lifecycle, state in (("", "done"), ("", "looping"), ("sleeping", "done")):
                 self.assertEqual(self.probe(minimum=0, lifecycle=lifecycle, state=state, wait=wait), "retained:" + wait)
         self.assertEqual(self.probe(hold="1", wait="children"), "retained:hold")

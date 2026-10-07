@@ -85,6 +85,8 @@ fleet_ui_t() {
     en:wait_children)           printf 'waiting on sub-tasks' ;;
     zh:wait_bg)                 printf '后台命令在跑' ;;
     en:wait_bg)                 printf 'background command running' ;;
+    zh:wait_tool)               printf '等 fleet 工具返回' ;;
+    en:wait_tool)               printf 'waiting on a fleet tool call' ;;
     # the worker pane header's @title_info segments (issue #1377)
     zh:title_kids)              printf '子任务' ;;
     en:title_kids)              printf 'sub-tasks' ;;

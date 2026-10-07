@@ -7613,6 +7613,9 @@ fleet_pane_claude_pid() {
 #   bg       its agent still owns a Bash-tool job — a run_in_background test, a
 #            PR-gate waiter (`tools/await-pr.sh`). fleet-sleep.py `busy`: the walk
 #            hibernation vetoes on, minus the MCP contract and the calling hook.
+#   tool     a fleet tool call it made is still running (fleet_window_tool_busy,
+#            issue #1880) — an `await`, a `pr_verdict --wait` Claude Code moved to
+#            a background task past 120 s, the turn over before it answered.
 #   pr-open  its branch has an open PR — shipped and waiting on the gate.
 #   pr-unknown  gh missing, failing or slow (5s) for a known repo + branch: the
 #            report has never once been right on a shipped child, so an unread
@@ -7626,6 +7629,7 @@ fleet_child_busy() {
   [ -n "$sess" ] || sess=$(fleet_current_session)
   [ -n "$sess" ] || return 1
   fleet_window_bg_busy "$sess" "$win" && { printf 'bg\n'; return 0; }
+  fleet_window_tool_busy "$sess" "$win" && { printf 'tool\n'; return 0; }
   if [ -z "$br" ]; then
     raw=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@issue}|#{@worktree}' 2>/dev/null)
     iss=${raw%%|*}; wt=${raw#*|}
@@ -7689,13 +7693,14 @@ fleet_cfg_state() {
 # fleet_cfg_restart_why <session> <win> [idle-secs] — may <win> be reopened onto
 # the current configuration NOW (issue #1783)? Exit 0 = yes. Else exit 1 and ONE
 # word on stdout says why not: gone · panel · remote · unknown · ok ·
-# state:<s> · recent · asleep · looping · bg. The ONE judge — fleet-cfg-restart.sh
+# state:<s> · recent · asleep · looping · bg · tool. The ONE judge — fleet-cfg-restart.sh
 # picks with it and fleet-migrate.sh --cfg-stale asks it again right before /exit,
 # so a session that started a turn in between is never interrupted. Only a
 # session — Claude or Codex alike (issue #1896) — whose @agent_cfg differs from
 # the expected one — or whose @agent_ver does (待换新, issue #1895: the two are
 # reopened alike) — `done` for <idle-secs> (FLEET_CFG_RESTART_IDLE, 600), with no
-# /loop round held and no Bash-tool job still running. needs/blocked never
+# /loop round held, no Bash-tool job and no fleet tool call (issue #1880) still
+# running. needs/blocked never
 # qualify: a pending question is the operator's, and a reopen would drop it; a
 # Codex loop between rounds reads `looping`, never `done`.
 fleet_cfg_restart_why() {
@@ -7722,6 +7727,7 @@ fleet_cfg_restart_why() {
     echo looping; return 1
   fi
   fleet_window_bg_busy "$sess" "$win" 1 && { echo bg; return 1; }
+  fleet_window_tool_busy "$sess" "$win" && { echo tool; return 1; }
   return 0
 }
 
@@ -7750,6 +7756,77 @@ fleet_window_bg_busy() {
   fi
   python3 "$bin/fleet-sleep.py" busy --session "$sess" ${pid:+--pid "$pid"} "$win" \
     >/dev/null 2>&1 </dev/null
+}
+
+# fleet_window_tool_busy <session> <win> — is a FLEET TOOL CALL <win>'s agent made
+# still running after its turn ended (issue #1880, EPIC #2074 C4)? Exit 0 = busy;
+# nothing printed. Claude Code moves an MCP call that runs past 120 s to a
+# background task and hands the model a "still running" result; the turn goes on
+# and usually ENDS there — Stop → `done` — while the call (an `await`, a
+# `pr_verdict --wait`) is still in flight, its answer a task notification minutes
+# later. #1876's worker read `done` for 2m44s that way (2026-10-06 20:15Z), and
+# every idle judge — cfg-restart, install-sync's busy gate, the EPIC backstop,
+# auto-sleep, the idle reap — would have taken it mid-wait. The fact is in the
+# process tree, no stamp and no transcript needed: the fleet's MCP server
+# (bin/fleet-mcp.py, a child of the agent; the mod's one-shot `fleet-mcp.py --call`
+# too) runs every tool as a subprocess, so a server with a live child IS a call in
+# flight, and an idle server has none. Walked from the pane pid, so a Codex
+# session's server counts the same. The server's own `--probe` of a new version
+# (a few seconds, no call) and the wrapper's `--cred` are not calls. The fourth
+# fleet_window_wait reason beside loop / children / bg; `looping` + @claude_wait=tool
+# at the Stop, back to `done` on the first re-ask after the call returns. One ps.
+# FLEET_TOOL_WAIT=0 turns the reason off (never busy) — and is how the BREAK-IT
+# drill `tool-wait-idle` shows the red it was written against.
+fleet_window_tool_busy() {
+  local sess="${1:-}" win="${2:-}" pp
+  [ "${FLEET_TOOL_WAIT:-1}" != 0 ] || return 1
+  [ -n "$win" ] || return 1
+  [ -n "$sess" ] || sess=$(fleet_current_session)
+  pp=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{pane_pid}' 2>/dev/null)
+  case "$pp" in ''|*[!0-9]*) return 1 ;; esac
+  ps -axo pid=,ppid=,stat=,command= 2>/dev/null | awk -v root="$pp" '
+    {
+      pid = $1; ppid = $2; st = $3
+      if (index(st, "Z") > 0) next                  # a zombie is no process (#1734)
+      $1 = ""; $2 = ""; $3 = ""
+      par[pid] = ppid; cmd[pid] = substr($0, 4); kids[ppid] = kids[ppid] " " pid
+    }
+    # is p under the pane? (its own pid never counts; 64 hops bound a cycle)
+    function under(p,   n) { n = 0; while (p != root && (p in par) && n++ < 64) p = par[p]; return p == root }
+    # The script word of a fleet-mcp.py argv — word 1 run directly, word 2 under a
+    # python — else 0. The SHAPE, never a substring: a Bash-tool shell (bash -c …)
+    # whose command text mentions fleet-mcp.py is under the pane too, with children.
+    function mcpw(c,   w, n) {
+      n = split(c, w, " ")
+      if (n >= 1 && w[1] ~ /(^|\/)fleet-mcp\.py$/) return 1
+      if (n >= 2 && w[2] ~ /(^|\/)fleet-mcp\.py$/ && w[1] ~ /(^|\/)[Pp]ython[0-9.]*$/) return 2
+      return 0
+    }
+    # a server, or the mod one-shot (--call); never --probe / --cred / --spec
+    function server(c,   w, n, s, i) {
+      s = mcpw(c); if (!s) return 0
+      n = split(c, w, " ")
+      for (i = s + 1; i <= n; i++) if (w[i] == "--probe" || w[i] == "--cred" || w[i] == "--spec") return 0
+      return 1
+    }
+    function probe(c,   w, n, s, i) {
+      s = mcpw(c); if (!s) return 0
+      n = split(c, w, " ")
+      for (i = s + 1; i <= n; i++) if (w[i] == "--probe") return 1
+      return 0
+    }
+    END {
+      found = 0
+      for (p in cmd) {
+        if (found || p == root || !server(cmd[p]) || !under(p)) continue
+        nk = split(kids[p], k, " ")
+        for (i = 1; i <= nk && !found; i++) {
+          if (k[i] == "" || !(k[i] in cmd) || probe(cmd[k[i]])) continue
+          found = 1
+        }
+      }
+      exit !found
+    }'
 }
 
 # fleet_window_okey <session> <win> → <win>'s own ledger key — `<slug>:issue-<N>` /
@@ -7917,9 +7994,11 @@ sys.exit(0 if tot else 1)' "$f" ${al:+"$d/$al.ndjson"} 2>/dev/null
 #   loop      a Loop is pending (fleet_window_loop: @loop / a fleet-loop ledger)
 #   children  a sub-task it spawned is not finished (fleet_window_waiting_children)
 #   bg        its agent still owns a Bash-tool job (fleet_window_bg_busy, quick)
+#   tool      a fleet tool call it made is still running (fleet_window_tool_busy,
+#             issue #1880) — an MCP call Claude Code backgrounded past 120 s
 # The Stop hook writes `looping` + @claude_wait from this; fleet-reap-live.py
-# retains on it. A window with none of the three pays one list-windows, one tmux
-# read and one ps.
+# retains on it. A window with none of the four pays one list-windows, two tmux
+# reads and two ps.
 fleet_window_wait() {
   local sess="${1:-}" t="${2:-}" out=''
   [ -n "$t" ] || return 1
@@ -7927,6 +8006,7 @@ fleet_window_wait() {
   fleet_window_loop "$sess" "$t" >/dev/null 2>&1 && out=loop
   fleet_window_waiting_children "$sess" "$t" >/dev/null 2>&1 && out="${out:+$out,}children"
   fleet_window_bg_busy "$sess" "$t" 1 && out="${out:+$out,}bg"
+  fleet_window_tool_busy "$sess" "$t" && out="${out:+$out,}tool"
   [ -n "$out" ] || return 1
   printf '%s\n' "$out"
 }

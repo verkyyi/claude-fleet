@@ -95,6 +95,23 @@ or a prompt — no tool polls for one.
 `fleet-repo.sh list` before anything runs. Omitted = the window's repo, as the
 script decides.
 
+## A call that outlives the turn (issue #1880, EPIC #2074 C4)
+
+Claude Code moves an MCP call that runs past 120 s — an `await`, a `pr_verdict`
+with `wait` — to a background task: the model gets «still running», goes on, and
+usually ends its turn there; the answer arrives as a task notification when the
+script returns. The session is idle to the TUI but not finished, and the Stop hook
+says so: the server runs every tool as a subprocess, so a `fleet-mcp.py` under the
+pane with a live child is a call in flight — `fleet_window_tool_busy`
+(`bin/fleet-lib.sh`), the fourth `fleet_window_wait` reason — and the Stop writes
+`looping` + `@claude_wait=tool` (the sidebar's 「等 fleet 工具返回」) instead of
+`done`. Every idle judge (cfg-restart, install-sync's busy gate, the EPIC backstop,
+auto-sleep, the idle reap) reads that as busy; the first re-ask after the call
+returns (the sleep tick's `fleet-wait-reeval.sh`, the next Stop) writes `done`
+again. An idle server, or one probing a new version, is not a call; a foreground
+call keeps `working` as before. `FLEET_TOOL_WAIT=0` turns the reason off.
+`fleet-wait-selftest.sh` F and the `tool-wait-idle` drill (docs/BREAK-IT.md) pin it.
+
 ## How a session gets it
 
 The definition lives once, in **`conf/mcp-worker.json`**:

@@ -80,8 +80,8 @@
 #             call. Only adds, never clears; a window that already has one is left.
 #   reeval    re-ask every idle window on every live fleet the Stop hook's
 #             "still waiting?" question (fleet-wait-reeval.sh, #1376): `done` ↔
-#             `looping` + @claude_wait for children / a background job / a Loop.
-#             Never touches working/needs.
+#             `looping` + @claude_wait for children / a background job / a Loop /
+#             a fleet tool call still running (#1880). Never touches working/needs.
 #   logins    --sync-logins only (issue #1122): bring this machine's OTHER
 #             logins to this commit — fleet-sync-logins.sh, the second command
 #             /fleet-sync-install used to end with, folded into this one. A
