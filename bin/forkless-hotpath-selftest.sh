@@ -152,7 +152,8 @@ C="$TMPD/.claude-dash"; FD="$C/fleets/fake-repo"; mkdir -p "$FD"
 printf 's1\tfake-repo\tfake/repo\n' > "$G/sessmap"
 printf '%s\n' \
   "issue-1${TAB}#1${TAB}OPEN${TAB}✓${TAB}ready${TAB}" \
-  "issue-2${TAB}#2${TAB}OPEN${TAB}✗${TAB}ready${TAB}" \
+  "issue-2${TAB}#2${TAB}OPEN${TAB}✗${TAB}${TAB}${TAB}lint,selftests" \
+  "issue-11${TAB}#11${TAB}OPEN${TAB}…${TAB}${TAB}${TAB}" \
   "issue-3${TAB}#3${TAB}OPEN${TAB}✓${TAB}behind${TAB}" \
   "issue-4${TAB}#4${TAB}OPEN${TAB}✓${TAB}draft${TAB}" \
   "feat${TAB}#5${TAB}OPEN${TAB}✓${TAB}conflict${TAB}" \
@@ -173,6 +174,7 @@ win 7 /w/seven        -               ''
 win 8 /w/eight        issue-8-3       ''
 win 10 /w/ten          issue-3         ''   # exact spelling wins (#792)
 win 9 /w/nine         issue-9         ''   # no such PR, exact or stripped
+win 11 /w/eleven      issue-11        ''   # checks still running
 cat > "$WORK/bin/tmux" <<SHIM
 #!/bin/sh
 case " \$* " in
@@ -198,6 +200,16 @@ eq "@prci: no branch, glyph already empty → untouched"  '<unset>' "$(prci 7)"
 eq "@prci: -N stripped; EMPTY readiness stays empty → ✓" '✓'     "$(prci 8)"
 eq "@prci: no PR, glyph already empty → untouched"      '<unset>' "$(prci 9)"
 eq "@prci: a clean issue-N matches exactly (#792)"      '✓↑'     "$(prci 10)"
+# the session header's PR segment (issue #1954): @pr_num|@pr_ci|@pr_fail in ONE call
+prseg() { awk -v w="s1:$1" '$5==w && $6=="@pr_num" {
+    for (i = 6; i <= NF; i++) if ($i ~ /^@pr_(num|ci|fail)$/) v[$i] = (i == NF || $(i+1) == ";") ? "" : $(i+1)
+    print v["@pr_num"] "|" v["@pr_ci"] "|" v["@pr_fail"]; f=1 } END{if(!f) print "<unset>"}' "$WORK/tmux.log"; }
+eq "header PR: green → #1|✓|"                          '#1|✓|'   "$(prseg 1)"
+eq "header PR: red → #2|✗|<red check names>"           '#2|✗|lint,selftests' "$(prseg 2)"
+eq "header PR: running → #11|…|"                       '#11|…|'  "$(prseg 11)"
+eq "header PR: green+behind keeps the bare ✓"          '#3|✓|'   "$(prseg 3)"
+eq "header PR: MERGED → nothing to write (all empty)"  '<unset>' "$(prseg 6)"
+eq "header PR: no PR → untouched"                      '<unset>' "$(prseg 9)"
 for t in cut sed tr dirname basename cat; do
   eq "tmux-pr-refresh.sh execs no $t (#888)" 0 "$(count "$t")"
 done

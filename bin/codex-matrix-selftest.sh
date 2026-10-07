@@ -116,6 +116,31 @@ printf '%s\n' "$emitted" | grep -q 'session-end-hook.sh' \
   && fail "Codex thread SessionEnd must not run window cleanup"
 ok "✅ rows: guardrails, project doc, state/lifecycle hooks and process-exit cleanup are wired"
 
+# 「你在哪」 (issue #1954): the SessionStart hook rides the codex target, and in a
+# Codex pane it prints where.ts's section as additionalContext; a Claude pane (the
+# mod already says it) gets nothing. Driven against a stub where-reader.
+printf '%s\n' "$emitted" | grep -q '^SessionStart	.*fleet-where-hook.sh' \
+  || fail "matrix claims Codex knows where you are at start, but fleet-where-hook.sh is not in the codex SessionStart" "$emitted"
+WH="$(mktemp -d "${TMPDIR:-/tmp}/codex-where.XXXXXX")" || fail "mktemp"
+cp "$BIN/fleet-where-hook.sh" "$WH/"
+printf '#!/bin/sh\necho "Verky Mac · macOS · iTerm2 3.7.3 · 能：打开网页"\nexit 0\n' > "$WH/fleet-client-where.sh"
+out=$(FLEET_CODEX_LAUNCHER_PID=4242 bash "$WH/fleet-where-hook.sh" </dev/null)
+ctx=$(printf '%s' "$out" | python3 -c 'import json,sys; o=json.load(sys.stdin)["hookSpecificOutput"]; assert o["hookEventName"]=="SessionStart"; print(o["additionalContext"])' 2>/dev/null) \
+  || { rm -rf "$WH"; fail "the where hook in a Codex pane must print SessionStart additionalContext" "$out"; }
+printf '%s\n' "$ctx" | grep -qx '操作者此刻在：Verky Mac · macOS · iTerm2 3.7.3 · 能：打开网页' \
+  || { rm -rf "$WH"; fail "the where hook must carry fleet-client-where.sh's line as where.ts does" "$ctx"; }
+# the same words as the mod's section (mod/fleet/hooks/where.ts whereSection)
+tailw='（fleet 客户端租约；换设备接管后这一行会跟着变。要最新的或要字段，运行 '
+printf '%s\n' "$ctx" | grep -qF "$tailw" && grep -qF "'$tailw'" "$BIN/../mod/fleet/hooks/where.ts" \
+  || { rm -rf "$WH"; fail "the where hook's text drifted from mod/fleet/hooks/where.ts" "$ctx"; }
+[ -z "$(env -u FLEET_CODEX_LAUNCHER_PID bash "$WH/fleet-where-hook.sh" </dev/null)" ] \
+  || { rm -rf "$WH"; fail "the where hook must print nothing outside a Codex pane (the mod already says it)"; }
+printf '#!/bin/sh\nexit 1\n' > "$WH/fleet-client-where.sh"
+[ -z "$(FLEET_CODEX_LAUNCHER_PID=4242 bash "$WH/fleet-where-hook.sh" </dev/null)" ] \
+  || { rm -rf "$WH"; fail "no answer from the where reader must print nothing"; }
+rm -rf "$WH"
+ok "✅ row: a Codex session gets the where line at SessionStart, the same text as the mod's"
+
 # ❌ rows: the Claude-only knobs must not have quietly appeared.
 for tok in 'CLAUDE_CODE_OAUTH_TOKEN' 'CLAUDE_CODE_SUBAGENT_MODEL' 'mcp-config' 'FLEET_MODEL'; do
   has "$tok" && fail "matrix says Codex skips $tok, but $SRC now uses it — regrade the row"

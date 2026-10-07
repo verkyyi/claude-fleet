@@ -31,12 +31,13 @@ CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 eq()   { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')" "${4:-}"; }
 
-# fold <json-array> → the prmap lines (branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha)
+# fold <json-array> → the prmap lines (branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha<TAB>fail)
 fold() { printf '%s' "$1" | jq -r "$FLEET_PRMAP_JQ"; }
 # the ci / ready / sha fields of the ONE line a single-PR fixture folds to
 ci_of()    { fold "$1" | cut -f4; }
 ready_of() { fold "$1" | cut -f5; }
 sha_of()   { fold "$1" | cut -f6; }
+fail_of()  { fold "$1" | cut -f7; }
 
 # --- rollup fixtures (the two shapes GitHub mixes in statusCheckRollup) --------
 ok='{"__typename":"CheckRun","name":"selftests","status":"COMPLETED","conclusion":"SUCCESS"}'
@@ -101,28 +102,38 @@ eq "no checks → ready empty"                ""         "$(ready_of "$(pr b 1 O
 eq "MERGED → ready empty"                   ""         "$(ready_of "$(pr b 1 MERGED UNKNOWN UNKNOWN false "$ok")")"
 eq "CLOSED → ready empty"                   ""         "$(ready_of "$(pr b 1 CLOSED UNKNOWN UNKNOWN false "$ok")")"
 
-# --- the line contract: 6 tab-separated fields, newest PR per branch -------------
+# --- the line contract: 7 tab-separated fields, newest PR per branch -------------
 line=$(fold "$(pr issue-42 77 OPEN MERGEABLE CLEAN false "$ok")")
-eq "line = branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha (sha empty while open)" \
-   "$(printf 'issue-42\t#77\tOPEN\t✓\tready\t')" "$line"
+eq "line = branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha<TAB>fail (sha + fail empty)" \
+   "$(printf 'issue-42\t#77\tOPEN\t✓\tready\t\t')" "$line"
 line=$(fold "$(pr b 1 MERGED UNKNOWN UNKNOWN false "$ok")")
 eq "MERGED line keeps the fields (empty ready; no mergeCommit → empty sha)" \
-   "$(printf 'b\t#1\tMERGED\t✓\t\t')" "$line"
+   "$(printf 'b\t#1\tMERGED\t✓\t\t\t')" "$line"
 # --- sha: the MERGE commit of a MERGED PR (issue #541) ----------------------------
 eq "MERGED → sha = mergeCommit.oid"             "d024f073" "$(sha_of "$(prm b 2 d024f073 "$ok")")"
 eq "OPEN → sha empty (mergeCommit null)"        ""         "$(sha_of "$(pr b 1 OPEN MERGEABLE CLEAN false "$ok")")"
 line=$(fold "$(prm issue-5 9 abc123 "$ok")")
 eq "MERGED line = …<TAB>ci<TAB>(empty ready)<TAB>sha" \
-   "$(printf 'issue-5\t#9\tMERGED\t✓\t\tabc123')" "$line"
+   "$(printf 'issue-5\t#9\tMERGED\t✓\t\tabc123\t')" "$line"
 two='[{"headRefName":"issue-9","number":10,"state":"CLOSED","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","isDraft":false,"mergeCommit":null,"statusCheckRollup":[]},
       {"headRefName":"issue-9","number":12,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","isDraft":false,"mergeCommit":null,"statusCheckRollup":['"$ok"']}]'
 eq "same branch twice → the newest PR wins" \
-   "$(printf 'issue-9\t#12\tOPEN\t✓\tready\t')" "$(fold "$two")"
+   "$(printf 'issue-9\t#12\tOPEN\t✓\tready\t\t')" "$(fold "$two")"
 # an older gh that doesn't return isDraft / mergeCommit: the keys are absent →
 # never a draft, and an empty sha rather than a jq error
 nodraft='[{"headRefName":"b","number":1,"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","statusCheckRollup":['"$ok"']}]'
 eq "isDraft absent (older gh) → ready, not draft" "ready" "$(fold "$nodraft" | cut -f5)"
 eq "mergeCommit absent (older gh) → empty sha"   ""      "$(fold "$nodraft" | cut -f6)"
+
+# --- fail: the names of the red checks (issue #1954 — the session header's ✗ <name>) ---
+lint_red='{"__typename":"CheckRun","name":"shellcheck","status":"COMPLETED","conclusion":"FAILURE"}'
+eq "green → fail empty"                     ""         "$(fail_of "$(pr b 1 OPEN MERGEABLE CLEAN false "$ok")")"
+eq "pending → fail empty"                   ""         "$(fail_of "$(pr b 1 OPEN MERGEABLE CLEAN false "$running")")"
+eq "one red CheckRun → its name"            "selftests" "$(fail_of "$(pr b 1 OPEN MERGEABLE CLEAN false "$ok" "$red")")"
+eq "red StatusContext → its context"        "ci/external" "$(fail_of "$(pr b 1 OPEN MERGEABLE CLEAN false "$ctx_err")")"
+eq "two reds → sorted, comma-joined, unique" "selftests,shellcheck" \
+   "$(fail_of "$(pr b 1 OPEN MERGEABLE CLEAN false "$lint_red" "$red" "$timedout" "$ok")")"
+eq "a red keeps the sha column in place"    "" "$(fail_of "$(pr b 1 OPEN MERGEABLE CLEAN false "$red")" >/dev/null; fold "$(pr b 1 OPEN MERGEABLE CLEAN false "$red")" | cut -f6)"
 
 # --- the program in fleet-lib.sh IS the one tmux-pr-refresh.sh runs ---------------
 grep -q -- '--jq "\$FLEET_PRMAP_JQ"' "$BIN/tmux-pr-refresh.sh" \
