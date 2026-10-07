@@ -66,6 +66,9 @@ var routeAccess = map[string]string{
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
 	"/v1/node/worker-records": accessSelf, "/v1/node/progress": accessSelf,
 	"/v1/node/credentials": accessSelf,
+	// The Singapore relay (claude-fleet#1974): a node token mints a pass;
+	// the check authenticates the pass the forwarder carries.
+	"/v1/node/relay-credential": accessSelf, RelayCheckPath: accessSelf,
 	// The team layer is read by every machine that applies it — a node's
 	// token, a client's certificate — and its PUT is refused to anyone but an
 	// admin by the handler itself.

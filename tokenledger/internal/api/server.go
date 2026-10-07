@@ -423,6 +423,11 @@ func (s *Server) routes() *routeMux {
 		// node's enrollment token, like the control channel; everything else
 		// is the operator's.
 		mux.HandleFunc("/v1/node/credentials", s.handleNodeCredentials)
+		// The Singapore relay (claude-fleet#1974): a trusted node mints its
+		// own relay credential with its token; the forwarder's forward_auth
+		// asks the check, which authenticates the pass it carries.
+		mux.HandleFunc("/v1/node/relay-credential", s.handleNodeRelayCredential)
+		mux.HandleFunc(RelayCheckPath, s.handleRelayCheck)
 		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredentials))))
 		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevoke))))
 		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredAudit))))

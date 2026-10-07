@@ -1,0 +1,103 @@
+# The fleet's Singapore relay (claude-fleet#1974, EPIC #1967 C7) — the whole
+# Caddy config of the forwarder. docs/CRED-RELAY.md is the runbook; the
+# selftest (bin/fleet-relay-cred-selftest.sh) runs THIS file against fakes.
+#
+# The relay holds no credential and parses none:
+#   - a request passes only when the hub's GET /v1/relay/check accepts the
+#     pass in its X-Fleet-Relay header (forward_auth) — never by source IP;
+#   - the auth subrequest carries no Authorization / Cookie (the subscription
+#     never reaches the hub);
+#   - the subscription's Authorization goes upstream untouched; X-Fleet-Relay
+#     and every X-Forwarded-* are stripped (the machine's own address must not
+#     reach the vendor: it is the region the relay exists to leave);
+#   - the log keeps the path PREFIX (empty for anything unrouted), the status
+#     and the bytes — no header, no address, no query.
+#
+# Placeholders are read when Caddy loads the file; none is a secret:
+#   FLEET_RELAY_SITE   the site address (default fleet-relay.24hw.cn — TLS by ACME)
+#   FLEET_HUB_URL      the hub, e.g. https://hub.example.com
+#   FLEET_RELAY_LOG    the access log (default /var/log/caddy/fleet-relay.log)
+#   FLEET_RELAY_ADMIN  Caddy's admin address (default localhost:2019; tests: off)
+#   FLEET_RELAY_ANTHROPIC / _CHATGPT / _OPENAI_AUTH   the upstreams (tests only)
+{
+	admin {$FLEET_RELAY_ADMIN:localhost:2019}
+}
+
+{$FLEET_RELAY_SITE:fleet-relay.24hw.cn} {
+	log {
+		output file {$FLEET_RELAY_LOG:/var/log/caddy/fleet-relay.log} {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		format filter {
+			wrap json
+			fields {
+				request>headers delete
+				request>uri regexp ^(?:(/(?:anthropic|chatgpt|openai-auth)/)|/).*$ ${1}
+				request>remote_ip delete
+				request>remote_port delete
+				request>client_ip delete
+				request>host delete
+				request>tls delete
+				resp_headers delete
+				user_id delete
+			}
+		}
+	}
+
+	# Liveness, with no pass (the monorepo relay's convention).
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# One gate for the three routes: the hub decides, per request. Both
+	# directives run before any handle (Caddy's directive order).
+	@fleet path /anthropic/* /chatgpt/* /openai-auth/*
+	forward_auth @fleet {$FLEET_HUB_URL} {
+		uri /v1/relay/check
+		header_up Host {upstream_hostport}
+		header_up -Authorization
+		header_up -Cookie
+		header_up -Chatgpt-Account-Id
+		header_up -X-Api-Key
+	}
+	request_header @fleet -X-Fleet-Relay
+
+	# Claude: api.anthropic.com
+	handle_path /anthropic/* {
+		reverse_proxy {$FLEET_RELAY_ANTHROPIC:https://api.anthropic.com} {
+			header_up Host {upstream_hostport}
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Proto
+			flush_interval -1
+		}
+	}
+
+	# Codex: chatgpt.com/backend-api (the proxy's base is /chatgpt, its paths /codex/…)
+	handle_path /chatgpt/* {
+		rewrite * /backend-api{uri}
+		reverse_proxy {$FLEET_RELAY_CHATGPT:https://chatgpt.com} {
+			header_up Host {upstream_hostport}
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Proto
+			flush_interval -1
+		}
+	}
+
+	# OpenAI sign-in refresh (R1): auth.openai.com
+	handle_path /openai-auth/* {
+		reverse_proxy {$FLEET_RELAY_OPENAI_AUTH:https://auth.openai.com} {
+			header_up Host {upstream_hostport}
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Proto
+		}
+	}
+
+	# Anything else is not a route — this is not an open proxy.
+	handle {
+		respond 404
+	}
+}

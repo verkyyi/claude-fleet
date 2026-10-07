@@ -77,6 +77,8 @@ FLEET_CRED_CODEX_HOMES             path: where the proxy reads Codex account hom
 FLEET_CRED_SID                     handoff: the per-launch credential-proxy session id fleet-session-wrap.sh hands the launcher (#1972)
 FLEET_DRILL_INVITE                 handoff: the drill's approve code, fleet-onboard-drill.sh → fleet-drill.sh approve (never an argv, #2010)
 FLEET_DRILL_LOGIN_REMOVE           seam: the login-remove script fleet-onboard-drill.sh tears down with (selftest sandbox, #2010)
+FLEET_CRED_RELAY_RECHECK_SECS      knob: how often the proxy launcher re-checks / re-mints its relay pass (1800, #1974)
+FLEET_CRED_RELAY_TOKEN             handoff: a hand-set relay pass, read from secrets.env only — never a setting; unset = the one fleet-relay-cred.sh mints (#1970, #1974)
 FLEET_DRILL_POLL_SECS              knob: how often fleet-onboard-drill.sh reads its pane (2 s)
 FLEET_DRILL_RETIRE_CMD             seam: the command fleet-onboard-drill.sh retires a drill node with (no HTTP way yet, #1928)
 FLEET_DRILL_SCAN_SECS              knob: how long fleet-onboard-drill.sh waits for the QR scan (600 s, the code's life)
