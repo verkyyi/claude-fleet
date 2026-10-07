@@ -169,7 +169,7 @@ sed -i.bak "s#^CCQUOTA_HUB_URL=.*#CCQUOTA_HUB_URL=http://127.0.0.1:$FP#" "$R/nod
 printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\nFLEET_CRED_CODEX_URL=http://127.0.0.1:%s/codex\n' "$FP" "$FP" >> "$C/fleet.conf"
 python3 -I "$BIN/fleet-credsep-launch.py" proxy "$ME" 2>"$SB/launch.err" &
 LPID=$!
-for _ in $(seq 1 100); do [ -S "$SB/run/$ME/ctl.sock" ] && [ -s "$SB/run/$ME/port" ] && break; sleep 0.1; done
+for _ in $(seq 1 300); do [ -S "$SB/run/$ME/ctl.sock" ] && [ -s "$SB/run/$ME/port" ] && break; sleep 0.1; done
 PORT=$(cat "$SB/run/$ME/port" 2>/dev/null)
 [ -n "$PORT" ] && pass "C the launcher started the proxy (127.0.0.1:$PORT, run dir)" \
   || { fail "C proxy did not start: $(cat "$SB/launch.err")"; }
@@ -223,9 +223,10 @@ v=$(FLEET_CONF_DIR="$S" bash -c ". '$BIN/fleet-lib.sh'; _fleet_hub_env; printf '
 # ── E: one peer uid ──────────────────────────────────────────────────────────────
 mkdir -p "$SB/e/state" "$SB/e/run"
 FLEET_CONF_DIR="$SB/e" FLEET_CRED_CTL_DIR="$SB/e/run" FLEET_CRED_CTL_UID=99999 FLEET_CRED_PROXY_LOG="$SB/e/log" \
-  python3 -I "$BIN/fleet-cred-proxy.py" --state "$SB/e/state" serve --max-seconds 30 2>/dev/null &
+  python3 -I "$BIN/fleet-cred-proxy.py" --state "$SB/e/state" serve --max-seconds 90 2>"$SB/e/err" &
 P2=$!
-for _ in $(seq 1 100); do [ -S "$SB/e/run/ctl.sock" ] && break; sleep 0.1; done
+for _ in $(seq 1 300); do [ -S "$SB/e/run/ctl.sock" ] && break; sleep 0.1; done   # a slow runner: 30s
+[ -S "$SB/e/run/ctl.sock" ] || echo "E proxy stderr: $(cat "$SB/e/err")"
 out=$(FLEET_CRED_CTL_DIR="$SB/e/run" python3 -I "$BIN/fleet-cred-proxy.py" --state "$SB/e/state" status 2>&1); rc=$?
 [ "$rc" != 0 ] && case "$out" in *"not this login"*) true ;; *) false ;; esac \
   && pass "E ctl refuses a peer that is not the login's uid" || fail "E ctl answered uid $(id -u): $out"
