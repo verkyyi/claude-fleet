@@ -1989,8 +1989,11 @@ try:
     # another device opens its own lease, and is the primary
     r = subprocess.run([os.path.join(h, "lease"), "acquire", "--device", "iPhone"], capture_output=True, text=True).stdout
     open(os.path.join(h, "primary"), "w").write(r.split("\t")[1] + "\n")
-    renews = log().count("renew " + me)
-    renewed = until(10, lambda: log().count("renew " + me) > renews)
+    # a renewal, or an input (which renews too: tmux may bump a client's
+    # activity on its own, e.g. on attach)
+    held = lambda: log().count("renew " + me) + log().count("input " + me)
+    renews = held()
+    renewed = until(10, lambda: held() > renews)
     if standby() or popped(0) or popped(1) or lease() != me: die("another device opening its lease put this one on standby")
     if not renewed: die("this server stopped renewing")
     # typing here (F12, a key nothing binds to an action): the input goes out
