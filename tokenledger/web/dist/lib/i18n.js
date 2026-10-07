@@ -2,7 +2,7 @@
 //
 // One dictionary per locale, English as the fallback for every key a locale
 // has not translated: a missing key renders the English sentence, never a raw
-// `spend.title` in the middle of a card. That is the whole failure mode worth
+// `ui.nav.overview` in the middle of a page. That is the whole failure mode worth
 // designing against — a half-translated page should read as English in places,
 // not as a key dump.
 //
@@ -186,7 +186,7 @@ export function langURL(href, loc) {
 
 /** t translates one key in the current locale.
  *
- *  `t('spend.incomplete', { missing: '…' })` — variables are named, never
+ *  `t('ui.usr.added', { login: '…' })` — variables are named, never
  *  positional, because a translator moves them: Chinese puts the count after
  *  the noun where English puts it before. */
 export const t = (key, vars) => interpolate(lookup(current, key), vars);
