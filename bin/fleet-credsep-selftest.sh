@@ -163,8 +163,9 @@ open(SB + "/fake.port", "w").write(str(s.server_address[1]))
 s.serve_forever()
 PY
 python3 "$SB/fake.py" "$SB" & echo $! > "$SB/fake.pid"
-for _ in $(seq 1 50); do [ -s "$SB/fake.port" ] && break; sleep 0.1; done
-FP=$(cat "$SB/fake.port")
+for _ in $(seq 1 300); do [ -s "$SB/fake.port" ] && break; sleep 0.1; done   # a slow runner: 30s
+FP=$(cat "$SB/fake.port" 2>/dev/null)
+[ -n "$FP" ] || { fail "C the fake far end never published its port"; }
 sed -i.bak "s#^CCQUOTA_HUB_URL=.*#CCQUOTA_HUB_URL=http://127.0.0.1:$FP#" "$R/node.env" && rm -f "$R/node.env.bak"
 printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\nFLEET_CRED_CODEX_URL=http://127.0.0.1:%s/codex\n' "$FP" "$FP" >> "$C/fleet.conf"
 python3 -I "$BIN/fleet-credsep-launch.py" proxy "$ME" 2>"$SB/launch.err" &
@@ -180,9 +181,10 @@ m=$(ls -l "$SB/run/$ME/port" 2>/dev/null | cut -c1-10)
 [ "$(bash "$BIN/fleet-cred-proxy.sh" port 2>&1)" = "$PORT" ] && pass "C fleet-cred-proxy.sh port reads the run dir" \
   || fail "C port: $(bash "$BIN/fleet-cred-proxy.sh" port 2>&1)"
 tok=$(bash "$BIN/fleet-cred-proxy.sh" mint --account main --sid s1 2>&1)
-curl -s -o /dev/null -H "Authorization: Bearer $tok" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORT/v1/messages"
-grep -q "POST /v1/messages auth=Bearer sk-ant-oat01-MAIN" "$SB/fake.log" \
-  && pass "C a session's request carries the credential from the store" || fail "C direct: $(tail -3 "$SB/fake.log")"
+code=$(curl -s --max-time 60 -o "$SB/c.body" -w '%{http_code}' -H "Authorization: Bearer $tok" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORT/v1/messages")
+grep -q "POST /v1/messages auth=Bearer sk-ant-oat01-MAIN" "$SB/fake.log" 2>/dev/null \
+  && pass "C a session's request carries the credential from the store" \
+  || fail "C direct: HTTP $code $(cat "$SB/c.body" 2>/dev/null) · fake saw: $(tail -3 "$SB/fake.log" 2>/dev/null)"
 printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-RENEWED"}}' | bash "$BIN/fleet-cred-proxy.sh" store --kind claude --label main
 grep -q RENEWED "$R/accounts/main.hub/.credentials.json" && [ ! -e "$C/accounts/main.hub/.credentials.json" ] \
   && pass "C store: the agent's lease lands in the store, not the login" || fail "C store"
@@ -194,9 +196,10 @@ pair=$(bash "$BIN/fleet-cred-proxy.sh" node-token 2>&1)
 burl=${pair%%	*} btok=${pair#*	}
 case "$btok" in fcpn1.*) pass "D node-token: $burl + fcpn1." ;; *) fail "D node-token: $pair" ;; esac
 : > "$SB/fake.log"
-curl -s -o /dev/null -H "Authorization: Bearer $btok" "$burl/v1/node/self"
+code=$(curl -s --max-time 60 -o "$SB/d.body" -w '%{http_code}' -H "Authorization: Bearer $btok" "$burl/v1/node/self")
 grep -q "GET /v1/node/self auth=Bearer ccq_NODE_SECRET_0123" "$SB/fake.log" \
-  && pass "D broker: the node token is put in on the way out" || fail "D broker fwd: $(cat "$SB/fake.log")"
+  && pass "D broker: the node token is put in on the way out" \
+  || fail "D broker fwd: HTTP $code $(cat "$SB/d.body" 2>/dev/null) · fake saw: $(cat "$SB/fake.log")"
 : > "$SB/fake.log"
 for p in /v1/node/credentials /v1/node/credentials/ //v1/node/credentials /v1/node/./credentials /v1/node/%63redentials /V1/NODE/CREDENTIALS; do
   c=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $btok" "$burl$p")
