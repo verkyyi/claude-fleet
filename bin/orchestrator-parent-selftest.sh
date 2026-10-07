@@ -78,7 +78,7 @@ wc=$(tf new-window -d -P -F '#{window_id}' -n kid -c "$WORK" 'while :; do sleep 
 tf set-window-option -t "$wc" @issue 101
 tf set-window-option -t "$wc" @repo acme/app
 tf set-window-option -t "$wc" @origin orchestrator
-tf set-window-option -t "$wc" @claude_state done
+tf set-window-option -t "$wc" @claude_state 'done'
 lib '' '' fleet_stamp_origin_wid "$L" "$wc" orchestrator "$L" >/dev/null 2>&1
 ofid=$(tf display-message -p -t "$wo" '#{@fleet_id}'); cfid=$(tf display-message -p -t "$wc" '#{@origin_fid}')
 ok; [ -n "$ofid" ] && [ "$ofid" = "$cfid" ] || fail "C: the child's @origin_fid is the orchestrator's @fleet_id" "orch=$ofid child=$cfid"
