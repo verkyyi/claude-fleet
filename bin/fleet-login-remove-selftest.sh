@@ -15,7 +15,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/login-remove-selftest.XXXXXX") || exit 2
 WORK=$(cd "$WORK" && pwd -P)   # one spelling of the path: $PWD is compared against it (#1216)
 trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
-mkdir -p "$WORK/bin" "$WORK/shim" "$WORK/shim-tar-fails" "$WORK/homes" "$WORK/LaunchDaemons" "$WORK/ds/groups"
+REAL_TAR=$(command -v tar) || exit 2
+mkdir -p "$WORK/bin" "$WORK/shim" "$WORK/shim-tar-fails" "$WORK/shim-tar-warns" "$WORK/homes" "$WORK/LaunchDaemons" "$WORK/ds/groups"
 cp "$BIN/fleet-login-remove.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" "$BIN/fleet-node-leave.sh" "$WORK/bin/"
 cat > "$WORK/bin/fleet-restore.sh" <<'EOF'
 #!/bin/sh
@@ -46,10 +47,16 @@ reset_fixture() {
   printf 'alive\n' > "$FLEET_TEST_LIVE"
   printf 'token\n' > "$FLEET_CONF_DIR/accounts/alpha"
   printf 'notes\n' > "$WORK/homes/alice/keep-me.txt"
+  mkdir -p "$WORK/homes/alice/Library/Caches/com.example"
+  printf 'cache\n' > "$WORK/homes/alice/Library/Caches/com.example/blob"
   for p in "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.alice.spinner.plist" \
            "$WORK/homes/alice/Library/LaunchAgents/com.claude-fleet.collect.plist" \
            "$WORK/homes/alice/Library/LaunchAgents/com.ccquota.agent.plist" \
-           "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.bob.spinner.plist"; do
+           "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.bob.spinner.plist" \
+           "$FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.alice.plist" \
+           "$FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.alice.plist.bak-1453" \
+           "$FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.alice.plist.pre-move" \
+           "$FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.bob.plist"; do
     printf 'plist\n' > "$p"
   done
   printf 'GroupMembership: admin1 alice bob\nGroupMembers: GUID-ADMIN1 GUID-ALICE GUID-BOB\n' > "$WORK/ds/groups/com.apple.access_ssh"
@@ -162,7 +169,18 @@ printf 'tar %s\n' "$*" >> "$FLEET_TEST_LOG"
 echo 'tar: disk full' >&2
 exit 1
 EOF
-chmod +x "$WORK/shim/"* "$WORK/shim-tar-fails/"*
+# tar that writes the archive but cannot read two files, as on 2026-10-05
+# (a socket, a SIP-protected .bnnsir): bsdtar says so and exits 1 (issue #1700).
+cat > "$WORK/shim-tar-warns/tar" <<EOF
+#!/bin/sh
+case "\$1" in -t*) exec "$REAL_TAR" "\$@" ;; esac
+printf 'tar %s\n' "\$*" >> "\$FLEET_TEST_LOG"
+"$REAL_TAR" "\$@" || exit 2
+echo 'tar: alice/Library/Biome/x.bnnsir: Couldn'"'"'t open: Operation not permitted' >&2
+echo 'tar: alice/Library/Group Containers/s.sock: tar format cannot archive socket' >&2
+exit 1
+EOF
+chmod +x "$WORK/shim/"* "$WORK/shim-tar-fails/"* "$WORK/shim-tar-warns/"*
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 has() { grep -Fq -- "$2" "$1" || fail "$3"; }
@@ -181,7 +199,9 @@ has "$WORK/out" 'bootout gui/602' 'GUI shape missing'
 has "$WORK/out" 'com.ccquota.agent.plist' 'ccquota missing'
 has "$WORK/out" "home-policy=archive → $ARCH/alice-" 'default policy is not archive'
 has "$WORK/out" "sudo install -d -m 700 -o 501 $ARCH" 'archive dir not prepared for the admin'
-has "$WORK/out" "sudo tar -czf $ARCH/alice-" 'archive command missing'
+has "$WORK/out" "sudo tar --exclude=alice/Library/Caches -czf $ARCH/alice-" 'archive command missing (or Library/Caches not excluded)'
+has "$WORK/out" "bootout system $FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.alice.plist" 'node agent LaunchDaemon not shown (#1700)'
+has "$WORK/out" "rm -f $FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.alice.plist.bak-1453" 'node agent .bak-* copy not shown'
 has "$WORK/out" "tar.gz -C $WORK/homes alice" 'archive is not the home, relative to the homes dir'
 has "$WORK/out" 'sudo chmod 600' 'archive is not 600'
 has "$WORK/out" 'sysadminctl -deleteUser alice' 'default deleteUser missing'
@@ -215,7 +235,13 @@ has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'account was not deleted'
 not_has "$FLEET_TEST_LOG" 'keepHome' 'apply passed -keepHome'
 has "$FLEET_TEST_LOG" 'pkill -TERM -U 602' 'remaining processes were not stopped'
 has "$FLEET_TEST_LOG" "install -d -m 700 -o 501 $ARCH" 'archive dir not prepared'
-has "$FLEET_TEST_LOG" "sudo tar -czf $ARCH/alice-" 'home was not archived'
+has "$FLEET_TEST_LOG" "sudo tar --exclude=alice/Library/Caches -czf $ARCH/alice-" 'home was not archived'
+has "$FLEET_TEST_LOG" "launchctl bootout system $FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.alice.plist" 'node agent LaunchDaemon not booted out (#1700)'
+for f in com.ccquota.agent.alice.plist com.ccquota.agent.alice.plist.bak-1453 com.ccquota.agent.alice.plist.pre-move; do
+  [ ! -e "$FLEET_INSTALL_DAEMON_DIR/$f" ] || fail "$f was left behind (#1700)"
+done
+[ -f "$FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.bob.plist" ] || fail "another login's node agent was removed"
+not_has "$FLEET_TEST_LOG" 'bootout system '"$FLEET_INSTALL_DAEMON_DIR"'/com.ccquota.agent.alice.plist.' 'a never-loaded copy was booted out'
 has "$FLEET_TEST_LOG" "chown 501 $ARCH/alice-" 'archive not handed to the admin'
 [ "$(archives)" = 1 ] || fail "expected one archive, found $(archives)"
 A=$(echo "$ARCH"/alice-*.tar.gz)
@@ -224,6 +250,8 @@ tar -tzf "$A" > "$WORK/tar.lst" || fail 'archive is not a readable tar.gz'
 has "$WORK/tar.lst" 'alice/keep-me.txt' "the person's files are not in the archive"
 has "$WORK/tar.lst" 'alice/.config/claude-fleet/fleets/alice-fleet/conf' 'the fleet conf is not in the archive'
 not_has "$WORK/tar.lst" 'accounts/alpha' 'the copied account pool is inside the archive'
+not_has "$WORK/tar.lst" 'Library/Caches' 'Library/Caches is inside the archive (#1700)'
+not_has "$WORK/out" 'WARN' 'a clean archive warned'
 has "$WORK/out" "archive=$A" 'archive path not printed at the end'
 has "$WORK/out" 'fleet-login-remove: done' 'done line missing'
 not_has "$WORK/out" 'WARN home still present' 'home was reported present after deleteUser removed it'
@@ -279,12 +307,24 @@ not_has "$FLEET_TEST_LOG" 'dscl . -delete' 'dscl -delete ran for a login in no a
 reset_fixture
 : > "$FLEET_TEST_LOG"; PATH="$WORK/shim-tar-fails:$PATH" bash "$S" alice --apply > "$WORK/out" 2>&1; RC=$?
 [ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail 'a failed archive did not stop the run'; }
-has "$FLEET_TEST_LOG" 'sudo tar -czf' 'failing tar was not attempted'
+has "$FLEET_TEST_LOG" 'sudo tar --exclude=alice/Library/Caches -czf' 'failing tar was not attempted'
 has "$WORK/out" 'stopped before deleting the login' 'failed archive not explained'
 not_has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser' 'login deleted although the archive failed'
 not_has "$FLEET_TEST_LOG" 'dscl . -delete' 'groups edited although the archive failed'
 [ -f "$WORK/homes/alice/keep-me.txt" ] || fail 'failed archive: home was lost'
 [ "$(ssh_group)" = "$(printf 'GroupMembership: admin1 alice bob\nGroupMembers: GUID-ADMIN1 GUID-ALICE GUID-BOB')" ] || fail 'failed archive: ssh group edited'
+
+# tar cannot read some files (a socket, a SIP file) but the archive is whole:
+# a WARN naming them, and the offboarding goes on (issue #1700).
+reset_fixture
+: > "$FLEET_TEST_LOG"; PATH="$WORK/shim-tar-warns:$PATH" bash "$S" alice --apply > "$WORK/out" 2>&1; RC=$?
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail 'an unreadable file stopped the archive (#1700)'; }
+has "$WORK/out" 'WARN 2 line(s) from tar' 'unreadable files not reported as a WARN'
+has "$WORK/out" 'x.bnnsir' 'the unreadable file is not named'
+has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'login not deleted after an archive with warnings'
+A=$(echo "$ARCH"/alice-*.tar.gz | tr ' ' '\n' | tail -n 1)
+tar -tzf "$A" | grep -Fq 'alice/keep-me.txt' || fail 'archive with warnings lost the readable files'
+rm -f "$ARCH"/alice-*.tar.gz
 
 # A group edit failing AFTER the deletion cannot undo it: finish the rest, say
 # what is left to do by hand, exit 1.
@@ -316,7 +356,7 @@ reset_fixture
 not_has "$WORK/out" 'Permission denied' 'closed cwd: a getcwd death leaked into the run'
 has "$FLEET_TEST_LOG" 'tmux -L alice-fleet kill-session -t alice-fleet' 'closed cwd: fleet was not stopped'
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'closed cwd: account was not deleted'
-has "$FLEET_TEST_LOG" "sudo tar -czf $ARCH/alice-" 'closed cwd: home was not archived'
+has "$FLEET_TEST_LOG" "sudo tar --exclude=alice/Library/Caches -czf $ARCH/alice-" 'closed cwd: home was not archived'
 [ ! -e "$WORK/homes/alice" ] || fail 'closed cwd: home remains'
 # A login that is a node is taken off the hub first, as itself, with its own
 # token (issue #1928): the hub is asked, node.env goes, and it happens before the
