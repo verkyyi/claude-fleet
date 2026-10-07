@@ -38,6 +38,8 @@ type cpRig struct {
 	upAuth   []string
 	upAcct   []string
 	audit    []string
+	// full is Authorization → the 429 body it answers (claude-fleet#2115)
+	full     map[string]string
 	skew     atomic.Int64 // the proxy's clock runs this far ahead (pastCache)
 }
 
@@ -71,7 +73,16 @@ func newCPRig(t *testing.T) *cpRig {
 		r.mu.Lock()
 		r.upAuth = append(r.upAuth, req.Header.Get("Authorization"))
 		r.upAcct = append(r.upAcct, req.Header.Get("Chatgpt-Account-Id"))
+		full, isFull := r.full[req.Header.Get("Authorization")]
 		r.mu.Unlock()
+		if isFull {
+			if strings.Contains(full, "weekly limit") { // a quota 429, not a request rate
+				w.Header().Set("Anthropic-Ratelimit-Unified-Status", "rejected")
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, full)
+			return
+		}
 		// usage: 150 counted tokens a request (claude-fleet#1977)
 		_, _ = io.WriteString(w, `{"content":[{"type":"text","text":"PONG"}],"usage":{"input_tokens":100,"cache_read_input_tokens":9000,"output_tokens":50}}`)
 	}))

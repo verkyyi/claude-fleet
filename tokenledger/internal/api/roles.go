@@ -80,7 +80,7 @@ var routeAccess = map[string]string{
 	control.RenewPath: accessSelf, control.HomePath: accessSelf,
 	"/v1/fleet/client-settings": accessSelf,
 	"/v1/fleet/session-cred":    accessSelf, "/v1/fleet/session-cred/": accessSelf,
-	CredProxyResolvePath: accessSelf,
+	CredProxyResolvePath: accessSelf, CredProxyRebindPath: accessSelf,
 	// Per-person budgets (claude-fleet#1977): each proxy reports with its own
 	// token; the list is the operator's.
 	CredProxyUsagePath: accessSelf, "/v1/node/usage": accessSelf, "/v1/fleet/person-usage": accessAdmin,

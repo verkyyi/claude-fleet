@@ -189,6 +189,9 @@ type Server struct {
 	// recent is the starts just sent to each node that its heartbeat may not
 	// show yet (claude-fleet#2077); judge counts them as running.
 	recent recentTable
+	// limits is the accounts the cluster proxy saw a quota 429 on
+	// (claude-fleet#2115); the session pick puts them last.
+	limits limitMemo
 
 	// devices holds `fleet login` device-code logins in progress.
 	devices deviceLogins
@@ -395,6 +398,9 @@ func (s *Server) routes() *routeMux {
 		// The cluster credential proxy's one question (claude-fleet#1973):
 		// its own token, checked by the handler.
 		mux.HandleFunc(CredProxyResolvePath, s.handleCredProxyResolve)
+		// …and its quota 429s (claude-fleet#2115): the hub moves the
+		// session to an account with room, once.
+		mux.HandleFunc(CredProxyRebindPath, s.handleCredProxyRebind)
 		// Per-person budgets (claude-fleet#1977): what a person used,
 		// reported by both proxies, each with its own token; the list is
 		// the operator's.
