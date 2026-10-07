@@ -3292,6 +3292,27 @@ if [ -n "$_ol" ]; then
   fi
 fi
 
+# --- compose: ↵ → 能打字 over the last 20 sends (issue #2238, EPIC #2230) ----------
+# fleet-compose-latency.sh's one-line summary. No send recorded yet (or none that
+# reached 能打字) is no warning — the bar is the batch's 3 s, and only a max past
+# it is one. The breakdown is `fleet-compose-latency.sh --last 20`.
+if _cs=$(bash "$(dirname "$0")/fleet-compose-latency.sh" --last 20 --summary 2>/dev/null) && [ -n "$_cs" ]; then
+  _cn=$(printf '%s' "$_cs" | sed -n 's/.*n=\([0-9]*\).*/\1/p')
+  _cr=$(printf '%s' "$_cs" | sed -n 's/.*ready=\([0-9]*\).*/\1/p')
+  _cp=$(printf '%s' "$_cs" | sed -n 's/.*p50=\([0-9-]*\).*/\1/p')
+  _cm=$(printf '%s' "$_cs" | sed -n 's/.*max=\([0-9-]*\).*/\1/p')
+  if [ "${_cr:-0}" -eq 0 ] || [ "$_cm" = - ]; then
+    info compose "↵ → 能打字: no measured send yet (${_cn:-0} recorded) — fleet-compose-latency.sh"
+  else
+    _cmsg=$(awk -v n="$_cr" -v p="$_cp" -v m="$_cm" 'BEGIN { printf "↵ → 能打字 over %d sends: p50 %.1fs · max %.1fs", n, p / 1000, m / 1000 }')
+    if [ "$_cm" -gt 3000 ]; then
+      warn compose "$_cmsg (> 3s) — fleet-compose-latency.sh --last 20 shows which segment"
+    else
+      pass compose "$_cmsg"
+    fi
+  fi
+fi
+
 # --- perl Time::HiRes (soft: dash spinner sub-second frames) ---
 if command -v perl >/dev/null 2>&1 && perl -MTime::HiRes -e1 >/dev/null 2>&1; then
   pass perl "Time::HiRes present (sub-second spinner)"

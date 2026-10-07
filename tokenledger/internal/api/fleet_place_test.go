@@ -629,3 +629,24 @@ func TestNodePlaceScratchIdleNodeStaysLocal(t *testing.T) {
 		t.Fatal("a local scratch placement sent a write")
 	}
 }
+
+// A done start carries the node's timing on (claude-fleet#2238); an older node
+// without one, or a timing that is not an object, adds nothing.
+func TestOutcomeOfTiming(t *testing.T) {
+	op := func(result string) map[string]any {
+		return map[string]any{"status": "succeeded", "result": json.RawMessage(result)}
+	}
+	oc := outcomeOf(op(`{"window":"@4","timing":{"t_accepted":1000,"t_window":2500}}`), "m5")
+	if oc.State != "done" || string(oc.Timing) != `{"t_accepted":1000,"t_window":2500}` {
+		t.Fatalf("timing not passed on: %+v %s", oc, oc.Timing)
+	}
+	for _, old := range []string{`{"window":"@4"}`, `{"window":"@4","timing":"x"}`} {
+		if oc := outcomeOf(op(old), "m5"); oc.Timing != nil {
+			t.Fatalf("%s: timing %s, want none", old, oc.Timing)
+		}
+		raw, _ := json.Marshal(outcomeOf(op(old), "m5"))
+		if strings.Contains(string(raw), "timing") {
+			t.Fatalf("%s: answer names timing: %s", old, raw)
+		}
+	}
+}

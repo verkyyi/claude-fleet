@@ -141,6 +141,9 @@ n=\$(grep -c . "$LOG")
 sleep 2
 case "\$1 \$2" in
   *' new') k=\$((42 + n)); nm=forty-three; [ "\$k" = 43 ] || nm=new-\$k
+       # the node's timing points (issue #2238), as a new hub hands them on; the
+       # other kinds play an older node that sends none
+       [ -z "\${FLEET_PLACE_TIMING:-}" ] || printf '{"t_accepted": 1000, "t_window": 4500, "x": 1}' > "\$FLEET_PLACE_TIMING"
        printf 'wid:U/issue-%s${US}working${US}*${US}%s${US}${US}${US}0${US}${US}m4${US}%s${US}${US}\n' "\$k" "\$nm" "\$k" >> "$ROWS"
        printf 'REMOTE m4 op%s done U/issue-%s\tm5 busier\n' "\$n" "\$k" ;;
   '- scratch')
@@ -285,6 +288,14 @@ eq 'N: sent · placed · started' $'ev=sent how=issue repo=acme/web\nev=placed r
   "$(clog ev how repo rc result machine session state)"
 eq 'N: …one id' 1 "$(clog id | sort -u | grep -c .)"
 has 'N: started says the seconds since the ↵' "$(clog ev secs | tail -1)" 'secs='
+# issue #2238: the ↵'s ms, the node's points on `placed`, and `ready` once the
+# row reads a state the person can type into
+case "$(clog ev t_enter | head -1)" in "ev=sent t_enter="[0-9]*) CHECKS=$((CHECKS + 1)) ;; *) fail 'N: sent carries t_enter' "$(clog ev t_enter)" ;; esac
+eq 'N: placed carries the node timing' "ev=placed t_accepted=1000 timing={'t_accepted': 1000, 't_window': 4500}" "$(clog ev t_accepted timing | sed -n 2p)"
+python3 -c 'import sys; p = sys.argv[1]; t = open(p).read().replace("wid:U/issue-43\x1fworking", "wid:U/issue-43\x1fdone"); open(p, "w").write(t)' "$ROWS"
+CHECKS=$((CHECKS + 1)); n=0; while ! grep -q '"ready"' "$FLEET_COMPOSE_LOG" 2>/dev/null && [ $n -lt 50 ]; do sleep .1; n=$((n + 1)); done
+case "$(clog ev session state t_ready | tail -1)" in "ev=ready session=U/issue-43 state=done t_ready="[0-9]*) ;; *) fail 'N: ready once the row reads done' "$(clog ev session state t_ready | tail -1)" ;; esac
+eq 'N: …still one id' 1 "$(clog id | sort -u | grep -c .)"
 hasnt 'B: the draft is empty after a send' "$(compose)" '附上截图'
 
 # C. ⌘N again: the same window; esc keeps the draft and goes back

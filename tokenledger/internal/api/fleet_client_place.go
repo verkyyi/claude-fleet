@@ -96,6 +96,9 @@ type ClientPlaceResponse struct {
 	WorkerID    string     `json:"worker_id,omitempty"`
 	Window      string     `json:"window,omitempty"`
 	Placement   *Placement `json:"placement,omitempty"`
+	// Timing: the node's timing points for a done start (claude-fleet#2238),
+	// as the node wrote them; the client logs them in compose.ndjson.
+	Timing json.RawMessage `json:"timing,omitempty"`
 }
 
 // checkActionMAC says whether lease is one of key's live leases and mac is
@@ -426,6 +429,7 @@ func (s *Server) clientPlaceAnswer(r *http.Request, op map[string]any, pl *Place
 			who = "-"
 		}
 		out.State, out.Exit, out.WorkerID, out.Window = "done", 0, oc.WorkerID, oc.Window
+		out.Timing = oc.Timing
 		out.Line = "REMOTE " + m + " " + opID + " done " + oneLine(who) + "\t" + reason
 	case (oc.State == "refused" || oc.State == "failed") && oc.Exit != nil && *oc.Exit > 0:
 		out.State, out.Exit = oc.State, 5

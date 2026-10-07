@@ -46,6 +46,10 @@
 # lines, the same codes); on one without, ONE line —
 # 「这台电脑没有 fleet，也连不上入口」 — and exit 1.
 #
+# FLEET_PLACE_TIMING=<file> (issue #2238): a done start's node timing points —
+# the hub's `timing`, epoch ms — written there as JSON; an older hub or node
+# writes nothing.
+#
 # State: the lease id in $FLEET_CLIENT_DIR/client.lease (default $TMPDIR, the
 # client server's), the key in FLEET_CLIENT_KEY_FILE (default <dir>/client.key).
 set -uo pipefail
@@ -189,6 +193,15 @@ line = out.get("line") or ""
 if not line:
     sys.stderr.write("fleet-client-place: the hub's answer has no line\n")
     sys.exit(1)
+# The node's timing points (issue #2238), for a caller that asked for them by
+# naming a file (fleet-compose.py → compose.ndjson); the line stays ONE line.
+tf = os.environ.get("FLEET_PLACE_TIMING") or ""
+if tf and isinstance(out.get("timing"), dict):
+    try:
+        with open(tf, "w", encoding="utf-8") as f:
+            json.dump(out["timing"], f)
+    except OSError:
+        pass
 print(line.replace("\n", " "))
 sys.exit(int(out.get("exit") or 0))
 PY

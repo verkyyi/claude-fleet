@@ -256,6 +256,19 @@ case "$mode" in
       printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale"
     done <<<"$rows"
     ;;
+  # --- wstate <sess> <@win> (issue #2238) --------------------------------------
+  # A just-opened window's `<@claude_state>\t<@cc_session_id>` — what the start's
+  # executor polls to stamp `t_ready` (can the person type yet?) into its
+  # operation's timing. One display-message; exit 5 = no such window (tmux must
+  # name it back — an answer without the id is no window, never an empty state).
+  wstate)
+    win="${3:-}"
+    case "$win" in @[0-9]*) ;; *) exit 2 ;; esac
+    case "$win" in *[!@0-9]*) exit 2 ;; esac
+    out=$(tmux -L "$(fleet_socket "$sess")" display-message -p -t "$win" \
+      '#{window_id}	#{@claude_state}	#{@cc_session_id}' 2>/dev/null) || exit 5
+    case "$out" in "$win	"*) printf '%s\n' "${out#*	}" ;; *) exit 5 ;; esac
+    ;;
   ready)
     # Can this login take a NEW session (issue #1475)? The node's heartbeat
     # carries the verdict and the hub's `auto` placement never picks a machine
