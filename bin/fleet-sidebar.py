@@ -228,6 +228,9 @@ def bar_record(rows, current):
         "node": machine_tag(node.rstrip("!~"))[1:] if node.rstrip("!~") else tr("sidebar_here"),
         "lost": node.endswith("!"), "direct": node.endswith("~"),
         "ask": sum(1 for r in rows if r[0] != "hdr" and r[1] in FOLD_KEEP),
+        # the session's worker id: the top line matches it against what the
+        # person's other clients are viewing (issue #1932)
+        "wid": current[4:] if current.startswith("wid:") else "",
     }
 
 

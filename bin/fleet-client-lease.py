@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""fleet-client-lease.py — one person, one connected client (issue #1715, EPIC #1710 C5).
+"""fleet-client-lease.py — a person's connected clients (issue #1715, EPIC #1710 C5;
+several at once since #1932, EPIC #1906 C13).
 
   fleet-client-lease.py acquire [--lease ID] [--device D] [--terminal T]
-  fleet-client-lease.py renew   --lease ID
+  fleet-client-lease.py renew   --lease ID [--last-input EPOCH] [--viewing WID]
+  fleet-client-lease.py input   --lease ID [--last-input EPOCH] [--viewing WID] [--where-file F]
+                                          this client was typed into / tapped (≤ 1 per 5 s)
   fleet-client-lease.py release --lease ID
   fleet-client-lease.py get
+  fleet-client-lease.py list              every client of yours (JSON: clients, primary)
+  fleet-client-lease.py revoke  --target ID   disconnect one of them
   fleet-client-lease.py device [--save F] this client's device + terminal (TAB);
                                           --save writes the whole of it (JSON) to F
   fleet-client-lease.py where             the person's current client, as the hub
@@ -19,11 +24,16 @@ device's connection certificate (`fleet-client@claude-fleet`) — or, with
 FLEET_HUB_TOKEN / hub.json's token, by that token. Prints ONE line,
 TAB-separated:
 
-  <state>  <lease id>  <holder's device>  <device it took over from>
+  <state>  <lease id>  <device>  <device asked to leave>  <reason>
 
-state is active (the lease is ours), taken_over (another client holds it — the
-third field says which device), released, none (get: nobody holds one) or
-nohub. Exit 0 = the hub answered (or nohub: there is no hub here, and with no
+state is active (the lease is ours), taken_over (ours is no longer held — the
+third field says by which device, the fifth why: evicted = a client past the
+limit asked this one, the least recently used, to leave; revoked = you
+disconnected it from another client; empty = an older hub's takeover),
+released, revoked, none (get: nobody holds one) or nohub. Every active answer
+also writes the person's whole list — {"lease": ours, "primary", "clients"} — to
+FLEET_CLIENT_LIST_FILE when that is set (the sidebar's 我的客户端 and the top
+line's 「也在 iPhone 上打开」 read it). Exit 0 = the hub answered (or nohub: there is no hub here, and with no
 hub there is no lease — the machine's one shell is already the only one);
 1 = the hub could not be asked (network, a refusal) — the caller keeps what it
 had.
@@ -287,20 +297,23 @@ def identity(flag):
     return "test" if in_session() else "person"
 
 
-def out(state, lease="", holder="", took=""):
-    print("\t".join(x.replace("\t", " ").replace("\n", " ") for x in (state, lease, holder, took)))
+def out(state, lease="", holder="", took="", reason=""):
+    print("\t".join(x.replace("\t", " ").replace("\n", " ") for x in (state, lease, holder, took, reason)))
 
 
 def main(argv):
     import argparse
     ap = argparse.ArgumentParser(prog="fleet-client-lease")
-    ap.add_argument("action", choices=["acquire", "renew", "release", "get", "device", "where"])
+    ap.add_argument("action", choices=["acquire", "renew", "input", "release", "get", "list", "revoke", "device", "where"])
     ap.add_argument("--lease", default="")
     ap.add_argument("--device", default="")
     ap.add_argument("--terminal", default="")
     ap.add_argument("--save", default="")
     ap.add_argument("--where-file", default="")
     ap.add_argument("--test-identity", action="store_true")
+    ap.add_argument("--last-input", type=int, default=0)
+    ap.add_argument("--viewing", default="")
+    ap.add_argument("--target", default="")
     a = ap.parse_args(argv)
     if a.action == "device":
         w = where(ask=True)
@@ -313,7 +326,7 @@ def main(argv):
                 sys.stderr.write("fleet-client-lease: %s\n" % e)
         print("%s\t%s" % (w["device"], w["terminal"]))
         return 0
-    if a.action in ("renew", "release") and not a.lease:
+    if a.action in ("renew", "input", "release") and not a.lease:
         sys.stderr.write("fleet-client-lease: %s needs --lease\n" % a.action)
         return 2
     fc = connect_module()
@@ -327,10 +340,19 @@ def main(argv):
         return 0
     ident = identity(a.test_identity)
     path = PATH + "/test" if ident == "test" else PATH
+    if a.action == "revoke" and not a.target:
+        sys.stderr.write("fleet-client-lease: revoke needs --target\n")
+        return 2
     body = {"action": a.action, "lease": a.lease}
+    if a.action in ("renew", "input"):
+        if a.last_input > 0:
+            body["last_input"] = a.last_input
+        body["viewing"] = a.viewing
+    if a.action == "revoke":
+        body["target"] = a.target
     if ident == "test":
         body["identity"] = "test"
-    if a.action == "acquire":
+    if a.action == "acquire" or (a.action == "input" and a.where_file):
         w = None
         if a.where_file:
             try:
@@ -338,13 +360,21 @@ def main(argv):
                     w = json.load(f)
             except (OSError, ValueError):
                 w = None
-        w = w if isinstance(w, dict) else where()
+        if not isinstance(w, dict):
+            w = where() if a.action == "acquire" else {}
         for k in ("os", "via", "host", "caps"):
             if w.get(k):
                 body[k] = w[k]
-        body["device"] = a.device or w.get("device") or device()
-        body["terminal"] = a.terminal or w.get("terminal") or terminal()
-        body["version"] = run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"], 2)
+        if a.action == "acquire":
+            body["device"] = a.device or w.get("device") or device()
+            body["terminal"] = a.terminal or w.get("terminal") or terminal()
+            body["version"] = run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"], 2)
+        else:
+            # another client of the same server typed into: the lease says
+            # where that one is (#1932)
+            for k in ("device", "terminal"):
+                if w.get(k):
+                    body[k] = w[k]
     headers = {"Content-Type": "application/json"}
     if in_session():
         # a session's request says so: the hub never hands it the person's lease
@@ -364,6 +394,9 @@ def main(argv):
         with urllib.request.urlopen(req, timeout=float(os.environ.get("FLEET_CLIENT_LEASE_TIMEOUT") or 8)) as r:
             d = json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
+        if e.code == 404 and a.action == "revoke":
+            sys.stderr.write("fleet-client-lease: no such client (it may have gone already)\n")
+            return 1
         if e.code == 404:
             # An older hub without the lease (or, for the test identity,
             # without its door): treat it as none — the client runs as it
@@ -387,11 +420,40 @@ def main(argv):
         return 1
     save_key(d.get("action_key") or "")
     lease = d.get("lease") or {}
+    if a.action == "list":
+        print(json.dumps({"state": d.get("state") or "none", "primary": d.get("primary") or "",
+                          "clients": d.get("clients") or []}, ensure_ascii=False))
+        return 0
+    if a.action in ("acquire", "renew", "input", "revoke") and d.get("state") in ("active", "revoked"):
+        save_list(lease.get("id") if a.action != "revoke" else None, d)
     by = d.get("by") or {}
-    took = d.get("took_over") or {}
+    gone = d.get("evicted") or d.get("took_over") or {}
     out(d.get("state") or "none", lease.get("id") or "", by.get("device") or lease.get("device") or "",
-        took.get("device") or "")
+        gone.get("device") or "", d.get("reason") or "")
     return 0
+
+
+def save_list(own, d):
+    """The person's clients (issue #1932) to FLEET_CLIENT_LIST_FILE: ours (own,
+    None = keep what the file says), the primary, every client — what the
+    sidebar's 我的客户端 and the top line read, never the hub on each draw."""
+    f = os.environ.get("FLEET_CLIENT_LIST_FILE") or ""
+    if not f:
+        return
+    if own is None:
+        try:
+            with open(f) as fh:
+                own = (json.load(fh) or {}).get("lease") or ""
+        except (OSError, ValueError, AttributeError):
+            own = ""
+    rec = {"lease": own or "", "primary": d.get("primary") or "", "clients": d.get("clients") or [],
+           "at": int(time.time())}
+    try:
+        with open(f + ".tmp", "w") as fh:
+            json.dump(rec, fh, ensure_ascii=False)
+        os.replace(f + ".tmp", f)
+    except OSError as e:
+        sys.stderr.write("fleet-client-lease: %s\n" % e)
 
 
 def save_key(key):
@@ -424,8 +486,9 @@ def node_env(key):
 
 
 def read_where(fc, hub, token):
-    """The person's current client, as the hub holds it, ONE JSON line:
-    {"state": active|none|nohub, "lease": {...}}. A node asks with its own
+    """The person's current client — the primary — as the hub holds it, ONE JSON
+    line: {"state": active|none|nohub, "lease": {...}, "clients": [...],
+    "primary": id} (an older hub: no clients). A node asks with its own
     token (GET /v1/node/client — its owner's); a client machine with its
     connection certificate (or hub token). Exit 1 = the hub could not be asked."""
     ntok = os.environ.get("CCQUOTA_TOKEN") or node_env("CCQUOTA_TOKEN")
@@ -464,7 +527,8 @@ def read_where(fc, hub, token):
     except (OSError, ValueError) as e:
         sys.stderr.write("fleet-client-lease: %s\n" % e)
         return 1
-    print(json.dumps({"state": d.get("state") or "none", "lease": d.get("lease") or None}, ensure_ascii=False))
+    print(json.dumps({"state": d.get("state") or "none", "lease": d.get("lease") or None,
+                      "clients": d.get("clients") or [], "primary": d.get("primary") or ""}, ensure_ascii=False))
     return 0
 
 

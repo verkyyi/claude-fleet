@@ -17,6 +17,10 @@
 #                   a terminal answering XTVERSION → its name; nothing → 通用终端
 #   F. hub        — fleet-client-where.sh off the hub's lease: the line, --json
 #                   fields; a takeover → the next call follows; nobody → exit 3
+#   F2. several   — the hub lists two clients (#1932): the line is the primary's
+#                   and ends 「也开着：<the other>」; --json carries clients +
+#                   primary; the primary moving is followed; one client → the
+#                   line byte for byte as before
 #   G. node read  — fleet-client-lease.py where asks GET /v1/node/client with
 #                   node.env's token (never another credential)
 #   H. local read — no hub: the fleet-shell client attached on this machine
@@ -171,6 +175,18 @@ cat > "$WORK/lease.json" <<'EOF'
 {"state":"active","lease":{"id":"L2","device":"verkyyi-iphone","os":"iOS","terminal":"Termius","via":"tailnet","host":"m5","caps":["link"],"since":"2026-10-05T12:05:00Z"}}
 EOF
 eq "F takeover followed" "verkyyi-iphone · iOS · Termius（客户端在 m5 上运行）· 能：给链接" "$(bash "$BIN/fleet-client-where.sh")"
+# F2. several clients (#1932): the primary is the lease, the others named
+mac='{"id":"L1","device":"MacBook","os":"macOS","terminal":"iTerm2 3.6","via":"local","host":"MacBook","caps":["open_url"]}'
+ph='{"id":"L2","device":"verkyyi-iphone","os":"iOS","terminal":"Termius","via":"tailnet","host":"m5","caps":["link"]}'
+printf '{"state":"active","lease":%s,"clients":[%s,%s],"primary":"L2"}\n' "$ph" "$ph" "$mac" > "$WORK/lease.json"
+eq "F2 iPhone typed last" "verkyyi-iphone · iOS · Termius（客户端在 m5 上运行）· 能：给链接 · 也开着：MacBook" "$(bash "$BIN/fleet-client-where.sh")"
+j=$(bash "$BIN/fleet-client-where.sh" --json)
+eq "F2 json primary" "L2" "$(jf primary)"
+eq "F2 json two clients" "2" "$(printf '%s' "$j" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["clients"]))')"
+printf '{"state":"active","lease":%s,"clients":[%s,%s],"primary":"L1"}\n' "$mac" "$mac" "$ph" > "$WORK/lease.json"
+eq "F2 MacBook typed last" "MacBook · macOS · iTerm2 3.6 · 能：打开网页 · 也开着：verkyyi-iphone" "$(bash "$BIN/fleet-client-where.sh")"
+printf '{"state":"active","lease":%s,"clients":[%s],"primary":"L1"}\n' "$mac" "$mac" > "$WORK/lease.json"
+eq "F2 one client: as before" "MacBook · macOS · iTerm2 3.6 · 能：打开网页" "$(bash "$BIN/fleet-client-where.sh")"
 printf '{"state":"none","lease":null}\n' > "$WORK/lease.json"
 line=$(bash "$BIN/fleet-client-where.sh"); rc=$?
 eq "F nobody → exit 3" "3" "$rc"

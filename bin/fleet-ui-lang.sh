@@ -366,7 +366,8 @@ repo	g	添加仓库到这个 fleet — 在输入行写 owner/name；~/projects/<
 open	e	进入 — 打开代理窗口（只有另一台机器上的行有；菜单标题写着「· m4」）
 message	m	发消息… — 只有别机行有：在输入行写，经入口送到那台机器的 issue 桥，作为它的下一轮
 stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit（可恢复）
-resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）' ;;
+resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）
+clients	d	我的客户端 — 只在客户端：同时开着的每台设备、终端、最后使用时间，可断开某一台' ;;
     en:menu_keys)               printf '%s' 'rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
 pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
@@ -384,7 +385,8 @@ repo	g	add a repo to this fleet — owner/name on the input line; ~/projects/<na
 open	e	enter — open the proxy window (a row on another machine only; the menu title says · m4)
 message	m	message… — a row on another machine only: typed on the input line, through the hub to the issue bridge on that machine, as its next turn
 stop	q	stop — a row on another machine only: /exit there through the hub (resumable)
-resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)' ;;
+resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)
+clients	d	my clients — in the client only: every device you have open, its terminal and when last used; disconnect one' ;;
     zh:menu_open_remote)        printf '进入（代理窗口）…' ;;
     en:menu_open_remote)        printf 'Enter (proxy window)…' ;;
     zh:menu_r_message)          printf '发消息…' ;;
@@ -407,6 +409,35 @@ resume	c	resume — a row on another machine only: reopen a just-stopped one thr
     en:menu_unpin)              printf 'Unpin' ;;
     # --- the reap policy (issue #1902): the row menu's submenu and the shell's
     # new-session question 「什么时候回收？」 — the prototype's words.
+    # --- 我的客户端 (issue #1932): the clients open at once, fleet-client-menu.sh
+    zh:menu_clients)            printf '我的客户端…' ;;
+    en:menu_clients)            printf 'My clients…' ;;
+    zh:clients_title)           printf '我的客户端' ;;
+    en:clients_title)           printf 'My clients' ;;
+    zh:clients_stale)           printf '入口连不上，上次的' ;;
+    en:clients_stale)           printf 'hub unreachable, last known' ;;
+    zh:clients_this)            printf '（这台）' ;;
+    en:clients_this)            printf '(this one)' ;;
+    zh:clients_now)             printf '刚刚用过' ;;
+    en:clients_now)             printf 'in use now' ;;
+    zh:clients_ago_m)           printf '%s 分钟前用过' "${1:-}" ;;
+    en:clients_ago_m)           printf 'used %sm ago' "${1:-}" ;;
+    zh:clients_ago_h)           printf '%s 小时前用过' "${1:-}" ;;
+    en:clients_ago_h)           printf 'used %sh ago' "${1:-}" ;;
+    zh:clients_ago_d)           printf '%s 天前用过' "${1:-}" ;;
+    en:clients_ago_d)           printf 'used %sd ago' "${1:-}" ;;
+    zh:clients_none)            printf '没有客户端连着' ;;
+    en:clients_none)            printf 'no client connected' ;;
+    zh:clients_hint)            printf '● = 网页、文件、通知送到这台（最后打字的）· 选一台断开' ;;
+    en:clients_hint)            printf '● = pages, files, notes go here (typed last) · pick one to disconnect' ;;
+    zh:clients_confirm_fmt)     printf '断开「%s」？(y/n)' "${1:-}" ;;
+    en:clients_confirm_fmt)     printf 'Disconnect "%s"? (y/n)' "${1:-}" ;;
+    zh:clients_revoked)         printf '已断开' ;;
+    en:clients_revoked)         printf 'Disconnected' ;;
+    zh:clients_revoke_failed)   printf '断开没成功：' ;;
+    en:clients_revoke_failed)   printf 'Could not disconnect:' ;;
+    zh:topbar_also_fmt)         printf '也在 %s 上打开' "${1:-}" ;;
+    en:topbar_also_fmt)         printf 'also open on %s' "${1:-}" ;;
     zh:menu_reap_policy)        printf '改回收方式…' ;;
     en:menu_reap_policy)        printf 'Reap policy…' ;;
     zh:reap_menu_title)         printf '什么时候回收' ;;

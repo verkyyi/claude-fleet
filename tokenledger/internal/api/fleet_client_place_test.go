@@ -92,10 +92,14 @@ func TestClientPlaceScratchWithValidKey(t *testing.T) {
 		"ts": time.Now().Add(-time.Hour).Unix()}); st != 401 {
 		t.Fatalf("stale payload = %d; want 401", st)
 	}
-	// Another device takes the lease over: the old lease and key open nothing.
+	// Another device opens beside it (#1932), and the person disconnects the
+	// first one: the old lease and key open nothing.
 	lease2, key2 := clientLeaseFor(t, h)
+	if st := clientPost(t, h, control.ClientPath, ClientLeaseRequest{Action: "revoke", Target: lease}, nil); st != 200 {
+		t.Fatalf("revoke = %d", st)
+	}
 	if st, _ := clientPlace(t, h, lease, key, map[string]any{"repo": writeRepo, "kind": "scratch"}); st != 401 {
-		t.Fatalf("taken-over lease = %d; want 401", st)
+		t.Fatalf("disconnected lease = %d; want 401", st)
 	}
 	if st, _ := clientPlace(t, h, lease2, key, map[string]any{"repo": writeRepo, "kind": "scratch"}); st != 401 {
 		t.Fatalf("new lease with the old key = %d; want 401", st)

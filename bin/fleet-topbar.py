@@ -27,6 +27,12 @@ Narrow, the line gives up, in this order (the prototype's widths): the repo
 the title is clipped with `…`. ‹ i/n ›, the key and the machine are never
 dropped. The whole line turns red only while the session asks you a question,
 grey only while its machine is out of reach.
+
+When another client of yours is looking at the same session (issue #1932: a
+person may hold several clients at once), the line says so before the machine —
+「也在 iPhone 上打开」 — off the clients the keeper last heard from the hub
+(client.list.json: each client's `viewing`, the session's worker id), never a
+network ask of its own; dropped first when narrow.
 """
 import json
 import os
@@ -71,6 +77,34 @@ def read_record(path=None):
     except (OSError, ValueError):
         return None
     return rec if isinstance(rec, dict) else None
+
+
+def also_on(rec):
+    """「也在 <device> 上打开」 when another of the person's clients views this
+    session (issue #1932), '' otherwise. Off the keeper's client.list.json."""
+    wid = rec.get("wid") or ""
+    if not wid:
+        return ""
+    f = os.environ.get("FLEET_CLIENT_LIST_FILE") or os.path.join(os.environ.get("TMPDIR") or "/tmp", "client.list.json")
+    try:
+        with open(f) as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(d, dict):
+        return ""
+    own = d.get("lease") or ""
+    devs = []
+    for c in d.get("clients") or []:
+        if isinstance(c, dict) and c.get("id") != own and c.get("viewing") == wid:
+            dev = (c.get("device") or "?").strip()
+            if dev not in devs:
+                devs.append(dev)
+    if not devs:
+        return ""
+    r = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "t", "topbar_also_fmt", "、".join(devs)],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    return r.stdout.strip()
 
 
 def cells(text):
@@ -146,6 +180,8 @@ def layout(rec, cols, down="", route="", now=None):
     if rec.get("key"):
         left += [(rec["key"], HL, "key"), (" ", None, "")]
     right = []
+    if rec.get("also") and cols >= REPO_MIN:
+        right.append((rec["also"], WARN, ""))
     pr = rec.get("pr") or ""
     if pr and cols >= PR_MIN:
         prc = OK if pr.endswith("✓") or pr in ("merged", "live") else BAD if "✗" in pr or "✖" in pr else WARN
@@ -182,6 +218,7 @@ def render(args):
         # no list has written one yet (a stage started before it): the window's name
         print("#[fg=%s,bold] %s#[default]" % (HL, tmux_text(kv.get("wn", ""))))
         return 0
+    rec["also"] = also_on(rec)
     parts, bg = layout(rec, cols, kv.get("down", ""), kv.get("rr", ""))
     fg_all = "#1a1b26" if bg == BG_ASK else None
     out = "#[bg=%s]" % bg if bg else ""
