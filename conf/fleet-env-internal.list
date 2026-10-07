@@ -336,6 +336,7 @@ FLEET_SPOT_EVACUATE_SECS           handoff: the SPOT reclaim deadline the ccquot
 FLEET_SPOT_EVACUATE_SESSIONS       seam: the fleets fleet-spot-evacuate.sh evacuates, space-separated, instead of fleet_sockets (no tmux in the selftest; #1428)
 FLEET_STABLE_API                   seam: the URL answering which commit refs/tags/stable names (default GitHub's API; fleet-update-selftest.sh's file, #1805)
 FLEET_STABLE_RAW                   seam: the raw host the client's files are fetched from at a commit (default raw.githubusercontent.com/verkyyi/claude-fleet; the selftest's tree, #1805)
+FLEET_STABLE_LOG                   path: where a FORCED stable move leaves its one line (fleet-stable.sh, logs/stable-move.log; the selftests' sandbox file, #2075)
 FLEET_STATUS_CACHE                 path: status-bar render cache file
 FLEET_STATUS_DISK                  knob: 0 drops the disk alert (fleet-alerts.sh; the bar has no disk segment since #1616)
 FLEET_STOP_CLOSE_WAIT              knob: internal pacing/limit, safe in-code default (fleet-worker-stop.sh)

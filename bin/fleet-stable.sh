@@ -212,7 +212,8 @@ do_move() {
 
   # Lease: the tag must still hold exactly what we read ("" = must not exist).
   lease="refs/tags/$TAG:$old"
-  printf 'stable: %s -> %s  (%s)\n' "${old:+$(short "$old")}${old:-none}" "$(short "$new")" "$(subject "$new")"
+  if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
+  printf 'stable: %s -> %s  (%s)\n' "$from" "$(short "$new")" "$(subject "$new")"
   printf 'checks: %s green on %s\n' "$total" "$slug"
   if [ "$old" ]; then printf 'forward: +%s commit(s)\n' "$(git -C "$dir" rev-list --count "$old..$new")"; fi
   if [ "$dry" -eq 1 ]; then
