@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -299,6 +300,15 @@ func runHub(args []string) error {
 			"rows are left exactly as they are (not deleted, not rebuilt).\n"+
 			"Read the refusal error before reaching for this: it says how many\n"+
 			"hours are at stake")
+	migrateOnly := fs.Bool("migrate-only", false,
+		"open the database, run its pending migrations, print what they did,\n"+
+			"and exit -- no port is bound. hub-deploy runs the new image this\n"+
+			"way on a copy of the live database before it switches images, so a\n"+
+			"migration that cannot pass stops the release instead of the hub\n"+
+			"(claude-fleet#2050). Refuses a --db that does not exist")
+	simulateMigrationFailure := fs.Bool("simulate-migration-failure", false,
+		"with --migrate-only, fail as a migration that cannot pass would: the\n"+
+			"drill that proves hub-deploy's rehearsal stops a release")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -321,6 +331,12 @@ func runHub(args []string) error {
 	dbFile, err := resolveDB(*dbPath)
 	if err != nil {
 		return err
+	}
+	if *simulateMigrationFailure && !*migrateOnly {
+		return errors.New("--simulate-migration-failure without --migrate-only: it only drills the rehearsal")
+	}
+	if *migrateOnly {
+		return migrateOnlyRun(dbFile, os.Stdout, *simulateMigrationFailure)
 	}
 	// The hub is the one command allowed to bring a database into being, so
 	// say when it does. A hub silently starting on an empty database looks
@@ -995,5 +1011,35 @@ func sshRelayConfig(srv *api.Server) error {
 		kv.set(n)
 	}
 	log.Printf("fleet relay at %s (%d CA key(s) for certificates)", control.SSHRelayPath, len(srv.SSHRelayCA))
+	return nil
+}
+
+// migrateOnlyRun is `ccquota hub --migrate-only`: Open runs every pending
+// numbered migration in its own transaction, so a failing one returns here
+// with the database as it was. A missing file is refused rather than created —
+// a rehearsal on an empty database proves nothing.
+// simulate is the drill: a migration that fails, after the real ones ran, the
+// way a broken one would — the caller exits non-zero and the copy is thrown
+// away.
+func migrateOnlyRun(dbFile string, out io.Writer, simulate bool) error {
+	if _, err := os.Stat(dbFile); err != nil {
+		return fmt.Errorf("--migrate-only: %w", err)
+	}
+	st, err := store.Open(dbFile)
+	if err != nil {
+		return fmt.Errorf("--migrate-only %s: %w", dbFile, err)
+	}
+	defer st.Close()
+	ms, err := st.Migrations()
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		fmt.Fprintf(out, "migration %d %s applied %s %s\n", m.ID, m.Name, m.AppliedAt, m.Detail)
+	}
+	if simulate {
+		return errors.New("--migrate-only: simulated migration failure (--simulate-migration-failure)")
+	}
+	fmt.Fprintf(out, "migrate-only: %s ok (%d migrations recorded)\n", dbFile, len(ms))
 	return nil
 }

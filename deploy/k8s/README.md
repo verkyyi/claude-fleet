@@ -23,10 +23,19 @@ A merge to `master` that touches `tokenledger/**` or `deploy/k8s/**` starts
    `set-by-hub-deploy`; the live tag is never committed);
 3. snapshots the database (`/data/backup-hubdeploy-<UTC>-<previous tag>.db`,
    the newest 3 kept);
-4. records the live image, `kubectl apply`s the render, waits for the rollout;
-5. checks every address for `/healthz` = 200 **and** `/version` naming this
+4. **rehearses the migrations** (issue #2050): the new image runs as an
+   ephemeral container in the live pod, mounts `/data` and runs
+   `ccquota hub --migrate-only` on a copy of that snapshot
+   (`/data/rehearse-<run>.db`, deleted afterwards). A migration that fails there
+   stops the release before the apply — the live pod never stopped, the job is
+   red, the summary says 没部署. Drill: `workflow_dispatch` with
+   `simulate_migration_failure`;
+5. records the live image, `kubectl apply`s the render, waits for the rollout
+   (3 minutes — with `Recreate` the old pod is already gone, so a longer wait is
+   a longer 503 before the rollback);
+6. checks every address for `/healthz` = 200 **and** `/version` naming this
    commit (up to ~2 minutes each);
-6. writes the run's summary page and, when repo variable
+7. writes the run's summary page and, when repo variable
    `HUB_DEPLOY_NOTIFY_ISSUE` names an issue, comments there.
 
 Nothing on any machine: no docker, no registry login, no kubeconfig.
@@ -90,7 +99,9 @@ exist, and with `Recreate` the hub would go down. To redeploy, run the workflow.
   (pull/push `24haowan/ccquota` only).
 - Cluster: Role `new-deploy/claudefleet-deployer` (24haowan-monorepo#11751) —
   the hub's Deployment, Service, Ingress, the `ccquota-pricing` ConfigMap, a
-  read of the `ccquota-data` PVC, pod exec for the snapshot. No Secret, no RBAC.
+  read of the `ccquota-data` PVC, pod exec for the snapshot, and patch on
+  `pods/ephemeralcontainers` for the migration rehearsal (issue #2050 — without
+  it the rehearsal refuses and nothing is released). No Secret, no RBAC.
   So a change to the PVC (growing the disk) or to a Secret is a person's, with
   an admin kubeconfig — RUNBOOK.md.
 
