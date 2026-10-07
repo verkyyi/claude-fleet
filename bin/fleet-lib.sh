@@ -474,14 +474,15 @@ fleet_load_conf() {
 $_flc_txt" in *"
 CCQUOTA_FLEET="*|*"
 export CCQUOTA_FLEET="*) export CCQUOTA_FLEET ;; esac
-  # Every repo lives in repos/<slug>.conf (issue #1937): a fleet conf that names no
-  # FLEET_REPO describes the fleet only, so a repo key the caller's environment or
-  # the global conf carries is not this fleet's — dropped before any overlay. A conf
-  # that still names one is the old layout (read for one version, until
-  # fleet_conf_repo_migrate moves it): its repo stays, exactly as before.
+  # Every repo lives in repos/<slug>.conf (issue #1937): in a fleet that has a
+  # repos/ dir, a fleet conf naming no repo describes the fleet only, so a repo key
+  # the caller's environment or the global conf carries is not this fleet's —
+  # dropped before any overlay. A conf that still names one is the old layout (read
+  # for one version, until fleet_conf_repo_migrate moves it): its repo stays, as
+  # before. No repos/ dir and no repo in the conf: untouched, as it always was.
   local _flc_old=0
   _fleet_conf_txt_names_repo "$_flc_txt" && _flc_old=1
-  [ "$_flc_old" = 1 ] || eval "unset $_FLEET_REPO_SCOPED"
+  [ "$_flc_old" = 1 ] || [ ! -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] || eval "unset $_FLEET_REPO_SCOPED"
   # Window-aware (issue #788): inside a pane of THIS fleet whose window belongs to a
   # hosted repo, that repo's overlay goes on top — so every in-pane consumer (hooks,
   # commands/*.md, the launcher, the claim brief) sees its own repo's MAIN/base/model
@@ -808,7 +809,8 @@ fleet_load_repo_conf() {
   fi
   # A new-layout conf names no repo (issue #1937): whatever repo keys the shell
   # already held are not the fleet's, so <repo>'s overlay is required.
-  _fleet_conf_txt_names_repo "$_flr_txt" || eval "unset $_FLEET_REPO_SCOPED"
+  _fleet_conf_txt_names_repo "$_flr_txt" || [ ! -d "$FLEET_CONF_DIR/fleets/${1:-_}/repos" ] \
+    || eval "unset $_FLEET_REPO_SCOPED"
   _fleet_repo_overlay "${1:-}" "${2:-}"
 }
 
