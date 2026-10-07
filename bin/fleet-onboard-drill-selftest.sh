@@ -59,6 +59,25 @@ run 3 'already exists'              'a home with no login'      --login drillgho
 run 2 'nothing to clean'            'a teardown of nothing'     --teardown drillnone
 run 2 'not an approve code'         '--invite: a malformed code' --login drillx --invite nope
 run 2 'needs --login'               '--invite with no --login'  --invite fd_abcdefghijklmnopqrstuvwxyz
+# a scratch name inside the login: the prompt line could show it (#2221)
+run 2 'part of the login'           '--name inside the login'   --login drill1007b --name drill
+
+# --- the scratch step's row match (issue #2221) ---------------------------------
+# the #2221 screen: the shell prompt 「<login>@host % …」 above the split, the
+# list 「No sessions」, the typed name on the input line — no row, so it FAILs
+scr() { printf '%s\n' 'drill1007b@mini2 ~ % curl -fsSL https://hub.example/install | sh' \
+          '  No sessions                 │ drill1007b@mini2 ~ %' "$@"; }
+rowm() { bash "$DRILL" --row-named "$1"; }
+if scr '› drill                       │' | rowm drill >/dev/null; then bad 'scratch: the prompt line / input line passed as a row'
+else ok 'scratch: 「<login>@host %」 + 「No sessions」 is no row (FAIL)'; fi
+if scr '› first                       │' | rowm first >/dev/null; then bad 'scratch: the typed name passed as a row'
+else ok 'scratch: the input line 「› first」 is no row'; fi
+if scr '  ● first-try  scratch        │' | rowm first >/dev/null; then bad 'scratch: first-try matched first'
+else ok 'scratch: the name matches as a whole word only'; fi
+r=$(scr '  ● first  scratch            │ claude' | rowm first)
+if [ "$r" = '  ● first  scratch' ]; then ok 'scratch: a real row in the left column is found'
+else bad "scratch: the real row: got '$r'"; fi
+
 # nothing past the preflight ran: no run dir was made
 if ls -d "$T"/fleet-onboard-drill.* >/dev/null 2>&1; then bad 'a refused run left a run dir'; else ok 'no refused run made a run dir'; fi
 

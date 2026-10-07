@@ -38,7 +38,10 @@
 #   8 scratch   the keyboard onto the list (prefix Space — the key the client's
 #               own hint names), a name typed, Enter; the repo question and
 #               「开在哪」 each Enter (the default, 自动); a new ROW — never the
-#               input line 「› <name>」 — must appear. The sidebar's refusal
+#               input line 「› <name>」, never a line outside the split (the
+#               shell prompt 「<login>@host % …」 above it, #2221) — must
+#               appear, the name a whole word (default `first`: never a part
+#               of the login, which is refused). The sidebar's refusal
 #               toast (no repo / no machine of yours / hub down, zh or en) is
 #               要人帮 — a FAIL naming it. The row's line is the evidence.
 #   9 offboard  stop the login's processes, revoke its device on the hub
@@ -79,8 +82,18 @@ PROG=fleet-onboard-drill
 BIN="$(cd "$(dirname "$0")" && pwd)"
 usage() { sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
+# list_row_named <name> (a screen on stdin): a list ROW carrying the name — the left column before 「│」,
+# never the input line 「› <name>」 (the typed name is not a session; matching
+# it passed the #1901 final run while the list said 「No sessions」). Only a
+# line of the split counts (one with 「│」: the shell prompt 「drill1007b@mini2 %」
+# above it passed #2221's run), and the name is a whole word — no letter,
+# digit, @, _ or - against either side.
+list_row_named() {
+  grep -F '│' | sed 's/│.*//' | grep -Ev '^[[:space:]]*›' \
+    | grep -E -- "(^|[^[:alnum:]@_-])$1(\$|[^[:alnum:]@_-])" | head -n 1 | sed 's/ *$//'
+}
 
-LOGIN='' HUB='' SCAN_CMD='' KEEP=0 TEARDOWN=0 NAME=drill INVITE=''
+LOGIN='' HUB='' SCAN_CMD='' KEEP=0 TEARDOWN=0 NAME=first INVITE='' ROW_ONLY=''
 DRILL_NS=fleet-drill@claude-fleet
 HOST=127.0.0.1 PORT=22
 TIMEOUT=${FLEET_DRILL_TIMEOUT:-900} SCAN_SECS=${FLEET_DRILL_SCAN_SECS:-600}
@@ -97,10 +110,12 @@ while [ $# -gt 0 ]; do
     --teardown) [ $# -ge 2 ] || usage; LOGIN=$2; TEARDOWN=1; shift 2 ;;
     --invite)   [ $# -ge 2 ] || usage; INVITE=$2; shift 2 ;;
     --keep)     KEEP=1; shift ;;
+    --row-named) [ $# -ge 2 ] || usage; ROW_ONLY=$2; shift 2 ;;   # selftest seam: screen on stdin
     -h|--help)  sed -n '2,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *)          die2 "unknown argument: $1" ;;
   esac
 done
+if [ -n "$ROW_ONLY" ]; then r=$(list_row_named "$ROW_ONLY"); [ -n "$r" ] && printf '%s\n' "$r"; [ -n "$r" ]; exit; fi
 if [ -n "$INVITE" ]; then
   printf '%s' "$INVITE" | grep -Eq '^fd_[a-z2-7]{26}$' || die2 "--invite: not an approve code (fd_… from fleet drill invite)"
   # the drill person's certificate names ITS login: the OS login must be it
@@ -110,6 +125,8 @@ fi
 printf '%s' "$LOGIN" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' \
   || die2 "bad login name '$LOGIN' (lowercase letters, digits, _ and -; at most 32)"
 printf '%s' "$NAME" | grep -Eq '^[a-z][a-z0-9-]{0,23}$' || die2 "--name: lowercase letters, digits and -, at most 24 (got '$NAME')"
+# the screen still shows 「<login>@host %」: a name inside the login is no proof (#2221)
+case "$LOGIN" in *"$NAME"*) die2 "--name '$NAME' is part of the login '$LOGIN' — pick a name the screen cannot already show" ;; esac
 for v in "TIMEOUT=$TIMEOUT" "SCAN_SECS=$SCAN_SECS" "STEP_SECS=$STEP_SECS" "PORT=$PORT"; do
   printf '%s' "${v#*=}" | grep -Eq '^[0-9]+$' || die2 "${v%%=*}: not a number: '${v#*=}'"
 done
@@ -383,10 +400,8 @@ step_client() {
 }
 
 # --- 8 scratch ----------------------------------------------------------------------
-# row_named <name>: a list ROW carrying the name — the left column before 「│」,
-# never the input line 「› <name>」 (the typed name is not a session; matching
-# it passed the #1901 final run while the list said 「No sessions」)
-row_named() { pane | cut -d'│' -f1 | grep -Ev '^[[:space:]]*›' | grep -E -- "$1" | head -n 1 | sed 's/ *$//'; }
+# row_named <name>: list_row_named (top of this file) on the drill's screen
+row_named() { pane | list_row_named "$1"; }
 # the sidebar's refusals (fleet-ui-lang.sh sidebar_place_*, zh + en): held on
 # the bar until a key since #2069 (a 4 s toast before), polled every second
 SCRATCH_NO='还没有仓库|还没有能开会话的机器|入口连不上|开机器没成功|机器还没开好|no repo yet|no machine of yours|hub is unreachable|machine for you failed|machine is not ready yet'
