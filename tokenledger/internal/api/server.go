@@ -394,6 +394,9 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/node/relay-credential", s.handleNodeRelayCredential)
 		mux.HandleFunc(RelayCheckPath, s.handleRelayCheck)
 		mux.Handle("/v1/fleet/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredentials))))
+		// Take a machine's enrollment back (claude-fleet#1403): the token,
+		// its open link, its session passes and relay credential at once.
+		mux.Handle(NodeRevokePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleNodeRevoke))))
 		mux.Handle("/v1/fleet/credentials/revoke", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetRevoke))))
 		mux.Handle("/v1/fleet/credentials/audit", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetCredAudit))))
 		mux.Handle("/credentials", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.serveCredentialsPage))))

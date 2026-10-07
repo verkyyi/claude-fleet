@@ -1293,6 +1293,21 @@ principal and revocation checks, an untrusted machine's lease is
 `GET /v1/node/self` carry `trust`. The doctor's `可信` row shows it for this
 machine (`fleet-node-trust.sh self`).
 
+**A machine's enrollment can be taken back (claude-fleet#1403).** Trust
+decides what a machine may lease; revoking decides whether it may speak at
+all. `bin/fleet-node-revoke.sh <machine>[:<login>] | <ep_id> [--reason …]`
+(the operator's viewer token, as above) calls `POST /v1/fleet/nodes/revoke`,
+which retires the endpoint and, at once: every route that takes its token
+answers it byte for byte like a token it never saw (the same
+`EndpointByTokenHash` decides both, and `TestNodeRevoke_RefusedEverywhereLikeAnUnknownToken`
+pins it per route); the control link already open is closed — and every
+message on a link re-reads its token, so a `ccquota endpoint retire` made on
+the hub's database closes it on the next beat; the session passes it issued
+are revoked in the retire's transaction; its relay credential is dropped; one
+`node_revoke` row lands in `fleet_audit`. There is no un-revoke — re-enroll the
+machine with a join code. Revocation state is never a field on `Endpoint`
+(the #43 rule for `EnrollKind`).
+
 **An untrusted machine's session borrows a pass (claude-fleet#1969).** Instead
 of a credential, a session asks `POST /v1/fleet/session-cred` (the node's
 enrollment token + the session's own `X-Fleet-Worker` assertion, #1810; body

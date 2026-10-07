@@ -45,9 +45,11 @@ func TestNodeLostRaisedAfter120sAndClearedOnReturn(t *testing.T) {
 	h := newFleetHarness(t)
 	n := connectFakeNode(t, h, "m5", false)
 	n.beat("m5", "verkyyi", machineA)
+	// The connect stamps a heartbeat too; wait for the BEAT's (it names the
+	// login), or the sweep below races it.
 	waitFor(t, 3*time.Second, "m5 beat recorded", func() bool {
 		ns, _ := h.srv.Store.Nodes()
-		return len(ns) == 1 && ns[0].LastHeartbeat != nil
+		return len(ns) == 1 && ns[0].LastHeartbeat != nil && ns[0].OSUser == "verkyyi"
 	})
 	last := lastBeat(t, h)
 	since := last.Add(-time.Hour)
@@ -93,7 +95,7 @@ func TestNodeLostCountsFromHubStart(t *testing.T) {
 	n.beat("m4", "verkyyi", machineB)
 	waitFor(t, 3*time.Second, "m4 beat recorded", func() bool {
 		ns, _ := h.srv.Store.Nodes()
-		return len(ns) == 1 && ns[0].LastHeartbeat != nil
+		return len(ns) == 1 && ns[0].LastHeartbeat != nil && ns[0].OSUser == "verkyyi"
 	})
 	start := lastBeat(t, h).Add(10 * time.Minute) // the hub restarted 10 min later
 	h.srv.NodeAlertTick(start, start.Add(60*time.Second))

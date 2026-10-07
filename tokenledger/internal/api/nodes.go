@@ -216,7 +216,8 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, "missing bearer token")
 		return
 	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
+	tokHash := HashToken(tok)
+	ep, err := s.Store.EndpointByTokenHash(tokHash)
 	if err != nil {
 		httpError(w, http.StatusUnauthorized, "unrecognised enrollment token")
 		return
@@ -349,6 +350,15 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		// The token was checked once, at connect; a revoke since then
+		// (claude-fleet#1403) — the operator's, or a retire made by another
+		// process — ends the link here, before the message is acted on.
+		if !s.nodeTokenLive(tokHash) {
+			log.Printf("node %s: enrollment revoked; closing its link", ep.ID)
+			s.revokeNodeRest(ep, time.Now(), false)
+			conn.Close(websocket.StatusPolicyViolation, "unrecognised enrollment token")
+			return
+		}
 		switch m.Type {
 		case control.TypeHeartbeat:
 			var hb control.Heartbeat
@@ -434,7 +444,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 				refuse(ctx, conn, m.OpID, control.CodeRefused, "relays need the relay capability in the hello")
 				break
 			}
-			s.acceptRelay(ctx, conn, *ep, HashToken(tok), m)
+			s.acceptRelay(ctx, conn, *ep, tokHash, m)
 		case control.TypeRelayResult:
 			s.relayResult(ep.ID, m)
 		case control.TypeAck:
