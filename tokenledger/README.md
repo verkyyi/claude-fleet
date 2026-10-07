@@ -551,7 +551,7 @@ process, and they do not share a credential.
 
 | Door | What you need | What it gives you |
 |---|---|---|
-| Dashboard, `/u/<login>`, `/growth` | viewer token, a WeCom session, or a named tailnet peer | every figure this hub holds |
+| The app (`/`, `/sessions`, `/connect`, `/config`), `/growth` | viewer token, a WeCom session, or a named tailnet peer | every figure this hub holds |
 | `/enter` | a 90-second ticket from the authorization service | exchanges that ticket for this hub's session cookie, nothing else |
 | `POST /logout` | a same-origin form (the page header's 退出) | clears the cookies this hub minted and shows the signed-out page; the authorization service's own session stays |
 | `/v1/...` | the viewer token, as a bearer header | the same figures as JSON |
@@ -789,7 +789,8 @@ is one `hub_audit` row: who, when, old → new.
 | `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN` (`none` = no machines) |
 | `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
-| `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS` (`<id>` = `gh:<GitHub ID>` or a WeCom userid; `none` = no login) |
+| `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS` (`<id>` = a GitHub ID (`583231` or `gh:583231`) or a WeCom userid; `none` = no login) |
+| `user.<GitHub ID>.lang` | — | the account's page language (claude-fleet#2033): `zh-CN` \| `en` |
 
 At start the hub copies each old value it was given into the database once
 (audited as `deploy`, marked `hub.legacy_migrated.<key>` so a value an admin
@@ -2017,9 +2018,8 @@ Once any team is assigned, team becomes a choice for the two breakdown
 cards' group-by (`g1`/`g2` in the URL), alongside project, login, machine,
 model and branch — not something the dashboard leads with. An OS login in
 the sessions table is a chip link that filters the current view to that
-person, not a link to a page; `/u/<login>` still exists and still renders a
-per-person view, but is now a direct-URL surface only — reachable by typing
-it or an old bookmark, not by clicking anything in the dashboard. Both are
+person, not a link to a page; the old `/u/<login>` page is gone
+(claude-fleet#1989) — a user's own figures are the app's Overview. Both are
 deliberately unnumbered. Read as a per-person performance ranking, an internal usage board
 fails by Goodhart — people avoid the tool or pad their usage — and either
 outcome destroys the cost data it exists to provide.

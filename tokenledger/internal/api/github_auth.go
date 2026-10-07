@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -293,20 +294,21 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	page := signinPage{Note: signinNotes[r.URL.Query().Get("e")]}
+	loc := s.pageLocale(w, r)
+	page := signinPage{pageView: newPageView(r, loc)}
+	if e := r.URL.Query().Get("e"); signinNotes[e] {
+		page.Note = pageT(loc, "signin.note."+e)
+	}
 	if u, ok := s.ssoGateURL(); ok {
 		page.WeCom = u
 	}
-	writeAuthPage(w, http.StatusOK, signinTmpl, page)
+	writeAuthPage(w, http.StatusOK, signinTmpl, loc, page)
 }
 
 // signinNotes are the only things /signin?e= can say: a fixed set, so the
-// page never reflects a query string.
-var signinNotes = map[string]string{
-	"expired":   "That sign-in took too long or was started in another tab. Try again.",
-	"cancelled": "GitHub didn't sign you in. Try again when you're ready.",
-	"github":    "GitHub couldn't be reached to finish signing you in. Try again in a minute.",
-}
+// page never reflects a query string. Each one's words are pageText's
+// signin.note.<e>.
+var signinNotes = map[string]bool{"expired": true, "cancelled": true, "github": true}
 
 // handleGitHubStart sends the browser to GitHub with a fresh state and PKCE
 // challenge.
@@ -643,7 +645,8 @@ func (s *Server) githubDeny(w http.ResponseWriter, r *http.Request, why, login s
 		httpError(w, http.StatusForbidden, "this GitHub account is not on this hub's list")
 		return
 	}
-	writeAuthPage(w, http.StatusForbidden, denyTmpl, denyPage{Why: why, Login: login})
+	loc := s.pageLocale(w, r)
+	writeAuthPage(w, http.StatusForbidden, denyTmpl, loc, denyPage{pageView: newPageView(r, loc), Why: why, Login: login})
 }
 
 func clearCookie(w http.ResponseWriter, r *http.Request, name, path string) {
@@ -687,15 +690,20 @@ func verifyBlob(v, key string) ([]byte, bool) {
 	return body, err == nil
 }
 
-func writeAuthPage(w http.ResponseWriter, status int, t *template.Template, data any) {
+func writeAuthPage(w http.ResponseWriter, status int, t *template.Template, loc string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Language", loc)
+	w.Header().Add("Vary", "Accept-Language, Cookie")
 	w.WriteHeader(status)
-	_ = t.Execute(w, data)
+	if c, err := t.Clone(); err == nil {
+		_ = c.Funcs(pageFuncs(loc)).Execute(w, data)
+	}
 }
 
 type signinPage struct {
+	pageView
 	// Note is one of signinNotes, or "".
 	Note string
 	// WeCom is the WeCom gate while that way in still exists, else "".
@@ -703,6 +711,7 @@ type signinPage struct {
 }
 
 type denyPage struct {
+	pageView
 	Why   string
 	Login string
 }
@@ -710,7 +719,7 @@ type denyPage struct {
 // The two pages follow the prototype's sign-in and "can't use this hub"
 // cards (EPIC #1982): its palette, its fonts, its words.
 const authPageHead = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="{{.Lang}}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -742,29 +751,30 @@ p{margin:0}.lead{color:var(--ink-2)}.fine{font-size:12.5px;color:var(--muted)}
 .note{background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:9px 12px;font-size:13.5px}
 .row{display:flex;gap:8px;flex-wrap:wrap}
 a.alt{color:var(--muted);font-size:13px}
-</style>`
+nav{justify-content:space-between;gap:12px}
+` + langSwitchCSS + zhTypeCSS + `</style>`
 
-const authNav = `<nav><a class="logo" href="/"><span class="mark"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></span>claudefleet</a></nav>`
+const authNav = `<nav><a class="logo" href="/"><span class="mark"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></span>claudefleet</a>` + langSwitch + `</nav>`
 
 const gitIcon = `<svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg>`
 
-var signinTmpl = template.Must(template.New("signin").Parse(authPageHead + `
-<title>Sign in · claudefleet</title></head><body><div class="pub">` + authNav + `
+var signinTmpl = template.Must(template.New("signin").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `
+<title>{{t "signin.title"}}</title></head><body><div class="pub">` + authNav + `
 <div class="center"><main class="card">
 <div class="big"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></div>
-<div style="display:grid;gap:6px"><h1>Sign in to claudefleet</h1><p class="lead">This hub is private. Use the GitHub account an admin added.</p></div>
+<div style="display:grid;gap:6px"><h1>{{t "signin.h1"}}</h1><p class="lead">{{t "signin.lead"}}</p></div>
 {{if .Note}}<p class="note" role="status">{{.Note}}</p>{{end}}
-<a class="btn gh lg" href="/auth/github/start">` + gitIcon + `Continue with GitHub</a>
-<p class="fine">claudefleet asks GitHub only who you are. It gets no access to your repositories or organizations.</p>
-{{if .WeCom}}<a class="alt" href="{{.WeCom}}">Sign in with WeCom instead</a>{{end}}
+<a class="btn gh lg" href="/auth/github/start">` + gitIcon + `{{t "signin.button"}}</a>
+<p class="fine">{{t "signin.fine"}}</p>
+{{if .WeCom}}<a class="alt" href="{{.WeCom}}">{{t "signin.wecom"}}</a>{{end}}
 </main></div></div></body></html>`))
 
-var denyTmpl = template.Must(template.New("deny").Parse(authPageHead + `
-<title>Can't use this hub · claudefleet</title></head><body><div class="pub">` + authNav + `
+var denyTmpl = template.Must(template.New("deny").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `
+<title>{{t "deny.title"}}</title></head><body><div class="pub">` + authNav + `
 <div class="center"><main class="card">
 <div class="big bad"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></div>
-<div style="display:grid;gap:6px"><h1>This GitHub account can't use this hub</h1>
-<p class="lead">{{if eq .Why "renamed"}}The username <b>{{.Login}}</b> is on this hub's list, but it now belongs to a different GitHub account. An admin can check the Users page.{{else if eq .Why "removed"}}<b>{{.Login}}</b> is no longer on this hub's list. Ask an admin to add your GitHub username again.{{else}}<b>{{.Login}}</b> isn't on this hub's list. Ask an admin to add your GitHub username.{{end}}</p></div>
-<div class="row"><a class="btn" href="/signin">Use another account</a><a class="btn ghost" href="/">Back to claudefleet</a></div>
-<p class="fine">Response 403 · no session created · the attempt is in the audit log.</p>
+<div style="display:grid;gap:6px"><h1>{{t "deny.h1"}}</h1>
+<p class="lead">{{if eq .Why "renamed"}}{{tb "deny.renamed" .Login}}{{else if eq .Why "removed"}}{{tb "deny.removed" .Login}}{{else}}{{tb "deny.notlisted" .Login}}{{end}}</p></div>
+<div class="row"><a class="btn" href="/signin">{{t "deny.another"}}</a><a class="btn ghost" href="/">{{t "deny.back"}}</a></div>
+<p class="fine">{{t "deny.fine"}}</p>
 </main></div></div></body></html>`))

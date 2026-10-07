@@ -153,17 +153,22 @@ func splitHosts(v string) []string {
 	return out
 }
 
-// isHubSettingKey reports whether key is one of hubSettings or a
-// user.<id>.machine_login.
+// isHubSettingKey reports whether key is one of hubSettings, a
+// user.<id>.machine_login or a user.<GitHub ID>.lang.
 func isHubSettingKey(key string) bool {
 	if _, ok := hubSettings[key]; ok {
+		return true
+	}
+	if _, ok := langKeyID(key); ok {
 		return true
 	}
 	_, ok := machineLoginKey(key)
 	return ok
 }
 
-// machineLoginKey parses user.<id>.machine_login.
+// machineLoginKey parses user.<id>.machine_login. <id> is a GitHub ID — bare
+// digits, as C9's user.<id>.lang spells it (claude-fleet#2033), or gh:<id> —
+// else a WeCom userid; the principal comes back as gh:<id> for a GitHub one.
 func machineLoginKey(key string) (principal string, ok bool) {
 	rest, ok := strings.CutPrefix(key, userSettingPrefix)
 	if !ok {
@@ -173,7 +178,29 @@ func machineLoginKey(key string) (principal string, ok bool) {
 	if !ok || pid == "" || len(pid) > 128 || strings.ContainsAny(pid, " \t\r\n") {
 		return "", false
 	}
+	if n, err := strconv.ParseInt(pid, 10, 64); err == nil && n > 0 {
+		pid = githubPrincipal(n)
+	}
 	return pid, true
+}
+
+// langKeyID parses user.<GitHub ID>.lang — the account language C9 reads
+// (pagelang.go's langSettingKey).
+func langKeyID(key string) (int64, bool) {
+	rest, ok := strings.CutPrefix(key, userSettingPrefix)
+	if !ok {
+		return 0, false
+	}
+	num, ok := strings.CutSuffix(rest, ".lang")
+	if !ok {
+		return 0, false
+	}
+	num = strings.TrimPrefix(num, githubPrincipalPrefix)
+	id, err := strconv.ParseInt(num, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 func machineLoginSettingKey(principal string) string {
@@ -367,6 +394,21 @@ func (s *Server) putHubSetting(actor, key, value string, now time.Time) (int, st
 	}
 	if pid, ok := machineLoginKey(key); ok {
 		return s.putMachineLogin(actor, pid, value, settings, now)
+	}
+	if id, ok := langKeyID(key); ok {
+		// The account language (claude-fleet#2033): zh-CN | en, or "".
+		stored := ""
+		if strings.TrimSpace(value) != "" {
+			if stored = parseLang(value); stored == "" {
+				return http.StatusBadRequest, "user.<id>.lang is zh-CN | en, or \"\" for none"
+			}
+		}
+		key = langSettingKey(id)
+		if err := s.Store.SetFleetSetting(key, stored, now); err != nil {
+			return http.StatusInternalServerError, err.Error()
+		}
+		s.settingAudit(actor, key, settings[key], stored, now)
+		return http.StatusOK, ""
 	}
 	spec := hubSettings[key]
 	stored := ""

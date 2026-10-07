@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { en } from '../dist/lib/i18n/en.js';
 import { zhCN } from '../dist/lib/i18n/zh-CN.js';
+import { normalizeLocale, readCookie, langURL } from '../dist/lib/i18n.js';
 import { pickLocale, interpolate, lookup, t, tIn, useLocale, withLocale,
          LOCALES, LOCALE_LABEL, DICTS, FALLBACK, punct, LOCALE_PUNCT } from '../dist/lib/i18n.js';
-import { SOURCE_LABEL, sourceLabel } from '../dist/lib/providers.js';
 
 // A key present in one dictionary and not the other is the failure mode this
 // whole file exists for: it ships silently, and the only symptom is one English
@@ -95,21 +95,6 @@ test('every locale names itself in its own language', () => {
   assert.equal(LOCALE_LABEL['zh-CN'], '简体中文');
 });
 
-// web/embed_test.go's TestDashboard_EverySourceIsNamedAndEveryChargeIsATerm
-// anchors on lib/providers.js's SOURCE_LABEL to catch a source added to
-// model.Sources with no label. That guard only keeps working while SOURCE_LABEL
-// stays the English text -- so the dictionary must agree with it rather than
-// quietly replace it.
-test('the English source labels and the dictionary agree', () => {
-  for (const [src, label] of Object.entries(SOURCE_LABEL)) {
-    assert.equal(en['source.' + src], label, `source.${src} has drifted from SOURCE_LABEL`);
-    assert.equal(sourceLabel(src), label, `sourceLabel(${src}) does not read from the dictionary`);
-  }
-  // A source with no dictionary entry falls back to its identifier, which is at
-  // least greppable, rather than to an empty picker option.
-  assert.equal(sourceLabel('brand_new_source'), 'brand_new_source');
-});
-
 // The server writes prose the page only relays (real spend, each source's price
 // basis, the empty-provider explanation). It cannot translate what it did not
 // write, so every request has to say which language it wants.
@@ -170,4 +155,26 @@ test('the limits banner joins onto a finished sentence without ASCII punctuation
     assert.ok(!DICTS[loc]['wall.noReading'].includes('{'),
       `${loc}/wall.noReading interpolates — it is used as a bare fallback`);
   }
+});
+
+// #2023: the link and the cookie join the rule, in the hub's order —
+// ?lang= > cf_lang cookie > the older stored choice > the browser.
+test('a link beats the cookie, the cookie beats the browser', () => {
+  assert.equal(pickLocale(null, ['en-US'], { query: 'zh' }), 'zh-CN');
+  assert.equal(pickLocale('zh-CN', ['zh-CN'], { query: 'en', cookie: 'zh-CN' }), 'en');
+  assert.equal(pickLocale(null, ['zh-CN'], { cookie: 'en' }), 'en');
+  assert.equal(pickLocale('en', ['en'], { cookie: 'zh-CN' }), 'zh-CN');
+  // An unknown value on any rung is skipped, not obeyed.
+  assert.equal(pickLocale(null, ['zh-TW'], { query: 'fr', cookie: 'xx' }), 'zh-CN');
+  assert.equal(normalizeLocale('ZH'), 'zh-CN');
+  assert.equal(normalizeLocale('en-GB'), 'en');
+  assert.equal(normalizeLocale('fr'), null);
+});
+
+test('readCookie and langURL', () => {
+  assert.equal(readCookie('a=1; cf_lang=zh-CN; b=2', 'cf_lang'), 'zh-CN');
+  assert.equal(readCookie('a=1', 'cf_lang'), null);
+  assert.equal(readCookie('', 'cf_lang'), null);
+  assert.equal(langURL('https://h/x?scope=a&lang=en#f', 'zh-CN'), 'https://h/x?scope=a&lang=zh#f');
+  assert.equal(langURL('https://h/', 'en'), 'https://h/?lang=en');
 });

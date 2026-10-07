@@ -28,6 +28,9 @@
 #   F. re-scan   the hub's device_idle / device_revoked refusal exits 3 (the
 #                "scan again" code) and leaves the old certificate alone;
 #                the start request carries the device name too
+#   G. blip      a 503 between two polls (the ingress, the hub restarting) is
+#                not a refusal: the client keeps waiting and gets its
+#                certificate (#1901 — a colleague's first scan died on one)
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/fleet-cert-st.XXXXXX")"
@@ -84,6 +87,8 @@ class H(BaseHTTPRequestHandler):
                 "interval": 1, "key_fingerprint": "SHA256:test", "qr": ["#.#", ".#.", "#.#"]})
         if self.path == "/v1/fleet/login/poll":
             state["polls"] += 1
+            if os.path.exists(os.path.join(SB, "blip")) and state["polls"] == 1:
+                return self.reply(503, {})
             if state["polls"] < 2:
                 return self.reply(202, {"status": "authorization_pending"})
             if state["deny"]:
@@ -203,6 +208,14 @@ out="$(python3 "$BIN/fleet-login.py" renew --hub "http://127.0.0.1:1" 2>&1)"; rc
 rm -f "$HOME/.ssh/fleet-cert-cert.pub"
 out="$(python3 "$BIN/fleet-login.py" check)"; rc=$?
 [ "$rc" = 1 ] && [ "$out" = none ] && ok "F check: none" || bad "F check rc=$rc out=$out"
+
+# ── G — a 5xx between two polls is a blip, not a «no» (#1901) ──
+rm -f "$HOME/.ssh/fleet-cert-cert.pub"; touch "$SB/blip"
+start_hub
+out="$(python3 "$BIN/fleet-login.py" 2>&1)"; rc=$?
+stop_hub
+rm -f "$SB/blip"
+[ "$rc" = 0 ] && [ -s "$HOME/.ssh/fleet-cert-cert.pub" ] && ok "G a 503 poll → kept waiting, certificate written" || bad "G blip rc=$rc: $out"
 
 [ "$fail" = 0 ] && echo "PASS fleet-login-selftest" || echo "FAIL fleet-login-selftest"
 exit "$fail"

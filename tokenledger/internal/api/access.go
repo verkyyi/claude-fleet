@@ -238,17 +238,12 @@ func (s *Server) doors(f HubFacts) []Door {
 	return []Door{
 		{
 			ID: "dashboard", Name: "The dashboard", Via: "http",
-			Where:      []string{"/", "/u/<os login>", "/growth"},
+			Where:      []string{"/", "/sessions", "/connect", "/config", "/growth"},
 			Credential: dashCred,
-			Can: "Read every figure this hub holds: spend, usage, live sessions, alerts, repo progress. " +
-				// Issue #99: this row said /u/<login> exists while the dashboard
-				// linked to it from nowhere, so "a door" and "a URL you have to
-				// know" were the same thing. The by-user breakdown card now has
-				// the link, and this says so -- a door is described by how you
-				// reach it, not only by what is behind it.
-				"/u/<login> is one person's totals, reached from the by-user breakdown card on the " +
-				"dashboard or by typing the path; /growth is the revenue ledger, the most sensitive " +
-				"figures in this binary, behind the same gate as the rest.",
+			Can: "Read what the viewer's role lets them see (claude-fleet#1985, #1989): an admin every " +
+				"figure this hub holds, a user their own usage, sessions, devices and settings. " +
+				"/growth is the revenue ledger, the most sensitive figures in this binary, behind the " +
+				"same gate as the rest.",
 			State: pick(f.Dashboard, "open", "off"),
 			Note:  dashNote + pick(f.Dashboard, "", " This binary was built without the dashboard, so / answers JSON instead."),
 		},
@@ -406,8 +401,8 @@ func (s *Server) doors(f HubFacts) []Door {
 // are through the gate, and a page whose whole job is to explain how to get in
 // should not be the heaviest thing to load after you have.
 //
-// (serveSharePage and serveUserPage stream their own files the same way. They
-// are deliberately NOT folded together here: the share page sets no-store and
+// (serveSharePage streams its own file the same way. It is
+// deliberately NOT folded together here: the share page sets no-store and
 // this one sets no-cache, and unifying them would mean changing the share
 // page's caching as a side effect of a documentation change.)
 func (s *Server) serveAccessPage(w http.ResponseWriter, r *http.Request) {

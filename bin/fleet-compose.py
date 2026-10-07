@@ -5,26 +5,36 @@
                                           the client stage's `@fleet_role portal`
                                           window (fleet-shell.sh portal opens it:
                                           ⌘N / prefix c / a tap on 「新任务」)
-    fleet-compose.py --send <payload.json> [--repo R] [--node N] [--reap P]
+    fleet-compose.py --send <payload.json> [--repo R | --no-repo | --multi]
+                     [--node N] [--reap P]
                                           the ONE way out: the payload a ↵ wrote,
                                           to the machine that opens it —
                                           fleet-client-place.sh <repo> new (an
                                           issue, filed there, then its worker) or
                                           <repo> scratch (「记成 issue」 off: a
-                                          scratch session). Prints the place's one
-                                          line and returns its code. Later members
-                                          (C6 repo choice, C7 the orchestrator)
-                                          add their routes here
-    fleet-compose.py payload <text-file> [--no-issue]
+                                          scratch session), or `-` scratch with
+                                          the text as its seed (「不关联仓库」 /
+                                          「多个仓库」, issue #1956). Prints the
+                                          place's one line and returns its code.
+                                          C7 (the orchestrator) adds its route here
+    fleet-compose.py payload <text-file> [--no-issue] [--repo R | --no-repo | --multi]
                                           the payload a ↵ on that text would write
-                                          (title · body · attachments), as JSON —
-                                          the selftest's view
+                                          (title · body · attachments · repo), as
+                                          JSON — the selftest's view
 
 The writing area: several lines (⇧↵ — the `fleet` iTerm2 profile sends it as
 0x0a, ⌃j — or ⌥↵ makes a new line; ↵ sends), a file dropped on the window (its
 path pasted) is an attachment, Tab walks to the 「记成 issue」 switch (space
 flips it: off = a scratch session instead of an issue), esc goes back to the
-session that was in view. The draft is on disk the whole time —
+session that was in view. The 「仓库」 option (issue #1956, Tab to it, space or
+↵ opens it): 自动 — the repo of the session that was in view, the default and
+what most sends want — / each repo the hub says this person's machines host /
+不关联仓库 (a session in $HOME, `@norepo`, no issue: it goes under the list's
+no repo heading) / 多个仓库 (a session can work in one repo only, so the send
+becomes 「编排」: until the orchestrator (C7) exists, a no-repo session seeded with
+the text and a line asking it to split the work by repo). The repo is never
+resolved here: 自动 travels as no repo, and the one rule (#1938 — named → the
+session's → the only one → ask) runs where the rows are. The draft is on disk the whole time —
 $XDG_STATE_HOME/claude-fleet/compose-draft (FLEET_SWITCH_STATE overrides the
 directory, as for the switch history), so leaving and coming back, or the client
 restarting, loses nothing.
@@ -132,9 +142,15 @@ def clean(text):
     return text.replace("<!--", "<! --")
 
 
-def payload(text, issue=True, prev="", repo=""):
+REPO_MODES = ("auto", "repo", "none", "multi")
+
+
+def payload(text, issue=True, prev="", repo="", mode="auto"):
     """What a ↵ sends: the first line is the title, the whole text the body, the
-    attachments listed under it. {} when there is nothing to send."""
+    attachments listed under it. {} when there is nothing to send. `mode` is the
+    「仓库」 choice (issue #1956): auto (the repo is resolved where the rows are),
+    repo (`repo` named), none (no repo: a session, never an issue) or multi
+    (several: 「编排」 — no issue either, `orchestrate` set for C7's route)."""
     text = clean(text).strip("\n")
     lines = [l.strip() for l in text.split("\n")]
     title = next((l for l in lines if l), "")
@@ -149,8 +165,13 @@ def payload(text, issue=True, prev="", repo=""):
     title = " ".join(title.split())
     if len(title) > MAX_TITLE:
         title = title[:MAX_TITLE - 1] + "…"
-    return {"title": title, "body": body, "issue": bool(issue), "attachments": files,
-            "repo": repo, "prev": prev, "at": int(time.time())}
+    if mode not in REPO_MODES or (mode == "repo") != bool(repo):
+        mode, repo = ("repo", repo) if repo else ("auto", "")
+    out = {"title": title, "body": body, "issue": bool(issue) and mode in ("auto", "repo"),
+           "attachments": files, "repo": repo, "repo_mode": mode, "prev": prev, "at": int(time.time())}
+    if mode == "multi":
+        out["orchestrate"] = True
+    return out
 
 
 def scratch_name(title):
@@ -170,9 +191,11 @@ def hub_repos():
         return None
 
 
-def send(path, repo="", node="auto", reap=""):
+def send(path, repo="", node="auto", reap="", mode=""):
     """The way out (`--send`): the payload to fleet-client-place.sh. Prints its
-    line, returns its code. 2 = nothing to send / no repo to send it to."""
+    line, returns its code. 2 = nothing to send / no repo to send it to. `mode`
+    (none / multi, from --no-repo / --multi) beats the payload's repo_mode; a
+    named --repo beats both."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -182,26 +205,45 @@ def send(path, repo="", node="auto", reap=""):
     if not title:
         print("fleet-compose: the payload has no title", file=sys.stderr)
         return 2
-    repo = repo or data.get("repo") or ""
-    if not repo:
-        repos = hub_repos() or []
-        if len(repos) == 1:
-            repo = repos[0]
-    if "/" not in repo:
-        print("fleet-compose: name the repo (owner/name) — 「自动」 has none to go on", file=sys.stderr)
-        return 2
-    args = ["bash", str(BIN / "fleet-client-place.sh"), repo]
-    bodyf = ""
-    if data.get("issue", True):
-        fd, bodyf = tempfile.mkstemp(prefix="fleet-compose-body.", dir=str(Path(path).parent))
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            out.write(data.get("body") or "")
-        args += ["new", "--title", title, "--body-file", bodyf]
+    if repo:
+        mode = "repo"
+    mode = mode or data.get("repo_mode") or ""
+    norepo = mode in ("none", "multi")
+    if not norepo:
+        # The one rule (#1938): named → the payload's → the only one → ask.
+        repo = repo or data.get("repo") or ""
+        if not repo:
+            repos = hub_repos() or []
+            if len(repos) == 1:
+                repo = repos[0]
+        if "/" not in repo:
+            print("fleet-compose: name the repo (owner/name) — 「自动」 has none to go on", file=sys.stderr)
+            return 2
+    args = ["bash", str(BIN / "fleet-client-place.sh"), "-" if norepo else repo]
+    text = data.get("body") or ""
+    if not norepo and data.get("issue", True):
+        args += ["new", "--title", title]
     else:
+        # A scratch. 「不关联仓库」 / 「多个仓库」 (issue #1956): a session of no repo
+        # — never an issue, which belongs to one repo — that starts working on
+        # the text; 「多个仓库」 is 「编排」, and until C7's orchestrator takes this
+        # route the session is asked to split the work by repo itself. A repo's
+        # scratch (「记成 issue」 off) keeps its line as an unsent draft, as before.
         args += ["scratch"]
         name = scratch_name(title)
         if name:
             args += ["--name", name]
+        if not norepo:
+            text = ""
+        elif mode == "multi":
+            seed = "\n\n" + tr("compose_multi_seed")
+            text = text[:MAX_BODY - len(seed)] + seed   # the hub's bound holds
+    bodyf = ""
+    if text:
+        fd, bodyf = tempfile.mkstemp(prefix="fleet-compose-body.", dir=str(Path(path).parent))
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(text)
+        args += ["--body-file", bodyf]
     args += ["--node", node or "auto"]
     if reap:
         args += ["--reap", reap]
@@ -427,6 +469,28 @@ def read_key(screen):
     return "text", k
 
 
+def repo_menu(group):
+    """The 「仓库」 menu (issue #1956): (mode, repo, label, note) — 自动 first,
+    each repo the hub says this person's machines host, 不关联仓库, 多个仓库."""
+    items = [("auto", "", tr("compose_repo_auto"),
+              (group + " · " + tr("compose_repo_here")) if group else "")]
+    for r in hub_repos() or []:
+        items.append(("repo", r, r.rsplit("/", 1)[-1], r.split("/", 1)[0]))
+    items.append(("none", "", tr("compose_repo_none"), tr("compose_repo_none_note")))
+    items.append(("multi", "", tr("compose_repo_multi"), tr("compose_repo_multi_note")))
+    return items
+
+
+def repo_label(mode, repo, group):
+    if mode == "repo":
+        return repo.rsplit("/", 1)[-1]
+    if mode == "none":
+        return tr("compose_repo_none")
+    if mode == "multi":
+        return tr("compose_repo_multi")
+    return tr("compose_repo_auto_fmt", group) if group else tr("compose_repo_auto")
+
+
 def ui(screen, session):
     os.write(1, b"\x1b[?2004h")   # bracketed paste: a drop is one insert, never a send
     try:
@@ -451,6 +515,8 @@ def ui(screen, session):
         draft = ""
     ed = Editor(draft)
     issue, focus, pasting = True, "body", False
+    mode, chosen = "auto", ""          # the 「仓库」 choice (issue #1956)
+    menu, menu_at = None, 0            # its menu while open: repo_menu() rows
     saved_text, saved_at, dirty_at = draft, (time.strftime("%H:%M") if draft else ""), None
     toast = ""
     prev, group = previous()
@@ -514,28 +580,50 @@ def ui(screen, session):
         x = x0 + 2
         put(y, x, tr("compose_repo") + " ", dim)
         x += cells(tr("compose_repo")) + 1
-        repo = " " + (tr("compose_repo_auto_fmt", group) if group else tr("compose_repo_auto")) + " "
-        put(y, x, repo, curses.A_BOLD)
+        repo = " " + repo_label(mode, chosen, group) + " ▾ "
+        put(y, x, repo, curses.color_pair(PAIR_ON) | curses.A_BOLD if focus == "repo" else curses.A_BOLD)
+        repo_x = x
         x += cells(repo) + 4
-        put(y, x, tr("compose_issue") + " ", dim)
-        x += cells(tr("compose_issue")) + 1
-        box = " ✓ " if issue else "   "
-        put(y, x, box, curses.color_pair(PAIR_ON) | curses.A_BOLD if focus == "issue" else curses.A_REVERSE)
         toggle_x = x
-        x += cells(box) + 4
+        if mode in ("auto", "repo"):
+            put(y, x, tr("compose_issue") + " ", dim)
+            x += cells(tr("compose_issue")) + 1
+            box = " ✓ " if issue else "   "
+            put(y, x, box, curses.color_pair(PAIR_ON) | curses.A_BOLD if focus == "issue" else curses.A_REVERSE)
+            toggle_x = x
+            x += cells(box) + 4
         files = attachments(ed.text())
         if files:
             put(y, x, tr("compose_attach") + " ", dim)
             put(y, x + cells(tr("compose_attach")) + 1, ", ".join(os.path.basename(f) for f in files))
-        go = tr("compose_go_issue") if issue else tr("compose_go_draft")
+        go = {"none": tr("compose_go_session"), "multi": tr("compose_go_orch")}.get(
+            mode, tr("compose_go_issue") if issue else tr("compose_go_draft"))
         put(y, max(x, x0 + bw - cells(go)), go, curses.color_pair(PAIR_GO) | curses.A_BOLD)
-        put(y + 2, x0 + 2, tr("compose_keys"), dim)
-        if toast:
+        if mode in ("none", "multi"):
+            put(y + 1, x0 + 2, tr("compose_why_" + mode), curses.color_pair(PAIR_TOAST) if mode == "multi" else dim)
+        put(y + 3 + len(menu) if menu else y + 2, x0 + 2, tr("compose_menu_keys") if menu else tr("compose_keys"), dim)
+        if toast and not menu:
             put(y + 3, x0 + 2, toast, curses.color_pair(PAIR_TOAST))
-        # the cursor: in the box on the body, on the switch otherwise
+        if menu:
+            # the 「仓库」 menu, a box under its field
+            lw = max(cells(m[2]) for m in menu) + 2
+            mw = min(bw - (repo_x - x0), max(lw + max(cells(m[3]) for m in menu) + 6, 24))
+            put(y + 1, repo_x, "╭" + "─" * (mw - 2) + "╮", curses.color_pair(PAIR_BOX))
+            for n, (_, _, label, note) in enumerate(menu):
+                row = ("› " if n == menu_at else "  ") + label
+                line = row + " " * max(1, lw + 2 - cells(row)) + note
+                put(y + 2 + n, repo_x, "│" + " " * (mw - 2) + "│", curses.color_pair(PAIR_BOX))
+                put(y + 2 + n, repo_x + 1, clip(line, mw - 2),
+                    curses.color_pair(PAIR_ON) | curses.A_BOLD if n == menu_at else 0)
+            put(y + 2 + len(menu), repo_x, "╰" + "─" * (mw - 2) + "╯", curses.color_pair(PAIR_BOX))
+        # the cursor: in the box on the body, on the option in focus otherwise
         if focus == "body":
             i, s, e = rows[cur] if rows else (0, 0, 0)
             cy, cx = 3 + cur - top, x0 + 2 + cells(ed.lines[i][s:ed.col])
+        elif menu:
+            cy, cx = y + 2 + menu_at, repo_x + 1
+        elif focus == "repo":
+            cy, cx = y, repo_x + 1
         else:
             cy, cx = y, toggle_x + 1
         try:
@@ -554,9 +642,23 @@ def ui(screen, session):
         if kind == "none":
             save(force=True)   # idle a beat: the draft is on disk
             continue
+        if menu is not None:
+            # the 「仓库」 menu has the keys while it is open
+            if k in ("up", "down"):
+                menu_at = (menu_at + (1 if k == "down" else -1)) % len(menu)
+            elif k == "enter" or (kind == "text" and k == " "):
+                mode, chosen = menu[menu_at][0], menu[menu_at][1]
+                menu = None
+            elif k in ("esc", "tab", "btab"):
+                menu = None
+            continue
         if kind == "text":
             if focus == "issue" and k == " " and not pasting:
                 issue = not issue
+                continue
+            if focus == "repo" and k == " " and not pasting:
+                menu = repo_menu(group)
+                menu_at = next((n for n, m in enumerate(menu) if (m[0], m[1]) == (mode, chosen)), 0)
                 continue
             focus = "body"
             ed.insert(k)
@@ -568,8 +670,11 @@ def ui(screen, session):
         elif k in ("newline",) or (k == "enter" and pasting):
             focus = "body"
             ed.newline()
+        elif k in ("enter", "down") and focus == "repo":
+            menu = repo_menu(group)
+            menu_at = next((n for n, m in enumerate(menu) if (m[0], m[1]) == (mode, chosen)), 0)
         elif k == "enter":
-            data = payload(ed.text(), issue, prev)
+            data = payload(ed.text(), issue, prev, chosen, mode)
             if not data:
                 toast = tr("compose_empty")
                 continue
@@ -583,10 +688,12 @@ def ui(screen, session):
                                      stdin=subprocess.DEVNULL, capture_output=True, text=True)
                 toast = tr("compose_result_fmt", (out.stdout or out.stderr).strip().split("\n")[-1])
             ed.clear()
-            issue, focus = True, "body"
+            issue, focus, mode, chosen = True, "body", "auto", ""
             save(force=True)
         elif k == "tab" or k == "btab":
-            focus = "issue" if focus == "body" else "body"
+            ring = ["body", "repo"] + (["issue"] if mode in ("auto", "repo") else [])
+            at = ring.index(focus) if focus in ring else 0
+            focus = ring[(at + (1 if k == "tab" else -1)) % len(ring)]
         elif k == "esc":
             save(force=True)
             go_back(shell, prev)
@@ -617,21 +724,35 @@ def clip(text, width):
 def main(argv):
     global TEXT
     TEXT = load_text()
-    if argv[:1] == ["--send"] and len(argv) >= 2:
+    if argv[:1] in (["--send"], ["payload"]) and len(argv) >= 2:
         opts = {"--repo": "", "--node": "auto", "--reap": ""}
+        flags = {"--no-repo": "none", "--multi": "multi", "--no-issue": ""}
+        mode, issue, chosen = "", True, 0
         rest = argv[2:]
         while rest:
             if rest[0] in opts and len(rest) >= 2:
+                chosen += rest[0] == "--repo"
                 opts[rest[0]] = rest[1]
                 rest = rest[2:]
+            elif rest[0] in flags:
+                if rest[0] == "--no-issue":
+                    issue = False
+                else:
+                    mode = flags[rest[0]]
+                    chosen += 1
+                rest = rest[1:]
             else:
                 print("fleet-compose: unknown argument %s" % rest[0], file=sys.stderr)
                 return 2
-        return send(argv[1], opts["--repo"], opts["--node"], opts["--reap"])
-    if argv[:1] == ["payload"] and len(argv) >= 2:
-        text = Path(argv[1]).read_text(encoding="utf-8")
-        print(json.dumps(payload(text, "--no-issue" not in argv), ensure_ascii=False, sort_keys=True))
-        return 0
+        if chosen > 1:
+            print("fleet-compose: --repo, --no-repo and --multi are one choice", file=sys.stderr)
+            return 2
+        if argv[0] == "payload":
+            text = Path(argv[1]).read_text(encoding="utf-8")
+            data = payload(text, issue, repo=opts["--repo"], mode=mode or ("repo" if opts["--repo"] else "auto"))
+            print(json.dumps(data, ensure_ascii=False, sort_keys=True))
+            return 0
+        return send(argv[1], opts["--repo"], opts["--node"], opts["--reap"], mode)
     session = ""
     if argv[:1] == ["--session"] and len(argv) >= 2:
         session = argv[1]

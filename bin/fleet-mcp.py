@@ -457,10 +457,20 @@ def cred_main(action):
         if action == "revoke":
             cred_revoke(cred)
             return 0
+        if action == "assert":
+            # The session's OWN assertion (issue #1972): what the wrapper hands the
+            # hub to borrow a session pass (POST /v1/fleet/session-cred) for it.
+            CALLER["claims"] = cred_verify(cred)
+            a = worker_assertion(ASSERT_TTL_S)
+            if not a:
+                print("fleet-mcp: no hub for this fleet (or no fleet UUID): no assertion", file=sys.stderr)
+                return 1
+            print(a)
+            return 0
     except ToolFault as exc:
         print("fleet-mcp: " + exc.message, file=sys.stderr)
         return 1
-    print("usage: fleet-mcp.py --cred mint|check|revoke", file=sys.stderr)
+    print("usage: fleet-mcp.py --cred mint|check|revoke|assert", file=sys.stderr)
     return 2
 
 
@@ -1526,7 +1536,7 @@ def main(argv):
         serve(LEGACY, "fleet-peer")
         return 0
     if argv:
-        print("usage: fleet-mcp.py [--mount codex | --legacy-peer | --probe | --cred mint|check|revoke]", file=sys.stderr)
+        print("usage: fleet-mcp.py [--mount codex | --legacy-peer | --probe | --cred mint|check|revoke|assert]", file=sys.stderr)
         return 2
     serve(TOOLS, SERVER)
     return 0

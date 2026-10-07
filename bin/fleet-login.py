@@ -453,8 +453,8 @@ def scan(hub, invert, purpose=""):
             code, res = post(hub + "/v1/fleet/login/poll", {"device_code": st["device_code"]})
         except (urllib.error.URLError, OSError):
             continue  # a blip on a cross-border link: keep waiting
-        if code == 202:
-            continue
+        if code == 202 or code >= 500:
+            continue  # a 5xx is the ingress / hub between two polls, not a «no» (#1901)
         if code == 200:
             return res
         die("not issued (HTTP %d): %s" % (code, res.get("error", "")), 1)

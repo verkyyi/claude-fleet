@@ -420,3 +420,29 @@ func TestMachineLoginSettingOverridesLegacy(t *testing.T) {
 		t.Fatal("verkyyi still someone's")
 	}
 }
+
+// C9's account language (claude-fleet#2033) is one of the hub settings:
+// validated, audited, and the bare-ID spelling of a GitHub person works for
+// the machine login too.
+func TestHubSettings_LangAndBareID(t *testing.T) {
+	h := newUsersHarness(t)
+	h.call(t, http.MethodPost, "/v1/fleet/users", `{"login":"alice"}`, nil)
+	if code, body := h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"user.200.lang","value":"zh"}`, nil); code != http.StatusOK {
+		t.Fatalf("lang = %d %v", code, body)
+	}
+	if set, _ := h.srv.Store.FleetSettings(); set[langSettingKey(200)] != "zh-CN" {
+		t.Fatalf("stored lang = %q", set[langSettingKey(200)])
+	}
+	if code, _ := h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"user.200.lang","value":"klingon"}`, nil); code != http.StatusBadRequest {
+		t.Fatalf("bad lang = %d", code)
+	}
+	if !h.auditHas(t, "setting", "ok", "user.200.lang") {
+		t.Fatalf("lang change not audited: %+v", h.audit(t))
+	}
+	if code, body := h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"user.200.machine_login","value":"alice9"}`, nil); code != http.StatusOK {
+		t.Fatalf("bare-id machine login = %d %v", code, body)
+	}
+	if u, _ := h.srv.Store.HubUserByID(200); u == nil || u.MachineLogin != "alice9" {
+		t.Fatalf("alice = %+v", u)
+	}
+}

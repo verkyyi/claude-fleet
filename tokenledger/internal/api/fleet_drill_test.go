@@ -133,7 +133,7 @@ func TestDrillApproveIsTheDrillPerson(t *testing.T) {
 
 	// The QR page, Alice signed in, approve_code in the form.
 	pc, done := personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}, "approve_code": {inv.ApproveCode}})
-	if pc != 200 || !strings.Contains(done, "已签发") || !strings.Contains(done, inv.Login) {
+	if pc != 200 || !strings.Contains(done, "valid until") || !strings.Contains(done, inv.Login) {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
 	cr := pollCert(t, h, st)
@@ -283,7 +283,7 @@ func TestDrillWrongCodeOnPageDoesNotFallBackToAdmin(t *testing.T) {
 	h, _ := drillHarness(t)
 	st := startLogin(t, h, newUserKey(t), nil)
 	pc, page := personForm(t, h, "Alice", h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}, "approve_code": {"fd_wrong"}})
-	if pc != 200 || !strings.Contains(html.UnescapeString(page), "演练确认码无效") {
+	if pc != 200 || !strings.Contains(html.UnescapeString(page), "drill approval code is invalid") {
 		t.Fatalf("page %d:\n%s", pc, page)
 	}
 	if code, _ := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code != http.StatusAccepted {

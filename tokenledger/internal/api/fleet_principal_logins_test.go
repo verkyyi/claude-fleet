@@ -421,7 +421,7 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	json.Unmarshal(body, &st)
 	pc, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "YiLiangHui", "易良辉", nil)
 	page := html.UnescapeString(string(raw))
-	if pc != 200 || strings.Contains(page, "还不能签发") || !strings.Contains(page, "确认签发") || !strings.Contains(page, "verkyyi") {
+	if pc != 200 || strings.Contains(page, "issue yet") || !strings.Contains(page, ">Confirm</button>") || !strings.Contains(page, "verkyyi") {
 		t.Fatalf("confirm page %d:\n%s", pc, page)
 	}
 	p, err := h.srv.Store.Principal("YiLiangHui")
@@ -432,7 +432,7 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 		t.Fatalf("verkyyi on macmini = %+v", a)
 	}
 	pc, done := cookieForm(t, h, uidCookie("YiLiangHui", "易良辉"), h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
-	if pc != 200 || !strings.Contains(done, "已签发") {
+	if pc != 200 || !strings.Contains(done, "valid until") {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
 	code, body := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})
@@ -469,7 +469,7 @@ func TestFleetCookieHolderIsPlacedAtTheDoorsThatNeedIt(t *testing.T) {
 	// An unmapped person knocks on every door and is placed by none.
 	_, body = postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": newUserKey(t)})
 	json.Unmarshal(body, &st)
-	if _, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "zhangsan", "张三", nil); !strings.Contains(string(raw), "还不能签发") {
+	if _, raw := asUID(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, "zhangsan", "张三", nil); !strings.Contains(string(raw), "issue yet") {
 		t.Fatalf("zhangsan's confirm page:\n%s", raw)
 	}
 	if code, _ := asUID(t, h, http.MethodGet, "/connect", "zhangsan", "张三", nil); code != 200 {

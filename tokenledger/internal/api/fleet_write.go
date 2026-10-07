@@ -364,7 +364,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "node", "origin_wid", "account_class", "reap"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -399,8 +399,23 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		if err == nil && kind != "new" {
 			if _, ok := args["title"]; ok {
 				err = fault("INVALID_ARGUMENT", "title belongs to a new-issue start (kind=new)")
-			} else if _, ok := args["body"]; ok {
-				err = fault("INVALID_ARGUMENT", "body belongs to a new-issue start (kind=new)")
+			} else if _, ok := args["body"]; ok && kind != "scratch" {
+				err = fault("INVALID_ARGUMENT", "body belongs to a new-issue or scratch start (kind=new / scratch)")
+			}
+		}
+		// no_repo (claude-fleet#1956): a scratch that belongs to no repo — the
+		// node opens it in $HOME, stamped @norepo (dash-raw-session.sh
+		// --no-repo). Only a scratch, only `true`, never beside a repo.
+		noRepo := false
+		if v, ok := args["no_repo"]; err == nil && ok {
+			if b, isBool := v.(bool); !isBool || !b {
+				err = fault("INVALID_ARGUMENT", "no_repo must be true when given")
+			} else if kind != "scratch" {
+				err = fault("INVALID_ARGUMENT", "no_repo belongs to a scratch start (kind=scratch)")
+			} else if r, _ := args["repo"].(string); r != "" {
+				err = fault("INVALID_ARGUMENT", "no_repo names no repo")
+			} else {
+				noRepo = true
 			}
 		}
 		if err != nil {
@@ -427,6 +442,18 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			}
 			if name != "" {
 				w.params["name"] = name
+			}
+			// body (claude-fleet#1956): the writing area's text — the
+			// scratch starts working on it (dash-raw-session.sh --prompt).
+			if b, ok := args["body"]; ok && b != "" {
+				var body string
+				if body, err = checkText(b, "body"); err != nil {
+					break
+				}
+				w.params["body"] = body
+			}
+			if noRepo {
+				w.params["no_repo"] = true
 			}
 		} else {
 			var issue int
@@ -503,9 +530,9 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			err = fault("INVALID_ARGUMENT", "node must be auto or a machine name from the roster")
 			break
 		}
-		if w.fleetID == "" && w.repo == "" {
+		if w.fleetID == "" && w.repo == "" && !noRepo {
 			// A placed start must say which repo: the machine is chosen
-			// among fleets that host it.
+			// among fleets that host it (a no-repo scratch: among all).
 			err = fault("INVALID_ARGUMENT", "Name the repo (owner/name) when no fleet_id is given")
 		}
 	case "worker_move_in":
@@ -1124,7 +1151,7 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 	from := s.askedFrom(p, now) // claude-fleet#1721: who may land on a personal machine
 	seen := map[string]bool{}
 	for _, r := range rows {
-		if !r.Present || seen[r.EndpointID] || !hostsRepo(r, repo) {
+		if !r.Present || seen[r.EndpointID] || (repo != "" && !hostsRepo(r, repo)) {
 			continue
 		}
 		if node != "auto" && !sameMachine(r.Hostname, node) {
@@ -1163,6 +1190,9 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 		where := "any of your machines"
 		if node != "auto" {
 			where = node
+		}
+		if repo == "" {
+			return pl, fault("NOT_FOUND", "No fleet on "+where)
 		}
 		return pl, fault("NOT_FOUND", "No fleet hosting "+repo+" on "+where)
 	}
@@ -1389,7 +1419,8 @@ func placementReason(c Candidate, all []Candidate) string {
 // fleet.node_maintenance.<machine> (claude-fleet#1427) a reason — any text,
 // "" to end the maintenance — stored as the dated record the roster shows;
 // fleet.client_defaults.<KEY> (claude-fleet#1722) a client's team default;
-// fleet.node_trust.<machine> (claude-fleet#1968) trusted | untrusted.
+// fleet.node_trust.<machine> (claude-fleet#1968) trusted | untrusted;
+// fleet.node_relay.<machine> (claude-fleet#1974) "" only — a revocation.
 func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch r.Method {
@@ -1440,6 +1471,21 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				httpError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			s.relayCacheReset()
+			s.writeFleetSettings(w)
+			return
+		case strings.HasPrefix(body.Key, NodeRelayPrefix) && nodeNameRE.MatchString(body.Key[len(NodeRelayPrefix):]):
+			// A machine's relay credentials (claude-fleet#1974): the
+			// operator only drops them ("" = revoke every login's); a
+			// node mints its own through /v1/node/relay-credential.
+			if body.Value != "" {
+				httpError(w, http.StatusBadRequest, "a relay credential is only revoked here (value \"\"); a node mints its own")
+				return
+			}
+			if err := s.revokeRelay(body.Key[len(NodeRelayPrefix):], time.Now()); err != nil {
+				httpError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 			s.writeFleetSettings(w)
 			return
 		case strings.HasPrefix(body.Key, ClientDefaultsPrefix):
@@ -1487,7 +1533,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+ClientDefaultsPrefix+"<KEY>, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
 		now := time.Now()
@@ -1532,6 +1578,13 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 		}
 	}
 	eff[SpotWeightKey] = s.spotWeight(settings)
+	// A relay credential's hash never leaves the hub (claude-fleet#1974).
+	settings = relayRedact(settings)
+	for k, v := range settings {
+		if strings.HasPrefix(k, NodeRelayPrefix) {
+			eff[k] = v
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "effective": eff, "hub": s.hubSettingsView(settings)})
 }
 
