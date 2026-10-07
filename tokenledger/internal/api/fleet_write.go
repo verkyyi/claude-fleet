@@ -1467,6 +1467,13 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.computeAutoAudit(body.Value, time.Now())
+		case body.Key == MeterKey:
+			// The public counter (claude-fleet#1988): off hides /meter.json
+			// and /odometer.svg; "" or on is the default — shown.
+			if body.Value != "" && body.Value != "on" && body.Value != "off" {
+				httpError(w, http.StatusBadRequest, MeterKey+" is on | off, or \"\" for the default (on)")
+				return
+			}
 		case strings.HasPrefix(body.Key, NodeCapPrefix) && nodeNameRE.MatchString(body.Key[len(NodeCapPrefix):]):
 			if body.Value != "" {
 				if n, err := strconv.Atoi(body.Value); err != nil || n < 0 || n > 256 {
@@ -1475,7 +1482,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+ClientDefaultsPrefix+"<KEY>, "+SpotWeightKey+" and "+ComputeAutoKey+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+ClientDefaultsPrefix+"<KEY>, "+SpotWeightKey+", "+ComputeAutoKey+" and "+MeterKey+" are settable")
 			return
 		}
 		if err := s.Store.SetFleetSetting(body.Key, body.Value, time.Now()); err != nil {

@@ -88,6 +88,7 @@ type Server struct {
 	// query is a full scan and the SSE stream pushes several times a second,
 	// so it is recomputed on a timer rather than per push.
 	counter        Counter
+	meter          meterState
 	sourceCounters scopedCounters
 	quotaLeases    quotaLeases
 
@@ -519,7 +520,14 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/embed/", s.viewerOnly(badges))
 	}
 
-	mux.Handle("/", s.viewerOnly(http.HandlerFunc(s.serveUI)))
+	// The public counter (claude-fleet#1988): the hub's one lifetime total,
+	// readable by anyone while hub.public_meter is on, so 24haowan.com's
+	// homepage takes it straight from here instead of through a token.
+	mux.HandleFunc("/meter.json", s.handleMeter)
+	mux.HandleFunc("/odometer.svg", s.handleOdometer)
+
+	// Signed out, "/" is the front page; signed in, the app.
+	mux.Handle("/", s.viewerOr(http.HandlerFunc(s.serveUI), s.serveLanding))
 
 	return s.logRequests(mux)
 }
@@ -530,6 +538,15 @@ func (s *Server) Handler() http.Handler {
 // `ccquota_token` cookie, which is what lets a browser follow ?token=... once
 // and then navigate normally.
 func (s *Server) viewerOnly(next http.Handler) http.Handler {
+	return s.viewerOr(next, nil)
+}
+
+// viewerOr is viewerOnly with a say in what a request holding NO credential
+// gets: signedOut answers it when it returns true, else the gate's usual
+// sign-in redirect or 401 follows. Only the front page uses it
+// (claude-fleet#1988): a stranger opening "/" reads what claudefleet is
+// instead of a refusal, while everyone the gate admits still gets the app.
+func (s *Server) viewerOr(next http.Handler, signedOut func(http.ResponseWriter, *http.Request) bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every admitting branch below records WHICH door let the request in
 		// (withDoor), so /v1/me can say so and the page header can show it
@@ -588,6 +605,9 @@ func (s *Server) viewerOnly(next http.Handler) http.Handler {
 		// of the local tailscaled, never of anything in the request.
 		if login, ok := s.Tailnet.Lookup(r.RemoteAddr); ok {
 			next.ServeHTTP(w, r.WithContext(withDoor(withViewer(r.Context(), login), doorTailnet)))
+			return
+		}
+		if signedOut != nil && signedOut(w, r) {
 			return
 		}
 		// A browser with no credential is someone who has not signed in yet;

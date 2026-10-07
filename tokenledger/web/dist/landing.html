@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claudefleet</title>
+<meta name="description" content="Run a fleet of Claude Code sessions: GitHub issues in, pull requests out, on every machine you own, sharing one pool of subscriptions.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230e6e5e'/%3E%3Cpath d='M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
+<!--
+  The signed-out front page (claude-fleet#1988), after the prototype's Front
+  page. Self-contained on purpose: it sends no request anywhere but this hub
+  (no web fonts, no CDN) — the hub serves it with a same-origin CSP.
+-->
+<style>
+:root {
+  --bg: #f4f6f5; --panel: #ffffff; --ink: #15201d; --ink-2: #3c4945; --muted: #6a7773; --line: #e0e6e3; --line-2: #ecf0ee;
+  --brand: #0e6e5e; --brand-ink: #ffffff; --brand-soft: #e1f1ec;
+  --term: #0d1513; --term-ink: #cfe3dd;
+  --f-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --f-ui: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1412; --panel: #151d1b; --ink: #e5ece9; --ink-2: #c1ccc8; --muted: #8b9894; --line: #26302d; --line-2: #1e2725;
+  --brand: #3fc2a6; --brand-ink: #062019; --brand-soft: #16302a; --term: #080c0b; --term-ink: #cfe3dd; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0e1412; --panel: #151d1b; --ink: #e5ece9; --ink-2: #c1ccc8; --muted: #8b9894; --line: #26302d; --line-2: #1e2725;
+  --brand: #3fc2a6; --brand-ink: #062019; --brand-soft: #16302a; --term: #080c0b; --term-ink: #cfe3dd; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 var(--f-ui); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+p { margin: 0; }
+a { color: var(--brand); text-decoration: none; }
+button { font: inherit; color: inherit; }
+code { font-family: var(--f-mono); font-size: .86em; }
+svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
+
+.btn { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; font-size: 13.5px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 7px 13px; border-radius: 7px; cursor: pointer; white-space: nowrap; transition: background .12s, border-color .12s; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.dark { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--ink-2); }
+.btn.ghost:hover { background: var(--line-2); }
+.btn.sm { padding: 4px 9px; font-size: 12.5px; border-radius: 6px; }
+.btn.lg { padding: 11px 18px; font-size: 15px; border-radius: 9px; }
+
+.pub { min-height: 100%; display: grid; grid-template-rows: auto 1fr auto; }
+.pub-nav { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 18px clamp(16px, 4vw, 48px); max-width: 1180px; width: 100%; margin: 0 auto; }
+.logo { display: inline-flex; align-items: center; gap: 9px; font: 700 18px var(--f-display); letter-spacing: -.01em; color: var(--ink); }
+.logo-mark { width: 26px; height: 26px; border-radius: 7px; background: var(--brand); display: grid; place-items: center; }
+.logo-mark svg { width: 16px; height: 16px; stroke: var(--brand-ink); stroke-width: 2.2; fill: none; stroke-linecap: round; }
+.pub-links { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.pub-main { max-width: 1180px; width: 100%; margin: 0 auto; padding: 24px clamp(16px, 4vw, 48px) 72px; display: grid; gap: 88px; min-width: 0; }
+.hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 48px; align-items: center; padding-top: 24px; }
+.hero h1 { font: 800 clamp(2.3rem, 5.2vw, 3.7rem)/1.02 var(--f-display); letter-spacing: -.035em; }
+.hero h1 em { font-style: normal; color: var(--brand); }
+.hero .sub { font-size: 1.12rem; color: var(--ink-2); max-width: 34rem; margin-top: 18px; line-height: 1.55; }
+.hero .ctas { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 28px; }
+.installline { margin-top: 18px; display: flex; align-items: center; gap: 8px; font: 12.5px var(--f-mono); color: var(--ink-2); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 8px 8px 12px; max-width: 34rem; }
+.installline span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term { background: var(--term); color: var(--term-ink); border-radius: 12px; box-shadow: 0 30px 60px -30px rgba(0,0,0,.55); overflow: hidden; font: 12.5px/1.7 var(--f-mono); min-width: 0; }
+.term-bar { display: flex; gap: 6px; padding: 10px 12px; background: rgba(255,255,255,.04); align-items: center; }
+.term-bar i { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,.14); display: block; }
+.term-bar span { margin-left: 8px; color: #7d918b; font-size: 11.5px; }
+.term-body { padding: 14px 16px 18px; display: grid; gap: 1px; overflow-x: auto; }
+.term-row { display: grid; grid-template-columns: 1.2rem 7.6rem minmax(0,1fr) 3.4rem; gap: 8px; white-space: nowrap; }
+.term-row .k { color: #e7f2ee; }
+.term-row .m { color: #7d918b; overflow: hidden; text-overflow: ellipsis; }
+.t-ok { color: #6fd394; } .t-warn { color: #e8b85a; } .t-dim { color: #55665f; } .t-brand { color: #3fc2a6; }
+.term-head { color: #7d918b; display: flex; justify-content: space-between; margin-bottom: 6px; }
+.term-line { white-space: nowrap; }
+.meterband { display: grid; grid-template-columns: auto 1fr; gap: 10px 28px; align-items: end; padding: 28px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); min-width: 0; }
+.meterband b { font: 500 clamp(1.7rem, 6vw, 3.6rem)/1 var(--f-mono); letter-spacing: -.03em; color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.meterband p { color: var(--muted); max-width: 28rem; }
+.sec-head { display: grid; gap: 10px; max-width: 40rem; margin-bottom: 28px; }
+.eyebrow { font: 500 12px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--brand); }
+.sec-head h2 { font: 700 clamp(1.6rem, 3.4vw, 2.3rem)/1.1 var(--f-display); letter-spacing: -.02em; }
+.features { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 20px; }
+.feature { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; display: grid; gap: 10px; align-content: start; }
+.feature .ic { width: 36px; height: 36px; border-radius: 9px; background: var(--brand-soft); color: var(--brand); display: grid; place-items: center; }
+.feature .ic svg { width: 19px; height: 19px; }
+.feature h3, .steps3 h3 { font: 600 1.05rem var(--f-ui); }
+.feature p, .steps3 p { color: var(--ink-2); }
+.steps3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 0; counter-reset: s; border-top: 1px solid var(--line); }
+.steps3 > div { padding: 22px 22px 0 0; display: grid; gap: 8px; align-content: start; }
+.steps3 > div::before { counter-increment: s; content: "0" counter(s); font: 500 13px var(--f-mono); color: var(--brand); }
+.steps3 code { background: var(--line-2); padding: 1px 5px; border-radius: 4px; }
+.pub-foot { border-top: 1px solid var(--line); }
+.pub-foot > div { max-width: 1180px; margin: 0 auto; padding: 22px clamp(16px, 4vw, 48px); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
+@media (max-width: 900px) {
+  .hero { grid-template-columns: minmax(0,1fr); }
+  .features, .steps3 { grid-template-columns: minmax(0,1fr); }
+  .pub-main { gap: 64px; }
+}
+@media (max-width: 520px) {
+  .meterband { grid-template-columns: minmax(0,1fr); }
+  .pub-links .hide-sm { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="pub">
+  <nav class="pub-nav">
+    <a class="logo" href="/"><span class="logo-mark"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 4 10M12 17l4-10 4 10M3 20h18"/></svg></span>claudefleet</a>
+    <div class="pub-links">
+      <a class="btn ghost hide-sm" href="#how">How it works</a>
+      <a class="btn ghost hide-sm" href="https://github.com/verkyyi/claude-fleet" rel="noopener">GitHub</a>
+      <a class="btn dark" href="/signin">Sign in</a>
+    </div>
+  </nav>
+  <main class="pub-main" id="landing">
+    <section class="hero">
+      <div>
+        <h1>Run a <em>fleet</em> of Claude Code sessions. One task per window.</h1>
+        <p class="sub">claudefleet turns GitHub issues into parallel coding sessions, each in its own git worktree, on every machine you own, sharing one pool of subscriptions. Every task ends as its own pull request.</p>
+        <div class="ctas">
+          <a class="btn primary lg" href="/signin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg>Sign in with GitHub</a>
+          <a class="btn lg" href="#how">How it works <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+        </div>
+        <div class="installline" id="install"><span id="installcmd">curl -fsSL https://claudefleet.24haowan.com/install | sh</span><button class="btn sm" type="button" id="copy"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg><span id="copylabel">Copy</span></button></div>
+      </div>
+      <div class="term" aria-label="Example of the fleet session list">
+        <div class="term-bar"><i></i><i></i><i></i><span>fleet · 5 sessions · 3 machines</span></div>
+        <div class="term-body">
+          <div class="term-head"><span>session</span><span>machine</span></div>
+          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1950</span><span class="m">Team settings reach every machine</span><span class="t-dim">mini2</span></div>
+          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1939</span><span class="m">Install sync keeps fleet.conf</span><span class="t-dim">m4</span></div>
+          <div class="term-row"><span class="t-warn">?</span><span class="k">issue-1953</span><span class="m">Doctor row for the team layer</span><span class="t-dim">mini2</span></div>
+          <div class="term-row"><span class="t-ok">●</span><span class="k">issue-1961</span><span class="m">Front page for the hub</span><span class="t-dim">spot</span></div>
+          <div class="term-row"><span class="t-dim">·</span><span class="k">scratch-6</span><span class="m">Portal plan</span><span class="t-dim">m4</span></div>
+          <div class="term-line t-dim" style="margin-top:10px">pool  A 62% · B 18% · C full · Codex 30%</div>
+          <div class="term-line"><span class="t-brand">❯</span> fleet spawn 1961<span class="t-dim">  → issue-1961 on m4 · Max 20× · B</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="meterband" id="meterband" hidden>
+      <b id="meter" aria-live="off">0</b>
+      <p>Claude and Codex tokens this fleet has run so far, counted live by the hub.</p>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="eyebrow">What it does</span><h2>Many sessions, many machines, one place to see them</h2></div>
+      <div class="features">
+        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-10 6"/></svg></div><h3>Issues in, pull requests out</h3><p>Hand an issue to a worker. It claims it, works in its own worktree, runs the related tests and opens the PR. You answer questions when it asks.</p></div>
+        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c2 0 2-1.5 4.5-1.5S10 17 12 17s2.5-1.5 4.5-1.5S19 17 21 17"/><path d="M3 12c2 0 2-1.5 4.5-1.5S10 12 12 12s2.5-1.5 4.5-1.5S19 12 21 12"/><path d="M7 7l5-4 5 4"/></svg></div><h3>Subscriptions, pooled</h3><p>New sessions start on whichever Claude or Codex subscription has the most headroom. A full one is skipped until its window resets.</p></div>
+        <div class="feature"><div class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></div><h3>Every machine you have</h3><p>Macs, Linux boxes, a rented machine when you run out of room. Sessions move between them; you reach any of them over SSH with a 12-hour certificate.</p></div>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="sec-head"><span class="eyebrow">How it works</span><h2>Three steps to your first fleet session</h2></div>
+      <div class="steps3">
+        <div><h3>Install the client</h3><p>Run <code>curl … /install | sh</code> on the computer you work from.</p></div>
+        <div><h3>Sign in with GitHub</h3><p><code>fleet login</code> shows a code; confirm it in the browser. Only people on this hub's list get in.</p></div>
+        <div><h3>Hand it an issue</h3><p><code>fleet spawn 1961</code> starts a worker on the best machine and subscription, and it lands as a PR.</p></div>
+      </div>
+    </section>
+  </main>
+  <footer class="pub-foot"><div><span>claudefleet · open source, MIT · <a href="https://github.com/verkyyi/claude-fleet" rel="noopener">github.com/verkyyi/claude-fleet</a></span><span id="hosted">Hosted at claudefleet.24haowan.com</span></div></footer>
+</div>
+<script>
+(function () {
+  'use strict';
+  // The install line names THIS hub, whatever it is called.
+  var cmd = 'curl -fsSL ' + location.origin + '/install | sh';
+  document.getElementById('installcmd').textContent = cmd;
+  document.getElementById('hosted').textContent = 'Hosted at ' + location.host;
+  document.getElementById('copy').addEventListener('click', function () {
+    var label = document.getElementById('copylabel');
+    var done = function () { label.textContent = 'Copied'; setTimeout(function () { label.textContent = 'Copy'; }, 1600); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(cmd).then(done, function () {});
+  });
+
+  // The counter: /meter.json's replay model (the same contract 24haowan.com's
+  // TokenMeter reads). Each payload says how much the total grew over its last
+  // window; the page plays that growth back over the same number of seconds,
+  // so it never runs ahead of the true figure and never rolls back.
+  var band = document.getElementById('meterband');
+  var el = document.getElementById('meter');
+  var PULL_MS = 15000;
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var base = null, baseAt = 0, lastTs = 0, shown = 0;
+  function fmt(n) { return Math.floor(n).toLocaleString('en-US'); }
+  function value(now) {
+    if (!base) return 0;
+    var from = base.total - base.windowTokens;
+    var t = base.windowSecs > 0 ? Math.min(1, (now - baseAt) / (base.windowSecs * 1000)) : 1;
+    return from + base.windowTokens * t;
+  }
+  function frame() {
+    var v = Math.max(shown, value(performance.now()));
+    if (Math.floor(v) !== Math.floor(shown) || el.textContent === '0') el.textContent = fmt(v);
+    shown = v;
+    if (!reduce) requestAnimationFrame(frame);
+  }
+  function pull() {
+    fetch('/meter.json', { credentials: 'omit', cache: 'no-cache' }).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    }).then(function (d) {
+      if (!(d.total > 0)) throw new Error('bad payload');
+      var ts = Number(d.ts) || 0;
+      if (ts && ts === lastTs) return;
+      lastTs = ts;
+      var first = !base;
+      base = { total: d.total, windowTokens: Math.max(0, Math.min(d.total, Number(d.windowTokens) || 0)), windowSecs: Number(d.windowSecs) || 0 };
+      baseAt = performance.now();
+      if (reduce) { shown = Math.max(shown, d.total); el.textContent = fmt(shown); }
+      band.hidden = false;
+      if (first) { shown = value(baseAt); if (!reduce) requestAnimationFrame(frame); else el.textContent = fmt(shown); }
+    }).catch(function () {
+      // Off (404) or not measured yet: no figure, never a zero.
+      if (!base) band.hidden = true;
+    });
+  }
+  pull();
+  setInterval(pull, PULL_MS);
+})();
+</script>
+</body>
+</html>
