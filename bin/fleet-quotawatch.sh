@@ -200,6 +200,12 @@ if [ "$CALLER" != collect ] && [ "$STATUS" = 0 ] && [ "$DRY" = 0 ] \
    && [ -f "$BIN/fleet-daemon-lib.sh" ]; then
   . "$BIN/fleet-daemon-lib.sh"; fleet_daemon_stamp_tick quotawatch "$BIN/.."
 fi
+# The pool's two settings from the hub (issue #2029): detached, TTL-gated inside
+# (FLEET_HUB_POOL_SECS), so a slow hub never costs this tick — the NEXT tick's
+# fleet-lib.sh reads what it wrote. No hub ⇒ it removes the file and returns.
+if [ "$STATUS" = 0 ] && [ "$DRY" = 0 ] && [ -f "$BIN/fleet-hub-pool.sh" ]; then
+  ( nohup bash "$BIN/fleet-hub-pool.sh" fetch </dev/null >/dev/null 2>&1 & )
+fi
 
 QTS="$G/account.quota.ts"
 QDIAG="$G/quota.diag"                                 # last tick's quota_parse complaints (#628)
