@@ -29,6 +29,8 @@ const (
 	fidB = "bbbbbbbb-0000-4000-8000-00000000000b"
 )
 
+// cpRig.full is Authorization → the 429 body the upstream answers it with
+// (claude-fleet#2115).
 type cpRig struct {
 	h        *harness
 	tok5, f5 string
@@ -38,9 +40,8 @@ type cpRig struct {
 	upAuth   []string
 	upAcct   []string
 	audit    []string
-	// full is Authorization → the 429 body it answers (claude-fleet#2115)
-	full     map[string]string
 	skew     atomic.Int64 // the proxy's clock runs this far ahead (pastCache)
+	full     map[string]string
 }
 
 // cpCacheTTL is the rig proxy's verdict cache. It runs on the rig's clock and
