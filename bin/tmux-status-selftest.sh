@@ -447,8 +447,17 @@ plant w1:warning w2:warning
 eq "J: no alarm → no ✖ slot at all (#1238's fixed width is gone)" " ${WARN2} " "$(CF='' bar)"
 plant a1:alarm
 eq "J: an alarm alone" " ${ALARM1} " "$(CF='' bar)"
-plant a1:alarm h1:healed n1:needs
-eq "J: a ↻ trace and a needs row are not counted here (● N is the left side's)" " ${ALARM1} " "$(CF='' bar)"
+plant a1:alarm h1:healed
+eq "J: a ↻ trace is not counted" " ${ALARM1} " "$(CF='' bar)"
+# ---- J: who waits on you — 「! n 等你 ⌘J」 (issue #1951, EPIC #1949 C2). The
+# needs rows were the list's alone (its `! N 个在问你` line, #1750); now the bar
+# says them too, red, before the counts, a tap = ⌘J (`needs` range). Narrow: `! n`.
+NEEDS2="#[range=user|needs]${R}#[bold]! 2 等你 ⌘J#[nobold]#[norange]"
+plant a1:alarm h1:healed n1:needs n2:needs
+eq "J: two sessions waiting → ! 2 等你 ⌘J, before the alarm, in its range" " ${NEEDS2}  ${ALARM1} " "$(CF='' bar)"
+plant n1:needs
+eq "J: narrow → ! 1, still the needs range" " #[range=user|needs]${R}#[bold]! 1#[nobold]#[norange] " "$(CF='' bar cw=54)"
+plant a1:alarm
 plant a1:alarm w1:warning w2:warning
 remote $(( NOW - 200 ))
 eq "J: the order — machine · account · alerts · hub" \

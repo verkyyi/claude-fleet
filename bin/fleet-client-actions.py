@@ -13,6 +13,22 @@
         — none/nohub: nobody to hand it to, the caller opens it its own way.
         Exit 0 = the hub answered (or nohub); 1 = the hub could not be asked.
 
+  fleet-client-actions.py notify --title T [--body B] [--jump <key>] [--session S]
+        THIS device's notification, raised by the client itself (issue #1951,
+        EPIC #1949 C2): bin/fleet-alerts.sh fleet_alerts_notify calls it for a
+        session that newly waits on you — the title says who, the body what it
+        asks. The same `notify` below (iterm2 / notify / a bottom line), plus a
+        click that goes there: `--jump` is the list's key (`wid:<worker_id>`).
+        terminal-notifier on PATH (notify): its -execute runs the jump. Any other
+        notifier (osascript, iTerm2's OSC 9) can only bring the terminal forward,
+        so the jump waits as the server's @notify_jump and the client's next
+        focus-in (conf/tmux-shell.conf) takes it — within FLEET_NOTIFY_JUMP_SECS
+        (60; 0 = never). iterm2 also gets OSC 1337 RequestAttention (the Dock).
+        FLEET_NOTIFY=0: nothing. Seam: FLEET_CLIENT_NOTIFY_CMD gets the title and
+        body, and the click as FLEET_NOTIFY_CLICK in its environment.
+  fleet-client-actions.py jump-pending [--session S]
+        the focus-in half: take @notify_jump when it is young enough, and jump.
+
   fleet-client-actions.py run --session S
         the client's side (bin/fleet-shell.sh starts one per server): long-polls
         the hub for its lease's actions (POST /v1/fleet/client/actions, this
@@ -405,6 +421,65 @@ class Client:
             return links["hub"], "hub"
         return "", ""
 
+    def tmux(self, *args):
+        """A command on THIS server — the one whose list the jump goes to."""
+        try:
+            return subprocess.run(["tmux", "-L", self.sess, *args], capture_output=True, text=True,
+                                  timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    def click(self, key):
+        """The argv a notification's click runs: the list's own jump to `key`
+        (fleet-quickopen.py jump, the ⌘P road), on this server."""
+        sock = self.tmux("display-message", "-p", "#{socket_path}")
+        if not key or not sock:
+            return []
+        return ["env", "TMUX=%s,0,0" % sock, "python3", os.path.join(BIN, "fleet-quickopen.py"), "jump", key]
+
+    def notify_local(self, title, body, key):
+        """(ok, result) — a notification raised here, with a click that jumps."""
+        w = self.where()
+        caps = w.get("caps") or []
+        click = self.click(key)
+        seam = os.environ.get("FLEET_CLIENT_NOTIFY_CMD")
+        tn = shutil.which("terminal-notifier") if not seam and sys.platform == "darwin" else None
+        if click and "notify" in caps and tn:
+            cmd = [tn, "-title", title, "-message", body or title, "-group", "fleet-" + key,
+                   "-activate", "com.googlecode.iterm2", "-execute", shlex.join(click)]
+            try:
+                ok = subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+            except OSError:
+                ok = False
+            return (True, "notified") if ok else (False, "the notifier failed")
+        # No click of its own: the focus-in the click causes takes the jump — only
+        # while the terminal is NOT in front (focus-events: tmux's `focused` flag);
+        # in front, the person sees the bar's 「! n 等你」 and nothing is armed.
+        away = "focused" not in self.tmux("list-clients", "-F", "#{client_flags}")
+        if click and away and ("notify" in caps or "iterm2" in caps):
+            self.tmux("set-option", "-g", "@notify_jump", "%d %s" % (time.time(), key))
+        if "iterm2" in caps and away:
+            self.escape(b"\033]1337;RequestAttention=yes\a")
+        if seam and click:
+            os.environ["FLEET_NOTIFY_CLICK"] = shlex.join(click)
+        return self.do({"kind": "notify", "title": title, "body": body})
+
+    def jump_pending(self):
+        """The focus-in half: a click on a notification that could not run one."""
+        val = self.tmux("show-options", "-gqv", "@notify_jump")
+        if not val:
+            return False
+        self.tmux("set-option", "-gu", "@notify_jump")
+        at, _, key = val.partition(" ")
+        try:
+            young = time.time() - float(at) <= float(os.environ.get("FLEET_NOTIFY_JUMP_SECS") or 60)
+        except ValueError:
+            young = False
+        if not young or not key:
+            return False
+        cmd = self.click(key)
+        return bool(cmd) and subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+
     def do(self, a):
         """(ok, result) — the action done on this device."""
         w = self.where()
@@ -558,12 +633,28 @@ def main(argv):
     s.add_argument("--title", default="")
     s.add_argument("--body", default="")
     s.add_argument("--wait", type=int, default=0)
+    n = sub.add_parser("notify")
+    n.add_argument("--title", required=True)
+    n.add_argument("--body", default="")
+    n.add_argument("--jump", default="")
+    n.add_argument("--session", default=os.environ.get("FLEET_SHELL_SESSION") or "fleet-shell")
+    j = sub.add_parser("jump-pending")
+    j.add_argument("--session", default=os.environ.get("FLEET_SHELL_SESSION") or "fleet-shell")
     r = sub.add_parser("run")
     r.add_argument("--session", default=os.environ.get("FLEET_SHELL_SESSION") or "fleet-shell")
     r.add_argument("--once", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "send":
         return send(a)
+    if a.cmd == "notify":
+        if os.environ.get("FLEET_NOTIFY", "1") == "0":
+            return 0
+        c = Client(a.session)
+        ok, result = c.notify_local(a.title, a.body, a.jump)
+        c.note("", "notify-local", result)
+        return 0 if ok else 1
+    if a.cmd == "jump-pending":
+        return 0 if Client(a.session).jump_pending() else 1
     return run(a)
 
 

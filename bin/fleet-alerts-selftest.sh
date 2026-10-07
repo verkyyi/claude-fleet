@@ -17,7 +17,12 @@
 #                 an account.model-limited row → `model · capped · fable → opus`
 #   7. needs    — @claude_state needs/failed windows → ● rows (question /
 #                 permission / blocked / waiting / failed; empty @issue safe);
-#                 a writer with no tmux keeps the previous needs rows
+#                 a writer with no tmux keeps the previous needs rows; each
+#                 row's `detail` is the question's own words
+#                 (@claude_needs_detail, issue #1951) — Claude's and Codex's
+#                 alike; on the CLIENT (FLEET_SHELL=1) the rows come from the
+#                 hub cache's needs_<sess> (fleet-hub-sessions.sh), never from
+#                 the client's own windows
 #   8. degenerate — nothing configured: no rows, an empty bar
 #  13. machine  — 负载 per core ≥ 0.8 / 内存 ≥ 85 % → `▲ machine · load high` /
 #                 `memory high` (issue #1616: they left the bar); under the bands
@@ -188,8 +193,8 @@ T="$(printf '\t')"
 cat > "$WORK/shim/tmux" <<EOF
 #!/bin/sh
 case "\$1" in list-windows) cat <<'ROWS'
-s1${T}@1${T}plan${T}-${T}needs${T}ask${T}$(( $(now) - 120 ))
-s1${T}@2${T}issue-7${T}7${T}needs${T}perm${T}$(( $(now) - 60 ))
+s1${T}@1${T}plan${T}-${T}needs${T}ask${T}$(( $(now) - 120 ))${T}演练放在 m5 还是只在 m4？ 两个都 要
+s1${T}@2${T}issue-7${T}7${T}needs${T}perm${T}$(( $(now) - 60 ))${T}Bash: git push
 s1${T}@3${T}issue-8${T}8${T}needs${T}blocked${T}0
 s1${T}@4${T}issue-9${T}9${T}failed${T}-${T}0
 s1${T}@5${T}issue-10${T}10${T}needs${T}-${T}0
@@ -208,8 +213,27 @@ case "$out" in *"●  #8 · blocked"*) ok ;; *) fail "7: blocked" "$out" ;; esac
 case "$out" in *"●  #9 · failed"*) ok ;; *) fail "7: failed" "$out" ;; esac
 case "$out" in *"●  #10 · waiting"*) ok ;; *) fail "7: undifferentiated needs → waiting" "$out" ;; esac
 case "$(cat "$G/alerts.ndjson")" in *'"target":"s1:@2"'*) ok ;; *) fail "7: jump target" "$(cat "$G/alerts.ndjson")" ;; esac
+nd=$(cat "$G/alerts.ndjson")
+case "$nd" in *'"target":"s1:@1","detail":"演练放在 m5 还是只在 m4？ 两个都 要"'*) ok ;; *) fail "7: a question's words ride in detail (#1951)" "$nd" ;; esac
+case "$nd" in *'"target":"s1:@2","detail":"Bash: git push"'*) ok ;; *) fail "7: a permission's command rides in detail" "$nd" ;; esac
+case "$nd" in *'"target":"s1:@3","detail":""'*) ok ;; *) fail "7: no question → an empty detail (never the window name)" "$nd" ;; esac
 fa write                                                      # no $TMUX: the quota watch's view
 eq "7: a writer that cannot see tmux keeps the needs rows" "0 0 5" "$(fa counts)"
+# The client (issue #1951): its own server holds no session — the rows are the
+# hub cache's needs_<sess>, every machine's, whatever its own windows say.
+rm -f "$G"/alerts.*
+US7=$(printf '\037')
+printf 'F/issue-1909%s#1909%sask%sm5%s演练放在 m5 还是只在 m4？\nF/scratch-3%sscratch-3%sperm%sm4%sBash: rm -rf build\nF/issue-1909%s#1909%sask%sm5%sdup\n' \
+  "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" "$US7" > "$G/needs_s1"
+FLEET_SHELL=1 TMUX=/tmp/fake,1,0 PATH="$WORK/shim:$PATH" fa write
+eq "7: the client counts the hub's needs, not its own windows (one row per worker)" "0 0 2" "$(fa counts)"
+nd=$(cat "$G/alerts.ndjson")
+case "$nd" in *'"id":"needs-wid-F'*'issue-1909","severity":"needs","subject":"#1909","condition":"question","value":"m5"'*'"action":"jump"'*'"target":"wid:F/issue-1909","detail":"演练放在 m5 还是只在 m4？"'*) ok ;; *) fail "7: a client needs row: subject, machine, jump by worker id, the question" "$nd" ;; esac
+case "$nd" in *'"subject":"scratch-3","condition":"permission"'*'"detail":"Bash: rm -rf build"'*) ok ;; *) fail "7: the client's permission row" "$nd" ;; esac
+: > "$G/needs_s1"
+FLEET_SHELL=1 TMUX=/tmp/fake,1,0 PATH="$WORK/shim:$PATH" fa write
+eq "7: answered on the node → gone from the client" "0 0 0" "$(fa counts)"
+rm -f "$G/needs_s1"
 
 # ------------------------------------------------------------- 8. degenerate ----
 rm -f "$G"/*

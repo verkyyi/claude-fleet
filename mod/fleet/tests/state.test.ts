@@ -69,6 +69,17 @@ test('AskUserQuestion: needs/ask while open, working once answered', async ($, o
   ])
 })
 
+test('AskUserQuestion: the question rides on stdin, the payload shape (#1951)', async ($, on) => {
+  const { runs } = engine(on)
+  await $.session.start(START)
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: '演练放在 m5 还是只在 m4？' }] } as never)
+  const ask = runs.find(r => r.argv[0] === 'sh' && r.argv.at(-1) === 'ask')
+  expect(JSON.parse(ask?.stdin ?? '{}')).toEqual({
+    tool_name: 'AskUserQuestion',
+    tool_input: { questions: [{ question: '演练放在 m5 还是只在 m4？' }] },
+  })
+})
+
 test('ScheduleWakeup / CronCreate / CronDelete → fleet_loop_mark.py hook with the PostToolUse payload', async ($, on) => {
   const { runs } = engine(on)
   await $.session.start(START)

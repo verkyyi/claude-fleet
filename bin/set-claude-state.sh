@@ -35,7 +35,9 @@ case "${CLAUDE_CODE_ENTRYPOINT:-cli}" in cli) : ;; *) exit 0 ;; esac
 via=''
 if [ "${1:-}" = --via ]; then
   via=${2:-}; shift; [ $# -gt 0 ] && shift
-  [ "$via" = mod ] && exec </dev/null
+  # …except `ask`, whose stdin is the call in the payload's shape (issue #1951):
+  # the question's words, read once by the `ask` branch, never waited on.
+  [ "$via" = mod ] && [ "${1:-}" != ask ] && exec </dev/null
 fi
 
 handoff_prev=''   # prior @claude_state, captured in the done branch (issue #330)
@@ -81,6 +83,14 @@ wprev=''          # the @claude_wait already on the window (cleared when it laps
 # @claude_state (bin/classify-sessions.sh, the spinner's stale-working demote)
 # clear it for the same reason. Readers consult it only while the state is `needs`.
 sub=''
+# …and WHAT it asks (issue #1951): @claude_needs_detail, the question's own words
+# (bin/fleet_needs_detail.py — an AskUserQuestion's first question, a permission's
+# `Bash: git push`), written in the SAME tmux call as @claude_needs, so it lives and
+# dies with the subtype. fleet-alerts.sh puts it in the needs row's `detail`, which
+# the client's bar and notification show. Only a needs path pays the python.
+detail=''
+_needs_detail() { _db=$(cd "$(dirname "$0")" 2>/dev/null && pwd) && [ -f "$_db/fleet_needs_detail.py" ] \
+  && python3 "$_db/fleet_needs_detail.py" "$@" 2>/dev/null; }
 
 case "${1:-}" in
   needs)
@@ -131,6 +141,7 @@ case "${1:-}" in
               AskUserQuestion) sub="ask" ;;
             esac
           fi
+          detail=$(_needs_detail transcript "$_tp")
         fi
       fi
     fi
@@ -187,16 +198,20 @@ case "${1:-}" in
     # tool_name. PostToolUse (arg 'working') fires when the user answers -> working.
     sem="working"
     if [ ! -t 0 ]; then
-      case "$(cat 2>/dev/null)" in
+      _payload=$(cat 2>/dev/null)
+      case "$_payload" in
         *'"tool_name":"AskUserQuestion"'*|*'"tool_name": "AskUserQuestion"'*)
-          sem="needs"; sub="ask"; set -- needs bell ;;
+          sem="needs"; sub="ask"; set -- needs bell
+          detail=$(printf '%s' "$_payload" | _needs_detail payload) ;;
       esac
     fi
     ;;
   ask)
     # An open AskUserQuestion, said by the mod (issue #1336) at the call itself —
-    # the same needs/ask the PreToolUse `busy` leg derives from its payload.
+    # the same needs/ask the PreToolUse `busy` leg derives from its payload. The
+    # mod hands the call as that payload's shape on stdin (issue #1951) for its words.
     sem="needs"; sub="ask"
+    [ ! -t 0 ] && detail=$(_needs_detail payload)
     ;;
   *)     sem="working" ;;   # PostToolUse / prompt submitted
 esac
@@ -255,7 +270,8 @@ if [ "$sem" != "leave" ]; then
   # the `needs` subtype, ALWAYS written beside the state it qualifies (issue #640):
   # a working/done write clears it, so no reader can ever pair a fresh state with a
   # stale reason.
-  tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" 2>/dev/null
+  tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" \; \
+       set-window-option -t "$TMUX_PANE" @claude_needs_detail "$detail" 2>/dev/null
   # …and WHY a Stop wrote `looping` (issue #1370) beside it; only a Stop decides it,
   # and a window that waits on nothing carries no option at all.
   if [ "$sem" = 'done' ]; then

@@ -13,6 +13,11 @@
 #                    limits cache in hub mode, else the window's own @rl5h/@rl7d;
 #                    only the window(s) past the line are drawn
 #   ⚠ GitHub 受限    the shared gh-limit marker says a bucket is limited (#989)
+#   ! N 等你 ⌘J      sessions waiting on you (fleet-alerts.sh's `needs` rows — on
+#                    the client, every machine's, issue #1951), red; a tap on it
+#                    is ⌘J (`#[range=user|needs]`, conf/tmux-shell.conf). Narrow:
+#                    `! N`. A NEW one also gets its macOS notification here
+#                    (fleet_alerts_notify — once per wait, FLEET_NOTIFY=0 off)
 #   ✖ N  ▲ N         alarms / warnings (bin/fleet-alerts.sh), each only when ≠ 0;
 #                    负载 / 内存 / 盘 in the red are warnings there now, not chips
 #   ○ 入口 Nm        hub mode, and the hub has been silent past
@@ -261,7 +266,7 @@ status_account() {
 SEGS=''
 status_seg() { [ -n "$1" ] && SEGS="${SEGS:+$SEGS  }$1"; return 0; }
 
-m_ctr='' gh_seg=''
+m_ctr='' gh_seg='' needs_seg=''
 # The right pane's title (`part=title`, issue #1759) draws the machine's words
 # alone: none of the bar's own readings below run for it.
 if [ "$STATUS_PART" != title ]; then
@@ -281,6 +286,15 @@ status_ctr_cached
 . "$BIN/fleet-alerts.sh"
 fleet_alerts_refresh --kick
 fleet_alerts_bar
+# Who waits on you (issue #1951, EPIC #1949 C2): the needs count fleet_alerts_bar
+# just read (FA_NEEDS), and the notification for a new one — the client only.
+needs_seg=''
+if [ "${FA_NEEDS:-0}" -gt 0 ]; then
+    _nn=$FA_NEEDS; [ "$_nn" -gt 99 ] && _nn=99
+    if [ "$STATUS_NARROW" = 1 ]; then needs_seg="#[range=user|needs]${RED}#[bold]! ${_nn}#[nobold]#[norange]"
+    else needs_seg="#[range=user|needs]${RED}#[bold]! ${_nn} 等你 ⌘J#[nobold]#[norange]"; fi
+fi
+fleet_alerts_notify
 
 # --- GitHub rate limit (issue #989, EPIC #1262 C2): `⚠ GitHub 受限至 HH:MM` while
 # the shared gh-limit marker (bin/fleet-gh-lib.sh, written by whichever caller saw
@@ -394,6 +408,7 @@ status_seg "$CU_SEG"
 status_seg "$MACH_SEG"
 status_seg "$_sq"
 status_seg "$gh_seg"
+status_seg "$needs_seg"
 status_seg "$FA_BAR"
 status_seg "$HUB_SEG"
 [ -n "$m_ctr" ] && status_seg "${BLUE}${FLEET_STATUS_CONTAINER} ${m_ctr}"

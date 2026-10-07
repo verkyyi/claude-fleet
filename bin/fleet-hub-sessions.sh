@@ -613,7 +613,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -759,6 +759,23 @@ for f in local:
     if client and via == "hub":
         e2e_log(path, rows)
     write(path, "".join(out))
+    # Who is waiting on you, and what they ask (issue #1951): `needs_<sess>` beside
+    # the cache, one line per session in `needs` (or `failed`) —
+    # `<worker_id> US <#issue|name> US <needs|failed> US <machine> US <question>` —
+    # which fleet-alerts.sh turns into the client's needs rows (the bar's
+    # 「! n 等你」, the notification). The question is the node's
+    # @claude_needs_detail, carried as the worker's `detail`.
+    need = []
+    for r in rows:
+        if r["local"] and r["local"] != f["sess"]:
+            continue
+        st = clean(r["state"])
+        if st not in ("needs", "failed"):
+            continue
+        subj = "#" + str(r["issue"]) if r["issue"] else r["name"]
+        need.append("\x1f".join(clean(v) for v in (r["wid"], subj, clean(r["needs"]) if st == "needs" else "failed",
+                                                   r["node"], r["detail"][:120])) + "\n")
+    write(os.path.join(gdir, "needs_" + f["sess"]), "".join(need))
 PY
 }
 
