@@ -248,6 +248,20 @@ Do not install from memory: read the doc and work from it.
   one `drill_<id>` (the test reds on either side missing); a way fixed in another
   repo is `登记：<ticket>`, listed, never drilled. Found a new one: add the row
   + drill, watch it go red, then fix.
+- **A red base branch is ONE issue, filed through `--breakage`** (issue #2078,
+  EPIC #2074 C7). `fleet-issue-file.sh --breakage` (the `file_issue` tool's
+  `breakage: true`) fingerprints the breakage first — `fleet_breakage_probe`
+  (`bin/fleet-lib.sh`): the commit the red streak started at (not the head), the
+  first failed check, its first error line sans `:<digits>` — REST only, so it
+  answers under a spent GraphQL budget. One issue per fingerprint: a `<key>/`
+  lock under `$FLEET_CONF_DIR/global/breakage` (2 min) holds the same-second
+  filers on one machine, the `<!-- fleet:breakage key=… -->` marker in the body
+  is what another machine finds (`fleet_breakage_find`, the REST open-issue list,
+  never `gh search` — its index lags). A later sighting gets a record-only
+  「同一故障，来自 …」 comment on the first issue, its URL on stdout and **exit 5**;
+  the caller waits for that issue (`await`), never files or spawns a second. An
+  ordinary filing runs none of it, byte for byte. `docs/BREAK-IT.md`
+  `breakage-three-filers` + `fleet-issue-file-selftest.sh` O–R pin it.
 - **A session says when it may be closed: `@reap_policy`** (issue #1902). Chosen
   at spawn (`--reap` on both spawners, the `spawn` tool, the client's new-session
   question 「什么时候回收？」 → hub `reap` → the node's `worker_start`), changed by

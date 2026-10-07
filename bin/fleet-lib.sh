@@ -6421,6 +6421,109 @@ fleet_from_marker() {
   printf '%s' "$mk"
 }
 
+# --- breakage fingerprint: one issue per broken base branch (issue #2078) ------
+# On 2026-10-07 04:26Z master went red on one duplicate route and three sessions
+# filed three issues (#2039 #2040 #2041) and three fixes inside 16 seconds. The
+# fingerprint names the BREAKAGE, not the observer: the commit the red streak
+# started at (not the head — a merge landing while red must not mint a new one),
+# the first check that failed (by completion time, so a later observer who also
+# sees the second red check agrees), and the first error line of that job's log
+# with line numbers stripped (a half-fix that moves the lines is the same
+# breakage). REST only — `gh api` / `gh run view` — so it answers under a spent
+# GraphQL budget, the state a red master tends to come with.
+#
+# fleet_breakage_probe <repo> [<branch>] → one line `key<TAB>sha<TAB>check<TAB>line`,
+#   rc 0 · 1 the branch head has no failed check (not red) · 2 gh could not answer.
+#   No <branch> ⇒ the repo's default branch. key = `<sha7>-<sha12 of sha·check·line>`.
+# fleet_breakage_key <repo> [<branch>] → the key alone (same rc).
+# fleet_breakage_marker <key> → the invisible body marker bin/fleet-issue-file.sh
+#   stamps on the issue it files and fleet_breakage_find greps for.
+# fleet_breakage_find <repo> <key> → the URL of the newest OPEN issue whose body
+#   carries the marker (rc 1 = none). The REST issue list, NOT `gh search issues`:
+#   the search index lags a fresh issue by seconds to minutes — exactly the window
+#   this exists to close — while the list is consistent at once. One page, newest
+#   first: the issue a breakage is about was filed minutes ago.
+# fleet_breakage_lock_dir → $FLEET_CONF_DIR/global/breakage — the filer's per-key
+#   lock (`<key>/`, mkdir-atomic; `<key>/issue` = the number once filed) that
+#   serializes the same-second filers on ONE machine; across machines the marker
+#   is the dedup (a few seconds' window — two issues at worst, never three).
+fleet_breakage_marker()   { printf '<!-- fleet:breakage key=%s -->' "$1"; }
+fleet_breakage_lock_dir() { printf '%s/global/breakage' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; }
+
+# fleet_breakage_norm_line — stdin: a failed job's log (`gh run view --log-failed`:
+# `<job>\t<step>\t<ISO time> <text>`) → the first line that smells like an error
+# (else the first non-empty), text only, ANSI and ##[group] furniture dropped,
+# every `:<digits>` (line, column, port, a clock) stripped, whitespace folded, at
+# most 160 chars.
+fleet_breakage_norm_line() {
+  local esc; esc=$(printf '\033')
+  LC_ALL=C sed -e 's/^[^	]*	[^	]*	//' -e 's/^[0-9][0-9-]*T[0-9:.]*Z *//' -e "s/$esc\\[[0-9;]*[A-Za-z]//g" \
+    | grep -v '^##\[' | grep . | awk '
+        tolower($0) ~ /error|fail|panic|fatal|exception|duplicate|undefined|cannot|not found|exit code|assert/ { print; found = 1; exit }
+        !first { first = $0 }
+        END { if (!found && first != "") print first }' \
+    | sed -e 's/:[0-9][0-9]*//g' -e 's/[[:space:]][[:space:]]*/ /g' -e 's/^ //' -e 's/ $//' \
+    | cut -c1-160
+}
+
+fleet_breakage_probe() {
+  local repo="$1" branch="${2:-}" owner name head rows first cid cname curl ctitle rid='' wid='' sha line key streak s c
+  owner="${repo%%/*}"; name="${repo#*/}"
+  [ -n "$branch" ] || branch=$(gh api "repos/$owner/$name" --jq .default_branch 2>/dev/null)
+  [ -n "$branch" ] || branch=master
+  head=$(gh api "repos/$owner/$name/commits/$branch" --jq .sha 2>/dev/null) || return 2
+  [ -n "$head" ] || return 2
+  rows=$(gh api "repos/$owner/$name/commits/$head/check-runs?per_page=100" \
+           --jq '[.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled" or .conclusion == "action_required")]
+                 | sort_by(.completed_at // "") | .[] | "\(.id)\t\(.name)\t\(.details_url // "")\t\(.output.title // "")"' 2>/dev/null) || return 2
+  first=$(printf '%s\n' "$rows" | grep . | head -1)
+  [ -n "$first" ] || return 1
+  IFS=$'\t' read -r cid cname curl ctitle <<EOF
+$first
+EOF
+  # The commit the red streak started at: this check's workflow, its completed
+  # runs on the branch newest first, back to the last success. Fallback: the head.
+  sha="$head"
+  case "$curl" in */actions/runs/*) rid=${curl##*/actions/runs/}; rid=${rid%%/*} ;; esac
+  case "$rid" in ''|*[!0-9]*) rid='' ;; esac
+  [ -n "$rid" ] && wid=$(gh api "repos/$owner/$name/actions/runs/$rid" --jq .workflow_id 2>/dev/null)
+  case "$wid" in ''|*[!0-9]*) wid='' ;; esac
+  if [ -n "$wid" ]; then
+    streak=$(gh api "repos/$owner/$name/actions/workflows/$wid/runs?branch=$branch&per_page=50&status=completed" \
+               --jq '.workflow_runs[] | "\(.head_sha)\t\(.conclusion)"' 2>/dev/null)
+    while IFS=$'\t' read -r s c; do
+      [ -n "$s" ] || continue
+      [ "$c" = success ] && break
+      sha="$s"
+    done <<EOF
+$streak
+EOF
+  fi
+  line=''
+  case "$cid" in ''|*[!0-9]*) : ;; *) line=$(gh run view --job "$cid" --log-failed -R "$repo" 2>/dev/null | fleet_breakage_norm_line) ;; esac
+  [ -n "$line" ] || line=$(printf '%s\n' "$ctitle" | fleet_breakage_norm_line)
+  key="$(printf '%.7s' "$sha")-$(printf '%s\t%s\t%s' "$sha" "$cname" "$line" | fleet_sha12)"
+  printf '%s\t%s\t%s\t%s\n' "$key" "$sha" "$cname" "$line"
+}
+
+fleet_breakage_key() {
+  local out rc=0
+  out=$(fleet_breakage_probe "$@") || rc=$?
+  [ "$rc" = 0 ] || return "$rc"
+  printf '%s\n' "${out%%	*}"
+}
+
+fleet_breakage_find() {
+  local repo="$1" mk owner name rows n
+  mk=$(fleet_breakage_marker "$2")
+  owner="${repo%%/*}"; name="${repo#*/}"
+  rows=$(gh api "repos/$owner/$name/issues?state=open&per_page=100&sort=created&direction=desc" \
+           --jq '.[] | select(.pull_request == null) | "\(.number)\t\(.body // "" | gsub("[\r\n]"; " "))"' 2>/dev/null) || return 1
+  n=$(printf '%s\n' "$rows" | grep -F -- "$mk" | head -1 | cut -f1)
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  printf 'https://github.com/%s/issues/%s\n' "$repo" "$n"
+}
+
 # --- fleet label taxonomy: the fixed, curated set (issue #333) -----------------
 # The ONE canonical label taxonomy for a fleet repo — the curated labels this
 # repo already uses, NOT a parallel `type:*` namespace. Two consumers share this

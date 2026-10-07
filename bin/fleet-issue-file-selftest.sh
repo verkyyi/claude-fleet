@@ -26,6 +26,19 @@
 #   L. unset FLEET_DEFAULT_MILESTONE: unregressed — no ensure, no --milestone.
 #   M. ensure-failure is BEST-EFFORT (issue #297): the milestone can't be created
 #      and isn't present, so the issue still FILES (exit 0) WITHOUT a --milestone.
+#   O. one issue per breakage (issue #2078): three concurrent --breakage-key K
+#      filers → ONE `gh issue create` (its body carries `<!-- fleet:breakage
+#      key=K -->`), the other two exit 5 with that issue's URL and leave one
+#      「同一故障」 comment each on it (no spawn, no bind); a lock gone + the marker
+#      in an open issue (another machine) is found by fleet_breakage_find → 5.
+#   P. a different key files its own issue; a stale lock (older than
+#      FLEET_BREAKAGE_LOCK_SECS) is nobody's.
+#   Q. the degenerate: no --breakage ⇒ no lock dir, no open-issue list, no
+#      check-run read — the argv and body are what they were.
+#   R. fleet_breakage_probe: the key is the red streak's FIRST commit (not the
+#      head), the first failed check by completion time, and the error line sans
+#      line numbers — two logs that differ only in `:88:2:` vs `:91:4:` give one
+#      key; a different error line gives another; a green head is rc 1.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -90,8 +103,25 @@ case "$1" in
       while [ "$#" -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
       printf '%s' "$b" > "$BODY"
       [ "${GH_CREATE_FAIL:-0}" = 1 ] && exit 1
+      # BRK_STORE (test O–Q): a store of filed issues, numbered up, with a pause so
+      # concurrent filers all reach the create before any number exists.
+      if [ -n "${BRK_STORE:-}" ]; then
+        sleep 0.3; n=$(( $(ls "$BRK_STORE"/issue-* 2>/dev/null | wc -l) + 201 ))
+        printf '%s' "$b" > "$BRK_STORE/issue-$n"; printf 'https://github.com/acme/widgets/issues/%s\n' "$n"; exit 0
+      fi
       printf 'https://github.com/acme/widgets/issues/%s\n' "${NEW_NUM:-777}"
+    elif [ "$2" = comment ]; then
+      printf '%s\n' "$*" >> "$GH_LOG"
+      shift 2; n="$1"; b=''
+      while [ "$#" -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
+      [ -n "${BRK_STORE:-}" ] && { printf '%s' "$b" | tr '\n' ' ' >> "$BRK_STORE/comments-$n"; printf '\n' >> "$BRK_STORE/comments-$n"; }
+      printf 'https://github.com/acme/widgets/issues/%s#issuecomment-1\n' "$n"
     fi
+    ;;
+  run)
+    # `gh run view --job <id> --log-failed`: the failed job's log (test R).
+    printf '%s\n' "$*" >> "$GH_LOG"
+    [ -n "${BRK_LOG:-}" ] && cat "$BRK_LOG"
     ;;
   api)
     printf 'api %s\n' "$*" >> "$GH_LOG"
@@ -107,6 +137,18 @@ case "$1" in
       fi
       exit 0
     fi
+    # --- the breakage probe's REST reads (tests O–R), answered post-jq the way the
+    # lib's --jq programs shape them; the open-issue list comes from BRK_STORE.
+    p=''; for a in "$@"; do case "$a" in repos/*) p="$a";; esac; done
+    case "$p" in
+      repos/acme/widgets)                    echo main; exit 0 ;;
+      repos/acme/widgets/commits/main)       echo "${BRK_HEAD:-}"; exit 0 ;;
+      */check-runs*)                         [ "${BRK_GREEN:-0}" = 1 ] || printf '%s\n' "${BRK_CHECKS:-}"; exit 0 ;;
+      */actions/runs/9001)                   echo 77; exit 0 ;;
+      */actions/workflows/77/runs*)          printf '%s\n' "${BRK_STREAK:-}"; exit 0 ;;
+      repos/acme/widgets/issues\?*)          for f in "${BRK_STORE:-/nonexistent}"/issue-*; do [ -e "$f" ] || continue
+                                               printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done; exit 0 ;;
+    esac
     case "$2" in
       repos/*/issues/*) case "$2" in */sub_issues) : ;; *) echo "${CHILD_ID:-999888}" ;; esac ;;
     esac
@@ -282,5 +324,116 @@ run_fif --title "Both" --bind --spawn
 grep -q 'issue create' "$GH_LOG"       && fail "N3 a usage error must not file" "$(cat "$GH_LOG")"
 ok "N3 --bind + --spawn is rejected up front (2), nothing filed"
 
-printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn · bind)\n' "$pass"
+# ============================ O: one issue per breakage (issue #2078) =======
+# Three filers of one fingerprint at once: one create, two × exit 5 with that
+# issue's URL, two 「同一故障」 comments on it, no spawn.
+BRK="$WORK/brk"; mkdir -p "$BRK"
+# run_brk <outfile-suffix> <args…> — like run_fif but with the breakage store and
+# a per-call stdout/stderr/rc so three can run at once.
+run_brk() {
+  local sfx="$1"; shift
+  PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" SPAWN_LOG="$SPAWN_LOG" BIND_LOG="$BIND_LOG" BODY="$WORK/body-$sfx" \
+  FLEET_REPO="acme/widgets" FLEET_CONF_DIR="$WORK/conf" BRK_STORE="$BRK" \
+    bash "$WORK/bin/fleet-issue-file.sh" "$@" >"$WORK/out-$sfx" 2>"$WORK/err-$sfx"
+  echo $? > "$WORK/rc-$sfx"
+}
+: > "$GH_LOG"; : > "$SPAWN_LOG"; : > "$BIND_LOG"
+for i in 1 2 3; do run_brk "o$i" --title "master 红" --breakage-key k-same --from "w$i" --spawn & done; wait
+[ "$(ls "$BRK"/issue-* | wc -l | tr -d ' ')" = 1 ] || fail "O three filers of one key must create ONE issue" "$(cat "$WORK"/err-o? 2>/dev/null)"
+n0=$(ls "$BRK"/issue-*); n0=${n0##*-}
+grep -q '<!-- fleet:breakage key=k-same -->' "$BRK/issue-$n0" || fail "O the filed body must carry the fleet:breakage marker" "$(cat "$BRK/issue-$n0")"
+grep -q '<!-- fleet:from role=w' "$BRK/issue-$n0"            || fail "O the filed body must still carry the fleet:from marker" "$(cat "$BRK/issue-$n0")"
+zeros=0; fives=0
+for i in 1 2 3; do
+  case "$(cat "$WORK/rc-o$i")" in
+    0) zeros=$((zeros+1)); grep -qx "https://github.com/acme/widgets/issues/$n0" "$WORK/out-o$i" || fail "O the first filer must print the new URL" "$(cat "$WORK/out-o$i")" ;;
+    5) fives=$((fives+1)); grep -qx "https://github.com/acme/widgets/issues/$n0" "$WORK/out-o$i" || fail "O a later filer must print the FIRST issue's URL" "$(cat "$WORK/out-o$i" "$WORK/err-o$i")"
+       grep -q 'already has an open issue' "$WORK/err-o$i" || fail "O exit 5 must say so on stderr" "$(cat "$WORK/err-o$i")" ;;
+    *) fail "O filer $i exited $(cat "$WORK/rc-o$i")" "$(cat "$WORK/err-o$i")" ;;
+  esac
+done
+[ "$zeros" = 1 ] && [ "$fives" = 2 ] || fail "O want 1 × exit 0 and 2 × exit 5, got $zeros / $fives"
+[ "$(grep -c '同一故障，来自 w' "$BRK/comments-$n0" 2>/dev/null)" = 2 ] || fail "O the first issue must get exactly 2 「同一故障，来自 …」 comments" "$(cat "$BRK/comments-$n0" 2>/dev/null)"
+grep -q 'fleet:no-relay' "$BRK/comments-$n0"  || fail "O the 「同一故障」 comment must be record-only (no-relay)" "$(cat "$BRK/comments-$n0")"
+[ "$(grep -c . "$SPAWN_LOG")" = 1 ]           || fail "O only the first filer may spawn (want 1 spawn)" "$(cat "$SPAWN_LOG")"
+[ -s "$WORK/conf/global/breakage/k-same/issue" ] || fail "O the lock must record the number for the same-second filers"
+ok "O three concurrent filers of one breakage: 1 issue, 2 × exit 5 + URL, 2 comments, 1 spawn"
+
+# The lock gone (another machine, or two minutes on): the marker in an OPEN
+# issue is found over the REST list, same number, exit 5, no second create.
+rm -rf "$WORK/conf/global/breakage"
+run_brk o4 --title "又红了" --breakage-key k-same --from w4
+[ "$(cat "$WORK/rc-o4")" = 5 ]                                        || fail "O2 a sighting with no lock must still dedup on the marker (exit 5)" "$(cat "$WORK/err-o4")"
+grep -qx "https://github.com/acme/widgets/issues/$n0" "$WORK/out-o4"  || fail "O2 it must print the first issue's URL" "$(cat "$WORK/out-o4")"
+[ "$(ls "$BRK"/issue-* | wc -l | tr -d ' ')" = 1 ]                    || fail "O2 no second issue"
+grep -q 'issues?state=open' "$GH_LOG"                                 || fail "O2 the dedup must read the REST open-issue list" "$(cat "$GH_LOG")"
+ok "O2 lock gone: the marker in an open issue is found over REST → exit 5, same number"
+
+# ============================ P: another key files; a stale lock is nobody's ===
+run_brk p1 --title "另一个故障" --breakage-key k-other --from w5
+[ "$(cat "$WORK/rc-p1")" = 0 ]                     || fail "P a different key must file its own issue" "$(cat "$WORK/err-p1")"
+[ "$(ls "$BRK"/issue-* | wc -l | tr -d ' ')" = 2 ] || fail "P a different key must create a second issue"
+# k-stale: a lock with no number, older than the TTL — the holder died. It is
+# dropped and the filer goes on (here: nothing open carries k-stale → it files).
+mkdir -p "$WORK/conf/global/breakage/k-stale"
+touch -t 202001010000 "$WORK/conf/global/breakage/k-stale"
+FLEET_BREAKAGE_WAIT=1 run_brk p2 --title "旧锁" --breakage-key k-stale --from w6
+[ "$(cat "$WORK/rc-p2")" = 0 ]                     || fail "P2 a stale lock must not block a filing" "$(cat "$WORK/err-p2")"
+[ "$(ls "$BRK"/issue-* | wc -l | tr -d ' ')" = 3 ] || fail "P2 the filing behind a stale lock must create"
+# A fresh lock with no number and a holder that never answers: no second filing
+# (exit 5, nothing printed) — bounded by FLEET_BREAKAGE_WAIT.
+mkdir -p "$WORK/conf/global/breakage/k-busy"
+FLEET_BREAKAGE_WAIT=1 run_brk p3 --title "正在开" --breakage-key k-busy --from w7
+[ "$(cat "$WORK/rc-p3")" = 5 ]                     || fail "P3 a live lock with no number yet must refuse a second filing (5)" "$(cat "$WORK/err-p3")"
+[ "$(ls "$BRK"/issue-* | wc -l | tr -d ' ')" = 3 ] || fail "P3 nothing filed behind a live lock"
+ok "P another key files; a stale lock is dropped; a live lock without a number refuses (5)"
+
+# ============================ Q: the degenerate — no --breakage ================
+rm -rf "$WORK/conf/global/breakage"
+run_fif --title "普通单"
+[ "$RC" -eq 0 ]                               || fail "Q an ordinary filing must still succeed" "$(cat "$WORK/err")"
+grep -q 'issues?state=open\|check-runs\|commits/' "$GH_LOG" && fail "Q an ordinary filing must read no breakage path" "$(cat "$GH_LOG")"
+grep -q 'fleet:breakage' "$BODY"                && fail "Q an ordinary filing's body carries no breakage marker" "$(cat "$BODY")"
+[ -e "$WORK/conf/global/breakage" ]             && fail "Q an ordinary filing creates no lock dir"
+ok "Q no --breakage: no probe, no list, no lock, no marker — unregressed"
+
+# ============================ R: the fingerprint itself =======================
+# Head aaaa…, red since bbbb… (cccc… was the last green); one failed check whose
+# log's first error line names roles.go:88:2.
+printf 'selftests / shard 3\tRun tests\t2026-10-07T04:20:11.1234567Z ##[group]Run bash bin/run-selftests.sh\nselftests / shard 3\tRun tests\t2026-10-07T04:20:12.0000000Z FAIL  lint: internal/api/roles.go:88:2: duplicate key "/v1/admin/drill" in map literal\n' > "$WORK/log-a"
+sed 's/:88:2:/:91:4:/' "$WORK/log-a" > "$WORK/log-a2"
+printf 'selftests / shard 3\tRun tests\t2026-10-07T04:30:00.0000000Z FAIL  bash32-array-selftest: bin/x.sh:12: bare array on an empty array\n' > "$WORK/log-b"
+probe() {  # probe <log> [VAR=val…] → the probe's line
+  local lg="$1"; shift
+  env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_HEAD=aaaa111aaaa111 BRK_LOG="$lg" \
+      BRK_CHECKS="$(printf '501\tselftests / shard 3\thttps://github.com/acme/widgets/actions/runs/9001/job/501\tProcess completed with exit code 1.')" \
+      BRK_STREAK="$(printf 'aaaa111aaaa111\tfailure\nbbbb222bbbb222\tfailure\ncccc333cccc333\tsuccess')" "$@" \
+      bash -c '. "$1/fleet-lib.sh"; fleet_breakage_probe acme/widgets' _ "$WORK/bin"
+}
+: > "$GH_LOG"
+pa=$(probe "$WORK/log-a");  rca=$?
+pa2=$(probe "$WORK/log-a2")
+pb=$(probe "$WORK/log-b")
+[ "$rca" = 0 ] && [ -n "$pa" ]                       || fail "R the probe must answer on a red head" "$(cat "$GH_LOG")"
+ka=${pa%%	*}; ka2=${pa2%%	*}; kb=${pb%%	*}
+case "$ka" in bbbb222-*) ;; *) fail "R the key must start with the red streak's FIRST commit (bbbb222), got [$ka]" "$pa" ;; esac
+[ "$ka" = "$ka2" ]                                   || fail "R two logs that differ only in line numbers must give one key" "$pa"$'\n'"$pa2"
+[ "$ka" != "$kb" ]                                   || fail "R a different error line must give a different key" "$pa"$'\n'"$pb"
+printf '%s' "$pa" | cut -f3 | grep -qx 'selftests / shard 3' || fail "R field 3 is the failed check's name" "$pa"
+printf '%s' "$pa" | cut -f4 | grep -q 'roles.go: duplicate key' || fail "R field 4 is the error line with :line:col stripped" "$pa"
+printf '%s' "$pa" | cut -f4 | grep -q ':88'          && fail "R the line number must be gone" "$pa"
+grep -q 'run view --job 501 --log-failed' "$GH_LOG"  || fail "R the log is read with gh run view --job <check-run id> --log-failed" "$(cat "$GH_LOG")"
+grep -q 'graphql' "$GH_LOG"                          && fail "R the probe must be REST only" "$(cat "$GH_LOG")"
+# a green head: rc 1, no key
+pg=$(probe "$WORK/log-a" BRK_GREEN=1); rcg=$?
+[ "$rcg" = 1 ] && [ -z "$pg" ]                       || fail "R a head with no failed check is rc 1 (not red)" "rc=$rcg [$pg]"
+# the key alone
+kk=$(env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_HEAD=aaaa111aaaa111 BRK_LOG="$WORK/log-a" \
+      BRK_CHECKS="$(printf '501\tselftests / shard 3\thttps://github.com/acme/widgets/actions/runs/9001/job/501\tx')" \
+      BRK_STREAK="$(printf 'aaaa111aaaa111\tfailure\nbbbb222bbbb222\tfailure\ncccc333cccc333\tsuccess')" \
+      bash -c '. "$1/fleet-lib.sh"; fleet_breakage_key acme/widgets' _ "$WORK/bin")
+[ "$kk" = "$ka" ]                                    || fail "R fleet_breakage_key is the probe's first field" "[$kk] vs [$ka]"
+ok "R fingerprint = red streak's first commit + first failed check + error line sans line numbers; green head rc 1"
+
+printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn · bind · breakage)\n' "$pass"
 exit 0

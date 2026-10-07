@@ -15,6 +15,19 @@
 #      repo out of band (fixed seed, no minting). The check is deterministic +
 #      offline (no gh read). No labels requested → no validation, so the
 #      label-free ⌃n / new-session paths add nothing here.
+#   1b. --breakage (issue #2078): the base branch is RED and this issue is its fix.
+#      Fingerprint the breakage first — fleet_breakage_probe: the commit the red
+#      streak started at + the first failed check + its first error line, sans
+#      line numbers — and file ONE issue per fingerprint: a `<key>/` lock under
+#      $FLEET_CONF_DIR/global/breakage serializes the same-second filers on this
+#      machine (2 minutes, FLEET_BREAKAGE_LOCK_SECS), the `<!-- fleet:breakage
+#      key=… -->` marker in the body is what a filer on another machine finds
+#      (fleet_breakage_find, the REST open-issue list). Found one ⇒ a record-only
+#      「同一故障，来自 …」 comment on it, its URL on stdout, exit 5, no spawn,
+#      no bind. On 2026-10-07 three sessions filed #2039 #2040 #2041 and three
+#      fixes inside 16 seconds for one duplicate route. --breakage-key K takes a
+#      key already computed (a selftest, a caller holding the probe's answer).
+#      A base that is not red files an ordinary issue and says so.
 #   2. STAMP the invisible `<!-- fleet:from role=… session=… issue=… -->`
 #      provenance marker into the body via the shared fleet_from_marker helper —
 #      the byte-identical marker bin/fleet-comment.sh puts on a comment (the
@@ -40,12 +53,14 @@
 # caller can parse the trailing #number; all diagnostics + refusals go to stderr.
 # Exit codes: 0 ok · 2 usage · 3 unknown label · 1 no-repo / create failure ·
 # 4 --spawn with no live parent (issue #1355; filed first when the spawn said it) — so a
-# caller records an honest FAIL rather than a false success.
+# caller records an honest FAIL rather than a false success ·
+# 5 --breakage: the breakage already has an open issue — its URL is on stdout, a
+# 「同一故障」 comment is on it, nothing was filed or spawned (issue #2078).
 #
 # Usage:
 #   fleet-issue-file.sh --title T [--body B] [--label L,...]… [--priority pN] \
 #                       [--parent N] [--from ROLE] [--milestone M] \
-#                       [--repo R] [--spawn | --bind]
+#                       [--repo R] [--spawn | --bind] [--breakage | --breakage-key K]
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -54,6 +69,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-gh-lib.sh"   # fleet_gh_write: every write below is queued (issue #1264)
 
 title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0 bind=0
+breakage=0 breakage_key='' bk_sha='' bk_check='' bk_line='' bk_lock='' bk_held=0
 labels=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -73,7 +89,9 @@ while [ "$#" -gt 0 ]; do
     --repo)      shift; repo="${1:-}" ;;
     --spawn)     spawn=1 ;;
     --bind)      bind=1 ;;
-    -h|--help)   sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --breakage)  breakage=1 ;;
+    --breakage-key) shift; breakage_key="${1:-}" ;;
+    -h|--help)   sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)         printf 'fleet-issue-file: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)           printf 'fleet-issue-file: unexpected argument %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -81,6 +99,10 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -z "$title" ] && { printf 'fleet-issue-file: --title is required\n' >&2; exit 2; }
+# A key is a lock directory's name and a marker token: one safe word.
+case "$breakage_key" in
+  ''|*[!A-Za-z0-9._-]*) [ -n "$breakage_key" ] && { printf 'fleet-issue-file: --breakage-key must be [A-Za-z0-9._-]+ (got %s)\n' "$breakage_key" >&2; exit 2; } ;;
+esac
 # --spawn starts a NEW worker; --bind makes the CALLER one. Asking for both is a
 # caller bug with no sane resolution, so refuse before filing anything.
 [ "$spawn" = 1 ] && [ "$bind" = 1 ] \
@@ -134,6 +156,78 @@ if [ "${#labels[@]}" -gt 0 ]; then
   fi
 fi
 
+# --- 1b. one issue per breakage (issue #2078) -----------------------------------
+# Only with --breakage / --breakage-key: an ordinary filing runs none of this —
+# no probe, no lock, no list read (the drill's degenerate leg pins it).
+if [ "$breakage" = 1 ] && [ -z "$breakage_key" ]; then
+  # The base branch: the window's repo overlay (FLEET_BASE_BRANCH), else the
+  # probe asks GitHub for the repo's default branch.
+  if [ -z "${FLEET_BASE_BRANCH:-}" ] && [ -n "$_fs" ]; then
+    fleet_load_repo_conf "$_fs" "$repo" 2>/dev/null
+  fi
+  _probe=$(fleet_breakage_probe "$repo" "${FLEET_BASE_BRANCH:-}"); _prc=$?
+  case "$_prc" in
+    0) IFS=$'\t' read -r breakage_key bk_sha bk_check bk_line <<EOF
+$_probe
+EOF
+       printf 'fleet-issue-file: breakage %s — %s @ %.7s: %s\n' "$breakage_key" "$bk_check" "$bk_sha" "$bk_line" >&2 ;;
+    1) printf 'fleet-issue-file: --breakage: %s has no failed check at its head — not red; filing an ordinary issue\n' "${FLEET_BASE_BRANCH:-the default branch}" >&2 ;;
+    *) printf 'fleet-issue-file: --breakage: gh could not read the checks of %s — filing without a fingerprint\n' "${FLEET_BASE_BRANCH:-the default branch}" >&2 ;;
+  esac
+fi
+bk_existing=''
+if [ -n "$breakage_key" ]; then
+  _bk_wait="${FLEET_BREAKAGE_WAIT:-30}"; _bk_ttl="${FLEET_BREAKAGE_LOCK_SECS:-120}"
+  case "$_bk_wait" in ''|*[!0-9]*) _bk_wait=30 ;; esac
+  case "$_bk_ttl" in ''|*[!0-9]*) _bk_ttl=120 ;; esac
+  bk_lock="$(fleet_breakage_lock_dir)/$breakage_key"
+  mkdir -p "${bk_lock%/*}" 2>/dev/null
+  # A lock older than the TTL is nobody's: drop it; GitHub (below) is the memory then.
+  if [ -d "$bk_lock" ]; then
+    _m=$(stat -c %Y "$bk_lock" 2>/dev/null || stat -f %m "$bk_lock" 2>/dev/null || echo 0)
+    [ $(( $(date +%s) - _m )) -gt "$_bk_ttl" ] && rm -rf "$bk_lock"
+  fi
+  if mkdir "$bk_lock" 2>/dev/null; then
+    bk_held=1
+  else
+    # Someone on this machine is filing this breakage right now: wait for its number.
+    _t=0
+    while [ ! -s "$bk_lock/issue" ] && [ -d "$bk_lock" ] && [ "$_t" -lt $((_bk_wait * 10)) ]; do sleep 0.1; _t=$((_t + 1)); done
+    if [ -s "$bk_lock/issue" ]; then
+      bk_existing="https://github.com/$repo/issues/$(tr -dc 0-9 < "$bk_lock/issue")"
+    elif mkdir "$bk_lock" 2>/dev/null; then
+      bk_held=1                                   # the holder gave up (its create failed): our turn
+    else
+      printf 'fleet-issue-file: another filing of breakage %s is in flight on this machine (%s) and gave no number in %ss — not filing a second one (exit 5)\n' "$breakage_key" "$bk_lock" "$_bk_wait" >&2
+      exit 5
+    fi
+  fi
+  if [ "$bk_held" = 1 ] && [ -z "$bk_existing" ]; then
+    # Another machine may have filed it: the marker in an open issue's body.
+    bk_existing=$(fleet_breakage_find "$repo" "$breakage_key") || bk_existing=''
+    [ -n "$bk_existing" ] && printf '%s\n' "${bk_existing##*/}" > "$bk_lock/issue"
+  fi
+  if [ -n "$bk_existing" ]; then
+    # 「我也碰到了」: a record-only comment (no-relay — the fixer's pane is not
+    # interrupted by it), who from, then the URL and exit 5. Never spawn / bind.
+    _role=$(fleet_from_role "$from")
+    _who=$(fleet_origin_key 2>/dev/null); [ -n "$_who" ] || _who=$(fleet_current_session 2>/dev/null)
+    # ${_who} braced: bash 3.2 under a C locale reads a following UTF-8 byte as
+    # part of the name (`_who（`: unbound variable).
+    _cb="同一故障，来自 ${_role}${_who:+（${_who}）}"$'\n\n'"$(fleet_from_marker "$_role" "$repo")"$'\n'"<!-- fleet:no-relay -->"
+    _cnum="${bk_existing##*/}"
+    if ! fleet_gh_write issue comment "$_cnum" --repo "$repo" --body "$_cb" >/dev/null 2>&1; then
+      _cf=$(mktemp "${TMPDIR:-/tmp}/fleet-bk-comment.XXXXXX") && printf '%s' "$_cb" > "$_cf" \
+        && fleet_gh_rest_comment "$repo" "$_cnum" "$_cf" >/dev/null 2>&1 \
+        || printf 'fleet-issue-file: could not comment on %s\n' "$bk_existing" >&2
+      rm -f "${_cf:-}"
+    fi
+    printf 'fleet-issue-file: breakage %s already has an open issue: %s — commented there, not filing (exit 5)\n' "$breakage_key" "$bk_existing" >&2
+    printf '%s\n' "$bk_existing"
+    exit 5
+  fi
+fi
+
 # --- 2. stamp the fleet:from provenance marker into the body -------------------
 # Invisible HTML comment, so the issue reads identically to the operator; it just
 # records which fleet actor filed it, from which session/issue.
@@ -143,6 +237,12 @@ if [ -n "$body" ]; then
   body="$body"$'\n\n'"$marker"
 else
   body="$marker"
+fi
+if [ -n "$breakage_key" ]; then
+  # What the operator reads to tell two breakages apart, then the marker.
+  _fp=''
+  [ -n "$bk_check" ] && _fp="故障指纹：\`$bk_check\` @ \`$(printf '%.7s' "$bk_sha")\`${bk_line:+ — $bk_line}"$'\n'
+  body="$body"$'\n\n'"$_fp$(fleet_breakage_marker "$breakage_key")"
 fi
 
 # --- 2b. default milestone: guarantee every filing gets one (issue #433) --------
@@ -182,10 +282,14 @@ if [ "${#labels[@]}" -gt 0 ]; then
   for _l in ${labels[@]+"${labels[@]}"}; do create_args+=(--label "$_l"); done
 fi
 url=$(fleet_gh_write issue create "${create_args[@]}" 2>/dev/null) \
-  || { printf 'fleet-issue-file: gh issue create failed in %s\n' "$repo" >&2; exit 1; }
-[ -z "$url" ] && { printf 'fleet-issue-file: gh issue create returned no URL\n' >&2; exit 1; }
+  || { printf 'fleet-issue-file: gh issue create failed in %s\n' "$repo" >&2
+       [ "$bk_held" = 1 ] && rm -rf "$bk_lock"   # a waiter may take the breakage over
+       exit 1; }
+[ -z "$url" ] && { printf 'fleet-issue-file: gh issue create returned no URL\n' >&2; [ "$bk_held" = 1 ] && rm -rf "$bk_lock"; exit 1; }
 printf '%s\n' "$url"                          # stdout = the URL (like gh), for the caller
 num="${url##*/}"; num="${num//[^0-9]/}"
+# The number is what the same-second filers on this machine are waiting for.
+[ "$bk_held" = 1 ] && [ -n "$num" ] && printf '%s\n' "$num" > "$bk_lock/issue"
 
 # --- 4. --parent: link as a sub-issue (best-effort) ----------------------------
 # The sub-issues API keys off the child's numeric DATABASE id (not its #number),

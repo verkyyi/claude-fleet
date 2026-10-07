@@ -300,6 +300,21 @@ override them):
        red, never `--admin`, never force-push the base. Notify the spawning session
        once of the red gate before fixing it: `mcp__fleet__report` with
        `state: failed`, `pr`, `summary: 'RED: CI failure or merge conflict; fixing it'`.
+
+       **Unless the red is the base branch's own** (issue #2078): the same check
+       is red on `master`'s head and your diff never touched what it names. That
+       is one breakage for the whole fleet, and on 2026-10-07 three workers filed
+       three issues and three fixes for one duplicate route inside 16 seconds.
+       Don't fix it in this worktree and don't file it by hand — file it ONCE
+       through `mcp__fleet__file_issue` with `breakage: true` (and `spawn: true`,
+       so the first sighting gets its one fixer): the filer fingerprints the
+       breakage (the commit it started at · the first failed check · its first
+       error line) and dedups on it — exit 0 = you were first, the fixer is
+       spawned; **exit 5 = someone already filed it**: the URL printed is that
+       issue, a 「同一故障，来自 …」 comment was left on it for you, nothing was
+       filed. Either way the next step is the same: **wait for that issue** —
+       `mcp__fleet__await` with its number — then re-read your own verdict. Never
+       a second issue, never a second fixer.
      - **`BLOCKED`** → branch protection (a required review) refuses the merge.
        That is a real gate, not a hedge — you can't and shouldn't force it: say so
        on the issue (blocked, below) and stop.
