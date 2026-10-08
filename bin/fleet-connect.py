@@ -750,14 +750,27 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     return run_ssh(m, route, login, hub, print_only, ssh_args, ssh_opts)
 
 
+def login_override(login):
+    """The login this connection is made as: FLEET_CONNECT_LOGIN when a caller
+    named one (claude-fleet#2430: fleet-remote-view.sh, for a session in another
+    of the person's logins on that machine — the certificate carries every one),
+    else the person's default from the hub."""
+    want = os.environ.get("FLEET_CONNECT_LOGIN") or ""
+    if want and re.fullmatch(r"[a-z_][a-z0-9_.-]{0,31}", want):
+        return want
+    return login
+
+
 def run_ssh(machine, route, login, hub, print_only, ssh_args, ssh_opts=()):
     alias = machine.get("alias") or machine.get("hostname") or "?"
+    login = login_override(login)
     cmd = ssh_command(machine, route, login, hub, ssh_opts) + list(ssh_args)
     rf = os.environ.get("FLEET_CONNECT_ROUTE_FILE")
     if rf and not print_only:
         try:
             with open(rf, "w") as f:
-                f.write(json.dumps({"machine": alias, "kind": route["kind"], "name": route["name"]}) + "\n")
+                f.write(json.dumps({"machine": alias, "kind": route["kind"], "name": route["name"],
+                                    "login": login or ""}) + "\n")
         except OSError:
             pass  # the pane then just does not know its route: no 「· 中转」, no upgrade
     if print_only:

@@ -246,6 +246,16 @@ if [ "$rc" = 0 ] && [ "$(hits routes_hits)" = "$before" ] && grep -q '秒前测�
   ok "fresh cache: re-checked tailnet with one handshake, no route-list fetch"
 else bad "cache reuse: rc=$rc hits $before→$(hits routes_hits) $(cat "$WORK/err3")"; fi
 
+# ── 3b — FLEET_CONNECT_LOGIN (issue #2430): the session's own login, cached or
+#         not, and the route file says which login the master was opened as ─
+out=$(FLEET_CONNECT_LOGIN=bob FLEET_CONNECT_ROUTE_FILE="$WORK/route3b" FLEET_HUB_TOKEN=tok-1 \
+      "$BIN/fleet" connect --hub "$HUB" --print 2>/dev/null); rc=$?
+if [ "$rc" = 0 ] && [[ "$out" == *" -l bob "* ]] && [[ "$out" != *" -l alice "* ]]; then
+  ok "FLEET_CONNECT_LOGIN=bob: ssh -l bob, not the default alice"
+else bad "login override: rc=$rc out=$out"; fi
+out=$(FLEET_CONNECT_LOGIN='bad login' FLEET_HUB_TOKEN=tok-1 "$BIN/fleet" connect --hub "$HUB" --print 2>/dev/null)
+[[ "$out" == *" -l alice "* ]] && ok "an invalid FLEET_CONNECT_LOGIN is ignored" || bad "invalid login override: $out"
+
 # ── 4 — close the remembered line: the next run moves to the relay ─────────
 echo '{"tailnet_up": false, "relay_ok": true}' > "$WORK/state"
 out=$(FLEET_HUB_TOKEN=tok-1 "$BIN/fleet" connect --hub "$HUB" --verbose --print 2>"$WORK/err4"); rc=$?

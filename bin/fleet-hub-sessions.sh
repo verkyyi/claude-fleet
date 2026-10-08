@@ -709,6 +709,31 @@ for lb in sorted(nodes):
     n = nodes[lb]
     head.append("\x1f".join(("#node", clean(lb), n["av"], "?" if n.get("unk") else str(n["n"]), str(n["seen"]), via)) + "\n")
 
+# Which login each fleet runs under (issue #2430): one person may hold two logins
+# on one machine, and a row opens over ssh AS ITS fleet's login. Every session's
+# fleet_id + os_user goes into the client's fleet → login map (fleet_fleet_login
+# in fleet-lib.sh owns the format: `<fleet UUID>\t<login>`, the last line wins),
+# rewritten whole so it never grows past the fleets the hub shows.
+def write_logins():
+    mp = os.path.join(gdir, "fleet_logins")
+    seen = {}
+    try:
+        for line in open(mp, encoding="utf-8"):
+            u, _, lg = line.rstrip("\n").partition("\t")
+            if u and lg:
+                seen[u] = lg
+    except OSError:
+        pass
+    new = dict(seen)
+    for s in sessions:
+        u, lg = s.get("fleet_id"), s.get("os_user")
+        if isinstance(u, str) and isinstance(lg, str) and re.fullmatch(r"[0-9A-Za-z-]{1,64}", u) \
+                and re.fullmatch(r"[a-z_][a-z0-9_.-]{0,31}", lg):
+            new[u] = lg
+    if new != seen:
+        write(mp, "".join("%s\t%s\n" % kv for kv in sorted(new.items())))
+write_logins()
+
 by_issue = {(r["repo"], str(r["issue"])): r["wid"] for r in rows if r["issue"]}
 parents = {}
 def parent_of(repo, issue):

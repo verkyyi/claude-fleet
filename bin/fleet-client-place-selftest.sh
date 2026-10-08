@@ -23,6 +23,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v python3 >/dev/null 2>&1 || { printf 'fleet-client-place selftest: python3 absent — SKIP\n'; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fcp-st.XXXXXX")" || exit 2
+mkdir -p "$WORK/tmp"; export TMPDIR="$WORK/tmp"   # the client cache (fleet_logins, #2430) stays in the sandbox
 export HOME="$WORK/home"; mkdir -p "$HOME/.config/claude-fleet"
 export XDG_CONFIG_HOME="$HOME/.config" FLEET_CONF_DIR="$HOME/.config/claude-fleet"
 export FLEET_CLIENT_DIR="$WORK/cl"; mkdir -p "$FLEET_CLIENT_DIR"
@@ -79,9 +80,13 @@ class H(BaseHTTPRequestHandler):
             return self.answer(200, {"line": "UNKNOWN m5 %s\tstill starting" % op, "exit": 6, "state": "pending", "operation_id": op})
         kind, issue = p.get("kind"), p.get("issue")
         if kind == "scratch":
-            return self.answer(200, {"line": "REMOTE m5 op1 done %s/scratch-3\tm4 excluded: load 1.00/core > 0.8" % UUID, "exit": 0, "state": "done"})
+            # an older hub (no `login`): the chosen candidate's os_user says it (#2430)
+            return self.answer(200, {"line": "REMOTE m5 op1 done %s/scratch-3\tm4 excluded: load 1.00/core > 0.8" % UUID, "exit": 0, "state": "done",
+                                     "placement": {"fleet_id": UUID, "candidates": [{"fleet_id": "other", "os_user": "verkyyi"},
+                                                                                   {"fleet_id": UUID, "os_user": "verky"}]}})
         if kind == "restore":
-            return self.answer(200, {"line": "REMOTE m4 op3 done %s/%s\tits /fleet-history row is on m4" % (UUID, p["key"]), "exit": 0, "state": "done"})
+            return self.answer(200, {"line": "REMOTE m4 op3 done %s/%s\tits /fleet-history row is on m4" % (UUID, p["key"]), "exit": 0, "state": "done",
+                                     "login": "bob", "worker_id": "%s/%s" % (UUID, p["key"])})
         table = {
             7: {"line": "UNKNOWN m5 op7\tstarting", "exit": 6, "state": "pending", "operation_id": "op7"},
             9: {"line": "HELD m4\t#9 is leased to m4", "exit": 3, "state": "held"},
@@ -135,6 +140,8 @@ has "A: scratch payload kind" "$(lastreq)" '"kind": "scratch"'
 has "A: scratch payload node" "$(lastreq)" '"node": "auto"'
 has "A: scratch payload title" "$(lastreq)" '"title": "看看日志"'
 has "A: scratch payload repo" "$(lastreq)" '"repo": "verkyyi/claude-fleet"'
+# issue #2430: the login it landed under is remembered against its fleet
+eq "A: scratch login remembered (candidate os_user)" "$UUID	verky" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
 
 # `fleet codex` (issue #2403): a HOME session carries its agent to the hub
 run "$P" - home --agent codex
@@ -155,6 +162,7 @@ eq "A: restore exit" 0 "$RC"
 eq "A: restore line" "REMOTE m4 op3 done $UUID/issue-21	its /fleet-history row is on m4" "$OUT"
 has "A: restore payload" "$(lastreq)" '"key": "issue-21"'
 has "A: restore payload kind" "$(lastreq)" '"kind": "restore"'
+eq "A: restore login remembered (the hub's login)" "$UUID	bob" "$(tail -n1 "$TMPDIR/.claude-dash/global/fleet_logins" 2>/dev/null)"
 
 # --- B. refusals keep their codes -----------------------------------------------------
 run "$P" verkyyi/claude-fleet issue-9

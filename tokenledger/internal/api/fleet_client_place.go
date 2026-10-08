@@ -105,6 +105,24 @@ type ClientPlaceResponse struct {
 	WindowID string `json:"window_id,omitempty"`
 	Key      string `json:"key,omitempty"`
 	Filed    string `json:"filed,omitempty"`
+	// Login is the login the session's fleet runs under on Machine
+	// (claude-fleet#2430): one person may hold two logins on one machine, and
+	// the client must ssh in as the one that holds it — the far end finds a
+	// worker only in its own login's fleets. "" when unknown.
+	Login string `json:"login,omitempty"`
+}
+
+// placedLogin is the login of the candidate placement chose (its fleet_id).
+func placedLogin(pl *Placement) string {
+	if pl == nil {
+		return ""
+	}
+	for _, c := range pl.Candidates {
+		if c.FleetID == pl.FleetID {
+			return c.OSUser
+		}
+	}
+	return ""
 }
 
 // checkActionMAC says whether lease is one of key's live leases and mac is
@@ -404,6 +422,9 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		return
 	}
 	out := s.clientPlaceAnswer(r, op, &pl, wait)
+	if target.OSUser != "" {
+		out.Login = target.OSUser // the fleet it went to — a restore has no candidates
+	}
 	if out.State == "refused" || out.State == "failed" {
 		giveBack()
 	}
@@ -419,7 +440,7 @@ func (s *Server) clientPlaceAnswer(r *http.Request, op map[string]any, pl *Place
 		op, heard = s.awaitOperation(r.Context(), op, time.Now().Add(wait))
 	}
 	opID := asString(op["operation_id"])
-	out := ClientPlaceResponse{OperationID: opID, Machine: m, Placement: pl}
+	out := ClientPlaceResponse{OperationID: opID, Machine: m, Placement: pl, Login: placedLogin(pl)}
 	oc := outcomeOf(op, m)
 	if oc.State == "unknown" && wait > 0 {
 		oc = neverStarted(op, heard, oc, wait)

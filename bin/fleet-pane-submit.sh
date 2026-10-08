@@ -54,14 +54,17 @@ FLEET_ALLOW_SENDKEYS=1 tmux -L "$sock" send-keys -t "$pane" Enter 2>/dev/null ||
 t_prompt=$(now_ms)
 
 # Confirm: the turn began, or the input emptied. A text still sitting in the box
-# after a moment got its Enter eaten — one more, never a second paste.
+# after a moment got its Enter eaten — another, never a second paste. Up to three
+# more, a second apart, over FLEET_SUBMIT_CONFIRM_SECS (6): a Codex composer that
+# was still settling took the first one and dropped it (issue #2430).
+cw="${FLEET_SUBMIT_CONFIRM_SECS:-6}"; case "$cw" in ''|*[!0-9]*) cw=6 ;; esac
 t=0 again=0
-while [ "$t" -lt 30 ]; do
+while [ "$t" -lt $((cw * 10)) ]; do
   sleep 0.1; t=$((t + 1))
   case "$(state)" in 00\ working*) printf '%s\t%s\n' "$t_ready" "$t_prompt"; exit 0 ;; esac
   if busy; then
-    if [ "$again" = 0 ] && [ "$t" -ge 6 ]; then
-      again=1; FLEET_ALLOW_SENDKEYS=1 tmux -L "$sock" send-keys -t "$pane" Enter 2>/dev/null
+    if [ "$again" -lt 3 ] && [ "$t" -ge $((6 + again * 10)) ]; then
+      again=$((again + 1)); FLEET_ALLOW_SENDKEYS=1 tmux -L "$sock" send-keys -t "$pane" Enter 2>/dev/null
     fi
   elif [ "$t" -ge 3 ]; then
     printf '%s\t%s\n' "$t_ready" "$t_prompt"; exit 0

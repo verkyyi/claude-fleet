@@ -268,6 +268,26 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 **退回本机自管**：`codex logout` 再 `codex login`（新的一张，和入口那张互不相干），
 并把 `CCQUOTA_FLEET_CREDS` 去掉重启节点程序；否则下一次租约又把 `auth.json` 换回去。
 
+## 5⅞⅞. 一台机器上同一个人有两个 login（#2430）
+
+迁移期间（#2210：管理员账号 verkyyi → 普通账号 verky）同一台机器上会有两个 login，
+各有一个 fleet，都登记在同一个人名下。
+
+- **放到哪就连到哪**：入口的放置答复带 `login`；客户端把每个 fleet 跑在哪个 login
+  下记在 `$TMPDIR/.claude-dash/global/fleet_logins`（放置答复 + 每一轮会话清单），
+  打开会话时 `ssh -l <那个 login>`，不骑别的 login 的暖连接。证书本来就签了这个人
+  所有的 login，不用改 sshd。
+- **侧栏**：会话清单里两个 login 的会话都在（证书路径下入口已按这个人全部
+  (机器, login) 裁过）。
+- **只让一个 login 接新会话**（运营者决定）：
+
+  ```
+  PUT /v1/fleet/settings {"key":"fleet.node_login.m5","value":"verky"}
+  ```
+
+  其他 login 在这台机器上不再接新会话（自动放置和点名都不行，指名它的 fleet 也拒），
+  已开着的会话照常、恢复照常；值为 `""` 取消。不设就是以前的样子，按余量挑。
+
 ## 6. 速查
 
 | 要做的事 | 命令 / 接口 |
