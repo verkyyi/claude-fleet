@@ -69,7 +69,8 @@
 #                                                   /readyz, preStop, PDB), tokenledger /readyz + /v1/deploy-probe
 #                                                   (go test, when a toolchain is here); the kind drill is
 #                                                   .github/workflows/hub-rolling.yml
-#   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single
+#   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single,
+#                                                   overlays/prod (only RWX OSS claims: release-volume.yaml)
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   login-browser-silent                            bin/fleet-login.py (scan: open_browser, KeyWatch, nudge, timeout)
@@ -3550,8 +3551,20 @@ drill_hub_disk_attach_stuck() {
   if command -v kubectl >/dev/null 2>&1 && r=$(kubectl kustomize "$b" 2>/dev/null); then
     case "$r" in *PersistentVolumeClaim*|*claimName*) WHY="the base render mounts a disk"; return 1 ;; esac
     r=$(kubectl kustomize "$ROOT/deploy/k8s/overlays/prod" 2>/dev/null) || { WHY="the prod overlay does not render"; return 1; }
-    case "$r" in *PersistentVolumeClaim*|*claimName*) WHY="prod still mounts a disk after the switch"; return 1 ;; esac
-    WHAT='base 与生产的渲染都没有盘（库在 Postgres），盘只在单份形态的组件里（回滚用）'
+    case "$r" in *"kind: PersistentVolumeClaim"*) WHY="prod still mounts a disk after the switch (the render creates a claim)"; return 1 ;; esac
+    # A claim prod mounts is no cloud disk only when the overlay declares it as
+    # an RWX OSS volume (ossfs: a network mount, nothing to detach/attach) — the
+    # /releases volume of #2366; any other claim is a disk that can stick.
+    local cl pv nr=0
+    for cl in $(printf '%s\n' "$r" | sed -n 's/^[[:space:]]*claimName:[[:space:]]*//p'); do
+      pv=$(grep -l "^  name: $cl\$" "$ROOT/deploy/k8s/overlays/prod"/*.yaml 2>/dev/null | head -1)
+      if [ -z "$pv" ] || ! grep -q 'ReadWriteMany' "$pv" || ! grep -q 'driver: ossplugin.csi.alibabacloud.com' "$pv" \
+         || grep -q 'diskplugin' "$pv"; then
+        WHY="prod still mounts a disk after the switch (claim $cl is not a declared RWX OSS volume)"; return 1
+      fi
+      nr=$((nr + 1))
+    done
+    WHAT="base 与生产的渲染都没有盘（库在 Postgres），盘只在单份形态的组件里（回滚用）；生产挂的 $nr 个卷是 OSS（RWX，无挂盘）"
   else
     WHAT='base 没有盘（按文件核对；没有 kubectl 不渲染），盘只在单份形态的组件里'
   fi
