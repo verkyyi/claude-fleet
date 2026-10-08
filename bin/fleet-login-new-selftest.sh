@@ -152,9 +152,10 @@ mkdir -p "$FLEET_LOGIN_HOMES"
 # FLEET_LOGIN_HOMES), no launchctl, no wait for a proxy nobody starts here
 # (the run dir holds the proxy's ctl.sock: a short /tmp path, AF_UNIX caps it at 104 bytes)
 SRUN=$(mktemp -d /tmp/lns.XXXXXX) || exit 2
+ME=$(/usr/bin/id -un)
 export FLEET_CREDSEP_ROOT_BASE="$WORK/credsep/db" FLEET_CREDSEP_RUN_BASE="$SRUN" \
        FLEET_CREDSEP_LOG_BASE="$WORK/credsep/log" FLEET_CREDSEP_LIB="$WORK/credsep/lib" \
-       FLEET_CREDSEP_DAEMON_DIR="$WORK/credsep/daemons" FLEET_CREDSEP_ROLE="$(/usr/bin/id -un)" \
+       FLEET_CREDSEP_DAEMON_DIR="$WORK/credsep/daemons" FLEET_CREDSEP_ROLE="$ME" \
        FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
        FLEET_CREDSEP_PW="$WORK/credsep/pw" FLEET_LOGIN_CREDSEP_WAIT=0
 unset FLEET_CRED_SEPARATE FLEET_CRED_PROXY

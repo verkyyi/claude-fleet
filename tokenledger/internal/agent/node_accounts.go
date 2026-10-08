@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +53,33 @@ var (
 	loginNewScript    = filepath.Join(".claude", "fleet", "bin", "fleet-login-new.sh")
 	loginRemoveScript = filepath.Join(".claude", "fleet", "bin", "fleet-login-remove.sh")
 )
+
+// credsepMark is the line fleet-login-new.sh ends a create with when it opened
+// the login credential-separated (claude-fleet#2294, its step 7b), and
+// credsepScriptMark what a version of the script that separates carries.
+const (
+	credsepMark       = "credsep: separated"
+	credsepScriptMark = "--no-credsep"
+)
+
+// credsepCapable reports whether this login's fleet-login-new.sh opens every
+// login separated — the hello's CapCredsep. A script from before #2294 (or none)
+// does not: the hub then opens no spare login here (claude-fleet#2263).
+func credsepCapable(home string) bool {
+	b, err := os.ReadFile(filepath.Join(home, loginNewScript))
+	return err == nil && bytes.Contains(b, []byte(credsepScriptMark)) && bytes.Contains(b, []byte(credsepMark))
+}
+
+// credsepResult is AccountResult.Credsep for a create's output: "separated"
+// only when its LAST non-empty line says so (a pending / off / failed open says
+// something else, and is never handed out as a spare).
+func credsepResult(out string) string {
+	lines := strings.Split(strings.TrimRight(out, " \t\r\n"), "\n")
+	if strings.TrimSpace(lines[len(lines)-1]) == credsepMark {
+		return control.CredsepSeparated
+	}
+	return ""
+}
 
 // accountGOOS is the platform the digit-leading rule is judged on; a test seam.
 var accountGOOS = runtime.GOOS
@@ -227,6 +256,9 @@ func (a *Agent) runAccountOp(op control.AccountOp) control.AccountResult {
 	switch {
 	case err == nil:
 		res.OK, res.Exit = true, 0
+		if op.Op == control.AccountCreate {
+			res.Credsep = credsepResult(out.String())
+		}
 	case errors.As(err, &ee):
 		res.Exit = ee.ExitCode()
 		res.Exists = op.Op == control.AccountCreate && res.Exit == 3
