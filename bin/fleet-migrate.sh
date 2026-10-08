@@ -394,6 +394,9 @@ migrated_stamp() {
 reported_restore() {
   if [ "${2:-}" = 1 ]; then TM set-window-option -t "$1" @reported 1 2>/dev/null
   else TM set-window-option -t "$1" -u @reported 2>/dev/null; fi
+  # …and the @migrating marker (issue #2321) goes with it: every road that calls
+  # this is one where the move is over (or abandoned) on a window that lives on.
+  TM set-window-option -t "$1" -u @migrating 2>/dev/null
   return 0
 }
 
@@ -635,6 +638,10 @@ migrate_one_body() {
   local wall; wall=$(TM capture-pane -p -S - -t "$wid" 2>/dev/null | fleet_limit_banner)
   # 2. exit: Escape (cancels the auto-continue wait / any menu), then /exit + Enter.
   TM set-option -w -t "$wid" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
+  # …and a REOPEN, not a close (issue #2321): the SessionEnd reap sees @migrating
+  # and records no closed-unlanded row, removes no worktree / branch — the session
+  # wakes in this same cwd. Cleared by reported_restore on every surviving window.
+  TM set-option -w -t "$wid" @migrating "${CFG_REASON:-migrate}" 2>/dev/null
   SK -t "$wid" Escape 2>/dev/null; sleep 0.6
   if [ "${AGENT:-claude}" = codex ]; then
     # Codex's paste detector can absorb a fast Enter as a newline: frame /exit as

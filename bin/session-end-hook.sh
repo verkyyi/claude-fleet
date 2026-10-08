@@ -124,6 +124,15 @@ if [ "${1:-}" = "--exec" ]; then
   # is released (fleet_issue_release_claim, dash ⌃x's copy), not left held.
   how="${6:-}"
   transfer_holds_window "$win" && exit 0
+  # A fleet REOPEN in flight (issue #2321): fleet-migrate.sh — a quota move, a
+  # cfg-stale / ver-stale reopen — stamps @migrating <reason> before its /exit and
+  # holds a rotate lease on the worktree. That exit is "same session, new window",
+  # never a close: no closed-unlanded row, no worktree / branch removal (a clean
+  # zero-commit branch cut from an older base reads `ancestor` and was deleted, and
+  # the session woke in a gone cwd). The window still goes — migrate opens the new
+  # one — and the in-pane gate hands the marker over as $6, since the window may be
+  # gone by now.
+  mig="$how"; [ "$mig" = migrating ] || mig=$(tmux display-message -p -t "$win" '#{@migrating}' 2>/dev/null)
   # Every road below closes the window: the fleet's close, never a kill the next
   # tick pulls back (issue #1840). A window already gone (a person's kill-window,
   # whose SessionEnd lands here after the fact) marks nothing.
@@ -145,6 +154,9 @@ if [ "${1:-}" = "--exec" ]; then
   # merged PR records `landed`, anything else `closed-unlanded` — never a removal.
   if [ "$kind" = raw ]; then
     key=$(fleet_scratch_key "${5:-}")
+    if [ -n "$key" ] && [ -n "$mig" ] && [ "$mig" != - ]; then
+      key=""      # a migrate's exit (#2321): nothing to record, the window just goes
+    fi
     if [ -n "$key" ]; then
       FLEET_SESSION="$sess"; export FLEET_SESSION
       # The window's OWN repo (issue #791); unknown in a multi-repo fleet → no
@@ -216,6 +228,14 @@ if [ "${1:-}" = "--exec" ]; then
   if [ -n "$MAIN" ]; then
     wl=$(fleet_worktree_head "$MAIN" "$branch")
     case "$wl" in *"$TAB"*) wtdir=${wl%%"$TAB"*}; whead=${wl#*"$TAB"} ;; esac
+  fi
+
+  # A migrate's exit (#2321, see $mig above) — the marker, or the mover's rotate
+  # lease on this worktree (a mover that predates the marker, or a marker lost
+  # with the window): close the window and touch nothing else.
+  if { [ -n "$mig" ] && [ "$mig" != - ]; } || { [ -n "$wtdir" ] && fleet_rotate_lease_held "$wtdir" >/dev/null; }; then
+    [ -n "$win" ] && tmux kill-window -t "$win" 2>/dev/null
+    exit 0
   fi
 
   # base ref for the ancestor test — locally-known origin/<base> (no blocking fetch;
@@ -391,6 +411,8 @@ hub=$(tmux display-message -p -t "$TMUX_PANE" '#{@hub}' 2>/dev/null)
 #    dash-reap.sh's fleet_bg.
 if [ -n "$issue" ]; then
   how=-; [ "$reason" = recycle ] && how=recycle
+  # a fleet reopen's exit (#2321): the --exec reaps nothing
+  [ "$reason" != recycle ] && [ -n "$(tmux display-message -p -t "$TMUX_PANE" '#{@migrating}' 2>/dev/null)" ] && how=migrating
   fleet_bg "bash '$BIN/session-end-hook.sh' --exec worker '$sess' '$win' '$issue' '$how'"
 elif [ "$raw" = 1 ]; then
   # @worktree is what dash-raw-session.sh binds at spawn; the pane cwd is the fallback
@@ -399,7 +421,8 @@ elif [ "$raw" = 1 ]; then
   wt=$(tmux display-message -p -t "$TMUX_PANE" '#{@worktree}' 2>/dev/null)
   [ -z "$wt" ] && wt=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_current_path}' 2>/dev/null)
   skey=$(fleet_scratch_key "$wt")
-  fleet_bg "bash '$BIN/session-end-hook.sh' --exec raw '$sess' '$win' '${skey:--}'"
+  how=-; [ -n "$(tmux display-message -p -t "$TMUX_PANE" '#{@migrating}' 2>/dev/null)" ] && how=migrating
+  fleet_bg "bash '$BIN/session-end-hook.sh' --exec raw '$sess' '$win' '${skey:--}' '$how'"
 elif [ "$reason" = recycle ]; then
   # Neither a worker nor a scratch (a no-repo session): nothing to record or reap,
   # the operator asked for the window to go.

@@ -19,6 +19,8 @@
 | 会话进程被杀（kill -9、OOM） | 同上 | 同上，恢复页写「被结束（信号 9）」 | `session-killed` |
 | 会话里按 Ctrl+Z（或对它 `kill -TSTP`） | Claude Code / Codex 撤掉界面、打印「已挂起，用 `fg` 回来」，再向整个进程组发 SIGTSTP；窗格的进程组是孤儿组，内核丢弃这个信号，没有 shell 会 `fg`：进程还在、界面没了、不再收输入，看起来在干活其实停住了 | 包装进程旁一个同组的小守护接住这个 SIGTSTP，立即给整组发 SIGCONT（Agent 自己的恢复处理器重画界面），记一行 `logs/session-ctrl-z.log`，正看着这个窗格的客户端提示「执行会话里 Ctrl+Z 不起作用」（#1843） | `session-ctrl-z` |
 | PR 合并后又在分支上提交，再在恢复页按 q（或退出回收） | 只看「issue-N 有合并的 PR」就当已落地：worktree 和分支被删，合并后补的提交悄悄没了 | 只有分支当前提交就是已合并 PR 的 head（或已在默认分支上）才回收；否则按未合并保留，恢复页写「未推送：N 个提交（分支 issue-N）」（#1842） | `merged-then-commit` |
+| 版本过期（或配置旧）的空闲会话被 fleet 重开（`fleet-cfg-restart.sh` → `fleet-migrate.sh --cfg-stale`） | 重开的 `/exit` 走 SessionEnd 回收：一个干净、零提交、从旧基线切出的分支读成 `ancestor`，记一行 `closed-unlanded`、删掉 worktree 和分支，5 秒后同一对话在已删的目录里醒来——每条命令报目录不存在，fleet 工具服务 `seat=none`，只能再重开（2026-10-08 issue-2235） | migrate 在 `/exit` 前给窗口盖 `@migrating <原因>`；SessionEnd 见到标记只关窗口，不记行、不删 worktree / 分支；`fleet-cleanup.sh` 见到标记记 `skip:migrating` 不动；窗口活下来的每条路都清掉标记（#2321） | `ver-reopen-deletes-worktree` |
+| 迁移（换账号、换模型）途中会话 `/exit`，窗口上没有 `@migrating`（旧版 mover、标记随窗口丢了） | 同上：mover 已经拿着这个 worktree 的 rotate 租约（#550），但 SessionEnd 回收不看它，照删不误（上月两次迁移途中被当成已关闭删掉） | SessionEnd 回收先问 rotate 租约：租约在就只关窗口、什么都不动；租约有 TTL，mover 死了也不会永远挡着（#2321） | `migrate-exit-reaps` |
 | 未合并的单在恢复页按 q | 窗口关了，单子还挂在这台登录名下，调度以为有人在做，一直不再派 | q 和 dash ⌃x 走同一个放认领函数：去掉 assignee、留一句说明，单子保持打开可再派（#1842） | `q-releases-claim` |
 | 恢复页上 ↵ / r 重开，5 秒内就失败（对话找不到、认证失效） | 当成「启动失败」直接退出，窗口关掉，看不到原因 | 只有第一次启动沿用快速失败退出；重开失败回到恢复页，写「续上原对话失败」和原因；恢复页自己出错也落到一个最简恢复页（#1842） | `resume-fails-fast` |
 | Codex 会话没记下对话 id 时在恢复页按 ↵ | `codex resume --last` 接上同一 Codex home 里最近的对话——可能是别的会话的 | 先续本窗口记下的 thread（`@codex_thread_id`），没有就新开，恢复页写「回车新开」；从不 `--last`（#1842） | `codex-no-id` |
