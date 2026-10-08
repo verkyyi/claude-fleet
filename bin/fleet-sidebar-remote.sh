@@ -29,6 +29,15 @@
 #                             display name only, never the key. The outcome
 #                             toasted; a refusal (machine lost, no grant, the
 #                             session gone) says why. Without the text: asked.
+#   reappol  worker_reap_policy — 改回收方式… (issue #2368): the policy from
+#                             $FLEET_SIDEBAR_TEXT (a pick of the row menu's
+#                             second menu, fleet-reap-policy.sh menu on a `wid:`
+#                             row; `fleet reap`), else asked. Checked here with
+#                             fleet_reap_policy.py first — a typo never goes out,
+#                             and an `at:HH:MM` is resolved on THIS computer's
+#                             clock, the person's — then sent; the node stamps
+#                             @reap_policy through fleet-reap-policy.sh set. The
+#                             outcome toasted; a refusal says why.
 #   answer   worker_answer  — the same: $FLEET_SIDEBAR_TEXT, or asked — a
 #                             permission prompt (`⊘`, needs=perm) takes y / n →
 #                             yes / no; a question (`?`, needs=ask) the option
@@ -104,7 +113,7 @@ else:
 
 label() {  # the action's human name for the toast / popup title
   case "$1" in
-    stop|resume|reap|message|answer|switch|rename) fleet_ui_t "remote_label_${1}_fmt" "$name" "$node" ;;
+    stop|resume|reap|message|answer|switch|rename|reappol) fleet_ui_t "remote_label_${1}_fmt" "$name" "$node" ;;
   esac
 }
 # write <tool> <json> [wait] → the record on stdout (fleet-hub-write's), rc its rc
@@ -129,7 +138,7 @@ fleet_status_remote_head "$sess"; fleet_status_hub_ok "$FSR_TS"
 if fleet_status_hub_lost "$(date +%s)"; then
   fleet_status_age "$FSH_AGE"
   case "$action" in
-    message|answer|rename)
+    message|answer|rename|reappol)
       if [ -n "$LINE" ]; then toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")"
       else printf '%s\n%s\n' "$(label "$action")" "$(fleet_ui_t remote_hub_lost_fmt "$FSA")" >&2; pause; fi ;;
     stop|resume|reap|switch) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
@@ -180,6 +189,21 @@ case "$action" in
     [ -n "${nm// /}" ] && [ "$nm" != "$name" ] || exit 0
     rec=$(write worker_rename "$(json_wid name "$nm")" 30)
     tell "$(outcome "$rec" "$(label rename)")"
+    ;;
+  reappol)
+    if [ -n "$LINE" ]; then pol=$FLEET_SIDEBAR_TEXT
+    else
+      printf '%s\n%s\n' "$(label reappol)" "$(fleet_ui_t remote_reappol_hint)" >&2
+      IFS= read -r -e pol 2>/dev/null || pol=''
+    fi
+    pol=${pol// /}
+    [ -n "$pol" ] || exit 0
+    canon=$(python3 "$BIN/fleet_reap_policy.py" norm "$pol" 2>/dev/null) || canon=''
+    if [ -z "$canon" ]; then
+      tell "$(fleet_ui_t remote_reappol_bad_fmt "$(label reappol)" "$pol")"; exit 0
+    fi
+    rec=$(write worker_reap_policy "$(json_wid policy "$canon")" 30)
+    tell "$(outcome "$rec" "$(label reappol)")"
     ;;
   answer)
     ans=''

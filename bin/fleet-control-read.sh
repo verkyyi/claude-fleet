@@ -662,6 +662,29 @@ case "$mode" in
       || { printf 'rename: tmux refused\n' >&2; exit 1; }
     printf 'renamed\n'
     ;;
+  # --- reappol <sess> <window_id> <fleet_id> <policy> (issue #2368) -----------
+  # The hub's worker_reap_policy: a sidebar on another machine's 「改回收方式…」 on
+  # a row here. The same check as rename — the window must still carry that
+  # @fleet_id (a recycled id is refused, exit 5) — then fleet-reap-policy.sh
+  # set, the one setter (`set_reap` runs it too): it parses the policy with
+  # fleet_reap_policy.py (exit 2 = not a policy) and clears the old countdown.
+  # TMUX unset: its _tm then names the fleet's own socket.
+  reappol)
+    fleet_load_conf "$sess"
+    win="${3:-}"; fid="${4:-}"; pol="${5:-}"
+    case "$win" in @[0-9]*) ;; *) exit 2 ;; esac
+    case "$win" in *[!@0-9]*) exit 2 ;; esac
+    [ -n "$pol" ] || { printf 'reappol: an empty policy\n' >&2; exit 2; }
+    sock=$(fleet_socket "$sess")
+    have=$(tmux -L "$sock" display-message -p -t "$win" '#{window_id} #{@fleet_id}' 2>/dev/null)
+    [ "${have%% *}" = "$win" ] || { printf 'reappol: no window %s on %s\n' "$win" "$sess" >&2; exit 5; }
+    have=${have#* }
+    if [ -n "$fid" ] && [ "$have" != "$fid" ]; then
+      printf 'reappol: window %s is no longer that session\n' "$win" >&2; exit 5
+    fi
+    unset TMUX TMUX_PANE
+    exec bash "$BIN/fleet-reap-policy.sh" set "$pol" --win "$win" --session "$sess"
+    ;;
   # --- reap <sess> <key> (issue #1487) -----------------------------------------
   # The hub's worker_reap: `dash-reap.sh <key> --yes` — the dash's confirmed ⌃x,
   # unasked (a dirty worktree is still KEPT; a live agent still refuses). dash-reap

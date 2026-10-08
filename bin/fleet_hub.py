@@ -308,9 +308,9 @@ class Hub:
     def worker_request(params):
         """A lifecycle tool names a worker, not a fleet: the fleet half of the
         worker id is what the grant is checked against and where it routes."""
-        fields(params, ("worker_id", "idempotency_key"), ("text", "answer", "account", "name"))
+        fields(params, ("worker_id", "idempotency_key"), ("text", "answer", "account", "name", "policy"))
         fleet_id, _ = parse_worker_id(params["worker_id"])
-        body = {k: v for k, v in params.items() if k in ("worker_id", "text", "answer", "account", "name")}
+        body = {k: v for k, v in params.items() if k in ("worker_id", "text", "answer", "account", "name", "policy")}
         return fleet_id, dict(fleet_id=fleet_id, idempotency_key=params["idempotency_key"], params=body)
 
     def call(self, tool, params, *, token=None, oauth=None, token_scopes=None):

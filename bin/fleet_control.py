@@ -412,6 +412,9 @@ class Control:
         if action == "worker_rename":
             # By identity or key alike, as a switch (issue #2358).
             return self.execute_rename(fleet, key, params["name"])
+        if action == "worker_reap_policy":
+            # By identity or key alike, as a rename (issue #2368).
+            return self.execute_reap_policy(fleet, key, params["policy"])
         if is_identity(key):
             # An identity-form worker_id (issue #1646): the session it names, under
             # the key it answers to NOW — every adapter below speaks keys.
@@ -558,6 +561,27 @@ class Control:
             raise Unattempted("INVALID_STATE", "Rename refused on the fleet: " + said)
         return {"renamed": matches[0], "name": new_name, "window": window,
                 "how": "renamed", "observed_at": now()}
+
+    def execute_reap_policy(self, fleet, key, policy):
+        """worker_reap_policy (issue #2368): the sidebar's 「改回收方式…」 on a row
+        here — `@reap_policy`, written by fleet-reap-policy.sh set, the one setter
+        the session's own `set_reap` tool runs too. As a rename, the adapter
+        first checks the window resolved now still carries the worker's
+        @fleet_id, so a window id tmux recycled meanwhile is never stamped."""
+        matches, _ = self.target(fleet, key, "worker_reap_policy")
+        window = matches[0].get("window_id", "")
+        code, output, err = self.adapter("reappol", fleet["name"], window,
+                                         matches[0].get("identity") or "", policy)
+        said = last_line(output if (output or b"").strip() else err)
+        if code == 2:
+            raise Unattempted("INVALID_ARGUMENT", "Reap policy refused on the fleet: " + said)
+        if code:
+            raise Unattempted("INVALID_STATE", "Reap policy refused on the fleet: " + said)
+        # `reap_policy=<canonical> · <label>` — the canonical spelling (an `at:`
+        # resolved to its ISO moment) is what the window now holds
+        canon = said.split(" ", 1)[0].partition("=")[2] if said.startswith("reap_policy=") else policy
+        return {"stamped": matches[0], "policy": canon, "window": window,
+                "how": said or "stamped", "observed_at": now()}
 
     def execute_reap(self, fleet, key):
         """worker_reap (issue #1487): dash-reap.sh --yes on the one live window

@@ -265,6 +265,12 @@ fleet_ui_t() {
     en:remote_label_reap_fmt)    printf 'reap %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_rename_fmt)  printf '%s 改名（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_rename_fmt)  printf 'rename %s (on %s)' "${1:-}" "${2:-}" ;;
+    zh:remote_label_reappol_fmt) printf '%s 改回收方式（在 %s）' "${1:-}" "${2:-}" ;;
+    en:remote_label_reappol_fmt) printf 'reap policy of %s (on %s)' "${1:-}" "${2:-}" ;;
+    zh:remote_reappol_hint)      printf '%s' 'merged[:时长] · done[:时长] · loop-end · at:<时间> · keep' ;;
+    en:remote_reappol_hint)      printf '%s' 'merged[:dur] · done[:dur] · loop-end · at:<time> · keep' ;;
+    zh:remote_reappol_bad_fmt)   printf '%s：「%s」不是回收方式' "${1:-}" "${2:-}" ;;
+    en:remote_reappol_bad_fmt)   printf '%s: "%s" is not a reap policy' "${1:-}" "${2:-}" ;;
     zh:remote_label_message_fmt) printf '发给 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_message_fmt) printf 'message %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_answer_fmt)  printf '答 %s（在 %s）' "${1:-}" "${2:-}" ;;

@@ -66,6 +66,9 @@ var fleetScopeOf = map[string]string{
 	// The sidebar's 「改名…」 (claude-fleet#2358): the window's display name
 	// only — a message's authority.
 	"worker_rename": "worker:message",
+	// The sidebar's 「改回收方式…」 (claude-fleet#2368): when the fleet may close
+	// the session on its own — a reap's authority (`done:1m` is a reap soon).
+	"worker_reap_policy": "worker:reap",
 	// A session moved in through the hub (claude-fleet#1426) opens a worker
 	// like a start does.
 	"worker_move_in": "worker:start",
@@ -99,7 +102,8 @@ var fleetConfigKeys = map[string][2]int{
 // GitHub reads.
 var (
 	fleetWriteTools = map[string]bool{"worker_start": true, "worker_message": true, "worker_stop": true,
-		"worker_resume": true, "worker_answer": true, "worker_reap": true, "worker_switch": true, "worker_rename": true, "config_set": true, "gh_comment": true}
+		"worker_resume": true, "worker_answer": true, "worker_reap": true, "worker_switch": true, "worker_rename": true,
+		"worker_reap_policy": true, "config_set": true, "gh_comment": true}
 	fleetGHReads = map[string]bool{"gh_issue_view": true, "gh_pr_view": true, "gh_pr_checks": true}
 )
 
@@ -572,7 +576,8 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			w.params["repo"] = w.repo
 		}
 		w.fleetID, _ = args["fleet_id"].(string)
-	case "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch", "worker_rename":
+	case "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch", "worker_rename",
+		"worker_reap_policy":
 		opt := []string{}
 		req := []string{"worker_id", "idempotency_key"}
 		if tool == "worker_message" {
@@ -586,6 +591,9 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		if tool == "worker_rename" {
 			req = append(req, "name")
+		}
+		if tool == "worker_reap_policy" {
+			req = append(req, "policy")
 		}
 		if err = checkFields(args, req, opt...); err != nil {
 			break
@@ -628,6 +636,14 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 				break
 			}
 			w.params["name"] = n
+		}
+		if tool == "worker_reap_policy" {
+			p, _ := args["policy"].(string)
+			if !validReapPolicy(p) {
+				err = fault("INVALID_ARGUMENT", "policy must be merged[:<dur>] · done[:<dur>] · loop-end · at:<ISO|HH:MM|epoch> · keep")
+				break
+			}
+			w.params["policy"] = p
 		}
 	case "config_set":
 		if err = checkFields(args, []string{"fleet_id", "key", "value", "expected_revision", "idempotency_key"}); err != nil {
@@ -1742,3 +1758,50 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 var reapPolicyRE = regexp.MustCompile(`^(?:(?:merged|done)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})$`)
 
 func reapPolicyOK(p string) bool { return p == "" || reapPolicyRE.MatchString(p) }
+
+// reapDurRE / reapAtRE: what validReapPolicy reads past the shape.
+var (
+	reapDurRE = regexp.MustCompile(`^([1-9][0-9]{0,6})([smhd]?)$`)
+	reapAtRE  = regexp.MustCompile(`^(?:[1-9][0-9]{8,10}|(?:[01]?[0-9]|2[0-3]):[0-5][0-9])$`)
+)
+
+// validReapPolicy is worker_reap_policy's check (claude-fleet#2368): the shape
+// above, not empty, and fleet_reap_policy.parse's own limits — <dur> up to
+// 366d, an `at:` an epoch, HH:MM or ISO-8601 with an offset. The node parses it
+// again and is the one that resolves an `at:HH:MM` to its moment.
+func validReapPolicy(p string) bool {
+	if p == "" || !reapPolicyRE.MatchString(p) {
+		return false
+	}
+	head, arg, hasArg := strings.Cut(p, ":")
+	switch head {
+	case "keep", "loop-end":
+		return !hasArg
+	case "merged", "done":
+		if !hasArg {
+			return true
+		}
+		m := reapDurRE.FindStringSubmatch(arg)
+		if m == nil {
+			return false
+		}
+		n, _ := strconv.Atoi(m[1])
+		unit := map[string]int{"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m[2]]
+		return n*unit <= 366*86400
+	case "at":
+		if reapAtRE.MatchString(arg) {
+			return true
+		}
+		t := strings.ReplaceAll(arg, "z", "Z")
+		if strings.HasSuffix(t, "Z") {
+			t = strings.TrimSuffix(t, "Z") + "+00:00"
+		}
+		for _, layout := range []string{"2006-01-02T15:04:05-07:00", "2006-01-02T15:04:05-0700",
+			"2006-01-02T15:04-07:00", "2006-01-02T15:04-0700"} {
+			if _, e := time.Parse(layout, t); e == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
