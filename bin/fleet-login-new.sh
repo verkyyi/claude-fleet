@@ -43,6 +43,12 @@
 #   7. ~<login>/.claude/fleet ← claude-fleet cloned at `stable`, AS <login>
 #      (sudo -u), so the daemons of step 8 have their scripts from the moment
 #      they load, and the first-login bootstrap finds its install already there.
+#      From this machine's cache (issue #2297): root first refreshes it from
+#      this install's checkout + the admin's own `claude`
+#      (fleet-bootstrap-cache.sh refresh), the clone reads that mirror and only
+#      then points origin at GitHub — so neither this step nor the login's
+#      first-run Claude install reaches github.com / claude.ai. Nothing cached →
+#      the clone from GitHub, as before.
 #   8. the login's background services, as an admin: every launchd/*.plist.tmpl
 #      of that clone rendered in SYSTEM shape (fleet-install-apply.sh
 #      --render-system: Label com.claude-fleet.<login>.<unit>, UserName <login>,
@@ -110,7 +116,9 @@
 #      — the public SSH entry the welcome letter names.
 # Env (tests): FLEET_LOGIN_HOMES (default /Users) — the homes root ·
 #      FLEET_INSTALL_DAEMON_DIR (/Library/LaunchDaemons) · FLEET_BOOTSTRAP_GIT_BASE
-#      (https://github.com) · FLEET_INSTALL_BREW_PREFIX (as fleet-install-apply.sh).
+#      (https://github.com) · FLEET_INSTALL_BREW_PREFIX (as fleet-install-apply.sh) ·
+#      FLEET_BOOTSTRAP_CACHE (fleet-bootstrap-cache.sh's; `off` = no cache) ·
+#      FLEET_BOOTSTRAP_CACHE_SRC (the checkout the cache is filled from; this one).
 set -u
 
 PROG=fleet-login-new
@@ -189,6 +197,11 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-daemon-lib.sh"
 GITURL="${FLEET_BOOTSTRAP_GIT_BASE:-https://github.com}/$FLEET_REPO_SELF.git"
+# the machine's cache a new login installs from (issue #2297) — and what fills it:
+# this install's own checkout (FLEET_BOOTSTRAP_CACHE_SRC is a test seam)
+CACHE_SH="$BIN/fleet-bootstrap-cache.sh"
+CDIR=$(bash "$CACHE_SH" dir)
+CSRC=$(cd "${FLEET_BOOTSTRAP_CACHE_SRC:-$BIN/..}" 2>/dev/null && pwd -P) || CSRC="$BIN/.."
 
 # Every path this script was handed, made absolute against the directory the
 # admin typed it in — then run from / (issue #1216). Every `sudo -u <login>`
@@ -412,7 +425,33 @@ if [ "$DONLY" = 0 ]; then
   # 7. the clone, as the login — its daemons (8) reference ~<login>/.claude/fleet/bin
   step "install claude-fleet for $LOGIN (clone at stable → $ROOT, as $LOGIN — the services below run its scripts)"
   run sudo -u "$LOGIN" -H mkdir -p "$H/.claude"
-  run sudo -u "$LOGIN" -H git -c advice.detachedHead=false clone -q -b stable "$GITURL" "$ROOT"
+  # This machine's cache first (issue #2297): stable + the admin's own Claude
+  # Code, copied by root where every login can read them, so neither this clone
+  # nor the login's first-run Claude install reaches github.com / claude.ai.
+  # The refresh is a note, never a failure — no cache is today's road.
+  if [ "$CDIR" != off ]; then
+    CL=$(command -v claude 2>/dev/null) || CL=''
+    [ -n "$CL" ] || { [ -x "$HOME/.local/bin/claude" ] && CL="$HOME/.local/bin/claude"; }
+    show sudo env FLEET_BOOTSTRAP_CACHE="$CDIR" bash "$CACHE_SH" refresh --from "$CSRC" ${CL:+--claude "$CL"}
+    if [ "$APPLY" = 1 ]; then
+      sudo env FLEET_BOOTSTRAP_CACHE="$CDIR" bash "$CACHE_SH" refresh --from "$CSRC" ${CL:+--claude "$CL"} 2>&1 | sed 's/^/    /'
+    fi
+  fi
+  CM="$CDIR/claude-fleet.git"
+  if [ "$CDIR" != off ] && { [ "$APPLY" = 0 ] || [ -d "$CM/objects" ]; }; then
+    cclone=(sudo -u "$LOGIN" -H git -c "safe.directory=$CM" -c advice.detachedHead=false clone -q --no-local -b stable "$CM" "$ROOT")
+    show "${cclone[@]}"
+    if [ "$APPLY" = 1 ] && ! "${cclone[@]}"; then
+      say "  (the cached clone failed — the same clone from $GITURL)"
+      sudo -u "$LOGIN" -H rm -rf "$ROOT"
+      run sudo -u "$LOGIN" -H git -c advice.detachedHead=false clone -q -b stable "$GITURL" "$ROOT"
+    else
+      run sudo -u "$LOGIN" -H git -C "$ROOT" remote set-url origin "$GITURL"
+    fi
+    [ "$APPLY" = 1 ] || say "  (nothing cached at $CDIR at --apply time → the same clone from $GITURL)"
+  else
+    run sudo -u "$LOGIN" -H git -c advice.detachedHead=false clone -q -b stable "$GITURL" "$ROOT"
+  fi
   run sudo -u "$LOGIN" -H mkdir -p "$ROOT/logs"
 fi
 

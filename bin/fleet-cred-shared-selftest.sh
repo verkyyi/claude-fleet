@@ -29,6 +29,10 @@
 #   H  a half install (issue #2273: the store and its meta.json, no credsep.json):
 #      `uninstall --dry-run` says HALF INSTALLED, not "nothing to undo", and
 #      `uninstall --login beta` puts it back byte for byte from meta.json
+#   P  the machine's ONE copy (issue #2311): what each tenant had moved into
+#      <db>/.shared/pool at the start, a lease two logins hold is ONE file, a
+#      token only beta leased is never served to alpha, a file no tenant names
+#      any more is gone — and G puts every tenant's copy back byte for byte
 #   I  machine install whose agent bootstrap fails AND whose way back fails too:
 #      exit 5, the credentials back anyway, the store kept as <login>.rolledback-*,
 #      the steps to do by hand printed (the clean rollback is BREAK-IT
@@ -168,6 +172,41 @@ grep -q '"sid": "a1"' "$SB/log/alpha.log" && ! grep -q '"sid": "b1"' "$SB/log/al
 ! grep -q 'sk-ant-' "$SB/log/alpha.log" "$SB/log/beta.log" "$SB/log/shared.log" 2>/dev/null \
   && pass "C no credential in any log" || fail "C a credential leaked into a log"
 
+# ── P: one copy for the machine (issue #2311) ─────────────────────────────────────
+pool_n() { find "$SB/db/.shared/pool/$1" -name "${2:-.credentials.json}" 2>/dev/null | wc -l | tr -d ' '; }
+creds_outside() { find "$SB/db" -name .credentials.json -not -path "$SB/db/.shared/pool/*" | wc -l | tr -d ' '; }
+[ "$(pool_n claude)" = 2 ] && [ "$(creds_outside)" = 0 ] \
+  && pass "P at the start each tenant's copy moved into the pool, none left in a store" \
+  || fail "P adopt: pool $(pool_n claude), outside $(creds_outside)"
+store() { # <login conf> <peer uid|-> <kind> <label> <token>
+  local j
+  if [ "$3" = claude ]; then j=$(printf '{"claudeAiOauth":{"accessToken":"%s","refreshToken":null,"expiresAt":4102444800000}}' "$5")
+  else j=$(printf '{"auth_mode":"chatgpt","tokens":{"access_token":"%s","account_id":"acct-1","refresh_token":"hub-managed"},"last_refresh":"%s"}' "$5" "$RANDOM"); fi
+  printf '%s' "$j" | if [ "$2" = - ]; then FLEET_CONF_DIR="$1" bash "$BIN/fleet-cred-proxy.sh" store --kind "$3" --label "$4"
+    else FLEET_CRED_TEST_PEER_UID=$2 FLEET_CONF_DIR="$1" bash "$BIN/fleet-cred-proxy.sh" store --kind "$3" --label "$4"; fi
+}
+store "$CA" - claude pool1 sk-ant-oat01-pool-v1 >/dev/null 2>&1
+store "$CB" "$BUID" claude pool1 sk-ant-oat01-pool-v1 >/dev/null 2>&1
+store "$CA" - codex default cx-pool-v1 >/dev/null 2>&1
+store "$CB" "$BUID" codex default cx-pool-v1 >/dev/null 2>&1
+[ "$(pool_n claude)" = 3 ] && [ "$(pool_n codex auth.json)" = 1 ] && [ "$(creds_outside)" = 0 ] \
+  && pass "P one lease two logins hold: ONE file (claude and codex alike)" \
+  || fail "P shared lease: claude $(pool_n claude) codex $(pool_n codex auth.json) outside $(creds_outside)"
+store "$CB" "$BUID" claude solo sk-ant-oat01-beta-only >/dev/null 2>&1
+TS=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --account solo --sid a2 2>&1)
+TP=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --account pool1 --sid a3 2>&1)
+case "$(call "$PORT" "$TS")" in *beta-only*) fail "P beta's token was served to alpha" ;;
+  *) pass "P a token only beta leased: never alpha's" ;; esac
+case "$(call "$PORT" "$TP")" in *sk-ant-oat01-pool-v1*) pass "P alpha's session reads the shared copy" ;;
+  *) fail "P pool read: $(call "$PORT" "$TP")" ;; esac
+store "$CA" - claude pool1 sk-ant-oat01-pool-v2 >/dev/null 2>&1
+[ "$(pool_n claude)" = 5 ] && pass "P renewed by alpha only: v1 kept for beta, v2 alpha's" || fail "P renew: $(pool_n claude)"
+store "$CB" "$BUID" claude pool1 sk-ant-oat01-pool-v2 >/dev/null 2>&1
+[ "$(pool_n claude)" = 4 ] && ! grep -rqs oat01-pool-v1 "$SB/db/.shared/pool" \
+  && pass "P renewed by both: the copy nobody names is gone" || fail "P gc: $(pool_n claude)"
+! grep -q 'sk-ant-\|cx-pool' "$SB/log/alpha.log" "$SB/log/beta.log" "$SB/log/shared.log" 2>/dev/null \
+  && pass "P no credential in any log" || fail "P a credential leaked into a log"
+
 # ── D: no login reaches another's ────────────────────────────────────────────────
 out=$(FLEET_CRED_AS=beta FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --account main --sid x 2>&1); rc=$?
 [ "$rc" != 0 ] && case "$out" in *"not your login"*) true ;; *) false ;; esac \
@@ -217,6 +256,12 @@ kill "$(cat "$SB/shared.pid")" 2>/dev/null; sleep 0.3
 out=$(bash "$BIN/fleet-credsep.sh" machine uninstall 2>&1); rc=$?
 [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^shared: OFF' && pass "G machine uninstall" || fail "G rc=$rc: $out"
 rm -f "$CA/cred-proxy/"*.json "$CA/cred-proxy/revoked" 2>/dev/null   # the copies it made, not the login's own files
+# P's leases came back as each login's own files (issue #2311) — then set aside for the byte-for-byte check
+grep -qs pool-v2 "$CA/accounts/pool1.hub/.credentials.json" && grep -qs beta-only "$CB/accounts/solo.hub/.credentials.json" \
+  && [ ! -e "$CA/accounts/solo.hub" ] && grep -qs cx-pool-v1 "$SB/homes/beta/.codex/auth.json" \
+  && pass "G each login gets back exactly the copies it leased (pool → its own files)" \
+  || fail "G pool out: $(cd "$SB/homes" && find . -name '*.json' -path '*accounts*' -o -name auth.json | tr '\n' ' ')"
+rm -rf "$CA/accounts/pool1.hub" "$CB/accounts/pool1.hub" "$CB/accounts/solo.hub" "$SB/homes/alpha/.codex" "$SB/homes/beta/.codex"
 [ "$(snap)" = "$BEFORE" ] && pass "G every fleet.conf and credential byte for byte" \
   || fail "G differs: $(diff <(printf '%s\n' "$BEFORE") <(snap) | head -6)"
 [ "$(cksum < "$CA/cred-proxy/key" 2>/dev/null)" = "$KEY0" ] && pass "G alpha's key back: its own proxy verifies the old sessions" \

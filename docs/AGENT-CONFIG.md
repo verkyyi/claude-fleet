@@ -45,7 +45,7 @@ doctor `agentcfg` 行分开数，`fleet-cfg-restart.sh` 两种一样闲时重开
 **broken**（会真坏：每轮 hook error、每次 spawn `no tool.call hook answered`）；只是新表 / 新 mod
 多了它不知道的东西 = **stale**（只缺新功能）；三样一字不差 = **ok**。`--sweep` 把每个 fleet 里配置旧 /
 待换新窗口的 manifest 各判一次，会坏的写进 `global/agent-cfg.broken`，`fleet_cfg_state` 读它：侧栏
-那一行从黄「配置旧」变成红「**会坏·需重开**」，doctor `agentcfg` 行三种分开数（有会坏的就 WARN），
+那一行的状态图标变成红 `✗`（#2305：行上只有状态 · 名称；高亮它时底栏写「**会坏·需重开**」（配置旧 / 待换新同样在底栏）），doctor `agentcfg` 行三种分开数（有会坏的就 WARN），
 闲时重开照旧把它当配置旧处理。采集 tick 的 `agentcfg` 阶段每轮扫一遍；`fleet-install-apply.sh` 末尾的
 `oldcfg:` 一步在挪版后立刻扫并点名会坏的和**在循环的**配置旧会话（窗口 · 仓库 · 单号 · 状态）——
 循环的调度会话闲时重开永远不碰，你得找空自己重开；这一步不自动重开任何会话（#2068 B 不做）。

@@ -29,6 +29,16 @@
 #      carries --login, a `sudo -u` line carries that login's HOME
 #   K  a login name may start with a digit (issue #2257): `machine install
 #      --dry-run --logins 24haowan` passes; `Bad Name` / `-x` are still exit 2
+#   L  root's settings (issue #2290): an upstream URL / FLEET_HUB_URL in the
+#      login's fleet.conf is ignored (said on stderr + ignored.<login>), the
+#      request goes to root's upstream; install --adopt takes only an https URL
+#      to an allowed host, never FLEET_CRED_ALLOW_HOSTS
+#   M  a root agent's log is not in the home (issue #2296): install points the
+#      agent's stdout/stderr (the plist's Standard*Path, the drop-in's
+#      StandardOutput) at $LOG_BASE/<login>/agent.log (0700); `rootlogs` is OK;
+#      a definition from before #2296 (log back in the home) is WARN naming
+#      `check --fix --login <login>`, which moves it; a root service that is
+#      not the fleet's is named as such; a service with a UserName is not counted
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "/tmp/credsep-st.XXXXXX")
@@ -37,7 +47,7 @@ cleanup() {
   kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null
   [ -n "${LPID:-}" ] && kill "$LPID" 2>/dev/null
   [ -n "${P2:-}" ] && kill "$P2" 2>/dev/null
-  kill "$(cat "$SB/fake.pid" 2>/dev/null)" 2>/dev/null
+  kill "$(cat "$SB/fake.pid" 2>/dev/null)" "$(cat "$SB/evil.pid" 2>/dev/null)" 2>/dev/null
   rm -rf "$SB"
 }
 trap cleanup EXIT
@@ -81,14 +91,16 @@ exec "$SB/fake-agent" agent --state "$HOME/.ccquota"
 EOF
 if [ "$(uname)" = Darwin ]; then
   AGENT_DEF="$SB/daemons/com.ccquota.agent.$ME.plist"
-  python3 - "$AGENT_DEF" "$HOME/.ccquota/run-agent.sh" "$ME" <<'PY'
+  python3 - "$AGENT_DEF" "$HOME/.ccquota/run-agent.sh" "$ME" "$HOME/.ccquota/agent.log" <<'PY'
 import plistlib, sys
 plistlib.dump({"Label": "com.ccquota.agent." + sys.argv[3], "ProgramArguments": [sys.argv[2]],
-               "RunAtLoad": True, "KeepAlive": True, "UserName": sys.argv[3]}, open(sys.argv[1], "wb"))
+               "RunAtLoad": True, "KeepAlive": True, "UserName": sys.argv[3],
+               "StandardOutPath": sys.argv[4], "StandardErrorPath": sys.argv[4]}, open(sys.argv[1], "wb"))
 PY
 else
   AGENT_DEF="$SB/daemons/ccquota-agent-$ME.service"
-  printf '[Service]\nUser=%s\nExecStart=%s\n' "$ME" "$HOME/.ccquota/run-agent.sh" > "$AGENT_DEF"
+  printf '[Service]\nUser=%s\nExecStart=%s\nStandardOutput=append:%s\nStandardError=append:%s\n' \
+    "$ME" "$HOME/.ccquota/run-agent.sh" "$HOME/.ccquota/agent.log" "$HOME/.ccquota/agent.log" > "$AGENT_DEF"
 fi
 # the "agent": proves where its token came from
 cat > "$SB/fake-agent" <<'EOF'
@@ -161,6 +173,71 @@ out=$(FLEET_CRED_SEPARATE=1 bash "$BIN/fleet-credsep.sh" apply 2>&1)
 case "$out" in *"credsep: ON"*) pass "B apply again: idempotent" ;; *) fail "B re-apply: $out" ;; esac
 grep -q at-DEFAULT "$R/codex/default/auth.json" && [ -L "$C/node.env" ] && pass "B re-apply moved nothing twice" || fail "B re-apply damage"
 
+# ── M: the root agent's log is not in the home (issue #2296) ───────────────────
+# the effective stdout path of the agent's definition (plist / unit + drop-in)
+agent_log_of() {
+  python3 - "$AGENT_DEF" <<'PY'
+import glob, plistlib, re, sys
+p = sys.argv[1]
+if p.endswith(".plist"):
+    d = plistlib.load(open(p, "rb"))
+    print(d.get("StandardOutPath", "") if d.get("StandardOutPath") == d.get("StandardErrorPath") else "MISMATCH")
+else:
+    v = ""
+    for f in [p] + sorted(glob.glob(p + ".d/*.conf")):
+        for l in open(f):
+            m = re.match(r"StandardOutput=(?:file|append|truncate):(.*)$", l.strip())
+            if m:
+                v = m.group(1)
+    print(v)
+PY
+}
+rootlogs() { FLEET_CREDSEP_HOMES="$SB/home" bash "$BIN/fleet-credsep.sh" rootlogs 2>&1; }
+lg=$(agent_log_of)
+mode=$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$SB/log/$ME" 2>/dev/null)
+[ "$lg" = "$SB/log/$ME/agent.log" ] && [ "$mode" = 0o700 ] \
+  && pass "M the root agent logs to \$LOG_BASE/$ME/agent.log (dir 0700), not the home" || fail "M agent log=$lg dir mode=$mode"
+out=$(rootlogs); rc=$?
+case "$rc:$out" in "0:rootlog: OK"*) pass "M rootlogs after install: $out" ;; *) fail "M rootlogs rc=$rc: $out" ;; esac
+# a definition separated before #2296: the agent's log back in the home
+python3 - "$AGENT_DEF" "$HOME/.ccquota/agent.log" <<'PY'
+import plistlib, sys
+p, log = sys.argv[1], sys.argv[2]
+if p.endswith(".plist"):
+    d = plistlib.load(open(p, "rb")); d["StandardOutPath"] = d["StandardErrorPath"] = log
+    plistlib.dump(d, open(p, "wb"))
+else:
+    f = p + ".d/credsep.conf"
+    keep = "".join(l for l in open(f) if not l.startswith("Standard"))
+    open(f, "w").write(keep)
+PY
+out=$(rootlogs); rc=$?
+case "$rc:$out" in 1:"rootlog: WARN"*"check --fix --login <login> for $ME"*) pass "M an old definition (log in the home) is WARN naming the fix" ;;
+  *) fail "M old definition rc=$rc: $out" ;; esac
+out=$(bash "$BIN/fleet-credsep.sh" check --fix 2>&1)
+printf '%s' "$out" | grep -q "agent: log .*→ $SB/log/$ME/agent.log" && [ "$(agent_log_of)" = "$SB/log/$ME/agent.log" ] \
+  && rootlogs | grep -q '^rootlog: OK' && pass "M check --fix moves the old definition's log out of the home" \
+  || fail "M check --fix: $out / $(agent_log_of)"
+out=$(bash "$BIN/fleet-credsep.sh" check --fix 2>&1)
+printf '%s' "$out" | grep -q 'nothing to move' && pass "M check --fix again: nothing to move" || fail "M fix again: $out"
+# a root service that is not the fleet's, and one that runs as its login
+if [ "$(uname)" = Darwin ]; then
+  python3 -c 'import plistlib,sys; plistlib.dump({"Label":"x.other","ProgramArguments":["/bin/true"],"StandardErrorPath":sys.argv[2]}, open(sys.argv[1],"wb"))' \
+    "$SB/daemons/x.other.plist" "$HOME/other.err"
+  python3 -c 'import plistlib,sys; plistlib.dump({"Label":"x.mine","UserName":"nobody","ProgramArguments":["/bin/true"],"StandardErrorPath":sys.argv[2]}, open(sys.argv[1],"wb"))' \
+    "$SB/daemons/x.mine.plist" "$HOME/mine.err"
+  junk="$SB/daemons/x.other.plist $SB/daemons/x.mine.plist"
+else
+  printf '[Service]\nExecStart=/bin/true\nStandardError=file:%s\n' "$HOME/other.err" > "$SB/daemons/x.other.service"
+  printf '[Service]\nUser=nobody\nExecStart=/bin/true\nStandardError=file:%s\n' "$HOME/mine.err" > "$SB/daemons/x.mine.service"
+  junk="$SB/daemons/x.other.service $SB/daemons/x.mine.service"
+fi
+out=$(rootlogs); rc=$?
+case "$rc:$out" in 1:"rootlog: WARN — 1 root service(s)"*"not the fleet's"*x.other*) pass "M a foreign root service logging in a home is named; a UserName one is not" ;;
+  *) fail "M foreign rc=$rc: $out" ;; esac
+# shellcheck disable=SC2086
+rm -f $junk
+
 # ── C: the proxy, started by the launcher ──────────────────────────────────────
 cat > "$SB/fake.py" <<'PY'
 import json, sys
@@ -182,11 +259,14 @@ open(SB + "/fake.port", "w").write(str(s.server_address[1]))
 s.serve_forever()
 PY
 python3 "$SB/fake.py" "$SB" & echo $! > "$SB/fake.pid"
+mkdir -p "$SB/evil"; python3 "$SB/fake.py" "$SB/evil" & echo $! > "$SB/evil.pid"
 for _ in $(seq 1 300); do [ -s "$SB/fake.port" ] && break; sleep 0.1; done   # a slow runner: 30s
 FP=$(cat "$SB/fake.port" 2>/dev/null)
 [ -n "$FP" ] || { fail "C the fake far end never published its port"; }
 sed -i.bak "s#^CCQUOTA_HUB_URL=.*#CCQUOTA_HUB_URL=http://127.0.0.1:$FP#" "$R/node.env" && rm -f "$R/node.env.bak"
-printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\nFLEET_CRED_CODEX_URL=http://127.0.0.1:%s/codex\n' "$FP" "$FP" >> "$C/fleet.conf"
+# the upstreams come from root's settings only (issue #2290); install wrote the file
+[ -f "$SB/lib/$ME.conf" ] && pass "C install wrote root's settings $SB/lib/$ME.conf" || fail "C no root settings file"
+printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\nFLEET_CRED_CODEX_URL=http://127.0.0.1:%s/codex\n' "$FP" "$FP" >> "$SB/lib/$ME.conf"
 python3 -I "$BIN/fleet-credsep-launch.py" proxy "$ME" 2>"$SB/launch.err" &
 LPID=$!
 for _ in $(seq 1 300); do [ -S "$SB/run/$ME/ctl.sock" ] && [ -s "$SB/run/$ME/port" ] && break; sleep 0.1; done
@@ -299,6 +379,40 @@ for bad in 'Bad Name' '-x' 'a/b'; do
   out=$(FLEET_CREDSEP_PW="$SB/pw" bash "$BIN/fleet-credsep.sh" machine install --dry-run "--logins=$bad" 2>&1); rc=$?
   case "$rc:$out" in 2:*"bad login"*) pass "K '$bad' still refused (exit 2)" ;; *) fail "K '$bad' rc=$rc: $out" ;; esac
 done
+
+# ── L: the login's own files cannot move an upstream or the hub (issue #2290) ──
+for _ in $(seq 1 300); do [ -s "$SB/evil/fake.port" ] && break; sleep 0.1; done
+EP=$(cat "$SB/evil/fake.port" 2>/dev/null)
+cp "$R/node.env" "$SB/node.env.keep"
+grep -v '^CCQUOTA_HUB_URL=' "$SB/node.env.keep" > "$R/node.env"   # the hub would come from FLEET_HUB_URL
+printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\nFLEET_CRED_CODEX_URL=http://127.0.0.1:%s/codex\nFLEET_CRED_CENTRAL_URL=http://127.0.0.1:%s\nFLEET_HUB_URL=http://127.0.0.1:%s\nFLEET_CRED_PROXY_TIMEOUT=30\n' \
+  "$EP" "$EP" "$EP" "$EP" >> "$C/fleet.conf"
+kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null
+rm -f "$SB/run/$ME/port"
+python3 -I "$BIN/fleet-credsep-launch.py" proxy "$ME" 2>"$SB/launch.err" &
+LPID=$!
+for _ in $(seq 1 300); do [ -s "$SB/run/$ME/port" ] && break; sleep 0.1; done
+PORT=$(cat "$SB/run/$ME/port" 2>/dev/null)
+: > "$SB/fake.log"
+tok=$(bash "$BIN/fleet-cred-proxy.sh" mint --account main --sid s2 2>&1)
+curl -s --max-time 60 -o /dev/null -H "Authorization: Bearer $tok" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORT/v1/messages"
+[ -n "$EP" ] && [ ! -s "$SB/evil/fake.log" ] && grep -q 'POST /v1/messages' "$SB/fake.log" \
+  && pass "L a login-file upstream / FLEET_HUB_URL: never asked, root's upstream served it" \
+  || fail "L the login's listener saw: $(cat "$SB/evil/fake.log" 2>/dev/null) · root's: $(cat "$SB/fake.log") · $(cat "$SB/launch.err")"
+grep -q "ignored FLEET_CRED_ANTHROPIC_URL from $C/fleet.conf" "$SB/launch.err" && grep -q 'ignored FLEET_HUB_URL' "$SB/launch.err" \
+  && grep -q '^FLEET_HUB_URL ' "$SB/run/$ME/ignored.$ME" && ! grep -q 'PROXY_TIMEOUT\|127.0.0.1' "$SB/run/$ME/ignored.$ME" \
+  && pass "L the launcher says what it ignored (key names, no value) for credsep check" \
+  || fail "L ignored note: $(cat "$SB/launch.err" "$SB/run/$ME/ignored.$ME" 2>&1)"
+cp "$SB/node.env.keep" "$R/node.env"
+# install --adopt: root takes the login's values — an https URL to an allowed host only
+printf 'FLEET_HUB_URL=https://ccquota.24haowan.com\nFLEET_CRED_RELAY_URL=https://evil.example/relay\nFLEET_CRED_ALLOW_HOSTS=evil.example\n' > "$C/fleet.conf"
+out=$(bash "$BIN/fleet-credsep.sh" install --adopt 2>&1); rc=$?
+if [ "$rc" = 0 ] && grep -qx 'FLEET_HUB_URL=https://ccquota.24haowan.com' "$SB/lib/$ME.conf" \
+   && ! grep -q evil "$SB/lib/$ME.conf" && grep -q "^FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:$FP\$" "$SB/lib/$ME.conf"; then
+  pass "L install --adopt: the allowed hub taken, evil.example and ALLOW_HOSTS refused, root's other lines kept"
+else fail "L adopt rc=$rc: $out · $(cat "$SB/lib/$ME.conf")"; fi
+m=$(ls -l "$SB/lib/$ME.conf" | cut -c1-10)
+[ "$m" = -rw------- ] && pass "L root's settings 0600 (a relay pass may be in it)" || fail "L root conf mode $m"
 
 # ── G: uninstall ───────────────────────────────────────────────────────────────
 kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null; LPID=''

@@ -61,6 +61,7 @@
 #   dispatch-wrong-replica                          tokenledger/internal/api node_route.go (fleet_node_conns +
 #                                                   /internal/v1/node-write; go test, when a toolchain is here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
+#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (macos gate)
 #   two-hubs-double-refresh                         tokenledger/internal/leader (Leader / Lock), credvault Lease's
 #                                                   CrossLock, the three gated loops (go test, when a toolchain is here)
 #   hub-release-downtime                            .github/actions/hub-release/probe.sh (downtime_seconds),
@@ -71,6 +72,8 @@
 #   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
+#   login-browser-silent                            bin/fleet-login.py (scan: open_browser, KeyWatch, nudge, timeout)
+#   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 #   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
@@ -100,6 +103,9 @@
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
 #   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
 #   zsh-guard-fleet-label                           shell/cw.zsh tmux()
+# Machine half — a sandbox Homebrew prefix under a world-traversable tmp dir:
+#   brew-keg-700                                    bin/fleet-diskguard.sh --brew-watch,
+#                                                   bin/fleet-brew-perms.sh, shell/cw.zsh brew()
 #
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs).
@@ -1737,7 +1743,7 @@ drill_cert_expiry_keeper() {
 # Before, a lost machine's rows moved into a `─ m4 失联 ─` group at the foot and
 # came back when it answered again — the list reshuffled twice. The sidebar pane
 # is captured before / during / after: during, the same lines in the same order,
-# only the lost rows' `@m4!` (the colour is the view's, never in a capture).
+# only the lost rows' state glyph `⊘` (issue #2305; the colour is the view's, never in a capture).
 off_hub() {   # the fake hub: `down` = unreachable, else the current answer
   mkdir -p "$WORK/off"
   printf '#!/bin/bash\n[ -f "%s/off/down" ] && exit 1\ncat "%s/off/cur.json"\n' "$WORK" "$WORK" > "$WORK/off/hub"
@@ -1776,7 +1782,9 @@ off_list() {   # the sidebar pane as it reads (text only), blank lines dropped
 # (input line, hints) is the bar's business, not the list's
 off_rows() { off_list "$1" | awk '/app-root|app-kid|app-m4|tool-m5|tool-m4|loose-m4|\([0-9]+\)$|失联/ { print }' | spin_off; }
 spin_off() { sed -e 's/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/*/g'; }       # the working spinner turns on its own
-off_norm() { LC_ALL=C sed -e 's/!//g' -e 's/  */ /g'; }
+# a row's state glyph is masked (`?`): a lost machine's row says so in it — `⊘`
+# (issue #2305) — and that is the one thing allowed to change in place
+off_norm() { LC_ALL=C sed -e 's/^\([^ ]* \) *[^ ][^ ]* /\1? /' -e 's/!//g' -e 's/  */ /g'; }
 off_wait() {   # <socket> <secs> <grep -E pattern> [v] — until the rows (do not) show it
   local _
   for _ in $(seq 1 $(($2 * 5))); do
@@ -1818,27 +1826,27 @@ PY
   sleep 1; before=$(off_rows "$s")
   # 1. one machine lost: the hub says m4 is lost
   cp "$WORK/off/m4lost.json" "$WORK/off/cur.json"
-  off_wait "$s" 20 '@m4!|@m!' || { WHY="m4 lost never showed on its rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  off_wait "$s" 20 '⊘ +app-m4' || { WHY="m4 lost never showed on its rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
   sleep 1; during=$(off_rows "$s")
-  case "$during" in *'@本!'*|*'@m5!'*) WHY="m4 lost dimmed m5's rows too (the hub went stale?): $(printf '%s' "$during" | tr '\n' '|')"; return 1 ;; esac
+  printf '%s\n' "$during" | grep -qE '⊘ +(app-root|tool-m5)' && { WHY="m4 lost dimmed m5's rows too (the hub went stale?): $(printf '%s' "$during" | tr '\n' '|')"; return 1; }
   case "$during" in *失联*) WHY="a 失联 heading came back: $(printf '%s' "$during" | tr '\n' '|')"; return 1 ;; esac
   [ "$(printf '%s\n' "$during" | off_norm)" = "$(printf '%s\n' "$before" | off_norm)" ] \
     || { WHY="m4 lost moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
   # 2. the hub unreachable: every row lost, still the same lines
   cp "$WORK/off/on.json" "$WORK/off/cur.json"
-  off_wait "$s" 20 '@m4!|@m!' v || { WHY="m4 never came back after its loss"; return 1; }
+  off_wait "$s" 20 '⊘ +app-m4' v || { WHY="m4 never came back after its loss"; return 1; }
   : > "$WORK/off/down"
-  off_wait "$s" 40 '@m5!|@本!|@本机!' || { WHY="入口连不上 never dimmed the m5 rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  off_wait "$s" 40 '⊘ +(app-root|tool-m5)' || { WHY="入口连不上 never dimmed the m5 rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
   sleep 1; during=$(off_rows "$s")
   [ "$(printf '%s\n' "$during" | off_norm)" = "$(printf '%s\n' "$before" | off_norm)" ] \
     || { WHY="入口连不上 moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
   # 3. back: the very lines of before, no `!` left
   t0=$(now); rm -f "$WORK/off/down"
-  off_wait "$s" "$CAP" '!' v || { WHY="the rows stayed lost after the hub answered: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  off_wait "$s" "$CAP" '⊘' v || { WHY="the rows stayed lost after the hub answered: $(off_rows "$s" | tr '\n' '|')"; return 1; }
   [ "$(off_rows "$s")" = "$before" ] || { WHY="back online, the list differs from before: [$(off_rows "$s" | tr '\n' '|')]"; return 1; }
   SECS=$(since "$t0"); : > "$WORK/off/stop"
   "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; "$REAL_TMUX" -L "$s-stage" kill-server 2>/dev/null
-  WHAT="m4 失联 / 入口连不上：行数、顺序、分组不变，只多 @m4!；恢复后与断开前逐行一致"
+  WHAT="m4 失联 / 入口连不上：行数、顺序、分组不变，只是状态图标变 ⊘；恢复后与断开前逐行一致"
 }
 
 # The proxy pane's `run` loop (fleet-remote-view.sh) against an ssh shim: a
@@ -2439,6 +2447,92 @@ PY2
   out=$(python3 "$hub/drive.py" "$BIN/fleet-drill.sh" "$((CAP + 10))" "$hub/home" 2>&1)
   [ "$out" = OK ] || { WHY=${out#WHY=}; WHY="${WHY:-the drive died}"; return 1; }
   SECS=$(since "$t0"); WHAT="演练的扫码以演练同事确认：入口上确认人是 drill person，不带运营者的 token / 证书，确认码只能用一次"
+}
+
+# A login's wait with no answer (issue #2262, EPIC #2259 约定 5/8): the browser
+# will not open, or opens and nobody confirms (a company network blocking
+# GitHub). Before, the terminal drew a QR and waited out the code's ten minutes
+# without a word. A fake hub that never confirms, a fake opener that fails, then
+# one that works: it says the browser would not open and draws the QR; it says
+# every few seconds what it waits for; it stops with the reason and what to do.
+login_pending_hub() {
+  cat > "$1/hub.py" <<'PY2'
+import json, os, signal, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+signal.alarm(int(sys.argv[2]))
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path == "/v1/fleet/login/start":
+            st, out = 200, {"device_code": "d" * 64, "user_code": "BCDF-GHJK", "expires_in": 600, "interval": 1,
+                            "verification_uri": "http://127.0.0.1/fleet/login?code=BCDF-GHJK",
+                            "key_fingerprint": "SHA256:x", "qr": ["#.#", ".#.", "#.#"]}
+        elif self.path == "/v1/fleet/login/poll":
+            st, out = 202, {"status": "authorization_pending"}
+        else:
+            st, out = 404, {}
+        b = json.dumps(out).encode()
+        self.send_response(st); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+srv = HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(sys.argv[1], "port"), "w").write(str(srv.server_port))
+srv.serve_forever()
+PY2
+  rm -f "$1/port"
+  python3 "$1/hub.py" "$1" "$2" 2>"$1/hub.err" & LHUB_PID=$!
+  for _ in $(seq 1 300); do [ -s "$1/port" ] && break; sleep 0.1; done
+  [ -s "$1/port" ]
+}
+login_sandbox_run() {   # <dir> <env…> — fleet-login.py in a sandbox HOME (killed at 20 s), its output printed
+  local d="$1"; shift
+  env -i PATH="$d/fakebin:$PATH" HOME="$d/home" XDG_CONFIG_HOME="$d/home/.config" "$@" \
+    python3 -c 'import subprocess, sys
+try: sys.exit(subprocess.run(sys.argv[1:], stdin=subprocess.DEVNULL, stderr=subprocess.STDOUT, timeout=20).returncode)
+except subprocess.TimeoutExpired: print("(still waiting after 20 s — killed)"); sys.exit(124)' \
+    python3 "$BIN/fleet-login.py" --hub "http://127.0.0.1:$(cat "$d/port")" 2>&1
+}
+drill_login_browser_silent() {
+  CAP=10; local t0 d="$WORK/lbs" out
+  mkdir -p "$d/home/.ssh" "$d/fakebin"
+  for o in open xdg-open; do printf '#!/bin/sh\nexit "$(cat %s/open.rc)"\n' "$d" > "$d/fakebin/$o"; chmod +x "$d/fakebin/$o"; done
+  login_pending_hub "$d" $((CAP * 3)) || { kill "$LHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$d/hub.err")"; return 1; }
+  echo 1 > "$d/open.rc"
+  out=$(login_sandbox_run "$d" FLEET_LOGIN_BROWSER=1 FLEET_LOGIN_NUDGE_SECS=1 FLEET_LOGIN_TIMEOUT_SECS=2)
+  case "$out" in *浏览器打不开*'█'*) ;; *) kill "$LHUB_PID" 2>/dev/null; WHY="an opener that fails: no 「浏览器打不开」 + QR: [$out]"; return 1 ;; esac
+  echo 0 > "$d/open.rc"
+  t0=$(now)
+  out=$(login_sandbox_run "$d" FLEET_LOGIN_BROWSER=1 FLEET_LOGIN_NUDGE_SECS=1 FLEET_LOGIN_TIMEOUT_SECS=3)
+  SECS=$(since "$t0")
+  kill "$LHUB_PID" 2>/dev/null; wait "$LHUB_PID" 2>/dev/null
+  case "$out" in *还在等浏览器里授权*按\ q\ 改用二维码*) ;; *) WHY="no 「还在等浏览器里授权…（按 q 改用二维码）」 while waiting: [$out]"; return 1 ;; esac
+  case "$out" in *秒内浏览器里没有完成授权，已停下*'fleet login --qr'*) ;; *) WHY="the wait did not stop with the reason + next step: [$out]"; return 1 ;; esac
+  [ -e "$d/home/.ssh/fleet-cert-cert.pub" ] && { WHY="a certificate appeared with nothing confirmed"; return 1; }
+  WHAT="浏览器打不开就说并画码；等着时每拍一句「还在等浏览器里授权…（按 q 改用二维码）」，到点停下给原因和下一步"
+}
+
+# A sandbox login that writes the REAL config (issue #2262): 2026-10-07 a
+# worker took its 上线证据 with HOME pointed at a temp dir but its session's
+# FLEET_CONF_DIR still set — `fleet login` remembered the fake hub in the
+# machine's real fleet.conf and m5 lost its hub. The real home is a seam here
+# ($d/real); the guard must keep both writes (the address, node.env's dir for
+# `fleet node ensure`) in the sandbox.
+drill_login_sandbox_real_conf() {
+  CAP=10; local t0 d="$WORK/lsr" out
+  mkdir -p "$d/home/.ssh" "$d/real/.config/claude-fleet" "$d/fakebin"
+  printf 'export FLEET_HUB_URL="https://hub.real"\n' > "$d/real/.config/claude-fleet/fleet.conf"
+  login_pending_hub "$d" $((CAP * 3)) || { kill "$LHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$d/hub.err")"; return 1; }
+  t0=$(now)
+  out=$(login_sandbox_run "$d" FLEET_LOGIN_BROWSER=0 FLEET_LOGIN_TIMEOUT_SECS=1 \
+        FLEET_LOGIN_REAL_HOME="$d/real" FLEET_CONF_DIR="$d/real/.config/claude-fleet")
+  SECS=$(since "$t0")
+  kill "$LHUB_PID" 2>/dev/null; wait "$LHUB_PID" 2>/dev/null
+  grep -q 'hub.real' "$d/real/.config/claude-fleet/fleet.conf" && ! grep -q '127.0.0.1' "$d/real/.config/claude-fleet/fleet.conf" \
+    || { WHY="the sandbox login wrote the real fleet.conf: $(cat "$d/real/.config/claude-fleet/fleet.conf")"; return 1; }
+  grep -q '127.0.0.1' "$d/home/.config/claude-fleet/fleet.conf" 2>/dev/null \
+    || { WHY="the sandbox's own fleet.conf did not get the address: [$out]"; return 1; }
+  case "$out" in *'belongs to'*) ;; *) WHY="it did not say it ignored the carried FLEET_CONF_DIR: [$out]"; return 1 ;; esac
+  WHAT="沙箱 HOME 下带着真的 FLEET_CONF_DIR 登录：真 fleet.conf 一字不动，地址写进沙箱，并说一句为什么"
 }
 
 # `fleet drill invite` on a client-only computer (issue #2024, EPIC #1906 C17):
@@ -3144,6 +3238,62 @@ drill_oldcfg_deleted_hook() {
   WHAT="删了 h.sh 的发版被拒（oldcfg: 点名 bin/h.sh，stable 没动）；--force 才挪并记一行"
 }
 
+# ---- macos-red-to-stable (#2286): the macOS selftests left the PR and run on
+# master after the merge. A BSD-only red there must (1) be filed once as a breakage
+# by the watcher and (2) stop `fleet-stable.sh move` with `macos:`; once the run on
+# the target goes green the same move goes through. Fake gh (the runs / check
+# runs), fake filer; a real bare repo + tag.
+drill_macos_red_to_stable() {
+  CAP=30; local t0 d out rc c1 c2
+  d="$WORK/macosred"; mkdir -p "$d/shim" "$d/seed" "$d/conf"
+  cat > "$d/shim/gh" <<SH
+#!/bin/sh
+case "\$*" in
+  *actions/workflows/*status=completed*) cat "$d/runs.watch" ;;
+  *actions/workflows/*) cat "$d/runs.stable" ;;
+  *actions/runs/*/jobs*) printf '7\tmacOS shard 1\n' ;;
+  'run view'*) printf 'FAIL  bsd-only-selftest.sh  1s\n' ;;
+  *) printf 'completed success shard 1\n' ;;
+esac
+SH
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/filed"\necho https://github.com/o/r/issues/77\n' "$d" > "$d/filer"
+  chmod +x "$d/shim/gh" "$d/filer"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm bsd && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    echo x > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'bsd-only break' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  # The watcher reads id/sha/conclusion/event; the stable gate head_sha/status/
+  # conclusion/event/id/title.
+  printf '9\t%s\tfailure\tpush\n8\t%s\tsuccess\tpush\n' "$c2" "$c1" > "$d/runs.watch"
+  printf '%s\tcompleted\tfailure\tpush\t9\tselftests (macOS)\n' "$c2" > "$d/runs.stable"
+  t0=$(now)
+  # red: the watcher files it as a breakage …
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_FILE_CMD="$d/filer" \
+          bash "$BIN/fleet-macos-watch.sh" --repo o/r --now 2>&1) || { WHY="the watcher failed: $out"; return 1; }
+  grep -q -- '--breakage' "$d/filed" 2>/dev/null || { WHY="the red run was not filed with --breakage: $out"; return 1; }
+  grep -q 'bsd-only-selftest.sh' "$d/filed" || { WHY="the filing does not name the red test"; return 1; }
+  # … and stable refuses to move onto it.
+  out=$(PATH="$d/shim:$PATH" sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="move onto the red commit exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — macos:'*) ;; *) WHY="the refusal is not prefixed macos: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a red macOS run"; return 1; }
+  # green: the fix's run on the same target is green → the move goes through.
+  printf '%s\tcompleted\tsuccess\tworkflow_dispatch\t10\tselftests (macOS) @ %s\n%s\tcompleted\tfailure\tpush\t9\tselftests (macOS)\n' \
+    "$c1" "$c2" "$c2" > "$d/runs.stable"
+  out=$(PATH="$d/shim:$PATH" sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the move after a green run failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move after the run went green"; return 1; }
+  WHAT="master 上 macOS 红：开出带指纹的修复单、stable 拒挪（macos:）；同一提交跑绿后照常挪"
+}
+
 # ---- burst-lands-on-one (#2077, EPIC #2074 C6): the hub counts the starts it just
 # sent and spreads a burst. The whole change is the hub's (judge + the journal), so
 # the drill is its Go tests, run for real where a toolchain is: four starts at two
@@ -3479,6 +3629,50 @@ drill_cold_fill_fails() {
   case " $(printf '%s ' $wins)" in *" 5 "*) WHY="the window of the failed checkout is still open"; return 1 ;; esac
   [ -z "$(ls -d "$d"/wt/*issue-5 2>/dev/null)" ] || { WHY="the half worktree is still there"; return 1; }
   WHAT="检出失败：会话窗口和半截 worktree 都收走，派发方得到 exit 1「worktree checkout」"
+}
+
+# brew-keg-700 (issue #2283): brew pours with the caller's umask, so an owner on
+# 077 leaves kegs (and opt links) only it can read — every other login on the
+# machine loses python ssl / tmux. The diskguard tick's brew pass repairs them to
+# go+rX, as the prefix's owner, on a machine with 2+ logins; one login, or not
+# the owner ⇒ nothing changes (the doctor names the owner). etc/*/private stays
+# private. Another uid reads the repaired file when sudo -n can show it.
+drill_brew_keg_700() {
+  CAP=5; local d p t0 out x
+  d="$(mktemp -d /tmp/brk-brew.XXXXXX)" || { WHY="no tmp dir"; return 1; }
+  chmod 755 "$d"; p="$d/brew"
+  mkdir -p "$p/Cellar/ok/1/bin" "$p/opt" "$p/etc/x"; chmod -R 755 "$p"
+  ( umask 077
+    mkdir -p "$p/Cellar/tmux/3.7c/lib" "$p/etc/x/private"
+    printf 'x\n' > "$p/Cellar/tmux/3.7c/lib/libjemalloc.2.dylib"
+    ln -s ../Cellar/tmux/3.7c "$p/opt/tmux" )
+  bw() { env FLEET_BREW_PREFIX="$p" FLEET_BREW_PERMS_EVERY=0 FLEET_CONF_DIR="$d/conf" "$@" \
+         bash "$BIN/fleet-diskguard.sh" --brew-watch >/dev/null 2>&1; }
+  mode() { ls -ld "$1" | cut -c1-10; }
+  bw FLEET_BREW_LOGINS=1
+  [ "$(mode "$p/Cellar/tmux/3.7c")" = drwx------ ] || { WHY="one login: the keg was changed ($(mode "$p/Cellar/tmux/3.7c"))"; rm -rf "$d"; return 1; }
+  bw FLEET_BREW_LOGINS=2 FLEET_BREW_ME=someone-else
+  [ "$(mode "$p/Cellar/tmux/3.7c")" = drwx------ ] || { WHY="not the owner: the keg was changed"; rm -rf "$d"; return 1; }
+  out="$(FLEET_BREW_PREFIX="$p" FLEET_BREW_LOGINS=2 FLEET_BREW_ME=someone-else bash "$BIN/fleet-brew-perms.sh" --doctor)"
+  case "$out" in warn*"owned by $(id -un)"*"chmod -R go+rX"*) ;; *) WHY="non-owner doctor line: [$out]"; rm -rf "$d"; return 1 ;; esac
+  t0=$(now)
+  bw FLEET_BREW_LOGINS=2
+  SECS=$(since "$t0")
+  for x in "$p/Cellar/tmux" "$p/Cellar/tmux/3.7c" "$p/Cellar/tmux/3.7c/lib"; do
+    [ "$(mode "$x")" = drwxr-xr-x ] || { WHY="$x is $(mode "$x") after the tick"; rm -rf "$d"; return 1; }
+  done
+  [ "$(mode "$p/Cellar/tmux/3.7c/lib/libjemalloc.2.dylib")" = -rw-r--r-- ] || { WHY="the dylib is $(mode "$p/Cellar/tmux/3.7c/lib/libjemalloc.2.dylib")"; rm -rf "$d"; return 1; }
+  [ "$(uname -s)" = Darwin ] && { [ "$(mode "$p/opt/tmux")" = lrwxr-xr-x ] || { WHY="opt/tmux is $(mode "$p/opt/tmux")"; rm -rf "$d"; return 1; }; }
+  [ "$(mode "$p/etc/x/private")" = drwx------ ] || { WHY="etc/x/private was opened"; rm -rf "$d"; return 1; }
+  [ -z "$(FLEET_BREW_PREFIX="$p" bash "$BIN/fleet-brew-perms.sh" --scan)" ] || { WHY="--scan still lists paths"; rm -rf "$d"; return 1; }
+  grep -q "keg $p/Cellar/tmux/3.7c fixed" "$d/conf/diskguard/brew-perms.log" 2>/dev/null || { WHY="no log line for the keg"; rm -rf "$d"; return 1; }
+  if sudo -n -u nobody true 2>/dev/null; then
+    sudo -n -u nobody cat "$p/opt/tmux/lib/libjemalloc.2.dylib" >/dev/null 2>&1 || { WHY="nobody still cannot read the dylib"; rm -rf "$d"; return 1; }
+    WHAT="一个登录 / 不是属主都不动；属主那一拍把 700 的 keg、opt 链接改回 go+rX，另一个 uid（nobody）读得到，etc/*/private 不碰"
+  else
+    WHAT="一个登录 / 不是属主都不动；属主那一拍把 700 的 keg、opt 链接改回 go+rX（无 sudo，按权限位判），etc/*/private 不碰"
+  fi
+  rm -rf "$d"
 }
 
 # ---- invite-expired (#2261, EPIC #2259 C2): a newcomer signs in with an invite

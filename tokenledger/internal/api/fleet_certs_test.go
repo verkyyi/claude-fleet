@@ -19,6 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 )
 
@@ -139,8 +140,13 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 	}
 
 	pc, done := personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
-	if pc != 200 || !strings.Contains(done, "valid until") {
+	if pc != 200 || !strings.Contains(done, "valid until") || !strings.Contains(done, "you can go back to the terminal") {
 		t.Fatalf("approve %d:\n%s", pc, done)
+	}
+	// claude-fleet#2262: one page for the phone and the computer's own browser
+	// says the terminal is where to go next.
+	if zh := pageT(i18n.ZhCN, "login.done"); !strings.HasPrefix(zh, "已登录，可以回到终端") {
+		t.Fatalf("login.done zh = %q", zh)
 	}
 
 	code, body = postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})

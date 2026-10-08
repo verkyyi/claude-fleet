@@ -586,6 +586,9 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    (bypass-perms can always `pkill`); self-teardown, isolated sockets (`-L`/`-S`),
    and `FLEET_ALLOW_TMUX_DESTROY=1` all pass through. Tell the user so a
    deliberate live-server destroy isn't a surprise.
+   It also wraps `brew` in `umask 022` (issue #2283): Homebrew pours kegs with
+   the caller's umask, and an owner on 077 leaves kegs no other login can read.
+   The shell's own umask is not changed — only brew's run is.
 
    **Optional — login banner + SSH opens the client** (issues #1068, #1166, #1711). Offer
    to add this line to `~/.zshrc`, after the `cw.zsh` line above:

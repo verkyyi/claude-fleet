@@ -13,7 +13,7 @@ with --enter) is the whole way in, in one go:
   1. the certificate — none, expired, or under FLEET_RENEW_BELOW_SECS (6h)
      left: renew it by this device's key (fleet-login.py renew, no scan);
      the hub says this device must scan (never registered, revoked, seven
-     idle days): the QR appears right here (fleet-login.py);
+     idle days): the browser opens here, or the QR (fleet-login.py);
   2. the machine — POST /v1/fleet/home: the hub picks the machine this device
      used last if it is online, else an online one with your sessions, else
      the least loaded one you have an account on; none online, it says so
@@ -130,9 +130,9 @@ class Refused(Exception):
     """The hub (or a route) said no; the message says why. code/body carry the
     hub's machine-readable refusal when it sent one."""
 
-    def __init__(self, msg, code="", body=None):
+    def __init__(self, msg, code="", body=None, status=0):
         super().__init__(msg)
-        self.code, self.body = code, body or {}
+        self.code, self.body, self.status = code, body or {}, status
 
 
 def die(msg, code=2):
@@ -476,7 +476,7 @@ def fetch_signed(hub, path, namespace, token, what, extra=None, timeout=10):
             body = {}
         why = body.get("error", "") if isinstance(body, dict) else ""
         raise Refused("hub refused %s (HTTP %d)%s" % (what, e.code, (": " + why) if why else ""),
-                      code=body.get("code", "") if isinstance(body, dict) else "", body=body)
+                      code=body.get("code", "") if isinstance(body, dict) else "", body=body, status=e.code)
 
 
 def fetch_routes(hub, token, timeout=10):
@@ -833,8 +833,8 @@ def ensure_cert(login, hub, verbose, force=False):
         return "kept"
     if rc != login.NEEDS_SCAN:
         die("renewal failed and no valid certificate is left — check the hub URL (%s) and the network" % hub, 1)
-    say("fleet · 需要扫码登录（第一次，或 7 天没用，或设备被吊销）\n")
-    login.cmd_login(["--hub", hub])  # draws the QR here, polls, writes the certificate; dies on failure
+    say("fleet · 需要登录（第一次，或 7 天没用，或设备被吊销）\n")
+    login.cmd_login(["--hub", hub])  # browser (or QR), polls, writes the certificate; dies on failure
     return "scanned"
 
 
@@ -917,10 +917,22 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
                 sys.stderr.write("fleet · %s\n" % (e.body.get("error") or "你的机器都不在线"))
                 print_candidates(e.body.get("home") or {})
                 sys.exit(1)
+            if e.status == 401 and token and attempt == 1:
+                # A viewer token the hub no longer knows — an old identity
+                # (claude-fleet#2262) — must not stand in for this person:
+                # drop it and log in as them.
+                login = load_login_module()
+                if os.environ.get("FLEET_HUB_TOKEN"):
+                    sys.stderr.write("fleet · 环境变量 FLEET_HUB_TOKEN 是入口已不认的旧令牌 — 从 shell 配置里删掉它（这次先不用它）\n")
+                elif login.drop_hub_token():
+                    sys.stderr.write("fleet · 清掉了本机一个入口已不认的旧令牌（hub.json 里的 token）\n")
+                token = ""
+                ensure_cert(login, hub, verbose)
+                continue
             if e.code == "device_revoked" and attempt == 1 and not token:
                 # The certificate in hand is a revoked device's: scan again,
                 # which registers this computer afresh, then ask once more.
-                sys.stderr.write("fleet · 这台设备已被吊销，需要重新扫码\n")
+                sys.stderr.write("fleet · 这台设备已被吊销，需要重新登录\n")
                 ensure_cert(load_login_module(), hub, verbose, force=True)
                 continue
             sys.stderr.write("fleet · 入口没有给出机器（%s），按上次的记录直连\n" % e)

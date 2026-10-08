@@ -355,7 +355,6 @@ COMMANDS = (
     ("new", "other"),
     ("newto", "other"),      # 新建到 <机器>… (1–9)
     ("restore", "other"),    # 已落地 — the landed list, in place
-    ("info", "other"),       # 详情列 — issue · PR · ctx%
     ("repo", "other"),
     ("clients", "other"),
 )

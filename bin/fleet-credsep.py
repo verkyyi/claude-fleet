@@ -3,7 +3,7 @@
 cannot read them (issue #1971, EPIC #1967 C4). bin/fleet-credsep.sh is the
 front; install / uninstall run as ROOT (it calls them through `sudo -n`).
 
-    install   --login L --conf-dir C --install-dir I [--dry-run]
+    install   --login L --conf-dir C --install-dir I [--dry-run|--adopt]
     uninstall --login L --conf-dir C [--dry-run]
     status    --conf-dir C [--json]                 (as the login)
     check     --conf-dir C                          (as the login: the doctor row)
@@ -46,6 +46,10 @@ What install does, each step idempotent:
   6. the agent service now starts through fleet-credsep-launch.py agent (root,
      token down a pipe, then the login); the original definition is kept in
      backup/ for uninstall
+  6b. LIB/<L>.conf (root, 0600) — the proxy's upstream / hub / relay-pass
+     settings; the launcher reads these from here ONLY, never the login's own
+     files (issue #2290). Written once from the login's allowed values, then
+     kept; `install --adopt` takes the login's current ones again
   7. C/credsep.json — the login-readable record that says "separated" (no secret),
      with `back`: the paths uninstall puts things back to (issue #2135)
 
@@ -63,7 +67,7 @@ account is still created unless FLEET_CREDSEP_ROLE names one),
 FLEET_CREDSEP_TEST=1 (allow a non-root install into the sandbox),
 FLEET_CREDSEP_HOMES / FLEET_CREDSEP_USERS (plan: the homes dir, a `name:home` list).
 """
-import argparse, grp, json, os, plistlib, pwd, re, shlex, shutil, subprocess, sys, time
+import argparse, glob, grp, json, os, plistlib, pwd, re, shlex, shutil, subprocess, sys, time
 
 MAC = sys.platform == "darwin"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -218,6 +222,66 @@ def paths(login):
     return os.path.join(ROOT_BASE, login), os.path.join(RUN_BASE, login)
 
 
+# root's settings for a login's proxy (issue #2290): every key that says where a
+# credential or the node token goes. fleet-credsep-launch.py reads these from
+# <LIB>/<login>.conf ONLY; the login's own fleet.conf / secrets.env keep the port
+# and timings and nothing else.
+ROOT_KEYS = ("FLEET_CRED_ANTHROPIC_URL", "FLEET_CRED_CODEX_URL", "FLEET_CRED_RELAY_URL", "FLEET_CRED_CENTRAL_URL",
+             "FLEET_HUB_URL", "FLEET_CRED_RELAY_TOKEN", "FLEET_PROBE_FORCE_UNREACHABLE", "FLEET_CRED_ALLOW_HOSTS")
+URL_KEYS = ROOT_KEYS[:5]
+
+
+def root_conf_path(login):
+    return os.path.join(LIB, login + ".conf")
+
+
+def proxy_mod():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fleet_cred_proxy", os.path.join(HERE, "fleet-cred-proxy.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def login_settings(conf, install_dir):
+    """The ROOT_KEYS the login's own files set today (parsed, never sourced)."""
+    out = {}
+    for f in ([os.path.join(install_dir, "fleet.conf")] if install_dir else []) + [
+            os.path.join(conf, "fleet.settings"), os.path.join(conf, "fleet.conf"), os.path.join(conf, "secrets.env")]:
+        out.update({k: v for k, v in env_file(f).items() if k in ROOT_KEYS})
+    return out
+
+
+def settings_conf(login, conf, install_dir, adopt=False):
+    """Write root's <LIB>/<login>.conf: on the first install (or --adopt) it takes
+    the login's current values — an upstream / hub URL only when it is https to an
+    allowed host, FLEET_CRED_ALLOW_HOSTS never (root adds that by hand). An
+    existing one is kept as it is: a later line in the login's files changes
+    nothing until root adopts it. True when the bytes changed."""
+    path = root_conf_path(login)
+    have = env_file(path) if os.path.isfile(path) else None
+    if have is not None and not adopt:
+        say("settings:", path, "(root's, kept)")
+        return False
+    vals = dict(have or {})
+    m = proxy_mod()
+    m.ALLOWED = m.allowed_hosts(vals.get("FLEET_CRED_ALLOW_HOSTS", ""))
+    for k, v in sorted(login_settings(conf, install_dir).items()):
+        if k == "FLEET_CRED_ALLOW_HOSTS":
+            say("settings: NOT taken %s from the login (only root adds a host: edit %s)" % (k, path))
+        elif k in URL_KEYS and not m.loopback_ok(v):
+            say("settings: NOT taken %s=%s from the login (not https to an allowed host)" % (k, v))
+        else:
+            vals[k] = v
+    body = ("# claude-fleet credsep (issue #2290) — root's settings for %s's credential proxy.\n"
+            "# Only root writes this; the same keys in the login's own files are ignored.\n" % login
+            + "".join("%s=%s\n" % (k, vals[k]) for k in ROOT_KEYS if vals.get(k)))
+    changed = put_changed(path, body, 0o600, "root" if os.geteuid() == 0 else login)
+    say("settings:", path, "(%s: %s)" % ("written" if changed else "current",
+                                         ", ".join(k for k in ROOT_KEYS if vals.get(k)) or "no key"))
+    return changed
+
+
 def codex_homes(conf, home, ne=None):
     ne = ne if ne is not None else env_file(os.path.join(conf, "node.pub.env")) or env_file(os.path.join(conf, "node.env"))
     return ne.get("CCQUOTA_FLEET_CODEX_HOMES") or os.path.join(home, ".codex-accounts")
@@ -326,6 +390,140 @@ def launcher_cmd(mode, login=None):
     return [PY, "-I", os.path.join(LIB, "fleet-credsep-launch.py"), mode] + ([login] if login else [])
 
 
+def agent_log(login):
+    """Where the root-started agent's stdout/stderr go (issue #2296): launchd opens
+    StandardOutPath AS ROOT and follows a symlink, so a log in the login's home is
+    a root write the login aims (ln -sf /etc/sudoers ~/.ccquota/agent.log)."""
+    return os.path.join(LOG_BASE, login, "agent.log")
+
+
+def agent_log_dir(login):
+    mkdir(LOG_BASE, 0o755, "root" if os.geteuid() == 0 else login)
+    mkdir(os.path.join(LOG_BASE, login), 0o700, "root" if os.geteuid() == 0 else login)
+
+
+def agent_dropin(login, unit):
+    """The systemd drop-in that starts the agent through the launcher as root; a
+    unit that logs to a file has it redirected under LOG_BASE (issue #2296)."""
+    txt = ("# claude-fleet credsep (issue #1971)\n[Service]\nUser=root\nGroup=root\nExecStart=\nExecStart=%s\n"
+           % " ".join(shlex.quote(c) for c in launcher_cmd("agent", login)))
+    try:
+        lines = open(unit).read().splitlines()
+    except OSError:
+        lines = []
+    if any(re.match(r"Standard(Output|Error)=(file|append|truncate):", l.strip()) for l in lines):
+        txt += "StandardOutput=append:%s\nStandardError=append:%s\n" % (agent_log(login), agent_log(login))
+    return txt
+
+
+def relog_agent(login):
+    """An agent credsep starts as root whose log is still in the login's home
+    (separated before issue #2296) → its log moves under LOG_BASE and it restarts.
+    True when it rewrote something; a definition that is not credsep's is left."""
+    if MAC:
+        p = os.path.join(DAEMON_DIR, "com.ccquota.agent.%s.plist" % login)
+        try:
+            with open(p, "rb") as f:
+                pl = plistlib.load(f)
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            return False
+        if pl.get("UserName") not in (None, "root") or \
+                not any("fleet-credsep-launch" in str(x) for x in pl.get("ProgramArguments") or []):
+            return False
+        if pl.get("StandardOutPath") == pl.get("StandardErrorPath") == agent_log(login):
+            return False
+        was = pl.get("StandardOutPath") or pl.get("StandardErrorPath") or "-"
+        agent_log_dir(login)
+        pl["StandardOutPath"] = pl["StandardErrorPath"] = agent_log(login)
+        put(p, plistlib.dumps(pl), 0o644, "root" if os.geteuid() == 0 else login)
+        load_daemon(p, pl["Label"])
+        say("agent: log %s → %s (root writes it; restarted)" % (was, agent_log(login)))
+        return True
+    unit = os.path.join(DAEMON_DIR, "ccquota-agent-%s.service" % login)
+    dp = os.path.join(unit + ".d", "credsep.conf")
+    if not os.path.isfile(dp):
+        return False
+    want = agent_dropin(login, unit)
+    if open(dp).read() == want:
+        return False
+    agent_log_dir(login)
+    put(dp, want, 0o644, "root" if os.geteuid() == 0 else login)
+    load_daemon(unit, "ccquota-agent-%s.service" % login)
+    say("agent: log → %s (root writes it; restarted)" % agent_log(login))
+    return True
+
+
+def relog(a):
+    if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", a.login):
+        die("bad login %r" % a.login, 2)
+    if not relog_agent(a.login):
+        say("agent: log of %s — nothing to move (not credsep's root agent, or already under %s)"
+            % (a.login, os.path.join(LOG_BASE, a.login)))
+    return 0
+
+
+def in_home(path, base):
+    """True when path (or what it resolves to) lies under the homes dir."""
+    b = base.rstrip("/") + "/"
+    return bool(path) and (path.startswith(b) or os.path.realpath(path).startswith(os.path.realpath(base) + "/"))
+
+
+def rootlogs(a):
+    """The doctor's `rootlog` row (issue #2296): every service the machine starts
+    as root whose stdout/stderr file lies in a home — a symlink planted there
+    turns root's open() onto any file. exit 0 OK, 1 WARN."""
+    base = E("FLEET_CREDSEP_HOMES", "/Users" if MAC else "/home")
+    n, bad = 0, []
+    for name in sorted(os.listdir(DAEMON_DIR)) if os.path.isdir(DAEMON_DIR) else []:
+        p = os.path.join(DAEMON_DIR, name)
+        if MAC:
+            if not name.endswith(".plist"):
+                continue
+            try:
+                with open(p, "rb") as f:
+                    pl = plistlib.load(f)
+            except (OSError, ValueError, plistlib.InvalidFileException):
+                continue
+            if not isinstance(pl, dict) or pl.get("UserName") not in (None, "root"):
+                continue
+            n += 1
+            label = pl.get("Label") or name[:-6]
+            outs = {pl.get(k) for k in ("StandardOutPath", "StandardErrorPath")}
+        else:
+            if not name.endswith(".service"):
+                continue
+            user, so = "", {}
+            for f in [p] + sorted(glob.glob(p + ".d/*.conf")):
+                try:
+                    for l in open(f):
+                        m = re.match(r"\s*(User|StandardOutput|StandardError)=(.*)$", l)
+                        if m and m.group(1) == "User":
+                            user = m.group(2).strip()
+                        elif m:
+                            so[m.group(1)] = m.group(2).strip()
+                except OSError:
+                    pass
+            if user not in ("", "root"):
+                continue
+            n += 1
+            label = name
+            outs = {v.split(":", 1)[1] for v in so.values() if re.match(r"(file|append|truncate):", v)}
+        if any(x and in_home(x, base) for x in outs):
+            m = re.match(r"(?:com\.ccquota\.agent\.|ccquota-agent-)([A-Za-z0-9_.-]+?)(?:\.service)?$", label)
+            bad.append((label, m.group(1) if m else None))
+    if bad:
+        ours = [l for _, l in bad if l]
+        other = [n for n, l in bad if not l]
+        print("rootlog: WARN — %d root service(s) write a log in a home, where a symlink turns root's write onto "
+              "any file: %s%s%s" % (len(bad), ", ".join(n for n, _ in bad),
+              " — fix: sudo bash %s check --fix --login <login> for %s" % (os.path.join(HERE, "fleet-credsep.sh"),
+                                                                          ", ".join(ours)) if ours else "",
+              "; not the fleet's, move its log under /var/log by hand: %s" % ", ".join(other) if other else ""))
+        return 1
+    print("rootlog: OK — %d root service(s) in %s, none writes a log in a home" % (n, DAEMON_DIR))
+    return 0
+
+
 def plist(label, argv, out=None, throttle=None):
     d = {"Label": label, "ProgramArguments": argv, "RunAtLoad": True, "KeepAlive": True}
     if throttle:    # launchd waits 10 s by default before a KeepAlive restart
@@ -401,6 +599,7 @@ def install(a):
         with open(os.path.join(HERE, f), "rb") as src:
             moved_code |= put_changed(os.path.join(LIB, f), src.read(), 0o755, "root" if os.geteuid() == 0 else login)
     say("code:", LIB, "(updated)" if moved_code else "(current)")
+    moved_code |= settings_conf(login, conf, a.install_dir, bool(getattr(a, "adopt", False)))
 
     # 4. the credentials
     n = 0
@@ -504,6 +703,8 @@ def install(a):
                 pl = plistlib.load(f)
             pl.pop("UserName", None); pl.pop("Program", None)
             pl["ProgramArguments"] = launcher_cmd("agent", login)
+            agent_log_dir(login)
+            pl["StandardOutPath"] = pl["StandardErrorPath"] = agent_log(login)
             put(s["path"], plistlib.dumps(pl), 0o644, "root" if os.geteuid() == 0 else login)
             load_daemon(s["path"], s["label"])
         elif s["kind"] == "launchd-gui":
@@ -516,14 +717,16 @@ def install(a):
             pl["Label"] = "com.ccquota.agent.%s" % login
             pl.pop("Program", None)
             pl["ProgramArguments"] = launcher_cmd("agent", login)
+            agent_log_dir(login)
+            pl["StandardOutPath"] = pl["StandardErrorPath"] = agent_log(login)
             put(dp, plistlib.dumps(pl), 0o644, "root" if os.geteuid() == 0 else login)
             load_daemon(dp, pl["Label"])
         else:  # systemd-system: a drop-in replaces the start line and the user
             dd = s["path"] + ".d"
             mkdir(dd, 0o755, "root" if os.geteuid() == 0 else login)
-            put(os.path.join(dd, "credsep.conf"),
-                "# claude-fleet credsep (issue #1971)\n[Service]\nUser=root\nGroup=root\nExecStart=\nExecStart=%s\n"
-                % " ".join(shlex.quote(c) for c in launcher_cmd("agent", login)), 0o644,
+            if "StandardOutput=" in agent_dropin(login, s["path"]):
+                agent_log_dir(login)
+            put(os.path.join(dd, "credsep.conf"), agent_dropin(login, s["path"]), 0o644,
                 "root" if os.geteuid() == 0 else login)
             load_daemon(s["path"], s["label"])
         say("agent: %s now starts through the launcher (token down a pipe)" % s["label"])
@@ -536,6 +739,8 @@ def install(a):
         say("agent: %s restarted — its leases go to the %s proxy" % (s["label"], "shared" if shared else "login's"))
     elif not meta.get("agent"):
         say("agent: none on this login (no node) — only the files move")
+    if meta.get("agent"):
+        relog_agent(login)      # separated before issue #2296: its log leaves the home
 
     prev = (record(conf) or {}).get("back") or {}
     back = {"files": sorted({tuple(m) for m in (prev.get("files") or []) + MOVED}),
@@ -548,6 +753,26 @@ def install(a):
         rec["shared"] = True
     put(os.path.join(conf, "credsep.json"), json.dumps(rec, indent=1) + "\n", 0o644, login)
     say("credsep: ON —", R, "(%s only%s)" % (ROLE, ", the machine's shared proxy" if shared else ""))
+
+
+def adopt(a):
+    """install --adopt (issue #2290): root takes the login's current upstream /
+    hub settings into <LIB>/<login>.conf — after the person checked them — and
+    restarts the proxy that reads them. Nothing else moves."""
+    R = paths(a.login)[0]
+    try:
+        meta = json.load(open(os.path.join(R, "meta.json")))
+    except (OSError, ValueError):
+        die("%s is not separated (no %s/meta.json): install first" % (a.login, R), 3)
+    if not settings_conf(a.login, os.path.abspath(a.conf_dir), a.install_dir or meta.get("install_dir", ""), True):
+        return 0
+    if meta.get("mode") == "shared":
+        load_daemon(SHARED_PATH, SHARED_LABEL)
+    else:
+        plabel = "com.claude-fleet.credsep.%s" % a.login if MAC else "claude-fleet-credsep-%s.service" % a.login
+        load_daemon(os.path.join(DAEMON_DIR, plabel + (".plist" if MAC else "")), plabel)
+    say("proxy: restarted on root's settings")
+    return 0
 
 
 def put_changed(path, data, mode, owner):
@@ -631,6 +856,7 @@ def uninstall(a):
             os.unlink(ppath)
         say("proxy:", plabel, "removed")
     else:
+        pool_out(R)
         leave_state(login, conf, R)
         conf_switch_back(login, conf, pw, meta.get("conf_prior") or {})
     # every credential back to the login's own path — the agent may have renewed them
@@ -649,9 +875,12 @@ def uninstall(a):
         say("node.env: back at", ne_path)
     say("credentials: %d moved back" % n)
     for p in (os.path.join(conf, "credsep.json"), os.path.join(LOG_BASE, login + ".log"),
-              os.path.join(LOG_BASE, login + ".launch.log")):
+              os.path.join(LOG_BASE, login + ".launch.log"), root_conf_path(login),
+              os.path.join(RUN_BASE, ".shared", "ignored." + login)):
         if os.path.exists(p) and not DRY:
             os.unlink(p)
+    if not DRY:
+        shutil.rmtree(os.path.join(LOG_BASE, login), ignore_errors=True)
     if not DRY and SOFT:
         # a rollback with a failed step keeps the store (backup/, meta.json) for
         # the person, under a name no reader takes for a separated login
@@ -679,6 +908,36 @@ def uninstall(a):
     drop_role()
     say("credsep: OFF — every file back where it was")
     return 0
+
+
+def pool_out(R):
+    """The machine's one copy back into a leaving tenant's store (issue #2311):
+    every <kind>:<label> its index (<R>/cred-proxy/pool.json) names, as the file
+    store_files() then moves to the login. -> how many."""
+    POOL = {"claude": ".credentials.json", "codex": "auth.json"}
+    ip = os.path.join(R, "cred-proxy", "pool.json")
+    try:
+        idx = json.load(open(ip))
+    except (OSError, ValueError):
+        return 0
+    n = 0
+    for ent, key in sorted(idx.items()) if isinstance(idx, dict) else []:
+        kind, _, label = ent.partition(":")
+        if kind not in POOL or not SAFE.match(label) or not re.match(r"^[0-9a-f]{32}$", str(key)):
+            continue
+        src = os.path.join(SHARED_DIR, "pool", kind, key, POOL[kind])
+        if not os.path.isfile(src):
+            continue
+        dst = (os.path.join(R, "accounts", label + ".hub", POOL[kind]) if kind == "claude"
+               else os.path.join(R, "codex", label, POOL[kind]))
+        mkdir(os.path.dirname(dst), 0o700, ROLE)
+        with open(src, "rb") as f:
+            put(dst, f.read(), 0o600, ROLE)
+        n += 1
+    if not DRY:
+        os.unlink(ip)
+    say("pool: %d credential(s) back into %s" % (n, R))
+    return n
 
 
 def store_files(R, conf, home, ch):
@@ -1118,12 +1377,6 @@ def machine_uninstall(a):
     if os.path.exists(SHARED_PATH) and not DRY:
         os.unlink(SHARED_PATH)
     say("shared: %s stopped and removed" % SHARED_LABEL)
-    if not DRY:
-        for p in (SHARED_REC, os.path.join(LOG_BASE, "shared.log"), os.path.join(LOG_BASE, "shared.launch.log")):
-            if os.path.exists(p):
-                os.unlink(p)
-        shutil.rmtree(SHARED_DIR, ignore_errors=True)
-        shutil.rmtree(SHARED_RUN, ignore_errors=True)
     if DRY:
         for d in sorted(os.listdir(ROOT_BASE)) if os.path.isdir(ROOT_BASE) else []:
             if d.startswith(".") or ".rolledback-" in d:
@@ -1139,6 +1392,13 @@ def machine_uninstall(a):
         say("== %s" % m["login"])
         uninstall(argparse.Namespace(login=m["login"], conf_dir=m["conf_dir"], home=m.get("home", ""),
                                      install_dir="", dry_run=DRY))
+    # last: the pool (issue #2311) is read by every tenant's uninstall above
+    if not DRY:
+        for p in (SHARED_REC, os.path.join(LOG_BASE, "shared.log"), os.path.join(LOG_BASE, "shared.launch.log")):
+            if os.path.exists(p):
+                os.unlink(p)
+        shutil.rmtree(SHARED_DIR, ignore_errors=True)
+        shutil.rmtree(SHARED_RUN, ignore_errors=True)
     say("")
     say("shared: OFF — every login back on its own proxy")
     return 0
@@ -1155,8 +1415,12 @@ def machine_refresh(a):
     for f in ("fleet-credsep-launch.py", "fleet-cred-proxy.py"):
         with open(os.path.join(HERE, f), "rb") as src:
             moved |= put_changed(os.path.join(LIB, f), src.read(), 0o755, owner)
+    for m in shared_tenants():
+        moved |= settings_conf(m["login"], m["conf_dir"], m.get("install_dir", ""))
     moved |= shared_service()
     shared_record([m["login"] for m in shared_tenants()])
+    for m in shared_tenants():
+        relog_agent(m["login"])     # separated before issue #2296
     if moved:
         load_daemon(SHARED_PATH, SHARED_LABEL)
     say("shared: %s — version %s" % ("refreshed, restarted" if moved else "current",
@@ -1347,6 +1611,22 @@ def check(a):
         print("credsep: WARN — FLEET_CRED_SEPARATE=0 but this login is still separated; uninstall: bash "
               "%s/fleet-credsep.sh uninstall" % HERE)
         return 1
+    me = pwd.getpwuid(os.getuid()).pw_name
+    rconf = os.path.join(rec.get("lib") or LIB, me + ".conf")
+    if not os.path.exists(rconf):
+        print("credsep: WARN — separated, but root's proxy settings %s are not written yet: the proxy has no "
+              "upstream / hub setting beyond its defaults. Re-run (sudo): bash %s/fleet-credsep.sh %s"
+              % (rconf, HERE, "machine refresh" if rec.get("shared") else "install"))
+        return 1
+    try:
+        ign = [l.split(" ", 1) for l in open(os.path.join(rec["run"], "ignored." + me)).read().splitlines() if l]
+    except OSError:
+        ign = []
+    if ign:
+        print("credsep: WARN — the proxy ignored %s (only root's %s sets these, issue #2290). If the change is "
+              "yours: sudo bash %s/fleet-credsep.sh install --adopt; otherwise delete the line(s)"
+              % (", ".join("%s from %s" % (k, f) for k, f in ign[:4]), rconf, HERE))
+        return 1
     print("credsep: OK — %s unreadable here (Permission denied), %sproxy on 127.0.0.1:%d as %s%s"
           % (R, "the machine's shared " if rec.get("shared") else "", port, rec["role"], note))
     return 0
@@ -1363,8 +1643,15 @@ def main():
         p.add_argument("--install-dir", default="")
         p.add_argument("--dry-run", action="store_true")
         p.add_argument("--force", action="store_true")
+        p.add_argument("--adopt", action="store_true")
     s = sub.add_parser("status"); s.add_argument("--conf-dir", required=True); s.add_argument("--json", action="store_true")
     c = sub.add_parser("check"); c.add_argument("--conf-dir", required=True)
+    rl = sub.add_parser("relog")
+    rl.add_argument("--login", required=True)
+    rl.add_argument("--conf-dir", default="")
+    rl.add_argument("--install-dir", default="")
+    rl.add_argument("--dry-run", action="store_true")
+    sub.add_parser("rootlogs")
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
     mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status"))
@@ -1375,6 +1662,13 @@ def main():
     a = ap.parse_args()
     if a.cmd == "plan":
         return plan(a)
+    if a.cmd == "rootlogs":
+        return rootlogs(a)
+    if a.cmd == "relog":
+        DRY = a.dry_run
+        if os.geteuid() != 0 and not TEST and not DRY:
+            die("relog needs root (bin/fleet-credsep.sh check --fix runs it through sudo -n)", 2)
+        return relog(a)
     if a.cmd == "machine":
         if a.verb == "status":
             return machine_status(a)
@@ -1392,6 +1686,8 @@ def main():
             die("only macOS and Linux", 2)
         if a.cmd == "uninstall":
             return uninstall(a)
+        if a.adopt:
+            return adopt(a)
         fresh = not DRY and not os.path.lexists(paths(a.login)[0])
         if fresh:
             preflight_gate([(a.login, os.path.abspath(a.conf_dir))], a.force)

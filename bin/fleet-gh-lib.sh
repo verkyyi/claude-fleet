@@ -184,8 +184,10 @@ fleet_gh_rest_pr_view() {  # fleet_gh_rest_pr_view <repo> <pr>
   { read -r st; read -r mg; read -r ms; read -r dr; read -r sha; read -r am; } <<< "$row"
   ck=none
   if [ "$st" = OPEN ] && [ -n "$sha" ]; then
+    # `macOS shard *` is not part of the merge gate (issue #2286) — dropped here
+    # exactly as fleet-pr-verdict.sh's GraphQL fold drops it.
     runs=$(fleet_gh_run core pr-view api "repos/$repo/commits/$sha/check-runs?per_page=100" --jq '
-             .check_runs[] |
+             .check_runs[] | select((.name // "") | startswith("macOS shard") | not) |
              if (.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled"
                  or .conclusion=="action_required") then "fail"
              elif .status!="completed" then "pending" else "pass" end') || return $?

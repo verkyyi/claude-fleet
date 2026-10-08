@@ -19,6 +19,20 @@ Separated, a **role account** owns all of it:
 | `node.env` | `~/.config/claude-fleet/node.env` (0600) | a symlink into the store; token-less copy in `node.pub.env` |
 | credential proxy | runs as the login (C3) | runs as `_fleetcred` (Linux: `fleetcred`) |
 | node agent | runs as the login, token from `node.env` | started by root, token down a pipe (fd 3), runs as the login |
+| node agent's log | `~/.ccquota/agent.log` | `/var/log/fleet-cred/<login>/agent.log` (dir `root:wheel 0700`) |
+
+**The agent's log leaves the home** (issue #2296). Once the agent is started by
+root, launchd opens its `StandardOutPath` (systemd its `StandardOutput=append:`)
+*as root* and follows a symlink — a log left in `~/.ccquota/` would let the login
+`ln -sf /etc/sudoers ~/.ccquota/agent.log` and have root append to any file. So
+install points it at `/var/log/fleet-cred/<login>/agent.log`; reading it takes
+`sudo` (`sudo tail /var/log/fleet-cred/<login>/agent.log`). A login separated
+before #2296 is moved by the next `install` / `apply` / `machine refresh`, or by
+an admin at once: `sudo bash ~/.claude/fleet/bin/fleet-credsep.sh check --fix
+--login <login>`. The doctor's `rootlog` row (`fleet-credsep.sh rootlogs`) scans
+`/Library/LaunchDaemons` (Linux `/etc/systemd/system`) and WARNs on any service
+run as root whose log lies in a home — the fleet's own with that fix line, any
+other as "not the fleet's".
 
 `/var/db/fleet-cred/<login>/` is `0700 _fleetcred`. A session doing
 `ls /var/db/fleet-cred/<login>` or `cat ~/.config/claude-fleet/node.env` gets
@@ -129,6 +143,7 @@ credentials and `node.env` moved, the agent through the launcher — and then:
 | port | one per login | one fixed `127.0.0.1:18923` (`FLEET_CRED_SHARED_PORT`) — plus each login's OLD port, answering that login only |
 | control socket | per login | `/var/run/fleet-cred/.shared/ctl.sock` (0666): the kernel's peer uid (`getpeereid` / `SO_PEERCRED`) names the login |
 | the login's proxy state (signing key, held passes, relay pass) | `~/.config/claude-fleet/cred-proxy/` | MOVED to `/var/db/fleet-cred/<login>/cred-proxy/` (binds / revocations / live sessions / trust copied) |
+| the leased credentials (Claude `.credentials.json`, Codex `auth.json`) | in the login's store | ONE copy for the machine, `/var/db/fleet-cred/.shared/pool/<kind>/<hash of the access token>/`; the login's store keeps only its index, `cred-proxy/pool.json` (issue #2311) |
 | `FLEET_CRED_PROXY` | as the login set it | `1` — the line it had is remembered and put back by `disable` |
 | version | each login's install | the root-owned copy in `/Library/Application Support/claude-fleet/credsep/`; an admin login's sync runs `machine refresh` (`sudo -n`) to follow stable, else the doctor says to |
 
@@ -136,7 +151,15 @@ credentials and `node.env` moved, the agent through the launcher — and then:
 signing key, binds, revocations, live sessions, hub passes, trust, the probe,
 the node token, the person's budget, the relay pass, the credentials, the log
 (`/var/log/fleet-cred/<login>.log`) — is that login's tenant's; nothing is
-shared between two. A session credential minted on the shared proxy carries its
+shared between two — except the leased credential FILE (issue #2311): a lease is
+filed once, under a hash of its access token, and each tenant's index
+(`cred-proxy/pool.json`, `<kind>:<label>` → hash) is the only way that tenant's
+sessions reach it. Two logins share a file exactly when the hub handed both the
+same token (the pool accounts); a token only one login leased is never served to
+another, and two people's accounts that happen to share a label stay two files.
+A tenant that joined before the pool moves its copies in when the proxy starts;
+a file no index names any more is removed; `uninstall` puts each tenant's copies
+back as its own files. A session credential minted on the shared proxy carries its
 login (`lg`) and is verified with **that** login's key, so a credential relabelled
 to another login only fails the signature. A hub pass (the central route) is
 filed under the login whose session registered it (`fleet-cred-proxy.sh pass`,
@@ -185,6 +208,39 @@ steps to finish by hand are printed. A store with no `credsep.json` (an install
 that stopped before its last step) is undone by `uninstall --login <login>`;
 its `--dry-run` says HALF INSTALLED. BREAK-IT rows `cred-sep-by-agent`,
 `cred-sep-bootstrap-fails`.
+
+## Where the proxy's settings come from (issue #2290)
+
+Root starts the proxy, but the login writes its own `fleet.conf` and
+`secrets.env` — so nothing there may say where a credential goes. The launcher
+splits the keys:
+
+| key | read from |
+|---|---|
+| `FLEET_CRED_PROXY_PORT` / `_TTL` / `_SWITCH_SECS` / `_TIMEOUT` / `_TRUST_SECS` | the login's own files, as before |
+| `FLEET_CRED_ANTHROPIC_URL` / `_CODEX_URL` / `_RELAY_URL` / `_CENTRAL_URL`, `FLEET_HUB_URL`, `FLEET_CRED_RELAY_TOKEN`, `FLEET_PROBE_FORCE_UNREACHABLE`, `FLEET_CRED_ALLOW_HOSTS` | root's `<LIB>/<login>.conf` ONLY (`/Library/Application Support/claude-fleet/credsep/<login>.conf`, Linux `/usr/local/lib/claude-fleet/credsep/`; root, 0600 — a relay pass may be in it) |
+
+The same key in a login file with a different value is **ignored**: one stderr
+line in the proxy's launch log (`ignored <KEY> from <file>`) and the key names
+(never a value) in `<run>/ignored.<login>`, which `credsep check` turns into a
+WARN. A file there that is not root's alone is not read.
+
+`install` writes root's file the first time (a shared tenant's: `machine
+refresh` / `machine install`), taking the login's current values — an upstream
+or hub URL only when it is https to an allowed host; `FLEET_CRED_ALLOW_HOSTS`
+never (root edits the file by hand). After that the file is kept as it is: a
+later change in the login's files does nothing until root takes it with
+`sudo bash …/fleet-credsep.sh install --adopt` (same validation; restarts the
+proxy that reads it).
+
+The proxy checks once more in separated mode: every upstream — the four URLs
+and the hub the node token goes to — must be https to `api.anthropic.com`,
+`chatgpt.com`, `api.openai.com`, `auth.openai.com`, `fleet-relay.24hw.cn`,
+`ccquota.24haowan.com` or `claudefleet.24haowan.com` (+ root's
+`FLEET_CRED_ALLOW_HOSTS`, space- or comma-separated); plain http on loopback only
+in the selftest's sandbox (`FLEET_CREDSEP_TEST=1`). A login's own unseparated
+proxy (its own credentials) keeps the old rule: any https host. BREAK-IT row
+`cred-upstream-tenant-override`.
 
 ## What it does not stop
 

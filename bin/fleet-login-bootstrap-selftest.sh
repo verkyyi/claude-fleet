@@ -31,6 +31,14 @@
 #      zshrc that has the block without it; a login's own line is kept, not doubled.
 #   I. first-run Claude UI state and wizard permissions: seed missing keys, keep
 #      existing values/rules, and cover every shell command in the wizard.
+#   J. (#2297) this machine's cache (fleet-bootstrap-cache.sh refresh from a
+#      versioned worktree at stable — the live install's shape — + a claude), GitHub and the claude installer both pointed
+#      at addresses that fail: rc 0, install at stable from the cache with origin
+#      re-pointed at GitHub, master tracking origin/master, claude laid out as
+#      versions/<ver> + ~/.local/bin/claude and runnable, the installer never
+#      called, the starter repo cloned from the cache; the zshrc block's clone
+#      names the same cache. An empty cache dir → today's road (GitHub + the
+#      installer), unchanged; FLEET_BOOTSTRAP_CACHE=off (every other leg) too.
 # Every step past the clone is a stub in the fixture repo's bin/ that logs its
 # argv — the real scripts have their own selftests.
 set -uo pipefail
@@ -54,6 +62,9 @@ leg()  { if [ "$FAILS" = "${_legf:-0}" ]; then printf 'PASS %s\n' "$1"; else pri
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 unset TMUX TMUX_PANE FLEET_INSTALL_ROOT FLEET_SEED_REPO FLEET_INSTALL_LAUNCHCTL FLEET_CLAUDE_INSTALL_CMD
+# no machine cache unless leg J builds one (the operator's /Library/Application
+# Support/claude-fleet/cache may be real — issue #2297)
+export FLEET_BOOTSTRAP_CACHE=off
 CALLS="$WORK/calls"; export CALLS
 # No `claude` anywhere on PATH — the runner's own ~/.local/bin included — so the
 # fixture login looks like one that has none (issue #1191); the "installer" is a
@@ -351,6 +362,47 @@ for command in commands:
 print(f'PASS wizard allow rules cover {len(commands)} shell lines from fleet-onboard.md')
 PY
 leg "I Claude first-run state preserves values; wizard commands are allowed"
+
+# ---- J. the machine's cache: no github.com, no claude.ai (#2297) ----
+CC="$WORK/cache"
+mkdir -p "$WORK/j-claude"
+printf '#!/bin/sh\necho "9.9.9 (Claude Code)"\n' > "$WORK/j-claude/claude"; chmod +x "$WORK/j-claude/claude"
+# the source the way the admin's live install is: a versioned worktree (a .git
+# FILE) checked out at stable, behind its repo's master
+git -C "$FX" worktree add -q --detach "$WORK/fx-live" stable
+out=$(FLEET_BOOTSTRAP_CACHE="$CC" "$BASH_BIN" "$BIN/fleet-bootstrap-cache.sh" refresh --from "$WORK/fx-live" --claude "$WORK/j-claude/claude" 2>&1)
+eq "J refresh rc" "$?" 0
+has "J refresh: stable" "$out" "claude-fleet: stable"
+has "J refresh: claude" "$out" "claude: 9.9.9"
+eq "J mirror at stable" "$(git -C "$CC/claude-fleet.git" rev-parse stable)" "$STABLE"
+eq "J mirror master = the repo's master" "$(git -C "$CC/claude-fleet.git" rev-parse master)" "$(git -C "$FX" rev-parse master)"
+eq "J claude current" "$(cat "$CC/claude/current")" 9.9.9
+newhome "$WORK/j"
+out=$(FLEET_BOOTSTRAP_CACHE="$CC" FLEET_BOOTSTRAP_GIT_BASE="$WORK/abroad-unreachable" FLEET_CLAUDE_INSTALL_CMD='exit 9' boot); rc=$?
+[ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '%s\n' "$out"
+eq "J rc" "$rc" 0
+R="$HOME/.claude/fleet"
+eq "J install at stable" "$(git -C "$R" rev-parse HEAD)" "$STABLE"
+eq "J install on master" "$(git -C "$R" symbolic-ref --short HEAD 2>/dev/null)" master
+eq "J master tracks origin/master" "$(git -C "$R" rev-parse --abbrev-ref 'master@{upstream}' 2>/dev/null)" origin/master
+eq "J origin re-pointed upstream" "$(git -C "$R" remote get-url origin)" "$WORK/abroad-unreachable/verkyyi/claude-fleet.git"
+has "J says cache" "$out" "from this machine's cache ($CC)"
+eq "J claude symlink" "$(readlink "$HOME/.local/bin/claude")" "$HOME/.local/share/claude/versions/9.9.9"
+eq "J claude runs" "$("$HOME/.local/bin/claude" --version)" "9.9.9 (Claude Code)"
+has "J claude line" "$out" "claude: installed 9.9.9 from $CC"
+grep -q '^claude-install' "$CALLS" && fail "J: the claude.ai installer ran"
+eq "J seed from cache" "$(git -C "$HOME/projects/claude-fleet" remote get-url origin 2>/dev/null)" "$WORK/abroad-unreachable/verkyyi/claude-fleet.git"
+eq "J fleet-up once" "$(grep -c '^fleet-up.sh ' "$CALLS")" 1
+[ -s "$FLEET_CONF_DIR/global/bootstrapped" ] || fail "J: not marked done"
+zb=$(boot --print-zshrc)
+has "J zshrc block clones the cache first" "$zb" "/Library/Application Support/claude-fleet/cache/claude-fleet.git"
+# an empty cache dir: today's road, untouched
+mkdir -p "$WORK/cache-empty"; newhome "$WORK/j2"
+out=$(FLEET_BOOTSTRAP_CACHE="$WORK/cache-empty" boot); eq "J2 rc" "$?" 0
+eq "J2 origin = GitHub" "$(git -C "$HOME/.claude/fleet" remote get-url origin)" "$GB/verkyyi/claude-fleet.git"
+eq "J2 installer ran once" "$(grep -c '^claude-install' "$CALLS")" 1
+hasnt "J2 no cache line" "$out" "this machine's cache"
+leg "J the machine's cache: no GitHub, no claude.ai; an empty cache → today's road"
 
 [ "$FAILS" = 0 ] || { printf 'selftest FAIL: %s failure(s)\n' "$FAILS"; exit 1; }
 printf 'selftest PASS: a new login sets itself up once, and only once — Claude Code included, the tools even without daemons (issues #1165, #1191, #1214) — bash %s\n' "$("$BASH_BIN" -c 'echo $BASH_VERSION')"

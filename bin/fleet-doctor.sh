@@ -331,6 +331,23 @@ if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
   esac
 fi
 
+# --- rootlog: no root service writes its log in a home (issue #2296) --------------
+# launchd / systemd open a root job's stdout file AS ROOT and follow a symlink:
+# a log in a home is a root write its login aims. Only on a machine the fleet put
+# services on (a com.ccquota.agent.* / com.claude-fleet.* / ccquota-agent-* unit).
+_rl_dir="${FLEET_CREDSEP_DAEMON_DIR:-$([ "$(uname)" = Darwin ] && echo /Library/LaunchDaemons || echo /etc/systemd/system)}"
+if [ -f "$(dirname "$0")/fleet-credsep.py" ] && [ -d "$_rl_dir" ] \
+   && find "$_rl_dir" -maxdepth 1 \( -name 'com.ccquota.agent.*' -o -name 'com.claude-fleet.*' \
+        -o -name 'ccquota-agent-*' -o -name 'claude-fleet-*' \) 2>/dev/null | grep -q .; then
+  _rl=$(bash "$(dirname "$0")/fleet-credsep.sh" rootlogs 2>&1 | tail -n 1)
+  _rl_m=${_rl#rootlog: }; _rl_lv=${_rl_m%% —*}; _rl_m=${_rl_m#* — }
+  case "$_rl_lv" in
+    OK)   pass rootlog "$_rl_m" ;;
+    WARN) warn rootlog "$_rl_m" ;;
+    *)    info rootlog "$_rl_m" ;;
+  esac
+fi
+
 # --- cred: which road this login's sessions take, and why (issue #1975) -----------
 # FLEET_CRED_PROXY=1 only (off = no row, as before): trust × probe → direct /
 # relay / central per agent, the proxy alive, credsep, session-pass renewal —
@@ -1682,6 +1699,18 @@ if [ -n "$fsev" ]; then
     pass machine "fseventsd ${fmb} MB RSS, ${fcpu}% CPU, up ${fet}"
   fi
 fi
+# 1b. A Homebrew keg the other logins cannot read (issue #2283): brew pours with
+#    the caller's umask, so a 077 owner's upgrade leaves 700 kegs that break every
+#    other login's python ssl / tmux and say nothing. The diskguard tick repairs
+#    them as the prefix's owner; this row WARNs with the owner and the one line to
+#    run. One login on the machine (or no brew) prints nothing.
+_bp="$(dirname "$0")/fleet-brew-perms.sh"
+bperm=''
+[ -f "$_bp" ] && bperm="$(bash "$_bp" --doctor 2>/dev/null | head -1)"
+case "$bperm" in
+  ok"	"*)   pass brew "${bperm#*	}" ;;
+  warn"	"*) warn brew "${bperm#*	}" ;;
+esac
 # 2. tmux calls per second, as the spinner measures itself (issue #887). Loosely
 #    coupled: a heartbeat without the field (a spinner predating it) shows nothing.
 tcps=''

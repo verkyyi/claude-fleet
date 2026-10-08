@@ -467,7 +467,34 @@ if [ "$DRY" = 0 ] && [ -x "$BIN/fleet-quotaguard.sh" ]; then
   }
 fi
 
+# --- the BSD half on master (issue #2286) -----------------------------------
+# The macOS selftests run on master after the merge; a red run there blocks every
+# `fleet-stable.sh move`. bin/fleet-macos-watch.sh files it ONCE as a breakage
+# (one issue per fingerprint, fleet-wide) and spawns its fixer into this fleet. Only
+# a repo whose base checkout carries BOTH the macOS workflow and
+# bin/fleet-stable.sh is read (business repos never are); independent of
+# FLEET_AUTOFILL; throttled inside the watcher (FLEET_MACOS_WATCH_SECS);
+# FLEET_MACOS_WATCH=0 turns it off.
+macos_watch_fleet() { (
+  sess="$1"
+  fleet_load_conf "$sess"
+  [ "${FLEET_MACOS_WATCH:-1}" = 0 ] && exit 0
+  [ -x "$BIN/fleet-macos-watch.sh" ] || exit 0
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    ( fleet_load_repo_conf "$sess" "$r" >/dev/null 2>&1
+      main="${FLEET_MAIN:-}"
+      [ -n "$main" ] && [ -f "$main/.github/workflows/selftests-macos.yml" ] && [ -f "$main/bin/fleet-stable.sh" ] || exit 0
+      if [ "$DRY" = 1 ]; then out=$("$BIN/fleet-macos-watch.sh" --repo "$r" --dry-run 2>&1)
+      else out=$("$BIN/fleet-macos-watch.sh" --repo "$r" --session "$sess" 2>&1); fi
+      [ -z "$out" ] || log "$sess: $r: macos-watch: ${out//$'\n'/ | }" )
+  done <<EOF
+$(fleet_repos "$sess")
+EOF
+) }
+
 for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
+  macos_watch_fleet "$s"
   dispatch_fleet "$s"
 done
 exit 0

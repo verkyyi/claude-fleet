@@ -174,8 +174,8 @@ var pageText = map[string]i18n.Text{
 		i18n.ZhCN: "已把 {node} 加为节点（证书签给 {login}，{until} 前有效）。回到终端，fleet node join 会接着装好并上线。",
 	},
 	"login.done": {
-		i18n.EN:   "Issued to {login}, valid until {until}. Back in the terminal, fleet login writes the certificate for you.",
-		i18n.ZhCN: "已签发给 {login}，{until} 前有效。回到终端，fleet login 会自动写好证书。",
+		i18n.EN:   "Signed in — you can go back to the terminal. (Certificate for {login}, valid until {until}; the terminal writes it for you.)",
+		i18n.ZhCN: "已登录，可以回到终端。（证书签给 {login}，{until} 前有效，终端会自动写好。）",
 	},
 	"login.confirm.lead": {
 		i18n.EN:   "Check that the code below matches the one in your terminal, then choose Confirm.",
@@ -185,7 +185,7 @@ var pageText = map[string]i18n.Text{
 	"login.for":      {i18n.EN: "Issued to", i18n.ZhCN: "签给"},
 	"login.account":  {i18n.EN: "system account", i18n.ZhCN: "系统账号"},
 	"login.keyfp":    {i18n.EN: "Key fingerprint", i18n.ZhCN: "密钥指纹"},
-	"login.validity": {i18n.EN: "Valid for 12 hours; scan again once it expires.", i18n.ZhCN: "有效期 12 小时，过期后再扫一次即可。"},
+	"login.validity": {i18n.EN: "Valid for 12 hours; fleet renews it by itself.", i18n.ZhCN: "有效期 12 小时，fleet 会自己续期。"},
 	"login.node.note": {
 		i18n.EN:   "Once confirmed, {node} becomes a node: the hub can place sessions on it.",
 		i18n.ZhCN: "确认后 {node} 成为节点：入口可以把会话派到它上面。",

@@ -7,10 +7,19 @@
 #   fleet-credsep.sh install [--dry-run|--force]
 #                                           separate (needs `sudo -n`, once;
 #                                           --dry-run needs none: what it would do)
+#   fleet-credsep.sh install --adopt        root takes the login's upstream / hub
+#                                           settings into root's <LIB>/<login>.conf
+#                                           (the only place the proxy reads them,
+#                                           issue #2290) and restarts the proxy
 #   fleet-credsep.sh uninstall [--dry-run]  undo: every file back where it was
 #                                           (--dry-run, no sudo: the steps back)
 #   fleet-credsep.sh status [--json]        separated or not (exit 3 = not)
 #   fleet-credsep.sh check                  the doctor's `credsep` row
+#   fleet-credsep.sh check --fix            and first move a root agent's log out of
+#                                           the login's home (issue #2296; sudo once —
+#                                           an admin: sudo bash … check --fix --login X)
+#   fleet-credsep.sh rootlogs               the doctor's `rootlog` row: every root
+#                                           service whose log lies in a home (WARN)
 #   fleet-credsep.sh plan                   every login on this machine: its state
 #                                           and the exact commands — dry run, the
 #                                           ONE sudo to type, status, the way back
@@ -170,7 +179,16 @@ case "$cmd" in
     root_machine "$@"
     ;;
   status) py status --conf-dir "$CONF" "$@" ;;
-  check)  py check --conf-dir "$CONF" ;;
+  check)
+    if [ "${1:-}" = --fix ]; then
+      # launchd opens a root job's log as root and follows a symlink: the agent's
+      # log leaves the home for /var/log/fleet-cred/<login>/ (issue #2296)
+      can_sudo || { echo "fleet-credsep: check --fix needs root once — run: sudo bash $BIN/fleet-credsep.sh check --fix" >&2; exit 4; }
+      root_py relog || exit $?
+      [ "$(id -u)" = 0 ] && exit 0     # root reads every store: the check is the login's to run
+    fi
+    py check --conf-dir "$CONF" ;;
+  rootlogs) py rootlogs ;;
   apply)
     dry=''; [ "${1:-}" = --dry-run ] && dry=--dry-run
     if shared; then

@@ -12,6 +12,10 @@
 #   cred-sep-proxy-off         bin/fleet-credsep.py preflight (proxy on · sessions on it · no EPIC batch)
 #   cred-sep-bootstrap-fails   bin/fleet-credsep.py machine install (rollback from meta.json),
 #                              bin/fleet-credsep.sh machine
+#   cred-upstream-tenant-override  bin/fleet-credsep-launch.py (root's settings only),
+#                              bin/fleet-cred-proxy.py (the upstream allow-list) — issue #2290
+#   root-log-in-home           bin/fleet-credsep.py agent_log (issue #2296): the root agent's
+#                              log is not in the home
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -123,6 +127,112 @@ EOF
     || { WHY="leftovers after the rollback: $(ls -a "$sb/db" "$C" 2>&1 | tr '\n' ' ')"; return 1; }
   printf '%s' "$out" | grep -q 'rolled back' || { WHY="the output does not say it rolled back: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
   WHAT="machine install 半途 bootstrap 返回 5：自动按 meta.json 退回（凭据、node.env、fleet.conf、agent 定义逐字节原样），退出码 ${rc}"
+}
+
+# A separated login writes its own upstream and hub into fleet.conf: a listener
+# of its own on loopback. Root's launcher must not hand those to the proxy — the
+# listener never sees a request, an Authorization or the node token (#2290).
+drill_cred_upstream_tenant_override() {
+  CAP=30
+  local me sb t0 evil good tok port i
+  me=$(id -un); sb="$WORK/tenant"
+  local c="$sb/home/.config/claude-fleet"
+  mkdir -p "$c/accounts/a1.hub" "$sb/daemons" "$sb/home/.ccquota" "$sb/good" "$sb/evil"
+  printf 'trusted\n' > "$sb/good/trust"; printf 'trusted\n' > "$sb/evil/trust"
+  cred_fake "$sb/good" && cred_fake "$sb/evil" || { WHY="the fake listeners did not start"; return 1; }
+  good="http://127.0.0.1:$(cat "$sb/good/fake.port")" evil="http://127.0.0.1:$(cat "$sb/evil/fake.port")"
+  printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-TENANT","refreshToken":null}}' > "$c/accounts/a1.hub/.credentials.json"
+  printf 'hub:a1\n' > "$c/accounts/a1"
+  printf 'CCQUOTA_TOKEN=ccq_TENANT_NODE_SECRET\n' > "$c/node.env"      # its hub: FLEET_HUB_URL
+  printf '{"anthropic":"reachable","openai":"reachable"}\n' > "$c/node-probe.json"
+  t0=$(now)
+  ( export HOME="$sb/home" FLEET_CONF_DIR="$c" FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" \
+      FLEET_CREDSEP_LOG_BASE="$sb/log" FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" \
+      FLEET_CREDSEP_ROLE="$me" FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO=''
+    bash "$BIN/fleet-credsep.sh" install >"$sb/install.out" 2>&1
+    # root's settings: the real upstream; the login's own file: its listener
+    printf 'FLEET_CRED_ANTHROPIC_URL=%s/direct-anthropic\n' "$good" >> "$sb/lib/$me.conf"
+    printf 'FLEET_CRED_ANTHROPIC_URL=%s/direct-anthropic\nFLEET_CRED_CENTRAL_URL=%s/central\nFLEET_HUB_URL=%s\n' \
+      "$evil" "$evil" "$evil" >> "$c/fleet.conf"
+    exec python3 -I "$BIN/fleet-credsep-launch.py" proxy "$me" ) 2>"$sb/launch.err" &
+  printf '%s\n' "$!" >> "$WORK/cred-pids"
+  until_ok 30 test -s "$sb/run/$me/port" || { WHY="the proxy did not start: $(tail -3 "$sb/install.out" "$sb/launch.err" | tr '\n' ' ')"; return 1; }
+  port=$(cat "$sb/run/$me/port")
+  tok=$(HOME="$sb/home" FLEET_CONF_DIR="$c" bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid t1 2>&1)
+  for i in 1 2; do
+    curl -s -m 20 -o "$sb/resp" -X POST -H "Authorization: Bearer $tok" -H 'content-type: application/json' \
+      -d '{}' "http://127.0.0.1:$port/v1/messages" >/dev/null 2>&1
+  done
+  SECS=$(since "$t0")
+  [ ! -s "$sb/evil/hits" ] || { WHY="the login's own listener was asked: $(sort -u "$sb/evil/hits" | tr '\n' ' ')"; return 1; }
+  grep -q '^direct-anthropic ' "$sb/good/hits" 2>/dev/null \
+    || { WHY="root's upstream never served the request: $(cat "$sb/resp" 2>/dev/null) $(tail -2 "$sb/launch.err" | tr '\n' ' ')"; return 1; }
+  grep -q 'ignored FLEET_CRED_ANTHROPIC_URL' "$sb/launch.err" && grep -q 'ignored FLEET_HUB_URL' "$sb/launch.err" \
+    || { WHY="the launcher did not say what it ignored: $(tr '\n' ' ' < "$sb/launch.err")"; return 1; }
+  WHAT="登录往自己的 fleet.conf 写上游和 FLEET_HUB_URL：它的监听收不到任何请求、Authorization 或节点令牌，请求照走 root 配置的上游；启动器写明 ignored"
+}
+
+# root-log-in-home (issue #2296): launchd / systemd open a root job's stdout file
+# AS ROOT and follow a symlink. credsep turns the agent into a root job (the
+# launcher) and used to keep its log at ~/.ccquota/agent.log — so the login could
+# `ln -sf <any file> ~/.ccquota/agent.log` and have root append to it. The drill
+# plays root's open() on both definitions: the one credsep used to leave (kept in
+# the store's backup/) writes through the link; the one it writes now does not.
+drill_root_log_in_home() {
+  CAP=20
+  local sb="$WORK/rootlog" t0 agent eff old victim home
+  sep_login "$sb"
+  home="$sb/homes/alpha"
+  printf '#!/bin/sh\nPATH="/usr/bin:/bin"\nexec /bin/sleep 1\n' > "$home/.ccquota/run-agent.sh"
+  chmod +x "$home/.ccquota/run-agent.sh"
+  if [ "$(uname)" = Darwin ]; then
+    agent="$sb/daemons/com.ccquota.agent.alpha.plist"
+    python3 -c 'import plistlib, sys
+open(sys.argv[1], "wb").write(plistlib.dumps({"Label": "com.ccquota.agent.alpha", "UserName": "alpha",
+    "ProgramArguments": [sys.argv[2]], "RunAtLoad": True, "KeepAlive": True,
+    "StandardOutPath": sys.argv[3], "StandardErrorPath": sys.argv[3]}))' "$agent" "$home/.ccquota/run-agent.sh" "$home/.ccquota/agent.log"
+  else
+    agent="$sb/daemons/ccquota-agent-alpha.service"
+    printf '[Service]\nUser=alpha\nExecStart=%s\nStandardOutput=append:%s\nStandardError=append:%s\n' \
+      "$home/.ccquota/run-agent.sh" "$home/.ccquota/agent.log" "$home/.ccquota/agent.log" > "$agent"
+  fi
+  printf 'export FLEET_CRED_PROXY=1\n' >> "$C/fleet.conf"
+  t0=$(now)
+  FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_PREFLIGHT=0 sep_install "$sb"
+  [ "$RC" = 0 ] || { WHY="machine install failed (rc $RC): $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"; return 1; }
+  # root's log path: the plist's StandardOutPath, or the unit's last StandardOutput= (drop-ins after it)
+  logpath() {
+    python3 - "$1" <<'PY'
+import glob, plistlib, re, sys
+p = sys.argv[1]
+if p.endswith(".plist"):
+    print(plistlib.load(open(p, "rb")).get("StandardOutPath", ""))
+else:
+    v = ""
+    for f in [p] + sorted(glob.glob(p + ".d/*.conf")):
+        for l in open(f):
+            m = re.match(r"StandardOutput=(?:file|append|truncate):(.*)$", l.strip())
+            if m:
+                v = m.group(1)
+    print(v)
+PY
+  }
+  root_writes() { python3 -c 'import sys; open(sys.argv[1], "a").write("ROOT WROTE THIS\n")' "$1"; }   # launchd's open(O_APPEND|O_CREAT)
+  victim="$sb/etc-sudoers"; printf 'root ALL=(ALL) ALL\n' > "$victim"
+  # the old way, as credsep left it: the agent's own log path, root's write through the login's link
+  old=$(logpath "$sb/db/alpha/backup/$(basename "$agent")")
+  mkdir -p "$(dirname "$old")"; ln -sf "$victim" "$old"
+  root_writes "$old"
+  grep -q 'ROOT WROTE' "$victim" || { WHY="the rig is wrong: root's write through the old path did not reach the link's target ($old)"; return 1; }
+  printf 'root ALL=(ALL) ALL\n' > "$victim"
+  eff=$(logpath "$agent")
+  SECS=$(since "$t0")
+  case "$eff" in
+    ''|"$sb/homes/"*) WHY="the root agent still logs in the home: ${eff:-<none>} — the login's link sends root's write anywhere"; return 1 ;;
+  esac
+  root_writes "$eff" 2>/dev/null
+  ! grep -q 'ROOT WROTE' "$victim" || { WHY="root's write reached the link's target through $eff"; return 1; }
+  WHAT="credsep 把节点代理改成 root 启动时，日志从 ~/.ccquota/agent.log 移到 \$LOG_BASE/<登录>/agent.log：同一根软链，旧写法 root 写进目标文件，新写法写不到"
 }
 
 cred_run_drills "$0"

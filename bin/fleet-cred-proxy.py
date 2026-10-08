@@ -122,8 +122,8 @@ proxy, never twice here. No hub / no node token / FLEET_CRED_BUDGET=0 = nothing
 reported, nothing refused; a verdict the hub has not renewed for
 FLEET_CRED_BUDGET_STALE (600 s) lapses (open).
 """
-import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, secrets
-import resource, signal, socket, ssl, sys, threading, time, urllib.error, urllib.request
+import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, re, secrets
+import resource, shutil, signal, socket, ssl, sys, threading, time, urllib.error, urllib.request
 from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -169,10 +169,31 @@ def red(k, v):
     return "<redacted:%d>" % len(v) if k.lower() in SECRET_HEADERS else v
 
 
+# Separated (issue #2290): the hosts a credential or the node token may go to.
+# The launcher hands this proxy its settings from root's config only, and on top
+# of that every upstream must be one of these (+ FLEET_CRED_ALLOW_HOSTS, which
+# also comes from root's config alone) — a login that talks the launcher into
+# another URL still cannot make the proxy send a real Authorization there.
+UPSTREAM_HOSTS = ("api.anthropic.com", "chatgpt.com", "api.openai.com", "auth.openai.com",
+                  "fleet-relay.24hw.cn", "ccquota.24haowan.com", "claudefleet.24haowan.com")
+ALLOWED = None      # None = a login's own proxy (its own credentials): any https host
+
+
+def allowed_hosts(extra=""):
+    return set(UPSTREAM_HOSTS) | {h.strip().lower() for h in re.split(r"[\s,]+", extra or "") if h.strip()}
+
+
 def loopback_ok(url):
-    """An upstream URL: https anywhere, plain http only on loopback (the selftest)."""
+    """An upstream URL: https anywhere, plain http only on loopback (the selftest).
+    Separated (ALLOWED set): https to an allowed host only; loopback http only in
+    the selftest's sandbox (FLEET_CREDSEP_TEST=1, which root's launcher never sets)."""
     u = urlsplit(url)
-    return u.scheme == "https" or (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1"))
+    loop = u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1")
+    if ALLOWED is None:
+        return u.scheme == "https" or loop
+    if u.scheme == "https":
+        return (u.hostname or "").lower() in ALLOWED
+    return loop and env("FLEET_CREDSEP_TEST") == "1"
 
 
 def node_env(path=None):
@@ -442,6 +463,8 @@ class HubPasses:
             hub, tok = (ne.get("CCQUOTA_HUB_URL") or env("FLEET_HUB_URL")).rstrip("/"), ne.get("CCQUOTA_TOKEN", "")
             if not hub or not tok:
                 raise RuntimeError("no hub / node token here")
+            if not loopback_ok(hub):
+                raise RuntimeError("hub URL not allowed (%s)" % hub)
             req = urllib.request.Request(hub + "/v1/fleet/session-cred/renew", method="POST",
                                          data=json.dumps({"cred": cur}).encode(),
                                          headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
@@ -550,6 +573,8 @@ class Router:
         tok = ne.get("CCQUOTA_TOKEN", "")
         if not hub:
             t, why = "trusted", "no hub: a standalone login"
+        elif not loopback_ok(hub):
+            t, why = "untrusted", "hub URL not allowed here (%s)" % hub
         elif not tok:
             t, why = "untrusted", "no node token: a client-only computer"
         else:
@@ -884,7 +909,7 @@ class Proxy(BaseHTTPRequestHandler):
             put["Authorization"] = "Bearer " + hubcred
             return base, upath, put, drop, "none"
         if provider == "codex":
-            path = codex_auth_path(c, acct)
+            path = pool_entry(c, "codex", acct) or codex_auth_path(c, acct)
             at, aid, fp = codex_tokens(path)
             self.codex_seen = (os.path.dirname(path), fp)
             put["Authorization"] = "Bearer " + at
@@ -892,7 +917,12 @@ class Proxy(BaseHTTPRequestHandler):
             if aid:   # ALWAYS the bound account's: a session never picks its workspace (#1912)
                 put["chatgpt-account-id"] = aid
         else:
-            put["Authorization"] = "Bearer " + claude_token(c.accounts, acct)
+            pp = pool_entry(c, "claude", acct)
+            if pp:
+                with open(pp) as f:
+                    put["Authorization"] = "Bearer " + json.load(f)["claudeAiOauth"]["accessToken"]
+            else:
+                put["Authorization"] = "Bearer " + claude_token(c.accounts, acct)
         return base, upath, put, drop, "file"
 
     def send(self, order, provider, path, body, hubcred, sid, acct, seen, t0, public=False):
@@ -1117,6 +1147,102 @@ def write_private(path, data):
     os.replace(tmp, path)
 
 
+# ---- the machine's one copy (issue #2311) -------------------------------------
+# On the shared proxy a lease is filed ONCE for the whole machine: under
+# <shared state>/pool/<kind>/<key>/, where <key> hashes the access token itself
+# — never the account's label, which two people may both use (the hub's key is
+# principal + provider + account). Each tenant keeps only its index,
+# <tenant state>/pool.json {"<kind>:<label>": key}: a tenant is served a pool
+# file only through its own index, so two logins share a file exactly when they
+# leased the same token, and a token one login never leased stays out of reach
+# of its sessions. A file no index names any more is removed.
+POOL_FILE = {"claude": ".credentials.json", "codex": "auth.json"}
+POOL_LOCK = threading.Lock()
+
+
+def pool_key(kind, data):
+    d = json.loads(data)
+    tok = d["claudeAiOauth"]["accessToken"] if kind == "claude" else d["tokens"]["access_token"]
+    if not tok:
+        raise ValueError("no access token")
+    return hashlib.sha256(("%s\0%s" % (kind, tok)).encode()).hexdigest()[:32]
+
+
+def own_path(cfg, kind, label):
+    """Where a tenant's own copy lived before the pool (and goes back to on uninstall)."""
+    if kind == "claude":
+        return os.path.join(cfg.accounts, label + ".hub", ".credentials.json")
+    return codex_auth_path(cfg, label)
+
+
+def pool_index(cfg):
+    d = read_json(os.path.join(cfg.state, "pool.json"), {})
+    return d if isinstance(d, dict) else {}
+
+
+def pool_entry(cfg, kind, label):
+    """-> the pool file a tenant's index names for <kind>:<label>, or ""."""
+    k = pool_index(cfg).get("%s:%s" % (kind, label)) if getattr(cfg, "pool", "") else ""
+    return os.path.join(cfg.pool, kind, k, POOL_FILE[kind]) if k else ""
+
+
+def pool_put(cfg, kind, label, data):
+    """File one lease in the pool, point the tenant's index at it, drop its own copy."""
+    key = pool_key(kind, data)
+    dst = os.path.join(cfg.pool, kind, key, POOL_FILE[kind])
+    if not os.path.isfile(dst):
+        write_private(dst, data)
+    idx = pool_index(cfg)
+    idx["%s:%s" % (kind, label)] = key
+    write_json(os.path.join(cfg.state, "pool.json"), idx)
+    own = own_path(cfg, kind, label)
+    if os.path.lexists(own):
+        os.unlink(own)
+        try:
+            os.rmdir(os.path.dirname(own))
+        except OSError:
+            pass
+    return key
+
+
+def pool_gc(pool, cfgs):
+    """Remove every pool file no tenant's index names."""
+    keep = set()
+    for c in cfgs:
+        keep.update("%s/%s" % (k.split(":", 1)[0], v) for k, v in pool_index(c).items())
+    for kind in POOL_FILE:
+        d = os.path.join(pool, kind)
+        for k in os.listdir(d) if os.path.isdir(d) else []:
+            if "%s/%s" % (kind, k) not in keep:
+                shutil.rmtree(os.path.join(d, k), ignore_errors=True)
+
+
+def pool_adopt(cfgs):
+    """A tenant that joined before the pool: its own copies move in, one each."""
+    n = 0
+    for c in cfgs:
+        found = []
+        acc = c.accounts
+        for d in sorted(os.listdir(acc)) if os.path.isdir(acc) else []:
+            if d.endswith(".hub") and SAFE_LABEL(d[:-4]):
+                found.append(("claude", d[:-4]))
+        cx = c.codex_homes
+        for d in sorted(os.listdir(cx)) if os.path.isdir(cx) else []:
+            if SAFE_LABEL(d):
+                found.append(("codex", d))
+        for kind, label in found:
+            p = own_path(c, kind, label)
+            if not os.path.isfile(p):
+                continue
+            try:
+                with open(p, "rb") as f:
+                    pool_put(c, kind, label, f.read())
+                n += 1
+            except (OSError, ValueError, KeyError, TypeError) as e:
+                sys.stderr.write("fleet-cred-proxy: pool: %s %s:%s left in place (%s)\n" % (c.name, kind, label, e))
+    return n
+
+
 def codex_tokens(path):
     """-> (access token, account id, credential fingerprint). The fingerprint is
     ccquota's credential_version (sha256 of access NUL refresh), so a verdict
@@ -1234,17 +1360,23 @@ def ctl_handle(req, t):
         data = base64.b64decode(req.get("data") or "")
         if not data or len(data) > 65536:
             return {"ok": False, "err": "store: empty or oversized"}
-        if kind == "claude":
-            dst = os.path.join(cfg.accounts, label + ".hub", ".credentials.json")
-        elif kind == "codex":
-            dst = codex_auth_path(cfg, label)
-        else:
+        if kind not in POOL_FILE:
             return {"ok": False, "err": "store: kind claude|codex"}
-        write_private(dst, data)
+        if getattr(cfg, "pool", ""):
+            # the shared proxy: one copy for the machine (issue #2311)
+            try:
+                with POOL_LOCK:
+                    key = pool_put(cfg, kind, label, data)
+                    pool_gc(cfg.pool, [x.cfg for x in Proxy.tenants.values()])
+            except (OSError, ValueError, KeyError, TypeError) as e:
+                return {"ok": False, "err": "store: %s" % e}
+            t.log(ev="store", kind=kind, acct=label, bytes=len(data), pool=key[:12])
+            return {"ok": True}
+        write_private(own_path(cfg, kind, label), data)
         t.log(ev="store", kind=kind, acct=label, bytes=len(data))
         return {"ok": True}
     if op == "probe":
-        pp = env("FLEET_CRED_PROBE")
+        pp = getattr(cfg, "probe_path", "") or env("FLEET_CRED_PROBE")
         if not cfg.store or not pp:
             return {"ok": False, "err": "probe: not separated"}
         d = json.loads(req.get("data") or "null")
@@ -1522,8 +1654,14 @@ def serve(a):
                 sys.exit("fleet-cred-proxy: --shared: logins %s and %s share uid %d" % (seen[tc.uid], tc.name, tc.uid))
             seen[tc.uid] = tc.name
             os.makedirs(tc.state, mode=0o700, exist_ok=True)
+            tc.pool = os.path.join(st, "pool")
             Proxy.tenants[tc.name] = Tenant(tc, tc.name)
         everyone = [t.cfg for t in Proxy.tenants.values()]
+        with POOL_LOCK:
+            n = pool_adopt(everyone)
+            pool_gc(os.path.join(st, "pool"), everyone)
+        if n:
+            Proxy.sink.log(ev="pool_adopt", files=n)
         ctld = shared["run"]
         a.port = int(shared.get("port") or a.port or 0)
     else:
@@ -1544,11 +1682,17 @@ def serve(a):
         cfg.uid = cfg.ctl_uid
         ctld = env("FLEET_CRED_CTL_DIR", st)
         everyone = [cfg]
+    global ALLOWED
+    if shared or cfg.store:
+        ALLOWED = allowed_hosts(env("FLEET_CRED_ALLOW_HOSTS"))
     for c in [cfg] + everyone:
         for name in ("anthropic_url", "codex_url", "relay_url", "central_url"):
             v = getattr(c, name, "")
             if v and not loopback_ok(v):
-                sys.exit("fleet-cred-proxy: %s=%s: https, or plain http on loopback only" % (name, v))
+                sys.exit("fleet-cred-proxy: %s=%s: %s" % (
+                    name, v, "https, or plain http on loopback only" if ALLOWED is None else
+                    "not an allowed upstream (https to %s; FLEET_CRED_ALLOW_HOSTS in root's config adds one)"
+                    % ", ".join(sorted(ALLOWED))))
     for c in everyone:
         if c.relay_url and not relay_pass(c):
             # not fatal: the launcher mints one (fleet-relay-cred.sh fetch); until

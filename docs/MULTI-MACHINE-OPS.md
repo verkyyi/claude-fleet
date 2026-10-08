@@ -257,7 +257,8 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 2. 这台机器 `~/.config/claude-fleet/node.env` 加 `CCQUOTA_FLEET_CREDS=1`，重启
    `ccquota agent`（launchd：`launchctl kickstart -k gui/$(id -u)/com.ccquota.agent`）。
    节点程序先向入口续租，再把 `~/.codex/auth.json` 整个换成短期那半（`last_refresh`
-   由它写）——切之前确认入口能续租：`~/.ccquota/agent.log` 里要有
+   由它写）——切之前确认入口能续租：`~/.ccquota/agent.log`（凭据已隔离的登录：
+   `sudo tail /var/log/fleet-cred/<登录>/agent.log`，#2296）里要有
    `credentials:` 成功行，没有就别切。
 3. 验证：`ccquota codex list --json` 里 `login.source` 为 `hub`、`state` 为 `valid`；
    `ccquota codex refresh` 被拒；起一个 Codex 会话能用。然后才轮到下一台。

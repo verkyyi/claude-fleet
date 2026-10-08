@@ -433,7 +433,7 @@ EOF
 # cred_run_drills <file> — every drill_cred_* in <file>, each checked for its row
 cred_run_drills() {
 FAILS=0; PASSES=0
-for fn in $(sed -n 's/^\(drill_cred_[a-z0-9_]*\)() *{.*/\1/p' "$1"); do
+for fn in $(sed -n 's/^\(drill_[a-z0-9_]*\)() *{.*/\1/p' "$1"); do
   r=$(printf '%s' "${fn#drill_}" | tr _ -)
   grep -qF -- "| \`$r\` |" "$DOC" || { FAILS=$((FAILS + 1)); printf 'FAIL  lint: %s has no row in docs/BREAK-IT.md\n' "$fn"; continue; }
   if [ -n "${BREAK_ONLY:-}" ]; then case " $BREAK_ONLY " in *" $r "*) ;; *) continue ;; esac; fi
