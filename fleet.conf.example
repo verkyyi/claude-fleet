@@ -778,7 +778,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # session whose issue is closed with no PR, or a spawned scratch with no policy,
 # done this many seconds. History first; the worktree is dropped only when clean
 # with nothing beyond the base, else only the window closes. Default 7200 (2h).
-# @label=Cleanup finished sessions with no PR @group=bridge @tier=advanced @scope=fleet @edit=int @unit=s
+# @label=Cleanup finished sessions with no PR @group=bridge @tier=internal @scope=fleet @edit=int @unit=s
 #FLEET_REAP_DONE_NO_PR_SECS=7200
 # Preserve idle workers in their original windows; resume from the sleeping page
 # (see FLEET_SLEEP_WAKE below) or on a due loop / quota / message. Start in
