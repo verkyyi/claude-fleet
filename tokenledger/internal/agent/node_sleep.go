@@ -98,6 +98,10 @@ func (a *Agent) watchScript(ctx context.Context, ev chan<- string) {
 			return
 		}
 		cmd := exec.CommandContext(ctx, script)
+		if err := prepCmd(ctx, cmd); err != nil {
+			log.Printf("sleepwatch: %v", err)
+			return
+		}
 		out, err := cmd.StdoutPipe()
 		if err != nil {
 			return

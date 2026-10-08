@@ -31,7 +31,12 @@ func main() {
 	case "report":
 		err = runReport(os.Args[2:])
 	case "agent":
-		err = runAgent(os.Args[2:])
+		if machineFlag(os.Args[2:]) {
+			// One node program for the whole machine (claude-fleet#2333).
+			err = runAgentMachine(os.Args[2:])
+		} else {
+			err = runAgent(os.Args[2:])
+		}
 	case "hub":
 		err = runHub(os.Args[2:])
 	case "enroll":

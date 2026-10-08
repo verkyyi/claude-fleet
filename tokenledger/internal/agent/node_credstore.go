@@ -22,14 +22,20 @@ func (a *Agent) credSink() credSink {
 	if a.cfg.FleetCredStore == "" {
 		return nil
 	}
-	return credStoreSink(a.cfg.FleetCredStore)
+	as := ""
+	if a.cfg.RunAs != nil {
+		// A machine tenant runs as root (claude-fleet#2333): the shared
+		// proxy answers root only for the login it names.
+		as = a.cfg.RunAs.Login
+	}
+	return credStoreSink(a.cfg.FleetCredStore, as)
 }
 
 // credStoreSink sends one `store` request to the proxy's control socket and
 // waits for its answer: {"op":"store","kind","label","data":<base64>}\n →
 // {"ok":true}\n. The proxy checks this end's uid (LOCAL_PEERCRED /
 // SO_PEERCRED), so only this login — or root — can hand it a credential.
-func credStoreSink(sock string) credSink {
+func credStoreSink(sock, as string) credSink {
 	return func(kind, label string, data []byte) error {
 		c, err := net.DialTimeout("unix", sock, 10*time.Second)
 		if err != nil {
@@ -37,10 +43,14 @@ func credStoreSink(sock string) credSink {
 		}
 		defer c.Close()
 		_ = c.SetDeadline(time.Now().Add(30 * time.Second))
-		req, _ := json.Marshal(map[string]string{
+		m := map[string]string{
 			"op": "store", "kind": kind, "label": label,
 			"data": base64.StdEncoding.EncodeToString(data),
-		})
+		}
+		if as != "" {
+			m["as"] = as
+		}
+		req, _ := json.Marshal(m)
 		if _, err := c.Write(append(req, '\n')); err != nil {
 			return err
 		}

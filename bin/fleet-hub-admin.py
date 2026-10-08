@@ -264,8 +264,13 @@ def machines_main(a):
         return
     rows = resp.get("machines") or []
     spares_on = any(m.get("spare") is not None for m in rows)
-    fmt = "%-22s %-12s %-9s %-10s %s"
-    print(fmt % ("machine", "status", "sessions", "load/core", "账号" if spares_on else ""))
+    # the logins under each machine (claude-fleet#2333); the machine link is no login
+    logins = {}
+    for n in resp.get("nodes") or []:
+        if not n.get("machine_link") and n.get("os_user"):
+            logins.setdefault(n.get("hostname", ""), set()).add(n["os_user"])
+    fmt = "%-22s %-12s %-9s %-10s %-6s %s"
+    print(fmt % ("machine", "status", "sessions", "load/core", "连接", "账号"))
     for m in rows:
         name = m.get("hostname", "")
         if m.get("alias"):
@@ -275,10 +280,12 @@ def machines_main(a):
             load = "%.2f" % (float(m.get("load1") or 0) / m["ncpu"])
         sess = m.get("sessions")
         spare = m.get("spare")
-        logins = ""
+        acct = "、".join(sorted(logins.get(m.get("hostname", ""), ()))) or "-"
         if spare is not None:
-            logins = "备用 %d · 已用 %s / 上限 %s" % (spare, m.get("logins_used", "?"), m.get("login_cap", "?"))
-        print(fmt % (name, m.get("status", ""), "?" if sess is None else sess, load, logins))
+            acct += " · 备用 %d · 已用 %s / 上限 %s" % (spare, m.get("logins_used", "?"), m.get("login_cap", "?"))
+        links = m.get("links")
+        print(fmt % (name, m.get("status", ""), "?" if sess is None else sess, load,
+                     "-" if links is None else links, acct))
     if not spares_on:
         print("\n备用账号没开（fleet hub set fleet.spares on 打开；每个备用都是那台电脑上的一个 macOS 账号）")
 

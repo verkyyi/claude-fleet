@@ -77,12 +77,17 @@ class H(BaseHTTPRequestHandler):
                                                  "hostname": "macmini", "state": "active"}]})
         if u.path == "/v1/nodes":
             spare = settings.get("fleet.spares") == "on"
-            ms = [{"hostname": "macmini", "alias": "m5", "status": "online", "sessions": 4, "load1": 2.0, "ncpu": 8},
+            ms = [{"hostname": "macmini", "alias": "m5", "status": "online", "sessions": 4, "load1": 2.0, "ncpu": 8,
+                   "links": 1},
                   {"hostname": "mini2", "status": "maintenance", "sessions": None, "load1": 0, "ncpu": 0}]
             if spare:
                 ms[0].update(spare=1, logins_used=2, login_cap=10)
                 ms[1].update(spare=0, logins_used=9, login_cap=9)
-            return self.answer(200, {"machines": ms, "nodes": []})
+            # m5 behind one machine link carrying two logins (claude-fleet#2333)
+            ns = [{"hostname": "macmini", "os_user": "root", "machine_link": True},
+                  {"hostname": "macmini", "os_user": "zx", "via": "ep_mach"},
+                  {"hostname": "macmini", "os_user": "verkyyi", "via": "ep_mach"}]
+            return self.answer(200, {"machines": ms, "nodes": ns})
         if u.path == "/v1/fleet/invites":
             if self.command == "POST":
                 b = json.loads(body or "{}")
@@ -235,10 +240,11 @@ on=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub machines
 acc=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts 2>&1)
 if [ "$rc1" = 0 ] && [ "$rc2" = 0 ] && [ "$(field "$r" method)" = GET ] && [ "$(field "$r" path)" = /v1/nodes ] \
    && printf '%s\n' "$off" | grep -q '备用账号没开' && ! printf '%s\n' "$off" | grep -q '备用 [0-9]' \
-   && printf '%s\n' "$on" | grep -q '^m5 (macmini) .*online .*4 .*0\.25 .*备用 1 · 已用 2 / 上限 10$' \
+   && printf '%s\n' "$on" | grep -q '^m5 (macmini) .*online .*4 .*0\.25 *1 *verkyyi、zx · 备用 1 · 已用 2 / 上限 10$' \
+   && printf '%s\n' "$off" | grep -q '^m5 (macmini) .*0\.25 *1 *verkyyi、zx$' && ! printf '%s\n' "$off" | grep -q 'root' \
    && printf '%s\n' "$on" | grep -q '^mini2 .*maintenance .*? .*备用 0 · 已用 9 / 上限 9$' \
    && printf '%s\n' "$acc" | grep -q '^spare:macmini:abcd1234 .*flk2m9qa .*macmini:active$'; then
-  ok "M fleet hub machines → GET /v1/nodes, 备用 N per machine (hint while off); accounts lists spares apart"
+  ok "M fleet hub machines → GET /v1/nodes, 连接 N + its logins (not the link) per machine, 备用 N (hint while off); accounts lists spares apart"
 else bad "M rc=$rc1/$rc2 req=$r off=$off on=$on acc=$acc"; fi
 
 echo "fleet-hub-admin-selftest: $PASS passed, $FAIL failed"

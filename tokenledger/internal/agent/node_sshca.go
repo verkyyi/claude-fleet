@@ -14,9 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
-
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 )
@@ -79,7 +76,10 @@ func sudo(ctx context.Context, stdin []byte, args ...string) (string, error) {
 	}
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
-	err := cmd.Run()
+	err := prepCmd(ctx, cmd)
+	if err == nil {
+		err = cmd.Run()
+	}
 	if err != nil {
 		return out.String(), fmt.Errorf("sudo %s: %w: %s", args[0], err, tail(strings.TrimSpace(out.String()), 400))
 	}
@@ -236,11 +236,11 @@ func effectiveCA(ctx context.Context, h sshdHost) error {
 
 // handleSSHCA answers one TypeSSHCA. Like an account op it returns at once;
 // sudo runs in the background.
-func (a *Agent) handleSSHCA(ctx context.Context, conn *websocket.Conn, m control.Message) {
+func (a *Agent) handleSSHCA(ctx context.Context, conn nodeLink, m control.Message) {
 	write := func(msg control.Message) {
 		wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
 		defer cancel()
-		_ = wsjson.Write(wctx, conn, msg)
+		_ = conn.write(wctx, msg)
 	}
 	refuse := func(code, msg string) {
 		write(control.Message{Type: control.TypeError, OpID: m.OpID, Proto: control.Proto,
@@ -256,7 +256,7 @@ func (a *Agent) handleSSHCA(ctx context.Context, conn *websocket.Conn, m control
 		return
 	}
 	go func() {
-		actx, cancel := context.WithTimeout(context.Background(), sshCATimeout)
+		actx, cancel := context.WithTimeout(a.bgCtx(), sshCATimeout)
 		res := applySSHCA(actx, newSSHDHost(), req.PublicKey)
 		cancel()
 		log.Printf("control channel: ssh CA: ok=%v changed=%v rolled_back=%v %s", res.OK, res.Changed, res.RolledBack, res.Detail)

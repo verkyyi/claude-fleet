@@ -367,6 +367,14 @@ class G_DefaultTable(Sandbox):
         r = subprocess.run([sys.executable, SUP, "status"], env=e, capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("not installed", r.stdout)
+        # C5 (#2333): the one node program, from the root runtime, waiting until
+        # the machine has its token and its logins directory.
+        na = t["children"][1]
+        self.assertEqual(na["cmd"][0], os.path.join(self.d, "rt", "bin", "ccquota"))
+        self.assertEqual(na["cmd"][1:3], ["agent", "--machine"])
+        self.assertIn("node-agent", r.stdout)
+        self.assertIn("waiting", r.stdout)
+        self.assertIn("machine.env", r.stdout)
 
     def test_all_users_orphans(self):
         dg = open(os.path.join(BIN, "fleet-diskguard.sh")).read()

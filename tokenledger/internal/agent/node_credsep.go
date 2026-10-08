@@ -70,7 +70,10 @@ func credsepRun(ctx context.Context, home, script, verb string) int {
 	defer cancel()
 	cmd := credsepCommand(ctx, "/bin/bash", script, verb)
 	cmd.Env = append(os.Environ(), "HOME="+home)
-	err := cmd.Run()
+	err := prepCmd(ctx, cmd)
+	if err == nil {
+		err = cmd.Run()
+	}
 	var ee *exec.ExitError
 	switch {
 	case err == nil:

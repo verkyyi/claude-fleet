@@ -592,6 +592,16 @@ Do not install from memory: read the doc and work from it.
   login's `fleet-install-apply.sh` renders no plist, its probe asks the daemon.
   expected.json's `accounts` narrows who runs. No accounts.json ⇒ byte for byte
   as before. BREAK-IT `account-adopt-stuck`.
+- **A managed machine has ONE node program, `ccquota agent --machine`** (issue
+  #2333, EPIC #2329 C5). Root, started by the supervisor's `node-agent` child once
+  `/var/db/fleet-node/machine.env` + `logins/<login>.env` exist; one control link
+  with the machine's token, each login a tenant that says its own hello on it
+  (`Message.login`, its own token in `Hello.login_token`) and stays its own
+  endpoint. A login is proven ONLY by `loginEndpoint` (`internal/api/node_machine.go`)
+  — anything else is `WRONG_LOGIN`, on both halves — and every command a tenant
+  starts goes through `prepCmd` (`internal/agent/runas.go`): dropped to the login,
+  refused rather than run as root. `docs/MANAGED-NODE.md` §6; BREAK-IT
+  `machine-agent-wrong-login`.
 - **A machine has three words — online, 维护中, lost — and only the middle one is
   the operator's** (issue #1427). `maintenance` is the fleet setting
   `fleet.node_maintenance.<machine>` on the hub (`bin/fleet-node-maintenance.sh

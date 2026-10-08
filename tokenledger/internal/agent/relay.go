@@ -16,9 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
-
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
 
@@ -99,7 +96,11 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := relayCommand(ctx, script, "paths").Output()
+	pcmd := relayCommand(ctx, script, "paths")
+	if prepCmd(ctx, pcmd) != nil {
+		return relayPaths{}, false
+	}
+	out, err := pcmd.Output()
 	if err != nil {
 		return relayPaths{}, false
 	}
@@ -131,7 +132,7 @@ func (a *Agent) relays() *relayState {
 
 // relayOutbox runs for one connection: it sends what claude-fleet left in the
 // outbox until ctx ends.
-func (a *Agent) relayOutbox(ctx context.Context, conn *websocket.Conn, p relayPaths) {
+func (a *Agent) relayOutbox(ctx context.Context, conn nodeLink, p relayPaths) {
 	st := a.relays()
 	st.mu.Lock()
 	// A new link: whatever was in flight on the last one is resent now.
@@ -149,7 +150,7 @@ func (a *Agent) relayOutbox(ctx context.Context, conn *websocket.Conn, p relayPa
 	}
 }
 
-func (a *Agent) relayOutboxOnce(ctx context.Context, conn *websocket.Conn, p relayPaths) {
+func (a *Agent) relayOutboxOnce(ctx context.Context, conn nodeLink, p relayPaths) {
 	ents, err := os.ReadDir(p.outbox)
 	if err != nil {
 		return
@@ -188,7 +189,7 @@ func (a *Agent) relayOutboxOnce(ctx context.Context, conn *websocket.Conn, p rel
 		}
 		m.OpID = r.ID
 		wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
-		err = wsjson.Write(wctx, conn, m)
+		err = conn.write(wctx, m)
 		cancel()
 		if err != nil {
 			return // the link is gone; the next one resends
@@ -235,7 +236,7 @@ func (a *Agent) relayRefused(p relayPaths, opID string, e *control.Error) bool {
 
 func relayQuarantine(p relayPaths, file, why string) {
 	dir := filepath.Join(p.outbox, "refused")
-	if os.MkdirAll(dir, 0o700) != nil {
+	if mkdirOwned(dir, 0o700) != nil {
 		_ = os.Remove(file)
 		return
 	}
@@ -244,12 +245,13 @@ func relayQuarantine(p relayPaths, file, why string) {
 		_ = os.Remove(file)
 		return
 	}
+	defer ownPath(dst + ".why")
 	_ = os.WriteFile(dst+".why", []byte(why+"\n"), 0o600)
 }
 
 // relayDeliver applies one relay the hub pushed, through claude-fleet, and
 // answers.
-func (a *Agent) relayDeliver(ctx context.Context, conn *websocket.Conn, p relayPaths, m control.Message) {
+func (a *Agent) relayDeliver(ctx context.Context, conn nodeLink, p relayPaths, m control.Message) {
 	res := control.RelayResult{}
 	var r control.Relay
 	if err := json.Unmarshal(m.Payload, &r); err != nil || r.ID == "" {
@@ -265,7 +267,7 @@ func (a *Agent) relayDeliver(ctx context.Context, conn *websocket.Conn, p relayP
 	out.OpID = m.OpID
 	wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
 	defer cancel()
-	_ = wsjson.Write(wctx, conn, out)
+	_ = conn.write(wctx, out)
 }
 
 func runRelayDeliver(ctx context.Context, p relayPaths, payload []byte) (ok, retry bool, detail string) {
@@ -275,7 +277,10 @@ func runRelayDeliver(ctx context.Context, p relayPaths, payload []byte) (ok, ret
 	cmd.Stdin = bytes.NewReader(payload)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := prepCmd(ctx, cmd)
+	if err == nil {
+		err = cmd.Run()
+	}
 	detail = lastLine(stderr.String())
 	if err == nil {
 		return true, false, detail
@@ -319,7 +324,7 @@ func relayWorkers(p relayPaths, m control.Message) error {
 		}
 		fmt.Fprintf(&b, "%s\t%s\t%s\n", r.WorkerID, r.Node, r.OriginWID)
 	}
-	if err := os.MkdirAll(filepath.Dir(p.workers), 0o700); err != nil {
+	if err := mkdirOwned(filepath.Dir(p.workers), 0o700); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(p.workers), ".hub-workers-*")
@@ -335,6 +340,7 @@ func relayWorkers(p relayPaths, m control.Message) error {
 		os.Remove(tmp.Name())
 		return err
 	}
+	ownPath(tmp.Name())
 	return os.Rename(tmp.Name(), p.workers)
 }
 

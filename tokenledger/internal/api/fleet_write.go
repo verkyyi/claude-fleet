@@ -15,8 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coder/websocket/wsjson"
-
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -857,7 +855,7 @@ func (s *Server) sendWrite(ctx context.Context, target store.FleetRow, op store.
 	}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
-	if err := wsjson.Write(wctx, c.conn, msg); err != nil {
+	if err := c.wire.write(wctx, msg); err != nil {
 		// A frame may have left before the error: unknown, not failed.
 		return "unknown", errResult(control.CodeUnknownOutcome, "control channel write failed: "+err.Error())
 	}

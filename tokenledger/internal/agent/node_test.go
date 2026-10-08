@@ -502,7 +502,7 @@ func TestAnswerRequestServesReadsOnly(t *testing.T) {
 
 	ask := func(method string) control.Message {
 		m, _ := control.New(control.TypeRequest, control.Request{Method: method, Params: json.RawMessage(`{"fleet_id":"f"}`)})
-		a.answerRequest(ctx, conn, m)
+		a.answerRequest(ctx, wsLink{conn}, m)
 		select {
 		case r := <-replies:
 			if r.OpID != m.OpID {
@@ -605,7 +605,7 @@ func TestAnswerWriteServesSubmitOnly(t *testing.T) {
 		mode = m
 		mu.Unlock()
 		msg, _ := control.New(control.TypeWrite, control.Request{Method: method, Params: json.RawMessage(params)})
-		a.answerWrite(ctx, conn, msg)
+		a.answerWrite(ctx, wsLink{conn}, msg)
 		select {
 		case r := <-replies:
 			if r.OpID != msg.OpID {

@@ -97,3 +97,41 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 - 旧节点没有身份信任：照旧按机器名，但只认它加入时的名字（`machine_name`）。
 - 迁移时 `enrolled_host` 用每个 endpoint 当时报的名字补齐，所以 m4 / m5 现有的登录一个都不掉。
 - 下一批删旧规则（`# compat-1v: 下一批删`）：那时每台机器都已凭托管加入码重新加入（C1 / C8）。
+
+## 6. 一个节点程序服务整台机器（C5，#2333）
+
+托管机器只跑**一个** `ccquota agent --machine`：root 运行，由守护（C3）的 `node-agent`
+子进程拉起，取代每个账号一份的 `com.ccquota.agent.<login>`。
+
+| 文件 | 内容 | 谁写 |
+|---|---|---|
+| `/var/db/fleet-node/machine.env` | `CCQUOTA_HUB_URL`、`CCQUOTA_TOKEN`（**机器自己**的节点令牌，§1） | 安装 / 迁移（C1 / C4），root 600 |
+| `/var/db/fleet-node/logins/<账号>.env` | 这个账号原来那份 agent 的设置（`CCQUOTA_*`、`FLEET_CONF_DIR`），`CCQUOTA_TOKEN` = **这个账号**的节点令牌 | 迁移，逐个账号，root 600；别人能读写就拒 |
+| `/var/db/fleet-node/agent/<账号>/` | 每个账号的游标、待发队列 | 节点程序自己 |
+
+两个文件都在之前，守护显示 `node-agent waiting — … missing`，不启动。
+
+**连接**：节点程序用机器令牌连一条线（hello 能力位 `machine`），每个账号在这条线上
+各说一次 hello，带自己的令牌（`login_token`）；之后这个账号的每条消息都带 `login`。
+入口把每个账号仍当一个 endpoint（名册行、租约、中继、开号都不变），只是线共用。
+
+**错账号一律拒**（BREAK-IT `machine-agent-wrong-login`）：入口只认令牌所属的登录名
+（`os_user`；从没上报过的照 hello 记）、同一台机器、不是机器自己的令牌
+（`internal/api/node_machine.go` `loginEndpoint`，唯一一处），否则答 `WRONG_LOGIN`、
+那个账号不上线、审计记 `machine_login REFUSED`；发给这条线上没有的账号的消息两端都答
+`WRONG_LOGIN`，不交给任何账号。
+
+**以账号身份跑**：每个账号是进程里一个租户；它启动的每条命令（`fleet-control.py`、
+开号脚本、中继、git、tailscale）降权到这个账号——uid / gid / 附属组、`HOME` / `USER` /
+`LOGNAME`、工作目录是它的家（`internal/agent/runas.go` `prepCmd`）；root 的机器程序遇到
+没带账号的命令**拒跑**，不以 root 跑。写进账号家目录的文件（中继、迁入的会话包、凭据
+标记）交还这个账号；订阅凭据只交给共享凭据代理（以 `as=<账号>` 说明是谁的），没有代理
+就不领——root 不往账号目录写凭据。
+
+**名册**：机器自己那条线标 `machine_link`（永不放会话），它带着的账号标 `via`；
+`machines[].links` 是这台机器开着的连接数。入口「机器」页每台卡片一行「1 条连接 · 账号：…」，
+`fleet hub machines` 多一列「连接」。
+
+**旧节点**：没迁的账号照旧自己连（`links` 多算一条）；某个账号已经由整机连接带着时，
+它残留的旧 agent 被拒（`REFUSED`），不来回抢。旧入口不认识能力位：把机器 hello 当一个
+普通节点、账号 hello 当未知消息——整机节点程序退不回去，迁移前先升级入口。

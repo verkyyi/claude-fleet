@@ -12,9 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
-
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -533,14 +530,14 @@ func (s *Server) dispatchAccounts() {
 // applyAccountResult records a node's answer to an account op and acks it, so
 // the node stops re-sending it. A result from a node that is not an admin is
 // refused; a duplicate or stale one is acked and changes nothing.
-func (s *Server) applyAccountResult(ctx context.Context, conn *websocket.Conn, epID string, nc *nodeConn, m control.Message) {
+func (s *Server) applyAccountResult(ctx context.Context, wire nodeWire, epID string, nc *nodeConn, m control.Message) {
 	if !nc.admin {
-		refuse(ctx, conn, m.OpID, control.CodeNotAdmin, "this node is not an admin node")
+		refuse(ctx, wire, m.OpID, control.CodeNotAdmin, "this node is not an admin node")
 		return
 	}
 	var res control.AccountResult
 	if err := json.Unmarshal(m.Payload, &res); err != nil {
-		refuse(ctx, conn, m.OpID, control.CodeBadMessage, "malformed account result")
+		refuse(ctx, wire, m.OpID, control.CodeBadMessage, "malformed account result")
 		return
 	}
 	state, detail := store.AccountFailed, res.Detail
@@ -565,7 +562,7 @@ func (s *Server) applyAccountResult(ctx context.Context, conn *websocket.Conn, e
 	ack := control.Message{Type: control.TypeAck, OpID: m.OpID, Proto: control.Proto}
 	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_ = wsjson.Write(wctx, conn, ack)
+	_ = wire.write(wctx, ack)
 }
 
 // applyAccountRefusal records a node refusing an op outright (not an admin,
