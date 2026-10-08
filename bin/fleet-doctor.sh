@@ -1631,6 +1631,19 @@ else
   pass machine "load $mload on $mcores cores (${mper}/core), no orphaned runaways"
 fi
 
+# --- the machine's one daemon (issue #2331, EPIC #2329 C3) ----------------------
+# com.claude-fleet.node runs the machine-level work once for every login; its
+# status is world-readable, so any login's doctor reads it. Not installed ⇒ no row
+# (a machine that never had it reads byte for byte as before).
+_nsup="$(dirname "$0")/fleet-node-supervisor.py"
+if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
+  nline=$(python3 "$_nsup" status --check 2>/dev/null); nrc=$?
+  case "$nrc" in
+    0) pass node "machine daemon com.claude-fleet.node: $nline" ;;
+    1) warn node "machine daemon com.claude-fleet.node is installed but not running — $nline. launchd's KeepAlive should bring it back within seconds; if it does not: \`sudo launchctl kickstart -k system/com.claude-fleet.node\`, log /var/log/fleet-node/supervisor.log, \`fleet-node-supervisor.py status\`" ;;
+  esac
+fi
+
 # --- fleet listeners exposed to the LAN (issue #1154) ---------------------------
 # An agent's temp server (`python3 -m http.server`, a node dev server) binds `*` by
 # default, and outlives its window: the 2026-09-24 audit found one serving the
