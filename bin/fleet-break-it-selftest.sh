@@ -3785,6 +3785,63 @@ drill_spare_login_empty() {
   SECS=$(since "$t0")
 }
 
+# ---- home-pool-claim-unkeyed (#2339): `fleet claude` opens a HOME session — a
+# no-repo window, claimed from the pool's HOME slot or opened cold — that has no
+# @raw and so no key. The start's result check looked for the receipt's window
+# among `scratch` rows only: UNKNOWN every time, the client said 开不了, and the
+# window stayed open with nobody holding it. Now the receipt's @fleet_id is
+# matched first (identity before key, #1646) and the result names window_id; a
+# start whose window still matches nothing is closed by `stop fid:<id>`.
+drill_home_pool_claim_unkeyed() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 - "$BIN" <<'PY' 2>&1
+import json, os, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+import fleet_control as fc
+FID = "c63813a3-3f3f-4cea-bec6-c12705d98fc3"
+def run(rows):
+    tmp = tempfile.mkdtemp()
+    c = fc.Control.__new__(fc.Control)
+    class Store:
+        root = __import__("pathlib").Path(tmp)
+        def connect(self):
+            import sqlite3
+            db = sqlite3.connect(os.path.join(tmp, "s.db")); db.row_factory = sqlite3.Row
+            return db
+    c.store = Store()
+    with c.store.connect() as db:
+        db.execute("CREATE TABLE operations (id TEXT, action TEXT, request TEXT, status TEXT, result TEXT, created REAL, updated REAL)")
+        req = {"fleet_id": "f", "action": "worker_start", "params": {"kind": "scratch", "no_repo": True, "agent": "claude"}}
+        db.execute("INSERT INTO operations VALUES ('0f0e0d0c-0b0a-4908-8706-050403020100','worker_start',?,'accepted','',?,?)", (json.dumps(req), fc.now() - 0.2, fc.now()))
+    c.fleet = lambda fid: {"name": "s", "fleet_id": "f"}
+    stops = []
+    def adapter(*a, **k):
+        if a[0] == "stop":
+            stops.append(a[2])
+        if a[0] == "start":
+            return 0, ("@694\tnorepo\t/home\t%s\t1000\t\t\n" % FID).encode(), b""
+        return 0, b"", b""
+    c.adapter = adapter
+    c.workers = lambda fl, w="": {"observed_at": 1, "workers": rows}
+    c.watch_ready = lambda *a: None
+    c.execute("0f0e0d0c-0b0a-4908-8706-050403020100")
+    with c.store.connect() as db:
+        row = db.execute("SELECT status, result FROM operations").fetchone()
+    return row["status"], json.loads(row["result"]), stops
+row = {"window_id": "@694", "scratch": False, "issue": None, "key": None, "repo": None, "identity": FID}
+st, r, stops = run([row])
+if st != "succeeded" or r.get("window_id") != "@694":
+    sys.exit("the HOME window was not recognised: %s %s" % (st, json.dumps(r)))
+st, r, stops = run([])
+if st != "unknown" or stops != ["fid:" + FID]:
+    sys.exit("an unmatched HOME window was left open: %s stops=%s" % (st, stops))
+PY
+) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='从池领（或冷开）的 HOME 会话没有 key：按回执的 @fleet_id 认出、结果带 window_id；仍认不出就 stop fid: 关掉，不留孤儿'
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"

@@ -426,13 +426,18 @@ case "$mode" in
       # window from the warm pool — the seed submitted into it as its first turn,
       # the receipt the same four fields plus `<t_window> <t_ready> <t_prompt>`.
       # An empty slot (exit 3) opens it exactly as before; FLEET_START_WARM=0 = off.
-      if [ -n "$seedf" ] && [ "${FLEET_START_WARM:-1}" != 0 ]; then
-        wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") && cp "$seedf" "$wseed" || wseed=''
-        if [ -n "$wseed" ]; then
-          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} "--prompt-file=$wseed")
-          wrc=$?; rm -f "$wseed"
+      # An unseeded HOME session (`fleet claude`, issue #2339) takes its slot's
+      # entry too — nothing to submit, the receipt's stamps after t_window empty.
+      if { [ -n "$seedf" ] || [ "$norepo" = 1 ]; } && [ "${FLEET_START_WARM:-1}" != 0 ]; then
+        wseed=''; wok=1
+        if [ -n "$seedf" ]; then
+          wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") && cp "$seedf" "$wseed" || { wseed=''; wok=0; }
+        fi
+        if [ "$wok" = 1 ]; then
+          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} ${wseed:+"--prompt-file=$wseed"})
+          wrc=$?; [ -z "$wseed" ] || rm -f "$wseed"
           if [ "$wrc" != 3 ]; then
-            rm -f "$seedf"
+            [ -z "$seedf" ] || rm -f "$seedf"
             [ -n "$out" ] && printf '%s\n' "$out"
             exit "$wrc"
           fi

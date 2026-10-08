@@ -699,9 +699,17 @@ class Control:
                 lines = output.decode("utf-8", "replace").split("\n")
                 receipt = (lines[0] if scratch or warm else ([l for l in lines if l.strip()] or [""])[-1]).split("\t")
                 window = receipt[0].strip()
+                # Its 4th field is the window's @fleet_id (issue #1873): identity
+                # first (issue #2339) — a no-repo session (`fleet claude`) has no
+                # @raw and no key, so the `scratch` test never matched one and every
+                # HOME start came back UNKNOWN with its window left open.
+                fid = receipt[3].strip() if len(receipt) > 3 else ""
+                fid = fid if is_identity(fid) else ""
 
                 def started(snapshot):
                     if scratch or warm:
+                        if fid:
+                            return [w for w in snapshot["workers"] if w.get("identity") == fid]
                         # The receipt names the window: that row, and only that row.
                         return [w for w in snapshot["workers"] if window and w["window_id"] == window and w["scratch"]]
                     # Match the spawned repo too (issue #1018): another repo's issue-N
@@ -713,10 +721,22 @@ class Control:
                 if not matches and re.fullmatch(r"@[0-9]+", window):
                     snapshot = self.workers(fleet)
                     matches = started(snapshot)
+                if not matches and fid:
+                    # Opened, but not the session it should be: never leave it as an
+                    # orphan nobody was told about (issue #2339) — the stop by its
+                    # identity, the one address a no-repo session has. Still unknown:
+                    # what the window holds is not this start's to vouch for.
+                    stop, _, _ = self.adapter("stop", fleet["name"], "fid:" + fid, timeout=120)
+                    raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible; "
+                                + ("its window was closed" if not stop else "closing its window failed (fid:%s)" % fid))
                 if not matches:
                     raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible")
                 result = {"workers": matches, "observed_at": snapshot["observed_at"],
                           "exit": 0, "window": matches[0].get("window_id", ""),
+                          # Where the client switches at once (issue #2236): every
+                          # start, not only a warm one; a no-repo session has no key.
+                          "window_id": matches[0].get("window_id", ""),
+                          **({"key": matches[0]["key"]} if matches[0].get("key") else {}),
                           # This machine's half of the send's clock (issue #2238,
                           # EPIC #2230 共同约定 3): epoch ms, the names fixed there.
                           "timing": {"t_accepted": ms(row["created"]), "t_window": ms(now())}}
@@ -730,8 +750,6 @@ class Control:
                 warmed = {k: int(v) for k, v in stamps.items() if v.isdigit()}
                 if warmed:
                     result["timing"].update(warmed)
-                    result["window_id"] = result["window"]
-                    result["key"] = matches[0].get("key", "")
                     if warm:
                         result["filed"] = "pending"
             elif req["action"] == "worker_move_in":

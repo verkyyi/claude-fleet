@@ -26,6 +26,10 @@
 #   F. the controller: a `warm` receipt becomes window_id / key / timing
 #      {t_accepted, t_window, t_ready, t_prompt} + filed=pending; ops.log carries
 #      the timing; a cold `new` reads the URL as before
+#   G. an UNSEEDED HOME start (`fleet claude`, issue #2339): the HOME entry, its
+#      @fleet_id in the receipt, nothing typed, within 3 s
+#   H. the controller: a no-repo receipt (no @raw, no key) is matched by its
+#      @fleet_id — window_id, no key; nothing matching closes it (`stop fid:…`)
 #
 # tmux / python3 / git absent → SKIP (exit 0).
 set -uo pipefail
@@ -259,5 +263,69 @@ first=$(printf '%s\n' "$out" | head -1); logl=$(printf '%s\n' "$out" | sed -n 2p
 [ "$first" = 'succeeded @5 a:scratch-3 pending t_prompt=1200,t_ready=1100,t_window=1000 True False' ] || fail "F the warm result" "$out"
 case "$logl" in *'succeeded window=@5 timing t_accepted='*' t_prompt=1200 t_ready=1100 t_window=1000') ;; *) fail "F ops.log carries the timing" "$logl" ;; esac
 ok "F the controller: window_id / key / timing / filed=pending; ops.log has the timing line"
+
+# ---- G: an unseeded HOME start (`fleet claude`, issue #2339) takes the HOME entry
+warm_up || fail "G the pool did not refill" "$(bash "$POOL" status "$SESS" 2>&1)"
+: > "$WORK/log/spawn"; : > "$FAKE_TURNS"
+t0=$(ms)
+out=$(bash "$CR" start "$SESS" scratch claude - '' '' '' </dev/null 2>"$WORK/errG"); rc=$?
+[ "$rc" = 0 ] || fail "G the unseeded HOME start exited $rc" "$out $(cat "$WORK/errG")"
+IFS=$'\t' read -r win _name _wt fid tw _ <<<"$out"
+case "$tw" in ''|*[!0-9]*) fail "G the 7-field receipt (t_window)" "$out" ;; esac
+[ "$(o "$win" @norepo)" = 1 ] && [ "$(o "$win" session_name)" = "$SESS" ] || fail "G the HOME entry, in the fleet"
+[ -n "$fid" ] && [ "$(o "$win" @fleet_id)" = "$fid" ] || fail "G the receipt names the window's @fleet_id" "$out"
+[ "$(o "$win" @fleet_role)" = worker ] || fail "G the claimed window is a worker" "$(o "$win" @fleet_role)"
+[ ! -s "$FAKE_TURNS" ] || fail "G nothing typed into it" "$(turns)"
+[ $(($(ms) - t0)) -le 3000 ] || fail "G the warm HOME start took $(($(ms) - t0)) ms (> 3000)"
+ok "G an unseeded HOME start: the HOME entry in $(($(ms) - t0)) ms, nothing typed"
+
+# ---- H: the controller finds a keyless no-repo session by its @fleet_id --------
+# The receipt of a no-repo start (cold here): no @raw, no key — only its identity.
+# Before #2339 the `scratch` test missed it: UNKNOWN, and the window stayed open.
+out=$(python3 - "$BIN" <<'PY'
+import json, os, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+import fleet_control as fc
+FID = "c63813a3-3f3f-4cea-bec6-c12705d98fc3"
+def run(rows):
+    tmp = tempfile.mkdtemp()
+    c = fc.Control.__new__(fc.Control)
+    class Store:
+        root = __import__("pathlib").Path(tmp)
+        def connect(self):
+            import sqlite3
+            db = sqlite3.connect(os.path.join(tmp, "s.db")); db.row_factory = sqlite3.Row
+            return db
+    c.store = Store()
+    with c.store.connect() as db:
+        db.execute("CREATE TABLE operations (id TEXT, action TEXT, request TEXT, status TEXT, result TEXT, created REAL, updated REAL)")
+        req = {"fleet_id": "f", "action": "worker_start", "params": {"kind": "scratch", "no_repo": True, "agent": "claude"}}
+        db.execute("INSERT INTO operations VALUES ('0f0e0d0c-0b0a-4908-8706-050403020100','worker_start',?,'accepted','',?,?)", (json.dumps(req), fc.now() - 0.2, fc.now()))
+    c.fleet = lambda fid: {"name": "s", "fleet_id": "f"}
+    calls = []
+    def adapter(*a, **k):
+        calls.append(a)
+        if a[0] == "start":
+            return 0, ("@7\tnorepo\t/home\t%s\n" % FID).encode(), b""
+        return 0, b"", b""
+    c.adapter = adapter
+    c.workers = lambda fl, w="": {"observed_at": 1, "workers": rows}
+    c.watch_ready = lambda *a: None
+    c.execute("0f0e0d0c-0b0a-4908-8706-050403020100")
+    with c.store.connect() as db:
+        row = db.execute("SELECT status, result FROM operations").fetchone()
+    stops = [a[2] for a in calls if a[0] == "stop"]
+    return row["status"], json.loads(row["result"]), stops
+row = {"window_id": "@7", "scratch": False, "issue": None, "key": None, "repo": None, "identity": FID}
+st, r, stops = run([row])
+print(st, r.get("window_id"), "key" in r, stops)
+st, r, stops = run([])
+print(st, r["error"]["code"], stops, r["error"]["message"])
+PY
+)
+l1=$(printf '%s\n' "$out" | sed -n 1p); l2=$(printf '%s\n' "$out" | sed -n 2p)
+[ "$l1" = 'succeeded @7 False []' ] || fail "H a keyless no-repo session matched by @fleet_id" "$out"
+case "$l2" in "unknown UNKNOWN_OUTCOME ['fid:c63813a3-3f3f-4cea-bec6-c12705d98fc3'] "*"its window was closed") ;; *) fail "H a miss closes the window it opened (fid:)" "$out" ;; esac
+ok "H the controller: a no-repo start matched by identity (window_id, no key); a miss closes it"
 
 printf 'fleet-start-warm: %d passed\n' "$pass"
