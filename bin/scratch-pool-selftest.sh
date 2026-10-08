@@ -79,7 +79,7 @@ val() {
   esac
 }
 # expand <window> <format> — every #{key} in it (the scripts read several options
-# in one call, split on \037)
+# in one call — wfmt)
 expand() {
   local f="$2" out='' k
   while :; do

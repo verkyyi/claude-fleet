@@ -264,9 +264,11 @@ EOF
 wopt() { TM display-message -p -t "$1" "#{$2}" 2>/dev/null; }
 # A claim is on the person's clock (发出即开 ≤1 s, issue #2352): every tmux call is a
 # client round-trip (~5 ms here, more on a loaded box), so a pass that reads
-# several of a window's options asks for them in ONE format, fields split on US
-# (\037 — not whitespace, so an empty option keeps its place).
-US=$'\037'
+# several of a window's options asks for them in ONE format — wfmt <key>…: the
+# fields tab-split, each led by `:` so an empty option keeps its place (`read`
+# folds adjacent tabs); the reader strips the `:`. Never a control-character
+# separator: an older tmux prints one escaped.
+wfmt() { local k o=''; for k in "$@"; do o="$o${o:+	}:#{$k}"; done; printf '%s' "$o"; }
 
 # pool_windows [all] → this slot's entries: REPO's (or HOME's) only — the holding
 # session is shared by every slot — and of this pass's AGENT; `all` keeps every
@@ -274,7 +276,8 @@ US=$'\037'
 # repo is its @repo stamp, else (one warmed before #797) its worktree's origin.
 pool_windows() {
   local w nr r wt a
-  while IFS=$US read -r w nr r wt a; do
+  while IFS=$'\t' read -r w nr r wt a; do
+    w=${w#:} nr=${nr#:} r=${r#:} wt=${wt#:} a=${a#:}
     [ -n "$w" ] || continue
     if [ "$nr" = 1 ]; then r=-                     # the HOME slot
     else
@@ -285,7 +288,7 @@ pool_windows() {
     if [ "${1:-}" != all ]; then [ "${a:-claude}" = "$AGENT" ] || continue; fi
     printf '%s\n' "$w"
   done <<EOF
-$(TM list-windows -t "$POOL" -F "#{window_id}$US#{@norepo}$US#{@repo}$US#{@worktree}$US#{@pool_agent}" 2>/dev/null)
+$(TM list-windows -t "$POOL" -F "$(wfmt window_id @norepo @repo @worktree @pool_agent)" 2>/dev/null)
 EOF
 }
 
@@ -497,9 +500,11 @@ EOF
 
 usable() {                                    # usable <wid> — ready, fresh, right account, current config
   local wid="$1" born age agent ready dead acct cfg ver ww wh
-  IFS=$US read -r ready agent dead born acct cfg ver ww wh <<EOF
-$(TM display-message -p -t "$wid" "#{@pool_ready}$US#{@pool_agent}$US#{pane_dead}$US#{@pool_born}$US#{@pool_account}$US#{@agent_cfg}$US#{@agent_ver}$US#{window_width}$US#{window_height}" 2>/dev/null)
+  IFS=$'\t' read -r ready agent dead born acct cfg ver ww wh <<EOF
+$(TM display-message -p -t "$wid" "$(wfmt @pool_ready @pool_agent pane_dead @pool_born @pool_account @agent_cfg @agent_ver window_width window_height)" 2>/dev/null)
 EOF
+  ready=${ready#:} agent=${agent#:} dead=${dead#:} born=${born#:} acct=${acct#:}
+  cfg=${cfg#:} ver=${ver#:} ww=${ww#:} wh=${wh#:}
   [ "$ready" = 1 ] || return 1
   [ "${agent:-claude}" = "$AGENT" ] || return 1
   [ "$dead" = 1 ] && return 1
@@ -662,9 +667,10 @@ cmd_claim() {
     usable "$wid" || continue
     # An entry git cannot bring up to origin/<base> is never handed out.
     align "$wid" || { retire "$wid"; continue; }
-    IFS=$US read -r slug wt <<EOF
-$(TM display-message -p -t "$wid" "#{@pool_slug}$US#{@worktree}" 2>/dev/null)
+    IFS=$'\t' read -r slug wt <<EOF
+$(TM display-message -p -t "$wid" "$(wfmt @pool_slug @worktree)" 2>/dev/null)
 EOF
+    slug=${slug#:} wt=${wt#:}
     # Claim-by-move: whoever's move-window succeeds owns it. A loser sees the
     # window gone from the pool session on the next iteration.
     TM move-window -s "$wid" -t "$SESS:" 2>/dev/null || continue
