@@ -68,6 +68,20 @@ would show (greyed when it would grey it), the hint off the menu's letter table
 (fleet-ui-lang.sh `menu_keys`) and the tmux command it would run. So a command is
 never spelt twice: ↵ runs exactly what picking it in the menu runs.
 
+ONE PANEL OF SESSIONS AND ACTIONS (issue #2365, 「一切优化为 CLI」): ⌘P is the way
+in, not the right-click menu (which stays, unadvertised). Each row carries its
+单号 · 机器 · 状态 · PR · 回收方式 (the bar no longer says them); ⌃R 改名 · ⌃X
+回收 · ⌃A 回答 · ⌃E 改回收方式 · ⌃O 打开 PR act on the lit row — each runs THAT
+row's menu item (ROW_KEYS → menu_items), so a key never spells an action twice;
+⌃A off a waiting row moves onto the first one that waits, and ⌃O on a row with
+no 「打开 PR」 item (another machine's) opens its PR's — else its issue's — page.
+`>` lists the panel's own lines first (panel_cmds: 退出 fleet · 新会话 claude |
+codex · 切到多 / 单会话视图 · 改名当前会话 — ⌘K's tail folded in; ⌘K and prefix s
+open this same panel now), then the row menu's. The last line always says the
+keys (the bar's @fleet_hint_palette says the same). An empty query lists the
+rows waiting on you first.
+    fleet-quickopen.py panel-cmds                `>`'s own lines, plain
+
 Ranking (`rank`): an empty query lists the most recent first, the row in view
 last (↵ on an empty ⌘P is «the one before»); a query keeps the rows it matches —
 a substring of the name first (earlier is better, a word start best), then a
@@ -91,6 +105,7 @@ BIN = Path(__file__).absolute().parent
 
 US = "\x1f"
 STACK_MAX = 50
+WAITING = ("needs", "failed")   # the rows an empty ⌘P lists first (issue #2365)
 MRU_MAX = 100
 STATE_WORDS = {"needs": "needs ask 在问你", "failed": "failed 失败", "working": "working 在干活",
                "idle": "idle 空闲", "done": "done 完成", "landed": "landed"}
@@ -183,19 +198,22 @@ def step(h, live, delta):
 # --- the rows ---------------------------------------------------------------------
 
 def rows_text(rows):
-    """The list's rows (fleet-sidebar.py's 13-field rows) as switch-rows.tsv:
-    every session row, with the repo heading it sits under."""
-    out, group = [], ""
+    """The list's rows (fleet-sidebar.py's 15-field rows) as switch-rows.tsv:
+    every session row, with the repo heading it sits under — key · state ·
+    glyph · name · machine · group · badge, then (issue #2365, appended so a
+    reader of the seven is unchanged) issue · PR · reap policy · title · repo."""
+    out, group, repo = [], "", ""
     for row in rows:
         if row[0] == "hdr":
             if len(row) > 3 and row[1]:
-                group = row[3].strip()
+                group, repo = row[3].strip(), row[1].strip()
             continue
         if row[0].startswith("landed:"):
             continue
-        clean = [(f or "").replace("\t", " ").replace("\n", " ") for f in row]
+        clean = [(f or "").replace("\t", " ").replace("\n", " ") for f in row] + [""] * 15
         out.append("\t".join((clean[0], clean[1], clean[2], clean[3].strip(), clean[8],
-                              group, clean[5])))
+                              group, clean[5], clean[9].strip(), clean[10].strip(),
+                              clean[14].strip(), clean[13].strip(), repo)))
     return "\n".join(out) + ("\n" if out else "")
 
 
@@ -220,8 +238,14 @@ def full_rows(session, timeout=8):
         return None
     if out.returncode != 0:
         return None
-    rows = [(line.split(US, 12) + [""] * 13)[:13] for line in out.stdout.split("\n") if line.count(US) >= 4]
+    rows = [(line.split(US, 14) + [""] * 15)[:15] for line in out.stdout.split("\n") if line.count(US) >= 4]
     return parse_rows(rows_text(rows))
+
+
+def cell(text):
+    """A hub cell as text: its `—` / `·` (none) as ""."""
+    text = (text or "").strip()
+    return "" if text in ("—", "·", "-") else text
 
 
 def parse_rows(text):
@@ -229,9 +253,11 @@ def parse_rows(text):
     for line in text.splitlines():
         f = line.split("\t")
         if len(f) >= 4 and f[0]:
-            f += [""] * (7 - len(f))
+            f += [""] * (12 - len(f))
             rows.append({"key": f[0], "state": f[1], "glyph": f[2], "name": f[3],
-                         "node": f[4].rstrip("!~"), "group": f[5], "badge": f[6]})
+                         "node": f[4].rstrip("!~"), "group": f[5], "badge": f[6],
+                         "issue": cell(f[7]).lstrip("#"), "pr": cell(f[8]), "reap": f[9],
+                         "title": f[10], "repo": f[11]})
     return rows
 
 
@@ -270,7 +296,9 @@ def score_token(token, row):
     i = low.find(token)
     if i >= 0:
         return 3000 - i + (200 if word_start(name, i) else 0), list(range(i, i + len(token)))
-    hay = " ".join((row["node"], STATE_WORDS.get(row["state"], row["state"]), row["group"], row["badge"])).lower()
+    issue = row.get("issue") or ""
+    hay = " ".join((row["node"], STATE_WORDS.get(row["state"], row["state"]), row["group"], row["badge"],
+                    "#" + issue if issue else "", row.get("title") or "", row.get("repo") or "")).lower()
     i = hay.find(token)
     if i >= 0:
         return 2000 - i, []
@@ -293,13 +321,15 @@ def score(query, row):
 
 
 def rank(rows, query, mru, current=""):
-    """The rows the popup shows, best first, each with its name's marks."""
+    """The rows the popup shows, best first, each with its name's marks. An
+    empty query puts the rows waiting on you first (issue #2365: the bar no
+    longer counts them — the list's red `!` and this order do)."""
     recency = {k: i for i, k in enumerate(mru)}
     far = len(mru) + 1
     order = {r["key"]: i for i, r in enumerate(rows)}
     if not query.strip():
         def empty_key(r):
-            return (r["key"] == current, recency.get(r["key"], far), order[r["key"]])
+            return (r["key"] == current, r["state"] not in WAITING, recency.get(r["key"], far), order[r["key"]])
         return [(r, []) for r in sorted(rows, key=empty_key)]
     scored = []
     for r in rows:
@@ -409,9 +439,11 @@ def switch_act(action, session=""):
         detach((seam.split() if seam else ["bash", str(BIN / "fleet-shell.sh"), "quit"])
                + ([session] if session else []), env)
         return True
-    if action == "new":
+    if action == "new" or action in ("new:claude", "new:codex"):
+        agent = action.partition(":")[2] or "claude"
         seam = os.environ.get("FLEET_SWITCH_NEW_CMD")
-        detach(seam.split() if seam else ["bash", str(BIN / "fleet-shell.sh"), "home-session", "claude"], env)
+        detach(seam.split() + ([agent] if action != "new" else []) if seam else
+               ["bash", str(BIN / "fleet-shell.sh"), "home-session", agent], env)
         return True
     if action.startswith("layout:"):
         lay = action.split(":", 1)[1]
@@ -583,6 +615,70 @@ def session_of():
     return tmux("display-message", "-p", "#{?#{session_group},#{session_group},#{session_name}}")
 
 
+# --- ⌘P: one panel of sessions AND actions (issue #2365) -----------------------------
+
+# ⌃<letter> on the lit row runs THAT row's menu item — the very command its
+# right-click menu runs (menu_items), so a key is never a second spelling of an
+# action. (key, menu action, the verb a refusal names.)
+ROW_KEYS = {"\x12": ("rename", "改名"), "\x18": ("reap", "回收"), "\x01": ("answer", "回答"),
+            "\x05": ("reappol", "改回收方式"), "\x0f": ("pr", "打开 PR")}
+
+
+def row_command(session, key, action):
+    """The command of row `key`'s menu item `action`, or "" (absent or greyed)."""
+    _, items = menu_items(session, key)
+    for it in items:
+        if it[0] == action and not it[1].startswith("-"):
+            return it[3]
+    return ""
+
+
+def pr_url(row):
+    """A row with no 「打开 PR」 item (a row on another machine): its PR's page off
+    the row's repo and PR cell (`#75✓`), else its issue's — which links the PR."""
+    repo = row.get("repo") or ""
+    if "/" not in repo:
+        return ""
+    num = "".join(c for c in (row.get("pr") or "").split("✓")[0].split("✗")[0] if c.isdigit())
+    if num:
+        return "https://github.com/%s/pull/%s" % (repo, num)
+    return "https://github.com/%s/issues/%s" % (repo, row["issue"]) if row.get("issue") else ""
+
+
+def open_url(url):
+    """The client's own way to a browser (fleet-remote-view.sh's opener)."""
+    opener = os.environ.get("FLEET_REMOTE_OPENER")
+    detach((opener.split() if opener else ["bash", str(BIN / "fleet-shell.sh"), "open-url"]) + [url])
+    return True
+
+
+def panel_cmds(layout, session, current, say=None):
+    """`>`'s own lines, above the row's (issue #2365 — ⌘K's tail folded in):
+    [(action, name, hint, command)] — a command a tmux command string, or a
+    `!<action>` run by panel_run (switch_act); a greyed line's name led by `-`.
+    退出 fleet is the client's own quit (#2349: every process of the client
+    here goes, the sessions run on) — not prefix d's 放到后台."""
+    say = say or {}
+    w = lambda k, d: say.get(k) or d
+    out = [("quit", w("panel_quit", "退出 fleet（会话在后台继续）"), "", "!quit")]
+    for agent in ("claude", "codex"):
+        out.append(("new:" + agent, (say.get("panel_new_fmt") or "新会话 · %s") % agent, "", "!new:" + agent))
+    if layout in ONE_PANE:
+        out.append(("layout:multi", w("panel_multi", "切到多会话视图"), "", "!layout:multi"))
+    else:
+        out.append(("layout:solo", w("panel_solo", "切到单会话视图"), "", "!layout:solo"))
+    rn = row_command(session, current, "rename") if current else ""
+    out.append(("rename-current", ("" if rn else "-") + w("panel_rename_current", "改名当前会话"), "", rn))
+    return out
+
+
+def panel_run(command, session=""):
+    """↵ on a `>` line: `!<action>` → switch_act, anything else → run_cmd."""
+    if command.startswith("!"):
+        return switch_act(command[1:], session)
+    return run_cmd(command)
+
+
 # --- the popup --------------------------------------------------------------------
 
 def cells(text):
@@ -620,7 +716,7 @@ def draw_cmds(screen, query, title, items, at, width, height, say):
     except curses.error:
         pass
     col = min(34, max(12, width // 2))
-    for y, it in enumerate((items or [])[:max(0, height - base_y)], base_y):
+    for y, it in enumerate((items or [])[:max(0, height - base_y - 2)], base_y):
         sel = y - base_y == at
         grey = it[1].startswith("-")
         base = curses.color_pair(2) if sel else curses.A_NORMAL
@@ -635,6 +731,9 @@ def draw_cmds(screen, query, title, items, at, width, height, say):
 
 def popup(screen, pane, session="", target="", switch=False):
     curses.use_default_colors()
+    # raw: ⌃O / ⌃V / ⌃C reach the panel as keys (the tty's discard / lnext /
+    # intr would take them) — esc and ⌃C still close it
+    curses.raw()
     try:
         curses.curs_set(1)
     except curses.error:
@@ -649,11 +748,13 @@ def popup(screen, pane, session="", target="", switch=False):
     # the painted rows at once; every session (folded ones too) a moment later —
     # and the screen's words with them
     fetched, say = [], {}
-    layout = layout_now() if switch else ""
+    layout = layout_now()
+    flash = [""]   # one line under the list until the next key (a refusal)
     def fetch():
-        say.update(words("quickopen_cmd_hint", "quickopen_cmd_for_fmt", "quickopen_cmd_none",
-                         "quickopen_cmd_loading", "switch_new", "switch_multi", "switch_solo",
-                         "switch_quit"))
+        say.update(words("quickopen_keys", "quickopen_cmd_keys", "quickopen_cmd_for_fmt", "quickopen_cmd_none",
+                         "quickopen_cmd_loading", "switch_new", "switch_multi", "switch_solo", "panel_quit",
+                         "panel_new_fmt", "panel_multi", "panel_solo", "panel_rename_current",
+                         "panel_no_action_fmt", "panel_no_waiting", "switch_quit"))
         fetched.append(full_rows(session))
     reader = threading.Thread(target=fetch, daemon=True)
     reader.start()
@@ -661,7 +762,9 @@ def popup(screen, pane, session="", target="", switch=False):
     # --target names), read once, the first time `>` is typed
     cmds, cmd_reader = [], None
     def fetch_cmds():
-        cmds.append(menu_items(session or session_of(), target or current))
+        sess = session or session_of()
+        title, items = menu_items(sess, target or current)
+        cmds.append((title, panel_cmds(layout, sess, current, say) + items))
     while True:
         if fetched and fetched[0]:
             rows, fetched[:] = fetched[0], [None]
@@ -685,7 +788,7 @@ def popup(screen, pane, session="", target="", switch=False):
                      else [("row", rm) for rm in rank(rows, query, hist["mru"], current)])
             shown = [ln for ln in lines if ln[0] != "sep"]
             at = max(0, min(at, len(shown) - 1))
-            body = height - 2 - (2 if say.get("quickopen_cmd_hint") else 0)
+            body = height - 4
             tail = [ln for ln in lines if ln[0] != "row"]
             nrows = max(0, body - len(tail))
             drawn = [ln for ln in lines if ln[0] == "row"][:nrows] + tail
@@ -705,10 +808,15 @@ def popup(screen, pane, session="", target="", switch=False):
                         pass
                     continue
                 row, marks = payload
-                node = "@" + row["node"] if row["node"] else ""
+                # the row's detail (issue #2365 — the bar no longer says it):
+                # 单号 · 机器 · 状态 · PR · 回收方式, right-aligned and dim
+                node = " · ".join(p for p in (("#" + row["issue"]) if row.get("issue") else "", row["node"],
+                                              STATE_SAY.get(row["state"], ""), row.get("pr") or "",
+                                              row.get("reap") or "") if p)
                 if switch:
                     when = ago(hist["seen"].get(row["key"]))
                     node = ("%s  %s" % (when, node)).strip() if when else node
+                node = clip(node, max(0, width // 2))
                 left = "%s %s " % ("›" if sel else " ", row["glyph"] or " ")
                 name = clip(row["name"], max(0, width - cells(left) - cells(node) - 2))
                 base = curses.color_pair(2) if sel else curses.A_NORMAL
@@ -723,11 +831,16 @@ def popup(screen, pane, session="", target="", switch=False):
                         screen.addstr(y, width - 1 - cells(node), node, base | curses.A_DIM)
                 except curses.error:
                     pass
-            if say.get("quickopen_cmd_hint") and height > 4:
-                try:
-                    screen.addstr(height - 1, 2, clip(say["quickopen_cmd_hint"], width - 3), curses.A_DIM)
-                except curses.error:
-                    pass
+        # the panel's keys on its last line, always (issue #2365) — or the one
+        # thing the last key could not do
+        if height > 4:
+            line = flash[0] or (say.get("quickopen_cmd_keys") if command else say.get("quickopen_keys")) or ""
+            try:
+                screen.addstr(height - 2, 0, "─" * (width - 1), curses.A_DIM)
+                screen.addstr(height - 1, 1, clip(line, width - 2),
+                              (curses.color_pair(1) | curses.A_BOLD) if flash[0] else curses.A_DIM)
+            except curses.error:
+                pass
         prompt = ("> " + query[1:].lstrip()) if command else ("› " + query)
         try:
             if command:
@@ -744,8 +857,33 @@ def popup(screen, pane, session="", target="", switch=False):
             key = screen.get_wch()
         except curses.error:
             continue  # a timeout: look for the full rows again
+        flash[0] = ""
         if key in ("\x1b", "\x03", "\x07") or key == curses.KEY_EXIT:
             return 0
+        if key in ROW_KEYS and not command:
+            # ⌃R ⌃X ⌃A ⌃E ⌃O on the lit row (issue #2365)
+            action, verb = ROW_KEYS[key]
+            row = shown[at][1][0] if shown and shown[at][0] == "row" else None
+            if action == "answer" and (row is None or row["state"] != "needs"):
+                # ⌃A off a waiting row: onto the first one that is
+                waiting = [i for i, ln in enumerate(shown) if ln[0] == "row" and ln[1][0]["state"] == "needs"]
+                if waiting:
+                    at = waiting[0]
+                else:
+                    flash[0] = say.get("panel_no_waiting") or "没有在问你的会话"
+                continue
+            if row is None:
+                curses.beep()
+                continue
+            cmd = row_command(session or session_of(), row["key"], action)
+            if cmd:
+                run_cmd(cmd)
+                return 0
+            if action == "pr" and pr_url(row):
+                open_url(pr_url(row))
+                return 0
+            flash[0] = (say.get("panel_no_action_fmt") or "这一行不能%s") % verb
+            continue
         if key in ("\n", "\r") or key == curses.KEY_ENTER:
             if command:
                 if not shown:
@@ -753,7 +891,7 @@ def popup(screen, pane, session="", target="", switch=False):
                 if shown[at][1].startswith("-") or not shown[at][3]:
                     curses.beep()   # greyed: the menu would not run it either
                     continue
-                run_cmd(shown[at][3])
+                panel_run(shown[at][3], session or session_of())
             elif shown and shown[at][0] == "act":
                 switch_act(shown[at][1][0], session or session_of())
             elif shown:
@@ -967,9 +1105,15 @@ def main(argv):
     if argv[:1] == ["switch-run"] and len(argv) in (2, 3):
         # ↵ on a ⌘K line: a session key jumps (as ↵ on it does), else the action
         session = argv[2] if len(argv) == 3 else os.environ.get("FLEET_SESSION", "")
-        if argv[1] in ("new", "quit") or argv[1].startswith("layout:"):
+        if argv[1] in ("new", "quit") or argv[1].startswith(("new:", "layout:")):
             return 0 if switch_act(argv[1], session) else 1
         return 0 if hand(list_pane(), "jump=" + argv[1]) else 1
+    if argv[:1] == ["panel-cmds"]:
+        # `>`'s own lines (issue #2365), plain: `action<TAB>name<TAB>command`
+        sess = os.environ.get("FLEET_SESSION") or session_of()
+        for action, name, _, command in panel_cmds(layout_now(), sess, in_view()):
+            print("%s\t%s\t%s" % (action, name, command))
+        return 0
     if argv[:1] == ["commands"]:
         for action, group in COMMANDS:
             print("%s\t%s" % (action, group))

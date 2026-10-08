@@ -246,16 +246,19 @@ try:
     attach()
     def solo_drawn():
         rows = screen().split('\n')
-        return 'CLAUDE-SESSION' in rows[0] and '⌃D 退出（会话在后台继续）' in rows[-1]
+        return 'CLAUDE-SESSION' in rows[0] and '⌃D 放到后台' in rows[-1]
     check(wait(solo_drawn, 10), 'solo: not the one-session screen:\n%s' % screen())
     time.sleep(1)
     rows = screen().split('\n')
     solo = '\n'.join(rows)
     check(rows[0].startswith('CLAUDE-SESSION'), 'solo: the session is not the first line: %r' % rows[0])
-    check('新任务' not in solo and '│' not in solo and '─' not in solo,
+    above = '\n'.join(rows[:-1])
+    check('新任务' not in above and '│' not in above and '─' not in above,
           'solo: a list or a border on screen:\n%s' % solo)
-    check('⌘K 其它会话' in rows[-1] and rows[-1].rstrip().endswith('m5'), 'solo: the bar: %r' % rows[-1])
-    check('⌘N' not in solo and '⌘P' not in solo, 'solo: the key row is still there: %r' % rows[-1])
+    # the bar is the same three things as any layout's (issue #2365): who is
+    # signed in, the ⟳ slot, the keys — ⌃D 放到后台 in ⌘↑↓'s place, no machine
+    check('⌘P 会话与动作' in rows[-1] and '⌃D 放到后台' in rows[-1] and '⌘↑↓' not in rows[-1],
+          'solo: the bar: %r' % rows[-1])
     panes = tm('list-panes', '-t', 'fc:home', '-F', '#{@sidebar}')
     check('1' in panes.split('\n'), 'solo: the list stopped running behind the session')
     check(tm('display-message', '-p', '-t', 'fc:home', '#{window_zoomed_flag}') == '1', 'solo: not zoomed')

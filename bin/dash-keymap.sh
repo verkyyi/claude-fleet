@@ -118,9 +118,9 @@ preview ctrl-p alt-p' ;;
 # `fold` (issue #2167): ⌘. opens or shuts the sub-tasks of the session in view
 # (on a sub-task: shuts its parent) — the list's caret, from wherever the
 # keyboard is; prefix . elsewhere (tmux's move-window prompt, no use here).
-# `switcher` (issue #2266, EPIC #2259 C7): ⌘K, the one-session view's way to any
-# other session, a new one, and the list beside it (fleet-quickopen.py --switch)
-# — prefix s elsewhere, tmux's own choose-tree key: the same job.
+# `switcher` (issue #2266, EPIC #2259 C7): ⌘K — since issue #2365 it opens ⌘P's
+# one panel of sessions and actions (the switcher's new session and layout flip
+# are its `>` commands); prefix s elsewhere, tmux's own choose-tree key.
 # `quit` (issue #2349): ⌘Q, 退出 fleet — the client's every process here goes,
 # the sessions run on (fleet-shell.sh quit); prefix Q elsewhere, unbound in tmux.
 switch) TABLE='next ⌘↓ 0xf701-0x300000 920 n

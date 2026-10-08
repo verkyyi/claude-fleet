@@ -60,7 +60,8 @@ eq("needs finds the row waiting", top("needs")[:1], ["@2"])
 eq("issue-1882", top("1882"), ["@4"])
 eq("two words, both must match", top("hub disk"), ["@6"])
 eq("no match, no row", top("zzzq"), [])
-eq("empty: recent first, the one in view last", top("", ["@3", "@7", "@1"], "@3"), ["@7", "@1", "@2", "@4", "@5", "@6", "@8", "@3"])
+# issue #2365: the rows waiting on you first, then the most recent
+eq("empty: waiting first, then recent, the one in view last", top("", ["@3", "@7", "@1"], "@3"), ["@2", "@7", "@1", "@4", "@5", "@6", "@8", "@3"])
 eq("a tie goes to the recent one", top("m5", ["@4"])[:1], ["@4"])
 _, marks = q.rank(rows, "cod", [])[0]
 eq("cod marks", marks, [0, 1, 2])
@@ -89,7 +90,8 @@ eq("at stays on the top", h["stack"][h["at"]], "@x79")
 # rows_text: the list's rows → switch-rows.tsv, headings folded into a group
 text = q.rows_text([["hdr", "verkyyi/claude-fleet", "", "verkyyi/claude-fleet", ""],
                     ["@9", "needs", "!", " nine", "", "b", "0", "", "m4", "", "", "", ""]])
-eq("rows_text", text, "@9\tneeds\t!\tnine\tm4\tverkyyi/claude-fleet\tb\n")
+# issue #2365 appends issue · PR · reap · title · repo after the seven
+eq("rows_text", text, "@9\tneeds\t!\tnine\tm4\tverkyyi/claude-fleet\tb\t\t\t\t\tverkyyi/claude-fleet\n")
 # D (the table half): COMMANDS ⇔ the menu's letter table, action for action
 table = [a for a, _ in q.COMMANDS]
 eq("COMMANDS has no action twice", len(table), len(set(table)))

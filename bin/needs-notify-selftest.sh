@@ -172,66 +172,61 @@ i=0; CL=''; while [ -z "$CL" ] && [ "$i" -lt 30 ]; do CL=$(T list-clients -F '#{
 hint() { T display-message -p -c "$CL" '#{E:@fleet_hint}' | sed 's/#\[[^]]*\]//g'; }
 raw() { T display-message -p -c "$CL" '#{E:@fleet_hint}'; }
 T select-pane -t "$PANE"
-eq "E: the keyboard in the session → its keys" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘. 展开/收起  ⌘/ 按键  ⌘Q 退出 fleet" "$(hint)"
-case "$(raw)" in *"range=user|key-User928]"*"⌘N"*"range=user|key-User924]"*"⌘J"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: each key is its own key-<key> range" "$(raw)" ;; esac
+# the bar is login · ⟳ · the keys of where the keyboard is (issue #2365)
+eq "E: the keyboard in the session → its keys" " ⌘P 会话与动作  ⌘N 新任务  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
+case "$(raw)" in *"range=user|key-User927]"*"⌘P"*"range=user|key-User928]"*"⌘N"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: each key is its own key-<key> range" "$(raw)" ;; esac
+T set-option -g @fleet_layout solo
+eq "E: the one-session view → ⌃D 放到后台 in ⌘↑↓'s place" " ⌘P 会话与动作  ⌘N 新任务  ⌃D 放到后台  ⌘Q 退出 fleet" "$(hint)"
+case "$(raw)" in *"range=user|key-C-d]"*"⌃D"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: ⌃D is its key range" "$(raw)" ;; esac
+T set-option -gu @fleet_layout
 T switch-client -c "$CL" -T prefix
-eq "E: prefix pressed → the prefix keys" " n p 切换  k 等你的  c 新任务  / 跳转  ? 按键  d 放到后台  Q 退出 fleet" "$(hint)"
+eq "E: prefix pressed → the prefix keys" " / 会话与动作  c 新任务  n p 切换  d 放到后台  Q 退出 fleet" "$(hint)"
 T switch-client -c "$CL" -T root
 T set-option -g @popup_open "$(date +%s)"; T set-option -g @popup_title popup_quickopen
-eq "E: ⌘P open → its keys" " ↵ 去  > 命令  esc 关" "$(hint)"
+eq "E: ⌘P open → the panel's keys" " ↵ 切过去  ⌃R 改名  ⌃X 回收  ⌃A 回答  ⌃E 回收方式  ⌃O PR  > 命令  esc 关" "$(hint)"
+eq "E: …the panel's own last line says the same" "$(hint | sed 's/^ //')" "$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t quickopen_keys)"
 T set-option -g @popup_title popup_keys
 eq "E: another popup → esc" " esc 关" "$(hint)"
 T set-option -g @popup_open 0
 T set-option -p -t "$PANE" @stage_ask 1
 eq "E: a question's pane → ↵ / esc" " ↵ 确定  esc 取消" "$(hint)"
 T set-option -pu -t "$PANE" @stage_ask
+# a tap on the list, and the lit row's detail, change nothing (issue #2365)
 T set-option -w -t "$PANE" @fleet_on_list 1
-eq "E: a tap on the list → what a tap does" " 点一行 切过去  右键 菜单  ⌘P 跳转  ⌘N 新任务  ⌘. 展开/收起  ⌘/ 按键" "$(hint)"
 T set-option -w -t "$PANE" @fleet_hint_name 'issue-1909 · 一个很长很长的名字, 带逗号'
-eq "E: …with the clipped row's whole name first" " issue-1909 · 一个很长很长的名字, 带逗号  │  点一行 切过去  右键 菜单  ⌘P 跳转  ⌘N 新任务  ⌘. 展开/收起  ⌘/ 按键" "$(hint)"
+eq "E: a tap on the list / a lit row → the same keys" " ⌘P 会话与动作  ⌘N 新任务  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
 T set-option -uw -t "$PANE" @fleet_on_list
+T set-option -uw -t "$PANE" @fleet_hint_name
 T set-option -w -t "$PANE" @fleet_view portal
 eq "E: the writing area in view → its keys" " ↵ 发出  ⇧↵ 换行  Tab 下一项  esc 回去" "$(hint)"
 T set-option -w -t "$PANE" @fleet_orch 1
 eq "E: …with an orchestrator: ⌘N 编排 and ⇧⇥ (issue #2146)" " ↵ 发出  ⇧↵ 换行  Tab 下一项  ⌘N 编排  ⇧⇥ 交给编排  esc 回去" "$(hint)"
 case "$(raw)" in *"range=user|key-User928]"*"⌘N"*"range=user|key-BTab]"*"⇧⇥"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the writing area's ⌘N / ⇧⇥ are key ranges (issue #2146)" "$(raw)" ;; esac
 T set-option -uw -t "$PANE" @fleet_view
-eq "E: …and in a session, ⌘N is still 新任务" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘. 展开/收起  ⌘/ 按键  ⌘Q 退出 fleet" "$(hint)"
+eq "E: …and in a session, ⌘N is still 新任务" " ⌘P 会话与动作  ⌘N 新任务  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
 T set-option -uw -t "$PANE" @fleet_orch
 sl=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
-case "$sl" in "B   ⌘N 新任务  ⌘P 跳转"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the slot, then the hint, after the badge" "$sl" ;; esac
+case "$sl" in "B   ⌘P 会话与动作  ⌘N 新任务"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the slot, then the hint, after the badge" "$sl" ;; esac
+T set-option -g @fleet_layout solo
+eq "E: the one-session view's bar is the same three things" "B   ⌘P 会话与动作  ⌘N 新任务  ⌃D 放到后台  ⌘Q 退出 fleet" \
+  "$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')"
+T set-option -gu @fleet_layout
 # The refresh slot (issue #2228): ⟳ lights in a two-cell slot the bar always
 # keeps, so the keys start on the same column lit or not.
 T set-option -w -t "$PANE" @fleet_refreshing 1
 lit=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
-case "$lit" in "B⟳  ⌘N 新任务  ⌘P 跳转"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: a waiting list lights ⟳ in the slot" "$lit" ;; esac
-col() { python3 -c 'import sys; print(sys.argv[1].index("⌘N"))' "$1"; }
+case "$lit" in "B⟳  ⌘P 会话与动作  ⌘N 新任务"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: a waiting list lights ⟳ in the slot" "$lit" ;; esac
+col() { python3 -c 'import sys; print(sys.argv[1].index("⌘P"))' "$1"; }
 eq "E: the keys start on the same column, lit or not" "$(col "$sl")" "$(col "$lit")"
 T set-option -uw -t "$PANE" @fleet_refreshing
 eq "E: …and the slot goes back to two blanks" "$sl" "$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')"
 T resize-window -t "=$L:" -x 90 2>/dev/null; "$REAL_TMUX" -L "${L}o" resize-window -t =o -x 90 2>/dev/null; sleep 0.2
 eq "E: narrower than 100 columns → the badge alone" "B" "$(T display-message -p -c "$CL" '#{E:status-left}')"
 "$REAL_TMUX" -L "${L}o" kill-server 2>/dev/null
-# the list's half (fleet-sidebar.py bar_hint): the highlighted row's detail (issue #2305)
-out=$(python3 - "$BIN" <<'PY'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("side", sys.argv[1] + "/fleet-sidebar.py")
-side = importlib.util.module_from_spec(spec); spec.loader.exec_module(side)
-long = ["@3", "needs", "?", "issue-1909 · 一个很长很长很长很长很长很长的名字 #x", "  ", "", "0", "", ""]
-short = ["@4", "done", "✓", "ok", "  ", "", "0", "", ""]
-rows = [["hdr", "acme", "", "acme"], long, short]
-print(side.bar_hint(rows, "@3", "@4", 30))
-print(side.bar_hint(rows, "@4", "@4", 30))
-print(side.bar_hint(rows, "@4", side.PORTAL_KEY, 30))
-print(side.bar_hint(rows, "@4", side.PORTAL_KEY, 30, True))
-PY
-)
-eq "E: bar_hint — the highlighted row's detail (# doubled), the writing area as a view" \
-   "('', 'issue-1909 · 一个很长很长很长很长很长很长的名字 ##x', '')
-('', 'ok', '')
-('portal', 'ok', '')
-('portal', 'ok', '1')" "$out"
-# a tap on a range is that key; 「! n 等你」 is ⌘J
+# the right end draws nothing; its job runs `part=quiet` for the notification (issue #2365)
+grep -q '^set -g status-right "#(bash __BIN__/tmux-status.sh part=quiet ' "$CONF" || fail "E: status-right is not the quiet job"
+CHECKS=$((CHECKS+1))
+# a tap on a range is that key; 「! n 等你」 (an older bar's) is ⌘J
 grep -q "bind -n MouseDown1Status if -F '#{m:key-\*,#{mouse_status_range}}' { run-shell -C \"send-keys -K -c '#{client_name}' '#{s/^key-//:mouse_status_range}'\" }" "$CONF" \
   && grep -q "#{==:#{mouse_status_range},needs}' { run-shell -C \"send-keys -K -c '#{client_name}' User924\" }" "$CONF" \
   || fail "E: the bar's taps are not the keys"

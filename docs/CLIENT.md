@@ -15,13 +15,21 @@ keyboard on the list.
 | the next session waiting on you | ⌘J | prefix k | as a tap on 「! N 个在问你」 |
 | zoom the right pane | ⌘↩ | F9 | again to restore |
 | every key | ⌘/ | prefix ? | |
-| quick open | ⌘P | prefix / | type a few letters, ↵ |
+| sessions and actions (also ⌘K / prefix s, issue #2365) | ⌘P | prefix / | type a few letters, ↵ — below |
 | a new task: the writing area on the right | ⌘N | prefix c | below |
 | the orchestrating session ⇄ the writing area (issue #2146) | ⌘N again | prefix c again | only with an orchestrator; also the 「新任务」 row's right-click menu |
 
-**Quick open** lists every session — one folded under its parent too. An empty
-query lists the most recent first and the one in view last, so ⌘P ↵ is «the one
-I was just on». A query keeps the rows it matches: a substring of the name first
+**⌘P — sessions and actions** (issue #2365: 「一切优化为 CLI」 — the way in is the
+keyboard, not the right-click menu, which stays but is advertised nowhere) lists
+every session — one folded under its parent too — each with `#单号 · 机器 · 状态 ·
+PR · 回收方式`. On the lit row: **⌃R** 改名 · **⌃X** 回收 · **⌃A** 回答 (on a row
+that is not asking: onto the first one that is) · **⌃E** 改回收方式 · **⌃O** 打开
+PR (a row on another machine: its PR's page, else its issue's). Each key runs
+THAT row's own menu item, never a second copy. A query starting `>` lists the
+panel's commands first — 退出 fleet · 新会话 claude / codex · 切到多 / 单会话视图 ·
+改名当前会话 — then the row menu's. The panel's last line says its keys. An empty
+query lists the sessions waiting on you first, then the most recent and the one
+in view last, so ⌘P ↵ is «the one I was just on». A query keeps the rows it matches: a substring of the name first
 (earlier is better, a word start best), then a substring of the machine, state
 or repo (`m4`, `needs`), then the letters in order (`crr` → 「Codex: reap
 rules」); ties go to the more recent. ⌘P + two letters + ↵ reaches any session
@@ -140,6 +148,27 @@ session as they always did. Two taps reach any session: the title, then its row.
 confirmed there; the taps need no setup, and the prefix keys (prefix / · n · p ·
 k) do the same jobs if a key does not arrive.*
 
+**The bar** (issue #2365) holds three things: who is signed in (the GitHub login
+off `fleet login`'s certificate — orange, with why, when the hub cannot be asked
+or refuses this computer), the ⟳ slot, and the keys of WHERE THE KEYBOARD IS — in
+a session `⌘P 会话与动作 · ⌘N 新任务 · ⌘↑↓ 切换 · ⌘Q 退出 fleet`, in the writing
+area its keys, in ⌘P the panel's, with the prefix pressed the prefix keys. It is
+the same whichever list row is lit. No quota, no 「N 等你」 (the list's red `!` and
+⌘P's order say who waits), no machine or issue of the row in view (⌘P and
+`fleet show` do).
+
+**The commands** (issue #2365): whatever the menu and ⌘P do, a command does —
+`fleet ls [--json]` (名称 · 状态 · 单号 · 机器 · PR · 回收方式), `fleet show <会话>`,
+`fleet open <会话>` (the client onto it), `fleet rename <会话> <新名>`,
+`fleet close <会话> [--yes]`, `fleet reap <会话> <方式>` (merged[:<dur>] ·
+done[:<dur>] · loop-end · at:<time> · keep), `fleet answer [<会话>] [<回答>]`. A
+session is a name or part of one, `#单号`, or its key; ONE resolver, and two
+matches are listed with exit 4 — never a guess (3 = none). They read the
+client's own rows and write through the hub by the session's worker_id
+(`bin/fleet-session-cli.py`, run inside the client server's environment by
+`fleet-shell.sh cli`), so the client must be running — after ⌃D it still is.
+`fleet open <url|:port|file>` and `fleet show <file>` are what they were.
+
 **The layout**: `FLEET_CLIENT_LAYOUT=auto` (default — one pane when the list does
 not fit beside 80 columns, i.e. under `FLEET_SHELL_WIDTH` + 81 columns, where
 the list used to be taken away with nothing in its place) · `single` (always) ·
@@ -149,8 +178,8 @@ the switcher writes) · `solo` (below).
 **The one-session view, `solo`** (issue #2265, EPIC #2259 C6) — what a fresh
 install writes: the whole screen is the session. No list (it still runs, zoomed
 away behind the session, so the switch keys work), no border, no top line, and
-the bar is ONE line — `⌃D 退出（会话在后台继续） · ⌘K 其它会话` and the session's
-machine on the right (`@fleet_view_node`, written by the list). **Leaving is
+the bar is the same three things as any layout's (below), with `⌃D 放到后台`
+where ⌘↑↓ would be. **Leaving is
 putting it in the background**: ⌃D (caught by the client; the agent never sees
 it — its own `/exit` still ends it), `prefix d` or closing the terminal only
 detach, and the terminal says 「会话在后台继续（m5）。下次输入 fleet 回来。」
