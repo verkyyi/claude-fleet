@@ -187,6 +187,10 @@ case "$mode" in
     # not a window's, and a batch nobody drives has no window to ride on, so every
     # row carries the same cell (the hub keeps only windows); the reader takes it
     # off any of them. Empty when there is none — the common case.
+    # Column 23 (issue #2235): `backfill=failed` on a session that started from the
+    # warm pool whose paperwork (fleet-start-backfill.sh: file the issue, bind the
+    # window) failed every try — @backfill; the sidebars mark the row
+    # 「单子没建上」. Empty on every other window, and while it is still filing.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -198,7 +202,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     estale=''
     while IFS=$'\t' read -r _sr _sn _sa _st; do
@@ -211,7 +215,9 @@ case "$mode" in
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11; exit }')
+      wbf=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      [ "$wbf" = failed ] || wbf=''
       wepic=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       case "$wepic" in *[!A-Za-z0-9/._#-]*|*'#'*'#'*) wepic='' ;; *'#'[0-9]*) ;; *) wepic='' ;; esac
       wrole=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -263,7 +269,7 @@ case "$mode" in
       fi
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------
@@ -475,7 +481,10 @@ case "$mode" in
             win=${rcpt%%	*}
             tf=$(mktemp "${TMPDIR:-/tmp}/fcr-title.XXXXXX") && printf '%s' "${8:-}" > "$tf"
             bf=$(mktemp "${TMPDIR:-/tmp}/fcr-body.XXXXXX") && printf '%s' "$nbody" > "$bf"
-            nohup bash "$BIN/fleet-start-backfill.sh" "$sess" "$win" "$srepo" "$tf" "$bf" </dev/null >/dev/null 2>&1 &
+            # The controller's operation id (issue #2235): the paperwork stamps
+            # t_filed / t_bound on it. Anything not a UUID's characters is dropped.
+            op="${FLEET_CONTROL_OP:-}"; case "$op" in *[!0-9a-f-]*) op='' ;; esac
+            nohup bash "$BIN/fleet-start-backfill.sh" "$sess" "$win" "$srepo" "$tf" "$bf" ${op:+"$op"} </dev/null >/dev/null 2>&1 &
             printf 'warm\t%s\n' "$rcpt"
             exit 0
           fi

@@ -231,9 +231,15 @@ def inventory_row(parts):
     Column 22 (issue #1916): `epicstale=` — the batches on the node's login that
     nobody drives (a stale heartbeat, the EPIC still open, no window wearing its
     @epic): `epic_stale`, a list (epic_stale_cell), on every row alike — it is the
-    login's, and a batch nobody drives has no window of its own; absent when empty."""
+    login's, and a batch nobody drives has no window of its own; absent when empty.
+    Column 23 (issue #2235): `backfill=failed` — a session started from the warm
+    pool whose issue could not be filed / bound after every try; the sidebars mark
+    its row 「单子没建上」. Absent otherwise."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 23 and parts[-1].startswith("backfill="):
+        if parts.pop()[9:] == "failed":
+            extra["backfill"] = "failed"
     if len(parts) >= 22 and parts[-1].startswith("epicstale="):
         st = epic_stale_cell(parts.pop()[10:])
         if st:

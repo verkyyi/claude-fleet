@@ -3668,6 +3668,58 @@ drill_pool_empty_compose() {
   WHAT="池子空时发任务：--warm-only 答 3、什么都不开；start new 走冷路径（建单 + 开会话各一次），输出与开池前逐字节相同"
 }
 
+# bind-after-start-fails (issue #2235, EPIC #2230 C5): a warm start's session is
+# already working when its paperwork runs (fleet-start-backfill.sh). Filing the
+# issue failing must leave that session exactly as it is, marked for the sidebar
+# (@backfill failed → 「单子没建上」) after its tries; once filing works, the same
+# window becomes issue-N in place — @fleet_id kept, fleet_win_for_key answers it,
+# the agent told through the peer channel.
+drill_bind_after_start_fails() {
+  CAP=15; BREAK_SOCK="$WORK/sock-baf"; local d="$WORK/baf" t0 rc win fid got
+  mkdir -p "$d/conf/fleets/bf" "$d/sb" "$d/log" "$d/home" "$d/fb"
+  git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
+  ( cd "$d/main" && git config user.email t@t && git config user.name t && echo x > f && git add f && git commit -qm i \
+      && git worktree add -q -b scratch-1 "$d/app-scratch-1" ) || { WHY="cannot build the repo"; return 1; }
+  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s/main"\nFLEET_BASE_BRANCH="master"\n' "$d" > "$d/conf/fleets/bf/conf"
+  for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
+  rm -f "$d/sb/fleet-issue-file.sh" "$d/sb/fleet-peer-send.sh"
+  printf '#!/bin/sh\necho try >> "%s/log/file"\n[ -e "%s/fail" ] && { echo "gh: HTTP 502" >&2; exit 1; }\necho https://github.com/acme/app/issues/9\n' "$d" "$d" > "$d/sb/fleet-issue-file.sh"
+  printf '#!/bin/sh\necho "$*" >> "%s/log/peer"\n' "$d" > "$d/sb/fleet-peer-send.sh"
+  printf '#!/bin/sh\necho "$*" >> "%s/log/gh"\n' "$d" > "$d/fb/gh"
+  chmod +x "$d/sb/fleet-issue-file.sh" "$d/sb/fleet-peer-send.sh" "$d/fb/gh"
+  nt -f /dev/null new-session -d -s bf -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  win=$(nt new-window -d -P -F '#{window_id}' -t bf -n 'a task' -c "$d/app-scratch-1" 'exec sleep 600')
+  fid=11111111-2222-4333-8444-555555555555
+  nt set-window-option -t "$win" @raw 1; nt set-window-option -t "$win" @worktree "$d/app-scratch-1"
+  nt set-window-option -t "$win" @repo acme/app; nt set-window-option -t "$win" @fleet_id "$fid"
+  bf() {
+    printf 'a task' > "$d/t"; printf 'the words' > "$d/b"
+    env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET PATH="$WORK/tbin:$d/fb:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
+      FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" FLEET_BACKFILL_TRIES=3 FLEET_BACKFILL_RETRY_SECS=0 \
+      bash "$d/sb/fleet-start-backfill.sh" bf "$win" acme/app "$d/t" "$d/b" >/dev/null 2>&1
+  }
+  t0=$(now)
+  touch "$d/fail"; bf; rc=$?
+  [ "$rc" = 1 ] || { WHY="a filing that fails every try answered $rc, want 1"; return 1; }
+  [ "$(grep -c . "$d/log/file")" = 3 ] || { WHY="filing was tried $(grep -c . "$d/log/file" 2>/dev/null) times, want 3"; return 1; }
+  [ "$(o "$win" @backfill)" = failed ] || { WHY="the window is not marked @backfill failed (it says [$(o "$win" @backfill)])"; return 1; }
+  [ "$(o "$win" @raw)" = 1 ] && [ -z "$(o "$win" @issue)" ] && [ "$(o "$win" pane_dead)" = 0 ] \
+    || { WHY="the failed paperwork touched the session (raw=$(o "$win" @raw) issue=$(o "$win" @issue))"; return 1; }
+  [ ! -s "$d/log/peer" ] || { WHY="the agent was told about an issue that does not exist"; return 1; }
+  rm -f "$d/fail"; bf; rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="once filing works the backfill answered $rc"; return 1; }
+  [ "$(o "$win" @issue)" = 9 ] && [ -z "$(o "$win" @raw)" ] && [ -z "$(o "$win" @backfill)" ] \
+    || { WHY="the window was not bound to #9 in place (issue=$(o "$win" @issue) raw=$(o "$win" @raw) mark=$(o "$win" @backfill))"; return 1; }
+  [ "$(o "$win" @fleet_id)" = "$fid" ] || { WHY="@fleet_id changed"; return 1; }
+  [ "$(git -C "$d/app-scratch-1" symbolic-ref --short HEAD)" = issue-9 ] || { WHY="the branch is not issue-9"; return 1; }
+  got=$(env PATH="$WORK/tbin:$PATH" BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; fleet_win_for_key issue-9 bf' _ "$BIN" 2>&1)
+  [ "$got" = "$win" ] || { WHY="fleet_win_for_key issue-9 answered [$got], want $win"; return 1; }
+  grep -q "issue-9" "$d/log/peer" || { WHY="the agent was not told its issue and branch"; return 1; }
+  grep -qE 'issue view|pr list' "$d/log/gh" 2>/dev/null && { WHY="a just-filed issue got a duplicate-claim read"; return 1; }
+  WHAT="补单失败：建单试 3 次都失败时会话原样在跑、窗口标「单子没建上」、不告诉 agent；建单恢复后同一窗口就地换成 issue-9（@fleet_id 不变、fleet_win_for_key 认得、经 peer 通道告诉它）"
+}
+
 drill_cold_fill_fails() {
   # issue #2237: the cold start opens the agent's window before the tree is
   # checked out; a checkout that fails must take that window (and the worktree)

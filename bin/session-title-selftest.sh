@@ -75,8 +75,15 @@ if [ -n "$REAL_TMUX" ]; then
   # column 20 is role=orchestrator on the orchestrating session (issue #1957), empty otherwise
   # column 21 is epic=<ref>[:k/n] on an EPIC's driver window (issue #1958), empty otherwise
   # column 22 is epicstale= — the login's batches nobody drives (issue #1916), empty with none
-  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22; 16 before it as they were" "16 reap= detail= role= epic= epicstale=" \
-     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 6, $18, $19, $20, $21, $22 }')"
+  # column 23 is backfill=failed on a warm start whose issue was never filed (issue #2235)
+  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23; 16 before it as they were" "17 reap= detail= role= epic= epicstale= backfill=" \
+     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 6, $18, $19, $20, $21, $22, $23 }')"
+  T set-option -w -t "=$S:draft" @backfill failed
+  T set-option -w -t "=$S:uncached" @backfill filing
+  out2=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
+  eq "A: @backfill failed → backfill=failed (column 23, #2235); still filing → empty" "backfill=failed backfill=" \
+     "$(printf '%s\n' "$out2" | awk -F'\t' '$10 == "draft" { d = $23 } $10 == "uncached" { u = $23 } END { print d, u }')"
+  T set-option -wu -t "=$S:draft" @backfill; T set-option -wu -t "=$S:uncached" @backfill
   T set-option -w -t "=$S:uncached" @claude_state needs
   T set-option -w -t "=$S:uncached" @claude_needs_detail '演练放在 m5 还是只在 m4？'
   T set-option -w -t "=$S:draft" @claude_needs_detail 'a stale question'

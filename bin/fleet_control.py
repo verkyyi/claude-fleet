@@ -85,9 +85,14 @@ class Control:
             env["FLEET_TIMING_READY_SECS"] = os.environ["FLEET_TIMING_READY_SECS"]
         return env
 
-    def adapter(self, mode, *args, timeout=20, payload=None):
+    def adapter(self, mode, *args, timeout=20, payload=None, op_id=None):
+        env = self.environment()
+        if op_id:
+            # The operation a start belongs to (issue #2235): its detached
+            # paperwork (fleet-start-backfill.sh) stamps t_filed / t_bound on it.
+            env["FLEET_CONTROL_OP"] = op_id
         return run(["bash", str(self.bin / "fleet-control-read.sh"), mode, *args],
-                   payload=payload, env=self.environment(), timeout=timeout)
+                   payload=payload, env=env, timeout=timeout)
 
     def inventory(self):
         code, output, _ = self.adapter("inventory")
@@ -349,16 +354,18 @@ class Control:
 
     def stamp_timing(self, op_id, **points):
         """Merge timing points (epoch ms) into a finished operation's result
-        (issue #2238) — its status and every other field untouched."""
+        (issue #2238) — its status and every other field untouched. False when
+        the operation is unknown or has no result yet (still running)."""
         with self.store.connect() as db:
             row = db.execute("SELECT result FROM operations WHERE id=?", (op_id,)).fetchone()
             if row is None or not row["result"]:
-                return
+                return False
             result = json.loads(row["result"])
             timing = result.get("timing") if isinstance(result.get("timing"), dict) else {}
             timing.update(points)
             result["timing"] = timing
             db.execute("UPDATE operations SET result=? WHERE id=?", (canonical(result), op_id))
+        return True
 
     def watch_ready(self, op_id, fleet, window, seeded):
         """After a start has finished: watch its window until the person can type
@@ -663,7 +670,7 @@ class Control:
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params["title"].strip(),
                                                      *reap_arg, payload=params.get("body", "").encode("utf-8"),
-                                                     timeout=240)
+                                                     timeout=240, op_id=op_id)
                     first = output.decode("utf-8", "replace").split("\n", 1)[0].strip()
                     if not code and first.startswith("warm\t"):
                         # 发出即开 (issue #2234, EPIC #2230 C4): answered from the warm
@@ -822,6 +829,10 @@ class Control:
         raise Fault("INVALID_ARGUMENT", "Unsupported control method")
 
 
+# The points a start's paperwork stamps after its operation finished (issue #2235).
+STAMP_POINTS = ("t_filed", "t_bound")
+
+
 def ms(seconds):
     """Epoch seconds → the integer epoch milliseconds a timing point is (issue #2238)."""
     return int(round(seconds * 1000))
@@ -850,8 +861,11 @@ def refusal_line(err):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--conf-dir")
-    parser.add_argument("command", choices=("rpc", "execute"))
+    parser.add_argument("command", choices=("rpc", "execute", "stamp"))
     parser.add_argument("operation_id", nargs="?")
+    # stamp (issue #2235): `<name>=<epoch ms>` points a start's detached paperwork
+    # adds to its finished operation — only the names 共同约定 3 fixed.
+    parser.add_argument("points", nargs="*")
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
@@ -859,6 +873,17 @@ def main(argv=None):
         if args.command == "execute":
             controller.execute(args.operation_id)
             return 0
+        if args.command == "stamp":
+            points = {}
+            for word in args.points:
+                key, _, value = word.partition("=")
+                if key not in STAMP_POINTS or not value.isdigit():
+                    raise Fault("INVALID_ARGUMENT", "Expected t_filed=<ms> / t_bound=<ms>")
+                points[key] = int(value)
+            if not points:
+                raise Fault("INVALID_ARGUMENT", "Nothing to stamp")
+            # 1 = no such operation, or its result is not written yet: try again.
+            return 0 if controller.stamp_timing(identifier(args.operation_id or ""), **points) else 1
         result = controller.dispatch(read_request(sys.stdin.buffer))
         print(canonical({"protocol": PROTOCOL, "machine_id": controller.machine_id, "result": result}))
     except Fault as exc:

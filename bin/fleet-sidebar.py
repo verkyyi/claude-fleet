@@ -1554,12 +1554,16 @@ def row_text(marker, glyph, tree, name, badge, width):
 # glyph's own cell instead of a word at the row's end. A row that waits on you
 # keeps its own red `!`/`?` — the producer's glyph already says it.
 LOST_GLYPH, BROKEN_GLYPH = "⊘", "✗"
+# A session that started from the warm pool whose issue could not be filed or
+# bound (issue #2235): it keeps working, the row says 「单子没建上」 — `∅`, no issue.
+BACKFILL_GLYPH = "∅"
 
 
 def row_glyph(row):
     """(glyph, why) for a session row: `⊘` "lost" on a lost machine's row, its
     own glyph while it waits on you, `✗` "broken" for a configuration that will
-    break (#2076), else its own glyph and ""."""
+    break (#2076), `∅` "backfill" for a session whose issue never got filed
+    (#2235), else its own glyph and ""."""
     glyph, state = row[2], row[1]
     node = row[8] if len(row) > 8 else ""
     cfg = row[12] if len(row) > 12 else ""
@@ -1569,6 +1573,8 @@ def row_glyph(row):
         return glyph, ""
     if cfg == "broken":
         return BROKEN_GLYPH, "broken"
+    if (row[15] if len(row) > 15 else "") == "failed":
+        return BACKFILL_GLYPH, "backfill"
     return glyph, ""
 
 
@@ -1675,12 +1681,14 @@ def auto_width(rows, cols, base, top):
 def detail_line(row):
     """Everything the row no longer carries, for the bar (issue #2305, on
     #1328's whole-name line): its whole name · #issue · @machine · PR · reap
-    policy · ctx% · the configuration word — the empty ones left out. Which `!`
+    policy · ctx% · the configuration word · 单子没建上 (#2235) — the empty ones
+    left out. Which `!`
     it is and why a ↻ waits (row[7]) live in the worker pane's header,
     @title_info (issue #1377)."""
     field = lambda i: row[i] if len(row) > i else ""
     parts = [row[3], field(9), machine_tag(field(8)), field(10),
-             reap_tag(field(14)), field(11), cfg_tag(field(12))]
+             reap_tag(field(14)), field(11), cfg_tag(field(12)),
+             tr("sidebar_backfill_failed") if field(15) == "failed" else ""]
     return " · ".join(p.strip() for p in parts if p and p.strip() not in ("", "—", "·"))
 
 
@@ -2203,8 +2211,9 @@ def collect_rows(proc):
 # (issues #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `broken` (#2076) / `ok`,
 # absent when unknown; #1921 — title is the session's issue title, absent when
 # none: a reader falls back to name; #1902 — reap is the @reap_policy, absent when
-# none)
-ROW_FIELDS = 15
+# none; #2235 — backfill is `failed` when a warm start's issue could not be filed /
+# bound, absent otherwise)
+ROW_FIELDS = 16
 
 
 def row_fields(line):
@@ -3071,7 +3080,7 @@ def ui(screen, session, worker, lock):
             # that will break on this install (#2076). The words — the machine,
             # 配置旧 / 会坏·需重开, the reap policy — are the bar's (detail_line).
             glyph, why = row_glyph(row)
-            if why == "broken":
+            if why in ("broken", "backfill"):
                 glyph_attr = curses.color_pair(PAIR_BROKEN + SEL_GLYPH if raised else PAIR_BROKEN) | curses.A_BOLD
             marker = "▶" if wid == current_row else "›" if wid == selected else " "
             # `marker glyph tree label` (issue #836): the hierarchy glyph is its own
