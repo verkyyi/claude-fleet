@@ -1040,6 +1040,29 @@ def launchctl_loaded(target):
     return subprocess.call([lc, "print", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
 
 
+def launchctl_gone(target):
+    """Wait for <target> to leave launchd. `bootout` of a KeepAlive job returns
+    while launchd is still tearing it down, so ONE `print` right after it reads
+    «still loaded» (m4, issue #2336): poll for FLEET_NODE_BOOTOUT_WAIT seconds."""
+    end = now() + env_num("FLEET_NODE_BOOTOUT_WAIT", 15)
+    while launchctl_loaded(target):
+        if now() >= end:
+            return False
+        time.sleep(0.25)
+    return True
+
+
+def launchctl_bootstrap(domain, path):
+    """bootstrap, retried while launchd still holds the old copy of the job
+    (a bootout a moment ago answers EIO / «already loaded» until it is gone)."""
+    end = now() + env_num("FLEET_NODE_BOOTOUT_WAIT", 15)
+    while True:
+        rc = launchctl("bootstrap", domain, path)
+        if rc == 0 or now() >= end:
+            return rc
+        time.sleep(0.5)
+
+
 def account_services(paths, login, uid, home):
     """The login's own fleet services: [{path, label, domain}] — its gui
     LaunchAgents and its system LaunchDaemons (com.claude-fleet.<login>.<unit>)."""
@@ -1201,7 +1224,7 @@ def _put_back(paths, e):
     os.chmod(e["src"], e["mode"])
     shutil.rmtree(os.path.dirname(e["dst"]), ignore_errors=True)
     if e.get("domain"):
-        launchctl("bootstrap", e["domain"], e["src"])
+        launchctl_bootstrap(e["domain"], e["src"])
 
 
 def account_adopt(paths, login, dry=False):
@@ -1244,7 +1267,7 @@ def account_adopt(paths, login, dry=False):
         for sv in svcs:
             target = "%s/%s" % (sv["domain"], sv["label"])
             launchctl("bootout", target)
-            if launchctl_loaded(target):
+            if not launchctl_gone(target):
                 # one that will not unload: every service of this login goes back
                 print("fleet-node-supervisor: %s did not unload — putting %s's %d moved service(s) back"
                       % (target, login, len(moved)), file=sys.stderr)
