@@ -162,7 +162,7 @@ t0=$(ms)
 out=$(printf '%s' "$body" | bash "$CR" start "$SESS" new claude o/a '' '' '修侧栏的刷新图标' 2>"$WORK/errA"); rc=$?
 [ "$rc" = 0 ] || fail "A the warm start exited $rc" "$out $(cat "$WORK/errA")"
 [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] || fail "A one stdout line" "$out"
-IFS=$'\t' read -r tag win name wt fid tw tr tp <<<"$out"
+IFS=$'\t' read -r tag win _name _wt fid tw tr tp <<<"$out"
 [ "$tag" = warm ] && case "$win" in @[0-9]*) true ;; *) false ;; esac || fail "A the line is warm + a window" "$out"
 case "$tw$tr$tp" in *[!0-9]*|'') fail "A three epoch-ms stamps" "$out" ;; esac
 [ "$(o "$win" session_name)" = "$SESS" ] || fail "A the window lives in the fleet"
@@ -199,7 +199,7 @@ ok "C an empty slot: the cold path, byte for byte FLEET_START_WARM=0"
 t0=$(ms)
 out=$(printf '帮我看看 ~/notes' | bash "$CR" start "$SESS" scratch claude - '' '' '看看笔记' 2>"$WORK/errD"); rc=$?
 [ "$rc" = 0 ] || fail "D the HOME start exited $rc" "$out $(cat "$WORK/errD")"
-IFS=$'\t' read -r win name wt fid tw tr tp <<<"$out"
+IFS=$'\t' read -r win _name _wt fid tw tr tp <<<"$out"
 case "$tp" in ''|*[!0-9]*) fail "D the 7-field receipt" "$out" ;; esac
 [ "$(o "$win" @norepo)" = 1 ] && [ "$(o "$win" session_name)" = "$SESS" ] || fail "D the HOME entry, in the fleet"
 [ "$(turns)" = '帮我看看 ~/notes' ] || fail "D the first turn is the text alone" "$(turns)"
