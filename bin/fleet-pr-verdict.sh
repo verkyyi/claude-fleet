@@ -55,6 +55,9 @@
 #     forward reconnects), else every FLEET_PR_WAIT_BACKSTOP (300s). No live
 #     forward → the poll above, unchanged. FLEET_PR_WAIT_WEBHOOK=0 forces the poll.
 #
+# `macOS shard *` checks are not part of the merge gate (issue #2286): the BSD half
+# runs on master after the merge and gates `fleet-stable.sh move` instead.
+#
 # The CHECK ROLLUP fold mirrors bin/tmux-pr-refresh.sh's dash glyphs
 # (none/fail/pending/pass), widened on the failure side — a gate must count
 # TIMED_OUT / CANCELLED / ACTION_REQUIRED as red, where a glance can shrug.
@@ -91,7 +94,7 @@ while [ "$#" -gt 0 ]; do
     --timeout)           shift; wait_timeout="${1:-}" ;;
     --no-checks-timeout) shift; nochecks_timeout="${1:-}" ;;
     --interval)          shift; interval="${1:-}" ;;
-    -h|--help) sed -n '2,69p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,72p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)       printf 'fleet-pr-verdict: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)         PR="$1" ;;
   esac
@@ -137,6 +140,10 @@ command -v gh >/dev/null 2>&1 || { printf 'fleet-pr-verdict: gh not on PATH\n' >
 # StatusContext (.state) — so every branch tests both; a missing key is null and
 # simply doesn't match. `none` is the EMPTY rollup — "no checks reported yet" is
 # read from the data, never inferred from an exit code (#950).
+# A `macOS shard *` check is DROPPED before the fold (issue #2286): the BSD half
+# runs after the merge, on master, and gates moving `stable`, not merging — so a
+# PR opened before that change, still carrying a queued macOS shard, is not held
+# PENDING by it (and a red one there is not this gate's to judge).
 # read_pr → sets st/mg/ms/dr/ck/am; returns 2 (with a message in $read_err) when
 # the PR can't be read.
 read_err='' via=''
@@ -145,7 +152,8 @@ read_pr() {
   # shellcheck disable=SC2016  # $r/$ck are jq variables, not shell — keep single-quoted
   row=$(fleet_gh_run graphql pr-verdict pr view "$PR" --repo "$repo" \
           --json state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,autoMergeRequest \
-          --jq '(.statusCheckRollup // []) as $r |
+          --jq '[(.statusCheckRollup // [])[]
+                 | select((.name // .context // "") | startswith("macOS shard") | not)] as $r |
                 (if   ($r|length)==0                       then "none"
                  elif ($r|any(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT"
                               or .conclusion=="CANCELLED" or .conclusion=="ACTION_REQUIRED"

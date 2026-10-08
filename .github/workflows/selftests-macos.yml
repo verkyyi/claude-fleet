@@ -37,26 +37,36 @@ name: selftests (macOS)
 # from `strategy.job-total`, so the list is the only thing to edit) or drop the
 # schedule.
 #
-# SCHEDULE, NOT PUSH
-# ------------------
-# Six PRs landed here in a single day; a per-push trigger would multiply this job
-# by the day's merge rate for no extra signal — a BSD regression is found just as
-# well the same night. A nightly cron makes the cost and the noise a predictable
-# constant. (`pull_request` was once scoped to this file alone; since #1374 it
-# covers every PR the ubuntu gate does, but runs only the related tests — below.)
+# AFTER MERGE, NOT BEFORE (issue #2286)
+# ---------------------------------------
+# A free account runs at most 5 macOS jobs at once. From #1374 to #2286 every PR
+# took 2 of them, so two EPICs with five PRs open queued here: the last 23 PR runs
+# took a median 21 minutes (worst 56) while every ubuntu check was long green, and
+# the merge gate sat PENDING on the BSD half alone. What the BSD half guards is
+# RELEASING to a machine — moving `stable` (bin/fleet-stable.sh) — not merging to
+# master: master's code reaches m4 / m5 / a client only when stable moves.
 #
-# A scheduled workflow only runs from the DEFAULT branch, so the nightly starts
-# after this merges. `workflow_dispatch` is the manual handle from then on.
+# So the division of labour is:
+#   * pull_request — NO macOS job. The ubuntu gate (selftests.yml) is the merge
+#     gate, and `fleet-pr-verdict.sh` ignores any `macOS shard *` check it still
+#     finds on an older PR.
+#   * push to master — `run-selftests.sh --changed <the previous master>` (the
+#     tests related to what just landed) on 2 shards. One group for all of master,
+#     and a newer push CANCELS the older run: the newest master is what stable may
+#     move to, and a cancelled run counts as no run at all (below).
+#   * a red master run is filed ONCE as a breakage (bin/fleet-macos-watch.sh, on
+#     the dispatch daemon's tick → fleet-issue-file.sh --breakage, one issue per
+#     fingerprint) and gets its fixer.
+#   * `fleet-stable.sh move` refuses (`macos:`) a target whose newest macOS run is
+#     not green; a target with no run (path-filtered, cancelled by a later push)
+#     gets a `workflow_dispatch` of the FULL suite on exactly that commit (input
+#     `sha`, which the run's name carries) and the move waits for it.
+#   * nightly — the full suite on master's head, the backstop for anything the
+#     selector cannot see.
 #
-# PER-PR, RELATED TESTS ONLY (issue #1374)
-# ----------------------------------------
-# Workers no longer run the suite on their own Mac before pushing — that took 21
-# minutes for 159 of 270 tests on a box shared by dozens of sessions. CI is the
-# verdict, so the Mac-only failure classes (bash 3.2, BSD tools) need a check
-# BEFORE merge, and this is it: on a pull_request the same matrix runs
-# `run-selftests.sh --changed origin/<base>` — only the tests related to the change
-# (see selftests.yml) — on macos-latest. The nightly and workflow_dispatch runs stay
-# the FULL suite: the backstop for anything a selector cannot see.
+# A dispatched run names its commit, so `fleet-stable.sh move` can find the run it
+# asked for: GitHub attaches a dispatch run to the branch head, never to `sha`.
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.sha != '' && format('selftests (macOS) @ {0}', inputs.sha) || 'selftests (macOS)' }}
 
 on:
   schedule:
@@ -64,9 +74,15 @@ on:
     # the hour, which is when GitHub's scheduler is most congested.
     - cron: '17 18 * * *'
   workflow_dispatch:
-  pull_request:
-    # The same trees as selftests.yml, so every PR that runs the ubuntu gate also
-    # gets its BSD half.
+    inputs:
+      sha:
+        description: 'the commit to run the full suite on (fleet-stable.sh move dispatches this; empty = the ref head)'
+        required: false
+        default: ''
+  push:
+    branches: [master]
+    # The same trees as selftests.yml: a docs-only landing runs no BSD half (and
+    # fleet-stable.sh dispatches one if stable is ever moved onto it).
     paths:
       - 'bin/**'
       - 'hooks/**'
@@ -83,12 +99,13 @@ on:
       - '.github/workflows/selftests.yml'
       - '.github/workflows/selftests-macos.yml'
 
-# One nightly at a time: a run that overlaps its successor (a wedged test, a long
-# queue for a macOS runner) would double the concurrency draw for a stale answer.
-# Each PR is its own group, and a re-push cancels that PR's stale run.
+# Master's push runs are ONE group and a newer push cancels the older run (only the
+# newest master matters to stable). The full runs (nightly, dispatch) are another
+# group that queues instead of cancelling — a dispatch fleet-stable.sh is waiting
+# on must not be killed by the nightly.
 concurrency:
-  group: selftests-macos-${{ github.event_name == 'pull_request' && github.ref || 'full' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: selftests-macos-${{ github.event_name == 'push' && 'master' || 'full' }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   selftests-macos:
@@ -102,19 +119,23 @@ jobs:
       # picture is what makes people re-run instead of read.
       fail-fast: false
       matrix:
-        # Two widths, configured apart from the ubuntu matrix (issue #1374): a PR
-        # gets at most 2 macOS shards, because a free account runs at most 5 macOS
-        # jobs at once and several PRs pushed together must not fill that; the
-        # nightly / dispatch full suite keeps 6. The runner reads N from
-        # `strategy.job-total`, so each list stays the single source of its width.
-        shard: ${{ github.event_name == 'pull_request' && fromJSON('[1, 2]') || fromJSON('[1, 2, 3, 4, 5, 6]') }}
-    # A PR whose change falls back to the FULL suite (a harness edit) runs it on 2
-    # shards, not 6: measured ~28 min a shard on #1375, so the PR bounds are wider.
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 30 }}
+        # Two widths, configured apart from the ubuntu matrix (issue #1374): a
+        # master push gets at most 2 macOS shards, because a free account runs at
+        # most 5 macOS jobs at once; the nightly / dispatch full suite keeps 6. The
+        # runner reads N from `strategy.job-total`, so each list stays the single
+        # source of its width.
+        shard: ${{ github.event_name == 'push' && fromJSON('[1, 2]') || fromJSON('[1, 2, 3, 4, 5, 6]') }}
+    # A push whose change falls back to the FULL suite (a harness edit) runs it on 2
+    # shards, not 6: measured ~28 min a shard on #1375, so the push bounds are wider.
+    timeout-minutes: ${{ github.event_name == 'push' && 60 || 30 }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # A PR run diffs against its base branch (--changed); it must be in the clone.
+          # A dispatch from fleet-stable.sh names the commit to test; else the
+          # event's own commit.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || '' }}
+          # A push run diffs against the previous master (--changed); it must be
+          # in the clone.
           fetch-depth: 0
 
       - name: Assert a BSD toolchain
@@ -158,10 +179,13 @@ jobs:
         # budgets, a macOS runner is a noisier neighbour than an ubuntu one, and
         # this job is nightly — a timeout red costs a whole night's signal, where
         # a few extra idle minutes cost nothing on a free public runner.
-        timeout-minutes: ${{ github.event_name == 'pull_request' && 50 || 20 }}
+        timeout-minutes: ${{ github.event_name == 'push' && 50 || 20 }}
         env:
-          # PR → only the related tests (issue #1374); nightly / dispatch → full.
-          CHANGED_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+          # push → only the tests related to what landed since the previous master
+          # (issue #2286); nightly / dispatch → full. A first push or a force-push
+          # has no usable `before` (all zeros / not in the clone): run-selftests.sh
+          # falls back to the full suite on an unresolvable base.
+          CHANGED_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
         run: |
           set -o pipefail
           set -- --shard "${{ matrix.shard }}/${{ strategy.job-total }}"

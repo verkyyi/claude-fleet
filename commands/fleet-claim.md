@@ -236,7 +236,7 @@ override them):
      PR, and read the gate (step 5). Run a test locally only to REPRODUCE a CI
      failure, and then only that one test (claude-fleet:
      `bin/run-selftests.sh <name>` — never the full gate, never `--changed`;
-     CI already runs the related tests, on ubuntu and macOS).
+     CI already runs the related tests — ubuntu on the PR, macOS on master after the merge, #2286).
   2. **Push** the clean worktree: `git status --porcelain` empty (commit
      anything left), then `git push -u origin issue-<N>`.
   3. **Open (or update) the PR** with a body containing `Closes #<issue>` plus a

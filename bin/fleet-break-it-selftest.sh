@@ -61,6 +61,7 @@
 #   dispatch-wrong-replica                          tokenledger/internal/api node_route.go (fleet_node_conns +
 #                                                   /internal/v1/node-write; go test, when a toolchain is here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
+#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (macos gate)
 #   two-hubs-double-refresh                         tokenledger/internal/leader (Leader / Lock), credvault Lease's
 #                                                   CrossLock, the three gated loops (go test, when a toolchain is here)
 #   hub-release-downtime                            .github/actions/hub-release/probe.sh (downtime_seconds),
@@ -3145,6 +3146,62 @@ drill_oldcfg_deleted_hook() {
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="--force left stable at the old commit"; return 1; }
   grep -q "	forced	" "$d/stable-move.log" 2>/dev/null || { WHY="--force left no line in stable-move.log"; return 1; }
   WHAT="删了 h.sh 的发版被拒（oldcfg: 点名 bin/h.sh，stable 没动）；--force 才挪并记一行"
+}
+
+# ---- macos-red-to-stable (#2286): the macOS selftests left the PR and run on
+# master after the merge. A BSD-only red there must (1) be filed once as a breakage
+# by the watcher and (2) stop `fleet-stable.sh move` with `macos:`; once the run on
+# the target goes green the same move goes through. Fake gh (the runs / check
+# runs), fake filer; a real bare repo + tag.
+drill_macos_red_to_stable() {
+  CAP=30; local t0 d out rc c1 c2
+  d="$WORK/macosred"; mkdir -p "$d/shim" "$d/seed" "$d/conf"
+  cat > "$d/shim/gh" <<SH
+#!/bin/sh
+case "\$*" in
+  *actions/workflows/*status=completed*) cat "$d/runs.watch" ;;
+  *actions/workflows/*) cat "$d/runs.stable" ;;
+  *actions/runs/*/jobs*) printf '7\tmacOS shard 1\n' ;;
+  'run view'*) printf 'FAIL  bsd-only-selftest.sh  1s\n' ;;
+  *) printf 'completed success shard 1\n' ;;
+esac
+SH
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/filed"\necho https://github.com/o/r/issues/77\n' "$d" > "$d/filer"
+  chmod +x "$d/shim/gh" "$d/filer"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm bsd && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c1"
+    echo x > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'bsd-only break' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c2"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
+  # The watcher reads id/sha/conclusion/event; the stable gate head_sha/status/
+  # conclusion/event/id/title.
+  printf '9\t%s\tfailure\tpush\n8\t%s\tsuccess\tpush\n' "$c2" "$c1" > "$d/runs.watch"
+  printf '%s\tcompleted\tfailure\tpush\t9\tselftests (macOS)\n' "$c2" > "$d/runs.stable"
+  t0=$(now)
+  # red: the watcher files it as a breakage …
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_FILE_CMD="$d/filer" \
+          bash "$BIN/fleet-macos-watch.sh" --repo o/r --now 2>&1) || { WHY="the watcher failed: $out"; return 1; }
+  grep -q -- '--breakage' "$d/filed" 2>/dev/null || { WHY="the red run was not filed with --breakage: $out"; return 1; }
+  grep -q 'bsd-only-selftest.sh' "$d/filed" || { WHY="the filing does not name the red test"; return 1; }
+  # … and stable refuses to move onto it.
+  out=$(PATH="$d/shim:$PATH" sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
+  [ "$rc" = 3 ] || { WHY="move onto the red commit exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'REFUSED — macos:'*) ;; *) WHY="the refusal is not prefixed macos: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a red macOS run"; return 1; }
+  # green: the fix's run on the same target is green → the move goes through.
+  printf '%s\tcompleted\tsuccess\tworkflow_dispatch\t10\tselftests (macOS) @ %s\n%s\tcompleted\tfailure\tpush\t9\tselftests (macOS)\n' \
+    "$c1" "$c2" "$c2" > "$d/runs.stable"
+  out=$(PATH="$d/shim:$PATH" sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="the move after a green run failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move after the run went green"; return 1; }
+  WHAT="master 上 macOS 红：开出带指纹的修复单、stable 拒挪（macos:）；同一提交跑绿后照常挪"
 }
 
 # ---- burst-lands-on-one (#2077, EPIC #2074 C6): the hub counts the starts it just
