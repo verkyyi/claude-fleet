@@ -1,5 +1,7 @@
 #!/bin/bash
 # Automatic done-raw window cleanup. Keeps worktree/branch/transcript for restore.
+# Also the finished sessions no PR will ever close (issue #1832): `cleaned:done-no-pr`
+# / `skip:<why>` on stdout, one line a window — fleet-cleanup-idle.py no_pr().
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -53,7 +55,7 @@ while IFS= read -r repo; do
   rc=$?
   [ -z "$out" ] || printf '%s\n' "$out"
   [ "$rc" = 75 ] && exit 75
-  limit=$(( limit - $(printf '%s\n' "$out" | grep -c '^reaped-idle:') ))
+  limit=$(( limit - $(printf '%s\n' "$out" | grep -cE '^(reaped-idle|cleaned:done-no-pr)') ))
 done <<EOF
 $(fleet_repos "$FLEET_SESSION")
 EOF

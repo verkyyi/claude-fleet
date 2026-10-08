@@ -4449,6 +4449,56 @@ drill_machine_agent_wrong_login() {
   SECS=$(since "$t0")
 }
 
+# A session that finished with NO PR (issue #1832, EPIC #2463 C7): an issue
+# session whose issue was closed without a PR, reap policy `merged` (#2446) —
+# no PR will ever merge, so the PR-keyed cleanup never saw it and it sat as a
+# `done` row forever. The idle pass must close it two hours after its last
+# turn, history first, and say so (`cleaned:done-no-pr`); one an hour old is
+# kept and said (`skip:done-recent`).
+drill_done_no_pr_stranded() {
+  CAP=20; BREAK_SOCK="$WORK/sock-dnp"; local d="$WORK/dnp" t0 out w1 w2 wt x w i p a kv sid=22222222-2222-4222-8222-222222222222
+  mkdir -p "$d/conf" "$d/gh" "$d/home"
+  git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
+  ( cd "$d/main" && git config user.email t@t && git config user.name t && git commit -qm i --allow-empty ) \
+    || { WHY="cannot build the repo"; return 1; }
+  git -C "$d/main" update-ref refs/remotes/origin/master HEAD
+  wt="$d/app-issue-12"; git -C "$d/main" worktree add -qb issue-12 "$wt" 2>/dev/null || { WHY="cannot add the worktree"; return 1; }
+  git -C "$d/main" worktree add -qb issue-13 "$d/app-issue-13" 2>/dev/null
+  mkdir -p "$d/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
+  printf '{"type":"user","message":{"role":"user","content":"x"}}\n' \
+    > "$d/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')/$sid.jsonl"
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s\nFLEET_REAP_MIN_AGE=0\n' "$d/main" > "$d/conf/dnp.conf"
+  printf '#!/bin/sh\ncase "$1" in issue) echo %s ;; *) echo %s ;; esac\n' "'{\"state\":\"CLOSED\"}'" "'[]'" > "$d/gh/gh"
+  chmod +x "$d/gh/gh"
+  nt -f /dev/null new-session -d -s dnp -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  w1=$(nt new-window -d -P -F '#{window_id}' -t dnp -c "$wt" 'exec sleep 600')
+  w2=$(nt new-window -d -P -F '#{window_id}' -t dnp -c "$d/app-issue-13" 'exec sleep 600')
+  for x in "$w1:12:$wt:9000" "$w2:13:$d/app-issue-13:3600"; do
+    IFS=: read -r w i p a <<EOF2
+$x
+EOF2
+    for kv in "@issue=$i" "@worktree=$p" "@claude_state=done" "@reap_policy=merged" "@repo=acme/app" \
+              "@claude_state_ts=$(( $(date +%s) - a ))" "@cc_agent=claude"; do
+      nt set-option -w -t "$w" "${kv%%=*}" "${kv#*=}"
+    done
+  done
+  run() { ( cd "$d" && env -u TMUX -u TMUX_PANE PATH="$d/gh:$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
+            FLEET_SKIP_GLOBAL_CONF=1 FLEET_HISTORY_LEDGER="$d/ledger.tsv" CLAUDE_PROJECTS_DIR="$d/projects" \
+            BREAK_SOCK="$BREAK_SOCK" bash "$BIN/fleet-cleanup-idle.sh" dnp ); }
+  t0=$(now)
+  out=$(run 2>&1)
+  nt set-option -w -t "$w1" @reap_due "$(( $(date +%s) - 1 ))" 2>/dev/null
+  out="$out
+$(run 2>&1)"
+  SECS=$(since "$t0")
+  case "$out" in *"cleaned:done-no-pr $w1 issue-12"*) ;; *) WHY="the stranded session was not closed: [$(printf '%s' "$out" | tr '\n' ' ')]"; return 1 ;; esac
+  nt list-windows -t dnp -F '#{window_id}' | grep -qx "$w1" && { WHY="its window is still open"; return 1; }
+  grep -q "$sid" "$d/ledger.tsv" 2>/dev/null || { WHY="closed without its history row"; return 1; }
+  case "$out" in *"skip:done-recent $w2 issue-13"*) ;; *) WHY="the hour-old session was not said kept: [$(printf '%s' "$out" | tr '\n' ' ')]"; return 1 ;; esac
+  nt list-windows -t dnp -F '#{window_id}' | grep -qx "$w2" || { WHY="the hour-old session was closed"; return 1; }
+  WHAT='issue 已关、无 PR、策略 merged 的 done 会话：满 2 小时先记账再关（cleaned:done-no-pr），1 小时的留着并说 skip:done-recent'
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"

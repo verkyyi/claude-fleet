@@ -406,5 +406,98 @@ class ReapPolicy(Rig):
         self.assertIn("reaped-idle:", self.due())
 
 
+@unittest.skipUnless(shutil.which("tmux"), "tmux absent")
+class DoneNoPr(Rig):
+    """A finished session no PR will ever close (issue #1832): closed two hours
+    after its last turn, its worktree dropped only when clean with nothing of its
+    own, and every refusal said as a token."""
+    def setUp(self):
+        super().setUp()
+        self.set("@raw", "")                         # a spawned scratch, no policy
+        (self.root / "issue.json").write_text('{"state":"CLOSED"}')
+        (self.root / "fake/gh").write_text(
+            '#!/bin/sh\nif [ "$1" = issue ]; then cat ' + shlex.quote(str(self.root / "issue.json"))
+            + '; else cat ' + shlex.quote(str(self.root / "prs.json")) + '; fi\n')
+
+    def ago(self, secs):
+        self.set("@claude_state_ts", str(int(time.time()) - secs))
+
+    def due(self):
+        out = self.clean()
+        if self.tm("display-message", "-p", "-t", self.win, "#{@reap_due}").strip().isdigit():
+            self.set("@reap_due", str(int(time.time()) - 1))
+            out += self.clean()
+        return out
+
+    def listed(self):
+        return str(self.wt) in self.call("git", "-C", str(self.main), "worktree", "list")
+
+    def test_recent_is_kept_and_said_once(self):
+        self.ago(3600)
+        out = self.clean()
+        self.assertIn("skip:done-recent " + self.win + " scratch-7", out)
+        self.assertEqual(self.clean(), "")           # the same skip is not repeated
+        self.assertTrue(self.exists())
+
+    def test_two_hours_clean_closes_and_drops_the_worktree(self):
+        self.ago(7300)
+        self.assertIn("would-clean:done-no-pr " + self.win, self.clean("--dry-run"))
+        self.assertTrue(self.exists())
+        out = self.due()
+        self.assertIn("cleaned:done-no-pr " + self.win + " scratch-7 worktree=trashed", out)
+        self.assertFalse(self.exists())
+        self.assertFalse(self.listed())
+        self.assertIn("scratch-7", self.call("git", "-C", str(self.main), "branch", "--list", "scratch-7"))
+        self.assertIn(self.sid, (self.root / "ledger.tsv").read_text())   # recorded first
+
+    def test_dirty_or_unpushed_only_closes_the_window(self):
+        self.ago(7300)
+        (self.wt / "dirty").write_text("keep")
+        self.assertIn("worktree=kept:dirty", self.due())
+        self.assertFalse(self.exists())
+        self.assertTrue((self.wt / "dirty").is_file())
+        self.assertTrue(self.listed())
+
+    def test_unpushed_commit_keeps_the_worktree(self):
+        self.ago(7300)
+        self.call("git", "-C", str(self.wt), "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                  "commit", "-qm", "unpushed", "--allow-empty")
+        self.assertIn("worktree=kept:unpushed", self.due())
+        self.assertFalse(self.exists())
+        self.assertTrue(self.listed())
+
+    def test_working_pr_open_issue_and_keep_are_kept(self):
+        self.ago(9000)
+        self.set("@claude_state", "working")
+        self.assertEqual(self.due(), "")
+        self.assertTrue(self.exists())
+        self.set("@claude_state", "done")
+        (self.root / "prs.json").write_text('[{"state":"OPEN"}]')
+        self.assertIn("skip:has-pr " + self.win, self.due())
+        self.assertTrue(self.exists())
+        (self.root / "prs.json").write_text("[]")
+        self.set("@issue", "12")
+        (self.root / "issue.json").write_text('{"state":"OPEN"}')
+        self.assertIn("skip:issue-open " + self.win + " scratch-7 #12", self.due())
+        self.assertTrue(self.exists())
+        for p in ("keep", "merged"):
+            self.set("@issue", "" if p == "merged" else "12")
+            self.set("@reap_policy", p)
+            self.due()
+            self.assertTrue(self.exists(), p)        # keep never; merged on a scratch is a PR's
+
+    def test_closed_issue_with_merged_policy_and_no_worktree(self):
+        # #2446: an issue session, policy merged, its issue closed with no PR — and
+        # here its worktree already gone (#2417 on this machine): the window closes.
+        self.ago(9000)
+        self.set("@issue", "12")
+        self.set("@reap_policy", "merged")
+        self.call("git", "-C", str(self.main), "worktree", "remove", "--force", str(self.wt))
+        out = self.due()
+        self.assertIn("cleaned:done-no-pr " + self.win + " scratch-7 worktree=gone", out)
+        self.assertFalse(self.exists())
+        self.assertIn("finished with no PR", (self.root / "ledger.tsv").read_text())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

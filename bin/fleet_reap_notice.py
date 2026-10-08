@@ -27,7 +27,9 @@ def notice(tm, window, key, deadline, now=None, dry=False, hold=None):
     now = int(time.time()) if now is None else now
     state = option(tm, window, "@claude_state")
     stamp = option(tm, window, "@claude_state_ts")
-    if state != "done" or not stamp.isdigit() or not 0 < int(stamp) <= now:
+    # exited (issue #1784): the agent gone, the pane on its recovery page — as
+    # idle as a finished turn, and the no-PR pass closes it too (issue #1832).
+    if state not in ("done", "exited") or not stamp.isdigit() or not 0 < int(stamp) <= now:
         if not dry:
             clear(tm, window)
         raise ValueError("window is not verifiably done")

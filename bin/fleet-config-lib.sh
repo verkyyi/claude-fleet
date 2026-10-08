@@ -284,6 +284,7 @@ fcfg_label_i18n() {
     FLEET_CLEANUP_MERGED_GRACE) printf '清理 merged 宽限期' ;;
     FLEET_CLEANUP_CLOSED_GRACE) printf '清理 closed 宽限期' ;;
     FLEET_REAP_IDLE_DONE_MIN) printf '清理空闲完成的 raw 会话' ;;
+    FLEET_REAP_DONE_NO_PR_SECS) printf '清理跑完没有 PR 的会话' ;;
     FLEET_SLEEP) printf 'Worker 休眠' ;;
     FLEET_SLEEP_AFTER) printf 'Worker 休眠空闲宽限' ;;
     FLEET_SLEEP_WAKE) printf 'Worker 到达时唤醒' ;;
