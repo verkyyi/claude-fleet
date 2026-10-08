@@ -391,9 +391,18 @@ class G_DefaultTable(Sandbox):
 FAKE_LC = """#!/bin/bash
 d="$FAKE_LC"; echo "$*" >> "$d/log"
 case "$1" in
-  bootout) l="${2##*/}"; [ -e "$d/stuck/$l" ] && exit 5; rm -f "$d/loaded/$l" ;;
-  bootstrap) l=$(basename "$3" .plist); touch "$d/loaded/$l" ;;
-  print) [ -e "$d/loaded/${2##*/}" ] ;;
+  bootout) l="${2##*/}"; [ -e "$d/stuck/$l" ] && exit 5
+           # slow: launchd still tears it down for <n> more prints (issue #2336)
+           if [ -e "$d/slow/$l" ]; then cp "$d/slow/$l" "$d/tearing-$l"; else rm -f "$d/loaded/$l"; fi ;;
+  bootstrap) l=$(basename "$3" .plist); [ -e "$d/tearing-$l" ] && exit 5
+             # busy: launchd refuses <n> more bootstraps of it (still tearing the old copy down)
+             if [ -e "$d/busy/$l" ]; then n=$(cat "$d/busy/$l"); if [ "$n" -gt 0 ]; then echo $((n - 1)) >"$d/busy/$l"; exit 5; fi; fi
+             touch "$d/loaded/$l" ;;
+  print) l="${2##*/}"
+         if [ -e "$d/tearing-$l" ]; then n=$(cat "$d/tearing-$l"); n=$((n - 1))
+           if [ "$n" -le 0 ]; then rm -f "$d/tearing-$l" "$d/loaded/$l"; exit 1; fi
+           echo "$n" >"$d/tearing-$l"; exit 0; fi
+         [ -e "$d/loaded/$l" ] ;;
 esac
 """
 
@@ -402,7 +411,7 @@ class H_Accounts(Sandbox):
     def setUp(self):
         Sandbox.setUp(self)
         self.lc = os.path.join(self.d, "lc")
-        for x in ("loaded", "stuck"):
+        for x in ("loaded", "stuck", "slow", "busy"):
             os.makedirs(os.path.join(self.lc, x))
         lcs = os.path.join(self.d, "launchctl")
         with open(lcs, "w") as f:
@@ -417,7 +426,8 @@ class H_Accounts(Sandbox):
         with open(os.path.join(self.d, "passwd.json"), "w") as f:
             json.dump(pw, f)
         self.env.update({"FLEET_NODE_PASSWD": os.path.join(self.d, "passwd.json"),
-                         "FLEET_NODE_LAUNCHCTL": lcs, "FAKE_LC": self.lc})
+                         "FLEET_NODE_LAUNCHCTL": lcs, "FAKE_LC": self.lc,
+                         "FLEET_NODE_BOOTOUT_WAIT": "2"})
 
     def home(self, who):
         return os.path.join(self.d, "Users", who)
@@ -585,6 +595,35 @@ class H_Accounts(Sandbox):
         self.assertIn("com.claude-fleet.dispatch", os.listdir(os.path.join(self.lc, "loaded")))
         self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 1)
         self.assertEqual(self.run_sup("attic", "list").stdout, "")
+
+    def test_slow_unload_is_waited_for(self):
+        # m4 (issue #2336): a KeepAlive daemon is still loaded right after its bootout
+        dd = self.env["FLEET_NODE_DAEMON_DIR"]
+        for u in ("collect", "webhook"):
+            self.plist(os.path.join(dd, "com.claude-fleet.alice.%s.plist" % u), "com.claude-fleet.alice.%s" % u)
+            open(os.path.join(self.lc, "loaded", "com.claude-fleet.alice.%s" % u), "w").close()
+        with open(os.path.join(self.lc, "slow", "com.claude-fleet.alice.webhook"), "w") as f:
+            f.write("3\n")
+        self.acct_table()
+        r = self.run_sup("account", "adopt", "alice")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("did not unload", r.stderr)
+        self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 0)
+
+    def test_put_back_waits_for_the_teardown(self):
+        # the put-back's bootstrap of a job launchd is still tearing down is retried
+        dd = self.env["FLEET_NODE_DAEMON_DIR"]
+        for u in ("a-webhook", "b-collect"):
+            self.plist(os.path.join(dd, "com.claude-fleet.alice.%s.plist" % u), "com.claude-fleet.alice.%s" % u)
+            open(os.path.join(self.lc, "loaded", "com.claude-fleet.alice.%s" % u), "w").close()
+        with open(os.path.join(self.lc, "busy", "com.claude-fleet.alice.a-webhook"), "w") as f:
+            f.write("2\n")
+        open(os.path.join(self.lc, "stuck", "com.claude-fleet.alice.b-collect"), "w").close()
+        self.acct_table()
+        r = self.run_sup("account", "adopt", "alice")
+        self.assertEqual(r.returncode, 1)
+        loaded = os.listdir(os.path.join(self.lc, "loaded"))
+        self.assertIn("com.claude-fleet.alice.a-webhook", loaded, "the put-back left the slow one unloaded")
 
     def test_stuck_service_puts_everything_back(self):
         la = os.path.join(self.home("alice"), "Library", "LaunchAgents")

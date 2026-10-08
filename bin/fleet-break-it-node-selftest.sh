@@ -85,7 +85,7 @@ LC
   printf '{"account": []}\n' > "$sb/table.json"
   sup() { FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" \
           FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json" \
-          FLEET_NODE_LAUNCHCTL="$sb/launchctl" FAKE_LC="$sb/lc" python3 "$BIN/fleet-node-supervisor.py" "$@"; }
+          FLEET_NODE_LAUNCHCTL="$sb/launchctl" FLEET_NODE_BOOTOUT_WAIT=1 FAKE_LC="$sb/lc" python3 "$BIN/fleet-node-supervisor.py" "$@"; }
   t0=$(now)
   sup account adopt alice >"$sb/adopt.out" 2>&1 && { WHY="adopt succeeded past a service that did not unload"; return 1; }
   n=$(ls "$la" | wc -l | tr -d ' ')
@@ -134,7 +134,7 @@ LC
   envf="$sb/db/logins/alice.env"
   sup() { FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$dd" \
           FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json" \
-          FLEET_NODE_LAUNCHCTL="$sb/launchctl" FAKE_LC="$sb/lc" FLEET_CREDSEP_ROOT_BASE="$sb/cred" \
+          FLEET_NODE_LAUNCHCTL="$sb/launchctl" FLEET_NODE_BOOTOUT_WAIT=1 FAKE_LC="$sb/lc" FLEET_CREDSEP_ROOT_BASE="$sb/cred" \
           python3 "$BIN/fleet-node-supervisor.py" "$@"; }
   t0=$(now)
   # 1. the old agent will not unload: nothing half done, no env for the machine's agent
