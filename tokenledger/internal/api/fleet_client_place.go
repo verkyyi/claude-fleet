@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/hmac"
 	"encoding/json"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -81,6 +82,9 @@ type clientPlaceRequest struct {
 	Idem        string `json:"idempotency_key"`
 	OperationID string `json:"operation_id"`
 	Wait        *int   `json:"wait"`
+	// Attachments: the files the writing area sends with a new or scratch
+	// start (claude-fleet#2393) — see fleet_attachment.go.
+	Attachments []clientAttachment `json:"attachments"`
 }
 
 // ClientPlaceResponse is the answer: Line and Exit are fleet_hub_place's.
@@ -113,6 +117,12 @@ type ClientPlaceResponse struct {
 	// Attempts are the machines that declined this start before the one
 	// answered (claude-fleet#1610); the line carries them as `after …`.
 	Attempts []placeAttempt `json:"attempts,omitempty"`
+	// Attached is how many of the request's attachments the start carried
+	// (claude-fleet#2393); AttachNote says why none went when some were
+	// sent. An older hub says neither, and the client says the files did
+	// not go.
+	Attached   int    `json:"attached,omitempty"`
+	AttachNote string `json:"attach_note,omitempty"`
 }
 
 // placedLogin is the login of the candidate placement chose (its fleet_id).
@@ -179,7 +189,12 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var env ClientPlaceEnvelope
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&env); err != nil {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, clientPlaceBodyMax))
+	if err != nil {
+		httpError(w, http.StatusRequestEntityTooLarge, "a place request is at most "+strconv.Itoa(clientPlaceBodyMax>>20)+" MiB")
+		return
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
 		httpError(w, http.StatusBadRequest, "the body must be one JSON object")
 		return
 	}
@@ -198,6 +213,11 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 	var req clientPlaceRequest
 	if err := json.Unmarshal([]byte(env.Payload), &req); err != nil {
 		httpError(w, http.StatusBadRequest, "the payload must be one JSON object")
+		return
+	}
+	if len(raw) > clientPlaceSmallMax && len(req.Attachments) == 0 {
+		// Only attachments make a place request big (claude-fleet#2393).
+		httpError(w, http.StatusRequestEntityTooLarge, "a place request without attachments is at most 32 KiB")
 		return
 	}
 	if d := now.Sub(time.Unix(req.TS, 0)); d > routesClockSkew || d < -routesClockSkew {
@@ -359,6 +379,26 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		return
 	}
 
+	var held []heldAttachment
+	if len(req.Attachments) > 0 {
+		if req.Kind != "new" && req.Kind != "scratch" {
+			httpError(w, http.StatusBadRequest, "attachments go with a new or scratch start")
+			return
+		}
+		var err error
+		if held, err = checkAttachments(p.Actor, idem, req.Attachments, now); err != nil {
+			httpError(w, http.StatusBadRequest, errorObject(err)["message"])
+			return
+		}
+		_, _ = s.Store.ExpireFleetAttachments(store.FleetAttachmentTTL, now)
+		for _, h := range held {
+			if err := s.Store.PutFleetAttachment(h.rec, h.data); err != nil {
+				httpError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+	}
+
 	if req.Kind == "restore" {
 		var err error
 		pl, target, err = s.restoreTarget(p, req.Repo, req.Key, node, now)
@@ -403,7 +443,9 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	deadline := now.Add(wait)
 	declined := map[string]string{}
 	attempts := []placeAttempt{}
+	attached, attachNote := 0, ""
 	answer := func(out ClientPlaceResponse) {
+		out.Attached, out.AttachNote = attached, attachNote
 		if len(attempts) > 0 {
 			out.Attempts = attempts
 			out.Line += "\t" + attemptsTail(attempts)
@@ -439,6 +481,22 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		args["fleet_id"] = pl.FleetID
 		if try > 1 {
 			args["idempotency_key"] = retryIdem(idem, try) // a new start, not the declined one again
+		}
+		delete(args, "attachments")
+		attached, attachNote = 0, ""
+		if len(held) > 0 {
+			// The chosen machine downloads them, or is sent none and the
+			// client says so (claude-fleet#2393).
+			if s.canAttach(r.Context(), target.EndpointID) {
+				list, err := s.attachArgs(held, target.EndpointID)
+				if err != nil {
+					httpError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				args["attachments"], attached = list, len(list)
+			} else {
+				attachNote = s.nodeMachineLabel(pl.Machine) + "'s node agent takes no attachments yet (upgrade ccquota / claude-fleet there)"
+			}
 		}
 		giveBack := func() {}
 		if req.Kind != "scratch" && req.Kind != "new" {

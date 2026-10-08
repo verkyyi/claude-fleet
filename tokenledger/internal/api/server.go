@@ -361,6 +361,8 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/node/move", s.handleNodeMove)
 		mux.HandleFunc("/v1/node/move/bundle", s.handleNodeMoveBundle)
 		mux.HandleFunc("/v1/node/move/bundle/", s.handleNodeMoveBundle)
+		// A writing area's attachments, for the start's node (claude-fleet#2393).
+		mux.HandleFunc("/v1/node/attachment/", s.handleNodeAttachment)
 		// Adding a machine in one command (claude-fleet#1418): join trades a
 		// one-time code for an enrollment token; dist and self authenticate
 		// with that token.

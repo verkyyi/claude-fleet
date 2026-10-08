@@ -175,13 +175,18 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	// Relays (claude-fleet#1421) only when this login's claude-fleet knows
 	// where its outbox and worker map live; otherwise the hub sends none.
 	rp, relayOK := relaySetup(ctx, a.cfg.Home)
-	a.moveIn = ""
+	a.moveIn, a.attachDir = "", ""
 	if relayOK {
 		caps = append(caps, control.CapRelay)
 		if rp.movein != "" {
 			// A session moved here through the hub (claude-fleet#1426).
 			caps = append(caps, control.CapMove)
 			a.moveIn = rp.movein
+		}
+		if rp.attach != "" {
+			// A writing area's files, downloaded before a start (claude-fleet#2393).
+			caps = append(caps, control.CapAttach)
+			a.attachDir = rp.attach
 		}
 	}
 	if a.cfg.FleetSSHRelay {
@@ -726,6 +731,11 @@ func (a *Agent) answerControl(ctx context.Context, conn nodeLink, m control.Mess
 		// channel (claude-fleet#1426): fetch it before the controller
 		// journals the write, so a failed download is a clean refusal.
 		if code, msg := a.fetchMoveBundle(ctx, params); code != "" {
+			fail(code, msg)
+			return
+		}
+		// …and so do a writing area's attachments (claude-fleet#2393).
+		if code, msg := a.fetchAttachments(ctx, params); code != "" {
 			fail(code, msg)
 			return
 		}

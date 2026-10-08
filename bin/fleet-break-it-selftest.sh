@@ -4609,6 +4609,51 @@ drill_place_server_down() {
   WHAT="服务不在的 fleet：节点 start 先问、退 8（没试过）；入口不选 down 的 fleet；$gohalf"
 }
 
+# A file dropped into the writing area on one computer, the session opened on
+# another (2026-10-07 #2392: a MacBook screenshot, the session on mini2): the
+# issue named the MacBook's path, the worker could not read it (issue #2393).
+drill_attach_cross_machine() {
+  CAP=120; local t0 d="$WORK/attach" out rc gohalf
+  mkdir -p "$d/conf/attachments/$(printf 'a%.0s' $(seq 32))" "$d/qb"
+  t0=$(now)
+  # client half: compose hands the file itself to the place script (--attach)
+  for f in "$BIN"/*; do ln -sf "$f" "$d/qb/"; done
+  rm -f "$d/qb/fleet-client-place.sh"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*"\n' > "$d/qb/fleet-client-place.sh"; chmod +x "$d/qb/fleet-client-place.sh"
+  printf 'PNG' > "$d/shot.png"
+  printf '{"title":"看图","body":"看图 %s","repo":"acme/web","attachments":["%s"]}\n' "$d/shot.png" "$d/shot.png" > "$d/q.json"
+  out=$(FLEET_SWITCH_STATE="$d" FLEET_COMPOSE_LOG="$d/q.ndjson" python3 "$d/qb/fleet-compose.py" --send "$d/q.json" 2>&1)
+  case "$out" in *"--attach $d/shot.png"*) ;; *) WHY="compose sends only the path, not the file: $out"; return 1 ;; esac
+  grep -q 'req\["attachments"\]' "$BIN/fleet-client-place.sh" \
+    || { WHY="fleet-client-place.sh does not send the attachments' bytes to the hub"; return 1; }
+  # node half: claude-fleet names where the agent lands them (CapAttach) …
+  out=$(FLEET_CONF_DIR="$d/conf" bash "$BIN/fleet-hub-node.sh" paths 2>/dev/null)
+  case "$out" in *"attach	$d/conf/attachments"*) ;; *) WHY="fleet-hub-node.sh paths names no attachment directory: $out"; return 1 ;; esac
+  # … and the start's text names THIS machine's path where the client's stood
+  printf 'PNG' > "$d/conf/attachments/$(printf 'a%.0s' $(seq 32))/shot.png"
+  out=$(cd "$BIN" && python3 -c '
+import sys, fleet_control
+c = fleet_control.Control.__new__(fleet_control.Control); c.conf_dir = __import__("pathlib").Path(sys.argv[1])
+print(c.attached_body({"body": "看图 /Users/me/shot.png", "attachments": [{"id": "a" * 32, "name": "shot.png",
+      "sha256": "0" * 64, "size": 3, "from": "/Users/me/shot.png"}]}))' "$d/conf" 2>&1)
+  [ "$out" = "看图 $d/conf/attachments/$(printf 'a%.0s' $(seq 32))/shot.png" ] \
+    || { WHY="the node's start text does not name the landed file: $out"; return 1; }
+  gohalf='hub half: the Go gate (tokenledger.yml) runs the attachment tests'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run 'TestClientPlace(CarriesAttachments|AttachmentsToAnOlderNode)$|TestFetchAttachments$' ./internal/api ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) gohalf='hub half: go test 入口转交 / 旧节点照说 / 节点下载校验 ok' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        gohalf='hub half: no go module cache / toolchain here — the Go gate (tokenledger.yml) runs the attachment tests' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="附件随任务到会话机器：写作区交 --attach，节点名下 attachments/<id>/<名>，正文写那台的路径；$gohalf"
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"

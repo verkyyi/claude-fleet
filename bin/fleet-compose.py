@@ -218,6 +218,19 @@ def attachments(text):
     return out
 
 
+# One file the writing area can send to another machine (issue #2393): the
+# hub's bound (fleet_attachment.go), said beside the name before ↵ —
+# fleet-client-place.sh checks it again and says what did not go.
+ATTACH_MAX = 10 << 20
+
+
+def too_big(path):
+    try:
+        return os.path.getsize(path) > ATTACH_MAX
+    except OSError:
+        return False
+
+
 def clean(text):
     """No control character but newline and tab; no `<!--` (the hub refuses a
     marker it did not stamp itself, so a pasted one is defused, not rejected)."""
@@ -340,6 +353,11 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
         with os.fdopen(fd, "w", encoding="utf-8") as out:
             out.write(text)
         args += ["--body-file", bodyf]
+    # The files themselves go with it (issue #2393): the session may run on
+    # another machine, where the paths in the text do not exist.
+    for f in data.get("attachments") or []:
+        if isinstance(f, str) and os.path.isfile(f):
+            args += ["--attach", f]
     args += ["--node", node]
     if agent:
         args += ["--agent", agent]
@@ -905,7 +923,8 @@ def ui(screen, session):
         files = attachments(ed.text())
         if files:
             put(y, x0 + 2, tr("compose_attach") + " ", dim)
-            put(y, x0 + 3 + cells(tr("compose_attach")), ", ".join(os.path.basename(f) for f in files))
+            put(y, x0 + 3 + cells(tr("compose_attach")),
+                ", ".join(os.path.basename(f) + (tr("compose_attach_big") if too_big(f) else "") for f in files))
             y += 1
         # the three options (issue #2231): picked already, ↵ sends as they are
         x, at_x = x0 + 2, {}

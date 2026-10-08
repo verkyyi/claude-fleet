@@ -26,6 +26,10 @@
 #      401 not your client → released + acquired once (FLEET_CLIENT_LEASE_CMD, a
 #      fake), `lease re-acquired once` on stderr, asked again → done; a second 401
 #      → exit 1 with the hub's words; an acquire that fails → exit 1, words + hint
+#   G. attachments (issue #2393, EPIC #2482 C1): --attach sends each file's bytes
+#      (base64, name, from, sha256) with a new start — the hub receives exactly the
+#      file; one over 10 MB stays behind and is said (stderr, the line's tail, the
+#      body beside its path); a hub that answers no `attached` (older) is said too
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -96,6 +100,11 @@ class H(BaseHTTPRequestHandler):
                 return self.answer(200, {"line": "REMOTE m5 op7 done %s/issue-7\tm4 excluded: full" % UUID, "exit": 0, "state": "done"})
             return self.answer(200, {"line": "UNKNOWN m5 %s\tstill starting" % op, "exit": 6, "state": "pending", "operation_id": op})
         kind, issue = p.get("kind"), p.get("issue")
+        if kind == "new":   # leg G: an older hub answers no `attached`
+            out = {"line": "REMOTE m4 op20 done %s/issue-20\tchose m4" % UUID, "exit": 0, "state": "done"}
+            if p.get("title") != "old hub":
+                out["attached"] = len(p.get("attachments") or [])
+            return self.answer(200, out)
         if kind == "scratch":
             # an older hub (no `login`): the chosen candidate's os_user says it (#2430)
             return self.answer(200, {"line": "REMOTE m5 op1 done %s/scratch-3\tm4 excluded: load 1.00/core > 0.8" % UUID, "exit": 0, "state": "done",
@@ -296,6 +305,26 @@ eq "F: acquire failed exit" 1 "$RC"
 has "F: acquire failed words" "$ERR" "HTTP 401: not your client"
 has "F: acquire failed hint" "$ERR" "restart the client"
 rm -f "$WORK/curlease"
+
+# --- G. attachments go with the start (issue #2393) -----------------------------------------
+printf '\211PNG the error in the screenshot' > "$WORK/shot 1.png"
+python3 -c 'import sys; open(sys.argv[1], "wb").write(b"x" * (10 * 1024 * 1024 + 1))' "$WORK/big.bin"
+printf '看这张 %s\n\n附件:\n- %s\n- %s' "$WORK/shot 1.png" "$WORK/shot 1.png" "$WORK/big.bin" > "$WORK/body"
+run "$P" verkyyi/claude-fleet new --title '看这张' --body-file "$WORK/body" --attach "$WORK/shot 1.png" --attach "$WORK/big.bin"
+eq "G: attach exit" 0 "$RC"
+eq "G: the hub received the file's bytes" "ok" "$(lastreq | python3 -c '
+import base64, hashlib, json, sys
+p = json.loads(sys.stdin.read()); a = p.get("attachments") or []
+want = open(sys.argv[1], "rb").read()
+print("ok" if len(a) == 1 and base64.b64decode(a[0]["data"]) == want and a[0]["name"] == "shot 1.png"
+      and a[0]["from"] == sys.argv[1] and a[0]["sha256"] == hashlib.sha256(want).hexdigest() else a)' "$WORK/shot 1.png")"
+has "G: the big one is said on the line" "$OUT" "	附件没带过去：big.bin（超过 10 MB）"
+has "G: … and on stderr" "$ERR" "附件没带过去：big.bin（超过 10 MB）"
+has "G: … and beside its path in the body" "$(lastreq)" "big.bin（附件没带过去：超过 10 MB）"
+run "$P" verkyyi/claude-fleet new --title 'old hub' --attach "$WORK/shot 1.png"
+eq "G: older hub exit" 0 "$RC"
+has "G: an older hub's start says the file did not go" "$OUT" "附件没带过去：shot 1.png（入口还不收附件"
+run "$P" verkyyi/claude-fleet 7 --attach "$WORK/shot 1.png";  eq "G: --attach on an issue start" 2 "$RC"
 
 # --- E. usage -----------------------------------------------------------------------------
 run "$P" verkyyi/claude-fleet bogus;  eq "E: bad kind" 2 "$RC"

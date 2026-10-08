@@ -73,6 +73,9 @@ type relayPaths struct {
 	// movein is where moved-in transcript bundles land (claude-fleet#1426);
 	// "" on a claude-fleet that predates moves.
 	movein string
+	// attach is where a start's attachments land (claude-fleet#2393); ""
+	// on a claude-fleet that predates them.
+	attach string
 }
 
 // relayState is the outbox's in-flight table, kept across reconnects so a
@@ -116,6 +119,10 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 		case "movein":
 			if filepath.IsAbs(v) {
 				p.movein = v
+			}
+		case "attach":
+			if filepath.IsAbs(v) {
+				p.attach = v
 			}
 		}
 	}

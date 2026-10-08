@@ -464,6 +464,8 @@ fleet_ui_t() {
     en:compose_menu_keys)       printf '↑↓ pick · ↵ choose · esc close' ;;
     zh:compose_attach)          printf '附件' ;;
     en:compose_attach)          printf 'attached' ;;
+    zh:compose_attach_big)      printf '（超过 10 MB，带不过去）' ;;
+    en:compose_attach_big)      printf ' (over 10 MB, will not go)' ;;
     zh:compose_go_issue)        printf '↵ 开工' ;;
     en:compose_go_issue)        printf '↵ start' ;;
     zh:compose_keys)            printf '⇧↵ 换行 · Tab 改选项 · esc 返回' ;;

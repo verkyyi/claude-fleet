@@ -127,6 +127,14 @@ const CapTeam = "team"
 // bundle over HTTP. The hub never moves a session to a node that did not say it.
 const CapMove = "move"
 
+// CapAttach is the hello capability a node lists when it takes the files a
+// client's writing area sends with a start (claude-fleet#2393): before it
+// hands a worker_start naming attachments to claude-fleet, it downloads each
+// one over HTTP into the directory its claude-fleet named. The hub never
+// names an attachment to a node that did not say it — the client is told the
+// file did not go.
+const CapAttach = "attach"
+
 // CapCredsep is the hello capability an admin node lists when every login its
 // create op opens is credential-separated from the start (claude-fleet#2294):
 // no subscription token in the login's home, its sessions only through the

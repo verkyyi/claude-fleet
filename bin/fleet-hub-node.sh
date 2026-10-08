@@ -279,7 +279,7 @@ EOF
 
 case "${1:-}" in
   paths)
-    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)"
+    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
     exit 0 ;;
   env) shift; node_env "$@"; exit $? ;;
   progress) shift; progress_pull "$@"; exit $? ;;

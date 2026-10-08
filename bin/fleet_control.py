@@ -475,6 +475,31 @@ class Control:
             raise Fault("UNKNOWN_OUTCOME", "Restore returned but no matching worker is visible")
         return {"workers": matches, "observed_at": snapshot["observed_at"]}
 
+    def attached_body(self, params):
+        """The start's text with every attachment's client path replaced by
+        where this node's agent downloaded it (issue #2393):
+        $FLEET_CONF_DIR/attachments/<id>/<name> — the dir `fleet-hub-node.sh
+        paths` names. A file the text does not mention is listed under it; one
+        that is not here (never on a working agent: it refuses the start
+        first) is listed as not carried, never as a path that cannot be read."""
+        body = params.get("body", "")
+        listed = []
+        for a in params.get("attachments") or ():
+            path = self.conf_dir / "attachments" / a["id"] / a["name"]
+            if not path.is_file():
+                if a["from"] in body:
+                    body = body.replace(a["from"], a["from"] + "（附件没带过去）")
+                else:
+                    listed.append("- %s（附件没带过去）" % a["name"])
+                continue
+            for form in (a["from"].replace(" ", "\\ "), a["from"]):   # a drop's own quoting first
+                body = body.replace(form, str(path))
+            if str(path) not in body:
+                listed.append("- " + str(path))
+        if listed:
+            body = (body + "\n\n" if body else "") + "附件:\n" + "\n".join(listed)
+        return body
+
     def execute_inject(self, fleet, matches, text):
         """worker_message on a fleet without the issue bridge (issue #1554): this
         node IS the worker's machine, so the text goes to the live session
@@ -692,6 +717,9 @@ class Control:
                 # The reap policy (issue #1902) as the adapter's $9, only when one
                 # was chosen — with none the argv is exactly what it was.
                 reap_arg = [params["reap"]] if params.get("reap") else []
+                # issue #2393: the files the writing area sent are on THIS machine
+                # now (the agent downloaded them) — the text names them here.
+                body = self.attached_body(params)
                 if scratch:
                     # issue #1541: a raw scratch session the hub placed here — the
                     # adapter's start with `scratch` for the issue, the account class
@@ -705,7 +733,7 @@ class Control:
                                                      "-" if params.get("no_repo") else params.get("repo", ""),
                                                      params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params.get("name", "").strip(),
-                                                     *reap_arg, payload=params["body"].encode("utf-8") if params.get("body") else None,
+                                                     *reap_arg, payload=body.encode("utf-8") if body else None,
                                                      timeout=180)
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start
@@ -716,7 +744,7 @@ class Control:
                     code, output, err = self.adapter("start", fleet["name"], "new", params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params["title"].strip(),
-                                                     *reap_arg, payload=params.get("body", "").encode("utf-8"),
+                                                     *reap_arg, payload=body.encode("utf-8"),
                                                      timeout=240, op_id=op_id)
                     first = output.decode("utf-8", "replace").split("\n", 1)[0].strip()
                     if not code and first.startswith("warm\t"):

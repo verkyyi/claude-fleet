@@ -1183,6 +1183,40 @@ echo "https://github.com/example/project/issues/128"
         self.assertEqual((failed["status"], failed["result"]["error"]["exit"]), ("failed", 7))
         self.assertEqual(len((self.node.conf / "spawn.calls").read_text().splitlines()), 1)
 
+    def test_new_issue_start_names_its_attachments_here(self):
+        # issue #2393: the writing area's files — the agent downloaded each to
+        # $FLEET_CONF_DIR/attachments/<id>/<name> before the start, so the issue
+        # the node files names THIS machine's path where the client's stood
+        # (the drop's backslash-quoted form too); a file that is not here is
+        # said, never left as a path the session cannot read.
+        self.node.script(self.node.bin / "fleet-issue-file.sh", '''#!/bin/bash
+printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/file.calls"
+echo "https://github.com/example/project/issues/129"
+''')
+        sha = "f" * 64
+        ids = ("a" * 32, "b" * 32, "c" * 32)
+        frm = ("/var/folders/mw/T/shot 1.png", "/Users/me/log.txt", "/Users/me/gone.png")
+        for i, n in zip(ids[:2], ("shot 1.png", "log.txt")):
+            (self.node.conf / "attachments" / i).mkdir(parents=True)
+            (self.node.conf / "attachments" / i / n).write_text("x")
+        atts = [{"id": i, "name": os.path.basename(f), "sha256": sha, "size": 1, "from": f} for i, f in zip(ids, frm)]
+        for bad in ({"kind": "issue", "issue": 1, "attachments": atts[:1]}, {"kind": "new", "title": "x", "attachments": []},
+                    {"kind": "new", "title": "x", "attachments": [dict(atts[0], name="../x")]},
+                    {"kind": "new", "title": "x", "attachments": [dict(atts[0], data="eA==")]},
+                    {"kind": "new", "title": "x", "attachments": [dict(atts[0], size="1")]}):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                validate_write("worker_start", bad)
+        body = "看这张 /var/folders/mw/T/shot\\ 1.png\n\n附件:\n- /var/folders/mw/T/shot 1.png\n- /Users/me/gone.png"
+        op = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="att-1", params={
+            "kind": "new", "title": "看这张", "body": body, "attachments": atts}))["operation_id"])
+        self.assertEqual((op["status"], op["result"]["exit"]), ("succeeded", 0))
+        here = [str(self.node.conf / "attachments" / i / n) for i, n in zip(ids[:2], ("shot 1.png", "log.txt"))]
+        filed = (self.node.conf / "file.calls").read_text()
+        self.assertEqual(filed, "--repo example/project --from hub --title 看这张 --body 看这张 %s\n\n附件:\n- %s\n"
+                                "- /Users/me/gone.png（附件没带过去）\n\n附件:\n- %s\n"
+                         % (here[0], here[0], here[1]))
+        self.assertNotIn("/var/folders/mw", filed)
+
     def test_start_carries_the_agent(self):
         # issue #2232 (EPIC #2230 C2): the agent picked in the writing area rides
         # worker_start's `agent` to the spawn as --agent, for every kind of start;

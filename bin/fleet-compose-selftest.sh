@@ -628,6 +628,17 @@ eq 'Q: a scratch of no repo carries them too' \
 eq 'Q: a named --node / --agent beats the payload'"'"'s' \
   'acme/web new --title 看日志 --body-file B --node m5 --agent claude' \
   "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":"m4","agent":"codex"}' --node m5 --agent claude)"
+# issue #2393: the files themselves go with it — each attachment still on this
+# computer as one --attach (a vanished one is not), so the place script sends
+# its bytes to the machine that opens the session
+eq 'Q: attachments → --attach each file still here' \
+  "acme/web new --title 看图 --body-file B --attach $WORK/shot.png --node auto" \
+  "$(qsend '{"title":"看图","body":"看图","repo":"acme/web","attachments":["'"$WORK"'/shot.png","'"$WORK"'/gone.png"]}')"
+python3 -c 'import sys; open(sys.argv[1], "wb").write(b"x" * (10 * 1024 * 1024 + 1))' "$WORK/big.bin"
+eq 'Q: over 10 MB is said before ↵ (too_big)' 'True False' "$(cd "$SB" && python3 -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("c", "fleet-compose.py"); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(m.too_big(sys.argv[1]), m.too_big(sys.argv[2]))' "$WORK/big.bin" "$WORK/shot.png")"
 out=$(qsend '{"title":"看日志","repo":"acme/web","agent":"gpt"}'); rc=$?
 eq 'Q: an unknown agent is refused (2), nothing placed' '2|fleet-compose: agent is claude or codex, not gpt' "$rc|$out"
 [ "$FAIL" = 0 ] || { printf 'fleet-compose selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS"; exit 1; }
