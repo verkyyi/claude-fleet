@@ -848,6 +848,7 @@ is one `hub_audit` row: who, when, old → new.
 | `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
 | `fleet.machine_names` | — | the short name every client shows a machine by, `macmini=m5,mini2=m4` (claude-fleet#1706); wins over a `CCQUOTA_FLEET_ROUTES` alias, rides `/v1/fleet/routes` → each client's `FLEET_NODE_ALIASES`, and `/v1/nodes` → `machines[].alias` |
+| `fleet.spare_accounts` | 0 | logins each host machine keeps opened ahead of a newcomer (claude-fleet#2263), 0–3: a first sign-in is handed a ready one (record-only, no wait) and it is refilled on the admin beat — never on a machine 维护中, over the placement's load / memory thresholds or holding its own admit gate; a failed spare stops that machine's refill until `forget`. Each spare is a macOS user: turn it on once you have agreed to that. `fleet hub machines` shows 备用 N |
 | `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS`, no longer read (`<id>` = a GitHub ID, `583231` or `gh:583231`; `none` = no login) |
 | `user.<GitHub ID>.lang` | — | the account's page language (claude-fleet#2033): `zh-CN` \| `en` |
 

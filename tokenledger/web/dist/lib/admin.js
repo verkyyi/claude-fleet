@@ -246,6 +246,8 @@ export function machineCards(snap) {
     sessions: m.sessions, loadCore: m.ncpu ? m.load1 / m.ncpu : null, hist: Array.isArray(m.load_hist) ? m.load_hist : [],
     version: vers[m.hostname] || '', seen: m.last_heartbeat, maintenance: m.maintenance || null,
     eps: eps[m.hostname] || [],
+    // ready spare logins (claude-fleet#2263): null while fleet.spare_accounts is off
+    spare: typeof m.spare === 'number' ? m.spare : null,
   })).sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || a.label.localeCompare(b.label));
 }
 
@@ -274,11 +276,11 @@ export function userRows(list) {
 }
 
 /** The switches and fields Settings draws, in groups, after the prototype.
- *  Each is a hub setting key (hub_settings.go); type on/off, pct, hosts or names. */
+ *  Each is a hub setting key (hub_settings.go); type on/off, pct, count, hosts or names. */
 export const SETTING_GROUPS = Object.freeze([
   { id: 'public', items: [{ key: 'hub.public_meter', type: 'onoff' }, { key: 'hub.public_badges', type: 'onoff' }] },
   { id: 'pool', items: [{ key: 'pool.skip_pct', type: 'pct' }, { key: 'pool.move_when_full', type: 'onoff' }] },
-  { id: 'people', items: [{ key: 'fleet.auto_assign', type: 'hosts' }, { key: 'fleet.machine_names', type: 'names' }, { key: 'fleet.spot', type: 'onoff' }] },
+  { id: 'people', items: [{ key: 'fleet.auto_assign', type: 'hosts' }, { key: 'fleet.machine_names', type: 'names' }, { key: 'fleet.spot', type: 'onoff' }, { key: 'fleet.spare_accounts', type: 'count' }] },
 ]);
 
 /** settingValue is what applies for key in a /v1/fleet/settings answer:

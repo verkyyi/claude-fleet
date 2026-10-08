@@ -20,6 +20,7 @@ Shell.mount('settings', async (ctx) => {
     let ctl;
     if (it.type === 'onoff') ctl = `<button class="switch" role="switch" aria-checked="${value === 'on'}" data-key="${esc(it.key)}" aria-label="${esc(name)}"></button>`;
     else if (it.type === 'pct') ctl = `<span class="numin"><input class="input" data-key="${esc(it.key)}" value="${esc(value)}" inputmode="numeric" aria-label="${esc(name)}">%</span>`;
+    else if (it.type === 'count') ctl = `<span class="numin"><input class="input" data-key="${esc(it.key)}" value="${esc(value)}" inputmode="numeric" aria-label="${esc(name)}"></span>`;
     else ctl = `<span class="numin"><input class="input mono" style="width:14rem;text-align:left" data-key="${esc(it.key)}" value="${esc(value)}" placeholder="${it.type === 'names' ? 'macmini=m5, mini2=m4' : 'mini2, m4'}" aria-label="${esc(name)}"></span>`;
     return `<div><div class="l"><b>${esc(name)} ${src}</b><span>${esc(help)} · <code>${esc(it.key)}</code></span></div>${ctl}</div>`;
   };

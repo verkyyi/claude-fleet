@@ -423,7 +423,12 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 				// Each admin beat is a chance to send what is queued for
 				// this machine: a person assigned while it was offline
 				// gets their login within a beat of it coming back.
-				go s.dispatchAccounts()
+				// The same beat refills the machines' spare logins
+				// (claude-fleet#2263), at most once per spareScanEvery.
+				go func() {
+					s.replenishSpares(time.Now(), false)
+					s.dispatchAccounts()
+				}()
 			}
 		case control.TypeAccountResult:
 			s.applyAccountResult(ctx, conn, ep.ID, nc, m)
@@ -597,6 +602,10 @@ type MachineView struct {
 	// still knows which repo a first session can open in. Always present
 	// ([] for none), so a client tells "hosts none" from an older hub.
 	Repos []string `json:"repos"`
+	// Spare is how many spare logins stand ready on the machine
+	// (claude-fleet#2263): on the operator's roster only, and only while
+	// fleet.spare_accounts is on — absent otherwise.
+	Spare *int `json:"spare,omitempty"`
 }
 
 // NodesSnapshot is the body of /v1/nodes.
@@ -803,6 +812,9 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap.Account = s.accountStateOf(principalOf(r.Context()), now)
+	if visible == nil {
+		s.stampSpares(&snap)
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, snap)
 }
