@@ -856,6 +856,7 @@ def uninstall(a):
             os.unlink(ppath)
         say("proxy:", plabel, "removed")
     else:
+        pool_out(R)
         leave_state(login, conf, R)
         conf_switch_back(login, conf, pw, meta.get("conf_prior") or {})
     # every credential back to the login's own path — the agent may have renewed them
@@ -907,6 +908,36 @@ def uninstall(a):
     drop_role()
     say("credsep: OFF — every file back where it was")
     return 0
+
+
+def pool_out(R):
+    """The machine's one copy back into a leaving tenant's store (issue #2311):
+    every <kind>:<label> its index (<R>/cred-proxy/pool.json) names, as the file
+    store_files() then moves to the login. -> how many."""
+    POOL = {"claude": ".credentials.json", "codex": "auth.json"}
+    ip = os.path.join(R, "cred-proxy", "pool.json")
+    try:
+        idx = json.load(open(ip))
+    except (OSError, ValueError):
+        return 0
+    n = 0
+    for ent, key in sorted(idx.items()) if isinstance(idx, dict) else []:
+        kind, _, label = ent.partition(":")
+        if kind not in POOL or not SAFE.match(label) or not re.match(r"^[0-9a-f]{32}$", str(key)):
+            continue
+        src = os.path.join(SHARED_DIR, "pool", kind, key, POOL[kind])
+        if not os.path.isfile(src):
+            continue
+        dst = (os.path.join(R, "accounts", label + ".hub", POOL[kind]) if kind == "claude"
+               else os.path.join(R, "codex", label, POOL[kind]))
+        mkdir(os.path.dirname(dst), 0o700, ROLE)
+        with open(src, "rb") as f:
+            put(dst, f.read(), 0o600, ROLE)
+        n += 1
+    if not DRY:
+        os.unlink(ip)
+    say("pool: %d credential(s) back into %s" % (n, R))
+    return n
 
 
 def store_files(R, conf, home, ch):
@@ -1346,12 +1377,6 @@ def machine_uninstall(a):
     if os.path.exists(SHARED_PATH) and not DRY:
         os.unlink(SHARED_PATH)
     say("shared: %s stopped and removed" % SHARED_LABEL)
-    if not DRY:
-        for p in (SHARED_REC, os.path.join(LOG_BASE, "shared.log"), os.path.join(LOG_BASE, "shared.launch.log")):
-            if os.path.exists(p):
-                os.unlink(p)
-        shutil.rmtree(SHARED_DIR, ignore_errors=True)
-        shutil.rmtree(SHARED_RUN, ignore_errors=True)
     if DRY:
         for d in sorted(os.listdir(ROOT_BASE)) if os.path.isdir(ROOT_BASE) else []:
             if d.startswith(".") or ".rolledback-" in d:
@@ -1367,6 +1392,13 @@ def machine_uninstall(a):
         say("== %s" % m["login"])
         uninstall(argparse.Namespace(login=m["login"], conf_dir=m["conf_dir"], home=m.get("home", ""),
                                      install_dir="", dry_run=DRY))
+    # last: the pool (issue #2311) is read by every tenant's uninstall above
+    if not DRY:
+        for p in (SHARED_REC, os.path.join(LOG_BASE, "shared.log"), os.path.join(LOG_BASE, "shared.launch.log")):
+            if os.path.exists(p):
+                os.unlink(p)
+        shutil.rmtree(SHARED_DIR, ignore_errors=True)
+        shutil.rmtree(SHARED_RUN, ignore_errors=True)
     say("")
     say("shared: OFF — every login back on its own proxy")
     return 0

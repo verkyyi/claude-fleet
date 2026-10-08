@@ -123,7 +123,7 @@ reported, nothing refused; a verdict the hub has not renewed for
 FLEET_CRED_BUDGET_STALE (600 s) lapses (open).
 """
 import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, re, secrets
-import resource, signal, socket, ssl, sys, threading, time, urllib.error, urllib.request
+import resource, shutil, signal, socket, ssl, sys, threading, time, urllib.error, urllib.request
 from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -909,7 +909,7 @@ class Proxy(BaseHTTPRequestHandler):
             put["Authorization"] = "Bearer " + hubcred
             return base, upath, put, drop, "none"
         if provider == "codex":
-            path = codex_auth_path(c, acct)
+            path = pool_entry(c, "codex", acct) or codex_auth_path(c, acct)
             at, aid, fp = codex_tokens(path)
             self.codex_seen = (os.path.dirname(path), fp)
             put["Authorization"] = "Bearer " + at
@@ -917,7 +917,12 @@ class Proxy(BaseHTTPRequestHandler):
             if aid:   # ALWAYS the bound account's: a session never picks its workspace (#1912)
                 put["chatgpt-account-id"] = aid
         else:
-            put["Authorization"] = "Bearer " + claude_token(c.accounts, acct)
+            pp = pool_entry(c, "claude", acct)
+            if pp:
+                with open(pp) as f:
+                    put["Authorization"] = "Bearer " + json.load(f)["claudeAiOauth"]["accessToken"]
+            else:
+                put["Authorization"] = "Bearer " + claude_token(c.accounts, acct)
         return base, upath, put, drop, "file"
 
     def send(self, order, provider, path, body, hubcred, sid, acct, seen, t0, public=False):
@@ -1142,6 +1147,102 @@ def write_private(path, data):
     os.replace(tmp, path)
 
 
+# ---- the machine's one copy (issue #2311) -------------------------------------
+# On the shared proxy a lease is filed ONCE for the whole machine: under
+# <shared state>/pool/<kind>/<key>/, where <key> hashes the access token itself
+# — never the account's label, which two people may both use (the hub's key is
+# principal + provider + account). Each tenant keeps only its index,
+# <tenant state>/pool.json {"<kind>:<label>": key}: a tenant is served a pool
+# file only through its own index, so two logins share a file exactly when they
+# leased the same token, and a token one login never leased stays out of reach
+# of its sessions. A file no index names any more is removed.
+POOL_FILE = {"claude": ".credentials.json", "codex": "auth.json"}
+POOL_LOCK = threading.Lock()
+
+
+def pool_key(kind, data):
+    d = json.loads(data)
+    tok = d["claudeAiOauth"]["accessToken"] if kind == "claude" else d["tokens"]["access_token"]
+    if not tok:
+        raise ValueError("no access token")
+    return hashlib.sha256(("%s\0%s" % (kind, tok)).encode()).hexdigest()[:32]
+
+
+def own_path(cfg, kind, label):
+    """Where a tenant's own copy lived before the pool (and goes back to on uninstall)."""
+    if kind == "claude":
+        return os.path.join(cfg.accounts, label + ".hub", ".credentials.json")
+    return codex_auth_path(cfg, label)
+
+
+def pool_index(cfg):
+    d = read_json(os.path.join(cfg.state, "pool.json"), {})
+    return d if isinstance(d, dict) else {}
+
+
+def pool_entry(cfg, kind, label):
+    """-> the pool file a tenant's index names for <kind>:<label>, or ""."""
+    k = pool_index(cfg).get("%s:%s" % (kind, label)) if getattr(cfg, "pool", "") else ""
+    return os.path.join(cfg.pool, kind, k, POOL_FILE[kind]) if k else ""
+
+
+def pool_put(cfg, kind, label, data):
+    """File one lease in the pool, point the tenant's index at it, drop its own copy."""
+    key = pool_key(kind, data)
+    dst = os.path.join(cfg.pool, kind, key, POOL_FILE[kind])
+    if not os.path.isfile(dst):
+        write_private(dst, data)
+    idx = pool_index(cfg)
+    idx["%s:%s" % (kind, label)] = key
+    write_json(os.path.join(cfg.state, "pool.json"), idx)
+    own = own_path(cfg, kind, label)
+    if os.path.lexists(own):
+        os.unlink(own)
+        try:
+            os.rmdir(os.path.dirname(own))
+        except OSError:
+            pass
+    return key
+
+
+def pool_gc(pool, cfgs):
+    """Remove every pool file no tenant's index names."""
+    keep = set()
+    for c in cfgs:
+        keep.update("%s/%s" % (k.split(":", 1)[0], v) for k, v in pool_index(c).items())
+    for kind in POOL_FILE:
+        d = os.path.join(pool, kind)
+        for k in os.listdir(d) if os.path.isdir(d) else []:
+            if "%s/%s" % (kind, k) not in keep:
+                shutil.rmtree(os.path.join(d, k), ignore_errors=True)
+
+
+def pool_adopt(cfgs):
+    """A tenant that joined before the pool: its own copies move in, one each."""
+    n = 0
+    for c in cfgs:
+        found = []
+        acc = c.accounts
+        for d in sorted(os.listdir(acc)) if os.path.isdir(acc) else []:
+            if d.endswith(".hub") and SAFE_LABEL(d[:-4]):
+                found.append(("claude", d[:-4]))
+        cx = c.codex_homes
+        for d in sorted(os.listdir(cx)) if os.path.isdir(cx) else []:
+            if SAFE_LABEL(d):
+                found.append(("codex", d))
+        for kind, label in found:
+            p = own_path(c, kind, label)
+            if not os.path.isfile(p):
+                continue
+            try:
+                with open(p, "rb") as f:
+                    pool_put(c, kind, label, f.read())
+                n += 1
+            except (OSError, ValueError, KeyError, TypeError) as e:
+                sys.stderr.write("fleet-cred-proxy: pool: %s %s:%s left in place (%s)\n" % (c.name, kind, label, e))
+    return n
+
+
 def codex_tokens(path):
     """-> (access token, account id, credential fingerprint). The fingerprint is
     ccquota's credential_version (sha256 of access NUL refresh), so a verdict
@@ -1259,17 +1360,23 @@ def ctl_handle(req, t):
         data = base64.b64decode(req.get("data") or "")
         if not data or len(data) > 65536:
             return {"ok": False, "err": "store: empty or oversized"}
-        if kind == "claude":
-            dst = os.path.join(cfg.accounts, label + ".hub", ".credentials.json")
-        elif kind == "codex":
-            dst = codex_auth_path(cfg, label)
-        else:
+        if kind not in POOL_FILE:
             return {"ok": False, "err": "store: kind claude|codex"}
-        write_private(dst, data)
+        if getattr(cfg, "pool", ""):
+            # the shared proxy: one copy for the machine (issue #2311)
+            try:
+                with POOL_LOCK:
+                    key = pool_put(cfg, kind, label, data)
+                    pool_gc(cfg.pool, [x.cfg for x in Proxy.tenants.values()])
+            except (OSError, ValueError, KeyError, TypeError) as e:
+                return {"ok": False, "err": "store: %s" % e}
+            t.log(ev="store", kind=kind, acct=label, bytes=len(data), pool=key[:12])
+            return {"ok": True}
+        write_private(own_path(cfg, kind, label), data)
         t.log(ev="store", kind=kind, acct=label, bytes=len(data))
         return {"ok": True}
     if op == "probe":
-        pp = env("FLEET_CRED_PROBE")
+        pp = getattr(cfg, "probe_path", "") or env("FLEET_CRED_PROBE")
         if not cfg.store or not pp:
             return {"ok": False, "err": "probe: not separated"}
         d = json.loads(req.get("data") or "null")
@@ -1547,8 +1654,14 @@ def serve(a):
                 sys.exit("fleet-cred-proxy: --shared: logins %s and %s share uid %d" % (seen[tc.uid], tc.name, tc.uid))
             seen[tc.uid] = tc.name
             os.makedirs(tc.state, mode=0o700, exist_ok=True)
+            tc.pool = os.path.join(st, "pool")
             Proxy.tenants[tc.name] = Tenant(tc, tc.name)
         everyone = [t.cfg for t in Proxy.tenants.values()]
+        with POOL_LOCK:
+            n = pool_adopt(everyone)
+            pool_gc(os.path.join(st, "pool"), everyone)
+        if n:
+            Proxy.sink.log(ev="pool_adopt", files=n)
         ctld = shared["run"]
         a.port = int(shared.get("port") or a.port or 0)
     else:
