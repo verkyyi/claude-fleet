@@ -361,6 +361,9 @@ case "$mode" in
     ;;
   start)
     fleet_load_conf "$sess"
+    # The one line a warm start's first turn carries after the person's words
+    # (issue #2234): its issue and branch come later (fleet-start-backfill.sh).
+    FLEET_START_NOTE='（单子和分支稍后会补给你，先开始。）'
     agent="${4:-${FLEET_AGENT:-claude}}"
     [ -n "$agent" ] || agent="${FLEET_AGENT:-claude}"
     # $5 = which hosted repo issue $3 belongs to (issue #984): owner/name, slug
@@ -419,6 +422,22 @@ case "$mode" in
         [ -s "$seedf" ] || { rm -f "$seedf"; seedf=''; }
       fi
       nrarg=''; [ "$norepo" = 1 ] && nrarg=--no-repo
+      # 发出即开 (issue #2234, EPIC #2230 C4): a seeded scratch is first offered a
+      # window from the warm pool — the seed submitted into it as its first turn,
+      # the receipt the same four fields plus `<t_window> <t_ready> <t_prompt>`.
+      # An empty slot (exit 3) opens it exactly as before; FLEET_START_WARM=0 = off.
+      if [ -n "$seedf" ] && [ "${FLEET_START_WARM:-1}" != 0 ]; then
+        wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") && cp "$seedf" "$wseed" || wseed=''
+        if [ -n "$wseed" ]; then
+          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} "--prompt-file=$wseed")
+          wrc=$?; rm -f "$wseed"
+          if [ "$wrc" != 3 ]; then
+            rm -f "$seedf"
+            [ -n "$out" ] && printf '%s\n' "$out"
+            exit "$wrc"
+          fi
+        fi
+      fi
       exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${seedf:+"--prompt-file=$seedf"}
     fi
     num="${3:-}"
@@ -432,6 +451,34 @@ case "$mode" in
       # that fails opens nothing (exit 7).
       [ -n "$srepo" ] || { printf 'start: no repo to file the new issue in\n' >&2; exit 6; }
       nbody=$(cat)
+      # 发出即开 (issue #2234, EPIC #2230 C4): with a ready window in this repo ×
+      # agent's warm slot, the start is answered from it — the person's words (the
+      # body, else the title) plus one line are SUBMITTED as its first turn, and
+      # the issue is filed and bound to that window afterwards, detached
+      # (fleet-start-backfill.sh). stdout is ONE line, `warm\t` + the receipt
+      # `<window_id>\t<name>\t<worktree>\t<fleet_id>\t<t_window>\t<t_ready>\t<t_prompt>`
+      # — no URL: nothing is filed yet. An empty slot (exit 3) takes the cold path
+      # below, byte for byte today's; FLEET_START_WARM=0 turns this off.
+      if [ "${FLEET_START_WARM:-1}" != 0 ]; then
+        first=$nbody; [ -n "${first//[[:space:]]/}" ] || first=${8:-}
+        wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") || wseed=''
+        if [ -n "$wseed" ] && printf '%s\n\n%s\n' "$first" "$FLEET_START_NOTE" > "$wseed"; then
+          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" --repo "$srepo" ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} --name "${8:-}" --reap "${9:-merged}" "--prompt-file=$wseed")
+          wrc=$?; rm -f "$wseed"
+          if [ "$wrc" = 0 ]; then
+            rcpt=$(printf '%s\n' "$out" | awk 'NF { l = $0 } END { print l }')
+            win=${rcpt%%	*}
+            tf=$(mktemp "${TMPDIR:-/tmp}/fcr-title.XXXXXX") && printf '%s' "${8:-}" > "$tf"
+            bf=$(mktemp "${TMPDIR:-/tmp}/fcr-body.XXXXXX") && printf '%s' "$nbody" > "$bf"
+            nohup bash "$BIN/fleet-start-backfill.sh" "$sess" "$win" "$srepo" "$tf" "$bf" </dev/null >/dev/null 2>&1 &
+            printf 'warm\t%s\n' "$rcpt"
+            exit 0
+          fi
+          [ "$wrc" = 3 ] || exit "$wrc"
+        else
+          [ -n "$wseed" ] && rm -f "$wseed"
+        fi
+      fi
       url=$(FLEET_SESSION="$sess" bash "$BIN/fleet-issue-file.sh" --repo "$srepo" --from hub --title "${8:-}" ${nbody:+--body "$nbody"}) \
         || { printf 'start: filing the new issue in %s failed\n' "$srepo" >&2; exit 7; }
       printf '%s\n' "$url"

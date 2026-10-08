@@ -110,7 +110,7 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
-NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""
+NAME=""; PROMPT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -163,6 +163,13 @@ while [ "$#" -gt 0 ]; do
     # exists, ONE stdout line `<window_id>\t<name>\t<worktree>\t<fleet_id>`. Foreground pass
     # only (the --bg pass's stdout is silenced, #446). The hub's node reads it.
     --print)       PRINT_WIN=1; shift ;;
+    # --warm-only (issue #2234, EPIC #2230 C4): a window from the warm pool or
+    # NOTHING — exit 3 when that (repo | HOME) × agent slot has no ready entry, so
+    # the caller takes its own cold path. A seed (--prompt / --prompt-file) is
+    # SUBMITTED into the claimed window as its first turn (fleet-pane-submit.sh),
+    # never a launch argument; --print adds `<t_window>\t<t_ready>\t<t_prompt>`
+    # (epoch ms) after the receipt's four fields. Headless callers only.
+    --warm-only)   WARM_ONLY=1; shift ;;
     # --reap <policy> (issue #1902): when the fleet may close this session on its
     # own — merged[:<dur>] | done[:<dur>] | loop-end | at:<time> | keep. None =
     # the kind's default, stamped below: done:2h, or loop-end for a /loop seed.
@@ -484,10 +491,25 @@ claimed=""
 # claims.
 _pool_ok=1; [ "$NOREPO" = 1 ] && _pool_ok=0
 _pool_repo=$REPO_ARG
+if [ "$WARM_ONLY" = 1 ]; then
+  # The node's slot contract (issue #2233): the window id alone, exit 3 = none
+  # ready. HOME is `--repo -`. Its worktree (and so its slug) is read off the
+  # window: the claim clears @pool_slug. Nothing ready: nothing opened, exit 3.
+  win=$(bash "$BIN/scratch-pool.sh" claim "$SESS" --repo "$([ "$NOREPO" = 1 ] && echo - || echo "$REPO_ARG")" \
+          --agent "${AGENT:-${FLEET_AGENT:-claude}}" 2>/dev/null | head -1)
+  case "$win" in @[0-9]*) ;; *) exit 3 ;; esac
+  t_window=$(python3 -c 'import time; print(int(time.time() * 1000))')
+  warm=1
+  if [ "$NOREPO" != 1 ]; then
+    wt=$(TM display-message -p -t "$win" '#{@worktree}' 2>/dev/null)
+    slug="scratch-${wt##*-scratch-}"
+  fi
+else
 [ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" ${_pool_repo:+--repo "$_pool_repo"} 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
   warm=1
   win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}
+fi
 fi
 
 # --- allocate a scratch worktree off the base branch (issue #290) -------------
@@ -600,6 +622,31 @@ elif [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SO
 # claim time. Best-effort — the dash backfills a window that ends up without one.
 fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
 
+# --warm-only's seed (issue #2234): the claimed window is an agent at rest past its
+# input-mount flush, so the seed goes in as its FIRST TURN — paste + a separate
+# Enter, only once its input is seen empty (fleet-pane-submit.sh). One that never
+# shows an idle, empty input is broken: it is closed (the pool's own close) and
+# nothing is left open — exit 3, the caller's cold path carries the seed instead.
+t_ready=''; t_prompt=''
+if [ "$WARM_ONLY" = 1 ] && [ -n "$PROMPT" ]; then
+  sf=$(mktemp "${TMPDIR:-/tmp}/dash-raw-seed.XXXXXX") || sf=''
+  if [ -n "$sf" ] && printf '%s' "$PROMPT" > "$sf"; then
+    stamps=$(bash "$BIN/fleet-pane-submit.sh" "$SOCK" "$win" "$sf"); src=$?
+  else
+    stamps=''; src=3
+  fi
+  [ -n "$sf" ] && rm -f "$sf"
+  if [ "$src" = 3 ] || [ "$src" = 1 ] || [ "$src" = 2 ]; then
+    fleet_win_retire "$win" "$SOCK"
+    TM kill-window -t "$win" 2>/dev/null
+    [ "$NOREPO" = 1 ] || { [ -n "$slug" ] && [ -n "$wt" ] && fleet_scratch_free "$MAIN" "$slug" "$wt"; }
+    printf 'dash-raw-session: the warm window would not take the first turn — closed it\n' >&2
+    exit 3
+  fi
+  t_ready=${stamps%%	*}; t_prompt=${stamps#*	}
+  [ "$src" = 0 ] || t_prompt=${t_prompt:-$(python3 -c 'import time; print(int(time.time() * 1000))')}
+fi
+
 # Keep the full name separate from the clipped/deduplicated window title. The
 # helper waits for the agent's input to settle, then pastes WITHOUT Enter. Pin a
 # pane id now so a later split/focus change cannot redirect the draft elsewhere.
@@ -632,7 +679,13 @@ TM run-shell -b "bash '$BIN/scratch-pool.sh' ensure '$SESS' --delay >/dev/null 2
 # @fleet_id (issue #1873), the address `fleet-worker-stop.sh <sess> fid:<id>` stops
 # it by later (a no-repo session has no key). Readers split on the tab and take
 # the fields they know, so the 4th column is additive.
-[ "$PRINT_WIN" = 1 ] && printf '%s\t%s\t%s\t%s\n' "$win" "$name" "$wt" "$fid"
+if [ "$PRINT_WIN" = 1 ]; then
+  if [ "$WARM_ONLY" = 1 ]; then
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$win" "$name" "$wt" "$fid" "$t_window" "$t_ready" "$t_prompt"
+  else
+    printf '%s\t%s\t%s\t%s\n' "$win" "$name" "$wt" "$fid"
+  fi
+fi
 
 if [ -z "$TARGET_SESS" ]; then
   # A spawn that worked draws nothing — the new window and its list row are the

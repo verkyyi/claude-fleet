@@ -3414,6 +3414,42 @@ drill_pool_stale_handed_out() {
   SECS=$(since "$t0"); WHAT="升级前开好的池里会话：领用返回 3、不交出，下一拍收掉（随后按新配置重开）"
 }
 
+# 发出即开 with nothing to hand out (issue #2234, EPIC #2230 C4): a ↵ while the
+# repo × agent slot of the warm pool is empty (the pool off, just claimed, still
+# warming) must open the task the old way — file it, spawn it, byte for byte what
+# the start printed before the pool — and the warm attempt must leave nothing
+# behind: no window, no worktree, no first turn typed anywhere.
+drill_pool_empty_compose() {
+  CAP=20; BREAK_SOCK="$WORK/sock-pec"; local d="$WORK/pec" t0 out rc wins f
+  mkdir -p "$d/conf/fleets/pe" "$d/sb" "$d/log" "$d/home"
+  git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
+  ( cd "$d/main" && git config user.email t@t && git config user.name t && echo x > f && git add f && git commit -qm i ) \
+    || { WHY="cannot build the repo"; return 1; }
+  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s/main"\nFLEET_BASE_BRANCH="master"\nFLEET_SCRATCH_POOL=1\nFLEET_MAX_SESSIONS=20\n' "$d" \
+    > "$d/conf/fleets/pe/conf"
+  for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
+  rm -f "$d/sb/fleet-issue-file.sh" "$d/sb/dash-issue-session.sh"
+  printf '#!/bin/sh\necho filed >> "%s/log/file"\necho https://github.com/acme/app/issues/9\n' "$d" > "$d/sb/fleet-issue-file.sh"
+  printf '#!/bin/sh\necho "$*" >> "%s/log/spawn"\necho @999\n' "$d" > "$d/sb/dash-issue-session.sh"
+  chmod +x "$d/sb/fleet-issue-file.sh" "$d/sb/dash-issue-session.sh"
+  nt -f /dev/null new-session -d -s pe -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  run() { env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
+            FLEET_SKIP_GLOBAL_CONF=1 FLEET_ADMIT=0 FLEET_ORIGIN_GATE=0 BREAK_SOCK="$BREAK_SOCK" "$@"; }
+  t0=$(now)
+  out=$(printf 'the text' | run bash "$d/sb/dash-raw-session.sh" pe --origin hub --print --warm-only --agent claude \
+          --repo acme/app --prompt 'the text' 2>/dev/null); rc=$?
+  [ "$rc" = 3 ] && [ -z "$out" ] || { WHY="--warm-only on an empty slot answered rc=$rc out=[$out], want exit 3 and nothing"; return 1; }
+  out=$(printf 'the text' | run bash "$d/sb/fleet-control-read.sh" start pe new claude acme/app '' '' 'a title' 2>/dev/null); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] && [ "$out" = $'https://github.com/acme/app/issues/9\n@999' ] \
+    || { WHY="the start on an empty slot was not the cold path (rc=$rc, out=[$out])"; return 1; }
+  [ "$(grep -c . "$d/log/file")" = 1 ] && [ "$(grep -c . "$d/log/spawn")" = 1 ] || { WHY="filed / spawned not exactly once"; return 1; }
+  wins=$(nt list-windows -t pe -F '#{window_name}' | tr '\n' ' ')
+  [ "$wins" = 'home ' ] || { WHY="the warm attempt left a window behind: $wins"; return 1; }
+  [ "$(git -C "$d/main" worktree list | grep -c .)" = 1 ] || { WHY="the warm attempt left a worktree behind"; return 1; }
+  WHAT="池子空时发任务：--warm-only 答 3、什么都不开；start new 走冷路径（建单 + 开会话各一次），输出与开池前逐字节相同"
+}
+
 drill_cold_fill_fails() {
   # issue #2237: the cold start opens the agent's window before the tree is
   # checked out; a checkout that fails must take that window (and the worktree)
