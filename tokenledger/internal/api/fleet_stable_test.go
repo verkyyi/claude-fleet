@@ -246,7 +246,7 @@ func TestInstallServesStablesInstaller(t *testing.T) {
 	needPacked(t)
 	resp, body = getBody(t, h.http.URL+"/install")
 	img, _ := fleetclient.Files.ReadFile(fleetclient.Installer)
-	if resp.StatusCode != 200 || body != strings.ReplaceAll(string(img), fleetclient.HubPlaceholder, h.http.URL) {
+	if resp.StatusCode != 200 || body != strings.ReplaceAll(strings.ReplaceAll(string(img), fleetclient.HubPlaceholder, h.http.URL), InvitePlaceholder, "") {
 		t.Fatalf("/install with an older stable must be the image's installer: %d %.80q", resp.StatusCode, body)
 	}
 }
