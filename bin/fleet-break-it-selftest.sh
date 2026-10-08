@@ -71,6 +71,8 @@
 #                                                   .github/workflows/hub-rolling.yml
 #   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single,
 #                                                   overlays/prod (only RWX OSS claims: release-volume.yaml)
+#   hub-shape-extra-volume                          .github/actions/hub-release/release.sh shape (the data disk is
+#                                                   the claim mounted at /data, not any PVC)
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   login-browser-silent                            bin/fleet-login.py (scan: open_browser, KeyWatch, nudge, timeout)
@@ -3568,6 +3570,67 @@ drill_hub_disk_attach_stuck() {
   else
     WHAT='base 没有盘（按文件核对；没有 kubectl 不渲染），盘只在单份形态的组件里'
   fi
+  SECS=$(since "$t0")
+}
+
+# ---- hub-shape-extra-volume (#2384): the release's shape check counted ANY
+# persistentVolumeClaim as the SQLite data disk, so the rolling (Postgres) prod
+# with its RWX /releases volume (#2366) read as a broken sqlite shape and every
+# hub-deploy went red. The data disk is the claim mounted at /data; another
+# claim (an RWX shared volume) is no disk — and every refusal still holds.
+drill_hub_shape_extra_volume() {
+  CAP=20; local t0 rel="$ROOT/.github/actions/hub-release/release.sh" d="$WORK/hsv" k got want
+  t0=$(now); mkdir -p "$d"
+  python3 - "$d" <<'PY2' || { WHY="could not write the renders"; return 1; }
+import json, os, sys
+out = sys.argv[1]
+def render(kind, extra=False, replicas=None, strat=None, dburl=None, pdb=None):
+    pg = kind == 'postgres'
+    c = {'name': 'ccquota', 'env': [], 'volumeMounts': []}
+    vols = []
+    if pg if dburl is None else dburl: c['env'].append({'name': 'CCQUOTA_DB_URL', 'value': 'x'})
+    if pg:
+        c['readinessProbe'] = {'httpGet': {'path': '/readyz'}}
+        c['lifecycle'] = {'preStop': {'exec': {'command': ['sleep', '5']}}}
+    else:
+        c['volumeMounts'].append({'name': 'data', 'mountPath': '/data'})
+        vols.append({'name': 'data', 'persistentVolumeClaim': {'claimName': 'ccquota-data'}})
+    if extra:
+        c['volumeMounts'].append({'name': 'releases', 'mountPath': '/releases'})
+        vols.append({'name': 'releases', 'persistentVolumeClaim': {'claimName': 'ccquota-releases'}})
+    spec = {'replicas': replicas if replicas is not None else (2 if pg else 1),
+            'strategy': strat or ({'type': 'RollingUpdate', 'rollingUpdate': {'maxUnavailable': 0}} if pg else {'type': 'Recreate'}),
+            'template': {'spec': {'containers': [c], 'volumes': vols}}}
+    docs = [{'kind': 'Deployment', 'metadata': {'name': 'ccquota-hub'}, 'spec': spec}]
+    if pg if pdb is None else pdb: docs.append({'kind': 'PodDisruptionBudget', 'metadata': {'name': 'ccquota-hub'}})
+    return docs
+cases = {
+    'pg-extra': render('postgres', extra=True),
+    'pg': render('postgres'),
+    'sqlite': render('sqlite'),
+    'sqlite-extra': render('sqlite', extra=True),
+    'sqlite-2': render('sqlite', replicas=2),
+    'sqlite-roll': render('sqlite', strat={'type': 'RollingUpdate'}),
+    'sqlite-dburl': render('sqlite', dburl=True),
+    'sqlite-pdb': render('sqlite', pdb=True),
+    'pg-1': render('postgres', extra=True, replicas=1),
+    'pg-nodb': render('postgres', extra=True, dburl=False),
+}
+for k, docs in cases.items():
+    with open(os.path.join(out, k + '.json'), 'w') as f:
+        for x in docs: f.write(json.dumps(x) + '\n')
+PY2
+  for k in 'pg-extra:mode=postgres' 'pg:mode=postgres' 'sqlite:mode=sqlite' 'sqlite-extra:mode=sqlite' \
+           'sqlite-2:replicas 2' 'sqlite-roll:strategy RollingUpdate' 'sqlite-dburl:CCQUOTA_DB_URL (half' \
+           'sqlite-pdb:PodDisruptionBudget on one' 'pg-1:replicas 1 (want' 'pg-nodb:no CCQUOTA_DB_URL'; do
+    want=${k#*:}; k=${k%%:*}
+    got=$(bash "$rel" shape "$d/$k.json" 2>&1)
+    case "$want" in
+      mode=*) [ "$got" = "$want" ] || { WHY="$k read as [$(printf '%s' "$got" | tr '\n' ' ')], want $want"; return 1; } ;;
+      *) case "$got" in *"$want"*) ;; *) WHY="$k was not refused for '$want': [$(printf '%s' "$got" | tr '\n' ' ')]"; return 1 ;; esac ;;
+    esac
+  done
+  WHAT='滚动形态 + 一块 RWX 额外卷读作 mode=postgres；挂 /data 的那块才是数据盘；单份形态的四条拒绝、滚动形态的拒绝照旧'
   SECS=$(since "$t0")
 }
 

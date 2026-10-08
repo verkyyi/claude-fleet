@@ -138,7 +138,11 @@ if len(deps) != 1:
 dep = deps[0]; spec = dep.get('spec', {}); pod = spec.get('template', {}).get('spec', {})
 hub = ([c for c in pod.get('containers', []) if c.get('name') == 'ccquota'] or [{}])[0]
 env = {e.get('name') for e in hub.get('env') or []}
-disk = any('persistentVolumeClaim' in v for v in pod.get('volumes') or [])
+# The data disk is the claim mounted at /data (components/sqlite-single's
+# ccquota-data); another claim — the RWX /releases volume (#2366) — is no disk.
+datavols = {m.get('name') for c in pod.get('containers') or [] for m in c.get('volumeMounts') or [] if m.get('mountPath') == '/data'}
+disk = any('persistentVolumeClaim' in v and (v.get('name') in datavols or v['persistentVolumeClaim'].get('claimName') == 'ccquota-data')
+           for v in pod.get('volumes') or [])
 pdb = any(d.get('kind') == 'PodDisruptionBudget' for d in docs)
 replicas = spec.get('replicas', 1)
 strat = spec.get('strategy', {}); ru = strat.get('rollingUpdate') or {}
