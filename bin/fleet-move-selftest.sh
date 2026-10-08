@@ -35,6 +35,8 @@
 #   7. regression: a branch already checked out in ANOTHER worktree on the
 #      target (a stale leftover) refuses with a clear reason instead of the
 #      opaque git error this test caught by hand while writing case 2.
+#   8. (#2210) --to <login>@<this machine>: the target half runs as that login
+#      through sudo (shimmed), no ssh at all; another host still uses ssh.
 #
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
@@ -341,6 +343,52 @@ printf '%s\n' "$out" | grep -qi 'already checked out\|failed:target' || fail "mu
 win_alive TSRC "$w5" || fail "a target-side refusal must never touch the source"
 TSRC send-keys -t "$w5" -l '/exit'; TSRC send-keys -t "$w5" Enter; sleep 1
 TSRC kill-window -t "$w5" 2>/dev/null
+ok
+
+# ============================================================ case 8: another login on THIS machine (issue #2210)
+# The hub signs no certificate to the machine itself: `--to <login>@<this host>`
+# runs the target half as that login through passwordless sudo, never ssh. The
+# sudo shim plays it with the same target env the ssh shim gives; an ssh shim
+# that only records proves no ssh ran.
+mkdir -p "$WORK/shim-local"
+cat > "$WORK/shim-local/sudo" <<EOF
+#!/bin/bash
+[ "\$1" = -n ] && [ "\$2" = -u ] && [ "\$3" = dstuser ] || { echo "sudo-shim: \$*" >&2; exit 1; }
+shift 3
+[ "\$1" = true ] && exit 0
+[ "\$1" = -H ] && shift
+exec env HOME="$WORK/dst-home" FLEET_CONF_DIR="$WORK/dst-home/.config/claude-fleet" PATH="$WORK/shim:$WORK/fakebin:\$PATH" \\
+  FLEET_MOVE_LAUNCH="$WORK/fakebin/dst-launch" FLEET_MOVE_BOOT_WAIT=5 "\$@"
+EOF
+cat > "$WORK/shim-local/ssh" <<EOF
+#!/bin/sh
+echo "ssh \$*" >> "$WORK/ssh-local.log"; exit 255
+EOF
+chmod +x "$WORK/shim-local/"*
+SID6="66666666-6666-6666-6666-666666666666"
+WT6="$WORK/src-home/projects/repo-issue-47"
+git -C "$WORK/src-home/projects/repo" worktree add -q -b issue-47 "$WT6" origin/master
+git -C "$WT6" config user.email t@t.com; git -C "$WT6" config user.name Test
+echo local > "$WT6/local.txt"; git -C "$WT6" add -A; git -C "$WT6" commit -q -m local
+seed_transcript "$WORK/src-home" "$WT6" "$SID6"
+w6=$(spawn_source b6 issue-47 "$SID6" "$WT6" 47 working)
+sleep 1
+out=$(PATH="$WORK/shim-local:$PATH" HOME="$WORK/src-home" FLEET_MOVE_LOCAL_HOST=samehost FLEET_MOVE_EXIT_WAIT=10 FLEET_MOVE_CLOSE_WAIT=6 \
+  "$MOVE" b6 --to dstuser@samehost --session "$LSRC" 2>&1); rc=$?
+[ "$rc" -eq 0 ] || fail "a same-machine move should exit 0, got $rc: $out"
+printf '%s\n' "$out" | grep -q 'is this machine' || fail "a same-machine move must say it runs through sudo: $out"
+[ -s "$WORK/ssh-local.log" ] && fail "a same-machine move ran ssh: $(cat "$WORK/ssh-local.log")"
+win_alive TSRC "$w6" && fail "source window must be closed after a verified same-machine move: $out"
+nw6=$(TDST list-windows -F '#{window_id} #{@issue}' | awk '$2==47{print $1; exit}')
+[ -n "$nw6" ] || fail "no target window carries @issue=47 after the same-machine move: $out"
+dwt6=$(TDST display-message -p -t "$nw6" '#{@worktree}')
+[ -f "$dwt6/local.txt" ] || fail "same-machine target worktree is missing the pushed commit"
+[ -f "$WORK/dst-home/.claude/projects/$(printf '%s' "$dwt6" | tr '/.' '--')/$SID6.jsonl" ] \
+  || fail "same-machine move did not copy the transcript"
+# a host that is not this machine still goes through ssh (and its certificate)
+out=$(PATH="$WORK/shim-local:$PATH" HOME="$WORK/src-home" FLEET_MOVE_LOCAL_HOST=samehost \
+  "$MOVE" @9999 --to dstuser@otherhost --session "$LSRC" 2>&1)
+printf '%s\n' "$out" | grep -q 'is this machine' && fail "another host was taken for this machine: $out"
 ok
 
 printf 'fleet-move selftest: OK (%d checks)\n' "$CHECKS"
