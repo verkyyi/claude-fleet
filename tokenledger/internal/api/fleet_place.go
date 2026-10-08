@@ -101,6 +101,12 @@ type placeOutcome struct {
 	// operation result's `timing`, passed on as the node wrote it (epoch ms
 	// t_accepted / t_window / …). Absent from an older node.
 	Timing json.RawMessage `json:"timing,omitempty"`
+	// WindowID / Key / Filed: a warm start's window, its key and `pending`
+	// while its issue is still being filed (claude-fleet#2234), as the node
+	// wrote them — the client switches to the window at once (#2236).
+	WindowID string `json:"window_id,omitempty"`
+	Key      string `json:"key,omitempty"`
+	Filed    string `json:"filed,omitempty"`
 }
 
 func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
@@ -405,9 +411,12 @@ func operationFinal(status string) bool {
 // outcomeOf reads a REMOTE start's operation as a placeOutcome.
 func outcomeOf(op map[string]any, node string) placeOutcome {
 	var res struct {
-		Window  string          `json:"window"`
-		Timing  json.RawMessage `json:"timing"`
-		Workers []struct {
+		Window   string          `json:"window"`
+		WindowID string          `json:"window_id"`
+		Key      string          `json:"key"`
+		Filed    string          `json:"filed"`
+		Timing   json.RawMessage `json:"timing"`
+		Workers  []struct {
 			WindowID string `json:"window_id"`
 			WorkerID string `json:"worker_id"`
 		} `json:"workers"`
@@ -431,7 +440,8 @@ func outcomeOf(op map[string]any, node string) placeOutcome {
 				win = res.Workers[0].WindowID
 			}
 		}
-		oc := placeOutcome{State: "done", Exit: exit(0), Window: win, WorkerID: wid, Node: node}
+		oc := placeOutcome{State: "done", Exit: exit(0), Window: win, WorkerID: wid, Node: node,
+			WindowID: res.WindowID, Key: res.Key, Filed: res.Filed}
 		if len(res.Timing) > 0 && res.Timing[0] == '{' {
 			oc.Timing = res.Timing
 		}

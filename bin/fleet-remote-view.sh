@@ -25,7 +25,9 @@
 #                           shell, on its STAGE server, FLEET_SHELL_STAGE —
 #                           issue #1759), because
 #                           it is a client of that machine's one fleet session
-#                           (one fleet per login).
+#                           (one fleet per login). `--node <m> [--name <n>]`
+#                           (issue #2236): the machine + name of a session just
+#                           opened, which the sidebar's cache does not carry yet.
 #   run [--shell] <node> <worker_id>  the proxy pane's program: connect, reconnect,
 #                           report (`--shell` is passed through to `attach`). A
 #                           <worker_id> of `-` is the machine itself: its fleet
@@ -511,6 +513,16 @@ open)
   row=$(LC_ALL=C awk -F $'\037' -v w="wid:$wid" '$1 == w { print $2 "\037" $8; exit }' \
         "$FLEET_C/global/remote_$sess" 2>/dev/null)
   node="${row%%$'\037'*}"; name="${row#*$'\037'}"
+  # --node <m> [--name <n>] (issue #2236): a session the hub just opened there,
+  # stepped into as the place answers — before the cache carries its row.
+  shift
+  while [ $# -ge 2 ]; do
+    case "$1" in
+      --node) [ -n "$node" ] || node=$2 ;;
+      --name) [ -n "$row" ] || name=$2 ;;
+    esac
+    shift 2
+  done
   [ -n "$node" ] || { tmux display-message "fleet: $wid 不在侧边栏的远程清单里" 2>/dev/null; exit 1; }
   case "$node" in *[!A-Za-z0-9._-]*) note "bad machine label: $node"; exit 2 ;; esac
   # `<name> · @m4` (issue #1780): the window name is also the pane header
