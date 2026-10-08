@@ -138,7 +138,11 @@ if len(deps) != 1:
 dep = deps[0]; spec = dep.get('spec', {}); pod = spec.get('template', {}).get('spec', {})
 hub = ([c for c in pod.get('containers', []) if c.get('name') == 'ccquota'] or [{}])[0]
 env = {e.get('name') for e in hub.get('env') or []}
-disk = any('persistentVolumeClaim' in v for v in pod.get('volumes') or [])
+# The data disk is the claim mounted at /data (components/sqlite-single's
+# ccquota-data); another claim — the RWX /releases volume (#2366) — is no disk.
+datavols = {m.get('name') for c in pod.get('containers') or [] for m in c.get('volumeMounts') or [] if m.get('mountPath') == '/data'}
+disk = any('persistentVolumeClaim' in v and (v.get('name') in datavols or v['persistentVolumeClaim'].get('claimName') == 'ccquota-data')
+           for v in pod.get('volumes') or [])
 pdb = any(d.get('kind') == 'PodDisruptionBudget' for d in docs)
 replicas = spec.get('replicas', 1)
 strat = spec.get('strategy', {}); ru = strat.get('rollingUpdate') or {}
@@ -402,7 +406,7 @@ envFrom {"secretRef":{"name":"hub"}}' ] && ok "env: ccquota only, sorted, secret
 
   # shape: the two good shapes and the mixes between them
   local sq pg
-  sq='{"kind":"Deployment","metadata":{"name":"ccquota-hub"},"spec":{"replicas":1,"strategy":{"type":"Recreate"},"template":{"spec":{"containers":[{"name":"ccquota","env":[{"name":"A","value":"1"}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"d"}}]}}}}'
+  sq='{"kind":"Deployment","metadata":{"name":"ccquota-hub"},"spec":{"replicas":1,"strategy":{"type":"Recreate"},"template":{"spec":{"containers":[{"name":"ccquota","env":[{"name":"A","value":"1"}],"volumeMounts":[{"name":"data","mountPath":"/data"}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"d"}}]}}}}'
   pg='{"kind":"Deployment","metadata":{"name":"ccquota-hub"},"spec":{"replicas":2,"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxUnavailable":0,"maxSurge":1}},"template":{"spec":{"containers":[{"name":"ccquota","env":[{"name":"CCQUOTA_DB_URL"}],"readinessProbe":{"httpGet":{"path":"/readyz"}},"lifecycle":{"preStop":{"sleep":{"seconds":5}}}}]}}}}
 {"kind":"PodDisruptionBudget"}'
   t=$(printf '%s\n' "$sq" | cmd_shape -); [ "$t" = mode=sqlite ] && ok "shape: one replica on a disk is sqlite" || no "shape sqlite: $t"
@@ -412,6 +416,12 @@ envFrom {"secretRef":{"name":"hub"}}' ] && ok "env: ccquota only, sorted, secret
   t=$(printf '%s\n' "${pg/CCQUOTA_DB_URL/X}" | cmd_shape -) && no "shape: no db-url passed" || ok "shape: two replicas without CCQUOTA_DB_URL refused"
   t=$(printf '%s\n' "${pg/\"maxUnavailable\":0/\"maxUnavailable\":1}" | cmd_shape -) && no "shape: maxUnavailable 1 passed" || ok "shape: maxUnavailable 1 refused"
   t=$(printf '%s\n' "${pg%%$'\n'*}" | cmd_shape -) && no "shape: no PDB passed" || ok "shape: rolling without a PDB refused"
+  # #2384: another claim (the RWX /releases volume) is no data disk
+  local px sx
+  px=${pg/'}]}}}}'/'}],"volumes":[{"name":"releases","persistentVolumeClaim":{"claimName":"ccquota-releases"}}]}}}}'}
+  sx=${sq/'"claimName":"d"}}]'/'"claimName":"d"}},{"name":"releases","persistentVolumeClaim":{"claimName":"r"}}]'}
+  t=$(printf '%s\n' "$px" | cmd_shape -) || true; [ "$t" = mode=postgres ] && ok "shape: Postgres + an RWX extra claim is still postgres" || no "shape postgres+rwx: $t"
+  t=$(printf '%s\n' "$sx" | cmd_shape -) || true; [ "$t" = mode=sqlite ] && ok "shape: sqlite + an extra claim is still sqlite" || no "shape sqlite+extra: $t"
 
   # probe: nothing listens ⇒ every second down; the verdict is the last line
   local stop; stop=$(mktemp -u)
