@@ -68,6 +68,9 @@
 #
 # --teardown <login>: steps 9–10 only, for a run left up (--keep) or cut short.
 #
+# --runs N: the 60-second standard instead (bin/fleet-onboard-clock.sh, #2267) —
+# `fleet-onboard-drill.sh --hub prod --runs 3`: sandbox HOMEs, no new login.
+#
 # Needs: an admin login (never root), a sudo ticket (`sudo -v` first — nothing
 # here prompts), ssh, tmux, Remote Login on --ssh-host:--ssh-port (default
 # 127.0.0.1:22), and for the device revoke CCQUOTA_VIEWER_TOKEN (or
@@ -113,6 +116,11 @@ qr_state() {
        && printf '%s\n' "$p" | grep -Eq -- "$CLIENT_UP|open terminal failed|not a terminal|$1@[^ ]+ [^ ]* ?[%\$#] *\$"; then echo none
   else echo wait; fi
 }
+
+# --runs N (issue #2267, EPIC #2259 C8): the 60-second standard — a sandbox per
+# run, timed from the paste to the first key the agent takes, every known pit
+# checked; no OS login is made. That is bin/fleet-onboard-clock.sh, whole.
+for a in "$@"; do [ "$a" = --runs ] && exec bash "$BIN/fleet-onboard-clock.sh" "$@"; done
 
 LOGIN='' HUB='' SCAN_CMD='' KEEP=0 TEARDOWN=0 NAME=first INVITE='' ROW_ONLY='' QR_ONLY=0
 DRILL_NS=fleet-drill@claude-fleet

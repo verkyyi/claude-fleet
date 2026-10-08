@@ -927,6 +927,30 @@ with `--invite`, has the drill person delete itself — and deletes the login; o
 (`fleet-onboard-drill-selftest.sh`) drives only the refusals and the `--invite` teardown's hub
 half, against PATH shims; `fleet-drill-selftest.sh` pins `fleet drill`.
 
+### The 60-second standard (60 秒上手，EPIC #2259)
+
+`fleet-onboard-drill.sh --hub prod --runs 3` (= `bin/fleet-onboard-clock.sh`, issue #2267)
+times the NEW road — no OS login is made: each run is a sandbox HOME on this computer (no
+`~/.config/claude-fleet`, no `~/.local`, no Homebrew on PATH, its own TMPDIR / TMUX_TMPDIR),
+driven in a terminal of its own. It pastes `curl -fsSL <hub>/i/<invite> | sh`, lets the
+installer run `fleet`, takes the authorize page with a stand-in browser and — after a fixed
+10-second hand — confirms it with a drill person's code, waits for the first HOME session, and
+types one letter until the agent keeps it. Per run it mints the drill person (`fleet drill
+invite`) and an invite (`fleet hub invite`) as you, and deletes the person at the end.
+
+The table it prints (also `report.md`, `clock.tsv` and every screen in its out dir, codes
+blanked) is EPIC #2259's five readings — paste → first key (the max of the runs, ≤ 60 s), the
+person's own steps (2), admin on the spot (0), fleet words on the screen before the first key
+(0) — and the eight known pits, PASS/FAIL each; the segments (安装 · 浏览器授权 · 拿到电脑 · 进会话 ·
+第一键) use `t_enter … t_key`, EPIC #2230's naming. Exit 0 only when all five are on target.
+
+A real hub places that session on a real machine **as the drill person's login**, so the login
+must exist there — a spare (#2263); preparing one is the operator's call (EPIC #2259 共同约定 6).
+CI runs it on every PR inside `bin/newcomer-e2e.sh` (the `clock` step, a hub built from the
+checkout, a fake node and a stand-in agent that drops keys while it mounts) with `--gate pits`:
+there the eight pits and the first key are held, the seconds and words only printed.
+`fleet-onboard-clock-selftest.sh` pins the refusals, the concept scan and the scrub.
+
 ## Publishing to installs — the `stable` tag (发布到各安装)
 
 Merging to `master` does not, by itself, reach any machine. What installs follow
