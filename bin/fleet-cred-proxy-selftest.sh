@@ -23,6 +23,8 @@
 #      out) is reported to the hub's /v1/node/usage; over the person's budget the
 #      next request is refused 403 person_budget_exceeded with the hub's line and
 #      reaches nothing; the window passing lets them back in
+#   K  binding never asks DNS for its own name (issue #2319): with getfqdn made
+#      to hang, the proxy's server still binds at once
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "${TMPDIR:-/tmp}/cred-proxy-st.XXXXXX")
@@ -365,6 +367,18 @@ pp=$(cat "$FLEET_CONF_DIR/cred-proxy/pid" 2>/dev/null)
 kill -9 "$RUNPID" 2>/dev/null; wait "$RUNPID" 2>/dev/null; RUNPID=''
 if waitfor sh -c "! kill -0 $pp 2>/dev/null"; then pass "H a SIGKILLed launcher takes its proxy with it"
 else fail "H proxy $pp outlived its launcher"; kill "$pp" 2>/dev/null; fi
+
+# ── K: no getfqdn on bind (issue #2319) ──────────────────────────────────────
+out=$(python3 -I - "$BIN/fleet-cred-proxy.py" <<'PY' 2>&1
+import importlib.util, socket, sys, time
+socket.getfqdn = lambda *a: time.sleep(30) or "slow"
+spec = importlib.util.spec_from_file_location("fcp", sys.argv[1]); m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+t = time.time(); s = m.Server(("127.0.0.1", 0), m.BaseHTTPRequestHandler); s.server_close()
+print("%.1f" % (time.time() - t))
+PY
+)
+case "$out" in 0.[0-9]) pass "K bind never waits on getfqdn (${out}s)" ;; *) fail "K bind waited on getfqdn: $out" ;; esac
 
 [ "$FAIL" = 0 ] && echo "fleet-cred-proxy-selftest: OK" || echo "fleet-cred-proxy-selftest: FAILED"
 exit "$FAIL"

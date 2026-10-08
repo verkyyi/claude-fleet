@@ -132,6 +132,17 @@ SECRET_HEADERS = {"authorization", "x-api-key", "cookie", "set-cookie",
 HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding",
        "te", "trailer", "upgrade", "host", "content-length"}
 PUBLIC = {"/api/hello"}
+
+
+class Server(ThreadingHTTPServer):
+    """http.server's bind looks its own address up (socket.getfqdn): a machine
+    whose /etc/hosts lost `127.0.0.1 localhost` waits out a DNS timeout there —
+    70 s on a GitHub macOS runner (issue #2319) — before the proxy answers at
+    all. The name is never used, so it is never asked for."""
+    def server_bind(self):
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 OAUTH_BETA = "oauth-2025-04-20"
 LOCAL_TAG, HUB_TAG, NODE_TAG = "fcp1", "fcp-h1", "fcpn1"
 # how long past its newest expiry the hub still renews a never-revoked pass —
@@ -1630,7 +1641,7 @@ def legacy_serve(t, cfg):
     h = type("ProxyOld_" + t.name, (Proxy,), {"fixed": t})
     while True:
         try:
-            srv = ThreadingHTTPServer(("127.0.0.1", t.cfg.legacy_port), h)
+            srv = Server(("127.0.0.1", t.cfg.legacy_port), h)
             break
         except OSError:
             time.sleep(1)
@@ -1746,7 +1757,7 @@ def serve(a):
     srv = None
     for p in want + [0]:
         try:
-            srv = ThreadingHTTPServer(("127.0.0.1", p), Proxy)
+            srv = Server(("127.0.0.1", p), Proxy)
             break
         except OSError:
             if a.port and p == a.port:
