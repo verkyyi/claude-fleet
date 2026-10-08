@@ -567,6 +567,18 @@ Do not install from memory: read the doc and work from it.
   意外下线: leases released at once, nothing re-dispatched, the record kept in
   `fleet_spot_nodes`. Off (no image) adds nothing — `TestSpotOffAddsNothing`
   and `fleet-spot-evacuate-selftest.sh` case A pin the degenerate case.
+- **A managed machine has ONE root daemon for its machine-level work** (issue
+  #2331, EPIC #2329 C3). `bin/fleet-node-supervisor.py` (`com.claude-fleet.node`,
+  root, KeepAlive, written by its own `install` — never a `launchd/*.tmpl`, which
+  every login would install) keeps its children up (the shared credential proxy,
+  C5's node program; backoff 1 s doubling to 60 s) and runs the machine task table
+  once — each task one copy, under `locks/<task>.lock`; account tasks (collect,
+  base-sync) are C4's. It runs only root-owned code from the root runtime, moves
+  fleet plist leftovers to `/var/db/fleet-node/attic/` (7 days, `attic restore`),
+  only REPORTS an unexpected live plist, and adopts a live child after a restart
+  (`state.json`). A child whose old LaunchDaemon is still installed stays
+  launchd's (`legacy`). `status` is one line per item; the doctor's `node` row
+  reads `status --check` (not installed ⇒ no row). BREAK-IT `node-supervisor-dead`.
 - **A machine has three words — online, 维护中, lost — and only the middle one is
   the operator's** (issue #1427). `maintenance` is the fleet setting
   `fleet.node_maintenance.<machine>` on the hub (`bin/fleet-node-maintenance.sh

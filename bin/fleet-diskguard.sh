@@ -81,6 +81,9 @@
 #   FLEET_ORPHAN_CPU_SECS   seconds hot before flagged   (default 300)
 #   FLEET_ORPHAN_CPU_ACTION notify | kill                (default notify)
 #   FLEET_ORPHAN_EXTRA_RE   extra ERE OR'd into the fleet fingerprint
+#   FLEET_ORPHAN_ALL_USERS  1 = every login's orphans, not only this one's — the
+#                           machine's one root watchdog (fleet-node-supervisor.py,
+#                           issue #2331); default off = ours only, byte for byte
 #   FLEET_FSEVENTSD_WARN_MB fseventsd RSS that counts as bloated (default 1024)
 #   FLEET_ORPHAN_LISTEN_SECS  an orphaned fleet listener older than this is reaped
 #                           (default 21600 = 6h; 0 = sweep OFF) — issue #1154
@@ -384,8 +387,9 @@ ps_all() {   # full process table, timeboxed — the machine this fires on is sl
 
 orphan_candidates() {   # $1=pct → "pid|pcpu|comm" lines
   local pct="$1" me; me="$(id -un 2>/dev/null)"
+  [ "${FLEET_ORPHAN_ALL_USERS:-0}" = 1 ] && me='*'
   ps_all | awk -v me="$me" -v pct="$pct" -v re="$ORPHAN_RE" '
-    { if ($3!=me) next;                                    # ours only
+    { if (me!="*" && $3!=me) next;                         # ours only (or every login)
       if ($2!=1) next;                                     # PPID=1 ⇒ reparented
       if (($4+0) < pct) next;                              # not hot
       cmd=""; for (i=5;i<=NF;i++) cmd=cmd (i>5?" ":"") $i;

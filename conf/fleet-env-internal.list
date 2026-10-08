@@ -85,6 +85,7 @@ FLEET_CLIENT_TTY                   seam: the terminal fleet-client-lease.py asks
 FLEET_CLIENT_BADGE_CACHE           path: where fleet-client-badge.sh keeps its last where read (~/.cache/claude-fleet/shell/tmp, #1779)
 FLEET_CLIENT_BADGE_HOST            seam: this machine's hostname as the status-bar badge reads it (fleet-client-badge.sh, #1779)
 FLEET_COMPOSE_LOG                  path: the writing area's usage log, logs/compose.ndjson (issue #1955)
+FLEET_ORPHAN_ALL_USERS             handoff: fleet-node-supervisor.py sets it on its root orphan watchdog task (every login's orphans, #2331)
 FLEET_PLACE_TIMING                 handoff: where fleet-client-place.sh writes a done start's node timing points, set by fleet-compose.py (issue #2238)
 FLEET_START_WARM                   knob: 0 = a start never takes a warm-pool window; always the cold path (fleet-control-read.sh, 1, #2234)
 FLEET_SUBMIT_WAIT_SECS             knob: seconds the first turn waits for an idle, empty input before giving up (fleet-pane-submit.sh, 5, #2234)
