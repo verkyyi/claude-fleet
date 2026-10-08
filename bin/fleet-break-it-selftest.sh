@@ -76,6 +76,8 @@
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
 #   spare-login-empty                               tokenledger/internal/api fleet_spare.go + fleet_accounts.go
 #                                                   (claimSpare, replenishSpares; go test, when a toolchain is here)
+#   release-tampered                                tokenledger/internal/api fleet_release.go (ReleaseStore) +
+#                                                   internal/release (Build, Fetch, Unpack; go test, when a toolchain is here)
 #   trust-name-borrowed                             tokenledger/internal/api fleet_trust.go (nodeTrust) + fleet_node_desired.go
 #                                                   (go test, when a toolchain is here)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
@@ -3962,6 +3964,37 @@ drill_trust_name_borrowed() {
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='冒名节点领凭据 / 中继凭据被拒、名册读 name_borrowed、hello 记审计；真机照领；托管加入码一次、一小时、信任记在身份上；期望状态只有操作者能写（go test 五条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- release-tampered (#2335, EPIC #2329 C7): a machine takes a release from
+# the hub only, and a tampered byte anywhere — a tree file, an artifact, the
+# manifest, the signature, a different key — installs nothing; GitHub out of
+# reach (and a restarted hub) still hands out what it stored. The hub half is
+# Go; this drill pins its tests by name and runs them when go is here.
+drill_release_tampered() {
+  CAP=120; local t0 out rc tests f
+  tests='TestReleaseBuiltOnStableAndFetched TestReleaseFetchWithGitHubDown TestReleaseTamperRefused TestReleaseVerifyDirCatchesEdit TestReleaseOffIs404'
+  f="$ROOT/tokenledger/internal/api/fleet_release_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 'digest does not match the manifest' "$ROOT/tokenledger/internal/release/release.go" \
+    || { WHY="Unpack no longer checks each file against the signed manifest"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='stable 一动入口就打包签名；机器从入口取到全部文件与二进制；GitHub 断了、入口重启也照样取；树 / 二进制 / 清单 / 签名 / 钥匙任一处被改都整个不换、不留半成品（go test 五条）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
         WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;

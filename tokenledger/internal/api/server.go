@@ -191,6 +191,10 @@ type Server struct {
 	// /install/stable/<sha>/ (CCQUOTA_FLEET_STABLE_REPO; "off" = nil). Nil:
 	// the image's packed client, as before.
 	Stable *StableSource
+	// Releases keeps a signed node release per stable and serves it at
+	// /v1/fleet/release/ (claude-fleet#2335; CCQUOTA_FLEET_RELEASE_KEY +
+	// CCQUOTA_FLEET_RELEASE_DIR). Nil: those routes 404.
+	Releases *ReleaseStore
 	// joinClock replaces the join-code clock in tests.
 	joinClock func() time.Time
 
@@ -475,6 +479,9 @@ func (s *Server) routes() *routeMux {
 		// 404 until the hub can sign someone in with nothing in hand.
 		mux.HandleFunc("/install", s.handleInstall)
 		mux.HandleFunc("/install/", s.handleInstallFile)
+		// Node releases (claude-fleet#2335): stable's files, binaries and
+		// installers, signed — public like /install; the signature is the trust.
+		mux.HandleFunc("/v1/fleet/release/", s.handleRelease)
 		// A client's team defaults (claude-fleet#1722): whitelisted, never
 		// a credential, read by every client's start — public like /install.
 		mux.HandleFunc("/v1/fleet/client-settings", s.handleClientSettings)
