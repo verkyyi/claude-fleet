@@ -50,7 +50,8 @@ setup() {
   # fake install: converges; offline (hosts blocked) it must not need GitHub
   cat >"$SB/fake/install.sh" <<EOF
 #!/bin/bash
-if [ "\${1:-}" = --join ]; then
+case " \$* " in *" --hub https://hub.invalid "*) ;; *) echo "✗ 检查：不知道入口地址"; exit 1 ;; esac
+if printf '%s\n' "\$@" | grep -qx -- --join; then
   [ -n "\${FND_INSTALL_ARGS:-}" ] && echo "joined" >>"\$FND_INSTALL_ARGS"
   ln -sfn "$SB/root/$TO" "$SB/root/current"
   echo "✓ 加入 机器令牌已写"; echo "✓ 运行时 $TO"; echo "跳过 角色用户：已在"
@@ -106,7 +107,7 @@ envs() {
   export FLEET_NODE_TEST=1 FLEET_NODE_STATE="$SB/state" FLEET_NODE_ROOT="$SB/root" \
     FLEET_NODE_DAEMON_DIR="$SB/daemons" FLEET_NODE_USERS="$SB/users" FLEET_DRILL_HOSTS="$SB/hosts" \
     FLEET_DRILL_INSTALL="$SB/fake/install.sh" FLEET_DRILL_SUPERVISOR="$SB/fake/sup.py" \
-    FLEET_DRILL_UPDATE="$SB/fake/upd.py" FLEET_DRILL_FETCH="$SB/fake/fetch.sh" FLEET_DRILL_POLL=0 FLEET_DRILL_WAIT=5
+    FLEET_DRILL_UPDATE="$SB/fake/upd.py" FLEET_DRILL_FETCH="$SB/fake/fetch.sh" FLEET_DRILL_POLL=0 FLEET_DRILL_WAIT=5 FLEET_HUB_URL=https://hub.invalid
 }
 drill() { ( envs; "$SH" "$DRILL" "$@" ); }
 trap '[ -n "$SB" ] && rm -rf "$SB"' EXIT
@@ -162,6 +163,14 @@ printf 'rolled-back\n' >"$SB/queue"
 OUT="$(drill run --yes --to "$TO" --fail "$BADSHA" 2>&1)"; rc=$?
 printf '%s\n' "$OUT" | grep -q '| 升级 | 自动 | .* | FAIL |' && ok "upgrade FAIL" || bad "upgrade" "$OUT"
 [ "$rc" = 1 ] && ok "exit 1" || bad "exit $rc"
+
+echo "H  an install that fails keeps the join file, reads no 人 count"
+setup
+printf '%s\n' "$CODE" >"$SB/join"
+OUT="$(drill run --yes --hub https://wrong.invalid --to "$TO" --fail "$BADSHA" --join-file "$SB/join" 2>&1)"; rc=$?
+[ "$rc" = 1 ] && ok "exit 1" || bad "exit $rc" "$OUT"
+[ -f "$SB/join" ] && ok "join file kept for the rerun" || bad "join file deleted on a failed install"
+printf '%s\n' "$OUT" | grep -q '要人动手的步骤 | 8 | - | ≤ 2 | —' && ok "no 人 count off a failed install" || bad "人 count" "$OUT"
 
 echo "G  usage"
 setup

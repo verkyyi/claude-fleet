@@ -2,7 +2,7 @@
 # fleet-node-drill.sh — rehearse a managed machine end to end on real hardware
 # and read EPIC #2329's five numbers off it (issue #2336, EPIC #2329 C8).
 #
-#   sudo fleet-node-drill.sh run --to <sha> --fail <sha> [--join-file <f>] [--logins a,b]
+#   sudo fleet-node-drill.sh run --to <sha> --fail <sha> [--hub <url>] [--join-file <f>] [--logins a,b]
 #   fleet-node-drill.sh count            the five numbers, now (no root needed)
 #   sudo fleet-node-drill.sh unblock     take a leftover GitHub block out of /etc/hosts
 #
@@ -16,7 +16,9 @@
 # Steps:
 #   基线      the five numbers before (count)
 #   加入码    人: 入口「机器」页「添加机器」— the code is read from --join-file
-#             (deleted after) or typed at a hidden prompt; never printed, never logged
+#             (deleted once the install succeeds — a failed install leaves it for
+#             the rerun) or typed at a hidden prompt; never printed, never logged.
+#             --hub (default: $FLEET_HUB_URL, else machine.env's) goes to the install
 #   安装      人: the one command — fleet-node-install.sh --join <码> (C1)
 #   迁账号    自动, one login at a time (共同约定 5): fleet-node-supervisor.py
 #             account adopt <login> from `current`; a failure stops the run and
@@ -151,7 +153,7 @@ block() {
 
 # ---------------------------------------------------------------- run ------------
 ASK_ALL=0
-TO="" FAILSHA="" JOINF="" LOGINS=""
+TO="" FAILSHA="" JOINF="" LOGINS="" HUB="${FLEET_HUB_URL:-}"
 OUT="" STEPS="" FAILED=0
 
 ask() { # ask <question> → 0 do it · 1 skip · exits 3 on q
@@ -195,20 +197,22 @@ report() {
     echo
     echo "| 步 | 谁 | 用时 | 结果 | 说明 |"
     echo "|---|---|---|---|---|"
-    awk -F'\t' '{printf "| %s | %s | %ss | %s | %s |\n", $1, $2, $3, $4, $5}' "$STEPS"
+    LC_ALL=C awk -F'\t' '{printf "| %s | %s | %ss | %s | %s |\n", $1, $2, $3, $4, $5}' "$STEPS"
     echo
     echo "| 指标 | 演练前 | 演练后 | 目标 | 达标 |"
     echo "|---|---|---|---|---|"
     local human b a
-    human=$(awk -F'\t' '$1 ~ /^(加入码|安装)$/ && $2 == "人" && $4 != "SKIP"' "$STEPS" | wc -l | tr -d ' ')
+    human=$(LC_ALL=C awk -F'\t' '$1 ~ /^(加入码|安装)$/ && $2 == "人" && $4 != "SKIP"' "$STEPS" | wc -l | tr -d ' ')
+    # read only off an install that went through
+    LC_ALL=C awk -F'\t' '$1 == "安装" && $4 == "PASS" {f = 1} END {exit !f}' "$STEPS" || human=""
     m() { # m <name> <key> <target> <op: le|eq>
       b="$( [ -f "$before" ] && val "$(cat "$before")" "$2")"; a="$( [ -f "$after" ] && val "$(cat "$after")" "$2")"
       local okw="—"
       if [ -n "$a" ]; then { [ "$a" -le "$3" ] && okw="✓"; } || okw="✗"; fi
       echo "| $1 | ${b:--} | ${a:--} | ≤ $3 | $okw |"
     }
-    local okh="✗"; [ "$human" -le 2 ] && okh="✓"
-    echo "| 把一台 Mac 变成托管机器要人动手的步骤 | 8 | $human | ≤ 2 | $okh |"
+    local okh="—"; [ -n "$human" ] && { { [ "$human" -le 2 ] && okh="✓"; } || okh="✗"; }
+    echo "| 把一台 Mac 变成托管机器要人动手的步骤 | 8 | ${human:--} | ≤ 2 | $okh |"
     m "一台机器上 fleet 的后台服务" services 3
     m "不跟着发布版自动更新的部件" parts 0
     m "各账号后台服务不一致的种类" kinds 1
@@ -226,6 +230,7 @@ run() {
       --to) TO="${2:-}"; shift ;;
       --fail) FAILSHA="${2:-}"; shift ;;
       --join-file) JOINF="${2:-}"; shift ;;
+      --hub) HUB="${2:-}"; shift ;;
       --logins) LOGINS="${2:-}"; shift ;;
       --yes) ASK_ALL=1 ;;
       -h|--help) usage; exit 0 ;;
@@ -237,6 +242,7 @@ run() {
   if [ "$(id -u)" != 0 ] && [ "${FLEET_NODE_TEST:-}" != 1 ]; then
     echo "$PROG: run as root (sudo) — it installs and swaps the machine's runtime" >&2; exit 2
   fi
+  [ -n "$HUB" ] || HUB="$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$STATE/machine.env" 2>/dev/null | head -n 1)"
   unblock >/dev/null   # a block a killed run left behind
   OUT="$STATE/drill/$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$OUT" && chmod 700 "$OUT" || { echo "$PROG: cannot write $OUT" >&2; exit 1; }
@@ -250,13 +256,14 @@ run() {
   local code="" rc
   if ask "在 $(hostname -s 2>/dev/null) 上安装托管机器（fleet-node-install.sh，覆盖现有安装）"; then
     t0
-    if [ -n "$JOINF" ]; then code="$(tr -d ' \n' <"$JOINF")"; rm -f "$JOINF"
+    if [ -n "$JOINF" ]; then code="$(tr -d ' \n' <"$JOINF")"
     elif [ "$ASK_ALL" != 1 ]; then printf '加入码（入口「机器」页「添加机器」，不回显）：' >/dev/tty; read -rs code </dev/tty; echo >/dev/tty
     fi
     row 加入码 人 "$(dt)" PASS "入口「机器」页点一次「添加机器」"
     t0
-    "$(script fleet-node-install.sh "${FLEET_DRILL_INSTALL:-}")" ${code:+--join "$code"} >"$OUT/install.log" 2>&1; rc=$?
+    "$(script fleet-node-install.sh "${FLEET_DRILL_INSTALL:-}")" ${HUB:+--hub "$HUB"} ${code:+--join "$code"} >"$OUT/install.log" 2>&1; rc=$?
     code=""
+    [ "$rc" = 0 ] && [ -n "$JOINF" ] && rm -f "$JOINF"
     if [ "$rc" = 0 ]; then row 安装 人 "$(dt)" PASS "一条命令；$(grep -c '^✓' "$OUT/install.log") 步做了 · $(grep -c '^跳过' "$OUT/install.log") 步跳过"
     else row 安装 人 "$(dt)" FAIL "$(grep '^✗' "$OUT/install.log" | head -n 1)"; report; exit 1; fi
   else row 安装 人 0 SKIP "没装"; fi
@@ -299,7 +306,7 @@ run() {
     t0; block
     local cur tmp ok=1 why=""
     cur="$(readlink "$ROOT/current" 2>/dev/null)"; cur="${cur##*/}"
-    "$(script fleet-node-install.sh "${FLEET_DRILL_INSTALL:-}")" >"$OUT/offline-install.log" 2>&1 \
+    "$(script fleet-node-install.sh "${FLEET_DRILL_INSTALL:-}")" ${HUB:+--hub "$HUB"} >"$OUT/offline-install.log" 2>&1 \
       || { ok=0; why="重装：$(grep '^✗' "$OUT/offline-install.log" | head -n 1)"; }
     tmp="$(mktemp -d "${TMPDIR:-/tmp}/fleet-node-drill.XXXXXX")"
     if [ "$ok" = 1 ]; then
