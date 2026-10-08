@@ -641,9 +641,32 @@ func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce, namespace string,
 	if err != nil {
 		return bad("its key id names no one this hub knows")
 	}
-	// CheckCert verifies the CA's signature, the validity window and that
-	// the person's login is among the certificate's principals.
-	if err := checker.CheckCert(p.Login, cert); err != nil {
+	// CheckCert verifies the CA's signature, the validity window and that one
+	// of the person's logins is among the certificate's principals.
+	//
+	// WHICH login: issueCert mints a certificate for the per-machine logins of
+	// this person's active accounts (managedLoginsOf), which on a machine whose
+	// fleet moved to a NEW OS login is NOT fleet_principals.login. Checking only
+	// the latter made the hub refuse its own certificates — the route list, the
+	// machine pick and the sidebar's fleet_sessions all 401 at once, and with
+	// them the quota readings a session's account rotation needs
+	// (claude-fleet#2437). The key id still pins the person, and the logins are
+	// looked up for THAT person, so a certificate for one person can no more be
+	// read as another's than before.
+	login := p.Login
+	if !certNamesLogin(cert, login) {
+		logins, _, _, err := s.managedLoginsOf(p.ID)
+		if err != nil {
+			return sshRelayIdentity{}, err
+		}
+		for _, l := range logins {
+			if certNamesLogin(cert, l) {
+				login = l
+				break
+			}
+		}
+	}
+	if err := checker.CheckCert(login, cert); err != nil {
 		return bad(err.Error())
 	}
 	if err := verifySSHSig(cert.Key, []byte(sigArmor), []byte(nonce), namespace); err != nil {
@@ -658,6 +681,19 @@ func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce, namespace string,
 		return bad("this device was revoked — run `fleet` and scan again")
 	}
 	return sshRelayIdentity{Principal: p.ID, Actor: p.ID}, nil
+}
+
+// certNamesLogin reports whether login is one of cert's principals.
+func certNamesLogin(cert *ssh.Certificate, login string) bool {
+	if login == "" {
+		return false
+	}
+	for _, p := range cert.ValidPrincipals {
+		if p == login {
+			return true
+		}
+	}
+	return false
 }
 
 // sshRelayCAs is every CA a relay certificate may be signed by: the hub's own

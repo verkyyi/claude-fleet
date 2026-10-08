@@ -67,7 +67,7 @@ func TestFleetMachinesMergesHeartbeatRoutes(t *testing.T) {
 		t.Fatalf("static routes mutated: %+v", h.srv.FleetRoutes)
 	}
 	// The ssh config `fleet login` writes carries the advertised routes too.
-	if cfg := h.srv.sshConfigFor("alice", nil); !bytes.Contains([]byte(cfg), []byte("HostName mini.tail.ts.net")) {
+	if cfg := h.srv.sshConfigFor("alice", nil, nil); !bytes.Contains([]byte(cfg), []byte("HostName mini.tail.ts.net")) {
 		t.Fatalf("ssh config lacks the heartbeat's route:\n%s", cfg)
 	}
 }
