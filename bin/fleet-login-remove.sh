@@ -22,6 +22,8 @@
 # itself — `fleet node leave --hub-only` (issue #1928): the hub retires its
 # token and drops it from the machines page. A hub that cannot be asked is a
 # WARN with what to do instead, never a reason to keep the login.
+# Step 2b purges its credential separation — the credsep proxy, the store under
+# /var/db/fleet-cred, root's conf and logs, its place on the shared proxy (#2418).
 # After the login is gone its name AND its GUID are removed from every
 # com.apple.access_* group (Remote Login's SSH allow-list, Screen Sharing, …).
 # `dseditgroup -d` cannot do that once the user record is gone ("Record was not
@@ -183,6 +185,19 @@ for stale in "$DDIR"/com.claude-fleet."$LOGIN".*.plist.* \
   [ -f "$stale" ] || continue
   run sudo rm -f "$stale"
 done
+
+# A login whose credentials were separated (issue #1971; at open, #2294) has a
+# root-started proxy run as the role account, a store holding pool tokens, root's
+# <LIB>/<login>.conf and its logs — none of it in the home or owned by the login,
+# so steps 2-6 never saw it: the proxy ran on for a login that no longer existed
+# (issue #2418). Purged, not undone — nothing goes back into the home — while the
+# login still exists; a shared-proxy tenant is dropped from it. Idempotent: a
+# login never separated prints "nothing of credsep here".
+step 2b "remove $LOGIN's credential separation (proxy, store, root conf, logs)"
+if [ "$APPLY" = 0 ] && [ -f "$BIN/fleet-credsep.py" ]; then
+  python3 -I "$BIN/fleet-credsep.py" purge --login "$LOGIN" --dry-run 2>&1 | sed 's/^/  /'
+fi
+run sudo python3 -I "$BIN/fleet-credsep.py" purge --login "$LOGIN"
 
 step 3 'remove the copied Claude account pool'
 run sudo rm -rf "$ACCOUNTS"

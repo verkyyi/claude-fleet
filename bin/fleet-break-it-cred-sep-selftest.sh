@@ -16,6 +16,8 @@
 #                              bin/fleet-cred-proxy.py (the upstream allow-list) — issue #2290
 #   root-log-in-home           bin/fleet-credsep.py agent_log (issue #2296): the root agent's
 #                              log is not in the home
+#   cred-login-removed-leftovers  bin/fleet-login-remove.sh step 2b, bin/fleet-credsep.py purge
+#                              (issue #2418): a deleted login's proxy, store, conf and logs go too
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -233,6 +235,41 @@ PY
   root_writes "$eff" 2>/dev/null
   ! grep -q 'ROOT WROTE' "$victim" || { WHY="root's write reached the link's target through $eff"; return 1; }
   WHAT="credsep 把节点代理改成 root 启动时，日志从 ~/.ccquota/agent.log 移到 \$LOG_BASE/<登录>/agent.log：同一根软链，旧写法 root 写进目标文件，新写法写不到"
+}
+
+# 2026-10-08 m4 (#2298's drill, issue #2418): `fleet-login-remove.sh tscan1008
+# --delete-home --apply` deleted a login separated at open (#2294) and left its
+# credsep proxy running as the role account, the store with the pool tokens,
+# root's <LIB>/<login>.conf and its logs. The offboarding now purges them before
+# the login goes: the step in its plan, and the purge itself leaving nothing.
+drill_cred_login_removed_leftovers() {
+  CAP=20
+  local sb="$WORK/loginrm" t0 out rc left n_del n_purge
+  mkdir -p "$sb/pool" "$sb/homes/brkgone/.config/claude-fleet" "$sb/inst" "$sb/daemons"
+  printf 'tok-POOL-1\n' > "$sb/pool/p1"; printf 'CCQUOTA_ACCOUNT=p1\n' > "$sb/pool/p1.conf"
+  printf 'brkgone:%s:%s:%s\n' "$(id -u)" "$(id -g)" "$sb/homes/brkgone" > "$sb/pw"
+  set -- FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" FLEET_CREDSEP_LOG_BASE="$sb/log" \
+    FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" FLEET_CREDSEP_ROLE="$(id -un)" \
+    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw"
+  out=$(env "$@" bash "$BIN/fleet-credsep.sh" install --login brkgone --fresh --pool-src "$sb/pool" --install-dir "$sb/inst" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="the rig: install --fresh failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  mkdir -p "$sb/log/brkgone"; : > "$sb/log/brkgone.log"; : > "$sb/log/brkgone.launch.log"; : > "$sb/lib/brkgone.conf"
+  [ -n "$(ls "$sb/daemons" 2>/dev/null)" ] && [ -d "$sb/db/brkgone" ] \
+    || { WHY="the rig: no proxy service / store after install: $(ls -a "$sb/daemons" "$sb/db" 2>&1 | tr '\n' ' ')"; return 1; }
+  t0=$(now)
+  # 1. the offboarding plans the purge, before the login is deleted
+  n_purge=$(grep -n 'fleet-credsep.py" purge --login' "$BIN/fleet-login-remove.sh" | grep -v dry-run | head -1 | cut -d: -f1)
+  n_del=$(grep -n 'sysadminctl -deleteUser "\$LOGIN"' "$BIN/fleet-login-remove.sh" | head -1 | cut -d: -f1)
+  [ -n "$n_purge" ] || { WHY="fleet-login-remove.sh has no credsep purge step: a deleted login's proxy runs on as the role account"; return 1; }
+  [ -n "$n_del" ] && [ "$n_purge" -lt "$n_del" ] || { WHY="the purge comes after the login is deleted (line $n_purge ≥ $n_del)"; return 1; }
+  # 2. the purge itself, as step 2b runs it
+  out=$(env "$@" python3 -I "$BIN/fleet-credsep.py" purge --login brkgone 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="purge failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  left=$(cd "$sb" && ls -d daemons/*brkgone* db/brkgone* run/brkgone lib/brkgone.conf log/brkgone* 2>/dev/null | tr '\n' ' ')
+  [ -z "$left" ] || { WHY="left behind after the purge: $left"; return 1; }
+  grep -rq tok-POOL "$sb/db" "$sb/homes" 2>/dev/null && { WHY="a pool token is still on disk: $(grep -rl tok-POOL "$sb/db" "$sb/homes")"; return 1; }
+  WHAT="删号第 2b 步（删登录之前）credsep purge：代理服务、store（含池令牌）、root 的 <LIB>/<登录>.conf、日志一个不剩，什么也不搬回家目录"
 }
 
 cred_run_drills "$0"
