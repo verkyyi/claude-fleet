@@ -1135,14 +1135,15 @@ try:
     (bin_dir / 'fleet-history.sh').symlink_to(real_bin / 'fleet-history.sh')
 
     # A row waiting on you is its own red `!` (issue #1950: the 要你处理 summary
-    # line went); prefix k — and the `needs` verb — land on it and switch to it,
-    # with the keyboard on the session.
+    # line went); a tap on the bar's 「! N 等你」 (F10 to the list, conf/tmux-shell.conf)
+    # — and the `needs` verb — land on it and switch to it, with the keyboard on
+    # the session. prefix k, its key until issue #2362, does nothing now.
     was_on = tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}')
     was_state = tm('show-options', '-wqv', '-t', w2, '@claude_state')
     def on_window():
         return tm('display-message', '-p', '-t', 'fleet-test:', '#{window_id}')
     tm('select-window', '-t', w1)
-    wait_for(lambda: bool(view_on(w1)), 'the prefix k leg needs the sidebar on the first worker')
+    wait_for(lambda: bool(view_on(w1)), 'the needs leg needs the sidebar on the first worker')
     tm('set-option', '-w', '-t', w2, '@claude_state', 'needs')
     tm('set-option', '-w', '-t', w2, '@claude_needs', 'ask')
     wait_for(lambda: any(l[2:3] == '!' for l in side_rows()), 'the row waiting on you lost its red !')
@@ -1156,8 +1157,11 @@ try:
     os.write(terminal, b'\x02')
     time.sleep(.3)
     os.write(terminal, b'k')
+    time.sleep(1.5)
+    check(on_window() == w1, 'prefix k (retired, issue #2362) still switched windows')
+    tm('send-keys', '-t', side, 'F10')   # what a tap on 「! N 等你」 sends the list
     wait_for(lambda: bool(view_on(w2)) and on_window() == w2,
-             'prefix k did not switch to the row waiting on you')
+             'a tap on 「! N 等你」 (F10) did not switch to the row waiting on you')
     tm('select-window', '-t', w1)
     wait_for(lambda: bool(view_on(w1)), 'the sidebar did not come back to the first worker')
     park('needs')
@@ -1168,7 +1172,7 @@ try:
     if was_state:
         tm('set-option', '-w', '-t', w2, '@claude_state', was_state)
     tm('select-window', '-t', was_on)
-    wait_for(lambda: bool(view_on(was_on)), 'the sidebar did not come back after the prefix k leg')
+    wait_for(lambda: bool(view_on(was_on)), 'the sidebar did not come back after the needs leg')
 
     # The row menu (issue #898): a right-click on a row, or a tap on the
     # highlighted row (the second tap on a row the first one switched to), opens
