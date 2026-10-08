@@ -770,6 +770,26 @@ class H_Accounts(Sandbox):
         self.assertFalse(os.path.exists(os.path.join(self.home("bob"), "Library", "LaunchAgents",
                                                      "com.ccquota.agent.plist")))
 
+    def test_credsep_store_owned_by_the_role_account(self):
+        # m4 (issue #2336): the store's node.env is _fleetcred's, not root's —
+        # the owner check (forced on here) must take the role account
+        import getpass
+        cred = os.path.join(self.d, "cred")
+        os.makedirs(os.path.join(cred, "alice"))
+        json.dump({"login": "alice", "mode": "shared"}, open(os.path.join(cred, "alice", "meta.json"), "w"))
+        self.node_env(os.path.join(cred, "alice", "node.env"), "CCQUOTA_TOKEN=tok-alice\n")
+        self.agent_plist("alice", {"CCQUOTA_FLEET": "1"})
+        self.acct_table()
+        e = {"FLEET_CREDSEP_ROOT_BASE": cred, "FLEET_CREDSEP_RUN_BASE": "/run/fc", "FLEET_NODE_OWNER_CHECK": "1",
+             "FLEET_CREDSEP_ROLE": "no-such-role-account"}
+        r = self.run_sup("account", "adopt", "alice", env=e)
+        self.assertEqual(r.returncode, 1, "a store file of an unknown owner was read")
+        self.assertIn("no CCQUOTA_TOKEN", r.stderr)
+        e["FLEET_CREDSEP_ROLE"] = getpass.getuser()
+        r = self.run_sup("account", "adopt", "alice", env=e)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.login_env("alice")[0]["CCQUOTA_TOKEN"], "tok-alice")
+
     def test_adopted_before_moves_the_agent_left_behind(self):
         la = os.path.join(self.home("alice"), "Library", "LaunchAgents")
         self.plist(os.path.join(la, "com.claude-fleet.dispatch.plist"), "com.claude-fleet.dispatch")

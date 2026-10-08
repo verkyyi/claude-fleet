@@ -1112,16 +1112,18 @@ def account_services(paths, login, uid, home):
 AGENT_ENV_KEYS = re.compile(r"^(CCQUOTA_[A-Z0-9_]+|FLEET_CONF_DIR)$")
 
 
-def _env_file(path, uid):
+def _env_file(path, uid, also=()):
     """KEY=VALUE lines of a node.env, PARSED (never sourced). Root reads a file in a
-    login's home: never through a symlink, only one that login (or root) owns."""
+    login's home: never through a symlink, only one that login (or root) owns —
+    or an owner in <also> (the credsep store's role account, issue #2336)."""
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
         return None
     with os.fdopen(fd) as f:
         st = os.fstat(f.fileno())
-        if st.st_uid not in (uid, 0) and env("FLEET_NODE_TEST", "") != "1":
+        if st.st_uid not in (uid, 0) + tuple(also) and (env("FLEET_NODE_TEST", "") != "1"
+                                                         or env("FLEET_NODE_OWNER_CHECK", "") == "1"):
             return None
         out = {}
         for line in f:
@@ -1137,6 +1139,13 @@ def _env_file(path, uid):
             if eq and k.strip():
                 out[k.strip()] = v
         return out
+
+
+def _role_uids():
+    try:
+        return (pwd.getpwnam(env("FLEET_CREDSEP_ROLE", "_fleetcred")).pw_uid,)
+    except KeyError:
+        return ()
 
 
 def account_agent(paths, login, uid, home):
@@ -1164,7 +1173,9 @@ def account_agent(paths, login, uid, home):
         meta = read_json(os.path.join(cbase, login, "meta.json"), None)
         if isinstance(meta, dict) and meta.get("login") == login:
             ne_path = os.path.join(cbase, login, "node.env")
-            ne = _env_file(ne_path, 0)
+            # the store is the role account's (fleet-credsep.py: _fleetcred 0700),
+            # under a root-owned base — m4 (issue #2336) had every token there
+            ne = _env_file(ne_path, 0, _role_uids())
             run = env("FLEET_CREDSEP_RUN_BASE", "/var/run/fleet-cred")
             store = os.path.join(run, ".shared", "ctl.sock") if meta.get("mode") == "shared" \
                 else os.path.join(run, login, "ctl.sock")
