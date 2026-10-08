@@ -3740,6 +3740,40 @@ drill_oldcfg_broken_unmarked() {
   WHAT="删了 gone.sh / await 的发版后：w-broken 红「会坏·需重开」并点名（窗口·仓库·单号·状态），只缺 new.sh 的 w-loop 黄且列为循环中，没 manifest 的 w-old 照旧黄；三个都没被重开"
 }
 
+# ---- tmpdir-shared-root (#2442): a process with no TMPDIR — the `sudo -u` half of
+# a same-machine fleet-move, the tmux server it started, every pane in it — once
+# fell back to the /tmp/.claude-dash every login shares; the first login made it
+# 0700 and the next could not open a worker. Each login now has its own, the one
+# its daemons read (macOS: DARWIN_USER_TEMP_DIR), and the server carries it.
+drill_tmpdir_shared_root() {
+  CAP=10; BREAK_SOCK="$WORK/sock-td"; local d="$WORK/td" t0 out lib want hits
+  mkdir -p "$d/home" "$d/conf"
+  t0=$(now)
+  noenv() { env -u TMPDIR PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+              BREAK_SOCK="$BREAK_SOCK" "$@"; }
+  lib=$(noenv bash -c ". '$BIN/fleet-lib.sh'; printf '%s' \"\$FLEET_C\"") || { WHY="fleet-lib.sh did not load with no TMPDIR"; return 1; }
+  if [ "$(uname -s)" = Darwin ]; then want="$(getconf DARWIN_USER_TEMP_DIR)/.claude-dash"
+  else want="/tmp/claude-fleet-$(id -u)/.claude-dash"; fi
+  case "$lib" in /tmp/.claude-dash|/tmp/.claude-dash/) WHY="no TMPDIR still reads the shared /tmp/.claude-dash"; return 1 ;; esac
+  [ "$lib" = "$want" ] || { WHY="no TMPDIR reads $lib, not this login's own $want (the daemons' dir)"; return 1; }
+  # the later login opens a worker: its dash cache is its own and writable
+  out=$(noenv bash -c ". '$BIN/fleet-lib.sh'; mkdir -p \"\$FLEET_C\" && [ -w \"\$FLEET_C\" ] && [ -O \"\$FLEET_C\" ] && echo ok") 
+  [ "$out" = ok ] || { WHY="this login cannot write its own dash cache $lib"; return 1; }
+  # a server started with no TMPDIR: fleet-up / the move's launch stamp it, so a
+  # server-side spawn (run-shell, a bind, a hook) reads the same directory
+  env -u TMPDIR "$REAL_TMUX" -S "$BREAK_SOCK" -f /dev/null new-session -d -s td 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  noenv bash -c ". '$BIN/fleet-lib.sh'; fleet_server_tmpdir td" || { WHY="fleet_server_tmpdir failed"; return 1; }
+  nt run-shell "printf '%s' \"\${TMPDIR:-/tmp/claude-fleet-\$(id -u)}/.claude-dash\" > '$d/srv'"
+  until_ok "$CAP" test -s "$d/srv" || { WHY="the server-side spawn wrote nothing"; return 1; }
+  [ "$(cat "$d/srv")" = "$lib" ] || { WHY="a server-side spawn reads $(cat "$d/srv"), the session's lib $lib — not one directory"; return 1; }
+  SECS=$(since "$t0")
+  # and nothing spells the shared fallback any more
+  hits=$(grep -rn 'TMPDIR:-/tmp}/\.claude-dash\|"/tmp", "\.claude-dash"\|'"'/tmp'), '.claude-dash'" "$ROOT/bin" "$ROOT/hooks" 2>/dev/null \
+           | grep -v -- '-selftest' | head -3)
+  [ -z "$hits" ] || { WHY="a script still falls back to the shared /tmp/.claude-dash: $hits"; return 1; }
+  WHAT="没有 TMPDIR 的进程（sudo -u 的半边、它起的 tmux 服务器）读写本登录自己的 ${want}：可写、属主是自己；服务器全局环境带上 TMPDIR，服务端起的命令读同一个目录；没有脚本再回退到共用的 /tmp/.claude-dash"
+}
+
 # A new login's first Claude start asks questions nobody in a fleet pane answers —
 # on 2026-10-08 the new `verky` logins' `guide` sessions sat on 2.1.293's "Make
 # auto mode your default permission mode?" for good (issue #2401). The fake

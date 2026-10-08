@@ -16,7 +16,7 @@
 set -uo pipefail
 MODE="${1:-all}"
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
-C="${TMPDIR:-/tmp}/.claude-dash"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 # this fleet's issues cache (slug'd via sessmap; flat fallback). FLEET_SESSION is

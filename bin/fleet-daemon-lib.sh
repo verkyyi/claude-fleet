@@ -267,7 +267,7 @@ fleet_now_pin() { _FLEET_NOW=$(date +%s); _FLEET_NOW_S0="${SECONDS:-}"; _FLEET_N
 # `root` is the install root, i.e. the caller's "$BIN/..".
 fleet_daemon_state_dir() {
   _fd_root="${1:-${FLEET_DAEMON_ROOT:-}}"
-  _fd_base="${TMPDIR:-/tmp}/.claude-dash"
+  _fd_base="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"
   if [ -n "$_fd_root" ]; then
     _fd_rp=$(cd "$_fd_root" 2>/dev/null && pwd -P) || _fd_rp=''
     _fd_lp=$(cd "${FLEET_LIVE_ROOT:-$HOME/.claude/fleet}" 2>/dev/null && pwd -P) || _fd_lp=''
@@ -425,7 +425,7 @@ fleet_daemon_stamp_tick() {
 fleet_daemon_tick_ts() {
   _fd_dir=$(fleet_daemon_state_dir "${2:-}")
   _fd_ts=$(_fleet_daemon_epoch "$_fd_dir/${1:-}.tick")
-  _fd_gl="${TMPDIR:-/tmp}/.claude-dash/global"
+  _fd_gl="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global"
   # Resolve the source list BEFORE narrowing IFS: fleet_daemon_field splits the
   # registry row with `read`, which honours IFS — running it under IFS=',' would
   # hand back the whole row instead of the third field.

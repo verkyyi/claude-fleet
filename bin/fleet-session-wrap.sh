@@ -57,6 +57,12 @@ for d in ${FLEET_TOOL_DIRS:-$HOME/.local/bin /opt/homebrew/bin /usr/local/bin}; 
   case ":$PATH:" in *":$d:"*) ;; *) PATH="${PATH:+$PATH:}$d" ;; esac
 done
 export PATH
+# This login's TMPDIR (issue #2442): a session opened from a `sudo -u` half (a
+# same-machine fleet-move) has none, and every script it runs would read the dash
+# cache from /tmp every login shares. fleet-lib.sh's fleet_user_tmpdir, inline.
+if [ -z "${TMPDIR:-}" ] && [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+  TMPDIR=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -d "$TMPDIR" ] && export TMPDIR || unset TMPDIR
+fi
 # The agent's `tmux` is the fleet's shim (issue #1841): every shell the session
 # opens — the Bash tool, `bash -c`, Codex's, Claude's `!` — finds bin/tmux-shim
 # first, and a delete aimed at a fleet's server is refused there. Only the agent

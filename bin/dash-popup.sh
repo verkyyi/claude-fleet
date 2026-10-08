@@ -170,7 +170,7 @@ if [ -n "$TITLE" ]; then
   me=''
   if [ -n "$sess" ]; then
     # shellcheck disable=SC2034  # read by the lib sourced on the next line
-    FLEET_STATUS_G="${TMPDIR:-/tmp}/.claude-dash/global"; . "$BIN/fleet-status-lib.sh"
+    FLEET_STATUS_G="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global"; . "$BIN/fleet-status-lib.sh"
     fleet_status_remote_head "$sess" && me=$FSR_ME
   fi
   [ -z "$me" ] || title="$title · $me"

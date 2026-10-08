@@ -15,7 +15,27 @@
 # caller: every optional expansion is defaulted (`${VAR:-}`) and every helper
 # returns cleanly.
 
-FLEET_C="${TMPDIR:-/tmp}/.claude-dash"
+# The dash cache is THIS login's (issue #2442): never the /tmp/.claude-dash every
+# login on the machine shares — the first login to create it makes it 0700 and the
+# next one is locked out of its own fleet. A process with no TMPDIR (a `sudo -u`
+# half of a same-machine fleet-move, a tmux server it started) takes the login's
+# own temp dir: on macOS the per-user one launchd hands the daemons
+# (`getconf DARWIN_USER_TEMP_DIR`), EXPORTED so every child — a tmux server, a
+# pane, a script that spells the path inline — reads the daemons' directory;
+# elsewhere `/tmp/claude-fleet-<uid>`, the same fallback every inline spelling
+# writes (`${TMPDIR:-/tmp/claude-fleet-$(id -u)}`). BREAK-IT `tmpdir-shared-root`.
+fleet_user_tmpdir() {
+  local d=''
+  [ "$(uname -s 2>/dev/null)" = Darwin ] && d=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)
+  [ -n "$d" ] && [ -d "$d" ] || d="/tmp/claude-fleet-$(id -u)"
+  printf '%s' "$d"
+}
+if [ -z "${TMPDIR:-}" ]; then
+  _fleet_ut=$(fleet_user_tmpdir)
+  case "$_fleet_ut" in /tmp/claude-fleet-*) ;; *) TMPDIR=$_fleet_ut; export TMPDIR ;; esac
+  unset _fleet_ut
+fi
+FLEET_C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"
 # Per-fleet configs live here. Override FLEET_CONF_DIR to relocate (used by the
 # test harness).
 FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
@@ -2138,6 +2158,17 @@ fleet_server_local_bin() {
   case "$cur" in PATH=*) cur=${cur#PATH=} ;; *) cur=$PATH ;; esac
   case ":$cur:" in *":$HOME/.local/bin:"*) return 0 ;; esac
   tmux -L "$sock" set-environment -g PATH "$HOME/.local/bin:$cur" 2>/dev/null
+}
+
+# fleet_server_tmpdir <socket> — a fleet's tmux server carries THIS login's TMPDIR
+# in its global environment (issue #2442), so a window it spawns server-side (a
+# bind, a hook, run-shell) reads the dash cache the daemons do. A server started
+# by a `sudo -u` half had none, and every pane in it fell back to a shared /tmp.
+# A no-op when the server already has one, or this process has none to give.
+fleet_server_tmpdir() {
+  [ -n "${TMPDIR:-}" ] || return 0
+  case "$(tmux -L "$1" show-environment -g TMPDIR 2>/dev/null)" in TMPDIR=?*) return 0 ;; esac
+  tmux -L "$1" set-environment -g TMPDIR "$TMPDIR" 2>/dev/null
 }
 
 # Where claude and tmux live when PATH does not say (issue #1774, #1784). A shell

@@ -12,7 +12,7 @@
 # to the current pane width every render (e.g. after a resize / toggle).
 num="${1//[^0-9]/}"
 export LANG="${LANG:-en_US.UTF-8}" LC_ALL="${LC_ALL:-en_US.UTF-8}"
-C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"

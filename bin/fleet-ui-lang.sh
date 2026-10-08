@@ -934,7 +934,7 @@ fleet_ui_fail() {
 # cannot be written fails OPEN (the hint shows), never silent forever.
 fleet_ui_hint_once() {
   case "${1:-}" in ''|*[!A-Za-z0-9_]*) return 0 ;; esac
-  _fuh_d="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global"
+  _fuh_d="${FLEET_C:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash}/global"
   _fuh_s="$_fuh_d/hint.$1.$(date +%Y%m%d)"
   [ -e "$_fuh_s" ] && return 1
   mkdir -p "$_fuh_d" 2>/dev/null

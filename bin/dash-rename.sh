@@ -37,7 +37,7 @@
 # branch: an EMPTY name cancels. Without [name] it reads `@rename_to` off the
 # window (and clears it) — a seam for callers that can only set an option.
 set -uo pipefail
-C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; flag="$C/rename_target"
 
 if [ "${1:-}" = --wid ]; then
   BIN="$(cd "$(dirname "$0")" && pwd)"

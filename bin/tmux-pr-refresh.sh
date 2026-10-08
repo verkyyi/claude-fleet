@@ -64,7 +64,7 @@ fi
 _FLEET_GH_LIB_DIR="$BIN"   # the lib would fork dirname to find itself (#888)
 [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
 command -v fleet_gh_share_on >/dev/null 2>&1 || fleet_gh_share_on() { return 1; }
-C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 G="$C/global"                       # machine-wide caches (git_<key>) — issue #181
 # Sweep this run's PID-unique temps on exit (across the fleets/<slug>/ subdirs now;
 # a failed gh fetch only `mv`s on success, so it would otherwise orphan a 0-byte

@@ -421,7 +421,7 @@ def reconcile(session, args, records, rows, now, stats):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--dry-run', action='store_true')
-    p.add_argument('--cache-dir', default=os.path.join(os.environ.get('TMPDIR', '/tmp'), '.claude-dash', 'global'))
+    p.add_argument('--cache-dir', default=os.path.join(os.environ.get('TMPDIR') or f'/tmp/claude-fleet-{os.getuid()}', '.claude-dash', 'global'))
     p.add_argument('--registry', default=os.environ.get('FLEET_CC_SESSIONS_DIR', os.path.expanduser('~/.claude/sessions')))
     p.add_argument('--idle-secs', type=int, default=int(os.environ.get('FLEET_STATE_IDLE_SECS') or 30))
     p.add_argument('--exited-secs', type=int, default=120)

@@ -143,7 +143,7 @@ def node_old(node):
     """Whether the hub calls that machine's fleet behind the stable mark (#644,
     `old:<n>` in hub_nodes' ver_state — the word the bar's machine chip drew
     before the title became this line)."""
-    g = os.environ.get("FLEET_STATUS_G") or os.path.join(os.environ.get("TMPDIR") or "/tmp", ".claude-dash", "global")
+    g = os.environ.get("FLEET_STATUS_G") or os.path.join(os.environ.get("TMPDIR") or f"/tmp/claude-fleet-{os.getuid()}", ".claude-dash", "global")
     try:
         with open(os.path.join(g, "hub_nodes"), encoding="utf-8", errors="replace") as f:
             for line in f:

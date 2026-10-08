@@ -82,7 +82,7 @@ else
 fi
 eval "$(bash "$BIN/dash-keymap.sh" --panel backlog env)"
 HDR="$SLOTS · ↵ work · $DASH_GLYPH_NEW new · ? keys"
-ACT="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"
+ACT="${FLEET_C:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash}/global/issues_act_${FLEET_SESSION:-_}.$$"
 if [ -n "${POPUP:-}" ]; then
   ENTER_TAIL='+abort'
   # POPUP only: tappable button chips for iPad/Termius, where the keyboard is a

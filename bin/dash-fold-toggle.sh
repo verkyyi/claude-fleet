@@ -140,7 +140,7 @@ fi
 # still in the cache once rewritten, so it cannot grow past the live list.
 if [ "${target#wid:}" != "$target" ]; then
   [ -n "$SESS" ] || exit 0
-  G="${TMPDIR:-/tmp}/.claude-dash/global"
+  G="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global"
   RC="$G/remote_$SESS"; RF="$G/remote_fold_$SESS"
   [ -s "$RC" ] || exit 0
   self=${target#wid:}
@@ -329,7 +329,7 @@ fi
 # up. Any failure falls back to the plain reload: a keystroke that costs an extra
 # render is fine, a blank list is not.
 htgt=$(tmux display-message -p -t "$hwid" '#{?#{session_group},#{session_group},#{session_name}}:#{window_index}' 2>/dev/null) || htgt=''
-SNAP="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/dash_fold_rows_${FLEET_SESSION:-default}"
+SNAP="${FLEET_C:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash}/global/dash_fold_rows_${FLEET_SESSION:-default}"
 pos=''
 if [ -n "$htgt" ]; then
   mkdir -p "${SNAP%/*}" 2>/dev/null || true

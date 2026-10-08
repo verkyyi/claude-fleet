@@ -12,7 +12,7 @@
 # finalizer creates ONE issue: title = first line, body = full text
 # (dash-new-session.sh already supports multi-line input).
 set -uo pipefail
-C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 BUF="$C/newtask_text"; PREV="$C/newtask_prev"; TS="$C/newtask_ts"; LOCK="$C/newtask.lock"
 QUIET="${DASH_TASK_QUIET:-2}"   # seconds of silence before the task is finalized
 q="${1:-}"; [ -z "$q" ] && exit 0

@@ -106,7 +106,7 @@ _FLEET_GH_LIB_DIR="$BIN"   # the lib would fork dirname to find itself (#888)
 [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
 command -v fleet_gh_share_on >/dev/null 2>&1 || fleet_gh_share_on() { return 1; }
 
-C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 STATE="${FLEET_ISSUE_BRIDGE_STATE_DIR:-$HOME/.config/claude-fleet/issue-bridge}"
 mkdir -p "$STATE" 2>/dev/null || :
 LEASE_DIR="${FLEET_DISPATCH_LEASE_DIR:-$HOME/.claude/leases}"

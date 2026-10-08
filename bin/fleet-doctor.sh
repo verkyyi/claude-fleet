@@ -704,7 +704,7 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
   # prints nothing — the degenerate case. WARN when any machine is behind stable;
   # a version this checkout cannot resolve, or none reported, is "unknown" — the
   # #635 rule: never 0, never current.
-  hn="${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}/hub_nodes"
+  hn="${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}/hub_nodes"
   if [ -s "$hn" ]; then
     hn_sum=$(LC_ALL=C awk -F "$(printf '\037')" '
       $1 == "#ts" { ts = $2; next }
@@ -876,7 +876,7 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
     # a fleet not swept, an account not warned — lives in the heartbeat's over= and
     # skipped=, and would otherwise only ever be visible in the launchd log. Same
     # argument as the collector's line below, which #653 added for the same reason.
-    qhb="${TMPDIR:-/tmp}/.claude-dash/global/quotawatch.heartbeat"
+    qhb="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/quotawatch.heartbeat"
     if [ -f "$qhb" ]; then
       qhb_get() { sed -n "s/^$1=//p" "$qhb" | head -1; }
       qhb_dur=$(qhb_get dur); qhb_budget=$(qhb_get budget)
@@ -907,7 +907,7 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
     # lesson: a check that can cry wolf is worse than no check, because the next
     # real one gets scrolled past. FLEET_ACCOUNT_QUOTA_STALE is the horizon the
     # rest of this section already uses for "no tick has run".
-    for qmf in "${TMPDIR:-/tmp}/.claude-dash/global/quotawatch.modelcap."*; do
+    for qmf in "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/quotawatch.modelcap."*; do
       case "$qmf" in *'quotawatch.modelcap.*') continue ;; esac   # an unmatched glob
       [ -f "$qmf" ] || continue
       qmfleet=${qmf##*/quotawatch.modelcap.}
@@ -1385,7 +1385,7 @@ fi
 # heartbeat means the dash caches (git/ctx/usage, and pre-#551 the quota watch)
 # are not moving: wedged tick (past FLEET_COLLECT_DEADLINE it is killed + superseded
 # by the next one) or an unloaded com.claude-fleet.collect.
-hb="${TMPDIR:-/tmp}/.claude-dash/global/collect.heartbeat"
+hb="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/collect.heartbeat"
 if [ -f "$hb" ]; then
   hb_now=$(date +%s)
   hb_get() { sed -n "s/^$1=//p" "$hb" | head -1; }
@@ -2637,7 +2637,7 @@ fi
 # every other machine closes its own on the next tick, so a lasting line here is
 # a machine that cannot ask (no node token, an old hub) or FLEET_ORCHESTRATOR
 # forced on in two places. Silent when there is no client cache here.
-for _of in "${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}"/orch_multi_*; do
+for _of in "${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}"/orch_multi_*; do
   [ -s "$_of" ] || continue
   _om=$(awk -F '\037' '{ printf "%s%s(%s)", (NR > 1 ? " " : ""), $1, $2 }' "$_of")
   warn orch "${_of##*/orch_multi_}: 不止一个编排会话 — $_om (fix: 每台的 \`fleet-orchestrator.sh where <fleet>\` 应只有一台 here；不能问入口的那台补 node token，或去掉它的 FLEET_ORCHESTRATOR=1)"
@@ -2813,7 +2813,7 @@ fi
 # heuristic above it is not fooled by an idle TUI repainting its footer, and it does
 # not share the spinner's process, so a wedged spinner no longer means `working`
 # forever. Silence here means com.claude-fleet.sleep itself is not ticking.
-rhb="${TMPDIR:-/tmp}/.claude-dash/global/reconcile.heartbeat"
+rhb="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/reconcile.heartbeat"
 rhb_age=''
 if [ -f "$rhb" ]; then
   rhb_at=$(sed -n 's/^at=//p' "$rhb" | head -n1)
@@ -3391,7 +3391,7 @@ fi
 # --- alerts (issue #1238): what the status bar counts, READ off the one
 # producer's file ($G/alerts.ndjson, bin/fleet-alerts.sh) — the doctor computes
 # none of it again. An alarm is a WARN; warnings and needs are listed, not counted.
-_af="${TMPDIR:-/tmp}/.claude-dash/global/alerts.ndjson"
+_af="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/alerts.ndjson"
 if [ -f "$_af" ] && command -v bash >/dev/null 2>&1; then
   _fa="$(dirname "$0")/fleet-alerts.sh"
   # shellcheck disable=SC2046

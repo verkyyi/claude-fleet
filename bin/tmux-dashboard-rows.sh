@@ -27,7 +27,7 @@ BIN="$(cd "${BIN:-/}" && pwd)"
 . "$BIN/fleet-lib.sh"   # fleet_cache: route prmap through THIS fleet's slug'd cache
 . "$BIN/fleet-ui-lang.sh"
 [ -n "${FLEET_SESSION:-}" ] && fleet_load_conf "$FLEET_SESSION" 2>/dev/null || true
-C="${TMPDIR:-/tmp}/.claude-dash"; [ -d "$C" ] || mkdir -p "$C"   # 1Hz path: no exec once it exists (#888)
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; [ -d "$C" ] || mkdir -p "$C"   # 1Hz path: no exec once it exists (#888)
 G="$C/global"                       # machine-wide caches (git_/ctx_) — issue #181
 SIDEBAR=0; [ "${1:-}" = --sidebar ] && SIDEBAR=1
 

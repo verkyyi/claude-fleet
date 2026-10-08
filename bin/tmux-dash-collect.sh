@@ -90,7 +90,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 _FLEET_GH_LIB_DIR="$BIN"   # the lib would fork dirname to find itself (#888)
 [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
 command -v fleet_gh_share_on >/dev/null 2>&1 || fleet_gh_share_on() { return 1; }
-C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 # Per-fleet cache layout (issue #181): slug-keyed fetches live under fleets/<slug>/
 # and machine-wide caches under global/. G is the global bucket.
 G="$C/global"; mkdir -p "$G"

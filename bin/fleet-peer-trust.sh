@@ -42,7 +42,7 @@ names=$(
   done
   for n in $(_val FLEET_TRUST_MACHINES); do printf '%s\n' "$n"; done
   [ -f "$HOME/.ssh/fleet-ssh-config" ] && awk '$1 == "Host" { for (i = 2; i <= NF; i++) print $i }' "$HOME/.ssh/fleet-ssh-config"
-  hn="${TMPDIR:-/tmp}/.claude-dash/global/hub_nodes"
+  hn="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/hub_nodes"
   [ -f "$hn" ] && awk -F '\037' '$1 !~ /^#/ && $1 != "" { print $1 }' "$hn"
 )
 # This machine's own names: its hostname and what FLEET_NODE_ALIASES calls it.

@@ -52,7 +52,7 @@ def save(path, value):
 
 
 def state_dir():
-    return Path(os.environ.get('FLEET_C', str(Path(os.environ.get('TMPDIR', '/tmp')) / '.claude-dash'))) / 'global'
+    return Path(os.environ.get('FLEET_C', str(Path(os.environ.get('TMPDIR') or f'/tmp/claude-fleet-{os.getuid()}') / '.claude-dash'))) / 'global'
 
 
 @contextmanager

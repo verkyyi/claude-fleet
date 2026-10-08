@@ -8,7 +8,7 @@
 # NB: fzf matches the FIRST ')' in transform(...) — nested parens in inline
 # actions break it, which is why this logic lives in a helper script.
 set -uo pipefail
-C="${TMPDIR:-/tmp}/.claude-dash"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"
 q="${1:-}"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$C/rename_target" ] || [ -f "$C/bind_target" ]; then

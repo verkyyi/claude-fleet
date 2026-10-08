@@ -67,7 +67,7 @@ export FLEET_DASH_POPUP_MAX_AGE FLEET_DASH_POPUP_POLL       # inherited by the r
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 WAIT="$BIN/dash-popup-wait.sh"   # pauses the reload while @popup_open is fresh (issue #308/#431)
-C="${TMPDIR:-/tmp}/.claude-dash"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"
 
 # Scope rows to THIS fleet's tmux session (strict per-fleet). The rows producer and
 # its reload-binds inherit FLEET_SESSION; unset ⇒ show-all (single-fleet back-compat).

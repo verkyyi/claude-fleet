@@ -14,7 +14,7 @@
 #                the agent choice, and the prompt label shows it).
 #   jump         (default, empty query): select the target window
 set -uo pipefail
-C="${TMPDIR:-/tmp}/.claude-dash"; flag="$C/rename_target"; bindflag="$C/bind_target"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; flag="$C/rename_target"; bindflag="$C/bind_target"
 target="${1:-}"; q="${2:-}"
 # The highlighted row, as fleet_selection_repo reads it (issues #997/#1010): the
 # bind passes `{2}:{4}` — a session row's WINDOW ID (`@12`; field 1 is the

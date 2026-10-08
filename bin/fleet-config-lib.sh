@@ -747,7 +747,7 @@ fcfg_repo_write() {
 # modal's ⌃s WRITE-SCOPE toggle — fleet or repo:<slug> (issue #1102; there is no
 # user-facing global scope any more). Persisted per-session in the dash cache dir
 # so it survives fzf reloads.
-fcfg_wscope_file()   { printf '%s/global/config_scope_%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${1:-_}"; }
+fcfg_wscope_file()   { printf '%s/global/config_scope_%s' "${FLEET_C:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash}" "${1:-_}"; }
 # A stored repo:<slug> whose repo is no longer hosted reads back as fleet, so a
 # stale scope can never route an edit nowhere; so does a `global` left by an
 # older modal (the fleet⇄global toggle it came from is gone).
