@@ -32,9 +32,22 @@
 #   fleet hub set <key> <value> the hub's settings, at once, audited (#1986);
 #                               fleet hub settings | get <key> | unset <key>
 #   fleet hub invite [github]   an install command that lets one newcomer in (#2261)
-#   fleet run claude|codex [args]
+#   fleet claude|codex [--node m4] [a first sentence…]
+#                               a new session in your home directory on a
+#                               fleet machine, the client onto it (#2264)
+#   fleet claude|codex --here [args]
 #                               a session on THIS computer through its
 #                               credential proxy, no credential in it (#2136)
+#   fleet run claude|codex [args]
+#                               旧写法 of `fleet claude|codex --here`
+#
+#                    fleet claude          fleet claude --here
+#     runs on        a fleet machine       this computer
+#     sees files of  that machine ($HOME)  this computer (the cwd)
+#     after you quit keeps running         ends with the agent
+#     other device   can pick it up        no
+#     on the list    yes                   no
+#
 #   fleet account add --provider claude|codex --label <name>
 #                               on a fleet machine: sign a new subscription in
 #                               and hand it to the hub, no copy kept (#2084)
@@ -102,7 +115,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,59p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
@@ -139,6 +152,12 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
   fi
   exit $rc
 fi
+# `fleet claude` / `fleet codex` (issue #2264): a session in one command — never
+# the node's own launchers of the same name (fleet-claude.sh / fleet-codex.sh)
+case $cmd in
+  claude|codex)
+    exec "$here/fleet-home-session.sh" "$@" ;;
+esac
 for ext in py sh; do
   if [ -x "$here/fleet-$cmd.$ext" ]; then
     shift

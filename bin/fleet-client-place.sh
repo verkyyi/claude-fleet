@@ -2,7 +2,7 @@
 # fleet-client-place.sh — open a session on a machine, from the client (issue
 # #1777, EPIC #1776 C1).
 #
-#   fleet-client-place.sh <repo> <issue|scratch|restore:<key>|new> [--node <m>|auto]
+#   fleet-client-place.sh <repo> <issue|scratch|home|restore:<key>|new> [--node <m>|auto]
 #                         [--title <t>] [--name <n>] [--agent claude|codex]
 #                         [--reap <policy>] [--body-file <f>]
 #
@@ -13,6 +13,11 @@
 # <repo> `-` (issue #1956, the writing area's 「不关联仓库」): a scratch of no repo
 # — opened in $HOME, `@norepo 1`, on any of this person's machines; only a
 # scratch. A scratch's --body-file is its seed: the session starts working on it.
+#
+# `- home` (issue #2264, EPIC #2259 共同约定 2): the HOME session — `fleet claude`
+# / `fleet codex`, a newcomer's first session. The same ask as `- scratch` (the
+# hub's scratch + no_repo; the node takes one from its pool, #2233, or opens one
+# cold): one name for the one primitive, so no caller writes a road of its own.
 #
 # <issue> is a number (or issue-<N>); restore:<key> resumes a /fleet-history row
 # (issue-<N> / scratch-<N>, a multi-repo fleet's <slug>: prefix allowed). A
@@ -82,13 +87,15 @@ fi
 KIND=''; ISSUE=''; KEY=''
 case "$WHAT" in
   scratch) KIND=scratch ;;
+  home) [ "$REPO" = - ] || { printf 'fleet-client-place: a home session belongs to no repo (-)\n' >&2; exit 2; }
+        KIND=scratch ;;
   new) KIND=new ;;
   restore:?*) KIND=restore; KEY=${WHAT#restore:} ;;
   issue-[1-9]*) KIND=issue; ISSUE=${WHAT#issue-} ;;
   [1-9]*) KIND=issue; ISSUE=$WHAT ;;
 esac
 case "$ISSUE" in *[!0-9]*) KIND='' ;; esac
-[ -n "$KIND" ] || { printf 'fleet-client-place: %s is not an issue number, scratch, restore:<key> or new\n' "$WHAT" >&2; exit 2; }
+[ -n "$KIND" ] || { printf 'fleet-client-place: %s is not an issue number, scratch, home, restore:<key> or new\n' "$WHAT" >&2; exit 2; }
 if [ "$KIND" = new ]; then
   [ -n "$TITLE" ] || { printf 'fleet-client-place: new needs --title\n' >&2; exit 2; }
 fi
