@@ -95,7 +95,11 @@ var tailnetSelfName = func(ctx context.Context) string {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "status", "--json", "--peers=false").Output()
+	tcmd := exec.CommandContext(ctx, bin, "status", "--json", "--peers=false")
+	if prepCmd(ctx, tcmd) != nil {
+		return ""
+	}
+	out, err := tcmd.Output()
 	if err != nil {
 		return ""
 	}

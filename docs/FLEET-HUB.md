@@ -898,6 +898,22 @@ Directories are private and databases contain no SSH private keys or provider
 credentials. The Hub relies on the administrator's SSH configuration/agent and
 each node's local provider login. Hub access tokens are not forwarded to nodes.
 
+### One node program per machine (`ccquota agent --machine`, #2333)
+
+A managed machine runs ONE `ccquota agent --machine` (root, started by the node
+supervisor's `node-agent` child) instead of one `ccquota agent` per login. It
+opens one control connection with the machine's own node token (hello capability
+`machine`), and each login says its own hello on it: `control.Message.login` set,
+the login's own node token in `Hello.login_token`. From there every message for
+or from that login carries `login`; the hub keeps each login its own endpoint
+(roster row, leases, relays, account ops), only the wire is shared. A login hello
+whose token is another login's, the machine's own or another machine's is
+answered `WRONG_LOGIN` and audited (`machine_login`); either side answers
+`WRONG_LOGIN` to a message for a login the link does not carry. The roster marks
+the link `machine_link`, each login it carries `via`, and every machine row counts
+its `links`. A login's own old agent keeps working on its own link, and is refused
+while its machine link carries it. Contract and files: `docs/MANAGED-NODE.md` §6.
+
 ## Local stdio access
 
 Only the Hub's `serve` command needs the optional SDK. Install it into a dedicated

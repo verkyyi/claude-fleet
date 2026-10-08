@@ -157,6 +157,18 @@ test('machines: lost last, load per core, trend and version carried', () => {
   assert.deepEqual(machineCards(null), []);
 });
 
+test('machines: one link for the machine, its logins listed under it (claude-fleet#2333)', () => {
+  const [m] = machineCards({ machines: [{ hostname: 'm4', status: 'online', links: 1, logins: 2 }], nodes: [
+    { hostname: 'm4', os_user: 'root', endpoint_id: 'ep_mach', machine_link: true },
+    { hostname: 'm4', os_user: 'beta', endpoint_id: 'ep_b', via: 'ep_mach' },
+    { hostname: 'm4', os_user: 'alpha', endpoint_id: 'ep_a', via: 'ep_mach' },
+  ] });
+  assert.equal(m.links, 1);
+  assert.deepEqual(m.logins, ['alpha', 'beta']);
+  // an older hub says nothing of links
+  assert.equal(machineCards({ machines: [{ hostname: 'm5', status: 'online' }] })[0].links, null);
+});
+
 test('machines: the admin\'s short name labels the card, the hostname stays the action\'s (claude-fleet#1706)', () => {
   const ms = machineCards({ machines: [
     { hostname: 'macmini', alias: 'm5', status: 'online' },

@@ -8,8 +8,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/coder/websocket/wsjson"
-
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -170,7 +168,7 @@ func (s *Server) oauthRefreshVia(ctx context.Context, c *nodeConn, name, provide
 	defer c.pending.remove(msg.OpID)
 	ctx, cancel := context.WithTimeout(ctx, oauthRefreshTimeout)
 	defer cancel()
-	if err := wsjson.Write(ctx, c.conn, msg); err != nil {
+	if err := c.wire.write(ctx, msg); err != nil {
 		return unavailable("control channel write to %s failed: %v", name, err)
 	}
 	select {

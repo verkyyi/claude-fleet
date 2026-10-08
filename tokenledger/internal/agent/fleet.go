@@ -108,7 +108,10 @@ func (p *fleetProbe) reading(ctx context.Context, home string) *model.FleetVersi
 	cmd := fleetCommand(ctx, script, fleetVersionArgs...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
+	err := prepCmd(ctx, cmd)
+	if err == nil {
+		err = cmd.Run()
+	}
 
 	// The exit code MIRRORS the verdict (1 = BEHIND/AHEAD/DIVERGED, 2 =
 	// UNKNOWN) and stdout is valid JSON either way, so a non-zero exit is

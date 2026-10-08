@@ -13,9 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
-
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -113,7 +110,7 @@ func shortNode(hostname string) string {
 //
 // tokenHash is the sender's HashToken, what its worker assertion — the session
 // that sent the relay (claude-fleet#1810) — is checked against.
-func (s *Server) acceptRelay(ctx context.Context, conn *websocket.Conn, ep store.Endpoint, tokenHash string, m control.Message) {
+func (s *Server) acceptRelay(ctx context.Context, wire nodeWire, ep store.Endpoint, tokenHash string, m control.Message) {
 	r, err := s.checkRelay(ep, m)
 	var wk *workerClaims
 	if err == nil {
@@ -122,7 +119,7 @@ func (s *Server) acceptRelay(ctx context.Context, conn *websocket.Conn, ep store
 	if err != nil {
 		e := errorObject(err)
 		_ = s.Store.FleetAuditWorker("node:"+ep.ID, wk.id(), wk.label(), "relay", "", "refused:"+e["code"], "", time.Now())
-		refuse(ctx, conn, m.OpID, e["code"], e["message"])
+		refuse(ctx, wire, m.OpID, e["code"], e["message"])
 		return
 	}
 	inserted, err := s.Store.InsertFleetRelay(r)
@@ -138,7 +135,7 @@ func (s *Server) acceptRelay(ctx context.Context, conn *websocket.Conn, ep store
 	}
 	ack := control.Message{Type: control.TypeAck, OpID: m.OpID, Proto: control.Proto}
 	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	_ = wsjson.Write(wctx, conn, ack)
+	_ = wire.write(wctx, ack)
 	cancel()
 	go s.dispatchRelays(r.TargetEndpoint)
 }

@@ -14,8 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coder/websocket/wsjson"
-
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -303,7 +301,7 @@ func (s *Server) NodeRead(ctx context.Context, endpointID, method string, params
 	defer c.pending.remove(msg.OpID)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if err := wsjson.Write(ctx, c.conn, msg); err != nil {
+	if err := c.wire.write(ctx, msg); err != nil {
 		return nil, "", fault("UNAVAILABLE", "control channel write failed: "+err.Error())
 	}
 	select {

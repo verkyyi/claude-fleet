@@ -334,7 +334,7 @@ var safeLabel = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$`)
 // writeAtomic writes data to path with mode via a same-directory rename, so a
 // CLI reading mid-write sees the old file or the new one, never half of one.
 func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := mkdirOwned(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
@@ -353,6 +353,7 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	ownPath(tmp.Name())
 	return os.Rename(tmp.Name(), path)
 }
 
@@ -387,7 +388,7 @@ func writeClaudeCred(dir, label, accessToken string, expires *time.Time, scopes 
 		}
 	} else {
 		credDir := filepath.Join(dir, label+".hub")
-		if err := os.MkdirAll(credDir, 0o700); err != nil {
+		if err := mkdirOwned(credDir, 0o700); err != nil {
 			return err
 		}
 		if err := writeAtomic(filepath.Join(credDir, ".credentials.json"), b, 0o600); err != nil {
@@ -418,7 +419,7 @@ func writeCodexAuth(home, accessToken, idToken, accountID string, now time.Time,
 	if accessToken == "" || accountID == "" {
 		return errors.New("lease carried no access token or account id")
 	}
-	if err := os.MkdirAll(home, 0o700); err != nil {
+	if err := mkdirOwned(home, 0o700); err != nil {
 		return err
 	}
 	auth := map[string]any{

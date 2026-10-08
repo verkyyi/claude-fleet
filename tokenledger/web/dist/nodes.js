@@ -36,7 +36,7 @@ function card(m) {
   return `<div class="panel mc"><div class="mc-h"><b>${esc(m.label)}</b>${m.label !== m.name ? `<span class="mono" style="opacity:.6">${esc(m.name)}</span>` : ''}${m.kind === 'ephemeral' ? `<span class="chip brand">${esc(t('ui.mach.spot'))}</span>` : ''}${status(m)}</div>${why}` +
     trend +
     `<div class="stats"><div><b>${m.sessions == null ? '?' : m.sessions}</b>${esc(t('ui.mach.sessions'))}</div><div><b>${esc(load)}</b>${esc(t('ui.mach.load'))}</div><div><b>${esc(m.version || '—')}</b>${esc(t('ui.mach.version'))}</div>${m.spare == null ? '' : `<div><b>${m.spare}</b>${esc(t('ui.mach.spare', { used: m.used ?? '?', cap: m.cap ?? '?' }))}</div>`}${desired(m)}</div>` +
-    trustLine(m) +
+    trustLine(m) + linksLine(m) +
     `<div class="mc-f"><span>${esc(t('ui.mach.seen', { when: relTime(m.seen) }))}</span><span>${btn}${rm}</span></div></div>`;
 }
 
@@ -48,6 +48,13 @@ function trustLine(m) {
   const src = m.trustSource ? t('ui.mach.trustSrc.' + m.trustSource) : '';
   const word = t(m.trust === 'trusted' ? 'ui.mach.trusted' : 'ui.mach.untrusted');
   return `<div style="font-size:12px;color:${m.trustSource === 'name_borrowed' ? 'var(--bad)' : 'var(--muted)'}">${esc(src ? t('ui.mach.trustFrom', { trust: word, src }) : word)}</div>`;
+}
+
+// linksLine is how many connections the machine holds and the logins under
+// them (claude-fleet#2333): one node program per machine reads 「1 条连接」.
+function linksLine(m) {
+  if (m.links == null || m.status === 'lost') return '';
+  return `<div style="font-size:12px;color:var(--muted)">${esc(t('ui.mach.links', { n: m.links, logins: m.logins.join(t('ui.mach.loginSep')) || '—' }))}</div>`;
 }
 
 // desired is the 期望 / 实际 pair of a managed machine; nothing for any other.

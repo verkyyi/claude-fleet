@@ -220,8 +220,17 @@ def default_table(paths):
             {"name": "cred-proxy-shared",
              "cmd": ["/usr/bin/python3", "-I", launcher, "shared"],
              "legacy": "com.claude-fleet.cred-proxy-shared"},
-            # C5 (#2333) fills in the one node program for every login.
-            {"name": "node-agent", "cmd": [], "note": "C5 #2333"},
+            # The one node program for every login (C5, #2333): one link to the
+            # hub with the machine's token, each login a tenant run as itself.
+            # Waits until the machine has its token (machine.env) and at least
+            # the logins directory — the migration writes both, login by login.
+            {"name": "node-agent",
+             "cmd": [os.path.join(rt_bin, "ccquota"), "agent", "--machine",
+                     "--machine-env", os.path.join(paths.state, "machine.env"),
+                     "--logins", os.path.join(paths.state, "logins"),
+                     "--state", os.path.join(paths.state, "agent")],
+             "requires": [os.path.join(paths.state, "machine.env"), os.path.join(paths.state, "logins")],
+             "note": "C5 #2333"},
         ],
         "tasks": [
             # --watch runs the orphan watchdog too; it is its own task below, all
@@ -546,6 +555,8 @@ class Supervisor(object):
             return account_runnable(c) or "supervised"
         if not c.get("cmd"):
             return "pending"
+        if any(not os.path.exists(r) for r in c.get("requires") or []):
+            return "waiting"
         if self.legacy_installed(c.get("legacy")):
             return "legacy"
         if not trusted(self.script_of(c["cmd"])):
@@ -1131,6 +1142,8 @@ def status_lines(paths, table, state):
         st = sup.child_status(c)
         if st == "pending":
             what = "not yet (%s)" % c.get("note", "")
+        elif st == "waiting":
+            what = "waiting — %s missing" % ", ".join(r for r in c.get("requires") or [] if not os.path.exists(r))
         elif st == "legacy":
             what = "legacy — launchd's %s still runs it" % c.get("legacy")
         elif st == "untrusted":

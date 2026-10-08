@@ -83,6 +83,8 @@
 #   lease-unseparated-user                          tokenledger/internal/api fleet_creds.go (credsepGated) + fleet_join.go
 #                                                   (/v1/node/self credsep_gate), internal/agent node_credsep.go,
 #                                                   bin/fleet-cred-proxy.py (Router.refresh); go test, when a toolchain is here
+#   machine-agent-wrong-login                       tokenledger/internal/api node_machine.go (loginEndpoint, serveMachine)
+#                                                   + internal/agent node_machine.go / runas.go (go test, when a toolchain is here)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 #   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
@@ -4092,6 +4094,43 @@ drill_release_tampered() {
     esac
   else
     WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- machine-agent-wrong-login (#2333, EPIC #2329 C5): the machine's one node
+# program speaks for every login over one link; a login hello proven with the
+# wrong token, or a message for a login the link does not carry, must be
+# refused on both halves — never run as the wrong login, never as root.
+drill_machine_agent_wrong_login() {
+  CAP=180; local t0 out rc api agt f g
+  api='TestMachineLinkRefusesWrongLogin TestMachineLinkCarriesEveryLogin TestMachineLinkSessionLandsOnItsLogin TestMachineLinkAccountCreateGoesToTheAdminLogin TestMachineLinkMoveLandsOnItsLogin TestMachineLinkAndPlainAgents TestMachineAgentRunsEachLoginAsItself'
+  agt='TestMachineLinkDemuxByLogin TestPrepCmdRunsAsTheLogin TestPrepCmdStrictOnlyForARootMachine'
+  f="$ROOT/tokenledger/internal/api/node_machine_test.go"
+  g="$ROOT/tokenledger/internal/agent/node_machine_test.go"
+  t0=$(now)
+  for out in $api; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  for out in $agt; do
+    grep -q "^func $out(" "$g" 2>/dev/null || { WHY="the node half's test $out is not in ${g#$ROOT/}"; return 1; }
+  done
+  grep -q 'ep.OSUser != login' "$ROOT/tokenledger/internal/api/node_machine.go" \
+    || { WHY="loginEndpoint no longer holds a login hello to its own token's login"; return 1; }
+  grep -q 'CodeWrongLogin' "$ROOT/tokenledger/internal/agent/node_machine.go" \
+    || { WHY="the node's demux no longer refuses a login it does not serve"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='整机连接上账号 hello 拿别人的 / 机器的 / 别的机器的令牌都答 WRONG_LOGIN、不上线、记审计；不认识的账号两端都拒；会话、开号、迁移各落在自己的账号；真的 RunMachine 以各账号身份跑控制器（go test 十条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十条测试按名核对在' ;;
+      *) WHY="the machine link (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：十条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }

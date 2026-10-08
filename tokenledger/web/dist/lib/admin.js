@@ -236,9 +236,12 @@ export function machineCards(snap) {
   const eps = {};
   const trust = {};
   const want = {};
+  const logins = {};
   for (const n of (snap && snap.nodes) || []) {
     const h = n.hostname;
     if (n.endpoint_id) (eps[h] = eps[h] || []).push(n.endpoint_id);
+    // the logins under the machine's link (claude-fleet#2333); the link itself is no login
+    if (!n.machine_link && n.os_user && !(logins[h] = logins[h] || []).includes(n.os_user)) logins[h].push(n.os_user);
     const v = n.fleet_version || n.agent_version || '';
     if (v && (!vers[h] || v > vers[h])) vers[h] = v;
     // trust (claude-fleet#2214): a trusted login wins, a borrowed name is said
@@ -258,6 +261,8 @@ export function machineCards(snap) {
     // trust and its source (join_code · operator · machine_name · name_borrowed), 期望 / 实际 (claude-fleet#2214)
     trust: (trust[m.hostname] || {}).trust || '', trustSource: (trust[m.hostname] || {}).source || '',
     desired: want[m.hostname] || null,
+    // control connections and the logins they carry (claude-fleet#2333); links is null from an older hub
+    links: typeof m.links === 'number' ? m.links : null, logins: (logins[m.hostname] || []).slice().sort(),
   })).sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || a.label.localeCompare(b.label));
 }
 

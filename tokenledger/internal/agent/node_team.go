@@ -118,7 +118,10 @@ func (a *Agent) teamSync(ctx context.Context, v int) (bool, string) {
 	cmd := teamCommand(ctx, script, "sync", "--hub-version", strconv.Itoa(v))
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
-	err := cmd.Run()
+	err := prepCmd(ctx, cmd)
+	if err == nil {
+		err = cmd.Run()
+	}
 	if err == nil {
 		return true, ""
 	}

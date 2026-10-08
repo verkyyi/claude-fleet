@@ -53,7 +53,7 @@ func (a *Agent) fetchMoveBundle(ctx context.Context, envelope json.RawMessage) (
 	if _, err := os.Stat(dest); err == nil {
 		return "", "" // a retried write: already here
 	}
-	if err := os.MkdirAll(a.moveIn, 0o700); err != nil {
+	if err := mkdirOwned(a.moveIn, 0o700); err != nil {
 		return "UNAVAILABLE", "move-in directory: " + err.Error()
 	}
 	fctx, cancel := context.WithTimeout(ctx, moveFetchTimeout)
@@ -87,6 +87,7 @@ func (a *Agent) fetchMoveBundle(ctx context.Context, envelope json.RawMessage) (
 	if want := resp.Header.Get("X-Bundle-Sha256"); want != "" && want != hex.EncodeToString(h.Sum(nil)) {
 		return "UNAVAILABLE", "the transcript bundle arrived corrupted (sha256 mismatch)"
 	}
+	ownPath(tmp.Name())
 	if err := os.Rename(tmp.Name(), dest); err != nil {
 		return "UNAVAILABLE", "move-in directory: " + err.Error()
 	}

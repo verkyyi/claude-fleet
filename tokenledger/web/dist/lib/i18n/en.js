@@ -285,6 +285,8 @@ export const en = {
   'ui.mach.load': 'load / core',
   'ui.mach.spare': 'spare · used {used} / cap {cap}',
   'ui.mach.version': 'version',
+  'ui.mach.links': '{n} connection(s) · logins: {logins}',
+  'ui.mach.loginSep': ', ',
   'ui.mach.trusted': 'Trusted',
   'ui.mach.untrusted': 'Untrusted',
   'ui.mach.trustFrom': '{trust} · from {src}',

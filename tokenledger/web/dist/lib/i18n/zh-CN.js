@@ -306,6 +306,8 @@ export const zhCN = {
   'ui.mach.load': '每核负载',
   'ui.mach.spare': '备用 · 已用 {used} / 上限 {cap}',
   'ui.mach.version': '版本',
+  'ui.mach.links': '{n} 条连接 · 账号：{logins}',
+  'ui.mach.loginSep': '、',
   'ui.mach.trusted': '可信',
   'ui.mach.untrusted': '不可信',
   'ui.mach.trustFrom': '{trust} · 来自{src}',
