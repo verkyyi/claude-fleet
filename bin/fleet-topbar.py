@@ -225,10 +225,11 @@ def render(args):
         # with none picked), the writing area, or a stage started before the
         # list wrote a record: the window's name. ‹ › and a tap on the name
         # still go round the sessions, so the one-pane layout (a phone in
-        # Termius) never leaves a bare shell with no way to them.
+        # Termius) never leaves a bare shell with no way to them. No subprocess
+        # here: tmux runs this line on every status redraw.
         print("#[fg=%s]#[range=user|prev] ‹ #[norange]#[range=user|next]› #[norange] "
-              "#[fg=%s,bold]#[range=user|title]%s#[norange]#[nobold]#[fg=%s]  %s#[default]"
-              % (DIM, HL, tmux_text(kv.get("wn", "")), DIM, tmux_text(say("topbar_pick"))))
+              "#[fg=%s,bold]#[range=user|title]%s#[norange]#[default]"
+              % (DIM, HL, tmux_text(kv.get("wn", ""))))
         return 0
     rec["also"] = also_on(rec)
     parts, bg = layout(rec, cols, kv.get("down", ""), kv.get("rr", ""))
