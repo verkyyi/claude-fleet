@@ -272,9 +272,11 @@ def i_cred_scan(it, a):
         return
     n = int(m.group(1))
     hits = [l.split()[0] + " " + l.split()[1] for l in out.splitlines()
-            if re.match(r"^[①②③④f]", l) and (re.search(r"shaped=[1-9]", l) or re.search(r"real=[1-9]", l))]
+            if re.match(r"^[①②③④f]", l) and re.search(r"real=[1-9]" if a.hashes else r"shaped=[1-9]", l)]
     it.count = n
     it.note(last(out) + ("；命中：" + "，".join(hits) if hits else ""))
+    if n and not a.hashes:
+        it.note("没给 --hashes：形状命中也可能是 fleet 自带测试里的假令牌——真机上用 --hashes 判真假")
 
 
 def i_forward(it, a):
@@ -550,6 +552,11 @@ def listening(host, ports, wait=0.4):
     return sorted(set(up))
 
 
+# a machine service that greets any visitor and carries no session: tailscaled's
+# PeerAPI on the tailnet address ("This is my Tailscale device …")
+SYSTEM_PAGE = re.compile(r"This is my Tailscale device")
+
+
 def probe(host, port):
     """The first anonymous path answering 2xx → (path, code, title), else None."""
     for path in ("/", "/d/", "/i/"):
@@ -563,6 +570,8 @@ def probe(host, port):
         finally:
             c.close()
         if 200 <= r.status < 300:
+            if SYSTEM_PAGE.search(body):
+                return "system"
             m = re.search(r"<title>([^<]{0,80})", body, re.I)
             return path, r.status, (m.group(1).strip() if m else "%d 字节" % len(body))
     return None
@@ -579,13 +588,17 @@ def i_preview(it, a):
         ports = range(1, 65536)
         mine = own_ports()
     hosts = (E("FLEET_TENANT_SCAN_HOSTS") or "").split() or ["127.0.0.1"] + ([tailnet_ip()] if tailnet_ip() else [])
-    n = 0
+    n, system = 0, []
     for host in hosts:
         for p in listening(host, [p for p in ports if p not in mine]):
             n += 1
             r = probe(host, p)
-            if r:
+            if r == "system":
+                system.append("%s:%d" % (host, p))
+            elif r:
                 it.hit("http://%s:%d%s → %d「%s」" % (host, p, r[0], r[1], r[2]))
+    if system:
+        it.note("不计：%s（tailscaled 的 PeerAPI，机器服务、不含会话）" % ", ".join(system))
     if not it.count:
         it.note("%s 上 %d 个不属于本账号的端口，匿名 GET / /d/ /i/ 都不是 2xx" % (" / ".join(hosts), n))
 

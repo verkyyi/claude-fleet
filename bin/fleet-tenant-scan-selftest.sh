@@ -17,7 +17,8 @@
 #   7  homes         another home listable → ③
 #   8  tmux          another uid's tmux dir listable → ③
 #   9  shared        another login's file in the shared dir readable → ③
-#  10  preview       an anonymous http.server → ③ (doc-preview's server.py stays 404)
+#  10  preview       an anonymous http.server → ③ (doc-preview's server.py stays 404;
+#                    tailscaled's PeerAPI greeting is named, not counted)
 #  11  bootstrap     no cache → 2 × ④; a login cloned from the network → ④
 #  12  usage         unknown item → exit 2; --json carries the same verdict
 #
@@ -244,6 +245,15 @@ ts_scan "$D" --only preview
 expect preview HIT "10: an anonymous http.server → HIT"
 printf '%s' "$(ts_row preview)" | grep -q ":$TS_PORT" && bad "10: doc-preview's server.py answered without a code" \
   || ok "10: doc-preview's server.py stays 404 beside it"
+mkdir -p "$WORK/ts" && printf '<h1>Hello</h1>This is my Tailscale device. Your device is m.\n' > "$WORK/ts/index.html"
+P3=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+(cd "$WORK/ts" && exec python3 -m http.server --bind 127.0.0.1 "$P3") >/dev/null 2>&1 &
+TS_PIDS="$TS_PIDS $!"
+i=0; until curl -s -o /dev/null "http://127.0.0.1:$P3/" 2>/dev/null || [ "$i" -ge 50 ]; do sleep 0.1; i=$((i + 1)); done
+printf '%s %s\n' "$TS_PORT" "$P3" > "$D/ports"
+ts_scan "$D" --only preview
+expect preview PASS "10: tailscaled's PeerAPI greeting is a machine service, not counted"
+printf '%s' "$(ts_row preview)" | grep -q "不计：127.0.0.1:$P3" && ok "10: …and named as not counted" || bad "10: PeerAPI not named"
 printf '%s\n' "$TS_PORT" > "$D/ports"
 
 # ---- 11. bootstrap --------------------------------------------------------------
