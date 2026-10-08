@@ -534,6 +534,7 @@ FLEET_JOIN_SUDO                    seam: the privilege prefix fleet-node-join.sh
 FLEET_JOIN_OS                      seam: overrides `uname -s` in fleet-node-join.sh (darwin|linux) (#1418)
 FLEET_JOIN_ARCH                    seam: overrides `uname -m` in fleet-node-join.sh (#1418)
 FLEET_JOIN_POLL                    seam: seconds between fleet-node-join.sh's /v1/node/self polls (default 3) (#1418)
+FLEET_NODE_STATE                   path: com.claude-fleet.node's state dir (default /var/db/fleet-node) — fleet_node_manages reads its accounts.json (#2332)
 FLEET_NODE_JOIN_ARGS               seam: extra fleet-node-join.sh options `fleet node join` passes through (fleet-node-selftest: --no-deps --service detached …) (#1627)
 FLEET_HUB_NODES_CMD                seam: command printing the hub's /v1/nodes JSON instead of a GET (fleet-hub-sessions.sh refresh_summaries, #1482)
 FLEET_HUB_LIMITS_CMD               seam: command printing the hub's /v1/limits?account=all JSON instead of a GET (fleet-hub-sessions.sh refresh_summaries, #1482)

@@ -45,6 +45,16 @@ _dlib="$_dlib/fleet-daemon-lib.sh"
 # shellcheck source=/dev/null
 [ -f "$_dlib" ] && . "$_dlib"
 
+# A login the machine daemon manages (issue #2332): its tasks run under
+# com.claude-fleet.node, so an account unit counts as installed while that
+# daemon is (machine units — memguard — are the node row's to judge).
+if command -v fleet_node_manages >/dev/null 2>&1 && [ "$unit" != memguard ] && fleet_node_manages; then
+  _nsup="${_dlib%/*}/fleet-node-supervisor.py"
+  [ -f "$_nsup" ] || exit 1
+  python3 -I "$_nsup" status --check >/dev/null 2>&1 && exit 0
+  exit 1
+fi
+
 # macOS: `launchctl list` prints one line per loaded agent, label in column 3.
 if [ "$(uname 2>/dev/null)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
   launchctl list 2>/dev/null | awk -v l="$label" '$3 == l { found = 1 } END { exit(found ? 0 : 1) }' && exit 0

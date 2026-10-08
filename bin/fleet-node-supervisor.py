@@ -15,8 +15,20 @@ machine's work ONCE, however many logins the machine carries:
                 watchdog …), each run as at most ONE copy: a task still running
                 when it is due again is skipped, and every run holds
                 `locks/<task>.lock`, so a hand-run `tick` cannot double it either.
-                Account-scoped jobs (collect, base-sync) are listed as `deferred`:
-                C4 runs them per account, as that account.
+  * accounts  — the account-level jobs (issue #2332, C4): ONE table, read from
+                the runtime's `launchd/com.claude-fleet.*.plist.tmpl` (every unit
+                but the machine-level ones), run for every account the daemon
+                MANAGES, each demoted to that account (initgroups/setgid/setuid)
+                with its HOME / USER / PATH / FLEET_CONF_DIR / TMPDIR — an interval
+                unit as a task, a KeepAlive unit (spinner, webhook) as a child.
+                The template's own interval, environment and log paths; the log
+                is opened by the demoted process, never by root. One account's
+                failing task never touches another's.
+                An account becomes managed by `account adopt <login>`: its own
+                fleet LaunchAgents / LaunchDaemons are booted out and moved to the
+                attic (kept until released); one that will not unload puts every
+                one back. `account release <login>` is the way back, one command.
+                expected.json's `accounts` (C2), when present, narrows who runs.
   * sweep     — fleet plist leftovers (`*.plist.bak*`, `.pre-move`, `.retired*`,
                 `.disabled*` …) in /Library/LaunchDaemons and every login's
                 ~/Library/LaunchAgents are MOVED to the attic
@@ -43,6 +55,9 @@ Usage:
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
   fleet-node-supervisor.py attic [list | restore <id> | purge]
   fleet-node-supervisor.py install | uninstall write / remove the LaunchDaemon (root)
+  fleet-node-supervisor.py account [list | adopt <login> | release <login> | manages <login>]
+                                               the account half (#2332); manages: exit 0 = this
+                                               daemon runs <login>'s tasks (install-apply, doctor)
 
 Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
   FLEET_NODE_STATE      /var/db/fleet-node          FLEET_NODE_LOG   /var/log/fleet-node
@@ -54,14 +69,20 @@ Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
   FLEET_NODE_ATTIC_DAYS (7)  FLEET_NODE_SWEEP_EVERY (3600)  FLEET_NODE_HEARTBEAT_STALE (120)
   FLEET_NODE_LAUNCHCTL  launchctl's path ('' = do not load/unload)
   FLEET_NODE_TEST=1     skip the root-ownership check on the runtime
+  FLEET_NODE_PASSWD     a JSON {login: {uid, gid, home}} read instead of the passwd
+                        database (tests; under FLEET_NODE_TEST only)
+  FLEET_NODE_BREW_PREFIX  __BREW_PREFIX__ in the templates (default /opt/homebrew, or
+                        /usr/local when that is where brew is)
 """
 from __future__ import print_function
 
 import errno
 import fcntl
+import glob
 import json
 import os
 import plistlib
+import pwd
 import re
 import shutil
 import signal
@@ -73,6 +94,11 @@ LABEL = "com.claude-fleet.node"
 # A fleet plist name, and a LEFTOVER of one: anything after `.plist`.
 FLEET_PLIST_RE = re.compile(r"^(com\.claude-fleet\.|com\.ccquota\.)")
 LEFTOVER_RE = re.compile(r"^(com\.claude-fleet\.|com\.ccquota\.).*\.plist\..+$")
+# Units the machine runs ONCE (the table below); every other launchd template is
+# an account unit (issue #2332). cred-proxy-shared has no template — it is listed
+# so an account's adopt never boots the machine's proxy out.
+MACHINE_UNITS = ("memguard", "node", "cred-proxy-shared")
+ACCOUNT_ENV_DROP = ("UserName", "GroupName")
 
 
 def env(name, default):
@@ -100,6 +126,7 @@ class Paths(object):
         self.locks = os.path.join(self.state, "locks")
         self.main_lock = os.path.join(self.state, "supervisor.lock")
         self.expected = os.path.join(self.state, "expected.json")
+        self.accounts = os.path.join(self.state, "accounts.json")
         self.plist = os.path.join(self.daemon_dir, LABEL + ".plist")
 
 
@@ -207,9 +234,10 @@ def default_table(paths):
             {"name": "orphans", "every": 60,
              "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-diskguard.sh"), "--orphan-watch"],
              "env": {"FLEET_ORPHAN_ALL_USERS": "1"}},
-            {"name": "collect", "scope": "account", "note": "C4 #2332"},
-            {"name": "base-sync", "scope": "account", "note": "C4 #2332"},
         ],
+        # None = the runtime's launchd templates (account_units); a table file may
+        # give the list itself, in account_units' shape.
+        "account": None,
     }
 
 
@@ -221,8 +249,170 @@ def load_table(paths):
             raise SystemExit("fleet-node-supervisor: FLEET_NODE_TABLE %s is not a JSON object" % path)
         t.setdefault("children", [])
         t.setdefault("tasks", [])
+        t.setdefault("account", [])
         return t
     return default_table(paths)
+
+
+# --------------------------------------------------------------- accounts -------
+def brew_prefix():
+    v = os.environ.get("FLEET_NODE_BREW_PREFIX")
+    if v:
+        return v
+    return "/opt/homebrew" if os.path.isdir("/opt/homebrew") or not os.path.isdir("/usr/local/bin") else "/usr/local"
+
+
+def account_units(paths, table=None):
+    """The ONE account task table: [{name, argv, env, every | keepalive, out, err}],
+    argv/env/out/err still carrying __HOME__ (filled per account). From the table
+    file when it names one, else every `launchd/com.claude-fleet.<u>.plist.tmpl` of
+    the runtime but MACHINE_UNITS — so a unit's interval, environment and log paths
+    are the template's own, and a new template is a new account task."""
+    if table is not None and table.get("account") is not None:
+        return list(table["account"])
+    out = []
+    pat = os.path.join(paths.runtime, "launchd", "com.claude-fleet.*.plist.tmpl")
+    for f in sorted(glob.glob(pat)):
+        u = os.path.basename(f)[len("com.claude-fleet."):-len(".plist.tmpl")]
+        if u in MACHINE_UNITS:
+            continue
+        try:
+            with open(f, "rb") as fh:
+                # launchd tolerates a `--` inside a comment, expat does not
+                pl = plistlib.loads(re.sub(rb"<!--.*?-->", b"", fh.read(), flags=re.S))
+        except Exception:
+            continue
+        argv = [str(a) for a in pl.get("ProgramArguments") or []]
+        if not argv:
+            continue
+        ent = {"name": u, "argv": argv,
+               "env": dict((k, str(v)) for k, v in (pl.get("EnvironmentVariables") or {}).items()),
+               "out": pl.get("StandardOutPath") or "/dev/null",
+               "err": pl.get("StandardErrorPath") or "/dev/null"}
+        if pl.get("KeepAlive"):
+            ent["keepalive"] = True
+        else:
+            ent["every"] = float(pl.get("StartInterval") or 60)
+        if u == "diskguard":
+            # its orphan watchdog runs once for every user, as the machine's
+            # `orphans` task — an account copy would notify twice
+            ent["env"]["FLEET_ORPHAN_CPU_PCT"] = "0"
+        out.append(ent)
+    return out
+
+
+def script_of(cmd):
+    """The file a command runs: the first argv entry after an interpreter."""
+    for a in cmd[1:] if len(cmd) > 1 and os.path.basename(cmd[0]) in (
+            "bash", "sh", "python3", "python") else cmd[:1]:
+        if not a.startswith("-"):
+            return a
+    return cmd[0]
+
+
+def account_ident(login):
+    """(uid, gid, home) of a login, or None. Never root, never a system account."""
+    fake = os.environ.get("FLEET_NODE_PASSWD")
+    if fake and env("FLEET_NODE_TEST", "") == "1":
+        e = (read_json(fake, {}) or {}).get(login)
+        return (int(e["uid"]), int(e["gid"]), e["home"]) if e else None
+    try:
+        pw = pwd.getpwnam(login)
+    except KeyError:
+        return None
+    if pw.pw_uid < 500:
+        return None
+    return pw.pw_uid, pw.pw_gid, pw.pw_dir
+
+
+def accounts_read(paths):
+    a = read_json(paths.accounts, {})
+    return a if isinstance(a, dict) else {}
+
+
+def expected_accounts(paths):
+    """The logins expected.json names (C2), or None when it names none."""
+    ex = read_json(paths.expected, None)
+    if not isinstance(ex, dict) or not isinstance(ex.get("accounts"), list):
+        return None
+    out = set()
+    for x in ex["accounts"]:
+        n = x.get("name") if isinstance(x, dict) else x
+        if n:
+            out.add(str(n))
+    return out
+
+
+def managed_accounts(paths):
+    """{login: why-not or None}: every adopted login; None = its tasks run."""
+    exp = expected_accounts(paths)
+    out = {}
+    for login, a in sorted(accounts_read(paths).items()):
+        if not (a or {}).get("managed"):
+            continue
+        out[login] = None if exp is None or login in exp else "not in expected.json — paused"
+    return out
+
+
+def fill(s, home, brew):
+    return s.replace("__HOME__", home).replace("__BREW_PREFIX__", brew)
+
+
+# The demoted process opens its own logs (root never writes in a login's
+# directory) and takes the login's own TMPDIR, as the system-shape plists did.
+ACCOUNT_SH = ('TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; [ -n "$TMPDIR" ] || TMPDIR=/tmp; export TMPDIR; '
+              'if : >>"$1" 2>/dev/null; then exec >>"$1"; else exec >/dev/null; fi; '
+              'if : >>"$2" 2>/dev/null; then exec 2>>"$2"; else exec 2>/dev/null; fi; '
+              'shift 2; exec "$@"')
+
+
+def account_entry(unit, login, ident, brew):
+    uid, gid, home = ident
+    argv = [fill(a, home, brew) for a in unit["argv"]]
+    e = dict((k, fill(v, home, brew)) for k, v in (unit.get("env") or {}).items()
+             if k not in ACCOUNT_ENV_DROP)
+    e.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+    e.setdefault("LANG", "en_US.UTF-8")
+    e.update(HOME=home, USER=login, LOGNAME=login,
+             FLEET_CONF_DIR=os.path.join(home, ".config", "claude-fleet"),
+             FLEET_NODE_ACCOUNT=login)
+    ent = {"name": "%s/%s" % (login, unit["name"]), "account": login, "unit": unit["name"],
+           "uid": uid, "gid": gid, "home": home, "env": e, "script": None,
+           "cmd": ["/bin/sh", "-c", ACCOUNT_SH, "fleet-account",
+                   fill(unit.get("out") or "/dev/null", home, brew),
+                   fill(unit.get("err") or "/dev/null", home, brew)] + argv}
+    ent["script"] = script_of(argv)
+    if unit.get("keepalive"):
+        ent["keepalive"] = True
+    else:
+        ent["every"] = unit.get("every", 60)
+        if unit.get("timeout"):
+            ent["timeout"] = unit["timeout"]
+    return ent
+
+
+def demote(login, uid, gid, home):
+    def f():
+        if os.geteuid() == 0:
+            os.initgroups(login, gid)
+            os.setgid(gid)
+            os.setuid(uid)
+        try:
+            os.chdir(home)
+        except OSError:
+            os.chdir("/")
+    return f
+
+
+def account_runnable(ent):
+    """Why an account entry must not start, or None."""
+    if ent["uid"] == 0:
+        return "refused — uid 0"
+    if os.geteuid() != 0 and ent["uid"] != os.geteuid():
+        return "needs root (to run as uid %d)" % ent["uid"]
+    if ent.get("script") and not os.path.exists(ent["script"]):
+        return "missing %s" % ent["script"]
+    return None
 
 
 # --------------------------------------------------------------- the daemon -----
@@ -243,11 +433,54 @@ class Supervisor(object):
         self.backoff_max = env_num("FLEET_NODE_BACKOFF_MAX", 60)
         self.backoff_reset = env_num("FLEET_NODE_BACKOFF_RESET", 60)
         self.last_save = 0
+        self.units = None
+        self.units_at = 0
+
+    # -- the account half (#2332): entries built from the one table, per managed login
+    def account_entries(self):
+        t = now()
+        if self.units is None or t - self.units_at >= 60:
+            self.units = account_units(self.p, self.table)
+            self.units_at = t
+        out = []
+        if not self.units:
+            return out
+        brew = brew_prefix()
+        for login, why in managed_accounts(self.p).items():
+            if why:
+                continue
+            ident = account_ident(login)
+            if ident is None:
+                st = self.state.setdefault("account_errors", {})
+                if st.get(login) != "no such login":
+                    st[login] = "no such login"
+                    self.dirty = True
+                continue
+            for u in self.units:
+                out.append(account_entry(u, login, ident, brew))
+        return out
+
+    def all_children(self):
+        return list(self.table["children"]) + [e for e in self.account_entries() if e.get("keepalive")]
+
+    def all_tasks(self):
+        return list(self.table["tasks"]) + [e for e in self.account_entries() if not e.get("keepalive")]
+
+    def spawn(self, ent, fh, extra_env=None):
+        """Popen one child / task: a machine one as root in the daemon's own env, an
+        account one demoted to its login, its output opened by itself (ACCOUNT_SH)."""
+        if ent.get("account"):
+            return subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=fh, env=ent["env"], start_new_session=True, close_fds=True,
+                                    preexec_fn=demote(ent["account"], ent["uid"], ent["gid"], ent["home"]))
+        return subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+                                env=self.child_env(extra_env), start_new_session=True, close_fds=True)
 
     # -- plumbing
     def ensure_dirs(self):
         for d, m in ((self.p.state, 0o755), (self.p.locks, 0o755), (self.p.attic, 0o700),
                      (self.p.log, 0o755), (os.path.join(self.p.log, "tasks"), 0o755),
+                     (os.path.join(self.p.log, "accounts"), 0o755),
                      (os.path.join(self.p.state, "home"), 0o700),
                      (os.path.join(self.p.state, "conf"), 0o700),
                      (os.path.join(self.p.state, "tmp"), 0o700)):
@@ -297,16 +530,11 @@ class Supervisor(object):
         return e
 
     def script_of(self, cmd):
-        """The file root would run: the first argv entry after an interpreter."""
-        for a in cmd[1:] if len(cmd) > 1 and os.path.basename(cmd[0]) in (
-                "bash", "sh", "python3", "python") else cmd[:1]:
-            if not a.startswith("-"):
-                return a
-        return cmd[0]
+        return script_of(cmd)
 
     # -- children
     def adopt(self):
-        for c in self.table["children"]:
+        for c in self.all_children():
             cs = self.state["children"].get(c["name"]) or {}
             pid = cs.get("pid")
             if pid and pid_alive(pid) and cs.get("cmd") and pid_cmd(pid) == cs["cmd"]:
@@ -314,6 +542,8 @@ class Supervisor(object):
                 self.log("adopted child %s pid %s" % (c["name"], pid))
 
     def child_status(self, c):
+        if c.get("account"):
+            return account_runnable(c) or "supervised"
         if not c.get("cmd"):
             return "pending"
         if self.legacy_installed(c.get("legacy")):
@@ -324,7 +554,12 @@ class Supervisor(object):
 
     def tend_children(self):
         t = now()
-        for c in self.table["children"]:
+        kids = self.all_children()
+        # a child whose account was released (or whose unit left the table) stops
+        live = set(c["name"] for c in kids)
+        for name in [n for n in list(self.procs) + list(self.adopted) if n not in live]:
+            self.stop_one(name)
+        for c in kids:
             name = c["name"]
             cs = self.state["children"].setdefault(name, {})
             st = self.child_status(c)
@@ -363,14 +598,37 @@ class Supervisor(object):
         self.dirty = True
         self.log("child %s exited rc=%s after %ds; restart in %ds" % (name, rc, up, delay))
 
+    def stop_one(self, name):
+        p = self.procs.pop(name, None)
+        pid = p.pid if p is not None else self.adopted.pop(name, None)
+        if pid:
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except OSError:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+            if p is not None:
+                try:
+                    p.wait(timeout=5)
+                except Exception:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+        cs = self.state["children"].get(name)
+        if cs is not None:
+            cs.update(pid=None, status="stopped")
+        self.dirty = True
+        self.log("child %s stopped (no longer in the table)" % name)
+
     def start_child(self, c, cs, t):
         try:
-            fh = self.logfile(c["name"])
-            p = subprocess.Popen(c["cmd"], stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
-                                 env=self.child_env(c.get("env")), start_new_session=True,
-                                 close_fds=True)
+            fh = self.logfile(c["account"], "accounts") if c.get("account") else self.logfile(c["name"])
+            p = self.spawn(c, fh, c.get("env"))
             fh.close()
-        except OSError as e:
+        except (OSError, subprocess.SubprocessError) as e:
             self.died(c["name"], cs, "spawn: %s" % e, t)
             return
         self.procs[c["name"]] = p
@@ -413,6 +671,8 @@ class Supervisor(object):
         return t - (ts.get("last_start") or 0) >= float(tk.get("every", 60))
 
     def task_runnable(self, tk):
+        if tk.get("account"):
+            return account_runnable(tk)
         if tk.get("scope") == "account" or not tk.get("cmd"):
             return "deferred"
         if not trusted(self.script_of(tk["cmd"])):
@@ -430,7 +690,7 @@ class Supervisor(object):
             return False
         if name in self.running:
             return False
-        lf = os.open(os.path.join(self.p.locks, name + ".lock"), os.O_RDWR | os.O_CREAT, 0o644)
+        lf = os.open(os.path.join(self.p.locks, name.replace("/", "@") + ".lock"), os.O_RDWR | os.O_CREAT, 0o644)
         try:
             fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -438,14 +698,16 @@ class Supervisor(object):
             ts.update(result="busy", skipped=(ts.get("skipped") or 0) + 1)
             self.dirty = True
             return False
-        fh = self.logfile(name, "tasks")
-        fh.write(("--- %s %s\n" % (iso(t), " ".join(tk["cmd"]))).encode())
+        if tk.get("account"):
+            fh = self.logfile(tk["account"], "accounts")
+            fh.write(("--- %s %s\n" % (iso(t), " ".join(tk["cmd"][6:]))).encode())
+        else:
+            fh = self.logfile(name, "tasks")
+            fh.write(("--- %s %s\n" % (iso(t), " ".join(tk["cmd"]))).encode())
         fh.flush()
         try:
-            p = subprocess.Popen(tk["cmd"], stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
-                                 env=self.child_env(tk.get("env")), start_new_session=True,
-                                 close_fds=True)
-        except OSError as e:
+            p = self.spawn(tk, fh, tk.get("env"))
+        except (OSError, subprocess.SubprocessError) as e:
             fh.close()
             os.close(lf)
             ts.update(last_start=t, last_end=t, rc=None, result="spawn failed: %s" % e)
@@ -486,7 +748,7 @@ class Supervisor(object):
             self.dirty = True
 
     def tend_tasks(self, t):
-        for tk in self.table["tasks"]:
+        for tk in self.all_tasks():
             if self.task_due(tk, t) or self.task_runnable(tk):
                 self.start_task(tk, t)
         self.reap_tasks()
@@ -559,7 +821,7 @@ class Supervisor(object):
                   % self.p.main_lock, file=sys.stderr)
             return 3
         t = now()
-        for tk in self.table["tasks"]:
+        for tk in self.all_tasks():
             if self.task_due(tk, t) or self.task_runnable(tk):
                 self.start_task(tk, t)
         self.reap_tasks(wait=True)
@@ -590,7 +852,29 @@ def _plist_label(path):
         return ""
 
 
+class attic_lock(object):
+    """The attic index has two writers — the sweep and `account adopt|release`."""
+    def __init__(self, paths):
+        self.path = os.path.join(paths.locks, "attic.lock")
+
+    def __enter__(self):
+        d = os.path.dirname(self.path)
+        if not os.path.isdir(d):
+            os.makedirs(d)
+        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *a):
+        os.close(self.fd)
+
+
 def sweep(paths, dry=False):
+    with attic_lock(paths):
+        return _sweep(paths, dry)
+
+
+def _sweep(paths, dry=False):
     moved, extra = [], []
     expected = read_json(paths.expected, None)
     labels = set(expected.get("labels") or []) if isinstance(expected, dict) else None
@@ -630,6 +914,8 @@ def attic_purge(paths, index):
     t = now()
     gone = 0
     for e in list(index):
+        if e.get("keep"):        # an adopted account's services: kept until released
+            continue
         if t - e.get("moved", t) > keep:
             shutil.rmtree(os.path.dirname(e["dst"]), ignore_errors=True)
             index.remove(e)
@@ -657,6 +943,160 @@ def attic_restore(paths, ident):
             return 0
     print("fleet-node-supervisor: no attic entry %s (see `attic list`)" % ident, file=sys.stderr)
     return 1
+
+
+# --------------------------------------------------------------- adopt / release --
+def launchctl_loaded(target):
+    """Is <domain>/<label> loaded? No launchctl (the test seam '') ⇒ no."""
+    lc = os.environ.get("FLEET_NODE_LAUNCHCTL", "/bin/launchctl")
+    if not lc:
+        return False
+    return subprocess.call([lc, "print", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+
+
+def account_services(paths, login, uid, home):
+    """The login's own fleet services: [{path, label, domain}] — its gui
+    LaunchAgents and its system LaunchDaemons (com.claude-fleet.<login>.<unit>)."""
+    out = []
+    la = os.path.join(home, "Library", "LaunchAgents")
+    # root moves files out of a login's directory: only out of the real one, its own
+    try:
+        st = os.lstat(la)
+        own = not os.path.islink(la) and (st.st_uid == uid or env("FLEET_NODE_TEST", "") == "1")
+    except OSError:
+        own = False
+    for f in sorted(glob.glob(os.path.join(la, "com.claude-fleet.*.plist"))) if own else []:
+        out.append({"path": f, "domain": "gui/%d" % uid})
+    for f in sorted(glob.glob(os.path.join(paths.daemon_dir, "com.claude-fleet.%s.*.plist" % login))):
+        out.append({"path": f, "domain": "system"})
+    keep = []
+    for s in out:
+        if os.path.islink(s["path"]) or not os.path.isfile(s["path"]):
+            continue
+        s["label"] = _plist_label(s["path"]) or os.path.basename(s["path"])[:-len(".plist")]
+        if s["label"] == LABEL or s["label"].split(".")[-1] in MACHINE_UNITS[1:]:
+            continue
+        keep.append(s)
+    return keep
+
+
+def _accounts_write(paths, a):
+    if not os.path.isdir(paths.state):
+        os.makedirs(paths.state)
+    write_json(paths.accounts, a, 0o644)
+
+
+def _put_back(paths, e):
+    """An attic entry back where it was, loaded again."""
+    shutil.move(e["dst"], e["src"])
+    try:
+        os.chown(e["src"], e["uid"], e["gid"])
+    except OSError:
+        pass
+    os.chmod(e["src"], e["mode"])
+    shutil.rmtree(os.path.dirname(e["dst"]), ignore_errors=True)
+    if e.get("domain"):
+        launchctl("bootstrap", e["domain"], e["src"])
+
+
+def account_adopt(paths, login, dry=False):
+    ident = account_ident(login)
+    if ident is None:
+        print("fleet-node-supervisor: %s is not a login this daemon may run as" % login, file=sys.stderr)
+        return 2
+    if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
+        print("fleet-node-supervisor: account adopt boots out %s's services — run it as root (sudo)" % login,
+              file=sys.stderr)
+        return 1
+    uid, gid, home = ident
+    a = accounts_read(paths)
+    if (a.get(login) or {}).get("managed"):
+        print("%s already managed since %s" % (login, iso(a[login].get("since"))))
+        return 0
+    svcs = account_services(paths, login, uid, home)
+    if dry:
+        for sv in svcs:
+            print("would boot out %s/%s and move %s to the attic" % (sv["domain"], sv["label"], sv["path"]))
+        print("would run %d account units as %s" % (len(account_units(paths, load_table(paths))), login))
+        return 0
+    Supervisor(paths, {"children": [], "tasks": []}).ensure_dirs()
+    moved = []
+    with attic_lock(paths):
+        index = read_json(paths.attic_index, [])
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        for sv in svcs:
+            target = "%s/%s" % (sv["domain"], sv["label"])
+            launchctl("bootout", target)
+            if launchctl_loaded(target):
+                # one that will not unload: every service of this login goes back
+                print("fleet-node-supervisor: %s did not unload — putting %s's %d moved service(s) back"
+                      % (target, login, len(moved)), file=sys.stderr)
+                for e in reversed(moved):
+                    _put_back(paths, e)
+                    index.remove(e)
+                write_json(paths.attic_index, index, 0o600)
+                return 1
+            ident_ = "%s-%s-%d" % (stamp, login, len(index) + 1)
+            dst = os.path.join(paths.attic, ident_, os.path.basename(sv["path"]))
+            st = os.stat(sv["path"])
+            os.makedirs(os.path.dirname(dst), 0o700)
+            shutil.move(sv["path"], dst)
+            e = {"id": ident_, "src": sv["path"], "dst": dst, "moved": now(), "uid": st.st_uid,
+                 "gid": st.st_gid, "mode": st.st_mode & 0o7777, "keep": True, "account": login,
+                 "label": sv["label"], "domain": sv["domain"]}
+            index.append(e)
+            moved.append(e)
+        write_json(paths.attic_index, index, 0o600)
+    a[login] = {"managed": True, "since": now(), "uid": uid, "home": home,
+                "attic": [e["id"] for e in moved]}
+    _accounts_write(paths, a)
+    print("adopted %s: %d service(s) booted out and kept in the attic; its tasks now run under %s"
+          % (login, len(moved), LABEL))
+    return 0
+
+
+def _account_running(paths, login):
+    st = read_json(paths.state_file, {})
+    for kind in ("children", "tasks"):
+        for name, x in (st.get(kind) or {}).items():
+            if name.startswith(login + "/") and x.get("pid") and pid_alive(x["pid"]):
+                return True
+    return False
+
+
+def account_release(paths, login):
+    """The way back, one command: stop running as <login>, put its services back."""
+    if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
+        print("fleet-node-supervisor: account release loads %s's services back — run it as root (sudo)" % login,
+              file=sys.stderr)
+        return 1
+    a = accounts_read(paths)
+    if not (a.get(login) or {}).get("managed"):
+        print("fleet-node-supervisor: %s is not managed" % login, file=sys.stderr)
+        return 1
+    a[login] = dict(a[login], managed=False, released=now())
+    _accounts_write(paths, a)
+    # the running daemon drops the login's entries on its next pass; wait for it,
+    # so the old services never run beside ours
+    sv = read_json(paths.state_file, {}).get("supervisor") or {}
+    if pid_alive(sv.get("pid")):
+        end = now() + env_num("FLEET_NODE_RELEASE_WAIT", 20)
+        while now() < end and _account_running(paths, login):
+            time.sleep(0.2)
+    back = 0
+    with attic_lock(paths):
+        index = read_json(paths.attic_index, [])
+        for e in [x for x in index if x.get("account") == login and x.get("keep")]:
+            if os.path.exists(e["src"]):
+                print("fleet-node-supervisor: %s already exists — left the attic copy %s" % (e["src"], e["id"]),
+                      file=sys.stderr)
+                continue
+            _put_back(paths, e)
+            index.remove(e)
+            back += 1
+        write_json(paths.attic_index, index, 0o600)
+    print("released %s: %d service(s) put back and loaded" % (login, back))
+    return 0
 
 
 # --------------------------------------------------------------- status ---------
@@ -709,6 +1149,26 @@ def status_lines(paths, table, state):
         out.append("task   %-18s last %s · %s rc=%s · %ss · runs %s"
                    % (tk["name"], iso(ts.get("last_start")), ts.get("result") or "never",
                       ts.get("rc"), ts.get("duration", "-"), ts.get("runs") or 0))
+    for login, why in managed_accounts(paths).items():
+        if why:
+            out.append("account %-17s %s" % (login, why))
+            continue
+        units = account_units(paths, table)
+        bad, ok, last = [], 0, 0
+        for u in units:
+            key = "%s/%s" % (login, u["name"])
+            x = (state.get("children" if u.get("keepalive") else "tasks") or {}).get(key) or {}
+            if u.get("keepalive"):
+                good = pid_alive(x.get("pid"))
+            else:
+                good = x.get("result") == "ok" or (x.get("result") == "running" and x.get("rc") in (0, None))
+                last = max(last, x.get("last_start") or 0)
+            if good:
+                ok += 1
+            else:
+                bad.append("%s %s" % (u["name"], x.get("result") or x.get("status") or "never"))
+        out.append("account %-17s %d/%d ok · last run %s%s"
+                   % (login, ok, len(units), iso(last), (" · " + ", ".join(bad)) if bad else ""))
     sw = state.get("sweep") or {}
     out.append("sweep  %-18s last %s · moved %s (total %s) · extra %s (report only) · attic %d entries"
                % ("leftovers", iso(sw.get("last")), sw.get("moved", 0), sw.get("total_moved", 0),
@@ -784,6 +1244,19 @@ def main(argv):
         return install(paths)
     if cmd == "uninstall":
         return uninstall(paths)
+    if cmd == "account":
+        sub = rest[0] if rest else "list"
+        if sub == "list":
+            for login, a in sorted(accounts_read(paths).items()):
+                print("%s  %s since %s" % (login, "managed" if a.get("managed") else "released",
+                                           iso(a.get("since"))))
+            return 0
+        if sub == "manages" and len(rest) > 1:
+            return 0 if (accounts_read(paths).get(rest[1]) or {}).get("managed") else 1
+        if sub == "adopt" and len(rest) > 1:
+            return account_adopt(paths, rest[1], dry="--dry-run" in rest)
+        if sub == "release" and len(rest) > 1:
+            return account_release(paths, rest[1])
     table = load_table(paths)
     if cmd == "run":
         return Supervisor(paths, table).run()
@@ -815,7 +1288,8 @@ def main(argv):
         sub = rest[0] if rest else "list"
         if sub == "list":
             for e in read_json(paths.attic_index, []):
-                print("%s  %s  moved %s" % (e["id"], e["src"], iso(e.get("moved"))))
+                print("%s  %s  moved %s%s" % (e["id"], e["src"], iso(e.get("moved")),
+                                              "  (account %s, kept)" % e["account"] if e.get("keep") else ""))
             return 0
         if sub == "restore" and len(rest) > 1:
             return attic_restore(paths, rest[1])
@@ -826,7 +1300,8 @@ def main(argv):
             print("purged %d" % n)
             return 0
     print("usage: fleet-node-supervisor.py run|tick|status [--json|--check]|sweep [--dry-run]|"
-          "attic [list|restore <id>|purge]|install|uninstall", file=sys.stderr)
+          "attic [list|restore <id>|purge]|account [list|adopt|release|manages <login>]|install|uninstall",
+          file=sys.stderr)
     return 2
 
 
