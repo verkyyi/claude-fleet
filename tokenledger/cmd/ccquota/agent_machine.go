@@ -188,8 +188,8 @@ func readLoginEnv(path string, strict bool) (map[string]string, error) {
 		if fi.Mode().Perm()&0o077 != 0 {
 			return nil, fmt.Errorf("%s: mode %o — it holds a token; only root may read it (chmod 600)", path, fi.Mode().Perm())
 		}
-		if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid != 0 {
-			return nil, fmt.Errorf("%s: owned by uid %d, not root", path, st.Uid)
+		if uid, ok := fileUID(fi); ok && uid != 0 {
+			return nil, fmt.Errorf("%s: owned by uid %d, not root", path, uid)
 		}
 	}
 	f, err := os.Open(path)
