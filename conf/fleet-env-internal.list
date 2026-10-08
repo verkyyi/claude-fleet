@@ -80,6 +80,7 @@ FLEET_CLIENT_BADGE_CACHE           path: where fleet-client-badge.sh keeps its l
 FLEET_CLIENT_BADGE_HOST            seam: this machine's hostname as the status-bar badge reads it (fleet-client-badge.sh, #1779)
 FLEET_COMPOSE_LOG                  path: the writing area's usage log, logs/compose.ndjson (issue #1955)
 FLEET_PLACE_TIMING                 handoff: where fleet-client-place.sh writes a done start's node timing points, set by fleet-compose.py (issue #2238)
+FLEET_PRETRUST_NODE_MAX_AGE        knob: how old (s, default 86400) the proxy's cached hub trust word may be for the trusted-node wide pre-trust (#2282)
 FLEET_TIMING_READY_SECS            knob: how long a start's executor watches its window for t_ready (fleet_control.py, 120; 0 = never; issue #2238)
 FLEET_CRED_PROXY_START_SECS        knob: how long `fleet-cred-proxy.sh ensure` waits for the proxy to come up (30)
 FLEET_CRED_PROXY_WATCH_SECS        knob: how often the proxy launcher looks at its proxy — a dead one is restarted on the next look (2, #1975)
