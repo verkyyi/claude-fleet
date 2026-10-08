@@ -83,7 +83,7 @@ FLEET_CLIENT_NOTIFY_CMD            seam: the system notifier the action loop run
 FLEET_CLIENT_OPEN_CMD              seam: the opener the action loop runs (default open / xdg-open, #1717)
 FLEET_CLIENT_TTY                   seam: the terminal fleet-client-lease.py asks XTVERSION on (default /dev/tty; fleet-client-where-selftest.sh hands it a pty, #1716)
 FLEET_CLIENT_BADGE_CACHE           path: where fleet-client-badge.sh keeps its last where read (~/.cache/claude-fleet/shell/tmp, #1779)
-FLEET_CLIENT_BADGE_HOST            seam: this machine's hostname as the status-bar badge reads it (fleet-client-badge.sh, #1779)
+FLEET_CLIENT_BADGE_LOGIN           seam: the login the status-bar badge shows instead of the certificate's principal (fleet-client-badge.sh, #2365)
 FLEET_CLOCK_POLL                   knob: how often fleet-onboard-clock.sh reads its terminal (0.25 s, #2267)
 FLEET_CLOCK_SSH_SHIM               seam: a dir put first on the clock sandbox's PATH — a fake node's ssh / hostname (newcomer-e2e clock step, #2267)
 FLEET_CLOCK_STEP_SECS              knob: fleet-onboard-clock.sh's deadline per wait (180 s; a run gets 3×, #2267)
