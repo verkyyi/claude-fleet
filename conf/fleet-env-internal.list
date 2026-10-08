@@ -383,6 +383,7 @@ FLEET_SPAWN_FILL_CMD               seam: replaces the cold start's background ch
 FLEET_SPAWN_OVERLAP                knob: 0 = the cold start checks the whole tree out before the agent starts (the old order); default 1 overlaps them (#2237)
 FLEET_SPAWN_GUARD_SLEEP            knob: internal pacing/limit, safe in-code default (dash-enter.sh)
 FLEET_SPAWN_CLAIMED                handoff: the --async tail inherits the foreground's GitHub claim, taken back on failure (#1606)
+FLEET_SPAWN_WNAME                  handoff: the --async tail takes the window name the gate pass derived (an EPIC member's 简称·…, #2355)
 FLEET_SPAWN_TAIL                   handoff: spawn only the seed tail (used by the handoff/resume path)
 FLEET_SPOT_EVACUATE_MARGIN         knob: seconds fleet-spot-evacuate.sh keeps before its deadline so a started move can finish, default 30 (#1428)
 FLEET_SPOT_EVACUATE_SECS           handoff: the SPOT reclaim deadline the ccquota agent passes to fleet-spot-evacuate.sh (its CCQUOTA_FLEET_RECLAIM_SECS, 240; #1428)
