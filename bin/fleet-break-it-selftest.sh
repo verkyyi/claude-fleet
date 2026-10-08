@@ -62,6 +62,7 @@
 #                                                   stderr), fleet-children.py (claim: stale); the hub half is
 #                                                   tokenledger/internal/api fleet_place.go (go test, when here)
 #   place-server-down                               fleet_server_down (fleet-lib.sh), fleet-control-read.sh start
+#   release-unverified                              bin/fleet-release.sh (fleet-release-selftest.sh's sandbox)
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
 #                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
 #   dispatch-wrong-replica                          tokenledger/internal/api node_route.go (fleet_node_conns +
@@ -3463,6 +3464,21 @@ SH
   SECS=$(since "$t0")
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move after the run went green"; return 1; }
   WHAT="master 上 macOS 红：开出带指纹的修复单、stable 拒挪（macos:）；同一提交跑绿后照常挪"
+}
+
+# ---- release-unverified (#2483, EPIC #2482 C3): `fleet release` runs the whole
+# road — CI, the move, the hub, every machine, this machine — and stops at the
+# first step that fails. The sandbox is bin/fleet-release-selftest.sh's (a real
+# bare repo + the real fleet-stable.sh; fake gh, hub, roster, machines, local
+# install-sync and doctor): a red check refuses and is named, a release logs every
+# machine's arrival, a machine that never follows is named, this machine's
+# rejection moves stable back by itself.
+drill_release_unverified() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-release-selftest.sh" 2>&1) || { WHY="$(printf '%s\n' "$out" | grep -m 3 '^FAIL' | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="fleet release：CI 红拒发并点名；发布逐台记到位时间；没跟上的机器点名；本机体检拒了自动退回 stable"
 }
 
 # ---- burst-lands-on-one (#2077, EPIC #2074 C6): the hub counts the starts it just

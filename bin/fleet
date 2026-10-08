@@ -38,6 +38,11 @@
 #   fleet hub set <key> <value> the hub's settings, at once, audited (#1986);
 #                               fleet hub settings | get <key> | unset <key>
 #   fleet hub invite [github]   an install command that lets one newcomer in (#2261)
+#   fleet release [--to <sha>] [--dry-run] | --rollback
+#                               (on a fleet machine) the release: CI green →
+#                               move stable → the hub, every machine and this one
+#                               follow, each checked; stops at the first that
+#                               does not, `--rollback` moves stable back (#2483)
 #   fleet claude|codex [--node m4] [a first sentence…]
 #                               a new session in your home directory on a
 #                               fleet machine, the client onto it (#2264)
@@ -132,7 +137,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,75p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,81p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
