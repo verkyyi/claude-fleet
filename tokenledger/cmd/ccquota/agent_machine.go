@@ -133,6 +133,7 @@ func machineTenants(dir, state string, strict bool) ([]agent.Config, error) {
 		if cfg.Token == "" {
 			return nil, fmt.Errorf("%s: no CCQUOTA_TOKEN", n)
 		}
+		ra.ConfDir = getenv("FLEET_CONF_DIR")
 		cfg.Home = ra.Home
 		cfg.RunAs = ra
 		cfg.Sources = getenv("CCQUOTA_SOURCES")

@@ -30,6 +30,10 @@ type RunAs struct {
 	GID    uint32
 	Groups []uint32
 	Home   string
+	// ConfDir is the login's own $FLEET_CONF_DIR (its <login>.env's, else
+	// ~/.config/claude-fleet): every command it runs gets this one, never the
+	// root agent's.
+	ConfDir string
 }
 
 type runAsKey struct{}
@@ -55,9 +59,16 @@ var machineStrict atomic.Int32
 // login to start it as.
 var errNoLogin = errors.New("machine agent: no login to run this command as (refused rather than run as root)")
 
-// prepCmd makes cmd run as ctx's login: credentials, HOME/USER/LOGNAME and a
-// working directory of the login's home unless one is set. A plain agent
-// (no login on ctx, not in machine mode) is untouched, byte for byte.
+// prepCmd makes cmd run as ctx's login: credentials, HOME/USER/LOGNAME, the
+// login's FLEET_CONF_DIR and a working directory of the login's home unless one
+// is set. A plain agent (no login on ctx, not in machine mode) is untouched,
+// byte for byte.
+//
+// The root agent's own FLEET_CONF_DIR and TMPDIR are the node supervisor's
+// (/var/db/fleet-node/conf, …/tmp — root 0700) and never travel to the login
+// (claude-fleet#2471): with them every fleet-control.py on m4 died opening its
+// store under root's conf dir, and the hub read only «INTERNAL: Local
+// controller failed». A value the caller put on cmd.Env itself is kept.
 func prepCmd(ctx context.Context, cmd *exec.Cmd) error {
 	ra := runAsOf(ctx)
 	if ra == nil {
@@ -71,21 +82,43 @@ func prepCmd(ctx context.Context, cmd *exec.Cmd) error {
 	if env == nil {
 		env = os.Environ()
 	}
-	out := make([]string, 0, len(env)+3)
+	out := make([]string, 0, len(env)+4)
+	hasConf := false
 	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
+		k, v, _ := strings.Cut(kv, "=")
 		switch k {
 		case "HOME", "USER", "LOGNAME", "MAIL", "SUDO_USER", "SUDO_UID", "SUDO_GID", "SUDO_COMMAND":
 			continue
+		case "FLEET_CONF_DIR", "TMPDIR":
+			if own, set := os.LookupEnv(k); set && v == own {
+				continue
+			}
+			if k == "FLEET_CONF_DIR" {
+				hasConf = true
+			}
 		}
 		out = append(out, kv)
 	}
 	out = append(out, "HOME="+ra.Home, "USER="+ra.Login, "LOGNAME="+ra.Login)
+	if conf := ra.confDir(); !hasConf && conf != "" {
+		out = append(out, "FLEET_CONF_DIR="+conf)
+	}
 	cmd.Env = out
 	if cmd.Dir == "" && ra.Home != "" {
 		cmd.Dir = ra.Home
 	}
 	return nil
+}
+
+// confDir is the login's FLEET_CONF_DIR: its own, else the default under its home.
+func (ra *RunAs) confDir() string {
+	if ra.ConfDir != "" {
+		return ra.ConfDir
+	}
+	if ra.Home == "" {
+		return ""
+	}
+	return filepath.Join(ra.Home, ".config", "claude-fleet")
 }
 
 // startWhy turns a command that never started as ctx's login into a reason a

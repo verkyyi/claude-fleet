@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 
 from fleet_config_write import revision, write
@@ -949,7 +950,12 @@ def main(argv=None):
     except Fault as exc:
         print(canonical({"error": exc.as_dict()}))
         return 1
-    except Exception:
-        print(canonical({"error": {"code": "INTERNAL", "message": "Local controller failed"}}))
+    except Exception as exc:
+        # The reason rides along (issue #2471): «Local controller failed» alone
+        # was all the hub read from m4 for a day, while the cause was one
+        # PermissionError on a conf dir the login could not open.
+        traceback.print_exc()
+        why = ("%s: %s" % (type(exc).__name__, exc)).strip().splitlines()[0][:200]
+        print(canonical({"error": {"code": "INTERNAL", "message": "Local controller failed: " + why}}))
         return 1
     return 0

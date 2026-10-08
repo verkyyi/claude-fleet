@@ -507,8 +507,9 @@ type fleetCapacity struct {
 var fleetControlCommand = func(ctx context.Context, script string, stdin []byte) ([]byte, error) {
 	cmd := fleetCommand(ctx, script, "rpc")
 	cmd.Stdin = bytes.NewReader(stdin)
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := prepCmd(ctx, cmd); err != nil {
 		return nil, err
 	}
@@ -517,6 +518,11 @@ var fleetControlCommand = func(ctx context.Context, script string, stdin []byte)
 	// the caller reads stdout either way.
 	if stdout.Len() > 0 {
 		return stdout.Bytes(), nil
+	}
+	// It died before it could say why (claude-fleet#2471): its last stderr
+	// line is the reason, not a bare «exit status 1».
+	if line := lastLine(stderr.String()); err != nil && line != "" {
+		err = fmt.Errorf("%w: %s", err, line)
 	}
 	return nil, err
 }
