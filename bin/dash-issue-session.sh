@@ -593,7 +593,13 @@ if [ -z "$title" ]; then
   title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
   [ -z "$title" ] && title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
 fi
-wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
+# An EPIC member's window wears its batch's 简称 first — 托管·一个节点… (issue
+# #2355): fleet_issue_win_name reads it off the body the gate just read (no
+# body ⇒ it reads one), one parent read per batch an hour; any other issue's
+# name is fleet_win_name's, byte for byte.
+_ibody=''
+[ -n "$issue_json" ] && _ibody=$(printf '%s\n' "$issue_json" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("body") or "")' 2>/dev/null)
+wname=$(fleet_issue_win_name "$REPO" "$num" "$title" "$_ibody"); [ -z "$wname" ] && wname="$slug"
 # No repo tag on the name, even with 2+ repos (issue #1023 dropped #793's `tl·`
 # prefix): the dash's repo headings + badge already say which repo a window is,
 # and identity is `@repo`/`@issue`, never the name. The `·slug$` dedup above still

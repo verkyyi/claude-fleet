@@ -178,7 +178,7 @@ title="$TITLE"
 if [ -z "$title" ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
   title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
 fi
-wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$branch"
+wname=$(fleet_issue_win_name "$REPO" "$num" "$title"); [ -z "$wname" ] && wname="$branch"   # an EPIC member: 简称· first (#2355)
 
 # Re-mark the window as a worker. @raw goes (the reapers must gate it on the PR
 # now, not treat it as a disposable experiment); @worktree STAYS (dash ⌃x resolves

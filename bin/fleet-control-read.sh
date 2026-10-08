@@ -2,6 +2,16 @@
 # Private, noninteractive adapter for fleet_control.py. All inputs are argv.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# The callers have no TMPDIR — an SSH forced command, and ccquota's agent (a
+# LaunchDaemon) reading `workers` for its heartbeat — while the daemons that
+# write the cache run with the per-user one (fleet-install-apply.sh). So read
+# the same dir, BEFORE fleet-lib.sh fixes $FLEET_C off it: with /tmp the
+# inventory found no issue cache and sent every row's `title=` empty (issue
+# #2355 — the other machines' sidebars showed scratch-N / issue-N, not the
+# task). No getconf (Linux) ⇒ /tmp as before.
+if [ -z "${TMPDIR:-}" ] && t=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -d "$t" ]; then
+  export TMPDIR="$t"
+fi
 . "$BIN/fleet-lib.sh"
 mode="${1:-}"
 sess="${2:-}"
@@ -560,11 +570,7 @@ case "$mode" in
     if [ "$mode" = comment ]; then
       exec bash "$BIN/fleet-comment.sh" "$n" --repo "$repo" --note --from hub --body-file -
     fi
-    # An SSH forced command has no TMPDIR; the daemons that write the cache run
-    # with the per-user one (fleet-install-apply.sh), so read the same dir.
-    if [ -z "${TMPDIR:-}" ] && t=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -d "$t" ]; then
-      export TMPDIR="$t"
-    fi
+    # TMPDIR: set at the top for every mode (issue #2355).
     case "${3:-}" in
       issue)  set -- issue view ;;
       pr)     set -- pr view ;;
