@@ -316,6 +316,30 @@ elif [ -e "$H" ]; then
   exit 3
 fi
 
+# A full name another login already carries (issue #2210): sysadminctl refuses
+# it — "User with full name '…' already exists" — and still exits 0, so step 1
+# "passed" and step 3 died on a login that was never made. The same person's
+# second login (the hub's relogin) hits it every time: take `<name> (<login>)`.
+realname_owner() { # $1 name → the login whose short or full name it is (none: empty)
+  dscl . -list /Users RealName 2>/dev/null | awk -v n="$1" '
+    { u = $1; r = $0; sub(/^[^ \t]+[ \t]*/, "", r)
+      if (u == n || r == n) { print u; exit } }'
+}
+if [ "$DONLY" = 0 ]; then
+  _own=$(realname_owner "$FULL")
+  if [ -n "$_own" ]; then
+    _alt="$FULL ($LOGIN)"
+    [ -z "$(realname_owner "$_alt")" ] || {
+      printf '%s: full name %s is login %s'"'"'s, and %s is taken too — refusing (pass another --full-name)\n' \
+        "$PROG" "$FULL" "$_own" "$_alt" >&2
+      exit 3
+    }
+    printf '%s: full name %s is already login %s'"'"'s — using %s\n' "$PROG" "$FULL" "$_own" "$_alt" >&2
+    FULL=$_alt
+  fi
+  unset _own _alt
+fi
+
 if [ "$APPLY" = 1 ]; then
   if [ "$DONLY" = 1 ]; then NEED='sudo'; else NEED='sudo sysadminctl createhomedir git'; fi
   for t in $NEED; do
@@ -390,6 +414,11 @@ if [ "$DONLY" = 0 ]; then
   fi
   run_shown "sudo sysadminctl -addUser $(printf %q "$LOGIN") -fullName $(printf %q "$FULL") -password <redacted: $PWFILE>" \
     -- sudo sysadminctl -addUser "$LOGIN" -fullName "$FULL" -password "$PW"
+  # sysadminctl's exit says nothing about whether the login exists (#2210)
+  if [ "$APPLY" = 1 ] && ! id "$LOGIN" >/dev/null 2>&1; then
+    printf '%s: sysadminctl did not create login %s (see its message above)\n' "$PROG" "$LOGIN" >&2
+    fail
+  fi
   step "create its home directory"
   run sudo createhomedir -c -u "$LOGIN"
 
