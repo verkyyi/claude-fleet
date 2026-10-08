@@ -129,6 +129,7 @@ credentials and `node.env` moved, the agent through the launcher — and then:
 | port | one per login | one fixed `127.0.0.1:18923` (`FLEET_CRED_SHARED_PORT`) — plus each login's OLD port, answering that login only |
 | control socket | per login | `/var/run/fleet-cred/.shared/ctl.sock` (0666): the kernel's peer uid (`getpeereid` / `SO_PEERCRED`) names the login |
 | the login's proxy state (signing key, held passes, relay pass) | `~/.config/claude-fleet/cred-proxy/` | MOVED to `/var/db/fleet-cred/<login>/cred-proxy/` (binds / revocations / live sessions / trust copied) |
+| the leased credentials (Claude `.credentials.json`, Codex `auth.json`) | in the login's store | ONE copy for the machine, `/var/db/fleet-cred/.shared/pool/<kind>/<hash of the access token>/`; the login's store keeps only its index, `cred-proxy/pool.json` (issue #2311) |
 | `FLEET_CRED_PROXY` | as the login set it | `1` — the line it had is remembered and put back by `disable` |
 | version | each login's install | the root-owned copy in `/Library/Application Support/claude-fleet/credsep/`; an admin login's sync runs `machine refresh` (`sudo -n`) to follow stable, else the doctor says to |
 
@@ -136,7 +137,15 @@ credentials and `node.env` moved, the agent through the launcher — and then:
 signing key, binds, revocations, live sessions, hub passes, trust, the probe,
 the node token, the person's budget, the relay pass, the credentials, the log
 (`/var/log/fleet-cred/<login>.log`) — is that login's tenant's; nothing is
-shared between two. A session credential minted on the shared proxy carries its
+shared between two — except the leased credential FILE (issue #2311): a lease is
+filed once, under a hash of its access token, and each tenant's index
+(`cred-proxy/pool.json`, `<kind>:<label>` → hash) is the only way that tenant's
+sessions reach it. Two logins share a file exactly when the hub handed both the
+same token (the pool accounts); a token only one login leased is never served to
+another, and two people's accounts that happen to share a label stay two files.
+A tenant that joined before the pool moves its copies in when the proxy starts;
+a file no index names any more is removed; `uninstall` puts each tenant's copies
+back as its own files. A session credential minted on the shared proxy carries its
 login (`lg`) and is verified with **that** login's key, so a credential relabelled
 to another login only fails the signature. A hub pass (the central route) is
 filed under the login whose session registered it (`fleet-cred-proxy.sh pass`,
