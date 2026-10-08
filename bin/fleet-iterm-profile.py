@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """fleet-iterm-profile.py — the iTerm2 Dynamic Profile `fleet` (issue #1903,
 EPIC #1906 C10): the profile the client's window runs in on a Mac, whose ⌘ chords
-send the private codes conf/tmux-shell.conf catches (⌘↓ ⌘↑ ⌘[ ⌘] ⌘J ⌘↩ ⌘/ ⌘P ⌘N).
+send the private codes conf/tmux-shell.conf catches (⌘↓ ⌘↑ ⌘[ ⌘] ⌘↩ ⌘P ⌘N ⌘. ⌘K).
 
     fleet-iterm-profile.py write    write / refresh it (nothing when it is current)
     fleet-iterm-profile.py remove   delete it

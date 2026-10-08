@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-switch-selftest.sh — switching sessions from the keyboard (issue #1903,
-# EPIC #1906 C10): ⌘↓ ⌘↑ ⌘[ ⌘] ⌘J ⌘↩ ⌘P, which iTerm2's `fleet` profile sends as
+# EPIC #1906 C10): ⌘↓ ⌘↑ ⌘[ ⌘] ⌘↩ ⌘P, which iTerm2's `fleet` profile sends as
 # private codes ESC [ 92x ~ (bin/dash-keymap.sh --panel switch).
 #
 #   A  ranking (bin/fleet-quickopen.py) on the prototype's session table: 「cod」
@@ -11,7 +11,8 @@
 #      (conf/tmux-shell.conf) and a terminal (a pty) the bytes are written to — so
 #      tmux's user-keys, the binds, the list's @sidebar_do queue and its jump() all
 #      run: every code moves the session in view as it should, two codes in one
-#      write are two steps, ⌘J lands on the row waiting on you, ⌘↩ zooms (and ⌘↓
+#      write are two steps, the retired ⌘J / ⌘/ codes (924 / 926, issue #2362)
+#      move nothing, open nothing and reach the session as no byte, ⌘↩ zooms (and ⌘↓
 #      still steps from there, the list hidden), and ⌘P
 #      opens the popup where 「thr」 ↵ switches to «three» — and finds a session
 #      folded under its parent, which ⌘[ steps back onto too; ⌘. (issue #2167)
@@ -20,7 +21,7 @@
 #      action of the row menu's letter table is in it and nothing else; `>` lists
 #      the menu's own items for the row in view in the table's order, filters
 #      them (`>pin`), and for real ⌘P `>pin` ↵ pins the row in view, the way the
-#      menu's 置顶 does; ⌘/ with no stage opens the page in a popup, q closes it.
+#      menu's 置顶 does.
 #   C  no iTerm2: the profile writer writes nothing, and fleet-shell.sh's attach is
 #      the bare `exec tmux … attach` it always was, byte for byte; in iTerm2 with
 #      the profile there, the window wears `fleet` only around the attach.
@@ -245,11 +246,16 @@ try:
     os.write(master, b'\x1b[920~\x1b[920~')
     check(wait(lambda: current() == W['three'], 4), 'two ⌘↓ in one write did not step twice: on %s' % current())
     print('B: two codes in one write are two steps')
-    # ⌘J: the row waiting on you
+    # ⌘J and ⌘/ went with issue #2362: an iTerm2 profile written before still
+    # sends their codes — caught, and nothing happens (no step, no popup)
     tm('set-option', '-w', '-t', W['one'], '@claude_state', 'needs')
     tm('set-option', '-w', '-t', W['one'], '@claude_needs', 'ask')
     time.sleep(1.5)  # the list's next read carries the needs row
-    press(924, 'one', '⌘J needs')
+    was = current()
+    os.write(master, b'\x1b[924~\x1b[926~')
+    time.sleep(1.5)
+    check(current() == was, 'the retired ⌘J code moved the session in view to %s' % current())
+    check(tm('show-options', '-gqv', '@popup_open') in ('', '0'), 'the retired ⌘/ code opened a popup')
     # ⌘↩: zoom the right pane, and back
     os.write(master, b'\x1b[925~')
     check(wait(lambda: tm('display-message', '-p', '#{window_zoomed_flag}') == '1', 3), '⌘↩ did not zoom')
@@ -259,7 +265,7 @@ try:
     os.write(master, b'\x1b[925~')
     check(wait(lambda: tm('display-message', '-p', '#{window_zoomed_flag}') == '1', 3), '⌘↩ did not zoom (2)')
     press(920, 'two', '⌘↓ while zoomed')
-    print('B: ⌘J lands on the row waiting on you; ⌘↩ zooms and restores; ⌘↓ from a zoomed session unzooms and steps')
+    print('B: the retired ⌘J / ⌘/ codes do nothing; ⌘↩ zooms and restores; ⌘↓ from a zoomed session unzooms and steps')
     # the rows ⌘P reads, and the popup itself: 「thr」 ↵
     rows = state / 'switch-rows.tsv'
     check(wait(lambda: rows.exists() and 'three' in rows.read_text(), 3), 'the list wrote no switch-rows.tsv')
@@ -349,14 +355,7 @@ try:
           '⌘P >pin ↵ did not pin the row in view')
     check(wait(lambda: tm('show-options', '-gqv', '@popup_open') in ('', '0'), 4), 'the popup did not close (3)')
     check(current() == W['five'], '>pin switched windows: on %s' % current())
-    print('B: ⌘P > lists the row menu\'s items in the table order; >pin ↵ pins the row in view')
-    # ⌘/ with no stage (not the shell): the page in the popup, q closes it
-    os.write(master, b'\x1b[926~')
-    check(wait(lambda: tm('show-options', '-gqv', '@popup_open') not in ('', '0'), 6), '⌘/ opened nothing')
-    time.sleep(.6)
-    os.write(master, b'q')
-    check(wait(lambda: tm('show-options', '-gqv', '@popup_open') in ('', '0'), 4), 'q did not close the keys page')
-    print('B: ⌘/ with no stage: the page in a popup, q closes it (%d checks)' % checks)
+    print('B: ⌘P > lists the row menu\'s items in the table order; >pin ↵ pins the row in view (%d checks)' % checks)
 except AssertionError as e:
     print('FAIL B: %s' % e)
     cleanup()

@@ -84,11 +84,8 @@
 #                          selected — the right pane shows it, the list its row;
 #                          one an older client started (`@portal_ver`) is
 #                          respawned on the new code first (issue #2113)
-#   keys <session>         ⌘/ / prefix ? (issue #1952): the one page of keys
-#                          (fleet-keys.sh --page) as a stage window of its own
-#                          (`@fleet_role keys`) — the right pane shows it, q / esc
-#                          closes it and the stage is back on what it showed.
-#                          Exit 1: no stage (the caller pops the sheet up instead)
+#   keys <session>         retired with ⌘/ (issue #2362): does nothing, exit 0 —
+#                          only a bind an older conf still holds calls it
 #   reload <session> [--from <old home>]   a newer client into the running one,
 #                          same servers (issue #1781) — see `reload` below
 #   ask <kind> [arg…]      a short question on ONE line at the bottom of the stage
@@ -471,15 +468,10 @@ portal_ver() {
 }
 # code_sum <file…> — the code a long-lived client process runs, by content
 # (issue #2345): each loop writes it beside its pid file when it takes the pid
-# (<pid file>.code), the keys page on its window (@keys_ver), and `reload`
+# (<pid file>.code), and `reload`
 # restarts the ones whose code on disk is not what they started from — never
 # judged by a link, which already points at the new files.
 code_sum() { cat "$@" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }'; }
-# keys_code — what the keys page draws from (fleet-keys.sh and what it runs)
-keys_code() {
-  local d="${SHADOW:-$BIN}"
-  code_sum "$d/fleet-keys.sh" "$d/fleet-ui-lang.sh" "$d/dash-keymap.sh" "$d/fleet-sidebar-menu.sh" "$d/fleet-lib.sh"
-}
 # portal_fresh <window id> [--force] — the stage's portal window on the code on
 # disk: a window started by another version (@portal_ver differs, or none) has
 # its pane respawned in place — same window id, same @fleet_role / @remote, so
@@ -1036,25 +1028,11 @@ portal)
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
-# The one page of keys (issue #1952, EPIC #1949 C3): a stage window, told by its
-# `@fleet_role keys`, running fleet-keys.sh --page — a whole page on the right,
-# where the old popup could not scroll (#1570). One at a time: a second ⌘/ just
-# shows it again. Its `@remote -:` names no machine and no row, as the `wait`
-# note's, so no machine's `open` retargets it and the list keeps its rows.
-keys)
-  s="${2:-$SESS}"
-  SESS=$s; STAGE="$s-stage"; SHADOW=$BIN
-  TS has-session -t "=$STAGE" 2>/dev/null || exit 1
-  w=$(TS list-windows -t "=$STAGE" -F '#{window_id} #{@fleet_role}' 2>/dev/null | awk '$2 == "keys" { print $1; exit }')
-  if [ -z "$w" ]; then
-    w=$(TS new-window -d -P -F '#{window_id}' -t "=$STAGE:" -n "$(sh "$BIN/fleet-ui-lang.sh" t keys_page_title 2>/dev/null || echo 按键)" -c "$HOME" \
-          "exec bash $(sq "$BIN/fleet-keys.sh") --page") || exit 1
-    TS set-window-option -t "$w" @fleet_role keys \; set-window-option -t "$w" @remote -: \; \
-      set-window-option -t "$w" automatic-rename off \; set-window-option -t "$w" @keys_ver "$(keys_code)" 2>/dev/null
-  fi
-  TS select-window -t "$w" 2>/dev/null || exit 1
-  exit 0
-  ;;
+# `keys` (issue #1952) opened the page of keys; it went with ⌘/ (issue #2362).
+# A bind a running server still holds from an older conf calls it until the
+# reload: it does nothing, rather than read `keys` as a machine to connect to.
+# compat-1v: 下一批删
+keys) exit 0 ;;
 # ---------------------------------------------------------------------------------
 # The right pane of `home` (issue #1759): a nested client of the stage — its
 # TMUX unset, so tmux does not refuse the nesting. The stage gone (its last
@@ -1136,17 +1114,14 @@ reload)
         done
   fi
   # the stage's long-lived windows (issue #2113): the writing area on the new
-  # code when what it runs moved (its draft is on disk), the keys page when
-  # fleet-keys.sh did — told by @fleet_role, never a name
+  # code when what it runs moved (its draft is on disk) — told by @fleet_role,
+  # never a name. A keys page an older client opened (`keys`, issue #1952) is
+  # closed: the page went with ⌘/ (issue #2362). compat-1v: 下一批删
   TS list-windows -t "=$STAGE" -F '#{window_id} #{@fleet_role}' 2>/dev/null \
     | while read -r w r; do
         case "$r" in
           portal) portal_fresh "$w" ${all:+--force} ;;
-          keys)
-            kv=$(keys_code)
-            if changed fleet-keys.sh || [ "$(TS show-window-option -v -t "$w" @keys_ver 2>/dev/null)" != "$kv" ]; then
-              TS respawn-pane -k -t "$w" 2>/dev/null && TS set-window-option -t "$w" @keys_ver "$kv" 2>/dev/null
-            fi ;;
+          keys)   TS kill-window -t "$w" 2>/dev/null ;;
         esac
       done
   # restart_loop <pid-file> <start command…> — that loop, on the new code

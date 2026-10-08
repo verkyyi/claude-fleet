@@ -12,12 +12,18 @@ keyboard on the list.
 |---|---|---|---|
 | next / previous session, the right pane follows at once | ⌘↓ ⌘↑ | prefix n / p | no wrap at either end |
 | back / forward through the sessions you were on | ⌘[ ⌘] | prefix h / l | a closed session is stepped over |
-| the next session waiting on you | ⌘J | prefix k | as a tap on 「! N 个在问你」 |
 | zoom the right pane | ⌘↩ | F9 | again to restore |
-| every key | ⌘/ | prefix ? | |
 | sessions and actions (also ⌘K / prefix s, issue #2365) | ⌘P | prefix / | type a few letters, ↵ — below |
 | a new task: the writing area on the right | ⌘N | prefix c | below |
 | the orchestrating session ⇄ the writing area (issue #2146) | ⌘N again | prefix c again | only with an orchestrator; also the 「新任务」 row's right-click menu |
+| open / shut the sub-tasks of the session in view (issue #2167) | ⌘. | prefix . | on a sub-task: shuts its parent |
+| the switcher: every session, a new one, the layout (issue #2266) | ⌘K | prefix s | |
+| quit fleet: the client's processes here go, the sessions run on (issue #2349) | ⌘Q | prefix Q | below |
+
+This table is the one list of the client's keys: the client opens no key page
+and has no key for one (issue #2362 took ⌘/ and prefix ? away, and with them ⌘J
+and prefix k). **The session waiting on you** is a tap on the bar's red
+「! N 等你」 — it unzooms, puts the list on that row and the right pane on it.
 
 **⌘P — sessions and actions** (issue #2365: 「一切优化为 CLI」 — the way in is the
 keyboard, not the right-click menu, which stays but is advertised nowhere) lists
@@ -35,7 +41,7 @@ or repo (`m4`, `needs`), then the letters in order (`crr` → 「Codex: reap
 rules」); ties go to the more recent. ⌘P + two letters + ↵ reaches any session
 in four keys.
 
-From a zoomed session, ⌘↓ ⌘↑ ⌘[ ⌘] ⌘J unzoom first (⌘P keeps the zoom while you
+From a zoomed session, ⌘↓ ⌘↑ ⌘[ ⌘] unzoom first (⌘P keeps the zoom while you
 pick). With no task list on screen they do nothing — prefix h is then still
 «the machine before», as prefix q.
 
@@ -75,18 +81,22 @@ A terminal sends nothing for ⌘ — macOS keeps it. So the client installs an
 **private code**:
 
     ESC [ <code> ~        code 920 next · 921 prev · 922 back · 923 fwd ·
-                               924 needs · 925 zoom · 926 help · 927 quickopen ·
-                               928 new
+                               925 zoom · 927 quickopen · 928 new · 929 fold ·
+                               930 switcher · 931 quit
+
+924 (⌘J) and 926 (⌘/) are retired (issue #2362) and never reused: a profile
+written before the update still sends them, and the conf catches both and does
+nothing with them until the next start rewrites the profile without them.
 
 No terminal sends `ESC [ 92x ~` for a real key. `conf/tmux-shell.conf` catches
 each as `user-keys[<code>]` → `User<code>`, bound to the same body as the prefix
 key. The one table is `bin/dash-keymap.sh --panel switch list` (action · ⌘ glyph
-· iTerm2 key · code · prefix key); the conf, the `?` sheet and the profile are
+· iTerm2 key · code · prefix key); the conf, the full sheet and the profile are
 all held to it by `bin/fleet-keys-selftest.sh` leg 10.
 
 The profile **adds** a profile and changes none: every other setting comes from
 its parent — the profile the window was in when it was written, else iTerm2's
-default — and its Keyboard Map is the parent's own with the eight rows on top.
+default — and its Keyboard Map is the parent's own with the table's rows on top.
 `fleet` wears it only while attached (`ESC ] 1337 ; SetProfile=fleet` before the
 attach, the profile it came from after the detach), so outside the client
 iTerm2 behaves as it always did.
@@ -100,6 +110,19 @@ iTerm2 behaves as it always did.
 - **Not iTerm2** (Terminal.app, Termius, ssh from elsewhere — no `ITERM_PROFILE`
   in the environment): the attach is the bare `exec tmux … attach` it always
   was, byte for byte; the prefix keys above do the same jobs.
+
+## Popups draw opaque
+
+The client's tmux server keeps the terminal's left/right margins (DECSLRM) off
+(`terminal-overrides[90] "*:Cmg@:Clmg@"`, issue #2362). tmux turns them on for
+iTerm2 by itself and then scrolls or clears every rectangle narrower than the
+screen — the session pane beside the list, the inside of ⌘P's popup — with a
+margin scroll; the popup's content travelled that way too, and any slip in the
+terminal's margin handling left the session's text inside the list and the
+popup's borders gone. With the margins off tmux redraws those rows cell by cell
+around the popup. The popups' own frame has a background of its own (the
+palette's `PAL_BG`, `fleet_popup_draw`), so no cell inside is the terminal's
+default.
 
 ## Where the state lives
 

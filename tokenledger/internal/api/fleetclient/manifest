@@ -121,7 +121,6 @@ bin/dash-keymap.sh
 bin/dash-popup.sh
 bin/fleet-popup-lib.sh
 bin/dash-fold-toggle.sh
-bin/fleet-keys.sh
 # switching sessions from the keyboard (#1903): ⌘P's popup + the switch history,
 # and the iTerm2 profile whose ⌘ chords send the switch codes
 bin/fleet-quickopen.py

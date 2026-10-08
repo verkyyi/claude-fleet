@@ -81,15 +81,16 @@ grep -Eq '\-ge "\$MAX_AGE"' "$WAIT" \
 code_only() { grep -v '^[[:space:]]*#' "$CONF"; }
 shell_code() { grep -v '^[[:space:]]*#' "$SHELLC"; }
 [ "$(code_only | grep -c 'dash-popup\.sh')" -eq 0 ] || fail "the node conf opens a popup again (#1714)"
-# issue #1903 adds ⌘/ (the same sheet as prefix ?) and ⌘P / prefix / (quick open);
+# issue #1903 adds ⌘P / prefix / (quick open) — and ⌘/, the sheet, which issue
+# #2362 took away with prefix ?: the client opens no key sheet;
 # issue #1904 F1, the full-screen switcher of the one-pane layout (quick open --full);
 # issue #2112 a tap on the bar's 「请重新扫码」 (`rescan`, the scan in a popup);
 # issue #2266 ⌘K / prefix s (the switcher, quick open --switch).
 npop=$(shell_code | grep -c 'dash-popup\.sh')
-[ "$npop" -eq 8 ] || fail "expected 8 dash-popup.sh binds in the client conf (prefix ?, ⌘/, ⌘P, prefix /, ⌘K, prefix s, F1, the rescan tap), found $npop"
-[ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'fleet-keys\.sh')" -eq 2 ] \
+[ "$npop" -eq 6 ] || fail "expected 6 dash-popup.sh binds in the client conf (⌘P, prefix /, ⌘K, prefix s, F1, the rescan tap), found $npop"
+[ "$(shell_code | grep -c 'fleet-keys\.sh')" -eq 0 ] \
   && [ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'fleet-quickopen\.py')" -eq 5 ] \
-  || fail "the client conf's popups are not exactly the key sheet ×2 (prefix ?, ⌘/) and quick open ×5 (⌘P, prefix /, ⌘K, prefix s, F1)"
+  || fail "the client conf's popups are not exactly quick open ×5 (⌘P, prefix /, ⌘K, prefix s, F1) with no key sheet (#2362)"
 cat "$CONF" "$SHELLC" | grep -v '^[[:space:]]*#' | grep -q 'display-popup' \
   && fail "a conf calls display-popup directly — every popup goes through dash-popup.sh (issue #1535)"
 [ "$(shell_code | grep -c 'dash-popup\.sh')" -eq "$(shell_code | grep 'dash-popup\.sh' | grep -c 'run-shell -b ')" ] \
