@@ -50,7 +50,7 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 	if err != nil {
 		return nil
 	}
-	if len(accts) == 0 && s.autoAssignOn() {
+	if len(accts) == 0 && (s.autoAssignOn() || s.invitedPrincipal(pid)) {
 		// Nothing queued yet — least-busy found no fit machine at the
 		// sign-in, or the setting came on after it: the same idempotent
 		// placement the sign-in runs, once more, so the client's next look

@@ -31,6 +31,7 @@
 #                               who may sign in to the hub with GitHub (#1986)
 #   fleet hub set <key> <value> the hub's settings, at once, audited (#1986);
 #                               fleet hub settings | get <key> | unset <key>
+#   fleet hub invite [github]   an install command that lets one newcomer in (#2261)
 #   fleet run claude|codex [args]
 #                               a session on THIS computer through its
 #                               credential proxy, no credential in it (#2136)
@@ -95,7 +96,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;

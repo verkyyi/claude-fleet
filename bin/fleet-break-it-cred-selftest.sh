@@ -414,7 +414,7 @@ EOF
   out=$(PATH="$sb/shim:$PATH" SUDO_USER="$me" HOME="$sb/home" FLEET_CONF_DIR="$sb/home/.config/claude-fleet" \
     FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" FLEET_CREDSEP_LOG_BASE="$sb/log" \
     FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" FLEET_CREDSEP_ROLE="$me" \
-    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_SUDO='' \
+    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
     bash "$BIN/fleet-credsep.sh" install 2>&1)
   SECS=$(since "$t0")
   [ ! -e "$sb/db/root" ] || { WHY="under sudo the login was taken as root: the credentials went to $sb/db/root ($(printf '%s' "$out" | tail -1))"; return 1; }
@@ -423,7 +423,7 @@ EOF
   grep -q "\"root\": \"$sb/db/$me\"" "$sb/home/.config/claude-fleet/credsep.json" 2>/dev/null \
     || { WHY="credsep.json does not name the login's store"; return 1; }
   # root with neither SUDO_USER nor --login: refused, nothing touched
-  out=$(PATH="$sb/shim:$PATH" SUDO_USER='' HOME="$sb/home" FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_TEST=1 \
+  out=$(PATH="$sb/shim:$PATH" SUDO_USER='' HOME="$sb/home" FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 \
     bash "$BIN/fleet-credsep.sh" install 2>&1); local rc=$?
   [ "$rc" = 2 ] || { WHY="root without SUDO_USER / --login was not refused (rc $rc): $out"; return 1; }
   WHAT="sudo 下照提示敲 install：凭据进的是登录 ${me} 自己的存储，不是 root 的；root 没 SUDO_USER 又没 --login 直接拒"

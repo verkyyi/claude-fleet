@@ -494,3 +494,19 @@ CREATE TABLE IF NOT EXISTS hub_audit (
   detail  TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_hub_audit_created ON hub_audit(created);
+
+-- Invites (claude-fleet#2261): one code lets one new person onto the list at
+-- their GitHub sign-in. Only the code's SHA-256 is kept; id names it on the
+-- admin's list. github_login, when set, is the only username it admits.
+-- Times are unix seconds; 0 = not yet.
+CREATE TABLE IF NOT EXISTS fleet_invites (
+  id           TEXT PRIMARY KEY,
+  code_hash    TEXT NOT NULL UNIQUE,
+  github_login TEXT NOT NULL DEFAULT '',
+  created_by   TEXT NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  used_at      INTEGER NOT NULL DEFAULT 0,
+  used_by      TEXT NOT NULL DEFAULT '',
+  revoked_at   INTEGER NOT NULL DEFAULT 0
+);

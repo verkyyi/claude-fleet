@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fleet hub set|get|unset|settings|users|accounts — the hub's settings, people list and login records (claude-fleet#1986).
+"""fleet hub set|get|unset|settings|users|accounts|invite — the hub's settings, people list, login records and invites (claude-fleet#1986).
 
     fleet hub settings                   every hub setting: what applies, from where
     fleet hub get <key>                  one setting's value
@@ -14,6 +14,10 @@
     fleet hub accounts forget <principal> drop a record that never reached a machine
     fleet hub accounts relogin <principal> <machine> <login>
                                          give them a new login there (the old one stays)
+    fleet hub invite [<github login>]    an install command that lets one new person in
+                                         (7 days, used once; only that GitHub user if named)
+    fleet hub invite --list              every invite and its state
+    fleet hub invite --revoke <id>       stop an unused one
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
 fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names
@@ -40,6 +44,7 @@ CONF_DIR = os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/cla
 SETTINGS_PATH = "/v1/fleet/settings"
 USERS_PATH = "/v1/fleet/users"
 ACCOUNTS_PATH = "/v1/fleet/accounts"
+INVITES_PATH = "/v1/fleet/invites"
 MIGRATED = "hub.legacy_migrated."
 
 
@@ -214,6 +219,39 @@ def moved_line(m, to_name=None):
     return "已把 %s（%s）从旧身份 %s 转给 %s" % (m.get("login"), hosts, m.get("from"), to_name or m.get("to"))
 
 
+# --- invites (claude-fleet#2261) ------------------------------------------------
+
+def invite_main(a):
+    if a.list:
+        resp = call(a, "GET", INVITES_PATH)
+        if a.json:
+            print(json.dumps(resp, indent=2, ensure_ascii=False))
+            return
+        fmt = "%-14s %-9s %-16s %-20s %s"
+        print(fmt % ("id", "state", "for", "expires", "made by / used by"))
+        for i in resp.get("invites") or []:
+            who = i.get("created_by", "") + (" → " + i["used_by"] if i.get("used_by") else "")
+            print(fmt % (i.get("id", ""), i.get("state", ""), i.get("github_login") or "anyone",
+                         (i.get("expires_at") or "")[:19], who))
+        return
+    if a.revoke:
+        resp = call(a, "DELETE", INVITES_PATH + "?id=" + urllib.parse.quote(a.revoke))
+        print(json.dumps(resp, indent=2, ensure_ascii=False) if a.json else "revoked %s" % resp.get("id"))
+        return
+    body = {}
+    if a.login:
+        body["github_login"] = a.login.lstrip("@")
+    resp = call(a, "POST", INVITES_PATH, body)
+    if a.json:
+        print(json.dumps(resp, indent=2, ensure_ascii=False))
+        return
+    # The code is in this answer and nowhere else: print it once, to the
+    # admin's own terminal, for them to send.
+    who = "GitHub 用户 %s" % resp["github_login"] if resp.get("github_login") else "一位新同事"
+    print("把这一行发给%s（%s 前有效，用一次即失效）：\n\n  %s\n" % (who, (resp.get("expires_at") or "")[:10], resp.get("command", "")))
+    print("撤销：fleet hub invite --revoke %s" % resp.get("id", ""))
+
+
 # --- login records -------------------------------------------------------------
 
 def accounts_main(a):
@@ -288,6 +326,10 @@ def main(argv):
     ac.add_argument("to", nargs="?", help="rekey: the new id · relogin: the machine")
     ac.add_argument("login", nargs="?", help="relogin: the new login")
     ac.add_argument("--host", help="forget: only the record on this machine")
+    iv = sub.add_parser("invite", parents=[common], help="an install command that lets one new person in")
+    iv.add_argument("login", nargs="?", help="only this GitHub user may use it")
+    iv.add_argument("--list", action="store_true", help="every invite and its state")
+    iv.add_argument("--revoke", metavar="ID", help="stop an unused invite")
     a = ap.parse_args(argv)
     if a.cmd in (None, "settings"):
         settings_list(a)
@@ -299,6 +341,8 @@ def main(argv):
         settings_set(a, "")
     elif a.cmd == "accounts":
         accounts_main(a)
+    elif a.cmd == "invite":
+        invite_main(a)
     else:
         if a.action == "rm":
             a.action = "remove"

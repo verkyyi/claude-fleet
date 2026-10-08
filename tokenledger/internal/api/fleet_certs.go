@@ -470,6 +470,7 @@ type deviceLogin struct {
 	name       string // the client's own hostname, for the device record (#1470)
 	purpose    string // "" fleet login · "node" fleet node join: the scan also adds a node (#1627)
 	osUser     string // the login the node's agent runs as (purpose=node)
+	invite     string // the invite the newcomer's install carried (claude-fleet#2261)
 	expires    time.Time
 	state      deviceState
 	issued     *CertResponse
@@ -609,6 +610,10 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		Purpose string `json:"purpose"`
 		// OSUser is the login the node's agent will run as (purpose=node).
 		OSUser string `json:"os_user"`
+		// Invite is the code an invite command's install carried
+		// (claude-fleet#2261): the sign-in this login sends the browser
+		// through presents it. Empty = the list alone decides, as before.
+		Invite string `json:"invite"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "malformed request")
@@ -641,6 +646,9 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		purpose: req.Purpose,
 		osUser:  sanitizeJoinField(req.OSUser),
 		expires: now.Add(deviceTTL),
+	}
+	if inv := strings.TrimSpace(req.Invite); validInviteCode(inv) {
+		l.invite = inv
 	}
 	if err := s.devices.add(l, now); err != nil {
 		httpError(w, http.StatusServiceUnavailable, err.Error())
@@ -893,6 +901,20 @@ func (s *Server) rememberLoginCode(next http.Handler) http.Handler {
 				HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r),
 				MaxAge: int(loginCookieTTL.Seconds()),
 			})
+			// The invite the login carried rides to the GitHub callback
+			// beside it (claude-fleet#2261) — only for a browser not signed
+			// in yet: a signed-in one never passes the callback again.
+			invite := ""
+			s.devices.withUser(code, time.Now(), func(l *deviceLogin) {
+				if l.state == devicePending {
+					invite = l.invite
+				}
+			})
+			if invite != "" {
+				if _, _, in := s.githubSession(r); !in {
+					setInviteCookie(w, r, invite)
+				}
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
