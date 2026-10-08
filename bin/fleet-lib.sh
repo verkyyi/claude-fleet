@@ -7186,15 +7186,22 @@ fleet_hub_sessions() {
 # itself hold spaces; a reader that never sees the field (no sleepers, an old
 # server) counts exactly as before. A PROXY window onto another machine's session
 # (@remote, issue #1424) rides the same field as `remote` and is no session here.
+# A window with NO agent in it holds no slot either (issue #2404): the wrapper gone
+# (a launch that never came up fell to the caller's `exec $SHELL`), the pane dead,
+# or the session on its recovery page (`exited`) — FLEET_AGENT_FMT's `@A=0`. On
+# 2026-10-07 three such shells filled a login's 4/4 and refused the one real
+# start. A preparing / waking window still counts (its agent is on its way).
 _fleet_session_tally() {   # → "<awake> <sleepers>" across every fleet
-  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT @L=#{?@remote,remote,#{@worker_lifecycle}}" | awk "$FLEET_ROLE_AWK"'
+  fleet_list_windows_all "#{session_name} $FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT @L=#{?@remote,remote,#{@worker_lifecycle}}" | awk "$FLEET_ROLE_AWK"'
     { rows[NR]=$0; r=frole($2); if (r=="home" || r=="panel") fleet[$1]=1 }
     END {
       for (i=1; i<=NR; i++) {
-        n=split(rows[i], a, " "); s=a[1]; w=frole(a[2]); l=""
+        n=split(rows[i], a, " "); s=a[1]; w=frole(a[2]); l=""; ag=1
         if (n>=3 && a[n] ~ /^@L=/) l=substr(a[n], 4)
+        if (n>=4 && a[n-1] ~ /^@A=/) ag=substr(a[n-1], 4)
         if (!fleet[s] || w!="worker" || l=="remote") continue
-        if (l=="sleeping" || l=="failed") z++; else c++
+        if (l=="sleeping" || l=="failed") z++
+        else if (ag!="0" || l=="preparing" || l=="waking") c++
       }
       print c+0, z+0
     }'
@@ -7213,20 +7220,61 @@ fleet_session_sleepers() { local t; t=$(_fleet_session_tally); printf '%s\n' "${
 # AND the sleeping/failed rule are duplicated in _fleet_session_tally above — keep BOTH in sync, or the global and
 # per-fleet caps count different sets.
 _fleet_session_tally_for() {   # <sess> → "<awake> <sleepers>" in that fleet
-  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "$FLEET_ROLE_FMT @L=#{?@remote,remote,#{@worker_lifecycle}}" 2>/dev/null | awk "$FLEET_ROLE_AWK"'
-    { l=""
-      if (match($0, / @L=[^ ]*$/)) { l=substr($0, RSTART+4); role=frole(substr($0, 1, RSTART-1)) } else role=frole($0)
-      if (role=="home" || role=="panel") hub=1; rows[NR]=role; life[NR]=l }
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "$FLEET_ROLE_FMT @A=$FLEET_AGENT_FMT @L=#{?@remote,remote,#{@worker_lifecycle}}" 2>/dev/null | awk "$FLEET_ROLE_AWK"'
+    { l=""; ag=1; t=$0
+      if (match(t, / @L=[^ ]*$/)) { l=substr(t, RSTART+4); t=substr(t, 1, RSTART-1) }
+      if (match(t, / @A=[^ ]*$/)) { ag=substr(t, RSTART+4); t=substr(t, 1, RSTART-1) }
+      role=frole(t)
+      if (role=="home" || role=="panel") hub=1; rows[NR]=role; life[NR]=l; agent[NR]=ag }
     END {
       if (!hub) { print 0, 0; exit }
       for (i=1; i<=NR; i++) {
         if (rows[i]!="worker" || life[i]=="remote") continue
-        if (life[i]=="sleeping" || life[i]=="failed") z++; else c++
+        if (life[i]=="sleeping" || life[i]=="failed") z++
+        else if (agent[i]!="0" || life[i]=="preparing" || life[i]=="waking") c++
       }
       print c+0, z+0
     }'
 }
 fleet_session_count_for() { local t; t=$(_fleet_session_tally_for "$1"); printf '%s\n' "${t%% *}"; }
+
+# fleet_window_has_agent <window> [socket] — rc 0 while an agent runs (or is on
+# its way) in <window>, rc 1 when nothing does: the wrapper gone (@wrap_gone, a
+# launch that fell to the caller's shell), the pane dead, or the session on its
+# recovery page (@claude_state exited) — issue #2404. The ONE rule the caps
+# (FLEET_AGENT_FMT in the tallies above) and the idle reap share; a window that
+# does not exist is rc 2.
+FLEET_AGENT_FMT='#{?#{pane_dead},0,#{?#{@wrap_gone},0,#{?#{==:#{@claude_state},exited},0,1}}}'
+fleet_window_has_agent() {
+  local a
+  # #{window_id} first: tmux answers an unknown target with empty formats, rc 0.
+  if [ -n "${2:-}" ]; then a=$(tmux -L "$2" display-message -p -t "$1" "#{window_id} $FLEET_AGENT_FMT @L=#{@worker_lifecycle}" 2>/dev/null)
+  else a=$(tmux display-message -p -t "$1" "#{window_id} $FLEET_AGENT_FMT @L=#{@worker_lifecycle}" 2>/dev/null); fi
+  case "$a" in @*) a=${a#* } ;; *) return 2 ;; esac
+  case "$a" in 0\ @L=preparing|0\ @L=waking) return 0 ;; 0\ *) return 1 ;; esac
+  return 0
+}
+
+# fleet_session_slot_holders <sess> → `<window id>\t<fleet_id>\t<name>` for each
+# window that holds a slot in that fleet — the refusal names them (issue #2404 ③),
+# so 「4/4」 is never a mystery and the way out is one command.
+fleet_session_slot_holders() {
+  tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "#{window_id} $FLEET_AGENT_FMT #{?@remote,remote,#{@worker_lifecycle}}	$FLEET_ROLE_FMT	#{@fleet_id}	#{window_name}" 2>/dev/null \
+    | awk -F'\t' "$FLEET_ROLE_AWK"'
+      { split($1, h, " "); if (frole($2)!="worker" || h[3]=="remote" || h[3]=="sleeping" || h[3]=="failed") next
+        if (h[1] ~ /^@/ && (h[2]!="0" || h[3]=="preparing" || h[3]=="waking")) print h[1] "\t" $3 "\t" $4 }'
+}
+# _fleet_holders_note <sess> → ` — 占着名额：@15 #11805 · @44 norepo-2；收掉一个：
+# fleet-worker-stop.sh <sess> fid:<id>` (nothing when no window answers).
+_fleet_holders_note() {
+  local rows fid
+  rows=$(fleet_session_slot_holders "$1") || return 0
+  [ -n "$rows" ] || return 0
+  fid=$(printf '%s\n' "$rows" | awk -F'\t' '$2!=""{print $2; exit}')
+  printf ' — 占着名额：%s' "$(printf '%s\n' "$rows" | awk -F'\t' '{ printf "%s%s %s", (NR>1 ? " · " : ""), $1, $3 }')"
+  [ -n "$fid" ] && printf '；收掉一个：%s/fleet-worker-stop.sh %s fid:%s' "$_FLEET_LIB_DIR" "$1" "$fid"
+  return 0
+}
 fleet_session_sleepers_for() { local t; t=$(_fleet_session_tally_for "$1"); printf '%s\n' "${t##* }"; }
 
 # Cap on concurrent Claude working sessions (issues #28, #70). Returns 0 if a new
@@ -7610,8 +7658,8 @@ fleet_session_cap_ok() {
   if [ -n "$sess" ] && [ "$fmax" -ne 0 ]; then
     n=$(( $(fleet_session_count_for "$sess") + $(fleet_inflight_count "$sess") ))
     if [ "$n" -ge "$fmax" ]; then
-      printf 'fleet at capacity: %s/%s Claude sessions in this fleet%s — raise FLEET_MAX_SESSIONS or close one first' \
-        "$n" "$fmax" "$(_fleet_sleepers_note "$(fleet_session_sleepers_for "$sess")")"
+      printf 'fleet at capacity: %s/%s Claude sessions in this fleet%s — raise FLEET_MAX_SESSIONS or close one first%s' \
+        "$n" "$fmax" "$(_fleet_sleepers_note "$(fleet_session_sleepers_for "$sess")")" "$(_fleet_holders_note "$sess")"
       return 1
     fi
   fi
