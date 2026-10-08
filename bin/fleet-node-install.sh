@@ -268,7 +268,7 @@ else
   # a switch ends at phase `switched` (the daemon verifies it next); anything else says result + reason
   res="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print("%s\t%s" % ("switched" if d.get("phase") == "switched" else d.get("result", ""), d.get("reason", "")))' "$STATE/update.json" 2>/dev/null)"
   case "${res%%	*}" in
-    switched|committed) ok 运行时 "current = $(cur_sha | cut -c1-12) · $("$PY" -I "$upd" versions 2>/dev/null | sed 's/^version *//')" ;;
+    switched|committed) ok 运行时 "current = $(cur_sha | cut -c1-12) · $("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); print(" · ".join("%s %s" % (t, d.get(t, "?")) for t in ("claude", "codex", "tmux")))' "$CUR/.release/staged.json" 2>/dev/null)（守护起来后由它验证）" ;;
     current) ok 运行时 "current = $(cur_sha | cut -c1-12)（已是这一版）" ;;
     *) fail 运行时 "更新器：${res:-$(tail -n 1 "$WORK/tick.out")}" ;;
   esac
