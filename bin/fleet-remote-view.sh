@@ -554,10 +554,11 @@ open)
   fi
   # one proxy window per (machine, LOGIN) — issue #2430: a row of the person's
   # other login on that machine is another connection, never a retarget over
-  # this one (whose far end cannot see that login's fleet)
+  # this one (whose far end cannot see that login's fleet). `run` stamps the
+  # window's login every round; an unstamped one (not up yet) is taken as is.
   olog=$(fleet_fleet_login "$wid" 2>/dev/null) || olog=''
   w=$(OT list-windows -t "=$osess" -F '#{window_id} #{@remote} #{@remote_login}' 2>/dev/null \
-      | awk -v n="$node:" -v l="$olog" 'index($2, n) == 1 && $3 == l { print $1; exit }')
+      | awk -v n="$node:" -v l="$olog" 'index($2, n) == 1 && ($3 == l || $3 == "") { print $1; exit }')
   if [ -n "$w" ]; then
     cur=$(OT show-options -wqv -t "$w" @remote 2>/dev/null)
     if [ "$cur" != "$node:$wid" ]; then
@@ -815,6 +816,7 @@ EOF_PEER
     login=$(fleet_fleet_login "$wid" 2>/dev/null) || login=''
     lopt=(); [ -n "$login" ] && lopt=(-l "$login")
     export FLEET_CONNECT_LOGIN="$login"
+    [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_login "$login" 2>/dev/null
     if [ -n "$shellopt" ] && [ "${FLEET_SHELL_WARM:-1}" != 0 ] \
        && { [ -z "$login" ] || [ "$(rv_route_login "${TMPDIR:-/tmp}/warm/$node.sock.route")" = "$login" ]; }; then
       # A warm master still coming up (its `<sock>.pending` pid alive — the shell
