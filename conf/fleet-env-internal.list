@@ -550,6 +550,7 @@ FLEET_JOIN_SUDO                    seam: the privilege prefix fleet-node-join.sh
 FLEET_JOIN_OS                      seam: overrides `uname -s` in fleet-node-join.sh (darwin|linux) (#1418)
 FLEET_JOIN_ARCH                    seam: overrides `uname -m` in fleet-node-join.sh (#1418)
 FLEET_JOIN_POLL                    seam: seconds between fleet-node-join.sh's /v1/node/self polls (default 3) (#1418)
+FLEET_JOIN_CREDSEP                 seam: the fleet-credsep.sh fleet-node-join.sh writes a separated login's node.env through (default: beside it, else the install's) (#2316)
 FLEET_NODE_STATE                   path: com.claude-fleet.node's state dir (default /var/db/fleet-node) — fleet_node_manages reads its accounts.json (#2332)
 FLEET_NODE_JOIN_ARGS               seam: extra fleet-node-join.sh options `fleet node join` passes through (fleet-node-selftest: --no-deps --service detached …) (#1627)
 FLEET_NODE_ROOT                    path: the managed machine's root runtime dir (default /Library/Application Support/claude-fleet) — fleet-node-install.sh / fleet-node-update.py (#2330, #2334)

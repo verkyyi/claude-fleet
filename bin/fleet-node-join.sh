@@ -146,6 +146,18 @@ HOSTN="$(hostname -s 2>/dev/null || hostname)"
 CONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}"
 ENVF="$CONF/node.env"
+# Separated (issue #2316): credsep moved node.env into the store (a link this
+# login cannot read; node.pub.env carries the rest). A join then writes THROUGH
+# credsep — root edits the store's copy, the link stays — and the agent starts
+# through its launcher; never a plain node.env in the home, never an agent the
+# launcher does not start (EPIC #2293 ③). FLEET_JOIN_CREDSEP: the test seam.
+SEP=0 CREDSEP=""
+if [ -f "$CONF/credsep.json" ]; then
+  SEP=1
+  CREDSEP="${FLEET_JOIN_CREDSEP:-}"
+  [ -n "$CREDSEP" ] || { [ -f "$0" ] && [ -f "$(dirname "$0")/fleet-credsep.sh" ] && CREDSEP="$(dirname "$0")/fleet-credsep.sh"; }
+  [ -n "$CREDSEP" ] || CREDSEP="$ROOT/bin/fleet-credsep.sh"
+fi
 STATE="$HOME/.ccquota"
 LBIN="$HOME/.local/bin"
 CCQ="$LBIN/ccquota"
@@ -196,15 +208,33 @@ can_priv() { [ "$UID_N" = 0 ] || { [ -n "$SUDO" ] && priv true >/dev/null 2>&1; 
 
 load_env() { # → TOKEN, saved HUB match, KIND, SAVED_COMPUTE
   TOKEN="" SAVED_HUB="" KIND="" SAVED_COMPUTE=""
-  [ -f "$ENVF" ] || return 1
-  SAVED_COMPUTE="$(sed -n 's/^CCQUOTA_FLEET_COMPUTE=//p' "$ENVF" | head -n 1)"
-  TOKEN="$(sed -n 's/^CCQUOTA_TOKEN=//p' "$ENVF" | head -n 1)"
-  SAVED_HUB="$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$ENVF" | head -n 1)"
-  KIND="$(sed -n 's/^CCQUOTA_FLEET_NODE_KIND=//p' "$ENVF" | head -n 1)"
+  local f="$ENVF"
+  # separated: the link's target is not this login's to read — the rest is in node.pub.env
+  [ "$SEP" = 1 ] && [ ! -r "$ENVF" ] && f="$CONF/node.pub.env"
+  [ -f "$f" ] || return 1
+  SAVED_COMPUTE="$(sed -n 's/^CCQUOTA_FLEET_COMPUTE=//p' "$f" | head -n 1)"
+  TOKEN="$(sed -n 's/^CCQUOTA_TOKEN=//p' "$f" | head -n 1)"
+  SAVED_HUB="$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$f" | head -n 1)"
+  KIND="$(sed -n 's/^CCQUOTA_FLEET_NODE_KIND=//p' "$f" | head -n 1)"
   [ -n "$TOKEN" ]
 }
 
+# sep_registered — separated, and the store already holds this hub's node.env
+# (the link is there): the token is not read, the hub is node.pub.env's word
+sep_registered() { [ "$SEP" = 1 ] && [ -L "$ENVF" ] && { load_env; [ "$SAVED_HUB" = "$HUB" ]; }; }
+
 write_env() {
+  if [ "$SEP" = 1 ]; then
+    # the same lines, down a pipe to root (the token never on an argv); a line
+    # with an empty value drops it, so ADMIN / KIND / COMPUTE converge too
+    { [ -z "$1" ] || printf 'CCQUOTA_TOKEN=%s\n' "$1"
+      printf 'CCQUOTA_HUB_URL=%s\nCCQUOTA_FLEET=1\n' "$HUB"
+      if [ "$ADMIN" = 1 ]; then printf 'CCQUOTA_FLEET_ADMIN=1\n'; else printf 'CCQUOTA_FLEET_ADMIN=\n'; fi
+      if [ "${KIND:-}" = ephemeral ]; then printf 'CCQUOTA_FLEET_NODE_KIND=ephemeral\n'; else printf 'CCQUOTA_FLEET_NODE_KIND=\n'; fi
+      [ -z "$COMPUTE" ] || printf 'CCQUOTA_FLEET_COMPUTE=%s\n' "$COMPUTE"
+    } | FLEET_CONF_DIR="$CONF" bash "$CREDSEP" setenv >>"$WORK/credsep.log" 2>&1
+    return
+  fi
   mkdir -p "$CONF" || return 1
   ( umask 077
     {
@@ -231,9 +261,24 @@ TOKEN="" SAVED_HUB="" KIND="" SAVED_COMPUTE=""
 # compute (issue #1719): --compute wins; else a node.env already here keeps its
 # word (no line = a node from before #1719, still on); else a first join is 0.
 if [ -z "$COMPUTE" ]; then
-  if [ -f "$ENVF" ]; then load_env; COMPUTE="$SAVED_COMPUTE"; else COMPUTE=0; fi
+  if [ -f "$ENVF" ] || [ -L "$ENVF" ]; then load_env; COMPUTE="$SAVED_COMPUTE"; else COMPUTE=0; fi
 fi
-if [ -z "$JOINED" ] && load_env && [ "$SAVED_HUB" = "$HUB" ] && self_status >/dev/null; then
+if [ "$SEP" = 1 ]; then
+  # before any code is spent: can the store be written at all?
+  [ -f "$CREDSEP" ] || die "join: this login's credentials are separated (credsep.json), but $CREDSEP is not here to write the store"
+  FLEET_CONF_DIR="$CONF" bash "$CREDSEP" setenv --check >"$WORK/credsep.log" 2>&1; rc=$?
+  case "$rc" in
+    0) ;;
+    4) die "join: this login's credentials are separated — its node token goes into the credential store only, which needs root once, and $ME has no password-less sudo. Nothing was spent: once an admin gives $ME password-less sudo, rerun the same command" ;;
+    *) die "join: credsep setenv --check failed (exit $rc): $(tail -n 1 "$WORK/credsep.log")" ;;
+  esac
+fi
+if [ -z "$JOINED" ] && [ -z "$CODE" ] && sep_registered; then
+  say "join: already registered with $HUB — the token stays in the credential store (separated; not read here)"
+  write_env "" || die "join: cannot update the store's node.env: $(tail -n 1 "$WORK/credsep.log")"
+  ADMIN_OK="?"; SSH_CA=""
+  ui "✓ 已登记在 ${HUB}（凭据已隔离：通行证留在凭据库里）"
+elif [ -z "$JOINED" ] && load_env && [ "$SAVED_HUB" = "$HUB" ] && self_status >/dev/null; then
   say "join: already registered with $HUB — the join code was not spent"
   # Keep the admin choice of THIS run.
   write_env "$TOKEN" || die "join: cannot rewrite $ENVF"
@@ -262,11 +307,16 @@ else
   TOKEN="$(jfield token < "$WORK/join")"
   [ -n "$TOKEN" ] || die "join: the hub answered without a token"
   KIND="$(jfield kind < "$WORK/join")"
-  write_env "$TOKEN" || die "join: cannot write $ENVF"
+  if [ "$SEP" = 1 ]; then
+    write_env "$TOKEN" || die "join: cannot write the token into the credential store: $(tail -n 1 "$WORK/credsep.log")"
+  else
+    write_env "$TOKEN" || die "join: cannot write $ENVF"
+  fi
   ADMIN_OK="$(jbool admin < "$WORK/join")"
   SSH_CA="$(jfield ssh_ca < "$WORK/join")"
   kind_note=""
   [ "$KIND" = ephemeral ] && kind_note=" · SPOT node (ephemeral): SIGTERM moves idle sessions off, then stops"
+  [ "$SEP" = 1 ] && kind_note="$kind_note · separated: the token is in the credential store, $ENVF stays its link"
   say "join: registered as $(jfield label < "$WORK/join") ($(jfield endpoint_id < "$WORK/join")); token in $ENVF$kind_note"
   [ -n "$JOINED" ] || ui "✓ 已登记到入口：$(jfield label < "$WORK/join")（通行证在 ${ENVF}）"
 fi
@@ -545,14 +595,46 @@ start_systemd() {
   return 2
 }
 
+# sep_service — separated (issue #2316): the agent starts through credsep's
+# launcher (root reads the store, pipes the token, runs it as this login), never
+# straight from $RUNNER (it would source a node.env it cannot read). An agent
+# credsep already runs was restarted by `setenv` when node.env changed; a first
+# one gets its definition written here — NOT started — and credsep's install
+# turns it into the launcher's and starts that.
+sep_service() {
+  if python3 -I -c 'import json, sys; sys.exit(0 if (json.load(open(sys.argv[1])).get("back") or {}).get("agent") else 1)'       "$CONF/credsep.json" 2>/dev/null; then
+    say "service: the agent starts through the credential launcher (root) — credsep restarted it if node.env changed"
+    return 0
+  fi
+  if [ "$OS" = darwin ]; then
+    plist="$HOME/Library/LaunchAgents/com.ccquota.agent.plist"
+    refuse_foreign "$plist" || return 1
+    mkdir -p "$HOME/Library/LaunchAgents"
+    plist_body com.ccquota.agent "" > "$plist" || { say "service: FAIL — cannot write $plist"; return 1; }
+  elif [ -d /run/systemd/system ] && can_priv; then
+    unit="/etc/systemd/system/ccquota-agent-$ME.service"
+    refuse_foreign "$unit" || return 1
+    unit_body "User=$ME" > "$WORK/unit"
+    priv install -m 644 "$WORK/unit" "$unit" || { say "service: FAIL — cannot write $unit"; return 1; }
+  else
+    say "service: FAIL — separated credentials need the agent under a service manager (launchd, or systemd with sudo)"; return 1
+  fi
+  FLEET_CONF_DIR="$CONF" bash "$CREDSEP" install >>"$WORK/credsep.log" 2>&1 \
+    || { say "service: FAIL — credsep install (the agent through its launcher): $(tail -n 1 "$WORK/credsep.log")"; return 1; }
+  say "service: the agent starts through the credential launcher (credsep install)"
+}
+
 case "$SERVICE" in
   none) say "service: skipped (--service none) — run $RUNNER under your own supervisor" ;;
-  detached) start_detached ;;
-  auto)
-    rc=2
-    if [ "$OS" = darwin ]; then start_launchd; rc=$?
-    elif command -v systemctl >/dev/null 2>&1; then start_systemd; rc=$?; fi
-    case "$rc" in 0) ;; 2) start_detached ;; *) exit 1 ;; esac ;;
+  *) if [ "$SEP" = 1 ]; then sep_service || exit 1; SERVICE=auto; rc=0
+     else case "$SERVICE" in
+       detached) start_detached ;;
+       auto)
+         rc=2
+         if [ "$OS" = darwin ]; then start_launchd; rc=$?
+         elif command -v systemctl >/dev/null 2>&1; then start_systemd; rc=$?; fi
+         case "$rc" in 0) ;; 2) start_detached ;; *) exit 1 ;; esac ;;
+     esac; fi ;;
 esac
 case "$SERVICE" in
   none) ui "! 没起服务（--service none）：用你自己的方式运行 $RUNNER" ;;
@@ -563,7 +645,11 @@ esac
 
 # ── online ──────────────────────────────────────────────────────────────────
 ONLINE=0
-if [ "$SERVICE" != none ]; then
+if [ "$SEP" = 1 ] && [ -z "$TOKEN" ] && [ "$SERVICE" != none ]; then
+  # a rerun that did not join: the token is in the store, not read here
+  ONLINE=1
+  say "online: not polled — the token is in the credential store (separated); fleet doctor's node row says whether the hub sees it"
+elif [ "$SERVICE" != none ]; then
   deadline=$(( $(date +%s) + WAIT ))
   while :; do
     st="$(self_status)" || st=""

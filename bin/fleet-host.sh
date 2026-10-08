@@ -44,8 +44,17 @@ MARK="claude-fleet node-join (issue #1418)"   # what fleet-node-join.sh writes i
 
 usage() { sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
-envval() { [ -f "$ENVF" ] && sed -n "s/^$1=//p" "$ENVF" | head -n 1; }
-is_node() { [ -n "$(envval CCQUOTA_TOKEN)" ]; }
+# separated (issue #2316): node.env is a link into the credsep store this login
+# cannot read; node.pub.env holds every line but the token
+separated() { [ -f "$CONF/credsep.json" ]; }
+envval() {
+  local f="$ENVF"
+  [ -r "$ENVF" ] || ! separated || f="$CONF/node.pub.env"
+  [ -f "$f" ] && sed -n "s/^$1=//p" "$f" | head -n 1
+}
+is_node() { [ -n "$(envval CCQUOTA_TOKEN)" ] || { separated && [ -L "$ENVF" ]; }; }
+# there <path> — a file, or a link (separated: its target is unreadable here)
+there() { [ -f "$1" ] || [ -L "$1" ]; }
 
 # hub — this machine's hub address ('' = none: one computer on its own)
 hub() {
@@ -141,7 +150,7 @@ cmd_on() {
     is_node && was_node=1
     # the pass `off` put aside: back in place, and the join reruns (no scan —
     # the hub still takes it) to start the agent `off` stopped
-    if [ "$was_node" = 0 ] && [ -f "$ENVF.host-off" ] && [ ! -f "$ENVF" ]; then
+    if [ "$was_node" = 0 ] && there "$ENVF.host-off" && ! there "$ENVF"; then
       mv -f "$ENVF.host-off" "$ENVF" && restored=1 && echo "✓ 沿用上次关掉时留下的入口通行证"
     fi
     if [ "$restored" = 1 ] || ! is_node || ! runtime; then
@@ -165,7 +174,7 @@ cmd_off() {
   fi
   if [ -f "$JOINED" ]; then
     agent_stop
-    [ -f "$ENVF" ] && mv -f "$ENVF" "$ENVF.host-off" && echo "✓ 入口通行证放到一边（$ENVF.host-off，再打开时不用重扫）"
+    there "$ENVF" && mv -f "$ENVF" "$ENVF.host-off" && echo "✓ 入口通行证放到一边（$ENVF.host-off，再打开时不用重扫）"
     rm -f "$JOINED"
   fi
   bash "$here/fleet-conf.sh" set-host 0 || { echo "✗ 写不了 $CONF/fleet.conf"; return 1; }

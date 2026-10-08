@@ -283,6 +283,25 @@ that stopped before its last step) is undone by `uninstall --login <login>`;
 its `--dry-run` says HALF INSTALLED. BREAK-IT rows `cred-sep-by-agent`,
 `cred-sep-bootstrap-fails`.
 
+## Writing node.env once it is separated (issue #2316)
+
+Separated, `~/.config/claude-fleet/node.env` is a link the login cannot read.
+Everything that writes it — `fleet node join` / `fleet host on` (the token the
+hub hands back), `fleet node compute on|off` / `fleet host off` — goes through
+`bin/fleet-credsep.sh setenv`: `KEY=VALUE` lines on stdin (the token never on an
+argv; `KEY=` drops a line; only the node's own `CCQUOTA_*` keys), root edits the
+store's copy in place (owner and mode kept), `node.pub.env` follows, the link
+stays, and an agent already started through the launcher is restarted (it read
+node.env at its start). A join on a separated login with no agent yet writes the
+agent's definition without starting it and runs `credsep install`, which starts
+it through the launcher. Readers fall back to `node.pub.env`.
+
+It needs root once per write: as the login through password-less sudo. A login
+without it is refused BEFORE a join code is spent or a probe runs (`setenv
+--check`, exit 4) — an admin gives it sudo, or for a compute switch runs the
+printed `printf 'KEY=value\n' | sudo bash …/fleet-credsep.sh setenv --login <X>`.
+BREAK-IT rows `cred-sep-rejoin-plain`, `cred-sep-compute-unlinks`.
+
 ## Where the proxy's settings come from (issue #2290)
 
 Root starts the proxy, but the login writes its own `fleet.conf` and

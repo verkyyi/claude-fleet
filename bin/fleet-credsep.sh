@@ -28,6 +28,15 @@
 #                                           an admin: sudo bash … check --fix --login X)
 #   fleet-credsep.sh rootlogs               the doctor's `rootlog` row: every root
 #                                           service whose log lies in a home (WARN)
+#   fleet-credsep.sh setenv [--check]      node.env's KEY=VALUE lines (stdin — the
+#                                           token never on argv) into the store: root
+#                                           edits its copy in place, node.pub.env
+#                                           follows, C/node.env stays the link (issue
+#                                           #2316 — fleet-node-join.sh, `fleet node
+#                                           compute`). Exit 3 = not separated (write
+#                                           node.env yourself), 4 = no password-less
+#                                           sudo (the line to hand an admin printed);
+#                                           --check answers that, writes nothing
 #   fleet-credsep.sh plan                   every login on this machine: its state
 #                                           and the exact commands — dry run, the
 #                                           ONE sudo to type, status, the way back
@@ -107,7 +116,7 @@ SELF="$(id -un)"
 if [ "$(id -u)" = 0 ]; then
   LOGIN="${want:-${SUDO_USER:-}}"
   if [ -z "$LOGIN" ] || [ "$LOGIN" = root ]; then
-    case "$cmd" in install|uninstall|apply)
+    case "$cmd" in install|uninstall|apply|setenv)
       echo "fleet-credsep: as root, say whose credentials: run it with sudo from the login, or add --login <login>" >&2
       exit 2 ;;
     esac
@@ -195,6 +204,15 @@ case "$cmd" in
     fi
     can_sudo || { echo "fleet-credsep: $cmd needs password-less sudo once — run: sudo bash $BIN/fleet-credsep.sh $cmd" >&2; exit 4; }
     root_py "$cmd" "$@"
+    ;;
+  setenv)
+    separated || { echo "fleet-credsep: $LOGIN is not separated — node.env is its own file" >&2; exit 3; }
+    if [ "$(id -u)" != 0 ] && ! can_sudo; then
+      echo "fleet-credsep: $LOGIN's node.env is in the credential store; writing it needs root once — an admin runs: printf '<KEY>=<value>\n' | sudo bash $BIN/fleet-credsep.sh setenv --login $LOGIN" >&2
+      exit 4
+    fi
+    [ "${1:-}" = --check ] && exit 0
+    root_py setenv
     ;;
   plan) python3 -I "$BIN/fleet-credsep.py" plan --bin "$BIN" ;;
   machine)
