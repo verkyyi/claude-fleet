@@ -135,7 +135,28 @@ k) do the same jobs if a key does not arrive.*
 **The layout**: `FLEET_CLIENT_LAYOUT=auto` (default — one pane when the list does
 not fit beside 80 columns, i.e. under `FLEET_SHELL_WIDTH` + 81 columns, where
 the list used to be taken away with nothing in its place) · `single` (always) ·
-`split` (never — the old rule, byte for byte).
+`split` (never — the old rule, byte for byte) · `multi` (auto's rule, the name
+the switcher writes) · `solo` (below).
+
+**The one-session view, `solo`** (issue #2265, EPIC #2259 C6) — what a fresh
+install writes: the whole screen is the session. No list (it still runs, zoomed
+away behind the session, so the switch keys work), no border, no top line, and
+the bar is ONE line — `⌃D 退出（会话在后台继续） · ⌘K 其它会话` and the session's
+machine on the right (`@fleet_view_node`, written by the list). **Leaving is
+putting it in the background**: ⌃D (caught by the client; the agent never sees
+it — its own `/exit` still ends it), `prefix d` or closing the terminal only
+detach, and the terminal says 「会话在后台继续（m5）。下次输入 fleet 回来。」
+(`fleet-topbar.py goodbye`, run by `fleet-shell.sh` once the attach returns).
+The session runs on under its `@reap_policy`. When the agent ends itself
+(`/exit`), the list sees the row in view go `exited` and detaches the client:
+「会话已结束（m5）。fleet 可以恢复。」 — the next `fleet` is back on that session's
+recovery page (↵ resumes it). `fleet` with the client still running re-attaches
+to what it showed; with nothing running it opens the row it showed last (the
+switch history's head) once the list has read it, or a new HOME Claude session
+when that row is gone (`solo_resume`). The layout lives in the server's
+`@fleet_layout` (bar, ⌃D, list); `fleet-shell.sh layout <value>` switches it
+live — remembering it in `fleet.conf` is the caller's. Every other layout's
+screen is byte for byte what it was: `bin/fleet-client-solo-selftest.sh`.
 
 **The top line is the same at every width** — the stage's own status line
 (`conf/tmux-shell-stage.conf` → `bin/fleet-topbar.py`): `‹ i/n ›` · state (●

@@ -300,19 +300,52 @@ def bar_record(rows, current):
     }
 
 
-def publish_bar(rows, current, last):
+def publish_bar(rows, current, last, session=""):
     """Write the top line's record (bar_record) for the stage, only on change, and
     bump the stage session's `@fleet_bar_gen`: the stage's status-left names it,
-    so tmux runs the line again at once (bin/fleet-topbar.py)."""
+    so tmux runs the line again at once (bin/fleet-topbar.py). The machine it
+    names goes on this server too, `@fleet_view_node` — the one-session view's
+    bar (issue #2265, conf/tmux-shell.conf) has no top line to read it from."""
     rec = bar_record(rows, current)
     text = json.dumps(rec, ensure_ascii=False, sort_keys=True)
     if text == last:
         return last
+    solo_ended(current, rec, session)
     if switch_lib().write_atomic(switch_lib().state_dir() / "switch-bar.json", text + "\n"):
         run(["tmux", "-L", STAGE, "set-option", "-t", "=" + STAGE, "@fleet_bar_gen",
              str(time.time_ns())])
+        tmux("set-option", "-g", "@fleet_view_node", (rec or {}).get("node") or "")
         return text
     return last
+
+
+# The one-session view (issue #2265, EPIC #2259 共同约定 3): the file the list
+# leaves in the switch state dir when it detached the client because the session
+# in view ENDED — fleet-topbar.py `goodbye` (run by fleet-shell.sh's attach once
+# the attach returns) reads it to say 「会话已结束」 instead of 「在后台继续」.
+SOLO_ENDED = "solo-ended"
+_SOLO_SEEN = []
+
+
+def solo_ended(current, rec, session):
+    """In the one-session view (`@fleet_layout solo`) the session in view going
+    `exited` — the agent's own /exit — does not leave the person on the wrapper's
+    recovery page: the client is detached, the file above names the machine, and
+    the attach that returns prints that the session ended and that `fleet`
+    resumes it. Only a change seen while watching THIS row counts: opening a row
+    already exited (to resume it, ↵ on that page) is no exit. True = detached."""
+    if rec is None:
+        return False
+    prev = _SOLO_SEEN[0] if _SOLO_SEEN else None
+    _SOLO_SEEN[:] = [(current, rec.get("state", ""))]
+    if not (prev and prev[0] == current and prev[1] != "exited" and rec.get("state") == "exited"):
+        return False
+    if tmux("show-options", "-gqv", "@fleet_layout").strip() != "solo":
+        return False
+    switch_lib().write_atomic(switch_lib().state_dir() / SOLO_ENDED, (rec.get("node") or "") + "\n")
+    if session:
+        tmux("detach-client", "-s", session)
+    return True
 
 
 def stage_remote():
@@ -505,16 +538,20 @@ def heal_frame(session, window):
     return True
 
 
-def single_layout(frame, cols, width):
+def single_layout(frame, cols, width, layout=""):
     """Whether the client's `home` shows ONE pane (issue #1904): only the
     client's frame (`@shell_frame`), never a fleet window. FLEET_CLIENT_LAYOUT is
     auto (the default: one pane when the list does not fit beside 80 columns of
     session — the width under which the list used to be taken away with nothing
-    in its place), single (always) or split (never: the old rule, byte for byte)."""
+    in its place), single (always), solo (always — the newcomer's one-session
+    view, issue #2265: the same one pane, with its own bar and keys in the conf)
+    or split (never: the old rule, byte for byte). `layout` is the server's
+    `@fleet_layout` (fleet-shell.sh sets it, and `layout` switches it live) —
+    it wins over the environment when set."""
     if not (SHELL and frame) or not cols.isdigit():
         return False
-    layout = os.environ.get("FLEET_CLIENT_LAYOUT", "auto")
-    if layout == "single":
+    layout = layout or os.environ.get("FLEET_CLIENT_LAYOUT", "auto")
+    if layout in ("single", "solo"):
         return True
     if layout == "split":
         return False
@@ -549,11 +586,12 @@ def sync(session, enabled, width, lock):
     info = fields(session + ":", US.join(("#{window_id}", "#{window_name}",
                   "#{window_width}", "#{session_attached}", "#{@issue}",
                   "#{@raw}", "#{@worktree}", "#{@norepo}", "#{window_zoomed_flag}",
-                  "#{@sidebar_width_manual}", "#{@remote}", "#{@shell_frame}")))
-    if len(info) != 12:
+                  "#{@sidebar_width_manual}", "#{@remote}", "#{@shell_frame}",
+                  "#{@fleet_layout}")))
+    if len(info) != 13:
         return
     (window, name, cols, attached, issue, raw, worktree, norepo, zoomed, manual,
-     remote, frame) = info
+     remote, frame, layout) = info
     if frame:
         heal_frame(session, window)  # the right pane first: the list's worker
     # A width the operator dragged to (issue #1328) is the width from then on.
@@ -566,7 +604,7 @@ def sync(session, enabled, width, lock):
     # iPad in portrait), or FLEET_CLIENT_LAYOUT=single. The list stays — zoomed
     # away behind the session, still reading rows and taking the queued switches
     # — and the stage's top line is the way round (‹ › and the switcher).
-    single = single_layout(frame, cols, width)
+    single = single_layout(frame, cols, width, layout)
     # A node's fleet session never gets here with enabled == "1" (issue #1713:
     # fleet-sidebar.sh draws the list only on the client's server), so a viewer
     # needs no marker of its own any more — one list, the client's.
@@ -2806,7 +2844,7 @@ def ui(screen, session, worker, lock):
                 # have and try again next tick; the watchdog logs it if it lasts.
                 failure, refresh_at = "tmux call timed out", time.monotonic() + 1
         if STAGE and loaded and view == "live":
-            bar_gen = publish_bar(rows, current_row, bar_gen)
+            bar_gen = publish_bar(rows, current_row, bar_gen, session)
         if not shown:
             follow_at = None  # a hidden view never switches windows
             shown_at = None   # nor does its frame age

@@ -380,6 +380,15 @@ fleet_ui_t() {
     en:home_failed_fmt)         printf 'could not open a session: %s' "${1:-}" ;;
     zh:home_first_hint)         printf '这里和本地运行 claude 一样；要在某个仓库里做，直接告诉我仓库名' ;;
     en:home_first_hint)         printf 'Just like running claude locally; to work in a repo, tell me its name' ;;
+    # leaving the one-session view (issue #2265): ⌃D / prefix d / the agent's /exit
+    zh:solo_left_fmt)           printf '会话在后台继续（%s）。' "${1:-}" ;;
+    en:solo_left_fmt)           printf 'The session keeps running in the background (%s).' "${1:-}" ;;
+    zh:solo_back)               printf '下次输入 fleet 回来。' ;;
+    en:solo_back)               printf 'Type fleet to come back.' ;;
+    zh:solo_ended_fmt)          printf '会话已结束（%s）。' "${1:-}" ;;
+    en:solo_ended_fmt)          printf 'The session has ended (%s).' "${1:-}" ;;
+    zh:solo_resume)             printf 'fleet 可以恢复。' ;;
+    en:solo_resume)             printf 'Type fleet to resume it.' ;;
     # the writing area itself (issue #1953, bin/fleet-compose.py)
     zh:compose_title)           printf '新任务' ;;
     en:compose_title)           printf 'New task' ;;
