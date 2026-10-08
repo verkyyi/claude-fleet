@@ -99,6 +99,9 @@
 #                          scratch, view, reload, info, needs). Exit 0 asked, 1 no
 #                          list on screen. A bare question (no kind of the list's):
 #                          bin/fleet-ask.py open --below <pane> --kind --prompt.
+#   layout <auto|single|split|multi|solo> [<session>]   the client's layout, live
+#                          (issue #2265): `@fleet_layout`, the stage's top line,
+#                          a sync — the switcher's 「打开多会话视图」 (#2266)
 #   env [MACHINE]          print the environment the server would get (debug, tests)
 #
 # ~/.config/claude-fleet/fleet.conf — the machine's one config file (issue #1623):
@@ -491,9 +494,21 @@ attach_client() {
     printf '\033]1337;SetProfile=fleet\007' > /dev/tty
     tmux -L "$SESS" attach-session -t "=$SESS"; rc=$?
     printf '\033]1337;SetProfile=%s\007' "$back" > /dev/tty
+    solo_goodbye
     exit "$rc"
   fi
-  exec tmux -L "$SESS" attach-session -t "=$SESS"
+  [ "$(T show-options -gqv @fleet_layout 2>/dev/null)" = solo ] || exec tmux -L "$SESS" attach-session -t "=$SESS"
+  tmux -L "$SESS" attach-session -t "=$SESS"; rc=$?
+  solo_goodbye
+  exit "$rc"
+}
+# solo_goodbye — the one-session view (issue #2265) does not exec the attach:
+# once it returns — ⌃D, prefix d, or the session's own /exit (fleet-sidebar.py
+# solo_ended) — the terminal is told where the session is and how to come back
+# (fleet-topbar.py goodbye). Any other layout, or the server gone: nothing.
+solo_goodbye() {
+  [ "$(T show-options -gqv @fleet_layout 2>/dev/null)" = solo ] || return 0
+  python3 "${SHADOW:-$BIN}/fleet-topbar.py" goodbye "node=$(T show-options -gqv @fleet_view_node 2>/dev/null)" 2>/dev/null || :
 }
 # write_conf — conf/tmux-shell.conf (the shell's server) and conf/tmux-shell-stage.conf
 # (the stage's, issue #1759) with the paths filled + the environment
@@ -528,7 +543,73 @@ stage_up() {
   w=$(TS -f "$CACHE/tmux-stage.conf" new-session -d -P -F '#{window_id}' -s "$STAGE" -n "$title" -c "$HOME" -x 180 -y 50 "$cmd") \
     || return 1
   TS set-window-option -t "$w" @remote "$remote" \; set-window-option -t "$w" automatic-rename off 2>/dev/null
+  [ "$(T show-options -gqv @fleet_layout 2>/dev/null)" = solo ] && TS set-option -g status off 2>/dev/null
   return 0
+}
+# layout_apply [<layout>] — the client's layout on the running servers (issue
+# #2265, EPIC #2259 共同约定 1): `@fleet_layout` on the shell's (the bar, ⌃D and
+# the list read it) and, in `solo`, the stage's top line off — the one-session
+# view has its bottom line only. No argument: FLEET_CLIENT_LAYOUT (auto).
+layout_apply() {
+  local lay="${1:-${FLEET_CLIENT_LAYOUT:-auto}}" st=on
+  case "$lay" in auto|single|split|multi|solo) ;; *) lay=auto ;; esac
+  [ "$lay" = solo ] && st=off
+  T set-option -g @fleet_layout "$lay" 2>/dev/null
+  TS has-session -t "=$STAGE" 2>/dev/null && TS set-option -g status "$st" 2>/dev/null
+  # and no border line over the session: `home`'s own pane-border-status, off in
+  # solo, else unset — the conf's `top` again
+  T list-windows -t "=$SESS" -F '#{window_id} #{@shell_frame}' 2>/dev/null \
+    | while read -r w f; do
+        [ "$f" = 1 ] || continue
+        if [ "$lay" = solo ]; then T set-option -w -t "$w" pane-border-status off 2>/dev/null
+        else T set-option -uw -t "$w" pane-border-status 2>/dev/null; fi
+      done
+  return 0
+}
+# solo_last — the row the one-session view showed last (issue #2265): the head
+# of the switch history the list keeps (fleet-quickopen.py's `mru`), read before
+# a new start's list writes its first visit. Empty: none.
+solo_last() {
+  python3 -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("q", sys.argv[1])
+q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
+print((q.load().get("mru") or [""])[0])' "${SHADOW:-$BIN}/fleet-quickopen.py" 2>/dev/null
+}
+# solo_resume <key> <since> — `fleet` with nothing running comes back to the
+# session it left (issue #2265, EPIC #2259 共同约定 3), in the background: a local
+# row (@<id>, no hub) by the list's own jump; a row on a machine once the list's
+# first read since <since> (epoch) is in — opened on the stage
+# (fleet-remote-view.sh open) when it is still there, else a new HOME session
+# (`home-session claude`), as when there was none. A newcomer still owed the
+# first one is first_home's. FLEET_HOME_OPEN_WAIT bounds the wait for the read;
+# FLEET_HOME_OPEN_CMD / FLEET_SOLO_NEW_CMD are the selftests' seams.
+solo_resume() {
+  local key="$1" since="$2"
+  [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] || return 0
+  [ -e "$CONF_DIR/home-session.first" ] || return 0
+  (
+    cd "$HOME" 2>/dev/null || :; trap '' HUP
+    case "$key" in
+      @*)
+        lp=$(T list-panes -a -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }')
+        [ -n "$lp" ] && T set-option -pa -t "$lp" @sidebar_do "jump=$key " \; send-keys -t "$lp" F12 2>/dev/null
+        exit 0 ;;
+    esac
+    rf="${TMPDIR:-/tmp}/.claude-dash/global/remote_$SESS"
+    n=$(( ${FLEET_HOME_OPEN_WAIT:-60} * 4 )); i=0
+    while [ "$i" -lt "$n" ]; do
+      m=$(stat -c %Y "$rf" 2>/dev/null || stat -f %m "$rf" 2>/dev/null) || m=0
+      case "$m" in ''|*[!0-9]*) m=0 ;; esac
+      [ "$m" -ge "$since" ] && break
+      sleep 0.25; i=$((i + 1))
+    done
+    [ "$i" -lt "$n" ] || exit 0                    # no read at all: the stage stays as it is
+    if [ -n "$key" ] && LC_ALL=C awk -F $'\037' -v k="$key" '$1 == k { f = 1; exit } END { exit !f }' "$rf" 2>/dev/null; then
+      ${FLEET_HOME_OPEN_CMD:-bash "$SHADOW/fleet-remote-view.sh" open} "$key"
+    else
+      ${FLEET_SOLO_NEW_CMD:-bash "$SHADOW/fleet-shell.sh" home-session claude}
+    fi
+  ) </dev/null >"$CACHE/solo-resume.log" 2>&1 &
 }
 # stage_select <machine> — the stage's window on that machine current (rc 1: none)
 stage_select() {
@@ -1010,6 +1091,7 @@ reload)
   if TS has-session -t "=$STAGE" 2>/dev/null; then
     TS source-file "$CACHE/tmux-stage.conf" || exit 1
   fi
+  layout_apply
   export_env
   T run-shell -b -t "=$SESS:" "bash $(sq "$SHADOW/fleet-sidebar.sh") sync '#{session_id}' >/dev/null 2>&1 || :"
   # changed <file> — that script is not what the old client ran
@@ -1050,6 +1132,21 @@ reload)
   # old one's pid is gone (one keeper per server)
   [ -n "$all" ] && [ -z "$inkeeper" ] && restart_loop "$CL_DIR/keeper.pid" bash "$SHADOW/fleet-shell.sh" keeper "$SESS"
   stamp_ver
+  exit 0
+  ;;
+# ---------------------------------------------------------------------------------
+# The client's layout, live (issue #2265): `@fleet_layout`, the server's
+# FLEET_CLIENT_LAYOUT (what the list's next sync reads) and the stage's top
+# line, then a sync. It does not write fleet.conf — remembering it is the caller's.
+#   layout <auto|single|split|multi|solo> [<session>]      Exit 1: no client running.
+layout)
+  lay="${2:-}"
+  case "$lay" in auto|single|split|multi|solo) ;; *) note 'layout: auto|single|split|multi|solo'; exit 2 ;; esac
+  [ -n "${3:-}" ] && { SESS=$3; STAGE="$3-stage"; }
+  T has-session -t "=$SESS" 2>/dev/null || exit 1
+  layout_apply "$lay"
+  T set-environment -g FLEET_CLIENT_LAYOUT "$lay" 2>/dev/null
+  T run-shell -b -t "=$SESS:" "bash $(sq "$BIN/fleet-sidebar.sh") sync '#{session_id}' >/dev/null 2>&1 || :"
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
@@ -1243,6 +1340,7 @@ if T has-session -t "=$SESS" 2>/dev/null; then
     w=$(T list-windows -t "=$SESS" -F '#{window_id} #{@remote}' 2>/dev/null | awk -v n="$node:" 'index($2, n) == 1 { print $1; exit }')
     [ -n "$w" ] && T select-window -t "$w" 2>/dev/null
   fi
+  layout_apply
   client_open
   ( nohup bash "$SHADOW/fleet-shell.sh" keeper "$SESS" </dev/null >/dev/null 2>&1 & )
   ( nohup bash "$SHADOW/fleet-shell.sh" warm "$SESS" </dev/null >/dev/null 2>&1 & )
@@ -1253,6 +1351,10 @@ if T has-session -t "=$SESS" 2>/dev/null; then
   attach_client
 fi
 
+# the one-session view comes back to the row it left (issue #2265): read before
+# the new list writes its first visit
+solo_key=''; solo_since=$(date +%s)
+[ "${FLEET_CLIENT_LAYOUT:-}" = solo ] && solo_key=$(solo_last)
 # 3. the servers: conf (keys, hooks, bar, environment); the stage with the first
 #    machine's window (issue #1759), then the shell's one window, `home`, whose
 #    right pane looks at the stage
@@ -1293,6 +1395,7 @@ w=$(tmux -L "$SESS" -f "$CACHE/tmux.conf" new-session -d -P -F '#{window_id}' -s
   || fail_start 'tmux 开不了会话'
 T set-window-option -t "$w" @shell_frame 1 \; set-window-option -t "$w" automatic-rename off \; \
   set-option -p -t "$w" @shell_viewer 1 \; set-option -p -t "$w" remain-on-exit on 2>/dev/null
+layout_apply
 stamp_ver
 # the right pane outlives whatever ends it (issue #1785): kept dead, the hooks'
 # sync respawns it (fleet-sidebar.py heal_frame) — the window, so the server,
@@ -1307,6 +1410,7 @@ client_open
 # its node pass by the device key, in the background — no scan, no output
 [ -f "$BIN/fleet-node.sh" ] && ( nohup bash "$BIN/fleet-node.sh" ensure </dev/null >/dev/null 2>&1 & )
 first_home
+solo_resume "$solo_key" "$solo_since"
 client_where
 [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && { printf '%s\n' "$SESS"; exit 0; }
 attach_client

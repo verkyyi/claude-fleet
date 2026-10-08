@@ -13,6 +13,12 @@ the sessions with a thumb.
         key — the issue, pr — the PR, opened on the person's computer
         (fleet-open.sh); machine — what is known about that machine, as a note
     fleet-topbar.py fit <cols> <record.json>   the plain text of the line (selftest)
+    fleet-topbar.py goodbye [node=<machine>]
+        the two lines the one-session view (issue #2265) leaves in the terminal
+        when its attach returns (fleet-shell.sh attach_client): 「会话在后台继续
+        （<machine>）· 下次输入 fleet 回来」 — or, when the list detached it because
+        the session ENDED (fleet-sidebar.py solo_ended's file, taken here), 「会话
+        已结束 · fleet 可以恢复」
 
 What it says comes from ONE record, `switch-bar.json` in the client's switch
 state dir (fleet-quickopen.py state_dir), written by the task list
@@ -317,7 +323,45 @@ def click(what, sess):
     return 0
 
 
+def say(key, *args):
+    r = subprocess.run(["sh", str(BIN / "fleet-ui-lang.sh"), "t", key, *args],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    return r.stdout.strip()
+
+
+ENDED_FRESH = 600   # a solo-ended file older than this was never taken: a detach since is a plain one
+
+
+def goodbye(args=()):
+    """The one-session view's last words (issue #2265): the session in view is on
+    its machine still (`node=`, the server's @fleet_view_node, else the record's)
+    — or it ended, and fleet-sidebar.py left its file (`solo-ended`, the machine
+    in it), taken once here."""
+    ended = state_dir() / "solo-ended"
+    node, gone = "", False
+    try:
+        if time.time() - ended.stat().st_mtime < ENDED_FRESH:
+            node, gone = ended.read_text().strip(), True
+        ended.unlink()
+    except OSError:
+        pass
+    if not node:
+        node = dict(a.split("=", 1) for a in args if "=" in a).get("node", "").strip()
+    if not node:
+        node = ((read_record() or {}).get("node") or "").strip()
+    node = node or "fleet"
+    if gone:
+        print(say("solo_ended_fmt", node))
+        print(say("solo_resume"))
+    else:
+        print(say("solo_left_fmt", node))
+        print(say("solo_back"))
+    return 0
+
+
 def main(argv):
+    if argv[:1] == ["goodbye"]:
+        return goodbye(argv[1:])
     if argv[:1] == ["render"]:
         return render(argv[1:])
     if argv[:1] == ["click"] and len(argv) >= 3:
