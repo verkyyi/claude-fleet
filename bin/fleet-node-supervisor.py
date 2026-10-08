@@ -29,6 +29,10 @@ machine's work ONCE, however many logins the machine carries:
                 attic (kept until released); one that will not unload puts every
                 one back. `account release <login>` is the way back, one command.
                 expected.json's `accounts` (C2), when present, narrows who runs.
+  * update    — the machine's one updater (issue #2334, C6): a task like the
+                rest (fleet-node-update.py tick). When it moves `current` it asks
+                this daemon to restart (<state>/update-restart.json): the daemon
+                stops its children and exits, and launchd starts the new code.
   * sweep     — fleet plist leftovers (`*.plist.bak*`, `.pre-move`, `.retired*`,
                 `.disabled*` …) in /Library/LaunchDaemons and every login's
                 ~/Library/LaunchAgents are MOVED to the attic
@@ -132,6 +136,12 @@ class Paths(object):
 
 def now():
     return time.time()
+
+
+def runtime_sha(paths):
+    """The release the runtime link names (its directory's name), or None."""
+    b = os.path.basename(os.path.realpath(paths.runtime))
+    return b if re.match(r"^[0-9a-f]{40}$", b) else None
 
 
 def iso(t):
@@ -243,6 +253,10 @@ def default_table(paths):
             {"name": "orphans", "every": 60,
              "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-diskguard.sh"), "--orphan-watch"],
              "env": {"FLEET_ORPHAN_ALL_USERS": "1"}},
+            # The one updater (C6, #2334): every part of the machine to the hub's
+            # release, or none. A switch ends in a restart request (below).
+            {"name": "update", "every": env_num("FLEET_NODE_UPDATE_EVERY", 300), "timeout": 1800,
+             "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-node-update.py"), "tick"]},
         ],
         # None = the runtime's launchd templates (account_units); a table file may
         # give the list itself, in account_units' shape.
@@ -794,11 +808,15 @@ class Supervisor(object):
         for ts in self.state["tasks"].values():
             if ts.get("result") == "running":
                 ts.update(result="interrupted", pid=None)
+        self.state["supervisor"]["runtime"] = runtime_sha(self.p)
         self.adopt()
-        self.log("supervisor up pid %d (start #%d)" % (os.getpid(), self.state["supervisor"]["starts"]))
+        self.log("supervisor up pid %d (start #%d) on %s" % (os.getpid(), self.state["supervisor"]["starts"],
+                                                            self.state["supervisor"]["runtime"] or "?"))
         tick = env_num("FLEET_NODE_TICK", 1)
         while not self.stop:
             t = now()
+            if self.restart_requested():
+                break
             self.tend_children()
             self.tend_tasks(t)
             if self.sweep_due(t):
@@ -821,6 +839,27 @@ class Supervisor(object):
 
     def on_signal(self, signum, frame):
         self.stop = True
+
+    def restart_requested(self):
+        """The updater switched `current` (C6, #2334): this process runs the old
+        code and its children the old binaries — stop them all and exit; launchd's
+        KeepAlive starts the new one from `current`. A request naming the version
+        this process already runs is done: removed."""
+        req = os.path.join(self.p.state, "update-restart.json")
+        if not os.path.exists(req):
+            return False
+        to = (read_json(req, {}) or {}).get("to")
+        mine = self.state["supervisor"].get("runtime")
+        if runtime_sha(self.p) == mine:
+            # done (this process is the new one), or stale (nothing moved): never a loop
+            try:
+                os.remove(req)
+            except OSError:
+                pass
+            self.log("restart request for %s %s" % ((to or "?")[:12], "done" if to == mine else "stale — current did not move"))
+            return False
+        self.log("restart requested: current is %s — stopping to come back on it" % (to or "?")[:12])
+        return True
 
     def tick_once(self):
         self.ensure_dirs()

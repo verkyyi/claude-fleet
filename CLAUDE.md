@@ -602,6 +602,20 @@ Do not install from memory: read the doc and work from it.
   starts goes through `prepCmd` (`internal/agent/runas.go`): dropped to the login,
   refused rather than run as root. `docs/MANAGED-NODE.md` §6; BREAK-IT
   `machine-agent-wrong-login`.
+- **A managed machine has ONE updater, and every part moves with the release or
+  none does** (issue #2334, EPIC #2329 C6). `bin/fleet-node-update.py` is the
+  supervisor's `update` task (root): `release.json` (repo root, signed with the
+  tree by C7) pins ccquota · Claude Code · Codex · tmux by artifact; each lands
+  under ONE link — `<root>/current` → `<sha>/` (runtime, `bin/ccquota`,
+  `tools/bin/<tool>` → the content-addressed root cache) — so a switch is one
+  rename and `.prev` the way back. The bootstrap cache's Claude and every managed
+  account's `~/.local/bin/{claude,codex}` follow (linked demoted, never over a
+  regular file); the daemon restarts last (`update-restart.json`). The machine
+  doctor (`fleet doctor --machine`) after the switch: a FAIL the old version did
+  not have rolls EVERYTHING back and skips that sha. `update.json`'s phase makes
+  a killed tick resume or roll back. A managed login's install-sync reads `off ·
+  managed`; `fleet-stable.sh move` refuses an updater tree without a valid
+  release.json (`release:`). `docs/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`.
 - **A machine has three words — online, 维护中, lost — and only the middle one is
   the operator's** (issue #1427). `maintenance` is the fleet setting
   `fleet.node_maintenance.<machine>` on the hub (`bin/fleet-node-maintenance.sh

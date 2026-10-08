@@ -9,6 +9,8 @@
 #                         bin/fleet-doctor.sh's `node` row
 #   account-adopt-stuck   bin/fleet-node-supervisor.py `account adopt|release` (#2332):
 #                         one of a login's services will not unload mid-migration
+#   node-update-half      bin/fleet-node-update.py (#2334): an update killed half way,
+#                         and a release whose new part fails the doctor
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -93,6 +95,55 @@ LC
     || { WHY="release did not put every service back and loaded"; return 1; }
   SECS=$(since "$t0")
   WHAT="迁移中一个服务卸不掉：adopt 退 1，已卸的全部放回并重新加载、账号不算托管；卸得掉之后 adopt 成功，release 一条命令全部还原"
+}
+
+drill_node_update_half() {
+  CAP=20
+  local sb t0 u tk cl out
+  sb="$WORK/upd"; mkdir -p "$sb/root" "$sb/rel" "$sb/db" "$sb/Users/alice" "$sb/LaunchDaemons"
+  mkdir -p "$sb/bin"; cp "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$sb/bin/"
+  u="$sb/bin/fleet-node-update.py"; tk="$BIN/fleet-node-update-selftest.py"
+  python3 "$tk" --fake-ccquota "$sb/ccquota" || { WHY="no fake ccquota"; return 1; }
+  V1=$(printf '%040d' 0 | tr 0 1); V2=$(printf '%040d' 0 | tr 0 2); V3=$(printf '%040d' 0 | tr 0 3)
+  python3 "$tk" --make-release "$sb/rel" "$V1" '{"claude":"2.1.1"}' \
+    && python3 "$tk" --make-release "$sb/rel" "$V2" '{"claude":"2.1.2"}' \
+    && python3 "$tk" --make-release "$sb/rel" "$V3" '{"claude":"2.1.3","broken":["claude-"]}' \
+    || { WHY="fixtures not built"; return 1; }
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  printf '{"alice":{"uid":%s,"gid":%s,"home":"%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  printf '{"alice":{"managed":true}}\n' > "$sb/db/accounts.json"
+  printf 'CCQUOTA_HUB_URL=https://hub.invalid\n' > "$sb/db/machine.env"; printf 'ed25519 AAAA\n' > "$sb/db/release.pub"
+  upd() { env FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/root/current" \
+      FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_PASSWD="$sb/passwd.json" \
+      FLEET_NODE_TEST=1 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_CCQUOTA="$sb/ccquota" FAKE_REL="$sb/rel" \
+      FLEET_NODE_UPDATE_PLATFORM=darwin-arm64 FLEET_NODE_UPDATE_SETTLE=0 FLEET_NODE_UPDATE_LIB=/nonexistent "$@"; }
+  # launchd's part: the daemon comes back on whatever `current` names
+  daemon() { python3 -c 'import json,os,sys,time; json.dump({"supervisor":{"pid":os.getppid(),"heartbeat":time.time(),"runtime":sys.argv[2]}},open(sys.argv[1],"w"))' "$sb/db/state.json" "$(basename "$(readlink "$sb/root/current")")"; }
+  on() { cl=$("$sb/root/current/tools/bin/claude" 2>/dev/null); [ "$(basename "$(readlink "$sb/root/current")")" = "$1" ] && [ "$cl" = "$2 (Claude Code)" ] \
+      && [ "$("$sb/Users/alice/.local/bin/claude" 2>/dev/null)" = "$2 (Claude Code)" ] \
+      && [ "$(cat "$sb/root/cache/claude/current" 2>/dev/null)" = "$2" ] \
+      && [ "$("$sb/root/current/bin/ccquota")" = "ccquota prod-$(printf '%s' "$1" | cut -c1-7)" ]; }
+  upd FLEET_NODE_UPDATE_TARGET="$V1" python3 "$u" tick >/dev/null && daemon && upd FLEET_NODE_UPDATE_TARGET="$V1" python3 "$u" tick >/dev/null
+  on "$V1" 2.1.1 || { WHY="v1 never landed whole"; return 1; }
+  # 1. killed half way through fetching v2: nothing moved, nothing half
+  upd FLEET_NODE_UPDATE_TARGET="$V2" FAKE_SLOW=5 python3 "$u" tick >/dev/null 2>&1 &
+  out=$!; until_ok 5 test -d "$sb/root/$V2.partial" || { WHY="the fetch never started"; return 1; }
+  pkill -9 -f "$u tick"; pkill -9 -f "$sb/ccquota" 2>/dev/null; wait "$out" 2>/dev/null; t0=$(now)
+  ! pgrep -f "$u tick" >/dev/null || { WHY="the tick survived kill -9"; return 1; }
+  on "$V1" 2.1.1 || { WHY="a killed fetch left the machine half new"; return 1; }
+  # 2. the next tick finishes it, whole
+  upd FLEET_NODE_UPDATE_TARGET="$V2" python3 "$u" tick >/dev/null && daemon && upd FLEET_NODE_UPDATE_TARGET="$V2" python3 "$u" tick >/dev/null
+  on "$V2" 2.1.2 || { WHY="the resumed update did not land every part"; return 1; }
+  [ ! -e "$sb/root/$V2.partial" ] || { WHY="the cut-short fetch left $V2.partial"; return 1; }
+  # 3. v3's Claude Code fails the doctor: every part back to v2, v3 skipped
+  upd FLEET_NODE_UPDATE_TARGET="$V3" python3 "$u" tick >/dev/null && daemon
+  out=$(upd FLEET_NODE_UPDATE_TARGET="$V3" python3 "$u" tick 2>&1)
+  case "$out" in *rolled-back*claude*) ;; *) WHY="no rollback on a new FAIL: $out"; return 1 ;; esac
+  on "$V2" 2.1.2 || { WHY="the rollback left a part on v3"; return 1; }
+  daemon; out=$(upd FLEET_NODE_UPDATE_TARGET="$V3" python3 "$u" tick 2>&1)
+  case "$out" in *skipped*) ;; *) WHY="the rejected release was tried again: $out"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="更新取包时被 kill -9：整台机器原样不动；下一轮从头取完、所有部件一起换上；新版体检多出 FAIL（Claude Code 起不来）→ 运行时、ccquota、Claude、开号缓存、账号链接全部回到上一版，这一版不再重试"
 }
 
 cred_run_drills "$0"

@@ -135,3 +135,65 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 **旧节点**：没迁的账号照旧自己连（`links` 多算一条）；某个账号已经由整机连接带着时，
 它残留的旧 agent 被拒（`REFUSED`），不来回抢。旧入口不认识能力位：把机器 hello 当一个
 普通节点、账号 hello 当未知消息——整机节点程序退不回去，迁移前先升级入口。
+
+## 7. 整机一个更新器（C6，#2334）
+
+你移一次 stable，每台托管机器上的**所有部件**换到这一版；新版体检不过就整体退回上一版。
+更新器是 `bin/fleet-node-update.py`，守护（C3）的 `update` 任务（每 5 分钟一次，`FLEET_NODE_UPDATE_EVERY`），
+root 运行；它取代托管账号各自的 `fleet-install-sync.sh`（那个账号的 install-sync 记 `off · managed`）。
+非托管机器照旧走 install-sync，一字不差。
+
+### `release.json`（仓库根，随发布包一起签名）
+
+```json
+{
+  "schema": 1,
+  "components": {
+    "ccquota":    {"artifact": "ccquota-{os}-{arch}"},
+    "claude":     {"version": "2.1.293", "artifact": "claude-{version}-{os}-{arch}"},
+    "codex":      {"version": "0.154.0", "artifact": "codex-{version}-{os}-{arch}"},
+    "tmux":       {"version": "3.7c",    "artifact": "tmux-{version}-{os}-{arch}", "lock": "conf/vendor-tmux.lock"},
+    "supervisor": {"script": "bin/fleet-node-supervisor.py"}
+  }
+}
+```
+
+| 部件 | 版本从哪来 | 装到哪 |
+|---|---|---|
+| 脚本（运行时） | 发布版提交本身（签名清单的 `sha`） | `<root>/<sha>/`（`<root>` = `/Library/Application Support/claude-fleet`） |
+| `ccquota` | 发布包里的 `ccquota-<os>-<arch>`（入口 dist 构建，sha256 在签名清单里） | `<root>/<sha>/bin/ccquota`——节点程序（C5）从 `current` 跑它 |
+| Claude Code / Codex / tmux | `version` 钉住；可执行文件本身是发布包的 artifact（`{version}` `{os}` `{arch}` 展开，`{arch}` 是 `arm64` / `amd64`） | root 缓存 `<root>/tools/<名>/<sha256>/<名>`，发布目录里 `tools/bin/<名>` 链过去 |
+| 开号缓存 | 同 `claude.version` | `<root>/cache/claude/<ver>/claude` + `current`（`fleet-bootstrap-cache.sh claude` 从这里装新账号） |
+| 账号 | — | 每个托管账号的 `~/.local/bin/{claude,codex}`、`~/.local/share/claude-fleet-vendor/bin/tmux` 链到 `<root>/current/tools/bin/<名>`；由降权到该账号的进程建，每轮重建（Claude Code 自己更新换掉了链接就换回来），**从不覆盖账号自己的普通文件** |
+| 守护自身 | 发布版提交 | 它就在 `current` 里：切换后最后一步写 `<state>/update-restart.json`，守护停掉子进程退出，launchd 用新版拉起 |
+
+- `os` / `arch` 只是 artifact 名字的展开；校验和永远是**入口签名清单**里的那个，`release.json` 不写校验和。
+- 升一个部件 = 改这里的版本 + 把同名 artifact 放进入口的 `CCQUOTA_FLEET_RELEASE_ARTIFACTS`，再移 stable。
+  发布包里缺 artifact → 这一版**不换**（`failed`，1 小时后重试），不会只换一半。
+- `fleet-stable.sh move` 拒绝一个带 `bin/fleet-node-update.py` 却没有合法 `release.json` 的目标（`release:`，`--force` 记一行）；
+  校验只有一处：`fleet-node-update.py check-release`。
+
+### 一轮怎么走
+
+`<state>/update.json` 记阶段，被杀后下一轮照记录做完（BREAK-IT `node-update-half`）：
+
+1. **目标**：`expected.json` 的 `release`（§3 期望状态），否则入口 `/version` 的 `stable`。
+2. **推迟**：任何托管账号有「有活」的 EPIC 批次在跑（#2247 的 `fleet_epic_holding`）→ `deferred`，最长 2 小时（`FLEET_EPIC_HOLD_CAP_SECS`）。
+3. **取包**：`ccquota release fetch --artifacts`（C7，只问入口、验钉住的公钥 `<state>/release.pub`）→ 装 ccquota 和各工具 → 写 `.release/staged.json`。没有这个标记的目录 = 没装完，删掉重取。
+4. **切换**：记下当前（旧版）的机器体检 FAIL 作基线 → `.prev` = 旧版、`current` = 新版（各一次 rename）→ 开号缓存、账号链接 → 请守护重启。
+5. **验证**（下一轮，新代码，`FLEET_NODE_UPDATE_SETTLE` 30 秒后）：机器体检（`fleet doctor --machine`）比基线多出 FAIL
+   → `current` 切回 `.prev`，缓存、链接一起回，这一版记 `skip`（stable 再动之前不重试），再请守护重启；否则 `committed`。
+6. 退下来的版本留 7 天（`FLEET_NODE_UPDATE_KEEP_SECS`），`current` / `.prev` 永不删；没有发布版再引用的工具缓存一起清。
+
+### 机器体检
+
+`fleet doctor --machine`（= `fleet-node-update.py doctor`）一行一个部件：`runtime` `ccquota` `claude` `codex` `tmux`
+（各自 `--version` 必须含 `release.json` 的版本，否则 FAIL）、`daemon`（守护在跑且跑的是 `current` 那一版，否则 FAIL）、
+每个子进程、`cache`、每个托管账号的链接（WARN），最后一行 `version … — 各部件 = 发布版声明`。
+退出码 = FAIL 数。普通 `fleet doctor` 多一行 `update`（最后一轮的结果；失败 / 回退 / 跳过时 WARN）。
+
+### 新旧并存
+
+- 没有 `update.json` 的机器：体检没有 `update` 行，`--machine` 只说「不是托管机器」。
+- 旧守护没有 `update` 任务、不认 `update-restart.json`：新守护第一次由 C1 / C8 装上后才开始自己更新。
+- 开号缓存的 git 镜像一半（`claude-fleet.git`）仍由开号时的 `refresh --from` 填；托管账号的 `~/.claude/fleet` 指向 root 运行时，不靠它。
