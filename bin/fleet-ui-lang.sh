@@ -634,6 +634,8 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:clients_revoke_failed)   printf 'Could not disconnect:' ;;
     zh:topbar_also_fmt)         printf '也在 %s 上打开' "${1:-}" ;;
     en:topbar_also_fmt)         printf 'also open on %s' "${1:-}" ;;
+    zh:topbar_pick)             printf '轻点选会话' ;;
+    en:topbar_pick)             printf 'tap to pick a session' ;;
     zh:menu_reap_policy)        printf '改回收方式…' ;;
     en:menu_reap_policy)        printf 'Reap policy…' ;;
     zh:reap_menu_title)         printf '什么时候回收' ;;
