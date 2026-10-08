@@ -622,8 +622,37 @@ func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce, namespace string,
 	if !ok {
 		return bad("not a certificate")
 	}
+	p, why, err := s.checkFleetCert(cert, now)
+	if err != nil {
+		return sshRelayIdentity{}, err
+	}
+	if why != "" {
+		return bad(why)
+	}
+	if err := verifySSHSig(cert.Key, []byte(sigArmor), []byte(nonce), namespace); err != nil {
+		return bad("challenge signature: " + err.Error())
+	}
+	// A revoked device's certificate is refused here from the moment of the
+	// revocation, inside its 12 hours or not (claude-fleet#1470). sshd itself
+	// cannot know, so the hub's own doors are where it bites.
+	if revoked, err := s.Store.DeviceRevoked(ssh.FingerprintSHA256(cert.Key)); err != nil {
+		return sshRelayIdentity{}, err
+	} else if revoked {
+		return bad("this device was revoked — run `fleet` and scan again")
+	}
+	return sshRelayIdentity{Principal: p.ID, Actor: p.ID}, nil
+}
+
+// checkFleetCert is the hub's whole judgement of a certificate it is shown:
+// a user certificate, signed by one of sshRelayCAs, valid now, whose key id
+// names a person this hub knows and whose principals include one of that
+// person's logins. why is the refusal ("" = accepted); err is the hub's own
+// failure. verifySSHRelayCert reads every certificate through it, and issueCert
+// reads every certificate it has just signed through it too (claude-fleet#2456)
+// — so the hub never hands out a certificate its own doors would refuse.
+func (s *Server) checkFleetCert(cert *ssh.Certificate, now time.Time) (p *store.Principal, why string, err error) {
 	if cert.CertType != ssh.UserCert {
-		return bad("not a user certificate")
+		return nil, "not a user certificate", nil
 	}
 	signedByCA := false
 	for _, ca := range s.sshRelayCAs() {
@@ -633,13 +662,13 @@ func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce, namespace string,
 		}
 	}
 	if !signedByCA {
-		return bad("not signed by this hub")
+		return nil, "not signed by this hub", nil
 	}
 	checker := ssh.CertChecker{Clock: func() time.Time { return now }}
 	pid := sshca.PrincipalOfKeyID(cert.KeyId)
-	p, err := s.Store.Principal(pid)
+	p, err = s.Store.Principal(pid)
 	if err != nil {
-		return bad("its key id names no one this hub knows")
+		return nil, "its key id names no one this hub knows", nil
 	}
 	// CheckCert verifies the CA's signature, the validity window and that one
 	// of the person's logins is among the certificate's principals.
@@ -657,7 +686,7 @@ func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce, namespace string,
 	if !certNamesLogin(cert, login) {
 		logins, _, _, err := s.managedLoginsOf(p.ID)
 		if err != nil {
-			return sshRelayIdentity{}, err
+			return nil, "", err
 		}
 		for _, l := range logins {
 			if certNamesLogin(cert, l) {
@@ -667,20 +696,9 @@ func (s *Server) verifySSHRelayCert(certLine, sigArmor, nonce, namespace string,
 		}
 	}
 	if err := checker.CheckCert(login, cert); err != nil {
-		return bad(err.Error())
+		return p, err.Error(), nil
 	}
-	if err := verifySSHSig(cert.Key, []byte(sigArmor), []byte(nonce), namespace); err != nil {
-		return bad("challenge signature: " + err.Error())
-	}
-	// A revoked device's certificate is refused here from the moment of the
-	// revocation, inside its 12 hours or not (claude-fleet#1470). sshd itself
-	// cannot know, so the hub's own doors are where it bites.
-	if revoked, err := s.Store.DeviceRevoked(ssh.FingerprintSHA256(cert.Key)); err != nil {
-		return sshRelayIdentity{}, err
-	} else if revoked {
-		return bad("this device was revoked — run `fleet` and scan again")
-	}
-	return sshRelayIdentity{Principal: p.ID, Actor: p.ID}, nil
+	return p, "", nil
 }
 
 // certNamesLogin reports whether login is one of cert's principals.

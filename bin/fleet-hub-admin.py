@@ -14,6 +14,9 @@
     fleet hub accounts forget <principal> drop a record that never reached a machine
     fleet hub accounts relogin <principal> <machine> <login>
                                          give them a new login there (the old one stays)
+    fleet hub accounts rename <principal> <machine>
+                                         set the person record's login to their login on
+                                         <machine> (after a relogin; no forget + adopt)
     fleet hub invite [<github login>]    an install command that lets one new person in
                                          (7 days, used once; only that GitHub user if named)
     fleet hub invite --list              every invite and its state
@@ -334,6 +337,17 @@ def accounts_main(a):
             print("relogin %s on %s → %s: create queued (the old login is left as is; undo: adopt it back)"
                   % (a.principal, a.to, a.login))
         return
+    if a.action == "rename":
+        if not a.principal or not a.to:
+            die("fleet hub accounts rename <principal> <machine>", 2)
+        resp = call(a, "POST", ACCOUNTS_PATH, {"action": "rename", "principal_id": a.principal, "hostname": a.to})
+        if a.json:
+            print(json.dumps(resp, indent=2, ensure_ascii=False))
+        elif resp.get("changed"):
+            print("rename %s: login %s → %s (as on %s)" % (a.principal, resp.get("from", ""), resp.get("login", ""), a.to))
+        else:
+            print("rename %s: login already %s (as on %s) — nothing changed" % (a.principal, resp.get("login", ""), a.to))
+        return
     if not a.principal:
         die("fleet hub accounts forget <principal> [--host <machine>]", 2)
     body = {"action": "forget", "principal_id": a.principal}
@@ -366,9 +380,9 @@ def main(argv):
     us.add_argument("name", nargs="?")
     us.add_argument("--machine-login", help="the OS login that is theirs on the machines")
     ac = sub.add_parser("accounts", parents=[common], help="the people the hub records and their logins")
-    ac.add_argument("action", choices=["list", "rekey", "forget", "relogin"], nargs="?", default="list")
+    ac.add_argument("action", choices=["list", "rekey", "forget", "relogin", "rename"], nargs="?", default="list")
     ac.add_argument("principal", nargs="?")
-    ac.add_argument("to", nargs="?", help="rekey: the new id · relogin: the machine")
+    ac.add_argument("to", nargs="?", help="rekey: the new id · relogin / rename: the machine")
     ac.add_argument("login", nargs="?", help="relogin: the new login")
     ac.add_argument("--host", help="forget: only the record on this machine")
     iv = sub.add_parser("invite", parents=[common], help="an install command that lets one new person in")

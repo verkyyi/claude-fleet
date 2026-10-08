@@ -210,7 +210,7 @@ func (s *Server) handleNodeRelayCredential(w http.ResponseWriter, r *http.Reques
 		refuse(http.StatusForbidden, LeaseNoPrincipal, "this enrollment names no machine and login")
 		return
 	}
-	principal, err := s.Store.PrincipalForLogin(host, osUser)
+	principal, err := s.principalOnNode(ep.ID, host, osUser)
 	if errors.Is(err, store.ErrNoPrincipal) {
 		refuse(http.StatusForbidden, LeaseNoPrincipal, "no active fleet account is "+osUser+" on "+host)
 		return
