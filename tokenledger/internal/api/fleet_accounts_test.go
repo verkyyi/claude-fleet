@@ -575,6 +575,29 @@ func TestFleetReloginCreatesNewLeavesOld(t *testing.T) {
 		t.Fatalf("relogin sent a second op %+v", got)
 	}
 
+	// A relogin whose create failed late (claude-fleet#2210: the admin then
+	// finished it by hand) is settled by adopting the row's own new login;
+	// a name the row does not carry refuses.
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "relogin", PrincipalID: pid, Hostname: "m4", Login: "verky"}); code != 200 {
+		t.Fatalf("relogin m4: HTTP %d", code)
+	}
+	m4 := connectNode(t, h, "m4-op", "m4", "verkyyi", true)
+	m, op = expectAccountOp(t, m4.tnode)
+	sendResult(t, m4.c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: false, Exit: 1, Detail: "FAILED at step 7b"})
+	waitState(t, h, pid, "m4", store.AccountFailed)
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m4", Login: "verkyx"}); code == 200 {
+		t.Fatalf("adopt of a login the row does not carry accepted")
+	}
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m4", Login: "verky"}); code != 200 {
+		t.Fatalf("adopt the relogin: HTTP %d", code)
+	}
+	if b := accountState(t, h, pid, "m4"); b.Login != "verky" || b.State != store.AccountActive {
+		t.Fatalf("after adopting the relogin m4 = %+v", b)
+	}
+	if p, err := h.srv.Store.Principal(pid); err != nil || p.Login != "verkyyi" {
+		t.Fatalf("principal moved: %+v, %v", p, err)
+	}
+
 	// Undo: adopt the old login back, nothing run.
 	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pid, Hostname: "m5", Login: "verkyyi"}); code != 200 {
 		t.Fatalf("undo adopt: HTTP %d", code)

@@ -310,3 +310,31 @@ kubectl -n new-deploy label secret ccquota-ssh-ca ccquota-fleet-cred-key app=ccq
   直接替换这个 Secret。
 - 这两把都**不在** `tools/export-cluster-state.sh` 的导出集里（Secret 按设计不进仓库），所以漂不漂只能
   靠 Deployment 起不起得来说话。
+
+## 发布包（#2335 代码，#2366 接上）
+
+入口按 stable 打包、签名每个发布版（`/v1/fleet/release/*`），存在 OSS 桶
+`haowan24-fleet-releases`（cn-shenzhen，private，VPC 内网地址）里，两个副本同时挂在 `/releases`。
+
+| 东西 | 谁建 | 内容 |
+|---|---|---|
+| OSS 桶 + RAM 用户 `svc-fleet-release-oss`（策略 `fleet-release-oss-rw`，只此一桶） | 人，控制台 | — |
+| Secret `ccquota-release-oss` | 人 | 键 `akId` / `akSecret`（OSS CSI 的 nodePublishSecretRef 格式） |
+| Secret `ccquota-release-key` | 人 | 键 `release-key`：`ccquota release keygen` 产出的 ed25519 私钥文件；只读挂到 `/etc/ccquota-release`（0440，fsGroup 10001） |
+| PV `ccquota-releases-oss` + PVC `ccquota-releases` | 人，一次 | `overlays/prod/release-volume.yaml`——部署 Role 建不了 PV / PVC，所以它不在 kustomization 里 |
+| 环境变量 + 两个挂载 | hub-deploy | `overlays/prod/deployment-release.yaml` |
+
+```sh
+kubectl apply -n new-deploy -f deploy/k8s/overlays/prod/release-volume.yaml
+kubectl -n new-deploy get pvc ccquota-releases     # Bound 之后才合并带挂载的那次发布
+```
+
+- PVC 没 Bound 就发布：新 pod 挂不上卷，滚动超时，hub-deploy 自动回滚——旧 pod 一直在服务。
+- 发布前的 `--check` 用新 env、旧 pod 的卷跑：hub-deploy 把只有新渲染才挂的路径写进
+  `CCQUOTA_CHECK_UNMOUNTED`，钥匙文件在其中时 `--check` 报告而不拒绝，真正的启动才读它。
+- 桶里的布局：`<sha>/b<unix>-<hex>/` 一次构建（就地写，签名最后写，之后不改不改名），
+  `<sha>/current` 指向在用的那次（单文件 rename）。ossfs 上目录 rename 是逐个对象复制再删，
+  不原子，两个副本又会同时构建同一个 stable——所以不用目录 rename。
+- 关掉：删 `deployment-release.yaml` 和 kustomization 里它那一行；桶和 PV 是 Retain，留着无害。
+- 公钥：`curl -fsS https://claudefleet.24haowan.com/v1/fleet/release/key`。换钥匙 = 新 keygen、
+  `kubectl create secret … --dry-run=client -o yaml | kubectl replace -f -`、滚一次；已装机器钉的旧公钥要跟着换。
