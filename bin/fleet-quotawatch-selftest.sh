@@ -161,11 +161,12 @@ iso "$RESET1" > "$WORK/reset"
 HUB="http://hub.test:8787"
 ACCTS=""            # per-case override of the accounts pool (see case 1)
 BLIND=""            # per-case override of the empty-fetch streak threshold (see 6d)
+STALE_OK=""         # 0 by default: no carrying of the last reading (#2465 — fleet-quota-carry-selftest.sh)
 run_watch() {
   PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
   FLEET_CONF_DIR="$WORK/conf" FLEET_ACCOUNTS_DIR="${ACCTS:-$WORK/accounts}" CCQUOTA_HUB_URL="$HUB" \
   FLEET_ACCOUNT_QUOTA_TTL="${QTTL:-0}" FLEET_NOTIFY_CMD="$WORK/fakepath/notify" \
-  FLEET_ACCOUNT_QUOTA_BLIND_STREAK="${BLIND:-3}" \
+  FLEET_ACCOUNT_QUOTA_BLIND_STREAK="${BLIND:-3}" FLEET_QUOTA_STALE_OK="${STALE_OK:-0}" \
   FAKE_LOG="$WORK/ccquota.calls" FAKE_TMUX_LOG="$WORK/tmux.calls" FAKE_NOTIFY_LOG="$WORK/notify.log" \
   FAKE_PCT_FILE="$WORK/pct" FAKE_PCT_B_FILE="$WORK/pct-b" FAKE_RESET_FILE="$WORK/reset" \
   FAKE_B_SHAPE_FILE="$WORK/b-shape" FAKE_HANG_MARK="$HANGMARK" FAKE_EMPTY_FILE="$WORK/ccq-empty" \
