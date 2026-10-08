@@ -415,6 +415,16 @@ fleet_ui_t() {
     en:home_placed_fmt)         printf 'the session is on %s' "${1:-}" ;;
     zh:home_failed_fmt)         printf '开不了会话：%s' "${1:-}" ;;
     en:home_failed_fmt)         printf 'could not open a session: %s' "${1:-}" ;;
+    zh:home_first_failed)       printf '你的第一个会话没开出来' ;;
+    en:home_first_failed)       printf 'your first session did not open' ;;
+    zh:home_first_why_fmt)      printf '原因：%s' "${1:-}" ;;
+    en:home_first_why_fmt)      printf 'why: %s' "${1:-}" ;;
+    zh:home_first_next_fmt)     printf '下一步：%s' "${1:-}" ;;
+    en:home_first_next_fmt)     printf 'next: %s' "${1:-}" ;;
+    zh:home_first_retry_fmt)    printf '%s 秒后自动再试一次，也可以现在敲 fleet claude' "${1:-60}" ;;
+    en:home_first_retry_fmt)    printf 'trying again in %s s — or type fleet claude now' "${1:-60}" ;;
+    zh:home_first_next)         printf '敲 fleet claude 再开一次；还不行就 fleet doctor 看哪里断了' ;;
+    en:home_first_next)         printf 'type fleet claude to try again; if it still fails, fleet doctor says what is down' ;;
     zh:home_first_hint)         printf '这里和本地运行 claude 一样；要在某个仓库里做，直接告诉我仓库名' ;;
     en:home_first_hint)         printf 'Just like running claude locally; to work in a repo, tell me its name' ;;
     # leaving the one-session view (issue #2265): ⌃D / prefix d / the agent's /exit
@@ -502,6 +512,12 @@ fleet_ui_t() {
     en:compose_sent_fmt)        printf 'sent: %s · starting…' "${1:-}" ;;
     zh:compose_empty)           printf '先写一行再 ↵' ;;
     en:compose_empty)           printf 'write a line first' ;;
+    zh:compose_failed_fmt)      printf '✗ 没发出去：%s · 字还在，改好再 ↵' "${1:-}" ;;
+    en:compose_failed_fmt)      printf '✗ not sent: %s · your text is kept — fix it and ↵ again' "${1:-}" ;;
+    zh:compose_failed_unknown)  printf '原因没说出来，看 fleet doctor' ;;
+    en:compose_failed_unknown)  printf 'no reason given — see fleet doctor' ;;
+    zh:compose_failed_silent)   printf '等了 4 分钟没有回音，看侧栏有没有开出来' ;;
+    en:compose_failed_silent)   printf 'no answer after 4 minutes — check the list for the session' ;;
     zh:compose_nolist)          printf '没找到任务列表：直接发给入口' ;;
     en:compose_nolist)          printf 'no task list found: sending straight to the hub' ;;
     zh:compose_result_fmt)      printf '入口回话：%s' "${1:-}" ;;

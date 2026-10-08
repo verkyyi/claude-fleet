@@ -58,7 +58,12 @@ title, the whole text the body, every attachment's path listed under it) and
 hands the task list `compose` on its @sidebar_do queue (F12 wakes it, exactly as
 ⌘P's pick does): the list draws 「开工中…」 under the 「新任务」 row at once, runs
 --send in the background and switches to the new session's row when it appears.
-No list on screen (an older client): --send runs from here. Nothing on the way
+No list on screen (an older client): --send runs from here. The box empties only
+when the machine said done (issue #2240): the list tells the area how the send
+ended (compose-result.json — {id, ok, why}), and one that did not open — the
+hub out of reach, a refusal, a machine that said no — leaves the text as it was
+written, its reason on the line under the options until the next key, and its
+payload kept as compose-failed.json. Nothing on the way
 spends a token: the issue is filed by fleet-issue-file.sh on the machine, the
 worker opened by its spawn. The orchestrator is not reached from here: its own
 row (and ⌘N on the writing area, #2146) is the way in.
@@ -82,6 +87,8 @@ MAX_SCRATCH = 64      # the hub's checkScratchName
 PLACE_WORDS = ("REMOTE", "LOCAL", "HELD", "REFUSED", "DECLINED", "UNKNOWN")  # fleet-client-place.sh's line
 PORTAL = "new"        # the portal window's @remote: the list's row key for it
 SAVE_EVERY = 1.0      # the draft is written at most this often while typing
+TOLD_EVERY = 0.5      # how often a send in flight looks for its answer (issue #2240)
+TOLD_WAIT = 240       # no answer by then (an older list): the text stays, said so
 
 
 def state_dir():
@@ -98,6 +105,53 @@ def draft_path():
 
 def send_path():
     return state_dir() / "compose-send.json"
+
+
+def result_path():
+    """compose-result.json beside the draft (issue #2240): how a send ended, as
+    the list (or --send from here) saw it — {id, ok, why}. Only a done start
+    clears the box; anything else leaves the text and says why."""
+    return state_dir() / "compose-result.json"
+
+
+def failed_path():
+    """compose-failed.json: the payload of the last send that did not open
+    (issue #2240) — kept, never unlinked, so nothing written is lost."""
+    return state_dir() / "compose-failed.json"
+
+
+def compose_told(cid, ok, why=""):
+    """The writing area told how its send `cid` ended (issue #2240): the list's
+    words when it did not open. The area reads it on its next beat."""
+    return write_atomic(result_path(), json.dumps({"id": cid, "ok": bool(ok), "why": why or ""},
+                                                  ensure_ascii=False) + "\n")
+
+
+def read_told():
+    try:
+        data = json.loads(result_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def keep_failed(path):
+    """The payload of a send that did not open, kept as compose-failed.json."""
+    try:
+        os.replace(str(path), str(failed_path()))
+    except OSError:
+        pass
+
+
+def place_why(text):
+    """The reason in fleet-client-place.sh's output (the direct road, no list):
+    its line's message after the tab, else the last line said."""
+    line = next((l for l in reversed(text.splitlines()) if l.split(" ", 1)[0] in PLACE_WORDS), "")
+    if line:
+        why = line.partition("\t")[2].partition("\tafter ")[0].strip()
+        return why or line.strip()
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    return lines[-1] if lines else ""
 
 
 def log_path():
@@ -814,6 +868,7 @@ def ui(screen, session):
     menu, menu_at = None, 0            # the open option's menu: menu_for() rows
     saved_text, saved_at, dirty_at = draft, (time.strftime("%H:%M") if draft else ""), None
     toast = ""
+    sending = None                     # the send in flight (issue #2240): {id, text, at}
     prev, group = previous()
     pick, touched = defaults(group), set()
 
@@ -850,6 +905,30 @@ def ui(screen, session):
 
     for sig in (signal.SIGHUP, signal.SIGTERM):
         signal.signal(sig, hangup)
+
+    def told():
+        """The send in flight, ended? Done: the box empties and the options go
+        back to their defaults. Anything else: the text stays as it was written
+        and the toast says why and what next, until the next key (issue #2240)."""
+        nonlocal sending, toast
+        data = read_told()
+        if data is not None and data.get("id") == sending["id"]:
+            try:
+                result_path().unlink()
+            except OSError:
+                pass
+            if data.get("ok"):
+                if ed.text() == sending["text"]:
+                    ed.clear()
+                    save(force=True)
+                fresh()
+                toast = ""
+            else:
+                toast = tr("compose_failed_fmt", data.get("why") or tr("compose_failed_unknown"))
+            sending = None
+        elif time.monotonic() - sending["at"] >= TOLD_WAIT:
+            toast = tr("compose_failed_fmt", tr("compose_failed_silent"))
+            sending = None
 
     def put(y, x, text, attr=0):
         h, w = screen.getmaxyx()
@@ -948,14 +1027,19 @@ def ui(screen, session):
             pass
         screen.refresh()
 
-        # a beat while typing: the draft
-        screen.timeout(int(SAVE_EVERY * 1000) if dirty_at is not None else -1)
+        # a beat while typing: the draft; while a send is in flight: its answer
+        screen.timeout(int(TOLD_EVERY * 1000) if sending is not None else
+                       int(SAVE_EVERY * 1000) if dirty_at is not None else -1)
         try:
             kind, k = read_key(screen)
         except curses.error:
             kind, k = "none", ""
         except KeyboardInterrupt:
             kind, k = "key", "esc"
+        if kind != "none" and k != "resize" and sending is None:
+            toast = ""         # a failure's words stay until the next key (issue #2240)
+        if sending is not None:
+            told()
         if kind == "none":
             save(force=True)   # idle a beat: the draft is on disk
             continue
@@ -1000,20 +1084,36 @@ def ui(screen, session):
             if not data:
                 toast = tr("compose_empty")
                 continue
+            if sending is not None:
+                toast = tr("compose_sent_fmt", sending["title"])   # one send at a time
+                continue
             if not write_atomic(send_path(), json.dumps(data, ensure_ascii=False) + "\n"):
                 toast = "✗ " + str(send_path())
                 continue
             if data["repo"]:
                 write_atomic(state_path(), json.dumps({"repo": data["repo"]}) + "\n")
+            # The box empties only once the machine said done (issue #2240): until
+            # then the text stays, and a send that does not open says why, here.
+            save(force=True)
+            try:
+                result_path().unlink()
+            except OSError:
+                pass
             if shell.hand("compose"):
                 toast = tr("compose_sent_fmt", data["title"])
+                sending = {"id": data["id"], "text": ed.text(), "title": data["title"], "at": time.monotonic()}
             else:
                 out = subprocess.run([sys.executable, str(Path(__file__).absolute()), "--send", str(send_path())],
                                      stdin=subprocess.DEVNULL, capture_output=True, text=True)
-                toast = tr("compose_result_fmt", (out.stdout or out.stderr).strip().split("\n")[-1])
-            ed.clear()
-            save(force=True)
-            fresh()
+                if out.returncode == 0:
+                    toast = tr("compose_result_fmt", place_why(out.stdout or out.stderr))
+                    ed.clear()
+                    save(force=True)
+                    fresh()
+                else:
+                    keep_failed(send_path())
+                    toast = tr("compose_failed_fmt", place_why((out.stdout or "") + "\n" + (out.stderr or ""))
+                               or tr("compose_failed_unknown"))
         elif k == "tab" or k == "btab":
             ring = ["body"] + list(OPTIONS)
             at = ring.index(focus) if focus in ring else 0
