@@ -235,7 +235,8 @@ eq 'bridge degenerate off → 5' "$?" 5
 has 'pool a (fleet)'   "$(bash "$BIN/scratch-pool.sh" status $M 2>&1)" "want=2"
 printf 'FLEET_REPO="o/a"\nFLEET_SCRATCH_POOL=0\n' > "$(fleet_repo_conf_file $M o/a)"
 has 'pool a (own overlay off)' "$(bash "$BIN/scratch-pool.sh" status $M 2>&1)" "want=0"
-has 'pool degenerate' "$(bash "$BIN/scratch-pool.sh" status $D 2>&1)" "want=0"
+# unset anywhere = the default, on since #2233: one warm entry per slot
+has 'pool degenerate' "$(env -u FLEET_SELFTEST_ROOT bash "$BIN/scratch-pool.sh" status $D 2>&1)" "want=1"
 leg switches
 
 if [ "$FAILS" -eq 0 ]; then echo "repo-settings-selftest: all PASS"; exit 0; fi
