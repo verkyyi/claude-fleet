@@ -209,6 +209,13 @@ def pid_cmd(pid):
         return ""
 
 
+def requires_missing(c):
+    """The child's requirements not met yet: a path that does not exist, or a
+    pattern (`*`) that matches nothing — `logins/*.env` on an empty directory."""
+    return [r for r in c.get("requires") or []
+            if not (glob.glob(r) if "*" in r else os.path.exists(r))]
+
+
 def dir_sig(d):
     """What a directory holds, as one string: each entry's name, size and mtime."""
     try:
@@ -259,13 +266,16 @@ def default_table(paths):
             # The one node program for every login (C5, #2333): one link to the
             # hub with the machine's token, each login a tenant run as itself.
             # Waits until the machine has its token (machine.env) and at least
-            # the logins directory — the migration writes both, login by login.
+            # one login in it (logins/*.env, #2421: an empty directory made
+            # ccquota exit 1 once a minute) — the migration writes both, login
+            # by login.
             {"name": "node-agent",
              "cmd": [os.path.join(rt_bin, "ccquota"), "agent", "--machine",
                      "--machine-env", os.path.join(paths.state, "machine.env"),
                      "--logins", os.path.join(paths.state, "logins"),
                      "--state", os.path.join(paths.state, "agent")],
-             "requires": [os.path.join(paths.state, "machine.env"), os.path.join(paths.state, "logins")],
+             "requires": [os.path.join(paths.state, "machine.env"),
+                          os.path.join(paths.state, "logins", "*.env")],
              # it reads its tenants once, at start: an adopt / release (#2387)
              # changes the directory, and the daemon starts it again on it
              "reload": os.path.join(paths.state, "logins"),
@@ -598,7 +608,7 @@ class Supervisor(object):
             return account_runnable(c) or "supervised"
         if not c.get("cmd"):
             return "pending"
-        if any(not os.path.exists(r) for r in c.get("requires") or []):
+        if requires_missing(c):
             return "waiting"
         if self.legacy_installed(c.get("legacy")):
             return "legacy"
@@ -621,6 +631,14 @@ class Supervisor(object):
                 cs["status"] = st
                 self.dirty = True
             if st != "supervised":
+                # the last login released (#2421): a running one has nothing to serve
+                if st == "waiting" and (name in self.procs or name in self.adopted):
+                    self.stop_one(name, "%s missing — waiting" % ", ".join(requires_missing(c)))
+                    cs["status"] = st
+                if st == "waiting" and (cs.get("fails") or cs.get("next_start")):
+                    # no backoff carried over: the first start once it is met is at once
+                    cs.update(fails=0, next_start=None)
+                    self.dirty = True
                 continue
             # an adopted pid: we cannot wait() on it, so poll
             if name in self.adopted:
@@ -1094,16 +1112,18 @@ def account_services(paths, login, uid, home):
 AGENT_ENV_KEYS = re.compile(r"^(CCQUOTA_[A-Z0-9_]+|FLEET_CONF_DIR)$")
 
 
-def _env_file(path, uid):
+def _env_file(path, uid, also=()):
     """KEY=VALUE lines of a node.env, PARSED (never sourced). Root reads a file in a
-    login's home: never through a symlink, only one that login (or root) owns."""
+    login's home: never through a symlink, only one that login (or root) owns —
+    or an owner in <also> (the credsep store's role account, issue #2336)."""
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
         return None
     with os.fdopen(fd) as f:
         st = os.fstat(f.fileno())
-        if st.st_uid not in (uid, 0) and env("FLEET_NODE_TEST", "") != "1":
+        if st.st_uid not in (uid, 0) + tuple(also) and (env("FLEET_NODE_TEST", "") != "1"
+                                                         or env("FLEET_NODE_OWNER_CHECK", "") == "1"):
             return None
         out = {}
         for line in f:
@@ -1119,6 +1139,13 @@ def _env_file(path, uid):
             if eq and k.strip():
                 out[k.strip()] = v
         return out
+
+
+def _role_uids():
+    try:
+        return (pwd.getpwnam(env("FLEET_CREDSEP_ROLE", "_fleetcred")).pw_uid,)
+    except KeyError:
+        return ()
 
 
 def account_agent(paths, login, uid, home):
@@ -1146,7 +1173,9 @@ def account_agent(paths, login, uid, home):
         meta = read_json(os.path.join(cbase, login, "meta.json"), None)
         if isinstance(meta, dict) and meta.get("login") == login:
             ne_path = os.path.join(cbase, login, "node.env")
-            ne = _env_file(ne_path, 0)
+            # the store is the role account's (fleet-credsep.py: _fleetcred 0700),
+            # under a root-owned base — m4 (issue #2336) had every token there
+            ne = _env_file(ne_path, 0, _role_uids())
             run = env("FLEET_CREDSEP_RUN_BASE", "/var/run/fleet-cred")
             store = os.path.join(run, ".shared", "ctl.sock") if meta.get("mode") == "shared" \
                 else os.path.join(run, login, "ctl.sock")
@@ -1400,7 +1429,7 @@ def status_lines(paths, table, state):
         if st == "pending":
             what = "not yet (%s)" % c.get("note", "")
         elif st == "waiting":
-            what = "waiting — %s missing" % ", ".join(r for r in c.get("requires") or [] if not os.path.exists(r))
+            what = "waiting — %s missing" % ", ".join(requires_missing(c))
         elif st == "legacy":
             what = "legacy — launchd's %s still runs it" % c.get("legacy")
         elif st == "untrusted":

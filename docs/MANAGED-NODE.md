@@ -109,7 +109,7 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 | `/var/db/fleet-node/logins/<账号>.env` | 这个账号原来那份 agent 的设置（`CCQUOTA_*`、`FLEET_CONF_DIR`），`CCQUOTA_TOKEN` = **这个账号**的节点令牌 | `account adopt <账号>` 写（#2387）：键取自旧 `com.ccquota.agent.<账号>` plist 的 `CCQUOTA_*` / `FLEET_CONF_DIR` + 这个账号 node.env 的 `CCQUOTA_*`（凭据隔离的从 credsep 存储读，带 `CCQUOTA_FLEET_CRED_STORE`），旧 agent 一起进 attic；`account release` 删它、放回旧 agent。root 600；别人能读写就拒；`logins/` 一变，守护重启节点程序 |
 | `/var/db/fleet-node/agent/<账号>/` | 每个账号的游标、待发队列 | 节点程序自己 |
 
-两个文件都在之前，守护显示 `node-agent waiting — … missing`，不启动。
+`machine.env` 在、`logins/` 里至少有一个 `<账号>.env` 之前，守护显示 `node-agent waiting — … missing`，不启动（空的 `logins/` 不算，#2421）；最后一个账号 release 掉，它停下回到 waiting。
 
 **连接**：节点程序用机器令牌连一条线（hello 能力位 `machine`），每个账号在这条线上
 各说一次 hello，带自己的令牌（`login_token`）；之后这个账号的每条消息都带 `login`。
@@ -249,3 +249,4 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 
 演练记录与五个指标的读数：#2336（m4，2026-10-08）。
 演练里的「升级」用一个只改这份文档的提交；「回退」用一个只加 `conf/drill-fail` 的提交，再用一个删掉它的提交往前走。
+演练前先在被演练的机器上 `count` 一次；中途新开的登录不在 `--logins` 里就不会被迁。
