@@ -23,7 +23,9 @@
 #             prints the one-command way back (account release)
 #   升级      人 moves stable (or the machine's desired release) to --to; the
 #             updater (C6) must reach `committed` with current = --to — 自动
-#   回退      人 moves it to --fail (a drill-branch commit whose doctor adds a FAIL);
+#   回退      人 moves it to --fail (a trunk commit that adds conf/drill-fail, so its
+#             doctor adds a FAIL — fleet-node-update.py DRILL_FAIL; the next commit
+#             removes it, so every install moves FORWARD off it, never back);
 #             the updater must reach `rolled-back` with current back on --to — 自动
 #   复查      fleet doctor --machine + versions + the five numbers after
 #   断GitHub  github.com & co. → 0.0.0.0 in /etc/hosts for the step, then the
@@ -278,7 +280,7 @@ run() {
   else row 升级 自动 0 SKIP "没移"; fi
 
   # 回退
-  if ask "把 stable 移到故意失败的 ${FAILSHA:0:12} — 移好了再答 y；看完记得移回"; then
+  if ask "把 stable 移到故意失败的 ${FAILSHA:0:12}（带 conf/drill-fail）— 移好了再答 y；看完往前移到删掉标记的提交"; then
     t0
     if wait_update rolled-back "$TO"; then row 回退 自动 "$(dt)" PASS "体检多出 FAIL → 整体退回 ${TO:0:12}"
     else row 回退 自动 "$(dt)" FAIL "$NOTE"; fi

@@ -65,7 +65,7 @@ def wj(path, obj):
         json.dump(obj, f)
 
 
-def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=()):
+def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=(), drill_fail=False):
     """A release dir as `ccquota release fetch --artifacts` leaves it, under <rel>/<sha>."""
     d = os.path.join(rel, sha)
     os.makedirs(os.path.join(d, ".release", "artifacts"))
@@ -77,6 +77,9 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
     wj(os.path.join(d, "release.json"), spec)
     shutil.copy(UPD, os.path.join(d, "bin"))
     shutil.copy(SUP, os.path.join(d, "bin"))
+    if drill_fail:
+        os.makedirs(os.path.join(d, "conf"))
+        open(os.path.join(d, "conf", "drill-fail"), "w").close()
     arts = {
         "ccquota-darwin-arm64": 'echo "ccquota prod-%s"' % sha[:7],
         "claude-%s-darwin-arm64" % claude: 'echo "%s (Claude Code)"' % claude,
@@ -263,6 +266,18 @@ class B_RollbackWhole(Sandbox):
 
 
 class C_DaemonAndCommit(Sandbox):
+    def test_drill_fail_marker_rolls_back(self):
+        # issue #2336: the drill's rollback release fails its own doctor
+        self.install(V1)
+        self.release(V2, drill_fail=True)
+        self.tick(V2)
+        self.daemon_on(V2)
+        st = self.tick(V2)
+        self.assertEqual(st["result"], "rolled-back", st)
+        self.assertIn("drill", st["reason"])
+        self.assertEqual(self.current(), V1)
+        self.assertNotIn("drill", self.cmd("doctor").stdout)
+
     def test_daemon_not_restarted_is_rolled_back(self):
         self.install(V1)
         self.release(V2, claude="2.1.2")
