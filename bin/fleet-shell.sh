@@ -1191,6 +1191,9 @@ EOF
     exit "$hrc"
   fi
   printf '%s\n' "$hline"
+  # where it opened (issue #2339): the client's view machine (「入口选了 …」) and
+  # the hub's placement are two choices — say the second, so one never reads as the other
+  case "$hline" in REMOTE\ ?*) note "$(sh "$BIN/fleet-ui-lang.sh" t home_placed_fmt "$(printf '%s' "$hline" | awk '{ print $2 }')" 2>/dev/null)" ;; esac
   # a HOME session made: the newcomer's first is no longer owed (below)
   mkdir -p "$CONF_DIR" 2>/dev/null && : > "$CONF_DIR/home-session.first"
   # its row key: `REMOTE <m> <op> done <worker_id>` → wid:<worker_id>; with no hub
