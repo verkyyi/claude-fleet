@@ -189,13 +189,40 @@ the line through the nested client, and the widths.
 
 `fleet claude [--node m4] [a first sentence…]` (or `fleet codex …`) opens a
 **HOME session** — no repo, in your home directory on a fleet machine, with that
-agent — and attaches the client onto it; the words are its first turn. It is the
-one HOME-session primitive (EPIC #2259 共同约定 2): `bin/fleet-home-session.sh`
-starts the client without attaching (its lease signs the ask), then
-`fleet-shell.sh home-session` asks `fleet-client-place.sh - home` — the hub's
-scratch + `no_repo`, which the node takes from its warm pool (#2233) or opens
-cold — and turns the stage onto the row as soon as the list has it. A placement
-that fails prints the hub's reason and attaches nothing.
+agent — and shows it, like running `claude` locally; the words are its first
+turn. It is the one HOME-session primitive (EPIC #2259 共同约定 2):
+`bin/fleet-home-session.sh` starts the client without attaching (its lease signs
+the ask), then `fleet-shell.sh home-session --no-stage` asks
+`fleet-client-place.sh - home` — the hub's scratch + `no_repo`, which the node
+takes from its warm pool (#2233) or opens cold. A placement that fails prints
+the hub's reason and attaches nothing.
+
+**It opens in a view of its own** (issue #2349, `fleet-shell.sh solo <machine>
+<worker id>`): the whole terminal is that one session, no list, no top line, one
+bottom line 「⌃D 放到后台 · /exit 结束会话」 with the machine on the right —
+whatever layout the client keeps, which `fleet claude` neither reads nor writes.
+It is not the client's stage but a tmux server of its own (`-L
+<session>-solo-<pid>`, the stage's conf with this bar over it) holding one proxy
+pinned to that session, so the client's own view — open in another terminal or
+not — never moves with it. A watcher reads the row off the client's list cache
+for as long as the view lives: the session going `exited` (the agent's `/exit`)
+ends the view, and the terminal is back at its prompt with 「会话已结束（m5）。」.
+⌃D, `prefix d` or closing the terminal only put it in the background:
+「会话在后台继续（m5）。`fleet` 可以找回。」 — the session runs on, `fleet` lists
+it. Either way the view's server goes with the attach, and a client `fleet
+claude` had to start for its ask is quit again (`fleet quit`, below), so nothing
+of fleet stays behind. No hub (a LOCAL placement): the client attaches, as
+before. `--here` is unchanged.
+
+**A regular client already running is never touched** (the issue's hard rule):
+`fleet claude` gives it no re-attach pass (which would apply its layout again,
+select a machine on its stage, take the lease for this terminal and say where it
+is in use) — its lease, held already, signs the ask; the view's server is built
+from ONE conf at its start, so the client's top line never runs there; the
+view's end, ⌃D or a closed terminal only close the view. Only `fleet quit`
+quits the regular client, and `fleet claude`'s own trailing quit (when it had to
+start one) is `--if-unattached`: a client someone attached meanwhile stays.
+`bin/fleet-client-solo-selftest.sh` D4 pins it with a client attached beside.
 
 A newcomer gets one without asking: a client whose `fleet.conf [client]` says
 `FLEET_CLIENT_LAYOUT=solo` (what a fresh install writes) opens ONE HOME Claude
@@ -211,12 +238,37 @@ the 旧写法:
 | runs on            | a fleet machine           | this computer                                 |
 | sees the files of  | that machine (`$HOME`)    | this computer (the current directory)         |
 | after you quit     | keeps running (reaped by its policy) | ends with the agent                |
+| its `/exit`        | back at your prompt       | back at your prompt                           |
 | from another device| can be picked up          | no                                            |
 | on the session list| yes                       | no                                            |
 
 `bin/fleet-home-session-selftest.sh` pins the dispatch, `--here` ≡ `fleet run`,
 a real `fleet codex "hi"` on a fake node (codex · `@norepo` · `$HOME` · "hi"
 submitted), and the first-session rule.
+`bin/fleet-client-solo-selftest.sh` D pins the view for real (one line, `/exit`
+→ the prompt, ⌃D → the background, the client's layout untouched);
+`bin/fleet-quit-selftest.sh` E the client quit after it only when `fleet claude`
+started it.
+
+## 放到后台 and 退出 fleet — two different things (issue #2349)
+
+- **放到后台** — `prefix d`, closing the terminal window, ⌃D in a one-session
+  view: the screen goes, the client and the sessions keep running, the next
+  `fleet` is back at once.
+- **退出 fleet** — `fleet quit`, ⌘Q (prefix Q without iTerm2; `dash-keymap.sh
+  --panel switch`'s `quit` row), the last line of ⌘K and of the row menu: every
+  process of the client on this computer goes — the keeper (the lease given
+  back at once, so the next client anywhere takes nothing over), the hub loop,
+  the actions loop, the warm loop and its ssh masters, the shell's server with
+  the list and the bar, the stage with its connections. **The sessions on the
+  machines keep running** — a closed proxy only drops its connection — so there
+  is no question first, and the terminal says 「fleet 已退出；会话仍在 m5/m4 上运行，
+  `fleet` 重新进入。」. From inside the client (a key, a menu) it goes on in the
+  background, since what runs it is about to go.
+- `fleet status` says which: 「客户端在后台运行（`fleet quit` 退出）。」 or
+  「客户端没在运行（`fleet` 进入）。」
+
+`bin/fleet-quit-selftest.sh` pins all of it on private sockets.
 
 ## A session on this computer — `fleet run` (issue #2136)
 

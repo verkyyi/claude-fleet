@@ -4,7 +4,8 @@
 #   A  the lines (fleet-quickopen.py switch): every session the list knows, most
 #      recent first (the one in view last), each with how long ago it was in
 #      view; then 「+ 新会话」, a rule, and the layout flip — 「打开多会话视图」
-#      in the one-session view (@fleet_layout solo), 「收起侧栏」 in any other.
+#      in the one-session view (@fleet_layout solo), 「收起侧栏」 in any other —
+#      and last 「退出 fleet」 (issue #2349).
 #      A query filters the sessions and never the tail.
 #   B  ↵ on a session (switch-run <key>) hands `jump=<key>` to the list pane's
 #      queue — the list's own jump, as ⌘P's ↵ does.
@@ -12,7 +13,8 @@
 #      FLEET_CLIENT_LAYOUT into fleet.conf's [client] (remembered) and switches
 #      the running client (fleet-shell.sh layout <v> <session>); ↵ on 「+ 新会话」
 #      opens a HOME session through the one primitive (fleet-shell.sh
-#      home-session claude) on the popup's client session.
+#      home-session claude) on the popup's client session; ↵ on 「退出 fleet」
+#      runs fleet-shell.sh quit <session> (issue #2349).
 #   D  the history keeps `seen` beside `mru` (visit), and drops what fell off it.
 #
 # tmux runs on an isolated socket (-S under a temp dir), never a fleet's.
@@ -62,15 +64,17 @@ wid:f/home-1	home claude
 [ "$(printf '%s\n' "$out" | sed -n 5p)" = '!new	+ 新会话' ] || fail "A: 「+ 新会话」 is not right under the sessions" "$out"; ok
 [ "$(printf '%s\n' "$out" | sed -n 6p)" = '--' ] || fail "A: no rule between 「+ 新会话」 and the flip" "$out"; ok
 [ "$(printf '%s\n' "$out" | sed -n 7p)" = '!layout:multi	打开多会话视图' ] || fail "A: the one-session view's last line is not 打开多会话视图 (layout:multi)" "$out"; ok
-[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 7 ] || fail "A: more than 4 sessions + 3 tail lines" "$out"; ok
+[ "$(printf '%s\n' "$out" | sed -n 8p)" = '!quit	退出 fleet' ] || fail "A: the last line is not 退出 fleet (quit, issue #2349)" "$out"; ok
+[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 8 ] || fail "A: more than 4 sessions + 4 tail lines" "$out"; ok
 tmux -S "$SOCK" set-option -g @fleet_layout multi
-Q switch | tail -1 | grep -q '^!layout:solo	' || fail "A: the multi-session view's last line is not 收起侧栏 (layout:solo)" "$(Q switch)"; ok
+Q switch | tail -2 | head -1 | grep -q '^!layout:solo	' || fail "A: the multi-session view's flip is not 收起侧栏 (layout:solo)" "$(Q switch)"; ok
 tmux -S "$SOCK" set-option -g @fleet_layout auto
-Q switch | tail -1 | grep -q '^!layout:solo	' || fail "A: an old user's auto layout does not offer 收起侧栏" "$(Q switch)"; ok
+Q switch | tail -2 | head -1 | grep -q '^!layout:solo	' || fail "A: an old user's auto layout does not offer 收起侧栏" "$(Q switch)"; ok
+Q switch | tail -1 | grep -q '^!quit	' || fail "A: 退出 fleet is not the last line in the multi-session view" "$(Q switch)"; ok
 out=$(Q switch gam)
 [ "$(printf '%s\n' "$out" | head -1 | cut -f1)" = "@3" ] || fail "A: a query does not filter the sessions" "$out"; ok
 [ "$(printf '%s\n' "$out" | grep -c '^@\|^wid:')" = 1 ] || fail "A: a query keeps rows it does not match" "$out"; ok
-[ "$(printf '%s\n' "$out" | tail -3 | cut -f1 | tr '\n' ' ')" = "!new -- !layout:solo " ] || fail "A: a query hid the tail" "$out"; ok
+[ "$(printf '%s\n' "$out" | tail -4 | cut -f1 | tr '\n' ' ')" = "!new -- !layout:solo !quit " ] || fail "A: a query hid the tail" "$out"; ok
 
 # --- B ----------------------------------------------------------------------------
 tmux -S "$SOCK" set-option -p -t "$LIST" @sidebar_do ''
@@ -103,6 +107,12 @@ grep -qx 'sw|home-session claude' "$rec" || fail "C: 「+ 新会话」 did not o
 # the real command when no seam: the one HOME-session primitive
 grep -q '"fleet-shell.sh"), "home-session", "claude"' "$BIN/fleet-quickopen.py" || fail "C: 「+ 新会话」 is not fleet-shell.sh home-session claude"; ok
 grep -q '"fleet-shell.sh"), "layout"' "$BIN/fleet-quickopen.py" || fail "C: the flip is not fleet-shell.sh layout"; ok
+# 退出 fleet (issue #2349): fleet-shell.sh quit, on the popup's client session
+: > "$rec"
+FLEET_SWITCH_QUIT_CMD="$seam quit" Q switch-run quit sw || fail "C: switch-run quit exited non-zero"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$rec" ] && break; sleep 0.2; done
+grep -qx 'sw|quit sw' "$rec" || fail "C: 「退出 fleet」 did not quit the client (fleet-shell.sh quit <session>)" "$(cat "$rec")"; ok
+grep -q '"fleet-shell.sh"), "quit"' "$BIN/fleet-quickopen.py" || fail "C: 「退出 fleet」 is not fleet-shell.sh quit"; ok
 
 # --- D ----------------------------------------------------------------------------
 python3 - "$BIN" <<'PY' || exit 1

@@ -210,6 +210,8 @@ fleet_ui_t() {
     en:switch_multi)            printf 'Open the multi-session view' ;;
     zh:switch_solo)             printf '收起侧栏' ;;
     en:switch_solo)             printf 'Hide the list' ;;
+    zh:switch_quit)             printf '退出 fleet' ;;
+    en:switch_quit)             printf 'Quit fleet' ;;
     zh:quickopen_cmd_for_fmt)   printf '对 %s' "${1:-}" ;;
     en:quickopen_cmd_for_fmt)   printf 'on %s' "${1:-}" ;;
     zh:quickopen_cmd_none)      printf '这里没有能做的事' ;;
@@ -402,6 +404,25 @@ fleet_ui_t() {
     en:solo_ended_fmt)          printf 'The session has ended (%s).' "${1:-}" ;;
     zh:solo_resume)             printf 'fleet 可以恢复。' ;;
     en:solo_resume)             printf 'Type fleet to resume it.' ;;
+    # `fleet claude` / `fleet codex`'s own one-session view (issue #2349): its bar and its last words
+    zh:solo_view_bar)           printf '⌃D 放到后台 · /exit 结束会话' ;;
+    en:solo_view_bar)           printf '⌃D to the background · /exit ends the session' ;;
+    zh:solo_view_left_fmt)      printf '会话在后台继续（%s）。`fleet` 可以找回。' "${1:-}" ;;
+    en:solo_view_left_fmt)      printf 'The session keeps running in the background (%s). `fleet` finds it again.' "${1:-}" ;;
+    zh:solo_view_ended_fmt)     printf '会话已结束（%s）。' "${1:-}" ;;
+    en:solo_view_ended_fmt)     printf 'The session has ended (%s).' "${1:-}" ;;
+    # 退出 fleet (issue #2349): `fleet quit`, ⌘Q, ⌘K's / the menu's last line — the
+    # client's processes here go, the sessions on the machines do not
+    zh:quit_done_fmt)           printf 'fleet 已退出；会话仍在 %s 上运行，`fleet` 重新进入。' "${1:-}" ;;
+    en:quit_done_fmt)           printf 'fleet has quit; the sessions keep running on %s — `fleet` to come back.' "${1:-}" ;;
+    zh:quit_done)               printf 'fleet 已退出；`fleet` 重新进入。' ;;
+    en:quit_done)               printf 'fleet has quit; `fleet` to come back.' ;;
+    zh:quit_none)               printf 'fleet 客户端没在运行。' ;;
+    en:quit_none)               printf 'The fleet client is not running.' ;;
+    zh:client_bg)               printf '客户端在后台运行（`fleet quit` 退出）。' ;;
+    en:client_bg)               printf 'The client is running in the background (`fleet quit` quits it).' ;;
+    zh:client_off)              printf '客户端没在运行（`fleet` 进入）。' ;;
+    en:client_off)              printf 'The client is not running (`fleet` opens it).' ;;
     # the writing area itself (issue #1953, bin/fleet-compose.py)
     zh:compose_title)           printf '新任务' ;;
     en:compose_title)           printf 'New task' ;;
@@ -513,6 +534,7 @@ message	m	发消息… — 只有别机行有：在输入行写，经入口送�
 stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit（可恢复）
 resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）
 clients	d	我的客户端 — 只在客户端：同时开着的每台设备、终端、最后使用时间，可断开某一台
+quit	z	退出 fleet — 只在客户端：关掉这台电脑上客户端的全部进程，远端会话照常在机器上跑（⌘Q · fleet quit）
 orch	b	进编排会话 — 直接切到固定的编排会话（写作区里再按 ⌘N 也是；「新任务」行的右键菜单，⌘P 的 > 也有）' ;;
     en:menu_keys)               printf '%s' 'rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
 pin	t	pin / unpin the row to the top
@@ -533,6 +555,7 @@ message	m	message… — a row on another machine only: typed on the input line,
 stop	q	stop — a row on another machine only: /exit there through the hub (resumable)
 resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)
 clients	d	my clients — in the client only: every device you have open, its terminal and when last used; disconnect one
+quit	z	quit fleet — in the client only: every process of the client on this computer goes, the sessions keep running on their machines (⌘Q · fleet quit)
 orch	b	go to the orchestrator — straight to the orchestrating session of the fleet (⌘N again in the writing area too; also on the right-click menu of the 「New task」 row, and in ⌘P >)' ;;
     zh:menu_open_remote)        printf '进入（代理窗口）…' ;;
     en:menu_open_remote)        printf 'Enter (proxy window)…' ;;
@@ -561,6 +584,8 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     # --- 我的客户端 (issue #1932): the clients open at once, fleet-client-menu.sh
     zh:menu_clients)            printf '我的客户端…' ;;
     en:menu_clients)            printf 'My clients…' ;;
+    zh:menu_quit)               printf '退出 fleet' ;;
+    en:menu_quit)               printf 'Quit fleet' ;;
     zh:clients_title)           printf '我的客户端' ;;
     en:clients_title)           printf 'My clients' ;;
     zh:clients_stale)           printf '入口连不上，上次的' ;;
@@ -735,6 +760,8 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:keys_switch_fold)       printf %s 'open / shut the sub-tasks of the session in view; on a sub-task: shut its parent' ;;
     zh:keys_switch_switcher)   printf %s '切换会话：全部会话按最近使用排，可搜索；最下面「+ 新会话」和「打开多会话视图」（多会话视图里是「收起侧栏」）' ;;
     en:keys_switch_switcher)   printf %s 'switch session: every session, most recent first, searchable; at the bottom + New session and Open the multi-session view (Hide the list in it)' ;;
+    zh:keys_switch_quit)       printf %s '退出 fleet：关掉这台电脑上客户端的全部进程（侧栏、hub 循环、连接），远端会话照常在机器上跑；fleet 重新进入' ;;
+    en:keys_switch_quit)       printf %s 'quit fleet: every process of the client on this computer goes (the list, the hub loop, the connections); the sessions keep running on their machines; fleet comes back' ;;
     zh:keys_single_f1)         printf %s '窄屏（手机）：全屏切换器 —— 在等你的 · 最近 1–9 · 全部，点一行切过去；顶栏点名字同此' ;;
     en:keys_single_f1)         printf %s 'narrow (a phone): the full-screen switcher — waiting on you · recent 1–9 · all, tap a row; tapping the name on the top line too' ;;
     zh:keys_single_f23)        printf %s '窄屏：上一个 / 下一个会话（顶栏 ‹ › 同此）' ;;
@@ -755,6 +782,8 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:keys_page_quickopen)    printf %s 'go to any session; type > for commands' ;;
     zh:keys_page_fold)         printf %s '展开/收起子任务（子任务上：收起父任务）' ;;
     en:keys_page_fold)         printf %s 'open / shut sub-tasks (on one: its parent)' ;;
+    zh:keys_page_quit)         printf %s '退出 fleet（会话照常在机器上跑）' ;;
+    en:keys_page_quit)         printf %s 'quit fleet (the sessions keep running)' ;;
     zh:keys_page_switcher)     printf %s '切换会话 · 新会话 · 打开/收起多会话视图' ;;
     en:keys_page_switcher)     printf %s 'switch session · new · multi-session view on/off' ;;
     zh:keys_page_prevnext)     printf %s '上一个 / 下一个会话' ;;

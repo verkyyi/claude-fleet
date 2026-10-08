@@ -62,7 +62,7 @@ if [ "${1:-}" = --keys ]; then
   # the shell's menu has no row-less items (issue #1518), so its sheet lists none
   printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v sh="${FLEET_SHELL:-0}" \
     'sh == 1 && ($1 == "new" || $1 == "newto" || $1 == "repo") { next }
-     sh != 1 && $1 == "clients" { next } { print $2 "\t" $3 }'
+     sh != 1 && ($1 == "clients" || $1 == "quit") { next } { print $2 "\t" $3 }'
   exit 0
 fi
 
@@ -283,7 +283,10 @@ if [ -n "$rowless" ]; then
   side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
   add_orch
   group
-  if [ "${FLEET_SHELL:-0}" = 1 ]; then add_views view
+  if [ "${FLEET_SHELL:-0}" = 1 ]; then
+    add_views view
+    # 退出 fleet (issue #2349): the client's last line here too
+    add "$(t menu_quit)" "$(mk quit)" "run-shell -b $(sq "bash $(sq "$BIN/fleet-shell.sh") quit $(sq "$sess") >/dev/null 2>&1 || :")"
   else add_other; fi
   if [ "$wid" = new ]; then show "$(t sidebar_portal)"; else show ""; fi
 fi
@@ -349,6 +352,9 @@ if [ -n "$remote" ]; then
     # 我的客户端 (issue #1932): the clients open at once, one to disconnect —
     # a second menu, drawn by fleet-client-menu.sh on the same client
     add "$(t menu_clients)" "$(mk clients)" "$(sh_run "bash $(sq "$BIN/fleet-client-menu.sh") menu $(sq "$sess")${client:+ $(sq "$client")}")"
+    # 退出 fleet (issue #2349): the last line — the client's every process here
+    # goes, the sessions run on; no question first (nothing is lost)
+    add "$(t menu_quit)" "$(mk quit)" "$(sh_run "bash $(sq "$BIN/fleet-shell.sh") quit $(sq "$sess")")"
   fi
   show "$title"
 fi

@@ -121,6 +121,8 @@ preview ctrl-p alt-p' ;;
 # `switcher` (issue #2266, EPIC #2259 C7): ⌘K, the one-session view's way to any
 # other session, a new one, and the list beside it (fleet-quickopen.py --switch)
 # — prefix s elsewhere, tmux's own choose-tree key: the same job.
+# `quit` (issue #2349): ⌘Q, 退出 fleet — the client's every process here goes,
+# the sessions run on (fleet-shell.sh quit); prefix Q elsewhere, unbound in tmux.
 switch) TABLE='next ⌘↓ 0xf701-0x300000 920 n
 prev ⌘↑ 0xf700-0x300000 921 p
 back ⌘[ 0x5b-0x100000 922 h
@@ -131,7 +133,8 @@ help ⌘/ 0x2f-0x100000 926 ?
 quickopen ⌘P 0x70-0x100000 927 /
 new ⌘N 0x6e-0x100000 928 c
 fold ⌘. 0x2e-0x100000 929 .
-switcher ⌘K 0x6b-0x100000 930 s'
+switcher ⌘K 0x6b-0x100000 930 s
+quit ⌘Q 0x71-0x100000 931 Q'
   cmd="${1:-list}"
   case "$cmd" in
     list)    printf '%s\n' "$TABLE" ;;
