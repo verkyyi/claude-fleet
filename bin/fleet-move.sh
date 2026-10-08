@@ -9,6 +9,8 @@
 # fleet install (bin/fleet-move-remote.sh, this script's other half).
 #
 #   fleet-move.sh <window>… --to <user>@<host> [opts]
+#                           (<host> = this machine: the target half runs as
+#                           <user> through passwordless sudo, no ssh — #2210)
 #   fleet-move.sh <window>… --via hub --to <machine> [--dry-run]
 #   fleet-move.sh --rebalance [--max N|all] [--dry-run]
 #   opts: --via hub         move THROUGH the hub (issue #1426, EPIC #1419 C7):
@@ -176,6 +178,7 @@ remote_cmd() {
 # ssh — the move stops on that step and says the hub did not let it through.
 PEER=() PEER_AT=0 PEER_NA=0
 peer_refresh() {
+  [ -n "$LOCAL_LOGIN" ] && return 0
   [ "$PEER_NA" = 1 ] && return 0
   [ $(( $(date +%s) - PEER_AT )) -lt 240 ] && [ "${#PEER[@]}" -gt 0 ] && return 0
   local out rc o
@@ -191,7 +194,29 @@ EOF_PEER
     *) printf 'fleet-move: the hub gave no certificate to reach %s — cross-machine access paused\n' "$TO" >&2; return 1 ;;
   esac
 }
-move_ssh() { peer_refresh || return 255; ssh -o BatchMode=yes ${PEER[@]+"${PEER[@]}"} "$@"; }
+# Another login on THIS machine (issue #2210): the hub signs no certificate to
+# the machine itself, and none is needed — the admin (passwordless sudo) runs
+# the target half as that login, the same command string ssh would hand its
+# shell (after any `-o` pairs, the host, then the words joined with spaces).
+# Nothing leaves the machine; stdin (the transcript tar) passes straight through.
+LOCAL_LOGIN=''
+local_target() { # $TO is <login>@<this machine> and we may act as that login → 0
+  local u=${TO%%@*} h=${TO#*@} me
+  [ -n "$u" ] && [ "$u" != "$TO" ] || return 1
+  me=${FLEET_MOVE_LOCAL_HOST:-$(hostname -s 2>/dev/null)}
+  case "$h" in localhost|127.0.0.1|"$me"|"$(hostname 2>/dev/null)") ;; *) return 1 ;; esac
+  [ "$u" != "$(id -un)" ] || return 1
+  (cd / && sudo -n -u "$u" true) 2>/dev/null
+}
+move_ssh() {
+  if [ -n "$LOCAL_LOGIN" ]; then
+    while [ "${1:-}" = -o ]; do shift 2; done
+    shift
+    (cd / && sudo -n -u "$LOCAL_LOGIN" -H /bin/bash -c "cd \"\$HOME\" && $*")
+    return
+  fi
+  peer_refresh || return 255; ssh -o BatchMode=yes ${PEER[@]+"${PEER[@]}"} "$@"
+}
 ssh_run() { move_ssh "$TO" "$(remote_cmd "$@")"; }
 
 # fid_bundle <window> <sid> — the session's lifelong identity (issue #1646) rides
@@ -249,6 +274,10 @@ move_main() {
     ssh)
       [ "${#WIDS[@]}" -gt 0 ] || die 'no window given'
       case "$TO" in *@*) ;; *) die "--to needs <user>@<host>" ;; esac
+      if local_target; then
+        LOCAL_LOGIN=${TO%%@*}
+        say "fleet-move: $TO is this machine — the target half runs as $LOCAL_LOGIN through sudo, no ssh"
+      fi
       ;;
     hub)
       [ "${CCQUOTA_FLEET:-0}" = 1 ] || die '--via hub needs the hub module (CCQUOTA_FLEET=1)'
@@ -541,7 +570,8 @@ move_main() {
     fleet_rotate_lease_drop "$ldir"
     if [ -z "$ncp" ]; then
       say "  ? $name ($wid): resumed on $TO ($nw) but no Claude appeared — SOURCE LEFT RUNNING — failed:verify"
-      say "    inspect by hand: ssh $TO tmux -L $rfleet attach -t $nw"
+      if [ -n "$LOCAL_LOGIN" ]; then say "    inspect by hand: sudo -u $LOCAL_LOGIN -i tmux -L $rfleet attach -t $nw"
+      else say "    inspect by hand: ssh $TO tmux -L $rfleet attach -t $nw"; fi
       return 10
     fi
 
