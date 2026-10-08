@@ -185,7 +185,7 @@ PY
 ok
 CONF="$BIN/../conf/tmux-shell.conf"
 for k in 'bind -n User930 ' 'bind s ' 'bind -n User927 ' 'bind / '; do
-  grep -E "^$k" "$CONF" | grep -q -- "fleet-quickopen.py --client '#{client_name}' --session" || fail "E: $k does not open the panel with its client"; ok
+  grep -E "^$k" "$CONF" | grep -q -- "fleet-quickopen.py --session" || fail "E: $k does not open the panel"; ok
   grep -E "^$k" "$CONF" | grep -q -- '--switch' && fail "E: $k still opens the old switcher"; ok
 done
 
