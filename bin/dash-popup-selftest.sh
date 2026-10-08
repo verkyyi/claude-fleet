@@ -213,6 +213,9 @@ FRAME_CW=54 frame --client /dev/ttyF --size M --title popup_alerts -- true
 [ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 96% -h 90%)" ] || fail "frame: a 54-column client is not 96%×90%: $(tr '\n' ' ' < "$FLOG")"
 FRAME_CW=54 frame --client /dev/ttyF --size S --title popup_new_task -- true
 [ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 96% -h 16)" ] || fail "frame: a narrow S popup lost its row count: $(tr '\n' ' ' < "$FLOG")"
+# a whole-screen panel (the full switcher, -w 100% -h 100%) stays whole on a narrow client
+FRAME_CW=45 frame --client /dev/ttyF -w 100% -h 100% --title popup_quickopen -- true
+[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 100% -h 100%)" ] || fail "frame: a narrow full-screen popup was shrunk: $(tr '\n' ' ' < "$FLOG")"
 FRAME_CW=120 frame --client /dev/ttyF --size M --title popup_alerts -- true
 [ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 86% -h 60%)" ] || fail "frame: a wide client was resized: $(tr '\n' ' ' < "$FLOG")"
 # -w / -h beside --size win on their axis; an object joins the title; a # in it is
