@@ -106,7 +106,7 @@ PUT 的请求体就是上面可写的字段，外加可选的 `if_version`（读
 | 文件 | 内容 | 谁写 |
 |---|---|---|
 | `/var/db/fleet-node/machine.env` | `CCQUOTA_HUB_URL`、`CCQUOTA_TOKEN`（**机器自己**的节点令牌，§1） | 安装 / 迁移（C1 / C4），root 600 |
-| `/var/db/fleet-node/logins/<账号>.env` | 这个账号原来那份 agent 的设置（`CCQUOTA_*`、`FLEET_CONF_DIR`），`CCQUOTA_TOKEN` = **这个账号**的节点令牌 | 迁移，逐个账号，root 600；别人能读写就拒 |
+| `/var/db/fleet-node/logins/<账号>.env` | 这个账号原来那份 agent 的设置（`CCQUOTA_*`、`FLEET_CONF_DIR`），`CCQUOTA_TOKEN` = **这个账号**的节点令牌 | `account adopt <账号>` 写（#2387）：键取自旧 `com.ccquota.agent.<账号>` plist 的 `CCQUOTA_*` / `FLEET_CONF_DIR` + 这个账号 node.env 的 `CCQUOTA_*`（凭据隔离的从 credsep 存储读，带 `CCQUOTA_FLEET_CRED_STORE`），旧 agent 一起进 attic；`account release` 删它、放回旧 agent。root 600；别人能读写就拒；`logins/` 一变，守护重启节点程序 |
 | `/var/db/fleet-node/agent/<账号>/` | 每个账号的游标、待发队列 | 节点程序自己 |
 
 两个文件都在之前，守护显示 `node-agent waiting — … missing`，不启动。
@@ -222,7 +222,7 @@ curl -fsSL <入口>/install/bin/fleet-node-install.sh | sudo bash -s -- --hub <�
 | ssh CA | `GET /v1/fleet/ssh-ca.pub` → `/etc/ssh/fleet_user_ca.pub` + `sshd_config.d/100-fleet-user-ca.conf`，与 admin agent 写的一字不差；`sshd -t` 不过或 `sshd -T` 不认就放回原样 | 两个文件已是这样；入口不签证书则跳过 |
 | 守护 | `<state>/logins`（700），`fleet-node-supervisor.py install`（从 `current` 跑，§C3） | `install --check`：服务定义一致且 launchd 已载入 |
 
-装完之后机器由守护管：更新器跟发布版走，节点程序等 `logins/<账号>.env`（迁移逐个账号写），
+装完之后机器由守护管：更新器跟发布版走，节点程序等 `logins/<账号>.env`（`account adopt <账号>` 逐个账号写，#2387），
 账号用 `sudo <root>/current/bin/fleet-node-supervisor.py account adopt <账号>` 交给守护。
 托管机器上 `fleet host on` / `fleet node join` 先提示改用这条命令（一个版本内照旧可用）。
 沙箱自测 `bin/fleet-node-install-selftest.sh`；BREAK-IT `node-install-half`。
