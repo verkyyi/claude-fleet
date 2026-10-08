@@ -867,6 +867,18 @@ def pool_drop(R, labels):
             os.unlink(f)
 
 
+# macOS starts its own per-user agents (cfprefsd, lsd, trustd, secd, distnoted,
+# contactsd …) the moment anything runs as a new login — fleet-login-new.sh's
+# clone as it, in step 7 — so a login opened a minute ago is never process-free
+# (claude-fleet#2210). They hold no credential and start no session: the fresh
+# gate counts only what is not the OS's own.
+OS_AGENT_DIRS = ("/System/", "/usr/libexec/", "/usr/sbin/")
+
+
+def os_agent(cmd):
+    return cmd.startswith(OS_AGENT_DIRS)
+
+
 def fresh_gate(login, force):
     """--fresh (issue #2294): a login fleet-login-new.sh has JUST opened. The
     preflight's questions (is its proxy on, do its sessions all use it) have no
@@ -875,13 +887,16 @@ def fresh_gate(login, force):
     if DRY or not PREFLIGHT:
         return
     pw = getpw(login)
-    r = subprocess.run(["ps", "-U", str(pw.pw_uid), "-o", "pid="], stdout=subprocess.PIPE,
+    r = subprocess.run(["ps", "-U", str(pw.pw_uid), "-o", "comm="], stdout=subprocess.PIPE,
                        stderr=subprocess.DEVNULL, text=True)
-    n = len([l for l in r.stdout.splitlines() if l.strip()])
-    if not n:
-        say("preflight: ok — %s is fresh (nothing runs as it): the proxy comes first, then its sessions" % login)
+    cmds = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+    ours = [c for c in cmds if not os_agent(c)]
+    if not ours:
+        say("preflight: ok — %s is fresh (nothing runs as it%s): the proxy comes first, then its sessions"
+            % (login, "" if not cmds else "; %d macOS per-user agent(s) only" % len(cmds)))
         return
-    say("preflight: %s — not a fresh login: %d process(es) run as it" % (login, n))
+    say("preflight: %s — not a fresh login: %d process(es) run as it (%s)"
+        % (login, len(ours), ", ".join(sorted(set(os.path.basename(c) for c in ours))[:5])))
     if force:
         say("preflight: --force — going on anyway")
         return

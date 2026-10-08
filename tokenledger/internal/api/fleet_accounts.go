@@ -837,6 +837,12 @@ func (s *Server) changeAccount(req FleetAccountRequest) error {
 		if !control.ValidExistingLogin(req.Login) {
 			return errors.New("adopt needs a login of 2-16 lowercase letters and digits")
 		}
+		// A relogin'd row (claude-fleet#2210) carries a login that is not the
+		// person's: adopting THAT login settles the row as active — the create
+		// failed late, and the admin finished the login by hand.
+		if p, err := s.Store.Principal(req.PrincipalID); err == nil && p.Login != req.Login && req.Hostname != "" {
+			return s.Store.AdoptReloginAccount(p.ID, req.Hostname, req.Login, now)
+		}
 		p, err := s.Store.AdoptPrincipal(req.PrincipalID, req.Login, req.DisplayName, now)
 		if err != nil {
 			return err
