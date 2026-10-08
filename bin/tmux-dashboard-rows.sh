@@ -511,7 +511,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   if [ -s "$_orchf" ]; then
     while IFS=$US read -r _ow _; do [ -n "$_ow" ] && _orchw+="wid:$_ow "; done < "$_orchf"
   fi
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf _r_ctx; do
     case "$_orchw" in *" $r_wid "*) continue ;; esac
     case "$r_wid" in
       '#ts'|'#me') continue ;;

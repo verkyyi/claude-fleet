@@ -114,7 +114,7 @@ demo repo data.</sub>
   *measurement bus*, not a visible line (issue #1452) — it prints nothing and
   stamps the context %, window size, model and effort level (plus the account's
   rate limits) onto the pane's tmux window, where the pane header shows
-  `62% · Opus 5.5 · high` on its right and the auto-handoff nudge reads the %.
+  `剩余 62% · Opus 5.5 · high` on its right and the auto-handoff nudge reads the %.
   Opt-in at install time by pointing `settings.json`'s `statusLine` at the
   live-install path, so it improves through `land → /fleet-sync-install`;
   jq-gated (inert without it). Never auto-wired. The fleet mod feeds the same

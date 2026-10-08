@@ -259,9 +259,28 @@ def inventory_row(parts):
     login's, and a batch nobody drives has no window of its own; absent when empty.
     Column 23 (issue #2235): `backfill=failed` — a session started from the warm
     pool whose issue could not be filed / bound after every try; the sidebars mark
-    its row 「单子没建上」. Absent otherwise."""
+    its row 「单子没建上」. Absent otherwise.
+    Columns 24-28 (issue #2431): the measurement bus — `ctxleft=` (% left),
+    `ctxband=` (ok|watch|handoff), `ctxts=` (the reading's epoch), `model=`,
+    `effort=` → ctx_left / ctx_band / ctx_ts / model / effort, what `fleet ls`
+    prints; an empty or malformed value is absent, an adapter older than it has
+    none."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 28 and parts[-1].startswith("effort=") and parts[-2].startswith("model=") \
+            and parts[-3].startswith("ctxts=") and parts[-4].startswith("ctxband=") \
+            and parts[-5].startswith("ctxleft="):
+        ef, md, ts, bd, lf = (parts.pop().split("=", 1)[1] for _ in range(5))
+        if re.fullmatch(r"[0-9]{1,3}", lf):
+            extra["ctx_left"] = int(lf)
+        if bd in ("ok", "watch", "handoff"):
+            extra["ctx_band"] = bd
+        if re.fullmatch(r"[0-9]{9,11}", ts):
+            extra["ctx_ts"] = int(ts)
+        if re.fullmatch(r"[A-Za-z0-9 ._()+-]{1,64}", md):
+            extra["model"] = md
+        if re.fullmatch(r"[a-z]{1,16}", ef):
+            extra["effort"] = ef
     if len(parts) >= 23 and parts[-1].startswith("backfill="):
         if parts.pop()[9:] == "failed":
             extra["backfill"] = "failed"
