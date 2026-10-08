@@ -120,7 +120,7 @@ for u in users:
 rows = {}
 for line in os.environ.get("DOC", "").splitlines():
     p = line.split(None, 2)
-    if len(p) >= 2:
+    if len(p) >= 2 and p[0] in ("PASS", "WARN", "FAIL"):   # not the closing INFO summary
         rows[p[1]] = p[0]
 parts = ("runtime", "ccquota", "claude", "codex", "tmux", "cache")
 notup = sum(1 for p in parts if rows.get(p) != "PASS") if rows else len(parts)
@@ -321,7 +321,9 @@ run() {
   else row 断GitHub 自动 0 SKIP "没挡"; fi
 
   # 回话
-  if ask "这台上的会话都能回话、入口能往这台派会话？（自己看一眼：答 y = 是）"; then row 回话 人 0 PASS "发起人看过"
+  # --yes cannot look: a person answers this one, so it stays open (SKIP), never a PASS
+  if [ "$ASK_ALL" = 1 ]; then row 回话 人 0 SKIP "--yes 代跑：待人确认会话能回话、入口能往这台派会话"
+  elif ask "这台上的会话都能回话、入口能往这台派会话？（自己看一眼：答 y = 是）"; then row 回话 人 0 PASS "发起人看过"
   else row 回话 人 0 FAIL "会话不回话或派不过来"; fi
 
   report
