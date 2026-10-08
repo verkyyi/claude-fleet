@@ -48,7 +48,11 @@ at once. When that machine has a session already open and idle for this repo
 (or HOME) and agent — the warm pool, `scratch-pool.sh` — it takes that one and
 submits your text into it as its first turn (plus one line: the issue and branch
 follow), and answers in about a second (issue #2234); the issue is then filed and
-the session bound to it in the background (`fleet-start-backfill.sh`). With none
+the session bound to it in the background (`fleet-start-backfill.sh`, issue
+#2235): the same window becomes `issue-N` in place, and the agent hears its issue
+and branch on its next turn, never in the middle of one. A filing that fails
+three times leaves the session working and its row marked 「单子没建上」 (a red
+`∅`). With none
 ready it files the issue (`fleet-issue-file.sh`) and opens its worker as before.
 The right pane switches to it when its row appears — no token spent on the way. esc goes back to the session before; the draft is kept on disk
 (`~/.local/state/claude-fleet/compose-draft`) until it is sent. The orchestrating
