@@ -187,10 +187,16 @@ try:
     while out.get("state") == "pending" and out.get("operation_id") and time.time() < deadline:
         out = ask({"action": "status", "operation_id": out["operation_id"], "wait": rnd()})
 except urllib.error.HTTPError as e:
-    why = ""
+    why, raw = "", e.read() or b"{}"
+    # the certificate's principals are not the login the hub checks (#2457)
+    hint = fc.principal_hint(raw.decode("utf-8", "replace"))
+    if hint:
+        sys.stderr.write("fleet-client-place: %s\n" % hint)
+        sys.exit(1)
     try:
-        why = (json.loads(e.read() or b"{}").get("error") or {}).get("message") or ""
-    except ValueError:
+        err = json.loads(raw).get("error") or {}
+        why = (err.get("message") if isinstance(err, dict) else err) or ""
+    except (ValueError, AttributeError):
         pass
     if e.code == 404 and not why:
         why = "this hub predates client placement (#1777)"

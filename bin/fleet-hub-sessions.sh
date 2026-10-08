@@ -328,9 +328,23 @@ curl_sessions() {
          else rm -f "$ETAGF"; fi
          return 0 ;;
     304)     rm -f "$hdr"; return 3 ;;
-    401|403) rm -f "$hdr"; return 4 ;;
+    401|403) rm -f "$hdr"; principal_note "$out"; return 4 ;;
     *)       rm -f "$hdr"; return 1 ;;
   esac
+}
+
+# principal_note <body> — a 401 that is the certificate's principals not being
+# the login the hub checks (issue #2457, after #2437) is said in the person's
+# words, once per refusal, instead of reading as 「入口连不上」 further down.
+# The wording is fleet-connect.py's (principal_hint), never a second copy.
+PRINCIPAL_SAID=''
+principal_note() {
+  local hint
+  [ -s "$1" ] && [ -f "$BIN/fleet-connect.py" ] || return 0
+  hint=$(python3 "$BIN/fleet-connect.py" --principal-hint < "$1" 2>/dev/null) || return 0
+  [ -n "$hint" ] || return 0
+  PRINCIPAL_SAID=1
+  printf 'fleet-hub-sessions: %s\n' "$hint" >&2
 }
 
 # fetch_cert <url> <out> <etag> → the JSON into <out>; rc as curl_sessions
@@ -354,6 +368,7 @@ print(json.dumps(b))' \
 # on disk — a fleet created since, or a wiped $FLEET_C, needs the body.
 fetch() {
   local out="$1" lf="$2" url st rc etag='' stamp sess _c q
+  PRINCIPAL_SAID=''
   if [ -n "${FLEET_HUB_SESSIONS_CMD:-}" ]; then
     bash -c "$FLEET_HUB_SESSIONS_CMD" </dev/null >"$out" 2>/dev/null; return
   fi
@@ -377,7 +392,8 @@ fetch() {
       # A certificate is always a person, never the operator: the hub has already
       # cut the answer to the (machine, login) pairs of their accounts (FleetScope)
       [ "$rc" = 4 ] || { SCOPED=1; return "$rc"; }
-      printf 'fleet-hub-sessions: the hub refused the connection certificate %s — trying the viewer token\n' "$CERT_PUB" >&2
+      if [ -n "$PRINCIPAL_SAID" ]; then printf 'fleet-hub-sessions: trying the viewer token\n' >&2
+      else printf 'fleet-hub-sessions: the hub refused the connection certificate %s — trying the viewer token\n' "$CERT_PUB" >&2; fi
       # the token's answer is another identity's: no validator, its own stamp
       etag=''; q=''; LP_SENT=0; ETAG_STAMP=${ETAG_STAMP/ cert / token } ;;
   esac
@@ -484,9 +500,12 @@ EOF
     restamp "$lf"; rm -f "$json" "$lf" "$mf"; return 0
   fi
   if [ "$rc" != 0 ] || [ ! -s "$json" ]; then
-    # one line, with how long the hub has been silent (hub_ok is left as it was)
+    # one line, with how long the hub has been silent (hub_ok is left as it was);
+    # a principal mismatch was already said in its own words — not 「unreachable」
     ok=''; { read -r ok _c < "$G/hub_ok"; } 2>/dev/null || ok=''
+    [ -n "$PRINCIPAL_SAID" ] && ok=principal
     case "$ok" in
+      principal) printf 'fleet-hub-sessions: the hub answered but refused this certificate (above) — keeping the last cache\n' >&2 ;;
       ''|*[!0-9]*) printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once hub_ok is older than %ss)\n' "${FLEET_HUB_SESSIONS_STALE:-60}" >&2 ;;
       *) printf 'fleet-hub-sessions: hub unreachable for %ss — keeping the last cache (its rows read 失联 past %ss; the next answer flips them back)\n' "$(( $(date +%s) - ok ))" "${FLEET_HUB_SESSIONS_STALE:-60}" >&2 ;;
     esac

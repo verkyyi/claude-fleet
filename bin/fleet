@@ -164,6 +164,12 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
     printf '  WARN  %-8s %s\n' orch "${_of##*/orch_multi_}: 不止一个编排会话 — $_om（入口只留一台；持续出现请在那几台跑 fleet doctor）"
     rc=1
   done
+  # cert (issue #2457): the certificate's principals, validity, and whether the hub accepts it
+  if [ -f "$here/fleet-connect.py" ] && r=$(python3 "$here/fleet-connect.py" --cert-check 2>/dev/null) && [ -n "$r" ]; then
+    tab=$(printf '\t')
+    printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" cert "${r#*"$tab"}"
+    case $r in PASS*) ;; *) rc=1 ;; esac
+  fi
   if [ -f "$here/fleet-agent-bundle.py" ]; then
     python3 "$here/fleet-agent-bundle.py" doctor --root "$here/.." "$@" || rc=1
   fi
