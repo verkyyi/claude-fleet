@@ -85,7 +85,7 @@
 #   2. the link is switched, then the NEW client's `fleet-shell.sh reload`
 #      rewrites the mirror and both confs and sources them into the RUNNING
 #      servers (fleet-shell + its stage — same pids), redraws the list where its
-#      VIEW_VERSION moved, and respawns a proxy pane only when
+#      code moved (VIEW_STAMP, issue #2345), and respawns a proxy pane only when
 #      fleet-remote-view.sh itself changed (the right pane's session is kept).
 #   3. any failure: the link back, the confs as they were sourced again, and
 #      one line on why. The tmux server itself is never replaced.
@@ -657,7 +657,7 @@ cmd_start() {
 }
 
 # resource <sess> <saved-dir> — the confs as they were, back in place and read
-# again by both servers; the list redrawn (its VIEW_VERSION may have moved back)
+# again by both servers; the list redrawn (its code may have moved back)
 resource() {
   local s="$1" d="$2" c
   c=$(shell_cache)

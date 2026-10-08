@@ -85,7 +85,7 @@ def mkview(w):
     """A view pane beside w's app pane, as sync would have made it."""
     pane = t("split-window", "-d", "-h", "-b", "-f", "-l", "38", "-P", "-F", "#{pane_id}", "-t", app[w], HOLD)
     t("set-option", "-p", "-t", pane, "@sidebar", "1", ";",
-      "set-option", "-p", "-t", pane, "@sidebar_version", sb.VIEW_VERSION, ";",
+      "set-option", "-p", "-t", pane, "@sidebar_version", sb.VIEW_STAMP, ";",
       "set-option", "-w", "-t", w, "@sidebar_worker", app[w])
     return pane
 

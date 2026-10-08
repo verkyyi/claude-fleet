@@ -11,6 +11,7 @@ what it has to say goes on the bar (`say`, tmux display-message).
 import curses
 import errno
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,28 @@ import unicodedata
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
 VIEW_VERSION = "30"  # #2146: @fleet_orch for the bar · #1957: 「新任务」 wears the orchestrator · #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
+# What a drawn list runs, by CONTENT (issue #2345): VIEW_VERSION is bumped by
+# hand, so a client update that changed this file without bumping it kept the
+# old process drawing — sync reuses a view whose @sidebar_version matches. The
+# stamp is VIEW_VERSION + a digest of every file the `ui` process loads into
+# itself (the rest it runs as fresh subprocesses), read off disk by the sync
+# that draws it — so a list started from other code is drawn again.
+VIEW_CODE = ("fleet-sidebar.py", "fleet_reap_policy.py", "fleet-quickopen.py",
+             "fleet-compose.py", "fleet-ui-lang.sh")
+
+
+def view_stamp():
+    h = hashlib.sha1()
+    for name in VIEW_CODE:
+        try:
+            h.update((BIN / name).read_bytes())
+        except OSError:
+            h.update(b"-")
+        h.update(b"\0")
+    return VIEW_VERSION + "." + h.hexdigest()[:12]
+
+
+VIEW_STAMP = view_stamp()
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -659,9 +682,9 @@ def sync(session, enabled, width, lock):
     for pane in all_panes:
         if pane[2] != "1":
             continue
-        if wanted and pane[1] == window and pane[4] != "1" and pane[6] == VIEW_VERSION and not current:
+        if wanted and pane[1] == window and pane[4] != "1" and pane[6] == VIEW_STAMP and not current:
             current.append(pane)
-        elif wanted and zoomed != "1" and pane[4] != "1" and pane[6] == VIEW_VERSION and not reusable:
+        elif wanted and zoomed != "1" and pane[4] != "1" and pane[6] == VIEW_STAMP and not reusable:
             reusable.append(pane)
         else:
             remove_view(pane[0])
@@ -700,7 +723,7 @@ def sync(session, enabled, width, lock):
     if not pane.startswith("%"):
         return
     tmux("set-option", "-p", "-t", pane, "@sidebar", "1", ";",
-         "set-option", "-p", "-t", pane, "@sidebar_version", VIEW_VERSION, ";",
+         "set-option", "-p", "-t", pane, "@sidebar_version", VIEW_STAMP, ";",
          "set-option", "-w", "-t", pane, "@sidebar_worker", worker, ";",
          "set-option", "-p", "-t", pane, "remain-on-exit", "off")
     if single:
@@ -3366,6 +3389,9 @@ def conf_enabled(conf, enabled):
 
 
 def main():
+    if sys.argv[1] == "stamp":   # what a list drawn now would carry (issue #2345)
+        print(VIEW_STAMP)
+        return
     if sys.argv[1] == "ui":
         steady()
         restarts = []
