@@ -71,7 +71,7 @@ class Cleaner:
         names = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
                  "@pin", "@cc_agent", "@cc_launcher_pid", "@codex_identity",
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
-                 "@reap_policy", "@loop", "@worker_lifecycle")
+                 "@reap_policy", "@loop", "@worker_lifecycle", "@wrap_gone", "pane_dead")
         return {n: option(self.tm, window, n) for n in names}
 
     def policy(self, snap):
@@ -118,8 +118,11 @@ class Cleaner:
             return False
         if (snap["@pin"] == "1"
                 # An exited session on its recovery page (issue #1784) is as idle
-                # as a finished turn: the same grace, the same resumable record.
-                or snap["@claude_state"] not in ("done", "exited")
+                # as a finished turn: the same grace, the same resumable record —
+                # and so is a window with no agent at all (the wrapper gone, the
+                # pane dead: fleet_window_has_agent, issue #2404).
+                or (snap["@claude_state"] not in ("done", "exited")
+                    and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")):
             return False
         # A no-repo session is never closed automatically (issue #791), and in a

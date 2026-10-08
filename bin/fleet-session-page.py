@@ -46,8 +46,11 @@ TEXT = {
            'no_sid': '没有记下对话 id：回车接着这个目录里最近的一次对话。',
            'no_sid_new': '没有记下这个窗口的对话 id：回车新开一次对话（不会接到别的会话上）。',
            'unpushed': '未推送：{n} 个提交（分支 {b}）', 'unpushed_nob': '未推送：{n} 个提交',
-           'failed_resume': '续上原对话失败', 'failed_new': '新开会话失败',
+           'failed_resume': '续上原对话失败', 'failed_new': '新开会话失败', 'failed_launch': '会话没能启动',
            'why_conversation': '找不到这个对话', 'why_auth': '认证失效，需要重新登录',
+           'why_cred': '凭据代理没给出会话凭据', 'why_account': '指定的订阅账号不可用',
+           'retry': '重试启动', 'launch_rc': '（退出码 {n}）',
+           'retry_hint': '会话还没开始过：回车按原样再启动一次（原因修好之后）。',
            'fail_rc': '（{s} 秒内退出，退出码 {n}）',
            'hooks_off': '个人自动规则 {n} 条这次连续失败、已停用：{w}',
            'personal_off': '这个窗口已不带个人配置（FLEET_PERSONAL=0）；长期退回：fleet config restore N',
@@ -58,7 +61,11 @@ TEXT = {
            'no_sid_new': 'No conversation id recorded for this window: Enter starts a new one (never another session\'s).',
            'unpushed': 'Unpushed: {n} commits (branch {b})', 'unpushed_nob': 'Unpushed: {n} commits',
            'failed_resume': 'Resuming the conversation failed', 'failed_new': 'Starting a new session failed',
+           'failed_launch': 'The session could not start',
            'why_conversation': 'conversation not found', 'why_auth': 'authentication expired — log in again',
+           'why_cred': 'the credential proxy gave no session credential', 'why_account': 'the pinned subscription is unavailable',
+           'retry': 'retry the launch', 'launch_rc': ' (code {n})',
+           'retry_hint': 'The session never started: Enter launches it again, as it was (once the cause is fixed).',
            'fail_rc': ' (exited within {s}s, code {n})',
            'hooks_off': '{n} personal hook(s) kept failing and were switched off: {w}',
            'personal_off': 'This window runs without the personal layer (FLEET_PERSONAL=0); to roll it back: fleet config restore N',
@@ -70,10 +77,13 @@ TEXT = {
 def headline(rc, words, failed='', why='', secs=0):
     """What happened, from the agent's exit status: 0 / 130 are the operator's own
     exit, >128 a signal (137 = kill -9), anything else a failure. A relaunch from
-    this page that died at once (failed = resume | new) names that instead."""
-    if failed in ('resume', 'new'):
+    this page that died at once (failed = resume | new) names that instead, and so
+    does a launch the launcher itself refused (failed = launch, issue #2404)."""
+    if failed in ('resume', 'new', 'launch'):
         head = words['failed_' + failed]
-        if why in ('conversation', 'auth'): head += ('：' if words is TEXT['zh'] else ': ') + words['why_' + why]
+        if why in ('conversation', 'auth', 'cred', 'account'):
+            head += ('：' if words is TEXT['zh'] else ': ') + words['why_' + why]
+        if failed == 'launch': return head + words['launch_rc'].format(n=rc), RED
         return head + words['fail_rc'].format(s=secs, n=rc), RED
     if rc == 0: return words['exited'], YELLOW
     if rc == 130: return words['exited'] + words['ctrl_c'], YELLOW
@@ -81,8 +91,8 @@ def headline(rc, words, failed='', why='', secs=0):
     return words['failed'].format(n=rc), RED
 
 
-def keys_line(words, personal=''):
-    line = (BOLD + '↵' + RESET + ' ' + words['resume'] + '   ' + BOLD + 'r' + RESET + ' ' + words['new']
+def keys_line(words, personal='', retry=False):
+    line = (BOLD + '↵' + RESET + ' ' + words['retry' if retry else 'resume'] + '   ' + BOLD + 'r' + RESET + ' ' + words['new']
             + '   ' + BOLD + 'q' + RESET + ' ' + words['quit'])
     if personal == 'on': line += '   ' + BOLD + 'p' + RESET + ' ' + words['personal']
     return line
@@ -101,7 +111,8 @@ def render(facts, cols, rows):
     body = [words['kept_win' if facts.get('failed') else 'kept']]
     sid = facts.get('sid') or ''
     no_sid = words['no_sid_new' if facts.get('agent') == 'codex' else 'no_sid']
-    body.append(DIM + (facts.get('agent') or 'claude') + ' ' + sid[:8] + '…' + RESET if sid else DIM + no_sid + RESET)
+    if facts.get('retry'): body.append(DIM + words['retry_hint'] + RESET)
+    else: body.append(DIM + (facts.get('agent') or 'claude') + ' ' + sid[:8] + '…' + RESET if sid else DIM + no_sid + RESET)
     if facts.get('detail'): body.append(DIM + facts['detail'] + RESET)
     n = int(facts.get('unpushed') or 0)
     if n > 0:
@@ -113,7 +124,7 @@ def render(facts, cols, rows):
     rule = DIM + '─' * (cols - 1) + RESET
     lines = [fit(first), rule, ''] + [fit(l) for l in body]
     lines = lines[:max(rows - 2, 1)]
-    lines += [''] * max(rows - len(lines) - 2, 0) + [rule, fit(keys_line(words, facts.get('personal') or ''))]
+    lines += [''] * max(rows - len(lines) - 2, 0) + [rule, fit(keys_line(words, facts.get('personal') or '', facts.get('retry')))]
     return '\n'.join(lines[:rows])
 
 
@@ -143,8 +154,10 @@ def main():
     p.add_argument('--title', default='')
     p.add_argument('--unpushed', type=int, default=0, help='commits on no remote (issue #1842)')
     p.add_argument('--branch', default='')
-    p.add_argument('--failed', default='', choices=['', 'resume', 'new'], help='a relaunch from this page died at once')
-    p.add_argument('--why', default='', help='conversation | auth | (unknown)')
+    p.add_argument('--failed', default='', choices=['', 'resume', 'new', 'launch'],
+                   help='a relaunch from this page died at once, or the launcher refused to start (launch)')
+    p.add_argument('--why', default='', help='conversation | auth | cred | account | (unknown)')
+    p.add_argument('--retry', action='store_true', help='↵ retries the same launch (the agent never ran, #2404)')
     p.add_argument('--detail', default='', help="the failed agent's last line")
     p.add_argument('--secs', type=int, default=0)
     p.add_argument('--personal', default='', choices=['', 'on', 'off'],
@@ -155,7 +168,7 @@ def main():
     a = p.parse_args()
     facts = {'rc': a.rc, 'agent': a.agent, 'sid': a.sid, 'title': a.title, 'unpushed': a.unpushed,
              'branch': a.branch, 'failed': a.failed, 'why': a.why, 'detail': a.detail, 'secs': a.secs,
-             'personal': a.personal, 'hooks_off': a.hooks_off, 'hooks_off_what': a.hooks_off_what}
+             'retry': a.retry, 'personal': a.personal, 'hooks_off': a.hooks_off, 'hooks_off_what': a.hooks_off_what}
     if a.print:
         sys.stdout.write(render(facts, 80, 24) + '\n')
         return 0

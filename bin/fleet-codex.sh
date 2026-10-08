@@ -106,6 +106,10 @@
 # MATRIX-END
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# A refusal to start the agent at all (issue #2404) says so on the pane before the
+# exit: fleet-session-wrap.sh then stops on the recovery page with the reason
+# (cred | account) instead of handing the window to the caller's bare shell.
+_fx_refused() { [ -n "${TMUX_PANE:-}" ] && tmux set-option -p -t "$TMUX_PANE" @launch_refused "$1" 2>/dev/null; return 0; }
 ROOT="$(cd "$BIN/.." && pwd)"
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"     # also sources the sibling global fleet.conf
@@ -469,7 +473,7 @@ if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "${FLEET_CODEX_PROFILE:-}" ]; then
       export FLEET_CODEX_SESSION_CRED
       _fx_real_home="${CODEX_HOME:-$HOME/.codex}"
       _fx_home=$(bash "$BIN/fleet-session-cred.sh" codex-home --sid "$FLEET_CRED_SID" --real "$_fx_real_home") \
-        || { echo 'fleet-codex: could not make this session a credential-free CODEX_HOME — refusing to launch' >&2; exit 1; }
+        || { echo 'fleet-codex: could not make this session a credential-free CODEX_HOME — refusing to launch' >&2; _fx_refused cred; exit 1; }
       export CODEX_HOME="$_fx_home"
       flags+=(-c 'model_provider="fleet"'
               -c "model_providers.fleet={name=\"fleet\",base_url=\"http://127.0.0.1:$_fx_port/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\",wire_api=\"responses\"}"
@@ -477,7 +481,7 @@ if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "${FLEET_CODEX_PROFILE:-}" ]; then
       unset _fx_home _fx_port ;;
     4) : ;;
     *) echo 'fleet-codex: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)' >&2
-       exit 1 ;;
+       _fx_refused cred; exit 1 ;;
   esac
   unset _fx_px _fx_rc
 fi

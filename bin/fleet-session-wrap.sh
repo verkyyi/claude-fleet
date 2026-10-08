@@ -125,6 +125,12 @@ if [ "$intmux" = 1 ]; then
   NOSTOP=$!
   trap 'kill "$NOSTOP" 2>/dev/null' EXIT
 fi
+# Whatever the pane runs after this wrapper is gone — the caller's `exec $SHELL`,
+# a fallback — is no agent (issue #2404): stamp it, so the session caps
+# (fleet_window_has_agent) stop counting the window. The next wrapper clears it.
+if [ "$intmux" = 1 ]; then
+  trap 'kill "${NOSTOP:-}" 2>/dev/null; tmux set-option -p -t "$TMUX_PANE" @wrap_gone 1 2>/dev/null' EXIT
+fi
 
 # Why a relaunch died at once, read off what it left on the pane: conversation |
 # auth | '' — and its last line, for the page's detail row.
@@ -164,6 +170,8 @@ while :; do
   if [ "$intmux" = 1 ]; then
     wset -u @wrap_quiet
     tmux set-option -p -t "$TMUX_PANE" @session_wrap "$$" 2>/dev/null
+    tmux set-option -pu -t "$TMUX_PANE" @wrap_gone 2>/dev/null
+    tmux set-option -pu -t "$TMUX_PANE" @launch_refused 2>/dev/null
     # The window this agent's identity lives on (issue #1844): when the pane is
     # broken out (prefix !), fleet-window-carry.sh sees it arrive elsewhere and
     # moves the identity after it.
@@ -215,14 +223,23 @@ while :; do
   # when it misses the SIGCHLD (#1801), and fleet-transfer's rollback names it.
   # A relaunch from the page that dies as fast is a lost conversation or a lapsed
   # login, not a caller's failure path: back to the page, saying why (#1842).
+  # The LAUNCHER refusing to start the agent at all (issue #2404: no session
+  # credential from the proxy, a pinned subscription gone) stamps @launch_refused
+  # first: no fallback of the caller's can do better — a new session would be
+  # refused the same — so even a first launch stops on the page, saying why, and
+  # ↵ retries the very same launch. Before this the window fell to a bare shell
+  # and held a session slot with nothing in it.
   dur=$(( $(date +%s) - t0 ))
-  failed=''
-  if [ "$dur" -lt "$FAST" ]; then
+  failed=''; refused=$(tmux show-options -pqv -t "$TMUX_PANE" @launch_refused 2>/dev/null)
+  if [ -n "$refused" ]; then
+    tmux set-option -p -t "$TMUX_PANE" @wrap_last_rc "$rc" 2>/dev/null
+    failed=launch; read_failure; fail_why=$refused
+  elif [ "$dur" -lt "$FAST" ]; then
     tmux set-option -p -t "$TMUX_PANE" @wrap_last_rc "$rc" 2>/dev/null
     [ "$first" = 1 ] && exit "$rc"
     failed=$last; read_failure
   fi
-  first=0
+  retry=$first; first=0
 
   agent=$(opt @cc_agent); [ "$agent" = codex ] || agent=claude
   if [ "$agent" = codex ]; then sid=$(opt @codex_session_id); else sid=$(opt @cc_session_id); fi
@@ -247,6 +264,7 @@ while :; do
   pargs=(--rc "$rc" --agent "$agent" --sid "$sid" --title "$(opt window_name)")
   [ "$unp" -gt 0 ] && pargs+=(--unpushed "$unp" --branch "$br")
   [ -n "$failed" ] && pargs+=(--failed "$failed" --why "$fail_why" --detail "$fail_line" --secs "$dur")
+  [ "$failed" = launch ] && [ "$retry" = 1 ] && pargs+=(--retry)
   # The personal layer (#1862): absent on this login → nothing passed, the page as before.
   pers=''
   if [ -e "$PCONF/person-bundle.json" ] || [ -e "$PCONF/person-bundle.good.json" ]; then
@@ -271,6 +289,10 @@ while :; do
   wset -u @wrap_exit_rc
   # p — ↵ without the personal layer, for this window from now on (#1862)
   [ "$act" = 13 ] && { export FLEET_PERSONAL=0; act=10; }
+  # ↵ after a refused FIRST launch — the agent never ran: the same launch again.
+  if [ "$act" = 10 ] && [ "$failed" = launch ] && [ "$retry" = 1 ]; then
+    first=1; wset @claude_state ''; wset @claude_state_ts "$(date +%s)"; continue
+  fi
   case "$act" in
     10)  # ↵ — the same conversation; a Codex window with none starts a new one
       last=resume
