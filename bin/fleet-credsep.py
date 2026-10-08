@@ -1755,6 +1755,7 @@ def main():
     rl.add_argument("--install-dir", default="")
     rl.add_argument("--dry-run", action="store_true")
     sub.add_parser("rootlogs")
+    sub.add_parser("role")      # the role account alone (fleet-node-install.sh, #2330)
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
     mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status"))
@@ -1767,6 +1768,11 @@ def main():
         return plan(a)
     if a.cmd == "rootlogs":
         return rootlogs(a)
+    if a.cmd == "role":
+        if os.geteuid() != 0 and not TEST:
+            die("role needs root (sudo fleet node install runs it)", 2)
+        print("role: %s %s" % (ROLE, "created" if ensure_role() else "exists"))
+        return 0
     if a.cmd == "relog":
         DRY = a.dry_run
         if os.geteuid() != 0 and not TEST and not DRY:

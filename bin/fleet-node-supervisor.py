@@ -59,6 +59,8 @@ Usage:
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
   fleet-node-supervisor.py attic [list | restore <id> | purge]
   fleet-node-supervisor.py install | uninstall write / remove the LaunchDaemon (root)
+  fleet-node-supervisor.py install --check     exit 0 = already installed as install writes it
+                                               and loaded (fleet-node-install.sh, #2330)
   fleet-node-supervisor.py account [list | adopt <login> | release <login> | manages <login>]
                                                the account half (#2332); manages: exit 0 = this
                                                daemon runs <login>'s tasks (install-apply, doctor)
@@ -1274,6 +1276,18 @@ def install(paths):
     return 0 if rc == 0 else 1
 
 
+def install_check(paths):
+    """0 = the LaunchDaemon on disk is the one install writes and launchd has it
+    loaded (`fleet node install`'s 守护 step skips); 1 = install would change it."""
+    try:
+        with open(paths.plist, "rb") as f:
+            if plistlib.load(f) != plist_body(paths):
+                return 1
+    except Exception:
+        return 1
+    return 0 if launchctl("print", "system/" + LABEL) == 0 else 1
+
+
 def uninstall(paths):
     launchctl("bootout", "system/" + LABEL)
     try:
@@ -1293,7 +1307,7 @@ def main(argv):
         print(__doc__)
         return 0
     if cmd == "install":
-        return install(paths)
+        return install_check(paths) if "--check" in rest else install(paths)
     if cmd == "uninstall":
         return uninstall(paths)
     if cmd == "account":

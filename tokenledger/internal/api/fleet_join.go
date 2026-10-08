@@ -48,6 +48,10 @@ const ManagedJoinCodeTTL = time.Hour
 // fleet's `stable` tag, the same ref fleet-login-bootstrap.sh installs.
 const DefaultJoinScriptURL = "https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-node-join.sh"
 
+// NodeInstallScript is the 托管 installer's path in the client package, served
+// at /install/<it> (fleetclient/manifest lists it).
+const NodeInstallScript = "bin/fleet-node-install.sh"
+
 var (
 	joinCodeRE  = regexp.MustCompile(`^fj_[a-z2-7]{26}$`)
 	joinLabelRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
@@ -169,7 +173,7 @@ func (s *Server) fleetJoinCodes(w http.ResponseWriter, r *http.Request, managed 
 		}
 		writeJSON(w, http.StatusOK, JoinCodeView{
 			Code: code, Label: req.Label, Kind: req.Kind, ExpiresAt: now.Add(ttl).UTC(),
-			Command: s.joinCommand(r, code), Trust: trust, Role: role,
+			Command: s.joinCommand(r, code, role), Trust: trust, Role: role,
 		})
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -177,8 +181,15 @@ func (s *Server) fleetJoinCodes(w http.ResponseWriter, r *http.Request, managed 
 	}
 }
 
-// joinCommand is the one line the operator pastes on the new machine.
-func (s *Server) joinCommand(r *http.Request, code string) string {
+// joinCommand is the one line the operator pastes on the new machine. A 托管
+// code's line is `fleet node install` (claude-fleet#2330, EPIC #2329 C1): the
+// installer this hub serves from its client package, run as root — the
+// machine joins as itself, nothing fetched from GitHub.
+func (s *Server) joinCommand(r *http.Request, code, role string) string {
+	if role == store.NodeRoleManaged {
+		hub := s.hubURL(r)
+		return fmt.Sprintf("curl -fsSL %s/install/%s | sudo bash -s -- --hub %s --join %s", hub, NodeInstallScript, hub, code)
+	}
 	script := s.FleetJoinScriptURL
 	if script == "" {
 		script = DefaultJoinScriptURL

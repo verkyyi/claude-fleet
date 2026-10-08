@@ -138,6 +138,10 @@ func TestManagedJoinCodeTrustsTheIdentity(t *testing.T) {
 	if v.Trust != TrustTrusted || v.Role != store.NodeRoleManaged {
 		t.Fatalf("managed code = %+v; want trusted managed", v)
 	}
+	// the one line runs the 托管 installer the hub itself serves (claude-fleet#2330)
+	if want := "curl -fsSL " + h.http.URL + "/install/" + NodeInstallScript + " | sudo bash -s -- --hub " + h.http.URL + " --join " + v.Code; v.Command != want {
+		t.Fatalf("managed command = %q; want %q", v.Command, want)
+	}
 	if d := v.ExpiresAt.Sub(t0); d < ManagedJoinCodeTTL-time.Second || d > ManagedJoinCodeTTL+time.Second {
 		t.Fatalf("expires in %s; want an hour", d)
 	}

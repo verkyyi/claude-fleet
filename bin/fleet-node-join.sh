@@ -39,7 +39,8 @@
 #             login in its CCQUOTA_FLEET_ADMIN_USERS, and the admin agent writes
 #             the CA + sshd_config.d snippet itself (sshd -t first, rollback on
 #             failure, never a restart). Refuses to replace an agent service it
-#             did not write unless --force.
+#             did not write unless --force. On a MANAGED machine the CA is
+#             `fleet node install`'s (fleet-node-install.sh, issue #2330).
 #             COMPUTE (issue #1719): a FIRST join writes CCQUOTA_FLEET_COMPUTE=0
 #             into node.env — the login heartbeats, holds its identity and
 #             certificates, and coordinates, but the hub places no session on it
