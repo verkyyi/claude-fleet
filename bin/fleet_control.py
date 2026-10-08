@@ -341,6 +341,10 @@ class Control:
                                       error.get("stderr1") or error.get("message", ""))
         else:
             said = "window=%s" % (result.get("window") or "-")
+            timing = result.get("timing") if isinstance(result.get("timing"), dict) else {}
+            if timing:
+                # The start's clock, one line (issue #2234): what the batch reads.
+                said += " timing " + " ".join("%s=%s" % (k, timing[k]) for k in sorted(timing))
         self.oplog(op_id, row["action"] if row else "?", "%s %s" % (state, said))
 
     def stamp_timing(self, op_id, **points):
@@ -630,6 +634,7 @@ class Control:
                 attempted = True
                 scratch = params.get("kind") == "scratch"
                 filed = params.get("kind") == "new"
+                warm = False
                 # The reap policy (issue #1902) as the adapter's $9, only when one
                 # was chosen — with none the argv is exactly what it was.
                 reap_arg = [params["reap"]] if params.get("reap") else []
@@ -659,8 +664,14 @@ class Control:
                                                      params.get("account_class", ""), params["title"].strip(),
                                                      *reap_arg, payload=params.get("body", "").encode("utf-8"),
                                                      timeout=240)
-                    if not code:
-                        first = output.decode("utf-8", "replace").split("\n", 1)[0].strip()
+                    first = output.decode("utf-8", "replace").split("\n", 1)[0].strip()
+                    if not code and first.startswith("warm\t"):
+                        # 发出即开 (issue #2234, EPIC #2230 C4): answered from the warm
+                        # pool — the window is a scratch already working on the
+                        # person's words; its issue is filed and bound afterwards.
+                        warm = True
+                        output = first[len("warm\t"):].encode("utf-8")
+                    elif not code:
                         number = re.search(r"/issues/([1-9][0-9]*)$", first)
                         if not number:
                             raise Fault("UNKNOWN_OUTCOME", "The issue was filed but its number did not come back")
@@ -686,10 +697,11 @@ class Control:
                 # alone is read. No id (an older spawn), or the window it names is
                 # not the worker: the whole fleet, as before.
                 lines = output.decode("utf-8", "replace").split("\n")
-                window = (lines[0] if scratch else ([l for l in lines if l.strip()] or [""])[-1]).split("\t", 1)[0].strip()
+                receipt = (lines[0] if scratch or warm else ([l for l in lines if l.strip()] or [""])[-1]).split("\t")
+                window = receipt[0].strip()
 
                 def started(snapshot):
-                    if scratch:
+                    if scratch or warm:
                         # The receipt names the window: that row, and only that row.
                         return [w for w in snapshot["workers"] if window and w["window_id"] == window and w["scratch"]]
                     # Match the spawned repo too (issue #1018): another repo's issue-N
@@ -708,6 +720,20 @@ class Control:
                           # This machine's half of the send's clock (issue #2238,
                           # EPIC #2230 共同约定 3): epoch ms, the names fixed there.
                           "timing": {"t_accepted": ms(row["created"]), "t_window": ms(now())}}
+                # A warm start's receipt carries its own clock (issue #2234):
+                # `<t_window> <t_ready> <t_prompt>` after the four fields — the
+                # claim, the input seen idle, the first turn submitted. Its window
+                # and key ride at the top for the client to switch to at once
+                # (共同约定 3); `filed: pending` = the issue is still being made.
+                stamps = dict(zip(("t_window", "t_ready", "t_prompt"),
+                                  (f.strip() for f in receipt[4:7])))
+                warmed = {k: int(v) for k, v in stamps.items() if v.isdigit()}
+                if warmed:
+                    result["timing"].update(warmed)
+                    result["window_id"] = result["window"]
+                    result["key"] = matches[0].get("key", "")
+                    if warm:
+                        result["filed"] = "pending"
             elif req["action"] == "worker_move_in":
                 result = self.execute_move_in(fleet, params)
                 attempted = True
@@ -729,7 +755,9 @@ class Control:
                 # here must not reach the `unknown` below.
                 seeded = not (params.get("kind") == "scratch" and not params.get("body"))
                 try:
-                    self.watch_ready(op_id, fleet, result["window"], seeded)
+                    # A warm start measured its own t_ready / t_prompt (issue #2234).
+                    if "t_prompt" not in result.get("timing", {}):
+                        self.watch_ready(op_id, fleet, result["window"], seeded)
                 except Exception:
                     pass
         except Unattempted as exc:

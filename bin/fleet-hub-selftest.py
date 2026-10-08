@@ -41,7 +41,10 @@ class Sandbox:
         self.conf = self.root / "conf"
         self.fleet_conf = self.conf / "fleets/demo/conf"
         self.fleet_conf.parent.mkdir(parents=True)
-        self.fleet_conf.write_text('FLEET_REPO="example/project"\nFLEET_MAIN="/fixture/project"\nFLEET_MAX_SESSIONS=3\nFLEET_ISSUE_BRIDGE=1\n')
+        # FLEET_START_WARM=0 (issue #2234): these legs pin the cold start's argv;
+        # the warm-pool start has its own test (fleet-start-warm-selftest.sh).
+        self.fleet_conf.write_text('FLEET_REPO="example/project"\nFLEET_MAIN="/fixture/project"\nFLEET_MAX_SESSIONS=3\nFLEET_ISSUE_BRIDGE=1\n'
+                                   'FLEET_START_WARM=0\n')
         for filename in ("fleet-control.py", "fleet_control.py", "fleet_hub_common.py", "fleet_config_write.py",
                          "fleet-lib.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py",
                          "fleet-gh.sh", "fleet-gh-lib.sh", "fleet-issue-cache.py", "fleet_loop_mark.py", "fleet_iso.py"):

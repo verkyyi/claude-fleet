@@ -44,9 +44,13 @@ with no issue — **节点** — the machine the hub would pick (fewest running)
 (`FLEET_AGENT`). A change is for this send only: the next ⌘N shows the defaults
 again. ↵ sends: the first line is the issue's title, the whole text its body (a
 HOME session starts on the whole text). The list draws 「开工中…」 under 「新任务」
-at once, the machine files the issue (`fleet-issue-file.sh`) and opens its
-worker, and the right pane switches to it when its row appears — no token spent
-on the way. esc goes back to the session before; the draft is kept on disk
+at once. When that machine has a session already open and idle for this repo
+(or HOME) and agent — the warm pool, `scratch-pool.sh` — it takes that one and
+submits your text into it as its first turn (plus one line: the issue and branch
+follow), and answers in about a second (issue #2234); the issue is then filed and
+the session bound to it in the background (`fleet-start-backfill.sh`). With none
+ready it files the issue (`fleet-issue-file.sh`) and opens its worker as before.
+The right pane switches to it when its row appears — no token spent on the way. esc goes back to the session before; the draft is kept on disk
 (`~/.local/state/claude-fleet/compose-draft`) until it is sent. The orchestrating
 session is reached from its own row, not from the writing area.
 
