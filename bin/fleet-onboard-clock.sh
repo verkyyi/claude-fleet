@@ -70,6 +70,11 @@
 #
 # The sandbox's computer is named newcomer-<run>-<pid> (FLEET_DEVICE_NAME): a
 # newcomer's computer is never named like a fleet machine, the drill's runs on one.
+# Its login still enrols it as a coordinating node (登录即登记, #2212) — the agent
+# downloaded and started as a newcomer's would be — but DETACHED under the
+# sandbox's HOME (FLEET_NODE_JOIN_ARGS='--service detached'): a LaunchAgent is
+# per uid, and the sandbox's would replace com.ccquota.agent of the login it runs
+# as. The teardown kills it with every other process of the sandbox.
 #
 # Exit: 0 every reading on target · 1 a reading missed (the table says which) ·
 #       2 usage / preflight. --gate pits (CI on a fake hub, whose seconds and
@@ -216,7 +221,8 @@ EOF
   TMUX='' "$TMUXB" -S "$sock" -f /dev/null new-session -d -s drill -x 160 -y 48 \
     env -i HOME="$sb/home" PATH="$pth" TERM=xterm-256color LANG=zh_CN.UTF-8 LC_CTYPE=zh_CN.UTF-8 \
       SHELL=/bin/zsh USER="$(id -un)" LOGNAME="$(id -un)" TMPDIR="$sb/tmp" TMUX_TMPDIR="$sb/t" \
-      FLEET_LOGIN_BROWSER=1 FLEET_DEVICE_NAME="newcomer-$n-$$" PS1='newcomer% ' "$PSHELL" -f \
+      FLEET_LOGIN_BROWSER=1 FLEET_DEVICE_NAME="newcomer-$n-$$" FLEET_NODE_JOIN_ARGS='--service detached' \
+      PS1='newcomer% ' "$PSHELL" -f \
     || { R_why='the drill terminal did not start'; cleanup_run "$sb"; return 1; }
   sleep 0.5
   dt() { TMUX='' "$TMUXB" -S "$sock" "$@"; }

@@ -171,6 +171,10 @@ python3 "$WORK/gh.py" >"$WORK/gh.log" 2>&1 &
 GH_PID=$!
 ssh-keygen -q -t ed25519 -N '' -C newcomer-e2e-ca -f "$WORK/ca" || die 'ssh-keygen could not make the CA key'
 mkdir -p "$WORK/dist"
+# the agent a computer downloads when its login enrols it (/v1/node/dist/<os>-<arch>):
+# with none, the clock step's newcomer fell back to `go install` for ~50 s (#2267)
+case "$(uname -m)" in x86_64|amd64) DARCH=amd64 ;; arm64|aarch64) DARCH=arm64 ;; *) DARCH=$(uname -m) ;; esac
+cp "$CCQ" "$WORK/dist/ccquota-$(uname -s | tr 'A-Z' 'a-z')-$DARCH"
 # CCQUOTA_FLEET_MAX_LOAD_PER_CORE: the fake node reports this box's own load,
 # and a shared runner (the clock step's drill on top) sits above the 0.8 a real
 # machine is held to (#2267)
