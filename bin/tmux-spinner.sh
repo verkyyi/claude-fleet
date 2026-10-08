@@ -712,7 +712,7 @@ step=1
 # Why beside the socket and not in $TMPDIR: the hook runs in a pane and this daemon
 # under launchd, whose $TMPDIR need not agree; both already agree on the socket
 # path, because that is how the hook's tmux calls reach the server at all. While a
-# fleet animates the marker is simply ignored — that fleet is read every frame.
+# fleet animates it is consumed unread — that fleet is read every frame anyway.
 
 # Per-socket cache (issue #887), POSITIONAL: slot n = the n-th entry of $SOCKETS,
 # held in C_<field>_<n> via eval (POSIX sh has no arrays). C_SOCK_n names the label
@@ -838,6 +838,14 @@ while :; do
         rm -f "$TSOCKDIR/$sock.dirty" 2>/dev/null   # BEFORE the read: a racing write re-creates it
         due=1
       fi
+    fi
+    # A socket read this frame anyway owns its marker too (issue #2327): the hook
+    # writes the STATE first and the marker last, so a ~1s re-read can see the new
+    # state between the two — the fleet turns animated and the marker, left behind,
+    # would only buy one redundant read once it goes quiet again. A builtin test;
+    # rm forks only when a marker is there.
+    if [ "$due" = 1 ] && [ -e "$TSOCKDIR/$sock.dirty" ]; then
+      rm -f "$TSOCKDIR/$sock.dirty" 2>/dev/null
     fi
     if [ "$due" = 0 ]; then
       _tok="" _ntok="" _agg="" _needy=0   # assigned by the eval below (shellcheck SC2154)
