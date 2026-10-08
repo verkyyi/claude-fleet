@@ -75,7 +75,8 @@ def wj(path, obj):
         json.dump(obj, f)
 
 
-def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=(), drill_fail=False):
+def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=(), drill_fail=False,
+                 sessions_log=None):
     """A release dir as `ccquota release fetch --artifacts` leaves it, under <rel>/<sha>."""
     d = os.path.join(rel, sha)
     os.makedirs(os.path.join(d, ".release", "artifacts"))
@@ -95,6 +96,13 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
             b += ("\n# release %s\n" % sha).encode()
         with open(os.path.join(d, "bin", f), "wb") as dst:
             dst.write(b)
+    if sessions_log:
+        # issue #2484: a fleet-sessions-snapshot.sh that records who ran it, from which release
+        sc = os.path.join(d, "bin", "fleet-sessions-snapshot.sh")
+        with open(sc, "w") as f:
+            f.write('#!/bin/bash\necho "$1|$HOME|${TMPDIR:+tmp}|%s" >> %s\n'
+                    '[ "$1" = restore ] && printf "back\\toc\\tissue-1\\t/w\\n"\nexit 0\n' % (sha, sessions_log))
+        os.chmod(sc, 0o755)
     if drill_fail:
         os.makedirs(os.path.join(d, "conf"))
         open(os.path.join(d, "conf", "drill-fail"), "w").close()
@@ -694,6 +702,43 @@ class I_Credsep(Sandbox):
         self.assertEqual(c.get("reload"), self.lib, out.stderr)
 
 
+class J_Sessions(Sandbox):
+    """issue #2484: every managed account's sessions are pinned before the switch
+    (the target release's fleet-sessions-snapshot.sh save, demoted, its own HOME and
+    TMPDIR) and brought back after it — committed or rolled back."""
+    def log(self):
+        p = os.path.join(self.d, "sessions.log")
+        return open(p).read().splitlines() if os.path.exists(p) else []
+
+    def test_save_before_restore_after(self):
+        L = os.path.join(self.d, "sessions.log")
+        self.install(V1, sessions_log=L)
+        self.assertEqual(self.log(), ["save|%s|tmp|%s" % (self.home, V1), "restore|%s|tmp|%s" % (self.home, V1)])
+        self.assertIn("sessions restore alice: rc 0 1 back", open(os.path.join(self.env["FLEET_NODE_LOG"], "update.log")).read())
+        # a version that fails its doctor: pinned by V2's, brought back by V1's
+        self.release(V2, claude="2.1.9", broken=("claude-",), sessions_log=L)
+        self.tick(V2)
+        self.daemon_on(V2)
+        self.assertEqual(self.tick(V2)["result"], "rolled-back")
+        self.assertEqual(self.log()[2:], ["save|%s|tmp|%s" % (self.home, V2), "restore|%s|tmp|%s" % (self.home, V1)])
+
+    def test_off_and_absent(self):
+        L = os.path.join(self.d, "sessions.log")
+        self.release(V1, sessions_log=L)
+        st = self.tick(V1, FLEET_NODE_UPDATE_SESSIONS="0")
+        self.assertEqual(st["phase"], "switched", st)
+        self.assertEqual(self.log(), [])
+        self.daemon_on(V1)
+        self.assertEqual(self.tick(V1, FLEET_NODE_UPDATE_SESSIONS="0")["result"], "committed")
+        self.assertEqual(self.log(), [])
+        # a release without the script (older than #2484): nothing run, nothing broken
+        self.release(V2)
+        self.tick(V2)
+        self.daemon_on(V2)
+        self.assertEqual(self.tick(V2)["result"], "committed")
+        self.assertEqual(self.log(), [])
+
+
 if __name__ == "__main__":
     # the BREAK-IT drill (node-update-half) builds its fixtures with the same code
     if len(sys.argv) > 1 and sys.argv[1] == "--fake-ccquota":
@@ -705,6 +750,9 @@ if __name__ == "__main__":
         kw = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
         make_release(sys.argv[2], sys.argv[3], **kw)
         sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-sessions":
+        # BREAK-IT node-update-sessions: pinned before the switch, back after
+        unittest.main(argv=[sys.argv[0], "J_Sessions.test_save_before_restore_after"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-credsep":
         # BREAK-IT credsep-stale-after-switch: the supervised case, switch + rollback
         unittest.main(argv=[sys.argv[0], "I_Credsep.test_supervised_proxy_follows_switch_and_rollback"], verbosity=1)

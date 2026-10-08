@@ -181,10 +181,10 @@ root 运行；它取代托管账号各自的 `fleet-install-sync.sh`（那个账
 1. **目标**：`expected.json` 的 `release`（§3 期望状态），否则入口 `/version` 的 `stable`。
 2. **推迟**：任何托管账号有「有活」的 EPIC 批次在跑（#2247 的 `fleet_epic_holding`）→ `deferred`，最长 2 小时（`FLEET_EPIC_HOLD_CAP_SECS`）。
 3. **取包**：`ccquota release fetch --artifacts`（C7，只问入口、验钉住的公钥 `<state>/release.pub`）→ 装 ccquota 和各工具 → 写 `.release/staged.json`。没有这个标记的目录 = 没装完，删掉重取。
-4. **切换**：记下当前（旧版）的机器体检 FAIL 作基线 → `.prev` = 旧版、`current` = 新版（各一次 rename）→ 开号缓存、账号链接、共享凭据代理的代码副本（`machine refresh`）→ 请守护重启。
+4. **切换**：每个托管账号（降权、它自己的 HOME / TMPDIR）先跑新版的 `fleet-sessions-snapshot.sh save`，把没做完的会话钉进它的 `global/sessions.snapshot`（#2484）→ 记下当前（旧版）的机器体检 FAIL 作基线 → `.prev` = 旧版、`current` = 新版（各一次 rename）→ 开号缓存、账号链接、共享凭据代理的代码副本（`machine refresh`）→ 请守护重启。
 5. **验证**（下一轮，新代码，`FLEET_NODE_UPDATE_SETTLE` 30 秒后）：机器体检（`fleet doctor --machine`）比基线多出 FAIL
    （判之前先 `machine refresh` 一次：由不认识 credsep 的旧更新器换上来的版本，副本还是旧的）
-   → `current` 切回 `.prev`，缓存、链接、代理副本一起回，这一版记 `skip`（stable 再动之前不重试），再请守护重启；否则 `committed`。
+   → `current` 切回 `.prev`，缓存、链接、代理副本一起回，这一版记 `skip`（stable 再动之前不重试），再请守护重启；否则 `committed`。提交或回退之后每个托管账号跑那一版的 `fleet-sessions-snapshot.sh restore`：钉住的会话按原名、原目录、原对话经 `fleet-restore.sh` 开回（已关单 / 已删目录 / fleet-down 的不开），回来几个、缺哪个记进 `update.log`（BREAK-IT `node-update-sessions`；`FLEET_NODE_UPDATE_SESSIONS=0` 关）。
 6. 退下来的版本留 7 天（`FLEET_NODE_UPDATE_KEEP_SECS`），`current` / `.prev` 永不删；没有发布版再引用的工具缓存一起清。
 
 ### 机器体检

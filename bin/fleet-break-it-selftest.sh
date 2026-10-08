@@ -20,6 +20,8 @@
 #   merged-then-commit / q-releases-claim           bin/session-end-hook.sh --recycle, fleet_reap_ok
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
+#   node-tmux-restart                               bin/fleet-sessions-snapshot.sh → fleet-restore.sh
+#   node-update-sessions                            bin/fleet-node-update.py (sessions save / restore)
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
@@ -111,6 +113,7 @@
 #   cert-expiry-keeper                              bin/fleet-shell.sh (keeper), fleet-login.py renew --if-under
 #   offline-list-moves                              tmux-dashboard-rows.sh (lost rows stay put), fleet-sidebar.py
 #   static-forward / proxy-orphan                   bin/fleet-remote-view.sh (run), fleet-shell.sh
+#   view-node-restart                               bin/fleet-remote-view.sh (run: exit 3 waits)
 #   reconnect-stale-view / reconnect-mouse          bin/fleet-remote-view.sh (run, open, select)
 #   view-reconnect-shared                           bin/fleet-remote-view.sh (attach, rv_prune)
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
@@ -4759,6 +4762,36 @@ print(c.attached_body({"body": "看图 /Users/me/shot.png", "attachments": [{"id
   fi
   SECS=$(since "$t0")
   WHAT="附件随任务到会话机器：写作区交 --attach，节点名下 attachments/<id>/<名>，正文写那台的路径；$gohalf"
+}
+
+# The node's sessions ride through a tmux restart and a node update (issue #2484):
+# each drill runs the selftest that does it for real on an isolated socket / a
+# sandboxed updater, so the row and the code it names cannot drift apart.
+drill_node_tmux_restart() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-sessions-snapshot-selftest.sh" 2>&1) \
+    || { WHY="fleet-sessions-snapshot-selftest: $(printf '%s' "$out" | grep -m1 FAIL)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="save → kill-server → restore：同名同目录同对话回来，已关单 / 已删目录 / fleet-down 的不开"
+}
+
+drill_node_update_sessions() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-sessions 2>&1) \
+    || { WHY="fleet-node-update J_Sessions: $(printf '%s' "$out" | grep -m1 -E 'Error|FAIL')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="更新器切换前对每个托管登录 save，提交 / 回退后 restore 并记进 update.log"
+}
+
+drill_view_node_restart() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/remote-view-run-selftest.sh" 2>&1) \
+    || { WHY="remote-view-run-selftest: $(printf '%s' "$out" | grep -m1 FAIL)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="会话暂时不在：说「机器在重启，稍等」，每 5s 再连同一地址，2 分钟后才说已不在"
 }
 
 # ================================================================ run ===========

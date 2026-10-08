@@ -20,6 +20,10 @@
 #                  attach within seconds (no kill -KILL)
 #   E. pane gone — (tmux on an isolated socket) the pane killed under `run`: the
 #                  loop and its attach are gone, no orphan holding a view session
+#   F. restart   — (issue #2484) the session not live on the machine (exit 3) is
+#                  asked for again with 「机器在重启，稍等」 and the same address is
+#                  attached when it is back; only past FLEET_REMOTE_GONE_SECS does
+#                  the pane say it is gone
 # ssh is a shim (FLEET_REMOTE_SSH_CMD) that logs its argv. python3 absent → SKIP.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -79,6 +83,11 @@ case "$*" in
           echo 'muxclient: master forward request failed' >&2
           exit 255
         fi
+        exit 0 ;;
+      gone) exit 3 ;;
+      gone-twice)   # the machine's tmux restarting: not there twice, then back (#2484)
+        n=$(cat "$FAKE_DIR/gone.n" 2>/dev/null || echo 0); echo $((n + 1)) > "$FAKE_DIR/gone.n"
+        [ "$n" -lt 2 ] && exit 3
         exit 0 ;;
       *) sleep "${FAKE_ATTACH_SECS:-0}"; exit 0 ;;
     esac ;;
@@ -157,6 +166,18 @@ if command -v tmux >/dev/null 2>&1; then
 else
   echo 'skip E: no tmux'
 fi
+
+if [ "$FAILS" -gt 0 ]; then printf '%d/%d checks FAILED\n' "$FAILS" "$CHECKS"; exit 1; fi
+# --- F. a machine restarting: wait for the session, then the same one -----------------
+: > "$WORK/ssh.log"; rm -f "$WORK/gone.n"
+FAKE_MODE=gone-twice FLEET_REMOTE_GONE_STEP=0 bash "$RV" run m9 "$WID" > "$WORK/f.out" 2>&1 < /dev/null
+out=$(cat "$WORK/f.out")
+has 'F: not live → 「机器在重启，稍等」' "$out" '机器在重启，稍等'
+hasnt 'F: …never 「已不在」 while it may come back' "$out" '已不在'
+CHECKS=$((CHECKS + 1)); [ "$(grep ' attach' "$WORK/ssh.log" | grep -c "$WID")" = 3 ] \
+  || fail 'F: asked again for the same session until it answered (3 attaches)' "$(grep -c ' attach' "$WORK/ssh.log")"
+FAKE_MODE=gone FLEET_REMOTE_GONE_SECS=0 bash "$RV" run m9 "$WID" > "$WORK/f2.out" 2>&1 < /dev/null
+has 'F: past the wait it says the session is gone' "$(cat "$WORK/f2.out")" '已不在 m9 上'
 
 if [ "$FAILS" -gt 0 ]; then printf '%d/%d checks FAILED\n' "$FAILS" "$CHECKS"; exit 1; fi
 printf 'PASS: %d checks\n' "$CHECKS"
