@@ -292,6 +292,9 @@ already=0
 if [ -n "$old" ] && [ "$old" = "$new" ]; then
   already=1
   step '② stable' "已在 $(short "$new")，不用挪 — 只核对 ③④⑤"
+elif [ "$dry" -eq 1 ] && [ -n "$CI_PEND" ]; then
+  # its CI gate would refuse a running check; a real run asks after ① settles
+  step '② stable' "① 跑完后会跑 fleet-stable.sh move $(short "$new")（各门：主干 · 只往前 · CI · 老会话回放 · macOS · release.json）"
 else
   sout=$(sh "$STABLE_SH" "${sargs[@]}" 2>&1); mrc=$?
   if [ "$mrc" -ne 0 ] && [ "$dry" -eq 1 ] && [ "$mrc" -eq 3 ] &&

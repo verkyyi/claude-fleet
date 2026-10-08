@@ -10,7 +10,7 @@
 # writes its state file, a doctor that prints an install row.
 #
 #   A. --dry-run lists the six steps ①…⑥, exit 0: nothing pushed, nothing kicked,
-#      nothing synced, no log line.
+#      nothing synced, no log line — also while a check is still running.
 #   B. CI red (a check run failed) → exit 3, the check is NAMED, stable unmoved,
 #      log result=refused:ci. A red macOS run → exit 3 with its run URL.
 #   C. a release: stable moves, the hub follows, m4 is kicked and follows, the lost
@@ -118,6 +118,13 @@ if [ "$RC" = 0 ] && [ "$n" = 6 ]; then ok "A dry-run lists the six steps"; else 
   && ok "A dry-run pushed, kicked, synced and logged nothing" || bad "A dry-run changed something"
 has 'm4=' && ! has 'm5=' && has 'm7（lost）' && ok "A ④ waits on m4, not on this machine (m5), names the lost m7" \
   || bad "A ④ machine list: $(printf '%s\n' "$OUT" | grep '④')"
+
+printf 'completed\tsuccess\tlint\nin_progress\t\tselftests (shard 2)\n' > "$d/checks.$c2"
+run --to "$c2" --dry-run
+n=0; for s in ① ② ③ ④ ⑤ ⑥; do printf '%s\n' "$OUT" | grep -q "^$s " && n=$((n + 1)); done
+{ [ "$RC" = 0 ] && [ "$n" = 6 ] && has 'selftests (shard 2)'; } && ok "A dry-run with CI still running still lists six steps" \
+  || bad "A dry-run, CI running: rc=$RC steps=$n: $OUT"
+rm -f "$d/checks.$c2"
 
 # ── B. CI red → exit 3, named ──
 printf 'completed\tsuccess\tlint\ncompleted\tfailure\tselftests (shard 3)\n' > "$d/checks.$c2"
