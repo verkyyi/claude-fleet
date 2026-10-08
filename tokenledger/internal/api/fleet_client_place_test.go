@@ -355,3 +355,24 @@ func TestClientPlaceNamedNodeAndAgent(t *testing.T) {
 		t.Fatalf("a refused start sent a write: m5=%d m4=%d", m5.count(), m4.count())
 	}
 }
+
+// The test identity's lease (claude-fleet#2460, #1931) lives in its own slot:
+// place finds it there, as the action poll does, instead of 401 forever.
+func TestClientPlaceTestIdentityLease(t *testing.T) {
+	h, _, m4, _, f4 := twoNodes(t)
+	var acq ClientLeaseResponse
+	if st := clientPost(t, h, control.ClientPath, ClientLeaseRequest{Action: "acquire", Device: "m4-drill", Identity: "test"}, &acq); st != 200 ||
+		acq.State != "active" || acq.Identity != "test" || acq.ActionKey == "" {
+		t.Fatalf("test acquire = %d %+v", st, acq)
+	}
+	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@3",
+		"workers": []map[string]any{{"window_id": "@3", "worker_id": f4.FleetID + "/scratch-2"}}}))
+	st, out := clientPlace(t, h, acq.Lease.ID, acq.ActionKey, map[string]any{"repo": writeRepo, "kind": "scratch", "node": "auto",
+		"title": "drill", "idempotency_key": "t-1"})
+	if st != 200 || out.State != "done" || out.WorkerID != f4.FleetID+"/scratch-2" {
+		t.Fatalf("test-identity place = %d %+v; want done", st, out)
+	}
+	if st, _ := clientPlace(t, h, acq.Lease.ID, strings.Repeat("0", 64), map[string]any{"repo": writeRepo, "kind": "scratch"}); st != 401 {
+		t.Fatalf("test lease with a wrong key = %d; want 401", st)
+	}
+}
