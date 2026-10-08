@@ -290,8 +290,6 @@ fleet_ui_t() {
     en:sidebar_epic_reopen_keys) printf '↵ open · esc cancel' ;;
     zh:sidebar_epic_reopening_fmt) printf '在开 #%s 的驱动会话…' "${1:-}" ;;
     en:sidebar_epic_reopening_fmt) printf 'opening the driver for #%s…' "${1:-}" ;;
-    zh:sidebar_refreshing)      printf '刷新中…' ;;
-    en:sidebar_refreshing)      printf 'refreshing…' ;;
     zh:sidebar_landed_heading_fmt) printf '已落地 (%s) · ↵ 恢复' "${1:-}" ;;
     en:sidebar_landed_heading_fmt) printf 'Landed (%s) · ↵ restore' "${1:-}" ;;
     zh:sidebar_landed_empty)    printf '（还没有已落地的会话）' ;;

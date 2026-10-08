@@ -46,6 +46,15 @@ assert sidebar.visible(['1', '0', '1', '99', '99:%d' % holder.pid], 100), 'a dea
 assert not sidebar.visible(['1', '0', '1', '99', '98:%d' % holder.pid], 100), "another epoch's holder: the 30s bound"
 assert sidebar.visible(['1', '0', '1', '60', '60:%d' % os.getpid()], 100), 'a flag past 30s never pauses'
 assert sidebar.tail('abc修复', 5) == 'c修复' and sidebar.tail('abc', 9) == 'abc'
+# The bar's refresh icon (issue #2228): lit while the list waits, and once lit it
+# stays at least REFRESH_HOLD — a frame landing just past STALE_SECS never blinks it.
+lit = sidebar.refresh_lit
+assert lit(False, 10.0, None) == (False, None), 'nothing waited on: dark'
+assert lit(True, 10.0, None) == (True, 10.0), 'waiting: lit, and when'
+assert lit(True, 12.0, 10.0) == (True, 10.0), 'still waiting: the first lighting counts'
+assert lit(False, 10.4, 10.0) == (True, 10.0), 'a frame inside the hold: still lit'
+assert lit(False, 11.0, 10.0) == (False, None), 'past the hold: dark'
+assert sidebar.STALE_SECS == 3 and sidebar.REFRESH_HOLD == 1.0
 # The view's width is HELD (issue #1521): tmux scales every pane when a window
 # takes a client's size (210 → 189 columns), and the manual width used to stay
 # where the scale left it until the next move — 37 ↔ 26 on every switch.
@@ -357,15 +366,20 @@ def list_only(pane):
             and '快捷键' not in text and '在问你' not in text)
 
 def refreshing(pane):
-    """The 「刷新中…」 top row is up (issue #1536): a stalled producer's frame is
-    past STALE_SECS. A tap during a stall waits for it, so the row it aims at
-    does not move down under the press."""
-    return tm('capture-pane', '-p', '-t', pane).splitlines()[:1] == ['刷新中…']
+    """The bar's refresh icon is lit (issue #2228; #1536 drew a 「刷新中…」 top
+    row instead): a stalled producer's frame is past STALE_SECS, and the list's
+    window carries `@fleet_refreshing` — the slot conf/tmux-shell.conf keeps."""
+    return tm('show-options', '-wqv', '-t', pane, '@fleet_refreshing') == '1'
 
 def row_y(pane, text):
-    """The painted row of the list that shows `text` — a 「刷新中…」 top row
-    (issue #1536) moves every row down one."""
+    """The painted row of the list that shows `text`."""
     return next(i for i, line in enumerate(tm('capture-pane', '-p', '-t', pane).splitlines()) if text in line)
+
+def row_ys(pane):
+    """Every painted line's y, by its text — refreshing must move none (issue #2228).
+    The ⠋ spinner's frame is dropped from the key: it turns between two reads."""
+    spin = re.compile('[\u2800-\u28ff]')
+    return {spin.sub('', line).strip(): i for i, line in enumerate(tm('capture-pane', '-p', '-t', pane).splitlines()) if line.strip()}
 
 def ask_pane(window):
     """The question open under the session (bin/fleet-ask.py, `@stage_ask`)."""
@@ -727,10 +741,16 @@ try:
     staged.write_text('#!/bin/bash\nn=0\nwhile [ -f %s ] && [ $n -lt 300 ]; do sleep .1; n=$((n+1)); done\n'
                       'exec bash %s "$@"\n' % (shlex.quote(str(stall)),
                                                shlex.quote(str(bin_dir / 'tmux-dashboard-rows-real.sh'))))
+    before = row_ys(side)
     stall.write_text('')
     os.replace(staged, rows_bin)
     time.sleep(1.5)  # the view's next refresh is now stuck in the producer
-    wait_for(lambda: refreshing(side), 'a stalled producer never showed 「刷新中…」')
+    wait_for(lambda: refreshing(side), 'a stalled producer never lit the refresh icon')
+    # The list itself does not move (issue #2228): no 「刷新中…」 row pushes it
+    # down — the top line is still a real row, and every row keeps its y.
+    lit_rows = row_ys(side)
+    check('刷新中…' not in lit_rows, 'the list still draws a 「刷新中…」 row: %r' % list(lit_rows)[:3])
+    check(lit_rows == before, 'refreshing moved the list: %r → %r' % (before, lit_rows))
     time.sleep(.6)   # past the double-click window, THEN read where the row is
     y = row_y(side, '修复侧栏')
     started = time.monotonic()
@@ -767,7 +787,7 @@ try:
     os.replace(staged, rows_bin)
     time.sleep(1.5)  # the view's next refresh is now stuck in the producer
     caret = sidebar.width_of(sidebar.row_left(' ', '·', '▾', '')) - 2
-    wait_for(lambda: refreshing(side), 'a stalled producer never showed 「刷新中…」')
+    wait_for(lambda: refreshing(side), 'a stalled producer never lit the refresh icon')
     time.sleep(.6)   # past the double-click window, THEN read where the row is
     y = row_y(side, 'worker-one')
     started = time.monotonic()
@@ -844,7 +864,8 @@ try:
 
     # Never blank (issue #1536): a producer hung for 15s — past its own 10s kill,
     # through a restart that hangs again — leaves the last rows painted under a
-    # 「刷新中…」 top row, and the watchdog writes ONE line for the stall.
+    # lit refresh icon (issue #2228; a 「刷新中…」 top row before it), and the
+    # watchdog writes ONE line for the stall.
     stall_log = bin_dir.parent / 'logs' / 'sidebar-stall.log'
     logged = len(stall_log.read_text().splitlines()) if stall_log.exists() else 0
     (bin_dir / 'tmux-dashboard-rows-real.sh').symlink_to(real_bin / 'tmux-dashboard-rows.sh')
@@ -858,18 +879,18 @@ try:
         screen = tm('capture-pane', '-p', '-t', side)
         if '修复侧栏' not in screen or 'worker-one' not in screen:
             blank.append(round(time.monotonic() - started, 1))
-        if flagged is None and screen.splitlines()[:1] == ['刷新中…']:
+        if flagged is None and refreshing(side):
             flagged = time.monotonic() - started
+            check('刷新中…' not in screen, 'a hung producer drew a 「刷新中…」 row')
         time.sleep(.25)
     check(not blank, 'the list went blank under a hung producer at %r s' % blank)
-    check(flagged is not None, 'a hung producer never showed 「刷新中…」')
+    check(flagged is not None, 'a hung producer never lit the refresh icon')
     lines = stall_log.read_text().splitlines() if stall_log.exists() else []
     check(len(lines) == logged + 1 and 'producer' in lines[-1] and 'restarted' in lines[-1],
           'the watchdog did not log the stall exactly once: %r' % lines[logged:])
-    print('sidebar timing: 「刷新中…」 after %.1fs of a hung producer; stall log: %s' % (flagged, lines[-1]))
+    print('sidebar timing: ⟳ after %.1fs of a hung producer; stall log: %s' % (flagged, lines[-1]))
     stall.unlink()
-    wait_for(lambda: tm('capture-pane', '-p', '-t', side).splitlines()[:1] != ['刷新中…'],
-             '「刷新中…」 stayed after the producer recovered')
+    wait_for(lambda: not refreshing(side), 'the refresh icon stayed lit after the producer recovered')
     rows_bin.unlink()
     rows_bin.symlink_to(real_bin / 'tmux-dashboard-rows.sh')
     (bin_dir / 'tmux-dashboard-rows-real.sh').unlink()

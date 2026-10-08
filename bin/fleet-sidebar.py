@@ -39,12 +39,17 @@ FOLLOW_SECS = 0.12
 PRODUCER_POLL = 0.05
 PRODUCER_TIMEOUT = 10
 # Never blank, never frozen (issue #1536). The FIRST frame waits this long for
-# real rows, then paints 「刷新中…」 over an empty list instead of a blank pane.
+# real rows, then lights the bar's refresh icon over an empty list instead of a
+# blank pane.
 FIRST_WAIT = 1.0
 # A painted frame older than this (counted from when the view last became
-# visible) gets the 「刷新中…」 top row: the last good rows stay, and the row says
-# what the view is waiting for.
+# visible) lights the refresh icon (issue #2228): the last good rows stay where
+# they are — no 「刷新中…」 row pushes the list down — and the client's bar shows
+# ⟳ in a slot it always keeps (conf/tmux-shell.conf @fleet_refresh_slot).
 STALE_SECS = 3
+# Once lit, the icon stays at least this long: a frame landing right after the
+# threshold does not blink it.
+REFRESH_HOLD = 1.0
 # The watchdog: every WATCHDOG_SECS it checks the frame's age, and past
 # STALL_SECS writes one line to logs/sidebar-stall.log and restarts the producer.
 WATCHDOG_SECS = 60
@@ -1733,6 +1738,32 @@ def publish_hint(window, hint, last):
     return hint
 
 
+def refresh_lit(waiting, now, since, hold=REFRESH_HOLD):
+    """The bar's refresh icon (issue #2228): (lit, since). Lit while the view
+    waits on a frame, and — once lit — for at least `hold` seconds, so a frame
+    that lands just past STALE_SECS does not blink it. `since` is when it lit."""
+    if waiting:
+        return True, (now if since is None else since)
+    if since is not None and now - since < hold:
+        return True, since
+    return False, None
+
+
+def publish_refreshing(window, lit, last):
+    """`@fleet_refreshing` on the list's window (issue #2228) — the bar's fixed
+    slot reads it (conf/tmux-shell.conf @fleet_refresh_slot) — only on change. A
+    view that moved on clears the icon it left lit on the window it left."""
+    if not window or last == (window, lit):
+        return last
+    cmds = []
+    if last is not None and last[0] != window and last[1]:
+        cmds += ["set-option", "-uw", "-t", last[0], "@fleet_refreshing", ";"]
+    cmds += (["set-option", "-w", "-t", window, "@fleet_refreshing", "1"] if lit else
+             ["set-option", "-uw", "-t", window, "@fleet_refreshing"])
+    tmux(*cmds)
+    return (window, lit)
+
+
 def say(session, text, secs=None):
     """What the list has to say, on the BAR of every client looking at it (issue
     #1950): a refusal's reason, 「正在 m5 上开…」 — tmux's display-message, so
@@ -2486,6 +2517,9 @@ def ui(screen, session, worker, lock):
     switch_rows = None  # the switch-rows.tsv last written (issue #1903)
     bar_gen = None  # the stage top line's record last published (issue #1904)
     hint_last = None  # the bar's (view, name) last written (issue #1951)
+    # The bar's refresh icon (issue #2228): the (window, lit) last written, and
+    # when it lit (REFRESH_HOLD keeps it at least that long).
+    refresh_last, refresh_since = None, None
     switch_visit(current_row)
     # The row producer in flight (issue #1033), and whether any run has landed:
     # only the FIRST frame waits for one — every later frame paints the last
@@ -2888,7 +2922,7 @@ def ui(screen, session, worker, lock):
                         # The first frame waits briefly for real rows rather than
                         # flash an empty list — but never a blank pane for the
                         # producer's whole timeout (issue #1536): past FIRST_WAIT
-                        # it paints 「刷新中…」 and keeps polling.
+                        # it lights the bar's refresh icon and keeps polling.
                         try:
                             producer.wait(timeout=FIRST_WAIT)
                             continue
@@ -2904,6 +2938,9 @@ def ui(screen, session, worker, lock):
         if not shown:
             follow_at = None  # a hidden view never switches windows
             shown_at = None   # nor does its frame age
+            # nor lights the bar's refresh icon (issue #2228): its frame waits
+            # on nothing while no one can see it
+            refresh_last, refresh_since = publish_refreshing(window, False, refresh_last), None
             if pressed is not None and read_at >= pressed[2]:
                 pressed = None  # read again since, and still hidden: not ours
             screen.timeout(max(1, min(1000, int((refresh_at - time.monotonic()) * 1000))))
@@ -2994,13 +3031,18 @@ def ui(screen, session, worker, lock):
             selected = current_row if current_row in ids else (ids[0] if ids else "")
         index = ids.index(selected) if selected in ids else 0
         where = next((i for i, row in enumerate(rows) if key_of(row) == selected), 0)
-        # The 「刷新中…」 row (issue #1536): the list waits on a frame that has not
-        # come — the first, or one past STALE_SECS. The rows it has stay painted
-        # one row lower; the top row says what the view is waiting for. Nothing
-        # else is ever a row here (issue #1950): no summary, no `?` row, no
-        # input line — the whole height is the list's.
-        waiting = 1 if height >= 4 and (not loaded or age > STALE_SECS) else 0
-        page = max(1, height - waiting)
+        # The list waits on a frame that has not come — the first, or one past
+        # STALE_SECS (issue #1536). The rows it has stay painted exactly where
+        # they were (issue #2228: the 「刷新中…」 top row that pushed them down a
+        # line is gone); the client's bar lights ⟳ in a slot it always keeps.
+        # Nothing else is ever a row here (issue #1950): no summary, no `?` row,
+        # no input line — the whole height is the list's.
+        lit, refresh_since = refresh_lit(not loaded or age > STALE_SECS, now, refresh_since)
+        refresh_last = publish_refreshing(window, lit, refresh_last)
+        if lit and refresh_since is not None:
+            # look again when the hold ends, so the icon goes out on time
+            refresh_at = min(refresh_at, refresh_since + REFRESH_HOLD + 0.05)
+        page = max(1, height)
         offset = max(0, min(offset, max(0, len(rows) - page)))
         if index == 0:
             where = 0  # the top row keeps the heading above it in view
@@ -3025,9 +3067,7 @@ def ui(screen, session, worker, lock):
                     pass  # a resize may race this paint
 
         screen.erase()
-        if waiting:
-            put(0, tr("sidebar_refreshing"), dim_attr)
-        for y, row in enumerate(rows[offset:offset + page], waiting):
+        for y, row in enumerate(rows[offset:offset + page]):
             wid, state, glyph, label, tree, badge, _depth, _detail, node = row[:9]
             if wid == "hdr":
                 if key_of((wid, state)) == selected:
@@ -3244,8 +3284,7 @@ def ui(screen, session, worker, lock):
                     pressed, refresh_at = mouse, 0  # read tmux first (above)
                     continue
             y, buttons, _when, x = mouse
-            ry = y - waiting  # below the 「刷新中…」 row when it shows (issue #1536)
-            hit_row = rows[offset + ry] if 0 <= ry < page and offset + ry < len(rows) else None
+            hit_row = rows[offset + y] if 0 <= y < page and offset + y < len(rows) else None
             hit = key_of(hit_row) if hit_row is not None else None
             # `selected`, not the painted cue: a fast double tap lands its second
             # press before the next refresh repaints the first one's switch.
