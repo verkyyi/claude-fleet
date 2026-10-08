@@ -79,7 +79,8 @@
 #   P. shell      — the client (FLEET_SHELL=1, no conf, issue #1680): its hub rows
 #                   group under one heading per repo THEY name (2+), sorted, plus
 #                   `无仓库`; ←/→ folds a group through the shell's OWN @repo_fold;
-#                   one repo ⇒ no heading; a node on the hub source (no FLEET_SHELL)
+#                   one repo ⇒ no heading — unless the hub's machines host 2+
+#                   (global/hub_repos, #2285: its heading opens the list); a node on the hub source (no FLEET_SHELL)
 #                   renders the same cache flat, byte for byte as before
 #                   (#1882: a lost machine's rows stay in their repo's group, dimmed —
 #                   the frame is the online one but for the `!`, 入口连不上 included)
@@ -489,6 +490,21 @@ PATH="$SHIMPATH" FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle
 hasnt "P: …a node with no conf repos writes nothing" "$(cat "$TMUX_LOG")" "@repo_fold"
 LC_ALL=C grep -v 'acme/tool' "$G/remote_$SH" > "$WORK/one" && mv "$WORK/one" "$G/remote_$SH"
 eq "P: one repo among the rows — no repo heading (a one-repo fleet's frame)" "" "$(shdrs "$(FLEET_SHELL=1 shell_side)")"
+# Issue #2285: what groups is the HOSTED count (global/hub_repos — every repo a
+# fleet behind the hub hosts), not how many repos have a session now. 2 hosted,
+# sessions in one ⇒ that repo's heading still opens the list (no empty heading
+# for the other); 1 hosted ⇒ no heading, the bytes of no hub_repos at all.
+one_bytes=$(FLEET_SHELL=1 shell_side)
+printf '#ts\037%s\nacme/app\nacme/tool\n' "$NOW" > "$G/hub_repos"
+p2=$(FLEET_SHELL=1 shell_side)
+eq "P: 2 hosted, one repo among the rows — that repo's heading, then 无仓库 (#2285)" \
+   "app (2);无仓库 (1);" "$(shdrs "$p2")"
+eq "P: …and it is the list's first row" "app (2)" \
+   "$(printf '%s\n' "$p2" | head -1 | LC_ALL=C awk -F"$US" '$1 == "hdr" { print $4 }')"
+printf '#ts\037%s\nacme/app\n' "$NOW" > "$G/hub_repos"
+eq "P: 1 hosted — no heading, byte for byte the frame without hub_repos (#2285)" \
+   "$one_bytes" "$(FLEET_SHELL=1 shell_side)"
+rm -f "$G/hub_repos"
 # Issues #1770/#1882: on the client (`#me` empty) a row with a repo goes to its
 # repo's group, a no-repo row to 无仓库 — and a LOST machine's row STAYS there,
 # dimmed (`m4!`): no `─ m4 失联 ─` group at the foot, so the list does not
