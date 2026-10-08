@@ -407,6 +407,7 @@ seh_rig() {
 #!/bin/bash
 if [ "${1:-}" = run-shell ]; then shift; [ "${1:-}" = -b ] && shift; sh -c "$1"; exit 0; fi
 case "$*" in
+  *@migrating*) printf '%s\n' "${MIG:-}" ;;
   *@issue*) printf '%s\n' "${ISS:-}" ;;
   *window_id*) printf '@9\n' ;;
   *session_name*) printf 's1\n' ;;
@@ -435,6 +436,64 @@ seh_q() {
     FLEET_CONF_DIR="$R/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$R" \
     FLEET_HISTORY_LEDGER="$R/ledger" CLAUDE_PROJECTS_DIR="$R/proj" TMUX=fake TMUX_PANE=%1 \
     bash "$BIN/session-end-hook.sh" --recycle >/dev/null 2>&1
+}
+
+# seh_exit <issue> [VAR=val…] — the agent in issue-<N>'s window exits (/exit)
+seh_exit() {
+  local R="$WORK/seh" n="$1"; shift
+  env "$@" ISS="$n" SEHLOG="$R/log" PATH="$R/fp:$PATH" HOME="$WORK/home" \
+    FLEET_REPO=acme/widgets FLEET_MAIN="$R/main" FLEET_BASE_BRANCH=main \
+    FLEET_CONF_DIR="$R/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$R" \
+    FLEET_HISTORY_LEDGER="$R/ledger" CLAUDE_PROJECTS_DIR="$R/proj" TMUX=fake TMUX_PANE=%1 \
+    FLEET_SESSION_END_REASON=prompt_input_exit \
+    bash "$BIN/session-end-hook.sh" >/dev/null 2>&1
+}
+# seh_fresh <issue> — a zero-commit issue-<N> worktree, then the base moves on:
+# its tip is a STRICT ancestor of the base, the shape the reap reads as landed.
+seh_fresh() {
+  local R="$WORK/seh" wt="$WORK/seh/wt-$1"
+  git -C "$R/main" worktree add -q -b "issue-$1" "$wt" main >/dev/null 2>&1
+  printf '%s\n' "$1" > "$R/main/base-$1"; git -C "$R/main" add "base-$1"
+  git -C "$R/main" commit -qm "base moves past issue-$1"
+}
+# seh_kept <issue> — the worktree and branch survived, the window went
+seh_kept() {
+  local R="$WORK/seh" wt="$WORK/seh/wt-$1"
+  [ -d "$wt" ] && git -C "$wt" rev-parse -q --verify HEAD >/dev/null \
+    || { WHY="the exit removed worktree $wt — the session wakes in a deleted cwd"; return 1; }
+  git -C "$R/main" rev-parse -q --verify "refs/heads/issue-$1" >/dev/null \
+    || { WHY="the exit deleted branch issue-$1"; return 1; }
+  grep -q KILL "$R/log" || { WHY="the old window was not closed (migrate waits for it)"; return 1; }
+}
+
+# A ver-stale / cfg-stale reopen /exits a clean, zero-commit worker: the
+# SessionEnd reap read it `ancestor` and removed worktree + branch, 5 s before
+# the same session resumed in that cwd (#2321, issue-2235 on 2026-10-08).
+drill_ver_reopen_deletes_worktree() {
+  CAP=10; seh_rig; local R="$WORK/seh" t0
+  seh_fresh 11
+  : > "$R/log"; t0=$(now)
+  seh_exit 11 MIG=ver-stale
+  SECS=$(since "$t0")
+  seh_kept 11 || return 1
+  # the mover's half: fleet-migrate.sh stamps the marker before it types /exit
+  awk '/@migrating "\$\{CFG_REASON/{m=NR} /SK -t "\$wid" -l .\/exit/{if(!x)x=NR} END{exit !(m && x && m<x)}' "$BIN/fleet-migrate.sh" \
+    || { WHY="fleet-migrate.sh does not stamp @migrating before its /exit"; return 1; }
+  WHAT="版本过期重开的 /exit（@migrating ver-stale）：worktree 与分支 issue-11 都在，旧窗口照常关"
+}
+
+# Mid-migrate, a mover that stamps no @migrating (or a marker lost with its
+# window) — only its rotate lease says the gap is deliberate (#550): the exit
+# reap ignored the lease and removed the worktree (#2321).
+drill_migrate_exit_reaps() {
+  CAP=10; seh_rig; local R="$WORK/seh" wt="$WORK/seh/wt-12" t0
+  seh_fresh 12
+  FLEET_CONF_DIR="$R/conf" bash -c '. "$1/fleet-lib.sh"; fleet_rotate_lease_take "$2" "migrate drill"' _ "$BIN" "$wt"
+  : > "$R/log"; t0=$(now)
+  seh_exit 12
+  SECS=$(since "$t0")
+  seh_kept 12 || return 1
+  WHAT="迁移途中的 /exit（只有 rotate 租约、没有标记）：worktree 与分支 issue-12 都在"
 }
 
 # Merged, then one more commit, then q: the branch and the commit stay (#1842 ①).

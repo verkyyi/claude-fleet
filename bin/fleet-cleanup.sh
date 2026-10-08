@@ -51,6 +51,8 @@
 #   skip:issue-open  automatic reap deferred: the bound issue #N is still OPEN and
 #                    the PR does not close it (issue #1156) — a side-fix PR shipped
 #                    from branch issue-<N> is not task #N done. Unknown state defers.
+#   skip:migrating   reap refused: the window is being reopened (@migrating, issue
+#                    #2321 — a quota move, a cfg-stale / ver-stale reopen)
 #   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2
 #
 # A CLOSED PR IS NOT PROOF THE WORK WAS ABANDONED (issue #544). This path used to
@@ -319,6 +321,13 @@ fi
 if [ -n "$WT" ] && _transfer_lease="$(fleet_rotate_lease_held "$WT")"; then
   note "  refusing $BRANCH: migration/transfer in flight — lease $_transfer_lease"
   done_token "skip:live"; exit 0
+fi
+# A fleet reopen in flight (issue #2321): fleet-migrate.sh stamps @migrating on
+# the window before its /exit — a quota move, a cfg-stale / ver-stale reopen. The
+# session comes straight back in the same worktree; never reap under it.
+if [ -n "$WIN" ] && _mig=$(ftmux display-message -p -t "$WIN" '#{@migrating}' 2>/dev/null) && [ -n "$_mig" ]; then
+  note "  refusing $BRANCH: window $WIN is being reopened (@migrating $_mig)"
+  done_token "skip:migrating"; exit 0
 fi
 
 # --- the scratch-head gate (issue #589) ---------------------------------------
