@@ -843,7 +843,7 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 // claude-fleet#1410.
 var FleetTools = []string{"fleet_list", "fleet_sessions", "fleet_status", "config_get", "operation_get",
 	"gh_issue_view", "gh_pr_view", "gh_pr_checks",
-	"worker_start", "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch", "worker_rename",
+	"worker_start", "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch", "worker_rename", "worker_reap_policy",
 	"config_set", "gh_comment"}
 
 // handleFleet serves /v1/fleet/<tool>: a read as GET with query arguments

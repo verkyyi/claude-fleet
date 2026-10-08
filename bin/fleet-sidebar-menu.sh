@@ -339,6 +339,9 @@ if [ -n "$remote" ]; then
   # Fleet Shell's way to move a walled session — the guide included — onto a
   # subscription with headroom; the node's dash-migrate.sh picks and gates it.
   add "$(t menu_r_switch)" "$(mk sub)" "$(sh_run "$rmt switch $rargs")"
+  # 改回收方式… (issue #2368): the local row's second menu of the five
+  # policies, each pick a hub write (worker_reap_policy) — ⌘P's ⌃E runs this.
+  add "$(t menu_reap_policy)" "$(mk reappol)" "$(sh_run "bash $(sq "$BIN/fleet-reap-policy.sh") menu $rargs")"
   m_r_reap_confirm=$(t menu_r_reap_confirm_fmt "$(fe "${name:-${wid##*/}}")" "$(fe "$node")")
   add "$(t menu_reap)" "$(mk reap)" "confirm-before -p $(sq "$m_r_reap_confirm") $(dq "$(sh_run "$rmt reap $rargs")")"
   # 其它 — not in the SHELL (issue #1518): its computer has no fleet conf, gh or

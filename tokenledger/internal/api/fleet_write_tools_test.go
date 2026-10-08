@@ -271,6 +271,40 @@ func TestFleetWriteRename(t *testing.T) {
 	}
 }
 
+// worker_reap_policy (claude-fleet#2368): the sidebar's 「改回收方式…」 on a row
+// on another machine. A journalled write under worker:reap's authority; the node
+// gets worker_id and the policy — fleet_reap_policy.py's grammar, nothing else.
+func TestFleetWriteReapPolicyTool(t *testing.T) {
+	h, _, m4, _, f4 := twoNodes(t)
+	wid := f4.FleetID + "/issue-2"
+	if !hasString(FleetTools, "worker_reap_policy") || !fleetWriteTools["worker_reap_policy"] || fleetScopeOf["worker_reap_policy"] != "worker:reap" {
+		t.Fatal("worker_reap_policy must be a listed write tool under worker:reap")
+	}
+	good := []string{"merged", "merged:30m", "done", "done:2h", "loop-end", "keep",
+		"at:2026-10-06T18:00:00Z", "at:2026-10-06T18:00+08:00", "at:18:00", "at:1791000000", "done:366d"}
+	for i, p := range good {
+		op := postFleet(t, h, "worker_reap_policy", map[string]any{"worker_id": wid, "policy": p, "idempotency_key": fmt.Sprintf("ok-%d", i)}, 200)
+		if op["status"] != "accepted" {
+			t.Fatalf("worker_reap_policy %q = %v; want accepted", p, op)
+		}
+	}
+	waitFor(t, 2*time.Second, "the node took every policy", func() bool { return m4.count() == len(good) })
+	env := m4.writes[0]
+	params, _ := env["params"].(map[string]any)
+	if env["action"] != "worker_reap_policy" || params["worker_id"] != wid || params["policy"] != "merged" || len(params) != 2 {
+		t.Fatalf("the node was sent %v", env)
+	}
+	for i, bad := range []any{"", "never", "keep:1h", "loop-end:", "merged:", "done:0", "done:2w", "done:367d",
+		"at:", "at:25:00", "at:tomorrow", "done 2h", strings.Repeat("k", 49), 3, nil} {
+		postFleet(t, h, "worker_reap_policy", map[string]any{"worker_id": wid, "policy": bad, "idempotency_key": fmt.Sprintf("bad-%d", i)}, 400)
+	}
+	postFleet(t, h, "worker_reap_policy", map[string]any{"worker_id": wid, "idempotency_key": "no-policy"}, 400)
+	postFleet(t, h, "worker_reap_policy", map[string]any{"worker_id": wid, "policy": "keep", "name": "x", "idempotency_key": "extra"}, 400)
+	if m4.count() != len(good) {
+		t.Fatalf("a refused policy reached the node (%d writes)", m4.count())
+	}
+}
+
 // worker_switch (claude-fleet#2102): the sidebar's 「换到可用订阅」 on a row on
 // another machine. A journalled write under worker:stop's authority (a switch is
 // a stop + resume of the same conversation); the node gets worker_id and, when
