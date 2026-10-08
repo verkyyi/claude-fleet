@@ -120,6 +120,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetMoves(); err != nil {
 		return err
 	}
+	// Writing-area attachments in transit (claude-fleet#2393).
+	if err := s.ensureFleetAttachments(); err != nil {
+		return err
+	}
 	// Issue leases (claude-fleet#1422).
 	if err := s.ensureFleetLeases(); err != nil {
 		return err

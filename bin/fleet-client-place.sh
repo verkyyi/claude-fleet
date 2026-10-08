@@ -4,7 +4,14 @@
 #
 #   fleet-client-place.sh <repo> <issue|scratch|home|restore:<key>|new> [--node <m>|auto]
 #                         [--title <t>] [--name <n>] [--agent claude|codex]
-#                         [--reap <policy>] [--body-file <f>]
+#                         [--reap <policy>] [--body-file <f>] [--attach <file>]…
+#
+# --attach (issue #2393, EPIC #2482 C1; new or scratch, repeatable): a file the
+# writing area's text names. Its bytes go with the request (≤ 10 MiB each and
+# together, ≤ 5) and land on the machine that opens the session — the text
+# names it there. One that cannot go (too big, unreadable, a hub or machine that
+# takes none) is said: `附件没带过去：…` on stderr and after the line's tab, and
+# beside its path in the text — never a path the session cannot read, silently.
 #
 # `new` (issue #1953, the writing area ⌘N opens): an issue that does not exist
 # yet — --title (required) and --body-file are its title and body; the machine
@@ -88,7 +95,7 @@ usage() { sed -n '5,7p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 REPO=$1; WHAT=$2; shift 2
-NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''
+NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''; ATTACH=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)  [ $# -ge 2 ] || usage; NODE=$2; shift 2 ;;
@@ -99,6 +106,7 @@ while [ $# -gt 0 ]; do
     # question's answer; canonical here, held to its shape by the hub too
     --reap)  [ $# -ge 2 ] || usage; REAP=$2; shift 2 ;;
     --body-file) [ $# -ge 2 ] || usage; BODYF=$2; shift 2 ;;
+    --attach) [ $# -ge 2 ] || usage; ATTACH+=("$2"); shift 2 ;;
     *) usage ;;
   esac
 done
@@ -126,19 +134,47 @@ fi
 [ "$REPO" != - ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: only a scratch belongs to no repo (-)\n' >&2; exit 2; }
 [ -z "$BODYF" ] || [ "$KIND" = new ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: --body-file is for new or scratch\n' >&2; exit 2; }
 [ -z "$BODYF" ] || [ -r "$BODYF" ] || { printf 'fleet-client-place: cannot read %s\n' "$BODYF" >&2; exit 2; }
+[ "${#ATTACH[@]}" -eq 0 ] || [ "$KIND" = new ] || [ "$KIND" = scratch ] || { printf 'fleet-client-place: --attach is for new or scratch\n' >&2; exit 2; }
 
 # --- the hub ----------------------------------------------------------------------
 # ask_hub <retry 0|1> — rc 10 = not applicable here (no hub URL, or no lease / key
 # to sign with); rc 11 (only with retry 1) = 401 not your client.
 ask_hub() {
-python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" <<'PY'
-import hashlib, hmac, importlib.util, json, os, re, sys, time, urllib.error, urllib.request
+python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
+import base64, hashlib, hmac, importlib.util, json, os, re, sys, time, urllib.error, urllib.request
 
 here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry = sys.argv[1:13]
+files = sys.argv[13:]
 body = ""
 if bodyf:
     with open(bodyf, encoding="utf-8") as f:
         body = f.read()
+
+# The attachments (issue #2393): the hub's own bounds (fleet_attachment.go),
+# checked here first so what cannot go is said before anything is sent.
+ATTACH_FILE_MAX, ATTACH_TOTAL_MAX, ATTACH_COUNT_MAX = 10 << 20, 10 << 20, 5
+attach, stayed = [], []
+for f in files:
+    try:
+        with open(f, "rb") as fh:
+            data = fh.read(ATTACH_FILE_MAX + 1)
+    except OSError:
+        stayed.append((f, "读不到"))
+        continue
+    if len(data) > ATTACH_FILE_MAX:
+        stayed.append((f, "超过 10 MB"))
+    elif len(attach) >= ATTACH_COUNT_MAX:
+        stayed.append((f, "一条任务最多 5 个"))
+    elif sum(a["size"] for a in attach) + len(data) > ATTACH_TOTAL_MAX:
+        stayed.append((f, "合计超过 10 MB"))
+    else:
+        attach.append({"name": os.path.basename(f), "from": f, "sha256": hashlib.sha256(data).hexdigest(),
+                       "data": base64.b64encode(data).decode("ascii"), "size": len(data)})
+for f, why in stayed:
+    # beside its path in the text: the session reads that it did not come
+    body = body.replace("- " + f + "\n", "- %s（附件没带过去：%s）\n" % (f, why))
+    if body.endswith("- " + f):
+        body += "（附件没带过去：%s）" % why
 
 
 def connect_module():
@@ -202,6 +238,8 @@ if issue:
 for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap), ("body", body)):
     if v:
         req[k] = v
+if attach:
+    req["attachments"] = [{k: a[k] for k in ("name", "from", "sha256", "data")} for a in attach]
 tried = []   # issue #1610: the machines that declined before the answer, as the hub said them
 
 
@@ -216,6 +254,8 @@ def note_tried(o):
 try:
     out = ask(req)
     note_tried(out)
+    carried = out.get("attached") or 0   # a status poll does not repeat it
+    carried_note = out.get("attach_note") or ""
     while out.get("state") == "pending" and out.get("operation_id") and time.time() < deadline:
         out = ask({"action": "status", "operation_id": out["operation_id"], "wait": rnd()})
 except urllib.error.HTTPError as e:
@@ -356,6 +396,15 @@ if out.get("state") != "done" and int(out.get("exit") or 0) not in (0, 3):
         sys.stderr.write("fleet-client-place: %s\n" % s)
 # A status poll answers for the last machine only: the first answer's tries
 # stay on the line (issue #1610).
+# What did not go with it (issue #2393), said — on stderr and after the line's
+# tab, so the writing area's toast shows it. A hub that predates attachments
+# answers no `attached`.
+if attach and int(out.get("exit") or 0) in (0, 6) and carried < len(attach):
+    stayed += [(a["from"], carried_note or "入口还不收附件（升级入口）") for a in attach[carried:]]
+if stayed:
+    said = "附件没带过去：" + "；".join("%s（%s）" % (os.path.basename(f), why) for f, why in stayed)
+    sys.stderr.write("fleet-client-place: %s\n" % said)
+    line += "\t" + said
 if tried and "\tafter " not in line:
     line += "\tafter " + ",".join("%s:%s:%s" % (a.get("machine", "?"), a.get("operation_id") or "-", a.get("exit", 1))
                                   for a in tried)

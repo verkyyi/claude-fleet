@@ -362,6 +362,30 @@ def check_text(text, what="text"):
 
 MAX_ISSUE_TITLE = 256
 
+ATTACH_MAX, ATTACH_COUNT_MAX = 10 << 20, 5
+
+
+def check_attachments(value):
+    """A worker_start's attachments (issue #2393): [{id, name, sha256, size,
+    from}] — the hub's checkAttachList, letter for letter. The name becomes a
+    file name under $FLEET_CONF_DIR/attachments/<id>/, so one path element."""
+    bad = Fault("INVALID_ARGUMENT", "attachments is a list of {id, name, sha256, size, from}")
+    if not isinstance(value, list) or not 1 <= len(value) <= ATTACH_COUNT_MAX:
+        raise bad
+    for a in value:
+        if not isinstance(a, dict) or set(a) != {"id", "name", "sha256", "size", "from"}:
+            raise bad
+        nm, frm = a["name"], a["from"]
+        if not isinstance(a["id"], str) or not re.fullmatch(r"[0-9a-f]{32}", a["id"]) \
+                or not isinstance(a["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", a["sha256"]) \
+                or type(a["size"]) is not int or not 0 <= a["size"] <= ATTACH_MAX \
+                or not isinstance(frm, str) or not 1 <= len(frm.encode("utf-8")) <= 1024 \
+                or any(ord(c) < 32 or ord(c) == 127 for c in frm):
+            raise bad
+        if not isinstance(nm, str) or not 1 <= len(nm.encode("utf-8")) <= 200 or nm in (".", "..") \
+                or "/" in nm or "\\" in nm or any(ord(c) < 32 or ord(c) == 127 for c in nm):
+            raise Fault("INVALID_ARGUMENT", "an attachment's name is one file name (1-200 bytes, no slash)")
+
 
 def check_issue_title(value):
     """A new-issue start's title (issue #1953): one line of 1-256 characters
@@ -410,7 +434,7 @@ def validate_gh_read(params):
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "agent", "repo", "no_repo", "origin_wid",
-                            "account_class", "reap"))
+                            "account_class", "reap", "attachments"))
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
@@ -453,6 +477,12 @@ def validate_write(action, params):
             raise Fault("INVALID_ARGUMENT", "kind must be issue, scratch or new")
         if params.get("agent", "") not in ("", "claude", "codex"):
             raise Fault("INVALID_ARGUMENT", "agent must be claude or codex")
+        if "attachments" in params:
+            # issue #2393: the writing area's files, downloaded by this node's
+            # agent before the start — held to the hub's checkAttachList.
+            if kind not in ("new", "scratch"):
+                raise Fault("INVALID_ARGUMENT", "attachments belong to a new or scratch start")
+            check_attachments(params["attachments"])
         check_repo(params)
         if "origin_wid" in params:
             # The parent on another machine (issue #1425): a worker_id, never

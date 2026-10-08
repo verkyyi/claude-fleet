@@ -300,6 +300,10 @@ type Agent struct {
 	// (claude-fleet#1426): claude-fleet's `fleet-hub-node.sh paths` movein
 	// line, set per connection before its reader starts; "" = no CapMove.
 	moveIn string
+	// attachDir is where a start's attachments are downloaded
+	// (claude-fleet#2393): claude-fleet's `fleet-hub-node.sh paths` attach
+	// line; "" = the login cannot take them (no CapAttach).
+	attachDir string
 
 	// consecutiveFailures backs the scan cadence off while the hub is
 	// unreachable. A failed cycle leaves the cursor unmoved, so the next scan

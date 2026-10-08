@@ -86,7 +86,7 @@ ok; ! lib fleet_window_waiting_children "$L" "$wp" >/dev/null || fail "A: CCQUOT
 
 # --- B: paths ---------------------------------------------------------------------------
 run bash "$BIN/fleet-hub-node.sh" paths
-ok; [ "$out" = "outbox	$OUTBOX"$'\n'"workers	$CACHE"$'\n'"movein	$FLEET_CONF_DIR/control/move-in" ] || fail "B: paths" "$out"
+ok; [ "$out" = "outbox	$OUTBOX"$'\n'"workers	$CACHE"$'\n'"movein	$FLEET_CONF_DIR/control/move-in"$'\n'"attach	$FLEET_CONF_DIR/attachments" ] || fail "B: paths" "$out"
 
 # --- C: deliver -------------------------------------------------------------------------
 relay() { # <id-suffix> <kind> <from> <to> <payload> [<from_node>]

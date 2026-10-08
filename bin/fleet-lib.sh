@@ -6292,6 +6292,11 @@ fleet_hub_cache()  { printf '%s/control/hub-workers.tsv' "$FLEET_CONF_DIR"; }
 # the hub moves one HERE (issue #1426); fleet-control-read.sh movein reads it.
 fleet_hub_movein() { printf '%s/control/move-in' "$FLEET_CONF_DIR"; }
 
+# fleet_hub_attach → where this node's agent downloads a writing area's
+# attachments before a start (issue #2393): <dir>/<id>/<name>, written into the
+# text by fleet_control.py's attached_body — the same $FLEET_CONF_DIR/attachments.
+fleet_hub_attach() { printf '%s/attachments' "$FLEET_CONF_DIR"; }
+
 # fleet_hub_wid <uuid> <key> → the FULL worker_id the hub map holds for that
 # (uuid may be empty: a bare key, matched only when exactly one row ends in it).
 # Reads the cache as fleet_worker_locate does (same freshness rule); rc 1 when

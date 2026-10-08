@@ -381,7 +381,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -539,6 +539,19 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		if reap != "" {
 			w.params["reap"] = reap
+		}
+		// attachments (claude-fleet#2393): the writing area's files, kept by
+		// the hub for the node to download — a new or scratch start only.
+		if v, ok := args["attachments"]; ok {
+			if kind != "new" && kind != "scratch" {
+				err = fault("INVALID_ARGUMENT", "attachments belong to a new or scratch start")
+				break
+			}
+			var list []any
+			if list, err = checkAttachList(v); err != nil {
+				break
+			}
+			w.params["attachments"] = list
 		}
 		if w.node == "" {
 			w.node = "auto"

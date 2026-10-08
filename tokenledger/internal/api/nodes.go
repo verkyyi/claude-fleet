@@ -67,6 +67,9 @@ type nodeConn struct {
 	// canMove is the hello's CapMove: this node downloads a moved session's
 	// transcript and takes worker_move_in (claude-fleet#1426).
 	canMove bool
+	// canAttach is the hello's CapAttach: this node downloads a writing
+	// area's attachments before a start (claude-fleet#2393).
+	canAttach bool
 	// workersAt is when the worker map was last pushed (UnixNano).
 	workersAt atomic.Int64
 	// canTeam is the hello's CapTeam (claude-fleet#1899): this node follows
@@ -346,7 +349,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
-		canTeam:    hp.HasCap(control.CapTeam),
+		canTeam: hp.HasCap(control.CapTeam), canAttach: hp.HasCap(control.CapAttach),
 		canCredsep: hp.HasCap(control.CapCredsep),
 		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine)}
