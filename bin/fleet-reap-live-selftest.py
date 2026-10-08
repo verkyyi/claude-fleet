@@ -133,11 +133,28 @@ class LiveTests(unittest.TestCase):
                  patch.object(live.time, "time", return_value=NOW), \
                  patch("builtins.print", side_effect=lambda *a: out.append(" ".join(map(str, a)))):
                 return live.main(), out
-        self.assertEqual(run(), (1, ["young-agent:claude:600s<1800s"]))
-        self.assertEqual(run("--merged-at", str(NOW-300)), (0, ["waived:young-agent:claude:600s<1800s"]))
-        self.assertEqual(run("--merged-at", str(NOW-900)), (1, ["young-agent:claude:600s<1800s"]))
-        for bad in ("0", "abc", "-5", ""):
-            self.assertEqual(run("--merged-at", bad), (1, ["young-agent:claude:600s<1800s"]))
+        with patch.dict(os.environ, {"FLEET_REAP_MIN_AGE": "1800"}):
+            self.assertEqual(run(), (1, ["young-agent:claude:600s<1800s"]))
+            self.assertEqual(run("--merged-at", str(NOW-300)), (0, ["waived:young-agent:claude:600s<1800s"]))
+            self.assertEqual(run("--merged-at", str(NOW-900)), (1, ["young-agent:claude:600s<1800s"]))
+            for bad in ("0", "abc", "-5", ""):
+                self.assertEqual(run("--merged-at", bad), (1, ["young-agent:claude:600s<1800s"]))
+
+    def test_default_min_age_is_five_minutes(self):
+        # Issue #2453: unset FLEET_REAP_MIN_AGE → 300s; 6 minutes passes, 4 refuses.
+        def run(age):
+            replies = iter(["", "\t", "", "done", "100", f"100 1 01:00:00 zsh\n101 100 {age} claude", "100 zsh\n101 claude"])
+            out = []
+            env = {k: v for k, v in os.environ.items() if k != "FLEET_REAP_MIN_AGE"}
+            with patch.dict(os.environ, env, clear=True), \
+                 patch.object(sys, "argv", ["probe", "@1"]), \
+                 patch.object(live, "read", side_effect=lambda *a: next(replies)), \
+                 patch.object(live, "waiting", return_value=""), \
+                 patch("builtins.print", side_effect=lambda *a: out.append(" ".join(map(str, a)))):
+                return live.main(), out
+        self.assertEqual(live.DEFAULT_MIN_AGE, 300)
+        self.assertEqual(run("06:00")[0], 0)
+        self.assertEqual(run("04:00"), (1, ["young-agent:claude:240s<300s"]))
 
     def test_state_never_overridden_by_age_knob(self):
         for state in ("working", "looping", "busy", "waiting", "unknown"):

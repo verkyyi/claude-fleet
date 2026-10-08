@@ -82,6 +82,11 @@ def merged_in_life(merged_at, age, now):
     return now - age < merged_at <= now
 
 
+# Issue #2453: the gate only has to cover a just-spawned agent that has not
+# stamped @claude_state yet; every other reap guard is independent of age.
+DEFAULT_MIN_AGE = 300
+
+
 def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, now=None):
     if not re.fullmatch(r"@\d+", target):
         return "unknown:unstable-target"
@@ -190,8 +195,8 @@ def main():
     parser.add_argument("--socket-names", default="", help="newline-separated registered socket labels")
     parser.add_argument("--merged-at", help="PR merge epoch: waive the age gate for an agent alive at the merge (#1329)")
     args = parser.parse_args()
-    raw = os.environ.get("FLEET_REAP_MIN_AGE", "1800")
-    minimum = int(raw) if re.fullmatch(r"\d+", raw) else 1800
+    raw = os.environ.get("FLEET_REAP_MIN_AGE", str(DEFAULT_MIN_AGE))
+    minimum = int(raw) if re.fullmatch(r"\d+", raw) else DEFAULT_MIN_AGE
     merged_at = None
     if args.merged_at is not None and re.fullmatch(r"[1-9]\d*", args.merged_at):
         merged_at = int(args.merged_at)

@@ -15,7 +15,7 @@ only=()
 [ "${FLEET_SLEEP:-observe}" != on ] || only=(--policy-only)
 set -- ${only[@]+"${only[@]}"} "$@"
 export FLEET_SESSION
-export FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}"
+export FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-300}"
 export FLEET_REAP_IDLE_DONE_MIN="${FLEET_REAP_IDLE_DONE_MIN:-30}"
 # One pass per hosted repo (issues #791, #1941), each with THAT repo's MAIN/base,
 # sharing the caller's --limit. The pass only considers windows stamped with its

@@ -356,6 +356,9 @@ ok 'young agent, failed probes and missing window/pid all fail closed'
 # Issue #1329: a short worker that merged its OWN PR (mergedAt after the agent
 # started) is reaped after the grace, not after FLEET_REAP_MIN_AGE; one spawned
 # onto an already-merged branch (agent started after the merge) keeps #565.
+# The waiver needs an agent older than the merge but younger than the gate, so
+# the gate is pinned above the default 600s grace here.
+printf 'FLEET_REAP_MIN_AGE=1800\n' > "$WORK/conf/testsess.conf"
 : > "$LEDGER"
 tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" run_clean merged --auto)"
 case "$tok" in cleaned:*) ;; *) fail "merged-during-life young agent should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
@@ -372,7 +375,19 @@ tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" FAKE_HOLD=1 run_clea
 [ "$tok" = skip:live ] || fail "a held worker must never be waived, got '$tok'"
 tok="$(FAKE_AGENT_AGE=20:00 FAKE_MERGED_AT="$(iso_ago 900)" run_clean merged)"
 case "$tok" in cleaned:*) ;; *) fail "manual cleanup unaffected, got '$tok'" ;; esac
+rm "$WORK/conf/testsess.conf"
 ok 'merged during the agent life waives young-agent; merged before, unset state or hold do not'
+
+# Issue #2453: with FLEET_REAP_MIN_AGE unset the gate is 300s — an agent started
+# 6 minutes ago (after the merge, so no waiver) is reaped, one 4 minutes ago is not.
+: > "$LEDGER"
+tok="$(FAKE_AGENT_AGE=06:00 run_clean merged --auto)"
+case "$tok" in cleaned:*) ;; *) fail "default gate: a 6-minute agent should clean, got '$tok'" "$(cat "$WORK/err")" ;; esac
+: > "$LEDGER"
+tok="$(FAKE_AGENT_AGE=04:00 run_clean merged --auto)"
+[ "$tok" = skip:live ] && grep -q 'young-agent:codex:240s<300s' "$WORK/err" \
+  || fail "default gate: a 4-minute agent must stay protected, got '$tok'" "$(cat "$WORK/err")"
+ok 'default FLEET_REAP_MIN_AGE is 300s: 6-minute agent reaped, 4-minute agent kept'
 
 # Issue #1244: a SLEEPING merged worker is cleaned without a wake — its sleep
 # record retired (fleet-sleep.py dispose) BEFORE the kill; a hold, an agent under
