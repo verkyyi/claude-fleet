@@ -145,7 +145,7 @@ waitfor 15 test -s "$G/remote_$SESS" || { printf 'FAIL: no row cache\n' >&2; exi
 SOCK=$(ts display-message -p '#{socket_path}')
 w=$(ts display-message -p -t "=$SESS:" '#{window_id}')
 right=$(ts list-panes -t "$w" -F '#{pane_id}' | head -1)
-VER=$(sed -n 's/^VIEW_VERSION = "\([^"]*\)".*/\1/p' "$BIN/fleet-sidebar.py")
+VER=$(python3 "$BIN/fleet-sidebar.py" stamp)   # the list's content stamp (issue #2345)
 # The stand-in list, where sync would draw the real one, with the real one's marks.
 ts resize-window -t "$w" -x 160 -y 44 2>/dev/null
 standin=$(ts split-window -d -h -b -f -l 30 -t "$right" -P -F '#{pane_id}' \

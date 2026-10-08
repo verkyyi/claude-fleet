@@ -464,6 +464,17 @@ stamp_ver() {
 portal_ver() {
   cat "${SHADOW:-$BIN}/fleet-compose.py" "${SHADOW:-$BIN}/fleet-ui-lang.sh" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }'
 }
+# code_sum <file…> — the code a long-lived client process runs, by content
+# (issue #2345): each loop writes it beside its pid file when it takes the pid
+# (<pid file>.code), the keys page on its window (@keys_ver), and `reload`
+# restarts the ones whose code on disk is not what they started from — never
+# judged by a link, which already points at the new files.
+code_sum() { cat "$@" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }'; }
+# keys_code — what the keys page draws from (fleet-keys.sh and what it runs)
+keys_code() {
+  local d="${SHADOW:-$BIN}"
+  code_sum "$d/fleet-keys.sh" "$d/fleet-ui-lang.sh" "$d/dash-keymap.sh" "$d/fleet-sidebar-menu.sh" "$d/fleet-lib.sh"
+}
 # portal_fresh <window id> [--force] — the stage's portal window on the code on
 # disk: a window started by another version (@portal_ver differs, or none) has
 # its pane respawned in place — same window id, same @fleet_role / @remote, so
@@ -702,6 +713,7 @@ keeper)
   p=''; { read -r p < "$CL_DIR/keeper.pid"; } 2>/dev/null
   case "$p" in ''|*[!0-9]*) ;; *) [ "$p" != $$ ] && kill -0 "$p" 2>/dev/null && exit 0 ;; esac
   printf '%s\n' $$ > "$CL_DIR/keeper.pid"
+  code_sum "$BIN/fleet-shell.sh" > "$CL_DIR/keeper.pid.code" 2>/dev/null
   # every FLEET_CLIENT_INPUT_EVERY (5 s): an input on a client here is reported
   # (#1932); the renewal and the rest every FLEET_CLIENT_LEASE_EVERY (15 s)
   every=${FLEET_CLIENT_LEASE_EVERY:-15}; tick=${FLEET_CLIENT_INPUT_EVERY:-5}
@@ -804,7 +816,9 @@ keeper)
 actions)
   s="${2:-$SESS}"
   [ "${FLEET_CLIENT_ACTIONS:-1}" != 0 ] || exit 0
-  FLEET_CLIENT_DIR="$CL_DIR" exec python3 "$BIN/fleet-client-actions.py" run --session "$s"
+  # its code, for reload (code_sum): written by the one that takes the pid
+  FLEET_CLIENT_DIR="$CL_DIR" FLEET_ACTIONS_CODE="$(code_sum "$BIN/fleet-client-actions.py" "$BIN/fleet-client-lease.py")" \
+    exec python3 "$BIN/fleet-client-actions.py" run --session "$s"
   ;;
 # ---------------------------------------------------------------------------------
 # The standby screen (issue #1715): what standby_popup runs on a client — why it
@@ -861,6 +875,7 @@ warm)
     p=''; { read -r p < "$WD/loop.pid"; } 2>/dev/null
     case "$p" in ''|*[!0-9]*) ;; *) [ "$p" != $$ ] && kill -0 "$p" 2>/dev/null && exit 0 ;; esac
     printf '%s\n' $$ > "$WD/loop.pid"
+    code_sum "$BIN/fleet-shell.sh" > "$WD/loop.pid.code" 2>/dev/null
   fi
   SSHC="${FLEET_REMOTE_SSH_CMD:-ssh}"
   CACHEF="${TMPDIR:-/tmp}/.claude-dash/global/remote_$s"
@@ -1030,7 +1045,7 @@ keys)
     w=$(TS new-window -d -P -F '#{window_id}' -t "=$STAGE:" -n "$(sh "$BIN/fleet-ui-lang.sh" t keys_page_title 2>/dev/null || echo 按键)" -c "$HOME" \
           "exec bash $(sq "$BIN/fleet-keys.sh") --page") || exit 1
     TS set-window-option -t "$w" @fleet_role keys \; set-window-option -t "$w" @remote -: \; \
-      set-window-option -t "$w" automatic-rename off 2>/dev/null
+      set-window-option -t "$w" automatic-rename off \; set-window-option -t "$w" @keys_ver "$(keys_code)" 2>/dev/null
   fi
   TS select-window -t "$w" 2>/dev/null || exit 1
   exit 0
@@ -1060,10 +1075,11 @@ viewer)
 # switched the install's link. The mirror again (onto the link, so it follows
 # it), both confs written from the new templates and sourced into the two
 # servers (the same servers, the same pids); the list drawn again where its
-# VIEW_VERSION moved; a proxy pane respawned only when fleet-remote-view.sh
-# itself changed (`--from <old home>` to compare with — no `--from`, none is);
-# the warm loop, the actions loop and the data loop restarted only when their
-# script changed. `--all` (issue #1829: files that moved under the running
+# code moved (its content stamp, VIEW_STAMP); a proxy pane respawned only when
+# fleet-remote-view.sh itself changed (`--from <old home>` to compare with — no
+# `--from`, none is); the warm loop, the actions loop, the data loop and the
+# keeper restarted when their script changed or they run other code than the
+# files' now (code_sum, issue #2345). `--all` (issue #1829: files that moved under the running
 # client, so what it runs is unknown) counts every script as changed — every
 # proxy pane respawned, every loop and the keeper restarted (`--in-keeper`: the
 # keeper is the caller and restarts itself). Exit non-zero = the caller rolls back.
@@ -1095,6 +1111,19 @@ reload)
   T run-shell -b -t "=$SESS:" "bash $(sq "$SHADOW/fleet-sidebar.sh") sync '#{session_id}' >/dev/null 2>&1 || :"
   # changed <file> — that script is not what the old client ran
   changed() { [ -n "$all" ] || { [ -n "$from" ] && ! cmp -s "$from/bin/$1" "$REAL_BIN/$1"; }; }
+  # stale <pid file> <file…> — that loop is running, and not on this code: what it
+  # wrote at its start (<pid file>.code; none = a loop older than the stamp) is
+  # not the files' now (issue #2345 — a reload with no `--from`, or one whose
+  # old home already had these files, used to leave it on its old code)
+  stale() {
+    local pf="$1" p='' c=''
+    shift
+    { read -r p < "$pf"; } 2>/dev/null
+    case "$p" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$p" 2>/dev/null || return 1
+    { read -r c < "$pf.code"; } 2>/dev/null
+    [ "$c" != "$(code_sum "$@")" ]
+  }
   if changed fleet-remote-view.sh; then
     TS list-panes -s -t "=$STAGE" -F '#{pane_id} #{pane_start_command}' 2>/dev/null \
       | while read -r p c; do
@@ -1108,7 +1137,11 @@ reload)
     | while read -r w r; do
         case "$r" in
           portal) portal_fresh "$w" ${all:+--force} ;;
-          keys) changed fleet-keys.sh && TS respawn-pane -k -t "$w" 2>/dev/null ;;
+          keys)
+            kv=$(keys_code)
+            if changed fleet-keys.sh || [ "$(TS show-window-option -v -t "$w" @keys_ver 2>/dev/null)" != "$kv" ]; then
+              TS respawn-pane -k -t "$w" 2>/dev/null && TS set-window-option -t "$w" @keys_ver "$kv" 2>/dev/null
+            fi ;;
         esac
       done
   # restart_loop <pid-file> <start command…> — that loop, on the new code
@@ -1120,8 +1153,12 @@ reload)
     rm -f "$pf"
     ( nohup "$@" </dev/null >/dev/null 2>&1 & )
   }
-  changed fleet-shell.sh && restart_loop "$CACHE/tmp/warm/loop.pid" bash "$SHADOW/fleet-shell.sh" warm "$SESS"
-  changed fleet-client-actions.py && restart_loop "$CL_DIR/actions.pid" bash "$SHADOW/fleet-shell.sh" actions "$SESS"
+  if changed fleet-shell.sh || stale "$CACHE/tmp/warm/loop.pid" "$SHADOW/fleet-shell.sh"; then
+    restart_loop "$CACHE/tmp/warm/loop.pid" bash "$SHADOW/fleet-shell.sh" warm "$SESS"
+  fi
+  if changed fleet-client-actions.py || stale "$CL_DIR/actions.pid" "$SHADOW/fleet-client-actions.py" "$SHADOW/fleet-client-lease.py"; then
+    restart_loop "$CL_DIR/actions.pid" bash "$SHADOW/fleet-shell.sh" actions "$SESS"
+  fi
   if changed fleet-hub-sessions.sh || changed fleet-lib.sh; then
     p=$(bash "$SHADOW/fleet-hub-sessions.sh" --status 2>/dev/null | sed -n 's/^loop \([0-9][0-9]*\).*/\1/p')
     [ -n "$p" ] && kill "$p" 2>/dev/null
@@ -1129,7 +1166,21 @@ reload)
   fi
   # the keeper too, when what it runs is unknown — a new one takes over once the
   # old one's pid is gone (one keeper per server)
-  [ -n "$all" ] && [ -z "$inkeeper" ] && restart_loop "$CL_DIR/keeper.pid" bash "$SHADOW/fleet-shell.sh" keeper "$SESS"
+  # (never the keeper this reload runs under — its update tick takes exit 4 and
+  # execs itself on the new code)
+  under() {   # under <pid> — this process descends from it
+    local q=$$
+    while [ "${q:-0}" -gt 1 ] 2>/dev/null; do
+      [ "$q" = "$1" ] && return 0
+      q=$(ps -o ppid= -p "$q" 2>/dev/null | tr -d ' ')
+    done
+    return 1
+  }
+  kp=''; { read -r kp < "$CL_DIR/keeper.pid"; } 2>/dev/null
+  if [ -z "$inkeeper" ] && ! { [ -n "$kp" ] && under "$kp"; } \
+     && { [ -n "$all" ] || stale "$CL_DIR/keeper.pid" "$SHADOW/fleet-shell.sh"; }; then
+    restart_loop "$CL_DIR/keeper.pid" bash "$SHADOW/fleet-shell.sh" keeper "$SESS"
+  fi
   stamp_ver
   exit 0
   ;;

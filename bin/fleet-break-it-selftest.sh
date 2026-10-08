@@ -96,6 +96,7 @@
 #   view-reconnect-shared                           bin/fleet-remote-view.sh (attach, rv_prune)
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
 #   client-unversioned-drift                        bin/fleet-client-update.sh (tick, digest), fleet-shell.sh stamp_ver
+#   client-sidebar-stale-after-update               bin/fleet-sidebar.py (VIEW_STAMP, sync), fleet-shell.sh reload
 #   hub-restart-where                               bin/fleet-shell.sh (keeper renew), fleet-client-lease.py renew,
 #                                                   fleet-client-where.sh
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
@@ -127,7 +128,7 @@ cleanup() {
   for s in "$WORK"/sock-*; do [ -S "$s" ] && "$REAL_TMUX" -S "$s" kill-server 2>/dev/null; done
   for s in kf "kscr$$"; do TMUX_TMPDIR="$WORK/ktt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   for s in vrn vrc; do TMUX_TMPDIR="$WORK/vt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
-  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}o" "${CSESS}o-stage" "${CSESS}u" "${CSESS}u-stage" "${CSESS}w" "${CSESS}w-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
+  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}o" "${CSESS}o-stage" "${CSESS}u" "${CSESS}u-stage" "${CSESS}w" "${CSESS}w-stage" "${CSESS}s" "${CSESS}s-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   pkill -f "fleet-shell.sh keeper $CSESS" 2>/dev/null
   pkill -f "$WORK/" 2>/dev/null
   [ -n "${BREAK_KEEP:-}" ] && { printf 'kept %s\n' "$WORK" >&2; return; }
@@ -2143,6 +2144,61 @@ drill_client_unversioned_drift() {
   SECS=$(since "$t0")
   until_ok 5 grep -q '"phase": "reloaded"' "$WORK/ncache/update.state" || { WHY="no trace of the reload: update.state is not reloaded"; return 1; }
   WHAT="没有 .client-version 的客户端：按内容认出新文件，空闲时重新载入，留下「已重新载入新文件」"
+}
+
+# (issue #2345) The client updated, the list kept drawing the old code: sync
+# reused a list pane whose @sidebar_version matched VIEW_VERSION — a constant
+# bumped by hand — so a version whose fleet-sidebar.py changed without the bump
+# left the old process running (the operator's MacBook, 5 hours of 「合并后回收」
+# after #2305 landed). The drill: an installed client with its keeper on a 1 s
+# beat and a client attached, so the list is drawn; the break is new files in
+# its home — fleet-sidebar.py changed, VIEW_VERSION as it was, a new
+# .client-version; the recovery is the keeper's reload drawing the list again
+# from the new code (a new list process).
+drill_client_sidebar_stale_after_update() {
+  CAP=20; local s="${CSESS}s" H="$WORK/shome" t0 lp f rc=0
+  client_setup
+  mkdir -p "$H/bin"
+  cp -P "$WORK"/sbin/* "$H/bin/"
+  for f in fleet-shell.sh fleet-client-update.sh fleet-sidebar.py; do rm -f "$H/bin/$f"; cp "$BIN/$f" "$H/bin/$f"; done
+  ln -s "$WORK/conf" "$H/conf"
+  printf 'version=v1\ncompat=1\ncommit=c0ffee1\nhub=https://hub.example\n' > "$H/.client-version"
+  ( client_env
+    export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/scache" FLEET_CLIENT_LEASE_CMD=false \
+           FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_IDLE_SECS=0 FLEET_CLIENT_CHECK_SECS=999999
+    mkdir -p "$XDG_CACHE_HOME/claude-fleet/client"; date +%s > "$XDG_CACHE_HOME/claude-fleet/client/checked"
+    bash "$H/bin/fleet-shell.sh" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
+  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ] || { WHY="the installed client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
+  # a client attached for the whole drill (control mode, fed by a fifo): the list
+  # is drawn only for an attached session, and a reload's sync takes it away otherwise
+  mkfifo "$WORK/sclient.fifo"
+  "$REAL_TMUX" -L "$s" -C attach-session -t "=$s" < "$WORK/sclient.fifo" >/dev/null 2>&1 &
+  local cpid=$!
+  exec 8> "$WORK/sclient.fifo"
+  slist() { "$REAL_TMUX" -L "$s" list-panes -s -t "=$s" -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }'; }
+  until_ok 5 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s list-clients -F x 2>/dev/null)\" ]" || { WHY="no client attached"; rc=1; }
+  if [ "$rc" = 0 ]; then
+    "$REAL_TMUX" -L "$s" resize-window -t "=$s:" -x 200 -y 50 2>/dev/null
+    "$REAL_TMUX" -L "$s" run-shell -t "=$s:" "bash '$WORK/scache/bin/fleet-sidebar.sh' sync '#{session_id}' >/dev/null 2>&1 || :"
+    until_ok 10 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s list-panes -s -t =$s -F '#{@sidebar}' 2>/dev/null | grep -x 1)\" ]" \
+      || { WHY="no list drawn on the installed client"; rc=1; }
+  fi
+  if [ "$rc" = 0 ]; then
+    lp=$(slist)
+    t0=$(now)
+    printf '\n# v2: the list moved, VIEW_VERSION as it was\n' >> "$H/bin/fleet-sidebar.py"   # the break
+    printf 'version=v2\ncompat=1\ncommit=beef002\nhub=https://hub.example\n' > "$H/.client-version"
+    until_ok "$CAP" sh -c "[ \"\$(\"$REAL_TMUX\" -L $s show-options -gqv @client_version 2>/dev/null)\" = v2 ]" \
+      || { WHY="the client never reloaded the new files (@client_version=$("$REAL_TMUX" -L "$s" show-options -gqv @client_version 2>/dev/null))"; rc=1; }
+  fi
+  if [ "$rc" = 0 ]; then
+    until_ok 5 sh -c "p=\$(\"$REAL_TMUX\" -L $s list-panes -s -t =$s -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '\$1 == \"1\" { print \$2; exit }'); [ -n \"\$p\" ] && [ \"\$p\" != $lp ]" \
+      || { WHY="the list process ($lp) still draws the old code after the reload: $(slist)"; rc=1; }
+    SECS=$(since "$t0")
+  fi
+  exec 8>&-; kill "$cpid" 2>/dev/null
+  [ "$rc" = 0 ] || return 1
+  WHAT="客户端换了新文件：侧栏按内容认出不是自己启动时的代码，重画成新进程"
 }
 
 # ============================================ a fleet's tmux, deleted from a shell ======
