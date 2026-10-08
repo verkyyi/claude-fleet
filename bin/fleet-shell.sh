@@ -486,29 +486,28 @@ iterm_keys() { python3 "$SHADOW/fleet-iterm-profile.py" write >/dev/null 2>&1 ||
 # profile there, the window wears it while attached and goes back to the profile
 # it came from after the detach — outside the client iTerm2 is as it was.
 attach_client() {
-  local back="${ITERM_PROFILE:-}" rc
+  local back="${ITERM_PROFILE:-}" rc iterm=''
   if [ -n "$back" ] && [ "$back" != fleet ] && [ "${FLEET_ITERM_KEYS:-1}" != 0 ] \
      && { [ "${TERM_PROGRAM:-}" = iTerm.app ] || [ "${LC_TERMINAL:-}" = iTerm2 ]; } \
      && [ -f "${FLEET_ITERM_DIR:-$HOME/Library/Application Support/iTerm2/DynamicProfiles}/fleet.json" ] \
      && { : > /dev/tty; } 2>/dev/null; then
-    printf '\033]1337;SetProfile=fleet\007' > /dev/tty
-    tmux -L "$SESS" attach-session -t "=$SESS"; rc=$?
-    printf '\033]1337;SetProfile=%s\007' "$back" > /dev/tty
-    solo_goodbye
-    exit "$rc"
+    iterm=1
   fi
-  [ "$(T show-options -gqv @fleet_layout 2>/dev/null)" = solo ] || exec tmux -L "$SESS" attach-session -t "=$SESS"
+  # the one-session view (issue #2265) does not exec the attach either: once it
+  # returns — ⌃D, prefix d, or the session's own /exit (fleet-sidebar.py
+  # solo_ended) — the terminal is told where the session is and how to come
+  # back (fleet-topbar.py goodbye). Any other layout: exactly as before.
+  if [ -z "$iterm" ] && [ "$(tmux -L "$SESS" show-options -gqv @fleet_layout 2>/dev/null)" != solo ]; then
+    exec tmux -L "$SESS" attach-session -t "=$SESS"
+  fi
+  [ -n "$iterm" ] && printf '\033]1337;SetProfile=fleet\007' > /dev/tty
   tmux -L "$SESS" attach-session -t "=$SESS"; rc=$?
-  solo_goodbye
+  [ -n "$iterm" ] && printf '\033]1337;SetProfile=%s\007' "$back" > /dev/tty
+  if [ "$(tmux -L "$SESS" show-options -gqv @fleet_layout 2>/dev/null)" = solo ]; then
+    python3 "${SHADOW:-$BIN}/fleet-topbar.py" goodbye \
+      "node=$(tmux -L "$SESS" show-options -gqv @fleet_view_node 2>/dev/null)" 2>/dev/null || :
+  fi
   exit "$rc"
-}
-# solo_goodbye — the one-session view (issue #2265) does not exec the attach:
-# once it returns — ⌃D, prefix d, or the session's own /exit (fleet-sidebar.py
-# solo_ended) — the terminal is told where the session is and how to come back
-# (fleet-topbar.py goodbye). Any other layout, or the server gone: nothing.
-solo_goodbye() {
-  [ "$(T show-options -gqv @fleet_layout 2>/dev/null)" = solo ] || return 0
-  python3 "${SHADOW:-$BIN}/fleet-topbar.py" goodbye "node=$(T show-options -gqv @fleet_view_node 2>/dev/null)" 2>/dev/null || :
 }
 # write_conf — conf/tmux-shell.conf (the shell's server) and conf/tmux-shell-stage.conf
 # (the stage's, issue #1759) with the paths filled + the environment
