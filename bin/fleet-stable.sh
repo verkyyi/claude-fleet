@@ -46,6 +46,12 @@
 #               no green run = refused. --force moves past it and logs one line,
 #               like gate 4. A target whose tree has no such workflow has no BSD
 #               half to wait for and passes.
+#            6. a tree that ships the machine updater (bin/fleet-node-update.py,
+#               issue #2334) carries a release.json its one validator accepts
+#               (`fleet-node-update.py check-release`): what every managed machine
+#               installs from this release. Missing / invalid REFUSES (reason
+#               `release:`); --force moves anyway and logs, like gates 4 and 5. A
+#               tree without the updater has nothing to declare and passes.
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
 #          loser's push is rejected and nothing is overwritten.
@@ -63,7 +69,7 @@
 #   show  0 tag read (CURRENT/BEHIND/OFFTRUNK) · 1 NONE · 2 UNKNOWN / usage
 #   move  0 moved (or already there, or dry-run passed) · 2 usage / read error
 #         3 refused (not on trunk / backward / CI not green / oldcfg red / macos not
-#           green) · 4 push failed
+#           green / release.json missing or invalid) · 4 push failed
 #           (lease lost to a concurrent move, or no push rights)
 set -u
 
@@ -180,6 +186,22 @@ force_log() {   # force_log <old> <new> <gate> <why> <what was forced past>
   printf '%s: FORCED past %s — one line in %s\n' "$3" "$5" "$_log" >&2
 }
 
+# 6. A tree that ships the machine updater declares what a managed machine runs
+# (issue #2334): release.json, checked by the updater's own validator.
+release_gate() {   # release_gate <old> <new>
+  git -C "$dir" cat-file -e "$2:bin/fleet-node-update.py" 2>/dev/null || return 0
+  if _rj=$(git -C "$dir" show "$2:release.json" 2>/dev/null) && [ -n "$_rj" ]; then
+    if _why=$(printf '%s\n' "$_rj" | python3 "$BIN_DIR/fleet-node-update.py" check-release - 2>&1 >/dev/null); then
+      printf 'release: %s carries a valid release.json\n' "$(short "$2")"; return 0
+    fi
+    _why="$(short "$2"): ${_why:-release.json could not be checked}"
+  else
+    _why="$(short "$2") ships bin/fleet-node-update.py but no release.json — a managed machine cannot tell what to install"
+  fi
+  if [ "$force" -eq 1 ]; then force_log "$1" "$2" release "$_why" "release.json"; return 0; fi
+  refuse "release: $_why — fix it (docs/MANAGED-NODE.md §7), or --force to move anyway (logged)"
+}
+
 # 4. An old session of the current stable, run on the target (issue #2075): the
 # replay's findings are printed as they came.
 oldcfg_log() { force_log "$1" "$2" oldcfg "$3" "the replay"; }
@@ -282,6 +304,7 @@ do_move() {
   if [ "$total" -eq 0 ] && [ "$allow_nochecks" -ne 1 ]; then
     refuse "$(short "$new") has NO check runs (path-filtered CI?) — no evidence it is green; pick a commit CI ran on, or pass --allow-no-checks"
   fi
+  release_gate "$old" "$new"
   [ -z "$old" ] || oldcfg_gate "$old" "$new"
   macos_gate "$old" "$new" "$slug"
 

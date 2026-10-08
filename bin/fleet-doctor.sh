@@ -73,6 +73,14 @@ vge() {
     exit 0 }'
 }
 
+# `fleet doctor --machine` (issue #2334): the machine half alone — the root
+# runtime and every part release.json pins, the rows the machine updater's
+# rollback gate reads, plus one `version` line. Exit = its FAIL count.
+if [ "${1:-}" = --machine ]; then
+  printf '%sclaude-fleet doctor — machine%s\n' "$B" "$Z"
+  exec python3 "$(dirname "$0")/fleet-node-update.py" doctor
+fi
+
 printf '%sclaude-fleet doctor%s\n' "$B" "$Z"
 
 # --- per-fleet conf enumeration (shared by the optional-daemon checks below) ---
@@ -1641,6 +1649,17 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
   case "$nrc" in
     0) pass node "machine daemon com.claude-fleet.node: $nline" ;;
     1) warn node "machine daemon com.claude-fleet.node is installed but not running — $nline. launchd's KeepAlive should bring it back within seconds; if it does not: \`sudo launchctl kickstart -k system/com.claude-fleet.node\`, log /var/log/fleet-node/supervisor.log, \`fleet-node-supervisor.py status\`" ;;
+  esac
+fi
+# The machine's one updater (issue #2334): where the last tick left it. No
+# update.json (the updater never ran here) ⇒ no row. WARN, never FAIL: the
+# updater's own gate rolls a bad release back; this line only says it happened.
+_nupd="$(dirname "$0")/fleet-node-update.py"
+if [ -f "$_nupd" ] && [ -f "${FLEET_NODE_STATE:-/var/db/fleet-node}/update.json" ] && command -v python3 >/dev/null 2>&1; then
+  uline=$(python3 "$_nupd" status --check 2>/dev/null); urc=$?
+  case "$urc" in
+    0) pass update "${uline#update  } — every part: \`fleet doctor --machine\`" ;;
+    1) warn update "${uline#update  } — log /var/log/fleet-node/update.log; every part: \`fleet doctor --machine\`" ;;
   esac
 fi
 

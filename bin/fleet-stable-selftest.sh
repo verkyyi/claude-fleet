@@ -215,4 +215,25 @@ OUT=$(FLEET_STABLE_LOG="$WORK/stable-move.log" sh "$ST" move "$C11" --force --di
 eq "J: --force moves past red" 0 "$RC"; eq "J: tag at C11" "$C11" "$(tag)"; contains "J: says FORCED" "$OUT" "macos: FORCED past the BSD half (failure)"
 contains "J: the log carries macos=" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "	macos=run 16 failure"
 
+# --- K. release.json (issue #2334) ---------------------------------------------------
+# A tree that ships the machine updater must declare what a managed machine runs.
+macos_green() { printf '%s\tcompleted\tsuccess\tpush\t%s\tselftests (macOS)\n' "$1" "$2" > "$WORK/macos"; }
+green
+mkdir -p "$SEED/bin"; printf '#!/usr/bin/env python3\n' > "$SEED/bin/fleet-node-update.py"
+git -C "$SEED" add -A; git -C "$SEED" commit -qm 'updater, no release.json'; C12=$(git -C "$SEED" rev-parse HEAD); push
+macos_green "$C12" 21
+run move "$C12"
+eq "K: the updater without release.json is refused" 3 "$RC"; contains "K: reason prefixed release:" "$OUT" "REFUSED — release:"
+contains "K: says what is missing" "$OUT" "no release.json"; eq "K: tag still C11" "$C11" "$(tag)"
+printf '{"schema": 2}\n' > "$SEED/release.json"
+git -C "$SEED" add -A; git -C "$SEED" commit -qm 'bad release.json'; C13=$(git -C "$SEED" rev-parse HEAD); push
+macos_green "$C13" 22
+run move "$C13"
+eq "K: an invalid release.json is refused" 3 "$RC"; contains "K: names the fault" "$OUT" "schema must be 1"
+cp "$BIN/../release.json" "$SEED/release.json"
+git -C "$SEED" add -A; git -C "$SEED" commit -qm 'release.json'; C14=$(git -C "$SEED" rev-parse HEAD); push
+macos_green "$C14" 23
+run move "$C14"
+eq "K: a valid release.json moves" 0 "$RC"; eq "K: tag at C14" "$C14" "$(tag)"; contains "K: says valid" "$OUT" "carries a valid release.json"
+
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"

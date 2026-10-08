@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "note": "What a managed machine runs at this commit (issue #2334): every part, one version. The hub signs this file with the tree (C7); bin/fleet-node-update.py installs each part from the release's artifacts; fleet-stable.sh move refuses a target without a valid one. Bump a version here and drop its artifact into the hub's CCQUOTA_FLEET_RELEASE_ARTIFACTS before moving stable. docs/MANAGED-NODE.md §7.",
+  "components": {
+    "ccquota": {"artifact": "ccquota-{os}-{arch}"},
+    "claude": {"version": "2.1.293", "artifact": "claude-{version}-{os}-{arch}"},
+    "codex": {"version": "0.154.0", "artifact": "codex-{version}-{os}-{arch}"},
+    "tmux": {"version": "3.7c", "artifact": "tmux-{version}-{os}-{arch}", "lock": "conf/vendor-tmux.lock"},
+    "supervisor": {"script": "bin/fleet-node-supervisor.py"}
+  }
+}
