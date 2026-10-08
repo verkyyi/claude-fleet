@@ -370,3 +370,65 @@ func TestReleaseTwoReplicasOneVolume(t *testing.T) {
 		t.Error("the served build was pruned")
 	}
 }
+
+// claude-fleet#2398: production's layout — the pinned installers under
+// pinned/ on the release volume itself (CCQUOTA_FLEET_RELEASE_DIR=/releases,
+// CCQUOTA_FLEET_RELEASE_ARTIFACTS=/releases/pinned). A stable built after they
+// land carries all three release.json names; a release already built is never
+// rebuilt (they reach the NEXT stable move, not the one on disk); prune never
+// touches pinned/.
+func TestReleasePinnedArtifactsOnTheReleaseVolume(t *testing.T) {
+	r := newReleaseRig(t)
+	vol := t.TempDir()
+	pinned := filepath.Join(vol, "pinned")
+	must(t, os.MkdirAll(pinned, 0o755))
+	r.rs.Dir, r.rs.ArtifactsDir = vol, pinned
+
+	// a release built before the files land: no installers, and it stays so
+	files := map[string][]byte{"bin/x": []byte("x")}
+	must(t, r.rs.publish(shaB, files, r.rs.artifacts(), time.Now().Add(-time.Hour)))
+
+	names := []string{"claude-2.1.293-darwin-arm64", "codex-0.154.0-darwin-arm64", "tmux-3.7c-darwin-arm64"}
+	for _, n := range names {
+		must(t, os.WriteFile(filepath.Join(pinned, n), []byte(n), 0o755))
+	}
+	must(t, r.rs.Source.Refresh(context.Background())) // stable = shaA
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	must(t, r.rs.Ensure(ctx, shaA))
+	must(t, r.rs.Ensure(ctx, shaB)) // on disk: not rebuilt
+
+	have := func(sha string) map[string]bool {
+		resp, body := getBody(t, r.hub.URL+release.Path+sha)
+		if resp.StatusCode != 200 {
+			t.Fatalf("GET %s: %d %s", sha[:7], resp.StatusCode, body)
+		}
+		var m release.Manifest
+		must(t, json.Unmarshal([]byte(body), &m))
+		out := map[string]bool{}
+		for _, a := range m.Artifacts {
+			out[a.Name] = true
+		}
+		return out
+	}
+	a, b := have(shaA), have(shaB)
+	for _, n := range names {
+		if !a[n] {
+			t.Errorf("stable %s lacks %s: %v", shaA[:7], n, a)
+		}
+		if b[n] {
+			t.Errorf("release %s, built before the files landed, was rebuilt with %s", shaB[:7], n)
+		}
+	}
+
+	r.rs.Keep = 1
+	r.rs.prune() // shaB goes, stable and pinned/ stay
+	if r.rs.Has(shaB) || !r.rs.Has(shaA) {
+		t.Errorf("prune: shaB kept=%v shaA kept=%v", r.rs.Has(shaB), r.rs.Has(shaA))
+	}
+	for _, n := range names {
+		if _, err := os.Stat(filepath.Join(pinned, n)); err != nil {
+			t.Errorf("prune touched pinned/%s: %v", n, err)
+		}
+	}
+}
