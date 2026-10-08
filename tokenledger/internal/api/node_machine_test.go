@@ -516,3 +516,52 @@ func TestMachineAgentRunsEachLoginAsItself(t *testing.T) {
 		return false
 	})
 }
+
+// claude-fleet#2433: a login on a machine link is judged on compute exactly as
+// its own link would be — its beat's explicit off plus a fresh ok probe stays
+// 只协调 while fleet.compute_auto is off and opens by policy when it is on; a
+// login with no probe stays off either way. The link itself never runs.
+func TestMachineLinkLoginComputeFollowsItsProbe(t *testing.T) {
+	h, n := machineRig(t)
+	now := time.Now()
+	off := false
+	probe := &control.NodeProbe{Loc: "US", Anthropic: "reachable", OpenAI: "reachable", TS: now.Add(-23 * time.Hour), Verdict: control.ProbeOK}
+	n.beat("alpha", control.Heartbeat{Hostname: "m4", OSUser: "alpha", NCPU: 10, ObservedAt: now, Compute: &off, Probe: probe})
+	n.beat("beta", control.Heartbeat{Hostname: "m4", OSUser: "beta", NCPU: 10, ObservedAt: now, Compute: &off})
+	waitFor(t, 3*time.Second, "alpha's beat with its probe recorded", func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_alpha", time.Now())
+		hb2, _, _ := h.srv.nodeStatusOf("ep_beta", time.Now())
+		return hb.Probe != nil && hb.Compute != nil && hb2.Compute != nil
+	})
+	verdict := func(ep string, settings map[string]string) computeVerdict {
+		hb, _, _ := h.srv.nodeStatusOf(ep, time.Now())
+		return h.srv.computeOf(ep, hb, settings, time.Now())
+	}
+	if cv := verdict("ep_alpha", nil); !cv.Off || cv.Why != excludedComputeOff || cv.Probe == nil || cv.Probe.Verdict != control.ProbeOK {
+		t.Fatalf("alpha, compute_auto off: %+v; want 只协调 with its ok probe carried", cv)
+	}
+	auto := map[string]string{ComputeAutoKey: "on"}
+	if cv := verdict("ep_alpha", auto); cv.Off || !cv.Auto {
+		t.Fatalf("alpha, compute_auto on: %+v; want opened by policy", cv)
+	}
+	if cv := verdict("ep_beta", auto); !cv.Off || cv.Why != excludedComputeOff {
+		t.Fatalf("beta (no probe), compute_auto on: %+v; want 只协调", cv)
+	}
+	if cv := verdict("ep_mach", auto); !cv.Off {
+		t.Fatalf("the machine link with compute_auto on: %+v; want never a place to run", cv)
+	}
+	// The same beat on alpha's own websocket would be judged the same.
+	want := decideCompute(false, false, probe, true, time.Now())
+	if got := verdict("ep_alpha", auto); got.Off != want.Off || got.Auto != want.Auto || got.Why != want.Why {
+		t.Fatalf("machine-link verdict %+v != plain-link rule %+v", got, want)
+	}
+	// And the roster says it the way placement reads it.
+	if err := h.srv.Store.SetFleetSetting(ComputeAutoKey, "on", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range roster(t, h).Nodes {
+		if v.EndpointID == "ep_alpha" && (v.ComputeOff || !v.ComputeAuto || v.Probe == nil) {
+			t.Fatalf("alpha's roster row = %+v; want compute_auto, probe carried", v)
+		}
+	}
+}

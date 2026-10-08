@@ -95,3 +95,60 @@ func TestProbeOnce(t *testing.T) {
 		t.Fatal("a day-old probe is due again")
 	}
 }
+
+// claude-fleet#2433: a login served by `ccquota agent --machine` beats the same
+// compute word and probe its own agent did. m4's logins/<login>.env names no
+// FLEET_CONF_DIR, so the tenant falls back to the login's own conf dir — the
+// files fleet-credsep-launch.py's agent branch read too, node.env a symlink into
+// the root-owned credential store (root follows it; the login could not).
+func TestMachineTenantBeatsComputeAndProbeLikeItsOwnAgent(t *testing.T) {
+	home, store := t.TempDir(), t.TempDir()
+	conf := filepath.Join(home, ".config", "claude-fleet")
+	if err := os.MkdirAll(conf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stored := filepath.Join(store, "node.env")
+	os.WriteFile(stored, []byte("CCQUOTA_TOKEN=x\nCCQUOTA_FLEET=1\nCCQUOTA_FLEET_COMPUTE=0\n"), 0o600)
+	if err := os.Symlink(stored, filepath.Join(conf, "node.env")); err != nil {
+		t.Fatal(err)
+	}
+	ts := time.Now().UTC().Add(-23 * time.Hour).Truncate(time.Second)
+	os.WriteFile(filepath.Join(conf, "node-probe.json"), []byte(`{"loc":"US","anthropic":"reachable","openai":"reachable","ts":"`+
+		ts.Format(time.RFC3339)+`","verdict":"ok"}`), 0o600)
+	old := fleetControlCommand
+	fleetControlCommand = func(context.Context, string, []byte) ([]byte, error) { return []byte(`{"result":{}}`), nil }
+	t.Cleanup(func() { fleetControlCommand = old })
+
+	build := func(ra *RunAs) *Agent {
+		a, err := New(Config{HubURL: "http://hub.invalid", Token: "x", Home: home, StateDir: t.TempDir(),
+			SessionsDir: t.TempDir(), Fleet: true, FleetComputeOff: true, RunAs: ra})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	plain := build(nil)
+	tenant := build(&RunAs{Login: "verkyyi", UID: 501, GID: 20, Home: home})
+	if tenant.cfg.FleetNodeEnvPath != filepath.Join(conf, "node.env") || tenant.cfg.FleetProbePath != filepath.Join(conf, "node-probe.json") ||
+		tenant.cfg.FleetNodeEnvPath != plain.cfg.FleetNodeEnvPath || tenant.cfg.FleetProbePath != plain.cfg.FleetProbePath {
+		t.Fatalf("tenant reads %q / %q; its own agent %q / %q", tenant.cfg.FleetNodeEnvPath, tenant.cfg.FleetProbePath,
+			plain.cfg.FleetNodeEnvPath, plain.cfg.FleetProbePath)
+	}
+	for name, a := range map[string]*Agent{"own agent": plain, "machine tenant": tenant} {
+		hb := a.nodeHeartbeat(context.Background(), &fleetProbe{})
+		if hb.Compute == nil || *hb.Compute {
+			t.Fatalf("%s: beat compute %v; want an explicit off (node.env says 0)", name, hb.Compute)
+		}
+		if hb.Probe == nil || hb.Probe.Verdict != "ok" || hb.Probe.Loc != "US" || !hb.Probe.TS.Equal(ts) {
+			t.Fatalf("%s: beat probe %+v; want the login's ok probe of %s", name, hb.Probe, ts)
+		}
+		if c := a.computeClaim(); c == nil || *c {
+			t.Fatalf("%s: hello claim %v; want false", name, c)
+		}
+	}
+	// `fleet node compute on` (root writing the store's copy) reaches both live.
+	os.WriteFile(stored, []byte("CCQUOTA_TOKEN=x\nCCQUOTA_FLEET=1\nCCQUOTA_FLEET_COMPUTE=1\n"), 0o600)
+	if hb := tenant.nodeHeartbeat(context.Background(), &fleetProbe{}); hb.Compute == nil || !*hb.Compute {
+		t.Fatalf("tenant after compute on: beat compute %v", hb.Compute)
+	}
+}
