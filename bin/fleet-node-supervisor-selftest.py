@@ -12,7 +12,12 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
   D  the supervisor restarted (kill -9) keeps its state and ADOPTS a live child
   E  status: one line per item; --check 2 not installed · 0 ok · 1 stale/down
   F  root runs only a root-owned, non-writable script; the built-in table's shape
-  G  the default (no table) is machine-level only: collect / base-sync deferred
+  G  the default (no table) machine half: diskguard / memguard / orphans
+  H  the account half (#2332): the table is the launchd templates; a task runs as
+     its account (uid, HOME, USER, FLEET_CONF_DIR, its own log); one account's
+     failure never touches another's; `account adopt` boots the old services out
+     into the attic and `account release` puts them back, one command each; a
+     service that will not unload puts every one back; expected.json narrows who runs
 """
 import importlib.util
 import json
@@ -347,10 +352,9 @@ class G_DefaultTable(Sandbox):
                 if k.startswith("FLEET_NODE_"):
                     del os.environ[k]
         names = [x["name"] for x in t["tasks"]]
-        self.assertEqual(names, ["diskguard", "memguard", "orphans", "collect", "base-sync"])
+        self.assertEqual(names, ["diskguard", "memguard", "orphans"])
         by = {x["name"]: x for x in t["tasks"]}
-        self.assertEqual(by["collect"]["scope"], "account")
-        self.assertEqual(by["base-sync"]["scope"], "account")
+        self.assertIsNone(t["account"], "the account table is the runtime's templates")
         self.assertEqual(by["diskguard"]["env"]["FLEET_ORPHAN_CPU_PCT"], "0", "orphans would run twice")
         self.assertEqual(by["orphans"]["env"]["FLEET_ORPHAN_ALL_USERS"], "1")
         for x in t["tasks"]:
@@ -363,7 +367,6 @@ class G_DefaultTable(Sandbox):
         r = subprocess.run([sys.executable, SUP, "status"], env=e, capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("not installed", r.stdout)
-        self.assertIn("deferred", r.stdout)
 
     def test_all_users_orphans(self):
         dg = open(os.path.join(BIN, "fleet-diskguard.sh")).read()
@@ -375,6 +378,236 @@ class G_DefaultTable(Sandbox):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("syntax error", r.stderr)
+
+
+FAKE_LC = """#!/bin/bash
+d="$FAKE_LC"; echo "$*" >> "$d/log"
+case "$1" in
+  bootout) l="${2##*/}"; [ -e "$d/stuck/$l" ] && exit 5; rm -f "$d/loaded/$l" ;;
+  bootstrap) l=$(basename "$3" .plist); touch "$d/loaded/$l" ;;
+  print) [ -e "$d/loaded/${2##*/}" ] ;;
+esac
+"""
+
+
+class H_Accounts(Sandbox):
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.lc = os.path.join(self.d, "lc")
+        for x in ("loaded", "stuck"):
+            os.makedirs(os.path.join(self.lc, x))
+        lcs = os.path.join(self.d, "launchctl")
+        with open(lcs, "w") as f:
+            f.write(FAKE_LC)
+        os.chmod(lcs, 0o755)
+        pw = {}
+        for who in ("alice", "bob"):
+            home = os.path.join(self.d, "Users", who)
+            os.makedirs(os.path.join(home, ".claude", "fleet", "bin"))
+            os.makedirs(os.path.join(home, "Library", "LaunchAgents"))
+            pw[who] = {"uid": os.getuid(), "gid": os.getgid(), "home": home}
+        with open(os.path.join(self.d, "passwd.json"), "w") as f:
+            json.dump(pw, f)
+        self.env.update({"FLEET_NODE_PASSWD": os.path.join(self.d, "passwd.json"),
+                         "FLEET_NODE_LAUNCHCTL": lcs, "FAKE_LC": self.lc})
+
+    def home(self, who):
+        return os.path.join(self.d, "Users", who)
+
+    def acct_script(self, who, name, body):
+        p = os.path.join(self.home(who), ".claude", "fleet", "bin", name)
+        with open(p, "w") as f:
+            f.write("#!/bin/bash\n" + body)
+        os.chmod(p, 0o755)
+
+    def plist(self, path, label):
+        import plistlib
+        with open(path, "wb") as f:
+            plistlib.dump({"Label": label, "ProgramArguments": ["/bin/true"]}, f)
+        open(os.path.join(self.lc, "loaded", label), "w").close()
+
+    def acct_table(self, *units):
+        with open(self.env["FLEET_NODE_TABLE"], "w") as f:
+            json.dump({"children": [], "tasks": [], "account": list(units)}, f)
+
+    def lclog(self):
+        try:
+            return open(os.path.join(self.lc, "log")).read()
+        except IOError:
+            return ""
+
+    def test_table_is_the_templates(self):
+        os.makedirs(os.path.join(self.d, "rt"))
+        os.symlink(os.path.join(os.path.dirname(BIN), "launchd"), os.path.join(self.d, "rt", "launchd"))
+        os.environ.update({k: v for k, v in self.env.items() if k.startswith("FLEET_NODE_")})
+        try:
+            units = {u["name"]: u for u in fns.account_units(fns.Paths())}
+        finally:
+            for k in list(os.environ):
+                if k.startswith("FLEET_NODE_"):
+                    del os.environ[k]
+        import glob as g
+        tmpl = set(os.path.basename(x)[len("com.claude-fleet."):-len(".plist.tmpl")]
+                   for x in g.glob(os.path.join(os.path.dirname(BIN), "launchd", "*.plist.tmpl")))
+        self.assertEqual(set(units), tmpl - {"memguard"}, "every template but the machine's is an account unit")
+        for need in ("dispatch", "issue-bridge", "pr-refresh", "ledger-watch", "quotawatch", "sleep", "cleanup",
+                     "worktree-autoclean", "spinner", "webhook", "collect", "install-sync", "base-sync"):
+            self.assertIn(need, units)
+        self.assertTrue(units["spinner"].get("keepalive") and units["webhook"].get("keepalive"))
+        self.assertEqual(units["issue-bridge"]["every"], 15)
+        self.assertEqual(units["install-sync"]["every"], 1800)
+        self.assertEqual(units["worktree-autoclean"]["every"], 3600)
+        self.assertEqual(units["spinner"]["env"].get("SPIN_INTERVAL"), "0.12")
+        self.assertEqual(units["diskguard"]["env"]["FLEET_ORPHAN_CPU_PCT"], "0", "orphans would run twice")
+        e = fns.account_entry(units["dispatch"], "alice", (501, 20, "/Users/alice"), "/opt/homebrew")
+        self.assertEqual(e["script"], "/Users/alice/.claude/fleet/bin/fleet-dispatch.sh")
+        self.assertTrue(e["env"]["PATH"].startswith("/Users/alice/.local/bin:/opt/homebrew/bin"))
+        self.assertEqual(e["env"]["FLEET_CONF_DIR"], "/Users/alice/.config/claude-fleet")
+        self.assertEqual(e["cmd"][4], "/dev/null")
+        self.assertEqual(e["cmd"][5], "/Users/alice/.claude/fleet/logs/dispatch.launchd.log")
+        self.assertNotIn("__HOME__", json.dumps(e))
+
+    def test_runs_as_account_and_isolated(self):
+        self.acct_script("alice", "probe.sh",
+                         'echo "uid=$(id -u) home=$HOME user=$USER conf=$FLEET_CONF_DIR pwd=$(pwd -P) '
+                         'path=$PATH acct=$FLEET_NODE_ACCOUNT"\n')
+        self.acct_script("bob", "probe.sh", "echo bob-broke >&2; exit 4\n")
+        self.acct_script("alice", "keep.sh", "exec sleep 300\n")
+        self.acct_table(
+            {"name": "probe", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/probe.sh"], "every": 0.2,
+             "env": {"PATH": "__HOME__/.local/bin:/usr/bin:/bin"},
+             "out": "__HOME__/probe.out", "err": "__HOME__/probe.err"},
+            {"name": "keep", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/keep.sh"], "keepalive": True})
+        for who in ("alice", "bob"):
+            r = self.run_sup("account", "adopt", who)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        self.start()
+        out = os.path.join(self.home("alice"), "probe.out")
+        self.assertTrue(until(10, lambda: (self.task("alice/probe").get("runs") or 0) >= 3
+                              and (self.task("bob/probe").get("runs") or 0) >= 3))
+        line = open(out).read().splitlines()[-1]
+        h = os.path.realpath(self.home("alice"))
+        self.assertIn("uid=%d " % os.getuid(), line)
+        self.assertIn("home=%s " % self.home("alice"), line)
+        self.assertIn("user=alice ", line)
+        self.assertIn("conf=%s/.config/claude-fleet " % self.home("alice"), line)
+        self.assertIn("pwd=%s " % h, line)
+        self.assertIn("path=%s/.local/bin:" % self.home("alice"), line)
+        self.assertIn("acct=alice", line)
+        self.assertIn("bob-broke", open(os.path.join(self.home("bob"), "probe.err")).read())
+        # one account's failure is its own
+        self.assertEqual(self.task("bob/probe")["rc"], 4)
+        self.assertEqual(self.task("alice/probe")["result"], "ok")
+        self.assertTrue(until(5, lambda: self.child("alice/keep").get("pid")), "alice's KeepAlive unit never started")
+        self.assertEqual(self.child("bob/keep").get("status"), "missing %s/.claude/fleet/bin/keep.sh" % self.home("bob"))
+        st = self.run_sup("status").stdout
+        self.assertIn("account alice             2/2 ok", st)
+        self.assertIn("account bob", st)
+        self.assertIn("probe failed", st)
+        # no root-owned log in a login's directory: the task log is the daemon's own
+        self.assertTrue(os.path.exists(os.path.join(self.d, "log", "accounts", "alice.log")))
+        # release: our copies stop, the account is no longer run
+        kpid = self.child("alice/keep")["pid"]
+        r = self.run_sup("account", "release", "alice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(fns.pid_alive(kpid), "release left the account's KeepAlive unit running")
+        runs = self.task("alice/probe")["runs"]
+        time.sleep(0.8)
+        self.assertLessEqual(self.task("alice/probe")["runs"], runs + 1, "a released account still runs")
+        self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 1)
+        self.assertEqual(self.run_sup("account", "manages", "bob").returncode, 0)
+
+    def test_needs_root_for_another_uid(self):
+        pw = json.load(open(self.env["FLEET_NODE_PASSWD"]))
+        pw["carol"] = {"uid": os.getuid() + 1, "gid": os.getgid(), "home": self.home("alice")}
+        pw["toor"] = {"uid": 0, "gid": 0, "home": self.home("alice")}
+        json.dump(pw, open(self.env["FLEET_NODE_PASSWD"], "w"))
+        self.acct_script("alice", "p.sh", "exit 0\n")
+        self.acct_table({"name": "p", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/p.sh"], "every": 60})
+        for who in ("carol", "toor"):
+            self.assertEqual(self.run_sup("account", "adopt", who).returncode, 0)
+        self.assertEqual(self.run_sup("tick").returncode, 0)
+        self.assertTrue(self.task("carol/p")["result"].startswith("needs root"))
+        self.assertEqual(self.task("toor/p")["result"], "refused — uid 0")
+        self.assertFalse(self.task("carol/p").get("runs"))
+
+    def test_adopt_moves_old_services_and_release_restores(self):
+        la = os.path.join(self.home("alice"), "Library", "LaunchAgents")
+        dd = self.env["FLEET_NODE_DAEMON_DIR"]
+        self.plist(os.path.join(la, "com.claude-fleet.dispatch.plist"), "com.claude-fleet.dispatch")
+        self.plist(os.path.join(la, "com.claude-fleet.spinner.plist"), "com.claude-fleet.spinner")
+        self.plist(os.path.join(dd, "com.claude-fleet.alice.collect.plist"), "com.claude-fleet.alice.collect")
+        self.plist(os.path.join(dd, "com.claude-fleet.bob.collect.plist"), "com.claude-fleet.bob.collect")
+        self.plist(os.path.join(dd, "com.claude-fleet.node.plist"), "com.claude-fleet.node")
+        os.chmod(os.path.join(la, "com.claude-fleet.spinner.plist"), 0o640)
+        self.acct_table()
+        self.assertIn("would boot out", self.run_sup("account", "adopt", "alice", "--dry-run").stdout)
+        self.assertTrue(os.path.exists(os.path.join(la, "com.claude-fleet.dispatch.plist")))
+        r = self.run_sup("account", "adopt", "alice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("3 service(s)", r.stdout)
+        self.assertEqual(sorted(os.listdir(la)), [], "a per-account LaunchAgent is still there")
+        self.assertFalse(os.path.exists(os.path.join(dd, "com.claude-fleet.alice.collect.plist")))
+        self.assertTrue(os.path.exists(os.path.join(dd, "com.claude-fleet.bob.collect.plist")), "bob's was touched")
+        self.assertTrue(os.path.exists(os.path.join(dd, "com.claude-fleet.node.plist")))
+        log = self.lclog()
+        self.assertIn("bootout gui/%d/com.claude-fleet.dispatch" % os.getuid(), log)
+        self.assertIn("bootout system/com.claude-fleet.alice.collect", log)
+        self.assertNotIn("bob", log)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.lc, "loaded"))),
+                         ["com.claude-fleet.bob.collect", "com.claude-fleet.node"])
+        self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 0)
+        lst = self.run_sup("attic", "list").stdout
+        self.assertEqual(lst.count("(account alice, kept)"), 3, lst)
+        # kept past the attic's days: a purge never takes an adopted account's way back
+        idx_p = os.path.join(self.d, "db", "attic", "index.json")
+        idx = json.load(open(idx_p))
+        for e in idx:
+            e["moved"] -= 30 * 86400
+        json.dump(idx, open(idx_p, "w"))
+        self.assertIn("purged 0", self.run_sup("attic", "purge").stdout)
+        # one command back
+        r = self.run_sup("account", "release", "alice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("3 service(s) put back", r.stdout)
+        self.assertEqual(sorted(os.listdir(la)), ["com.claude-fleet.dispatch.plist", "com.claude-fleet.spinner.plist"])
+        self.assertEqual(os.stat(os.path.join(la, "com.claude-fleet.spinner.plist")).st_mode & 0o777, 0o640)
+        self.assertTrue(os.path.exists(os.path.join(dd, "com.claude-fleet.alice.collect.plist")))
+        self.assertIn("bootstrap system %s" % os.path.join(dd, "com.claude-fleet.alice.collect.plist"), self.lclog())
+        self.assertIn("com.claude-fleet.dispatch", os.listdir(os.path.join(self.lc, "loaded")))
+        self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 1)
+        self.assertEqual(self.run_sup("attic", "list").stdout, "")
+
+    def test_stuck_service_puts_everything_back(self):
+        la = os.path.join(self.home("alice"), "Library", "LaunchAgents")
+        for u in ("a-cleanup", "b-dispatch", "c-sleep"):
+            self.plist(os.path.join(la, "com.claude-fleet.%s.plist" % u), "com.claude-fleet.%s" % u)
+        open(os.path.join(self.lc, "stuck", "com.claude-fleet.b-dispatch"), "w").close()
+        self.acct_table()
+        r = self.run_sup("account", "adopt", "alice")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("did not unload", r.stderr)
+        self.assertEqual(len(os.listdir(la)), 3, "a half migration left the account without services")
+        self.assertEqual(len(os.listdir(os.path.join(self.lc, "loaded"))), 3, "a booted-out service was not reloaded")
+        self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 1)
+        self.assertEqual(self.run_sup("attic", "list").stdout, "")
+
+    def test_expected_accounts_narrow(self):
+        self.acct_script("alice", "p.sh", "exit 0\n")
+        self.acct_script("bob", "p.sh", "exit 0\n")
+        self.acct_table({"name": "p", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/p.sh"], "every": 60})
+        for who in ("alice", "bob"):
+            self.run_sup("account", "adopt", who)
+        with open(os.path.join(self.d, "db", "expected.json"), "w") as f:
+            json.dump({"accounts": ["alice", {"name": "dave"}]}, f)
+        self.assertEqual(self.run_sup("tick").returncode, 0)
+        self.assertEqual(self.task("alice/p")["result"], "ok")
+        self.assertFalse(self.task("bob/p"), "an account the expected state drops still ran")
+        self.assertIn("not in expected.json", self.run_sup("status").stdout)
+
+    def test_adopt_refuses_unknown(self):
+        r = self.run_sup("account", "adopt", "nobody-here")
+        self.assertEqual(r.returncode, 2)
 
 
 if __name__ == "__main__":

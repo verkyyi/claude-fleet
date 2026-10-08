@@ -572,13 +572,26 @@ Do not install from memory: read the doc and work from it.
   root, KeepAlive, written by its own `install` — never a `launchd/*.tmpl`, which
   every login would install) keeps its children up (the shared credential proxy,
   C5's node program; backoff 1 s doubling to 60 s) and runs the machine task table
-  once — each task one copy, under `locks/<task>.lock`; account tasks (collect,
-  base-sync) are C4's. It runs only root-owned code from the root runtime, moves
+  once — each task one copy, under `locks/<task>.lock`; account tasks are the
+  account half below. It runs only root-owned code from the root runtime, moves
   fleet plist leftovers to `/var/db/fleet-node/attic/` (7 days, `attic restore`),
   only REPORTS an unexpected live plist, and adopts a live child after a restart
   (`state.json`). A child whose old LaunchDaemon is still installed stays
   launchd's (`legacy`). `status` is one line per item; the doctor's `node` row
   reads `status --check` (not installed ⇒ no row). BREAK-IT `node-supervisor-dead`.
+  **The account half is the same daemon** (issue #2332, C4): ONE account table —
+  every `launchd/*.plist.tmpl` of the runtime but the machine's (memguard), each
+  with its own interval / environment / log paths, a KeepAlive one (spinner,
+  webhook, cred-proxy) as a child — run for every login `account adopt <login>`
+  took over, DEMOTED to it (initgroups/setgid/setuid, its HOME / USER / PATH /
+  `FLEET_CONF_DIR` / TMPDIR; the log opened by the demoted process, never root).
+  adopt boots the login's own LaunchAgents / LaunchDaemons out into the attic
+  (kept, never purged) and puts every one back if one will not unload;
+  `account release <login>` is the one-command way back. `accounts.json` is the
+  one list: `fleet_node_manages` (`fleet-daemon-lib.sh`) reads it, and a managed
+  login's `fleet-install-apply.sh` renders no plist, its probe asks the daemon.
+  expected.json's `accounts` narrows who runs. No accounts.json ⇒ byte for byte
+  as before. BREAK-IT `account-adopt-stuck`.
 - **A machine has three words — online, 维护中, lost — and only the middle one is
   the operator's** (issue #1427). `maintenance` is the fleet setting
   `fleet.node_maintenance.<machine>` on the hub (`bin/fleet-node-maintenance.sh

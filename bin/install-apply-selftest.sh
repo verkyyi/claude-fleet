@@ -101,7 +101,7 @@ export FLEET_LAUNCHD_AGENTS_DIR="$H/Library/LaunchAgents" FLEET_INSTALL_DAEMON_D
 export FLEET_SYSTEMD_USER_DIR="$H/.config/systemd/user" FLEET_INSTALL_PLATFORM=launchd
 export FLEET_INSTALL_LAUNCHCTL="$WORK/shim/launchctl" FLEET_INSTALL_SYSTEMCTL="$WORK/shim/systemctl"
 export FLEET_INSTALL_CLAUDE="$WORK/shim/claude" FLEET_INSTALL_BREW_PREFIX=/opt/homebrew FLEET_INSTALL_SUDO=''
-export FLEET_INSTALL_LOGIN=tester
+export FLEET_INSTALL_LOGIN=tester FLEET_NODE_STATE="$WORK/fleet-node"
 mkdir -p "$H/.config/claude-fleet/codex" "$H/codex account"
 python3 - "$H/.config/claude-fleet/codex/accounts.json" "$H/codex account" <<'PY'
 import json, pathlib, sys
@@ -516,6 +516,22 @@ run_ap --from "$P1" --to "$P2"
 eq 'P without the flag -> exit 0' 0 "$RC"
 contains 'P without the flag adds the unit' "$OUT" 'daemons: added pnew'
 ok 'P without the flag bootstraps it' "grep -qx 'launchctl bootstrap gui/$(id -u) $H/Library/LaunchAgents/com.claude-fleet.pnew.plist' '$LOG'"
+
+# --- P2. a login the machine daemon manages (issue #2332) ------------------------------
+# accounts.json names it: no per-login plist is rendered or loaded; every other
+# login (and every machine with no accounts.json — every leg above) is unchanged.
+rm -f "$H/Library/LaunchAgents/com.claude-fleet.pnew.plist"
+mkdir -p "$WORK/fleet-node"
+printf '{"tester": {"managed": true, "since": 1}}\n' > "$WORK/fleet-node/accounts.json"
+run_ap --from "$P1" --to "$P2"
+eq 'P2 managed -> exit 0' 0 "$RC"
+contains 'P2 managed: daemons skipped, says why' "$OUT" "daemons: skip — tester's tasks are run by com.claude-fleet.node"
+ok 'P2 managed: no launchctl' "! grep -q '^launchctl' '$LOG'"
+ok 'P2 managed: no plist written' "[ ! -f '$H/Library/LaunchAgents/com.claude-fleet.pnew.plist' ]"
+printf '{"tester": {"managed": false}, "other": {"managed": true}}\n' > "$WORK/fleet-node/accounts.json"
+run_ap --from "$P1" --to "$P2"
+contains 'P2 released: the unit is added again' "$OUT" 'daemons: added pnew'
+rm -rf "$WORK/fleet-node"
 
 # --- Q. settings (issue #1558) --------------------------------------------------------
 Q0=$(git -C "$R" rev-parse HEAD)

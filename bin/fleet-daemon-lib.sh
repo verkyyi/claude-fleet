@@ -190,6 +190,24 @@ fleet_daemon_shape() {
   fi
 }
 
+# fleet_node_manages [login] — the machine daemon (com.claude-fleet.node) runs this
+# login's account tasks (issue #2332, EPIC #2329 C4): `account adopt` booted its
+# own services out and wrote it into accounts.json. Then no per-login plist is
+# rendered, loaded or probed for it. No accounts.json (every machine that is not
+# managed) ⇒ false with no process spawned — byte for byte as before.
+#   FLEET_NODE_STATE   the daemon's state dir (default /var/db/fleet-node)
+fleet_node_manages() {
+  _fnm_f="${FLEET_NODE_STATE:-/var/db/fleet-node}/accounts.json"
+  [ -r "$_fnm_f" ] || return 1
+  python3 -c 'import json, sys
+try:
+    a = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+sys.exit(0 if isinstance(a, dict) and isinstance(a.get(sys.argv[2]), dict) and a[sys.argv[2]].get("managed") else 1)' \
+    "$_fnm_f" "${1:-$(fleet_daemon_login)}" 2>/dev/null
+}
+
 # fleet_daemon_label <unit> [shape] [login] → that unit's launchd label in that
 # shape: com.claude-fleet.<unit> (gui) or com.claude-fleet.<login>.<unit>
 # (system). Shape and login default to this login's.
