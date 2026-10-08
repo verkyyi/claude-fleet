@@ -91,7 +91,9 @@
 # ~/.config/claude-fleet/hub.json (what `fleet login` remembered).
 #
 # Which rows: every session whose login is yours (os_user = `id -un`, or
-# FLEET_HUB_SESSIONS_USER; `*` = every login the hub shows you) and that has a
+# FLEET_HUB_SESSIONS_USER; `*` = every login the hub shows you — what the shell
+# takes when the hub answered over your certificate, already cut to your logins,
+# issue #2388) and that has a
 # worker_id — a row the hub could not identify is not addressable, so it is not
 # shown. The other machines' rows go into EVERY fleet's cache here; this machine's
 # own (issue #1480, EPIC #1479 C1: by fleet UUID, else by hostname + fleet name)
@@ -188,6 +190,7 @@ LP_WAIT="${FLEET_HUB_SESSIONS_WAIT:-25}"; case "$LP_WAIT" in ''|*[!0-9]*|0) LP_W
 WAIT=''      # the long poll's wait for THIS round (issue #1526); set by loop only
 LP_SENT=0    # 1 = this round's ask carried a validator AND a wait
 LAST_FETCH=1 # this round's fetch rc (0 = 200, 3 = 304)
+SCOPED=0     # 1 = this round's answer came over YOUR certificate (issue #2388)
 PIDF="$G/hubsess.pid"
 SESSIONS_NS='fleet-sessions@claude-fleet'
 SUMMARY_NS='fleet-summary@claude-fleet'   # the status bar's two summaries (#1502)
@@ -349,13 +352,15 @@ fetch() {
     done < "$lf"
   fi
   # the long poll (issue #1526): only with a validator to hold against
-  q=''; LP_SENT=0
+  q=''; LP_SENT=0; SCOPED=0
   if [ -n "$WAIT" ] && [ -n "$etag" ]; then LP_SENT=1; q="?wait=$WAIT"; fi
   st=$(cert_state)
   case "$st" in
     ok\ *)
       fetch_cert "$url" "$out" "$etag"; rc=$?
-      [ "$rc" = 4 ] || return "$rc"
+      # A certificate is always a person, never the operator: the hub has already
+      # cut the answer to the (machine, login) pairs of their accounts (FleetScope)
+      [ "$rc" = 4 ] || { SCOPED=1; return "$rc"; }
       printf 'fleet-hub-sessions: the hub refused the connection certificate %s — trying the viewer token\n' "$CERT_PUB" >&2 ;;
   esac
   if token_source >/dev/null; then
@@ -403,6 +408,17 @@ restamp() {
   [ -z "$CLIENT" ] && [ -f "$FLEET_CONF_DIR/control/hub-workers.tsv" ] && touch "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null
   hub_ok "$now"
   return 0
+}
+
+# rows_user — whose sessions this round's answer is cut to: FLEET_HUB_SESSIONS_USER,
+# else `*` for the shell when the hub answered over the person's certificate (issue
+# #2388: the hub already scoped it to their logins, and the login on a node is not
+# the name of the computer they sit at — cj's sidebar matched `id -un` against it
+# and dropped every session, the one just opened included), else `id -un`.
+rows_user() {
+  if [ -n "${FLEET_HUB_SESSIONS_USER:-}" ]; then printf '%s' "$FLEET_HUB_SESSIONS_USER"
+  elif [ -n "$CLIENT" ] && [ "$SCOPED" = 1 ]; then printf '*'
+  else id -un 2>/dev/null; fi
 }
 
 refresh() {
@@ -464,7 +480,7 @@ EOF
     return "$rc"
   fi
   now=$(date +%s)
-  map_write "$json" "$lf" "$mf" "$now" hub "${FLEET_HUB_SESSIONS_USER:-$(id -un 2>/dev/null)}"; rc=$?
+  map_write "$json" "$lf" "$mf" "$now" hub "$(rows_user)"; rc=$?
   rm -f "$json" "$lf" "$mf"
   # A cache that failed to write is not vouched for: the next fetch takes the body.
   # One that stood is the hub answering: hub_ok (#1483).
