@@ -160,7 +160,43 @@ else the row's name.
 `bin/fleet-client-layout-selftest.sh` pins the layout, the keys, a real tap on
 the line through the nested client, and the widths.
 
+## A new session in one command — `fleet claude` / `fleet codex` (issue #2264)
+
+`fleet claude [--node m4] [a first sentence…]` (or `fleet codex …`) opens a
+**HOME session** — no repo, in your home directory on a fleet machine, with that
+agent — and attaches the client onto it; the words are its first turn. It is the
+one HOME-session primitive (EPIC #2259 共同约定 2): `bin/fleet-home-session.sh`
+starts the client without attaching (its lease signs the ask), then
+`fleet-shell.sh home-session` asks `fleet-client-place.sh - home` — the hub's
+scratch + `no_repo`, which the node takes from its warm pool (#2233) or opens
+cold — and turns the stage onto the row as soon as the list has it. A placement
+that fails prints the hub's reason and attaches nothing.
+
+A newcomer gets one without asking: a client whose `fleet.conf [client]` says
+`FLEET_CLIENT_LAYOUT=solo` (what a fresh install writes) opens ONE HOME Claude
+session on its first start, with the line 「这里和本地运行 claude 一样；要在某个
+仓库里做，直接告诉我仓库名」 — `home-session.first` in the conf dir records it
+(any HOME session writes it). An existing install never sees it.
+
+`--here` is this computer instead — exactly `fleet run` below, which stays as
+the 旧写法:
+
+|                    | `fleet claude`            | `fleet claude --here` (= `fleet run claude`) |
+|--------------------|---------------------------|-----------------------------------------------|
+| runs on            | a fleet machine           | this computer                                 |
+| sees the files of  | that machine (`$HOME`)    | this computer (the current directory)         |
+| after you quit     | keeps running (reaped by its policy) | ends with the agent                |
+| from another device| can be picked up          | no                                            |
+| on the session list| yes                       | no                                            |
+
+`bin/fleet-home-session-selftest.sh` pins the dispatch, `--here` ≡ `fleet run`,
+a real `fleet codex "hi"` on a fake node (codex · `@norepo` · `$HOME` · "hi"
+submitted), and the first-session rule.
+
 ## A session on this computer — `fleet run` (issue #2136)
+
+`fleet claude|codex --here [args…]` is the same thing (issue #2264); `fleet run`
+is its older spelling.
 
 A computer with only the client runs no fleet, so a host's launchers never
 apply here. `fleet run claude|codex [args…]` is the one way to open a Claude

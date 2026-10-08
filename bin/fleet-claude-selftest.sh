@@ -272,12 +272,14 @@ ok "a cap on the fallback model itself leaves the launch alone"
 # own selftest covers that); here we pin the CALL: made by default with the fleet's
 # FLEET_MAIN and the launch cwd, skipped under FLEET_PRETRUST=0 or with no
 # FLEET_MAIN, and its stderr note names what it trusted. A fake fleet-trust.sh
-# records its argv; the real one never runs (no ~/.claude.json is touched).
+# records its argv; the real one never runs (no ~/.claude.json is touched). Its
+# `node` answers "not a trusted node" (exit 2): the #563 narrow call is pinned here;
+# the trusted node's wide form (#2282) is fleet-trust-selftest.sh J.
 TRUST_LOG="$WORK/trustlog"
 cat > "$WORK/bin/fleet-trust.sh" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$TRUST_LOG"
-case "\$1" in grant) printf '%s\n' "\$3" ;; file) echo /fake/home/.claude.json ;; esac
+case "\$1" in node) exit 2 ;; grant) printf '%s\n' "\$3" ;; file) echo /fake/home/.claude.json ;; esac
 exit 0
 EOF
 chmod +x "$WORK/bin/fleet-trust.sh"

@@ -6,8 +6,16 @@
 #   fleet-trust.sh grant --main <FLEET_MAIN> [<dir>...]   trust the base checkout,
 #                                                         plus each <dir> that is a
 #                                                         worktree OF that checkout
+#   fleet-trust.sh grant [--main <m>]... [--home] [<dir>...]
+#                                                         the trusted node's wide
+#                                                         form (issue #2282): every
+#                                                         hosted repo's checkout,
+#                                                         and the login's $HOME
 #   fleet-trust.sh check <dir>                             trusted | untrusted | unknown
 #                                                         (exit 0 / 1 / 2)
+#   fleet-trust.sh node                                    is THIS machine a trusted
+#                                                         node? `<word>\t<why>`
+#                                                         (exit 0 trusted / 1 / 2)
 #   fleet-trust.sh file                                    print the config path
 #
 # WHAT CLAUDE CODE DOES (verified on 2.1.269, the build that shipped this fix): on
@@ -43,6 +51,21 @@
 #     unattended first spawn on a fresh machine needs.
 #   * Idempotent: an already-trusted path is a no-op (no write, no output).
 #
+# THE TRUSTED NODE'S WIDE FORM (issue #2282). On a machine the hub trusts, the
+# launcher pre-trusts more of the directories the fleet ITSELF opens sessions in:
+# every hosted repo's base checkout (+ its worktrees) — `--main` repeats — and,
+# for a window the fleet opened with no repo (@norepo 1 / the orchestrator) whose
+# cwd is the login's home, `--home`: the physical $HOME, that one directory, never
+# an ancestor or any other path. Still a whitelist, still per directory.
+#   `node` is the ONE reader of "is this a trusted node": the credential proxy's
+# cached word ($FLEET_CONF_DIR/cred-proxy/trust.json — the hub's
+# fleet.node_trust.<machine> via GET /v1/node/self, or "no hub: a standalone
+# login"; the same word `fleet-cred-proxy.sh doctor` prints), at most
+# FLEET_PRETRUST_NODE_MAX_AGE seconds old (86400); a separated / shared proxy
+# (credsep.json) is asked over its control socket when the local copy has none.
+# No proxy, no word, a stale word, `untrusted`, `unknown` => not trusted: the
+# launcher then runs today's narrow grant, byte for byte. Never asks the hub.
+#
 # Output: `grant` prints each path it newly trusted, one per line (nothing when
 # nothing changed); notes go to stderr. python3 does the JSON (already a fleet
 # dependency — the collector needs it); without it, `grant` exits 2 and `check`
@@ -54,7 +77,7 @@
 # concurrent writer. Unset in production.
 set -u
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; }
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; }
 note()  { printf 'fleet-trust: %s\n' "$*" >&2; }
 
 cfg_file() {
@@ -145,6 +168,34 @@ if v is True: print("trusted"); sys.exit(0)
 print("untrusted"); sys.exit(1)
 '
 
+# node: argv conf dir, max age, cred-proxy.sh path → prints `<word>\t<why>`
+PY_NODE='
+import json, os, subprocess, sys, time
+conf, max_age, cps = sys.argv[1], int(sys.argv[2] or 86400), sys.argv[3]
+def out(word, why):
+    print("%s\t%s" % (word, why)); sys.exit({"trusted": 0, "untrusted": 1}.get(word, 2))
+try:
+    with open(os.path.join(conf, "cred-proxy", "trust.json")) as f: c = json.load(f)
+except (OSError, ValueError):
+    c = None
+if isinstance(c, dict) and c.get("trust"):
+    age = time.time() - float(c.get("ts") or 0)
+    if age <= max_age:
+        out(str(c["trust"]), "%s · cred-proxy/trust.json" % (c.get("why") or "?"))
+    stale = "cred-proxy/trust.json is %dh old (> %ds)" % (age // 3600, max_age)
+else:
+    stale = "no cred-proxy/trust.json (the credential proxy is off here?)"
+if os.path.isfile(os.path.join(conf, "credsep.json")) and os.path.isfile(cps):
+    try:
+        r = subprocess.run(["bash", cps, "status", "--json"], capture_output=True, text=True, timeout=5)
+        st = json.loads(r.stdout or "{}")
+        if st.get("trust"):
+            out(str(st["trust"]), "%s · the separated proxy" % (st.get("trust_why") or "?"))
+    except Exception:
+        pass
+out("unknown", stale)
+'
+
 cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   file) cfg_file; echo ;;
@@ -156,31 +207,88 @@ case "$cmd" in
     python3 -c "$PY_CHECK" "$(cfg_file)" "$p"
     ;;
 
+  node)
+    command -v python3 >/dev/null 2>&1 || { printf 'unknown\tno python3\n'; exit 2; }
+    python3 -I -c "$PY_NODE" "${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}" \
+      "${FLEET_PRETRUST_NODE_MAX_AGE:-86400}" "$(cd "$(dirname "$0")" && pwd)/fleet-cred-proxy.sh"
+    ;;
+
   grant)
-    main=''
+    main='' mains='' home=0
     while [ $# -gt 0 ]; do
       case "$1" in
-        --main) [ $# -ge 2 ] || { usage; exit 2; }; main="$2"; shift 2 ;;
-        --main=*) main="${1#--main=}"; shift ;;
+        --main) [ $# -ge 2 ] || { usage; exit 2; }; m="$2"; shift 2 ;;
+        --main=*) m="${1#--main=}"; shift ;;
+        --home) home=1; shift; continue ;;
         -h|--help) usage; exit 0 ;;
         --) shift; break ;;
         -*) note "unknown flag $1"; usage; exit 2 ;;
         *) break ;;
       esac
+      if [ -z "$main" ]; then main="$m"; else mains="$mains
+$m"; fi
     done
-    [ -n "$main" ] || { note "grant needs --main <FLEET_MAIN>"; usage; exit 2; }
+    [ -n "$main" ] || [ "$home" = 1 ] || { note "grant needs --main <FLEET_MAIN>"; usage; exit 2; }
     command -v python3 >/dev/null 2>&1 || { note "python3 not found — cannot edit $(cfg_file)"; exit 2; }
-    mp=$(phys "$main") || { note "refusing: --main $main is not a directory"; exit 3; }
-    [ -d "$mp/.git" ] || { note "refusing: --main $mp is not a git checkout"; exit 3; }
-    refused=0
-    targets="$mp"
+    if [ -z "$mains" ] && [ "$home" = 0 ]; then
+      # the narrow form (#563), exactly as it always ran
+      mp=$(phys "$main") || { note "refusing: --main $main is not a directory"; exit 3; }
+      [ -d "$mp/.git" ] || { note "refusing: --main $mp is not a git checkout"; exit 3; }
+      refused=0
+      targets="$mp"
+      for d in "$@"; do
+        dp=$(phys "$d") || { note "refusing $d: not a directory"; refused=1; continue; }
+        [ "$dp" = "$mp" ] && continue
+        if belongs "$dp" "$mp"; then targets="$targets
+$dp"
+        else note "refusing $dp: not a worktree of $mp (only the fleet's own checkout is pre-trusted)"; refused=1; fi
+      done
+      printf '%s\n' "$targets" | python3 -c "$PY_GRANT" "$(cfg_file)" || exit $?
+      [ "$refused" = 0 ] || exit 3
+      exit 0
+    fi
+    # The wide form (#2282): every --main that is a checkout, $HOME with --home,
+    # and each <dir> that is one of them or a worktree of one. A refused path is
+    # noted and skipped; the rest are still written; exit 3 if any was refused.
+    refused=0 targets='' mps='' hp=''
+    mains="$main$mains"
+    while IFS= read -r m; do
+      [ -n "$m" ] || continue
+      mp=$(phys "$m") || { note "refusing: --main $m is not a directory"; refused=1; continue; }
+      [ -d "$mp/.git" ] || { note "refusing: --main $mp is not a git checkout"; refused=1; continue; }
+      targets="$targets
+$mp"; mps="$mps
+$mp"
+    done <<EOF
+$mains
+EOF
+    if [ "$home" = 1 ]; then
+      hp=$(phys "${HOME:-/nonexistent}") || hp=''
+      case "$hp" in
+        ''|/) note "refusing --home: \$HOME (${HOME:-}) is not a directory"; refused=1; hp='' ;;
+        *) targets="$targets
+$hp" ;;
+      esac
+    fi
     for d in "$@"; do
       dp=$(phys "$d") || { note "refusing $d: not a directory"; refused=1; continue; }
-      [ "$dp" = "$mp" ] && continue
-      if belongs "$dp" "$mp"; then targets="$targets
-$dp"
-      else note "refusing $dp: not a worktree of $mp (only the fleet's own checkout is pre-trusted)"; refused=1; fi
+      [ -n "$hp" ] && [ "$dp" = "$hp" ] && continue
+      ok=0
+      while IFS= read -r mp; do
+        [ -n "$mp" ] || continue
+        if [ "$dp" = "$mp" ]; then ok=2; break; fi
+        if belongs "$dp" "$mp"; then ok=1; break; fi
+      done <<EOF
+$mps
+EOF
+      case "$ok" in
+        1) targets="$targets
+$dp" ;;
+        2) : ;;
+        *) note "refusing $dp: not a hosted repo's checkout or worktree, nor the login's home"; refused=1 ;;
+      esac
     done
+    [ -n "$targets" ] || exit 3
     printf '%s\n' "$targets" | python3 -c "$PY_GRANT" "$(cfg_file)" || exit $?
     [ "$refused" = 0 ] || exit 3
     ;;

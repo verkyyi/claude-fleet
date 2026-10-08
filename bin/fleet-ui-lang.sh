@@ -379,6 +379,13 @@ fleet_ui_t() {
     en:sidebar_portal)          printf 'New task' ;;
     zh:sidebar_portal_placing_fmt) printf '开工中… %s' "${1:-}" ;;
     en:sidebar_portal_placing_fmt) printf 'starting… %s' "${1:-}" ;;
+    # a HOME session (issue #2264): `fleet claude` / `fleet codex`, a newcomer's first one
+    zh:home_opening_fmt)        printf '正在开 %s 会话（主目录）…' "${1:-}" ;;
+    en:home_opening_fmt)        printf 'opening a %s session (home directory)…' "${1:-}" ;;
+    zh:home_failed_fmt)         printf '开不了会话：%s' "${1:-}" ;;
+    en:home_failed_fmt)         printf 'could not open a session: %s' "${1:-}" ;;
+    zh:home_first_hint)         printf '这里和本地运行 claude 一样；要在某个仓库里做，直接告诉我仓库名' ;;
+    en:home_first_hint)         printf 'Just like running claude locally; to work in a repo, tell me its name' ;;
     # the writing area itself (issue #1953, bin/fleet-compose.py)
     zh:compose_title)           printf '新任务' ;;
     en:compose_title)           printf 'New task' ;;
