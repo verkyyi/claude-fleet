@@ -77,7 +77,14 @@ if [ ! -e "$conf_dir/global/onboarded" ]; then
     [ -n "$sess" ] || continue
     if fleet_guide_alive "$sess"; then guide=1; break; fi
   done < <(fleet_each_conf)
-  [ "$guide" = 1 ] || add 'onboarding guide'
+  # A guide that stopped after its tries (issue #2424) says why; one the person
+  # closed is their «not now», not a missing step.
+  stuck=''
+  [ -f "$conf_dir/global/onboard.stuck" ] && IFS= read -r stuck < "$conf_dir/global/onboard.stuck"
+  if [ "$guide" = 1 ]; then :
+  elif [ -n "$stuck" ]; then add "onboarding guide stopped: $stuck (fleet guide to retry)"
+  elif [ -e "$conf_dir/global/onboard.dismissed" ]; then :
+  else add 'onboarding guide'; fi
 fi
 
 if [ -n "$missing" ]; then printf 'needs: %s\n' "$missing"; exit 1; fi

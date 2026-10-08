@@ -107,6 +107,11 @@ FLEET_BASE_BRANCH="main"
 #FLEET_GUIDE_COOLDOWN=60
 # @label=Guide grace to speak before restart @group=spawn @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_GUIDE_SPEAK_SECS=180
+# After this many opens that never spoke the collector stops and writes the reason
+# to global/onboard.stuck (doctor's onboard row, the guide window); `fleet guide`
+# gives it a fresh budget (issue #2424).
+# @label=Guide tries before it stops @group=spawn @tier=internal @scope=global @edit=int
+#FLEET_GUIDE_MAX_TRIES=3
 
 # ── Per-repo settings (issue #978) ──────────────────────────────────────────
 # A fleet hosting 2+ repos keeps each further repo's conf at

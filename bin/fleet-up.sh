@@ -283,8 +283,7 @@ bash "$BIN/fleet-orchestrator.sh" ensure "$NAME" >/dev/null 2>&1 || true
 ONBOARDED="$FLEET_CONF_DIR/global/onboarded"
 if [ "$NEWFLEET" = 1 ] && [ "${FLEET_ONBOARD:-1}" != 0 ] && [ ! -e "$ONBOARDED" ]; then
   mkdir -p "${ONBOARDED%/*}"
-  : > "$FLEET_CONF_DIR/global/onboard.pending"
-  date +%s > "$FLEET_CONF_DIR/global/onboard.retry"
+  fleet_guide_rearm   # pending + a fresh try budget (issue #2424)
   if fleet_guide_open "$NAME" >/dev/null 2>&1 && fleet_guide_wait "$NAME" "${FLEET_GUIDE_WAIT_SECS:-30}"; then
     date '+%Y-%m-%d %H:%M:%S' > "$ONBOARDED"
     rm -f "$FLEET_CONF_DIR/global/onboard.pending"

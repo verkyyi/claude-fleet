@@ -3887,6 +3887,34 @@ FAKE
   WHAT="新开账号（onboard 步）和已有账号（settings pass 只填不改）第一个会话都直接到输入框：没有 onboarding、没有「Make auto mode your default…」；doctor firstrun 两个都 ok"
 }
 
+# A first-login guide that can never come up (issue #2424): its agent exits at
+# once with `Session ID … is already in use` (or sits on a spent account). The
+# collector's tick reopened it every minute, forever. Now three opens is the
+# budget: the tick after writes global/onboard.stuck with the reason and stops.
+drill_guide_retry_forever() {
+  CAP=10; BREAK_SOCK="$WORK/sock-gd"; local d="$WORK/gd" t0 i n
+  mkdir -p "$d/conf/global" "$d/home"
+  printf '#!/bin/sh\nprintf x >> "%s/launches"\nprintf "Error: Session ID 2aaef796 is already in use.\\n"\nexec sh\n' "$d" > "$d/agent"
+  chmod +x "$d/agent"
+  nt -f /dev/null new-session -d -s gd -n home -x 100 -y 20 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  nt new-window -d -t gd: -n guide "$d/agent"
+  nt set-option -w -t gd:guide @pin 1
+  : > "$d/conf/global/onboard.pending"; printf '1\n' > "$d/conf/global/onboard.tries"   # fleet-up's open
+  t0=$(now)
+  for i in 1 2 3 4 5 6; do
+    printf '0\n' > "$d/conf/global/onboard.retry"
+    ( PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf"; export PATH HOME FLEET_CONF_DIR BREAK_SOCK
+      . "$BIN/fleet-lib.sh"; fleet_guide_tick gd ) 2>/dev/null
+    sleep 0.3
+  done
+  SECS=$(since "$t0")
+  n=$(wc -c < "$d/launches" 2>/dev/null | tr -d ' ')
+  [ "$n" = 3 ] || { WHY="six ticks opened the guide $n times, want 3 (the budget) — the retry is unbounded"; return 1; }
+  grep -q '会话编号被占用' "$d/conf/global/onboard.stuck" 2>/dev/null \
+    || { WHY="no onboard.stuck naming the id clash: [$(cat "$d/conf/global/onboard.stuck" 2>/dev/null)]"; return 1; }
+  WHAT="引导连开 3 次都没开口：第 4 拍不再重开，写 onboard.stuck（「会话编号被占用 · 连续 3 次没开口」），窗口挂上同一句原因"
+}
+
 # A warm-pool entry started before an upgrade (its @agent_cfg / @agent_ver no longer
 # the expected ones) must never be handed out — the node's claim says 3 and the
 # caller opens a cold session — and the next pass retires it (issue #2233).
