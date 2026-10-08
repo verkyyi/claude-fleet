@@ -475,7 +475,10 @@ case "$mode" in
             win=${rcpt%%	*}
             tf=$(mktemp "${TMPDIR:-/tmp}/fcr-title.XXXXXX") && printf '%s' "${8:-}" > "$tf"
             bf=$(mktemp "${TMPDIR:-/tmp}/fcr-body.XXXXXX") && printf '%s' "$nbody" > "$bf"
-            nohup bash "$BIN/fleet-start-backfill.sh" "$sess" "$win" "$srepo" "$tf" "$bf" </dev/null >/dev/null 2>&1 &
+            # The controller's operation id (issue #2235): the paperwork stamps
+            # t_filed / t_bound on it. Anything not a UUID's characters is dropped.
+            op="${FLEET_CONTROL_OP:-}"; case "$op" in *[!0-9a-f-]*) op='' ;; esac
+            nohup bash "$BIN/fleet-start-backfill.sh" "$sess" "$win" "$srepo" "$tf" "$bf" ${op:+"$op"} </dev/null >/dev/null 2>&1 &
             printf 'warm\t%s\n' "$rcpt"
             exit 0
           fi

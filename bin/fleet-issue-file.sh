@@ -356,7 +356,8 @@ fi
 # reports its own refusal. Like --spawn, a refusal must NOT lose the just-filed
 # issue: say so on stderr and still exit 0 with the URL already on stdout.
 if [ "$bind" = 1 ] && [ -n "$num" ]; then
-  bash "$BIN/fleet-bind.sh" "$num" --title "$title" \
+  # --fresh (issue #2235): we filed it a moment ago — no claim to check for.
+  bash "$BIN/fleet-bind.sh" "$num" --title "$title" --fresh \
     || printf 'fleet-issue-file: filed #%s but the bind was refused — it is on the backlog\n' "$num" >&2
 fi
 exit 0
