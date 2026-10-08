@@ -841,60 +841,30 @@ unset FLEET_ACCOUNT_PAUSED
 rm -rf "$ACCT_DIR/h1" "$ACCT_DIR/h2" "$ACCT_DIR/h1.hub" "$ACCT_DIR/h2.hub" "$STATE_PAUSED" "$STATE_AUTH_ALERT"
 export FLEET_ACCOUNTS="a b c"
 # ============================================================================
-# a SEPARATED login picks blind no more (issue #2412): no viewer token, no
-# CCQUOTA_ACCOUNT pin, no credential file — the credential proxy's readings are
-# its quota, and a limit banner's bench still counts when every login reads out
+# a BLIND pick (issue #2412): every login out and no quota row — never stay on a
+# benched account, and the doctor's account-pick says so; a SEPARATED login is
+# never blind (its credential proxy picks the account per request)
 # ============================================================================
 rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS" "$STATE_AUTH_ALERT"; : > "$STATE_LIMITED"; : > "$STATE_REAUTH"
 _cd="$FLEET_CONF_DIR"; export FLEET_CONF_DIR="$WORK/sepconf"; mkdir -p "$FLEET_CONF_DIR"
-for h in gm ic ly; do printf 'hub:%s\n' "$h" > "$ACCT_DIR/$h"; done
-printf 'store:pool-ly\n' > "$ACCT_DIR/ly"
-export FLEET_ACCOUNTS="gm ic ly"
-_soon=$(( $(now) + 3600 )); _past=$(( $(now) - 60 ))
-_rd() { printf '{"rl5h":"%s","rl7d":"%s","rl_reset5":"%s","rl_reset7":"%s","ts":%s}' "$1" "$2" "$3" "$4" "$(date +%s)"; }
-_acc="{\"accounts\":{\"claude\":{\"gm\":$(_rd 0 99 $_soon $_soon),\"ic\":$(_rd 11 21 $_soon $_soon),\"pool-ly\":$(_rd 40 95 $_past $_past)}}}"
-eq "sep: not separated → no proxy rows, byte for byte" "" "$(quota_proxy_rows)"
-: > "$FLEET_CONF_DIR/credsep.json"
-FLEET_ACCOUNT_PROXY_QUOTA_CMD="printf '%s' '$_acc'"; export FLEET_ACCOUNT_PROXY_QUOTA_CMD
-_rows=$(quota_proxy_rows)
-eq "sep: gm at 7d 99 → its row" "gm	0	99	1	$_soon	$_soon	0" "$(printf '%s\n' "$_rows" | grep '^gm	')"
-eq "sep: a store: marker names the pool label; a reset window reads 0" "ly	0	0	100	0	0	0" "$(printf '%s\n' "$_rows" | grep '^ly	')"
-# an older proxy: only per-session readings — the newest per account wins
-_ses="{\"sessions\":{\"s1\":{\"acct\":\"gm\",\"provider\":\"claude\",\"rl5h\":\"5\",\"rl7d\":\"50\",\"rl_reset5\":\"$_soon\",\"rl_reset7\":\"$_soon\",\"ts\":10},\"s2\":{\"acct\":\"gm\",\"provider\":\"claude\",\"rl5h\":\"0\",\"rl7d\":\"98\",\"rl_reset5\":\"$_soon\",\"rl_reset7\":\"$_soon\",\"ts\":20},\"s3\":{\"acct\":\"gm\",\"provider\":\"codex\",\"rl5h\":\"1\",\"rl7d\":\"1\",\"rl_reset5\":\"-\",\"rl_reset7\":\"-\",\"ts\":30}}}"
-eq "sep: per-session readings → the newest Claude one" "gm	0	98	2	$_soon	$_soon	0" "$(FLEET_ACCOUNT_PROXY_QUOTA_CMD="printf '%s' '$_ses'" quota_proxy_rows)"
-eq "sep: merge — a hub row wins, the proxy fills the rest" $'gm\t1\t1\t99\t0\t0\t0\nic\t11\t21\t79\t'"$_soon"$'\t'"$_soon"$'\t0\nly\t0\t0\t100\t0\t0\t0' \
-   "$(quota_merge $'gm\t1\t1\t99\t0\t0\t0' "$_rows")"
-eq "sep: merge — no proxy rows is the hub's, byte for byte" $'gm\t1\t1\t99\t0\t0\t0' "$(quota_merge $'gm\t1\t1\t99\t0\t0\t0' "")"
-# the fetch with no hub at all (CCQUOTA_HUB_URL unset) still writes the rows
-_hu="${CCQUOTA_HUB_URL-}"; unset CCQUOTA_HUB_URL
-FLEET_ACCOUNT_PAUSED_CMD="exit 1" quota_fetch 2>/dev/null
-eq "sep: no hub — the fetch writes the proxy's rows" 3 "$(grep -c . "$STATE_QUOTA")"
-eq "sep: no hub — quota-verdict reads them (gm at the ceiling)" limited "$(cmd_quota_verdict gm 2>/dev/null | cut -d' ' -f1)"
-# every login reads as valid (the label is the proxy's) and the pick follows quota:
-# the 99% current account is left for the one with headroom
-for h in gm ic; do mkdir -p "$ACCT_DIR/$h.hub"
-  printf '{"claudeAiOauth":{"accessToken":"at","expiresAt":%s000}}\n' "$(( $(date +%s) + 86400 ))" > "$ACCT_DIR/$h.hub/.credentials.json"; done
-_p=$(pick_active gm); case "$_p" in ic|ly) _p=left ;; esac
-eq "sep: pick leaves gm at 99% for an account with headroom" left "$_p"
-rm -rf "$ACCT_DIR/gm.hub" "$ACCT_DIR/ic.hub"
-eq "sep: a proxy that does not answer cannot say a lease is gone → valid, not no_credentials" valid "$(acct_login gm)"
-rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS"
-# no reading at all and every login out: never stay on the BENCHED current one
 : > "$ACCT_DIR/gm"; : > "$ACCT_DIR/ic"; : > "$ACCT_DIR/ly"
-limit gm
-eq "sep: blind — every login out, no quota row: the doctor's account-pick names them" \
+export FLEET_ACCOUNTS="gm ic ly"
+eq "blind: every login out, no quota row → the doctor's account-pick names them" \
    "gm auth:no_credentials; ic auth:no_credentials; ly auth:no_credentials" "$(cmd_blind)"
 printf 'gm\t1\t1\t99\t0\t0\t0\n' > "$STATE_QUOTA"
-eq "sep: not blind once a quota row exists" "" "$(cmd_blind)"
+eq "blind: not once a quota row exists" "" "$(cmd_blind)"
 rm -f "$STATE_QUOTA"
-eq "sep: all logins out, gm benched → the next one not benched" ic "$(pick_active gm 2>/dev/null)"
-eq "sep: all logins out, current not benched → it stays (#1670)" ic "$(pick_active ic 2>/dev/null)"
+: > "$FLEET_CONF_DIR/credsep.json"
+eq "blind: a separated login is never blind (the proxy picks)" "" "$(cmd_blind)"
+rm -f "$FLEET_CONF_DIR/credsep.json"
+limit gm
+eq "blind: all logins out, gm benched → the next one not benched" ic "$(pick_active gm 2>/dev/null)"
+eq "blind: all logins out, current not benched → it stays (#1670)" ic "$(pick_active ic 2>/dev/null)"
 limit ic; limit ly
-eq "sep: all logins out AND all benched → current stays" gm "$(pick_active gm 2>/dev/null)"
+eq "blind: all logins out AND all benched → current stays" gm "$(pick_active gm 2>/dev/null)"
 : > "$STATE_LIMITED"
-unset FLEET_ACCOUNT_PROXY_QUOTA_CMD; [ -n "$_hu" ] && export CCQUOTA_HUB_URL="$_hu"
 rm -f "$ACCT_DIR/gm" "$ACCT_DIR/ic" "$ACCT_DIR/ly" "$STATE_AUTH_ALERT"
 export FLEET_CONF_DIR="$_cd"; export FLEET_ACCOUNTS="a b c"
 if [ -n "$_tmpd" ]; then export TMPDIR="$_tmpd"; else unset TMPDIR; fi
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace, #1540 account class, #1670 login filter, #2083 paused pool, #2412 separated quota)\n' "$CHECKS"
+printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace, #1540 account class, #1670 login filter, #2083 paused pool, #2412 blind pick)\n' "$CHECKS"

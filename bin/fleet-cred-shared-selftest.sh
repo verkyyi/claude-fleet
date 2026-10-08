@@ -37,6 +37,8 @@
 #      separated login read each lease's expiry from the proxy, never a token
 #   Q  account-quota (issue #2412): the newest rate-limit reading per account, another
 #      login's only for an account the asker also holds — never a sid or a token
+#   R  a separated login's fleet-session-cred.sh mint names no account (the proxy picks)
+#      and its rebind exits 2 (issue #2412)
 #   I  machine install whose agent bootstrap fails AND whose way back fails too:
 #      exit 5, the credentials back anyway, the store kept as <login>.rolledback-*,
 #      the steps to do by hand printed (the clean rollback is BREAK-IT
@@ -237,6 +239,19 @@ sys.exit(0 if ok else 1)' "$qa" "$qb" \
   && case "$qa$qb" in *sk-ant*|*'"a1"'*|*'"b1"'*|*'"b2"'*|*alpha*|*beta*) false ;; *) true ;; esac \
   && pass "Q account-quota: beta sees pool1 through alpha's session, alpha never sees beta's solo; no sid, login or token" \
   || fail "Q account-quota: alpha=$qa beta=$qb"
+
+# ── R: a separated login's launcher names no account (issue #2412) ───────────────
+out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 FLEET_SESSION_WRAP=$$ bash "$BIN/fleet-session-cred.sh" mint --provider claude --sid r1 --account main 2>&1)
+rc=$?; cred=$(printf '%s' "$out" | cut -f3)
+ac=$(python3 -c 'import base64,json,sys; p=sys.argv[1].split(".")[1]; print(json.loads(base64.urlsafe_b64decode(p+"="*(-len(p)%4))).get("acct",""))' "$cred" 2>/dev/null)
+[ "$rc" = 0 ] && [ -z "$ac" ] && grep -q '^account=proxy$' "$CA/cred-proxy/sessions/r1" \
+  && case "$(call "$PORT" "$cred")" in *sk-ant-oat01-*) true ;; *) false ;; esac \
+  && pass "R fleet-session-cred.sh mint (separated): no account in the credential, the proxy picks — a request is answered" \
+  || fail "R mint rc=$rc acct=[$ac]: $out"
+out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 bash "$BIN/fleet-session-cred.sh" rebind --sid r1 --account main 2>&1); rc=$?
+[ "$rc" = 2 ] && pass "R fleet-session-cred.sh rebind (separated): refused, exit 2" || fail "R rebind rc=$rc: $out"
+FLEET_CONF_DIR="$CA" bash "$BIN/fleet-session-cred.sh" revoke --sid r1 >/dev/null 2>&1
+case "$(call "$PORT" "$cred")" in *revoked*) pass "R revoke (account=proxy): the session credential is dead" ;; *) fail "R revoke: $(call "$PORT" "$cred")" ;; esac
 
 # ── D: no login reaches another's ────────────────────────────────────────────────
 out=$(FLEET_CRED_AS=beta FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --account main --sid x 2>&1); rc=$?

@@ -406,14 +406,23 @@ reported_restore() {
 # 1 = not this road: a Codex window, a --model / --cfg-stale move (those relaunch
 # on purpose), a central route (the cluster picks the account), the proxy off, or
 # a rebind that failed — then the close + resume below, as before.
+#
+# SEPARATED (credsep.json, issue #2412) the proxy picks the account and moves the
+# session itself when it fills: an account move is never the login's — skipped,
+# never closed and resumed.
 migrate_rebind() {
   local wid="$1" label="$2" csid route name
-  [ "${AGENT:-claude}" = claude ] && [ -z "$MODEL" ] && [ "$CFG" != 1 ] && [ -n "$ACTIVE" ] || return 1
+  [ "${AGENT:-claude}" = claude ] && [ -z "$MODEL" ] && [ "$CFG" != 1 ] || return 1
   csid=$(wopt "$wid" '#{@cred_sid}'); route=$(wopt "$wid" '#{@cred_route}')
   [ -n "$csid" ] || return 1
   case "$route" in direct|relay) ;; *) return 1 ;; esac
   bash "$BIN/fleet-session-cred.sh" on 2>/dev/null || return 1
   name=$(wopt "$wid" '#{window_name}')
+  if [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ]; then
+    say "  – $name ($wid): the credential proxy picks its account (separated login) — skipped"
+    skipped=$((skipped+1)); return 0
+  fi
+  [ -n "$ACTIVE" ] || return 1
   if migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then
     if [ "$label" = "$ACTIVE" ]; then say "  – $name ($wid): already on $label — skipped"
     else say "  – $name ($wid): nowhere to move (${label:-ambient login} → $ACTIVE, benched too) — skipped"; fi

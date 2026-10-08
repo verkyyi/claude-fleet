@@ -56,6 +56,18 @@ window whose @cred_sid it is. Not separated, a fresh reading also kicks
 FLEET_CRED_QUOTA_PUSH (the launcher points it at that script; empty = off),
 at most once per FLEET_CRED_QUOTA_PUSH_SECS (2).
 
+THE ACCOUNT PICK (issue #2412): a SEPARATED login does not choose its
+subscription. A Claude session credential minted for it names no account (a
+login's --account is ignored and logged; `rebind` is refused — root alone
+pins, in bind.json), and the proxy picks one per session from the accounts the
+login holds, by those readings (on the shared proxy every login's answers
+count): the session keeps it while it is under FLEET_CRED_PICK_CEILING
+(default FLEET_ACCOUNT_CEILING, 85) and not limited; at the ceiling the next
+request runs on the account with the most room, and a quota 429 moves the SAME
+request there (limited until its reset) — no exit, no resume. A credential
+minted before #2412 that names an account runs on it, as before. ctl `picks`
+says which account each session is on (read-only). Not separated: no pick.
+
 ROUTES (EPIC #1967 共同约定 1) — decided ONLY by the hub's record of this
 machine's trust × the last probe (bin/fleet-node-probe.sh → node-probe.json):
 
@@ -670,6 +682,7 @@ class Tenant:
         self.skip = {}          # sid -> {route: (until, why)}: a route that refused this session
         self.hubcreds = {}      # sid -> fcp-h1.… handed in over ctl `attach` (memory only)
         self.quota = {}         # sid -> its newest rate-limit reading (issue #1978; memory only)
+        self.picks = {}         # (provider, sid) -> the account the proxy picked for it (issue #2412)
         self.push_due = False
 
     def log(self, **kv):
@@ -685,6 +698,8 @@ class Tenant:
         rd.update(provider=provider, acct=acct, route=route, ts=int(time.time()))
         with Proxy.lock:
             self.quota[sid] = rd
+            if self.cfg.store and acct and acct != "-":
+                Proxy.reads[(provider, acct)] = rd   # what the account pick reads (issue #2412)
             if len(self.quota) > 4096:   # a day of dead sessions, at most: oldest out
                 for k in sorted(self.quota, key=lambda k: self.quota[k]["ts"])[:len(self.quota) - 4096]:
                     del self.quota[k]
@@ -706,6 +721,107 @@ class Tenant:
                              stderr=subprocess.DEVNULL, start_new_session=True)
         except OSError as e:
             self.log(ev="quota_push_err", err=type(e).__name__)
+
+
+    # ---- the account pick (issue #2412) --------------------------------------
+    # A SEPARATED login does not choose its subscription and does not need to
+    # know it: its session credential names no account, and the proxy picks one
+    # here, per session — from the accounts this login holds, by the rate-limit
+    # readings every answer carries (#1978; on the shared proxy, every login's
+    # answers). A session keeps its account (its prompt cache lives there) until
+    # that account reaches the ceiling, answers a quota 429, or is limited; then
+    # the next request runs on the one with the most room, the session none the
+    # wiser. Unread accounts rank in the middle (PICK_UNKNOWN).
+    def held(self, provider):
+        out = {k.split(":", 1)[1] for k in pool_index(self.cfg) if k.startswith(provider + ":")}
+        if provider == "claude":
+            acc = self.cfg.accounts
+            out.update(d[:-4] for d in (os.listdir(acc) if os.path.isdir(acc) else [])
+                       if d.endswith(".hub") and os.path.isfile(os.path.join(acc, d, ".credentials.json")))
+        return sorted(a for a in out if SAFE_LABEL(a))
+
+    @staticmethod
+    def used(provider, acct, now):
+        """-> the account's higher window (%), None without a reading; a window
+        whose reset has passed reads 0 (it refreshed)."""
+        rd = Proxy.reads.get((provider, acct))
+        if not rd:
+            return None
+        u = []
+        for pk, rk in (("rl5h", "rl_reset5"), ("rl7d", "rl_reset7")):
+            v, r = _num(rd.get(pk)), _num(rd.get(rk))
+            if v is None:
+                continue
+            u.append(0.0 if r and 0 < r <= now else v)
+        return max(u) if u else None
+
+    def usable(self, provider, acct, now):
+        if Proxy.limited.get((provider, acct), 0) > now:
+            return False
+        u = self.used(provider, acct, now)
+        return u is None or u < self.cfg.pick_ceiling
+
+    def pick_account(self, provider, sid, avoid=()):
+        """-> the account this session's next request runs on ("" = none held)."""
+        now = time.time()
+        with Proxy.lock:
+            cur = self.picks.get((provider, sid))
+        if cur and cur not in avoid and self.usable(provider, cur, now):
+            return cur
+        held = [a for a in self.held(provider) if a not in avoid]
+        if not held:
+            return cur or ""
+        with Proxy.lock:
+            load = {}
+            for tt in (list(Proxy.tenants.values()) or [self]):
+                for (pv, _), a in tt.picks.items():
+                    if pv == provider:
+                        load[a] = load.get(a, 0) + 1
+        def rank(a):
+            u = self.used(provider, a, now)
+            return (u if u is not None else PICK_UNKNOWN, load.get(a, 0), a)
+        good = [a for a in held if self.usable(provider, a, now)]
+        nxt = min(good or held, key=rank)
+        if nxt != cur:
+            with Proxy.lock:
+                self.picks[(provider, sid)] = nxt
+            u = self.used(provider, nxt, now)
+            self.log(ev="pick", sid=sid, provider=provider, acct=nxt, frm=cur or "-",
+                     why=("first" if not cur else "full" if cur not in avoid else "limited"),
+                     used="-" if u is None else round(u), full=not good)
+        return nxt
+
+    def repick(self, provider, sid, acct, until):
+        """A quota 429 on <acct>: limited until <until>; -> the account to retry
+        on, or None (nowhere better: the 429 goes to the session)."""
+        with Proxy.lock:
+            Proxy.limited[(provider, acct)] = max(until, Proxy.limited.get((provider, acct), 0))
+        nxt = self.pick_account(provider, sid, avoid=(acct,))
+        return nxt if nxt and nxt != acct and self.usable(provider, nxt, time.time()) else None
+
+
+PICK_UNKNOWN = 50.0
+
+
+def limit_until(provider, headers, body, now=None):
+    """-> until when a 429 keeps its account out of the pick (issue #2412): a
+    quota answer to its reset (else an hour), anything else a minute."""
+    now = now or time.time()
+    h = {k.lower(): v for k, v in headers}
+    text = (body or b"").decode("utf-8", "replace").lower()
+    if provider == "claude":
+        quota = (h.get("anthropic-ratelimit-unified-status") or "").lower() == "rejected" \
+            or "limit" in text and ("usage" in text or "weekly" in text or "reached" in text)
+        resets = [_num(h.get(k)) for k in ("anthropic-ratelimit-unified-reset",
+                                          "anthropic-ratelimit-unified-5h-reset",
+                                          "anthropic-ratelimit-unified-7d-reset")]
+    else:
+        quota = "usage_limit" in text
+        resets = [_num(h.get("x-codex-%s-reset-at" % w)) for w in ("primary", "secondary")]
+    if not quota:
+        return now + 60
+    future = [r for r in resets if r and r > now]
+    return min(max(future) if future else now + 3600, now + 7 * 86400)
 
 
 class LogSink:
@@ -749,6 +865,8 @@ class Proxy(BaseHTTPRequestHandler):
     lock = threading.Lock()
     T = None        # the one tenant of a per-login proxy
     tenants = {}    # the shared proxy (issue #2217): login -> Tenant
+    reads = {}      # (provider, account) -> its newest reading, separated tenants (issue #2412)
+    limited = {}    # (provider, account) -> until: a quota 429 keeps it out of the pick
     sink = None     # where a request is logged before it has a tenant
     fixed = None    # a login's old port on the shared proxy: that login's tenant
     t = None
@@ -850,7 +968,16 @@ class Proxy(BaseHTTPRequestHandler):
             if first:
                 self.passes.stats["local"] += 1
                 self.log(ev="renew", kind="local", sid=sid)
-        acct = read_json(os.path.join(self.cfg.state, "bind.json"), {}).get(sid, claims["acct"])
+        # root's pin (bind.json) first, then the account a credential minted
+        # before #2412 names; a credential that names none: the proxy picks
+        acct = read_json(os.path.join(self.cfg.state, "bind.json"), {}).get(sid) or claims.get("acct") or ""
+        self.auto = not acct and bool(self.cfg.store)
+        if self.auto:
+            acct = self.t.pick_account(provider, sid)
+            if not acct:
+                self.log(ev="deny", sid=sid, path=path.split("?")[0], why="no account held")
+                return self.fail(403, "this login holds no %s account the proxy could pick" % provider,
+                                 "permission_error")
         hubcred = self.t.hubcreds.get(sid)
         if hubcred:
             hubcred = self.passes.best(hubcred)
@@ -958,27 +1085,17 @@ class Proxy(BaseHTTPRequestHandler):
                              "hub session credential (or no central proxy is configured)", "permission_error")
         last, tried = None, list(skipped)
         for i, route in enumerate(order):
-            try:
-                base, upath, put, drop, cred = self.target(route, provider, path, acct, hubcred, public)
-            except (OSError, KeyError, ValueError, TypeError) as e:
-                self.log(ev="nocred", sid=sid, acct=acct, route=route, err=type(e).__name__)
-                last = (403, "no upstream credential for account %s" % acct, "permission_error")
-                tried.append("%s: no credential for %s" % (route, acct))
-                continue
-            out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() not in drop}
-            if provider == "claude" and cred == "file":
-                betas = [b.strip() for k, v in out.items() if k.lower() == "anthropic-beta"
-                         for b in v.split(",") if b.strip()]
-                out = {k: v for k, v in out.items() if k.lower() != "anthropic-beta"}
-                if OAUTH_BETA not in betas:
-                    betas.append(OAUTH_BETA)
-                out["anthropic-beta"] = ",".join(betas)
-            out.update(put)
             nxt = order[i + 1] if i + 1 < len(order) else None
-            res = self.upstream(base, upath, out, body, route, sid, acct, cred, seen, t0, provider,
-                                can_switch=nxt is not None, tried=tried)
+            for hops in range(4):
+                res = self.attempt(route, nxt, provider, path, body, hubcred, sid, acct, seen, t0, public, tried, hops)
+                if not (isinstance(res, tuple) and res[0] == "acct"):
+                    break
+                acct = res[1]       # a quota 429 on a picked account: the same request on the next one
             if res is None:
                 return
+            if isinstance(res, tuple):          # ("nocred", the answer): this route has no credential
+                last = res[1]
+                continue
             tried.append("%s: %s" % (route, res))
             # a region refusal / a connection that never opened: next route, same request
             with self.lock:
@@ -986,6 +1103,29 @@ class Proxy(BaseHTTPRequestHandler):
             self.log(ev="route_switch", sid=sid, acct=acct, provider=provider, frm=route, to=nxt, why=res)
         code, msg, typ = last or (502, "no route answered", "api_error")
         self.fail(code, msg, typ)
+
+    def attempt(self, route, nxt, provider, path, body, hubcred, sid, acct, seen, t0, public, tried, hops):
+        """One request on one route and account: upstream's answer, or
+        ("nocred", the refusal) when this account has no credential here."""
+        try:
+            base, upath, put, drop, cred = self.target(route, provider, path, acct, hubcred, public)
+        except (OSError, KeyError, ValueError, TypeError) as e:
+            self.log(ev="nocred", sid=sid, acct=acct, route=route, err=type(e).__name__)
+            tried.append("%s: no credential for %s" % (route, acct))
+            return ("nocred", (403, "no upstream credential for account %s" % acct, "permission_error"))
+        out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() not in drop}
+        if provider == "claude" and cred == "file":
+            betas = [b.strip() for k, v in out.items() if k.lower() == "anthropic-beta"
+                     for b in v.split(",") if b.strip()]
+            out = {k: v for k, v in out.items() if k.lower() != "anthropic-beta"}
+            if OAUTH_BETA not in betas:
+                betas.append(OAUTH_BETA)
+            out["anthropic-beta"] = ",".join(betas)
+        out.update(put)
+        # a picked account (issue #2412) may hand a quota 429 to the next one — three times at most
+        self.rehome = getattr(self, "auto", False) and cred == "file" and hops < 3
+        return self.upstream(base, upath, out, body, route, sid, acct, cred, seen, t0, provider,
+                             can_switch=nxt is not None, tried=tried)
 
     def upstream(self, base, upath, out, body, route, sid, acct, cred, seen, t0, provider, can_switch, tried=()):
         """Send one request. None = answered (the response went to the client);
@@ -1020,6 +1160,13 @@ class Proxy(BaseHTTPRequestHandler):
         if provider in ("claude", "codex"):
             self.t.note_quota(sid, provider, acct, route, r.getheaders())
         first = b""
+        if r.status == 429 and getattr(self, "rehome", False):
+            first = r.read(65536)
+            nxt = self.t.repick(provider, sid, acct, limit_until(provider, r.getheaders(), first))
+            if nxt:
+                conn.close()
+                self.log(ev="acct_switch", sid=sid, provider=provider, frm=acct, to=nxt, why="429")
+                return ("acct", nxt)
         if r.status == 403:
             first = r.read(65536)
             if any(m in first.decode("utf-8", "replace").lower() for m in REGION_MARKS):
@@ -1243,9 +1390,10 @@ def lease_expiries(cfg):
 
 
 def account_quota(t):
-    """{provider: {account: its newest rate-limit reading}} (issue #2412) — what a
-    SEPARATED login picks its account by: it cannot read the hub's quota, and its
-    own sessions see only the accounts they ran on. On the machine's shared proxy
+    """{provider: {account: its newest rate-limit reading}} (issue #2412) — the
+    readings the proxy picks a SEPARATED login's accounts by, for that login to
+    read (it cannot read the hub's quota, and its own sessions see only the
+    accounts they ran on). On the machine's shared proxy
     every login's sessions count, but only for an account THIS login also holds
     (its pool index, its leases, its own readings): percentages and resets, never
     a session id, a login or a token."""
@@ -1367,7 +1515,14 @@ def ctl_handle(req, t):
                 "provider": prov}
     if op == "mint":
         acct = req.get("account") or ""
-        if not acct or "/" in acct or acct.startswith("."):
+        # separated, a Claude session names no account (issue #2412): the proxy
+        # picks it per request — a login's --account is ignored (logged), only
+        # root names one. No provider (a launcher older than #2412): as before.
+        if cfg.store and req.get("provider") == "claude" and not req.get("_root"):
+            if acct:
+                t.log(ev="mint_account_ignored", sid=req.get("sid") or "-", acct=acct)
+            acct = ""
+        elif not acct or "/" in acct or acct.startswith("."):
             return {"ok": False, "err": "mint: --account LABEL"}
         sid = req.get("sid") or "s-" + secrets.token_hex(4)
         tok = t.keys.mint(acct, sid, int(req.get("ttl") or cfg.ttl), lg=t.name)
@@ -1379,12 +1534,17 @@ def ctl_handle(req, t):
                 d = read_json(p, {})
                 d = {k: v for k, v in d.items() if pid_alive(v)}
                 d[sid] = wrap; write_json(p, d)
-        t.log(ev="mint", sid=sid, acct=acct)
+        t.log(ev="mint", sid=sid, acct=acct or "(proxy picks)")
         return {"ok": True, "token": tok, "sid": sid}
     if op == "rebind":
         sid, acct = req.get("sid") or "", req.get("account") or ""
         if not sid or not acct:
             return {"ok": False, "err": "rebind: --sid and --account"}
+        if cfg.store and not req.get("_root"):
+            # separated, the account is the proxy's to pick (issue #2412): a pin is root's
+            t.log(ev="deny", path="ctl rebind", sid=sid, acct=acct, why="separated: only root pins an account")
+            return {"ok": False, "err": "rebind: this login's account is the credential proxy's to pick "
+                                        "(separated, issue #2412) — only root pins one"}
         p = os.path.join(cfg.state, "bind.json")
         with Proxy.lock:
             d = read_json(p, {}); d[sid] = acct; write_json(p, d)
@@ -1399,6 +1559,11 @@ def ctl_handle(req, t):
             os.write(fd, (sid + "\n").encode()); os.close(fd)
             t.hubcreds.pop(sid, None)
             t.quota.pop(sid, None)
+            for k in [k for k in t.picks if k[1] == sid]:
+                del t.picks[k]
+            b = read_json(os.path.join(cfg.state, "bind.json"), {})
+            if b.pop(sid, None) is not None:
+                write_json(os.path.join(cfg.state, "bind.json"), b)
             p = os.path.join(cfg.state, "live.json")
             d = read_json(p, {})
             if d.pop(sid, None) is not None:
@@ -1486,6 +1651,12 @@ def ctl_handle(req, t):
         return {"ok": True, "quota": q}
     if op == "account-quota":
         return {"ok": True, "accounts": account_quota(t)}
+    if op == "picks":
+        # which account the proxy runs each of this login's sessions on (issue #2412): read-only
+        with Proxy.lock:
+            pk = {"%s:%s" % (pv, sid): a for (pv, sid), a in t.picks.items()}
+        b = read_json(os.path.join(cfg.state, "bind.json"), {})
+        return {"ok": True, "picks": pk, "pinned": b if isinstance(b, dict) else {}}
     if op == "pass":
         # the shared proxy (issue #2217): a session's hub pass is filed under its
         # login here, so a request carrying it is that login's (renewal, log)
@@ -1587,6 +1758,14 @@ def ctl_conn(c, cfg):
             req = req if isinstance(req, dict) else {}
         except ValueError:
             req = {}
+        req.pop("_root", None)          # never the caller's word
+        try:
+            u = peer_uid(c)
+        except OSError:
+            u = -1
+        if env("FLEET_CRED_SHARED_TEST") == "1" and isinstance(req.get("peer_uid"), int):
+            u = req["peer_uid"]
+        req["_root"] = u == 0
         t, why = ctl_tenant(c, req)
         if not t:
             Proxy.log_any(ev="deny", path="ctl", why=why[0])
@@ -1706,6 +1885,8 @@ def serve(a):
     cfg.codex_url = env("FLEET_CRED_CODEX_URL", "https://chatgpt.com/backend-api/codex").rstrip("/")
     cfg.ttl = int(env("FLEET_CRED_PROXY_TTL", "86400"))
     cfg.switch_ttl = int(env("FLEET_CRED_PROXY_SWITCH_SECS", "1800"))
+    # the account pick's ceiling (issue #2412): a session leaves an account at it
+    cfg.pick_ceiling = float(env("FLEET_CRED_PICK_CEILING", env("FLEET_ACCOUNT_CEILING", "85")) or 85)
     cfg.timeout = int(env("FLEET_CRED_PROXY_TIMEOUT", "600"))
     cfg.quota_push_secs = float(env("FLEET_CRED_QUOTA_PUSH_SECS", "2"))
     if not cfg.log:
@@ -1918,7 +2099,8 @@ def main():
     r.add_argument("--refresh", action="store_true")
     r.add_argument("--json", action="store_true")
     m = sub.add_parser("mint")
-    m.add_argument("--account", required=True); m.add_argument("--sid", default="")
+    m.add_argument("--account", default=""); m.add_argument("--sid", default="")
+    m.add_argument("--provider", default="")
     m.add_argument("--ttl", type=int, default=0); m.add_argument("--wrap", type=int, default=0)
     b = sub.add_parser("rebind")
     b.add_argument("--sid", required=True); b.add_argument("--account", required=True)
@@ -1928,6 +2110,7 @@ def main():
     t.add_argument("--sid", required=True)
     sub.add_parser("quota")
     sub.add_parser("account-quota")
+    sub.add_parser("picks")
     u = sub.add_parser("status")
     u.add_argument("--json", action="store_true")
     sub.add_parser("machine")
@@ -1948,8 +2131,10 @@ def main():
         res.pop("ok", None)
         print(json.dumps(res, ensure_ascii=False) if a.json else "%s\t%s" % (res["route"], res["reason"]))
     elif a.cmd == "mint":
-        print(ctl_call(a.state, {"op": "mint", "account": a.account, "sid": a.sid, "ttl": a.ttl,
-                                 "wrap": a.wrap})["token"])
+        req = {"op": "mint", "account": a.account, "sid": a.sid, "ttl": a.ttl, "wrap": a.wrap}
+        if a.provider:
+            req["provider"] = a.provider
+        print(ctl_call(a.state, req)["token"])
     elif a.cmd == "rebind":
         ctl_call(a.state, {"op": "rebind", "sid": a.sid, "account": a.account})
         print("rebound %s -> %s" % (a.sid, a.account))
@@ -1981,6 +2166,9 @@ def main():
         print(json.dumps(res, sort_keys=True))
     elif a.cmd == "quota":
         print(json.dumps(ctl_call(a.state, {"op": "quota"})["quota"], sort_keys=True))
+    elif a.cmd == "picks":
+        res = ctl_call(a.state, {"op": "picks"})
+        print(json.dumps({"picks": res["picks"], "pinned": res["pinned"]}, sort_keys=True))
     elif a.cmd == "account-quota":
         res = ctl_call(a.state, {"op": "account-quota"})
         if "accounts" not in res:      # an older proxy: no such op

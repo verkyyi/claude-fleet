@@ -268,27 +268,23 @@ def claude_marks():
 
 
 _PROXY_LEASES = None
-_PROXY_BLIND = False
 
 
 def proxy_leases():
     """{label: expiresAt ms} from the credential proxy, for a SEPARATED login
     (credsep.json, issue #1971): its leased .credentials.json files live where
     it cannot read them, so the proxy holding them answers each one's expiry —
-    never a token (issue #2308). {} anywhere else, or when the proxy is down —
-    and then _PROXY_BLIND says so (issue #2412)."""
-    global _PROXY_LEASES, _PROXY_BLIND
+    never a token (issue #2308). {} anywhere else, or when the proxy is down."""
+    global _PROXY_LEASES
     if _PROXY_LEASES is None:
         _PROXY_LEASES = {}
         conf = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet')))
         if (conf / 'credsep.json').is_file():
-            _PROXY_BLIND = True
             try:
-                r = subprocess.run(['bash', str(Path(__file__).resolve().parent / 'fleet-cred-proxy.sh'), 'accounts'],
-                                   capture_output=True, text=True, timeout=15)
-                d = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
-                if isinstance(d, dict):
-                    _PROXY_LEASES, _PROXY_BLIND = d, False
+                out = subprocess.run(['bash', str(Path(__file__).resolve().parent / 'fleet-cred-proxy.sh'), 'accounts'],
+                                     capture_output=True, text=True, timeout=15).stdout
+                d = json.loads(out or '{}')
+                _PROXY_LEASES = d if isinstance(d, dict) else {}
             except (OSError, ValueError, subprocess.SubprocessError):
                 pass
     return _PROXY_LEASES
@@ -326,11 +322,6 @@ def claude_login(label, now=None):
             if name in leases:
                 creds = {'claudeAiOauth': {'accessToken': '(held by the credential proxy)', 'expiresAt': leases[name]}}
                 break
-        # A separated login whose proxy did not answer cannot tell a lease is gone
-        # (issue #2412): the lease is the proxy's, so is this session's fate — the
-        # label is the proxy's to hold, and the quota decides the pick.
-        if not isinstance(creds, dict) and _PROXY_BLIND:
-            return 'valid'
     if not isinstance(creds, dict):
         return 'no_credentials'
     oauth = creds.get('claudeAiOauth') if isinstance(creds.get('claudeAiOauth'), dict) else creds

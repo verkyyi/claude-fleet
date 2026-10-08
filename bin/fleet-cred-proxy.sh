@@ -15,12 +15,13 @@
 #                                 (a computer with no daemon — a client-only one);
 #                                 prints the port. Exit 3 = switched off.
 #   fleet-cred-proxy.sh port      the port sessions use (exit 1 = not running)
-#   fleet-cred-proxy.sh route|mint|rebind|revoke|attach|quota|account-quota …
+#   fleet-cred-proxy.sh route|mint|rebind|revoke|attach|quota|account-quota|picks …
 #                                 the control socket — see fleet-cred-proxy.py
 #                                 (`quota`: each session's last rate-limit reading,
 #                                 issue #1978 — bin/fleet-proxy-quota.sh stamps it;
-#                                 `account-quota`: the newest one per ACCOUNT, what a
-#                                 separated login picks by — issue #2412)
+#                                 `account-quota`: the newest one per ACCOUNT;
+#                                 `picks`: the account the proxy runs each of a
+#                                 separated login's sessions on — issue #2412)
 #   fleet-cred-proxy.sh pass         a session's hub pass (fcp-h1., on STDIN) filed
 #                                 under this login at the machine's shared proxy
 #                                 (issue #2217; fleet-session-cred.sh does it)
@@ -214,7 +215,7 @@ case "$cmd" in
     esac
     exec bash "$BIN/fleet-cred-rollout.sh" status "$@"
     ;;
-  route|mint|rebind|revoke|attach|quota|account-quota|pass|machine)
+  route|mint|rebind|revoke|attach|quota|account-quota|picks|pass|machine)
     exec python3 -I "$PY" --state "$STATE" "$cmd" "$@"
     ;;
   doctor)
