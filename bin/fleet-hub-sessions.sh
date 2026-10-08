@@ -116,6 +116,11 @@
 #       hub's `nodes` list; derived from the sessions on a hub older than #1475.
 # then one row per session:
 #   wid:<worker_id>  node  online|lost  issue  repo  state  agent  name  origin  needs  local  wid  via  busy  born  cfg  [title]
+#   [reap epic backfill]  [ctx_left ctx_band ctx_ts model effort]
+# Fields 21-25 (issue #2431) are the session's measurement bus (the node's
+# inventory columns 24-28): % of the context LEFT, its band, the reading's epoch,
+# the model and its effort — `fleet ls` prints them; all five or none (a node
+# older than it sends none), so a `read` naming `backfill` last must name one more.
 # `origin` is already in the viewing fleet's terms: a parent in THIS fleet is its
 # bare key (`issue-1419`, exactly what a local @origin holds), a parent elsewhere is
 # its full worker_id; no @origin_wid ⇒ the issue's sub-issue parent (the collector's
@@ -635,6 +640,19 @@ def stale_of(w):
 
 
 rows = []
+
+def ctx_of(w):
+    """The measurement bus off a worker (issue #2431, columns 24-28 of the node's
+    inventory): (ctx_left, ctx_band, ctx_ts, model, effort) as cache text, each
+    validated; None when the node sent none (an older node: `fleet ls` says —)."""
+    lf, bd, ts, md, ef = (w.get(k) for k in ("ctx_left", "ctx_band", "ctx_ts", "model", "effort"))
+    out = (str(lf) if isinstance(lf, int) and not isinstance(lf, bool) and 0 <= lf <= 100 else "",
+           bd if bd in ("ok", "watch", "handoff") else "",
+           str(ts) if isinstance(ts, int) and not isinstance(ts, bool) and ts > 0 else "",
+           md if isinstance(md, str) and re.fullmatch(r"[A-Za-z0-9 ._()+-]{1,64}", md) else "",
+           ef if isinstance(ef, str) and re.fullmatch(r"[a-z]{1,16}", ef) else "")
+    return out if any(out) else None
+
 for s in sessions:
     w = s.get("worker") or {}
     wid = s.get("worker_id")
@@ -654,7 +672,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", role="orchestrator" if w.get("role") == "orchestrator" else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", role="orchestrator" if w.get("role") == "orchestrator" else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", ctx=ctx_of(w), stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -762,10 +780,13 @@ for f in local:
                                               # 17 title, 18 reap (#1902), 19 epic (#1958), 20 backfill
                                               # (#2235): each only when there is one, the empty ones
                                               # before it kept
-                                              + ((r["title"],) if r["title"] or r["reap"] or r["epic"] or r["backfill"] else ())
-                                              + ((r["reap"],) if r["reap"] or r["epic"] or r["backfill"] else ())
-                                              + ((r["epic"],) if r["epic"] or r["backfill"] else ())
-                                              + ((r["backfill"],) if r["backfill"] else ())) + "\n")
+                                              + ((r["title"],) if r["title"] or r["reap"] or r["epic"] or r["backfill"] or r["ctx"] else ())
+                                              + ((r["reap"],) if r["reap"] or r["epic"] or r["backfill"] or r["ctx"] else ())
+                                              + ((r["epic"],) if r["epic"] or r["backfill"] or r["ctx"] else ())
+                                              + ((r["backfill"],) if r["backfill"] or r["ctx"] else ())
+                                              # 21-25 (#2431): ctx_left · ctx_band · ctx_ts · model ·
+                                              # effort — all five, only when the node measured any
+                                              + (r["ctx"] or ())) + "\n")
     path = os.path.join(gdir, "remote_" + f["sess"])
     if via == "node" and not (client and os.environ.get("FLEET_HUB_SESSIONS_LOCAL") == "1"):
         # The machines that did not answer over a connection keep their last

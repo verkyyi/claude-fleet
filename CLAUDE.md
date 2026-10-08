@@ -641,8 +641,8 @@ Do not install from memory: read the doc and work from it.
   drill runs only at a time the operator confirmed. No setting ⇒ two words,
   byte for byte: `TestMaintenanceOffAddsNothing`, `fleet-node-maintenance-selftest.sh`
   leg A, `dash-remote-rows-selftest.sh` pin it.
-- **The measurement bus has ONE writer, `conf/statusline.sh`, and two feeders**
-  (issues #1452, #1459). Every `@ctx_pct/@ctx_limit/@ctx_band/@model/@effort/@rl*`
+- **The measurement bus has ONE writer, `conf/statusline.sh`, and its feeders**
+  (issues #1452, #1459, #2431). Every `@ctx_pct/@ctx_limit/@ctx_band/@model/@effort/@rl*`
   stamp goes through that script — Claude Code's `statusLine` feeds it the JSON on
   stdin; the fleet mod (`mod/fleet/hooks/usage.ts`) feeds it `--from mod key=value …`
   from inside the session (context + rate limits off `session.measure`, model +
@@ -653,6 +653,13 @@ Do not install from memory: read the doc and work from it.
   the window whose `@cred_sid` it is (`@rl_src proxy`, `@rl_ts` = the reading's
   time); while that stamp is fresh (`FLEET_RL_PROXY_FRESH`, 300 s) the other two
   leave `@rl*` alone. No proxy ⇒ no such stamp ⇒ byte for byte as before.
+  A Codex session feeds it too (issue #2431): `bin/fleet-codex-session.py`'s hook
+  runs `--from codex pct= limit= model= effort=` (effort off the rollout's
+  `turn_context`, else `config.toml`) and stamps nothing itself (`@ctx_src codex`).
+  The script also stamps `@ctx_left` (% left) and `@ctx_ts` (the reading's time,
+  re-stamped at most once a minute when nothing changed) — the header's
+  `剩余 62% · Opus 5.5 · high` (`@fleet_ctx_hdr`, grey past 5 minutes), the node
+  inventory's columns 24-28 and `fleet ls` all read those stamps.
   Never add a second place that computes a band or rounds a percent. Claude Code
   keeps one blank bottom row for ANY `statusLine`, so the key is removable once
   every Claude window on the login runs mod ≥ 0.2.0: `bin/fleet-statusline.sh

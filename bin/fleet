@@ -46,8 +46,9 @@
 #                               credential proxy, no credential in it (#2136)
 #   fleet run claude|codex [args]
 #                               旧写法 of `fleet claude|codex --here`
-#   fleet ls [--json]           your sessions: 名称 · 状态 · 单号 · 机器 · PR ·
-#                               回收方式 (#2365 — everything the menu does, a
+#   fleet ls [--json]           your sessions: 名称 · 单号 · 机器 · Agent · 剩余 ·
+#                               模型 · Effort · 状态 · PR · 回收方式 (#2365, #2431
+#                               — everything the menu does, a
 #                               command does too; the client must be running)
 #   fleet show|open <会话>      one session's fields · the client onto it
 #   fleet rename <会话> <新名>  · fleet close <会话> [--yes]

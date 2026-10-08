@@ -181,7 +181,7 @@ the same whichever list row is lit. No quota, no 「N 等你」 (the list's red 
 `fleet show` do).
 
 **The commands** (issue #2365): whatever the menu and ⌘P do, a command does —
-`fleet ls [--json]` (名称 · 状态 · 单号 · 机器 · PR · 回收方式), `fleet show <会话>`,
+`fleet ls [--json]` (名称 · 单号 · 机器 · Agent · 剩余 · 模型 · Effort · 状态 · PR · 回收方式 — 剩余 coloured like the session's own header, 「(N 分钟前)」 past 5 minutes, — from a node too old to report it, issue #2431), `fleet show <会话>`,
 `fleet open <会话>` (the client onto it), `fleet rename <会话> <新名>`,
 `fleet close <会话> [--yes]`, `fleet reap <会话> <方式>` (merged[:<dur>] ·
 done[:<dur>] · loop-end · at:<time> · keep), `fleet answer [<会话>] [<回答>]`. A

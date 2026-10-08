@@ -2,8 +2,9 @@
 """fleet-session-cli.py — the client's sessions from the command line (issue
 #2365): whatever the row menu and ⌘P can do, a command can do.
 
-    fleet ls [--json]                    every session: 名称 · 状态 · 单号 · 机器 ·
-                                         PR · 回收方式 (the same rows ⌘P lists)
+    fleet ls [--json]                    every session: 名称 · 单号 · 机器 · Agent ·
+                                         剩余 · 模型 · Effort · 状态 · PR · 回收方式
+                                         (the same rows ⌘P lists)
     fleet show <会话>                    one session, every field
     fleet open <会话>                    the client onto it (as ↵ on its ⌘P line)
     fleet rename <会话> <新名…>          its display name (the hub's worker_rename,
@@ -37,8 +38,16 @@ computer never acts on a window it does not have.
 
 Exit: 0 done · 1 the action failed, or no client running · 2 usage · 3 no such
 session · 4 more than one session matches.
+剩余 · 模型 · Effort (issue #2431) are each session's measurement bus as its own
+header shows it (conf/statusline.sh stamps it): another machine's off the hub's
+session cache (global/remote_<fleet>, the node's inventory columns 24-28), this
+machine's off its window when the cache has none. 剩余 is coloured on a terminal
+— >50 green, 20–50 amber, <20 or at the handoff line red — and a reading older
+than 5 minutes is grey with 「(N 分钟前)」; a node too old to report it shows —.
+
 Seams (tests): FLEET_SESSION_CLI_ROWS (a switch-rows.tsv to read instead of the
-producer), FLEET_SESSION_CLI_WRITE (a script run in fleet-hub-write.sh's place,
+producer), FLEET_SESSION_CLI_CACHE (a remote_<fleet> cache to read instead of the
+client's; "" = none), FLEET_SESSION_CLI_NOW (the clock), FLEET_SESSION_CLI_WRITE (a script run in fleet-hub-write.sh's place,
 same argv) and fleet-hub-write.sh's own FLEET_HUB_WRITE_CMD (close's reap).
 """
 import importlib.util
@@ -47,6 +56,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import unicodedata
 from pathlib import Path
 
@@ -81,7 +91,108 @@ def rows():
     return got if got is not None else qo.read_rows()
 
 
+# --- the measurement bus (issue #2431) ---------------------------------------------
+
+STALE_SECS = 300
+AGENT_SAY = {"claude": "Claude", "codex": "Codex"}
+
+
+def now():
+    try:
+        return int(os.environ["FLEET_SESSION_CLI_NOW"])
+    except (KeyError, ValueError):
+        return int(time.time())
+
+
+def agent_say(agent):
+    a = (agent or "").split(":", 1)[0]
+    return AGENT_SAY.get(a, a)
+
+
+def bus_cache():
+    """{row key: {agent, left, band, ts, model, effort}} off the hub's session
+    cache — a `wid:` row by its key, this machine's own (local=1) by its window id
+    too. Fields 21-25 are the bus; an older node's row has only its agent."""
+    seam = os.environ.get("FLEET_SESSION_CLI_CACHE")
+    if seam is not None:
+        path = seam
+    else:
+        path = os.path.join(os.environ.get("TMPDIR") or "/tmp", ".claude-dash", "global",
+                            "remote_" + os.environ.get("FLEET_SESSION", ""))
+    out = {}
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines() if path else []
+    except OSError:
+        lines = []
+    for line in lines:
+        f = line.split("\x1f")
+        if not f[0].startswith("wid:"):
+            continue
+        f += [""] * (25 - len(f))
+        m = {"agent": f[6]}
+        if any(f[20:25]):
+            m.update(left=f[20], band=f[21], ts=f[22], model=f[23], effort=f[24])
+        out[f[0]] = m
+        if f[10] == "1" and f[11].startswith("@"):
+            out[f[11]] = m
+    return out
+
+
+def bus_local(keys):
+    """This machine's windows the cache did not cover (no hub): their own stamps,
+    read the way the node's inventory reads them."""
+    sess = os.environ.get("FLEET_SESSION", "")
+    if not keys or not sess:
+        return {}
+    fmt = ("#{window_id}\t#{@cc_agent}\t#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}"
+           "\t#{@ctx_band}\t#{@ctx_ts}\t#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t#{@effort}")
+    try:
+        got = subprocess.run(["tmux", "-u", "-L", sess, "list-windows", "-t", "=" + sess, "-F", fmt],
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    out = {}
+    for line in got.splitlines():
+        f = (line.split("\t") + [""] * 7)[:7]
+        if f[0] in keys:
+            m = {"agent": f[1]}
+            if any(f[2:7]):
+                m.update(left=f[2], band=f[3], ts=f[4], model=f[5], effort=f[6])
+            out[f[0]] = m
+    return out
+
+
+def attach_bus(rs):
+    """Every row gets agent · left · band · ts · model · effort ('' = unknown)."""
+    bus = bus_cache()
+    bus.update(bus_local({r["key"] for r in rs if r["key"].startswith("@") and r["key"] not in bus}))
+    for r in rs:
+        m = bus.get(r["key"], {})
+        r["agent"] = agent_say(m.get("agent", ""))
+        for k in ("left", "band", "ts", "model", "effort"):
+            r[k] = m.get(k, "")
+    return rs
+
+
+def left_cell(r, colour):
+    """剩余: `62%`, `47% (8 分钟前)` when stale; — when the node never said."""
+    left = r.get("left", "")
+    if not re.fullmatch(r"[0-9]{1,3}", left or ""):
+        return "—"
+    text = left + "%"
+    age = now() - int(r["ts"]) if re.fullmatch(r"[0-9]+", r.get("ts") or "") else -1
+    stale = age >= STALE_SECS
+    if stale:
+        text += " (%d 分钟前)" % (age // 60)
+    if not colour:
+        return text
+    n = int(left)
+    code = "90" if stale else "31" if r.get("band") == "handoff" or n < 20 else "33" if n <= 50 else "32"
+    return "\x1b[%sm%s\x1b[0m" % (code, text)
+
+
 def cells(text):
+    text = re.sub(r"\x1b\[[0-9;]*m", "", text)
     return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
 
 
@@ -89,11 +200,12 @@ def pad(text, width):
     return text + " " * max(0, width - cells(text))
 
 
-def fields(r):
+def fields(r, colour=False):
     """The columns `ls` prints and `show` names, in order."""
-    return [("名称", r["name"]), ("状态", STATE_SAY.get(r["state"], r["state"])),
-            ("单号", "#" + r["issue"] if r["issue"] else ""), ("机器", r["node"]),
-            ("PR", r["pr"]), ("回收方式", r["reap"])]
+    return [("名称", r["name"]), ("单号", "#" + r["issue"] if r["issue"] else ""), ("机器", r["node"]),
+            ("Agent", r.get("agent") or "—"), ("剩余", left_cell(r, colour)),
+            ("模型", r.get("model") or "—"), ("Effort", r.get("effort") or "—"),
+            ("状态", STATE_SAY.get(r["state"], r["state"])), ("PR", r["pr"]), ("回收方式", r["reap"])]
 
 
 # --- ONE resolver: refuses rather than guesses ---------------------------------------
@@ -131,8 +243,9 @@ def one(all_rows, query):
 
 
 def table(rs, out=sys.stdout):
+    colour = out.isatty() and not os.environ.get("NO_COLOR")
     cols = [[name for name, _ in fields(rs[0])]] if rs else []
-    body = [[v for _, v in fields(r)] for r in rs]
+    body = [[v for _, v in fields(r, colour)] for r in rs]
     widths = [max(cells(row[i]) for row in cols + body) for i in range(len(cols[0]))] if rs else []
     for row in cols + body:
         print("  ".join(pad(v, w) for v, w in zip(row, widths)).rstrip(), file=out)
@@ -196,10 +309,13 @@ def ask(prompt):
 def cmd_ls(args):
     if args not in ([], ["--json"]):
         return usage()
-    rs = rows()
+    rs = attach_bus(rows())
     if args == ["--json"]:
         keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo")
-        print(json.dumps([{k: r.get(k, "") for k in keep} for r in rs], ensure_ascii=False))
+        bus = (("agent", "agent"), ("ctx_left", "left"), ("ctx_band", "band"), ("ctx_ts", "ts"),
+               ("model", "model"), ("effort", "effort"))
+        print(json.dumps([dict({k: r.get(k, "") for k in keep}, **{k: r.get(v, "") for k, v in bus})
+                          for r in rs], ensure_ascii=False))
         return 0
     if not rs:
         say("没有会话（客户端还没拿到列表时也是这样：稍等再试）")
@@ -214,7 +330,8 @@ def cmd_show(args):
     row, rc = one(rows(), args[0])
     if row is None:
         return rc
-    lines = fields(row) + [("标题", row.get("title") or ""), ("仓库", row.get("repo") or ""),
+    attach_bus([row])
+    lines = fields(row, sys.stdout.isatty() and not os.environ.get("NO_COLOR")) + [("标题", row.get("title") or ""), ("仓库", row.get("repo") or ""),
                            ("分组", row.get("group") or ""), ("key", row["key"])]
     w = max(cells(k) for k, _ in lines)
     for k, v in lines:

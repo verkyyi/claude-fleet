@@ -76,14 +76,33 @@ if [ -n "$REAL_TMUX" ]; then
   # column 21 is epic=<ref>[:k/n] on an EPIC's driver window (issue #1958), empty otherwise
   # column 22 is epicstale= — the login's batches nobody drives (issue #1916), empty with none
   # column 23 is backfill=failed on a warm start whose issue was never filed (issue #2235)
+  # columns 24-28 are the measurement bus (issue #2431) — NF - 11 keeps the count of the 17
   eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23; 16 before it as they were" "17 reap= detail= role= epic= epicstale= backfill=" \
-     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 6, $18, $19, $20, $21, $22, $23 }')"
+     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 11, $18, $19, $20, $21, $22, $23 }')"
   T set-option -w -t "=$S:draft" @backfill failed
   T set-option -w -t "=$S:uncached" @backfill filing
   out2=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
   eq "A: @backfill failed → backfill=failed (column 23, #2235); still filing → empty" "backfill=failed backfill=" \
      "$(printf '%s\n' "$out2" | awk -F'\t' '$10 == "draft" { d = $23 } $10 == "uncached" { u = $23 } END { print d, u }')"
   T set-option -wu -t "=$S:draft" @backfill; T set-option -wu -t "=$S:uncached" @backfill
+  # columns 24-28 (issue #2431): ctxleft= ctxband= ctxts= model= effort= off the bus;
+  # an unmeasured window the five keys empty; no @ctx_left → 100 - @ctx_pct; a Codex
+  # window with only the launcher's @cc_model gives that (compat-1v)
+  eq "A: an unmeasured window → columns 24-28 empty" "ctxleft= ctxband= ctxts= model= effort=" \
+     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "draft" { print $24, $25, $26, $27, $28 }')"
+  T set-option -w -t "=$S:draft" @ctx_pct 38; T set-option -w -t "=$S:draft" @ctx_left 62
+  T set-option -w -t "=$S:draft" @ctx_band ok; T set-option -w -t "=$S:draft" @ctx_ts 1800000000
+  T set-option -w -t "=$S:draft" @model 'Opus 5.5'; T set-option -w -t "=$S:draft" @effort high
+  T set-option -w -t "=$S:uncached" @ctx_pct 53; T set-option -w -t "=$S:uncached" @cc_agent codex
+  T set-option -w -t "=$S:uncached" @cc_model gpt-6-astra; T set-option -w -t "=$S:uncached" @ctx_band 'x;y'
+  out3=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
+  eq "A: the bus → columns 24-28" "ctxleft=62|ctxband=ok|ctxts=1800000000|model=Opus 5.5|effort=high" \
+     "$(printf '%s\n' "$out3" | awk -F'\t' '$10 == "draft" { print $24 "|" $25 "|" $26 "|" $27 "|" $28 }')"
+  eq "A: no @ctx_left → 100 - @ctx_pct; a Codex @cc_model; a bad band dropped" "ctxleft=47|ctxband=|model=gpt-6-astra" \
+     "$(printf '%s\n' "$out3" | awk -F'\t' '$10 == "uncached" { print $24 "|" $25 "|" $27 }')"
+  for o in @ctx_pct @ctx_left @ctx_band @ctx_ts @model @effort @cc_agent @cc_model; do
+    T set-option -wu -t "=$S:draft" "$o"; T set-option -wu -t "=$S:uncached" "$o"
+  done
   T set-option -w -t "=$S:uncached" @claude_state needs
   T set-option -w -t "=$S:uncached" @claude_needs_detail '演练放在 m5 还是只在 m4？'
   T set-option -w -t "=$S:draft" @claude_needs_detail 'a stale question'
@@ -127,6 +146,14 @@ p, x = inventory_row(base + tail + ["title=t", "reap=keep", "detail="])
 assert x["detail"] is None and x["reap"] == "keep", x
 p, x = inventory_row(base + tail + ["title=t", "reap=keep"])
 assert "detail" not in x, x
+# columns 24-28 (issue #2431): the measurement bus, after backfill=
+full = base + tail + ["title=t", "reap=", "detail=", "role=", "epic=", "epicstale=", "backfill="]
+p, x = inventory_row(full + ["ctxleft=62", "ctxband=ok", "ctxts=1800000000", "model=Opus 5.5", "effort=high"])
+assert (x["ctx_left"], x["ctx_band"], x["ctx_ts"], x["model"], x["effort"], x["title"]) == (62, "ok", 1800000000, "Opus 5.5", "high", "t"), x
+p, x = inventory_row(full + ["ctxleft=", "ctxband=bad", "ctxts=x", "model=a;b", "effort="])
+assert not any(k in x for k in ("ctx_left", "ctx_band", "ctx_ts", "model", "effort")) and x["title"] == "t", x
+p0, x0 = inventory_row(full)
+assert "model" not in x0 and x0["title"] == "t", x0
 print("ok")
 PY
 )
@@ -150,7 +177,10 @@ sessions = [s("issue-21", issue=21, name="slug-of-21", title="远程的 issue �
             s("issue-23", issue=23, name="slug-of-23"),
             s("issue-24", issue=24, name="slug-of-24", state="needs", needs="ask", detail="演练放在 m5 还是只在 m4？"),
             s("scratch-5", name="scratch-5", state="needs", needs="perm", detail="Bash: git push"),
-            s("issue-25", issue=25, name="slug-of-25", state="failed")]
+            s("issue-25", issue=25, name="slug-of-25", state="failed"),
+            s("issue-26", issue=26, name="slug-of-26", agent="codex", ctx_left=81, ctx_band="ok",
+              ctx_ts=1800000000, model="gpt-6-astra", effort="high"),
+            s("issue-27", issue=27, name="slug-of-27", ctx_left=None, ctx_band=None, model=None)]
 nodes = [dict(machine_name="mini2.local", availability="online", sessions=3, observed_at="2026-10-06T10:00:00Z", age_sec=3)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
@@ -162,6 +192,10 @@ crow() { printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/$1" '$1 == w { p
 eq "C: a titled worker's row ends in field 17 = the title" "17|远程的 issue 标题" "$(crow issue-21)"
 eq "C: a null title keeps the row's 16 fields" "16|" "$(crow issue-22)"
 eq "C: no title key keeps the row's 16 fields" "16|" "$(crow issue-23)"
+# fields 21-25 (issue #2431): the bus, all five, the empty optional ones before kept
+eq "C: a measured session's row carries fields 21-25" "25|81|ok|1800000000|gpt-6-astra|high" \
+   "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-26" '$1 == w { print NF "|" $21 "|" $22 "|" $23 "|" $24 "|" $25 }')"
+eq "C: nulls for every bus key keep the row's 16 fields" "16|" "$(crow issue-27)"
 # who waits on you and what they ask (issue #1951): needs_<sess> beside the cache
 eq "C: needs_<sess> lists the needs / failed sessions with their question" \
    "$F/issue-24${US}#24${US}ask${US}m4${US}演练放在 m5 还是只在 m4？

@@ -1147,7 +1147,11 @@ for line in open(ipath, encoding="utf-8"):
                                 "cfg": extra.get("cfg"), "title": extra.get("title"),
                                 "reap": extra.get("reap"), "epic": extra.get("epic"),
                                 "epic_stale": extra.get("epic_stale"),
-                                "backfill": extra.get("backfill")}})
+                                "backfill": extra.get("backfill"),
+                                # issue #2431: the measurement bus, as the hub forwards it
+                                "ctx_left": extra.get("ctx_left"), "ctx_band": extra.get("ctx_band"),
+                                "ctx_ts": extra.get("ctx_ts"), "model": extra.get("model"),
+                                "effort": extra.get("effort")}})
 print(json.dumps({"sessions": sessions,
                   "nodes": [{"machine_name": host, "availability": "online",
                              "sessions": len(sessions), "observed_at": now}]}, ensure_ascii=False))

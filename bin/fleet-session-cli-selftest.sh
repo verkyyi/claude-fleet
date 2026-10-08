@@ -3,7 +3,11 @@
 # answer` (issue #2365, bin/fleet-session-cli.py): whatever the menu and ⌘P do,
 # a command does, and a name that matches two sessions is refused, never guessed.
 #
-#   A  ls / ls --json        the rows: 名称 · 状态 · 单号 · 机器 · PR · 回收方式
+#   A  ls / ls --json        the rows: 名称 · 单号 · 机器 · Agent · 剩余 · 模型 ·
+#                            Effort · 状态 · PR · 回收方式 — the bus columns (#2431)
+#                            off the hub's session cache (fields 21-25): 剩余 with
+#                            「(N 分钟前)」 past 5 minutes, — from an older node;
+#                            coloured only on a terminal (green / amber / red / grey)
 #   B  the ONE resolver      key · #单号 / 单号 · whole name · part of a name;
 #                            none → exit 3, two → the candidates and exit 4
 #   C  show                  every field of one row
@@ -54,17 +58,45 @@ case "\${FAKE_REFUSE:-}" in
 esac
 EOF
 chmod +x "$W/write"
-cli() { FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_WRITE="$W/write" python3 "$BIN/fleet-session-cli.py" "$@"; }
+# the hub's session cache (fleet-hub-sessions.sh): fields 21-25 are the bus
+# (#2431) — issue-12 fresh on Opus, issue-13 a Codex reading 8 minutes old,
+# scratch-3 from a node too old to say (no 21-25)
+NOW=1800000000
+U=$(printf '\037')
+{
+  printf '#ts%s%s\n' "$U" "$NOW"
+  printf '%s\n' "wid:F/issue-12${U}m4${U}online${U}12${U}acme/web${U}needs${U}claude${U}登录页重做${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}merged${U}${U}${U}62${U}ok${U}$((NOW - 20))${U}Opus 5.5${U}high"
+  printf '%s\n' "wid:F/issue-13${U}m5${U}online${U}13${U}acme/web${U}working${U}codex:7_x${U}登录页样式${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:2h${U}${U}${U}47${U}watch${U}$((NOW - 485))${U}gpt-6-astra${U}medium"
+  printf '%s\n' "wid:F/scratch-3${U}m4${U}online${U}${U}${U}idle${U}claude${U}随便聊聊${U}${U}${U}0${U}${U}hub${U}${U}${U}ok"
+} > "$W/remote"
+cli() { FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_WRITE="$W/write" FLEET_SESSION_CLI_CACHE="$W/remote" \
+        FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
 
 # --- A. ls -----------------------------------------------------------------------
 out=$(cli ls); rc=$?
 eq "A ls exits 0" 0 "$rc"
 eq "A ls: a header and three rows" 4 "$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
-has "A ls header" "名称        状态    单号  机器  PR    回收方式" "$out"
-has "A ls row: 单号 · 机器 · 状态 · PR · 回收方式" "登录页重做  在问你  #12   m4    #75✓  merged" "$out"
-has "A ls row: no PR (—) is blank" "登录页样式  在干活  #13   m5          done:2h" "$out"
+has "A ls header" "名称        单号  机器  Agent   剩余            模型         Effort  状态    PR    回收方式" "$out"
+has "A ls row: 单号 · 机器 · Agent · 剩余 · 模型 · Effort · 状态 · PR · 回收方式" "登录页重做  #12   m4    Claude  62%             Opus 5.5     high    在问你  #75✓  merged" "$out"
+has "A ls row: a stale Codex reading says how old; no PR (—) is blank" "登录页样式  #13   m5    Codex   47% (8 分钟前)  gpt-6-astra  medium  在干活        done:2h" "$out"
+has "A ls row: an older node's session — for the bus" "随便聊聊          m4    Claude  —               —            —       空闲          keep" "$out"
+case "$out" in *$'\033'*) eq "A ls: no colour off a terminal" none colour ;; *) eq "A ls: no colour off a terminal" none none ;; esac
+# on a terminal: 剩余 coloured — green >50, amber 20–50, red <20 or handoff, grey stale
+eq "A colours" "32 90 31 33 31" "$(FLEET_SESSION_CLI_NOW=$NOW python3 - "$BIN" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("cli", sys.argv[1] + "/fleet-session-cli.py")
+cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+ts = str(1800000000 - 10)
+rows = [dict(left="62", band="ok", ts=ts), dict(left="47", band="watch", ts=str(1800000000 - 400)),
+        dict(left="19", band="watch", ts=ts), dict(left="20", band="watch", ts=ts), dict(left="35", band="handoff", ts=ts)]
+print(" ".join(cli.left_cell(r, True)[2:4] for r in rows))
+PY
+)"
 eq "A ls --json" "wid:F/issue-12|12|#75✓|merged;wid:F/issue-13|13||done:2h;wid:F/scratch-3|||keep;" \
   "$(cli ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s|%s;" % (r["key"], r["issue"], r["pr"], r["reap"]) for r in json.load(sys.stdin)))')"
+eq "A ls --json: the bus" "Claude|62|ok|Opus 5.5|high;Codex|47|watch|gpt-6-astra|medium;Claude||||;" \
+  "$(cli ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s|%s|%s;" % (r["agent"], r["ctx_left"], r["ctx_band"], r["model"], r["effort"]) for r in json.load(sys.stdin)))')"
+eq "A no cache at all: every row still listed, the bus —" 3 "$(FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE= python3 "$BIN/fleet-session-cli.py" ls | grep -c '—')"
 
 # --- B. the resolver -----------------------------------------------------------------
 eq "B by key" "名称      随便聊聊" "$(cli show wid:F/scratch-3 | head -1)"
@@ -86,6 +118,8 @@ has "C show: 机器" "机器      m4" "$out"
 has "C show: PR" "PR        #75✓" "$out"
 has "C show: 回收方式" "回收方式  merged" "$out"
 has "C show: the key" "key       wid:F/issue-12" "$out"
+has "C show: 剩余" "剩余      62%" "$out"
+has "C show: 模型" "模型      Opus 5.5" "$out"
 
 # --- D. rename / reap / answer ----------------------------------------------------------
 : > "$W/writes"
@@ -152,7 +186,8 @@ if command -v tmux >/dev/null 2>&1; then
   tmux -L "$L" set-environment -g FLEET_SESSION_CLI_ROWS "$W/rows.tsv"
   out=$(FLEET_SHELL_SESSION="$L" bash "$BIN/fleet" ls 2>&1); rc=$?
   eq "H bin/fleet ls → fleet-shell.sh cli → the rows, exit 0" 0 "$rc"
-  has "H …read in the server's environment" "随便聊聊    空闲" "$out"
+  has "H …read in the server's environment" "随便聊聊" "$out"
+  has "H …with its state" "空闲" "$out"
   FLEET_SHELL_SESSION="$L" bash "$BIN/fleet" show 登录页 >/dev/null 2>&1
   eq "H …and its exit code (ambiguous → 4)" 4 "$?"
 fi
