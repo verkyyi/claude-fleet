@@ -42,6 +42,15 @@
 #   UNCLAIM (issue #1610) a spawn here that claimed the issue and then failed
 #           (new-window) takes its GitHub assignee back; one that opened keeps it.
 #           Hub on only: with CCQUOTA_FLEET unset a failed spawn is as today (OFF).
+#   STALE   (issue #1610) a claim an unknown send left — no window, no report, no
+#           session in a fresh hub table, past FLEET_STALE_CLAIM_SECS — is withdrawn
+#           before the next send (no --force); a young send / silent hub keeps it.
+#   FALLBACK (issue #1610) the hub tried the next machine after a decline: the
+#           line's `after <m>:<op>:<exit>,…` field is a dispatch row per machine
+#           before the answer's, stripped from every message; each try's stderr
+#           line passes through; LOCAL after the others opens here; REFUSED
+#           ALL_DECLINED refuses (2 when every machine was full, else 1), never
+#           opens here, gives the lease and (unassigned before) the claim back.
 #   ASYNC   --async asks with --wait 0; the operation id is left in the dispatch
 #           file and `fleet-children.py show --json` lists it.
 #   PERSONAL (issue #1721) a personal login (node.env CCQUOTA_FLEET_PERSONAL=1,
@@ -190,6 +199,12 @@ run_spawn() { # $@ = args to dash-issue-session.sh
   : > "$GH_LOG"; : > "$TMUX_LOG"; : > "$GIT_LOG"; : > "$DISPLAY_LOG"; : > "$LEASE_LOG"; : > "$PLACE_LOG"
   rm -f "$WORK/place.env" "$WORK/tmux.env" "$WORK/ccq.log"
   rm -rf "$WORK/dash/.claude-dash"
+  # HUBCACHE=1: a fresh hub session table with no session in it (issue #1610).
+  if [ "${HUBCACHE:-0}" = 1 ]; then
+    mkdir -p "$WORK/dash/.claude-dash/global"
+    printf '#ts\037%s\n' "$(date +%s)" > "$WORK/dash/.claude-dash/global/remote_testsess"
+    date +%s > "$WORK/dash/.claude-dash/global/hub_ok"
+  fi
   # INFLIGHT=1: one fresh spawn-in-flight marker, so FLEET_GLOBAL_MAX_SESSIONS=1 is full.
   if [ "${INFLIGHT:-0}" = 1 ]; then mkdir -p "$WORK/dash/.claude-dash/global/spawn-inflight"; : > "$WORK/dash/.claude-dash/global/spawn-inflight/x.1"; fi
   FLEET_ORIGIN_GATE=0 \
@@ -472,6 +487,64 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose 
 gh_has '--remove-assignee'                       && fail "UNCLAIM a spawn that opened keeps its claim"
 ok "UNCLAIM a claimed-then-failed spawn here withdraws its GitHub claim; an opened one keeps it"
 
+# ===== STALE (issue #1610): a claim an unknown send left, no session anywhere =====
+rm -f "$DISPATCH"; mkdir -p "$(dirname "$DISPATCH")"
+_old=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)))')
+printf '{"seq": 1, "ts": "%s", "child": "acme-widgets:issue-258", "node": "mini2", "op": "op_50", "state": "unknown"}\n' "$_old" > "$DISPATCH"
+CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=1 HUBCACHE=1 LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5' run_spawn 258 --origin issue-77
+gh_has "issue edit 258 --repo acme/widgets --remove-assignee @me" || fail "STALE the dead claim is withdrawn before the send" "$(cat "$WORK/spawn.err")"
+err_has '死认领'                                  || fail "STALE says the claim was a dead one"
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "STALE the send opens without --force (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+grep -q -- '--force' "$LEASE_LOG"                && fail "STALE never needs --force"
+CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=1 LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5' run_spawn 258 --origin issue-77
+gh_has '--remove-assignee'                       && fail "STALE a hub that said nothing proves nothing: the claim stays"
+printf '{"seq": 2, "ts": "%s", "child": "acme-widgets:issue-258", "node": "m4", "op": "op_51", "state": "unknown"}\n' \
+  "$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))')" >> "$DISPATCH"
+CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=1 HUBCACHE=1 LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5' run_spawn 258 --origin issue-77
+gh_has '--remove-assignee'                       && fail "STALE a send still young may yet open: the claim stays"
+ok "STALE a claim an unknown send left with no session anywhere is withdrawn before the next send — no --force; a young send or a silent hub keeps it"
+
+# ===== FALLBACK (issue #1610): the hub tried the next machine after a decline =====
+rm -f "$DISPATCH"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_RC=0 \
+  PLACE_STDERR='ccquota place: mini2 declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument — trying the next machine' \
+  PLACE_ANSWER=$'REMOTE m4 op_61 done @61\tchose m4\tafter mini2:op_60:1' run_spawn 258 --origin issue-77
+[ "$(rc)" = 0 ]                                  || fail "FALLBACK done on the next machine exits 0 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+err_has '#258 → m4 已开窗 @61 (hub operation op_61) — chose m4' || fail "FALLBACK the reason stops before the after field" "$(cat "$WORK/spawn.err")"
+err_has '#258 先被 mini2 拒绝，入口已换下一台'    || fail "FALLBACK names the machine that declined first"
+err_has 'fleet: mini2 declined (exit 1): fleet discover' || fail "FALLBACK passes each declined try through as it happened"
+grep -q '"node": "mini2", "op": "op_60", "state": "refused"' "$DISPATCH" || fail "FALLBACK mini2's decline is its own dispatch row" "$(cat "$DISPATCH")"
+python3 - "$DISPATCH" <<'PY' || fail "FALLBACK the book's last row for the child is m4's done" "$(cat "$DISPATCH")"
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+assert [r['node'] for r in rows] == ['mini2', 'm4'] and rows[-1]['state'] == 'done', rows
+PY
+lease_has release                                && fail "FALLBACK the lease is the machine's that opened it"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5\tafter mini2:-:1,m4:op_62:2' run_spawn 258
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "FALLBACK LOCAL after the others opens here (rc=$(rc))"
+err_has '#258 开在本机 m5 — chose m5'$'\n'         || err_has '#258 开在本机 m5 — chose m5' || fail "FALLBACK LOCAL reason without the after field"
+err_has 'after mini2'                            && fail "FALLBACK the after field never reaches a message raw"
+for pre in 0 1; do
+  CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=$pre LEASE_ANSWER="GRANTED m5" PLACE_RC=4 \
+    PLACE_ANSWER=$'REFUSED ALL_DECLINED\tevery machine that could take it said no — mini2: declined: fork; m4: declined: full\tafter mini2:op_63:1,m4:op_64:2' run_spawn 258 --origin issue-77
+  [ "$(rc)" = 1 ]                                || fail "ALL_DECLINED (pre=$pre) exits 1 (rc=$(rc))"
+  err_has '#258 每台机器都拒绝了: every machine that could take it said no — mini2: declined: fork; m4: declined: full' || fail "ALL_DECLINED names each machine's reason" "$(cat "$WORK/spawn.err")"
+  tmux_has 'new-window'                          && fail "ALL_DECLINED never opens it here on the hub's no"
+  lease_has release                              || fail "ALL_DECLINED releases the lease the hub gave back"
+  if [ "$pre" = 0 ]; then
+    gh_has "issue edit 258 --repo acme/widgets --remove-assignee @me" || fail "ALL_DECLINED withdraws the GitHub claim a machine may have taken"
+  else
+    gh_has '--remove-assignee'                   && fail "ALL_DECLINED an assignee that predates the ask is not ours to take"
+  fi
+done
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_RC=4 \
+  PLACE_ANSWER=$'REFUSED ALL_DECLINED\tall full\tafter mini2:op_63:2,m4:op_64:2' run_spawn 258
+[ "$(rc)" = 2 ]                                  || fail "ALL_DECLINED every machine full exits 2 (rc=$(rc))"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'LOCAL m5\tchose m5' run_spawn 258
+[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "ALL_DECLINED the re-send opens without --force (rc=$(rc))"
+grep -q -- '--force' "$LEASE_LOG"                && fail "ALL_DECLINED a re-send must not need --force"
+ok "FALLBACK the hub's next machine: done/LOCAL after a decline recorded per machine; ALL_DECLINED refuses, gives lease + claim back, no --force after"
+
 rm -f "$DISPATCH"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED m5" PLACE_ANSWER=$'REMOTE m4 op_46 accepted\tchose m4' run_spawn 258 --origin issue-77 --async
 [ "$(rc)" = 0 ]                                  || fail "ASYNC exits 0 (rc=$(rc))"
@@ -660,7 +733,11 @@ PLACE_ANSWER=$'DECLINED m4 op_44 1\tdash-raw-session: could not create a scratch
 PLACE_ANSWER=$'UNKNOWN m4 op_45\tno final state from m4' PLACE_RC=6 run_raw --node m4
 [ "$(rc)" = 1 ] && err_has '未知，不当成功'         || fail "SCRATCH-UNKNOWN no final state → exit 1, never a success (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 tmux_has 'new-window'                            && fail "SCRATCH-UNKNOWN nothing opens here"
-ok "SCRATCH DECLINED (2 full · 1 else) and UNKNOWN (exit 1) come back as an issue spawn's do"
+PLACE_ANSWER=$'REFUSED ALL_DECLINED\tevery machine that could take it said no — mini2: declined: fork\tafter mini2:op_70:1' PLACE_RC=4 run_raw
+[ "$(rc)" = 1 ] && err_has '每台机器都拒绝了: every machine that could take it said no — mini2: declined: fork' \
+                                                 || fail "SCRATCH-ALL_DECLINED → exit 1 with each reason (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+tmux_has 'new-window'                            && fail "SCRATCH-ALL_DECLINED never opens it here on the hub's no (#1610)"
+ok "SCRATCH DECLINED (2 full · 1 else), ALL_DECLINED and UNKNOWN (exit 1) come back as an issue spawn's do"
 
 PLACE_RC=1 PLACE_STDERR='ccquota: Post "https://hub.test/v1/node/place": context deadline exceeded' run_raw
 [ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SCRATCH-DOWN hub unreachable opens it here (rc=$(rc))"

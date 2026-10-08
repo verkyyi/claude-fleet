@@ -38,11 +38,15 @@
 #   3  HELD <m>\t<message>                          the issue is leased elsewhere
 #   4  REFUSED <code>\t<message>                    no machine can take it — every
 #                                                   machine's reason, as the hub said it
+#   4  REFUSED ALL_DECLINED\t<message>              every machine tried said no (#1610)
 #   5  DECLINED <m> <op> <exit>\t<line>             that machine's spawn said no
 #   6  UNKNOWN <m> <op>\t<message>                  no final state within the wait
 #                                                   (FLEET_CLIENT_PLACE_WAIT, 60 s)
 #   1  the hub could not be asked (stderr says why)
 #   2  usage
+# An auto issue / scratch start a machine declines is tried by the hub on the
+# next machine (issue #1610): each such machine is one stderr line, and the
+# printed line carries an optional third field `after <m>:<op>:<exit>,…`.
 # The hub is asked in rounds of at most 20 s (a place, then status polls of its
 # operation), so no request outlives a proxy's patience.
 #
@@ -192,8 +196,20 @@ if issue:
 for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap), ("body", body)):
     if v:
         req[k] = v
+tried = []   # issue #1610: the machines that declined before the answer, as the hub said them
+
+
+def note_tried(o):
+    for a in o.get("attempts") or []:
+        if isinstance(a, dict) and a not in tried:
+            tried.append(a)
+            sys.stderr.write("fleet-client-place: %s declined (exit %s): %s — the hub tried the next machine\n"
+                             % (a.get("machine", "?"), a.get("exit", "?"), " ".join(str(a.get("why") or "").split())))
+
+
 try:
     out = ask(req)
+    note_tried(out)
     while out.get("state") == "pending" and out.get("operation_id") and time.time() < deadline:
         out = ask({"action": "status", "operation_id": out["operation_id"], "wait": rnd()})
 except urllib.error.HTTPError as e:
@@ -268,6 +284,11 @@ if rf and out.get("state") == "done":
             json.dump(said, f)
     except OSError:
         pass
+# A status poll answers for the last machine only: the first answer's tries
+# stay on the line (issue #1610).
+if tried and "\tafter " not in line:
+    line += "\tafter " + ",".join("%s:%s:%s" % (a.get("machine", "?"), a.get("operation_id") or "-", a.get("exit", 1))
+                                  for a in tried)
 print(line.replace("\n", " "))
 sys.exit(int(out.get("exit") or 0))
 PY

@@ -50,7 +50,12 @@ state done (a window opened there) · accepted (an --async spawn: the operation 
 is the handle) · unknown (no final state in time) · refused (that machine's spawn
 said no: exit + line). `show --json` carries the last row per child as the
 top-level `dispatches` list, and the text view lists one under the children —
-neither changes a count.
+neither changes a count. One send may write several rows (issue #1610): each
+machine that declined before the hub tried the next one is a refused row of its
+own, the answer's row last. A child whose last row is accepted / unknown, older
+than FLEET_STALE_CLAIM_SECS (600), with no window, no report and no session in a
+fresh hub table carries `"claim": "stale"` (text: `stale-claim`) — a claim with
+no session behind it, which the next send gets past without --force.
 """
 import argparse
 import datetime
@@ -430,13 +435,32 @@ def hub_states(path):
     when there is no cache, or the hub has been silent past
     FLEET_HUB_RETAIN_SECS (600): an old answer is no answer."""
     out = {}
-    if not path:
+    lines = hub_lines(path)
+    if lines is None:
         return out
+    for ln in lines:
+        p = ln.split('\x1f')
+        if not p[0].startswith('wid:') or len(p) < 6 or not p[3]:
+            continue
+        st = p[5] or 'idle'
+        if len(p) > 13 and p[13] in ('looping', 'bg'):
+            st = p[13]
+        elif st not in HUB_BUSY and p[2] == 'lost':
+            st = 'lost'
+        out.setdefault((p[3], p[4]), []).append((st, p[1]))
+    return out
+
+
+def hub_lines(path):
+    """The hub cache's lines while it is a fresh answer (hub_states' rule), else
+    None — so "the hub shows no session" is told from "the hub said nothing"."""
+    if not path:
+        return None
     try:
         with open(path, encoding='utf-8') as f:
             lines = f.read().splitlines()
     except OSError:
-        return out
+        return None
     ts = 0
     try:
         with open(os.path.join(os.path.dirname(path), 'hub_ok'), encoding='utf-8') as f:
@@ -451,18 +475,31 @@ def hub_states(path):
     except ValueError:
         ttl = 600
     if time.time() - ts > ttl:
-        return out
-    for ln in lines:
-        p = ln.split('\x1f')
-        if not p[0].startswith('wid:') or len(p) < 6 or not p[3]:
-            continue
-        st = p[5] or 'idle'
-        if len(p) > 13 and p[13] in ('looping', 'bg'):
-            st = p[13]
-        elif st not in HUB_BUSY and p[2] == 'lost':
-            st = 'lost'
-        out.setdefault((p[3], p[4]), []).append((st, p[1]))
-    return out
+        return None
+    return lines
+
+
+def stale_claim(live, last, disp, hub_said, hs, now=None):
+    """A claim with no session behind it (issue #1610): a placement that was
+    sent (accepted) or never heard back from (unknown) longer than
+    FLEET_STALE_CLAIM_SECS (600) ago, with no window here, no report, and a
+    fresh hub table showing no session for it anywhere. The GitHub claim such
+    a send keeps (a late open stays held off) is then nobody's — the next send
+    must not need --force to get past it. A hub that said nothing proves
+    nothing: never stale then."""
+    if live is not None or last or not disp or not hub_said or hs:
+        return False
+    if disp.get('state') not in ('accepted', 'unknown'):
+        return False
+    try:
+        secs = int(os.environ.get('FLEET_STALE_CLAIM_SECS') or 600)
+    except ValueError:
+        secs = 600
+    try:
+        t = datetime.datetime.strptime(disp.get('ts') or '', '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return False
+    return (now or time.time()) - t.timestamp() >= secs
 
 
 def slugify(repo):
@@ -893,6 +930,7 @@ def cmd_show(a):
     # no report or window yet IS that child's row (issue #1648), counted like any
     # other, its state the placement's until the first report says more.
     hub = hub_states(a.hub_cache)
+    hub_said = hub_lines(a.hub_cache) is not None
     dispatches = read_dispatches(a.dir, parent, a.one_slug)
     dmap = {d['child']: d for d in dispatches}
     for d in dispatches:
@@ -932,6 +970,10 @@ def cmd_show(a):
         if disp:
             kids[-1]['dispatch'] = disp
         kids[-1]['progress'] = progress_of(live, st, disp)
+        if stale_claim(live, last, disp, hub_said, hub_state_of(child, hub)):
+            # an added field, only then: every other row is unchanged (issue #1610)
+            kids[-1]['claim'] = 'stale'
+
         if st is not last:              # a MERGED a later quiet row would have hidden
             kids[-1]['settled'] = st
     kids.sort(key=lambda k: ('!⏳▸✓–'.index(k['bucket']), k['child']))
@@ -980,6 +1022,8 @@ def cmd_show(a):
                 rep += ' ' + d['window']
             if d.get('state') in ('refused', 'failed'):
                 rep += ' exit %s %s' % (d.get('exit', '?'), d.get('line', ''))
+            if k.get('claim') == 'stale':
+                rep = 'stale-claim (%s, no session anywhere)' % rep
             if d.get('ts'):
                 rep += ' ' + age(d['ts'])
         live = '%s %s' % (k['window'], k['state']) if k['live'] else 'gone'

@@ -58,6 +58,9 @@
 #   node-paused-still-placed                        bin/fleet-control-read.sh capacity (admit / admit_why / room),
 #                                                   fleet_machine_admit, fleet_machine_headroom; the hub half is
 #                                                   tokenledger/internal/api judge() (go test, when a toolchain is here)
+#   place-declined-not-retried                      fleet_hub_place (fleet-lib.sh: the `after` field, each try's
+#                                                   stderr), fleet-children.py (claim: stale); the hub half is
+#                                                   tokenledger/internal/api fleet_place.go (go test, when here)
 #   dispatch-wrong-replica                          tokenledger/internal/api node_route.go (fleet_node_conns +
 #                                                   /internal/v1/node-write; go test, when a toolchain is here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
@@ -4525,6 +4528,45 @@ $(run 2>&1)"
   case "$out" in *"skip:done-recent $w2 issue-13"*) ;; *) WHY="the hour-old session was not said kept: [$(printf '%s' "$out" | tr '\n' ' ')]"; return 1 ;; esac
   nt list-windows -t dnp -F '#{window_id}' | grep -qx "$w2" || { WHY="the hour-old session was closed"; return 1; }
   WHAT='issue 已关、无 PR、策略 merged 的 done 会话：满 2 小时先记账再关（cleaned:done-no-pr），1 小时的留着并说 skip:done-recent'
+}
+
+# An auto send one machine declines (2026-10-08: mini2's `fleet discover:
+# fork/exec … invalid argument`, three times) was a failure, and an unknown one
+# left a GitHub claim with no session that only --force got past (issue #1610).
+drill_place_declined_not_retried() {
+  CAP=120; local t0 d="$WORK/pdecl" out err rc gohalf old_ts now_s
+  mkdir -p "$d/g"
+  t0=$(now)
+  # node half: the hub's `after …` field and each declined try survive fleet_hub_place
+  printf '#!/bin/sh\nprintf "ccquota place: mini2 declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument — trying the next machine\\n" >&2\nprintf "REMOTE m4 op2 done @9\\tchose m4\\tafter mini2:op1:1\\n"\n' > "$d/place"
+  chmod +x "$d/place"
+  out=$(bash -c '. "$1/fleet-lib.sh"; fleet_hub_on(){ return 0; }; fleet_uuid(){ echo 11111111-1111-4111-8111-111111111111; }
+        _fleet_hub_env(){ :; }; FLEET_HUB_PLACE_CMD="$2" fleet_hub_place s o/r 7 auto' _ "$BIN" "$d/place" 2>"$d/err"); rc=$?
+  err=$(cat "$d/err")
+  [ "$rc" = 0 ] && [ "$out" = "REMOTE m4 op2 done @9	chose m4	after mini2:op1:1" ] \
+    || { WHY="fleet_hub_place lost the hub's next-machine answer (rc=$rc): $out"; return 1; }
+  case "$err" in *'mini2 declined (exit 1): fleet discover'*) ;; *) WHY="the declined try is not said on stderr: $err"; return 1 ;; esac
+  # the claim a never-seen send keeps is told apart: stale, no session anywhere
+  old_ts=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)))')
+  now_s=$(date +%s)
+  printf '{"seq": 1, "ts": "%s", "child": "issue-11317", "node": "mini2", "op": "o1", "state": "unknown"}\n' "$old_ts" > "$d/scratch-3.dispatch"
+  printf '#ts\037%s\n' "$now_s" > "$d/g/remote_s"; printf '%s\n' "$now_s" > "$d/g/hub_ok"
+  out=$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$d" --parent scratch-3 --hub-cache "$d/g/remote_s" --json)
+  case "$out" in *'"claim": "stale"'*) ;; *) WHY="fleet-children does not call a claim with no session stale: $out"; return 1 ;; esac
+  gohalf='hub half: the Go gate (tokenledger.yml) runs the next-machine tests'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run 'TestNodePlace(DeclinedTriesNextMachine|AllDeclinedRefuses|AskerIsTriedLast|NamedOrClaimedIsTriedOnce)$|TestClientPlaceDeclinedTriesNextMachine$' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) gohalf='hub half: go test 换下一台 / 全拒 / 本机最后 / 指名不换 / client ok' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        gohalf='hub half: no go module cache / toolchain here — the Go gate (tokenledger.yml) runs the next-machine tests' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="一台拒绝后入口换下一台（本机最后），行尾 after 段与逐台 stderr 传到节点；没开成又哪台都没会话的认领标 stale；$gohalf"
 }
 
 # ================================================================ run ===========

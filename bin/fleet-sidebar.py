@@ -1353,6 +1353,7 @@ def placed(plan):
                 pass
         line = next((l for l in reversed(text.splitlines()) if l.split(" ", 1)[0] in PLACE_WORDS), "")
         head, _, why = line.partition("\t")
+        why = why.partition("\tafter ")[0]   # the machines tried first (issue #1610) are not the reason
         words = head.split()
         machine = words[1] if len(words) > 1 else plan.get("label") or ""
         plan["state"] = "end"

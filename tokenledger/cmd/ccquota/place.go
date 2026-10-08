@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 )
 
@@ -43,6 +44,12 @@ import (
 //	6  UNKNOWN <machine> <operation_id>\t<message>   still running there when the
 //	                                                 wait ran out — not a success
 //	Every answer but REMOTE … done hands the lease back to the asker (#1606).
+//
+//	An auto send the chosen machine's spawn declines is tried on the next
+//	machine, the asking one last (claude-fleet#1610, at most placeTries
+//	machines): each declined try is one stderr line, and the answer's line
+//	carries an optional third TAB field `after <machine>:<op>:<exit>,…` naming
+//	them. Every machine declining is REFUSED ALL_DECLINED, each reason in it.
 //	1  the hub could not be asked (stderr says why)
 //	2  usage
 //
@@ -69,6 +76,7 @@ const workerAssertEnv = "FLEET_WORKER_ASSERT"
 const (
 	placeTimeout     = 40 * time.Second
 	placeWaitDefault = 60
+	placeTries       = 3
 )
 
 func runPlace(args []string) error {
@@ -143,10 +151,12 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	if *reap != "" {
 		ask["reap"] = *reap
 	}
-	timeout := placeTimeout + placeWaitDefault*time.Second
+	// Each machine tried is waited on in turn (claude-fleet#1610).
+	ask["tries"] = placeTries
+	timeout := placeTimeout + placeTries*placeWaitDefault*time.Second
 	if *wait >= 0 {
 		ask["wait"] = *wait
-		timeout = placeTimeout + time.Duration(*wait)*time.Second
+		timeout = placeTimeout + placeTries*time.Duration(*wait)*time.Second
 	}
 	body, _ := json.Marshal(ask)
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(*hub, "/")+"/v1/node/place", bytes.NewReader(body))
@@ -191,11 +201,33 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 		Holder struct {
 			Node string `json:"node"`
 		} `json:"holder"`
+		Attempts []struct {
+			Machine     string `json:"machine"`
+			OperationID string `json:"operation_id"`
+			Exit        *int   `json:"exit"`
+			Why         string `json:"why"`
+		} `json:"attempts"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return 1, fmt.Errorf("hub answered HTTP %d with something that is not JSON", resp.StatusCode)
 	}
 	oneLine := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	// The machines that declined before the answer (claude-fleet#1610): one
+	// stderr line each, and the line's `after …` field.
+	tail := ""
+	if len(out.Attempts) > 0 {
+		ms, ops, xs := []string{}, []string{}, []int{}
+		for _, a := range out.Attempts {
+			x := 1
+			if a.Exit != nil {
+				x = *a.Exit
+			}
+			fmt.Fprintf(stderr, "ccquota place: %s declined (exit %d): %s — trying the next machine\n", a.Machine, x, oneLine(a.Why))
+			ms, ops, xs = append(ms, a.Machine), append(ops, a.OperationID), append(xs, x)
+		}
+		tail = "\t" + api.AttemptsTail(ms, ops, xs)
+	}
+	stdout = &tailWriter{w: stdout, tail: tail}
 	switch {
 	case resp.StatusCode == http.StatusOK && out.Local != nil && *out.Local:
 		fmt.Fprintf(stdout, "LOCAL %s\t%s\n", out.Placement.Machine, oneLine(out.Placement.Reason))
@@ -226,10 +258,27 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	case out.Error.Code == "ALREADY_CLAIMED":
 		fmt.Fprintf(stdout, "HELD %s\t%s\n", out.Holder.Node, oneLine(out.Error.Message))
 		return leaseHeld, nil
-	case out.Error.Code != "" && resp.StatusCode < 500 || out.Error.Code == "NO_ELIGIBLE_NODE" ||
+	case out.Error.Code != "" && resp.StatusCode < 500 || out.Error.Code == "NO_ELIGIBLE_NODE" || out.Error.Code == "ALL_DECLINED" ||
 		out.Error.Code == "UNAVAILABLE":
 		fmt.Fprintf(stdout, "REFUSED %s\t%s\n", out.Error.Code, oneLine(out.Error.Message))
 		return placeRefused, nil
 	}
 	return 1, fmt.Errorf("hub answered HTTP %d: %s", resp.StatusCode, oneLine(string(raw)))
+}
+
+// tailWriter puts a place line's optional `after …` field (claude-fleet#1610)
+// before its newline; every answer is one Fprintf of one line.
+type tailWriter struct {
+	w    io.Writer
+	tail string
+}
+
+func (t *tailWriter) Write(p []byte) (int, error) {
+	if t.tail == "" || len(p) == 0 || p[len(p)-1] != '\n' {
+		return t.w.Write(p)
+	}
+	if _, err := t.w.Write(append(append(p[:len(p)-1:len(p)-1], t.tail...), '\n')); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
