@@ -333,7 +333,9 @@ cleanup_fleet() { (
   # reap — each repo's lease is taken inside cleanup_repo.
 
   # Detection is cache-only: the prmap pr-refresh already writes (ZERO extra gh).
-  # Done raw sessions do not necessarily HAVE a PR/cache row. Use the same
+  # Done raw sessions do not necessarily HAVE a PR/cache row — nor does an issue
+  # session that finished with none, or a spawned scratch (issue #1832): the idle
+  # pass is the SECOND candidate source, every finished window, PR or not. Use the same
   # daemon/lease/timebox, and account for their window closes in this tick's cap.
   idle_cleaned=0
   if [ -f "$BIN/fleet-cleanup-idle.sh" ]; then
@@ -341,14 +343,16 @@ cleanup_fleet() { (
     idle_out=$(fleet_timebox "$cto" bash "$BIN/fleet-cleanup-idle.sh" "$sess" \
       --limit "$k" ${idle_args[@]+"${idle_args[@]}"})
     idle_rc=$?
-    [ -z "$idle_out" ] || log "$sess: $idle_out"
+    # One log line per token (issue #1832): `cleaned:done-no-pr` / `skip:<why>`
+    # for every finished session no PR will close, so none is invisible again.
+    [ -z "$idle_out" ] || printf '%s\n' "$idle_out" | while IFS= read -r l; do log "$sess: $l"; done
     # A timed-out batch spends the tick budget; never start more destructive
     # work after a partial observation. The next daemon tick can retry safely.
     case "$idle_rc" in
       124) log "$sess: idle cleanup deferred (rc=124)"; exit 0 ;;
       75) log "$sess: idle cleanup deferred (rc=75); rate limit stops all fleets"; exit 75 ;;
     esac
-    idle_cleaned=$(printf '%s\n' "$idle_out" | awk '/^reaped-idle:/{n++} END{print n+0}')
+    idle_cleaned=$(printf '%s\n' "$idle_out" | awk '/^(reaped-idle|cleaned:done-no-pr)/{n++} END{print n+0}')
     k=$(( k - idle_cleaned ))
     [ "$k" -gt 0 ] || exit 0
   fi

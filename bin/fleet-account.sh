@@ -203,6 +203,18 @@ STATE_QUOTA_TS="$STATE_DIR/account.quota.ts"
 # whether the tick brought anything BACK. They are different failures, and until
 # #684 only the first had an alarm.
 STATE_QUOTA_EMPTY="$STATE_DIR/account.quota.empty"
+# A refused or silent hub does not wipe the last good reading (issue #2465): on
+# 2026-10-08 the hub answered 401 for six hours, 341 reads in a row came back
+# empty, the pick had no opinion and never rotated. So an empty fetch KEEPS the
+# rows it had while the reading is younger than FLEET_QUOTA_STALE_OK (default
+# 1800 s), and only past that clears them. read_at = when the rows were read (no
+# file = an older cache, written on every fetch: its stamp is the reading's age);
+# why = what the empty reads since then said: <refused|unreachable|empty>\t<since>\t<detail>.
+# FLEET_QUOTA_STALE_OK=0 carries nothing (the pre-#2465 behaviour).
+STATE_QUOTA_READ_AT="$STATE_DIR/account.quota.read_at"
+STATE_QUOTA_WHY="$STATE_DIR/account.quota.why"
+QUOTA_STALE_OK="${FLEET_QUOTA_STALE_OK:-1800}"
+case "$QUOTA_STALE_OK" in ''|*[!0-9]*) QUOTA_STALE_OK=1800 ;; esac
 # --- which account a new spawn lands on (issues #598, #1231) -------------------
 # PICK_MODE decides how the ccquota rows are RANKED once the ceiling gate has
 # thrown out the accounts that are too hot to use at all:
@@ -682,16 +694,69 @@ quota_empty_streak() {
 quota_fetch() {
   command -v "$CCQUOTA" >/dev/null 2>&1 || return 0
   [ -n "${CCQUOTA_HUB_URL:-}" ] || return 0
-  local rows raw
+  local rows raw ra
   raw=$("$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null)
   rows=$(printf '%s' "$raw" | quota_parse)
   mkdir -p "$STATE_DIR"
-  printf '%s' "$raw" | atomic_write "$STATE_DIR/account.quota.json"
-  printf '%s' "$rows" | atomic_write "$STATE_QUOTA"
+  if printf '%s' "$rows" | grep -q . || [ -z "$(acct_labels)" ]; then
+    printf '%s' "$raw" | atomic_write "$STATE_DIR/account.quota.json"
+    printf '%s' "$rows" | atomic_write "$STATE_QUOTA"
+    now | atomic_write "$STATE_QUOTA_READ_AT"
+    rm -f "$STATE_QUOTA_WHY"
+  else
+    # Nothing came back (issue #2465): say why, and keep the last reading while
+    # it is young enough to act on — only past FLEET_QUOTA_STALE_OK is it cleared.
+    quota_why_note "$(printf '%s' "$raw" | quota_why)"
+    ra=$(quota_read_at)
+    if [ "$QUOTA_STALE_OK" -eq 0 ] || [ $(( $(now) - ra )) -gt "$QUOTA_STALE_OK" ]; then
+      printf '%s' "$raw" | atomic_write "$STATE_DIR/account.quota.json"
+      : | atomic_write "$STATE_QUOTA"
+    fi
+  fi
   now | atomic_write "$STATE_QUOTA_TS"
   quota_empty_streak "$rows"
   model_quota_sync "$raw"
   quota_paused_fetch
+}
+# quota_why — a ccquota payload that brought no rows (stdin) → one line
+# <refused|unreachable|empty><TAB><detail>: refused = the hub answered 401/403
+# (a revoked token, a certificate it no longer accepts); unreachable = no answer
+# at all, or any other hub error; empty = the hub answered and had no reading.
+quota_why() {
+  python3 -c '
+import json, re, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except ValueError:
+    d = None
+if not isinstance(d, dict):
+    print("unreachable\tno answer from ccquota" if not raw.strip() else "unreachable\tunreadable answer"); sys.exit(0)
+r = str(d.get("reason") or "").replace("\t", " ").replace("\n", " ")[:160]
+if re.search(r"HTTP (401|403)\b", r): print("refused\t" + r)
+elif r.startswith("hub unreachable") or "no hub configured" in r: print("unreachable\t" + r)
+else: print("empty\t" + (r or "no row for any pool account"))
+' 2>/dev/null || printf 'unreachable\tno answer from ccquota\n'
+}
+# quota_why_note <why-line> — keep the since of an unchanged reason, so the
+# doctor and the alarm can say how long the hub has refused (not just that it does).
+quota_why_note() {
+  local why="${1%%$'\t'*}" detail="" prev since
+  case "$1" in *$'\t'*) detail=${1#*$'\t'} ;; esac
+  [ -n "$why" ] || why=unreachable
+  prev=$(cat "$STATE_QUOTA_WHY" 2>/dev/null || true)
+  since=$(printf '%s' "$prev" | awk -F'\t' -v w="$why" '$1 == w && $2 ~ /^[0-9]+$/ { print $2; exit }')
+  [ -n "$since" ] || since=$(now)
+  printf '%s\t%s\t%s\n' "$why" "$since" "$detail" | atomic_write "$STATE_QUOTA_WHY"
+}
+# quota_read_at — the epoch of the reading in the cache: read_at, else (a cache
+# from before #2465, rewritten on every fetch) its stamp, else 0.
+quota_read_at() {
+  local ra
+  ra=$(cat "$STATE_QUOTA_READ_AT" 2>/dev/null || true)
+  case "$ra" in ''|*[!0-9]*) ra=$(cat "$STATE_QUOTA_TS" 2>/dev/null || true) ;; esac
+  case "$ra" in ''|*[!0-9]*) ra=0 ;; esac
+  printf '%s' "$ra"
 }
 # quota_paused_fetch — the hub's paused pool accounts (issue #2083), from the
 # public client-settings `pool` segment, into $STATE_PAUSED, on the same TTL'd
@@ -815,6 +880,10 @@ quota_rows() {
     ts=$(cat "$STATE_QUOTA_TS" 2>/dev/null || echo 0)
     if [ "$mode" = refresh ] || [ $(( $(now) - ts )) -ge "$QUOTA_TTL" ]; then quota_fetch; fi
   fi
+  # A carried reading past FLEET_QUOTA_STALE_OK is no opinion (issue #2465) —
+  # even when no fetch has cleared it yet.
+  local ra; ra=$(quota_read_at)
+  [ "$QUOTA_STALE_OK" -eq 0 ] || [ "$ra" -eq 0 ] || [ $(( $(now) - ra )) -le "$QUOTA_STALE_OK" ] || return 0
   [ -f "$STATE_QUOTA" ] && cat "$STATE_QUOTA"
   return 0
 }
@@ -868,6 +937,12 @@ cmd_quota_verdict() {
   age=$(( $(now) - ts ))
   if [ "$age" -ge "${FLEET_ACCOUNT_QUOTA_STALE:-600}" ]; then
     echo "quota-verdict: $label unknown — ccquota cache stale (${age}s)" >&2; echo unknown; return 0
+  fi
+  # A reading CARRIED over a refused / silent hub (issue #2465) feeds the pick,
+  # never this verdict: a banner must still bench while the hub says nothing.
+  if [ -s "$STATE_QUOTA_WHY" ]; then
+    echo "quota-verdict: $label unknown — the hub has not answered since $(( ($(now) - $(quota_read_at)) / 60 ))m ago ($(cut -f1 "$STATE_QUOTA_WHY")); the last reading is only carried" >&2
+    echo unknown; return 0
   fi
   rows=$(cat "$STATE_QUOTA" 2>/dev/null || true)
   if [ -z "$(quota_field "$rows" "$label" 2)" ]; then

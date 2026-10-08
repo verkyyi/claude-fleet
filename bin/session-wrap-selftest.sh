@@ -8,8 +8,9 @@
 #      exit) with a fake launcher: the agent exits 0 / 130 / kill -9 → the window
 #      stays, @claude_state=exited, the recovery page is drawn, ↵ relaunches with
 #      `--resume <the same id>`; r starts new; a fleet exit (@wrap_quiet) and a
-#      fast launch failure return the status with no page; q → session-end-hook
-#      --recycle
+#      fast launch failure return the status with no page (and stamps @wrap_gone);
+#      a launch the LAUNCHER refused (@launch_refused, #2404) stops on the page
+#      even the first time, ↵ retrying it; q → session-end-hook --recycle
 #   B' the worker credential (issue #1809): with fleet-mcp.py beside it the wrapper
 #      hands the launch a FLEET_WORKER_CRED that verifies, for this window's
 #      @fleet_id, and revokes it when the agent exits; without it (every leg
@@ -102,6 +103,10 @@ printf 'cred=%s\n' "${FLEET_WORKER_CRED:+set}" >> "$CTL/cred"
 tmux set-option -w -t "$TMUX_PANE" @cc_session_id SID-1
 tmux set-option -w -t "$TMUX_PANE" @cc_agent claude
 [ "$(cat "$CTL/mode" 2>/dev/null)" = fast ] && exit 3
+if [ "$(cat "$CTL/mode" 2>/dev/null)" = refuse ]; then   # the launcher's own refusal (#2404)
+  echo 'fleet-claude: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch' >&2
+  tmux set-option -p -t "$TMUX_PANE" @launch_refused cred; exit 1
+fi
 while [ ! -e "$CTL/go" ]; do sleep 0.05; done
 rm -f "$CTL/go"
 case "$(cat "$CTL/mode")" in
@@ -163,6 +168,21 @@ eq "w/quiet: the marker is consumed" "" "$(o w @wrap_quiet)"
 win f 5; printf fast > "$WORK/f/mode"
 waitfor "f: the wrapper returned the launch's status" screen_has f 'WRAP_RC=3'
 CHECKS=$((CHECKS + 1)); [ "$(o f @claude_state)" != exited ] || fail "f: a fast launch failure drew the page"
+eq "f: the wrapper gone, the pane says so (no agent: issue #2404)" 1 "$(o f @wrap_gone)"
+
+# R (issue #2404 ①): the LAUNCHER refused to start (no session credential) — even a
+# first launch stops on the page, saying why, never the caller's bare shell; ↵
+# retries the very same launch.
+win rf 5; printf refuse > "$WORK/rf/mode"
+waitfor "rf: state exited" state_is rf exited
+waitfor "rf: the page says the launch was refused, and why" screen_has rf '会话没能启动：凭据代理没给出会话凭据'
+waitfor "rf: ↵ is a retry" screen_has rf '重试启动'
+CHECKS=$((CHECKS + 1)); screen_has rf 'WRAP_RC=' && fail "rf: the wrapper returned to the caller's shell"
+eq "rf: the wrapper is still there" "" "$(o rf @wrap_gone)"
+printf fast > "$WORK/rf/mode"; tf send-keys -t sw:rf Enter
+waitfor "rf: ↵ relaunched" launches rf 2
+eq "rf: ↵ retries the SAME launch (the spawn's argv)" "--agent claude the seed prompt" "$(sed -n 2p "$WORK/rf/argv")"
+waitfor "rf: a plain fast failure on the retry is the caller's again" screen_has rf 'WRAP_RC=3'
 
 # q: recycle through the SessionEnd hook.
 win q 0

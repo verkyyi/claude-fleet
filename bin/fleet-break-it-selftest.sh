@@ -3810,6 +3810,36 @@ drill_tmpdir_shared_root() {
   WHAT="没有 TMPDIR 的进程（sudo -u 的半边、它起的 tmux 服务器）读写本登录自己的 ${want}：可写、属主是自己；服务器全局环境带上 TMPDIR，服务端起的命令读同一个目录；没有脚本再回退到共用的 /tmp/.claude-dash"
 }
 
+# ---- tmpdir-foreign-owner (#2450): the dash cache already exists and belongs to
+# ANOTHER login — the session's TMPDIR was the shared /tmp (the demoted daemon's
+# fallback when DARWIN_USER_TEMP_DIR came back empty), or someone made
+# /tmp/claude-fleet-<uid> first. fleet-lib must never take it: it moves to a
+# per-uid directory of its own and says so; the demoted launch never falls back
+# to /tmp. A symlink to a root-owned directory stands in for "another login's".
+drill_tmpdir_foreign_owner() {
+  CAP=10; local d="$WORK/tfo" t0 out err lib sh
+  mkdir -p "$d/t" "$d/home" "$d/fbin"; ln -s /usr "$d/t/.claude-dash"
+  t0=$(now)
+  out=$(env TMPDIR="$d/t" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+          bash -c ". '$BIN/fleet-lib.sh'; printf '%s' \"\$FLEET_C\"" 2>"$d/err") || { WHY="fleet-lib.sh did not load"; return 1; }
+  lib=$out; err=$(cat "$d/err")
+  [ "$lib" != "$d/t/.claude-dash" ] || { WHY="fleet-lib took $lib, which belongs to another login"; return 1; }
+  case "$lib" in *"$(id -u)"*|"$d/home/"*) ;; *) WHY="the fallback $lib is not this login's (no uid, not under HOME)"; return 1 ;; esac
+  case "$err" in *'another login'*) ;; *) WHY="no stderr line said the dash cache belonged to another login ($err)"; return 1 ;; esac
+  out=$(env TMPDIR="$d/t" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+          bash -c ". '$BIN/fleet-lib.sh' 2>/dev/null; mkdir -p \"\$FLEET_C\" && [ -w \"\$FLEET_C\" ] && [ -O \"\$FLEET_C\" ] && echo ok")
+  [ "$out" = ok ] || { WHY="this login cannot write its fallback dash cache $lib"; return 1; }
+  # the demoted daemon launch with no DARWIN_USER_TEMP_DIR: never TMPDIR=/tmp
+  printf '#!/bin/sh\nexit 1\n' > "$d/fbin/getconf"; chmod +x "$d/fbin/getconf"
+  sh=$(python3 -c 'import importlib.util,sys
+s=importlib.util.spec_from_file_location("sup",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.ACCOUNT_SH)' "$BIN/fleet-node-supervisor.py") \
+    || { WHY="cannot read ACCOUNT_SH from fleet-node-supervisor.py"; return 1; }
+  env -u TMPDIR PATH="$d/fbin:/usr/bin:/bin" sh -c "$sh" _ "$d/o.log" "$d/e.log" sh -c 'printf %s "$TMPDIR" > "$0"' "$d/acct"
+  case "$(cat "$d/acct" 2>/dev/null)" in /tmp|/tmp/|'') WHY="the demoted launch falls back to TMPDIR=[$(cat "$d/acct" 2>/dev/null)], the shared /tmp"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="TMPDIR/.claude-dash 属别的登录时 fleet-lib 不用它：stderr 报一行，改用本登录按 uid 分开的 ${lib}（可写、属主是自己）；守护降权拿不到 DARWIN_USER_TEMP_DIR 时 TMPDIR=$(cat "$d/acct")，不再是共享的 /tmp"
+}
+
 # A new login's first Claude start asks questions nobody in a fleet pane answers —
 # on 2026-10-08 the new `verky` logins' `guide` sessions sat on 2.1.293's "Make
 # auto mode your default permission mode?" for good (issue #2401). The fake
@@ -4347,6 +4377,38 @@ drill_trust_name_borrowed() {
   SECS=$(since "$t0")
 }
 
+# ---- quota-refused-blind (#2465, EPIC #2463 C8): the hub answers the quota read
+# 401 (a certificate / token it no longer takes). Before: every fetch overwrote
+# the cache with nothing, the pick had no opinion for six hours and never rotated,
+# and every dial stayed green. Now the last reading is carried (≤ FLEET_QUOTA_STALE_OK)
+# with the 401 named — done for real against a fake ccquota in a sandbox.
+drill_quota_refused_blind() {
+  CAP=20; local t0 d s n
+  d="$WORK/qrb"; mkdir -p "$d/p" "$d/acc" "$d/conf" "$d/.claude-dash/global"
+  printf 't\n' > "$d/acc/a"; chmod 600 "$d/acc/a"
+  cat > "$d/p/ccquota" <<'FAKE'
+#!/bin/bash
+if [ -f "$QRB_DIR/refuse" ]; then
+  printf '{"verdict":"unknown","reason":"hub unreachable: HTTP 401: unauthorized","accounts":null}\n'
+else
+  printf '{"verdict":"go","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":70,"five_hour":{"utilization":30},"seven_day":{"utilization":10}}]}\n'
+fi
+FAKE
+  chmod +x "$d/p/ccquota"
+  qrb() { env PATH="$d/p:$PATH" TMPDIR="$d" HOME="$d" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$d/conf" \
+            FLEET_ACCOUNTS_DIR="$d/acc" CCQUOTA_HUB_URL=http://hub.test QRB_DIR="$d" "$@"; }
+  t0=$(now)
+  qrb bash "$BIN/fleet-account.sh" quota --refresh >/dev/null 2>&1
+  : > "$d/refuse"
+  for n in 1 2 3 4; do qrb bash "$BIN/fleet-account.sh" quota --refresh >/dev/null 2>&1; done
+  n=$(qrb bash "$BIN/fleet-account.sh" quota --cached 2>/dev/null | grep -c .)
+  [ "$n" = 1 ] || { WHY="four 401 reads wiped the quota cache ($n rows) — the pick is blind"; return 1; }
+  s=$(qrb bash "$BIN/fleet-quotawatch.sh" --status 2>/dev/null)
+  case "$s" in carry*refused*) ;; *) WHY="--status does not say the reading is carried over a 401: $s"; return 1 ;; esac
+  WHAT='入口答 401 四次：额度读数沿用、挑号照常给分；--status 答 carry · refused（30 分钟后才清空并报警）'
+  SECS=$(since "$t0")
+}
+
 # ---- release-tampered (#2335, EPIC #2329 C7): a machine takes a release from
 # the hub only, and a tampered byte anywhere — a tree file, an artifact, the
 # manifest, the signature, a different key — installs nothing; GitHub out of
@@ -4413,6 +4475,56 @@ drill_machine_agent_wrong_login() {
     WHAT='没有 go：十条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
+}
+
+# A session that finished with NO PR (issue #1832, EPIC #2463 C7): an issue
+# session whose issue was closed without a PR, reap policy `merged` (#2446) —
+# no PR will ever merge, so the PR-keyed cleanup never saw it and it sat as a
+# `done` row forever. The idle pass must close it two hours after its last
+# turn, history first, and say so (`cleaned:done-no-pr`); one an hour old is
+# kept and said (`skip:done-recent`).
+drill_done_no_pr_stranded() {
+  CAP=20; BREAK_SOCK="$WORK/sock-dnp"; local d="$WORK/dnp" t0 out w1 w2 wt x w i p a kv sid=22222222-2222-4222-8222-222222222222
+  mkdir -p "$d/conf" "$d/gh" "$d/home"
+  git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
+  ( cd "$d/main" && git config user.email t@t && git config user.name t && git commit -qm i --allow-empty ) \
+    || { WHY="cannot build the repo"; return 1; }
+  git -C "$d/main" update-ref refs/remotes/origin/master HEAD
+  wt="$d/app-issue-12"; git -C "$d/main" worktree add -qb issue-12 "$wt" 2>/dev/null || { WHY="cannot add the worktree"; return 1; }
+  git -C "$d/main" worktree add -qb issue-13 "$d/app-issue-13" 2>/dev/null
+  mkdir -p "$d/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
+  printf '{"type":"user","message":{"role":"user","content":"x"}}\n' \
+    > "$d/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')/$sid.jsonl"
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s\nFLEET_REAP_MIN_AGE=0\n' "$d/main" > "$d/conf/dnp.conf"
+  printf '#!/bin/sh\ncase "$1" in issue) echo %s ;; *) echo %s ;; esac\n' "'{\"state\":\"CLOSED\"}'" "'[]'" > "$d/gh/gh"
+  chmod +x "$d/gh/gh"
+  nt -f /dev/null new-session -d -s dnp -n home 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  w1=$(nt new-window -d -P -F '#{window_id}' -t dnp -c "$wt" 'exec sleep 600')
+  w2=$(nt new-window -d -P -F '#{window_id}' -t dnp -c "$d/app-issue-13" 'exec sleep 600')
+  for x in "$w1:12:$wt:9000" "$w2:13:$d/app-issue-13:3600"; do
+    IFS=: read -r w i p a <<EOF2
+$x
+EOF2
+    for kv in "@issue=$i" "@worktree=$p" "@claude_state=done" "@reap_policy=merged" "@repo=acme/app" \
+              "@claude_state_ts=$(( $(date +%s) - a ))" "@cc_agent=claude"; do
+      nt set-option -w -t "$w" "${kv%%=*}" "${kv#*=}"
+    done
+  done
+  run() { ( cd "$d" && env -u TMUX -u TMUX_PANE PATH="$d/gh:$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
+            FLEET_SKIP_GLOBAL_CONF=1 FLEET_HISTORY_LEDGER="$d/ledger.tsv" CLAUDE_PROJECTS_DIR="$d/projects" \
+            BREAK_SOCK="$BREAK_SOCK" bash "$BIN/fleet-cleanup-idle.sh" dnp ); }
+  t0=$(now)
+  out=$(run 2>&1)
+  nt set-option -w -t "$w1" @reap_due "$(( $(date +%s) - 1 ))" 2>/dev/null
+  out="$out
+$(run 2>&1)"
+  SECS=$(since "$t0")
+  case "$out" in *"cleaned:done-no-pr $w1 issue-12"*) ;; *) WHY="the stranded session was not closed: [$(printf '%s' "$out" | tr '\n' ' ')]"; return 1 ;; esac
+  nt list-windows -t dnp -F '#{window_id}' | grep -qx "$w1" && { WHY="its window is still open"; return 1; }
+  grep -q "$sid" "$d/ledger.tsv" 2>/dev/null || { WHY="closed without its history row"; return 1; }
+  case "$out" in *"skip:done-recent $w2 issue-13"*) ;; *) WHY="the hour-old session was not said kept: [$(printf '%s' "$out" | tr '\n' ' ')]"; return 1 ;; esac
+  nt list-windows -t dnp -F '#{window_id}' | grep -qx "$w2" || { WHY="the hour-old session was closed"; return 1; }
+  WHAT='issue 已关、无 PR、策略 merged 的 done 会话：满 2 小时先记账再关（cleaned:done-no-pr），1 小时的留着并说 skip:done-recent'
 }
 
 # ================================================================ run ===========

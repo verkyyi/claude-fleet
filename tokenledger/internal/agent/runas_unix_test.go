@@ -3,7 +3,15 @@
 package agent
 
 import (
+	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
+	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -61,4 +69,40 @@ func seenAny(gs []uint32, xs ...uint32) bool {
 		}
 	}
 	return false
+}
+
+// claude-fleet#2451: a command that never starts as its login says why — the
+// login missing, the paths it needed — never a bare «invalid argument».
+func TestStartWhyLoginNotFound(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fleet-control.py")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho '{}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ra := &RunAs{Login: "ghost-2451", UID: 3999999, GID: uint32(os.Getgid()), Home: filepath.Join(dir, "no-home")}
+	_, err := fleetControlCommand(withRunAs(context.Background(), ra), script, nil)
+	if err == nil {
+		t.Fatal("started as a login that does not exist")
+	}
+	for _, want := range []string{"login ghost-2451 not found", "home " + ra.Home + " missing", "program " + script} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("missing %q in: %v", want, err)
+		}
+	}
+}
+
+func TestStartWhyLeavesOthersAlone(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "exit 3")
+	err := cmd.Run()
+	ctx := withRunAs(context.Background(), &RunAs{Login: "x", UID: 1})
+	if got := startWhy(ctx, cmd, err); got != err {
+		t.Fatalf("an exit status changed: %v", got)
+	}
+	perr := &fs.PathError{Op: "fork/exec", Path: "/x", Err: syscall.EINVAL}
+	if got := startWhy(context.Background(), cmd, perr); got != error(perr) {
+		t.Fatalf("a plain agent's error changed: %v", got)
+	}
+	if got := startWhy(ctx, cmd, perr); !strings.Contains(got.Error(), "EINVAL: ") || !errors.Is(got, syscall.EINVAL) {
+		t.Fatalf("errno not named or not wrapped: %v", got)
+	}
 }

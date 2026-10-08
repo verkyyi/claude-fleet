@@ -3,10 +3,14 @@
 package agent
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func setCredential(cmd *exec.Cmd, ra *RunAs) {
@@ -50,4 +54,33 @@ func capGroups(groups []uint32, gid uint32, goos string) []uint32 {
 		add(g)
 	}
 	return out
+}
+
+// credFacts is what setCredential asks of the kernel for ra: how many
+// supplementary groups it hands setgroups(2), and how many the login has.
+func credFacts(ra *RunAs) []string {
+	set := capGroups(ra.Groups, ra.GID, runtime.GOOS)
+	if os.Geteuid() != 0 {
+		return []string{fmt.Sprintf("not root (euid %d): no uid change allowed", os.Geteuid())}
+	}
+	return []string{fmt.Sprintf("%d supplementary groups set of %d", len(set), len(ra.Groups))}
+}
+
+func fileOwner(fi os.FileInfo) (uint32, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Uid, true
+}
+
+// errnoName is «EINVAL: » for an error carrying an errno, else "".
+func errnoName(err error) string {
+	var no syscall.Errno
+	if errors.As(err, &no) {
+		if n := unix.ErrnoName(no); n != "" {
+			return n + ": "
+		}
+	}
+	return ""
 }

@@ -304,8 +304,13 @@ QW_SKIP=""   # what the TICK budget deferred to the next tick
 QW_OVER=""   # what spent its OWN budget and was killed
 
 # --status: off (pool/hub not configured) | never (configured, no stamp yet) |
-# fresh | stale | blind, then TAB + how long that state has held in seconds, TAB
-# + the consecutive-empty-fetch streak (0 unless blind).
+# fresh | stale | carry | blind, then TAB + how long that state has held in
+# seconds, TAB + the consecutive-empty-fetch streak (0 unless carry/blind); carry
+# and blind add TAB + why the reads come back empty (refused | unreachable |
+# empty), carry TAB + how long that reason has held.
+# `carry` (issue #2465): the last fetch(es) came back empty, but the cache still
+# holds a reading younger than FLEET_QUOTA_STALE_OK — the pick keeps using it;
+# column 2 is THAT READING's age ("沿用 N 分钟前的读数").
 # `blind` is the FRESH-BUT-EMPTY state (issue #684): the watch IS ticking, so
 # nothing reads stale, but the last N fetches brought back no rows and the
 # pre-emptive rotation has had nothing to act on. It gets its own word precisely
@@ -319,8 +324,14 @@ if [ "$STATUS" = 1 ]; then
   if [ "$ts" -eq 0 ]; then printf 'never\t0\t0\n'; exit 0; fi
   age=$(( $(now) - ts ))
   if [ -n "$(fleet_quota_stale_age)" ]; then printf 'stale\t%s\t0\n' "$age"; exit 0; fi
+  qc=$(fleet_quota_carry)
+  qn=$(cut -f1 "$G/account.quota.empty" 2>/dev/null); case "$qn" in ''|*[!0-9]*) qn=0 ;; esac
+  if [ -n "$qc" ]; then
+    # carry <reading age> <streak> <why> <how long the why has held> (issue #2465)
+    qcr=${qc#*	}; printf 'carry\t%s\t%s\t%s\t%s\n' "${qc%%	*}" "$qn" "${qcr%%	*}" "$(printf '%s' "$qcr" | cut -f2)"; exit 0
+  fi
   qb=$(fleet_quota_blind)
-  if [ -n "$qb" ]; then printf 'blind\t%s\t%s\n' "${qb#*	}" "${qb%%	*}"; exit 0; fi
+  if [ -n "$qb" ]; then qw=$(fleet_quota_why); printf 'blind\t%s\t%s\t%s\n' "${qb#*	}" "${qb%%	*}" "${qw%%	*}"; exit 0; fi
   printf 'fresh\t%s\t0\n' "$age"
   exit 0
 fi
@@ -648,6 +659,10 @@ rm -f "$qdiagf"
 T_FETCH=$(( $(now) - f0 ))
 post_ts=$(cat "$QTS" 2>/dev/null); case "$post_ts" in ''|*[!0-9]*) post_ts=0;; esac
 fetched=0; [ "$post_ts" -gt "$pre_ts" ] && fetched=1
+# When ccquota's rows were READ — the stamp says when the tick ran, and a reading
+# carried over a refused hub (issue #2465) is older than that.
+qread_ts=$(cat "$G/account.quota.read_at" 2>/dev/null); case "$qread_ts" in ''|*[!0-9]*) qread_ts=$post_ts;; esac
+[ "$qread_ts" -le "$post_ts" ] || qread_ts=$post_ts
 nrows=$(printf '%s' "$qrows" | grep -c .)
 hb "policy" "fetched=$fetched"$'\n'"rows=$nrows"$'\n'
 y0=$(now)
@@ -694,11 +709,11 @@ fi
 # pool account already had a fresh in-session reading could skip it (#1338); the
 # merge is here, after the blind checks: those are ccquota's own health, and
 # stay so.
-[ -n "$qsl" ] && qrows=$(fleet_quota_merge "$qrows" "$post_ts" "$qsl")
+[ -n "$qsl" ] && qrows=$(fleet_quota_merge "$qrows" "$qread_ts" "$qsl")
 # One pass: count the statusline rows and (not on --dry-run) write quota.freshness.
-# Unmerged rows have no source/epoch columns — they are ccquota's, as of $post_ts.
+# Unmerged rows have no source/epoch columns — they are ccquota's, as of $qread_ts.
 qfout=/dev/null; [ "$DRY" = 0 ] && qfout="$G/quota.freshness.$$"
-nsl=$(printf '%s\n' "$qrows" | awk -F'\t' -v now="$(now)" -v cts="$post_ts" -v out="$qfout" '
+nsl=$(printf '%s\n' "$qrows" | awk -F'\t' -v now="$(now)" -v cts="$qread_ts" -v out="$qfout" '
   $1 != "" { src = ($8 == "" ? "ccquota" : $8); t = ($9 == "" ? cts : $9)
              printf "%s\t%s\t%d\n", $1, src, now - t > out; if (src != "ccquota") n++ }
   END { close(out); print n + 0 }')

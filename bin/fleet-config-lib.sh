@@ -284,6 +284,7 @@ fcfg_label_i18n() {
     FLEET_CLEANUP_MERGED_GRACE) printf '清理 merged 宽限期' ;;
     FLEET_CLEANUP_CLOSED_GRACE) printf '清理 closed 宽限期' ;;
     FLEET_REAP_IDLE_DONE_MIN) printf '清理空闲完成的 raw 会话' ;;
+    FLEET_REAP_DONE_NO_PR_SECS) printf '清理跑完没有 PR 的会话' ;;
     FLEET_SLEEP) printf 'Worker 休眠' ;;
     FLEET_SLEEP_AFTER) printf 'Worker 休眠空闲宽限' ;;
     FLEET_SLEEP_WAKE) printf 'Worker 到达时唤醒' ;;
@@ -385,6 +386,8 @@ fcfg_label_i18n() {
     FLEET_ACCOUNT_QUOTA_TTL) printf 'ccquota 缓存 TTL' ;;
     FLEET_ACCOUNT_QUOTA_STALE) printf '配额监控陈旧时间' ;;
     FLEET_ACCOUNT_QUOTA_BLIND_STREAK) printf '配额监控连续盲读' ;;
+    FLEET_QUOTA_STALE_OK) printf '额度读数沿用时限' ;;
+    FLEET_QUOTA_REFUSED_ALARM) printf '额度读数被拒告警' ;;
     FLEET_ACCOUNT_VERDICT_REFETCH) printf 'Banner refetch 去重' ;;
     FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS) printf '通过 banner 显示配额的秒数' ;;
     FLEET_ACCOUNT_PICK) printf '启动排名策略' ;;

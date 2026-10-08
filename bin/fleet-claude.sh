@@ -13,6 +13,10 @@
 # `--agent codex`) execs bin/fleet-codex.sh instead — see the dispatch block below.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# A refusal to start the agent at all (issue #2404) says so on the pane before the
+# exit: fleet-session-wrap.sh then stops on the recovery page with the reason
+# (cred | account) instead of handing the window to the caller's bare shell.
+_fc_refused() { [ -n "${TMUX_PANE:-}" ] && tmux set-option -p -t "$TMUX_PANE" @launch_refused "$1" 2>/dev/null; return 0; }
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"     # also sources the sibling global fleet.conf
 # shellcheck source=/dev/null
@@ -230,7 +234,7 @@ label="${FLEET_ACCOUNT_LABEL:-}"
 # (`local` with no local token file is the ambient login, which IS local.)
 if [ -z "$label" ] && [ "${FLEET_ACCOUNT_CLASS:-}" = pool ] && [ "$_fc_sep" != 1 ]; then
   echo 'fleet-claude: --account pool, but no hub-pool account is registered on this login (fleet-account.sh list) — refusing to launch on its own subscription' >&2
-  exit 1
+  _fc_refused account; exit 1
 fi
 model_flag=()
 launch_model=""
@@ -364,7 +368,7 @@ if [ -n "${FLEET_CRED_SID:-}" ]; then
       fi ;;
     4) : ;;
     *) echo 'fleet-claude: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)' >&2
-       exit 1 ;;
+       _fc_refused cred; exit 1 ;;
   esac
   unset _fc_px _fc_rc
 fi
@@ -399,7 +403,7 @@ PY
     fi
   elif [ -n "${FLEET_ACCOUNT_LABEL:-}" ]; then
     echo 'fleet-claude: pinned subscription is unavailable; refusing an ambient login fallback' >&2
-    exit 1
+    _fc_refused account; exit 1
   fi
 fi
 
