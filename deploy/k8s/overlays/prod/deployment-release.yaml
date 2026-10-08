@@ -2,8 +2,19 @@
 # `ccquota-release-key` (key `release-key`, made by `ccquota release keygen`,
 # by a person — never here), read-only, group-readable like the base's other
 # Secret volumes (fsGroup 10001); the releases on the OSS volume
-# (release-volume.yaml). CCQUOTA_FLEET_RELEASE_ARTIFACTS (pinned installers)
-# stays unset until C6. Roll back: delete this patch and its resources line.
+# (release-volume.yaml). Roll back: delete this patch and its resources line.
+#
+# CCQUOTA_FLEET_RELEASE_ARTIFACTS (#2398): the pinned installers every release
+# carries beside ccquota — one file per release.json component, named as its
+# `artifact` expands (`claude-<ver>-darwin-arm64`, `codex-<ver>-darwin-arm64`,
+# `tmux-<ver>-darwin-arm64`), taken from the official source and checked by a
+# person (claude: its manifest.json; codex: the GitHub release digest; tmux:
+# conf/vendor-tmux.lock). They live under pinned/ on the same OSS bucket
+# (haowan24-fleet-releases) — prune only touches <sha>/ dirs, never pinned/.
+# Bumping a version in release.json means putting the new file here BEFORE
+# moving stable (docs/MANAGED-NODE.md §7): a release reads this dir once, when
+# its stable is first built, and is never rebuilt — one missing an artifact
+# leaves the managed machines on the old version (`failed`).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,6 +29,8 @@ spec:
               value: /etc/ccquota-release/release-key
             - name: CCQUOTA_FLEET_RELEASE_DIR
               value: /releases
+            - name: CCQUOTA_FLEET_RELEASE_ARTIFACTS
+              value: /releases/pinned
           volumeMounts:
             - name: release-key
               mountPath: /etc/ccquota-release
