@@ -62,6 +62,9 @@ var fleetScopeOf = map[string]string{
 	// resume the same conversation on another subscription — a stop's authority,
 	// so no grant needs a new scope.
 	"worker_switch": "worker:stop",
+	// The sidebar's 「改名…」 (claude-fleet#2358): the window's display name
+	// only — a message's authority.
+	"worker_rename": "worker:message",
 	// A session moved in through the hub (claude-fleet#1426) opens a worker
 	// like a start does.
 	"worker_move_in": "worker:start",
@@ -95,7 +98,7 @@ var fleetConfigKeys = map[string][2]int{
 // GitHub reads.
 var (
 	fleetWriteTools = map[string]bool{"worker_start": true, "worker_message": true, "worker_stop": true,
-		"worker_resume": true, "worker_answer": true, "worker_reap": true, "worker_switch": true, "config_set": true, "gh_comment": true}
+		"worker_resume": true, "worker_answer": true, "worker_reap": true, "worker_switch": true, "worker_rename": true, "config_set": true, "gh_comment": true}
 	fleetGHReads = map[string]bool{"gh_issue_view": true, "gh_pr_view": true, "gh_pr_checks": true}
 )
 
@@ -112,7 +115,11 @@ var (
 	// accountRE is fleet_hub_common.ACCOUNT_RE: worker_switch's optional
 	// subscription label, one argv word on the node.
 	accountRE = regexp.MustCompile(`^[A-Za-z0-9._@-]{1,64}$`)
-	answerRE  = regexp.MustCompile(`^(?:yes|no|[1-9][0-9]{0,2}(?:,[1-9][0-9]{0,2}){0,15}(?: [1-9][0-9]{0,2}(?:,[1-9][0-9]{0,2}){0,15}){0,7})$`)
+	// nameRE is fleet_hub_common.NAME_RE: worker_rename's window name, 1-64
+	// characters, no control character (a tab or newline would split the
+	// node's inventory columns).
+	nameRE   = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,64}$`)
+	answerRE = regexp.MustCompile(`^(?:yes|no|[1-9][0-9]{0,2}(?:,[1-9][0-9]{0,2}){0,15}(?: [1-9][0-9]{0,2}(?:,[1-9][0-9]{0,2}){0,15}){0,7})$`)
 )
 
 // maxFleetText is the longest worker_message text / gh_comment body.
@@ -564,7 +571,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			w.params["repo"] = w.repo
 		}
 		w.fleetID, _ = args["fleet_id"].(string)
-	case "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch":
+	case "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch", "worker_rename":
 		opt := []string{}
 		req := []string{"worker_id", "idempotency_key"}
 		if tool == "worker_message" {
@@ -575,6 +582,9 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		if tool == "worker_answer" {
 			req = append(req, "answer")
+		}
+		if tool == "worker_rename" {
+			req = append(req, "name")
 		}
 		if err = checkFields(args, req, opt...); err != nil {
 			break
@@ -609,6 +619,14 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 				break
 			}
 			w.params["account"] = a
+		}
+		if tool == "worker_rename" {
+			n, _ := args["name"].(string)
+			if !nameRE.MatchString(n) || strings.TrimSpace(n) == "" {
+				err = fault("INVALID_ARGUMENT", "name must be 1-64 characters with no control character")
+				break
+			}
+			w.params["name"] = n
 		}
 	case "config_set":
 		if err = checkFields(args, []string{"fleet_id", "key", "value", "expected_revision", "idempotency_key"}); err != nil {

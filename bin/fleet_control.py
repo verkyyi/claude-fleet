@@ -409,6 +409,9 @@ class Control:
             # By identity or key alike: a no-repo session (the pinned guide) has
             # no key at all, only its @fleet_id (issue #2102).
             return self.execute_switch(fleet, key, params.get("account", ""))
+        if action == "worker_rename":
+            # By identity or key alike, as a switch (issue #2358).
+            return self.execute_rename(fleet, key, params["name"])
         if is_identity(key):
             # An identity-form worker_id (issue #1646): the session it names, under
             # the key it answers to NOW — every adapter below speaks keys.
@@ -536,6 +539,25 @@ class Control:
                 "how": "dispatched: closes the session and resumes the same conversation on the new "
                        "subscription; the fleet's alerts report the outcome",
                 "observed_at": now()}
+
+    def execute_rename(self, fleet, key, new_name):
+        """worker_rename (issue #2358): the sidebar's 「改名…」 on a row here — the
+        window's display name only. The adapter renames the one window resolved
+        now and checks it still carries the worker's @fleet_id first, so a window
+        id tmux recycled meanwhile is never renamed; the key, the issue and the
+        reap policy are untouched (a window is told by @fleet_role / @fleet_id,
+        never its name)."""
+        matches, _ = self.target(fleet, key, "worker_rename")
+        window = matches[0].get("window_id", "")
+        code, output, err = self.adapter("rename", fleet["name"], window,
+                                         matches[0].get("identity") or "", new_name)
+        said = last_line(output if (output or b"").strip() else err)
+        if code == 2:
+            raise Unattempted("INVALID_ARGUMENT", "Rename refused on the fleet: " + said)
+        if code:
+            raise Unattempted("INVALID_STATE", "Rename refused on the fleet: " + said)
+        return {"renamed": matches[0], "name": new_name, "window": window,
+                "how": "renamed", "observed_at": now()}
 
     def execute_reap(self, fleet, key):
         """worker_reap (issue #1487): dash-reap.sh --yes on the one live window

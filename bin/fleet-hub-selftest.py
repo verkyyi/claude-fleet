@@ -59,8 +59,24 @@ if "display-message" in sys.argv and "#{socket_path}" in sys.argv:
     # the reap adapter's `#{socket_path}` (issue #1487): point bare tmux at this server;
     # any other display-message (a window's @repo, #1018) answers as an unset option does
     print("/tmp/fleet-hub-selftest.sock"); sys.exit(0)
+if "display-message" in sys.argv and "#{window_id} #{@fleet_id}" in sys.argv:
+    # the rename adapter's check (issue #2358): the window's @fleet_id, the tenth
+    # column of workers.tsv, after the window's own id
+    win=sys.argv[sys.argv.index("-t") + 1]
+    data=root/"workers.tsv"
+    for row in (data.read_text().splitlines() if data.exists() else []):
+        cols=row.split("\\t")
+        if cols[0] == win:
+            print(win + " " + (cols[9] if len(cols) > 9 else "")); sys.exit(0)
+    # real tmux: rc 0 and ANOTHER window's answer for an id that is gone
+    print("@1 other"); sys.exit(0)
 if "display-message" in sys.argv:
     print(""); sys.exit(0)
+if "rename-window" in sys.argv:
+    # worker_rename (issue #2358): the whole argv, the name one word of it
+    with open(root/"rename.calls", "a") as out:
+        out.write("\\x1f".join(sys.argv[1:]) + "\\n")
+    sys.exit(0)
 if "list-windows" in sys.argv:
     # Rows carry @repo in column 9; a format that does not ask for it (a one-repo
     # fleet, issue #1018) gets that column empty, exactly as real tmux prints it.
@@ -563,6 +579,54 @@ class HubTests(HubFixture):
         with self.assertRaisesRegex(Fault, "outside this caller"):
             self.lifecycle("worker_switch", idem="no-scope", token=reader["token"])
         self.assertEqual(len(self.node.calls("migrate")), n)
+
+    def test_rename_renames_the_window_by_key_or_identity(self):
+        # worker_rename (issue #2358): the client sidebar's 「改名…」 on a row here.
+        # The worker resolves to its WINDOW (key or identity), the adapter checks
+        # that window still carries the worker's @fleet_id, then rename-window +
+        # automatic-rename off with the name as ONE argv word. The key and the
+        # identity are unchanged; a bad name never reaches the node.
+        ident = str(uuid.uuid4())
+        self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "", ident),
+                          ("@4", None, True, "/fixture/project-scratch-4", "", "", str(uuid.uuid4())))
+        done = self.lifecycle("worker_rename", name="登录页 · 重做 'a b'")
+        self.assertEqual((done["status"], done["result"]["window"], done["result"]["name"]),
+                         ("succeeded", "@12", "登录页 · 重做 'a b'"), done)
+        by_id = self.lifecycle("worker_rename", ident, idem="by-identity", name="短名")
+        self.assertEqual((by_id["status"], by_id["result"]["window"]), ("succeeded", "@12"), by_id)
+        calls = [c.split("\x1f") for c in self.node.calls("rename")]
+        self.assertEqual(len(calls), 2, calls)
+        for call, want in zip(calls, ("登录页 · 重做 'a b'", "短名")):
+            self.assertEqual(call[call.index("rename-window"):call.index("rename-window") + 5],
+                             ["rename-window", "-t", "@12", "--", want])
+            self.assertIn("automatic-rename", call)
+        # the worker_id is untouched: the same identity still finds the window
+        self.assertEqual(self.lifecycle("worker_rename", ident, idem="again", name="x")["status"], "succeeded")
+        n = len(self.node.calls("rename"))
+        for bad in ("", "   ", "a\tb", "a\nb", "x" * 65, 3, None):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                self.call("worker_rename", {"worker_id": self.worker(), "name": bad, "idempotency_key": "bad"})
+        with self.assertRaises(Fault):
+            self.call("worker_rename", {"worker_id": self.worker(), "idempotency_key": "no-name"})
+        gone = self.lifecycle("worker_rename", str(uuid.uuid4()), idem="nobody", name="x")
+        self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        reader = self.hub.grant("reader2", [self.fleet], ["fleet:read", "worker:answer"])
+        with self.assertRaisesRegex(Fault, "outside this caller"):
+            self.lifecycle("worker_rename", idem="no-scope", token=reader["token"], name="x")
+        self.assertEqual(len(self.node.calls("rename")), n)
+
+    def test_rename_refuses_a_recycled_window(self):
+        # The window id the inventory answered no longer carries that @fleet_id by
+        # the time the adapter acts (tmux recycled it): refused, nothing renamed.
+        ident = str(uuid.uuid4())
+        self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "", ident))
+        code, out, err = self.node.controller.adapter("rename", "demo", "@12", str(uuid.uuid4()), "x")
+        self.assertEqual(code, 5, (out, err))
+        self.assertIn(b"no longer that session", err)
+        code, out, err = self.node.controller.adapter("rename", "demo", "@99", ident, "x")
+        self.assertEqual(code, 5, (out, err))
+        self.assertEqual(self.node.controller.adapter("rename", "demo", "@12", ident, "")[0], 2)
+        self.assertEqual(self.node.calls("rename"), [])
 
     def test_message_goes_through_the_issue_bridge(self):
         self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@13", None, True, "/fixture/project-scratch-4"))

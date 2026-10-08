@@ -25,7 +25,10 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             "worker_reap": "worker:reap", "gh_comment": "gh:comment",
             # worker_switch (issue #2102) closes the session and resumes the same
             # conversation on another subscription: a stop's authority, no new grant.
-            "worker_switch": "worker:stop"}
+            "worker_switch": "worker:stop",
+            # worker_rename (issue #2358) changes the window's display name only:
+            # a message's authority, the lowest a person who can talk to it holds.
+            "worker_rename": "worker:message"}
 # The tools that name a WORKER (a worker_id), not a fleet. worker_answer and
 # worker_reap (issue #1487, EPIC #1479 C8) are what a sidebar on another machine
 # runs on a row here: answer the pane's open prompt (fleet-answer.sh /
@@ -34,10 +37,14 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
 # dash-migrate.sh <window> to [<account>]: the same conversation resumed on the
 # fleet's active (or the named) subscription.
 WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap",
-                  "worker_switch")
+                  "worker_switch", "worker_rename")
 # worker_switch's optional `account`: a label in the accounts dir, one argv word
 # (fleet-manual-sub.sh check's own rule).
 ACCOUNT_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}")
+# worker_rename's `name` (issue #2358): a window name — 1 to 64 characters, no
+# control character (a tab or newline would split the inventory's columns), not
+# blank. One argv word on the node; never parsed by a shell or tmux.
+NAME_RE = re.compile(r"[^\x00-\x1f\x7f]{1,64}")
 # worker_answer's `answer` (issue #1487): `yes` / `no` for a permission prompt
 # (fleet-permission.sh --allow / --deny), else the picks of an AskUserQuestion —
 # one option number per question in order, `1,3` toggling several in a
@@ -433,6 +440,11 @@ def validate_write(action, params):
     elif action in WORKER_ACTIONS:
         if action == "worker_answer":
             fields(params, ("worker_id", "answer"))
+        elif action == "worker_rename":
+            fields(params, ("worker_id", "name"))
+            if not (isinstance(params["name"], str) and NAME_RE.fullmatch(params["name"])
+                    and params["name"].strip()):
+                raise Fault("INVALID_ARGUMENT", "name must be 1-64 characters with no control character")
         elif action == "worker_switch":
             fields(params, ("worker_id",), ("account",))
             if "account" in params and not (isinstance(params["account"], str)

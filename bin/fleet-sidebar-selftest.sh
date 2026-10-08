@@ -1539,12 +1539,18 @@ try:
     remote_wid = 'wid:' + F + '/issue-1423'
     remote_items = menu_items(remote_wid)
     remote_cmds = menu_commands(remote_wid)
-    check({'e', 'm', 'a', 's', 'q', 'c', 'x', 'n', '1', 'o', 'g'} <= set(remote_items),
+    check({'e', 'm', 'a', 'r', 's', 'q', 'c', 'x', 'n', '1', 'o', 'g'} <= set(remote_items),
           'the remote row menu lacks an action: %r' % remote_items)
     # s = 换到可用订阅 (issue #2102): the shell's way to move a walled row — the
     # guide included — onto a subscription with headroom, a hub write like stop
     for k in 'sqcx':
         check('fleet-sidebar-remote.sh' in remote_cmds[k], 'remote %s does not go through fleet-sidebar-remote.sh: %r' % (k, remote_cmds[k]))
+    # r = 改名… (issue #2358): a remote row renames too — asked on the line under
+    # the session like a local row's (parked `rename wid:…`, never a popup), then
+    # a hub write; greyed only when no view is up to ask on
+    check(not remote_items['r'].startswith('-') and '@sidebar_ask' in remote_cmds['r']
+          and 'rename ' + remote_wid in remote_cmds['r'] and 'dash-popup.sh' not in remote_cmds['r'],
+          'remote r does not ask the new name on the question line: %r %r' % (remote_items.get('r'), remote_cmds.get('r')))
     # message asks for its text on the line under the session (issues #1620,
     # #1950), not in a popup — and parks it without moving the keyboard to the list
     check('@sidebar_ask' in remote_cmds['m'] and 'message' in remote_cmds['m'] and 'dash-popup.sh' not in remote_cmds['m']
@@ -1558,7 +1564,7 @@ try:
     check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}') + ' · m5',
           'with the hub on the local menu title does not name this machine: %r' % t1)
     _, rshape = menu_shape(remote_wid)
-    check(rshape == 'e|ma|sqcx|n1og|E',
+    check(rshape == 'e|ma|rsqcx|n1og|E',
           'the remote row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % rshape)
     # In the SHELL (issue #1518) the row-less group is gone — new task, new on
     # m4, restore, add repo run scripts its computer does not have — and the
@@ -1569,7 +1575,7 @@ try:
     sh_shape = ''.join('E' if l.split('\t')[1] == '-Esc 关闭' else (l.split('\t')[0] if l.split('\t')[1] else '|')
                        for l in sh_out.splitlines() if l.count('\t') == 2 and not l.startswith('title\t'))
     # …and its own group instead: 我的客户端 (issue #1932), d
-    check(sh_shape == 'e|ma|sqcx|odz|E', 'the shell remote menu: not the row-less group gone + 已落地 · 我的客户端 · 退出 fleet (#1952; 详情列 left with #2305; z #2349): %r' % sh_shape)
+    check(sh_shape == 'e|ma|rsqcx|odz|E', 'the shell remote menu: not the row-less group gone + 已落地 · 我的客户端 · 退出 fleet (#1952; 详情列 left with #2305; z #2349; r #2358): %r' % sh_shape)
     check(not any(s in sh_out for s in ('dash-issue-new.sh', 'fleet-restore-pick.sh', 'dash-repo-add.sh')),
           'the shell remote menu names a machine-only script: %r' % sh_out)
     check(sh_out.split('\n', 1)[0] == 'title\t' + menu_shape(remote_wid)[0],
@@ -1628,6 +1634,27 @@ try:
     check(r.returncode == 0 and last[0] == 'worker_message' and _json.loads(last[1]).get('text') == '你好 $HOME',
           'the line-asked message did not go out verbatim: %r %s' % (last, r.stderr))
     check('按任意键' not in r.stderr and 'press any' not in r.stderr, 'the line-asked message waited on a key')
+    # 改名 (issue #2358): the new name from the line goes out as worker_rename's
+    # `name`, verbatim; the old name unchanged (or blank) sends nothing
+    r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'rename', 'fleet-test', remote_wid],
+                       env=dict(env_w, FLEET_SIDEBAR_TEXT="登录页 'a' $HOME"), text=True, stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=30)
+    last = writes.read_text().splitlines()[-1].split('\t')
+    check(r.returncode == 0 and last[0] == 'worker_rename' and _json.loads(last[1]).get('name') == "登录页 'a' $HOME"
+          and _json.loads(last[1]).get('worker_id') == F + '/issue-1423',
+          'the line-asked rename did not go out as worker_rename: %r %s' % (last, r.stderr))
+    n_now = len(writes.read_text().splitlines())
+    for same in ('侧边栏', '  '):
+        subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), 'rename', 'fleet-test', remote_wid],
+                       env=dict(env_w, FLEET_SIDEBAR_TEXT=same), stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+    check(len(writes.read_text().splitlines()) == n_now, 'an unchanged / blank rename reached the hub')
+    # the view's line starts on the row's cached name and hands ↵ to the hub write
+    os.environ['FLEET_STATUS_G'] = str(cache)
+    try:
+        prefill = sidebar.remote_name('fleet-test', remote_wid)
+    finally:
+        del os.environ['FLEET_STATUS_G']
+    check(prefill == '侧边栏', 'the rename line does not start on the remote row name: %r' % prefill)
     # 入口失联 (issue #1483, EPIC #1479 C4): global/hub_ok older than
     # FLEET_HUB_SESSIONS_STALE — the one word the rows and the bar read too — and
     # no action is sent: the popups say 入口失联 on stderr before asking anything,
@@ -1640,9 +1667,10 @@ try:
                        env=env_w, text=True, input='hello\n', capture_output=True, timeout=30)
     check(r.returncode == 0 and '入口失联 5m，稍后再试' in r.stderr and '发给' in r.stderr,
           'the message popup did not refuse with 入口失联 while the hub is silent: %s' % r.stderr)
-    for action in ('stop', 'reap', 'answer'):
+    for action in ('stop', 'reap', 'answer', 'rename'):
         r = subprocess.run(['bash', str(bin_dir / 'fleet-sidebar-remote.sh'), action, 'fleet-test', remote_wid],
-                           env=env_w, text=True, input='y', capture_output=True, timeout=30)
+                           env=env_w if action != 'rename' else dict(env_w, FLEET_SIDEBAR_TEXT='新名'),
+                           text=True, input='y', capture_output=True, timeout=30)
         check(r.returncode == 0, 'fleet-sidebar-remote.sh %s while the hub is silent failed: %s' % (action, r.stderr))
     check(len(writes.read_text().splitlines()) == n_writes, 'a hub write went out while the hub is silent: %r' % writes.read_text())
     printed = command(['bash', str(bin_dir / 'fleet-sidebar.sh'), 'menu', 'fleet-test', remote_wid, '--print']).stdout
@@ -1652,8 +1680,8 @@ try:
     lost_items, lost_cmds = menu_items(remote_wid), menu_commands(remote_wid)
     check(lost_items.get('1') == '-新建到 m4… · 入口失联 5m' and lost_cmds.get('1') == '',
           '«new task on m4» is not greyed with the reason while the hub is silent: %r %r' % (lost_items.get('1'), lost_cmds.get('1')))
-    check({'m', 'a', 'q', 'c', 'x'} <= set(lost_items) and all('fleet-sidebar-remote.sh' in lost_cmds[k] for k in 'qcx')
-          and all('@sidebar_ask' in lost_cmds[k] for k in 'ma'),
+    check({'m', 'a', 'r', 'q', 'c', 'x'} <= set(lost_items) and all('fleet-sidebar-remote.sh' in lost_cmds[k] for k in 'qcx')
+          and all('@sidebar_ask' in lost_cmds[k] for k in 'mar'),
           'the remote row actions left the menu while the hub is silent: %r' % lost_items)
     check(menu_items(w1).get('1') == '-新建到 m4… · 入口失联 5m', 'the local menu still offers «new task on m4» while the hub is silent: %r' % menu_items(w1).get('1'))
     (cache / 'hub_ok').write_text('%d\n' % int(time.time()))

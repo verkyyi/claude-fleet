@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,6 +239,35 @@ func TestFleetWriteByCertificate(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET %s: HTTP %d", control.WritePath, resp.StatusCode)
+	}
+}
+
+// worker_rename (claude-fleet#2358): the sidebar's 「改名…」 on a row on another
+// machine. A journalled write under worker:message's authority; the node gets
+// worker_id and the name — nothing else, and no name with a control character.
+func TestFleetWriteRename(t *testing.T) {
+	h, _, m4, _, f4 := twoNodes(t)
+	wid := f4.FleetID + "/issue-2"
+	if !hasString(FleetTools, "worker_rename") || !fleetWriteTools["worker_rename"] || fleetScopeOf["worker_rename"] != "worker:message" {
+		t.Fatal("worker_rename must be a listed write tool under worker:message")
+	}
+	op := postFleet(t, h, "worker_rename", map[string]any{"worker_id": wid, "name": "登录页 · 重做", "idempotency_key": "r1"}, 200)
+	if op["status"] != "accepted" {
+		t.Fatalf("worker_rename = %v; want accepted", op)
+	}
+	waitFor(t, 2*time.Second, "the node took the rename", func() bool { return m4.count() == 1 })
+	env := m4.writes[0]
+	params, _ := env["params"].(map[string]any)
+	if env["action"] != "worker_rename" || params["worker_id"] != wid || params["name"] != "登录页 · 重做" || len(params) != 2 {
+		t.Fatalf("the node was sent %v", env)
+	}
+	for i, bad := range []any{"", "   ", "a\tb", "a\nb", strings.Repeat("x", 65), 3, nil} {
+		postFleet(t, h, "worker_rename", map[string]any{"worker_id": wid, "name": bad, "idempotency_key": fmt.Sprintf("bad-%d", i)}, 400)
+	}
+	postFleet(t, h, "worker_rename", map[string]any{"worker_id": wid, "idempotency_key": "no-name"}, 400)
+	postFleet(t, h, "worker_rename", map[string]any{"worker_id": wid, "name": "x", "text": "x", "idempotency_key": "extra"}, 400)
+	if m4.count() != 1 {
+		t.Fatalf("a refused rename reached the node (%d writes)", m4.count())
 	}
 }
 

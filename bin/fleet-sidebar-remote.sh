@@ -22,6 +22,13 @@
 #                             fleet's active subscription (dash-migrate.sh `to`,
 #                             whose dry-run refuses the same / a benched target);
 #                             toasts the outcome — a refusal says why
+#   rename   worker_rename  — 改名… (issue #2358): the new name from
+#                             $FLEET_SIDEBAR_TEXT (the sidebar's input line,
+#                             pre-filled with the old one), sent; the node renames
+#                             the window holding the worker's @fleet_id — the
+#                             display name only, never the key. The outcome
+#                             toasted; a refusal (machine lost, no grant, the
+#                             session gone) says why. Without the text: asked.
 #   answer   worker_answer  — the same: $FLEET_SIDEBAR_TEXT, or asked — a
 #                             permission prompt (`⊘`, needs=perm) takes y / n →
 #                             yes / no; a question (`?`, needs=ask) the option
@@ -97,7 +104,7 @@ else:
 
 label() {  # the action's human name for the toast / popup title
   case "$1" in
-    stop|resume|reap|message|answer|switch) fleet_ui_t "remote_label_${1}_fmt" "$name" "$node" ;;
+    stop|resume|reap|message|answer|switch|rename) fleet_ui_t "remote_label_${1}_fmt" "$name" "$node" ;;
   esac
 }
 # write <tool> <json> [wait] → the record on stdout (fleet-hub-write's), rc its rc
@@ -122,7 +129,7 @@ fleet_status_remote_head "$sess"; fleet_status_hub_ok "$FSR_TS"
 if fleet_status_hub_lost "$(date +%s)"; then
   fleet_status_age "$FSH_AGE"
   case "$action" in
-    message|answer)
+    message|answer|rename)
       if [ -n "$LINE" ]; then toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")"
       else printf '%s\n%s\n' "$(label "$action")" "$(fleet_ui_t remote_hub_lost_fmt "$FSA")" >&2; pause; fi ;;
     stop|resume|reap|switch) toast "fleet: $(fleet_ui_t remote_hub_lost_fmt "$FSA")" ;;
@@ -161,6 +168,18 @@ case "$action" in
     [ -n "${text// /}" ] || exit 0
     rec=$(write worker_message "$(json_wid text "$text")" 30)
     tell "$(outcome "$rec" "$(label message)")"
+    ;;
+  rename)
+    # the new name from the sidebar's line (pre-filled with the old one), else
+    # the keyboard; unchanged or blank = nothing to do
+    if [ -n "$LINE" ]; then nm=$FLEET_SIDEBAR_TEXT
+    else
+      printf '%s\n' "$(label rename)" >&2
+      IFS= read -r -e nm 2>/dev/null || nm=''
+    fi
+    [ -n "${nm// /}" ] && [ "$nm" != "$name" ] || exit 0
+    rec=$(write worker_rename "$(json_wid name "$nm")" 30)
+    tell "$(outcome "$rec" "$(label rename)")"
     ;;
   answer)
     ans=''
