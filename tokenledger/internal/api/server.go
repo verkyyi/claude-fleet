@@ -361,6 +361,11 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/node/dist/", s.handleNodeDist)
 		mux.HandleFunc("/v1/node/self", s.handleNodeSelf)
 		mux.Handle("/v1/fleet/join-codes", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetJoinCodes))))
+		// A managed machine (claude-fleet#2214): trusted join codes and each
+		// machine's desired state are the operator's; the node reads its own.
+		// The exact /v1/fleet/nodes/revoke and /retire routes still win.
+		mux.Handle(FleetNodesPrefix, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetNodes))))
+		mux.HandleFunc("/v1/node/desired", s.handleNodeDesired)
 		// SPOT nodes (claude-fleet#1428): the node's own reclaim notice
 		// authenticates with its token; starting and releasing are the
 		// operator's.

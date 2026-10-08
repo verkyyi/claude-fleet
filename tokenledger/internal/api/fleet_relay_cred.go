@@ -231,8 +231,8 @@ func (s *Server) handleNodeRelayCredential(w http.ResponseWriter, r *http.Reques
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if trustOf(host, settings) != TrustTrusted {
-		refuse(http.StatusForbidden, LeaseUntrusted, machine+" is not a trusted machine — an untrusted machine's sessions go through the central proxy, never the relay with their own credential")
+	if t, src := s.endpointTrust(ep.ID, host, settings); t != TrustTrusted {
+		refuse(http.StatusForbidden, LeaseUntrusted, untrustedWhy(host, src)+" — an untrusted machine's sessions go through the central proxy, never the relay with their own credential")
 		return
 	}
 	var b [32]byte
@@ -352,7 +352,7 @@ func (s *Server) relayJudge(tok, hash string, now time.Time) relayVerdict {
 		if machine == "" {
 			return relayVerdict{why: "unknown or revoked relay credential"}
 		}
-		if trustOf(machine, settings) != TrustTrusted {
+		if !s.machineTrusted(machine, settings) {
 			return relayVerdict{why: machine + " is not a trusted machine"}
 		}
 		if rev, err := s.Store.RevokedFor(machine, ""); err != nil {

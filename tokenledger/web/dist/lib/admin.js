@@ -234,11 +234,17 @@ export function machineCards(snap) {
   const ms = (snap && Array.isArray(snap.machines)) ? snap.machines : [];
   const vers = {};
   const eps = {};
+  const trust = {};
+  const want = {};
   for (const n of (snap && snap.nodes) || []) {
     const h = n.hostname;
     if (n.endpoint_id) (eps[h] = eps[h] || []).push(n.endpoint_id);
     const v = n.fleet_version || n.agent_version || '';
     if (v && (!vers[h] || v > vers[h])) vers[h] = v;
+    // trust (claude-fleet#2214): a trusted login wins, a borrowed name is said
+    if (n.trust === 'trusted' && (!trust[h] || trust[h].trust !== 'trusted' || n.trust_source === 'join_code')) trust[h] = { trust: n.trust, source: n.trust_source || '' };
+    else if (!trust[h] && n.trust) trust[h] = { trust: n.trust, source: n.trust_source || '' };
+    if (n.desired && (!want[h] || n.desired.want > want[h].want)) want[h] = n.desired;
   }
   const rank = { online: 0, maintenance: 1, lost: 2 };
   return ms.map((m) => ({
@@ -249,6 +255,9 @@ export function machineCards(snap) {
     // spare logins (claude-fleet#2263): 备用 N · 已用 M / 上限 K; null while fleet.spares is off
     spare: typeof m.spare === 'number' ? m.spare : null, used: typeof m.logins_used === 'number' ? m.logins_used : null,
     cap: typeof m.login_cap === 'number' ? m.login_cap : null,
+    // trust and its source (join_code · operator · machine_name · name_borrowed), 期望 / 实际 (claude-fleet#2214)
+    trust: (trust[m.hostname] || {}).trust || '', trustSource: (trust[m.hostname] || {}).source || '',
+    desired: want[m.hostname] || null,
   })).sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3) || a.label.localeCompare(b.label));
 }
 

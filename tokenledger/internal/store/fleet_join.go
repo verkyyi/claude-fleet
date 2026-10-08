@@ -43,6 +43,10 @@ type JoinCode struct {
 	EndpointID string     `json:"endpoint_id,omitempty"`
 	JoinedHost string     `json:"joined_host,omitempty"`
 	JoinedUser string     `json:"joined_user,omitempty"`
+	// Trust / Role are what the code hands the endpoint it enrolls
+	// (claude-fleet#2214): trusted, and managed for a 托管 machine.
+	Trust string `json:"trust,omitempty"`
+	Role  string `json:"role,omitempty"`
 }
 
 // ErrJoinCode is a code that is unknown, already used or expired. One error
@@ -69,9 +73,9 @@ func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label
 		return err
 	}
 	defer tx.Rollback()
-	var codeLabel, kind string
-	err = tx.QueryRow(`SELECT label, kind FROM fleet_join_codes
-		WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?`, codeHash, fmtTime(now)).Scan(&codeLabel, &kind)
+	var codeLabel, kind, trust, role string
+	err = tx.QueryRow(`SELECT label, kind, trust, role FROM fleet_join_codes
+		WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?`, codeHash, fmtTime(now)).Scan(&codeLabel, &kind, &trust, &role)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrJoinCode
 	}
@@ -100,8 +104,23 @@ func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label
 	}
 	// node_kind comes from the CODE, never from the joining side
 	// (claude-fleet#1428): the hub minted it knowing what it was for.
-	if _, err := tx.Exec(`INSERT INTO endpoints (endpoint_id, account_uuid, label, token_hash, enrolled_at, kind, hostname, os_user, node_kind)
-		VALUES (?, NULL, ?, ?, ?, 'agent', ?, ?, ?)`, endpointID, label, tokenHash, fmtTime(now), host, osUser, kind); err != nil {
+	// Trust and role come from the CODE too (claude-fleet#2214): the
+	// operator's word at minting, held by this endpoint's identity whatever
+	// name it reports later. enrolled_host pins the name it joined under; a
+	// join that named no machine gets "?", so no later report can claim a
+	// trusted machine's name for it.
+	source := ""
+	if trust != "" {
+		source = TrustSourceJoinCode
+	}
+	enrolled := host
+	if enrolled == "" {
+		enrolled = "?"
+	}
+	if _, err := tx.Exec(`INSERT INTO endpoints (endpoint_id, account_uuid, label, token_hash, enrolled_at, kind, hostname, os_user, node_kind,
+		  enrolled_host, trust, trust_source, role)
+		VALUES (?, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`, endpointID, label, tokenHash, fmtTime(now), host, osUser, kind,
+		enrolled, trust, source, role); err != nil {
 		return fmt.Errorf("enroll endpoint: %w", err)
 	}
 	// A code the hub minted for a SPOT node it started: the ledger row learns
@@ -118,7 +137,7 @@ func (s *Store) JoinCodes(limit int) ([]JoinCode, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := s.read.Query(`SELECT label, kind, created_at, expires_at, used_at, endpoint_id, joined_host, joined_user
+	rows, err := s.read.Query(`SELECT label, kind, created_at, expires_at, used_at, endpoint_id, joined_host, joined_user, trust, role
 		FROM fleet_join_codes ORDER BY created_at DESC LIMIT ` + strconv.Itoa(limit))
 	if err != nil {
 		return nil, err
@@ -129,7 +148,7 @@ func (s *Store) JoinCodes(limit int) ([]JoinCode, error) {
 		var c JoinCode
 		var created, expires string
 		var used, ep sql.NullString
-		if err := rows.Scan(&c.Label, &c.Kind, &created, &expires, &used, &ep, &c.JoinedHost, &c.JoinedUser); err != nil {
+		if err := rows.Scan(&c.Label, &c.Kind, &created, &expires, &used, &ep, &c.JoinedHost, &c.JoinedUser, &c.Trust, &c.Role); err != nil {
 			return nil, err
 		}
 		c.CreatedAt, _ = time.Parse(rfc, created)

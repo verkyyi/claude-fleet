@@ -1347,6 +1347,22 @@ principal and revocation checks, an untrusted machine's lease is
 `GET /v1/node/self` carry `trust`. The doctor's `可信` row shows it for this
 machine (`fleet-node-trust.sh self`).
 
+**Trust rides the endpoint, not the name (claude-fleet#2214, EPIC #2329 C2).**
+The machine name is the agent's own report, so a name-keyed trust let any
+endpoint that reported a trusted machine's hostname inherit its trust. Now an
+endpoint's trust is, in order: the operator's `untrusted` for the name it
+reports (only ever takes trust away) · the endpoint's OWN trust — set by the
+join code that enrolled it (`POST /v1/fleet/nodes/join-codes`: trusted, role
+`managed`, one redemption within an hour; the machines page's 「添加机器」 mints
+these) or by the operator's desired-state write — whatever name it reports ·
+for one version (`# compat-1v`) the old name setting, but only while the
+endpoint reports the name it ENROLLED under (`endpoints.enrolled_host`: the
+join's hostname, else its first report). A borrowed name reads `untrusted`,
+`trust_source: name_borrowed`, refuses the lease and the relay credential, and
+its hello writes a `BORROWED NAME` audit row. The roster and `/v1/node/self`
+carry `trust_source` (`join_code` · `operator` · `machine_name` ·
+`name_borrowed`); the desired state itself is `docs/MANAGED-NODE.md`.
+
 **A machine's enrollment can be taken back (claude-fleet#1403).** Trust
 decides what a machine may lease; revoking decides whether it may speak at
 all. `bin/fleet-node-revoke.sh <machine>[:<login>] | <ep_id> [--reason …]`

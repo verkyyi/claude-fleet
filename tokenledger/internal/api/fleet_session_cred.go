@@ -512,7 +512,7 @@ func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 	}
 	trustSet, _ := s.trustSettings(now)
 	audit(c, fl.FleetID, "issued "+claims.ID+" to "+principal+" ("+strings.Join(providers, ",")+") until "+
-		time.Unix(claims.Exp, 0).UTC().Format(time.RFC3339)+" · "+trustOf(host, trustSet))
+		time.Unix(claims.Exp, 0).UTC().Format(time.RFC3339)+" · "+trustWord(s.endpointTrust(ep.ID, host, trustSet)))
 	writeJSON(w, http.StatusOK, sessionCredAnswer(signSessionCred(claims, s.SessionCredKey), claims))
 }
 

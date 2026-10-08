@@ -284,6 +284,19 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusInternalError, "hub could not record the node")
 		return
 	}
+	// A borrowed machine name is said out loud (claude-fleet#2214): the node
+	// reports a trusted machine's name it did not join as — it gets no trust,
+	// and the audit carries one row per connection.
+	// The raw settings, never trustSettings: a hello must not run the trust
+	// migration before the machine's accounts exist.
+	if set, err := s.Store.FleetSettings(); err == nil {
+		if et, err := s.Store.EndpointTrustOf(ep.ID); err == nil {
+			if _, src := nodeTrust(ep.Hostname, et, set); src == TrustSourceNameBorrowed {
+				s.leaseAudit("node:"+ep.ID, "node_trust", "machine:"+trustKey(ep.Hostname)[len(NodeTrustPrefix):],
+					"BORROWED NAME — joined as "+et.EnrolledHost+", reports "+ep.Hostname+": untrusted", time.Now())
+			}
+		}
+	}
 	// A machine joining as a mapped login AFTER its person signed in: adopt
 	// it now rather than at their next sign-in (claude-fleet#1458).
 	if s.mappedLogin(ep.OSUser) {
@@ -563,6 +576,24 @@ type NodeView struct {
 	// trusted | untrusted — only a trusted one leases credentials, and the
 	// node's own proxy reads it off /v1/node/self to pick its road.
 	Trust string `json:"trust,omitempty"`
+	// TrustSource is where Trust came from (claude-fleet#2214): join_code |
+	// operator (the endpoint's own) · machine_name (the old name rule,
+	// compat-1v) · name_borrowed (a trusted name this node did not join as).
+	TrustSource string `json:"trust_source,omitempty"`
+	// Role is managed for a 托管 machine (EPIC #2329).
+	Role string `json:"role,omitempty"`
+	// Desired pairs the hub's desired-state version with the one the node
+	// reports it reached; absent when neither exists.
+	Desired *DesiredView `json:"desired,omitempty"`
+}
+
+// DesiredView is one node's 期望 / 实际 pair on the roster.
+type DesiredView struct {
+	Want        int    `json:"want"`
+	Reached     int    `json:"reached"`
+	Release     string `json:"release,omitempty"`
+	WantRelease string `json:"want_release,omitempty"`
+	Diff        string `json:"diff,omitempty"`
 }
 
 // NodeFleetSummary is one fleet on a node, without its window list (C2 owns
@@ -671,6 +702,8 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	// on a hub that never started a SPOT node, and the reads are one query
 	// each.
 	kinds, _ := s.Store.EphemeralEndpoints()
+	// Each endpoint's own trust (claude-fleet#2214): one read for the roster.
+	epTrust, _, _ := s.Store.EndpointTrusts()
 	spotState := map[string]string{}
 	if spots, err := s.Store.SpotNodes(false, 0); err == nil {
 		for _, sp := range spots {
@@ -700,7 +733,12 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			v.Kind = k
 		}
 		v.Spot = spotState[n.EndpointID]
-		v.Trust = trustOf(n.Hostname, settings)
+		et, known := epTrust[n.EndpointID]
+		if !known {
+			et, _ = s.Store.EndpointTrustOf(n.EndpointID)
+		}
+		v.Trust, v.TrustSource = nodeTrust(n.Hostname, et, settings)
+		v.Role = et.Role
 		if m, flagged := maintenanceOf(n.Hostname, settings); flagged {
 			v.Maintenance = &m
 			if v.Status == "online" {
@@ -715,6 +753,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			v.ComputeWhy = cv.Why
 		}
 		v.Personal = s.personalOf(n.EndpointID, hb)
+		v.Desired = s.desiredView(n.EndpointID, hb.Desired)
 		if c := s.nodes.get(n.EndpointID); c != nil {
 			v.Connected, v.Admin = true, c.admin
 			if c.admin {

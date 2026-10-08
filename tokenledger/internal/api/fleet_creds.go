@@ -222,9 +222,10 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if trustOf(host, trustSet) != TrustTrusted {
-		deny(http.StatusForbidden, LeaseUntrusted, principal, firstLabel(host)+" is not a trusted machine — the operator marks it with fleet-node-trust.sh set "+
-			strings.ToLower(firstLabel(host))+" trusted")
+	// The endpoint's own trust first, a name only for the endpoint that
+	// enrolled under it (claude-fleet#2214).
+	if t, src := s.endpointTrust(ep.ID, host, trustSet); t != TrustTrusted {
+		deny(http.StatusForbidden, LeaseUntrusted, principal, untrustedWhy(host, src))
 		return
 	}
 

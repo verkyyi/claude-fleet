@@ -342,3 +342,17 @@ test('a card says when its reading was taken and by whom (claude-fleet#2169)', (
   const [old] = subscriptions({ limits: LIMITS, accounts: ACCOUNTS, creds: CREDS, live: LIVE });
   assert.equal(old.readVia, '');
 });
+
+test('machines: trust and its source, 期望 / 实际 for a managed machine (claude-fleet#2214)', () => {
+  const ms = machineCards({ machines: [{ hostname: 'm4', status: 'online' }, { hostname: 'm5', status: 'online' }, { hostname: 'm6', status: 'online' }],
+    nodes: [
+      { hostname: 'm4', trust: 'trusted', trust_source: 'join_code', desired: { want: 3, reached: 2, diff: 'codex' } },
+      { hostname: 'm4', trust: 'trusted', trust_source: 'machine_name' },
+      { hostname: 'm5', trust: 'untrusted', trust_source: 'name_borrowed' },
+      { hostname: 'm6' },
+    ] });
+  const by = Object.fromEntries(ms.map((m) => [m.name, m]));
+  assert.deepEqual([by.m4.trust, by.m4.trustSource, by.m4.desired.want, by.m4.desired.reached], ['trusted', 'join_code', 3, 2]);
+  assert.deepEqual([by.m5.trust, by.m5.trustSource, by.m5.desired], ['untrusted', 'name_borrowed', null]);
+  assert.deepEqual([by.m6.trust, by.m6.desired], ['', null]);
+});

@@ -210,6 +210,12 @@ func migrate(db *sql.DB) error {
 		{"endpoints", "fleet_error", "TEXT NOT NULL DEFAULT ''"},
 		{"endpoints", "fleet_fetched", "INTEGER NOT NULL DEFAULT 0"},
 		{"endpoints", "fleet_seen_at", "TEXT"},
+		// The machine name an endpoint ENROLLED under (claude-fleet#2214):
+		// the join's hostname, else the first one it ever reported. Trust by
+		// machine name holds only while the endpoint still reports this name,
+		// so a later report that borrows a trusted machine's name inherits
+		// nothing. '' = never named yet.
+		{"endpoints", "enrolled_host", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -222,6 +228,12 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(dialectOf(db).ddl(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", a.table, a.column, a.spec))); err != nil {
 			return fmt.Errorf("add %s.%s: %w", a.table, a.column, err)
 		}
+	}
+	// Every endpoint enrolled before #2214 enrolled under the name it reports
+	// now. Idempotent: a stamped row is left alone, and a row the touch has
+	// named is stamped by the touch itself.
+	if _, err := db.Exec(`UPDATE endpoints SET enrolled_host = hostname WHERE enrolled_host = '' AND hostname <> ''`); err != nil {
+		return fmt.Errorf("backfill endpoints.enrolled_host: %w", err)
 	}
 	if err := migrateSources(db); err != nil {
 		return err
@@ -630,10 +642,10 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 			UPDATE endpoints SET account_uuid = ?, hostname = ?, os = ?, arch = ?,
 			       machine_id = COALESCE(NULLIF(?,''), machine_id),
 			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
-			       last_seen = ?
+			       last_seen = ?, enrolled_host = CASE WHEN enrolled_host = '' THEN ? ELSE enrolled_host END
 			WHERE endpoint_id = ?`,
 			id.AccountUUID, id.Hostname, id.OS, id.Arch, id.MachineID,
-			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), endpointID)
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, endpointID)
 	} else {
 		// Everything except the account: the machine is still reporting, and
 		// its hardware facts are just as true on a secondary batch.
@@ -641,10 +653,10 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 			UPDATE endpoints SET hostname = ?, os = ?, arch = ?,
 			       machine_id = COALESCE(NULLIF(?,''), machine_id),
 			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
-			       last_seen = ?
+			       last_seen = ?, enrolled_host = CASE WHEN enrolled_host = '' THEN ? ELSE enrolled_host END
 			WHERE endpoint_id = ?`,
 			id.Hostname, id.OS, id.Arch, id.MachineID,
-			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), endpointID)
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, endpointID)
 	}
 	if err != nil {
 		return "", false, fmt.Errorf("touch endpoint: %w", err)
