@@ -2120,6 +2120,17 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Transcript archive tick budget @group=disk @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_TRANSCRIPT_ARCHIVE_BUDGET=30    # seconds of work per tick; a backlog resumes next tick
 
+# Homebrew keg permissions (issue #2283) — the diskguard tick's brew pass. brew
+# pours kegs with the caller's umask, so an owner on 077 leaves kegs no other
+# login can read (python ssl, tmux). On a machine with 2+ logins, as the brew
+# prefix's owner, the pass puts Cellar / opt / keg paths back to go+rX and logs
+# each repair in ~/.config/claude-fleet/diskguard/brew-perms.log; the doctor's
+# `brew` row WARNs when this login cannot repair them.
+# @label=Homebrew keg repair @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_BREW_PERMS=1                # 0 = the pass is OFF
+# @label=Homebrew keg repair interval @group=disk @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_BREW_PERMS_EVERY=300        # min seconds between two passes
+
 # Memory guard (issue #1292) — com.claude-fleet.memguard, a KeepAlive daemon that
 # samples every 2s. 2026-10-03 one `git` went from nothing to ~40 GB in two
 # seconds and rebooted the machine with every session on it. It only ever touches
