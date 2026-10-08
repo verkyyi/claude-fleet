@@ -209,7 +209,7 @@ case "$mode" in
     # only the launcher's @cc_model gives that — compat-1v: 下一批删), `effort=`.
     # Read as conf/statusline.sh stamped them, never recomputed; an unmeasured
     # window carries the five keys empty.
-    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\037#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\037#{@ctx_band}\037#{@ctx_ts}\037#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\037#{@effort}' 2>/dev/null) || ctxs=''
+    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}' 2>/dev/null) || ctxs=''
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -290,8 +290,10 @@ case "$mode" in
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
       cl='' cb='' cts='' cm='' ce=''
       if [ -n "$ctxs" ]; then
-        # \037, never a TAB: TAB is IFS whitespace, so `read` would collapse an empty field
-        IFS=$'\037' read -r _ cl cb cts cm ce <<<"$(printf '%s\n' "$ctxs" | awk -F'\037' -v w="$wid" '$1 == w { print; exit }')"
+        # each field `=`-led, so no field is ever empty: a TAB is IFS whitespace and
+        # `read` would collapse an empty one (no \037 here — an older tmux prints it as _)
+        IFS=$'\t' read -r _ cl cb cts cm ce <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
+        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=}
         case "$cl" in *[!0-9]*) cl='' ;; esac
         case "$cb" in ok|watch|handoff) ;; *) cb='' ;; esac
         case "$cts" in *[!0-9]*) cts='' ;; esac
