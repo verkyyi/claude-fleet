@@ -16,6 +16,8 @@
 #                              bin/fleet-cred-proxy.py (the upstream allow-list) — issue #2290
 #   root-log-in-home           bin/fleet-credsep.py agent_log (issue #2296): the root agent's
 #                              log is not in the home
+#   cred-sep-quota-blind       bin/fleet-account.sh quota_proxy_rows + bin/.fleet-account.py
+#                              claude_login (issue #2412): a separated login picks by quota
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -233,6 +235,35 @@ PY
   root_writes "$eff" 2>/dev/null
   ! grep -q 'ROOT WROTE' "$victim" || { WHY="root's write reached the link's target through $eff"; return 1; }
   WHAT="credsep 把节点代理改成 root 启动时，日志从 ~/.ccquota/agent.log 移到 \$LOG_BASE/<登录>/agent.log：同一根软链，旧写法 root 写进目标文件，新写法写不到"
+}
+
+# cred-sep-quota-blind (issue #2412): on 2026-10-08 m5 a separated login could
+# read neither its leases nor the hub's quota (no viewer token, no
+# CCQUOTA_ACCOUNT pin) — every label `auth:no_credentials`, no quota row — so
+# pick_active kept account.active: every new session of cj's landed on a 99%
+# account while another had 79% left. The drill is that login: hub: markers, no
+# lease file, credsep.json, no hub; the proxy's answer is played through the
+# FLEET_ACCOUNT_PROXY_QUOTA_CMD seam and its `accounts` socket is not there.
+drill_cred_sep_quota_blind() {
+  CAP=20
+  local sb="$WORK/quotablind" t0 acc pick rows soon
+  mkdir -p "$sb/conf/accounts" "$sb/tmp"
+  printf 'hub:gm\n' > "$sb/conf/accounts/gm"; printf 'hub:ic\n' > "$sb/conf/accounts/ic"
+  printf '{"separated": true, "run": "%s/run-none"}\n' "$sb" > "$sb/conf/credsep.json"
+  mkdir -p "$sb/tmp/.claude-dash/global"; printf 'gm\n' > "$sb/tmp/.claude-dash/global/account.active"
+  soon=$(( $(date +%s) + 3600 ))
+  acc='{"claude":{"gm":{"rl5h":"0","rl7d":"99","rl_reset5":"'$soon'","rl_reset7":"'$soon'","ts":1},"ic":{"rl5h":"11","rl7d":"21","rl_reset5":"'$soon'","rl_reset7":"'$soon'","ts":1}}}'
+  _acct() { env -i HOME="$sb" PATH="$PATH" TMPDIR="$sb/tmp" FLEET_CONF_DIR="$sb/conf" FLEET_ACCOUNTS_DIR="$sb/conf/accounts" \
+              FLEET_ACCOUNT_PAUSED_CMD="exit 1" FLEET_ACCOUNT_PROXY_QUOTA_CMD="printf '%s' '{\"accounts\":$acc}'" \
+              bash "$BIN/fleet-account.sh" "$@" 2>/dev/null; }
+  t0=$(now)
+  _acct quota >/dev/null
+  pick=$(_acct active)
+  SECS=$(since "$t0")
+  rows=$(cat "$sb/tmp/.claude-dash/global/account.quota" 2>/dev/null | cut -f1,3 | tr '\t\n' ': ')
+  [ "$pick" = ic ] || { WHY="the pick stayed blind: active=${pick:-<none>} (quota rows: ${rows:-none}; blind: $(_acct blind))"; return 1; }
+  [ -z "$(_acct blind)" ] || { WHY="doctor still reads the pick as blind: $(_acct blind)"; return 1; }
+  WHAT="隔离登录读不到租约也读不到入口额度：额度改从凭据代理的限流读数来（${rows% }），代理不答时登录算代理持有；新会话离开 7d 99% 的 gm、落到 ic"
 }
 
 cred_run_drills "$0"

@@ -1242,6 +1242,33 @@ def lease_expiries(cfg):
     return out
 
 
+def account_quota(t):
+    """{provider: {account: its newest rate-limit reading}} (issue #2412) — what a
+    SEPARATED login picks its account by: it cannot read the hub's quota, and its
+    own sessions see only the accounts they ran on. On the machine's shared proxy
+    every login's sessions count, but only for an account THIS login also holds
+    (its pool index, its leases, its own readings): percentages and resets, never
+    a session id, a login or a token."""
+    held = set()
+    for k in pool_index(t.cfg):
+        kind, _, label = k.partition(":")
+        held.add((kind, label))
+    if t.cfg.store:
+        held.update(("claude", label) for label in lease_expiries(t.cfg))
+    cutoff = time.time() - 86400
+    out = {}
+    with Proxy.lock:
+        for tt in (list(Proxy.tenants.values()) or [t]):
+            for v in tt.quota.values():
+                key = (v.get("provider") or "claude", v.get("acct") or "")
+                if not key[1] or v.get("ts", 0) <= cutoff or (tt is not t and key not in held):
+                    continue
+                cur = out.setdefault(key[0], {}).get(key[1])
+                if cur is None or v["ts"] > cur["ts"]:
+                    out[key[0]][key[1]] = {f: v[f] for f in ("rl5h", "rl7d", "rl_reset5", "rl_reset7", "ts") if f in v}
+    return out
+
+
 def pool_gc(pool, cfgs):
     """Remove every pool file no tenant's index names."""
     keep = set()
@@ -1457,6 +1484,8 @@ def ctl_handle(req, t):
         with Proxy.lock:
             q = {k: dict(v) for k, v in t.quota.items() if v["ts"] > time.time() - 86400}
         return {"ok": True, "quota": q}
+    if op == "account-quota":
+        return {"ok": True, "accounts": account_quota(t)}
     if op == "pass":
         # the shared proxy (issue #2217): a session's hub pass is filed under its
         # login here, so a request carrying it is that login's (renewal, log)
@@ -1898,6 +1927,7 @@ def main():
     t = sub.add_parser("attach")
     t.add_argument("--sid", required=True)
     sub.add_parser("quota")
+    sub.add_parser("account-quota")
     u = sub.add_parser("status")
     u.add_argument("--json", action="store_true")
     sub.add_parser("machine")
@@ -1951,6 +1981,11 @@ def main():
         print(json.dumps(res, sort_keys=True))
     elif a.cmd == "quota":
         print(json.dumps(ctl_call(a.state, {"op": "quota"})["quota"], sort_keys=True))
+    elif a.cmd == "account-quota":
+        res = ctl_call(a.state, {"op": "account-quota"})
+        if "accounts" not in res:      # an older proxy: no such op
+            sys.exit(1)
+        print(json.dumps(res["accounts"], sort_keys=True))
     elif a.cmd == "status":
         res = ctl_call(a.state, {"op": "status"})
         res.pop("ok", None)

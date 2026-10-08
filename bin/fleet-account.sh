@@ -680,18 +680,112 @@ quota_empty_streak() {
 # including the ones that succeed, because the clear-on-success half is what keeps
 # the alarm off a hub that merely blinked.
 quota_fetch() {
-  command -v "$CCQUOTA" >/dev/null 2>&1 || return 0
-  [ -n "${CCQUOTA_HUB_URL:-}" ] || return 0
-  local rows raw
-  raw=$("$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null)
-  rows=$(printf '%s' "$raw" | quota_parse)
+  local rows="" raw="" hub=0 prows
+  if command -v "$CCQUOTA" >/dev/null 2>&1 && [ -n "${CCQUOTA_HUB_URL:-}" ]; then
+    hub=1
+    raw=$("$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null)
+    rows=$(printf '%s' "$raw" | quota_parse)
+  fi
+  prows=$(quota_proxy_rows)
+  [ "$hub" = 1 ] || [ -n "$prows" ] || return 0
+  rows=$(quota_merge "$rows" "$prows")
   mkdir -p "$STATE_DIR"
-  printf '%s' "$raw" | atomic_write "$STATE_DIR/account.quota.json"
+  [ "$hub" = 1 ] && printf '%s' "$raw" | atomic_write "$STATE_DIR/account.quota.json"
   printf '%s' "$rows" | atomic_write "$STATE_QUOTA"
   now | atomic_write "$STATE_QUOTA_TS"
   quota_empty_streak "$rows"
-  model_quota_sync "$raw"
+  [ "$hub" = 1 ] && model_quota_sync "$raw"
   quota_paused_fetch
+}
+
+# --- a SEPARATED login's quota, from the credential proxy (issue #2412) -------
+# Separated (credsep.json, #1971) a login reads no credential and, as a rule, has
+# no viewer token for the hub's /v1/limits — and its pool labels carry no
+# CCQUOTA_ACCOUNT pin either — so ccquota gave it no row, pick_best had no
+# opinion, and every new session stuck on account.active while it sat at 99%.
+# The proxy that holds the leases sees every answer's rate-limit headers (#1978):
+# `fleet-cred-proxy.sh account-quota` is the newest reading per account (on the
+# machine's shared proxy: every login's sessions on an account this login also
+# holds), an older proxy's `quota` the per-session readings folded here. A label
+# matches the proxy's account by its marker — `hub:<H>` / `store:<S>` name the
+# pool label, anything else the label itself. A window whose reset has passed
+# reads 0 (it refreshed). These rows only FILL labels ccquota left without one
+# (quota_merge): the hub stays the source wherever it answers. Not separated ⇒
+# no call, no row, byte for byte. FLEET_ACCOUNT_PROXY_QUOTA_CMD is the selftest
+# seam: its stdout is {"accounts":{"claude":{label:reading}}} or {"sessions":{…}}.
+acct_separated() { [ -f "$FLEET_CONF_DIR/credsep.json" ]; }
+quota_proxy_json() {
+  local out
+  if [ -n "${FLEET_ACCOUNT_PROXY_QUOTA_CMD:-}" ]; then bash -c "$FLEET_ACCOUNT_PROXY_QUOTA_CMD" 2>/dev/null; return 0; fi
+  acct_separated || return 0
+  out=$(bash "$BIN/fleet-cred-proxy.sh" account-quota 2>/dev/null) && [ -n "$out" ] \
+    && { printf '{"accounts":%s}' "$out"; return 0; }
+  out=$(bash "$BIN/fleet-cred-proxy.sh" quota 2>/dev/null) && [ -n "$out" ] && printf '{"sessions":%s}' "$out"
+  return 0
+}
+quota_proxy_rows() {
+  local js map l t k
+  js=$(quota_proxy_json); [ -n "$js" ] || return 0
+  map=$(while IFS= read -r l; do
+          [ -n "$l" ] || continue
+          t=$(acct_token "$l"); k=$l
+          case "$t" in (hub:?*) k=${t#hub:} ;; (store:?*) k=${t#store:} ;; esac
+          printf '%s\t%s\n' "$l" "$k"
+        done <<EOF
+$(acct_labels)
+EOF
+)
+  QP_MAP="$map" QP_JSON="$js" QP_NOW="$(now)" python3 - <<'PY'
+import json, os
+try:
+    d = json.loads(os.environ.get("QP_JSON", ""))
+except ValueError:
+    raise SystemExit(0)
+now = int(os.environ.get("QP_NOW") or 0)
+best = {}
+if isinstance(d, dict) and isinstance(d.get("accounts"), dict):
+    src = d["accounts"].get("claude")
+    for acct, rd in (src.items() if isinstance(src, dict) else []):
+        if isinstance(rd, dict):
+            best[acct] = rd
+elif isinstance(d, dict) and isinstance(d.get("sessions"), dict):
+    for rd in d["sessions"].values():
+        if not isinstance(rd, dict) or (rd.get("provider") or "claude") != "claude":
+            continue
+        a = rd.get("acct") or ""
+        if a and (a not in best or int(rd.get("ts") or 0) > int(best[a].get("ts") or 0)):
+            best[a] = rd
+def pct(v, reset):
+    try:
+        u = float(v)
+    except (TypeError, ValueError):
+        return None
+    try:
+        r = int(reset)
+    except (TypeError, ValueError):
+        r = 0
+    return (0 if 0 < r <= now else u), (r if r > now else 0)
+for line in os.environ.get("QP_MAP", "").splitlines():
+    label, _, key = line.partition("\t")
+    rd = best.get(key) or best.get(label)
+    if not label or not rd:
+        continue
+    a, b = pct(rd.get("rl5h"), rd.get("rl_reset5")), pct(rd.get("rl7d"), rd.get("rl_reset7"))
+    if a is None or b is None:
+        continue
+    (u5, r5), (u7, r7) = a, b
+    print("%s\t%d\t%d\t%d\t%d\t%d\t0" % (label, round(u5), round(u7), round(100 - max(u5, u7)), r5, r7))
+PY
+}
+# quota_merge <hub-rows> <proxy-rows> → the hub's rows, then a proxy row for each
+# label the hub gave none.
+quota_merge() {
+  [ -n "$2" ] || { printf '%s' "$1"; return 0; }
+  { [ -z "$1" ] || printf '%s\n' "$1"
+    printf '%s\n' "$2" | awk -F'\t' -v have="$(printf '%s\n' "$1" | cut -f1 | tr '\n' ' ')" '
+      BEGIN { n = split(have, h, " "); for (i = 1; i <= n; i++) seen[h[i]] = 1 }
+      NF && !($1 in seen)'
+  } | awk 'NF'
 }
 # quota_paused_fetch — the hub's paused pool accounts (issue #2083), from the
 # public client-settings `pool` segment, into $STATE_PAUSED, on the same TTL'd
@@ -857,7 +951,7 @@ cmd_quota_verdict() {
   done
   case "$axis" in ''|5h|7d) ;; *) label="" ;; esac
   [ -n "$label" ] || { echo "quota-verdict: usage: quota-verdict <label> [--axis 5h|7d] [--refresh]" >&2; return 2; }
-  if ! command -v "$CCQUOTA" >/dev/null 2>&1 || [ -z "${CCQUOTA_HUB_URL:-}" ]; then
+  if { ! command -v "$CCQUOTA" >/dev/null 2>&1 || [ -z "${CCQUOTA_HUB_URL:-}" ]; } && ! acct_separated; then
     echo "quota-verdict: $label unknown — no ccquota hub configured" >&2; echo unknown; return 0
   fi
   ts=$(cat "$STATE_QUOTA_TS" 2>/dev/null || echo 0); case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
@@ -1147,9 +1241,16 @@ pick_active() {
   acct_auth_scan
   # No label has a valid login (#1670): stay where we are — a hard switch onto
   # another dead login is what parked a session until morning — and say so.
+  # …but never on one a limit banner benched (issue #2412): it fails for sure, and
+  # every login reading out is as likely the reader's blind spot as the logins'.
   if ! acct_any_auth_ok; then
     acct_auth_alert
-    if [ -n "$cur" ] && acct_labels | grep -qx "$cur"; then printf '%s' "$cur"
+    if [ -n "$cur" ] && acct_labels | grep -qx "$cur" && acct_eligible "$cur"; then printf '%s' "$cur"
+    elif best=$(acct_labels | awk -v c="$cur" '{ l[NR] = $0; if ($0 == c) at = NR }
+                 END { for (i = 1; i <= NR; i++) print l[(at + i - 1) % NR + 1] }' \
+                | while IFS= read -r l; do acct_eligible "$l" && { printf '%s' "$l"; break; }; done) && [ -n "$best" ]
+    then printf '%s' "$best"
+    elif [ -n "$cur" ] && acct_labels | grep -qx "$cur"; then printf '%s' "$cur"
     else acct_labels | sed -n 1p | tr -d '\n'; fi
     return 0
   fi
@@ -1702,13 +1803,25 @@ EOF
 # token in <label>.hub/.credentials.json. Shows where it comes from and when the
 # token in hand runs out — the agent renews it ~2h before, so `expired` means the
 # agent is not leasing (stopped, revoked at the hub, or the hub unreachable).
+# Separated (issue #2412) the lease is the proxy's, never in this login's reach:
+# its expiry comes from `fleet-cred-proxy.sh accounts` (#2308), asked once per list.
+_HUB_PROXY_LEASES=
 hub_state() {
-  local f="$ACCT_DIR/$1.hub/.credentials.json" exp
+  local f="$ACCT_DIR/$1.hub/.credentials.json" exp h src="hub"
   exp=$(sed -n 's/.*"expiresAt":\([0-9][0-9]*\).*/\1/p' "$f" 2>/dev/null | head -n1)
+  if [ -z "$exp" ] && acct_separated; then
+    [ -n "$_HUB_PROXY_LEASES" ] || _HUB_PROXY_LEASES=$(bash "$BIN/fleet-cred-proxy.sh" accounts 2>/dev/null || printf '{}')
+    h=$(acct_token "$1"); h=${h#hub:}; [ -n "$h" ] || h=$1
+    exp=$(printf '%s' "$_HUB_PROXY_LEASES" | python3 -c 'import json,sys
+try: v = json.load(sys.stdin).get(sys.argv[1])
+except Exception: v = None
+print(int(v) if isinstance(v, (int, float)) else "")' "$h" 2>/dev/null)
+    src="hub · held by the credential proxy"
+  fi
   if [ -z "$exp" ]; then printf '%sNO TOKEN%s %s· hub, nothing leased yet%s' "$A_RED" "$A_RST" "$A_DIM" "$A_RST"; return; fi
   exp=$(( exp / 1000 ))
-  if [ "$exp" -le "$2" ]; then printf '%sexpired%s %s· hub%s' "$A_RED" "$A_RST" "$A_DIM" "$A_RST"; return; fi
-  printf '%sok%s %s· hub · expires in ~%s%s' "$A_GRN" "$A_RST" "$A_DIM" "$(human_dur $(( exp - $2 )))" "$A_RST"
+  if [ "$exp" -le "$2" ]; then printf '%sexpired%s %s· %s%s' "$A_RED" "$A_RST" "$A_DIM" "$src" "$A_RST"; return; fi
+  printf '%sok%s %s· %s · expires in ~%s%s' "$A_GRN" "$A_RST" "$A_DIM" "$src" "$(human_dur $(( exp - $2 )))" "$A_RST"
 }
 
 cmd_list() {
@@ -1806,6 +1919,18 @@ $(acct_labels)
 EOF
 }
 
+# cmd_blind — the doctor's `account-pick` question (issue #2412): is the pick
+# BLIND? Every label out on its login AND no quota row: then pick_active keeps
+# account.active whatever it is spending, and nothing on any dial says so.
+# Prints the excluded set when blind, nothing otherwise.
+cmd_blind() {
+  local _ACCT_AUTH=""
+  acct_auth_scan
+  acct_any_auth_ok && return 0
+  [ -n "$(quota_rows cached)" ] && return 0
+  acct_auth_excluded
+}
+
 # Dispatch ONLY when executed directly. Sourcing (the selftest does this to unit
 # -test the pure helpers) must not run a command — no rotation, no state writes —
 # so the tests can exercise dur_secs/acct_ttl/pick_active/… in isolation.
@@ -1830,6 +1955,7 @@ case "${1:-active}" in
   reauth-since)  acct_reauth_since "${2:-}" ;;
   quota)         shift; cmd_quota "$@" ;;
   quota-verdict) shift; cmd_quota_verdict "$@" ;;
+  blind)         cmd_blind ;;
   pace)          cmd_pace ;;
   bench)         cmd_bench "${2:-}" "${3:-}" "${4:-}" ;;
   model-limited) cmd_model_limited "${2:-}" "${3:-}" "${4:-}" ;;
@@ -1839,6 +1965,6 @@ case "${1:-active}" in
   migrate)       shift; exec bash "$BIN/fleet-migrate.sh" "$@" ;;
   whoami)        shift; exec bash "$BIN/fleet-migrate.sh" whoami "$@" ;;
   phase)         shift; cmd_phase "$@" ;;
-  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|mark-reauth|clear-reauth|reauth-since|target-auth|quota|quota-verdict|pace|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
+  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|mark-reauth|clear-reauth|reauth-since|target-auth|quota|quota-verdict|blind|pace|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
 esac
 fi

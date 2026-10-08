@@ -35,6 +35,8 @@
 #      any more is gone — and G puts every tenant's copy back byte for byte
 #      — and `accounts` / the account check (`.fleet-account.py claude-login`) of a
 #      separated login read each lease's expiry from the proxy, never a token
+#   Q  account-quota (issue #2412): the newest rate-limit reading per account, another
+#      login's only for an account the asker also holds — never a sid or a token
 #   I  machine install whose agent bootstrap fails AND whose way back fails too:
 #      exit 5, the credentials back anyway, the store kept as <login>.rolledback-*,
 #      the steps to do by hand printed (the clean rollback is BREAK-IT
@@ -72,7 +74,11 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("content-length") or 0)
         if n: self.rfile.read(n)
         b = json.dumps({"auth": self.headers.get("authorization", "")}).encode()
-        self.send_response(200); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+        self.send_response(200); self.send_header("content-length", str(len(b)))
+        # the account's windows on every answer, as Anthropic sends them (leg Q, issue #2412)
+        self.send_header("anthropic-ratelimit-unified-5h-utilization", "0.1")
+        self.send_header("anthropic-ratelimit-unified-7d-utilization", "0.99")
+        self.end_headers(); self.wfile.write(b)
     do_GET = do_POST = any
 s = ThreadingHTTPServer(("127.0.0.1", 0), H)
 open(sys.argv[1], "w").write(str(s.server_address[1]))
@@ -215,6 +221,22 @@ st=$(FLEET_CONF_DIR="$CA" python3 "$BIN/.fleet-account.py" claude-login main 2>&
   || fail "P claude-login main: $st"
 ! grep -q 'sk-ant-\|cx-pool' "$SB/log/alpha.log" "$SB/log/beta.log" "$SB/log/shared.log" 2>/dev/null \
   && pass "P no credential in any log" || fail "P a credential leaked into a log"
+
+# ── Q: what a separated login picks by (issue #2412) ──────────────────────────────
+# beta runs a session on `solo` (only beta holds it); alpha's a3 read pool1, which
+# beta holds too. account-quota: the newest reading per ACCOUNT — another login's
+# only for an account the asker holds; never a sid, a login or a token.
+TBS=$(FLEET_CRED_TEST_PEER_UID=$BUID FLEET_CONF_DIR="$CB" bash "$BIN/fleet-cred-proxy.sh" mint --account solo --sid b2 2>&1)
+call "$PORT" "$TBS" >/dev/null
+qa=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" account-quota 2>&1)
+qb=$(FLEET_CRED_TEST_PEER_UID=$BUID FLEET_CONF_DIR="$CB" bash "$BIN/fleet-cred-proxy.sh" account-quota 2>&1)
+python3 -c 'import json,sys
+a, b = (json.loads(x).get("claude", {}) for x in sys.argv[1:3])
+ok = sorted(a) == ["main", "pool1"] and sorted(b) == ["main", "pool1", "solo"] and b["pool1"]["rl7d"] == "99"
+sys.exit(0 if ok else 1)' "$qa" "$qb" \
+  && case "$qa$qb" in *sk-ant*|*'"a1"'*|*'"b1"'*|*'"b2"'*|*alpha*|*beta*) false ;; *) true ;; esac \
+  && pass "Q account-quota: beta sees pool1 through alpha's session, alpha never sees beta's solo; no sid, login or token" \
+  || fail "Q account-quota: alpha=$qa beta=$qb"
 
 # ── D: no login reaches another's ────────────────────────────────────────────────
 out=$(FLEET_CRED_AS=beta FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --account main --sid x 2>&1); rc=$?
