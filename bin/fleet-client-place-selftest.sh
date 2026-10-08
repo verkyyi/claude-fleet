@@ -17,6 +17,10 @@
 #   D. degenerate — no hub and no fleet on this computer: the one line
 #      「这台电脑没有 fleet，也连不上入口」, exit 1, nothing asked
 #   E. usage: a bad kind / repo is exit 2
+#   F. a lease the hub no longer holds (issue #2464, e.g. a hub just redeployed):
+#      401 not your client → released + acquired once (FLEET_CLIENT_LEASE_CMD, a
+#      fake), `lease re-acquired once` on stderr, asked again → done; a second 401
+#      → exit 1 with the hub's words; an acquire that fails → exit 1, words + hint
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -32,6 +36,7 @@ unset FLEET_HUB_URL FLEET_HUB_TOKEN CCQUOTA_FLEET TMUX TMUX_PANE
 LEASE=abcdef0123456789abcdef01
 KEY=0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
 UUID=11111111-1111-4111-8111-111111111111
+NEW=0123456789abcdef01234567
 
 FAIL=0; CHECKS=0
 fail() { FAIL=$((FAIL + 1)); printf 'FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '      got: %s\n' "$2" >&2; }
@@ -46,7 +51,7 @@ cat > "$WORK/hub.py" <<'PY'
 import hashlib, hmac, json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-LEASE, KEY, UUID, LOG, PORTF = sys.argv[1:6]
+LEASE, KEY, UUID, LOG, PORTF, CURF = sys.argv[1:7]
 polls = {}
 
 
@@ -67,8 +72,13 @@ class H(BaseHTTPRequestHandler):
         if self.path != "/v1/fleet/client/place" or self.headers.get("Authorization") != "Bearer tok":
             return self.answer(404, {})
         mac = hmac.new(KEY.encode(), env.get("payload", "").encode(), hashlib.sha256).hexdigest()
-        if env.get("lease") != LEASE or not hmac.compare_digest(mac, env.get("mac", "")):
-            return self.answer(401, {"error": {"code": "UNAUTHENTICATED", "message": "not your current client"}})
+        cur = LEASE
+        if os.path.exists(CURF):   # the lease the hub holds now (leg F)
+            with open(CURF) as f:
+                cur = f.read().strip()
+        if env.get("lease") != cur or not hmac.compare_digest(mac, env.get("mac", "")):
+            return self.answer(401, {"error": {"code": "UNAUTHENTICATED", "message":
+                                     "not your client: the lease is not held (asked to leave, disconnected or lapsed) or the action key does not check"}})
         p = json.loads(env["payload"])
         with open(LOG, "a") as f:
             f.write(json.dumps(p, ensure_ascii=False, sort_keys=True) + "\n")
@@ -103,7 +113,7 @@ with open(PORTF + ".tmp", "w") as f:
 os.replace(PORTF + ".tmp", PORTF)
 srv.serve_forever()
 PY
-python3 "$WORK/hub.py" "$LEASE" "$KEY" "$UUID" "$WORK/log" "$WORK/port" 2>"$WORK/hub.err" &
+python3 "$WORK/hub.py" "$LEASE" "$KEY" "$UUID" "$WORK/log" "$WORK/port" "$WORK/curlease" 2>"$WORK/hub.err" &
 HUBPID=$!
 # a cold python on a CI runner can take seconds to bind
 for _ in $(seq 300); do
@@ -115,6 +125,19 @@ done
 HUB="http://127.0.0.1:$(cat "$WORK/port")"
 
 P="$BIN/fleet-client-place.sh"
+# the lease tool (fleet-client-lease.py) faked: logs its argv; acquire answers the
+# lease in $WORK/next (and writes the action key, as save_key does), or fails
+# when there is none
+cat > "$WORK/lease" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$WORK/lease.log"
+[ "$1" = acquire ] || { printf 'released\t%s\t\t\t\n' "$3"; exit 0; }
+[ -s "$WORK/next" ] || exit 1
+printf '%s\n' "$FAKE_KEY" > "$FLEET_CLIENT_KEY_FILE"
+printf 'active\t%s\tm4\t\t\n' "$(cat "$WORK/next")"
+SH
+chmod +x "$WORK/lease"
+export WORK FAKE_KEY="$KEY" FLEET_CLIENT_LEASE_CMD="$WORK/lease"
 run() { OUT=$("$@" 2>"$WORK/err"); RC=$?; ERR=$(cat "$WORK/err"); }
 lastreq() { tail -n1 "$WORK/log"; }
 
@@ -175,7 +198,7 @@ eq "B: declined exit" 5 "$RC"; eq "B: declined line" "DECLINED m4 op12 2	fleet-m
 FLEET_CLIENT_PLACE_WAIT=2 run "$P" verkyyi/claude-fleet 13
 eq "B: unknown exit" 6 "$RC"; has "B: unknown line" "$OUT" "UNKNOWN m5 op13"
 
-# --- C. a key that does not check -------------------------------------------------------
+# --- C. a key that does not check (and no lease to take again) ---------------------------
 printf '%s\n' "$(printf '%s' "$KEY" | tr 0f f0)" > "$FLEET_CLIENT_KEY_FILE"
 run "$P" verkyyi/claude-fleet scratch
 eq "C: wrong key exit" 1 "$RC"; eq "C: wrong key stdout" "" "$OUT"
@@ -184,6 +207,35 @@ printf '%s\n' "$KEY" > "$FLEET_CLIENT_KEY_FILE"
 printf 'ffffffffffffffffffffffff\n' > "$FLEET_CLIENT_DIR/client.lease"
 run "$P" verkyyi/claude-fleet scratch
 eq "C: taken-over lease exit" 1 "$RC"
+
+# --- F. the hub no longer holds our lease: take it again once (issue #2464) ---------------
+printf '%s\n' "$LEASE" > "$FLEET_CLIENT_DIR/client.lease"
+printf '%s\n' "$NEW" > "$WORK/curlease"; printf '%s\n' "$NEW" > "$WORK/next"; : > "$WORK/lease.log"
+printf '{"device": "iPhone"}\n' > "$FLEET_CLIENT_DIR/client.where.json"
+run "$P" verkyyi/claude-fleet scratch
+eq "F: re-acquired exit" 0 "$RC"
+has "F: re-acquired line" "$OUT" "REMOTE m5 op1 done $UUID/scratch-3"
+has "F: re-acquired said" "$ERR" "fleet-client-place: lease re-acquired once"
+has "F: the old lease released" "$(cat "$WORK/lease.log")" "release --lease $LEASE"
+has "F: acquired on the same device" "$(tail -n1 "$WORK/lease.log")" "acquire --where-file $FLEET_CLIENT_DIR/client.where.json"
+eq "F: the new lease kept" "$NEW" "$(cat "$FLEET_CLIENT_DIR/client.lease")"
+# the new lease asked nothing again: one acquire, one release
+eq "F: one release + one acquire" 2 "$(wc -l < "$WORK/lease.log" | tr -d ' ')"
+# a second 401: exit 1, the hub's words on stderr, no third ask
+printf '%s\n' "$LEASE" > "$FLEET_CLIENT_DIR/client.lease"
+printf 'eeeeeeeeeeeeeeeeeeeeeeee\n' > "$WORK/next"; : > "$WORK/lease.log"
+run "$P" verkyyi/claude-fleet scratch
+eq "F: twice 401 exit" 1 "$RC"; eq "F: twice 401 stdout" "" "$OUT"
+has "F: twice 401 re-acquired once" "$ERR" "lease re-acquired once"
+has "F: twice 401 words" "$ERR" "HTTP 401: not your client: the lease is not held"
+eq "F: twice 401 one acquire" 1 "$(grep -c '^acquire' "$WORK/lease.log")"
+# an acquire that fails: exit 1, the 401's words and what to do
+printf '%s\n' "$LEASE" > "$FLEET_CLIENT_DIR/client.lease"; : > "$WORK/next"
+run "$P" verkyyi/claude-fleet scratch
+eq "F: acquire failed exit" 1 "$RC"
+has "F: acquire failed words" "$ERR" "HTTP 401: not your client"
+has "F: acquire failed hint" "$ERR" "restart the client"
+rm -f "$WORK/curlease"
 
 # --- E. usage -----------------------------------------------------------------------------
 run "$P" verkyyi/claude-fleet bogus;  eq "E: bad kind" 2 "$RC"

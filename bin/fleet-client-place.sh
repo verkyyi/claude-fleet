@@ -46,6 +46,14 @@
 # The hub is asked in rounds of at most 20 s (a place, then status polls of its
 # operation), so no request outlives a proxy's patience.
 #
+# A 401 `not your client…` (issue #2464) — the lease was taken under an identity
+# the hub no longer matches, e.g. right after the hub was redeployed — is not the
+# end: the lease is released and acquired again ONCE (fleet-client-lease.py, the
+# same identity — FLEET_CLIENT_IDENTITY — and the same device, client.where.json),
+# stderr says `fleet-client-place: lease re-acquired once`, and the place is asked
+# again. A second 401 exits 1 with the hub's words. FLEET_CLIENT_LEASE_CMD is the
+# selftests' seam (as in fleet-shell.sh).
+#
 # No hub (no URL, or no lease to sign with): on a computer with a fleet, it opens
 # here through the node's own adapter (fleet-control-read.sh — `LOCAL <host>`
 # lines, the same codes); on one without, ONE line —
@@ -110,11 +118,13 @@ fi
 [ -z "$BODYF" ] || [ -r "$BODYF" ] || { printf 'fleet-client-place: cannot read %s\n' "$BODYF" >&2; exit 2; }
 
 # --- the hub ----------------------------------------------------------------------
-# rc 10 = not applicable here (no hub URL, or no lease / key to sign with).
-python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" <<'PY'
+# ask_hub <retry 0|1> — rc 10 = not applicable here (no hub URL, or no lease / key
+# to sign with); rc 11 (only with retry 1) = 401 not your client.
+ask_hub() {
+python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" <<'PY'
 import hashlib, hmac, importlib.util, json, os, re, sys, time, urllib.error, urllib.request
 
-here, repo, kind, issue, key, node, title, name, agent, reap, bodyf = sys.argv[1:12]
+here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry = sys.argv[1:13]
 body = ""
 if bodyf:
     with open(bodyf, encoding="utf-8") as f:
@@ -200,6 +210,10 @@ except urllib.error.HTTPError as e:
         pass
     if e.code == 404 and not why:
         why = "this hub predates client placement (#1777)"
+    # the lease is not one the hub holds for us (#2464): the caller takes it again once
+    if e.code == 401 and retry == "1" and why.startswith("not your client"):
+        sys.stderr.write("fleet-client-place: hub answered HTTP 401: %s\n" % why)
+        sys.exit(11)
     sys.stderr.write("fleet-client-place: hub answered HTTP %d%s\n" % (e.code, (": " + why) if why else ""))
     sys.exit(1)
 except fc.Refused as e:
@@ -257,7 +271,40 @@ if rf and out.get("state") == "done":
 print(line.replace("\n", " "))
 sys.exit(int(out.get("exit") or 0))
 PY
-rc=$?
+}
+
+# relet — release the lease the hub refused and acquire one again: the same
+# identity (the environment) and device (the where in use here). rc 1 = no lease.
+relet() {
+  local d old='' wf line st id
+  d=${FLEET_CLIENT_DIR:-${TMPDIR:-/tmp}}
+  export FLEET_CLIENT_KEY_FILE="${FLEET_CLIENT_KEY_FILE:-$d/client.key}"
+  { read -r old < "$d/client.lease"; } 2>/dev/null
+  [ -s "$d/client.where.json" ] && wf="$d/client.where.json"
+  # shellcheck disable=SC2086  # a command line, split as fleet-shell.sh splits it
+  [ -z "$old" ] || ${FLEET_CLIENT_LEASE_CMD:-python3 $BIN/fleet-client-lease.py} release --lease "$old" >/dev/null 2>&1
+  # shellcheck disable=SC2086
+  line=$(${FLEET_CLIENT_LEASE_CMD:-python3 $BIN/fleet-client-lease.py} acquire ${wf:+--where-file "$wf"} 2>/dev/null) || return 1
+  IFS=$'\t' read -r st id _ <<< "$line"
+  [ "$st" = active ] && [ -n "$id" ] || return 1
+  printf '%s\n' "$id" > "$d/client.lease.tmp" && mv -f "$d/client.lease.tmp" "$d/client.lease"
+}
+
+ef=$(mktemp "${TMPDIR:-/tmp}/fcp-err.XXXXXX" 2>/dev/null) || ef=/dev/null
+ask_hub 1 2>"$ef"; rc=$?
+if [ "$rc" = 11 ]; then
+  if relet; then
+    printf 'fleet-client-place: lease re-acquired once\n' >&2
+    ask_hub 0; rc=$?
+  else
+    cat "$ef" >&2 2>/dev/null
+    printf 'fleet-client-place: the hub no longer holds this lease and a new one could not be taken — restart the client (fleet)\n' >&2
+    rc=1
+  fi
+else
+  cat "$ef" >&2 2>/dev/null
+fi
+[ "$ef" = /dev/null ] || rm -f "$ef"
 [ "$rc" = 10 ] || exit "$rc"
 
 # --- no hub: this computer's own fleet, if it has one -------------------------------
