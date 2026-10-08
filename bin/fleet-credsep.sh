@@ -11,6 +11,14 @@
 #                                           settings into root's <LIB>/<login>.conf
 #                                           (the only place the proxy reads them,
 #                                           issue #2290) and restarts the proxy
+#   sudo fleet-credsep.sh install --login <X> --fresh [--pool-src <dir>] [--install-dir <dir>]
+#                                           a login fleet-login-new.sh has just
+#                                           opened (issue #2294): separated before
+#                                           its first session — the preflight is
+#                                           "nothing runs as it"; --pool-src copies
+#                                           the team pool INTO the store (the login
+#                                           gets label markers only); --install-dir
+#                                           = the login's own clone
 #   fleet-credsep.sh uninstall [--dry-run]  undo: every file back where it was
 #                                           (--dry-run, no sudo: the steps back)
 #   fleet-credsep.sh status [--json]        separated or not (exit 3 = not)
@@ -67,12 +75,15 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 SUDO="${FLEET_CREDSEP_SUDO-sudo -n}"
 
 cmd="${1:-}"; [ $# -gt 0 ] && shift
-# --login <login> may sit anywhere after the command; the rest pass through
-want='' rest=()
+# --login <login> / --install-dir <dir> may sit anywhere after the command; the
+# rest pass through
+want='' instdir='' rest=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --login)   want="${2:-}"; [ $# -gt 1 ] && shift ;;
     --login=*) want="${1#--login=}" ;;
+    --install-dir)   instdir="${2:-}"; [ $# -gt 1 ] && shift ;;
+    --install-dir=*) instdir="${1#--install-dir=}" ;;
     *) rest+=("$1") ;;
   esac
   shift
@@ -92,6 +103,8 @@ if [ "$(id -u)" = 0 ]; then
     esac
     LOGIN="$SELF"
   fi
+elif [ "${FLEET_CREDSEP_TEST:-}" = 1 ] && [ -n "$want" ]; then
+  LOGIN="$want"     # the selftest's sandbox: another login played by this user (FLEET_CREDSEP_PW)
 else
   LOGIN="$SELF"
   if [ -n "$want" ] && [ "$want" != "$SELF" ]; then
@@ -101,11 +114,19 @@ fi
 if [ "$LOGIN" = "$SELF" ] && [ "$(id -u)" != 0 ]; then
   CONF="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 else
-  LHOME="$(python3 -I -c 'import pwd, sys; print(pwd.getpwnam(sys.argv[1]).pw_dir)' "$LOGIN" 2>/dev/null)" \
+  LHOME=''
+  if [ "${FLEET_CREDSEP_TEST:-}" = 1 ] && [ -f "${FLEET_CREDSEP_PW:-}" ]; then
+    LHOME=$(awk -F: -v l="$LOGIN" 'NF == 4 && $1 == l { print $4; exit }' "$FLEET_CREDSEP_PW")
+  fi
+  [ -n "$LHOME" ] || LHOME="$(python3 -I -c 'import pwd, sys; print(pwd.getpwnam(sys.argv[1]).pw_dir)' "$LOGIN" 2>/dev/null)" \
     || { echo "fleet-credsep: no such login $LOGIN" >&2; exit 2; }
   CONF="${FLEET_CONF_DIR:-$LHOME/.config/claude-fleet}"
+  [ "$(id -u)" = 0 ] || CONF="$LHOME/.config/claude-fleet"   # the sandbox's other login: its own
 fi
 
+# the install the login's launcher reads fleet.conf from: this one, or (root,
+# opening a new login — fleet-login-new.sh, issue #2294) the login's own clone
+INST="${instdir:-$BIN/..}"
 _env_switch="${FLEET_CRED_SEPARATE:-}"
 set -a
 for f in "$BIN/../fleet.conf" "$CONF/fleet.settings" "$CONF/fleet.conf"; do
@@ -129,7 +150,8 @@ root_py() { # the privileged half, through sudo (env seams passed explicitly)
     ${FLEET_CREDSEP_TEST:+FLEET_CREDSEP_TEST="$FLEET_CREDSEP_TEST"} \
     ${FLEET_CREDSEP_PREFLIGHT:+FLEET_CREDSEP_PREFLIGHT="$FLEET_CREDSEP_PREFLIGHT"} \
     ${FLEET_CREDSEP_BOOT_TRIES:+FLEET_CREDSEP_BOOT_TRIES="$FLEET_CREDSEP_BOOT_TRIES"} \
-    python3 -I "$BIN/fleet-credsep.py" "$@" --login "$LOGIN" --conf-dir "$CONF" --install-dir "$BIN/.."
+    ${FLEET_CREDSEP_PW:+FLEET_CREDSEP_PW="$FLEET_CREDSEP_PW"} \
+    python3 -I "$BIN/fleet-credsep.py" "$@" --login "$LOGIN" --conf-dir "$CONF" --install-dir "$INST"
 }
 can_sudo() { [ -z "$SUDO" ] || $SUDO true 2>/dev/null; }
 separated() { [ -f "$CONF/credsep.json" ]; }
@@ -158,7 +180,7 @@ case "$cmd" in
     if [ "${1:-}" = --dry-run ] && [ "$(id -u)" != 0 ]; then
       # a dry run moves nothing: run as the login, no sudo (what the operator
       # reads BEFORE typing the one sudo)
-      python3 -I "$BIN/fleet-credsep.py" "$cmd" --dry-run --login "$LOGIN" --conf-dir "$CONF" --install-dir "$BIN/.."
+      python3 -I "$BIN/fleet-credsep.py" "$cmd" --dry-run --login "$LOGIN" --conf-dir "$CONF" --install-dir "$INST"
       exit $?
     fi
     can_sudo || { echo "fleet-credsep: $cmd needs password-less sudo once — run: sudo bash $BIN/fleet-credsep.sh $cmd" >&2; exit 4; }

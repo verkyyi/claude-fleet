@@ -50,8 +50,13 @@ key; `--password-file <f>` uses f's first line instead, issue #1192),
 `createhomedir`, adds the login to `com.apple.access_ssh` (only when that group
 exists — without it Remote Login admits every user), installs `--pubkey` as
 `~alice/.ssh/authorized_keys` (`.ssh` 700, key 600, owned by alice), and with
-`--share-pool` copies the Claude pool as step 2b below describes. Then it
-**clones claude-fleet at `stable` into `~alice/.claude/fleet` as alice** and
+`--share-pool` takes the Claude pool along (step 2b). Then it
+**clones claude-fleet at `stable` into `~alice/.claude/fleet` as alice**,
+**separates her credentials before anything runs as her** (step 7b, issue #2294 —
+`FLEET_CRED_PROXY=1` + `FLEET_CRED_SEPARATE=1` in her fleet.conf, root's
+`fleet-credsep.sh install --login alice --fresh`: the pool tokens go into
+`/var/db/fleet-cred/alice/`, her `accounts/` holds only `store:<label>` markers;
+docs/CRED-SEPARATE.md «A new login») and
 **installs her 14 background services as system LaunchDaemons** —
 `/Library/LaunchDaemons/com.claude-fleet.alice.<unit>.plist`, `UserName alice`,
 rendered from that clone by `fleet-install-apply.sh --render-system` and
@@ -130,9 +135,11 @@ tooling neither requires nor refuses either setup. Sharing the pool still keeps
 one login per person, so usage stays attributed per login on the hub.
 
 **Claude pool** — the tokens are plain `claude setup-token` files, so copy them.
-`fleet-login-new.sh --share-pool` (step 1) does exactly this: every `<label>`
+`fleet-login-new.sh --share-pool --no-credsep` (step 1) does exactly this: every `<label>`
 token and its `<label>.conf` (`CCQUOTA_ACCOUNT`) from your accounts dir
-(`--pool-src` to pick another), dir 700 / files 600, owned by the new login. For
+(`--pool-src` to pick another), dir 700 / files 600, owned by the new login —
+readable by its every session. Without `--no-credsep` (the default since #2294)
+the tokens go into the login's credential store instead. For
 an existing login, by hand (admin, since the source files are `600` in the
 operator's home):
 

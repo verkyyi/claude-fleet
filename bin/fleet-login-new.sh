@@ -1,7 +1,8 @@
 #!/bin/bash
 # fleet-login-new.sh <login> --full-name <name> [--pubkey <file>] [--share-pool]
 #                    [--pool-src <dir>] [--password-file <file>] [--no-daemons]
-#                    [--machine <name>] [--no-welcome] [--lang zh|en] [--apply]
+#                    [--machine <name>] [--no-welcome] [--lang zh|en] [--no-credsep]
+#                    [--apply]
 # fleet-login-new.sh <login> --daemons-only [--apply]
 #   — open a new person's OS login on a shared machine in ONE command
 #     (issue #1164, EPIC #1163; no GUI sign-in needed since #1192, EPIC #1190;
@@ -30,10 +31,14 @@
 #      first login (the letter says how). --no-welcome without --pubkey is an
 #      error: nothing would carry the key.
 #   5. --share-pool: every Claude pool token + its <label>.conf from --pool-src
-#      (default: YOUR accounts dir) → ~<login>/.config/claude-fleet/accounts,
-#      dir 700 / files 600, owned by <login> — SHARED-MACHINE step 2b. Never
-#      ~/.codex/auth.json: Codex rotates its refresh token, so the new login gets
-#      its own device-code session instead (printed as a manual step).
+#      (default: YOUR accounts dir). Separated (the default, step 7b): the tokens
+#      go into the login's credential STORE, never its dir — it gets only the
+#      label markers (`store:<label>`) + the .conf files. --no-credsep: the old
+#      layout, every token copied into ~<login>/.config/claude-fleet/accounts
+#      (dir 700 / files 600, owned by <login>, readable by its every session) —
+#      SHARED-MACHINE step 2b. Never ~/.codex/auth.json: Codex rotates its
+#      refresh token, so the new login gets its own device-code session instead
+#      (printed as a manual step).
 #   6. ~<login>/.zshrc ← the ~/.local/bin PATH line (Claude Code's native install
 #      dir, issue #1191; skipped when the file has one) and, after it, the
 #      claude-fleet block (fleet-login-bootstrap.sh --print-zshrc, issue #1165),
@@ -49,6 +54,22 @@
 #      then points origin at GitHub — so neither this step nor the login's
 #      first-run Claude install reaches github.com / claude.ai. Nothing cached →
 #      the clone from GitHub, as before.
+#   7b. its subscription out of its reach (issue #2294, EPIC #2293 C1) — after
+#      the clone, BEFORE its background services and its first session (先代理、
+#      后搬凭据、再开会话): ~<login>/.config/claude-fleet/fleet.conf gets
+#      FLEET_CRED_PROXY=1 + FLEET_CRED_SEPARATE=1 in [common] (owned by <login>,
+#      600), then, as root, `fleet-credsep.sh install --login <login> --fresh
+#      --install-dir ~<login>/.claude/fleet [--pool-src <pool>]`: the role
+#      account's store /var/db/fleet-cred/<login>/ (0700 _fleetcred), the proxy
+#      run as _fleetcred, the pool (step 5) inside the store. Its preflight is
+#      "nothing runs as this login yet". From then on the login needs no sudo:
+#      its sessions reach the subscription only through the proxy. The run ends
+#      with ONE line the hub reads — `credsep: separated` (status separated AND
+#      check OK, the one judgement, EPIC #2293 convention 1), `credsep: pending
+#      — <why>` (separated, but check not OK yet: the proxy still starting) — and
+#      a status that is not separated FAILS the run (exit 1). --no-credsep skips
+#      7b (and prints `credsep: off`): the old layout, for a machine whose fleet
+#      predates credsep.
 #   8. the login's background services, as an admin: every launchd/*.plist.tmpl
 #      of that clone rendered in SYSTEM shape (fleet-install-apply.sh
 #      --render-system: Label com.claude-fleet.<login>.<unit>, UserName <login>,
@@ -105,7 +126,8 @@
 # Only ever ADDS: it refuses (exit 3) when the login or its home already exists,
 # never overwrites, and writes nothing in the new home outside `.ssh/`,
 # `.config/claude-fleet/accounts/` (plus owning the `.config` dirs it creates),
-# `.zshrc` and `.claude/fleet/`. In YOUR home it writes only ~/<login>-onboard/
+# `.config/claude-fleet/{fleet.conf,credsep.json}` (7b), `.zshrc` and
+# `.claude/fleet/`. In YOUR home it writes only ~/<login>-onboard/
 # (password.txt, the temporary key pair, welcome.txt — all yours only).
 #
 # Exit: 0 ok · 1 a step failed under --apply · 2 bad arguments · 3 the login
@@ -114,6 +136,8 @@
 #
 # Conf: FLEET_SSH_PUBLIC_HOST / FLEET_SSH_PUBLIC_PORT (global; fleet.conf.example)
 #      — the public SSH entry the welcome letter names.
+# Env: FLEET_LOGIN_CREDSEP_WAIT (15) — seconds 7b waits for `check` to pass
+#      (the proxy starting) before it reports `pending`.
 # Env (tests): FLEET_LOGIN_HOMES (default /Users) — the homes root ·
 #      FLEET_INSTALL_DAEMON_DIR (/Library/LaunchDaemons) · FLEET_BOOTSTRAP_GIT_BASE
 #      (https://github.com) · FLEET_INSTALL_BREW_PREFIX (as fleet-install-apply.sh) ·
@@ -129,7 +153,7 @@ usage() {
 }
 die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 
-LOGIN='' FULL='' PUBKEY='' SHARE=0 APPLY=0 MACHINE=mini POOL_SRC='' PWFILE='' DAEMONS=1 WELCOME=1 WLANG=zh DONLY=0
+LOGIN='' FULL='' PUBKEY='' SHARE=0 APPLY=0 MACHINE=mini POOL_SRC='' PWFILE='' DAEMONS=1 WELCOME=1 WLANG=zh DONLY=0 CREDSEP=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --full-name) [ $# -ge 2 ] || usage; FULL=$2; shift 2 ;;
@@ -140,6 +164,7 @@ while [ $# -gt 0 ]; do
     --lang)      [ $# -ge 2 ] || usage; WLANG=$2; shift 2 ;;
     --share-pool) SHARE=1; shift ;;
     --no-daemons) DAEMONS=0; shift ;;
+    --no-credsep) CREDSEP=0; shift ;;
     --daemons-only) DONLY=1; shift ;;
     --welcome)   WELCOME=1; shift ;;
     --no-welcome) WELCOME=0; shift ;;
@@ -166,7 +191,7 @@ if [ "$DONLY" = 1 ]; then
   [ "$SHARE" = 0 ] || die2 "--daemons-only installs the background services only; --share-pool is step 5 (docs/SHARED-MACHINE.md 2b for an existing login)"
   [ -z "$PUBKEY" ] || die2 "--daemons-only installs the background services only; --pubkey is step 4"
   [ -z "$PWFILE" ] || die2 "--daemons-only installs the background services only; --password-file is step 1"
-  WELCOME=0
+  WELCOME=0 CREDSEP=0
 else
   [ -n "$FULL" ] || die2 "--full-name is required"
 fi
@@ -398,9 +423,12 @@ if [ "$DONLY" = 0 ]; then
   run sudo chmod 700 "$H/.ssh"
   run sudo chmod 600 "$H/.ssh/authorized_keys"
 
-  if [ "$SHARE" = 1 ]; then
+  if [ "$SHARE" = 1 ] && [ "$CREDSEP" = 1 ]; then
+    step "join the shared Claude pool (${#POOL[@]} files from $POOL_SRC)"
+    say "  (separated: the tokens go into $LOGIN's credential store in step 7b — never into $H; it gets the label markers only)"
+  elif [ "$SHARE" = 1 ]; then
     D="$H/.config/claude-fleet/accounts"
-    step "join the shared Claude pool (${#POOL[@]} files from $POOL_SRC — SHARED-MACHINE 2b)"
+    step "join the shared Claude pool (${#POOL[@]} files from $POOL_SRC — SHARED-MACHINE 2b; --no-credsep: readable by $LOGIN's sessions)"
     DST=()
     for f in ${POOL[@]+"${POOL[@]}"}; do DST+=("$D/${f##*/}"); done
     run sudo mkdir -p "$D"
@@ -453,6 +481,38 @@ if [ "$DONLY" = 0 ]; then
     run sudo -u "$LOGIN" -H git -c advice.detachedHead=false clone -q -b stable "$GITURL" "$ROOT"
   fi
   run sudo -u "$LOGIN" -H mkdir -p "$ROOT/logs"
+
+  # 7b. the subscription out of the login's reach (issue #2294) — before its
+  # services (8) and its first session: the proxy first, then the credentials
+  CD="$H/.config/claude-fleet"
+  if [ "$CREDSEP" = 1 ]; then
+    N0=$N; N="${N}b"; say ""; say "[$N] keep the subscription out of $LOGIN's reach (credsep, before any service or session: FLEET_CRED_PROXY=1 + FLEET_CRED_SEPARATE=1, store ${FLEET_CREDSEP_ROOT_BASE:-/var/db/fleet-cred}/$LOGIN$([ "$SHARE" = 1 ] && echo ', the pool inside it'))"
+    FC="$TMPD/fleet.conf"
+    {
+      printf "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
+      printf '# Credentials never live here: node.env, hub.json (its token), secrets.env and\n'
+      printf '# ~/.ssh/fleet-cert are separate, each 0600. Written by fleet-login-new.sh when\n'
+      printf '# this login was opened: separated from its first session on (issue #2294).\n'
+      printf '\n# ---- [common] ----\n'
+      printf 'export FLEET_CRED_PROXY=1\n'
+      printf 'export FLEET_CRED_SEPARATE=1\n'
+      printf '%s\n' '_fcs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/secrets.env"; [ -f "$_fcs" ] && . "$_fcs"; unset _fcs'
+      printf '\n# ---- [client] — only the shell (FLEET_SHELL=1) reads this section ----\n'
+      printf '%s\n:\n%s\n' 'if [ "${FLEET_SHELL:-0}" = 1 ]; then' 'fi  # ---- [client] end ----'
+      printf '\n# ---- [node] — the shell (FLEET_SHELL=1) does not read this section ----\n'
+      printf '%s\n:\n%s\n' 'if [ "${FLEET_SHELL:-0}" != 1 ]; then' 'fi  # ---- [node] end ----'
+    } > "$FC"
+    run sudo mkdir -p "$CD"
+    run sudo chown "$LOGIN:staff" "$H/.config" "$CD"
+    run sudo chmod 700 "$CD"
+    run_shown "sudo install -m 600 <fleet.conf: [common] export FLEET_CRED_PROXY=1, export FLEET_CRED_SEPARATE=1> $(printf %q "$CD/fleet.conf")" \
+      -- sudo install -m 600 "$FC" "$CD/fleet.conf"
+    run sudo chown "$LOGIN:staff" "$CD/fleet.conf"
+    CS=(sudo bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
+    [ "$SHARE" = 1 ] && CS+=(--pool-src "$POOL_SRC")
+    run "${CS[@]}"
+    N=$N0
+  fi
 fi
 
 # 8. the background services, system shape, as the admin
@@ -526,6 +586,39 @@ if [ "$DAEMONS" = 1 ]; then
     NI=$((NI + 1))
   done
   [ "$APPLY" = 1 ] && say "  installed $((NI + NK))/$NU$([ "$NK" = 0 ] || echo " ($NK already in place)")"
+fi
+
+# The verdict of 7b — the ONE judgement (EPIC #2293 convention 1): status
+# `separated` AND check OK, read AS the login with its own scripts. Status not
+# separated = 7b did not take: the run fails (the hub must not hand this login
+# out). Check not OK yet = the proxy still coming up: waited for, then `pending`.
+CREDSEP_LINE=''
+if [ "$DONLY" = 0 ] && [ "$CREDSEP" = 0 ]; then
+  CREDSEP_LINE='credsep: off (--no-credsep — the old layout: the subscription is readable by this login'"'"'s sessions)'
+elif [ "$DONLY" = 0 ] && [ "$APPLY" = 1 ]; then
+  say ""; say "[check] $LOGIN is separated (fleet-credsep.sh status + check, as $LOGIN — the step 7b verdict)"
+  AS=(sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" bash "$ROOT/bin/fleet-credsep.sh")
+  show "${AS[@]}" status
+  st=$("${AS[@]}" status 2>&1)
+  say "  $st"
+  case "$st" in
+    separated*) ;;
+    *) printf '%s: %s is NOT separated after step 7b (%s) — stopped: do not hand this login out\n' "$PROG" "$LOGIN" "$st" >&2
+       say "credsep: not separated"; exit 1 ;;
+  esac
+  wait=${FLEET_LOGIN_CREDSEP_WAIT:-15}; t=0
+  while :; do
+    ck=$("${AS[@]}" check 2>&1); rc=$?
+    [ "$rc" = 0 ] && break
+    [ "$t" -ge "$wait" ] && break
+    sleep 1; t=$((t + 1))
+  done
+  show "${AS[@]}" check
+  say "  $ck"
+  if [ "$rc" = 0 ]; then CREDSEP_LINE='credsep: separated'
+  else CREDSEP_LINE="credsep: pending — $ck"; fi
+elif [ "$DONLY" = 0 ]; then
+  CREDSEP_LINE='credsep: (after --apply) separated before its first session'
 fi
 
 if [ "$DONLY" = 1 ]; then
@@ -787,4 +880,6 @@ if [ "$DAEMONS" = 1 ]; then
 else
   say "  claude-fleet + Claude Code install themselves on $LOGIN's first terminal login after step 1 — no step here"
 fi
+# last, so the hub's detail (the output's tail) always carries it
+say "$CREDSEP_LINE"
 exit 0

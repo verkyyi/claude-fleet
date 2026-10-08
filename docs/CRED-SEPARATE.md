@@ -71,6 +71,34 @@ bash ~/.claude/fleet/bin/fleet-credsep.sh status
 bash ~/.claude/fleet/bin/fleet-credsep.sh check       # the doctor's `credsep` row
 ```
 
+### A new login: separated from its first moment (issue #2294, EPIC #2293 C1)
+
+`bin/fleet-login-new.sh --apply` — the hub's account op, and the spare logins of
+#2263, which take the same road — separates the login it opens, as step **7b**:
+after the clone, **before** its background services and its first session (先代理、
+后搬凭据、再开会话):
+
+1. `~<X>/.config/claude-fleet/fleet.conf` is written with `FLEET_CRED_PROXY=1` and
+   `FLEET_CRED_SEPARATE=1` in `[common]` (the login's, 0600);
+2. as root: `fleet-credsep.sh install --login <X> --fresh --install-dir ~<X>/.claude/fleet
+   [--pool-src <the admin's pool>]`. `--fresh` replaces the preflight with "nothing
+   runs as this login yet" (exit 6 otherwise). `--pool-src` (only with `--fresh`)
+   copies every token file of the pool into `/var/db/fleet-cred/<X>/accounts/<label>`
+   — never the login's dir — and gives the login the marker `store:<label>` plus the
+   label's `.conf` (a usable label to its account judge; the token itself is the
+   store's); an admin marker (`hub:…`) travels as a marker. The proxy reads the
+   store's file; a session names the label. `uninstall` puts each token at the login's
+   path (the old share-pool layout); a failed fresh install deletes them instead;
+   `check` WARNs if a pool label's file holds a token again.
+3. the verdict, read **as the login** with its own clone: `status` not `separated`
+   fails the open (exit 1 — the login must not be handed out); then `check` (waited
+   for up to `FLEET_LOGIN_CREDSEP_WAIT`, 15 s, while the proxy starts). The run's
+   LAST line is the one the hub reads: `credsep: separated` · `credsep: pending — <why>`
+   · `credsep: off` (`--no-credsep`, the old layout: every pool token copied into the
+   login, readable by its sessions — only for a machine whose fleet predates credsep).
+
+From then on the login never needs sudo.
+
 ### Rolling it out on a machine (issue #2135, EPIC #2133 C5)
 
 One login at a time, the operator types the only `sudo`; nothing else needs root.

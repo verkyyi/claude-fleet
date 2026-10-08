@@ -147,7 +147,7 @@ def getpw(name):
             r = line.strip().split(":")
             if len(r) == 4 and r[0] == name:
                 return argparse.Namespace(pw_name=r[0], pw_uid=int(r[1]), pw_gid=int(r[2]), pw_dir=r[3],
-                                          pw_shell="/bin/sh")
+                                          pw_shell="/bin/sh", sandbox=True)
     return pwd.getpwnam(name)
 
 
@@ -577,7 +577,8 @@ def install(a):
     login, conf = a.login, os.path.abspath(a.conf_dir)
     shared = bool(getattr(a, "shared", False))
     pw = getpw(login)
-    home = (getattr(a, "home", "") or os.environ["HOME"]) if TEST else pw.pw_dir   # the sandbox's, never the real ~/.codex
+    home = (getattr(a, "home", "") or (pw.pw_dir if getattr(pw, "sandbox", False) else os.environ["HOME"])) \
+        if TEST else pw.pw_dir   # the sandbox's, never the real ~/.codex
     R, RUN = paths(login)
     if shared:
         RUN = SHARED_RUN
@@ -742,6 +743,8 @@ def install(a):
     if meta.get("agent"):
         relog_agent(login)      # separated before issue #2296: its log leaves the home
 
+    pool = pool_in(a.pool_src, R, conf, login) if getattr(a, "pool_src", "") else []
+
     prev = (record(conf) or {}).get("back") or {}
     back = {"files": sorted({tuple(m) for m in (prev.get("files") or []) + MOVED}),
             "agent": meta.get("agent"), "proxy": ppath}
@@ -751,6 +754,8 @@ def install(a):
            "back": back}
     if shared:
         rec["shared"] = True
+    if pool or (record(conf) or {}).get("pool"):
+        rec["pool"] = sorted(set(pool) | set((record(conf) or {}).get("pool") or []))
     put(os.path.join(conf, "credsep.json"), json.dumps(rec, indent=1) + "\n", 0o644, login)
     say("credsep: ON —", R, "(%s only%s)" % (ROLE, ", the machine's shared proxy" if shared else ""))
 
@@ -799,10 +804,95 @@ def chown_tree(d, owner):
 
 
 # ---- uninstall ----------------------------------------------------------------------
+def pool_in(src, R, conf, login):
+    """A NEW login's share of the team pool (issue #2294 — fleet-login-new.sh
+    --share-pool, the hub's every account op): each token file of <src> (the
+    admin's accounts dir) is COPIED into the store, never the login's dir; the
+    login gets a label marker (no credential) and the label's .conf (settings, no
+    secret). The marker is `store:<label>`, not `hub:` — the token is a whole
+    `claude setup-token` in the store, so the login's account judge reads the
+    label as usable (a `hub:` label's lease file is what it checks, and that
+    has no file here) and the picker names it; the proxy reads
+    <store>/accounts/<label>, a session names the label. -> the labels. Uninstall puts each token at the login's path (the
+    old share-pool layout); a failed --fresh install deletes them instead."""
+    src = os.path.abspath(src)
+    if not os.path.isdir(src):
+        die("--pool-src: no pool at %s" % src, 2)
+    acc = os.path.join(conf, "accounts")
+    mkdir(acc, 0o700, login)
+    labels = []
+    for n in sorted(os.listdir(src)):
+        f = os.path.join(src, n)
+        if n.startswith(".") or n.endswith("~") or not os.path.isfile(f) or os.path.islink(f):
+            continue
+        if n.endswith(".conf"):
+            if SAFE.match(n[:-5]):
+                if DRY:
+                    say("    would copy", f, "→", os.path.join(acc, n))
+                else:
+                    with open(f, "rb") as h:
+                        put(os.path.join(acc, n), h.read(), 0o600, login)
+            continue
+        if not SAFE.match(n):
+            say("pool: %s skipped (not a label name)" % n)
+            continue
+        with open(f, "rb") as h:
+            first = h.readline().strip()
+        if first.startswith(b"hub:"):
+            # the admin's own label marker (a separated or hub-leased pool): no
+            # credential to keep — the label travels, the hub leases it (C2)
+            put(os.path.join(acc, n), first + b"\n", 0o600, login)
+            labels.append(n)
+            continue
+        dst = os.path.join(R, "accounts", n)
+        if DRY:
+            say("    would copy", f, "→", dst)
+        else:
+            with open(f, "rb") as h:
+                put(dst, h.read(), 0o600, ROLE)
+        put(os.path.join(acc, n), "store:%s\n" % n, 0o600, login)
+        MOVED.append([dst, os.path.join(acc, n)])
+        labels.append(n)
+    say("pool: %d account(s) from %s into %s — %s holds only the label markers"
+        % (len(labels), src, os.path.join(R, "accounts"), acc))
+    return labels
+
+
+def pool_drop(R, labels):
+    """Undo pool_in for a --fresh install that failed: the tokens were never at a
+    login path, so they are deleted, not "moved back" into the login's reach."""
+    for n in labels or []:
+        f = os.path.join(R, "accounts", n)
+        if SAFE.match(n) and os.path.isfile(f) and not DRY:
+            os.unlink(f)
+
+
+def fresh_gate(login, force):
+    """--fresh (issue #2294): a login fleet-login-new.sh has JUST opened. The
+    preflight's questions (is its proxy on, do its sessions all use it) have no
+    subject yet — the install itself starts the proxy, before any session — so
+    the one thing to make sure of is that it IS fresh: no process runs as it."""
+    if DRY or not PREFLIGHT:
+        return
+    pw = getpw(login)
+    r = subprocess.run(["ps", "-U", str(pw.pw_uid), "-o", "pid="], stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL, text=True)
+    n = len([l for l in r.stdout.splitlines() if l.strip()])
+    if not n:
+        say("preflight: ok — %s is fresh (nothing runs as it): the proxy comes first, then its sessions" % login)
+        return
+    say("preflight: %s — not a fresh login: %d process(es) run as it" % (login, n))
+    if force:
+        say("preflight: --force — going on anyway")
+        return
+    die("preflight refused: nothing was moved (install without --fresh runs the full preflight)", 6)
+
+
 def uninstall(a):
     login, conf = a.login, os.path.abspath(a.conf_dir)
     pw = getpw(login)
-    home = (getattr(a, "home", "") or os.environ["HOME"]) if TEST else pw.pw_dir   # the sandbox's, never the real ~/.codex
+    home = (getattr(a, "home", "") or (pw.pw_dir if getattr(pw, "sandbox", False) else os.environ["HOME"])) \
+        if TEST else pw.pw_dir   # the sandbox's, never the real ~/.codex
     R, RUN = paths(login)
     try:
         meta = json.load(open(os.path.join(R, "meta.json")))
@@ -949,6 +1039,8 @@ def store_files(R, conf, home, ch):
         f = os.path.join(acc, d, ".credentials.json")
         if d.endswith(".hub") and SAFE.match(d[:-4]) and os.path.isfile(f):
             out.append((f, os.path.join(conf, "accounts", d, ".credentials.json")))
+        elif SAFE.match(d) and not d.endswith(".conf") and os.path.isfile(os.path.join(acc, d)):
+            out.append((os.path.join(acc, d), os.path.join(conf, "accounts", d)))   # a pool token (#2294)
     cx = os.path.join(R, "codex")
     for d in sorted(os.listdir(cx)) if os.path.isdir(cx) else []:
         f = os.path.join(cx, d, "auth.json")
@@ -1552,6 +1644,14 @@ def leftovers(conf, home, rec):
             [os.path.join(ch, d, "auth.json") for d in (os.listdir(ch) if os.path.isdir(ch) else [])]:
         if os.path.isfile(f) and hub_managed_codex(f):
             out.append(f)
+    for n in (rec or {}).get("pool") or []:
+        f = os.path.join(acc, n)
+        try:
+            first = open(f).readline().strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if SAFE.match(n) and first and not first.startswith(("store:", "hub:")):
+            out.append(f)       # a pool label holds its token at the login path again (#2294)
     ne = os.path.join(conf, "node.env")
     if os.path.isfile(ne) and os.access(ne, os.R_OK):
         out.append(ne)
@@ -1644,6 +1744,9 @@ def main():
         p.add_argument("--dry-run", action="store_true")
         p.add_argument("--force", action="store_true")
         p.add_argument("--adopt", action="store_true")
+        if n == "install":
+            p.add_argument("--fresh", action="store_true")   # a login just opened (#2294)
+            p.add_argument("--pool-src", default="")         # with --fresh: the team pool, into the store
     s = sub.add_parser("status"); s.add_argument("--conf-dir", required=True); s.add_argument("--json", action="store_true")
     c = sub.add_parser("check"); c.add_argument("--conf-dir", required=True)
     rl = sub.add_parser("relog")
@@ -1688,8 +1791,12 @@ def main():
             return uninstall(a)
         if a.adopt:
             return adopt(a)
+        if a.pool_src and not a.fresh:
+            die("--pool-src is for a login just opened (--fresh): an existing login's own pool stays its own", 2)
         fresh = not DRY and not os.path.lexists(paths(a.login)[0])
-        if fresh:
+        if fresh and a.fresh:
+            fresh_gate(a.login, a.force)
+        elif fresh:
             preflight_gate([(a.login, os.path.abspath(a.conf_dir))], a.force)
         try:
             return install(a)
@@ -1698,7 +1805,11 @@ def main():
                 raise
             say("install: FAILED (%s) — rolling back %s" % (
                 e.code if isinstance(e, SystemExit) else "%s: %s" % (type(e).__name__, e), a.login))
-            home = (getattr(a, "home", "") or os.environ["HOME"]) if TEST else getpw(a.login).pw_dir
+            pw = getpw(a.login)
+            home = (pw.pw_dir if getattr(pw, "sandbox", False) else os.environ["HOME"]) if TEST else pw.pw_dir
+            if a.pool_src:
+                pool_drop(paths(a.login)[0], [m[0].rsplit("/", 1)[1] for m in MOVED
+                                             if os.path.dirname(m[0]) == os.path.join(paths(a.login)[0], "accounts")])
             if rollback_login(a.login, os.path.abspath(a.conf_dir), home):
                 say("install: rolled back — %s is as it was; nothing is separated" % a.login)
                 return 1
