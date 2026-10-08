@@ -320,6 +320,16 @@ fi
 _trust_root=''
 [ -n "${FLEET_MAIN:-}" ] && _trust_root=$(cd "$FLEET_MAIN" 2>/dev/null && pwd -P)
 _codex_conf="${CODEX_HOME:-$HOME/.codex}/config.toml"
+# A TRUSTED NODE answers it (issue #2401, the Codex half of #2282's wide form): the
+# same `fleet-trust.sh node` word, then `codex-grant` writes that one table — fill
+# only, so a login's own "untrusted" stands and the warning below still fires.
+if [ -n "$_trust_root" ] && [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -f "$BIN/fleet-trust.sh" ] \
+   && sh "$BIN/fleet-trust.sh" node >/dev/null 2>&1 \
+   && _granted=$(sh "$BIN/fleet-trust.sh" codex-grant --main "$_trust_root" 2>/dev/null) \
+   && [ -n "$_granted" ]; then
+  printf 'fleet-codex: pre-trusted %s in %s (trusted node, issue #2401)\n' "$_granted" "$_codex_conf" >&2
+fi
+unset _granted
 if [ -n "$_trust_root" ] && [ -r "$_codex_conf" ] \
    && ! awk -v h="[projects.\"$_trust_root\"]" '
         $0 == h { t = 1; next }
@@ -335,8 +345,13 @@ if [ -n "$_trust_root" ] && [ -r "$_codex_conf" ] \
 fi
 unset _trust_root _codex_conf
 
+# check_for_update_on_startup=false (issue #2401): a fresh $CODEX_HOME opens on an
+# "Update available! … 1. Update now 2. Skip" picker before anything else, and a
+# fleet pane has nobody to answer it. Codex's version is the release's to move
+# (release.json / the login's own updater), never a prompt's.
 flags=(
   --dangerously-bypass-hook-trust
+  -c 'check_for_update_on_startup=false'
   -c 'features.hooks=true'
   -c 'project_doc_fallback_filenames=["CLAUDE.md"]'
   ${hook_flags[@]+"${hook_flags[@]}"}

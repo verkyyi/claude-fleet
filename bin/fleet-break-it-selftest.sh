@@ -3684,6 +3684,53 @@ drill_oldcfg_broken_unmarked() {
   WHAT="删了 gone.sh / await 的发版后：w-broken 红「会坏·需重开」并点名（窗口·仓库·单号·状态），只缺 new.sh 的 w-loop 黄且列为循环中，没 manifest 的 w-old 照旧黄；三个都没被重开"
 }
 
+# A new login's first Claude start asks questions nobody in a fleet pane answers —
+# on 2026-10-08 the new `verky` logins' `guide` sessions sat on 2.1.293's "Make
+# auto mode your default permission mode?" for good (issue #2401). The fake
+# `claude` gates exactly as the measured build does: no hasCompletedOnboarding →
+# the onboarding; no hasSeenAutoDefaultNudge → that question; both → the prompt.
+# A new login goes through the bootstrap's onboard step, an existing login (a
+# .claude.json from before #2401) through the settings pass; each must reach the
+# input box, with the doctor's reader agreeing.
+drill_new_login_first_run_dialog() {
+  CAP=10; BREAK_SOCK="$WORK/sock-fr"; local d="$WORK/fr" t0 out
+  mkdir -p "$d/new/.claude" "$d/old/.claude"
+  cat > "$d/claude" <<'FAKE'
+#!/bin/sh
+python3 - "$HOME/.claude.json" <<'PY'
+import json, sys
+try: s = json.load(open(sys.argv[1]))
+except Exception: s = {}
+if s.get("hasCompletedOnboarding") is not True: print("Choose the text style that looks best with your terminal")
+elif s.get("hasSeenAutoDefaultNudge") is not True:
+    print("Make auto mode your default permission mode?\n ❯ Yes, set auto mode as my default permission mode\n   No, keep bypass permissions")
+else: print("❯ \n  ⏵⏵ bypass permissions on")
+PY
+exec sleep 600
+FAKE
+  chmod +x "$d/claude"
+  printf '{"hasCompletedOnboarding": true, "numStartups": 3}\n' > "$d/old/.claude.json"
+  printf '{}\n' > "$d/old/.claude/settings.json"
+  t0=$(now)
+  # the new login: the bootstrap's onboard step, before fleet-up opens anything
+  out=$(python3 "$BIN/fleet-onboard-defaults.py" "$d/new" 2>&1) || { WHY="the onboard step failed: $out"; return 1; }
+  # the existing login: install-apply's settings pass, fill only
+  out=$(python3 "$BIN/fleet-hooks-merge.py" defaults --settings "$d/old/.claude/settings.json" --config "$d/old/.claude.json" \
+          --override "$d/old/.claude/settings.fleet-override.json" 2>&1) || { WHY="the settings pass failed: $out"; return 1; }
+  nt -f /dev/null new-session -d -s fr -n new -x 100 -y 20 "HOME='$d/new' exec '$d/claude'" || { WHY="cannot start the isolated tmux server"; return 1; }
+  nt new-window -d -t fr: -n old "HOME='$d/old' exec '$d/claude'"
+  frready() { local w p; for w in new old; do p=$(nt capture-pane -p -t "fr:$w" 2>/dev/null)
+      case "$p" in *'Make auto mode'*|*'Choose the text style'*) return 1 ;; *'bypass permissions on'*) : ;; *) return 1 ;; esac; done; }
+  until_ok "$CAP" frready || { WHY="a first session still stops on a first-run question: new=[$(nt capture-pane -p -t fr:new | tr '\n' '|')] old=[$(nt capture-pane -p -t fr:old | tr '\n' '|')]"; return 1; }
+  SECS=$(since "$t0")
+  python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if s.get("numStartups")==3 else 1)' "$d/old/.claude.json" \
+    || { WHY="the settings pass dropped the existing login's own keys: $(cat "$d/old/.claude.json")"; return 1; }
+  for h in new old; do
+    out=$(python3 "$BIN/fleet-onboard-defaults.py" --check "$d/$h" 2>&1) || { WHY="the doctor's firstrun reader says no for the $h login: $out"; return 1; }
+  done
+  WHAT="新开账号（onboard 步）和已有账号（settings pass 只填不改）第一个会话都直接到输入框：没有 onboarding、没有「Make auto mode your default…」；doctor firstrun 两个都 ok"
+}
+
 # A warm-pool entry started before an upgrade (its @agent_cfg / @agent_ver no longer
 # the expected ones) must never be handed out — the node's claim says 3 and the
 # caller opens a cold session — and the next pass retires it (issue #2233).

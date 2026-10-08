@@ -42,7 +42,9 @@ the arguments and the path spelling (~ vs $HOME vs absolute) are NOT identity.
          login's), its "globalConfig" section fills Claude Code's GLOBAL config
          ~/.claude.json ($CLAUDE_CONFIG_DIR/.claude.json when set) — today
          leftArrowOpensAgents=false, the only place that key is read (in
-         settings.json it does nothing, measured on 2.1.289). FILL ONLY: a key
+         settings.json it does nothing, measured on 2.1.289), and the first-run
+         answers hasCompletedOnboarding / hasSeenAutoDefaultNudge (issue #2401:
+         2.1.293's "Make auto mode your default permission mode?"). FILL ONLY: a key
          the login lacks is set, a key it has — any value — is never overwritten;
          an object default (permissions.defaultMode) fills into an existing
          object leaf by leaf, so the login's permissions.allow survives.

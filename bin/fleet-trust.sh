@@ -11,6 +11,10 @@
 #                                                         form (issue #2282): every
 #                                                         hosted repo's checkout,
 #                                                         and the login's $HOME
+#   fleet-trust.sh codex-grant --main <FLEET_MAIN>         the same answer for Codex:
+#                                                         `trust_level = "trusted"` for
+#                                                         that checkout in
+#                                                         $CODEX_HOME/config.toml (#2401)
 #   fleet-trust.sh check <dir>                             trusted | untrusted | unknown
 #                                                         (exit 0 / 1 / 2)
 #   fleet-trust.sh node                                    is THIS machine a trusted
@@ -66,6 +70,18 @@
 # No proxy, no word, a stale word, `untrusted`, `unknown` => not trusted: the
 # launcher then runs today's narrow grant, byte for byte. Never asks the hub.
 #
+# CODEX (issue #2401). Codex asks its own "Do you trust the contents of this
+# directory?" and keys it on the MAIN checkout too (a worktree inherits it, verified
+# on 0.154); the answer is persisted state — `[projects."<path>"] trust_level =
+# "trusted"` in $CODEX_HOME/config.toml — and a `-c` override does not satisfy it.
+# `codex-grant` writes that one table for the given checkout, FILL ONLY: a table
+# that already names a trust_level (any value — "untrusted" is the login's own
+# answer) is left alone, a table without one gets the line under its header, no
+# table gets one appended. The file is edited as TEXT (every other line byte for
+# byte; macOS python 3.9 has no tomllib), temp + rename, mode kept (0600 when new);
+# a missing $CODEX_HOME is not created (Codex is not set up on this login).
+# fleet-codex.sh calls it on a trusted node only — the same gate as the wide form.
+#
 # Output: `grant` prints each path it newly trusted, one per line (nothing when
 # nothing changed); notes go to stderr. python3 does the JSON (already a fleet
 # dependency — the collector needs it); without it, `grant` exits 2 and `check`
@@ -77,7 +93,7 @@
 # concurrent writer. Unset in production.
 set -u
 
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; }
+usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//' >&2; }
 note()  { printf 'fleet-trust: %s\n' "$*" >&2; }
 
 cfg_file() {
@@ -154,6 +170,47 @@ for attempt in range(8):
 sys.stderr.write("fleet-trust: %s kept changing under us — gave up after 8 attempts\n" % path); sys.exit(4)
 '
 
+# codex-grant: argv config.toml path, physical checkout → prints the path when written
+# Exit: 0 ok · 6 no $CODEX_HOME (nothing created)
+PY_CODEX='
+import os, sys
+path, target = sys.argv[1], sys.argv[2]
+home = os.path.dirname(path)
+if not os.path.isdir(home):
+    sys.stderr.write("fleet-trust: %s does not exist — Codex is not set up here; nothing created\n" % home); sys.exit(6)
+try:
+    with open(path, encoding="utf-8") as f: text = f.read()
+    mode = os.stat(path).st_mode & 0o777
+except FileNotFoundError:
+    text, mode = "", 0o600
+esc = target.replace("\\", "\\\\").replace("\"", "\\\"")
+header = "[projects.\"%s\"]" % esc
+lines = text.split("\n")
+if lines and lines[-1] == "": lines.pop()
+at = None
+for i, l in enumerate(lines):
+    if l.strip() == header: at = i; break
+if at is not None:
+    j = at + 1
+    while j < len(lines) and not lines[j].lstrip().startswith("["):
+        if lines[j].split("=", 1)[0].strip() == "trust_level": sys.exit(0)   # the login has answered
+        j += 1
+    lines.insert(at + 1, "trust_level = \"trusted\"")
+else:
+    if lines and lines[-1].strip(): lines.append("")
+    lines += [header, "trust_level = \"trusted\""]
+tmp = "%s.fleet-trust.%d.tmp" % (path, os.getpid())
+try:
+    with open(tmp, "w", encoding="utf-8") as f: f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+except BaseException:
+    try: os.unlink(tmp)
+    except OSError: pass
+    raise
+print(target)
+'
+
 PY_CHECK='
 import json, sys
 path, target = sys.argv[1], sys.argv[2]
@@ -205,6 +262,19 @@ case "$cmd" in
     command -v python3 >/dev/null 2>&1 || { echo unknown; exit 2; }
     p=$(phys "$d") || { echo unknown; exit 2; }
     python3 -c "$PY_CHECK" "$(cfg_file)" "$p"
+    ;;
+
+  codex-grant)
+    m=''
+    case "${1:-}" in
+      --main) m="${2:-}" ;;
+      --main=*) m="${1#--main=}" ;;
+    esac
+    [ -n "$m" ] || { note "codex-grant needs --main <FLEET_MAIN>"; usage; exit 2; }
+    command -v python3 >/dev/null 2>&1 || { note "python3 not found — cannot edit the Codex config"; exit 2; }
+    mp=$(phys "$m") || { note "refusing: --main $m is not a directory"; exit 3; }
+    [ -d "$mp/.git" ] || { note "refusing: --main $mp is not a git checkout"; exit 3; }
+    python3 -I -c "$PY_CODEX" "${CODEX_HOME:-$HOME/.codex}/config.toml" "$mp"
     ;;
 
   node)

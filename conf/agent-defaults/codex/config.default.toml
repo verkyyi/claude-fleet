@@ -15,6 +15,12 @@ approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_reasoning_effort = "high"
 
+# Codex's first-run "Update available! … 1. Update now 2. Skip" picker (issue #2401):
+# an unattended pane has nobody to answer it, and the version is the release's to
+# move. fleet-codex.sh passes the same as `-c` on every fleet launch; this covers a
+# plain `codex` on the login.
+check_for_update_on_startup = false
+
 # The same four MCP servers conf/agent-defaults/claude/mcp.default.json gives Claude.
 [mcp_servers.context7]
 command = "npx"

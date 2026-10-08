@@ -35,7 +35,8 @@
 #             Claude Code's GLOBAL config ~/.claude.json, or
 #             $CLAUDE_CONFIG_DIR/.claude.json (its "globalConfig": today
 #             `leftArrowOpensAgents: false` — the only switch for ←'s agents
-#             view; settings.json does not reach it). FILL ONLY: a key the login
+#             view; settings.json does not reach it — and the first-run answers
+#             hasCompletedOnboarding / hasSeenAutoDefaultNudge, issue #2401). FILL ONLY: a key the login
 #             lacks is set, a key it has is never overwritten, and the keys
 #             listed in ~/.claude/settings.fleet-override.json are never written
 #             at all. Not gated on the file changing: a login whose settings lost

@@ -12,6 +12,8 @@
     "agentPushNotifEnabled": true
   },
   "globalConfig": {
-    "leftArrowOpensAgents": false
+    "leftArrowOpensAgents": false,
+    "hasCompletedOnboarding": true,
+    "hasSeenAutoDefaultNudge": true
   }
 }

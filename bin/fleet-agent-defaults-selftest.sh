@@ -10,7 +10,7 @@
 #   1  the shipped defaults: shape, the four servers, the three Codex keys, no
 #      `model`, both doc blocks marked; tomllib agrees with the fleet's reader
 #   2  empty: {} .claude.json + a one-key config.toml + no docs → every default
-#      in; `filled claude 5 · codex 8`; check reads 0 missing (skills once installed)
+#      in; `filled claude 5 · codex 9`; check reads 0 missing (skills once installed)
 #   3  own: a same-name server (both agents) and a login's approval_policy are
 #      never rewritten; the login's lines survive byte for byte; the personal
 #      AGENTS.md text survives under the appended block
@@ -77,8 +77,8 @@ grep -q 'gh auth token' "$BIN/mcp-github.sh" || fail 'mcp-github.sh does not tak
 grep -q 'mcp-github.sh' "$D/claude/mcp.default.json" && grep -q 'mcp-github.sh' "$D/codex/config.default.toml" \
   || fail 'the github server must run through bin/mcp-github.sh on both agents'
 if [ "$HAS_TOML" = 1 ]; then
-  [ "$(toml_get "$D/codex/config.default.toml" 'sorted(k for k in d if k != "mcp_servers")')" = "['approval_policy', 'model_reasoning_effort', 'sandbox_mode']" ] \
-    || fail 'config.default.toml top-level keys are not approval_policy / model_reasoning_effort / sandbox_mode' "$(cat "$D/codex/config.default.toml")"
+  [ "$(toml_get "$D/codex/config.default.toml" 'sorted(k for k in d if k != "mcp_servers")')" = "['approval_policy', 'check_for_update_on_startup', 'model_reasoning_effort', 'sandbox_mode']" ] \
+    || fail 'config.default.toml top-level keys are not approval_policy / check_for_update_on_startup / model_reasoning_effort / sandbox_mode' "$(cat "$D/codex/config.default.toml")"
   [ "$(toml_get "$D/codex/config.default.toml" 'sorted(d["mcp_servers"])')" = "['context7', 'fetch', 'github', 'playwright']" ] \
     || fail 'config.default.toml must ship the same four servers'
   [ "$(toml_get "$D/codex/config.default.toml" 'd["approval_policy"], d["sandbox_mode"]')" = "('never', 'danger-full-access')" ] \
@@ -94,7 +94,7 @@ done
 fresh "$WORK/c1"
 run python3 check "$WORK/c1" > "$WORK/o1"; rc=$?
 [ "$rc" = 1 ] || fail "check on an empty login should exit 1 (got $rc)" "$(cat "$WORK/o1")"
-head -1 "$WORK/o1" | grep -q '^claude 5 missing · codex 8 missing · skills 4 missing$' || fail 'check head line on an empty login' "$(cat "$WORK/o1")"
+head -1 "$WORK/o1" | grep -q '^claude 5 missing · codex 9 missing · skills 4 missing$' || fail 'check head line on an empty login' "$(cat "$WORK/o1")"
 [ "$(grep -c '^missing    codex\[.*\] mcp ' "$WORK/o1")" = 4 ] || fail 'check did not name 4 missing Codex servers' "$(cat "$WORK/o1")"
 grep -q '^missing    codex\[.*\] approval_policy (default "never")$' "$WORK/o1" || fail 'check did not name approval_policy with its default' "$(cat "$WORK/o1")"
 grep -q '^missing    claude doc CLAUDE.md fleet block (absent)$' "$WORK/o1" || fail 'check did not name the absent CLAUDE.md block' "$(cat "$WORK/o1")"
@@ -103,8 +103,8 @@ ok '1 shipped defaults: four servers, three Codex keys, no model, marked doc blo
 
 # --- 2. empty login → every default in --------------------------------------------------
 run python3 apply "$WORK/c1" > "$WORK/o2" || fail 'apply on an empty login failed' "$(cat "$WORK/o2")"
-grep -q '^filled  claude 5 · codex 8$' "$WORK/o2" || fail 'apply summary' "$(cat "$WORK/o2")"
-[ "$(grep -c '^set ' "$WORK/o2")" = 13 ] || fail 'apply did not print one set per item' "$(cat "$WORK/o2")"
+grep -q '^filled  claude 5 · codex 9$' "$WORK/o2" || fail 'apply summary' "$(cat "$WORK/o2")"
+[ "$(grep -c '^set ' "$WORK/o2")" = 14 ] || fail 'apply did not print one set per item' "$(cat "$WORK/o2")"
 [ "$(json_get "$WORK/c1/claude/.claude.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'github', 'playwright']" ] \
   || fail '.claude.json did not get the four servers' "$(cat "$WORK/c1/claude/.claude.json")"
 [ "$(json_get "$WORK/c1/claude/.claude.json" 'd["mcpServers"]["context7"]')" = "$(json_get "$D/claude/mcp.default.json" 'd["mcpServers"]["context7"]')" ] \
@@ -189,7 +189,7 @@ grep -q '^own            codex\[.*\] approval_policy = "on-request" (default "ne
 grep -q '^own            codex\[.*\] mcp fetch — this login'\''s$' "$WORK/o3" || fail 'apply did not report the login'\''s fetch' "$(cat "$WORK/o3")"
 head -3 "$WORK/c3/codex/AGENTS.md" | grep -q '^# Global AGENTS.md$' && grep -q '^My own rules.$' "$WORK/c3/codex/AGENTS.md" \
   && grep -q '^<!-- fleet:agent-defaults begin -->' "$WORK/c3/codex/AGENTS.md" || fail 'AGENTS.md: personal text lost or block not appended' "$(cat "$WORK/c3/codex/AGENTS.md")"
-grep -q '^filled  claude 4 · codex 6$' "$WORK/o3" || fail 'own-case summary' "$(cat "$WORK/o3")"
+grep -q '^filled  claude 4 · codex 7$' "$WORK/o3" || fail 'own-case summary' "$(cat "$WORK/o3")"
 ok '3 own: same-name servers and the login'\''s approval_policy / model kept; its lines survive in order; personal AGENTS.md text under the block'
 
 # --- 4. idempotent ----------------------------------------------------------------------

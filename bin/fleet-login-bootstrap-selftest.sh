@@ -85,6 +85,7 @@ UPPATH="$WORK/up.path"; export UPPATH        # the PATH fleet-up was run with
 # ---- the fixture GitHub: verkyyi/claude-fleet with stubs, stable one behind master ----
 FX="$WORK/fx"; mkdir -p "$FX/bin" "$FX/shell"
 cp "$BIN/fleet-onboard-defaults.py" "$FX/bin/fleet-onboard-defaults.py"
+mkdir -p "$FX/conf"; cp "$BIN/../conf/claude-settings.default.json" "$FX/conf/claude-settings.default.json"
 stub() { # stub <name> <body…> — logs "<name> <argv>" to $CALLS, then runs <body>
   local n="$1"; shift
   { printf '#!/bin/bash\nprintf "%%s %%s\\n" %s "$*" >> "$CALLS"\n' "$n"; printf '%s\n' "$@"; } > "$FX/bin/$n"
@@ -155,6 +156,8 @@ state = json.loads((home / '.claude.json').read_text())
 settings = json.loads((home / '.claude/settings.json').read_text())
 assert state['hasCompletedOnboarding'] is True
 assert state['theme'] == 'dark'
+# issue #2401: the auto-mode question is answered before the first start (bypass kept)
+assert state['hasSeenAutoDefaultNudge'] is True
 assert settings['permissions']['allow']
 PY
 leg "A first run installs everything, fleet-up --seed --no-attach"
@@ -333,6 +336,7 @@ home, md, module = map(pathlib.Path, sys.argv[1:])
 state = json.loads((home / '.claude.json').read_text())
 settings = json.loads((home / '.claude/settings.json').read_text())
 assert state['hasCompletedOnboarding'] is False and state['theme'] == 'light' and state['mine'] == 7
+assert state['hasSeenAutoDefaultNudge'] is True   # a missing first-run answer is filled beside them
 assert settings['mine'] == 8
 allow = settings['permissions']['allow']
 assert allow[0] == 'Bash(my-command)' and len(allow) == len(set(allow))
