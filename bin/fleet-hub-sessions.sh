@@ -184,6 +184,14 @@ G="$FLEET_C/global"
 EVERY="${FLEET_HUB_SESSIONS_EVERY:-10}"; case "$EVERY" in ''|*[!0-9]*|0) EVERY=10 ;; esac
 WATCHED_EVERY="${FLEET_HUB_SESSIONS_WATCHED_EVERY:-2}"; case "$WATCHED_EVERY" in ''|*[!0-9]*|0) WATCHED_EVERY=2 ;; esac
 ETAGF="$G/hubsess.etag"      # the validator of the cache on disk (issue #1481)
+# …and what MAPPED that cache (issue #2397): the ETag vouches for the hub's answer,
+# not for the rows this code kept of it. Its second line is this stamp — the code
+# that maps (by content, as it loaded), the rows-user knob, client or node — and a
+# validator under any other stamp is never sent: cj's client, updated to the code
+# that keeps his node login's rows (#2390), kept asking with the ETag the old code
+# had stored beside an empty cache, and every 304 kept the list empty.
+MAPCODE=$(cat "$BIN/fleet-hub-sessions.sh" "$BIN/fleet-lib.sh" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }')
+ETAG_STAMP=''  # this round's stamp (fetch sets it; curl_sessions writes it)
 LOOP_SECS="${FLEET_HUB_SESSIONS_LOOP_SECS:-70}"; case "$LOOP_SECS" in ''|*[!0-9]*) LOOP_SECS=70 ;; esac
 LP_WAIT="${FLEET_HUB_SESSIONS_WAIT:-25}"; case "$LP_WAIT" in ''|*[!0-9]*|0) LP_WAIT=25 ;; esac
 [ "$LP_WAIT" -le 25 ] || LP_WAIT=25
@@ -311,7 +319,7 @@ curl_sessions() {
   case "$code" in
     200) etag=$(awk 'tolower($1) == "etag:" { sub(/\r$/, "", $2); print $2; exit }' "$hdr" 2>/dev/null)
          rm -f "$hdr"
-         if [ -n "$etag" ]; then printf '%s\n' "$etag" > "$ETAGF.new" && mv -f "$ETAGF.new" "$ETAGF"
+         if [ -n "$etag" ]; then printf '%s\n%s\n' "$etag" "$ETAG_STAMP" > "$ETAGF.new" && mv -f "$ETAGF.new" "$ETAGF"
          else rm -f "$ETAGF"; fi
          return 0 ;;
     304)     rm -f "$hdr"; return 3 ;;
@@ -340,13 +348,17 @@ print(json.dumps(b))' \
 # 1 = no answer. The validator goes out only while every cache it vouches for is
 # on disk — a fleet created since, or a wiped $FLEET_C, needs the body.
 fetch() {
-  local out="$1" lf="$2" url st rc etag='' sess _c q
+  local out="$1" lf="$2" url st rc etag='' stamp sess _c q
   if [ -n "${FLEET_HUB_SESSIONS_CMD:-}" ]; then
     bash -c "$FLEET_HUB_SESSIONS_CMD" </dev/null >"$out" 2>/dev/null; return
   fi
   url=$(hub_url) || { printf 'fleet-hub-sessions: no hub URL (CCQUOTA_HUB_URL / FLEET_HUB_URL / hub.json) — no other machine to show\n' >&2; return 1; }
   command -v curl >/dev/null 2>&1 || return 1
-  if [ -s "$ETAGF" ] && read -r etag < "$ETAGF" && [ -n "$etag" ]; then
+  st=$(cert_state)
+  case "$st" in ok\ *) ETAG_STAMP=cert ;; *) ETAG_STAMP=token ;; esac
+  ETAG_STAMP="map $MAPCODE $ETAG_STAMP ${CLIENT:-node} ${FLEET_HUB_SESSIONS_USER:-}"
+  if [ -s "$ETAGF" ] && { read -r etag; IFS= read -r stamp || stamp=''; } < "$ETAGF" && [ -n "$etag" ]; then
+    [ "$stamp" = "$ETAG_STAMP" ] || etag=''
     while IFS=$'\t' read -r sess _c; do
       [ -z "$sess" ] || [ -s "$G/remote_$sess" ] || { etag=''; break; }
     done < "$lf"
@@ -354,14 +366,15 @@ fetch() {
   # the long poll (issue #1526): only with a validator to hold against
   q=''; LP_SENT=0; SCOPED=0
   if [ -n "$WAIT" ] && [ -n "$etag" ]; then LP_SENT=1; q="?wait=$WAIT"; fi
-  st=$(cert_state)
   case "$st" in
     ok\ *)
       fetch_cert "$url" "$out" "$etag"; rc=$?
       # A certificate is always a person, never the operator: the hub has already
       # cut the answer to the (machine, login) pairs of their accounts (FleetScope)
       [ "$rc" = 4 ] || { SCOPED=1; return "$rc"; }
-      printf 'fleet-hub-sessions: the hub refused the connection certificate %s — trying the viewer token\n' "$CERT_PUB" >&2 ;;
+      printf 'fleet-hub-sessions: the hub refused the connection certificate %s — trying the viewer token\n' "$CERT_PUB" >&2
+      # the token's answer is another identity's: no validator, its own stamp
+      etag=''; q=''; LP_SENT=0; ETAG_STAMP=${ETAG_STAMP/ cert / token } ;;
   esac
   if token_source >/dev/null; then
     curl_sessions "$out" "$etag" -H "Authorization: Bearer $TOK" "$url/v1/fleet/fleet_sessions$q"; rc=$?

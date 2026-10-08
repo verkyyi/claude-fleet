@@ -202,7 +202,7 @@ ts_of() { head -1 "$G/remote_$S" | cut -d"$US" -f2; }
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err" || fail "D: first --refresh failed" "$(cat "$WORK/err")"
 eq  "D: the first fetch sends no validator"     "GET inm=- auth=y" "$(sed -n 1p "$WORK/hub.log")"
 eq  "D: …and writes the row"                    "working" "$(row_state)"
-eq  "D: …and keeps the hub's ETag"              '"A"' "$(cat "$G/hubsess.etag" 2>/dev/null)"
+eq  "D: …and keeps the hub's ETag"              '"A"' "$(head -n1 "$G/hubsess.etag" 2>/dev/null)"
 t1=$(ts_of); sleep 1
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err" || fail "D: a 304 refresh must succeed" "$(cat "$WORK/err")"
 eq  "D: the second fetch sends If-None-Match"   'GET inm="A" auth=y' "$(sed -n 2p "$WORK/hub.log")"
@@ -212,11 +212,22 @@ eq  "D: …and says nothing on stderr"            "" "$(cat "$WORK/err")"
 printf 'B needs\n' > "$WORK/hub.mode"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "D: refresh after a change failed"
 eq  "D: a new validator comes with the new rows" "needs" "$(row_state)"
-eq  "D: …and replaces the stored ETag"          '"B"' "$(cat "$G/hubsess.etag")"
+eq  "D: …and replaces the stored ETag"          '"B"' "$(head -n1 "$G/hubsess.etag")"
+has "D: …with the mapping it was kept under (issue #2397)" "$(sed -n 2p "$G/hubsess.etag")" "map "
+# A validator another mapping stored (issue #2397): an ETag vouches for the hub's
+# answer, not for the rows older code kept of it — cj's client, updated past
+# #2390, kept sending the ETag stored beside the old code's empty cache and every
+# 304 kept it empty. One with no stamp (or another) is not sent: a full body.
+printf '"B"\n' > "$G/hubsess.etag"
+printf '#ts\037%s\n' "$(date +%s)" > "$G/remote_$S"   # the old code's empty cache
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "D: refresh over another mapping's validator failed"
+eq  "D: another mapping's validator is not sent" "GET inm=- auth=y" "$(sed -n 4p "$WORK/hub.log")"
+eq  "D: …and the rows are mapped again"           "needs" "$(row_state)"
+has "D: …and the validator carries this mapping" "$(sed -n 2p "$G/hubsess.etag")" "map "
 # A cache the validator vouches for that is gone from disk: the body is fetched.
 rm -f "$G/remote_$S"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "D: refresh with a missing cache failed"
-eq  "D: a missing cache sends no validator"      "GET inm=- auth=y" "$(sed -n 4p "$WORK/hub.log")"
+eq  "D: a missing cache sends no validator"      "GET inm=- auth=y" "$(sed -n 5p "$WORK/hub.log")"
 eq  "D: …and the row is back"                   "needs" "$(row_state)"
 # A hub without ETags (older than #1481): full fetches, no validator kept.
 printf 'noetag done\n' > "$WORK/hub.mode"
@@ -226,13 +237,13 @@ absent "D: …and no validator is kept for it"      "$G/hubsess.etag"
 # A failed fetch keeps the rows and the validator they came with.
 printf 'C working\n' > "$WORK/hub.mode"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-eq  "D: a validator is back once the hub sends one" '"C"' "$(cat "$G/hubsess.etag" 2>/dev/null)"
+eq  "D: a validator is back once the hub sends one" '"C"' "$(head -n1 "$G/hubsess.etag" 2>/dev/null)"
 kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=''
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>"$WORK/err"
 eq  "D: a dead hub returns 1"                    "1" "$?"
 eq  "D: …keeps the last rows"                    "working" "$(row_state)"
 has "D: …and says so"                            "$(cat "$WORK/err")" "hub unreachable"
-eq  "D: …and keeps the validator of the rows on disk" '"C"' "$(cat "$G/hubsess.etag" 2>/dev/null)"
+eq  "D: …and keeps the validator of the rows on disk" '"C"' "$(head -n1 "$G/hubsess.etag" 2>/dev/null)"
 
 # ============================================================================
 # E. cadence: 2 s while someone is attached, 10 s otherwise
