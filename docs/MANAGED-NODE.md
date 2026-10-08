@@ -226,3 +226,23 @@ curl -fsSL <入口>/install/bin/fleet-node-install.sh | sudo bash -s -- --hub <�
 账号用 `sudo <root>/current/bin/fleet-node-supervisor.py account adopt <账号>` 交给守护。
 托管机器上 `fleet host on` / `fleet node join` 先提示改用这条命令（一个版本内照旧可用）。
 沙箱自测 `bin/fleet-node-install-selftest.sh`；BREAK-IT `node-install-half`。
+
+## 9. 真机演练（C8，#2336）
+
+```
+sudo bin/fleet-node-drill.sh run --to <升级到的 sha> --fail <故意失败的 sha> [--join-file <f>] [--logins a,b]
+bin/fleet-node-drill.sh count        # 五个指标此刻的读数（不用 root）
+sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitHub 挡板
+```
+
+在**被演练的那台**上跑（先 m4，共同约定 6）。每一步动真机前先问（y 做 · n 跳过记 SKIP · q 停）：
+基线 → 加入码（人）→ 安装（人，§8 那一条）→ 逐个账号 `account adopt`（发起人自己的账号最后迁；失败即停并打印 `account release`）
+→ 升级（人移 stable 到 `--to`，等更新器 `committed`）→ 回退（人移到 `--fail`：只在演练分支上、doctor 多一行 FAIL 的提交，等 `rolled-back` 回到 `--to`；看完移回）
+→ 复查（`doctor --machine` + 五个指标）→ 断 GitHub（这一步内 `/etc/hosts` 挡住 github.com 等，重装应全部跳过、只从入口取到当前发布版；挡板总会撤掉，下次启动也先撤）
+→ 回话（人确认会话能回话、入口能往这台派会话）。
+
+每步计时、标「人 / 自动」，最后两张表——步骤表和五个指标的演练前 / 后 / 目标——打印并存到
+`<state>/drill/<UTC>/report.md`，报告页直接用。加入码只从 `--join-file`（读后删除）或不回显的提示读，不打印、不落盘。
+指标口径（`count`）：服务 = `/Library/LaunchDaemons` + 每个账号 `~/Library/LaunchAgents` 里有效的 `com.claude-fleet.*` / `com.ccquota.*`
+（`.bak` / `.retired` 等残留不算）；种类 = 各账号服务组合去重（托管账号算「守护代跑」一种）；GitHub = 未托管且有 install-sync 的账号数；
+部件 = `doctor --machine` 里 runtime / ccquota / claude / codex / tmux / cache 不是 PASS 的个数。沙箱自测 `bin/fleet-node-drill-selftest.sh`。
