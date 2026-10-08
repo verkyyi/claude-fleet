@@ -658,8 +658,9 @@ try:
           'the label still carries the tree glyph — it belongs in its own field')
     # (field 13, cfg, rides only a row whose configuration is known — #1783;
     # field 14, title, only a row whose issue title is known — #1921; field
-    # 15, reap, only a row with a @reap_policy — #1902)
-    check(all(len(r) == 5 if r[0] == 'hdr' else len(r) in (sidebar.ROW_FIELDS - 3, sidebar.ROW_FIELDS - 2, sidebar.ROW_FIELDS - 1, sidebar.ROW_FIELDS)
+    # 15, reap, only a row with a @reap_policy — #1902; field 16, backfill, only a
+    # warm start whose issue was never filed — #2235)
+    check(all(len(r) == 5 if r[0] == 'hdr' else len(r) in (sidebar.ROW_FIELDS - 4, sidebar.ROW_FIELDS - 3, sidebar.ROW_FIELDS - 2, sidebar.ROW_FIELDS - 1, sidebar.ROW_FIELDS)
               for r in row_data()),
           'sidebar rows must carry 9 fields (a heading 5)')
     root = [r for r in row_data() if r[0] == w1]
