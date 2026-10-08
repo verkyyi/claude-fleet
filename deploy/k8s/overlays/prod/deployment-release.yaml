@@ -1,0 +1,37 @@
+# Node releases (#2366): the signing key from its own Secret
+# `ccquota-release-key` (key `release-key`, made by `ccquota release keygen`,
+# by a person — never here), read-only, group-readable like the base's other
+# Secret volumes (fsGroup 10001); the releases on the OSS volume
+# (release-volume.yaml). CCQUOTA_FLEET_RELEASE_ARTIFACTS (pinned installers)
+# stays unset until C6. Roll back: delete this patch and its resources line.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-hub
+spec:
+  template:
+    spec:
+      containers:
+        - name: ccquota
+          env:
+            - name: CCQUOTA_FLEET_RELEASE_KEY
+              value: /etc/ccquota-release/release-key
+            - name: CCQUOTA_FLEET_RELEASE_DIR
+              value: /releases
+          volumeMounts:
+            - name: release-key
+              mountPath: /etc/ccquota-release
+              readOnly: true
+            - name: releases
+              mountPath: /releases
+      volumes:
+        - name: release-key
+          secret:
+            secretName: ccquota-release-key
+            defaultMode: 0440
+            items:
+              - key: release-key
+                path: release-key
+        - name: releases
+          persistentVolumeClaim:
+            claimName: ccquota-releases
