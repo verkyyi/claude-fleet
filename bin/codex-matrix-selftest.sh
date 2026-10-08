@@ -88,7 +88,7 @@ ok "missing block / missing marker → exit 2"
 # --- 6. the verdicts still match the launcher's CODE ---------------------------
 # Comments stripped: this reads what fleet-codex.sh DOES, not what it says.
 code="$(sed -n '/^set -uo pipefail/,$p' "$SRC" | grep -v '^[[:space:]]*#')"
-has() { printf '%s\n' "$code" | grep -q -- "$1"; }
+has() { grep -q -- "$1" <<<"$code"; }   # never a pipe: grep -q leaving early SIGPIPEs printf, and pipefail calls that a miss (macOS pipes hold 16 KB)
 
 # ✅ rows: the guardrails, the project doc, the model knob.
 for tok in 'dangerously-bypass-approvals-and-sandbox' 'dangerously-bypass-hook-trust' \
