@@ -1205,6 +1205,26 @@ def pool_put(cfg, kind, label, data):
     return key
 
 
+def lease_expiries(cfg):
+    """{label: expiresAt (ms) or None} of every hub-leased Claude account this
+    tenant holds — its pool entries and any own copy."""
+    out = {}
+    labels = {k.split(":", 1)[1] for k in pool_index(cfg) if k.startswith("claude:")}
+    acc = cfg.accounts
+    labels.update(d[:-4] for d in (os.listdir(acc) if os.path.isdir(acc) else []) if d.endswith(".hub"))
+    for label in sorted(labels):
+        if not SAFE_LABEL(label):
+            continue
+        try:
+            with open(pool_entry(cfg, "claude", label) or own_path(cfg, "claude", label)) as f:
+                o = json.load(f)["claudeAiOauth"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if o.get("accessToken"):
+            out[label] = o.get("expiresAt")
+    return out
+
+
 def pool_gc(pool, cfgs):
     """Remove every pool file no tenant's index names."""
     keep = set()
@@ -1375,6 +1395,12 @@ def ctl_handle(req, t):
         write_private(own_path(cfg, kind, label), data)
         t.log(ev="store", kind=kind, acct=label, bytes=len(data))
         return {"ok": True}
+    if op == "accounts":
+        # a separated login cannot read its leased files: when each Claude
+        # account's lease runs out — the expiry only, never a token (issue #2308)
+        if not cfg.store:
+            return {"ok": False, "err": "accounts: not separated"}
+        return {"ok": True, "claude": lease_expiries(cfg)}
     if op == "probe":
         pp = getattr(cfg, "probe_path", "") or env("FLEET_CRED_PROBE")
         if not cfg.store or not pp:
@@ -1860,6 +1886,7 @@ def main():
     sub.add_parser("machine")
     o = sub.add_parser("store")
     o.add_argument("--kind", required=True, choices=("claude", "codex")); o.add_argument("--label", required=True)
+    sub.add_parser("accounts")
     sub.add_parser("probe")
     sub.add_parser("relay")
     sub.add_parser("pass")
@@ -1888,6 +1915,8 @@ def main():
     elif a.cmd == "store":
         ctl_call(a.state, {"op": "store", "kind": a.kind, "label": a.label,
                            "data": base64.b64encode(sys.stdin.buffer.read(65537)).decode()})
+    elif a.cmd == "accounts":
+        print(json.dumps(ctl_call(a.state, {"op": "accounts"}).get("claude") or {}, sort_keys=True))
     elif a.cmd == "probe":
         ctl_call(a.state, {"op": "probe", "data": sys.stdin.read(65536)})
     elif a.cmd == "relay":

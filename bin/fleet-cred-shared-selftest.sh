@@ -33,6 +33,8 @@
 #      <db>/.shared/pool at the start, a lease two logins hold is ONE file, a
 #      token only beta leased is never served to alpha, a file no tenant names
 #      any more is gone — and G puts every tenant's copy back byte for byte
+#      — and `accounts` / the account check (`.fleet-account.py claude-login`) of a
+#      separated login read each lease's expiry from the proxy, never a token
 #   I  machine install whose agent bootstrap fails AND whose way back fails too:
 #      exit 5, the credentials back anyway, the store kept as <login>.rolledback-*,
 #      the steps to do by hand printed (the clean rollback is BREAK-IT
@@ -204,6 +206,13 @@ store "$CA" - claude pool1 sk-ant-oat01-pool-v2 >/dev/null 2>&1
 store "$CB" "$BUID" claude pool1 sk-ant-oat01-pool-v2 >/dev/null 2>&1
 [ "$(pool_n claude)" = 4 ] && ! grep -rqs oat01-pool-v1 "$SB/db/.shared/pool" \
   && pass "P renewed by both: the copy nobody names is gone" || fail "P gc: $(pool_n claude)"
+out=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" accounts 2>&1)
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if sorted(d)==["main","pool1"] and d["main"]==4102444800000 else 1)' "$out" \
+  && case "$out" in *sk-ant*) false ;; *) true ;; esac \
+  && pass "P accounts: alpha's leases and their expiry, never a token, never beta's ($out)" || fail "P accounts: $out"
+st=$(FLEET_CONF_DIR="$CA" python3 "$BIN/.fleet-account.py" claude-login main 2>&1 | cut -f2)
+[ "$st" = valid ] && pass "P a separated login's account check asks the proxy: main valid (issue #2308)" \
+  || fail "P claude-login main: $st"
 ! grep -q 'sk-ant-\|cx-pool' "$SB/log/alpha.log" "$SB/log/beta.log" "$SB/log/shared.log" 2>/dev/null \
   && pass "P no credential in any log" || fail "P a credential leaked into a log"
 
