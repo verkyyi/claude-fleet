@@ -632,6 +632,28 @@ row compares it with `refs/tags/stable` (`bin/fleet-hub-image.sh`): WARN with th
 count when the hub hands out a client older than stable, INFO otherwise — no
 cluster access, no token.
 
+**Machines take stable from the hub, signed** (issue #2335, EPIC #2329 C7). Each
+time the hub sees stable move it builds a **node release** for that commit
+(`tokenledger/internal/api/fleet_release.go`, format in `internal/release`): the
+runtime tree (`bin/ conf/ hooks/ commands/ skills/ mod/ shell/ launchd/ systemd/
+docs/` + the top-level files — never `tokenledger/`, `deploy/`, `.github/`) as one
+deterministic tar, every `ccquota-<os>-<arch>` in `CCQUOTA_FLEET_DIST_DIR`, every
+pinned installer in `CCQUOTA_FLEET_RELEASE_ARTIFACTS` (Claude Code, Codex), a
+sha256 for each in `manifest.json` and an ed25519 signature over it with
+`CCQUOTA_FLEET_RELEASE_KEY` (its own Secret; `ccquota release keygen --out F`).
+Kept in `CCQUOTA_FLEET_RELEASE_DIR` (the cluster's OSS bucket, mounted), newest
+10, the current stable never pruned. Public like `/install`:
+`GET /v1/fleet/release/key` · `/<sha|stable>` (the manifest, `.files`) ·
+`/<sha>/manifest.sig` · `/<sha>/tree.tar.gz` · `/<sha>/artifacts/<name>` — a sha
+the hub neither holds nor has seen stable at is a 404, never a build. A machine
+runs `ccquota release fetch --hub <hub> --pubkey <pinned> [--artifacts] <sha|stable>
+<dest>`: the manifest must verify against the key pinned at install (`fleet node
+install`, C1), the tree and every file and binary must match it, else nothing is
+installed (exit 1, no `dest`, no `.partial`); `ccquota release verify` re-checks
+the hub's copy or (`--dir`) an installed one. GitHub is the hub's business only —
+a restarted hub that cannot reach it still serves what it stored. No key ⇒ every
+release route 404s, the hub as before. BREAK-IT row `release-tampered`.
+
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
 a **proxy window** `m4 <name>` (its pane header carries the same `m4`, so a

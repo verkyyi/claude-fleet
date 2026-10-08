@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -25,6 +26,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/leader"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -264,6 +266,9 @@ func loadFleetCerts(srv *api.Server) error {
 	// "off" hands out the image's packed client only.
 	if repo := os.Getenv("CCQUOTA_FLEET_STABLE_REPO"); repo != "off" {
 		srv.Stable = &api.StableSource{Repo: repo}
+		if err := loadFleetReleases(srv); err != nil {
+			return err
+		}
 		srv.Stable.Commit() // the first lookup, in the background
 	}
 	path := os.Getenv("CCQUOTA_FLEET_SSH_CA_KEY")
@@ -277,6 +282,41 @@ func loadFleetCerts(srv *api.Server) error {
 	}
 	srv.SSHCA = ca
 	log.Printf("fleet: SSH user CA %s — 12h certificates at /connect and `fleet login`", ca.Fingerprint())
+	return nil
+}
+
+// loadFleetReleases wires the node release store (claude-fleet#2335).
+// CCQUOTA_FLEET_RELEASE_KEY names the ed25519 signing key file (its own k8s
+// Secret, never the database); CCQUOTA_FLEET_RELEASE_DIR the volume releases
+// are kept on (the cluster's OSS bucket, mounted); CCQUOTA_FLEET_RELEASE_ARTIFACTS
+// the pinned Claude Code / Codex installers. No key: no releases. A key that
+// cannot be read, or one without a dir: the hub refuses to start.
+func loadFleetReleases(srv *api.Server) error {
+	path := os.Getenv("CCQUOTA_FLEET_RELEASE_KEY")
+	if path == "" {
+		log.Printf("fleet: no CCQUOTA_FLEET_RELEASE_KEY — node releases are off")
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_FLEET_RELEASE_KEY: %w", err)
+	}
+	key, err := release.LoadPrivateKey(b)
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_FLEET_RELEASE_KEY: %w", err)
+	}
+	dir := os.Getenv("CCQUOTA_FLEET_RELEASE_DIR")
+	if dir == "" {
+		return errors.New("CCQUOTA_FLEET_RELEASE_KEY is set but CCQUOTA_FLEET_RELEASE_DIR is not")
+	}
+	repo := srv.Stable.Repo
+	if repo == "" {
+		repo = "verkyyi/claude-fleet"
+	}
+	srv.Releases = &api.ReleaseStore{Dir: dir, Key: key, Repo: repo, Source: srv.Stable,
+		DistDir: srv.FleetDistDir, ArtifactsDir: os.Getenv("CCQUOTA_FLEET_RELEASE_ARTIFACTS")}
+	srv.Stable.OnStable = srv.Releases.OnStable
+	log.Printf("fleet: node releases in %s, signed by %s", dir, release.KeyID(key.Public().(ed25519.PublicKey)))
 	return nil
 }
 

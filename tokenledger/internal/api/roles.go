@@ -48,6 +48,7 @@ var routeAccess = map[string]string{
 	"/healthz": accessPublic, "/version": accessPublic,
 	"/readyz": accessPublic, "/v1/deploy-probe": accessPublic,
 	"/install": accessPublic, "/install/": accessPublic,
+	"/v1/fleet/release/": accessPublic, // signed node releases (claude-fleet#2335)
 	// The public counter (claude-fleet#1988); the handler 404s it when off.
 	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
 	"/v1/fleet/ssh-ca.pub":  accessPublic,

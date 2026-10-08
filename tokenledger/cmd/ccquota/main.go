@@ -62,6 +62,8 @@ func main() {
 		err = runCredProxy(os.Args[2:])
 	case "db":
 		err = runDB(os.Args[2:])
+	case "release":
+		err = runRelease(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("ccquota", Version)
 	case "help", "--help", "-h":
@@ -111,6 +113,8 @@ Usage:
                             Deployment beside the hub; deploy/k8s/credproxy)
   ccquota db     <cmd>      Move the hub's SQLite database into Postgres, and
                             check the copy (migrate | verify; deploy/k8s/RUNBOOK.md)
+  ccquota release <cmd>     A node release from the hub, signature-checked
+                            (fetch | verify | keygen | pubkey; never GitHub)
   ccquota version           Print the version
 
 Run any subcommand with -h for its flags.
