@@ -113,7 +113,10 @@ def compose_log(ev, **fields):
                multi · orchestrate), repo; ts = the ↵'s time, t_enter its ms
       placed   the place answered: id, rc, result (the place's first word),
                machine, session (the worker_id it named), op, secs since sent;
-               t_accepted + timing = the node's points (issue #2238), when it sent them
+               t_accepted + timing = the node's points (issue #2238), when it sent them;
+               key · window · filed = a warm start's session (issue #2236)
+      switched the list switched the stage to the new session as the place
+               answered, before its row showed: id, session, t_switch (issue #2236)
       started  the new session's row appeared in the list: id, session, fid,
                state, secs since sent — the task list writes it
       ready    that row first read a state the person can type into: id, session,
@@ -131,6 +134,16 @@ def compose_log(ev, **fields):
         return True
     except OSError:
         return False
+
+
+def read_opened(path):
+    """The session fleet-client-place.sh said it opened (issue #2236), at
+    `path`: its string fields; {} for none or junk."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8") or "{}")
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, str)} if isinstance(data, dict) else {}
 
 
 def read_timing(path):
@@ -336,12 +349,16 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
     # place's stdout stays its one line.
     fd, timef = tempfile.mkstemp(prefix="fleet-compose-timing.", dir=str(Path(path).parent))
     os.close(fd)
-    env = dict(os.environ, FLEET_PLACE_TIMING=timef)
+    # …and the session it opened (issue #2236): a warm start's window and key.
+    fd, resf = tempfile.mkstemp(prefix="fleet-compose-result.", dir=str(Path(path).parent))
+    os.close(fd)
+    env = dict(os.environ, FLEET_PLACE_TIMING=timef, FLEET_PLACE_RESULT=resf)
     try:
         out = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True, env=env)
         timing = read_timing(timef)
+        opened = read_opened(resf)
     finally:
-        for f in (bodyf, timef):
+        for f in (bodyf, timef, resf):
             if f:
                 try:
                     os.unlink(f)
@@ -356,7 +373,8 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
                 session=words[4] if remote and len(words) > 4 and "/" in words[4] else "",
                 op=words[2] if remote and len(words) > 2 else "",
                 secs=max(0, int(time.time()) - at),
-                t_accepted=timing.get("t_accepted"), timing=timing or None)
+                t_accepted=timing.get("t_accepted"), timing=timing or None,
+                key=opened.get("key"), window=opened.get("window_id"), filed=opened.get("filed"))
     return out.returncode
 
 

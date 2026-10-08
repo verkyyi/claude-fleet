@@ -148,17 +148,36 @@ def switch_lib():
 _COMPOSE = []
 
 
+def compose_mod():
+    """fleet-compose.py, imported once: compose.ndjson's one writer."""
+    if not _COMPOSE:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("fleet_compose", str(BIN / "fleet-compose.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _COMPOSE.append(mod)
+    return _COMPOSE[0]
+
+
+def compose_switched(plan):
+    """The stage switched to the writing area's new session as the place
+    answered, before its row showed (issue #2236): its `switched` line, t_switch
+    the ms — the client's half of 「↵ 到能打字」. Never stops the list."""
+    try:
+        wid = plan.get("key", "")
+        compose_mod().compose_log("switched", id=plan.get("cid", ""),
+                                  session=wid[len("wid:"):] if wid.startswith("wid:") else wid,
+                                  t_switch=int(time.time() * 1000))
+    except Exception:   # a log line is never worth the list
+        pass
+
+
 def compose_started(plan, row):
     """The writing area's new session is in the list (issue #1955): its
     `started` line in logs/compose.ndjson — fleet-compose.py's one writer, the
     seconds since the ↵. Never stops the list."""
     try:
-        if not _COMPOSE:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("fleet_compose", str(BIN / "fleet-compose.py"))
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            _COMPOSE.append(mod)
+        compose_mod()
         wid = row[0] if row else plan.get("key", "")
         wid = wid[len("wid:"):] if wid.startswith("wid:") else wid
         at = int(plan.get("at") or 0)
@@ -715,9 +734,11 @@ def lock_within(handle, wait):
         time.sleep(0.02)
 
 
-def jump(session, window, pane, lock):
+def jump(session, window, pane, lock, node="", name=""):
     """Switch to `window`. False only when the view lock stayed busy past
-    LOCK_WAIT — the caller paints what was pressed and retries."""
+    LOCK_WAIT — the caller paints what was pressed and retries. `node` / `name`
+    (issue #2236): another machine's session the list does not carry yet — just
+    opened there — is stepped into on that machine, under that name."""
     if window == PORTAL_KEY:
         # 「新任务」 (issue #1953): the stage's writing-area window, made once.
         open_portal(session)
@@ -733,7 +754,8 @@ def jump(session, window, pane, lock):
     # only a row on another machine is a `wid:`.
     if window.startswith("wid:") and "/" in window:
         env = dict(os.environ, FLEET_SESSION=session)
-        out = run(["bash", str(BIN / "fleet-remote-view.sh"), "open", window], env=env,
+        extra = (["--node", node] if node else []) + (["--name", name] if node and name else [])
+        out = run(["bash", str(BIN / "fleet-remote-view.sh"), "open", window] + extra, env=env,
                   stdin=subprocess.DEVNULL)
         if STAGE and stage_remote():
             # The shell's stage (issue #1759): `open` selected the row's window
@@ -799,11 +821,15 @@ def with_portal(rows, placing, session=""):
     elif ost in ("working", "preparing", "waking"):
         state, glyph = "working", ORCH_SPIN[int(time.time() * 4) % len(ORCH_SPIN)]
     top = [[PORTAL_KEY, state, glyph, tr("sidebar_portal"), " ", "", "0", "", ""] + pad]
-    if placing is not None and placing.get("verb") == "compose" and placing.get("state") in ("placing", "await"):
+    if placing is not None and placing.get("verb") == "compose" and \
+            placing.get("state") in ("placing", "opened", "await"):
+        # Also the new session's stand-in (issue #2236): switched to as the place
+        # answered, it is this row until the list carries the real one.
         title = placing.get("title", "")
         if cells_of(title) > PLACING_TITLE:   # never the row that widens the list
             title = clip(title, PLACING_TITLE - 1) + "…"
-        top.append([PLACING_KEY, "working", "⠇", tr("sidebar_portal_placing_fmt", title),
+        top.append([PLACING_KEY, "working", ORCH_SPIN[int(time.time() * 4) % len(ORCH_SPIN)],
+                    tr("sidebar_portal_placing_fmt", title),
                     " ", "", "0", "", ""] + pad)
     top.append(["hdr", "", "─", "─" * 120] + [""] * (ROW_FIELDS - 4))
     return top + body
@@ -1294,7 +1320,11 @@ def placed(plan):
         plan["state"] = "end"
         if rc == 0 and words[:1] in (["REMOTE"], ["LOCAL"]):
             who = words[4] if words[0] == "REMOTE" and len(words) > 4 else ""
-            plan.update(state="await", machine=machine, key="wid:" + who if "/" in who else "",
+            # The worker_id the hub named (issue #2236): switched to at once —
+            # `opened` — not when the list next carries its row. None named (an
+            # older hub or node, a LOCAL start): found in the list, as before.
+            plan.update(state="opened" if "/" in who else "await", machine=machine,
+                        key="wid:" + who if "/" in who else "",
                         until=time.monotonic() + PLACE_FIND_SECS,
                         note=tr("sidebar_place_opening_fmt", machine))
             return "", None
@@ -2743,6 +2773,17 @@ def ui(screen, session, worker, lock):
             refresh_at = min(refresh_at, now + 1)   # its state, read every second (#2238)
         if placing is not None and placing.get("state") == "end":
             placing = None
+        elif placing is not None and placing.get("state") == "opened" and view == "live":
+            # The hub named the new session (issue #2236): over to it now, on its
+            # machine — its row (the 「开工中…」 stand-in until then) is found below.
+            placing.update(state="await", jumped=True, said=True)
+            if placing.get("verb") == "compose":
+                compose_switched(placing)
+            say(session, tr("sidebar_place_opened_fmt", placing["machine"]))
+            if not jump(session, placing["key"], pane, lock, node=placing["machine"],
+                        name=placing.get("name") or placing.get("title", "")):
+                placing["jumped"] = False   # lock busy (#1536): switched when its row shows
+            refresh_at = 0
         elif placing is not None and placing.get("state") == "await" and view == "live":
             # The hub said done: the new session is selected and switched to as
             # soon as the list carries it (issue #1778) — read every second meanwhile.
@@ -2754,13 +2795,16 @@ def ui(screen, session, worker, lock):
                 selected, follow_at = hit, None
                 if placing.get("verb") == "compose":
                     compose_started(placing, next((r for r in rows if r[0] == hit), None))
-                say(session, tr("sidebar_place_opened_fmt", placing["machine"]))
-                placing = None
-                if not jump(session, selected, pane, lock):
-                    follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
+                jumped, machine, placing = placing.get("jumped"), placing["machine"], None
+                if not jumped:
+                    say(session, tr("sidebar_place_opened_fmt", machine))
+                    if not jump(session, selected, pane, lock):
+                        follow_at = time.monotonic() + LOCK_RETRY  # lock busy (#1536)
+                # Switched already (#2236): the real row only takes the stand-in's place.
                 refresh_at = 0
             elif now >= placing["until"]:
-                say(session, tr("sidebar_place_notyet_fmt", placing["machine"]))
+                if not placing.get("jumped"):
+                    say(session, tr("sidebar_place_notyet_fmt", placing["machine"]))
                 placing = None
             else:
                 refresh_at = min(refresh_at, now + 1)

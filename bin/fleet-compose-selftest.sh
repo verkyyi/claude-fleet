@@ -68,6 +68,13 @@
 #      the stage on it, nothing pasted; ⌘N again: back to the writing area. No
 #      orch_fcs: ⌘N on the writing area changes nothing. 「新任务」's right-click
 #      menu: 进编排会话 on the same road (greyed, saying why, with none)
+# The switch (issue #2236, EPIC #2230 C6):
+#   R. the hub answers done naming the worker_id while the list does not carry
+#      its row yet: the stage is on it within 0.5 s of the answer (`switched`
+#      t_switch in compose.ndjson, against the fake's reply), opened with --node
+#      <m> --name <title>; 「开工中…」 stands in; once the row shows it replaces
+#      the stand-in, one row, no second switch. An older hub (no worker_id): no
+#      switch until the row shows, as before
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -123,6 +130,7 @@ cat > "$SB/fleet-remote-view.sh" <<EOF
 #!/bin/bash
 [ "\$1" = open ] || exit 0
 printf '%s\n' "\$2" >> "$VIEW"
+printf '%s\n' "\$*" >> "$VIEW.args"
 # the orchestrator's row (issue #1957): a stage window that reads bracketed paste
 if [ "\$2" = wid:U/orch ]; then
   T() { "$REAL_TMUX" -L fcs-stage "\$@"; }
@@ -135,9 +143,19 @@ EOF
 cat > "$SB/fleet-client-place.sh" <<EOF
 #!/bin/bash
 # the body first: the test reads it as soon as the argv is logged
-prev=''; name=''; for a in "\$@"; do [ "\$prev" = --body-file ] && cat "\$a" > "$BODY"; [ "\$prev" = --name ] && name=\$a; prev=\$a; done
+prev=''; name=''; title=''; for a in "\$@"; do [ "\$prev" = --body-file ] && cat "\$a" > "$BODY"; [ "\$prev" = --name ] && name=\$a; [ "\$prev" = --title ] && title=\$a; prev=\$a; done
 printf '%s\n' "\$*" >> "$LOG"
 n=\$(grep -c . "$LOG")
+# R (issue #2236): the hub answers at once, the list carries the row only once
+# $WORK/row-go appears — 先切 names the worker_id, 老入口 (an older hub) does not
+case "\$title" in 先切*|老入口*)
+  k=\$((42 + n)); nm=fast-\$k; who=U/issue-\$k
+  case "\$title" in 老入口*) nm=old-\$k; who=@4 ;; esac
+  ( i=0; while [ ! -e "$WORK/row-go" ] && [ \$i -lt 200 ]; do sleep .1; i=\$((i + 1)); done
+    printf 'wid:U/issue-%s${US}working${US}*${US}%s${US}${US}${US}0${US}${US}m4${US}%s${US}${US}\n' "\$k" "\$nm" "\$k" >> "$ROWS" ) </dev/null >/dev/null 2>&1 &
+  python3 -c 'import time; print(int(time.time() * 1000))' > "$WORK/t_reply"
+  printf 'REMOTE m4 op%s done %s\tm5 busier\n' "\$n" "\$who"; exit 0 ;;
+esac
 sleep 2
 case "\$1 \$2" in
   *' new') k=\$((42 + n)); nm=forty-three; [ "\$k" = 43 ] || nm=new-\$k
@@ -284,7 +302,7 @@ for l in open(sys.argv[1]):
     r = json.loads(l)
     print(" ".join("%s=%s" % (k, r[k]) for k in sys.argv[2:] if k in r))' "$FLEET_COMPOSE_LOG" "$@" 2>/dev/null; }
 CHECKS=$((CHECKS + 1)); n=0; while ! grep -q '"started"' "$FLEET_COMPOSE_LOG" 2>/dev/null && [ $n -lt 30 ]; do sleep .1; n=$((n + 1)); done
-eq 'N: sent · placed · started' $'ev=sent how=issue repo=acme/web\nev=placed rc=0 result=REMOTE machine=m4 session=U/issue-43\nev=started session=U/issue-43 state=working' \
+eq 'N: sent · placed · switched · started' $'ev=sent how=issue repo=acme/web\nev=placed rc=0 result=REMOTE machine=m4 session=U/issue-43\nev=switched session=U/issue-43\nev=started session=U/issue-43 state=working' \
   "$(clog ev how repo rc result machine session state)"
 eq 'N: …one id' 1 "$(clog id | sort -u | grep -c .)"
 has 'N: started says the seconds since the ↵' "$(clog ev secs | tail -1)" 'secs='
@@ -550,6 +568,41 @@ type_ '\033[928~'
 sleep 1
 eq 'P: no orchestrator → ⌘N on the writing area changes nothing' "$pw|" "$(st_ display-message -p -t fcs-stage: '#{window_id}')|$(cat "$VIEW")"
 has 'P: none → greyed, saying why' "$(pmenu | sed -n 2p | cut -f1,2)" $'b\t-进编排会话 · 这台机器没有编排会话'
+
+# R. (issue #2236) the hub names the new session: the stage is on it within 0.5 s
+# of the answer, the 「开工中…」 row stands in for it; the list's next round
+# swaps in the real row, once. An older hub (no worker_id): as before.
+send_r() { settled; rm -f "$WORK/row-go" "$WORK/t_reply"; : > "$VIEW"; : > "$VIEW.args"
+  st_ select-window -t "$pw"; st_ send-keys -t "$pw" C-u; st_ send-keys -t "$pw" -l "$1"; sleep .3
+  st_ send-keys -t "$pw" Enter; }
+send_r '先切过去再说'
+CHECKS=$((CHECKS + 1)); n=0; while ! grep -q . "$VIEW" && [ $n -lt 80 ]; do sleep .05; n=$((n + 1)); done
+k=$(sed -n 's#^wid:U/issue-##p' "$VIEW" | head -1)
+[ -n "$k" ] || fail 'R: the stage switched before the row showed' "$(cat "$VIEW")"
+has 'R: …on the machine the hub named, under the title' "$(cat "$VIEW.args")" "open wid:U/issue-$k --node m4 --name 先切过去再说"
+sw=$(python3 -c 'import json, sys
+for l in open(sys.argv[1]):
+    r = json.loads(l)
+    if r["ev"] == "switched" and r.get("session") == sys.argv[2]:
+        print(r["t_switch"])' "$FLEET_COMPOSE_LOG" "U/issue-$k" 2>/dev/null | tail -1)
+CHECKS=$((CHECKS + 1)); [ -n "$sw" ] && [ $((sw - $(cat "$WORK/t_reply"))) -le 500 ] \
+  || fail 'R: switched within 0.5 s of the answer' "t_switch=$sw t_reply=$(cat "$WORK/t_reply" 2>/dev/null)"
+has 'R: the 「开工中…」 row stands in for it' "$(screen)" '开工中… 先切过去再说'
+hasnt 'R: …no real row yet' "$(screen)" "fast-$k"
+touch "$WORK/row-go"
+CHECKS=$((CHECKS + 1)); waitfor 6 "fast-$k" || fail 'R: the real row arrived' "$(screen)"
+settled
+hasnt 'R: the stand-in gone with it' "$(screen)" '开工中'
+eq 'R: the new session is in the list once' 1 "$(screen | grep -c "fast-$k")"
+eq 'R: switched once, never again when the row showed' 1 "$(grep -c . "$VIEW")"
+send_r '老入口不给'
+sleep 1.2
+eq 'R: an older hub (no worker_id): no switch before the row' '' "$(cat "$VIEW")"
+has 'R: …the 「开工中…」 row meanwhile' "$(screen)" '开工中… 老入口不给'
+touch "$WORK/row-go"
+CHECKS=$((CHECKS + 1)); n=0; while ! grep -q 'wid:U/issue-' "$VIEW" && [ $n -lt 60 ]; do sleep .1; n=$((n + 1)); done
+has 'R: …switched once the row showed, as before' "$(cat "$VIEW")" 'wid:U/issue-'
+hasnt 'R: …found by the list, no --node' "$(cat "$VIEW.args")" '--node'
 # Q. (pure) the machine and the agent (issue #2232): a sandbox bin/ whose
 # fleet-client-place.sh prints its argv (the body file's path masked)
 QB="$WORK/q-bin"; mkdir -p "$QB"

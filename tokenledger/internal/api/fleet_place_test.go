@@ -630,6 +630,25 @@ func TestNodePlaceScratchIdleNodeStaysLocal(t *testing.T) {
 	}
 }
 
+// A warm start's window, key and filed ride along as the node wrote them
+// (claude-fleet#2236); an older node's answer names none of them.
+func TestOutcomeOfWarmWindow(t *testing.T) {
+	op := func(result string) map[string]any {
+		return map[string]any{"status": "succeeded", "result": json.RawMessage(result)}
+	}
+	oc := outcomeOf(op(`{"window":"@4","window_id":"@4","key":"scratch-3","filed":"pending",`+
+		`"workers":[{"window_id":"@4","worker_id":"U/F"}]}`), "m5")
+	if oc.WindowID != "@4" || oc.Key != "scratch-3" || oc.Filed != "pending" || oc.WorkerID != "U/F" {
+		t.Fatalf("warm fields not passed on: %+v", oc)
+	}
+	raw, _ := json.Marshal(outcomeOf(op(`{"window":"@4"}`), "m5"))
+	for _, k := range []string{"window_id", `"key"`, "filed"} {
+		if strings.Contains(string(raw), k) {
+			t.Fatalf("an older node's answer names %s: %s", k, raw)
+		}
+	}
+}
+
 // A done start carries the node's timing on (claude-fleet#2238); an older node
 // without one, or a timing that is not an object, adds nothing.
 func TestOutcomeOfTiming(t *testing.T) {

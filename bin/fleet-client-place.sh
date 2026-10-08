@@ -55,6 +55,12 @@
 # the hub's `timing`, epoch ms — written there as JSON; an older hub or node
 # writes nothing.
 #
+# FLEET_PLACE_RESULT=<file> (issue #2236): a done start's session, as JSON —
+# {worker_id, window, window_id, key, filed, machine}, each only when the hub
+# said it — so the caller switches to it at once instead of waiting for the
+# list to carry its row. A warm start names window_id + key (#2234); an older
+# hub or node, fewer fields (the line's worker_id is still there).
+#
 # State: the lease id in $FLEET_CLIENT_DIR/client.lease (default $TMPDIR, the
 # client server's), the key in FLEET_CLIENT_KEY_FILE (default <dir>/client.key).
 set -uo pipefail
@@ -207,6 +213,15 @@ if tf and isinstance(out.get("timing"), dict):
     try:
         with open(tf, "w", encoding="utf-8") as f:
             json.dump(out["timing"], f)
+    except OSError:
+        pass
+rf = os.environ.get("FLEET_PLACE_RESULT") or ""
+if rf and out.get("state") == "done":
+    said = {k: out[k] for k in ("worker_id", "window", "window_id", "key", "filed", "machine")
+            if isinstance(out.get(k), str) and out[k]}
+    try:
+        with open(rf, "w", encoding="utf-8") as f:
+            json.dump(said, f)
     except OSError:
         pass
 print(line.replace("\n", " "))
