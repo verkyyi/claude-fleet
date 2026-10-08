@@ -123,13 +123,15 @@ preview ctrl-p alt-p' ;;
 # are its `>` commands); prefix s elsewhere, tmux's own choose-tree key.
 # `quit` (issue #2349): ⌘Q, 退出 fleet — the client's every process here goes,
 # the sessions run on (fleet-shell.sh quit); prefix Q elsewhere, unbound in tmux.
+# `needs` (⌘J / prefix k, code 924) and `help` (⌘/ / prefix ?, code 926) went
+# with issue #2362: the bar's 「! N 等你」 is still a tap to the one waiting, the
+# keys live in docs/CLIENT.md. Their codes stay retired — never reuse 924 / 926:
+# an iTerm2 profile written before still sends them (the conf swallows both).
 switch) TABLE='next ⌘↓ 0xf701-0x300000 920 n
 prev ⌘↑ 0xf700-0x300000 921 p
 back ⌘[ 0x5b-0x100000 922 h
 fwd ⌘] 0x5d-0x100000 923 l
-needs ⌘J 0x6a-0x100000 924 k
 zoom ⌘↩ 0xd-0x100000 925 F9
-help ⌘/ 0x2f-0x100000 926 ?
 quickopen ⌘P 0x70-0x100000 927 /
 new ⌘N 0x6e-0x100000 928 c
 fold ⌘. 0x2e-0x100000 929 .

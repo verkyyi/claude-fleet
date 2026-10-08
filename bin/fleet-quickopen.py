@@ -681,18 +681,69 @@ def panel_run(command, session=""):
 
 # --- the popup --------------------------------------------------------------------
 
+def char_cells(c):
+    """The cells one character takes, as the terminal and tmux count them: a
+    wide or full-width one 2, a mark that rides on the one before (a combining
+    accent, a variation selector, a zero-width joiner) 0, anything else 1. One
+    count for every width here (issue #2362): a 中文 name and the column after it
+    are measured the same way, so no half cell is left behind."""
+    if unicodedata.category(c) in ("Mn", "Me", "Cf"):
+        return 0
+    return 2 if unicodedata.east_asian_width(c) in "WF" else 1
+
+
 def cells(text):
-    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+    return sum(char_cells(c) for c in text)
 
 
 def clip(text, width):
     out, used = "", 0
     for c in text:
-        w = 2 if unicodedata.east_asian_width(c) in "WF" else 1
+        w = char_cells(c)
         if used + w > width:
             break
         out, used = out + c, used + w
     return out
+
+
+class Heal:
+    """The popup paints itself whole again now and then (issue #2362). tmux draws
+    a popup's own output straight onto the terminal, cell by cell; the frame and
+    every cell the popup never writes are painted only when tmux redraws the
+    whole popup. After a resize tmux redraws the session pane behind it, and text
+    of that session was left inside the list and across the frame until the
+    popup closed. So, a moment after a resize and then every HEAL seconds, the
+    popup asks tmux for that whole redraw — a line feed on its last row: a popup
+    narrower than the terminal cannot be scrolled in place (the client keeps the
+    terminal's left/right margins off, conf/tmux-shell.conf), so tmux draws the
+    popup again, frame and all — and curses repaints from a cleared screen."""
+    HEAL = 1.0      # seconds between two whole repaints of an idle popup
+    SETTLE = 0.3    # after a resize: the session behind has redrawn by then
+
+    def __init__(self):
+        self.due = time.monotonic() + self.HEAL
+
+    def resized(self, screen):
+        screen.clearok(True)
+        self.due = time.monotonic() + self.SETTLE
+
+    def timeout(self, busy):
+        """The ms get_wch waits: 150 while a read runs, else until the next heal."""
+        left = max(0, int((self.due - time.monotonic()) * 1000))
+        return min(150, left) if busy else left
+
+    def tick(self, screen):
+        """Before a draw: past due ⇒ tmux redraws the whole popup, and curses
+        every cell of it."""
+        if time.monotonic() < self.due:
+            return
+        height = screen.getmaxyx()[0]
+        try:
+            os.write(sys.stdout.fileno(), b"\x1b[%d;1H\n" % height)
+        except OSError:
+            pass
+        screen.clearok(True)
+        self.due = time.monotonic() + self.HEAL
 
 
 def words(*keys):
@@ -765,6 +816,7 @@ def popup(screen, pane, session="", target="", switch=False):
         sess = session or session_of()
         title, items = menu_items(sess, target or current)
         cmds.append((title, panel_cmds(layout, sess, current, say) + items))
+    heal = Heal()
     while True:
         if fetched and fetched[0]:
             rows, fetched[:] = fetched[0], [None]
@@ -773,8 +825,9 @@ def popup(screen, pane, session="", target="", switch=False):
             cmd_reader = threading.Thread(target=fetch_cmds, daemon=True)
             cmd_reader.start()
         busy = reader.is_alive() or (cmd_reader is not None and cmd_reader.is_alive())
-        screen.timeout(150 if busy else -1)
+        screen.timeout(heal.timeout(busy))
         height, width = screen.getmaxyx()
+        heal.tick(screen)
         screen.erase()
         if command:
             title, items = cmds[0] if cmds else ("", None)
@@ -823,10 +876,10 @@ def popup(screen, pane, session="", target="", switch=False):
                 try:
                     screen.addstr(y, 0, " " * (width - 1), base)
                     screen.addstr(y, 0, left, base)
-                    x = cells(left)
+                    # each letter where curses' own cursor stands after the one
+                    # before — a mark that rides on a letter stays on it
                     for i, c in enumerate(name):
-                        screen.addstr(y, x, c, base | (curses.color_pair(1) | curses.A_BOLD if i in marks else 0))
-                        x += cells(c)
+                        screen.addstr(c, base | (curses.color_pair(1) | curses.A_BOLD if i in marks else 0))
                     if node:
                         screen.addstr(y, width - 1 - cells(node), node, base | curses.A_DIM)
                 except curses.error:
@@ -858,6 +911,12 @@ def popup(screen, pane, session="", target="", switch=False):
         except curses.error:
             continue  # a timeout: look for the full rows again
         flash[0] = ""
+        if key == curses.KEY_RESIZE:
+            # a new size (issue #2362): the whole popup again from a cleared
+            # screen, never a diff against the old geometry — and once more when
+            # the session behind has redrawn
+            heal.resized(screen)
+            continue
         if key in ("\x1b", "\x03", "\x07") or key == curses.KEY_EXIT:
             return 0
         if key in ROW_KEYS and not command:
@@ -955,14 +1014,16 @@ def full(screen, pane, session=""):
     fetched = []
     reader = threading.Thread(target=lambda: fetched.append(full_rows(session)), daemon=True)
     reader.start()
+    heal = Heal()
     while True:
         if fetched and fetched[0]:
             rows, fetched[:] = fetched[0], [None]
-        screen.timeout(150 if reader.is_alive() else -1)
+        screen.timeout(heal.timeout(reader.is_alive()))
         items = full_items(rows, query, hist["mru"], current)
         picks = [i for i, it in enumerate(items) if it[0] == "row"]
         at = max(0, min(at, len(picks) - 1))
         height, width = screen.getmaxyx()
+        heal.tick(screen)
         # every item two lines (a row: its name, then where / what it is): a thumb's
         # height on a phone; a heading one line
         lines, spot = [], {}
@@ -1039,6 +1100,12 @@ def full(screen, pane, session=""):
             if idx is not None and items[idx][0] == "row":
                 hand(pane or list_pane(), "jump=" + items[idx][2]["key"])
                 return 0
+            continue
+        if key == curses.KEY_RESIZE:
+            # a new size (issue #2362): the whole popup again from a cleared
+            # screen, never a diff against the old geometry — and once more when
+            # the session behind has redrawn
+            heal.resized(screen)
             continue
         if key in ("\x1b", "\x03", "\x07") or key == curses.KEY_EXIT:
             return 0

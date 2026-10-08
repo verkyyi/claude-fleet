@@ -117,11 +117,8 @@ $conf_prefix_keys
 EOF
 
 # --- 3. the popup wiring is present -------------------------------------------
-grep -q '/fleet-keys.sh' "$CONF"   || fail "conf has no fleet-keys.sh popup bind"
-# The `?` bind opens its popup through the one door, dash-popup.sh (issue #1535),
-# which stamps the @popup_open epoch (#308/#431) and draws the one title row.
-grep -Eq '^bind[[:space:]]+\?[[:space:]]+run-shell -b ".*dash-popup\.sh .*fleet-keys\.sh' "$CONF" \
-  || fail "conf 'prefix ?' does not open fleet-keys.sh through dash-popup.sh"
+# The client opens no key sheet any more (issue #2362, leg 11); the panels' `?`
+# still open it through the one door, dash-popup.sh (issue #1535).
 # The in-panel opens are scoped to their own panel (issue #265): the dash `?`
 # passes `--context dash`, the backlog `⌃k` passes `--context backlog` — while the
 # global `prefix ?` (checked above) stays the full sheet.
@@ -442,10 +439,13 @@ sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --p
 # `new` (⌘N / prefix c, issue #1953): the writing area — private code 928.
 # `fold` (⌘. / prefix ., issue #2167): the session in view's sub-tasks — 929.
 # `switcher` (⌘K / prefix s, issue #2266): ⌘P's panel since #2365 — 930.
+# `needs` (⌘J · 924 · prefix k) and `help` (⌘/ · 926 · prefix ?) went with issue #2362.
 # `quit` (⌘Q / prefix Q, issue #2349): 退出 fleet — 931.
-[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 12 ] || fail "10: the switch table is not the 8 actions of #1903 + #1953's new + #2167's fold + #2266's switcher + #2349's quit: $sw_table"
-[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd needs zoom help quickopen new fold switcher quit " ] \
-  || fail "10: the switch actions are not next prev back fwd needs zoom help quickopen new fold switcher quit"
+[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 10 ] || fail "10: the switch table is not #1903's 6 (less needs / help, #2362) + #1953's new + #2167's fold + #2266's switcher + #2349's quit: $sw_table"
+[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd zoom quickopen new fold switcher quit " ] \
+  || fail "10: the switch actions are not next prev back fwd zoom quickopen new fold switcher quit"
+printf '%s\n' "$sw_table" | awk '$4 == 924 || $4 == 926 || $2 == "⌘J" || $2 == "⌘/"' | grep -q . \
+  && fail "10: a retired code / chord is back in the switch table (924 ⌘J, 926 ⌘/ — issue #2362)"
 printf '%s\n' "$sw_table" | awk '$1 == "quit" && $2 == "⌘Q" && $3 == "0x71-0x100000" && $4 == 931 && $5 == "Q"' | grep -q . \
   || fail "10: quit is not ⌘Q · 0x71-0x100000 · code 931 · prefix Q"
 grep -E '^bind -n User931 ' "$CONF" | grep -q 'fleet-shell.sh quit' || fail "10: ⌘Q does not quit the client (fleet-shell.sh quit)"
@@ -500,11 +500,13 @@ PY
 done <<EOF
 $sw_table
 EOF
-# the table's 12 + ⇧↵ → 0x0a (the writing area's newline, issue #1953)
-[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 13 ] \
+# the table's 10 + ⇧↵ → 0x0a (the writing area's newline, issue #1953); no ⌘J / ⌘/
+[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 11 ] \
   || fail "10: the profile maps keys beyond the table + ⇧↵ (no parent map to keep here)"
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]; assert m["0xd-0x20000"] == {"Action": 11, "Text": "0x0a"}, m' "$SW_PROF/fleet.json" \
   || fail "10: the profile does not send 0x0a for ⇧↵"
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]; assert "0x6a-0x100000" not in m and "0x2f-0x100000" not in m, m' "$SW_PROF/fleet.json" \
+  || fail "10: the profile still maps ⌘J or ⌘/ (issue #2362)"
 FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_KEYS=0 python3 "$BIN/fleet-iterm-profile.py" write
 [ -f "$SW_PROF/fleet.json" ] && fail "10: FLEET_ITERM_KEYS=0 left the profile in place"
 rm -rf "$SW_PROF"
@@ -522,47 +524,36 @@ if command -v tmux >/dev/null 2>&1; then
   done <<EOF
 $sw_table
 EOF
+  # the retired codes (issue #2362): still caught — an older profile sends them,
+  # and an unknown code would reach the session as raw bytes — and bound to nothing
+  for sc in 924 926; do
+    grep -Fq "user-keys[$sc] \\033[$sc~" <<< "$uk" || fail "10: the retired code $sc is not caught any more: $uk"
+    awk -v k="User$sc" '$4 == k' <<< "$rk" | grep -q . && fail "10: the retired code $sc is still bound: $(awk -v k="User$sc" '$4 == k' <<< "$rk")"
+  done
 fi
 
-# --- 11. ⌘/ — the one page (issue #1952) ------------------------------------
-# fleet-keys.sh --page is what ⌘/ and prefix ? open on the stage: it fits a
-# 38-row window and the stage's 119 columns, in both languages; it names every
-# chord of the switch table with that action's key for any other terminal on the
-# same line (⌘↑ ⌘↓ and ⌘[ ⌘] a pair each — 10 lines for the 12 actions); its three
-# groups are the ⌘ keys, the writing area's and the mouse's; and it lists no ⌃
-# key — the list has none (leg 7). Both binds open it (leg 10 holds them equal).
-for lang in zh en; do
-  PG="$(FLEET_UI_LANG=$lang NO_COLOR=1 bash "$KEYS" --page --plain)" || fail "11: fleet-keys.sh --page ($lang) exited non-zero"
-  n=$(printf '%s\n' "$PG" | wc -l | tr -d ' ')
-  [ "$n" -le 38 ] || fail "11: the $lang page is $n lines — it must fit a 38-row window"
-  wmax=$(printf '%s\n' "$PG" | python3 -c 'import sys, unicodedata
-print(max(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in l.rstrip("\n")) for l in sys.stdin))')
-  [ "$wmax" -le 119 ] || fail "11: the $lang page is $wmax cells wide — the stage is 119"
-  grep -q '⌃' <<< "$PG" && fail "11: the $lang page lists a ⌃ key: $(grep '⌃' <<< "$PG" | head -2)"
-  while read -r sa sg _ _ sp; do
-    [ -n "$sa" ] || continue
-    line=$(grep -F "$sg" <<< "$PG" | head -1)
-    [ -n "$line" ] || fail "11: the $lang page does not name $sa's $sg"
-    case "$sp" in F[0-9]*) want=$sp ;; *) want=$sp ;; esac
-    case "$line" in *"prefix "*"$want"*|*" $want") ;; *) fail "11: $sa: the $lang page's $sg line lacks its key '$want': $line" ;; esac
-  done <<EOF
-$sw_table
-EOF
-  [ "$(grep -c '⌘' <<< "$(printf '%s\n' "$PG" | awk '/^    ⌘/')")" = 10 ] \
-    || fail "11: the $lang page's ⌘ group is not 10 lines: $(printf '%s\n' "$PG" | awk '/^    ⌘/')"
+# --- 11. no page of keys, no ⌘J (issue #2362) ---------------------------------
+# The client opens no key page and has no key for one: ⌘/ and prefix ? went (the
+# stage's `keys` window, fleet-keys.sh --page), and with them ⌘J and prefix k —
+# the bar's 「! N 等你」 is the way to the one waiting. Nothing on the client's
+# bar names them, the sheet lists neither prefix key, and a reload unbinds them.
+grep -q -- '--page' "$KEYS" && fail "11: fleet-keys.sh still has its --page"
+grep -Eq '^bind (\?|k) |^bind -n User92[46] ' "$CONF" && fail "11: the client conf still binds prefix ? / k or ⌘/ / ⌘J: $(grep -E '^bind (\?|k) |^bind -n User92[46] ' "$CONF")"
+for u in 'unbind ?' 'unbind k' 'unbind -n User924' 'unbind -n User926'; do
+  grep -qxF "$u" "$CONF" || fail "11: the client conf does not '$u' (a running server keeps a key the conf just leaves out)"
 done
-PG="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --page --plain)"
-[ "$(printf '%s\n' "$PG" | grep -E '^  [^ ]' | sed -e 1d -e 's/^  //' | tr '\n' '|')" = '⌘ 键|写作区|鼠标|面板里的按键：在那个面板里按 ?|' ] \
-  || fail "11: the page's groups are not ⌘ 键 · 写作区 · 鼠标: $(printf '%s\n' "$PG" | grep -E '^  [^ ]' | tr '\n' '|')"
-grep -q '输入 > 是命令' <<< "$PG" || fail "11: the page does not say ⌘P's > is commands"
-for b in 'bind ?' 'bind -n User926'; do
-  grep -E "^$b " "$CONF" | grep -q 'fleet-shell.sh keys __SESS__' \
-    || fail "11: '$b' does not open the page on the stage (fleet-shell.sh keys)"
-  grep -E "^$b " "$CONF" | grep -q 'fleet-keys.sh --page' \
-    || fail "11: '$b' has no popup fallback with the page"
-done
-grep -q '^keys)$' "$BIN/fleet-shell.sh" || fail "11: fleet-shell.sh has no keys mode"
-grep -A12 '^keys)$' "$BIN/fleet-shell.sh" | grep -q 'fleet-keys.sh") --page' || fail "11: fleet-shell.sh keys does not run fleet-keys.sh --page"
+grep -E '^set -g @fleet_hint' "$CONF" | grep -Eq '⌘J|⌘/|User92[46]| k#\{E:@fleet_hint_k0\} 等你的|\?#\{E:@fleet_hint_k0\} 按键' \
+  && fail "11: the bar still names ⌘J / ⌘/ / prefix k / prefix ?"
+grep -q '等你 ⌘J' "$BIN/tmux-status.sh" && fail "11: the bar's 「! N 等你」 still says ⌘J"
+grep "#{==:#{mouse_status_range},needs}" "$CONF" | grep -q 'F10' || fail "11: a tap on 「! N 等你」 no longer goes to the one waiting"
+SH="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --plain)"
+grep -Eq '^  prefix (k|\?) ' <<< "$SH" && fail "11: the sheet still lists prefix k / prefix ?: $(grep -E '^  prefix (k|\?) ' <<< "$SH")"
+grep -Eq '⌘J|⌘/' <<< "$SH" && fail "11: the sheet still names ⌘J / ⌘/"
+grep -q '^keys) exit 0 ;;$' "$BIN/fleet-shell.sh" || fail "11: fleet-shell.sh keys is not the do-nothing stub (an old bind would read 'keys' as a machine)"
+grep -q 'fleet-keys.sh' "$BIN/fleet-shell.sh" && fail "11: fleet-shell.sh still runs fleet-keys.sh"
+grep -qx 'bin/fleet-keys.sh' "$ROOT/tokenledger/internal/api/fleetclient/manifest" && fail "11: the client still ships fleet-keys.sh"
+# ⌘P draws opaque (issue #2362): no DECSLRM margins on the client's server
+grep -qxF 'set -s terminal-overrides[90] "*:Cmg@:Clmg@"' "$CONF" || fail "11: the client conf does not keep the terminal's left/right margins off"
 
 # 9 — the recovery page's keys (issue #1862)
 page_out=$(python3 - "$BIN" <<'PY'

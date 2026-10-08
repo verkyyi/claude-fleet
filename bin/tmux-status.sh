@@ -18,9 +18,10 @@
 #                    limits cache in hub mode, else the window's own @rl5h/@rl7d;
 #                    only the window(s) past the line are drawn
 #   ⚠ GitHub 受限    the shared gh-limit marker says a bucket is limited (#989)
-#   ! N 等你 ⌘J      sessions waiting on you (fleet-alerts.sh's `needs` rows — on
+#   ! N 等你         sessions waiting on you (fleet-alerts.sh's `needs` rows — on
 #                    the client, every machine's, issue #1951), red; a tap on it
-#                    is ⌘J (`#[range=user|needs]`, conf/tmux-shell.conf). Narrow:
+#                    jumps to the next one (`#[range=user|needs]`,
+#                    conf/tmux-shell.conf — ⌘J went with issue #2362). Narrow:
 #                    `! N`. A NEW one also gets its macOS notification here
 #                    (fleet_alerts_notify — once per wait, FLEET_NOTIFY=0 off)
 #   ✖ N  ▲ N         alarms / warnings (bin/fleet-alerts.sh), each only when ≠ 0;
@@ -297,7 +298,7 @@ needs_seg=''
 if [ "${FA_NEEDS:-0}" -gt 0 ]; then
     _nn=$FA_NEEDS; [ "$_nn" -gt 99 ] && _nn=99
     if [ "$STATUS_NARROW" = 1 ]; then needs_seg="#[range=user|needs]${RED}#[bold]! ${_nn}#[nobold]#[norange]"
-    else needs_seg="#[range=user|needs]${RED}#[bold]! ${_nn} 等你 ⌘J#[nobold]#[norange]"; fi
+    else needs_seg="#[range=user|needs]${RED}#[bold]! ${_nn} 等你#[nobold]#[norange]"; fi
 fi
 fleet_alerts_notify
 

@@ -81,15 +81,16 @@ grep -Eq '\-ge "\$MAX_AGE"' "$WAIT" \
 code_only() { grep -v '^[[:space:]]*#' "$CONF"; }
 shell_code() { grep -v '^[[:space:]]*#' "$SHELLC"; }
 [ "$(code_only | grep -c 'dash-popup\.sh')" -eq 0 ] || fail "the node conf opens a popup again (#1714)"
-# issue #1903 adds ⌘/ (the same sheet as prefix ?) and ⌘P / prefix / (quick open);
+# issue #1903 adds ⌘P / prefix / (quick open) — and ⌘/, the sheet, which issue
+# #2362 took away with prefix ?: the client opens no key sheet;
 # issue #1904 F1, the full-screen switcher of the one-pane layout (quick open --full);
 # issue #2112 a tap on the bar's 「请重新扫码」 (`rescan`, the scan in a popup);
 # issue #2266 ⌘K / prefix s (the switcher, quick open --switch).
 npop=$(shell_code | grep -c 'dash-popup\.sh')
-[ "$npop" -eq 8 ] || fail "expected 8 dash-popup.sh binds in the client conf (prefix ?, ⌘/, ⌘P, prefix /, ⌘K, prefix s, F1, the rescan tap), found $npop"
-[ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'fleet-keys\.sh')" -eq 2 ] \
-  && [ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'fleet-quickopen\.py')" -eq 5 ] \
-  || fail "the client conf's popups are not exactly the key sheet ×2 (prefix ?, ⌘/) and quick open ×5 (⌘P, prefix /, ⌘K, prefix s, F1)"
+[ "$npop" -eq 6 ] || fail "expected 6 dash-popup.sh binds in the client conf (⌘P, prefix /, ⌘K, prefix s, F1, the rescan tap), found $npop"
+[ "$(shell_code | grep -c 'fleet-keys\.sh')" -eq 0 ] \
+  && [ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'title popup_quickopen -- python3 [^ ]*fleet-quickopen\.py')" -eq 5 ] \
+  || fail "the client conf's popups are not exactly quick open ×5 (⌘P, prefix /, ⌘K, prefix s, F1) with no key sheet (#2362)"
 cat "$CONF" "$SHELLC" | grep -v '^[[:space:]]*#' | grep -q 'display-popup' \
   && fail "a conf calls display-popup directly — every popup goes through dash-popup.sh (issue #1535)"
 [ "$(shell_code | grep -c 'dash-popup\.sh')" -eq "$(shell_code | grep 'dash-popup\.sh' | grep -c 'run-shell -b ')" ] \
@@ -135,10 +136,11 @@ tmux new-session -d -s t -x 200 -y 50 </dev/null >/dev/null 2>&1 \
 # --- PRODUCER (live): the conf parses AND registers the flagged binds ---------
 tmux source-file "$CONF" 2>"$WORK/src.err" \
   || { printf '%s\n' "$(cat "$WORK/src.err" 2>/dev/null)" >&2; fail "conf/tmux-attention.conf failed to source (syntax error in the popup-bind wrap)"; }
-sed -e "s#__BIN__#$BIN#g" -e 's#__PREFIX__#C-b#g' "$SHELLC" | grep -E '^bind \? ' > "$WORK/shell-pop.conf"
-tmux source-file "$WORK/shell-pop.conf" || fail "the client's prefix ? bind failed to source"
-tmux list-keys -T prefix 2>/dev/null | grep -F -- " ? " | grep -q 'dash-popup.sh --client' \
-  || fail "the client's prefix '?' does not open through dash-popup.sh (which stamps @popup_open, issue #431/#1535) after sourcing"
+# prefix / (⌘P's quick open): the client's prefix ? sheet went with issue #2362
+sed -e "s#__BIN__#$BIN#g" -e 's#__PREFIX__#C-b#g' "$SHELLC" | grep -E '^bind / ' > "$WORK/shell-pop.conf"
+tmux source-file "$WORK/shell-pop.conf" || fail "the client's prefix / bind failed to source"
+tmux list-keys -T prefix 2>/dev/null | grep -F -- " / " | grep -q 'dash-popup.sh --client' \
+  || fail "the client's prefix '/' does not open through dash-popup.sh (which stamps @popup_open, issue #431/#1535) after sourcing"
 # The footer no longer opens a popup: the usage-stat click range went with the
 # stat (issue #1100) and the modal is `prefix u`, stamped in the loop above.
 

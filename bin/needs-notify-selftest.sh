@@ -24,13 +24,13 @@
 #                 takes it once; past FLEET_NOTIFY_JUMP_SECS it is dropped
 #   E. keys     — the bar's middle (conf/tmux-shell.conf @fleet_hint) for a real
 #                 client attached to an isolated server: the session's keys by
-#                 default (⌘N ⌘P ⌘↑↓ ⌘J ⌘/, each a `key-<key>` range); the prefix
+#                 default (⌘N ⌘P ⌘↑↓ ⌘., each a `key-<key>` range); the prefix
 #                 keys while prefix is pressed; ⌘P's while its popup is open; ↵ /
 #                 esc in a question's pane; what a tap does on the list, with the
 #                 highlighted row's detail (fleet-sidebar.py bar_hint, #2305 — #948's
 #                 `? 快捷键` row is gone, the bar says it); the writing area's; a
 #                 tap on a range is that key (MouseDown1Status → send-keys -K) and
-#                 「! n 等你」 is ⌘J; narrower than 100 columns the line goes
+#                 「! n 等你」 jumps to the one waiting (#2362: no ⌘J); narrower than 100 columns the line goes
 # No network, no live fleet. Exit 0 = pass.
 set -uo pipefail
 
@@ -226,9 +226,9 @@ eq "E: narrower than 100 columns → the badge alone" "B" "$(T display-message -
 # the right end draws nothing; its job runs `part=quiet` for the notification (issue #2365)
 grep -q '^set -g status-right "#(bash __BIN__/tmux-status.sh part=quiet ' "$CONF" || fail "E: status-right is not the quiet job"
 CHECKS=$((CHECKS+1))
-# a tap on a range is that key; 「! n 等你」 (an older bar's) is ⌘J
+# a tap on a range is that key; 「! n 等你」 (an older bar's) jumps to the one waiting — the old ⌘J's body, inline (issue #2362)
 grep -q "bind -n MouseDown1Status if -F '#{m:key-\*,#{mouse_status_range}}' { run-shell -C \"send-keys -K -c '#{client_name}' '#{s/^key-//:mouse_status_range}'\" }" "$CONF" \
-  && grep -q "#{==:#{mouse_status_range},needs}' { run-shell -C \"send-keys -K -c '#{client_name}' User924\" }" "$CONF" \
+  && grep -q "#{==:#{mouse_status_range},needs}' { if -F '#{@fleet_single}' { run-shell -b \"python3 __BIN__/fleet-quickopen.py do needs >/dev/null 2>&1 || :\" } { if -F '#{window_zoomed_flag}' { resize-pane -Z } ; if -F -t '{top-left}' '#{==:#{@sidebar},1}' { send-keys -t '{top-left}' F10 } } }" "$CONF" \
   || fail "E: the bar's taps are not the keys"
 CHECKS=$((CHECKS+1))
 

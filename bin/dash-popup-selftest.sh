@@ -202,23 +202,23 @@ FTMP="$WORK/frame-tmp"; mkdir -p "$FTMP"
 frame() { PATH="$FRAME:$PATH" TMPDIR="$FTMP" FLEET_UI_LANG=zh bash "$HELPER" "$@" >/dev/null 2>&1; }
 frame --client /dev/ttyF --size L --title popup_keys -- true \
   || fail "frame: --size/--title/--client did not run"
-want="$(printf '%s\n' -c /dev/ttyF -E -b rounded -S 'fg=#565f89' -w 94% -h 86% -T '#[align=centre] 快捷键 ')"
-[ "$(head -13 "$FLOG")" = "$want" ] \
-  || fail "frame: the L popup is not rounded/PAL_DIM 94%×86% titled 「快捷键」 centred: $(head -13 "$FLOG" | tr '\n' ' ')"
+want="$(printf '%s\n' -c /dev/ttyF -E -b rounded -S 'fg=#565f89' -s 'bg=#1a1b26' -w 94% -h 86% -T '#[align=centre] 快捷键 ')"
+[ "$(head -15 "$FLOG")" = "$want" ] \
+  || fail "frame: the L popup is not rounded/PAL_DIM on PAL_BG 94%×86% titled 「快捷键」 centred: $(head -15 "$FLOG" | tr '\n' ' ')"
 # every fzf in the popup reads the palette: FZF_DEFAULT_OPTS is exported ahead of the command
 tail -1 "$FLOG" | grep -q '^export FZF_DEFAULT_OPTS=.*--color=.*bg+:#414868.*--border=none.*--info=hidden.*FLEET_POPUP=1;' \
   || fail "frame: the popup command does not export the palette fzf options: $(tail -1 "$FLOG")"
 # a narrow client (the iPad's 54 columns) gets 96% × 90% — a fixed row count is kept
 FRAME_CW=54 frame --client /dev/ttyF --size M --title popup_alerts -- true
-[ "$(sed -n 8,11p "$FLOG")" = "$(printf '%s\n' -w 96% -h 90%)" ] || fail "frame: a 54-column client is not 96%×90%: $(tr '\n' ' ' < "$FLOG")"
+[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 96% -h 90%)" ] || fail "frame: a 54-column client is not 96%×90%: $(tr '\n' ' ' < "$FLOG")"
 FRAME_CW=54 frame --client /dev/ttyF --size S --title popup_new_task -- true
-[ "$(sed -n 8,11p "$FLOG")" = "$(printf '%s\n' -w 96% -h 16)" ] || fail "frame: a narrow S popup lost its row count: $(tr '\n' ' ' < "$FLOG")"
+[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 96% -h 16)" ] || fail "frame: a narrow S popup lost its row count: $(tr '\n' ' ' < "$FLOG")"
 FRAME_CW=120 frame --client /dev/ttyF --size M --title popup_alerts -- true
-[ "$(sed -n 8,11p "$FLOG")" = "$(printf '%s\n' -w 86% -h 60%)" ] || fail "frame: a wide client was resized: $(tr '\n' ' ' < "$FLOG")"
+[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 86% -h 60%)" ] || fail "frame: a wide client was resized: $(tr '\n' ' ' < "$FLOG")"
 # -w / -h beside --size win on their axis; an object joins the title; a # in it is
 # literal in the tmux format
 frame --client /dev/ttyF --size S -h 9 --title popup_answer --object '#42' -- true
-[ "$(sed -n 8,11p "$FLOG")" = "$(printf '%s\n' -w 84% -h 9)" ] || fail "frame: -h beside --size S did not win: $(tr '\n' ' ' < "$FLOG")"
+[ "$(sed -n 10,13p "$FLOG")" = "$(printf '%s\n' -w 84% -h 9)" ] || fail "frame: -h beside --size S did not win: $(tr '\n' ' ' < "$FLOG")"
 grep -qxF -- '#[align=centre] 回答 · ##42 ' "$FLOG" || fail "frame: the object is not 「回答 · #42」: $(tr '\n' ' ' < "$FLOG")"
 # a title that is no key shows as given; English follows FLEET_UI_LANG
 PATH="$FRAME:$PATH" TMPDIR="$FTMP" FLEET_UI_LANG=en bash "$HELPER" --client /dev/ttyF --size M --title 'Free text' -- true

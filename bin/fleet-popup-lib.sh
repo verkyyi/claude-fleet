@@ -162,7 +162,10 @@ fleet_popup_draw() {
   [ -n "$FPOP_W" ] && geom+=(-w "$FPOP_W")
   [ -n "$FPOP_H" ] && geom+=(-h "$FPOP_H")
   [ -n "$FPOP_TITLE" ] && geom+=(-T "$FPOP_TITLE")
+  # -s: the content's own background (issue #2362) — every cell inside the frame
+  # is the palette's, never the terminal's default, so nothing behind can read
+  # as part of the popup
   local style=(-b rounded)
-  fleet_palette_load && style+=(-S "fg=$PAL_DIM")
+  fleet_palette_load && style+=(-S "fg=$PAL_DIM" -s "bg=$PAL_BG")
   tmux display-popup -c "$client" -E ${style[@]+"${style[@]}"} ${geom[@]+"${geom[@]}"} "$env $cmd"
 }
