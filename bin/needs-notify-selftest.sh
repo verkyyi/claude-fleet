@@ -172,10 +172,10 @@ i=0; CL=''; while [ -z "$CL" ] && [ "$i" -lt 30 ]; do CL=$(T list-clients -F '#{
 hint() { T display-message -p -c "$CL" '#{E:@fleet_hint}' | sed 's/#\[[^]]*\]//g'; }
 raw() { T display-message -p -c "$CL" '#{E:@fleet_hint}'; }
 T select-pane -t "$PANE"
-eq "E: the keyboard in the session → its keys" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘. 展开/收起  ⌘/ 按键" "$(hint)"
+eq "E: the keyboard in the session → its keys" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘. 展开/收起  ⌘/ 按键  ⌘Q 退出 fleet" "$(hint)"
 case "$(raw)" in *"range=user|key-User928]"*"⌘N"*"range=user|key-User924]"*"⌘J"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: each key is its own key-<key> range" "$(raw)" ;; esac
 T switch-client -c "$CL" -T prefix
-eq "E: prefix pressed → the prefix keys" " n p 切换  k 等你的  c 新任务  / 跳转  ? 按键  d 离开" "$(hint)"
+eq "E: prefix pressed → the prefix keys" " n p 切换  k 等你的  c 新任务  / 跳转  ? 按键  d 放到后台  Q 退出 fleet" "$(hint)"
 T switch-client -c "$CL" -T root
 T set-option -g @popup_open "$(date +%s)"; T set-option -g @popup_title popup_quickopen
 eq "E: ⌘P open → its keys" " ↵ 去  > 命令  esc 关" "$(hint)"
@@ -196,7 +196,7 @@ T set-option -w -t "$PANE" @fleet_orch 1
 eq "E: …with an orchestrator: ⌘N 编排 and ⇧⇥ (issue #2146)" " ↵ 发出  ⇧↵ 换行  Tab 下一项  ⌘N 编排  ⇧⇥ 交给编排  esc 回去" "$(hint)"
 case "$(raw)" in *"range=user|key-User928]"*"⌘N"*"range=user|key-BTab]"*"⇧⇥"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the writing area's ⌘N / ⇧⇥ are key ranges (issue #2146)" "$(raw)" ;; esac
 T set-option -uw -t "$PANE" @fleet_view
-eq "E: …and in a session, ⌘N is still 新任务" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘. 展开/收起  ⌘/ 按键" "$(hint)"
+eq "E: …and in a session, ⌘N is still 新任务" " ⌘N 新任务  ⌘P 跳转  ⌘↑↓ 切换  ⌘J 等你的  ⌘. 展开/收起  ⌘/ 按键  ⌘Q 退出 fleet" "$(hint)"
 T set-option -uw -t "$PANE" @fleet_orch
 sl=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
 case "$sl" in "B   ⌘N 新任务  ⌘P 跳转"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the slot, then the hint, after the badge" "$sl" ;; esac

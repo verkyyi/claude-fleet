@@ -20,6 +20,16 @@
 #   C  fleet-shell.sh solo_resume (lifted out of the script, tmux stubbed): a
 #      fresh start opens the row it left when the list's first read has it, a
 #      new HOME session when it does not, and nothing before the read.
+#   D  `fleet claude`'s OWN view (issue #2349, fleet-shell.sh `solo <m> <wid>`),
+#      for real on private sockets, the client up in its saved `multi` layout:
+#      D1 the terminal is that one session and one bottom line 「⌃D 放到后台 ·
+#      /exit 结束会话 … m5」 — no list, no top line, a tmux server of its own —
+#      and the client's `@fleet_layout` / fleet.conf are neither read nor
+#      written; D2 the row going `exited` (seen while watched) ends the view: the
+#      terminal is back at its prompt with 「会话已结束（m5）。」 and the view's
+#      server gone; D3 a row already exited when opened ends nothing, ⌃D leaves
+#      with 「会话在后台继续（m5）。`fleet` 可以找回。」, the session never saw the
+#      ⌃D, the client and its layout untouched.
 #
 # Drives: bin/fleet-shell.sh, bin/fleet-sidebar.py, bin/fleet-sidebar.sh,
 # bin/fleet-topbar.py, bin/fleet-ui-lang.sh, conf/tmux-shell.conf,
@@ -325,4 +335,169 @@ run_case 'the row it left is gone' wid:fleet/abc $'wid:fleet/zzz\037x' 'new'
 run_case 'no row left at all' '' $'wid:fleet/zzz\037x' 'new'
 run_case 'no read in time' wid:fleet/abc - ''
 [ "$fails" = 0 ] || exit 1
+
+# --- D ---------------------------------------------------------------------------
+# the real tmux — never the fleet's tmux-shim (a session's PATH starts with it)
+REAL_TMUX_D=''
+_ifs=$IFS; IFS=:
+for d in $PATH; do
+  case "$d" in */tmux-shim) continue ;; esac
+  [ -x "$d/tmux" ] && { REAL_TMUX_D="$d/tmux"; break; }
+done
+IFS=$_ifs
+if [ -z "$REAL_TMUX_D" ]; then
+  echo 'D: no tmux — skipped'
+else
+python3 - "$BIN" "$REAL_TMUX_D" <<'PY' || exit 1
+import os, shlex, shutil, signal, subprocess, sys, tempfile, time
+from pathlib import Path
+
+real_bin, real_tmux = Path(sys.argv[1]), sys.argv[2]
+work = Path(tempfile.mkdtemp(prefix='fcd.', dir='/tmp'))   # AF_UNIX paths stop at 104 bytes
+socks = work / 's'
+socks.mkdir()
+bin_dir = work / 'root' / 'bin'
+bin_dir.mkdir(parents=True)
+for source in real_bin.iterdir():
+    (bin_dir / source.name).symlink_to(source)
+(work / 'root' / 'conf').symlink_to(real_bin.parent / 'conf')
+cache = work / 'cache'
+(cache / 'bin').mkdir(parents=True)
+for source in real_bin.iterdir():
+    if source.name != 'fleet-remote-view.sh':
+        (cache / 'bin' / source.name).symlink_to(source)
+# the session on its machine: a proxy that says which one it shows, then reads its
+# keys (a ⌃D reaching it would end the `cat` and leave the eof file)
+eof = work / 'eof'
+(cache / 'bin' / 'fleet-remote-view.sh').write_text(
+    '#!/bin/bash\nprintf "REMOTE-SESSION %%s %%s\\n" "$3" "$4"\ncat >/dev/null\necho eof > %s\n' % shlex.quote(str(eof)))
+(cache / 'bin' / 'fleet-remote-view.sh').chmod(0o755)
+stage_conf = (real_bin.parent / 'conf' / 'tmux-shell-stage.conf').read_text() \
+    .replace('__BIN__', str(cache / 'bin')).replace('__SESS__', 'fc').replace('__STAGE__', 'fc-stage')
+(cache / 'tmux-stage.conf').write_text(stage_conf)
+rows = cache / 'tmp' / '.claude-dash' / 'global' / 'remote_fc'
+rows.parent.mkdir(parents=True)
+conf_dir = work / 'conf'
+conf_dir.mkdir()
+saved = '[client]\nexport FLEET_CLIENT_LAYOUT=multi\n'
+(conf_dir / 'fleet.conf').write_text(saved)
+sock, term = str(socks / 'fc'), str(socks / 'term')
+shim = work / 'path'
+shim.mkdir()
+# `-L fc` (the client's server) and `-L fc-solo-<pid>` (the view's own) → socket files
+(shim / 'tmux').write_text(
+    '#!/bin/sh\nif [ "$1" = -L ]; then l=$2; shift 2; exec %s -S %s/"$l" "$@"; fi\nexec %s "$@"\n'
+    % (shlex.quote(real_tmux), shlex.quote(str(socks)), shlex.quote(real_tmux)))
+(shim / 'tmux').chmod(0o755)
+env = dict(os.environ, HOME=str(work), TERM='xterm-256color', FLEET_UI_LANG='zh', FLEET_CONF_DIR=str(conf_dir),
+           FLEET_SHELL_CACHE=str(cache), FLEET_SOLO_WATCH_EVERY='0.2', PATH=str(shim) + os.pathsep + os.environ['PATH'])
+for k in ('TMUX', 'TMUX_PANE', 'FLEET_CLIENT_LAYOUT', 'FLEET_SHELL_SESSION'):
+    env.pop(k, None)
+checks = 0
+
+
+def tm(*args, s=sock):
+    return subprocess.run([real_tmux, '-S', s, *args], env=env, capture_output=True, text=True, timeout=15)
+
+
+def check(condition, message):
+    global checks
+    if not condition:
+        raise AssertionError(message)
+    checks += 1
+
+
+def wait(predicate, secs=8):
+    end = time.monotonic() + secs
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(.1)
+    return False
+
+
+def solos():
+    return [p for p in socks.iterdir() if p.name.startswith('fc-solo-') and tm('has-session', s=str(p)).returncode == 0]
+
+
+def cleanup():
+    for p in socks.iterdir():
+        tm('kill-server', s=str(p))
+    shutil.rmtree(work, ignore_errors=True)
+
+
+for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+    signal.signal(sig, lambda *_: sys.exit(130))
+
+
+def screen():
+    return tm('capture-pane', '-p', '-t', 'term:', s=term).stdout.rstrip('\n')
+
+
+def terminal():
+    """The «terminal»: `fleet claude`'s step 3 in it, then the prompt."""
+    tm('kill-server', s=term)
+    if eof.exists():
+        eof.unlink()
+    cmd = 'bash %s solo m5 F/w1 fc; echo PROMPT; exec sleep 600' % shlex.quote(str(bin_dir / 'fleet-shell.sh'))
+    tm('-f', '/dev/null', 'new-session', '-d', '-s', 'term', '-x', '100', '-y', '24', cmd, s=term)
+    tm('set-option', '-g', 'status', 'off', s=term)
+
+
+def drawn():
+    lines = screen().split('\n')
+    return 'REMOTE-SESSION m5 F/w1' in lines[0] and '⌃D 放到后台 · /exit 结束会话' in lines[-1]
+
+
+try:
+    # the client, in its saved multi-session layout
+    tm('-f', '/dev/null', 'new-session', '-d', '-s', 'fc', '-x', '120', '-y', '30', 'sleep 600')
+    tm('set-option', '-g', '@fleet_layout', 'multi')
+
+    # D1. the whole terminal is that session and one bottom line — no list, no
+    # top line — and the client's layout is neither read nor written
+    rows.write_text('#node\x1fm5\n')
+    terminal()
+    check(wait(drawn, 10), 'D1: not the one-session screen:\n%s' % screen())
+    lines = screen().split('\n')
+    check(lines[-1].rstrip().endswith('m5'), 'D1: no machine on the bar: %r' % lines[-1])
+    check('新任务' not in screen() and '│' not in screen() and '⌘N' not in screen(), 'D1: a list or a key row:\n%s' % screen())
+    check(len(solos()) == 1, 'D1: not one view server of its own: %r' % solos())
+    check(tm('show-options', '-gqv', '@fleet_layout').stdout.strip() == 'multi', 'D1: the client\'s layout moved')
+    print('D1: one session, one line: %r' % lines[-1].strip())
+
+    # D2. the session ending (`exited`, seen while watched) → the view goes, the
+    # terminal is back at its prompt with one line
+    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fworking\n')
+    time.sleep(1)
+    check(drawn(), 'D2: the view went before the session ended:\n%s' % screen())
+    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fexited\n')
+    check(wait(lambda: 'PROMPT' in screen()), 'D2: /exit did not end the view:\n%s' % screen())
+    check('会话已结束（m5）。' in screen(), 'D2: the last line: %r' % screen())
+    check(solos() == [], 'D2: the view\'s server stayed: %r' % solos())
+    print('D2: /exit → %r, back at the prompt' % [l for l in screen().split('\n') if l.strip()][-2])
+
+    # D3. ⌃D → to the background: the session never sees it (its cat runs on until
+    # the view drops the connection), the terminal says where it is
+    terminal()
+    check(wait(drawn, 10), 'D3: not the one-session screen:\n%s' % screen())
+    time.sleep(.6)
+    check(drawn(), 'D3: a session already exited when opened ended the view:\n%s' % screen())
+    tm('send-keys', '-t', 'term:', 'C-d', s=term)
+    check(wait(lambda: 'PROMPT' in screen()), 'D3: ⌃D did not leave the view:\n%s' % screen())
+    check('会话在后台继续（m5）。`fleet` 可以找回。' in screen(), 'D3: the last line: %r' % screen())
+    check(not eof.exists(), 'D3: ⌃D reached the session')
+    check(solos() == [], 'D3: the view\'s server stayed: %r' % solos())
+    check(tm('has-session', '-t', 'fc').returncode == 0, 'D3: the client went with the view')
+    check(tm('show-options', '-gqv', '@fleet_layout').stdout.strip() == 'multi', 'D3: the client\'s layout moved')
+    check((conf_dir / 'fleet.conf').read_text() == saved, 'D3: fleet.conf was written')
+    print('D3: ⌃D → %r; the client and its layout untouched' % [l for l in screen().split('\n') if l.strip()][-2])
+    print('D: %d checks' % checks)
+except AssertionError as e:
+    print('FAIL D: %s' % e)
+    cleanup()
+    sys.exit(1)
+cleanup()
+PY
+fi
 echo 'fleet-client-solo selftest: PASS'

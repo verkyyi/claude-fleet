@@ -13,7 +13,7 @@ session (issue #1903, EPIC #1906 C10) — and the switch history ⌘[ / ⌘] wal
                                               「打开多会话视图」 (in the one-session
                                               view) / 「收起侧栏」 (anywhere else)
     fleet-quickopen.py switch [<query>]       ⌘K's lines, plain (the selftest's view)
-    fleet-quickopen.py switch-run <key|new|layout:multi|layout:solo> [<session>]
+    fleet-quickopen.py switch-run <key|new|layout:multi|layout:solo|quit> [<session>]
                                               ↵ on that line
     fleet-quickopen.py rank [--all] [<query>] the ranked rows, one per line
                                               (`key<TAB>name`) — the selftest's view;
@@ -363,13 +363,15 @@ def layout_now():
 
 def switch_tail(layout, say=None):
     """The switcher's lines under the sessions: (action, label) — a new HOME
-    session, a rule (`sep`), and the layout flip."""
+    session, a rule (`sep`), the layout flip, and last 退出 fleet (issue #2349:
+    the client's every process here goes, the sessions run on)."""
     say = say or {}
     if layout in ONE_PANE:
         flip = ("layout:multi", say.get("switch_multi") or "打开多会话视图")
     else:
         flip = ("layout:solo", say.get("switch_solo") or "收起侧栏")
-    return [("new", say.get("switch_new") or "+ 新会话"), ("sep", ""), flip]
+    return [("new", say.get("switch_new") or "+ 新会话"), ("sep", ""), flip,
+            ("quit", say.get("switch_quit") or "退出 fleet")]
 
 
 def ago(then, now=None):
@@ -395,10 +397,18 @@ def switch_act(action, session=""):
     one primitive (fleet-shell.sh home-session, issue #2264), which puts the
     stage on it. `layout:<v>`: remembered in fleet.conf's [client]
     (fleet-conf.sh set-client) and switched live (fleet-shell.sh layout).
-    FLEET_SWITCH_NEW_CMD / FLEET_SWITCH_LAYOUT_CMD are the selftest's seams."""
+    `quit`: 退出 fleet (fleet-shell.sh quit, issue #2349), detached — it stops
+    the server this popup runs on.
+    FLEET_SWITCH_NEW_CMD / FLEET_SWITCH_LAYOUT_CMD / FLEET_SWITCH_QUIT_CMD are
+    the selftest's seams."""
     env = dict(os.environ)
     if session:
         env["FLEET_SHELL_SESSION"] = session
+    if action == "quit":
+        seam = os.environ.get("FLEET_SWITCH_QUIT_CMD")
+        detach((seam.split() if seam else ["bash", str(BIN / "fleet-shell.sh"), "quit"])
+               + ([session] if session else []), env)
+        return True
     if action == "new":
         seam = os.environ.get("FLEET_SWITCH_NEW_CMD")
         detach(seam.split() if seam else ["bash", str(BIN / "fleet-shell.sh"), "home-session", "claude"], env)
@@ -461,6 +471,7 @@ COMMANDS = (
     ("restore", "other"),    # 已落地 — the landed list, in place
     ("repo", "other"),
     ("clients", "other"),
+    ("quit", "other"),       # 退出 fleet — the client only, the last line (issue #2349)
 )
 
 
@@ -641,7 +652,8 @@ def popup(screen, pane, session="", target="", switch=False):
     layout = layout_now() if switch else ""
     def fetch():
         say.update(words("quickopen_cmd_hint", "quickopen_cmd_for_fmt", "quickopen_cmd_none",
-                         "quickopen_cmd_loading", "switch_new", "switch_multi", "switch_solo"))
+                         "quickopen_cmd_loading", "switch_new", "switch_multi", "switch_solo",
+                         "switch_quit"))
         fetched.append(full_rows(session))
     reader = threading.Thread(target=fetch, daemon=True)
     reader.start()
@@ -955,7 +967,7 @@ def main(argv):
     if argv[:1] == ["switch-run"] and len(argv) in (2, 3):
         # ↵ on a ⌘K line: a session key jumps (as ↵ on it does), else the action
         session = argv[2] if len(argv) == 3 else os.environ.get("FLEET_SESSION", "")
-        if argv[1] == "new" or argv[1].startswith("layout:"):
+        if argv[1] in ("new", "quit") or argv[1].startswith("layout:"):
             return 0 if switch_act(argv[1], session) else 1
         return 0 if hand(list_pane(), "jump=" + argv[1]) else 1
     if argv[:1] == ["commands"]:

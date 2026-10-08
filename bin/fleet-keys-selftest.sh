@@ -442,9 +442,14 @@ sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --p
 # `new` (⌘N / prefix c, issue #1953): the writing area — private code 928.
 # `fold` (⌘. / prefix ., issue #2167): the session in view's sub-tasks — 929.
 # `switcher` (⌘K / prefix s, issue #2266): every session + new + the layout — 930.
-[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 11 ] || fail "10: the switch table is not the 8 actions of #1903 + #1953's new + #2167's fold + #2266's switcher: $sw_table"
-[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd needs zoom help quickopen new fold switcher " ] \
-  || fail "10: the switch actions are not next prev back fwd needs zoom help quickopen new fold switcher"
+# `quit` (⌘Q / prefix Q, issue #2349): 退出 fleet — 931.
+[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 12 ] || fail "10: the switch table is not the 8 actions of #1903 + #1953's new + #2167's fold + #2266's switcher + #2349's quit: $sw_table"
+[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd needs zoom help quickopen new fold switcher quit " ] \
+  || fail "10: the switch actions are not next prev back fwd needs zoom help quickopen new fold switcher quit"
+printf '%s\n' "$sw_table" | awk '$1 == "quit" && $2 == "⌘Q" && $3 == "0x71-0x100000" && $4 == 931 && $5 == "Q"' | grep -q . \
+  || fail "10: quit is not ⌘Q · 0x71-0x100000 · code 931 · prefix Q"
+grep -E '^bind -n User931 ' "$CONF" | grep -q 'fleet-shell.sh quit' || fail "10: ⌘Q does not quit the client (fleet-shell.sh quit)"
+grep -F '@fleet_hint_session ' "$CONF" | grep -q 'key-User931]' || fail "10: the bar's ⌘Q is not the quit key (User931)"
 printf '%s\n' "$sw_table" | awk '$1 == "switcher" && $2 == "⌘K" && $3 == "0x6b-0x100000" && $4 == 930 && $5 == "s"' | grep -q . \
   || fail "10: switcher is not ⌘K · 0x6b-0x100000 · code 930 · prefix s"
 grep -E '^bind -n User930 ' "$CONF" | grep -q 'fleet-quickopen.py --switch' || fail "10: ⌘K does not open the switcher (fleet-quickopen.py --switch)"
@@ -493,8 +498,8 @@ PY
 done <<EOF
 $sw_table
 EOF
-# the table's 11 + ⇧↵ → 0x0a (the writing area's newline, issue #1953)
-[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 12 ] \
+# the table's 12 + ⇧↵ → 0x0a (the writing area's newline, issue #1953)
+[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 13 ] \
   || fail "10: the profile maps keys beyond the table + ⇧↵ (no parent map to keep here)"
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]; assert m["0xd-0x20000"] == {"Action": 11, "Text": "0x0a"}, m' "$SW_PROF/fleet.json" \
   || fail "10: the profile does not send 0x0a for ⇧↵"
