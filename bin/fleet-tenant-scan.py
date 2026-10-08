@@ -118,9 +118,9 @@ ITEMS = [
     ("preview", 3, "preview-no-code"),
     ("bootstrap", 4, "bootstrap-abroad"),
 ]
-# by design readable to every login (fleet-heavy's slots + log, the machine-wide
-# session counters): login names, pids, counts — never a session's content
-SHARED_OK = re.compile(r"^(heavy/(slot-\d+|events\.log)|sessions/[^/]+)$")
+# by design readable to every login (fleet-heavy's slots, holds and logs — each
+# login's own since #2299 — the machine-wide session counters): login names, pids, counts — never a session's content
+SHARED_OK = re.compile(r"^(heavy/(slot-\d+|events(\.[^/]+)?\.log|(hold|wait)\.[^/]+)|sessions/[^/]+)$")
 
 
 def run(argv, timeout=60, env=None):

@@ -19,8 +19,14 @@
 #
 # Shared across logins (EPIC #1291 convention 6): the dir is machine-level —
 # /Users/Shared/claude-fleet/heavy on macOS, /var/tmp/claude-fleet/heavy
-# elsewhere — mode 1777, slot files 0666, never in anyone's $HOME. A slot file
-# holds only `pid login label start`.
+# elsewhere — mode 1777, never in anyone's $HOME. Each login only ever writes
+# files it OWNS, 0644 (issue #2299): a login opens slot-K read-only and only
+# flocks it — on a managed machine root's `shared-dirs` task
+# (bin/fleet-shared-dirs.py) makes the slots and the dirs root's, so no login can
+# delete, replace or rewrite them; who holds a slot is `hold.<login>.<pid>`
+# (`pid login label start slot`), a queued run `wait.<login>.<pid>`, the event
+# log `events.<login>.log`. A reader believes such a file only when <login> owns
+# it, and every open refuses a symlink (O_NOFOLLOW).
 #
 # The fleet's Bash hook (hooks/bash-guard.py) prefixes this wrapper onto every
 # statement matching FLEET_HEAVY_RE, so business repos need no change.
@@ -67,7 +73,7 @@ export FLEET_HEAVY="${FLEET_HEAVY:-1}"
 # command-substitution scanner trips over quotes/parens inside a heredoc body.
 # And never `python3 - <<EOF`: stdin belongs to the wrapped command.
 read -r -d '' _HEAVY_PY <<'PYEOF'
-import errno, fcntl, os, pwd, signal, subprocess, sys, time
+import errno, fcntl, os, pwd, signal, stat, subprocess, sys, time
 
 DIR = os.environ["FLEET_HEAVY_DIR"]
 POLL = 0.25
@@ -114,32 +120,103 @@ def ensure_dir():
     return os.path.isdir(DIR)
 
 
-def open_shared(path, extra=0):
-    """O_RDWR|O_CREAT at 0666 regardless of umask; RDONLY if another login made it
-    without group/other write (flock works on a read-only fd; metadata is skipped)."""
-    old = os.umask(0)
-    try:
+def open_slot(path):
+    """A slot read-only — all a lock needs. A missing one is made 0644 first (on a
+    managed machine root made them all; elsewhere the first login does); never
+    through a symlink, never anything but a regular file."""
+    for _ in (1, 2):
         try:
-            return os.open(path, os.O_RDWR | os.O_CREAT | extra, 0o666), True
-        except PermissionError:
-            return os.open(path, os.O_RDONLY), False
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            try:
+                os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644))
+            except FileExistsError:
+                pass
+            continue
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            return fd
+        os.close(fd)
+        break
+    raise OSError(errno.EINVAL, "not a slot file")
+
+
+def owned_by(st, who):
+    """A file is <who>'s when its owner is that account (by name, or by its home's
+    basename — fleet_machine_login's key) and it is a regular file."""
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    try:
+        pw = pwd.getpwuid(st.st_uid)
+    except KeyError:
+        return False
+    return who in (pw.pw_name, os.path.basename(pw.pw_dir.rstrip("/")))
+
+
+def own_file(path, extra=0):
+    """Open THIS login's own file: created 0644, never through a symlink, never one
+    another login planted under our name (fstat owner) — None then."""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | extra, 0o644)
+    except OSError:
+        return None
+    st = os.fstat(fd)
+    if st.st_uid != os.getuid() or not stat.S_ISREG(st.st_mode):
+        os.close(fd)
+        return None
+    return fd
+
+
+def write_own(path, text):
+    fd = own_file(path, os.O_TRUNC)
+    if fd is None:
+        return False
+    try:
+        os.write(fd, text.encode())
     finally:
-        os.umask(old)
+        os.close(fd)
+    return True
+
+
+def unlink_own(path):
+    try:
+        if os.lstat(path).st_uid == os.getuid():
+            os.unlink(path)
+    except OSError:
+        pass
 
 
 def log_event(kind, label, extra=""):
+    fd = own_file(os.path.join(DIR, "events.%s.log" % login()), os.O_APPEND)
+    if fd is None:
+        return
     try:
-        fd, _ = open_shared(os.path.join(DIR, "events.log"), os.O_APPEND)
-        try:
-            line = "%s\t%s\t%s\t%d\t%s\t%s\n" % (
-                time.strftime("%Y-%m-%dT%H:%M:%S"), kind, login(), os.getpid(), label, extra)
-            os.write(fd, line.encode())       # O_APPEND: concurrent lines never clobber
-            if os.fstat(fd).st_size > 2 * 1024 * 1024:
-                os.ftruncate(fd, 0)          # crude cap; the log is evidence, not history
-        finally:
-            os.close(fd)
+        line = "%s\t%s\t%s\t%d\t%s\t%s\n" % (
+            time.strftime("%Y-%m-%dT%H:%M:%S"), kind, login(), os.getpid(), label, extra)
+        os.write(fd, line.encode())           # O_APPEND: concurrent lines never clobber
+        if os.fstat(fd).st_size > 2 * 1024 * 1024:
+            os.ftruncate(fd, 0)              # crude cap; the log is evidence, not history
     except OSError:
         pass
+    finally:
+        os.close(fd)
+
+
+def event_logs():
+    """Every login's own log (owner checked) + the old shared one (compat-1v: 下一批删)."""
+    out = [os.path.join(DIR, "events.log")]
+    try:
+        names = sorted(os.listdir(DIR))
+    except OSError:
+        return out
+    for n in names:
+        if n.startswith("events.") and n.endswith(".log") and n != "events.log":
+            p = os.path.join(DIR, n)
+            try:
+                if owned_by(os.lstat(p), n[len("events."):-len(".log")]):
+                    out.append(p)
+            except OSError:
+                pass
+    return out
 
 
 def alive(pid):
@@ -151,25 +228,62 @@ def alive(pid):
 
 
 def read_meta(path):
+    """`pid login label start [slot]` → (pid, login, label, start, slot-or-None)."""
     try:
-        with open(path) as f:
-            parts = f.read().strip().split("\t")
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            parts = os.read(fd, 4096).decode("utf-8", "replace").strip().split("\t")
+        finally:
+            os.close(fd)
         if len(parts) >= 4:
-            return int(parts[0]), parts[1], parts[2], int(parts[3])
+            slot = int(parts[4]) if len(parts) >= 5 and parts[4].isdigit() else None
+            return int(parts[0]), parts[1], parts[2], int(parts[3]), slot
     except Exception:
         pass
     return None
 
 
+def owned_meta(prefix):
+    """[(meta, path)] of every live `<prefix>.<login>.<pid>` its login owns. A dead
+    one of ours is removed; another login's dead one is only skipped (root's sweep
+    removes it)."""
+    out = []
+    try:
+        names = sorted(os.listdir(DIR))
+    except OSError:
+        return out
+    for n in names:
+        parts = n.split(".")
+        if len(parts) < 3 or parts[0] != prefix or not parts[-1].isdigit():
+            continue
+        who, pid = ".".join(parts[1:-1]), int(parts[-1])
+        p = os.path.join(DIR, n)
+        try:
+            if not owned_by(os.lstat(p), who):
+                continue
+        except OSError:
+            continue
+        m = read_meta(p)
+        if m and m[0] == pid and m[1] == who and alive(pid):
+            out.append((m, p))
+        elif not alive(pid):
+            unlink_own(p)
+    return out
+
+
 def probe_held(slots):
     """[(slot, meta-or-None)] for every slot someone holds right now."""
+    holds = {}
+    for m, _ in owned_meta("hold"):
+        if m[4]:
+            holds[m[4]] = m
     held = []
     for k in range(1, slots + 1):
         path = os.path.join(DIR, "slot-%d" % k)
-        if not os.path.exists(path):
+        if not os.path.lexists(path):
             continue
         try:
-            fd, _ = open_shared(path)
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         except OSError:
             continue
         try:
@@ -177,31 +291,15 @@ def probe_held(slots):
                 fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
                 fcntl.flock(fd, fcntl.LOCK_UN)
             except OSError:
-                held.append((k, read_meta(path)))
+                # compat-1v: 下一批删 — an older version writes its metadata INTO the slot
+                held.append((k, holds.get(k) or read_meta(path)))
         finally:
             os.close(fd)
     return held
 
 
 def waiters():
-    out = []
-    try:
-        names = os.listdir(DIR)
-    except OSError:
-        return out
-    for n in sorted(names):
-        if not n.startswith("wait."):
-            continue
-        p = os.path.join(DIR, n)
-        m = read_meta(p)
-        if m and alive(m[0]):
-            out.append(m)
-        else:
-            try:
-                os.unlink(p)                 # sticky dir: only our own goes
-            except OSError:
-                pass
-    return out
+    return [m for m, _ in owned_meta("wait")]
 
 
 def age(start):
@@ -214,17 +312,18 @@ def wait_stats(window=86400):
     issue #1313) — the number that says whether light runs really stopped queuing."""
     cut = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - window))
     w = []
-    try:
-        with open(os.path.join(DIR, "events.log")) as f:
-            for line in f:
-                p = line.rstrip("\n").split("\t")
-                if len(p) < 6 or p[0] < cut or p[1] not in ("acquire", "timeout"):
-                    continue
-                for tok in p[5].split():
-                    if tok.startswith("waited=") and tok.endswith("s") and tok[7:-1].isdigit():
-                        w.append(int(tok[7:-1]))
-    except OSError:
-        pass
+    for path in event_logs():
+        try:
+            with open(path) as f:
+                for line in f:
+                    p = line.rstrip("\n").split("\t")
+                    if len(p) < 6 or p[0] < cut or p[1] not in ("acquire", "timeout"):
+                        continue
+                    for tok in p[5].split():
+                        if tok.startswith("waited=") and tok.endswith("s") and tok[7:-1].isdigit():
+                            w.append(int(tok[7:-1]))
+        except OSError:
+            pass
     if not w:
         return "  waits 24h: none recorded"
     w.sort()
@@ -259,8 +358,9 @@ def status(slots):
 
 def acquire(slots, wait, label):
     """→ (fd, slot) or (None, None) after `wait` seconds."""
-    me = "%d\t%s\t%s\t%d\n" % (os.getpid(), login(), label, int(time.time()))
+    me = "%d\t%s\t%s\t%d" % (os.getpid(), login(), label, int(time.time()))
     wpath = os.path.join(DIR, "wait.%s.%d" % (login(), os.getpid()))
+    hpath = os.path.join(DIR, "hold.%s.%d" % (login(), os.getpid()))
     t0 = time.time()
     announced = False
     try:
@@ -268,7 +368,7 @@ def acquire(slots, wait, label):
             for k in range(1, slots + 1):
                 path = os.path.join(DIR, "slot-%d" % k)
                 try:
-                    fd, rw = open_shared(path)
+                    fd = open_slot(path)
                 except OSError:
                     continue
                 try:
@@ -276,10 +376,7 @@ def acquire(slots, wait, label):
                 except OSError:
                     os.close(fd)
                     continue
-                if rw:
-                    os.ftruncate(fd, 0)
-                    os.lseek(fd, 0, os.SEEK_SET)
-                    os.write(fd, me.encode())
+                write_own(hpath, "%s\t%d\n" % (me, k))
                 waited = int(time.time() - t0)
                 log_event("acquire", label, "slot=%d held=%d waited=%ds"
                           % (k, len(probe_held(slots)), waited))
@@ -289,12 +386,7 @@ def acquire(slots, wait, label):
                 return fd, k
             if not announced:
                 announced = True
-                try:
-                    fd, _ = open_shared(wpath)
-                    os.write(fd, me.encode())
-                    os.close(fd)
-                except OSError:
-                    pass
+                write_own(wpath, me + "\n")
                 who = ", ".join("%s(%s)" % (m[2], m[1]) for _, m in probe_held(slots) if m)
                 sys.stderr.write("fleet-heavy: all %d heavy slots busy [%s] — queued %s "
                                  "(runs anyway after %ds; `fleet-heavy.sh --status`)\n"
@@ -304,10 +396,7 @@ def acquire(slots, wait, label):
                 return None, None
             time.sleep(POLL)
     finally:
-        try:
-            os.unlink(wpath)
-        except OSError:
-            pass
+        unlink_own(wpath)
 
 
 def run(argv, slots, wait, label):
@@ -349,6 +438,7 @@ def run(argv, slots, wait, label):
             continue
     if fd is not None:
         log_event("release", label, "rc=%d" % rc)
+        unlink_own(os.path.join(DIR, "hold.%s.%d" % (login(), os.getpid())))
         os.close(fd)
     if rc < 0:                                # died of a signal: die the same way
         signal.signal(-rc, signal.SIG_DFL)

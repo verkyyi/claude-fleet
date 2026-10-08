@@ -7728,6 +7728,14 @@ EOF
 # is not holding sessions we can see. FLEET_MACHINE_SESSIONS_DIR overrides (the
 # selftest seam). The login key is the basename of $HOME (= the account name on
 # macOS), so a test can simulate several logins by switching HOME.
+#
+# Each login's file is its OWN (issue #2299): written 0644 through a mktemp in the
+# dir (never a predictable temp a symlink could be planted on), and a reader
+# counts `<login>` only when that account owns it (fleet_machine_sessions_owned) —
+# a file planted under another login's name, or a dozen made-up logins, count
+# nothing; root's `shared-dirs` task (bin/fleet-shared-dirs.py) sweeps them.
+# FLEET_MACHINE_SESSIONS_OWNER_CHECK=0 is the selftest seam for "several logins
+# are several HOMEs of one uid".
 fleet_machine_sessions_dir() {
   if [ -n "${FLEET_MACHINE_SESSIONS_DIR:-}" ]; then printf '%s\n' "$FLEET_MACHINE_SESSIONS_DIR"
   elif [ "$(uname -s 2>/dev/null)" = Darwin ]; then printf '/Users/Shared/claude-fleet/sessions\n'
@@ -7753,10 +7761,30 @@ fleet_machine_sessions_publish() {
     [ -O "$p" ] && chmod 1777 "$p" 2>/dev/null
   done
   [ -d "$d" ] || return 1
-  f="$d/$(fleet_machine_login)"; tmp="$d/.$(fleet_machine_login).$$"
+  f="$d/$(fleet_machine_login)"
+  tmp=$(mktemp "$d/.$(fleet_machine_login).XXXXXX" 2>/dev/null) || return 1
   if printf '%s %s\n' "$n" "$(date +%s)" > "$tmp" 2>/dev/null && chmod 644 "$tmp" 2>/dev/null \
      && mv -f "$tmp" "$f" 2>/dev/null; then return 0; fi
   rm -f "$tmp" 2>/dev/null; return 1
+}
+# fleet_machine_sessions_owned <dir> — the login files in <dir> their login owns,
+# one path a line: a regular file named after the account that owns it (or after
+# that account's home basename — fleet_machine_login's key). fleet-doctor.sh is
+# /bin/sh and carries the same filter inline — KEEP IN SYNC.
+fleet_machine_sessions_owned() {
+  local d="$1" o l h
+  if [ "${FLEET_MACHINE_SESSIONS_OWNER_CHECK:-1}" = 0 ]; then
+    for l in "$d"/*; do [ -f "$l" ] && [ ! -L "$l" ] && printf '%s\n' "$l"; done
+    return 0
+  fi
+  ls -l "$d" 2>/dev/null | awk '/^-/ { print $3, $NF }' | while read -r o l; do
+    [ -n "$l" ] || continue
+    if [ "$o" != "$l" ]; then
+      case "$o" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+      h=$(eval "printf '%s' ~$o" 2>/dev/null); [ "${h##*/}" = "$l" ] || continue
+    fi
+    printf '%s\n' "$d/$l"
+  done
 }
 # fleet_machine_sessions_rows [self-count] — one line per login:
 #   `<login> <count> <age-secs> <self|fresh|stale>`
@@ -7770,8 +7798,8 @@ fleet_machine_sessions_rows() {
   [ -n "$self" ] || self=$(( $(fleet_session_count) + $(fleet_inflight_count) ))
   now=$(date +%s)
   printf '%s %s 0 self\n' "$me" "$self"
-  for f in "$d"/*; do
-    [ -f "$f" ] || continue
+  [ -d "$d" ] || return 0
+  fleet_machine_sessions_owned "$d" | while read -r f; do
     l="${f##*/}"; [ "$l" = "$me" ] && continue
     n=''; ts=''; read -r n ts < "$f" 2>/dev/null
     case "$n" in ''|*[!0-9]*) n=0; ts=0 ;; esac

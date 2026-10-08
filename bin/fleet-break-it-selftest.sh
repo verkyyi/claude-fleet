@@ -3846,6 +3846,38 @@ s=importlib.util.spec_from_file_location("sup",sys.argv[1]); m=importlib.util.mo
   WHAT="TMPDIR/.claude-dash 属别的登录时 fleet-lib 不用它：stderr 报一行，改用本登录按 uid 分开的 ${lib}（可写、属主是自己）；守护降权拿不到 DARWIN_USER_TEMP_DIR 时 TMPDIR=$(cat "$d/acct")，不再是共享的 /tmp"
 }
 
+# ---- shared-dir-foreign-write (#2299): /Users/Shared/claude-fleet is every
+# login's. Before, the heavy slots and the event log were 0666 (any login could
+# truncate or rewrite them), the first login owned the sticky dirs (and so could
+# delete anyone's entry), a file planted under another login's name in sessions/
+# counted, and a planted symlink was written through. The drill takes a slot,
+# plants the squats, and wants every file 0644 and its writer's, the symlink
+# untouched, the squat uncounted, and root's fleet-shared-dirs.py sweeping them.
+drill_shared_dir_foreign_write() {
+  CAP=15; local d="$WORK/sdf" t0 me bad r
+  me=$(id -un); mkdir -p "$d/home/$me" "$d/conf"
+  printf 'precious\n' > "$d/victim"
+  t0=$(now)
+  python3 "$BIN/fleet-shared-dirs.py" --root "$d/shared" --slots 2 >/dev/null 2>&1
+  ln -s "$d/victim" "$d/shared/heavy/events.$me.log" 2>/dev/null
+  FLEET_HEAVY_DIR="$d/shared/heavy" HOME="$d/home/$me" "$BIN/fleet-heavy.sh" --slots 2 -- true 2>/dev/null \
+    || { WHY="fleet-heavy.sh did not run"; return 1; }
+  [ "$(cat "$d/victim")" = precious ] || { WHY="a planted events-log symlink was written through"; return 1; }
+  FLEET_HEAVY_DIR="$d/shared2/heavy" HOME="$d/home/$me" "$BIN/fleet-heavy.sh" --slots 2 -- true 2>/dev/null
+  bad=$(find "$d/shared2" -type f \( -perm -002 -o -perm -020 \) 2>/dev/null)
+  [ -z "$bad" ] || { WHY="another login could rewrite: $(ls -l $bad | awk '{print $1, $NF}' | tr '\n' ' ')"; return 1; }
+  printf '999 %s\n' "$(date +%s)" > "$d/shared/sessions/mallory"
+  r=$(env HOME="$d/home/$me" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_MACHINE_SESSIONS_DIR="$d/shared/sessions" \
+        bash -c ". '$BIN/fleet-lib.sh'; fleet_machine_sessions_summary 1" 2>/dev/null)
+  [ "${r%%$'\t'*}" = 1 ] || { WHY="a sessions file planted under another login's name counted ($r)"; return 1; }
+  python3 "$BIN/fleet-shared-dirs.py" --root "$d/shared" --slots 2 >/dev/null 2>&1
+  [ ! -e "$d/shared/sessions/mallory" ] && [ ! -L "$d/shared/heavy/events.$me.log" ] \
+    || { WHY="fleet-shared-dirs.py left the squats in place"; return 1; }
+  grep -q '"shared-dirs"' "$BIN/fleet-node-supervisor.py" || { WHY="the node supervisor runs no shared-dirs task"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="共享目录每个文件只归写它的人、0644；种下的软链不被写穿，冒名的计数不算；root 的 shared-dirs 任务把冒名文件清掉"
+}
+
 # A new login's first Claude start asks questions nobody in a fleet pane answers —
 # on 2026-10-08 the new `verky` logins' `guide` sessions sat on 2.1.293's "Make
 # auto mode your default permission mode?" for good (issue #2401). The fake

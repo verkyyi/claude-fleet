@@ -509,7 +509,11 @@ Do not install from memory: read the doc and work from it.
 - **Heavy jobs queue machine-wide** (issue #1295). `bin/fleet-heavy.sh -- <cmd>`
   is a counting semaphore shared by EVERY login on the box (`FLEET_HEAVY_SLOTS`,
   default 3): slots are `fcntl.flock`s on `/Users/Shared/claude-fleet/heavy/slot-K`
-  (1777 dir, 0666 files, never under a `$HOME`), held by a python3 parent that
+  (1777 dir, never under a `$HOME`; each login writes only its OWN 0644 files —
+  slots opened read-only, `hold.` / `wait.<login>.<pid>`, `events.<login>.log` —
+  and root's `shared-dirs` supervisor task, `bin/fleet-shared-dirs.py`, owns the
+  dirs and slots and sweeps a file planted under another login's name, issue
+  #2299; `sessions/` likewise), held by a python3 parent that
   runs the command as its child — so a SIGKILLed holder frees its slot at once
   and a daemon the command leaves behind cannot keep it. `hooks/bash-guard.py`
   PREFIXES the wrapper onto any Bash statement whose command matches
