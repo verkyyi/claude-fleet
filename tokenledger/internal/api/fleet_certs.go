@@ -253,9 +253,16 @@ func (s *Server) issueCert(r *http.Request, pid, keyLine, via string) (*CertResp
 	if err != nil {
 		return nil, err
 	}
+	if s.certLoginsHook != nil {
+		logins = s.certLoginsHook(pid, logins)
+	}
 	now := time.Now()
 	iss, err := s.SSHCA.Sign(sshca.Request{Key: key, PrincipalID: pid, Logins: logins}, now)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.selfCheckCert(pid, iss.Line, now); err != nil {
+		log.Printf("fleet: REFUSED to hand out ssh certificate for %s: %v", pid, err)
 		return nil, err
 	}
 	serial := strconv.FormatUint(iss.Serial, 10)
@@ -279,6 +286,54 @@ func (s *Server) issueCert(r *http.Request, pid, keyLine, via string) (*CertResp
 		Machines:    s.certMachines(hosts),
 		Hub:         s.hubURL(r),
 	}, nil
+}
+
+// errCertSelfCheck: the hub signed a certificate its own doors would refuse
+// (claude-fleet#2456). Never handed out; a 5xx, because the fault is the hub's.
+var errCertSelfCheck = errors.New("the hub refused its own certificate")
+
+// selfCheckCert reads a certificate issueCert has just signed through the very
+// judgement verifySSHRelayCert applies (checkFleetCert: the CA, the validity
+// window, the key id's person and one of their logins among the principals).
+// The two used to read a person's login from two places, and a fleet moved to
+// a new OS login was handed certificates every door then 401'd (#2437); this
+// makes that class of split a loud refusal at signing instead. The error names
+// the certificate's principals and the logins the hub would accept.
+func (s *Server) selfCheckCert(pid, line string, now time.Time) error {
+	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line))
+	if err != nil {
+		return fmt.Errorf("%w: unreadable: %v", errCertSelfCheck, err)
+	}
+	cert, ok := pub.(*ssh.Certificate)
+	if !ok {
+		return fmt.Errorf("%w: not a certificate", errCertSelfCheck)
+	}
+	// The window opens in the past (sshca back-dates ValidAfter); judge it a
+	// second on, so a certificate that is valid only at the signing instant
+	// is not let through.
+	_, why, err := s.checkFleetCert(cert, now.Add(time.Second))
+	if err != nil {
+		return err
+	}
+	if why == "" {
+		return nil
+	}
+	want := map[string]bool{}
+	if p, perr := s.Store.Principal(pid); perr == nil && p.Login != "" {
+		want[p.Login] = true
+	}
+	if logins, _, _, lerr := s.managedLoginsOf(pid); lerr == nil {
+		for _, l := range logins {
+			want[l] = true
+		}
+	}
+	expected := make([]string, 0, len(want))
+	for l := range want {
+		expected = append(expected, l)
+	}
+	sort.Strings(expected)
+	return fmt.Errorf("%w: principals %v, but %s's logins are %v: %s",
+		errCertSelfCheck, cert.ValidPrincipals, pid, expected, why)
 }
 
 // CertMachine is one machine of CertResponse.Machines.
@@ -461,6 +516,9 @@ func (s *Server) handleFleetCert(w http.ResponseWriter, r *http.Request) {
 func certErrStatus(err error) int {
 	if errors.Is(err, errNoAccount) {
 		return http.StatusConflict
+	}
+	if errors.Is(err, errCertSelfCheck) {
+		return http.StatusInternalServerError
 	}
 	if strings.HasPrefix(err.Error(), "record certificate") {
 		return http.StatusInternalServerError

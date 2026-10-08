@@ -424,6 +424,60 @@ func (s *Store) RequestRelogin(principalID, hostname, login string, at time.Time
 	return from, tx.Commit()
 }
 
+// ErrRenameTaken: the login a rename would give the person record is another
+// person's (fleet_principals.login is UNIQUE).
+var ErrRenameTaken = errors.New("login is another person's")
+
+// AlignPrincipalLogin is the supported rename (claude-fleet#2456): it sets the
+// person record's login (fleet_principals.login) to the login of their ACTIVE
+// account on hostname — the way back to one name after a relogin (#2210) left
+// the record on the old one — without a forget + adopt, so no account row,
+// certificate, device or lease is touched. The account rows stay the source a
+// certificate is minted from (managedLoginsOf); this only stops the record
+// disagreeing with them. from == to is a no-op (no error). ErrAccountState: no
+// active account on hostname; ErrRenameTaken: another person holds that login.
+func (s *Store) AlignPrincipalLogin(principalID, hostname string) (from, to string, err error) {
+	tx, err := s.write.Begin()
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback()
+	var pid string
+	err = tx.QueryRow(`SELECT principal_id, login FROM fleet_principals WHERE `+s.d.eqNocase("principal_id"), principalID).Scan(&pid, &from)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrNoPrincipal
+	}
+	if err != nil {
+		return "", "", err
+	}
+	err = tx.QueryRow(`SELECT login FROM fleet_accounts WHERE principal_id = ? AND hostname = ? AND state = ?`,
+		pid, hostname, AccountActive).Scan(&to)
+	if errors.Is(err, sql.ErrNoRows) {
+		return from, "", fmt.Errorf("%w: %s has no active account on %s", ErrAccountState, principalID, hostname)
+	}
+	if err != nil {
+		return from, "", err
+	}
+	if from == to {
+		return from, to, nil
+	}
+	var other string
+	err = tx.QueryRow(`SELECT principal_id FROM fleet_principals WHERE login = ? AND principal_id <> ?`, to, pid).Scan(&other)
+	if err == nil {
+		return from, to, fmt.Errorf("%w: %q is %s's", ErrRenameTaken, to, other)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return from, to, err
+	}
+	if _, err := tx.Exec(`UPDATE fleet_principals SET login = ? WHERE principal_id = ?`, to, pid); err != nil {
+		if isUniqueViolation(err) {
+			return from, to, fmt.Errorf("%w: %q", ErrRenameTaken, to)
+		}
+		return from, to, err
+	}
+	return from, to, tx.Commit()
+}
+
 // AdoptReloginAccount settles a relogin'd row (claude-fleet#2210) as active
 // without running anything: the row on hostname must already carry login (the
 // relogin's new name, not the person's own) and be settled or failed — the

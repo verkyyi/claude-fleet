@@ -130,6 +130,9 @@ type Server struct {
 
 	// fleetScopeHook replaces fleetScope in tests (claude-fleet#1409).
 	fleetScopeHook func(*http.Request) (func(hostname, osUser string) bool, error)
+	// certLoginsHook replaces the logins issueCert signs for, in tests that
+	// split signing from checking on purpose (claude-fleet#2456).
+	certLoginsHook func(pid string, logins []string) []string
 	// Vault is the credential vault (claude-fleet#1415): long-lived Claude /
 	// Codex credentials sealed under CCQUOTA_FLEET_CRED_KEY, leased to nodes
 	// as short-lived tokens. nil (no key configured) leaves every credential

@@ -685,6 +685,10 @@ func (s *Server) handleFleetAccounts(w http.ResponseWriter, r *http.Request) {
 			s.rekeyAccount(w, r, req)
 			return
 		}
+		if req.Action == "rename" {
+			s.renameAccount(w, r, req)
+			return
+		}
 		if req.PrincipalID == "" || (req.Hostname == "" && req.Action != "forget") {
 			httpError(w, http.StatusBadRequest, "principal_id and hostname are required")
 			return
@@ -752,6 +756,36 @@ func (s *Server) rekeyAccount(w http.ResponseWriter, r *http.Request, req FleetA
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// renameAccount is the supported rename (claude-fleet#2456): the person
+// record's login takes the login of their active account on req.Hostname —
+// the way to settle a relogin (#2210) without forget + adopt. Audited.
+func (s *Server) renameAccount(w http.ResponseWriter, r *http.Request, req FleetAccountRequest) {
+	if req.PrincipalID == "" || req.Hostname == "" {
+		httpError(w, http.StatusBadRequest, "rename needs principal_id and hostname (the machine whose login the person record takes)")
+		return
+	}
+	now := time.Now()
+	target := req.PrincipalID + "@" + req.Hostname
+	from, to, err := s.Store.AlignPrincipalLogin(req.PrincipalID, req.Hostname)
+	if err != nil {
+		_ = s.Store.HubAudit(actorOf(r), "account.rename", target, "refused", err.Error(), now)
+		switch {
+		case errors.Is(err, store.ErrNoPrincipal):
+			httpError(w, http.StatusNotFound, "no such principal: "+req.PrincipalID)
+		case errors.Is(err, store.ErrAccountState), errors.Is(err, store.ErrRenameTaken):
+			httpError(w, http.StatusConflict, err.Error())
+		default:
+			httpError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	_ = s.Store.HubAudit(actorOf(r), "account.rename", target, "ok", from+" → "+to, now)
+	if from != to {
+		log.Printf("fleet: rename %s: person login %s → %s (as on %s)", req.PrincipalID, from, to, req.Hostname)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"principal_id": req.PrincipalID, "from": from, "login": to, "changed": from != to})
 }
 
 // creatableLogin is the node's create rule (control.ValidCreateLogin), judged

@@ -70,6 +70,8 @@ class H(BaseHTTPRequestHandler):
                 if b.get("action") == "rekey":
                     return self.answer(200, {"from": b["principal_id"], "to": "gh:" + b["to_principal_id"].replace("gh:", ""),
                                              "login": "zx", "hosts": ["macmini", "mini2"], "moved": {}})
+                if b.get("action") == "rename":
+                    return self.answer(200, {"principal_id": b["principal_id"], "from": "verkyyi", "login": "verky", "changed": True})
                 return self.answer(200, {"accounts": []})
             return self.answer(200, {"principals": [{"principal_id": "zx", "login": "zx", "display_name": ""}],
                                      "accounts": [{"principal_id": "zx", "hostname": "macmini", "state": "active"}],
@@ -221,6 +223,15 @@ if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" 
    && grep -q 'relogin gh:2718137 on macmini → verkydev: create queued' "$WORK/out"; then
   ok "K fleet hub accounts relogin → POST {action: relogin, hostname, login}"
 else bad "K rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
+
+# K2 — fleet hub accounts rename (claude-fleet#2456): one POST, the machine whose login the record takes
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok python3 "$BIN/fleet-hub.py" accounts rename gh:2718137 macmini >"$WORK/out" 2>"$WORK/err"; rc=$?
+r=$(last)
+if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/accounts ] \
+   && [ "$(field "$r" body)" = '{"action": "rename", "principal_id": "gh:2718137", "hostname": "macmini"}' ] \
+   && grep -q 'rename gh:2718137: login verkyyi → verky (as on macmini)' "$WORK/out"; then
+  ok "K2 fleet hub accounts rename → POST {action: rename, hostname}"
+else bad "K2 rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
 
 # L — fleet hub invite (claude-fleet#2261): mint, list, revoke
 run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub invite @alice >"$WORK/out" 2>"$WORK/err"; rc=$?
