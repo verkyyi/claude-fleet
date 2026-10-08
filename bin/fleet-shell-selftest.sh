@@ -395,6 +395,8 @@ eq 'F: rr= / cr= empty → the bar byte for byte as without them' "$b" "$(bar "$
 b5=$(bar "$w1")
 has 'F: the m5 window says m5' "$b5" 'm5 '
 eq 'F: the window list was blanked (hub mode)' '1' "$(ts show-options -gqv @status_wlist_saved)"
+# the client's conf runs it `part=quiet` since issue #2365: the same work, nothing drawn
+eq 'F: part=quiet → nothing drawn' '' "$(bar "$w2" part=quiet)"
 eq 'F: title: m4 online → nothing after its name' '' "$(title "$w2")"
 eq 'F: title: rr=relay → · 中转' ' · 中转' "$(title "$w2" rr=relay)"
 

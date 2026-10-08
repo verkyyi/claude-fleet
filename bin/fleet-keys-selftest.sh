@@ -441,7 +441,7 @@ fi
 sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --panel switch list exited non-zero"
 # `new` (⌘N / prefix c, issue #1953): the writing area — private code 928.
 # `fold` (⌘. / prefix ., issue #2167): the session in view's sub-tasks — 929.
-# `switcher` (⌘K / prefix s, issue #2266): every session + new + the layout — 930.
+# `switcher` (⌘K / prefix s, issue #2266): ⌘P's panel since #2365 — 930.
 # `quit` (⌘Q / prefix Q, issue #2349): 退出 fleet — 931.
 [ "$(printf '%s\n' "$sw_table" | grep -c .)" = 12 ] || fail "10: the switch table is not the 8 actions of #1903 + #1953's new + #2167's fold + #2266's switcher + #2349's quit: $sw_table"
 [ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd needs zoom help quickopen new fold switcher quit " ] \
@@ -452,8 +452,10 @@ grep -E '^bind -n User931 ' "$CONF" | grep -q 'fleet-shell.sh quit' || fail "10:
 grep -F '@fleet_hint_session ' "$CONF" | grep -q 'key-User931]' || fail "10: the bar's ⌘Q is not the quit key (User931)"
 printf '%s\n' "$sw_table" | awk '$1 == "switcher" && $2 == "⌘K" && $3 == "0x6b-0x100000" && $4 == 930 && $5 == "s"' | grep -q . \
   || fail "10: switcher is not ⌘K · 0x6b-0x100000 · code 930 · prefix s"
-grep -E '^bind -n User930 ' "$CONF" | grep -q 'fleet-quickopen.py --switch' || fail "10: ⌘K does not open the switcher (fleet-quickopen.py --switch)"
-grep -F '@fleet_hint_solo ' "$CONF" | grep -q 'key-User930]' || fail "10: the one-session bar's ⌘K is not the switcher's key (User930)"
+# ⌘K is ⌘P's panel since issue #2365 (one panel of sessions and actions): the same body
+[ "$(grep -E '^bind -n User930 ' "$CONF" | sed 's/^bind -n User930 //')" = "$(grep -E '^bind -n User927 ' "$CONF" | sed 's/^bind -n User927 //')" ] \
+  || fail "10: ⌘K does not open ⌘P's panel (issue #2365)"
+grep -E '^bind -n User930 ' "$CONF" | grep -q -- '--switch' && fail "10: ⌘K still opens the old switcher"
 printf '%s\n' "$sw_table" | awk '$1 == "new" && $2 == "⌘N" && $4 == 928 && $5 == "c"' | grep -q . \
   || fail "10: new is not ⌘N · code 928 · prefix c"
 printf '%s\n' "$sw_table" | awk '$1 == "fold" && $2 == "⌘." && $3 == "0x2e-0x100000" && $4 == 929 && $5 == "."' | grep -q . \

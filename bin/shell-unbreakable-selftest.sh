@@ -114,11 +114,11 @@ for k in x '&' '$' '<' '>' w; do
   CHECKS=$((CHECKS + 1))
   [ -z "$(ts list-keys -T prefix 2>/dev/null | awk -v k="$k" '$4 == k || $4 == "\\" k')" ] || fail "A: the client still binds prefix $k"
 done
-# prefix s is the switcher now (issue #2266, ⌘K's key elsewhere) — never choose-tree
+# prefix s is ⌘P's panel now (issue #2266 → #2365, ⌘K's key elsewhere) — never choose-tree
 CHECKS=$((CHECKS + 1))
-ts list-keys -T prefix 2>/dev/null | awk '$4 == "s"' | grep -q 'fleet-quickopen.py --switch' \
+ts list-keys -T prefix 2>/dev/null | awk '$4 == "s"' | grep -q 'fleet-quickopen.py --client' \
   && ! ts list-keys -T prefix 2>/dev/null | awk '$4 == "s"' | grep -qE 'choose-tree|kill' \
-  || fail "A: prefix s is not the switcher (or still choose-tree)"
+  || fail "A: prefix s is not ⌘P's panel (or still choose-tree)"
 for m in MouseDown3Pane M-MouseDown3Pane MouseDown3Status M-MouseDown3Status MouseDown3StatusLeft M-MouseDown3StatusLeft; do
   CHECKS=$((CHECKS + 1))
   ts list-keys -T root 2>/dev/null | awk -v k="$m" '$4 == k' | grep -qE 'display-menu|kill' && fail "A: the client's $m opens a menu"

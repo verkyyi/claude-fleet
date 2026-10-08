@@ -1205,6 +1205,26 @@ layout)
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
+# The sessions from the command line (issue #2365): `fleet ls | show | open |
+# rename | close | reap | answer` (bin/fleet-session-cli.py) read the client's own
+# rows and act through its hub identity, so they run with THIS server's
+# environment — imported here as home-session does — and with TMUX naming its
+# socket, so a bare `tmux` (the rows' producer, the list's queue) reaches it.
+#   cli <verb> [args…]       Exit: the verb's; 1 when no client is running.
+cli)
+  shift
+  T has-session -t "=$SESS" 2>/dev/null || { note "客户端没在运行（${SESS}）：先敲 fleet 打开它，⌃D / prefix d 离开后它仍在后台"; exit 1; }
+  while IFS= read -r line; do
+    case "$line" in FLEET_*=*|CCQUOTA_*=*|TMPDIR=*|XDG_*=*) export "${line?}" ;; esac
+  done <<EOF
+$(T show-environment -g 2>/dev/null)
+EOF
+  sock=$(T display-message -p '#{socket_path}' 2>/dev/null)
+  [ -n "$sock" ] && TMUX="$sock,0,0" && export TMUX
+  export FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_CLIENT_DIR="$CL_DIR"
+  exec python3 "$BIN/fleet-session-cli.py" "$@"
+  ;;
+# ---------------------------------------------------------------------------------
 # A HOME session (issue #2264, EPIC #2259 共同约定 2) — `fleet claude` / `fleet codex`
 # (bin/fleet-home-session.sh) and a newcomer's first session (`--first`, below):
 # a session of no repo, in the machine's $HOME, with that agent. ONE road —
@@ -1230,7 +1250,7 @@ home-session)
     esac
   done
   case "$hagent" in claude|codex) ;; *) note 'home-session: claude or codex'; exit 2 ;; esac
-  T has-session -t "=$SESS" 2>/dev/null || { note "客户端没在运行（$SESS）"; exit 1; }
+  T has-session -t "=$SESS" 2>/dev/null || { note "客户端没在运行（${SESS}）"; exit 1; }
   # the server's environment (write_conf's set-environment lines): the hub, the
   # cache's TMPDIR (so $FLEET_C is the shell's), the stage — what a row's own
   # jump runs with

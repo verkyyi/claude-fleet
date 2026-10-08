@@ -105,7 +105,11 @@ Q switch-run new sw || fail "C: switch-run new exited non-zero"
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$rec" ] && break; sleep 0.2; done
 grep -qx 'sw|home-session claude' "$rec" || fail "C: 「+ 新会话」 did not open a HOME Claude session on the client" "$(cat "$rec")"; ok
 # the real command when no seam: the one HOME-session primitive
-grep -q '"fleet-shell.sh"), "home-session", "claude"' "$BIN/fleet-quickopen.py" || fail "C: 「+ 新会话」 is not fleet-shell.sh home-session claude"; ok
+grep -q '"fleet-shell.sh"), "home-session", agent]' "$BIN/fleet-quickopen.py" || fail "C: 「+ 新会话」 is not fleet-shell.sh home-session <agent>"; ok
+: > "$rec"
+Q switch-run new:codex sw || fail "C: switch-run new:codex exited non-zero"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$rec" ] && break; sleep 0.2; done
+grep -qx 'sw|home-session claude codex' "$rec" || fail "C: > 新会话 · codex did not open a HOME codex session" "$(cat "$rec")"; ok
 grep -q '"fleet-shell.sh"), "layout"' "$BIN/fleet-quickopen.py" || fail "C: the flip is not fleet-shell.sh layout"; ok
 # 退出 fleet (issue #2349): fleet-shell.sh quit, on the popup's client session
 : > "$rec"
@@ -134,5 +138,55 @@ assert q.load()["seen"] == {}, q.load()
 assert q.ago(0) == "" and q.ago(t0 - 90, t0) == "1m" and q.ago(t0 - 3 * 86400, t0) == "3d"
 PY
 ok
+
+# --- E: ⌘P is one panel of sessions and actions (issue #2365) ----------------------
+# ⌘K / prefix s open it; its `>` lists its own lines (⌘K's tail folded in) first;
+# ⌃R ⌃X ⌃A ⌃E ⌃O map onto the row menu's actions; ⌃O on a row with no 「打开 PR」
+# item opens its PR's (else its issue's) page; an empty query lists the waiting
+# rows first; the list's rows carry 单号 · PR · 回收方式 (rows_text ⇄ parse_rows).
+tmux -S "$SOCK" set-option -g @fleet_layout solo
+out=$(Q panel-cmds)
+[ "$(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')" = "quit new:claude new:codex layout:multi rename-current " ] \
+  || fail "E: > does not start with 退出 · 新会话 claude / codex · the layout flip · 改名当前会话" "$out"; ok
+printf '%s\n' "$out" | grep -qx "quit	退出 fleet（会话在后台继续）	!quit" || fail "E: 退出 fleet is not the client's own quit (#2349)" "$out"; ok
+printf '%s\n' "$out" | grep -qx 'new:codex	新会话 · codex	!new:codex' || fail "E: 新会话 · codex" "$out"; ok
+tmux -S "$SOCK" set-option -g @fleet_layout multi
+Q panel-cmds | grep -q '^layout:solo	切到单会话视图' || fail "E: the multi view offers 切到单会话视图" "$(Q panel-cmds)"; ok
+python3 - "$BIN" <<'PY' || exit 1
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("q", os.path.join(sys.argv[1], "fleet-quickopen.py"))
+q = importlib.util.module_from_spec(spec); spec.loader.exec_module(q)
+# the keys: each one is a row-menu action (COMMANDS) — never a second spelling
+acts = {a for a, _ in q.COMMANDS}
+assert {k: v[0] for k, v in q.ROW_KEYS.items()} == {"\x12": "rename", "\x18": "reap", "\x01": "answer",
+                                                   "\x05": "reappol", "\x0f": "pr"}, q.ROW_KEYS
+assert all(v[0] in acts for v in q.ROW_KEYS.values()), q.ROW_KEYS
+# a row as the list hands it (15 fields) → switch-rows.tsv → the panel's row
+side = [["hdr", "acme/web", "", "acme/web (2)", " "],
+        ["wid:F/issue-12", "needs", "!", "登录页重做", " ", "", "0", "ask", "m4", "#12", "#75✓", "40%", "", "登录页 · 重做", "done:2h"],
+        ["wid:F/issue-13", "idle", "○", "样式", " ", "", "0", "", "m5", "#13", "—", "·", "", "", ""]]
+rows = q.parse_rows(q.rows_text(side))
+r = rows[0]
+assert (r["issue"], r["pr"], r["reap"], r["title"], r["repo"], r["group"]) == \
+    ("12", "#75✓", "done:2h", "登录页 · 重做", "acme/web", "acme/web (2)"), r
+assert (rows[1]["issue"], rows[1]["pr"]) == ("13", ""), rows[1]
+# an old seven-column file still reads
+assert q.parse_rows("@1\tidle\t\tx\tm5\tg\t\n")[0]["issue"] == ""
+assert q.pr_url(r) == "https://github.com/acme/web/pull/75", q.pr_url(r)
+assert q.pr_url(rows[1]) == "https://github.com/acme/web/issues/13", q.pr_url(rows[1])
+assert q.pr_url(dict(rows[1], repo="none")) == ""
+# #单号 and the title find a row
+assert [x["key"] for x, _ in q.rank(rows, "#13", [])] == ["wid:F/issue-13"]
+assert [x["key"] for x, _ in q.rank(rows, "重做", [])] == ["wid:F/issue-12"]
+# an empty query: the rows waiting on you first, whatever the recency
+order = [x["key"] for x, _ in q.rank(rows, "", ["wid:F/issue-13", "wid:F/issue-12"])]
+assert order == ["wid:F/issue-12", "wid:F/issue-13"], order
+PY
+ok
+CONF="$BIN/../conf/tmux-shell.conf"
+for k in 'bind -n User930 ' 'bind s ' 'bind -n User927 ' 'bind / '; do
+  grep -E "^$k" "$CONF" | grep -q -- "fleet-quickopen.py --client '#{client_name}' --session" || fail "E: $k does not open the panel with its client"; ok
+  grep -E "^$k" "$CONF" | grep -q -- '--switch' && fail "E: $k still opens the old switcher"; ok
+done
 
 echo "fleet-client-switcher-selftest: OK ($CHECKS checks)"

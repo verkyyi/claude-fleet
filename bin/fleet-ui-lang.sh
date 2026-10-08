@@ -141,16 +141,12 @@ fleet_ui_t() {
     # a cross-machine certificate while the hub is down (issue #1630): refused at once, with the way round
     # the bar's left end (issue #1779, fleet-client-badge.sh): ⌂ = where the CLIENT runs,
     # and nowhere else — local: machine · terminal; over ssh: machine ← the device in your hand
-    zh:badge_local_fmt)         printf '⌂ %s · %s' "${1:-}" "${2:-}" ;;
-    en:badge_local_fmt)         printf '⌂ %s · %s' "${1:-}" "${2:-}" ;;
-    zh:badge_ssh_fmt)           printf '⌂ %s ← %s' "${1:-}" "${2:-}" ;;
-    en:badge_ssh_fmt)           printf '⌂ %s ← %s' "${1:-}" "${2:-}" ;;
-    zh:badge_bare_fmt)          printf '⌂ %s' "${1:-}" ;;
-    en:badge_bare_fmt)          printf '⌂ %s' "${1:-}" ;;
-    zh:badge_hubdown_fmt)       printf '⌂ %s · 入口连不上' "${1:-}" ;;
-    en:badge_hubdown_fmt)       printf '⌂ %s · hub unreachable' "${1:-}" ;;
-    zh:badge_hubrefused_fmt)    printf '⌂ %s · 入口不认这台电脑 · 请重新扫码（fleet login）' "${1:-}" ;;
-    en:badge_hubrefused_fmt)    printf '⌂ %s · the hub refused this computer · scan again (fleet login)' "${1:-}" ;;
+    zh:badge_user_fmt)          printf '%s' "${1:-}" ;;
+    en:badge_user_fmt)          printf '%s' "${1:-}" ;;
+    zh:badge_hubdown_fmt)       printf '%s · 入口连不上' "${1:-}" ;;
+    en:badge_hubdown_fmt)       printf '%s · hub unreachable' "${1:-}" ;;
+    zh:badge_hubrefused_fmt)    printf '%s · 入口不认这台电脑 · 请重新扫码（fleet login）' "${1:-}" ;;
+    en:badge_hubrefused_fmt)    printf '%s · the hub refused this computer · scan again (fleet login)' "${1:-}" ;;
     zh:badge_rescan_note)       printf '入口不认这台电脑的证书，续期也没用 — 请重新扫码：点左下角，或运行 fleet login' ;;
     en:badge_rescan_note)       printf 'The hub refuses this computer'"'"'s certificate and renewing will not help — scan again: tap the bottom left, or run fleet login' ;;
     zh:badge_updated_fmt)       printf '✓ 已更新到 %s' "${1:-}" ;;
@@ -218,6 +214,24 @@ fleet_ui_t() {
     en:quickopen_cmd_none)      printf 'nothing to do here' ;;
     zh:quickopen_cmd_loading)   printf '读命令…' ;;
     en:quickopen_cmd_loading)   printf 'reading commands…' ;;
+    zh:quickopen_keys)          printf '↵ 切过去  ⌃R 改名  ⌃X 回收  ⌃A 回答  ⌃E 回收方式  ⌃O PR  > 命令  esc 关' ;;
+    en:quickopen_keys)          printf '↵ go  ⌃R rename  ⌃X close  ⌃A answer  ⌃E reap  ⌃O PR  > commands  esc close' ;;
+    zh:quickopen_cmd_keys)      printf '↵ 执行  ↑↓ 选  ⌫ 回到会话  esc 关' ;;
+    en:quickopen_cmd_keys)      printf '↵ run  ↑↓ pick  ⌫ back to sessions  esc close' ;;
+    zh:panel_quit)              printf '退出 fleet（会话在后台继续）' ;;
+    en:panel_quit)              printf 'Quit fleet (the sessions keep running)' ;;
+    zh:panel_new_fmt)           printf '新会话 · %s' "${1:-}" ;;
+    en:panel_new_fmt)           printf 'New session · %s' "${1:-}" ;;
+    zh:panel_multi)             printf '切到多会话视图' ;;
+    en:panel_multi)             printf 'Switch to the multi-session view' ;;
+    zh:panel_solo)              printf '切到单会话视图' ;;
+    en:panel_solo)              printf 'Switch to the one-session view' ;;
+    zh:panel_rename_current)    printf '改名当前会话' ;;
+    en:panel_rename_current)    printf 'Rename the session in view' ;;
+    zh:panel_no_action_fmt)     printf '这一行不能%s' "${1:-}" ;;
+    en:panel_no_action_fmt)     printf 'this row cannot %s' "${1:-}" ;;
+    zh:panel_no_waiting)        printf '没有在问你的会话' ;;
+    en:panel_no_waiting)        printf 'nobody is waiting on you' ;;
     zh:popup_tasks)             printf '任务' ;;
     en:popup_tasks)             printf 'Tasks' ;;
     zh:popup_new_task)          printf '新建任务' ;;
@@ -780,14 +794,14 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:keys_page_cmd)          printf %s '⌘ keys' ;;
     zh:keys_page_new)          printf %s '新任务；再按一次：去编排，再按回来' ;;
     en:keys_page_new)          printf %s 'new task; again: orchestrator, and back' ;;
-    zh:keys_page_quickopen)    printf %s '跳到任意会话；输入 > 是命令' ;;
-    en:keys_page_quickopen)    printf %s 'go to any session; type > for commands' ;;
+    zh:keys_page_quickopen)    printf %s '会话与动作：跳到任意会话，对选中的改名 / 回收 / 回答 / 改回收方式 / 打开 PR；输入 > 是命令' ;;
+    en:keys_page_quickopen)    printf %s 'sessions + actions: go to one; rename / close / answer / reap / PR; > commands' ;;
     zh:keys_page_fold)         printf %s '展开/收起子任务（子任务上：收起父任务）' ;;
     en:keys_page_fold)         printf %s 'open / shut sub-tasks (on one: its parent)' ;;
     zh:keys_page_quit)         printf %s '退出 fleet（会话照常在机器上跑）' ;;
     en:keys_page_quit)         printf %s 'quit fleet (the sessions keep running)' ;;
-    zh:keys_page_switcher)     printf %s '切换会话 · 新会话 · 打开/收起多会话视图' ;;
-    en:keys_page_switcher)     printf %s 'switch session · new · multi-session view on/off' ;;
+    zh:keys_page_switcher)     printf %s '会话与动作，同上（> 里有新会话、切视图、退出）' ;;
+    en:keys_page_switcher)     printf %s 'sessions and actions, as above (> has new session, layout, quit)' ;;
     zh:keys_page_prevnext)     printf %s '上一个 / 下一个会话' ;;
     en:keys_page_prevnext)     printf %s 'previous / next session' ;;
     zh:keys_page_backfwd)      printf %s '后退 / 前进' ;;

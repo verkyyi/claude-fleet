@@ -1,5 +1,10 @@
 #!/bin/bash
 # tmux-status.sh — right side of the tmux status bar.
+# THE CLIENT DRAWS NONE OF IT since issue #2365 (the bar is login · ⟳ · keys):
+# conf/tmux-shell.conf runs it with `part=quiet` for what it does besides
+# drawing — the notification of a new wait, the alerts refresh, the window list
+# — and nothing is printed. What follows is what it still draws for any other
+# caller.
 # IT DRAWS ONLY WHAT WANTS YOUR HAND (issue #1616, EPIC #1615 C1). It is the
 # CLIENT's bar since issue #1714 (conf/tmux-shell.conf): a node's own status line
 # is one static hint (conf/tmux-bar.conf) and runs no job. This side is EMPTY while
@@ -398,6 +403,11 @@ _cun="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/client/note"
 if [ "${FLEET_SHELL:-0}" = 1 ] && [ -f "$_cun" ] && [ -n "$(find "$_cun" -mmin -60 2>/dev/null)" ]; then
     IFS= read -r _cut < "$_cun" && [ -n "$_cut" ] && CU_SEG="${BLUE}${_cut}"
 fi
+
+# --- The client's bar since issue #2365 draws no right end: `part=quiet` ran
+# everything above for what it does (the notification, the alerts refresh, the
+# window list) and prints nothing.
+[ "$STATUS_PART" = quiet ] && exit 0
 
 # --- Output: the segments in their order, nothing at all while all is well.
 MACH_SEG='' HUB_SEG=''

@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# fleet-client-badge-selftest.sh — the status bar's left end, ⌂ = where the client
-# runs (issue #1779, EPIC #1776 C3). Drives bin/fleet-client-badge.sh through the
-# REAL bin/fleet-client-where.sh (its hub read faked by FLEET_CLIENT_WHERE_CMD):
-#   A. three leases  — local iTerm2 / ssh from an iPhone in Termius / no lease
-#   B. hub down      — orange 「⌂ <this machine> · 入口连不上」
+# fleet-client-badge-selftest.sh — the status bar's left end: who is signed in
+# (issue #2365; #1779's ⌂ <machine> · <terminal> before it). Drives
+# bin/fleet-client-badge.sh through the REAL bin/fleet-client-where.sh (its hub
+# read faked by FLEET_CLIENT_WHERE_CMD):
+#   A. the login     — signed in: the login alone, wherever the client runs; no
+#                      lease: the same, orange; the certificate's principal
+#   B. hub down      — orange 「<login> · 入口连不上」
 #   B2. refused     — (#2112) the hub answered 401: orange 「入口不认这台电脑 · 请重新
 #                     扫码（fleet login）」, a `rescan` range a tap turns into fleet login
-#   C. narrow bar    — under 60 columns: ⌂ + the machine only
+#   C. narrow bar    — under 60 columns: the login only
 #   D. English       — the same words off fleet-ui-lang.sh
 #   E. the cache     — one where read per TTL; a width change still redraws
-#   F. wiring        — conf/tmux-shell.conf's status-left runs it; ⌂ only there
+#   F. wiring        — conf/tmux-shell.conf's status-left runs it; no ⌂ anywhere
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -29,32 +31,38 @@ cat "$WORK/lease.json"
 EOF
 chmod +x "$WORK/hubread"
 export FLEET_CLIENT_WHERE_CMD="$WORK/hubread" FLEET_SHELL_SESSION="badge-st-none-$$" FLEET_SHELL_CACHE="$WORK/shell" \
-  FLEET_CLIENT_BADGE_CACHE="$WORK/cache" FLEET_CLIENT_BADGE_HOST="MacBookPro.local" \
+  FLEET_CLIENT_BADGE_CACHE="$WORK/cache" FLEET_CLIENT_BADGE_LOGIN=octocat \
   FLEET_NODE_ALIASES="macmini=m5 mini2=m4 MacBookPro=MacBook" FLEET_UI_LANG=zh
 badge() { FLEET_CLIENT_BADGE_TTL="${TTL:-0}" bash "$BIN/fleet-client-badge.sh" "cw=${CW:-120}"; }
 
-# --- A. three leases ---------------------------------------------------------------
+# --- A. the login --------------------------------------------------------------------
 printf '%s\n' '{"state":"active","lease":{"id":"L1","device":"Verky Mac","os":"macOS","terminal":"iTerm2 3.7.3","via":"local","host":"MacBookPro","caps":["open_url","iterm2"]}}' > "$WORK/lease.json"
-eq "A local iTerm2" "$OK ⌂ MacBook · iTerm2 $TAIL" "$(badge)"
+eq "A local iTerm2 → the login alone" "$OK octocat $TAIL" "$(badge)"
 printf '%s\n' '{"state":"active","lease":{"id":"L2","device":"iPhone","os":"iOS","terminal":"Termius","via":"tailnet","host":"macmini","caps":["link"]}}' > "$WORK/lease.json"
-eq "A ssh from an iPhone in Termius" "$OK ⌂ m5 ← iPhone Termius $TAIL" "$(badge)"
+eq "A ssh from an iPhone → the same: no machine, no terminal" "$OK octocat $TAIL" "$(badge)"
 printf '%s\n' '{"state":"none","lease":null}' > "$WORK/lease.json"
-eq "A no lease → this machine, orange" "$WARN ⌂ MacBook $TAIL" "$(badge)"
+eq "A no lease → the login, orange" "$WARN octocat $TAIL" "$(badge)"
+# the certificate's principal (fleet login) when no seam names it
+mkdir -p "$WORK/ssh" && ssh-keygen -q -t ed25519 -N '' -f "$WORK/ssh/ca" && ssh-keygen -q -t ed25519 -N '' -f "$WORK/ssh/fleet-cert" \
+  && ssh-keygen -q -s "$WORK/ssh/ca" -I t -n monalisa,other -V +1h "$WORK/ssh/fleet-cert.pub" 2>/dev/null
+printf '%s\n' '{"state":"active","lease":{"id":"L1","via":"local","host":"MacBookPro"}}' > "$WORK/lease.json"
+eq "A the certificate's first principal" "$OK monalisa $TAIL" "$(FLEET_CLIENT_BADGE_LOGIN='' FLEET_CERT="$WORK/ssh/fleet-cert" badge)"
+eq "A no certificate → this computer's user" "$OK $(id -un) $TAIL" "$(FLEET_CLIENT_BADGE_LOGIN='' FLEET_CERT="$WORK/none" badge)"
 
 # --- B. hub down ---------------------------------------------------------------------
 printf '#!/bin/bash\nexit 1\n' > "$WORK/hubdown"; chmod +x "$WORK/hubdown"
-eq "B hub out of reach → orange 入口连不上" "$WARN ⌂ MacBook · 入口连不上 $TAIL" "$(FLEET_CLIENT_WHERE_CMD="$WORK/hubdown" badge)"
-eq "B the where itself could not be read → the same" "$WARN ⌂ MacBook · 入口连不上 $TAIL" \
+eq "B hub out of reach → orange 入口连不上" "$WARN octocat · 入口连不上 $TAIL" "$(FLEET_CLIENT_WHERE_CMD="$WORK/hubdown" badge)"
+eq "B the where itself could not be read → the same" "$WARN octocat · 入口连不上 $TAIL" \
   "$(FLEET_CLIENT_BADGE_WHERE_CMD=false badge)"
 
 # --- B2. the hub refused this machine's credential (#2112) ---------------------------
 printf '#!/bin/bash\nexit 4\n' > "$WORK/hubrefused"; chmod +x "$WORK/hubrefused"
 R="#[range=user|rescan]"
-eq "B2 401 → orange 请重新扫码, a tap range" "$R$WARN ⌂ MacBook · 入口不认这台电脑 · 请重新扫码（fleet login） #[norange]$TAIL" \
+eq "B2 401 → orange 请重新扫码, a tap range" "$R$WARN octocat · 入口不认这台电脑 · 请重新扫码（fleet login） #[norange]$TAIL" \
   "$(FLEET_CLIENT_WHERE_CMD="$WORK/hubrefused" badge)"
-eq "B2 English" "$R$WARN ⌂ MacBook · the hub refused this computer · scan again (fleet login) #[norange]$TAIL" \
+eq "B2 English" "$R$WARN octocat · the hub refused this computer · scan again (fleet login) #[norange]$TAIL" \
   "$(FLEET_UI_LANG=en FLEET_CLIENT_WHERE_CMD="$WORK/hubrefused" badge)"
-eq "B2 narrow → ⌂ + machine, no range" "$WARN ⌂ MacBook $TAIL" "$(CW=40 FLEET_CLIENT_WHERE_CMD="$WORK/hubrefused" badge)"
+eq "B2 narrow → the login, no range" "$WARN octocat $TAIL" "$(CW=40 FLEET_CLIENT_WHERE_CMD="$WORK/hubrefused" badge)"
 case "$(cat "$ROOT/conf/tmux-shell.conf")" in
   *"#{==:#{mouse_status_range},rescan}' { run-shell -b \"bash __BIN__/dash-popup.sh --client '#{client_name}'"*"-- bash __BIN__/fleet login"*) eq "B2 a tap on it runs fleet login" 1 1 ;;
   *) eq "B2 a tap on it runs fleet login" "rescan bind" "missing" ;;
@@ -62,12 +70,11 @@ esac
 
 # --- C. narrow -----------------------------------------------------------------------
 printf '%s\n' '{"state":"active","lease":{"device":"iPhone","terminal":"Termius","via":"tailnet","host":"m5"}}' > "$WORK/lease.json"
-eq "C narrow (59) → ⌂ + machine" "$OK ⌂ m5 $TAIL" "$(CW=59 badge)"
-eq "C 60 is wide" "$OK ⌂ m5 ← iPhone Termius $TAIL" "$(CW=60 badge)"
-eq "C narrow + hub down → orange ⌂ + machine" "$WARN ⌂ MacBook $TAIL" "$(CW=40 FLEET_CLIENT_WHERE_CMD="$WORK/hubdown" badge)"
+eq "C narrow (59) → the login" "$OK octocat $TAIL" "$(CW=59 badge)"
+eq "C narrow + hub down → orange login" "$WARN octocat $TAIL" "$(CW=40 FLEET_CLIENT_WHERE_CMD="$WORK/hubdown" badge)"
 
 # --- D. English ----------------------------------------------------------------------
-eq "D English hub down" "$WARN ⌂ MacBook · hub unreachable $TAIL" "$(FLEET_UI_LANG=en FLEET_CLIENT_WHERE_CMD="$WORK/hubdown" badge)"
+eq "D English hub down" "$WARN octocat · hub unreachable $TAIL" "$(FLEET_UI_LANG=en FLEET_CLIENT_WHERE_CMD="$WORK/hubdown" badge)"
 
 # --- E. the cache --------------------------------------------------------------------
 rm -rf "$WORK/cache"
@@ -82,18 +89,18 @@ TTL=600 FLEET_CLIENT_WHERE_CMD="$WORK/counted" badge >/dev/null
 printf '%s\n' '{"state":"none","lease":null}' > "$WORK/lease.json"
 out=$(TTL=600 CW=40 FLEET_CLIENT_WHERE_CMD="$WORK/counted" badge)
 eq "E within the TTL: one where read" "1" "$(wc -l < "$WORK/reads" | tr -d ' ')"
-eq "E a width change redraws off the cache" "$OK ⌂ m5 $TAIL" "$out"
-eq "E TTL 0 reads again" "$WARN ⌂ MacBook $TAIL" "$(TTL=0 FLEET_CLIENT_WHERE_CMD="$WORK/counted" badge)"
+eq "E a width change redraws off the cache" "$OK octocat $TAIL" "$out"
+eq "E TTL 0 reads again" "$WARN octocat $TAIL" "$(TTL=0 FLEET_CLIENT_WHERE_CMD="$WORK/counted" badge)"
 
 # --- F. wiring -----------------------------------------------------------------------
-# (any layout but the one-session view's, issue #2265 — that one has no badge)
-left='set -g status-left "#{?#{==:#{@fleet_layout},solo},#{E:@fleet_hint_solo},#(bash __BIN__/fleet-client-badge.sh cw=#{client_width})'
+# (every layout — the one-session view's too, issue #2365)
+left='set -g status-left "#(bash __BIN__/fleet-client-badge.sh cw=#{client_width})'
 eq "F status-left runs the badge" '1' "$(grep -cF "$left" "$ROOT/conf/tmux-shell.conf")"
 eq "F the badge rides the client package" '1' \
   "$(grep -cx 'bin/fleet-client-badge.sh' "$ROOT/tokenledger/internal/api/fleetclient/manifest")"
-# ⌂ is the client's place and nothing else on a bar: the node's bar and the
-# client's status-right never draw it
+# the bar is three things now (issue #2365): no ⌂ <machine> on either bar
 eq "F no ⌂ on the node bar" '0' "$(grep -v '^ *#' "$ROOT/conf/tmux-bar.conf" | grep -c '⌂')"
+eq "F no ⌂ in the badge's words" '0' "$(grep -c 'badge_.*⌂' "$BIN/fleet-ui-lang.sh")"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'fleet-client-badge selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

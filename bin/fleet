@@ -46,6 +46,16 @@
 #                               credential proxy, no credential in it (#2136)
 #   fleet run claude|codex [args]
 #                               旧写法 of `fleet claude|codex --here`
+#   fleet ls [--json]           your sessions: 名称 · 状态 · 单号 · 机器 · PR ·
+#                               回收方式 (#2365 — everything the menu does, a
+#                               command does too; the client must be running)
+#   fleet show|open <会话>      one session's fields · the client onto it
+#   fleet rename <会话> <新名>  · fleet close <会话> [--yes]
+#   fleet reap <会话> <方式>    · fleet answer [<会话>] [<回答>]
+#                               <会话> = a name (or part), #单号, or the key;
+#                               two matches = the candidates and exit 4, never
+#                               a guess. `fleet open <url|:port|file>` and
+#                               `fleet show <file>` are what they were
 #
 #                    fleet claude          fleet claude --here
 #     runs on        a fleet machine       this computer
@@ -121,7 +131,7 @@ fi
 cmd=${1-}
 case $cmd in
   -h|--help|help)
-    sed -n '2,65p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,75p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     client ;;
@@ -169,6 +179,10 @@ case $cmd in
     exec bash "$here/fleet-shell.sh" quit "$@" ;;
   status)
     exec bash "$here/fleet-shell.sh" running --say ;;
+  # the sessions from the command line (issue #2365) — `fleet open <url|:port|file>`
+  # and `fleet show <file>` still go to fleet-open.sh / fleet-show.sh from there
+  ls|show|open|rename|close|reap|answer)
+    exec python3 "$here/fleet-session-cli.py" "$@" ;;
 esac
 for ext in py sh; do
   if [ -x "$here/fleet-$cmd.$ext" ]; then
