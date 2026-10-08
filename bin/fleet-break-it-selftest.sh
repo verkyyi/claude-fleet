@@ -78,6 +78,9 @@
 #                                                   (claimSpare, replenishSpares; go test, when a toolchain is here)
 #   trust-name-borrowed                             tokenledger/internal/api fleet_trust.go (nodeTrust) + fleet_node_desired.go
 #                                                   (go test, when a toolchain is here)
+#   lease-unseparated-user                          tokenledger/internal/api fleet_creds.go (credsepGated) + fleet_join.go
+#                                                   (/v1/node/self credsep_gate), internal/agent node_credsep.go,
+#                                                   bin/fleet-cred-proxy.py (Router.refresh); go test, when a toolchain is here
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 #   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
@@ -3839,6 +3842,42 @@ drill_spare_login_empty() {
     esac
   else
     WHAT='没有 go：六条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- lease-unseparated-user (#2295, EPIC #2293 C2): a user's login whose
+# credential separation did not happen (or an agent too old to say) must not be
+# leased a real token — the hub refuses 「拒发：未隔离」 and tells the node's
+# proxy to route every session central, so they still work. Admin / operator
+# logins lease as before.
+drill_lease_unseparated_user() {
+  CAP=120; local t0 out rc api agent fa fg
+  api='TestLeaseCredsepGate TestLeaseCredsepGateOnlyForUsers TestNodeSelfCarriesCredsepGate'
+  agent='TestCredsepJudge TestCredsepProbeCaches'
+  fa="$ROOT/tokenledger/internal/api/fleet_credsep_test.go"
+  fg="$ROOT/tokenledger/internal/agent/node_credsep_test.go"
+  t0=$(now)
+  for out in $api; do
+    grep -q "^func $out(" "$fa" 2>/dev/null || { WHY="the hub half's test $out is not in ${fa#$ROOT/}"; return 1; }
+  done
+  for out in $agent; do
+    grep -q "^func $out(" "$fg" 2>/dev/null || { WHY="the node half's test $out is not in ${fg#$ROOT/}"; return 1; }
+  done
+  grep -q 'credsep_gate' "$BIN/fleet-cred-proxy.py" \
+    || { WHY="fleet-cred-proxy.py no longer routes a credsep-gated login central"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$api" "$agent" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='普通用户未隔离 / 不报字段 → 403「拒发：未隔离」、/self 带 credsep_gate（代理走 central）；隔离后 200；管理员与非 GitHub 用户不受影响；节点按 status+check 判定并 5 分钟缓存（go test 五条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }

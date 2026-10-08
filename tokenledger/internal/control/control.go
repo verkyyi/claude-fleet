@@ -138,6 +138,15 @@ const CapCredsep = "credsep"
 // CredsepSeparated is AccountResult.Credsep for a login opened separated.
 const CredsepSeparated = "separated"
 
+// Heartbeat.Credsep's other words (claude-fleet#2295): CredsepNot — the
+// login is not separated, or it is but `fleet-credsep.sh check` warns;
+// CredsepUnknown — the script is missing or could not be run. The hub leases
+// a role=user person's login real tokens only on CredsepSeparated.
+const (
+	CredsepNot     = "not"
+	CredsepUnknown = "unknown"
+)
+
 // Relay kinds.
 const (
 	RelayChildReport = "child_report"
@@ -459,6 +468,13 @@ type Heartbeat struct {
 	// `fleet connect`, which measures each and picks the best. Absent on an
 	// agent older than #1414, or one that knows no route.
 	Routes []NodeRoute `json:"routes,omitempty"`
+
+	// Credsep is this login's credential separation as `fleet-credsep.sh
+	// status` + `check` judge it (claude-fleet#2295, EPIC #2293 共同约定 1):
+	// CredsepSeparated only when status says separated AND check passes,
+	// CredsepNot / CredsepUnknown otherwise. Absent from an agent older than
+	// #2295 — the hub reads that as not separated for a role=user person.
+	Credsep string `json:"credsep,omitempty"`
 
 	// Ready says whether this login can take a NEW session
 	// (claude-fleet#1475): gh is logged in, a Claude or Codex credential is

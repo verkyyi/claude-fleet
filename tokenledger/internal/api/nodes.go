@@ -585,6 +585,13 @@ type NodeView struct {
 	// Desired pairs the hub's desired-state version with the one the node
 	// reports it reached; absent when neither exists.
 	Desired *DesiredView `json:"desired,omitempty"`
+	// Credsep is the login's own credential-separation word from its newest
+	// heartbeat (claude-fleet#2295): separated | not | unknown, absent from
+	// an older agent. CredsepGate is set only in /v1/node/self's answer:
+	// "not_separated" when the hub leases this login no token, so its proxy
+	// routes every session central.
+	Credsep     string `json:"credsep,omitempty"`
+	CredsepGate string `json:"credsep_gate,omitempty"`
 }
 
 // DesiredView is one node's 期望 / 实际 pair on the roster.
@@ -849,6 +856,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.MaxSessions, v.CapSessions = hb.MaxSessions, hb.CapSessions
 		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
+		v.Credsep = hb.Credsep
 		for _, f := range hb.Fleets {
 			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count, Error: f.Error})
 		}
