@@ -37,6 +37,7 @@ const (
 	SpotKey         = "fleet.spot"
 	RoutesExtraKey  = "fleet.routes_extra"
 	MachineNamesKey = "fleet.machine_names"
+	// SparesKey / SpareMaxKey are fleet_spare.go's (claude-fleet#2263).
 
 	// userSettingPrefix / machineLoginSuffix make user.<id>.machine_login:
 	// the OS login that is a person's on the machines. <id> is the principal
@@ -134,6 +135,10 @@ var hubSettings = map[string]hubSetting{
 			}
 			return strings.TrimSpace(v), ""
 		}},
+	SparesKey: {def: "off", help: "keep spare logins opened on each host machine, so a newcomer's first sign-in is ready at once (each is a macOS user)",
+		check: onOff(SparesKey, "off")},
+	SpareMaxKey: {def: "5", help: "at most this many spare logins per machine, within fleet.node_user_cap.<machine> (default 10) minus the logins handed out",
+		check: checkSpareMax},
 	MachineNamesKey: {def: "", help: "the short name every client shows a machine by: hostname=name, comma-separated (macmini=m5, mini2=m4)",
 		check: func(_ *Server, v string) (string, string) {
 			names, err := parseMachineNames(v)

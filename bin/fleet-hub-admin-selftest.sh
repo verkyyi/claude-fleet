@@ -15,6 +15,8 @@
 #   H  no hub configured → exit 3
 #   L  fleet hub invite alice → POST {github_login}; prints the command once
 #      (claude-fleet#2261); --list / --revoke <id>
+#   M  fleet hub machines → GET /v1/nodes; 备用 N · 已用 M / 上限 K while spares are
+#      on, a hint while off; fleet hub accounts lists spares apart (claude-fleet#2263)
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd -P)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/hub-admin-selftest.XXXXXX")
@@ -70,7 +72,17 @@ class H(BaseHTTPRequestHandler):
                                              "login": "zx", "hosts": ["macmini", "mini2"], "moved": {}})
                 return self.answer(200, {"accounts": []})
             return self.answer(200, {"principals": [{"principal_id": "zx", "login": "zx", "display_name": ""}],
-                                     "accounts": [{"principal_id": "zx", "hostname": "macmini", "state": "active"}]})
+                                     "accounts": [{"principal_id": "zx", "hostname": "macmini", "state": "active"}],
+                                     "spares": [{"principal_id": "spare:macmini:abcd1234", "login": "flk2m9qa",
+                                                 "hostname": "macmini", "state": "active"}]})
+        if u.path == "/v1/nodes":
+            spare = settings.get("fleet.spares") == "on"
+            ms = [{"hostname": "macmini", "alias": "m5", "status": "online", "sessions": 4, "load1": 2.0, "ncpu": 8},
+                  {"hostname": "mini2", "status": "maintenance", "sessions": None, "load1": 0, "ncpu": 0}]
+            if spare:
+                ms[0].update(spare=1, logins_used=2, login_cap=10)
+                ms[1].update(spare=0, logins_used=9, login_cap=9)
+            return self.answer(200, {"machines": ms, "nodes": []})
         if u.path == "/v1/fleet/invites":
             if self.command == "POST":
                 b = json.loads(body or "{}")
@@ -214,6 +226,20 @@ rv=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/invites ]    && [ "$(field "$r" body)" = '{"github_login": "alice"}' ]    && grep -q 'GitHub 用户 alice' "$WORK/out" && grep -qF 'curl -fsSL http://h/i/secretcodesecretcode | sh' "$WORK/out"    && printf '%s\n' "$l" | grep -q '^inv_abc .*used .*anyone.*verkyyi → gh:300$'    && [ "$v" = 'revoked inv_abc' ] && [ "$(field "$rv" query)" = id=inv_abc ]; then
   ok "L fleet hub invite → POST {github_login}, the command printed; --list; --revoke"
 else bad "L rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l revoke=$v"; fi
+
+# M — fleet hub machines (claude-fleet#2263): spares off, then on
+off=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub machines 2>&1); rc1=$?
+r=$(last)
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub set fleet.spares on >/dev/null 2>&1
+on=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub machines 2>&1); rc2=$?
+acc=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub accounts 2>&1)
+if [ "$rc1" = 0 ] && [ "$rc2" = 0 ] && [ "$(field "$r" method)" = GET ] && [ "$(field "$r" path)" = /v1/nodes ] \
+   && printf '%s\n' "$off" | grep -q '备用账号没开' && ! printf '%s\n' "$off" | grep -q '备用 [0-9]' \
+   && printf '%s\n' "$on" | grep -q '^m5 (macmini) .*online .*4 .*0\.25 .*备用 1 · 已用 2 / 上限 10$' \
+   && printf '%s\n' "$on" | grep -q '^mini2 .*maintenance .*? .*备用 0 · 已用 9 / 上限 9$' \
+   && printf '%s\n' "$acc" | grep -q '^spare:macmini:abcd1234 .*flk2m9qa .*macmini:active$'; then
+  ok "M fleet hub machines → GET /v1/nodes, 备用 N per machine (hint while off); accounts lists spares apart"
+else bad "M rc=$rc1/$rc2 req=$r off=$off on=$on acc=$acc"; fi
 
 echo "fleet-hub-admin-selftest: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

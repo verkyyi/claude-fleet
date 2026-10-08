@@ -848,6 +848,9 @@ is one `hub_audit` row: who, when, old → new.
 | `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
 | `fleet.machine_names` | — | the short name every client shows a machine by, `macmini=m5,mini2=m4` (claude-fleet#1706); wins over a `CCQUOTA_FLEET_ROUTES` alias, rides `/v1/fleet/routes` → each client's `FLEET_NODE_ALIASES`, and `/v1/nodes` → `machines[].alias` |
+| `fleet.spares` | off | keep spare logins opened on every host machine (claude-fleet#2263): a newcomer's first sign-in is handed a ready one — recorded as theirs, never renamed — instead of waiting for one to be made. Only on a machine whose admin node opens logins credential-separated (`credsep`, claude-fleet#2294), and a spare whose create did not come back `separated` is never handed out (and stops that machine's refill until `forget`). Refilled on the admin beat only when the machine is fit (online, not 维护中, load / memory inside the placement thresholds, its admit gate open); 维护中 or under pressure it only shrinks. Each spare is a macOS user (measured idle: ~9 processes, 60–75 MB, 0.25–0.9 GB): turn it on once you have agreed to that. `fleet hub machines` shows 备用 N · 已用 M / 上限 K |
+| `fleet.spare_max` | 5 | spares per machine, at most — within `fleet.node_user_cap.<machine>` − the logins handed out there |
+| `fleet.node_user_cap.<machine>` | 10 | how many logins the machine may hold (handed out + spare) |
 | `user.<id>.machine_login` | — | `CCQUOTA_FLEET_PRINCIPAL_LOGINS`, no longer read (`<id>` = a GitHub ID, `583231` or `gh:583231`; `none` = no login) |
 | `user.<GitHub ID>.lang` | — | the account's page language (claude-fleet#2033): `zh-CN` \| `en` |
 

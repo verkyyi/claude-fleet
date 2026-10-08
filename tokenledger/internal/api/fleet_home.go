@@ -283,7 +283,13 @@ func (s *Server) handleFleetHome(w http.ResponseWriter, r *http.Request) {
 	if err != nil && pid != "" {
 		// No active login (claude-fleet#2069): one being opened is "wait a
 		// minute", not "forbidden" — the client holds and asks again.
-		if st := s.accountStateOf(pid, now); st != nil && st.State == "opening" {
+		st := s.accountStateOf(pid, now)
+		if st == nil {
+			// The look itself placed them on a ready spare login
+			// (claude-fleet#2263): they hold an active one now — pick again.
+			out, err = s.homePick(pid, req.Last, now)
+			out.Hub = s.hubURL(r)
+		} else if st.State == "opening" {
 			w.Header().Set("Cache-Control", "no-store")
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 				"error": "正在为你开机器，约 " + strconv.Itoa(st.EtaS) + " 秒",

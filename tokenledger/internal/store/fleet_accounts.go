@@ -256,10 +256,11 @@ func (s *Store) Principal(id string) (*Principal, error) {
 	return &p, nil
 }
 
-// Principals lists everyone, by login.
+// Principals lists everyone, by login. A spare login (claude-fleet#2263) is
+// nobody yet and is left out.
 func (s *Store) Principals() ([]Principal, error) {
 	rows, err := s.read.Query(`SELECT principal_id, login, display_name, created_at, last_login_at
-		FROM fleet_principals ORDER BY login`)
+		FROM fleet_principals WHERE principal_id NOT LIKE ? ORDER BY login`, spareLikePattern)
 	if err != nil {
 		return nil, err
 	}

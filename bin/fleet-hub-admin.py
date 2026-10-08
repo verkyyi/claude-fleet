@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fleet hub set|get|unset|settings|users|accounts|invite — the hub's settings, people list, login records and invites (claude-fleet#1986).
+"""fleet hub set|get|unset|settings|users|accounts|invite|machines — the hub's settings, people list, login records, invites and machines (claude-fleet#1986).
 
     fleet hub settings                   every hub setting: what applies, from where
     fleet hub get <key>                  one setting's value
@@ -18,10 +18,12 @@
                                          (7 days, used once; only that GitHub user if named)
     fleet hub invite --list              every invite and its state
     fleet hub invite --revoke <id>       stop an unused one
+    fleet hub machines                   every machine: status, sessions, load, and its logins:
+                                         备用 N · 已用 M / 上限 K (fleet.spares, claude-fleet#2263)
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
-fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names
-user.<id>.machine_login (and the fleet.* keys PUT /v1/fleet/settings already took).
+fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names fleet.spares fleet.spare_max
+fleet.node_user_cap.<machine> user.<id>.machine_login (and the fleet.* keys PUT /v1/fleet/settings already took).
 
 Auth, read from the environment and never written down: CCQUOTA_VIEWER_TOKEN
 (the operator's token), else FLEET_HUB_SESSION — the value of the `ccq_sess`
@@ -45,6 +47,7 @@ SETTINGS_PATH = "/v1/fleet/settings"
 USERS_PATH = "/v1/fleet/users"
 ACCOUNTS_PATH = "/v1/fleet/accounts"
 INVITES_PATH = "/v1/fleet/invites"
+NODES_PATH = "/v1/nodes"
 MIGRATED = "hub.legacy_migrated."
 
 
@@ -252,6 +255,34 @@ def invite_main(a):
     print("撤销：fleet hub invite --revoke %s" % resp.get("id", ""))
 
 
+# --- machines (claude-fleet#2263) ----------------------------------------------
+
+def machines_main(a):
+    resp = call(a, "GET", NODES_PATH)
+    if a.json:
+        print(json.dumps(resp, indent=2, ensure_ascii=False))
+        return
+    rows = resp.get("machines") or []
+    spares_on = any(m.get("spare") is not None for m in rows)
+    fmt = "%-22s %-12s %-9s %-10s %s"
+    print(fmt % ("machine", "status", "sessions", "load/core", "账号" if spares_on else ""))
+    for m in rows:
+        name = m.get("hostname", "")
+        if m.get("alias"):
+            name = "%s (%s)" % (m["alias"], name)
+        load = "-"
+        if m.get("ncpu"):
+            load = "%.2f" % (float(m.get("load1") or 0) / m["ncpu"])
+        sess = m.get("sessions")
+        spare = m.get("spare")
+        logins = ""
+        if spare is not None:
+            logins = "备用 %d · 已用 %s / 上限 %s" % (spare, m.get("logins_used", "?"), m.get("login_cap", "?"))
+        print(fmt % (name, m.get("status", ""), "?" if sess is None else sess, load, logins))
+    if not spares_on:
+        print("\n备用账号没开（fleet hub set fleet.spares on 打开；每个备用都是那台电脑上的一个 macOS 账号）")
+
+
 # --- login records -------------------------------------------------------------
 
 def accounts_main(a):
@@ -268,6 +299,13 @@ def accounts_main(a):
         for p in resp.get("principals") or []:
             pid = p.get("principal_id", "")
             print(fmt % (pid, p.get("login", ""), p.get("display_name", "") or "-", " ".join(by.get(pid, [])) or "-"))
+        spares = resp.get("spares") or []
+        if spares:
+            # opened ahead of a newcomer (claude-fleet#2263); `forget` takes the principal
+            print("\nspare logins (备用):")
+            for ac in spares:
+                print(fmt % (ac.get("principal_id", ""), ac.get("login", ""), "-",
+                             "%s:%s" % (ac.get("hostname"), ac.get("state"))))
         return
     if a.action == "rekey":
         if not a.principal or not a.to:
@@ -330,6 +368,7 @@ def main(argv):
     iv.add_argument("login", nargs="?", help="only this GitHub user may use it")
     iv.add_argument("--list", action="store_true", help="every invite and its state")
     iv.add_argument("--revoke", metavar="ID", help="stop an unused invite")
+    sub.add_parser("machines", parents=[common], help="every machine, with its spare logins")
     a = ap.parse_args(argv)
     if a.cmd in (None, "settings"):
         settings_list(a)
@@ -343,6 +382,8 @@ def main(argv):
         accounts_main(a)
     elif a.cmd == "invite":
         invite_main(a)
+    elif a.cmd == "machines":
+        machines_main(a)
     else:
         if a.action == "rm":
             a.action = "remove"

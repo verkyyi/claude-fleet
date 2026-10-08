@@ -239,6 +239,11 @@ type Server struct {
 	// twice by two triggers racing.
 	accountsMu sync.Mutex
 
+	// spareMu / spareScanAt pace the spare-login refill (claude-fleet#2263):
+	// one scan per spareScanEvery, whichever beat comes first.
+	spareMu     sync.Mutex
+	spareScanAt time.Time
+
 	// relayLocks serialises relay dispatch per target endpoint
 	// (claude-fleet#1421), so two heartbeat triggers never push one relay
 	// twice in the same instant.

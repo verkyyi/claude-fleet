@@ -150,6 +150,14 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 	if len(hosts) == 0 {
 		return nil
 	}
+	if claimed := s.claimSpare(principal, displayName, actor, hosts, now); claimed != "" {
+		// A ready spare on one of their machines is theirs now
+		// (claude-fleet#2263); any other machine opens the same name.
+		hosts = dropHost(hosts, claimed)
+		if len(hosts) == 0 {
+			return nil
+		}
+	}
 	p, err := s.Store.EnsurePrincipalAs(principal, displayName, s.preferredLogin(principal, displayName),
 		control.MaxLoginLen, control.ValidLogin, now)
 	if err != nil {
@@ -267,8 +275,13 @@ func (s *Server) leastBusyMachine(now time.Time) string {
 		}
 		return m.Load1 / float64(m.NCPU)
 	}
+	spare := s.spareReadyHosts()
 	sort.SliceStable(fit, func(a, b int) bool {
 		fa, fb := fit[a], fit[b]
+		// A ready spare first (claude-fleet#2263): the newcomer is in at once.
+		if sa, sb := spare[strings.ToLower(fa.Hostname)] > 0, spare[strings.ToLower(fb.Hostname)] > 0; sa != sb {
+			return sa
+		}
 		if ra, rb := len(fa.Repos) > 0, len(fb.Repos) > 0; ra != rb {
 			return ra
 		}
@@ -532,6 +545,10 @@ func (s *Server) applyAccountResult(ctx context.Context, conn *websocket.Conn, e
 	}
 	state, detail := store.AccountFailed, res.Detail
 	switch {
+	case res.OK && res.Op == control.AccountCreate && res.Credsep != control.CredsepSeparated && s.isSpareOp(m.OpID):
+		// A spare that is not credential-separated is never handed out
+		// (claude-fleet#2263): the login exists, but it is failed here.
+		detail = "spare opened without credential separation (credsep=" + res.Credsep + "); not handed out. " + detail
 	case res.OK && res.Op == control.AccountCreate:
 		state = store.AccountActive
 	case res.OK && res.Op == control.AccountRemove:
@@ -606,6 +623,9 @@ func (s *Server) handleFleetMe(w http.ResponseWriter, r *http.Request) {
 type FleetAccountsView struct {
 	Principals []store.Principal    `json:"principals"`
 	Accounts   []store.FleetAccount `json:"accounts"`
+	// Spares are the spare logins (claude-fleet#2263), apart from anyone's;
+	// absent when there are none. `forget` takes their principal_id.
+	Spares []store.FleetAccount `json:"spares,omitempty"`
 }
 
 // FleetAccountRequest is the body of POST /v1/fleet/accounts.
@@ -642,13 +662,21 @@ func (s *Server) handleFleetAccounts(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		as, err := s.Store.FleetAccounts("")
+		all, err := s.Store.FleetAccounts("")
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		view := FleetAccountsView{Principals: ps, Accounts: []store.FleetAccount{}}
+		for _, a := range all {
+			if store.IsSparePrincipal(a.PrincipalID) {
+				view.Spares = append(view.Spares, a)
+			} else {
+				view.Accounts = append(view.Accounts, a)
+			}
+		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, http.StatusOK, FleetAccountsView{Principals: ps, Accounts: as})
+		writeJSON(w, http.StatusOK, view)
 	case http.MethodPost:
 		var req FleetAccountRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
