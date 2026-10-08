@@ -518,6 +518,8 @@ FLEET_CLIENT_LAYOUT                knob: the client's layout, fleet.conf [client
 FLEET_HOME_SHELL                   seam: the client script fleet-home-session.sh drives (fleet-shell.sh; fleet-home-session-selftest.sh, #2264)
 FLEET_HOME_OPEN_CMD                seam: what turns the stage onto a placed HOME session's row (fleet-remote-view.sh open; fleet-shell.sh home-session, #2264)
 FLEET_HOME_OPEN_WAIT               knob: seconds a placed HOME session's row is waited for on the list before the stage is left as it is (fleet-shell.sh home-session, 60, #2264)
+FLEET_HOME_FAILED                  handoff: where home-session writes why a newcomer's first session did not open, set by first_home (fleet-shell.sh, #2240)
+FLEET_HOME_FIRST_RETRY             knob: seconds before first_home tries a newcomer's first session once more after it did not open (fleet-shell.sh, 60, #2240)
 FLEET_SOLO_NEW_CMD                 seam: what a solo client's fresh start runs when the session it left is gone (fleet-shell.sh home-session claude; fleet-shell.sh solo_resume, #2265)
 FLEET_SOLO_ATTACH                  seam: 0 = fleet-shell.sh solo starts the view's own server and prints its socket, no attach (#2349)
 FLEET_SOLO_WATCH_EVERY             seam: how often fleet-shell.sh solo's watcher reads the row's state (1 s; the selftest's 0.2, #2349)
