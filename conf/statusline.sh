@@ -15,14 +15,25 @@
 #   .context_window.context_window_size  → @ctx_limit  the window SIZE — the only
 #                                           place the fleet can learn it (#477)
 #   those two + the fleet's handoff lines → @ctx_band   ok | watch | handoff — the
-#                                           header's colour (#1452). Same bands as
-#                                           fleet-context.sh: with
+#                                           auto-handoff bands (#1452). Same bands
+#                                           as fleet-context.sh: with
 #                                           FLEET_AUTO_HANDOFF_PCT (or _TOKENS,
 #                                           converted against @ctx_limit the way
 #                                           set-claude-state.sh does, #1317) the
 #                                           handoff line is red and 15 points below
 #                                           it is yellow (unset ⇒ 80, #1571); with
 #                                           it 0 and no _TOKENS, 80 / 50.
+#   100 - @ctx_pct                       → @ctx_left   the context LEFT, % (issue
+#                                           #2431: what the header, `fleet ls` and
+#                                           the node's inventory show — computed
+#                                           here once, never by a reader)
+#   the reading's time                   → @ctx_ts     epoch seconds of the newest
+#                                           context reading (#2431): the header
+#                                           greys a reading older than 5 minutes
+#                                           and says how old. Re-stamped when a
+#                                           context stamp changed, else at most
+#                                           once per FLEET_CTX_TS_GRAIN (60 s), so
+#                                           an idle pane still costs nothing.
 #   .model.display_name                  → @model      e.g. "Opus 5.5" (#1452)
 #   .effort.level                        → @effort     low … max — present only
 #                                           when the model has an effort level;
@@ -31,9 +42,9 @@
 #   .rate_limits.five_hour / .seven_day  → @rl5h @rl7d @rl_reset @rl_ts (#1267: the
 #                                           quota watch merges them per @cc_account;
 #                                           both windows or nothing)
-#   (mod feed only, issue #1459)         → @ctx_src mod  beside @ctx_pct, and
-#                                           @rl_src mod beside the @rl* set — who
-#                                           fed the bus (bin/fleet-statusline.sh)
+#   (mod / codex feeds, issues #1459,    → @ctx_src mod | codex  beside @ctx_pct,
+#    #2431)                                 and @rl_src mod beside the @rl* set —
+#                                           who fed the bus (bin/fleet-statusline.sh)
 #
 # Cost per render: one jq pass, one tmux read, and at most ONE tmux write chain —
 # a stamp is written only when its value CHANGED since the last render, so an idle
@@ -78,6 +89,17 @@
 # (300 s) the other two feeders leave the @rl* set alone. No proxy (the
 # default) ⇒ no @rl_src proxy ⇒ both behave byte for byte as before.
 #
+# A FOURTH FEEDER, FOR A CODEX SESSION (issue #2431). bin/fleet-codex-session.py
+# (the Codex hook) used to stamp @ctx_pct / @ctx_limit / @cc_model itself — no
+# band, no effort, a model the header never read. It now feeds this script:
+#
+#   statusline.sh --from codex pct=N limit=N model=M effort=E
+#       the same fields as the mod's (`ctx_pct=` / `ctx_limit=` are accepted too),
+#       stamped the same way — @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts
+#       @model @effort — with @ctx_src codex. So a Codex window and a Claude window
+#       read the same on the header, in the inventory and on `fleet ls`, and the
+#       bands and the rounding are still computed in ONE place.
+#
 # Outside tmux there is no bus: nothing is stamped and nothing is printed. The
 # old visible line's cwd + git-branch segments went with it (#1452 — the window
 # name and the task bar show both), so this never runs git.
@@ -88,14 +110,14 @@ if [[ "${1:-}" == --from ]]; then FROM="${2:-}"; shift 2; fi
 
 US=$'\x1f'   # field separator — never whitespace, so `read` keeps EMPTY fields
 
-if [[ "$FROM" == mod || "$FROM" == proxy ]]; then
-  # ── the mod's / the proxy's reading: key=value argv, no stdin ───────────────
+if [[ "$FROM" == mod || "$FROM" == proxy || "$FROM" == codex ]]; then
+  # ── the mod's / the proxy's / the Codex hook's reading: key=value argv, no stdin
   [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || exit 0
   CTX_PCT='' CTX_SIZE='' MODEL='' EFFORT='' RL5='-' RL7='-' RLR5='-' RLR7='-' RLTS=''
   for kv in "$@"; do
     case "$kv" in
-      ctx_pct=*)   CTX_PCT=${kv#*=} ;;
-      ctx_limit=*) CTX_SIZE=${kv#*=} ;;
+      ctx_pct=*|pct=*)     CTX_PCT=${kv#*=} ;;
+      ctx_limit=*|limit=*) CTX_SIZE=${kv#*=} ;;
       model=*)     MODEL=${kv#*=} ;;
       effort=*)    EFFORT=${kv#*=} ;;
       rl5h=*)      RL5=${kv#*=} ;;
@@ -139,9 +161,10 @@ fi
 # ── what this render wants on the bus ───────────────────────────────────────
 # '' = leave the option as it is (no reading this render); the band / effort
 # rules below are the only places '' means UNSET.
-want_pct='' want_limit='' want_band=''
+want_pct='' want_limit='' want_band='' want_left=''
 if [[ "$CTX_PCT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   want_pct=$(printf '%.0f' "$CTX_PCT")
+  want_left=$(( 100 - want_pct )); (( want_left < 0 )) && want_left=0   # issue #2431
   [[ "$CTX_SIZE" =~ ^[0-9]+(\.[0-9]+)?$ ]] && want_limit=${CTX_SIZE%%.*}
 
   # The handoff lines, read the CHEAP way — never by sourcing fleet-lib (≈200 ms
@@ -198,12 +221,12 @@ fi
 # older tmux prints a control character as `_` to a client it does not take for
 # UTF-8, so the proxy-wins rule below must not hang on the \x1f split.
 CUR=$(tmux display-message -p -t "$TMUX_PANE" \
-        "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}" 2>/dev/null)
+        "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}${US}#{@ctx_left}${US}#{@ctx_ts}" 2>/dev/null)
 cur_rlsrc='' cur_rlts=''
 if [[ "$CUR" =~ ^([^ ]+)\ ([^ ]+)\ (.*)$ ]]; then
   cur_rlsrc=${BASH_REMATCH[1]}; cur_rlts=${BASH_REMATCH[2]}; CUR=${BASH_REMATCH[3]}
 fi
-IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort cur_src <<< "$CUR"
+IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort cur_src cur_left cur_ts <<< "$CUR"
 
 # The proxy's quota reading wins while it is fresh (issue #1978): a status-line
 # render or a mod measure then leaves the @rl* set as the proxy stamped it.
@@ -225,7 +248,17 @@ if [[ -n "$want_pct" ]]; then
   stamp @ctx_pct  "$want_pct"  "$cur_pct"
   [[ -n "$want_limit" ]] && stamp @ctx_limit "$want_limit" "$cur_limit"
   stamp @ctx_band "$want_band" "$cur_band"
-  [[ "$FROM" == mod ]] && stamp @ctx_src mod "$cur_src"   # the Claude path never touches it
+  stamp @ctx_left "$want_left" "$cur_left"
+  [[ "$FROM" == mod || "$FROM" == codex ]] && stamp @ctx_src "$FROM" "$cur_src"   # the Claude path never touches it
+  # @ctx_ts (issue #2431): the reading's time — written with any context change,
+  # else only once the stamp on the bus is FLEET_CTX_TS_GRAIN old, so a render
+  # that changes nothing stays free of tmux writes.
+  ts_grain=${FLEET_CTX_TS_GRAIN:-60}; [[ "$ts_grain" =~ ^[0-9]+$ ]] || ts_grain=60
+  now_ts=$(date +%s 2>/dev/null); [[ "$now_ts" =~ ^[0-9]+$ ]] || now_ts=''   # no date ⇒ no ts
+  if [[ -n "$now_ts" ]] && { [[ "$want_pct" != "$cur_pct" || "$want_band" != "$cur_band" || "$want_left" != "$cur_left" ]] \
+     || [[ ! "$cur_ts" =~ ^[0-9]+$ ]] || (( now_ts - cur_ts >= ts_grain )); }; then
+    stamp @ctx_ts "$now_ts" "$cur_ts"
+  fi
 fi
 if [[ -n "$MODEL" ]]; then
   stamp @model  "$MODEL"  "$cur_model"
