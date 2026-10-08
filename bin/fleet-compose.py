@@ -110,11 +110,16 @@ def compose_log(ev, **fields):
     """One line of logs/compose.ndjson (issue #1955, EPIC #1949 R2): how the
     writing area is used, for /fleet-history's `drafts` and the daily brief.
       sent     a ↵ / a hand-over left the area: id, how (issue · scratch · norepo ·
-               multi · orchestrate), repo; ts = the ↵'s time
+               multi · orchestrate), repo; ts = the ↵'s time, t_enter its ms
       placed   the place answered: id, rc, result (the place's first word),
-               machine, session (the worker_id it named), secs since sent
+               machine, session (the worker_id it named), op, secs since sent;
+               t_accepted + timing = the node's points (issue #2238), when it sent them
       started  the new session's row appeared in the list: id, session, fid,
                state, secs since sent — the task list writes it
+      ready    that row first read a state the person can type into: id, session,
+               state, t_ready — the task list writes it (issue #2238)
+    Every t_* is epoch ms, named by EPIC #2230 共同约定 3;
+    fleet-compose-latency.sh reads them back.
     Append-only, one write per line; a failure to write never stops a send."""
     row = {"ev": ev, "ts": int(time.time())}
     row.update({k: v for k, v in fields.items() if v not in (None, "")})
@@ -126,6 +131,19 @@ def compose_log(ev, **fields):
         return True
     except OSError:
         return False
+
+
+def read_timing(path):
+    """The node's timing points fleet-client-place.sh left at `path` (issue
+    #2238): {t_*: epoch ms} — only integer t_* fields; {} for none or junk."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8") or "{}")
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items()
+            if k.startswith("t_") and isinstance(v, int) and not isinstance(v, bool)}
 
 
 def send_how(data, mode=""):
@@ -219,7 +237,7 @@ def payload(text, prev="", repo="", node=None, agent=None):
         title = title[:MAX_TITLE - 1] + "…"
     return {"title": title, "body": body, "attachments": files, "repo": repo,
             "node": node or None, "agent": agent or None, "prev": prev, "at": int(time.time()),
-            "id": "%x" % time.time_ns()}
+            "t_enter": int(time.time() * 1000), "id": "%x" % time.time_ns()}
 
 
 def payload_norepo(data, mode=""):
@@ -287,7 +305,9 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
             return 2
     cid = data.get("id") or "%x" % time.time_ns()
     at = int(data.get("at") or time.time())
-    compose_log("sent", id=cid, how=send_how(data, "none" if norepo else ""), repo="" if norepo else repo, at=at)
+    t_enter = int(data.get("t_enter") or at * 1000)
+    compose_log("sent", id=cid, how=send_how(data, "none" if norepo else ""), repo="" if norepo else repo, at=at,
+                t_enter=t_enter)
     args = ["bash", str(BIN / "fleet-client-place.sh"), "-" if norepo else repo]
     text = data.get("body") or ""
     if not norepo and data.get("issue", True):
@@ -312,21 +332,31 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
         args += ["--agent", agent]
     if reap:
         args += ["--reap", reap]
+    # The node's timing points come back through a file (issue #2238): the
+    # place's stdout stays its one line.
+    fd, timef = tempfile.mkstemp(prefix="fleet-compose-timing.", dir=str(Path(path).parent))
+    os.close(fd)
+    env = dict(os.environ, FLEET_PLACE_TIMING=timef)
     try:
-        out = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+        out = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True, env=env)
+        timing = read_timing(timef)
     finally:
-        if bodyf:
-            try:
-                os.unlink(bodyf)
-            except OSError:
-                pass
+        for f in (bodyf, timef):
+            if f:
+                try:
+                    os.unlink(f)
+                except OSError:
+                    pass
     sys.stdout.write(out.stdout)
     line = next((l for l in reversed(out.stdout.splitlines()) if l.split(" ", 1)[0] in PLACE_WORDS), "")
     words = line.partition("\t")[0].split()
+    remote = words[:1] == ["REMOTE"]
     compose_log("placed", id=cid, rc=out.returncode, result=words[0] if words else "",
                 machine=words[1] if len(words) > 1 else "",
-                session=words[4] if words[:1] == ["REMOTE"] and len(words) > 4 and "/" in words[4] else "",
-                secs=max(0, int(time.time()) - at))
+                session=words[4] if remote and len(words) > 4 and "/" in words[4] else "",
+                op=words[2] if remote and len(words) > 2 else "",
+                secs=max(0, int(time.time()) - at),
+                t_accepted=timing.get("t_accepted"), timing=timing or None)
     return out.returncode
 
 

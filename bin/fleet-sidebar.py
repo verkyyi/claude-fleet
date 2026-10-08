@@ -161,8 +161,41 @@ def compose_started(plan, row):
                                 fid=wid.rsplit("/", 1)[-1] if "/" in wid else "",
                                 state=row[1] if row and len(row) > 1 else "",
                                 secs=max(0, int(time.time()) - at) if at else None)
+        if row and plan.get("cid"):
+            COMPOSE_READY[row[0]] = {"cid": plan["cid"], "session": wid,
+                                     "until": time.monotonic() + COMPOSE_READY_SECS}
+            compose_ready([row])   # already typeable when it first showed
     except Exception:   # a log line is never worth the list
         pass
+
+
+# The writing area's new sessions not yet typeable (issue #2238): row key →
+# {cid, session, until}. Each is watched until its row reads a READY_STATES
+# state — the `ready` line, its t_ready — or COMPOSE_READY_SECS pass.
+COMPOSE_READY = {}
+COMPOSE_READY_SECS = 120
+READY_STATES = ("done", "idle", "ready")
+
+
+def compose_ready(rows):
+    """One look at the watched rows (issue #2238): a row the person can type into
+    now gets its `ready` line; one past its watch is dropped. True while any is
+    still watched — the list then reads again within the second."""
+    now = time.monotonic()
+    by_key = {r[0]: r for r in rows if r}
+    for key, w in list(COMPOSE_READY.items()):
+        row = by_key.get(key)
+        state = row[1] if row and len(row) > 1 else ""
+        if state in READY_STATES:
+            del COMPOSE_READY[key]
+            try:
+                _COMPOSE[0].compose_log("ready", id=w["cid"], session=w["session"], state=state,
+                                        t_ready=int(time.time() * 1000))
+            except Exception:   # a log line is never worth the list
+                pass
+        elif now >= w["until"]:
+            del COMPOSE_READY[key]
+    return bool(COMPOSE_READY)
 
 
 def switch_visit(row):
@@ -2762,6 +2795,8 @@ def ui(screen, session, worker, lock):
             elif (hub_account() or {}).get("state") == "failed":
                 held_enter = None
                 say(session, nohost_word(None))
+        if COMPOSE_READY and loaded and compose_ready(rows):
+            refresh_at = min(refresh_at, now + 1)   # its state, read every second (#2238)
         if placing is not None and placing.get("state") == "end":
             placing = None
         elif placing is not None and placing.get("state") == "await" and view == "live":

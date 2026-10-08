@@ -97,6 +97,10 @@ type placeOutcome struct {
 	// (claude-fleet#1777: the client switches to it).
 	WorkerID string `json:"worker_id,omitempty"`
 	Node     string `json:"node"`
+	// Timing is the node's half of the send's clock (claude-fleet#2238): its
+	// operation result's `timing`, passed on as the node wrote it (epoch ms
+	// t_accepted / t_window / …). Absent from an older node.
+	Timing json.RawMessage `json:"timing,omitempty"`
 }
 
 func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
@@ -401,7 +405,8 @@ func operationFinal(status string) bool {
 // outcomeOf reads a REMOTE start's operation as a placeOutcome.
 func outcomeOf(op map[string]any, node string) placeOutcome {
 	var res struct {
-		Window  string `json:"window"`
+		Window  string          `json:"window"`
+		Timing  json.RawMessage `json:"timing"`
 		Workers []struct {
 			WindowID string `json:"window_id"`
 			WorkerID string `json:"worker_id"`
@@ -426,7 +431,11 @@ func outcomeOf(op map[string]any, node string) placeOutcome {
 				win = res.Workers[0].WindowID
 			}
 		}
-		return placeOutcome{State: "done", Exit: exit(0), Window: win, WorkerID: wid, Node: node}
+		oc := placeOutcome{State: "done", Exit: exit(0), Window: win, WorkerID: wid, Node: node}
+		if len(res.Timing) > 0 && res.Timing[0] == '{' {
+			oc.Timing = res.Timing
+		}
+		return oc
 	case "failed":
 		why := res.Error.Stderr
 		if why == "" {
