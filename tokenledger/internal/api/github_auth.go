@@ -402,13 +402,20 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	role, refusal, err := s.githubAdmitSignIn(id, login, now)
+	invite := takeInviteCookie(w, r)
+	role, refusal, err := s.githubAdmitSignIn(id, login, now, invite)
 	if err != nil {
 		log.Printf("github sign-in of %s (%d): %v", login, id, err)
 		httpError(w, http.StatusInternalServerError, "could not read the people list")
 		return
 	}
 	if role == "" {
+		// A `fleet login` is waiting on this browser: its terminal hears the
+		// refusal too, in the same words, instead of waiting ten minutes.
+		if to := s.loginRefusedHop(w, r, refusal, login, now); to != "" {
+			http.Redirect(w, r, to, http.StatusFound)
+			return
+		}
 		s.githubDeny(w, r, refusal, login)
 		return
 	}
@@ -437,12 +444,17 @@ const (
 	denyNotListed = "not-listed"
 	denyRenamed   = "renamed"
 	denyRemoved   = "removed"
+	// denyInvitePrefix + an invite reason (store.Invite*): the invite the
+	// sign-in carried cannot be used (claude-fleet#2261).
+	denyInvitePrefix = "invite-"
 )
 
 // githubAdmitSignIn decides a sign-in by GitHub ID and username, pins the
 // name the first time it is seen, and audits the outcome. role "" is a
-// refusal, named by the second result.
-func (s *Server) githubAdmitSignIn(id int64, login string, now time.Time) (role, refusal string, err error) {
+// refusal, named by the second result. invite is the code the sign-in
+// carried (claude-fleet#2261), "" for none: it lets in a person the list does
+// not name yet, and is never spent on one it does.
+func (s *Server) githubAdmitSignIn(id int64, login string, now time.Time, invite string) (role, refusal string, err error) {
 	actor := githubPrincipal(id)
 	target := login + " (" + actor + ")"
 	pinned, known, err := s.Store.PinnedID(login)
@@ -471,6 +483,12 @@ func (s *Server) githubAdmitSignIn(id int64, login string, now time.Time) (role,
 	role, err = s.githubRole(id)
 	if err != nil {
 		return "", "", err
+	}
+	if role == "" && invite != "" {
+		if refusal, err := s.admitInvite(id, login, invite, now); err != nil || refusal != "" {
+			return "", refusal, err
+		}
+		role = roleUser
 	}
 	if role == "" {
 		_ = s.Store.HubAudit(actor, "signin", target, "refused", "not on the list", now)
@@ -651,8 +669,45 @@ func (s *Server) githubDeny(w http.ResponseWriter, r *http.Request, why, login s
 		return
 	}
 	loc := s.pageLocale(w, r)
-	writeAuthPage(w, http.StatusForbidden, denyTmpl, loc, denyPage{pageView: newPageView(r, loc), Why: why, Login: login})
+	page := denyPage{pageView: newPageView(r, loc), Why: why, Login: login}
+	if notListed(why) {
+		page.Ask = denyAskLine(loc, login)
+	}
+	writeAuthPage(w, http.StatusForbidden, denyTmpl, loc, page)
 }
+
+// denyAskLine is the one line a person nobody invited sends an admin
+// (claude-fleet#2261) — on the refusal page and in their terminal alike.
+func denyAskLine(loc, login string) string {
+	return i18n.Interpolate(pageT(loc, "deny.ask"), map[string]string{"login": login})
+}
+
+// denyText is a refusal as one plain sentence, for a terminal: the same
+// words as the page, with nothing bolded.
+func denyText(loc, why, login string) string {
+	key := "deny.notlisted"
+	switch why {
+	case denyRenamed:
+		key = "deny.renamed"
+	case denyRemoved:
+		key = "deny.removed"
+	default:
+		if r, ok := strings.CutPrefix(why, denyInvitePrefix); ok {
+			if _, known := pageText["deny.invite."+r]; known {
+				key = "deny.invite." + r
+			}
+		}
+	}
+	txt := i18n.Interpolate(pageT(loc, key), map[string]string{"v": login})
+	if notListed(why) {
+		txt += denyAskLine(loc, login) + pageT(loc, "deny.after")
+	}
+	return txt
+}
+
+// notListed: the refusal is "nobody has invited you" — denyNotListed, or no
+// reason at all, which the page words the same way.
+func notListed(why string) bool { return why == denyNotListed || why == "" }
 
 func clearCookie(w http.ResponseWriter, r *http.Request, name, path string) {
 	http.SetCookie(w, &http.Cookie{
@@ -717,6 +772,8 @@ type denyPage struct {
 	pageView
 	Why   string
 	Login string
+	// Ask is the line a person nobody invited sends an admin (#2261).
+	Ask string
 }
 
 // The two pages follow the prototype's sign-in and "can't use this hub"
@@ -753,6 +810,7 @@ p{margin:0}.lead{color:var(--ink-2)}.fine{font-size:12.5px;color:var(--muted)}
 .btn svg{width:17px;height:17px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round}
 .note{background:var(--warn-soft);color:var(--warn);border-radius:8px;padding:9px 12px;font-size:13.5px}
 .row{display:flex;gap:8px;flex-wrap:wrap}
+.ask{background:var(--line-2);border-radius:8px;padding:10px 12px;user-select:all}.ask code{font:500 14px ui-monospace,Menlo,monospace}
 a.alt{color:var(--muted);font-size:13px}
 nav{justify-content:space-between;gap:12px}
 ` + langSwitchCSS + zhTypeCSS + `</style>`
@@ -776,7 +834,8 @@ var denyTmpl = template.Must(template.New("deny").Funcs(pageFuncs(i18n.EN)).Pars
 <div class="center"><main class="card">
 <div class="big bad"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></div>
 <div style="display:grid;gap:6px"><h1>{{t "deny.h1"}}</h1>
-<p class="lead">{{if eq .Why "renamed"}}{{tb "deny.renamed" .Login}}{{else if eq .Why "removed"}}{{tb "deny.removed" .Login}}{{else}}{{tb "deny.notlisted" .Login}}{{end}}</p></div>
+<p class="lead">{{if eq .Why "renamed"}}{{tb "deny.renamed" .Login}}{{else if eq .Why "removed"}}{{tb "deny.removed" .Login}}{{else if eq .Why "invite-expired"}}{{tb "deny.invite.expired" .Login}}{{else if eq .Why "invite-used"}}{{tb "deny.invite.used" .Login}}{{else if eq .Why "invite-revoked"}}{{tb "deny.invite.revoked" .Login}}{{else if eq .Why "invite-unknown"}}{{tb "deny.invite.unknown" .Login}}{{else if eq .Why "invite-other-user"}}{{tb "deny.invite.other-user" .Login}}{{else}}{{tb "deny.notlisted" .Login}}{{end}}</p></div>
+{{if .Ask}}<p class="ask"><code>{{.Ask}}</code></p>{{end}}
 <div class="row"><a class="btn" href="/signin">{{t "deny.another"}}</a><a class="btn ghost" href="/">{{t "deny.back"}}</a></div>
 <p class="fine">{{t "deny.fine"}}</p>
 </main></div></div></body></html>`))

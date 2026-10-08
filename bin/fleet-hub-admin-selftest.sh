@@ -13,6 +13,8 @@
 #   F  fleet hub get / unset / settings
 #   G  FLEET_HUB_SESSION → the ccq_sess cookie, no bearer
 #   H  no hub configured → exit 3
+#   L  fleet hub invite alice → POST {github_login}; prints the command once
+#      (claude-fleet#2261); --list / --revoke <id>
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd -P)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/hub-admin-selftest.XXXXXX")
@@ -69,6 +71,18 @@ class H(BaseHTTPRequestHandler):
                 return self.answer(200, {"accounts": []})
             return self.answer(200, {"principals": [{"principal_id": "zx", "login": "zx", "display_name": ""}],
                                      "accounts": [{"principal_id": "zx", "hostname": "macmini", "state": "active"}]})
+        if u.path == "/v1/fleet/invites":
+            if self.command == "POST":
+                b = json.loads(body or "{}")
+                return self.answer(201, {"id": "inv_abc", "state": "active", "github_login": b.get("github_login", ""),
+                                         "expires_at": "2026-10-14T00:00:00Z", "code": "secretcodesecretcode",
+                                         "url": "http://h/i/secretcodesecretcode",
+                                         "command": "curl -fsSL http://h/i/secretcodesecretcode | sh"})
+            if self.command == "DELETE":
+                return self.answer(200, {"id": parse_qs(u.query)["id"][0], "state": "revoked"})
+            return self.answer(200, {"invites": [{"id": "inv_abc", "state": "used", "github_login": "",
+                                                  "expires_at": "2026-10-14T00:00:00Z", "created_by": "verkyyi",
+                                                  "used_by": "gh:300"}]})
         if u.path == "/v1/fleet/settings":
             if self.command == "PUT":
                 b = json.loads(body)
@@ -190,6 +204,16 @@ if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" 
    && grep -q 'relogin gh:2718137 on macmini → verkydev: create queued' "$WORK/out"; then
   ok "K fleet hub accounts relogin → POST {action: relogin, hostname, login}"
 else bad "K rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err")"; fi
+
+# L — fleet hub invite (claude-fleet#2261): mint, list, revoke
+run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub invite @alice >"$WORK/out" 2>"$WORK/err"; rc=$?
+r=$(last)
+l=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub invite --list 2>&1)
+v=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub invite --revoke inv_abc 2>&1)
+rv=$(last)
+if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/invites ]    && [ "$(field "$r" body)" = '{"github_login": "alice"}' ]    && grep -q 'GitHub 用户 alice' "$WORK/out" && grep -qF 'curl -fsSL http://h/i/secretcodesecretcode | sh' "$WORK/out"    && printf '%s\n' "$l" | grep -q '^inv_abc .*used .*anyone.*verkyyi → gh:300$'    && [ "$v" = 'revoked inv_abc' ] && [ "$(field "$rv" query)" = id=inv_abc ]; then
+  ok "L fleet hub invite → POST {github_login}, the command printed; --list; --revoke"
+else bad "L rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l revoke=$v"; fi
 
 echo "fleet-hub-admin-selftest: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

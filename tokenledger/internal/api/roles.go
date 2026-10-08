@@ -52,6 +52,9 @@ var routeAccess = map[string]string{
 	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
 	"/v1/fleet/ssh-ca.pub":  accessPublic,
 	"/v1/fleet/login/start": accessPublic, "/v1/fleet/login/poll": accessPublic,
+	// Invites (claude-fleet#2261): the code in the path / the signed note
+	// is the whole credential.
+	InvitePath: accessPublic, LoginRefusedPath: accessPublic,
 
 	// Their own credential, checked by the handler.
 	"/v1/ingest": accessSelf, "/v1/live/report": accessSelf,
@@ -93,7 +96,7 @@ var routeAccess = map[string]string{
 	// audits, settings, the operator's own analytics.
 	"/v1/fleet/join-codes": accessAdmin, "/v1/fleet/peer-certs": accessAdmin,
 	"/v1/fleet/spot":     accessAdmin,
-	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/users": accessAdmin,
+	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/users": accessAdmin, "/v1/fleet/invites": accessAdmin,
 	"/v1/fleet/credentials": accessAdmin, "/v1/fleet/credentials/revoke": accessAdmin,
 	NodeRevokePath:                accessAdmin,
 	"/v1/fleet/credentials/audit": accessAdmin,

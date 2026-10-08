@@ -183,7 +183,8 @@ func TestSigninAndDeny_InChinese(t *testing.T) {
 	r.Header.Set("Accept-Language", "zh")
 	h.srv.githubDeny(rec, r, "", "<mallory>")
 	b = rec.Body.String()
-	if rec.Code != 403 || !strings.Contains(b, "<b>&lt;mallory&gt;</b> 不在本入口的名单上") {
+	if rec.Code != 403 || !strings.Contains(b, "还没有人邀请你（<b>&lt;mallory&gt;</b>）") ||
+		!strings.Contains(b, "请邀请 GitHub 用户 &lt;mallory&gt;") {
 		t.Fatalf("deny in zh: %d %s", rec.Code, b)
 	}
 }
