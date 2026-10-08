@@ -8,8 +8,11 @@
 #
 #   install   ~/.claude/fleet — cloned at refs/tags/stable (the hook's clone, or
 #             this script's own), on a `master` branch so install-sync can
-#             fast-forward it from there.
-#   claude    Claude Code, when no `claude` is on PATH (issue #1191): the official
+#             fast-forward it from there. From this machine's cache when it has
+#             one (fleet-bootstrap-cache.sh, issue #2297), else from GitHub.
+#   claude    Claude Code, when no `claude` is on PATH (issue #1191): the admin's
+#             own binary from this machine's cache (fleet-bootstrap-cache.sh
+#             claude, issue #2297) when there is one, else the official
 #             native installer (`curl -fsSL https://claude.ai/install.sh | bash`
 #             → ~/.local/bin/claude), run as this login; FLEET_CLAUDE_INSTALL_CMD
 #             overrides the command (a test seam). ~/.local/bin goes on THIS run's
@@ -37,7 +40,8 @@
 #             the wizard's commands to ~/.claude/settings.json permissions.allow.
 #   fleet     fleet-up.sh <FLEET_SEED_REPO> --seed --no-attach, when this login
 #             has no fleet yet: the starter repo, which only looks (issue #1167).
-#             Its checkout is cloned over https first, so no `gh auth` is needed.
+#             Its checkout is cloned over https first, so no `gh auth` is needed
+#             — from the cache when the starter is claude-fleet itself (#2297).
 #   doctor    fleet-doctor.sh, output passed through — a report, never a gate.
 #
 # Done ⇔ every step before doctor passed → `$FLEET_CONF_DIR/global/bootstrapped`
@@ -77,7 +81,10 @@ print_zshrc() {
 # First interactive login(s): install claude-fleet and bring the fleet up — until
 # it has succeeded once (~/.config/claude-fleet/global/bootstrapped).
 if [[ -o interactive ]] && [[ -z "$TMUX" ]] && [[ ! -f ~/.config/claude-fleet/global/bootstrapped ]]; then
-  [[ -d ~/.claude/fleet/.git ]] || git clone -q -b stable https://github.com/verkyyi/claude-fleet.git ~/.claude/fleet
+  _fc='/Library/Application Support/claude-fleet/cache/claude-fleet.git'   # this machine's copy first (issue #2297)
+  [[ -d ~/.claude/fleet/.git ]] || { [[ -d $_fc/objects && ! -e ~/.claude/fleet ]] && { git -c safe.directory="$_fc" clone -q --no-local -b stable "$_fc" ~/.claude/fleet && git -C ~/.claude/fleet remote set-url origin https://github.com/verkyyi/claude-fleet.git || { rm -rf ~/.claude/fleet; false; }; }; } \
+    || git clone -q -b stable https://github.com/verkyyi/claude-fleet.git ~/.claude/fleet
+  unset _fc
   [[ -x ~/.claude/fleet/bin/fleet-login-bootstrap.sh ]] && ~/.claude/fleet/bin/fleet-login-bootstrap.sh
 fi
 [[ -r ~/.claude/fleet/shell/cw.zsh ]] && source ~/.claude/fleet/shell/cw.zsh
@@ -103,6 +110,7 @@ esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 G="$FLEET_CONF_DIR/global"
+CACHE_SH="$BIN/fleet-bootstrap-cache.sh"
 DONE="$G/bootstrapped" STARTED="$G/bootstrap.started" APPLIED="$G/bootstrap.applied"
 
 say() { printf '%s: %s\n' "$PROG" "$*"; }
@@ -124,7 +132,10 @@ elif [ -e "$ROOT" ]; then
   fail install "$ROOT exists but is not a git checkout — move it aside and log in again"
 else
   mkdir -p "$(dirname "$ROOT")"
-  if git clone -q -b stable "$GITBASE/$FLEET_REPO_SELF.git" "$ROOT" 2>/dev/null; then
+  # the machine's cache first (issue #2297): no github.com on a new login's first minute
+  if bash "$CACHE_SH" clone "$ROOT" --branch stable; then
+    say "install: cloned $FLEET_REPO_SELF at stable from this machine's cache ($(bash "$CACHE_SH" dir)) → $ROOT"
+  elif git clone -q -b stable "$GITBASE/$FLEET_REPO_SELF.git" "$ROOT" 2>/dev/null; then
     say "install: cloned $FLEET_REPO_SELF at stable → $ROOT"
   else
     fail install "git clone $GITBASE/$FLEET_REPO_SELF.git failed (offline?)"
@@ -153,7 +164,10 @@ if cbin=$(command -v claude 2>/dev/null) && [ -n "$cbin" ]; then
   say "claude: ok — $cbin"
 else
   cmd="${FLEET_CLAUDE_INSTALL_CMD:-curl -fsSL https://claude.ai/install.sh | bash}"
-  out=$(bash -c "$cmd" </dev/null 2>&1); rc=$?
+  # the admin's own Claude Code, cached on this machine, before claude.ai (issue #2297)
+  if out=$(bash "$CACHE_SH" claude </dev/null 2>&1); then cmd="$CACHE_SH claude"; rc=0
+  else out=$(bash -c "$cmd" </dev/null 2>&1); rc=$?
+  fi
   [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/    /'
   if [ "$rc" = 0 ] && cbin=$(command -v claude 2>/dev/null) && [ -n "$cbin" ]; then
     say "claude: ok — installed $cbin"
@@ -267,7 +281,9 @@ else
   seed_dir="$HOME/projects/${SEED##*/}"
   if [ ! -e "$seed_dir" ]; then
     mkdir -p "$(dirname "$seed_dir")"
-    git clone -q "$GITBASE/$SEED.git" "$seed_dir" 2>/dev/null \
+    # the starter repo is claude-fleet itself by default: the cache has it (issue #2297)
+    { [ "$SEED" = "$FLEET_REPO_SELF" ] && bash "$CACHE_SH" clone "$seed_dir"; } \
+      || git clone -q "$GITBASE/$SEED.git" "$seed_dir" 2>/dev/null \
       || fail fleet "git clone $GITBASE/$SEED.git failed"
   fi
   if [ -d "$seed_dir/.git" ]; then
