@@ -375,6 +375,7 @@ class G_DefaultTable(Sandbox):
         self.assertIn("node-agent", r.stdout)
         self.assertIn("waiting", r.stdout)
         self.assertIn("machine.env", r.stdout)
+        self.assertIn(os.path.join("logins", "*.env"), r.stdout, "an empty logins/ must not count (#2421)")
 
     def test_all_users_orphans(self):
         dg = open(os.path.join(BIN, "fleet-diskguard.sh")).read()
@@ -800,6 +801,30 @@ class H_Accounts(Sandbox):
         pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
         self.assertTrue(pid2, "logins/ changed and the node agent kept its old tenants")
         self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the old node agent is still running")
+
+    def test_node_agent_waits_for_a_login(self):
+        # #2421: an empty logins/ made ccquota exit 1 once a minute (restarts 47);
+        # the daemon waits until one <login>.env is in it, and stops it again
+        # when the last one goes.
+        lg = os.path.join(self.d, "db", "logins")
+        os.makedirs(lg)
+        self.table(children=[{"name": "node-agent", "cmd": [self.script("na.sh", "exec sleep 300\n")],
+                              "requires": [os.path.join(lg, "*.env")], "reload": lg}])
+        self.start()
+        self.assertTrue(until(10, lambda: self.child("node-agent").get("status") == "waiting"))
+        time.sleep(0.5)
+        self.assertFalse(self.child("node-agent").get("pid"), "started on an empty logins/")
+        self.assertFalse(self.child("node-agent").get("restarts"))
+        r = self.run_sup("status")
+        self.assertIn("waiting — %s missing" % os.path.join(lg, "*.env"), r.stdout)
+        env = os.path.join(lg, "alice.env")
+        with open(env, "w") as f:
+            f.write("CCQUOTA_TOKEN=x\n")
+        pid = until(10, lambda: self.child("node-agent").get("pid"))
+        self.assertTrue(pid, "a login arrived and the node agent did not start")
+        os.unlink(env)
+        self.assertTrue(until(10, lambda: not fns.pid_alive(pid)), "the last login left and it kept running")
+        self.assertTrue(until(10, lambda: self.child("node-agent").get("status") == "waiting"))
 
     def test_adopt_refuses_unknown(self):
         r = self.run_sup("account", "adopt", "nobody-here")
