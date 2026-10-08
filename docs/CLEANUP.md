@@ -114,6 +114,31 @@ Only the window is closed: the worktree, branch and transcript remain available 
 `dash-restore-session.sh`. Claude and Codex round-trip tests exercise the real
 history and restore scripts on a private tmux socket with bounded fake launchers.
 
+### Finished sessions with no PR (issue #1832)
+
+The PR pass only ever sees a branch with a MERGED/CLOSED PR, so a session that
+finished without one — a daily report, a push, a read-only check, or an issue
+session whose issue was closed with no PR (policy `merged`, which will never
+fire) — used to sit as a `done` row forever, never once in the log. The idle pass
+is the second candidate source: every finished window (done, exited, or its agent
+gone) of this repo that is an issue session with no policy or `merged`, or a
+spawned (non-raw) scratch with no policy. It is closed once its issue is CLOSED
+(read from the collector's copy first, `fleet-gh.sh`), its branch has no PR, and
+it has been done `FLEET_REAP_DONE_NO_PR_SECS` (default 7200 — the same two hours
+as `done:2h`). Every gate of the idle pass still applies: working / looping /
+background job / child task / transfer or rotation lease / pinned / no-repo are
+kept. History is written (and, with the worktree present, verified resumable)
+before the window closes. The worktree is dropped (`fleet_worktree_drop`, to the
+trash) only when it is clean and its HEAD is already on the base; dirty or with
+commits of its own it stays on disk and only the window closes.
+
+Every decision is a token on the daemon's log, one line a window, printed when it
+changes (`@reap_skip`): `cleaned:done-no-pr <win> <key> worktree=trashed|kept:dirty|kept:unpushed|gone`,
+`skip:done-recent … due=<epoch>`, `skip:issue-open`, `skip:issue-unknown`,
+`skip:has-pr`, `skip:busy`, `skip:live`, `skip:no-resume`, `skip:foreign-worktree`,
+`skip:no-worktree`. `--dry-run` prints `would-clean:done-no-pr`. BREAK-IT row
+`done-no-pr-stranded`.
+
 The raw pass shares the daemon's lease, timeout and per-tick reap cap. It reads PR
 state through GitHub before declaring a branch PR-free; failed reads retain the
 window. An actual GitHub rate-limit response stops that tick without retrying.
