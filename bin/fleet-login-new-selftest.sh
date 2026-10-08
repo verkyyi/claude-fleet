@@ -228,6 +228,9 @@ not_contains "A never prompts (#1192)" "$OUT" "-password -"
 contains "A would write the password" "$OUT" "would write a random password to $HOME/victor-onboard/password.txt"
 [ -e "$HOME/victor-onboard" ] && fail "A dry run wrote the password file"
 contains "A home" "$OUT" 'sudo createhomedir -c -u victor'
+contains "A home 700 right after (#2414)" "$OUT" "sudo createhomedir -c -u victor
+  \$ sudo chmod 700 $FLEET_LOGIN_HOMES/victor
+"
 contains "A ssh group" "$OUT" 'sudo dseditgroup -o edit -a victor -t user com.apple.access_ssh'
 contains "A key" "$OUT" "sudo tee -a $FLEET_LOGIN_HOMES/victor/.ssh/authorized_keys < $KEY"
 contains "A key chmod" "$OUT" "sudo chmod 600 $FLEET_LOGIN_HOMES/victor/.ssh/authorized_keys"
