@@ -36,9 +36,9 @@ export HOME="$WORK/admin" PATH="$WORK/shim:$PATH"
 export FLEET_TEST_CALLER="$HOME/projects/claude-fleet"   # inside the admin's 0700 home (#1216)
 mkdir -p "$HOME" "$FLEET_TEST_CALLER"
 # credsep's root paths (issue #2418), all under the work dir; no launchctl/systemctl
-CS="$WORK/credsep"
+CS="$WORK/credsep" ME=$(id -un)
 export FLEET_CREDSEP_ROOT_BASE="$CS/db" FLEET_CREDSEP_RUN_BASE="$CS/run" FLEET_CREDSEP_LOG_BASE="$CS/log" \
-  FLEET_CREDSEP_LIB="$CS/lib" FLEET_CREDSEP_DAEMON_DIR="$CS/daemons" FLEET_CREDSEP_ROLE="$(id -un)" \
+  FLEET_CREDSEP_LIB="$CS/lib" FLEET_CREDSEP_DAEMON_DIR="$CS/daemons" FLEET_CREDSEP_ROLE="$ME" \
   FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1
 if [ "$(uname)" = Darwin ]; then PX=com.claude-fleet.credsep.; PXS=.plist; else PX=claude-fleet-credsep-; PXS=.service; fi
 # cs_fixture <mode> — alice and bob separated: own proxies (mode own), or both
@@ -243,7 +243,7 @@ not_has "$WORK/out" '/Groups/staff' 'a non-access group was touched'
 has "$WORK/out" "archive=$ARCH/alice-" 'archive path not printed last'
 has "$WORK/out" "sudo python3 -I $WORK/bin/fleet-credsep.py purge --login alice" 'credsep purge step not shown (#2418)'
 has "$WORK/out" "would remove: $CS/db/alice" 'the dry run does not list the store it would remove'
-[ -d "$CS/db/alice" ] && [ -f "$CS/daemons/$PX"alice"$PXS" ] || fail 'preview removed credsep files'
+[ -d "$CS/db/alice" ] && [ -f "$CS/daemons/${PX}alice$PXS" ] || fail 'preview removed credsep files'
 [ ! -s "$FLEET_TEST_LOG" ] || fail 'preview executed a mutating command'
 [ -f "$FLEET_TEST_LIVE" ] && [ -f "$FLEET_CONF_DIR/accounts/alpha" ] || fail 'preview mutated fixture'
 [ ! -e "$ARCH" ] || fail 'preview created the archive dir'
@@ -307,10 +307,10 @@ PY
 # and logs are gone; bob's are all there
 left=$(cd "$CS" && ls -d daemons/*alice* db/alice* run/alice lib/alice.conf log/alice* 2>/dev/null | tr '\n' ' ')
 [ -z "$left" ] || fail "credsep left behind for a deleted login: $left"
-for f in "daemons/$PX"bob"$PXS" db/bob/accounts/p1 run/bob lib/bob.conf log/bob.log log/bob/agent.log; do
+for f in "daemons/${PX}bob$PXS" db/bob/accounts/p1 run/bob lib/bob.conf log/bob.log log/bob/agent.log; do
   [ -e "$CS/$f" ] || fail "another login's credsep $f was removed"
 done
-has "$WORK/out" "purge: alice — removed: proxy $PX"alice 'purge did not say what it removed'
+has "$WORK/out" "purge: alice — removed: proxy ${PX}alice" 'purge did not say what it removed'
 
 # --delete-home: no archive at all; the deletion and the group cleanup are the same.
 reset_fixture
