@@ -19,6 +19,11 @@ names — or leaves every part where it was:
              that account, re-linked every tick, never over a regular file
   cache      the bootstrap cache's Claude Code (<root>/cache/claude/<ver>, what a
              NEW account installs from — fleet-bootstrap-cache.sh)
+  credsep    the shared credential proxy's root-owned code copy (LIB,
+             /Library/Application Support/claude-fleet/credsep) is refreshed from
+             <current>/bin by `fleet-credsep.py machine refresh`, and the proxy
+             restarts on it — launchd's, or the daemon's child (its `reload`)
+             (issue #2435)
   supervisor the daemon itself: it runs from `current`, so it is the LAST step —
              the tick asks it to restart (<state>/update-restart.json) and
              launchd's KeepAlive starts the new one
@@ -113,6 +118,7 @@ ACCOUNT_LINKS = {
     "codex": ".local/bin/codex",
     "tmux": ".local/share/claude-fleet-vendor/bin/tmux",
 }
+CREDSEP_CODE = ("fleet-cred-proxy.py", "fleet-credsep-launch.py")   # what machine refresh copies to LIB
 RELEASE_FILE = "release.json"
 STAGED = ".release/staged.json"
 
@@ -199,6 +205,13 @@ class P(object):
 
     def rel(self, sha):
         return os.path.join(self.root, sha)
+
+
+def credsep_rec():
+    """The shared credential proxy's record (fleet-credsep.py's .shared.json), or
+    None: no shared proxy on this machine."""
+    r = read_json(os.path.join(env("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred"), ".shared.json"), None)
+    return r if isinstance(r, dict) and r.get("shared") and r.get("lib") else None
 
 
 def link_sha(path):
@@ -477,6 +490,23 @@ class Updater(object):
                 notes.append("%s: %s" % (login, (err or out)[:120]))
         return notes
 
+    # -- credsep's code copy follows `current` (issue #2435, EPIC #2329 共同约定 3)
+    def sync_credsep(self):
+        """`<current>/bin/fleet-credsep.py machine refresh`: LIB's copy = this
+        release's, and the proxy restarted on it when the bytes moved. -> notes."""
+        cs = os.path.join(self.p.current, "bin", "fleet-credsep.py")
+        if not credsep_rec() or not os.path.exists(cs):
+            return []
+        rc, out, err = run([sys.executable, "-I", cs, "machine", "refresh"], timeout=180)
+        if rc == 3:
+            return []
+        last = ([l for l in out.splitlines() if l.startswith("shared:")] or [""])[-1]
+        if rc != 0:
+            return ["credsep: machine refresh rc %d %s" % (rc, (err or out).strip()[-160:])]
+        if last and not last.startswith("shared: current"):
+            self.log("credsep: %s" % last)
+        return []
+
     # -- the switch, the verify, the rollback
     def request_restart(self, sha):
         write_json(self.p.request, {"to": sha, "at": now()})
@@ -486,7 +516,7 @@ class Updater(object):
         if frm and os.path.isdir(self.p.rel(frm)):
             swap_link(self.p.prev, self.p.rel(frm))
         swap_link(self.p.current, self.p.rel(to))
-        notes = self.sync_outside()
+        notes = self.sync_outside() + self.sync_credsep()
         self.st.update(phase="switched", switched_at=now(), notes=notes)
         if frm:
             self.st["retired"][frm] = now()
@@ -500,6 +530,7 @@ class Updater(object):
         swap_link(self.p.current, self.p.rel(frm))
         swap_link(self.p.prev, self.p.rel(to))
         self.sync_outside()
+        self.sync_credsep()
         self.st["skip"] = {to: {"at": now(), "reason": why}}
         self.st["retired"][to] = now()
         self.st["retired"].pop(frm, None)
@@ -514,6 +545,9 @@ class Updater(object):
         settle = env_num("FLEET_NODE_UPDATE_SETTLE", 30)
         if now() - t0 < settle:
             return self.end("switched", "verifying %s after %ds" % (self.st["to"][:12], int(settle)))
+        # a switch made by an updater from before #2435 left the copy behind:
+        # refresh before judging, or this version's own credsep row rolls it back
+        self.sync_credsep()
         rows = doctor_rows(self.p)
         fails = sorted(set(r[1] for r in rows if r[0] == "FAIL"))
         new = [f for f in fails if f not in (self.st.get("baseline") or [])]
@@ -573,7 +607,7 @@ class Updater(object):
         if not SHA_RE.match(target):
             return self.end("unknown", "%s is not a commit sha (%s)" % (target, src), current=cur)
         if target == cur:
-            notes = self.sync_outside()
+            notes = self.sync_outside() + self.sync_credsep()
             self.st.pop("hold", None)
             return self.end("current", "%s (%s)%s" % (cur[:12], src, (" · " + "; ".join(notes)) if notes else ""),
                             current=cur, notes=notes)
@@ -671,12 +705,58 @@ def doctor_rows(p):
                  if os.path.realpath(os.path.join(ident[2], rel)) != os.path.realpath(os.path.join(p.current, "tools", "bin", t))]
         rows.append(("PASS", "account", "%s: claude · codex · tmux from the release" % login) if not drift
                     else ("WARN", "account", "%s: %s not the release's (re-linked on the next tick)" % (login, ", ".join(drift))))
+    cr = credsep_row(p)
+    if cr:
+        rows.append(cr)
     # the drill's deliberate failure (issue #2336): a release carrying this marker
     # fails its own doctor, so the updater must roll it back. On trunk, so a
     # non-managed install that follows stable onto it moves forward off it again.
     if os.path.exists(os.path.join(d, DRILL_FAIL)):
         rows.append(("FAIL", "drill", "%s carries %s — a deliberate drill failure (#2336)" % (cur[:12], DRILL_FAIL)))
     return rows
+
+
+def credsep_row(p):
+    """The shared credential proxy runs this release's code (issue #2435): LIB's
+    copy = <current>/bin's (FAIL otherwise — the updater refreshes it every tick),
+    and the live proxy's <run>/version = that copy's (FAIL after
+    FLEET_NODE_CREDSEP_WAIT seconds: it did not restart on the new code).
+    None when the machine has no shared proxy."""
+    rec = credsep_rec()
+    if not rec:
+        return None
+    lib, rundir = rec["lib"], rec.get("run") or ""
+    cur_bin = os.path.join(p.current, "bin")
+    drift = []
+    for f in CREDSEP_CODE:
+        try:
+            if sha256_file(os.path.join(lib, f)) != sha256_file(os.path.join(cur_bin, f)):
+                drift.append(f)
+        except (IOError, OSError):
+            drift.append(f)
+    if drift:
+        return ("FAIL", "credsep", "%s: %s ≠ the release's (machine refresh puts it back)" % (lib, ", ".join(drift)))
+    want = sha256_file(os.path.join(cur_bin, "fleet-cred-proxy.py"))[:12]
+    end = now() + env_num("FLEET_NODE_CREDSEP_WAIT", 15)
+    while True:
+        try:
+            live = _read_lines(os.path.join(rundir, "version"))[:1]
+            pid = int((_read_lines(os.path.join(rundir, "pid")) or ["0"])[0] or 0)
+        except ValueError:
+            live, pid = [], 0
+        up = bool(pid) and fns.pid_alive(pid)
+        if (live == [want] and up) or now() >= end:
+            break
+        time.sleep(0.5)
+    if live == [want] and up:
+        return ("PASS", "credsep", "the shared proxy runs the release's code (%s)" % want)
+    if not live:
+        return ("WARN", "credsep", "the shared proxy's %s cannot be read — copy = release %s" % (
+            os.path.join(rundir, "version"), want))
+    if not up:
+        return ("FAIL", "credsep", "the shared proxy is not running (pid %s, last version %s)" % (pid or "-", live[0]))
+    return ("FAIL", "credsep", "the shared proxy runs %s, the release's copy is %s — it did not restart on the new code"
+            % (live[0], want))
 
 
 def versions_line(p):

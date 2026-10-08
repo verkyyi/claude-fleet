@@ -96,6 +96,9 @@ SHARED_REC = os.path.join(ROOT_BASE, ".shared.json")     # anyone reads it: who 
 SHARED_LABEL = "com.claude-fleet.cred-proxy-shared" if MAC else "claude-fleet-cred-proxy-shared.service"
 SHARED_PATH = os.path.join(DAEMON_DIR, SHARED_LABEL + (".plist" if MAC else ""))
 SHARED_PORT = int(E("FLEET_CRED_SHARED_PORT", "18923"))
+# the machine daemon (fleet-node-supervisor.py, issue #2331) may run the shared proxy
+# as its child `cred-proxy-shared` instead of launchd / systemd (issue #2435)
+NODE_STATE = E("FLEET_NODE_STATE", "/var/db/fleet-node")
 # a per-login proxy's state that follows its login into the store: the signing
 # key and the held passes MOVE (a session must not keep a copy to forge with);
 # the rest is copied (nothing secret, and the login's proxy reads it back)
@@ -1511,12 +1514,29 @@ def machine_uninstall(a):
     return 0
 
 
+def shared_supervised():
+    """True when the machine daemon runs the shared proxy (its child
+    `cred-proxy-shared`) and no service definition of ours is installed: the
+    daemon restarts it when LIB changes (its `reload`), so refresh writes no
+    plist / unit — one would start a second proxy beside the daemon's (#2435)."""
+    if os.path.exists(SHARED_PATH):
+        return False
+    try:
+        st = json.load(open(os.path.join(NODE_STATE, "state.json")))
+    except (OSError, ValueError):
+        return False
+    return isinstance(st, dict) and "cred-proxy-shared" in (st.get("children") or {})
+
+
 def machine_refresh(a):
-    """Follow stable: the root-owned code copy from this install; the service
-    restarts only when the bytes changed."""
+    """Follow the release: the root-owned code copy from this install's bin/ (on a
+    managed machine the updater runs it from `current`, issue #2435); the service
+    restarts only when the bytes changed — launchd's / systemd's, or, when the
+    machine daemon runs it, the daemon (it watches LIB)."""
     if not shared_rec():
         say("shared: off — nothing to refresh")
         return 3
+    sup = shared_supervised()
     owner = "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name
     moved = False
     for f in ("fleet-credsep-launch.py", "fleet-cred-proxy.py"):
@@ -1524,14 +1544,15 @@ def machine_refresh(a):
             moved |= put_changed(os.path.join(LIB, f), src.read(), 0o755, owner)
     for m in shared_tenants():
         moved |= settings_conf(m["login"], m["conf_dir"], m.get("install_dir", ""))
-    moved |= shared_service()
+    if not sup:
+        moved |= shared_service()
     shared_record([m["login"] for m in shared_tenants()])
     for m in shared_tenants():
         relog_agent(m["login"])     # separated before issue #2296
-    if moved:
+    if moved and not sup:
         load_daemon(SHARED_PATH, SHARED_LABEL)
-    say("shared: %s — version %s" % ("refreshed, restarted" if moved else "current",
-                                      code_version(os.path.join(LIB, "fleet-cred-proxy.py"))))
+    say("shared: %s — version %s" % (("refreshed, restarted" + (" by the machine daemon" if sup else "")) if moved
+                                      else "current", code_version(os.path.join(LIB, "fleet-cred-proxy.py"))))
     return 0
 
 

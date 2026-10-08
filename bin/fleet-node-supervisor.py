@@ -262,7 +262,11 @@ def default_table(paths):
         "children": [
             {"name": "cred-proxy-shared",
              "cmd": ["/usr/bin/python3", "-I", launcher, "shared"],
-             "legacy": "com.claude-fleet.cred-proxy-shared"},
+             "legacy": "com.claude-fleet.cred-proxy-shared",
+             # it runs root's code copy in LIB, which the updater refreshes from
+             # `current` on every switch / rollback (issue #2435): a new copy (or a
+             # login's <L>.conf) starts it again on the new bytes
+             "reload": cred_lib},
             # The one node program for every login (C5, #2333): one link to the
             # hub with the machine's token, each login a tenant run as itself.
             # Waits until the machine has its token (machine.env) and at least
