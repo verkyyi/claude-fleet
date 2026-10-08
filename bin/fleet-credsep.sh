@@ -44,6 +44,16 @@
 #                                           sudo for the machine; uninstall = back
 #                                           to a proxy per login, byte for byte;
 #                                           refresh = follow this install's code
+#   fleet-credsep.sh machine join [--logins a,b] [--dry-run]
+#                                           a login separated on its OWN proxy
+#                                           (com.claude-fleet.credsep.<login>) onto
+#                                           the shared one with no gap: the shared
+#                                           proxy answers for it first, the agent's
+#                                           leases follow, then the own proxy goes
+#                                           (kept in the store's backup/) — issue #2432
+#   fleet-credsep.sh machine leave --logins a,b
+#                                           the way back: its own proxy again, on
+#                                           its old port with its own key
 #   fleet-credsep.sh machine status [--json]  anyone: shared or per-login, as whom,
 #                                           which logins, the version
 #   fleet-credsep.sh apply [--dry-run]      the install pass: converge on the
@@ -191,8 +201,8 @@ case "$cmd" in
     verb="${1:-}"
     case "$verb" in
       status) exec python3 -I "$BIN/fleet-credsep.py" machine "$@" ;;
-      install|uninstall|refresh) ;;
-      *) echo "fleet-credsep: machine install|uninstall|refresh|status" >&2; exit 2 ;;
+      install|uninstall|refresh|join|leave) ;;
+      *) echo "fleet-credsep: machine install|uninstall|refresh|join|leave|status" >&2; exit 2 ;;
     esac
     case " $* " in
       *" --dry-run "*) [ "$(id -u)" = 0 ] || { python3 -I "$BIN/fleet-credsep.py" machine "$@"; exit $?; } ;;

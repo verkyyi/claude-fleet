@@ -221,6 +221,8 @@ def shared():
                         "node_env": os.path.join(root, "node.env"), "probe": probe,
                         "log": os.path.join(logdir, login + ".log"),
                         "legacy_port": int(meta.get("legacy_port") or 0),
+                        # `machine join` (issue #2432): its own proxy still reads the store's files
+                        "pool_hold": bool(meta.get("pool_hold")),
                         "settings": tenant_settings(meta, run)})
     try:
         version = hashlib.sha256(open(os.path.join(HERE, "fleet-cred-proxy.py"), "rb").read()).hexdigest()[:12]

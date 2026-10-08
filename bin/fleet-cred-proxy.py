@@ -1433,6 +1433,8 @@ def pool_adopt(cfgs):
     """A tenant that joined before the pool: its own copies move in, one each."""
     n = 0
     for c in cfgs:
+        if getattr(c, "pool_hold", False):
+            continue        # its own proxy still reads these files (issue #2432): next start
         found = []
         acc = c.accounts
         for d in sorted(os.listdir(acc)) if os.path.isdir(acc) else []:
@@ -1591,6 +1593,15 @@ def ctl_handle(req, t):
             return {"ok": False, "err": "store: empty or oversized"}
         if kind not in POOL_FILE:
             return {"ok": False, "err": "store: kind claude|codex"}
+        if getattr(cfg, "pool", "") and getattr(cfg, "pool_hold", False):
+            # joining from its own proxy (issue #2432): that one still reads the
+            # store's files until `machine join` boots it out — no pool yet
+            write_private(own_path(cfg, kind, label), data)
+            idx = pool_index(cfg)
+            if idx.pop("%s:%s" % (kind, label), None):
+                write_json(os.path.join(cfg.state, "pool.json"), idx)
+            t.log(ev="store", kind=kind, acct=label, bytes=len(data), hold=True)
+            return {"ok": True}
         if getattr(cfg, "pool", ""):
             # the shared proxy: one copy for the machine (issue #2311)
             try:
@@ -1844,6 +1855,7 @@ def tenant_cfg(base, spec):
                      or st.get("FLEET_HUB_URL") or "").rstrip("/")
     c.legacy_port = int(spec.get("legacy_port") or 0)
     c.legacy_bound = 0
+    c.pool_hold = bool(spec.get("pool_hold"))
     c.quota_push, c.store, c.broker, c.ctl_uid = "", True, True, c.uid
     return c
 
@@ -1858,7 +1870,7 @@ def legacy_serve(t, cfg):
             srv = Server(("127.0.0.1", t.cfg.legacy_port), h)
             break
         except OSError:
-            time.sleep(1)
+            time.sleep(0.2)     # the own proxy lets go during `machine join` (#2432): take it at once
     srv.daemon_threads = True
     t.cfg.legacy_bound = t.cfg.legacy_port
     t.log(ev="legacy_port", port=t.cfg.legacy_port)
