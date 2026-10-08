@@ -309,7 +309,9 @@ run_case() {
   : > "$W/c/conf/home-session.first"
   [ "$rows" = - ] || printf '%s\n' "$rows" > "$W/c/tmp/.claude-dash/global/remote_fc"
   (
+    # shellcheck disable=SC2034  # read by solo_resume, sourced below
     FLEET_CLIENT_LAYOUT=solo CONF_DIR="$W/c/conf" CACHE="$W/c/cache" SESS=fc TMPDIR="$W/c/tmp" HOME="$W/c"
+    # shellcheck disable=SC2034
     FLEET_HOME_OPEN_WAIT=1 FLEET_HOME_OPEN_CMD="echo open" FLEET_SOLO_NEW_CMD="echo new"
     . "$W/lib.sh"
     solo_resume "$key" "$(( $(date +%s) - 5 ))"
