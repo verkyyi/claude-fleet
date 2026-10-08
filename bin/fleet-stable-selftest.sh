@@ -21,6 +21,13 @@
 #   I. oldcfg gate        a target that deletes a script stable's hook table still
 #                         calls is REFUSED (`oldcfg:`, the script named, tag untouched);
 #                         --force moves it and logs one line (issue #2075)
+#   J. macos gate         (issue #2286) a target whose newest macOS run is red is
+#                         REFUSED (`macos:`); the generic check gate ignores the
+#                         `macOS shard *` runs; --dry-run with no run refuses and
+#                         dispatches nothing; no run (or only a cancelled one) →
+#                         the full suite is dispatched with -f sha=<target> and
+#                         waited for, then the tag moves; --force moves past red
+#                         and logs `macos=`
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -44,11 +51,17 @@ export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 : > "$WORK/gitconfig"
 
-# gh shim: `gh api …/check-runs --jq …` → the lines in $WORK/checks.
+# gh shim: `gh api …/check-runs --jq …` → the lines in $WORK/checks; the macOS
+# workflow's runs → $WORK/macos (head_sha status conclusion event id title, TSV);
+# `gh workflow run` is logged to $WORK/dispatched and appends $WORK/dispatch_to.
 mkdir -p "$WORK/shim"
 cat > "$WORK/shim/gh" <<SH
 #!/bin/sh
-cat "$WORK/checks"
+case "\$*" in
+  *actions/workflows/*) cat "$WORK/macos" 2>/dev/null ;;
+  'workflow run'*) echo "\$*" >> "$WORK/dispatched"; cat "$WORK/dispatch_to" >> "$WORK/macos" 2>/dev/null ;;
+  *) cat "$WORK/checks" ;;
+esac
 SH
 chmod +x "$WORK/shim/gh"
 export PATH="$WORK/shim:$PATH"
@@ -141,7 +154,7 @@ fi
 # A stable whose hook table calls bin/h.sh, then a target that deletes the script.
 mkdir -p "$SEED/hooks" "$SEED/bin"
 printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"sh ~/.claude/fleet/bin/h.sh"}]}]}}\n' > "$SEED/hooks/settings-hooks.json"
-printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$SEED/bin/h.sh"
+mkdir -p "$SEED/bin"; printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$SEED/bin/h.sh"
 git -C "$SEED" add -A; git -C "$SEED" commit -qm hooked; C7=$(git -C "$SEED" rev-parse HEAD); push
 green
 run move "$C7"
@@ -157,5 +170,49 @@ OUT=$(FLEET_STABLE_LOG="$WORK/stable-move.log" sh "$ST" move "$C8" --force --dir
 eq "I: --force moves" 0 "$RC"; eq "I: tag at C8" "$C8" "$(tag)"; contains "I: says FORCED" "$OUT" "oldcfg: FORCED past the replay"
 contains "I: one line logged" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "	forced	old=$(git -C "$CO" rev-parse --short "$C7")	new=$(git -C "$CO" rev-parse --short "$C8")	by="
 contains "I: the log carries the replay's verdict" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "oldcfg=oldcfg-replay: RED — 1 finding(s)"
+
+# --- J. the macOS gate (issue #2286) ------------------------------------------------
+# From here the tree carries the macOS workflow, so gate 5 applies. h.sh comes back
+# too: stable C8's hook table still calls it (gate 4 must stay green here).
+mkdir -p "$SEED/.github/workflows"; echo 'name: selftests (macOS)' > "$SEED/.github/workflows/selftests-macos.yml"
+mkdir -p "$SEED/bin"; printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$SEED/bin/h.sh"
+git -C "$SEED" add -A; git -C "$SEED" commit -qm 'bsd half'; C9=$(git -C "$SEED" rev-parse HEAD); push
+# The generic gate must not count the macOS shards: a cancelled one is no verdict.
+printf 'completed success shard 1\ncompleted cancelled macOS shard 1\n' > "$WORK/checks"
+printf '%s\tcompleted\tfailure\tpush\t11\tselftests (macOS)\n' "$C9" > "$WORK/macos"
+run move "$C9"
+eq "J: a red macOS run on the target is refused" 3 "$RC"; contains "J: reason prefixed macos:" "$OUT" "REFUSED — macos:"
+contains "J: names the run" "$OUT" "is failure (run 11, push"; eq "J: tag still C8" "$C8" "$(tag)"
+case "$OUT" in *"not green: completed cancelled"*) fail "J: the generic gate counted a macOS shard" ;; esac
+# A target with no run: --dry-run refuses and dispatches nothing.
+C10=$(commit ten); push
+printf '%s\tcompleted\tcancelled\tpush\t13\tselftests (macOS)\n%s\tcompleted\tfailure\tpush\t11\tselftests (macOS)\n' "$C10" "$C9" > "$WORK/macos"
+run move "$C10" --dry-run
+eq "J: dry-run with no run refused" 3 "$RC"; contains "J: dry-run says it would dispatch" "$OUT" "a real move dispatches"
+eq "J: dry-run dispatched nothing" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
+# A real move dispatches the full suite on exactly C10 and waits: in_progress, then
+# (after one poll) success. A cancelled run on C10 counted as none.
+printf '%s\tin_progress\t\tworkflow_dispatch\t14\tselftests (macOS) @ %s\n' "$C9" "$C10" > "$WORK/dispatch_to"
+mkdir -p "$WORK/sleepshim"
+cat > "$WORK/sleepshim/sleep" <<SH
+#!/bin/sh
+printf '%s\tcompleted\tsuccess\tworkflow_dispatch\t14\tselftests (macOS) @ %s\n' "$C9" "$C10" > "$WORK/macos"
+SH
+chmod +x "$WORK/sleepshim/sleep"
+OUT=$(PATH="$WORK/sleepshim:$PATH" FLEET_STABLE_MACOS_POLL=1 sh "$ST" move "$C10" --dir "$CO" --repo o/r 2>&1); RC=$?
+eq "J: no run → dispatched, waited, moved" 0 "$RC"; eq "J: tag at C10" "$C10" "$(tag)"
+contains "J: dispatched with the target sha" "$(cat "$WORK/dispatched" 2>/dev/null)" "workflow run selftests-macos.yml --repo o/r --ref master -f sha=$C10"
+contains "J: says it dispatched" "$OUT" "dispatched the full suite"; contains "J: says green" "$OUT" "macos: green on"
+# A run that never finishes refuses at --macos-timeout.
+C11=$(commit eleven); push; rm -f "$WORK/dispatch_to"
+printf '%s\tqueued\t\tpush\t15\tselftests (macOS)\n' "$C11" > "$WORK/macos"
+mkdir -p "$WORK/nosleep"; printf '#!/bin/sh\nexit 0\n' > "$WORK/nosleep/sleep"; chmod +x "$WORK/nosleep/sleep"
+OUT=$(PATH="$WORK/nosleep:$PATH" FLEET_STABLE_MACOS_POLL=1 sh "$ST" move "$C11" --macos-timeout 3 --dir "$CO" --repo o/r 2>&1); RC=$?
+eq "J: an unfinished run refuses at the bound" 3 "$RC"; contains "J: says did not finish" "$OUT" "did not finish in 3s"; eq "J: tag still C10" "$C10" "$(tag)"
+# --force past red: moves, one `macos=` line.
+printf '%s\tcompleted\tfailure\tschedule\t16\tselftests (macOS)\n' "$C11" > "$WORK/macos"
+OUT=$(FLEET_STABLE_LOG="$WORK/stable-move.log" sh "$ST" move "$C11" --force --dir "$CO" --repo o/r 2>&1); RC=$?
+eq "J: --force moves past red" 0 "$RC"; eq "J: tag at C11" "$C11" "$(tag)"; contains "J: says FORCED" "$OUT" "macos: FORCED past the BSD half (failure)"
+contains "J: the log carries macos=" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "	macos=run 16 failure"
 
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"

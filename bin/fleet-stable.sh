@@ -1,7 +1,7 @@
 #!/bin/sh
 # fleet-stable.sh show | move [<sha>] [--dry-run] [--allow-no-checks] [--force]
 #                 [--dir <checkout>] [--remote <name>] [--branch <trunk>]
-#                 [--repo <owner/name>] [--timeout <s>]
+#                 [--repo <owner/name>] [--timeout <s>] [--macos-timeout <s>]
 #   — the "stable" mark every install follows (issue #1118, EPIC #1117 C1).
 #
 # Merging to master used to be the same event as "this reaches all my machines"
@@ -20,7 +20,8 @@
 #               repos/<repo>/commits/<sha>/check-runs) is completed with
 #               success / neutral / skipped. Pending = not green. ZERO check runs
 #               is refused too — push CI is path-filtered, so a docs-only commit
-#               has none; `--allow-no-checks` accepts that deliberately;
+#               has none; `--allow-no-checks` accepts that deliberately. The
+#               `macOS shard *` runs are not counted here: gate 5 owns them;
 #            4. an old session of the current stable keeps working on the target
 #               (issue #2075, EPIC #2074 C2): bin/fleet-oldcfg-replay.py replays
 #               stable's hook table, the mod's tool list and the MCP servers
@@ -29,7 +30,22 @@
 #               `oldcfg:`), and so does a replay that cannot run (no evidence is
 #               not green). --force moves anyway and appends one line to
 #               logs/stable-move.log (FLEET_STABLE_LOG): the operator's call, on
-#               the record (EPIC #2074 决定 2).
+#               the record (EPIC #2074 决定 2);
+#            5. the BSD half is green ON THE TARGET (issue #2286): since the macOS
+#               job left the PR (it runs on master after the merge), this is the
+#               one place it gates anything. The newest run of the macOS workflow
+#               (FLEET_STABLE_MACOS_WORKFLOW, default selftests-macos.yml) that is
+#               about the target — a push / nightly run whose head is the target,
+#               or a dispatch whose name says `@ <target sha>` — must be completed
+#               + success; a cancelled run (a newer push superseded it) counts as
+#               none. Red REFUSES (reason `macos:`); a run still going is waited
+#               for; NO run (path-filtered, cancelled) dispatches the FULL suite on
+#               exactly the target (`gh workflow run … -f sha=<target>`) and waits
+#               for it, up to --macos-timeout (default 3600s) — a run that does
+#               not finish in time refuses. --dry-run never dispatches or waits:
+#               no green run = refused. --force moves past it and logs one line,
+#               like gate 4. A target whose tree has no such workflow has no BSD
+#               half to wait for and passes.
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
 #          loser's push is rejected and nothing is overwritten.
@@ -46,20 +62,21 @@
 # Exit codes:
 #   show  0 tag read (CURRENT/BEHIND/OFFTRUNK) · 1 NONE · 2 UNKNOWN / usage
 #   move  0 moved (or already there, or dry-run passed) · 2 usage / read error
-#         3 refused (not on trunk / backward / CI not green / oldcfg red) · 4 push failed
+#         3 refused (not on trunk / backward / CI not green / oldcfg red / macos not
+#           green) · 4 push failed
 #           (lease lost to a concurrent move, or no push rights)
 set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 dir="$(cd "$BIN_DIR/.." && pwd)"
-remote=origin branch=master repo="" timeout=15 dry=0 allow_nochecks=0 force=0
+remote=origin branch=master repo="" timeout=15 dry=0 allow_nochecks=0 force=0 macos_timeout=3600
 cmd="" target=""
 TAG=stable
 
 die() { printf 'fleet-stable: %s\n' "$*" >&2; exit 2; }
 refuse() { printf 'fleet-stable: REFUSED — %s\n' "$*" >&2; exit 3; }
 
-[ "$#" -gt 0 ] || { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ "$#" -gt 0 ] || { sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     show|move)         [ -z "$cmd" ] || die "one subcommand only"; cmd="$1" ;;
@@ -71,7 +88,8 @@ while [ "$#" -gt 0 ]; do
     --branch)          shift; branch="${1:-}" ;;
     --repo)            shift; repo="${1:-}" ;;
     --timeout)         shift; timeout="${1:-15}" ;;
-    -h|--help)         sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --macos-timeout)   shift; macos_timeout="${1:-3600}" ;;
+    -h|--help)         sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)                die "unknown flag $1" ;;
     *)                 [ "$cmd" = move ] && [ -z "$target" ] || die "unexpected argument $1"
                        target="$1" ;;
@@ -80,6 +98,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$cmd" ] || die "usage: fleet-stable.sh show | move [<sha>] [--dry-run] [--force]"
 case "$timeout" in ''|*[!0-9]*|0) timeout=15 ;; esac
+case "$macos_timeout" in ''|*[!0-9]*) macos_timeout=3600 ;; esac
 git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git checkout (--dir)"
 
 # git's own stall abort bounds every network call — macOS has no timeout(1).
@@ -152,15 +171,18 @@ check_runs() {
     --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"'
 }
 
-# 4. An old session of the current stable, run on the target (issue #2075): the
-# replay's findings are printed as they came; one line per FORCED move is kept.
-oldcfg_log() {   # oldcfg_log <old> <new> <the replay's last line>
+# One line per FORCED move past gate 4 or 5 is kept (FLEET_STABLE_LOG).
+force_log() {   # force_log <old> <new> <gate> <why> <what was forced past>
   _log="${FLEET_STABLE_LOG:-$BIN_DIR/../logs/stable-move.log}"
   mkdir -p "$(dirname "$_log")" 2>/dev/null
-  printf '%s\tforced\told=%s\tnew=%s\tby=%s\toldcfg=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    "$(short "$1")" "$(short "$2")" "${USER:-?}" "$3" >> "$_log" 2>/dev/null
-  printf 'oldcfg: FORCED past the replay — one line in %s\n' "$_log" >&2
+  printf '%s\tforced\told=%s\tnew=%s\tby=%s\t%s=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$(short "$1")" "$(short "$2")" "${USER:-?}" "$3" "$4" >> "$_log" 2>/dev/null
+  printf '%s: FORCED past %s — one line in %s\n' "$3" "$5" "$_log" >&2
 }
+
+# 4. An old session of the current stable, run on the target (issue #2075): the
+# replay's findings are printed as they came.
+oldcfg_log() { force_log "$1" "$2" oldcfg "$3" "the replay"; }
 oldcfg_gate() {   # oldcfg_gate <old> <new>
   _rep="$BIN_DIR/fleet-oldcfg-replay.py"
   if [ ! -f "$_rep" ] || ! command -v python3 >/dev/null 2>&1; then
@@ -174,6 +196,55 @@ oldcfg_gate() {   # oldcfg_gate <old> <new>
   printf '%s\n' "$_out" | sed 's/^/  /' >&2
   if [ "$force" -eq 1 ]; then oldcfg_log "$1" "$2" "$_last"; return 0; fi
   refuse "oldcfg: an old session of stable $(short "$1") would break on $(short "$2") — fix the findings above (CONTRIBUTING «老会话兼容», #2068), or --force to move anyway (logged)"
+}
+
+# 5. The BSD half, on the target (issue #2286).
+MACOS_WF="${FLEET_STABLE_MACOS_WORKFLOW:-selftests-macos.yml}"
+# The newest run of the macOS workflow ABOUT <sha>, as
+# "status<TAB>conclusion<TAB>event<TAB>id": a non-PR run whose head is <sha>, or a
+# dispatch named `… @ <sha>` (a dispatch attaches to the branch head, so its name
+# is the only place the commit is). Cancelled runs are skipped — superseded by a
+# newer push, they say nothing. Prints nothing when there is none; rc 2 = unread.
+macos_row() {   # macos_row <slug> <sha>
+  _rows=$(gh api "repos/$1/actions/workflows/$MACOS_WF/runs?per_page=100" \
+    --jq '.workflow_runs[] | [.head_sha, .status, (.conclusion // ""), .event, (.id|tostring), (.display_title // "")] | @tsv') || return 2
+  printf '%s\n' "$_rows" | awk -F'\t' -v sha="$2" '
+    NF < 5 || $4 ~ /^pull_request/ || $3 == "cancelled" { next }
+    $1 == sha || $6 ~ ("@ " sha "$") { print $2 "\t" $3 "\t" $4 "\t" $5; exit }'
+}
+macos_pace() { _p="${FLEET_STABLE_MACOS_POLL:-30}"; case "$_p" in ''|*[!0-9]*|0) _p=30 ;; esac; printf '%s' "$_p"; }
+macos_gate() {   # macos_gate <old> <new> <slug>
+  if ! git -C "$dir" cat-file -e "$2:.github/workflows/$MACOS_WF" 2>/dev/null; then
+    printf 'macos: %s carries no .github/workflows/%s — no BSD half to wait for\n' "$(short "$2")" "$MACOS_WF"; return 0
+  fi
+  _row=$(macos_row "$3" "$2") || die "could not read the $MACOS_WF runs on $3 (gh auth?)"
+  if [ -z "$_row" ]; then
+    if [ "$force" -eq 1 ]; then force_log "$1" "$2" macos "no macOS run on the target" "the BSD half (no run)"; return 0; fi
+    [ "$dry" -eq 0 ] || refuse "macos: no green macOS run on $(short "$2") yet — a real move dispatches the full suite on it and waits; --dry-run does neither"
+    gh workflow run "$MACOS_WF" --repo "$3" --ref "$branch" -f "sha=$2" >/dev/null 2>&1 ||
+      refuse "macos: no macOS run on $(short "$2") and the dispatch failed (gh workflow run $MACOS_WF -f sha=$2) — no evidence the BSD half is green"
+    printf 'macos: no run on %s — dispatched the full suite on it; waiting up to %ss\n' "$(short "$2")" "$macos_timeout" >&2
+  fi
+  _waited=0 _said=''
+  while :; do
+    case "$_row" in completed"	"*) break ;; esac
+    [ -z "$_row" ] || [ -n "$_said" ] || { printf 'macos: run %s on %s is %s — waiting\n' "$(printf '%s' "$_row" | cut -f4)" "$(short "$2")" "${_row%%	*}" >&2; _said=1; }
+    if [ "$dry" -eq 1 ] && [ -n "$_row" ]; then
+      refuse "macos: the macOS run on $(short "$2") is still ${_row%%	*} — --dry-run does not wait"
+    fi
+    if [ "$_waited" -ge "$macos_timeout" ]; then
+      [ "$force" -eq 0 ] || { force_log "$1" "$2" macos "not finished in ${macos_timeout}s" "the BSD half (unfinished)"; return 0; }
+      refuse "macos: the macOS run on $(short "$2") did not finish in ${macos_timeout}s — run move again later (it waits for the same run)"
+    fi
+    sleep "$(macos_pace)"; _waited=$((_waited + $(macos_pace)))
+    _row=$(macos_row "$3" "$2") || _row=''
+  done
+  _concl=$(printf '%s' "$_row" | cut -f2) _ev=$(printf '%s' "$_row" | cut -f3) _id=$(printf '%s' "$_row" | cut -f4)
+  if [ "$_concl" = success ]; then
+    printf 'macos: green on %s (run %s, %s)\n' "$(short "$2")" "$_id" "$_ev"; return 0
+  fi
+  [ "$force" -eq 0 ] || { force_log "$1" "$2" macos "run $_id $_concl" "the BSD half ($_concl)"; return 0; }
+  refuse "macos: the newest macOS run on $(short "$2") is $_concl (run $_id, $_ev: https://github.com/$3/actions/runs/$_id) — fix it (its breakage issue), or --force to move anyway (logged)"
 }
 
 do_move() {
@@ -199,6 +270,9 @@ do_move() {
 
   slug=$(repo_slug); [ -n "$slug" ] || die "cannot tell the GitHub repo from $remote — pass --repo owner/name"
   runs=$(check_runs "$slug" "$new") || die "could not read check runs for $(short "$new") on $slug (gh auth?)"
+  # The macOS shards are gate 5's (issue #2286): a push run a later push cancelled
+  # is no verdict, and a running one is waited for there, not refused here.
+  runs=$(printf '%s\n' "$runs" | awk 'NF && !($3 == "macOS" && $4 == "shard")')
   bad=$(printf '%s\n' "$runs" | awk 'NF && !($1=="completed" && ($2=="success" || $2=="neutral" || $2=="skipped"))')
   total=$(printf '%s\n' "$runs" | awk 'NF' | wc -l | tr -d ' ')
   if [ -n "$bad" ]; then
@@ -209,6 +283,7 @@ do_move() {
     refuse "$(short "$new") has NO check runs (path-filtered CI?) — no evidence it is green; pick a commit CI ran on, or pass --allow-no-checks"
   fi
   [ -z "$old" ] || oldcfg_gate "$old" "$new"
+  macos_gate "$old" "$new" "$slug"
 
   # Lease: the tag must still hold exactly what we read ("" = must not exist).
   lease="refs/tags/$TAG:$old"

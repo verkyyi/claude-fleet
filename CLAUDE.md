@@ -428,8 +428,15 @@ Do not install from memory: read the doc and work from it.
   `selftest-shadow-root.sh`, `.github/workflows/selftests*.yml`) or an
   unresolvable base falls back to the full suite. `selftests.yml` runs it on
   `pull_request` and on `push` to **master only** (the branch push duplicated
-  the PR run); `selftests-macos.yml` runs it on every PR too (2 shards max — 5 macOS jobs per free account) — the pre-merge BSD /
-  bash 3.2 check — and stays FULL nightly as the backstop. So **don't run the
+  the PR run). **The BSD half is not on the PR** (issue #2286): `selftests-macos.yml`
+  runs `--changed <the previous master>` on every `push` to master (2 shards — 5
+  macOS jobs per free account; a newer push cancels the older run) and stays FULL
+  nightly; the merge gate is the ubuntu checks alone (`fleet-pr-verdict.sh` drops
+  any `macOS shard *` an older PR still carries). It gates RELEASING instead:
+  `fleet-stable.sh move` refuses (`macos:`) a target whose newest macOS run is not
+  green and dispatches the full suite on a target with none, and a red master run
+  is filed once as a breakage by `bin/fleet-macos-watch.sh` (dispatch tick →
+  `fleet-issue-file.sh --breakage`) with its fixer spawned. So **don't run the
   suite locally**: push, open the PR, read the gate. Locally run only the one
   test that reproduces a CI failure (`run-selftests.sh <name>`), never the full
   gate or `--changed`. A new selftest is selected when its own file changes or
@@ -478,8 +485,17 @@ Do not install from memory: read the doc and work from it.
     exemption stays local; a fallback split across two lines marks itself
     `# portable-ok: <why>` (see `fleet_epoch_from_iso`).
   - `.github/workflows/selftests-macos.yml` — the full 6-shard suite on
-    `macos-latest`, nightly (18:17 UTC = 02:17 CST), plus `workflow_dispatch`;
-    on every PR it runs `--changed` (the related tests only, issue #1374).
+    `macos-latest`, nightly (18:17 UTC = 02:17 CST), plus `workflow_dispatch`
+    (input `sha`: the full suite on that commit, named `… @ <sha>`); on every
+    push to master it runs `--changed` against the previous master. **Since
+    #2286 it runs AFTER the merge, not on the PR**: the queue for 5 macOS slots
+    had made the merge gate wait a median 21 minutes (worst 56) on a check that
+    guards releasing, not merging — master reaches a machine only when `stable`
+    moves. So the BSD half's verdict lands in two places: `fleet-stable.sh move`
+    (gate 5, `macos:`; no run on the target ⇒ dispatch + wait; `--force` logs) and
+    `bin/fleet-macos-watch.sh` (a red master run ⇒ ONE breakage issue + its fixer,
+    on the dispatch daemon's tick, only for a repo carrying this workflow and
+    `bin/fleet-stable.sh`). BREAK-IT row `macos-red-to-stable`.
     This is the half a lint structurally cannot do: **behaviour** differences.
     #703 (a bare `${a[@]}` on an empty array is fatal on bash 3.2, a no-op on
     bash 5) is not an enumerable idiom, only an observable outcome. The lint nets

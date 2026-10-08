@@ -349,6 +349,28 @@ run_wait --until-merged
   || fail "--until-merged with nothing armed should hand READY back" "out=$OUT rc=$RC calls=$CALLS"
 ok "--until-merged: an armed READY waits to MERGED; unarmed READY returns (you merge)"
 
+# macOS shards are not the merge gate (issue #2286): they run on master after the
+# merge. A PR opened before that change still carries one — queued, or even red —
+# and must read READY once the Linux checks are green, in the one-shot read and
+# in --wait (which must not block on it). Only a NAMED `macOS shard *` is dropped.
+C_MQ='{"name":"macOS shard 1","status":"QUEUED","conclusion":null}'
+C_MF='{"name":"macOS shard 2","status":"COMPLETED","conclusion":"FAILURE"}'
+C_LIN='{"name":"shard 1","status":"COMPLETED","conclusion":"SUCCESS"}'
+seq_reset; fx 1 OPEN CLEAN "$C_LIN,$C_MQ,$C_MF"
+run_wait
+[ "$OUT" = READY ] && [ "$RC" = 0 ] || fail "a queued/red macOS shard beside green Linux must read READY" "out=$OUT rc=$RC $ERR"
+seq_reset; fx 1 OPEN CLEAN "$C_LIN,$C_MQ"
+run_wait --wait
+[ "$OUT" = READY ] && [ "$CALLS" = 1 ] && [ "$SLEPT" = 0 ] \
+  || fail "--wait must not block on a queued macOS shard" "out=$OUT calls=$CALLS slept=$SLEPT $ERR"
+seq_reset; fx 1 OPEN CLEAN "$C_MQ"
+run_wait --wait --no-checks-timeout 60
+[ "$OUT" = TIMEOUT ] || fail "a rollup holding ONLY macOS shards is 'no checks yet' to a waiter" "out=$OUT $ERR"
+seq_reset; fx 1 OPEN CLEAN '{"name":"ubuntu shard 1","status":"COMPLETED","conclusion":"FAILURE"}'
+run_wait
+[ "$OUT" = FAILING ] || fail "only a check NAMED macOS shard * is dropped" "out=$OUT"
+ok "macOS shards never hold the merge gate (#2286): queued/red ones are dropped, Linux decides"
+
 # Duration flags are validated like everything else: exit 2.
 seq_reset; fx 1 OPEN CLEAN "$C_PASS"
 run_wait --wait --timeout soon
