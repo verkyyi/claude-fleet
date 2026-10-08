@@ -44,6 +44,28 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(got['output_tokens'], 40000)
         self.assertEqual(got['transcript'], str(self.path))
 
+    def test_effort_turn_context_then_config(self):
+        # issue #2431: the turn's effort, else collaboration_mode, else config.toml
+        self.assertEqual(cx.telemetry(self.data)['effort'], '')
+        (self.home / 'config.toml').write_text('model = "x"\nmodel_reasoning_effort = "medium"  # c\n[profiles.p]\nmodel_reasoning_effort = "low"\n')
+        stats = cx.telemetry(self.data)
+        self.assertEqual(cx.bus_fields(stats, str(self.home)),
+                         ['pct=40.00', 'limit=300000', 'model=gpt-fixture', 'effort=medium'])
+        self.records.insert(2, dict(type='turn_context', payload=dict(model='gpt-fixture', collaboration_mode=dict(
+            mode='default', settings=dict(model='gpt-fixture', reasoning_effort='xhigh')))))
+        self.write()
+        self.assertEqual(cx.telemetry(self.data)['effort'], 'xhigh')
+        self.records.insert(3, dict(type='turn_context', payload=dict(model='gpt-fixture', effort='high')))
+        self.write()
+        self.assertEqual(cx.bus_fields(cx.telemetry(self.data), str(self.home))[-1], 'effort=high')
+        # a [table]'s key is not the top level's; no file → no effort
+        (self.home / 'config.toml').write_text('[profiles.p]\nmodel_reasoning_effort = "low"\n')
+        self.assertEqual(cx.config_effort(str(self.home)), '')
+        self.assertEqual(cx.config_effort(str(self.root / 'nowhere')), '')
+        # an unknown % feeds the model only, never a context stamp
+        self.data['home'] = str(self.root / 'another-account')
+        self.assertEqual(cx.bus_fields(cx.telemetry(self.data), ''), ['model=fixture-model'])
+
     def test_wrong_hint_does_not_override_identity(self):
         wrong = self.root / 'wrong.jsonl'
         wrong.write_text(json.dumps(dict(type='session_meta', payload=dict(id=OTHER))) + '\n')
@@ -106,6 +128,12 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(data['session_id'], SID)
             self.assertEqual(data['home'], str(self.home.resolve()))
             self.assertEqual(call('show-options', '-wv', '-t', pane, '@ctx_pct'), '40')
+            # issue #2431: over the bus — the same stamps a Claude window gets
+            opt = lambda n: call('display-message', '-p', '-t', pane, '#{' + n + '}')
+            self.assertEqual([opt(n) for n in ('@ctx_limit', '@ctx_band', '@ctx_left', '@ctx_src', '@model')],
+                             ['300000', 'ok', '60', 'codex', 'gpt-fixture'])
+            self.assertRegex(opt('@ctx_ts'), r'^[0-9]{10}$')
+            self.assertEqual(opt('@cc_model'), '', 'the hook no longer writes @cc_model')
             hook(OTHER, owner='999')
             hook(OTHER, event='Stop')
             self.assertEqual(json.loads(call('show-options', '-wv', '-t', pane, '@codex_identity'))['session_id'], SID)

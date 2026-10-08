@@ -11,6 +11,7 @@ import glob
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -93,7 +94,7 @@ def number(value):
 def telemetry(data):
     path, header = rollout(data)
     result = {"agent": "codex", "session_id": data.get("session_id", ""),
-              "model": data.get("model", ""), "live_tokens": None, "limit": None,
+              "model": data.get("model", ""), "effort": "", "live_tokens": None, "limit": None,
               "pct": -1, "output_tokens": None, "transcript": path,
               "source": "unknown", "limit_source": "unknown"}
     if not path:
@@ -114,6 +115,14 @@ def telemetry(data):
                     continue
                 if record.get("type") == "turn_context":
                     result["model"] = payload.get("model") or result["model"]
+                    # the turn's reasoning effort (issue #2431): `effort`, else the
+                    # collaboration mode's setting — the newest turn wins
+                    mode = payload.get("collaboration_mode")
+                    settings = mode.get("settings") if isinstance(mode, dict) else None
+                    effort = payload.get("effort") or (settings.get("reasoning_effort")
+                                                        if isinstance(settings, dict) else None)
+                    if isinstance(effort, str) and effort:
+                        result["effort"] = effort
                 if record.get("type") != "event_msg" or payload.get("type") != "token_count":
                     continue
                 info = payload.get("info")
@@ -137,6 +146,38 @@ def telemetry(data):
         result.update(pct=result["live_tokens"] * 100 // result["limit"],
                       source="codex-rollout", limit_source="codex")
     return result
+
+
+def config_effort(home):
+    """`model_reasoning_effort` off <CODEX_HOME>/config.toml's top level — the
+    effort a session runs at when no turn has said one (issue #2431). Read as
+    text (macOS python 3.9 has no tomllib); '' when there is none."""
+    try:
+        with open(os.path.join(home, "config.toml"), encoding="utf-8") as stream:
+            for line in stream:
+                if line.lstrip().startswith("["):
+                    break                       # a table: past the top-level keys
+                m = re.match(r'\s*model_reasoning_effort\s*=\s*["\']([A-Za-z]+)["\']', line)
+                if m:
+                    return m.group(1)
+    except (OSError, UnicodeDecodeError):
+        pass
+    return ""
+
+
+def bus_fields(stats, home):
+    """The `statusline.sh --from codex` argv for one reading (issue #2431): the
+    raw % (statusline.sh rounds it, the ONE place), the window size, the model
+    and its effort. An unknown % leaves the context stamps alone."""
+    out = []
+    if stats["pct"] >= 0 and stats["limit"]:
+        out += ["pct=%.2f" % (stats["live_tokens"] * 100.0 / stats["limit"]), "limit=%d" % stats["limit"]]
+    if stats["model"]:
+        out.append("model=" + stats["model"])
+        effort = stats.get("effort") or (config_effort(home) if home else "")
+        if effort:
+            out.append("effort=" + effort)
+    return out
 
 
 def hook():
@@ -174,13 +215,22 @@ def hook():
         data["model"] = stats["model"]
     cmds = [["set-option", "-w", "-t", pane, "@codex_identity", json.dumps(data, separators=(",", ":"))],
             ["set-option", "-w", "-t", pane, "@codex_session_id", data["session_id"]]]
-    for name, value in (("@ctx_pct", stats["pct"] if stats["pct"] >= 0 else ""),
-                        ("@ctx_limit", stats["limit"] or ""), ("@cc_model", data.get("model", ""))):
-        cmds.append(["set-option", "-w", "-t", pane, name, str(value)])
     # Compare and stamp within one tmux command queue. An old hook cannot stamp
     # a replacement launch after a slow rollout read.
     test = "#{&&:#{==:#{@cc_agent},codex},#{==:#{@cc_launcher_pid}," + owner + "}}"
     tmux(["if-shell", "-F", "-t", pane, test, " ; ".join(shlex.join(c) for c in cmds)])
+    # The measurement goes over the bus (issue #2431): conf/statusline.sh is the
+    # ONE writer of @ctx_pct / @ctx_limit / @ctx_band / @ctx_left / @ctx_ts /
+    # @model / @effort, so a Codex window reads as a Claude one does. The hook no
+    # longer writes @ctx_* or @cc_model itself. Re-checked first: a replacement
+    # launch that took the window during the rollout read is not ours to stamp.
+    fields = bus_fields(stats, data.get("home", ""))
+    if fields and tmux(["display-message", "-p", "-t", pane, "#{@cc_agent}|#{@cc_launcher_pid}"]) == "codex|" + owner:
+        bus = Path(__file__).absolute().parent.parent / "conf" / "statusline.sh"
+        if not bus.is_file():   # a dir-of-symlinks bin/ (a selftest shadow): the real tree's
+            bus = Path(__file__).resolve().parent.parent / "conf" / "statusline.sh"
+        subprocess.run(["bash", str(bus), "--from", "codex"] + fields, stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=5)
 
 
 def context(args):
