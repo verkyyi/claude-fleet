@@ -364,6 +364,7 @@ _fa_machine() {
 # quota watch writes from outside tmux, where no window is visible.
 fleet_alerts_compute() {
   local kick=0 now qstale qblind qvb qspread cstale ckick trace dn du dnames
+  local qcarry qcage qcrest qcwhy qcfor qcmin qbwhy qbtxt
   local dkick dtrace free floor target af at nf label rest model until fb seen
   [ "${1:-}" = --kick ] && kick=1
   now=$(fleet_now)
@@ -375,10 +376,30 @@ fleet_alerts_compute() {
     _fa_row quota-stale alarm quota stale "$(fleet_usage_human_secs "$qstale")" \
       $(( now - qstale )) accounts 0 '' 'no quota-watch tick for this long: the pre-emptive rotation is blind'
   else
-    qblind=$(fleet_quota_blind)
-    [ -n "$qblind" ] && _fa_row quota-unreadable alarm quota unreadable \
-      "$(fleet_usage_human_secs "${qblind#*	}")" $(( now - ${qblind#*	} )) accounts 0 '' \
-      'the hub answers with no rows: the rotation has nothing to act on'
+    # A reading carried over a refused / silent hub (issue #2465): the rotation
+    # keeps working on it, so a blip is no alarm — but a hub that REFUSES (401)
+    # for FLEET_QUOTA_REFUSED_ALARM (300 s) is a credential to fix, not a blip.
+    qcarry=$(fleet_quota_carry)
+    if [ -n "$qcarry" ]; then
+      qcage=${qcarry%%	*}; qcrest=${qcarry#*	}; qcwhy=${qcrest%%	*}; qcrest=${qcrest#*	}; qcfor=${qcrest%%	*}
+      qcmin="${FLEET_QUOTA_REFUSED_ALARM:-300}"; case "$qcmin" in ''|*[!0-9]*) qcmin=300 ;; esac
+      if [ "$qcwhy" = refused ] && [ "$qcfor" -ge "$qcmin" ]; then
+        _fa_row quota-refused alarm quota refused "$(fleet_usage_human_secs "$qcfor")" $(( now - qcfor )) accounts 0 '' \
+          "the hub refuses the quota read (401): carrying the reading from $(fleet_usage_human_secs "$qcage") ago"
+      fi
+    else
+      qblind=$(fleet_quota_blind)
+      if [ -n "$qblind" ]; then
+        qbwhy=$(fleet_quota_why); qbwhy=${qbwhy%%	*}
+        case "$qbwhy" in
+          refused)     qbtxt='the hub refuses the quota read (401): the rotation has nothing to act on' ;;
+          unreachable) qbtxt='the hub does not answer the quota read: the rotation has nothing to act on' ;;
+          *)           qbtxt='the hub answers with no rows: the rotation has nothing to act on' ;;
+        esac
+        _fa_row quota-unreadable alarm quota unreadable \
+          "$(fleet_usage_human_secs "${qblind#*	}")" $(( now - ${qblind#*	} )) accounts 0 '' "$qbtxt"
+      fi
+    fi
   fi
   qvb=$(fleet_quota_via_banner)
   [ -n "$qvb" ] && _fa_row quota-banner warning quota 'from banner' "${qvb%%	*}" \

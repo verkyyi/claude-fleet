@@ -385,6 +385,8 @@ fcfg_label_i18n() {
     FLEET_ACCOUNT_QUOTA_TTL) printf 'ccquota 缓存 TTL' ;;
     FLEET_ACCOUNT_QUOTA_STALE) printf '配额监控陈旧时间' ;;
     FLEET_ACCOUNT_QUOTA_BLIND_STREAK) printf '配额监控连续盲读' ;;
+    FLEET_QUOTA_STALE_OK) printf '额度读数沿用时限' ;;
+    FLEET_QUOTA_REFUSED_ALARM) printf '额度读数被拒告警' ;;
     FLEET_ACCOUNT_VERDICT_REFETCH) printf 'Banner refetch 去重' ;;
     FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS) printf '通过 banner 显示配额的秒数' ;;
     FLEET_ACCOUNT_PICK) printf '启动排名策略' ;;

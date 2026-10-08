@@ -71,9 +71,11 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf -- '--- g
 ok()   { CHECKS=$((CHECKS+1)); }
 
 # Every invocation shares one environment; STREAK is the knob under test, so it is
-# passed per call rather than baked in.
+# passed per call rather than baked in. FLEET_QUOTA_STALE_OK=0: no carrying of the
+# last reading (issue #2465) — this is the #684 axis on its own; the carry in front
+# of it is fleet-quota-carry-selftest.sh's.
 run() {
-  env PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
+  env PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_QUOTA_STALE_OK=0 \
     FLEET_CONF_DIR="$WORK/conf" FLEET_ACCOUNTS_DIR="$WORK/accounts" \
     CCQUOTA_HUB_URL="http://hub.test:8787" FAKE_MODE_FILE="$MODE" \
     ${STREAK:+FLEET_ACCOUNT_QUOTA_BLIND_STREAK="$STREAK"} "$@"

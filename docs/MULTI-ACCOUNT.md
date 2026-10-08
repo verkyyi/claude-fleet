@@ -657,6 +657,19 @@ Now:
   A pool with **no token files** is not blind, just unconfigured, and never
   raises it. Stale wins where both could fire: a stamp that has stopped moving
   means no fetch is happening at all, so the streak is frozen history.
+- **A refused or silent hub carries the last reading** (issue #2465). On
+  2026-10-08 the hub answered the quota read 401 for six hours: 341 empty reads
+  in a row, each one overwriting the cache, so the pick had no opinion and never
+  rotated. Now an empty fetch keeps the rows it had (`global/account.quota.read_at`
+  = when they were read) while they are younger than `FLEET_QUOTA_STALE_OK`
+  (1800 s, 0 = off), and `global/account.quota.why` says why the reads are empty —
+  `refused` (401/403), `unreachable`, `empty`. `--status` answers `carry`, the
+  doctor's `qwatch` line 「沿用 N 分钟前的读数」 with 拒 / 失联 / 盲, and a 401
+  held `FLEET_QUOTA_REFUSED_ALARM` (300 s) raises `✖ quota · refused` + a FAIL.
+  `quota-verdict` answers `unknown` on a carried reading, so a limit banner
+  still benches. Past the limit the rows are cleared and the blind alarm above
+  fires. `fleet-hub-sessions.sh` names the same split beside `hub_ok`
+  (`global/hub_why`).
 - **Rehearsal.** `fleet-quotawatch.sh --dry-run` prints what each account
   would trigger without writing a marker, benching or moving anything;
   `--status` prints `off|never|fresh|stale|blind<TAB>age-seconds<TAB>empty-streak`
