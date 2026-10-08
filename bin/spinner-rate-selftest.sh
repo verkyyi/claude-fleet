@@ -150,6 +150,11 @@ w=$(wait_spin w2 spin 3000)
 [ "$w" = timeout ] || w=$(( $(now_ms) - t0 ))
 if [ "$w" != timeout ] && [ "$w" -le 800 ]; then ok "MARKER: hook write → spinning after ${w}ms (design ≤ 250 + a frame)"
 else fail "MARKER: hook write → spinning after ${w}ms, want well under the 1s re-read"; fi
+# Consumed within a frame or two of the write, quiet or not (issue #2327): on a
+# loaded runner the 1s re-read can see the hook's state before its marker lands,
+# so the fleet is already animating when the marker appears — poll, don't peek.
+_t0=$(now_ms)
+while [ -e "$SOCKP.dirty" ] && [ $(( $(now_ms) - _t0 )) -lt 1000 ]; do sleep 0.05; done
 if [ ! -e "$SOCKP.dirty" ]; then ok "MARKER: the spinner consumed <socket>.dirty"
 else fail "MARKER: <socket>.dirty is still there — the quiet-fleet path never read it"; fi
 tl set-window-option -t "$LBL:w2" @claude_state 'done'
