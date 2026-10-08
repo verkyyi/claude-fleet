@@ -171,7 +171,9 @@ def writable(path):
     path = os.path.normpath(path)
     if os.path.islink(path) and owner(path) == UID:
         return "软链属于本账号"
-    if os.path.lexists(path) and os.access(path, os.W_OK, follow_symlinks=False) and not os.path.isdir(path):
+    # a symlink's own mode is 0777 everywhere: what counts is its target (and,
+    # below, the directory that holds the link)
+    if os.path.exists(path) and not os.path.isdir(path) and os.access(path, os.W_OK):
         return "可写"
     child, d = path, os.path.dirname(path)
     while True:

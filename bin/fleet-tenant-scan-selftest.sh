@@ -47,9 +47,11 @@ ts_build() {
   printf '{"mode": "shared", "port": 18923}\n' > "$d/db/.shared.json"
   # ② a root job whose program and log root alone can change; a login's own job
   python3 - "$d" <<'PY'
-import plistlib, sys
+import os, plistlib, sys
 d = sys.argv[1]
-plistlib.dump({"Label": "com.x.root", "ProgramArguments": ["/usr/bin/python3", "-I", d + "/ro/lib/fleet-credsep-launch.py",
+os.makedirs(d + "/ro/bin", exist_ok=True)
+os.symlink("/usr/bin/true", d + "/ro/bin/py")     # a symlink's own 0777 is not "writable" (ubuntu's /usr/bin/python3)
+plistlib.dump({"Label": "com.x.root", "ProgramArguments": [d + "/ro/bin/py", "-I", d + "/ro/lib/fleet-credsep-launch.py",
                "agent", "alice"], "StandardOutPath": d + "/ro/log/a.log", "StandardErrorPath": "/dev/null"},
               open(d + "/daemons/com.x.root.plist", "wb"))
 plistlib.dump({"Label": "com.x.alice", "UserName": "alice", "ProgramArguments": ["/bin/sh", "-c",
