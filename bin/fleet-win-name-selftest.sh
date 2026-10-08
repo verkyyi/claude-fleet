@@ -188,6 +188,7 @@ CHECKS=$((CHECKS + 1))
 [ -z "$stray" ] || fail "H a second byte-wise slugify appeared in: $stray"
 
 # ---- I. EPIC members wear their batch's 简称 (issue #2355) -------------------
+epic_theme=''   # fleet_epic_theme_v's OUTPUT global
 fleet_epic_theme_v 'EPIC: 托管节点：一条命令、一个守护、自己更新'
 eq "I theme: EPIC: prefix and 「：…」 cut" "托管节点" "$epic_theme"
 fleet_epic_theme_v 'EPIC: 新任务 3 秒开工'
