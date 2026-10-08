@@ -425,8 +425,9 @@ def fill(s, home, brew):
 
 
 # The demoted process opens its own logs (root never writes in a login's
-# directory) and takes the login's own TMPDIR, as the system-shape plists did.
-ACCOUNT_SH = ('TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; [ -n "$TMPDIR" ] || TMPDIR=/tmp; export TMPDIR; '
+# directory) and takes the login's own TMPDIR, as the system-shape plists did —
+# with none, the per-uid one, never the shared /tmp (issue #2450).
+ACCOUNT_SH = ('TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; [ -n "$TMPDIR" ] || { TMPDIR="/tmp/claude-fleet-$(id -u)"; mkdir -p -m 700 "$TMPDIR" 2>/dev/null; }; export TMPDIR; '
               'if : >>"$1" 2>/dev/null; then exec >>"$1"; else exec >/dev/null; fi; '
               'if : >>"$2" 2>/dev/null; then exec 2>>"$2"; else exec 2>/dev/null; fi; '
               'shift 2; exec "$@"')

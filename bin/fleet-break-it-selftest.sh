@@ -3810,6 +3810,36 @@ drill_tmpdir_shared_root() {
   WHAT="没有 TMPDIR 的进程（sudo -u 的半边、它起的 tmux 服务器）读写本登录自己的 ${want}：可写、属主是自己；服务器全局环境带上 TMPDIR，服务端起的命令读同一个目录；没有脚本再回退到共用的 /tmp/.claude-dash"
 }
 
+# ---- tmpdir-foreign-owner (#2450): the dash cache already exists and belongs to
+# ANOTHER login — the session's TMPDIR was the shared /tmp (the demoted daemon's
+# fallback when DARWIN_USER_TEMP_DIR came back empty), or someone made
+# /tmp/claude-fleet-<uid> first. fleet-lib must never take it: it moves to a
+# per-uid directory of its own and says so; the demoted launch never falls back
+# to /tmp. A symlink to a root-owned directory stands in for "another login's".
+drill_tmpdir_foreign_owner() {
+  CAP=10; local d="$WORK/tfo" t0 out err lib sh
+  mkdir -p "$d/t" "$d/home" "$d/fbin"; ln -s /usr "$d/t/.claude-dash"
+  t0=$(now)
+  out=$(env TMPDIR="$d/t" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+          bash -c ". '$BIN/fleet-lib.sh'; printf '%s' \"\$FLEET_C\"" 2>"$d/err") || { WHY="fleet-lib.sh did not load"; return 1; }
+  lib=$out; err=$(cat "$d/err")
+  [ "$lib" != "$d/t/.claude-dash" ] || { WHY="fleet-lib took $lib, which belongs to another login"; return 1; }
+  case "$lib" in *"$(id -u)"*|"$d/home/"*) ;; *) WHY="the fallback $lib is not this login's (no uid, not under HOME)"; return 1 ;; esac
+  case "$err" in *'another login'*) ;; *) WHY="no stderr line said the dash cache belonged to another login ($err)"; return 1 ;; esac
+  out=$(env TMPDIR="$d/t" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+          bash -c ". '$BIN/fleet-lib.sh' 2>/dev/null; mkdir -p \"\$FLEET_C\" && [ -w \"\$FLEET_C\" ] && [ -O \"\$FLEET_C\" ] && echo ok")
+  [ "$out" = ok ] || { WHY="this login cannot write its fallback dash cache $lib"; return 1; }
+  # the demoted daemon launch with no DARWIN_USER_TEMP_DIR: never TMPDIR=/tmp
+  printf '#!/bin/sh\nexit 1\n' > "$d/fbin/getconf"; chmod +x "$d/fbin/getconf"
+  sh=$(python3 -c 'import importlib.util,sys
+s=importlib.util.spec_from_file_location("sup",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.ACCOUNT_SH)' "$BIN/fleet-node-supervisor.py") \
+    || { WHY="cannot read ACCOUNT_SH from fleet-node-supervisor.py"; return 1; }
+  env -u TMPDIR PATH="$d/fbin:/usr/bin:/bin" sh -c "$sh" _ "$d/o.log" "$d/e.log" sh -c 'printf %s "$TMPDIR" > "$0"' "$d/acct"
+  case "$(cat "$d/acct" 2>/dev/null)" in /tmp|/tmp/|'') WHY="the demoted launch falls back to TMPDIR=[$(cat "$d/acct" 2>/dev/null)], the shared /tmp"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="TMPDIR/.claude-dash 属别的登录时 fleet-lib 不用它：stderr 报一行，改用本登录按 uid 分开的 ${lib}（可写、属主是自己）；守护降权拿不到 DARWIN_USER_TEMP_DIR 时 TMPDIR=$(cat "$d/acct")，不再是共享的 /tmp"
+}
+
 # A new login's first Claude start asks questions nobody in a fleet pane answers —
 # on 2026-10-08 the new `verky` logins' `guide` sessions sat on 2.1.293's "Make
 # auto mode your default permission mode?" for good (issue #2401). The fake

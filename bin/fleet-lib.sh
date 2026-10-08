@@ -36,6 +36,21 @@ if [ -z "${TMPDIR:-}" ]; then
   unset _fleet_ut
 fi
 FLEET_C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"
+# …and never ANOTHER login's (issue #2450): a TMPDIR that is the shared /tmp, or a
+# /tmp/claude-fleet-<uid> someone else made first, would put this login's state in
+# a directory it does not own — 0700 locks every spawn out, anything looser leaks
+# it. A cache that exists and is not ours is refused with one stderr line; the
+# per-uid one takes over, then one under $HOME. `[ -O ]` is a builtin: no fork on
+# the common path. BREAK-IT `tmpdir-foreign-owner`.
+if [ -e "$FLEET_C" ] && [ ! -O "$FLEET_C" ]; then
+  _fleet_cu="/tmp/claude-fleet-${UID:-$(id -u)}"
+  if { [ -e "$_fleet_cu" ] && [ ! -O "$_fleet_cu" ]; } || { [ -e "$_fleet_cu/.claude-dash" ] && [ ! -O "$_fleet_cu/.claude-dash" ]; }; then
+    _fleet_cu="${HOME:-/nonexistent}/.cache/claude-fleet"
+  fi
+  printf 'fleet-lib: %s belongs to another login; using %s/.claude-dash\n' "$FLEET_C" "$_fleet_cu" >&2
+  FLEET_C="$_fleet_cu/.claude-dash"
+  unset _fleet_cu
+fi
 # Per-fleet configs live here. Override FLEET_CONF_DIR to relocate (used by the
 # test harness).
 FLEET_CONF_DIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
