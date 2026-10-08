@@ -331,6 +331,23 @@ if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
   esac
 fi
 
+# --- rootlog: no root service writes its log in a home (issue #2296) --------------
+# launchd / systemd open a root job's stdout file AS ROOT and follow a symlink:
+# a log in a home is a root write its login aims. Only on a machine the fleet put
+# services on (a com.ccquota.agent.* / com.claude-fleet.* / ccquota-agent-* unit).
+_rl_dir="${FLEET_CREDSEP_DAEMON_DIR:-$([ "$(uname)" = Darwin ] && echo /Library/LaunchDaemons || echo /etc/systemd/system)}"
+if [ -f "$(dirname "$0")/fleet-credsep.py" ] && [ -d "$_rl_dir" ] \
+   && find "$_rl_dir" -maxdepth 1 \( -name 'com.ccquota.agent.*' -o -name 'com.claude-fleet.*' \
+        -o -name 'ccquota-agent-*' -o -name 'claude-fleet-*' \) 2>/dev/null | grep -q .; then
+  _rl=$(bash "$(dirname "$0")/fleet-credsep.sh" rootlogs 2>&1 | tail -n 1)
+  _rl_m=${_rl#rootlog: }; _rl_lv=${_rl_m%% —*}; _rl_m=${_rl_m#* — }
+  case "$_rl_lv" in
+    OK)   pass rootlog "$_rl_m" ;;
+    WARN) warn rootlog "$_rl_m" ;;
+    *)    info rootlog "$_rl_m" ;;
+  esac
+fi
+
 # --- cred: which road this login's sessions take, and why (issue #1975) -----------
 # FLEET_CRED_PROXY=1 only (off = no row, as before): trust × probe → direct /
 # relay / central per agent, the proxy alive, credsep, session-pass renewal —

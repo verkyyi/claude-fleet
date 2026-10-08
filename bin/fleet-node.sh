@@ -296,7 +296,7 @@ cmd_compute() {
 }
 
 cmd_status() {
-  local hub tok body st label
+  local hub tok body st label alog
   tok=$(envval CCQUOTA_TOKEN)
   hub=$(envval CCQUOTA_HUB_URL)
   if [ -z "$tok" ] || [ -z "$hub" ]; then
@@ -310,9 +310,12 @@ cmd_status() {
   st=$(printf '%s' "$body" | jfield status)
   label="$(printf '%s' "$body" | jfield hostname)"
   [ -n "$label" ] || label=$(hostname -s 2>/dev/null || hostname)
+  # separated (issue #2296): root writes the agent's log, outside the home
+  alog="$HOME/.ccquota/agent.log"
+  [ -f "$CONF/credsep.json" ] && alog="sudo tail /var/log/fleet-cred/$(id -un)/agent.log（凭据已隔离，日志归 root）"
   case "$st" in
     online) echo "✓ $label/$(id -un) 连着 ${hub}：在线" ;;
-    *) echo "✗ $label/$(id -un) 连着 ${hub}，但入口看到的状态是「${st:-?}」— 看 ~/.ccquota/agent.log，或重跑：fleet node join"
+    *) echo "✗ $label/$(id -un) 连着 ${hub}，但入口看到的状态是「${st:-?}」— 看 $alog，或重跑：fleet node join"
        return 1 ;;
   esac
 }
