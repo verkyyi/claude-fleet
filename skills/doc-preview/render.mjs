@@ -1,8 +1,10 @@
 // Render Markdown for the doc-preview skill. Four modes:
 //   page  <srcMd|srcHtml> <outHtml> <metaJson> — render one doc + write its entry metadata
-//                                           (reads ID/HREF/ADDED/SESSION/SRC from env)
-//   repage <metaJson> <outHtml>           — re-render an existing entry from its source (--refresh)
-//   index <outIndexHtml> <entriesDir>     — (re)build the fixed root page listing ALL entries
+//                                           (reads ID/HREF/ADDED/SESSION/SRC/EXPIRES/CREATED/INDEX_HREF
+//                                           from env; INDEX_HREF is the header's index link)
+//   repage <metaJson> <outHtml>           — re-render an existing entry from its source (--refresh;
+//                                           INDEX_HREF from env)
+//   index <outIndexHtml> <entriesDir>     — (re)build the index page (/i/<code>/) listing ALL entries
 //   list  <entriesDir>                    — print current entries as plain text (for --list)
 //
 // Local images a page references by a RELATIVE path — `![](shots/a.png)` in Markdown,
@@ -187,7 +189,7 @@ function pageHtml(title, b64, meta = {}) {
  }
 </style></head><body>
 <div class="hdr">
- <a href="/">${icon('book-open', 13)}全部文档</a>
+ ${meta.indexHref ? `<a href="${esc(meta.indexHref)}">${icon('book-open', 13)}全部文档</a>` : ''}
  ${metaLine ? `<span class="sep">·</span>${metaLine}` : ''}
  <span class="share" id="share" hidden>
   <button class="sw" id="sw" role="switch" aria-checked="false" aria-label="公开链接" title="生成可公开访问的链接"><span class="knob"></span></button>
@@ -273,7 +275,9 @@ function readEntries(dir) {
     .filter((f) => f.endsWith('.json'))
     .map((f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } })
     .filter(Boolean)
-    .sort((a, b) => String(b.id).localeCompare(String(a.id)));
+    // newest first: by creation time (a random id has no order); a pre-#1153 entry has
+    // none, and its timestamped id still sorts it among the others of its kind.
+    .sort((a, b) => (Number(b.created) || 0) - (Number(a.created) || 0) || String(b.id).localeCompare(String(a.id)));
 }
 
 // Deterministic pastel chip color per session label (stable across rebuilds).
@@ -281,6 +285,24 @@ function chipColor(s) {
   let h = 0;
   for (const ch of String(s || '?')) h = (h * 31 + ch.codePointAt(0)) % 360;
   return { bg: `hsl(${h} 70% 94%)`, fg: `hsl(${h} 55% 32%)`, br: `hsl(${h} 60% 82%)` };
+}
+
+// When the link stops working (share.sh --ttl; issue #1153). Written into a static page,
+// so it names the date, never a countdown that goes stale.
+function expiryLabel(e) {
+  if (e.expires === undefined || e.expires === null) return '';
+  if (!Number(e.expires)) return '永久';
+  const d = new Date(Number(e.expires) * 1000), p = (n) => String(n).padStart(2, '0');
+  return `到期 ${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function leftLabel(e) {
+  if (e.expires === undefined || e.expires === null) return '';
+  const exp = Number(e.expires);
+  if (!exp) return '永久';
+  const s = exp - Math.floor(Date.now() / 1000);
+  if (s <= 0) return '已过期';
+  return s >= 86400 ? `剩 ${Math.floor(s / 86400)}d${Math.floor(s % 86400 / 3600)}h`
+    : s >= 3600 ? `剩 ${Math.floor(s / 3600)}h${Math.floor(s % 3600 / 60)}m` : `剩 ${Math.max(1, Math.floor(s / 60))}m`;
 }
 
 function indexHtml(entries) {
@@ -292,6 +314,7 @@ function indexHtml(entries) {
     <div class="meta">
       <span class="chip" style="background:${c.bg};color:${c.fg};border-color:${c.br}">${esc(e.session || '—')}</span>
       <span class="time">${esc(e.added || '')}</span>
+      <span class="time" title="链接到期后打不开">${esc(expiryLabel(e))}</span>
       <span class="open">打开 ${icon('arrow-right', 12)}</span>
     </div></a>`;
   }).join('\n');
@@ -402,7 +425,7 @@ if (mode === 'page') {
   writePage(src, raw, out, title, {
     id: process.env.ID,
     session: process.env.SESSION, added: process.env.ADDED,
-    disp: process.env.DISP, full: process.env.SRC,
+    disp: process.env.DISP, full: process.env.SRC, indexHref: process.env.INDEX_HREF,
   });
 
   copyLocalImages(src, raw, out);
@@ -412,6 +435,9 @@ if (mode === 'page') {
     full: process.env.SRC || src,                    // full absolute path (tooltip only)
     href: process.env.HREF, added: process.env.ADDED, session: process.env.SESSION,
   };
+  // expiry (epoch seconds, 0 = never) + creation time: share.sh's --ttl (issue #1153)
+  if (process.env.EXPIRES !== undefined) entry.expires = Number(process.env.EXPIRES) || 0;
+  if (process.env.CREATED !== undefined) entry.created = Number(process.env.CREATED) || 0;
   fs.mkdirSync(path.dirname(meta), { recursive: true });
   fs.writeFileSync(meta, JSON.stringify(entry, null, 2));
   process.stdout.write(title);
@@ -426,7 +452,7 @@ if (mode === 'page') {
   const title = titleOf(src, raw);
   writePage(src, raw, out, title, {
     id: e.id,
-    session: e.session, added: e.added, disp: e.src, full: e.full,
+    session: e.session, added: e.added, disp: e.src, full: e.full, indexHref: process.env.INDEX_HREF,
   });
   copyLocalImages(src, raw, out);
   if (title !== e.title) { e.title = title; fs.writeFileSync(metaJson, JSON.stringify(e, null, 2)); }
@@ -439,7 +465,10 @@ if (mode === 'page') {
   const [entriesDir] = rest;
   const es = readEntries(entriesDir);
   if (!es.length) { process.stdout.write('(none)\n'); }
-  for (const e of es) process.stdout.write(`  [${e.session || '?'}] ${e.title}  ${e.href}  <- ${e.src}  (${e.added})\n`);
+  for (const e of es) {
+    const left = leftLabel(e), pub = e.pub ? '  [公开]' : '';
+    process.stdout.write(`  [${e.session || '?'}] ${e.title}  ${e.href}  <- ${e.src}  (${e.added}${left ? ' · ' + left : ''})${pub}\n`);
+  }
 } else {
   process.stderr.write('usage: render.mjs page|index|list ...\n');
   process.exit(1);

@@ -34,7 +34,10 @@ with `tailscale serve` (HTTPS on the tailnet). The viewing browser needs interne
 **Three serving modes** (recorded in `~/.cache/claude-doc-preview/mode`, issues #1093/#1151):
 
 - **`https`** — the default: `server.py` on loopback, fronted by `tailscale serve`. URL
-  `https://<magicdns>[:<port>]/`.
+  `https://<magicdns>[:<port>]/`. One tailnet port per login: a restarted server re-points
+  the route it had (never opens another), and each share drops extra routes stacked on this
+  server or left on a dead port this login once served — another login's routes are never
+  touched (issue #1153: one machine had piled up ~260).
 - **`http-direct`** — the fallback when this login is **not tailscale's operator** (a machine
   has exactly one; `tailscale debug prefs` → `OperatorUser`) and has no root, so `tailscale
   serve` is refused. `server.py` binds the machine's tailscale IPv4 instead and the URL is
@@ -70,9 +73,20 @@ no half-added entries behind.
 
 **Multi-session safe — this is the key property.** Every share **appends** to one shared
 collection behind a **single fixed URL**. A new share never removes other docs and never
-changes the URL. The root page (`/`) lists everything currently shared, across all sessions
-(each row shows the title, source path, session label, and time). So multiple concurrent
-Claude sessions can each share docs and they all show up in one list.
+changes the URL. The index page (`/i/<index code>/`, printed as `INDEX`) lists everything
+currently shared, across all sessions (each row shows the title, source path, session label,
+time and when the link expires). So multiple concurrent Claude sessions can each share docs
+and they all show up in one list.
+
+**Every link carries a code, and it expires** (issue #1153). A doc is `/d/<code>/`, where
+the code is 128 random bits; the index has its own code (`$ROOT/index.token`). The server
+answers **404** to everything else — `/`, `/d/`, a wrong code, an expired one — so a link
+cannot be guessed and another login on this machine that reaches the port sees nothing. A
+link stops working **7 days** after the share (`--ttl 3d` / `12h` / `0` = never;
+`DOC_PREVIEW_TTL`); `--list` shows the time each has left, and every run prunes expired docs.
+`--refresh` keeps every link. A pre-#1153 link (`/d/<date>-<time>-<n>/`) works until 7 days
+after it was shared. After an install update the next share restarts the running
+`server.py` on the same port, so the new rules take hold at once.
 
 ## Usage
 
@@ -83,34 +97,44 @@ Add doc(s) to the shared list (paths relative to the repo or absolute):
 ```
 
 Output and what to relay:
-- **Single doc shared** → prints `READY <direct doc URL>` + `INDEX <root list URL>`.
+- **Single doc shared** → prints `READY <direct doc URL>` + `INDEX <index URL>` + a `TTL` line.
   **Relay the `READY` direct URL** (it opens the doc itself); mention the index only if useful.
-- **Multiple docs shared** → prints `READY <root list URL>` + one `ADDED <direct URL>` per doc.
+- **Multiple docs shared** → prints `READY <index URL>` + one `ADDED <direct URL>` per doc.
   **Relay the `READY` index URL** (it lists all of them).
 
-In both cases the `READY` line is the primary URL to give the user.
+In both cases the `READY` line is the primary URL to give the user — **whole**: the code
+is the key, so never shorten the URL to its host (it would 404). The code never goes into an
+issue, a comment, a commit or a log.
 
 Other commands:
 
 ```bash
 ~/.claude/skills/doc-preview/share.sh --open <file>       # share + open it in the operator's browser
-~/.claude/skills/doc-preview/share.sh --local <file>      # loopback only: http://127.0.0.1:<port>/d/<id>/
-~/.claude/skills/doc-preview/share.sh --list              # show what's currently shared
+~/.claude/skills/doc-preview/share.sh --local <file>      # loopback only: http://127.0.0.1:<port>/d/<code>/
+~/.claude/skills/doc-preview/share.sh --ttl 30d <file>    # the link lives 30 days (default 7d; 0 = never)
+~/.claude/skills/doc-preview/share.sh --list              # what's shared, the index URL, time left
 ~/.claude/skills/doc-preview/share.sh --refresh           # re-render ALL shared docs in place
                                                           #  (same URLs; picks up source-file edits
                                                           #   and template changes — no new entries)
 ~/.claude/skills/doc-preview/share.sh --remove <substr>   # drop entries matching id/title/path
-~/.claude/skills/doc-preview/share.sh --publish   <id>    # expose ONE doc on the public internet
-~/.claude/skills/doc-preview/share.sh --unpublish <id>    # take that doc back off the public internet
+~/.claude/skills/doc-preview/share.sh --publish   <id>    # expose ONE doc on the public internet (7d; --ttl)
+~/.claude/skills/doc-preview/share.sh --unpublish <id>    # take it back off — verified, or exit 1
 ~/.claude/skills/doc-preview/share.sh --pubstatus <id>    # is this doc public? print its URL
+~/.claude/skills/doc-preview/share.sh --health            # public links + serve routes, for fleet-doctor
 ~/.claude/skills/doc-preview/share.sh --stop              # tear down EVERYTHING (all sessions)
 ```
 
 ## Public sharing (per-document, opt-in)
 
 By default everything is **tailnet-only**. A single document can be exposed on the public
-internet via a per-doc **Tailscale Funnel path mount** at `https://<host>:<funnelport>/p/<id>/`
-(funnel port is 443/8443/10000 — here `:10000`, since nginx holds 443/8443).
+internet via a per-doc **Tailscale Funnel path mount** at `https://<host>:<funnelport>/p/<public code>/`
+(funnel port is 443/8443/10000 — here `:10000`, since nginx holds 443/8443). The public code
+is random and is NOT the doc's code, so a public link says nothing about the tailnet one. A
+public link expires 7 days after it was published (`--publish --ttl 1d <id>`, `0` = never —
+fleet-doctor WARNs on one), then 404s and the next run unmounts it. `--unpublish` checks
+tailscale's exit code and re-reads `funnel status`: it prints `public OFF` only when the mount
+is really gone, and exits 1 otherwise. With no `tailscale` on PATH it calls the App's own
+binary (`/Applications/Tailscale.app/Contents/MacOS/Tailscale`) directly.
 
 **This is normally driven by an in-page toggle, not the CLI.** Each doc page rendered over the
 tailnet shows a **"公开链接" switch** in its header. Flipping it on calls the loopback control
@@ -119,13 +143,13 @@ copy button; flipping it off unmounts it. The switch is a thin wrapper over `sha
 --unpublish`, so you can also drive it from the terminal.
 
 Two properties make this safe to expose:
-- **Only opted-in docs are public.** Funnel mounts individual `/p/<id>/` paths; every other
+- **Only opted-in docs are public.** Funnel mounts individual `/p/<code>/` paths; every other
   doc and the collection index return 404 publicly. The tailnet URL still shows the full list.
 - **The toggle is tailnet-only.** The control API (`/_ctl/*`) is never Funnel-mounted, so it is
   unreachable from the public internet (404). A public visitor can read the one doc — nothing else.
-- **No internal metadata leaks.** The Funnel mount targets a `/_pub/<id>/` route that strips the
+- **No internal metadata leaks.** The Funnel mount targets a `/_pub/<public code>/` route that strips the
   page header server-side, so the public bytes contain only the document — no index link, no
-  session/date, and no source file path (not even in view-source). The tailnet `/d/<id>/` view
+  session/date, and no source file path (not even in view-source). The tailnet `/d/<code>/` view
   keeps the full header.
 
 `--stop` turns off all public mounts too. Freshly published URLs take a few seconds to warm up
