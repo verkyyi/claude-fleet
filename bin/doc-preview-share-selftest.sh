@@ -38,6 +38,19 @@
 #                  macos-latest runner that blocked 30s+ — the port sat bound but
 #                  never accepting, share.sh gave up on five ports (~170s), and this
 #                  test was red on every macOS run from the day it landed.
+#   • CODES        (issue #1153) every link carries a 128-bit random code: `/`, `/d/`,
+#                  no / a wrong / an EXPIRED code → 404, the right one → 200; the index
+#                  is /i/<its own code>/; another login (a second HOME) holding its own
+#                  codes gets 404 here; --refresh keeps the link; --ttl / 0 = never; a
+#                  pre-#1153 id lives 7 days from its timestamp; a server.py from an older
+#                  version is restarted on the SAME port.
+#   • SERVE LEAK   a restarted server re-points this login's one tailnet route instead of
+#                  opening another; routes stacked on our backend or left on a dead port
+#                  we once served are dropped, another login's routes are not.
+#   • PUBLIC       --publish mounts /p/<its own code>/ (never the doc's), with an expiry;
+#                  an expired public link 404s and is taken down; --unpublish exits 1 and
+#                  never prints OFF when tailscale fails, lies, or cannot be asked; with no
+#                  CLI on PATH the App's own binary is called directly (never a symlink).
 #   • DOCTOR       fleet-doctor's `docprev` row: operator = this login → PASS;
 #                  another login → INFO naming the http-direct fallback and the
 #                  one-time `sudo tailscale serve` command; unreadable → no row.
@@ -73,26 +86,55 @@ ok()   { CHECKS=$((CHECKS + 1)); "$@" || fail "check failed: $*"; }
 nofile(){ CHECKS=$((CHECKS + 1)); [ ! -e "$1" ] || fail "$2 ($1 exists: $(cat "$1" 2>/dev/null))"; }
 
 # fake tailscale: the tailnet "IPv4" is loopback (the only address a test can bind);
-# `serve --bg` behaves per $WORK/serve.mode: operator | cert | ok.
-cat > "$WORK/fake/tailscale" <<SH
-#!/bin/sh
-case "\$1 \${2:-}" in
-  "status --json") echo '{"Self":{"DNSName":"box.tailnet.ts.net."}}' ;;
-  "status "*)      [ ! -e "$WORK/ts.down" ] ;;
-  "ip -4")         cat "$WORK/ts.ip" ;;
-  "serve status")  exit 0 ;;
-  "serve --bg")
-    printf '%s\n' "\$*" >> "$WORK/serve.argv"
-    case "\$(cat "$WORK/serve.mode")" in
-      operator) printf "Use 'sudo tailscale %s'.\nTo not require root, use 'sudo tailscale set --operator=\\\$USER' once.\n" "\$*" >&2; exit 1 ;;
-      cert)     echo 'error: certificates are not enabled for this tailnet' >&2; exit 1 ;;
-      *)        exit 0 ;;
-    esac ;;
-  "serve reset"|"funnel status") exit 0 ;;
-  "debug prefs")   cat "$WORK/prefs.json" ;;
-  *) exit 0 ;;
-esac
-SH
+# `serve --bg` behaves per $WORK/serve.mode: operator | cert | ok, and keeps the routes it
+# set in $WORK/ts.json (`serve status --json` reads them back, `serve --https=N off` drops
+# one). `funnel` keeps its /p/ mounts there too: $WORK/funnel.mode fail → --bg refused;
+# $WORK/off.mode fail (exit 1, mount stays) | lie (exit 0, mount stays); $WORK/fstat.fail
+# → `funnel status` errors. Invoked through a symlink while $WORK/app.only exists → the
+# App binary's bundleIdentifier crash (issue #1153).
+cat > "$WORK/fake/tailscale" <<PYF
+#!/usr/bin/env python3
+import json, os, sys
+W = "$WORK"
+def rd(n, d=""):
+    try: return open(os.path.join(W, n)).read().strip()
+    except OSError: return d
+if os.path.exists(os.path.join(W, "app.only")) and os.path.islink(sys.argv[0]):
+    sys.stderr.write("Tailscale: bundleIdentifier is nil — crash\n"); sys.exit(134)
+st = json.loads(rd("ts.json", "{}") or "{}"); st.setdefault("web", {}); st.setdefault("mounts", {})
+def save(): open(os.path.join(W, "ts.json"), "w").write(json.dumps(st))
+a = sys.argv[1:]
+opt = {x.split("=", 1)[0]: (x.split("=", 1)[1] if "=" in x else "") for x in a if x.startswith("--")}
+pos = [x for x in a if not x.startswith("--")]
+cmd = " ".join(pos[:2])
+if cmd == "status" and "--json" in opt: print(json.dumps({"Self": {"DNSName": "box.tailnet.ts.net."}}))
+elif pos[:1] == ["status"]: sys.exit(1 if os.path.exists(os.path.join(W, "ts.down")) else 0)
+elif pos[:1] == ["ip"]: print(rd("ts.ip"))
+elif cmd == "serve status":
+    if "--json" in opt:
+        print(json.dumps({"TCP": {p: {"HTTPS": True} for p in st["web"]},
+                          "Web": {"box.tailnet.ts.net:" + p: {"Handlers": {"/": {"Proxy": u}}} for p, u in st["web"].items()}}))
+elif cmd == "serve reset": st["web"] = {}; save()
+elif pos[:1] == ["serve"] and pos[-1:] == ["off"]: st["web"].pop(opt.get("--https", ""), None); save()
+elif pos[:1] == ["serve"] and "--bg" in opt:
+    open(os.path.join(W, "serve.argv"), "a").write(" ".join(a) + "\n")
+    m = rd("serve.mode")
+    if m == "operator":
+        sys.stderr.write("Use 'sudo tailscale %s'.\nTo not require root, use 'sudo tailscale set --operator=\$USER' once.\n" % " ".join(a)); sys.exit(1)
+    if m == "cert": sys.stderr.write("error: certificates are not enabled for this tailnet\n"); sys.exit(1)
+    st["web"][opt["--https"]] = pos[-1]; save()
+elif cmd == "funnel status":
+    if os.path.exists(os.path.join(W, "fstat.fail")): sys.stderr.write("funnel status: daemon gone\n"); sys.exit(1)
+    for path, u in sorted(st["mounts"].items()): print("|-- %s proxy %s" % (path, u))
+elif pos[:1] == ["funnel"] and pos[-1:] == ["off"]:
+    m = rd("off.mode")
+    if m == "fail": sys.exit(1)
+    if m != "lie": st["mounts"].pop(opt.get("--set-path", ""), None); save()
+elif pos[:1] == ["funnel"] and "--bg" in opt:
+    if rd("funnel.mode") == "fail": sys.exit(1)
+    st["mounts"][opt["--set-path"]] = pos[-1]; save()
+elif cmd == "debug prefs": print(rd("prefs.json"))
+PYF
 # blind lsof: sees no listener at all — what a port held by ANOTHER login looks like.
 printf '#!/bin/sh\nexit 1\n' > "$WORK/fake/lsof"
 # fake cloudflared: logs the quick-tunnel banner (mode ok) or nothing (mode never), then idles.
@@ -114,7 +156,7 @@ share() { HOME="$WORK/home" PATH="$WORK/fake:$PATH" DOC_PREVIEW_PORT="$BASEPORT"
 reset_state() {
   [ -f "$ROOT/server.pid" ] && kill "$(cat "$ROOT/server.pid")" 2>/dev/null
   [ -f "$ROOT/tunnel.pid" ] && kill "$(cat "$ROOT/tunnel.pid")" 2>/dev/null
-  rm -rf "$ROOT"; : > "$WORK/serve.argv"; : > "$WORK/cf.argv"
+  rm -rf "$ROOT"; : > "$WORK/serve.argv"; : > "$WORK/cf.argv"; rm -f "$WORK/ts.json"
 }
 entries() { ls "$ROOT/entries" 2>/dev/null | wc -l | tr -d ' '; }
 printf '# Doc one\n\nhi\n' > "$WORK/a.md"
@@ -209,7 +251,8 @@ page="$(get "$PORT" "$path")"
 has 200 "$page" "7: the tunnel server must serve the doc"
 lacks 'class="hdr"' "$page" "7: a public doc page must have its header stripped"
 lacks "$WORK" "$page" "7: a public doc page must not carry the source path"
-idx="$(get "$PORT" /)"
+has 404 "$(get "$PORT" /)" "7: the public root is 404 — the index needs its code (issue #1153)"
+idx="$(get "$PORT" "/i/$(cat "$ROOT/index.token")/")"
 has "Doc one" "$idx" "7: the public index still lists the doc"
 lacks 'class="src"' "$idx" "7: the public index must drop source paths"
 has 404 "$(get "$PORT" "/_ctl/status?id=${path#/d/}")" "7: /_ctl must be 404 on a public server"
@@ -287,7 +330,7 @@ has "http-direct" "$out" "8e: the refusal must say why"
 # traceback in its log, instead of silently sitting bound-but-not-listening on a
 # runner whose resolver is slow.
 P9="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
-mkdir -p "$WORK/serve9"; echo '<p>no-dns ok</p>' > "$WORK/serve9/index.html"
+mkdir -p "$WORK/serve9"; echo '<p>no-dns ok</p>' > "$WORK/serve9/index.html"; echo 0123456789abcdef0123456789abcdef > "$WORK/index.token"
 python3 - "$BIN/../skills/doc-preview/server.py" "$P9" "$WORK/serve9" "$BIN/../skills/doc-preview" > "$WORK/srv9.log" 2>&1 <<'PY' &
 import runpy, socket, sys
 def boom(*a, **k): raise RuntimeError("reverse DNS lookup at startup: %r" % (a,))
@@ -302,10 +345,187 @@ for _ in $(seq 1 100); do
   sleep 0.1
 done
 CHECKS=$((CHECKS + 1)); [ "$up9" = 1 ] || fail "9: server.py must come up with reverse DNS unavailable (it reverse-resolves at startup, or never reached listen())" "$(cat "$WORK/srv9.log" 2>/dev/null)"
-has 200 "$(get "$P9" /)" "9: the no-DNS server must serve"
+has 200 "$(get "$P9" /i/0123456789abcdef0123456789abcdef/)" "9: the no-DNS server must serve"
 has "listening on http://127.0.0.1:$P9/" "$(cat "$WORK/srv9.log")" "9: server.py must log the address it is accepting on"
 lacks "reverse DNS lookup" "$(cat "$WORK/srv9.log")" "9: server.py must never have called a reverse lookup"
 kill "$pid9" 2>/dev/null
+
+# --- 10. codes, expiry, isolation, serve leak, honest unpublish (issue #1153) ----
+code() { python3 -c 'import sys,urllib.request,urllib.error
+class N(urllib.request.HTTPRedirectHandler):
+  def redirect_request(self,*a): return None
+o=urllib.request.build_opener(N)
+try: print(o.open("http://127.0.0.1:"+sys.argv[1]+sys.argv[2]).status)
+except urllib.error.HTTPError as e: print(e.code)
+except Exception as e: print("ERR",e)' "$1" "$2" 2>&1; }
+tset() { python3 "$BIN/../skills/doc-preview/server.py" --tool set "$ROOT" "$@"; }
+reset_state; echo ok > "$WORK/serve.mode"; : > "$WORK/funnel.mode"; : > "$WORK/off.mode"; rm -f "$WORK/fstat.fail"
+out="$(share "$WORK/a.md")"; rc=$?
+[ "$rc" = 0 ] || fail "10: an https share must work (rc=$rc)" "$out"
+PORT="$(cat "$ROOT/server.port")"
+doc="$(printf '%s\n' "$out" | sed -n 's#^READY https://[^/]*\(/d/[^ ]*\).*#\1#p')"
+id="${doc#/d/}"; id="${id%/}"
+CHECKS=$((CHECKS + 1)); printf '%s\n' "$id" | grep -Eqx '[0-9a-f]{32}' || fail "10a: a doc link must carry a 128-bit random code, got '$doc'" "$out"
+IDX="$(cat "$ROOT/index.token")"
+CHECKS=$((CHECKS + 1)); printf '%s\n' "$IDX" | grep -Eqx '[0-9a-f]{32}' || fail "10a: the index code must be 128 random bits"
+has "INDEX https://box.tailnet.ts.net/i/$IDX/" "$out" "10a: INDEX must be the coded index URL"
+has "TTL expires in 7d" "$out" "10a: the default TTL is 7 days and the share says so"
+has 200 "$(code "$PORT" "$doc")" "10a: the right code → 200"
+has 404 "$(code "$PORT" /)" "10a: the root → 404 (no code, no listing)"
+has 404 "$(code "$PORT" /d/)" "10a: /d/ → 404 (never a directory listing of codes)"
+has 404 "$(code "$PORT" /d/0123456789abcdef0123456789abcdef/)" "10a: a wrong code → 404"
+has 404 "$(code "$PORT" /index.html)" "10a: the index file by name → 404"
+has 404 "$(code "$PORT" /i/0123456789abcdef0123456789abcdef/)" "10a: a wrong index code → 404"
+has 200 "$(code "$PORT" "/i/$IDX/")" "10a: the right index code → 200"
+has "/i/$IDX/" "$(get "$PORT" "$doc")" "10a: the doc's 全部文档 link carries the index code"
+has 404 "$(code "$PORT" /entries/)" "10a: the state dir is never served"
+exp="$(python3 "$BIN/../skills/doc-preview/server.py" --tool get "$ROOT" "$id" expires)"
+now="$(date +%s)"
+CHECKS=$((CHECKS + 1)); [ "$exp" -gt $((now + 604000)) ] && [ "$exp" -le $((now + 604800)) ] || fail "10b: the entry must expire 7d out (expires=$exp now=$now)"
+# expired → 404 at once, and pruned by the next run
+tset "$id" "expires=$((now - 1))"
+has 404 "$(code "$PORT" "$doc")" "10b: an expired code → 404 (server-side, before any prune)"
+lst="$(share --list)"
+lacks "$id" "$lst" "10b: --list prunes an expired doc"
+nofile "$ROOT/entries/$id.json" "10b: the expired entry must be gone"
+# --ttl 0 = never, --ttl 2h
+out="$(share --ttl 0 "$WORK/a.md")"; id0="$(printf '%s\n' "$out" | sed -n 's#^READY [^ ]*/d/\([0-9a-f]*\)/.*#\1#p')"
+has "never expires" "$out" "10c: --ttl 0 must say the link never expires"
+has "永久" "$(share --list)" "10c: --list shows a never-expiring doc as 永久"
+out="$(share --ttl 2h "$WORK/b.md")"; id2="$(printf '%s\n' "$out" | sed -n 's#^READY [^ ]*/d/\([0-9a-f]*\)/.*#\1#p')"
+e2="$(python3 "$BIN/../skills/doc-preview/server.py" --tool get "$ROOT" "$id2" expires)"
+CHECKS=$((CHECKS + 1)); [ "$e2" -gt $((now + 7000)) ] && [ "$e2" -le $(( $(date +%s) + 7200 )) ] || fail "10c: --ttl 2h → expires 2h out (got $e2)"
+has "· 剩 " "$(share --list)" "10c: --list shows the time left"
+out="$(share --ttl soon "$WORK/a.md")"; rc=$?
+[ "$rc" = 1 ] || fail "10c: a bad --ttl must refuse (rc=$rc)" "$out"
+# --refresh keeps every link
+share --refresh >/dev/null
+has 200 "$(code "$PORT" "/d/$id0/")" "10d: --refresh keeps the link working"
+has 200 "$(code "$PORT" "/d/$id2/")" "10d: --refresh keeps every link"
+# another login: its own HOME, its own codes — none of them opens anything here
+HOME2="$WORK/home2"; mkdir -p "$HOME2"
+out2="$(HOME="$HOME2" PATH="$WORK/fake:$PATH" DOC_PREVIEW_PORT="$((PORT + 1))" DOC_PREVIEW_SESSION=u "$SH" --local "$WORK/a.md" 2>&1)"
+doc2="$(printf '%s\n' "$out2" | sed -n 's#^READY http://127.0.0.1:[0-9]*\(/d/[^ ]*\).*#\1#p')"
+IDX2="$(cat "$HOME2/.cache/claude-doc-preview/index.token")"
+has 404 "$(code "$PORT" "$doc2")" "10e: another login's doc code → 404 on this login's port"
+has 404 "$(code "$PORT" "/i/$IDX2/")" "10e: another login's index code → 404 on this login's port"
+has 404 "$(code "$PORT" /)" "10e: another login with no code → 404"
+CHECKS=$((CHECKS + 1)); [ "$(ls -ld "$ROOT" | cut -c1-10)" = drwx------ ] || fail "10e: the state dir must be 0700 ($(ls -ld "$ROOT"))"
+CHECKS=$((CHECKS + 1)); [ "$(ls -l "$ROOT/index.token" | cut -c1-10)" = -rw------- ] || fail "10e: index.token must be 0600"
+kill "$(cat "$HOME2/.cache/claude-doc-preview/server.pid")" 2>/dev/null
+# a pre-#1153 doc: its old link lives 7 days from its timestamp, then 404s
+for L in "$(date +%Y%m%d-%H%M%S)-11" "20200101-120000-22"; do
+  mkdir -p "$ROOT/serve/d/$L"; echo '<p>old</p>' > "$ROOT/serve/d/$L/index.html"
+  printf '{"id":"%s","title":"old","href":"/d/%s/","src":"x","added":"then"}' "$L" "$L" > "$ROOT/entries/$L.json"
+done
+L1=""; for j in "$ROOT"/entries/*-11.json; do L1="$(basename "$j" .json)"; done
+has 200 "$(code "$PORT" "/d/$L1/")" "10f: a fresh pre-#1153 link keeps working"
+has 404 "$(code "$PORT" /d/20200101-120000-22/)" "10f: a pre-#1153 link older than 7 days → 404"
+share --list >/dev/null
+nofile "$ROOT/entries/20200101-120000-22.json" "10f: a stale pre-#1153 doc is pruned"
+# a server.py from an older version is replaced on the SAME port
+pid0="$(cat "$ROOT/server.pid")"; echo stale > "$ROOT/server.ver"
+share "$WORK/b.md" >/dev/null
+CHECKS=$((CHECKS + 1)); [ "$(cat "$ROOT/server.pid")" != "$pid0" ] || fail "10g: an old-version server must be restarted"
+ok [ "$(cat "$ROOT/server.port")" = "$PORT" ]
+CHECKS=$((CHECKS + 1)); ! kill -0 "$pid0" 2>/dev/null || fail "10g: the old server must be gone"
+
+# serve leak: the restart above re-used its route; now a restart on ANOTHER port
+routes() { python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(" ".join(p+">"+u.rsplit(":",1)[1] for p,u in sorted(d["web"].items())))' "$WORK/ts.json"; }
+HP="$(cat "$ROOT/https.port")"
+ok [ "$(routes)" = "$HP>$PORT" ]
+spid="$(cat "$ROOT/server.pid")"; kill "$spid"
+for _ in $(seq 1 50); do kill -0 "$spid" 2>/dev/null || break; sleep 0.1; done
+# the restarted server lands on ANOTHER loopback port (its first free one from here)
+NEWBASE="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
+out="$(HOME="$WORK/home" PATH="$WORK/fake:$PATH" DOC_PREVIEW_PORT="$NEWBASE" DOC_PREVIEW_SESSION=t "$SH" "$WORK/a.md" 2>&1)"; rc=$?
+[ "$rc" = 0 ] || fail "10h: a share after a restart must work (rc=$rc)" "$out"
+NP="$(cat "$ROOT/server.port")"
+ok [ "$NP" != "$PORT" ]
+ok [ "$(cat "$ROOT/https.port")" = "$HP" ]
+has "READY https://box.tailnet.ts.net/d/" "$out" "10h: the URL keeps its tailnet port"
+CHECKS=$((CHECKS + 1)); [ "$(routes)" = "$HP>$NP" ] || fail "10h: a restarted server re-points this login's route, never opens another" "$(routes)"
+PORT="$NP"
+# stacked + dead routes: two more onto our server, one on a dead port we once served,
+# one on a dead port that was never ours (another login's) — only ours may go
+DEADP="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
+OTHERP="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
+echo "$DEADP" >> "$ROOT/served.ports"
+python3 - "$WORK/ts.json" "$PORT" "$DEADP" "$OTHERP" <<'PY2'
+import json, sys
+f, p, dead, other = sys.argv[1:]
+d = json.load(open(f))
+d["web"].update({"8444": "http://127.0.0.1:" + p, "8445": "http://127.0.0.1:" + p,
+                 "8446": "http://127.0.0.1:" + dead, "8447": "http://127.0.0.1:" + other})
+json.dump(d, open(f, "w"))
+PY2
+has "serve_dup=2 serve_dead=2" "$(share --health)" "10h: --health counts stacked and dead routes"
+out="$(share "$WORK/b.md")"
+CHECKS=$((CHECKS + 1)); [ "$(routes)" = "$HP>$PORT 8447>$OTHERP" ] || fail "10h: stacked/dead routes of this login dropped, another login's kept, no new port" "$(routes)"
+
+# public: its own code, an expiry, honest down
+id=""; for j in "$ROOT"/entries/*.json; do j="$(basename "$j" .json)"; case "$j" in *-*) ;; *) id="$j"; break ;; esac; done
+out="$(share --publish "$id")"; rc=$?
+[ "$rc" = 0 ] || fail "10i: --publish must work (rc=$rc)" "$out"
+pc="$(printf '%s\n' "$out" | sed -n 's#^public ON: *https://[^/]*/p/\([0-9a-f]*\)/$#\1#p')"
+CHECKS=$((CHECKS + 1)); printf '%s\n' "$pc" | grep -Eqx '[0-9a-f]{32}' || fail "10i: a public link must be /p/<128-bit code>/" "$out"
+CHECKS=$((CHECKS + 1)); [ "$pc" != "$id" ] || fail "10i: the public code must not be the doc's code"
+has "\"/p/$pc\": \"http://127.0.0.1:$PORT/_pub/$pc/\"" "$(cat "$WORK/ts.json")" "10i: funnel mounts /p/<code> onto /_pub/<code>/"
+pg="$(get "$PORT" "/_pub/$pc/")"
+has 200 "$pg" "10i: the public view serves"
+lacks 'class="hdr"' "$pg" "10i: the public view strips the header"
+has 404 "$(code "$PORT" "/_pub/$id/")" "10i: the doc's own code is not a public code"
+pe="$(python3 "$BIN/../skills/doc-preview/server.py" --tool get "$ROOT" "$id" pub_expires)"
+CHECKS=$((CHECKS + 1)); [ "$pe" -gt $(( $(date +%s) + 604000 )) ] || fail "10i: a public link expires 7d out by default (pub_expires=$pe)"
+has "public=1 " "$(share --health)" "10i: --health counts the public link"
+# expired public link → 404, and the next run takes the mount down
+tset "$id" "pub_expires=$(( $(date +%s) - 1 ))"
+has 404 "$(code "$PORT" "/_pub/$pc/")" "10j: an expired public link → 404"
+share --list >/dev/null
+lacks "/p/$pc" "$(cat "$WORK/ts.json")" "10j: an expired public link is unmounted by the next run"
+has 200 "$(code "$PORT" "/d/$id/")" "10j: the doc itself stays"
+# --unpublish when tailscale fails / lies / cannot be asked → exit 1, never OFF
+for m in fail lie; do
+  share --publish --ttl 1h "$id" >/dev/null
+  echo "$m" > "$WORK/off.mode"
+  out="$(share --unpublish "$id")"; rc=$?
+  [ "$rc" = 1 ] || fail "10k: --unpublish with tailscale '$m' must exit 1 (rc=$rc)" "$out"
+  lacks "public OFF" "$out" "10k: --unpublish with tailscale '$m' must never print OFF"
+  has "STILL public" "$out" "10k: it must say the link is still public ($m)"
+  : > "$WORK/off.mode"
+  has "public OFF" "$(share --unpublish "$id")" "10k: a working off prints OFF"
+done
+share --publish "$id" >/dev/null; touch "$WORK/fstat.fail"
+out="$(share --unpublish "$id")"; rc=$?
+[ "$rc" = 1 ] || fail "10k: --unpublish with funnel status failing must exit 1 (rc=$rc)" "$out"
+lacks "public OFF" "$out" "10k: an unverifiable off must not print OFF"
+rm -f "$WORK/fstat.fail"
+# no CLI on PATH: the App's binary, called directly (a symlink to it crashes)
+mkdir -p "$WORK/app/Tailscale.app/Contents/MacOS" "$WORK/nots"
+cp "$WORK/fake/tailscale" "$WORK/app/Tailscale.app/Contents/MacOS/Tailscale"
+for t in python3 node git cksum awk sed grep date cat; do p="$(command -v "$t")" && ln -sf "$p" "$WORK/nots/$t"; done
+ln -sf "$WORK/app/Tailscale.app/Contents/MacOS/Tailscale" "$WORK/nots/tailscale"; touch "$WORK/app.only"
+appsh() { HOME="$WORK/home" PATH="$WORK/nots:/usr/bin:/bin" DOC_PREVIEW_TAILSCALE_APP="$WORK/app/Tailscale.app/Contents/MacOS/Tailscale" DOC_PREVIEW_PORT="$BASEPORT" "$SH" "$@" 2>&1; }
+out="$(appsh --unpublish "$id")"; rc=$?
+[ "$rc" = 0 ] || fail "10l: a symlinked CLI must be bypassed for the App binary (rc=$rc)" "$out"
+has "public OFF" "$out" "10l: unpublish through the App binary works"
+lacks "/p/" "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["mounts"])' "$WORK/ts.json")" "10l: and the mount is really gone"
+rm -f "$WORK/nots/tailscale"
+out="$(HOME="$WORK/home" PATH="$WORK/nots:/usr/bin:/bin" DOC_PREVIEW_TAILSCALE_APP="$WORK/none" "$SH" --unpublish "$id" 2>&1)"; rc=$?
+[ "$rc" = 1 ] || fail "10l: no tailscale CLI at all → exit 1 (rc=$rc)" "$out"
+lacks "public OFF" "$out" "10l: no CLI must never print OFF"
+has "not found" "$out" "10l: and say the CLI was not found"
+rm -f "$WORK/app.only"
+# --health + the doctor row: a public link that never expires is a WARN
+share --publish --ttl 0 "$id" >/dev/null
+has "unexpiring_public=1" "$(share --health)" "10m: --health counts a never-expiring public link"
+mkdir -p "$WORK/skills10" "$WORK/conf"; ln -s "$(dirname "$SH")" "$WORK/skills10/doc-preview"
+l="$(HOME="$WORK/home" PATH="$WORK/fake:$PATH" CLAUDE_SKILLS_DIR="$WORK/skills10" FLEET_SKIP_GLOBAL_CONF=1 \
+    FLEET_CONF_DIR="$WORK/conf" sh "$BIN/fleet-doctor.sh" 2>/dev/null | grep -a 'docprev' | grep -a 'public links')"
+has "WARN" "$l" "10m: doctor WARNs on a public link that never expires"
+has "never-expiring 1" "$l" "10m: the row names it"
+share --unpublish "$id" >/dev/null
+share --remove Doc >/dev/null
 
 # --- 6. fleet-doctor's docprev row ------------------------------------------
 mkdir -p "$WORK/skills/doc-preview" "$WORK/conf"; : > "$WORK/skills/doc-preview/SKILL.md"

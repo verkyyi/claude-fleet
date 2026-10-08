@@ -572,6 +572,27 @@ print(h, p)' "${DOC_PREVIEW_PORT:-8765}" "$(tailscale ip -4 2>/dev/null | head -
   fi
 fi
 
+# What doc-preview has OUT there (issue #1153): public (Funnel) links, how long the oldest
+# has been up, one that never expires; tailscale serve routes stacked on one backend or
+# left pointing at a dead port (one machine had ~260). share.sh --health is the one
+# reader — it judges with the same expiry rule the server enforces. Nothing shared → no row.
+if [ -x "$skills_dir/doc-preview/share.sh" ] && [ -d "$HOME/.cache/claude-doc-preview/entries" ]; then
+  _dp_h="$("$skills_dir/doc-preview/share.sh" --health 2>/dev/null | tail -1)"
+  _dp_v() { printf '%s\n' "$_dp_h" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
+  _dp_pub="$(_dp_v public)"; _dp_old="$(_dp_v oldest_public_secs)"; _dp_inf="$(_dp_v unexpiring_public)"
+  _dp_dup="$(_dp_v serve_dup)"; _dp_dead="$(_dp_v serve_dead)"; _dp_rt="$(_dp_v serve_routes)"
+  if [ -n "$_dp_pub" ]; then
+    _dp_msg="public links: ${_dp_pub} (oldest $(( ${_dp_old:-0} / 3600 ))h, never-expiring ${_dp_inf:-0}); serve routes to loopback: ${_dp_rt:-0} (stacked ${_dp_dup:-0}, dead ${_dp_dead:-0})"
+    if [ "${_dp_dup:-0}" -gt 0 ] || [ "${_dp_dead:-0}" -gt 0 ]; then
+      warn docprev "$_dp_msg — extra tailscale serve routes are left behind; the next share.sh run drops this login's (or: tailscale serve status, then tailscale serve --https=<port> off)"
+    elif [ "${_dp_inf:-0}" -gt 0 ] || [ "${_dp_old:-0}" -gt 604800 ]; then
+      warn docprev "$_dp_msg — a public link that never expires or is over 7 days old: share.sh --list, then share.sh --unpublish <id>"
+    elif [ "${_dp_pub:-0}" -gt 0 ]; then
+      info docprev "$_dp_msg"
+    fi
+  fi
+fi
+
 # --- live install freshness: is THIS machine's ~/.claude/fleet current? (#635) ---
 # The commands/skills checks above answer "is it installed". This answers "is it
 # CURRENT", which nothing used to. `/fleet-sync-install` is per-machine and
