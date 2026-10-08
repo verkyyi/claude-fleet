@@ -526,7 +526,7 @@ fi
 # fleet-keys.sh --page is what ⌘/ and prefix ? open on the stage: it fits a
 # 38-row window and the stage's 119 columns, in both languages; it names every
 # chord of the switch table with that action's key for any other terminal on the
-# same line (⌘↑ ⌘↓ and ⌘[ ⌘] a pair each — 9 lines for the 11 actions); its three
+# same line (⌘↑ ⌘↓ and ⌘[ ⌘] a pair each — 10 lines for the 12 actions); its three
 # groups are the ⌘ keys, the writing area's and the mouse's; and it lists no ⌃
 # key — the list has none (leg 7). Both binds open it (leg 10 holds them equal).
 for lang in zh en; do
@@ -546,8 +546,8 @@ print(max(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in l.rst
   done <<EOF
 $sw_table
 EOF
-  [ "$(grep -c '⌘' <<< "$(printf '%s\n' "$PG" | awk '/^    ⌘/')")" = 9 ] \
-    || fail "11: the $lang page's ⌘ group is not 9 lines: $(printf '%s\n' "$PG" | awk '/^    ⌘/')"
+  [ "$(grep -c '⌘' <<< "$(printf '%s\n' "$PG" | awk '/^    ⌘/')")" = 10 ] \
+    || fail "11: the $lang page's ⌘ group is not 10 lines: $(printf '%s\n' "$PG" | awk '/^    ⌘/')"
 done
 PG="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --page --plain)"
 [ "$(printf '%s\n' "$PG" | grep -E '^  [^ ]' | sed -e 1d -e 's/^  //' | tr '\n' '|')" = '⌘ 键|写作区|鼠标|面板里的按键：在那个面板里按 ?|' ] \
