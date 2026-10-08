@@ -248,3 +248,4 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 部件 = `doctor --machine` 里 runtime / ccquota / claude / codex / tmux / cache 不是 PASS 的个数。沙箱自测 `bin/fleet-node-drill-selftest.sh`。
 
 演练记录与五个指标的读数：#2336（m4，2026-10-08）。
+演练里的「升级」用一个只改这份文档的提交；「回退」用一个只加 `conf/drill-fail` 的提交，再用一个删掉它的提交往前走。
