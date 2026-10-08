@@ -96,7 +96,7 @@ eq "A ls --json" "wid:F/issue-12|12|#75✓|merged;wid:F/issue-13|13||done:2h;wid
   "$(cli ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s|%s;" % (r["key"], r["issue"], r["pr"], r["reap"]) for r in json.load(sys.stdin)))')"
 eq "A ls --json: the bus" "Claude|62|ok|Opus 5.5|high;Codex|47|watch|gpt-6-astra|medium;Claude||||;" \
   "$(cli ls --json | python3 -c 'import json,sys; print("".join("%s|%s|%s|%s|%s;" % (r["agent"], r["ctx_left"], r["ctx_band"], r["model"], r["effort"]) for r in json.load(sys.stdin)))')"
-eq "A no cache at all: every row still listed, the bus —" 3 "$(FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE= python3 "$BIN/fleet-session-cli.py" ls | grep -c '—')"
+eq "A no cache at all: every row still listed, the bus —" 3 "$(FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_CACHE="" python3 "$BIN/fleet-session-cli.py" ls | grep -c '—')"
 
 # --- B. the resolver -----------------------------------------------------------------
 eq "B by key" "名称      随便聊聊" "$(cli show wid:F/scratch-3 | head -1)"
