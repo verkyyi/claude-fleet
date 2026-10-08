@@ -114,7 +114,9 @@ eq "B …the terminal's line" "$out" 'fleet 已退出；会话仍在 m4/m5 上�
 eq "B the client's server gone" "$(T has-session -t =fq 2>/dev/null; echo $?)" 1
 eq "B its stage gone" "$(tmux -L fq-stage has-session 2>/dev/null; echo $?)" 1
 sleep 0.3
-for p in K H A; do eval "pid=\$$p"; eq "B loop $p gone" "$(alive "$pid" && echo alive || echo gone)" gone; done
+eq "B the keeper gone" "$(alive "$K" && echo alive || echo gone)" gone
+eq "B the hub loop gone" "$(alive "$H" && echo alive || echo gone)" gone
+eq "B the actions loop gone" "$(alive "$A" && echo alive || echo gone)" gone
 eq "B a pid file naming another process kills nothing" "$(alive "$OTHER" && echo alive || echo gone)" alive
 eq "B the lease given back" "$(cat "$W/lease.log" 2>/dev/null)" 'release --lease L1'
 eq "B the lease's files gone" "$(ls "$CL"/client.lease "$CL"/client.where.json "$CL"/keeper.pid 2>/dev/null | wc -l | tr -d ' ')" 0
