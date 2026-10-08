@@ -498,7 +498,7 @@ if [ "$WARM_ONLY" = 1 ]; then
   win=$(bash "$BIN/scratch-pool.sh" claim "$SESS" --repo "$([ "$NOREPO" = 1 ] && echo - || echo "$REPO_ARG")" \
           --agent "${AGENT:-${FLEET_AGENT:-claude}}" 2>/dev/null | head -1)
   case "$win" in @[0-9]*) ;; *) exit 3 ;; esac
-  t_window=$(python3 -c 'import time; print(int(time.time() * 1000))')
+  t_window=$(fleet_now_ms)
   warm=1
   if [ "$NOREPO" != 1 ]; then
     wt=$(TM display-message -p -t "$win" '#{@worktree}' 2>/dev/null)
@@ -617,11 +617,6 @@ fi
 if [ -n "$ORIGIN_WID" ]; then TM set-window-option -t "$win" @origin_wid "$ORIGIN_WID" 2>/dev/null
 elif [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"; fi
 [ -n "$ORIGIN" ] && [ -z "$ORIGIN_WID" ] && fleet_stamp_origin_gen "$SESS" "$win" "$ORIGIN" "$SOCK"
-# Window handle (issue #566), likewise on BOTH paths: a warm-pool window is parked
-# in the holding session with no handle, and only becomes a fleet window here at
-# claim time. Best-effort — the dash backfills a window that ends up without one.
-fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
-
 # --warm-only's seed (issue #2234): the claimed window is an agent at rest past its
 # input-mount flush, so the seed goes in as its FIRST TURN — paste + a separate
 # Enter, only once its input is seen empty (fleet-pane-submit.sh). One that never
@@ -644,8 +639,15 @@ if [ "$WARM_ONLY" = 1 ] && [ -n "$PROMPT" ]; then
     exit 3
   fi
   t_ready=${stamps%%	*}; t_prompt=${stamps#*	}
-  [ "$src" = 0 ] || t_prompt=${t_prompt:-$(python3 -c 'import time; print(int(time.time() * 1000))')}
+  [ "$src" = 0 ] || t_prompt=${t_prompt:-$(fleet_now_ms)}
 fi
+
+# Window handle (issue #566), likewise on BOTH paths: a warm-pool window is parked
+# in the holding session with no handle, and only becomes a fleet window here at
+# claim time. Best-effort — the dash backfills a window that ends up without one.
+# After the first turn, not before: its lock + scan is the dearest stamp, and
+# nothing the turn starts reads it (发出即开 ≤1 s, issue #2352).
+fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
 
 # Keep the full name separate from the clipped/deduplicated window title. The
 # helper waits for the agent's input to settle, then pastes WITHOUT Enter. Pin a

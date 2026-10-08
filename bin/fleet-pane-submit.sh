@@ -21,7 +21,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 sock="${1:-}" target="${2:-}" tf="${3:-}"
 [ -n "$sock" ] && [ -n "$target" ] && [ -f "$tf" ] || { echo "usage: fleet-pane-submit.sh <socket> <window|pane> <text-file>" >&2; exit 2; }
 TM() { tmux -L "$sock" "$@"; }
-now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+# perl first: a python3 start is ~20 ms of the person's 1 s (issue #2352).
+now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000' 2>/dev/null || python3 -c 'import time; print(int(time.time() * 1000))'; }
 text=$(cat "$tf")
 [ -n "${text//[[:space:]]/}" ] || { echo "fleet-pane-submit: nothing to submit" >&2; exit 2; }
 
