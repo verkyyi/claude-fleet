@@ -154,6 +154,9 @@ def check_release(spec):
     return spec
 
 
+DRILL_FAIL = "conf/drill-fail"   # fleet-node-drill.sh's rollback release (issue #2336)
+
+
 def platform_id():
     p = env("FLEET_NODE_UPDATE_PLATFORM", "")
     if p:
@@ -668,6 +671,11 @@ def doctor_rows(p):
                  if os.path.realpath(os.path.join(ident[2], rel)) != os.path.realpath(os.path.join(p.current, "tools", "bin", t))]
         rows.append(("PASS", "account", "%s: claude · codex · tmux from the release" % login) if not drift
                     else ("WARN", "account", "%s: %s not the release's (re-linked on the next tick)" % (login, ", ".join(drift))))
+    # the drill's deliberate failure (issue #2336): a release carrying this marker
+    # fails its own doctor, so the updater must roll it back. On trunk, so a
+    # non-managed install that follows stable onto it moves forward off it again.
+    if os.path.exists(os.path.join(d, DRILL_FAIL)):
+        rows.append(("FAIL", "drill", "%s carries %s — a deliberate drill failure (#2336)" % (cur[:12], DRILL_FAIL)))
     return rows
 
 

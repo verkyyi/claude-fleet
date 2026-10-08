@@ -237,7 +237,7 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 
 在**被演练的那台**上跑（先 m4，共同约定 6）。每一步动真机前先问（y 做 · n 跳过记 SKIP · q 停）：
 基线 → 加入码（人）→ 安装（人，§8 那一条）→ 逐个账号 `account adopt`（发起人自己的账号最后迁；失败即停并打印 `account release`）
-→ 升级（人移 stable 到 `--to`，等更新器 `committed`）→ 回退（人移到 `--fail`：只在演练分支上、doctor 多一行 FAIL 的提交，等 `rolled-back` 回到 `--to`；看完移回）
+→ 升级（人移 stable 到 `--to`，等更新器 `committed`）→ 回退（人移到 `--fail`：master 上一个只加 `conf/drill-fail` 的提交——带这个标记的发布版 doctor 多一行 FAIL（`fleet-node-update.py` `DRILL_FAIL`）——等 `rolled-back` 回到 `--to`；看完 stable **往前**移到删掉标记的下一提交。不用演练分支：install-sync 从不往回移，停在主干外的提交上的非托管账号就再也跟不上 stable）
 → 复查（`doctor --machine` + 五个指标）→ 断 GitHub（这一步内 `/etc/hosts` 挡住 github.com 等，重装应全部跳过、只从入口取到当前发布版；挡板总会撤掉，下次启动也先撤）
 → 回话（人确认会话能回话、入口能往这台派会话）。
 
