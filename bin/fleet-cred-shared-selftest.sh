@@ -26,6 +26,13 @@
 #   F  `status --machine` / the doctor's `cred` row: shared · user · k/N · a/b
 #   G  machine uninstall: every fleet.conf, credential and key byte for byte
 #      where it was; the record, the store and the service gone
+#   H  a half install (issue #2273: the store and its meta.json, no credsep.json):
+#      `uninstall --dry-run` says HALF INSTALLED, not "nothing to undo", and
+#      `uninstall --login beta` puts it back byte for byte from meta.json
+#   I  machine install whose agent bootstrap fails AND whose way back fails too:
+#      exit 5, the credentials back anyway, the store kept as <login>.rolledback-*,
+#      the steps to do by hand printed (the clean rollback is BREAK-IT
+#      `cred-sep-bootstrap-fails`)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "/tmp/credshared-st.XXXXXX")
@@ -38,7 +45,7 @@ cleanup() {
 trap cleanup EXIT
 export FLEET_CREDSEP_ROOT_BASE="$SB/db" FLEET_CREDSEP_RUN_BASE="$SB/run" FLEET_CREDSEP_LOG_BASE="$SB/log" \
        FLEET_CREDSEP_LIB="$SB/lib" FLEET_CREDSEP_DAEMON_DIR="$SB/daemons" FLEET_CREDSEP_ROLE="$ME" \
-       FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_SUDO='' \
+       FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
        FLEET_CREDSEP_PW="$SB/pw" FLEET_CREDSEP_USERS="$SB/users" FLEET_CREDSEP_HOMES="$SB/homes"
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_CRED_SEPARATE FLEET_CRED_PROXY FLEET_CRED_AS
 FAIL=0
@@ -216,5 +223,50 @@ rm -f "$CA/cred-proxy/"*.json "$CA/cred-proxy/revoked" 2>/dev/null   # the copie
   || fail "G key"
 [ ! -e "$SB/db/.shared.json" ] && [ ! -e "$SB/db/alpha" ] && [ ! -e "$SB/db/beta" ] && [ -z "$(ls "$SB/daemons")" ] \
   && pass "G the record, the stores and the service gone" || fail "G leftovers: $(ls -a "$SB/db" "$SB/daemons" 2>&1 | tr '\n' ' ')"
+
+# ── H: a half install is undone from meta.json ─────────────────────────────────────
+out=$(bash "$BIN/fleet-credsep.sh" machine install --logins beta 2>&1) || fail "H setup install: $out"
+rm -f "$CB/credsep.json"                       # the install stopped before its last step
+chmod 000 "$SB/db/beta/meta.json"              # as the login sees it: the store is not readable
+out=$(HOME="$SB/homes/beta" python3 -I "$BIN/fleet-credsep.py" uninstall --dry-run --login beta --conf-dir "$CB" 2>&1)
+chmod 600 "$SB/db/beta/meta.json"
+case "$out" in *"HALF INSTALLED"*"uninstall --login beta"*) pass "H dry run names the half install and the one line" ;;
+  *) fail "H dry run: $out" ;; esac
+out=$(HOME="$SB/homes/beta" python3 -I "$BIN/fleet-credsep.py" uninstall --login beta --conf-dir "$CB" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(snap)" = "$BEFORE" ] && [ ! -e "$SB/db/beta" ] \
+  && pass "H uninstall from meta.json alone: beta byte for byte" \
+  || fail "H rc=$rc: $(diff <(printf '%s\n' "$BEFORE") <(snap) | head -4) $(printf '%s' "$out" | tail -2)"
+bash "$BIN/fleet-credsep.sh" machine uninstall >/dev/null 2>&1
+
+# ── I: the way back fails too: say so, keep the store, print the steps ──────────────
+mkdir -p "$SB/shim"
+cat > "$SB/shim/launchctl" <<'EOF'
+#!/bin/sh
+case "$1" in print) exit 113 ;; bootstrap) echo "Bootstrap failed: 5: Input/output error"; exit 5 ;; esac
+exit 0
+EOF
+cat > "$SB/shim/systemctl" <<'EOF'
+#!/bin/sh
+case "$*" in *ccquota-agent-*) case "$1" in enable|restart) echo "Job failed"; exit 5 ;; esac ;; esac
+exit 0
+EOF
+chmod +x "$SB/shim/launchctl" "$SB/shim/systemctl"
+printf '#!/bin/sh\nexec /bin/sleep 1\n' > "$SB/homes/beta/run-agent.sh"; chmod +x "$SB/homes/beta/run-agent.sh"
+if [ "$(uname)" = Darwin ]; then AG="$SB/daemons/com.ccquota.agent.beta.plist"
+  python3 -c 'import plistlib, sys; open(sys.argv[1], "wb").write(plistlib.dumps({"Label": "com.ccquota.agent.beta",
+"ProgramArguments": [sys.argv[2]], "RunAtLoad": True}))' "$AG" "$SB/homes/beta/run-agent.sh"
+else AG="$SB/daemons/ccquota-agent-beta.service"; printf '[Service]\nExecStart=%s\n' "$SB/homes/beta/run-agent.sh" > "$AG"; fi
+AG0=$(cksum < "$AG")
+out=$(PATH="$SB/shim:$PATH" FLEET_CREDSEP_SVC=1 FLEET_CREDSEP_BOOT_TRIES=1 bash "$BIN/fleet-credsep.sh" machine install --logins beta 2>&1); rc=$?
+[ "$rc" = 5 ] && printf '%s' "$out" | grep -q 'rollback: beta — FAILED at' \
+  && printf '%s' "$out" | grep -q 'rollback INCOMPLETE' \
+  && printf '%s' "$out" | grep -Eq '^  [0-9]+\. .*(launchctl bootstrap system|systemctl restart)' \
+  && pass "I the way back failed: exit 5, the manual steps printed" || fail "I rc=$rc: $(printf '%s' "$out" | tail -8)"
+grep -q 'sk-ant-oat01-beta' "$CB/accounts/main.hub/.credentials.json" 2>/dev/null && [ ! -L "$CB/node.env" ] \
+  && [ "$(cksum < "$AG")" = "$AG0" ] \
+  && pass "I the credentials and the agent definition are back all the same" || fail "I files: $(ls -la "$CB" | tr '\n' ' ')"
+ls -d "$SB/db"/beta.rolledback-* >/dev/null 2>&1 && [ ! -e "$SB/db/beta" ] && [ ! -e "$CB/credsep.json" ] \
+  && pass "I the store kept as beta.rolledback-* for the person; nothing reads it as separated" \
+  || fail "I store: $(ls -a "$SB/db" 2>&1 | tr '\n' ' ')"
 
 [ "$FAIL" = 0 ] && echo "fleet-cred-shared-selftest: OK" || { echo "fleet-cred-shared-selftest: FAILED"; exit 1; }

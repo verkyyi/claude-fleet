@@ -69,6 +69,8 @@
 #                                                   (go test, when a toolchain is here); the kind drill is
 #                                                   .github/workflows/hub-rolling.yml
 #   hub-disk-attach-stuck                           deploy/k8s/base (no PVC), components/sqlite-single
+#   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
+#                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
@@ -91,7 +93,8 @@
 #                                                   fleet-client-where.sh
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
-#   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217).
+#   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
+#   cred-sep-bootstrap-fails, bin/fleet-break-it-cred-sep-selftest.sh (issue #2273).
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
 #   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
 #   zsh-guard-fleet-label                           shell/cw.zsh tmux()
@@ -154,7 +157,7 @@ lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
 [ -f "$DOC" ] || lintfail "docs/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
-DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" | tr _ -)
+DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" | tr _ -)
 IDS=''
 NROWS=0
 while IFS= read -r r; do
@@ -3381,6 +3384,68 @@ drill_oldcfg_broken_unmarked() {
   word=$(FLEET_UI_LANG=zh bash -c '. "$1/fleet-ui-lang.sh"; fleet_ui_t sidebar_cfg_broken' _ "$BIN")
   [ "$word" = '会坏·需重开' ] || { WHY="the broken row's word is [$word], not 会坏·需重开"; return 1; }
   WHAT="删了 gone.sh / await 的发版后：w-broken 红「会坏·需重开」并点名（窗口·仓库·单号·状态），只缺 new.sh 的 w-loop 黄且列为循环中，没 manifest 的 w-old 照旧黄；三个都没被重开"
+}
+
+drill_cold_fill_fails() {
+  # issue #2237: the cold start opens the agent's window before the tree is
+  # checked out; a checkout that fails must take that window (and the worktree)
+  # with it, and the spawn must say so — never a session on half a tree.
+  CAP=10; local d="$WORK/cf" lbl="brkcf-$$" t0 rc
+  mkdir -p "$d/o.git" "$d/main" "$d/conf" "$d/tmp" "$d/fb"
+  git init -q --bare "$d/o.git"
+  ( cd "$d/main" && git init -q -b master . && git config user.email t@t && git config user.name t \
+      && printf 'x\n' > CLAUDE.md && git add -A && git commit -qm i && git remote add origin "$d/o.git" \
+      && git push -q origin master ) || { WHY="cannot build the repo"; return 1; }
+  printf '#!/bin/sh\nexit 0\n' > "$d/fb/gh"; printf '#!/bin/sh\nexec sleep 60\n' > "$d/fb/agent"; chmod +x "$d/fb/gh" "$d/fb/agent"
+  env PATH="$d/fb:$PATH" FLEET_WRAP_LAUNCH="$d/fb/agent" "$REAL_TMUX" -L "$lbl" -f /dev/null new-session -d -s "$lbl" -n home \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  t0=$(now)
+  env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET PATH="$d/fb:$PATH" FLEET_CONF_DIR="$d/conf" TMPDIR="$d/tmp" \
+    FLEET_ORIGIN_GATE=0 FLEET_PRESPAWN_DEDUP=0 FLEET_REPO=acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master \
+    FLEET_WORKTREE_ROOT="$d/wt" FLEET_SPAWN_FILL_CMD='sleep 1; exit 1' \
+    bash "$BIN/dash-issue-session.sh" 5 "$lbl" --title t --origin hub --print > "$d/out" 2> "$d/err"; rc=$?
+  SECS=$(since "$t0")
+  local wins; wins=$("$REAL_TMUX" -L "$lbl" list-windows -t "$lbl" -F '#{@issue}' 2>/dev/null)
+  "$REAL_TMUX" -L "$lbl" kill-server >/dev/null 2>&1
+  [ "$rc" = 1 ] || { WHY="the spawn exited $rc, want 1"; return 1; }
+  grep -q 'worktree checkout' "$d/err" || { WHY="the spawn did not say the checkout failed: $(tr '\n' '|' < "$d/err")"; return 1; }
+  case " $(printf '%s ' $wins)" in *" 5 "*) WHY="the window of the failed checkout is still open"; return 1 ;; esac
+  [ -z "$(ls -d "$d"/wt/*issue-5 2>/dev/null)" ] || { WHY="the half worktree is still there"; return 1; }
+  WHAT="检出失败：会话窗口和半截 worktree 都收走，派发方得到 exit 1「worktree checkout」"
+}
+
+# ---- invite-expired (#2261, EPIC #2259 C2): a newcomer signs in with an invite
+# that cannot be used — expired, used, revoked, someone else's, never minted. The
+# whole change is the hub's, so the drill is its Go tests, run for real where a
+# toolchain is: each bad code is refused with its own reason and puts nobody on
+# the list; a good one lets the person in once and audits 「邀请已使用」; no code
+# is the list as before, saying the line to send an admin; the waiting
+# `fleet login` hears the refusal instead of waiting ten minutes. Without go the
+# tests must at least exist by name.
+drill_invite_expired() {
+  CAP=120; local t0 out rc tests f
+  tests='TestInviteRefusals TestInviteLetsANewcomerIn TestInviteNoCodeIsTheListAsBefore TestInviteRefusalReachesTheTerminal TestInviteOpensTheLoginWithAutoAssignOff'
+  f="$ROOT/tokenledger/internal/api/fleet_invites_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 'denyInvitePrefix + reason' "$ROOT/tokenledger/internal/api/fleet_invites.go" \
+    || { WHY="admitInvite no longer refuses a bad invite with its reason"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='过期 / 已用 / 撤销 / 别人的 / 没发过的码各被拒且说清原因、名单不变；好码进名单一次、审计「邀请已使用」；终端立刻听到拒绝（go test 五条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
 }
 
 # ================================================================ run ===========

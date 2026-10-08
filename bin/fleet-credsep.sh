@@ -4,7 +4,8 @@
 # EPIC #1967 C4). bin/fleet-credsep.py does the work; this resolves the login,
 # its conf and sudo.
 #
-#   fleet-credsep.sh install [--dry-run]    separate (needs `sudo -n`, once;
+#   fleet-credsep.sh install [--dry-run|--force]
+#                                           separate (needs `sudo -n`, once;
 #                                           --dry-run needs none: what it would do)
 #   fleet-credsep.sh uninstall [--dry-run]  undo: every file back where it was
 #                                           (--dry-run, no sudo: the steps back)
@@ -19,7 +20,7 @@
 # the doctor print), the login is SUDO_USER's — or `--login <login>` — and its
 # conf dir is under THAT login's home: never root's (issue #2135, BREAK-IT
 # `cred-sep-sudo-root`). Root with neither is refused (exit 2).
-#   fleet-credsep.sh machine install|uninstall|refresh [--logins a,b] [--dry-run]
+#   fleet-credsep.sh machine install|uninstall|refresh [--logins a,b] [--dry-run] [--force]
 #                                           the machine's ONE shared proxy (issue
 #                                           #2217): every login (default: each with
 #                                           ~/.claude/fleet) a tenant of it — one
@@ -34,6 +35,14 @@
 #                                           uninstall; separated → refresh the
 #                                           root-owned code copy. No password-less
 #                                           sudo → one line saying what to run.
+#
+# Preflight (issue #2273): install / machine install refuse (exit 6, nothing
+# moved) a login whose credential proxy is off or not running, whose live
+# sessions do not all talk to it yet, or that has an EPIC batch running —
+# moving the credentials first is what took m4's subscription away on
+# 2026-10-07. --force skips it. A step that fails halfway puts every login it
+# took from nothing back, from the store's meta.json (exit 1; 5 = the way back
+# failed too, the steps to do by hand printed).
 #
 # Separated: a role account (_fleetcred / fleetcred) owns
 # /var/db/fleet-cred/<login>/ (0700) — the leased credentials, Codex auth.json
@@ -109,6 +118,8 @@ root_py() { # the privileged half, through sudo (env seams passed explicitly)
     ${FLEET_CREDSEP_ROLE:+FLEET_CREDSEP_ROLE="$FLEET_CREDSEP_ROLE"} \
     ${FLEET_CREDSEP_SVC:+FLEET_CREDSEP_SVC="$FLEET_CREDSEP_SVC"} \
     ${FLEET_CREDSEP_TEST:+FLEET_CREDSEP_TEST="$FLEET_CREDSEP_TEST"} \
+    ${FLEET_CREDSEP_PREFLIGHT:+FLEET_CREDSEP_PREFLIGHT="$FLEET_CREDSEP_PREFLIGHT"} \
+    ${FLEET_CREDSEP_BOOT_TRIES:+FLEET_CREDSEP_BOOT_TRIES="$FLEET_CREDSEP_BOOT_TRIES"} \
     python3 -I "$BIN/fleet-credsep.py" "$@" --login "$LOGIN" --conf-dir "$CONF" --install-dir "$BIN/.."
 }
 can_sudo() { [ -z "$SUDO" ] || $SUDO true 2>/dev/null; }
@@ -124,6 +135,8 @@ root_machine() { # the machine verbs (issue #2217): no --login, the logins are n
     ${FLEET_CREDSEP_ROLE:+FLEET_CREDSEP_ROLE="$FLEET_CREDSEP_ROLE"} \
     ${FLEET_CREDSEP_SVC:+FLEET_CREDSEP_SVC="$FLEET_CREDSEP_SVC"} \
     ${FLEET_CREDSEP_TEST:+FLEET_CREDSEP_TEST="$FLEET_CREDSEP_TEST"} \
+    ${FLEET_CREDSEP_PREFLIGHT:+FLEET_CREDSEP_PREFLIGHT="$FLEET_CREDSEP_PREFLIGHT"} \
+    ${FLEET_CREDSEP_BOOT_TRIES:+FLEET_CREDSEP_BOOT_TRIES="$FLEET_CREDSEP_BOOT_TRIES"} \
     ${FLEET_CREDSEP_PW:+FLEET_CREDSEP_PW="$FLEET_CREDSEP_PW"} \
     ${FLEET_CREDSEP_USERS:+FLEET_CREDSEP_USERS="$FLEET_CREDSEP_USERS"} \
     ${FLEET_CREDSEP_HOMES:+FLEET_CREDSEP_HOMES="$FLEET_CREDSEP_HOMES"} \

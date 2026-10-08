@@ -127,6 +127,8 @@ bin/fleet-topbar.py
 bin/fleet-iterm-profile.py
 # ⌘N's writing area (#1953): the stage's portal pane and its one way out
 bin/fleet-compose.py
+# …and how long each of its sends took, per segment (#2238)
+bin/fleet-compose-latency.sh
 conf/tmux-shell.conf
 conf/tmux-shell-stage.conf
 conf/fleet-palette.conf

@@ -120,8 +120,39 @@ var pageText = map[string]i18n.Text{
 		i18n.ZhCN: "{v} 已经不在本入口的名单上了。请让管理员重新加上你的 GitHub 用户名。",
 	},
 	"deny.notlisted": {
-		i18n.EN:   "{v} isn't on this hub's list. Ask an admin to add your GitHub username.",
-		i18n.ZhCN: "{v} 不在本入口的名单上。请让管理员加上你的 GitHub 用户名。",
+		i18n.EN:   "Nobody has invited {v} to this hub yet. Send this line to an admin: ",
+		i18n.ZhCN: "还没有人邀请你（{v}）。把这行发给管理员：",
+	},
+	// The terminal's last words after deny.notlisted + deny.ask (#2261).
+	"deny.after": {
+		i18n.EN:   " — once invited, run the line they send you.",
+		i18n.ZhCN: "——拿到邀请后，运行他发来的那一行就行。",
+	},
+	// The line a refused person sends (claude-fleet#2261): plain text, copied.
+	"deny.ask": {
+		i18n.EN:   "Please invite GitHub user {login}",
+		i18n.ZhCN: "请邀请 GitHub 用户 {login}",
+	},
+	// An invite that cannot be used (claude-fleet#2261), one per reason.
+	"deny.invite.expired": {
+		i18n.EN:   "This invite has expired — an invite lasts 7 days. Ask whoever sent it for a new one.",
+		i18n.ZhCN: "这条邀请已过期——邀请 7 天有效。请发邀请的人再发一条。",
+	},
+	"deny.invite.used": {
+		i18n.EN:   "This invite was already used — each one lets one person in, once. Ask whoever sent it for a new one.",
+		i18n.ZhCN: "这条邀请已经用过了——一条邀请只放一个人进来一次。请发邀请的人再发一条。",
+	},
+	"deny.invite.revoked": {
+		i18n.EN:   "An admin withdrew this invite. Ask them for a new one.",
+		i18n.ZhCN: "管理员已撤销这条邀请。请找他再发一条。",
+	},
+	"deny.invite.unknown": {
+		i18n.EN:   "This hub never made this invite. Check the whole command was pasted, or ask for a new one.",
+		i18n.ZhCN: "本入口没发过这条邀请。看看命令是不是没粘全，或者请人再发一条。",
+	},
+	"deny.invite.other-user": {
+		i18n.EN:   "This invite is for another GitHub account, not {v}. Sign in with that account, or ask for an invite of your own.",
+		i18n.ZhCN: "这条邀请是发给另一个 GitHub 账号的，不是 {v}。换那个账号登录，或者请人给你单独发一条。",
 	},
 	"deny.another": {i18n.EN: "Use another account", i18n.ZhCN: "换个账号"},
 	"deny.back":    {i18n.EN: "Back to claudefleet", i18n.ZhCN: "回到 claudefleet"},

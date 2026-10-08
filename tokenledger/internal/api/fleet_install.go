@@ -47,26 +47,41 @@ func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// stable's own installer when it installs from stable (claude-fleet#1805),
-	// else the one this image was built with
-	tmpl := s.stableInstaller(r.Context())
-	if tmpl == nil {
-		if !fleetclient.Packed {
-			httpError(w, http.StatusServiceUnavailable, "this hub was built without its client — pack it (bin/fleet-client-pack.sh) and rebuild")
-			return
-		}
-		var err error
-		if tmpl, err = fleetclient.Files.ReadFile(fleetclient.Installer); err != nil {
-			httpError(w, http.StatusInternalServerError, "installer missing from this build")
-			return
-		}
+	body, ok := s.installerScript(w, r, "")
+	if !ok {
+		return
 	}
-	body := strings.ReplaceAll(string(tmpl), fleetclient.HubPlaceholder, s.hubURL(r))
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write([]byte(body))
 }
+
+// installerScript is the installer /install serves, hub URL filled in —
+// stable's own when it installs from stable (claude-fleet#1805), else the one
+// this image was built with. invite fills the installer's InvitePlaceholder
+// (claude-fleet#2260/#2261) — "" on /install, so the literal never reads as a
+// code. ok=false when it answered w with the error.
+func (s *Server) installerScript(w http.ResponseWriter, r *http.Request, invite string) (string, bool) {
+	tmpl := s.stableInstaller(r.Context())
+	if tmpl == nil {
+		if !fleetclient.Packed {
+			httpError(w, http.StatusServiceUnavailable, "this hub was built without its client — pack it (bin/fleet-client-pack.sh) and rebuild")
+			return "", false
+		}
+		var err error
+		if tmpl, err = fleetclient.Files.ReadFile(fleetclient.Installer); err != nil {
+			httpError(w, http.StatusInternalServerError, "installer missing from this build")
+			return "", false
+		}
+	}
+	body := strings.ReplaceAll(string(tmpl), fleetclient.HubPlaceholder, s.hubURL(r))
+	return strings.ReplaceAll(body, InvitePlaceholder, invite), true
+}
+
+// InvitePlaceholder is where bin/fleet-install.sh takes the invite code
+// (claude-fleet#2260), filled the way fleetclient.HubPlaceholder is.
+const InvitePlaceholder = "__FLEET_INVITE__"
 
 // handleInstallFile serves GET /install/<path>: the manifest, or one file it
 // lists (bin/fleet, bin/fleet-shell.sh, conf/tmux-shell.conf, …), with its

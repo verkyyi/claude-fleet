@@ -4327,10 +4327,13 @@ _fleet_wt_of() {
 # dash, #401/#446); prints the worktree path on success, rc 1 on failure.
 # What a new worktree gets beyond the checkout is fleet_worktree_setup's (#885).
 fleet_worktree_create() {
-  local main="" slug="" base="" br="" reuse=0 n=0 wt
+  local main="" slug="" base="" br="" reuse=0 n=0 wt nco=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --reuse)  reuse=1 ;;
+      # --no-checkout (issue #2237): the worktree and its branch, no files and no
+      # setup hook — fleet_worktree_fill does both later, while the agent starts.
+      --no-checkout) nco=--no-checkout ;;
       --branch) br="${2:-}"; shift ;;
       *) n=$((n + 1)); case "$n" in 1) main="$1" ;; 2) slug="$1" ;; 3) base="$1" ;; esac ;;
     esac
@@ -4341,17 +4344,42 @@ fleet_worktree_create() {
   wt="$(fleet_worktree_dir "$main" "$slug")" || return 1
   mkdir -p "$(dirname "$wt")" 2>/dev/null
   if [ -n "$base" ]; then
-    git -C "$main" worktree add -b "$br" "$wt" "origin/$base" >/dev/null 2>&1 \
-      || git -C "$main" worktree add -b "$br" "$wt" "$base" >/dev/null 2>&1 \
-      || { [ "$reuse" = 1 ] && git -C "$main" worktree add "$wt" "$br" >/dev/null 2>&1; } \
+    git -C "$main" worktree add ${nco:+"$nco"} -b "$br" "$wt" "origin/$base" >/dev/null 2>&1 \
+      || git -C "$main" worktree add ${nco:+"$nco"} -b "$br" "$wt" "$base" >/dev/null 2>&1 \
+      || { [ "$reuse" = 1 ] && git -C "$main" worktree add ${nco:+"$nco"} "$wt" "$br" >/dev/null 2>&1; } \
       || return 1
   else
-    git -C "$main" worktree add -b "$br" "$wt" >/dev/null 2>&1 \
-      || { [ "$reuse" = 1 ] && git -C "$main" worktree add "$wt" "$br" >/dev/null 2>&1; } \
+    git -C "$main" worktree add ${nco:+"$nco"} -b "$br" "$wt" >/dev/null 2>&1 \
+      || { [ "$reuse" = 1 ] && git -C "$main" worktree add ${nco:+"$nco"} "$wt" "$br" >/dev/null 2>&1; } \
       || return 1
   fi
-  fleet_worktree_setup "$main" "$wt"
+  [ -n "$nco" ] || fleet_worktree_setup "$main" "$wt"
   printf '%s\n' "$wt"
+}
+
+# fleet_worktree_boot <wt> — after fleet_worktree_create --no-checkout: check out
+# only what an agent reads AS IT STARTS (issue #2237) — CLAUDE.md / AGENTS.md, the
+# project's .claude/ and .codex/, .mcp.json — so it can be launched now, before
+# the rest of the tree. Silent; rc of the checkout (0 when the repo has none).
+fleet_worktree_boot() {
+  local wt="${1:-}" f
+  [ -d "$wt" ] || return 1
+  f=$(git -C "$wt" ls-tree --name-only HEAD -- CLAUDE.md CLAUDE.local.md AGENTS.md .claude .codex .mcp.json 2>/dev/null)
+  [ -n "$f" ] || return 0
+  # shellcheck disable=SC2086  # one top-level name per line, none with a space
+  ( IFS=$'\n'; git -C "$wt" checkout -q HEAD -- $f ) >/dev/null 2>&1
+}
+
+# fleet_worktree_fill <main> <wt> — the rest of a --no-checkout worktree (issue
+# #2237): every file of its HEAD, then the per-worktree setup hook, exactly what
+# fleet_worktree_create does in one go. rc 1 when the checkout failed; no
+# directory = nothing to fill (rc 0 — the spawn's own worktree check stands).
+fleet_worktree_fill() {
+  local main="${1:-}" wt="${2:-}"
+  [ -d "$wt" ] || return 0
+  git -C "$wt" reset -q --hard >/dev/null 2>&1 || return 1
+  fleet_worktree_setup "$main" "$wt"
+  return 0
 }
 
 # fleet_worktree_setup <main> <wt> — the per-worktree setup hook (issue #885). When

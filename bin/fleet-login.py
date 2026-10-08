@@ -598,6 +598,31 @@ def parse_scan_opts(argv, node=False):
     return hub_arg, invert, include, out
 
 
+INVITE_FILE = os.path.join(CONF_DIR, "invite")
+
+
+def pending_invite():
+    """The invite an invite command's install carried (claude-fleet#2261):
+    FLEET_INVITE, exported by the script <hub>/i/<code> served — kept in
+    INVITE_FILE (0600) so a login run again later still sends it — else
+    that file. "" for none. Used once: login_done drops it."""
+    code = os.environ.get("FLEET_INVITE", "").strip()
+    if code:
+        try:
+            os.makedirs(CONF_DIR, exist_ok=True)
+            fd = os.open(INVITE_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(code + "\n")
+        except OSError:
+            pass
+        return code
+    try:
+        with open(INVITE_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def scan(hub, invert, purpose=""):
     """The device-code flow: start, draw the QR, wait for the confirmation.
     Returns the hub's answer (a CertResponse; with purpose=node it also
@@ -606,6 +631,9 @@ def scan(hub, invert, purpose=""):
     body = {"public_key": pub, "device_name": device_name()}
     if purpose:
         body.update(purpose=purpose, os_user=getpass.getuser())
+    invite = pending_invite()
+    if invite:
+        body["invite"] = invite
     try:
         code, st = post(hub + "/v1/fleet/login/start", body)
     except (urllib.error.URLError, OSError) as e:
@@ -639,8 +667,10 @@ def scan(hub, invert, purpose=""):
             continue  # a 5xx is the ingress / hub between two polls, not a «no» (#1901)
         if code == 200:
             return res
-        if res.get("code") == "no_machine_login":
-            # the hub cannot sign for this person yet (claude-fleet#2090)
+        if res.get("code") in ("no_machine_login", "not_invited"):
+            # the hub cannot sign for this person yet (claude-fleet#2090), or
+            # their sign-in was refused — nobody invited them, or the invite
+            # cannot be used (claude-fleet#2261): the reason, and stop
             die("✗ %s" % (res.get("reason") or res.get("error", "")), 1)
         die("not issued (HTTP %d): %s" % (code, res.get("error", "")), 1)
     die("timed out waiting for the scan — run it again", 1)
@@ -656,6 +686,10 @@ def cmd_login(argv):
     # blocks the first time. The certificate goes first: it is what says
     # "logged in" to `fleet node ensure`.
     write_file(CERT, res["certificate"], 0o644)
+    try:
+        os.unlink(INVITE_FILE)  # spent at the sign-in (claude-fleet#2261)
+    except OSError:
+        pass
     ensure_node(hub)
     added = write_cert(res, include)
     show("✓ 证书已写入 %s（%s 前有效，账号 %s）" % (CERT, res["valid_before"], ",".join(res["principals"])))
