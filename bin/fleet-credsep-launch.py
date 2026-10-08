@@ -5,9 +5,11 @@ bin/fleet-credsep.sh installs; never from a login's own checkout.
 
     fleet-credsep-launch.py proxy <login>
         The credential proxy, as the role account (_fleetcred / fleetcred):
-        reads <root>/meta.json, takes the FLEET_CRED_* settings from the
+        reads <root>/meta.json, takes the proxy's port / timings from the
         login's fleet.conf + secrets.env (PARSED, never sourced — this is root
-        reading a file the login writes), copies node-probe.json in, then drops
+        reading a file the login writes) and everything that names an upstream,
+        the hub or the relay pass from root's <lib>/<login>.conf ONLY (issue
+        #2290), copies node-probe.json in, then drops
         to the role account and execs fleet-cred-proxy.py serve with every
         credential path pointing into <root>.
 
@@ -37,8 +39,15 @@ import json, os, pwd, re, shutil, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROLE = "_fleetcred" if sys.platform == "darwin" else "fleetcred"
 CRED_KEYS = re.compile(r"^(FLEET_CRED_(PROXY_PORT|PROXY_TTL|PROXY_SWITCH_SECS|PROXY_TIMEOUT|PROXY_TRUST_SECS|"
-                       r"RELAY_URL|RELAY_TOKEN|CENTRAL_URL|ANTHROPIC_URL|CODEX_URL)|FLEET_HUB_URL|"
+                       r"RELAY_URL|RELAY_TOKEN|CENTRAL_URL|ANTHROPIC_URL|CODEX_URL|ALLOW_HOSTS)|FLEET_HUB_URL|"
                        r"FLEET_PROBE_FORCE_UNREACHABLE)$")
+# the only CRED_KEYS a login's own files may set (issue #2290): its proxy's port
+# and timings. Everything that says WHERE a credential or the node token goes —
+# every upstream URL, FLEET_HUB_URL, the relay pass, the allow-list, the probe
+# override — comes from root's <lib>/<login>.conf alone (fleet-credsep.py install
+# writes it); the same key in a login file is ignored and said so.
+LOGIN_KEYS = re.compile(r"^FLEET_CRED_PROXY_(PORT|TTL|SWITCH_SECS|TIMEOUT|TRUST_SECS)$")
+TEST = os.environ.get("FLEET_CREDSEP_TEST") == "1"
 LOGIN_RE = re.compile(r"^[a-z0-9_][a-z0-9_.-]{0,31}$")
 
 
@@ -102,13 +111,58 @@ def drop_to(user):
     return pw
 
 
-def tenant_settings(meta):
-    settings = {}
+def root_conf(login):
+    """root's settings for <login>: <lib>/<login>.conf, beside this root-owned
+    code (FLEET_CREDSEP_LIB in the selftest's sandbox). Not root's ⇒ not read."""
+    lib = os.environ.get("FLEET_CREDSEP_LIB") if TEST and os.environ.get("FLEET_CREDSEP_LIB") else HERE
+    path = os.path.join(lib, login + ".conf")
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return path, {}
+    if os.geteuid() == 0 and (st.st_uid != 0 or st.st_mode & 0o022 or not os.path.isfile(path)):
+        sys.stderr.write("fleet-credsep-launch: %s is not root's alone — not read\n" % path)
+        return path, {}
+    return path, {k: v for k, v in env_lines(path).items() if CRED_KEYS.match(k)}
+
+
+def tenant_settings(meta, run=None):
+    """The proxy's settings for meta's login: its port / timings from its own
+    files, the rest from root's config only (issue #2290). A login file that
+    sets one of the rest differently is ignored — one stderr line per key, and
+    the key names (never a value) in <run>/ignored.<login> for `credsep check`."""
+    login = meta["login"]
+    rpath, root = root_conf(login)
+    settings, ignored = {}, {}
     conf = meta["conf_dir"]
     for f in (os.path.join(meta.get("install_dir", ""), "fleet.conf"),
               os.path.join(conf, "fleet.settings"), os.path.join(conf, "fleet.conf"),
               os.path.join(conf, "secrets.env")):
-        settings.update({k: v for k, v in env_lines(f).items() if CRED_KEYS.match(k)})
+        for k, v in env_lines(f).items():
+            if not CRED_KEYS.match(k):
+                continue
+            if LOGIN_KEYS.match(k):
+                settings[k] = v
+            elif root.get(k) != v:
+                ignored[k] = f
+            else:
+                ignored.pop(k, None)
+    settings.update(root)
+    for k, f in sorted(ignored.items()):
+        sys.stderr.write("fleet-credsep-launch: ignored %s from %s — only root's %s sets it (issue #2290)\n"
+                         % (k, f, rpath))
+    if run:
+        note = os.path.join(run, "ignored." + login)
+        try:
+            if ignored:
+                with open(note + ".tmp", "w") as f:
+                    f.write("".join("%s %s\n" % (k, ignored[k]) for k in sorted(ignored)))
+                os.chmod(note + ".tmp", 0o644)
+                os.replace(note + ".tmp", note)
+            elif os.path.exists(note):
+                os.unlink(note)
+        except OSError:
+            pass
     return settings
 
 
@@ -167,7 +221,7 @@ def shared():
                         "node_env": os.path.join(root, "node.env"), "probe": probe,
                         "log": os.path.join(logdir, login + ".log"),
                         "legacy_port": int(meta.get("legacy_port") or 0),
-                        "settings": tenant_settings(meta)})
+                        "settings": tenant_settings(meta, run)})
     try:
         version = hashlib.sha256(open(os.path.join(HERE, "fleet-cred-proxy.py"), "rb").read()).hexdigest()[:12]
     except OSError:
@@ -184,10 +238,15 @@ def shared():
     os.replace(tmp, tf)
     env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": pw_role.pw_dir or "/var/empty",
            "LANG": "en_US.UTF-8", "FLEET_CRED_PROXY_LOG": os.path.join(logdir, "shared.log")}
+    # the allow-list (issue #2290): every tenant's root config may add hosts
+    extra = " ".join(t["settings"].get("FLEET_CRED_ALLOW_HOSTS", "") for t in tenants).strip()
+    if extra:
+        env["FLEET_CRED_ALLOW_HOSTS"] = extra
     if test:    # the sandbox's fake upstreams and its peer-uid seam
         env.update({k: v for k, v in os.environ.items()
                     if k.startswith("FLEET_CRED_") and k not in ("FLEET_CRED_PROXY_LOG",)})
         env["FLEET_CRED_SHARED_TEST"] = "1"
+        env["FLEET_CREDSEP_TEST"] = "1"
     drop_to(role)
     os.umask(0o077)
     os.chdir("/")
@@ -230,21 +289,10 @@ def main():
         os.makedirs(logdir, mode=0o755, exist_ok=True)
         if os.geteuid() == 0:
             os.chown(logdir, pw_role.pw_uid, pw_role.pw_gid)
-        conf = meta["conf_dir"]
-        settings = {}
-        for f in (os.path.join(meta.get("install_dir", ""), "fleet.conf"),
-                  os.path.join(conf, "fleet.settings"), os.path.join(conf, "fleet.conf"),
-                  os.path.join(conf, "secrets.env")):
-            settings.update({k: v for k, v in env_lines(f).items() if CRED_KEYS.match(k)})
+        settings = tenant_settings(meta, run)
         state = os.path.join(root, "cred-proxy")
         probe = os.path.join(state, "node-probe.json")
-        try:   # the probe the login measured; later ones arrive over ctl `probe`
-            shutil.copyfile(os.path.join(conf, "node-probe.json"), probe)
-            if os.geteuid() == 0:
-                os.chown(probe, pw_role.pw_uid, pw_role.pw_gid)
-            os.chmod(probe, 0o600)
-        except OSError:
-            pass
+        copy_probe(meta["conf_dir"], probe, pw_role)
         env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": pw_role.pw_dir or "/var/empty",
                "LANG": "en_US.UTF-8", "FLEET_CONF_DIR": root,
                "FLEET_CRED_ACCOUNTS": os.path.join(root, "accounts"),
@@ -257,6 +305,8 @@ def main():
                "FLEET_CRED_CTL_DIR": run,
                "FLEET_CRED_PROXY_LOG": os.path.join(logdir, login + ".log")}
         env.update(settings)
+        if TEST:    # loopback upstreams pass the allow-list only in the sandbox
+            env["FLEET_CREDSEP_TEST"] = "1"
         drop_to(role)
         os.umask(0o077)
         os.chdir("/")

@@ -186,6 +186,39 @@ that stopped before its last step) is undone by `uninstall --login <login>`;
 its `--dry-run` says HALF INSTALLED. BREAK-IT rows `cred-sep-by-agent`,
 `cred-sep-bootstrap-fails`.
 
+## Where the proxy's settings come from (issue #2290)
+
+Root starts the proxy, but the login writes its own `fleet.conf` and
+`secrets.env` — so nothing there may say where a credential goes. The launcher
+splits the keys:
+
+| key | read from |
+|---|---|
+| `FLEET_CRED_PROXY_PORT` / `_TTL` / `_SWITCH_SECS` / `_TIMEOUT` / `_TRUST_SECS` | the login's own files, as before |
+| `FLEET_CRED_ANTHROPIC_URL` / `_CODEX_URL` / `_RELAY_URL` / `_CENTRAL_URL`, `FLEET_HUB_URL`, `FLEET_CRED_RELAY_TOKEN`, `FLEET_PROBE_FORCE_UNREACHABLE`, `FLEET_CRED_ALLOW_HOSTS` | root's `<LIB>/<login>.conf` ONLY (`/Library/Application Support/claude-fleet/credsep/<login>.conf`, Linux `/usr/local/lib/claude-fleet/credsep/`; root, 0600 — a relay pass may be in it) |
+
+The same key in a login file with a different value is **ignored**: one stderr
+line in the proxy's launch log (`ignored <KEY> from <file>`) and the key names
+(never a value) in `<run>/ignored.<login>`, which `credsep check` turns into a
+WARN. A file there that is not root's alone is not read.
+
+`install` writes root's file the first time (a shared tenant's: `machine
+refresh` / `machine install`), taking the login's current values — an upstream
+or hub URL only when it is https to an allowed host; `FLEET_CRED_ALLOW_HOSTS`
+never (root edits the file by hand). After that the file is kept as it is: a
+later change in the login's files does nothing until root takes it with
+`sudo bash …/fleet-credsep.sh install --adopt` (same validation; restarts the
+proxy that reads it).
+
+The proxy checks once more in separated mode: every upstream — the four URLs
+and the hub the node token goes to — must be https to `api.anthropic.com`,
+`chatgpt.com`, `api.openai.com`, `auth.openai.com`, `fleet-relay.24hw.cn`,
+`ccquota.24haowan.com` or `claudefleet.24haowan.com` (+ root's
+`FLEET_CRED_ALLOW_HOSTS`, space- or comma-separated); plain http on loopback only
+in the selftest's sandbox (`FLEET_CREDSEP_TEST=1`). A login's own unseparated
+proxy (its own credentials) keeps the old rule: any https host. BREAK-IT row
+`cred-upstream-tenant-override`.
+
 ## What it does not stop
 
 - **Root.** A login with password-less sudo can `sudo cat` anything; the

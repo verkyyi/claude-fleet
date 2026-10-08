@@ -3,7 +3,7 @@
 cannot read them (issue #1971, EPIC #1967 C4). bin/fleet-credsep.sh is the
 front; install / uninstall run as ROOT (it calls them through `sudo -n`).
 
-    install   --login L --conf-dir C --install-dir I [--dry-run]
+    install   --login L --conf-dir C --install-dir I [--dry-run|--adopt]
     uninstall --login L --conf-dir C [--dry-run]
     status    --conf-dir C [--json]                 (as the login)
     check     --conf-dir C                          (as the login: the doctor row)
@@ -46,6 +46,10 @@ What install does, each step idempotent:
   6. the agent service now starts through fleet-credsep-launch.py agent (root,
      token down a pipe, then the login); the original definition is kept in
      backup/ for uninstall
+  6b. LIB/<L>.conf (root, 0600) — the proxy's upstream / hub / relay-pass
+     settings; the launcher reads these from here ONLY, never the login's own
+     files (issue #2290). Written once from the login's allowed values, then
+     kept; `install --adopt` takes the login's current ones again
   7. C/credsep.json — the login-readable record that says "separated" (no secret),
      with `back`: the paths uninstall puts things back to (issue #2135)
 
@@ -216,6 +220,66 @@ def env_file(path):
 
 def paths(login):
     return os.path.join(ROOT_BASE, login), os.path.join(RUN_BASE, login)
+
+
+# root's settings for a login's proxy (issue #2290): every key that says where a
+# credential or the node token goes. fleet-credsep-launch.py reads these from
+# <LIB>/<login>.conf ONLY; the login's own fleet.conf / secrets.env keep the port
+# and timings and nothing else.
+ROOT_KEYS = ("FLEET_CRED_ANTHROPIC_URL", "FLEET_CRED_CODEX_URL", "FLEET_CRED_RELAY_URL", "FLEET_CRED_CENTRAL_URL",
+             "FLEET_HUB_URL", "FLEET_CRED_RELAY_TOKEN", "FLEET_PROBE_FORCE_UNREACHABLE", "FLEET_CRED_ALLOW_HOSTS")
+URL_KEYS = ROOT_KEYS[:5]
+
+
+def root_conf_path(login):
+    return os.path.join(LIB, login + ".conf")
+
+
+def proxy_mod():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("fleet_cred_proxy", os.path.join(HERE, "fleet-cred-proxy.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def login_settings(conf, install_dir):
+    """The ROOT_KEYS the login's own files set today (parsed, never sourced)."""
+    out = {}
+    for f in ([os.path.join(install_dir, "fleet.conf")] if install_dir else []) + [
+            os.path.join(conf, "fleet.settings"), os.path.join(conf, "fleet.conf"), os.path.join(conf, "secrets.env")]:
+        out.update({k: v for k, v in env_file(f).items() if k in ROOT_KEYS})
+    return out
+
+
+def settings_conf(login, conf, install_dir, adopt=False):
+    """Write root's <LIB>/<login>.conf: on the first install (or --adopt) it takes
+    the login's current values — an upstream / hub URL only when it is https to an
+    allowed host, FLEET_CRED_ALLOW_HOSTS never (root adds that by hand). An
+    existing one is kept as it is: a later line in the login's files changes
+    nothing until root adopts it. True when the bytes changed."""
+    path = root_conf_path(login)
+    have = env_file(path) if os.path.isfile(path) else None
+    if have is not None and not adopt:
+        say("settings:", path, "(root's, kept)")
+        return False
+    vals = dict(have or {})
+    m = proxy_mod()
+    m.ALLOWED = m.allowed_hosts(vals.get("FLEET_CRED_ALLOW_HOSTS", ""))
+    for k, v in sorted(login_settings(conf, install_dir).items()):
+        if k == "FLEET_CRED_ALLOW_HOSTS":
+            say("settings: NOT taken %s from the login (only root adds a host: edit %s)" % (k, path))
+        elif k in URL_KEYS and not m.loopback_ok(v):
+            say("settings: NOT taken %s=%s from the login (not https to an allowed host)" % (k, v))
+        else:
+            vals[k] = v
+    body = ("# claude-fleet credsep (issue #2290) — root's settings for %s's credential proxy.\n"
+            "# Only root writes this; the same keys in the login's own files are ignored.\n" % login
+            + "".join("%s=%s\n" % (k, vals[k]) for k in ROOT_KEYS if vals.get(k)))
+    changed = put_changed(path, body, 0o600, "root" if os.geteuid() == 0 else login)
+    say("settings:", path, "(%s: %s)" % ("written" if changed else "current",
+                                         ", ".join(k for k in ROOT_KEYS if vals.get(k)) or "no key"))
+    return changed
 
 
 def codex_homes(conf, home, ne=None):
@@ -401,6 +465,7 @@ def install(a):
         with open(os.path.join(HERE, f), "rb") as src:
             moved_code |= put_changed(os.path.join(LIB, f), src.read(), 0o755, "root" if os.geteuid() == 0 else login)
     say("code:", LIB, "(updated)" if moved_code else "(current)")
+    moved_code |= settings_conf(login, conf, a.install_dir, bool(getattr(a, "adopt", False)))
 
     # 4. the credentials
     n = 0
@@ -550,6 +615,26 @@ def install(a):
     say("credsep: ON —", R, "(%s only%s)" % (ROLE, ", the machine's shared proxy" if shared else ""))
 
 
+def adopt(a):
+    """install --adopt (issue #2290): root takes the login's current upstream /
+    hub settings into <LIB>/<login>.conf — after the person checked them — and
+    restarts the proxy that reads them. Nothing else moves."""
+    R = paths(a.login)[0]
+    try:
+        meta = json.load(open(os.path.join(R, "meta.json")))
+    except (OSError, ValueError):
+        die("%s is not separated (no %s/meta.json): install first" % (a.login, R), 3)
+    if not settings_conf(a.login, os.path.abspath(a.conf_dir), a.install_dir or meta.get("install_dir", ""), True):
+        return 0
+    if meta.get("mode") == "shared":
+        load_daemon(SHARED_PATH, SHARED_LABEL)
+    else:
+        plabel = "com.claude-fleet.credsep.%s" % a.login if MAC else "claude-fleet-credsep-%s.service" % a.login
+        load_daemon(os.path.join(DAEMON_DIR, plabel + (".plist" if MAC else "")), plabel)
+    say("proxy: restarted on root's settings")
+    return 0
+
+
 def put_changed(path, data, mode, owner):
     """put() only when the bytes differ; True when it wrote."""
     b = data if isinstance(data, bytes) else data.encode()
@@ -649,7 +734,8 @@ def uninstall(a):
         say("node.env: back at", ne_path)
     say("credentials: %d moved back" % n)
     for p in (os.path.join(conf, "credsep.json"), os.path.join(LOG_BASE, login + ".log"),
-              os.path.join(LOG_BASE, login + ".launch.log")):
+              os.path.join(LOG_BASE, login + ".launch.log"), root_conf_path(login),
+              os.path.join(RUN_BASE, ".shared", "ignored." + login)):
         if os.path.exists(p) and not DRY:
             os.unlink(p)
     if not DRY and SOFT:
@@ -1155,6 +1241,8 @@ def machine_refresh(a):
     for f in ("fleet-credsep-launch.py", "fleet-cred-proxy.py"):
         with open(os.path.join(HERE, f), "rb") as src:
             moved |= put_changed(os.path.join(LIB, f), src.read(), 0o755, owner)
+    for m in shared_tenants():
+        moved |= settings_conf(m["login"], m["conf_dir"], m.get("install_dir", ""))
     moved |= shared_service()
     shared_record([m["login"] for m in shared_tenants()])
     if moved:
@@ -1347,6 +1435,22 @@ def check(a):
         print("credsep: WARN — FLEET_CRED_SEPARATE=0 but this login is still separated; uninstall: bash "
               "%s/fleet-credsep.sh uninstall" % HERE)
         return 1
+    me = pwd.getpwuid(os.getuid()).pw_name
+    rconf = os.path.join(rec.get("lib") or LIB, me + ".conf")
+    if not os.path.exists(rconf):
+        print("credsep: WARN — separated, but root's proxy settings %s are not written yet: the proxy has no "
+              "upstream / hub setting beyond its defaults. Re-run (sudo): bash %s/fleet-credsep.sh %s"
+              % (rconf, HERE, "machine refresh" if rec.get("shared") else "install"))
+        return 1
+    try:
+        ign = [l.split(" ", 1) for l in open(os.path.join(rec["run"], "ignored." + me)).read().splitlines() if l]
+    except OSError:
+        ign = []
+    if ign:
+        print("credsep: WARN — the proxy ignored %s (only root's %s sets these, issue #2290). If the change is "
+              "yours: sudo bash %s/fleet-credsep.sh install --adopt; otherwise delete the line(s)"
+              % (", ".join("%s from %s" % (k, f) for k, f in ign[:4]), rconf, HERE))
+        return 1
     print("credsep: OK — %s unreadable here (Permission denied), %sproxy on 127.0.0.1:%d as %s%s"
           % (R, "the machine's shared " if rec.get("shared") else "", port, rec["role"], note))
     return 0
@@ -1363,6 +1467,7 @@ def main():
         p.add_argument("--install-dir", default="")
         p.add_argument("--dry-run", action="store_true")
         p.add_argument("--force", action="store_true")
+        p.add_argument("--adopt", action="store_true")
     s = sub.add_parser("status"); s.add_argument("--conf-dir", required=True); s.add_argument("--json", action="store_true")
     c = sub.add_parser("check"); c.add_argument("--conf-dir", required=True)
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
@@ -1392,6 +1497,8 @@ def main():
             die("only macOS and Linux", 2)
         if a.cmd == "uninstall":
             return uninstall(a)
+        if a.adopt:
+            return adopt(a)
         fresh = not DRY and not os.path.lexists(paths(a.login)[0])
         if fresh:
             preflight_gate([(a.login, os.path.abspath(a.conf_dir))], a.force)
