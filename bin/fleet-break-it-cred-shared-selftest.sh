@@ -208,7 +208,10 @@ drill_cred_own_to_shared() {
   # alpha: separated on its own proxy, the way m4's credsep.fleetu2 / credsep.verky are
   bash "$BIN/fleet-credsep.sh" install --login alpha >"$sb/install-alpha.out" 2>&1 \
     || { WHY="install alpha: $(tail -2 "$sb/install-alpha.out" | tr '\n' ' ')"; own_down; return 1; }
-  svc=$(ls "$sb/daemons" | grep -E 'credsep[.-]alpha' | head -n 1)
+  svc=''
+  for f in "$sb/daemons"/com.claude-fleet.credsep.alpha.plist "$sb/daemons"/claude-fleet-credsep-alpha.service; do
+    [ -e "$f" ] && svc=$(basename "$f")
+  done
   [ -n "$svc" ] || { WHY="alpha's own proxy service was not written: $(ls "$sb/daemons")"; own_down; return 1; }
   own_up || { WHY="alpha's own proxy did not start: $(tail -2 "$sb/own.err" | tr '\n' ' ')"; own_down; return 1; }
   oport=$(cat "$sb/run/alpha/port")
