@@ -87,6 +87,14 @@ touch "$WORK/conf/global/guide.spoke"
 ready TEST_GUIDE=live
 needs 'onboarding guide'
 rm "$WORK/conf/global/guide.spoke"
+# A guide that stopped after its tries names why (issue #2424); one the person
+# closed is not a missing step.
+printf '账号额度用尽（usage limit） · 连续 3 次没开口 · 2026-10-08 12:00\n' > "$WORK/conf/global/onboard.stuck"
+needs 'onboarding guide stopped: 账号额度用尽（usage limit） · 连续 3 次没开口'
+rm "$WORK/conf/global/onboard.stuck"
+touch "$WORK/conf/global/onboard.dismissed"
+ready
+rm "$WORK/conf/global/onboard.dismissed"
 touch "$WORK/conf/global/onboarded"
 
 # Exercise the real doctor dispatch as well as the helper: enrollment controls

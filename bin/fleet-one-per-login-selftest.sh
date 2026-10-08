@@ -28,6 +28,10 @@
 #      agent runs brief, and then no tick restarts anything.
 #   9. cf --guide (now `fleet guide`) opens/focuses one guide, reuses a live guide, and respawns a
 #      guide that fell back to a bare shell.
+#  10. a guide that exits at once stops after FLEET_GUIDE_MAX_TRIES (3) opens:
+#      onboard.stuck names why, the window wears it, `fleet guide` lifts it (#2424).
+#  11. a no-repo guide reopens with a FRESH --session-id, never the old one.
+#  12. a guide the person closed is onboard.dismissed and never reopened.
 # The hub, collector, disk gate and trust check are stubbed in a sandbox bin/;
 # tmux: a PATH shim maps every `-L <label>` to a private socket under $SOCKD.
 set -uo pipefail
@@ -280,6 +284,7 @@ leg "7 first fleet opens the pinned guide, once"
 
 # ---- 8. a guide that never spoke stays unmarked; ticks restart it (#1204/#1215) ----
 export FLEET_CONF_DIR="$WORK/conf8"; unset FLEET_ONBOARD
+export FLEET_GUIDE_MAX_TRIES=9   # this leg restarts four times; leg 10 is the budget
 launches="$WORK/guide-launches"
 # #1210 ③ verbatim: claude comes up, the command is not installed, it prints
 # `Unknown command` and sits at its prompt — RUNNING, never SPOKE.
@@ -380,6 +385,7 @@ lib 'fleet_guide_tick fleet'
 eq "8 no extra restart" "$(wc -l < "$launches" | tr -d ' ')" 4
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "8 a guide that never spoke is not onboarded; ticks restart silent and dead guides"
+unset FLEET_GUIDE_MAX_TRIES
 
 # ---- 9. cf --guide (= fleet guide, #1711) recalls the existing or failed guide (issue #1171) ----
 export FLEET_CONF_DIR="$WORK/conf9" FLEET_ONBOARD=0
@@ -453,6 +459,93 @@ if [ -n "${GUIDE_EVIDENCE_FILE:-}" ]; then
 fi
 "$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
 leg "9 cf --guide opens, focuses, and repairs the guide"
+
+# ---- 10. a guide that never comes up stops after its tries and says why (issue #2424) ----
+# 2026-10-08: a guide that exits 1 at once (`Session ID … is already in use`) was
+# reopened every minute, forever. Three opens is the budget: the fourth tick
+# writes onboard.stuck (the reason read off the pane), reopens nothing, and the
+# guide window wears the reason; a person's `fleet guide` lifts it.
+export FLEET_CONF_DIR="$WORK/conf10"; unset FLEET_ONBOARD FLEET_GUIDE_MAX_TRIES
+: > "$launches"
+cat > "$SB/fleet-claude.sh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$launches"
+printf 'Error: Session ID 2aaef796-0000 is already in use.\n'
+exit 1
+EOF
+chmod +x "$SB/fleet-claude.sh"
+gdir="$FLEET_CONF_DIR/global"
+out=$(FLEET_GUIDE_WAIT_SECS=2 up o/g "$g"); eq "10 up rc" "$?" 0
+eq "10 first open is try 1" "$(cat "$gdir/onboard.tries" 2>/dev/null)" 1
+for n in 2 3; do
+  printf '0\n' > "$gdir/onboard.retry"
+  FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(wc -l < "$launches" | tr -d ' ')" = "$n" ] && break; sleep 0.2; done
+  eq "10 reopened ($n)" "$(wc -l < "$launches" | tr -d ' ')" "$n"
+done
+eq "10 three tries" "$(cat "$gdir/onboard.tries" 2>/dev/null)" 3
+[ -e "$gdir/onboard.stuck" ] && fail "10: stuck before the budget ran out"
+for _ in 1 2 3 4 5 6 7 8 9 10; do lib 'fleet_guide_running fleet' || break; sleep 0.2; done
+printf '0\n' > "$gdir/onboard.retry"
+FLEET_GUIDE_COOLDOWN=3600 FLEET_GUIDE_SPEAK_SECS=3600 lib 'fleet_guide_tick fleet'
+sleep 0.6
+eq "10 fourth tick reopens nothing" "$(wc -l < "$launches" | tr -d ' ')" 3
+[ -s "$gdir/onboard.stuck" ] || fail "10: no onboard.stuck after three silent tries"
+has "10 stuck names the id clash" "$(cat "$gdir/onboard.stuck" 2>/dev/null)" "会话编号被占用"
+has "10 stuck counts the tries" "$(cat "$gdir/onboard.stuck" 2>/dev/null)" "连续 3 次没开口"
+[ -f "$gdir/onboard.pending" ] || fail "10: a stop is not a dismissal — pending must stay"
+has "10 the window says why" "$(wins '#{window_name}|#{@claude_state}|#{@claude_needs_detail}' | grep '^guide|')" "guide|needs|引导停了：会话编号被占用"
+printf '0\n' > "$gdir/onboard.retry"
+FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
+sleep 0.4
+eq "10 stays stopped" "$(wc -l < "$launches" | tr -d ' ')" 3
+# A person asking for it lifts the stop: a fresh budget, one open.
+tmux -L fleet select-window -t fleet:plan
+out=$(guide); eq "10 fleet guide rc" "$?" 0
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(wc -l < "$launches" | tr -d ' ')" = 4 ] && break; sleep 0.2; done
+eq "10 fleet guide reopens once" "$(wc -l < "$launches" | tr -d ' ')" 4
+[ -e "$gdir/onboard.stuck" ] && fail "10: fleet guide left the stop in place"
+eq "10 fresh budget" "$(cat "$gdir/onboard.tries" 2>/dev/null)" 1
+# a spent account reads as such
+"$REAL_TMUX" -S "$SOCKD/fleet" respawn-window -k -t fleet:guide "printf 'You have hit your limit · resets Oct 10\\n'; exec sh"
+sleep 0.4
+has "10 limit reason" "$(lib 'fleet_guide_why fleet')" "账号额度用尽"
+leg "10 three silent tries, then the guide stops and says why"
+
+# ---- 11. a no-repo guide reopens with a FRESH session id (issue #2424 ①) ----
+# Its command carries --session-id <uuid>; respawning it reran the same id into a
+# conversation that already exists. Reopening retires the window and opens anew.
+"$REAL_TMUX" -S "$SOCKD/fleet" kill-window -t fleet:guide 2>/dev/null
+: > "$launches"
+TMUX='' bash "$SB/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo fleet >/dev/null 2>&1
+eq "11 a no-repo guide" "$(wins '#{window_name}|#{@pin}|#{@norepo}' | grep '^guide|')" "guide|1|1"
+sid1=$(wins '#{window_name}|#{@norepo_sid}' | sed -n 's/^guide|//p')
+[ -n "$sid1" ] || fail "11: no @norepo_sid on the no-repo guide"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$launches" ] && break; sleep 0.2; done
+has "11 first launch carries its id" "$(head -n 1 "$launches")" "--session-id $sid1"
+lib 'fleet_guide_respawn fleet' >/dev/null 2>&1; eq "11 respawn rc" "$?" 0
+sid2=$(wins '#{window_name}|#{@norepo_sid}' | sed -n 's/^guide|//p')
+[ -n "$sid2" ] && [ "$sid2" != "$sid1" ] || fail "11: reopened with the same id ($sid1 → $sid2)"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(wc -l < "$launches" | tr -d ' ')" = 2 ] && break; sleep 0.2; done
+has "11 relaunch carries the new id" "$(sed -n 2p "$launches")" "--session-id $sid2"
+hasnt "11 never the old id" "$(sed -n 2p "$launches")" "$sid1"
+eq "11 still one pinned guide" "$(wins '#{window_name}|#{@pin}' | grep -c '^guide|1$')" 1
+leg "11 a no-repo guide reopens with a fresh session id"
+
+# ---- 12. the person closed the guide: dismissed, never reopened (issue #2424 ④) ----
+rm -f "$gdir/onboard.stuck" "$gdir/onboard.dismissed"; : > "$gdir/onboard.pending"
+printf '1\n' > "$gdir/onboard.tries"; printf '0\n' > "$gdir/onboard.retry"
+"$REAL_TMUX" -S "$SOCKD/fleet" kill-window -t fleet:guide 2>/dev/null
+: > "$launches"
+FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
+FLEET_GUIDE_COOLDOWN=0 FLEET_GUIDE_SPEAK_SECS=0 lib 'fleet_guide_tick fleet'
+sleep 0.4
+eq "12 not reopened" "$(wins '#{window_name}' | grep -cx guide)" 0
+eq "12 nothing launched" "$(wc -l < "$launches" | tr -d ' ')" 0
+[ -e "$gdir/onboard.dismissed" ] || fail "12: closing the guide was not recorded as dismissed"
+[ ! -e "$gdir/onboard.pending" ] || fail "12: pending left behind a dismissal"
+"$REAL_TMUX" -S "$SOCKD/fleet" kill-server 2>/dev/null
+leg "12 a guide the person closed stays closed"
 
 [ "$FAILS" = 0 ] && { echo "fleet-one-per-login-selftest: all passed"; exit 0; }
 echo "fleet-one-per-login-selftest: $FAILS failure(s)"; exit 1

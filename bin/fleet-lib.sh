@@ -2053,18 +2053,115 @@ fleet_guide_alive() { fleet_guide_spoke && fleet_guide_running "$1"; }
 # scratch when there is none. Respawning reuses the worktree instead of leaking
 # one on every failed attempt. A guide window that is NOT pinned is someone's
 # own scratch that happens to be called guide — refused, never killed.
+# A no-repo guide (@norepo_sid) is NOT respawned (issue #2424): its command
+# carries `--session-id <uuid>`, and rerunning it hands Claude an id whose
+# conversation already exists — `Session ID … is already in use`, exit 1, every
+# time. It has no worktree to keep, so it is retired and opened anew, which mints
+# a fresh id (the recovery page's `r`). Every open that took counts one try
+# (fleet_guide_tried); the tick stops at FLEET_GUIDE_MAX_TRIES.
 fleet_guide_respawn() {
-  local sess="$1" bin name wid pin sep='|'
-  while IFS="$sep" read -r name wid pin; do
+  local sess="$1" bin name wid pin nsid sep='|'
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  while IFS="$sep" read -r name wid pin nsid; do
     [ "$name" = guide ] || continue
     [ "$pin" = 1 ] || return 1
-    tmux -L "$sess" respawn-window -k -t "$wid" >/dev/null 2>&1
-    return $?
+    if [ -n "$nsid" ]; then
+      fleet_win_retire "$wid" "$sess"
+      tmux -L "$sess" kill-window -t "$wid" >/dev/null 2>&1 || return 1
+      TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo "$sess" || return 1
+    else
+      tmux -L "$sess" respawn-window -k -t "$wid" >/dev/null 2>&1 || return 1
+    fi
+    fleet_guide_tried
+    return 0
   done <<EOF
-$(tmux -L "$sess" list-windows -t "$sess" -F "#{window_name}${sep}#{window_id}${sep}#{@pin}" 2>/dev/null)
+$(tmux -L "$sess" list-windows -t "$sess" -F "#{window_name}${sep}#{window_id}${sep}#{@pin}${sep}#{@norepo_sid}" 2>/dev/null)
 EOF
-  bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin "$sess"
+  TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin "$sess" || return 1
+  fleet_guide_tried
+}
+
+# ---- the guide's retry budget (issue #2424) ----------------------------------
+# global/onboard.tries     opens since the pending marker was set (fleet-up's
+#                          first open is 1); FLEET_GUIDE_MAX_TRIES (3) is the budget.
+# global/onboard.stuck     ONE line: why the guide stopped (fleet_guide_why) · how
+#                          many tries · when. While it exists the tick reopens
+#                          nothing; the doctor's onboard row prints it and the
+#                          guide window wears it as its needs question (the
+#                          lists' `detail=`). A person's `fleet guide` clears it.
+# global/onboard.dismissed the person closed the pinned guide window — a clear
+#                          «not now». The pending marker goes with it; nothing
+#                          reopens it until they ask (`fleet guide`).
+fleet_guide_tries() {
+  local n
+  n=$(cat "$FLEET_CONF_DIR/global/onboard.tries" 2>/dev/null || true)
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+fleet_guide_tried() {
+  [ -d "$FLEET_CONF_DIR/global" ] || return 0
+  printf '%s\n' "$(( $(fleet_guide_tries) + 1 ))" > "$FLEET_CONF_DIR/global/onboard.tries" 2>/dev/null
+  return 0
+}
+# fleet_guide_rearm — a new fleet opens the guide, or a person asks for it: a
+# fresh budget, no stop, no dismissal — and pending again unless onboarded.
+fleet_guide_rearm() {
+  local g="$FLEET_CONF_DIR/global"
+  [ -d "$g" ] || mkdir -p "$g" 2>/dev/null || return 0
+  rm -f "$g/onboard.stuck" "$g/onboard.dismissed"
+  printf '0\n' > "$g/onboard.tries"
+  if [ ! -e "$g/onboarded" ] && [ "${FLEET_ONBOARD:-1}" != 0 ]; then
+    : > "$g/onboard.pending"
+    date +%s > "$g/onboard.retry"
+  fi
+  return 0
+}
+
+# fleet_guide_wid <session> → the pinned guide window's id (rc 1: none).
+fleet_guide_wid() {
+  local name wid pin sep='|'
+  while IFS="$sep" read -r name wid pin; do
+    [ "$name" = guide ] && [ "$pin" = 1 ] && { printf '%s' "$wid"; return 0; }
+  done <<EOF
+$(tmux -L "$1" list-windows -t "$1" -F "#{window_name}${sep}#{window_id}${sep}#{@pin}" 2>/dev/null)
+EOF
+  return 1
+}
+
+# fleet_guide_why <session> → one short line: why the guide has not spoken, read
+# off its pane — the two 2026-10-08 ways first (an id already in use, a spent
+# account), then a missing command, a lapsed login — else the state it is in.
+fleet_guide_why() {
+  local sess="$1" wid txt esc last
+  wid=$(fleet_guide_wid "$sess") || { printf '引导窗口不在了'; return 0; }
+  esc=$(printf '\033')
+  txt=$(tmux -L "$sess" capture-pane -p -J -t "$wid" -S -200 2>/dev/null | sed "s/$esc\[[0-9;?]*[A-Za-z]//g" | grep -v '^[[:space:]]*$')
+  if printf '%s' "$txt" | grep -qi 'already in use'; then
+    printf '会话编号被占用（Session ID already in use）'
+  elif printf '%s' "$txt" | grep -qiE '(hit|reached) your( [a-z]+)? limit|usage limit|limit reached|wait for (the )?limit to reset|out of (extra )?usage|rate[ _-]?limit'; then
+    printf '账号额度用尽（usage limit）'
+  elif printf '%s' "$txt" | grep -qi 'unknown command'; then
+    printf '/fleet-onboard 命令没装上（Unknown command）'
+  elif printf '%s' "$txt" | grep -qiE 'not logged in|please run /login|invalid api key|unauthori[sz]ed|authentication'; then
+    printf '账号没登录或认证失效'
+  elif fleet_guide_running "$sess"; then
+    printf '起来了但一直没开口'
+  else
+    last=$(printf '%s\n' "$txt" | tail -n 1 | tr '\t' ' ' | cut -c1-120)
+    printf '启动失败%s' "${last:+：$last}"
+  fi
+}
+
+# fleet_guide_stuck_mark <session> — the stop reason on the guide window as its
+# needs question, so every list says it (fleet-control-read.sh column 19).
+fleet_guide_stuck_mark() {
+  local wid why
+  wid=$(fleet_guide_wid "$1") || return 0
+  why=$(head -n 1 "$FLEET_CONF_DIR/global/onboard.stuck" 2>/dev/null)
+  [ -n "$why" ] || return 0
+  tmux -L "$1" set-option -w -t "$wid" @claude_needs_detail "引导停了：${why%% · *}（fleet guide 重试）" 2>/dev/null
+  tmux -L "$1" set-option -w -t "$wid" @claude_state needs 2>/dev/null
+  return 0
 }
 
 # fleet_guide_open <session> — make sure a guide agent is up: reuse a RUNNING
@@ -2106,29 +2203,53 @@ fleet_guide_wait() {
 #                                 (`Unknown command: /fleet-onboard`, #1215) never
 #                                 will, and restarting a claude that is merely
 #                                 slow would only restart its clock.
+# And a budget (issue #2424): after FLEET_GUIDE_MAX_TRIES opens that never spoke
+# the tick writes onboard.stuck (the reason) and stops; a guide window the person
+# closed is onboard.dismissed — before #2424 both came back every minute, forever.
 fleet_guide_tick() {
-  local sockets="$1" sock retry cooldown stamp
+  local sockets="$1" sock retry cooldown stamp tries max g="$FLEET_CONF_DIR/global"
   [ "${FLEET_ONBOARD:-1}" != 0 ] || return 0
-  [ -f "$FLEET_CONF_DIR/global/onboard.pending" ] || return 0
-  [ ! -e "$FLEET_CONF_DIR/global/onboarded" ] || return 0
+  [ -f "$g/onboard.pending" ] || return 0
+  [ ! -e "$g/onboarded" ] || return 0
   for sock in $sockets; do
     if fleet_guide_confirmed "$sock"; then
-      date '+%Y-%m-%d %H:%M:%S' > "$FLEET_CONF_DIR/global/onboarded"
-      rm -f "$FLEET_CONF_DIR/global/onboard.pending"
+      date '+%Y-%m-%d %H:%M:%S' > "$g/onboarded"
+      rm -f "$g/onboard.pending" "$g/onboard.stuck" "$g/onboard.tries"
       return 0
     fi
   done
   [ -n "$sockets" ] || return 0
   sock=${sockets%%$'\n'*}
-  retry=$(cat "$FLEET_CONF_DIR/global/onboard.retry" 2>/dev/null || true)
+  # Stopped: keep the reason on the window, reopen nothing.
+  if [ -s "$g/onboard.stuck" ]; then fleet_guide_stuck_mark "$sock"; return 0; fi
+  tries=$(fleet_guide_tries)
+  # The person closed the guide we opened (q on its page, a kill-window): that is
+  # a «no», not a failure — stop asking.
+  if [ "$tries" -ge 1 ] && tmux -L "$sock" has-session -t "$sock" 2>/dev/null \
+     && ! tmux -L "$sock" list-windows -t "$sock" -F '#{window_name}' 2>/dev/null | grep -qx guide; then
+    date '+%Y-%m-%d %H:%M:%S' > "$g/onboard.dismissed"
+    rm -f "$g/onboard.pending" "$g/onboard.tries"
+    return 0
+  fi
+  retry=$(cat "$g/onboard.retry" 2>/dev/null || true)
   case "$retry" in ''|*[!0-9]*) retry=0 ;; esac
   if fleet_guide_running "$sock"; then cooldown="${FLEET_GUIDE_SPEAK_SECS:-180}"
   else cooldown="${FLEET_GUIDE_COOLDOWN:-60}"; fi
   case "$cooldown" in ''|*[!0-9]*) cooldown=60 ;; esac
   stamp=$(date +%s)
   [ $((stamp - retry)) -ge "$cooldown" ] || return 0
-  printf '%s\n' "$stamp" > "$FLEET_CONF_DIR/global/onboard.retry"
-  fleet_guide_respawn "$sock" >/dev/null 2>&1 || printf 'fleet-guide: could not reopen onboarding guide in %s\n' "$sock" >&2
+  max="${FLEET_GUIDE_MAX_TRIES:-3}"
+  case "$max" in ''|*[!0-9]*) max=3 ;; esac
+  if [ "$tries" -ge "$max" ]; then
+    printf '%s · 连续 %s 次没开口 · %s\n' "$(fleet_guide_why "$sock")" "$tries" "$(date '+%Y-%m-%d %H:%M')" > "$g/onboard.stuck"
+    fleet_guide_stuck_mark "$sock"
+    return 0
+  fi
+  printf '%s\n' "$stamp" > "$g/onboard.retry"
+  fleet_guide_respawn "$sock" >/dev/null 2>&1 || {
+    printf '引导窗口没能重开 · 第 %s 次 · %s\n' "$((tries + 1))" "$(date '+%Y-%m-%d %H:%M')" > "$g/onboard.stuck"
+    printf 'fleet-guide: could not reopen onboarding guide in %s\n' "$sock" >&2
+  }
 }
 
 # ~/.local/bin on the PATH a fleet's tmux server runs under (issue #1191). Claude

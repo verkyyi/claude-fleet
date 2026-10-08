@@ -32,6 +32,12 @@ EOF
 fi
 [ -n "$sess" ] || { echo 'fleet guide: no running fleet; run fleet first' >&2; exit 1; }
 
+# A person asking for the guide lifts a stop or a dismissal (issue #2424): a fresh
+# try budget, and the collector confirms it again. A login that never had a
+# pending guide is not opted in by this.
+for _g in onboard.stuck onboard.dismissed onboard.pending; do
+  [ -e "$FLEET_CONF_DIR/global/$_g" ] && { fleet_guide_rearm; break; }
+done
 fleet_guide_open "$sess" || { echo 'fleet guide: could not open the guide' >&2; exit 1; }
 tmux -L "$sess" select-window -t "$sess:guide" \
   || { echo 'fleet guide: could not focus the guide' >&2; exit 1; }
