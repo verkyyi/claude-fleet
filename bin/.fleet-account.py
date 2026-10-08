@@ -267,6 +267,29 @@ def claude_marks():
     return marks
 
 
+_PROXY_LEASES = None
+
+
+def proxy_leases():
+    """{label: expiresAt ms} from the credential proxy, for a SEPARATED login
+    (credsep.json, issue #1971): its leased .credentials.json files live where
+    it cannot read them, so the proxy holding them answers each one's expiry —
+    never a token (issue #2308). {} anywhere else, or when the proxy is down."""
+    global _PROXY_LEASES
+    if _PROXY_LEASES is None:
+        _PROXY_LEASES = {}
+        conf = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet')))
+        if (conf / 'credsep.json').is_file():
+            try:
+                out = subprocess.run(['bash', str(Path(__file__).resolve().parent / 'fleet-cred-proxy.sh'), 'accounts'],
+                                     capture_output=True, text=True, timeout=15).stdout
+                d = json.loads(out or '{}')
+                _PROXY_LEASES = d if isinstance(d, dict) else {}
+            except (OSError, ValueError, subprocess.SubprocessError):
+                pass
+    return _PROXY_LEASES
+
+
 def claude_login(label, now=None):
     """'valid' | 'reauth_required' | 'expired' | 'no_credentials' for one pool label.
     A plain token file (`claude setup-token`): readable, first line non-empty. A
@@ -293,6 +316,12 @@ def claude_login(label, now=None):
         creds = read(claude_accounts_dir() / (name + '.hub') / '.credentials.json')
         if isinstance(creds, dict):
             break
+    if not isinstance(creds, dict):
+        leases = proxy_leases()
+        for name in (label, hub_label):
+            if name in leases:
+                creds = {'claudeAiOauth': {'accessToken': '(held by the credential proxy)', 'expiresAt': leases[name]}}
+                break
     if not isinstance(creds, dict):
         return 'no_credentials'
     oauth = creds.get('claudeAiOauth') if isinstance(creds.get('claudeAiOauth'), dict) else creds
