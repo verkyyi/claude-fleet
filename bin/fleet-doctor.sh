@@ -325,6 +325,49 @@ if [ "$_hub_on" = 1 ] && [ "${_tok_lv:-}" = PASS ] && [ -f "$(dirname "$0")/flee
   esac
 fi
 
+# --- compute: may the hub open sessions on this login (issue #2480) --------------
+# node.env's CCQUOTA_FLEET_COMPUTE beside the hub's own verdict (GET /v1/node/self:
+# compute_off / compute_why / compute_auto). Off is why `fleet claude` lands on
+# another machine — or nowhere: a WARN on a computer that hosts (承载), an INFO on
+# one that only coordinates by choice. Only where the node token row passed.
+if [ "$_hub_on" = 1 ] && [ "${_tok_lv:-}" = PASS ] && [ -f "$(dirname "$0")/fleet-node-trust.sh" ]; then
+  _cp_env=$(sed -n 's/^CCQUOTA_FLEET_COMPUTE=//p' "$conf_dir/node.env" 2>/dev/null | head -n 1 | tr -d "\"' ")
+  _cp_j=$(CCQUOTA_FLEET=1 FLEET_CONF_DIR="$conf_dir" FLEET_HUB_TIMEOUT="${FLEET_HUB_TIMEOUT:-5}" \
+          bash "$(dirname "$0")/fleet-node-trust.sh" self --json 2>/dev/null) || _cp_j=''
+  _cp=$(printf '%s' "$_cp_j" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    d = None
+if not isinstance(d, dict):
+    print("?\x1f\x1f"); sys.exit(0)
+host = (d.get("hostname") or "").split(".")[0]
+print("%s\x1f%s\x1f%s" % ("off" if d.get("compute_off") else ("auto" if d.get("compute_auto") else "on"),
+                      host, " ".join(str(d.get("compute_why") or "").split())))' 2>/dev/null)
+  IFS=$'\037' read -r _cp_v _cp_h _cp_why <<< "${_cp:-?}"
+  _cp_who="${_cp_h:-$(hostname -s 2>/dev/null)}/$(id -un)"
+  _cp_open='打开：在这台运行 fleet host on（即 node.env CCQUOTA_FLEET_COMPUTE=1），或在入口打开团队策略 fleet.compute_auto'
+  case "$_cp_why" in *出口地区*) _cp_open='出口地区不在支持范围；确要打开：fleet host on --force（记进入口审计）' ;; esac
+  _cp_lv=warn; [ "$_ho_on" = 1 ] || _cp_lv=info
+  case "$_cp_v" in
+    on)   pass compute "$_cp_who · 入口可往这台派会话（node.env CCQUOTA_FLEET_COMPUTE=${_cp_env:-未写，按开}）" ;;
+    auto) pass compute "$_cp_who · 入口可往这台派会话（团队策略 fleet.compute_auto 打开的；node.env CCQUOTA_FLEET_COMPUTE=${_cp_env:-未写}）" ;;
+    off)
+      if [ "$_cp_env" = 0 ]; then
+        $_cp_lv compute "$_cp_who · 只协调：${_cp_why:-compute off} — 入口不往这台派会话，fleet claude 只能去别的机器开；$_cp_open"
+      else
+        $_cp_lv compute "$_cp_who · 入口判它只协调（${_cp_why:-compute off}），node.env 却是 CCQUOTA_FLEET_COMPUTE=${_cp_env:-未写} — 下一次心跳才生效，仍是这样就看 agent 在不在跑（fleet node status）；$_cp_open"
+      fi ;;
+    *)
+      if [ "$_cp_env" = 0 ]; then
+        $_cp_lv compute "$_cp_who · node.env CCQUOTA_FLEET_COMPUTE=0：只协调 — 入口不往这台派会话（问不到入口的判断）；$_cp_open"
+      else
+        info compute "$_cp_who · node.env CCQUOTA_FLEET_COMPUTE=${_cp_env:-未写，按开}；问不到入口的判断"
+      fi ;;
+  esac
+fi
+
 # --- credsep: the credentials out of this login's reach (issue #1971) --------------
 # FLEET_CRED_SEPARATE=1 → the role account's store must be unreadable here, no
 # credential back at a login path, its proxy up; =0 and not separated → no row.

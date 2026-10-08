@@ -1242,12 +1242,18 @@ EOF
   export FLEET_CLIENT_DIR="$CL_DIR" FLEET_SESSION="$SESS"
   hopen=home_opening_fmt; [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] && hopen=home_opening_solo_fmt
   note "$(sh "$BIN/fleet-ui-lang.sh" t "$hopen" "$hagent" 2>/dev/null)"
-  hout=$(bash "$BIN/fleet-client-place.sh" - home --agent "$hagent" --node "$hnode" ${hbody:+--body-file "$hbody"}); hrc=$?
+  # why THIS computer was not chosen (issue #2480), said after the failure line
+  hwhy=$(mktemp "${TMPDIR:-/tmp}/fleet-place-why.XXXXXX" 2>/dev/null) || hwhy=''
+  hout=$(FLEET_PLACE_WHY="$hwhy" bash "$BIN/fleet-client-place.sh" - home --agent "$hagent" --node "$hnode" ${hbody:+--body-file "$hbody"}); hrc=$?
   hline=$(printf '%s\n' "$hout" | tail -n1)
   if [ "$hrc" != 0 ]; then
     note "$(sh "$BIN/fleet-ui-lang.sh" t home_failed_fmt "${hline:-—}" 2>/dev/null)"
-    exit "$hrc"
+    if [ -n "$hwhy" ]; then
+      while IFS= read -r line; do [ -n "$line" ] && note "$line"; done < "$hwhy"
+    fi
   fi
+  [ -z "$hwhy" ] || rm -f "$hwhy"
+  [ "$hrc" = 0 ] || exit "$hrc"
   printf '%s\n' "$hline"
   # where it opened (issue #2339): the client's view machine (「入口选了 …」) and
   # the hub's placement are two choices — say the second, so one never reads as the other

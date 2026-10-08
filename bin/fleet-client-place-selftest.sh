@@ -14,7 +14,10 @@
 #   B. the refusals keep fleet_hub_place's codes: HELD 3, REFUSED 4 (the hub's
 #      reason as it is), DECLINED 5, UNKNOWN 6 once FLEET_CLIENT_PLACE_WAIT runs out;
 #      (issue #1610) the machines the hub tried first: one stderr line each, and
-#      the `after …` field kept on the line a status poll ends with; ALL_DECLINED 4
+#      the `after …` field kept on the line a status poll ends with; ALL_DECLINED 4;
+#      (issue #2480) a placement that left THIS computer out: why, per login here,
+#      in a person's words (compute off → fleet host on, tmux down → fleet up),
+#      on stderr or to FLEET_PLACE_WHY; one with no placement adds nothing
 #   C. a wrong key / a lease the hub no longer holds → 401 → exit 1, one stderr line
 #   D. degenerate — no hub and no fleet on this computer: the one line
 #      「这台电脑没有 fleet，也连不上入口」, exit 1, nothing asked
@@ -53,7 +56,7 @@ cat > "$WORK/hub.py" <<'PY'
 import hashlib, hmac, json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-LEASE, KEY, UUID, LOG, PORTF, CURF = sys.argv[1:7]
+LEASE, KEY, UUID, LOG, PORTF, CURF, SELF = sys.argv[1:8]
 polls = {}
 
 
@@ -114,6 +117,19 @@ class H(BaseHTTPRequestHandler):
                  "exit": 4, "state": "refused",
                  "attempts": [{"machine": "mini2", "operation_id": "op150", "exit": 1, "why": "fork"},
                               {"machine": "m3", "operation_id": "op151", "exit": 2, "why": "full"}]},
+            # issue #2480: THIS computer only coordinates, its other login's fleet is down
+            16: {"line": "DECLINED m4 op16 1\tfleet discover: INTERNAL: Local controller failed", "exit": 5, "state": "failed",
+                 "placement": {"machine": "m4", "reason": "chose m4 (score 0.556); %s excluded: compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)" % SELF,
+                               "candidates": [{"machine": "m4", "os_user": "bob", "eligible": True},
+                                              {"machine": SELF, "os_user": "verky", "eligible": False,
+                                               "excluded": "compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)"},
+                                              {"machine": SELF, "os_user": "verky", "eligible": False, "excluded": "tmux 服务没在跑"},
+                                              {"machine": SELF.upper() + ".local", "os_user": "alice", "eligible": False,
+                                               "excluded": "compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)"}]}},
+            # ... and one whose candidates do not hold this computer at all
+            17: {"line": "REFUSED NO_ELIGIBLE_NODE\tm4 excluded: full", "exit": 4, "state": "refused",
+                 "placement": {"reason": "m4 excluded: full",
+                               "candidates": [{"machine": "m4", "os_user": "bob", "eligible": False, "excluded": "full"}]}},
         }
         return self.answer(200, table[issue])
 
@@ -124,7 +140,8 @@ with open(PORTF + ".tmp", "w") as f:
 os.replace(PORTF + ".tmp", PORTF)
 srv.serve_forever()
 PY
-python3 "$WORK/hub.py" "$LEASE" "$KEY" "$UUID" "$WORK/log" "$WORK/port" "$WORK/curlease" 2>"$WORK/hub.err" &
+SELF=$(python3 -c 'import socket; print((socket.gethostname() or "").split(".")[0].lower())')
+python3 "$WORK/hub.py" "$LEASE" "$KEY" "$UUID" "$WORK/log" "$WORK/port" "$WORK/curlease" "$SELF" 2>"$WORK/hub.err" &
 HUBPID=$!
 # a cold python on a CI runner can take seconds to bind
 for _ in $(seq 300); do
@@ -219,6 +236,27 @@ run "$P" verkyyi/claude-fleet 15
 eq "B: all declined exit" 4 "$RC"
 has "B: all declined line" "$OUT" "REFUSED ALL_DECLINED	every machine that could take it said no — mini2: declined: fork; m3: declined: full	after mini2:op150:1,m3:op151:2"
 has "B: all declined stderr, one per machine" "$ERR" "m3 declined (exit 2): full"
+
+# issue #2480: why THIS computer was not chosen — after the line, in a person's words
+USER=verky run "$P" verkyyi/claude-fleet 16
+eq "B: self declined exit" 5 "$RC"
+eq "B: self declined line as it was" "DECLINED m4 op16 1	fleet discover: INTERNAL: Local controller failed" "$OUT"
+has "B: self — this login's compute off, and how to open it" "$ERR" "fleet-client-place: 你这台（${SELF}/verky）没被选：compute off（只协调）——在这台运行 fleet host on 打开"
+has "B: self — the policy named too" "$ERR" "fleet.compute_auto"
+has "B: self — both reasons of this login on one line" "$ERR" "；这台 fleet 的 tmux 服务没在跑——在这台运行 fleet up 拉起"
+has "B: self — another login here, by its name" "$ERR" "这台的另一个登录（${SELF}/alice）没被选：compute off"
+has "B: self — another login's fix is run as that login" "$ERR" "以 alice 登录在这台运行 fleet host on"
+case "$ERR" in *m4*没被选*) fail "B: self — a hint about another machine" "$ERR" ;; esac
+WHY="$WORK/why"; : > "$WHY"
+USER=verky FLEET_PLACE_WHY="$WHY" run "$P" verkyyi/claude-fleet 16
+case "$ERR" in *没被选*) fail "B: self — on stderr though FLEET_PLACE_WHY was set" "$ERR" ;; esac
+has "B: self — written to FLEET_PLACE_WHY" "$(head -n1 "$WHY")" "你这台（${SELF}/verky）没被选：compute off"
+eq "B: self — one line per login" 2 "$(wc -l < "$WHY" | tr -d ' ')"
+run "$P" verkyyi/claude-fleet 17
+eq "B: self absent exit" 4 "$RC"
+has "B: self absent — said so" "$ERR" "你这台（${SELF}）不在入口的候选里"
+run "$P" verkyyi/claude-fleet 12
+case "$ERR" in *没被选*|*候选*) fail "B: no placement — a self hint anyway" "$ERR" ;; esac
 
 # --- C. a key that does not check (and no lease to take again) ---------------------------
 printf '%s\n' "$(printf '%s' "$KEY" | tr 0f f0)" > "$FLEET_CLIENT_KEY_FILE"

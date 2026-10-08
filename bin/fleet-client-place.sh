@@ -67,6 +67,12 @@
 # the hub's `timing`, epoch ms — written there as JSON; an older hub or node
 # writes nothing.
 #
+# FLEET_PLACE_WHY=<file> (issue #2480): a start that did not open (REFUSED /
+# DECLINED / UNKNOWN), why THIS computer was not chosen — its candidates in the
+# hub's placement, each exclusion in a person's words with what opens it
+# (compute off → fleet host on; the fleet's tmux down → fleet up) — one line per
+# login here, written there; without the variable, stderr lines.
+#
 # FLEET_PLACE_RESULT=<file> (issue #2236): a done start's session, as JSON —
 # {worker_id, window, window_id, key, filed, machine}, each only when the hub
 # said it — so the caller switches to it at once instead of waiting for the
@@ -284,6 +290,70 @@ if rf and out.get("state") == "done":
             json.dump(said, f)
     except OSError:
         pass
+# Why THIS computer was not chosen (issue #2480): a start that did not open, its
+# placement's candidates on this machine said in a person's words — `你这台
+# （<m>/<login>）没被选：<why>——<what opens it>`, one line per login here. To the
+# file FLEET_PLACE_WHY names (fleet-shell.sh home-session says it after its
+# failure line), else stderr. Nothing when the hub sent no placement.
+SELF_FIX = (
+    ("compute off (只协调", "compute off（只协调）——在这台运行 fleet host on 打开（即 node.env CCQUOTA_FLEET_COMPUTE=1），"
+                           "或在入口打开团队策略 fleet.compute_auto"),
+    ("compute off (出口地区", None),
+    ("tmux 服务没在跑", "这台 fleet 的 tmux 服务没在跑——在这台运行 fleet up 拉起"),
+)
+
+
+def self_why(why):
+    for pre, say in SELF_FIX:
+        if why.startswith(pre):
+            return say or (why + "——出口地区不在支持范围；确要打开：fleet host on --force")
+    return why
+
+
+def self_lines(o):
+    pl = o.get("placement") if isinstance(o.get("placement"), dict) else None
+    if not pl:
+        return []
+    import socket
+    host = (socket.gethostname() or "").split(".")[0].lower()
+    me = os.environ.get("USER") or ""
+    names = {host} | {a.split("=", 1)[1].lower() for a in (os.environ.get("FLEET_NODE_ALIASES") or "").split()
+                       if a.lower().startswith(host + "=")}
+    whys, here = {}, False
+    for c in pl.get("candidates") or []:
+        if not isinstance(c, dict) or str(c.get("machine") or "").split(".")[0].lower() not in names:
+            continue
+        here = True
+        if c.get("eligible") or not c.get("excluded"):
+            continue
+        w = whys.setdefault(str(c.get("os_user") or "?"), [])
+        s = self_why(str(c["excluded"]))
+        if s not in w:
+            w.append(s)
+    out = []
+    for lg in sorted(whys, key=lambda u: (u != me, u)):
+        who = "你这台" if lg == me else "这台的另一个登录"
+        say = "；".join(whys[lg])
+        if lg != me:
+            say = say.replace("在这台运行", "以 %s 登录在这台运行" % lg)
+        out.append("%s（%s/%s）没被选：%s" % (who, host, lg, say))
+    if not here and host and node in ("auto", "") and kind != "restore" and (pl.get("candidates") or pl.get("reason")):
+        out.append("你这台（%s）不在入口的候选里——没登记成节点，或没有能开它的 fleet（在这台运行 fleet host on）" % host)
+    return out
+
+
+if out.get("state") != "done" and int(out.get("exit") or 0) not in (0, 3):
+    sl = self_lines(out)
+    wf = os.environ.get("FLEET_PLACE_WHY") or ""
+    if sl and wf:
+        try:
+            with open(wf, "w", encoding="utf-8") as f:
+                f.write("\n".join(sl) + "\n")
+            sl = []
+        except OSError:
+            pass
+    for s in sl:
+        sys.stderr.write("fleet-client-place: %s\n" % s)
 # A status poll answers for the last machine only: the first answer's tries
 # stay on the line (issue #1610).
 if tried and "\tafter " not in line:

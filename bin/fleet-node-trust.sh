@@ -5,6 +5,10 @@
 #   fleet-node-trust.sh set <machine> trusted|untrusted   the operator marks a machine
 #   fleet-node-trust.sh status [<machine>]                every machine's trust (or one)
 #   fleet-node-trust.sh self                              this machine's, as the hub tells its node
+#   fleet-node-trust.sh self --json                       the hub's whole word on this login
+#                                                         (GET /v1/node/self as it came: trust,
+#                                                         compute_off / compute_why — fleet-doctor's
+#                                                         `compute` row, issue #2480)
 #
 # What trust does: POST /v1/node/credentials answers only a machine the
 # operator marked trusted; any other gets 403 untrusted_node (and a deny row in
@@ -48,7 +52,7 @@ BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 die() { printf 'fleet-node-trust: %s\n' "$2" >&2; exit "$1"; }
 usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; }
 
-ACTION='' MACHINE='' VALUE=''
+ACTION='' MACHINE='' VALUE='' SELF_JSON=''
 [ $# -gt 0 ] || { usage >&2; die 2 'say set, status or self'; }
 case "$1" in
   set)
@@ -58,7 +62,8 @@ case "$1" in
     [ $# -le 2 ] || die 2 'status [<machine>]'
     ACTION=status MACHINE=${2:-} ;;
   self)
-    [ $# -eq 1 ] || die 2 'self takes no argument'
+    SELF_JSON=''
+    case "$#:${2:-}" in 1:) ;; 2:--json) SELF_JSON=1 ;; *) die 2 'self takes no argument but --json' ;; esac
     ACTION=self ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; die 2 "unknown action '$1'" ;;
@@ -114,6 +119,7 @@ if [ "$ACTION" = self ]; then
   resp=$(_fleet_hub_env; _TOK=$CCQUOTA_TOKEN _URL=${CCQUOTA_HUB_URL%/}; _call GET /v1/node/self); rc=$?
   _URL=${CCQUOTA_HUB_URL:-$(_fleet_node_env_val CCQUOTA_HUB_URL)}
   json=$(_answer "$resp" "$rc") || exit $?
+  [ -z "$SELF_JSON" ] || { printf '%s\n' "$json"; exit 0; }
   printf '%s' "$json" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)

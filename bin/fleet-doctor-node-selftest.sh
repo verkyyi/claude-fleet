@@ -169,4 +169,43 @@ not_contains "TRUST: the token's value is never printed" "$l" "fn_abc"
 l=$(trust_lines TRUST_WORD=trusted)
 [ -z "$l" ] && ok || fail "TRUST: a row with the hub off" "$l"
 
+# COMPUTE (issue #2480): node.env's CCQUOTA_FLEET_COMPUTE beside the hub's own
+# verdict (compute_off / compute_why off GET /v1/node/self, fleet-node-trust.sh
+# self --json): off says why and how to open it; on passes; the hub off → no row.
+compute_lines() {
+  env "$@" PATH="$WORK/ccq:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" \
+    FLEET_HUB_CURL="$WORK/computecurl" bash "$WORK/bin/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+compute([[:space:]]|$)'
+}
+cat > "$WORK/computecurl" <<'FAKE'
+#!/bin/bash
+cat >/dev/null
+[ -n "${TRUST_RC:-}" ] && exit "$TRUST_RC"
+if [ "${COMPUTE_OFF:-}" = 1 ]; then
+  printf '{"hostname":"m9.local","status":"online","trust":"trusted","compute_off":true,"compute_why":"%s"}\n200' "$COMPUTE_WHY"
+else
+  printf '{"hostname":"m9.local","status":"online","trust":"trusted"}\n200'
+fi
+FAKE
+chmod +x "$WORK/computecurl"
+printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=fn_abc\nCCQUOTA_FLEET_COMPUTE=0\n' > "$NE"; chmod 600 "$NE"
+l=$(compute_lines CCQUOTA_FLEET=1 COMPUTE_OFF=1 "COMPUTE_WHY=compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)")
+case "$l" in *"WARN  compute"*|*"INFO  compute"*) ok ;; *) fail "COMPUTE: off is not a WARN / INFO" "$l" ;; esac
+contains "COMPUTE: off names the machine and login" "$l" "m9/$(id -un) · 只协调"
+contains "COMPUTE: off says how to open it" "$l" "fleet host on（即 node.env CCQUOTA_FLEET_COMPUTE=1）"
+contains "COMPUTE: off names the team policy" "$l" "fleet.compute_auto"
+not_contains "COMPUTE: the token's value is never printed" "$l" "fn_abc"
+l=$(compute_lines CCQUOTA_FLEET=1 COMPUTE_OFF=1 "COMPUTE_WHY=compute off (出口地区 CN 不在 Claude / OpenAI 支持范围)")
+contains "COMPUTE: a closed region says --force" "$l" "fleet host on --force"
+printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=fn_abc\nCCQUOTA_FLEET_COMPUTE=1\n' > "$NE"; chmod 600 "$NE"
+l=$(compute_lines CCQUOTA_FLEET=1)
+contains "COMPUTE: on → PASS" "$l" "PASS  compute"
+contains "COMPUTE: on says node.env" "$l" "CCQUOTA_FLEET_COMPUTE=1"
+l=$(compute_lines CCQUOTA_FLEET=1 COMPUTE_OFF=1 "COMPUTE_WHY=compute off (只协调: CCQUOTA_FLEET_COMPUTE=0)")
+contains "COMPUTE: node.env on, hub off → says the beat" "$l" "下一次心跳"
+printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=fn_abc\nCCQUOTA_FLEET_COMPUTE=0\n' > "$NE"; chmod 600 "$NE"
+l=$(compute_lines CCQUOTA_FLEET=1 TRUST_RC=7)
+contains "COMPUTE: hub down, node.env 0 → still says it" "$l" "CCQUOTA_FLEET_COMPUTE=0：只协调"
+l=$(compute_lines COMPUTE_OFF=1)
+[ -z "$l" ] && ok || fail "COMPUTE: a row with the hub off" "$l"
+
 printf 'fleet-doctor-node-selftest OK (%s checks)\n' "$CHECKS"
