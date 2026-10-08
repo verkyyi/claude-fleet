@@ -185,7 +185,8 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	key := clientLeaseKey(id)
+	// a test identity's lease lives in its own slot (#1931), as in actions
+	key := s.clientLeases.slotOf(clientLeaseKey(id), env.Lease)
 	if !s.clientLeases.checkActionMAC(key, env.Lease, env.Payload, env.MAC, now) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
 		httpError(w, http.StatusUnauthorized, "not your client: the lease is not held (asked to leave, disconnected or lapsed) or the action key does not check")
