@@ -6,6 +6,8 @@
     fleet connect --proxy MACHINE
     fleet connect --pick [MACHINE]
     fleet connect --probe-direct MACHINE
+    fleet connect --cert-check
+    fleet connect --principal-hint < BODY
 
 `fleet` with nothing after it (claude-fleet#1470; `bin/fleet` runs this file
 with --enter) is the whole way in, in one go:
@@ -68,6 +70,14 @@ prints them). With no hub URL at all (claude-fleet#1712) the pick is THIS
 computer, reason `local` (FLEET_NODE_ALIASES names it) — the client reads this
 machine — and a MACHINE that is not this one exits 1; `fleet connect --print`
 then prints `local <machine>`: the route is no ssh at all.
+
+--cert-check (claude-fleet#2457): the doctor's `cert` row — this computer's
+~/.ssh/fleet-cert-cert.pub, its principals and how long it is still valid, and
+whether the hub accepts it (one signed route-list read). One line
+"PASS|WARN|FAIL<TAB><text>", exit 0; exit 3 and nothing printed when there is
+no certificate here (a machine signed in another way). --principal-hint reads
+a hub refusal on stdin and prints its person's words when it is the principal
+mismatch of claude-fleet#2437 (exit 0), else nothing (exit 1).
 
 If the hub cannot be asked, the routes come from ~/.ssh/fleet-ssh-config —
 the file `fleet login` wrote — without the relay.
@@ -133,6 +143,34 @@ class Refused(Exception):
     def __init__(self, msg, code="", body=None, status=0):
         super().__init__(msg)
         self.code, self.body, self.status = code, body or {}, status
+
+
+# The hub's 401 when the certificate's principals are not the login it checks
+# against (claude-fleet#2437): golang.org/x/crypto/ssh's CheckCert words it
+#   ssh: principal "X" not in the set of valid principals for given certificate: ["Y"]
+PRINCIPAL_RE = re.compile(r'principal "([^"]*)" not in the set of valid principals[^\[]*\[([^\]]*)\]')
+
+
+def principal_hint(text):
+    """The person's words for that refusal (claude-fleet#2457), or "" when
+    `text` is not it — the error string, or the hub's whole JSON body. The ONE
+    wording: the shell, client placement and the sidebar's fleet-hub-sessions.sh
+    (`--principal-hint`) all print this."""
+    try:
+        body = json.loads(text or "")
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):  # the client door's {"error": {"message": …}}
+                err = err.get("message")
+            text = err if isinstance(err, str) else ""
+    except ValueError:
+        pass
+    m = PRINCIPAL_RE.search(text or "")
+    if not m:
+        return ""
+    have = ",".join(re.findall(r'"([^"]*)"', m.group(2))) or "无"
+    return ("证书 principal(%s) 与入口期望(%s) 不一致 → 跑 `fleet login renew`；"
+            "仍不行则入口需要升级（#2437）" % (have, m.group(1)))
 
 
 def die(msg, code=2):
@@ -470,11 +508,15 @@ def fetch_signed(hub, path, namespace, token, what, extra=None, timeout=10):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
+        raw = e.read() or b"{}"
         try:
-            body = json.loads(e.read() or b"{}")
+            body = json.loads(raw)
         except ValueError:
             body = {}
         why = body.get("error", "") if isinstance(body, dict) else ""
+        hint = principal_hint(raw.decode("utf-8", "replace"))
+        if hint:
+            raise Refused(hint, code="principal_mismatch", body=body if isinstance(body, dict) else {}, status=e.code)
         raise Refused("hub refused %s (HTTP %d)%s" % (what, e.code, (": " + why) if why else ""),
                       code=body.get("code", "") if isinstance(body, dict) else "", body=body, status=e.code)
 
@@ -499,7 +541,10 @@ def parse_ssh_config_snippet(text):
     """Machines from the snippet `fleet login` wrote (fleet-ssh-config v1):
     a block "Host <alias> fleet-<alias> fleet-<alias>-<route>" opens a machine,
     each "Host fleet-<alias>-<route>" after it adds a route. No relay: the
-    snippet does not name the machine as the hub's roster does."""
+    snippet does not name the machine as the hub's roster does. Each machine
+    keeps its OWN "User" (claude-fleet#2457: the hub writes every machine's
+    login since #2437); the top-level "login" is only the default for a machine
+    whose blocks name none."""
     machines, cur, block, login = [], None, None, ""
     for line in text.splitlines():
         w = line.split()
@@ -524,7 +569,8 @@ def parse_ssh_config_snippet(text):
             elif k == "port" and w[1].isdigit():
                 block["port"] = int(w[1])
             elif k == "user":
-                login = w[1]
+                cur.setdefault("login", w[1])
+                login = login or w[1]
     for m in machines:
         m["routes"] = [r for r in m["routes"] if r["host"]]
     return {"login": login, "machines": [m for m in machines if m["routes"]]}
@@ -735,7 +781,7 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
         print_table(label, rows, best, probes, hub)
     if best is None:
         die("%s: 没有一条线能连通" % label, 1)
-    login = info.get("login") or ""
+    login = machine_login(m, info)
     name = m.get("alias") or m.get("hostname")
     route = {k: best[k] for k in ("name", "kind", "host", "port")}
     ent = {"at": now, "hub": hub, "label": label, "machine": m, "login": login, "route": route,
@@ -748,6 +794,16 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     cache["machines"], cache["last"] = entries, name
     save_cache(cache)
     return run_ssh(m, route, login, hub, print_only, ssh_args, ssh_opts)
+
+
+def machine_login(m, info):
+    """The login THIS machine is entered as (claude-fleet#2457): its own, from
+    the snippet's Host block or the hub's machine entry; the person's default
+    only for a machine that names none. Never another machine's."""
+    own = (m or {}).get("login")
+    if isinstance(own, str) and own:
+        return own
+    return (info or {}).get("login") or ""
 
 
 def login_override(login):
@@ -874,7 +930,7 @@ def pick_json(m, info, reason=""):
                 for x in (info or {}).get("machines") or [] if isinstance(x, dict)]
     out = {"machine": (m or {}).get("alias") or (m or {}).get("hostname") or "",
            "hostname": (m or {}).get("hostname") or "", "reason": reason or "",
-           "login": (info or {}).get("login") or "", "machines": machines}
+           "login": machine_login(m, info), "machines": machines}
     sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
     sys.stdout.flush()
     return 0
@@ -891,7 +947,10 @@ def pick_named(want, hub, token):
         try:
             with open(ssh_config_snippet_path()) as f:
                 info = parse_ssh_config_snippet(f.read())
-            sys.stderr.write("fleet · 入口连不上（%s），按 %s 里的机器\n" % (e, ssh_config_snippet_path()))
+            if getattr(e, "code", "") == "principal_mismatch":
+                sys.stderr.write("fleet · %s；先按 %s 里的机器\n" % (e, ssh_config_snippet_path()))
+            else:
+                sys.stderr.write("fleet · 入口连不上（%s），按 %s 里的机器\n" % (e, ssh_config_snippet_path()))
         except OSError:
             die("hub: %s" % e, 1)
     machines = info.get("machines") or []
@@ -948,7 +1007,10 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
                 sys.stderr.write("fleet · 这台设备已被吊销，需要重新登录\n")
                 ensure_cert(load_login_module(), hub, verbose, force=True)
                 continue
-            sys.stderr.write("fleet · 入口没有给出机器（%s），按上次的记录直连\n" % e)
+            if e.code == "principal_mismatch":
+                sys.stderr.write("fleet · %s；先按上次的记录直连\n" % e)
+            else:
+                sys.stderr.write("fleet · 入口没有给出机器（%s），按上次的记录直连\n" % e)
             if pick_only:
                 return pick_named(cache.get("last") or "", hub, token) if cache.get("last") else pick_json(None, None, "hub: %s" % e)
             return connect(None, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=ssh_opts)
@@ -975,6 +1037,47 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
     return connect(name, hub, token, verbose, retest, print_only, ssh_args, info=home, ssh_opts=ssh_opts)
 
 
+def cert_check(hub, timeout=6):
+    """--cert-check: (verdict, text) for the doctor's `cert` row, or None
+    when there is no certificate here."""
+    _, cert = cert_paths()
+    if not os.path.exists(cert):
+        return None
+    try:
+        out = subprocess.run(["ssh-keygen", "-L", "-f", cert], capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return "FAIL", "%s 读不出来（ssh-keygen -L）— 跑 `fleet login`" % cert
+    names, inp = [], False
+    for line in out.splitlines():  # "Principals:" then one name a line, until the next "Key: value"
+        t = line.strip()
+        if t.startswith("Principals:"):
+            inp = True
+        elif inp and t and ":" not in t:
+            names.append(t)
+        elif inp:
+            break
+    principals = ",".join(names) or "无"
+    vm = re.search(r"Valid: from \S+ to (\S+)", out)
+    until, left = (vm.group(1) if vm else ("永久" if "Valid: forever" in out else "?")), None
+    if vm:
+        try:
+            left = time.mktime(time.strptime(vm.group(1), "%Y-%m-%dT%H:%M:%S")) - time.time()
+        except ValueError:
+            left = None
+    what = "principal %s · 有效至 %s" % (principals, until)
+    if left is not None and left <= 0:
+        return "FAIL", "%s（已过期）— 跑 `fleet login renew`" % what
+    if not hub:
+        return "PASS", "%s · 没有入口，未探" % what
+    try:
+        fetch_routes(hub.rstrip("/"), "", timeout=timeout)
+    except Refused as e:
+        return "FAIL", "%s · %s" % (what, e)
+    except (OSError, ValueError, subprocess.CalledProcessError) as e:
+        return "WARN", "%s · 入口连不上，未验证（%s）" % (what, e)
+    return "PASS", "%s · 入口接受" % what
+
+
 def main(argv):
     import argparse
     ssh_args = []
@@ -998,7 +1101,16 @@ def main(argv):
                     help="one handshake on MACHINE's remembered direct routes; exit 0 when one answers (the shell)")
     ap.add_argument("--pick", action="store_true",
                     help="certificate + the hub's machine pick as one JSON line; no measuring, no ssh (the shell)")
+    ap.add_argument("--cert-check", action="store_true",
+                    help="the doctor's cert row: principals, validity, and whether the hub accepts it")
+    ap.add_argument("--principal-hint", action="store_true",
+                    help="a hub refusal on stdin → the person's words for a principal mismatch (exit 1: not one)")
     a = ap.parse_args(argv)
+    if a.principal_hint:
+        hint = principal_hint(sys.stdin.read())
+        if hint:
+            print(hint)
+        return 0 if hint else 1
     if a.probe_direct:
         return probe_remembered_direct(a.probe_direct)
     if os.environ.get("FLEET_CONNECT_RETEST") == "1":
@@ -1008,6 +1120,12 @@ def main(argv):
     # its old "url" is read for one version.
     hub = a.hub or os.environ.get("FLEET_HUB_URL") or machine_conf_hub() or conf.get("url") or ""
     token = os.environ.get("FLEET_HUB_TOKEN") or conf.get("token") or ""
+    if a.cert_check:
+        r = cert_check(a.hub or os.environ.get("FLEET_HUB_URL") or machine_conf_hub() or conf.get("url") or "")
+        if r is None:
+            return 3
+        print("%s\t%s" % r)
+        return 0
     if a.proxy:
         if not hub:
             die("no hub URL: pass --hub, set FLEET_HUB_URL, or run `fleet login --hub <入口地址>` once")

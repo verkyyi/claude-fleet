@@ -1147,6 +1147,16 @@ case "$_tr_rc" in
   1) pass sshtrust "authorized_keys 里没有其它 fleet 机器的钥匙 — 跨机只认入口签发的 5 分钟证书" ;;
 esac
 
+# --- cert (issue #2457): this computer's connection certificate, as the hub sees it
+# Its principals, how long it is valid, and one signed route-list read to ask the
+# hub whether it accepts it — a principal the hub does not expect (#2437) is
+# FAIL in the person's words. No certificate here prints nothing.
+_cc=$(python3 "$(dirname "$0")/fleet-connect.py" --cert-check 2>/dev/null) && [ -n "$_cc" ] && case "$_cc" in
+  PASS*) pass cert "${_cc#*	}" ;;
+  WARN*) warn cert "${_cc#*	}" ;;
+  *)     fail cert "${_cc#*	}" ;;
+esac
+
 # --- agent (issue #1525): every login's node agent on this machine vs stable ---
 # Same reading as `fleet-node-upgrade.sh --status`: the bytes on disk AND the
 # version the hub sees running (an agent upgraded on disk but never restarted is
