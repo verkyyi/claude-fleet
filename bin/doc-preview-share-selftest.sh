@@ -43,7 +43,9 @@
 #                  is /i/<its own code>/; another login (a second HOME) holding its own
 #                  codes gets 404 here; --refresh keeps the link; --ttl / 0 = never; a
 #                  pre-#1153 id lives 7 days from its timestamp; a server.py from an older
-#                  version is restarted on the SAME port.
+#                  version is restarted on the SAME port — by a share, or by --upgrade
+#                  with no share (issue #2415), which also ends an untracked server.py;
+#                  --health's server_stale and the doctor's docprev WARN report one.
 #   • SERVE LEAK   a restarted server re-points this login's one tailnet route instead of
 #                  opening another; routes stacked on our backend or left on a dead port
 #                  we once served are dropped, another login's routes are not.
@@ -429,6 +431,44 @@ share "$WORK/b.md" >/dev/null
 CHECKS=$((CHECKS + 1)); [ "$(cat "$ROOT/server.pid")" != "$pid0" ] || fail "10g: an old-version server must be restarted"
 ok [ "$(cat "$ROOT/server.port")" = "$PORT" ]
 CHECKS=$((CHECKS + 1)); ! kill -0 "$pid0" 2>/dev/null || fail "10g: the old server must be gone"
+# --upgrade (issue #2415): the same restart WITHOUT a share — install-apply runs it, so a
+# server from before an install never outlives it; an untracked copy is ended too.
+CHECKS=$((CHECKS + 1)); [ "$(ps -o pgid= -p "$(cat "$ROOT/server.pid")" | tr -d ' ')" = "$(cat "$ROOT/server.pid")" ] \
+  || fail "10g2: server.py runs in its own session (setsid), so a launchd job's exit cannot take it"
+has "server_stale=0" "$(share --health)" "10g2: a current server is not stale"
+out="$(share --upgrade --check)"; rc=$?
+[ "$rc" = 0 ] || fail "10g2: --upgrade --check on a current server → 0 (rc=$rc)" "$out"
+pid1="$(cat "$ROOT/server.pid")"; echo stale > "$ROOT/server.ver"
+has "server_stale=1" "$(share --health)" "10g2: --health counts an old-version server"
+out="$(share --upgrade --check)"; rc=$?
+[ "$rc" = 1 ] || fail "10g2: --upgrade --check on an old server → 1 (rc=$rc)" "$out"
+has "older copy" "$out" "10g2: --check names it"
+ok [ "$(cat "$ROOT/server.pid")" = "$pid1" ]
+mkdir -p "$WORK/skills10g" "$WORK/conf"; ln -s "$(dirname "$SH")" "$WORK/skills10g/doc-preview"
+l="$(HOME="$WORK/home" PATH="$WORK/fake:$PATH" CLAUDE_SKILLS_DIR="$WORK/skills10g" FLEET_SKIP_GLOBAL_CONF=1 \
+    FLEET_CONF_DIR="$WORK/conf" sh "$BIN/fleet-doctor.sh" 2>/dev/null | grep -a 'docprev' | grep -a 'older than the installed')"
+has "WARN" "$l" "10g2: doctor WARNs on a server older than the installed copy"
+has "share.sh --upgrade" "$l" "10g2: and names the fix"
+out="$(share --upgrade)"; rc=$?
+[ "$rc" = 0 ] || fail "10g2: --upgrade must restart an old server (rc=$rc)" "$out"
+has "restarted server.py on :$PORT" "$out" "10g2: on the SAME port"
+CHECKS=$((CHECKS + 1)); ! kill -0 "$pid1" 2>/dev/null || fail "10g2: the old server must be gone"
+ok [ "$(cat "$ROOT/server.port")" = "$PORT" ]
+has 200 "$(code "$PORT" "/d/$id0/")" "10g2: links keep working after --upgrade"
+has 404 "$(code "$PORT" /)" "10g2: and / is still 404"
+has "current" "$(share --upgrade)" "10g2: a second --upgrade changes nothing"
+# an untracked server.py of this install + this login (a lost pid file) is ended
+SP="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
+SKD="$(cd "$(dirname "$SH")" && pwd)"   # the path share.sh names its own server.py by
+python3 "$SKD/server.py" "$SP" "$ROOT/serve" "$SKD" 127.0.0.1 >/dev/null 2>&1 &
+spid=$!; PIDS+=("$spid")
+for _ in $(seq 1 50); do code "$SP" / | grep -q 404 && break; sleep 0.1; done
+has "server_stale=1" "$(share --health)" "10g2: --health counts an untracked server"
+out="$(share --upgrade)"
+has "untracked server.py pid $spid" "$out" "10g2: --upgrade ends the untracked one"
+for _ in $(seq 1 30); do kill -0 "$spid" 2>/dev/null || break; sleep 0.1; done
+CHECKS=$((CHECKS + 1)); ! kill -0 "$spid" 2>/dev/null || fail "10g2: the untracked server must be gone"
+CHECKS=$((CHECKS + 1)); kill -0 "$(cat "$ROOT/server.pid")" 2>/dev/null || fail "10g2: and ours must still run"
 
 # serve leak: the restart above re-used its route; now a restart on ANOTHER port
 routes() { python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(" ".join(p+">"+u.rsplit(":",1)[1] for p,u in sorted(d["web"].items())))' "$WORK/ts.json"; }

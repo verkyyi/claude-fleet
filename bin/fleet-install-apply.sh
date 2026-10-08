@@ -52,6 +52,11 @@
 #             _template.md placeholder `worker|hub|either`) is not a command.
 #   skills    mirror added/changed skills/<name>/ dirs, remove retired ones;
 #             never clobber a personal (unmarked, divergent) skill
+#   docprev   every apply (issue #2415): doc-preview's share.sh --upgrade restarts
+#             a running server.py that is older than the installed copy, on the
+#             same port, and ends an untracked one — a server started before an
+#             install keeps the old rules until restarted (one from before #1153
+#             listed every share without a code for a day). No server = nothing.
 #   codex     mirror the same fleet commands as native Codex skills under each
 #             known $CODEX_HOME/skills/<command>/SKILL.md, and mirror repo skills
 #             there too. Old Codex homes that do not exist are ignored.
@@ -842,6 +847,20 @@ elif [ "$COPY" = 1 ]; then
       if mkdir -p "$dst" && cp -pR "$src"/. "$dst"/; then inst=$((inst + 1)); else fail skills "install $n"; fi
     done
     say "skills: $([ "$DRY" = 1 ] && echo 'would install' || echo installed) $inst · $([ "$DRY" = 1 ] && echo 'would remove' || echo removed) $rem"
+  fi
+fi
+
+# --- docprev (issue #2415) -----------------------------------------------------
+# Not gated on skills/ changing: the m4 server outlived the install that replaced it.
+dp_sh="$CDIR/skills/doc-preview/share.sh"
+if [ -x "$dp_sh" ] && [ -d "$HOME/.cache/claude-doc-preview" ]; then
+  if [ "$DRY" = 1 ]; then
+    if dp_out=$("$dp_sh" --upgrade --check 2>&1); then say 'docprev: server.py current'
+    else say "docprev: would restart — $(printf '%s' "$dp_out" | tr '\n' ';')"; fi
+  elif dp_out=$("$dp_sh" --upgrade 2>&1); then
+    say "docprev: $(printf '%s' "$dp_out" | sed 's/^doc-preview: //' | tr '\n' ';' | sed 's/;$//')"
+  else
+    say "docprev: WARN $(printf '%s' "$dp_out" | tr '\n' ' ')"
   fi
 fi
 
