@@ -1252,13 +1252,15 @@ EOF
 # the last line of ⌘K and of the row menu. A call from inside the client (a key,
 # a menu: its own server runs it) goes on in the background, since what runs it
 # is about to go.
-#   quit [<session>] [--quiet]     Exit 0 (also when nothing was running).
+#   quit [<session>] [--quiet] [--if-unattached]   Exit 0 (also when nothing was
+#                          running; --if-unattached: nothing while a terminal is on it).
 quit)
   shift
-  qquiet=''
+  qquiet=''; qifun=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --quiet) qquiet=1; shift ;;
+      --if-unattached) qifun=1; shift ;;   # `fleet claude`'s own: a client someone uses stays
       -*) note "quit: unknown $1"; exit 2 ;;
       *) SESS=$1; STAGE="$1-stage"; shift ;;
     esac
@@ -1269,6 +1271,7 @@ quit)
     exit 0
   fi
   qrun=''; T has-session -t "=$SESS" 2>/dev/null && qrun=1
+  [ -n "$qifun" ] && [ -n "$(T list-clients -F '#{client_name}' 2>/dev/null)" ] && exit 0
   # the server's environment: the hub, the device's certificate, the cache's
   # TMPDIR — what the keeper gives the lease back with
   if [ -n "$qrun" ]; then
@@ -1356,7 +1359,10 @@ solo)
   SB=$BIN; [ -x "$CACHE/bin/fleet-remote-view.sh" ] && SB="$CACHE/bin"
   OV="$CACHE/tmux-solo.$$.conf"
   bar=$(sh "$SB/fleet-ui-lang.sh" t solo_view_bar 2>/dev/null)
-  cat > "$OV" <<EOF
+  # ONE conf, read at the server's start: the stage's (its environment, its ssh)
+  # with this view's bar after it — so not one line of the stage's top line
+  # (fleet-topbar.py, the client's record) ever runs on this server
+  { cat "$CACHE/tmux-stage.conf"; cat <<EOF
 # fleet-shell.sh solo (issue #2349): this view's bar over the stage's conf
 set -g status on
 set -g status-position bottom
@@ -1374,11 +1380,12 @@ set -g prefix $PREFIX
 unbind -a -T prefix
 bind d detach-client
 EOF
-  sw=$(tmux -L "$SOLO" -f "$CACHE/tmux-stage.conf" new-session -d -P -F '#{window_id}' -s "$SOLO" -n "$snode" -c "$HOME" \
+  } > "$OV" || { note "写不了 $OV"; exit 1; }
+  sw=$(tmux -L "$SOLO" -f "$OV" new-session -d -P -F '#{window_id}' -s "$SOLO" -n "$snode" -c "$HOME" \
          -x "$(tput cols 2>/dev/null || echo 180)" -y "$(tput lines 2>/dev/null || echo 50)" \
          "exec bash $(sq "$SB/fleet-remote-view.sh") run --shell $(sq "$snode") $(sq "$swid")") \
     || { rm -f "$OV"; note 'tmux 开不了会话'; exit 1; }
-  tmux -L "$SOLO" source-file "$OV" \; set-window-option -t "$sw" @remote "$snode:$swid" \; \
+  tmux -L "$SOLO" set-window-option -t "$sw" @remote "$snode:$swid" \; \
     set-window-option -t "$sw" automatic-rename off 2>/dev/null
   rm -f "$OV"
   ended="$CL_DIR/solo-ended.$SOLO"; rm -f "$ended"; smain=$$

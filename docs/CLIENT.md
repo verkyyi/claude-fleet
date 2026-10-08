@@ -210,6 +210,16 @@ claude` had to start for its ask is quit again (`fleet quit`, below), so nothing
 of fleet stays behind. No hub (a LOCAL placement): the client attaches, as
 before. `--here` is unchanged.
 
+**A regular client already running is never touched** (the issue's hard rule):
+`fleet claude` gives it no re-attach pass (which would apply its layout again,
+select a machine on its stage, take the lease for this terminal and say where it
+is in use) — its lease, held already, signs the ask; the view's server is built
+from ONE conf at its start, so the client's top line never runs there; the
+view's end, ⌃D or a closed terminal only close the view. Only `fleet quit`
+quits the regular client, and `fleet claude`'s own trailing quit (when it had to
+start one) is `--if-unattached`: a client someone attached meanwhile stays.
+`bin/fleet-client-solo-selftest.sh` D4 pins it with a client attached beside.
+
 A newcomer gets one without asking: a client whose `fleet.conf [client]` says
 `FLEET_CLIENT_LAYOUT=solo` (what a fresh install writes) opens ONE HOME Claude
 session on its first start, with the line 「这里和本地运行 claude 一样；要在某个

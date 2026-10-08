@@ -1563,7 +1563,7 @@ try:
     sh_shape = ''.join('E' if l.split('\t')[1] == '-Esc 关闭' else (l.split('\t')[0] if l.split('\t')[1] else '|')
                        for l in sh_out.splitlines() if l.count('\t') == 2 and not l.startswith('title\t'))
     # …and its own group instead: 我的客户端 (issue #1932), d
-    check(sh_shape == 'e|ma|sqcx|od|E', 'the shell remote menu: not the row-less group gone + 已落地 · 我的客户端 (#1952; 详情列 left with #2305): %r' % sh_shape)
+    check(sh_shape == 'e|ma|sqcx|odz|E', 'the shell remote menu: not the row-less group gone + 已落地 · 我的客户端 · 退出 fleet (#1952; 详情列 left with #2305; z #2349): %r' % sh_shape)
     check(not any(s in sh_out for s in ('dash-issue-new.sh', 'fleet-restore-pick.sh', 'dash-repo-add.sh')),
           'the shell remote menu names a machine-only script: %r' % sh_out)
     check(sh_out.split('\n', 1)[0] == 'title\t' + menu_shape(remote_wid)[0],

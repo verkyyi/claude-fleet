@@ -89,8 +89,14 @@ if [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ]; then
   bash "$SH" running >/dev/null 2>&1 || was_up=''
 fi
 
-# 1. the client, up and holding its lease — not attached yet
-FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_NO_FIRST=1 bash "$SH" ${node:+"$node"} >/dev/null || exit $?
+# 1. the client, up and holding its lease — not attached yet. A client already
+#    running (a person's own multi-session client, issue #2349) is left exactly
+#    as it is: no re-attach pass, which would apply its layout again, select a
+#    machine on its stage, take the lease for THIS terminal and say where it is
+#    in use — it holds its lease already, and that lease signs the ask.
+if [ -z "$was_up" ] || [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ]; then
+  FLEET_SHELL_NO_ATTACH=1 FLEET_SHELL_NO_FIRST=1 bash "$SH" ${node:+"$node"} >/dev/null || exit $?
+fi
 
 # 2. the session — the client's own stage left where it is when this command
 #    shows it in its own view (--no-stage, step 3)
@@ -116,7 +122,8 @@ case "$hline" in
     case "$hw" in
       */*)
         bash "$SH" solo "$hm" "$hw"; rc=$?
-        [ -n "$was_up" ] || bash "$SH" quit --quiet
+        # a client someone attached meanwhile (`fleet` in another terminal) stays
+        [ -n "$was_up" ] || bash "$SH" quit --quiet --if-unattached
         exit "$rc" ;;
     esac ;;
 esac

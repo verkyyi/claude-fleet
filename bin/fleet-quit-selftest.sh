@@ -16,8 +16,11 @@
 #      server): it goes on in the background and the server still goes
 #   E  `fleet claude` (fleet-home-session.sh, the shell stubbed) in a terminal:
 #      `running`, the client up unattached, `home-session … --no-stage`, then its
-#      own view `solo <machine> <worker id>` — and `quit --quiet` after it only
-#      when the client was not running before; a LOCAL placement attaches the client
+#      own view `solo <machine> <worker id>` — a client already running gets no
+#      re-attach pass at all (its lease, layout, stage, where untouched), and
+#      `quit --quiet --if-unattached` after the view only when the client was not
+#      running before (and nobody attached it since); a LOCAL placement attaches
+#      the client
 #   F  the guard (#1931): `fleet quit` / `fleet status` / `fleet-shell.sh quit`
 #      start no client; a bare `fleet-shell.sh` still does
 #
@@ -159,13 +162,23 @@ fhs() {   # in a terminal (fleet-home-session.sh wants one), to the end
 printf '1\n' > "$W/running"
 printf 'REMOTE m5 place done 1234-ab/fid-9\n' > "$W/hline"
 eq "E no client before: its own view, then the client goes again" "$(fhs)" \
-  '[running][][home-session claude --body-file B --no-stage][solo m5 1234-ab/fid-9][quit --quiet]'
+  '[running][][home-session claude --body-file B --no-stage][solo m5 1234-ab/fid-9][quit --quiet --if-unattached]'
 printf '0\n' > "$W/running"
-eq "E a client already running: the view, and the client stays" "$(fhs)" \
-  '[running][][home-session claude --body-file B --no-stage][solo m5 1234-ab/fid-9]'
+eq "E a client already running: no re-attach pass on it, the view, and it stays" "$(fhs)" \
+  '[running][home-session claude --body-file B --no-stage][solo m5 1234-ab/fid-9]'
 printf 'LOCAL host\t@7 x\n' > "$W/hline"
 eq "E no hub (a LOCAL row): the client, as before" "$(fhs)" \
-  '[running][][home-session claude --body-file B --no-stage][]'
+  '[running][home-session claude --body-file B --no-stage][]'
+
+# --if-unattached (fleet claude's own quit): a client someone attached meanwhile stays
+T -f /dev/null new-session -d -s fq "sleep 600"
+tmux -L fq-term -f /dev/null new-session -d -s t -x 80 -y 20 "env -u TMUX $REAL_TMUX -S $W/s/fq attach -t fq"
+n=0; while [ -z "$(T list-clients 2>/dev/null)" ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+bash "$BIN/fleet-shell.sh" quit fq --quiet --if-unattached
+eq "E --if-unattached: an attached client is left running" "$(T has-session -t =fq 2>/dev/null; echo $?)" 0
+tmux -L fq-term kill-server 2>/dev/null; sleep 0.2
+bash "$BIN/fleet-shell.sh" quit fq --quiet --if-unattached
+eq "E --if-unattached: with no terminal on it, it goes" "$(T has-session -t =fq 2>/dev/null; echo $?)" 1
 
 # --- F ---------------------------------------------------------------------------
 g() { printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \

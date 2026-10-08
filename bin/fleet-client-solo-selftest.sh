@@ -29,7 +29,10 @@
 #      terminal is back at its prompt with 「会话已结束（m5）。」 and the view's
 #      server gone; D3 a row already exited when opened ends nothing, ⌃D leaves
 #      with 「会话在后台继续（m5）。`fleet` 可以找回。」, the session never saw the
-#      ⌃D, the client and its layout untouched.
+#      ⌃D, the client and its layout untouched; D4 the person's own multi-session
+#      client attached beside it: `fleet claude` → /exit leaves its screen, its
+#      client, its server options (layout, bar), its lease, its where, its
+#      switch history and fleet.conf byte for byte.
 #
 # Drives: bin/fleet-shell.sh, bin/fleet-sidebar.py, bin/fleet-sidebar.sh,
 # bin/fleet-topbar.py, bin/fleet-ui-lang.sh, conf/tmux-shell.conf,
@@ -492,6 +495,46 @@ try:
     check(tm('show-options', '-gqv', '@fleet_layout').stdout.strip() == 'multi', 'D3: the client\'s layout moved')
     check((conf_dir / 'fleet.conf').read_text() == saved, 'D3: fleet.conf was written')
     print('D3: ⌃D → %r; the client and its layout untouched' % [l for l in screen().split('\n') if l.strip()][-2])
+
+    # D4. the person's own multi-session client attached beside it (the issue's
+    # acceptance leg): `fleet claude` → /exit leaves its screen, its client, its
+    # lease, its where, its layout and its switch history byte for byte
+    reg = str(socks / 'reg')
+    tm('send-keys', '-t', 'fc:', 'clear; printf "REGULAR-CLIENT list|session\\n"', 'Enter')
+    tm('-f', '/dev/null', 'new-session', '-d', '-s', 'reg', '-x', '110', '-y', '26',
+       'env -u TMUX %s -S %s attach -t fc' % (shlex.quote(real_tmux), shlex.quote(sock)), s=reg)
+    check(wait(lambda: tm('list-clients', '-F', '#{client_name}').stdout.strip() != ''), 'D4: the regular client did not attach')
+    cl = cache / 'tmp'
+    (cl / 'client.lease').write_text('L9\n')
+    (cl / 'client.where.json').write_text('{"device": "MacBook"}\n')
+    sw_state = work / 'switch'
+    sw_state.mkdir()
+    (sw_state / 'switch.json').write_text('{"mru": ["wid:F/w7"]}\n')
+    tm('set-environment', '-g', 'FLEET_SWITCH_STATE', str(sw_state))
+    time.sleep(.5)
+
+    def regular():
+        return (tm('capture-pane', '-p', '-t', 'reg:', s=reg).stdout,
+                tm('list-clients', '-F', '#{client_name} #{client_session}').stdout,
+                tm('show-options', '-g').stdout,
+                (cl / 'client.lease').read_text(), (cl / 'client.where.json').read_text(),
+                sorted((p.name, p.read_text()) for p in sw_state.iterdir()),
+                (conf_dir / 'fleet.conf').read_text())
+    before = regular()
+    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fworking\n')
+    terminal()
+    check(wait(drawn, 10), 'D4: not the one-session screen:\n%s' % screen())
+    time.sleep(.6)
+    check(regular() == before, 'D4: the view moved the regular client while open')
+    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fexited\n')
+    check(wait(lambda: 'PROMPT' in screen()), 'D4: /exit did not end the view:\n%s' % screen())
+    check('会话已结束（m5）。' in screen(), 'D4: the last line: %r' % screen())
+    time.sleep(.5)
+    after = regular()
+    for i, what in enumerate(('screen', 'clients', 'options (layout, bar)', 'lease', 'where', 'switch history', 'fleet.conf')):
+        check(after[i] == before[i], 'D4: /exit changed the regular client\'s %s:\n%r\n→ %r' % (what, before[i], after[i]))
+    tm('kill-server', s=reg)
+    print('D4: a regular client beside it — screen, client, lease, where, layout, switch history untouched')
     print('D: %d checks' % checks)
 except AssertionError as e:
     print('FAIL D: %s' % e)
