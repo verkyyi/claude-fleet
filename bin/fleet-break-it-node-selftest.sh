@@ -9,6 +9,9 @@
 #                         bin/fleet-doctor.sh's `node` row
 #   account-adopt-stuck   bin/fleet-node-supervisor.py `account adopt|release` (#2332):
 #                         one of a login's services will not unload mid-migration
+#   account-adopt-agent-left  bin/fleet-node-supervisor.py `account adopt|release` (#2387):
+#                         the login's own node agent (com.ccquota.agent.<login>) moves
+#                         with it — logins/<login>.env written, the old one in the attic
 #   node-update-half      bin/fleet-node-update.py (#2334): an update killed half way,
 #                         and a release whose new part fails the doctor
 #   node-install-half     bin/fleet-node-install.sh (#2330): `fleet node install`
@@ -97,6 +100,64 @@ LC
     || { WHY="release did not put every service back and loaded"; return 1; }
   SECS=$(since "$t0")
   WHAT="迁移中一个服务卸不掉：adopt 退 1，已卸的全部放回并重新加载、账号不算托管；卸得掉之后 adopt 成功，release 一条命令全部还原"
+}
+
+# account-adopt-agent-left (#2387): adopt moved a login's fleet services but not
+# its own node agent — the machine's one node program waited forever for
+# logins/<login>.env and every login kept its old com.ccquota.agent.<login>.
+drill_account_adopt_agent_left() {
+  CAP=10
+  local sb la dd conf t0 envf out
+  sb="$WORK/acctag"; la="$sb/Users/alice/Library/LaunchAgents"; dd="$sb/LaunchDaemons"
+  conf="$sb/Users/alice/.config/claude-fleet"
+  mkdir -p "$la" "$sb/lc/loaded" "$sb/lc/stuck" "$dd" "$conf"
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  cat > "$sb/launchctl" <<'LC'
+#!/bin/bash
+d="$FAKE_LC"; echo "$*" >> "$d/log"
+case "$1" in
+  bootout) l="${2##*/}"; [ -e "$d/stuck/$l" ] && exit 5; rm -f "$d/loaded/$l" ;;
+  bootstrap) touch "$d/loaded/$(basename "$3" .plist)" ;;
+  print) [ -e "$d/loaded/${2##*/}" ] ;;
+esac
+LC
+  chmod +x "$sb/launchctl"
+  python3 -c 'import plistlib, sys; plistlib.dump({"Label": "com.claude-fleet.dispatch", "ProgramArguments": ["/bin/true"]}, open(sys.argv[1], "wb"))' \
+    "$la/com.claude-fleet.dispatch.plist"
+  python3 -c 'import plistlib, sys; plistlib.dump({"Label": "com.ccquota.agent.alice", "ProgramArguments": ["/bin/true"],
+    "EnvironmentVariables": {"CCQUOTA_HUB_URL": "https://hub.invalid", "CCQUOTA_FLEET": "1", "FLEET_CONF_DIR": sys.argv[2], "PATH": "/usr/bin"}},
+    open(sys.argv[1], "wb"))' "$dd/com.ccquota.agent.alice.plist" "$conf"
+  printf 'CCQUOTA_HUB_URL=https://hub.invalid\nCCQUOTA_TOKEN=drill-secret-alice\n' > "$conf/node.env"; chmod 600 "$conf/node.env"
+  : > "$sb/lc/loaded/com.claude-fleet.dispatch"; : > "$sb/lc/loaded/com.ccquota.agent.alice"
+  : > "$sb/lc/stuck/com.ccquota.agent.alice"
+  printf '{"account": []}\n' > "$sb/table.json"
+  envf="$sb/db/logins/alice.env"
+  sup() { FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$dd" \
+          FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json" \
+          FLEET_NODE_LAUNCHCTL="$sb/launchctl" FAKE_LC="$sb/lc" FLEET_CREDSEP_ROOT_BASE="$sb/cred" \
+          python3 "$BIN/fleet-node-supervisor.py" "$@"; }
+  t0=$(now)
+  # 1. the old agent will not unload: nothing half done, no env for the machine's agent
+  sup account adopt alice >"$sb/adopt.out" 2>&1 && { WHY="adopt succeeded past an agent that did not unload"; return 1; }
+  [ ! -e "$envf" ] || { WHY="a failed adopt left logins/alice.env — two agents would speak for alice"; return 1; }
+  [ -f "$dd/com.ccquota.agent.alice.plist" ] && [ -f "$la/com.claude-fleet.dispatch.plist" ] \
+    && [ -e "$sb/lc/loaded/com.claude-fleet.dispatch" ] || { WHY="a failed adopt did not put everything back"; return 1; }
+  rm -f "$sb/lc/stuck/com.ccquota.agent.alice"
+  # 2. adopt: the env for the machine's agent, the old agent in the attic, no token printed
+  out=$(sup account adopt alice 2>&1) || { WHY="adopt failed once the agent unloads: $out"; return 1; }
+  case "$out" in *drill-secret*) WHY="adopt printed the token"; return 1 ;; esac
+  [ -f "$envf" ] && [ "$(ls -l "$envf" | cut -c1-10)" = "-rw-------" ] || { WHY="no logins/alice.env, or not 0600"; return 1; }
+  grep -qx 'CCQUOTA_TOKEN=drill-secret-alice' "$envf" && grep -q '^FLEET_CONF_DIR=' "$envf" \
+    || { WHY="logins/alice.env lacks the token or FLEET_CONF_DIR"; return 1; }
+  [ ! -e "$dd/com.ccquota.agent.alice.plist" ] && [ ! -e "$sb/lc/loaded/com.ccquota.agent.alice" ] \
+    || { WHY="the old agent still runs beside the machine's node program"; return 1; }
+  # 3. release: the env goes, the old agent comes back loaded
+  sup account release alice >/dev/null 2>&1 || { WHY="release failed"; return 1; }
+  [ ! -e "$envf" ] || { WHY="release left logins/alice.env"; return 1; }
+  [ -f "$dd/com.ccquota.agent.alice.plist" ] && [ -e "$sb/lc/loaded/com.ccquota.agent.alice" ] \
+    || { WHY="release did not put the old agent back and loaded"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="adopt 连账号自己的节点程序一起迁：旧 agent 卸不掉就全部放回、不写 logins/alice.env；卸得掉则写 600 的 env（含令牌、不打印）、旧 agent 进 attic；release 删 env、放回旧 agent"
 }
 
 drill_node_update_half() {

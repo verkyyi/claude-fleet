@@ -27,7 +27,14 @@ machine's work ONCE, however many logins the machine carries:
                 An account becomes managed by `account adopt <login>`: its own
                 fleet LaunchAgents / LaunchDaemons are booted out and moved to the
                 attic (kept until released); one that will not unload puts every
-                one back. `account release <login>` is the way back, one command.
+                one back. Its own node agent (com.ccquota.agent.<login>, #2387)
+                moves with them, and only once all are out its settings — the
+                agent plist's CCQUOTA_* / FLEET_CONF_DIR + its node.env's CCQUOTA_*
+                (a separated login's from the credsep store) — land in
+                <state>/logins/<login>.env (root 0600), where the machine's one
+                node program (C5) serves it from; that child restarts whenever
+                logins/ changes. `account release <login>` is the way back, one
+                command: the env goes first, then the old services come back.
                 expected.json's `accounts` (C2), when present, narrows who runs.
   * update    — the machine's one updater (issue #2334, C6): a task like the
                 rest (fleet-node-update.py tick). When it moves `current` it asks
@@ -133,6 +140,7 @@ class Paths(object):
         self.main_lock = os.path.join(self.state, "supervisor.lock")
         self.expected = os.path.join(self.state, "expected.json")
         self.accounts = os.path.join(self.state, "accounts.json")
+        self.logins = os.path.join(self.state, "logins")
         self.plist = os.path.join(self.daemon_dir, LABEL + ".plist")
 
 
@@ -201,6 +209,22 @@ def pid_cmd(pid):
         return ""
 
 
+def dir_sig(d):
+    """What a directory holds, as one string: each entry's name, size and mtime."""
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return ""
+    out = []
+    for n in names:
+        try:
+            st = os.lstat(os.path.join(d, n))
+            out.append("%s:%d:%d" % (n, st.st_size, st.st_mtime_ns))
+        except OSError:
+            pass
+    return "|".join(out)
+
+
 def trusted(path, as_root=None):
     """Root runs only a root-owned script no group / other may write, in a dir
     likewise. Off under FLEET_NODE_TEST, and for a non-root supervisor."""
@@ -242,6 +266,9 @@ def default_table(paths):
                      "--logins", os.path.join(paths.state, "logins"),
                      "--state", os.path.join(paths.state, "agent")],
              "requires": [os.path.join(paths.state, "machine.env"), os.path.join(paths.state, "logins")],
+             # it reads its tenants once, at start: an adopt / release (#2387)
+             # changes the directory, and the daemon starts it again on it
+             "reload": os.path.join(paths.state, "logins"),
              "note": "C5 #2333"},
         ],
         "tasks": [
@@ -602,6 +629,11 @@ class Supervisor(object):
                 del self.adopted[name]
                 self.died(name, cs, None, t)
                 continue
+            if c.get("reload") and (name in self.procs or name in self.adopted) \
+                    and cs.get("reload_sig") != dir_sig(c["reload"]):
+                self.stop_one(name, "%s changed — starting it again" % c["reload"])
+                self.start_child(c, cs, t)
+                continue
             p = self.procs.get(name)
             if p is not None:
                 rc = p.poll()
@@ -625,7 +657,7 @@ class Supervisor(object):
         self.dirty = True
         self.log("child %s exited rc=%s after %ds; restart in %ds" % (name, rc, up, delay))
 
-    def stop_one(self, name):
+    def stop_one(self, name, why="no longer in the table"):
         p = self.procs.pop(name, None)
         pid = p.pid if p is not None else self.adopted.pop(name, None)
         if pid:
@@ -648,7 +680,7 @@ class Supervisor(object):
         if cs is not None:
             cs.update(pid=None, status="stopped")
         self.dirty = True
-        self.log("child %s stopped (no longer in the table)" % name)
+        self.log("child %s stopped (%s)" % (name, why))
 
     def start_child(self, c, cs, t):
         try:
@@ -660,6 +692,8 @@ class Supervisor(object):
             return
         self.procs[c["name"]] = p
         cs.update(pid=p.pid, started=t, cmd=pid_cmd(p.pid) or " ".join(c["cmd"]))
+        if c.get("reload"):
+            cs["reload_sig"] = dir_sig(c["reload"])
         self.dirty = True
         self.log("child %s started pid %d" % (c["name"], p.pid))
 
@@ -1032,6 +1066,125 @@ def account_services(paths, login, uid, home):
     return keep
 
 
+# The login's own node agent (#2387): what `ccquota agent --machine` (C5, #2333)
+# serves it from instead is <state>/logins/<login>.env, written here, at adopt.
+AGENT_ENV_KEYS = re.compile(r"^(CCQUOTA_[A-Z0-9_]+|FLEET_CONF_DIR)$")
+
+
+def _env_file(path, uid):
+    """KEY=VALUE lines of a node.env, PARSED (never sourced). Root reads a file in a
+    login's home: never through a symlink, only one that login (or root) owns."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    with os.fdopen(fd) as f:
+        st = os.fstat(f.fileno())
+        if st.st_uid not in (uid, 0) and env("FLEET_NODE_TEST", "") != "1":
+            return None
+        out = {}
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):]
+            k, eq, v = line.partition("=")
+            v = v.strip()
+            if len(v) >= 2 and v[0] in "\"'" and v[-1] == v[0]:
+                v = v[1:-1]
+            if eq and k.strip():
+                out[k.strip()] = v
+        return out
+
+
+def account_agent(paths, login, uid, home):
+    """The login's own ccquota node agent and the settings the machine's agent
+    serves it with: {path, label, domain, env, node_env} · None (no agent) ·
+    a string (an agent whose settings carry no token — adopt refuses)."""
+    cands = [(os.path.join(paths.daemon_dir, "com.ccquota.agent.%s.plist" % login), "system"),
+             (os.path.join(home, "Library", "LaunchAgents", "com.ccquota.agent.plist"), "gui/%d" % uid)]
+    for path, domain in cands:
+        if os.path.islink(path) or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "rb") as f:
+                pl = plistlib.load(f)
+        except Exception as e:  # noqa: BLE001 — one line, no traceback
+            return "%s: not a plist (%s)" % (path, e)
+        pe = pl.get("EnvironmentVariables") if isinstance(pl, dict) else None
+        out = {}
+        for k, v in (pe if isinstance(pe, dict) else {}).items():
+            if AGENT_ENV_KEYS.match(k) and isinstance(v, str) and v:
+                out[k] = v
+        # the token: a separated login keeps it in root's credsep store (issue
+        # #1971, fleet-credsep-launch.py's agent branch), any other in its conf dir
+        cbase = env("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred")
+        meta = read_json(os.path.join(cbase, login, "meta.json"), None)
+        if isinstance(meta, dict) and meta.get("login") == login:
+            ne_path = os.path.join(cbase, login, "node.env")
+            ne = _env_file(ne_path, 0)
+            run = env("FLEET_CREDSEP_RUN_BASE", "/var/run/fleet-cred")
+            store = os.path.join(run, ".shared", "ctl.sock") if meta.get("mode") == "shared" \
+                else os.path.join(run, login, "ctl.sock")
+        else:
+            conf = out.get("FLEET_CONF_DIR") or os.path.join(home, ".config", "claude-fleet")
+            ne_path = os.path.join(conf, "node.env")
+            ne = _env_file(ne_path, uid)
+            store = None
+        for k, v in (ne or {}).items():
+            if k.startswith("CCQUOTA_") and v:
+                out[k] = v
+        if store:
+            out["CCQUOTA_FLEET_CRED_STORE"] = store
+        if not out.get("CCQUOTA_TOKEN"):
+            return "%s: no CCQUOTA_TOKEN in its EnvironmentVariables or %s" % (path, ne_path)
+        return {"path": path, "domain": domain, "label": _plist_label(path) or os.path.basename(path)[:-len(".plist")],
+                "env": out, "node_env": ne_path}
+    return None
+
+
+def login_env_path(paths, login):
+    return os.path.join(paths.logins, login + ".env")
+
+
+def write_login_env(paths, login, kv):
+    """<state>/logins/<login>.env: root 0600, written whole by one rename."""
+    if not os.path.isdir(paths.logins):
+        os.makedirs(paths.logins)
+    os.chmod(paths.logins, 0o700)
+    dst = login_env_path(paths, login)
+    tmp = "%s.tmp-%d" % (dst, os.getpid())
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("# claude-fleet account adopt (issue #2387): %s's node agent settings — holds its token, root 0600\n"
+                    % login)
+            for k in sorted(kv):
+                v = kv[k].replace("\n", "")
+                if v[:1] in ("'", '"'):
+                    v = ("'%s'" if v[:1] == '"' else '"%s"') % v
+                f.write("%s=%s\n" % (k, v))
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, dst)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def remove_login_env(paths, login):
+    try:
+        os.unlink(login_env_path(paths, login))
+        return True
+    except OSError:
+        return False
+
+
 def _accounts_write(paths, a):
     if not os.path.isdir(paths.state):
         os.makedirs(paths.state)
@@ -1062,13 +1215,25 @@ def account_adopt(paths, login, dry=False):
         return 1
     uid, gid, home = ident
     a = accounts_read(paths)
-    if (a.get(login) or {}).get("managed"):
-        print("%s already managed since %s" % (login, iso(a[login].get("since"))))
+    was = a.get(login) if (a.get(login) or {}).get("managed") else None
+    agent = account_agent(paths, login, uid, home)
+    if was is not None and agent is None:
+        print("%s already managed since %s" % (login, iso(was.get("since"))))
         return 0
-    svcs = account_services(paths, login, uid, home)
+    # adopted before #2387: only the node agent left behind moves now
+    svcs = [] if was is not None else account_services(paths, login, uid, home)
+    if isinstance(agent, str):
+        # the machine's agent could not serve it: its own stays, nothing moves
+        print("fleet-node-supervisor: %s — nothing moved; fix the token (bin/fleet-hub-node.sh env --write) and adopt again"
+              % agent, file=sys.stderr)
+        return 1
+    if agent:
+        svcs.append(agent)
     if dry:
         for sv in svcs:
             print("would boot out %s/%s and move %s to the attic" % (sv["domain"], sv["label"], sv["path"]))
+        if agent:
+            print("would write %s (0600) with %s" % (login_env_path(paths, login), " ".join(sorted(agent["env"]))))
         print("would run %d account units as %s" % (len(account_units(paths, load_table(paths))), login))
         return 0
     Supervisor(paths, {"children": [], "tasks": []}).ensure_dirs()
@@ -1083,10 +1248,7 @@ def account_adopt(paths, login, dry=False):
                 # one that will not unload: every service of this login goes back
                 print("fleet-node-supervisor: %s did not unload — putting %s's %d moved service(s) back"
                       % (target, login, len(moved)), file=sys.stderr)
-                for e in reversed(moved):
-                    _put_back(paths, e)
-                    index.remove(e)
-                write_json(paths.attic_index, index, 0o600)
+                _undo(paths, index, moved)
                 return 1
             ident_ = "%s-%s-%d" % (stamp, login, len(index) + 1)
             dst = os.path.join(paths.attic, ident_, os.path.basename(sv["path"]))
@@ -1098,13 +1260,35 @@ def account_adopt(paths, login, dry=False):
                  "label": sv["label"], "domain": sv["domain"]}
             index.append(e)
             moved.append(e)
+        # only once the old agent is out: never two agents speaking for one login
+        if agent:
+            try:
+                write_login_env(paths, login, agent["env"])
+            except OSError as ex:
+                print("fleet-node-supervisor: cannot write %s (%s) — putting %s's %d moved service(s) back"
+                      % (login_env_path(paths, login), ex.strerror or ex, login, len(moved)), file=sys.stderr)
+                _undo(paths, index, moved)
+                remove_login_env(paths, login)
+                return 1
         write_json(paths.attic_index, index, 0o600)
-    a[login] = {"managed": True, "since": now(), "uid": uid, "home": home,
-                "attic": [e["id"] for e in moved]}
+    a[login] = {"managed": True, "since": (was or {}).get("since") or now(), "uid": uid, "home": home,
+                "attic": list((was or {}).get("attic") or []) + [e["id"] for e in moved]}
+    if agent:
+        a[login]["login_env"] = login_env_path(paths, login)
     _accounts_write(paths, a)
     print("adopted %s: %d service(s) booted out and kept in the attic; its tasks now run under %s"
           % (login, len(moved), LABEL))
+    if agent:
+        print("  its node agent %s → %s (keys: %s)" % (agent["label"], login_env_path(paths, login),
+                                                     " ".join(sorted(agent["env"]))))
     return 0
+
+
+def _undo(paths, index, moved):
+    for e in reversed(moved):
+        _put_back(paths, e)
+        index.remove(e)
+    write_json(paths.attic_index, index, 0o600)
 
 
 def _account_running(paths, login):
@@ -1114,6 +1298,12 @@ def _account_running(paths, login):
             if name.startswith(login + "/") and x.get("pid") and pid_alive(x["pid"]):
                 return True
     return False
+
+
+def _node_agent_stale(paths):
+    """The machine's node agent still runs on a logins/ it read before a change."""
+    cs = (read_json(paths.state_file, {}).get("children") or {}).get("node-agent") or {}
+    return bool(cs.get("pid")) and pid_alive(cs["pid"]) and cs.get("reload_sig") != dir_sig(paths.logins)
 
 
 def account_release(paths, login):
@@ -1128,12 +1318,15 @@ def account_release(paths, login):
         return 1
     a[login] = dict(a[login], managed=False, released=now())
     _accounts_write(paths, a)
+    # the machine's agent stops speaking for it (it restarts on logins/ changing)
+    # before its own agent comes back below
+    gone_env = remove_login_env(paths, login)
     # the running daemon drops the login's entries on its next pass; wait for it,
     # so the old services never run beside ours
     sv = read_json(paths.state_file, {}).get("supervisor") or {}
     if pid_alive(sv.get("pid")):
         end = now() + env_num("FLEET_NODE_RELEASE_WAIT", 20)
-        while now() < end and _account_running(paths, login):
+        while now() < end and (_account_running(paths, login) or (gone_env and _node_agent_stale(paths))):
             time.sleep(0.2)
     back = 0
     with attic_lock(paths):

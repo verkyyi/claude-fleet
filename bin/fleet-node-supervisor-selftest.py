@@ -613,6 +613,155 @@ class H_Accounts(Sandbox):
         self.assertFalse(self.task("bob/p"), "an account the expected state drops still ran")
         self.assertIn("not in expected.json", self.run_sup("status").stdout)
 
+    # -- the login's own node agent (#2387) -------------------------------------
+    def agent_plist(self, who, env, gui=False):
+        import plistlib
+        if gui:
+            path, label = os.path.join(self.home(who), "Library", "LaunchAgents", "com.ccquota.agent.plist"), \
+                "com.ccquota.agent"
+        else:
+            path, label = os.path.join(self.env["FLEET_NODE_DAEMON_DIR"], "com.ccquota.agent.%s.plist" % who), \
+                "com.ccquota.agent.%s" % who
+        with open(path, "wb") as f:
+            plistlib.dump({"Label": label, "ProgramArguments": ["/bin/true"], "EnvironmentVariables": env}, f)
+        open(os.path.join(self.lc, "loaded", label), "w").close()
+        return path
+
+    def node_env(self, path, body):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(body)
+        os.chmod(path, 0o600)
+
+    def login_env(self, who):
+        p = os.path.join(self.d, "db", "logins", who + ".env")
+        if not os.path.exists(p):
+            return None, None
+        kv = {}
+        for line in open(p):
+            if line.strip() and not line.startswith("#"):
+                k, _, v = line.rstrip("\n").partition("=")
+                kv[k] = v
+        return kv, os.stat(p).st_mode & 0o777
+
+    def test_adopt_moves_node_agent_and_release_restores(self):
+        conf = os.path.join(self.home("alice"), ".config", "claude-fleet")
+        ap = self.agent_plist("alice", {"CCQUOTA_HUB_URL": "https://hub.invalid", "CCQUOTA_FLEET": "1",
+                                        "FLEET_CONF_DIR": conf, "PATH": "/usr/bin", "HOME": "/nope"})
+        self.node_env(os.path.join(conf, "node.env"),
+                      "# x\nCCQUOTA_HUB_URL=https://hub.invalid\nexport CCQUOTA_TOKEN='tok-alice-1'\nFLEET_X=1\n")
+        self.agent_plist("bob", {"CCQUOTA_TOKEN": "tok-bob"})
+        self.acct_table()
+        r = self.run_sup("account", "adopt", "alice", "--dry-run")
+        self.assertIn("would boot out system/com.ccquota.agent.alice", r.stdout)
+        self.assertIn("logins/alice.env (0600) with CCQUOTA_FLEET CCQUOTA_HUB_URL CCQUOTA_TOKEN FLEET_CONF_DIR", r.stdout)
+        self.assertNotIn("tok-alice", r.stdout + r.stderr)
+        self.assertEqual(self.login_env("alice"), (None, None), "a dry run wrote the env")
+        r = self.run_sup("account", "adopt", "alice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("tok-alice", r.stdout + r.stderr, "adopt printed the token")
+        kv, mode = self.login_env("alice")
+        self.assertEqual(mode, 0o600)
+        self.assertEqual(kv, {"CCQUOTA_HUB_URL": "https://hub.invalid", "CCQUOTA_FLEET": "1",
+                              "FLEET_CONF_DIR": conf, "CCQUOTA_TOKEN": "tok-alice-1"})
+        self.assertEqual(os.stat(os.path.join(self.d, "db", "logins")).st_mode & 0o777, 0o700)
+        self.assertFalse(os.path.exists(ap), "the old agent is still installed")
+        self.assertNotIn("com.ccquota.agent.alice", os.listdir(os.path.join(self.lc, "loaded")))
+        self.assertIn("com.ccquota.agent.bob", os.listdir(os.path.join(self.lc, "loaded")), "bob's agent was touched")
+        self.assertIn("(account alice, kept)", self.run_sup("attic", "list").stdout)
+        # adopting again changes nothing
+        self.assertIn("already managed", self.run_sup("account", "adopt", "alice").stdout)
+        r = self.run_sup("account", "release", "alice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.login_env("alice"), (None, None), "release left logins/alice.env")
+        self.assertTrue(os.path.exists(ap))
+        self.assertIn("bootstrap system %s" % ap, self.lclog())
+        self.assertIn("com.ccquota.agent.alice", os.listdir(os.path.join(self.lc, "loaded")))
+
+    def test_agent_that_will_not_unload_puts_everything_back(self):
+        la = os.path.join(self.home("alice"), "Library", "LaunchAgents")
+        self.plist(os.path.join(la, "com.claude-fleet.dispatch.plist"), "com.claude-fleet.dispatch")
+        conf = os.path.join(self.home("alice"), ".config", "claude-fleet")
+        ap = self.agent_plist("alice", {"FLEET_CONF_DIR": conf})
+        self.node_env(os.path.join(conf, "node.env"), "CCQUOTA_TOKEN=tok-alice\n")
+        open(os.path.join(self.lc, "stuck", "com.ccquota.agent.alice"), "w").close()
+        self.acct_table()
+        r = self.run_sup("account", "adopt", "alice")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("did not unload", r.stderr)
+        self.assertEqual(self.login_env("alice"), (None, None))
+        self.assertTrue(os.path.exists(ap) and os.path.exists(os.path.join(la, "com.claude-fleet.dispatch.plist")))
+        self.assertIn("com.claude-fleet.dispatch", os.listdir(os.path.join(self.lc, "loaded")))
+        self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 1)
+        self.assertEqual(self.run_sup("attic", "list").stdout, "")
+
+    def test_agent_with_no_token_moves_nothing(self):
+        la = os.path.join(self.home("alice"), "Library", "LaunchAgents")
+        self.plist(os.path.join(la, "com.claude-fleet.dispatch.plist"), "com.claude-fleet.dispatch")
+        ap = self.agent_plist("alice", {"CCQUOTA_HUB_URL": "https://hub.invalid"})
+        self.acct_table()
+        r = self.run_sup("account", "adopt", "alice")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no CCQUOTA_TOKEN", r.stderr)
+        self.assertTrue(os.path.exists(ap) and os.path.exists(os.path.join(la, "com.claude-fleet.dispatch.plist")))
+        self.assertEqual(self.lclog(), "", "something was booted out")
+        self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 1)
+
+    def test_credsep_login_reads_the_store(self):
+        cred = os.path.join(self.d, "cred")
+        for who, mode in (("alice", "shared"), ("bob", "own")):
+            os.makedirs(os.path.join(cred, who))
+            json.dump({"login": who, "mode": mode}, open(os.path.join(cred, who, "meta.json"), "w"))
+            self.node_env(os.path.join(cred, who, "node.env"), "CCQUOTA_TOKEN=tok-%s\nCCQUOTA_HUB_URL=https://h\n" % who)
+            self.agent_plist(who, {"CCQUOTA_FLEET": "1"}, gui=(who == "bob"))
+        # the login's own conf dir is not where a separated login's token is
+        self.node_env(os.path.join(self.home("alice"), ".config", "claude-fleet", "node.env"), "CCQUOTA_TOKEN=wrong\n")
+        self.acct_table()
+        e = {"FLEET_CREDSEP_ROOT_BASE": cred, "FLEET_CREDSEP_RUN_BASE": "/run/fc"}
+        for who in ("alice", "bob"):
+            r = self.run_sup("account", "adopt", who, env=e)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        kv, _ = self.login_env("alice")
+        self.assertEqual(kv["CCQUOTA_TOKEN"], "tok-alice")
+        self.assertEqual(kv["CCQUOTA_FLEET_CRED_STORE"], "/run/fc/.shared/ctl.sock")
+        kv, _ = self.login_env("bob")
+        self.assertEqual(kv["CCQUOTA_FLEET_CRED_STORE"], "/run/fc/bob/ctl.sock")
+        self.assertIn("bootout gui/%d/com.ccquota.agent" % os.getuid(), self.lclog())
+        self.assertFalse(os.path.exists(os.path.join(self.home("bob"), "Library", "LaunchAgents",
+                                                     "com.ccquota.agent.plist")))
+
+    def test_adopted_before_moves_the_agent_left_behind(self):
+        la = os.path.join(self.home("alice"), "Library", "LaunchAgents")
+        self.plist(os.path.join(la, "com.claude-fleet.dispatch.plist"), "com.claude-fleet.dispatch")
+        self.acct_table()
+        self.assertEqual(self.run_sup("account", "adopt", "alice").returncode, 0)
+        conf = os.path.join(self.home("alice"), ".config", "claude-fleet")
+        ap = self.agent_plist("alice", {})
+        self.node_env(os.path.join(conf, "node.env"), "CCQUOTA_TOKEN=tok-a\n")
+        r = self.run_sup("account", "adopt", "alice")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.exists(ap))
+        self.assertEqual(self.login_env("alice")[0]["CCQUOTA_TOKEN"], "tok-a")
+        self.assertEqual(len(json.load(open(os.path.join(self.d, "db", "accounts.json")))["alice"]["attic"]), 2)
+        self.assertEqual(self.run_sup("account", "release", "alice").returncode, 0)
+        self.assertTrue(os.path.exists(ap) and os.path.exists(os.path.join(la, "com.claude-fleet.dispatch.plist")))
+
+    def test_node_agent_restarts_when_logins_change(self):
+        lg = os.path.join(self.d, "db", "logins")
+        os.makedirs(lg)
+        self.table(children=[{"name": "node-agent", "cmd": [self.script("na.sh", "exec sleep 300\n")],
+                              "requires": [lg], "reload": lg}])
+        self.start()
+        pid = until(10, lambda: self.child("node-agent").get("pid"))
+        self.assertTrue(pid)
+        time.sleep(0.3)
+        self.assertEqual(self.child("node-agent")["pid"], pid, "restarted with nothing changed")
+        with open(os.path.join(lg, "alice.env"), "w") as f:
+            f.write("CCQUOTA_TOKEN=x\n")
+        pid2 = until(10, lambda: (self.child("node-agent").get("pid") or pid) != pid and self.child("node-agent")["pid"])
+        self.assertTrue(pid2, "logins/ changed and the node agent kept its old tenants")
+        self.assertTrue(until(3, lambda: not fns.pid_alive(pid)), "the old node agent is still running")
+
     def test_adopt_refuses_unknown(self):
         r = self.run_sup("account", "adopt", "nobody-here")
         self.assertEqual(r.returncode, 2)
