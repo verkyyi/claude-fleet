@@ -772,7 +772,7 @@ for line in sys.stdin:
   # In the shell (`--shell`) `fleet connect` picks the line on every connect, and
   # every RECONNECT re-measures them all (FLEET_CONNECT_RETEST, issue #1628) —
   # never the remembered one. A fleet's own proxy alternates direct / hub below.
-  route=direct; delay=1; retest=''
+  route=direct; delay=1; retest=''; gone_since=''
   while :; do
     # Machine to machine (issue #1626): a plain-ssh view from a hub node asks the
     # hub for a five-minute certificate to THIS machine first. rc 3 = no hub here
@@ -894,10 +894,22 @@ EOF_PEER
     fi
     case "$rc" in
       0) exit 0 ;;                                   # the remote client ended on purpose
-      3) if [ "$wid" = - ]; then printf '\n%s 上没有活着的 fleet 会话。按任意键关闭。\n' "$node"
+      3) # Not live there right now (issue #2484): a machine whose tmux restarted or
+         # whose node program is updating brings its sessions back — same @fleet_id,
+         # so the same address — within a tick or two. Ask again every
+         # FLEET_REMOTE_GONE_STEP (5s) for FLEET_REMOTE_GONE_SECS (120s) before
+         # saying it is gone.
+         now=$(date +%s); [ -n "$gone_since" ] || gone_since=$now
+         gstep=${FLEET_REMOTE_GONE_STEP:-5}; gmax=${FLEET_REMOTE_GONE_SECS:-120}
+         if [ $(( now - gone_since )) -lt "$gmax" ]; then
+           printf '\n%s 机器在重启，稍等 · 每 %ss 再连一次，最多 %ss\n' "$node" "$gstep" "$gmax"
+           sleep "$gstep"; continue
+         fi
+         if [ "$wid" = - ]; then printf '\n%s 上没有活着的 fleet 会话。按任意键关闭。\n' "$node"
          else printf '\n%s 已不在 %s 上（结束或搬走了）。按任意键关闭。\n' "${wid#*/}" "$node"; fi
          read -r -n 1 -s _; exit 0 ;;
     esac
+    gone_since=''
     # A drop after a good session reconnects at once; a failing route backs off and,
     # when the hub relay is configured, alternates with it.
     if [ $(( $(date +%s) - started )) -gt 30 ]; then delay=1

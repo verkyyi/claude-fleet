@@ -507,6 +507,44 @@ class Updater(object):
             self.log("credsep: %s" % last)
         return []
 
+    # -- the sessions ride through a switch (issue #2484, EPIC #2482 C5)
+    def sessions(self, verb, sha):
+        """`<release sha>/bin/fleet-sessions-snapshot.sh save|restore` for every
+        managed account, demoted to it with its own TMPDIR (so its tmux socket):
+        pinned before the switch, brought back and checked after. -> notes."""
+        if env_num("FLEET_NODE_UPDATE_SESSIONS", 1) == 0 or not sha:
+            return []
+        sc = os.path.join(self.p.rel(sha), "bin", "fleet-sessions-snapshot.sh")
+        if not os.path.exists(sc):
+            return []
+        notes = []
+        tb = os.path.join(self.p.rel(sha), "tools", "bin")
+        for login, why in fns.managed_accounts(self.p.sup).items():
+            ident = fns.account_ident(login)
+            if why or ident is None:
+                continue
+            uid, gid, home = ident
+            if uid == 0 or (os.geteuid() != 0 and uid != os.geteuid()):
+                continue
+            rc, out, err = run(["/bin/sh", "-c", SESSIONS_SH, "fleet-sessions",
+                                "/bin/bash", sc, verb],
+                               timeout=600, preexec_fn=fns.demote(login, uid, gid, home),
+                               env={"HOME": home, "USER": login, "LOGNAME": login, "LANG": "en_US.UTF-8",
+                                    "PATH": "%s:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" % tb,
+                                    "FLEET_CONF_DIR": os.path.join(home, ".config", "claude-fleet")})
+            if verb == "save":
+                msg = (out.strip().splitlines() or [""])[-1]
+            else:
+                rows = [l.split("\t") for l in out.splitlines() if "\t" in l]
+                msg = "%d back" % sum(1 for r in rows if r[0] == "back")
+                miss = [r[2] for r in rows if r[0] == "missing" and len(r) > 2]
+                if miss:
+                    msg += ", missing: %s" % " ".join(miss)
+            self.log("sessions %s %s: rc %d %s" % (verb, login, rc, msg or (err or "").strip()[-160:]))
+            if rc not in (0, 3):
+                notes.append("sessions %s %s: rc %d %s" % (verb, login, rc, msg))
+        return notes
+
     # -- the switch, the verify, the rollback
     def request_restart(self, sha):
         write_json(self.p.request, {"to": sha, "at": now()})
@@ -536,6 +574,7 @@ class Updater(object):
         self.st["retired"].pop(frm, None)
         self.record("rolled-back", frm, to, why)
         self.st.update(phase="idle")
+        self.sessions("restore", frm)
         self.end("rolled-back", "%s → back to %s: %s" % (to[:12], frm[:12], why), current=frm)
         self.request_restart(frm)
         return 0
@@ -559,6 +598,7 @@ class Updater(object):
             return self.rollback(self.st["rollback_reason"])
         self.record("committed", self.st.get("from"), self.st["to"], "; ".join(new))
         self.st.update(phase="idle", current=self.st["to"])
+        self.sessions("restore", self.st["to"])
         self.prune()
         return self.end("committed", "%s%s" % (self.st["to"][:12],
                                               (" (no previous version to go back to; FAIL: %s)" % ", ".join(new)) if new else ""))
@@ -628,10 +668,16 @@ class Updater(object):
             return self.end("failed", "%s: %s" % (target[:12], e), current=cur)
         self.st["failed"].pop(target, None)
         baseline = sorted(set(r[1] for r in doctor_rows(self.p) if r[0] == "FAIL")) if cur else []
+        self.sessions("save", target)
         self.st.update(phase="switching", **{"from": cur, "to": target, "baseline": baseline})
         self.save()
         self.switch()
         return 0
+
+
+# the login's own TMPDIR, as the supervisor's account units get it (issue #2450)
+SESSIONS_SH = ('TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; '
+               '[ -n "$TMPDIR" ] || TMPDIR="/tmp/claude-fleet-$(id -u)"; export TMPDIR; exec "$@"')
 
 
 class StageError(Exception):
