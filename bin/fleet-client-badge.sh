@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
-# fleet-client-badge.sh — the left end of the client's status bar: WHERE THE
-# CLIENT RUNS (issue #1779, EPIC #1776 C3). ⌂ means this and only this, and
-# appears nowhere else.
+# fleet-client-badge.sh — the left end of the client's status bar: WHO IS SIGNED
+# IN (issue #2365, overturning #1779's ⌂ <machine> · <terminal>). The bar holds
+# three things — this login, the ⟳ slot, the keys of where the keyboard is — so
+# while all is well this is the GitHub login alone:
 #
-#   ⌂ MacBook · iTerm2             the client runs on this computer, in iTerm2
-#   ⌂ m5 ← verkyyi-iphone Termius  the client runs on m5; you reached it over
-#                                  ssh from the device after the arrow
-#   ⌂ MacBook · 入口连不上         (orange) a hub is set but cannot be asked
-#   ⌂ MacBook · 入口不认这台电脑 · 请重新扫码（fleet login）
+#   verkyyi                        signed in, the hub answers (blue)
+#   verkyyi · 入口连不上           (orange) a hub is set but cannot be asked
+#   verkyyi · 入口不认这台电脑 · 请重新扫码（fleet login）
 #                                  (orange) the hub answered 401: it refused this
-#                                  machine's certificate (issue #2112) — scan again
-#   ⌂ MacBook                      (orange) nobody holds the client lease
-#   ⌂ m5                           a bar narrower than 60 columns: the machine only
+#                                  machine's certificate (issue #2112) — scan again;
+#                                  a tap on it runs fleet login
+#   verkyyi                        (orange) nobody holds the client lease
+#   a bar narrower than 60 columns: the login only, in its colour
+#
+# The login is the connection certificate's principal (`fleet login` — the GitHub
+# login the hub signed it for: `ssh-keygen -L` on ${FLEET_CERT:-~/.ssh/fleet-cert}-cert.pub),
+# else this computer's user (no hub, no certificate).
 #
 # conf/tmux-shell.conf: status-left "#(bash __BIN__/fleet-client-badge.sh cw=#{client_width})".
-# The ONE reading is fleet-client-where.sh --json (state · hub · via · host ·
-# device · terminal) — never a second way to tell. It is asked at most every
-# FLEET_CLIENT_BADGE_TTL seconds (10): the bar ticks every 2 s, so between asks
-# this prints off the cached fields, and a width change still redraws at once.
-# Machine names (the where's `host`, this machine's hostname, the device) go
-# through FLEET_NODE_ALIASES (`macmini=m5 MacBookPro=MacBook`). Every word is a
-# fleet-ui-lang.sh key (badge_*); the colours are the palette's (orange =
-# PAL_YELLOW).
+# The state is fleet-client-where.sh --json (state · hub) — never a second way to
+# tell. It is asked at most every FLEET_CLIENT_BADGE_TTL seconds (10): the bar
+# ticks every 2 s, so between asks this prints off the cached fields, and a width
+# change still redraws at once. Every word is a fleet-ui-lang.sh key (badge_*);
+# the colours are the palette's (orange = PAL_YELLOW).
 #
 # After it, the client's own update (issue #1781, fleet-client-update.sh's
 # update.state): `✓ 已更新到 <commit>` (`✓ 已重新载入新文件` for a home with no .client-version, #2145) or the one-line failure for
@@ -29,8 +30,8 @@
 # `新版已就绪 · 下次打开生效` for as long as a change waits for a restart.
 #
 # Seams (tests): FLEET_CLIENT_BADGE_WHERE_CMD (the where read),
-# FLEET_CLIENT_BADGE_CACHE (the cache dir), FLEET_CLIENT_BADGE_HOST (this
-# machine's hostname), FLEET_CLIENT_BADGE_TTL.
+# FLEET_CLIENT_BADGE_CACHE (the cache dir), FLEET_CLIENT_BADGE_LOGIN (the login),
+# FLEET_CLIENT_BADGE_TTL.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
@@ -46,20 +47,8 @@ else
   OK='' WARN='' DIM=''
 fi
 
-# alias <name> — the short name FLEET_NODE_ALIASES gives a machine (any case,
-# domain dropped), else the name itself
-alias_of() {
-  local n=${1%%.*} a ln la
-  ln=$(printf '%s' "$n" | tr '[:upper:]' '[:lower:]')
-  for a in ${FLEET_NODE_ALIASES:-}; do
-    la=$(printf '%s' "${a%%=*}" | tr '[:upper:]' '[:lower:]')
-    [ "$la" = "$ln" ] && { printf '%s' "${a#*=}"; return 0; }
-  done
-  printf '%s' "$n"
-}
-
 CDIR="${FLEET_CLIENT_BADGE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell/tmp}"
-CF="$CDIR/badge.row"
+CF="$CDIR/badge.user.row"   # state · hub · login (#2365; badge.row was #1779's six fields)
 TTL="${FLEET_CLIENT_BADGE_TTL:-10}"
 case "$TTL" in ''|*[!0-9]*) TTL=10 ;; esac
 
@@ -69,8 +58,8 @@ if [ "$TTL" -gt 0 ] && [ -f "$CF" ]; then
   case "$m" in ''|*[!0-9]*) ;; *) [ $(( $(date +%s) - m )) -lt "$TTL" ] && fresh=1 ;; esac
 fi
 if [ "$fresh" = 0 ]; then
-  # one line: state hub via host device terminal, \037-separated (not a tab: IFS
-  # whitespace would fold an empty field into its neighbour)
+  # one line: state hub login, \037-separated (not a tab: IFS whitespace would
+  # fold an empty field into its neighbour)
   row=$(${FLEET_CLIENT_BADGE_WHERE_CMD:-bash "$BIN/fleet-client-where.sh" --json} 2>/dev/null | python3 -c '
 import json, sys
 try:
@@ -78,40 +67,38 @@ try:
 except ValueError:
     d = {}
 f = lambda k: " ".join(str(d.get(k) or "").split())
-print("\x1f".join([f("state") or "unknown", f("hub") or "down", f("via"), f("host"), f("device"), f("terminal")]))
+print("\x1f".join([f("state") or "unknown", f("hub") or "down"]))
 ' 2>/dev/null)
-  [ -n "$row" ] || row=$(printf 'unknown\037down\037\037\037\037')
+  [ -n "$row" ] || row=$(printf 'unknown\037down')
+  login=${FLEET_CLIENT_BADGE_LOGIN:-}
+  if [ -z "$login" ]; then
+    # the certificate's first principal — `Principals:` then one indented line each
+    login=$(ssh-keygen -L -f "${FLEET_CERT:-$HOME/.ssh/fleet-cert}-cert.pub" 2>/dev/null \
+      | awk '/^[[:space:]]*Principals:/ { p = 1; next } p { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }')
+  fi
+  [ -n "$login" ] || login=$(id -un 2>/dev/null)
+  row="$row"$'\037'"${login:-?}"
   mkdir -p "$CDIR" 2>/dev/null
   { printf '%s\n' "$row" > "$CF.$$" && mv -f "$CF.$$" "$CF"; } 2>/dev/null || rm -f "$CF.$$" 2>/dev/null
 else
   row=$(head -n 1 "$CF" 2>/dev/null)
 fi
 
-IFS=$'\037' read -r st hub via host dev term <<EOF
+IFS=$'\037' read -r st hub login <<EOF
 $row
 EOF
 
-me=$(alias_of "${FLEET_CLIENT_BADGE_HOST:-$(hostname -s 2>/dev/null)}")
-tword=${term%% [0-9]*}   # "iTerm2 3.7.3" → iTerm2: the terminal, not its version
-
-col=$OK
+col=$OK key=badge_user_fmt
 if [ "$hub" = down ]; then
-  col=$WARN; host=$me; key=badge_hubdown_fmt
+  col=$WARN; key=badge_hubdown_fmt
 elif [ "$hub" = refused ]; then
-  col=$WARN; host=$me; key=badge_hubrefused_fmt
+  col=$WARN; key=badge_hubrefused_fmt
 elif [ "$st" != active ]; then
-  col=$WARN; host=$me; key=badge_bare_fmt
-else
-  host=$(alias_of "${host:-$me}")
-  case "$via" in
-    ''|local) key=badge_local_fmt; detail=$tword ;;
-    *)        key=badge_ssh_fmt;   detail=$(alias_of "${dev:-?}")${tword:+ $tword} ;;
-  esac
-  [ -n "${detail:-}" ] || key=badge_bare_fmt
+  col=$WARN
 fi
-[ "$cw" -lt 60 ] && key=badge_bare_fmt
+[ "$cw" -lt 60 ] && key=badge_user_fmt
 
-text=$(fleet_ui_t "$key" "${host:-?}" "${detail:-}")
+text=$(fleet_ui_t "$key" "${login:-?}")
 if [ "$key" = badge_hubrefused_fmt ]; then
   # one tap scans again (conf/tmux-shell.conf's MouseDown1Status, `rescan`)
   printf '#[range=user|rescan]%s %s #[norange]#[default]%s│' "$col" "${text//#/##}" "$DIM"

@@ -6,15 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
@@ -51,6 +49,33 @@ var (
 	loginNewScript    = filepath.Join(".claude", "fleet", "bin", "fleet-login-new.sh")
 	loginRemoveScript = filepath.Join(".claude", "fleet", "bin", "fleet-login-remove.sh")
 )
+
+// credsepMark is the line fleet-login-new.sh ends a create with when it opened
+// the login credential-separated (claude-fleet#2294, its step 7b), and
+// credsepScriptMark what a version of the script that separates carries.
+const (
+	credsepMark       = "credsep: separated"
+	credsepScriptMark = "--no-credsep"
+)
+
+// credsepCapable reports whether this login's fleet-login-new.sh opens every
+// login separated — the hello's CapCredsep. A script from before #2294 (or none)
+// does not: the hub then opens no spare login here (claude-fleet#2263).
+func credsepCapable(home string) bool {
+	b, err := os.ReadFile(filepath.Join(home, loginNewScript))
+	return err == nil && bytes.Contains(b, []byte(credsepScriptMark)) && bytes.Contains(b, []byte(credsepMark))
+}
+
+// credsepResult is AccountResult.Credsep for a create's output: "separated"
+// only when its LAST non-empty line says so (a pending / off / failed open says
+// something else, and is never handed out as a spare).
+func credsepResult(out string) string {
+	lines := strings.Split(strings.TrimRight(out, " \t\r\n"), "\n")
+	if strings.TrimSpace(lines[len(lines)-1]) == credsepMark {
+		return control.CredsepSeparated
+	}
+	return ""
+}
 
 // accountGOOS is the platform the digit-leading rule is judged on; a test seam.
 var accountGOOS = runtime.GOOS
@@ -143,13 +168,13 @@ func (o *accountOps) deliver(m control.Message) {
 
 // handleAccountOp answers one TypeAccountOp. It returns at once; the script
 // runs in the background and its result is delivered when it ends.
-func (a *Agent) handleAccountOp(ctx context.Context, conn *websocket.Conn, m control.Message) {
+func (a *Agent) handleAccountOp(ctx context.Context, conn nodeLink, m control.Message) {
 	refuse := func(code, msg string) {
 		e := control.Message{Type: control.TypeError, OpID: m.OpID, Proto: control.Proto,
 			Error: &control.Error{Code: code, Message: msg}}
 		wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
 		defer cancel()
-		_ = wsjson.Write(wctx, conn, e)
+		_ = conn.write(wctx, e)
 	}
 	if !a.cfg.FleetAdmin {
 		log.Printf("control channel: refused an account op: this agent is not an admin agent (CCQUOTA_FLEET_ADMIN is not 1)")
@@ -161,7 +186,7 @@ func (a *Agent) handleAccountOp(ctx context.Context, conn *websocket.Conn, m con
 		refuse(control.CodeBadArgs, "malformed account op")
 		return
 	}
-	if err := validateAccountOp(op); err != nil {
+	if err := validateAccountOp(op, a.osLogin()); err != nil {
 		log.Printf("control channel: refused account op %s: %v", m.OpID, err)
 		refuse(control.CodeBadArgs, err.Error())
 		return
@@ -181,7 +206,7 @@ func (a *Agent) handleAccountOp(ctx context.Context, conn *websocket.Conn, m con
 	}()
 }
 
-func validateAccountOp(op control.AccountOp) error {
+func validateAccountOp(op control.AccountOp, self string) error {
 	if op.Op != control.AccountCreate && op.Op != control.AccountRemove {
 		return errors.New("op must be create or remove")
 	}
@@ -197,7 +222,7 @@ func validateAccountOp(op control.AccountOp) error {
 		// leading letter or _; fleet-login-new.sh is macOS-only anyway.
 		return errors.New("a login starting with a digit can only be opened on macOS, not " + accountGOOS)
 	}
-	if u, err := user.Current(); err == nil && u.Username == op.Login {
+	if self != "" && self == op.Login {
 		return errors.New("refusing to touch this agent's own login")
 	}
 	if op.Op == control.AccountCreate && !control.ValidFullName(op.FullName) {
@@ -213,7 +238,7 @@ func (a *Agent) runAccountOp(op control.AccountOp) control.AccountResult {
 	defer a.acct.run.Unlock()
 	res := control.AccountResult{Op: op.Op, Login: op.Login, Exit: -1}
 	script, args := accountArgv(a.cfg.Home, op)
-	ctx, cancel := context.WithTimeout(context.Background(), accountOpTimeout)
+	ctx, cancel := context.WithTimeout(a.bgCtx(), accountOpTimeout)
 	defer cancel()
 	cmd := accountCommand(ctx, script, args...)
 	// The scripts cd to / themselves; starting there too means a sudo -u in
@@ -221,12 +246,18 @@ func (a *Agent) runAccountOp(op control.AccountOp) control.AccountResult {
 	cmd.Dir = "/"
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
-	err := cmd.Run()
+	err := prepCmd(ctx, cmd)
+	if err == nil {
+		err = cmd.Run()
+	}
 	res.Detail = tail(out.String(), accountDetailMax)
 	var ee *exec.ExitError
 	switch {
 	case err == nil:
 		res.OK, res.Exit = true, 0
+		if op.Op == control.AccountCreate {
+			res.Credsep = credsepResult(out.String())
+		}
 	case errors.As(err, &ee):
 		res.Exit = ee.ExitCode()
 		res.Exists = op.Op == control.AccountCreate && res.Exit == 3

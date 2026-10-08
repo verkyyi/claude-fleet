@@ -526,7 +526,7 @@ else
     env -i HOME="$HOME" PATH="$PATH" TERM=xterm-256color LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-}" \
       TMPDIR="$L/tmp/" FLEET_CONF_DIR="$L/conf" FLEET_ACCOUNTS_DIR="$L/acc" CCQUOTA_FLEET=$lcf \
       CCQUOTA_HUB_URL=http://127.0.0.1:9 FLEET_ALERTS_TTL=3600 FLEET_ALERTS_DISK=0 FLEET_ALERTS_MACHINE=0 \
-      FLEET_CLIENT_WHERE_CMD=false FLEET_SHELL_SESSION="l-$st-none" FLEET_CLIENT_BADGE_HOST=m5 FLEET_CLIENT_BADGE_CACHE="$L/badge" \
+      FLEET_CLIENT_WHERE_CMD=false FLEET_SHELL_SESSION="l-$st-none" FLEET_CLIENT_BADGE_LOGIN=octo FLEET_CLIENT_BADGE_CACHE="$L/badge" \
       "$REAL_TMUX" -u -S "$IN" -f /dev/null new-session -d -s f1 -n issue-1 -x 80 -y 20 'sleep 300' \
       || fail "L: no isolated inner server"
     "$REAL_TMUX" -S "$IN" source-file "$L/bar.conf" \
@@ -537,18 +537,20 @@ else
       "$REAL_TMUX" -S "$WORK/l-$st-$c.sock" -f /dev/null new-session -d -s o -x "$c" -y 12 \
         "env -u TMUX TERM=xterm-256color $REAL_TMUX -u -S '$IN' attach -t f1" || fail "L: no outer server at $c"
     done
-    case "$st" in quota) tok54='5h 86%' tokw='icloud 5h 86%' ;; alerts) tok54='▲ 2' tokw='▲ 2' ;; hublost) tok54='○ 入口 10m' tokw='○ 入口 10m' ;; *) tok54='⌂ m5' tokw='⌂ m5' ;; esac
+    # since issue #2365 the client's bar is login · ⟳ · keys in EVERY state: the
+    # state's old segment (quota / ▲ / ○ 入口) is drawn by nobody
+    case "$st" in quota) gone='5h 86%' ;; alerts) gone='▲ 2' ;; hublost) gone='○ 入口' ;; *) gone='⌂' ;; esac
     for c in 54 120 189; do
-      tok=$tokw; [ "$c" = 54 ] && tok=$tok54
       line=''
       for _ in $(seq 1 60); do
         line=$("$REAL_TMUX" -S "$WORK/l-$st-$c.sock" capture-pane -p -t o 2>/dev/null | tail -n1)
-        case "$line" in *"$tok"*) case "$line" in *"⌂ m5"*) break ;; esac ;; esac   # both #() jobs drawn
+        case "$line" in *octo*) break ;; esac   # the badge's #() drawn
         sleep 0.2
       done
-      has "L: $st at $c columns — its segment" "$tok" "$line"
-      # the left end is where the client runs (issue #1779): ⌂ + the machine
-      has "L: $st at $c — where the client runs leads" "⌂ m5" "$line"
+      sleep 0.5; line=$("$REAL_TMUX" -S "$WORK/l-$st-$c.sock" capture-pane -p -t o 2>/dev/null | tail -n1)
+      # the left end is who is signed in (issue #2365)
+      has "L: $st at $c — the login leads" "octo" "$line"
+      hasnt "L: $st at $c — no $gone (issue #2365)" "$gone" "$line"
       hasnt "L: $st at $c — no ☰ (a node's, retired by #1714)" "☰" "$line"
       for no in 本机 负载 内存 '盘 ' '● 入口'; do hasnt "L: $st at $c — no $no" "$no" "$line"; done
       if [ "$c" = 54 ]; then
@@ -558,10 +560,8 @@ else
         [ "$st" = quota ] && hasnt "L: quota at 54 — no account label" "icloud" "$line"
         printf 'tmux-status-selftest: L %-7s 54 cols, %2s of ink: [%s]\n' "$st" "$n" "$(printf '%s' "$line" | sed 's/ *$//')"
       fi
-      if [ "$st" = normal ]; then
-        read -r _ g <<< "$(ink "$line")"
-        [ "$g" = 0 ] || fail "L: normal at $c — something drawn on the right" "$line"; CHECKS=$((CHECKS+1))
-      fi
+      read -r _ g <<< "$(ink "$line")"
+      [ "$g" = 0 ] || fail "L: $st at $c — something drawn on the right" "$line"; CHECKS=$((CHECKS+1))
       "$REAL_TMUX" -S "$WORK/l-$st-$c.sock" kill-server 2>/dev/null
     done
     "$REAL_TMUX" -S "$IN" kill-server 2>/dev/null

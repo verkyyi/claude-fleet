@@ -147,7 +147,7 @@ func (n *nodeConns) closeRevoked(id string) {
 	delete(n.conns, id)
 	n.mu.Unlock()
 	if c != nil {
-		go c.conn.Close(websocket.StatusPolicyViolation, "unrecognised enrollment token")
+		go c.wire.close(websocket.StatusPolicyViolation, "unrecognised enrollment token")
 	}
 }
 

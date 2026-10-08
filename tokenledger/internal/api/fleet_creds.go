@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -97,7 +98,41 @@ const (
 	// unwrapped it (claude-fleet#1417). Nothing is issued meanwhile — there
 	// is no plain key to fall back to — and the hub raises a critical finding.
 	LeaseVaultLocked = "vault_locked"
+	// LeaseNotSeparated: a role=user person's login whose newest heartbeat
+	// does not say credsep=separated (claude-fleet#2295). Nothing is issued —
+	// its sessions take the proxy's central route instead (/v1/node/self
+	// says so), so they still work but no token lands in the login's home.
+	LeaseNotSeparated = "not_separated"
 )
+
+// credsepGated says whether principal's login must be refused real tokens
+// because it is not credential-separated (claude-fleet#2295, EPIC #2293).
+// Only a GitHub person whose role is user is held to it — an admin, the
+// operator's own principals and anyone not signed in through GitHub lease as
+// before (共同约定 4). credsep is the login's newest heartbeat's word; ""
+// (an agent older than #2295) counts as not separated.
+func (s *Server) credsepGated(principal, credsep string) (bool, error) {
+	id, ok := githubIDOf(principal)
+	if !ok {
+		return false, nil
+	}
+	role, err := s.githubRole(id)
+	if err != nil {
+		return false, err
+	}
+	if role != roleUser {
+		return false, nil
+	}
+	return credsep != control.CredsepSeparated, nil
+}
+
+// credsepWord is how a heartbeat's credsep reads in an audit line.
+func credsepWord(v string) string {
+	if v == "" {
+		return "unreported"
+	}
+	return v
+}
 
 // vaultLocked answers 503 vault_locked when the vault holds no key.
 func (s *Server) vaultLocked(w http.ResponseWriter) bool {
@@ -222,9 +257,24 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if trustOf(host, trustSet) != TrustTrusted {
-		deny(http.StatusForbidden, LeaseUntrusted, principal, firstLabel(host)+" is not a trusted machine — the operator marks it with fleet-node-trust.sh set "+
-			strings.ToLower(firstLabel(host))+" trusted")
+	// The endpoint's own trust first, a name only for the endpoint that
+	// enrolled under it (claude-fleet#2214).
+	if t, src := s.endpointTrust(ep.ID, host, trustSet); t != TrustTrusted {
+		deny(http.StatusForbidden, LeaseUntrusted, principal, untrustedWhy(host, src))
+		return
+	}
+
+	// Credential separation (claude-fleet#2295): a user's login that has not
+	// put its tokens out of its own reach gets none — 拒发：未隔离.
+	gated, err := s.credsepGated(principal, hb.Credsep)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if gated {
+		deny(http.StatusForbidden, LeaseNotSeparated, principal, "拒发：未隔离 — "+osUser+" on "+firstLabel(host)+
+			" is not credential-separated (credsep="+credsepWord(hb.Credsep)+"); its sessions go through the hub's central proxy. "+
+			"Separate it: sudo bash ~/.claude/fleet/bin/fleet-credsep.sh install --login "+osUser)
 		return
 	}
 

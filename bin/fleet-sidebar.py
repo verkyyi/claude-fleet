@@ -11,6 +11,7 @@ what it has to say goes on the bar (`say`, tmux display-message).
 import curses
 import errno
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,28 @@ import unicodedata
 BIN = Path(__file__).absolute().parent  # preserve the selftest shadow root
 US = "\x1f"
 VIEW_VERSION = "30"  # #2146: @fleet_orch for the bar · #1957: 「新任务」 wears the orchestrator · #1953: 「新任务」 on top + `compose` · #1950: sessions only, no keys — questions under the session (fleet-ask.py)
+# What a drawn list runs, by CONTENT (issue #2345): VIEW_VERSION is bumped by
+# hand, so a client update that changed this file without bumping it kept the
+# old process drawing — sync reuses a view whose @sidebar_version matches. The
+# stamp is VIEW_VERSION + a digest of every file the `ui` process loads into
+# itself (the rest it runs as fresh subprocesses), read off disk by the sync
+# that draws it — so a list started from other code is drawn again.
+VIEW_CODE = ("fleet-sidebar.py", "fleet_reap_policy.py", "fleet-quickopen.py",
+             "fleet-compose.py", "fleet-ui-lang.sh")
+
+
+def view_stamp():
+    h = hashlib.sha1()
+    for name in VIEW_CODE:
+        try:
+            h.update((BIN / name).read_bytes())
+        except OSError:
+            h.update(b"-")
+        h.update(b"\0")
+    return VIEW_VERSION + "." + h.hexdigest()[:12]
+
+
+VIEW_STAMP = view_stamp()
 # ↑↓ follow (issue #822): an arrow moves the highlight at once and switches to
 # it only after this much quiet. A held key on a slow link is one switch, not
 # one per row, and a row passed over is never selected — so the wake hook's
@@ -659,9 +682,9 @@ def sync(session, enabled, width, lock):
     for pane in all_panes:
         if pane[2] != "1":
             continue
-        if wanted and pane[1] == window and pane[4] != "1" and pane[6] == VIEW_VERSION and not current:
+        if wanted and pane[1] == window and pane[4] != "1" and pane[6] == VIEW_STAMP and not current:
             current.append(pane)
-        elif wanted and zoomed != "1" and pane[4] != "1" and pane[6] == VIEW_VERSION and not reusable:
+        elif wanted and zoomed != "1" and pane[4] != "1" and pane[6] == VIEW_STAMP and not reusable:
             reusable.append(pane)
         else:
             remove_view(pane[0])
@@ -700,7 +723,7 @@ def sync(session, enabled, width, lock):
     if not pane.startswith("%"):
         return
     tmux("set-option", "-p", "-t", pane, "@sidebar", "1", ";",
-         "set-option", "-p", "-t", pane, "@sidebar_version", VIEW_VERSION, ";",
+         "set-option", "-p", "-t", pane, "@sidebar_version", VIEW_STAMP, ";",
          "set-option", "-w", "-t", pane, "@sidebar_worker", worker, ";",
          "set-option", "-p", "-t", pane, "remain-on-exit", "off")
     if single:
@@ -797,6 +820,21 @@ def orch_state(session):
                 p = line.rstrip("\n").split("\x1f")
                 if len(p) >= 4 and "/" in p[0]:
                     return p[3]
+    except OSError:
+        pass
+    return ""
+
+
+def remote_name(session, wid):
+    """A row on another machine's window name, off the refresh loop's cache
+    (fleet-hub-sessions.sh remote_<session>: worker key in column 1, name in 8)
+    — what 改名 starts its line with (issue #2358). "" when not cached."""
+    try:
+        with open(os.path.join(status_dir(), "remote_" + (session or "")), encoding="utf-8") as f:
+            for line in f:
+                p = line.rstrip("\n").split("\x1f")
+                if len(p) >= 8 and p[0] == wid:
+                    return p[7]
     except OSError:
         pass
     return ""
@@ -1393,6 +1431,11 @@ def submit(ask, text, session, env):
                           "--session", session, "--answer", text.lower()], env, failed)
     if not text:
         return None
+    if ask.kind == "rename" and ask.arg.startswith("wid:"):
+        # a row on another machine (issue #2358): a hub write, worker_rename —
+        # its outcome (a refusal included) toasts
+        return start_job(["bash", str(BIN / "fleet-sidebar-remote.sh"), "rename", session, ask.arg],
+                         dict(env, FLEET_SIDEBAR_TEXT=text), quiet)
     if ask.kind == "rename":
         run(["bash", str(BIN / "dash-rename.sh"), "--wid", ask.arg, text], env=env)
         return None
@@ -1531,12 +1574,16 @@ def row_text(marker, glyph, tree, name, badge, width):
 # glyph's own cell instead of a word at the row's end. A row that waits on you
 # keeps its own red `!`/`?` — the producer's glyph already says it.
 LOST_GLYPH, BROKEN_GLYPH = "⊘", "✗"
+# A session that started from the warm pool whose issue could not be filed or
+# bound (issue #2235): it keeps working, the row says 「单子没建上」 — `∅`, no issue.
+BACKFILL_GLYPH = "∅"
 
 
 def row_glyph(row):
     """(glyph, why) for a session row: `⊘` "lost" on a lost machine's row, its
     own glyph while it waits on you, `✗` "broken" for a configuration that will
-    break (#2076), else its own glyph and ""."""
+    break (#2076), `∅` "backfill" for a session whose issue never got filed
+    (#2235), else its own glyph and ""."""
     glyph, state = row[2], row[1]
     node = row[8] if len(row) > 8 else ""
     cfg = row[12] if len(row) > 12 else ""
@@ -1546,6 +1593,8 @@ def row_glyph(row):
         return glyph, ""
     if cfg == "broken":
         return BROKEN_GLYPH, "broken"
+    if (row[15] if len(row) > 15 else "") == "failed":
+        return BACKFILL_GLYPH, "backfill"
     return glyph, ""
 
 
@@ -1652,12 +1701,14 @@ def auto_width(rows, cols, base, top):
 def detail_line(row):
     """Everything the row no longer carries, for the bar (issue #2305, on
     #1328's whole-name line): its whole name · #issue · @machine · PR · reap
-    policy · ctx% · the configuration word — the empty ones left out. Which `!`
+    policy · ctx% · the configuration word · 单子没建上 (#2235) — the empty ones
+    left out. Which `!`
     it is and why a ↻ waits (row[7]) live in the worker pane's header,
     @title_info (issue #1377)."""
     field = lambda i: row[i] if len(row) > i else ""
     parts = [row[3], field(9), machine_tag(field(8)), field(10),
-             reap_tag(field(14)), field(11), cfg_tag(field(12))]
+             reap_tag(field(14)), field(11), cfg_tag(field(12)),
+             tr("sidebar_backfill_failed") if field(15) == "failed" else ""]
     return " · ".join(p.strip() for p in parts if p and p.strip() not in ("", "—", "·"))
 
 
@@ -2180,8 +2231,9 @@ def collect_rows(proc):
 # (issues #1328, #1475, #1532, #1783 — cfg is `stale` / `renew` (#1895) / `broken` (#2076) / `ok`,
 # absent when unknown; #1921 — title is the session's issue title, absent when
 # none: a reader falls back to name; #1902 — reap is the @reap_policy, absent when
-# none)
-ROW_FIELDS = 15
+# none; #2235 — backfill is `failed` when a warm start's issue could not be filed /
+# bound, absent otherwise)
+ROW_FIELDS = 16
 
 
 def row_fields(line):
@@ -2619,7 +2671,7 @@ def ui(screen, session, worker, lock):
         text = answer.get("text", "").strip()
         if ask.kind == "new" and answer.get("choice"):
             ask.repo = answer["choice"]   # the repo Tab stepped to
-        if ask.kind == "rename":
+        if ask.kind == "rename" and not ask.arg.startswith("wid:"):
             # An empty rename still goes to dash-rename.sh, which decides (an
             # empty name cancels, as in the hub).
             run(["bash", str(BIN / "dash-rename.sh"), "--wid", ask.arg, text], env=env)
@@ -3048,7 +3100,7 @@ def ui(screen, session, worker, lock):
             # that will break on this install (#2076). The words — the machine,
             # 配置旧 / 会坏·需重开, the reap policy — are the bar's (detail_line).
             glyph, why = row_glyph(row)
-            if why == "broken":
+            if why in ("broken", "backfill"):
                 glyph_attr = curses.color_pair(PAIR_BROKEN + SEL_GLYPH if raised else PAIR_BROKEN) | curses.A_BOLD
             marker = "▶" if wid == current_row else "›" if wid == selected else " "
             # `marker glyph tree label` (issue #836): the hierarchy glyph is its own
@@ -3181,6 +3233,9 @@ def ui(screen, session, worker, lock):
             if kind == "rename" and arg.startswith("@"):
                 nxt = Ask("rename", tr("sidebar_rename"), arg=arg,
                           text=fields(arg, "#{window_name}")[0])
+            elif kind == "rename" and arg.startswith("wid:"):
+                # a row on another machine (issue #2358): its name off the cache
+                nxt = Ask("rename", tr("sidebar_rename"), arg=arg, text=remote_name(session, arg))
             elif kind in ("new", "restore", "scratch", "view", "reload", "needs"):
                 act(kind, arg)
             elif kind == "landed" and not SHELL:
@@ -3366,6 +3421,9 @@ def conf_enabled(conf, enabled):
 
 
 def main():
+    if sys.argv[1] == "stamp":   # what a list drawn now would carry (issue #2345)
+        print(VIEW_STAMP)
+        return
     if sys.argv[1] == "ui":
         steady()
         restarts = []

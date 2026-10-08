@@ -76,6 +76,15 @@
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
 #   spare-login-empty                               tokenledger/internal/api fleet_spare.go + fleet_accounts.go
 #                                                   (claimSpare, replenishSpares; go test, when a toolchain is here)
+#   release-tampered                                tokenledger/internal/api fleet_release.go (ReleaseStore) +
+#                                                   internal/release (Build, Fetch, Unpack; go test, when a toolchain is here)
+#   trust-name-borrowed                             tokenledger/internal/api fleet_trust.go (nodeTrust) + fleet_node_desired.go
+#                                                   (go test, when a toolchain is here)
+#   lease-unseparated-user                          tokenledger/internal/api fleet_creds.go (credsepGated) + fleet_join.go
+#                                                   (/v1/node/self credsep_gate), internal/agent node_credsep.go,
+#                                                   bin/fleet-cred-proxy.py (Router.refresh); go test, when a toolchain is here
+#   machine-agent-wrong-login                       tokenledger/internal/api node_machine.go (loginEndpoint, serveMachine)
+#                                                   + internal/agent node_machine.go / runas.go (go test, when a toolchain is here)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 #   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
@@ -96,6 +105,7 @@
 #   view-reconnect-shared                           bin/fleet-remote-view.sh (attach, rv_prune)
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
 #   client-unversioned-drift                        bin/fleet-client-update.sh (tick, digest), fleet-shell.sh stamp_ver
+#   client-sidebar-stale-after-update               bin/fleet-sidebar.py (VIEW_STAMP, sync), fleet-shell.sh reload
 #   hub-restart-where                               bin/fleet-shell.sh (keeper renew), fleet-client-lease.py renew,
 #                                                   fleet-client-where.sh
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
@@ -127,7 +137,7 @@ cleanup() {
   for s in "$WORK"/sock-*; do [ -S "$s" ] && "$REAL_TMUX" -S "$s" kill-server 2>/dev/null; done
   for s in kf "kscr$$"; do TMUX_TMPDIR="$WORK/ktt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   for s in vrn vrc; do TMUX_TMPDIR="$WORK/vt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
-  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}o" "${CSESS}o-stage" "${CSESS}u" "${CSESS}u-stage" "${CSESS}w" "${CSESS}w-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
+  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}o" "${CSESS}o-stage" "${CSESS}u" "${CSESS}u-stage" "${CSESS}w" "${CSESS}w-stage" "${CSESS}s" "${CSESS}s-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   pkill -f "fleet-shell.sh keeper $CSESS" 2>/dev/null
   pkill -f "$WORK/" 2>/dev/null
   [ -n "${BREAK_KEEP:-}" ] && { printf 'kept %s\n' "$WORK" >&2; return; }
@@ -167,7 +177,7 @@ lintfail() { LINT=$((LINT + 1)); printf 'FAIL  lint: %s\n' "$1"; }
 [ -f "$DOC" ] || lintfail "docs/BREAK-IT.md is missing"
 # The cred half lives in its own script (issue #1975: its own run, its own
 # durations row) — its drills are listed rows like any other.
-DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" | tr _ -)
+DRILLS=$(sed -n 's/^drill_\([a-z0-9_]*\)() *{.*/\1/p' "$0" "$BIN/fleet-break-it-cred-selftest.sh" "$BIN/fleet-break-it-cred-shared-selftest.sh" "$BIN/fleet-break-it-cred-sep-selftest.sh" "$BIN/fleet-break-it-node-selftest.sh" | tr _ -)
 IDS=''
 NROWS=0
 while IFS= read -r r; do
@@ -2145,6 +2155,61 @@ drill_client_unversioned_drift() {
   WHAT="没有 .client-version 的客户端：按内容认出新文件，空闲时重新载入，留下「已重新载入新文件」"
 }
 
+# (issue #2345) The client updated, the list kept drawing the old code: sync
+# reused a list pane whose @sidebar_version matched VIEW_VERSION — a constant
+# bumped by hand — so a version whose fleet-sidebar.py changed without the bump
+# left the old process running (the operator's MacBook, 5 hours of 「合并后回收」
+# after #2305 landed). The drill: an installed client with its keeper on a 1 s
+# beat and a client attached, so the list is drawn; the break is new files in
+# its home — fleet-sidebar.py changed, VIEW_VERSION as it was, a new
+# .client-version; the recovery is the keeper's reload drawing the list again
+# from the new code (a new list process).
+drill_client_sidebar_stale_after_update() {
+  CAP=20; local s="${CSESS}s" H="$WORK/shome" t0 lp f rc=0
+  client_setup
+  mkdir -p "$H/bin"
+  cp -P "$WORK"/sbin/* "$H/bin/"
+  for f in fleet-shell.sh fleet-client-update.sh fleet-sidebar.py; do rm -f "$H/bin/$f"; cp "$BIN/$f" "$H/bin/$f"; done
+  ln -s "$WORK/conf" "$H/conf"
+  printf 'version=v1\ncompat=1\ncommit=c0ffee1\nhub=https://hub.example\n' > "$H/.client-version"
+  ( client_env
+    export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/scache" FLEET_CLIENT_LEASE_CMD=false \
+           FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_IDLE_SECS=0 FLEET_CLIENT_CHECK_SECS=999999
+    mkdir -p "$XDG_CACHE_HOME/claude-fleet/client"; date +%s > "$XDG_CACHE_HOME/claude-fleet/client/checked"
+    bash "$H/bin/fleet-shell.sh" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
+  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ] || { WHY="the installed client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
+  # a client attached for the whole drill (control mode, fed by a fifo): the list
+  # is drawn only for an attached session, and a reload's sync takes it away otherwise
+  mkfifo "$WORK/sclient.fifo"
+  "$REAL_TMUX" -L "$s" -C attach-session -t "=$s" < "$WORK/sclient.fifo" >/dev/null 2>&1 &
+  local cpid=$!
+  exec 8> "$WORK/sclient.fifo"
+  slist() { "$REAL_TMUX" -L "$s" list-panes -s -t "=$s" -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }'; }
+  until_ok 5 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s list-clients -F x 2>/dev/null)\" ]" || { WHY="no client attached"; rc=1; }
+  if [ "$rc" = 0 ]; then
+    "$REAL_TMUX" -L "$s" resize-window -t "=$s:" -x 200 -y 50 2>/dev/null
+    "$REAL_TMUX" -L "$s" run-shell -t "=$s:" "bash '$WORK/scache/bin/fleet-sidebar.sh' sync '#{session_id}' >/dev/null 2>&1 || :"
+    until_ok 10 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s list-panes -s -t =$s -F '#{@sidebar}' 2>/dev/null | grep -x 1)\" ]" \
+      || { WHY="no list drawn on the installed client"; rc=1; }
+  fi
+  if [ "$rc" = 0 ]; then
+    lp=$(slist)
+    t0=$(now)
+    printf '\n# v2: the list moved, VIEW_VERSION as it was\n' >> "$H/bin/fleet-sidebar.py"   # the break
+    printf 'version=v2\ncompat=1\ncommit=beef002\nhub=https://hub.example\n' > "$H/.client-version"
+    until_ok "$CAP" sh -c "[ \"\$(\"$REAL_TMUX\" -L $s show-options -gqv @client_version 2>/dev/null)\" = v2 ]" \
+      || { WHY="the client never reloaded the new files (@client_version=$("$REAL_TMUX" -L "$s" show-options -gqv @client_version 2>/dev/null))"; rc=1; }
+  fi
+  if [ "$rc" = 0 ]; then
+    until_ok 5 sh -c "p=\$(\"$REAL_TMUX\" -L $s list-panes -s -t =$s -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '\$1 == \"1\" { print \$2; exit }'); [ -n \"\$p\" ] && [ \"\$p\" != $lp ]" \
+      || { WHY="the list process ($lp) still draws the old code after the reload: $(slist)"; rc=1; }
+    SECS=$(since "$t0")
+  fi
+  exec 8>&-; kill "$cpid" 2>/dev/null
+  [ "$rc" = 0 ] || return 1
+  WHAT="客户端换了新文件：侧栏按内容认出不是自己启动时的代码，重画成新进程"
+}
+
 # ============================================ a fleet's tmux, deleted from a shell ======
 # (issue #1841, EPIC #1851 C2) A fleet is `-L <its label>` since #159, so the old
 # guard's "a -L means an isolated test server" let every fleet through; and only an
@@ -3605,6 +3670,58 @@ drill_pool_empty_compose() {
   WHAT="池子空时发任务：--warm-only 答 3、什么都不开；start new 走冷路径（建单 + 开会话各一次），输出与开池前逐字节相同"
 }
 
+# bind-after-start-fails (issue #2235, EPIC #2230 C5): a warm start's session is
+# already working when its paperwork runs (fleet-start-backfill.sh). Filing the
+# issue failing must leave that session exactly as it is, marked for the sidebar
+# (@backfill failed → 「单子没建上」) after its tries; once filing works, the same
+# window becomes issue-N in place — @fleet_id kept, fleet_win_for_key answers it,
+# the agent told through the peer channel.
+drill_bind_after_start_fails() {
+  CAP=15; BREAK_SOCK="$WORK/sock-baf"; local d="$WORK/baf" t0 rc win fid got
+  mkdir -p "$d/conf/fleets/bf" "$d/sb" "$d/log" "$d/home" "$d/fb"
+  git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
+  ( cd "$d/main" && git config user.email t@t && git config user.name t && echo x > f && git add f && git commit -qm i \
+      && git worktree add -q -b scratch-1 "$d/app-scratch-1" ) || { WHY="cannot build the repo"; return 1; }
+  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s/main"\nFLEET_BASE_BRANCH="master"\n' "$d" > "$d/conf/fleets/bf/conf"
+  for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
+  rm -f "$d/sb/fleet-issue-file.sh" "$d/sb/fleet-peer-send.sh"
+  printf '#!/bin/sh\necho try >> "%s/log/file"\n[ -e "%s/fail" ] && { echo "gh: HTTP 502" >&2; exit 1; }\necho https://github.com/acme/app/issues/9\n' "$d" "$d" > "$d/sb/fleet-issue-file.sh"
+  printf '#!/bin/sh\necho "$*" >> "%s/log/peer"\n' "$d" > "$d/sb/fleet-peer-send.sh"
+  printf '#!/bin/sh\necho "$*" >> "%s/log/gh"\n' "$d" > "$d/fb/gh"
+  chmod +x "$d/sb/fleet-issue-file.sh" "$d/sb/fleet-peer-send.sh" "$d/fb/gh"
+  nt -f /dev/null new-session -d -s bf -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  win=$(nt new-window -d -P -F '#{window_id}' -t bf -n 'a task' -c "$d/app-scratch-1" 'exec sleep 600')
+  fid=11111111-2222-4333-8444-555555555555
+  nt set-window-option -t "$win" @raw 1; nt set-window-option -t "$win" @worktree "$d/app-scratch-1"
+  nt set-window-option -t "$win" @repo acme/app; nt set-window-option -t "$win" @fleet_id "$fid"
+  bf() {
+    printf 'a task' > "$d/t"; printf 'the words' > "$d/b"
+    env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET PATH="$WORK/tbin:$d/fb:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
+      FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" FLEET_BACKFILL_TRIES=3 FLEET_BACKFILL_RETRY_SECS=0 \
+      bash "$d/sb/fleet-start-backfill.sh" bf "$win" acme/app "$d/t" "$d/b" >/dev/null 2>&1
+  }
+  t0=$(now)
+  touch "$d/fail"; bf; rc=$?
+  [ "$rc" = 1 ] || { WHY="a filing that fails every try answered $rc, want 1"; return 1; }
+  [ "$(grep -c . "$d/log/file")" = 3 ] || { WHY="filing was tried $(grep -c . "$d/log/file" 2>/dev/null) times, want 3"; return 1; }
+  [ "$(o "$win" @backfill)" = failed ] || { WHY="the window is not marked @backfill failed (it says [$(o "$win" @backfill)])"; return 1; }
+  [ "$(o "$win" @raw)" = 1 ] && [ -z "$(o "$win" @issue)" ] && [ "$(o "$win" pane_dead)" = 0 ] \
+    || { WHY="the failed paperwork touched the session (raw=$(o "$win" @raw) issue=$(o "$win" @issue))"; return 1; }
+  [ ! -s "$d/log/peer" ] || { WHY="the agent was told about an issue that does not exist"; return 1; }
+  rm -f "$d/fail"; bf; rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="once filing works the backfill answered $rc"; return 1; }
+  [ "$(o "$win" @issue)" = 9 ] && [ -z "$(o "$win" @raw)" ] && [ -z "$(o "$win" @backfill)" ] \
+    || { WHY="the window was not bound to #9 in place (issue=$(o "$win" @issue) raw=$(o "$win" @raw) mark=$(o "$win" @backfill))"; return 1; }
+  [ "$(o "$win" @fleet_id)" = "$fid" ] || { WHY="@fleet_id changed"; return 1; }
+  [ "$(git -C "$d/app-scratch-1" symbolic-ref --short HEAD)" = issue-9 ] || { WHY="the branch is not issue-9"; return 1; }
+  got=$(env PATH="$WORK/tbin:$PATH" BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; fleet_win_for_key issue-9 bf' _ "$BIN" 2>&1)
+  [ "$got" = "$win" ] || { WHY="fleet_win_for_key issue-9 answered [$got], want $win"; return 1; }
+  grep -q "issue-9" "$d/log/peer" || { WHY="the agent was not told its issue and branch"; return 1; }
+  grep -qE 'issue view|pr list' "$d/log/gh" 2>/dev/null && { WHY="a just-filed issue got a duplicate-claim read"; return 1; }
+  WHAT="补单失败：建单试 3 次都失败时会话原样在跑、窗口标「单子没建上」、不告诉 agent；建单恢复后同一窗口就地换成 issue-9（@fleet_id 不变、fleet_win_for_key 认得、经 peer 通道告诉它）"
+}
+
 drill_cold_fill_fails() {
   # issue #2237: the cold start opens the agent's window before the tree is
   # checked out; a checkout that fails must take that window (and the worktree)
@@ -3781,6 +3898,239 @@ drill_spare_login_empty() {
     esac
   else
     WHAT='没有 go：六条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- lease-unseparated-user (#2295, EPIC #2293 C2): a user's login whose
+# credential separation did not happen (or an agent too old to say) must not be
+# leased a real token — the hub refuses 「拒发：未隔离」 and tells the node's
+# proxy to route every session central, so they still work. Admin / operator
+# logins lease as before.
+drill_lease_unseparated_user() {
+  CAP=120; local t0 out rc api agent fa fg
+  api='TestLeaseCredsepGate TestLeaseCredsepGateOnlyForUsers TestNodeSelfCarriesCredsepGate'
+  agent='TestCredsepJudge TestCredsepProbeCaches'
+  fa="$ROOT/tokenledger/internal/api/fleet_credsep_test.go"
+  fg="$ROOT/tokenledger/internal/agent/node_credsep_test.go"
+  t0=$(now)
+  for out in $api; do
+    grep -q "^func $out(" "$fa" 2>/dev/null || { WHY="the hub half's test $out is not in ${fa#$ROOT/}"; return 1; }
+  done
+  for out in $agent; do
+    grep -q "^func $out(" "$fg" 2>/dev/null || { WHY="the node half's test $out is not in ${fg#$ROOT/}"; return 1; }
+  done
+  grep -q 'credsep_gate' "$BIN/fleet-cred-proxy.py" \
+    || { WHY="fleet-cred-proxy.py no longer routes a credsep-gated login central"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$api" "$agent" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='普通用户未隔离 / 不报字段 → 403「拒发：未隔离」、/self 带 credsep_gate（代理走 central）；隔离后 200；管理员与非 GitHub 用户不受影响；节点按 status+check 判定并 5 分钟缓存（go test 五条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- home-pool-claim-unkeyed (#2339): `fleet claude` opens a HOME session — a
+# no-repo window, claimed from the pool's HOME slot or opened cold — that has no
+# @raw and so no key. The start's result check looked for the receipt's window
+# among `scratch` rows only: UNKNOWN every time, the client said 开不了, and the
+# window stayed open with nobody holding it. Now the receipt's @fleet_id is
+# matched first (identity before key, #1646) and the result names window_id; a
+# start whose window still matches nothing is closed by `stop fid:<id>`.
+drill_home_pool_claim_unkeyed() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 - "$BIN" <<'PY' 2>&1
+import json, os, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+import fleet_control as fc
+FID = "c63813a3-3f3f-4cea-bec6-c12705d98fc3"
+def run(rows):
+    tmp = tempfile.mkdtemp()
+    c = fc.Control.__new__(fc.Control)
+    class Store:
+        root = __import__("pathlib").Path(tmp)
+        def connect(self):
+            import sqlite3
+            db = sqlite3.connect(os.path.join(tmp, "s.db")); db.row_factory = sqlite3.Row
+            return db
+    c.store = Store()
+    with c.store.connect() as db:
+        db.execute("CREATE TABLE operations (id TEXT, action TEXT, request TEXT, status TEXT, result TEXT, created REAL, updated REAL)")
+        req = {"fleet_id": "f", "action": "worker_start", "params": {"kind": "scratch", "no_repo": True, "agent": "claude"}}
+        db.execute("INSERT INTO operations VALUES ('0f0e0d0c-0b0a-4908-8706-050403020100','worker_start',?,'accepted','',?,?)", (json.dumps(req), fc.now() - 0.2, fc.now()))
+    c.fleet = lambda fid: {"name": "s", "fleet_id": "f"}
+    stops = []
+    def adapter(*a, **k):
+        if a[0] == "stop":
+            stops.append(a[2])
+        if a[0] == "start":
+            return 0, ("@694\tnorepo\t/home\t%s\t1000\t\t\n" % FID).encode(), b""
+        return 0, b"", b""
+    c.adapter = adapter
+    c.workers = lambda fl, w="": {"observed_at": 1, "workers": rows}
+    c.watch_ready = lambda *a: None
+    c.execute("0f0e0d0c-0b0a-4908-8706-050403020100")
+    with c.store.connect() as db:
+        row = db.execute("SELECT status, result FROM operations").fetchone()
+    return row["status"], json.loads(row["result"]), stops
+row = {"window_id": "@694", "scratch": False, "issue": None, "key": None, "repo": None, "identity": FID}
+st, r, stops = run([row])
+if st != "succeeded" or r.get("window_id") != "@694":
+    sys.exit("the HOME window was not recognised: %s %s" % (st, json.dumps(r)))
+st, r, stops = run([])
+if st != "unknown" or stops != ["fid:" + FID]:
+    sys.exit("an unmatched HOME window was left open: %s stops=%s" % (st, stops))
+PY
+) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='从池领（或冷开）的 HOME 会话没有 key：按回执的 @fleet_id 认出、结果带 window_id；仍认不出就 stop fid: 关掉，不留孤儿'
+}
+
+# new-login-unseparated (issue #2294, EPIC #2293 C1): a login opened the old way
+# had the team pool copied into its own accounts/ and FLEET_CRED_SEPARATE=0 —
+# its first session could read every subscription token. Now fleet-login-new.sh
+# plans step 7b (credsep install --fresh) before the login's services and its
+# first session, and the pool lands in the store: the login holds markers only.
+drill_new_login_unseparated() {
+  CAP=20
+  local d="$WORK/newlogin" t0 out rc C R st
+  mkdir -p "$d/pool" "$d/homes" "$d/homes2" "$d/db" "$d/run" "$d/daemons" "$d/inst"
+  printf 'tok-POOL-1\n' > "$d/pool/p1"; printf 'CCQUOTA_ACCOUNT=p1\n' > "$d/pool/p1.conf"
+  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBRK brk@t\n' > "$d/key.pub"
+  printf 'brkfresh:%s:%s:%s\n' "$(id -u)" "$(id -g)" "$d/homes/brkfresh" > "$d/pw"
+  t0=$(now)
+  # 1. the plan the hub's account op runs (its fixed argv: --share-pool)
+  out=$(FLEET_LOGIN_HOMES="$d/homes2" bash "$BIN/fleet-login-new.sh" brkfresh --full-name B --pubkey "$d/key.pub" \
+        --share-pool --pool-src "$d/pool" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="the dry run failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  # case, not `printf | grep -q`: under pipefail a grep that quits early can SIGPIPE the printf
+  case "$out" in *"fleet-credsep.sh install --login brkfresh --fresh"*) ;;
+    *) WHY="the plan opens the login with no credsep step: the pool lands where its sessions read it"; return 1 ;; esac
+  case "$out" in *"sudo cp -p $d/pool/p1"*) WHY="the plan still copies the pool into the login's own dir"; return 1 ;; esac
+  case "$out" in *"background services as system"*"--fresh"*) WHY="the services start before the credentials are separated (先代理、后搬凭据、再开会话)"; return 1 ;; esac
+  # 2. the separation itself (root's half, sandboxed): nothing for a session to read
+  C="$d/homes/brkfresh/.config/claude-fleet" R="$d/db/brkfresh"
+  mkdir -p "$C"
+  out=$(FLEET_CREDSEP_ROOT_BASE="$d/db" FLEET_CREDSEP_RUN_BASE="$d/run" FLEET_CREDSEP_LOG_BASE="$d/log" \
+        FLEET_CREDSEP_LIB="$d/lib" FLEET_CREDSEP_DAEMON_DIR="$d/daemons" FLEET_CREDSEP_ROLE="$(id -un)" \
+        FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$d/pw" \
+        bash "$BIN/fleet-credsep.sh" install --login brkfresh --fresh --pool-src "$d/pool" --install-dir "$d/inst" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="install --fresh failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  grep -rq 'tok-POOL' "$d/homes/brkfresh" && { WHY="a pool token is readable in the new login's home: $(grep -rl tok-POOL "$d/homes/brkfresh")"; return 1; }
+  [ -z "$(find "$d/homes/brkfresh" \( -name .credentials.json -o -name auth.json -o -name node.env \) -print)" ] \
+    || { WHY="a credential file in the new login's home"; return 1; }
+  [ "$(cat "$R/accounts/p1" 2>/dev/null)" = tok-POOL-1 ] && [ "$(cat "$C/accounts/p1")" = store:p1 ] \
+    || { WHY="the pool is not in the store / the login has no marker: $(ls -a "$R/accounts" "$C/accounts" 2>&1 | tr '\n' ' ')"; return 1; }
+  st=$(FLEET_CONF_DIR="$C" bash "$BIN/fleet-credsep.sh" status 2>&1)
+  SECS=$(since "$t0")
+  case "$st" in separated*) ;; *) WHY="status after the open: $st"; return 1 ;; esac
+  WHAT="新账号开号：计划里第 7b 步 credsep install --fresh 排在服务和第一个会话之前；订阅池只进 store（账号里只有 store:<label> 标记），status=separated"
+}
+
+# ---- trust-name-borrowed (#2214, EPIC #2329 C2): an untrusted node reports a
+# trusted machine's hostname. Trust rides the endpoint (the join code, the
+# operator), the old name rule holds only for the endpoint that enrolled under
+# that name, so the impostor's lease and relay credential are refused and its
+# hello is audited; a managed join code trusts the identity, once, for an hour.
+drill_trust_name_borrowed() {
+  CAP=120; local t0 out rc tests f
+  tests='TestTrustBorrowedNameGetsNothing TestTrustOldNodeKeepsItsName TestManagedJoinCodeTrustsTheIdentity TestDesiredStateOperatorWrites TestDesiredAbsentAddsNothing'
+  f="$ROOT/tokenledger/internal/api/fleet_node_identity_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 'sameName(et.EnrolledHost, host)' "$ROOT/tokenledger/internal/api/fleet_trust.go" \
+    || { WHY="nodeTrust no longer holds the name rule to the name the endpoint enrolled under"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='冒名节点领凭据 / 中继凭据被拒、名册读 name_borrowed、hello 记审计；真机照领；托管加入码一次、一小时、信任记在身份上；期望状态只有操作者能写（go test 五条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- release-tampered (#2335, EPIC #2329 C7): a machine takes a release from
+# the hub only, and a tampered byte anywhere — a tree file, an artifact, the
+# manifest, the signature, a different key — installs nothing; GitHub out of
+# reach (and a restarted hub) still hands out what it stored. The hub half is
+# Go; this drill pins its tests by name and runs them when go is here.
+drill_release_tampered() {
+  CAP=120; local t0 out rc tests f
+  tests='TestReleaseBuiltOnStableAndFetched TestReleaseFetchWithGitHubDown TestReleaseTamperRefused TestReleaseVerifyDirCatchesEdit TestReleaseOffIs404'
+  f="$ROOT/tokenledger/internal/api/fleet_release_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 'digest does not match the manifest' "$ROOT/tokenledger/internal/release/release.go" \
+    || { WHY="Unpack no longer checks each file against the signed manifest"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='stable 一动入口就打包签名；机器从入口取到全部文件与二进制；GitHub 断了、入口重启也照样取；树 / 二进制 / 清单 / 签名 / 钥匙任一处被改都整个不换、不留半成品（go test 五条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- machine-agent-wrong-login (#2333, EPIC #2329 C5): the machine's one node
+# program speaks for every login over one link; a login hello proven with the
+# wrong token, or a message for a login the link does not carry, must be
+# refused on both halves — never run as the wrong login, never as root.
+drill_machine_agent_wrong_login() {
+  CAP=180; local t0 out rc api agt f g
+  api='TestMachineLinkRefusesWrongLogin TestMachineLinkCarriesEveryLogin TestMachineLinkSessionLandsOnItsLogin TestMachineLinkAccountCreateGoesToTheAdminLogin TestMachineLinkMoveLandsOnItsLogin TestMachineLinkAndPlainAgents TestMachineAgentRunsEachLoginAsItself'
+  agt='TestMachineLinkDemuxByLogin TestPrepCmdRunsAsTheLogin TestPrepCmdStrictOnlyForARootMachine'
+  f="$ROOT/tokenledger/internal/api/node_machine_test.go"
+  g="$ROOT/tokenledger/internal/agent/node_machine_test.go"
+  t0=$(now)
+  for out in $api; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  for out in $agt; do
+    grep -q "^func $out(" "$g" 2>/dev/null || { WHY="the node half's test $out is not in ${g#$ROOT/}"; return 1; }
+  done
+  grep -q 'ep.OSUser != login' "$ROOT/tokenledger/internal/api/node_machine.go" \
+    || { WHY="loginEndpoint no longer holds a login hello to its own token's login"; return 1; }
+  grep -q 'CodeWrongLogin' "$ROOT/tokenledger/internal/agent/node_machine.go" \
+    || { WHY="the node's demux no longer refuses a login it does not serve"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='整机连接上账号 hello 拿别人的 / 机器的 / 别的机器的令牌都答 WRONG_LOGIN、不上线、记审计；不认识的账号两端都拒；会话、开号、迁移各落在自己的账号；真的 RunMachine 以各账号身份跑控制器（go test 十条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十条测试按名核对在' ;;
+      *) WHY="the machine link (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：十条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }

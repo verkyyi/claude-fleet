@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-bind.sh <issue-number> [--force] [--title <t>] — promote THIS scratch
+# fleet-bind.sh <issue-number> [--force] [--fresh] [--title <t>] — promote THIS scratch
 # session into the worker for a GitHub issue, IN PLACE (issue #520).
 #
 # The flow it serves: press ⌃s (or type a name on the dash prompt line), refine the
@@ -36,6 +36,9 @@
 # dash-issue-session.sh: it skips the claim CHECK and the claim WRITE entirely.
 # --title <t> is the authoritative window name for a create-then-bind caller
 # (fleet-issue-file.sh --bind), which just wrote the issue and needs no gh read.
+# --fresh says the caller filed #N a moment ago (issue #2235): nobody can have
+# claimed it or opened a PR for it yet, so the claim CHECK (two gh reads) is
+# skipped — the claim WRITE is not, unlike --force.
 #
 # Exit codes — one per rail, each printed on stderr:
 #   0  bound
@@ -64,7 +67,7 @@ die() {  # <message> <exit-code> — stderr is the record; the status line is th
 }
 
 # --- args ---------------------------------------------------------------------
-num=""; FORCE=0; TITLE=""; _want=""
+num=""; FORCE=0; FRESH=0; TITLE=""; _want=""
 for _a in "$@"; do
   if [ -n "$_want" ]; then
     case "$_want" in title) TITLE="$_a" ;; esac
@@ -72,6 +75,7 @@ for _a in "$@"; do
   fi
   case "$_a" in
     --force|--reclaim) FORCE=1 ;;
+    --fresh)   FRESH=1 ;;
     --title)   _want=title ;;
     --title=*) TITLE="${_a#--title=}" ;;
     -h|--help) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -83,7 +87,7 @@ for _a in "$@"; do
 done
 [ -n "$_want" ] && { printf 'fleet-bind: --title needs a value\n' >&2; exit 2; }
 num="${num//[^0-9]/}"
-[ -n "$num" ] || { printf 'fleet-bind: usage: fleet-bind.sh <issue-number> [--force] [--title <t>]\n' >&2; exit 2; }
+[ -n "$num" ] || { printf 'fleet-bind: usage: fleet-bind.sh <issue-number> [--force] [--fresh] [--title <t>]\n' >&2; exit 2; }
 
 # --- the caller's pane: one probe, five fields --------------------------------
 [ -n "${TMUX_PANE:-}" ] || die "not inside a tmux pane — run this from the scratch session you want to bind" 3
@@ -148,7 +152,7 @@ done
 
 # Cross-machine claim gate — the same read dash-issue-session.sh makes at spawn.
 # A gh outage degrades to bind-anyway (never a false refusal), matching the spawner.
-if [ "$FORCE" != 1 ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
+if [ "$FORCE" != 1 ] && [ "$FRESH" != 1 ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
   cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state \
         --jq '"\(.assignees|length)\t\(.state)"' 2>/dev/null)
   n_assignee=${cs%%$'\t'*}; st=${cs#*$'\t'}
@@ -174,11 +178,17 @@ git -C "$WT" branch -m "$slug" "$branch" >/dev/null 2>&1 \
 
 # Window name from the issue CONTENT (issue #216's rule): an explicit --title wins
 # and costs no round-trip; else one gh read; else the bare issue-<N> slug.
-title="$TITLE"
+# An EPIC member wears its batch's 简称 first (issue #2355): the one read takes
+# the body with the title. An explicit --title is a fresh issue the filer just
+# wrote (fleet-issue-file.sh --bind) — no EPIC member, and no read at all.
+title="$TITLE"; body=''
 if [ -z "$title" ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
-  title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
+  tb=$(gh issue view "$num" --repo "$REPO" --json title,body -q '.title + "\n" + .body' 2>/dev/null) || tb=''
+  title=${tb%%$'\n'*}; body=${tb#*$'\n'}; [ "$body" = "$tb" ] && body=''
 fi
-wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$branch"
+if [ -n "$TITLE" ]; then wname=$(fleet_win_name "$title")
+else wname=$(fleet_issue_win_name "$REPO" "$num" "$title" "${body:-.}"); fi
+[ -z "$wname" ] && wname="$branch"
 
 # Re-mark the window as a worker. @raw goes (the reapers must gate it on the PR
 # now, not treat it as a disposable experiment); @worktree STAYS (dash ⌃x resolves

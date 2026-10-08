@@ -82,6 +82,8 @@ bin/fleet-client-where.sh
 bin/fleet-client-place.sh
 # `fleet claude` / `fleet codex` (#2264): a HOME session in one command
 bin/fleet-home-session.sh
+# `fleet ls | show | open | rename | close | reap | answer` (#2365): the menu as commands
+bin/fleet-session-cli.py
 bin/fleet-open.sh
 bin/fleet-open-addr.py
 bin/open-url.sh

@@ -133,6 +133,11 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetSpot(); err != nil {
 		return err
 	}
+	// Trust on the endpoint, join codes that carry it, and each machine's
+	// desired state (claude-fleet#2214) — after the join codes, too.
+	if err := s.ensureFleetIdentity(); err != nil {
+		return err
+	}
 	// Node-lost / lease-conflict alerts (claude-fleet#1630).
 	if err := s.ensureFleetAlerts(); err != nil {
 		return err
@@ -175,6 +180,15 @@ func (s *Store) NodeHeartbeat(endpointID, hostname, osUser, machineID string, pr
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return errors.New("heartbeat from a node that never said hello")
+	}
+	// An endpoint enrolled with no machine name (`ccquota enroll`, the
+	// operator's) enrolls under the first one it reports (claude-fleet#2214);
+	// a join always names one, and a stamped name is never moved.
+	if hostname != "" {
+		if _, err := s.write.Exec(`UPDATE endpoints SET enrolled_host = ? WHERE endpoint_id = ? AND enrolled_host = ''`,
+			hostname, endpointID); err != nil {
+			return fmt.Errorf("stamp enrolled host: %w", err)
+		}
 	}
 	return nil
 }

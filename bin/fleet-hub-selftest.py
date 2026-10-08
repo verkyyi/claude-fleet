@@ -47,7 +47,8 @@ class Sandbox:
                                    'FLEET_START_WARM=0\n')
         for filename in ("fleet-control.py", "fleet_control.py", "fleet_hub_common.py", "fleet_config_write.py",
                          "fleet-lib.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py",
-                         "fleet-gh.sh", "fleet-gh-lib.sh", "fleet-issue-cache.py", "fleet_loop_mark.py", "fleet_iso.py"):
+                         "fleet-gh.sh", "fleet-gh-lib.sh", "fleet-issue-cache.py", "fleet_loop_mark.py", "fleet_iso.py",
+                         "fleet-reap-policy.sh", "fleet_reap_policy.py"):
             shutil.copy2(BIN / filename, self.bin / filename)
         self.tools = self.root / "tools"
         self.tools.mkdir()
@@ -59,8 +60,35 @@ if "display-message" in sys.argv and "#{socket_path}" in sys.argv:
     # the reap adapter's `#{socket_path}` (issue #1487): point bare tmux at this server;
     # any other display-message (a window's @repo, #1018) answers as an unset option does
     print("/tmp/fleet-hub-selftest.sock"); sys.exit(0)
+if "display-message" in sys.argv and "#{window_id} #{@fleet_id}" in sys.argv:
+    # the rename adapter's check (issue #2358): the window's @fleet_id, the tenth
+    # column of workers.tsv, after the window's own id
+    win=sys.argv[sys.argv.index("-t") + 1]
+    data=root/"workers.tsv"
+    for row in (data.read_text().splitlines() if data.exists() else []):
+        cols=row.split("\\t")
+        if cols[0] == win:
+            print(win + " " + (cols[9] if len(cols) > 9 else "")); sys.exit(0)
+    # real tmux: rc 0 and ANOTHER window's answer for an id that is gone
+    print("@1 other"); sys.exit(0)
+if "display-message" in sys.argv and "#{window_id}" in sys.argv:
+    # fleet-reap-policy.sh's resolve_win (issue #2368): a live window names itself
+    win=sys.argv[sys.argv.index("-t") + 1]
+    data=root/"workers.tsv"
+    rows=[r.split("\\t")[0] for r in (data.read_text().splitlines() if data.exists() else [])]
+    print(win if win in rows else "@1"); sys.exit(0)
+if "set-option" in sys.argv and "rename-window" not in sys.argv:
+    # worker_reap_policy (issue #2368): the setter's stamp and its clears, logged
+    with open(root/"reappol.calls", "a") as out:
+        out.write("\\x1f".join(sys.argv[1:]) + "\\n")
+    sys.exit(0)
 if "display-message" in sys.argv:
     print(""); sys.exit(0)
+if "rename-window" in sys.argv:
+    # worker_rename (issue #2358): the whole argv, the name one word of it
+    with open(root/"rename.calls", "a") as out:
+        out.write("\\x1f".join(sys.argv[1:]) + "\\n")
+    sys.exit(0)
 if "list-windows" in sys.argv:
     # Rows carry @repo in column 9; a format that does not ask for it (a one-repo
     # fleet, issue #1018) gets that column empty, exactly as real tmux prints it.
@@ -563,6 +591,105 @@ class HubTests(HubFixture):
         with self.assertRaisesRegex(Fault, "outside this caller"):
             self.lifecycle("worker_switch", idem="no-scope", token=reader["token"])
         self.assertEqual(len(self.node.calls("migrate")), n)
+
+    def test_rename_renames_the_window_by_key_or_identity(self):
+        # worker_rename (issue #2358): the client sidebar's 「改名…」 on a row here.
+        # The worker resolves to its WINDOW (key or identity), the adapter checks
+        # that window still carries the worker's @fleet_id, then rename-window +
+        # automatic-rename off with the name as ONE argv word. The key and the
+        # identity are unchanged; a bad name never reaches the node.
+        ident = str(uuid.uuid4())
+        self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "", ident),
+                          ("@4", None, True, "/fixture/project-scratch-4", "", "", str(uuid.uuid4())))
+        done = self.lifecycle("worker_rename", name="登录页 · 重做 'a b'")
+        self.assertEqual((done["status"], done["result"]["window"], done["result"]["name"]),
+                         ("succeeded", "@12", "登录页 · 重做 'a b'"), done)
+        by_id = self.lifecycle("worker_rename", ident, idem="by-identity", name="短名")
+        self.assertEqual((by_id["status"], by_id["result"]["window"]), ("succeeded", "@12"), by_id)
+        calls = [c.split("\x1f") for c in self.node.calls("rename")]
+        self.assertEqual(len(calls), 2, calls)
+        for call, want in zip(calls, ("登录页 · 重做 'a b'", "短名")):
+            self.assertEqual(call[call.index("rename-window"):call.index("rename-window") + 5],
+                             ["rename-window", "-t", "@12", "--", want])
+            self.assertIn("automatic-rename", call)
+        # the worker_id is untouched: the same identity still finds the window
+        self.assertEqual(self.lifecycle("worker_rename", ident, idem="again", name="x")["status"], "succeeded")
+        n = len(self.node.calls("rename"))
+        for bad in ("", "   ", "a\tb", "a\nb", "x" * 65, 3, None):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                self.call("worker_rename", {"worker_id": self.worker(), "name": bad, "idempotency_key": "bad"})
+        with self.assertRaises(Fault):
+            self.call("worker_rename", {"worker_id": self.worker(), "idempotency_key": "no-name"})
+        gone = self.lifecycle("worker_rename", str(uuid.uuid4()), idem="nobody", name="x")
+        self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        reader = self.hub.grant("reader2", [self.fleet], ["fleet:read", "worker:answer"])
+        with self.assertRaisesRegex(Fault, "outside this caller"):
+            self.lifecycle("worker_rename", idem="no-scope", token=reader["token"], name="x")
+        self.assertEqual(len(self.node.calls("rename")), n)
+
+    def test_rename_refuses_a_recycled_window(self):
+        # The window id the inventory answered no longer carries that @fleet_id by
+        # the time the adapter acts (tmux recycled it): refused, nothing renamed.
+        ident = str(uuid.uuid4())
+        self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "", ident))
+        code, out, err = self.node.controller.adapter("rename", "demo", "@12", str(uuid.uuid4()), "x")
+        self.assertEqual(code, 5, (out, err))
+        self.assertIn(b"no longer that session", err)
+        code, out, err = self.node.controller.adapter("rename", "demo", "@99", ident, "x")
+        self.assertEqual(code, 5, (out, err))
+        self.assertEqual(self.node.controller.adapter("rename", "demo", "@12", ident, "")[0], 2)
+        self.assertEqual(self.node.calls("rename"), [])
+
+    def test_reap_policy_stamps_the_window_by_key_or_identity(self):
+        # worker_reap_policy (issue #2368): the client's 「改回收方式…」 / `fleet
+        # reap` on a row here. The worker resolves to its window (key or
+        # identity), the adapter checks the window still carries the worker's
+        # @fleet_id, then fleet-reap-policy.sh set stamps @reap_policy — the one
+        # setter — and clears the old countdown. A bad policy never reaches it.
+        ident = str(uuid.uuid4())
+        self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "", ident),
+                          ("@4", None, True, "/fixture/project-scratch-4", "", "", str(uuid.uuid4())))
+        stamps = lambda: [c.split("\x1f") for c in self.node.calls("reappol") if "@reap_policy" in c.split("\x1f")]
+        done = self.lifecycle("worker_reap_policy", policy="done:2h")
+        self.assertEqual((done["status"], done["result"]["window"], done["result"]["policy"]),
+                         ("succeeded", "@12", "done:2h"), done)
+        by_id = self.lifecycle("worker_reap_policy", ident, idem="by-identity", policy="at:2026-10-06T18:00:00Z")
+        self.assertEqual((by_id["status"], by_id["result"]["window"], by_id["result"]["policy"]),
+                         ("succeeded", "@12", "at:2026-10-06T18:00:00Z"), by_id)
+        got = stamps()
+        self.assertEqual([c[c.index("set-option"):] for c in got],
+                         [["set-option", "-w", "-t", "@12", "@reap_policy", p]
+                          for p in ("done:2h", "at:2026-10-06T18:00:00Z")], got)
+        # on the fleet's own socket, and the countdown shown under the old policy cleared
+        self.assertTrue(all("-L" in c for c in got), got)
+        self.assertTrue(any("@reap_due" in c.split("\x1f") for c in self.node.calls("reappol")))
+        n = len(stamps())
+        for bad in ("", "never", "keep:1h", "done:0", "done:2w", "at:soon", "keep; rm -rf /", 3, None):
+            with self.subTest(bad=bad), self.assertRaises(Fault):
+                self.call("worker_reap_policy", {"worker_id": self.worker(), "policy": bad, "idempotency_key": "bad"})
+        with self.assertRaises(Fault):
+            self.call("worker_reap_policy", {"worker_id": self.worker(), "idempotency_key": "no-policy"})
+        gone = self.lifecycle("worker_reap_policy", str(uuid.uuid4()), idem="nobody", policy="keep")
+        self.assertEqual((gone["status"], gone["result"]["error"]["code"]), ("failed", "NOT_FOUND"))
+        reader = self.hub.grant("reader3", [self.fleet], ["fleet:read", "worker:message"])
+        with self.assertRaisesRegex(Fault, "outside this caller"):
+            self.lifecycle("worker_reap_policy", idem="no-scope", token=reader["token"], policy="keep")
+        self.assertEqual(len(stamps()), n)
+
+    def test_reap_policy_refuses_a_recycled_window(self):
+        # The window id no longer carries that @fleet_id (tmux recycled it), or is
+        # gone: refused, nothing stamped; a policy the setter does not parse: 2.
+        ident = str(uuid.uuid4())
+        self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "", ident))
+        code, out, err = self.node.controller.adapter("reappol", "demo", "@12", str(uuid.uuid4()), "keep")
+        self.assertEqual(code, 5, (out, err))
+        self.assertIn(b"no longer that session", err)
+        self.assertEqual(self.node.controller.adapter("reappol", "demo", "@99", ident, "keep")[0], 5)
+        self.assertEqual(self.node.controller.adapter("reappol", "demo", "@12", ident, "never")[0], 2)
+        self.assertEqual(self.node.controller.adapter("reappol", "demo", "@12", ident, "")[0], 2)
+        self.assertEqual(self.node.calls("reappol"), [])
+        code, out, _ = self.node.controller.adapter("reappol", "demo", "@12", ident, "keep")
+        self.assertEqual((code, out.decode().split(" ")[0]), (0, "reap_policy=keep"))
 
     def test_message_goes_through_the_issue_bridge(self):
         self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@13", None, True, "/fixture/project-scratch-4"))

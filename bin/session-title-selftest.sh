@@ -75,8 +75,15 @@ if [ -n "$REAL_TMUX" ]; then
   # column 20 is role=orchestrator on the orchestrating session (issue #1957), empty otherwise
   # column 21 is epic=<ref>[:k/n] on an EPIC's driver window (issue #1958), empty otherwise
   # column 22 is epicstale= — the login's batches nobody drives (issue #1916), empty with none
-  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22; 16 before it as they were" "16 reap= detail= role= epic= epicstale=" \
-     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 6, $18, $19, $20, $21, $22 }')"
+  # column 23 is backfill=failed on a warm start whose issue was never filed (issue #2235)
+  eq "A: column 17, the reap column 18, the detail column 19, the role column 20, the epic column 21, the epicstale column 22, the backfill column 23; 16 before it as they were" "17 reap= detail= role= epic= epicstale= backfill=" \
+     "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "fix-sidebar-slug" { print NF - 6, $18, $19, $20, $21, $22, $23 }')"
+  T set-option -w -t "=$S:draft" @backfill failed
+  T set-option -w -t "=$S:uncached" @backfill filing
+  out2=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
+  eq "A: @backfill failed → backfill=failed (column 23, #2235); still filing → empty" "backfill=failed backfill=" \
+     "$(printf '%s\n' "$out2" | awk -F'\t' '$10 == "draft" { d = $23 } $10 == "uncached" { u = $23 } END { print d, u }')"
+  T set-option -wu -t "=$S:draft" @backfill; T set-option -wu -t "=$S:uncached" @backfill
   T set-option -w -t "=$S:uncached" @claude_state needs
   T set-option -w -t "=$S:uncached" @claude_needs_detail '演练放在 m5 还是只在 m4？'
   T set-option -w -t "=$S:draft" @claude_needs_detail 'a stale question'
@@ -210,5 +217,19 @@ eq "D: a remote row carries its node's title as field 14" "远程的 issue 标�
 eq "D: …beside its cfg verdict (field 13)" "stale" "$(fld "$s" RT 13)"
 eq "D: a remote row with no title (an older cache) has no field 14" "-" "$(fld "$s" RN 14)"
 eq "D: …nor field 13" "-" "$(fld "$s" RN 13)"
+
+# E (issue #2355): ccquota's agent runs the adapter with no TMPDIR (a
+# LaunchDaemon) — it must find the SAME cache the login's daemons write, or
+# every title= goes out empty. The per-user dir is set before fleet-lib.sh
+# fixes $FLEET_C off it.
+_tl=$(grep -n 'DARWIN_USER_TEMP_DIR' "$BIN/fleet-control-read.sh" | head -n1 | cut -d: -f1)
+_ll=$(grep -n '^\. "\$BIN/fleet-lib.sh"' "$BIN/fleet-control-read.sh" | head -n1 | cut -d: -f1)
+eq "E: fleet-control-read.sh sets TMPDIR before it sources fleet-lib.sh" "yes" \
+   "$([ -n "$_tl" ] && [ -n "$_ll" ] && [ "$_tl" -lt "$_ll" ] && echo yes || echo no)"
+if _ut=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -d "$_ut" ]; then
+  got=$(env -u TMPDIR bash -c 'BIN=$1; eval "$(sed -n "/DARWIN_USER_TEMP_DIR/,/^fi/p" "$BIN/fleet-control-read.sh")"; . "$BIN/fleet-lib.sh"; printf %s "$FLEET_C"' _ "$BIN")
+  CHECKS=$((CHECKS+1))
+  case "$got" in "${_ut%/}"/*.claude-dash) ;; *) fail "E: with no TMPDIR the cache must be the per-user one (got '$got', want under '$_ut')" ;; esac
+fi
 
 printf 'session-title selftest: PASS (%s checks)\n' "$CHECKS"

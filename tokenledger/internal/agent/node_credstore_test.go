@@ -56,7 +56,7 @@ func TestClaudeCredGoesToTheStoreWhenSeparated(t *testing.T) {
 	sock, got := fakeCredStore(t, "")
 	dir := t.TempDir()
 	exp := time.Now().Add(time.Hour)
-	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-sep", &exp, nil, "max", credStoreSink(sock)); err != nil {
+	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-sep", &exp, nil, "max", credStoreSink(sock, "")); err != nil {
 		t.Fatal(err)
 	}
 	req := <-got
@@ -80,7 +80,7 @@ func TestClaudeCredGoesToTheStoreWhenSeparated(t *testing.T) {
 func TestCodexAuthGoesToTheStoreWhenSeparated(t *testing.T) {
 	sock, got := fakeCredStore(t, "")
 	home := filepath.Join(t.TempDir(), ".codex")
-	if err := writeCodexAuth(home, "at-sep", "id", "acct-1", time.Now(), credStoreSink(sock)); err != nil {
+	if err := writeCodexAuth(home, "at-sep", "id", "acct-1", time.Now(), credStoreSink(sock, "")); err != nil {
 		t.Fatal(err)
 	}
 	req := <-got
@@ -98,7 +98,7 @@ func TestCodexAuthGoesToTheStoreWhenSeparated(t *testing.T) {
 func TestCredStoreRefusalIsAnError(t *testing.T) {
 	sock, _ := fakeCredStore(t, "unsafe label")
 	exp := time.Now().Add(time.Hour)
-	err := writeClaudeCred(t.TempDir(), "main", "sk-ant-oat01-x", &exp, nil, "", credStoreSink(sock))
+	err := writeClaudeCred(t.TempDir(), "main", "sk-ant-oat01-x", &exp, nil, "", credStoreSink(sock, ""))
 	if err == nil || !strings.Contains(err.Error(), "unsafe label") {
 		t.Fatalf("err = %v", err)
 	}

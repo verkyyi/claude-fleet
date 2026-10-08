@@ -157,6 +157,18 @@ test('machines: lost last, load per core, trend and version carried', () => {
   assert.deepEqual(machineCards(null), []);
 });
 
+test('machines: one link for the machine, its logins listed under it (claude-fleet#2333)', () => {
+  const [m] = machineCards({ machines: [{ hostname: 'm4', status: 'online', links: 1, logins: 2 }], nodes: [
+    { hostname: 'm4', os_user: 'root', endpoint_id: 'ep_mach', machine_link: true },
+    { hostname: 'm4', os_user: 'beta', endpoint_id: 'ep_b', via: 'ep_mach' },
+    { hostname: 'm4', os_user: 'alpha', endpoint_id: 'ep_a', via: 'ep_mach' },
+  ] });
+  assert.equal(m.links, 1);
+  assert.deepEqual(m.logins, ['alpha', 'beta']);
+  // an older hub says nothing of links
+  assert.equal(machineCards({ machines: [{ hostname: 'm5', status: 'online' }] })[0].links, null);
+});
+
 test('machines: the admin\'s short name labels the card, the hostname stays the action\'s (claude-fleet#1706)', () => {
   const ms = machineCards({ machines: [
     { hostname: 'macmini', alias: 'm5', status: 'online' },
@@ -341,4 +353,18 @@ test('a card says when its reading was taken and by whom (claude-fleet#2169)', (
   // Without the hub's own reading the fields are simply empty.
   const [old] = subscriptions({ limits: LIMITS, accounts: ACCOUNTS, creds: CREDS, live: LIVE });
   assert.equal(old.readVia, '');
+});
+
+test('machines: trust and its source, 期望 / 实际 for a managed machine (claude-fleet#2214)', () => {
+  const ms = machineCards({ machines: [{ hostname: 'm4', status: 'online' }, { hostname: 'm5', status: 'online' }, { hostname: 'm6', status: 'online' }],
+    nodes: [
+      { hostname: 'm4', trust: 'trusted', trust_source: 'join_code', desired: { want: 3, reached: 2, diff: 'codex' } },
+      { hostname: 'm4', trust: 'trusted', trust_source: 'machine_name' },
+      { hostname: 'm5', trust: 'untrusted', trust_source: 'name_borrowed' },
+      { hostname: 'm6' },
+    ] });
+  const by = Object.fromEntries(ms.map((m) => [m.name, m]));
+  assert.deepEqual([by.m4.trust, by.m4.trustSource, by.m4.desired.want, by.m4.desired.reached], ['trusted', 'join_code', 3, 2]);
+  assert.deepEqual([by.m5.trust, by.m5.trustSource, by.m5.desired], ['untrusted', 'name_borrowed', null]);
+  assert.deepEqual([by.m6.trust, by.m6.desired], ['', null]);
 });

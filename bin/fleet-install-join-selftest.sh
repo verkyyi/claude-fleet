@@ -224,8 +224,9 @@ CONF="$H1/.config/claude-fleet"
 ROOT="$H1/.claude/fleet"   # the one fleet directory (#1804)
 ENVF="$CONF/node.env"
 [ "$(cat "$WORK/rc")" = 0 ] && ok "A install exit 0" || bad "A install rc=$(cat "$WORK/rc"): $(cat "$WORK/out")"
-if [ "$(hubstate starts)" = 0 ] && [ ! -e "$ENVF" ] && grep -q '入口: 登录（fleet login，扫一次码）时自动登记' "$WORK/out"; then
-  ok "A the install scans nothing — the login will register it"
+# a fresh computer is the newcomer's path (issue #2347): 登录即登记 is not said
+if [ "$(hubstate starts)" = 0 ] && [ ! -e "$ENVF" ] && ! grep -Eq '^(入口|登记):' "$WORK/out"; then
+  ok "A the install scans nothing — the login will register it, unsaid on the newcomer's screen"
 else bad "A install: starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 fleet_in h1 login
 [ "$(cat "$WORK/rc")" = 0 ] && ok "A fleet login exit 0" || bad "A fleet login rc=$(cat "$WORK/rc"): $(cat "$WORK/out")"
@@ -239,7 +240,8 @@ if [ "$mode" = 600 ] && grep -qx 'CCQUOTA_TOKEN=ccq_nodepass0123456789abcdefXYZ'
   ok "A node.env (0600): the pass, COMPUTE=0, PERSONAL=1, no admin"
 else bad "A node.env mode=$mode: $(sed 's/TOKEN=.*/TOKEN=…/' "$ENVF" 2>/dev/null)"; fi
 [ "$(hubstate online)" = True ] && ok "A the agent checked in" || bad "A the agent never checked in: $(cat "$CONF/node-join.log" 2>/dev/null)"
-grep -q '随登录登记为节点（不可信 · 只协调' "$WORK/out" && ok "A the output says 随登录登记 · 不可信 · 只协调" || bad "A output: $(cat "$WORK/out")"
+# the newcomer's view (solo, issue #2347): registered, but no 只协调 on the screen
+grep -q '只协调' "$WORK/out" && bad "A 只协调 on the newcomer's screen: $(cat "$WORK/out")" || ok "A the output says no 只协调 to the newcomer"
 grep -q 'ccq_nodepass' "$WORK/out" "$CONF/node-join.log" && bad "A the token was printed" || ok "A the token is never printed"
 
 # ── B. ssh ──────────────────────────────────────────────────────────────────
@@ -294,8 +296,8 @@ else bad "D rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")";
 # output to a file and no FORCE: nobody could scan, so no join — one line instead
 FORCE='' install_in h3
 if [ "$(cat "$WORK/rc")" = 0 ] && [ "$(hubstate starts)" = 1 ] && [ ! -e "$WORK/h3/.config/claude-fleet/node.env" ] \
-   && grep -q '入口: 登录（fleet login，扫一次码）时自动登记' "$WORK/out"; then
-  ok "F no terminal: no scan, no wait, the login-registers line"
+   && ! grep -Eq '^(入口|登记):' "$WORK/out"; then
+  ok "F no terminal: no scan, no wait, nothing said on the newcomer's path"
 else bad "F rc=$(cat "$WORK/rc") starts=$(hubstate starts): $(cat "$WORK/out")"; fi
 
 # ── E. no node ──────────────────────────────────────────────────────────────

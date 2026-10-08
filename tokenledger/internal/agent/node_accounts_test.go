@@ -338,3 +338,56 @@ func TestAdminAgentCreatesExistingDigitLogin(t *testing.T) {
 		})
 	}
 }
+
+// A fleet-login-new.sh that separates the logins it opens (claude-fleet#2294):
+// the admin agent says CapCredsep in its hello, and a create that ends with
+// `credsep: separated` carries AccountResult.Credsep "separated"; one that ends
+// otherwise (pending / off) carries nothing. A script from before #2294 — no
+// such words — earns neither (TestAdminAgentRunsFixedCreateArgv's fake).
+func TestAdminAgentSaysCredsep(t *testing.T) {
+	for _, tc := range []struct{ last, want string }{
+		{"credsep: separated", control.CredsepSeparated},
+		{"credsep: pending — proxy not running", ""},
+		{"credsep: off (--no-credsep)", ""},
+	} {
+		shrinkBackoff(t)
+		hub := newAccountHub(t, control.AccountOp{Op: control.AccountCreate, Login: "alice", FullName: "Alice Wang"})
+		a := adminAgent(t, hub.srv.URL, true)
+		fakeLoginScripts(t, a.cfg.Home, "0")
+		body := "#!/bin/sh\n# --no-credsep … credsep: separated\necho step 7b\necho '" + tc.last + "'\n"
+		if err := os.WriteFile(filepath.Join(a.cfg.Home, loginNewScript), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runAgentUntil(t, a, 5*time.Second, func() bool { r, _, _ := hub.snapshot(); return len(r) > 0 })
+		results, _, _ := hub.snapshot()
+		if len(results) != 1 {
+			t.Fatalf("%q: results=%v", tc.last, results)
+		}
+		var res control.AccountResult
+		json.Unmarshal(results[0].Payload, &res)
+		if !res.OK || res.Credsep != tc.want {
+			t.Fatalf("%q: result = %+v, want credsep %q", tc.last, res, tc.want)
+		}
+		hub.mu.Lock()
+		caps := strings.Join(hub.hellos[0].Capabilities, ",")
+		hub.mu.Unlock()
+		if !strings.Contains(","+caps+",", ","+control.CapCredsep+",") {
+			t.Fatalf("hello capabilities %s lack %s", caps, control.CapCredsep)
+		}
+	}
+}
+
+// No separating script (or not the admin agent): no CapCredsep in the hello.
+func TestCredsepCapableNeedsTheScript(t *testing.T) {
+	home := t.TempDir()
+	if credsepCapable(home) {
+		t.Fatal("no script, yet credsep capable")
+	}
+	fakeLoginScripts(t, home, "0")
+	if credsepCapable(home) {
+		t.Fatal("a script from before #2294 counted as separating")
+	}
+	if credsepResult("x\ncredsep: separated\n\n") != control.CredsepSeparated || credsepResult("credsep: separated\nmore") != "" {
+		t.Fatal("credsepResult reads the wrong line")
+	}
+}

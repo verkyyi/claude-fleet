@@ -55,7 +55,8 @@
 #                    version's apply back; that version is skipped until stable
 #                    moves; the next stable move is followed
 #   G. baseline      a FAIL the login already had is NOT a rollback
-#   H. off           FLEET_INSTALL_SYNC=0 → no fetch, no move, state says off
+#   H. off           FLEET_INSTALL_SYNC=0 → no fetch, no move, state says off;
+#                    H2: a login the machine daemon manages (#2334) → off too
 #   I. not seen      a failed fetch is fetch-failed (not refused); no tag = none
 #   J. dry-run       prints the move, changes nothing, writes no state
 #   N. lock          a live lock skips the tick (the skip names its pid); a dead
@@ -447,6 +448,17 @@ contains "H: says how to switch on" "$(st reason)" "FLEET_INSTALL_SYNC=0"
 eq "H: no fetch (local tag untouched)" "$C6" "$(git -C "$CO" rev-parse refs/tags/stable)"
 eq "H: HEAD untouched" "$C6" "$(hd)"; eq "H: nothing ran" 0 "$(applies)"
 contains "H: log line" "$(lastlog)" " off "
+# H2 (issue #2334): a login the machine daemon manages is the machine updater's —
+# no fetch, no move; a machine that manages someone else changes nothing here.
+mkdir -p "$WORK/node"; printf '{"%s": {"managed": true}}\n' "$(id -un)" > "$WORK/node/accounts.json"
+: > "$LOG"; OUT=$(FLEET_NODE_STATE="$WORK/node" bash "$IS" --root "$CO" 2>&1); RC=$?
+eq "H2: exits 0" 0 "$RC"; eq "H2: result off" off "$(st result)"
+contains "H2: says the machine updater has it" "$(st reason)" "managed — the machine updater"
+eq "H2: no fetch (local tag untouched)" "$C6" "$(git -C "$CO" rev-parse refs/tags/stable)"
+eq "H2: HEAD untouched" "$C6" "$(hd)"; eq "H2: nothing ran" 0 "$(applies)"
+printf '{"someone-else": {"managed": true}}\n' > "$WORK/node/accounts.json"
+OUT=$(FLEET_NODE_STATE="$WORK/node" FLEET_INSTALL_SYNC=0 bash "$IS" --root "$CO" 2>&1)
+contains "H2: another login managed is not this one" "$(st reason)" "FLEET_INSTALL_SYNC=0"
 
 # --- I. not seen ---------------------------------------------------------------------------------------
 url=$(git -C "$CO" remote get-url origin)

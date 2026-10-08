@@ -10,7 +10,6 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
@@ -152,14 +150,26 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 
 	dctx, dcancel := context.WithTimeout(ctx, nodeDialTimeout)
 	defer dcancel()
-	conn, _, err := websocket.Dial(dctx, nodeURL(a.cfg.HubURL), &websocket.DialOptions{
-		HTTPHeader: http.Header{"Authorization": []string{"Bearer " + a.cfg.Token}},
-	})
-	if err != nil {
-		return false, err
+	var conn nodeLink
+	if a.machine != nil {
+		// A tenant of the machine's one node program (claude-fleet#2333):
+		// this login's lane on the machine link, not a link of its own.
+		l, err := a.machine.lane(dctx, a.cfg.RunAs.Login)
+		if err != nil {
+			return false, err
+		}
+		conn = l
+	} else {
+		c, _, err := websocket.Dial(dctx, nodeURL(a.cfg.HubURL), &websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": []string{"Bearer " + a.cfg.Token}},
+		})
+		if err != nil {
+			return false, err
+		}
+		c.SetReadLimit(1 << 20)
+		conn = wsLink{c}
 	}
-	defer conn.CloseNow()
-	conn.SetReadLimit(1 << 20)
+	defer conn.closeNow()
 
 	caps := []string{control.CapRead, control.CapWrite}
 	// Relays (claude-fleet#1421) only when this login's claude-fleet knows
@@ -184,6 +194,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.relaysOAuthRefresh() {
 		caps = append(caps, control.CapOAuthRefresh)
 	}
+	if a.cfg.FleetAdmin && credsepCapable(a.cfg.Home) {
+		// Every login this node's create op opens is separated (claude-fleet#2294).
+		caps = append(caps, control.CapCredsep)
+	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: a.cfg.Version,
@@ -193,15 +207,16 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		ComputeForce: a.computeForce(),
 		Probe:        a.nodeProbe(),
 		Personal:     a.personalNow(),
+		LoginToken:   a.loginToken(),
 	})
 	if err != nil {
 		return false, err
 	}
-	if err := wsjson.Write(dctx, conn, hello); err != nil {
+	if err := conn.write(dctx, hello); err != nil {
 		return false, err
 	}
-	var reply control.Message
-	if err := wsjson.Read(dctx, conn, &reply); err != nil {
+	reply, err := conn.read(dctx)
+	if err != nil {
 		return false, err
 	}
 	switch reply.Type {
@@ -234,8 +249,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	readErr := make(chan error, 1)
 	go func() {
 		for {
-			var m control.Message
-			if err := wsjson.Read(ctx, conn, &m); err != nil {
+			m, err := conn.read(ctx)
+			if err != nil {
 				readErr <- err
 				return
 			}
@@ -291,7 +306,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	a.acct.attach(func(m control.Message) error {
 		wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
 		defer cancel()
-		return wsjson.Write(wctx, conn, m)
+		return conn.write(wctx, m)
 	})
 	defer a.acct.detach()
 
@@ -308,10 +323,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		}
 		wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
 		defer cancel()
-		if err := wsjson.Write(wctx, conn, m); err != nil {
+		if err := conn.write(wctx, m); err != nil {
 			return err
 		}
-		return conn.Ping(wctx)
+		return conn.ping(wctx)
 	}
 
 	// The first beat goes out at once: the roster should show a node the
@@ -330,7 +345,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	for {
 		select {
 		case <-ctx.Done():
-			conn.Close(websocket.StatusGoingAway, "agent stopping")
+			conn.close("agent stopping")
 			return true, nil
 		case err := <-readErr:
 			return true, err
@@ -365,9 +380,7 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 		AgentVersion: a.cfg.Version, ObservedAt: time.Now().UTC(),
 	}
 	hb.Hostname, _ = os.Hostname()
-	if u, err := user.Current(); err == nil {
-		hb.OSUser = u.Username
-	}
+	hb.OSUser = a.osLogin()
 	si := readSysInfo()
 	hb.Load1, hb.MemFreeBytes, hb.MemTotalBytes = si.Load1, si.MemFree, si.MemTotal
 	hb.MemPressure = si.MemPressure
@@ -397,6 +410,7 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	}
 	hb.Ready, hb.NotReady = probe.ready.reading(ctx, a.cfg.Home, time.Now())
 	hb.Routes = a.nodeRoutes(ctx)
+	hb.Credsep = probe.credsep.reading(ctx, a.cfg.Home, time.Now())
 	// Explicit either way in a beat (claude-fleet#1720): a true tells the hub
 	// that `fleet node compute on` overrode a hello that said off.
 	on := !a.computeOffNow()
@@ -495,6 +509,9 @@ var fleetControlCommand = func(ctx context.Context, script string, stdin []byte)
 	cmd.Stdin = bytes.NewReader(stdin)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
+	if err := prepCmd(ctx, cmd); err != nil {
+		return nil, err
+	}
 	err := cmd.Run()
 	// fleet-control.py prints a JSON error object and exits 1 on a refusal;
 	// the caller reads stdout either way.
@@ -619,7 +636,7 @@ const writeTimeout = 20 * time.Second
 // anything else is refused here, whatever the hub asked. The node fills in
 // its OWN machine_id — fleet-control.py checks it, so a request can never
 // address another login's controller.
-func (a *Agent) answerRequest(ctx context.Context, conn *websocket.Conn, m control.Message) {
+func (a *Agent) answerRequest(ctx context.Context, conn nodeLink, m control.Message) {
 	a.answerControl(ctx, conn, m, false)
 }
 
@@ -634,16 +651,16 @@ func (a *Agent) answerRequest(ctx context.Context, conn *websocket.Conn, m contr
 // journalled here. Anything else after it started — a crash, a timeout, output
 // that is not JSON — may have come after the controller committed the
 // operation, so it goes back as UNKNOWN_OUTCOME and the hub never re-sends it.
-func (a *Agent) answerWrite(ctx context.Context, conn *websocket.Conn, m control.Message) {
+func (a *Agent) answerWrite(ctx context.Context, conn nodeLink, m control.Message) {
 	a.answerControl(ctx, conn, m, true)
 }
 
-func (a *Agent) answerControl(ctx context.Context, conn *websocket.Conn, m control.Message, write bool) {
+func (a *Agent) answerControl(ctx context.Context, conn nodeLink, m control.Message, write bool) {
 	reply := func(msg control.Message) {
 		msg.OpID = m.OpID
 		wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
 		defer cancel()
-		_ = wsjson.Write(wctx, conn, msg)
+		_ = conn.write(wctx, msg)
 	}
 	// Every write the hub sends leaves one line in this agent's log, taken
 	// or refused (claude-fleet#1606): a start the hub says it sent and this

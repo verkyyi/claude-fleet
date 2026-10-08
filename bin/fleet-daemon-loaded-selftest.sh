@@ -35,13 +35,13 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 rc_is() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected rc $2, got rc $3"; }
 eq()    { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected '$2', got '$3'"; }
 # the probe, in a sandbox: this login is `guest`, its plist dirs are ours
-probe() { PATH="$SHIM:$PATH" FLEET_INSTALL_LOGIN=guest FLEET_LAUNCHD_AGENTS_DIR="$AG" FLEET_INSTALL_DAEMON_DIR="$LD" \
+probe() { PATH="$SHIM:$PATH" FLEET_NODE_STATE="$WORK/node" FLEET_INSTALL_LOGIN=guest FLEET_LAUNCHD_AGENTS_DIR="$AG" FLEET_INSTALL_DAEMON_DIR="$LD" \
           sh "$P" "$@"; printf '%s' $?; }
 
 mkshim() { printf '#!/bin/sh\n%s\n' "$2" > "$SHIM/$1"; chmod +x "$SHIM/$1"; }
 
 # ---- the lib's shape rule (issue #1495) — what the probe and the installer share ----
-lib() { ( export FLEET_INSTALL_LOGIN=guest FLEET_LAUNCHD_AGENTS_DIR="$AG" FLEET_INSTALL_DAEMON_DIR="$LD"
+lib() { ( export FLEET_NODE_STATE="$WORK/node" FLEET_INSTALL_LOGIN=guest FLEET_LAUNCHD_AGENTS_DIR="$AG" FLEET_INSTALL_DAEMON_DIR="$LD"
           . "$L" && "$@" ); }
 eq "lib: neither dir has a plist → gui"   gui    "$(lib fleet_daemon_shape)"
 : > "$LD/com.claude-fleet.guest.cleanup.plist"
@@ -139,6 +139,25 @@ rm -f "$SHIM/systemctl"
 # the stripped PATH can't break the run itself.
 rc_is "no init system → 2 (unknown, not a guess)" 2 \
       "$(PATH="$SHIM" /bin/sh "$P" com.claude-fleet.ledger-watch; printf '%s' $?)"
+
+# ---- a login the machine daemon manages (issue #2332) -----------------------
+# accounts.json names it: an account unit is "installed" while com.claude-fleet.node
+# is up (status --check), missing while it is down; memguard is the node row's.
+mkshim uname 'echo Darwin'
+mkshim launchctl 'exit 1'
+mkshim sudo 'exit 1'
+rc_is "not managed, nothing loaded → 1"            1 "$(probe com.claude-fleet.cleanup)"
+eq    "lib: no accounts.json → not managed"        1 "$(lib fleet_node_manages; printf '%s' $?)"
+mkdir -p "$WORK/node"
+printf '{"guest": {"managed": true}, "other": {"managed": false}}\n' > "$WORK/node/accounts.json"
+eq    "lib: guest managed"                         0 "$(lib fleet_node_manages; printf '%s' $?)"
+eq    "lib: a released login is not"               1 "$(lib fleet_node_manages other; printf '%s' $?)"
+printf '{"supervisor": {"pid": %s, "heartbeat": %s}}\n' "$$" "$(date +%s)" > "$WORK/node/state.json"
+rc_is "managed, the daemon up → 0"                 0 "$(probe com.claude-fleet.cleanup)"
+rc_is "managed: memguard is not an account unit"   1 "$(probe com.claude-fleet.memguard)"
+printf '{"supervisor": {"pid": 999999, "heartbeat": 1}}\n' > "$WORK/node/state.json"
+rc_is "managed, the daemon down → 1"               1 "$(probe com.claude-fleet.cleanup)"
+rm -rf "$WORK/node" "$SHIM/launchctl" "$SHIM/sudo"
 
 # ---- argument guard ---------------------------------------------------------
 mkshim uname 'echo Darwin'

@@ -85,9 +85,14 @@ class Control:
             env["FLEET_TIMING_READY_SECS"] = os.environ["FLEET_TIMING_READY_SECS"]
         return env
 
-    def adapter(self, mode, *args, timeout=20, payload=None):
+    def adapter(self, mode, *args, timeout=20, payload=None, op_id=None):
+        env = self.environment()
+        if op_id:
+            # The operation a start belongs to (issue #2235): its detached
+            # paperwork (fleet-start-backfill.sh) stamps t_filed / t_bound on it.
+            env["FLEET_CONTROL_OP"] = op_id
         return run(["bash", str(self.bin / "fleet-control-read.sh"), mode, *args],
-                   payload=payload, env=self.environment(), timeout=timeout)
+                   payload=payload, env=env, timeout=timeout)
 
     def inventory(self):
         code, output, _ = self.adapter("inventory")
@@ -349,16 +354,18 @@ class Control:
 
     def stamp_timing(self, op_id, **points):
         """Merge timing points (epoch ms) into a finished operation's result
-        (issue #2238) — its status and every other field untouched."""
+        (issue #2238) — its status and every other field untouched. False when
+        the operation is unknown or has no result yet (still running)."""
         with self.store.connect() as db:
             row = db.execute("SELECT result FROM operations WHERE id=?", (op_id,)).fetchone()
             if row is None or not row["result"]:
-                return
+                return False
             result = json.loads(row["result"])
             timing = result.get("timing") if isinstance(result.get("timing"), dict) else {}
             timing.update(points)
             result["timing"] = timing
             db.execute("UPDATE operations SET result=? WHERE id=?", (canonical(result), op_id))
+        return True
 
     def watch_ready(self, op_id, fleet, window, seeded):
         """After a start has finished: watch its window until the person can type
@@ -402,6 +409,12 @@ class Control:
             # By identity or key alike: a no-repo session (the pinned guide) has
             # no key at all, only its @fleet_id (issue #2102).
             return self.execute_switch(fleet, key, params.get("account", ""))
+        if action == "worker_rename":
+            # By identity or key alike, as a switch (issue #2358).
+            return self.execute_rename(fleet, key, params["name"])
+        if action == "worker_reap_policy":
+            # By identity or key alike, as a rename (issue #2368).
+            return self.execute_reap_policy(fleet, key, params["policy"])
         if is_identity(key):
             # An identity-form worker_id (issue #1646): the session it names, under
             # the key it answers to NOW — every adapter below speaks keys.
@@ -529,6 +542,46 @@ class Control:
                 "how": "dispatched: closes the session and resumes the same conversation on the new "
                        "subscription; the fleet's alerts report the outcome",
                 "observed_at": now()}
+
+    def execute_rename(self, fleet, key, new_name):
+        """worker_rename (issue #2358): the sidebar's 「改名…」 on a row here — the
+        window's display name only. The adapter renames the one window resolved
+        now and checks it still carries the worker's @fleet_id first, so a window
+        id tmux recycled meanwhile is never renamed; the key, the issue and the
+        reap policy are untouched (a window is told by @fleet_role / @fleet_id,
+        never its name)."""
+        matches, _ = self.target(fleet, key, "worker_rename")
+        window = matches[0].get("window_id", "")
+        code, output, err = self.adapter("rename", fleet["name"], window,
+                                         matches[0].get("identity") or "", new_name)
+        said = last_line(output if (output or b"").strip() else err)
+        if code == 2:
+            raise Unattempted("INVALID_ARGUMENT", "Rename refused on the fleet: " + said)
+        if code:
+            raise Unattempted("INVALID_STATE", "Rename refused on the fleet: " + said)
+        return {"renamed": matches[0], "name": new_name, "window": window,
+                "how": "renamed", "observed_at": now()}
+
+    def execute_reap_policy(self, fleet, key, policy):
+        """worker_reap_policy (issue #2368): the sidebar's 「改回收方式…」 on a row
+        here — `@reap_policy`, written by fleet-reap-policy.sh set, the one setter
+        the session's own `set_reap` tool runs too. As a rename, the adapter
+        first checks the window resolved now still carries the worker's
+        @fleet_id, so a window id tmux recycled meanwhile is never stamped."""
+        matches, _ = self.target(fleet, key, "worker_reap_policy")
+        window = matches[0].get("window_id", "")
+        code, output, err = self.adapter("reappol", fleet["name"], window,
+                                         matches[0].get("identity") or "", policy)
+        said = last_line(output if (output or b"").strip() else err)
+        if code == 2:
+            raise Unattempted("INVALID_ARGUMENT", "Reap policy refused on the fleet: " + said)
+        if code:
+            raise Unattempted("INVALID_STATE", "Reap policy refused on the fleet: " + said)
+        # `reap_policy=<canonical> · <label>` — the canonical spelling (an `at:`
+        # resolved to its ISO moment) is what the window now holds
+        canon = said.split(" ", 1)[0].partition("=")[2] if said.startswith("reap_policy=") else policy
+        return {"stamped": matches[0], "policy": canon, "window": window,
+                "how": said or "stamped", "observed_at": now()}
 
     def execute_reap(self, fleet, key):
         """worker_reap (issue #1487): dash-reap.sh --yes on the one live window
@@ -663,7 +716,7 @@ class Control:
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params["title"].strip(),
                                                      *reap_arg, payload=params.get("body", "").encode("utf-8"),
-                                                     timeout=240)
+                                                     timeout=240, op_id=op_id)
                     first = output.decode("utf-8", "replace").split("\n", 1)[0].strip()
                     if not code and first.startswith("warm\t"):
                         # 发出即开 (issue #2234, EPIC #2230 C4): answered from the warm
@@ -699,9 +752,17 @@ class Control:
                 lines = output.decode("utf-8", "replace").split("\n")
                 receipt = (lines[0] if scratch or warm else ([l for l in lines if l.strip()] or [""])[-1]).split("\t")
                 window = receipt[0].strip()
+                # Its 4th field is the window's @fleet_id (issue #1873): identity
+                # first (issue #2339) — a no-repo session (`fleet claude`) has no
+                # @raw and no key, so the `scratch` test never matched one and every
+                # HOME start came back UNKNOWN with its window left open.
+                fid = receipt[3].strip() if len(receipt) > 3 else ""
+                fid = fid if is_identity(fid) else ""
 
                 def started(snapshot):
                     if scratch or warm:
+                        if fid:
+                            return [w for w in snapshot["workers"] if w.get("identity") == fid]
                         # The receipt names the window: that row, and only that row.
                         return [w for w in snapshot["workers"] if window and w["window_id"] == window and w["scratch"]]
                     # Match the spawned repo too (issue #1018): another repo's issue-N
@@ -713,10 +774,22 @@ class Control:
                 if not matches and re.fullmatch(r"@[0-9]+", window):
                     snapshot = self.workers(fleet)
                     matches = started(snapshot)
+                if not matches and fid:
+                    # Opened, but not the session it should be: never leave it as an
+                    # orphan nobody was told about (issue #2339) — the stop by its
+                    # identity, the one address a no-repo session has. Still unknown:
+                    # what the window holds is not this start's to vouch for.
+                    stop, _, _ = self.adapter("stop", fleet["name"], "fid:" + fid, timeout=120)
+                    raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible; "
+                                + ("its window was closed" if not stop else "closing its window failed (fid:%s)" % fid))
                 if not matches:
                     raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible")
                 result = {"workers": matches, "observed_at": snapshot["observed_at"],
                           "exit": 0, "window": matches[0].get("window_id", ""),
+                          # Where the client switches at once (issue #2236): every
+                          # start, not only a warm one; a no-repo session has no key.
+                          "window_id": matches[0].get("window_id", ""),
+                          **({"key": matches[0]["key"]} if matches[0].get("key") else {}),
                           # This machine's half of the send's clock (issue #2238,
                           # EPIC #2230 共同约定 3): epoch ms, the names fixed there.
                           "timing": {"t_accepted": ms(row["created"]), "t_window": ms(now())}}
@@ -730,8 +803,6 @@ class Control:
                 warmed = {k: int(v) for k, v in stamps.items() if v.isdigit()}
                 if warmed:
                     result["timing"].update(warmed)
-                    result["window_id"] = result["window"]
-                    result["key"] = matches[0].get("key", "")
                     if warm:
                         result["filed"] = "pending"
             elif req["action"] == "worker_move_in":
@@ -804,6 +875,10 @@ class Control:
         raise Fault("INVALID_ARGUMENT", "Unsupported control method")
 
 
+# The points a start's paperwork stamps after its operation finished (issue #2235).
+STAMP_POINTS = ("t_filed", "t_bound")
+
+
 def ms(seconds):
     """Epoch seconds → the integer epoch milliseconds a timing point is (issue #2238)."""
     return int(round(seconds * 1000))
@@ -832,8 +907,11 @@ def refusal_line(err):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--conf-dir")
-    parser.add_argument("command", choices=("rpc", "execute"))
+    parser.add_argument("command", choices=("rpc", "execute", "stamp"))
     parser.add_argument("operation_id", nargs="?")
+    # stamp (issue #2235): `<name>=<epoch ms>` points a start's detached paperwork
+    # adds to its finished operation — only the names 共同约定 3 fixed.
+    parser.add_argument("points", nargs="*")
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
@@ -841,6 +919,17 @@ def main(argv=None):
         if args.command == "execute":
             controller.execute(args.operation_id)
             return 0
+        if args.command == "stamp":
+            points = {}
+            for word in args.points:
+                key, _, value = word.partition("=")
+                if key not in STAMP_POINTS or not value.isdigit():
+                    raise Fault("INVALID_ARGUMENT", "Expected t_filed=<ms> / t_bound=<ms>")
+                points[key] = int(value)
+            if not points:
+                raise Fault("INVALID_ARGUMENT", "Nothing to stamp")
+            # 1 = no such operation, or its result is not written yet: try again.
+            return 0 if controller.stamp_timing(identifier(args.operation_id or ""), **points) else 1
         result = controller.dispatch(read_request(sys.stdin.buffer))
         print(canonical({"protocol": PROTOCOL, "machine_id": controller.machine_id, "result": result}))
     except Fault as exc:

@@ -46,7 +46,9 @@ type nodeConns struct {
 }
 
 type nodeConn struct {
-	conn *websocket.Conn
+	// wire is the endpoint's half of its control channel: the websocket, or
+	// one login's lane on its machine's link (claude-fleet#2333).
+	wire nodeWire
 	// proto is re-read on every heartbeat by the reader and checked by
 	// SendNodeWrite from other goroutines.
 	proto atomic.Int64
@@ -90,6 +92,9 @@ type nodeConn struct {
 	probe        *control.NodeProbe
 	// personal is the hello's Personal (claude-fleet#1721).
 	personal bool
+	// machineLink: this endpoint is a machine's own node program, the link
+	// that carries its logins (CapMachine, claude-fleet#2333).
+	machineLink bool
 	// beatSaidOn: a heartbeat on this link said compute=true — `fleet node
 	// compute on` overrode the hello's off without a reconnect (#1720).
 	beatSaidOn atomic.Bool
@@ -123,7 +128,7 @@ func (n *nodeConns) put(id string, c *nodeConn) {
 		// The same endpoint reconnected before the hub noticed the old link
 		// die. The newer one is the truth; the old one is closed so its
 		// reader stops and cannot remove the new entry on its way out.
-		old.conn.Close(websocket.StatusPolicyViolation, "superseded by a newer connection")
+		old.wire.close(websocket.StatusPolicyViolation, "superseded by a newer connection")
 	}
 	n.conns[id] = c
 }
@@ -143,7 +148,7 @@ func (n *nodeConns) dropAll(id string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if c := n.conns[id]; c != nil {
-		c.conn.Close(websocket.StatusGoingAway, "node released")
+		c.wire.close(websocket.StatusGoingAway, "node released")
 		delete(n.conns, id)
 	}
 }
@@ -228,7 +233,7 @@ func (s *Server) SendNodeWrite(ctx context.Context, endpointID string, msg contr
 	if msg.Proto == 0 {
 		msg.Proto = control.Proto
 	}
-	return wsjson.Write(ctx, c.conn, msg)
+	return c.wire.write(ctx, msg)
 }
 
 // handleNodeConnect accepts one node's control channel.
@@ -264,25 +269,56 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if hello.Type != control.TypeHello {
-		refuse(ctx, conn, hello.OpID, control.CodeBadMessage, "the first message must be a hello")
+		refuse(ctx, wsWire{conn}, hello.OpID, control.CodeBadMessage, "the first message must be a hello")
 		return
 	}
 	var hp control.Hello
 	if len(hello.Payload) > 0 {
 		if err := json.Unmarshal(hello.Payload, &hp); err != nil {
-			refuse(ctx, conn, hello.OpID, control.CodeBadMessage, "malformed hello")
+			refuse(ctx, wsWire{conn}, hello.OpID, control.CodeBadMessage, "malformed hello")
 			return
 		}
 	}
 	if hp.HeartbeatMS <= 0 {
 		hp.HeartbeatMS = defaultHeartbeatMS
 	}
+	if hp.HasCap(control.CapMachine) {
+		// One link for every login of the machine (claude-fleet#2333).
+		s.serveMachine(ctx, conn, ep, tokHash, hello, hp)
+		return
+	}
+	if cur := s.nodes.get(ep.ID); cur != nil && cur.wire.machine() != "" {
+		// The login is already served by its machine's link: an old
+		// per-login agent left running must not take it back and forth.
+		refuse(ctx, wsWire{conn}, hello.OpID, control.CodeRefused,
+			"this login is served by its machine's node program (ccquota agent --machine)")
+		return
+	}
+	s.serveNode(ctx, wsWire{conn}, ep, tokHash, hello, hp)
+}
 
+// serveNode runs one endpoint's session after its hello: on a plain link the
+// whole websocket, on a machine link one login's lane (claude-fleet#2333).
+func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoint, tokHash string,
+	hello control.Message, hp control.Hello) {
 	if err := s.Store.NodeConnected(ep.ID, ep.Hostname, ep.OSUser, hp.AgentVersion,
 		hello.Proto, hp.HeartbeatMS, time.Now()); err != nil {
 		log.Printf("node %s: record hello: %v", ep.ID, err)
-		conn.Close(websocket.StatusInternalError, "hub could not record the node")
+		wire.close(websocket.StatusInternalError, "hub could not record the node")
 		return
+	}
+	// A borrowed machine name is said out loud (claude-fleet#2214): the node
+	// reports a trusted machine's name it did not join as — it gets no trust,
+	// and the audit carries one row per connection.
+	// The raw settings, never trustSettings: a hello must not run the trust
+	// migration before the machine's accounts exist.
+	if set, err := s.Store.FleetSettings(); err == nil {
+		if et, err := s.Store.EndpointTrustOf(ep.ID); err == nil {
+			if _, src := nodeTrust(ep.Hostname, et, set); src == TrustSourceNameBorrowed {
+				s.leaseAudit("node:"+ep.ID, "node_trust", "machine:"+trustKey(ep.Hostname)[len(NodeTrustPrefix):],
+					"BORROWED NAME — joined as "+et.EnrolledHost+", reports "+ep.Hostname+": untrusted", time.Now())
+			}
+		}
 	}
 	// A machine joining as a mapped login AFTER its person signed in: adopt
 	// it now rather than at their next sign-in (claude-fleet#1458).
@@ -301,19 +337,19 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	reply, _ := control.New(control.TypeWelcome, welcome)
 	reply.OpID = hello.OpID
 	wctx, cancel := context.WithTimeout(ctx, helloTimeout)
-	err = wsjson.Write(wctx, conn, reply)
+	err := wire.write(wctx, reply)
 	cancel()
 	if err != nil {
 		return
 	}
 
-	nc := &nodeConn{conn: conn, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
+	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
 		canTeam:    hp.HasCap(control.CapTeam),
 		canCredsep: hp.HasCap(control.CapCredsep),
 		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
-		personal: hp.Personal}
+		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine)}
 	// The refresh relay is an ADMIN role: a node that offers it without
 	// being on the hub's admin list is never handed a refresh token's form.
 	nc.canOAuthRefresh = nc.admin && hp.HasCap(control.CapOAuthRefresh)
@@ -369,8 +405,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 	first := true
 	for {
 		rctx, cancel := context.WithTimeout(ctx, idle)
-		var m control.Message
-		err := wsjson.Read(rctx, conn, &m)
+		m, err := wire.read(rctx)
 		cancel()
 		if err != nil {
 			return
@@ -381,14 +416,14 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		if !s.nodeTokenLive(tokHash) {
 			log.Printf("node %s: enrollment revoked; closing its link", ep.ID)
 			s.revokeNodeRest(ep, time.Now(), false)
-			conn.Close(websocket.StatusPolicyViolation, "unrecognised enrollment token")
+			wire.close(websocket.StatusPolicyViolation, "unrecognised enrollment token")
 			return
 		}
 		switch m.Type {
 		case control.TypeHeartbeat:
 			var hb control.Heartbeat
 			if err := json.Unmarshal(m.Payload, &hb); err != nil {
-				refuse(ctx, conn, m.OpID, control.CodeBadMessage, "malformed heartbeat")
+				refuse(ctx, wire, m.OpID, control.CodeBadMessage, "malformed heartbeat")
 				continue
 			}
 			if hb.Hostname == "" {
@@ -448,7 +483,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 				}()
 			}
 		case control.TypeAccountResult:
-			s.applyAccountResult(ctx, conn, ep.ID, nc, m)
+			s.applyAccountResult(ctx, wire, ep.ID, nc, m)
 		case control.TypeResult:
 			// A reply to a hub read (claude-fleet#1409) or write
 			// (claude-fleet#1410).
@@ -472,26 +507,26 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 			// A node handing over a relay for another machine
 			// (claude-fleet#1421).
 			if !nc.canRelay {
-				refuse(ctx, conn, m.OpID, control.CodeRefused, "relays need the relay capability in the hello")
+				refuse(ctx, wire, m.OpID, control.CodeRefused, "relays need the relay capability in the hello")
 				break
 			}
-			s.acceptRelay(ctx, conn, *ep, tokHash, m)
+			s.acceptRelay(ctx, wire, *ep, tokHash, m)
 		case control.TypeRelayResult:
 			s.relayResult(ep.ID, m)
 		case control.TypeAck:
 			// Replies to hub writes. Nothing sends one yet (C3 will).
 		default:
-			refuse(ctx, conn, m.OpID, control.CodeBadMessage, "unknown message type "+m.Type)
+			refuse(ctx, wire, m.OpID, control.CodeBadMessage, "unknown message type "+m.Type)
 		}
 	}
 }
 
-func refuse(ctx context.Context, conn *websocket.Conn, opID, code, msg string) {
+func refuse(ctx context.Context, wire nodeWire, opID, code, msg string) {
 	m := control.Message{Type: control.TypeError, OpID: opID, Proto: control.Proto,
 		Error: &control.Error{Code: code, Message: msg}}
 	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_ = wsjson.Write(wctx, conn, m)
+	_ = wire.write(wctx, m)
 }
 
 // NodeView is one node as the roster API presents it.
@@ -510,6 +545,12 @@ type NodeView struct {
 	AgentVersion  string     `json:"agent_version,omitempty"`
 	// Admin is a connected node the hub will send account ops to.
 	Admin bool `json:"admin,omitempty"`
+	// MachineLink is a machine's own node program (claude-fleet#2333): the
+	// one link that carries its logins — not a login itself. Via, on a login,
+	// is the machine link's endpoint that carries it right now; absent on a
+	// login with its own link (or none).
+	MachineLink bool   `json:"machine_link,omitempty"`
+	Via         string `json:"via,omitempty"`
 	// SSHCA is an admin node's last answer to the SSH user CA install
 	// (claude-fleet#1412): sent | trusted… | failed….
 	SSHCA string `json:"ssh_ca,omitempty"`
@@ -563,6 +604,31 @@ type NodeView struct {
 	// trusted | untrusted — only a trusted one leases credentials, and the
 	// node's own proxy reads it off /v1/node/self to pick its road.
 	Trust string `json:"trust,omitempty"`
+	// TrustSource is where Trust came from (claude-fleet#2214): join_code |
+	// operator (the endpoint's own) · machine_name (the old name rule,
+	// compat-1v) · name_borrowed (a trusted name this node did not join as).
+	TrustSource string `json:"trust_source,omitempty"`
+	// Role is managed for a 托管 machine (EPIC #2329).
+	Role string `json:"role,omitempty"`
+	// Desired pairs the hub's desired-state version with the one the node
+	// reports it reached; absent when neither exists.
+	Desired *DesiredView `json:"desired,omitempty"`
+	// Credsep is the login's own credential-separation word from its newest
+	// heartbeat (claude-fleet#2295): separated | not | unknown, absent from
+	// an older agent. CredsepGate is set only in /v1/node/self's answer:
+	// "not_separated" when the hub leases this login no token, so its proxy
+	// routes every session central.
+	Credsep     string `json:"credsep,omitempty"`
+	CredsepGate string `json:"credsep_gate,omitempty"`
+}
+
+// DesiredView is one node's 期望 / 实际 pair on the roster.
+type DesiredView struct {
+	Want        int    `json:"want"`
+	Reached     int    `json:"reached"`
+	Release     string `json:"release,omitempty"`
+	WantRelease string `json:"want_release,omitempty"`
+	Diff        string `json:"diff,omitempty"`
 }
 
 // NodeFleetSummary is one fleet on a node, without its window list (C2 owns
@@ -587,6 +653,10 @@ type MachineView struct {
 	Status string `json:"status"` // online if any login is; maintenance when flagged
 	Online int    `json:"logins_online"`
 	Logins int    `json:"logins"`
+	// Links is how many control connections the machine holds open
+	// (claude-fleet#2333): one for a machine served by its machine link, one
+	// per login for logins that still dial their own.
+	Links int `json:"links"`
 	// Sessions is nil when a heard login's count is unknown
 	// (claude-fleet#1465); SessionsUnknown names those fleets as
 	// "<login>/<fleet>: <why>".
@@ -671,6 +741,8 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	// on a hub that never started a SPOT node, and the reads are one query
 	// each.
 	kinds, _ := s.Store.EphemeralEndpoints()
+	// Each endpoint's own trust (claude-fleet#2214): one read for the roster.
+	epTrust, _, _ := s.Store.EndpointTrusts()
 	spotState := map[string]string{}
 	if spots, err := s.Store.SpotNodes(false, 0); err == nil {
 		for _, sp := range spots {
@@ -700,7 +772,12 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			v.Kind = k
 		}
 		v.Spot = spotState[n.EndpointID]
-		v.Trust = trustOf(n.Hostname, settings)
+		et, known := epTrust[n.EndpointID]
+		if !known {
+			et, _ = s.Store.EndpointTrustOf(n.EndpointID)
+		}
+		v.Trust, v.TrustSource = nodeTrust(n.Hostname, et, settings)
+		v.Role = et.Role
 		if m, flagged := maintenanceOf(n.Hostname, settings); flagged {
 			v.Maintenance = &m
 			if v.Status == "online" {
@@ -715,8 +792,13 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			v.ComputeWhy = cv.Why
 		}
 		v.Personal = s.personalOf(n.EndpointID, hb)
+		v.Desired = s.desiredView(n.EndpointID, hb.Desired)
 		if c := s.nodes.get(n.EndpointID); c != nil {
 			v.Connected, v.Admin = true, c.admin
+			v.MachineLink, v.Via = c.machineLink, c.wire.machine()
+			if v.MachineLink {
+				v.Via = ""
+			}
 			if c.admin {
 				v.SSHCA = s.sshCAStatusOf(n.EndpointID)
 			}
@@ -733,6 +815,13 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			m = &MachineView{Hostname: v.Hostname, Alias: machineAlias(v.Hostname, aliases), Status: "lost", Kind: v.Kind, Sessions: &zero, Repos: []string{}}
 			machines[v.Hostname] = m
 			order = append(order, v.Hostname)
+		}
+		if v.Connected && v.Via == "" {
+			m.Links++
+		}
+		if v.MachineLink {
+			// The link, not a login: it carries the logins below it.
+			continue
 		}
 		m.Logins++
 		m.Personal = m.Personal || v.Personal
@@ -810,6 +899,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.MaxSessions, v.CapSessions = hb.MaxSessions, hb.CapSessions
 		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
+		v.Credsep = hb.Credsep
 		for _, f := range hb.Fleets {
 			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count, Error: f.Error})
 		}

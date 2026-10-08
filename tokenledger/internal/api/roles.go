@@ -48,6 +48,7 @@ var routeAccess = map[string]string{
 	"/healthz": accessPublic, "/version": accessPublic,
 	"/readyz": accessPublic, "/v1/deploy-probe": accessPublic,
 	"/install": accessPublic, "/install/": accessPublic,
+	"/v1/fleet/release/": accessPublic, // signed node releases (claude-fleet#2335)
 	// The public counter (claude-fleet#1988); the handler 404s it when off.
 	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
 	"/v1/fleet/ssh-ca.pub":  accessPublic,
@@ -95,6 +96,7 @@ var routeAccess = map[string]string{
 	// An admin's: subscriptions, machines, join codes, SPOT, credentials,
 	// audits, settings, the operator's own analytics.
 	"/v1/fleet/join-codes": accessAdmin, "/v1/fleet/peer-certs": accessAdmin,
+	FleetNodesPrefix: accessAdmin, "/v1/node/desired": accessSelf, // claude-fleet#2214
 	"/v1/fleet/spot":     accessAdmin,
 	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/users": accessAdmin, "/v1/fleet/invites": accessAdmin,
 	"/v1/fleet/credentials": accessAdmin, "/v1/fleet/credentials/revoke": accessAdmin,

@@ -856,14 +856,14 @@ QS="epicq$$"
 mkdir -p "$WORK/conf/fleets/$QS/repos" "$WORK/.claude-dash/fleets/acme-app" "$WORK/conf/global/epic-running.d"
 printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$QS/conf"
 printf 'FLEET_REPO=acme/tool\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$QS/repos/acme-tool.conf"
-printf '\t#1949\t\t侧栏改版\n\t#1950\t\t只看只点\n' > "$WORK/.claude-dash/fleets/acme-app/issues"
+printf '\t#1949\t\tEPIC: 侧栏改版：只看只点\n\t#1950\t\t只看只点\n\t#1961\t\t底部数字\n' > "$WORK/.claude-dash/fleets/acme-app/issues"
 # WFMT, every field: 1 session · 2 idx · 3 name · 4 path · 5 state · 7 window id ·
 # 8 @issue · 9 @origin · 10 @worktree · 14 @expand · 20 @repo · 30 @epic
 we() { printf '%s\n' "$QS$US$1$US$2$US$3$US$4$US$US$5$US${6:-}$US${7:-}$US$3$US$US$US$US${10:-}$US$US$US$US$US$US${8:-}$US$US$US$US$US$US$US$US$US$US${9:-}" >> "$WLIST_FILE"; }
 cp "$WLIST_FILE" "$WORK/wlist.q"; : > "$WLIST_FILE"
 we 1  scratch-7  /w/app-scratch-7      looping  @1  ''    ''                   acme/app   acme/app#1949  1
 we 2  只看只点   /w/app-issue-1950     'done'     @2  1950  acme-app:scratch-7   acme/app
-we 3  底栏       /w/app-issue-1951     working  @3  1951  acme-app:scratch-7   acme/app
+we 3  侧栏·底栏  /w/app-issue-1951     working  @3  1951  acme-app:scratch-7   acme/app
 we 4  工具活     /w/tool-issue-31      working  @4  31    acme-app:scratch-7   acme/tool
 we 5  单干       /w/app-issue-1960     working  @5  1960  ''                   acme/app
 qside() { PATH="$SHIMPATH" FLEET_SESSION=$QS bash "$ROWS" --sidebar 2>/dev/null | strip; }
@@ -872,17 +872,27 @@ MARK="$WORK/conf/global/epic-running.d/acme-app-1949"
 printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: acme/app\nlanded: 1\nmembers: 3\n' "$NOW" > "$MARK"
 q=$(unset CCQUOTA_FLEET; qside)
 eq "Q: the EPIC is one row, its three members right under it" \
-   "单干;#1949 侧栏改版;只看只点;底栏;工具活 ⇢too;" "$(sorder "$q")" "$q"
-eq "Q: …badged landed/members off its heartbeat mark, a root with its caret" "@1|▾|1/3|0|" "$(srow "$q" '#1949 侧栏改版')"
+   "单干;侧栏改版;只看只点;底栏;工具活 ⇢too;" "$(sorder "$q")" "$q"
+eq "Q: …badged landed/members off its heartbeat mark, a root with its caret" "@1|▾|1/3|0|" "$(srow "$q" '侧栏改版')"
 eq "Q: …the member in the other repo hangs under it, tagged with its repo" "@4|└||1|" "$(srow "$q" '工具活 ⇢too')"
 eq "Q: …once — never again in its own repo's group" "1" "$(printf '%s\n' "$q" | LC_ALL=C grep -c '工具活')"
-eq "Q: …its title travels as the row's title field" "侧栏改版" \
-   "$(printf '%s\n' "$q" | LC_ALL=C awk -F"$US" '$4 == "#1949 侧栏改版" { print $14; exit }')"
-has "Q: the hub list names it the same way" "$(unset CCQUOTA_FLEET; qhub)" "#1949 侧栏改版"
+eq "Q: …its title travels as the row's title field" "EPIC: 侧栏改版：只看只点" \
+   "$(printf '%s\n' "$q" | LC_ALL=C awk -F"$US" '$4 == "侧栏改版" { print $14; exit }')"
+has "Q: the hub list names it the same way" "$(unset CCQUOTA_FLEET; qhub)" "侧栏改版"
+# issue #2355: the batch reads as its theme (the title's `EPIC:` and 「：…」 cut),
+# its number in the issue cell — the bar's detail line under a highlight
+eq "Q: …its number in the issue cell, not the label" "#1949" \
+   "$(printf '%s\n' "$q" | LC_ALL=C awk -F"$US" '$4 == "侧栏改版" { print $10; exit }')"
+eq "Q: a nested member's 简称· prefix is the parent row's word — dropped" "@3|└||1|" "$(srow "$q" '底栏')"
+cp "$WLIST_FILE" "$WORK/wl.n"
+we 6  issue-1961  /w/app-issue-1961   working  @6  1961  ''  acme/app
+eq "Q: a window named only issue-N shows its issue's title (#2355)" "@6" \
+   "$(srow "$(unset CCQUOTA_FLEET; qside)" '底部数字' | cut -d'|' -f1)"
+cp "$WORK/wl.n" "$WLIST_FILE"
 rm -f "$MARK"
-eq "Q: no mark — the subtree's own k/N" "@1|▾|1/3|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '#1949 侧栏改版')"
+eq "Q: no mark — the subtree's own k/N" "@1|▾|1/3|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '侧栏改版')"
 printf 'epoch: %s\nlanded: 2\nmembers: 8\n' "$NOW" > "$MARK"
-eq "Q: the mark's count wins over the live subtree" "@1|▾|2/8|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '#1949 侧栏改版')"
+eq "Q: the mark's count wins over the live subtree" "@1|▾|2/8|0|" "$(srow "$(unset CCQUOTA_FLEET; qside)" '侧栏改版')"
 LC_ALL=C sed "s/${US}acme\/app#1949\$/$US/" "$WLIST_FILE" > "$WORK/wl.noepic"; cp "$WLIST_FILE" "$WORK/wl.epic"; cp "$WORK/wl.noepic" "$WLIST_FILE"
 q0=$(unset CCQUOTA_FLEET; qside)
 eq "Q: no @epic — the window's own name, the members nested as ever" "单干;scratch-7;只看只点;底栏;工具活 ⇢too;" "$(sorder "$q0")"
@@ -894,12 +904,16 @@ FQ=44444444-5555-6666-7777-999999999999
 { printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
   printf 'wid:%s/acme-app:scratch-9\037m4\037online\037\037acme/app\037looping\037claude\037scratch-9\037\037\0370\037\037\037\037\037\037另一批\037\037acme/app#1982:2/5\n' "$FQ"
   printf 'wid:%s/acme-app:issue-1983\037m4\037online\0371983\037acme/app\037working\037claude\037成员甲\037%s/acme-app:scratch-9\037\0370\037\n' "$FQ" "$FQ"
+  # field 20 (issue #2235): a warm start whose issue was never filed
+  printf 'wid:%s/acme-app:scratch-8\037m4\037online\037\037acme/app\037working\037claude\037没建上的\037\037\0370\037\037\037\037\037\037\037\037\037failed\n' "$FQ"
 } > "$G/remote_$QS"
 printf '%s\n' "$NOW" > "$G/hub_ok"
 printf '%s/acme-app:scratch-9\n' "$FQ" > "$G/remote_fold_$QS"
 qr=$(CCQUOTA_FLEET=1 qside)
-eq "Q: a remote driver is one row too, named and badged off its node's cell" "wid:$FQ/acme-app:scratch-9|▾|2/5|0|m4" "$(srow "$qr" '#1982 另一批')"
+eq "Q: a remote driver is one row too, named and badged off its node's cell" "wid:$FQ/acme-app:scratch-9|▾|2/5|0|m4" "$(srow "$qr" '另一批')"
 eq "Q: …its member under it" "wid:$FQ/acme-app:issue-1983|└||1|m4" "$(srow "$qr" '成员甲')"
+eq "Q: a remote row whose issue was never filed (#2235): sidebar field 16 failed, 13-15 empty before it" "|||failed" \
+   "$(printf '%s\n' "$qr" | LC_ALL=C awk -F"$US" '$4 == "没建上的" { print $13 "|" $14 "|" $15 "|" $16 }')"
 # the refresher writes the cell: the worker's `epic` → field 19, title + reap kept before it
 python3 - "$WORK/sessions.json" "$WORK/sessions-epic.json" "$F" <<'PY2'
 import json, sys
@@ -911,6 +925,8 @@ d["sessions"].append(dict(worker_id=f + "/acme-app:scratch-5", machine_name="min
                           fleet_id=f, fleet_name="x", availability="online", worker=w, observed_at="2026-10-04T10:06:00Z"))
 w2 = dict(w, key="acme-app:scratch-6", name="scratch-6", title="", epic="acme/app#1;rm -rf")
 d["sessions"].append(dict(d["sessions"][-1], worker_id=f + "/acme-app:scratch-6", worker=w2))
+w3 = dict(w, key="acme-app:scratch-4", name="scratch-4", title="", epic=None, backfill="failed")
+d["sessions"].append(dict(d["sessions"][-1], worker_id=f + "/acme-app:scratch-4", worker=w3))
 json.dump(d, open(dst, "w"), ensure_ascii=False)
 PY2
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-epic.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || fail "Q: --refresh (epic) failed"
@@ -918,6 +934,8 @@ eq "Q: the refresher carries the cell as field 19, the title before it" "第三�
    "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-5" '$1 == w { print $17 "|" $18 "|" $19 }' "$G/remote_$S")"
 eq "Q: …and drops a cell that is not one" "" \
    "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-6" '$1 == w { print $19 }' "$G/remote_$S")"
+eq "Q: …backfill=failed as field 20 (#2235), the empty 17-19 kept before it" "|||failed" \
+   "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-4" '$1 == w { print $17 "|" $18 "|" $19 "|" $20 }' "$G/remote_$S")"
 got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
 p = ["@5", "", "1", "/w/app-scratch-7", "looping", "claude", "a1", "", "acme/app", "scratch-7", "", "", "", "busy=", "born=", "cfg=", "title=侧栏改版", "reap=", "detail=", "role="]
 print(h.inventory_row(p + ["epic=acme/app#1949:1/3"])[1].get("epic"), h.inventory_row(p + ["epic=#7"])[1].get("epic"),
@@ -1011,6 +1029,11 @@ a = h.inventory_row(p + ["epicstale=acme/app#1949\x1f5400\x1f侧栏改版\x1ejun
 print(a.get("epic_stale"), h.inventory_row(p + ["epicstale="])[1].get("epic_stale"), h.inventory_row(p)[1].get("title"), a.get("title"))' 2>&1)
 eq "T: inventory column 22 — valid entries kept, junk dropped, absent when empty, the columns before it intact" \
    "[{'epic': 'acme/app#1949', 'age': 5400, 'title': '侧栏改版'}, {'epic': 'acme/tool#4', 'age': 7, 'title': 'a b'}] None t t" "$got"
+got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
+p = ["@5", "", "1", "/w/x", "looping", "claude", "a1", "", "acme/app", "scratch-7", "", "", "", "busy=", "born=", "cfg=", "title=t", "reap=", "detail=", "role=", "epic=", "epicstale="]
+print(h.inventory_row(p + ["backfill=failed"])[1].get("backfill"), h.inventory_row(p + ["backfill="])[1].get("backfill"),
+      h.inventory_row(p + ["backfill=junk"])[1].get("backfill"), h.inventory_row(p + ["backfill=failed"])[1].get("title"))' 2>&1)
+eq "T: inventory column 23 (#2235) — backfill=failed kept, empty / junk absent, the columns before it intact" "failed None None t" "$got"
 rm -rf "$WORK/conf/fleets/$TS" "$EDIR"
 cp "$WORK/wlist.t" "$WLIST_FILE"
 

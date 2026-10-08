@@ -30,6 +30,11 @@
 #   4b. home   — `fleet` ON the machine the hub picks, with no fleet of this
 #                login there (issue #2219): the right pane is the home page,
 #                never 「正在连接 <本机>」 / 「没有活着的 fleet 会话」
+#   4c. clock  — bin/fleet-onboard-clock.sh against this hub (issue #2267): the
+#                whole road timed in a sandbox — the /i/<invite> line, the
+#                browser page, the first HOME session on the node (its submit
+#                answered by the fake node, its agent a stand-in that drops
+#                keys while it mounts), the first key kept; all eight pits
 #   5. opening — the same person with no login yet and fleet.auto_assign on
 #                (a newcomer's first look, #2069): the right pane says
 #                正在为你开机器, never 入口没有在线的机器 (issue #2220)
@@ -85,7 +90,7 @@ ok() { printf '   ✓ %s\n' "$1"; }
 scrub() { sed -E 's/fd_[a-z2-7]{20,}/fd_…/g; s/"(token|approve_code|certificate)":"[^"]*"/"\1":"…"/g'; }
 logs() {
   local f
-  for f in hub.log agent.log install.log login.out fleet.err fleet2.err fleet4.err ssh.log; do
+  for f in hub.log agent.log install.log login.out fleet.err fleet2.err fleet4.err ssh.log clock.log; do
     [ -s "$WORK/$f" ] || continue
     printf -- '--- %s (last 40)\n' "$f"; tail -n 40 "$WORK/$f" | scrub
   done
@@ -166,11 +171,18 @@ python3 "$WORK/gh.py" >"$WORK/gh.log" 2>&1 &
 GH_PID=$!
 ssh-keygen -q -t ed25519 -N '' -C newcomer-e2e-ca -f "$WORK/ca" || die 'ssh-keygen could not make the CA key'
 mkdir -p "$WORK/dist"
+# the agent a computer downloads when its login enrols it (/v1/node/dist/<os>-<arch>):
+# with none, the clock step's newcomer fell back to `go install` for ~50 s (#2267)
+case "$(uname -m)" in x86_64|amd64) DARCH=amd64 ;; arm64|aarch64) DARCH=arm64 ;; *) DARCH=$(uname -m) ;; esac
+cp "$CCQ" "$WORK/dist/ccquota-$(uname -s | tr 'A-Z' 'a-z')-$DARCH"
+# CCQUOTA_FLEET_MAX_LOAD_PER_CORE: the fake node reports this box's own load,
+# and a shared runner (the clock step's drill on top) sits above the 0.8 a real
+# machine is held to (#2267)
 env CCQUOTA_FLEET=1 CCQUOTA_VIEWER_TOKEN="$VT" CCQUOTA_FLEET_DIST_DIR="$WORK/dist" \
     CCQUOTA_FLEET_SSH_CA_KEY="$WORK/ca" CCQUOTA_GITHUB_CLIENT_ID=newcomer-e2e \
     CCQUOTA_GITHUB_CLIENT_SECRET="placeholder-$RANDOM$RANDOM" \
     CCQUOTA_GITHUB_API_BASE="http://127.0.0.1:$GHPORT" CCQUOTA_FLEET_PUBLIC_URL="$HUB" \
-    CCQUOTA_FLEET_STABLE_REPO="$STABLE" \
+    CCQUOTA_FLEET_STABLE_REPO="$STABLE" CCQUOTA_FLEET_MAX_LOAD_PER_CORE=100 \
   "$CCQ" hub --addr "127.0.0.1:$PORT" --db "$WORK/hub.db" >"$WORK/hub.log" 2>&1 &
 HUB_PID=$!
 waitfor 20 curl -fs -m 2 -o /dev/null "$HUB/healthz" || die 'the hub never answered /healthz'
@@ -178,23 +190,30 @@ code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$HUB/install")
 [ "$code" = 200 ] || die 'GET /install did not serve the installer' "HTTP $code"
 ok "hub up at $HUB, /install served"
 
-# =============================================================================
-step 'node: a fake node joins and reports one session'
-NH="$WORK/node"; mkdir -p "$NH/.claude/fleet/bin" "$NH/state"
+# fake_node <log>: a node joined as $OSU from $NH, machine id $MID — its
+# controller a stub (discover / ready / fleet_status, and a HOME start's
+# submit + operation_get); sets FID and FAKE_PID
+fake_node() {
+mkdir -p "$NH/.claude/fleet/bin" "$NH/state"
 JC=$(api -X POST -H 'Content-Type: application/json' -d '{}' "$HUB/v1/fleet/join-codes" | jget code) \
   || die 'the operator API minted no join code'
 J=$(curl -fsS -m 10 -H 'Content-Type: application/json' -X POST \
-      -d "{\"code\":\"$JC\",\"hostname\":\"e2enode\",\"os_user\":\"$(id -un)\"}" "$HUB/v1/node/join") \
+      -d "{\"code\":\"$JC\",\"hostname\":\"e2enode\",\"os_user\":\"$OSU\"}" "$HUB/v1/node/join") \
   || die '/v1/node/join refused the code'
 NTOK=$(printf '%s' "$J" | jget token 2>/dev/null)
 [ -n "$NTOK" ] || die 'the join answer had no token' "$J"
-MID=7e2e0000-0000-4000-8000-000000002096
 FID=$(python3 -c 'import json,sys,uuid; print(uuid.uuid5(uuid.UUID(sys.argv[1]), json.dumps(sys.argv[2:], ensure_ascii=False, sort_keys=True, separators=(",", ":"))))' "$MID" acme acme/app /w/acme)
 cat > "$NH/.claude/fleet/bin/fleet-control.py" <<EOF
 #!/usr/bin/env python3
 import json, sys, time
 req = json.load(sys.stdin)
 m = req.get("method")
+OPF = "$NH/state/home-op.json"
+HOME = [{"worker_id": "$FID/scratch-9", "key": "scratch-9", "window_id": "@12", "issue": None, "repo": "",
+         "scratch": True, "worktree": "", "state": "idle", "lifecycle": "awake", "agent": "claude", "handle": ""}]
+def home():
+    import os
+    return HOME if os.path.exists(OPF) else []
 now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 if m == "discover":
     r = {"machine_id": "$MID", "hostname": "e2enode", "protocol": 1, "observed_at": now,
@@ -206,7 +225,18 @@ elif m == "fleet_status":
     r = {"state": "running", "observed_at": now,
          "workers": [{"worker_id": "$FID/scratch-3", "key": "scratch-3", "window_id": "@9", "issue": None,
                       "repo": "acme/app", "scratch": True, "worktree": "/w/scratch-3", "state": "idle",
-                      "lifecycle": "awake", "agent": "claude", "handle": ""}]}
+                      "lifecycle": "awake", "agent": "claude", "handle": ""}] + home()}
+elif m in ("submit", "operation_get"):
+    # a HOME session (the clock step, issue #2267): started at once, listed from then on
+    if m == "submit":
+        op = {"operation_id": req["params"]["operation_id"], "fleet_id": "$FID", "action": "worker_start",
+              "status": "succeeded", "created_at": time.time(), "updated_at": time.time(),
+              "result": {"workers": HOME, "observed_at": now, "exit": 0, "window": "@12",
+                         "timing": {"t_accepted": int(time.time() * 1000), "t_window": int(time.time() * 1000)}}}
+        open(OPF, "w").write(json.dumps(op))
+    try: r = json.load(open(OPF))
+    except OSError:
+        print(json.dumps({"error": {"code": "NOT_FOUND", "message": "no such operation"}})); sys.exit(1)
 else:
     print(json.dumps({"error": {"code": "INVALID_ARGUMENT", "message": "newcomer-e2e fake node"}})); sys.exit(1)
 print(json.dumps({"protocol": 1, "machine_id": "$MID", "result": r}))
@@ -214,8 +244,15 @@ EOF
 chmod +x "$NH/.claude/fleet/bin/fleet-control.py"
 ( cd "$NH" && exec env HOME="$NH" CCQUOTA_HUB_URL="$HUB" CCQUOTA_TOKEN="$NTOK" CCQUOTA_FLEET=1 \
     CCQUOTA_FLEET_NODE_ROUTES=lan=127.0.0.1:22 CCQUOTA_FLEET_NODE_TAILNET=0 \
-    "$CCQ" agent --hub "$HUB" --home "$NH" --state "$NH/state" ) >"$WORK/agent.log" 2>&1 &
-AGENT_PID=$!
+    "$CCQ" agent --hub "$HUB" --home "$NH" --state "$NH/state" ) >"$WORK/$1" 2>&1 &
+FAKE_PID=$!
+}
+
+# =============================================================================
+step 'node: a fake node joins and reports one session'
+NH="$WORK/node" OSU=$(id -un) MID=7e2e0000-0000-4000-8000-000000002096
+fake_node agent.log
+AGENT_PID=$FAKE_PID
 node_up() { api "$HUB/v1/fleet/fleet_sessions" >"$WORK/sessions.json" 2>/dev/null && grep -q "$FID/scratch-3" "$WORK/sessions.json"; }
 waitfor 60 node_up || die 'the hub never listed the node'"'"'s session' "$(head -c 600 "$WORK/sessions.json" 2>/dev/null)"
 # the machine's name is what its agent reports (the host's own name), not the join label
@@ -305,6 +342,19 @@ while [ \$# -gt 0 ]; do
 done
 if [ -n "\$op" ]; then [ "\$op" = check ] && [ -S "\$ctl" ]; exit \$?; fi
 case "\$*" in
+  *"fleet-remote-view.sh attach --shell "*)
+    # the node's home page; once the node holds a HOME session (the clock
+    # step), it is that session's agent — the stand-in for the client's switch
+    # onto it over the serve channel, which fleet-remote-view's own selftests pin
+    [ -n "\$ctl" ] && python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); time.sleep(600)' "\$ctl" &
+    printf 'drill@node %% '
+    while [ ! -f "$WORK/node/state/home-op.json" ]; do sleep 0.2; done
+    exec python3 "$WORK/agent.py" ;;
+  *"fleet-remote-view.sh attach "*)
+    # the clock step (issue #2267): the session is an agent — its input line
+    # drawn after a mount, what arrives while it mounts dropped, as Claude's is
+    [ -n "\$ctl" ] && python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); time.sleep(600)' "\$ctl" &
+    exec python3 "$WORK/agent.py" ;;
   *" attach "*|*attach*)
     [ -n "\$ctl" ] && python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); time.sleep(600)' "\$ctl" &
     echo \$! > "$WORK/master.pid"; wait ;;
@@ -383,6 +433,63 @@ pg=$(tp capture-pane -p -t "$w1" 2>/dev/null)
 case "$pg" in *正在连接*|*没有活着的*) die 'the right pane still tries this computer' "$pg" ;; esac
 ok "@remote=-: · the home page, no 正在连接 $NODE, no 没有活着的 fleet 会话"
 ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+
+# =============================================================================
+step 'clock: the 60-second drill against this hub (fleet-onboard-clock.sh, issue #2267)'
+# The whole road timed in one sandbox: the pasted /i/<invite> line, the browser
+# page (a stand-in opener + the drill code after the hand), the first HOME
+# session placed on the node, its input line, the first key it keeps. The fake
+# agent (agent.py, run by the ssh stand-in on an attach) drops what arrives
+# while it mounts, as Claude does. Gated on the eight pits and the first key
+# (--gate pits): the seconds and the words on screen are a real hub's to judge
+# (a runner is no newcomer's computer) — printed here, not held.
+cat > "$WORK/agent.py" <<'EOF2'
+import os, select, sys, termios, time, tty
+fd = 0
+time.sleep(1.0)                     # mounting: whatever arrives now is lost
+try: tty.setraw(fd)
+except termios.error: pass
+while select.select([fd], [], [], 0)[0]: os.read(fd, 1024)
+buf = ""
+def draw():
+    sys.stdout.write("\033[2J\033[H╭─ claude ─╮\r\n❯ " + buf); sys.stdout.flush()
+draw()
+while True:
+    r = os.read(fd, 64)
+    if not r: break
+    for ch in r.decode("utf-8", "replace"):
+        if ch in ("\x7f", "\b"): buf = buf[:-1]
+        elif ch in ("\x03", "\x04"): sys.exit(0)
+        elif ch >= " ": buf += ch
+    draw()
+EOF2
+D=$(aenv bash "$BIN/fleet-drill.sh" invite --host "$NODE" --login drillclk --ttl 30m --json 2>"$WORK/drill.err") \
+  || die 'fleet drill invite (the clock person) failed' "$(cat "$WORK/drill.err")"
+CAPPROVE=$(printf '%s' "$D" | jget approve_code 2>/dev/null)
+# The hub places a HOME session only on a fleet the person's own login runs
+# (fleetScope), and the fake node's fleet runs as THIS login (an agent reports
+# its own user): the drill person's login on the node becomes it.
+OSU=$(id -un)
+python3 -c 'import sqlite3, sys
+c = sqlite3.connect(sys.argv[1], timeout=10)
+n = c.execute("UPDATE fleet_accounts SET login = ? WHERE principal_id = ?", (sys.argv[3], sys.argv[2])).rowcount
+n *= c.execute("UPDATE fleet_principals SET login = ? WHERE principal_id = ?", (sys.argv[3], sys.argv[2])).rowcount
+c.commit()
+sys.exit(0 if n else 1)' "$WORK/hub.db" "$(printf '%s' "$D" | jget person_id)" "$OSU" || die "the clock person's login row was not on the hub's db"
+CINV=$(api -X POST -H 'Content-Type: application/json' -d '{}' "$HUB/v1/fleet/invites" | jget code 2>/dev/null)
+[ -n "$CAPPROVE" ] && [ -n "$CINV" ] || die 'no approve code / invite for the clock'
+# the earlier steps' clients stop here: a session is the clock's own
+pkill -f "fleet-shell.sh [a-z]* $SESS" 2>/dev/null
+ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+KEEPARG=''; [ "$KEEP" = 1 ] && KEEPARG=--keep
+# the drill's own terminal needs a tmux: the one the install line brought (a runner may have none)
+PATH="$(dirname "$REAL_TMUX"):$PATH" FLEET_DRILL_INVITE="$CAPPROVE" FLEET_DRILL_INSTALL_INVITE="$CINV" FLEET_CLOCK_SSH_SHIM="$SHIM" \
+  bash "$BIN/fleet-onboard-clock.sh" --hub "$HUB" --login "$OSU" --hand 1 --gate pits \
+    --out "$WORK/clock" ${KEEPARG:+"$KEEPARG"} >"$WORK/clock.log" 2>&1 \
+  || die 'the clock: a pit failed or no first key' "$(cat "$WORK/clock.log"; grep -v '^ *$' "$WORK"/clock/screens/run1-last.txt 2>/dev/null | tail -n 15
+       echo '--- home-first.log'; cat "$WORK"/clock/run1-home-first.log 2>/dev/null)"
+sed -n '/^| 粘贴/p' "$WORK/clock/report.md"
+ok "the 60-second drill: first key at $(sed -n 's/^| 粘贴[^|]*| \([^|]*\) |.*/\1/p' "$WORK/clock/report.md"), no pit"
 
 # =============================================================================
 step 'opening: no login yet — the right pane says 正在为你开机器, never 没有在线的机器'

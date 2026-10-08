@@ -152,7 +152,12 @@ kind=${verdict%%$'\t'*}
 # resolves to its key too). Best-effort: a missing title falls back to a
 # resume-<key> name below; a missing key simply skips the bind.
 IFS=$'\t' read -r led_key led_title led_origin <<<"$(bash "$BIN/fleet-history.sh" meta --repo "$REPO" "$key" 2>/dev/null)"
-rname=""; { [ -n "$led_title" ] && [ "$led_title" != "-" ]; } && rname=$(fleet_win_name "$led_title" 2>/dev/null)
+rname=""
+if [ -n "$led_title" ] && [ "$led_title" != "-" ]; then
+  # an EPIC member reopens wearing its batch's 简称 (issue #2355); a scratch has none
+  case "$led_key" in ''|*[!0-9]*) rname=$(fleet_win_name "$led_title" 2>/dev/null) ;;
+    *) rname=$(fleet_issue_win_name "$REPO" "$led_key" "$led_title" 2>/dev/null) ;; esac
+fi
 # Which marker set? A `scratch-<n>` key (from the target OR the ledger) is a SCRATCH
 # row (#466): it has no issue, and binding one would hand the restored window to
 # issue machinery it must stay out of (reapers, the PR map, the janitor's

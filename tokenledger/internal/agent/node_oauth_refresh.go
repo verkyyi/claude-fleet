@@ -9,9 +9,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
-
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
 
@@ -49,12 +46,12 @@ func (a *Agent) oauthTokenURL(provider string) string {
 }
 
 // answerOAuthRefresh serves one TypeOAuthRefresh.
-func (a *Agent) answerOAuthRefresh(ctx context.Context, conn *websocket.Conn, m control.Message) {
+func (a *Agent) answerOAuthRefresh(ctx context.Context, conn nodeLink, m control.Message) {
 	reply := func(msg control.Message) {
 		msg.OpID = m.OpID
 		wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
 		defer cancel()
-		_ = wsjson.Write(wctx, conn, msg)
+		_ = conn.write(wctx, msg)
 	}
 	fail := func(code, text string) {
 		reply(control.Message{Type: control.TypeError, Proto: control.Proto,

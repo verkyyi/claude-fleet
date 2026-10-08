@@ -593,7 +593,21 @@ if [ -z "$title" ]; then
   title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
   [ -z "$title" ] && title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
 fi
-wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$slug"
+# An EPIC member's window wears its batch's 简称 first — 托管·一个节点… (issue
+# #2355): fleet_issue_win_name reads it off the body the gate just read, one
+# parent read per batch an hour; any other issue's name is fleet_win_name's,
+# byte for byte. No body in hand (no gate ran) ⇒ no read: --title promises no
+# round-trip (#216). The async tail is handed the name the gate's pass derived
+# (FLEET_SPAWN_WNAME), so it never re-derives one without the body.
+if [ "$TAIL_ONLY" = 1 ] && [ -n "${FLEET_SPAWN_WNAME:-}" ]; then
+  wname=$FLEET_SPAWN_WNAME
+elif [ -n "$issue_json" ]; then
+  _ibody=$(printf '%s\n' "$issue_json" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("body") or "")' 2>/dev/null)
+  wname=$(fleet_issue_win_name "$REPO" "$num" "$title" "${_ibody:-.}")
+else
+  wname=$(fleet_win_name "$title")
+fi
+[ -z "$wname" ] && wname="$slug"
 # No repo tag on the name, even with 2+ repos (issue #1023 dropped #793's `tl·`
 # prefix): the dash's repo headings + badge already say which repo a window is,
 # and identity is `@repo`/`@issue`, never the name. The `·slug$` dedup above still
@@ -627,6 +641,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # separate client call independent of this process's fds (its stderr copy is what
   # this redirect drops, and the tail has no caller left to read it — the
   # interactive --async path is toast-only by construction).
+  _bg="$_bg FLEET_SPAWN_WNAME=$(shq "$wname")"
   _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title") --origin $(shq "$ORIGIN")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ORIGIN_WID:+ --origin-wid $(shq "$ORIGIN_WID")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || { refuse "spawn failed for #$num: dispatch"; exit "$RC_INFRA"; }

@@ -15,6 +15,11 @@
 #       the stamped policy, or `default` when none is (the kind decides).
 #   fleet-reap-policy.sh menu <sess> <@id> [<client>]
 #       the sidebar menu's submenu: the five choices, the current one marked.
+#   fleet-reap-policy.sh menu <sess> <wid:worker_id> [<client>]
+#       the same for a row on ANOTHER machine (issue #2368): each pick is a hub
+#       write — fleet-sidebar-remote.sh reappol (worker_reap_policy) — and the
+#       mark is the policy the row's cache last carried (fleet-hub-sessions.sh's
+#       remote_<sess>, column 18).
 #
 # Grammar and words live in ONE place, bin/fleet_reap_policy.py. The closing
 # itself is the cleanup tick's (fleet-cleanup-idle.py / fleet-cleanup.sh), through
@@ -75,13 +80,33 @@ case "$sub" in
     ;;
   menu)
     SESS=${1:-}; WIN=${2:-}; client=${3:-}
-    [ -n "$SESS" ] && [ -n "$WIN" ] || die 2 "menu <sess> <@id> [<client>]"
-    resolve_win
+    [ -n "$SESS" ] && [ -n "$WIN" ] || die 2 "menu <sess> <@id|wid:…> [<client>]"
     . "$BIN/fleet-ui-lang.sh"; fleet_ui_pin
-    cur=$(_tm show-options -wqv -t "$WIN" @reap_policy 2>/dev/null)
-    self=$(printf '%q' "$BIN/fleet-reap-policy.sh")
-    # single quotes inside: the `at` item nests this in command-prompt's "…"
-    run() { printf "run-shell -b '%s set %s --win %s --session %s >/dev/null 2>&1 || :'" "$self" "$1" "$WIN" "$(printf '%q' "$SESS")"; }
+    case "$WIN" in
+      wid:*/*)
+        # a row on another machine: no window here, so no _tm on a fleet socket —
+        # the menu draws on the server this runs under, like the row menu did
+        _tm() { tmux "$@"; }
+        fleet_load_conf "$SESS" 2>/dev/null
+        cur=$(LC_ALL=C awk -F $'\037' -v w="$WIN" '$1 == w { print $18; exit }' \
+              "${FLEET_C:-/nonexistent}/global/remote_$SESS" 2>/dev/null)
+        rmt=$(printf '%q' "$BIN/fleet-sidebar-remote.sh")
+        # the env the row menu handed this (a run-shell job sees the server's)
+        env=''
+        for v in FLEET_CONF_DIR FLEET_UI_LANG FLEET_SHELL; do
+          [ -n "${!v:-}" ] && env="$env $v=$(printf '%q' "${!v}")"
+        done
+        run() { printf "run-shell -b '%s FLEET_SIDEBAR_TEXT=%s bash %s reappol %s %s %s >/dev/null 2>&1 || :'" \
+                  "$env" "$1" "$rmt" "$(printf '%q' "$SESS")" "$(printf '%q' "$WIN")" "$(printf '%q' "$client")"; }
+        ;;
+      *)
+        resolve_win
+        cur=$(_tm show-options -wqv -t "$WIN" @reap_policy 2>/dev/null)
+        self=$(printf '%q' "$BIN/fleet-reap-policy.sh")
+        # single quotes inside: the `at` item nests this in command-prompt's "…"
+        run() { printf "run-shell -b '%s set %s --win %s --session %s >/dev/null 2>&1 || :'" "$self" "$1" "$WIN" "$(printf '%q' "$SESS")"; }
+        ;;
+    esac
     margs=(); n=0
     for p in merged done:2h loop-end at keep; do
       n=$((n + 1))
@@ -105,6 +130,6 @@ case "$sub" in
     _tm display-menu ${client:+-c "$client"} -T "#[align=centre] $(fleet_ui_t reap_menu_title) " -x P -y P -- \
       ${margs[@]+"${margs[@]}"} 2>/dev/null || :
     ;;
-  -h|--help|'') sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; [ -n "$sub" ] || exit 2 ;;
+  -h|--help|'') sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; [ -n "$sub" ] || exit 2 ;;
   *) die 2 "unknown subcommand $sub (set | get | menu)" ;;
 esac

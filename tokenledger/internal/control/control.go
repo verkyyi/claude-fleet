@@ -135,8 +135,40 @@ const CapMove = "move"
 // said AccountResult.Credsep "separated".
 const CapCredsep = "credsep"
 
+// CapMachine is the hello capability of a MACHINE link (claude-fleet#2333,
+// EPIC #2329 C5): one connection, dialled by `ccquota agent --machine` with
+// the machine's own node token, that carries every login of the machine. Each
+// login then says its own hello on that link — a TypeHello with Message.Login
+// set and its own node token in Hello.LoginToken — and from there every
+// message for or from that login carries Login. The hub keeps each login its
+// own endpoint (roster row, leases, relays), only the wire is shared. A hub
+// that does not know the capability refuses nothing: it reads the machine
+// hello as one more node, and the logins' hellos as unknown — so a machine
+// agent falls back to nothing and an older hub is never sent a login it
+// cannot route.
+const CapMachine = "machine"
+
+// CodeWrongLogin refuses a message on a machine link whose Login is not one
+// that link carries, or a login hello whose token belongs to another login or
+// another machine (claude-fleet#2333) — an op never runs as the wrong login.
+const CodeWrongLogin = "WRONG_LOGIN"
+
+// CodeLinkClosed is the hub telling a machine link that one login's session on
+// it ended (revoked, superseded, malformed): the node drops that login and
+// says its hello again after a backoff. Never sent on a plain link.
+const CodeLinkClosed = "LINK_CLOSED"
+
 // CredsepSeparated is AccountResult.Credsep for a login opened separated.
 const CredsepSeparated = "separated"
+
+// Heartbeat.Credsep's other words (claude-fleet#2295): CredsepNot — the
+// login is not separated, or it is but `fleet-credsep.sh check` warns;
+// CredsepUnknown — the script is missing or could not be run. The hub leases
+// a role=user person's login real tokens only on CredsepSeparated.
+const (
+	CredsepNot     = "not"
+	CredsepUnknown = "unknown"
+)
 
 // Relay kinds.
 const (
@@ -260,9 +292,13 @@ var ErrIncompatible = errors.New("node protocol version is not compatible with t
 
 // Message is one frame on the control channel.
 type Message struct {
-	Type    string          `json:"type"`
-	OpID    string          `json:"op_id"`
-	Proto   int             `json:"proto"`
+	Type  string `json:"type"`
+	OpID  string `json:"op_id"`
+	Proto int    `json:"proto"`
+	// Login names the login a message is for or from, on a machine link
+	// only (CapMachine, claude-fleet#2333). Empty on a plain link, and for
+	// the machine's own messages on a machine link.
+	Login   string          `json:"login,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 	Error   *Error          `json:"error,omitempty"`
 }
@@ -334,6 +370,11 @@ type Hello struct {
 	// its own client, or a session already running there. false/absent is a
 	// shared machine, as every node was.
 	Personal bool `json:"personal,omitempty"`
+	// LoginToken is a login's own node token, carried ONLY by that login's
+	// hello on a machine link (claude-fleet#2333): the machine's token opens
+	// the link, each login's token proves the login. Never logged, never
+	// echoed; empty everywhere else.
+	LoginToken string `json:"login_token,omitempty"`
 }
 
 // NodeProbe is bin/fleet-node-probe.sh's verdict (claude-fleet#1720), read off
@@ -460,6 +501,13 @@ type Heartbeat struct {
 	// agent older than #1414, or one that knows no route.
 	Routes []NodeRoute `json:"routes,omitempty"`
 
+	// Credsep is this login's credential separation as `fleet-credsep.sh
+	// status` + `check` judge it (claude-fleet#2295, EPIC #2293 共同约定 1):
+	// CredsepSeparated only when status says separated AND check passes,
+	// CredsepNot / CredsepUnknown otherwise. Absent from an agent older than
+	// #2295 — the hub reads that as not separated for a role=user person.
+	Credsep string `json:"credsep,omitempty"`
+
 	// Ready says whether this login can take a NEW session
 	// (claude-fleet#1475): gh is logged in, a Claude or Codex credential is
 	// usable and every hosted repo's checkout exists. nil on an agent older
@@ -478,9 +526,23 @@ type Heartbeat struct {
 	Probe        *NodeProbe `json:"probe,omitempty"`
 	// Personal repeats the hello's (claude-fleet#1721), re-read every beat.
 	Personal bool `json:"personal,omitempty"`
+	// Desired is how far a managed machine converged on the desired state
+	// the hub keeps for it (claude-fleet#2214, docs/MANAGED-NODE.md). Absent
+	// from an agent that manages nothing — the roster then shows no 期望 /
+	// 实际 columns, byte for byte as before.
+	Desired *DesiredReport `json:"desired,omitempty"`
 
 	AgentVersion string    `json:"agent_version,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`
+}
+
+// DesiredReport is a managed node's word on its desired state: the version it
+// last converged to, the release it runs, and a one-line summary of what
+// still differs ("" = nothing).
+type DesiredReport struct {
+	Version int    `json:"version"`
+	Release string `json:"release,omitempty"`
+	Diff    string `json:"diff,omitempty"`
 }
 
 // FleetStateUnknown is a fleet whose fleet_status read failed: the agent

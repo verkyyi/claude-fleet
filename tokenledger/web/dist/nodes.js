@@ -2,7 +2,10 @@
 // computer that runs sessions (load trend, status, sessions, version), the
 // maintenance switch behind a confirm, «add a machine» (a one-time join code,
 // its command and countdown, waiting for the machine to join), and the SPOT
-// switch. Reads /v1/nodes, /v1/fleet/join-codes, /v1/fleet/settings; writes
+// switch. A code from 「添加机器」 is trusted and managed (claude-fleet#2214,
+// POST /v1/fleet/nodes/join-codes), and each card says where its trust came
+// from and, for a managed machine, its 期望 / 实际 version.
+// Reads /v1/nodes, /v1/fleet/join-codes, /v1/fleet/settings; writes
 // fleet.node_maintenance.<machine> and fleet.spot, and 「移除」 (claude-fleet#1928)
 // retires every enrollment on the machine through /v1/fleet/nodes/retire — its
 // token stops working and its card leaves the page. An admin's.
@@ -32,8 +35,37 @@ function card(m) {
   const rm = m.eps.length ? `<button class="btn sm ghost" data-act="remove" data-m="${esc(m.name)}" data-eps="${esc(m.eps.join(' '))}" data-n="${m.sessions == null ? '' : m.sessions}">${ic('trash')}${esc(t('ui.mach.removeBtn'))}</button>` : '';
   return `<div class="panel mc"><div class="mc-h"><b>${esc(m.label)}</b>${m.label !== m.name ? `<span class="mono" style="opacity:.6">${esc(m.name)}</span>` : ''}${m.kind === 'ephemeral' ? `<span class="chip brand">${esc(t('ui.mach.spot'))}</span>` : ''}${status(m)}</div>${why}` +
     trend +
-    `<div class="stats"><div><b>${m.sessions == null ? '?' : m.sessions}</b>${esc(t('ui.mach.sessions'))}</div><div><b>${esc(load)}</b>${esc(t('ui.mach.load'))}</div><div><b>${esc(m.version || '—')}</b>${esc(t('ui.mach.version'))}</div>${m.spare == null ? '' : `<div><b>${m.spare}</b>${esc(t('ui.mach.spare', { used: m.used ?? '?', cap: m.cap ?? '?' }))}</div>`}</div>` +
+    `<div class="stats"><div><b>${m.sessions == null ? '?' : m.sessions}</b>${esc(t('ui.mach.sessions'))}</div><div><b>${esc(load)}</b>${esc(t('ui.mach.load'))}</div><div><b>${esc(m.version || '—')}</b>${esc(t('ui.mach.version'))}</div>${m.spare == null ? '' : `<div><b>${m.spare}</b>${esc(t('ui.mach.spare', { used: m.used ?? '?', cap: m.cap ?? '?' }))}</div>`}${desired(m)}</div>` +
+    trustLine(m) + linksLine(m) +
     `<div class="mc-f"><span>${esc(t('ui.mach.seen', { when: relTime(m.seen) }))}</span><span>${btn}${rm}</span></div></div>`;
+}
+
+// trustLine says whether the machine is trusted and where that came from
+// (claude-fleet#2214): the join code, the operator, the old machine-name rule,
+// or a borrowed name that inherits nothing.
+function trustLine(m) {
+  if (!m.trust) return '';
+  const src = m.trustSource ? t('ui.mach.trustSrc.' + m.trustSource) : '';
+  const word = t(m.trust === 'trusted' ? 'ui.mach.trusted' : 'ui.mach.untrusted');
+  return `<div style="font-size:12px;color:${m.trustSource === 'name_borrowed' ? 'var(--bad)' : 'var(--muted)'}">${esc(src ? t('ui.mach.trustFrom', { trust: word, src }) : word)}</div>`;
+}
+
+// linksLine is how many connections the machine holds and the logins under
+// them (claude-fleet#2333): one node program per machine reads 「1 条连接」.
+function linksLine(m) {
+  if (m.links == null || m.status === 'lost') return '';
+  return `<div style="font-size:12px;color:var(--muted)">${esc(t('ui.mach.links', { n: m.links, logins: m.logins.join(t('ui.mach.loginSep')) || '—' }))}</div>`;
+}
+
+// desired is the 期望 / 实际 pair of a managed machine; nothing for any other.
+function desired(m) {
+  const d = m.desired;
+  if (!d) return '';
+  const rel = (v) => (v ? String(v).slice(0, 7) : '');
+  const show = (n, r) => (n ? `v${n}${r ? ' · ' + rel(r) : ''}` : '—');
+  const off = d.want !== d.reached || !!d.diff;
+  return `<div><b>${esc(show(d.want, d.want_release))}</b>${esc(t('ui.mach.want'))}</div>` +
+    `<div><b${off ? ' style="color:var(--warn)"' : ''} title="${esc(d.diff || '')}">${esc(show(d.reached, d.release))}</b>${esc(t('ui.mach.reached'))}</div>`;
 }
 
 function joinModal(ctx, j) {
@@ -122,7 +154,9 @@ Shell.mount('machines', async (ctx) => {
       try {
         stop();
         join.label = 'web-' + Date.now().toString(36);
-        const j = await ctx.api('/v1/fleet/join-codes', { json: { label: join.label } });
+        // 托管 (claude-fleet#2214): the code carries trust — the machine holds
+        // it on its own identity, no separate 「标记可信」 step.
+        const j = await ctx.api('/v1/fleet/nodes/join-codes', { json: { label: join.label } });
         joinModal(ctx, j);
         join.tick = setInterval(() => {
           const el = document.getElementById('exp');

@@ -186,7 +186,7 @@ EOF
             pkey "$G_prev $G_next" "$(fleet_ui_t keys_page_prevnext)" "$P_prev / ${P_next#prefix }" ;;
       back) done_acts="$done_acts fwd"
             pkey "$G_back $G_fwd" "$(fleet_ui_t keys_page_backfwd)" "$P_back / ${P_fwd#prefix }" ;;
-      new|switcher|quickopen|needs|zoom|help|fold) pkey "${!sg}" "$(fleet_ui_t "keys_page_$sa")" "${!sp}" ;;
+      new|switcher|quickopen|needs|zoom|help|fold|quit) pkey "${!sg}" "$(fleet_ui_t "keys_page_$sa")" "${!sp}" ;;
       *) pkey "${!sg}" "$(fleet_ui_t "keys_switch_$sa")" "${!sp}" ;;
     esac
   done

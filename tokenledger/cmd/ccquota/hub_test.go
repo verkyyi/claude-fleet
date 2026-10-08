@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
 )
 
 func TestBindHosts(t *testing.T) {
@@ -78,5 +80,25 @@ func TestShutdownGrace(t *testing.T) {
 		if (err == nil) != c.ok || got != c.want {
 			t.Errorf("CCQUOTA_SHUTDOWN_GRACE=%q: %v, %v", c.v, got, err)
 		}
+	}
+}
+
+// claude-fleet#2366: hub-deploy's check names the mounts only the new render
+// has; a release key under one is reported, not refused — anything else still is.
+func TestReleaseKeyOnUnmountedVolume(t *testing.T) {
+	t.Setenv("CCQUOTA_FLEET_RELEASE_KEY", "/etc/ccquota-release/release-key")
+	t.Setenv("CCQUOTA_FLEET_RELEASE_DIR", "/releases")
+	t.Setenv("CCQUOTA_CHECK_UNMOUNTED", "/etc/ccquota-release /releases")
+	srv := &api.Server{Stable: &api.StableSource{}}
+	if err := loadFleetReleases(srv); err != nil || srv.Releases != nil {
+		t.Fatalf("unmounted key: err %v, releases %v — want reported and off", err, srv.Releases)
+	}
+	t.Setenv("CCQUOTA_CHECK_UNMOUNTED", "/etc/ccquota-releasex")
+	if err := loadFleetReleases(srv); err == nil {
+		t.Fatal("a missing key outside the unmounted volumes did not refuse the start")
+	}
+	t.Setenv("CCQUOTA_CHECK_UNMOUNTED", "")
+	if err := loadFleetReleases(srv); err == nil {
+		t.Fatal("a missing key with no check hint did not refuse the start")
 	}
 }

@@ -73,6 +73,10 @@ type StableSource struct {
 	CodeloadBase string
 	TTL          time.Duration // how long a lookup is trusted; default 5m
 	Client       *http.Client
+	// OnStable runs (in its own goroutine) each time a lookup finds stable at
+	// a commit other than the last one — the release store builds it then
+	// (claude-fleet#2335). Set before the first lookup.
+	OnStable func(sha string)
 
 	mu         sync.Mutex
 	sha        string
@@ -186,6 +190,7 @@ func (s *StableSource) Refresh(ctx context.Context) error {
 		return fmt.Errorf("%s: HTTP %d %q", req.URL, resp.StatusCode, firstLine(sha))
 	}
 	s.mu.Lock()
+	moved := s.sha != sha
 	s.sha, s.at = sha, time.Now()
 	if !containsStr(s.seen, sha) {
 		s.seen = append(s.seen, sha)
@@ -193,7 +198,11 @@ func (s *StableSource) Refresh(ctx context.Context) error {
 			s.seen = s.seen[len(s.seen)-stableSeenMax:]
 		}
 	}
+	on := s.OnStable
 	s.mu.Unlock()
+	if moved && on != nil {
+		go on(sha)
+	}
 	return nil
 }
 
@@ -312,6 +321,22 @@ func (s *StableSource) loadTarball(ctx context.Context, sha string) bool {
 
 // fetchTarball is every client path (stablePathOK) of sha's tarball.
 func (s *StableSource) fetchTarball(ctx context.Context, sha string) (map[string][]byte, error) {
+	return s.tarballFiles(ctx, sha, stablePathOK)
+}
+
+// Tree is every path of sha's tarball that keep accepts (a node release,
+// claude-fleet#2335) — one codeload request, nothing cached here: the release
+// store keeps what it builds.
+func (s *StableSource) Tree(ctx context.Context, sha string, keep func(string) bool) (map[string][]byte, error) {
+	if !shaRe.MatchString(sha) {
+		return nil, fmt.Errorf("bad sha %q", sha)
+	}
+	return s.tarballFiles(ctx, sha, keep)
+}
+
+// tarballFiles is every path keep accepts in sha's codeload tarball; the
+// client manifest must be among them (a tarball without it is not this repo).
+func (s *StableSource) tarballFiles(ctx context.Context, sha string, keep func(string) bool) (map[string][]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, stableTarTime)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.codeloadBase()+"/"+s.repo()+"/tar.gz/"+sha, nil)
@@ -347,7 +372,7 @@ func (s *StableSource) fetchTarball(ctx context.Context, sha string) (map[string
 		}
 		// <repo>-<sha>/<path>: the top directory is the archive's, not the repo's
 		_, p, ok := strings.Cut(hd.Name, "/")
-		if !ok || !stablePathOK(p) || hd.Size > stableFileMax {
+		if !ok || !keep(p) || hd.Size > stableFileMax {
 			continue
 		}
 		b, err := io.ReadAll(io.LimitReader(tr, stableFileMax+1))

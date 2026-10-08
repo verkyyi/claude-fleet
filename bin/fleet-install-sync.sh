@@ -37,7 +37,9 @@
 # One tick, in order (each gate is a line in the state file + one log line):
 #
 #   off        FLEET_INSTALL_SYNC=0 (this login's fleet.conf / fleet.settings)
-#              → nothing is fetched or moved. Default 1 (on).
+#              → nothing is fetched or moved. Default 1 (on). Also off for a
+#              login the machine daemon manages (accounts.json, issue #2334):
+#              the machine's one updater moves it with every other part.
 #   fetch      `git fetch --no-tags origin +refs/tags/stable:refs/tags/stable`
 #              over https, no credentials, bounded by --timeout (git's own
 #              low-speed abort — macOS has no timeout(1)). A fetch that fails is
@@ -765,6 +767,15 @@ main() {
   if [ "${FLEET_INSTALL_SYNC:-1}" = 0 ]; then
     DEFERRED_SINCE=''
     finish off 'FLEET_INSTALL_SYNC=0 — this login does not follow stable (set it to 1, or delete the line, to switch back on)'
+  fi
+  # --- managed (issue #2334) -----------------------------------------------------
+  # A login the machine daemon manages runs the root runtime, and the machine's ONE
+  # updater (fleet-node-update.py, the daemon's `update` task) moves every part of
+  # the machine to the release at once — this login moving its own copy would be a
+  # second, half update. A machine with no accounts.json is byte for byte as before.
+  if command -v fleet_node_manages >/dev/null 2>&1 && fleet_node_manages; then
+    DEFERRED_SINCE=''
+    finish off 'managed — the machine updater (com.claude-fleet.node · fleet-node-update.py) moves this machine to the release; `fleet doctor --machine` shows it'
   fi
 
   git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 \

@@ -338,6 +338,17 @@ grep -q 'open.* http://127.0.0.1/fleet/login?code=BCDF-GHJK$' "$SB/opened" 2>/de
   && echo "$out" | grep -q 'BCDF-GHJK' && ! echo "$out" | grep -q '█\|▀\|▄' \
   && ok "L said so, no QR drawn, certificate written" || bad "L rc=$rc: $out"
 
+echo "$out" | grep -q '没看到？打开 http://.* ，或按 q 改用手机扫码' && ok "L the phone fallback is offered at once" || bad "L no fallback line: $out"
+# L2 the newcomer's one-session view (solo, issue #2347): no fleet word before the first key
+rm -f "$HOME/.ssh/fleet-cert-cert.pub" "$SB/opened"
+start_hub
+out="$(PATH="$SB/fakebin:$PATH" FLEET_LOGIN_BROWSER=1 FLEET_CLIENT_LAYOUT=solo python3 "$BIN/fleet-login.py" 2>&1 </dev/null)"; rc=$?
+stop_hub
+ALL_OUT="$ALL_OUT$out"
+[ "$rc" = 0 ] && echo "$out" | grep -q '没看到？打开 http://127.0.0.1/fleet/login?code=BCDF-GHJK$' \
+  && ! echo "$out" | grep -v '^⚠' | grep -Eq '扫码|只协调|入口' \
+  && ok "L2 solo: the link only — 扫码 · 只协调 · 入口 never on the newcomer's screen" || bad "L2 rc=$rc: $out"
+
 # ── M — no screen (ssh in), or --qr: the opener is never called, the QR is drawn ──
 rm -f "$HOME/.ssh/fleet-cert-cert.pub" "$SB/opened"
 start_hub

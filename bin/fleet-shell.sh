@@ -102,6 +102,11 @@
 #   layout <auto|single|split|multi|solo> [<session>]   the client's layout, live
 #                          (issue #2265): `@fleet_layout`, the stage's top line,
 #                          a sync — the switcher's 「打开多会话视图」 (#2266)
+#   solo <machine> <worker id>  `fleet claude`'s own one-session view (issue #2349)
+#                          — see `solo` below
+#   quit [<session>]       退出 fleet (issue #2349): every process of the client
+#                          here, the sessions untouched — see `quit` below
+#   running [--say]        exit 0 while the client runs here (`fleet status`)
 #   env [MACHINE]          print the environment the server would get (debug, tests)
 #
 # ~/.config/claude-fleet/fleet.conf — the machine's one config file (issue #1623):
@@ -464,6 +469,17 @@ stamp_ver() {
 portal_ver() {
   cat "${SHADOW:-$BIN}/fleet-compose.py" "${SHADOW:-$BIN}/fleet-ui-lang.sh" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }'
 }
+# code_sum <file…> — the code a long-lived client process runs, by content
+# (issue #2345): each loop writes it beside its pid file when it takes the pid
+# (<pid file>.code), the keys page on its window (@keys_ver), and `reload`
+# restarts the ones whose code on disk is not what they started from — never
+# judged by a link, which already points at the new files.
+code_sum() { cat "$@" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }'; }
+# keys_code — what the keys page draws from (fleet-keys.sh and what it runs)
+keys_code() {
+  local d="${SHADOW:-$BIN}"
+  code_sum "$d/fleet-keys.sh" "$d/fleet-ui-lang.sh" "$d/dash-keymap.sh" "$d/fleet-sidebar-menu.sh" "$d/fleet-lib.sh"
+}
 # portal_fresh <window id> [--force] — the stage's portal window on the code on
 # disk: a window started by another version (@portal_ver differs, or none) has
 # its pane respawned in place — same window id, same @fleet_role / @remote, so
@@ -702,6 +718,7 @@ keeper)
   p=''; { read -r p < "$CL_DIR/keeper.pid"; } 2>/dev/null
   case "$p" in ''|*[!0-9]*) ;; *) [ "$p" != $$ ] && kill -0 "$p" 2>/dev/null && exit 0 ;; esac
   printf '%s\n' $$ > "$CL_DIR/keeper.pid"
+  code_sum "$BIN/fleet-shell.sh" > "$CL_DIR/keeper.pid.code" 2>/dev/null
   # every FLEET_CLIENT_INPUT_EVERY (5 s): an input on a client here is reported
   # (#1932); the renewal and the rest every FLEET_CLIENT_LEASE_EVERY (15 s)
   every=${FLEET_CLIENT_LEASE_EVERY:-15}; tick=${FLEET_CLIENT_INPUT_EVERY:-5}
@@ -804,7 +821,9 @@ keeper)
 actions)
   s="${2:-$SESS}"
   [ "${FLEET_CLIENT_ACTIONS:-1}" != 0 ] || exit 0
-  FLEET_CLIENT_DIR="$CL_DIR" exec python3 "$BIN/fleet-client-actions.py" run --session "$s"
+  # its code, for reload (code_sum): written by the one that takes the pid
+  FLEET_CLIENT_DIR="$CL_DIR" FLEET_ACTIONS_CODE="$(code_sum "$BIN/fleet-client-actions.py" "$BIN/fleet-client-lease.py")" \
+    exec python3 "$BIN/fleet-client-actions.py" run --session "$s"
   ;;
 # ---------------------------------------------------------------------------------
 # The standby screen (issue #1715): what standby_popup runs on a client — why it
@@ -861,6 +880,7 @@ warm)
     p=''; { read -r p < "$WD/loop.pid"; } 2>/dev/null
     case "$p" in ''|*[!0-9]*) ;; *) [ "$p" != $$ ] && kill -0 "$p" 2>/dev/null && exit 0 ;; esac
     printf '%s\n' $$ > "$WD/loop.pid"
+    code_sum "$BIN/fleet-shell.sh" > "$WD/loop.pid.code" 2>/dev/null
   fi
   SSHC="${FLEET_REMOTE_SSH_CMD:-ssh}"
   CACHEF="${TMPDIR:-/tmp}/.claude-dash/global/remote_$s"
@@ -1030,7 +1050,7 @@ keys)
     w=$(TS new-window -d -P -F '#{window_id}' -t "=$STAGE:" -n "$(sh "$BIN/fleet-ui-lang.sh" t keys_page_title 2>/dev/null || echo 按键)" -c "$HOME" \
           "exec bash $(sq "$BIN/fleet-keys.sh") --page") || exit 1
     TS set-window-option -t "$w" @fleet_role keys \; set-window-option -t "$w" @remote -: \; \
-      set-window-option -t "$w" automatic-rename off 2>/dev/null
+      set-window-option -t "$w" automatic-rename off \; set-window-option -t "$w" @keys_ver "$(keys_code)" 2>/dev/null
   fi
   TS select-window -t "$w" 2>/dev/null || exit 1
   exit 0
@@ -1060,10 +1080,11 @@ viewer)
 # switched the install's link. The mirror again (onto the link, so it follows
 # it), both confs written from the new templates and sourced into the two
 # servers (the same servers, the same pids); the list drawn again where its
-# VIEW_VERSION moved; a proxy pane respawned only when fleet-remote-view.sh
-# itself changed (`--from <old home>` to compare with — no `--from`, none is);
-# the warm loop, the actions loop and the data loop restarted only when their
-# script changed. `--all` (issue #1829: files that moved under the running
+# code moved (its content stamp, VIEW_STAMP); a proxy pane respawned only when
+# fleet-remote-view.sh itself changed (`--from <old home>` to compare with — no
+# `--from`, none is); the warm loop, the actions loop, the data loop and the
+# keeper restarted when their script changed or they run other code than the
+# files' now (code_sum, issue #2345). `--all` (issue #1829: files that moved under the running
 # client, so what it runs is unknown) counts every script as changed — every
 # proxy pane respawned, every loop and the keeper restarted (`--in-keeper`: the
 # keeper is the caller and restarts itself). Exit non-zero = the caller rolls back.
@@ -1095,6 +1116,19 @@ reload)
   T run-shell -b -t "=$SESS:" "bash $(sq "$SHADOW/fleet-sidebar.sh") sync '#{session_id}' >/dev/null 2>&1 || :"
   # changed <file> — that script is not what the old client ran
   changed() { [ -n "$all" ] || { [ -n "$from" ] && ! cmp -s "$from/bin/$1" "$REAL_BIN/$1"; }; }
+  # stale <pid file> <file…> — that loop is running, and not on this code: what it
+  # wrote at its start (<pid file>.code; none = a loop older than the stamp) is
+  # not the files' now (issue #2345 — a reload with no `--from`, or one whose
+  # old home already had these files, used to leave it on its old code)
+  stale() {
+    local pf="$1" p='' c=''
+    shift
+    { read -r p < "$pf"; } 2>/dev/null
+    case "$p" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$p" 2>/dev/null || return 1
+    { read -r c < "$pf.code"; } 2>/dev/null
+    [ "$c" != "$(code_sum "$@")" ]
+  }
   if changed fleet-remote-view.sh; then
     TS list-panes -s -t "=$STAGE" -F '#{pane_id} #{pane_start_command}' 2>/dev/null \
       | while read -r p c; do
@@ -1108,7 +1142,11 @@ reload)
     | while read -r w r; do
         case "$r" in
           portal) portal_fresh "$w" ${all:+--force} ;;
-          keys) changed fleet-keys.sh && TS respawn-pane -k -t "$w" 2>/dev/null ;;
+          keys)
+            kv=$(keys_code)
+            if changed fleet-keys.sh || [ "$(TS show-window-option -v -t "$w" @keys_ver 2>/dev/null)" != "$kv" ]; then
+              TS respawn-pane -k -t "$w" 2>/dev/null && TS set-window-option -t "$w" @keys_ver "$kv" 2>/dev/null
+            fi ;;
         esac
       done
   # restart_loop <pid-file> <start command…> — that loop, on the new code
@@ -1120,8 +1158,12 @@ reload)
     rm -f "$pf"
     ( nohup "$@" </dev/null >/dev/null 2>&1 & )
   }
-  changed fleet-shell.sh && restart_loop "$CACHE/tmp/warm/loop.pid" bash "$SHADOW/fleet-shell.sh" warm "$SESS"
-  changed fleet-client-actions.py && restart_loop "$CL_DIR/actions.pid" bash "$SHADOW/fleet-shell.sh" actions "$SESS"
+  if changed fleet-shell.sh || stale "$CACHE/tmp/warm/loop.pid" "$SHADOW/fleet-shell.sh"; then
+    restart_loop "$CACHE/tmp/warm/loop.pid" bash "$SHADOW/fleet-shell.sh" warm "$SESS"
+  fi
+  if changed fleet-client-actions.py || stale "$CL_DIR/actions.pid" "$SHADOW/fleet-client-actions.py" "$SHADOW/fleet-client-lease.py"; then
+    restart_loop "$CL_DIR/actions.pid" bash "$SHADOW/fleet-shell.sh" actions "$SESS"
+  fi
   if changed fleet-hub-sessions.sh || changed fleet-lib.sh; then
     p=$(bash "$SHADOW/fleet-hub-sessions.sh" --status 2>/dev/null | sed -n 's/^loop \([0-9][0-9]*\).*/\1/p')
     [ -n "$p" ] && kill "$p" 2>/dev/null
@@ -1129,7 +1171,21 @@ reload)
   fi
   # the keeper too, when what it runs is unknown — a new one takes over once the
   # old one's pid is gone (one keeper per server)
-  [ -n "$all" ] && [ -z "$inkeeper" ] && restart_loop "$CL_DIR/keeper.pid" bash "$SHADOW/fleet-shell.sh" keeper "$SESS"
+  # (never the keeper this reload runs under — its update tick takes exit 4 and
+  # execs itself on the new code)
+  under() {   # under <pid> — this process descends from it
+    local q=$$
+    while [ "${q:-0}" -gt 1 ] 2>/dev/null; do
+      [ "$q" = "$1" ] && return 0
+      q=$(ps -o ppid= -p "$q" 2>/dev/null | tr -d ' ')
+    done
+    return 1
+  }
+  kp=''; { read -r kp < "$CL_DIR/keeper.pid"; } 2>/dev/null
+  if [ -z "$inkeeper" ] && ! { [ -n "$kp" ] && under "$kp"; } \
+     && { [ -n "$all" ] || stale "$CL_DIR/keeper.pid" "$SHADOW/fleet-shell.sh"; }; then
+    restart_loop "$CL_DIR/keeper.pid" bash "$SHADOW/fleet-shell.sh" keeper "$SESS"
+  fi
   stamp_ver
   exit 0
   ;;
@@ -1149,6 +1205,26 @@ layout)
   exit 0
   ;;
 # ---------------------------------------------------------------------------------
+# The sessions from the command line (issue #2365): `fleet ls | show | open |
+# rename | close | reap | answer` (bin/fleet-session-cli.py) read the client's own
+# rows and act through its hub identity, so they run with THIS server's
+# environment — imported here as home-session does — and with TMUX naming its
+# socket, so a bare `tmux` (the rows' producer, the list's queue) reaches it.
+#   cli <verb> [args…]       Exit: the verb's; 1 when no client is running.
+cli)
+  shift
+  T has-session -t "=$SESS" 2>/dev/null || { note "客户端没在运行（${SESS}）：先敲 fleet 打开它，⌃D / prefix d 离开后它仍在后台"; exit 1; }
+  while IFS= read -r line; do
+    case "$line" in FLEET_*=*|CCQUOTA_*=*|TMPDIR=*|XDG_*=*) export "${line?}" ;; esac
+  done <<EOF
+$(T show-environment -g 2>/dev/null)
+EOF
+  sock=$(T display-message -p '#{socket_path}' 2>/dev/null)
+  [ -n "$sock" ] && TMUX="$sock,0,0" && export TMUX
+  export FLEET_SHELL=1 FLEET_SESSION="$SESS" FLEET_CLIENT_DIR="$CL_DIR"
+  exec python3 "$BIN/fleet-session-cli.py" "$@"
+  ;;
+# ---------------------------------------------------------------------------------
 # A HOME session (issue #2264, EPIC #2259 共同约定 2) — `fleet claude` / `fleet codex`
 # (bin/fleet-home-session.sh) and a newcomer's first session (`--first`, below):
 # a session of no repo, in the machine's $HOME, with that agent. ONE road —
@@ -1158,22 +1234,23 @@ layout)
 # foreground and says what it is waiting for; once it is placed, a background
 # step turns the stage onto it as soon as the list has its row. `--first` also
 # puts the first-screen hint on the client's line.
-#   home-session <claude|codex> [--node <m>] [--body-file <f>] [--first]
+#   home-session <claude|codex> [--node <m>] [--body-file <f>] [--first] [--no-stage]
 # Exit: fleet-client-place.sh's code (0 placed); 1 no client here; 2 usage.
 home-session)
   shift
   hagent="${1:-}"; [ $# -gt 0 ] && shift
-  hnode=auto; hbody=''; hfirst=0
+  hnode=auto; hbody=''; hfirst=0; hnostage=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --node)      [ $# -ge 2 ] || exit 2; hnode="${2:-auto}"; shift 2 ;;
       --body-file) [ $# -ge 2 ] || exit 2; hbody="$2"; shift 2 ;;
       --first)     hfirst=1; shift ;;
+      --no-stage)  hnostage=1; shift ;;
       *) note "home-session: unknown $1"; exit 2 ;;
     esac
   done
   case "$hagent" in claude|codex) ;; *) note 'home-session: claude or codex'; exit 2 ;; esac
-  T has-session -t "=$SESS" 2>/dev/null || { note "客户端没在运行（$SESS）"; exit 1; }
+  T has-session -t "=$SESS" 2>/dev/null || { note "客户端没在运行（${SESS}）"; exit 1; }
   # the server's environment (write_conf's set-environment lines): the hub, the
   # cache's TMPDIR (so $FLEET_C is the shell's), the stage — what a row's own
   # jump runs with
@@ -1183,7 +1260,8 @@ home-session)
 $(T show-environment -g 2>/dev/null)
 EOF
   export FLEET_CLIENT_DIR="$CL_DIR" FLEET_SESSION="$SESS"
-  note "$(sh "$BIN/fleet-ui-lang.sh" t home_opening_fmt "$hagent" 2>/dev/null)"
+  hopen=home_opening_fmt; [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] && hopen=home_opening_solo_fmt
+  note "$(sh "$BIN/fleet-ui-lang.sh" t "$hopen" "$hagent" 2>/dev/null)"
   hout=$(bash "$BIN/fleet-client-place.sh" - home --agent "$hagent" --node "$hnode" ${hbody:+--body-file "$hbody"}); hrc=$?
   hline=$(printf '%s\n' "$hout" | tail -n1)
   if [ "$hrc" != 0 ]; then
@@ -1191,6 +1269,9 @@ EOF
     exit "$hrc"
   fi
   printf '%s\n' "$hline"
+  # where it opened (issue #2339): the client's view machine (「入口选了 …」) and
+  # the hub's placement are two choices — say the second, so one never reads as the other
+  case "$hline" in REMOTE\ ?*) note "$(sh "$BIN/fleet-ui-lang.sh" t home_placed_fmt "$(printf '%s' "$hline" | awk '{ print $2 }')" 2>/dev/null)" ;; esac
   # a HOME session made: the newcomer's first is no longer owed (below)
   mkdir -p "$CONF_DIR" 2>/dev/null && : > "$CONF_DIR/home-session.first"
   # its row key: `REMOTE <m> <op> done <worker_id>` → wid:<worker_id>; with no hub
@@ -1200,6 +1281,9 @@ EOF
     REMOTE\ *) hkey=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $5 }'); case "$hkey" in */*) hkey="wid:$hkey" ;; *) hkey='' ;; esac ;;
     LOCAL\ *)  hkey=$(printf '%s' "${hline#*$'\t'}" | awk '{ print $1 }'); case "$hkey" in @[0-9]*) ;; *) hkey='' ;; esac ;;
   esac
+  # `fleet claude`'s own view shows it (--no-stage, issue #2349): the client's
+  # stage stays on what it shows
+  [ -n "$hnostage" ] && exit 0
   # the stage onto it, in the background: a placed session reaches the list on
   # the hub loop's next read; give up after FLEET_HOME_OPEN_WAIT (60 s), leaving
   # it on the list. FLEET_HOME_OPEN_CMD is the selftests' seam.
@@ -1226,6 +1310,191 @@ EOF
       T display-message -d 15000 "$(sh "$BIN/fleet-ui-lang.sh" t home_first_hint 2>/dev/null)" 2>/dev/null
     fi
   ) </dev/null >/dev/null 2>&1 &
+  exit 0
+  ;;
+# ---------------------------------------------------------------------------------
+# 退出 fleet (issue #2349) — not 放到后台 (prefix d / closing the window / the
+# one-session view's ⌃D, after which everything runs on and `fleet` is back at
+# once): every process of the CLIENT on this computer goes — the keeper (and
+# with it the lease, given back here, so the next client anywhere takes nothing
+# over), the hub loop, the actions loop, the warm loop and its ssh masters, the
+# shell's server with the list and the bar, the stage with its connections.
+# The sessions on the machines are not touched: a closed proxy only drops its
+# connection. No question first — nothing is lost. `fleet quit`, ⌘Q / prefix Q,
+# the last line of ⌘K and of the row menu. A call from inside the client (a key,
+# a menu: its own server runs it) goes on in the background, since what runs it
+# is about to go.
+#   quit [<session>] [--quiet] [--if-unattached]   Exit 0 (also when nothing was
+#                          running; --if-unattached: nothing while a terminal is on it).
+quit)
+  shift
+  qquiet=''; qifun=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --quiet) qquiet=1; shift ;;
+      --if-unattached) qifun=1; shift ;;   # `fleet claude`'s own: a client someone uses stays
+      -*) note "quit: unknown $1"; exit 2 ;;
+      *) SESS=$1; STAGE="$1-stage"; shift ;;
+    esac
+  done
+  if [ -n "${TMUX:-}" ] && [ "${TMUX%%,*}" = "$(T display-message -p '#{socket_path}' 2>/dev/null)" ]; then
+    ( trap '' HUP; cd "$HOME" 2>/dev/null || :
+      nohup env -u TMUX -u TMUX_PANE bash "$SELF" quit "$SESS" --quiet </dev/null >/dev/null 2>&1 & )
+    exit 0
+  fi
+  qrun=''; T has-session -t "=$SESS" 2>/dev/null && qrun=1
+  [ -n "$qifun" ] && [ -n "$(T list-clients -F '#{client_name}' 2>/dev/null)" ] && exit 0
+  # the server's environment: the hub, the device's certificate, the cache's
+  # TMPDIR — what the keeper gives the lease back with
+  if [ -n "$qrun" ]; then
+    while IFS= read -r line; do
+      case "$line" in FLEET_*=*|CCQUOTA_*=*|TMPDIR=*|XDG_*=*) export "${line?}" ;; esac
+    done <<EOF
+$(T show-environment -g 2>/dev/null)
+EOF
+  fi
+  export TMPDIR="$CL_DIR"
+  # the machines the sessions are on, read before the list's cache goes quiet
+  qnodes=$(LC_ALL=C awk -F $'\037' '$1 ~ /^wid:/ && $2 != "" { print $2 }' \
+             "$CL_DIR/.claude-dash/global/remote_$SESS" 2>/dev/null | sort -u | paste -sd / -)
+  # qkill <pid file> <argv pattern> — that loop, when the pid is still it
+  qkill() {
+    local p='' c
+    { read -r p < "$1"; } 2>/dev/null
+    case "$p" in ''|*[!0-9]*) return 0 ;; esac
+    c=$(ps -o command= -p "$p" 2>/dev/null) || c=''
+    case "$c" in *$2*) kill "$p" 2>/dev/null ;; esac
+    rm -f "$1"
+  }
+  # 1. the keeper first, so nothing renews what is given back here
+  qkill "$CL_DIR/keeper.pid" 'fleet-shell.sh keeper'
+  id=''; { read -r id < "$CL_DIR/client.lease"; } 2>/dev/null
+  [ -n "$id" ] && lease release --lease "$id"
+  rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/client.where.json" "$CL_DIR/client.key" "$CL_DIR/client.list.json" "$CL_DIR/client.why" "$CL_DIR/client.rescan"
+  # 2. the loops beside it, and the warm lines (closed, not left to ControlPersist)
+  qkill "$CL_DIR/.claude-dash/global/hubsess.pid" 'fleet-hub-sessions.sh'
+  qkill "$CL_DIR/actions.pid" 'fleet-client-actions.py'
+  qkill "$CL_DIR/warm/loop.pid" 'fleet-shell.sh warm'
+  for sk in "$CL_DIR"/warm/*.sock; do
+    [ -S "$sk" ] && ssh -S "$sk" -O exit fleet >/dev/null 2>&1
+    rm -f "$sk" "$sk.pending"
+  done
+  # 3. the two servers — the client's own, never a fleet's
+  T kill-server 2>/dev/null
+  TS kill-server 2>/dev/null
+  if [ -z "$qquiet" ]; then
+    if [ -z "$qrun" ]; then sh "$BIN/fleet-ui-lang.sh" t quit_none
+    elif [ -n "$qnodes" ]; then sh "$BIN/fleet-ui-lang.sh" t quit_done_fmt "$qnodes"
+    else sh "$BIN/fleet-ui-lang.sh" t quit_done; fi
+    echo
+  fi
+  exit 0
+  ;;
+# ---------------------------------------------------------------------------------
+# Whether the client runs here (issue #2349) — `fleet status`'s line with --say.
+#   running [<session>] [--say]      Exit 0 it does, 1 it does not.
+running)
+  shift; rsay=''
+  for a in "$@"; do case "$a" in --say) rsay=1 ;; *) SESS=$a; STAGE="$a-stage" ;; esac; done
+  if T has-session -t "=$SESS" 2>/dev/null; then
+    [ -n "$rsay" ] && { sh "$BIN/fleet-ui-lang.sh" t client_bg; echo; }
+    exit 0
+  fi
+  [ -n "$rsay" ] && { sh "$BIN/fleet-ui-lang.sh" t client_off; echo; }
+  exit 1
+  ;;
+# ---------------------------------------------------------------------------------
+# `fleet claude` / `fleet codex`'s OWN view (issue #2349): one session, the whole
+# terminal — no list, no top line, one bottom line 「⌃D 放到后台 · /exit 结束会话」
+# with the machine on the right. It is not the client's layout (FLEET_CLIENT_LAYOUT
+# is neither read nor written) and not its stage: a tmux server of its own,
+# `-L <session>-solo-<pid>`, made from the stage's conf (its environment, its
+# ssh) with this view's bar over it, holding ONE proxy window pinned to that
+# session (fleet-remote-view.sh run --shell <machine> <worker id>) — so the
+# client's own view, open in another terminal or not, never moves with it.
+# Beside it, for as long as it lives and no longer, a watcher reads the row off
+# the client's list cache: the session going `exited` (the agent's /exit) while
+# watched ends the view. The attach returns either way — ⌃D, prefix d, closing
+# the terminal, the session ending — and the server goes with it; the terminal
+# gets one line: 「会话已结束（m5）」 or 「会话在后台继续（m5）。`fleet` 可以找回。」
+# The client must be up: its warm lines and its list's cache are what this rides.
+#   solo <machine> <worker id> [<session>]     Exit 0; 1 no client; 2 usage.
+#   FLEET_SOLO_ATTACH=0 (the selftests): start it, print its socket, no attach.
+solo)
+  snode="${2:-}"; swid="${3:-}"
+  [ -n "${4:-}" ] && { SESS=$4; STAGE="$4-stage"; }
+  case "$snode" in ''|*[!A-Za-z0-9._-]*) note 'solo: <machine> <worker id>'; exit 2 ;; esac
+  case "$swid" in ''|*[!A-Za-z0-9._/@:-]*) note 'solo: <machine> <worker id>'; exit 2 ;; esac
+  T has-session -t "=$SESS" 2>/dev/null || { note "客户端没在运行（$SESS）"; exit 1; }
+  [ -f "$CACHE/tmux-stage.conf" ] || { note "缺 $CACHE/tmux-stage.conf"; exit 1; }
+  SOLO="$SESS-solo-$$"
+  SB=$BIN; [ -x "$CACHE/bin/fleet-remote-view.sh" ] && SB="$CACHE/bin"
+  OV="$CACHE/tmux-solo.$$.conf"
+  bar=$(sh "$SB/fleet-ui-lang.sh" t solo_view_bar 2>/dev/null)
+  # ONE conf, read at the server's start: the stage's (its environment, its ssh)
+  # with this view's bar after it — so not one line of the stage's top line
+  # (fleet-topbar.py, the client's record) ever runs on this server
+  { cat "$CACHE/tmux-stage.conf"; cat <<EOF
+# fleet-shell.sh solo (issue #2349): this view's bar over the stage's conf
+set -g status on
+set -g status-position bottom
+set -g status-interval 0
+set -g status-style "bg=#1a1b26,fg=#565f89"
+set -g status-left-length 200
+set -g status-left " #[range=user|bg]#[fg=#c0caf5]#[bold]${bar%% *}#[nobold]#[fg=#565f89] ${bar#* }#[norange]#[default]"
+set -g status-right "#[fg=#565f89]$snode "
+set -g status-right-length 40
+set -g pane-border-status off
+bind -n MouseDown1Status if -F '#{==:#{mouse_status_range},bg}' { detach-client }
+bind -n C-d detach-client
+# the client's prefix, with ONE key: d, to the background as everywhere
+set -g prefix $PREFIX
+unbind -a -T prefix
+bind d detach-client
+EOF
+  } > "$OV" || { note "写不了 $OV"; exit 1; }
+  sw=$(tmux -L "$SOLO" -f "$OV" new-session -d -P -F '#{window_id}' -s "$SOLO" -n "$snode" -c "$HOME" \
+         -x "$(tput cols 2>/dev/null || echo 180)" -y "$(tput lines 2>/dev/null || echo 50)" \
+         "exec bash $(sq "$SB/fleet-remote-view.sh") run --shell $(sq "$snode") $(sq "$swid")") \
+    || { rm -f "$OV"; note 'tmux 开不了会话'; exit 1; }
+  tmux -L "$SOLO" set-window-option -t "$sw" @remote "$snode:$swid" \; \
+    set-window-option -t "$sw" automatic-rename off 2>/dev/null
+  rm -f "$OV"
+  ended="$CL_DIR/solo-ended.$SOLO"; rm -f "$ended"; smain=$$
+  [ "${FLEET_SOLO_ATTACH:-1}" = 0 ] && smain=''   # no attach to outlive: the caller ends it
+  # the watcher: the row's state off the list's cache, once a second, while the
+  # view lives — a change to `exited` it SAW ends the view (opening a session
+  # already exited is no exit, as the client's own solo_ended)
+  (
+    trap '' HUP; cd "$HOME" 2>/dev/null || :
+    rf="$CL_DIR/.claude-dash/global/remote_$SESS"; prev=''
+    while tmux -L "$SOLO" has-session -t "=$SOLO" 2>/dev/null; do
+      # the view's own process gone without its cleanup (SIGKILLed): the view too
+      [ -z "$smain" ] || kill -0 "$smain" 2>/dev/null || { tmux -L "$SOLO" kill-server 2>/dev/null; break; }
+      st=$(LC_ALL=C awk -F $'\037' -v k="wid:$swid" '$1 == k { print $6; exit }' "$rf" 2>/dev/null)
+      if [ "$st" = exited ] && [ -n "$prev" ] && [ "$prev" != exited ]; then
+        printf '%s\n' "$snode" > "$ended"
+        tmux -L "$SOLO" detach-client -s "=$SOLO" 2>/dev/null
+        break
+      fi
+      [ -n "$st" ] && prev=$st
+      sleep "${FLEET_SOLO_WATCH_EVERY:-1}"
+    done
+  ) </dev/null >/dev/null 2>&1 &
+  swatch=$!
+  if [ "${FLEET_SOLO_ATTACH:-1}" = 0 ]; then printf '%s\n' "$SOLO"; exit 0; fi
+  # the terminal closed under it (a HUP): the view goes all the same, silently
+  trap 'kill "$swatch" 2>/dev/null; tmux -L "$SOLO" kill-server 2>/dev/null; rm -f "$ended"; exit 0' HUP TERM
+  env -u TMUX -u TMUX_PANE tmux -L "$SOLO" attach-session -t "=$SOLO"
+  trap - HUP TERM
+  # whatever ended the attach, the view goes: its connection drops, the session
+  # on its machine never notices
+  kill "$swatch" 2>/dev/null
+  tmux -L "$SOLO" kill-server 2>/dev/null
+  if [ -s "$ended" ]; then sh "$SB/fleet-ui-lang.sh" t solo_view_ended_fmt "$snode"
+  else sh "$SB/fleet-ui-lang.sh" t solo_view_left_fmt "$snode"; fi
+  echo
+  rm -f "$ended"
   exit 0
   ;;
 # ---------------------------------------------------------------------------------

@@ -567,6 +567,55 @@ Do not install from memory: read the doc and work from it.
   意外下线: leases released at once, nothing re-dispatched, the record kept in
   `fleet_spot_nodes`. Off (no image) adds nothing — `TestSpotOffAddsNothing`
   and `fleet-spot-evacuate-selftest.sh` case A pin the degenerate case.
+- **A managed machine has ONE root daemon for its machine-level work** (issue
+  #2331, EPIC #2329 C3). `bin/fleet-node-supervisor.py` (`com.claude-fleet.node`,
+  root, KeepAlive, written by its own `install` — never a `launchd/*.tmpl`, which
+  every login would install) keeps its children up (the shared credential proxy,
+  C5's node program; backoff 1 s doubling to 60 s) and runs the machine task table
+  once — each task one copy, under `locks/<task>.lock`; account tasks are the
+  account half below. It runs only root-owned code from the root runtime, moves
+  fleet plist leftovers to `/var/db/fleet-node/attic/` (7 days, `attic restore`),
+  only REPORTS an unexpected live plist, and adopts a live child after a restart
+  (`state.json`). A child whose old LaunchDaemon is still installed stays
+  launchd's (`legacy`). `status` is one line per item; the doctor's `node` row
+  reads `status --check` (not installed ⇒ no row). BREAK-IT `node-supervisor-dead`.
+  **The account half is the same daemon** (issue #2332, C4): ONE account table —
+  every `launchd/*.plist.tmpl` of the runtime but the machine's (memguard), each
+  with its own interval / environment / log paths, a KeepAlive one (spinner,
+  webhook, cred-proxy) as a child — run for every login `account adopt <login>`
+  took over, DEMOTED to it (initgroups/setgid/setuid, its HOME / USER / PATH /
+  `FLEET_CONF_DIR` / TMPDIR; the log opened by the demoted process, never root).
+  adopt boots the login's own LaunchAgents / LaunchDaemons out into the attic
+  (kept, never purged) and puts every one back if one will not unload;
+  `account release <login>` is the one-command way back. `accounts.json` is the
+  one list: `fleet_node_manages` (`fleet-daemon-lib.sh`) reads it, and a managed
+  login's `fleet-install-apply.sh` renders no plist, its probe asks the daemon.
+  expected.json's `accounts` narrows who runs. No accounts.json ⇒ byte for byte
+  as before. BREAK-IT `account-adopt-stuck`.
+- **A managed machine has ONE node program, `ccquota agent --machine`** (issue
+  #2333, EPIC #2329 C5). Root, started by the supervisor's `node-agent` child once
+  `/var/db/fleet-node/machine.env` + `logins/<login>.env` exist; one control link
+  with the machine's token, each login a tenant that says its own hello on it
+  (`Message.login`, its own token in `Hello.login_token`) and stays its own
+  endpoint. A login is proven ONLY by `loginEndpoint` (`internal/api/node_machine.go`)
+  — anything else is `WRONG_LOGIN`, on both halves — and every command a tenant
+  starts goes through `prepCmd` (`internal/agent/runas.go`): dropped to the login,
+  refused rather than run as root. `docs/MANAGED-NODE.md` §6; BREAK-IT
+  `machine-agent-wrong-login`.
+- **A managed machine has ONE updater, and every part moves with the release or
+  none does** (issue #2334, EPIC #2329 C6). `bin/fleet-node-update.py` is the
+  supervisor's `update` task (root): `release.json` (repo root, signed with the
+  tree by C7) pins ccquota · Claude Code · Codex · tmux by artifact; each lands
+  under ONE link — `<root>/current` → `<sha>/` (runtime, `bin/ccquota`,
+  `tools/bin/<tool>` → the content-addressed root cache) — so a switch is one
+  rename and `.prev` the way back. The bootstrap cache's Claude and every managed
+  account's `~/.local/bin/{claude,codex}` follow (linked demoted, never over a
+  regular file); the daemon restarts last (`update-restart.json`). The machine
+  doctor (`fleet doctor --machine`) after the switch: a FAIL the old version did
+  not have rolls EVERYTHING back and skips that sha. `update.json`'s phase makes
+  a killed tick resume or roll back. A managed login's install-sync reads `off ·
+  managed`; `fleet-stable.sh move` refuses an updater tree without a valid
+  release.json (`release:`). `docs/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`.
 - **A machine has three words — online, 维护中, lost — and only the middle one is
   the operator's** (issue #1427). `maintenance` is the fleet setting
   `fleet.node_maintenance.<machine>` on the hub (`bin/fleet-node-maintenance.sh

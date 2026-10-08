@@ -1327,6 +1327,26 @@ func fleetToolSpecs() []toolSpec {
 				"idempotency_key": idemProp}, "worker_id", "idempotency_key"),
 		},
 		{
+			Name:  "worker_rename",
+			Title: "Rename a worker's window",
+			Description: "Change the display name of a worker's window (tmux rename-window, automatic " +
+				"rename off): its key, Issue, identity and reap policy are unchanged. name: 1-64 characters, " +
+				"no control character. Needs worker:message." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"worker_id": workerIDProp,
+				"name":            map[string]any{"type": "string", "description": "the new window name"},
+				"idempotency_key": idemProp}, "worker_id", "name", "idempotency_key"),
+		},
+		{
+			Name:  "worker_reap_policy",
+			Title: "Change when a worker may be reaped",
+			Description: "Set the worker window's @reap_policy (fleet-reap-policy.sh set on its node): when the fleet " +
+				"may close the session on its own. policy: merged[:<dur>] · done[:<dur>] · loop-end · " +
+				"at:<ISO|HH:MM|epoch> · keep (dur: 90 · 30m · 2h · 3d). Needs worker:reap." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"worker_id": workerIDProp,
+				"policy":          map[string]any{"type": "string", "description": "the new reap policy, e.g. done:2h"},
+				"idempotency_key": idemProp}, "worker_id", "policy", "idempotency_key"),
+		},
+		{
 			Name:  "config_set",
 			Title: "Set one fleet setting",
 			Description: "Compare-and-set one of FLEET_MAX_SESSIONS (0–256), FLEET_AUTOFILL (0|1), " +

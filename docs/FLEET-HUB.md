@@ -106,7 +106,8 @@ operation journal. Spec: [FLEET-MCP.md](FLEET-MCP.md) «The hub route».
   never accepted as a target.
 
 `worker_message`, `worker_stop`, `worker_resume`, `worker_answer`,
-`worker_reap` and `worker_switch` take the `worker_id`. The
+`worker_reap`, `worker_switch`, `worker_rename` and `worker_reap_policy` take
+the `worker_id`. The
 node re-resolves it against the fleet's live windows at the moment it acts and
 refuses (`NOT_FOUND`, `AMBIGUOUS`) unless exactly one window holds it — a window
 that merely has the number a caller last saw is never touched. `lifecycle`
@@ -632,6 +633,28 @@ row compares it with `refs/tags/stable` (`bin/fleet-hub-image.sh`): WARN with th
 count when the hub hands out a client older than stable, INFO otherwise — no
 cluster access, no token.
 
+**Machines take stable from the hub, signed** (issue #2335, EPIC #2329 C7). Each
+time the hub sees stable move it builds a **node release** for that commit
+(`tokenledger/internal/api/fleet_release.go`, format in `internal/release`): the
+runtime tree (`bin/ conf/ hooks/ commands/ skills/ mod/ shell/ launchd/ systemd/
+docs/` + the top-level files — never `tokenledger/`, `deploy/`, `.github/`) as one
+deterministic tar, every `ccquota-<os>-<arch>` in `CCQUOTA_FLEET_DIST_DIR`, every
+pinned installer in `CCQUOTA_FLEET_RELEASE_ARTIFACTS` (Claude Code, Codex), a
+sha256 for each in `manifest.json` and an ed25519 signature over it with
+`CCQUOTA_FLEET_RELEASE_KEY` (its own Secret; `ccquota release keygen --out F`).
+Kept in `CCQUOTA_FLEET_RELEASE_DIR` (the cluster's OSS bucket, mounted), newest
+10, the current stable never pruned. Public like `/install`:
+`GET /v1/fleet/release/key` · `/<sha|stable>` (the manifest, `.files`) ·
+`/<sha>/manifest.sig` · `/<sha>/tree.tar.gz` · `/<sha>/artifacts/<name>` — a sha
+the hub neither holds nor has seen stable at is a 404, never a build. A machine
+runs `ccquota release fetch --hub <hub> --pubkey <pinned> [--artifacts] <sha|stable>
+<dest>`: the manifest must verify against the key pinned at install (`fleet node
+install`, C1), the tree and every file and binary must match it, else nothing is
+installed (exit 1, no `dest`, no `.partial`); `ccquota release verify` re-checks
+the hub's copy or (`--dir`) an installed one. GitHub is the hub's business only —
+a restarted hub that cannot reach it still serves what it stored. No key ⇒ every
+release route 404s, the hub as before. BREAK-IT row `release-tampered`.
+
 **…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
 dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
 a **proxy window** `m4 <name>` (its pane header carries the same `m4`, so a
@@ -813,6 +836,8 @@ too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
 | `worker_answer(worker_id, answer, idempotency_key)` | Answer what the worker's pane is asking (#1487): `answer` = `yes` / `no` presses the plain Yes / the No of an open **permission prompt** in the caller's name (`fleet-permission.sh --allow` / `--deny --by <actor>`; never a "don't ask again" row); option numbers (`2`, `1,3`; one per question, space-separated) answer an `AskUserQuestion` (`fleet-answer.sh --answer`). Refused — the script's own reason verbatim — when nothing is pending or the screen does not show the row | `worker:answer` on the worker's Fleet |
 | `worker_reap(worker_id, idempotency_key)` | The dash's confirmed reap (#1487): `dash-reap.sh <key> --yes` — close the window, remove the worktree when clean (a dirty one is KEPT); an unlanded Issue stays open with its claim released (#1542); a live or too-young agent is refused with the reason (`skip:live`) | `worker:reap` on the worker's Fleet |
 | `worker_switch(worker_id, idempotency_key, account?)` | Move a session onto an available subscription (#2102): `dash-migrate.sh <window> to [<account>]` — close + `claude --resume` of the same conversation; refused with the migrate's one-line reason when the target is the source, benched or over its quota gate | `worker:stop` on the worker's Fleet |
+| `worker_rename(worker_id, name, idempotency_key)` | Change the window's display name (#2358): `rename-window` + `automatic-rename off` on the one window holding the worker's `@fleet_id` (checked at action time — a recycled window id is refused); the key, Issue, identity and reap policy are untouched. `name`: 1–64 characters, no control character | `worker:message` on the worker's Fleet |
+| `worker_reap_policy(worker_id, policy, idempotency_key)` | Change when the fleet may close the session on its own (#2368): `fleet-reap-policy.sh set <policy>` — the setter the session's own `set_reap` runs — on the one window holding the worker's `@fleet_id` (checked at action time, as for a rename); the result carries the canonical policy (an `at:HH:MM` resolved on the node). `policy`: `merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<ISO|HH:MM|epoch>` · `keep` (`bin/fleet_reap_policy.py`'s grammar, checked by the hub and again by the node) | `worker:reap` on the worker's Fleet |
 | `config_set(fleet_id, key, value, expected_revision, idempotency_key)` | Compare-and-set one allowed configuration key | `config:write` plus an explicit key grant |
 | `operation_get(operation_id)` | Reconcile a caller's own operation with its node | `fleet:read` on the target Fleet |
 | `gh_issue_view(fleet_id, number, repo?, fields?)` | One Issue through the node's `fleet-gh.sh`: the daemons' local copy when fresh, else `gh`, else REST — the `gh --json` fields plus `_source` (`cache`/`gh`/`rest`) and `_age` seconds (#1274) | `gh:read` on that Fleet |
@@ -875,6 +900,22 @@ The Hub's default state directory is `~/.config/claude-fleet/hub`.
 Directories are private and databases contain no SSH private keys or provider
 credentials. The Hub relies on the administrator's SSH configuration/agent and
 each node's local provider login. Hub access tokens are not forwarded to nodes.
+
+### One node program per machine (`ccquota agent --machine`, #2333)
+
+A managed machine runs ONE `ccquota agent --machine` (root, started by the node
+supervisor's `node-agent` child) instead of one `ccquota agent` per login. It
+opens one control connection with the machine's own node token (hello capability
+`machine`), and each login says its own hello on it: `control.Message.login` set,
+the login's own node token in `Hello.login_token`. From there every message for
+or from that login carries `login`; the hub keeps each login its own endpoint
+(roster row, leases, relays, account ops), only the wire is shared. A login hello
+whose token is another login's, the machine's own or another machine's is
+answered `WRONG_LOGIN` and audited (`machine_login`); either side answers
+`WRONG_LOGIN` to a message for a login the link does not carry. The roster marks
+the link `machine_link`, each login it carries `via`, and every machine row counts
+its `links`. A login's own old agent keeps working on its own link, and is refused
+while its machine link carries it. Contract and files: `docs/MANAGED-NODE.md` §6.
 
 ## Local stdio access
 
@@ -1203,6 +1244,27 @@ with a code, never `unknown`:
   (optional, one label) names the target, else the fleet's active pick. It
   needs `worker:stop`: a switch is a stop + resume of the same conversation, so
   no grant gains a new scope.
+- `worker_rename` (issue #2358) is the sidebar's 「改名…」 on a row on another
+  machine — every row the Fleet Shell draws is remote, so without it a client
+  could not rename at all. The new name is typed on the view's own input line
+  (pre-filled from the cached name) and sent as `name`; the node resolves the
+  worker (key or identity) to its window, `fleet-control-read.sh rename` checks
+  that window still carries the worker's `@fleet_id` (else `failed`,
+  `INVALID_STATE` — the session moved on), then renames it with the name as one
+  argv word. Only the display name changes: windows are told apart by
+  `@fleet_role` / `@fleet_id`, never by name. It needs `worker:message`: a
+  rename is the smallest change a person who can talk to the session can make.
+  EPIC rows are not renamed through it (their short name is #2355's).
+- `worker_reap_policy` (issue #2368) is the sidebar's 「改回收方式…」 (and the
+  quick-open panel's ⌃E) on a row on another machine, and `fleet reap` on a
+  client: every row the Fleet Shell draws is remote, so without it a client
+  could not change `@reap_policy` at all. The node resolves the worker (key or
+  identity) to its window, `fleet-control-read.sh reappol` checks that window
+  still carries the worker's `@fleet_id` (else `failed`, `INVALID_STATE`), then
+  execs `fleet-reap-policy.sh set` — the one setter, which parses the policy
+  again (`INVALID_ARGUMENT` when it is not one) and clears the countdown shown
+  under the old one. It needs `worker:reap`: a policy decides when the session
+  is closed, and `done:1m` is a reap a minute from now.
 - `worker_reap` is the dash's confirmed ⌃x, unasked: `dash-reap.sh <key>
   --yes` on the fleet's own server (the adapter points bare `tmux` at it through
   `TMUX`, as `fleet-remote-view.sh` does with no pane). Its result token on
@@ -1346,6 +1408,22 @@ principal and revocation checks, an untrusted machine's lease is
 `403 untrusted_node` plus a `fleet_cred_audit` deny row. The roster and
 `GET /v1/node/self` carry `trust`. The doctor's `可信` row shows it for this
 machine (`fleet-node-trust.sh self`).
+
+**Trust rides the endpoint, not the name (claude-fleet#2214, EPIC #2329 C2).**
+The machine name is the agent's own report, so a name-keyed trust let any
+endpoint that reported a trusted machine's hostname inherit its trust. Now an
+endpoint's trust is, in order: the operator's `untrusted` for the name it
+reports (only ever takes trust away) · the endpoint's OWN trust — set by the
+join code that enrolled it (`POST /v1/fleet/nodes/join-codes`: trusted, role
+`managed`, one redemption within an hour; the machines page's 「添加机器」 mints
+these) or by the operator's desired-state write — whatever name it reports ·
+for one version (`# compat-1v`) the old name setting, but only while the
+endpoint reports the name it ENROLLED under (`endpoints.enrolled_host`: the
+join's hostname, else its first report). A borrowed name reads `untrusted`,
+`trust_source: name_borrowed`, refuses the lease and the relay credential, and
+its hello writes a `BORROWED NAME` audit row. The roster and `/v1/node/self`
+carry `trust_source` (`join_code` · `operator` · `machine_name` ·
+`name_borrowed`); the desired state itself is `docs/MANAGED-NODE.md`.
 
 **A machine's enrollment can be taken back (claude-fleet#1403).** Trust
 decides what a machine may lease; revoking decides whether it may speak at

@@ -15,13 +15,21 @@ keyboard on the list.
 | the next session waiting on you | ⌘J | prefix k | as a tap on 「! N 个在问你」 |
 | zoom the right pane | ⌘↩ | F9 | again to restore |
 | every key | ⌘/ | prefix ? | |
-| quick open | ⌘P | prefix / | type a few letters, ↵ |
+| sessions and actions (also ⌘K / prefix s, issue #2365) | ⌘P | prefix / | type a few letters, ↵ — below |
 | a new task: the writing area on the right | ⌘N | prefix c | below |
 | the orchestrating session ⇄ the writing area (issue #2146) | ⌘N again | prefix c again | only with an orchestrator; also the 「新任务」 row's right-click menu |
 
-**Quick open** lists every session — one folded under its parent too. An empty
-query lists the most recent first and the one in view last, so ⌘P ↵ is «the one
-I was just on». A query keeps the rows it matches: a substring of the name first
+**⌘P — sessions and actions** (issue #2365: 「一切优化为 CLI」 — the way in is the
+keyboard, not the right-click menu, which stays but is advertised nowhere) lists
+every session — one folded under its parent too — each with `#单号 · 机器 · 状态 ·
+PR · 回收方式`. On the lit row: **⌃R** 改名 · **⌃X** 回收 · **⌃A** 回答 (on a row
+that is not asking: onto the first one that is) · **⌃E** 改回收方式 · **⌃O** 打开
+PR (a row on another machine: its PR's page, else its issue's). Each key runs
+THAT row's own menu item, never a second copy. A query starting `>` lists the
+panel's commands first — 退出 fleet · 新会话 claude / codex · 切到多 / 单会话视图 ·
+改名当前会话 — then the row menu's. The panel's last line says its keys. An empty
+query lists the sessions waiting on you first, then the most recent and the one
+in view last, so ⌘P ↵ is «the one I was just on». A query keeps the rows it matches: a substring of the name first
 (earlier is better, a word start best), then a substring of the machine, state
 or repo (`m4`, `needs`), then the letters in order (`crr` → 「Codex: reap
 rules」); ties go to the more recent. ⌘P + two letters + ↵ reaches any session
@@ -48,7 +56,11 @@ at once. When that machine has a session already open and idle for this repo
 (or HOME) and agent — the warm pool, `scratch-pool.sh` — it takes that one and
 submits your text into it as its first turn (plus one line: the issue and branch
 follow), and answers in about a second (issue #2234); the issue is then filed and
-the session bound to it in the background (`fleet-start-backfill.sh`). With none
+the session bound to it in the background (`fleet-start-backfill.sh`, issue
+#2235): the same window becomes `issue-N` in place, and the agent hears its issue
+and branch on its next turn, never in the middle of one. A filing that fails
+three times leaves the session working and its row marked 「单子没建上」 (a red
+`∅`). With none
 ready it files the issue (`fleet-issue-file.sh`) and opens its worker as before.
 The right pane switches to it when its row appears — no token spent on the way. esc goes back to the session before; the draft is kept on disk
 (`~/.local/state/claude-fleet/compose-draft`) until it is sent. The orchestrating
@@ -136,6 +148,27 @@ session as they always did. Two taps reach any session: the title, then its row.
 confirmed there; the taps need no setup, and the prefix keys (prefix / · n · p ·
 k) do the same jobs if a key does not arrive.*
 
+**The bar** (issue #2365) holds three things: who is signed in (the GitHub login
+off `fleet login`'s certificate — orange, with why, when the hub cannot be asked
+or refuses this computer), the ⟳ slot, and the keys of WHERE THE KEYBOARD IS — in
+a session `⌘P 会话与动作 · ⌘N 新任务 · ⌘↑↓ 切换 · ⌘Q 退出 fleet`, in the writing
+area its keys, in ⌘P the panel's, with the prefix pressed the prefix keys. It is
+the same whichever list row is lit. No quota, no 「N 等你」 (the list's red `!` and
+⌘P's order say who waits), no machine or issue of the row in view (⌘P and
+`fleet show` do).
+
+**The commands** (issue #2365): whatever the menu and ⌘P do, a command does —
+`fleet ls [--json]` (名称 · 状态 · 单号 · 机器 · PR · 回收方式), `fleet show <会话>`,
+`fleet open <会话>` (the client onto it), `fleet rename <会话> <新名>`,
+`fleet close <会话> [--yes]`, `fleet reap <会话> <方式>` (merged[:<dur>] ·
+done[:<dur>] · loop-end · at:<time> · keep), `fleet answer [<会话>] [<回答>]`. A
+session is a name or part of one, `#单号`, or its key; ONE resolver, and two
+matches are listed with exit 4 — never a guess (3 = none). They read the
+client's own rows and write through the hub by the session's worker_id
+(`bin/fleet-session-cli.py`, run inside the client server's environment by
+`fleet-shell.sh cli`), so the client must be running — after ⌃D it still is.
+`fleet open <url|:port|file>` and `fleet show <file>` are what they were.
+
 **The layout**: `FLEET_CLIENT_LAYOUT=auto` (default — one pane when the list does
 not fit beside 80 columns, i.e. under `FLEET_SHELL_WIDTH` + 81 columns, where
 the list used to be taken away with nothing in its place) · `single` (always) ·
@@ -145,8 +178,8 @@ the switcher writes) · `solo` (below).
 **The one-session view, `solo`** (issue #2265, EPIC #2259 C6) — what a fresh
 install writes: the whole screen is the session. No list (it still runs, zoomed
 away behind the session, so the switch keys work), no border, no top line, and
-the bar is ONE line — `⌃D 退出（会话在后台继续） · ⌘K 其它会话` and the session's
-machine on the right (`@fleet_view_node`, written by the list). **Leaving is
+the bar is the same three things as any layout's (below), with `⌃D 放到后台`
+where ⌘↑↓ would be. **Leaving is
 putting it in the background**: ⌃D (caught by the client; the agent never sees
 it — its own `/exit` still ends it), `prefix d` or closing the terminal only
 detach, and the terminal says 「会话在后台继续（m5）。下次输入 fleet 回来。」
@@ -185,13 +218,40 @@ the line through the nested client, and the widths.
 
 `fleet claude [--node m4] [a first sentence…]` (or `fleet codex …`) opens a
 **HOME session** — no repo, in your home directory on a fleet machine, with that
-agent — and attaches the client onto it; the words are its first turn. It is the
-one HOME-session primitive (EPIC #2259 共同约定 2): `bin/fleet-home-session.sh`
-starts the client without attaching (its lease signs the ask), then
-`fleet-shell.sh home-session` asks `fleet-client-place.sh - home` — the hub's
-scratch + `no_repo`, which the node takes from its warm pool (#2233) or opens
-cold — and turns the stage onto the row as soon as the list has it. A placement
-that fails prints the hub's reason and attaches nothing.
+agent — and shows it, like running `claude` locally; the words are its first
+turn. It is the one HOME-session primitive (EPIC #2259 共同约定 2):
+`bin/fleet-home-session.sh` starts the client without attaching (its lease signs
+the ask), then `fleet-shell.sh home-session --no-stage` asks
+`fleet-client-place.sh - home` — the hub's scratch + `no_repo`, which the node
+takes from its warm pool (#2233) or opens cold. A placement that fails prints
+the hub's reason and attaches nothing.
+
+**It opens in a view of its own** (issue #2349, `fleet-shell.sh solo <machine>
+<worker id>`): the whole terminal is that one session, no list, no top line, one
+bottom line 「⌃D 放到后台 · /exit 结束会话」 with the machine on the right —
+whatever layout the client keeps, which `fleet claude` neither reads nor writes.
+It is not the client's stage but a tmux server of its own (`-L
+<session>-solo-<pid>`, the stage's conf with this bar over it) holding one proxy
+pinned to that session, so the client's own view — open in another terminal or
+not — never moves with it. A watcher reads the row off the client's list cache
+for as long as the view lives: the session going `exited` (the agent's `/exit`)
+ends the view, and the terminal is back at its prompt with 「会话已结束（m5）。」.
+⌃D, `prefix d` or closing the terminal only put it in the background:
+「会话在后台继续（m5）。`fleet` 可以找回。」 — the session runs on, `fleet` lists
+it. Either way the view's server goes with the attach, and a client `fleet
+claude` had to start for its ask is quit again (`fleet quit`, below), so nothing
+of fleet stays behind. No hub (a LOCAL placement): the client attaches, as
+before. `--here` is unchanged.
+
+**A regular client already running is never touched** (the issue's hard rule):
+`fleet claude` gives it no re-attach pass (which would apply its layout again,
+select a machine on its stage, take the lease for this terminal and say where it
+is in use) — its lease, held already, signs the ask; the view's server is built
+from ONE conf at its start, so the client's top line never runs there; the
+view's end, ⌃D or a closed terminal only close the view. Only `fleet quit`
+quits the regular client, and `fleet claude`'s own trailing quit (when it had to
+start one) is `--if-unattached`: a client someone attached meanwhile stays.
+`bin/fleet-client-solo-selftest.sh` D4 pins it with a client attached beside.
 
 A newcomer gets one without asking: a client whose `fleet.conf [client]` says
 `FLEET_CLIENT_LAYOUT=solo` (what a fresh install writes) opens ONE HOME Claude
@@ -207,12 +267,37 @@ the 旧写法:
 | runs on            | a fleet machine           | this computer                                 |
 | sees the files of  | that machine (`$HOME`)    | this computer (the current directory)         |
 | after you quit     | keeps running (reaped by its policy) | ends with the agent                |
+| its `/exit`        | back at your prompt       | back at your prompt                           |
 | from another device| can be picked up          | no                                            |
 | on the session list| yes                       | no                                            |
 
 `bin/fleet-home-session-selftest.sh` pins the dispatch, `--here` ≡ `fleet run`,
 a real `fleet codex "hi"` on a fake node (codex · `@norepo` · `$HOME` · "hi"
 submitted), and the first-session rule.
+`bin/fleet-client-solo-selftest.sh` D pins the view for real (one line, `/exit`
+→ the prompt, ⌃D → the background, the client's layout untouched);
+`bin/fleet-quit-selftest.sh` E the client quit after it only when `fleet claude`
+started it.
+
+## 放到后台 and 退出 fleet — two different things (issue #2349)
+
+- **放到后台** — `prefix d`, closing the terminal window, ⌃D in a one-session
+  view: the screen goes, the client and the sessions keep running, the next
+  `fleet` is back at once.
+- **退出 fleet** — `fleet quit`, ⌘Q (prefix Q without iTerm2; `dash-keymap.sh
+  --panel switch`'s `quit` row), the last line of ⌘K and of the row menu: every
+  process of the client on this computer goes — the keeper (the lease given
+  back at once, so the next client anywhere takes nothing over), the hub loop,
+  the actions loop, the warm loop and its ssh masters, the shell's server with
+  the list and the bar, the stage with its connections. **The sessions on the
+  machines keep running** — a closed proxy only drops its connection — so there
+  is no question first, and the terminal says 「fleet 已退出；会话仍在 m5/m4 上运行，
+  `fleet` 重新进入。」. From inside the client (a key, a menu) it goes on in the
+  background, since what runs it is about to go.
+- `fleet status` says which: 「客户端在后台运行（`fleet quit` 退出）。」 or
+  「客户端没在运行（`fleet` 进入）。」
+
+`bin/fleet-quit-selftest.sh` pins all of it on private sockets.
 
 ## A session on this computer — `fleet run` (issue #2136)
 

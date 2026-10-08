@@ -218,6 +218,11 @@ done
 # a computer the fleet was never on: no config directory, or an empty one
 FRESH=0
 [ -n "$(ls -A "$CONF" 2>/dev/null)" ] || FRESH=1
+# the newcomer's path (EPIC #2259, issue #2347): a fresh computer, sent by a hub, that did not
+# ask for 承载 — the closing lines say what to type, not the fleet's words
+# (入口 · 承载 · 只协调 · 扫码); a computer the fleet was on reads them as before
+NEWBIE=0
+[ "$FRESH" = 1 ] && [ "$HOST_ANS" = 0 ] && [ "$HUB_ANS" = 1 ] && NEWBIE=1
 mkdir -p "$BIN" "$CONF"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/fleet-install.XXXXXX")"
 LOCK='' STG=''
@@ -586,7 +591,7 @@ fi
 # the invitation, for the first `fleet login` (EPIC #2259 C2): 0600, never shown
 if [ -n "$INVITE" ]; then
   ( umask 077; printf '%s\n' "$INVITE" > "$CONF/invite.tmp" ) && mv -f "$CONF/invite.tmp" "$CONF/invite"
-  say "邀请: 已收下，登录时一起交给入口"
+  if [ "$NEWBIE" = 1 ]; then say "邀请: 已收下，登录时一起带上"; else say "邀请: 已收下，登录时一起交给入口"; fi
 fi
 # a computer the fleet was never on: the newcomer's one-session view (共同约定 1)
 if [ "$FRESH" = 1 ]; then
@@ -621,7 +626,9 @@ case ":$PATH:" in
 esac
 
 say "✓ 已安装 fleet 到 ${BIN}（fleet 在 ${ROOT}）${path_note}"
-if [ "$HUB_ANS" = 1 ]; then
+if [ "$HUB_ANS" = 1 ] && [ "$NEWBIE" = 1 ]; then
+  say "  之后每次只敲：fleet"
+elif [ "$HUB_ANS" = 1 ]; then
   say "  入口 $HUBURL · 之后每次只敲：fleet"
 else
   say "  没有入口：fleet 读这台电脑自己的 fleet · 之后每次只敲：fleet"
@@ -715,11 +722,14 @@ if [ "$HUB_ANS" = 1 ] && [ "$HOST_ANS" = 0 ] && [ "$CUR_HOST" = 0 ] && [ "${FLEE
     # one not logged in yet is registered by its `fleet login` (the one scan)
     _erc=0
     FLEET_CONF_DIR="$CONF" bash "$ROOT/bin/fleet-node.sh" ensure --hub "$HUBURL" </dev/null >/dev/null 2>&1 || _erc=$?
-    case "$_erc" in
+    if [ "$NEWBIE" = 1 ]; then
+      # 登录即登记 is the fleet's business: nothing to read here unless it failed
+      [ "$_erc" = 0 ] || [ "$_erc" = 3 ] || say "登记: 这次没成 — fleet 照样能用，登录后会自己补上"
+    else case "$_erc" in
       0) say "入口: 已随登录登记这台电脑（不可信 · 只协调：不在本机跑别人派的会话、不借入口的账号）" ;;
       3) say "入口: 登录（fleet login，扫一次码）时自动登记为只协调的节点，不用另外扫码" ;;
       *) say "入口: 这次没登记成 — fleet 照样能用；登录后 fleet run / fleet 会自己补上（或敲 fleet node join）" ;;
-    esac
+    esac; fi
   fi
 fi
 
@@ -751,13 +761,17 @@ fi
 # ── 7 — what this computer does, in the doctor's words (#1806) ─────────────
 if [ "$(fconf host 2>/dev/null || true)" = 1 ]; then cap='承载 已开'; else cap='承载 未开'; fi
 if [ -n "$(conf_get FLEET_HUB_URL)" ]; then hubw='接'; else hubw='不接'; fi
-say "能力: 基础 · $cap · 入口 $hubw"
-if [ "$cap" = '承载 已开' ]; then
-  say "  要改答案：再跑一次同一条命令 · 关掉承载：fleet host off"
-elif [ "$HINT_HOST" = 1 ]; then
-  say "  要承载：再跑一次本命令，或 fleet host on"
+if [ "$NEWBIE" = 1 ] && [ "$cap" != '承载 已开' ]; then
+  :   # the newcomer: nothing was asked, nothing to change yet — no 能力 lines
 else
-  say "  要在这台跑会话：再跑一次同一条命令选 2，或 fleet host on"
+  say "能力: 基础 · $cap · 入口 $hubw"
+  if [ "$cap" = '承载 已开' ]; then
+    say "  要改答案：再跑一次同一条命令 · 关掉承载：fleet host off"
+  elif [ "$HINT_HOST" = 1 ]; then
+    say "  要承载：再跑一次本命令，或 fleet host on"
+  else
+    say "  要在这台跑会话：再跑一次同一条命令选 2，或 fleet host on"
+  fi
 fi
 
 say "用时 $(( $(date +%s) - T0 )) 秒"

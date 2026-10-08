@@ -14,8 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coder/websocket/wsjson"
-
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -303,7 +301,7 @@ func (s *Server) NodeRead(ctx context.Context, endpointID, method string, params
 	defer c.pending.remove(msg.OpID)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if err := wsjson.Write(ctx, c.conn, msg); err != nil {
+	if err := c.wire.write(ctx, msg); err != nil {
 		return nil, "", fault("UNAVAILABLE", "control channel write failed: "+err.Error())
 	}
 	select {
@@ -845,7 +843,7 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 // claude-fleet#1410.
 var FleetTools = []string{"fleet_list", "fleet_sessions", "fleet_status", "config_get", "operation_get",
 	"gh_issue_view", "gh_pr_view", "gh_pr_checks",
-	"worker_start", "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch",
+	"worker_start", "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch", "worker_rename", "worker_reap_policy",
 	"config_set", "gh_comment"}
 
 // handleFleet serves /v1/fleet/<tool>: a read as GET with query arguments

@@ -138,6 +138,9 @@ func (r *repoResolver) ask(ctx context.Context, cwd string) string {
 	// checkout: this is a read of one local string, and it must not become an
 	// interactive prompt on a headless machine.
 	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
+	if prepCmd(ctx, cmd) != nil {
+		return ""
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		// Not a checkout, no origin, deleted path, or git said no. All of them

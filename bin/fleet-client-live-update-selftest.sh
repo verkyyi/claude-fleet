@@ -42,6 +42,11 @@
 #   I. adopt       a plain-dir home and a pre-#1781 <home>.prev, nothing running:
 #                  `start` makes them versions/<v> + the link, and .prev names the
 #                  old one
+#   K. same version a list started from other code (issue #2345): v8's fleet-sidebar.py
+#                  differs from v6's but its VIEW_VERSION does not → the list pane is
+#                  drawn again (a new pane process), its @sidebar_version the stamp of
+#                  v8's files; a keeper started from other code (its keeper.pid.code)
+#                  is restarted by a plain `reload` (no --from, no --all)
 #   J. unversioned a home with NO .client-version (issue #2145), started on a conf
 #                  without the key hints: the server carries @client_digest; new
 #                  files → the doctor WARNs (no mark, the fix, the drift); not while
@@ -146,6 +151,9 @@ shell_pid() { ts display-message -p -t "=$SESS:" '#{pid}' 2>/dev/null; }
 stage_pid() { tsg display-message -p -t "=$SESS-stage:" '#{pid}' 2>/dev/null; }
 proxy_pid() { tsg list-panes -s -t "=$SESS-stage" -F '#{pane_pid} #{pane_start_command}' 2>/dev/null | awk '/fleet-remote-view.sh/ { print $1; exit }'; }
 side_ver() { ts list-panes -s -t "=$SESS" -F '#{@sidebar} #{@sidebar_version}' 2>/dev/null | awk '$1 == "1" { print $2; exit }'; }
+side_pid() { ts list-panes -s -t "=$SESS" -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }'; }
+# stamp_of <client dir> — what a list drawn from that client carries (issue #2345)
+stamp_of() { python3 "$1/bin/fleet-sidebar.py" stamp 2>/dev/null; }
 attached() { [ -n "$(ts list-clients -F x 2>/dev/null)" ]; }
 not() { ! "$@"; }
 side_is_any() { [ -n "$(side_ver)" ]; }
@@ -172,7 +180,7 @@ ts set-option -g @popup_open 0 2>/dev/null
 ts run-shell -t "=$SESS:" "bash '$FLEET_SHELL_CACHE/bin/fleet-sidebar.sh' sync '#{session_id}' >>'$WORK/sync.err' 2>&1 || :"
 waitfor 10 side_is_any || fail 'no list pane after the start' "$(ts list-panes -s -F '#{pane_id} #{@sidebar}' 2>&1; cat "$WORK/sync.err")"
 waitfor 10 proxy_up || fail 'no proxy pane on the stage' "$(tsg list-panes -s -F '#{pane_start_command}' 2>&1)"
-eq 'start: the list runs this VIEW_VERSION' "$VV" "$(side_ver)"
+eq 'start: the list runs this client stamp' "$(stamp_of "$ROOT")" "$(side_ver)"
 SP=$(shell_pid); GP=$(stage_pid); PP=$(proxy_pid)
 
 # --- A. someone is typing ------------------------------------------------------------
@@ -192,8 +200,10 @@ eq 'B: .prev names the old one' v1 "$(cat "$V/.prev" 2>/dev/null)"
 CHECKS=$((CHECKS + 1)); [ ! -e "$V/.next" ] || fail 'B: .next left behind'
 eq "B: the shell's tmux server: same pid" "$SP" "$(shell_pid)"
 eq "B: the stage's tmux server: same pid" "$GP" "$(stage_pid)"
-waitfor 10 side_is "${VV}u1781"
-eq 'B: the list redrawn on the new VIEW_VERSION' "${VV}u1781" "$(side_ver)"
+VS2=$(stamp_of "$V/v2")
+has "B: v2's stamp carries its VIEW_VERSION" "$VS2" "${VV}u1781."
+waitfor 10 side_is "$VS2"
+eq 'B: the list redrawn on the new VIEW_VERSION' "$VS2" "$(side_ver)"
 eq 'B: the proxy pane untouched (fleet-remote-view.sh unchanged): same pid' "$PP" "$(proxy_pid)"
 has 'B: the mirror follows the link' "$(readlink "$FLEET_SHELL_CACHE/bin/fleet-sidebar.py")" "${ROOT#"$WORK"}/bin/fleet-sidebar.py"
 has 'B: the conf is the new one, paths on the mirror' "$(grep -m1 'fleet-client-badge.sh' "$FLEET_SHELL_CACHE/tmux.conf")" "$FLEET_SHELL_CACHE/bin/fleet-client-badge.sh"
@@ -299,6 +309,33 @@ keeper_moved() { local p; p=$(cat "$FLEET_SHELL_CACHE/tmp/keeper.pid" 2>/dev/nul
 waitfor 5 keeper_moved
 CHECKS=$((CHECKS + 1)); keeper_moved || fail 'H: the old keeper was kept (start reload)' "$KP → $(cat "$FLEET_SHELL_CACHE/tmp/keeper.pid" 2>/dev/null)"
 CHECKS=$((CHECKS + 1)); [ -n "$KP" ] && kill -0 "$KP" 2>/dev/null && fail 'H: the old keeper still runs' "$KP"
+SP=$(shell_pid)
+
+# --- K. the list's code changed, its VIEW_VERSION did not (issue #2345) ----------------
+waitfor 10 side_is_any
+LP=$(side_pid); S0=$(side_ver)
+stage_ver v8 beef008
+own "$V/v8" fleet-sidebar.py
+printf '\n# v8: the code moved, VIEW_VERSION as it was\n' >> "$V/v8/bin/fleet-sidebar.py"
+VS8=$(stamp_of "$V/v8")
+CHECKS=$((CHECKS + 1)); [ -n "$VS8" ] && [ "$VS8" != "$S0" ] || fail 'K: the stamp does not tell the two apart' "$S0 / $VS8"
+eq 'K: … though VIEW_VERSION is the same' "${S0%%.*}" "${VS8%%.*}"
+FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
+eq 'K: applied (exit 4)' 4 "$rc"
+waitfor 10 side_is "$VS8"
+eq 'K: the list carries the new stamp' "$VS8" "$(side_ver)"
+CHECKS=$((CHECKS + 1)); [ -n "$(side_pid)" ] && [ "$(side_pid)" != "$LP" ] || fail 'K: the old list process kept drawing' "$LP → $(side_pid)"
+eq "K: the shell's server: same pid" "$SP" "$(shell_pid)"
+# a keeper on other code: a plain reload (no --from, no --all) restarts it
+KP=$(cat "$FLEET_SHELL_CACHE/tmp/keeper.pid" 2>/dev/null)
+CHECKS=$((CHECKS + 1)); [ -n "$KP" ] && kill -0 "$KP" 2>/dev/null || fail 'K: no keeper running' "$KP"
+eq 'K: the keeper wrote the code it started from' "$(cat "$ROOT/bin/fleet-shell.sh" | cksum | awk '{ print $1 "-" $2 }')" "$(cat "$FLEET_SHELL_CACHE/tmp/keeper.pid.code" 2>/dev/null)"
+FLEET_SHELL_SESSION="$SESS" bash "$ROOT/bin/fleet-shell.sh" reload "$SESS" >>"$WORK/upd.err" 2>&1
+eq 'K: same code → the keeper kept' "$KP" "$(cat "$FLEET_SHELL_CACHE/tmp/keeper.pid" 2>/dev/null)"
+echo 0-0 > "$FLEET_SHELL_CACHE/tmp/keeper.pid.code"
+FLEET_SHELL_SESSION="$SESS" bash "$ROOT/bin/fleet-shell.sh" reload "$SESS" >>"$WORK/upd.err" 2>&1
+waitfor 5 keeper_moved
+CHECKS=$((CHECKS + 1)); keeper_moved || fail 'K: a keeper on other code was kept' "$KP → $(cat "$FLEET_SHELL_CACHE/tmp/keeper.pid" 2>/dev/null)"
 SP=$(shell_pid)
 
 # --- G. a restart-needing client, nobody attached: the next `fleet` takes it -------------

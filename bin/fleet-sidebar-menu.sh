@@ -62,7 +62,7 @@ if [ "${1:-}" = --keys ]; then
   # the shell's menu has no row-less items (issue #1518), so its sheet lists none
   printf '%s\n' "$MENU_KEYS" | awk -F '\t' -v sh="${FLEET_SHELL:-0}" \
     'sh == 1 && ($1 == "new" || $1 == "newto" || $1 == "repo") { next }
-     sh != 1 && $1 == "clients" { next } { print $2 "\t" $3 }'
+     sh != 1 && ($1 == "clients" || $1 == "quit") { next } { print $2 "\t" $3 }'
   exit 0
 fi
 
@@ -283,7 +283,10 @@ if [ -n "$rowless" ]; then
   side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
   add_orch
   group
-  if [ "${FLEET_SHELL:-0}" = 1 ]; then add_views view
+  if [ "${FLEET_SHELL:-0}" = 1 ]; then
+    add_views view
+    # 退出 fleet (issue #2349): the client's last line here too
+    add "$(t menu_quit)" "$(mk quit)" "run-shell -b $(sq "bash $(sq "$BIN/fleet-shell.sh") quit $(sq "$sess") >/dev/null 2>&1 || :")"
   else add_other; fi
   if [ "$wid" = new ]; then show "$(t sidebar_portal)"; else show ""; fi
 fi
@@ -326,12 +329,19 @@ if [ -n "$remote" ]; then
   esac
   # 控制
   group
+  # 改名… (issue #2358): edited on the view's input line like a local row's,
+  # then a hub write (worker_rename) — the node renames the window holding the
+  # row's @fleet_id; greyed (adda) only when no view is on screen to ask on.
+  adda "$(t menu_rename)" "$(mk rename)" "$(ask rename "$wid")"
   add "$(t menu_r_stop)" "$(mk stop)" "$(sh_run "$rmt stop $rargs")"
   add "$(t menu_r_resume)" "$(mk resume)" "$(sh_run "$rmt resume $rargs")"
   # 换到可用订阅 (issue #2102): the shell's every row is remote, so this is the
   # Fleet Shell's way to move a walled session — the guide included — onto a
   # subscription with headroom; the node's dash-migrate.sh picks and gates it.
   add "$(t menu_r_switch)" "$(mk sub)" "$(sh_run "$rmt switch $rargs")"
+  # 改回收方式… (issue #2368): the local row's second menu of the five
+  # policies, each pick a hub write (worker_reap_policy) — ⌘P's ⌃E runs this.
+  add "$(t menu_reap_policy)" "$(mk reappol)" "$(sh_run "bash $(sq "$BIN/fleet-reap-policy.sh") menu $rargs")"
   m_r_reap_confirm=$(t menu_r_reap_confirm_fmt "$(fe "${name:-${wid##*/}}")" "$(fe "$node")")
   add "$(t menu_reap)" "$(mk reap)" "confirm-before -p $(sq "$m_r_reap_confirm") $(dq "$(sh_run "$rmt reap $rargs")")"
   # 其它 — not in the SHELL (issue #1518): its computer has no fleet conf, gh or
@@ -349,6 +359,9 @@ if [ -n "$remote" ]; then
     # 我的客户端 (issue #1932): the clients open at once, one to disconnect —
     # a second menu, drawn by fleet-client-menu.sh on the same client
     add "$(t menu_clients)" "$(mk clients)" "$(sh_run "bash $(sq "$BIN/fleet-client-menu.sh") menu $(sq "$sess")${client:+ $(sq "$client")}")"
+    # 退出 fleet (issue #2349): the last line — the client's every process here
+    # goes, the sessions run on; no question first (nothing is lost)
+    add "$(t menu_quit)" "$(mk quit)" "$(sh_run "bash $(sq "$BIN/fleet-shell.sh") quit $(sq "$sess")")"
   fi
   show "$title"
 fi

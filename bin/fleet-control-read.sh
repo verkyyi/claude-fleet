@@ -2,6 +2,16 @@
 # Private, noninteractive adapter for fleet_control.py. All inputs are argv.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# The callers have no TMPDIR — an SSH forced command, and ccquota's agent (a
+# LaunchDaemon) reading `workers` for its heartbeat — while the daemons that
+# write the cache run with the per-user one (fleet-install-apply.sh). So read
+# the same dir, BEFORE fleet-lib.sh fixes $FLEET_C off it: with /tmp the
+# inventory found no issue cache and sent every row's `title=` empty (issue
+# #2355 — the other machines' sidebars showed scratch-N / issue-N, not the
+# task). No getconf (Linux) ⇒ /tmp as before.
+if [ -z "${TMPDIR:-}" ] && t=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -d "$t" ]; then
+  export TMPDIR="$t"
+fi
 . "$BIN/fleet-lib.sh"
 mode="${1:-}"
 sess="${2:-}"
@@ -187,6 +197,10 @@ case "$mode" in
     # not a window's, and a batch nobody drives has no window to ride on, so every
     # row carries the same cell (the hub keeps only windows); the reader takes it
     # off any of them. Empty when there is none — the common case.
+    # Column 23 (issue #2235): `backfill=failed` on a session that started from the
+    # warm pool whose paperwork (fleet-start-backfill.sh: file the issue, bind the
+    # window) failed every try — @backfill; the sidebars mark the row
+    # 「单子没建上」. Empty on every other window, and while it is still filing.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -198,7 +212,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     estale=''
     while IFS=$'\t' read -r _sr _sn _sa _st; do
@@ -211,7 +225,9 @@ case "$mode" in
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11; exit }')
+      wbf=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      [ "$wbf" = failed ] || wbf=''
       wepic=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       case "$wepic" in *[!A-Za-z0-9/._#-]*|*'#'*'#'*) wepic='' ;; *'#'[0-9]*) ;; *) wepic='' ;; esac
       wrole=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -263,7 +279,7 @@ case "$mode" in
       fi
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------
@@ -426,13 +442,18 @@ case "$mode" in
       # window from the warm pool — the seed submitted into it as its first turn,
       # the receipt the same four fields plus `<t_window> <t_ready> <t_prompt>`.
       # An empty slot (exit 3) opens it exactly as before; FLEET_START_WARM=0 = off.
-      if [ -n "$seedf" ] && [ "${FLEET_START_WARM:-1}" != 0 ]; then
-        wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") && cp "$seedf" "$wseed" || wseed=''
-        if [ -n "$wseed" ]; then
-          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} "--prompt-file=$wseed")
-          wrc=$?; rm -f "$wseed"
+      # An unseeded HOME session (`fleet claude`, issue #2339) takes its slot's
+      # entry too — nothing to submit, the receipt's stamps after t_window empty.
+      if { [ -n "$seedf" ] || [ "$norepo" = 1 ]; } && [ "${FLEET_START_WARM:-1}" != 0 ]; then
+        wseed=''; wok=1
+        if [ -n "$seedf" ]; then
+          wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") && cp "$seedf" "$wseed" || { wseed=''; wok=0; }
+        fi
+        if [ "$wok" = 1 ]; then
+          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} ${wseed:+"--prompt-file=$wseed"})
+          wrc=$?; [ -z "$wseed" ] || rm -f "$wseed"
           if [ "$wrc" != 3 ]; then
-            rm -f "$seedf"
+            [ -z "$seedf" ] || rm -f "$seedf"
             [ -n "$out" ] && printf '%s\n' "$out"
             exit "$wrc"
           fi
@@ -470,7 +491,10 @@ case "$mode" in
             win=${rcpt%%	*}
             tf=$(mktemp "${TMPDIR:-/tmp}/fcr-title.XXXXXX") && printf '%s' "${8:-}" > "$tf"
             bf=$(mktemp "${TMPDIR:-/tmp}/fcr-body.XXXXXX") && printf '%s' "$nbody" > "$bf"
-            nohup bash "$BIN/fleet-start-backfill.sh" "$sess" "$win" "$srepo" "$tf" "$bf" </dev/null >/dev/null 2>&1 &
+            # The controller's operation id (issue #2235): the paperwork stamps
+            # t_filed / t_bound on it. Anything not a UUID's characters is dropped.
+            op="${FLEET_CONTROL_OP:-}"; case "$op" in *[!0-9a-f-]*) op='' ;; esac
+            nohup bash "$BIN/fleet-start-backfill.sh" "$sess" "$win" "$srepo" "$tf" "$bf" ${op:+"$op"} </dev/null >/dev/null 2>&1 &
             printf 'warm\t%s\n' "$rcpt"
             exit 0
           fi
@@ -555,11 +579,7 @@ case "$mode" in
     if [ "$mode" = comment ]; then
       exec bash "$BIN/fleet-comment.sh" "$n" --repo "$repo" --note --from hub --body-file -
     fi
-    # An SSH forced command has no TMPDIR; the daemons that write the cache run
-    # with the per-user one (fleet-install-apply.sh), so read the same dir.
-    if [ -z "${TMPDIR:-}" ] && t=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -d "$t" ]; then
-      export TMPDIR="$t"
-    fi
+    # TMPDIR: set at the top for every mode (issue #2355).
     case "${3:-}" in
       issue)  set -- issue view ;;
       pr)     set -- pr view ;;
@@ -616,6 +636,54 @@ case "$mode" in
     export TMUX="$sp,0,0"
     unset TMUX_PANE
     exec bash "$BIN/dash-migrate.sh" "$win" to ${acct:+"$acct"}
+    ;;
+  # --- rename <sess> <window_id> <fleet_id> <name> (issue #2358) --------------
+  # The hub's worker_rename: a sidebar on another machine's 「改名…」 on a row
+  # here. fleet_control resolved the worker to its window; this checks the
+  # window still carries that @fleet_id (a recycled id is refused, exit 5),
+  # then rename-window + automatic-rename off — the display name only. The name
+  # is one argv word, never parsed by a shell or a tmux command string.
+  rename)
+    fleet_load_conf "$sess"
+    win="${3:-}"; fid="${4:-}"; nm="${5:-}"
+    case "$win" in @[0-9]*) ;; *) exit 2 ;; esac
+    case "$win" in *[!@0-9]*) exit 2 ;; esac
+    [ -n "$nm" ] || { printf 'rename: an empty name\n' >&2; exit 2; }
+    sock=$(fleet_socket "$sess")
+    # tmux answers a missing window id with rc 0 and another window's format, so
+    # the window must name itself back before its @fleet_id counts.
+    have=$(tmux -L "$sock" display-message -p -t "$win" '#{window_id} #{@fleet_id}' 2>/dev/null)
+    [ "${have%% *}" = "$win" ] || { printf 'rename: no window %s on %s\n' "$win" "$sess" >&2; exit 5; }
+    have=${have#* }
+    if [ -n "$fid" ] && [ "$have" != "$fid" ]; then
+      printf 'rename: window %s is no longer that session\n' "$win" >&2; exit 5
+    fi
+    tmux -u -L "$sock" rename-window -t "$win" -- "$nm" \; set-option -w -t "$win" automatic-rename off \
+      || { printf 'rename: tmux refused\n' >&2; exit 1; }
+    printf 'renamed\n'
+    ;;
+  # --- reappol <sess> <window_id> <fleet_id> <policy> (issue #2368) -----------
+  # The hub's worker_reap_policy: a sidebar on another machine's 「改回收方式…」 on
+  # a row here. The same check as rename — the window must still carry that
+  # @fleet_id (a recycled id is refused, exit 5) — then fleet-reap-policy.sh
+  # set, the one setter (`set_reap` runs it too): it parses the policy with
+  # fleet_reap_policy.py (exit 2 = not a policy) and clears the old countdown.
+  # TMUX unset: its _tm then names the fleet's own socket.
+  reappol)
+    fleet_load_conf "$sess"
+    win="${3:-}"; fid="${4:-}"; pol="${5:-}"
+    case "$win" in @[0-9]*) ;; *) exit 2 ;; esac
+    case "$win" in *[!@0-9]*) exit 2 ;; esac
+    [ -n "$pol" ] || { printf 'reappol: an empty policy\n' >&2; exit 2; }
+    sock=$(fleet_socket "$sess")
+    have=$(tmux -L "$sock" display-message -p -t "$win" '#{window_id} #{@fleet_id}' 2>/dev/null)
+    [ "${have%% *}" = "$win" ] || { printf 'reappol: no window %s on %s\n' "$win" "$sess" >&2; exit 5; }
+    have=${have#* }
+    if [ -n "$fid" ] && [ "$have" != "$fid" ]; then
+      printf 'reappol: window %s is no longer that session\n' "$win" >&2; exit 5
+    fi
+    unset TMUX TMUX_PANE
+    exec bash "$BIN/fleet-reap-policy.sh" set "$pol" --win "$win" --session "$sess"
     ;;
   # --- reap <sess> <key> (issue #1487) -----------------------------------------
   # The hub's worker_reap: `dash-reap.sh <key> --yes` — the dash's confirmed ⌃x,

@@ -14,9 +14,13 @@
 #      <t_ready>\t<t_prompt>`; the window is in the fleet, named after the title;
 #      its first turn is the body + a blank line + the one note, byte for byte;
 #      t_prompt − the call's start ≤ 1 s; no issue was filed on the start's clock
-#   B. the backfill: fleet-issue-file.sh --repo o/a --from hub --title … --body …
-#      --bind, run as THAT window's pane (TMUX_PANE), and it says so in
-#      control/backfill.log
+#   B. the backfill (issue #2235, EPIC #2230 C5): fleet-issue-file.sh --repo o/a
+#      --from hub --title … --body …, run as THAT window's pane (TMUX_PANE), once;
+#      then the REAL fleet-bind.sh --fresh: the window is issue-77 — @issue/@repo,
+#      no @raw, branch issue-77, fleet_win_for_key issue-77 answers it, @fleet_id
+#      unchanged — @t_filed ≤ @t_bound stamped, no @backfill mark; the agent is
+#      told through fleet-peer-send.sh (its next turn), never typed into the pane;
+#      the claim is written with no duplicate-claim read (gh issue view / pr list)
 #   C. the slot is empty: the cold path, byte for byte FLEET_START_WARM=0's output
 #      (the URL, then the spawn's window) — what an old client got
 #   D. a seeded HOME scratch (`scratch claude -`): the HOME entry, the text alone
@@ -26,6 +30,18 @@
 #   F. the controller: a `warm` receipt becomes window_id / key / timing
 #      {t_accepted, t_window, t_ready, t_prompt} + filed=pending; ops.log carries
 #      the timing; a cold `new` reads the URL as before
+#   G. an UNSEEDED HOME start (`fleet claude`, issue #2339): the HOME entry, its
+#      @fleet_id in the receipt, nothing typed, within 3 s
+#   H. the controller: a no-repo receipt (no @raw, no key) is matched by its
+#      @fleet_id — window_id, no key; nothing matching closes it (`stop fid:…`)
+#   I. filing fails every try (3, FLEET_BACKFILL_TRIES): the session keeps working
+#      — still a scratch, still in the fleet, nothing typed, nothing bound or told —
+#      and its window carries `@backfill failed` (the sidebar's 「单子没建上」)
+#   J. the clock: fleet_control.py stamp <op> t_filed=… t_bound=… merges both into
+#      the finished operation's timing (exit 0); an operation still running (no
+#      result) answers 1 so the backfill tries again; another point name is refused
+#   K. the controller hands the `new` start its operation id (FLEET_CONTROL_OP), and
+#      the adapter passes it on to the backfill
 #
 # tmux / python3 / git absent → SKIP (exit 0).
 set -uo pipefail
@@ -113,12 +129,25 @@ chmod +x "$WORK/b/claude"
 # The shadow bin: every script the real one, but the filer and the cold spawner
 # log their argv (and the pane they ran as) instead of touching GitHub.
 for f in "$BIN"/*; do ln -s "$f" "$WORK/sb/${f##*/}"; done
-rm -f "$WORK/sb/fleet-issue-file.sh" "$WORK/sb/dash-issue-session.sh"
+rm -f "$WORK/sb/fleet-issue-file.sh" "$WORK/sb/dash-issue-session.sh" "$WORK/sb/fleet-peer-send.sh"
 cat > "$WORK/sb/fleet-issue-file.sh" <<'SH'
 #!/bin/bash
 printf 'pane=%s argv=%s\n' "${TMUX_PANE:-}" "$*" >> "$STUB_LOG/file"
+[ -e "$STUB_LOG/file-fails" ] && { echo "gh: HTTP 502" >&2; exit 1; }
 echo "https://github.com/o/a/issues/77"
 SH
+# The agent is told through the peer channel (its next turn): logged, not sent.
+cat > "$WORK/sb/fleet-peer-send.sh" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$STUB_LOG/peer"
+echo "sent → stub"
+SH
+# gh: the claim write fleet-bind.sh makes, logged — never GitHub.
+cat > "$WORK/b/gh" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$STUB_LOG/gh"
+SH
+chmod +x "$WORK/sb/fleet-peer-send.sh" "$WORK/b/gh"
 cat > "$WORK/sb/dash-issue-session.sh" <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "$STUB_LOG/spawn"
@@ -129,7 +158,7 @@ POOL="$WORK/sb/scratch-pool.sh"; CR="$WORK/sb/fleet-control-read.sh"
 
 export PATH="$WORK/b:$PATH" HOME="$WORK/home" SHELL=/bin/sh STUB_LOG="$WORK/log" FAKE_TURNS="$WORK/turns"
 export FLEET_CONF_DIR="$WORK/c" FLEET_SKIP_GLOBAL_CONF=1 FLEET_ADMIT=0 FLEET_ORIGIN_GATE=0
-export FLEET_WRAP_LAUNCH="$WORK/b/claude" FLEET_AGENT_CFG=0 FLEET_QUOTA_GATE=0
+export FLEET_WRAP_LAUNCH="$WORK/b/claude" FLEET_AGENT_CFG=0 FLEET_QUOTA_GATE=0 FLEET_BACKFILL_RETRY_SECS=0
 unset TMUX TMUX_PANE FLEET_SESSION FLEET_SCRATCH_POOL CCQUOTA_FLEET FLEET_START_WARM
 
 git init -q --bare -b master "$WORK/o.git" 2>/dev/null || git init -q --bare "$WORK/o.git"
@@ -171,19 +200,34 @@ case "$tw$tr$tp" in *[!0-9]*|'') fail "A three epoch-ms stamps" "$out" ;; esac
 [ "$(o "$win" @reap_policy)" = merged ] || fail "A a new task closes when merged" "$(o "$win" @reap_policy)"
 got=$(turns)
 [ "$got" = "$body"$'\n\n'"$NOTE" ] || fail "A the first turn is the body + the note" "got=[$got]"
-[ $((tp - t0)) -le 1000 ] || fail "A t_prompt came $((tp - t0)) ms after the call (> 1000)"
+[ $((tp - t0)) -le 1000 ] || fail "A t_prompt came $((tp - t0)) ms after the call (> 1000): t_window +$((tw - t0)), t_ready +$((tr - t0))"
 [ "$tw" -le "$tr" ] && [ "$tr" -le "$tp" ] || fail "A t_window ≤ t_ready ≤ t_prompt" "$out"
 [ ! -s "$WORK/log/spawn" ] || fail "A nothing cold-spawned" "$(cat "$WORK/log/spawn")"
 ok "A new task: warm window in $((tp - t0)) ms (t_window→t_prompt $((tp - tw)) ms), first turn = body + note"
 
 # ---- B: the paperwork runs afterwards, as that window -------------------------
-for _ in $(seq 1 50); do [ -s "$WORK/log/file" ] && grep -q "$win" "$FLEET_CONF_DIR/control/backfill.log" 2>/dev/null && break; sleep 0.2; done
+for _ in $(seq 1 75); do grep -q "$SESS $win bound #77" "$FLEET_CONF_DIR/control/backfill.log" 2>/dev/null && [ -s "$WORK/log/peer" ] && break; sleep 0.2; done
 line=$(cat "$WORK/log/file" 2>/dev/null)
 [ "$(grep -c "^pane=" "$WORK/log/file")" = 1 ] || fail "B filed exactly once" "$line"
 case "$line" in "pane=$(o "$win" pane_id) "*) ;; *) fail "B the filer ran as the window's pane" "$line" ;; esac
-case "$line" in *"--repo o/a --from hub --title 修侧栏的刷新图标 --body $body --bind") ;; *) fail "B fleet-issue-file … --bind with the title and body" "$line" ;; esac
-grep -q "$SESS $win rc=0" "$FLEET_CONF_DIR/control/backfill.log" || fail "B backfill.log" "$(cat "$FLEET_CONF_DIR/control/backfill.log" 2>&1)"
-ok "B the issue is filed + bound afterwards, as the window's own pane"
+case "$line" in *"--repo o/a --from hub --title 修侧栏的刷新图标 --body $body") ;; *) fail "B fleet-issue-file … with the title and body" "$line" ;; esac
+grep -q "$SESS $win bound #77" "$FLEET_CONF_DIR/control/backfill.log" || fail "B backfill.log says bound" "$(cat "$FLEET_CONF_DIR/control/backfill.log" 2>&1)"
+[ "$(o "$win" @issue)" = 77 ] && [ "$(o "$win" @repo)" = o/a ] && [ -z "$(o "$win" @raw)" ] \
+  || fail "B the window is the worker for o/a#77" "issue=$(o "$win" @issue) repo=$(o "$win" @repo) raw=$(o "$win" @raw)"
+[ "$(o "$win" @fleet_id)" = "$fid" ] || fail "B @fleet_id unchanged" "$(o "$win" @fleet_id) vs $fid"
+[ "$(git -C "$(o "$win" @worktree)" symbolic-ref --short HEAD 2>/dev/null)" = issue-77 ] || fail "B the branch is issue-77"
+got=$( . "$BIN/fleet-lib.sh"; fleet_win_for_key issue-77 "$SESS" 2>&1 )
+[ "$got" = "$win" ] || fail "B fleet_win_for_key issue-77 answers the window" "$got"
+tf=$(o "$win" @t_filed); tb=$(o "$win" @t_bound)
+case "$tf$tb" in ''|*[!0-9]*) fail "B @t_filed / @t_bound stamped" "$tf $tb" ;; esac
+[ "$tf" -le "$tb" ] || fail "B t_filed ≤ t_bound"
+[ -z "$(o "$win" @backfill)" ] || fail "B no @backfill mark once bound" "$(o "$win" @backfill)"
+pl=$(cat "$WORK/log/peer")
+case "$pl" in "-L $SESS --expect-issue 77 $win 单子补好了：这是 o/a#77，分支已改名为 issue-77"*"/fleet-claim"*"Closes #77"*) ;; *) fail "B the agent is told on its next turn (peer send)" "$pl" ;; esac
+[ "$(turns)" = "$body"$'\n\n'"$NOTE" ] || fail "B nothing typed into the pane" "$(turns)"
+grep -q 'issue edit 77 --repo o/a --add-assignee @me' "$WORK/log/gh" || fail "B the claim was written" "$(cat "$WORK/log/gh" 2>&1)"
+grep -qE 'issue view|pr list' "$WORK/log/gh" && fail "B a fresh issue gets no duplicate-claim read" "$(cat "$WORK/log/gh")"
+ok "B filed + bound to issue-77 $((tb - tp)) ms after the first turn (same @fleet_id), told via the peer channel"
 
 # ---- C: an empty slot is the cold path, byte for byte ------------------------
 : > "$WORK/log/file"
@@ -259,5 +303,132 @@ first=$(printf '%s\n' "$out" | head -1); logl=$(printf '%s\n' "$out" | sed -n 2p
 [ "$first" = 'succeeded @5 a:scratch-3 pending t_prompt=1200,t_ready=1100,t_window=1000 True False' ] || fail "F the warm result" "$out"
 case "$logl" in *'succeeded window=@5 timing t_accepted='*' t_prompt=1200 t_ready=1100 t_window=1000') ;; *) fail "F ops.log carries the timing" "$logl" ;; esac
 ok "F the controller: window_id / key / timing / filed=pending; ops.log has the timing line"
+
+# ---- G: an unseeded HOME start (`fleet claude`, issue #2339) takes the HOME entry
+warm_up || fail "G the pool did not refill" "$(bash "$POOL" status "$SESS" 2>&1)"
+: > "$WORK/log/spawn"; : > "$FAKE_TURNS"
+t0=$(ms)
+out=$(bash "$CR" start "$SESS" scratch claude - '' '' '' </dev/null 2>"$WORK/errG"); rc=$?
+[ "$rc" = 0 ] || fail "G the unseeded HOME start exited $rc" "$out $(cat "$WORK/errG")"
+IFS=$'\t' read -r win _name _wt fid tw _ <<<"$out"
+case "$tw" in ''|*[!0-9]*) fail "G the 7-field receipt (t_window)" "$out" ;; esac
+[ "$(o "$win" @norepo)" = 1 ] && [ "$(o "$win" session_name)" = "$SESS" ] || fail "G the HOME entry, in the fleet"
+[ -n "$fid" ] && [ "$(o "$win" @fleet_id)" = "$fid" ] || fail "G the receipt names the window's @fleet_id" "$out"
+[ "$(o "$win" @fleet_role)" = worker ] || fail "G the claimed window is a worker" "$(o "$win" @fleet_role)"
+[ ! -s "$FAKE_TURNS" ] || fail "G nothing typed into it" "$(turns)"
+[ $(($(ms) - t0)) -le 3000 ] || fail "G the warm HOME start took $(($(ms) - t0)) ms (> 3000)"
+ok "G an unseeded HOME start: the HOME entry in $(($(ms) - t0)) ms, nothing typed"
+
+# ---- H: the controller finds a keyless no-repo session by its @fleet_id --------
+# The receipt of a no-repo start (cold here): no @raw, no key — only its identity.
+# Before #2339 the `scratch` test missed it: UNKNOWN, and the window stayed open.
+out=$(python3 - "$BIN" <<'PY'
+import json, os, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+import fleet_control as fc
+FID = "c63813a3-3f3f-4cea-bec6-c12705d98fc3"
+def run(rows):
+    tmp = tempfile.mkdtemp()
+    c = fc.Control.__new__(fc.Control)
+    class Store:
+        root = __import__("pathlib").Path(tmp)
+        def connect(self):
+            import sqlite3
+            db = sqlite3.connect(os.path.join(tmp, "s.db")); db.row_factory = sqlite3.Row
+            return db
+    c.store = Store()
+    with c.store.connect() as db:
+        db.execute("CREATE TABLE operations (id TEXT, action TEXT, request TEXT, status TEXT, result TEXT, created REAL, updated REAL)")
+        req = {"fleet_id": "f", "action": "worker_start", "params": {"kind": "scratch", "no_repo": True, "agent": "claude"}}
+        db.execute("INSERT INTO operations VALUES ('0f0e0d0c-0b0a-4908-8706-050403020100','worker_start',?,'accepted','',?,?)", (json.dumps(req), fc.now() - 0.2, fc.now()))
+    c.fleet = lambda fid: {"name": "s", "fleet_id": "f"}
+    calls = []
+    def adapter(*a, **k):
+        calls.append(a)
+        if a[0] == "start":
+            return 0, ("@7\tnorepo\t/home\t%s\n" % FID).encode(), b""
+        return 0, b"", b""
+    c.adapter = adapter
+    c.workers = lambda fl, w="": {"observed_at": 1, "workers": rows}
+    c.watch_ready = lambda *a: None
+    c.execute("0f0e0d0c-0b0a-4908-8706-050403020100")
+    with c.store.connect() as db:
+        row = db.execute("SELECT status, result FROM operations").fetchone()
+    stops = [a[2] for a in calls if a[0] == "stop"]
+    return row["status"], json.loads(row["result"]), stops
+row = {"window_id": "@7", "scratch": False, "issue": None, "key": None, "repo": None, "identity": FID}
+st, r, stops = run([row])
+print(st, r.get("window_id"), "key" in r, stops)
+st, r, stops = run([])
+print(st, r["error"]["code"], stops, r["error"]["message"])
+PY
+)
+l1=$(printf '%s\n' "$out" | sed -n 1p); l2=$(printf '%s\n' "$out" | sed -n 2p)
+[ "$l1" = 'succeeded @7 False []' ] || fail "H a keyless no-repo session matched by @fleet_id" "$out"
+case "$l2" in "unknown UNKNOWN_OUTCOME ['fid:c63813a3-3f3f-4cea-bec6-c12705d98fc3'] "*"its window was closed") ;; *) fail "H a miss closes the window it opened (fid:)" "$out" ;; esac
+ok "H the controller: a no-repo start matched by identity (window_id, no key); a miss closes it"
+
+# ---- I: filing fails every try — the session keeps working, marked ------------
+warm_up || fail "I the pool did not refill" "$(bash "$POOL" status "$SESS" 2>&1)"
+: > "$WORK/log/file"; : > "$WORK/log/peer"; : > "$FAKE_TURNS"; touch "$WORK/log/file-fails"
+out=$(printf '另一件事' | bash "$CR" start "$SESS" new claude o/a '' '' '另一件事' 2>"$WORK/errI"); rc=$?
+IFS=$'\t' read -r tag win _name _wt fid _ <<<"$out"
+[ "$rc" = 0 ] && [ "$tag" = warm ] || fail "I the warm start" "rc=$rc $out $(cat "$WORK/errI")"
+for _ in $(seq 1 75); do grep -q "$SESS $win failed:" "$FLEET_CONF_DIR/control/backfill.log" 2>/dev/null && break; sleep 0.2; done
+rm -f "$WORK/log/file-fails"
+[ "$(grep -c '^pane=' "$WORK/log/file")" = 3 ] || fail "I tried 3 times" "$(cat "$WORK/log/file")"
+[ "$(o "$win" @backfill)" = failed ] || fail "I the window is marked @backfill failed" "[$(o "$win" @backfill)] $(cat "$FLEET_CONF_DIR/control/backfill.log")"
+case "$(o "$win" @backfill_why)" in *'HTTP 502'*) ;; *) fail "I the mark says why" "$(o "$win" @backfill_why)" ;; esac
+[ "$(o "$win" @raw)" = 1 ] && [ -z "$(o "$win" @issue)" ] && [ "$(o "$win" session_name)" = "$SESS" ] \
+  || fail "I still a scratch in the fleet"
+[ "$(o "$win" @fleet_id)" = "$fid" ] || fail "I @fleet_id unchanged"
+[ ! -s "$WORK/log/peer" ] || fail "I nothing told" "$(cat "$WORK/log/peer")"
+[ "$(turns)" = '另一件事'$'\n\n'"$NOTE" ] || fail "I the first turn stands, nothing else typed" "$(turns)"
+ok "I filing failed 3×: the session keeps working, still a scratch, marked @backfill failed"
+
+# ---- J: fleet_control.py stamp merges t_filed / t_bound into the operation -----
+out=$(python3 - "$BIN" "$WORK/cj" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import fleet_control as fc
+c = fc.Control(sys.argv[2])
+A, B = "0f0e0d0c-0b0a-4908-8706-050403020100", "1f0e0d0c-0b0a-4908-8706-050403020100"
+with c.store.connect() as db:
+    cols = [r[1] for r in db.execute("PRAGMA table_info(operations)")]
+    def put(i, result):
+        row = {k: "" for k in cols}
+        row.update(id=i, action="worker_start", request="{}", status="succeeded", result=result, created=1, updated=1)
+        db.execute("INSERT INTO operations (%s) VALUES (%s)" % (",".join(row), ",".join("?" * len(row))), list(row.values()))
+    put(A, json.dumps({"window": "@5", "timing": {"t_window": 10}}))
+    put(B, "")
+rc = [fc.main(["--conf-dir", sys.argv[2], "stamp", A, "t_filed=20", "t_bound=30"]),
+      fc.main(["--conf-dir", sys.argv[2], "stamp", B, "t_filed=20"]),
+      fc.main(["--conf-dir", sys.argv[2], "stamp", A, "t_ready=40"])]
+with c.store.connect() as db:
+    r = json.loads(db.execute("SELECT result FROM operations WHERE id=?", (A,)).fetchone()[0])
+print(rc, sorted(r["timing"].items()), r["window"])
+PY
+)
+case "$(printf '%s\n' "$out" | tail -1)" in "[0, 1, 1] [('t_bound', 30), ('t_filed', 20), ('t_window', 10)] @5"*) ;; *) fail "J stamp merges / not-yet / refused" "$out" ;; esac
+ok "J fleet_control.py stamp: merged into the timing; a running op answers 1; t_ready refused"
+
+# ---- K: the controller hands the new start its operation id -------------------
+out=$(python3 - "$BIN" <<'PY'
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+import fleet_control as fc
+seen = []
+fc.run = lambda argv, payload=None, env=None, timeout=20: (seen.append(env.get("FLEET_CONTROL_OP")), (0, b"", b""))[1]
+c = fc.Control.__new__(fc.Control)
+c.conf_dir, c.bin = pathlib.Path("/nonexistent"), pathlib.Path(sys.argv[1])
+c.adapter("start", "s", "new", op_id="0f0e0d0c-0b0a-4908-8706-050403020100")
+c.adapter("inventory")
+print(seen)
+PY
+)
+[ "$out" = "['0f0e0d0c-0b0a-4908-8706-050403020100', None]" ] || fail "K FLEET_CONTROL_OP only when an op is named" "$out"
+grep -qF 'fleet-start-backfill.sh" "$sess" "$win" "$srepo" "$tf" "$bf" ${op:+"$op"}' "$BIN/fleet-control-read.sh" \
+  || fail "K the adapter passes the op id to the backfill"
+ok "K the start's operation id reaches the backfill"
 
 printf 'fleet-start-warm: %d passed\n' "$pass"

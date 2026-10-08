@@ -595,7 +595,11 @@ daemons_systemd() {
 }
 
 BREW=$(brew_prefix)
-if [ "$NODAEMONS" = 1 ]; then
+if [ "$NODAEMONS" = 0 ] && [ "$PLATFORM" = launchd ] && fleet_node_manages "$LOGIN"; then
+  # issue #2332: the machine daemon runs this login's tasks from the runtime's
+  # templates — no per-login plist is rendered or loaded on a managed machine
+  say "daemons: skip — $LOGIN's tasks are run by com.claude-fleet.node (managed; no per-login plist)"
+elif [ "$NODAEMONS" = 1 ]; then
   # issue #1214: the caller has found these daemons have nowhere to go yet and
   # reports them itself — render, load and remove nothing here
   say 'daemons: skip — --no-daemons (nothing rendered, loaded or removed; the caller reports them)'

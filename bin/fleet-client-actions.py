@@ -597,6 +597,13 @@ def run(a):
             pass
         with open(pidf, "w") as f:
             f.write("%d\n" % os.getpid())
+        # the code this loop started from (issue #2345): `fleet-shell.sh reload`
+        # restarts it when the files on disk are no longer that
+        try:
+            with open(pidf + ".code", "w") as f:
+                f.write(os.environ.get("FLEET_ACTIONS_CODE", "") + "\n")
+        except OSError:
+            pass
     try:
         while True:
             if not a.once and not c.alive():

@@ -6871,6 +6871,113 @@ fleet_win_name() {
   printf '%s' "$s"
 }
 
+# ---- EPIC names (issue #2355) ------------------------------------------------
+# An EPIC member's window reads `<EPIC 简称>·<its own name>` — 托管·一个节点程序服务…
+# — so four batches running at once can be told apart; the batch's driver row
+# reads `EPIC·<主题>` on the sidebar. Everything below is a pure function of its
+# arguments except fleet_issue_win_name, the ONE place a window name is derived
+# from an issue (spawn · bind · reopen); restore / migrate / move carry the live
+# name and never re-derive it.
+
+# fleet_epic_theme_v <EPIC title> → $epic_theme: the title without its `EPIC:`
+# prefix, cut at the first 「：」 / ` — ` / `: ` — 「EPIC: 托管节点：一条命令…」 →
+# 托管节点. Fork-free (the sidebar runs it once a row). A title that would cut
+# to nothing keeps itself.
+fleet_epic_theme_v() {
+  local t="${1:-}" r
+  case "$t" in [Ee][Pp][Ii][Cc]:*|[Ee][Pp][Ii][Cc]：*|[Ee][Pp][Ii][Cc]' '*) t=${t#????} ;; esac
+  t=${t#：}; t=${t#:}
+  while :; do case "$t" in ' '*|'—'*|'-'*) t=${t#?} ;; *) break ;; esac; done
+  r=${t%%：*}; r=${r%% — *}; r=${r%%: *}
+  while :; do case "$r" in *' ') r=${r% } ;; *) break ;; esac; done
+  epic_theme=${r:-${1:-}}
+}
+
+# fleet_epic_short <EPIC title> [EPIC body] → the batch's 简称. The body's
+# `<!-- fleet:epic … short=托管 … -->` wins (/fleet-epic-plan writes it, the
+# person may change it); else the theme's first 4 letters/digits. Letters and
+# digits only either way — it becomes part of a window name.
+fleet_epic_short() {
+  local t="${1:-}" b="${2:-}" m='' epic_theme=''
+  case "$b" in *'fleet:epic '*short=*)
+    m=$(printf '%s\n' "$b" | sed -n 's/.*<!-- *fleet:epic [^>]*short=\([^ >]*\).*/\1/p' | head -n1) ;;
+  esac
+  if [ -z "$m" ]; then fleet_epic_theme_v "$t"; m=$epic_theme; fi
+  [ -n "$m" ] || return 0
+  S="$m" perl -CO -MEncode -e '
+    my $s = decode_utf8($ENV{S});
+    $s =~ s/[^\p{Alnum}\p{M}]+//g;
+    print substr($s, 0, 4);' 2>/dev/null
+}
+
+# fleet_epic_member_ref <member body> → `<owner/name>\t<N>` (owner/name empty =
+# the member's own repo) off its `<!-- fleet:epic-member epic=<P|owner/name#P> -->`;
+# nothing when the body names no EPIC.
+fleet_epic_member_ref() {
+  local ref
+  case "${1:-}" in *'fleet:epic-member '*epic=*) ;; *) return 0 ;; esac
+  ref=$(printf '%s\n' "$1" | sed -n 's/.*<!-- *fleet:epic-member [^>]*epic=\([^ >]*\).*/\1/p' | head -n1)
+  case "$ref" in
+    [0-9]*) case "$ref" in *[!0-9]*) return 0 ;; esac; printf '\t%s\n' "$ref" ;;
+    */*'#'[0-9]*) case "${ref##*#}" in *[!0-9]*) return 0 ;; esac
+                  printf '%s\t%s\n' "${ref%#*}" "${ref##*#}" ;;
+  esac
+}
+
+# fleet_member_win_name <title> <short> → `<short>·<fleet_win_name title>`,
+# clipped to fleet_win_name's 32 columns by cutting the TITLE's part — never the
+# 简称. No short ⇒ fleet_win_name, byte for byte; an empty title part ⇒ empty
+# (the caller takes its slug, as it always has).
+fleet_member_win_name() {
+  local t="${1:-}" sh="${2:-}" n clip_out='' clip_w=0 room
+  n=$(fleet_win_name "$t")
+  { [ -n "$sh" ] && [ -n "$n" ]; } || { printf '%s' "$n"; return 0; }
+  fleet_clip_display 32 "$sh"; room=$(( 32 - ${clip_w:-0} - 1 ))
+  [ "$room" -gt 0 ] || { printf '%s' "$n"; return 0; }
+  fleet_clip_display "$room" "$n"; n="${clip_out:-}"; n="${n%-}"
+  [ -n "$n" ] || return 0
+  printf '%s·%s' "$sh" "$n"
+}
+
+# fleet_issue_win_name <repo> <num> <title> [body] → the window name of a session
+# on (repo, num): fleet_member_win_name with the 简称 of the EPIC its body names.
+# Network only for an EPIC member — one `gh issue view` of the parent, kept
+# ($FLEET_C/global/epic_short/<slug>-<N>, an hour) so eight members spawned in a
+# row ask once. No body given ⇒ read it. gh down ⇒ the parent's title off this
+# machine's issue cache; nothing at all ⇒ the plain name.
+fleet_issue_win_name() {
+  local repo="${1:-}" num="${2:-}" t="${3:-}" b="${4:-}" ref er en f sh='' et eb js now ts
+  if [ -z "$b" ] && [ -n "$repo" ] && [ -n "$num" ] && command -v gh >/dev/null 2>&1; then
+    b=$(gh issue view "$num" --repo "$repo" --json body -q .body 2>/dev/null) || b=''
+  fi
+  ref=$(fleet_epic_member_ref "$b")
+  if [ -n "$ref" ]; then
+    er=${ref%%$'\t'*}; en=${ref#*$'\t'}; [ -n "$er" ] || er=$repo
+    f="$FLEET_C/global/epic_short/$(fleet_slug "$er" 2>/dev/null)-$en"
+    now=$(date +%s); ts=0
+    [ -f "$f" ] && ts=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)
+    if [ -s "$f" ] && [ $(( now - ${ts:-0} )) -lt 3600 ]; then
+      IFS= read -r sh < "$f"
+    else
+      js=''; command -v gh >/dev/null 2>&1 \
+        && js=$(gh issue view "$en" --repo "$er" --json title,body 2>/dev/null)
+      if [ -n "$js" ]; then
+        et=$(printf '%s' "$js" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title") or "")' 2>/dev/null)
+        eb=$(printf '%s' "$js" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("body") or "")' 2>/dev/null)
+      else
+        et=$(awk -F'\t' -v n="#$en" '$2 == n { t = $0; sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", t); print t; exit }' \
+             "$FLEET_C/fleets/$(fleet_slug "$er" 2>/dev/null)/issues" 2>/dev/null)
+        eb=''
+      fi
+      sh=$(fleet_epic_short "$et" "$eb")
+      if [ -n "$sh" ] && [ -n "$js" ]; then
+        mkdir -p "${f%/*}" 2>/dev/null && printf '%s\n' "$sh" > "$f.$$" && mv -f "$f.$$" "$f"
+      fi
+    fi
+  fi
+  fleet_member_win_name "$t" "$sh"
+}
+
 # timestamp → friendly relative span (issue #228). Sets $reltime_out to a short,
 # human-readable "time since": "now", "5 mins", "2 hours", "3 days", "2 wks",
 # "5 mos", "1 yr". Both the dash live-list activity column and the landed history

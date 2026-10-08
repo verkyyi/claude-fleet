@@ -156,6 +156,10 @@ func (a *Agent) probeOnce(ctx context.Context, now time.Time) bool {
 	defer cancel()
 	cmd := exec.CommandContext(pctx, script, "--quiet")
 	cmd.Env = append(os.Environ(), "FLEET_CONF_DIR="+filepath.Dir(a.cfg.FleetProbePath))
+	if err := prepCmd(pctx, cmd); err != nil {
+		log.Printf("probe: %s: %v", script, err)
+		return true
+	}
 	out, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if err != nil && !(errors.As(err, &ee) && ee.ExitCode() == 1) && ctx.Err() == nil {

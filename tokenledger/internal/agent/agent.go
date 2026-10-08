@@ -184,6 +184,11 @@ type Config struct {
 	FleetReclaimCmd string
 	// FleetReclaimTimeout bounds Reclaim as a whole.
 	FleetReclaimTimeout time.Duration
+	// RunAs is the login this agent's work runs as (claude-fleet#2333): set
+	// only for a tenant of `ccquota agent --machine`, which runs as root and
+	// serves every login of the machine. Every command the agent starts drops
+	// to it; nil is a plain agent, running as whoever started it.
+	RunAs *RunAs
 	// FleetNudgePath is the file claude-fleet touches when a window's state
 	// changes (claude-fleet#1481): $FLEET_CONF_DIR/global/hub-nudge. The
 	// agent beats at once when its mtime moves. Empty with Fleet on means
@@ -226,7 +231,10 @@ const spoolFraction = 4
 
 // Agent is a running collector.
 type Agent struct {
-	cfg             Config
+	cfg Config
+	// machine is the machine link this agent is a tenant of
+	// (claude-fleet#2333); nil for a plain agent with its own link.
+	machine         *machineLink
 	scanner         *scan.Scanner
 	codex           *scan.Scanner
 	codexProfiles   []*codexCollector
@@ -390,6 +398,8 @@ func New(cfg Config) (*Agent, error) {
 
 // Run collects until the context is cancelled, or once when cfg.Once is set.
 func (a *Agent) Run(ctx context.Context) error {
+	// A machine tenant's every command runs as its login (claude-fleet#2333).
+	ctx = withRunAs(ctx, a.cfg.RunAs)
 	if a.cfg.Once {
 		return a.cycle(ctx)
 	}
@@ -1127,6 +1137,11 @@ func (a *Agent) drain(ctx context.Context) error {
 }
 
 func (a *Agent) push(ctx context.Context, batch *model.Batch) (*model.IngestResponse, error) {
+	if a.cfg.RunAs != nil {
+		// A machine tenant runs as root (claude-fleet#2333): the endpoint is
+		// the login's (the hub stamps each turn's os_user from it).
+		batch.Identity.OSUser = a.cfg.RunAs.Login
+	}
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return nil, fmt.Errorf("encode batch: %w", err)

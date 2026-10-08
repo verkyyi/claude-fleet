@@ -180,11 +180,47 @@ eq "H exactly one fleet_win_name definition" "1" "$defs"
 # re-introduces the bug on whichever path grew it.
 for f in dash-issue-session.sh dash-restore-session.sh fleet-history.sh fleet-bind.sh; do
   CHECKS=$((CHECKS + 1))
-  grep -q 'fleet_win_name' "$BIN/$f" \
+  grep -q 'fleet_win_name\|fleet_issue_win_name' "$BIN/$f" \
     || fail "H $f no longer derives its window name through fleet_win_name"
 done
 stray=$(grep -rln "tr -c 'a-z0-9" "$BIN" --include='*.sh' | grep -v -e 'fleet-lib.sh$' -e 'win-name-selftest.sh$' || true)
 CHECKS=$((CHECKS + 1))
 [ -z "$stray" ] || fail "H a second byte-wise slugify appeared in: $stray"
 
-printf 'selftest OK: fleet_win_name (%s assertions — #579 CJK names, determinism for restore #455, 32-column UTF-8-safe cut, emoji/punct slug fallback, reserved-panel guard, ASCII regression guard, no-perl degradation)\n' "$CHECKS"
+# ---- I. EPIC members wear their batch's 简称 (issue #2355) -------------------
+epic_theme=''   # fleet_epic_theme_v's OUTPUT global
+fleet_epic_theme_v 'EPIC: 托管节点：一条命令、一个守护、自己更新'
+eq "I theme: EPIC: prefix and 「：…」 cut" "托管节点" "$epic_theme"
+fleet_epic_theme_v 'EPIC: 新任务 3 秒开工'
+eq "I theme: a title with no cut keeps itself" "新任务 3 秒开工" "$epic_theme"
+fleet_epic_theme_v 'EPIC: Sidebar names — the long tail'
+eq "I theme: ` — ` cuts too" "Sidebar names" "$epic_theme"
+eq "I short: the body's short= marker wins" "托管" \
+   "$(fleet_epic_short 'EPIC: 托管节点：一条命令' $'x\n<!-- fleet:epic repo=acme/app short=托管 -->\ny')"
+eq "I short: no marker ⇒ the theme's first 4 letters/digits" "托管节点" "$(fleet_epic_short 'EPIC: 托管节点：一条命令')"
+eq "I short: …spaces and punctuation are not letters" "新任务3" "$(fleet_epic_short 'EPIC: 新任务 3 秒开工')"
+eq "I member ref: a bare number = the member's own repo" $'\t2329' \
+   "$(fleet_epic_member_ref $'body\n<!-- fleet:epic-member epic=2329 key=C3 -->')"
+eq "I member ref: another repo's EPIC" $'acme/app\t12' \
+   "$(fleet_epic_member_ref '<!-- fleet:epic-member epic=acme/app#12 key=C2 -->')"
+eq "I member ref: no marker ⇒ nothing" "" "$(fleet_epic_member_ref 'an ordinary issue')"
+eq "I member name: 简称·title" "托管·一个节点程序服务" \
+   "$(fleet_member_win_name '一个节点程序服务' '托管')"
+long='一个节点程序服务机器上所有账号的事情都由它来管而且标题非常非常长'
+got=$(fleet_member_win_name "$long" '托管')
+case "$got" in 托管·*) ok ;; *) fail "I member name: a long title must not cut the 简称 (got '$got')" ;; esac
+eq "I member name: still within 32 columns" "31" "$(printf '%s' "$got" | perl -CS -ne 'my $w=0; for (split //) { $w += (ord($_) >= 0x1100 ? 2 : 1) } print $w')"
+eq "I member name: no 简称 ⇒ fleet_win_name byte for byte" "$(fleet_win_name "$long")" "$(fleet_member_win_name "$long" '')"
+eq "I member name: an ASCII non-EPIC title unchanged" "fix-the-widget-cache" "$(fleet_member_win_name 'Fix The Widget Cache' '')"
+eq "I member name: an empty title part ⇒ empty (caller's slug)" "" "$(fleet_member_win_name '🎉🎉' '托管')"
+# fleet_issue_win_name: a member whose EPIC gh cannot read takes its title off
+# the local issue cache; a non-member is never sent to gh for a parent
+mkdir -p "$WORK/c/fleets/acme-app" "$WORK/gh"
+printf '\t#12\t\tEPIC: 托管节点：一条命令\n' > "$WORK/c/fleets/acme-app/issues"
+printf '#!/bin/sh\nexit 1\n' > "$WORK/gh/gh"; chmod +x "$WORK/gh/gh"
+eq "I issue name: a member, gh down ⇒ the cache's EPIC title" "托管节点·节点程序" \
+   "$(PATH="$WORK/gh:$PATH" FLEET_C="$WORK/c" bash -c '. "$1"; FLEET_C="$2"; fleet_issue_win_name acme/app 13 "节点程序" "<!-- fleet:epic-member epic=12 key=C1 -->"' _ "$LIB" "$WORK/c")"
+eq "I issue name: a non-member ⇒ the plain name" "节点程序" \
+   "$(PATH="$WORK/gh:$PATH" bash -c '. "$1"; fleet_issue_win_name acme/app 13 "节点程序" "plain body"' _ "$LIB")"
+
+printf 'selftest OK: fleet_win_name (%s assertions — #579 CJK names, determinism for restore #455, 32-column UTF-8-safe cut, emoji/punct slug fallback, reserved-panel guard, ASCII regression guard, no-perl degradation, #2355 EPIC 简称)\n' "$CHECKS"

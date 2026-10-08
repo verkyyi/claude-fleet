@@ -70,21 +70,43 @@ cat > "$WORK/fakebin/tmux" <<'FAKE'
 #!/bin/bash
 S="$TMUX_FAKE_STATE"; echo "$*" >> "$S/log"
 args=("$@"); [ "${args[0]}" = "-L" ] && args=("${args[@]:2}")
-cmd="${args[0]}"; shift_args=("${args[@]:1}")
+# val <window> <key> — one format variable's value
+val() {
+  case "$2" in
+    window_id) printf '%s' "$1" ;;
+    window_name) awk -F'\t' -v i="$1" '$1==i{printf "%s", $3}' "$S/windows" ;;
+    *) cat "$S/win.$1.${2#@}" 2>/dev/null ;;
+  esac
+}
+# expand <window> <format> — every #{key} in it (the scripts read several options
+# in one call — wfmt)
+expand() {
+  local f="$2" out='' k
+  while :; do
+    case "$f" in *'#{'*) ;; *) break ;; esac
+    out="$out${f%%\#\{*}"; f="${f#*\#\{}"; k="${f%%\}*}"; f="${f#*\}}"
+    out="$out$(val "$1" "$k")"
+  done
+  printf '%s\n' "$out$f"
+}
+DEFAULT_FMT='#{window_id}'
+one() {
+cmd="$1"; shift_args=("${@:2}")
 tgt=""; fmt=""; i=0
 while [ $i -lt ${#shift_args[@]} ]; do
   case "${shift_args[$i]}" in
     -t) i=$((i+1)); tgt="${shift_args[$i]}" ;;
-    -F|-p) : ;;
+    -F) i=$((i+1)); fmt="${shift_args[$i]}" ;;
+    -p) : ;;
   esac
   i=$((i+1))
 done
 case "$cmd" in
-  has-session) grep -q "	${tgt}	" "$S/windows" && exit 0; exit 1 ;;
+  has-session) grep -q "	${tgt}	" "$S/windows" && return 0; return 1 ;;
   list-windows)
     while IFS=$'\t' read -r id sess name; do
       [ "$sess" = "$tgt" ] || continue
-      echo "$id"
+      expand "$id" "${fmt:-$DEFAULT_FMT}"
     done < "$S/windows" ;;
   display-message)
     # a session target resolves to that session's first window (real tmux does)
@@ -92,18 +114,12 @@ case "$cmd" in
       @*) : ;;
       *) tgt=$(awk -F'\t' -v s="$tgt" '$2==s{print $1; exit}' "$S/windows") ;;
     esac
-    f="${shift_args[${#shift_args[@]}-1]}"
-    key="${f#\#\{}"; key="${key%\}}"
-    case "$key" in
-      window_name) awk -F'\t' -v i="$tgt" '$1==i{print $3}' "$S/windows" ;;
-      window_width|window_height|pane_pid|pane_dead) cat "$S/win.${tgt}.$key" 2>/dev/null || echo "" ;;
-      *) cat "$S/win.${tgt}.${key#@}" 2>/dev/null || echo "" ;;
-    esac ;;
+    expand "$tgt" "${shift_args[${#shift_args[@]}-1]}" ;;
   set-window-option)
     unset_it=0; a=(); for x in "${shift_args[@]}"; do [ "$x" = "-u" ] && unset_it=1 || a+=("$x"); done
     # a = (-t <tgt> <opt> [val])
-    opt="${a[2]}"; val="${a[3]:-}"; opt="${opt#@}"
-    if [ "$unset_it" = 1 ]; then rm -f "$S/win.${tgt}.$opt"; else printf '%s' "$val" > "$S/win.${tgt}.$opt"; fi ;;
+    opt="${a[2]}"; v="${a[3]:-}"; opt="${opt#@}"
+    if [ "$unset_it" = 1 ]; then rm -f "$S/win.${tgt}.$opt"; else printf '%s' "$v" > "$S/win.${tgt}.$opt"; fi ;;
   move-window)
     src=""; dst=""; i=0
     while [ $i -lt ${#shift_args[@]} ]; do
@@ -114,6 +130,14 @@ case "$cmd" in
   new-window|new-session|kill-window|rename-window|set-option|resize-window|run-shell|select-window) : ;;
   *) : ;;
 esac
+return 0
+}
+# a `;`-chained call runs each command in turn, stopping at the first failure
+cur=()
+for x in "${args[@]}"; do
+  if [ "$x" = ';' ]; then one ${cur[@]+"${cur[@]}"} || exit 1; cur=(); else cur+=("$x"); fi
+done
+[ "${#cur[@]}" -gt 0 ] && { one ${cur[@]+"${cur[@]}"} || exit 1; }
 exit 0
 FAKE
 chmod +x "$WORK/fakebin/tmux"

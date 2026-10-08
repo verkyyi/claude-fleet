@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -25,6 +26,7 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/leader"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
@@ -221,25 +223,6 @@ func kmsEnvelope(keyID string, st *store.Store) (*credvault.Envelope, error) {
 	return &credvault.Envelope{KMS: &credvault.AliyunKMS{Endpoint: endpoint, Creds: creds}, KeyID: keyID, Store: st}, nil
 }
 
-// fleetNudgePath is $FLEET_CONF_DIR/global/hub-nudge when the fleet's conf
-// dir is named in the environment (claude-fleet#1481); empty lets the agent
-// derive the default conf dir from its home.
-func fleetNudgePath() string {
-	if d := os.Getenv("FLEET_CONF_DIR"); d != "" {
-		return filepath.Join(d, "global", "hub-nudge")
-	}
-	return ""
-}
-
-// fleetConfPath is $FLEET_CONF_DIR/<name> when the conf dir is named in the
-// environment; empty lets the agent derive the default from its home.
-func fleetConfPath(name string) string {
-	if d := os.Getenv("FLEET_CONF_DIR"); d != "" {
-		return filepath.Join(d, name)
-	}
-	return ""
-}
-
 // fleetEnabled reports CCQUOTA_FLEET=1, the one switch for the whole fleet
 // module (claude-fleet#1408). Anything else — unset, empty, 0 — is off, and off
 // is today's hub and agent exactly.
@@ -264,6 +247,9 @@ func loadFleetCerts(srv *api.Server) error {
 	// "off" hands out the image's packed client only.
 	if repo := os.Getenv("CCQUOTA_FLEET_STABLE_REPO"); repo != "off" {
 		srv.Stable = &api.StableSource{Repo: repo}
+		if err := loadFleetReleases(srv); err != nil {
+			return err
+		}
 		srv.Stable.Commit() // the first lookup, in the background
 	}
 	path := os.Getenv("CCQUOTA_FLEET_SSH_CA_KEY")
@@ -278,6 +264,59 @@ func loadFleetCerts(srv *api.Server) error {
 	srv.SSHCA = ca
 	log.Printf("fleet: SSH user CA %s — 12h certificates at /connect and `fleet login`", ca.Fingerprint())
 	return nil
+}
+
+// loadFleetReleases wires the node release store (claude-fleet#2335).
+// CCQUOTA_FLEET_RELEASE_KEY names the ed25519 signing key file (its own k8s
+// Secret, never the database); CCQUOTA_FLEET_RELEASE_DIR the volume releases
+// are kept on (the cluster's OSS bucket, mounted); CCQUOTA_FLEET_RELEASE_ARTIFACTS
+// the pinned Claude Code / Codex installers. No key: no releases. A key that
+// cannot be read, or one without a dir: the hub refuses to start.
+func loadFleetReleases(srv *api.Server) error {
+	path := os.Getenv("CCQUOTA_FLEET_RELEASE_KEY")
+	if path == "" {
+		log.Printf("fleet: no CCQUOTA_FLEET_RELEASE_KEY — node releases are off")
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if m := checkUnmounted(path); m != "" && errors.Is(err, os.ErrNotExist) {
+			log.Printf("fleet: check: CCQUOTA_FLEET_RELEASE_KEY %s is on %s, which only the new render mounts — not checked; the real start reads it", path, m)
+			return nil
+		}
+		return fmt.Errorf("CCQUOTA_FLEET_RELEASE_KEY: %w", err)
+	}
+	key, err := release.LoadPrivateKey(b)
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_FLEET_RELEASE_KEY: %w", err)
+	}
+	dir := os.Getenv("CCQUOTA_FLEET_RELEASE_DIR")
+	if dir == "" {
+		return errors.New("CCQUOTA_FLEET_RELEASE_KEY is set but CCQUOTA_FLEET_RELEASE_DIR is not")
+	}
+	repo := srv.Stable.Repo
+	if repo == "" {
+		repo = "verkyyi/claude-fleet"
+	}
+	srv.Releases = &api.ReleaseStore{Dir: dir, Key: key, Repo: repo, Source: srv.Stable,
+		DistDir: srv.FleetDistDir, ArtifactsDir: os.Getenv("CCQUOTA_FLEET_RELEASE_ARTIFACTS")}
+	srv.Stable.OnStable = srv.Releases.OnStable
+	log.Printf("fleet: node releases in %s, signed by %s", dir, release.KeyID(key.Public().(ed25519.PublicKey)))
+	return nil
+}
+
+// checkUnmounted: the mount path, among CCQUOTA_CHECK_UNMOUNTED, that holds
+// path — "" when none does. hub-deploy's pre-switch check runs the new env with
+// the live pod's volumes and names there the mounts only the new render has
+// (claude-fleet#2366); nothing else sets it.
+func checkUnmounted(path string) string {
+	for _, m := range strings.Fields(os.Getenv("CCQUOTA_CHECK_UNMOUNTED")) {
+		m = filepath.Clean(m)
+		if m != "/" && (path == m || strings.HasPrefix(filepath.Clean(path), m+"/")) {
+			return m
+		}
+	}
+	return ""
 }
 
 // envOrFile reads a secret from NAME_FILE (a Secret mount) or NAME.
@@ -1061,64 +1100,27 @@ func runAgent(args []string) error {
 		nodeRoutes = r
 	}
 
-	a, err := agent.New(agent.Config{
-		HubURL:              strings.TrimRight(*hub, "/"),
-		Token:               *token,
-		Home:                h,
-		Sources:             *sources,
-		CodexHome:           *codexHome,
-		CodexHomes:          *codexHomes,
-		CodexBinary:         *codexBinary,
-		CodexDisableRefresh: !*codexAutoRefresh,
-		StateDir:            stateDir,
-		SessionsDir:         *sessionsDir,
-		ScanInterval:        *scanEvery,
-		LimitsInterval:      *limitsEvery,
-		LiveInterval:        *liveEvery,
-		SpoolMaxBytes:       *spoolMB << 20,
-		MaxBackfill:         *maxBackfill,
-		Version:             Version,
-		Once:                *once,
-		AccountsDir:         *accountsDir,
-		ProbeModels:         splitList(*probeModels),
-		Fleet:               fleetEnabled(),
-		// Only meaningful with the fleet module on: the admin agent is a
-		// role on the control channel.
-		FleetAdmin: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_ADMIN") == "1",
-		// Coordinate only (claude-fleet#1719): no placement, no lease. Only
-		// an explicit 0 — a node joined before #1719 has no line and runs.
-		FleetComputeOff: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_COMPUTE") == "0",
-		// Lease this login's credentials from the hub's vault (#1415).
-		FleetCreds:         fleetEnabled() && os.Getenv("CCQUOTA_FLEET_CREDS") == "1",
-		FleetCodexHomesDir: os.Getenv("CCQUOTA_FLEET_CODEX_HOMES"),
-		// Separated (claude-fleet#1971): the lease goes to the proxy's socket.
-		FleetCredStore: os.Getenv("CCQUOTA_FLEET_CRED_STORE"),
-		// The relay rides the control channel, so it is on wherever that is
-		// unless explicitly refused (claude-fleet#1413).
-		FleetSSHRelay: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
-		// An admin agent carries the hub's token refreshes unless refused
-		// (claude-fleet#1490); the endpoint overrides are for a fake provider.
-		FleetOAuthRefresh: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_OAUTH_REFRESH") != "0",
-		OAuthTokenURLs: map[string]string{
-			"claude": os.Getenv("CCQUOTA_FLEET_CLAUDE_TOKEN_URL"),
-			"codex":  os.Getenv("CCQUOTA_FLEET_CODEX_TOKEN_URL"),
-		},
-		// Routes for `fleet connect` ride the heartbeat (#1414).
-		FleetRoutes:       nodeRoutes,
-		FleetTailnetRoute: fleetEnabled() && os.Getenv("CCQUOTA_FLEET_NODE_TAILNET") != "0",
-		// A SPOT node (claude-fleet#1428): the join wrote
-		// CCQUOTA_FLEET_NODE_KIND=ephemeral from the hub's answer. SIGTERM is
-		// then the cloud taking the machine, not a restart.
-		FleetEphemeral:      fleetEnabled() && os.Getenv("CCQUOTA_FLEET_NODE_KIND") == "ephemeral",
-		FleetReclaimCmd:     os.Getenv("CCQUOTA_FLEET_RECLAIM_CMD"),
-		FleetReclaimTimeout: reclaimTimeout,
-		// The state nudge (claude-fleet#1481): the fleet's conf dir when
-		// the environment names one, else the agent's default under home.
-		FleetNudgePath: fleetNudgePath(),
-		// node.env + node-probe.json, re-read every beat (claude-fleet#1720).
-		FleetNodeEnvPath: fleetConfPath("node.env"),
-		FleetProbePath:   fleetConfPath("node-probe.json"),
-	})
+	cfg := agentFleetConfig(os.Getenv, nodeRoutes)
+	cfg.HubURL = strings.TrimRight(*hub, "/")
+	cfg.Token = *token
+	cfg.Home = h
+	cfg.Sources = *sources
+	cfg.CodexHome = *codexHome
+	cfg.CodexHomes = *codexHomes
+	cfg.CodexBinary = *codexBinary
+	cfg.CodexDisableRefresh = !*codexAutoRefresh
+	cfg.StateDir = stateDir
+	cfg.SessionsDir = *sessionsDir
+	cfg.ScanInterval = *scanEvery
+	cfg.LimitsInterval = *limitsEvery
+	cfg.LiveInterval = *liveEvery
+	cfg.SpoolMaxBytes = *spoolMB << 20
+	cfg.MaxBackfill = *maxBackfill
+	cfg.Version = Version
+	cfg.Once = *once
+	cfg.AccountsDir = *accountsDir
+	cfg.ProbeModels = splitList(*probeModels)
+	a, err := agent.New(cfg)
 	if err != nil {
 		return err
 	}
@@ -1152,6 +1154,59 @@ func runAgent(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return a.Run(ctx)
+}
+
+// agentFleetConfig is the part of an agent's Config its environment sets — the
+// fleet module's switches. One copy for both a plain agent (os.Getenv) and each
+// login of `ccquota agent --machine` (that login's env file,
+// claude-fleet#2333).
+func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute) agent.Config {
+	fleet := getenv("CCQUOTA_FLEET") == "1"
+	confPath := func(name string) string {
+		if d := getenv("FLEET_CONF_DIR"); d != "" {
+			return filepath.Join(d, filepath.FromSlash(name))
+		}
+		return ""
+	}
+	return agent.Config{
+		Fleet: fleet,
+		// Only meaningful with the fleet module on: the admin agent is a
+		// role on the control channel.
+		FleetAdmin: fleet && getenv("CCQUOTA_FLEET_ADMIN") == "1",
+		// Coordinate only (claude-fleet#1719): no placement, no lease. Only
+		// an explicit 0 — a node joined before #1719 has no line and runs.
+		FleetComputeOff: fleet && getenv("CCQUOTA_FLEET_COMPUTE") == "0",
+		// Lease this login's credentials from the hub's vault (#1415).
+		FleetCreds:         fleet && getenv("CCQUOTA_FLEET_CREDS") == "1",
+		FleetCodexHomesDir: getenv("CCQUOTA_FLEET_CODEX_HOMES"),
+		// Separated (claude-fleet#1971): the lease goes to the proxy's socket.
+		FleetCredStore: getenv("CCQUOTA_FLEET_CRED_STORE"),
+		// The relay rides the control channel, so it is on wherever that is
+		// unless explicitly refused (claude-fleet#1413).
+		FleetSSHRelay: fleet && getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
+		// An admin agent carries the hub's token refreshes unless refused
+		// (claude-fleet#1490); the endpoint overrides are for a fake provider.
+		FleetOAuthRefresh: fleet && getenv("CCQUOTA_FLEET_OAUTH_REFRESH") != "0",
+		OAuthTokenURLs: map[string]string{
+			"claude": getenv("CCQUOTA_FLEET_CLAUDE_TOKEN_URL"),
+			"codex":  getenv("CCQUOTA_FLEET_CODEX_TOKEN_URL"),
+		},
+		// Routes for `fleet connect` ride the heartbeat (#1414).
+		FleetRoutes:       nodeRoutes,
+		FleetTailnetRoute: fleet && getenv("CCQUOTA_FLEET_NODE_TAILNET") != "0",
+		// A SPOT node (claude-fleet#1428): the join wrote
+		// CCQUOTA_FLEET_NODE_KIND=ephemeral from the hub's answer. SIGTERM is
+		// then the cloud taking the machine, not a restart.
+		FleetEphemeral:      fleet && getenv("CCQUOTA_FLEET_NODE_KIND") == "ephemeral",
+		FleetReclaimCmd:     getenv("CCQUOTA_FLEET_RECLAIM_CMD"),
+		FleetReclaimTimeout: reclaimTimeout,
+		// The state nudge (claude-fleet#1481): the fleet's conf dir when
+		// the environment names one, else the agent's default under home.
+		FleetNudgePath: confPath("global/hub-nudge"),
+		// node.env + node-probe.json, re-read every beat (claude-fleet#1720).
+		FleetNodeEnvPath: confPath("node.env"),
+		FleetProbePath:   confPath("node-probe.json"),
+	}
 }
 
 // reclaimTimeout is how long a SPOT node's agent spends moving sessions off

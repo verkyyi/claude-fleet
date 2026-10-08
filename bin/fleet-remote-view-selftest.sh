@@ -221,7 +221,7 @@ if fn == "jump":
 elif fn == "sync":
     sb.sync(sys.argv[3], "1", 30, sys.argv[4])
 elif fn == "version":
-    print(sb.VIEW_VERSION)
+    print(sb.VIEW_STAMP)
 PYR
 }
 VV=$(sb version)

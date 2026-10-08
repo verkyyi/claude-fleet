@@ -39,6 +39,9 @@
 #      a definition from before #2296 (log back in the home) is WARN naming
 #      `check --fix --login <login>`, which moves it; a root service that is
 #      not the fleet's is named as such; a service with a UserName is not counted
+#   N  --fresh (issue #2294, fleet-login-new.sh's step 7b): a login something
+#      runs as is refused (exit 6, nothing made); --pool-src without --fresh is
+#      exit 2 (fleet-login-new-selftest.sh drives the whole fresh install)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "/tmp/credsep-st.XXXXXX")
@@ -136,6 +139,15 @@ else fail "H dry run rc=$rc: $out"; fi
 printf '%s' "$out" | grep -q 'sk-ant-\|ccq_' && fail "H the dry run printed a credential" || pass "H the dry run prints paths, no credential"
 out=$(FLEET_CREDSEP_SUDO=false bash "$BIN/fleet-credsep.sh" uninstall --dry-run 2>&1); rc=$?
 case "$rc:$out" in "0:credsep: not separated"*) pass "H uninstall --dry-run when not separated: nothing to undo" ;; *) fail "H uninstall dry rc=$rc: $out" ;; esac
+
+# ── N: --fresh is for a login nothing runs as yet (issue #2294) ─────────────────
+out=$(FLEET_CREDSEP_PREFLIGHT=1 bash "$BIN/fleet-credsep.sh" install --fresh 2>&1); rc=$?
+if [ "$rc" = 6 ] && printf '%s' "$out" | grep -q 'not a fresh login' && [ "$(snap)" = "$BEFORE" ] && [ ! -e "$R" ]; then
+  pass "N --fresh on a login with processes: refused (exit 6), nothing made"
+else fail "N --fresh rc=$rc: $out"; fi
+out=$(bash "$BIN/fleet-credsep.sh" install --pool-src "$SB" 2>&1); rc=$?
+case "$rc:$out" in 2:*"--pool-src is for a login just opened"*) pass "N --pool-src without --fresh: exit 2" ;; *) fail "N pool-src rc=$rc: $out" ;; esac
+[ "$(snap)" = "$BEFORE" ] && [ ! -e "$R" ] && pass "N refusals changed nothing" || fail "N a refusal changed something"
 
 # ── B: install ─────────────────────────────────────────────────────────────────
 out=$(FLEET_CRED_SEPARATE=1 bash "$BIN/fleet-credsep.sh" apply 2>&1); rc=$?

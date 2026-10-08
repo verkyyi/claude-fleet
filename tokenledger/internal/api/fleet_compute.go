@@ -97,6 +97,11 @@ func (s *Server) computeOf(endpointID string, hb control.Heartbeat, settings map
 	claimOn := control.ComputeOn(hb.Compute)
 	force, probe := hb.ComputeForce, hb.Probe
 	if c := s.nodes.get(endpointID); c != nil {
+		if c.machineLink {
+			// A machine's own link carries logins; it is never one to run
+			// sessions on (claude-fleet#2333), whatever the team policy says.
+			return computeVerdict{Off: true, Why: "machine link"}
+		}
 		if c.computeOff && !c.beatSaidOn.Load() {
 			claimOn = false
 		}

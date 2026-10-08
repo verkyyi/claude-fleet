@@ -73,6 +73,14 @@ vge() {
     exit 0 }'
 }
 
+# `fleet doctor --machine` (issue #2334): the machine half alone — the root
+# runtime and every part release.json pins, the rows the machine updater's
+# rollback gate reads, plus one `version` line. Exit = its FAIL count.
+if [ "${1:-}" = --machine ]; then
+  printf '%sclaude-fleet doctor — machine%s\n' "$B" "$Z"
+  exec python3 "$(dirname "$0")/fleet-node-update.py" doctor
+fi
+
 printf '%sclaude-fleet doctor%s\n' "$B" "$Z"
 
 # --- per-fleet conf enumeration (shared by the optional-daemon checks below) ---
@@ -1629,6 +1637,30 @@ elif awk -v p="$mper" -v w="$mwarn" 'BEGIN{ exit !(p>=w) }'; then
   warn machine "load $mload on $mcores cores = ${mper}/core, at or over the ${mwarn}/core line — every fleet on this box is sharing it. No fleet-fingerprinted orphan is responsible (\`bin/fleet-diskguard.sh --orphans\` is empty), so look at what else is running"
 else
   pass machine "load $mload on $mcores cores (${mper}/core), no orphaned runaways"
+fi
+
+# --- the machine's one daemon (issue #2331, EPIC #2329 C3) ----------------------
+# com.claude-fleet.node runs the machine-level work once for every login; its
+# status is world-readable, so any login's doctor reads it. Not installed ⇒ no row
+# (a machine that never had it reads byte for byte as before).
+_nsup="$(dirname "$0")/fleet-node-supervisor.py"
+if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
+  nline=$(python3 "$_nsup" status --check 2>/dev/null); nrc=$?
+  case "$nrc" in
+    0) pass node "machine daemon com.claude-fleet.node: $nline" ;;
+    1) warn node "machine daemon com.claude-fleet.node is installed but not running — $nline. launchd's KeepAlive should bring it back within seconds; if it does not: \`sudo launchctl kickstart -k system/com.claude-fleet.node\`, log /var/log/fleet-node/supervisor.log, \`fleet-node-supervisor.py status\`" ;;
+  esac
+fi
+# The machine's one updater (issue #2334): where the last tick left it. No
+# update.json (the updater never ran here) ⇒ no row. WARN, never FAIL: the
+# updater's own gate rolls a bad release back; this line only says it happened.
+_nupd="$(dirname "$0")/fleet-node-update.py"
+if [ -f "$_nupd" ] && [ -f "${FLEET_NODE_STATE:-/var/db/fleet-node}/update.json" ] && command -v python3 >/dev/null 2>&1; then
+  uline=$(python3 "$_nupd" status --check 2>/dev/null); urc=$?
+  case "$urc" in
+    0) pass update "${uline#update  } — every part: \`fleet doctor --machine\`" ;;
+    1) warn update "${uline#update  } — log /var/log/fleet-node/update.log; every part: \`fleet doctor --machine\`" ;;
+  esac
 fi
 
 # --- fleet listeners exposed to the LAN (issue #1154) ---------------------------

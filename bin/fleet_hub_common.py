@@ -25,7 +25,13 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             "worker_reap": "worker:reap", "gh_comment": "gh:comment",
             # worker_switch (issue #2102) closes the session and resumes the same
             # conversation on another subscription: a stop's authority, no new grant.
-            "worker_switch": "worker:stop"}
+            "worker_switch": "worker:stop",
+            # worker_rename (issue #2358) changes the window's display name only:
+            # a message's authority, the lowest a person who can talk to it holds.
+            "worker_rename": "worker:message",
+            # worker_reap_policy (issue #2368) says WHEN the fleet may close the
+            # session on its own: a reap's authority — `done:1m` is a reap soon.
+            "worker_reap_policy": "worker:reap"}
 # The tools that name a WORKER (a worker_id), not a fleet. worker_answer and
 # worker_reap (issue #1487, EPIC #1479 C8) are what a sidebar on another machine
 # runs on a row here: answer the pane's open prompt (fleet-answer.sh /
@@ -34,10 +40,29 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
 # dash-migrate.sh <window> to [<account>]: the same conversation resumed on the
 # fleet's active (or the named) subscription.
 WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap",
-                  "worker_switch")
+                  "worker_switch", "worker_rename", "worker_reap_policy")
 # worker_switch's optional `account`: a label in the accounts dir, one argv word
 # (fleet-manual-sub.sh check's own rule).
 ACCOUNT_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}")
+# worker_rename's `name` (issue #2358): a window name — 1 to 64 characters, no
+# control character (a tab or newline would split the inventory's columns), not
+# blank. One argv word on the node; never parsed by a shell or tmux.
+NAME_RE = re.compile(r"[^\x00-\x1f\x7f]{1,64}")
+# worker_reap_policy's `policy` (issue #2368): bin/fleet_reap_policy.py's grammar —
+# the ONE parser, never a second copy — and no longer than the inventory's
+# `reap` column carries (48, [A-Za-z0-9:.+-]).
+REAP_POLICY_RE = re.compile(r"[A-Za-z0-9:.+-]{1,48}")
+
+
+def reap_policy_ok(policy):
+    if not (isinstance(policy, str) and REAP_POLICY_RE.fullmatch(policy)):
+        return False
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "fleet_reap_policy", Path(__file__).resolve().with_name("fleet_reap_policy.py"))
+    grammar = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(grammar)
+    return grammar.parse(policy) is not None
 # worker_answer's `answer` (issue #1487): `yes` / `no` for a permission prompt
 # (fleet-permission.sh --allow / --deny), else the picks of an AskUserQuestion —
 # one option number per question in order, `1,3` toggling several in a
@@ -231,9 +256,15 @@ def inventory_row(parts):
     Column 22 (issue #1916): `epicstale=` — the batches on the node's login that
     nobody drives (a stale heartbeat, the EPIC still open, no window wearing its
     @epic): `epic_stale`, a list (epic_stale_cell), on every row alike — it is the
-    login's, and a batch nobody drives has no window of its own; absent when empty."""
+    login's, and a batch nobody drives has no window of its own; absent when empty.
+    Column 23 (issue #2235): `backfill=failed` — a session started from the warm
+    pool whose issue could not be filed / bound after every try; the sidebars mark
+    its row 「单子没建上」. Absent otherwise."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 23 and parts[-1].startswith("backfill="):
+        if parts.pop()[9:] == "failed":
+            extra["backfill"] = "failed"
     if len(parts) >= 22 and parts[-1].startswith("epicstale="):
         st = epic_stale_cell(parts.pop()[10:])
         if st:
@@ -427,6 +458,16 @@ def validate_write(action, params):
     elif action in WORKER_ACTIONS:
         if action == "worker_answer":
             fields(params, ("worker_id", "answer"))
+        elif action == "worker_rename":
+            fields(params, ("worker_id", "name"))
+            if not (isinstance(params["name"], str) and NAME_RE.fullmatch(params["name"])
+                    and params["name"].strip()):
+                raise Fault("INVALID_ARGUMENT", "name must be 1-64 characters with no control character")
+        elif action == "worker_reap_policy":
+            fields(params, ("worker_id", "policy"))
+            if not reap_policy_ok(params["policy"]):
+                raise Fault("INVALID_ARGUMENT", "policy must be merged[:<dur>] · done[:<dur>] · loop-end · "
+                                                "at:<ISO|HH:MM|epoch> · keep")
         elif action == "worker_switch":
             fields(params, ("worker_id",), ("account",))
             if "account" in params and not (isinstance(params["account"], str)

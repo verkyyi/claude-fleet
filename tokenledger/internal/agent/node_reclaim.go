@@ -75,6 +75,10 @@ func (a *Agent) Reclaim(ctx context.Context) {
 	setProcessGroup(c)
 	c.Cancel = func() error { return killProcessGroup(c) }
 	c.WaitDelay = 5 * time.Second
+	if err := prepCmd(ctx, c); err != nil {
+		log.Printf("reclaim: %v", err)
+		return
+	}
 	out, err := c.StdoutPipe()
 	if err != nil {
 		log.Printf("reclaim: %v", err)

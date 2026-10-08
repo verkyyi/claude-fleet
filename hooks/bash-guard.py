@@ -1231,7 +1231,11 @@ def check_direct(script, tool, masked_cmd, cwd):
 # is the hatch. The operator's hub pane (FLEET_HUB=1) and a person's shell are
 # never touched.
 _SSH_ARG_OPTS = set("bcDEeFIiJLlmOoPpQRSWw")
-_FLEET_NOT_CLIENT = {"-h", "--help", "help", "doctor"}
+# `fleet quit` / `fleet status` (issue #2349) stop or read the client, never start one
+_FLEET_NOT_CLIENT = {"-h", "--help", "help", "doctor", "quit", "status"}
+# fleet-shell.sh's modes that start no client (issue #2349): `quit` stops it,
+# `running` reads it, `solo` needs one up and starts none
+_SHELL_NOT_CLIENT = {"quit", "running", "solo"}
 
 
 def _client_start(toks, i):
@@ -1239,7 +1243,7 @@ def _client_start(toks, i):
     word = os.path.basename(toks[i].rstrip(")"))
     rest = toks[i + 1:]
     if word == "fleet-shell.sh":
-        return "--test-identity" not in rest
+        return "--test-identity" not in rest and not (rest and rest[0] in _SHELL_NOT_CLIENT)
     # `fleet claude|codex` (issue #2264) starts the client too, before its attach;
     # with --here it is `fleet run`, this computer's own session — no client
     if word == "fleet-home-session.sh":
