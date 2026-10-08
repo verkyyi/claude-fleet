@@ -424,6 +424,26 @@ func (s *Store) RequestRelogin(principalID, hostname, login string, at time.Time
 	return from, tx.Commit()
 }
 
+// AdoptReloginAccount settles a relogin'd row (claude-fleet#2210) as active
+// without running anything: the row on hostname must already carry login (the
+// relogin's new name, not the person's own) and be settled or failed — the
+// create stopped part-way and the admin finished the login by hand. Any other
+// row refuses with ErrAccountState: adopt never invents a second login.
+func (s *Store) AdoptReloginAccount(principalID, hostname, login string, at time.Time) error {
+	ts := at.UTC().Format(rfc)
+	res, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, op = 'adopt', detail = ?, op_id = '', endpoint_id = '', updated_at = ?
+		WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ? AND login = ? AND state IN (?, ?, ?, ?)`,
+		AccountActive, "adopted: relogin "+login+" finished by hand", ts, principalID, hostname, login,
+		AccountActive, AccountFailed, AccountRemoved, AccountUnknown)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: no settled row with login %s on %s", ErrAccountState, login, hostname)
+	}
+	return nil
+}
+
 // AdoptAccountIfOpen is AdoptAccount for the roster-driven path
 // (claude-fleet#1458): it records p's login on hostname as active only when
 // the hub holds no row there yet, or a row that never reached the machine

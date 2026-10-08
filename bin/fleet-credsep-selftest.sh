@@ -145,6 +145,12 @@ out=$(FLEET_CREDSEP_PREFLIGHT=1 bash "$BIN/fleet-credsep.sh" install --fresh 2>&
 if [ "$rc" = 6 ] && printf '%s' "$out" | grep -q 'not a fresh login' && [ "$(snap)" = "$BEFORE" ] && [ ! -e "$R" ]; then
   pass "N --fresh on a login with processes: refused (exit 6), nothing made"
 else fail "N --fresh rc=$rc: $out"; fi
+# macOS's own per-user agents never make a login "not fresh" (issue #2210)
+out=$(python3 -c 'import importlib.util as u,sys; s=u.spec_from_file_location("c",sys.argv[1]); m=u.module_from_spec(s); s.loader.exec_module(m)
+print(" ".join(str(m.os_agent(c)) for c in sys.argv[2:]))' "$BIN/fleet-credsep.py" \
+  /usr/sbin/cfprefsd /usr/libexec/lsd /System/Library/Frameworks/Contacts.framework/Support/contactsd \
+  /bin/zsh /Users/x/.local/bin/claude /usr/bin/ssh git 2>&1)
+case "$out" in "True True True False False False False") pass "N the OS's per-user agents are not a session; a shell, claude, ssh are" ;; *) fail "N os_agent: $out" ;; esac
 out=$(bash "$BIN/fleet-credsep.sh" install --pool-src "$SB" 2>&1); rc=$?
 case "$rc:$out" in 2:*"--pool-src is for a login just opened"*) pass "N --pool-src without --fresh: exit 2" ;; *) fail "N pool-src rc=$rc: $out" ;; esac
 [ "$(snap)" = "$BEFORE" ] && [ ! -e "$R" ] && pass "N refusals changed nothing" || fail "N a refusal changed something"
