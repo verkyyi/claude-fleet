@@ -1913,7 +1913,20 @@ case "$mstale" in ''|*[!0-9]*) mstale=300 ;; esac
 mrows=''
 if [ -d "$msdir" ]; then
   mnow=$(date +%s)
-  for mf in "$msdir"/*; do
+  # only a file its login owns (fleet_machine_sessions_owned, issue #2299 — KEEP IN SYNC)
+  mfiles=$(if [ "${FLEET_MACHINE_SESSIONS_OWNER_CHECK:-1}" = 0 ]; then
+      for mf in "$msdir"/*; do [ -f "$mf" ] && [ ! -L "$mf" ] && printf '%s\n' "$mf"; done
+    else
+      ls -l "$msdir" 2>/dev/null | awk '/^-/ { print $3, $NF }' | while read -r mo ml; do
+        [ -n "$ml" ] || continue
+        if [ "$mo" != "$ml" ]; then
+          case "$mo" in (''|*[!A-Za-z0-9._-]*) continue ;; esac
+          mh=$(eval "printf '%s' ~$mo" 2>/dev/null); [ "${mh##*/}" = "$ml" ] || continue
+        fi
+        printf '%s\n' "$msdir/$ml"
+      done
+    fi)
+  for mf in $mfiles; do
     [ -f "$mf" ] || continue
     mrows="$mrows$(awk -v l="${mf##*/}" -v now="$mnow" -v st="$mstale" '
       NR == 1 { n = ($1 ~ /^[0-9]+$/) ? $1 : 0; ts = ($2 ~ /^[0-9]+$/) ? $2 : 0

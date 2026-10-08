@@ -296,6 +296,11 @@ def default_table(paths):
             {"name": "orphans", "every": 60,
              "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-diskguard.sh"), "--orphan-watch"],
              "env": {"FLEET_ORPHAN_ALL_USERS": "1"}},
+            # The machine's shared dirs (#2299): /Users/Shared/claude-fleet and its
+            # heavy/ + sessions/ root's and 1777, the heavy slots root's 0644, any
+            # file planted under another login's name swept — each login its own.
+            {"name": "shared-dirs", "every": 60,
+             "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-shared-dirs.py")]},
             # The one updater (C6, #2334): every part of the machine to the hub's
             # release, or none. A switch ends in a restart request (below).
             {"name": "update", "every": env_num("FLEET_NODE_UPDATE_EVERY", 300), "timeout": 1800,

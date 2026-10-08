@@ -7,7 +7,15 @@
 #               frees its slot at once; --wait times out into a WARN and runs
 #               anyway; exit codes pass through; FLEET_HEAVY=0 / nested holders
 #               pass straight through; two logins (two HOMEs) share one slot set;
-#               the shared dir is 1777 and slot files 0666.
+#               the shared dir is 1777.
+#   own files   (issue #2299) every file a login writes is its own and 0644 —
+#               slots opened read-only (a lock only), hold.<login>.<pid> /
+#               wait.<login>.<pid> / events.<login>.log; a planted symlink or a
+#               file under another login's name is never written through nor
+#               believed; root's fleet-shared-dirs.py replaces a slot another
+#               login owns and sweeps the squats; another uid (sudo -n -u
+#               nobody, where there is one) can neither delete nor rewrite them,
+#               and still queues behind the same slots (machine-wide).
 #   hook        rewrites only a statement whose COMMAND matches FLEET_HEAVY_RE,
 #               as a pure prefix (quotes, heredoc bodies, pipes, && chains keep
 #               every byte); FLEET_HEAVY=0 (env / settings / inline) and non-fleet
@@ -54,12 +62,16 @@ while [ "$n" -lt 60 ]; do
 done
 wait
 [ "$peak" -le 3 ] && [ "$peak" -ge 2 ] && ok "6 concurrent → peak held $peak ≤ 3" || fail "6 concurrent → peak held $peak (want 2..3)"
-eq "all 6 ran" 6 "$(grep -c '	acquire	' "$FLEET_HEAVY_DIR/events.log")"
-logpeak="$(sed -n 's/.*held=\([0-9]*\).*/\1/p' "$FLEET_HEAVY_DIR/events.log" | sort -n | tail -1)"
+ME="$(id -un)"; EV="$FLEET_HEAVY_DIR/events.$ME.log"
+eq "all 6 ran" 6 "$(grep -c '	acquire	' "$EV")"
+logpeak="$(sed -n 's/.*held=\([0-9]*\).*/\1/p' "$EV" | sort -n | tail -1)"
 eq "event log never records held > 3" 3 "$logpeak"
 eq "shared dir is 1777" drwxrwxrwt "$(ls -ld "$FLEET_HEAVY_DIR" | cut -c1-10)"
 eq "parent dir is 1777" drwxrwxrwt "$(ls -ld "$TMP/shared" | cut -c1-10)"
-eq "slot file is 0666" -rw-rw-rw- "$(ls -l "$FLEET_HEAVY_DIR/slot-1" | cut -c1-10)"
+eq "slot file is 0644" -rw-r--r-- "$(ls -l "$FLEET_HEAVY_DIR/slot-1" | cut -c1-10)"
+eq "no file in the shared dir is writable by another login" "" \
+   "$(find "$FLEET_HEAVY_DIR" -type f -perm -002 -o -type f -perm -020 2>/dev/null)"
+eq "no shared events.log: each login logs to its own" "" "$(ls "$FLEET_HEAVY_DIR/events.log" 2>/dev/null)"
 
 # SIGKILL the holder → the slot is free immediately.
 "$HEAVY" --slots 1 --label victim -- sh -c "echo \$\$ > '$TMP/victim.pid'; exec sleep 30" 2>/dev/null &
@@ -81,7 +93,7 @@ eq "--wait timeout: command still runs" "RAN/0" "$out/$rc"
 has "--wait timeout: WARN on stderr" "WARN waited 1s" "$(cat "$TMP/late.err")"
 has "--wait timeout: names the holder" "hog(" "$(cat "$TMP/late.err")"
 [ $((SECONDS - t0)) -lt 4 ] && ok "--wait timeout: did not wait out the holder" || fail "--wait timeout waited the holder out"
-has "--wait timeout: logged" "	timeout	" "$(cat "$FLEET_HEAVY_DIR/events.log")"
+has "--wait timeout: logged" "	timeout	" "$(cat "$EV")"
 has "--status shows the holder" "hog" "$("$HEAVY" --slots 1 --status)"
 st="$("$HEAVY" --slots 1 --status)"
 has "--status prints the 24h wait stats" "waits 24h:" "$st"
@@ -103,12 +115,53 @@ kill "$hog" 2>/dev/null; wait "$hog" 2>/dev/null
 eq "exit code passes through" 7 "$("$HEAVY" -- sh -c 'exit 7' 2>/dev/null; echo $?)"
 eq "stdin reaches the command" hello "$(printf hello | "$HEAVY" -- cat)"
 eq "missing command → 127" 127 "$("$HEAVY" -- /nonexistent/xyz 2>/dev/null; echo $?)"
-before="$(wc -l < "$FLEET_HEAVY_DIR/events.log")"
+before="$(wc -l < "$EV")"
 FLEET_HEAVY=0 "$HEAVY" -- true
 FLEET_HEAVY_HELD=1 "$HEAVY" -- true
-eq "FLEET_HEAVY=0 / nested holder take no slot" "$before" "$(wc -l < "$FLEET_HEAVY_DIR/events.log")"
+eq "FLEET_HEAVY=0 / nested holder take no slot" "$before" "$(wc -l < "$EV")"
 eq "nested holder sees FLEET_HEAVY_HELD=1" 1 "$("$HEAVY" -- sh -c 'echo $FLEET_HEAVY_HELD')"
 "$HEAVY" --bogus -- true 2>/dev/null; eq "unknown option → exit 2" 2 "$?"
+
+# ---------------------------------------------------------------- own files (#2299)
+OD="$TMP/own/heavy"; mkdir -p "$TMP/own"
+python3 "$BIN/fleet-shared-dirs.py" --root "$TMP/own" --slots 2 >/dev/null
+eq "root's provisioner: shared dir 1777" drwxrwxrwt "$(ls -ld "$OD" | cut -c1-10)"
+eq "root's provisioner: slot 0644" -rw-r--r-- "$(ls -l "$OD/slot-2" | cut -c1-10)"
+printf 'precious\n' > "$TMP/victim"
+ln -s "$TMP/victim" "$OD/events.$ME.log"                 # a planted log symlink
+ln -s "$TMP/victim" "$OD/slot-3"                         # a planted slot symlink
+FLEET_HEAVY_DIR="$OD" "$HEAVY" --slots 3 --label sym -- true
+eq "a planted symlink is never written through" precious "$(cat "$TMP/victim")"
+FLEET_HEAVY_DIR="$OD" "$HEAVY" --slots 2 --label held -- sh -c "FLEET_HEAVY_DIR='$OD' '$HEAVY' --slots 2 --status > '$TMP/own.st'; ls '$OD' > '$TMP/own.ls'"
+has "the holder is named in its own hold file" "hold.$ME." "$(cat "$TMP/own.ls")"
+has "--status names the holder off its hold file" "$ME" "$(grep 'held     slot-' "$TMP/own.st")"
+eq "the hold file is gone after release" "" "$(for f in "$OD"/hold.*; do [ -e "$f" ] && echo "$f"; done)"
+printf '%s\tmallory\tfake\t0\t1\n' "$$" > "$OD/hold.mallory.$$"   # owned by $ME, named mallory
+sleep 30 & SQ=$!; printf '%s\tmallory\tfake\t0\n' "$SQ" > "$OD/wait.mallory.$SQ"
+st="$(FLEET_HEAVY_DIR="$OD" "$HEAVY" --slots 2 --status)"
+hasnt "a hold under another login's name is not believed" "mallory" "$st"
+has "a wait under another login's name is not counted" "0 waiting" "$st"
+python3 "$BIN/fleet-shared-dirs.py" --root "$TMP/own" --slots 2 >/dev/null
+eq "fleet-shared-dirs.py sweeps the squats" "" "$(for f in "$OD"/hold.mallory.* "$OD"/wait.mallory.*; do [ -e "$f" ] && echo "$f"; done)"
+kill "$SQ" 2>/dev/null; wait "$SQ" 2>/dev/null
+eq "fleet-shared-dirs.py sweeps a planted events symlink" "" "$([ -L "$OD/events.$ME.log" ] && echo symlink)"
+if [ "$(id -u)" != 0 ] && sudo -n -u nobody true 2>/dev/null; then
+  chmod 755 "$TMP" "$TMP/own"
+  FLEET_HEAVY_DIR="$OD" "$HEAVY" --slots 2 -- true
+  if sudo -n -u nobody test -r "$OD/events.$ME.log"; then
+    for f in slot-1 "events.$ME.log"; do
+      sudo -n -u nobody rm -f "$OD/$f" 2>/dev/null; [ -f "$OD/$f" ] && ok "nobody cannot delete $f" || fail "nobody deleted $f"
+      sz="$(wc -c < "$OD/$f")"; sudo -n -u nobody sh -c "echo x >> '$OD/$f'; : > '$OD/$f'" 2>/dev/null
+      eq "nobody cannot write $f" "$sz" "$(wc -c < "$OD/$f")"
+    done
+    if sudo -n -u nobody test -r "$HEAVY" && sudo -n -u nobody test -r "$BIN/fleet-lib.sh"; then
+      FLEET_HEAVY_DIR="$OD" "$HEAVY" --slots 1 -- sleep 3 & H=$!; sleep 1
+      out="$(sudo -n -u nobody env FLEET_HEAVY_DIR="$OD" HOME=/ "$HEAVY" --slots 1 --wait 0 -- true 2>&1)"
+      has "another uid queues behind the same slot (machine-wide)" "WARN waited 0s" "$out"
+      wait "$H" 2>/dev/null
+    else echo "skip own: nobody cannot read $HEAVY"; fi
+  else echo "skip own: nobody cannot reach $OD"; fi
+else echo "skip own: no sudo -n -u nobody here — the other-uid leg runs where there is one (CI)"; fi
 
 # ---------------------------------------------------------------- hook
 WRAP="$HEAVY"

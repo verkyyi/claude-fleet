@@ -239,6 +239,9 @@ FLEET_WRAP_LAUNCH_ID               handoff: one launch of fleet-session-wrap.sh,
 FLEET_SESSION_WRAP                 handoff: the pid of the fleet-session-wrap.sh holding this pane, read by session-end-hook.sh
 FLEET_SLEEPWATCH_SELFTEST          seam: fleet-node-sleepwatch.sh posts one sleep + one wake to itself and exits (#1721)
 FLEET_MACHINE_SESSIONS_DIR         path: the machine-wide per-login session-count dir (default /Users/Shared/claude-fleet/sessions)
+FLEET_MACHINE_SESSIONS_OWNER_CHECK seam: 0 = count every login file regardless of its owner — several selftest logins are several HOMEs of one uid (#2299)
+FLEET_SHARED_ROOT                  path: the machine-wide shared root fleet-shared-dirs.py keeps (default /Users/Shared/claude-fleet, #2299)
+FLEET_HEAVY_PROVISION_SLOTS        knob: how many heavy slot files root makes (fleet-shared-dirs.py, 16, #2299)
 FLEET_HEAVY_HELD                   handoff: fleet-heavy.sh sets it for its child so nested heavies pass through
 FLEET_HISTORY_LEDGER               path: state/log location override (fleet-history.sh)
 FLEET_HOST                         doc: the machine's 承载 switch in fleet.conf [common], written by `fleet host on|off` (fleet-host.sh) — read as the orchestrator's default (#1957)

@@ -17,6 +17,13 @@
 #      no window.
 #   E. continuation paths (crash restore, handoff) never pass the cap.
 #   F. the collector publishes after a clean socket probe; doctor states the total.
+#   G. each login's file is its own (issue #2299): written 0644 via a mktemp, never
+#      a predictable temp; a file planted under another login's name (or a symlink)
+#      counts nothing, in the lib and the doctor alike; root's fleet-shared-dirs.py
+#      sweeps it; another uid (sudo -n -u nobody, when there is one) can neither
+#      delete nor rewrite this login's file.
+#   A–F simulate three logins as three HOMEs of ONE uid, so they run with the
+#   owner check off (FLEET_MACHINE_SESSIONS_OWNER_CHECK=0); G runs it on.
 set -uo pipefail
 unset FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MACHINE_SESSIONS_DIR \
       FLEET_GLOBAL_MAX_SESSIONS FLEET_MAX_SESSIONS 2>/dev/null
@@ -66,7 +73,8 @@ as() {
   local l="$1" w="$2"; shift 2
   mkdir -p "$WORK/home/$l" "$WORK/c-$l"
   env PATH="$WORK/fakebin:$PATH" HOME="$WORK/home/$l" FLEET_C="$WORK/c-$l" TMPDIR="$WORK/c-$l" \
-    FLEET_CONF_DIR="$WORK/conf" FLEET_MACHINE_SESSIONS_DIR="$SH" FAKE_WINDOWS="$w" "$@"
+    FLEET_CONF_DIR="$WORK/conf" FLEET_MACHINE_SESSIONS_DIR="$SH" FAKE_WINDOWS="$w" \
+    FLEET_MACHINE_SESSIONS_OWNER_CHECK="${OWNER_CHECK:-0}" "$@"
 }
 lib() { local l="$1" w="$2"; shift 2; as "$l" "$w" bash -c 'source "$1/fleet-lib.sh"; shift; eval "$*"' _ "$BIN" "$@"; }
 
@@ -148,12 +156,40 @@ ok "E crash restore / handoff / move never reach the machine cap"
 
 # ===== F: collector + doctor ===================================================
 grep -q 'fleet_machine_sessions_publish' "$BIN/tmux-dash-collect.sh" || fail "F the collector must publish this login's count"
-out=$(env HOME="$WORK/home/alice" FLEET_CONF_DIR="$WORK/conf" FLEET_MACHINE_SESSIONS_DIR="$SH" sh "$BIN/fleet-doctor.sh" 2>&1)
+out=$(env HOME="$WORK/home/alice" FLEET_CONF_DIR="$WORK/conf" FLEET_MACHINE_SESSIONS_DIR="$SH" FLEET_MACHINE_SESSIONS_OWNER_CHECK=0 sh "$BIN/fleet-doctor.sh" 2>&1)
 printf '%s\n' "$out" | grep -q 'sessions across logins: 6 across 3 login(s): alice 3 · bob 2 · carol 1 — no machine cap' \
   || fail "F doctor must state the machine-wide total with each login's share" "$(printf '%s\n' "$out" | grep machine)"
 out=$(env HOME="$WORK/home/alice" FLEET_CONF_DIR="$WORK/conf" FLEET_MACHINE_SESSIONS_DIR="$WORK/none" sh "$BIN/fleet-doctor.sh" 2>&1)
 printf '%s\n' "$out" | grep -q 'sessions across logins: no login has published' || fail "F doctor with no files says so" "$(printf '%s\n' "$out" | grep machine)"
 ok "F collector publishes; doctor: $(printf '%s\n' "$out" | grep -m1 'across logins' | sed 's/^ *//' | cut -c1-80)…"
+
+# ===== G: each login's file is its own (issue #2299) ===========================
+me=$(id -un); G="$WORK/g"; SH="$G/shared/sessions"; mkdir -p "$G"
+OWNER_CHECK=1 lib "$me" 2 fleet_machine_sessions_publish || fail "G $me's publish failed"
+perm=$(stat -c %a "$SH/$me" 2>/dev/null || stat -f %Lp "$SH/$me" 2>/dev/null)
+[ "$perm" = 644 ] || fail "G a login's file must be 0644, not writable by others (got $perm)"
+grep -q 'mktemp "\$d/' "$BIN/fleet-lib.sh" || fail "G publish must write through a mktemp, never a predictable .<login>.\$\$ temp"
+printf '50 %s\n' "$(date +%s)" > "$SH/mallory"          # owned by $me, named mallory: a squat
+ln -s "$SH/$me" "$SH/eve"                              # a symlink posing as a login
+r=$(OWNER_CHECK=1 lib "$me" 2 fleet_machine_sessions_summary)
+[ "$r" = "$(printf '2\t%s 2' "$me")" ] || fail "G a planted or symlinked login file must count nothing (got '$r')"
+out=$(env HOME="$WORK/home/$me" FLEET_CONF_DIR="$WORK/conf" FLEET_MACHINE_SESSIONS_DIR="$SH" sh "$BIN/fleet-doctor.sh" 2>&1)
+printf '%s\n' "$out" | grep -q "sessions across logins: 2 across 1 login(s): $me 2 " \
+  || fail "G the doctor must skip a planted login file too" "$(printf '%s\n' "$out" | grep 'across logins')"
+python3 "$BIN/fleet-shared-dirs.py" --root "$G/shared" --slots 1 >/dev/null || fail "G fleet-shared-dirs.py failed"
+[ -e "$SH/mallory" ] || [ -L "$SH/eve" ] && fail "G fleet-shared-dirs.py must sweep the planted files"
+[ -f "$SH/$me" ] || fail "G fleet-shared-dirs.py must keep the login's own file"
+if [ "$(id -u)" != 0 ] && sudo -n -u nobody true 2>/dev/null; then
+  chmod 755 "$WORK" "$G" "$G/shared"
+  if sudo -n -u nobody test -r "$SH/$me"; then
+    sudo -n -u nobody rm -f "$SH/$me" 2>/dev/null; [ -f "$SH/$me" ] || fail "G another uid deleted this login's file"
+    sudo -n -u nobody sh -c "printf '99 0\n' > '$SH/$me'" 2>/dev/null
+    read -r gn _ < "$SH/$me"; [ "$gn" = 2 ] || fail "G another uid rewrote this login's file (got '$gn')"
+    sudo -n -u nobody mv "$SH/$me" "$SH/x" 2>/dev/null; [ -f "$SH/$me" ] || fail "G another uid renamed this login's file away"
+    ok "G another uid (nobody) cannot delete, rewrite or rename this login's file"
+  else echo "skip G: nobody cannot reach $SH"; fi
+else echo "skip G: no sudo -n -u nobody here — the other-uid leg runs where there is one (CI)"; fi
+ok "G a login's file is its own: 0644, planted/symlinked names count nothing, swept"
 
 printf '\nselftest OK: %s groups passed (machine-wide session total, issue #1301)\n' "$pass"
 exit 0

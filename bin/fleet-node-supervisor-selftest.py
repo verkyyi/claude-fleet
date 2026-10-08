@@ -12,7 +12,7 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
   D  the supervisor restarted (kill -9) keeps its state and ADOPTS a live child
   E  status: one line per item; --check 2 not installed · 0 ok · 1 stale/down
   F  root runs only a root-owned, non-writable script; the built-in table's shape
-  G  the default (no table) machine half: diskguard / memguard / orphans
+  G  the default (no table) machine half: diskguard / memguard / orphans / shared-dirs
   H  the account half (#2332): the table is the launchd templates; a task runs as
      its account (uid, HOME, USER, FLEET_CONF_DIR, its own log); one account's
      failure never touches another's; `account adopt` boots the old services out
@@ -352,7 +352,7 @@ class G_DefaultTable(Sandbox):
                 if k.startswith("FLEET_NODE_"):
                     del os.environ[k]
         names = [x["name"] for x in t["tasks"]]
-        self.assertEqual(names, ["diskguard", "memguard", "orphans", "update"])
+        self.assertEqual(names, ["diskguard", "memguard", "orphans", "shared-dirs", "update"])
         by = {x["name"]: x for x in t["tasks"]}
         self.assertIsNone(t["account"], "the account table is the runtime's templates")
         self.assertEqual(by["diskguard"]["env"]["FLEET_ORPHAN_CPU_PCT"], "0", "orphans would run twice")
