@@ -165,6 +165,7 @@ root 运行；它取代托管账号各自的 `fleet-install-sync.sh`（那个账
 | Claude Code / Codex / tmux | `version` 钉住；可执行文件本身是发布包的 artifact（`{version}` `{os}` `{arch}` 展开，`{arch}` 是 `arm64` / `amd64`） | root 缓存 `<root>/tools/<名>/<sha256>/<名>`，发布目录里 `tools/bin/<名>` 链过去 |
 | 开号缓存 | 同 `claude.version` | `<root>/cache/claude/<ver>/claude` + `current`（`fleet-bootstrap-cache.sh claude` 从这里装新账号） |
 | 账号 | — | 每个托管账号的 `~/.local/bin/{claude,codex}`、`~/.local/share/claude-fleet-vendor/bin/tmux` 链到 `<root>/current/tools/bin/<名>`；由降权到该账号的进程建，每轮重建（Claude Code 自己更新换掉了链接就换回来），**从不覆盖账号自己的普通文件** |
+| 共享凭据代理 | 发布版提交的 `bin/fleet-cred-proxy.py` / `fleet-credsep-launch.py` | root 代码副本 `<root>/credsep/`：更新器每次切换、回退、验证前和每一轮跑 `<current>/bin/fleet-credsep.py machine refresh`，字节变了代理就重启——launchd 管的（旧 `com.claude-fleet.cred-proxy-shared` 还在）由 refresh bootout / bootstrap，守护管的子进程由守护按 `reload`（`credsep/` 一变）重启，refresh 不另写 plist（#2435） |
 | 守护自身 | 发布版提交 | 它就在 `current` 里：切换后最后一步写 `<state>/update-restart.json`，守护停掉子进程退出，launchd 用新版拉起 |
 
 - `os` / `arch` 只是 artifact 名字的展开；校验和永远是**入口签名清单**里的那个，`release.json` 不写校验和。
@@ -180,16 +181,17 @@ root 运行；它取代托管账号各自的 `fleet-install-sync.sh`（那个账
 1. **目标**：`expected.json` 的 `release`（§3 期望状态），否则入口 `/version` 的 `stable`。
 2. **推迟**：任何托管账号有「有活」的 EPIC 批次在跑（#2247 的 `fleet_epic_holding`）→ `deferred`，最长 2 小时（`FLEET_EPIC_HOLD_CAP_SECS`）。
 3. **取包**：`ccquota release fetch --artifacts`（C7，只问入口、验钉住的公钥 `<state>/release.pub`）→ 装 ccquota 和各工具 → 写 `.release/staged.json`。没有这个标记的目录 = 没装完，删掉重取。
-4. **切换**：记下当前（旧版）的机器体检 FAIL 作基线 → `.prev` = 旧版、`current` = 新版（各一次 rename）→ 开号缓存、账号链接 → 请守护重启。
+4. **切换**：记下当前（旧版）的机器体检 FAIL 作基线 → `.prev` = 旧版、`current` = 新版（各一次 rename）→ 开号缓存、账号链接、共享凭据代理的代码副本（`machine refresh`）→ 请守护重启。
 5. **验证**（下一轮，新代码，`FLEET_NODE_UPDATE_SETTLE` 30 秒后）：机器体检（`fleet doctor --machine`）比基线多出 FAIL
-   → `current` 切回 `.prev`，缓存、链接一起回，这一版记 `skip`（stable 再动之前不重试），再请守护重启；否则 `committed`。
+   （判之前先 `machine refresh` 一次：由不认识 credsep 的旧更新器换上来的版本，副本还是旧的）
+   → `current` 切回 `.prev`，缓存、链接、代理副本一起回，这一版记 `skip`（stable 再动之前不重试），再请守护重启；否则 `committed`。
 6. 退下来的版本留 7 天（`FLEET_NODE_UPDATE_KEEP_SECS`），`current` / `.prev` 永不删；没有发布版再引用的工具缓存一起清。
 
 ### 机器体检
 
 `fleet doctor --machine`（= `fleet-node-update.py doctor`）一行一个部件：`runtime` `ccquota` `claude` `codex` `tmux`
 （各自 `--version` 必须含 `release.json` 的版本，否则 FAIL）、`daemon`（守护在跑且跑的是 `current` 那一版，否则 FAIL）、
-每个子进程、`cache`、每个托管账号的链接（WARN），最后一行 `version … — 各部件 = 发布版声明`。
+每个子进程、`cache`、`credsep`（机器有共享凭据代理时：副本 ≠ 发布版 FAIL；代理的 `version` ≠ 副本、等 `FLEET_NODE_CREDSEP_WAIT` 15 秒后仍是 FAIL；读不到 WARN）、每个托管账号的链接（WARN），最后一行 `version … — 各部件 = 发布版声明`。
 退出码 = FAIL 数。普通 `fleet doctor` 多一行 `update`（最后一轮的结果；失败 / 回退 / 跳过时 WARN）。
 
 ### 新旧并存

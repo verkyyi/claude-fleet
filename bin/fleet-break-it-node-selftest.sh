@@ -16,6 +16,9 @@
 #                         and a release whose new part fails the doctor
 #   node-install-half     bin/fleet-node-install.sh (#2330): `fleet node install`
 #                         killed half way through, then a part deleted afterwards
+#   credsep-stale-after-switch  bin/fleet-node-update.py + fleet-credsep.py `machine
+#                         refresh` + the supervisor's cred-proxy-shared `reload` (#2435):
+#                         a switch / rollback left the shared credential proxy on old code
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -207,6 +210,18 @@ drill_node_update_half() {
   case "$out" in *skipped*) ;; *) WHY="the rejected release was tried again: $out"; return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="更新取包时被 kill -9：整台机器原样不动；下一轮从头取完、所有部件一起换上；新版体检多出 FAIL（Claude Code 起不来）→ 运行时、ccquota、Claude、开号缓存、账号链接全部回到上一版，这一版不再重试"
+}
+
+# credsep-stale-after-switch (#2435): the updater moved `current` but credsep's
+# root code copy and the shared proxy stayed on the old release.
+drill_credsep_stale_after_switch() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-credsep 2>&1) \
+    || { WHY="the proxy did not follow the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="换版两次再回退一次：每次 credsep 副本的 sha = 发布版，守护的共享代理子进程用新副本重启（pid 换了），回退时副本和代理一起回旧版，不另写 plist"
 }
 
 drill_node_install_half() {

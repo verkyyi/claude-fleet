@@ -610,12 +610,18 @@ Do not install from memory: read the doc and work from it.
   `tools/bin/<tool>` → the content-addressed root cache) — so a switch is one
   rename and `.prev` the way back. The bootstrap cache's Claude and every managed
   account's `~/.local/bin/{claude,codex}` follow (linked demoted, never over a
-  regular file); the daemon restarts last (`update-restart.json`). The machine
+  regular file); the shared credential proxy's root code copy follows too
+  (`<current>/bin/fleet-credsep.py machine refresh` on switch, rollback, before the
+  verify and every tick; the proxy restarts on new bytes — launchd's, or the
+  daemon's child by its `reload` on the copy's dir; the doctor's `credsep` row FAILs
+  on a stale copy or a proxy still on old code — issue #2435); the daemon restarts
+  last (`update-restart.json`). The machine
   doctor (`fleet doctor --machine`) after the switch: a FAIL the old version did
   not have rolls EVERYTHING back and skips that sha. `update.json`'s phase makes
   a killed tick resume or roll back. A managed login's install-sync reads `off ·
   managed`; `fleet-stable.sh move` refuses an updater tree without a valid
-  release.json (`release:`). `docs/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`.
+  release.json (`release:`). `docs/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`,
+  `credsep-stale-after-switch`.
 - **A Mac becomes a managed machine by ONE command, and the same command repairs
   it** (issue #2330, EPIC #2329 C1). `sudo fleet node install --join <码>`
   (`bin/fleet-node-install.sh`; a 托管 join code's line pipes the copy the hub serves

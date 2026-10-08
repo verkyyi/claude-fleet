@@ -20,10 +20,19 @@ the way `ccquota release fetch --artifacts` lays one out (C7). Nothing touches
   G  the daemon: a restart request after `current` moved stops it (launchd brings
      the new code); on the new code, or with nothing moved, the request is removed
   H  release.json: the repo's own passes the one validator; broken ones do not
+  I  credsep's root-owned code copy and the shared credential proxy follow `current`
+     (issue #2435): after a switch the copy's sha is the release's and the proxy
+     (the daemon's child, played by a fake that reports the copy it loaded) runs
+     it; a rollback puts both back; a launchd-owned proxy (legacy) is restarted
+     by `machine refresh`; a tick on the current release heals a drifted copy; a
+     switch made by an updater that did not know (the first version carrying
+     this) is not rolled back by its own new doctor row; the doctor's `credsep`
+     row FAILs on a stale copy and on a proxy still on the old code
 """
 import hashlib
 import json
 import os
+import pwd
 import shutil
 import signal
 import subprocess
@@ -39,6 +48,7 @@ REPO = os.path.dirname(BIN)
 V1 = "1" * 40
 V2 = "2" * 40
 V3 = "3" * 40
+CREDSEP_CODE = ("fleet-cred-proxy.py", "fleet-credsep-launch.py", "fleet-credsep.py")
 
 FAKE_CCQUOTA = r"""#!/bin/bash
 # fake `ccquota release fetch --hub H --pubkey P --artifacts <sha> <dest>`
@@ -77,6 +87,14 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
     wj(os.path.join(d, "release.json"), spec)
     shutil.copy(UPD, os.path.join(d, "bin"))
     shutil.copy(SUP, os.path.join(d, "bin"))
+    # the credential proxy's code, different bytes per release (issue #2435)
+    for f in CREDSEP_CODE:
+        with open(os.path.join(BIN, f), "rb") as src:
+            b = src.read()
+        if f != "fleet-credsep.py":
+            b += ("\n# release %s\n" % sha).encode()
+        with open(os.path.join(d, "bin", f), "wb") as dst:
+            dst.write(b)
     if drill_fail:
         os.makedirs(os.path.join(d, "conf"))
         open(os.path.join(d, "conf", "drill-fail"), "w").close()
@@ -129,6 +147,16 @@ class Sandbox(unittest.TestCase):
             "FLEET_NODE_UPDATE_SETTLE": "0",
             "FLEET_NODE_UPDATE_LIB": os.path.join(self.d, "no-lib.sh"),
             "FAKE_REL": self.rel,
+            # credsep's root paths (issue #2435): no shared proxy unless a case writes its record
+            "FLEET_CREDSEP_ROOT_BASE": os.path.join(self.d, "cred", "db"),
+            "FLEET_CREDSEP_RUN_BASE": os.path.join(self.d, "cred", "run"),
+            "FLEET_CREDSEP_LOG_BASE": os.path.join(self.d, "cred", "log"),
+            "FLEET_CREDSEP_LIB": os.path.join(self.d, "cred", "lib"),
+            "FLEET_CREDSEP_DAEMON_DIR": os.path.join(self.d, "LaunchDaemons"),
+            "FLEET_CREDSEP_ROLE": pwd.getpwuid(os.geteuid()).pw_name,
+            "FLEET_CREDSEP_SVC": "0",
+            "FLEET_CREDSEP_TEST": "1",
+            "FLEET_NODE_CREDSEP_WAIT": "0",
         })
         os.makedirs(self.env["FLEET_NODE_DAEMON_DIR"])
         self.wj(self.env["FLEET_NODE_TABLE"], {"children": [], "tasks": []})
@@ -484,6 +512,188 @@ class H_ReleaseJson(Sandbox):
         self.assertEqual(self.cmd("status", "--check").returncode, 2)
 
 
+FAKE_PROXY = r"""import hashlib, os, sys, time
+# the shared credential proxy, played: it reports the copy it loaded, as the real
+# one writes <run>/version from the launcher's hash of <LIB>/fleet-cred-proxy.py
+lib, run = sys.argv[1], sys.argv[2]
+os.makedirs(run, exist_ok=True)
+v = hashlib.sha256(open(os.path.join(lib, "fleet-cred-proxy.py"), "rb").read()).hexdigest()[:12]
+for n, x in (("pid", os.getpid()), ("version", v)):
+    with open(os.path.join(run, n + ".tmp"), "w") as f:
+        f.write("%s\n" % x)
+    os.replace(os.path.join(run, n + ".tmp"), os.path.join(run, n))
+time.sleep(3600)
+"""
+
+
+class I_Credsep(Sandbox):
+    """credsep's code copy + the shared proxy follow `current` (issue #2435)."""
+
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.lib = self.env["FLEET_CREDSEP_LIB"]
+        self.run = os.path.join(self.env["FLEET_CREDSEP_RUN_BASE"], ".shared")
+        self.svc = os.path.join(self.env["FLEET_CREDSEP_DAEMON_DIR"], "com.claude-fleet.cred-proxy-shared.plist"
+                                if sys.platform == "darwin" else "claude-fleet-cred-proxy-shared.service")
+        os.makedirs(self.lib)
+        os.makedirs(self.env["FLEET_CREDSEP_ROOT_BASE"])
+        self.wj(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], ".shared.json"),
+                {"shared": True, "user": self.env["FLEET_CREDSEP_ROLE"], "port": 18923, "run": self.run,
+                 "lib": self.lib, "version": "", "logins": [], "since": "2026-10-08T00:00:00Z"})
+
+    def code(self, path):
+        with open(path, "rb") as f:
+            return sh256(f.read())
+
+    def copies_on(self, sha):
+        for f in CREDSEP_CODE[:2]:
+            self.assertEqual(self.code(os.path.join(self.lib, f)), self.code(os.path.join(self.rel, sha, "bin", f)),
+                             "%s in LIB is not %s's" % (f, sha[:4]))
+
+    def want(self, sha):
+        return self.code(os.path.join(self.rel, sha, "bin", "fleet-cred-proxy.py"))[:12]
+
+    def live(self):
+        try:
+            with open(os.path.join(self.run, "version")) as f:
+                v = f.read().strip()
+            with open(os.path.join(self.run, "pid")) as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 0)
+            return v, pid
+        except (OSError, ValueError):
+            return None, None
+
+    def wait_live(self, want, timeout=15):
+        end = time.time() + timeout
+        while time.time() < end:
+            v, pid = self.live()
+            if v == want:
+                return pid
+            time.sleep(0.1)
+        self.fail("the proxy never ran %s (it runs %s)" % (want, self.live()[0]))
+
+    def sup(self):
+        e = dict(self.env, FLEET_NODE_TICK="0.1")
+        p = subprocess.Popen([sys.executable, SUP, "run"], env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(p)
+        return p
+
+    def log(self):
+        try:
+            with open(os.path.join(self.d, "log", "update.log")) as f:
+                return f.read()
+        except OSError:
+            return ""
+
+    def doctor(self, **extra):
+        r = subprocess.run([sys.executable, UPD, "doctor"], env=dict(self.env, **extra), capture_output=True, text=True,
+                           timeout=60)
+        rows = [l.split(None, 2) for l in r.stdout.splitlines() if l.split()[1:2] == ["credsep"]]
+        return rows[0][0] + " " + rows[0][2] if rows else None
+
+    def test_supervised_proxy_follows_switch_and_rollback(self):
+        """The daemon's child: the copy follows, the proxy runs it — no service definition of our own."""
+        fake = os.path.join(self.d, "fake-proxy.py")
+        with open(fake, "w") as f:
+            f.write(FAKE_PROXY)
+        for x in CREDSEP_CODE[:2]:      # what machine install left (an older checkout's copy)
+            shutil.copy(os.path.join(BIN, x), os.path.join(self.lib, x))
+        self.wj(self.env["FLEET_NODE_TABLE"], {"children": [
+            {"name": "cred-proxy-shared", "cmd": [sys.executable, fake, self.lib, self.run], "reload": self.lib}],
+            "tasks": []})
+        self.env["FLEET_NODE_CREDSEP_WAIT"] = "10"
+        for s, kw in ((V1, {}), (V2, {"claude": "2.1.2"}), (V3, {"claude": "2.1.3", "drill_fail": True})):
+            self.release(s, **kw)
+        p = self.sup()
+        old = self.wait_live(self.code(os.path.join(BIN, "fleet-cred-proxy.py"))[:12])
+        pid = old
+        for s in (V1, V2):
+            self.assertEqual(self.tick(s)["phase"], "switched")
+            self.copies_on(s)
+            self.assertEqual(p.wait(timeout=15), 0)     # current moved: the daemon goes, launchd brings it back
+            p = self.sup()
+            new = self.wait_live(self.want(s))
+            self.assertNotEqual(new, pid, "the proxy was not restarted")
+            pid = new
+            st = self.tick(s)
+            self.assertEqual(st["result"], "committed", st)
+            self.assertTrue(self.doctor().startswith("PASS"), self.doctor())
+        # V3 fails its doctor: the copy and the proxy go back to V2 with every other part
+        self.assertEqual(self.tick(V3)["phase"], "switched")
+        self.copies_on(V3)
+        self.assertEqual(p.wait(timeout=15), 0)
+        p = self.sup()
+        self.wait_live(self.want(V3))
+        st = self.tick(V3)
+        self.assertEqual(st["result"], "rolled-back", st)
+        self.copies_on(V2)
+        self.assertEqual(p.wait(timeout=15), 0)
+        p = self.sup()
+        self.assertNotEqual(self.wait_live(self.want(V2)), pid, "the rolled-back proxy is the old process")
+        self.assertFalse(os.path.exists(self.svc), "refresh wrote a service definition beside the daemon's child")
+        p.send_signal(signal.SIGTERM)
+        p.wait(timeout=15)
+
+    def test_legacy_proxy_is_restarted_and_drift_healed(self):
+        """launchd still runs the proxy (its plist is there): machine refresh restarts it."""
+        with open(self.svc, "w") as f:
+            f.write("legacy\n")
+        self.install(V1)
+        self.copies_on(V1)
+        self.install(V2, claude="2.1.2")
+        self.copies_on(V2)
+        self.assertIn("credsep: shared: refreshed, restarted", self.log())
+        # a copy changed by hand (or an admin's own checkout) is put back on the next tick
+        with open(os.path.join(self.lib, "fleet-cred-proxy.py"), "w") as f:
+            f.write("# someone else's\n")
+        self.assertEqual(self.tick(V2)["result"], "current")
+        self.copies_on(V2)
+        # switched by an updater that did not refresh the copy (the version before this
+        # one): the new verify refreshes before it judges — no rollback on its own row
+        self.release(V3, claude="2.1.3")
+        self.assertEqual(self.tick(V3)["phase"], "switched")
+        for x in CREDSEP_CODE[:2]:
+            shutil.copy(os.path.join(self.rel, V2, "bin", x), os.path.join(self.lib, x))
+        self.daemon_on(V3)
+        st = self.tick(V3)
+        self.assertEqual(st["result"], "committed", st)
+        self.copies_on(V3)
+
+    def test_doctor_row(self):
+        with open(self.svc, "w") as f:
+            f.write("legacy\n")
+        self.install(V1)
+        self.assertTrue(self.doctor().startswith("WARN"), self.doctor())     # no version file to read
+        with open(os.path.join(self.run if os.path.isdir(self.run) else (os.makedirs(self.run) or self.run),
+                               "pid"), "w") as f:
+            f.write("%d\n" % os.getpid())
+        with open(os.path.join(self.run, "version"), "w") as f:
+            f.write(self.want(V1) + "\n")
+        self.assertTrue(self.doctor().startswith("PASS"), self.doctor())
+        with open(os.path.join(self.run, "version"), "w") as f:
+            f.write("0123456789ab\n")
+        self.assertTrue(self.doctor().startswith("FAIL"), self.doctor())
+        self.assertIn("0123456789ab", self.doctor())
+        with open(os.path.join(self.lib, "fleet-credsep-launch.py"), "a") as f:
+            f.write("# edited\n")
+        d = self.doctor()
+        self.assertTrue(d.startswith("FAIL") and "fleet-credsep-launch.py" in d, d)
+        # no shared proxy on the machine: no row at all
+        os.remove(os.path.join(self.env["FLEET_CREDSEP_ROOT_BASE"], ".shared.json"))
+        self.assertIsNone(self.doctor())
+
+    def test_default_table_reloads_on_lib(self):
+        e = dict(os.environ, FLEET_CREDSEP_LIB=self.lib)
+        out = subprocess.run([sys.executable, "-c", "import importlib.util, json, sys\n"
+                              "s = importlib.util.spec_from_file_location('s', sys.argv[1]); m = importlib.util.module_from_spec(s)\n"
+                              "s.loader.exec_module(m); p = m.Paths()\n"
+                              "print(json.dumps([c for c in m.default_table(p)['children'] if c['name'] == 'cred-proxy-shared'][0]))",
+                              SUP], env=e, capture_output=True, text=True, timeout=30)
+        c = json.loads(out.stdout)
+        self.assertEqual(c.get("reload"), self.lib, out.stderr)
+
+
 if __name__ == "__main__":
     # the BREAK-IT drill (node-update-half) builds its fixtures with the same code
     if len(sys.argv) > 1 and sys.argv[1] == "--fake-ccquota":
@@ -495,4 +705,7 @@ if __name__ == "__main__":
         kw = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
         make_release(sys.argv[2], sys.argv[3], **kw)
         sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-credsep":
+        # BREAK-IT credsep-stale-after-switch: the supervised case, switch + rollback
+        unittest.main(argv=[sys.argv[0], "I_Credsep.test_supervised_proxy_follows_switch_and_rollback"], verbosity=1)
     unittest.main(verbosity=2)
