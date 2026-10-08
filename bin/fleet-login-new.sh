@@ -19,6 +19,8 @@
 #      never a terminal prompt (`-password -` hung every remote/scripted run,
 #      #1183 ①), and never printed: the person signs in with their key.
 #   2. sudo createhomedir -c -u <login>          (the home, so step 4 has a place)
+#      + sudo chmod 700 <home>   (never the macOS default: 0750 staff lets every
+#                                 other login list it — issue #2414)
 #   3. sudo dseditgroup … com.apple.access_ssh   (only when that group exists —
 #                                     without it Remote Login admits every user)
 #   4. ~/.ssh/authorized_keys ← --pubkey, .ssh 700 / key file 600, owned by <login>
@@ -419,8 +421,13 @@ if [ "$DONLY" = 0 ]; then
     printf '%s: sysadminctl did not create login %s (see its message above)\n' "$PROG" "$LOGIN" >&2
     fail
   fi
-  step "create its home directory"
+  step "create its home directory (mode 700 — every login is in staff)"
   run sudo createhomedir -c -u "$LOGIN"
+  # macOS's default home is 0750 <login>:staff on some machines (m4, issue
+  # #2414) and every login is in staff, so any other login could list ~/.claude,
+  # ~/.claude/projects, ~/.codex. Never rely on the default: 700, the mode only
+  # — the ACL (`everyone deny delete`) is left as macOS made it.
+  run sudo chmod 700 "$H"
 
   step "allow SSH (Remote Login)"
   if [ "$HAVE_SSH_GROUP" = 1 ]; then
