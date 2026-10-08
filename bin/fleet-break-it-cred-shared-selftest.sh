@@ -13,6 +13,8 @@
 #                       login names no account; only root pins; bin/fleet-session-cred.sh rebind
 #   cred-sep-acct-full  bin/fleet-cred-proxy.py pick_account / repick / limit_until (issue
 #                       #2412): a quota 429 moves the same request to the account with room
+#   cred-own-to-shared  bin/fleet-credsep.py machine join / leave (issue #2432): a login on its
+#                       own proxy joins the shared one with no gap, and goes back
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT / CP are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -161,6 +163,114 @@ drill_cred_sep_acct_full() {
   grep -q '"ev": "acct_switch"' "$SB/log/alpha.log" || { WHY="no acct_switch in the log"; shared_down; return 1; }
   shared_down
   WHAT="会话所在的 $first 周限满（429）：代理把它标到重置、同一请求改走 $other 直接 200，会话凭据不变、不退出不续；后续请求留在 $other"
+}
+
+# cred-own-to-shared (issue #2432): a login separated on its OWN proxy
+# (com.claude-fleet.credsep.<login>, before the machine had a shared one) is
+# moved onto the shared proxy. Before: the only road was `machine install`,
+# which booted the own proxy out FIRST, restarted the agent from a definition
+# the node daemon had already moved to the attic (die), and the shared proxy took
+# the tenant only after — every session of that login with no proxy meanwhile.
+# Now `machine join`: the shared proxy answers for it first, the agent's leases
+# follow (logins/<login>.env), then the own proxy goes and its old port is bound
+# by the shared one; a join the shared proxy does not take leaves everything as
+# it was; `machine leave` puts it back.
+drill_cred_own_to_shared() {
+  CAP=20   # join: the shared proxy's restart (loop delay + a python start) + the old port's handover
+  local sb me uid gid port oport ta out rc t0 sup ca refused bad own_pid svc
+  me=$(id -un); uid=$(id -u); gid=$(id -g); sb="$WORK/owntoshared"
+  mkdir -p "$sb/daemons" "$sb/node/logins"
+  cred_rig owntoshared trusted reachable || return 1
+  for L in alpha beta; do
+    mkdir -p "$sb/homes/$L/.config/claude-fleet/accounts/a1.hub" "$sb/homes/$L/.claude/fleet/bin"
+    printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat-%s"}}' "$L" > "$sb/homes/$L/.config/claude-fleet/accounts/a1.hub/.credentials.json"
+  done
+  ca="$sb/homes/alpha/.config/claude-fleet"
+  printf 'FLEET_CRED_ANTHROPIC_URL=%s/direct-anthropic\n' "$CU" > "$ca/fleet.conf"
+  printf 'alpha:%s:%s:%s\nbeta:1999993:%s:%s\n' "$uid" "$gid" "$sb/homes/alpha" "$gid" "$sb/homes/beta" > "$sb/pw"
+  port=$(cred_deadport)
+  export FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" FLEET_CREDSEP_LOG_BASE="$sb/log" \
+    FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" FLEET_CREDSEP_ROLE="$me" \
+    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw" \
+    FLEET_CREDSEP_SANDBOX_KILL=1 FLEET_CREDSEP_JOIN_WAIT=15 FLEET_NODE_STATE="$sb/node" \
+    FLEET_CRED_SHARED_PORT="$port" FLEET_CRED_ANTHROPIC_URL="$CU/direct-anthropic"
+  own_down() {
+    kill "$sup" 2>/dev/null; kill "$(cat "$sb/run/.shared/pid" 2>/dev/null)" "$(cat "$sb/run/alpha/pid" 2>/dev/null)" 2>/dev/null
+    unset FLEET_CREDSEP_ROOT_BASE FLEET_CREDSEP_RUN_BASE FLEET_CREDSEP_LOG_BASE FLEET_CREDSEP_LIB FLEET_CREDSEP_DAEMON_DIR \
+      FLEET_CREDSEP_ROLE FLEET_CREDSEP_SVC FLEET_CREDSEP_TEST FLEET_CREDSEP_SUDO FLEET_CREDSEP_PW FLEET_CRED_SHARED_PORT \
+      FLEET_CREDSEP_SANDBOX_KILL FLEET_CREDSEP_JOIN_WAIT FLEET_NODE_STATE
+  }
+  own_up() {   # launchd's part for alpha's own proxy
+    python3 -I "$sb/lib/fleet-credsep-launch.py" proxy alpha 2>>"$sb/own.err" &
+    printf '%s\n' "$!" >> "$WORK/cred-pids"
+    until_ok 30 sh -c '[ -s "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null && [ -S "$1/ctl.sock" ]' _ "$sb/run/alpha"
+  }
+  # alpha: separated on its own proxy, the way m4's credsep.fleetu2 / credsep.verky are
+  bash "$BIN/fleet-credsep.sh" install --login alpha >"$sb/install-alpha.out" 2>&1 \
+    || { WHY="install alpha: $(tail -2 "$sb/install-alpha.out" | tr '\n' ' ')"; own_down; return 1; }
+  svc=$(ls "$sb/daemons" | grep -E 'credsep[.-]alpha' | head -n 1)
+  [ -n "$svc" ] || { WHY="alpha's own proxy service was not written: $(ls "$sb/daemons")"; own_down; return 1; }
+  own_up || { WHY="alpha's own proxy did not start: $(tail -2 "$sb/own.err" | tr '\n' ' ')"; own_down; return 1; }
+  oport=$(cat "$sb/run/alpha/port")
+  # the node daemon's view of alpha's agent (issue #2387): its leases go to the own socket
+  printf 'CCQUOTA_TOKEN=tok-alpha\nCCQUOTA_FLEET_CRED_STORE=%s\n' "$sb/run/alpha/ctl.sock" > "$sb/node/logins/alpha.env"
+  # beta makes the machine's shared proxy; the loop plays its KeepAlive
+  bash "$BIN/fleet-credsep.sh" machine install --logins beta >"$sb/install-beta.out" 2>&1 \
+    || { WHY="machine install beta: $(tail -2 "$sb/install-beta.out" | tr '\n' ' ')"; own_down; return 1; }
+  ( while :; do python3 -I "$sb/lib/fleet-credsep-launch.py" shared 2>>"$sb/shared.err"; sleep 1; done ) 2>/dev/null &
+  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
+  until_ok 30 test -S "$sb/run/.shared/ctl.sock" || { WHY="the shared proxy did not start: $(tail -2 "$sb/shared.err" | tr '\n' ' ')"; own_down; return 1; }
+  ta=$(FLEET_CONF_DIR="$ca" bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid so 2>&1)
+  case "$ta" in fcp1.*) ;; *) WHY="mint on the own proxy: $ta"; own_down; return 1 ;; esac
+  CP=$oport
+  [ "$(cred_req "$ta" "$sb/r")" = 200 ] || { WHY="before the join: $(cat "$sb/r")"; own_down; return 1; }
+
+  # a join the shared proxy never takes: nothing moves, the own proxy keeps serving
+  kill "$sup" 2>/dev/null; kill "$(cat "$sb/run/.shared/pid" 2>/dev/null)" 2>/dev/null; sleep 0.5
+  out=$(FLEET_CREDSEP_JOIN_WAIT=2 bash "$BIN/fleet-credsep.sh" machine join --logins alpha 2>&1); rc=$?
+  own_pid=$(cat "$sb/run/alpha/pid" 2>/dev/null)
+  [ "$rc" != 0 ] && [ -e "$sb/daemons/$svc" ] && kill -0 "$own_pid" 2>/dev/null \
+    && ! grep -q '"mode": "shared"' "$sb/db/alpha/meta.json" && [ "$(cred_req "$ta" "$sb/r")" = 200 ] \
+    || { WHY="a join the shared proxy did not take moved something (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; own_down; return 1; }
+  ( while :; do python3 -I "$sb/lib/fleet-credsep-launch.py" shared 2>>"$sb/shared.err"; sleep 1; done ) 2>/dev/null &
+  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
+  until_ok 30 test -S "$sb/run/.shared/ctl.sock"
+
+  # the join, with alpha's session asking all the while
+  : > "$sb/codes"
+  ( while [ ! -e "$sb/stop" ]; do cred_req "$ta" /dev/null >> "$sb/codes"; echo >> "$sb/codes"; sleep 0.2; done ) &
+  local pinger=$!
+  t0=$(now)
+  out=$(bash "$BIN/fleet-credsep.sh" machine join --logins alpha 2>&1); rc=$?
+  SECS=$(since "$t0")
+  sleep 0.5; : > "$sb/stop"; wait "$pinger" 2>/dev/null
+  [ "$rc" = 0 ] || { WHY="machine join failed (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; own_down; return 1; }
+  refused=$(grep -c '^000$' "$sb/codes"); bad=$(grep -v '^$' "$sb/codes" | grep -vc '^\(200\|000\)$')
+  [ "$bad" = 0 ] || { WHY="during the join alpha's session got: $(sort "$sb/codes" | uniq -c | tr '\n' ' ')"; own_down; return 1; }
+  [ "$refused" -le 5 ] || { WHY="alpha's session had no proxy for $refused pings (> 1 s): $(sort "$sb/codes" | uniq -c | tr '\n' ' ')"; own_down; return 1; }
+  [ "$(cred_req "$ta" "$sb/r")" = 200 ] || { WHY="after the join, the old port: $(cat "$sb/r")"; own_down; return 1; }
+  # a session minted after the join is the shared proxy's, on its own port
+  local tn; tn=$(FLEET_CONF_DIR="$ca" bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid sn 2>&1)
+  CP=$port
+  [ "$(cred_req "$tn" "$sb/r")" = 200 ] || { WHY="a session minted after the join, on the shared port: $(cat "$sb/r")"; own_down; return 1; }
+  [ ! -e "$sb/daemons/$svc" ] && [ -f "$sb/db/alpha/backup/$svc" ] \
+    || { WHY="the own proxy's service is not in the store's backup/: $(ls "$sb/daemons" "$sb/db/alpha/backup" 2>&1 | tr '\n' ' ')"; own_down; return 1; }
+  grep -qx "CCQUOTA_FLEET_CRED_STORE=$sb/run/.shared/ctl.sock" "$sb/node/logins/alpha.env" && grep -qx 'CCQUOTA_TOKEN=tok-alpha' "$sb/node/logins/alpha.env" \
+    || { WHY="the agent's leases were not repointed (logins/alpha.env)"; own_down; return 1; }
+  grep -q '"shared": true' "$ca/credsep.json" || { WHY="credsep.json does not say shared"; own_down; return 1; }
+
+  # the way back
+  out=$(bash "$BIN/fleet-credsep.sh" machine leave --logins alpha 2>&1) \
+    || { WHY="machine leave: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; own_down; return 1; }
+  [ -e "$sb/daemons/$svc" ] && grep -qx "CCQUOTA_FLEET_CRED_STORE=$sb/run/alpha/ctl.sock" "$sb/node/logins/alpha.env" \
+    && ! grep -q '"shared": true' "$ca/credsep.json" \
+    || { WHY="leave did not put the own proxy back: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; own_down; return 1; }
+  own_up || { WHY="the own proxy did not come back: $(tail -2 "$sb/own.err" | tr '\n' ' ')"; own_down; return 1; }
+  CP=$oport
+  [ "$(cat "$sb/run/alpha/port")" = "$oport" ] && [ "$(cred_req "$ta" "$sb/r")" = 200 ] \
+    || { WHY="after leave, the own proxy on $(cat "$sb/run/alpha/port") (want $oport): $(cat "$sb/r")"; own_down; return 1; }
+  own_down
+  WHAT="own 模式登录 machine join：共享代理先答应接管、agent 改指共享 socket，才卸旧代理（进 backup/）；旧端口由共享代理接住，会话原凭据一路 200（拒连 ${refused} 次）；共享代理不接则原样不动；machine leave 一条放回"
 }
 
 cred_run_drills "$0"

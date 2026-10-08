@@ -227,6 +227,38 @@ again. The shared proxy dying is BREAK-IT `cred-shared-down`.
 `bin/fleet-cred-shared-selftest.sh` runs two logins through one proxy in a
 sandbox.
 
+### A login already separated on its own proxy (issue #2432)
+
+A login separated before the machine had the shared proxy runs its own one
+(`com.claude-fleet.credsep.<login>`, the store's `meta.json` without
+`mode: shared`). `machine status` names it (`own proxy: …`), the login's
+`credsep check` WARNs, and one command moves it over with no gap:
+
+```sh
+sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine join  --logins a,b   # --dry-run first; no --logins = every own-mode login
+sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine leave --logins a     # the way back
+```
+
+`join`, in this order: the store becomes a tenant (`mode: shared`, its old port
+kept as `legacy_port`, `pool_hold` so the shared proxy leaves the credential
+files where the own proxy still reads them) and the shared proxy restarts; the
+join waits for the shared proxy's OWN answer for that login on its control
+socket (`FLEET_CREDSEP_JOIN_WAIT`, 30 s); the agent's leases are repointed to
+the shared socket (on a managed machine the `CCQUOTA_FLEET_CRED_STORE` line of
+`/var/db/fleet-node/logins/<login>.env` — the node daemon restarts its node
+program; else credsep's agent definition is restarted); only then is the own
+proxy booted out, its definition kept in `<store>/backup/`; the shared proxy
+binds the old port (it retries every 0.2 s), so a session minted on the own
+proxy goes on with its next request. No answer in time ⇒ everything is put back
+and `join` exits 1 — the own proxy never stopped. `machine install` takes an
+own-mode login down this same road.
+
+`leave` reverses it: the pool's copies back into the store, the tenant out of
+the shared proxy (its old port freed), the own definition back from `backup/`
+and started on the old port with the same key, the agent repointed. A session
+started under the shared proxy (the shared port) needs a reopen after a leave.
+BREAK-IT `cred-own-to-shared`.
+
 ## A step fails halfway (issue #2273)
 
 Before it moves anything, `install` / `machine install` checks each login it
@@ -303,5 +335,5 @@ status / check) · `bin/fleet-credsep-launch.py` (root launcher: `proxy` |
 `node-token`, `node-hash`, `/hub/` broker, peer-uid gate) ·
 `tokenledger/internal/agent/node_credstore.go` (the agent's `store` client) ·
 `bin/fleet-credsep-selftest.sh` · `bin/fleet-cred-shared-selftest.sh` (the
-machine's shared proxy, `machine install|uninstall|refresh|status`,
+machine's shared proxy, `machine install|uninstall|refresh|join|leave|status`,
 `fleet-credsep-launch.py shared`, `fleet-cred-proxy.py serve --shared`).
