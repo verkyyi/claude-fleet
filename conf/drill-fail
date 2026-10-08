@@ -1,0 +1,1 @@
+drill rollback release — issue #2336. A release carrying this file fails its own `fleet doctor --machine` (bin/fleet-node-update.py DRILL_FAIL), so a managed machine rolls it back. The next commit removes it.
