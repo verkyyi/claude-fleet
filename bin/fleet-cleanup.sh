@@ -519,7 +519,7 @@ auto_cleanup_gate() {
           MERGED:0|MERGED:*[!0-9]*) ;;
           MERGED:*) socket_args+=(--merged-at "$merged_epoch") ;;
         esac
-        if ! why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}" \
+        if ! why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-300}" \
           python3 "$BIN/fleet-reap-live.py" "$WIN" ${socket_args[@]+"${socket_args[@]}"} 2>/dev/null); then
           why="${why:-liveness probe unavailable}"
         else

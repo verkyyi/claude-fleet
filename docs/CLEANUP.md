@@ -59,7 +59,7 @@ of the remote base. Manual CLOSED cleanup retains its existing policy. This dela
 worker is idle. Automatic MERGED cleanup also requires exactly one resolved
 window in explicit `done` state and passes the shared dash process gate: a
 Claude/Codex descendant in any pane younger than `FLEET_REAP_MIN_AGE` (default
-1800 seconds), unreadable metadata, or an active transfer defers with `skip:live`.
+300 seconds), unreadable metadata, or an active transfer defers with `skip:live`.
 Missing/ambiguous windows are retained; windowless work belongs to
 `worktree-autoclean.sh`. The daemon explicitly selects its fleet's named socket.
 

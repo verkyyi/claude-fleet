@@ -2804,7 +2804,7 @@ fleet_reap_ok() {
     _reap_sockets=$(fleet_sockets)
     if [ -n "$_reap_sockets" ]; then
       _reap_bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-      if ! FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}" \
+      if ! FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-300}" \
         python3 "$_reap_bin/fleet-reap-live.py" --worktree "$wtdir" \
           --socket-names "$_reap_sockets" ${merged_at:+--merged-at "$merged_at"} >/dev/null 2>&1; then
         printf 'live'; return 1

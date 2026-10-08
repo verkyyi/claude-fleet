@@ -131,13 +131,13 @@ ask_yes() {
 # (#565). Recheck at each disposal entry, INCLUDING the delayed --exec tail,
 # before reports/history/issue writes or killing anything. Explicit --yes and
 # popup confirmation authorize disposal, not killing an active agent. Wait for
-# done (or an empty state) and FLEET_REAP_MIN_AGE seconds (default 1800).
+# done (or an empty state) and FLEET_REAP_MIN_AGE seconds (default 300).
 guard_live() {
   local why
   # MERGED_AT (issue #1542) = the branch's merged PR epoch, once known: the probe
   # then waives the young-agent (#1248) and stale `looping` (#1356) gates for an
   # agent that was alive at the merge — the worker shipped its own PR.
-  if ! why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-1800}" \
+  if ! why=$(FLEET_REAP_MIN_AGE="${FLEET_REAP_MIN_AGE:-300}" \
     python3 "$BIN/fleet-reap-live.py" "$target" ${MERGED_AT:+--merged-at "$MERGED_AT"} 2>/dev/null); then
     emit skip:live
     # A pending /loop (issue #1331) is not "live" in the busy sense — say what it is:

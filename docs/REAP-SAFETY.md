@@ -40,7 +40,7 @@ The read-only `fleet-reap-live.py` gate blocks disposal when:
 - `@claude_state` is anything other than `done` or empty, including `working`,
   `looping`, `busy` and `waiting`;
 - any pane in that window contains a Claude or Codex process younger than
-  `FLEET_REAP_MIN_AGE` seconds (default **1800**, or 30 minutes);
+  `FLEET_REAP_MIN_AGE` seconds (default **300**, or 5 minutes);
 
 A worker that **shipped its own PR** is the one exception to the last two
 (issue #1542): `dash-reap.sh` reads the branch's merged PR with its `mergedAt`
