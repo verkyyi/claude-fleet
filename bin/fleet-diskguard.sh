@@ -389,7 +389,7 @@ orphan_candidates() {   # $1=pct → "pid|pcpu|comm" lines
   local pct="$1" me; me="$(id -un 2>/dev/null)"
   [ "${FLEET_ORPHAN_ALL_USERS:-0}" = 1 ] && me='*'
   ps_all | awk -v me="$me" -v pct="$pct" -v re="$ORPHAN_RE" '
-    { if (me!="*" && $3!=me) next;                         # ours only (or the machine's)
+    { if (me!="*" && $3!=me) next;                         # ours only (or every login)
       if ($2!=1) next;                                     # PPID=1 ⇒ reparented
       if (($4+0) < pct) next;                              # not hot
       cmd=""; for (i=5;i<=NF;i++) cmd=cmd (i>5?" ":"") $i;

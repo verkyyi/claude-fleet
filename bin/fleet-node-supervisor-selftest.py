@@ -369,6 +369,12 @@ class G_DefaultTable(Sandbox):
         dg = open(os.path.join(BIN, "fleet-diskguard.sh")).read()
         self.assertIn('[ "${FLEET_ORPHAN_ALL_USERS:-0}" = 1 ] && me=\'*\'', dg)
         self.assertIn('if (me!="*" && $3!=me) next;', dg)
+        dgp = os.path.join(BIN, "fleet-diskguard.sh")
+        self.assertEqual(subprocess.run(["bash", "-n", dgp]).returncode, 0, "fleet-diskguard.sh no longer parses")
+        r = subprocess.run(["bash", dgp, "--orphans"], env=dict(os.environ, FLEET_ORPHAN_ALL_USERS="1"),
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("syntax error", r.stderr)
 
 
 if __name__ == "__main__":
