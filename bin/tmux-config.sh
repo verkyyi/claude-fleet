@@ -277,7 +277,7 @@ EOF
 EOF
         ;;
       FLEET_SCRATCH_POOL) cat <<'EOF'
-预热 scratch 会话数量。大于 0 会提前准备空闲 scratch，换取更快启动；也会占用会话容量。
+每个仓库（和 HOME）常备几个已开好的空闲会话，默认 1。领走后几秒内补上；机器忙或磁盘紧张时只减不补；升级后整批换新。0 = 关。
 EOF
         ;;
       FLEET_MAX_SESSIONS) cat <<'EOF'

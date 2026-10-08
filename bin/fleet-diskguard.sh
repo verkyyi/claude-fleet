@@ -791,6 +791,23 @@ restore_watch() {
   return 0
 }
 
+# pool_watch — the --watch tick's refill of the warm pool (issue #2233): every
+# fleet's slots (each hosted repo + HOME) topped back up to FLEET_SCRATCH_POOL, so a
+# claimed slot is ready again by the next tick without anyone asking. Detached: a
+# warm-up takes longer than a tick; ensure --tick skips a slot another ensure is
+# still warming, and a busy machine (load, disk) only shrinks — scratch-pool.sh
+# owns both rules. With the pool off a pass only reaps.
+pool_watch() {
+  [ "${FLEET_POOL_TICK:-1}" = 0 ] && return 0
+  [ -f "$BIN/scratch-pool.sh" ] || return 0
+  local s
+  for s in $(fleet_sockets 2>/dev/null); do
+    [ -f "$(fleet_conf_file "$s")" ] || continue      # a fleet is one fleet-up wrote a conf for
+    ( bash "$BIN/scratch-pool.sh" ensure "$s" --tick >/dev/null 2>&1 & ) 2>/dev/null
+  done
+  return 0
+}
+
 # mem_watch — the --watch tick's share: one notice per edge, per kind.
 mem_watch() {
   local rows mem lvl av co sw top u m w word kind
@@ -913,6 +930,7 @@ EOF2
     home_watch                                    # a home pane left dead: respawn it (#1801)
     restore_watch                                 # a fleet that went down: pull it back up (#1784)
     brew_watch                                    # a keg other logins cannot read: repair it (#2283)
+    pool_watch                                    # warm-pool slots topped back up (#2233)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet
     [ "$free" -ge "$WARN_GB" ] && exit 0          # healthy

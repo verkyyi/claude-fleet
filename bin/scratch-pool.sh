@@ -37,12 +37,34 @@
 #
 # Commands:
 #   ensure <sess>   top the pool up to FLEET_SCRATCH_POOL ready entries (slow —
-#                   spawns + waits for readiness; callers background it)
+#                   spawns + waits for readiness; callers background it). The
+#                   diskguard --watch tick runs it for every fleet (pool_watch),
+#                   so a claimed slot is refilled without anyone asking; --tick
+#                   marks that caller (it skips a slot another ensure is warming).
 #   claim <sess>    move one READY entry into <sess>. Prints "<wid>\t<slug>\t<wt>"
 #                   on success, nothing when the pool is cold (caller falls back
 #                   to the normal cold spawn). Never blocks.
+#   claim [<sess>] --repo <owner/name|-> --agent <claude|codex>
+#                   the node's entry (issue #2233, EPIC #2230 C3): prints the
+#                   claimed window's `@id` alone, exit 3 when that slot has no
+#                   ready entry, and asks for the slot's refill a few seconds
+#                   later. `--repo -` is the HOME slot. Either an --agent or no
+#                   <sess> selects this contract; the 3-field form is unchanged.
 #   reap <sess>     retire stale / dead / never-ready entries and their worktrees
-#   status <sess>   one line per entry (for humans + the selftest)
+#   status <sess>   one `slot` line per (repo | HOME) × agent, then one line per
+#                   entry (for humans + the selftest). `--status` with no <sess>
+#                   reads the caller's fleet.
+#
+# SLOTS (issue #2233): one per hosted repo AND one for HOME — a no-repo session
+# warmed in $HOME, stamped `@norepo 1` (no worktree, no @raw, no @repo), the way
+# dash-raw-session.sh --no-repo opens one. Each slot is per agent (`--agent`,
+# else the slot's FLEET_AGENT). A slot grows only while the machine has room:
+# load per core at most FLEET_POOL_LOAD_PER_CORE (1) and the disk above
+# FLEET_DISK_WARN_GB (15) — otherwise it only shrinks. An entry whose agent
+# configuration went old (fleet_cfg_state stale / renew / broken — an upgrade) is
+# never handed out and is retired on the next pass, so an upgrade replaces the
+# whole pool; a repo entry's worktree is fast-forwarded to origin/<base> before it
+# is handed out (the tick fetches, the claim only moves the branch).
 #
 # One pool PER HOSTED REPO (issue #797), however many the fleet hosts (#1941):
 # every warm window is stamped @repo, and each command takes `--repo <owner/name>`:
@@ -58,7 +80,9 @@
 # with no repo has no pool.
 #
 # Config (per-fleet conf; a repo overlay overrides any of it):
-#   FLEET_SCRATCH_POOL       how many warm entries to keep. 0 (default) = OFF.
+#   FLEET_SCRATCH_POOL       how many warm entries to keep per slot. Default 1
+#                            (issue #2233); 0 or "" = OFF, and then every command
+#                            behaves as it did before the default changed.
 #   FLEET_POOL_MAX_AGE       seconds before an unclaimed entry is retired (1800).
 #                            A warm worktree is a snapshot of origin/<base> taken
 #                            when it was created; handing out a stale one silently
@@ -76,52 +100,86 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-CMD="${1:-}"; SESS="${2:-}"; DELAY=0; REPO_ARG=''
-[ -n "$CMD" ] || { echo "usage: scratch-pool.sh {ensure|claim|reap|status} <session> [--delay] [--repo <owner/name>]" >&2; exit 2; }
-[ -n "$SESS" ] || { echo "scratch-pool: no session" >&2; exit 2; }
-shift 2
+CMD="${1:-}"; SESS=''; DELAY=0; REPO_ARG=''; AGENT_ARG=''; TICK=0; SOON=0; NEWCLAIM=0
+[ -n "$CMD" ] || { echo "usage: scratch-pool.sh {ensure|claim|reap|status} [<session>] [--delay] [--repo <owner/name|->] [--agent <a>]" >&2; exit 2; }
+shift
+case "$CMD" in --status|--ensure|--claim|--reap) CMD=${CMD#--} ;; esac
+case "${1:-}" in ''|-*) NEWCLAIM=1 ;; *) SESS=$1; shift ;; esac
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --delay)  DELAY=1 ;;
-    --repo)   REPO_ARG="${2:-}"; [ "$#" -gt 1 ] && shift ;;
-    --repo=*) REPO_ARG="${1#--repo=}" ;;
+    --delay)   DELAY=1 ;;
+    --tick)    TICK=1 ;;
+    --soon)    SOON=1 ;;
+    --repo)    REPO_ARG="${2:-}"; [ "$#" -gt 1 ] && shift ;;
+    --repo=*)  REPO_ARG="${1#--repo=}" ;;
+    --agent)   AGENT_ARG="${2:-}"; [ "$#" -gt 1 ] && shift ;;
+    --agent=*) AGENT_ARG="${1#--agent=}" ;;
   esac
   shift
 done
+case "$AGENT_ARG" in '') ;; claude|codex) NEWCLAIM=1 ;; *) echo "scratch-pool: --agent is claude or codex" >&2; exit 2 ;; esac
+
+# No <session>: the caller's fleet — the one it was spawned for, else the session
+# its pane sits in, else the login's only fleet (one fleet per login, #980).
+if [ -z "$SESS" ]; then
+  SESS=${FLEET_SESSION:-}
+  [ -z "$SESS" ] && [ -n "${TMUX:-}" ] && SESS=$(fleet_session_canon "$(fleet_current_session)")
+  if [ -z "$SESS" ]; then
+    _n=0
+    for _s in $(fleet_sockets 2>/dev/null); do _n=$((_n + 1)); SESS=$_s; done
+    [ "$_n" = 1 ] || SESS=''
+  fi
+  [ -n "$SESS" ] || { echo "scratch-pool: no session (pass one, or run it inside the fleet)" >&2; exit 2; }
+fi
 
 # The pool is never the CALLER's window: a claim runs from whichever pane pressed
 # ⌃s, and fleet_load_conf would lay that window's repo overlay on top — leaking
 # repo A's FLEET_AGENT / FLEET_SCRATCH_POOL into repo B's pool. No-op in a fleet
 # (fleet_load_conf would otherwise read TMUX_PANE for the window's overlay).
 unset TMUX_PANE
+# A fleet is one fleet-up wrote a conf for: a session with none (a test server, a
+# sandbox reading another login's sockets) has no pool, and nothing here touches it.
+[ -f "$(fleet_conf_file "$SESS")" ] || { [ "$CMD" = claim ] && [ "$NEWCLAIM" = 1 ] && exit 3; exit 0; }
 fleet_load_conf "$SESS"
 SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
 POOL=$(fleet_pool_session "$SESS")
 
-# REPO: the one repo this pass serves — the pool is per repo, one road whatever
-# the count (#1941). With no --repo, ensure/reap/status fan out over every hosted
-# repo and claim takes the first.
+# The default slot size: 1 (issue #2233) — except under the selftest gate
+# (FLEET_SELFTEST_ROOT, which run-selftests.sh sets for every test), where a ⌃s
+# spawn or a diskguard tick in some unrelated test would otherwise warm real agent
+# sessions in the background, past that test's end. A test that wants the pool
+# sets FLEET_SCRATCH_POOL in its fleet conf, as the pool's own selftests do.
+POOL_DEFAULT=1; [ -n "${FLEET_SELFTEST_ROOT:-}" ] && POOL_DEFAULT=0
+
+# REPO: the one slot this pass serves — a hosted repo, or `-` for HOME (#2233).
+# The pool is per repo, one road whatever the count (#1941). With no --repo,
+# ensure/reap/status fan out over every hosted repo plus HOME, and claim takes the
+# first repo.
 if [ -z "$REPO_ARG" ]; then
   case "$CMD" in
     ensure|reap|status)
-      # Fan out: one pass per hosted repo, each under its own conf. The refill
-      # delay is paid ONCE, here, and only when some repo has its pool on — with
-      # every pool off this costs nothing (see cmd_ensure).
+      # Fan out: one pass per slot, each under its own conf. The refill delay is
+      # paid ONCE, here, and only when some slot has its pool on — with every
+      # pool off this costs nothing (see cmd_ensure).
       if [ "$CMD" = ensure ] && [ "$DELAY" = 1 ]; then
         while IFS= read -r _r; do
           [ -n "$_r" ] || continue
-          _w=$( fleet_load_repo_conf "$SESS" "$_r" >/dev/null 2>&1; printf '%s' "${FLEET_SCRATCH_POOL:-0}" )
+          if [ "$_r" = - ]; then _w=${FLEET_SCRATCH_POOL-$POOL_DEFAULT}
+          else _w=$( fleet_load_repo_conf "$SESS" "$_r" >/dev/null 2>&1; printf '%s' "${FLEET_SCRATCH_POOL-$POOL_DEFAULT}" ); fi
           case "$_w" in ''|*[!0-9]*|0) continue ;; esac
           sleep "${FLEET_POOL_REFILL_DELAY:-45}"; break
         done <<EOF
 $(fleet_repos "$SESS")
+-
 EOF
       fi
       # An entry whose repo the fleet no longer hosts (or cannot be told) belongs
       # to no pass below: retire the window. Its worktree cannot be freed without
-      # that repo's MAIN — the scratch janitor owns what is left.
+      # that repo's MAIN — the scratch janitor owns what is left. A HOME entry
+      # (@norepo) belongs to the `-` pass.
       [ "$CMD" = status ] || for _w in $(TM list-windows -t "$POOL" -F '#{window_id}' 2>/dev/null); do
+        [ "$(TM display-message -p -t "$_w" '#{@norepo}' 2>/dev/null)" = 1 ] && continue
         _r=$(TM display-message -p -t "$_w" '#{@repo}' 2>/dev/null)
         [ -n "$_r" ] && fleet_repo_hosted "$SESS" "$_r" && continue
         [ -z "$_r" ] && _wt=$(TM display-message -p -t "$_w" '#{@worktree}' 2>/dev/null) \
@@ -129,28 +187,45 @@ EOF
         fleet_win_retire "$_w" "$SOCK"
         TM kill-window -t "$_w" 2>/dev/null
       done
+      _pass=''
+      [ "$TICK" = 1 ] && _pass="$_pass --tick"
+      [ -n "$AGENT_ARG" ] && _pass="$_pass --agent $AGENT_ARG"
       while IFS= read -r _r; do
         [ -n "$_r" ] || continue
-        bash "$0" "$CMD" "$SESS" --repo "$_r"
+        # shellcheck disable=SC2086
+        bash "$0" "$CMD" "$SESS" --repo "$_r" $_pass
       done <<EOF
 $(fleet_repos "$SESS")
+-
 EOF
       exit 0 ;;
     *) REPO_ARG=$(fleet_repos "$SESS" | head -n1) ;;
   esac
 fi
-REPO=$(fleet_norm_repo "$REPO_ARG")
-[ -n "$REPO" ] || exit 0                             # no repo hosted: no pool
-fleet_load_repo_conf "$SESS" "$REPO" || exit 0       # not hosted: an empty pool
+# claim's answer when it hands nothing out: the 3-field form says it with silence
+# (exit 0, the caller's cold path follows), the node's form with exit 3.
+empty() { if [ "$CMD" = claim ] && [ "$NEWCLAIM" = 1 ]; then exit 3; fi; exit 0; }
+if [ "$REPO_ARG" = - ]; then
+  REPO=-                                             # HOME: the fleet conf already loaded
+else
+  REPO=$(fleet_norm_repo "$REPO_ARG")
+  [ -n "$REPO" ] || empty                            # no repo hosted: no repo pool
+  fleet_load_repo_conf "$SESS" "$REPO" || empty      # not hosted: an empty pool
+fi
 
-WANT="${FLEET_SCRATCH_POOL:-0}"; case "$WANT" in ''|*[!0-9]*) WANT=0;; esac
-AGENT="${FLEET_AGENT:-claude}"
+WANT="${FLEET_SCRATCH_POOL-$POOL_DEFAULT}"; case "$WANT" in ''|*[!0-9]*) WANT=0;; esac
+AGENT="${AGENT_ARG:-${FLEET_AGENT:-claude}}"
 case "$AGENT" in claude|codex) ;; *) AGENT=claude ;; esac
 MAXAGE="${FLEET_POOL_MAX_AGE:-1800}"; case "$MAXAGE" in ''|*[!0-9]*) MAXAGE=1800;; esac
 PTIMEOUT="${FLEET_POOL_PROBE_TIMEOUT:-120}"; case "$PTIMEOUT" in ''|*[!0-9]*) PTIMEOUT=120;; esac
 MAIN="${FLEET_MAIN:-}"
 BASE="${FLEET_BASE_BRANCH:-master}"
+[ "$REPO" = - ] && MAIN=''                          # HOME has no worktree to free
+SLOT_NAME=$REPO; [ "$REPO" = - ] && SLOT_NAME=HOME
 NOW() { date +%s; }
+# What a fresh session would be started with now (fleet_cfg_state's reference),
+# read once: an entry warmed before an upgrade is never handed out.
+fleet_cfg_expected_load
 
 # The account a warm entry was launched under is baked into its claude process
 # (fleet-claude.sh exports CLAUDE_CODE_OAUTH_TOKEN at exec time), so an entry
@@ -191,6 +266,7 @@ wopt() { TM display-message -p -t "$1" "#{$2}" 2>/dev/null; }
 # (an entry warmed before #797) its worktree's origin. Empty when neither says.
 pool_repo() {
   local r wt
+  [ "$(wopt "$1" @norepo)" = 1 ] && { printf -- '-\n'; return 0; }   # the HOME slot
   r=$(wopt "$1" @repo)
   if [ -z "$r" ]; then
     wt=$(wopt "$1" @worktree)
@@ -199,12 +275,15 @@ pool_repo() {
   fleet_norm_repo "$r"
 }
 
-# pool_windows → this pool's entries: REPO's only (the holding session is shared
-# by every hosted repo).
+# pool_windows [all] → this slot's entries: REPO's (or HOME's) only — the holding
+# session is shared by every slot — and of this pass's AGENT; `all` keeps every
+# agent's (the reap of a slot's default agent retires the others').
 pool_windows() {
-  local w
+  local w a
   for w in $(TM list-windows -t "$POOL" -F '#{window_id}' 2>/dev/null); do
-    if [ "$(pool_repo "$w")" = "$REPO" ]; then printf '%s\n' "$w"; fi
+    [ "$(pool_repo "$w")" = "$REPO" ] || continue
+    if [ "${1:-}" != all ]; then a=$(wopt "$w" @pool_agent); [ "${a:-claude}" = "$AGENT" ] || continue; fi
+    printf '%s\n' "$w"
   done
 }
 
@@ -244,14 +323,21 @@ POOL_STABLE_HITS="${FLEET_POOL_STABLE_HITS:-8}"   # x0.5s of an unchanging scree
 input_line() { TM capture-pane -p -t "$1" 2>/dev/null | LC_ALL=C grep -m1 '❯'; }
 screen_hash() { TM capture-pane -p -t "$1" 2>/dev/null | LC_ALL=C cksum | awk '{print $1}'; }
 
-# claude_pid <wid> — the claude process under the pane (the pane itself runs the
-# zsh wrapper from fleet-claude.sh, so look one level down too).
+# claude_pid <wid> — the claude process under the pane. It is never the pane's own
+# process: the pane runs `sh -c '<launch>; exec $SHELL'`, the launch is the
+# session wrapper (#1784) that stays as claude's parent, and fleet-claude.sh may
+# hand it to fleet-loop.py's bridge — so claude sits 2–4 levels down. Looking only
+# one level down (the pre-wrapper layout) meant no entry ever settled (#2233).
 claude_pid() {
-  local pp c
+  local pp c lvl=0 next
   pp=$(wopt "$1" pane_pid); [ -n "$pp" ] || return 1
-  if ps -o command= -p "$pp" 2>/dev/null | grep -qE '(^|/)claude( |$)'; then printf '%s\n' "$pp"; return 0; fi
-  for c in $(pgrep -P "$pp" 2>/dev/null); do
-    ps -o command= -p "$c" 2>/dev/null | grep -qE '(^|/)claude( |$)' && { printf '%s\n' "$c"; return 0; }
+  while [ -n "$pp" ] && [ "$lvl" -le 5 ]; do
+    next=''
+    for c in $pp; do
+      ps -o command= -p "$c" 2>/dev/null | grep -qE '(^|/)claude( |$)' && { printf '%s\n' "$c"; return 0; }
+      next="$next $(pgrep -P "$c" 2>/dev/null | tr '\n' ' ')"
+    done
+    pp=$(printf '%s' "$next" | tr -s ' '); pp=${pp# }; lvl=$((lvl + 1))
   done
   return 1
 }
@@ -338,15 +424,21 @@ warm_input() {
 
 # ------------------------------------------------------------------- ensure ----
 spawn_one() {
-  local alloc slug wt win acct launch
-  [ -n "$MAIN" ] || return 1
-  [ -d "$MAIN/.git" ] || return 1
+  local alloc slug='' wt acct launch stamp='' nsid='' wname win
   # Never warm the fleet past its own ceiling, and always leave one slot of
   # headroom so a warm entry can't be the reason a real spawn is refused.
-  fleet_session_cap_ok "$SESS" >/dev/null || return 1
-  acct=$(acct_now) || return 1
-  alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || return 1
-  slug=${alloc%%	*}; wt=${alloc#*	}
+  if [ "$REPO" = - ]; then
+    wt=$HOME; wname=warm-home                 # HOME: the agent runs in $HOME, no worktree
+    fleet_session_cap_ok "$SESS" >/dev/null || return 1
+    acct=$(acct_now) || return 1
+  else
+    [ -n "$MAIN" ] || return 1
+    [ -d "$MAIN/.git" ] || return 1
+    fleet_session_cap_ok "$SESS" >/dev/null || return 1
+    acct=$(acct_now) || return 1
+    alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || return 1
+    slug=${alloc%%	*}; wt=${alloc#*	}; wname="warm-${slug#scratch-}"
+  fi
   read -r _w _h <<EOF
 $(fleet_dims)
 EOF
@@ -354,26 +446,43 @@ EOF
   if [ "$AGENT" = codex ]; then
     printf -v launch '%s --codex-home %q' "$launch" "${acct#codex:}"
   fi
+  if [ "$REPO" = - ]; then
+    # Same identity a cold --no-repo session gets (dash-raw-session.sh): a Claude
+    # one runs under a session id of its own, stamped @norepo_sid so restore
+    # resumes THAT conversation in $HOME; the window stamps @norepo before the
+    # launcher reads its conf (#789).
+    if [ "$AGENT" = claude ]; then
+      nsid=$(uuidgen 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null)
+      nsid=$(printf '%s' "$nsid" | tr 'A-F' 'a-f' | LC_ALL=C tr -cd '0-9a-f-')
+      [ -n "$nsid" ] && launch="$launch --session-id $nsid"
+    fi
+    stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
+  fi
   if TM has-session -t "$POOL" 2>/dev/null; then
     TM set-option -t "$POOL" window-size manual >/dev/null 2>&1
     TM resize-window -t "$POOL" -x "$_w" -y "$_h" >/dev/null 2>&1
-    win=$(TM new-window -d -P -F '#{window_id}' -t "$POOL:" -n "warm-${slug#scratch-}" -c "$wt" \
-            "$launch; exec \$SHELL" 2>/dev/null)
+    win=$(TM new-window -d -P -F '#{window_id}' -t "$POOL:" -n "$wname" -c "$wt" \
+            "$stamp$launch; exec \$SHELL" 2>/dev/null)
   else
-    TM new-session -d -s "$POOL" -x "$_w" -y "$_h" -n "warm-${slug#scratch-}" -c "$wt" \
-      "$launch; exec \$SHELL" >/dev/null 2>&1
+    TM new-session -d -s "$POOL" -x "$_w" -y "$_h" -n "$wname" -c "$wt" \
+      "$stamp$launch; exec \$SHELL" >/dev/null 2>&1
     TM set-option -t "$POOL" window-size manual >/dev/null 2>&1
     win=$(TM list-windows -t "$POOL" -F '#{window_id}' 2>/dev/null | head -1)
   fi
-  [ -n "$win" ] || { fleet_scratch_free "$MAIN" "$slug" "$wt"; return 1; }
-  TM set-window-option -t "$win" @raw 1 2>/dev/null
+  [ -n "$win" ] || { [ -n "$slug" ] && fleet_scratch_free "$MAIN" "$slug" "$wt"; return 1; }
   TM set-window-option -t "$win" @pool 1 2>/dev/null
-  TM set-window-option -t "$win" @pool_slug "$slug" 2>/dev/null
   TM set-window-option -t "$win" @pool_born "$(NOW)" 2>/dev/null
   TM set-window-option -t "$win" @pool_account "$acct" 2>/dev/null
   TM set-window-option -t "$win" @pool_agent "$AGENT" 2>/dev/null
-  TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null
-  TM set-window-option -t "$win" @repo "$REPO" 2>/dev/null
+  if [ "$REPO" = - ]; then
+    TM set-window-option -t "$win" @norepo 1 2>/dev/null    # deliberately no repo, no worktree
+    [ -n "$nsid" ] && TM set-window-option -t "$win" @norepo_sid "$nsid" 2>/dev/null
+  else
+    TM set-window-option -t "$win" @raw 1 2>/dev/null
+    TM set-window-option -t "$win" @pool_slug "$slug" 2>/dev/null
+    TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null
+    TM set-window-option -t "$win" @repo "$REPO" 2>/dev/null
+  fi
   if [ "$AGENT" = codex ]; then
     if python3 "$BIN/fleet-codex-warm.py" --socket "$SOCK" --pane "$win" --timeout "$PTIMEOUT" \
         --settle "$POOL_SETTLE_MIN" --stable-hits "$POOL_STABLE_HITS"; then
@@ -384,7 +493,7 @@ EOF
   retire "$win"; return 1                     # never came up — don't leave a husk
 }
 
-usable() {                                    # usable <wid> — ready, fresh, right account
+usable() {                                    # usable <wid> — ready, fresh, right account, current config
   local wid="$1" born age agent
   [ "$(wopt "$wid" @pool_ready)" = 1 ] || return 1
   agent=$(wopt "$wid" @pool_agent); [ "${agent:-claude}" = "$AGENT" ] || return 1
@@ -392,6 +501,11 @@ usable() {                                    # usable <wid> — ready, fresh, r
   born=$(wopt "$wid" @pool_born); case "$born" in ''|*[!0-9]*) return 1;; esac
   age=$(( $(NOW) - born )); [ "$age" -le "$MAXAGE" ] || return 1
   [ "$(wopt "$wid" @pool_account)" = "$(acct_now)" ] || return 1
+  # Started on an older configuration (an upgrade since it was warmed, #2233):
+  # 配置旧 / 待换新 / 会坏 are the list's own words for it — never handed out.
+  # No fingerprint on it, or none expected, reads unknown and passes, as before.
+  fleet_cfg_state "${agent:-claude}" "$(wopt "$wid" @agent_cfg)" "$(wopt "$wid" @agent_ver)"
+  case "$FCFG_STATE" in stale|renew|broken) return 1 ;; esac
   # Geometry gate (see fleet_dims): handing out a window that will be resized on
   # arrival trades a 7s wait for a permanently wedged pane.
   read -r _fw _fh <<EOF
@@ -401,9 +515,91 @@ EOF
   return 0
 }
 
+# align <wid> — bring a repo entry's worktree up to origin/<base> before it is
+# handed out (#2233): it was cut when the entry was warmed, and work started on
+# it would otherwise branch off an old master. Local only — a fast-forward of the
+# scratch branch to the remote-tracking ref the tick's fetch (pool_fetch) keeps
+# current — so a claim stays well under half a second. A worktree with commits of
+# its own, or one git cannot move, fails: the caller retires it instead of
+# handing it out. HOME entries and an entry with no worktree on disk pass.
+align() {
+  local wt
+  [ "$REPO" = - ] && return 0
+  wt=$(wopt "$1" @worktree)
+  [ -n "$wt" ] && [ -d "$wt" ] || return 0
+  git -C "$wt" rev-parse --verify -q "refs/remotes/origin/$BASE" >/dev/null 2>&1 || return 0
+  git -C "$wt" merge-base --is-ancestor "refs/remotes/origin/$BASE" HEAD 2>/dev/null && return 0
+  git -C "$wt" merge --ff-only -q "refs/remotes/origin/$BASE" >/dev/null 2>&1
+}
+
+# pool_fetch — refresh origin/<base> once per pass, so align has the newest
+# master to move to. Only a repo slot that holds an entry pays it (a spawn's
+# fleet_scratch_alloc fetches on its own).
+pool_fetch() {
+  [ "$REPO" != - ] && [ -n "$MAIN" ] && [ -d "$MAIN/.git" ] || return 0
+  git -C "$MAIN" fetch origin "$BASE" --quiet >/dev/null 2>&1
+  return 0
+}
+
+# grow_hold — why this slot must not grow right now (prints it, exit 0), or
+# nothing (exit 1): the machine's load per core above FLEET_POOL_LOAD_PER_CORE
+# (default 1 — stricter than admission's 1.5: a warm entry is a nice-to-have, a
+# real spawn is not), or the disk under diskguard's warn line FLEET_DISK_WARN_GB.
+# A held slot only shrinks (#2233). An unreadable probe never holds.
+pool_free_gb() {
+  if [ -n "${FLEET_POOL_DISK_PROBE_CMD:-}" ]; then
+    sh -c "$FLEET_POOL_DISK_PROBE_CMD" 2>/dev/null | awk 'NF{print int($1); exit}'; return 0
+  fi
+  df -Pk "${FLEET_DISK_TARGET:-${TMPDIR:-/tmp}}" 2>/dev/null | awk 'NR==2 { printf "%d", int($4/1048576) }'
+}
+grow_hold() {
+  local lim="${FLEET_POOL_LOAD_PER_CORE:-1}" per warn="${FLEET_DISK_WARN_GB:-15}" free
+  case "$lim" in ''|*[!0-9.]*) lim=1 ;; esac
+  case "$warn" in ''|*[!0-9]*) warn=15 ;; esac
+  per=$(_fleet_load_per_core)
+  if [ -n "$per" ] && awk -v p="$per" -v m="$lim" 'BEGIN{ exit !(m > 0 && p > m) }'; then
+    printf 'load %s/core > %s\n' "$per" "$lim"; return 0
+  fi
+  free=$(pool_free_gb)
+  case "$free" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$free" -lt "$warn" ] && { printf 'disk %sGB < %sGB\n' "$free" "$warn"; return 0; }
+  return 1
+}
+
+# pool_lock — one ensure per slot at a time: a warm-up outlasts the tick that
+# started it, and two passes counting the same empty slot would warm two. The
+# tick (--tick) skips a held slot; any other caller (a claim's refill, ⌃s's) waits
+# for it, up to FLEET_POOL_LOCK_WAIT seconds. A holder that died frees it.
+LOCKD=''
+pool_unlock() { [ -n "$LOCKD" ] && rm -rf "$LOCKD" 2>/dev/null; LOCKD=''; return 0; }
+pool_lock() {
+  local d waited=0 max="${FLEET_POOL_LOCK_WAIT:-300}" holder slot
+  case "$max" in ''|*[!0-9]*) max=300 ;; esac
+  slot=home; [ "$REPO" = - ] || slot=$(fleet_slug "$REPO")
+  d="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$(fleet_slug "$SESS")/pool/$slot-$AGENT.lock"
+  mkdir -p "${d%/*}" 2>/dev/null
+  while ! mkdir "$d" 2>/dev/null; do
+    holder=$(cat "$d/pid" 2>/dev/null)
+    if [ -z "$holder" ] || ! kill -0 "$holder" 2>/dev/null; then
+      sleep 1; holder=$(cat "$d/pid" 2>/dev/null)          # a holder still writing its pid
+      if [ -z "$holder" ] || ! kill -0 "$holder" 2>/dev/null; then rm -rf "$d" 2>/dev/null; continue; fi
+    fi
+    [ "$TICK" = 1 ] && return 1
+    [ "$waited" -ge "$max" ] && return 1
+    sleep 1; waited=$((waited + 1))
+  done
+  printf '%s\n' "$$" > "$d/pid" 2>/dev/null
+  LOCKD=$d
+  trap pool_unlock EXIT
+  return 0
+}
+
 cmd_reap() {
-  local wid
-  for wid in $(pool_windows); do usable "$wid" && continue
+  local wid set=''
+  # The slot's default pass (no --agent) also retires an entry of another agent —
+  # what is left after FLEET_AGENT changed; an --agent pass keeps to its own.
+  [ -z "$AGENT_ARG" ] && set=all
+  for wid in $(pool_windows $set); do usable "$wid" && continue
     # an entry still inside its probe window is neither usable nor stale yet
     [ "$(wopt "$wid" @pool_ready)" = 1 ] || {
       born=$(wopt "$wid" @pool_born)
@@ -415,7 +611,7 @@ cmd_reap() {
 }
 
 cmd_ensure() {
-  local have n
+  local have n wid hold
   [ "$WANT" -gt 0 ] || { cmd_reap; return 0; }
   # --delay: wait before rebuilding. Warming is a full cold claude boot, and the
   # caller is the ⌃s spawn — firing it at the instant the operator starts typing
@@ -426,22 +622,41 @@ cmd_ensure() {
   # selftest executes run-shell synchronously — a sleep there added 45s to EVERY
   # spawn case and blew the CI job's 10-minute budget.
   [ "$DELAY" = 1 ] && sleep "${FLEET_POOL_REFILL_DELAY:-45}"
+  # --soon: a claim's own refill (#2233) — a few seconds, so the slot is back
+  # well inside the 30 s the batch promises, yet not on the claimer's first keys.
+  [ "$SOON" = 1 ] && sleep "${FLEET_POOL_CLAIM_REFILL_DELAY:-5}"
+  pool_lock || return 0
   cmd_reap
-  have=0; for wid in $(pool_windows); do usable "$wid" && have=$((have + 1)); done
+  # Count what is ready; an entry over the slot's size goes (a lowered
+  # FLEET_SCRATCH_POOL shrinks the slot), and every one kept is moved to the
+  # newest origin/<base> now, so the claim's own align is a no-op.
+  have=0; n=0
+  for wid in $(pool_windows); do
+    usable "$wid" || continue
+    if [ "$have" -ge "$WANT" ]; then retire "$wid"; continue; fi
+    [ "$n" = 0 ] && { pool_fetch; n=1; }
+    align "$wid" || { retire "$wid"; continue; }
+    have=$((have + 1))
+  done
   n=$(( WANT - have ))
+  [ "$n" -gt 0 ] || return 0
+  hold=$(grow_hold) && return 0               # a busy machine: only shrink (#2233)
   while [ "$n" -gt 0 ]; do spawn_one || break; n=$((n - 1)); done
 }
 
 # -------------------------------------------------------------------- claim ----
-# Prints "<window-id>\t<slug>\t<worktree>" for a window now living in <sess>.
+# Prints "<window-id>\t<slug>\t<worktree>" for a window now living in <sess> — or,
+# for the node's form (NEWCLAIM), the window id alone. Exit 1 = nothing handed out.
 cmd_claim() {
   local wid slug wt
-  [ "$WANT" -gt 0 ] || return 0
+  [ "$WANT" -gt 0 ] || return 1
   # @repo stays: a claimed window is a scratch OF that repo (dash-raw-session
   # stamps the same value again).
-  TM has-session -t "$POOL" 2>/dev/null || return 0
+  TM has-session -t "$POOL" 2>/dev/null || return 1
   for wid in $(pool_windows); do
     usable "$wid" || continue
+    # An entry git cannot bring up to origin/<base> is never handed out.
+    align "$wid" || { retire "$wid"; continue; }
     slug=$(wopt "$wid" @pool_slug); wt=$(wopt "$wid" @worktree)
     # Claim-by-move: whoever's move-window succeeds owns it. A loser sees the
     # window gone from the pool session on the next iteration.
@@ -452,26 +667,37 @@ cmd_claim() {
     TM set-window-option -t "$wid" -u @pool_account 2>/dev/null
     TM set-window-option -t "$wid" -u @pool_agent 2>/dev/null
     TM set-window-option -t "$wid" -u @pool_slug 2>/dev/null
-    printf '%s\t%s\t%s\n' "$wid" "$slug" "$wt"
+    if [ "$NEWCLAIM" = 1 ]; then
+      printf '%s\n' "$wid"
+      # The node's caller has no ⌃s refill behind it: the slot asks for its own.
+      TM run-shell -b "bash '$BIN/scratch-pool.sh' ensure '$SESS' --repo '$REPO' --agent '$AGENT' --soon >/dev/null 2>&1" 2>/dev/null
+    else
+      printf '%s\t%s\t%s\n' "$wid" "$slug" "$wt"
+    fi
     return 0
   done
-  return 0
+  return 1
 }
 
 cmd_status() {
-  local wid
+  local wid ready=0 hold=''
+  [ "$WANT" -gt 0 ] && hold=$(grow_hold)
+  if TM has-session -t "$POOL" 2>/dev/null; then
+    for wid in $(pool_windows); do usable "$wid" && ready=$((ready + 1)); done
+  fi
+  printf 'slot %s agent=%s want=%s ready=%s%s\n' "$SLOT_NAME" "$AGENT" "$WANT" "$ready" "${hold:+ hold=$hold}"
   TM has-session -t "$POOL" 2>/dev/null || { echo "pool: (none)  want=$WANT"; return 0; }
   for wid in $(pool_windows); do
-    printf '%s  name=%s ready=%s age=%ss account=%s usable=%s%s\n' \
+    printf '%s  name=%s ready=%s age=%ss account=%s usable=%s repo=%s want=%s\n' \
       "$wid" "$(wopt "$wid" window_name)" "$(wopt "$wid" @pool_ready)" \
       "$(( $(NOW) - $(wopt "$wid" @pool_born) ))" "$(wopt "$wid" @pool_account)" \
-      "$(usable "$wid" && echo yes || echo no)" "${REPO:+ repo=$REPO want=$WANT}"
+      "$(usable "$wid" && echo yes || echo no)" "$SLOT_NAME" "$WANT"
   done
 }
 
 case "$CMD" in
   ensure) cmd_ensure ;;
-  claim)  cmd_claim ;;
+  claim)  cmd_claim || empty ;;
   reap)   cmd_reap ;;
   status) cmd_status ;;
   *) echo "scratch-pool: unknown command '$CMD'" >&2; exit 2 ;;

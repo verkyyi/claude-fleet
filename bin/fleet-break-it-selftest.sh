@@ -73,6 +73,7 @@
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
+#   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -3385,6 +3386,35 @@ drill_oldcfg_broken_unmarked() {
   word=$(FLEET_UI_LANG=zh bash -c '. "$1/fleet-ui-lang.sh"; fleet_ui_t sidebar_cfg_broken' _ "$BIN")
   [ "$word" = '会坏·需重开' ] || { WHY="the broken row's word is [$word], not 会坏·需重开"; return 1; }
   WHAT="删了 gone.sh / await 的发版后：w-broken 红「会坏·需重开」并点名（窗口·仓库·单号·状态），只缺 new.sh 的 w-loop 黄且列为循环中，没 manifest 的 w-old 照旧黄；三个都没被重开"
+}
+
+# A warm-pool entry started before an upgrade (its @agent_cfg / @agent_ver no longer
+# the expected ones) must never be handed out — the node's claim says 3 and the
+# caller opens a cold session — and the next pass retires it (issue #2233).
+drill_pool_stale_handed_out() {
+  CAP=10; BREAK_SOCK="$WORK/sock-psh"; local d="$WORK/psh" t0 out rc w acct kv
+  mkdir -p "$d/conf/fleets/ps" "$d/conf/global" "$d/home"
+  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s/nomain"\nFLEET_BASE_BRANCH="main"\nFLEET_SCRATCH_POOL=1\n' "$d" > "$d/conf/fleets/ps/conf"
+  printf 'claude NEW x\nver v2\n' > "$d/conf/global/agent-cfg.expected"
+  nt -f /dev/null new-session -d -s ps -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  nt new-session -d -s ps-pool -n warm-1 -x 100 -y 30 'exec sleep 600'
+  w=$(nt list-windows -t ps-pool -F '#{window_id}' | head -1)
+  acct=$(env HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-account.sh" active 2>/dev/null)
+  for kv in "@pool 1" "@pool_ready 1" "@pool_slug scratch-1" "@pool_born $(date +%s)" "@pool_agent claude" \
+            "@repo acme/app" "@worktree $d/wt" "@agent_cfg OLD" "@agent_ver v1"; do
+    nt set-option -w -t "$w" ${kv%% *} "${kv#* }"
+  done
+  nt set-option -w -t "$w" @pool_account "$acct"
+  pool() { env PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+             BREAK_SOCK="$BREAK_SOCK" FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' \
+             FLEET_POOL_CLAIM_REFILL_DELAY=600 bash "$BIN/scratch-pool.sh" "$@"; }
+  t0=$(now)
+  out=$(pool claim ps --repo acme/app --agent claude 2>&1); rc=$?
+  [ "$rc" = 3 ] && [ -z "$out" ] || { WHY="an entry warmed before the upgrade was handed out (rc=$rc, out=[$out])"; return 1; }
+  [ "$(o "$w" session_name)" = ps-pool ] || { WHY="the old-config entry left the pool"; return 1; }
+  pool reap ps --repo acme/app >/dev/null 2>&1
+  nt list-windows -a -F '#{window_id}' | grep -qx "$w" && { WHY="the next pass did not retire the old-config entry"; return 1; }
+  SECS=$(since "$t0"); WHAT="升级前开好的池里会话：领用返回 3、不交出，下一拍收掉（随后按新配置重开）"
 }
 
 drill_cold_fill_fails() {

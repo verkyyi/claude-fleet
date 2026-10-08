@@ -8,28 +8,39 @@
 # replaced by its own address; GitHub's `stable` serves it as it is (raw
 # …/stable/bin/fleet-install.sh), with no address — the only difference.
 #
-# It asks two things, from the terminal (/dev/tty — so `curl | sh` can ask too):
+# It asks NOTHING (claude-fleet#2260, EPIC #2259 C1): pasted, it is done in
+# seconds, and the next thing on the screen is `fleet`. What it used to ask, it
+# now decides:
 #
-#   ① 这台电脑要做什么？  1 只看、只派（推荐）· 2 也跑会话（承载）
-#   ② 接入口吗？          1 接（the default when an address came with the line
-#                         or is already in fleet.conf）· 2 不接（单机）
+#   承载 (this computer also runs sessions) — off, unless asked for: `--host`
+#       (FLEET_INSTALL_HOST=1), or this computer already 承载s. A newcomer never
+#       sees the word; `fleet host on` turns it on later.
+#   入口 — 接 whenever an address is known: the one the hub filled in below
+#       (the line was copied from it), else the one this computer already has;
+#       no address (GitHub's own copy of this script) → 不接 (单机). FLEET_HUB_URL
+#       names one ahead; FLEET_INSTALL_HUB=0 / --no-hub keeps it 单机.
 #
-# Enter takes the default — on a computer that already answered, the default is
-# what it answered, so running the line again changes nothing, and running it
-# again with another answer is how the answer changes (only the part that is new
-# gets installed; nothing is torn down — 承载 goes off with `fleet host off`).
-# 「2 承载」 lists what it will add (git, tmux, the background programs) and asks
-# once more. No terminal to ask (automation, CI) → the defaults: the part
-# everyone has, and one line on how to add 承载. Automation answers ahead with
-# FLEET_INSTALL_HOST=0|1 and FLEET_INSTALL_HUB=0|1 (FLEET_HUB_URL for an address);
-# --host / --no-hub (and FLEET_INSTALL_NO_HUB=1) are kept for one version as
-# aliases of those answers, out of the docs.
+# Running it again changes nothing that was chosen (only what is new gets
+# installed; nothing is torn down — 承载 goes off with `fleet host off`).
+# FLEET_INSTALL_HOST=0|1 / FLEET_INSTALL_HUB=0|1 still answer ahead for
+# automation.
+#
+# An invitation (EPIC #2259 C2) rides in the line: the hub's /i/<code> serves this
+# script with the code in place of __FLEET_INVITE__ (FLEET_INVITE ahead), and it
+# is kept, 0600, at $FLEET_CONF_DIR/invite for the first `fleet login` to hand
+# in — never printed, never on a command line.
+#
+# A computer the fleet was never on (no ~/.config/claude-fleet) gets
+# FLEET_CLIENT_LAYOUT=solo in fleet.conf's [client] (EPIC #2259 共同约定 1): the
+# newcomer's one-session view. One that had it keeps its layout, byte for byte.
 #
 # ONE directory, ~/.claude/fleet (FLEET_INSTALL_HOME / FLEET_INSTALL_ROOT):
 #
 #   1. the part everyone has — the client's manifest (fleetclient/manifest in
 #      the repo: `fleet`, what it dispatches to, the SHELL, the Agent package),
-#      every file SHA-256-checked, from the hub's /install/<path> (接) or the
+#      with a hub as ONE download — <from>/bundle.tar.gz, the manifest and every
+#      file it lists in one SHA-256-checked tar (#2260; ~140 requests took close
+#      to two minutes) — and file by file when that fails, each SHA-256-checked, from the hub's /install/<path> (接) or the
 #      repo paths on GitHub's stable (不接, FLEET_INSTALL_SRC), in the repo's own
 #      layout, no git. A copy the manifest no longer lists goes, so the tree is
 #      exactly the manifest's; `.client-version` records which client it is
@@ -51,8 +62,11 @@
 #      file, #1623); hub.json keeps its token. 不接 writes no address;
 #   3. ~/.local/bin on PATH: ONE line in the shell's rc file, once;
 #   4. tmux ≥ 3.2 (#1629), the one thing the shell needs that a stock system
-#      lacks — Homebrew / apt-get / dnf / yum / apk, never a password prompt;
-#      `--no-deps` (FLEET_INSTALL_NO_DEPS=1) skips it;
+#      lacks — first tmux's own static build (#2260: the bundle's vendor/tmux,
+#      else the archive conf/vendor-tmux.lock pins, SHA-256 checked) into
+#      ~/.local/share/claude-fleet-vendor/bin, no Homebrew needed; a platform
+#      with none → Homebrew / apt-get / dnf / yum / apk, never a password
+#      prompt; `--no-deps` (FLEET_INSTALL_NO_DEPS=1) skips it;
 #   5. 承载 — `fleet host on --yes` (fleet-host.sh): fleet-host-install.sh turns
 #      ~/.claude/fleet into a checkout of stable in place (git, tmux, a new
 #      login's setup: hooks, commands, daemons, a first fleet), then, with a
@@ -71,7 +85,9 @@
 # Env: FLEET_INSTALL_BIN (the `fleet` on PATH; ~/.local/bin) · FLEET_INSTALL_NO_RUN=1
 # installs without running `fleet` · FLEET_INSTALL_RC (the rc file) ·
 # FLEET_INSTALL_SUDO (the sudo prefix; default `sudo -n`, empty = none) ·
-# FLEET_INSTALL_ASK=0 never asks, even with a terminal (the selftests' seam).
+# FLEET_INSTALL_BUNDLE=0 skips the one-download bundle (file by file) ·
+# FLEET_INSTALL_VENDOR (where the static tmux goes) · FLEET_INSTALL_STATIC_TMUX=0
+# skips the static tmux (straight to Homebrew / apt).
 # Exit: 0 installed (and `fleet` is running, which replaces this process) ·
 # 2 an unsupported system, a missing prerequisite or a bad answer · 1 a download
 # failed.
@@ -90,6 +106,7 @@
 # fleet-install: stable-aware — the hub serves this installer from stable only
 # while it carries this line (tokenledger/internal/api/fleet_stable.go).
 set -eu
+T0=$(date +%s)
 
 DEPS=1
 [ "${FLEET_INSTALL_NO_DEPS:-}" = 1 ] && DEPS=0
@@ -99,8 +116,8 @@ HUB_ANS="${FLEET_INSTALL_HUB:-}"
 for a in "$@"; do
   case "$a" in
     --no-deps) DEPS=0 ;;
-    --host) HOST_ANS=1 ;;      # one version: the answer «2 也跑会话», ahead
-    --no-hub) HUB_ANS=0 ;;     # one version: the answer «2 不接», ahead
+    --host) HOST_ANS=1 ;;      # 承载 too: the part that runs sessions
+    --no-hub) HUB_ANS=0 ;;     # 单机: no hub even when an address is known
     --no-node) FLEET_INSTALL_NO_NODE=1 ;;
     *) printf 'fleet-install: 不认识的参数 %s（自动化用 FLEET_INSTALL_HOST=0|1、FLEET_INSTALL_HUB=0|1 预填答案）\n' "$a" >&2; exit 2 ;;
   esac
@@ -110,6 +127,9 @@ case "$HUB_ANS" in ''|0|1) ;; *) echo "fleet-install: FLEET_INSTALL_HUB 只能�
 
 PRE_HUB="${FLEET_HUB_URL:-__FLEET_HUB_URL__}"
 case "$PRE_HUB" in http://*|https://*) PRE_HUB="${PRE_HUB%/}" ;; *) PRE_HUB='' ;; esac
+# the invitation the hub's /i/<code> filled in (EPIC #2259 C2), or none
+INVITE="${FLEET_INVITE:-__FLEET_INVITE__}"
+case "$INVITE" in __FLEET_INV*|''|*[!A-Za-z0-9_-]*) INVITE='' ;; esac
 SRC="${FLEET_INSTALL_SRC:-https://raw.githubusercontent.com/verkyyi/claude-fleet/stable}"
 SRC="${SRC%/}"
 RAW="${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}"
@@ -173,79 +193,14 @@ HUBURL="${PRE_HUB:-$CUR_HUB}"
 
 TTY=0
 ( : </dev/tty ) 2>/dev/null && TTY=1
-ASK=$TTY
-[ "${FLEET_INSTALL_ASK:-}" = 0 ] && ASK=0
-ask() { printf '%s\n' "$*" >/dev/tty; }
-# choose <default 1|2> → CH: Enter = the default, anything else asks again
-choose() {
-  while :; do
-    printf '回车 = %s › ' "$1" >/dev/tty
-    IFS= read -r CH </dev/tty || CH=''
-    case "$CH" in '') CH=$1; return 0 ;; 1|2) return 0 ;; esac
-    ask "  只有 1 或 2"
-  done
-}
-
-ASKED_HOST=0
-if [ -z "$HOST_ANS" ] && [ "$ASK" = 1 ]; then
-  d=1; [ "$CUR_HOST" = 1 ] && d=2
-  ask ''
-  ask '这台电脑要做什么？'
-  ask '  1 只看、只派        推荐 · 会话开在别的机器上'
-  ask '  2 也跑会话（承载）  要 tmux、git、后台程序'
-  choose "$d"
-  HOST_ANS=$((CH - 1)); ASKED_HOST=1
-  [ "$CH" = 1 ] && ask '→ 1 只看、只派' || ask '→ 2 也跑会话'
-fi
-if [ -z "$HUB_ANS" ] && [ "$ASK" = 1 ]; then
-  d=2; [ -n "$HUBURL" ] && d=1
-  ask ''
-  ask '接入口吗？'
-  if [ -n "$PRE_HUB" ]; then
-    ask "  1 接                推荐 · 命令是从入口复制来的（${PRE_HUB}）"
-    ask '  2 不接（单机）'
-  else
-    if [ -n "$CUR_HUB" ]; then
-      ask "  1 接                现在接着 $CUR_HUB"
-      ask '  2 不接（单机）      一台电脑就是全部'
-    else
-      ask '  1 接                看到别的机器上的会话、跨机器派活'
-      ask '  2 不接（单机）      推荐 · 一台电脑就是全部'
-    fi
-  fi
-  choose "$d"
-  HUB_ANS=$((2 - CH))
-  [ "$CH" = 1 ] && ask '→ 1 接' || ask '→ 2 不接'
-  if [ "$HUB_ANS" = 1 ] && [ -z "$HUBURL" ]; then
-    printf '入口地址（https://…，回车 = 不接）› ' >/dev/tty
-    IFS= read -r HUBURL </dev/tty || HUBURL=''
-    HUBURL="${HUBURL%/}"
-    case "$HUBURL" in http://*|https://*) ;; '') HUB_ANS=0 ;; *) say "fleet-install: 入口地址要以 http:// 或 https:// 开头"; exit 2 ;; esac
-  fi
-fi
-# no terminal (or nothing asked): what was given, else what this computer had,
-# else the defaults — the part everyone has; 接 when an address is known
+# Nothing is asked (#2260): what was given, else what this computer had, else
+# the defaults — the part everyone has; 接 whenever an address is known.
 HINT_HOST=0
 if [ -z "$HOST_ANS" ]; then HOST_ANS=$CUR_HOST; [ "$CUR_HOST" = 0 ] && HINT_HOST=1; fi
 if [ -z "$HUB_ANS" ]; then if [ -n "$HUBURL" ]; then HUB_ANS=1; else HUB_ANS=0; fi; fi
 if [ "$HUB_ANS" = 1 ] && [ -z "$HUBURL" ]; then
   say "fleet-install: 要接入口，但不知道地址 — 用入口给的那条命令，或 FLEET_HUB_URL=https://… 预填"; exit 2
 fi
-# 承载, chosen just now on a computer that does not host yet: say what comes, once more
-if [ "$ASKED_HOST" = 1 ] && [ "$HOST_ANS" = 1 ] && [ "$CUR_HOST" = 0 ]; then
-  ask ''
-  ask '承载要多装这些（已有的跳过）：'
-  ask '  · git、tmux'
-  ask "  · 跑会话的那部分 fleet：$ROOT 换成跟 stable 的完整安装（同一个目录）"
-  ask '  · 后台程序（launchd / systemd），合盖前自动进维护'
-  [ "$HUB_ANS" = 1 ] && ask '  · 入口程序：入口开始往这台派会话（个人电脑只派你自己开的）'
-  while :; do
-    printf '装吗？ [Y/n] › ' >/dev/tty
-    IFS= read -r CH </dev/tty || CH=''
-    case "$CH" in ''|y|Y|yes|是) break ;; n|N|no|否) HOST_ANS=0; ask '→ 先不承载：只装基础'; break ;; esac
-  done
-fi
-[ "$ASK" = 1 ] && ask ''
 
 if [ "$HUB_ANS" = 1 ]; then FROM="$HUBURL/install"; else FROM="$SRC"; fi
 TOOLS="curl python3"
@@ -260,6 +215,9 @@ for tool in $TOOLS; do
   }
 done
 
+# a computer the fleet was never on: no config directory, or an empty one
+FRESH=0
+[ -n "$(ls -A "$CONF" 2>/dev/null)" ] || FRESH=1
 mkdir -p "$BIN" "$CONF"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/fleet-install.XXXXXX")"
 LOCK='' STG=''
@@ -301,6 +259,48 @@ fetch() {
     got="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$tmp/$1")"
     [ "$got" = "$want" ] || { say "fleet-install: $1 下载不完整（校验不符）"; exit 1; }
   fi
+}
+
+# sha256 <file> — its SHA-256 hex
+sha256() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+# platform — this computer as conf/vendor-tmux.lock names it, or ''
+platform() {
+  case "$(uname -s)" in Darwin) _po=macos ;; Linux) _po=linux ;; *) return 0 ;; esac
+  case "$(uname -m)" in arm64|aarch64) _pa=arm64 ;; x86_64|amd64) _pa=x86_64 ;; *) return 0 ;; esac
+  printf '%s-%s' "$_po" "$_pa"
+}
+# download <url> <out> <what> [<curl opts>…] — curl in the background, and a
+# line every 15 s on what it still waits for (EPIC #2259 共同约定 5: no silent
+# wait); the timeout is the caller's --max-time. Exit = curl's.
+download() {
+  _du=$1 _do=$2 _dw=$3; shift 3
+  curl -fsL --connect-timeout 10 "$@" "$_du" -o "$_do" &
+  _dp=$! _d0=$(date +%s) _dn=15
+  while kill -0 "$_dp" 2>/dev/null; do
+    sleep 0.2 2>/dev/null || sleep 1
+    _dt=$(( $(date +%s) - _d0 ))
+    if [ "$_dt" -ge "$_dn" ]; then
+      _dn=$((_dn + 15))
+      _dk=$(( $(wc -c <"$_do" 2>/dev/null || echo 0) / 1024 ))
+      say "  还在下载${_dw}… 已 ${_dt} 秒，收到 ${_dk} KB（$(printf '%s' "$_du" | sed 's/?.*//')）"
+    fi
+  done
+  wait "$_dp"
+}
+# fetch_bundle — the whole client in one download (#2260): <from>/bundle.tar.gz
+# → $tmp/b/, SHA-256 checked against the hub's header; a vendor/tmux in it is
+# the static tmux for this platform. 1 + BWHY when anything is off.
+fetch_bundle() {
+  BWHY=''
+  _bu="$FROM/bundle.tar.gz?os=$(uname -s)&arch=$(uname -m)"
+  download "$_bu" "$tmp/bundle.tgz" '（一个包）' --max-time 90 -D "$tmp/bundle.hdr" || { BWHY='下载失败'; return 1; }
+  _bw="$(tr -d '\r' <"$tmp/bundle.hdr" | awk 'tolower($1)=="x-ccquota-sha256:"{print $2}' | tail -n 1)"
+  [ -n "$_bw" ] || { BWHY='入口没给校验和'; return 1; }
+  [ "$(sha256 "$tmp/bundle.tgz")" = "$_bw" ] || { BWHY='校验不符'; return 1; }
+  rm -rf "$tmp/b"; mkdir -p "$tmp/b"
+  tar -xzf "$tmp/bundle.tgz" -C "$tmp/b" 2>/dev/null || { BWHY='解不开'; return 1; }
+  [ -f "$tmp/b/manifest" ] && [ ! -L "$tmp/b/manifest" ] || { BWHY='包里没有 manifest'; return 1; }
+  return 0
 }
 
 # stale_in <dir> — what an earlier install left in <dir> that the manifest no
@@ -466,9 +466,22 @@ PYV
       say "fleet: 问不到 stable 指向哪个提交，按 stable 当前内容装（下次启动 fleet 时对齐）"
     fi
   fi
+  # With a hub, the whole client in ONE download (#2260); a bundle that fails
+  # (an older hub, a cut connection) → the manifest, then every file on it,
+  # as before. Nothing is installed until all are here.
+  BUNDLED=0
+  if [ "$HUB_ANS" = 1 ] && [ "${FLEET_INSTALL_BUNDLE:-1}" != 0 ]; then
+    say "fleet: 下载中…"
+    if fetch_bundle; then
+      BUNDLED=1
+      mv -f "$tmp/b/manifest" "$tmp/manifest"
+    else
+      say "fleet: 整包没下成（${BWHY}），改为逐个文件下载…"
+    fi
+  fi
   # the manifest first (its `installer` line is this very script, not a
-  # download), then every file on it; nothing is installed until all are here
-  fetch manifest "$MPATH"
+  # download), then every file on it
+  [ "$BUNDLED" = 1 ] || fetch manifest "$MPATH"
   FILES="$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" { print $1 }' "$tmp/manifest" | tr '\n' ' ')"
   [ -n "${FILES% }" ] || { say "fleet-install: $FROM 的 manifest 里没有文件"; exit 1; }
   for f in $FILES; do
@@ -476,7 +489,13 @@ PYV
       bin/*|conf/*|hooks/*|commands/*|skills/*|mod/*) case "$f" in *..*|*/) say "fleet-install: manifest 里有不认识的路径 $f"; exit 1 ;; esac ;;
       *) say "fleet-install: manifest 里有不认识的路径 $f"; exit 1 ;;
     esac
-    fetch "$f"
+    if [ "$BUNDLED" = 1 ]; then
+      { [ -f "$tmp/b/$f" ] && [ ! -L "$tmp/b/$f" ]; } || { say "fleet-install: 包里少了 $f"; exit 1; }
+      mkdir -p "$tmp/$(dirname "$f")"
+      mv -f "$tmp/b/$f" "$tmp/$f"
+    else
+      fetch "$f"
+    fi
     # a script or a sourced lib (a comment first; a proxy's HTML page starts with '<')
     case "$f" in bin/*) [ "$(head -c 1 "$tmp/$f")" = '#' ] || { say "fleet-install: $f 不是脚本（入口返回了别的东西）"; exit 1; } ;; esac
   done
@@ -564,6 +583,15 @@ PY
 elif [ -n "$CUR_HUB" ]; then
   say "入口: 这次选了不接 — fleet.conf 里原来的地址 $CUR_HUB 没删"
 fi
+# the invitation, for the first `fleet login` (EPIC #2259 C2): 0600, never shown
+if [ -n "$INVITE" ]; then
+  ( umask 077; printf '%s\n' "$INVITE" > "$CONF/invite.tmp" ) && mv -f "$CONF/invite.tmp" "$CONF/invite"
+  say "邀请: 已收下，登录时一起交给入口"
+fi
+# a computer the fleet was never on: the newcomer's one-session view (共同约定 1)
+if [ "$FRESH" = 1 ]; then
+  fconf set-client FLEET_CLIENT_LAYOUT 'export FLEET_CLIENT_LAYOUT=solo' >/dev/null 2>&1 || :
+fi
 
 # ── 3 — PATH, once ─────────────────────────────────────────────────────────
 MARK="# fleet (claude-fleet#1470)"
@@ -600,6 +628,35 @@ else
 fi
 
 # ── 4 — tmux ≥ 3.2 (fleet-client-lib.sh's check + install, as node join's) ─
+# vendor_tmux — tmux's static build for this platform into $VENDOR/bin (#2260):
+# the bundle's vendor/tmux, else the archive conf/vendor-tmux.lock pins, its
+# SHA-256 checked; it must run and say ≥ 3.2 before it is put in place. 1 = no
+# build for this platform, or it would not run (→ Homebrew / apt as before).
+VENDOR="${FLEET_INSTALL_VENDOR:-${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet-vendor}"
+vendor_tmux() {
+  [ "${FLEET_INSTALL_STATIC_TMUX:-1}" != 0 ] || return 1
+  _vt="$tmp/vendor-tmux"
+  if [ -f "$tmp/b/vendor/tmux" ] && [ ! -L "$tmp/b/vendor/tmux" ]; then
+    mv -f "$tmp/b/vendor/tmux" "$_vt"
+  else
+    _vp=$(platform); [ -n "$_vp" ] || return 1
+    _vl=$(awk -v p="$_vp" '$1 == p { print $2, $3; exit }' "$ROOT/conf/vendor-tmux.lock" 2>/dev/null)
+    [ -n "$_vl" ] || return 1
+    _vs=${_vl%% *} _vu=${_vl#* }
+    say "tmux: 下载 tmux 的静态版（$_vp）…"
+    download "$_vu" "$tmp/vendor-tmux.tgz" ' tmux' --max-time 120 || { say "tmux: 静态版没下成（$_vu）"; return 1; }
+    [ "$(sha256 "$tmp/vendor-tmux.tgz")" = "$_vs" ] || { say "tmux: 静态版校验不符，不用它"; return 1; }
+    mkdir -p "$tmp/vx"
+    tar -xzf "$tmp/vendor-tmux.tgz" -C "$tmp/vx" tmux 2>/dev/null && [ -f "$tmp/vx/tmux" ] || return 1
+    mv -f "$tmp/vx/tmux" "$_vt"
+  fi
+  chmod 0755 "$_vt"
+  _vv=$("$_vt" -V 2>/dev/null) || { say "tmux: 静态版在这台电脑上跑不起来"; return 1; }
+  mkdir -p "$VENDOR/bin" || return 1
+  mv -f "$_vt" "$VENDOR/bin/tmux" || return 1
+  case ":$PATH:" in *":$VENDOR/bin:"*) ;; *) PATH="$VENDOR/bin:$PATH" ;; esac
+  [ -n "$_vv" ]
+}
 if [ "$DEPS" = 0 ]; then
   say "tmux: skipped (--no-deps)"
 else
@@ -609,8 +666,12 @@ else
   FC_LOG="$tmp/deps.log"
   # shellcheck disable=SC2034
   if [ -n "${FLEET_INSTALL_SUDO+x}" ]; then FC_SUDO="$FLEET_INSTALL_SUDO"; fi
+  # tmux's own static build, from an earlier run, comes first (as `fleet` puts it)
+  [ -x "$VENDOR/bin/tmux" ] && PATH="$VENDOR/bin:$PATH"
   if fc_tmux_ok; then
     say "tmux: $FC_TMUX_V 已就绪"
+  elif vendor_tmux && fc_tmux_ok; then
+    say "tmux: $FC_TMUX_V 已就绪（随包带的，在 $VENDOR/bin — 不用 Homebrew）"
   else
     old="$FC_TMUX_V"
     if [ -n "$old" ]; then say "tmux: $old 低于 3.2，安装新版本…"; else say "tmux: 没有，安装中…"; fi
@@ -699,6 +760,7 @@ else
   say "  要在这台跑会话：再跑一次同一条命令选 2，或 fleet host on"
 fi
 
+say "用时 $(( $(date +%s) - T0 )) 秒"
 if [ "${FLEET_INSTALL_NO_RUN:-}" = 1 ]; then
   exit 0
 fi

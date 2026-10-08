@@ -1271,18 +1271,29 @@ _fleet_repo_name_v() {
 # the hub's rows (FLEET_SIDEBAR_SOURCE=hub, #1480), across machines, so its repos
 # are the ones those rows name — each `wid:` line's repo field in the hub cache
 # (global/remote_<sess>, fleet-hub-sessions.sh client mode), sorted, never a
-# machine's conf. 2+ of them group the list exactly as a 2+ repo fleet does.
+# machine's conf. 2+ of them group the list exactly as a 2+ repo fleet does —
+# and so does ONE, when the machines behind the hub host 2+ repos (issue #2285:
+# global/hub_repos, fleet-hub-sessions.sh's list of every hosted repo). What
+# groups is the hosted count, never how many repos happen to have a session
+# ("One repo is not a mode"); the headings stay the rows' repos, so a hosted repo
+# with no session draws none. One hosted repo (or no hub_repos) = as before.
 # shellcheck disable=SC2034  # RMANY/RSHORTMAP/RGRPMAP/RHEADS/RNREPO are caller-facing OUTPUT globals
 fleet_dash_repo_frame() {
-  local sess="${1:-}" shorts r s sh all=''
+  local sess="${1:-}" shorts r s sh all='' hosted=0
   RMANY=0; RSHORTMAP=$'\n'; RGRPMAP=$'\n'; RHEADS=''; RNREPO=0
   if [ ! -d "$FLEET_CONF_DIR/fleets/${sess:-_}/repos" ]; then
     [ "${FLEET_SHELL:-0}" = 1 ] && [ -n "$sess" ] || return 0
     shorts=$(fleet_hub_repo_shorts "$FLEET_C/global/remote_$sess")
+    [ -s "$FLEET_C/global/hub_repos" ] \
+      && hosted=$(awk '/^[^#\/ ]+\/[^\/ ]+$/ { n++ } END { print n + 0 }' "$FLEET_C/global/hub_repos")
   else
     shorts=$(fleet_repo_shorts "$sess")
   fi
-  case "$shorts" in *$'\n'*) ;; *) return 0 ;; esac          # one repo: nothing to filter
+  case "$shorts" in
+    *$'\n'*) ;;
+    ?*) [ "$hosted" -ge 2 ] || return 0 ;;                    # one repo: nothing to filter
+    *) return 0 ;;
+  esac
   RMANY=1
   while IFS=$'\t' read -r r s sh; do [ -n "$r" ] && all+=$'\t'"${r##*/}"$'\t'; done <<EOF
 $shorts
@@ -2148,12 +2159,19 @@ fleet_path_fill() {
 }
 
 # fleet_find_tool <claude|tmux> — the binary to run: $FLEET_CLAUDE_BIN /
-# $FLEET_TMUX_BIN when it is executable, else the bare name when PATH (or a
+# $FLEET_TMUX_BIN (unset: the install line's static tmux,
+# ~/.local/share/claude-fleet-vendor/bin/tmux, when there is one — #2260) when it is executable, else the bare name when PATH (or a
 # function) answers — byte for byte the old `exec claude` — else the first
 # FLEET_TOOL_DIRS hit. rc 1 + one stderr line naming every place tried.
 fleet_find_tool() {
   local name="$1" pin='' dir tried=''
-  case "$name" in claude) pin=${FLEET_CLAUDE_BIN:-} ;; tmux) pin=${FLEET_TMUX_BIN:-} ;; esac
+  case "$name" in
+    claude) pin=${FLEET_CLAUDE_BIN:-} ;;
+    # no pin: the static tmux the install line put here (#2260), when it did
+    tmux) pin=${FLEET_TMUX_BIN:-}
+      [ -n "$pin" ] || [ ! -x "${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet-vendor/bin/tmux" ] \
+        || pin="${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet-vendor/bin/tmux" ;;
+  esac
   if [ -n "$pin" ]; then
     [ -x "$pin" ] && { printf '%s\n' "$pin"; return 0; }
     tried="$pin "

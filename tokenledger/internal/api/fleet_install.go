@@ -106,6 +106,10 @@ func (s *Server) handleInstallFile(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusServiceUnavailable, "this hub was built without its client — pack it (bin/fleet-client-pack.sh) and rebuild")
 		return
 	}
+	if name == bundleName {
+		s.handleImageBundle(w, r)
+		return
+	}
 	if !fleetclient.Serves(name) {
 		http.NotFound(w, r)
 		return

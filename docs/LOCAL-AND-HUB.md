@@ -58,23 +58,26 @@ curl -fsSL <入口>/install | sh
 
 没有入口时，同一个文件从 GitHub 的 `stable` 取
 （`curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh`），
-只差入口预填的地址。装的时候从终端（`/dev/tty`，`curl | sh` 也能问）问两件事：
+只差入口预填的地址。**什么都不问**（issue #2260）：粘贴、回车，几秒后就是 `fleet`。
 
-1. **这台电脑要做什么？** `1 只看、只派`（推荐，回车）· `2 也跑会话（承载）`——选 2
-   再列出要多装的（git、tmux、后台程序）确认一次。
-2. **接入口吗？** `1 接`（命令是从入口复制来的、或 `fleet.conf` 里已有地址时是默认）·
-   `2 不接（单机）`。
-
+- **承载默认不开**：`--host`（或 `FLEET_INSTALL_HOST=1`）才装跑会话的那部分；这台原来就承载的照旧。
+  以后要开：`fleet host on`。
+- **入口**：有地址就接——入口预填的那个，没有就用 `fleet.conf` 里原有的；都没有（GitHub 那份）
+  就是单机。`FLEET_INSTALL_HUB=0`（`--no-hub`）强制单机，`FLEET_HUB_URL` 预填地址。
+- **一次下载**：接入口时整个客户端是一个包（`<入口>/install/bundle.tar.gz`，带 SHA-256），
+  包不对或旧入口没有就退回逐个文件。
+- **tmux 不用 Homebrew**：没有 tmux ≥ 3.2 时，用 tmux 官方的静态版（入口的包里带着，
+  否则按 `conf/vendor-tmux.lock` 下载并校验），放在 `~/.local/share/claude-fleet-vendor/bin`，
+  `fleet` 优先用它；没有对应平台再走 Homebrew / apt。
+- **新电脑**（没有 `~/.config/claude-fleet`）在 `fleet.conf` 的 `[client]` 写
+  `FLEET_CLIENT_LAYOUT=solo`（单会话视图）；装过的电脑一个字不改。
+- **邀请**：入口 `/i/<码>` 发的那份安装命令带着邀请码，存到 `~/.config/claude-fleet/invite`
+  （0600），第一次登录时交给入口。
 - **一个目录**：都装在 `~/.claude/fleet`。只看只派 = 客户端清单
   （`tokenledger/internal/api/fleetclient/manifest`）那部分，不要 git；承载 = 同一个目录
   原地换成跟 `stable` 的 git 检出、跑新登录的设置（`bin/fleet-host-install.sh`，
   `fleet host on` 走的也是它）。已是完整安装的目录一个文件都不重下。
-- **再跑一次 = 改答案**：回车默认是这台上次的答案，所以再跑零改动；改选 2 只多装承载那部分。
-  安装从不拆东西——关承载用 `fleet host off`。也可以不跑安装：`fleet host on`。
-- **没有终端可问**（自动化、CI）：按默认只装基础，打印一行
-  「要承载：再跑一次本命令，或 fleet host on」。自动化用环境变量预填答案：
-  `FLEET_INSTALL_HOST=0|1`、`FLEET_INSTALL_HUB=0|1`（地址 `FLEET_HUB_URL`）。
-  旧的 `--host` / `--no-hub` 再认一个版本，作预填答案的别名。
+- **再跑一次零改动**，安装从不拆东西——关承载用 `fleet host off`。
 - **两套并存的旧机器**：`~/.local/share/claude-fleet`（旧客户端目录）改成指向
   `~/.claude/fleet` 的符号链接（薄壳，一个版本后删），里面的旧文件在没有程序还从那里跑时删掉；
   正在跑的客户端不断。

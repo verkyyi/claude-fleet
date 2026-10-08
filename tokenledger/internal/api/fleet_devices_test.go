@@ -554,7 +554,9 @@ func TestFleetClientMatchesBin(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && !listed[p] && p != fleetclient.PackPlaceholder {
+		// vendor/ is the packed static tmux (#2260): a build input of its own,
+		// pinned by conf/vendor-tmux.lock, served only inside the bundle
+		if !d.IsDir() && !listed[p] && p != fleetclient.PackPlaceholder && !strings.HasPrefix(p, "vendor/") {
 			t.Errorf("pack/%s is embedded but not in the manifest — run bin/fleet-client-pack.sh", p)
 		}
 		return nil

@@ -10,6 +10,7 @@
 #   fleet-conf.sh line <KEY>             print KEY's assignment line(s) as written (exit 1 = none)
 #   fleet-conf.sh set-line <KEY> <line>  put <line> where KEY's line is, else under [common] (#2134)
 #   fleet-conf.sh drop-line <KEY>        delete KEY's assignment line(s) — the undo of a set-line that added one
+#   fleet-conf.sh set-client <KEY> <line> put <line> where KEY's line is in [client], else first in it (#2260)
 #   fleet-conf.sh role [--why] · add-role client|node · set-hub … --role client|node — the
 #                                        FLEET_ROLE spellings, read for ONE more version (issue #1806)
 #
@@ -59,7 +60,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 FLEET_SKIP_GLOBAL_CONF=1 . "$BIN/fleet-lib.sh"
 
 die()   { echo "fleet-conf: $*" >&2; exit 1; }
-usage() { sed -n '4,13p' "$0" | sed 's/^# //' >&2; exit 2; }
+usage() { sed -n '4,14p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 CD="$FLEET_CONF_DIR"
 MC="$CD/fleet.conf"
@@ -286,6 +287,25 @@ _set_common() {
     { print }
     /^# ---- \[common\] ----$/ && !done { print line; done = 1; put = 1 }
     END { if (!done && !put) print line }
+  ' "$f" > "$tmp" && { chmod "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f")" "$tmp" 2>/dev/null; mv -f "$tmp" "$f"; } \
+    || { rm -f "$tmp"; return 1; }
+}
+
+# _set_client <file> <KEY> <assignment-line> — replace KEY's line inside the
+# [client] guard, else add it first inside it (a file with no guard gets one at
+# its end). Atomic, mode kept — FLEET_CLIENT_LAYOUT (#2260) is the shell's only.
+_set_client() {
+  local f="$1" key="$2" line="$3" tmp="$1.tmp.$$" had=0
+  awk -v key="$key" -v open="$CLIENT_OPEN" 'BEGIN { re = "^[[:space:]]*(export[[:space:]]+)?" key "=" }
+    $0 == open { inside = 1; next } inside && /^fi  # ---- \[client\] end/ { inside = 0 }
+    inside && $0 ~ re { found = 1 } END { exit found ? 0 : 1 }' "$f" && had=1
+  awk -v key="$key" -v line="$line" -v open="$CLIENT_OPEN" -v cclose="$CLIENT_CLOSE" -v had="$had" '
+    BEGIN { re = "^[[:space:]]*(export[[:space:]]+)?" key "=" }
+    $0 == open { print; inside = 1; seen = 1; if (!had) { print line; put = 1 }; next }
+    inside && $0 == cclose { inside = 0 }
+    inside && $0 ~ re { if (!put) print line; put = 1; next }
+    { print }
+    END { if (!seen) { print ""; print open; print line; print cclose } }
   ' "$f" > "$tmp" && { chmod "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f")" "$tmp" 2>/dev/null; mv -f "$tmp" "$f"; } \
     || { rm -f "$tmp"; return 1; }
 }
@@ -743,6 +763,11 @@ case "$cmd" in
     [ $# -ge 2 ] || usage
     [ -f "$MC" ] || die "no $MC (fleet-conf.sh migrate makes one)"
     _set_common "$MC" "$k" "$2" || die "cannot write $MC" ;;
+  set-client)
+    k="${1:-}"; case "$k" in ''|*[!A-Za-z0-9_]*) usage ;; esac
+    [ $# -ge 2 ] || usage
+    _ensure_file 0 || die "cannot write $MC"
+    _set_client "$MC" "$k" "$2" || die "cannot write $MC" ;;
   drop-line)
     k="${1:-}"; case "$k" in ''|*[!A-Za-z0-9_]*) usage ;; esac
     [ -f "$MC" ] || exit 0
