@@ -19,6 +19,20 @@ Separated, a **role account** owns all of it:
 | `node.env` | `~/.config/claude-fleet/node.env` (0600) | a symlink into the store; token-less copy in `node.pub.env` |
 | credential proxy | runs as the login (C3) | runs as `_fleetcred` (Linux: `fleetcred`) |
 | node agent | runs as the login, token from `node.env` | started by root, token down a pipe (fd 3), runs as the login |
+| node agent's log | `~/.ccquota/agent.log` | `/var/log/fleet-cred/<login>/agent.log` (dir `root:wheel 0700`) |
+
+**The agent's log leaves the home** (issue #2296). Once the agent is started by
+root, launchd opens its `StandardOutPath` (systemd its `StandardOutput=append:`)
+*as root* and follows a symlink — a log left in `~/.ccquota/` would let the login
+`ln -sf /etc/sudoers ~/.ccquota/agent.log` and have root append to any file. So
+install points it at `/var/log/fleet-cred/<login>/agent.log`; reading it takes
+`sudo` (`sudo tail /var/log/fleet-cred/<login>/agent.log`). A login separated
+before #2296 is moved by the next `install` / `apply` / `machine refresh`, or by
+an admin at once: `sudo bash ~/.claude/fleet/bin/fleet-credsep.sh check --fix
+--login <login>`. The doctor's `rootlog` row (`fleet-credsep.sh rootlogs`) scans
+`/Library/LaunchDaemons` (Linux `/etc/systemd/system`) and WARNs on any service
+run as root whose log lies in a home — the fleet's own with that fix line, any
+other as "not the fleet's".
 
 `/var/db/fleet-cred/<login>/` is `0700 _fleetcred`. A session doing
 `ls /var/db/fleet-cred/<login>` or `cat ~/.config/claude-fleet/node.env` gets
