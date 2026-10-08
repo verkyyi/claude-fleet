@@ -80,7 +80,7 @@ ok "every key the code asks for exists ($(printf '%s\n' "$used" | wc -l | tr -d 
 # dump: what fleet-sidebar.py reads — KEY NUL TEXT NUL, a printf argument a \001 slot
 d=$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" dump sidebar_new_to no_repo | tr '\0\001' '|@')
 eq 'dump slots' "$d" 'no_repo|无仓库|sidebar_new_to_fmt|新会话 → @…|'
-eq 'menu letters come from the table' "$(FLEET_UI_LANG=en bash "$BIN/fleet-sidebar-menu.sh" --keys | cut -f1 | tr -d '\n')" 'rtpaswklvxn1-9oigemqcb'
+eq 'menu letters come from the table' "$(FLEET_UI_LANG=en bash "$BIN/fleet-sidebar-menu.sh" --keys | cut -f1 | tr -d '\n')" 'rtpaswklvxn1-9ogemqcb'
 eq 'pinned lookup' "$(FLEET_UI_LANG=en bash -c '. "$1"; fleet_ui_pin; FLEET_UI_LANG=zh; fleet_ui_t ui_close' _ "$table")" 'Esc close'
 
 printf 'selftest OK: %s assertions passed (FLEET_UI_LANG)\n' "$pass"

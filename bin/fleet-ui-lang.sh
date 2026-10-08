@@ -268,16 +268,10 @@ fleet_ui_t() {
     en:sidebar_here)            printf 'here' ;;
     zh:sidebar_cfg_stale)       printf '配置旧' ;;
     en:sidebar_cfg_stale)       printf 'old cfg' ;;
-    zh:sidebar_cfg_stale_narrow) printf '旧' ;;
-    en:sidebar_cfg_stale_narrow) printf 'old' ;;
     zh:sidebar_cfg_renew)       printf '待换新' ;;
     en:sidebar_cfg_renew)       printf 'renew' ;;
-    zh:sidebar_cfg_renew_narrow) printf '换' ;;
-    en:sidebar_cfg_renew_narrow) printf 'rn' ;;
     zh:sidebar_cfg_broken)      printf '会坏·需重开' ;;
     en:sidebar_cfg_broken)      printf 'breaks·reopen' ;;
-    zh:sidebar_cfg_broken_narrow) printf '坏' ;;
-    en:sidebar_cfg_broken_narrow) printf 'brk' ;;
     zh:sidebar_epic_stale)      printf '没人在跑' ;;
     en:sidebar_epic_stale)      printf 'not driven' ;;
     zh:sidebar_epic_stale_detail_fmt) printf '心跳 %s 分钟前停了 · 再点一下重开驱动会话' "${1:-}" ;;
@@ -491,7 +485,6 @@ reap	x	回收 — 先确认 y/n（别机行：经入口让那台机器回收）
 new	n	新任务 — 在输入行写标题（多仓库 Tab 换仓库），↵ 建 issue 并启动 worker
 newto	1-9	新建到 <机器>… — 入口在线的别的机器各一项：建 issue，worker 开在那台机器上
 restore	o	已落地 — 任务栏就地换成已落地列表，点一行恢复（再选一次回到运行中）
-info	i	详情列 — 任务栏右边显示 issue · PR · ctx%（再选一次收起）
 repo	g	添加仓库到这个 fleet — 在输入行写 owner/name；~/projects/<name>，缺失时 clone（hub ⌃z）
 open	e	进入 — 打开代理窗口（只有另一台机器上的行有；菜单标题写着「· m4」）
 message	m	发消息… — 只有别机行有：在输入行写，经入口送到那台机器的 issue 桥，作为它的下一轮
@@ -512,7 +505,6 @@ reap	x	reap it — asks y/n first (a row on another machine: through the hub, th
 new	n	new task — its title on the input line (Tab picks the repo in a 2+ repo fleet), ↵ files the issue AND spawns its worker
 newto	1-9	new task on <machine>… — one per other machine the hub says is online: file the issue, open the worker there
 restore	o	landed — the sidebar shows the landed list in place; tap a row to restore it (again: back to the running list)
-info	i	detail column — issue · PR · ctx% on the right of the sidebar (again to fold it)
 repo	g	add a repo to this fleet — owner/name on the input line; ~/projects/<name>, cloned if missing (the hub ⌃z)
 open	e	enter — open the proxy window (a row on another machine only; the menu title says · m4)
 message	m	message… — a row on another machine only: typed on the input line, through the hub to the issue bridge on that machine, as its next turn
@@ -592,32 +584,18 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     # the row's reap-policy word (issue #1902), left of the @ mark; _narrow when tight
     zh:sidebar_reap_merged)     printf '合并后回收' ;;
     en:sidebar_reap_merged)     printf 'after merge' ;;
-    zh:sidebar_reap_merged_narrow) printf '合并收' ;;
-    en:sidebar_reap_merged_narrow) printf 'merge' ;;
     zh:sidebar_reap_merged_for) printf '合并后留 %s' "${1:-}" ;;
     en:sidebar_reap_merged_for) printf 'merge+%s' "${1:-}" ;;
-    zh:sidebar_reap_merged_for_narrow) printf '留%s' "${1:-}" ;;
-    en:sidebar_reap_merged_for_narrow) printf '+%s' "${1:-}" ;;
     zh:sidebar_reap_done)       printf '做完就回收' ;;
     en:sidebar_reap_done)       printf 'when done' ;;
-    zh:sidebar_reap_done_narrow) printf '做完收' ;;
-    en:sidebar_reap_done_narrow) printf 'done' ;;
     zh:sidebar_reap_done_for)   printf '做完闲 %s' "${1:-}" ;;
     en:sidebar_reap_done_for)   printf 'done+%s' "${1:-}" ;;
-    zh:sidebar_reap_done_for_narrow) printf '闲%s' "${1:-}" ;;
-    en:sidebar_reap_done_for_narrow) printf 'idle%s' "${1:-}" ;;
     zh:sidebar_reap_loop_end)   printf '循环停了回收' ;;
     en:sidebar_reap_loop_end)   printf 'after loop' ;;
-    zh:sidebar_reap_loop_end_narrow) printf '循环收' ;;
-    en:sidebar_reap_loop_end_narrow) printf 'loop' ;;
     zh:sidebar_reap_at)         printf '到点 %s' "${1:-}" ;;
     en:sidebar_reap_at)         printf 'at %s' "${1:-}" ;;
-    zh:sidebar_reap_at_narrow)  printf '%s' "${1:-}" ;;
-    en:sidebar_reap_at_narrow)  printf '%s' "${1:-}" ;;
     zh:sidebar_reap_keep)       printf '常驻' ;;
     en:sidebar_reap_keep)       printf 'keep' ;;
-    zh:sidebar_reap_keep_narrow) printf '常驻' ;;
-    en:sidebar_reap_keep_narrow) printf 'keep' ;;
     # the five choices of 「什么时候回收？」 (issue #1902): `label<TAB>note`
     zh:sidebar_place_reap_merged) printf '合并后回收\tPR 合并 10 分钟后' ;;
     en:sidebar_place_reap_merged) printf 'After merge\t10 min after the PR merges' ;;
@@ -673,8 +651,6 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:menu_orch_none)          printf 'Go to the orchestrator · none on this machine' ;;
     zh:menu_restore)            printf '恢复已收工…' ;;
     en:menu_restore)            printf 'Restore finished task…' ;;
-    zh:menu_info)               printf '详情列（issue · PR · ctx%%）' ;;
-    en:menu_info)               printf 'Detail column (issue · PR · ctx%%)' ;;
     zh:menu_repo)               printf '＋ 仓库…' ;;
     en:menu_repo)               printf 'Add repo…' ;;
     # --- the key sheet (fleet-keys.sh): its frame, then one entry per row

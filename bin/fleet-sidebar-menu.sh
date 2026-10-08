@@ -245,11 +245,11 @@ show() {
 }
 PRINT=''; [ "${4:-}" = --print ] && PRINT=1
 
-# add_views <restore kind> — the list's two views (issue #1952): the landed list
-# (`landed` on a node's list, `view` in the shell's) and the detail column.
+# add_views <restore kind> — the list's other view (issue #1952): the landed list
+# (`landed` on a node's list, `view` in the shell's). The detail column left with
+# issue #2305 — the bar says the highlighted row's issue · PR · ctx%.
 add_views() {
   adda "$(t menu_restore)" "$(mk restore)" "$(ask "$1")"
-  adda "$(t menu_info)" "$(mk info)" "$(ask info)"
 }
 
 # The row-less items, the same at the bottom of both menus.
@@ -342,7 +342,7 @@ if [ -n "$remote" ]; then
     group
     add_other
   else
-    # 已落地 · 详情列 (issue #1952): the list's own views, as verbs on its line —
+    # 已落地 (issue #1952): the list's own view, as a verb on its line —
     # the shell's landed list is the machines' ledger (fleet-sidebar.py `act`)
     group
     add_views view

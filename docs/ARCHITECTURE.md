@@ -322,10 +322,10 @@ focused, polled like a typed name); ⌃t swaps the running rows for the landed o
 `fleet-history.sh rows`, re-read on the switch, on ⌃r and every 10 s while shown
 — and ↵ on one runs `fleet-restore-pick.sh --select` (a popup only for a
 `landed:issue:` row, which may ask the #543 question), then puts the running
-list back; ⌃r re-reads the shown list now; ⌃i (Tab) opens the info column, the
-producer's fields 10-12 (issue · PR · ctx%, the hub's cells) right-aligned,
-widening the view within `FLEET_SIDEBAR_WIDTH_MAX`. Folded by default — the
-names get the width. ⌃s is XOFF to a tty with IXON on and ⌃t BSD's VSTATUS, so
+list back; ⌃r re-reads the shown list now. (The ⌃i info column left with
+issue #2305: a row is state · name · an EPIC's N/N, and the producer's fields
+10-12 — issue · PR · ctx% — ride the client's bar with the machine and the reap
+policy, for the highlighted row.) ⌃s is XOFF to a tty with IXON on and ⌃t BSD's VSTATUS, so
 the view switches both off with VDISCARD. Chords, not the letters `t` / `i`:
 every letter types into the input line.
 

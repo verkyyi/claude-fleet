@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# sidebar-machine-tag-selftest.sh — every session row says which machine it runs
-# on (issue #1780, EPIC #1776 C4). Drives bin/fleet-sidebar.py's own layout
-# (row_layout / machine_tag / tag_pair) and bin/tmux-dashboard-rows.sh's node row:
-#   A. three kinds   — another machine `@m4` dim · this computer `@本机` magenta ·
-#                      a lost machine `@m4!` dim (and the row dims) · `@m5~` heard
-#                      over the shell's own connection
-#   B. 40 cells      — the name keeps >= 18 cells beside the mark, badge or not;
-#                      narrower, the mark is `@` + its first letter
-#   C. degenerate    — field 9 empty (a node's own row): no mark, the row is
-#                      byte for byte row_text as before
+# sidebar-machine-tag-selftest.sh — every session says which machine it runs on
+# (issue #1780, EPIC #1776 C4) — in the client's bar, for the highlighted row,
+# since issue #2305 moved it off the row. Drives bin/fleet-sidebar.py's own
+# functions (machine_tag / detail_line / row_glyph / row_text) and
+# bin/fleet-remote-view.sh's proxy title:
+#   A. three kinds   — another machine `@m4` · this computer `@本机` · a lost
+#                      machine `@m4!` · `@m5~` heard over the shell's own
+#                      connection — each in the bar's detail line
+#   B. the row       — state · name · N/N only: no mark at any width, row_need
+#                      asks nothing for it; a lost machine's row takes `⊘` as
+#                      its state glyph
+#   C. degenerate    — field 9 empty (a node's own row): no mark in the bar
 #   D. English       — `@here`
 #   E. proxy title   — fleet-remote-view.sh titles a proxy `<name> · @m4`
 #                      (`@本机` on this computer), never `m4 <name>`
@@ -33,62 +35,33 @@ def check(cond, what):
 w = lambda t: sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t)
 
 if lang == "zh":
-    # A. the three kinds of row (+ the via mark)
+    # A. the three kinds of machine (+ the via mark), and where they show: the bar
     check(m.machine_tag("m4") == "@m4", "A: another machine → @m4")
     check(m.machine_tag("MacBook") == "@本机", "A: this computer (its alias) → @本机")
     check(m.machine_tag("macbookpro") == "@本机", "A: this computer (its hostname, any case) → @本机")
     check(m.machine_tag("m4!") == "@m4!", "A: a lost machine → @m4!")
     check(m.machine_tag("m5~") == "@m5~", "A: heard over the shell's connection → @m5~")
-    check(m.tag_pair("m4") == m.PAIR_DIM, "A: @m4 is dim grey")
-    check(m.tag_pair("MacBook") == m.PAIR_HERE, "A: @本机 is its own colour")
-    check(m.PAIRS[m.PAIR_HERE][0] == "PAL_MAGENTA", "A: …magenta (the palette's)")
-    check(m.tag_pair("m4!") == m.PAIR_DIM, "A: @m4! is dim")
-    check(m.tag_pair("MacBook!") == m.PAIR_DIM, "A: this computer lost → dim, not magenta")
-    check(m.tag_pair("MacBook", raised=True) == m.PAIR_HERE + m.SEL_GLYPH
-          and m.PAIRS[m.PAIR_HERE + m.SEL_GLYPH] == ("PAL_MAGENTA", "PAL_SEL"), "A: raised @本机 keeps the row's ground")
-    check(m.tag_pair("m4", raised=True) == m.PAIR_DIM_SEL
-          and m.PAIRS[m.PAIR_DIM_SEL] == ("PAL_DIM", "PAL_SEL"), "A: raised @m4 keeps the row's ground")
-    check(len(set(m.PAIRS)) == len(m.PAIRS) and m.PAIR_DIM_SEL not in (m.PAIR_HERE + m.SEL_GLYPH,)
-          and all(p + m.SEL_GLYPH not in (m.PAIR_DIM_SEL, m.PAIR_HERE + m.SEL_GLYPH) for p in m.STATE_PAIR.values()),
-          "A: the mark's pairs collide with no other pair")
-    # the row's end: the mark sits in the last cells, the name before it
-    text, tag = m.row_layout(" ", "●", " ", "issue-1780", "", 39, "", "m4")
-    check(tag == "@m4" and w(text) <= 39 - 4, "A: the row leaves the mark its cells: %r %r" % (text, tag))
-    text, tag = m.row_layout(" ", "●", " ", "issue-1780", "2/3", 39, "", "MacBook")
-    check(tag == "@本机" and text.endswith("· 2/3") and w(text) == 39 - w("@本机") - 1,
-          "A: the badge keeps its place left of the mark: %r" % text)
+    row = m.row_fields("\x1f".join(("wid:x/issue-1", "working", "●", "issue-1", " ", "", "0", "", "m4", "#1")))
+    check(m.detail_line(row) == "issue-1 · #1 · @m4", "A: the bar names the machine: %r" % m.detail_line(row))
+    here = row[:8] + ["MacBook"] + row[9:]
+    check("@本机" in m.detail_line(here), "A: …@本机 for this computer's own: %r" % m.detail_line(here))
 
-    # B. a 40-cell sidebar (39 drawable cells): the name keeps >= 18
+    # B. the row never carries the mark (issue #2305), at any width
     left = w(m.row_left(" ", "●", "└", ""))
     for badge in ("", "2/3", "12/13"):
-        for node in ("m4", "MacBook", "m4!", "m5~"):
-            name = "x" * 60
-            text, tag = m.row_layout(" ", "●", "└", name, badge, 39, "", node)
-            right = m.row_right(badge)
-            room = w(text) - left - (w(right) + 1 if right else 0)
-            check(tag and room >= m.NAME_MIN - 1 and w(text) + w(tag) + 1 <= 39,
-                  "B: 40 cells, badge %r, %s: name column %d (>= 18 with its …), mark %r"
-                  % (badge, node, room + 1, tag))
-    check(m.NAME_MIN == 18, "B: the floor is 18 cells")
-    # narrower: the mark gives way to `@` + its first letter, never the name's floor
-    text, tag = m.row_layout(" ", "●", "└", "x" * 60, "2/3", 30, "", "m4")
-    check(tag == "@m", "B: 30 cells with a badge → @m (%r)" % tag)
-    text, tag = m.row_layout(" ", "●", "└", "x" * 60, "2/3", 30, "", "m4!")
-    check(tag == "@m!", "B: …a lost one keeps its ! (%r)" % tag)
-    text, tag = m.row_layout(" ", "●", "└", "x" * 60, "", 28, "", "MacBook")
-    check(tag == "@本", "B: 28 cells, this computer → @本 (%r)" % tag)
-    check(m.row_layout(" ", "●", " ", "abc", "", 4, "", "m4")[1] == "", "B: no room at all → no mark")
-    # the auto width asks for the mark too
-    row = m.row_fields("\x1f".join(("wid:x/issue-1", "working", "●", "issue-1", " ", "", "0", "", "m4")))
+        for width in (28, 30, 39):
+            text = m.row_text(" ", "●", "└", "x" * 60, badge, width)
+            check("@" not in text and w(text) <= width and (not badge or text.endswith("· " + badge)),
+                  "B: %d cells, badge %r: name + badge only: %r" % (width, badge, text))
+    lost = row[:8] + ["m4!"] + row[9:]
+    check(m.row_glyph(lost) == (m.LOST_GLYPH, "lost") and m.LOST_GLYPH == "⊘",
+          "B: a lost machine's row says so in its state glyph: %r" % (m.row_glyph(lost),))
+    check(m.row_glyph(row) == ("●", ""), "B: …a live one keeps its own glyph")
     bare = row[:8] + [""] * 4
-    check(m.row_need(row) == m.row_need(bare) + 4, "B: row_need adds `@m4` + a gap")
+    check(m.row_need(row) == m.row_need(bare), "B: row_need asks no cells for the machine")
 
-    # C. degenerate: no machine field → no mark, row_text byte for byte
-    for badge in ("", "1/2"):
-        text, tag = m.row_layout("▶", "●", " ", "issue-7", badge, 29, "", "")
-        check(tag == "" and text == m.row_text("▶", "●", " ", "issue-7", badge, 29),
-              "C: an empty field 9 draws exactly the old row (badge %r)" % badge)
-    check(m.machine_tag("") == "" and m.tag_need("") == 0, "C: no machine, no mark, no cells")
+    # C. degenerate: no machine field → nothing to name
+    check(m.machine_tag("") == "" and "@" not in m.detail_line(bare), "C: no machine, no mark in the bar")
 else:
     # D. English
     check(m.machine_tag("MacBook") == "@here", "D: English → @here")

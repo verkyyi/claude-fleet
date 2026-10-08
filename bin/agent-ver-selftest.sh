@@ -182,25 +182,18 @@ eq "D: a remote row takes its machine's verdict — renew" renew "$(f13 "$(side)
 rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
 
 # ============================================================================
-# E. sidebar — 待换新 where 配置旧 goes
+# E. sidebar — 待换新 where 配置旧 goes: the bar (issue #2305)
 # ============================================================================
 out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="macmini=m5 mini2=m4" \
   python3 - "$BIN/fleet-sidebar.py" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-w = m.width_of
-t, g = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "m4", "renew")
-assert g == "待换新 @m4", g
-assert m.cfg_part(g, "renew") == "待换新" and m.cfg_part(g, "stale") == ""
-assert w(t) + w(g) + 1 <= 44, (t, g)
-t, g = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "", "renew")
-assert g == "待换新", g
-t, g = m.row_layout(" ", "✓", " ", "worker-one", "", 28, "", "m4", "renew")
-assert m.cfg_part(g, "renew") in ("换", ""), g
 row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "m4", "", "", ""]
-assert m.row_need(row + ["renew"]) == m.row_need(row) + w("待换新") + 1
-t2, g2 = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "m4", "stale")
-assert g2 == "配置旧 @m4", g2
+assert m.cfg_tag("renew") == "待换新", m.cfg_tag("renew")
+assert m.detail_line(row + ["renew"]) == "worker-one · @m4 · 待换新", m.detail_line(row + ["renew"])
+assert m.detail_line(row[:8] + [""] + row[9:] + ["renew"]) == "worker-one · 待换新"
+assert m.detail_line(row + ["stale"]).endswith("· 配置旧")
+assert m.row_glyph(row + ["renew"]) == ("✓", "") and m.row_need(row + ["renew"]) == m.row_need(row)
 print("ok")
 PY
 )
