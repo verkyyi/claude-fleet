@@ -248,9 +248,6 @@ try:
     print('B: two codes in one write are two steps')
     # ⌘J and ⌘/ went with issue #2362: an iTerm2 profile written before still
     # sends their codes — caught, and nothing happens (no step, no popup)
-    tm('set-option', '-w', '-t', W['one'], '@claude_state', 'needs')
-    tm('set-option', '-w', '-t', W['one'], '@claude_needs', 'ask')
-    time.sleep(1.5)  # the list's next read carries the needs row
     was = current()
     os.write(master, b'\x1b[924~\x1b[926~')
     time.sleep(1.5)
@@ -264,7 +261,7 @@ try:
     # ⌘↓ with the session zoomed (the list hidden): still a step
     os.write(master, b'\x1b[925~')
     check(wait(lambda: tm('display-message', '-p', '#{window_zoomed_flag}') == '1', 3), '⌘↩ did not zoom (2)')
-    press(920, 'two', '⌘↓ while zoomed')
+    press(920, 'four', '⌘↓ while zoomed')   # still on «three»: the retired ⌘J moved nothing
     print('B: the retired ⌘J / ⌘/ codes do nothing; ⌘↩ zooms and restores; ⌘↓ from a zoomed session unzooms and steps')
     # the rows ⌘P reads, and the popup itself: 「thr」 ↵
     rows = state / 'switch-rows.tsv'

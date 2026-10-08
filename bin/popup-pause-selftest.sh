@@ -136,10 +136,11 @@ tmux new-session -d -s t -x 200 -y 50 </dev/null >/dev/null 2>&1 \
 # --- PRODUCER (live): the conf parses AND registers the flagged binds ---------
 tmux source-file "$CONF" 2>"$WORK/src.err" \
   || { printf '%s\n' "$(cat "$WORK/src.err" 2>/dev/null)" >&2; fail "conf/tmux-attention.conf failed to source (syntax error in the popup-bind wrap)"; }
-sed -e "s#__BIN__#$BIN#g" -e 's#__PREFIX__#C-b#g' "$SHELLC" | grep -E '^bind \? ' > "$WORK/shell-pop.conf"
-tmux source-file "$WORK/shell-pop.conf" || fail "the client's prefix ? bind failed to source"
-tmux list-keys -T prefix 2>/dev/null | grep -F -- " ? " | grep -q 'dash-popup.sh --client' \
-  || fail "the client's prefix '?' does not open through dash-popup.sh (which stamps @popup_open, issue #431/#1535) after sourcing"
+# prefix / (⌘P's quick open): the client's prefix ? sheet went with issue #2362
+sed -e "s#__BIN__#$BIN#g" -e 's#__PREFIX__#C-b#g' "$SHELLC" | grep -E '^bind / ' > "$WORK/shell-pop.conf"
+tmux source-file "$WORK/shell-pop.conf" || fail "the client's prefix / bind failed to source"
+tmux list-keys -T prefix 2>/dev/null | grep -F -- " / " | grep -q 'dash-popup.sh --client' \
+  || fail "the client's prefix '/' does not open through dash-popup.sh (which stamps @popup_open, issue #431/#1535) after sourcing"
 # The footer no longer opens a popup: the usage-stat click range went with the
 # stat (issue #1100) and the modal is `prefix u`, stamped in the loop above.
 
