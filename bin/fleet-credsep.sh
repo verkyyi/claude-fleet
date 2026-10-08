@@ -7,6 +7,10 @@
 #   fleet-credsep.sh install [--dry-run|--force]
 #                                           separate (needs `sudo -n`, once;
 #                                           --dry-run needs none: what it would do)
+#   fleet-credsep.sh install --adopt        root takes the login's upstream / hub
+#                                           settings into root's <LIB>/<login>.conf
+#                                           (the only place the proxy reads them,
+#                                           issue #2290) and restarts the proxy
 #   fleet-credsep.sh uninstall [--dry-run]  undo: every file back where it was
 #                                           (--dry-run, no sudo: the steps back)
 #   fleet-credsep.sh status [--json]        separated or not (exit 3 = not)

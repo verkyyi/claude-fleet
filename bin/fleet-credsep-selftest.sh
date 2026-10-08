@@ -29,6 +29,10 @@
 #      carries --login, a `sudo -u` line carries that login's HOME
 #   K  a login name may start with a digit (issue #2257): `machine install
 #      --dry-run --logins 24haowan` passes; `Bad Name` / `-x` are still exit 2
+#   L  root's settings (issue #2290): an upstream URL / FLEET_HUB_URL in the
+#      login's fleet.conf is ignored (said on stderr + ignored.<login>), the
+#      request goes to root's upstream; install --adopt takes only an https URL
+#      to an allowed host, never FLEET_CRED_ALLOW_HOSTS
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "/tmp/credsep-st.XXXXXX")
@@ -37,7 +41,7 @@ cleanup() {
   kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null
   [ -n "${LPID:-}" ] && kill "$LPID" 2>/dev/null
   [ -n "${P2:-}" ] && kill "$P2" 2>/dev/null
-  kill "$(cat "$SB/fake.pid" 2>/dev/null)" 2>/dev/null
+  kill "$(cat "$SB/fake.pid" 2>/dev/null)" "$(cat "$SB/evil.pid" 2>/dev/null)" 2>/dev/null
   rm -rf "$SB"
 }
 trap cleanup EXIT
@@ -182,11 +186,14 @@ open(SB + "/fake.port", "w").write(str(s.server_address[1]))
 s.serve_forever()
 PY
 python3 "$SB/fake.py" "$SB" & echo $! > "$SB/fake.pid"
+mkdir -p "$SB/evil"; python3 "$SB/fake.py" "$SB/evil" & echo $! > "$SB/evil.pid"
 for _ in $(seq 1 300); do [ -s "$SB/fake.port" ] && break; sleep 0.1; done   # a slow runner: 30s
 FP=$(cat "$SB/fake.port" 2>/dev/null)
 [ -n "$FP" ] || { fail "C the fake far end never published its port"; }
 sed -i.bak "s#^CCQUOTA_HUB_URL=.*#CCQUOTA_HUB_URL=http://127.0.0.1:$FP#" "$R/node.env" && rm -f "$R/node.env.bak"
-printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\nFLEET_CRED_CODEX_URL=http://127.0.0.1:%s/codex\n' "$FP" "$FP" >> "$C/fleet.conf"
+# the upstreams come from root's settings only (issue #2290); install wrote the file
+[ -f "$SB/lib/$ME.conf" ] && pass "C install wrote root's settings $SB/lib/$ME.conf" || fail "C no root settings file"
+printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\nFLEET_CRED_CODEX_URL=http://127.0.0.1:%s/codex\n' "$FP" "$FP" >> "$SB/lib/$ME.conf"
 python3 -I "$BIN/fleet-credsep-launch.py" proxy "$ME" 2>"$SB/launch.err" &
 LPID=$!
 for _ in $(seq 1 300); do [ -S "$SB/run/$ME/ctl.sock" ] && [ -s "$SB/run/$ME/port" ] && break; sleep 0.1; done
@@ -299,6 +306,40 @@ for bad in 'Bad Name' '-x' 'a/b'; do
   out=$(FLEET_CREDSEP_PW="$SB/pw" bash "$BIN/fleet-credsep.sh" machine install --dry-run "--logins=$bad" 2>&1); rc=$?
   case "$rc:$out" in 2:*"bad login"*) pass "K '$bad' still refused (exit 2)" ;; *) fail "K '$bad' rc=$rc: $out" ;; esac
 done
+
+# ── L: the login's own files cannot move an upstream or the hub (issue #2290) ──
+for _ in $(seq 1 300); do [ -s "$SB/evil/fake.port" ] && break; sleep 0.1; done
+EP=$(cat "$SB/evil/fake.port" 2>/dev/null)
+cp "$R/node.env" "$SB/node.env.keep"
+grep -v '^CCQUOTA_HUB_URL=' "$SB/node.env.keep" > "$R/node.env"   # the hub would come from FLEET_HUB_URL
+printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\nFLEET_CRED_CODEX_URL=http://127.0.0.1:%s/codex\nFLEET_CRED_CENTRAL_URL=http://127.0.0.1:%s\nFLEET_HUB_URL=http://127.0.0.1:%s\nFLEET_CRED_PROXY_TIMEOUT=30\n' \
+  "$EP" "$EP" "$EP" "$EP" >> "$C/fleet.conf"
+kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null
+rm -f "$SB/run/$ME/port"
+python3 -I "$BIN/fleet-credsep-launch.py" proxy "$ME" 2>"$SB/launch.err" &
+LPID=$!
+for _ in $(seq 1 300); do [ -s "$SB/run/$ME/port" ] && break; sleep 0.1; done
+PORT=$(cat "$SB/run/$ME/port" 2>/dev/null)
+: > "$SB/fake.log"
+tok=$(bash "$BIN/fleet-cred-proxy.sh" mint --account main --sid s2 2>&1)
+curl -s --max-time 60 -o /dev/null -H "Authorization: Bearer $tok" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORT/v1/messages"
+[ -n "$EP" ] && [ ! -s "$SB/evil/fake.log" ] && grep -q 'POST /v1/messages' "$SB/fake.log" \
+  && pass "L a login-file upstream / FLEET_HUB_URL: never asked, root's upstream served it" \
+  || fail "L the login's listener saw: $(cat "$SB/evil/fake.log" 2>/dev/null) · root's: $(cat "$SB/fake.log") · $(cat "$SB/launch.err")"
+grep -q "ignored FLEET_CRED_ANTHROPIC_URL from $C/fleet.conf" "$SB/launch.err" && grep -q 'ignored FLEET_HUB_URL' "$SB/launch.err" \
+  && grep -q '^FLEET_HUB_URL ' "$SB/run/$ME/ignored.$ME" && ! grep -q 'PROXY_TIMEOUT\|127.0.0.1' "$SB/run/$ME/ignored.$ME" \
+  && pass "L the launcher says what it ignored (key names, no value) for credsep check" \
+  || fail "L ignored note: $(cat "$SB/launch.err" "$SB/run/$ME/ignored.$ME" 2>&1)"
+cp "$SB/node.env.keep" "$R/node.env"
+# install --adopt: root takes the login's values — an https URL to an allowed host only
+printf 'FLEET_HUB_URL=https://ccquota.24haowan.com\nFLEET_CRED_RELAY_URL=https://evil.example/relay\nFLEET_CRED_ALLOW_HOSTS=evil.example\n' > "$C/fleet.conf"
+out=$(bash "$BIN/fleet-credsep.sh" install --adopt 2>&1); rc=$?
+if [ "$rc" = 0 ] && grep -qx 'FLEET_HUB_URL=https://ccquota.24haowan.com' "$SB/lib/$ME.conf" \
+   && ! grep -q evil "$SB/lib/$ME.conf" && grep -q "^FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:$FP\$" "$SB/lib/$ME.conf"; then
+  pass "L install --adopt: the allowed hub taken, evil.example and ALLOW_HOSTS refused, root's other lines kept"
+else fail "L adopt rc=$rc: $out · $(cat "$SB/lib/$ME.conf")"; fi
+m=$(ls -l "$SB/lib/$ME.conf" | cut -c1-10)
+[ "$m" = -rw------- ] && pass "L root's settings 0600 (a relay pass may be in it)" || fail "L root conf mode $m"
 
 # ── G: uninstall ───────────────────────────────────────────────────────────────
 kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null; LPID=''
