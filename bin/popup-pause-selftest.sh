@@ -89,7 +89,7 @@ shell_code() { grep -v '^[[:space:]]*#' "$SHELLC"; }
 npop=$(shell_code | grep -c 'dash-popup\.sh')
 [ "$npop" -eq 6 ] || fail "expected 6 dash-popup.sh binds in the client conf (⌘P, prefix /, ⌘K, prefix s, F1, the rescan tap), found $npop"
 [ "$(shell_code | grep -c 'fleet-keys\.sh')" -eq 0 ] \
-  && [ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'fleet-quickopen\.py')" -eq 5 ] \
+  && [ "$(shell_code | grep 'dash-popup\.sh' | grep -c 'title popup_quickopen -- python3 [^ ]*fleet-quickopen\.py')" -eq 5 ] \
   || fail "the client conf's popups are not exactly quick open ×5 (⌘P, prefix /, ⌘K, prefix s, F1) with no key sheet (#2362)"
 cat "$CONF" "$SHELLC" | grep -v '^[[:space:]]*#' | grep -q 'display-popup' \
   && fail "a conf calls display-popup directly — every popup goes through dash-popup.sh (issue #1535)"
