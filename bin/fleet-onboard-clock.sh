@@ -226,6 +226,7 @@ EOF
   last_p='' last_change=$t0 maxgap=0 first='' opened='' code='' key_at='' hand_at='' tries=0
   deadline=$(( $(date +%s) + STEP_SECS * 3 ))
   local shot=0 cert="$sb/home/.ssh/fleet-cert-cert.pub" conf="$sb/home/.config/claude-fleet" el
+  local hfl="$sb/home/.cache/claude-fleet/shell/home-first.log"
   while :; do
     p=$(dt capture-pane -p -t drill 2>/dev/null)
     el=$(( $(nowms) - t0 ))
@@ -303,6 +304,11 @@ EOF
     fi
     [ -n "$R_key" ] && break
     if [ "$(date +%s)" -ge "$deadline" ]; then R_why='deadline'; break; fi
+    # the first session's ask was refused (fleet-shell.sh home-session): nothing more will come
+    if [ -z "$R_machine" ] && grep -Eq '开不了会话|could not open a session' "$hfl" 2>/dev/null; then
+      R_why="first session refused: $(grep -E '开不了会话|could not open a session' "$hfl" | tail -n 1 | sed 's/^fleet: //' | scrub | cut -c1-160)"
+      break
+    fi
     # the installer or the client gave up: nothing more will come
     if printf '%s\n' "$p" | tail -n 2 | grep -q '^newcomer% *$' && [ -n "$R_installed" ] && [ -z "$R_machine" ] \
        && [ $(( $(nowms) - last_change )) -gt 5000 ]; then
@@ -320,14 +326,14 @@ EOF
   fi
   if [ -e "$conf/home-session.first" ]; then
     local hl
-    hl=$(grep -E '^REMOTE ' "$sb/home/.cache/claude-fleet/shell/home-first.log" 2>/dev/null | tail -n 1)
+    hl=$(grep -E '^REMOTE ' "$hfl" 2>/dev/null | tail -n 1)
     case "$hl" in REMOTE\ *\ done\ *) P6=PASS ;; *) P6='FAIL(no REMOTE … done)' ;; esac
   fi
   [ -z "$R_key" ] && [ "$P8" = PASS ] && P8='FAIL(no key)'
   [ -n "$R_key" ] || [ -n "$R_why" ] || R_why='no first key'
   # the last screen, and what the first session's ask said, for the reading
   dt capture-pane -p -t drill 2>/dev/null | scrub > "$OUT/screens/run$n-last.txt"
-  scrub < "$sb/home/.cache/claude-fleet/shell/home-first.log" > "$OUT/run$n-home-first.log" 2>/dev/null
+  scrub < "$hfl" > "$OUT/run$n-home-first.log" 2>/dev/null
   teardown_person "$sb" "$approve" "$inv_id"
   cleanup_run "$sb"
 }

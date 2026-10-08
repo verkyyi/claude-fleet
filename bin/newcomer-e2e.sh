@@ -471,6 +471,15 @@ c.commit()
 sys.exit(0 if n else 1)' "$WORK/hub.db" "$(printf '%s' "$D" | jget person_id)" "$OSU" || die "the clock person's login row was not on the hub's db"
 CINV=$(api -X POST -H 'Content-Type: application/json' -d '{}' "$HUB/v1/fleet/invites" | jget code 2>/dev/null)
 [ -n "$CAPPROVE" ] && [ -n "$CINV" ] || die 'no approve code / invite for the clock'
+# The hub places nothing on a machine above 0.8 load/core, and the fake node
+# reports THIS box's load: the earlier steps' clients (each poll a controller
+# spawn) are stopped, and the load is let settle — a shared runner can sit above
+# it (a 1.14/core runner refused the HOME session: NO_ELIGIBLE_NODE).
+pkill -f "fleet-shell.sh [a-z]* $SESS" 2>/dev/null
+ts kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+calm() { python3 -c 'import os, sys; sys.exit(0 if os.getloadavg()[0] / (os.cpu_count() or 1) < 0.6 else 1)'; }
+waitfor 120 calm || printf '   (load still %s/core after 120 s — the HOME session may be refused)\n' \
+  "$(python3 -c 'import os; print(round(os.getloadavg()[0] / (os.cpu_count() or 1), 2))')"
 KEEPARG=''; [ "$KEEP" = 1 ] && KEEPARG=--keep
 # the drill's own terminal needs a tmux: the one the install line brought (a runner may have none)
 PATH="$(dirname "$REAL_TMUX"):$PATH" FLEET_DRILL_INVITE="$CAPPROVE" FLEET_DRILL_INSTALL_INVITE="$CINV" FLEET_CLOCK_SSH_SHIM="$SHIM" \
