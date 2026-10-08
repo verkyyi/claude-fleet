@@ -1,0 +1,52 @@
+# Node releases (claude-fleet#2335 code, wired by #2366): the hub keeps every
+# stable's signed release on the OSS bucket `haowan24-fleet-releases`
+# (cn-shenzhen, private), mounted at /releases by deployment-release.yaml.
+# Both replicas mount it at once during a rolling release, hence RWX; the
+# store's on-volume layout is written for ossfs (internal/api/fleet_release.go:
+# no directory rename, one-file pointer). The bucket, the RAM user
+# `svc-fleet-release-oss` (policy `fleet-release-oss-rw`, this bucket only) and
+# Secret `ccquota-release-oss` (keys akId / akSecret) are made by a person,
+# never here. Not in kustomization.yaml — hub-deploy's Role may not create a
+# PV or a claim — so a person applies this file once, with an admin
+# kubeconfig, before deployment-release.yaml ships (../../RUNBOOK.md «发布包»):
+#   kubectl apply -n new-deploy -f deploy/k8s/overlays/prod/release-volume.yaml
+# Retain: deleting the claim keeps the bucket and its releases.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ccquota-releases-oss
+  labels:
+    alicloud-pvname: ccquota-releases-oss
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  csi:
+    driver: ossplugin.csi.alibabacloud.com
+    volumeHandle: ccquota-releases-oss
+    nodePublishSecretRef:
+      name: ccquota-release-oss
+      namespace: new-deploy
+    volumeAttributes:
+      bucket: haowan24-fleet-releases
+      path: /
+      url: oss-cn-shenzhen-internal.aliyuncs.com
+      # the image runs as uid/gid 10001 (base/deployment.yaml); no stat cache,
+      # so a release the other replica just pointed at is seen at once
+      otherOpts: "-o allow_other -o uid=10001 -o gid=10001 -o umask=022 -o max_stat_cache_size=0"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ccquota-releases
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: ccquota-releases-oss
+  resources:
+    requests:
+      storage: 20Gi

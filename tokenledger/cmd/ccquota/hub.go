@@ -280,6 +280,10 @@ func loadFleetReleases(srv *api.Server) error {
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
+		if m := checkUnmounted(path); m != "" && errors.Is(err, os.ErrNotExist) {
+			log.Printf("fleet: check: CCQUOTA_FLEET_RELEASE_KEY %s is on %s, which only the new render mounts — not checked; the real start reads it", path, m)
+			return nil
+		}
 		return fmt.Errorf("CCQUOTA_FLEET_RELEASE_KEY: %w", err)
 	}
 	key, err := release.LoadPrivateKey(b)
@@ -299,6 +303,20 @@ func loadFleetReleases(srv *api.Server) error {
 	srv.Stable.OnStable = srv.Releases.OnStable
 	log.Printf("fleet: node releases in %s, signed by %s", dir, release.KeyID(key.Public().(ed25519.PublicKey)))
 	return nil
+}
+
+// checkUnmounted: the mount path, among CCQUOTA_CHECK_UNMOUNTED, that holds
+// path — "" when none does. hub-deploy's pre-switch check runs the new env with
+// the live pod's volumes and names there the mounts only the new render has
+// (claude-fleet#2366); nothing else sets it.
+func checkUnmounted(path string) string {
+	for _, m := range strings.Fields(os.Getenv("CCQUOTA_CHECK_UNMOUNTED")) {
+		m = filepath.Clean(m)
+		if m != "/" && (path == m || strings.HasPrefix(filepath.Clean(path), m+"/")) {
+			return m
+		}
+	}
+	return ""
 }
 
 // envOrFile reads a secret from NAME_FILE (a Secret mount) or NAME.

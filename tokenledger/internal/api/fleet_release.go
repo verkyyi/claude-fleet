@@ -80,11 +80,40 @@ func (rs *ReleaseStore) keep() int {
 	return ReleaseKeep
 }
 
-func (rs *ReleaseStore) dir(sha string) string { return filepath.Join(rs.Dir, sha) }
+// On-volume layout — written for an object store as much as a disk
+// (claude-fleet#2366: production keeps it on an OSS bucket through ossfs,
+// where a directory rename is copy-every-object-then-delete, not atomic, and
+// both replicas build the same stable at once):
+//
+//	<Dir>/<sha>/b<unix>-<hex>/   one build, written in place, signature last,
+//	                             never renamed and never changed after
+//	<Dir>/<sha>/current          the build that is served: one small object,
+//	                             replaced by a single-file rename
+//
+// Two replicas racing each finish their own build and point current at it;
+// whichever wins, current names a whole, self-consistent build. The loser is
+// pruned later.
+const releaseCurrent = "current"
+
+var buildIDRe = regexp.MustCompile(`^b([0-9]{1,19})-[0-9a-f]{12}$`)
+
+// dir is the build current names for <sha> ("" when there is none).
+func (rs *ReleaseStore) dir(sha string) string {
+	b, err := os.ReadFile(filepath.Join(rs.Dir, sha, releaseCurrent))
+	id := strings.TrimSpace(string(b))
+	if err != nil || !buildIDRe.MatchString(id) {
+		return ""
+	}
+	return filepath.Join(rs.Dir, sha, id)
+}
 
 // Has: <sha> is built and on disk.
 func (rs *ReleaseStore) Has(sha string) bool {
-	_, err := os.Stat(filepath.Join(rs.dir(sha), release.SigName))
+	d := rs.dir(sha)
+	if d == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(d, release.SigName))
 	return err == nil
 }
 
@@ -186,21 +215,32 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(rs.Dir, 0o755); err != nil {
+	return rs.publish(sha, files, rs.artifacts(), time.Now())
+}
+
+// publish writes one build of <sha> into its own directory (release.Build
+// writes the signature last) and then points current at it.
+func (rs *ReleaseStore) publish(sha string, files map[string][]byte, artifacts map[string]string, now time.Time) error {
+	shaDir := filepath.Join(rs.Dir, sha)
+	if err := os.MkdirAll(shaDir, 0o755); err != nil {
 		return err
 	}
 	var rnd [6]byte
 	_, _ = rand.Read(rnd[:])
-	tmp := filepath.Join(rs.Dir, ".tmp-"+sha+"-"+hex.EncodeToString(rnd[:]))
-	if _, err := release.Build(tmp, rs.Repo, sha, files, rs.artifacts(), rs.Key, time.Now()); err != nil {
-		_ = os.RemoveAll(tmp)
+	id := fmt.Sprintf("b%d-%s", now.Unix(), hex.EncodeToString(rnd[:]))
+	if _, err := release.Build(filepath.Join(shaDir, id), rs.Repo, sha, files, artifacts, rs.Key, now); err != nil {
+		_ = os.RemoveAll(filepath.Join(shaDir, id))
 		return err
 	}
-	if err := os.Rename(tmp, rs.dir(sha)); err != nil {
-		_ = os.RemoveAll(tmp)
-		if rs.Has(sha) { // another replica of the volume won the race
-			return nil
-		}
+	// a file rename is one server-side copy on an object store: a reader sees
+	// the old current or the new one, never half of it
+	tmp := filepath.Join(shaDir, ".current-"+id)
+	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o644); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(shaDir, releaseCurrent)); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	rs.prune()
@@ -208,7 +248,9 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string) error {
 }
 
 // prune keeps the newest Keep releases (by their manifest's time) and never
-// the one stable names now; stray build directories go too.
+// the one stable names now. Inside a kept release, builds current does not
+// name (a lost race, a build that died) go once they are older than any build
+// still running; so do stray entries from the layout before #2366.
 func (rs *ReleaseStore) prune() {
 	ents, err := os.ReadDir(rs.Dir)
 	if err != nil {
@@ -218,6 +260,7 @@ func (rs *ReleaseStore) prune() {
 	if rs.Source != nil {
 		cur = rs.Source.Commit()
 	}
+	stale := func(unix int64) bool { return time.Since(time.Unix(unix, 0)) > 2*releaseBuildTime }
 	type rel struct {
 		sha string
 		at  time.Time
@@ -225,8 +268,8 @@ func (rs *ReleaseStore) prune() {
 	var rels []rel
 	for _, e := range ents {
 		n := e.Name()
-		if strings.HasPrefix(n, ".tmp-") {
-			if st, err := os.Stat(filepath.Join(rs.Dir, n)); err == nil && time.Since(st.ModTime()) > 2*releaseBuildTime {
+		if strings.HasPrefix(n, ".tmp-") { // the rename layout's staging dirs
+			if st, err := os.Stat(filepath.Join(rs.Dir, n)); err == nil && stale(st.ModTime().Unix()) {
 				_ = os.RemoveAll(filepath.Join(rs.Dir, n))
 			}
 			continue
@@ -234,11 +277,33 @@ func (rs *ReleaseStore) prune() {
 		if !e.IsDir() || !release.ValidSHA(n) {
 			continue
 		}
+		served := rs.dir(n)
+		if bs, err := os.ReadDir(filepath.Join(rs.Dir, n)); err == nil {
+			for _, b := range bs {
+				p := filepath.Join(rs.Dir, n, b.Name())
+				if p == served || b.Name() == releaseCurrent {
+					continue
+				}
+				if m := buildIDRe.FindStringSubmatch(b.Name()); m != nil {
+					var unix int64
+					_, _ = fmt.Sscan(m[1], &unix)
+					if stale(unix) {
+						_ = os.RemoveAll(p)
+					}
+				} else if strings.HasPrefix(b.Name(), ".current-") {
+					if st, err := os.Stat(p); err == nil && stale(st.ModTime().Unix()) {
+						_ = os.Remove(p)
+					}
+				}
+			}
+		}
 		at := time.Time{}
-		if b, err := os.ReadFile(filepath.Join(rs.Dir, n, release.ManifestName)); err == nil {
-			var m release.Manifest
-			if json.Unmarshal(b, &m) == nil {
-				at = m.Created
+		if served != "" {
+			if b, err := os.ReadFile(filepath.Join(served, release.ManifestName)); err == nil {
+				var m release.Manifest
+				if json.Unmarshal(b, &m) == nil {
+					at = m.Created
+				}
 			}
 		}
 		rels = append(rels, rel{n, at})
@@ -296,6 +361,10 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	base := rs.dir(sha)
+	if base == "" { // pruned since
+		http.NotFound(w, r)
+		return
+	}
 	var file, ctype string
 	immutable := true
 	switch {

@@ -409,6 +409,11 @@ jobs:
             ([$p[0].spec.containers[] | select(.name == "ccquota") | .volumeMounts[]?.name]) as $live
             | [.volumeMounts[]?.name | select(. as $n | $live | index($n) | not)] | join(" ")' "$RUNNER_TEMP/new-container.json")
           [ -z "$missing" ] || echo "::warning::the render mounts volume(s) the live pod does not have ($missing) — the check runs without them; whatever reads them is first tried by the real start"
+          # …and the hub is told where they would be (CCQUOTA_CHECK_UNMOUNTED,
+          # #2366): a setting naming a file under one is reported, not refused.
+          unmounted=$(jq -r --slurpfile p "$RUNNER_TEMP/pod.json" '
+            ([$p[0].spec.containers[] | select(.name == "ccquota") | .volumeMounts[]?.name]) as $live
+            | [.volumeMounts[]? | select(.name as $n | $live | index($n) | not) | .mountPath] | join(" ")' "$RUNNER_TEMP/new-container.json")
           cleanup() { kubectl -n "$NS" exec "$POD" -c ccquota -- sh -c 'rm -f "$1" "$1-wal" "$1-shm"' _ "$copy" || echo "::warning::could not delete $copy from /data"; }
           kubectl -n "$NS" exec "$POD" -c ccquota -- sh -c '
             set -e
@@ -423,13 +428,13 @@ jobs:
           # drill for a Secret holding half a GitHub pair. An image older than
           # --check (a rollback to a tag before #2052) gets --migrate-only.
           attempt() { # <container name> <--check | --migrate-only> → $code $why $state
-            jq -c --slurpfile p "$RUNNER_TEMP/pod.json" --arg name "$1" --arg mode "$2" --arg copy "$copy" \
+            jq -c --slurpfile p "$RUNNER_TEMP/pod.json" --arg name "$1" --arg mode "$2" --arg copy "$copy" --arg unmounted "$unmounted" \
               --argjson simmig "$( [ "$SIMULATE_MIGRATION" = true ] && echo true || echo false )" \
               --argjson simgh "$( [ "$SIMULATE_CHECK" = true ] && echo true || echo false )" '
               {spec: {ephemeralContainers: [
                 {name: $name, image: .image,
                  args: ((.args // []) + [$mode, "--db", $copy] + (if $simmig then ["--simulate-migration-failure"] else [] end)),
-                 env: ((.env // [])
+                 env: ((.env // []) + (if $unmounted != "" then [{name: "CCQUOTA_CHECK_UNMOUNTED", value: $unmounted}] else [] end)
                    | if $simgh then map(select(.name != "CCQUOTA_GITHUB_CLIENT_ID" and .name != "CCQUOTA_GITHUB_CLIENT_SECRET"))
                        + [{name: "CCQUOTA_GITHUB_CLIENT_ID", value: "simulated-half-pair"}, {name: "CCQUOTA_GITHUB_CLIENT_SECRET", value: ""}]
                      else . end),

@@ -199,7 +199,7 @@ func TestReleaseTamperRefused(t *testing.T) {
 	r := newReleaseRig(t)
 	must(t, r.rs.Source.Refresh(context.Background()))
 	must(t, r.rs.Ensure(context.Background(), shaA))
-	base := filepath.Join(r.dir, shaA)
+	base := r.rs.dir(shaA)
 	snapshot := map[string][]byte{}
 	for _, n := range []string{release.ManifestName, release.SigName, release.TreeName, "artifacts/claude-code-2.1.0-darwin-arm64"} {
 		b, err := os.ReadFile(filepath.Join(base, n))
@@ -274,8 +274,7 @@ func TestReleasePruneKeepsNewestAndStable(t *testing.T) {
 	must(t, r.rs.Source.Refresh(context.Background())) // stable = shaA
 	files := map[string][]byte{"bin/x": []byte("x")}
 	mk := func(sha string, age time.Duration) {
-		_, err := release.Build(filepath.Join(r.dir, sha), "o/r", sha, files, nil, r.key, time.Now().Add(-age))
-		must(t, err)
+		must(t, r.rs.publish(sha, files, nil, time.Now().Add(-age)))
 	}
 	mk(shaA, 100*time.Hour) // the oldest — but stable
 	var shas []string
@@ -314,5 +313,60 @@ func TestReleasePathOK(t *testing.T) {
 		if releasePathOK(p) != want {
 			t.Errorf("releasePathOK(%q) = %v", p, !want)
 		}
+	}
+}
+
+// claude-fleet#2366: the volume is an OSS bucket shared by two replicas. Both
+// build the same stable at once: each build stays whole in its own directory,
+// current names one of them, and the release fetches. A build with no current
+// (a replica that died mid-write) is never served, and is pruned once stale.
+func TestReleaseTwoReplicasOneVolume(t *testing.T) {
+	r := newReleaseRig(t)
+	must(t, r.rs.Source.Refresh(context.Background()))
+	other := &ReleaseStore{Dir: r.dir, Key: r.key, Repo: "o/r", Source: r.rs.Source, DistDir: r.dist, ArtifactsDir: r.inst}
+	files := map[string][]byte{StableManifestPath: []byte("bin/fleet\n"), "bin/fleet": []byte("#!/bin/sh\necho A\n")}
+	errs := make(chan error, 2)
+	for i, s := range []*ReleaseStore{r.rs, other} {
+		go func(s *ReleaseStore, n int) {
+			arts := s.artifacts()
+			if n == 1 { // a replica on another image: different binaries
+				arts = map[string]string{}
+			}
+			errs <- s.publish(shaA, files, arts, time.Now())
+		}(s, i)
+	}
+	must(t, <-errs)
+	must(t, <-errs)
+	if _, err := r.fetch.Fetch(context.Background(), shaA, filepath.Join(t.TempDir(), "rt"), true); err != nil {
+		t.Fatalf("after a race: %v", err)
+	}
+	bs, _ := os.ReadDir(filepath.Join(r.dir, shaA))
+	builds := 0
+	for _, b := range bs {
+		if buildIDRe.MatchString(b.Name()) {
+			builds++
+		}
+	}
+	if builds != 2 {
+		t.Fatalf("%d builds on the volume, want both kept until stale", builds)
+	}
+
+	// a half-written build of shaB with no current: not served
+	half := filepath.Join(r.dir, shaB, fmt.Sprintf("b%d-%012x", time.Now().Add(-time.Hour).Unix(), 1))
+	must(t, os.MkdirAll(half, 0o755))
+	must(t, os.WriteFile(filepath.Join(half, release.TreeName), []byte("partial"), 0o644))
+	if r.rs.Has(shaB) {
+		t.Fatal("a build with no current counts as a release")
+	}
+	// a stale losing build of shaA goes; the served one stays
+	served := r.rs.dir(shaA)
+	loser := filepath.Join(r.dir, shaA, fmt.Sprintf("b%d-%012x", time.Now().Add(-time.Hour).Unix(), 2))
+	must(t, os.MkdirAll(loser, 0o755))
+	r.rs.prune()
+	if _, err := os.Stat(loser); err == nil {
+		t.Error("a stale build current does not name was kept")
+	}
+	if r.rs.dir(shaA) != served || !r.rs.Has(shaA) {
+		t.Error("the served build was pruned")
 	}
 }

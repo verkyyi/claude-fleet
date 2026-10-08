@@ -7,6 +7,10 @@ kind: Kustomization
 namespace: new-deploy
 resources:
   - ../../base
+# release-volume.yaml (the OSS PV + its claim) is NOT a resource: the deploy
+# Role may not create a PersistentVolume or a claim, so a person applies it
+# once with an admin kubeconfig before the patch below goes out (RUNBOOK.md
+# «发布包»).
 # The two-replica rolling shape on managed Postgres (mode=postgres): the
 # `components: [sqlite]` lines went with the switch (../../RUNBOOK.md «换库»);
 # a rollback reverts this commit.
@@ -18,3 +22,4 @@ images:
 patches:
   - path: deployment-env.yaml
   - path: ingress-hosts.yaml
+  - path: deployment-release.yaml
