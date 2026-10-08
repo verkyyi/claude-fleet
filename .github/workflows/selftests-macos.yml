@@ -170,6 +170,27 @@ jobs:
           command -v tmux >/dev/null 2>&1 || brew install tmux
           tmux -V
 
+      - name: Skip http.server's lookup of its own address
+        # issue #2319: on this runner image the FIRST reverse lookup of 127.0.0.1
+        # in a process takes 35 s (measured; rewriting /etc/hosts does not help).
+        # http.server's bind does exactly that (`socket.getfqdn` for server_name,
+        # which nothing here reads), so every python fake server a selftest starts
+        # paid 35 s and the full shards ran past their 20-minute bound. A
+        # sitecustomize in the PATH python3's site-packages (loaded even under
+        # `python3 -I`) binds without the lookup. The fleet's own server
+        # (bin/fleet-cred-proxy.py) never asks — fleet-cred-proxy-selftest.sh K —
+        # so this hides nothing the product does.
+        run: |
+          sp=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+          cat >> "$sp/sitecustomize.py" <<'PY'
+          import http.server as _hs, socketserver as _ss
+          def _bind(self):
+              _ss.TCPServer.server_bind(self)
+              self.server_name, self.server_port = self.server_address[:2]
+          _hs.HTTPServer.server_bind = _bind
+          PY
+          python3 -I -c 'import time, http.server as h; t = time.time(); h.ThreadingHTTPServer(("127.0.0.1", 0), h.BaseHTTPRequestHandler); print("bind %.2fs" % (time.time() - t))'
+
       - name: Run this shard's selftests
         # Same command and the same sharding as the ubuntu matrix — K from the
         # matrix entry, N from `strategy.job-total`, so the `shard:` list stays
