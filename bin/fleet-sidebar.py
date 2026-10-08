@@ -825,6 +825,21 @@ def orch_state(session):
     return ""
 
 
+def remote_name(session, wid):
+    """A row on another machine's window name, off the refresh loop's cache
+    (fleet-hub-sessions.sh remote_<session>: worker key in column 1, name in 8)
+    — what 改名 starts its line with (issue #2358). "" when not cached."""
+    try:
+        with open(os.path.join(status_dir(), "remote_" + (session or "")), encoding="utf-8") as f:
+            for line in f:
+                p = line.rstrip("\n").split("\x1f")
+                if len(p) >= 8 and p[0] == wid:
+                    return p[7]
+    except OSError:
+        pass
+    return ""
+
+
 def with_portal(rows, placing, session=""):
     """The rows as painted in the shell (issue #1953): 「新任务」, the 「开工中…」 row
     of a task ↵ just sent, a rule — then the list. Built again every frame from
@@ -1416,6 +1431,11 @@ def submit(ask, text, session, env):
                           "--session", session, "--answer", text.lower()], env, failed)
     if not text:
         return None
+    if ask.kind == "rename" and ask.arg.startswith("wid:"):
+        # a row on another machine (issue #2358): a hub write, worker_rename —
+        # its outcome (a refusal included) toasts
+        return start_job(["bash", str(BIN / "fleet-sidebar-remote.sh"), "rename", session, ask.arg],
+                         dict(env, FLEET_SIDEBAR_TEXT=text), quiet)
     if ask.kind == "rename":
         run(["bash", str(BIN / "dash-rename.sh"), "--wid", ask.arg, text], env=env)
         return None
@@ -2651,7 +2671,7 @@ def ui(screen, session, worker, lock):
         text = answer.get("text", "").strip()
         if ask.kind == "new" and answer.get("choice"):
             ask.repo = answer["choice"]   # the repo Tab stepped to
-        if ask.kind == "rename":
+        if ask.kind == "rename" and not ask.arg.startswith("wid:"):
             # An empty rename still goes to dash-rename.sh, which decides (an
             # empty name cancels, as in the hub).
             run(["bash", str(BIN / "dash-rename.sh"), "--wid", ask.arg, text], env=env)
@@ -3213,6 +3233,9 @@ def ui(screen, session, worker, lock):
             if kind == "rename" and arg.startswith("@"):
                 nxt = Ask("rename", tr("sidebar_rename"), arg=arg,
                           text=fields(arg, "#{window_name}")[0])
+            elif kind == "rename" and arg.startswith("wid:"):
+                # a row on another machine (issue #2358): its name off the cache
+                nxt = Ask("rename", tr("sidebar_rename"), arg=arg, text=remote_name(session, arg))
             elif kind in ("new", "restore", "scratch", "view", "reload", "needs"):
                 act(kind, arg)
             elif kind == "landed" and not SHELL:

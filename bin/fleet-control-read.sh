@@ -631,6 +631,31 @@ case "$mode" in
     unset TMUX_PANE
     exec bash "$BIN/dash-migrate.sh" "$win" to ${acct:+"$acct"}
     ;;
+  # --- rename <sess> <window_id> <fleet_id> <name> (issue #2358) --------------
+  # The hub's worker_rename: a sidebar on another machine's 「改名…」 on a row
+  # here. fleet_control resolved the worker to its window; this checks the
+  # window still carries that @fleet_id (a recycled id is refused, exit 5),
+  # then rename-window + automatic-rename off — the display name only. The name
+  # is one argv word, never parsed by a shell or a tmux command string.
+  rename)
+    fleet_load_conf "$sess"
+    win="${3:-}"; fid="${4:-}"; nm="${5:-}"
+    case "$win" in @[0-9]*) ;; *) exit 2 ;; esac
+    case "$win" in *[!@0-9]*) exit 2 ;; esac
+    [ -n "$nm" ] || { printf 'rename: an empty name\n' >&2; exit 2; }
+    sock=$(fleet_socket "$sess")
+    # tmux answers a missing window id with rc 0 and another window's format, so
+    # the window must name itself back before its @fleet_id counts.
+    have=$(tmux -L "$sock" display-message -p -t "$win" '#{window_id} #{@fleet_id}' 2>/dev/null)
+    [ "${have%% *}" = "$win" ] || { printf 'rename: no window %s on %s\n' "$win" "$sess" >&2; exit 5; }
+    have=${have#* }
+    if [ -n "$fid" ] && [ "$have" != "$fid" ]; then
+      printf 'rename: window %s is no longer that session\n' "$win" >&2; exit 5
+    fi
+    tmux -u -L "$sock" rename-window -t "$win" -- "$nm" \; set-option -w -t "$win" automatic-rename off \
+      || { printf 'rename: tmux refused\n' >&2; exit 1; }
+    printf 'renamed\n'
+    ;;
   # --- reap <sess> <key> (issue #1487) -----------------------------------------
   # The hub's worker_reap: `dash-reap.sh <key> --yes` — the dash's confirmed ⌃x,
   # unasked (a dirty worktree is still KEPT; a live agent still refuses). dash-reap

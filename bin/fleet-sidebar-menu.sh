@@ -329,6 +329,10 @@ if [ -n "$remote" ]; then
   esac
   # 控制
   group
+  # 改名… (issue #2358): edited on the view's input line like a local row's,
+  # then a hub write (worker_rename) — the node renames the window holding the
+  # row's @fleet_id; greyed (adda) only when no view is on screen to ask on.
+  adda "$(t menu_rename)" "$(mk rename)" "$(ask rename "$wid")"
   add "$(t menu_r_stop)" "$(mk stop)" "$(sh_run "$rmt stop $rargs")"
   add "$(t menu_r_resume)" "$(mk resume)" "$(sh_run "$rmt resume $rargs")"
   # 换到可用订阅 (issue #2102): the shell's every row is remote, so this is the

@@ -263,6 +263,8 @@ fleet_ui_t() {
     en:remote_label_resume_fmt)  printf 'resume %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_reap_fmt)    printf '回收 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_reap_fmt)    printf 'reap %s (on %s)' "${1:-}" "${2:-}" ;;
+    zh:remote_label_rename_fmt)  printf '%s 改名（在 %s）' "${1:-}" "${2:-}" ;;
+    en:remote_label_rename_fmt)  printf 'rename %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_message_fmt) printf '发给 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_message_fmt) printf 'message %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_answer_fmt)  printf '答 %s（在 %s）' "${1:-}" "${2:-}" ;;

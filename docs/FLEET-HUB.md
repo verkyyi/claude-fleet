@@ -106,7 +106,7 @@ operation journal. Spec: [FLEET-MCP.md](FLEET-MCP.md) «The hub route».
   never accepted as a target.
 
 `worker_message`, `worker_stop`, `worker_resume`, `worker_answer`,
-`worker_reap` and `worker_switch` take the `worker_id`. The
+`worker_reap`, `worker_switch` and `worker_rename` take the `worker_id`. The
 node re-resolves it against the fleet's live windows at the moment it acts and
 refuses (`NOT_FOUND`, `AMBIGUOUS`) unless exactly one window holds it — a window
 that merely has the number a caller last saw is never touched. `lifecycle`
@@ -835,6 +835,7 @@ too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
 | `worker_answer(worker_id, answer, idempotency_key)` | Answer what the worker's pane is asking (#1487): `answer` = `yes` / `no` presses the plain Yes / the No of an open **permission prompt** in the caller's name (`fleet-permission.sh --allow` / `--deny --by <actor>`; never a "don't ask again" row); option numbers (`2`, `1,3`; one per question, space-separated) answer an `AskUserQuestion` (`fleet-answer.sh --answer`). Refused — the script's own reason verbatim — when nothing is pending or the screen does not show the row | `worker:answer` on the worker's Fleet |
 | `worker_reap(worker_id, idempotency_key)` | The dash's confirmed reap (#1487): `dash-reap.sh <key> --yes` — close the window, remove the worktree when clean (a dirty one is KEPT); an unlanded Issue stays open with its claim released (#1542); a live or too-young agent is refused with the reason (`skip:live`) | `worker:reap` on the worker's Fleet |
 | `worker_switch(worker_id, idempotency_key, account?)` | Move a session onto an available subscription (#2102): `dash-migrate.sh <window> to [<account>]` — close + `claude --resume` of the same conversation; refused with the migrate's one-line reason when the target is the source, benched or over its quota gate | `worker:stop` on the worker's Fleet |
+| `worker_rename(worker_id, name, idempotency_key)` | Change the window's display name (#2358): `rename-window` + `automatic-rename off` on the one window holding the worker's `@fleet_id` (checked at action time — a recycled window id is refused); the key, Issue, identity and reap policy are untouched. `name`: 1–64 characters, no control character | `worker:message` on the worker's Fleet |
 | `config_set(fleet_id, key, value, expected_revision, idempotency_key)` | Compare-and-set one allowed configuration key | `config:write` plus an explicit key grant |
 | `operation_get(operation_id)` | Reconcile a caller's own operation with its node | `fleet:read` on the target Fleet |
 | `gh_issue_view(fleet_id, number, repo?, fields?)` | One Issue through the node's `fleet-gh.sh`: the daemons' local copy when fresh, else `gh`, else REST — the `gh --json` fields plus `_source` (`cache`/`gh`/`rest`) and `_age` seconds (#1274) | `gh:read` on that Fleet |
@@ -1225,6 +1226,17 @@ with a code, never `unknown`:
   (optional, one label) names the target, else the fleet's active pick. It
   needs `worker:stop`: a switch is a stop + resume of the same conversation, so
   no grant gains a new scope.
+- `worker_rename` (issue #2358) is the sidebar's 「改名…」 on a row on another
+  machine — every row the Fleet Shell draws is remote, so without it a client
+  could not rename at all. The new name is typed on the view's own input line
+  (pre-filled from the cached name) and sent as `name`; the node resolves the
+  worker (key or identity) to its window, `fleet-control-read.sh rename` checks
+  that window still carries the worker's `@fleet_id` (else `failed`,
+  `INVALID_STATE` — the session moved on), then renames it with the name as one
+  argv word. Only the display name changes: windows are told apart by
+  `@fleet_role` / `@fleet_id`, never by name. It needs `worker:message`: a
+  rename is the smallest change a person who can talk to the session can make.
+  EPIC rows are not renamed through it (their short name is #2355's).
 - `worker_reap` is the dash's confirmed ⌃x, unasked: `dash-reap.sh <key>
   --yes` on the fleet's own server (the adapter points bare `tmux` at it through
   `TMUX`, as `fleet-remote-view.sh` does with no pane). Its result token on
