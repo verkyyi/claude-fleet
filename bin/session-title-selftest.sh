@@ -218,4 +218,18 @@ eq "D: …beside its cfg verdict (field 13)" "stale" "$(fld "$s" RT 13)"
 eq "D: a remote row with no title (an older cache) has no field 14" "-" "$(fld "$s" RN 14)"
 eq "D: …nor field 13" "-" "$(fld "$s" RN 13)"
 
+# E (issue #2355): ccquota's agent runs the adapter with no TMPDIR (a
+# LaunchDaemon) — it must find the SAME cache the login's daemons write, or
+# every title= goes out empty. The per-user dir is set before fleet-lib.sh
+# fixes $FLEET_C off it.
+_tl=$(grep -n 'DARWIN_USER_TEMP_DIR' "$BIN/fleet-control-read.sh" | head -n1 | cut -d: -f1)
+_ll=$(grep -n '^\. "\$BIN/fleet-lib.sh"' "$BIN/fleet-control-read.sh" | head -n1 | cut -d: -f1)
+eq "E: fleet-control-read.sh sets TMPDIR before it sources fleet-lib.sh" "yes" \
+   "$([ -n "$_tl" ] && [ -n "$_ll" ] && [ "$_tl" -lt "$_ll" ] && echo yes || echo no)"
+if _ut=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) && [ -d "$_ut" ]; then
+  got=$(env -u TMPDIR bash -c 'BIN=$1; eval "$(sed -n "/DARWIN_USER_TEMP_DIR/,/^fi/p" "$BIN/fleet-control-read.sh")"; . "$BIN/fleet-lib.sh"; printf %s "$FLEET_C"' _ "$BIN")
+  CHECKS=$((CHECKS+1))
+  case "$got" in "${_ut%/}"/*.claude-dash) ;; *) fail "E: with no TMPDIR the cache must be the per-user one (got '$got', want under '$_ut')" ;; esac
+fi
+
 printf 'session-title selftest: PASS (%s checks)\n' "$CHECKS"

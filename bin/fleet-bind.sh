@@ -178,11 +178,17 @@ git -C "$WT" branch -m "$slug" "$branch" >/dev/null 2>&1 \
 
 # Window name from the issue CONTENT (issue #216's rule): an explicit --title wins
 # and costs no round-trip; else one gh read; else the bare issue-<N> slug.
-title="$TITLE"
+# An EPIC member wears its batch's 简称 first (issue #2355): the one read takes
+# the body with the title. An explicit --title is a fresh issue the filer just
+# wrote (fleet-issue-file.sh --bind) — no EPIC member, and no read at all.
+title="$TITLE"; body=''
 if [ -z "$title" ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
-  title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null)
+  tb=$(gh issue view "$num" --repo "$REPO" --json title,body -q '.title + "\n" + .body' 2>/dev/null) || tb=''
+  title=${tb%%$'\n'*}; body=${tb#*$'\n'}; [ "$body" = "$tb" ] && body=''
 fi
-wname=$(fleet_win_name "$title"); [ -z "$wname" ] && wname="$branch"
+if [ -n "$TITLE" ]; then wname=$(fleet_win_name "$title")
+else wname=$(fleet_issue_win_name "$REPO" "$num" "$title" "${body:-.}"); fi
+[ -z "$wname" ] && wname="$branch"
 
 # Re-mark the window as a worker. @raw goes (the reapers must gate it on the PR
 # now, not treat it as a disposable experiment); @worktree STAYS (dash ⌃x resolves

@@ -323,6 +323,12 @@ epic_v() { en='' ettl='' ebadge=''
   local f k l m _l
   case "$2" in
     wid:*) ettl=$3
+           # no title from its node (one older than #2355 sent none): this
+           # machine's own issue cache, when it holds the EPIC
+           if [ -z "$ettl" ] && [ -n "$eslug" ]; then
+             k="$eslug"$'\t#'"$en"
+             case "$ITTL" in *$'\n'"$k"$'\t'*) ettl=${ITTL#*$'\n'"$k"$'\t'}; ettl=${ettl%%$'\n'*} ;; esac
+           fi
            case "$1" in *:*/*) ebadge=${1#*:} ;; esac
            case "$ebadge" in *[!0-9/]*) ebadge='' ;; esac ;;
     *) if [ -n "$eslug" ]; then
@@ -626,12 +632,11 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
   [ -n "$wepic" ] && DRIVEN+="${wepic%%:*} "
   # An EPIC driver's row (issue #1958) is named after its parent issue: that
   # title too, from the EPIC's own repo's cache — in the hub list as well.
-  case "$rwid" in wid:*) ;; *)
-    if [ -n "$wepic" ] && epic_ref_v "$wepic" && [ -n "$eslug" ]; then
-      ITWANT+="$eslug"$'\t#'"$en"$'\n'
-      case "$ISLUGS" in *" $eslug "*) ;; *) ISLUGS+="$eslug " ;; esac
-    fi ;;
-  esac
+  # A remote driver's too (issue #2355): its node's title cell may be empty.
+  if [ -n "$wepic" ] && epic_ref_v "$wepic" && [ -n "$eslug" ]; then
+    ITWANT+="$eslug"$'\t#'"$en"$'\n'
+    case "$ISLUGS" in *" $eslug "*) ;; *) ISLUGS+="$eslug " ;; esac
+  fi
   okp_v "$wrepo" "$wnorepo"
   okey_v "$iss" "$wt" "$path"
   # A remote row: its worker_id (#1423). The row's id is `wid:<worker_id>`, its
@@ -1110,7 +1115,29 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # deeper; a row that owns a subtree swaps its free cell for the fold caret
   # (`▾ ` a root, `└▾`, ` ▾`, `┊▾`). The name keeps all 26 of its cells.
   dname=$name; treed=''
-  [ -n "$en" ] && dname="#$en${ettl:+ $ettl}"           # an EPIC row (issue #1958)
+  if [ -n "$en" ]; then
+    # An EPIC row (issue #1958) reads as its batch, not its number (issue #2355):
+    # the EPIC title's theme (「EPIC: 托管节点：…」 → 托管节点), else the driver's
+    # own name when it says something (`EPIC·托管节点` → 托管节点), else `#N`. The
+    # number moves to the issue cell — the bar's detail line under a highlight.
+    epic_theme=''; [ -n "$ettl" ] && fleet_epic_theme_v "$ettl"
+    if [ -z "$epic_theme" ]; then
+      case "$name" in
+        scratch-[0-9]*|issue-[0-9]*|*:scratch-[0-9]*|*:issue-[0-9]*|'') ;;
+        *) epic_theme=${name#EPIC·} ;;
+      esac
+    fi
+    dname=${epic_theme:-#$en}
+    issd="#$en"
+  elif [ "$SIDEBAR" = 1 ] && [ -n "$wittl" ]; then
+    # A window named only by its number (issue #2355) — `issue-2173`, `scratch-4`
+    # (a spawn whose title read missed, a bind, a resume) — shows its issue's
+    # title instead: a number says nothing about the work.
+    case "${name##*:}" in
+      issue-*|scratch-*) _nn=${name##*-}
+        case "$_nn" in ''|*[!0-9]*) ;; *) dname=$wittl ;; esac ;;
+    esac
+  fi
   # agent tag (issue #547): a window running a non-Claude agent (@cc_agent, stamped
   # by bin/fleet-codex.sh) shows its agent name in the flex span — a Claude window
   # carries no @cc_agent and draws nothing. ASCII only, so the ${#tagd} width math
@@ -1182,6 +1209,14 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     fi
   fi
   [ -n "$ebadge" ] && kidd=$ebadge                    # an EPIC row: landed/members (#1958)
+  # An EPIC member nested under its batch (issue #2355): its window name's
+  # `<简称>·` prefix is the parent row's word already — the flat list, the window
+  # name and ⌘P keep it. Only a short prefix is one of ours (4 CJK glyphs are
+  # 12 bytes where the locale counts bytes, 4 where it counts characters).
+  if [ "$depth" -gt 0 ] && [ "$dname" = "$name" ]; then
+    case "$name" in ?*·?*) _np=${name%%·*}
+      [ "${#_np}" -le 12 ] && dname=${name#*·} ;; esac
+  fi
   # --- @title_info: the worker pane's header line (issue #1377) --------------
   # What the sidebar's selected-row line used to say, moved to where there is
   # room: the worker pane's top border (conf/tmux-attention.conf reads

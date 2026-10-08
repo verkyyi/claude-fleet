@@ -422,7 +422,7 @@ the bodies they always did. Only now, and in this order:
 
    ```markdown
    > 设计方案页：<READY url>（tailnet 内可达，重启即失效；页面内容已全部写回本 issue 与各子单，页面失效不丢信息）
-   <!-- fleet:epic repo=<owner/name> -->
+   <!-- fleet:epic repo=<owner/name> short=<简称> -->
 
    ## 主题
    <the page's subtitle>
@@ -470,6 +470,12 @@ the bodies they always did. Only now, and in this order:
    instead of spawning repo A's workers for repo B's issue numbers. A member in
    another repo is named by its own `owner/name#N` in the list, never by the
    marker — the parent is in one repo, the members may be in several.
+
+   `short=` is the batch's 简称 (issue #2355): 2–4 letters you pick from the
+   theme (托管 · 安全 · 上手 · 3秒) — letters/digits only, no spaces. Every
+   member's window is named `<简称>·<its title>` (`fleet_issue_win_name`), so
+   batches running side by side can be told apart; the person may edit it in the
+   body. Left out, it is the theme's first 4 letters.
 
    The charter body is load-bearing. `/fleet-epic-run` seeds each worker to read
    the parent before it starts, so a charter edited mid-batch reaches every worker
