@@ -400,6 +400,12 @@ fi
 # asked ⇒ the GitHub claim that machine may have taken is withdrawn too (#1610).
 # --async asks without waiting and leaves the operation id for fleet-children.sh.
 # Every REMOTE answer is written to the parent's `children/<key>.dispatch`.
+# Issue #1610: an auto send a machine declined was already tried on the next
+# one by the hub, this machine last (answered LOCAL) — the line's `after …`
+# field names the machines that said no first, each written to the dispatch
+# book as its own refused row before the answer's. Every machine declining is
+# `REFUSED ALL_DECLINED`: refused here too, lease and claim given back, never
+# opened here on the hub's no.
 _place_note() {  # <state> <machine> <op> [<window>] [<exit>] [<line>]
   case "$ORIGIN" in issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*) ;; *) return 0 ;; esac
   local ck   # the child's key carries its repo in every fleet (issue #1939)
@@ -407,6 +413,23 @@ _place_note() {  # <state> <machine> <op> [<window>] [<exit>] [<line>]
   python3 "$BIN/fleet-children.py" dispatch \
     --file "$(fleet_state_dir "$SESS")/children/$(printf '%s' "$ORIGIN" | LC_ALL=C tr -cd 'A-Za-z0-9._:-').dispatch" \
     --child "$ck" --state "$1" --node "$2" --op "$3" --window "${4:-}" --exit "${5:-}" --line "${6:-}" >/dev/null 2>&1 || :
+}
+# _stale_claim (issue #1610): the parent's book says this issue's last send was
+# never seen open — accepted / unknown, long enough ago, no window, no report and
+# no session in the hub's table (fleet-children.py `claim: stale`). Its GitHub
+# claim is then nobody's, and the send withdraws it rather than need --force.
+_stale_claim() {
+  case "$ORIGIN" in issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*) ;; *) return 1 ;; esac
+  local ck
+  ck="$(fleet_okey_prefix "$SESS" "$REPO")issue-$num"
+  fleet_timebox 20 bash "$BIN/fleet-children.sh" "$ORIGIN" --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+sys.exit(0 if any(k.get("child") == sys.argv[1] and k.get("claim") == "stale" for k in d.get("children") or []) else 1)
+' "$ck"
 }
 if [ "$PLACING" = 1 ]; then
   if [ "${CCQUOTA_FLEET:-0}" != 1 ] || [ -z "$REPO" ]; then
@@ -425,9 +448,24 @@ if [ "$PLACING" = 1 ]; then
     _pre_asg=''
     if [ "$ASYNC_FLAG" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && command -v gh >/dev/null 2>&1; then
       _pre_asg=$(gh issue view "$num" --repo "$REPO" --json assignees --jq '.assignees|length' 2>/dev/null)
+      # A claim an earlier send left with no session behind it (issue #1610).
+      if [ "${_pre_asg:-0}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && _stale_claim \
+         && gh issue edit "$num" --repo "$REPO" --remove-assignee @me >/dev/null 2>&1; then
+        printf 'dash-issue-session: #%s 的认领是上次派活留下的死认领（没开成、哪台都没有会话）— 已收回，不用 --force\n' "$num" >&2
+        _pre_asg=0
+      fi
     fi
     place_out=$(fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
     _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
+    _after=''; case "$_why" in *$'\t'after\ *) _after=${_why##*$'\t'after }; _why=${_why%$'\t'after *} ;; esac
+    if [ -n "$_after" ]; then   # <m>:<op>:<exit>,… — the machines that declined first
+      for _a in $(printf '%s' "$_after" | tr ',' ' '); do
+        IFS=: read -r _am _aop _ax <<<"$_a"
+        [ "$_aop" = - ] && _aop=''
+        _place_note refused "$_am" "$_aop" '' "$_ax" 'declined; the hub tried the next machine'
+      done
+      printf 'dash-issue-session: #%s 先被 %s 拒绝，入口已换下一台\n' "$num" "$(printf '%s' "$_after" | sed 's/:[^,]*//g; s/,/、/g')" >&2
+    fi
     case "$place_rc:$_pv" in
       0:REMOTE\ *)
         # The lease is the remote fleet's now: the EXIT trap must not hand it back.
@@ -463,6 +501,17 @@ if [ "$PLACING" = 1 ]; then
         printf 'dash-issue-session: #%s 开在本机 %s — %s\n' "$num" "${_pv#LOCAL }" "$_why" >&2 ;;
       3:*)
         refuse "#$num 已被 ${_pv#HELD } 认领 (${_why}) — not spawning"; exit "$RC_CLAIMED" ;;
+      4:REFUSED\ ALL_DECLINED)
+        # Every machine that could take it said no (issue #1610): the hub gave
+        # the lease back — the EXIT trap releases it — and the GitHub claim a
+        # machine may have taken is withdrawn, so the next send needs no --force.
+        [ "$_pre_asg" = 0 ] && CLAIMED_HERE=1
+        refuse "#$num 每台机器都拒绝了: ${_why:-no reason given}"
+        for _a in $(printf '%s' "$_after" | tr ',' ' '); do   # all full ⇒ 2, else 1
+          [ "${_a##*:}" = 2 ] || exit "$RC_INFRA"
+        done
+        [ -n "$_after" ] || exit "$RC_INFRA"
+        exit "$RC_CAP" ;;
       *)
         if [ "$NODE" != auto ]; then
           refuse "#$num 不能开在 $NODE: ${_why:-${_pv:-hub unreachable}}"
@@ -476,7 +525,7 @@ if [ "$PLACING" = 1 ]; then
         fi
         [ "$place_rc" = 4 ] && printf 'dash-issue-session: 没有机器能接 #%s (%s) — 开在本机\n' "$num" "$_why" >&2 ;;
     esac
-    unset _pw _u _pv _why _wait _pre_asg
+    unset _pw _u _pv _why _wait _pre_asg _after _a _am _aop _ax
   fi
 fi
 # Opening here after all: this machine's cap verdict, held above, now applies.

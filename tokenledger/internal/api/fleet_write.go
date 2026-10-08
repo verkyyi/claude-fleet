@@ -1244,6 +1244,15 @@ func (s *Server) loginAccounts() map[string]string {
 }
 
 func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (Placement, error) {
+	return s.pickNodeAfter(p, repo, node, now, nil, "")
+}
+
+// pickNodeAfter is pickNode for the next try of one send (claude-fleet#1610):
+// declined maps each fleet that already said no to its reason — out of the
+// running, its reason the candidate's — and last is a fleet ranked after every
+// other eligible one (the asking machine: 本机最后). With every eligible
+// machine declined the fault is ALL_DECLINED, each machine's reason in it.
+func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Time, declined map[string]string, last string) (Placement, error) {
 	pl := Placement{Requested: node, Repo: repo, Candidates: []Candidate{}, At: now.UTC()}
 	_, rows, err := s.visibleFleets(p, now)
 	if err != nil {
@@ -1302,6 +1311,9 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 			}
 			c.Score = math.Round(c.Score*weight*1000) / 1000
 		}
+		if why, ok := declined[r.FleetID]; ok && c.Eligible {
+			c.Eligible, c.Excluded = false, excludedDeclined+why
+		}
 		pl.Candidates = append(pl.Candidates, c)
 	}
 	if len(pl.Candidates) == 0 {
@@ -1319,9 +1331,17 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 		if !c.Eligible {
 			continue
 		}
-		if best < 0 || better(c, pl.Candidates[best]) {
+		if best < 0 || (pl.Candidates[best].FleetID == last && c.FleetID != last) ||
+			((c.FleetID == last) == (pl.Candidates[best].FleetID == last) && better(c, pl.Candidates[best])) {
 			best = i
 		}
+	}
+	if best < 0 && len(declined) > 0 {
+		reasons := []string{}
+		for _, c := range pl.Candidates {
+			reasons = append(reasons, c.Machine+": "+c.Excluded)
+		}
+		return pl, fault("ALL_DECLINED", "every machine that could take it said no — "+strings.Join(reasons, "; "))
 	}
 	if best < 0 {
 		reasons, full, paused := []string{}, true, false
@@ -1485,11 +1505,14 @@ func memPressureName(lv int) string {
 // excludedFull opens the verdict on a login at its own session cap
 // (claude-fleet#1587); excludedPersonCap the one at the hub's per-person cap;
 // excludedPaused the one whose own gate is holding new sessions
-// (claude-fleet#1836) — 「机器暂停接新：<原因>」, the reason in the gate's words.
+// (claude-fleet#1836) — 「机器暂停接新：<原因>」, the reason in the gate's words;
+// excludedDeclined the one whose spawn already said no to this send
+// (claude-fleet#1610), its own reason after it.
 const (
 	excludedFull      = "full"
 	excludedPersonCap = "at the per-person cap"
 	excludedPaused    = "机器暂停接新"
+	excludedDeclined  = "declined: "
 )
 
 // excludedForFullness reports whether a candidate is out only because it has

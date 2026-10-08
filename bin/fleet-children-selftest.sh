@@ -406,4 +406,44 @@ eq "remote: a hub silent past FLEET_HUB_RETAIN_SECS is no answer" 4 "$(printf '%
 eq "remote: degenerate — no --hub-cache, the view is unchanged" \
   "$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$RD" --parent scratch-5)" "$RTXT"
 
+# --- 6. A CLAIM WITH NO SESSION BEHIND IT (issue #1610) ---------------------------
+# A send never seen open (accepted / unknown) past FLEET_STALE_CLAIM_SECS, no window,
+# no report, and a fresh hub table with no session for it: `"claim": "stale"`, the
+# text `stale-claim`. A row the hub shows, a young row, a refused / done one, or a
+# hub that said nothing are never stale; every other field is as it was. One send
+# that went to a second machine is two rows, the answer's last.
+SD="$WORK/stale"; mkdir -p "$SD/g"
+old_ts=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)))')
+new_ts=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))')
+printf '%s\n' \
+  "{\"seq\": 1, \"ts\": \"$old_ts\", \"child\": \"issue-601\", \"node\": \"mini2\", \"op\": \"o1\", \"state\": \"unknown\"}" \
+  "{\"seq\": 2, \"ts\": \"$old_ts\", \"child\": \"issue-602\", \"node\": \"m4\", \"op\": \"o2\", \"state\": \"unknown\"}" \
+  "{\"seq\": 3, \"ts\": \"$new_ts\", \"child\": \"issue-603\", \"node\": \"m4\", \"op\": \"o3\", \"state\": \"unknown\"}" \
+  "{\"seq\": 4, \"ts\": \"$old_ts\", \"child\": \"issue-604\", \"node\": \"mini2\", \"op\": \"o4\", \"state\": \"refused\", \"exit\": 1}" \
+  "{\"seq\": 5, \"ts\": \"$old_ts\", \"child\": \"issue-604\", \"node\": \"m4\", \"op\": \"o5\", \"state\": \"done\", \"window\": \"@7\"}" \
+  "{\"seq\": 6, \"ts\": \"$old_ts\", \"child\": \"issue-605\", \"node\": \"m4\", \"op\": \"o6\", \"state\": \"accepted\"}" \
+  > "$SD/scratch-8.dispatch"
+{ printf '#ts%s%s\n' "$US" "$now"; rrow 602 working ''; } > "$SD/g/remote_s"
+printf '%s\n' "$now" > "$SD/g/hub_ok"
+SOUT=$(printf '%s\n' "@5|working||issue-605|scratch-8||kid" \
+  | python3 "$BIN/fleet-children.py" show --dir "$SD" --parent scratch-8 --hub-cache "$SD/g/remote_s" --json)
+python3 - "$SOUT" <<'PY3' || fail "stale: only a send nobody saw open, anywhere, is a stale claim (see above)" "$SOUT"
+import json, sys
+d = json.loads(sys.argv[1])
+k = {c["child"]: c for c in d["children"]}
+assert k["issue-601"].get("claim") == "stale", k["issue-601"]
+assert "claim" not in k["issue-602"], k["issue-602"]          # the hub shows it working
+assert "claim" not in k["issue-603"], k["issue-603"]          # too young
+assert "claim" not in k["issue-604"] and k["issue-604"]["dispatch"]["node"] == "m4", k["issue-604"]
+assert "claim" not in k["issue-605"], k["issue-605"]          # a window here holds it
+assert k["issue-601"]["progress"] == "unknown", k["issue-601"]  # fields only added
+assert [x["node"] for x in d["dispatches"] if x["child"] == "issue-604"] == ["m4"], d["dispatches"]
+PY3
+CHECKS=$((CHECKS + 1))
+has "stale: the text says stale-claim" 'stale-claim (unknown' "$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$SD" --parent scratch-8 --hub-cache "$SD/g/remote_s" | grep issue-601)"
+eq "stale: a hub that said nothing proves nothing" 0 \
+  "$(printf '' | python3 "$BIN/fleet-children.py" show --dir "$SD" --parent scratch-8 --json | grep -c '"claim"')"
+eq "stale: FLEET_STALE_CLAIM_SECS moves the bar" 0 \
+  "$(printf '' | FLEET_STALE_CLAIM_SECS=7200 python3 "$BIN/fleet-children.py" show --dir "$SD" --parent scratch-8 --hub-cache "$SD/g/remote_s" --json | grep -c '"claim"')"
+
 printf 'fleet-children selftest: OK (%d checks)\n' "$CHECKS"

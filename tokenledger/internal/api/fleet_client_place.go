@@ -110,6 +110,9 @@ type ClientPlaceResponse struct {
 	// the client must ssh in as the one that holds it — the far end finds a
 	// worker only in its own login's fleets. "" when unknown.
 	Login string `json:"login,omitempty"`
+	// Attempts are the machines that declined this start before the one
+	// answered (claude-fleet#1610); the line carries them as `after …`.
+	Attempts []placeAttempt `json:"attempts,omitempty"`
 }
 
 // placedLogin is the login of the candidate placement chose (its fleet_id).
@@ -285,7 +288,6 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	tool := "worker_start"
 	var pl Placement
 	var target store.FleetRow
-	giveBack := func() {}
 	what := ""
 
 	switch req.Kind {
@@ -368,18 +370,77 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		bare := clientPlaceKeyRE.FindStringSubmatch(req.Key)[1]
 		tool = "worker_resume"
 		args = map[string]any{"worker_id": target.FleetID + "/" + targetKey(bare, target, req.Repo), "idempotency_key": idem}
-	} else {
-		var err error
-		if pl, err = s.pickNode(p, req.Repo, node, now); err != nil {
-			s.leaseAudit(p.Actor, "client_place", what, errorObject(err)["code"], now)
+		m := s.nodeMachineLabel(pl.Machine)
+		op, err := s.submitWrite(r.Context(), p, tool, args, &pl)
+		if err != nil {
+			s.leaseAudit(p.Actor, "client_place", what, "REMOTE "+m+" refused: "+errorObject(err)["code"], now)
 			writeJSON(w, http.StatusOK, refusedAnswer(err, &pl))
 			return
 		}
+		out, _ := s.clientPlaceAnswer(r, op, &pl, wait)
+		if target.OSUser != "" {
+			out.Login = target.OSUser // the fleet it went to — a restore has no candidates
+		}
+		s.leaseAudit(p.Actor, "client_place", what, "REMOTE "+m+" "+out.State+" "+asString(op["operation_id"]), now)
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+
+	// A start (claude-fleet#1610): an auto issue or scratch start whose
+	// machine declines it is tried on the next candidate in placement's
+	// order, its lease back in the pool in between — within this request's
+	// wait, the earlier tries in the answer's `attempts` and the line's
+	// `after …` field; every machine declining is REFUSED ALL_DECLINED. A
+	// machine named, a restore (one fleet holds its row) and a new issue
+	// (the machine may have filed it before it said no) are tried once.
+	var err error
+	if pl, err = s.pickNode(p, req.Repo, node, now); err != nil {
+		s.leaseAudit(p.Actor, "client_place", what, errorObject(err)["code"], now)
+		writeJSON(w, http.StatusOK, refusedAnswer(err, &pl))
+		return
+	}
+	retry := node == "auto" && wait > 0 && (req.Kind == "" || req.Kind == "issue" || req.Kind == "scratch")
+	deadline := now.Add(wait)
+	declined := map[string]string{}
+	attempts := []placeAttempt{}
+	answer := func(out ClientPlaceResponse) {
+		if len(attempts) > 0 {
+			out.Attempts = attempts
+			out.Line += "\t" + attemptsTail(attempts)
+		}
+		writeJSON(w, http.StatusOK, out)
+	}
+	// next takes a declined try out of the running: true = try pl now,
+	// false = the declined answer stands (or the refusal was written: done).
+	next := func(a placeAttempt) (ok, done bool) {
+		if !retry || time.Until(deadline) < placeRetryMin(wait) {
+			return false, false
+		}
+		attempts = append(attempts, a)
+		declined[pl.FleetID] = a.Why
+		npl, err := s.pickNodeAfter(p, req.Repo, "auto", time.Now(), declined, "")
+		if err != nil {
+			if len(attempts) == 1 {
+				attempts = attempts[:0]
+				return false, false
+			}
+			s.leaseAudit(p.Actor, "client_place", what, errorObject(err)["code"], time.Now())
+			answer(refusedAnswer(err, &npl))
+			return false, true
+		}
+		pl = npl
+		return true, false
+	}
+	for try := 1; ; try++ {
 		if target, err = s.Store.Fleet(pl.FleetID); err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		args["fleet_id"] = pl.FleetID
+		if try > 1 {
+			args["idempotency_key"] = retryIdem(idem, try) // a new start, not the declined one again
+		}
+		giveBack := func() {}
 		if req.Kind != "scratch" && req.Kind != "new" {
 			args["issue"] = float64(req.Issue)
 			// The chosen machine's fleet takes the issue's lease, so the
@@ -389,14 +450,14 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 				WorkerID: pl.FleetID + "/" + targetKey("issue-"+strconv.Itoa(req.Issue), target, req.Repo),
 				FleetID:  pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser}
 			hadOwn := false
-			if ls, err := s.Store.Leases(now); err == nil {
+			if ls, err := s.Store.Leases(time.Now()); err == nil {
 				for _, l := range ls {
 					if l.Repo == store.NormRepo(req.Repo) && l.Issue == req.Issue && l.FleetID == pl.FleetID {
 						hadOwn = true // a live worker there already holds it: never give that back
 					}
 				}
 			}
-			granted, held, _, err := s.Store.AcquireLease(claim, leaseStartGrace, now)
+			granted, held, _, err := s.Store.AcquireLease(claim, leaseStartGrace, time.Now())
 			if err != nil {
 				httpError(w, http.StatusInternalServerError, err.Error())
 				return
@@ -404,7 +465,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 			if !granted {
 				m := s.nodeMachineLabel(held.Hostname)
 				s.leaseAudit(p.Actor, "client_place", what, "HELD by "+held.WorkerID+" on "+m, now)
-				writeJSON(w, http.StatusOK, ClientPlaceResponse{Line: "HELD " + m + "\t" + what + " is leased to " + m,
+				answer(ClientPlaceResponse{Line: "HELD " + m + "\t" + what + " is leased to " + m,
 					Exit: 3, State: "held", Machine: m, Placement: &pl})
 				return
 			}
@@ -412,29 +473,47 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 				giveBack = func() { _, _ = s.Store.ReleaseLease(req.Repo, req.Issue, claim.WorkerID) }
 			}
 		}
-	}
 
-	m := s.nodeMachineLabel(pl.Machine)
-	op, err := s.submitWrite(r.Context(), p, tool, args, &pl)
-	if err != nil {
-		giveBack()
-		s.leaseAudit(p.Actor, "client_place", what, "REMOTE "+m+" refused: "+errorObject(err)["code"], now)
-		writeJSON(w, http.StatusOK, refusedAnswer(err, &pl))
+		m := s.nodeMachineLabel(pl.Machine)
+		op, err := s.submitWrite(r.Context(), p, tool, args, &pl)
+		if err != nil {
+			giveBack()
+			e := errorObject(err)
+			s.leaseAudit(p.Actor, "client_place", what, "REMOTE "+m+" refused: "+e["code"], now)
+			if declinedBySubmit(e["code"]) {
+				one := 1
+				if ok, done := next(placeAttempt{Machine: m, State: "refused", Exit: &one, Why: oneLine(e["message"])}); done {
+					return
+				} else if ok {
+					continue
+				}
+			}
+			answer(refusedAnswer(err, &pl))
+			return
+		}
+		out, oc := s.clientPlaceAnswer(r, op, &pl, min(wait, max(time.Until(deadline), time.Second)))
+		if target.OSUser != "" {
+			out.Login = target.OSUser
+		}
+		if out.State == "refused" || out.State == "failed" {
+			giveBack()
+		}
+		s.leaseAudit(p.Actor, "client_place", what, "REMOTE "+m+" "+out.State+" "+asString(op["operation_id"]), now)
+		if out.Exit == 5 && oc.Exit != nil && *oc.Exit != 3 {
+			if ok, done := next(placeAttempt{Machine: m, OperationID: out.OperationID, State: oc.State,
+				Exit: oc.Exit, Why: oneLine(oc.Stderr)}); done {
+				return
+			} else if ok {
+				continue
+			}
+		}
+		answer(out)
 		return
 	}
-	out := s.clientPlaceAnswer(r, op, &pl, wait)
-	if target.OSUser != "" {
-		out.Login = target.OSUser // the fleet it went to — a restore has no candidates
-	}
-	if out.State == "refused" || out.State == "failed" {
-		giveBack()
-	}
-	s.leaseAudit(p.Actor, "client_place", what, "REMOTE "+m+" "+out.State+" "+asString(op["operation_id"]), now)
-	writeJSON(w, http.StatusOK, out)
 }
 
 // clientPlaceAnswer waits up to wait on op and words what became of it.
-func (s *Server) clientPlaceAnswer(r *http.Request, op map[string]any, pl *Placement, wait time.Duration) ClientPlaceResponse {
+func (s *Server) clientPlaceAnswer(r *http.Request, op map[string]any, pl *Placement, wait time.Duration) (ClientPlaceResponse, placeOutcome) {
 	m := s.nodeMachineLabel(pl.Machine)
 	var heard error
 	if wait > 0 {
@@ -471,7 +550,7 @@ func (s *Server) clientPlaceAnswer(r *http.Request, op map[string]any, pl *Place
 		out.State, out.Exit = "unknown", 6
 		out.Line = "UNKNOWN " + m + " " + opID + "\t" + oneLine(oc.Stderr)
 	}
-	return out
+	return out, oc
 }
 
 // clientPlaceStatus answers a poll of an operation this person's client
@@ -491,7 +570,7 @@ func (s *Server) clientPlaceStatus(w http.ResponseWriter, r *http.Request, p fle
 			pl.Machine = f.Hostname
 		}
 	}
-	out := s.clientPlaceAnswer(r, operationView(o), &pl, wait)
+	out, _ := s.clientPlaceAnswer(r, operationView(o), &pl, wait)
 	if (out.State == "refused" || out.State == "failed") && o.Action == "worker_start" {
 		// The start there did not open: its lease goes back to the pool,
 		// as a place answered on the spot gives it back.

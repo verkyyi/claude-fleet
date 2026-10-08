@@ -51,6 +51,18 @@ func TestPlaceCLIContract(t *testing.T) {
 			3, "HELD m4\t#7 is leased to m4"},
 		{"no machine", `{"error":{"code":"NO_ELIGIBLE_NODE","message":"No machine can take a new session now"}}`, 503,
 			4, "REFUSED NO_ELIGIBLE_NODE\tNo machine can take a new session now"},
+		// claude-fleet#1610: machines that declined first ride the line's
+		// third field; every machine declining is REFUSED ALL_DECLINED.
+		{"done after a decline", `{"local":false,"placement":{"machine":"m3","reason":"chose m3"},
+			"operation":{"operation_id":"op_5","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@9","node":"m3"},
+			"attempts":[{"machine":"m4","operation_id":"op_4","state":"failed","exit":1,"why":"fleet discover: fork/exec"}]}`, 200,
+			0, "REMOTE m3 op_5 done @9\tchose m3\tafter m4:op_4:1"},
+		{"local after a decline", `{"local":true,"placement":{"machine":"m5","reason":"chose m5"},
+			"attempts":[{"machine":"m4","state":"refused","exit":1,"why":"node gone"}]}`, 200,
+			0, "LOCAL m5\tchose m5\tafter m4:-:1"},
+		{"all declined", `{"error":{"code":"ALL_DECLINED","message":"every machine that could take it said no — m4: declined: a; m3: declined: b"},
+			"attempts":[{"machine":"m4","operation_id":"op_4","exit":1,"why":"a"},{"machine":"m3","operation_id":"op_6","exit":2,"why":"b"}]}`, 409,
+			4, "REFUSED ALL_DECLINED\tevery machine that could take it said no — m4: declined: a; m3: declined: b\tafter m4:op_4:1,m3:op_6:2"},
 		{"not a hub fleet", `{"error":"fleet x is not registered to this node"}`, 403, 1, ""},
 		{"hub broken", `{"error":{"code":"INTERNAL","message":"db"}}`, 500, 1, ""},
 	}
@@ -67,6 +79,9 @@ func TestPlaceCLIContract(t *testing.T) {
 	}
 	if got["node"] != "auto" || got["issue"] != float64(7) || got["worker_id"] != wid || got["origin_wid"] != "p/issue-1" {
 		t.Fatalf("last request body %v", got)
+	}
+	if got["tries"] != float64(placeTries) {
+		t.Fatalf("tries = %v; want %d so the hub may try the next machine", got["tries"], placeTries)
 	}
 	if _, has := got["wait"]; has {
 		t.Fatalf("no --wait sent a wait: %v; the hub's default must apply", got)

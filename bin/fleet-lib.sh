@@ -5758,7 +5758,10 @@ fleet_node_is_self() {
 # knows). Prints the place command's one line, machine names through
 # FLEET_NODE_ALIASES — `LOCAL <m>\t<reason>` / `REMOTE <m> <op> <status>\t<reason>` /
 # `REMOTE <m> <op> done <window>\t<reason>` / `DECLINED <m> <op> <exit>\t<line>` /
-# `UNKNOWN <m> <op>\t<msg>` / `HELD <m>\t<msg>` / `REFUSED <code>\t<msg>` — and returns:
+# `UNKNOWN <m> <op>\t<msg>` / `HELD <m>\t<msg>` / `REFUSED <code>\t<msg>` — and returns
+# (issue #1610: an auto send a machine declined was tried on the next one, the
+# asker last — each such machine one stderr line, and the line's optional third
+# field `after <m>:<op>:<exit>,…`; every machine declining is REFUSED ALL_DECLINED):
 #   0  LOCAL or REMOTE             3  the issue is leased elsewhere
 #   4  refused: no machine can take it, or the chosen one would not
 #   5  the start was sent and that machine's spawn refused it (<exit> is its
@@ -5802,9 +5805,18 @@ fleet_hub_place() {
     { k = split($1, w, " ")
       if ((w[1] == "LOCAL" || w[1] == "REMOTE" || w[1] == "HELD" || w[1] == "DECLINED" || w[1] == "UNKNOWN") && (w[2] in m)) w[2] = m[w[2]]
       h = w[1]; for (i = 2; i <= k; i++) h = h " " w[i]
-      $1 = h; print }' OFS='\t')
+      $1 = h
+      if (NF >= 3 && $3 ~ /^after /) {            # issue #1610: who declined first
+        k = split(substr($3, 7), w, ","); t = ""
+        for (i = 1; i <= k; i++) { p = index(w[i], ":"); x = p ? substr(w[i], 1, p - 1) : w[i]
+          if (x in m) w[i] = m[x] substr(w[i], p); t = t (i > 1 ? "," : "") w[i] }
+        $3 = "after " t }
+      print }' OFS='\t')
   case "$rc" in
-    0|3|4|5|6) [ "$ef" = /dev/null ] || rm -f "$ef"; printf '%s\n' "$out"; return "$rc" ;;
+    0|3|4|5|6)
+      # Each machine that declined before the answer (issue #1610), as it was tried.
+      [ "$ef" = /dev/null ] || { grep '^ccquota place: .* declined (exit' "$ef" | sed 's/^ccquota place: /fleet: /' >&2; rm -f "$ef"; }
+      printf '%s\n' "$out"; return "$rc" ;;
   esac
   printf 'fleet: %s — placing %s, opening it here\n' "$(_fleet_hub_fail placement "$cmd" "$rc" "$ef")" "$what" >&2
   [ "$ef" = /dev/null ] || rm -f "$ef"

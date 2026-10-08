@@ -12,7 +12,9 @@
 #      poll), restore:<key> — each prints the hub's line, exit 0; the payload
 #      carried repo / kind / node / title, the issue number and the key
 #   B. the refusals keep fleet_hub_place's codes: HELD 3, REFUSED 4 (the hub's
-#      reason as it is), DECLINED 5, UNKNOWN 6 once FLEET_CLIENT_PLACE_WAIT runs out
+#      reason as it is), DECLINED 5, UNKNOWN 6 once FLEET_CLIENT_PLACE_WAIT runs out;
+#      (issue #1610) the machines the hub tried first: one stderr line each, and
+#      the `after …` field kept on the line a status poll ends with; ALL_DECLINED 4
 #   C. a wrong key / a lease the hub no longer holds → 401 → exit 1, one stderr line
 #   D. degenerate — no hub and no fleet on this computer: the one line
 #      「这台电脑没有 fleet，也连不上入口」, exit 1, nothing asked
@@ -85,6 +87,8 @@ class H(BaseHTTPRequestHandler):
         if p.get("action") == "status":
             op = p["operation_id"]
             polls[op] = polls.get(op, 0) + 1
+            if op == "op14":   # the machine tried second (issue #1610): its own line, no tail
+                return self.answer(200, {"line": "REMOTE m3 op14 done %s/issue-14\tchose m3" % UUID, "exit": 0, "state": "done"})
             if op == "op7":
                 return self.answer(200, {"line": "REMOTE m5 op7 done %s/issue-7\tm4 excluded: full" % UUID, "exit": 0, "state": "done"})
             return self.answer(200, {"line": "UNKNOWN m5 %s\tstill starting" % op, "exit": 6, "state": "pending", "operation_id": op})
@@ -103,6 +107,13 @@ class H(BaseHTTPRequestHandler):
             11: {"line": "REFUSED AT_CAPACITY\tall-full: every machine is at its session cap — m5: at cap 8/8; m4: at cap 4/4", "exit": 4, "state": "refused"},
             12: {"line": "DECLINED m4 op12 2\tfleet-m4 is full", "exit": 5, "state": "refused"},
             13: {"line": "UNKNOWN m5 op13\tstarting", "exit": 6, "state": "pending", "operation_id": "op13"},
+            14: {"line": "UNKNOWN m3 op14\tstarting\tafter mini2:op140:1", "exit": 6, "state": "pending", "operation_id": "op14",
+                 "attempts": [{"machine": "mini2", "operation_id": "op140", "state": "failed", "exit": 1,
+                               "why": "fleet discover: fork/exec fleet-control.py: invalid argument"}]},
+            15: {"line": "REFUSED ALL_DECLINED\tevery machine that could take it said no — mini2: declined: fork; m3: declined: full\tafter mini2:op150:1,m3:op151:2",
+                 "exit": 4, "state": "refused",
+                 "attempts": [{"machine": "mini2", "operation_id": "op150", "exit": 1, "why": "fork"},
+                              {"machine": "m3", "operation_id": "op151", "exit": 2, "why": "full"}]},
         }
         return self.answer(200, table[issue])
 
@@ -197,6 +208,17 @@ run "$P" verkyyi/claude-fleet 12
 eq "B: declined exit" 5 "$RC"; eq "B: declined line" "DECLINED m4 op12 2	fleet-m4 is full" "$OUT"
 FLEET_CLIENT_PLACE_WAIT=2 run "$P" verkyyi/claude-fleet 13
 eq "B: unknown exit" 6 "$RC"; has "B: unknown line" "$OUT" "UNKNOWN m5 op13"
+
+# issue #1610: the hub tried the next machine — each decline on stderr, the
+# first answer's `after …` field kept on the line a status poll ends with
+run "$P" verkyyi/claude-fleet 14
+eq "B: next machine exit" 0 "$RC"
+eq "B: next machine line keeps who declined first" "REMOTE m3 op14 done $UUID/issue-14	chose m3	after mini2:op140:1" "$OUT"
+has "B: next machine stderr names the decline" "$ERR" "mini2 declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument"
+run "$P" verkyyi/claude-fleet 15
+eq "B: all declined exit" 4 "$RC"
+has "B: all declined line" "$OUT" "REFUSED ALL_DECLINED	every machine that could take it said no — mini2: declined: fork; m3: declined: full	after mini2:op150:1,m3:op151:2"
+has "B: all declined stderr, one per machine" "$ERR" "m3 declined (exit 2): full"
 
 # --- C. a key that does not check (and no lease to take again) ---------------------------
 printf '%s\n' "$(printf '%s' "$KEY" | tr 0f f0)" > "$FLEET_CLIENT_KEY_FILE"

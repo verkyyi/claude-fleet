@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
@@ -67,6 +68,11 @@ type placeRequest struct {
 	// Wait is how many seconds a REMOTE start is waited on for its outcome
 	// (claude-fleet#1586): absent = placeWait, 0 = answer on acceptance.
 	Wait *int `json:"wait"`
+	// Tries is how many machines an auto send may be tried on
+	// (claude-fleet#1610), at most placeTriesMax: the asker's patience is
+	// tries × wait. Absent (an older ccquota) = 1 — the next machine is still
+	// tried while that one wait has room left.
+	Tries int `json:"tries"`
 }
 
 // placeWait is how long a REMOTE start is waited on by default (60 s, the
@@ -246,109 +252,253 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	// rule) and nobody else can take the issue in between. A scratch has no
 	// lease to hand over (claude-fleet#1541): nothing is reserved, nothing is
 	// given back — its start is sent as it is.
-	target, err := s.Store.Fleet(pl.FleetID)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	giveBack := func() {}
-	if !scratch {
-		tclaim := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: pl.FleetID + "/" + targetKey(key, target, req.Repo),
-			FleetID: pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser}
-		moved, err := s.Store.HandOverLease(req.Repo, req.Issue, req.WorkerID, tclaim, leaseStartGrace, now)
-		if err == nil && !moved {
-			// The asker held no live lease (its own acquire could not reach
-			// the hub): take it for the target the ordinary way.
-			var held store.Lease
-			if moved, held, _, err = s.Store.AcquireLease(tclaim, leaseStartGrace, now); err == nil && !moved {
-				s.placeAudit(p, fleetID, "HELD by "+held.WorkerID+" on "+nodeLabel(held.Hostname), now)
-				writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]string{"code": "ALREADY_CLAIMED",
-					"message": "#" + strconv.Itoa(req.Issue) + " is leased to " + nodeLabel(held.Hostname)},
-					"holder": leaseView(held), "placement": pl})
-				return
-			}
-		}
-		if err != nil {
-			httpError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		giveBack = func() {
-			mine := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: req.WorkerID, FleetID: fleetID,
-				EndpointID: ep.ID, Hostname: fl.Hostname, OSUser: fl.OSUser}
-			if _, err := s.Store.HandOverLease(req.Repo, req.Issue, tclaim.WorkerID, mine, leaseStartGrace, time.Now()); err != nil {
-				s.placeAudit(p, fleetID, "lease give-back failed: "+err.Error(), time.Now())
-			}
-		}
-	}
-
-	idem := req.Idem
+	//
+	// A machine whose spawn says no (claude-fleet#1610) is not the end of an
+	// auto send: the lease comes back, that machine is out, and the next
+	// candidate in placement's order gets the start — the asking machine
+	// last, answered LOCAL as it always is. Each try is waited on as one
+	// start is (wait), the whole send at most tries × wait; the earlier tries
+	// ride the answer as `attempts`. A machine named is honoured or refused,
+	// never swapped; a "claimed" no (3) is the issue's, not the machine's.
+	// Every machine declining is ALL_DECLINED, each one's reason in it.
 	what := strconv.Itoa(req.Issue)
 	if scratch {
 		what = "scratch"
 	}
-	if idem == "" {
-		idem = "place-" + fleetID[:8] + "-" + what + "-" + strconv.FormatInt(now.UnixNano(), 36)
-	}
-	args := map[string]any{"fleet_id": pl.FleetID, "repo": req.Repo, "node": req.Node, "idempotency_key": idem}
-	if scratch {
-		args["kind"] = "scratch"
-		if req.Name != "" {
-			args["name"] = req.Name
-		}
-	} else {
-		args["issue"] = float64(req.Issue)
-	}
-	if req.Agent != "" {
-		args["agent"] = req.Agent
-	}
-	if req.OriginWID != "" {
-		args["origin_wid"] = req.OriginWID
-	}
-	if accountClassBinds(req.AccountClass) {
-		args["account_class"] = req.AccountClass
-	}
-	if req.Reap != "" {
-		args["reap"] = req.Reap
-	}
-	op, err := s.submitWrite(r.Context(), p, "worker_start", args, &pl)
-	if err != nil {
-		giveBack()
-		s.placeAudit(p, fleetID, "REMOTE "+nodeLabel(pl.Machine)+" refused: "+errorObject(err)["code"], now)
-		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})
-		return
+	baseIdem := req.Idem
+	if baseIdem == "" {
+		baseIdem = "place-" + fleetID[:8] + "-" + what + "-" + strconv.FormatInt(now.UnixNano(), 36)
 	}
 	wait := placeWait
 	if req.Wait != nil {
 		wait = min(max(time.Duration(*req.Wait)*time.Second, 0), placeWaitMax)
 	}
-	resp := map[string]any{"local": false, "placement": pl}
-	if wait > 0 {
-		var heard error
-		op, heard = s.awaitOperation(r.Context(), op, time.Now().Add(wait))
-		oc := outcomeOf(op, nodeLabel(pl.Machine))
-		if oc.State == "unknown" {
-			oc = neverStarted(op, heard, oc, wait)
-		}
-		resp["outcome"] = oc
-		if oc.State != "done" {
-			// Nothing seen open there (claude-fleet#1606): the issue is the
-			// asker's again, which gives it back to the pool when it exits —
-			// no lease outlives a start nobody saw open, so the next send
-			// needs no --force. A start still running that opens after all
-			// is held off by the GitHub claim, the second guard.
-			giveBack()
-		}
-		s.placeAudit(p, fleetID, "REMOTE "+nodeLabel(pl.Machine)+" "+oc.State, now)
-	} else {
-		if op["status"] == "failed" {
-			// The node refused before running anything: the issue is the
-			// asker's again, so its fallback can still open it.
-			giveBack()
-		}
-		s.placeAudit(p, fleetID, "REMOTE "+nodeLabel(pl.Machine)+" "+asString(op["status"]), now)
+	tries := 1
+	if req.Tries > 0 {
+		tries = min(req.Tries, placeTriesMax)
 	}
-	resp["operation"] = op
-	writeJSON(w, http.StatusOK, resp)
+	deadline := now.Add(wait * time.Duration(tries))
+	declined := map[string]string{}
+	attempts := []placeAttempt{}
+	withAttempts := func(m map[string]any) map[string]any {
+		if len(attempts) > 0 {
+			m["attempts"] = attempts
+		}
+		return m
+	}
+	// next takes a declined try out of the running and says where the send
+	// goes now: done=true means the answer was written (LOCAL, or every
+	// machine declined); false with pl moved means try pl.
+	next := func(a placeAttempt) (done bool, ok bool) {
+		if req.Node != "auto" || wait <= 0 || time.Until(deadline) < placeRetryMin(wait) {
+			return false, false
+		}
+		attempts = append(attempts, a)
+		declined[pl.FleetID] = a.Why
+		npl, err := s.pickNodeAfter(p, req.Repo, "auto", time.Now(), declined, fleetID)
+		if err != nil {
+			if len(attempts) == 1 {
+				// The only machine that could take it said no: its answer,
+				// as it always was.
+				attempts = attempts[:0]
+				return false, false
+			}
+			s.placeAudit(p, fleetID, errorObject(err)["code"], time.Now())
+			writeJSON(w, placeStatus(err), withAttempts(map[string]any{"error": errorObject(err), "placement": npl}))
+			return true, true
+		}
+		pl = npl
+		if pl.FleetID == fleetID {
+			s.placeAudit(p, fleetID, "LOCAL "+nodeLabel(pl.Machine)+" after "+strconv.Itoa(len(attempts)), time.Now())
+			writeJSON(w, http.StatusOK, withAttempts(map[string]any{"local": true, "placement": pl}))
+			return true, true
+		}
+		return false, true
+	}
+	for try := 1; ; try++ {
+		target, err := s.Store.Fleet(pl.FleetID)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		giveBack := func() {}
+		if !scratch {
+			tclaim := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: pl.FleetID + "/" + targetKey(key, target, req.Repo),
+				FleetID: pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser}
+			moved, err := s.Store.HandOverLease(req.Repo, req.Issue, req.WorkerID, tclaim, leaseStartGrace, now)
+			if err == nil && !moved {
+				// The asker held no live lease (its own acquire could not reach
+				// the hub): take it for the target the ordinary way.
+				var held store.Lease
+				if moved, held, _, err = s.Store.AcquireLease(tclaim, leaseStartGrace, now); err == nil && !moved {
+					s.placeAudit(p, fleetID, "HELD by "+held.WorkerID+" on "+nodeLabel(held.Hostname), now)
+					writeJSON(w, http.StatusConflict, withAttempts(map[string]any{"error": map[string]string{"code": "ALREADY_CLAIMED",
+						"message": "#" + strconv.Itoa(req.Issue) + " is leased to " + nodeLabel(held.Hostname)},
+						"holder": leaseView(held), "placement": pl}))
+					return
+				}
+			}
+			if err != nil {
+				httpError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			giveBack = func() {
+				mine := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: req.WorkerID, FleetID: fleetID,
+					EndpointID: ep.ID, Hostname: fl.Hostname, OSUser: fl.OSUser}
+				if _, err := s.Store.HandOverLease(req.Repo, req.Issue, tclaim.WorkerID, mine, leaseStartGrace, time.Now()); err != nil {
+					s.placeAudit(p, fleetID, "lease give-back failed: "+err.Error(), time.Now())
+				}
+			}
+		}
+
+		idem := baseIdem
+		if try > 1 {
+			idem = retryIdem(baseIdem, try) // a new start, not the declined one again
+		}
+		args := map[string]any{"fleet_id": pl.FleetID, "repo": req.Repo, "node": req.Node, "idempotency_key": idem}
+		if scratch {
+			args["kind"] = "scratch"
+			if req.Name != "" {
+				args["name"] = req.Name
+			}
+		} else {
+			args["issue"] = float64(req.Issue)
+		}
+		if req.Agent != "" {
+			args["agent"] = req.Agent
+		}
+		if req.OriginWID != "" {
+			args["origin_wid"] = req.OriginWID
+		}
+		if accountClassBinds(req.AccountClass) {
+			args["account_class"] = req.AccountClass
+		}
+		if req.Reap != "" {
+			args["reap"] = req.Reap
+		}
+		m := nodeLabel(pl.Machine)
+		op, err := s.submitWrite(r.Context(), p, "worker_start", args, &pl)
+		if err != nil {
+			giveBack()
+			e := errorObject(err)
+			s.placeAudit(p, fleetID, "REMOTE "+m+" refused: "+e["code"], now)
+			if declinedBySubmit(e["code"]) {
+				one := 1
+				if done, ok := next(placeAttempt{Machine: m, State: "refused", Exit: &one, Why: oneLine(e["message"])}); done {
+					return
+				} else if ok {
+					continue
+				}
+			}
+			writeJSON(w, placeStatus(err), withAttempts(map[string]any{"error": e, "placement": pl}))
+			return
+		}
+		resp := map[string]any{"local": false, "placement": pl}
+		if wait > 0 {
+			tw := min(wait, max(time.Until(deadline), 0))
+			var heard error
+			op, heard = s.awaitOperation(r.Context(), op, time.Now().Add(tw))
+			oc := outcomeOf(op, m)
+			if oc.State == "unknown" {
+				oc = neverStarted(op, heard, oc, tw)
+			}
+			resp["outcome"] = oc
+			if oc.State != "done" {
+				// Nothing seen open there (claude-fleet#1606): the issue is the
+				// asker's again, which gives it back to the pool when it exits —
+				// no lease outlives a start nobody saw open, so the next send
+				// needs no --force. A start still running that opens after all
+				// is held off by the GitHub claim, the second guard.
+				giveBack()
+			}
+			s.placeAudit(p, fleetID, "REMOTE "+m+" "+oc.State, now)
+			if (oc.State == "refused" || oc.State == "failed") && oc.Exit != nil && *oc.Exit > 0 && *oc.Exit != 3 {
+				if done, ok := next(placeAttempt{Machine: m, OperationID: asString(op["operation_id"]), State: oc.State,
+					Exit: oc.Exit, Why: oneLine(oc.Stderr)}); done {
+					return
+				} else if ok {
+					continue
+				}
+			}
+		} else {
+			if op["status"] == "failed" {
+				// The node refused before running anything: the issue is the
+				// asker's again, so its fallback can still open it.
+				giveBack()
+			}
+			s.placeAudit(p, fleetID, "REMOTE "+m+" "+asString(op["status"]), now)
+		}
+		resp["operation"] = op
+		writeJSON(w, http.StatusOK, withAttempts(resp))
+		return
+	}
+}
+
+// placeAttempt is one machine that declined a send before the one answered
+// (claude-fleet#1610): its machine, the operation it was sent ("" when the
+// hub could not even hand it over), its outcome and the reason.
+type placeAttempt struct {
+	Machine     string `json:"machine"`
+	OperationID string `json:"operation_id,omitempty"`
+	State       string `json:"state"`
+	Exit        *int   `json:"exit,omitempty"`
+	Why         string `json:"why"`
+}
+
+// retryIdem is the idempotency key of a send's try-th machine: its own
+// start, never the declined one answered again.
+func retryIdem(base string, try int) string {
+	return base[:min(len(base), 120)] + ":try" + strconv.Itoa(try)
+}
+
+// placeTriesMax is the most machines one send is tried on.
+const placeTriesMax = 3
+
+// placeRetryMin is how much of a send's budget must be left to try another
+// machine: half a try's wait, at most 10 s — a try with less would end
+// unknown, which keeps a claim the next send has to look at.
+func placeRetryMin(wait time.Duration) time.Duration {
+	return min(wait/2, 10*time.Second)
+}
+
+// declinedBySubmit says whether a start the hub could not hand to the
+// machine is that machine's no (another may take it) rather than the
+// request's (no machine would).
+func declinedBySubmit(code string) bool {
+	switch code {
+	case "INVALID_ARGUMENT", "IDEMPOTENCY_CONFLICT", "INTERNAL", "UNAUTHENTICATED", "ALREADY_CLAIMED":
+		return false
+	}
+	return true
+}
+
+// AttemptsTail is the optional last field of a place line (claude-fleet#1610):
+// `after <machine>:<operation_id>:<exit>,…` for each machine that declined
+// first ("-" for none), "" when the first try answered.
+func AttemptsTail(machines, ops []string, exits []int) string {
+	if len(machines) == 0 {
+		return ""
+	}
+	parts := make([]string, len(machines))
+	for i, m := range machines {
+		op := ops[i]
+		if op == "" {
+			op = "-"
+		}
+		parts[i] = m + ":" + op + ":" + strconv.Itoa(exits[i])
+	}
+	return "after " + strings.Join(parts, ",")
+}
+
+func attemptsTail(as []placeAttempt) string {
+	ms, ops, xs := make([]string, len(as)), make([]string, len(as)), make([]int, len(as))
+	for i, a := range as {
+		ms[i], ops[i], xs[i] = a.Machine, a.OperationID, 1
+		if a.Exit != nil {
+			xs[i] = *a.Exit
+		}
+	}
+	return AttemptsTail(ms, ops, xs)
 }
 
 // awaitOperation asks the target for a REMOTE start's state until it is
@@ -513,7 +663,7 @@ func placeStatus(err error) int {
 	code := errorObject(err)["code"]
 	if st := map[string]int{"INVALID_ARGUMENT": 400, "NOT_FOUND": 404, "FORBIDDEN": 403, "UNAUTHENTICATED": 401,
 		"UNAVAILABLE": 503, "TIMEOUT": 504, control.CodeProtoMismatch: 409,
-		"IDEMPOTENCY_CONFLICT": 409, "AT_CAPACITY": 429, "NO_ELIGIBLE_NODE": 503}[code]; st != 0 {
+		"IDEMPOTENCY_CONFLICT": 409, "ALL_DECLINED": 409, "AT_CAPACITY": 429, "NO_ELIGIBLE_NODE": 503}[code]; st != 0 {
 		return st
 	}
 	if code == "INTERNAL" {

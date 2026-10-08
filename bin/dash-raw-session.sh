@@ -398,7 +398,14 @@ if [ "$PLACING" = 1 ]; then
   _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
   place_out=$(fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP"); place_rc=$?
   _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
+  # Issue #1610: machines that declined first (the hub tried the next one).
+  case "$_why" in *$'\t'after\ *)
+    printf 'dash-raw-session: scratch 先被 %s 拒绝，入口已换下一台\n' "$(printf '%s' "${_why##*$'\t'after }" | sed 's/:[^,]*//g; s/,/、/g')" >&2
+    _why=${_why%$'\t'after *} ;;
+  esac
   case "$place_rc:$_pv" in
+    4:REFUSED\ ALL_DECLINED)
+      refuse "raw: scratch 每台机器都拒绝了: ${_why:-no reason given}"; exit 1 ;;
     0:REMOTE\ *)
       read -r _ _m _op _st _w <<<"$_pv"
       if [ "$_st" = 'done' ]; then
