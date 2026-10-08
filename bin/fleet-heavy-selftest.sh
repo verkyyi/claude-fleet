@@ -135,16 +135,16 @@ eq "a planted symlink is never written through" precious "$(cat "$TMP/victim")"
 FLEET_HEAVY_DIR="$OD" "$HEAVY" --slots 2 --label held -- sh -c "FLEET_HEAVY_DIR='$OD' '$HEAVY' --slots 2 --status > '$TMP/own.st'; ls '$OD' > '$TMP/own.ls'"
 has "the holder is named in its own hold file" "hold.$ME." "$(cat "$TMP/own.ls")"
 has "--status names the holder off its hold file" "$ME" "$(grep 'held     slot-' "$TMP/own.st")"
-eq "the hold file is gone after release" "" "$(ls "$OD" | grep '^hold\.')"
+eq "the hold file is gone after release" "" "$(for f in "$OD"/hold.*; do [ -e "$f" ] && echo "$f"; done)"
 printf '%s\tmallory\tfake\t0\t1\n' "$$" > "$OD/hold.mallory.$$"   # owned by $ME, named mallory
 sleep 30 & SQ=$!; printf '%s\tmallory\tfake\t0\n' "$SQ" > "$OD/wait.mallory.$SQ"
 st="$(FLEET_HEAVY_DIR="$OD" "$HEAVY" --slots 2 --status)"
 hasnt "a hold under another login's name is not believed" "mallory" "$st"
 has "a wait under another login's name is not counted" "0 waiting" "$st"
 python3 "$BIN/fleet-shared-dirs.py" --root "$TMP/own" --slots 2 >/dev/null
-eq "fleet-shared-dirs.py sweeps the squats" "" "$(ls "$OD" | grep -E '^(hold|wait)\.mallory')"
+eq "fleet-shared-dirs.py sweeps the squats" "" "$(for f in "$OD"/hold.mallory.* "$OD"/wait.mallory.*; do [ -e "$f" ] && echo "$f"; done)"
 kill "$SQ" 2>/dev/null; wait "$SQ" 2>/dev/null
-eq "fleet-shared-dirs.py sweeps a planted events symlink" "" "$(ls -l "$OD" | grep "events.$ME.log ->")"
+eq "fleet-shared-dirs.py sweeps a planted events symlink" "" "$([ -L "$OD/events.$ME.log" ] && echo symlink)"
 if [ "$(id -u)" != 0 ] && sudo -n -u nobody true 2>/dev/null; then
   chmod 755 "$TMP" "$TMP/own"
   FLEET_HEAVY_DIR="$OD" "$HEAVY" --slots 2 -- true
