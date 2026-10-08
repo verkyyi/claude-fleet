@@ -780,6 +780,10 @@ kout=$(cd "$KH" && env -i HOME="$KH" PATH="$KP" SHELL=/bin/zsh TMPDIR="$WORK" FL
 [ "$krc" = 0 ] && [ "$kout" = fleet-shell ] && grep -q 'new-session' "$K/tmux.log" && ! grep -q 'install tmux' "$K/fleet.err" \
   && ok "K \`fleet\` finds the static tmux (nothing else on PATH) and starts the shell" || bad "K fleet: rc=$krc out=$kout err=$(tail -3 "$K/fleet.err") log=$(head -3 "$K/tmux.log")"
 [ "$(hval "$KH" FLEET_CLIENT_LAYOUT)" = solo ] && ok "K a computer the fleet was never on → FLEET_CLIENT_LAYOUT=solo" || bad "K layout: $(cat "$KH/.config/claude-fleet/fleet.conf" 2>&1)"
+# the newcomer's screen before `fleet` (issue #2347, EPIC #2259): what to type, no fleet word
+kw=$(echo "$out" | grep -E '入口|承载|只协调|扫码' || true)
+[ -z "$kw" ] && echo "$out" | grep -q '^  之后每次只敲：fleet$' && echo "$out" | grep -q '^邀请: 已收下，登录时一起带上$' \
+  && ok "K the newcomer's install says what to type, no 入口 · 承载 · 只协调 · 扫码 (#2347)" || bad "K fleet words on the newcomer's screen: ${kw:-（none — but no 之后每次只敲 / 邀请 line）} $out"
 inv="$KH/.config/claude-fleet/invite"
 [ "$(cat "$inv" 2>/dev/null)" = inv-K2260abc ] && [ "$(ls -l "$inv" | cut -c1-10)" = '-rw-------' ] && ! echo "$out" | grep -q inv-K2260abc \
   && ok "K the invitation the line carried is kept 0600, never printed" || bad "K invite: $(ls -l "$inv" 2>&1) $out"
@@ -788,6 +792,9 @@ KH2="$K/home2"; mkdir -p "$KH2/.config/claude-fleet"; echo '{}' > "$KH2/.config/
 kinstall "$KH2"
 [ "$rc" = 0 ] && ! grep -q FLEET_CLIENT_LAYOUT "$KH2/.config/claude-fleet/fleet.conf" \
   && ok "K an earlier install → no FLEET_CLIENT_LAYOUT written" || bad "K earlier: rc=$rc $(grep LAYOUT "$KH2/.config/claude-fleet/fleet.conf") $out"
+echo "$out" | grep -q '^能力: 基础 · 承载 未开 · 入口 接$' && echo "$out" | grep -q '^  入口 .* · 之后每次只敲：fleet$' \
+  && echo "$out" | grep -q '^邀请: 已收下，登录时一起交给入口$' \
+  && ok "K an earlier install still reads 入口 · 能力 as before (#2347)" || bad "K earlier install's lines changed: $out"
 # a bundle that does not match its SHA-256 → file by file, still installed
 touch "$K/corrupt"; KH3="$K/home3"; mkdir -p "$KH3"
 kinstall "$KH3"; rm -f "$K/corrupt"

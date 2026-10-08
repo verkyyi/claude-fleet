@@ -98,16 +98,18 @@ list_row_named() {
 }
 
 # qr_state <login> (a screen on stdin): qr — a 验证码 is up; none — the
-# installer is past 「能力:」 AND finished with no code (the client is up, it
+# installer is past its end (「能力:」, or 「用时 N 秒」 — the newcomer's install
+# prints no 能力 line, issue #2347) AND finished with no code (the client is up, it
 # could not open, or the person is back at a prompt); wait — anything else.
 # The installer prints 「能力:」 BEFORE its QR (#2255): 能力: alone is no proof
 # that this computer was already known, so it never reads none by itself.
 CLIENT_UP='新任务|New task'
+INSTALL_END='^(能力:|用时 [0-9]+ 秒)'
 qr_state() {
   local p
   p=$(cat)
   if printf '%s\n' "$p" | grep -Eq '验证码 [A-Z]{4}-[A-Z]{4}'; then echo qr
-  elif printf '%s\n' "$p" | grep -Eq '^能力:' \
+  elif printf '%s\n' "$p" | grep -Eq "$INSTALL_END" \
        && printf '%s\n' "$p" | grep -Eq -- "$CLIENT_UP|open terminal failed|not a terminal|$1@[^ ]+ [^ ]* ?[%\$#] *\$"; then echo none
   else echo wait; fi
 }
@@ -258,7 +260,7 @@ ask_wait() {
     p=$(pane)
     n=$(printf '%s\n' "$p" | grep -Ec '回车 = [0-9]+ ›')
     if [ "$n" -gt "$answered" ]; then printf 1; return 0; fi
-    if printf '%s\n' "$p" | grep -Eq '验证码 [A-Z]{4}-[A-Z]{4}|^能力:|fleet-install: |✗ |command not found|Could not resolve'; then printf 2; return 0; fi
+    if printf '%s\n' "$p" | grep -Eq '验证码 [A-Z]{4}-[A-Z]{4}|^能力:|^用时 [0-9]+ 秒|fleet-install: |✗ |command not found|Could not resolve'; then printf 2; return 0; fi
     [ "$SECONDS" -lt "$deadline" ] || return 1
     sleep "$POLL"
   done
@@ -353,7 +355,7 @@ step_install() {
   done
   pass ask "$asked question(s), each answered with Enter (the default)"
   # 5 download: on to the QR, the end, or an error
-  k=$(wait_for "$TIMEOUT" '验证码 [A-Z]{4}-[A-Z]{4}' '^能力:' 'fleet-install: |✗ |\[fleet-onboard-drill\] ssh exited')
+  k=$(wait_for "$TIMEOUT" '验证码 [A-Z]{4}-[A-Z]{4}' "$INSTALL_END" 'fleet-install: |✗ |\[fleet-onboard-drill\] ssh exited')
   NOISE=$(pane | grep -c 'curl: (')
   case "$k" in
     1|2) shot download

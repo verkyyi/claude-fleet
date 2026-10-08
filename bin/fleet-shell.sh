@@ -1183,7 +1183,8 @@ home-session)
 $(T show-environment -g 2>/dev/null)
 EOF
   export FLEET_CLIENT_DIR="$CL_DIR" FLEET_SESSION="$SESS"
-  note "$(sh "$BIN/fleet-ui-lang.sh" t home_opening_fmt "$hagent" 2>/dev/null)"
+  hopen=home_opening_fmt; [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] && hopen=home_opening_solo_fmt
+  note "$(sh "$BIN/fleet-ui-lang.sh" t "$hopen" "$hagent" 2>/dev/null)"
   hout=$(bash "$BIN/fleet-client-place.sh" - home --agent "$hagent" --node "$hnode" ${hbody:+--body-file "$hbody"}); hrc=$?
   hline=$(printf '%s\n' "$hout" | tail -n1)
   if [ "$hrc" != 0 ]; then

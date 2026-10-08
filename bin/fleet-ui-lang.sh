@@ -382,6 +382,9 @@ fleet_ui_t() {
     # a HOME session (issue #2264): `fleet claude` / `fleet codex`, a newcomer's first one
     zh:home_opening_fmt)        printf '正在开 %s 会话（主目录，开在入口挑的有空机器上）…' "${1:-}" ;;
     en:home_opening_fmt)        printf 'opening a %s session (home directory, on the machine the hub picks)…' "${1:-}" ;;
+    # the newcomer's one-session view (issue #2347): no fleet word before the first key
+    zh:home_opening_solo_fmt)   printf '正在开 %s 会话（主目录，开在一台有空的机器上）…' "${1:-}" ;;
+    en:home_opening_solo_fmt)   printf 'opening a %s session (home directory, on a free machine)…' "${1:-}" ;;
     zh:home_placed_fmt)         printf '会话开在 %s' "${1:-}" ;;
     en:home_placed_fmt)         printf 'the session is on %s' "${1:-}" ;;
     zh:home_failed_fmt)         printf '开不了会话：%s' "${1:-}" ;;
