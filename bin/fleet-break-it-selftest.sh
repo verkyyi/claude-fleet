@@ -109,6 +109,7 @@
 #   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
 #   client-unversioned-drift                        bin/fleet-client-update.sh (tick, digest), fleet-shell.sh stamp_ver
 #   client-sidebar-stale-after-update               bin/fleet-sidebar.py (VIEW_STAMP, sync), fleet-shell.sh reload
+#   client-other-login-empty-list                   bin/fleet-hub-sessions.sh (fetch: ETag + its mapping stamp)
 #   hub-restart-where                               bin/fleet-shell.sh (keeper renew), fleet-client-lease.py renew,
 #                                                   fleet-client-where.sh
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
@@ -2214,6 +2215,61 @@ drill_client_sidebar_stale_after_update() {
   exec 8>&-; kill "$cpid" 2>/dev/null
   [ "$rc" = 0 ] || return 1
   WHAT="客户端换了新文件：侧栏按内容认出不是自己启动时的代码，重画成新进程"
+}
+
+# A client whose node login is not the name of the computer it sits at (issue
+# #2397): cj's sidebar read 「No sessions」 while the hub listed his five sessions.
+# The code before #2390 kept only rows whose os_user was `id -un`, and stored the
+# hub's ETag beside the empty cache it mapped; the client updated past #2390, but
+# every round after sent that ETag back, the hub's answer for his scope had not
+# moved (no heartbeat in it), and each 304 kept the empty list. The sandbox: the
+# real fleet-hub-sessions.sh in client mode over a connection certificate, a curl
+# that answers 304 to the stored ETag and the body otherwise, and the old code's
+# leftovers on disk — an empty cache and a bare ETag.
+drill_client_other_login_empty_list() {
+  CAP=10; local sc="$WORK/cole" t0 out F=22222222-2222-4222-8222-222222222222 S=cole
+  mkdir -p "$sc/bin" "$sc/home/.ssh" "$sc/conf/fleets/$S" "$sc/t/.claude-dash/global"
+  printf 'FLEET_REPO=acme/app\n' > "$sc/conf/fleets/$S/conf"
+  cat > "$sc/sessions.json" <<EOF
+{"sessions": [{"worker_id": "$F/issue-7", "machine_name": "m5", "os_user": "nodelogin", "availability": "online",
+  "worker": {"issue": 7, "repo": "acme/app", "state": "done", "agent": "claude", "name": "cj-row", "needs": ""}}],
+ "nodes": [{"machine_name": "m5", "availability": "online", "sessions": 1}]}
+EOF
+  # curl: 304 to If-None-Match "E1", else the body with ETag "E1"
+  cat > "$sc/bin/curl" <<SHIM
+#!/bin/sh
+out='' hdr='' inm=''
+while [ \$# -gt 0 ]; do
+  case "\$1" in -o) out=\$2; shift ;; -D) hdr=\$2; shift ;; -H) case "\$2" in If-None-Match:*) inm=\${2#If-None-Match: } ;; esac; shift ;; esac
+  shift
+done
+printf '%s\n' "\${inm:--}" >> '$sc/inm.log'
+[ -n "\$hdr" ] && printf 'HTTP/1.1 200 OK\r\nETag: "E1"\r\n\r\n' > "\$hdr"
+if [ "\$inm" = '"E1"' ]; then printf 304; exit 0; fi
+[ -n "\$out" ] && cat '$sc/sessions.json' > "\$out"
+printf 200
+SHIM
+  chmod +x "$sc/bin/curl"
+  ssh-keygen -q -t ed25519 -N '' -f "$sc/ca" >/dev/null 2>&1
+  ssh-keygen -q -t ed25519 -N '' -f "$sc/home/.ssh/fleet-cert" >/dev/null 2>&1
+  ssh-keygen -q -s "$sc/ca" -I 'gh:cj' -n nodelogin -V '-5m:+1h' "$sc/home/.ssh/fleet-cert.pub" >/dev/null 2>&1 \
+    || { WHY="could not sign a sandbox certificate"; return 1; }
+  # the break: what the code before #2390 left on disk — its empty cache, the bare ETag
+  printf '#ts\037%s\n' "$(date +%s)" > "$sc/t/.claude-dash/global/remote_$S"
+  printf '"E1"\n' > "$sc/t/.claude-dash/global/hubsess.etag"
+  date +%s > "$sc/t/.claude-dash/global/hub_ok"
+  t0=$(now)
+  out=$( unset CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_CMD FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_LOCAL \
+               FLEET_NODE_ALIASES FLEET_HUB_URL FLEET_CERT XDG_CONFIG_HOME TMUX TMUX_PANE
+         export PATH="$sc/bin:$PATH" HOME="$sc/home" TMPDIR="$sc/t" FLEET_CONF_DIR="$sc/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+                CCQUOTA_FLEET=1 CCQUOTA_HUB_URL=http://hub.test FLEET_HUB_SESSIONS_CLIENT="$S"
+         bash "$BIN/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1
+         cat "$TMPDIR/.claude-dash/global/remote_$S" 2>/dev/null )
+  SECS=$(since "$t0")
+  case "$out" in *"wid:$F/issue-7"*) ;;
+    *) WHY="the list stayed empty — the client sent [$(tr '\n' ' ' < "$sc/inm.log")] and kept the old mapping's cache: [$(printf '%s' "$out" | tr '\037\n' '| ')]"; return 1 ;;
+  esac
+  WHAT="客户端换版后，旧代码存下的 ETag 不再拿去问入口：入口回全量，按新代码重新映射，节点登录名≠本机用户名的会话回到侧栏"
 }
 
 # ============================================ a fleet's tmux, deleted from a shell ======
