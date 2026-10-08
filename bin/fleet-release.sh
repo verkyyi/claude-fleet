@@ -115,8 +115,7 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-for v in ci_timeout hub_timeout mach_timeout local_timeout; do
-  eval "x=\${$v}"
+for x in "$ci_timeout" "$hub_timeout" "$mach_timeout" "$local_timeout"; do
   case "$x" in ''|*[!0-9]*) die "a --*-timeout takes seconds" ;; esac
 done
 git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git checkout (--dir)"
