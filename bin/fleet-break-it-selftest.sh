@@ -1736,7 +1736,7 @@ drill_cert_expiry_keeper() {
 # Before, a lost machine's rows moved into a `─ m4 失联 ─` group at the foot and
 # came back when it answered again — the list reshuffled twice. The sidebar pane
 # is captured before / during / after: during, the same lines in the same order,
-# only the lost rows' `@m4!` (the colour is the view's, never in a capture).
+# only the lost rows' state glyph `⊘` (issue #2305; the colour is the view's, never in a capture).
 off_hub() {   # the fake hub: `down` = unreachable, else the current answer
   mkdir -p "$WORK/off"
   printf '#!/bin/bash\n[ -f "%s/off/down" ] && exit 1\ncat "%s/off/cur.json"\n' "$WORK" "$WORK" > "$WORK/off/hub"
@@ -1775,7 +1775,9 @@ off_list() {   # the sidebar pane as it reads (text only), blank lines dropped
 # (input line, hints) is the bar's business, not the list's
 off_rows() { off_list "$1" | awk '/app-root|app-kid|app-m4|tool-m5|tool-m4|loose-m4|\([0-9]+\)$|失联/ { print }' | spin_off; }
 spin_off() { sed -e 's/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/*/g'; }       # the working spinner turns on its own
-off_norm() { LC_ALL=C sed -e 's/!//g' -e 's/  */ /g'; }
+# a row's state glyph is masked (`?`): a lost machine's row says so in it — `⊘`
+# (issue #2305) — and that is the one thing allowed to change in place
+off_norm() { LC_ALL=C sed -e 's/^\([^ ]* \) *[^ ][^ ]* /\1? /' -e 's/!//g' -e 's/  */ /g'; }
 off_wait() {   # <socket> <secs> <grep -E pattern> [v] — until the rows (do not) show it
   local _
   for _ in $(seq 1 $(($2 * 5))); do
@@ -1817,27 +1819,27 @@ PY
   sleep 1; before=$(off_rows "$s")
   # 1. one machine lost: the hub says m4 is lost
   cp "$WORK/off/m4lost.json" "$WORK/off/cur.json"
-  off_wait "$s" 20 '@m4!|@m!' || { WHY="m4 lost never showed on its rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  off_wait "$s" 20 '⊘ +app-m4' || { WHY="m4 lost never showed on its rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
   sleep 1; during=$(off_rows "$s")
-  case "$during" in *'@本!'*|*'@m5!'*) WHY="m4 lost dimmed m5's rows too (the hub went stale?): $(printf '%s' "$during" | tr '\n' '|')"; return 1 ;; esac
+  printf '%s\n' "$during" | grep -qE '⊘ +(app-root|tool-m5)' && { WHY="m4 lost dimmed m5's rows too (the hub went stale?): $(printf '%s' "$during" | tr '\n' '|')"; return 1; }
   case "$during" in *失联*) WHY="a 失联 heading came back: $(printf '%s' "$during" | tr '\n' '|')"; return 1 ;; esac
   [ "$(printf '%s\n' "$during" | off_norm)" = "$(printf '%s\n' "$before" | off_norm)" ] \
     || { WHY="m4 lost moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
   # 2. the hub unreachable: every row lost, still the same lines
   cp "$WORK/off/on.json" "$WORK/off/cur.json"
-  off_wait "$s" 20 '@m4!|@m!' v || { WHY="m4 never came back after its loss"; return 1; }
+  off_wait "$s" 20 '⊘ +app-m4' v || { WHY="m4 never came back after its loss"; return 1; }
   : > "$WORK/off/down"
-  off_wait "$s" 40 '@m5!|@本!|@本机!' || { WHY="入口连不上 never dimmed the m5 rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  off_wait "$s" 40 '⊘ +(app-root|tool-m5)' || { WHY="入口连不上 never dimmed the m5 rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
   sleep 1; during=$(off_rows "$s")
   [ "$(printf '%s\n' "$during" | off_norm)" = "$(printf '%s\n' "$before" | off_norm)" ] \
     || { WHY="入口连不上 moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
   # 3. back: the very lines of before, no `!` left
   t0=$(now); rm -f "$WORK/off/down"
-  off_wait "$s" "$CAP" '!' v || { WHY="the rows stayed lost after the hub answered: $(off_rows "$s" | tr '\n' '|')"; return 1; }
+  off_wait "$s" "$CAP" '⊘' v || { WHY="the rows stayed lost after the hub answered: $(off_rows "$s" | tr '\n' '|')"; return 1; }
   [ "$(off_rows "$s")" = "$before" ] || { WHY="back online, the list differs from before: [$(off_rows "$s" | tr '\n' '|')]"; return 1; }
   SECS=$(since "$t0"); : > "$WORK/off/stop"
   "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; "$REAL_TMUX" -L "$s-stage" kill-server 2>/dev/null
-  WHAT="m4 失联 / 入口连不上：行数、顺序、分组不变，只多 @m4!；恢复后与断开前逐行一致"
+  WHAT="m4 失联 / 入口连不上：行数、顺序、分组不变，只是状态图标变 ⊘；恢复后与断开前逐行一致"
 }
 
 # The proxy pane's `run` loop (fleet-remote-view.sh) against an ssh shim: a
