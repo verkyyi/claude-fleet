@@ -508,6 +508,19 @@ ok 'P the command landed' "[ -f '$H/.claude/commands/fleet-claim.md' ]"
 ok 'P the hooks still merge' "grep -q '^fleet-hooks-merge.py merge' '$LOG'"
 contains 'P the skills step still runs' "$OUT" 'skills: installed'
 contains 'P apply ok' "$OUT" 'apply: ok'
+# docprev (issue #2415): every apply asks doc-preview to restart a server.py older than
+# the installed copy — not gated on skills/ changing; a dry run only asks (--check).
+mkdir -p "$H/.cache/claude-doc-preview" "$H/.claude/skills/doc-preview"
+printf '#!/bin/sh\necho "share.sh $*" >> "%s"\n[ "$2" = --check ] && { echo "doc-preview: server.py pid 9 on :8765 runs an older copy"; exit 1; }\necho "doc-preview: restarted server.py on :8765 with the installed copy"\n' "$LOG" > "$H/.claude/skills/doc-preview/share.sh"
+chmod +x "$H/.claude/skills/doc-preview/share.sh"
+run_ap --from "$PEMPTY" --to "$P2" --no-daemons
+contains 'P docprev restarts an old server' "$OUT" 'docprev: restarted server.py on :8765'
+ok 'P docprev ran --upgrade' "grep -qx 'share.sh --upgrade' '$LOG'"
+run_ap --from "$PEMPTY" --to "$P2" --no-daemons --dry-run
+contains 'P docprev dry-run only reports' "$OUT" 'docprev: would restart'
+ok 'P docprev dry-run asked --check' "grep -qx 'share.sh --upgrade --check' '$LOG'"
+ok 'P docprev dry-run restarted nothing' "! grep -qx 'share.sh --upgrade' '$LOG'"
+rm -rf "$H/.cache/claude-doc-preview" "$H/.claude/skills/doc-preview"
 run_ap --from "$P1" --to "$P2" --no-daemons --dry-run
 contains 'P dry-run keeps the skip line' "$OUT" 'daemons: skip — --no-daemons'
 ok 'P dry-run no launchctl' "! grep -q '^launchctl' '$LOG'"

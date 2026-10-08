@@ -121,6 +121,7 @@ Other commands:
 ~/.claude/skills/doc-preview/share.sh --unpublish <id>    # take it back off — verified, or exit 1
 ~/.claude/skills/doc-preview/share.sh --pubstatus <id>    # is this doc public? print its URL
 ~/.claude/skills/doc-preview/share.sh --health            # public links + serve routes, for fleet-doctor
+~/.claude/skills/doc-preview/share.sh --upgrade [--check]  # restart a server.py older than this copy, same port (install-apply runs it)
 ~/.claude/skills/doc-preview/share.sh --stop              # tear down EVERYTHING (all sessions)
 ```
 

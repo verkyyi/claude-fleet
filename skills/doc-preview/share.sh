@@ -21,6 +21,7 @@
 #   share.sh --unpublish <id|substr>   # take that doc back off the public internet (verified, or exit 1)
 #   share.sh --pubstatus <id|substr>   # print whether a doc is public + its URL
 #   share.sh --health                  # one line for fleet-doctor: public mounts, their age, serve routes
+#   share.sh --upgrade [--check]       # restart a server.py older than this copy, same port (#2415)
 #   share.sh --stop                    # tear everything down (all sessions; public links off)
 #
 # Every link carries a code (issue #1153): a doc is /d/<128-bit random code>/, the
@@ -32,7 +33,8 @@
 # server.py enforces both on every request (its `--tool` half is the one copy of that
 # rule share.sh reads), and every share.sh run prunes what has expired. --refresh keeps
 # every link as it is. A pre-#1153 doc keeps its old link until 7 days after it was
-# shared. A running server.py from an older version is restarted on the SAME port.
+# shared. A running server.py from an older version is restarted on the SAME port —
+# by the next share, or at once by `share.sh --upgrade` (install-apply runs it, #2415).
 #
 # Publishing is per-document and normally driven by the in-page "公开链接" toggle (shown only
 # when the doc is viewed over the tailnet). Tailnet sharing stays private; only explicitly
@@ -164,7 +166,12 @@ start_server() { # <addr> [public] [first port]; sets PORT
   while [ "$p" -lt "$end" ] && [ "$launches" -lt 5 ]; do
     if port_free "$addr" "$p"; then
       launches=$((launches + 1))
-      nohup python3 "$SRV" "$p" "$SERVE_DIR" "$HERE" "$addr" $pub >"$ROOT/server.log" 2>&1 &
+      # Its own session (setsid; macOS has no setsid(1)): a launchd job that restarts it
+      # (install-apply's --upgrade, issue #2415) would otherwise take it down on exit.
+      nohup python3 -c 'import os, sys
+try: os.setsid()
+except OSError: pass
+os.execvp(sys.argv[1], sys.argv[1:])' python3 "$SRV" "$p" "$SERVE_DIR" "$HERE" "$addr" $pub >"$ROOT/server.log" 2>&1 &
       pid=$!
       START_FAIL="server.py (pid $pid) exited before it accepted a connection on $addr:$p"
       for _ in $(seq 1 50); do
@@ -185,6 +192,39 @@ start_server() { # <addr> [public] [first port]; sets PORT
     p=$((p + 1))
   done
   return 1
+}
+srv_ver() { cksum <"$SRV" | awk '{print $1}'; }
+# Our recorded server is alive but was started from another server.py (no server.ver =
+# from before #1153, which knew no codes) — it keeps serving the old rules until restarted.
+server_stale() {
+  [ -f "$PIDFILE" ] && [ -f "$PORTFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null \
+    && [ "$(cat "$VERFILE" 2>/dev/null)" != "$(srv_ver)" ]
+}
+# This login's server.py processes of THIS install that server.pid does not name — a pid
+# file lost or overwritten leaves one serving whatever rules it started with (issue #2415).
+stray_servers() {
+  local me pid; me="$(cat "$PIDFILE" 2>/dev/null || true)"
+  for pid in $(pgrep -u "$(id -u)" -f "$SRV [0-9]+ $SERVE_DIR " 2>/dev/null || true); do
+    [ "$pid" = "$me" ] || echo "$pid"
+  done
+}
+# The address (and public flag) the server binds in <mode>; sets ADDR, PUB.
+server_addr() { # <mode>
+  PUB=""
+  if [ "$1" = http-direct ]; then
+    ADDR="$(ts_ip4)"; [ -n "$ADDR" ] || { echo "doc-preview: no tailscale IPv4 (tailscale ip -4)" >&2; return 1; }
+  else
+    ADDR=127.0.0.1
+    [ "$1" = tunnel ] && PUB=public
+  fi
+  return 0
+}
+# Replace a stale server on the SAME port (its tailscale serve route / tunnel stay valid).
+restart_server() {
+  local oldpid; oldpid="$(cat "$PIDFILE")"; PORT="$(cat "$PORTFILE")"
+  kill "$oldpid" 2>/dev/null || true
+  for _ in $(seq 1 30); do kill -0 "$oldpid" 2>/dev/null || break; sleep 0.1; done
+  start_server "$ADDR" "$PUB" "$PORT"
 }
 # The tailnet HTTPS port whose "/" already proxies to 127.0.0.1:<port>, if any — e.g. a
 # route an admin set up once with `sudo tailscale serve` for a non-operator login.
@@ -346,9 +386,32 @@ stop() {
 case "${1:-}" in
   --stop) stop; exit 0 ;;
   --health)
-    # fleet-doctor's docprev row reads this one line (issue #1153).
-    { ts serve status --json 2>/dev/null || true; } | tool health "$OWNEDFILE" "$(cat "$PORTFILE" 2>/dev/null || echo 0)"
+    # fleet-doctor's docprev row reads this one line (issue #1153); server_stale (#2415)
+    # counts this login's running server.py processes that serve an older copy.
+    _st=0; server_stale && _st=1; _st=$((_st + $(stray_servers | wc -l)))
+    echo "$({ ts serve status --json 2>/dev/null || true; } | tool health "$OWNEDFILE" "$(cat "$PORTFILE" 2>/dev/null || echo 0)") server_stale=$_st"
     exit 0 ;;
+  --upgrade)
+    # Run by fleet-install-apply.sh after the skills pass (issue #2415): a server.py
+    # started before an install keeps the OLD rules until something restarts it — on
+    # m4 one from before #1153 listed every share to anyone on the machine for a day.
+    # Restart it on the SAME port now, and end any untracked copy, rather than wait
+    # for the next share. --check: report only (exit 1 = something stale).
+    if [ "${2:-}" = --check ]; then
+      _bad=0
+      server_stale && { echo "doc-preview: server.py pid $(cat "$PIDFILE") on :$(cat "$PORTFILE") runs an older copy"; _bad=1; }
+      for _p in $(stray_servers); do echo "doc-preview: untracked server.py pid $_p"; _bad=1; done
+      exit "$_bad"
+    fi
+    for _ in $(seq 1 100); do mkdir "$LOCK" 2>/dev/null && break || sleep 0.2; done
+    trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+    for _p in $(stray_servers); do kill "$_p" 2>/dev/null && echo "doc-preview: ended untracked server.py pid $_p"; done
+    if ! server_stale; then echo "doc-preview: server.py current (or none running)"; exit 0; fi
+    server_addr "$(mode)" || exit 1
+    if restart_server; then echo "doc-preview: restarted server.py on :$PORT with the installed copy"; exit 0; fi
+    rm -f "$PIDFILE" "$PORTFILE"
+    echo "doc-preview: could not restart server.py — ${START_FAIL:-}; the next share starts one" >&2
+    exit 1 ;;
   --pubstatus|--publish|--unpublish)
     act="$1"; arg=""; json=0; pttl="${DOC_PREVIEW_PUBLISH_TTL:-7d}"; shift
     while [ $# -gt 0 ]; do
@@ -541,24 +604,15 @@ server_fail() { # <addr>
   rollback; exit 1
 }
 
-PUB=""
-if [ "$MODE" = http-direct ]; then
-  ADDR="$(ts_ip4)"; [ -n "$ADDR" ] || { echo "doc-preview: no tailscale IPv4 (tailscale ip -4)" >&2; rollback; exit 1; }
-else
-  ADDR=127.0.0.1
-  [ "$MODE" = tunnel ] && PUB=public
-fi
+server_addr "$MODE" || { rollback; exit 1; }
+for _p in $(stray_servers); do kill "$_p" 2>/dev/null || true; done
 
 # Ensure ONE static server is running (reuse the existing one — keeps the port/URL fixed).
 # One started by an older server.py is replaced on the SAME port: an old server knows
 # nothing of codes or expiry (issue #1153), and a new port would mean a new route.
 if [ -f "$PIDFILE" ] && [ -f "$PORTFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   PORT="$(cat "$PORTFILE")"
-  if [ "$(cat "$VERFILE" 2>/dev/null)" != "$(cksum <"$SRV" | awk '{print $1}')" ]; then
-    OLDPID="$(cat "$PIDFILE")"; kill "$OLDPID" 2>/dev/null || true
-    for _ in $(seq 1 30); do kill -0 "$OLDPID" 2>/dev/null || break; sleep 0.1; done
-    start_server "$ADDR" "$PUB" "$PORT" || server_fail "$ADDR"
-  fi
+  if server_stale; then restart_server || server_fail "$ADDR"; fi
 else
   start_server "$ADDR" "$PUB" || server_fail "$ADDR"
 fi

@@ -589,6 +589,11 @@ if [ -x "$skills_dir/doc-preview/share.sh" ] && [ -d "$HOME/.cache/claude-doc-pr
   _dp_v() { printf '%s\n' "$_dp_h" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
   _dp_pub="$(_dp_v public)"; _dp_old="$(_dp_v oldest_public_secs)"; _dp_inf="$(_dp_v unexpiring_public)"
   _dp_dup="$(_dp_v serve_dup)"; _dp_dead="$(_dp_v serve_dead)"; _dp_rt="$(_dp_v serve_routes)"
+  # A server.py older than the installed copy keeps the old rules (issue #2415: one from
+  # before #1153 listed every share without a code for a day after the install moved).
+  if [ "$(_dp_v server_stale)" -gt 0 ] 2>/dev/null; then
+    warn docprev "$(_dp_v server_stale) running doc-preview server.py older than the installed copy — it still serves the old rules: $skills_dir/doc-preview/share.sh --upgrade"
+  fi
   if [ -n "$_dp_pub" ]; then
     _dp_msg="public links: ${_dp_pub} (oldest $(( ${_dp_old:-0} / 3600 ))h, never-expiring ${_dp_inf:-0}); serve routes to loopback: ${_dp_rt:-0} (stacked ${_dp_dup:-0}, dead ${_dp_dead:-0})"
     if [ "${_dp_dup:-0}" -gt 0 ] || [ "${_dp_dead:-0}" -gt 0 ]; then
