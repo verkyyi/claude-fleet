@@ -312,6 +312,7 @@ FLEET_MOVE_BOOT_WAIT               knob: internal pacing/limit, safe in-code def
 FLEET_MOVE_CLOSE_WAIT              knob: internal pacing/limit, safe in-code default (fleet-move.sh)
 FLEET_MOVE_EXIT_WAIT               knob: internal pacing/limit, safe in-code default (fleet-move.sh)
 FLEET_MOVE_LAUNCH                  seam: an injectable command/path for tests (fleet-move-remote.sh)
+FLEET_MOVE_LOCAL_HOST              seam: the name fleet-move.sh takes for THIS machine, default hostname -s (selftest; #2210)
 FLEET_MOVE_REBALANCE_MAX           knob: most sessions one `fleet-move.sh --rebalance` moves, default 2 (#1426)
 FLEET_MOVE_TERM_WAIT               knob: internal pacing/limit, safe in-code default (fleet-move.sh)
 FLEET_NEEDS_PLAIN_SECS             knob: internal pacing/limit, safe in-code default (tmux-spinner.sh)
