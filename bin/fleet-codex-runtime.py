@@ -197,11 +197,22 @@ def run(argv, prepare=None, tick=None):
         attention = Path(__file__).with_name("fleet-codex-attention.py")
         if attention.is_file():
             monitor = runpy.run_path(str(attention))["Monitor"](remote, env)
+        # issue #2430: the seed is SUBMITTED — a first sentence left sitting in
+        # the composer gets its Enter (bin/fleet-codex-seed.py; reads only).
+        seeder = None
+        seed_mod = Path(__file__).with_name("fleet-codex-seed.py")
+        if seed_mod.is_file():
+            try:
+                seeder = runpy.run_path(str(seed_mod))["for_launch"](argv)
+            except Exception:
+                seeder = None
         client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
         next_tick = time.monotonic()
         while client.poll() is None and guardian.poll() is None and not ended:
             if time.monotonic() >= next_tick:
                 if monitor: monitor.tick()
+                if seeder is not None and not seeder.tick():
+                    seeder = None
                 if tick: tick()
                 next_tick = time.monotonic() + 1
             time.sleep(0.1)

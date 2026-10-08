@@ -736,6 +736,13 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 			if s.personalOf(target.EndpointID, hb) && !s.isMachine(target.Hostname, s.askedFrom(p, now)) {
 				return nil, fault("NO_ELIGIBLE_NODE", target.Hostname+": "+excludedPersonal+" — open it from that computer's own client")
 			}
+			// One login takes new sessions there (claude-fleet#2430): a start
+			// named at another login's fleet is held to placement's rule.
+			if settings, err := s.Store.FleetSettings(); err == nil {
+				if why := otherLoginExcluded(target.Hostname, target.OSUser, settings); why != "" {
+					return nil, fault("NO_ELIGIBLE_NODE", target.Hostname+"/"+target.OSUser+": "+why)
+				}
+			}
 		}
 	default:
 		pl, err := s.pickNode(p, w.repo, w.node, time.Now())
@@ -1407,6 +1414,10 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 		if maint.Reason != "" {
 			c.Excluded += ": " + maint.Reason
 		}
+	case otherLoginExcluded(r.Hostname, r.OSUser, settings) != "":
+		// One login takes new sessions on this machine (claude-fleet#2430):
+		// the operator's choice, out for auto AND for a start that names it.
+		c.Excluded = otherLoginExcluded(r.Hostname, r.OSUser, settings)
 	case connErr != nil:
 		c.Excluded = errorObject(connErr)["message"]
 	case c.LoadPerCore != nil && *c.LoadPerCore > maxLoadPerCore:
@@ -1683,6 +1694,12 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+		case strings.HasPrefix(body.Key, NodeLoginPrefix) && nodeNameRE.MatchString(body.Key[len(NodeLoginPrefix):]):
+			// The one login that takes new sessions there (claude-fleet#2430).
+			if v := strings.TrimSpace(body.Value); v != "" && !control.ValidExistingLogin(v) {
+				httpError(w, http.StatusBadRequest, "a machine's accepting login is a login name, or \"\" for every login")
+				return
+			}
 		case strings.HasPrefix(body.Key, NodeCapPrefix) && nodeNameRE.MatchString(body.Key[len(NodeCapPrefix):]):
 			if body.Value != "" {
 				if n, err := strconv.Atoi(body.Value); err != nil || n < 0 || n > 256 {
@@ -1691,7 +1708,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeUserCapPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+NodeUserCapPrefix+"<machine>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
 		now := time.Now()

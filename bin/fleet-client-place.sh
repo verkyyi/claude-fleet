@@ -112,7 +112,7 @@ fi
 # --- the hub ----------------------------------------------------------------------
 # rc 10 = not applicable here (no hub URL, or no lease / key to sign with).
 python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" <<'PY'
-import hashlib, hmac, importlib.util, json, os, sys, time, urllib.error, urllib.request
+import hashlib, hmac, importlib.util, json, os, re, sys, time, urllib.error, urllib.request
 
 here, repo, kind, issue, key, node, title, name, agent, reap, bodyf = sys.argv[1:12]
 body = ""
@@ -215,6 +215,30 @@ if tf and isinstance(out.get("timing"), dict):
             json.dump(out["timing"], f)
     except OSError:
         pass
+# The login the session landed under (issue #2430): the hub's `login`, else the
+# chosen candidate's os_user (a hub older than #2430) — remembered against its
+# fleet's UUID in the client's fleet → login map (fleet_fleet_login, the format's
+# owner in fleet-lib.sh), so opening it connects as THAT login.
+def placed_login(o):
+    pl = o.get("placement") if isinstance(o.get("placement"), dict) else {}
+    fid = pl.get("fleet_id") or (o.get("worker_id") or "").split("/", 1)[0]
+    lg = o.get("login") if isinstance(o.get("login"), str) else ""
+    if not lg:
+        for c in pl.get("candidates") or []:
+            if isinstance(c, dict) and c.get("fleet_id") == fid and isinstance(c.get("os_user"), str):
+                lg = c["os_user"]
+                break
+    return fid, lg
+if out.get("state") == "done":
+    fid, lg = placed_login(out)
+    if re.fullmatch(r"[0-9A-Za-z-]{1,64}", fid or "") and re.fullmatch(r"[a-z_][a-z0-9_.-]{0,31}", lg or ""):
+        mp = os.path.join(os.environ.get("TMPDIR") or "/tmp", ".claude-dash", "global", "fleet_logins")
+        try:
+            os.makedirs(os.path.dirname(mp), exist_ok=True)
+            with open(mp, "a", encoding="utf-8") as f:
+                f.write("%s\t%s\n" % (fid, lg))
+        except OSError:
+            pass
 rf = os.environ.get("FLEET_PLACE_RESULT") or ""
 if rf and out.get("state") == "done":
     said = {k: out[k] for k in ("worker_id", "window", "window_id", "key", "filed", "machine")

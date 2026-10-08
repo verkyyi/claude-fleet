@@ -2272,6 +2272,42 @@ SHIM
   WHAT="客户端换版后，旧代码存下的 ETag 不再拿去问入口：入口回全量，按新代码重新映射，节点登录名≠本机用户名的会话回到侧栏"
 }
 
+# Same person, two logins on one machine (issue #2430): m9 has alice (the old
+# account, whose connection the client keeps warm) and bob (the new one); the hub
+# placed a session in bob's fleet. Before: the list mapped both rows but kept no
+# login, so opening bob's row rode the warm master as alice and the far end said
+# 「已不在 m9 上」. The recovery: the sessions round remembers each fleet's login,
+# and the proxy's attach goes out as bob — never over alice's warm master.
+drill_two_logins_one_machine() {
+  CAP=10; local sc="$WORK/tl" t0 out S=tl A=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa B=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb line
+  rv_shim; mkdir -p "$WORK/rv/tmp/.claude-dash/global" "$sc"
+  cat > "$sc/sessions.json" <<JSON
+{"sessions": [
+  {"worker_id": "$A/issue-1", "fleet_id": "$A", "machine_name": "m9", "os_user": "alice", "availability": "online",
+   "worker": {"issue": 1, "repo": "acme/app", "state": "done", "agent": "claude", "name": "alice-row"}},
+  {"worker_id": "$B/scratch-1", "fleet_id": "$B", "machine_name": "m9", "os_user": "bob", "availability": "online",
+   "worker": {"state": "done", "agent": "codex", "name": "bob-codex"}}],
+ "nodes": [{"machine_name": "m9", "availability": "online", "sessions": 2}]}
+JSON
+  # the warm master to m9 was opened as alice (fleet-connect.py's route file)
+  printf '{"machine": "m9", "kind": "direct", "name": "lan", "login": "alice"}\n' > "$WORK/rv/tmp/warm/m9.sock.route"
+  t0=$(now)
+  ( unset CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_LOCAL FLEET_NODE_ALIASES FLEET_HUB_URL TMUX TMUX_PANE
+    export HOME="$WORK/rv" TMPDIR="$WORK/rv/tmp" FLEET_CONF_DIR="$WORK/rv/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=1 \
+           FLEET_HUB_SESSIONS_CLIENT="$S" FLEET_HUB_SESSIONS_USER='*' FLEET_HUB_SESSIONS_CMD="cat '$sc/sessions.json'"
+    bash "$BIN/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 )
+  out=$(cat "$WORK/rv/tmp/.claude-dash/global/remote_$S" 2>/dev/null)
+  case "$out" in *"wid:$A/issue-1"*"wid:$B/scratch-1"*|*"wid:$B/scratch-1"*"wid:$A/issue-1"*) ;;
+    *) WHY="the list does not show both logins' sessions: [$(printf '%s' "$out" | tr '\037\n' '| ')]"; return 1 ;; esac
+  # shellcheck disable=SC2046  # rv_env is KEY=VALUE words on purpose (no spaces in $WORK)
+  env $(rv_env) bash "$BIN/fleet-remote-view.sh" run --shell m9 "$B/scratch-1" > "$WORK/rv/out" 2>&1 < /dev/null
+  SECS=$(since "$t0")
+  line=$(grep ' attach' "$WORK/rv/ssh.log" | head -n 1)
+  case " $line " in *" -l bob "*) ;; *) WHY="bob's session was opened as someone else: [$line]"; return 1 ;; esac
+  case "$line" in *"warm/m9.sock"*) WHY="bob's session rode alice's warm master: [$line]"; return 1 ;; esac
+  WHAT="同一人两个 login：侧栏两行都在，打开 bob 的会话用 -l bob、不骑 alice 的暖连接"
+}
+
 # ============================================ a fleet's tmux, deleted from a shell ======
 # (issue #1841, EPIC #1851 C2) A fleet is `-L <its label>` since #159, so the old
 # guard's "a -L means an isolated test server" let every fleet through; and only an

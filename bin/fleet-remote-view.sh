@@ -170,6 +170,14 @@ ssh_host() {
   h=$(printf '%s\n' ${FLEET_REMOTE_SSH:-} | awk -F= -v n="$n" '$1 == n { print $2; exit }')
   printf '%s' "${h:-$n}"
 }
+# rv_route_login <route file> — the login a master was opened as (fleet-connect.py
+# writes it into FLEET_CONNECT_ROUTE_FILE, issue #2430); nothing when it did not say.
+rv_route_login() {
+  [ -s "${1:-}" ] || return 0
+  python3 -c 'import json,sys
+try: print(json.load(open(sys.argv[1])).get("login") or "")
+except Exception: pass' "$1" 2>/dev/null
+}
 # The hub's name for a machine label: FLEET_NODE_ALIASES backwards (`macmini=m5`).
 hub_node() {
   printf '%s\n' ${FLEET_NODE_ALIASES:-} | awk -F= -v n="$1" '$2 == n { print $1; f = 1; exit } END { if (!f) print n }'
@@ -544,8 +552,13 @@ open)
      && tmux -L "$FLEET_SHELL_STAGE" has-session -t "=$FLEET_SHELL_STAGE" 2>/dev/null; then
     OT() { tmux -L "$FLEET_SHELL_STAGE" "$@"; }; osess=$FLEET_SHELL_STAGE
   fi
-  w=$(OT list-windows -t "=$osess" -F '#{window_id} #{@remote}' 2>/dev/null \
-      | awk -v n="$node:" 'index($2, n) == 1 { print $1; exit }')
+  # one proxy window per (machine, LOGIN) — issue #2430: a row of the person's
+  # other login on that machine is another connection, never a retarget over
+  # this one (whose far end cannot see that login's fleet). `run` stamps the
+  # window's login every round; an unstamped one (not up yet) is taken as is.
+  olog=$(fleet_fleet_login "$wid" 2>/dev/null) || olog=''
+  w=$(OT list-windows -t "=$osess" -F '#{window_id} #{@remote} #{@remote_login}' 2>/dev/null \
+      | awk -v n="$node:" -v l="$olog" 'index($2, n) == 1 && ($3 == l || $3 == "") { print $1; exit }')
   if [ -n "$w" ]; then
     cur=$(OT show-options -wqv -t "$w" @remote 2>/dev/null)
     if [ "$cur" != "$node:$wid" ]; then
@@ -584,6 +597,7 @@ open)
   else
     w=$(OT new-window -d -P -F '#{window_id}' -t "=$osess:" -n "$title" -c "$HOME" "$cmd" 2>/dev/null) || exit 1
     OT set-window-option -t "$w" @remote "$node:$wid" 2>/dev/null
+    [ -n "$olog" ] && OT set-window-option -t "$w" @remote_login "$olog" 2>/dev/null
     OT set-window-option -t "$w" automatic-rename off 2>/dev/null
   fi
   OT select-window -t "$w" 2>/dev/null
@@ -794,7 +808,17 @@ EOF_PEER
       cur=$(tmux show-options -wqv -t "${TMUX_PANE:-}" @remote 2>/dev/null)
       case "$cur" in "$node":?*) wid=${cur#"$node":} ;; esac
     fi
-    if [ -n "$shellopt" ] && [ "${FLEET_SHELL_WARM:-1}" != 0 ]; then
+    # The login that holds this worker's fleet (issue #2430): one person may have
+    # two logins on the machine, and the far end finds a worker only in its own
+    # login's fleets. Named → every connection this round is made as it (`-l`,
+    # and FLEET_CONNECT_LOGIN for `fleet connect`), and a warm master logged in
+    # as anyone else is not ridden. Unnamed → the default login, as before.
+    login=$(fleet_fleet_login "$wid" 2>/dev/null) || login=''
+    lopt=(); [ -n "$login" ] && lopt=(-l "$login")
+    export FLEET_CONNECT_LOGIN="$login"
+    [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_login "$login" 2>/dev/null
+    if [ -n "$shellopt" ] && [ "${FLEET_SHELL_WARM:-1}" != 0 ] \
+       && { [ -z "$login" ] || [ "$(rv_route_login "${TMPDIR:-/tmp}/warm/$node.sock.route")" = "$login" ]; }; then
       # A warm master still coming up (its `<sock>.pending` pid alive — the shell
       # and the first click start in the same second) is waited for, up to
       # FLEET_REMOTE_WARM_WAIT (5) s, instead of opening a private master beside
@@ -815,7 +839,7 @@ EOF_PEER
     [ -n "${TMUX:-}" ] && tmux set-window-option -t "${TMUX_PANE:-}" @remote_ctl "$use" 2>/dev/null
     if [ "$use" != "$ctl" ]; then
       printf '\033[2J\033[H→ 正在连接 %s (%s · 已连) …\n' "$node" "$host"
-      opts=(-tt -o ControlMaster=no "${MUXO[@]}" -S "$use")
+      opts=(-tt -o ControlMaster=no "${MUXO[@]}" -S "$use" ${lopt[@]+"${lopt[@]}"})
     else
       printf '\033[2J\033[H→ 正在连接 %s (%s%s%s) …\n' "$node" "$host" "$( [ "$route" = hub ] && printf ' · 经入口中转')" \
         "$( [ ${#peer[@]} -gt 0 ] && printf ' · 入口证书 5 分钟')"
@@ -823,7 +847,7 @@ EOF_PEER
       # no compression (a LAN / tailnet only pays its latency), low-delay QoS
       opts=(-tt -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8
             -o "IPQoS=lowdelay throughput" -o Compression=no
-            -o ControlMaster=yes -o "ControlPath=$ctl" "${MASTERO[@]}" -o ControlPersist=no ${peer[@]+"${peer[@]}"})
+            -o ControlMaster=yes -o "ControlPath=$ctl" "${MASTERO[@]}" -o ControlPersist=no ${peer[@]+"${peer[@]}"} ${lopt[@]+"${lopt[@]}"})
       [ "$route" = hub ] && opts+=(-o "ProxyCommand=$(sq "$BIN/fleet") connect --proxy $(sq "$(hub_node "$node")")")
       rm -f "$ctl" "$ctl.route" "$ctl.upgrade"
     fi

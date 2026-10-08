@@ -353,6 +353,17 @@ eq "each_conf: fleet-a listed once" "1" \
   "$(printf '%s\n' "$enum" | awk -F'\t' '$1=="fleet-a"' | grep -c .)"
 eq "each_conf: fleet-b (legacy) present" "$CONFROOT/fleet-b.conf" \
   "$(printf '%s\n' "$enum" | awk -F'\t' '$1=="fleet-b"{print $2}')"
+# issue #2430: a backup of a fleet dir (a `.` in its name — never a tmux session)
+# and a renamed copy of the stranded machine config are not fleets.
+mkdir -p "$CONFROOT/fleets/fleet.ghost-bak-20261006-225821" "$CONFROOT/fleets/oldmachine"
+printf 'FLEET_REPO="acme/ghost"\n' > "$CONFROOT/fleets/fleet.ghost-bak-20261006-225821/conf"
+printf "# claude-fleet — this machine's ONE config file (issue #1623)\n" > "$CONFROOT/fleets/oldmachine/conf"
+enum=$(fleet_each_conf | sort)
+eq "each_conf: a dotted backup dir is no fleet" "0" \
+  "$(printf '%s\n' "$enum" | awk -F'\t' '$1 ~ /ghost-bak/' | grep -c .)"
+eq "each_conf: a renamed machine config is no fleet" "0" \
+  "$(printf '%s\n' "$enum" | awk -F'\t' '$1=="oldmachine"' | grep -c .)"
+rm -rf "$CONFROOT/fleets/fleet.ghost-bak-20261006-225821" "$CONFROOT/fleets/oldmachine"
 
 # fleet_sess_for_repo maps a repo back to its configured session (normalized).
 eq "sess_for_repo: new-layout fleet"  "fleet-a" "$(fleet_sess_for_repo acme/new)"

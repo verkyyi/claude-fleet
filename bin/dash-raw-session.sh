@@ -655,6 +655,9 @@ if [ "$WARM_ONLY" = 1 ] && [ -n "$PROMPT" ]; then
   fi
   t_ready=${stamps%%	*}; t_prompt=${stamps#*	}
   [ "$src" = 0 ] || t_prompt=${t_prompt:-$(fleet_now_ms)}
+  # exit 4 (issue #2430): the seed is in the window, its turn never seen to start
+  # after four Enters — said, never passed off as a clean start
+  [ "$src" = 4 ] && printf 'dash-raw-session: the seed is in %s but its first turn was not seen to start\n' "$win" >&2
 fi
 
 # Window handle (issue #566), likewise on BOTH paths: a warm-pool window is parked

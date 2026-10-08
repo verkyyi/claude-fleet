@@ -344,13 +344,16 @@ fleet_each_conf() {
       [ -d "$d" ] || continue
       conf="${d}conf"; [ -f "$conf" ] || continue
       sess=${d%/}; sess=${sess##*/}
-      # The machine's own config stranded as fleets/fleet/conf by the pre-#1887
-      # migrator is not a fleet (issue #2059) — `fleet-conf.sh migrate` puts it
-      # back. Read with the `read` builtin: no fork on this hot path (#888).
-      if [ "$sess" = fleet ]; then
-        hdr=''; IFS= read -r hdr < "$conf" || true
-        case "$hdr" in "# claude-fleet — this machine's ONE config file"*) continue ;; esac
-      fi
+      # A name with a `.` is never a fleet (issue #2430): fleet-up turns `.` into
+      # `-` (tmux session names hold none), so `fleets/fleet.ghost-bak-<stamp>/`
+      # is somebody's backup — on m5 it was reported to the hub as a fleet.
+      case "$sess" in *.*) continue ;; esac
+      # The machine's own config stranded under fleets/ by the pre-#1887 migrator
+      # is not a fleet (issue #2059) — `fleet-conf.sh migrate` puts it back — and
+      # neither is a renamed copy of it (issue #2430): the header, whatever the
+      # directory's name. Read with the `read` builtin: no fork on this hot path (#888).
+      hdr=''; IFS= read -r hdr < "$conf" || true
+      case "$hdr" in "# claude-fleet — this machine's ONE config file"*) continue ;; esac
       printf '%s\t%s\n' "$sess" "$conf"
     done
   fi
@@ -5216,6 +5219,36 @@ fleet_retired_dir() { printf '%s' "${FLEET_PULLBACK_RETIRED_DIR:-$FLEET_CONF_DIR
 
 # fleet_win_retire <window> [<sock>] — mark that window's session as closed by the
 # fleet. Never fails; a window with no @fleet_id has nothing to mark.
+# --- which login a fleet runs under, on the CLIENT (issue #2430) ---------------
+# One person may hold two logins on one machine (m5: verkyyi + verky, #2210), each
+# with its own fleet. The hub places a session in either; the client must ssh in
+# AS THE LOGIN THAT HOLDS IT — the far end only finds a worker in its own login's
+# fleets, so the wrong login answers "not live". The map is
+# $FLEET_C/global/fleet_logins: `<fleet UUID>\t<login>` per line, the last line for
+# a UUID wins. Written from the place answer (fleet-client-place.sh) and from
+# every fleet_sessions round (fleet-hub-sessions.sh, the rows' fleet_id +
+# os_user); read by fleet-remote-view.sh before it connects. No line for a
+# fleet ⇒ no login named ⇒ the person's default login, byte for byte as before.
+fleet_login_map_file() { printf '%s/global/fleet_logins' "$FLEET_C"; }
+# fleet_fleet_login <worker_id | fleet UUID> → its login on stdout; rc 1 unknown
+fleet_fleet_login() {
+  local u="${1#wid:}"
+  u=${u%%/*}
+  case "$u" in ''|*[!0-9A-Za-z-]*) return 1 ;; esac
+  awk -F'\t' -v u="$u" '$1 == u && $2 != "" { l = $2 } END { if (l == "") exit 1; print l }' \
+    "$(fleet_login_map_file)" 2>/dev/null
+}
+# fleet_fleet_login_put <fleet UUID> <login> — remember it (a valid login only)
+fleet_fleet_login_put() {
+  local u="${1:-}" l="${2:-}" f
+  case "$u" in ''|*[!0-9A-Za-z-]*) return 1 ;; esac
+  case "$l" in ''|[!a-z_]*|*[!a-z0-9_.-]*) return 1 ;; esac
+  [ "$(fleet_fleet_login "$u" 2>/dev/null)" = "$l" ] && return 0
+  f=$(fleet_login_map_file)
+  mkdir -p "${f%/*}" 2>/dev/null || return 1
+  printf '%s\t%s\n' "$u" "$l" >> "$f"
+}
+
 fleet_win_retire() {
   local w="${1:-}" sock="${2:-}" f d
   [ -n "$w" ] || return 0
