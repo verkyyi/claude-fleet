@@ -836,6 +836,12 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
     esac
   done
   [ "$bad" -eq 0 ] && pass account "$n subscription token(s) in ${acct_dir} — auto-failover armed (per-account windows honored)"
+  # A BLIND pick (issue #2412): no login reads as usable and the quota cache has no
+  # row, so every new session lands on account.active — at 99% as readily as at 1%,
+  # with every dial above green. (A separated login is never blind: its credential
+  # proxy picks the account per request.)
+  blind=$(bash "$(dirname "$0")/fleet-account.sh" blind 2>/dev/null)
+  [ -n "$blind" ] && warn account-pick "the account pick is BLIND — no login reads as usable ($blind) and the quota cache has no row, so every new session lands on account.active whatever it has left. \`fleet-account.sh list\`, then \`quota --refresh\`"
   # ccquota-driven PRE-EMPTIVE rotation (issue #513): with a hub URL + ccquota on
   # PATH the collector rotates at FLEET_ACCOUNT_CEILING before any banner. Report
   # what the collector would see: rows per pool label (unmapped labels = ccquota

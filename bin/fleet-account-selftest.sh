@@ -840,6 +840,31 @@ grep -q 'h1 paused; h2 paused' "$STATE_AUTH_ALERT" || fail "paused: the alert st
 unset FLEET_ACCOUNT_PAUSED
 rm -rf "$ACCT_DIR/h1" "$ACCT_DIR/h2" "$ACCT_DIR/h1.hub" "$ACCT_DIR/h2.hub" "$STATE_PAUSED" "$STATE_AUTH_ALERT"
 export FLEET_ACCOUNTS="a b c"
+# ============================================================================
+# a BLIND pick (issue #2412): every login out and no quota row — never stay on a
+# benched account, and the doctor's account-pick says so; a SEPARATED login is
+# never blind (its credential proxy picks the account per request)
+# ============================================================================
+rm -f "$STATE_QUOTA" "$STATE_QUOTA_TS" "$STATE_AUTH_ALERT"; : > "$STATE_LIMITED"; : > "$STATE_REAUTH"
+_cd="$FLEET_CONF_DIR"; export FLEET_CONF_DIR="$WORK/sepconf"; mkdir -p "$FLEET_CONF_DIR"
+: > "$ACCT_DIR/gm"; : > "$ACCT_DIR/ic"; : > "$ACCT_DIR/ly"
+export FLEET_ACCOUNTS="gm ic ly"
+eq "blind: every login out, no quota row → the doctor's account-pick names them" \
+   "gm auth:no_credentials; ic auth:no_credentials; ly auth:no_credentials" "$(cmd_blind)"
+printf 'gm\t1\t1\t99\t0\t0\t0\n' > "$STATE_QUOTA"
+eq "blind: not once a quota row exists" "" "$(cmd_blind)"
+rm -f "$STATE_QUOTA"
+: > "$FLEET_CONF_DIR/credsep.json"
+eq "blind: a separated login is never blind (the proxy picks)" "" "$(cmd_blind)"
+rm -f "$FLEET_CONF_DIR/credsep.json"
+limit gm
+eq "blind: all logins out, gm benched → the next one not benched" ic "$(pick_active gm 2>/dev/null)"
+eq "blind: all logins out, current not benched → it stays (#1670)" ic "$(pick_active ic 2>/dev/null)"
+limit ic; limit ly
+eq "blind: all logins out AND all benched → current stays" gm "$(pick_active gm 2>/dev/null)"
+: > "$STATE_LIMITED"
+rm -f "$ACCT_DIR/gm" "$ACCT_DIR/ic" "$ACCT_DIR/ly" "$STATE_AUTH_ALERT"
+export FLEET_CONF_DIR="$_cd"; export FLEET_ACCOUNTS="a b c"
 if [ -n "$_tmpd" ]; then export TMPDIR="$_tmpd"; else unset TMPDIR; fi
 
-printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace, #1540 account class, #1670 login filter, #2083 paused pool)\n' "$CHECKS"
+printf 'selftest OK: fleet-account rotation math (%s assertions — dur/human, acct_ttl, limited/eligible, pick_active, banner reset instant, ccquota quota/bench + #628 no-reading rail, #598 ranking + phase stagger, #1231 weekly pace, #1540 account class, #1670 login filter, #2083 paused pool, #2412 blind pick)\n' "$CHECKS"

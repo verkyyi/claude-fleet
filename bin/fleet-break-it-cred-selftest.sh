@@ -73,9 +73,11 @@ def mint(cid, ttl):
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     def log_message(self, *a): pass
-    def reply(self, code, obj):
+    def reply(self, code, obj, hdrs=None):
         b = json.dumps(obj).encode()
         self.send_response(code)
+        for k, v in (hdrs or {}).items():
+            self.send_header(k, v)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(b)))
         self.end_headers(); self.wfile.write(b)
@@ -101,6 +103,21 @@ class H(BaseHTTPRequestHandler):
         if via == "direct-anthropic":
             if has("region-direct"):
                 return self.reply(403, {"type": "error", "error": {"type": "forbidden", "message": "Request not allowed"}})
+            # accts.json {token: {"u7": %, "full": bool}}: each account's windows on every
+            # answer, and a quota 429 from a full one (issue #2412's drills)
+            tok = h.get("authorization", "")[7:]
+            a = json.load(open(os.path.join(D, "accts.json"))).get(tok) if has("accts.json") else None
+            if a is not None:
+                now = int(time.time())
+                rl = {"anthropic-ratelimit-unified-5h-utilization": "0.1",
+                      "anthropic-ratelimit-unified-7d-utilization": str(a["u7"] / 100.0),
+                      "anthropic-ratelimit-unified-7d-reset": str(now + 86400)}
+                if a.get("full"):
+                    rl["anthropic-ratelimit-unified-status"] = "rejected"
+                    rl["anthropic-ratelimit-unified-reset"] = str(now + 86400)
+                    return self.reply(429, {"type": "error", "error": {"type": "rate_limit_error",
+                                      "message": "weekly usage limit reached"}}, rl)
+                return self.reply(200, {"via": "direct", "auth": tok}, rl)
             return self.reply(200, {"via": "direct", "auth": h.get("authorization", "")[:20]})
         if via == "relay":
             if h.get("x-fleet-relay") != "relaytok":

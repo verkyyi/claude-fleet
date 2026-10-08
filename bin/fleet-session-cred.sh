@@ -22,6 +22,11 @@
 #                              hub pass's DELETE, the Codex home marked dead
 #   fleet-session-cred.sh rebind --sid SID --account LABEL
 #                              the next request of that session runs on LABEL
+#
+# SEPARATED (credsep.json, issue #2412) a Claude session names no account: mint
+# asks for a credential bound to the sid alone and the proxy picks the account
+# per request (record `account=proxy`); --account is not passed on, `rebind`
+# exits 2 — only root pins an account. Codex keeps its home's account.
 #   fleet-session-cred.sh codex-home --sid SID --real DIR
 #        → a credential-free CODEX_HOME for this session: every entry of DIR
 #          linked except auth.json (threads, history, skills, trust stay DIR's),
@@ -49,6 +54,8 @@ switch() { # 1 / 0 — an explicit environment value outranks the conf (fleet-cr
     done
     printf '%s' "${FLEET_CRED_PROXY:-0}" )
 }
+
+separated() { [ -f "$CONF/credsep.json" ]; }   # the role account holds the credentials (#1971)
 
 sid_ok() { case "${1:-}" in ''|*[!A-Za-z0-9._-]*|.*) return 1 ;; esac; }
 
@@ -191,6 +198,22 @@ case "$cmd" in
       # quota reading finds this window (issue #1978); a hash, never the pass
       qs=$(printf '%s' "$cred" | python3 -I -c 'import hashlib,sys; print("h-" + hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:10])' 2>/dev/null)
       [ -n "$qs" ] && rec_set "$sid" qsid "$qs"
+    elif [ "$provider" = claude ] && separated; then
+      # separated (issue #2412): the session names no account — the proxy picks
+      # one per request and moves it when it fills; a --account here is not ours
+      # to give. A proxy older than #2412 still wants one: the login's own pick,
+      # for that proxy's last version.
+      err=$(mktemp "${TMPDIR:-/tmp}/fsc-mint.XXXXXX")
+      cred=$(bash "$PROXY" mint --provider claude --sid "$sid" --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>"$err")
+      if [ -z "$cred" ] && grep -q -- '--account LABEL' "$err"; then
+        account=$(bash "$BIN/fleet-account.sh" active 2>/dev/null)
+        [ -n "$account" ] && cred=$(bash "$PROXY" mint --account "$account" --sid "$sid" --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null)
+      else
+        account=proxy
+      fi
+      rm -f "$err"
+      [ -n "$cred" ] || die "the proxy would not mint a session credential"
+      rec_set "$sid" account "$account"
     else
       if [ -z "$account" ] && [ "$provider" = codex ] && [ -n "$chome" ]; then
         account=$(codex_label "$chome") || account=''
@@ -220,6 +243,8 @@ case "$cmd" in
     ;;
   rebind)
     sid_ok "$sid" && [ -n "$account" ] || die "rebind: --sid NAME --account LABEL" 2
+    [ "$(rec_get "$sid" provider)" = codex ] || ! separated \
+      || die "rebind: this login's account is the credential proxy's to pick (separated, issue #2412)" 2
     case "$(rec_get "$sid" route)" in
       direct|relay) ;;
       central) die "rebind: $sid routes central — the cluster picks its account" ;;

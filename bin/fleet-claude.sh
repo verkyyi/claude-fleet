@@ -96,10 +96,16 @@ if [ "$_fc_explicit" != 1 ]; then
     *" --resume "*|*" --continue "*|*" --from-pr "*|*" --fork-session "*|*" --model "*|*" --model="*) _fc_agent=claude ;;
   esac
 fi
+# A SEPARATED login (credsep.json, #1971) through its credential proxy does not
+# choose its subscription (issue #2412): the session credential names no account
+# and the proxy picks one per request, moving it when it fills — so no pick, no
+# failover planner, no @cc_account here. Byte for byte as before anywhere else.
+_fc_sep=0
+[ -n "${FLEET_CRED_SID:-}" ] && [ -f "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/credsep.json" ] && _fc_sep=1
 # Opted-in fresh launches use the same strict subscription planner as recovery.
 # Native resume/model-specific calls retain their explicit provider contract.
 if [ "${FLEET_FAILOVER:-0}" = 1 ] && [ "${FLEET_ACCOUNT_SELECTED:-0}" != 1 ] \
-  && [ -z "${FLEET_HANDOFF_MANIFEST:-}" ]; then
+  && [ -z "${FLEET_HANDOFF_MANIFEST:-}" ] && [ "$_fc_sep" != 1 ]; then
   case " $* " in
     *" --resume "*|*" --continue "*|*" --from-pr "*|*" --fork-session "*|*" resume "*|*" fork "*|*" --codex-home "*|*" --codex-profile "*) : ;;
     *) export FLEET_FAILOVER FLEET_FAILOVER_AGENTS FLEET_MODEL
@@ -217,11 +223,12 @@ unset _fc_tr_args _fc_fleet
 # (fleet-account.sh re-sources only the global conf) — the account pick prefers
 # one whose cap ledger leaves it free (issue #1073).
 label="${FLEET_ACCOUNT_LABEL:-}"
-[ -n "$label" ] || label=$(FLEET_PICK_MODEL="${FLEET_MODEL-opus}" "$BIN/fleet-account.sh" active 2>/dev/null)
+[ "$_fc_sep" = 1 ] && label=''      # the proxy picks (issue #2412)
+[ -n "$label" ] || [ "$_fc_sep" = 1 ] || label=$(FLEET_PICK_MODEL="${FLEET_MODEL-opus}" "$BIN/fleet-account.sh" active 2>/dev/null)
 # --account pool with no pool account registered here (issue #1540): refuse rather
 # than fall to this login's own subscription — the one thing the choice ruled out.
 # (`local` with no local token file is the ambient login, which IS local.)
-if [ -z "$label" ] && [ "${FLEET_ACCOUNT_CLASS:-}" = pool ]; then
+if [ -z "$label" ] && [ "${FLEET_ACCOUNT_CLASS:-}" = pool ] && [ "$_fc_sep" != 1 ]; then
   echo 'fleet-claude: --account pool, but no hub-pool account is registered on this login (fleet-account.sh list) — refusing to launch on its own subscription' >&2
   exit 1
 fi
@@ -352,7 +359,8 @@ if [ -n "${FLEET_CRED_SID:-}" ]; then
       unset _fc_cred _fc_port
       if [ -n "${TMUX_PANE:-}" ]; then
         tmux set-option -w -t "$TMUX_PANE" @cred_route "$_fc_route" 2>/dev/null || true
-        [ "$_fc_route" = central ] || tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true
+        if [ "$_fc_sep" = 1 ]; then tmux set-option -wu -t "$TMUX_PANE" @cc_account 2>/dev/null || true
+        elif [ "$_fc_route" != central ]; then tmux set-option -w -t "$TMUX_PANE" @cc_account "$label" 2>/dev/null || true; fi
       fi ;;
     4) : ;;
     *) echo 'fleet-claude: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch (fleet-cred-proxy.sh status; logs/cred-proxy.log)' >&2

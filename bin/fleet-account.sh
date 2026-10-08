@@ -1147,9 +1147,15 @@ pick_active() {
   acct_auth_scan
   # No label has a valid login (#1670): stay where we are — a hard switch onto
   # another dead login is what parked a session until morning — and say so.
+  # …but never on one a limit banner benched (issue #2412): it fails for sure.
   if ! acct_any_auth_ok; then
     acct_auth_alert
-    if [ -n "$cur" ] && acct_labels | grep -qx "$cur"; then printf '%s' "$cur"
+    if [ -n "$cur" ] && acct_labels | grep -qx "$cur" && acct_eligible "$cur"; then printf '%s' "$cur"
+    elif best=$(acct_labels | awk -v c="$cur" '{ l[NR] = $0; if ($0 == c) at = NR }
+                 END { for (i = 1; i <= NR; i++) print l[(at + i - 1) % NR + 1] }' \
+                | while IFS= read -r l; do acct_eligible "$l" && { printf '%s' "$l"; break; }; done) && [ -n "$best" ]
+    then printf '%s' "$best"
+    elif [ -n "$cur" ] && acct_labels | grep -qx "$cur"; then printf '%s' "$cur"
     else acct_labels | sed -n 1p | tr -d '\n'; fi
     return 0
   fi
@@ -1702,13 +1708,27 @@ EOF
 # token in <label>.hub/.credentials.json. Shows where it comes from and when the
 # token in hand runs out — the agent renews it ~2h before, so `expired` means the
 # agent is not leasing (stopped, revoked at the hub, or the hub unreachable).
+# A SEPARATED login (credsep.json, #1971) neither holds its leases nor picks among
+# them: the credential proxy does, per request (issue #2412). `list` still shows
+# each lease's expiry, read from `fleet-cred-proxy.sh accounts` (#2308) once per list.
+acct_separated() { [ -f "$FLEET_CONF_DIR/credsep.json" ]; }
+_HUB_PROXY_LEASES=
 hub_state() {
-  local f="$ACCT_DIR/$1.hub/.credentials.json" exp
+  local f="$ACCT_DIR/$1.hub/.credentials.json" exp h src="hub"
   exp=$(sed -n 's/.*"expiresAt":\([0-9][0-9]*\).*/\1/p' "$f" 2>/dev/null | head -n1)
+  if [ -z "$exp" ] && acct_separated; then
+    [ -n "$_HUB_PROXY_LEASES" ] || _HUB_PROXY_LEASES=$(bash "$BIN/fleet-cred-proxy.sh" accounts 2>/dev/null || printf '{}')
+    h=$(acct_token "$1"); h=${h#hub:}; [ -n "$h" ] || h=$1
+    exp=$(printf '%s' "$_HUB_PROXY_LEASES" | python3 -c 'import json,sys
+try: v = json.load(sys.stdin).get(sys.argv[1])
+except Exception: v = None
+print(int(v) if isinstance(v, (int, float)) else "")' "$h" 2>/dev/null)
+    src="hub · held and picked by the credential proxy"
+  fi
   if [ -z "$exp" ]; then printf '%sNO TOKEN%s %s· hub, nothing leased yet%s' "$A_RED" "$A_RST" "$A_DIM" "$A_RST"; return; fi
   exp=$(( exp / 1000 ))
-  if [ "$exp" -le "$2" ]; then printf '%sexpired%s %s· hub%s' "$A_RED" "$A_RST" "$A_DIM" "$A_RST"; return; fi
-  printf '%sok%s %s· hub · expires in ~%s%s' "$A_GRN" "$A_RST" "$A_DIM" "$(human_dur $(( exp - $2 )))" "$A_RST"
+  if [ "$exp" -le "$2" ]; then printf '%sexpired%s %s· %s%s' "$A_RED" "$A_RST" "$A_DIM" "$src" "$A_RST"; return; fi
+  printf '%sok%s %s· %s · expires in ~%s%s' "$A_GRN" "$A_RST" "$A_DIM" "$src" "$(human_dur $(( exp - $2 )))" "$A_RST"
 }
 
 cmd_list() {
@@ -1806,6 +1826,20 @@ $(acct_labels)
 EOF
 }
 
+# cmd_blind — the doctor's `account-pick` question (issue #2412): is the pick
+# BLIND? Every label out on its login AND no quota row: pick_active then keeps
+# account.active whatever it is spending, and nothing on any dial says so. A
+# separated login is never blind — the credential proxy picks its account.
+# Prints the excluded set when blind, nothing otherwise.
+cmd_blind() {
+  local _ACCT_AUTH=""
+  acct_separated && return 0
+  acct_auth_scan
+  acct_any_auth_ok && return 0
+  [ -n "$(quota_rows cached)" ] && return 0
+  acct_auth_excluded
+}
+
 # Dispatch ONLY when executed directly. Sourcing (the selftest does this to unit
 # -test the pure helpers) must not run a command — no rotation, no state writes —
 # so the tests can exercise dur_secs/acct_ttl/pick_active/… in isolation.
@@ -1830,6 +1864,7 @@ case "${1:-active}" in
   reauth-since)  acct_reauth_since "${2:-}" ;;
   quota)         shift; cmd_quota "$@" ;;
   quota-verdict) shift; cmd_quota_verdict "$@" ;;
+  blind)         cmd_blind ;;
   pace)          cmd_pace ;;
   bench)         cmd_bench "${2:-}" "${3:-}" "${4:-}" ;;
   model-limited) cmd_model_limited "${2:-}" "${3:-}" "${4:-}" ;;
@@ -1839,6 +1874,6 @@ case "${1:-active}" in
   migrate)       shift; exec bash "$BIN/fleet-migrate.sh" "$@" ;;
   whoami)        shift; exec bash "$BIN/fleet-migrate.sh" whoami "$@" ;;
   phase)         shift; cmd_phase "$@" ;;
-  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|mark-reauth|clear-reauth|reauth-since|target-auth|quota|quota-verdict|pace|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
+  *) echo "fleet-account.sh: unknown command '$1' (active|token|env|list|use|rotate|mark-limited|clear|limited-until|mark-reauth|clear-reauth|reauth-since|target-auth|quota|quota-verdict|blind|pace|bench|phase|model-limited|model-limited-until|model-clear|model-quota|migrate|whoami)" >&2; exit 2 ;;
 esac
 fi
