@@ -418,7 +418,7 @@ for L in "$(date +%Y%m%d-%H%M%S)-11" "20200101-120000-22"; do
   mkdir -p "$ROOT/serve/d/$L"; echo '<p>old</p>' > "$ROOT/serve/d/$L/index.html"
   printf '{"id":"%s","title":"old","href":"/d/%s/","src":"x","added":"then"}' "$L" "$L" > "$ROOT/entries/$L.json"
 done
-L1="$(ls "$ROOT/entries" | grep -E '^[0-9]{8}-[0-9]{6}-11\.json$' | sed 's/\.json$//')"
+L1=""; for j in "$ROOT"/entries/*-11.json; do L1="$(basename "$j" .json)"; done
 has 200 "$(code "$PORT" "/d/$L1/")" "10f: a fresh pre-#1153 link keeps working"
 has 404 "$(code "$PORT" /d/20200101-120000-22/)" "10f: a pre-#1153 link older than 7 days → 404"
 share --list >/dev/null
@@ -434,12 +434,11 @@ CHECKS=$((CHECKS + 1)); ! kill -0 "$pid0" 2>/dev/null || fail "10g: the old serv
 routes() { python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(" ".join(p+">"+u.rsplit(":",1)[1] for p,u in sorted(d["web"].items())))' "$WORK/ts.json"; }
 HP="$(cat "$ROOT/https.port")"
 ok [ "$(routes)" = "$HP>$PORT" ]
-kill "$(cat "$ROOT/server.pid")"; for _ in $(seq 1 30); do port_up_() { python3 -c 'import socket,sys;s=socket.socket();s.settimeout(.3);sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))))' "$1"; }; port_up_ "$PORT" || break; sleep 0.1; done
-python3 -c 'import socket,sys,time
-s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(1); time.sleep(120)' "$PORT" &
-PIDS+=($!); sleep 0.3
-out="$(share "$WORK/a.md")"; rc=$?
+spid="$(cat "$ROOT/server.pid")"; kill "$spid"
+for _ in $(seq 1 50); do kill -0 "$spid" 2>/dev/null || break; sleep 0.1; done
+# the restarted server lands on ANOTHER loopback port (its first free one from here)
+NEWBASE="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
+out="$(HOME="$WORK/home" PATH="$WORK/fake:$PATH" DOC_PREVIEW_PORT="$NEWBASE" DOC_PREVIEW_SESSION=t "$SH" "$WORK/a.md" 2>&1)"; rc=$?
 [ "$rc" = 0 ] || fail "10h: a share after a restart must work (rc=$rc)" "$out"
 NP="$(cat "$ROOT/server.port")"
 ok [ "$NP" != "$PORT" ]
@@ -465,7 +464,7 @@ out="$(share "$WORK/b.md")"
 CHECKS=$((CHECKS + 1)); [ "$(routes)" = "$HP>$PORT 8447>$OTHERP" ] || fail "10h: stacked/dead routes of this login dropped, another login's kept, no new port" "$(routes)"
 
 # public: its own code, an expiry, honest down
-id="$(ls "$ROOT/entries" | grep -E '^[0-9a-f]{32}\.json$' | head -1 | sed 's/\.json$//')"
+id=""; for j in "$ROOT"/entries/*.json; do j="$(basename "$j" .json)"; case "$j" in *-*) ;; *) id="$j"; break ;; esac; done
 out="$(share --publish "$id")"; rc=$?
 [ "$rc" = 0 ] || fail "10i: --publish must work (rc=$rc)" "$out"
 pc="$(printf '%s\n' "$out" | sed -n 's#^public ON: *https://[^/]*/p/\([0-9a-f]*\)/$#\1#p')"
