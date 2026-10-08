@@ -1833,6 +1833,18 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # one FLEET_NOTIFY_CMD per episode. Default 3 ≈ 3 min at the 60s TTL. 0 = off.
 # @label=Quota watch blind after @group=accounts @tier=internal @scope=global @edit=int @unit=reads
 #FLEET_ACCOUNT_QUOTA_BLIND_STREAK=3
+# A refused or silent hub does not blind the pick (issue #2465): an empty fetch
+# keeps the last good reading (account.quota.read_at says when it was read) and
+# the pick ranks on it while it is younger than this; the doctor's qwatch line
+# says 「沿用 N 分钟前的读数」 and why (拒 401 · 失联 · 盲). Past it the reading
+# is cleared and the blind alarm above takes over. 0 = carry nothing.
+# @label=Carry last quota reading @group=accounts @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_QUOTA_STALE_OK=1800
+# How long the hub may answer the quota read 401 (while the reading is carried)
+# before `✖ quota · refused` and a FAIL on the qwatch line: a refused credential is
+# something to fix, not a blip to ride out.
+# @label=Quota refused alarm after @group=accounts @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_QUOTA_REFUSED_ALARM=300
 # A subscription limit banner is a HINT when ccquota has a fresh reading (issue
 # #874): it forces one refetch, and `fleet-account.sh quota-verdict` decides. That
 # refetch is skipped while the cache is younger than this, so N walled windows in

@@ -49,7 +49,7 @@ cat > "$WORK/bin/curl" <<SHIM
 out=''
 while [ \$# -gt 0 ]; do [ "\$1" = -o ] && { out=\$2; shift; }; shift; done
 [ -n "\$out" ] && cat '$WORK/sessions.json' > "\$out"
-printf 200
+code=\$(cat '$WORK/code' 2>/dev/null); printf '%s' "\${code:-200}"
 SHIM
 chmod +x "$WORK/bin/curl"
 PATH="$WORK/bin:$PATH"
@@ -86,5 +86,22 @@ bash "$HUBS" --refresh 2>"$WORK/err"
 out=$(cat "$G/remote_$S" 2>/dev/null)
 has   "D: a node + certificate still writes its cache" "$out" "wid:$F/issue-9"
 hasnt "D: …with \`id -un\`'s rows only, as before" "$out" "wid:$F/issue-7"
+
+# E (issue #2465): WHY a round did not stand sits beside hub_ok — refused (401)
+# told apart from no answer, its since kept while the reason holds, gone on 200.
+printf 401 > "$WORK/code"; rm -f "$G/hub_why"
+bash "$HUBS" --refresh 2>/dev/null
+w=$(cat "$G/hub_why" 2>/dev/null)
+has   "E: a 401 writes hub_why refused" "$w" "refused	"
+has   "E: …with the code" "$w" "HTTP 401"
+since1=$(printf '%s' "$w" | cut -f2)
+sleep 1; bash "$HUBS" --refresh 2>/dev/null
+CHECKS=$((CHECKS + 1)); [ "$(cut -f2 "$G/hub_why")" = "$since1" ] || fail "E: the since holds while the hub keeps refusing" "$(cat "$G/hub_why")"
+printf 000 > "$WORK/code"
+bash "$HUBS" --refresh 2>/dev/null
+has   "E: no answer writes hub_why unreachable" "$(cat "$G/hub_why" 2>/dev/null)" "unreachable	"
+printf 200 > "$WORK/code"
+bash "$HUBS" --refresh 2>/dev/null
+CHECKS=$((CHECKS + 1)); [ ! -f "$G/hub_why" ] || fail "E: an answer that stands removes hub_why" "$(cat "$G/hub_why")"
 
 printf 'hub-sessions-cert-scope selftest: PASS (%d checks)\n' "$CHECKS"

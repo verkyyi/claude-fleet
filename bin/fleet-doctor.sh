@@ -860,14 +860,34 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
     # fail-open cost a whole 5-hour window on 2026-09-11, so it is a FAIL.
     qst=$(bash "$(dirname "$0")/fleet-quotawatch.sh" --status 2>/dev/null)
     # state <TAB> how long it has held (s) <TAB> consecutive-empty-fetch streak.
-    qstate=${qst%%	*}; qrest=${qst#*	}; qage=${qrest%%	*}; qstreak=${qrest#*	}
+    # carry/blind add why the reads come back empty, carry how long that has held.
+    qstate=${qst%%	*}; qrest=${qst#*	}; qage=${qrest%%	*}; qrest=${qrest#*	}
+    qstreak=${qrest%%	*}; qwhy=''; qwhyfor=0
+    case "$qrest" in *'	'*) qrest=${qrest#*	}; qwhy=${qrest%%	*}; case "$qrest" in *'	'*) qwhyfor=${qrest#*	} ;; esac ;; esac
     case "$qage"    in ''|*[!0-9]*) qage=0 ;; esac
     case "$qstreak" in ''|*[!0-9]*) qstreak=0 ;; esac
+    case "$qwhyfor" in ''|*[!0-9]*) qwhyfor=0 ;; esac
     qdur="$((qage/60))m"; [ "$qage" -lt 60 ] && qdur="${qage}s"
+    # The three ways the hub gives nothing (issue #2465), in the words the alarm uses.
+    qdetail=$(sed -n '1s/^[^	]*	[^	]*	//p' "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/account.quota.why" 2>/dev/null)
+    case "$qwhy" in
+      refused)     qwhyw="拒（401：入口拒绝额度读数${qdetail:+ — $qdetail}）" ;;
+      unreachable) qwhyw="失联（入口联系不上${qdetail:+ — $qdetail}）" ;;
+      empty)       qwhyw="盲（入口答空）" ;;
+      *)           qwhyw="盲（入口答空）" ;;
+    esac
+    qrefuse_alarm="${FLEET_QUOTA_REFUSED_ALARM:-300}"; case "$qrefuse_alarm" in ''|*[!0-9]*) qrefuse_alarm=300 ;; esac
     case "$qstate" in
+      carry)
+        qcarry="沿用 $((qage/60)) 分钟前的读数 — the pick keeps ranking on it until it is FLEET_QUOTA_STALE_OK $(( ${FLEET_QUOTA_STALE_OK:-1800} / 60 ))m old, then clears it; a limit banner still benches"
+        if [ "$qwhy" = refused ] && [ "$qwhyfor" -ge "$qrefuse_alarm" ]; then
+          fail qwatch "$qwhyw for $((qwhyfor/60))m ($qstreak reads) — $qcarry. Fix the credential (\`fleet doctor\` cert / node rows, \`fleet login\`), then \`fleet-account.sh quota --refresh\`"
+        else
+          warn qwatch "$qwhyw, $qstreak read(s) — $qcarry (\`fleet-account.sh quota --refresh\`)"
+        fi ;;
       stale) fail qwatch "quota cache last refreshed $((qage/60))m ago (> FLEET_ACCOUNT_QUOTA_STALE ${FLEET_ACCOUNT_QUOTA_STALE:-600}s) — pre-emptive rotation is BLIND; is com.claude-fleet.quotawatch loaded? (\`launchctl list | grep quotawatch\`; the collector falls back to running the watch first thing each tick once this unit stops ticking, issue #671 — check its heartbeat below)" ;;
       never) warn qwatch "quota cache never written — no fleet-quotawatch tick has run yet (install/kick com.claude-fleet.quotawatch, or run bin/fleet-quotawatch.sh once)" ;;
-      blind) fail qwatch "quota cache is FRESH BUT EMPTY — the last $qstreak ccquota reads returned no rows ($qdur, ≥ FLEET_ACCOUNT_QUOTA_BLIND_STREAK ${FLEET_ACCOUNT_QUOTA_BLIND_STREAK:-3}). The watch IS ticking, so nothing here is stale; the 70%/85% pre-emptive rotation simply has nothing to act on, which is the same outage with every dial green (issue #684). Check the hub: \`ccquota budget --account all --json\`, then \`fleet-account.sh quota --refresh\`; the quota line below names any account ccquota cannot read" ;;
+      blind) fail qwatch "$qwhyw — quota cache is FRESH BUT EMPTY — the last $qstreak ccquota reads returned no rows ($qdur, ≥ FLEET_ACCOUNT_QUOTA_BLIND_STREAK ${FLEET_ACCOUNT_QUOTA_BLIND_STREAK:-3}). The watch IS ticking, so nothing here is stale; the 70%/85% pre-emptive rotation simply has nothing to act on, which is the same outage with every dial green (issue #684). Check the hub: \`ccquota budget --account all --json\`, then \`fleet-account.sh quota --refresh\`; the quota line below names any account ccquota cannot read" ;;
       fresh) pass qwatch "quota cache ${qage}s old and non-empty — the pre-emptive watch is ticking AND getting readings (\`fleet-quotawatch.sh --status\`)" ;;
     esac
     # …and whether the ticks that ARE happening finish their work (issue #698).
@@ -958,6 +978,10 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
         # into `0% used` — a confident wrong number that never benches and
         # attracts every migrate. RED, not a warn: nobody is rotating on this.
         fail quota "$qtag payload shape not recognized for: ${qshape% } — neither five_hour nor seven_day in an account that is not flagged unavailable; those accounts get NO row (never benched, never a migrate target). That build is probably newer than this fleet — compare \`ccquota budget --account all --json\` with quota_parse in bin/fleet-account.sh"
+      elif [ "$qn" -gt 0 ] && [ -s "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/account.quota.why" ]; then
+        # The hub gave nothing this time; these rows are the last good reading,
+        # carried (issue #2465) — the qwatch line above says why and how old.
+        warn quota "$qtag → hub $CCQUOTA_HUB_URL gave no reading — $qn/$n pool accounts ranked on the carried one ($(printf '%s' "$qrows" | awk -F'\t' '{printf "%s%s %s%%/%s%%", (NR>1?", ":""), $1, $2, $3}')); see qwatch"
       elif [ "$qn" -gt 0 ] && [ "$qn" -eq "$n" ]; then
         pass quota "$qtag → hub $CCQUOTA_HUB_URL: $qn/$n pool accounts mapped — pre-emptive rotation at ${FLEET_ACCOUNT_CEILING:-85}% (warn ${FLEET_ACCOUNT_WARN_PCT:-70}%)"
       elif [ -n "$qnoread" ]; then

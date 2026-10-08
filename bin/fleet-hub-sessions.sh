@@ -328,7 +328,7 @@ curl_sessions() {
          else rm -f "$ETAGF"; fi
          return 0 ;;
     304)     rm -f "$hdr"; return 3 ;;
-    401|403) rm -f "$hdr"; principal_note "$out"; return 4 ;;
+    401|403) rm -f "$hdr"; REFUSED_CODE=$code; principal_note "$out"; return 4 ;;
     *)       rm -f "$hdr"; return 1 ;;
   esac
 }
@@ -368,7 +368,7 @@ print(json.dumps(b))' \
 # on disk — a fleet created since, or a wiped $FLEET_C, needs the body.
 fetch() {
   local out="$1" lf="$2" url st rc etag='' stamp sess _c q
-  PRINCIPAL_SAID=''
+  PRINCIPAL_SAID=''; REFUSED_CODE=''
   if [ -n "${FLEET_HUB_SESSIONS_CMD:-}" ]; then
     bash -c "$FLEET_HUB_SESSIONS_CMD" </dev/null >"$out" 2>/dev/null; return
   fi
@@ -424,6 +424,22 @@ local_fetch() {
 # readers; a cache from before this file is judged by its own #ts there.
 hub_ok() {
   printf '%s\n' "$1" > "$G/hub_ok.new" 2>/dev/null && mv -f "$G/hub_ok.new" "$G/hub_ok"
+  rm -f "$G/hub_why"
+  return 0
+}
+
+# hub_why <refused|unreachable> <detail> — WHY the hub's last round did not stand
+# (issue #2465), beside hub_ok: `<why><TAB><since epoch><TAB><detail>`. refused =
+# it answered 401/403 (the credential is the thing to fix); unreachable = no
+# answer at all. The since is kept while the reason does not change, so a reader
+# can say how long it has refused; hub_ok removes the file. The rows keep their
+# 失联 rule (#1483) — this only names the cause.
+REFUSED_CODE=''
+hub_why() {
+  local why="$1" detail="${2:-}" since='' w s _d
+  { IFS=$'\t' read -r w s _d < "$G/hub_why"; } 2>/dev/null && [ "$w" = "$why" ] && since=$s
+  case "$since" in ''|*[!0-9]*) since=$(date +%s) ;; esac
+  printf '%s\t%s\t%s\n' "$why" "$since" "$detail" > "$G/hub_why.new" 2>/dev/null && mv -f "$G/hub_why.new" "$G/hub_why"
   return 0
 }
 
@@ -504,6 +520,8 @@ EOF
     # a principal mismatch was already said in its own words — not 「unreachable」
     ok=''; { read -r ok _c < "$G/hub_ok"; } 2>/dev/null || ok=''
     [ -n "$PRINCIPAL_SAID" ] && ok=principal
+    if [ -n "$REFUSED_CODE" ]; then hub_why refused "HTTP $REFUSED_CODE${PRINCIPAL_SAID:+ (certificate principals)}"
+    else hub_why unreachable "no answer"; fi
     case "$ok" in
       principal) printf 'fleet-hub-sessions: the hub answered but refused this certificate (above) — keeping the last cache\n' >&2 ;;
       ''|*[!0-9]*) printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once hub_ok is older than %ss)\n' "${FLEET_HUB_SESSIONS_STALE:-60}" >&2 ;;

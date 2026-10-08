@@ -4349,6 +4349,38 @@ drill_trust_name_borrowed() {
   SECS=$(since "$t0")
 }
 
+# ---- quota-refused-blind (#2465, EPIC #2463 C8): the hub answers the quota read
+# 401 (a certificate / token it no longer takes). Before: every fetch overwrote
+# the cache with nothing, the pick had no opinion for six hours and never rotated,
+# and every dial stayed green. Now the last reading is carried (≤ FLEET_QUOTA_STALE_OK)
+# with the 401 named — done for real against a fake ccquota in a sandbox.
+drill_quota_refused_blind() {
+  CAP=20; local t0 d s n
+  d="$WORK/qrb"; mkdir -p "$d/p" "$d/acc" "$d/conf" "$d/.claude-dash/global"
+  printf 't\n' > "$d/acc/a"; chmod 600 "$d/acc/a"
+  cat > "$d/p/ccquota" <<'FAKE'
+#!/bin/bash
+if [ -f "$QRB_DIR/refuse" ]; then
+  printf '{"verdict":"unknown","reason":"hub unreachable: HTTP 401: unauthorized","accounts":null}\n'
+else
+  printf '{"verdict":"go","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":70,"five_hour":{"utilization":30},"seven_day":{"utilization":10}}]}\n'
+fi
+FAKE
+  chmod +x "$d/p/ccquota"
+  qrb() { env PATH="$d/p:$PATH" TMPDIR="$d" HOME="$d" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$d/conf" \
+            FLEET_ACCOUNTS_DIR="$d/acc" CCQUOTA_HUB_URL=http://hub.test QRB_DIR="$d" "$@"; }
+  t0=$(now)
+  qrb bash "$BIN/fleet-account.sh" quota --refresh >/dev/null 2>&1
+  : > "$d/refuse"
+  for n in 1 2 3 4; do qrb bash "$BIN/fleet-account.sh" quota --refresh >/dev/null 2>&1; done
+  n=$(qrb bash "$BIN/fleet-account.sh" quota --cached 2>/dev/null | grep -c .)
+  [ "$n" = 1 ] || { WHY="four 401 reads wiped the quota cache ($n rows) — the pick is blind"; return 1; }
+  s=$(qrb bash "$BIN/fleet-quotawatch.sh" --status 2>/dev/null)
+  case "$s" in carry*refused*) ;; *) WHY="--status does not say the reading is carried over a 401: $s"; return 1 ;; esac
+  WHAT='入口答 401 四次：额度读数沿用、挑号照常给分；--status 答 carry · refused（30 分钟后才清空并报警）'
+  SECS=$(since "$t0")
+}
+
 # ---- release-tampered (#2335, EPIC #2329 C7): a machine takes a release from
 # the hub only, and a tampered byte anywhere — a tree file, an artifact, the
 # manifest, the signature, a different key — installs nothing; GitHub out of

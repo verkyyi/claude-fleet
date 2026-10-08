@@ -290,6 +290,7 @@ fleet_quota_stale_age() {
 fleet_quota_blind() {
   fleet_quota_watch_configured || return 0
   [ -z "$(fleet_quota_stale_age)" ] || return 0
+  [ -z "$(fleet_quota_carry)" ] || return 0            # still acting on the last reading (#2465)
   _qbmin="${FLEET_ACCOUNT_QUOTA_BLIND_STREAK:-3}"
   case "$_qbmin" in ''|*[!0-9]*) _qbmin=3 ;; esac
   [ "$_qbmin" -eq 0 ] && return 0                      # 0 = alarm off
@@ -304,6 +305,48 @@ fleet_quota_blind() {
   [ "$_qbs" -gt 0 ] && _qbage=$(( $(fleet_usage_now) - _qbs ))
   [ "$_qbage" -lt 0 ] && _qbage=0
   printf '%s\t%s' "$_qbn" "$_qbage"
+  return 0
+}
+
+# --- a reading CARRIED over a refused / silent hub (issue #2465) ---------------
+# bin/fleet-account.sh keeps the last good rows when a fetch comes back empty
+# (account.quota.why says why) until the reading is FLEET_QUOTA_STALE_OK old
+# (1800 s); only then does it clear them, and only then is the watch blind above.
+# fleet_quota_carry — print
+#   "<reading age s><TAB><refused|unreachable|empty><TAB><how long that reason has held s><TAB><detail>"
+# IFF the watch is configured, ticking, the last fetch was empty and the cache
+# still holds rows young enough to act on. Nothing otherwise.
+fleet_quota_carry() {
+  fleet_quota_watch_configured || return 0
+  [ -z "$(fleet_quota_stale_age)" ] || return 0
+  _qcd=$(fleet_usage_cache_dir)
+  [ -s "$_qcd/account.quota.why" ] && [ -s "$_qcd/account.quota" ] || return 0
+  _qcw=''; IFS= read -r _qcw < "$_qcd/account.quota.why" 2>/dev/null
+  _qcr=''; [ -f "$_qcd/account.quota.read_at" ] && IFS= read -r _qcr < "$_qcd/account.quota.read_at" 2>/dev/null
+  case "$_qcr" in ''|*[!0-9]*) _qcr=''; [ -f "$_qcd/account.quota.ts" ] && IFS= read -r _qcr < "$_qcd/account.quota.ts" 2>/dev/null ;; esac
+  case "$_qcr" in ''|*[!0-9]*) return 0 ;; esac
+  _qcnow=$(fleet_usage_now)
+  _qcage=$(( _qcnow - _qcr )); [ "$_qcage" -lt 0 ] && _qcage=0
+  _qcok="${FLEET_QUOTA_STALE_OK:-1800}"; case "$_qcok" in ''|*[!0-9]*) _qcok=1800 ;; esac
+  [ "$_qcok" -gt 0 ] && [ "$_qcage" -le "$_qcok" ] || return 0
+  _qcwhy=${_qcw%%	*}; _qcrest=''; case "$_qcw" in *'	'*) _qcrest=${_qcw#*	} ;; esac
+  _qcs=${_qcrest%%	*}; _qcdet=''; case "$_qcrest" in *'	'*) _qcdet=${_qcrest#*	} ;; esac
+  case "$_qcwhy" in refused|unreachable|empty) ;; *) _qcwhy=unreachable ;; esac
+  case "$_qcs" in ''|*[!0-9]*) _qcs=$_qcnow ;; esac
+  _qcfor=$(( _qcnow - _qcs )); [ "$_qcfor" -lt 0 ] && _qcfor=0
+  printf '%s\t%s\t%s\t%s' "$_qcage" "$_qcwhy" "$_qcfor" "$_qcdet"
+  return 0
+}
+
+# fleet_quota_why — the reason the empty reads gave, "<why><TAB><detail>", for
+# the blind alarm's words (nothing when the last fetch brought rows).
+fleet_quota_why() {
+  _qwf="$(fleet_usage_cache_dir)/account.quota.why"
+  [ -s "$_qwf" ] || return 0
+  _qww=''; IFS= read -r _qww < "$_qwf" 2>/dev/null
+  _qwr=''; case "$_qww" in *'	'*) _qwr=${_qww#*	} ;; esac
+  case "$_qwr" in *'	'*) _qwr=${_qwr#*	} ;; *) _qwr='' ;; esac
+  printf '%s\t%s' "${_qww%%	*}" "$_qwr"
   return 0
 }
 
