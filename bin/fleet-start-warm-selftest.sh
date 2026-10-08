@@ -175,7 +175,7 @@ case "$tw$tr$tp" in *[!0-9]*|'') fail "A three epoch-ms stamps" "$out" ;; esac
 [ "$(o "$win" @reap_policy)" = merged ] || fail "A a new task closes when merged" "$(o "$win" @reap_policy)"
 got=$(turns)
 [ "$got" = "$body"$'\n\n'"$NOTE" ] || fail "A the first turn is the body + the note" "got=[$got]"
-[ $((tp - t0)) -le 1000 ] || fail "A t_prompt came $((tp - t0)) ms after the call (> 1000)"
+[ $((tp - t0)) -le 1000 ] || fail "A t_prompt came $((tp - t0)) ms after the call (> 1000): t_window +$((tw - t0)), t_ready +$((tr - t0))"
 [ "$tw" -le "$tr" ] && [ "$tr" -le "$tp" ] || fail "A t_window ≤ t_ready ≤ t_prompt" "$out"
 [ ! -s "$WORK/log/spawn" ] || fail "A nothing cold-spawned" "$(cat "$WORK/log/spawn")"
 ok "A new task: warm window in $((tp - t0)) ms (t_window→t_prompt $((tp - tw)) ms), first turn = body + note"

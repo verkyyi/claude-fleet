@@ -76,7 +76,7 @@
 #   claim               with --repo: only an entry of that repo. Without: the
 #                       fleet's first repo.
 # All repos share the one holding session; @repo is what tells them apart (an
-# older unstamped entry is told by its worktree's origin, pool_repo). A fleet
+# older unstamped entry is told by its worktree's origin, pool_windows). A fleet
 # with no repo has no pool.
 #
 # Config (per-fleet conf; a repo overlay overrides any of it):
@@ -253,38 +253,40 @@ acct_now() {
 # on every top-up in case the operator's terminal changed size since.
 fleet_dims() {
   local w h
-  w=$(TM display-message -p -t "$SESS" '#{window_width}' 2>/dev/null)
-  h=$(TM display-message -p -t "$SESS" '#{window_height}' 2>/dev/null)
+  read -r w h <<EOF
+$(TM display-message -p -t "$SESS" '#{window_width} #{window_height}' 2>/dev/null)
+EOF
   case "$w" in ''|*[!0-9]*) w=80;; esac
   case "$h" in ''|*[!0-9]*) h=24;; esac
   printf '%s %s\n' "$w" "$h"
 }
 
 wopt() { TM display-message -p -t "$1" "#{$2}" 2>/dev/null; }
-
-# pool_repo <wid> → the repo a warm entry was built from: its @repo stamp, else
-# (an entry warmed before #797) its worktree's origin. Empty when neither says.
-pool_repo() {
-  local r wt
-  [ "$(wopt "$1" @norepo)" = 1 ] && { printf -- '-\n'; return 0; }   # the HOME slot
-  r=$(wopt "$1" @repo)
-  if [ -z "$r" ]; then
-    wt=$(wopt "$1" @worktree)
-    [ -n "$wt" ] && [ -d "$wt" ] && r=$(git -C "$wt" remote get-url origin 2>/dev/null)
-  fi
-  fleet_norm_repo "$r"
-}
+# A claim is on the person's clock (发出即开 ≤1 s, issue #2352): every tmux call is a
+# client round-trip (~5 ms here, more on a loaded box), so a pass that reads
+# several of a window's options asks for them in ONE format, fields split on US
+# (\037 — not whitespace, so an empty option keeps its place).
+US=$'\037'
 
 # pool_windows [all] → this slot's entries: REPO's (or HOME's) only — the holding
 # session is shared by every slot — and of this pass's AGENT; `all` keeps every
-# agent's (the reap of a slot's default agent retires the others').
+# agent's (the reap of a slot's default agent retires the others'). An entry's
+# repo is its @repo stamp, else (one warmed before #797) its worktree's origin.
 pool_windows() {
-  local w a
-  for w in $(TM list-windows -t "$POOL" -F '#{window_id}' 2>/dev/null); do
-    [ "$(pool_repo "$w")" = "$REPO" ] || continue
-    if [ "${1:-}" != all ]; then a=$(wopt "$w" @pool_agent); [ "${a:-claude}" = "$AGENT" ] || continue; fi
+  local w nr r wt a
+  while IFS=$US read -r w nr r wt a; do
+    [ -n "$w" ] || continue
+    if [ "$nr" = 1 ]; then r=-                     # the HOME slot
+    else
+      [ -z "$r" ] && [ -n "$wt" ] && [ -d "$wt" ] && r=$(git -C "$wt" remote get-url origin 2>/dev/null)
+      r=$(fleet_norm_repo "$r")
+    fi
+    [ "$r" = "$REPO" ] || continue
+    if [ "${1:-}" != all ]; then [ "${a:-claude}" = "$AGENT" ] || continue; fi
     printf '%s\n' "$w"
-  done
+  done <<EOF
+$(TM list-windows -t "$POOL" -F "#{window_id}$US#{@norepo}$US#{@repo}$US#{@worktree}$US#{@pool_agent}" 2>/dev/null)
+EOF
 }
 
 # retire <wid> — kill the window and free its worktree+branch. Idempotent.
@@ -494,24 +496,27 @@ EOF
 }
 
 usable() {                                    # usable <wid> — ready, fresh, right account, current config
-  local wid="$1" born age agent
-  [ "$(wopt "$wid" @pool_ready)" = 1 ] || return 1
-  agent=$(wopt "$wid" @pool_agent); [ "${agent:-claude}" = "$AGENT" ] || return 1
-  [ "$(wopt "$wid" pane_dead)" = 1 ] && return 1
-  born=$(wopt "$wid" @pool_born); case "$born" in ''|*[!0-9]*) return 1;; esac
+  local wid="$1" born age agent ready dead acct cfg ver ww wh
+  IFS=$US read -r ready agent dead born acct cfg ver ww wh <<EOF
+$(TM display-message -p -t "$wid" "#{@pool_ready}$US#{@pool_agent}$US#{pane_dead}$US#{@pool_born}$US#{@pool_account}$US#{@agent_cfg}$US#{@agent_ver}$US#{window_width}$US#{window_height}" 2>/dev/null)
+EOF
+  [ "$ready" = 1 ] || return 1
+  [ "${agent:-claude}" = "$AGENT" ] || return 1
+  [ "$dead" = 1 ] && return 1
+  case "$born" in ''|*[!0-9]*) return 1;; esac
   age=$(( $(NOW) - born )); [ "$age" -le "$MAXAGE" ] || return 1
-  [ "$(wopt "$wid" @pool_account)" = "$(acct_now)" ] || return 1
+  [ "$acct" = "$(acct_now)" ] || return 1
   # Started on an older configuration (an upgrade since it was warmed, #2233):
   # 配置旧 / 待换新 / 会坏 are the list's own words for it — never handed out.
   # No fingerprint on it, or none expected, reads unknown and passes, as before.
-  fleet_cfg_state "${agent:-claude}" "$(wopt "$wid" @agent_cfg)" "$(wopt "$wid" @agent_ver)"
+  fleet_cfg_state "${agent:-claude}" "$cfg" "$ver"
   case "$FCFG_STATE" in stale|renew|broken) return 1 ;; esac
   # Geometry gate (see fleet_dims): handing out a window that will be resized on
   # arrival trades a 7s wait for a permanently wedged pane.
   read -r _fw _fh <<EOF
 $(fleet_dims)
 EOF
-  [ "$(wopt "$wid" window_width)" = "$_fw" ] && [ "$(wopt "$wid" window_height)" = "$_fh" ] || return 1
+  [ "$ww" = "$_fw" ] && [ "$wh" = "$_fh" ] || return 1
   return 0
 }
 
@@ -657,16 +662,17 @@ cmd_claim() {
     usable "$wid" || continue
     # An entry git cannot bring up to origin/<base> is never handed out.
     align "$wid" || { retire "$wid"; continue; }
-    slug=$(wopt "$wid" @pool_slug); wt=$(wopt "$wid" @worktree)
+    IFS=$US read -r slug wt <<EOF
+$(TM display-message -p -t "$wid" "#{@pool_slug}$US#{@worktree}" 2>/dev/null)
+EOF
     # Claim-by-move: whoever's move-window succeeds owns it. A loser sees the
     # window gone from the pool session on the next iteration.
     TM move-window -s "$wid" -t "$SESS:" 2>/dev/null || continue
-    TM set-window-option -t "$wid" -u @pool 2>/dev/null
-    TM set-window-option -t "$wid" -u @pool_ready 2>/dev/null
-    TM set-window-option -t "$wid" -u @pool_born 2>/dev/null
-    TM set-window-option -t "$wid" -u @pool_account 2>/dev/null
-    TM set-window-option -t "$wid" -u @pool_agent 2>/dev/null
-    TM set-window-option -t "$wid" -u @pool_slug 2>/dev/null
+    # One client call (an unset of an option never set is no error, so the chain
+    # always runs through).
+    TM set-window-option -t "$wid" -u @pool \; set-window-option -t "$wid" -u @pool_ready \; \
+       set-window-option -t "$wid" -u @pool_born \; set-window-option -t "$wid" -u @pool_account \; \
+       set-window-option -t "$wid" -u @pool_agent \; set-window-option -t "$wid" -u @pool_slug 2>/dev/null
     if [ "$NEWCLAIM" = 1 ]; then
       printf '%s\n' "$wid"
       # The node's caller has no ⌃s refill behind it: the slot asks for its own.
