@@ -5,6 +5,8 @@ front; install / uninstall run as ROOT (it calls them through `sudo -n`).
 
     install   --login L --conf-dir C --install-dir I [--dry-run|--adopt]
     uninstall --login L --conf-dir C [--dry-run]
+    purge     --login L [--dry-run]                 (root: a login being deleted — everything of it
+                                                     GONE, nothing moved back; fleet-login-remove.sh, #2418)
     status    --conf-dir C [--json]                 (as the login)
     check     --conf-dir C                          (as the login: the doctor row)
     plan      --bin B                               (anyone: every login's state + commands)
@@ -1046,6 +1048,72 @@ def uninstall(a):
         return 1
     drop_role()
     say("credsep: OFF — every file back where it was")
+    return 0
+
+
+def purge(a):
+    """A login about to be DELETED (fleet-login-remove.sh, issue #2418): every
+    credsep thing of it gone — never moved back, the home is about to be archived
+    or deleted and no pool token may land in it. Its own proxy booted out (and
+    checked gone) and its service removed; a tenant of the shared proxy dropped
+    from it — the record rewritten, the proxy restarted so its tenants.json and
+    pool follow (or, run by the machine daemon, the LIB change restarts it); the
+    store (and any .rolledback- copy), the run dir, root's <LIB>/<login>.conf, its
+    logs. Needs no passwd entry: the login may already be gone. Idempotent."""
+    login = a.login
+    R, RUN = paths(login)
+    meta = read_meta(login) or {}
+    plabel, ppath = own_label(login)
+    rec = shared_rec() or {}
+    tenant = meta.get("mode") == "shared" or login in (rec.get("logins") or [])
+    gone = []
+    if os.path.exists(ppath) or (meta and not tenant):
+        unload_daemon(plabel)
+        if MAC and SVC and not DRY:
+            wait_gone("system/" + plabel)
+            if sh("launchctl", "print", "system/" + plabel, check=False, quiet=True) == 0:
+                die("purge: %s is still loaded — nothing removed; boot it out by hand: "
+                    "sudo launchctl bootout system/%s" % (plabel, plabel))
+        if os.path.exists(ppath) and not DRY:
+            os.unlink(ppath)
+        gone.append("proxy " + plabel)
+    s = meta.get("agent") or {}
+    dropin = os.path.join(s["path"] + ".d", "credsep.conf") if s.get("kind") == "systemd-system" else ""
+    if dropin and os.path.exists(dropin):
+        if not DRY:
+            os.unlink(dropin)
+            try:
+                os.rmdir(os.path.dirname(dropin))
+            except OSError:
+                pass
+        gone.append("agent drop-in " + dropin)
+    stores = [R] + sorted(glob.glob(R + ".rolledback-*"))
+    for p in stores + [RUN, os.path.join(LOG_BASE, login), os.path.join(SHARED_RUN, "ignored." + login)]:
+        if os.path.lexists(p):
+            if not DRY:
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    os.unlink(p)
+            gone.append(p)
+    for p in [root_conf_path(login)] + sorted(glob.glob(os.path.join(LOG_BASE, login + ".*"))):
+        if os.path.lexists(p):
+            if not DRY:
+                os.unlink(p)
+            gone.append(p)
+    if DRY:
+        for g in gone:
+            say("    would remove:", g)
+    if tenant and rec:
+        if not DRY:
+            shared_record([m["login"] for m in shared_tenants()])
+        if os.path.exists(SHARED_PATH):
+            load_daemon(SHARED_PATH, SHARED_LABEL)     # its tenants.json and pool follow
+        gone.append("tenant of %s" % SHARED_LABEL)
+    if not gone:
+        say("purge: %s — nothing of credsep here" % login)
+        return 0
+    say("purge: %s — %s" % (login, "would remove %d item(s)" % len(gone) if DRY else "removed: " + "; ".join(gone)))
     return 0
 
 
@@ -2119,6 +2187,9 @@ def main():
     rl.add_argument("--install-dir", default="")
     rl.add_argument("--dry-run", action="store_true")
     sub.add_parser("rootlogs")
+    pg = sub.add_parser("purge")    # a login being deleted (fleet-login-remove.sh, #2418)
+    pg.add_argument("--login", required=True)
+    pg.add_argument("--dry-run", action="store_true")
     sub.add_parser("role")      # the role account alone (fleet-node-install.sh, #2330)
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
@@ -2137,6 +2208,13 @@ def main():
             die("role needs root (sudo fleet node install runs it)", 2)
         print("role: %s %s" % (ROLE, "created" if ensure_role() else "exists"))
         return 0
+    if a.cmd == "purge":
+        DRY = a.dry_run
+        if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", a.login):
+            die("bad login %r" % a.login, 2)
+        if os.geteuid() != 0 and not TEST and not DRY:
+            die("purge needs root (fleet-login-remove.sh runs it through sudo)", 2)
+        return purge(a)
     if a.cmd == "relog":
         DRY = a.dry_run
         if os.geteuid() != 0 and not TEST and not DRY:

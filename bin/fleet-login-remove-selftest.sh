@@ -17,7 +17,7 @@ WORK=$(cd "$WORK" && pwd -P)   # one spelling of the path: $PWD is compared agai
 trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
 REAL_TAR=$(command -v tar) || exit 2
 mkdir -p "$WORK/bin" "$WORK/shim" "$WORK/shim-tar-fails" "$WORK/shim-tar-warns" "$WORK/homes" "$WORK/LaunchDaemons" "$WORK/ds/groups"
-cp "$BIN/fleet-login-remove.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" "$BIN/fleet-node-leave.sh" "$WORK/bin/"
+cp "$BIN/fleet-login-remove.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" "$BIN/fleet-node-leave.sh" "$BIN/fleet-credsep.py" "$WORK/bin/"
 cat > "$WORK/bin/fleet-restore.sh" <<'EOF'
 #!/bin/sh
 exit 0
@@ -35,6 +35,35 @@ export FLEET_TEST_LOG="$WORK/calls.log" FLEET_TEST_LIVE="$WORK/live" FLEET_TEST_
 export HOME="$WORK/admin" PATH="$WORK/shim:$PATH"
 export FLEET_TEST_CALLER="$HOME/projects/claude-fleet"   # inside the admin's 0700 home (#1216)
 mkdir -p "$HOME" "$FLEET_TEST_CALLER"
+# credsep's root paths (issue #2418), all under the work dir; no launchctl/systemctl
+CS="$WORK/credsep"
+export FLEET_CREDSEP_ROOT_BASE="$CS/db" FLEET_CREDSEP_RUN_BASE="$CS/run" FLEET_CREDSEP_LOG_BASE="$CS/log" \
+  FLEET_CREDSEP_LIB="$CS/lib" FLEET_CREDSEP_DAEMON_DIR="$CS/daemons" FLEET_CREDSEP_ROLE="$(id -un)" \
+  FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1
+if [ "$(uname)" = Darwin ]; then PX=com.claude-fleet.credsep.; PXS=.plist; else PX=claude-fleet-credsep-; PXS=.service; fi
+# cs_fixture <mode> — alice and bob separated: own proxies (mode own), or both
+# tenants of the shared proxy (mode shared)
+cs_fixture() {
+  rm -rf "${CS:?}"
+  mkdir -p "$CS/daemons" "$CS/lib" "$CS/log/alice" "$CS/log/bob"
+  for l in alice bob; do
+    mkdir -p "$CS/db/$l/accounts" "$CS/run/$l"
+    printf 'tok-POOL-%s\n' "$l" > "$CS/db/$l/accounts/p1"
+    printf 'K=v\n' > "$CS/lib/$l.conf"; : > "$CS/log/$l.log"; : > "$CS/log/$l/agent.log"
+    if [ "$1" = shared ]; then
+      printf '{"login": "%s", "mode": "shared", "conf_dir": "%s"}\n' "$l" "$CS/conf-$l" > "$CS/db/$l/meta.json"
+    else
+      printf '{"login": "%s"}\n' "$l" > "$CS/db/$l/meta.json"; printf 'plist\n' > "$CS/daemons/$PX$l$PXS"
+    fi
+  done
+  mkdir -p "$CS/db/alice.rolledback-20261008T000000Z"
+  if [ "$1" = shared ]; then
+    printf '{"shared": true, "logins": ["alice", "bob"]}\n' > "$CS/db/.shared.json"
+    if [ "$(uname)" = Darwin ]; then printf 'plist\n' > "$CS/daemons/com.claude-fleet.cred-proxy-shared.plist"
+    else printf 'unit\n' > "$CS/daemons/claude-fleet-cred-proxy-shared.service"; fi
+  fi
+}
+cs_fixture own
 
 # The fixture every --apply leg starts from: alice's home (fleet conf, copied
 # pool, GUI agents), her system daemon, a live fleet, and the directory-service
@@ -212,6 +241,9 @@ not_has "$WORK/out" 'access_screensharing' 'a group alice is not in was touched'
 not_has "$WORK/out" 'access_disabled' 'a group with no member list was touched'
 not_has "$WORK/out" '/Groups/staff' 'a non-access group was touched'
 has "$WORK/out" "archive=$ARCH/alice-" 'archive path not printed last'
+has "$WORK/out" "sudo python3 -I $WORK/bin/fleet-credsep.py purge --login alice" 'credsep purge step not shown (#2418)'
+has "$WORK/out" "would remove: $CS/db/alice" 'the dry run does not list the store it would remove'
+[ -d "$CS/db/alice" ] && [ -f "$CS/daemons/$PX"alice"$PXS" ] || fail 'preview removed credsep files'
 [ ! -s "$FLEET_TEST_LOG" ] || fail 'preview executed a mutating command'
 [ -f "$FLEET_TEST_LIVE" ] && [ -f "$FLEET_CONF_DIR/accounts/alpha" ] || fail 'preview mutated fixture'
 [ ! -e "$ARCH" ] || fail 'preview created the archive dir'
@@ -269,8 +301,16 @@ python3 - "$FLEET_TEST_LOG" <<'PY' || fail 'wrong step order'
 import pathlib, sys
 lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
 def at(s): return next(i for i, line in enumerate(lines) if s in line)
-assert at('kill-session') < at('launchctl bootout system') < at('rm -rf') < at('pkill -TERM') < at('sudo tar') < at('sysadminctl -deleteUser') < at('dscl . -delete')
+assert at('kill-session') < at('launchctl bootout system') < at('fleet-credsep.py purge') < at('rm -rf') < at('pkill -TERM') < at('sudo tar') < at('sysadminctl -deleteUser') < at('dscl . -delete')
 PY
+# credsep (issue #2418): alice's proxy, store (+ .rolledback-), run dir, root conf
+# and logs are gone; bob's are all there
+left=$(cd "$CS" && ls -d daemons/*alice* db/alice* run/alice lib/alice.conf log/alice* 2>/dev/null | tr '\n' ' ')
+[ -z "$left" ] || fail "credsep left behind for a deleted login: $left"
+for f in "daemons/$PX"bob"$PXS" db/bob/accounts/p1 run/bob lib/bob.conf log/bob.log log/bob/agent.log; do
+  [ -e "$CS/$f" ] || fail "another login's credsep $f was removed"
+done
+has "$WORK/out" "purge: alice — removed: proxy $PX"alice 'purge did not say what it removed'
 
 # --delete-home: no archive at all; the deletion and the group cleanup are the same.
 reset_fixture
@@ -400,5 +440,26 @@ has "$WORK/out" 'was not taken off the hub' 'hub-down WARN missing'
 has "$WORK/out" '「移除」' 'hub-down WARN does not name the machines page'
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'hub down: the login was not deleted'
 unset FLEET_HUB_CURL
+
+# A tenant of the machine's shared proxy (issue #2418): dropped from its record,
+# the shared proxy restarted so its tenants.json and pool follow; bob stays on.
+reset_fixture; cs_fixture shared
+run alice --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail 'shared-tenant apply failed'; }
+[ ! -e "$CS/db/alice" ] && [ ! -e "$CS/lib/alice.conf" ] || fail 'shared tenant: store / root conf left behind'
+[ -f "$CS/db/bob/accounts/p1" ] || fail "shared tenant: another tenant's store was removed"
+python3 -c 'import json, sys; l = json.load(open(sys.argv[1]))["logins"]; sys.exit(l != ["bob"])' "$CS/db/.shared.json" \
+  || fail "shared tenant: .shared.json still lists alice: $(cat "$CS/db/.shared.json")"
+has "$WORK/out" 'tenant of ' 'shared tenant: purge did not drop it from the shared proxy'
+has "$WORK/out" 'cred-proxy-shared' 'shared tenant: the shared proxy was not restarted'
+
+# The purge failing (here: refused, not root outside the sandbox) stops BEFORE
+# the login is deleted.
+reset_fixture; cs_fixture own
+FLEET_CREDSEP_TEST=0 run alice --delete-home --apply
+[ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail 'a refused purge did not stop the run'; }
+has "$WORK/out" 'stopped before deleting the login' 'refused purge not explained'
+not_has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser' 'login deleted although the credsep purge failed'
+[ -d "$CS/db/alice" ] || fail 'refused purge: store removed anyway'
 
 printf 'fleet-login-remove-selftest: PASS\n'
