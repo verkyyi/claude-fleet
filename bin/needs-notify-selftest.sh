@@ -27,7 +27,7 @@
 #                 default (⌘N ⌘P ⌘↑↓ ⌘J ⌘/, each a `key-<key>` range); the prefix
 #                 keys while prefix is pressed; ⌘P's while its popup is open; ↵ /
 #                 esc in a question's pane; what a tap does on the list, with the
-#                 clipped row's whole name (fleet-sidebar.py bar_hint — #948's
+#                 highlighted row's detail (fleet-sidebar.py bar_hint, #2305 — #948's
 #                 `? 快捷键` row is gone, the bar says it); the writing area's; a
 #                 tap on a range is that key (MouseDown1Status → send-keys -K) and
 #                 「! n 等你」 is ⌘J; narrower than 100 columns the line goes
@@ -212,7 +212,7 @@ eq "E: …and the slot goes back to two blanks" "$sl" "$(T display-message -p -c
 T resize-window -t "=$L:" -x 90 2>/dev/null; "$REAL_TMUX" -L "${L}o" resize-window -t =o -x 90 2>/dev/null; sleep 0.2
 eq "E: narrower than 100 columns → the badge alone" "B" "$(T display-message -p -c "$CL" '#{E:status-left}')"
 "$REAL_TMUX" -L "${L}o" kill-server 2>/dev/null
-# the list's half (fleet-sidebar.py bar_hint): the clipped highlighted row's name
+# the list's half (fleet-sidebar.py bar_hint): the highlighted row's detail (issue #2305)
 out=$(python3 - "$BIN" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("side", sys.argv[1] + "/fleet-sidebar.py")
@@ -226,11 +226,11 @@ print(side.bar_hint(rows, "@4", side.PORTAL_KEY, 30))
 print(side.bar_hint(rows, "@4", side.PORTAL_KEY, 30, True))
 PY
 )
-eq "E: bar_hint — a clipped row's whole name (# doubled), the writing area as a view" \
+eq "E: bar_hint — the highlighted row's detail (# doubled), the writing area as a view" \
    "('', 'issue-1909 · 一个很长很长很长很长很长很长的名字 ##x', '')
-('', '', '')
-('portal', '', '')
-('portal', '', '1')" "$out"
+('', 'ok', '')
+('portal', 'ok', '')
+('portal', 'ok', '1')" "$out"
 # a tap on a range is that key; 「! n 等你」 is ⌘J
 grep -q "bind -n MouseDown1Status if -F '#{m:key-\*,#{mouse_status_range}}' { run-shell -C \"send-keys -K -c '#{client_name}' '#{s/^key-//:mouse_status_range}'\" }" "$CONF" \
   && grep -q "#{==:#{mouse_status_range},needs}' { run-shell -C \"send-keys -K -c '#{client_name}' User924\" }" "$CONF" \

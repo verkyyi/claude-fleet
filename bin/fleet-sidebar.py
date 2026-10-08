@@ -1434,36 +1434,21 @@ def row_left(marker, glyph, tree, name):
     return marker + " " + glyph + " " + (tree or " ") + " " + name
 
 
-def row_right(badge, info=""):
-    """What sits at a row's right edge: the subtree badge (`· k/N`), then — while
-    the info column is open (⌃i, issue #1532) — `info_text`. The machine's `@`
-    mark (issue #1780) is painted after it, in its own colour: `machine_tag`."""
-    return " ".join(part for part in ("· " + badge if badge else "", info) if part)
+def row_right(badge):
+    """What sits at a row's right edge: the subtree badge (`· k/N`) — an EPIC's
+    done count — and nothing else (issue #2305: the row is state · name · N/N;
+    the machine, reap policy, configuration word and the old ⌃i issue · PR · ctx%
+    column are the bar's, `detail_line`)."""
+    return "· " + badge if badge else ""
 
 
-# The info column (issue #1532): the hub's issue · PR · ctx% cells, which the
-# producer hands every session row as fields 10-12. Fixed widths, so the three
-# line up down the list; folded away by default — the width goes to the names.
-INFO_WIDTHS = (5, 7, 4)
-
-
-def info_text(row):
-    """A session row's `#1532  #1552✓  45%`, or "" (a heading, a landed row, a
-    row from a producer that predates the fields)."""
-    if row[0] == "hdr" or len(row) < 12 or not any(row[9:12]):
-        return ""
-    return " ".join(" " * max(0, size - width_of(cell)) + cell
-                    for cell, size in zip(row[9:12], INFO_WIDTHS))
-
-
-def row_text(marker, glyph, tree, name, badge, width, info=""):
+def row_text(marker, glyph, tree, name, badge, width):
     """A session row laid out to `width` cells (issue #1328). The subtree badge
     (`· k/N`) is right-aligned and ALWAYS whole; the name gets what is left and,
     when it does not fit, ends in `…`. A narrow pane gives up name, never the
-    count — the old joined label was clipped from the right, so the count went
-    first. A row with no badge and a name that fits is exactly the old line."""
+    count — the one width rule a row has (issue #2305)."""
     left = row_left(marker, glyph, tree, "")
-    right = row_right(badge, info)
+    right = row_right(badge)
     room = width - width_of(left) - (width_of(right) + 1 if right else 0)
     if width_of(name) > room:
         name = clip(name, max(0, room - 1)) + "…" if room > 0 else ""
@@ -1473,40 +1458,37 @@ def row_text(marker, glyph, tree, name, badge, width, info=""):
     return text
 
 
-def row_layout(marker, glyph, tree, name, badge, width, info="", node="", cfg="", reap=""):
-    """A session row in `width` cells with its machine's @ mark (issue #1780):
-    (text, tag) — `row_text` in what the mark leaves, the mark (`fit_tag`) to
-    paint at the row's last cells. No mark: the row is exactly `row_text`.
-    A stale configuration (`cfg` == "stale", issue #1783) puts 配置旧 in front of
-    the mark, one space between — `cfg_part(tag)` is that word, painted yellow;
-    `renew` (issue #1895) puts 待换新 there the same way. A reap policy (issue
-    #1902) puts its word — 合并后回收 · 做完就回收 · 常驻 … — between the two."""
-    right = row_right(badge, info)
-    room = width - width_of(row_left(marker, glyph, tree, "")) - (width_of(right) + 1 if right else 0)
-    tag = fit_tag(node, room)
-    rtag = fit_reap_tag(reap, room - (width_of(tag) + 1 if tag else 0))
-    if rtag:
-        tag = rtag + (" " + tag if tag else "")
-    ctag = fit_cfg_tag(cfg, room - (width_of(tag) + 1 if tag else 0))
-    if ctag:
-        tag = ctag + (" " + tag if tag else "")
-    cut = width_of(tag) + 1 if tag else 0
-    return row_text(marker, glyph, tree, name, badge, width - cut, info), tag
+# The state glyph a row's urgent condition takes over (issue #2305): a lost
+# machine's row and a session that WILL fail on this install say so in the
+# glyph's own cell instead of a word at the row's end. A row that waits on you
+# keeps its own red `!`/`?` — the producer's glyph already says it.
+LOST_GLYPH, BROKEN_GLYPH = "⊘", "✗"
 
 
-def row_need(row, info=False):
-    """The cells `row` needs to show whole, plus the one the paint keeps free —
-    its info column too while that is open."""
+def row_glyph(row):
+    """(glyph, why) for a session row: `⊘` "lost" on a lost machine's row, its
+    own glyph while it waits on you, `✗` "broken" for a configuration that will
+    break (#2076), else its own glyph and ""."""
+    glyph, state = row[2], row[1]
+    node = row[8] if len(row) > 8 else ""
+    cfg = row[12] if len(row) > 12 else ""
+    if node.endswith("!"):
+        return LOST_GLYPH, "lost"
+    if state == "needs":
+        return glyph, ""
+    if cfg == "broken":
+        return BROKEN_GLYPH, "broken"
+    return glyph, ""
+
+
+def row_need(row):
+    """The cells `row` needs to show whole, plus the one the paint keeps free."""
     wid, _state, glyph, name, tree, badge = row[:6]
     if wid == "hdr":
         return 0 if name.startswith("──") else width_of(name) + 1
     need = width_of(row_left(" ", glyph, tree, name)) + 1
-    right = row_right(badge, info_text(row) if info else "")
-    need += width_of(right) + 1 if right else 0
-    need += tag_need(row[8] if len(row) > 8 else "")   # the @ mark (#1780)
-    ctag = cfg_tag(row[12] if len(row) > 12 else "")    # 配置旧 (#1783)
-    rtag = reap_tag(row[14] if len(row) > 14 else "")   # 合并后回收 … (#1902)
-    return need + (width_of(ctag) + 1 if ctag else 0) + (width_of(rtag) + 1 if rtag else 0)
+    right = row_right(badge)
+    return need + (width_of(right) + 1 if right else 0)
 
 
 def alias_of(name):
@@ -1529,87 +1511,29 @@ def here_names():
 
 
 HERE = here_names()
-# The name column keeps at least this many cells beside the @ mark (issue #1780);
-# narrower, the mark shrinks to `@` + its first letter.
-NAME_MIN = 18
 
 
-def machine_tag(node, narrow=False):
-    """The `@` mark a session row ends in (issue #1780): the machine the session
-    runs on — `@m4`; `@本机` when that is the computer this list runs on; `@m4!`
-    once that machine is lost; `@m5~` when the row came over the shell's own
-    connection while the hub is silent (#1488). `narrow` keeps `@` + the first
-    letter (+ its mark). An empty field 9 — this machine's own row on a node's
-    list — has none: a node's list marks the OTHER machines' rows only."""
+def machine_tag(node):
+    """The machine a session runs on, as the bar names it (issue #1780, moved off
+    the row by #2305): `@m4`; `@本机` when that is the computer this list runs
+    on; `@m4!` once that machine is lost; `@m5~` when the row came over the
+    shell's own connection while the hub is silent (#1488). An empty field 9 —
+    this machine's own row on a node's list — has none."""
     base = node.rstrip("!~")
     if not base:
         return ""
     name = tr("sidebar_here") if base.lower() in HERE else base
-    return "@" + (name[:1] if narrow else name) + node[len(base):]
+    return "@" + name + node[len(base):]
 
 
-def tag_pair(node, raised=False):
-    """The @ mark's colour pair (issue #1780): `@本机` magenta, every other
-    machine's — a lost one's included, even this computer's — dim; on the
-    raised row's ground when the row is raised."""
-    base = node.rstrip("!~")
-    if base and base.lower() in HERE and not node.endswith("!"):
-        return PAIR_HERE + SEL_GLYPH if raised else PAIR_HERE
-    return PAIR_DIM_SEL if raised else PAIR_DIM
-
-
-def tag_need(node):
-    """The cells the @ mark takes at a row's end: the tag plus its gap."""
-    tag = machine_tag(node)
-    return width_of(tag) + 1 if tag else 0
-
-
-def fit_tag(node, room):
-    """The @ mark for a row whose name and badge have `room` cells beside the mark
-    (issue #1780): whole while the name keeps NAME_MIN cells, else `@` + the first
-    letter; "" when even that leaves no name."""
-    tag = machine_tag(node)
-    if not tag:
-        return ""
-    if room - (width_of(tag) + 1) < NAME_MIN:
-        tag = machine_tag(node, narrow=True)
-    return tag if room - (width_of(tag) + 1) > 0 else ""
-
-
-CFG_WORDS = ("stale", "renew", "broken")   # the cfg verdicts that carry a word
-
-
-def cfg_tag(cfg, narrow=False):
-    """The 配置旧 word a row whose configuration is stale carries left of its @
-    mark (issue #1783) — `旧` when narrow; 待换新 (`换`) for a `renew` row, the
-    same configuration on an older fleet version (issue #1895); 会坏·需重开 (`坏`)
-    for a `broken` row, whose start names something the install no longer has
-    (issue #2076 — painted red, every other word yellow); "" for `ok` / unknown
-    (empty)."""
-    if cfg == "stale":
-        return tr("sidebar_cfg_stale_narrow" if narrow else "sidebar_cfg_stale")
-    if cfg == "renew":
-        return tr("sidebar_cfg_renew_narrow" if narrow else "sidebar_cfg_renew")
-    if cfg == "broken":
-        return tr("sidebar_cfg_broken_narrow" if narrow else "sidebar_cfg_broken")
+def cfg_tag(cfg):
+    """配置旧 for a row whose configuration is stale (issue #1783); 待换新 for a
+    `renew` row, the same configuration on an older fleet version (issue #1895);
+    会坏·需重开 for a `broken` row, whose start names something the install no
+    longer has (issue #2076); "" for `ok` / unknown (empty)."""
+    if cfg in ("stale", "renew", "broken"):
+        return tr("sidebar_cfg_" + cfg)
     return ""
-
-
-def cfg_pair(cfg):
-    """The colour pair cfg_part is painted in: red for broken, yellow otherwise."""
-    return PAIR_BROKEN if cfg == "broken" else PAIR_STALE
-
-
-def fit_cfg_tag(cfg, room):
-    """配置旧 for a row with `room` cells left beside the @ mark: whole while the
-    name keeps NAME_MIN cells, else the narrow word; "" when even that leaves no
-    name — the same rule as fit_tag, and the @ mark is fitted first."""
-    tag = cfg_tag(cfg)
-    if not tag:
-        return ""
-    if room - (width_of(tag) + 1) < NAME_MIN:
-        tag = cfg_tag(cfg, narrow=True)
-    return tag if room - (width_of(tag) + 1) > 0 else ""
 
 
 def _compact(secs):
@@ -1619,10 +1543,10 @@ def _compact(secs):
     return "%ds" % secs
 
 
-def reap_tag(policy, narrow=False):
-    """The word a row's reap policy (issue #1902, @reap_policy) carries left of
-    its @ mark — the new-session question's words; `narrow` the short one. ""
-    for none (an old window: its kind decides, nothing is drawn) or a garbled one."""
+def reap_tag(policy):
+    """The words for a row's reap policy (issue #1902, @reap_policy) — the
+    new-session question's words. "" for none (an old window: its kind decides)
+    or a garbled one."""
     if not policy or fleet_reap_policy is None:
         return ""
     got = fleet_reap_policy.parse(policy)
@@ -1631,95 +1555,53 @@ def reap_tag(policy, narrow=False):
     kind, val = got
     if kind == "at":
         lt = time.localtime(val)
-        when = time.strftime("%H:%M" if time.localtime()[:3] == lt[:3] else "%m-%d %H:%M", lt)
-        return tr("sidebar_reap_at_narrow", when) if narrow else tr("sidebar_reap_at", when)
+        return tr("sidebar_reap_at", time.strftime(
+            "%H:%M" if time.localtime()[:3] == lt[:3] else "%m-%d %H:%M", lt))
     if kind == "merged" and val:
-        return tr("sidebar_reap_merged_for_narrow" if narrow else "sidebar_reap_merged_for", _compact(val))
+        return tr("sidebar_reap_merged_for", _compact(val))
     if kind == "done" and val != fleet_reap_policy.DONE_DEFAULT:
-        return tr("sidebar_reap_done_for_narrow" if narrow else "sidebar_reap_done_for", _compact(val))
-    return tr(REAP_WORDS[kind][1 if narrow else 0])
+        return tr("sidebar_reap_done_for", _compact(val))
+    return tr(REAP_WORDS[kind])
 
 
-REAP_WORDS = {"merged": ("sidebar_reap_merged", "sidebar_reap_merged_narrow"),
-              "done": ("sidebar_reap_done", "sidebar_reap_done_narrow"),
-              "loop-end": ("sidebar_reap_loop_end", "sidebar_reap_loop_end_narrow"),
-              "keep": ("sidebar_reap_keep", "sidebar_reap_keep_narrow")}
+REAP_WORDS = {"merged": "sidebar_reap_merged", "done": "sidebar_reap_done",
+              "loop-end": "sidebar_reap_loop_end", "keep": "sidebar_reap_keep"}
 
 
-def fit_reap_tag(policy, room):
-    """reap_tag for a row with `room` cells left beside the @ mark — fit_cfg_tag's rule."""
-    tag = reap_tag(policy)
-    if not tag:
-        return ""
-    if room - (width_of(tag) + 1) < NAME_MIN:
-        tag = reap_tag(policy, narrow=True)
-    return tag if room - (width_of(tag) + 1) > 0 else ""
-
-
-def reap_part(tag, cfg, policy):
-    """(offset, word) of the reap word inside a row_layout tag, else (0, "")."""
-    if not policy or not tag:
-        return 0, ""
-    at = 0
-    c = cfg_part(tag, cfg)
-    if c:
-        at = width_of(c) + 1
-    rest = tag[len(c) + 1:] if c else tag
-    for word in (reap_tag(policy), reap_tag(policy, narrow=True)):
-        if word and (rest == word or rest.startswith(word + " ")):
-            return at, word
-    return 0, ""
-
-
-def cfg_part(tag, cfg):
-    """The leading 配置旧 / 待换新 (or its narrow word) of a row_layout tag, else ""."""
-    if cfg not in CFG_WORDS or not tag:
-        return ""
-    for word in (cfg_tag(cfg), cfg_tag(cfg, narrow=True)):
-        if tag == word or tag.startswith(word + " "):
-            return word
-    return ""
-
-
-def auto_width(rows, cols, base, top, info=False):
+def auto_width(rows, cols, base, top):
     """The width the view wants for `rows` in a `cols`-wide window (issue #1328):
     its longest row, between `base` (FLEET_SIDEBAR_WIDTH, 30) and `top`
     (FLEET_SIDEBAR_WIDTH_MAX, 44), and never past a quarter of the window nor into
     the worker's 80 columns (move_view's rule) — but never under `base`, which is
-    what the view was opened at. An open info column (issue #1532) widens it
-    within the same `top`: past that, the names give way."""
-    want = max([base] + [row_need(row, info) for row in rows])
+    what the view was opened at."""
+    want = max([base] + [row_need(row) for row in rows])
     want = min(want, top, cols // 4, cols - 81)
     return max(base, want)
 
 
 def detail_line(row):
-    """The selected row's line above the input (issue #1328): its WHOLE name, for
-    a row whose name the list clipped. Which `!` it is and why a ↻ waits (row[7])
-    moved to the worker pane's header, @title_info (issue #1377) — a parent row
-    almost always carries one, and it took the `?` line from the hints."""
-    return " " + row[3]
-
-
-def hint_line(row, width, info=False):
-    """What takes the `?` row for the selected `row` in a `width`-wide view: its
-    whole name when the list clipped it, else None (`? 快捷键` stays)."""
-    if row is not None and row_need(row, info) > max(0, width - 1):
-        return detail_line(row)
-    return None
+    """Everything the row no longer carries, for the bar (issue #2305, on
+    #1328's whole-name line): its whole name · #issue · @machine · PR · reap
+    policy · ctx% · the configuration word — the empty ones left out. Which `!`
+    it is and why a ↻ waits (row[7]) live in the worker pane's header,
+    @title_info (issue #1377)."""
+    field = lambda i: row[i] if len(row) > i else ""
+    parts = [row[3], field(9), machine_tag(field(8)), field(10),
+             reap_tag(field(14)), field(11), cfg_tag(field(12))]
+    return " · ".join(p.strip() for p in parts if p and p.strip() not in ("", "—", "·"))
 
 
 def bar_hint(rows, selected, current, width, orch=False):
     """What the client's bar reads off the list (issue #1951, EPIC #1949 C2), as
-    (view, name): view `portal` while the writing area (「新任务」, issue #1953) is
-    in the right pane — the bar then says ITS keys — else ""; name = the
-    highlighted row's whole name when the list clipped it (hint_line, issue
-    #1328 — the `?` row's old job), else "". A literal for tmux: `#` doubled.
+    (view, name, orch): view `portal` while the writing area (「新任务」, issue
+    #1953) is in the right pane — the bar then says ITS keys — else ""; name =
+    the highlighted session row's `detail_line` (issue #2305 — the row itself is
+    state · name · N/N), "" on a heading. A literal for tmux: `#` doubled.
     The third, `1` while a machine runs the orchestrating session (issue #2146):
     the writing area's bar then names ⌘N 编排 and ⇧⇥ — else ""."""
     view = "portal" if current == PORTAL_KEY else ""
     row = next((r for r in rows if r and r[0] != "hdr" and r[0] == selected), None)
-    name = (hint_line(row, width) or "").strip()
+    name = detail_line(row) if row is not None and row[0] != PORTAL_KEY else ""
     return view, name.replace("#", "##"), "1" if orch else ""
 
 
@@ -2258,7 +2140,7 @@ def env_float(name, default):
         return default
 
 
-def fit_plan(pw, ww, window, zoomed, manual, rows, sized, moved="", info=False):
+def fit_plan(pw, ww, window, zoomed, manual, rows, sized, moved=""):
     """What holds the view's width (issues #1328, #1521), as (action, sized):
     action is ("manual", w) — record w as the operator's width — or ("resize", w)
     — one resize-pane — or None; `sized` is the (pane width, window width,
@@ -2284,26 +2166,25 @@ def fit_plan(pw, ww, window, zoomed, manual, rows, sized, moved="", info=False):
         want = max(24, min(60, int(manual)))
     else:
         base = max(24, min(60, env_int("FLEET_SIDEBAR_WIDTH", 30)))
-        want = auto_width(rows, ww, base, max(base, env_int("FLEET_SIDEBAR_WIDTH_MAX", 44)), info)
+        want = auto_width(rows, ww, base, max(base, env_int("FLEET_SIDEBAR_WIDTH_MAX", 44)))
     if want != pw and ww >= want + 81:
         return ("resize", want), (want, ww, window, moved)
     return None, (pw, ww, window, moved)
 
 
-def fit_view(session, pane, rows, sized, wide=False):
+def fit_view(session, pane, rows, sized):
     """Apply fit_plan to the view: at most one tmux write a tick, and none at all
     while the pane is at the width it wants — the ONE writer of the view's width
     (a hook-driven sync has no memory of the last fit, so it could not tell the
     operator's drag from tmux's scaling and would undo the drag). `sized` is what
-    this function last left the view at; returns the next. `wide`: the info
-    column is open (issue #1532)."""
+    this function last left the view at; returns the next."""
     info = fields(pane, US.join(("#{pane_width}", "#{window_width}", "#{window_id}",
                                  "#{window_zoomed_flag}", "#{@sidebar_width_manual}",
                                  "#{@sidebar_moved}")))
     if len(info) != 6 or not info[0].isdigit() or not info[1].isdigit():
         return sized
     action, sized = fit_plan(int(info[0]), int(info[1]), info[2], info[3] == "1",
-                             info[4], rows, sized, info[5], wide)
+                             info[4], rows, sized, info[5])
     if action is None:
         return sized
     if action[0] == "manual":
@@ -2395,23 +2276,16 @@ PALETTE_BASIC = {"PAL_FG": -1, "PAL_DIM": -1, "PAL_SEL": curses.COLOR_BLUE,
 # — the red 「等你」 dot is no longer drowned in rows painted whole. The current
 # row and the keyboard's row share one quiet PAL_SEL ground, told apart by ▶ / ›.
 # {pair: (fg, bg)}, None = the terminal's default.
-STATE_PAIR = {"working": 1, "needs": 2, "done": 3, "looping": 4, "exited": 18}   # 18: past PAIR_DIM_SEL (#1784)
+STATE_PAIR = {"working": 1, "needs": 2, "done": 3, "looping": 4, "exited": 18}   # 18: past 17 (#1784)
 STATE_COLOR = {"working": "PAL_CYAN", "needs": "PAL_RED", "done": "PAL_GREEN",
                "looping": "PAL_MAGENTA", "exited": "PAL_YELLOW"}
-PAIR_SEL, PAIR_HERE, PAIR_TOAST, PAIR_FG, PAIR_DIM, SEL_GLYPH = 5, 6, 7, 8, 9, 10
-# The @ mark (issue #1780): `@本机` magenta, any other machine's dim — on the
-# raised row's ground too (PAIR_HERE + SEL_GLYPH, PAIR_DIM_SEL).
-PAIR_DIM_SEL = 17
-# 配置旧 (issue #1783): yellow, on the raised row's ground too (PAIR_STALE + SEL_GLYPH).
-PAIR_STALE = 18
-# 会坏·需重开 (issue #2076): red — the session WILL fail on this install, not merely
-# lack a feature; the one cfg word that is not yellow.
+PAIR_SEL, PAIR_TOAST, PAIR_FG, PAIR_DIM, SEL_GLYPH = 5, 7, 8, 9, 10
+# 会坏·需重开 (issue #2076): the row's `✗` glyph is red (issue #2305) — the
+# session WILL fail on this install. (6 / 17 were the @ mark's, which left the
+# row with #2305.)
 PAIR_BROKEN = 19
 PAIRS = {PAIR_SEL: ("PAL_FG", "PAL_SEL"), PAIR_TOAST: ("PAL_RED", None),
          PAIR_FG: ("PAL_FG", None), PAIR_DIM: ("PAL_DIM", None),
-         PAIR_HERE: ("PAL_MAGENTA", None), PAIR_HERE + SEL_GLYPH: ("PAL_MAGENTA", "PAL_SEL"),
-         PAIR_DIM_SEL: ("PAL_DIM", "PAL_SEL"),
-         PAIR_STALE: ("PAL_YELLOW", None), PAIR_STALE + SEL_GLYPH: ("PAL_YELLOW", "PAL_SEL"),
          PAIR_BROKEN: ("PAL_RED", None), PAIR_BROKEN + SEL_GLYPH: ("PAL_RED", "PAL_SEL")}
 for _state, _pair in STATE_PAIR.items():
     PAIRS[_pair] = (STATE_COLOR[_state], None)
@@ -2540,9 +2414,8 @@ def ui(screen, session, worker, lock):
     watch_at = time.monotonic() + env_float("FLEET_SIDEBAR_WATCHDOG_SECS", WATCHDOG_SECS)
     # The full-screen list's own actions (issue #1532): which list is shown
     # (⌃t: `live` ⇄ `landed`), the live rows kept while the landed one is up so
-    # ⌃t back paints at once, when the landed rows were last read (⌃r: now), and
-    # whether the info column is open (⌃i).
-    view, live_rows, landed, landed_at, wide = "live", [], None, NEVER, False
+    # ⌃t back paints at once, and when the landed rows were last read (⌃r: now).
+    view, live_rows, landed, landed_at = "live", [], None, NEVER
     # The shell's open-a-session flow in flight (issue #1778): the plan whose
     # fleet-client-place.sh runs, then waits for its row — one at a time.
     placing = None
@@ -2586,10 +2459,11 @@ def ui(screen, session, worker, lock):
         issue #1950 it takes no keys, so they are VERBS, parked in @sidebar_ask
         like a question (fleet-sidebar-menu.sh `ask`, the switcher's commands):
         `new [machine]` a new task · `restore` · `scratch` a scratch session now ·
-        `view` the running list or the landed one · `reload` · `info` the issue ·
-        PR · ctx% column · `needs` onto the next row waiting on you."""
+        `view` the running list or the landed one · `reload` · `needs` onto the
+        next row waiting on you. (`info`, the ⌃i column, left with #2305: the bar
+        says the highlighted row's issue · PR · ctx%.)"""
         nonlocal follow_at, refresh_at, producer, view, live_rows, rows, landed_at
-        nonlocal selected, wide, spawning
+        nonlocal selected, spawning
         follow_at = None
         if verb == "new":
             if SHELL:
@@ -2623,10 +2497,6 @@ def ui(screen, session, worker, lock):
                 view, rows, selected = "live", live_rows, current_row
         elif verb == "reload":
             landed_at = NEVER   # the shown list now, landed included
-        elif verb == "info":
-            # issue · PR · ctx%, right-aligned; the width follows at once, within
-            # FLEET_SIDEBAR_WIDTH_MAX. Folded is the default, names come first.
-            wide = not wide
         elif verb == "needs" and view == "live":
             nxt = next_attention(rows, selected)
             if nxt:
@@ -2912,7 +2782,7 @@ def ui(screen, session, worker, lock):
                     # list within a second (issue #1536), not at the next tick.
                     refresh_at = now + 0.25
                 if shown and loaded:
-                    sized = fit_view(session, pane, rows, sized, wide)
+                    sized = fit_view(session, pane, rows, sized)
                 if shown and producer is None and view == "landed":
                     if now - landed_at >= LANDED_SECS:
                         producer = start_landed(env)
@@ -3089,49 +2959,27 @@ def ui(screen, session, worker, lock):
             glyph_attr = curses.color_pair(pair + SEL_GLYPH if raised else pair) if pair else attr
             if lost:
                 glyph_attr |= curses.A_DIM
+            # An urgent condition takes the glyph's own cell (issue #2305): `⊘`
+            # on a lost machine's row (dim, the row is), a red `✗` for a session
+            # that will break on this install (#2076). The words — the machine,
+            # 配置旧 / 会坏·需重开, the reap policy — are the bar's (detail_line).
+            glyph, why = row_glyph(row)
+            if why == "broken":
+                glyph_attr = curses.color_pair(PAIR_BROKEN + SEL_GLYPH if raised else PAIR_BROKEN) | curses.A_BOLD
             marker = "▶" if wid == current_row else "›" if wid == selected else " "
             # `marker glyph tree label` (issue #836): the hierarchy glyph is its own
             # fixed cell between the state glyph and the name, so at 30 columns every
             # name starts in the same place instead of a child's text sitting two
-            # columns right of its parent's.
-            # The machine the session runs on (issue #1780): `@m4` grey at the
-            # row's end, `@本机` magenta for this computer's own, `@m4!` dim on a
-            # lost machine's (dimmed) row, `@m5~` heard over the shell's own
-            # connection (#1488). Its cells come off the name, which keeps
-            # NAME_MIN of them; narrower, the mark is `@` + its first letter. The
-            # badge keeps its place left of it.
+            # columns right of its parent's. Then the EPIC's `· k/N`, and nothing
+            # else (issue #2305).
             w = max(0, width - 1)
-            # A stale configuration (issue #1783): a yellow 配置旧 left of the mark.
-            cfg = row[12] if len(row) > 12 else ""
-            reap = row[14] if len(row) > 14 else ""   # the reap policy (#1902)
-            text, tag = row_layout(marker, glyph, tree, label, badge, w,
-                                   info_text(row) if wide else "", node, cfg, reap)
-            put(y, text, attr, fill=raised)
+            put(y, row_text(marker, glyph, tree, label, badge, w), attr, fill=raised)
             # The state glyph, painted over its own cell in the state's colour —
             # where row_left put it, and only when the row is wide enough for it.
             at = width_of(marker) + 1
             if glyph.strip() and at + width_of(glyph) <= w and 0 <= y < height:
                 try:
                     screen.addstr(y, at, glyph, glyph_attr)
-                except curses.error:
-                    pass
-            if tag:
-                tpair = tag_pair(node, raised)
-                tag_attr = dim_attr if tpair == PAIR_DIM else curses.color_pair(tpair)
-                if tpair == PAIR_DIM_SEL and pal_dim_default:
-                    tag_attr |= curses.A_DIM
-                try:
-                    screen.addstr(y, w - width_of(tag), tag, tag_attr)
-                    ctag = cfg_part(tag, cfg)
-                    if ctag:
-                        screen.addstr(y, w - width_of(tag), ctag, curses.color_pair(
-                            cfg_pair(cfg) + SEL_GLYPH if raised else cfg_pair(cfg)) | curses.A_BOLD)
-                    # 常驻 (issue #1902) in the 本机 magenta: the one policy that
-                    # says «this one stays»; every other word keeps the tag's dim.
-                    roff, rword = reap_part(tag, cfg, reap)
-                    if rword and reap == "keep":
-                        screen.addstr(y, w - width_of(tag) + roff, rword, curses.color_pair(
-                            PAIR_HERE + SEL_GLYPH if raised else PAIR_HERE))
                 except curses.error:
                     pass
         screen.refresh()
@@ -3249,7 +3097,7 @@ def ui(screen, session, worker, lock):
             if kind == "rename" and arg.startswith("@"):
                 nxt = Ask("rename", tr("sidebar_rename"), arg=arg,
                           text=fields(arg, "#{window_name}")[0])
-            elif kind in ("new", "restore", "scratch", "view", "reload", "info", "needs"):
+            elif kind in ("new", "restore", "scratch", "view", "reload", "needs"):
                 act(kind, arg)
             elif kind == "landed" and not SHELL:
                 act("view")   # the menu's 恢复已落地 (issue #1532)

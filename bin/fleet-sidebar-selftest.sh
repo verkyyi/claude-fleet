@@ -27,6 +27,7 @@ import time
 
 real_bin = Path(sys.argv[1])
 os.environ['FLEET_UI_LANG'] = 'zh'
+sys.path.insert(0, str(real_bin))   # as when it runs: fleet_reap_policy beside it
 spec = importlib.util.spec_from_file_location('sidebar', real_bin / 'fleet-sidebar.py')
 sidebar = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sidebar)
@@ -73,14 +74,12 @@ assert fit(26, 117, '@1', False, '37', [], (37, 210, '@1', '')) == (None, (26, 1
 assert fit(26, 118, '@1', False, '37', [], (37, 210, '@1', ''))[0] == ('resize', 37), 'just wide enough: corrected'
 assert fit(26, 189, '@1', False, '', [], (30, 210, '@1', '')) == (('resize', 30), (30, 189, '@1', '')), 'no manual width: auto_width is re-applied as before'
 assert fit(26, 100, '@1', False, '', [], (30, 160, '@1', '')) == (None, (26, 100, '@1', '')), 'auto, too narrow: nothing'
-# The `?` row for the selected row (issue #1377): only a CLIPPED name takes it.
-# Which `!` / why a ↻ waits (field 7) moved to the worker header, @title_info.
+# The bar's line for the highlighted row (issue #1377 → #2305): its whole name,
+# then what the row no longer carries. Which `!` / why a ↻ waits (field 7) moved
+# to the worker header, @title_info.
 parent = ['@1', 'looping', '↻', '阿里云成本', '▸', '1/2', '0', '等子任务 1/2']
-assert sidebar.hint_line(parent, 30) is None, sidebar.hint_line(parent, 30)
-assert sidebar.hint_line(['@2', 'needs', '!', 'k2', '', '', '0', '在问你'], 30) is None
-longp = parent[:3] + ['阿里云月成本评估-ack-节点合并-再看一遍'] + parent[4:]
-assert sidebar.hint_line(longp, 30) == ' ' + longp[3], sidebar.hint_line(longp, 30)
-assert '等子任务' not in sidebar.hint_line(longp, 30)
+assert sidebar.detail_line(parent) == '阿里云成本', sidebar.detail_line(parent)
+assert '等子任务' not in sidebar.detail_line(parent)
 # ←/→ fold AT ONCE (issue #1530): the view's guess, the producer's rules — ←
 # shuts the innermost OPEN block the cursor is in, a needs row and the current
 # window stay, → redraws the block from the rows last seen in it.
@@ -105,25 +104,30 @@ assert ids(opened) == ids(frows) and opened[0][3] == 'a (4)', opened
 assert sidebar.fold_now(frows, '@5', 'collapse', '@9', fcache)[1] is None
 assert sidebar.fold_now(frows, '@1', 'expand', '@9', fcache)[1] is None
 assert sidebar.fold_now(frows, 'wid:m4/x', 'collapse', '@9', fcache)[1] is None
-# The full-screen list's own actions (issue #1532). The producer's fields 10-12
-# are the hub's issue · PR · ctx% cells; the info column (⌃i) draws them right-
-# aligned in fixed widths, and only on a session row.
-r12 = sidebar.row_fields('\x1f'.join(['@1', 'working', '·', 'issue-1532', ' ', '', '0', '', '', '#1532', '#1552✓', '45%']))
-assert len(r12) == sidebar.ROW_FIELDS == 15 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[12:] == ['', '', ''], r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902)
-assert sidebar.info_text(r12) == '#1532  #1552✓  45%', repr(sidebar.info_text(r12))
-assert sidebar.info_text(['hdr', 'o/a', '', 'a (1)', ' '] + [''] * 7) == ''
-assert sidebar.info_text(sidebar.row_fields('@2\x1fdone\x1f✓\x1fx\x1f \x1f\x1f0\x1f\x1f')) == '', 'an old 9-field row has no info'
-assert sidebar.info_text(['@3', 'idle', '·', 'notes', ' ', '', '0', '', '', '', '—', '·']) == '%5s %7s %4s' % ('', '—', '·')
-info_row = sidebar.row_text('▶', '·', ' ', 'issue-1532', '', 30, sidebar.info_text(r12))
-assert info_row.endswith('#1532  #1552✓  45%') and sidebar.width_of(info_row) == 30, repr(info_row)
-assert sidebar.row_text('▶', '·', ' ', 'issue-1532', '1/2', 34, sidebar.info_text(r12)).endswith('· 1/2 #1532  #1552✓  45%')
-# Open, the view widens for the column — never past FLEET_SIDEBAR_WIDTH_MAX; folded
-# (the default) it wants what it always wanted.
+# A row is state · name · (an EPIC's) N/N and nothing else (issue #2305); the
+# producer's fields 9-15 — machine · issue · PR · ctx% · cfg · reap — are the
+# bar's, for the highlighted row (detail_line → @fleet_hint_name).
+r12 = sidebar.row_fields('\x1f'.join(['@1', 'working', '·', 'issue-1532', ' ', '', '0', '', 'm4', '#1532', '#1552✓', '45%', '', '', 'merged']))
+assert len(r12) == sidebar.ROW_FIELDS == 15 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[14] == 'merged', r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902)
+want = 'issue-1532 · #1532 · @m4 · #1552✓ · 合并后回收 · 45%'
+assert sidebar.detail_line(r12) == want, repr(sidebar.detail_line(r12))
+assert sidebar.bar_hint([r12], '@1', '@1', 30)[1] == want.replace('#', '##'), 'the bar: # doubled for tmux'
+assert sidebar.bar_hint([['hdr', 'o/a', '', 'a (1)', ' '], r12], 'hdr:o/a', '@1', 30)[1] == '', 'a heading: no detail'
+assert sidebar.detail_line(['@3', 'idle', '·', 'notes', ' ', '', '0', '', '', '', '—', '·']) == 'notes', 'placeholders stay out'
+for w in (24, 30, 44):
+    for badge in ('', '2/3'):
+        line = sidebar.row_text('▶', '·', ' ', 'issue-1532 一个很长很长的名字', badge, w)
+        assert sidebar.width_of(line) <= w and not re.search(r'#1532|@m4|45%|合并', line), repr(line)
+        assert not badge or line.endswith('· ' + badge), 'the N/N stays whole: %r' % line
+assert sidebar.row_need(r12) == sidebar.row_need(r12[:8] + [''] * 7), 'row_need asks nothing for the moved fields'
+# The urgent conditions take the state glyph's cell: a broken configuration a
+# red ✗, a lost machine ⊘; a question keeps its red ? / ! (STATE_PAIR needs).
+broken = r12[:12] + ['broken'] + r12[13:]
+assert sidebar.row_glyph(broken) == ('✗', 'broken') and sidebar.row_glyph(r12) == ('·', '')
+assert sidebar.row_glyph(r12[:8] + ['m4!'] + r12[9:]) == ('⊘', 'lost')
+assert sidebar.detail_line(broken).endswith('· 会坏·需重开'), sidebar.detail_line(broken)
 long12 = r12[:3] + ['阿里云月成本评估-再看一遍'] + r12[4:]
-assert sidebar.auto_width([long12], 400, 30, 44) == sidebar.auto_width([long12], 400, 30, 44, False)
-assert sidebar.auto_width([long12], 400, 30, 44, True) == 44, sidebar.auto_width([long12], 400, 30, 44, True)
-assert sidebar.auto_width([r12], 400, 30, 60, True) > sidebar.auto_width([r12], 400, 30, 60), 'the info column did not widen the view'
-assert sidebar.fit_plan(30, 400, '@1', False, '', [long12], None, '', True)[0] == ('resize', 44)
+assert sidebar.auto_width([long12], 400, 30, 44) == min(44, max(30, sidebar.row_need(long12))), 'the width follows the bare row'
 # ⌃t's landed list: `fleet-history.sh rows` as the view's rows — a heading that
 # names the list, then one restore target per row, whitespace folded to fit.
 landed_text = ('hdr\x1fhdr\x1f  issue  window\n'
@@ -1075,21 +1079,16 @@ try:
     wait_for(lambda: view_on(w1) == [side], 'the view did not come back after `scratch`')
     tm('kill-window', '-t', new)
 
-    # `info`: the info column, the hub's issue · PR · ctx% cells right-aligned on
-    # each row (worker-one is issue 1, no PR, no ctx reading). Folded by default;
-    # open, the view widens for it but never past FLEET_SIDEBAR_WIDTH_MAX (44).
-    # (The current row is worker-one's — `▶` — and open, the column clips its
-    # name, so the row is found by its marker.)
+    # The ▶ row is state · name only (issue #2305): worker-one's issue (`#1`)
+    # rides the bar — @fleet_hint_name on the list's window, `#` doubled — and
+    # the old ⌃i `info` verb is gone (a stale tap changes nothing).
     wait_for(lambda: 'worker-one' in row_line('▶'), 'worker-one is not the ▶ row')
-    check(not re.search(r'#1 +— +·$', row_line('▶')), 'the info column is open by default: %r' % row_line('▶'))
+    check(not re.search(r'#1\b|—', row_line('▶')), 'the row carries more than state · name: %r' % row_line('▶'))
+    hint = lambda: tm('show-options', '-wqv', '-t', side, '@fleet_hint_name')
+    wait_for(lambda: hint().startswith('worker-one · ##1'), 'the bar does not carry the ▶ row\'s detail: %r' % hint())
     park('info')
-    wait_for(lambda: re.search(r'#1 +— +·$', row_line('▶')),
-             '`info` did not open the info column: %r' % row_line('▶'))
-    check(int(tm('display-message', '-p', '-t', side, '#{pane_width}')) <= 44,
-          'the open info column widened the view past FLEET_SIDEBAR_WIDTH_MAX')
-    park('info')
-    wait_for(lambda: row_line('▶') and not re.search(r'#1 +— +·$', row_line('▶')),
-             'a second `info` did not fold the info column: %r' % row_line('▶'))
+    time.sleep(0.5)
+    check(not re.search(r'#1\b', row_line('▶')), 'a stale `info` tap opened a column: %r' % row_line('▶'))
 
     # `view`: running ⇄ landed, in place — the rows `fleet-history.sh rows` gives
     # the hub's ⌃t (stubbed: the ledger is not this test's subject). `reload`
@@ -1553,7 +1552,7 @@ try:
     check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}') + ' · m5',
           'with the hub on the local menu title does not name this machine: %r' % t1)
     _, rshape = menu_shape(remote_wid)
-    check(rshape == 'e|ma|sqcx|n1oig|E',
+    check(rshape == 'e|ma|sqcx|n1og|E',
           'the remote row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % rshape)
     # In the SHELL (issue #1518) the row-less group is gone — new task, new on
     # m4, restore, add repo run scripts its computer does not have — and the
@@ -1564,7 +1563,7 @@ try:
     sh_shape = ''.join('E' if l.split('\t')[1] == '-Esc 关闭' else (l.split('\t')[0] if l.split('\t')[1] else '|')
                        for l in sh_out.splitlines() if l.count('\t') == 2 and not l.startswith('title\t'))
     # …and its own group instead: 我的客户端 (issue #1932), d
-    check(sh_shape == 'e|ma|sqcx|oid|E', 'the shell remote menu: not the row-less group gone + 已落地 · 详情列 · 我的客户端 (#1952): %r' % sh_shape)
+    check(sh_shape == 'e|ma|sqcx|od|E', 'the shell remote menu: not the row-less group gone + 已落地 · 我的客户端 (#1952; 详情列 left with #2305): %r' % sh_shape)
     check(not any(s in sh_out for s in ('dash-issue-new.sh', 'fleet-restore-pick.sh', 'dash-repo-add.sh')),
           'the shell remote menu names a machine-only script: %r' % sh_out)
     check(sh_out.split('\n', 1)[0] == 'title\t' + menu_shape(remote_wid)[0],

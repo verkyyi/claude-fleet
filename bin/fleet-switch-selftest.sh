@@ -98,11 +98,11 @@ eq("COMMANDS ⇔ menu_keys", sorted(table), keyed)
 eq("COMMANDS groups", sorted({g for _, g in q.COMMANDS}), ["control", "enter", "message", "other"])
 eq("the digits are newto's", q.menu_keys().get("5", ("",))[0], "newto")
 items = [("rename", "改名…", "在会话下面一行改", "c1"), ("pin", "置顶", "置顶 / 取消置顶", "c2"),
-         ("reap", "回收…", "先确认 y/n", "c3"), ("info", "-详情列", "issue · PR · ctx%", "")]
-eq("> lists every command for an empty query", [i[0] for i in q.rank_cmds(items, "")], ["rename", "pin", "reap", "info"])
+         ("reap", "回收…", "先确认 y/n", "c3"), ("restore", "-已落地", "任务栏换成已落地列表", "")]
+eq("> lists every command for an empty query", [i[0] for i in q.rank_cmds(items, "")], ["rename", "pin", "reap", "restore"])
 eq(">pin finds pin by its action", [i[0] for i in q.rank_cmds(items, "pin")], ["pin"])
 eq(">改 finds rename by its name", [i[0] for i in q.rank_cmds(items, "改")][:1], ["rename"])
-eq(">详情 finds a greyed one too", [i[0] for i in q.rank_cmds(items, "详情")], ["info"])
+eq(">已落地 finds a greyed one too", [i[0] for i in q.rank_cmds(items, "已落地")], ["restore"])
 eq("a target the menu has no row for is row-less", (q.target_of("new"), q.target_of("@3"), q.target_of("wid:f/issue-1")),
    ("-", "@3", "wid:f/issue-1"))
 if errs:
@@ -327,7 +327,7 @@ try:
                                    capture_output=True, text=True, timeout=20).stdout
     listed = [l.split('\t') for l in qo('cmds').splitlines()]
     acts = [l[0] for l in listed]
-    check({'rename', 'pin', 'reap', 'restore', 'info'} <= set(acts), '> lacks a command: %r' % acts)
+    check({'rename', 'pin', 'reap', 'restore'} <= set(acts) and 'info' not in acts, '> lacks a command (or kept 详情列, #2305): %r' % acts)
     order = [a for a in qo('commands').split() if a in acts]
     check(acts == [a for a in order if a in acts], '> is not in the table order: %r' % acts)
     names = {l[0]: l[1] for l in listed}

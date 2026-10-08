@@ -240,9 +240,9 @@ eq "B: a local sibling is untouched" "@2|└||1|" "$(srow "$s" C1)"
 eq "B: a local row carries the 9th field too, empty" "12" "$(nfields "$s" C1)"
 eq "B: a remote row has it" "12" "$(nfields "$s" '侧边栏')"
 hasnt "B: no [m4] in any name" "$s" "[m4"
-# A remote row ends in its machine's `@m4` (issue #1780; #1475 drew none): the
-# view's own renderer lays the name out as the same row local does, and the mark
-# takes its cells at the end — row_need asks exactly `@m4` plus a gap more.
+# A remote row names its machine `@m4` (issue #1780; #1475 drew none) — in the
+# bar since issue #2305: the view's own renderer lays the row out exactly as the
+# same row local, row_need asks nothing more, and detail_line says `@m4`.
 printf '%s\n' "$s" > "$WORK/srows"
 drawn=$(python3 - "$BIN/fleet-sidebar.py" '侧边栏' "$WORK/srows" <<'PYR'
 import importlib.util, sys
@@ -252,10 +252,11 @@ r = next(x for x in rows if x[3] == sys.argv[2])
 local = r[:8] + [""]
 text = sb.row_text(" ", r[2], r[4], r[3], r[5], 34)
 print(text, "same" if text == sb.row_text(" ", local[2], local[4], local[3], local[5], 34) else "differs",
-      sb.row_need(r) == sb.row_need(local) + 4, sb.machine_tag(r[8]), repr(sb.machine_tag(local[8])), sep="|")
+      sb.row_need(r) == sb.row_need(local), sb.machine_tag(r[8]), repr(sb.machine_tag(local[8])),
+      "@m4" in sb.detail_line(r), sep="|")
 PYR
 )
-has "B: the view ends a remote row in @m4 (#1780), a local row in nothing" "$drawn" "|@m4|''"
+has "B: the bar names a remote row's @m4 (#1780, #2305), a local row's nothing" "$drawn" "|@m4|''|True"
 has "B: …and lays the name out exactly as the same row local" "$drawn" "|same|True|"
 h=$(hub)
 has "B: the hub row shows the issue" "$h" "#1423"

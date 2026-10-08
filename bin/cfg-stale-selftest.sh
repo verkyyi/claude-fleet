@@ -110,29 +110,21 @@ eq "A: …an older cache (no field 16): unknown" "-" "$(f13 "$s" RN)"
 rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
 
 # ============================================================================
-# B. sidebar — 配置旧 left of the @ mark
+# B. sidebar — 配置旧 in the bar, never on the row (issue #2305)
 # ============================================================================
 out=$(FLEET_SIDEBAR_HOST="MacBookPro.local" FLEET_NODE_ALIASES="macmini=m5 mini2=m4" \
   python3 - "$BIN/fleet-sidebar.py" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-w = m.width_of
 assert m.ROW_FIELDS == 15   # 14: title (#1921), 15: reap (#1902)
-t0, g0 = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "m4")
-t1, g1 = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "m4", "ok")
-assert (t0, g0) == (t1, g1), "ok draws nothing"
-t2, g2 = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "m4", "stale")
-assert g2 == "配置旧 @m4", g2
-assert m.cfg_part(g2, "stale") == "配置旧"
-assert w(t2) + w(g2) + 1 <= 44, (t2, g2)
-t3, g3 = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "", "stale")
-assert g3 == "配置旧", g3                       # a local row: no @ mark, still 配置旧
-t4, g4 = m.row_layout(" ", "✓", " ", "worker-one", "", 28, "", "m4", "stale")
-assert m.cfg_part(g4, "stale") in ("旧", ""), g4  # narrow: the short word (or none)
-assert m.cfg_part("@m4", "stale") == "" and m.cfg_part(g2, "ok") == ""
 row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "m4", "", "", ""]
-assert m.row_need(row + ["stale"]) == m.row_need(row) + w("配置旧") + 1
-assert m.row_need(row + ["ok"]) == m.row_need(row)
+assert m.cfg_tag("stale") == "配置旧" and m.cfg_tag("ok") == "" and m.cfg_tag("") == ""
+assert m.detail_line(row + ["stale"]) == "worker-one · @m4 · 配置旧", m.detail_line(row + ["stale"])
+assert m.detail_line(row + ["ok"]) == m.detail_line(row) == "worker-one · @m4", m.detail_line(row + ["ok"])
+local = row[:8] + [""] + row[9:]
+assert m.detail_line(local + ["stale"]) == "worker-one · 配置旧"   # a local row: no @ mark, still 配置旧
+assert m.row_glyph(row + ["stale"]) == ("✓", ""), "stale is not urgent: the row keeps its glyph"
+assert m.row_need(row + ["stale"]) == m.row_need(row), "the row asks no cells for 配置旧"
 assert m.row_fields("a\x1fb")[12] == ""
 print("ok")
 PY

@@ -251,27 +251,19 @@ import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 w = m.width_of
 assert m.cfg_tag("broken") == "会坏·需重开", m.cfg_tag("broken")
-assert m.cfg_tag("broken", narrow=True) == "坏"
 assert m.cfg_tag("stale") == "配置旧" and m.cfg_tag("ok") == "" and m.cfg_tag("") == ""
-assert "broken" in m.CFG_WORDS and "stale" in m.CFG_WORDS and "renew" in m.CFG_WORDS
-assert m.cfg_pair("broken") == m.PAIR_BROKEN and m.cfg_pair("stale") == m.PAIR_STALE and m.cfg_pair("renew") == m.PAIR_STALE
 assert m.PAIRS[m.PAIR_BROKEN] == ("PAL_RED", None), m.PAIRS[m.PAIR_BROKEN]
 assert m.PAIRS[m.PAIR_BROKEN + m.SEL_GLYPH] == ("PAL_RED", "PAL_SEL")
-assert m.PAIRS[m.PAIR_STALE] == ("PAL_YELLOW", None)
-used = [p for p, v in m.PAIRS.items() if p != m.PAIR_BROKEN and p != m.PAIR_BROKEN + m.SEL_GLYPH]
-assert m.PAIR_BROKEN not in used and m.PAIR_BROKEN + m.SEL_GLYPH not in used, "a pair number collides"
-t2, g2 = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "m4", "broken")
-assert g2 == "会坏·需重开 @m4", g2
-assert m.cfg_part(g2, "broken") == "会坏·需重开"
-assert w(t2) + w(g2) + 1 <= 44, (t2, g2)
-t3, g3 = m.row_layout(" ", "✓", " ", "worker-one", "", 44, "", "", "broken")
-assert g3 == "会坏·需重开", g3                   # a local row: no @ mark, still the word
-t4, g4 = m.row_layout(" ", "✓", " ", "worker-one", "", 26, "", "m4", "broken")
-assert m.cfg_part(g4, "broken") in ("坏", ""), g4     # narrow: the short word (or none)
-assert m.cfg_part("@m4", "broken") == "" and m.cfg_part(g2, "ok") == ""
+assert len(m.PAIRS) == len(set(m.PAIRS)), "a pair number collides"
+# issue #2305: a broken row's state glyph is its own (`✗`, painted red) — the
+# word is the bar's; stale / ok rows keep the producer's glyph
 row = ["@1", "done", "✓", "worker-one", " ", "", "0", "", "m4", "", "", ""]
-assert m.row_need(row + ["broken"]) == m.row_need(row) + w("会坏·需重开") + 1
-assert m.row_need(row + ["ok"]) == m.row_need(row)
+assert m.row_glyph(row + ["broken"]) == ("✗", "broken"), m.row_glyph(row + ["broken"])
+assert m.row_glyph(row + ["stale"]) == ("✓", "") and m.row_glyph(row + ["ok"]) == ("✓", "")
+assert m.row_glyph(["@1", "needs", "?"] + row[3:] + ["broken"]) == ("?", ""), "a question keeps its red ?"
+assert m.row_glyph(row[:8] + ["m4!"] + row[9:] + ["broken"])[1] == "lost", "a lost machine wins"
+assert m.detail_line(row + ["broken"]) == "worker-one · @m4 · 会坏·需重开", m.detail_line(row + ["broken"])
+assert m.row_need(row + ["broken"]) == m.row_need(row) and w("✗") == w("✓")
 print("E-ok")
 PY
 ) || fail "E: sidebar assertions" "$out"
