@@ -103,12 +103,12 @@ EOF
   chmod +x "$SB/fake/fetch.sh"
 }
 envs() {
-  echo FLEET_NODE_TEST=1 FLEET_NODE_STATE="$SB/state" FLEET_NODE_ROOT="$SB/root" \
+  export FLEET_NODE_TEST=1 FLEET_NODE_STATE="$SB/state" FLEET_NODE_ROOT="$SB/root" \
     FLEET_NODE_DAEMON_DIR="$SB/daemons" FLEET_NODE_USERS="$SB/users" FLEET_DRILL_HOSTS="$SB/hosts" \
     FLEET_DRILL_INSTALL="$SB/fake/install.sh" FLEET_DRILL_SUPERVISOR="$SB/fake/sup.py" \
     FLEET_DRILL_UPDATE="$SB/fake/upd.py" FLEET_DRILL_FETCH="$SB/fake/fetch.sh" FLEET_DRILL_POLL=0 FLEET_DRILL_WAIT=5
 }
-drill() { env $(envs) "$SH" "$DRILL" "$@"; }
+drill() { ( envs; "$SH" "$DRILL" "$@" ); }
 trap '[ -n "$SB" ] && rm -rf "$SB"' EXIT
 
 echo "A  count"
@@ -151,7 +151,7 @@ if printf '%s\n' "$OUT" | grep -q "$CODE" || grep -rq "$CODE" "$SB/state"; then 
 
 echo "E  a login that will not adopt"
 setup
-OUT="$(env $(envs) FND_ADOPT_FAIL=alice "$SH" "$DRILL" run --yes --to "$TO" --fail "$BADSHA" 2>&1)"; rc=$?
+OUT="$(FND_ADOPT_FAIL=alice drill run --yes --to "$TO" --fail "$BADSHA" 2>&1)"; rc=$?
 [ "$rc" = 1 ] && ok "exit 1" || bad "exit $rc" "$OUT"
 printf '%s\n' "$OUT" | grep -q '迁:alice .*FAIL.*account release alice' && ok "FAIL + the way back" || bad "no way back" "$OUT"
 printf '%s\n' "$OUT" | grep -q '迁:bob' && bad "went on past the failure" "$OUT" || ok "stopped there"
