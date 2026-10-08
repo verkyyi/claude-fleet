@@ -1666,7 +1666,7 @@ try:
     # One frame (issue #1535): 进入 / 消息 / 控制 / 其它, a rule between, Esc last;
     # with the hub off the title is the row's name alone — no machine to name.
     t1, shape1 = menu_shape(w1)
-    check(shape1 == 'p|a|rtsklx|vnoig|E', 'the local row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % shape1)
+    check(shape1 == 'p|a|rtsklx|vnog|E', 'the local row menu is not grouped 进入/消息/控制/其它 + Esc: %r' % shape1)
     check(t1 == tm('display-message', '-p', '-t', w1, '#{window_name}'), 'the hub-off menu title is not the bare row name: %r' % t1)
     tm('select-window', '-t', w1)
     wait_for(lambda: bool(view_on(w1)), 'the view did not return after the hub-source leg')

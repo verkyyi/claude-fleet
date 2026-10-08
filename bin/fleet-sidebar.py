@@ -1531,9 +1531,11 @@ def cfg_tag(cfg):
     `renew` row, the same configuration on an older fleet version (issue #1895);
     会坏·需重开 for a `broken` row, whose start names something the install no
     longer has (issue #2076); "" for `ok` / unknown (empty)."""
-    if cfg in ("stale", "renew", "broken"):
-        return tr("sidebar_cfg_" + cfg)
-    return ""
+    return tr(CFG_WORDS[cfg]) if cfg in CFG_WORDS else ""
+
+
+CFG_WORDS = {"stale": "sidebar_cfg_stale", "renew": "sidebar_cfg_renew",
+             "broken": "sidebar_cfg_broken"}
 
 
 def _compact(secs):
