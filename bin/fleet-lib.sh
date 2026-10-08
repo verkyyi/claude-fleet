@@ -7247,7 +7247,7 @@ fleet_session_slot_holders() {
   tmux -L "$(fleet_socket "$1")" list-windows -t "$1" -F "#{window_id} $FLEET_AGENT_FMT #{?@remote,remote,#{@worker_lifecycle}}	$FLEET_ROLE_FMT	#{@fleet_id}	#{window_name}" 2>/dev/null \
     | awk -F'\t' "$FLEET_ROLE_AWK"'
       { split($1, h, " "); if (frole($2)!="worker" || h[3]=="remote" || h[3]=="sleeping" || h[3]=="failed") next
-        if (h[2]!="0" || h[3]=="preparing" || h[3]=="waking") print h[1] "\t" $3 "\t" $4 }'
+        if (h[1] ~ /^@/ && (h[2]!="0" || h[3]=="preparing" || h[3]=="waking")) print h[1] "\t" $3 "\t" $4 }'
 }
 # _fleet_holders_note <sess> → ` — 占着名额：@15 #11805 · @44 norepo-2；收掉一个：
 # fleet-worker-stop.sh <sess> fid:<id>` (nothing when no window answers).
@@ -7635,8 +7635,8 @@ fleet_session_cap_ok() {
     # of sleepers is legible, never a mystery (read only on a refusal).
     n=$(( $(fleet_session_count) + $(fleet_inflight_count) ))
     if [ "$n" -ge "$gmax" ]; then
-      printf 'fleet at capacity: %s/%s Claude sessions running (global)%s — raise FLEET_GLOBAL_MAX_SESSIONS or close one first%s' \
-        "$n" "$gmax" "$(_fleet_sleepers_note "$(fleet_session_sleepers)")" "${sess:+$(_fleet_holders_note "$sess")}"
+      printf 'fleet at capacity: %s/%s Claude sessions running (global)%s — raise FLEET_GLOBAL_MAX_SESSIONS or close one first' \
+        "$n" "$gmax" "$(_fleet_sleepers_note "$(fleet_session_sleepers)")"
       return 1
     fi
   fi
