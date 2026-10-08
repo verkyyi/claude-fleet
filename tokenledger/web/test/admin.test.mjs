@@ -152,7 +152,8 @@ test('machines: lost last, load per core, trend and version carried', () => {
   assert.deepEqual(ms[2].eps, []);
   // spare logins (claude-fleet#2263): a count only while the hub sends one
   assert.equal(ms[0].spare, null);
-  assert.equal(machineCards({ machines: [{ hostname: 'm5', status: 'online', spare: 1 }] })[0].spare, 1);
+  const sp = machineCards({ machines: [{ hostname: 'm5', status: 'online', spare: 1, logins_used: 2, login_cap: 10 }] })[0];
+  assert.deepEqual([sp.spare, sp.used, sp.cap], [1, 2, 10]);
   assert.deepEqual(machineCards(null), []);
 });
 

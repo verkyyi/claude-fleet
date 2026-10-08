@@ -545,6 +545,10 @@ func (s *Server) applyAccountResult(ctx context.Context, conn *websocket.Conn, e
 	}
 	state, detail := store.AccountFailed, res.Detail
 	switch {
+	case res.OK && res.Op == control.AccountCreate && res.Credsep != control.CredsepSeparated && s.isSpareOp(m.OpID):
+		// A spare that is not credential-separated is never handed out
+		// (claude-fleet#2263): the login exists, but it is failed here.
+		detail = "spare opened without credential separation (credsep=" + res.Credsep + "); not handed out. " + detail
 	case res.OK && res.Op == control.AccountCreate:
 		state = store.AccountActive
 	case res.OK && res.Op == control.AccountRemove:

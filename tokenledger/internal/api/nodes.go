@@ -72,6 +72,9 @@ type nodeConn struct {
 	// none yet), so a beat pushes only a version the node has not heard.
 	canTeam  bool
 	teamSent atomic.Int64
+	// canCredsep is an admin hello's CapCredsep (claude-fleet#2263/#2294):
+	// the logins it opens are credential-separated, so spares may go there.
+	canCredsep bool
 	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
 	// sshd (claude-fleet#1413). Set once, before the conn is published.
 	canSSHRelay bool
@@ -185,6 +188,19 @@ func (n *nodeConns) adminFor(hostname string) (endpointID string, ok bool) {
 	return "", false
 }
 
+// credsepAdminFor says hostname's account-op node (adminFor's pick) opens
+// credential-separated logins (CapCredsep).
+func (n *nodeConns) credsepAdminFor(hostname string) bool {
+	id, ok := n.adminFor(hostname)
+	if !ok {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[id]
+	return c != nil && c.canCredsep
+}
+
 // ErrNodeOffline is returned when a write is addressed to a node with no open
 // control channel.
 var ErrNodeOffline = errors.New("node has no open control channel")
@@ -295,6 +311,7 @@ func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
 		canTeam:    hp.HasCap(control.CapTeam),
+		canCredsep: hp.HasCap(control.CapCredsep),
 		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal}
 	// The refresh relay is an ADMIN role: a node that offers it without
@@ -602,10 +619,13 @@ type MachineView struct {
 	// still knows which repo a first session can open in. Always present
 	// ([] for none), so a client tells "hosts none" from an older hub.
 	Repos []string `json:"repos"`
-	// Spare is how many spare logins stand ready on the machine
-	// (claude-fleet#2263): on the operator's roster only, and only while
-	// fleet.spare_accounts is on — absent otherwise.
-	Spare *int `json:"spare,omitempty"`
+	// Spare is how many spare logins stand ready on the machine, LoginsUsed
+	// how many logins are handed out there and LoginCap how many it may hold
+	// (fleet.node_user_cap.<machine>) — claude-fleet#2263: on the operator's
+	// roster only, and only while fleet.spares is on; absent otherwise.
+	Spare      *int `json:"spare,omitempty"`
+	LoginsUsed *int `json:"logins_used,omitempty"`
+	LoginCap   *int `json:"login_cap,omitempty"`
 }
 
 // NodesSnapshot is the body of /v1/nodes.

@@ -52,10 +52,16 @@ func connectNode(t *testing.T, h *harness, label, hostname, osUser string, admin
 
 func dialAdmin(t *testing.T, h *harness, tok string, admin bool) *tnode {
 	t.Helper()
+	return dialAdminCaps(t, h, tok, admin)
+}
+
+// dialAdminCaps is dialAdmin with the hello listing caps.
+func dialAdminCaps(t *testing.T, h *harness, tok string, admin bool, caps ...string) *tnode {
+	t.Helper()
 	c := dialNode(t, h, tok)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	m, _ := control.New(control.TypeHello, control.Hello{HeartbeatMS: 5000, Admin: admin})
+	m, _ := control.New(control.TypeHello, control.Hello{HeartbeatMS: 5000, Admin: admin, Capabilities: caps})
 	if err := wsjson.Write(ctx, c, m); err != nil {
 		t.Fatal(err)
 	}

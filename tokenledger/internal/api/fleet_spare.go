@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -12,62 +13,176 @@ import (
 )
 
 // Spare logins (claude-fleet#2263, EPIC #2259 C4): every host machine keeps
-// fleet.spare_accounts logins opened ahead of time, so a newcomer's first
-// sign-in is handed one that already exists — ready in the time a database
-// write takes, instead of 「正在为你开机器，约 60 秒」.
+// logins opened ahead of time, so a newcomer's first sign-in is handed one
+// that already exists — ready in the time a database write takes, instead of
+// 「正在为你开机器，约 60 秒」.
 //
-//   - Refill rides the admin node's heartbeat (the same beat that sends queued
-//     account ops): at most once per spareScanEvery, every fit machine short of
-//     its count gets one more spare queued. Fit is the placement's own word —
-//     online (not 维护中, not lost), hosts sessions, an admin node connected,
-//     not a person's own computer or a SPOT node, load per core and free
-//     memory inside the placement thresholds, and the machine's own admit gate
-//     open. A machine with a failed spare gets no more until the operator
-//     forgets it: a create that fails once would fail on every beat.
+//   - How many: per machine, min(fleet.spare_max (default 5),
+//     fleet.node_user_cap.<machine> (default 10) − the logins already handed
+//     out there). A spare runs no session and holds no subscription; measured
+//     on m5 (2026-10-08, idle fleet logins zx / vincent / victor) one costs
+//     about 9 processes, 60–75 MB resident and 0.25–0.9 GB of disk.
+//   - Refill rides the admin node's heartbeat (at most once per
+//     spareScanEvery), and only on a fit machine: online (not 维护中, not
+//     lost), hosts sessions, not a person's own computer or a SPOT node,
+//     load per core and free memory inside the placement thresholds, the
+//     machine's own admit gate open — and an admin node that opens logins
+//     credential-separated (control.CapCredsep, claude-fleet#2294). A machine
+//     with a failed spare gets no more until the operator forgets it.
+//   - Shrink needs no fitness: a machine holding more than its count (the cap
+//     lowered, logins handed out) closes the newest ready spares and drops the
+//     ones that never reached it. 维护中 / under pressure ⇒ only shrinks.
 //   - Claim is placePrincipal's first move for a person the hub has never
-//     recorded: a machine of theirs holding a ready spare hands it over
-//     (store.ClaimSpare — record-only, nothing sent). No ready spare, or a
-//     person already recorded: the create runs as before, and the doors say
-//     「正在开」 with its ETA exactly as they did.
-//   - A spare runs no session and holds no subscription: it is a login with
-//     the fleet installed and nothing started. It is nobody in every people,
-//     budget and usage view (store.Principals leaves it out).
+//     recorded: a ready spare on one of their machines becomes theirs — the
+//     hub records 「this GitHub person → that login」, nothing is renamed and
+//     nothing is sent (store.ClaimSpare). Ready means its create came back
+//     credential-separated, so there is no window in which the newcomer can
+//     read a token. No ready spare, or a person already recorded: their own
+//     login is opened as before, and the doors say 「正在开」 with its ETA.
+//   - A spare is nobody in every people, budget and usage view
+//     (store.Principals leaves it out).
 //
-// fleet.spare_accounts defaults to 0: the first spare on a real machine is a
-// macOS user made on it, and the operator turns this on once they have said
-// yes to that (EPIC #2259 共同约定 6). 0 ⇒ nothing is created, nothing claimed,
-// and every answer is byte for byte what it was.
+// fleet.spares defaults to off: a spare is a macOS user made on a real
+// machine, and the operator turns this on once they have said yes to that
+// (EPIC #2259 共同约定 6). Off ⇒ nothing is created, nothing claimed, and
+// every answer is byte for byte what it was.
 
-// SpareAccountsKey is how many spare logins each host machine keeps.
-const SpareAccountsKey = "fleet.spare_accounts"
+// The spare settings' keys.
+const (
+	SparesKey         = "fleet.spares"
+	SpareMaxKey       = "fleet.spare_max"
+	NodeUserCapPrefix = "fleet.node_user_cap."
+)
 
-// maxSpareAccounts bounds fleet.spare_accounts: a spare is a macOS user, and a
-// handful per machine is already more than a team onboards in ten minutes.
-const maxSpareAccounts = 3
+// spareMaxCeiling bounds fleet.spare_max; defaultNodeUserCap is a machine's
+// login cap when fleet.node_user_cap.<machine> is unset.
+const (
+	spareMaxCeiling    = 20
+	defaultSpareMax    = 5
+	defaultNodeUserCap = 10
+)
 
 // spareScanEvery is how often a beat may run the refill scan. A variable so
 // tests can move it.
 var spareScanEvery = 30 * time.Second
 
-// spareTarget is fleet.spare_accounts, 0 when unset or unreadable.
-func (s *Server) spareTarget() int {
-	n, err := strconv.Atoi(strings.TrimSpace(s.setting(SpareAccountsKey)))
-	if err != nil || n < 0 {
-		return 0
+func checkSpareMax(_ *Server, v string) (string, string) {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 || n > spareMaxCeiling {
+		return "", SpareMaxKey + " is an integer 0–" + strconv.Itoa(spareMaxCeiling) + ", or \"\" for the default (5)"
 	}
-	if n > maxSpareAccounts {
-		return maxSpareAccounts
+	return strconv.Itoa(n), ""
+}
+
+// sparesOn is fleet.spares.
+func (s *Server) sparesOn() bool { return s.settingOn(SparesKey) }
+
+// spareMax is fleet.spare_max.
+func (s *Server) spareMax() int {
+	n, err := strconv.Atoi(strings.TrimSpace(s.setting(SpareMaxKey)))
+	if err != nil || n < 0 {
+		return defaultSpareMax
+	}
+	if n > spareMaxCeiling {
+		return spareMaxCeiling
 	}
 	return n
 }
 
-func checkSpareAccounts(_ *Server, v string) (string, string) {
-	v = strings.TrimSpace(v)
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 || n > maxSpareAccounts {
-		return "", SpareAccountsKey + " is an integer 0–" + strconv.Itoa(maxSpareAccounts) + " (0 = off)"
+// nodeUserCap is how many logins hostname may hold: fleet.node_user_cap.<it>,
+// else defaultNodeUserCap.
+func nodeUserCap(hostname string, settings map[string]string) int {
+	for k, v := range settings {
+		if strings.HasPrefix(k, NodeUserCapPrefix) && sameMachine(hostname, k[len(NodeUserCapPrefix):]) {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+				return n
+			}
+		}
 	}
-	return strconv.Itoa(n), ""
+	return defaultNodeUserCap
+}
+
+// spareMachine is one machine's spare picture.
+type spareMachine struct {
+	Ready  int  // spares handed out at the next sign-in (active)
+	Held   int  // spares in any state but closed / on their way out
+	Used   int  // logins handed out (anyone's but a spare's, not closed)
+	Cap    int  // the machine's login cap
+	Target int  // spares it should hold
+	Failed bool // a spare's create failed
+	spares []store.FleetAccount
+}
+
+func (m *spareMachine) aim(max int) {
+	m.Target = m.Cap - m.Used
+	if m.Target > max {
+		m.Target = max
+	}
+	if m.Target < 0 {
+		m.Target = 0
+	}
+}
+
+func leaving(state string) bool {
+	switch state {
+	case store.AccountRemoved, store.AccountRemovePending, store.AccountRemoving:
+		return true
+	}
+	return false
+}
+
+// sparePicture is every machine's spare picture, keyed by lower-case name;
+// machine (when not "") is in it even with no account at all.
+func (s *Server) sparePicture(machines ...string) (map[string]*spareMachine, error) {
+	all, err := s.Store.FleetAccounts("")
+	if err != nil {
+		return nil, err
+	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*spareMachine{}
+	get := func(host string) *spareMachine {
+		k := strings.ToLower(host)
+		m := out[k]
+		if m == nil {
+			m = &spareMachine{Cap: nodeUserCap(host, settings)}
+			out[k] = m
+		}
+		return m
+	}
+	for _, h := range machines {
+		get(h)
+	}
+	for _, a := range all {
+		if !a.Managed() {
+			continue
+		}
+		m := get(a.Hostname)
+		if !store.IsSparePrincipal(a.PrincipalID) {
+			if !leaving(a.State) {
+				m.Used++
+			}
+			continue
+		}
+		m.spares = append(m.spares, a)
+		if leaving(a.State) {
+			continue
+		}
+		switch a.State {
+		case store.AccountActive:
+			m.Ready++
+		case store.AccountFailed:
+			m.Failed = true
+		}
+		m.Held++
+	}
+	max := s.spareMax()
+	for _, m := range out {
+		m.aim(max)
+	}
+	return out, nil
 }
 
 // spareFitMachines is every machine a spare may be opened on right now.
@@ -91,7 +206,7 @@ func (s *Server) spareFitMachines(now time.Time) []string {
 	for _, m := range snap.Machines {
 		h := strings.ToLower(m.Hostname)
 		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
-			m.Sessions == nil || !admin[h] || paused[h] {
+			m.Sessions == nil || !admin[h] || paused[h] || !s.nodes.credsepAdminFor(m.Hostname) {
 			continue
 		}
 		if m.NCPU > 0 && m.Load1/float64(m.NCPU) > maxLoadPerCore {
@@ -105,39 +220,12 @@ func (s *Server) spareFitMachines(now time.Time) []string {
 	return out
 }
 
-// spareCounts is, per machine (lower-cased), how many spares it holds in
-// any state but removed, how many of them are ready (active), and whether
-// one failed.
-func (s *Server) spareCounts() (held, ready map[string]int, failed map[string]bool, err error) {
-	rows, err := s.Store.SpareAccounts()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	held, ready, failed = map[string]int{}, map[string]int{}, map[string]bool{}
-	for _, a := range rows {
-		h := strings.ToLower(a.Hostname)
-		switch a.State {
-		case store.AccountRemoved:
-			continue
-		case store.AccountActive:
-			ready[h]++
-		case store.AccountFailed:
-			failed[h] = true
-		}
-		held[h]++
-	}
-	return held, ready, failed, nil
-}
-
-// replenishSpares queues a spare on every fit machine short of
-// fleet.spare_accounts. force skips the scan throttle (right after a claim).
-// It reports whether anything was queued; the caller dispatches.
+// replenishSpares brings every machine to its spare count: it queues spares
+// on fit machines short of it, and closes or drops spares on any machine
+// over it. force skips the scan throttle (right after a claim). It reports
+// whether anything was queued; the caller dispatches.
 func (s *Server) replenishSpares(now time.Time, force bool) bool {
-	if !s.Fleet || s.Store == nil {
-		return false
-	}
-	target := s.spareTarget()
-	if target == 0 {
+	if !s.Fleet || s.Store == nil || !s.sparesOn() {
 		return false
 	}
 	s.spareMu.Lock()
@@ -146,18 +234,22 @@ func (s *Server) replenishSpares(now time.Time, force bool) bool {
 		return false
 	}
 	s.spareScanAt = now
-	held, _, failed, err := s.spareCounts()
+	fit := s.spareFitMachines(now)
+	pic, err := s.sparePicture(fit...)
 	if err != nil {
 		log.Printf("fleet: spares: %v", err)
 		return false
 	}
 	queued := false
-	for _, host := range s.spareFitMachines(now) {
-		h := strings.ToLower(host)
-		if failed[h] {
+	for _, m := range pic {
+		queued = s.shrinkSpares(m, now) || queued
+	}
+	for _, host := range fit {
+		m := pic[strings.ToLower(host)]
+		if m.Failed {
 			continue // the operator looks at why first (fleet hub accounts)
 		}
-		for n := held[h]; n < target; n++ {
+		for n := m.Held; n < m.Target; n++ {
 			a, err := s.Store.CreateSpare(host, control.ValidLogin, now)
 			if err != nil {
 				log.Printf("fleet: spares: queue one on %s: %v", host, err)
@@ -170,10 +262,66 @@ func (s *Server) replenishSpares(now time.Time, force bool) bool {
 	return queued
 }
 
+// shrinkSpares takes m down to its target: spares that never reached the
+// machine are dropped, ready ones closed (newest first); a spare with an op
+// in flight is left to finish. Closed spares are forgotten. It reports
+// whether a removal was queued.
+func (s *Server) shrinkSpares(m *spareMachine, now time.Time) bool {
+	for _, a := range m.spares {
+		if a.State == store.AccountRemoved {
+			if err := s.Store.ForgetPrincipal(a.PrincipalID, ""); err != nil {
+				log.Printf("fleet: spares: forget %s: %v", a.Login, err)
+			}
+		}
+	}
+	over := m.Held - m.Target
+	if over <= 0 {
+		return false
+	}
+	live := make([]store.FleetAccount, 0, len(m.spares))
+	for _, a := range m.spares {
+		if a.State == store.AccountPending || a.State == store.AccountActive {
+			live = append(live, a)
+		}
+	}
+	// Never-sent first, then the newest ready.
+	sort.SliceStable(live, func(i, j int) bool {
+		if pi, pj := live[i].State == store.AccountPending, live[j].State == store.AccountPending; pi != pj {
+			return pi
+		}
+		return live[i].RequestedAt.After(live[j].RequestedAt)
+	})
+	queued := false
+	for _, a := range live {
+		if over == 0 {
+			break
+		}
+		var err error
+		if a.State == store.AccountPending {
+			err = s.Store.ForgetPrincipal(a.PrincipalID, "")
+		} else if err = s.Store.RequestAccountRemoval(a.PrincipalID, a.Hostname, now); err == nil {
+			queued = true
+		}
+		if err != nil {
+			log.Printf("fleet: spares: shrink %s on %s: %v", a.Login, a.Hostname, err)
+			continue
+		}
+		log.Printf("fleet: spares: %s on %s is one over (%d held, %d wanted) — closing it", a.Login, a.Hostname, m.Held, m.Target)
+		over--
+	}
+	return queued
+}
+
+// isSpareOp says opID was sent for a spare's account.
+func (s *Server) isSpareOp(opID string) bool {
+	a, err := s.Store.AccountByOp(opID)
+	return err == nil && store.IsSparePrincipal(a.PrincipalID)
+}
+
 // claimSpare hands principal a ready spare on one of hosts, when the hub
 // has never recorded them. It returns the machine it claimed on, "" for none.
 func (s *Server) claimSpare(principal, displayName, actor string, hosts []string, now time.Time) string {
-	if s.spareTarget() == 0 || store.IsSparePrincipal(principal) || s.Store.IsDrill(principal) {
+	if !s.sparesOn() || store.IsSparePrincipal(principal) || s.Store.IsDrill(principal) {
 		return ""
 	}
 	if _, err := s.Store.Principal(principal); !errors.Is(err, store.ErrNoPrincipal) {
@@ -215,29 +363,43 @@ func (s *Server) spareDisplayName(principal, displayName string) string {
 }
 
 // spareReadyHosts is, per machine (lower-cased), how many ready spares it
-// holds — for leastBusyMachine's preference and the operator's roster.
+// holds — leastBusyMachine's preference. nil while spares are off.
 func (s *Server) spareReadyHosts() map[string]int {
-	if s.spareTarget() == 0 {
+	if !s.sparesOn() {
 		return nil
 	}
-	_, ready, _, err := s.spareCounts()
+	pic, err := s.sparePicture()
 	if err != nil {
 		log.Printf("fleet: spares: %v", err)
 		return nil
 	}
-	return ready
+	out := map[string]int{}
+	for k, m := range pic {
+		out[k] = m.Ready
+	}
+	return out
 }
 
-// stampSpares writes each machine's ready spare count onto the operator's
-// roster (machines[].spare) while spares are on; absent otherwise.
+// stampSpares writes each machine's 备用 N · 已用 M / 上限 K onto the
+// operator's roster while spares are on; absent otherwise.
 func (s *Server) stampSpares(snap *NodesSnapshot) {
-	ready := s.spareReadyHosts()
-	if ready == nil {
+	if !s.sparesOn() {
+		return
+	}
+	hosts := make([]string, len(snap.Machines))
+	for i, m := range snap.Machines {
+		hosts[i] = m.Hostname
+	}
+	pic, err := s.sparePicture(hosts...)
+	if err != nil {
+		log.Printf("fleet: spares: %v", err)
 		return
 	}
 	for i := range snap.Machines {
-		n := ready[strings.ToLower(snap.Machines[i].Hostname)]
-		snap.Machines[i].Spare = &n
+		mv := &snap.Machines[i]
+		m := pic[strings.ToLower(mv.Hostname)]
+		ready, used, cap := m.Ready, m.Used, m.Cap
+		mv.Spare, mv.LoginsUsed, mv.LoginCap = &ready, &used, &cap
 	}
 }
 

@@ -18,12 +18,12 @@
                                          (7 days, used once; only that GitHub user if named)
     fleet hub invite --list              every invite and its state
     fleet hub invite --revoke <id>       stop an unused one
-    fleet hub machines                   every machine: status, sessions, load, spare logins ready
-                                         (备用 — fleet.spare_accounts, claude-fleet#2263)
+    fleet hub machines                   every machine: status, sessions, load, and its logins:
+                                         备用 N · 已用 M / 上限 K (fleet.spares, claude-fleet#2263)
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
-fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names fleet.spare_accounts
-user.<id>.machine_login (and the fleet.* keys PUT /v1/fleet/settings already took).
+fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names fleet.spares fleet.spare_max
+fleet.node_user_cap.<machine> user.<id>.machine_login (and the fleet.* keys PUT /v1/fleet/settings already took).
 
 Auth, read from the environment and never written down: CCQUOTA_VIEWER_TOKEN
 (the operator's token), else FLEET_HUB_SESSION — the value of the `ccq_sess`
@@ -265,7 +265,7 @@ def machines_main(a):
     rows = resp.get("machines") or []
     spares_on = any(m.get("spare") is not None for m in rows)
     fmt = "%-22s %-12s %-9s %-10s %s"
-    print(fmt % ("machine", "status", "sessions", "load/core", "备用" if spares_on else ""))
+    print(fmt % ("machine", "status", "sessions", "load/core", "账号" if spares_on else ""))
     for m in rows:
         name = m.get("hostname", "")
         if m.get("alias"):
@@ -275,10 +275,12 @@ def machines_main(a):
             load = "%.2f" % (float(m.get("load1") or 0) / m["ncpu"])
         sess = m.get("sessions")
         spare = m.get("spare")
-        print(fmt % (name, m.get("status", ""), "?" if sess is None else sess, load,
-                     "" if spare is None else "备用 %d" % spare))
+        logins = ""
+        if spare is not None:
+            logins = "备用 %d · 已用 %s / 上限 %s" % (spare, m.get("logins_used", "?"), m.get("login_cap", "?"))
+        print(fmt % (name, m.get("status", ""), "?" if sess is None else sess, load, logins))
     if not spares_on:
-        print("\n备用账号没开（fleet hub set fleet.spare_accounts 1 打开；每台电脑会建一个 macOS 账号）")
+        print("\n备用账号没开（fleet hub set fleet.spares on 打开；每个备用都是那台电脑上的一个 macOS 账号）")
 
 
 # --- login records -------------------------------------------------------------

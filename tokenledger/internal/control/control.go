@@ -127,6 +127,17 @@ const CapTeam = "team"
 // bundle over HTTP. The hub never moves a session to a node that did not say it.
 const CapMove = "move"
 
+// CapCredsep is the hello capability an admin node lists when every login its
+// create op opens is credential-separated from the start (claude-fleet#2294):
+// no subscription token in the login's home, its sessions only through the
+// proxy. The hub opens spare logins (claude-fleet#2263) only on a machine
+// whose admin node says it, and hands one out only when its create result
+// said AccountResult.Credsep "separated".
+const CapCredsep = "credsep"
+
+// CredsepSeparated is AccountResult.Credsep for a login opened separated.
+const CredsepSeparated = "separated"
+
 // Relay kinds.
 const (
 	RelayChildReport = "child_report"
@@ -609,6 +620,10 @@ type AccountResult struct {
 	Exists bool `json:"exists,omitempty"`
 	// Detail is the tail of the script's output, or why it did not run.
 	Detail string `json:"detail,omitempty"`
+	// Credsep is how the login's credentials ended up (claude-fleet#2294):
+	// CredsepSeparated when no token is readable from it. Absent from a node
+	// that does not separate — a spare it opened is never handed out.
+	Credsep string `json:"credsep,omitempty"`
 }
 
 // MaxLoginLen bounds a hub-generated login. macOS allows longer short names;

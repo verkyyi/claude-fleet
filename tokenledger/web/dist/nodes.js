@@ -32,7 +32,7 @@ function card(m) {
   const rm = m.eps.length ? `<button class="btn sm ghost" data-act="remove" data-m="${esc(m.name)}" data-eps="${esc(m.eps.join(' '))}" data-n="${m.sessions == null ? '' : m.sessions}">${ic('trash')}${esc(t('ui.mach.removeBtn'))}</button>` : '';
   return `<div class="panel mc"><div class="mc-h"><b>${esc(m.label)}</b>${m.label !== m.name ? `<span class="mono" style="opacity:.6">${esc(m.name)}</span>` : ''}${m.kind === 'ephemeral' ? `<span class="chip brand">${esc(t('ui.mach.spot'))}</span>` : ''}${status(m)}</div>${why}` +
     trend +
-    `<div class="stats"><div><b>${m.sessions == null ? '?' : m.sessions}</b>${esc(t('ui.mach.sessions'))}</div><div><b>${esc(load)}</b>${esc(t('ui.mach.load'))}</div><div><b>${esc(m.version || '—')}</b>${esc(t('ui.mach.version'))}</div>${m.spare == null ? '' : `<div><b>${m.spare}</b>${esc(t('ui.mach.spare'))}</div>`}</div>` +
+    `<div class="stats"><div><b>${m.sessions == null ? '?' : m.sessions}</b>${esc(t('ui.mach.sessions'))}</div><div><b>${esc(load)}</b>${esc(t('ui.mach.load'))}</div><div><b>${esc(m.version || '—')}</b>${esc(t('ui.mach.version'))}</div>${m.spare == null ? '' : `<div><b>${m.spare}</b>${esc(t('ui.mach.spare', { used: m.used ?? '?', cap: m.cap ?? '?' }))}</div>`}</div>` +
     `<div class="mc-f"><span>${esc(t('ui.mach.seen', { when: relTime(m.seen) }))}</span><span>${btn}${rm}</span></div></div>`;
 }
 

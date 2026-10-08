@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,8 +30,9 @@ const SparePrefix = "spare:"
 // SpareFullName is the display name a spare is opened under.
 const SpareFullName = "fleet spare"
 
-// spareLoginStem starts every spare login: "fl" + six letters and digits.
-const spareLoginStem = "fl"
+// spareLoginStem starts every spare login: fleetu1, fleetu2, … — a name a
+// person reads, kept for good once the spare is theirs (never renamed).
+const spareLoginStem = "fleetu"
 
 // IsSparePrincipal says id is a spare login's principal, not a person.
 func IsSparePrincipal(id string) bool {
@@ -56,20 +58,21 @@ func randomLowerAlnum(n int) (string, error) {
 }
 
 // CreateSpare records a new spare on hostname and queues its creation there:
-// a principal spare:<hostname>:<nonce> under a fresh login fl<6>, and its
-// account row pending — dispatchAccounts sends it like any other create.
-// valid is the node's login whitelist (a candidate it refuses is skipped).
+// a principal spare:<hostname>:<nonce> under the next free login fleetu<N>,
+// and its account row pending — dispatchAccounts sends it like any other
+// create. valid is the node's login whitelist (a candidate it refuses is
+// skipped).
 func (s *Store) CreateSpare(hostname string, valid func(string) bool, at time.Time) (*FleetAccount, error) {
 	if hostname == "" {
 		return nil, errors.New("empty hostname")
 	}
 	ts := at.UTC().Format(rfc)
-	for i := 0; i < 20; i++ {
-		suf, err := randomLowerAlnum(6)
-		if err != nil {
-			return nil, err
-		}
-		login := spareLoginStem + suf
+	var n int
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_principals WHERE login LIKE ?`, spareLoginStem+"%").Scan(&n); err != nil {
+		return nil, err
+	}
+	for i := 1; i <= 200; i++ {
+		login := spareLoginStem + strconv.Itoa(n+i)
 		if !valid(login) {
 			continue
 		}
@@ -92,7 +95,7 @@ func (s *Store) CreateSpare(hostname string, valid func(string) bool, at time.Ti
 		if err != nil {
 			tx.Rollback()
 			if isUniqueViolation(err) {
-				continue // the name is taken somewhere: draw another
+				continue // the name is taken somewhere: the next one
 			}
 			return nil, err
 		}
