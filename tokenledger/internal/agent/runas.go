@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/user"
@@ -84,6 +86,56 @@ func prepCmd(ctx context.Context, cmd *exec.Cmd) error {
 		cmd.Dir = ra.Home
 	}
 	return nil
+}
+
+// startWhy turns a command that never started as ctx's login into a reason a
+// person can read (claude-fleet#2451): on 2026-10-08 the hub's only answer from
+// m4 was «fork/exec …/fleet-control.py: invalid argument» — a login in more
+// groups than setgroups(2) takes, but it could as well have been a missing
+// login or a home the login cannot reach. What the agent can see as root is
+// appended to the error; one that did start (an exit status), or a plain
+// agent's, is returned as it is.
+func startWhy(ctx context.Context, cmd *exec.Cmd, err error) error {
+	ra := runAsOf(ctx)
+	var pe *fs.PathError
+	if ra == nil || err == nil || !errors.As(err, &pe) {
+		return err
+	}
+	var facts []string
+	if u, lerr := user.LookupId(fmt.Sprint(ra.UID)); lerr != nil || u.Username != ra.Login {
+		facts = append(facts, fmt.Sprintf("login %s not found on this machine (uid %d)", ra.Login, ra.UID))
+	} else {
+		facts = append(facts, fmt.Sprintf("login %s uid %d gid %d", ra.Login, ra.UID, ra.GID))
+	}
+	facts = append(facts, credFacts(ra)...)
+	facts = append(facts, pathFact("home", ra.Home, ra))
+	if cmd.Dir != "" && cmd.Dir != ra.Home {
+		facts = append(facts, pathFact("dir", cmd.Dir, ra))
+	}
+	facts = append(facts, pathFact("program", cmd.Path, ra))
+	for _, a := range append(append([]string{}, cmd.Args...), cmd.Env...) {
+		if strings.IndexByte(a, 0) >= 0 {
+			facts = append(facts, "an argument or environment entry holds a NUL byte")
+			break
+		}
+	}
+	return fmt.Errorf("%w (%s%s)", err, errnoName(err), strings.Join(facts, "; "))
+}
+
+// pathFact is one line on a path the login needs: missing, or who owns it.
+func pathFact(what, path string, ra *RunAs) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fmt.Sprintf("%s %s missing", what, path)
+	}
+	own := ""
+	if uid, ok := fileOwner(fi); ok {
+		own = fmt.Sprintf(" owner uid %d", uid)
+		if uid != ra.UID && uid != 0 {
+			own += fmt.Sprintf(" (not %s)", ra.Login)
+		}
+	}
+	return fmt.Sprintf("%s %s%s mode %04o", what, path, own, fi.Mode().Perm())
 }
 
 // tenantHomes is every machine tenant's home → its login (claude-fleet#2333),
