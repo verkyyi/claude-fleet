@@ -392,6 +392,10 @@ func (s *Server) stableCommit() string {
 // handleStableFile serves GET /install/stable/<sha>/<path>.
 func (s *Server) handleStableFile(w http.ResponseWriter, r *http.Request, rest string) {
 	sha, path, ok := strings.Cut(rest, "/")
+	if ok && path == bundleName && s.Stable != nil && shaRe.MatchString(sha) && s.Stable.Seen(sha) {
+		s.handleStableBundle(w, r, sha)
+		return
+	}
 	if s.Stable == nil || !ok || !shaRe.MatchString(sha) || !stablePathOK(path) || !s.Stable.Seen(sha) {
 		http.NotFound(w, r)
 		return

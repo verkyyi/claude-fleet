@@ -26,6 +26,15 @@
 # /install/manifest). Same bytes in ⇒ same /install/manifest and the same
 # client_version on /version as when the files were committed copies.
 #
+# The static tmux (#2260): beside the client, pack/vendor/tmux-<platform> — the
+# binary out of each archive conf/vendor-tmux.lock pins, SHA-256 checked, kept
+# in ${XDG_CACHE_HOME:-~/.cache}/claude-fleet/vendor so a rebuild downloads
+# nothing. The hub puts the one for the installer's platform into
+# /install/bundle.tar.gz. A download that fails is a warning, never a failed
+# pack: the bundle then carries no tmux and the installer fetches it itself
+# (or falls back to Homebrew / apt). FLEET_PACK_VENDOR=0 skips it (offline
+# builds, CI); --check never looks at vendor/.
+#
 # Exit: 0 ok · 1 drift (--check) · 2 no repo / manifest, or a listed file missing.
 set -uo pipefail
 # $0 may be a symlink in a shadow bin/ (run-selftests.sh, #660): follow it to the
@@ -44,6 +53,40 @@ PACK="$CLIENT/pack"
 # listed — the manifest's paths (the installer's too: the hub fills it in and
 # serves it at /install). Every line that is not blank or a comment.
 listed() { awk '!/^[[:space:]]*#/ && NF { print $1 }' "$MANIFEST"; }
+
+# sha256_of <file> — its SHA-256 hex (shasum on macOS, sha256sum on Linux)
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+
+# pack_vendor — the static tmux of every platform conf/vendor-tmux.lock pins
+pack_vendor() {
+  [ "${FLEET_PACK_VENDOR:-1}" = 0 ] && return 0
+  local lock="$REPO/conf/vendor-tmux.lock" cache plat sum url arc x n=0
+  [ -f "$lock" ] || return 0
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/vendor"
+  mkdir -p "$cache" "$PACK/vendor" || return 0
+  while read -r plat sum url; do
+    case "$plat" in ''|'#'*) continue ;; esac
+    arc="$cache/$sum.tar.gz"
+    if [ ! -f "$arc" ] || [ "$(sha256_of "$arc")" != "$sum" ]; then
+      curl -fsSL --max-time 120 "$url" -o "$arc.part" 2>/dev/null && mv -f "$arc.part" "$arc" \
+        || { rm -f "$arc.part"; echo "fleet-client-pack: WARN tmux $plat: download failed ($url) — the bundle carries no tmux for it" >&2; continue; }
+    fi
+    if [ "$(sha256_of "$arc")" != "$sum" ]; then
+      rm -f "$arc"; echo "fleet-client-pack: WARN tmux $plat: SHA-256 mismatch — not packed" >&2; continue
+    fi
+    x="$(mktemp -d)"
+    if tar -xzf "$arc" -C "$x" tmux 2>/dev/null && [ -f "$x/tmux" ]; then
+      cp "$x/tmux" "$PACK/vendor/tmux-$plat" && chmod 0755 "$PACK/vendor/tmux-$plat" && n=$((n + 1))
+    else
+      echo "fleet-client-pack: WARN tmux $plat: no tmux in $url" >&2
+    fi
+    rm -rf "$x"
+  done < "$lock"
+  echo "packed the static tmux for $n platform(s) into pack/vendor/"
+}
 
 case "${1:-}" in
   --check)
@@ -65,6 +108,7 @@ EOT
         [ -n "$f" ] || continue
         rel="${f#"$PACK"/}"
         [ "$rel" = doc.go ] && continue
+        case "$rel" in vendor/*) continue ;; esac
         case "$l" in *"
 $rel
 "*) ;; *) echo "unlisted: pack/$rel is not in the manifest — run bin/fleet-client-pack.sh"; rc=1 ;; esac
@@ -91,6 +135,7 @@ EOT
     done <<EOT
 $(listed)
 EOT
-    echo "packed $n file(s) into tokenledger/internal/api/fleetclient/pack/" ;;
+    echo "packed $n file(s) into tokenledger/internal/api/fleetclient/pack/"
+    pack_vendor ;;
   *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac

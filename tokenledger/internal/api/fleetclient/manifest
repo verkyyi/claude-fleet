@@ -130,6 +130,7 @@ bin/fleet-compose-latency.sh
 conf/tmux-shell.conf
 conf/tmux-shell-stage.conf
 conf/fleet-palette.conf
+conf/vendor-tmux.lock
 # --- agent bundle: generated from conf/agent-bundle.manifest by bin/fleet-client-mirror.sh — do not edit (#1725) ---
 conf/agent-bundle.manifest
 hooks/settings-hooks.json

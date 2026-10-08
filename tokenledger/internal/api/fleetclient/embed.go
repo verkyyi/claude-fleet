@@ -184,3 +184,18 @@ func Serves(name string) bool {
 	}
 	return false
 }
+
+// VendorTmux is the static tmux packed for <platform> (macos-arm64,
+// linux-x86_64, … — conf/vendor-tmux.lock's names; claude-fleet#2260), or nil:
+// bin/fleet-client-pack.sh puts it at pack/vendor/tmux-<platform>. It rides in
+// /install/bundle.tar.gz as vendor/tmux; it is never a download of its own.
+func VendorTmux(platform string) []byte {
+	if platform == "" || strings.ContainsAny(platform, "/.") {
+		return nil
+	}
+	b, err := fs.ReadFile(Files.pack, "vendor/tmux-"+platform)
+	if err != nil {
+		return nil
+	}
+	return b
+}

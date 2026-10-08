@@ -56,6 +56,12 @@
 # `fleet-<command>.sh`, so adding one is adding a file, not editing here. A
 # first word that is not a command is a machine name.
 here=$(cd "$(dirname "$0")" && pwd -P)
+# tmux's static build the install line put here when this computer had no
+# tmux (#2260) comes first, for `fleet` and everything it runs — one tmux for
+# the client's server, whatever else is installed later
+_fv="${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet-vendor/bin"
+if [ -x "$_fv/tmux" ]; then case ":$PATH:" in *":$_fv:"*) ;; *) PATH="$_fv:$PATH"; export PATH ;; esac; fi
+unset _fv
 # client — the client, or one line on why it cannot open here and a non-zero exit
 client() {
   # keep up with the hub (issue #1722): an installed client asks it, at most
