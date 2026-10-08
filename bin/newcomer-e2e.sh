@@ -471,11 +471,13 @@ c.commit()
 sys.exit(0 if n else 1)' "$WORK/hub.db" "$(printf '%s' "$D" | jget person_id)" "$OSU" || die "the clock person's login row was not on the hub's db"
 CINV=$(api -X POST -H 'Content-Type: application/json' -d '{}' "$HUB/v1/fleet/invites" | jget code 2>/dev/null)
 [ -n "$CAPPROVE" ] && [ -n "$CINV" ] || die 'no approve code / invite for the clock'
+KEEPARG=''; [ "$KEEP" = 1 ] && KEEPARG=--keep
 # the drill's own terminal needs a tmux: the one the install line brought (a runner may have none)
 PATH="$(dirname "$REAL_TMUX"):$PATH" FLEET_DRILL_INVITE="$CAPPROVE" FLEET_DRILL_INSTALL_INVITE="$CINV" FLEET_CLOCK_SSH_SHIM="$SHIM" \
   bash "$BIN/fleet-onboard-clock.sh" --hub "$HUB" --login "$OSU" --hand 1 --gate pits \
-    --out "$WORK/clock" $([ "$KEEP" = 1 ] && echo --keep) >"$WORK/clock.log" 2>&1 \
-  || die 'the clock: a pit failed or no first key' "$(cat "$WORK/clock.log"; tail -n 30 "$WORK"/clock/screens/run1-last.txt 2>/dev/null)"
+    --out "$WORK/clock" ${KEEPARG:+"$KEEPARG"} >"$WORK/clock.log" 2>&1 \
+  || die 'the clock: a pit failed or no first key' "$(cat "$WORK/clock.log"; grep -v '^ *$' "$WORK"/clock/screens/run1-last.txt 2>/dev/null | tail -n 15
+       echo '--- home-first.log'; cat "$WORK"/clock/run1-home-first.log 2>/dev/null)"
 sed -n '/^| 粘贴/p' "$WORK/clock/report.md"
 ok "the 60-second drill: first key at $(sed -n 's/^| 粘贴[^|]*| \([^|]*\) |.*/\1/p' "$WORK/clock/report.md"), no pit"
 

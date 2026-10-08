@@ -179,7 +179,7 @@ printf '%s: hub=%s  runs=%s  hand=%ss  budget=%ss  person=%s  out %s\n' "$PROG" 
 # run_one <n>: fills R_* (times in ms since t_enter, '' = not reached) and P_* (坑)
 run_one() {
   local n=$1 sb login approve invite inv_id url sock first opened code key_at hand_at tries
-  local p last_p last_change gap maxgap t0 deadline seen ready_seen
+  local p last_p last_change gap maxgap t0 deadline
   R_installed='' R_browser='' R_cert='' R_machine='' R_ready='' R_key='' R_why=''
   R_steps=1 R_admin=0 R_concepts='' R_gap=0 R_code_after='' R_tries=0
   P2=FAIL P3=FAIL P5=FAIL P6=FAIL P7=PASS P8=PASS P1=PASS P4=PASS
@@ -223,7 +223,7 @@ EOF
   dt send-keys -t drill -l "curl -fsSL $url | sh"
   dt send-keys -t drill Enter
   t0=$(nowms)
-  last_p='' last_change=$t0 maxgap=0 first='' opened='' code='' key_at='' hand_at='' tries=0 ready_seen=''
+  last_p='' last_change=$t0 maxgap=0 first='' opened='' code='' key_at='' hand_at='' tries=0
   deadline=$(( $(date +%s) + STEP_SECS * 3 ))
   local shot=0 cert="$sb/home/.ssh/fleet-cert-cert.pub" conf="$sb/home/.config/claude-fleet" el
   while :; do
@@ -278,12 +278,12 @@ EOF
       if [ -n "$code" ]; then SECRETS+=("$code"); R_browser=$el; R_steps=$((R_steps + 1)); P3=SKIP; hand_at=$(nowms); fi
     fi
     # the hand: --hand seconds after the page opened, the person clicks 确认签发
-    if [ -n "$hand_at" ] && [ -n "$code" ] && [ -z "$R_cert" ] && [ "$hand_at" != done ] \
+    if [ -n "$hand_at" ] && [ -n "$code" ] && [ -z "$R_cert" ] && [ "$hand_at" != clicked ] \
        && [ $(( $(nowms) - hand_at )) -ge $(( HAND * 1000 )) ]; then
       env -i PATH="$PATH" HOME="$sb/admin" FLEET_CONF_DIR="$sb/admin/conf" FLEET_HUB_URL="$HUB" \
           FLEET_DRILL_INVITE="$approve" bash "$BIN/fleet-drill.sh" approve "$code" >"$sb/approve.out" 2>&1 \
         || { R_why="the drill could not confirm the login: $(tail -n 1 "$sb/approve.out" | scrub)"; break; }
-      R_steps=$((R_steps + 1)); hand_at=done
+      R_steps=$((R_steps + 1)); hand_at=clicked
     fi
     [ -z "$R_cert" ] && [ -s "$cert" ] && R_cert=$el
     [ -z "$R_machine" ] && [ -e "$conf/home-session.first" ] && R_machine=$el
@@ -325,8 +325,9 @@ EOF
   fi
   [ -z "$R_key" ] && [ "$P8" = PASS ] && P8='FAIL(no key)'
   [ -n "$R_key" ] || [ -n "$R_why" ] || R_why='no first key'
-  # the last screen, for the reading
+  # the last screen, and what the first session's ask said, for the reading
   dt capture-pane -p -t drill 2>/dev/null | scrub > "$OUT/screens/run$n-last.txt"
+  scrub < "$sb/home/.cache/claude-fleet/shell/home-first.log" > "$OUT/run$n-home-first.log" 2>/dev/null
   teardown_person "$sb" "$approve" "$inv_id"
   cleanup_run "$sb"
 }
@@ -349,6 +350,7 @@ cleanup_run() {
   pkill -f "$sb/" 2>/dev/null
   sleep 0.3; pkill -9 -f "$sb/" 2>/dev/null
   [ "$KEEP" = 1 ] && { printf '        sandbox kept: %s\n' "$sb"; return 0; }
+  chmod -R u+w "$sb" 2>/dev/null   # a Go module cache under the sandbox is read-only
   rm -rf "$sb"
 }
 
