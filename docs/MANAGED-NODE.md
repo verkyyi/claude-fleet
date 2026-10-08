@@ -249,3 +249,4 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 
 演练记录与五个指标的读数：#2336（m4，2026-10-08）。
 演练里的「升级」用一个只改这份文档的提交；「回退」用一个只加 `conf/drill-fail` 的提交，再用一个删掉它的提交往前走。
+演练前先在被演练的机器上 `count` 一次；中途新开的登录不在 `--logins` 里就不会被迁。
