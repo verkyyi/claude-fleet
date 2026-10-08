@@ -55,7 +55,11 @@ class Sandbox:
         self.script(self.tools / "tmux", '''#!/usr/bin/env python3
 import os, pathlib, sys
 root=pathlib.Path(os.environ["FLEET_CONF_DIR"])
-if "has-session" in sys.argv: sys.exit(0)
+if "has-session" in sys.argv:
+    # issue #2477: `server-down` = this fleet's tmux server is not running
+    if (root / "server-down").exists():
+        sys.stderr.write("no server running on /tmp/tmux-0/demo\\n"); sys.exit(1)
+    sys.exit(0)
 if "display-message" in sys.argv and "#{socket_path}" in sys.argv:
     # the reap adapter's `#{socket_path}` (issue #1487): point bare tmux at this server;
     # any other display-message (a window's @repo, #1018) answers as an unset option does
@@ -1112,6 +1116,18 @@ class HubTests(HubFixture):
         err = refused["result"]["error"]
         self.assertEqual((refused["status"], err["code"], err["exit"]), ("failed", "AT_CAPACITY", 2))
         self.assertEqual(err["stderr1"], "dash-raw-session: at capacity: 6/6 sessions")
+        (self.node.conf / "spawn-full").unlink()
+        # issue #2477: a fleet whose tmux server is not running opens nothing —
+        # the adapter says so (exit 8) before any spawn, filed as not attempted
+        # (`failed`, never `unknown`), so the hub tries its next candidate
+        (self.node.conf / "server-down").touch()
+        down = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="scratch-3",
+                                                             params={"kind": "scratch"}))["operation_id"])
+        (self.node.conf / "server-down").unlink()
+        err = down["result"]["error"]
+        self.assertEqual((down["status"], err["code"], err["exit"]), ("failed", "UNAVAILABLE", 8))
+        self.assertEqual(err["stderr1"], "start: fleet demo has no running tmux server — nothing opened")
+        self.assertEqual(len((self.node.conf / "scratch.calls").read_text().splitlines()), 1)
 
     def test_start_no_repo_scratch_with_seed(self):
         # issue #1956: the writing area's 「不关联仓库」 — no_repo is a scratch of

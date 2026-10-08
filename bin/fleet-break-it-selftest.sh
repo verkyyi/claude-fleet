@@ -61,6 +61,9 @@
 #   place-declined-not-retried                      fleet_hub_place (fleet-lib.sh: the `after` field, each try's
 #                                                   stderr), fleet-children.py (claim: stale); the hub half is
 #                                                   tokenledger/internal/api fleet_place.go (go test, when here)
+#   place-server-down                               fleet_server_down (fleet-lib.sh), fleet-control-read.sh start
+#                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
+#                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
 #   dispatch-wrong-replica                          tokenledger/internal/api node_route.go (fleet_node_conns +
 #                                                   /internal/v1/node-write; go test, when a toolchain is here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
@@ -4567,6 +4570,43 @@ drill_place_declined_not_retried() {
   fi
   SECS=$(since "$t0")
   WHAT="一台拒绝后入口换下一台（本机最后），行尾 after 段与逐台 stderr 传到节点；没开成又哪台都没会话的认领标 stale；$gohalf"
+}
+
+# A fleet whose tmux server is gone — an old login's per-repo fleet still
+# reported to the hub (2026-10-08 m5, fleet-24haowan-monorepo) — took a home
+# start, answered UNKNOWN and never tried the next candidate (issue #2477).
+drill_place_server_down() {
+  CAP=120; local t0 lbl out rc gohalf
+  t0=$(now)
+  lbl="bk2477-$$"
+  # node half: no server on the label ⇒ the helper says so, rc 0; a server
+  # without the fleet's session ⇒ says that; the fleet's session there ⇒ rc 1
+  out=$(bash -c '. "$1/fleet-lib.sh"; fleet_server_down "$2"' _ "$BIN" "$lbl"); rc=$?
+  [ "$rc" = 0 ] && [ "$out" = "fleet $lbl has no running tmux server" ] \
+    || { WHY="fleet_server_down missed a fleet with no server (rc=$rc): $out"; return 1; }
+  tmux -L "$lbl" -f /dev/null new-session -d -s "$lbl" 2>/dev/null
+  out=$(bash -c '. "$1/fleet-lib.sh"; fleet_server_down "$2"' _ "$BIN" "$lbl"); rc=$?
+  tmux -L "$lbl" kill-server 2>/dev/null
+  [ "$rc" = 1 ] && [ -z "$out" ] || { WHY="fleet_server_down called a live fleet down (rc=$rc): $out"; return 1; }
+  # the adapter's start asks before any spawn and exits 8; the controller files 8 as not attempted
+  grep -q 'fleet_server_down "$sess"' "$BIN/fleet-control-read.sh" \
+    || { WHY="fleet-control-read.sh start no longer asks fleet_server_down before a spawn"; return 1; }
+  grep -q '8: "UNAVAILABLE"' "$BIN/fleet_control.py" \
+    || { WHY="fleet_control.py no longer files exit 8 as UNAVAILABLE (not attempted)"; return 1; }
+  gohalf='hub half: the Go gate (tokenledger.yml) runs the down-fleet tests'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run 'TestPlacement(SkipsDownFleet|SameLoginPrefersLiveFleet)$|TestClientPlaceServerDownTriesNextMachine$' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) gohalf='hub half: go test 不选 down / 同登录选活的 / 退 8 换下一台 ok' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        gohalf='hub half: no go module cache / toolchain here — the Go gate (tokenledger.yml) runs the down-fleet tests' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="服务不在的 fleet：节点 start 先问、退 8（没试过）；入口不选 down 的 fleet；$gohalf"
 }
 
 # ================================================================ run ===========

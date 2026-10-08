@@ -1967,6 +1967,25 @@ fleet_socket_wedged() {
   esac
   return 1
 }
+# fleet_server_down <sess> → rc 0 + ONE line saying why when the fleet's tmux
+# server is not running there (no socket, nothing listening, a wedged server) or
+# runs without the fleet's session; rc 1 when it answers, or fails some other way
+# (issue #2477: a start into a fleet whose server is gone opened nothing and came
+# back UNKNOWN — the node's start asks first and declines, so the hub tries the
+# next candidate). One tmux call.
+fleet_server_down() {
+  local out
+  out=$(tmux -L "$(fleet_socket "$1")" has-session -t "=$1" 2>&1) && return 1
+  case "$out" in
+    *'no server running'*|*'No such file or directory'*|*'error connecting'*)
+      printf "fleet %s has no running tmux server\n" "$1" ;;
+    *'server exited unexpectedly'*)
+      printf "fleet %s's tmux server is wedged (server exited unexpectedly)\n" "$1" ;;
+    *"can't find session"*)
+      printf "fleet %s's tmux server has no session %s\n" "$1" "$1" ;;
+    *) return 1 ;;
+  esac
+}
 # fleet_socket_heal <label> → when wedged, remove the socket so the next tmux call
 # starts a fresh server, print ONE line saying so (the caller routes it: stderr or
 # its log) and append it to $FLEET_CONF_DIR/socket-heal.log (fleet-doctor's

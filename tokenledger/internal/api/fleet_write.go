@@ -1276,9 +1276,21 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 	}
 	weight := s.spotWeight(settings)
 	from := s.askedFrom(p, now) // claude-fleet#1721: who may land on a personal machine
+	// A login whose first fleet by name is down while another of its fleets
+	// is up (claude-fleet#2477: an old per-repo fleet left behind): the live
+	// one stands for the login, the down one is passed over.
+	upOn := map[string]bool{}
+	for _, r := range rows {
+		if r.Present && r.State != fleetStateDown && (repo == "" || hostsRepo(r, repo)) {
+			upOn[r.EndpointID] = true
+		}
+	}
 	seen := map[string]bool{}
 	for _, r := range rows {
 		if !r.Present || seen[r.EndpointID] || (repo != "" && !hostsRepo(r, repo)) {
+			continue
+		}
+		if r.State == fleetStateDown && upOn[r.EndpointID] {
 			continue
 		}
 		if node != "auto" && !sameMachine(r.Hostname, node) {
@@ -1310,6 +1322,9 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 				c.Eligible, c.Excluded = false, "SPOT node "+st
 			}
 			c.Score = math.Round(c.Score*weight*1000) / 1000
+		}
+		if r.State == fleetStateDown && c.Eligible {
+			c.Eligible, c.Excluded = false, excludedDown
 		}
 		if why, ok := declined[r.FleetID]; ok && c.Eligible {
 			c.Eligible, c.Excluded = false, excludedDeclined+why
@@ -1513,7 +1528,15 @@ const (
 	excludedPersonCap = "at the per-person cap"
 	excludedPaused    = "机器暂停接新"
 	excludedDeclined  = "declined: "
+	// excludedDown: the fleet's tmux server is not running there
+	// (claude-fleet#2477) — its node reports the fleet `down`; a start sent
+	// there opens nothing.
+	excludedDown = "tmux 服务没在跑"
 )
+
+// fleetStateDown is the state a node reports for a fleet whose tmux server is
+// not running (fleet_control.py's workers: the adapter's exit 3).
+const fleetStateDown = "down"
 
 // excludedForFullness reports whether a candidate is out only because it has
 // no free session slot — its own cap, the per-person cap, or its own gate

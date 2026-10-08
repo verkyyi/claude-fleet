@@ -802,7 +802,8 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT} \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
-       _why=''; fleet_socket_wedged "$SOCK" && _why=" — this fleet's tmux server is gone: its socket $(fleet_socket_path "$SOCK") is held by a dying server that drops every client (tmux says \"server exited unexpectedly\"); fleet-up.sh clears it and brings the fleet back"  # issue #1729
+       _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"  # issue #2477
+       fleet_socket_wedged "$SOCK" && _why=" — this fleet's tmux server is gone: its socket $(fleet_socket_path "$SOCK") is held by a dying server that drops every client (tmux says \"server exited unexpectedly\"); fleet-up.sh clears it and brings the fleet back"  # issue #1729
        refuse "spawn failed for #$num: new-window$_why"; exit "$RC_INFRA"; }
 [ -n "$FILL_PID" ] || CLAIMED_HERE=0   # a window holds the issue now: its claim is the worker's
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on

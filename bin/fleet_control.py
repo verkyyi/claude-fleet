@@ -738,8 +738,9 @@ class Control:
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
                     # 7 = a new issue (issue #1953) that could not be filed: nothing was opened.
+                    # 8 = the fleet's tmux server is not running (issue #2477): nothing was opened.
                     reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT",
-                               7: "EXECUTION_FAILED"}
+                               7: "EXECUTION_FAILED", 8: "UNAVAILABLE"}
                     attempted = code not in reasons
                     # The spawn's own exit code and refusal line ride back to
                     # whoever placed it (issue #1586): a refusal there prints

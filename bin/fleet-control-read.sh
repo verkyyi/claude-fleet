@@ -421,6 +421,12 @@ case "$mode" in
         [ $? = 4 ] && { printf 'start: this fleet hosts several repos; name the repo of %s\n' "$([ "${3:-}" = scratch ] && echo 'the scratch' || echo "#${3:-}")" >&2; exit 6; }
         srepo=''; }
     fi
+    # A fleet whose tmux server is not running opens nothing (issue #2477): say
+    # so and exit 8 — the controller files it as not attempted, so the hub tries
+    # its next candidate instead of answering UNKNOWN for a start that never was.
+    if _down=$(fleet_server_down "$sess"); then
+      printf 'start: %s — nothing opened\n' "$_down" >&2; exit 8
+    fi
     bash "$BIN/fleet-diskguard.sh" --gate >&2 || exit 4
     if [ "$agent" = codex ]; then
       if [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then

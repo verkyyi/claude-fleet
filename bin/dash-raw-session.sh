@@ -598,7 +598,10 @@ else
   fi
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
-         refuse "raw: new-window failed in $SESS"; exit 1; }
+         # Say WHY when it is the server (issue #2477): the line rides into
+         # the hub's DECLINED / UNKNOWN answer as the refusal.
+         _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"
+         refuse "raw: new-window failed in $SESS$_why"; exit 1; }
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
 [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
