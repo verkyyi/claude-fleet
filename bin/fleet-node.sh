@@ -92,8 +92,17 @@ CERT="$HOME/.ssh/fleet-cert-cert.pub"
 
 usage() { sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
+# separated (issue #2316): credsep moved node.env into the store — $ENVF is a
+# link this login cannot read, node.pub.env holds every line but the token
+separated() { [ -f "$CONF/credsep.json" ]; }
 # envval <KEY> — one value from node.env ('' when absent)
-envval() { [ -f "$ENVF" ] && sed -n "s/^$1=//p" "$ENVF" | head -n 1; }
+envval() {
+  local f="$ENVF"
+  [ -r "$ENVF" ] || ! separated || f="$CONF/node.pub.env"
+  [ -f "$f" ] && sed -n "s/^$1=//p" "$f" | head -n 1
+}
+# is_node — a token here, or (separated) one in the store behind the link
+is_node() { [ -n "$(envval CCQUOTA_TOKEN)" ] || { separated && [ -L "$ENVF" ]; }; }
 
 # self <hub> <token> — the hub's /v1/node/self body; exit 0 iff it answered 200
 self() { curl -fsS --max-time 15 -H "Authorization: Bearer $2" "$1/v1/node/self" 2>/dev/null; }
@@ -132,8 +141,9 @@ cmd_join() {
   chmod 700 "$work"
   local joined=()
   tok=$(envval CCQUOTA_TOKEN)
-  if [ -n "$tok" ] && [ "$(envval CCQUOTA_HUB_URL)" = "$hub" ] && self "$hub" "$tok" >/dev/null; then
+  if is_node && [ "$(envval CCQUOTA_HUB_URL)" = "$hub" ] && { [ -z "$tok" ] || self "$hub" "$tok" >/dev/null; }; then
     : # already a node of this hub: no scan; the join script skips its join step
+    # (separated, #2316: the token is in the store, unread — the link says it is there)
   elif [ -z "$invert" ] && [ -f "$CERT" ] && "$here/fleet-login.py" node-pass --hub "$hub" --out "$work/node.json" --quiet; then
     # 登录即登记 (issue #2212): logged in already — the device key, no scan
     joined=(--joined "$work/node.json")
@@ -169,8 +179,8 @@ cmd_ensure() {
   done
   if [ -n "$hub_arg" ]; then hub=$("$here/fleet-login.py" hub --hub "$hub_arg" 2>/dev/null) || return 2
   else hub=$("$here/fleet-login.py" hub 2>/dev/null) || return 2; fi
-  [ -f "$CERT" ] || { [ -n "$(envval CCQUOTA_TOKEN)" ] && return 0; return 3; }
-  if [ -n "$(envval CCQUOTA_TOKEN)" ]; then
+  [ -f "$CERT" ] || { is_node && return 0; return 3; }
+  if is_node; then
     # A node already (a scan / code join, before #2212): once per hub, show
     # the hub its token by the device key — it ties that node to this device
     # and records whose login this is (登录即认人), no new node, no scan.
@@ -201,7 +211,7 @@ cmd_ensure() {
   # shellcheck disable=SC2086
   FLEET_CONF_DIR="$CONF" "$here/fleet-node-join.sh" --hub "$hub" --joined "$work/node.json" \
     --no-fleet --no-deps --no-admin --wait 20 ${FLEET_NODE_JOIN_ARGS:-} >>"$CONF/node-join.log" 2>&1
-  [ -n "$(envval CCQUOTA_TOKEN)" ] || { rm -rf "$work"; return 1; }
+  is_node || { rm -rf "$work"; return 1; }
   # a computer that only coordinates is a person's own (#1721)
   [ "$fresh" = 1 ] && [ -z "$(envval CCQUOTA_FLEET_PERSONAL)" ] && setenv CCQUOTA_FLEET_PERSONAL 1
   passed "$hub" "$work/pass.json"   # tied to this device already
@@ -233,9 +243,20 @@ notpassed() {
   printf '%s\n' "$why" > "$CONF/node-login.why"
 }
 
+# credsep_setenv [--check] — bin/fleet-credsep.sh setenv for this conf's login;
+# as root (an admin fixing a login) the login is the conf's owner, never root
+credsep_setenv() {
+  local who=()
+  [ "$(id -u)" != 0 ] || who=(--login "$(python3 -I -c 'import os, pwd, sys; print(pwd.getpwuid(os.stat(sys.argv[1]).st_uid).pw_name)' "$CONF/credsep.json")")
+  FLEET_CONF_DIR="$CONF" bash "$here/fleet-credsep.sh" setenv ${who[@]+"${who[@]}"} "$@"
+}
+
 # setenv <KEY> <value|''> — node.env's line for KEY replaced (or removed when
-# the value is empty), every other line kept; 0600, atomic.
+# the value is empty), every other line kept; 0600, atomic. Separated (issue
+# #2316): credsep writes the store's copy in place — a mv here would swap the
+# link for a plain file and put the token back in the home.
 setenv() {
+  if separated; then printf '%s=%s\n' "$1" "$2" | credsep_setenv >/dev/null; return; fi
   { grep -v "^$1=" "$ENVF"; [ -z "$2" ] || printf '%s=%s\n' "$1" "$2"; } > "$ENVF.tmp" \
     && chmod 600 "$ENVF.tmp" && mv "$ENVF.tmp" "$ENVF"
 }
@@ -262,10 +283,17 @@ cmd_compute() {
     esac
     shift
   done
-  if [ -z "$(envval CCQUOTA_TOKEN)" ]; then
+  if ! is_node; then
     echo "这台机器（$(id -un)）还没登记到入口 — 先运行：fleet host on（或只登记：fleet node join）"
     return 1
   fi
+  case "$verb" in on|off)
+    # separated: the store's copy is root's to write — say so before any probe
+    if separated && ! credsep_setenv --check; then
+      echo "✗ 凭据已隔离：node.env 在凭据库里，改它要 root 一次（上面一行是给管理员的命令）"
+      return 1
+    fi ;;
+  esac
   case "$verb" in
     on)
       line=$(FLEET_CONF_DIR="$CONF" "$here/fleet-node-probe.sh" 2>&1); rc=$?
@@ -313,6 +341,11 @@ cmd_status() {
   local hub tok body st label alog
   tok=$(envval CCQUOTA_TOKEN)
   hub=$(envval CCQUOTA_HUB_URL)
+  if [ -z "$tok" ] && [ -n "$hub" ] && is_node; then
+    # separated (#2316): the token is in the store — this login does not read it
+    echo "✓ $(id -un) 登记在 ${hub}（凭据已隔离：通行证在凭据库里，本登录不读；在线与否看 fleet doctor 的 node 行）"
+    return 0
+  fi
   if [ -z "$tok" ] || [ -z "$hub" ]; then
     echo "这台机器（$(id -un)）还没登记到入口 — 运行：fleet host on（或只登记：fleet node join）"
     return 1

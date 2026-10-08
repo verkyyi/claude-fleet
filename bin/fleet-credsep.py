@@ -660,10 +660,7 @@ def install(a):
             chown_tree(os.path.join(R, "codex", label), ROLE)
     say("credentials: %d moved into %s" % (n, R))
     if ne:
-        pub = "".join("%s=%s\n" % (k, v) for k, v in ne.items() if not re.search(r"TOKEN|SECRET|PASSWORD", k))
-        put(os.path.join(conf, "node.pub.env"),
-            "# claude-fleet credsep (issue #1971) — node.env's lines WITHOUT the token; the token is in %s\n%s"
-            % (R, pub), 0o600, login)
+        pub_env(conf, R, ne, login)
         move(ne_path, os.path.join(R, "node.env"), ROLE)
         MOVED.append([os.path.join(R, "node.env"), ne_path])
         if not DRY:
@@ -2036,6 +2033,112 @@ def plan(a):
     return 0
 
 
+# ---- setenv: node.env's lines, in the store (issue #2316) --------------------------
+# Separated, C/node.env is a link into the store the login cannot read. Every
+# writer that used to rewrite it (fleet-node-join.sh's join, fleet-node.sh's
+# compute on/off) hands its lines here instead — root edits the store's copy in
+# place (its owner and mode kept), node.pub.env follows, and the link stays: a
+# `mv node.env.tmp node.env` from the login's side would put the token back in
+# the home (EPIC #2293 ①). Only the node's own keys pass.
+SETENV_KEYS = ("CCQUOTA_TOKEN", "CCQUOTA_HUB_URL", "CCQUOTA_FLEET", "CCQUOTA_FLEET_ADMIN",
+               "CCQUOTA_FLEET_NODE_KIND", "CCQUOTA_FLEET_COMPUTE", "CCQUOTA_FLEET_COMPUTE_FORCE",
+               "CCQUOTA_FLEET_PERSONAL")
+SETENV_VAL = re.compile(r"^[A-Za-z0-9_.:/@%+=,~-]*$")
+
+
+def pub_env(conf, R, ne, login):
+    """C/node.pub.env — node.env's lines WITHOUT the token, the login's to read."""
+    pub = "".join("%s=%s\n" % (k, v) for k, v in ne.items() if not re.search(r"TOKEN|SECRET|PASSWORD", k))
+    put(os.path.join(conf, "node.pub.env"),
+        "# claude-fleet credsep (issue #1971) — node.env's lines WITHOUT the token; the token is in %s\n%s"
+        % (R, pub), 0o600, login)
+
+
+def setenv(a):
+    """KEY=VALUE lines on stdin (never argv: the token is one of them); `KEY=` drops
+    the line. → 0 written (or nothing to change) · 1 refused · 3 not separated."""
+    login, conf = a.login, os.path.abspath(a.conf_dir)
+    rec = record(conf)
+    R = paths(login)[0]
+    if not rec:
+        die("%s is not separated (no credsep.json) — node.env is the login's own file" % login, 3)
+    if not os.path.isfile(os.path.join(R, "meta.json")):
+        die("separated, but %s has no meta.json — rerun: sudo bash %s/fleet-credsep.sh install --login %s"
+            % (R, HERE, login))
+    want = []
+    for line in sys.stdin.read().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        k, eq, v = line.partition("=")
+        if not eq or k not in SETENV_KEYS:
+            die("setenv: %r is not a node.env key this may write (%s)" % (k if eq else line[:40], ", ".join(SETENV_KEYS)), 2)
+        if not SETENV_VAL.match(v):
+            die("setenv: %s carries a character node.env does not take" % k, 2)
+        want.append((k, v))
+    ne_store = os.path.join(R, "node.env")
+    ne_path = os.path.join(conf, "node.env")
+    if os.path.lexists(ne_path) and not os.path.islink(ne_path):
+        die("%s is a plain file in the home (the token readable there) — move it into the store first: "
+            "sudo bash %s/fleet-credsep.sh install --login %s" % (ne_path, HERE, login))
+    lines = open(ne_store).read().splitlines() if os.path.isfile(ne_store) else \
+        ["# claude-fleet node-join (issue #1418) — this login's ccquota agent; in the credsep store (issue #2316)"]
+    cur = env_file(ne_store)
+    old_hub = cur.get("CCQUOTA_HUB_URL", "")
+    for k, v in want:
+        if k == "CCQUOTA_HUB_URL" and old_hub and v != old_hub:
+            die("setenv: this node belongs to %s — another hub is a new node (fleet node leave first)" % old_hub)
+    changed = []
+    for k, v in want:
+        if cur.get(k, "") == v and (v or k not in cur):
+            continue
+        pat = re.compile(r"^\s*(?:export\s+)?%s=" % re.escape(k))
+        lines = [l for l in lines if not pat.match(l)]
+        if v:
+            lines.append("%s=%s" % (k, v))
+        cur.pop(k, None)
+        if v:
+            cur[k] = v
+        changed.append(k)
+    if changed or not os.path.isfile(ne_store):
+        if os.path.isfile(ne_store):
+            st = os.stat(ne_store)
+            mode, owner = st.st_mode & 0o777, pwd.getpwuid(st.st_uid).pw_name
+        else:
+            mode, owner = 0o600, ROLE
+        put(ne_store, "\n".join(lines) + "\n", mode, owner)
+    if not DRY:
+        pub_env(conf, R, env_file(ne_store), login)
+        if not os.path.lexists(ne_path):
+            os.symlink(ne_store, ne_path)
+            chown(ne_path, login, follow=False)
+    back = rec.get("back") or {}
+    files = back.get("files") or []
+    if [ne_store, ne_path] not in files:
+        back["files"] = files + [[ne_store, ne_path]]
+        rec["back"] = back
+        put(os.path.join(conf, "credsep.json"), json.dumps(rec, indent=1) + "\n", 0o644, login)
+    if not changed:
+        say("node.env: unchanged (in %s)" % R)
+        return 0
+    say("node.env: %s set in %s — %s stays a link" % (", ".join(changed), R, ne_path))
+    # the agent read node.env at its start (the launcher pipes the token, the rest
+    # is its environment) and cannot re-read the store: a change needs a restart
+    try:
+        meta = json.load(open(os.path.join(R, "meta.json")))
+    except (OSError, ValueError):
+        meta = {}
+    s = meta.get("agent")
+    if s:
+        path, label = (s["path"], s["label"]) if s["kind"] != "launchd-gui" else \
+            (os.path.join(DAEMON_DIR, "com.ccquota.agent.%s.plist" % login), "com.ccquota.agent.%s" % login)
+        load_daemon(path, label)
+        say("agent: %s restarted through the launcher" % label)
+    else:
+        say("agent: none through the launcher yet")
+    return 0
+
+
 # ---- the login's side -------------------------------------------------------------
 def record(conf):
     try:
@@ -2187,6 +2290,10 @@ def main():
     rl.add_argument("--install-dir", default="")
     rl.add_argument("--dry-run", action="store_true")
     sub.add_parser("rootlogs")
+    se = sub.add_parser("setenv")   # node.env's lines into the store (issue #2316); stdin
+    se.add_argument("--login", required=True)
+    se.add_argument("--conf-dir", required=True)
+    se.add_argument("--install-dir", default="")
     pg = sub.add_parser("purge")    # a login being deleted (fleet-login-remove.sh, #2418)
     pg.add_argument("--login", required=True)
     pg.add_argument("--dry-run", action="store_true")
@@ -2215,6 +2322,12 @@ def main():
         if os.geteuid() != 0 and not TEST and not DRY:
             die("purge needs root (fleet-login-remove.sh runs it through sudo)", 2)
         return purge(a)
+    if a.cmd == "setenv":
+        if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", a.login):
+            die("bad login %r" % a.login, 2)
+        if os.geteuid() != 0 and not TEST:
+            die("setenv needs root (bin/fleet-credsep.sh setenv runs it through sudo -n)", 2)
+        return setenv(a)
     if a.cmd == "relog":
         DRY = a.dry_run
         if os.geteuid() != 0 and not TEST and not DRY:

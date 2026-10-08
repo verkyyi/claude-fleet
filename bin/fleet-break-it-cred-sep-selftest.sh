@@ -18,6 +18,9 @@
 #                              log is not in the home
 #   cred-login-removed-leftovers  bin/fleet-login-remove.sh step 2b, bin/fleet-credsep.py purge
 #                              (issue #2418): a deleted login's proxy, store, conf and logs go too
+#   cred-sep-rejoin-plain      bin/fleet-node-join.sh (separated: the token through credsep setenv),
+#                              bin/fleet-credsep.sh / fleet-credsep.py setenv (issue #2316)
+#   cred-sep-compute-unlinks   bin/fleet-node.sh setenv / envval, bin/fleet-host.sh (issue #2316, #2426)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -270,6 +273,90 @@ drill_cred_login_removed_leftovers() {
   [ -z "$left" ] || { WHY="left behind after the purge: $left"; return 1; }
   grep -rq tok-POOL "$sb/db" "$sb/homes" 2>/dev/null && { WHY="a pool token is still on disk: $(grep -rl tok-POOL "$sb/db" "$sb/homes")"; return 1; }
   WHAT="删号第 2b 步（删登录之前）credsep purge：代理服务、store（含池令牌）、root 的 <LIB>/<登录>.conf、日志一个不剩，什么也不搬回家目录"
+}
+
+# sep_self <dir> [node.env lines] — THIS user as a separated login in <dir> (the
+# writers call credsep with no --login, so the sandbox login is `id -un`); sets
+# C, R, SEPENV (the env every call runs under). With lines, node.env is there
+# first and install moves it into the store.
+sep_self() {
+  local sb="$1" me out rc; me=$(id -un)
+  C="$sb/homes/$me/.config/claude-fleet" R="$sb/db/$me"
+  mkdir -p "$C" "$sb/homes/$me/.ccquota" "$sb/inst" "$sb/daemons"
+  printf '%s:%s:%s:%s\n' "$me" "$(id -u)" "$(id -g)" "$sb/homes/$me" > "$sb/pw"
+  if [ -n "${2:-}" ]; then printf '%s' "$2" > "$C/node.env"; chmod 600 "$C/node.env"; fi
+  SEPENV="FLEET_CREDSEP_ROOT_BASE=$sb/db FLEET_CREDSEP_RUN_BASE=$sb/run FLEET_CREDSEP_LOG_BASE=$sb/log
+    FLEET_CREDSEP_LIB=$sb/lib FLEET_CREDSEP_DAEMON_DIR=$sb/daemons FLEET_CREDSEP_ROLE=$me FLEET_CREDSEP_SVC=0
+    FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO= FLEET_CREDSEP_PW=$sb/pw
+    FLEET_CONF_DIR=$C HOME=$sb/homes/$me"
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV bash "$BIN/fleet-credsep.sh" install --install-dir "$sb/inst" 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ -f "$C/credsep.json" ] || { WHY="the rig: credsep install failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+}
+# home_token <dir> — any file under the login's home carrying a node token
+home_token() { grep -rl 'ccq_' "$1/homes" 2>/dev/null | tr '\n' ' '; }
+
+# 2026-10-08: a login separated at open (#2294) has no node.env; someone runs
+# `fleet node join` as it. The join wrote node.env.tmp and mv'd it in place —
+# the hub's token in plain text in the home, the agent started without the
+# launcher. Now the token goes down a pipe to credsep and into the store.
+drill_cred_sep_rejoin_plain() {
+  CAP=30
+  local sb="$WORK/seprejoin" t0 out rc
+  sep_self "$sb" || return 1
+  printf '#!/bin/sh\necho v1\n' > "$sb/ccq"; chmod +x "$sb/ccq"
+  printf '{"token":"ccq_JOIN_SECRET","label":"m","endpoint_id":"e1","admin":false}' > "$sb/pass.json"
+  set -- --hub http://127.0.0.1:1 --joined "$sb/pass.json" --no-deps --no-fleet --ccquota "$sb/ccq" --service none --no-admin
+  t0=$(now)
+  # no password-less sudo: refused before anything is spent or written
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV FLEET_CREDSEP_SUDO=false bash "$BIN/fleet-node-join.sh" "$@" 2>&1); rc=$?
+  [ "$rc" != 0 ] || { WHY="no sudo, yet the join went on: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  case "$out" in *"password-less sudo"*) ;; *) WHY="refused without saying it needs root once: $(printf '%s' "$out" | tail -1)"; return 1 ;; esac
+  [ -z "$(home_token "$sb")" ] && [ ! -e "$C/node.env" ] && [ ! -L "$C/node.env" ] \
+    || { WHY="refused, yet node.env was written: $(home_token "$sb")"; return 1; }
+  # the join itself
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV bash "$BIN/fleet-node-join.sh" "$@" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="the join failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  [ -z "$(home_token "$sb")" ] || { WHY="the node token is in plain text in the home: $(home_token "$sb")"; return 1; }
+  [ -L "$C/node.env" ] && [ "$(readlink "$C/node.env")" = "$R/node.env" ] \
+    || { WHY="node.env is not the store's link: $(ls -l "$C/node.env" 2>&1)"; return 1; }
+  grep -qx 'CCQUOTA_TOKEN=ccq_JOIN_SECRET' "$R/node.env" && grep -qx 'CCQUOTA_HUB_URL=http://127.0.0.1:1' "$C/node.pub.env" \
+    || { WHY="the store / node.pub.env do not carry the join: $(grep -h CCQUOTA_HUB "$R/node.env" "$C/node.pub.env" 2>&1 | tr '\n' ' ')"; return 1; }
+  # a rerun with no pass: registered already (the link + node.pub.env), the store kept
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV bash "$BIN/fleet-node-join.sh" --hub http://127.0.0.1:1 --no-deps --no-fleet --ccquota "$sb/ccq" --service none 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] && [ -L "$C/node.env" ] && [ -z "$(home_token "$sb")" ] && grep -q ccq_JOIN_SECRET "$R/node.env" \
+    || { WHY="the rerun (rc $rc) broke the link or the store: $(printf '%s' "$out" | tail -1)"; return 1; }
+  WHAT="隔离登录再 join：没有免密 sudo 先拒（什么都没花）；有则令牌经 credsep setenv 进存储，家目录无明文、node.env 仍是软链；无码重跑认作已登记"
+}
+
+# 2026-10-08 m4: `fleet host off` on a separated login — as the login, "not
+# registered"; as root, setenv's mv swapped the link for a plain file holding
+# the token (#2426). Now credsep edits the store's copy in place.
+drill_cred_sep_compute_unlinks() {
+  CAP=30
+  local sb="$WORK/sepcompute" t0 out rc before after
+  sep_self "$sb" "$(printf 'CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=ccq_NODE_SECRET\nCCQUOTA_FLEET=1\nCCQUOTA_FLEET_COMPUTE=1\n')" || return 1
+  [ -L "$C/node.env" ] || { WHY="the rig: install left no link"; return 1; }
+  before=$(ls -ln "$R/node.env" | awk '{print $1, $3, $4}')
+  t0=$(now)
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV bash "$BIN/fleet-node.sh" compute off 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="compute off failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  [ -L "$C/node.env" ] || { WHY="compute off swapped node.env's link for a plain file: $(ls -l "$C/node.env")"; return 1; }
+  [ -z "$(home_token "$sb")" ] || { WHY="the node token is in the home: $(home_token "$sb")"; return 1; }
+  after=$(ls -ln "$R/node.env" | awk '{print $1, $3, $4}')
+  [ "$before" = "$after" ] || { WHY="the store's node.env changed owner / mode: $before → $after"; return 1; }
+  grep -qx 'CCQUOTA_FLEET_COMPUTE=0' "$R/node.env" && grep -qx 'CCQUOTA_TOKEN=ccq_NODE_SECRET' "$R/node.env" \
+    || { WHY="the store's copy is not compute off with its token kept: $(grep -c . "$R/node.env") lines"; return 1; }
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV bash "$BIN/fleet-node.sh" compute status 2>/dev/null | head -n 1)
+  case "$out" in 只协调*) ;; *) WHY="compute status does not read node.pub.env: $out"; return 1 ;; esac
+  WHAT="隔离登录 compute off：存储那份原地改成 0（属主、权限不变、令牌在），node.env 仍是软链，家目录无令牌；status 读 node.pub.env"
 }
 
 cred_run_drills "$0"
