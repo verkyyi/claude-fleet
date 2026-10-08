@@ -13,7 +13,7 @@
 #      ONE stdout line `warm\t<window>\t<name>\t<worktree>\t<fid>\t<t_window>\t
 #      <t_ready>\t<t_prompt>`; the window is in the fleet, named after the title;
 #      its first turn is the body + a blank line + the one note, byte for byte;
-#      t_prompt − the call's start ≤ 1 s; no issue was filed on the start's clock
+#      t_prompt − the call's start ≤ 1 s on an idle box (≤ 3 s loaded); no issue was filed on the start's clock
 #   B. the backfill (issue #2235, EPIC #2230 C5): fleet-issue-file.sh --repo o/a
 #      --from hub --title … --body …, run as THAT window's pane (TMUX_PANE), once;
 #      then the REAL fleet-bind.sh --fresh: the window is issue-77 — @issue/@repo,
@@ -206,7 +206,21 @@ case "$tw$tr$tp" in *[!0-9]*|'') fail "A three epoch-ms stamps" "$out" ;; esac
 [ "$(o "$win" @reap_policy)" = merged ] || fail "A a new task closes when merged" "$(o "$win" @reap_policy)"
 got=$(turns)
 [ "$got" = "$body"$'\n\n'"$NOTE" ] || fail "A the first turn is the body + the note" "got=[$got]"
-[ $((tp - t0)) -le 1000 ] || fail "A t_prompt came $((tp - t0)) ms after the call (> 1000): t_window +$((tw - t0)), t_ready +$((tr - t0))"
+# The 1 s budget is judged on an idle box only (issue #2476): one sample on a
+# loaded CI runner went 1070 ms with nothing changed, and passed at 795 ms on the
+# next run. A loaded box still holds the CEILING — a warm start that took the
+# seconds of a cold spawn is a regression whatever the load.
+cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
+load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')
+[ -n "$load" ] || load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)
+budget="${FLEET_START_WARM_BUDGET_MS:-1000}"; ceiling="${FLEET_START_WARM_CEILING_MS:-3000}"
+lat="t_prompt came $((tp - t0)) ms after the call: t_window +$((tw - t0)), t_ready +$((tr - t0)) (load $load / $cores cores)"
+if [ "$(awk -v l="$load" -v c="$cores" 'BEGIN{print (l <= c / 2) ? 1 : 0}')" = 1 ]; then
+  [ $((tp - t0)) -le "$budget" ] || fail "A $lat > $budget on an idle box"
+else
+  [ $((tp - t0)) -le "$ceiling" ] || fail "A $lat > the $ceiling ceiling"
+  printf 'note A: %s — the %s ms budget NOT judged on a loaded box\n' "$lat" "$budget"
+fi
 [ "$tw" -le "$tr" ] && [ "$tr" -le "$tp" ] || fail "A t_window ≤ t_ready ≤ t_prompt" "$out"
 [ ! -s "$WORK/log/spawn" ] || fail "A nothing cold-spawned" "$(cat "$WORK/log/spawn")"
 ok "A new task: warm window in $((tp - t0)) ms (t_window→t_prompt $((tp - tw)) ms), first turn = body + note"
