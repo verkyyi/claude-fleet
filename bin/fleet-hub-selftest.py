@@ -142,8 +142,9 @@ if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
   exit 2
 fi
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/spawn.calls"
-repo=''; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; prev=$a; done
-printf '@12\\t%s\\t0\\t/fixture/issue-%s\\tdone\\tclaude\\ta1\\t\\t%s\\n' "$1" "$1" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
+# the agent it was asked for stamped on the window (@cc_agent, issue #2403), as the real one does
+repo=''; agent=claude; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; [ "$prev" = --agent ] && agent=$a; prev=$a; done
+printf '@12\\t%s\\t0\\t/fixture/issue-%s\\tdone\\t%s\\ta1\\t\\t%s\\n' "$1" "$1" "$agent" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
 # --print (issue #2237): the window it opened, last — the controller reads it back alone
 case " $* " in *" --print "*) echo '@12' ;; esac
 ''')
@@ -156,9 +157,9 @@ if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
   exit 2
 fi
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/scratch.calls"
-repo=''; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; prev=$a
+repo=''; agent=claude; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; [ "$prev" = --agent ] && agent=$a; prev=$a
   case "$a" in --prompt-file=*) cat "${a#--prompt-file=}" > "$FLEET_CONF_DIR/scratch.seed" ;; esac; done
-printf '@13\\t\\t1\\t/fixture/project-scratch-3\\tdone\\tclaude\\ta2\\t\\t%s\\n' "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
+printf '@13\\t\\t1\\t/fixture/project-scratch-3\\tdone\\t%s\\ta2\\t\\t%s\\n' "$agent" "$repo" >> "$FLEET_CONF_DIR/workers.tsv"
 printf '@13\\tscratch-3\\t/fixture/project-scratch-3\\n'
 ''')
         # Lifecycle fakes (issue #834): each records its argv, acts on the

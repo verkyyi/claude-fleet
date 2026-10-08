@@ -136,6 +136,12 @@ has "A: scratch payload node" "$(lastreq)" '"node": "auto"'
 has "A: scratch payload title" "$(lastreq)" '"title": "看看日志"'
 has "A: scratch payload repo" "$(lastreq)" '"repo": "verkyyi/claude-fleet"'
 
+# `fleet codex` (issue #2403): a HOME session carries its agent to the hub
+run "$P" - home --agent codex
+eq "A: home exit" 0 "$RC"
+has "A: home payload no_repo" "$(lastreq)" '"no_repo": true'
+has "A: home payload agent" "$(lastreq)" '"agent": "codex"'
+
 run "$P" verkyyi/claude-fleet 7 --node m5 --agent codex
 eq "A: issue exit (after one status poll)" 0 "$RC"
 eq "A: issue line" "REMOTE m5 op7 done $UUID/issue-7	m4 excluded: full" "$OUT"

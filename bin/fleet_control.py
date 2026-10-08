@@ -784,6 +784,20 @@ class Control:
                                 + ("its window was closed" if not stop else "closing its window failed (fid:%s)" % fid))
                 if not matches:
                     raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible")
+                # The session runs the agent asked for, or the start failed (issue
+                # #2403): `fleet codex` that opened a Claude is closed — by its
+                # identity, else its window — never handed over as the answer.
+                asked = params.get("agent", "")
+                got = matches[0].get("agent") or fleet.get("agent") or "claude"
+                if asked and got != asked:
+                    ident = fid or (matches[0].get("identity") if is_identity(matches[0].get("identity") or "") else "")
+                    target = ("fid:" + ident) if ident else (matches[0].get("key") or "")
+                    stop, _, _ = self.adapter("stop", fleet["name"], target, timeout=120) if target else (1, b"", b"")
+                    if stop:
+                        raise Fault("UNKNOWN_OUTCOME", "The session opened runs %s, not %s; closing it failed (%s)"
+                                    % (got, asked, target or "?"))
+                    attempted = False   # closed again: nothing of this start is left open
+                    raise Fault("EXECUTION_FAILED", "The session opened runs %s, not %s; it was closed" % (got, asked))
                 result = {"workers": matches, "observed_at": snapshot["observed_at"],
                           "exit": 0, "window": matches[0].get("window_id", ""),
                           # Where the client switches at once (issue #2236): every
