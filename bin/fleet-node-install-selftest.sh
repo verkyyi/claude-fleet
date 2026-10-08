@@ -110,13 +110,14 @@ esac
 SH
   chmod +x "$SB/fake/"*
   printf '{}\n' > "$SB/passwd.json"
+  PYBIN="$(command -v python3)"; ME="$(id -un)"
   export HUBD FAKE_REL="$SB/rel" \
     FLEET_NODE_STATE="$SB/db" FLEET_NODE_ROOT="$SB/root" FLEET_NODE_LOG="$SB/log" \
     FLEET_NODE_DAEMON_DIR="$SB/LaunchDaemons" FLEET_NODE_USERS="$SB/Users" FLEET_NODE_PASSWD="$SB/passwd.json" \
     FLEET_NODE_LAUNCHCTL="$SB/fake/launchctl" FLEET_NODE_TEST=1 \
     FLEET_NODE_INSTALL_CURL="$SB/fake/curl" FLEET_NODE_INSTALL_OS=darwin FLEET_NODE_INSTALL_ARCH=arm64 \
-    FLEET_NODE_PYTHON="$(command -v python3)" FLEET_NODE_SSH_DIR="$SB/ssh" FLEET_NODE_SSHD="$SB/fake/sshd" \
-    FLEET_CREDSEP_ROLE="$(id -un)" \
+    FLEET_NODE_PYTHON="$PYBIN" FLEET_NODE_SSH_DIR="$SB/ssh" FLEET_NODE_SSHD="$SB/fake/sshd" \
+    FLEET_CREDSEP_ROLE="$ME" \
     FLEET_NODE_UPDATE_PLATFORM=darwin-arm64 FLEET_NODE_UPDATE_SETTLE=0 FLEET_NODE_UPDATE_LIB=/nonexistent
 }
 
