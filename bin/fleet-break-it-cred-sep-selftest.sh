@@ -170,6 +170,8 @@ drill_cred_upstream_tenant_override() {
   grep -q 'ignored FLEET_CRED_ANTHROPIC_URL' "$sb/launch.err" && grep -q 'ignored FLEET_HUB_URL' "$sb/launch.err" \
     || { WHY="the launcher did not say what it ignored: $(tr '\n' ' ' < "$sb/launch.err")"; return 1; }
   WHAT="登录往自己的 fleet.conf 写上游和 FLEET_HUB_URL：它的监听收不到任何请求、Authorization 或节点令牌，请求照走 root 配置的上游；启动器写明 ignored"
+}
+
 # root-log-in-home (issue #2296): launchd / systemd open a root job's stdout file
 # AS ROOT and follow a symlink. credsep turns the agent into a root job (the
 # launcher) and used to keep its log at ~/.ccquota/agent.log — so the login could
