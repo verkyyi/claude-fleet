@@ -48,6 +48,8 @@ FLEET_BASE_SYNC                    knob: per-repo 0 opts a repo out of base-bran
 FLEET_BASE_SYNC_LEASE_TTL          knob: internal pacing/limit, safe in-code default (fleet-base-sync.sh)
 FLEET_BG_SOCK                      handoff: the background peer socket a message is sent over
 FLEET_BOOTSTRAP_GIT_BASE           seam: an injectable command/path for tests (fleet-login-bootstrap.sh)
+FLEET_BOOTSTRAP_CACHE              path: the machine cache a new login installs from; `off` = none (fleet-bootstrap-cache.sh, issue #2297)
+FLEET_BOOTSTRAP_CACHE_SRC          seam: the checkout the cache is filled from (fleet-login-new.sh)
 FLEET_BOOT_ID_CMD                  seam: a fake boot-session id for the diskguard crash harvest (fleet-diskguard.sh, #1294)
 FLEET_C                            path: the dash cache root ($TMPDIR/.claude-dash) — tests point it at a sandbox
 FLEET_CC_PROJECTS_DIR              path: state/log location override (fleet-migrate.sh)
