@@ -76,6 +76,8 @@
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
 #   spare-login-empty                               tokenledger/internal/api fleet_spare.go + fleet_accounts.go
 #                                                   (claimSpare, replenishSpares; go test, when a toolchain is here)
+#   trust-name-borrowed                             tokenledger/internal/api fleet_trust.go (nodeTrust) + fleet_node_desired.go
+#                                                   (go test, when a toolchain is here)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 #   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
@@ -3937,6 +3939,37 @@ drill_new_login_unseparated() {
   SECS=$(since "$t0")
   case "$st" in separated*) ;; *) WHY="status after the open: $st"; return 1 ;; esac
   WHAT="新账号开号：计划里第 7b 步 credsep install --fresh 排在服务和第一个会话之前；订阅池只进 store（账号里只有 store:<label> 标记），status=separated"
+}
+
+# ---- trust-name-borrowed (#2214, EPIC #2329 C2): an untrusted node reports a
+# trusted machine's hostname. Trust rides the endpoint (the join code, the
+# operator), the old name rule holds only for the endpoint that enrolled under
+# that name, so the impostor's lease and relay credential are refused and its
+# hello is audited; a managed join code trusts the identity, once, for an hour.
+drill_trust_name_borrowed() {
+  CAP=120; local t0 out rc tests f
+  tests='TestTrustBorrowedNameGetsNothing TestTrustOldNodeKeepsItsName TestManagedJoinCodeTrustsTheIdentity TestDesiredStateOperatorWrites TestDesiredAbsentAddsNothing'
+  f="$ROOT/tokenledger/internal/api/fleet_node_identity_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 'sameName(et.EnrolledHost, host)' "$ROOT/tokenledger/internal/api/fleet_trust.go" \
+    || { WHY="nodeTrust no longer holds the name rule to the name the endpoint enrolled under"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='冒名节点领凭据 / 中继凭据被拒、名册读 name_borrowed、hello 记审计；真机照领；托管加入码一次、一小时、信任记在身份上；期望状态只有操作者能写（go test 五条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
 }
 
 # ================================================================ run ===========

@@ -180,7 +180,7 @@ func (s *Server) deviceNode(r *http.Request, fp, hostname, osUser string, now ti
 	}
 	if host := sanitizeJoinField(hostname); host != "" {
 		settings, _ := s.trustSettings(now)
-		if trustOf(host, settings) == TrustTrusted {
+		if s.machineTrusted(host, settings) {
 			return nil, "", &trustedNameErr{host}
 		}
 	}

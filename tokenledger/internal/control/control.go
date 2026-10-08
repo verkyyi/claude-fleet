@@ -478,9 +478,23 @@ type Heartbeat struct {
 	Probe        *NodeProbe `json:"probe,omitempty"`
 	// Personal repeats the hello's (claude-fleet#1721), re-read every beat.
 	Personal bool `json:"personal,omitempty"`
+	// Desired is how far a managed machine converged on the desired state
+	// the hub keeps for it (claude-fleet#2214, docs/MANAGED-NODE.md). Absent
+	// from an agent that manages nothing — the roster then shows no 期望 /
+	// 实际 columns, byte for byte as before.
+	Desired *DesiredReport `json:"desired,omitempty"`
 
 	AgentVersion string    `json:"agent_version,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`
+}
+
+// DesiredReport is a managed node's word on its desired state: the version it
+// last converged to, the release it runs, and a one-line summary of what
+// still differs ("" = nothing).
+type DesiredReport struct {
+	Version int    `json:"version"`
+	Release string `json:"release,omitempty"`
+	Diff    string `json:"diff,omitempty"`
 }
 
 // FleetStateUnknown is a fleet whose fleet_status read failed: the agent

@@ -40,6 +40,10 @@ import (
 // JoinCodeTTL is how long a join code stays redeemable.
 const JoinCodeTTL = 10 * time.Minute
 
+// ManagedJoinCodeTTL is a 托管 code's life (claude-fleet#2214): long enough
+// to walk to the new machine and install, short enough to be worth little.
+const ManagedJoinCodeTTL = time.Hour
+
 // DefaultJoinScriptURL is where the one command fetches the join script: the
 // fleet's `stable` tag, the same ref fleet-login-bootstrap.sh installs.
 const DefaultJoinScriptURL = "https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-node-join.sh"
@@ -67,11 +71,21 @@ type JoinCodeView struct {
 	Kind      string    `json:"kind"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Command   string    `json:"command"`
+	// Trust / Role: what the enrolled endpoint will hold (claude-fleet#2214).
+	Trust string `json:"trust,omitempty"`
+	Role  string `json:"role,omitempty"`
 }
 
 // handleFleetJoinCodes: GET lists recent codes (never the codes themselves),
 // POST mints one. The operator's (adminOnly wraps it).
 func (s *Server) handleFleetJoinCodes(w http.ResponseWriter, r *http.Request) {
+	s.fleetJoinCodes(w, r, false)
+}
+
+// fleetJoinCodes serves both join-code routes. managed is the 托管 route,
+// /v1/fleet/nodes/join-codes (claude-fleet#2214): a code there enrolls a
+// trusted, managed machine unless the body says otherwise, and lives an hour.
+func (s *Server) fleetJoinCodes(w http.ResponseWriter, r *http.Request, managed bool) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch r.Method {
 	case http.MethodGet:
@@ -91,6 +105,11 @@ func (s *Server) handleFleetJoinCodes(w http.ResponseWriter, r *http.Request) {
 			// Kind is fixed (default) or ephemeral: a code for a node the
 			// operator runs on a SPOT machine by hand (claude-fleet#1428).
 			Kind string `json:"kind"`
+			// Trusted / Role are handed to the endpoint the code enrolls
+			// (claude-fleet#2214) — trust on its identity, never its name.
+			// Absent: the route's default (the 托管 route: trusted, managed).
+			Trusted *bool  `json:"trusted"`
+			Role    string `json:"role"`
 		}
 		if r.ContentLength != 0 {
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -110,24 +129,47 @@ func (s *Server) handleFleetJoinCodes(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusBadRequest, "kind: fixed or ephemeral")
 			return
 		}
+		trust, role, ttl := "", req.Role, JoinCodeTTL
+		if managed {
+			trust, ttl = TrustTrusted, ManagedJoinCodeTTL
+			if role == "" {
+				role = store.NodeRoleManaged
+			}
+		}
+		if req.Trusted != nil {
+			trust = ""
+			if *req.Trusted {
+				trust = TrustTrusted
+			}
+		}
+		switch role {
+		case "", store.NodeRoleManaged:
+		default:
+			httpError(w, http.StatusBadRequest, "role: managed or absent")
+			return
+		}
 		code, err := MintJoinCode()
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		now := s.joinNow()
-		if err := s.Store.CreateJoinCodeKind(HashToken(code), req.Label, req.Kind, now, JoinCodeTTL); err != nil {
+		if err := s.Store.CreateJoinCodeFor(HashToken(code), req.Label, req.Kind, trust, role, now, ttl); err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		// 加机器 is in the audit (claude-fleet#1990): who minted a code, and
 		// below, which machine redeemed one. Never the code itself.
-		if err := s.Store.FleetAudit(actorOf(r), "node_join_code", "join:"+req.Label, "MINTED "+req.Kind, "", now); err != nil {
+		what := "MINTED " + req.Kind
+		if trust != "" || role != "" {
+			what += strings.TrimRight(" "+trust+" "+role, " ")
+		}
+		if err := s.Store.FleetAudit(actorOf(r), "node_join_code", "join:"+req.Label, what, "", now); err != nil {
 			log.Printf("join code audit: %v", err)
 		}
 		writeJSON(w, http.StatusOK, JoinCodeView{
-			Code: code, Label: req.Label, Kind: req.Kind, ExpiresAt: now.Add(JoinCodeTTL).UTC(),
-			Command: s.joinCommand(r, code),
+			Code: code, Label: req.Label, Kind: req.Kind, ExpiresAt: now.Add(ttl).UTC(),
+			Command: s.joinCommand(r, code), Trust: trust, Role: role,
 		})
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -239,7 +281,11 @@ func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*No
 	if ep, err := s.Store.EndpointByTokenHash(HashToken(tok)); err == nil {
 		label = ep.Label
 	}
-	if err := s.Store.FleetAudit("node:"+host+"/"+osUser, "node_join", "endpoint:"+id, "JOINED "+label, "", now); err != nil {
+	what := "JOINED " + label
+	if et, err := s.Store.EndpointTrustOf(id); err == nil && et.Trust != "" {
+		what += strings.TrimRight(" · "+et.Trust+" (join code) "+et.Role, " ")
+	}
+	if err := s.Store.FleetAudit("node:"+host+"/"+osUser, "node_join", "endpoint:"+id, what, "", now); err != nil {
 		log.Printf("join audit: %v", err)
 	}
 	return s.joinResponse(r, id, label, tok, osUser), nil
@@ -359,5 +405,10 @@ func (s *Server) handleNodeSelf(w http.ResponseWriter, r *http.Request) {
 	// Never connected: the enrollment's machine name is all there is, and
 	// trust (claude-fleet#1968) is read off it like the roster does.
 	settings, _ := s.trustSettings(time.Now())
-	writeJSON(w, http.StatusOK, map[string]string{"endpoint_id": ep.ID, "status": "never", "trust": trustOf(ep.Hostname, settings)})
+	trust, src := s.endpointTrust(ep.ID, ep.Hostname, settings)
+	out := map[string]string{"endpoint_id": ep.ID, "status": "never", "trust": trust}
+	if src != "" {
+		out["trust_source"] = src
+	}
+	writeJSON(w, http.StatusOK, out)
 }
