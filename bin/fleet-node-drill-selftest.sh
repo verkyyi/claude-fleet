@@ -92,6 +92,7 @@ if a[:1] == ["status"]:
 elif a[:1] == ["doctor"]:
     for p in ("runtime", "ccquota", "claude", "codex", "tmux", "cache", "daemon"):
         print("  PASS  %-8s ok" % p)
+    print("  INFO  runtime aaaa · claude 2.1 — 各部件 = 发布版声明")
 elif a[:1] == ["versions"]:
     print("version  all = release")
 EOF
@@ -128,7 +129,8 @@ setup
 printf '%s\n' "$CODE" >"$SB/join"
 OUT="$(drill run --yes --to "$TO" --fail "$BADSHA" --join-file "$SB/join" 2>&1)"; rc=$?
 [ "$rc" = 0 ] && ok "exit 0" || bad "exit $rc" "$OUT"
-for s in 基线 加入码 安装 迁:alice 迁:bob 升级 回退 复查 断GitHub 回话; do
+printf '%s\n' "$OUT" | grep -q '| 回话 | 人 | 0s | SKIP |' && ok "--yes leaves 回话 to a person (SKIP)" || bad "回话 not SKIP under --yes" "$OUT"
+for s in 基线 加入码 安装 迁:alice 迁:bob 升级 回退 复查 断GitHub; do
   printf '%s\n' "$OUT" | grep -q "| $s | .* | PASS |" || bad "step $s PASS" "$OUT"
 done
 ok "every step in the table"
