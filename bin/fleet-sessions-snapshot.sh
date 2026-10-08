@@ -128,8 +128,8 @@ live_has() {
 restore() {
   [ -s "$SNAP" ] || { printf 'no snapshot (%s) — run save first\n' "$SNAP" >&2; return 3; }
   mkdir -p "$RDIR"
-  local lk="$RDIR/.auto.lock" holder i
-  for i in $(seq 1 120); do
+  local lk="$RDIR/.auto.lock" holder _
+  for _ in $(seq 1 120); do
     mkdir "$lk" 2>/dev/null && break
     holder=$(cat "$lk/pid" 2>/dev/null)
     if [ -z "$holder" ] || ! kill -0 "$holder" 2>/dev/null; then rm -rf "$lk"; continue; fi
@@ -140,10 +140,10 @@ restore() {
   # shellcheck disable=SC2064
   trap "rm -rf '$lk'" EXIT
 
-  local skip="$SDIR/.skip.$$" sess key cwd sid reap fid issue state repo st mf tmp
+  local skip="$SDIR/.skip.$$" sess key cwd fid issue repo st mf tmp
   : > "$skip"
   # 1. what must NOT come back: closed issue · retired · worktree gone · fleet down
-  while IFS=$'\t' read -r sess key cwd sid reap fid issue state repo; do
+  while IFS=$'\t' read -r sess key cwd _ _ fid issue _ repo; do
     case "$sess" in ''|'#'*) continue ;; esac
     if [ -f "$FLEET_CONF_DIR/fleets/$sess/restore.down" ]; then
       printf '%s\t%s\tdown\n' "$sess" "$key" >> "$skip"; continue
@@ -175,7 +175,7 @@ restore() {
 
   # 3. one line per pinned session: did it come back?
   local miss=0 why sock
-  while IFS=$'\t' read -r sess key cwd sid reap fid issue state repo; do
+  while IFS=$'\t' read -r sess key cwd _ _ fid _ _ repo; do
     case "$sess" in ''|'#'*) continue ;; esac
     why=$(awk -F'\t' -v s="$sess" -v k="$key" '$1 == s && $2 == k { print $3; exit }' "$skip")
     if [ -n "$why" ]; then printf '%s\t%s\t%s\t%s\n' "$why" "$sess" "$key" "$cwd"; continue; fi

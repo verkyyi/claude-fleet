@@ -71,12 +71,13 @@ win() {  # win <name> <issue> <state> <sid> <fid>
   nt set-window-option -t "oc:$1" @cc_session_id "$4"
   nt set-window-option -t "oc:$1" @fleet_id "$5"
   # the resolver resumes a hook-recorded id only when its transcript is on disk
-  local pd="$WORK/home/.claude/projects/$(printf '%s' "$WORK/wt-$1" | sed 's/[^A-Za-z0-9]/-/g')"
+  local pd
+  pd="$WORK/home/.claude/projects/$(printf '%s' "$WORK/wt-$1" | sed 's/[^A-Za-z0-9]/-/g')"
   mkdir -p "$pd"; printf '{"type":"user","message":{"content":"work"}}\n' > "$pd/$4.jsonl"
 }
 win issue-1 1 working sid-1 f0000000-0000-4000-8000-000000000001
 win issue-2 2 idle    sid-2 f0000000-0000-4000-8000-000000000002
-win issue-4 4 done    sid-4 f0000000-0000-4000-8000-000000000004
+win issue-4 4 "done"  sid-4 f0000000-0000-4000-8000-000000000004
 win issue-5 5 working sid-5 f0000000-0000-4000-8000-000000000005
 win scratch-3 - idle  sid-3 f0000000-0000-4000-8000-000000000003
 nt set-window-option -t oc:issue-1 @reap_policy merged:48h
