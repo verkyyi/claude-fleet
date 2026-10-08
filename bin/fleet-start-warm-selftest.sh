@@ -42,6 +42,12 @@
 #      result) answers 1 so the backfill tries again; another point name is refused
 #   K. the controller hands the `new` start its operation id (FLEET_CONTROL_OP), and
 #      the adapter passes it on to the backfill
+#   L. `fleet codex` (issue #2403): `scratch codex -` with only a Claude HOME entry
+#      warm — opened cold, @cc_agent=codex; the Claude entry stays in the pool
+#   M. a warm entry whose @cc_agent is not the asked agent is closed, never handed
+#      out; the asked agent opens cold
+#   N. the controller: a session of another agent than asked → `stop fid:…`, the
+#      start failed (EXECUTION_FAILED); a close that fails is unknown; claude as before
 #
 # tmux / python3 / git absent → SKIP (exit 0).
 set -uo pipefail
@@ -430,5 +436,81 @@ PY
 grep -qF 'fleet-start-backfill.sh" "$sess" "$win" "$srepo" "$tf" "$bf" ${op:+"$op"}' "$BIN/fleet-control-read.sh" \
   || fail "K the adapter passes the op id to the backfill"
 ok "K the start's operation id reaches the backfill"
+
+# ---- L: `fleet codex` with only Claude in the HOME slot: cold codex (issue #2403)
+warm_up || fail "L the pool did not refill" "$(bash "$POOL" status "$SESS" 2>&1)"
+hwarm=$(nt list-windows -a -F '#{window_id} #{@norepo} #{@pool}' | awk '$2 == 1 && $3 == 1 { print $1; exit }')
+[ -n "$hwarm" ] || fail "L a Claude HOME entry is ready" "$(nt list-windows -a -F '#{window_id} #{session_name} #{@norepo} #{@pool} #{@pool_agent}')"
+out=$(bash "$CR" start "$SESS" scratch codex - '' '' '' </dev/null 2>"$WORK/errL"); rc=$?
+[ "$rc" = 0 ] || fail "L the codex HOME start exited $rc" "$out $(cat "$WORK/errL")"
+IFS=$'\t' read -r win _name _wt fid _ <<<"$out"
+case "$win" in @[0-9]*) ;; *) fail "L the receipt names a window" "$out" ;; esac
+[ "$win" != "$hwarm" ] || fail "L the Claude entry was handed out for codex"
+[ "$(o "$win" @cc_agent)" = codex ] || fail "L the session opened runs codex" "[$(o "$win" @cc_agent)]"
+[ "$(o "$win" @norepo)" = 1 ] && [ "$(o "$win" session_name)" = "$SESS" ] || fail "L a HOME session in the fleet"
+[ "$(o "$hwarm" @pool)" = 1 ] && [ "$(o "$hwarm" @pool_agent)" = claude ] || fail "L the Claude entry is still in the pool"
+ok "L codex asked, only Claude warm: codex opened cold (@cc_agent=codex), the Claude entry left in the pool"
+
+# ---- M: a warm entry that runs another agent than the one asked is never handed out
+out=$(bash "$CR" start "$SESS" scratch claude - '' '' '' </dev/null 2>/dev/null)
+[ "$(printf '%s' "$out" | cut -f1)" = "$hwarm" ] || fail "M setup: claude takes the Claude entry" "$out"
+warm_up || fail "M the pool did not refill" "$(bash "$POOL" status "$SESS" 2>&1)"
+hwarm=$(nt list-windows -a -F '#{window_id} #{@norepo} #{@pool}' | awk '$2 == 1 && $3 == 1 { print $1; exit }')
+nt set-window-option -t "$hwarm" @cc_agent codex      # the entry's launcher says codex, its slot says claude
+out=$(bash "$CR" start "$SESS" scratch claude - '' '' '' </dev/null 2>"$WORK/errM"); rc=$?
+IFS=$'\t' read -r win _ <<<"$out"
+[ "$rc" = 0 ] && [ "$win" != "$hwarm" ] || fail "M the mismatched entry was handed out" "rc=$rc $out"
+nt list-windows -a -F '#{window_id}' | grep -qxF "$hwarm" && fail "M the mismatched entry is closed"
+grep -q 'runs codex, not claude' "$WORK/errM" || fail "M it says why" "$(cat "$WORK/errM")"
+[ "$(o "$win" @cc_agent)" = claude ] || fail "M the cold session is a claude" "[$(o "$win" @cc_agent)]"
+ok "M a warm entry running codex is closed for a claude ask; claude opened cold"
+
+# ---- N: the controller: a session of another agent than asked fails, closed --
+out=$(python3 - "$BIN" <<'PY'
+import json, os, sys, tempfile
+sys.path.insert(0, sys.argv[1])
+import fleet_control as fc
+FID = "c63813a3-3f3f-4cea-bec6-c12705d98fc3"
+def run(asked, got, stop_rc=0):
+    tmp = tempfile.mkdtemp()
+    c = fc.Control.__new__(fc.Control)
+    class Store:
+        root = __import__("pathlib").Path(tmp)
+        def connect(self):
+            import sqlite3
+            db = sqlite3.connect(os.path.join(tmp, "s.db")); db.row_factory = sqlite3.Row
+            return db
+    c.store = Store()
+    with c.store.connect() as db:
+        db.execute("CREATE TABLE operations (id TEXT, action TEXT, request TEXT, status TEXT, result TEXT, created REAL, updated REAL)")
+        req = {"fleet_id": "f", "action": "worker_start", "params": {"kind": "scratch", "no_repo": True, "agent": asked}}
+        db.execute("INSERT INTO operations VALUES ('0f0e0d0c-0b0a-4908-8706-050403020100','worker_start',?,'accepted','',?,?)", (json.dumps(req), fc.now() - 0.2, fc.now()))
+    c.fleet = lambda fid: {"name": "s", "fleet_id": "f", "agent": "claude"}
+    calls = []
+    def adapter(*a, **k):
+        calls.append(a)
+        if a[0] == "start":
+            return 0, ("@7\tnorepo\t/home\t%s\n" % FID).encode(), b""
+        return stop_rc, b"", b""
+    c.adapter = adapter
+    c.workers = lambda fl, w="": {"observed_at": 1, "workers": [{"window_id": "@7", "scratch": False, "issue": None,
+                                                               "key": None, "repo": None, "identity": FID, "agent": got}]}
+    c.watch_ready = lambda *a: None
+    c.execute("0f0e0d0c-0b0a-4908-8706-050403020100")
+    with c.store.connect() as db:
+        row = db.execute("SELECT status, result FROM operations").fetchone()
+    r = json.loads(row["result"])
+    return row["status"], (r.get("error") or {}).get("code", r.get("window_id")), [a[2] for a in calls if a[0] == "stop"]
+print(*run("codex", "codex"))
+print(*run("codex", "claude"))
+print(*run("codex", "claude", stop_rc=1))
+print(*run("claude", "claude"))
+PY
+)
+[ "$(printf '%s\n' "$out" | sed -n 1p)" = 'succeeded @7 []' ] || fail "N codex asked, codex opened: succeeded" "$out"
+[ "$(printf '%s\n' "$out" | sed -n 2p)" = "failed EXECUTION_FAILED ['fid:c63813a3-3f3f-4cea-bec6-c12705d98fc3']" ] || fail "N codex asked, claude opened: failed + closed" "$out"
+[ "$(printf '%s\n' "$out" | sed -n 3p)" = "unknown UNKNOWN_OUTCOME ['fid:c63813a3-3f3f-4cea-bec6-c12705d98fc3']" ] || fail "N a close that fails is unknown" "$out"
+[ "$(printf '%s\n' "$out" | sed -n 4p)" = 'succeeded @7 []' ] || fail "N claude unchanged" "$out"
+ok "N the controller: another agent than asked is closed and the start failed; claude unchanged"
 
 printf 'fleet-start-warm: %d passed\n' "$pass"

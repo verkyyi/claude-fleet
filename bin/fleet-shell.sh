@@ -590,9 +590,14 @@ print((q.load().get("mru") or [""])[0])' "${SHADOW:-$BIN}/fleet-quickopen.py" 2>
 # (`home-session claude`), as when there was none. A newcomer still owed the
 # first one is first_home's. FLEET_HOME_OPEN_WAIT bounds the wait for the read;
 # FLEET_HOME_OPEN_CMD / FLEET_SOLO_NEW_CMD are the selftests' seams.
+#
+# A client `fleet claude|codex` started for its own ask (FLEET_SHELL_NO_FIRST)
+# resumes nothing (issue #2403): its session is the one it asked for — the
+# `else` below would open a SECOND one, a Claude, beside a `fleet codex`.
 solo_resume() {
   local key="$1" since="$2"
   [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] || return 0
+  [ "${FLEET_SHELL_NO_FIRST:-0}" != 1 ] || return 0
   [ -e "$CONF_DIR/home-session.first" ] || return 0
   (
     cd "$HOME" 2>/dev/null || :; trap '' HUP

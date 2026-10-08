@@ -19,7 +19,9 @@
 #      multi` → the screen is byte for byte the screen of `auto`.
 #   C  fleet-shell.sh solo_resume (lifted out of the script, tmux stubbed): a
 #      fresh start opens the row it left when the list's first read has it, a
-#      new HOME session when it does not, and nothing before the read.
+#      new HOME session when it does not, and nothing before the read — nor
+#      ever for a client `fleet claude|codex` started (FLEET_SHELL_NO_FIRST,
+#      issue #2403: a `fleet codex` got a Claude beside it).
 #   D  `fleet claude`'s OWN view (issue #2349, fleet-shell.sh `solo <m> <wid>`),
 #      for real on private sockets, the client up in its saved `multi` layout:
 #      D1 the terminal is that one session and one bottom line 「⌃D 放到后台 ·
@@ -320,7 +322,7 @@ grep -q '^solo_resume() {' "$W/lib.sh" || { echo 'FAIL C: no solo_resume in flee
 fails=0
 # run_case <name> <key> <rows file content | -> <want>
 run_case() {
-  local name="$1" key="$2" rows="$3" want="$4" got
+  local name="$1" key="$2" rows="$3" want="$4" nofirst="${5:-0}" got
   rm -rf "$W/c" && mkdir -p "$W/c/tmp/.claude-dash/global" "$W/c/conf" "$W/c/cache"
   : > "$W/c/conf/home-session.first"
   [ "$rows" = - ] || printf '%s\n' "$rows" > "$W/c/tmp/.claude-dash/global/remote_fc"
@@ -329,6 +331,8 @@ run_case() {
     FLEET_CLIENT_LAYOUT=solo CONF_DIR="$W/c/conf" CACHE="$W/c/cache" SESS=fc TMPDIR="$W/c/tmp" HOME="$W/c"
     # shellcheck disable=SC2034
     FLEET_HOME_OPEN_WAIT=1 FLEET_HOME_OPEN_CMD="echo open" FLEET_SOLO_NEW_CMD="echo new"
+    # shellcheck disable=SC2034
+    FLEET_SHELL_NO_FIRST=$nofirst
     . "$W/lib.sh"
     solo_resume "$key" "$(( $(date +%s) - 5 ))"
     wait
@@ -340,6 +344,10 @@ run_case 'the row it left is on the list' wid:fleet/abc $'wid:fleet/abc\037x' 'o
 run_case 'the row it left is gone' wid:fleet/abc $'wid:fleet/zzz\037x' 'new'
 run_case 'no row left at all' '' $'wid:fleet/zzz\037x' 'new'
 run_case 'no read in time' wid:fleet/abc - ''
+# `fleet codex` started the client for its own ask (issue #2403): no second
+# session beside it — neither the row it left nor a new (Claude) HOME one
+run_case 'fleet claude|codex started it' '' $'wid:fleet/zzz\037x' '' 1
+run_case 'fleet claude|codex started it, a row left' wid:fleet/abc $'wid:fleet/abc\037x' '' 1
 [ "$fails" = 0 ] || exit 1
 
 # --- D ---------------------------------------------------------------------------

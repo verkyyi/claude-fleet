@@ -782,6 +782,9 @@ _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
 _sw+=(\; set-window-option -t "$win" @worktree "$wt")
 [ -n "$ORIGIN" ] && _sw+=(\; set-window-option -t "$win" @origin "$ORIGIN")
 [ -n "$ORIGIN_WID" ] && _sw+=(\; set-window-option -t "$win" @origin_wid "$ORIGIN_WID")
+# - @cc_agent: the agent asked for (issue #2403), before the node's start reads the
+#   window back to check it — the launcher's own stamp comes later, from the pane
+[ -n "$AGENT" ] && _sw+=(\; set-window-option -t "$win" @cc_agent "$AGENT")
 # Last, and -o: an identity something minted first is kept (-o refuses to
 # overwrite; a refusal stops only the rest of the list, which is nothing).
 [ -n "$_fid" ] && _sw+=(\; set-window-option -o -t "$win" @fleet_id "$_fid")

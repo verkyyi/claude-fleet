@@ -504,6 +504,17 @@ if [ "$WARM_ONLY" = 1 ]; then
     wt=$(TM display-message -p -t "$win" '#{@worktree}' 2>/dev/null)
     slug="scratch-${wt##*-scratch-}"
   fi
+  # The agent it runs is the one asked for, or it is not handed out (issue #2403):
+  # never another agent standing in — closed, and exit 3, so the caller opens the
+  # asked-for agent cold. @cc_agent empty = a Claude (only a Codex stamps it).
+  _wa=$(TM display-message -p -t "$win" '#{@cc_agent}' 2>/dev/null)
+  if [ "${_wa:-claude}" != "${AGENT:-${FLEET_AGENT:-claude}}" ]; then
+    fleet_win_retire "$win" "$SOCK"
+    TM kill-window -t "$win" 2>/dev/null
+    [ "$NOREPO" = 1 ] || { [ -n "$wt" ] && fleet_scratch_free "$MAIN" "$slug" "$wt"; }
+    printf 'dash-raw-session: the warm window runs %s, not %s — closed it\n' "${_wa:-claude}" "${AGENT:-${FLEET_AGENT:-claude}}" >&2
+    exit 3
+  fi
 else
 [ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" ${_pool_repo:+--repo "$_pool_repo"} 2>/dev/null | head -1)
 if [ -n "$claimed" ]; then
@@ -584,6 +595,10 @@ else
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
 [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
+  # the agent asked for, on the window before anyone reads it back (issue #2403):
+  # the node's start checks the session it opened runs it — the launcher's own
+  # stamp (fleet-codex.sh) comes later, from inside the pane
+  [ -n "$AGENT" ] && TM set-window-option -t "$win" @cc_agent "$AGENT" 2>/dev/null
   if [ "$NOREPO" = 1 ]; then
     TM set-window-option -t "$win" @norepo 1 2>/dev/null    # deliberately no repo, no worktree
     [ -n "$nsid" ] && TM set-window-option -t "$win" @norepo_sid "$nsid" 2>/dev/null
