@@ -89,7 +89,7 @@ export SEAM_LOG="$rec" FLEET_SWITCH_LAYOUT_CMD="$seam" FLEET_SWITCH_NEW_CMD="$se
 Q switch-run layout:multi sw || fail "C: switch-run layout:multi exited non-zero"
 grep -qx 'sw|multi sw' "$rec" || fail "C: the running client was not switched to multi" "$(cat "$rec")"; ok
 grep -q '^export FLEET_CLIENT_LAYOUT=multi$' "$FLEET_CONF_DIR/fleet.conf" || fail "C: multi was not remembered" "$(cat "$FLEET_CONF_DIR/fleet.conf")"; ok
-( set +u; FLEET_SHELL=1; . "$FLEET_CONF_DIR/fleet.conf"; [ "$FLEET_CLIENT_LAYOUT" = multi ] ) \
+( set +u; export FLEET_SHELL=1; . "$FLEET_CONF_DIR/fleet.conf"; [ "$FLEET_CLIENT_LAYOUT" = multi ] ) \
   || fail "C: fleet.conf's [client] does not give the shell multi" "$(cat "$FLEET_CONF_DIR/fleet.conf")"; ok
 Q switch-run layout:solo sw || fail "C: switch-run layout:solo exited non-zero"
 grep -qx 'sw|solo sw' "$rec" || fail "C: 收起侧栏 did not switch the client to solo" "$(cat "$rec")"; ok
