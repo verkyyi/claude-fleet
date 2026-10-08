@@ -221,8 +221,14 @@ def render(args):
     cols = int(kv["cw"]) if kv.get("cw", "").isdigit() else 80
     rec = read_record()
     if rec is None:
-        # no list has written one yet (a stage started before it): the window's name
-        print("#[fg=%s,bold] %s#[default]" % (HL, tmux_text(kv.get("wn", ""))))
+        # no session row in view — a machine's bare shell (the client opened
+        # with none picked), the writing area, or a stage started before the
+        # list wrote a record: the window's name. ‹ › and a tap on the name
+        # still go round the sessions, so the one-pane layout (a phone in
+        # Termius) never leaves a bare shell with no way to them.
+        print("#[fg=%s]#[range=user|prev] ‹ #[norange]#[range=user|next]› #[norange] "
+              "#[fg=%s,bold]#[range=user|title]%s#[norange]#[nobold]#[fg=%s]  %s#[default]"
+              % (DIM, HL, tmux_text(kv.get("wn", "")), DIM, tmux_text(say("topbar_pick"))))
         return 0
     rec["also"] = also_on(rec)
     parts, bg = layout(rec, cols, kv.get("down", ""), kv.get("rr", ""))
