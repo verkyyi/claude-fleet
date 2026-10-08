@@ -118,6 +118,9 @@ preview ctrl-p alt-p' ;;
 # `fold` (issue #2167): ⌘. opens or shuts the sub-tasks of the session in view
 # (on a sub-task: shuts its parent) — the list's caret, from wherever the
 # keyboard is; prefix . elsewhere (tmux's move-window prompt, no use here).
+# `switcher` (issue #2266, EPIC #2259 C7): ⌘K, the one-session view's way to any
+# other session, a new one, and the list beside it (fleet-quickopen.py --switch)
+# — prefix s elsewhere, tmux's own choose-tree key: the same job.
 switch) TABLE='next ⌘↓ 0xf701-0x300000 920 n
 prev ⌘↑ 0xf700-0x300000 921 p
 back ⌘[ 0x5b-0x100000 922 h
@@ -127,7 +130,8 @@ zoom ⌘↩ 0xd-0x100000 925 F9
 help ⌘/ 0x2f-0x100000 926 ?
 quickopen ⌘P 0x70-0x100000 927 /
 new ⌘N 0x6e-0x100000 928 c
-fold ⌘. 0x2e-0x100000 929 .'
+fold ⌘. 0x2e-0x100000 929 .
+switcher ⌘K 0x6b-0x100000 930 s'
   cmd="${1:-list}"
   case "$cmd" in
     list)    printf '%s\n' "$TABLE" ;;

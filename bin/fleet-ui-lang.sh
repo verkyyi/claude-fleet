@@ -204,6 +204,12 @@ fleet_ui_t() {
     # ⌘P's commands (issue #1952): `>` lists the row menu's items
     zh:quickopen_cmd_hint)      printf '输入 > 是命令' ;;
     en:quickopen_cmd_hint)      printf 'type > for commands' ;;
+    zh:switch_new)              printf '+ 新会话' ;;
+    en:switch_new)              printf '+ New session' ;;
+    zh:switch_multi)            printf '打开多会话视图' ;;
+    en:switch_multi)            printf 'Open the multi-session view' ;;
+    zh:switch_solo)             printf '收起侧栏' ;;
+    en:switch_solo)             printf 'Hide the list' ;;
     zh:quickopen_cmd_for_fmt)   printf '对 %s' "${1:-}" ;;
     en:quickopen_cmd_for_fmt)   printf 'on %s' "${1:-}" ;;
     zh:quickopen_cmd_none)      printf '这里没有能做的事' ;;
@@ -720,6 +726,8 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:keys_switch_new)        printf %s 'new task: the writing area on the right — several lines, attachments; ↵ files the issue and opens its session; again in it: the orchestrating session, and back' ;;
     zh:keys_switch_fold)       printf %s '展开/收起当前会话的子任务；在子任务上按：收起它的父任务' ;;
     en:keys_switch_fold)       printf %s 'open / shut the sub-tasks of the session in view; on a sub-task: shut its parent' ;;
+    zh:keys_switch_switcher)   printf %s '切换会话：全部会话按最近使用排，可搜索；最下面「+ 新会话」和「打开多会话视图」（多会话视图里是「收起侧栏」）' ;;
+    en:keys_switch_switcher)   printf %s 'switch session: every session, most recent first, searchable; at the bottom + New session and Open the multi-session view (Hide the list in it)' ;;
     zh:keys_single_f1)         printf %s '窄屏（手机）：全屏切换器 —— 在等你的 · 最近 1–9 · 全部，点一行切过去；顶栏点名字同此' ;;
     en:keys_single_f1)         printf %s 'narrow (a phone): the full-screen switcher — waiting on you · recent 1–9 · all, tap a row; tapping the name on the top line too' ;;
     zh:keys_single_f23)        printf %s '窄屏：上一个 / 下一个会话（顶栏 ‹ › 同此）' ;;
@@ -740,6 +748,8 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:keys_page_quickopen)    printf %s 'go to any session; type > for commands' ;;
     zh:keys_page_fold)         printf %s '展开/收起子任务（子任务上：收起父任务）' ;;
     en:keys_page_fold)         printf %s 'open / shut sub-tasks (on one: its parent)' ;;
+    zh:keys_page_switcher)     printf %s '切换会话 · 新会话 · 打开/收起多会话视图' ;;
+    en:keys_page_switcher)     printf %s 'switch session · new · multi-session view on/off' ;;
     zh:keys_page_prevnext)     printf %s '上一个 / 下一个会话' ;;
     en:keys_page_prevnext)     printf %s 'previous / next session' ;;
     zh:keys_page_backfwd)      printf %s '后退 / 前进' ;;

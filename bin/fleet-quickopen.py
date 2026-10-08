@@ -6,6 +6,15 @@ session (issue #1903, EPIC #1906 C10) — and the switch history ⌘[ / ⌘] wal
                                               the popup (conf/tmux-shell.conf's
                                               ⌘P / prefix / open it through the
                                               one popup door)
+    fleet-quickopen.py --switch [--session S] ⌘K (issue #2266, EPIC #2259 C7): the
+                                              same popup, every session most recent
+                                              first with how long ago it was in view,
+                                              then 「+ 新会话」, a rule and
+                                              「打开多会话视图」 (in the one-session
+                                              view) / 「收起侧栏」 (anywhere else)
+    fleet-quickopen.py switch [<query>]       ⌘K's lines, plain (the selftest's view)
+    fleet-quickopen.py switch-run <key|new|layout:multi|layout:solo> [<session>]
+                                              ↵ on that line
     fleet-quickopen.py rank [--all] [<query>] the ranked rows, one per line
                                               (`key<TAB>name`) — the selftest's view;
                                               --all reads every session as the popup does
@@ -41,8 +50,9 @@ Two files, ONE writer each, under the client's state dir
                          too (the list's producer, run with FLEET_ROWS_UNFOLD=1)
     switch-history.json  the switches, written by fleet-sidebar.py on every
                          change of the row in view: `stack` + `at` (⌘[ ⌘] walk
-                         it like a browser's back/forward) and `mru` (most recent
-                         first — the order an empty ⌘P shows)
+                         it like a browser's back/forward), `mru` (most recent
+                         first — the order an empty ⌘P shows) and `seen` (when
+                         each was last in view — ⌘K's age column)
 
 The popup never switches anything itself: ↵ appends `jump=<key>` to the list
 pane's @sidebar_do and wakes it with F12, so a switch goes through the list's own
@@ -73,6 +83,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unicodedata
 from pathlib import Path
 
@@ -124,7 +135,9 @@ def load():
     at = h.get("at", len(stack) - 1)
     at = at if isinstance(at, int) and 0 <= at < len(stack) else len(stack) - 1
     mru = [k for k in h.get("mru", []) if isinstance(k, str) and k]
-    return {"stack": stack, "at": at, "mru": mru}
+    seen = h.get("seen") if isinstance(h.get("seen"), dict) else {}
+    seen = {k: v for k, v in seen.items() if k in mru and isinstance(v, int)}
+    return {"stack": stack, "at": at, "mru": mru, "seen": seen}
 
 
 def save(h):
@@ -146,6 +159,10 @@ def visit(h, key):
         h["at"] = len(stack) - 1
     mru = [k for k in h["mru"] if k != key]
     h["mru"] = ([key] + mru)[:MRU_MAX]
+    # when each was last in view (issue #2266): the switcher's 「3 分钟前」
+    seen = h.get("seen") or {}
+    seen[key] = int(time.time())
+    h["seen"] = {k: seen[k] for k in h["mru"] if k in seen}
     return h
 
 
@@ -327,6 +344,93 @@ def do(verb):
         tmux("send-keys", "-t", pane, "F10")
         return True
     return hand(pane, verb)
+
+
+# --- ⌘K: the switcher (issue #2266, EPIC #2259 C7) ----------------------------------
+
+# The layouts whose `home` is the one session alone: there the switcher's last
+# line opens the list beside it (共同约定 1: `multi`, remembered); in any other
+# it folds the list away again (`solo`).
+ONE_PANE = ("solo", "single")
+
+
+def layout_now():
+    """The client's layout: the server's `@fleet_layout` (fleet-shell.sh's
+    layout_apply), else FLEET_CLIENT_LAYOUT, else auto."""
+    return (tmux("show-options", "-gqv", "@fleet_layout") or
+            os.environ.get("FLEET_CLIENT_LAYOUT", "") or "auto")
+
+
+def switch_tail(layout, say=None):
+    """The switcher's lines under the sessions: (action, label) — a new HOME
+    session, a rule (`sep`), and the layout flip."""
+    say = say or {}
+    if layout in ONE_PANE:
+        flip = ("layout:multi", say.get("switch_multi") or "打开多会话视图")
+    else:
+        flip = ("layout:solo", say.get("switch_solo") or "收起侧栏")
+    return [("new", say.get("switch_new") or "+ 新会话"), ("sep", ""), flip]
+
+
+def ago(then, now=None):
+    """`then` (epoch) as a short age — 刚刚 / 5m / 3h / 2d; '' for none."""
+    if not then:
+        return ""
+    s = max(0, int((now or time.time()) - then))
+    if s < 60:
+        return "<1m"
+    for unit, n in (("d", 86400), ("h", 3600), ("m", 60)):
+        if s >= n:
+            return "%d%s" % (s // n, unit)
+    return ""
+
+
+def detach(argv, env=None):
+    subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True, cwd=os.path.expanduser("~"))
+
+
+def switch_act(action, session=""):
+    """Run a switcher line's action. `new`: a HOME Claude session through the
+    one primitive (fleet-shell.sh home-session, issue #2264), which puts the
+    stage on it. `layout:<v>`: remembered in fleet.conf's [client]
+    (fleet-conf.sh set-client) and switched live (fleet-shell.sh layout).
+    FLEET_SWITCH_NEW_CMD / FLEET_SWITCH_LAYOUT_CMD are the selftest's seams."""
+    env = dict(os.environ)
+    if session:
+        env["FLEET_SHELL_SESSION"] = session
+    if action == "new":
+        seam = os.environ.get("FLEET_SWITCH_NEW_CMD")
+        detach(seam.split() if seam else ["bash", str(BIN / "fleet-shell.sh"), "home-session", "claude"], env)
+        return True
+    if action.startswith("layout:"):
+        lay = action.split(":", 1)[1]
+        if lay not in ("multi", "solo"):
+            return False
+        try:
+            ok = subprocess.run(["bash", str(BIN / "fleet-conf.sh"), "set-client", "FLEET_CLIENT_LAYOUT",
+                                 "export FLEET_CLIENT_LAYOUT=" + lay], stdin=subprocess.DEVNULL,
+                                capture_output=True, timeout=10).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            ok = False
+        seam = os.environ.get("FLEET_SWITCH_LAYOUT_CMD")
+        argv = seam.split() if seam else ["bash", str(BIN / "fleet-shell.sh"), "layout"]
+        argv += [lay] + ([session] if session else [])
+        try:
+            live = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                                  timeout=10).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            live = False
+        return ok and live
+    return False
+
+
+def switch_lines(rows, query, hist, current, layout, say=None):
+    """What ⌘K shows, top to bottom: [(kind, payload)] — `row` (row, marks) for
+    each session ranked as ⌘P ranks them (most recent first), then the tail:
+    `act` (action, label) and `sep`."""
+    out = [("row", rm) for rm in rank(rows, query, hist["mru"], current)]
+    return out + [("sep" if a == "sep" else "act", (a, label)) for a, label in switch_tail(layout, say)]
 
 
 # --- the commands (issue #1952) ---------------------------------------------------
@@ -518,7 +622,7 @@ def draw_cmds(screen, query, title, items, at, width, height, say):
             pass
 
 
-def popup(screen, pane, session="", target=""):
+def popup(screen, pane, session="", target="", switch=False):
     curses.use_default_colors()
     try:
         curses.curs_set(1)
@@ -534,9 +638,10 @@ def popup(screen, pane, session="", target=""):
     # the painted rows at once; every session (folded ones too) a moment later —
     # and the screen's words with them
     fetched, say = [], {}
+    layout = layout_now() if switch else ""
     def fetch():
         say.update(words("quickopen_cmd_hint", "quickopen_cmd_for_fmt", "quickopen_cmd_none",
-                         "quickopen_cmd_loading"))
+                         "quickopen_cmd_loading", "switch_new", "switch_multi", "switch_solo"))
         fetched.append(full_rows(session))
     reader = threading.Thread(target=fetch, daemon=True)
     reader.start()
@@ -562,12 +667,36 @@ def popup(screen, pane, session="", target=""):
             at = max(0, min(at, len(shown or []) - 1))
             draw_cmds(screen, query, title, shown, at, width, height, say)
         else:
-            shown = rank(rows, query, hist["mru"], current)
+            # ⌘K (issue #2266): the sessions, then its tail — + 新会话, a rule,
+            # the layout flip — the tail always on screen, under the last row
+            lines = (switch_lines(rows, query, hist, current, layout, say) if switch
+                     else [("row", rm) for rm in rank(rows, query, hist["mru"], current)])
+            shown = [ln for ln in lines if ln[0] != "sep"]
             at = max(0, min(at, len(shown) - 1))
             body = height - 2 - (2 if say.get("quickopen_cmd_hint") else 0)
-            for y, (row, marks) in enumerate(shown[:max(0, body)], 2):
-                sel = y - 2 == at
+            tail = [ln for ln in lines if ln[0] != "row"]
+            nrows = max(0, body - len(tail))
+            drawn = [ln for ln in lines if ln[0] == "row"][:nrows] + tail
+            sel_ln = shown[at] if shown else None
+            for y, (kind, payload) in enumerate(drawn[:max(0, body)], 2):
+                sel = (kind, payload) == sel_ln if sel_ln else False
+                if kind != "row":
+                    try:
+                        if kind == "sep":
+                            screen.addstr(y, 2, "─" * max(0, width - 5), curses.A_DIM)
+                        else:
+                            base = curses.color_pair(2) if sel else curses.A_NORMAL
+                            screen.addstr(y, 0, " " * (width - 1), base)
+                            screen.addstr(y, 0, clip(("› " if sel else "  ") + payload[1], width - 1),
+                                          base | (curses.A_BOLD if sel else curses.color_pair(3)))
+                    except curses.error:
+                        pass
+                    continue
+                row, marks = payload
                 node = "@" + row["node"] if row["node"] else ""
+                if switch:
+                    when = ago(hist["seen"].get(row["key"]))
+                    node = ("%s  %s" % (when, node)).strip() if when else node
                 left = "%s %s " % ("›" if sel else " ", row["glyph"] or " ")
                 name = clip(row["name"], max(0, width - cells(left) - cells(node) - 2))
                 base = curses.color_pair(2) if sel else curses.A_NORMAL
@@ -613,11 +742,14 @@ def popup(screen, pane, session="", target=""):
                     curses.beep()   # greyed: the menu would not run it either
                     continue
                 run_cmd(shown[at][3])
+            elif shown and shown[at][0] == "act":
+                switch_act(shown[at][1][0], session or session_of())
             elif shown:
-                hand(pane or list_pane(), "jump=" + shown[at][0]["key"])
+                hand(pane or list_pane(), "jump=" + shown[at][1][0]["key"])
             return 0
         if key in (curses.KEY_UP, "\x10"):
-            at -= 1
+            # ⌘K: ↑ on the first line wraps to the last — the layout flip
+            at = (10 ** 6) if switch and at == 0 and not command else at - 1
         elif key in (curses.KEY_DOWN, "\x0e", "\t"):
             at += 1
         elif key in (curses.KEY_BACKSPACE, "\x7f", "\x08"):
@@ -807,6 +939,25 @@ def main(argv):
         for row, _ in rank(rows, " ".join(words), hist["mru"], current):
             print("%s\t%s" % (row["key"], row["name"]))
         return 0
+    if argv[:1] == ["switch"]:
+        # ⌘K's lines, plain (the selftest's view): a session `key<TAB>name<TAB>age`,
+        # the rule `--`, an action `!<action><TAB>label`
+        hist = load()
+        current = hist["stack"][hist["at"]] if hist["stack"] else ""
+        for kind, payload in switch_lines(read_rows(), " ".join(argv[1:]), hist, current, layout_now()):
+            if kind == "row":
+                print("%s\t%s\t%s" % (payload[0]["key"], payload[0]["name"], ago(hist["seen"].get(payload[0]["key"]))))
+            elif kind == "sep":
+                print("--")
+            else:
+                print("!%s\t%s" % payload)
+        return 0
+    if argv[:1] == ["switch-run"] and len(argv) in (2, 3):
+        # ↵ on a ⌘K line: a session key jumps (as ↵ on it does), else the action
+        session = argv[2] if len(argv) == 3 else os.environ.get("FLEET_SESSION", "")
+        if argv[1] == "new" or argv[1].startswith("layout:"):
+            return 0 if switch_act(argv[1], session) else 1
+        return 0 if hand(list_pane(), "jump=" + argv[1]) else 1
     if argv[:1] == ["commands"]:
         for action, group in COMMANDS:
             print("%s\t%s" % (action, group))
@@ -832,7 +983,7 @@ def main(argv):
     if "--full" in argv:
         return curses.wrapper(full, pane, session)
     target = argv[argv.index("--target") + 1] if "--target" in argv[:-1] else ""
-    return curses.wrapper(popup, pane, session, target)
+    return curses.wrapper(popup, pane, session, target, "--switch" in argv)
 
 
 if __name__ == "__main__":
