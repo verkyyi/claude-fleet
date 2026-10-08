@@ -512,7 +512,7 @@ var fleetControlCommand = func(ctx context.Context, script string, stdin []byte)
 	if err := prepCmd(ctx, cmd); err != nil {
 		return nil, err
 	}
-	err := cmd.Run()
+	err := startWhy(ctx, cmd, cmd.Run())
 	// fleet-control.py prints a JSON error object and exits 1 on a refusal;
 	// the caller reads stdout either way.
 	if stdout.Len() > 0 {
