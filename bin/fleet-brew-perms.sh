@@ -64,7 +64,7 @@ login_count() {
   fi
 }
 
-owner_of() { stat -f '%Su' "$1" 2>/dev/null || stat -c '%U' "$1" 2>/dev/null; } # portable-ok: both-ways fallback
+owner_of() { stat -c '%U' "$1" 2>/dev/null || stat -f '%Su' "$1" 2>/dev/null; } # portable-ok: both-ways fallback
 
 # Units, not paths: a bad file deep in a keg reports its keg once.
 scan() {
