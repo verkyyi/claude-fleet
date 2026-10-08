@@ -18,6 +18,9 @@
 #   E. a newcomer's first session: a client start with FLEET_CLIENT_LAYOUT=solo
 #      opens ONE HOME claude session (first_home) — not with the marker there,
 #      not without solo, not under FLEET_SHELL_NO_FIRST
+#   E2. (issue #2240) the first session REFUSED: 没开出来 · 原因 · 下一步 in
+#      home-first.failed, on the client's line and on the solo view's waiting page;
+#      ONE retry, none once a HOME session was made meanwhile
 #   F. the guard (#1931): a session's `fleet codex` is a client start; `--here` is not
 #
 # Every tmux call goes to a private socket via a PATH shim; the agents are
@@ -173,6 +176,48 @@ eq "E FLEET_SHELL_NO_FIRST (fleet claude opens its own): nothing" "$(first FLEET
 : > "$WORK/fhconf/home-session.first"
 eq "E once: the marker there, nothing" "$(first FLEET_CLIENT_LAYOUT=solo)" ""
 grep -q '^first_home$' "$BIN/fleet-shell.sh" && ok "E first_home is called on start" || fail "E first_home never called"
+# E2 (issue #2240): REFUSED — the screen says 没开出来 · 原因 · 下一步, not only
+# home-first.log: home-first.failed (the solo view's `wait` page draws it), the
+# client's line, ONE retry after FLEET_HOME_FIRST_RETRY — none once a HOME
+# session was made meanwhile
+cat > "$WORK/fhshadow/fleet-shell.sh" <<EOF
+#!/bin/bash
+printf 'call:%s\n' "\$*" >> "$WORK/stub.log"
+[ -n "\${FLEET_HOME_FAILED:-}" ] && printf '没有机器能开：m4 只协调\n这台 (mini) 没被选：没开承载 → fleet host on\n' > "\$FLEET_HOME_FAILED"
+[ -n "\${FH_MARK:-}" ] && : > "$WORK/fhconf/home-session.first"
+exit 4
+EOF
+chmod +x "$WORK/fhshadow/fleet-shell.sh"
+first2() {
+  : > "$WORK/stub.log"; rm -f "$WORK/fhconf/home-session.first"
+  rm -rf "$WORK/fhcache"; mkdir -p "$WORK/fhcache"
+  env "$@" FLEET_CLIENT_LAYOUT=solo FLEET_UI_LANG=zh FLEET_HOME_FIRST_RETRY=0 BIN="$BIN" CACHE="$WORK/fhcache" \
+    CONF_DIR="$WORK/fhconf" SHADOW="$WORK/fhshadow" bash -c 'T() { printf "T:%s\n" "$*" >> "'"$WORK"'/stub.log"; }
+    '"$fh"'
+    first_home; wait' 2>/dev/null
+  cat "$WORK/stub.log"
+}
+out=$(first2)
+eq "E2 refused: tried twice (one retry)" "$(printf '%s\n' "$out" | grep -c '^call:home-session claude --first')" 2
+has "E2 the client's line says it" "$out" "T:display-message -d 60000 你的第一个会话没开出来 · 原因：没有机器能开：m4 只协调 · 下一步："
+f=$(cat "$WORK/fhcache/home-first.failed" 2>/dev/null)
+eq "E2 home-first.failed: 没开出来" "$(printf '%s\n' "$f" | sed -n 1p)" "你的第一个会话没开出来"
+eq "E2 …原因 (the place's message)" "$(printf '%s\n' "$f" | sed -n 2p)" "原因：没有机器能开：m4 只协调"
+eq "E2 …下一步 (what opens it, then try again)" "$(printf '%s\n' "$f" | sed -n 3p)" "下一步：这台 (mini) 没被选：没开承载 → fleet host on"
+has "E2 the first failure says it retries" "$(printf '%s\n' "$out" | grep '^T:' | head -1)" "秒后自动再试一次"
+[ -e "$WORK/fhcache/home-first.lock" ] && fail "E2 the lock left behind" || ok "E2 the lock released"
+out=$(first2 FH_MARK=1)
+eq "E2 a HOME session made meanwhile: no retry" "$(printf '%s\n' "$out" | grep -c '^call:')" 1
+[ -e "$WORK/fhcache/home-first.failed" ] && fail "E2 …and nothing left to say" || ok "E2 …and nothing left to say"
+# the solo view's waiting page draws the three lines (fleet-shell.sh wait, no server: it
+# stops by itself; read in its first second)
+first2 >/dev/null
+( FLEET_SHELL_CACHE="$WORK/fhcache" FLEET_UI_LANG=zh bash "$BIN/fleet-shell.sh" wait fhs-nosuch > "$WORK/wait.out" 2>&1 & echo $! > "$WORK/wait.pid" )
+sleep 1.5; kill "$(cat "$WORK/wait.pid")" 2>/dev/null
+w=$(cat "$WORK/wait.out")
+has "E2 the waiting page: 没开出来" "$w" "你的第一个会话没开出来"
+has "E2 …原因" "$w" "原因：没有机器能开"
+has "E2 …下一步" "$w" "下一步："
 
 # --- F. the guard ---------------------------------------------------------------------
 g() { printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \

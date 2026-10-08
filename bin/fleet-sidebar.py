@@ -1331,7 +1331,7 @@ def place_job(plan, rows, env):
             ["--node", plan["node"]]
         if plan.get("reap"):
             args += ["--reap", plan["reap"]]
-        return start_job(args, env, placed(plan))
+        return start_job(args, env, compose_told(plan, placed(plan)))
     args = ["bash", str(BIN / "fleet-client-place.sh"), plan["repo"], plan["what"],
             "--node", plan["node"]]
     if plan.get("name") and plan["what"] == "scratch":
@@ -1341,15 +1341,43 @@ def place_job(plan, rows, env):
     return start_job(args, env, placed(plan))
 
 
+def compose_tell(plan, ok, why=""):
+    """The writing area told how its send ended (issue #2240) — compose-result.json,
+    fleet-compose.py's one writer: done, or the reason in words. Never stops the list."""
+    try:
+        compose_mod().compose_told(plan.get("cid", ""), ok, why.lstrip("✗ ").strip())
+    except Exception:
+        pass
+
+
+def compose_told(plan, done):
+    """placed()'s answer, and the writing area told it: only a start that opened
+    empties its box; a refusal, a machine that said no, no answer, a hub out of
+    reach leave the text there with the same words the list says."""
+    def told(rc, text):
+        toast, ask = done(rc, text)
+        if plan.get("state") in ("opened", "await"):
+            compose_tell(plan, True)
+        else:
+            compose_tell(plan, False, toast or (ask.prompt if ask is not None else "") or last_line(text))
+        return toast, ask
+    return told
+
+
 def placed(plan):
     """fleet-client-place.sh's one line, in words (its exit codes, #1777): done →
     wait for the row; the issue held elsewhere → «y 切过去»; a refusal → its
     reason as the hub said it; the hub not reachable → 入口连不上."""
     def done(rc, text):
         if plan.get("payload"):
+            # A start that did not open keeps what was written (issue #2240):
+            # the last such payload is compose-failed.json, never unlinked.
             try:
-                os.unlink(plan["payload"])
-            except OSError:
+                if rc == 0:
+                    os.unlink(plan["payload"])
+                else:
+                    os.replace(plan["payload"], str(compose_mod().failed_path()))
+            except Exception:
                 pass
         line = next((l for l in reversed(text.splitlines()) if l.split(" ", 1)[0] in PLACE_WORDS), "")
         head, _, why = line.partition("\t")
@@ -2574,6 +2602,8 @@ def ui(screen, session, worker, lock):
             say(session, plan.get("note", ""))   # 「正在 m5 上开…」 (issue #1778)
         elif go:
             say(session, placing.get("note", ""))
+            if plan is not None and plan.get("verb") == "compose":
+                compose_tell(plan, False, placing.get("note", ""))   # one at a time (#2240)
         elif nxt is not None:
             ask_now(nxt)
 
@@ -2693,10 +2723,16 @@ def ui(screen, session, worker, lock):
         rest = [v for v in verbs if v != "compose"]
         if len(rest) == len(verbs):
             return verbs
+        src = switch_lib().state_dir() / "compose-send.json"
         if placing is not None:
             say(session, placing.get("note", ""))
+            try:   # the area keeps its text and says why (issue #2240)
+                cid = json.loads(src.read_text(encoding="utf-8")).get("id", "")
+            except (OSError, ValueError, AttributeError):
+                cid = ""
+            if cid:
+                compose_tell({"cid": cid}, False, placing.get("note", ""))
             return rest
-        src = switch_lib().state_dir() / "compose-send.json"
         dst = src.with_name("compose-send.%d.json" % time.time_ns())
         try:
             os.replace(str(src), str(dst))
@@ -2721,7 +2757,9 @@ def ui(screen, session, worker, lock):
             if len(repos) == 1:
                 plan["repo"] = repos[0]
             elif not repos:
-                say(session, nohost_word(None) if hub_repos() == [] else tr("sidebar_place_norepo"))
+                word = nohost_word(None) if hub_repos() == [] else tr("sidebar_place_norepo")
+                say(session, word)
+                compose_tell(plan, False, str(word))   # the area keeps its text (#2240)
                 return rest
             else:
                 ask_now(Ask("place-repo", tr("sidebar_place_repo"), hint=tr("sidebar_place_keys"), plan=plan,

@@ -75,6 +75,11 @@
 #      <m> --name <title>; 「开工中…」 stands in; once the row shows it replaces
 #      the stand-in, one row, no second switch. An older hub (no worker_id): no
 #      switch until the row shows, as before
+# Nothing written is lost (issue #2240, EPIC #2482 C2):
+#   S. the hub answers 503: the box keeps both lines, the line under the options
+#      says 「没发出去：入口连不上… · 字还在，改好再 ↵」 until the next key, the
+#      draft and compose-failed.json hold the text, nothing switched; the direct
+#      road's reason is the place's message (place_why)
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -156,6 +161,8 @@ case "\$title" in 先切*|老入口*)
   python3 -c 'import time; print(int(time.time() * 1000))' > "$WORK/t_reply"
   printf 'REMOTE m4 op%s done %s\tm5 busier\n' "\$n" "\$who"; exit 0 ;;
 esac
+# S (issue #2240): the hub out of reach — no line, a 503 on stderr, exit 1
+case "\$title" in 入口挂了*) printf 'fleet-client-place: https://hub.invalid: HTTP 503 Service Unavailable\n' >&2; exit 1 ;; esac
 sleep 2
 case "\$1 \$2" in
   *' new') k=\$((42 + n)); nm=forty-three; [ "\$k" = 43 ] || nm=new-\$k
@@ -603,6 +610,34 @@ touch "$WORK/row-go"
 CHECKS=$((CHECKS + 1)); n=0; while ! grep -q 'wid:U/issue-' "$VIEW" && [ $n -lt 60 ]; do sleep .1; n=$((n + 1)); done
 has 'R: …switched once the row showed, as before' "$(cat "$VIEW")" 'wid:U/issue-'
 hasnt 'R: …found by the list, no --node' "$(cat "$VIEW.args")" '--node'
+# S. (issue #2240) the hub answers 503: the text stays in the box as written,
+# the line under the options says why and what next until the next key, the
+# payload is kept as compose-failed.json; the next ↵ that opens empties it
+settled; : > "$VIEW"
+st_ select-window -t "$pw"; st_ send-keys -t "$pw" C-u
+st_ send-keys -t "$pw" -l '入口挂了也别丢'; st_ send-keys -t "$pw" C-j; st_ send-keys -t "$pw" -l '第二行也在'; sleep .3
+st_ send-keys -t "$pw" Enter
+CHECKS=$((CHECKS + 1)); waitfor 8 '没发出去' compose || fail 'S: the area says it was not sent' "$(compose)"
+has 'S: …why, in the list'"'"'s words' "$(compose)" '入口连不上'
+has 'S: …and what next' "$(compose)" '字还在，改好再 ↵'
+has 'S: the first line is still in the box' "$(compose)" '入口挂了也别丢'
+has 'S: …and the second' "$(compose)" '第二行也在'
+has 'S: the draft on disk holds it' "$(cat "$FLEET_SWITCH_STATE/compose-draft" 2>/dev/null)" '第二行也在'
+has 'S: the payload is kept' "$(cat "$FLEET_SWITCH_STATE/compose-failed.json" 2>/dev/null)" '入口挂了也别丢'
+eq 'S: nothing switched' '' "$(cat "$VIEW")"
+sleep 1
+has 'S: the reason stays while no key is pressed' "$(compose)" '没发出去'
+st_ send-keys -t "$pw" End; sleep .4
+hasnt 'S: …and goes with the next key' "$(compose)" '没发出去'
+has 'S: …the text still there' "$(compose)" '入口挂了也别丢'
+# the direct road (no list): --send from the area's own process says the same
+out=$(cd "$SB" && python3 -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("c", "fleet-compose.py"); c = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(c)
+print(c.place_why("fleet-client-place: https://hub.invalid: HTTP 503 Service Unavailable"))
+print(c.place_why("REFUSED NO_CAPACITY\t没有机器有空\tafter m4:op1:5"))' 2>&1)
+eq 'S: the reason off the place: the last line, or the line'"'"'s message' \
+  $'fleet-client-place: https://hub.invalid: HTTP 503 Service Unavailable\n没有机器有空' "$out"
 # Q. (pure) the machine and the agent (issue #2232): a sandbox bin/ whose
 # fleet-client-place.sh prints its argv (the body file's path masked)
 QB="$WORK/q-bin"; mkdir -p "$QB"

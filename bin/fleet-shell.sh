@@ -975,6 +975,10 @@ EOF
       *)       if [ -n "${3:-}" ]; then note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_home_fmt "$3")
                else note=$(sh "$BIN/fleet-ui-lang.sh" t shell_wait_nohost); fi ;;
     esac
+    # a newcomer's first session that did not open (issue #2240): its three lines
+    [ -s "$CACHE/home-first.failed" ] && note="$(sed '2,$s/^/  /' "$CACHE/home-first.failed")
+
+  $note"
     note="$note
   $(sh "$BIN/fleet-ui-lang.sh" t shell_wait_leave)"
     if [ "$note" != "$said" ]; then
@@ -1244,15 +1248,27 @@ EOF
   note "$(sh "$BIN/fleet-ui-lang.sh" t "$hopen" "$hagent" 2>/dev/null)"
   # why THIS computer was not chosen (issue #2480), said after the failure line
   hwhy=$(mktemp "${TMPDIR:-/tmp}/fleet-place-why.XXXXXX" 2>/dev/null) || hwhy=''
-  hout=$(FLEET_PLACE_WHY="$hwhy" bash "$BIN/fleet-client-place.sh" - home --agent "$hagent" --node "$hnode" ${hbody:+--body-file "$hbody"}); hrc=$?
+  herr=$(mktemp "${TMPDIR:-/tmp}/fleet-place-err.XXXXXX" 2>/dev/null) || herr=/dev/null
+  hout=$(FLEET_PLACE_WHY="$hwhy" bash "$BIN/fleet-client-place.sh" - home --agent "$hagent" --node "$hnode" ${hbody:+--body-file "$hbody"} 2>"$herr"); hrc=$?
+  [ "$herr" = /dev/null ] || cat "$herr" >&2
   hline=$(printf '%s\n' "$hout" | tail -n1)
   if [ "$hrc" != 0 ]; then
     note "$(sh "$BIN/fleet-ui-lang.sh" t home_failed_fmt "${hline:-—}" 2>/dev/null)"
     if [ -n "$hwhy" ]; then
       while IFS= read -r line; do [ -n "$line" ] && note "$line"; done < "$hwhy"
     fi
+    # FLEET_HOME_FAILED=<file> (issue #2240, first_home): why, in one line — the
+    # place line's message, else what it said on stderr — then why THIS computer
+    # was not chosen (#2480), each with what opens it
+    if [ -n "${FLEET_HOME_FAILED:-}" ]; then
+      hmsg=$(printf '%s' "$hline" | cut -f2 -s)
+      [ -n "$hmsg" ] || hmsg=$hline
+      [ -n "$hmsg" ] || hmsg=$(grep -v '^ *$' "$herr" 2>/dev/null | tail -n1)
+      { printf '%s\n' "$hmsg"; [ -z "$hwhy" ] || grep -v '^ *$' "$hwhy"; } > "$FLEET_HOME_FAILED" 2>/dev/null
+    fi
   fi
   [ -z "$hwhy" ] || rm -f "$hwhy"
+  [ "$herr" = /dev/null ] || rm -f "$herr"
   [ "$hrc" = 0 ] || exit "$hrc"
   printf '%s\n' "$hline"
   # where it opened (issue #2339): the client's view machine (「入口选了 …」) and
@@ -1569,6 +1585,11 @@ client_open() {
 # writes it. An existing install (no `solo`) never sees it; fleet-home-session.sh
 # opens its own and says FLEET_SHELL_NO_FIRST. One at a time: a lock dir, taken
 # over once it is older than a place can take.
+#
+# Not opened (issue #2240): the screen says so, not only home-first.log — three
+# lines in home-first.failed (没开出来 · 原因 · 下一步), drawn by the solo view's
+# `wait` page and put on the client's line, and ONE retry after
+# FLEET_HOME_FIRST_RETRY (60) seconds unless a HOME session was made meanwhile.
 first_home() {
   local lock="$CACHE/home-first.lock"
   [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] || return 0
@@ -1580,7 +1601,29 @@ first_home() {
     rm -rf "$lock"; mkdir "$lock" 2>/dev/null || return 0
   fi
   ( trap '' HUP; cd "$HOME" 2>/dev/null || :
-    bash "$SHADOW/fleet-shell.sh" home-session claude --first; rmdir "$lock" 2>/dev/null
+    failed="$CACHE/home-first.failed"; retry="${FLEET_HOME_FIRST_RETRY:-60}"; try=1
+    rm -f "$failed" "$failed.why"
+    while :; do
+      if FLEET_HOME_FAILED="$failed.why" bash "$SHADOW/fleet-shell.sh" home-session claude --first; then
+        rm -f "$failed" "$failed.why"; break
+      fi
+      why=$(sed -n 1p "$failed.why" 2>/dev/null); nxt=$(sed -n 2p "$failed.why" 2>/dev/null)
+      [ -n "$why" ] || why='-'
+      # (no multibyte text inside ${v:+…}: bash 3.2 mangles it)
+      if [ "$try" = 1 ]; then
+        rtxt=$(sh "$BIN/fleet-ui-lang.sh" t home_first_retry_fmt "$retry" 2>/dev/null)
+        if [ -n "$nxt" ]; then nxt="$nxt; $rtxt"; else nxt=$rtxt; fi
+      elif [ -z "$nxt" ]; then nxt=$(sh "$BIN/fleet-ui-lang.sh" t home_first_next 2>/dev/null); fi
+      { sh "$BIN/fleet-ui-lang.sh" t home_first_failed; echo
+        sh "$BIN/fleet-ui-lang.sh" t home_first_why_fmt "$why"; echo
+        sh "$BIN/fleet-ui-lang.sh" t home_first_next_fmt "$nxt"; echo; } > "$failed" 2>/dev/null
+      cat "$failed"
+      T display-message -d 60000 "$(paste -sd '|' "$failed" | sed 's/|/ · /g')" 2>/dev/null
+      [ "$try" = 1 ] || break
+      try=2; sleep "$retry"
+      [ ! -e "$CONF_DIR/home-session.first" ] || { rm -f "$failed" "$failed.why"; break; }
+    done
+    rm -f "$failed.why"; rmdir "$lock" 2>/dev/null
   ) </dev/null >"$CACHE/home-first.log" 2>&1 &
 }
 
