@@ -278,6 +278,8 @@ fleet_ui_t() {
     en:sidebar_cfg_renew)       printf 'renew' ;;
     zh:sidebar_cfg_broken)      printf '会坏·需重开' ;;
     en:sidebar_cfg_broken)      printf 'breaks·reopen' ;;
+    zh:sidebar_backfill_failed) printf '单子没建上' ;;
+    en:sidebar_backfill_failed) printf 'issue not filed' ;;
     zh:sidebar_epic_stale)      printf '没人在跑' ;;
     en:sidebar_epic_stale)      printf 'not driven' ;;
     zh:sidebar_epic_stale_detail_fmt) printf '心跳 %s 分钟前停了 · 再点一下重开驱动会话' "${1:-}" ;;

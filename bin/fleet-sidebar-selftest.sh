@@ -108,7 +108,7 @@ assert sidebar.fold_now(frows, 'wid:m4/x', 'collapse', '@9', fcache)[1] is None
 # producer's fields 9-15 — machine · issue · PR · ctx% · cfg · reap — are the
 # bar's, for the highlighted row (detail_line → @fleet_hint_name).
 r12 = sidebar.row_fields('\x1f'.join(['@1', 'working', '·', 'issue-1532', ' ', '', '0', '', 'm4', '#1532', '#1552✓', '45%', '', '', 'merged']))
-assert len(r12) == sidebar.ROW_FIELDS == 15 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[14] == 'merged', r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902)
+assert len(r12) == sidebar.ROW_FIELDS == 16 and r12[9:12] == ['#1532', '#1552✓', '45%'] and r12[14] == 'merged', r12   # 13: cfg (#1783) · 14: title (#1921) · 15: reap (#1902)
 want = 'issue-1532 · #1532 · @m4 · #1552✓ · 合并后回收 · 45%'
 assert sidebar.detail_line(r12) == want, repr(sidebar.detail_line(r12))
 assert sidebar.bar_hint([r12], '@1', '@1', 30)[1] == want.replace('#', '##'), 'the bar: # doubled for tmux'
@@ -126,6 +126,11 @@ broken = r12[:12] + ['broken'] + r12[13:]
 assert sidebar.row_glyph(broken) == ('✗', 'broken') and sidebar.row_glyph(r12) == ('·', '')
 assert sidebar.row_glyph(r12[:8] + ['m4!'] + r12[9:]) == ('⊘', 'lost')
 assert sidebar.detail_line(broken).endswith('· 会坏·需重开'), sidebar.detail_line(broken)
+# A warm start whose issue never got filed (issue #2235): field 16 `failed` — a red
+# ∅ in the glyph's cell, 单子没建上 on the bar; a broken configuration still wins.
+nofile = r12[:15] + ['failed']
+assert sidebar.row_glyph(nofile) == ('∅', 'backfill') and sidebar.row_glyph(broken + ['failed']) == ('✗', 'broken')
+assert sidebar.detail_line(nofile).endswith('· 单子没建上'), sidebar.detail_line(nofile)
 long12 = r12[:3] + ['阿里云月成本评估-再看一遍'] + r12[4:]
 assert sidebar.auto_width([long12], 400, 30, 44) == min(44, max(30, sidebar.row_need(long12))), 'the width follows the bare row'
 # ⌃t's landed list: `fleet-history.sh rows` as the view's rows — a heading that

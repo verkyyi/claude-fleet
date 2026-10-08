@@ -81,7 +81,7 @@ R="${E}0m"; US=$'\x1f'
 # After @reap_policy (issue #1958): @epic, `<owner/name>#<N>` on the window that
 # drives a running EPIC (fleet-epic-heartbeat.sh stamps it) — the row is then the
 # EPIC's: its parent issue's number + title, badged landed/members (epic_v).
-WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{?#{==:#{@fleet_role},orchestrator},home,#{window_name}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}${US}#{@reap_policy}${US}#{@epic}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?@remote,,#{?#{==:#{@fleet_role},orchestrator},home,#{window_name}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -505,7 +505,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   if [ -s "$_orchf" ]; then
     while IFS=$US read -r _ow _; do [ -n "$_ow" ] && _orchw+="wid:$_ow "; done < "$_orchf"
   fi
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf; do
     case "$_orchw" in *" $r_wid "*) continue ;; esac
     case "$r_wid" in
       '#ts'|'#me') continue ;;
@@ -534,13 +534,13 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
       # about the row changes (its place, its nesting, its colour)
       r_node="$r_node~"
     fi
-    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic")
+    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
-    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap r_epic <<< "$_rr"
+    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap r_epic r_bf <<< "$_rr"
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
-    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic"$'\n'
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf"$'\n'
   done
   unset _rrows _rr _rexpd _rexp
   WLIST="$RLIST$WLIST"
@@ -594,7 +594,7 @@ KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
 # The issue titles this frame needs (issue #1921, --sidebar only): a local row's
 # (repo, #issue) key, looked up once below in its repo's issue cache.
 ITWANT=''; ISLUGS=' '; DRIVEN=' '
-while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn _ _ _ wepic; do
+while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn _ _ _ wepic _; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   RFOLD=$rfold
@@ -871,7 +871,7 @@ buf=""
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load; fleet_cfg_broken_load
 CFG_STALE_T='' CFG_RENEW_T='' CFG_BROKEN_T=''
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo slept _ wloop wtitle wborn wcfg wittl wreap wepic wbf; do
   [ -z "$name" ] && continue
   epic_v "$wepic" "$wid" "$wittl"
   # Is this session's configuration the one it would get now? A local row
@@ -912,6 +912,15 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       _c13=''; [ "$cfgst" = unknown ] || _c13=$cfgst
       cfgf="$US$_c13$US$wittl$US$wreap" ;;
     esac
+    # field 16 (issue #2235): `failed` — this session started from the warm pool
+    # and its issue could not be filed / bound (fleet-start-backfill.sh's
+    # @backfill); the view marks the row 「单子没建上」. Fields 13-15 stay, empty,
+    # before it; no mark ⇒ no field, byte for byte as before.
+    if [ "$wbf" = failed ]; then
+      _c13=''; [ "$cfgst" = unknown ] || _c13=$cfgst
+      _c15=$wreap; case "$_c15" in *[!A-Za-z0-9:.+-]*) _c15='' ;; esac
+      cfgf="$US$_c13$US$wittl$US$_c15$US$wbf"
+    fi
   fi
   # strict per-fleet: only windows from the viewing dash's own tmux session.
   # FLEET_SESSION exported by tmux-dashboard.sh; unset ⇒ show all (single-fleet).

@@ -894,12 +894,16 @@ FQ=44444444-5555-6666-7777-999999999999
 { printf '#ts\037%s\n#me\037m5\n#node\037m4\037online\0372\037%s\n' "$NOW" "$NOW"
   printf 'wid:%s/acme-app:scratch-9\037m4\037online\037\037acme/app\037looping\037claude\037scratch-9\037\037\0370\037\037\037\037\037\037另一批\037\037acme/app#1982:2/5\n' "$FQ"
   printf 'wid:%s/acme-app:issue-1983\037m4\037online\0371983\037acme/app\037working\037claude\037成员甲\037%s/acme-app:scratch-9\037\0370\037\n' "$FQ" "$FQ"
+  # field 20 (issue #2235): a warm start whose issue was never filed
+  printf 'wid:%s/acme-app:scratch-8\037m4\037online\037\037acme/app\037working\037claude\037没建上的\037\037\0370\037\037\037\037\037\037\037\037\037failed\n' "$FQ"
 } > "$G/remote_$QS"
 printf '%s\n' "$NOW" > "$G/hub_ok"
 printf '%s/acme-app:scratch-9\n' "$FQ" > "$G/remote_fold_$QS"
 qr=$(CCQUOTA_FLEET=1 qside)
 eq "Q: a remote driver is one row too, named and badged off its node's cell" "wid:$FQ/acme-app:scratch-9|▾|2/5|0|m4" "$(srow "$qr" '#1982 另一批')"
 eq "Q: …its member under it" "wid:$FQ/acme-app:issue-1983|└||1|m4" "$(srow "$qr" '成员甲')"
+eq "Q: a remote row whose issue was never filed (#2235): sidebar field 16 failed, 13-15 empty before it" "|||failed" \
+   "$(printf '%s\n' "$qr" | LC_ALL=C awk -F"$US" '$4 == "没建上的" { print $13 "|" $14 "|" $15 "|" $16 }')"
 # the refresher writes the cell: the worker's `epic` → field 19, title + reap kept before it
 python3 - "$WORK/sessions.json" "$WORK/sessions-epic.json" "$F" <<'PY2'
 import json, sys
@@ -911,6 +915,8 @@ d["sessions"].append(dict(worker_id=f + "/acme-app:scratch-5", machine_name="min
                           fleet_id=f, fleet_name="x", availability="online", worker=w, observed_at="2026-10-04T10:06:00Z"))
 w2 = dict(w, key="acme-app:scratch-6", name="scratch-6", title="", epic="acme/app#1;rm -rf")
 d["sessions"].append(dict(d["sessions"][-1], worker_id=f + "/acme-app:scratch-6", worker=w2))
+w3 = dict(w, key="acme-app:scratch-4", name="scratch-4", title="", epic=None, backfill="failed")
+d["sessions"].append(dict(d["sessions"][-1], worker_id=f + "/acme-app:scratch-4", worker=w3))
 json.dump(d, open(dst, "w"), ensure_ascii=False)
 PY2
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-epic.json'" PATH="$SHIMPATH" CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null || fail "Q: --refresh (epic) failed"
@@ -918,6 +924,8 @@ eq "Q: the refresher carries the cell as field 19, the title before it" "第三�
    "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-5" '$1 == w { print $17 "|" $18 "|" $19 }' "$G/remote_$S")"
 eq "Q: …and drops a cell that is not one" "" \
    "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-6" '$1 == w { print $19 }' "$G/remote_$S")"
+eq "Q: …backfill=failed as field 20 (#2235), the empty 17-19 kept before it" "|||failed" \
+   "$(LC_ALL=C awk -F"$US" -v w="wid:$F/acme-app:scratch-4" '$1 == w { print $17 "|" $18 "|" $19 "|" $20 }' "$G/remote_$S")"
 got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
 p = ["@5", "", "1", "/w/app-scratch-7", "looping", "claude", "a1", "", "acme/app", "scratch-7", "", "", "", "busy=", "born=", "cfg=", "title=侧栏改版", "reap=", "detail=", "role="]
 print(h.inventory_row(p + ["epic=acme/app#1949:1/3"])[1].get("epic"), h.inventory_row(p + ["epic=#7"])[1].get("epic"),
@@ -1011,6 +1019,11 @@ a = h.inventory_row(p + ["epicstale=acme/app#1949\x1f5400\x1f侧栏改版\x1ejun
 print(a.get("epic_stale"), h.inventory_row(p + ["epicstale="])[1].get("epic_stale"), h.inventory_row(p)[1].get("title"), a.get("title"))' 2>&1)
 eq "T: inventory column 22 — valid entries kept, junk dropped, absent when empty, the columns before it intact" \
    "[{'epic': 'acme/app#1949', 'age': 5400, 'title': '侧栏改版'}, {'epic': 'acme/tool#4', 'age': 7, 'title': 'a b'}] None t t" "$got"
+got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
+p = ["@5", "", "1", "/w/x", "looping", "claude", "a1", "", "acme/app", "scratch-7", "", "", "", "busy=", "born=", "cfg=", "title=t", "reap=", "detail=", "role=", "epic=", "epicstale="]
+print(h.inventory_row(p + ["backfill=failed"])[1].get("backfill"), h.inventory_row(p + ["backfill="])[1].get("backfill"),
+      h.inventory_row(p + ["backfill=junk"])[1].get("backfill"), h.inventory_row(p + ["backfill=failed"])[1].get("title"))' 2>&1)
+eq "T: inventory column 23 (#2235) — backfill=failed kept, empty / junk absent, the columns before it intact" "failed None None t" "$got"
 rm -rf "$WORK/conf/fleets/$TS" "$EDIR"
 cp "$WORK/wlist.t" "$WLIST_FILE"
 
