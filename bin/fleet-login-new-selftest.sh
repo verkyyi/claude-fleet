@@ -69,6 +69,11 @@
 #                 `installed N/N`; a rerun leaves every unit alone; one missing
 #                 unit → only it; no clone → exit 1 naming it; no such login / no
 #                 home → exit 4, nothing run; another step's option → exit 2
+#   L. cache      (#2297) FLEET_BOOTSTRAP_CACHE on, GitHub unreachable: --apply
+#                 refreshes the cache as root (stable + the admin's claude), clones
+#                 the login's install from it (safe.directory, --no-local), points
+#                 origin back at GitHub — exit 0, HEAD at stable; a dry run shows
+#                 the refresh + the cached clone and says what happens with none
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -155,6 +160,8 @@ NTMPL=$(ls "$FX/launchd" | wc -l | tr -d ' ')
 git init -q -b master "$FX" && git -C "$FX" add -A && git -C "$FX" commit -qm stable && git -C "$FX" tag stable
 GB="$WORK/gh"; mkdir -p "$GB/verkyyi"; git clone -q --bare "$FX" "$GB/verkyyi/claude-fleet.git"
 export FLEET_BOOTSTRAP_GIT_BASE="$GB"
+# no machine cache unless leg L builds one (issue #2297) — the operator's may be real
+export FLEET_BOOTSTRAP_CACHE=off
 # no plutil (Linux CI): the daemons step cannot render — run those legs with --no-daemons
 DAEMONS=''; command -v plutil >/dev/null 2>&1 || DAEMONS=--no-daemons
 
@@ -626,4 +633,24 @@ for args in "kai --daemons-only --no-daemons" "kai --daemons-only --share-pool -
   eq "K usage nothing run ($args)" 0 "$(mutations)"
 done
 not_contains "K bash32" "$OUT" "unbound variable"
+# --- L. the machine's cache (#2297): no github.com for the clone -------------
+CC="$WORK/cache"; mkdir -p "$WORK/l-bin"
+printf '#!/bin/sh\necho "9.9.9 (Claude Code)"\n' > "$WORK/l-bin/claude"; chmod +x "$WORK/l-bin/claude"
+export FLEET_BOOTSTRAP_CACHE="$CC" FLEET_BOOTSTRAP_CACHE_SRC="$FX" FLEET_BOOTSTRAP_GIT_BASE="$WORK/abroad-unreachable"
+PATH="$WORK/l-bin:$PATH" run lena --full-name 'Lena L' --pubkey "$KEY" --no-daemons
+eq "L dry run exit" 0 "$RC"
+contains "L dry: refresh" "$OUT" "sudo env FLEET_BOOTSTRAP_CACHE=$CC bash $BIN/fleet-bootstrap-cache.sh refresh --from $FX --claude $WORK/l-bin/claude"
+contains "L dry: cached clone" "$OUT" "sudo -u lena -H git -c safe.directory=$CC/claude-fleet.git -c advice.detachedHead=false clone -q --no-local -b stable $CC/claude-fleet.git $FLEET_LOGIN_HOMES/lena/.claude/fleet"
+contains "L dry: the fallback named" "$OUT" "nothing cached at $CC at --apply time"
+[ -e "$CC" ] && fail "L dry run made the cache"
+PATH="$WORK/l-bin:$PATH" run lena --full-name 'Lena L' --pubkey "$KEY" --no-daemons --apply
+eq "L apply exit" 0 "$RC"
+unlock_homes
+LH="$FLEET_LOGIN_HOMES/lena"
+eq "L clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$LH/.claude/fleet" rev-parse HEAD 2>/dev/null)"
+eq "L origin = GitHub" "$WORK/abroad-unreachable/verkyyi/claude-fleet.git" "$(git -C "$LH/.claude/fleet" remote get-url origin)"
+eq "L claude cached" 9.9.9 "$(cat "$CC/claude/current")"
+not_contains "L no fallback" "$OUT" "the cached clone failed"
+not_contains "L bash32" "$OUT" "unbound variable"
+export FLEET_BOOTSTRAP_CACHE=off FLEET_BOOTSTRAP_GIT_BASE="$GB"; unset FLEET_BOOTSTRAP_CACHE_SRC
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"
