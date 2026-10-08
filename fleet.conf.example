@@ -530,8 +530,8 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # `sh bin/fleet-trust.sh grant --main $FLEET_MAIN`. fleet-doctor.sh's `trust` line
 # and fleet-up warn on an untrusted base; the dispatcher marks a parked pane `needs`.
 # On a TRUSTED NODE (issue #2282 — `sh bin/fleet-trust.sh node`: the credential
-# proxy's cached hub word, cred-proxy/trust.json, at most
-# FLEET_PRETRUST_NODE_MAX_AGE=86400 s old) the launcher also pre-trusts every repo
+# proxy's cached hub word, cred-proxy/trust.json, no older than a day, or the
+# environment's FLEET_PRETRUST_NODE_MAX_AGE seconds) the launcher also pre-trusts every repo
 # the fleet hosts and, for a fleet-opened no-repo session (@norepo 1 / the
 # orchestrator) in $HOME, that one directory; untrusted / unknown = the narrow grant
 # above, byte for byte. fleet-doctor's `信任框` row says which this machine is.
