@@ -99,6 +99,20 @@ after the clone, **before** its background services and its first session (先�
 
 From then on the login never needs sudo.
 
+### The hub's backstop: no token to a user's login that is not separated (issue #2295, EPIC #2293 C2)
+
+Should step 7b not have happened — an old script, a by-hand override, a login put
+back — the hub still holds the line. Every heartbeat carries `credsep`
+(`separated` · `not` · `unknown`), the agent's reading of `fleet-credsep.sh status`
+**and** `check` (exit 0 both ⇒ `separated`; asked at most every 5 minutes). For a
+GitHub person whose role is **user**, `/v1/node/credentials` issues real tokens only
+while that word is `separated`; otherwise it answers 403 `not_separated` and the
+credential audit records 「拒发：未隔离」. An agent too old to send the field counts
+as not separated. `/v1/node/self` then carries `credsep_gate: not_separated`, and the
+login's proxy reads it as an untrusted machine: every session goes **central**
+(the hub's proxy, no credential file read) — slower, but it works, and nothing ever
+lands in `accounts/*.hub/`. Admin and operator logins lease exactly as before.
+
 ### Rolling it out on a machine (issue #2135, EPIC #2133 C5)
 
 One login at a time, the operator types the only `sudo`; nothing else needs root.

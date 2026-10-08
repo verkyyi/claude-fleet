@@ -398,6 +398,13 @@ func (s *Server) handleNodeSelf(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, n := range snap.Nodes {
 		if n.EndpointID == ep.ID {
+			// The lease's credsep gate (claude-fleet#2295), said where the
+			// node's proxy reads its road: a gated login routes central.
+			if p, err := s.Store.PrincipalForLogin(n.Hostname, n.OSUser); err == nil {
+				if gated, err := s.credsepGated(p, n.Credsep); err == nil && gated {
+					n.CredsepGate = LeaseNotSeparated
+				}
+			}
 			writeJSON(w, http.StatusOK, n)
 			return
 		}

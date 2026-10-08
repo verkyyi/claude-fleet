@@ -62,6 +62,8 @@ type fleetProbe struct {
 	// ready is the login's readiness for new sessions (claude-fleet#1475),
 	// asked of fleet-control.py on its own, slower clock.
 	ready readyProbe
+	// credsep is the login's credential separation (claude-fleet#2295).
+	credsep credsepProbe
 }
 
 // fleetVersionWire is the script's JSON as it arrives. Kept separate from

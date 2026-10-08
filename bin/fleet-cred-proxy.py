@@ -64,7 +64,9 @@ machine's trust × the last probe (bin/fleet-node-probe.sh → node-probe.json):
                                     (FLEET_CRED_RELAY_URL + X-Fleet-Relay)
     central  untrusted              NO credential file is read: the session's
                                     hub credential (fcp-h1.) goes to the
-                                    cluster's credential proxy
+                                    cluster's credential proxy — also a login
+                                    the hub gates as not credential-separated
+                                    (/v1/node/self credsep_gate, issue #2295)
 
 A region refusal (Anthropic 403 / OpenAI unsupported_country_region_territory)
 or a connection that never opens moves THAT session to the next route and
@@ -601,6 +603,10 @@ class Router:
                 else:
                     t = "trusted" if str(raw).lower() in ("trusted", "true", "1") else "untrusted"
                     why = "hub: %s" % raw
+                if body.get("credsep_gate"):
+                    # the hub leases this login no token until it is separated
+                    # (issue #2295): every session goes central, as untrusted
+                    t, why = "untrusted", "hub: %s — this login is not credential-separated" % body["credsep_gate"]
             except Exception as e:
                 with self.lock:
                     if self.trust:
