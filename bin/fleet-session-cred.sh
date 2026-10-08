@@ -68,13 +68,27 @@ codex_label() { # <home> → the proxy's label for it (default | <name>), exit 1
   return 1
 }
 
+# hub_broker → `<broker url>TAB<fcpn1.…>` on a SEPARATED login (issue #1971:
+# credsep.json, node.env a symlink into the role account's store this login cannot
+# read) — the credential proxy's hub broker puts the node token in on the way out,
+# the same road as fleet-lib's _fleet_node_env_val. rc 1 = not separated / no
+# answer: the callers then read node.env as before (issue #2392).
+hub_broker() {
+  local out
+  [ ! -r "$CONF/node.env" ] && [ -f "$CONF/credsep.json" ] || return 1
+  out=$(bash "$PROXY" node-token 2>/dev/null) || return 1
+  case "$out" in http://127.0.0.1:*"	"fcpn1.*) printf '%s\n' "$out" ;; *) return 1 ;; esac
+}
+
 # hub_pass <provider> → "<id>\t<cred>": the node token is read INSIDE python from
-# node.env (never exported, issue #1491); the assertion travels in the environment.
+# node.env (never exported, issue #1491) — or, separated, the broker's short-lived
+# fcpn1. pair, only in python's environment; the assertion travels the same way.
 hub_pass() {
   local a="${FLEET_WORKER_ASSERT:-}"   # a caller that already holds this session's own
   [ -n "$a" ] || a=$(python3 "$BIN/fleet-mcp.py" --cred assert 2>/dev/null)
   [ -n "$a" ] || die "central route: this session has no worker assertion (FLEET_WORKER_CRED, a hub) — no pass"
-  FLEET_WORKER_ASSERT="$a" FSC_PROVIDER="$1" FSC_CONF="$CONF" python3 -I - <<'PY'
+  local br=''; br=$(hub_broker) || br=''
+  FSC_BROKER="$br" FLEET_WORKER_ASSERT="$a" FSC_PROVIDER="$1" FSC_CONF="$CONF" python3 -I - <<'PY'
 import json, os, sys, urllib.request
 ne = {}
 try:
@@ -89,8 +103,12 @@ except OSError:
     pass
 hub = (ne.get("CCQUOTA_HUB_URL") or os.environ.get("FLEET_HUB_URL", "")).rstrip("/")
 tok = ne.get("CCQUOTA_TOKEN", "")
+if os.environ.get("FSC_BROKER") and "\t" in os.environ["FSC_BROKER"]:
+    hub, tok = os.environ["FSC_BROKER"].split("\t", 1)   # separated: the proxy's hub broker
 if not hub or not tok:
-    sys.exit("fleet-session-cred: central route: no hub / node token (node.env)")
+    sys.exit("fleet-session-cred: central route: no hub / node token (node.env%s)"
+             % (" unreadable and the proxy's hub broker did not answer" if os.path.exists(
+                 os.path.join(os.environ["FSC_CONF"], "credsep.json")) else ""))
 body = json.dumps({"providers": [os.environ["FSC_PROVIDER"]]}).encode()
 req = urllib.request.Request(hub + "/v1/fleet/session-cred", data=body, method="POST", headers={
     "Authorization": "Bearer " + tok, "X-Fleet-Worker": os.environ["FLEET_WORKER_ASSERT"],
@@ -108,7 +126,8 @@ PY
 }
 
 hub_drop() { # <pass id> — DELETE it, best effort (it expires on its own)
-  FSC_ID="$1" FSC_CONF="$CONF" python3 -I - <<'PY' >/dev/null 2>&1
+  local br=''; br=$(hub_broker) || br=''
+  FSC_BROKER="$br" FSC_ID="$1" FSC_CONF="$CONF" python3 -I - <<'PY' >/dev/null 2>&1
 import os, urllib.parse, urllib.request
 ne = {}
 try:
@@ -123,6 +142,8 @@ except OSError:
     pass
 hub = (ne.get("CCQUOTA_HUB_URL") or os.environ.get("FLEET_HUB_URL", "")).rstrip("/")
 tok = ne.get("CCQUOTA_TOKEN", "")
+if os.environ.get("FSC_BROKER") and "\t" in os.environ["FSC_BROKER"]:
+    hub, tok = os.environ["FSC_BROKER"].split("\t", 1)   # separated: the proxy's hub broker
 if hub and tok:
     req = urllib.request.Request(hub + "/v1/fleet/session-cred/" + urllib.parse.quote(os.environ["FSC_ID"], safe=""),
                                  method="DELETE", headers={"Authorization": "Bearer " + tok})

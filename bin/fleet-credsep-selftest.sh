@@ -16,7 +16,8 @@
 #   D  the hub broker: fcpn1. → the real node token on the way out; POST
 #      /v1/node/credentials (any spelling) refused before the hub sees it; no
 #      credential → 401; node-hash = sha256(token); fleet-lib's
-#      _fleet_node_env_val / _fleet_hub_env hand a session the broker pair
+#      _fleet_node_env_val / _fleet_hub_env hand a session the broker pair, and
+#      fleet-session-cred.sh's central pass (mint + revoke) rides it (issue #2392)
 #   E  the ctl socket answers ONE peer uid (another uid is refused)
 #   F  the launcher's agent mode: the token arrives on fd 3, never in the env
 #   G  uninstall: every file back where it was, byte for byte; the store, the
@@ -269,9 +270,15 @@ class H(BaseHTTPRequestHandler):
         if n: self.rfile.read(n)
         with open(SB + "/fake.log", "a") as f:
             f.write("%s %s auth=%s\n" % (self.command, self.path, self.headers.get("authorization", "")))
-        b = json.dumps({"trust": "trusted"} if self.path.endswith("/v1/node/self") else {"ok": True}).encode()
+        try: trust = open(SB + "/trust").read().strip()
+        except OSError: trust = "trusted"
+        if self.path.endswith("/v1/node/self"): d = {"trust": trust}
+        elif self.path.endswith("/v1/fleet/session-cred") and self.command == "POST":
+            d = {"cred": "fcp-h1.PASS-sep.sig", "id": "pass-sep"}
+        else: d = {"ok": True}
+        b = json.dumps(d).encode()
         self.send_response(200); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
-    do_GET = do_POST = any
+    do_GET = do_POST = do_DELETE = any
 s = ThreadingHTTPServer(("127.0.0.1", 0), H)
 open(SB + "/fake.port", "w").write(str(s.server_address[1]))
 s.serve_forever()
@@ -342,6 +349,25 @@ v=$(FLEET_CONF_DIR="$S" bash -c ". '$BIN/fleet-lib.sh'; _fleet_node_env_val CCQU
 [ "$v" = 1 ] && pass "D fleet-lib: other keys from node.pub.env" || fail "D lib key: '$v'"
 v=$(FLEET_CONF_DIR="$S" bash -c ". '$BIN/fleet-lib.sh'; _fleet_hub_env; printf '%s %s' \"\$CCQUOTA_HUB_URL\" \"\${CCQUOTA_TOKEN%%.*}\"")
 [ "$v" = "$burl fcpn1" ] && pass "D fleet-lib: _fleet_hub_env exports the broker PAIR" || fail "D hub_env: '$v'"
+# a central session on a separated login (issue #2392): fleet-session-cred.sh's
+# hub pass rides the broker too — before, it read node.env, found nothing and
+# `fleet claude` refused to launch ("central route: no hub / node token")
+echo untrusted > "$SB/trust"
+FLEET_CONF_DIR="$S" bash "$BIN/fleet-cred-proxy.sh" route --provider claude --refresh >/dev/null 2>&1
+: > "$SB/fake.log"
+row=$(FLEET_CONF_DIR="$S" FLEET_CRED_PROXY=1 FLEET_WORKER_ASSERT=fwa1.test.sig \
+      bash "$BIN/fleet-session-cred.sh" mint --provider claude --sid sep1 2>"$SB/d.err")
+case "$row" in central"	"*"	"fcp-h1.PASS-sep.sig) pass "D session-cred: a central pass on a separated login" ;;
+  *) fail "D session-cred mint: '$row' $(cat "$SB/d.err")" ;; esac
+grep -q "POST /v1/fleet/session-cred auth=Bearer ccq_NODE_SECRET_0123" "$SB/fake.log" \
+  && pass "D session-cred: the pass request went through the broker (node token put in)" \
+  || fail "D session-cred: the hub saw: $(cat "$SB/fake.log")"
+FLEET_CONF_DIR="$S" bash "$BIN/fleet-session-cred.sh" revoke --sid sep1
+grep -q "DELETE /v1/fleet/session-cred/pass-sep auth=Bearer ccq_NODE_SECRET_0123" "$SB/fake.log" \
+  && pass "D session-cred: revoke DELETEs the pass through the broker" \
+  || fail "D session-cred revoke: the hub saw: $(cat "$SB/fake.log")"
+rm -f "$SB/trust"
+FLEET_CONF_DIR="$S" bash "$BIN/fleet-cred-proxy.sh" route --provider claude --refresh >/dev/null 2>&1
 
 # ── E: one peer uid ──────────────────────────────────────────────────────────────
 mkdir -p "$SB/e/state" "$SB/e/run"
