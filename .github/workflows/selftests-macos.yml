@@ -181,15 +181,19 @@ jobs:
         # (bin/fleet-cred-proxy.py) never asks — fleet-cred-proxy-selftest.sh K —
         # so this hides nothing the product does.
         run: |
-          sp=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
-          cat >> "$sp/sitecustomize.py" <<'PY'
+          # Homebrew's python ships its own sitecustomize.py in the stdlib dir,
+          # which shadows one in site-packages: append to the one it imports.
+          sc=$(python3 -c 'import sitecustomize; print(sitecustomize.__file__)' 2>/dev/null) \
+            || sc="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/sitecustomize.py"
+          echo "sitecustomize: $sc"
+          cat >> "$sc" <<'PY'
           import http.server as _hs, socketserver as _ss
           def _bind(self):
               _ss.TCPServer.server_bind(self)
               self.server_name, self.server_port = self.server_address[:2]
           _hs.HTTPServer.server_bind = _bind
           PY
-          python3 -I -c 'import time, http.server as h; t = time.time(); h.ThreadingHTTPServer(("127.0.0.1", 0), h.BaseHTTPRequestHandler); print("bind %.2fs" % (time.time() - t))'
+          python3 -I -c 'import sys, time, http.server as h; t = time.time(); h.ThreadingHTTPServer(("127.0.0.1", 0), h.BaseHTTPRequestHandler); d = time.time() - t; print("bind %.2fs" % d); sys.exit(d > 5)'
 
       - name: Run this shard's selftests
         # Same command and the same sharding as the ubuntu matrix — K from the
