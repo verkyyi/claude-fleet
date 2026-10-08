@@ -29,7 +29,7 @@
 # Prints nothing (⇒ no fzf action) on every refusal; the toast carries the why.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-C="${TMPDIR:-/tmp}/.claude-dash"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"
 
 [ -f "$C/rename_target" ] || [ -f "$C/bind_target" ] && exit 0
 

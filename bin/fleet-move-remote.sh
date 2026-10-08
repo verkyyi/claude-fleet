@@ -156,6 +156,9 @@ case "$cmd" in
     sess=$(resolve_fleet "$fleetw") || die 'no single configured fleet on this login (pass --fleet)'
     SOCK=$(fleet_socket "$sess")
     TM() { tmux -L "$SOCK" "$@"; }
+    # A same-machine move runs this half under `sudo -u` with no TMPDIR: the
+    # server it lands on gets the login's own (fleet-lib.sh exported it; #2442).
+    fleet_server_tmpdir "$SOCK"
     LAUNCH="${FLEET_MOVE_LAUNCH:-$BIN/fleet-session-wrap.sh}"
     boot="${FLEET_MOVE_BOOT_WAIT:-15}"
     cmdline="'$LAUNCH' --resume '$sid'; exec \$SHELL"

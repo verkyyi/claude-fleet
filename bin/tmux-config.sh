@@ -363,7 +363,7 @@ CFG_DIM=$'\033[38;2;86;95;137m'       # dim    — unset → code default
 CFG_REPO=$'\033[38;2;187;154;247m'    # magenta — the repo's own overlay wins
 
 # ---- UI state (raw-key + section-expand toggles, persisted per session) ------
-CFG_STATE_DIR="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global"
+CFG_STATE_DIR="${FLEET_C:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash}/global"
 raw_file()   { printf '%s/config_raw_%s' "$CFG_STATE_DIR" "${SESSION:-_}"; }
 raw_on()     { [ -f "$(raw_file)" ]; }
 raw_toggle() { local f; f=$(raw_file); if [ -f "$f" ]; then rm -f "$f"; else mkdir -p "$CFG_STATE_DIR" 2>/dev/null; : > "$f"; fi; }
@@ -664,7 +664,7 @@ eval "$(bash "$BIN/dash-keymap.sh" --panel config env)"
 # Baked into the enter bind so the transform child writes the SAME paths the parent
 # loop reads (like $RESTART). mkdir the dir up front so the writes can't fail for a
 # missing parent (see the guarded abort in emit_enter_action).
-CGLOB="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global"
+CGLOB="${FLEET_C:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash}/global"
 RESTART="$CGLOB/config_restart_${SESSION:-_}.$$"
 EDITKEY="$CGLOB/config_edit_${SESSION:-_}.$$"
 QUERYF="$CGLOB/config_query_${SESSION:-_}.$$"

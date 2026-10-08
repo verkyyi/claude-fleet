@@ -56,7 +56,7 @@
 # that uuid (what a window's @cc_account holds), else the hub's own label.
 
 # shellcheck disable=SC2034  # the FSN_* / FSR_* / FSH_* / HN_* / HL_* / FSA results are read by the sourcing script
-FLEET_STATUS_G="${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}"
+FLEET_STATUS_G="${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}"
 _FS_US=$'\x1f'
 
 fleet_status_node() {

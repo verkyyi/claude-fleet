@@ -1059,7 +1059,7 @@ PLACE_FIND_SECS = 30
 def status_dir():
     """The refresh loop's cache dir (fleet-status-lib.sh FLEET_STATUS_G)."""
     return os.environ.get("FLEET_STATUS_G") or os.path.join(
-        os.environ.get("TMPDIR") or "/tmp", ".claude-dash", "global")
+        os.environ.get("TMPDIR") or f"/tmp/claude-fleet-{os.getuid()}", ".claude-dash", "global")
 
 
 def hub_down():

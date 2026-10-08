@@ -11,7 +11,7 @@ num="${1//[^0-9]/}"; [ -z "$num" ] && exit 0
 BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
-C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 # --repo=<owner/name> (issue #794): the backlog row's repo, in a fleet hosting 2+
 # repos — the action targets THAT repo. fleet_backlog_repo validates it (hosted).
 ROWREPO=''

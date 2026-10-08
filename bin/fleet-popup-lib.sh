@@ -85,7 +85,7 @@ _fleet_fzf_caps() {
   [ -n "${FLEET_FZF_FOOTER:-}" ] && return 0
   local f c v
   f=$(command -v fzf 2>/dev/null) || { FLEET_FZF_FOOTER=0; return 0; }
-  c="${TMPDIR:-/tmp}/.claude-dash/fzf-caps-v2-$(printf '%s' "$f" | tr -c 'A-Za-z0-9' _)"
+  c="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/fzf-caps-v2-$(printf '%s' "$f" | tr -c 'A-Za-z0-9' _)"
   if [ -f "$c" ] && [ "$c" -nt "$f" ]; then
     read -r v < "$c" 2>/dev/null; FLEET_FZF_FOOTER=${v:-0}; return 0
   fi

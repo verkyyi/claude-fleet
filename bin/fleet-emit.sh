@@ -100,7 +100,7 @@ _emit_load_conf() {
 
 # Spool lives beside the other runtime caches. FLEET_EMIT_DIR is the test seam.
 _emit_spool() {
-  printf '%s' "${FLEET_EMIT_DIR:-${TMPDIR:-/tmp}/.claude-dash/emit}"
+  printf '%s' "${FLEET_EMIT_DIR:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/emit}"
 }
 
 # The spool name's clock: `<seconds>-<microseconds>`, both zero-padded to a FIXED

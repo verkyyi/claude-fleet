@@ -233,7 +233,7 @@ capture() {
       | sort -k4,4nr | awk '!seen[$0]++' | head -20
     echo
     echo "## size of fleet-owned dirs (bounded du, 8s watchdog each — never a full-volume walk)"
-    for d in "${TMPDIR:-/tmp}/.claude-dash" "$HOME/.claude/projects" "$HOME/.config/claude-fleet" "$HOME/.colima"; do
+    for d in "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash" "$HOME/.claude/projects" "$HOME/.config/claude-fleet" "$HOME/.colima"; do
       [ -d "$d" ] || continue
       printf '%12s  %s\n' "$(tmo 8 du -shx "$d" 2>/dev/null | awk '{print $1}')" "$d"
     done

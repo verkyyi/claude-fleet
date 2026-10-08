@@ -607,7 +607,7 @@ solo_resume() {
         [ -n "$lp" ] && T set-option -pa -t "$lp" @sidebar_do "jump=$key " \; send-keys -t "$lp" F12 2>/dev/null
         exit 0 ;;
     esac
-    rf="${TMPDIR:-/tmp}/.claude-dash/global/remote_$SESS"
+    rf="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/remote_$SESS"
     n=$(( ${FLEET_HOME_OPEN_WAIT:-60} * 4 )); i=0
     while [ "$i" -lt "$n" ]; do
       m=$(stat -c %Y "$rf" 2>/dev/null || stat -f %m "$rf" 2>/dev/null) || m=0
@@ -880,7 +880,7 @@ warm)
     code_sum "$BIN/fleet-shell.sh" > "$WD/loop.pid.code" 2>/dev/null
   fi
   SSHC="${FLEET_REMOTE_SSH_CMD:-ssh}"
-  CACHEF="${TMPDIR:-/tmp}/.claude-dash/global/remote_$s"
+  CACHEF="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/remote_$s"
   wlog() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >> "$WD/warm.log" 2>/dev/null; }
   whost() {   # its ssh host (FLEET_REMOTE_SSH, as fleet-remote-view.sh)
     local h
@@ -957,7 +957,7 @@ wait)
   # being opened for a newcomer (#2069) is 「正在为你开机器」, a failed or
   # missing one names who to ask. No line (a login they hold, no hub, an older
   # hub): the note as before. Read again every second, redrawn on a change.
-  hr="${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}/hub_repos"
+  hr="${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}/hub_repos"
   said='' seen='' n=0
   while :; do
     st='' eta='' mach='' ask=''
@@ -1008,7 +1008,7 @@ portal)
   # From the orchestrator (or anywhere else) ⌘N is the writing area, as below. No
   # orchestrator: nothing changes — the writing area stays, no line.
   if [ "$(TS display-message -p -t "=$STAGE:" '#{@fleet_role}' 2>/dev/null)" = portal ] \
-     && [ -s "${FLEET_STATUS_G:-${TMPDIR:-/tmp}/.claude-dash/global}/orch_$s" ] \
+     && [ -s "${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}/orch_$s" ] \
      && python3 "$BIN/fleet-compose.py" --orch "$s" >/dev/null 2>&1; then
     exit 0
   fi
@@ -1269,7 +1269,7 @@ EOF
   # it on the list. FLEET_HOME_OPEN_CMD is the selftests' seam.
   (
     cd "$HOME" 2>/dev/null || :; trap '' HUP
-    rf="${TMPDIR:-/tmp}/.claude-dash/global/remote_$SESS"
+    rf="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/remote_$SESS"
     n=$(( ${FLEET_HOME_OPEN_WAIT:-60} * 4 )); i=0
     case "$hkey" in
       wid:*)

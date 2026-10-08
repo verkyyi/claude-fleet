@@ -27,7 +27,7 @@
 #                          the collector + the old footer segment.
 
 # Machine-wide cache dir (global/, issue #181). Honors $TMPDIR like the rest.
-fleet_usage_cache_dir() { printf '%s/.claude-dash/global' "${TMPDIR:-/tmp}"; }
+fleet_usage_cache_dir() { printf '%s/.claude-dash/global' "${TMPDIR:-/tmp/claude-fleet-$(id -u)}"; }
 
 # fleet_usage_now — epoch seconds for the age math below (issue #888). Delegates
 # to fleet-daemon-lib.sh's fleet_now when that is loaded, so a caller that pinned

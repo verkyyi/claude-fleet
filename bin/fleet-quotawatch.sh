@@ -155,7 +155,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/usage-lib.sh"         # fleet_quota_stale_age / fleet_quota_watch_configured
 
-C="${TMPDIR:-/tmp}/.claude-dash"; G="$C/global"; mkdir -p "$G"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; G="$C/global"; mkdir -p "$G"
 now() { date +%s; }
 atomic_write() { local dest="$1" tmp="$1.$$"; cat > "$tmp" && mv "$tmp" "$dest"; }
 

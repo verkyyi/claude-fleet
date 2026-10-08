@@ -186,7 +186,7 @@ landed_target() { # <ledger key> <pr> [<repo>]
 # A fleet hosting 2+ repos keeps one per repo, `<file>.<slug>` (issue #790): two
 # repos' `issue-12` rows are different sessions. [<slug>] picks that file.
 landed_fold_file() { # [<slug>]
-  printf '%s/global/dash_fold_landed_%s%s' "${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}" "${FLEET_SESSION:-default}" \
+  printf '%s/global/dash_fold_landed_%s%s' "${FLEET_C:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash}" "${FLEET_SESSION:-default}" \
     "${1:+.$1}"
 }
 
@@ -838,7 +838,7 @@ cmd_rows() {
   # layout) is read, and every haystack line is keyed `<slug>\t#<num>`.
   local _pf prdir prmapn='' prwant=''
   if [ "$LANDED_MERGED" = 1 ]; then
-    prdir="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/fleets"
+    prdir="${FLEET_C:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash}/fleets"
     prwant=$(awk -F'\t' '{ p=$5; if (p != "" && p != "-") { sub(/^#/, "", p); r=$1; gsub(/\//, "-", r); print r "\t#" p } }' <<< "$out" | LC_ALL=C sort -u)
     local _r _prf=()
     while IFS= read -r _r; do
@@ -1368,7 +1368,7 @@ cmd_fold() {
   [ "$LANDED_MERGED" = 1 ] || hrepo=''
   case "$hkey" in scratch-*) htgt=$(landed_target "$hkey" "$hpr" "$hrepo") ;;
                   *)         htgt=$(landed_target "${hkey#issue-}" "$hpr" "$hrepo") ;; esac
-  snap="${FLEET_C:-${TMPDIR:-/tmp}/.claude-dash}/global/dash_fold_rows_${FLEET_SESSION:-default}"
+  snap="${FLEET_C:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash}/global/dash_fold_rows_${FLEET_SESSION:-default}"
   mkdir -p "${snap%/*}" 2>/dev/null || true
   if cmd_rows > "$snap.$$" 2>/dev/null && [ -s "$snap.$$" ]; then
     mv -f "$snap.$$" "$snap"

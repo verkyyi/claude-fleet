@@ -93,7 +93,7 @@ act() {
 # for an answer that changes only with the prefix or the script itself. A test
 # seam (FLEET_TMUX_PREFIX*) bypasses the cache, as it bypasses the server.
 keys_env() {
-  local c="${TMPDIR:-/tmp}/.claude-dash" p f
+  local c="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash" p f
   if [ -n "${FLEET_TMUX_PREFIX+x}" ] || [ -n "${FLEET_TMUX_PREFIX2+x}" ]; then
     bash "$BIN/dash-keymap.sh" env 2>/dev/null; return 0
   fi

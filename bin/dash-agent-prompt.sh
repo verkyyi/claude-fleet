@@ -46,7 +46,7 @@ set -uo pipefail
 case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
 BIN="$(cd "${BIN:-/}" && pwd)"
 mode="${1:-actions}"
-C="${TMPDIR:-/tmp}/.claude-dash"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"
 
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"

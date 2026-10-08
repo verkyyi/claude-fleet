@@ -304,6 +304,9 @@ fi
 # own PATH — gets ~/.local/bin stamped onto its global environment, so the next
 # window it spawns server-side finds claude too (issue #1191). A no-op when there.
 fleet_server_local_bin "$SOCK"
+# ...and this login's TMPDIR, so a server a `sudo -u` half started reads the
+# daemons' dash cache, not a shared /tmp one (issue #2442). A no-op when there.
+fleet_server_tmpdir "$SOCK"
 # The server outlives its last window (issue #1784): an exit that closes the last
 # session must not take every view of this machine down with it.
 fleet_server_resident "$SOCK" "$NAME"

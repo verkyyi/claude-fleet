@@ -32,7 +32,7 @@ if ! cap_msg=$(fleet_session_cap_ok "$SESS"); then fleet_ui_fail "$cap_msg"; exi
 # Backstop throttle (multi-line pastes are coalesced upstream by
 # dash-task-buffer.sh, so a burst reaches us as ONE call; this only guards
 # against pathological loops).
-C="${TMPDIR:-/tmp}/.claude-dash"; mkdir -p "$C"
+C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 now=$(date +%s); last=$(cat "$C/last_issue_create" 2>/dev/null || echo 0)
 if [ $(( now - last )) -lt 5 ]; then
   fleet_ui_fail "issue create throttled — wait 5s"; exit 0

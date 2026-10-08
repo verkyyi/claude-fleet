@@ -54,7 +54,7 @@ fleet_home_trace_start() {
   # A trace already running (hub-zoom.sh --hub, exec'd back from the sidebar)
   # goes on; one whose file is gone (recorded and removed) is over — start anew.
   if [ -n "${FLEET_HOME_MS:-}" ] && [ -f "$FLEET_HOME_MS" ]; then return 0; fi
-  local d="${TMPDIR:-/tmp}/.claude-dash"
+  local d="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"
   [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || { FLEET_HOME_MS=''; return 0; }
   FLEET_HOME_MS="$d/home-trace.$$"   # one trace per process; $RANDOM is not sh
   : > "$FLEET_HOME_MS" 2>/dev/null || { FLEET_HOME_MS=''; return 0; }

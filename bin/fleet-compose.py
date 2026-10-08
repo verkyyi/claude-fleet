@@ -267,7 +267,7 @@ def scratch_name(title):
 
 def status_dir():
     """The refresh loop's cache dir (fleet-status-lib.sh FLEET_STATUS_G)."""
-    return os.environ.get("FLEET_STATUS_G") or os.path.join(os.environ.get("TMPDIR") or "/tmp",
+    return os.environ.get("FLEET_STATUS_G") or os.path.join(os.environ.get("TMPDIR") or f"/tmp/claude-fleet-{os.getuid()}",
                                                              ".claude-dash", "global")
 
 

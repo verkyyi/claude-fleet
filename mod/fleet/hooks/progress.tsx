@@ -56,7 +56,12 @@ async function refreshProgress($: EngineInterface): Promise<void> {
   const { self, windows } = parseTmux(run.stdout)
   if (self === null) return
 
-  const tmp = (await $.env.get('TMPDIR')) || '/tmp'
+  // No TMPDIR: this login's own fallback, never the /tmp every login shares (#2442).
+  let tmp = (await $.env.get('TMPDIR')) || ''
+  if (tmp === '') {
+    const id = await $.process.run(['id', '-u'], { timeoutMs: TMUX_TIMEOUT_MS })
+    tmp = `/tmp/claude-fleet-${id.stdout.trim()}`
+  }
   const dash = join(tmp, '.claude-dash', 'fleets')
   const home = (await $.env.get('HOME')) ?? ''
   const conf = (await $.env.get('FLEET_CONF_DIR')) || join(home, '.config', 'claude-fleet')
