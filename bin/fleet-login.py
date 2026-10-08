@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""fleet-login.py — `fleet login`: scan once, get a 12-hour SSH certificate.
+"""fleet-login.py — `fleet login`: one click in the browser, a 12-hour SSH certificate.
 
-    fleet login [--hub URL] [--invert] [--no-include]
+    fleet login [--hub URL] [--invert] [--no-include] [--qr]
     fleet login renew [--hub URL] [--quiet] [--if-under SECS]
     fleet login status
     fleet login check
@@ -14,10 +14,16 @@
 
   1. makes ~/.ssh/fleet-cert (ed25519, no passphrase) if it is not there —
      the private key never leaves this computer;
-  2. POSTs the public half to <hub>/v1/fleet/login/start and draws the
-     returned QR code here;
-  3. you scan it with a phone (or open the link), sign in with GitHub, and
-     confirm the code on the page;
+  2. POSTs the public half to <hub>/v1/fleet/login/start; with a screen here
+     (claude-fleet#2262: macOS in a GUI login, Linux with $DISPLAY, not over
+     ssh; FLEET_LOGIN_BROWSER=1/0 decides outright) it opens the returned
+     confirmation page in this computer's browser (`open` / `xdg-open`) —
+     otherwise, with --qr, when the browser will not open, or on `q` while
+     waiting, it draws the QR code here;
+  3. you sign in with GitHub on that page (or scan the QR with a phone) and
+     click 「确认签发」; the page then says 已登录，可以回到终端. The wait says
+     what it is waiting for every FLEET_LOGIN_NUDGE_SECS (15) and stops after
+     FLEET_LOGIN_TIMEOUT_SECS (120) with why — never a silent wait;
   4. polls <hub>/v1/fleet/login/poll and writes
         ~/.ssh/fleet-cert-cert.pub   the certificate (12 hours)
         ~/.ssh/fleet-ssh-config      Host blocks for your machines
@@ -92,8 +98,41 @@ CERT = KEY + "-cert.pub"
 SSH_CONFIG_SNIPPET = os.path.join(SSH_DIR, "fleet-ssh-config")
 SSH_CONFIG = os.path.join(SSH_DIR, "config")
 HUB_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "claude-fleet", "hub.json")
+
+
+def _inside(path, root):
+    path, root = os.path.realpath(path), os.path.realpath(root)
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def conf_dir_env():
+    """FLEET_CONF_DIR, unless it was carried into a sandbox (claude-fleet#2262):
+    HOME moved off this account's own home while FLEET_CONF_DIR still points
+    into the real one — a session's environment under a hand-made sandbox. A
+    login there would write the sandbox's hub address into the machine's real
+    fleet.conf (2026-10-07: m5 lost its hub that way). Such a value is dropped
+    — for this process and every script it runs — and the sandbox's own
+    ~/.config/claude-fleet is used."""
+    d = os.environ.get("FLEET_CONF_DIR", "")
+    if not d:
+        return ""
+    real = os.environ.get("FLEET_LOGIN_REAL_HOME", "")   # the BREAK-IT drill's seam, never a setting
+    if not real:
+        try:
+            import pwd
+            real = pwd.getpwuid(os.getuid()).pw_dir
+        except (ImportError, KeyError):
+            return d
+    if not _inside(HOME, real) and _inside(d, real) and not _inside(d, HOME):
+        os.environ.pop("FLEET_CONF_DIR", None)
+        print("fleet login: FLEET_CONF_DIR (%s) belongs to %s, not this HOME — using %s"
+              % (d, real, os.path.dirname(HUB_FILE)), file=sys.stderr)
+        return ""
+    return d
+
+
 # The machine's ONE config file (issue #1623): the hub address lives there.
-MACHINE_CONF = os.path.join(os.environ.get("FLEET_CONF_DIR") or os.path.dirname(HUB_FILE), "fleet.conf")
+MACHINE_CONF = os.path.join(conf_dir_env() or os.path.dirname(HUB_FILE), "fleet.conf")
 # A node's machine-to-machine ssh (claude-fleet#1719): the node pass lives in
 # node.env; the peer key, the certificates and the machine list under peer/.
 CONF_DIR = os.environ.get("FLEET_CONF_DIR") or os.path.dirname(HUB_FILE)
@@ -188,6 +227,52 @@ def remember_hub(url):
     d["url"] = url
     os.makedirs(os.path.dirname(HUB_FILE), exist_ok=True)
     write_file(HUB_FILE, json.dumps(d, indent=2) + "\n", 0o600)
+
+
+def token_dead(hub, token):
+    """True only when the hub answers this viewer token with 401 — an old
+    identity's (claude-fleet#2262: a WeCom-era hub.json token that would stand
+    in for the certificate and get every `fleet` refused). Unreachable, or any
+    other answer, is not proof: the token stays."""
+    req = urllib.request.Request(hub.rstrip("/") + "/v1/fleet/home",
+                                 headers={"Authorization": "Bearer " + token})
+    try:
+        urllib.request.urlopen(req, timeout=10).close()
+    except urllib.error.HTTPError as e:
+        return e.code == 401
+    except (urllib.error.URLError, OSError, ValueError):
+        pass
+    return False
+
+
+def drop_hub_token():
+    """Take the token out of hub.json, every other key kept (the file goes
+    when nothing is left). The value is never printed."""
+    d = read_hub_file()
+    if "token" not in d:
+        return False
+    del d["token"]
+    if d:
+        write_file(HUB_FILE, json.dumps(d, indent=2) + "\n", 0o600)
+    else:
+        try:
+            os.remove(HUB_FILE)
+        except OSError:
+            return False
+    return True
+
+
+def clear_stale_identity(hub):
+    """Before a scan: an identity the hub no longer knows must not outlive it
+    (claude-fleet#2262). A dead hub.json token is removed; a dead
+    FLEET_HUB_TOKEN in the environment is this shell's, so it is only named."""
+    tok = str(read_hub_file().get("token") or "")
+    if tok and token_dead(hub, tok) and drop_hub_token():
+        show("✓ 清掉了本机一个入口已不认的旧令牌（%s 里的 token）" % tilde(HUB_FILE))
+    env = os.environ.get("FLEET_HUB_TOKEN", "")
+    if env and token_dead(hub, env):
+        show("⚠ 环境变量 FLEET_HUB_TOKEN 是入口已不认的旧令牌 — 从 shell 配置里删掉它（这次先不用它）")
+        os.environ.pop("FLEET_HUB_TOKEN", None)
 
 
 def post(url, body, timeout=20, headers=None):
@@ -580,7 +665,7 @@ def cmd_node_pass(argv):
 
 
 def parse_scan_opts(argv, node=False):
-    hub_arg, invert, include, out = "", False, True, ""
+    hub_arg, invert, include, out, qr = "", False, True, "", False
     it = iter(argv)
     for a in it:
         if a == "--hub":
@@ -591,11 +676,13 @@ def parse_scan_opts(argv, node=False):
             invert = True
         elif a == "--no-include":
             include = False
+        elif a == "--qr":
+            qr = True
         elif node and a == "--out":
             out = next(it, "")
         else:
             die("unknown option " + a)
-    return hub_arg, invert, include, out
+    return hub_arg, invert, include, out, qr
 
 
 INVITE_FILE = os.path.join(CONF_DIR, "invite")
@@ -623,8 +710,110 @@ def pending_invite():
         return ""
 
 
-def scan(hub, invert, purpose=""):
-    """The device-code flow: start, draw the QR, wait for the confirmation.
+def has_gui():
+    """Can this terminal open a browser the person is looking at
+    (claude-fleet#2262)? FLEET_LOGIN_BROWSER=1/0 says so outright; otherwise
+    an ssh session never can (the browser would open on a screen nobody is at),
+    macOS can when the login is a GUI one (`launchctl managername` → Aqua), and
+    Linux when there is a display."""
+    want = os.environ.get("FLEET_LOGIN_BROWSER", "auto").strip().lower()
+    if want in ("1", "yes", "on", "true"):
+        return True
+    if want in ("0", "no", "off", "false"):
+        return False
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return False
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(["launchctl", "managername"], capture_output=True, text=True, timeout=3)
+            return r.returncode != 0 or r.stdout.strip() in ("Aqua", "")
+        except (OSError, subprocess.SubprocessError):
+            return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def open_browser(url):
+    """`open` (macOS) / `xdg-open` (Linux) on url; True when the opener ran
+    and said yes. Its own chatter never reaches the terminal."""
+    for opener in (["open"] if sys.platform == "darwin" else []) + ["xdg-open", "open"]:
+        try:
+            r = subprocess.run([opener, url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        return r.returncode == 0
+    return False
+
+
+class KeyWatch:
+    """While the scan waits, a `q` typed in the terminal switches to the QR
+    (claude-fleet#2262). Only on a real terminal: the line discipline goes to
+    cbreak for the wait and comes back as it was, whatever happens."""
+
+    def __init__(self):
+        self.fd, self.saved = None, None
+        try:
+            if sys.stdin.isatty():
+                import termios
+                import tty
+                self.fd = sys.stdin.fileno()
+                self.saved = termios.tcgetattr(self.fd)
+                tty.setcbreak(self.fd)
+        except (ImportError, OSError, ValueError):
+            self.fd, self.saved = None, None
+
+    def wait(self, secs):
+        """Sleep secs, or less when a key comes; True when it was q."""
+        if self.fd is None:
+            time.sleep(secs)
+            return False
+        import select
+        end = time.time() + secs
+        while True:
+            left = end - time.time()
+            if left <= 0:
+                return False
+            try:
+                ready, _, _ = select.select([self.fd], [], [], left)
+            except (OSError, ValueError):
+                time.sleep(max(0, left))
+                return False
+            if ready:
+                if os.read(self.fd, 1) in (b"q", b"Q"):
+                    return True
+
+    def close(self):
+        if self.saved is not None:
+            import termios
+            try:
+                termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
+            except (OSError, ValueError):
+                pass
+            self.saved = None
+
+
+def env_secs(name, default):
+    try:
+        return max(1.0, float(os.environ.get(name, "") or default))
+    except ValueError:
+        return float(default)
+
+
+def show_qr(st, invert):
+    show("\n用手机扫码，用 GitHub 登录后点「确认签发」（验证码 %s）：\n" % st["user_code"])
+    draw_qr(st.get("qr") or [], invert)
+    show("\n  链接：%s" % st["verification_uri"])
+    show("  密钥指纹 %s\n" % st.get("key_fingerprint", ""))
+
+
+def scan(hub, invert, purpose="", qr=False):
+    """The device-code flow: start, show the way to confirm, wait for it.
+    With a screen here (claude-fleet#2262) the confirmation page opens in this
+    computer's own browser — one click on 「确认签发」 and the terminal goes on;
+    over ssh, or with --qr, or when the browser will not open, the QR is drawn.
+    Every FLEET_LOGIN_NUDGE_SECS (15) without an answer it says what it is
+    waiting for; after FLEET_LOGIN_TIMEOUT_SECS (120) it stops with why and
+    what to do next — never a silent wait (EPIC #2259 约定 5).
     Returns the hub's answer (a CertResponse; with purpose=node it also
     carries `node`, the node pass — claude-fleet#1627)."""
     pub = ensure_key()
@@ -650,36 +839,76 @@ def scan(hub, invert, purpose=""):
     if not purpose:
         remember_hub(hub)
 
-    show("\n用手机扫码或在浏览器打开下面的链接，用 GitHub 登录后点确认（验证码 %s）：\n" % st["user_code"])
-    draw_qr(st.get("qr") or [], invert)
-    show("\n  链接：%s" % st["verification_uri"])
-    show("  密钥指纹 %s · %d 秒内有效\n" % (st.get("key_fingerprint", ""), st.get("expires_in", 600)))
+    # cbreak from here on: a `q` typed the moment the page opens is a key, not
+    # half a line the terminal keeps to itself
+    keys = KeyWatch()
+    try:
+        return wait_confirm(hub, st, invert, qr, keys)
+    finally:
+        keys.close()
 
-    deadline = time.time() + st.get("expires_in", 600)
+
+def wait_confirm(hub, st, invert, qr, keys):
+    browser = False
+    if not qr and has_gui():
+        browser = open_browser(st["verification_uri"])
+        if browser:
+            show("\n已在浏览器里打开 GitHub 授权页（验证码 %s）：在那里点「确认签发」，然后回到这里。"
+                 % st["user_code"])
+            show("  没看到？打开 %s ，或按 q 改用手机扫码\n" % st["verification_uri"])
+        else:
+            show("\n浏览器打不开，改用二维码：")
+    if not browser:
+        show_qr(st, invert)
+
+    timeout = env_secs("FLEET_LOGIN_TIMEOUT_SECS", 120)
+    nudge = env_secs("FLEET_LOGIN_NUDGE_SECS", 15)
+    began = time.time()
+    hard = began + st.get("expires_in", 600)    # the code itself dies here
+    deadline = min(hard, began + timeout)
+    next_nudge = began + nudge
     interval = max(1, int(st.get("interval", 3)))
     while time.time() < deadline:
-        time.sleep(interval)
+        if keys.wait(interval) and browser:
+            browser = False
+            show_qr(st, invert)
+            deadline = min(hard, time.time() + timeout)   # a phone takes its own while
+            next_nudge = time.time() + nudge
         try:
             code, res = post(hub + "/v1/fleet/login/poll", {"device_code": st["device_code"]})
         except (urllib.error.URLError, OSError):
-            continue  # a blip on a cross-border link: keep waiting
-        if code == 202 or code >= 500:
-            continue  # a 5xx is the ingress / hub between two polls, not a «no» (#1901)
+            code, res = 0, {}   # a blip on a cross-border link: keep waiting
         if code == 200:
             return res
-        if res.get("code") in ("no_machine_login", "not_invited"):
-            # the hub cannot sign for this person yet (claude-fleet#2090), or
-            # their sign-in was refused — nobody invited them, or the invite
-            # cannot be used (claude-fleet#2261): the reason, and stop
-            die("✗ %s" % (res.get("reason") or res.get("error", "")), 1)
-        die("not issued (HTTP %d): %s" % (code, res.get("error", "")), 1)
-    die("timed out waiting for the scan — run it again", 1)
+        if code and code != 202 and code < 500:
+            # a 5xx is the ingress / hub between two polls, not a «no» (#1901)
+            if res.get("code") in ("no_machine_login", "not_invited"):
+                # the hub cannot sign for this person yet (claude-fleet#2090), or
+                # their sign-in was refused — nobody invited them, or the invite
+                # cannot be used (claude-fleet#2261): the reason, and stop
+                die("✗ %s" % (res.get("reason") or res.get("error", "")), 1)
+            if code == 410:
+                die("这个验证码已过期或已用过 — 再运行 fleet login", 1)
+            die("not issued (HTTP %d): %s" % (code, res.get("error", "")), 1)
+        if time.time() >= next_nudge:
+            waited = int(time.time() - began)
+            if browser:
+                show("  还在等浏览器里授权…（已等 %d 秒；按 q 改用二维码）" % waited)
+            else:
+                show("  还在等扫码确认…（已等 %d 秒）" % waited)
+            next_nudge += nudge
+    mins = "%d 分钟" % (timeout // 60) if timeout >= 60 and timeout % 60 == 0 else "%d 秒" % timeout
+    if browser:
+        die("%s内浏览器里没有完成授权，已停下 — 浏览器可能开在了别的窗口、没登 GitHub，"
+            "或网络拦了 GitHub。再运行 fleet login；想用手机扫码：fleet login --qr" % mins, 1)
+    die("%s内没有完成扫码确认，已停下 — 再运行 fleet login（手机打不开链接时，换电脑浏览器打开同一链接）" % mins, 1)
 
 
 def cmd_login(argv):
-    hub_arg, invert, include, _ = parse_scan_opts(argv)
+    hub_arg, invert, include, _, qr = parse_scan_opts(argv)
     hub = hub_url(hub_arg)
-    res = scan(hub, invert)
+    clear_stale_identity(hub)
+    res = scan(hub, invert, qr=qr)
     was_node = os.path.exists(NODE_ENV)
     # 登录即登记 (claude-fleet#2212): the same confirmation makes it a node —
     # before the snippet is written, so it carries a node's machine-to-machine
@@ -711,10 +940,10 @@ def cmd_login(argv):
 def cmd_node(argv):
     """`fleet node join`'s scan (claude-fleet#1627): the certificate is written
     exactly as `fleet login` writes it; the node pass goes to --out."""
-    hub_arg, invert, include, out = parse_scan_opts(argv, node=True)
+    hub_arg, invert, include, out, qr = parse_scan_opts(argv, node=True)
     if not out:
         die("node: --out FILE is required")
-    res = scan(hub_url(hub_arg), invert, purpose="node")
+    res = scan(hub_url(hub_arg), invert, purpose="node", qr=qr)
     node = res.get("node")
     if not isinstance(node, dict) or not node.get("token"):
         # an older hub ignores purpose and answers a plain login (#1627)
@@ -732,7 +961,7 @@ def cmd_node(argv):
 
 
 def cmd_hub(argv):
-    hub_arg, _, _, _ = parse_scan_opts(argv)
+    hub_arg = parse_scan_opts(argv)[0]
     print(hub_url(hub_arg))
     return 0
 
@@ -754,6 +983,8 @@ def cmd_renew(argv):
             quiet = True
         elif a == "--no-include":
             include = False
+        elif a == "--qr":
+            qr = True
         else:
             die("unknown option " + a)
     if under is not None:
