@@ -28,6 +28,8 @@
 #                         the full suite is dispatched with -f sha=<target> and
 #                         waited for, then the tag moves; --force moves past red
 #                         and logs `macos=`
+#   L. --ignore-check     the caller's own pending CI job (exact name) is passed
+#                         over; any other pending run still refuses
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -235,5 +237,22 @@ git -C "$SEED" add -A; git -C "$SEED" commit -qm 'release.json'; C14=$(git -C "$
 macos_green "$C14" 23
 run move "$C14"
 eq "K: a valid release.json moves" 0 "$RC"; eq "K: tag at C14" "$C14" "$(tag)"; contains "K: says valid" "$OUT" "carries a valid release.json"
+
+# --- L. --ignore-check (stable-auto.yml) -----------------------------------------------
+# The CI job that runs the move is a check run on the very commit it moves to, never
+# finished yet: without the flag it is refused like any pending run; with its exact
+# name it is passed over — and only that name (a pending run beside it still refuses).
+C15=$(commit fifteen); push; macos_green "$C15" 24
+printf 'completed success shard 1\nin_progress null move stable\n' > "$WORK/checks"
+run move "$C15" --dry-run
+eq "L: its own pending job refused without the flag" 3 "$RC"; contains "L: names it" "$OUT" "not green: in_progress null move stable"
+run move "$C15" --ignore-check "move stable"
+eq "L: --ignore-check passes over its own job" 0 "$RC"; eq "L: tag at C15" "$C15" "$(tag)"
+C16=$(commit sixteen); push; macos_green "$C16" 25
+printf 'completed success shard 1\nin_progress null move stable\nqueued null deploy hub\n' > "$WORK/checks"
+run move "$C16" --ignore-check "move stable"
+eq "L: another pending run still refuses" 3 "$RC"; contains "L: names the other one" "$OUT" "not green: queued null deploy hub"
+case "$OUT" in *"not green: in_progress null move stable"*) fail "L: the ignored job was counted" ;; esac
+eq "L: tag still C15" "$C15" "$(tag)"
 
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"
