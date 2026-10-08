@@ -950,7 +950,10 @@ drill_personal_hook_hangs() {
 # A personal hook that always errors (exit 1, a missing command → 127): off after
 # 3 in a row. A deliberate deny (exit 2) is the hook doing its job — never a strike.
 drill_personal_hook_errors() {
-  CAP=3; local t0 r; mkdir -p "$WORK/ph/conf"
+  # 14 sequential hook launches (no waiting in them): ~2 s here, 3.9 s on a macOS
+  # runner (run 37731956688, #2377). The switch-off itself is pinned by the exit
+  # codes below, so the bound only has to catch a launch that hangs.
+  CAP=6; local t0 r; mkdir -p "$WORK/ph/conf"
   t0=$(now); PH_LAUNCH="err$$"; r=$(ph_hook 5 'exit 1' 4)
   case "$r" in 1:*' '1:*' '1:*' '0:*) ;; *) WHY="a hook that fails every time is never switched off: [$r]"; return 1 ;; esac
   PH_LAUNCH="err127$$"; r=$(ph_hook 5 'no-such-personal-tool-xyz --go' 4)
