@@ -246,3 +246,5 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 指标口径（`count`）：服务 = `/Library/LaunchDaemons` + 每个账号 `~/Library/LaunchAgents` 里有效的 `com.claude-fleet.*` / `com.ccquota.*`
 （`.bak` / `.retired` 等残留不算）；种类 = 各账号服务组合去重（托管账号算「守护代跑」一种）；GitHub = 未托管且有 install-sync 的账号数；
 部件 = `doctor --machine` 里 runtime / ccquota / claude / codex / tmux / cache 不是 PASS 的个数。沙箱自测 `bin/fleet-node-drill-selftest.sh`。
+
+演练记录与五个指标的读数：#2336（m4，2026-10-08）。
