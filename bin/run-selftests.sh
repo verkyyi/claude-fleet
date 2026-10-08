@@ -193,11 +193,6 @@ unset FLEET_GLOBAL_MAX_SESSIONS 2>/dev/null || true
 # that has nothing to do with it. Off for the suite; fleet-admit-selftest.sh turns it
 # back on against stubbed probes.
 export FLEET_ADMIT=0
-# The warm pool is ON by default (issue #2233): every ⌃s spawn and every diskguard
-# tick would warm real agent sessions on a test's fleet — in the background, past
-# the test's end. Off for the suite; the pool's own selftests turn it on in their
-# fleet conf (a conf value beats this baseline).
-export FLEET_SCRATCH_POOL=0
 # Every collector tick publishes this login's session count to a MACHINE-level dir
 # the other logins' caps read (issue #1301). A test tick counting its own fake fleet
 # must never land there — it would overwrite the operator's real row for up to the

@@ -145,6 +145,13 @@ SOCK=$(fleet_socket "$SESS")
 TM() { tmux -L "$SOCK" "$@"; }
 POOL=$(fleet_pool_session "$SESS")
 
+# The default slot size: 1 (issue #2233) — except under the selftest gate
+# (FLEET_SELFTEST_ROOT, which run-selftests.sh sets for every test), where a ⌃s
+# spawn or a diskguard tick in some unrelated test would otherwise warm real agent
+# sessions in the background, past that test's end. A test that wants the pool
+# sets FLEET_SCRATCH_POOL in its fleet conf, as the pool's own selftests do.
+POOL_DEFAULT=1; [ -n "${FLEET_SELFTEST_ROOT:-}" ] && POOL_DEFAULT=0
+
 # REPO: the one slot this pass serves — a hosted repo, or `-` for HOME (#2233).
 # The pool is per repo, one road whatever the count (#1941). With no --repo,
 # ensure/reap/status fan out over every hosted repo plus HOME, and claim takes the
@@ -158,8 +165,8 @@ if [ -z "$REPO_ARG" ]; then
       if [ "$CMD" = ensure ] && [ "$DELAY" = 1 ]; then
         while IFS= read -r _r; do
           [ -n "$_r" ] || continue
-          if [ "$_r" = - ]; then _w=${FLEET_SCRATCH_POOL-1}
-          else _w=$( fleet_load_repo_conf "$SESS" "$_r" >/dev/null 2>&1; printf '%s' "${FLEET_SCRATCH_POOL-1}" ); fi
+          if [ "$_r" = - ]; then _w=${FLEET_SCRATCH_POOL-$POOL_DEFAULT}
+          else _w=$( fleet_load_repo_conf "$SESS" "$_r" >/dev/null 2>&1; printf '%s' "${FLEET_SCRATCH_POOL-$POOL_DEFAULT}" ); fi
           case "$_w" in ''|*[!0-9]*|0) continue ;; esac
           sleep "${FLEET_POOL_REFILL_DELAY:-45}"; break
         done <<EOF
@@ -206,7 +213,7 @@ else
   fleet_load_repo_conf "$SESS" "$REPO" || empty      # not hosted: an empty pool
 fi
 
-WANT="${FLEET_SCRATCH_POOL-1}"; case "$WANT" in ''|*[!0-9]*) WANT=0;; esac
+WANT="${FLEET_SCRATCH_POOL-$POOL_DEFAULT}"; case "$WANT" in ''|*[!0-9]*) WANT=0;; esac
 AGENT="${AGENT_ARG:-${FLEET_AGENT:-claude}}"
 case "$AGENT" in claude|codex) ;; *) AGENT=claude ;; esac
 MAXAGE="${FLEET_POOL_MAX_AGE:-1800}"; case "$MAXAGE" in ''|*[!0-9]*) MAXAGE=1800;; esac

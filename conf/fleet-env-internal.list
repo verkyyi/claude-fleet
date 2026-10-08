@@ -348,6 +348,7 @@ FLEET_RESTORE_SESS                 handoff: the session a restore targets
 FLEET_RESTORE_STALE_MAP_AGE        knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
 FLEET_RESTORE_TMP_MAX_MIN          knob: internal pacing/limit, safe in-code default (fleet-restore.sh)
 FLEET_SEED_REPO                    knob: the starter repo a new login's first-login bootstrap brings its fleet up on; read before any conf exists (fleet-login-bootstrap.sh)
+FLEET_SELFTEST_ROOT                handoff: the shadow install root run-selftests.sh runs the suite from; scratch-pool.sh keeps the warm pool off by default under it (#2233)
 FLEET_SESSION                      handoff: the fleet session a pane/popup belongs to, exported by the spawner
 FLEET_SESSION_END_REASON           handoff: why the SessionEnd hook fired (set by the stopper)
 FLEET_SIDEBAR_CURRENT              handoff: the window id the sidebar is rendering for
