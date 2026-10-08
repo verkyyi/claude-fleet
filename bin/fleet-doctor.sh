@@ -3229,6 +3229,23 @@ _repos_row() {
 if [ ! -f "$tr_sh" ]; then
   warn trust "bin/fleet-trust.sh missing — spawns cannot pre-trust the checkout; a worker may park on Claude Code's \"trust this folder?\" dialog (#563); run /fleet-sync-install"
 fi
+# --- 信任框 (issue #2282): does this machine pre-trust WIDE? — one line, why ------
+# A trusted node pre-answers the folder-trust dialog for every hosted repo and for a
+# fleet-opened no-repo session's $HOME; otherwise only the window's repo (#563).
+# The verdict is fleet-trust.sh node's, the launcher's own reader. Advice: INFO.
+if [ -f "$tr_sh" ] && grep -q '^  node)' "$tr_sh" 2>/dev/null; then
+  _pt=$(_gconf_val FLEET_PRETRUST)
+  _pt_v=$(FLEET_CONF_DIR="$conf_dir" sh "$tr_sh" node 2>/dev/null); _pt_rc=$?
+  _pt_why=$(printf '%s' "$_pt_v" | cut -f2-)
+  if [ "$_pt" = 0 ]; then
+    info 信任框 "不预信任：FLEET_PRETRUST=0 — 新会话都会停在「是否信任此文件夹」"
+  elif [ "$_pt_rc" = 0 ]; then
+    pass 信任框 "放宽：这台是可信节点（${_pt_why}）— 新会话预信任每个托管仓库的 checkout + worktree，及 fleet 开的无仓库会话的 \$HOME（#2282）"
+  else
+    info 信任框 "不放宽：这台不算可信节点（${_pt_why:-判不出}）— 只预信任窗口所在仓库的 checkout + worktree（#563）；无仓库会话、编排会话仍会停在「是否信任此文件夹」"
+  fi
+  unset _pt _pt_v _pt_rc _pt_why
+fi
 if [ -d "$conf_dir" ]; then
   rs_fleets=$(_fleet_confs "$conf_dir" | grep -c .)
   while IFS= read -r cf; do

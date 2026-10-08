@@ -74,6 +74,7 @@
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 #   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
+#   pretrust-norepo                                 bin/fleet-trust.sh (node, grant --home), bin/fleet-claude.sh
 # Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
 # sockets, an ssh shim for the far end, a python pty as the person's terminal:
 #   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
@@ -3474,6 +3475,48 @@ drill_invite_expired() {
     WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
+}
+
+drill_pretrust_norepo() {
+  # issue #2282: on a trusted node a fleet-opened @norepo session in $HOME must
+  # not park on Claude Code's "trust this folder?" dialog; on an untrusted node the
+  # same launch leaves ~/.claude.json byte for byte. The fake claude does what
+  # Claude Code does: an exact-key lookup of its cwd in ~/.claude.json.
+  CAP=10; local d="$WORK/ptn" sock="$WORK/sock-ptn" t0 w go verdict
+  mkdir -p "$d/home" "$d/conf/fleets/ptn" "$d/conf/cred-proxy" "$d/fb"
+  printf 'FLEET_SESSION=ptn\n' > "$d/conf/fleets/ptn/conf"
+  printf '{"numStartups": 7, "projects": {"/elsewhere": {"hasTrustDialogAccepted": true}}}\n' > "$d/home/.claude.json"
+  cp "$d/home/.claude.json" "$d/before.json"
+  cat > "$d/fb/claude" <<'FAKE'
+#!/bin/sh
+python3 -c 'import json, os, sys
+d = json.load(open(os.path.join(os.environ["HOME"], ".claude.json")))
+ok = d.get("projects", {}).get(os.getcwd(), {}).get("hasTrustDialogAccepted") is True
+open(sys.argv[1], "w").write("no-dialog" if ok else "dialog")' "$PTN_OUT"
+FAKE
+  chmod +x "$d/fb/claude"
+  "$REAL_TMUX" -S "$sock" -f /dev/null new-session -d -s ptn -n home || { WHY="cannot start the isolated tmux server"; return 1; }
+  ptn_launch() { # <word in trust.json> → the fake claude's verdict in $d/out.<word>
+    printf '{"trust": "%s", "why": "hub: %s", "ts": %s}\n' "$1" "$1" "$(date +%s)" > "$d/conf/cred-proxy/trust.json"
+    go="$d/go.$1"
+    w=$("$REAL_TMUX" -S "$sock" new-window -d -P -F '#{window_id}' -t ptn -c "$d/home" \
+        "while [ ! -f '$go' ]; do sleep 0.05; done; exec env -i HOME='$d/home' PATH='$d/fb:/usr/bin:/bin:$(dirname "$REAL_TMUX")' TMUX=\"\$TMUX\" TMUX_PANE=\"\$TMUX_PANE\" FLEET_CONF_DIR='$d/conf' FLEET_MOD=0 FLEET_AGENT_CFG=0 FLEET_CLAUDE_BIN='$d/fb/claude' PTN_OUT='$d/out.$1' bash '$BIN/fleet-claude.sh' >'$go.log' 2>&1")
+    "$REAL_TMUX" -S "$sock" set-option -w -t "$w" @norepo 1
+    : > "$go"
+    until_ok 8 test -s "$d/out.$1"
+  }
+  ptn_launch untrusted || { WHY="the untrusted launch never reached claude: $(cat "$d/go.untrusted.log" 2>/dev/null)"; return 1; }
+  cmp -s "$d/home/.claude.json" "$d/before.json" || { WHY="untrusted node: ~/.claude.json changed: $(cat "$d/home/.claude.json")"; return 1; }
+  [ "$(cat "$d/out.untrusted")" = dialog ] || { WHY="untrusted node: the folder was trusted anyway"; return 1; }
+  t0=$(now)
+  ptn_launch trusted || { WHY="the trusted launch never reached claude: $(cat "$d/go.trusted.log" 2>/dev/null)"; return 1; }
+  SECS=$(since "$t0")
+  verdict=$(cat "$d/out.trusted")
+  "$REAL_TMUX" -S "$sock" kill-server >/dev/null 2>&1
+  [ "$verdict" = no-dialog ] || { WHY="trusted node: the @norepo session in \$HOME still meets the trust dialog: $(cat "$d/go.trusted.log")"; return 1; }
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("numStartups") == 7 and "/elsewhere" in d["projects"] and len(d["projects"]) == 2 else 1)' "$d/home/.claude.json" \
+    || { WHY="trusted node: wrote more than \$HOME, or lost a key: $(cat "$d/home/.claude.json")"; return 1; }
+  WHAT="可信节点上 @norepo 会话开在 \$HOME 不再停在信任框（只多写 \$HOME 一项）；不可信节点同样开，~/.claude.json 一字不差"
 }
 
 # ================================================================ run ===========

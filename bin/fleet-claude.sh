@@ -39,6 +39,7 @@ if command -v fleet_load_conf >/dev/null 2>&1; then
     _fc_sess="$FLEET_LAUNCH_SESSION"
   fi
   [ -n "$_fc_sess" ] && fleet_load_conf "$_fc_sess"
+  _fc_fleet="$_fc_sess"   # kept for the trusted node's pre-trust (issue #2282)
   unset _fc_sess
 fi
 
@@ -127,7 +128,61 @@ unset _fc_agent _fc_explicit _fc_args _fc_want _fc_a
 # the dialog stays per-directory; we answer it for our own directories only.
 # Best-effort: no python3 / no FLEET_MAIN / a cwd that is not ours → skip quietly;
 # claude is still the authority. FLEET_PRETRUST=0 opts a fleet out.
-if [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -n "${FLEET_MAIN:-}" ] && [ -f "$BIN/fleet-trust.sh" ]; then
+#
+# A TRUSTED NODE goes wider (issue #2282): when `fleet-trust.sh node` reads this
+# machine as trusted (the credential proxy's cached word from the hub), the grant
+# names EVERY repo this fleet hosts (fleet_repos → each one's FLEET_MAIN), so a
+# worktree of the second repo is covered whatever the window's overlay said, and
+# — for a window the fleet opened with no repo (@norepo 1, or the orchestrator)
+# whose cwd is the login's $HOME — `--home`, that one directory. Still the same
+# door: the ↵ on the recovery page, fleet-migrate, fleet-restore and a sleeper's
+# wake all relaunch through here. Not trusted / cannot tell ⇒ the narrow call
+# below, byte for byte; nothing already running is touched.
+_fc_tr_args='' _fc_tr_home=0
+if [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -f "$BIN/fleet-trust.sh" ]; then
+  _fc_norepo=''
+  if [ -n "${TMUX_PANE:-}" ]; then
+    _fc_norepo=$(tmux display-message -p -t "$TMUX_PANE" '#{@norepo}|#{@fleet_role}' 2>/dev/null)
+  fi
+  case "$_fc_norepo" in
+    1\|*|*\|orchestrator)
+      [ "$(cd "$PWD" 2>/dev/null && pwd -P)" = "$(cd "${HOME:-/nonexistent}" 2>/dev/null && pwd -P)" ] \
+        && _fc_tr_home=1 ;;
+  esac
+  unset _fc_norepo
+  # nothing the wide form could add (no checkout, not a no-repo window in $HOME) ⇒
+  # no question asked, exactly as before
+  if { [ -n "${FLEET_MAIN:-}" ] || [ "$_fc_tr_home" = 1 ]; } \
+     && sh "$BIN/fleet-trust.sh" node >/dev/null 2>&1; then
+    _fc_tr_args=wide
+  fi
+fi
+if [ "$_fc_tr_args" = wide ]; then
+  _fc_tr=()
+  [ -n "${FLEET_MAIN:-}" ] && _fc_tr+=(--main "$FLEET_MAIN")
+  if [ -n "${_fc_fleet:-}" ] && command -v fleet_repos >/dev/null 2>&1; then
+    while IFS= read -r _fc_r; do
+      [ -n "$_fc_r" ] || continue
+      _fc_m=$(fleet_repo_conf_get "$_fc_fleet" "$_fc_r" FLEET_MAIN 2>/dev/null)
+      [ -n "$_fc_m" ] && [ "$_fc_m" != "${FLEET_MAIN:-}" ] && _fc_tr+=(--main "$_fc_m")
+    done <<EOF_FC_REPOS
+$(fleet_repos "$_fc_fleet" 2>/dev/null)
+EOF_FC_REPOS
+    unset _fc_r _fc_m
+  fi
+  [ "${_fc_tr_home:-0}" = 1 ] && _fc_tr+=(--home)
+  if [ "${#_fc_tr[@]}" -gt 0 ]; then
+    _fc_granted=$(sh "$BIN/fleet-trust.sh" grant ${_fc_tr[@]+"${_fc_tr[@]}"} "$PWD" 2>"${TMPDIR:-/tmp}/.fleet-trust.$$")
+    _fc_rc=$?
+    if [ -n "$_fc_granted" ]; then
+      printf 'fleet-claude: pre-trusted %s in %s (trusted node, issue #2282)\n' "$(printf '%s' "$_fc_granted" | tr '\n' ' ')" "$(sh "$BIN/fleet-trust.sh" file)" >&2
+    fi
+    case "$_fc_rc" in 0|2|3) : ;; *) cat "${TMPDIR:-/tmp}/.fleet-trust.$$" >&2 ;; esac
+    rm -f "${TMPDIR:-/tmp}/.fleet-trust.$$"
+    unset _fc_granted _fc_rc
+  fi
+  unset _fc_tr _fc_tr_home
+elif [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -n "${FLEET_MAIN:-}" ] && [ -f "$BIN/fleet-trust.sh" ]; then
   _fc_granted=$(sh "$BIN/fleet-trust.sh" grant --main "$FLEET_MAIN" "$PWD" 2>"${TMPDIR:-/tmp}/.fleet-trust.$$")
   _fc_rc=$?
   if [ -n "$_fc_granted" ]; then
@@ -140,6 +195,7 @@ if [ "${FLEET_PRETRUST:-1}" != 0 ] && [ -n "${FLEET_MAIN:-}" ] && [ -f "$BIN/fle
   rm -f "${TMPDIR:-/tmp}/.fleet-trust.$$"
   unset _fc_granted _fc_rc
 fi
+unset _fc_tr_args _fc_fleet
 
 # Default spawned sessions to opus (never let a new window fall back to sonnet).
 # Overridable per install/fleet via FLEET_MODEL in fleet.conf; set it empty to

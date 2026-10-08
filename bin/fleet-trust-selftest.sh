@@ -28,7 +28,7 @@ command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 missing — SK
 command -v git >/dev/null 2>&1 || { printf 'selftest: git missing — SKIP\n' >&2; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-trust.XXXXXX")" || exit 2
-trap 'rm -rf "$WORK"' EXIT
+trap '[ -n "${KEEP:-}" ] || rm -rf "$WORK"' EXIT
 trap 'exit 130' INT TERM HUP
 
 pass=0
@@ -183,6 +183,100 @@ out=$(CLAUDE_CONFIG_DIR="$WORK/ccd" sh "$SUT" grant --main "$MAIN" 2>"$WORK/err"
 [ "$(CLAUDE_CONFIG_DIR="$WORK/ccd" sh "$SUT" file)" = "$WORK/ccd/.claude.json" ] || fail "G file must follow CLAUDE_CONFIG_DIR"
 [ "$(CLAUDE_CONFIG_DIR="$WORK/ccd" sh "$SUT" check "$MAIN")" = trusted ] || fail "G check must read the relocated file"
 ok "G CLAUDE_CONFIG_DIR/.claude.json is used when set"
+
+# --- H. node: the trusted-node reader (issue #2282) — fail closed ----------------
+NC="$WORK/nconf"; mkdir -p "$NC/cred-proxy"
+node_is() { # <want word> <want rc> <label>
+  out=$(FLEET_CONF_DIR="$NC" sh "$SUT" node); rc=$?
+  [ "${out%%	*}" = "$1" ] && [ "$rc" = "$2" ] || fail "H $3: want $1/$2" "got '$out' rc=$rc"
+}
+node_is unknown 2 "no trust.json"
+printf '{"trust": "trusted", "why": "hub: trusted", "ts": %s}\n' "$(date +%s)" > "$NC/cred-proxy/trust.json"
+node_is trusted 0 "a fresh trusted word"
+printf '%s\n' "$out" | grep -q 'hub: trusted' || fail "H the why must carry the proxy's reason" "$out"
+printf '{"trust": "untrusted", "why": "hub: untrusted", "ts": %s}\n' "$(date +%s)" > "$NC/cred-proxy/trust.json"
+node_is untrusted 1 "an untrusted word"
+printf '{"trust": "trusted", "why": "hub: trusted", "ts": %s}\n' "$(( $(date +%s) - 200000 ))" > "$NC/cred-proxy/trust.json"
+node_is unknown 2 "a trusted word older than the max age"
+printf 'not json' > "$NC/cred-proxy/trust.json"
+node_is unknown 2 "an unparseable trust.json"
+ok "H node: trusted only on a fresh cached trusted word; none / stale / untrusted / garbage → not trusted"
+
+# --- I. the wide grant: several checkouts + --home, still a whitelist -------------
+MAIN2="$WORK/proj/two"; git init -q "$MAIN2" && git -C "$MAIN2" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+MAIN2_P=$(cd "$MAIN2" && pwd -P)
+git -C "$MAIN2" worktree add -q "$WORK/proj/two-issue-9" -b issue-9 >/dev/null 2>&1 || fail "fixture: worktree 2"
+WT2_P=$(cd "$WORK/proj/two-issue-9" && pwd -P)
+HOME_P=$(cd "$HOME" && pwd -P)
+write_cfg
+out=$(sh "$SUT" grant --main "$MAIN" --main "$MAIN2" "$WORK/proj/two-issue-9" 2>"$WORK/err"); rc=$?
+[ "$rc" = 0 ] || fail "I grant two mains + a worktree of the second exited $rc" "$(cat "$WORK/err")"
+for p in "$MAIN_P" "$MAIN2_P" "$WT2_P"; do
+  [ "$(jget projects "$p" hasTrustDialogAccepted)" = true ] || fail "I $p not trusted" "$(cat "$CFG")"
+done
+[ "$(jget projects "$HOME_P")" = null ] || fail "I \$HOME trusted without --home" "$(cat "$CFG")"
+out=$(sh "$SUT" grant --home "$HOME" 2>"$WORK/err"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$HOME_P" ] || fail "I --home must trust exactly the physical \$HOME" "rc=$rc out='$out' $(cat "$WORK/err")"
+write_cfg
+out=$(sh "$SUT" grant --main "$MAIN2" --home "$OTHER" "$WORK" 2>"$WORK/err"); rc=$?
+[ "$rc" = 3 ] || fail "I a stranger dir in the wide form must still exit 3" "rc=$rc $(cat "$WORK/err")"
+[ "$(jget projects "$OTHER_P")" = null ] && [ "$(jget projects "$(cd "$WORK" && pwd -P)")" = null ] \
+  || fail "I a stranger dir (or \$HOME's parent) was written" "$(cat "$CFG")"
+[ "$(jget projects "$MAIN2_P" hasTrustDialogAccepted)" = true ] && [ "$(jget projects "$HOME_P" hasTrustDialogAccepted)" = true ] \
+  || fail "I the allowed paths must still land when a sibling is refused" "$(cat "$CFG")"
+ok "I wide grant: every --main + their worktrees, \$HOME only with --home; strangers refused (3), never written"
+
+# --- J. the launcher end to end, on an isolated tmux socket -----------------------
+# A two-repo fleet: a worktree of the SECOND repo (no @repo stamped, so the overlay
+# reads the first) · an @norepo window in $HOME · a plain window in $HOME. Untrusted
+# node ⇒ ~/.claude.json byte for byte what the #563 narrow grant makes; trusted ⇒
+# the second repo + its worktree and the @norepo $HOME are trusted, the plain $HOME
+# window is not.
+REAL_TMUX=$(command -v tmux 2>/dev/null)
+if [ -z "$REAL_TMUX" ]; then
+  printf 'skip J: no tmux\n'
+else
+  JC="$WORK/jconf"; mkdir -p "$JC/fleets/tst/repos" "$JC/cred-proxy" "$WORK/fb"
+  printf 'FLEET_SESSION=tst\n' > "$JC/fleets/tst/conf"
+  printf 'o-a\no-b\n' > "$JC/fleets/tst/repos/.order"
+  printf 'FLEET_REPO=o/a\nFLEET_MAIN=%s\nFLEET_BASE_BRANCH=master\n' "$MAIN" > "$JC/fleets/tst/repos/o-a.conf"
+  printf 'FLEET_REPO=o/b\nFLEET_MAIN=%s\nFLEET_BASE_BRANCH=master\n' "$MAIN2" > "$JC/fleets/tst/repos/o-b.conf"
+  printf '#!/bin/sh\npwd > "%s/ran.$$"\n' "$WORK" > "$WORK/fb/claude"; chmod +x "$WORK/fb/claude"
+  SOCK="${TMPDIR:-/tmp}/ftj.$$.sock"
+  trap '[ -n "${KEEP:-}" ] || rm -rf "$WORK"; "$REAL_TMUX" -S "$SOCK" kill-server >/dev/null 2>&1; rm -f "$SOCK"' EXIT
+  launch() { # <cwd> <@norepo or -> — one launch in its own window, wait for the fake claude
+    local go="$WORK/go.$RANDOM" w
+    w=$("$REAL_TMUX" -S "$SOCK" new-window -d -P -F '#{window_id}' -t tst -c "$1" \
+        "while [ ! -f '$go' ]; do sleep 0.05; done; exec env -i HOME='$HOME' PATH='$WORK/fb:/usr/bin:/bin:$(dirname "$REAL_TMUX")' TMUX=\"\$TMUX\" TMUX_PANE=\"\$TMUX_PANE\" FLEET_CONF_DIR='$JC' FLEET_MOD=0 FLEET_AGENT_CFG=0 FLEET_CLAUDE_BIN='$WORK/fb/claude' bash '$BIN/fleet-claude.sh' >'$go.out' 2>&1")
+    [ "$2" = - ] || "$REAL_TMUX" -S "$SOCK" set-option -w -t "$w" @norepo "$2"
+    : > "$go"
+    for _ in $(seq 1 100); do [ -f "$go.out" ] && ! "$REAL_TMUX" -S "$SOCK" list-windows -t tst -F '#{window_id}' | grep -qx "$w" && return 0; sleep 0.1; done
+    fail "J the launch in $1 never finished" "$(cat "$go.out" 2>/dev/null)"
+  }
+  three() { launch "$WORK/proj/two-issue-9" -; launch "$HOME" 1; launch "$HOME" -; }
+  "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s tst -n home || fail "J cannot start the isolated tmux server"
+  # the reference: what the #563 launcher does for those three cwds
+  write_cfg
+  for d in "$WORK/proj/two-issue-9" "$HOME" "$HOME"; do sh "$SUT" grant --main "$MAIN" "$d" >/dev/null 2>&1; done
+  cp "$CFG" "$WORK/ref"
+  write_cfg
+  printf '{"trust": "untrusted", "why": "hub: untrusted", "ts": %s}\n' "$(date +%s)" > "$JC/cred-proxy/trust.json"
+  three
+  cmp -s "$CFG" "$WORK/ref" || fail "J untrusted node: ~/.claude.json differs from the #563 launcher's" "$(diff "$WORK/ref" "$CFG")"
+  write_cfg; rm -f "$JC/cred-proxy/trust.json"; three
+  cmp -s "$CFG" "$WORK/ref" || fail "J no trust word: ~/.claude.json differs from the #563 launcher's" "$(diff "$WORK/ref" "$CFG")"
+  write_cfg
+  printf '{"trust": "trusted", "why": "hub: trusted", "ts": %s}\n' "$(date +%s)" > "$JC/cred-proxy/trust.json"
+  launch "$HOME" -
+  [ "$(jget projects "$HOME_P")" = null ] || fail "J trusted node: a plain window in \$HOME trusted \$HOME" "$(cat "$CFG")"
+  launch "$WORK/proj/two-issue-9" -
+  [ "$(jget projects "$MAIN2_P" hasTrustDialogAccepted)" = true ] && [ "$(jget projects "$WT2_P" hasTrustDialogAccepted)" = true ] \
+    || fail "J trusted node: the second repo's worktree was not pre-trusted" "$(cat "$CFG")"
+  launch "$HOME" 1
+  [ "$(jget projects "$HOME_P" hasTrustDialogAccepted)" = true ] || fail "J trusted node: the @norepo window's \$HOME was not pre-trusted" "$(cat "$CFG")"
+  [ "$(jget projects "$(cd "$WORK" && pwd -P)")" = null ] || fail "J trusted node: \$HOME's parent was written" "$(cat "$CFG")"
+  ok "J launcher: untrusted / no word ⇒ byte for byte the #563 grant; trusted ⇒ every hosted repo + the @norepo \$HOME, nothing else"
+fi
 
 printf 'selftest PASS: %d checks — fleet-trust.sh is scoped, lossless under a concurrent writer, atomic, idempotent\n' "$pass"
 exit 0
