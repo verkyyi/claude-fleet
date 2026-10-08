@@ -74,6 +74,10 @@
 #                 the login's install from it (safe.directory, --no-local), points
 #                 origin back at GitHub — exit 0, HEAD at stable; a dry run shows
 #                 the refresh + the cached clone and says what happens with none
+#   N. full name  (#2210) a full name another login carries → `<name> (<login>)`
+#                 passed to sysadminctl, a note on stderr; that one taken too →
+#                 exit 3, nothing run; sysadminctl "succeeding" without making
+#                 the login → FAILED at step 1, step 2 never run
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -132,14 +136,22 @@ cat > "$WORK/shim/createhomedir" <<EOF
 echo "createhomedir \$*" >> "$LOG"
 mkdir -p "\$FLEET_LOGIN_HOMES/\$3" && chmod 000 "\$FLEET_LOGIN_HOMES/\$3"
 EOF
+# `dscl . -list /Users RealName` answers FAKE_REALNAMES ("<login>=<full name>;…",
+# issue #2210); every other read answers the ssh group's presence
 cat > "$WORK/shim/dscl" <<EOF
 #!/bin/sh
 echo "dscl \$*" >> "$LOG"
+if [ "\$2" = -list ] && [ "\$4" = RealName ]; then
+  printf '%s' "\${FAKE_REALNAMES:-}" | tr ';' '\n' | sed 's/=/ /'; exit 0
+fi
 [ "\${FAKE_SSH_GROUP:-1}" = 1 ]
 EOF
-cat > "$WORK/shim/id" <<'EOF'
+# a login exists when FAKE_EXISTING names it, or this run's sysadminctl made it
+# (the shim logs it; FAKE_NOCREATE plays macOS refusing with exit 0 — #2210)
+cat > "$WORK/shim/id" <<EOF
 #!/bin/sh
-for u in ${FAKE_EXISTING:-}; do [ "$1" = "$u" ] && { echo "uid=501($u)"; exit 0; }; done
+for u in \${FAKE_EXISTING:-}; do [ "\$1" = "\$u" ] && { echo "uid=501(\$u)"; exit 0; }; done
+[ -z "\${FAKE_NOCREATE:-}" ] && grep -q "^sysadminctl -addUser \$1 " "$LOG" 2>/dev/null && { echo "uid=502(\$1)"; exit 0; }
 exit 1
 EOF
 chmod +x "$WORK/shim/"*
@@ -768,4 +780,18 @@ eq "L claude cached" 9.9.9 "$(cat "$CC/claude/current")"
 not_contains "L no fallback" "$OUT" "the cached clone failed"
 not_contains "L bash32" "$OUT" "unbound variable"
 export FLEET_BOOTSTRAP_CACHE=off FLEET_BOOTSTRAP_GIT_BASE="$GB"; unset FLEET_BOOTSTRAP_CACHE_SRC
+# --- N. a full name already taken (issue #2210) --------------------------------
+: > "$LOG"; OUT=$(FAKE_REALNAMES='verkyyi=verkyyi;root=System Administrator' "$BASH_BIN" "$S" pia --full-name verkyyi --pubkey "$KEY" $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+eq "N dry exit" 0 "$RC"
+contains "N note" "$OUT" "full name verkyyi is already login verkyyi's — using verkyyi (pia)"
+contains "N alt name" "$OUT" "-fullName verkyyi\\ \\(pia\\)"
+: > "$LOG"; OUT=$(FAKE_REALNAMES='verkyyi=verkyyi;x=verkyyi (pia)' "$BASH_BIN" "$S" pia --full-name verkyyi --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+eq "N both taken exit" 3 "$RC"
+eq "N both taken: nothing run" 0 "$(mutations)"
+: > "$LOG"; OUT=$(FAKE_NOCREATE=1 "$BASH_BIN" "$S" pia --full-name Pia --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+unlock_homes
+eq "N no login exit" 1 "$RC"
+contains "N no login named" "$OUT" "sysadminctl did not create login pia"
+contains "N stops at 1" "$OUT" "FAILED at step 1"
+not_contains "N no home" "$CALLS" "createhomedir"
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"
