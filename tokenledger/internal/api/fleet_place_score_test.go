@@ -168,3 +168,13 @@ func TestPlacementNoDefaultNodeCap(t *testing.T) {
 		}
 	}
 }
+
+// The load ceiling a hub starts with (claude-fleet#2267): a positive number
+// moves it, anything else leaves 0.8.
+func TestLoadCeilingFromEnv(t *testing.T) {
+	for v, want := range map[string]float64{"": 0.8, "3": 3, " 1.5 ": 1.5, "0": 0.8, "-2": 0.8, "x": 0.8, "Inf": 0.8, "NaN": 0.8} {
+		if got := loadCeiling(v, 0.8); got != want {
+			t.Errorf("loadCeiling(%q) = %v; want %v", v, got, want)
+		}
+	}
+}
