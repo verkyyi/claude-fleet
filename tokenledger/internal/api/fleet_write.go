@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -997,6 +998,21 @@ var (
 	minFreeMemFrac          = 0.10
 	memPressureWarn         = 2
 )
+
+// CCQUOTA_FLEET_MAX_LOAD_PER_CORE moves the load ceiling for a whole hub
+// (claude-fleet#2267: newcomer-e2e's hub, whose fake node reports a shared CI
+// runner's own load — the drill under test pushes it past 0.8). Unset, or not
+// a positive number: 0.8, as before.
+func init() {
+	maxLoadPerCore = loadCeiling(os.Getenv("CCQUOTA_FLEET_MAX_LOAD_PER_CORE"), maxLoadPerCore)
+}
+
+func loadCeiling(v string, def float64) float64 {
+	if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f > 0 && !math.IsInf(f, 0) {
+		return f
+	}
+	return def
+}
 
 // memFloor is the free memory a machine of total bytes must keep to take a
 // new session: max(minFreeMem, minFreeMemFrac × total).
