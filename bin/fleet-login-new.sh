@@ -13,11 +13,16 @@
 # could not log in, or could not use the pool, and the admin had to go hunting.
 # This script is those steps, in order:
 #
-#   1. sudo sysadminctl -addUser <login> -fullName <name> -password <pw>
-#      <pw> is --password-file's first line, or (default) a random one this
-#      script writes to ~/<login>-onboard/password.txt (mode 600, yours only) —
-#      never a terminal prompt (`-password -` hung every remote/scripted run,
-#      #1183 ①), and never printed: the person signs in with their key.
+#   1. sudo sysadminctl -addUser <login> -fullName <name> -shell /usr/bin/false
+#      then `sudo dscl .` reading `passwd /Users/<login> <pw>` on its STDIN, then
+#      the shell back to /bin/zsh. <pw> never enters any argv (issue #2396: the
+#      old `-password <pw>` sat in `ps` for the ~5 minutes sysadminctl ran, to
+#      every login on the machine); the login is shell-less while it still has
+#      no password, so a blank-password `su` reaches nothing. <pw> is
+#      --password-file's first line, or (default) a random one this script
+#      writes to ~/<login>-onboard/password.txt (mode 600, yours only) — never a
+#      terminal prompt (`-password -` hung every remote/scripted run, #1183 ①),
+#      and never printed: the person signs in with their key.
 #   2. sudo createhomedir -c -u <login>          (the home, so step 4 has a place)
 #      + sudo chmod 700 <home>   (never the macOS default: 0750 staff lets every
 #                                 other login list it — issue #2414)
@@ -279,6 +284,11 @@ elif [ -n "$PWFILE" ]; then
   [ -r "$PWFILE" ] || die2 "--password-file: cannot read '$PWFILE'"
   PW=$(head -n 1 "$PWFILE")
   [ -n "$PW" ] || die2 "--password-file: '$PWFILE' is empty"
+  # it travels as one word of an interactive dscl line (issue #2396), whose
+  # parser has no reliable escape for these — refuse rather than mangle
+  case "$PW" in *[[:space:]\"\'\\]*|*[![:print:]]*)
+    die2 "--password-file: '$PWFILE' holds a space, quote, backslash or control character — use printable ASCII without them" ;;
+  esac
 else
   PWFILE="$ONBOARD/password.txt"; PWGEN=1
 fi
@@ -414,13 +424,25 @@ if [ "$DONLY" = 0 ]; then
   else
     step "create the OS login (password: the first line of $PWFILE — never printed)"
   fi
-  run_shown "sudo sysadminctl -addUser $(printf %q "$LOGIN") -fullName $(printf %q "$FULL") -password <redacted: $PWFILE>" \
-    -- sudo sysadminctl -addUser "$LOGIN" -fullName "$FULL" -password "$PW"
+  # No password on any argv (issue #2396): `ps` shows every process's argv to
+  # every login, and addUser runs for minutes. Created shell-less, the password
+  # goes in on dscl's stdin, then the shell is given back.
+  run sudo sysadminctl -addUser "$LOGIN" -fullName "$FULL" -shell /usr/bin/false
   # sysadminctl's exit says nothing about whether the login exists (#2210)
   if [ "$APPLY" = 1 ] && ! id "$LOGIN" >/dev/null 2>&1; then
     printf '%s: sysadminctl did not create login %s (see its message above)\n' "$PROG" "$LOGIN" >&2
     fail
   fi
+  printf '  $ sudo dscl .   < passwd /Users/%s <redacted: %s>   (on stdin, never argv)\n' "$LOGIN" "$PWFILE"
+  if [ "$APPLY" = 1 ]; then
+    # interactive dscl: one command per stdin line, the password one plain word
+    # (checked above). It exits 0 on a DS error, so its words are the verdict;
+    # they never echo the password, redacted anyway.
+    DSOUT=$(printf 'passwd /Users/%s %s\n' "$LOGIN" "$PW" | sudo dscl . 2>&1) \
+      && ! printf '%s' "$DSOUT" | grep -qi 'error' \
+      || { printf '%s: could not set the password of %s: %s\n' "$PROG" "$LOGIN" "${DSOUT//"$PW"/<redacted>}" >&2; fail; }
+  fi
+  run sudo dscl . -create "/Users/$LOGIN" UserShell /bin/zsh
   step "create its home directory (mode 700 — every login is in staff)"
   run sudo createhomedir -c -u "$LOGIN"
   # macOS's default home is 0750 <login>:staff on some machines (m4, issue

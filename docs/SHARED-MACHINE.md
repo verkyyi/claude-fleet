@@ -46,8 +46,11 @@ inherits your cwd (issue #1216):
 In order, it runs `sysadminctl -addUser` (no `-admin`: a fleet doesn't need it)
 with a **random password it writes to `~/alice-onboard/password.txt`** in your
 own home (mode 600, printed as a path, never as text — alice signs in with her
-key; `--password-file <f>` uses f's first line instead, issue #1192),
-`createhomedir`, adds the login to `com.apple.access_ssh` (only when that group
+key; `--password-file <f>` uses f's first line instead, issue #1192 — no
+space, quote or backslash in it). The password never enters a command line —
+`ps` shows every process's argv to every login: the login is created
+shell-less, the password goes in on `dscl`'s stdin, then the shell is given
+back (issue #2396). Then `createhomedir`, adds the login to `com.apple.access_ssh` (only when that group
 exists — without it Remote Login admits every user), installs `--pubkey` as
 `~alice/.ssh/authorized_keys` (`.ssh` 700, key 600, owned by alice), and with
 `--share-pool` takes the Claude pool along (step 2b). Then it

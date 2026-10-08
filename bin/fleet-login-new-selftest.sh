@@ -25,8 +25,12 @@
 #                 the ~/.local/bin PATH line (#1191) then the bootstrap block
 #                 (#1165) — the line once and first — 644, owned by the login
 #   B2. password  (#1192) a random one → ~/<login>-onboard/password.txt (600) in
-#                 the ADMIN's home, passed to sysadminctl as argv, never printed;
-#                 --password-file <f> uses f's first line and writes nothing
+#                 the ADMIN's home, never printed; --password-file <f> uses f's
+#                 first line and writes nothing. (#2396) It is on NO shim's argv:
+#                 addUser goes shell-less with no -password, the password reaches
+#                 `dscl .` on stdin (`passwd /Users/<login> <pw>`), the shell
+#                 comes back after; a DS error on that stdin → FAILED; a
+#                 --password-file line with a space / quote / backslash → exit 2
 #   B3. daemons   (#1192) the clone at stable as the login (~<login>/.claude/fleet
 #                 + logs/); every launchd template rendered in system shape —
 #                 Label com.claude-fleet.<login>.<unit>, UserName <login>, __HOME__
@@ -103,6 +107,7 @@ mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
 # --- shims ------------------------------------------------------------------
 LOG="$WORK/calls.log"
+DLOG="$WORK/dscl-stdin.log"   # what interactive `dscl .` read on stdin (#2396)
 mkdir -p "$WORK/shim"
 # the admin's own home is 0700: from under CALLER (their repo checkout, where
 # docs/SHARED-MACHINE.md's example is typed) "the login" cannot stand — a
@@ -141,6 +146,14 @@ EOF
 cat > "$WORK/shim/dscl" <<EOF
 #!/bin/sh
 echo "dscl \$*" >> "$LOG"
+# interactive \`dscl .\` (issue #2396): its commands come on stdin, kept apart
+# from the argv log; FAKE_DSCL_ERR plays a DS error, which dscl answers with exit 0
+if [ \$# -eq 1 ]; then
+  cat >> "$DLOG"
+  [ -n "\${FAKE_DSCL_ERR:-}" ] && echo "passwd: DS Error: -14165 (eDSAuthPasswordQualityCheckFailed)"
+  echo Goodbye; exit 0
+fi
+[ "\$2" = -create ] && exit 0
 if [ "\$2" = -list ] && [ "\$4" = RealName ]; then
   printf '%s' "\${FAKE_REALNAMES:-}" | tr ';' '\n' | sed 's/=/ /'; exit 0
 fi
@@ -216,14 +229,17 @@ locked() { # $1 home: still mode 000 (0), or open / missing (1)
   [ -d "$1" ] && [ "$(mode "$1")" = 0 ]
 }
 unlock_homes() { for h in "$FLEET_LOGIN_HOMES"/*; do [ -d "$h" ] && chmod 700 "$h"; done; return 0; }
-run() { : > "$LOG"; OUT=$("$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); }
+run() { : > "$LOG"; : > "$DLOG"; OUT=$("$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); }
 mutations() { printf '%s\n' "$CALLS" | grep -v '^dscl ' | grep -c . ; }
 
 # --- A. dry run -------------------------------------------------------------
 run victor --full-name 'Victor V' --pubkey "$KEY" --share-pool --pool-src "$POOL"
 eq "A dry run exit" 0 "$RC"
 contains "A banner" "$OUT" "DRY RUN"
-contains "A addUser" "$OUT" "sudo sysadminctl -addUser victor -fullName Victor\\ V -password <redacted: $HOME/victor-onboard/password.txt>"
+contains "A addUser" "$OUT" "sudo sysadminctl -addUser victor -fullName Victor\\ V -shell /usr/bin/false"
+not_contains "A addUser has no password argv (#2396)" "$OUT" "-password"
+contains "A password on dscl's stdin" "$OUT" "sudo dscl .   < passwd /Users/victor <redacted: $HOME/victor-onboard/password.txt>"
+contains "A the shell back" "$OUT" "sudo dscl . -create /Users/victor UserShell /bin/zsh"
 not_contains "A never prompts (#1192)" "$OUT" "-password -"
 contains "A would write the password" "$OUT" "would write a random password to $HOME/victor-onboard/password.txt"
 [ -e "$HOME/victor-onboard" ] && fail "A dry run wrote the password file"
@@ -293,9 +309,15 @@ PW=$(cat "$PWF")
 eq "B2 password length" 24 "${#PW}"
 eq "B2 password file mode" 600 "$(mode "$PWF")"
 eq "B2 onboard dir mode" 700 "$(mode "$HOME/victor-onboard")"
-contains "B2 addUser argv carries it" "$CALLS" "sysadminctl -addUser victor -fullName Victor V -password $PW"
+# no argv any shim saw carries it (#2396) — addUser, dscl, sudo, chown, …
+contains "B2 addUser shell-less, no password" "$CALLS" "sysadminctl -addUser victor -fullName Victor V -shell /usr/bin/false"
+not_contains "B2 no argv carries it" "$CALLS" "$PW"
+not_contains "B2 no -password argv at all" "$CALLS" "-password"
+eq "B2 dscl stdin carries it" "passwd /Users/victor $PW" "$(cat "$DLOG")"
+ORD2=$(printf '%s\n' "$CALLS" | grep -E '^(sysadminctl -addUser|dscl \.$|dscl \. -create /Users/victor UserShell /bin/zsh$|createhomedir)' | awk '{print $1 $2 $3}' | tr '\n' ' ')
+eq "B2 addUser → passwd → shell → home" "sysadminctl-addUservictor dscl. dscl.-create createhomedir-c-u " "$ORD2"
 not_contains "B2 never printed" "$OUT" "$PW"
-contains "B2 redacted on screen" "$OUT" "-password <redacted: $PWF>"
+contains "B2 redacted on screen" "$OUT" "<redacted: $PWF>"
 contains "B2 path at the end" "$OUT" "password: $PWF (mode 600"
 contains "B ssh group argv" "$CALLS" "dseditgroup -o edit -a victor -t user com.apple.access_ssh"
 eq "B key content" "$(cat "$KEY")" "$(cat "$H/.ssh/authorized_keys")"
@@ -351,12 +373,13 @@ eq "B zshrc mode" 644 "$(mode "$H/.zshrc")"
 contains "B zshrc chown" "$CALLS" "chown victor:staff $H/.zshrc"
 # B2. --password-file: its first line, nothing generated
 printf 'hunter2-from-file\nsecond line ignored\n' > "$WORK/pw.txt"
-: > "$LOG"; OUT=$("$BASH_BIN" "$S" pam --full-name P --pubkey "$KEY" --password-file "$WORK/pw.txt" --apply --no-daemons 2>&1); RC=$?
+: > "$LOG"; : > "$DLOG"; OUT=$("$BASH_BIN" "$S" pam --full-name P --pubkey "$KEY" --password-file "$WORK/pw.txt" --apply --no-daemons 2>&1); RC=$?
 CALLS=$(cat "$LOG"); unlock_homes
 eq "B2 --password-file exit" 0 "$RC"
-contains "B2 --password-file argv" "$CALLS" "sysadminctl -addUser pam -fullName P -password hunter2-from-file"
+not_contains "B2 --password-file on no argv" "$CALLS" "hunter2-from-file"
+eq "B2 --password-file on dscl's stdin" "passwd /Users/pam hunter2-from-file" "$(cat "$DLOG")"
 not_contains "B2 --password-file never printed" "$OUT" "hunter2-from-file"
-contains "B2 --password-file redacted" "$OUT" "-password <redacted: $WORK/pw.txt>"
+contains "B2 --password-file redacted" "$OUT" "<redacted: $WORK/pw.txt>"
 [ -e "$HOME/pam-onboard/password.txt" ] && fail "B2 --password-file still generated one"
 contains "B2 --password-file at the end" "$OUT" "password: the first line of $WORK/pw.txt (--password-file)"
 
@@ -464,6 +487,7 @@ eq "D key mode" 600 "$(mode "$FLEET_LOGIN_HOMES/dora/.ssh/authorized_keys")"
 
 # --- E. usage ---------------------------------------------------------------
 : > "$WORK/empty.pub"
+printf 'two words\n' > "$WORK/pw-space.txt"; printf 'qu"ote\n' > "$WORK/pw-quote.txt"; printf 'back\\slash\n' > "$WORK/pw-bslash.txt"
 mkdir -p "$WORK/nopool"
 for args in "Bad!Name --full-name X --pubkey $KEY" \
             "2468 --full-name X --pubkey $KEY" \
@@ -475,6 +499,9 @@ for args in "Bad!Name --full-name X --pubkey $KEY" \
             "eve --full-name X --pubkey $KEY --bogus" \
             "eve --full-name X --pubkey $KEY --password-file $WORK/missing.txt" \
             "eve --full-name X --pubkey $KEY --password-file $WORK/empty.pub" \
+            "eve --full-name X --pubkey $KEY --password-file $WORK/pw-space.txt --apply" \
+            "eve --full-name X --pubkey $KEY --password-file $WORK/pw-quote.txt --apply" \
+            "eve --full-name X --pubkey $KEY --password-file $WORK/pw-bslash.txt --apply" \
             "eve eve2 --full-name X --pubkey $KEY" \
             ""; do
   # shellcheck disable=SC2086  # deliberate word-split of the case's argv
@@ -515,7 +542,7 @@ eq "G no pool exit" 0 "$RC"
 cp "$KEY" "$CALLER/hal.pub"; mkdir -p "$CALLER/pool"; cp -p "$POOL"/alpha "$POOL"/alpha.conf "$POOL"/beta "$POOL"/beta.conf "$CALLER/pool/"; printf 'pw-from-cwd\n' > "$CALLER/pw.txt"
 ( cd "$CALLER" && "$WORK/shim/sudo" -u hal -H git --version >/dev/null 2>&1 ) && fail "H the shim does not refuse a -u run from the closed cwd"
 ( cd "$CALLER" && "$WORK/shim/sudo" tee /dev/null </dev/null >/dev/null 2>&1 ) || fail "H the shim refuses a root (no -u) run from the closed cwd"
-hrun() { : > "$LOG"; OUT=$(cd "$CALLER" && "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); unlock_homes; }
+hrun() { : > "$LOG"; : > "$DLOG"; OUT=$(cd "$CALLER" && "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); unlock_homes; }
 hrun hal --full-name 'Hal H' --pubkey hal.pub --share-pool --pool-src ./pool --password-file pw.txt --apply $DAEMONS
 eq "H apply from the closed cwd: exit 0" 0 "$RC"
 not_contains "H no getcwd death" "$OUT" "Unable to read current working directory"
@@ -525,10 +552,10 @@ contains "H the clone ran as the login" "$CALLS" "sudo git"
 eq "H clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$HH/.claude/fleet" rev-parse HEAD 2>/dev/null)"
 eq "H relative --pubkey found" "$(cat "$KEY")" "$(cat "$HH/.ssh/authorized_keys")"
 eq "H relative --pool-src found" "alpha alpha.conf beta beta.conf" "$(ls -A "$HH/.config/claude-fleet/accounts" | tr '\n' ' ' | sed 's/ $//')"
-contains "H relative --password-file found" "$CALLS" "sysadminctl -addUser hal -fullName Hal H -password pw-from-cwd"
+eq "H relative --password-file found" "passwd /Users/hal pw-from-cwd" "$(cat "$DLOG")"
 contains "H transcript: key path absolute" "$OUT" "sudo tee -a $HH/.ssh/authorized_keys < $CALLER/hal.pub"
 contains "H transcript: pool path absolute" "$OUT" "--pool-src $CALLER/pool"
-contains "H transcript: password path absolute" "$OUT" "-password <redacted: $CALLER/pw.txt>"
+contains "H transcript: password path absolute" "$OUT" "<redacted: $CALLER/pw.txt>"
 [ -e "$HOME/hal-onboard/password.txt" ] && fail "H --password-file still generated one"
 # a dry run from there: the same absolute paths on screen, nothing executed
 hrun ian --full-name I --pubkey hal.pub --share-pool --pool-src pool
@@ -797,4 +824,16 @@ eq "N no login exit" 1 "$RC"
 contains "N no login named" "$OUT" "sysadminctl did not create login pia"
 contains "N stops at 1" "$OUT" "FAILED at step 1"
 not_contains "N no home" "$CALLS" "createhomedir"
+
+# --- B2. a DS error setting the password (issue #2396) --------------------------
+# interactive dscl exits 0 on it: its words decide — FAILED at step 1, shell-less,
+# never the password on screen, nothing after it run
+: > "$LOG"; : > "$DLOG"; OUT=$(FAKE_DSCL_ERR=1 "$BASH_BIN" "$S" pia --full-name Pia --pubkey "$KEY" --password-file "$WORK/pw.txt" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+unlock_homes
+eq "B2 DS error exit" 1 "$RC"
+contains "B2 DS error named" "$OUT" "could not set the password of pia"
+contains "B2 DS error stops at 1" "$OUT" "FAILED at step 1"
+not_contains "B2 DS error: password never shown" "$OUT" "hunter2-from-file"
+not_contains "B2 DS error: shell not given back" "$CALLS" "UserShell"
+not_contains "B2 DS error: no home" "$CALLS" "createhomedir"
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"
