@@ -63,6 +63,46 @@ func TestPrepCmdRunsAsTheLogin(t *testing.T) {
 	}
 }
 
+// The root agent's own FLEET_CONF_DIR / TMPDIR (the supervisor's root-only
+// dirs) never reach the login (claude-fleet#2471): the login's conf dir does —
+// its <login>.env's, else ~/.config/claude-fleet — and a value the caller set
+// on cmd.Env itself stays.
+func TestPrepCmdGivesTheLoginItsConfDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("FLEET_CONF_DIR", "/var/db/fleet-node/conf")
+	t.Setenv("TMPDIR", "/var/db/fleet-node/tmp")
+	read := func(ra *RunAs, env []string) map[string][]string {
+		t.Helper()
+		cmd := exec.Command("/usr/bin/true")
+		cmd.Env = env
+		if err := prepCmd(withRunAs(context.Background(), ra), cmd); err != nil {
+			t.Fatal(err)
+		}
+		got := map[string][]string{}
+		for _, kv := range cmd.Env {
+			k, v, _ := strings.Cut(kv, "=")
+			got[k] = append(got[k], v)
+		}
+		return got
+	}
+	ra := selfRunAs(t, "beta", home)
+	got := read(ra, nil)
+	if want := filepath.Join(home, ".config", "claude-fleet"); len(got["FLEET_CONF_DIR"]) != 1 || got["FLEET_CONF_DIR"][0] != want {
+		t.Fatalf("FLEET_CONF_DIR = %q; want only %s", got["FLEET_CONF_DIR"], want)
+	}
+	if len(got["TMPDIR"]) != 0 {
+		t.Fatalf("root's TMPDIR leaked into the login's env: %q", got["TMPDIR"])
+	}
+	ra.ConfDir = "/elsewhere/conf"
+	if got := read(ra, nil); len(got["FLEET_CONF_DIR"]) != 1 || got["FLEET_CONF_DIR"][0] != ra.ConfDir {
+		t.Fatalf("FLEET_CONF_DIR = %q; want the login's own %s", got["FLEET_CONF_DIR"], ra.ConfDir)
+	}
+	explicit := append(os.Environ(), "FLEET_CONF_DIR=/caller/set")
+	if got := read(ra, explicit); len(got["FLEET_CONF_DIR"]) != 1 || got["FLEET_CONF_DIR"][0] != "/caller/set" {
+		t.Fatalf("FLEET_CONF_DIR = %q; want the caller's /caller/set", got["FLEET_CONF_DIR"])
+	}
+}
+
 // Only a root machine agent refuses a command with no login: never run it as
 // root. As anyone else, or with no machine running, it is a plain agent.
 func TestPrepCmdStrictOnlyForARootMachine(t *testing.T) {
@@ -197,5 +237,19 @@ func TestMachineLinkDemuxByLogin(t *testing.T) {
 	defer ecancel()
 	if _, err := beta.read(ectx); err != errLaneClosed {
 		t.Fatalf("beta after LINK_CLOSED: %v; want the lane closed", err)
+	}
+}
+
+// A controller that dies before printing its JSON answer hands back its last
+// stderr line with the exit status (claude-fleet#2471), not «exit status 1».
+func TestFleetControlCommandCarriesStderr(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "fleet-control.py")
+	body := "#!/bin/sh\necho 'Traceback (most recent call last):' >&2\necho \"PermissionError: [Errno 13] Permission denied: '/var/db/fleet-node/conf/control'\" >&2\nexit 1\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := fleetControlCommand(context.Background(), script, []byte("{}"))
+	if out != nil || err == nil || !strings.Contains(err.Error(), "exit status 1: PermissionError: [Errno 13]") {
+		t.Fatalf("got %q, %v; want the stderr's last line on the error", out, err)
 	}
 }
