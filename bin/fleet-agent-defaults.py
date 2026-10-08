@@ -7,7 +7,8 @@ conf/agent-defaults/ is the only source:
   claude/mcp.default.json    user-scope MCP servers → ~/.claude.json "mcpServers"
                              (context7 · playwright · github · fetch)
   claude/CLAUDE.default.md   one marker-delimited block → ~/.claude/CLAUDE.md
-  codex/config.default.toml  approval_policy / sandbox_mode / model_reasoning_effort
+  codex/config.default.toml  approval_policy / sandbox_mode / model_reasoning_effort /
+                             check_for_update_on_startup
                              + the same [mcp_servers.*] → $CODEX_HOME/config.toml
   codex/AGENTS.default.md    the same block → $CODEX_HOME/AGENTS.md
   skills/ (the repo's)       counted here, installed by fleet-install-apply.sh's

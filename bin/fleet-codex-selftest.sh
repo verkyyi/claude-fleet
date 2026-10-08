@@ -265,6 +265,7 @@ printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
 run '/fleet-claim'
 hasarg -m && fail "E no FLEET_CODEX_MODEL → no -m (codex's own default)" "$(argv1l)"
 hasarg 'features.hooks=true' || fail "E fleet guard hooks must be enabled even in a fresh CODEX_HOME"
+hasarg 'check_for_update_on_startup=false' || fail "E a fresh CODEX_HOME opens on an update picker nobody answers (#2401)" "$(argv1l)"
 grep -q 'set-option -w -t %0 @cc_model ' "$WORK/tmuxlog" && fail "E no model → no invented @cc_model stamp" "$(cat "$WORK/tmuxlog")"
 grep -q 'set-option -wu -t %0 @cc_model' "$WORK/tmuxlog" || fail "E new launch must clear the predecessor's model"
 ok "E FLEET_CODEX_MODEL → -m + @cc_model; caller -m wins; empty defers to codex"
@@ -399,6 +400,28 @@ rm -f "$CODEX_HOME/config.toml"; run '/fleet-claim'
 grep -q "not trusted" "$WORK/err" && fail "H no codex config at all → skip the check quietly" "$(cat "$WORK/err")"
 printf '%s\n' "$before" > "$CODEX_HOME/config.toml"
 ok "H untrusted base checkout → pane note + needs stamp, codex still runs, config never written; trusted → silent"
+# H2 (issue #2401): on a TRUSTED node the launcher answers the question itself —
+# fleet-trust.sh codex-grant writes the base's table, fill only: the login's own
+# "untrusted" stands (and is still reported), every other line kept byte for byte.
+[ -f "$IBIN/fleet-trust.sh" ] || ln -s "$BIN/fleet-trust.sh" "$IBIN/fleet-trust.sh"
+[ -d "$FAKE_MAIN/.git" ] || git -C "$FAKE_MAIN" init -q
+mkdir -p "$FLEET_CONF_DIR/cred-proxy"
+printf '{"trust":"trusted","why":"selftest","ts":%s}\n' "$(date +%s)" > "$FLEET_CONF_DIR/cred-proxy/trust.json"
+printf 'model = "x"\n' > "$CODEX_HOME/config.toml"
+run '/fleet-claim'
+[ "$(ran)" = codex ] || fail "H2 codex must run" "$(cat "$WORK/err")"
+grep -q "not trusted" "$WORK/err" && fail "H2 a trusted node must answer the trust question, not report it" "$(cat "$WORK/err")"
+grep -q 'pre-trusted' "$WORK/err" || fail "H2 the pre-trust is not said in the pane" "$(cat "$WORK/err")"
+[ "$(cat "$CODEX_HOME/config.toml")" = "$(printf 'model = "x"\n\n[projects."%s"]\ntrust_level = "trusted"' "$FAKE_MAIN")" ] \
+  || fail "H2 codex-grant did not append exactly the base's table" "$(cat "$CODEX_HOME/config.toml")"
+printf 'model = "x"\n\n[projects."%s"]\ntrust_level = "untrusted"\n' "$FAKE_MAIN" > "$CODEX_HOME/config.toml"
+cp "$CODEX_HOME/config.toml" "$WORK/codex.own"
+run '/fleet-claim'
+cmp -s "$CODEX_HOME/config.toml" "$WORK/codex.own" || fail "H2 a login's own untrusted answer was overwritten" "$(cat "$CODEX_HOME/config.toml")"
+grep -q "not trusted" "$WORK/err" || fail "H2 the login's own untrusted base must still be reported" "$(cat "$WORK/err")"
+rm -f "$FLEET_CONF_DIR/cred-proxy/trust.json"
+printf '%s\n' "$before" > "$CODEX_HOME/config.toml"
+ok "H2 trusted node → codex-grant answers Codex's trust question (fill only; the login's untrusted stands)"
 
 # ============================================================================
 # I. the fleet tool service (issue #1807): Codex mounts the same `fleet` server

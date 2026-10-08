@@ -2503,6 +2503,26 @@ if [ -f "$_hm" ] && [ -f "$_dj" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+# --- Claude Code's first-run questions answered (issue #2401) ---
+# A login's first Claude start asks things a fleet pane has nobody to answer: the
+# onboarding, and on 2.1.29x "Make auto mode your default permission mode?" — on
+# 2026-10-08 the new `verky` logins on m5 and m4 sat on that one for good, their
+# `guide` session a stuck row. The answers are two ~/.claude.json keys
+# (hasCompletedOnboarding, hasSeenAutoDefaultNudge); a new login gets them from
+# fleet-login-bootstrap.sh's onboard step before its first start, an existing one
+# from the settings pass above (which never creates a .claude.json Claude did not
+# write — so a login with none at all is named here). Codex's two (the update
+# picker, the trust question) are answered by fleet-codex.sh on every launch.
+_od="$(dirname "$0")/fleet-onboard-defaults.py"
+if [ -f "$_od" ] && [ -f "$_dj" ] && command -v python3 >/dev/null 2>&1; then
+  _fout="$(python3 "$_od" --check "${CLAUDE_CONFIG_DIR:-$HOME}" 2>&1)"; _frc=$?
+  if [ "$_frc" = 0 ]; then
+    pass firstrun "${_fout#ok }"
+  else
+    warn firstrun "$(printf '%s\n' "$_fout" | head -1)$(printf '%s\n' "$_fout" | sed -n '2,$p' | sed 's/  */ /g' | paste -sd ';' - | sed 's/^/ — /; s/;/; /g') (fix: python3 $_od \$HOME — fills only what is missing)"
+  fi
+fi
+
 # --- agent defaults: ONE MCP + Codex-posture + doc-block package for BOTH agents (issue #1559) ---
 # conf/agent-defaults/ is the one source the sync (fleet-install-apply.sh's `agents`
 # pass) fills into every login: the user-scope MCP servers context7 / playwright /

@@ -172,6 +172,9 @@ d = json.load(open(os.environ["DEFS"]))
 ok = (set(d) <= {"settings", "globalConfig"}
       and d["settings"]["permissions"]["defaultMode"] == "bypassPermissions"
       and d["globalConfig"]["leftArrowOpensAgents"] is False
+      # issue #2401: Claude Code's first-run questions, answered before a login's first start
+      and d["globalConfig"]["hasCompletedOnboarding"] is True
+      and d["globalConfig"]["hasSeenAutoDefaultNudge"] is True
       and not {"model", "enabledPlugins", "hooks"} & set(d["settings"]))
 sys.exit(0 if ok else 1)
 PY
@@ -234,7 +237,8 @@ import json, os, sys
 s = json.load(open(os.environ["K"]))
 sys.exit(0 if s == {"numStartups": 7, "oauthAccount": {"emailAddress": "a@b"},
                     "projects": {"/x": {"hasTrustDialogAccepted": True}},
-                    "leftArrowOpensAgents": False} else 1)
+                    "leftArrowOpensAgents": False, "hasCompletedOnboarding": True,
+                    "hasSeenAutoDefaultNudge": True} else 1)
 PY
 [ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$K")" = 600 ] \
   || fail "defaults loosened .claude.json's mode"
@@ -262,7 +266,7 @@ sys.exit(0 if "theme" not in s and "permissions" not in s and s["effortLevel"] =
 PY
 grep -q '^kept    2 key(s) left to this login: permissions.defaultMode, theme' "$WORK/d4" || fail "defaults did not list the kept keys" "$(cat "$WORK/d4")"
 grep -q '^differs    claude.json leftArrowOpensAgents = true (default false)' "$WORK/d4" || fail "defaults did not report the user's true" "$(cat "$WORK/d4")"
-python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if s=={"leftArrowOpensAgents": True, "theme": "dark"} else 1)' "$K" \
+python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if s=={"leftArrowOpensAgents": True, "theme": "dark", "hasCompletedOnboarding": True, "hasSeenAutoDefaultNudge": True} else 1)' "$K" \
   || fail "defaults corrected a user true — the fill became a pin" "$(cat "$K")"
 d defaults-check --settings "$S7" --config "$K" --skip leftArrowOpensAgents >"$WORK/d4c" || fail "defaults-check with override + --skip unhappy" "$(cat "$WORK/d4c")"
 grep -q '^ok .*left to this login: permissions.defaultMode, theme, leftArrowOpensAgents' "$WORK/d4c" || fail "defaults-check did not list the shielded keys" "$(cat "$WORK/d4c")"
