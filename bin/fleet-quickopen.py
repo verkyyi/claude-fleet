@@ -681,7 +681,7 @@ def panel_run(command, session=""):
 
 # --- the popup --------------------------------------------------------------------
 
-def cell(c):
+def char_cells(c):
     """The cells one character takes, as the terminal and tmux count them: a
     wide or full-width one 2, a mark that rides on the one before (a combining
     accent, a variation selector, a zero-width joiner) 0, anything else 1. One
@@ -693,13 +693,13 @@ def cell(c):
 
 
 def cells(text):
-    return sum(cell(c) for c in text)
+    return sum(char_cells(c) for c in text)
 
 
 def clip(text, width):
     out, used = "", 0
     for c in text:
-        w = cell(c)
+        w = char_cells(c)
         if used + w > width:
             break
         out, used = out + c, used + w
