@@ -11,6 +11,8 @@
 #                         one of a login's services will not unload mid-migration
 #   node-update-half      bin/fleet-node-update.py (#2334): an update killed half way,
 #                         and a release whose new part fails the doctor
+#   node-install-half     bin/fleet-node-install.sh (#2330): `fleet node install`
+#                         killed half way through, then a part deleted afterwards
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -144,6 +146,39 @@ drill_node_update_half() {
   case "$out" in *skipped*) ;; *) WHY="the rejected release was tried again: $out"; return 1 ;; esac
   SECS=$(since "$t0")
   WHAT="更新取包时被 kill -9：整台机器原样不动；下一轮从头取完、所有部件一起换上；新版体检多出 FAIL（Claude Code 起不来）→ 运行时、ccquota、Claude、开号缓存、账号链接全部回到上一版，这一版不再重试"
+}
+
+drill_node_install_half() {
+  CAP=30
+  # its own subshell: the sandbox exports FLEET_NODE_* for every step it drives
+  (
+    TMPDIR="$WORK" FNI_LIB=1 . "$BIN/fleet-node-install-selftest.sh"
+    sandbox
+    res() { printf '%s\n%s\n%s\n' "${1:-}" "${2:-}" "${3:-}" > "$WORK/fni.res"; exit 0; }
+    # 1. killed while the runtime is being fetched (a slow hub)
+    FAKE_SLOW=5 bash "$INST" --hub https://hub.test --join "$CODE1" >/dev/null 2>&1 &
+    p=$!
+    until_ok 10 test -d "$SB/root/$V1.partial" || res "" "the fetch never started"
+    pkill -9 -f "$INST" 2>/dev/null; pkill -9 -f "$BIN/fleet-node-update.py tick" 2>/dev/null
+    pkill -9 -f "$SB/db/bin/ccquota" 2>/dev/null; wait "$p" 2>/dev/null
+    t0=$(now)
+    [ ! -e "$SB/root/current" ] || res "" "a killed install left a current"
+    # 2. the same command, no code (the token is already the machine's): converged
+    run
+    [ "$RC" = 0 ] && line 已收敛 || res "" "the rerun did not converge: $(printf '%s' "$OUT" | grep '^✗' | head -n 1)"
+    [ "$(basename "$(readlink "$SB/root/current")")" = "$V1" ] && [ -f "$SB/root/current/.release/staged.json" ] \
+      || res "" "the rerun left a half release"
+    [ "$(cat "$HUBD/joins")" = 1 ] || res "" "the rerun spent a second join"
+    # 3. a part deleted later (the LaunchDaemon): only it comes back
+    rm -f "$SB/LaunchDaemons/com.claude-fleet.node.plist" "$SB/loaded"
+    run
+    [ "$RC" = 0 ] && [ "$(shape)" = "+检查 -加入 -发布公钥 -期望状态 -ccquota -运行时 -角色用户 -ssh +守护 " ] \
+      || res "" "a deleted daemon was not the only thing redone: $(shape)"
+    clean || res "" "something half written was left: $(find "$SB" -name '*.partial' -o -name '*.tmp-*' | grep -v /rel/ | head -n 1)"
+    res "$(since "$t0")" ""
+  )
+  { read -r SECS; read -r WHY; } < "$WORK/fni.res"
+  WHAT="装到一半（取运行时时）被 kill -9：没有 current、没有半个发布版；同一条命令不带码重跑，从断处做完、不再花加入码；之后删掉守护的服务定义，重跑只补它一件"
 }
 
 cred_run_drills "$0"

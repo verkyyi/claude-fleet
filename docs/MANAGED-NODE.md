@@ -36,7 +36,7 @@ POST /v1/fleet/nodes/join-codes      （操作者）
 - 旧路由 `POST /v1/fleet/join-codes` 照旧：不带信任、10 分钟。
 - 码只存哈希；兑换（`POST /v1/node/join`）与登记 endpoint 在一个事务里，一次、过期即拒。
 - 加入码不进任何 issue、评论、提交、日志（共同约定 8）。
-- `command` 目前是 `fleet-node-join.sh` 那一行；C1（#2330）的 `sudo fleet node install --join <码>` 上线后换成它。
+- 托管码的 `command` 是 `curl -fsSL <入口>/install/bin/fleet-node-install.sh | sudo bash -s -- --hub <入口> --join <码>`（§8，入口自己的客户端包里那份，不连 GitHub）；不带角色的旧码仍是 `fleet-node-join.sh` 那一行。
 
 ## 3. 期望状态
 
@@ -197,3 +197,32 @@ root 运行；它取代托管账号各自的 `fleet-install-sync.sh`（那个账
 - 没有 `update.json` 的机器：体检没有 `update` 行，`--machine` 只说「不是托管机器」。
 - 旧守护没有 `update` 任务、不认 `update-restart.json`：新守护第一次由 C1 / C8 装上后才开始自己更新。
 - 开号缓存的 git 镜像一半（`claude-fleet.git`）仍由开号时的 `refresh --from` 填；托管账号的 `~/.claude/fleet` 指向 root 运行时，不靠它。
+
+## 8. 一条命令装成托管机器（C1，#2330）
+
+```
+sudo fleet node install --join <码> [--hub <入口>]
+curl -fsSL <入口>/install/bin/fleet-node-install.sh | sudo bash -s -- --hub <入口> --join <码>   # 干净的 Mac
+```
+
+入口「机器」页点「添加机器」给出第二行，复制到新机器运行——这就是加一台机器要人做的全部（浏览器里点一次 + 这一条）。
+`bin/fleet-node-install.sh` 按顺序收敛下面每一步：**先查后做**，已满足就「跳过」，缺的才做；
+一步失败就停在那一步，打印原因和重跑命令（加入码不打印），这一步替换过的东西放回、不留半成品。
+同一条命令再跑一遍 = 把缺的补上、坏的修好；退出码 0 = 已收敛。
+
+| 步 | 做什么 | 已满足 = |
+|---|---|---|
+| 检查 | root、macOS、`/usr/bin/python3`（Xcode 命令行工具）、curl | — |
+| 加入 | 加入码换**机器自己**的节点令牌（§1；`os_user` 报 `root`）→ `<state>/machine.env`（root 600：`CCQUOTA_HUB_URL`、`CCQUOTA_TOKEN`，其余行保留） | 令牌入口仍认（`/v1/node/self` 200）——不再花码 |
+| 发布公钥 | `GET /v1/fleet/release/key` → `<state>/release.pub`，钉一次（`--release-key <文件>` 钉指定的） | 已钉住 |
+| 期望状态 | `GET /v1/node/desired` → `<state>/expected.json`（§3 的首份）；`accounts` 为空就不写（写了会让守护暂停每个账号） | 与入口一字不差 |
+| ccquota | 入口 `/v1/node/dist/darwin-<arch>`，SHA-256 核对 → `<state>/bin/ccquota`，只用来取第一个发布版 | `current/bin/ccquota` 或它已在 |
+| 运行时 | 更新器（§7）跑一轮：`<root>/<sha>` + `current` + 各钉住的工具；目标 = `--target`、`expected.json` 的 `release`、入口 stable；用 curl 管道跑时更新器取自签名发布版本身 | `current` 是装齐的发布版（`staged.json`） |
+| 角色用户 | `_fleetcred`（`fleet-credsep.py role`，与凭据隔离同一份代码） | 账号已在 |
+| ssh CA | `GET /v1/fleet/ssh-ca.pub` → `/etc/ssh/fleet_user_ca.pub` + `sshd_config.d/100-fleet-user-ca.conf`，与 admin agent 写的一字不差；`sshd -t` 不过或 `sshd -T` 不认就放回原样 | 两个文件已是这样；入口不签证书则跳过 |
+| 守护 | `<state>/logins`（700），`fleet-node-supervisor.py install`（从 `current` 跑，§C3） | `install --check`：服务定义一致且 launchd 已载入 |
+
+装完之后机器由守护管：更新器跟发布版走，节点程序等 `logins/<账号>.env`（迁移逐个账号写），
+账号用 `sudo <root>/current/bin/fleet-node-supervisor.py account adopt <账号>` 交给守护。
+托管机器上 `fleet host on` / `fleet node join` 先提示改用这条命令（一个版本内照旧可用）。
+沙箱自测 `bin/fleet-node-install-selftest.sh`；BREAK-IT `node-install-half`。

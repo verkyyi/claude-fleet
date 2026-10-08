@@ -105,8 +105,16 @@ agent_stop() {
   fi
 }
 
+# managed_hint — on a managed machine (#2330) the old road still works for one
+# version, but the machine's own command is `fleet node install`
+managed_hint() {
+  [ -e "${FLEET_NODE_STATE:-/var/db/fleet-node}/machine.env" ] || return 0
+  echo "! 这台是托管机器：加入 / 修复用 sudo fleet node install --join <码>（这条旧命令一个版本内照旧可用）" >&2
+}
+
 cmd_on() {
   local h was_node=0 restored=0 rc
+  managed_hint
   h=$(hub)
   if [ "$(host_now)" = 1 ] && { [ -z "$h" ] || { is_node && [ "$(envval CCQUOTA_FLEET_COMPUTE)" != 0 ]; }; }; then
     echo "承载 已开 — 什么都不用做"; cap_line; return 0

@@ -616,6 +616,17 @@ Do not install from memory: read the doc and work from it.
   a killed tick resume or roll back. A managed login's install-sync reads `off ·
   managed`; `fleet-stable.sh move` refuses an updater tree without a valid
   release.json (`release:`). `docs/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`.
+- **A Mac becomes a managed machine by ONE command, and the same command repairs
+  it** (issue #2330, EPIC #2329 C1). `sudo fleet node install --join <码>`
+  (`bin/fleet-node-install.sh`; a 托管 join code's line pipes the copy the hub serves
+  at `/install/bin/fleet-node-install.sh`) converges 检查 · 加入 · 发布公钥 · 期望状态 ·
+  ccquota · 运行时 · 角色用户 · ssh CA · 守护, each looked at before it is done
+  (`跳过` when it already holds — a token the hub still accepts spends no code),
+  each file by one rename, a failing step putting back what it replaced. The
+  runtime is the updater's own tick (C6), the daemon the supervisor's `install`
+  (`install --check` = nothing to do), the role account `fleet-credsep.py role` —
+  never a second copy of any of them. `docs/MANAGED-NODE.md` §8; BREAK-IT
+  `node-install-half`; `fleet-node-install-selftest.sh`.
 - **A machine has three words — online, 维护中, lost — and only the middle one is
   the operator's** (issue #1427). `maintenance` is the fleet setting
   `fleet.node_maintenance.<machine>` on the hub (`bin/fleet-node-maintenance.sh

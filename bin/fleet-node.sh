@@ -42,6 +42,12 @@
 #       says it as its last line.
 #       No hub ⇒ nothing. Exit 0 a token is in node.env · 2 no hub · 3 not
 #       logged in · 4 the hub offers no such door · 1 anything else.
+#   sudo fleet node install --join <码> [--hub URL]
+#       Make this Mac a MANAGED machine (issue #2330, EPIC #2329): join with the
+#       hub's 托管 code as the machine, then the root runtime, the machine
+#       daemon, the ssh CA — bin/fleet-node-install.sh, one line per step; the
+#       same command again repairs whatever is missing. On a managed machine
+#       `fleet node join` / `fleet host on` point here (and still work).
 #   fleet node status
 #       Like `fleet login status`: is this login a node, of which hub, and does
 #       the hub see it online. Exit 0 only when it does.
@@ -94,7 +100,15 @@ self() { curl -fsS --max-time 15 -H "Authorization: Bearer $2" "$1/v1/node/self"
 
 jfield() { sed -n "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/p" | head -n 1; }
 
+# managed_hint — on a managed machine (#2330) the old road still works for one
+# version, but the machine's own command is `fleet node install`
+managed_hint() {
+  [ -e "${FLEET_NODE_STATE:-/var/db/fleet-node}/machine.env" ] || return 0
+  echo "! 这台是托管机器：加入 / 修复用 sudo fleet node install --join <码>（这条旧命令一个版本内照旧可用）" >&2
+}
+
 cmd_join() {
+  managed_hint
   local hub_arg="" invert="" hub tok work rc
   local pass=()
   while [ $# -gt 0 ]; do
@@ -322,10 +336,11 @@ cmd_status() {
 
 case "${1:-}" in
   join) shift; cmd_join "$@" ;;
+  install) shift; exec "$here/fleet-node-install.sh" "$@" ;;
   status) shift; cmd_status "$@" ;;
   ensure) shift; cmd_ensure "$@" ;;
   compute) shift; cmd_compute "$@" ;;
   leave) shift; FLEET_CONF_DIR="$CONF" exec "$here/fleet-node-leave.sh" "$@" ;;
   ''|-h|--help|help) usage ;;
-  *) echo "fleet node: unknown command ${1} — fleet node join | fleet node status | fleet node compute | fleet node leave" >&2; exit 2 ;;
+  *) echo "fleet node: unknown command ${1} — fleet node install | fleet node join | fleet node status | fleet node compute | fleet node leave" >&2; exit 2 ;;
 esac

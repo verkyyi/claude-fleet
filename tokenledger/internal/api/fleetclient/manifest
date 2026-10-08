@@ -36,6 +36,10 @@
 # from here on a computer with only the client installed.
 # bin/fleet-node-leave.sh is `fleet node leave` (#1928): the computer takes
 # itself off the hub — a laptop joined by the install line leaves the same way.
+# bin/fleet-node-install.sh is `sudo fleet node install --join <码>` (#2330): a
+# Mac becomes a MANAGED machine — and a 托管 join code's one line fetches it
+# from here (/install/bin/fleet-node-install.sh), so a clean Mac needs nothing
+# else; the runtime it installs comes from the hub's signed release.
 # bin/fleet-logout.sh is `fleet logout` (#2212): the way back from 登录即登记 —
 # the node its login registered leaves too, then the certificate and device key.
 bin/fleet-install.sh  installer
@@ -45,6 +49,7 @@ bin/fleet-node.sh
 bin/fleet-node-join.sh
 bin/fleet-node-probe.sh
 bin/fleet-node-leave.sh
+bin/fleet-node-install.sh
 bin/fleet-logout.sh
 # bin/fleet-host.sh is `fleet host on|off|status` (#1806): 承载 — the person's
 # word for the node steps above (join, compute on/off).
