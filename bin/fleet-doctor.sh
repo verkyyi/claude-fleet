@@ -341,11 +341,11 @@ try:
 except ValueError:
     d = None
 if not isinstance(d, dict):
-    print("?\x1f\x1f"); sys.exit(0)
+    print("?"); sys.exit(0)
 host = (d.get("hostname") or "").split(".")[0]
-print("%s\x1f%s\x1f%s" % ("off" if d.get("compute_off") else ("auto" if d.get("compute_auto") else "on"),
+print("%s\n%s\n%s" % ("off" if d.get("compute_off") else ("auto" if d.get("compute_auto") else "on"),
                       host, " ".join(str(d.get("compute_why") or "").split())))' 2>/dev/null)
-  IFS=$'\037' read -r _cp_v _cp_h _cp_why <<< "${_cp:-?}"
+  _cp_v=$(printf '%s\n' "${_cp:-?}" | sed -n 1p); _cp_h=$(printf '%s\n' "$_cp" | sed -n 2p); _cp_why=$(printf '%s\n' "$_cp" | sed -n 3p)
   _cp_who="${_cp_h:-$(hostname -s 2>/dev/null)}/$(id -un)"
   _cp_open='打开：在这台运行 fleet host on（即 node.env CCQUOTA_FLEET_COMPUTE=1），或在入口打开团队策略 fleet.compute_auto'
   case "$_cp_why" in *出口地区*) _cp_open='出口地区不在支持范围；确要打开：fleet host on --force（记进入口审计）' ;; esac
