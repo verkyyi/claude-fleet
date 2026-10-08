@@ -95,6 +95,9 @@
 # Shell half — a sandbox fleet on -L kf (TMUX_TMPDIR under $WORK), the real wrapper:
 #   shell-kill-fleet                                bin/tmux-shim/tmux, fleet-session-wrap.sh, hooks/bash-guard.py
 #   zsh-guard-fleet-label                           shell/cw.zsh tmux()
+# Machine half — a sandbox Homebrew prefix under a world-traversable tmp dir:
+#   brew-keg-700                                    bin/fleet-diskguard.sh --brew-watch,
+#                                                   bin/fleet-brew-perms.sh, shell/cw.zsh brew()
 #
 # tmux / python3 absent → SKIP (exit 0). BREAK_KEEP=1 keeps the work dir.
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs).
@@ -3407,6 +3410,50 @@ drill_cold_fill_fails() {
   case " $(printf '%s ' $wins)" in *" 5 "*) WHY="the window of the failed checkout is still open"; return 1 ;; esac
   [ -z "$(ls -d "$d"/wt/*issue-5 2>/dev/null)" ] || { WHY="the half worktree is still there"; return 1; }
   WHAT="检出失败：会话窗口和半截 worktree 都收走，派发方得到 exit 1「worktree checkout」"
+}
+
+# brew-keg-700 (issue #2283): brew pours with the caller's umask, so an owner on
+# 077 leaves kegs (and opt links) only it can read — every other login on the
+# machine loses python ssl / tmux. The diskguard tick's brew pass repairs them to
+# go+rX, as the prefix's owner, on a machine with 2+ logins; one login, or not
+# the owner ⇒ nothing changes (the doctor names the owner). etc/*/private stays
+# private. Another uid reads the repaired file when sudo -n can show it.
+drill_brew_keg_700() {
+  CAP=5; local d p t0 out x
+  d="$(mktemp -d /tmp/brk-brew.XXXXXX)" || { WHY="no tmp dir"; return 1; }
+  chmod 755 "$d"; p="$d/brew"
+  mkdir -p "$p/Cellar/ok/1/bin" "$p/opt" "$p/etc/x"; chmod -R 755 "$p"
+  ( umask 077
+    mkdir -p "$p/Cellar/tmux/3.7c/lib" "$p/etc/x/private"
+    printf 'x\n' > "$p/Cellar/tmux/3.7c/lib/libjemalloc.2.dylib"
+    ln -s ../Cellar/tmux/3.7c "$p/opt/tmux" )
+  bw() { env FLEET_BREW_PREFIX="$p" FLEET_BREW_PERMS_EVERY=0 FLEET_CONF_DIR="$d/conf" "$@" \
+         bash "$BIN/fleet-diskguard.sh" --brew-watch >/dev/null 2>&1; }
+  mode() { ls -ld "$1" | cut -c1-10; }
+  bw FLEET_BREW_LOGINS=1
+  [ "$(mode "$p/Cellar/tmux/3.7c")" = drwx------ ] || { WHY="one login: the keg was changed ($(mode "$p/Cellar/tmux/3.7c"))"; rm -rf "$d"; return 1; }
+  bw FLEET_BREW_LOGINS=2 FLEET_BREW_ME=someone-else
+  [ "$(mode "$p/Cellar/tmux/3.7c")" = drwx------ ] || { WHY="not the owner: the keg was changed"; rm -rf "$d"; return 1; }
+  out="$(FLEET_BREW_PREFIX="$p" FLEET_BREW_LOGINS=2 FLEET_BREW_ME=someone-else bash "$BIN/fleet-brew-perms.sh" --doctor)"
+  case "$out" in warn*"owned by $(id -un)"*"chmod -R go+rX"*) ;; *) WHY="non-owner doctor line: [$out]"; rm -rf "$d"; return 1 ;; esac
+  t0=$(now)
+  bw FLEET_BREW_LOGINS=2
+  SECS=$(since "$t0")
+  for x in "$p/Cellar/tmux" "$p/Cellar/tmux/3.7c" "$p/Cellar/tmux/3.7c/lib"; do
+    [ "$(mode "$x")" = drwxr-xr-x ] || { WHY="$x is $(mode "$x") after the tick"; rm -rf "$d"; return 1; }
+  done
+  [ "$(mode "$p/Cellar/tmux/3.7c/lib/libjemalloc.2.dylib")" = -rw-r--r-- ] || { WHY="the dylib is $(mode "$p/Cellar/tmux/3.7c/lib/libjemalloc.2.dylib")"; rm -rf "$d"; return 1; }
+  [ "$(uname -s)" = Darwin ] && { [ "$(mode "$p/opt/tmux")" = lrwxr-xr-x ] || { WHY="opt/tmux is $(mode "$p/opt/tmux")"; rm -rf "$d"; return 1; }; }
+  [ "$(mode "$p/etc/x/private")" = drwx------ ] || { WHY="etc/x/private was opened"; rm -rf "$d"; return 1; }
+  [ -z "$(FLEET_BREW_PREFIX="$p" bash "$BIN/fleet-brew-perms.sh" --scan)" ] || { WHY="--scan still lists paths"; rm -rf "$d"; return 1; }
+  grep -q "keg $p/Cellar/tmux/3.7c fixed" "$d/conf/diskguard/brew-perms.log" 2>/dev/null || { WHY="no log line for the keg"; rm -rf "$d"; return 1; }
+  if sudo -n -u nobody true 2>/dev/null; then
+    sudo -n -u nobody cat "$p/opt/tmux/lib/libjemalloc.2.dylib" >/dev/null 2>&1 || { WHY="nobody still cannot read the dylib"; rm -rf "$d"; return 1; }
+    WHAT="一个登录 / 不是属主都不动；属主那一拍把 700 的 keg、opt 链接改回 go+rX，另一个 uid（nobody）读得到，etc/*/private 不碰"
+  else
+    WHAT="一个登录 / 不是属主都不动；属主那一拍把 700 的 keg、opt 链接改回 go+rX（无 sudo，按权限位判），etc/*/private 不碰"
+  fi
+  rm -rf "$d"
 }
 
 # ================================================================ run ===========

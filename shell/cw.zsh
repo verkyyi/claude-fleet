@@ -10,6 +10,9 @@
 # It also installs a tmux() destroy-guard (issue #158) — see the bottom of the
 # file — so an accidental `tmux kill-server` from a bypass-perms worker can't
 # take down every fleet sharing the default socket.
+#
+# And a brew() wrapper (issue #2283): brew runs under umask 022 whatever this
+# shell's umask is — see brew() below.
 
 # cf — folded into `fleet` (issue #1711, EPIC #1710 C1): the one way in is the
 # client, bin/fleet. Kept ONE version as an alias that says so and goes there:
@@ -166,6 +169,16 @@ cwclean() {
 # a shell function is not inherited by the bash processes they run in. In a
 # session pane they do reach bin/tmux-shim (it leads the agent's PATH), which
 # passes the fleet's own scripts through and judges everything else the same way.
+# brew() — Homebrew pours kegs with the CALLER's umask (issue #2283). A login on
+# umask 077 (m5's verkyyi and root, 2026-10-07) upgraded nine formulae into
+# drwx------ kegs, and every OTHER login on the machine lost python's ssl and
+# tmux. Only brew writes the shared prefix, so only brew gets Homebrew's own
+# default, 022 — in a subshell, so this shell's umask (a deliberate privacy
+# choice for everything else it writes) is untouched. A brew run some other
+# way (a script, launchd) is still caught: the diskguard tick repairs the keg
+# within minutes (bin/fleet-brew-perms.sh), and the doctor's `brew` row WARNs.
+brew() { ( umask 022 && command brew "$@" ) }
+
 typeset -g _CW_FLEET_BIN="${${(%):-%x}:A:h:h}/bin"   # <fleet>/bin, for tmux() below
 tmux() {
   emulate -L zsh
