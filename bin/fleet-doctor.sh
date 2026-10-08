@@ -1682,6 +1682,18 @@ if [ -n "$fsev" ]; then
     pass machine "fseventsd ${fmb} MB RSS, ${fcpu}% CPU, up ${fet}"
   fi
 fi
+# 1b. A Homebrew keg the other logins cannot read (issue #2283): brew pours with
+#    the caller's umask, so a 077 owner's upgrade leaves 700 kegs that break every
+#    other login's python ssl / tmux and say nothing. The diskguard tick repairs
+#    them as the prefix's owner; this row WARNs with the owner and the one line to
+#    run. One login on the machine (or no brew) prints nothing.
+_bp="$(dirname "$0")/fleet-brew-perms.sh"
+bperm=''
+[ -f "$_bp" ] && bperm="$(bash "$_bp" --doctor 2>/dev/null | head -1)"
+case "$bperm" in
+  ok"	"*)   pass brew "${bperm#*	}" ;;
+  warn"	"*) warn brew "${bperm#*	}" ;;
+esac
 # 2. tmux calls per second, as the spinner measures itself (issue #887). Loosely
 #    coupled: a heartbeat without the field (a spinner predating it) shows nothing.
 tcps=''

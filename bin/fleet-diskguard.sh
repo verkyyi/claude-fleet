@@ -54,6 +54,8 @@
 #                     a row is absent when the machine will not say.
 #   --orphan-listeners print the orphaned-listener reap candidates (dry run)
 #   --listen-watch    run only the orphaned-listener sweep (what --watch also does)
+#   --brew-watch      run only the Homebrew keg-permission pass (what --watch also
+#                     does, throttled by FLEET_BREW_PERMS_EVERY) — issue #2283
 #   --probe           capture an incident right now regardless of free space
 #   --metrics         print one machine-metrics row (what --watch appends, issue #1294)
 #   --harvest-crash [--since <iso>]
@@ -94,6 +96,8 @@
 #   FLEET_PTY_WARN_PCT      pty table % used that counts as over  (default 80)
 #   FLEET_MEM_NOTIFY_COOLDOWN min seconds between two notices of one kind
 #                           (memory / files / pty; default 1800) — issue #1293
+#   FLEET_BREW_PERMS        0 = no Homebrew keg-permission repair (default 1) — #2283;
+#                           FLEET_BREW_PERMS_EVERY min seconds between passes (300)
 #   FLEET_TRANSCRIPT_ARCHIVE 0 = no daily transcript archive pass (default 1) —
 #                           issue #1299; bin/fleet-transcript-archive.sh has the
 #                           rules and its own knobs (FLEET_TRANSCRIPT_KEEP_DAYS, …)
@@ -517,6 +521,23 @@ Bind temp servers to 127.0.0.1; share with the operator through doc-preview."
 # never holds this tick past ~30s: a backlog (6000+ files on first run) drains over
 # a few ticks — the stamp is written only once a pass FINISHES (exit 0), so an
 # unfinished one (75) simply resumes on the next tick.
+# A Homebrew keg poured under umask 077 is readable by its owner only, and every
+# OTHER login on the machine loses what links it (python ssl, tmux — #2283). This
+# tick runs on every login whatever install-sync is holding, so it is the one that
+# can repair it within minutes; bin/fleet-brew-perms.sh changes nothing unless the
+# machine has 2+ logins and this login owns the prefix.
+brew_watch() {
+  [ "${FLEET_BREW_PERMS:-1}" = 0 ] && return 0
+  [ -x "$BIN/fleet-brew-perms.sh" ] || return 0
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  local st="$GDIR/last-brew-perms" last nowt
+  nowt="$(now)"; last="$(cat "$st" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((nowt - last)) -ge "${FLEET_BREW_PERMS_EVERY:-300}" ] 2>/dev/null || return 0
+  printf '%s\n' "$nowt" > "$st" 2>/dev/null
+  tmo 60 env FLEET_BREW_LOG="${FLEET_BREW_LOG:-$GDIR/brew-perms.log}" "$BIN/fleet-brew-perms.sh" --fix >/dev/null 2>&1
+  return 0
+}
 transcript_watch() {
   [ "${FLEET_TRANSCRIPT_ARCHIVE:-1}" = 0 ] && return 0
   [ -x "$BIN/fleet-transcript-archive.sh" ] || return 0
@@ -878,6 +899,8 @@ case "${1:-}" in
     type fleet_reap_orphan_listeners >/dev/null 2>&1 || exit 0
     fleet_reap_orphan_listeners dry "$LISTEN_SECS"
     ;;
+  --brew-watch)
+    brew_watch; exit 0 ;;
   --listen-watch)
     listen_watch
     ;;
@@ -906,6 +929,7 @@ EOF2
     transcript_watch                              # daily transcript archive (#1299), budgeted
     home_watch                                    # a home pane left dead: respawn it (#1801)
     restore_watch                                 # a fleet that went down: pull it back up (#1784)
+    brew_watch                                    # a keg other logins cannot read: repair it (#2283)
     pool_watch                                    # warm-pool slots topped back up (#2233)
     free=$(free_gb)
     [ -z "$free" ] && exit 0                      # measurement failed — stay quiet

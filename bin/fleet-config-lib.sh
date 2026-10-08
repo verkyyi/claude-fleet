@@ -449,6 +449,8 @@ fcfg_label_i18n() {
     FLEET_TRANSCRIPT_ARCHIVE) printf '会话记录归档' ;;
     FLEET_TRANSCRIPT_ARCHIVE_EVERY) printf '会话记录归档间隔' ;;
     FLEET_TRANSCRIPT_ARCHIVE_BUDGET) printf '会话记录归档单次预算' ;;
+    FLEET_BREW_PERMS) printf 'Homebrew keg 权限修复' ;;
+    FLEET_BREW_PERMS_EVERY) printf 'Homebrew keg 权限修复间隔' ;;
     FLEET_DOCTOR_SPOTLIGHT) printf 'Doctor Spotlight 检查' ;;
     FLEET_DOCTOR_SLEEP) printf 'Doctor sleep 检查' ;;
     FLEET_DOCTOR_SIRI) printf 'Doctor Siri 检查' ;;
