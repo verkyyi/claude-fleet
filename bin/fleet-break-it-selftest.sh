@@ -3859,9 +3859,10 @@ drill_new_login_unseparated() {
   out=$(FLEET_LOGIN_HOMES="$d/homes2" bash "$BIN/fleet-login-new.sh" brkfresh --full-name B --pubkey "$d/key.pub" \
         --share-pool --pool-src "$d/pool" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the dry run failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
-  printf '%s' "$out" | grep -q "fleet-credsep.sh install --login brkfresh --fresh" \
-    || { WHY="the plan opens the login with no credsep step: the pool lands where its sessions read it"; return 1; }
-  printf '%s' "$out" | grep -q "sudo cp -p $d/pool/p1" && { WHY="the plan still copies the pool into the login's own dir"; return 1; }
+  # case, not `printf | grep -q`: under pipefail a grep that quits early can SIGPIPE the printf
+  case "$out" in *"fleet-credsep.sh install --login brkfresh --fresh"*) ;;
+    *) WHY="the plan opens the login with no credsep step: the pool lands where its sessions read it"; return 1 ;; esac
+  case "$out" in *"sudo cp -p $d/pool/p1"*) WHY="the plan still copies the pool into the login's own dir"; return 1 ;; esac
   case "$out" in *"background services as system"*"--fresh"*) WHY="the services start before the credentials are separated (先代理、后搬凭据、再开会话)"; return 1 ;; esac
   # 2. the separation itself (root's half, sandboxed): nothing for a session to read
   C="$d/homes/brkfresh/.config/claude-fleet" R="$d/db/brkfresh"
