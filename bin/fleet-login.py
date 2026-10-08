@@ -688,6 +688,24 @@ def parse_scan_opts(argv, node=False):
 INVITE_FILE = os.path.join(CONF_DIR, "invite")
 
 
+def newcomer():
+    """The newcomer's one-session view (FLEET_CLIENT_LAYOUT=solo, which a fresh
+    install writes — claude-fleet#2347): the env, else fleet.conf's last word.
+    On it the screen before the first key carries no fleet words (入口 · 只协调 ·
+    扫码); every other computer reads what it always read."""
+    lay = os.environ.get("FLEET_CLIENT_LAYOUT", "")
+    if not lay:
+        try:
+            with open(os.path.join(CONF_DIR, "fleet.conf")) as f:
+                for line in f:
+                    m = re.match(r"\s*(?:export\s+)?FLEET_CLIENT_LAYOUT=['\"]?([A-Za-z]*)", line)
+                    if m:
+                        lay = m.group(1)
+        except OSError:
+            pass
+    return lay == "solo"
+
+
 def pending_invite():
     """The invite an invite command's install carried (claude-fleet#2261):
     FLEET_INVITE, exported by the script <hub>/i/<code> served — kept in
@@ -855,7 +873,11 @@ def wait_confirm(hub, st, invert, qr, keys):
         if browser:
             show("\n已在浏览器里打开 GitHub 授权页（验证码 %s）：在那里点「确认签发」，然后回到这里。"
                  % st["user_code"])
-            show("  没看到？打开 %s ，或按 q 改用手机扫码\n" % st["verification_uri"])
+            if newcomer():
+                # the phone is the fallback: the 15 s nudge below offers it (#2347)
+                show("  没看到？打开 %s\n" % st["verification_uri"])
+            else:
+                show("  没看到？打开 %s ，或按 q 改用手机扫码\n" % st["verification_uri"])
         else:
             show("\n浏览器打不开，改用二维码：")
     if not browser:
@@ -929,7 +951,7 @@ def cmd_login(argv):
     why = node_login_why()
     if why:
         show("⚠ 这台电脑的登录还没认到你名下（机间连接会被拒）：%s — 详情 %s" % (why, os.path.join(CONF_DIR, "node-join.log")))
-    if os.path.exists(NODE_ENV) and not was_node:
+    if os.path.exists(NODE_ENV) and not was_node and not newcomer():
         show("✓ 也已随登录登记为节点（不可信 · 只协调；可信只在入口 /nodes 设）")
     hosts = [l.split()[1] for l in res["ssh_config"].splitlines() if l.startswith("Host ")]
     if hosts:

@@ -950,7 +950,9 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
         sys.stderr.write("fleet · %s\n" % (home.get("reason") or "你的机器都不在线"))
         print_candidates(home)
         sys.exit(1)
-    sys.stderr.write("fleet · 入口选了 %s（%s）\n" % (name, home.get("reason", "")))
+    # the newcomer's view says where, not who chose (claude-fleet#2347)
+    said = "连到" if load_login_module().newcomer() else "入口选了"
+    sys.stderr.write("fleet · %s %s（%s）\n" % (said, name, home.get("reason", "")))
     if verbose:
         print_candidates(home)
     if pick_only:

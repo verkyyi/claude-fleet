@@ -92,6 +92,11 @@ st=$(printf '%s\n' "$P0" "$CAP" '  ● 新任务                 │ drill1007c@
 [ "$st" = none ] && ok 'qr: 能力: then the client, no code, reads none (SKIP)' || bad "qr: known computer read '$st'"
 st=$(printf '%s\n' "$P0" "$CAP" 'drill1007c@mini2 ~ % ' | qrs)
 [ "$st" = none ] && ok 'qr: 能力: then back at the prompt, no code, reads none' || bad "qr: back at prompt read '$st'"
+# the newcomer's install prints no 能力 line (issue #2347): 用时 is its end
+st=$(printf '%s\n' "$P0" '用时 9 秒' '  ● 新任务                 │ drill1007c@mini2 ~ %' | qrs)
+[ "$st" = none ] && ok 'qr: 用时 (no 能力:) then the client, no code, reads none' || bad "qr: newcomer end read '$st'"
+st=$(printf '%s\n' "$P0" '用时 9 秒' | qrs)
+[ "$st" = wait ] && ok 'qr: 「用时」 alone is wait, not no-QR' || bad "qr: 用时 alone read '$st'"
 st=$(printf '%s\n' "$P0" | qrs)
 [ "$st" = wait ] && ok 'qr: the typed curl line is no prompt' || bad "qr: the curl line read '$st'"
 
