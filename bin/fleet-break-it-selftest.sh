@@ -3842,6 +3842,47 @@ PY
   WHAT='从池领（或冷开）的 HOME 会话没有 key：按回执的 @fleet_id 认出、结果带 window_id；仍认不出就 stop fid: 关掉，不留孤儿'
 }
 
+# new-login-unseparated (issue #2294, EPIC #2293 C1): a login opened the old way
+# had the team pool copied into its own accounts/ and FLEET_CRED_SEPARATE=0 —
+# its first session could read every subscription token. Now fleet-login-new.sh
+# plans step 7b (credsep install --fresh) before the login's services and its
+# first session, and the pool lands in the store: the login holds markers only.
+drill_new_login_unseparated() {
+  CAP=20
+  local d="$WORK/newlogin" t0 out rc C R st
+  mkdir -p "$d/pool" "$d/homes" "$d/homes2" "$d/db" "$d/run" "$d/daemons" "$d/inst"
+  printf 'tok-POOL-1\n' > "$d/pool/p1"; printf 'CCQUOTA_ACCOUNT=p1\n' > "$d/pool/p1.conf"
+  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBRK brk@t\n' > "$d/key.pub"
+  printf 'brkfresh:%s:%s:%s\n' "$(id -u)" "$(id -g)" "$d/homes/brkfresh" > "$d/pw"
+  t0=$(now)
+  # 1. the plan the hub's account op runs (its fixed argv: --share-pool)
+  out=$(FLEET_LOGIN_HOMES="$d/homes2" bash "$BIN/fleet-login-new.sh" brkfresh --full-name B --pubkey "$d/key.pub" \
+        --share-pool --pool-src "$d/pool" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="the dry run failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  # case, not `printf | grep -q`: under pipefail a grep that quits early can SIGPIPE the printf
+  case "$out" in *"fleet-credsep.sh install --login brkfresh --fresh"*) ;;
+    *) WHY="the plan opens the login with no credsep step: the pool lands where its sessions read it"; return 1 ;; esac
+  case "$out" in *"sudo cp -p $d/pool/p1"*) WHY="the plan still copies the pool into the login's own dir"; return 1 ;; esac
+  case "$out" in *"background services as system"*"--fresh"*) WHY="the services start before the credentials are separated (先代理、后搬凭据、再开会话)"; return 1 ;; esac
+  # 2. the separation itself (root's half, sandboxed): nothing for a session to read
+  C="$d/homes/brkfresh/.config/claude-fleet" R="$d/db/brkfresh"
+  mkdir -p "$C"
+  out=$(FLEET_CREDSEP_ROOT_BASE="$d/db" FLEET_CREDSEP_RUN_BASE="$d/run" FLEET_CREDSEP_LOG_BASE="$d/log" \
+        FLEET_CREDSEP_LIB="$d/lib" FLEET_CREDSEP_DAEMON_DIR="$d/daemons" FLEET_CREDSEP_ROLE="$(id -un)" \
+        FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$d/pw" \
+        bash "$BIN/fleet-credsep.sh" install --login brkfresh --fresh --pool-src "$d/pool" --install-dir "$d/inst" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="install --fresh failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  grep -rq 'tok-POOL' "$d/homes/brkfresh" && { WHY="a pool token is readable in the new login's home: $(grep -rl tok-POOL "$d/homes/brkfresh")"; return 1; }
+  [ -z "$(find "$d/homes/brkfresh" \( -name .credentials.json -o -name auth.json -o -name node.env \) -print)" ] \
+    || { WHY="a credential file in the new login's home"; return 1; }
+  [ "$(cat "$R/accounts/p1" 2>/dev/null)" = tok-POOL-1 ] && [ "$(cat "$C/accounts/p1")" = store:p1 ] \
+    || { WHY="the pool is not in the store / the login has no marker: $(ls -a "$R/accounts" "$C/accounts" 2>&1 | tr '\n' ' ')"; return 1; }
+  st=$(FLEET_CONF_DIR="$C" bash "$BIN/fleet-credsep.sh" status 2>&1)
+  SECS=$(since "$t0")
+  case "$st" in separated*) ;; *) WHY="status after the open: $st"; return 1 ;; esac
+  WHAT="新账号开号：计划里第 7b 步 credsep install --fresh 排在服务和第一个会话之前；订阅池只进 store（账号里只有 store:<label> 标记），status=separated"
+}
+
 # ================================================================ run ===========
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/BREAK-IT.md\n' "$NROWS"

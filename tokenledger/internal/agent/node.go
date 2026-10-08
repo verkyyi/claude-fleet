@@ -184,6 +184,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.relaysOAuthRefresh() {
 		caps = append(caps, control.CapOAuthRefresh)
 	}
+	if a.cfg.FleetAdmin && credsepCapable(a.cfg.Home) {
+		// Every login this node's create op opens is separated (claude-fleet#2294).
+		caps = append(caps, control.CapCredsep)
+	}
 	hello, err := control.New(control.TypeHello, control.Hello{
 		HeartbeatMS:  int(a.cfg.LiveInterval / time.Millisecond),
 		AgentVersion: a.cfg.Version,

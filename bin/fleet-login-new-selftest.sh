@@ -85,7 +85,8 @@ BASH_BIN=/bin/bash; [ -x "$BASH_BIN" ] || BASH_BIN=bash
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/login-new-selftest.XXXXXX")" || exit 2
 WORK=$(cd "$WORK" && pwd -P)
-trap 'chmod -R u+rwX "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT INT TERM HUP
+LPID='' FPID='' SRUN=''
+trap 'kill $LPID $FPID 2>/dev/null; chmod -R u+rwX "$WORK" 2>/dev/null; rm -rf "$WORK" ${SRUN:+"$SRUN"}' EXIT INT TERM HUP
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
@@ -145,6 +146,23 @@ chmod +x "$WORK/shim/"*
 export PATH="$WORK/shim:$PATH"
 export FLEET_LOGIN_HOMES="$WORK/homes"
 mkdir -p "$FLEET_LOGIN_HOMES"
+# step 7b (issue #2294) runs the real fleet-credsep.sh install through the sudo
+# shim: every root path under the sandbox (its FLEET_CREDSEP_* seams), the role
+# account played by us, each new login a FLEET_CREDSEP_PW row (its home under
+# FLEET_LOGIN_HOMES), no launchctl, no wait for a proxy nobody starts here
+# (the run dir holds the proxy's ctl.sock: a short /tmp path, AF_UNIX caps it at 104 bytes)
+SRUN=$(mktemp -d /tmp/lns.XXXXXX) || exit 2
+ME=$(/usr/bin/id -un)
+export FLEET_CREDSEP_ROOT_BASE="$WORK/credsep/db" FLEET_CREDSEP_RUN_BASE="$SRUN" \
+       FLEET_CREDSEP_LOG_BASE="$WORK/credsep/log" FLEET_CREDSEP_LIB="$WORK/credsep/lib" \
+       FLEET_CREDSEP_DAEMON_DIR="$WORK/credsep/daemons" FLEET_CREDSEP_ROLE="$ME" \
+       FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
+       FLEET_CREDSEP_PW="$WORK/credsep/pw" FLEET_LOGIN_CREDSEP_WAIT=0
+unset FLEET_CRED_SEPARATE FLEET_CRED_PROXY
+mkdir -p "$WORK/credsep/daemons"
+for l in victor victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin uma vee wen lena 24haowan; do
+  printf '%s:%s:%s:%s\n' "$l" "$(/usr/bin/id -u)" "$(/usr/bin/id -g)" "$FLEET_LOGIN_HOMES/$l"
+done > "$FLEET_CREDSEP_PW"
 # the admin's HOME (the password file lands there) + the daemons dir (#1192)
 export HOME="$WORK/admin" FLEET_INSTALL_DAEMON_DIR="$WORK/LaunchDaemons" FLEET_INSTALL_BREW_PREFIX=/opt/homebrew
 mkdir -p "$HOME" "$FLEET_INSTALL_DAEMON_DIR" "$CALLER"
@@ -154,6 +172,9 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 FX="$WORK/fx"; mkdir -p "$FX/bin" "$FX/launchd"
 cp "$BIN/fleet-install-apply.sh" "$BIN/fleet-daemon-lib.sh" "$FX/bin/"   # apply sources the lib beside it (#1495)
+# 7b's verdict is read AS the login with its own clone's credsep (issue #2294)
+cp "$BIN/fleet-credsep.sh" "$BIN/fleet-credsep.py" "$BIN/fleet-credsep-launch.py" "$BIN/fleet-cred-proxy.py" \
+   "$BIN/fleet-cred-proxy.sh" "$FX/bin/"
 cp "$BIN/../launchd/"com.claude-fleet.*.plist.tmpl "$FX/launchd/" 2>/dev/null
 NTMPL=$(ls "$FX/launchd" | wc -l | tr -d ' ')
 [ "$NTMPL" -gt 0 ] || fail "no launchd/*.plist.tmpl beside bin/ — the fixture needs the real templates"
@@ -198,8 +219,19 @@ contains "A home" "$OUT" 'sudo createhomedir -c -u victor'
 contains "A ssh group" "$OUT" 'sudo dseditgroup -o edit -a victor -t user com.apple.access_ssh'
 contains "A key" "$OUT" "sudo tee -a $FLEET_LOGIN_HOMES/victor/.ssh/authorized_keys < $KEY"
 contains "A key chmod" "$OUT" "sudo chmod 600 $FLEET_LOGIN_HOMES/victor/.ssh/authorized_keys"
+# separated (the default, issue #2294): the pool goes into the store, never the login's dir
+not_contains "A no pool cp into the login" "$OUT" "sudo cp -p $POOL/alpha"
+contains "A pool into the store" "$OUT" "the tokens go into victor's credential store in step 7b"
+contains "A conf switches" "$OUT" "sudo install -m 600 <fleet.conf: [common] export FLEET_CRED_PROXY=1, export FLEET_CRED_SEPARATE=1> $FLEET_LOGIN_HOMES/victor/.config/claude-fleet/fleet.conf"
+contains "A credsep install" "$OUT" "sudo bash $BIN/fleet-credsep.sh install --login victor --fresh --install-dir $FLEET_LOGIN_HOMES/victor/.claude/fleet --pool-src $POOL"
+if [ -z "$DAEMONS" ]; then case "$OUT" in *"--fresh"*"[8] install victor"*) ;; *) fail "A 7b is not before the daemons (8)" ;; esac; fi
+# --no-credsep: the old layout, every token copied into the login
+run victor --full-name 'Victor V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --no-credsep
 contains "A pool cp" "$OUT" "sudo cp -p $POOL/alpha $POOL/alpha.conf $POOL/beta $POOL/beta.conf $FLEET_LOGIN_HOMES/victor/.config/claude-fleet/accounts/"
 contains "A pool chown" "$OUT" "sudo chown -R victor:staff $FLEET_LOGIN_HOMES/victor/.config/claude-fleet/accounts"
+not_contains "A --no-credsep no 7b" "$OUT" "fleet-credsep.sh install"
+contains "A --no-credsep says off" "$OUT" "credsep: off"
+run victor --full-name 'Victor V' --pubkey "$KEY" --share-pool --pool-src "$POOL"
 not_contains "A no dotfile" "$OUT" ".DS_Store"
 not_contains "A no backup" "$OUT" "alpha~"
 not_contains "A no GUI step (#1192)" "$OUT" "ONCE in the GUI"
@@ -227,6 +259,7 @@ contains "A --no-daemons installs itself" "$OUT" "claude-fleet + Claude Code ins
 
 # --- B. apply ---------------------------------------------------------------
 run victor --full-name 'Victor V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --machine box --apply $DAEMONS
+BOUT=$OUT
 eq "B apply exit" 0 "$RC"
 H="$FLEET_LOGIN_HOMES/victor"
 # the home was never opened to the admin's own process (#1213): still 000, and a
@@ -256,10 +289,12 @@ eq "B key mode" 600 "$(mode "$H/.ssh/authorized_keys")"
 contains "B .ssh chown" "$CALLS" "chown -R victor:staff $H/.ssh"
 D="$H/.config/claude-fleet/accounts"
 eq "B pool set" "alpha alpha.conf beta beta.conf" "$(ls -A "$D" | tr '\n' ' ' | sed 's/ $//')"
-eq "B pool token" "tok-beta" "$(cat "$D/beta")"
+eq "B pool: the login holds the marker" "store:beta" "$(cat "$D/beta")"
+eq "B pool: the .conf travels" "CCQUOTA_ACCOUNT=beta" "$(cat "$D/beta.conf")"
+eq "B pool: the token is in the store" "tok-beta" "$(cat "$FLEET_CREDSEP_ROOT_BASE/victor/accounts/beta" 2>/dev/null)"
+eq "B pool: store token mode" 600 "$(mode "$FLEET_CREDSEP_ROOT_BASE/victor/accounts/beta")"
 eq "B pool dir mode" 700 "$(mode "$D")"
 for f in alpha alpha.conf beta beta.conf; do eq "B pool $f mode" 600 "$(mode "$D/$f")"; done
-contains "B pool chown" "$CALLS" "chown -R victor:staff $D"
 contains "B config chown" "$CALLS" "chown victor:staff $H/.config $H/.config/claude-fleet"
 contains "B machine" "$OUT" "ccquota enroll --name box-victor"
 eq "B only .claude + .config + .ssh + .zshrc written" ".claude .config .ssh .zshrc" "$(ls -A "$H" | tr '\n' ' ' | sed 's/ $//')"
@@ -310,6 +345,86 @@ contains "B2 --password-file redacted" "$OUT" "-password <redacted: $WORK/pw.txt
 [ -e "$HOME/pam-onboard/password.txt" ] && fail "B2 --password-file still generated one"
 contains "B2 --password-file at the end" "$OUT" "password: the first line of $WORK/pw.txt (--password-file)"
 
+# --- M. separated from the first moment (issue #2294, EPIC #2293 C1) ---------
+# victor, opened in B: nothing a session of his could read holds a credential —
+# no .credentials.json / auth.json / node.env, no pool token anywhere in his
+# home; status is `separated`; and a session of his reaches the subscription
+# through the proxy (the store's token on the way out).
+unlock_homes
+CD="$H/.config/claude-fleet"
+eq "M no credential file in the home" "" "$(cd "$H" && find . \( -name .credentials.json -o -name auth.json -o -name node.env \) -print)"
+eq "M no pool token in the home" "" "$(grep -rl 'tok-alpha\|tok-beta' "$H" 2>/dev/null)"
+contains "M fleet.conf: the proxy" "$(cat "$CD/fleet.conf")" "export FLEET_CRED_PROXY=1"
+contains "M fleet.conf: separated" "$(cat "$CD/fleet.conf")" "export FLEET_CRED_SEPARATE=1"
+eq "M fleet.conf mode" 600 "$(mode "$CD/fleet.conf")"
+contains "M nothing to move: a fresh login" "$BOUT" "credentials: 0 moved"
+contains "M pool into the store" "$BOUT" "pool: 2 account(s) from $POOL"
+st=$(FLEET_CONF_DIR="$CD" bash "$H/.claude/fleet/bin/fleet-credsep.sh" status 2>&1)
+contains "M status separated (as the login, its own clone)" "$st" "separated · $FLEET_CREDSEP_ROOT_BASE/victor"
+contains "M the hub reads the verdict last" "$(printf '%s\n' "$BOUT" | tail -n 1)" "credsep: pending"
+# the login's account judge reads a pool label as usable (the picker names it,
+# and the proxy then mints for it) — a `hub:` marker with no lease file would not
+eq "M the account judge: beta usable" "beta	valid" "$(FLEET_CONF_DIR="$CD" FLEET_STATE_DIR="$WORK/acct-state" python3 "$BIN/.fleet-account.py" claude-login beta 2>&1)"
+# the proxy, as launchd would start it (root's code copy), against a fake far end
+cat > "$WORK/fake.py" <<'PY2'
+import json, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+W = sys.argv[1]
+class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def log_message(self, *a): pass
+    def any(self):
+        n = int(self.headers.get("content-length") or 0)
+        if n: self.rfile.read(n)
+        with open(W + "/fake.log", "a") as f:
+            f.write("%s %s auth=%s\n" % (self.command, self.path, self.headers.get("authorization", "")))
+        b = json.dumps({"ok": True}).encode()
+        self.send_response(200); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    do_GET = do_POST = any
+s = ThreadingHTTPServer(("127.0.0.1", 0), H)
+open(W + "/fake.port", "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY2
+python3 "$WORK/fake.py" "$WORK" & FPID=$!
+for _ in $(seq 1 300); do [ -s "$WORK/fake.port" ] && break; sleep 0.1; done
+FP=$(cat "$WORK/fake.port" 2>/dev/null)
+# the upstream comes from root's settings only (issue #2290), which install wrote
+[ -f "$FLEET_CREDSEP_LIB/victor.conf" ] || fail "M install wrote no root settings $FLEET_CREDSEP_LIB/victor.conf"
+printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\n' "$FP" >> "$FLEET_CREDSEP_LIB/victor.conf"
+HOME="$WORK/admin" python3 -I "$FLEET_CREDSEP_LIB/fleet-credsep-launch.py" proxy victor 2>"$WORK/launch.err" & LPID=$!
+for _ in $(seq 1 300); do [ -s "$FLEET_CREDSEP_RUN_BASE/victor/port" ] && [ -S "$FLEET_CREDSEP_RUN_BASE/victor/ctl.sock" ] && break; sleep 0.1; done
+PORT=$(cat "$FLEET_CREDSEP_RUN_BASE/victor/port" 2>/dev/null)
+[ -n "$PORT" ] || fail "M the proxy did not start: $(cat "$WORK/launch.err" | tr "\n" " ")"
+tok=$(FLEET_CONF_DIR="$CD" bash "$H/.claude/fleet/bin/fleet-cred-proxy.sh" mint --account beta --sid s1 2>&1)
+case "$tok" in fcp1.*) ;; *) fail "M mint: $tok" ;; esac
+code=$(curl -s --max-time 60 -o "$WORK/l.body" -w '%{http_code}' -H "Authorization: Bearer $tok" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORT/v1/messages")
+eq "M a session's request is answered through the proxy" 200 "$code"
+contains "M ... carrying the store's token, which the login never held" "$(cat "$WORK/fake.log" 2>/dev/null)" "POST /v1/messages auth=Bearer tok-beta"
+kill "$LPID" "$FPID" 2>/dev/null; wait "$LPID" "$FPID" 2>/dev/null; LPID='' FPID=''
+# a pool token put back at the login's path is a leak the doctor names (the
+# store made unreadable the way the role account's 0700 makes it — here the
+# role account is us)
+R="$FLEET_CREDSEP_ROOT_BASE/victor"
+cp "$R/accounts/beta" "$CD/accounts/beta.tmp" && mv "$CD/accounts/beta.tmp" "$CD/accounts/beta"
+chmod 000 "$R"
+ck=$(FLEET_CONF_DIR="$CD" bash "$H/.claude/fleet/bin/fleet-credsep.sh" check 2>&1)
+chmod 700 "$R"
+contains "M check WARNs on a pool token back at the login's path" "$ck" "credentials are back at login paths: $CD/accounts/beta"
+printf 'store:beta\n' > "$CD/accounts/beta"
+# --no-credsep: the old layout, and the hub reads `credsep: off`
+: > "$LOG"; OUT=$("$BASH_BIN" "$S" uma --full-name N --pubkey "$KEY" --share-pool --pool-src "$POOL" --no-credsep --apply --no-daemons 2>&1); RC=$?
+unlock_homes
+eq "M --no-credsep exit" 0 "$RC"
+eq "M --no-credsep: the token in the login (the old way)" "tok-beta" "$(cat "$FLEET_LOGIN_HOMES/uma/.config/claude-fleet/accounts/beta" 2>/dev/null)"
+[ -e "$FLEET_CREDSEP_ROOT_BASE/uma" ] && fail "M --no-credsep made a store"
+contains "M --no-credsep last line" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep: off"
+# 7b refused (a login that is not fresh, a store that cannot be made) → the run fails, never hands it out
+: > "$LOG"; OUT=$(FLEET_CREDSEP_ROOT_BASE=/dev/null/nope "$BASH_BIN" "$S" vee --full-name V --pubkey "$KEY" --apply --no-daemons 2>&1); RC=$?
+unlock_homes
+eq "M 7b failing → exit 1" 1 "$RC"
+contains "M 7b failing stops at it" "$OUT" "FAILED at step"
+not_contains "M 7b failing: never 'separated'" "$OUT" "credsep: separated"
+
 # --- C. already exists -------------------------------------------------------
 run victor --full-name V --pubkey "$KEY"
 eq "C home exists → 3" 3 "$RC"
@@ -330,7 +445,7 @@ eq "D exit" 0 "$RC"
 contains "D skipped" "$OUT" "skipped: no com.apple.access_ssh"
 not_contains "D no dseditgroup" "$CALLS" "dseditgroup"
 eq "D key mode" 600 "$(mode "$FLEET_LOGIN_HOMES/dora/.ssh/authorized_keys")"
-[ -e "$FLEET_LOGIN_HOMES/dora/.config" ] && fail "D wrote .config without --share-pool"
+[ -e "$FLEET_LOGIN_HOMES/dora/.config/claude-fleet/accounts" ] && fail "D wrote accounts/ without --share-pool"
 
 # --- E. usage ---------------------------------------------------------------
 : > "$WORK/empty.pub"
@@ -397,14 +512,14 @@ eq "H relative --pubkey found" "$(cat "$KEY")" "$(cat "$HH/.ssh/authorized_keys"
 eq "H relative --pool-src found" "alpha alpha.conf beta beta.conf" "$(ls -A "$HH/.config/claude-fleet/accounts" | tr '\n' ' ' | sed 's/ $//')"
 contains "H relative --password-file found" "$CALLS" "sysadminctl -addUser hal -fullName Hal H -password pw-from-cwd"
 contains "H transcript: key path absolute" "$OUT" "sudo tee -a $HH/.ssh/authorized_keys < $CALLER/hal.pub"
-contains "H transcript: pool path absolute" "$OUT" "sudo cp -p $CALLER/pool/alpha $CALLER/pool/alpha.conf $CALLER/pool/beta $CALLER/pool/beta.conf $HH/.config/claude-fleet/accounts/"
+contains "H transcript: pool path absolute" "$OUT" "--pool-src $CALLER/pool"
 contains "H transcript: password path absolute" "$OUT" "-password <redacted: $CALLER/pw.txt>"
 [ -e "$HOME/hal-onboard/password.txt" ] && fail "H --password-file still generated one"
 # a dry run from there: the same absolute paths on screen, nothing executed
 hrun ian --full-name I --pubkey hal.pub --share-pool --pool-src pool
 eq "H dry run exit" 0 "$RC"
 contains "H dry run: key path absolute" "$OUT" "sudo tee -a $FLEET_LOGIN_HOMES/ian/.ssh/authorized_keys < $CALLER/hal.pub"
-contains "H dry run: pool path absolute" "$OUT" "sudo cp -p $CALLER/pool/alpha "
+contains "H dry run: pool path absolute" "$OUT" "--pool-src $CALLER/pool"
 eq "H dry run nothing executed" 0 "$(mutations)"
 [ -e "$FLEET_LOGIN_HOMES/ian" ] && fail "H dry run created a home"
 # a relative path that does not exist is still the usual exit 2, from there too
@@ -464,7 +579,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   eq "J key mode" 600 "$(mode "$KH/.ssh/authorized_keys")"
   contains "J key comment (greppable for the swap)" "$(cat "$KF.pub")" " wen-onboard-temp"
   eq "J private key parses back to the public line" "$(ssh-keygen -y -f "$KF" | cut -d' ' -f1,2)" "$(cut -d' ' -f1,2 "$KF.pub")"
-  eq "J only .claude + .ssh + .zshrc in the login's home" ".claude .ssh .zshrc" "$(ls -A "$KH" | tr '\n' ' ' | sed 's/ $//')"
+  eq "J only .claude + .config (7b: fleet.conf + credsep.json) + .ssh + .zshrc in the login's home" ".claude .config .ssh .zshrc" "$(ls -A "$KH" | tr '\n' ' ' | sed 's/ $//')"
   contains "J transcript: the temp pub is what tee'd" "$OUT" "sudo tee -a $KH/.ssh/authorized_keys < $KF.pub"
   contains "J transcript: key=temporary" "$OUT" "key=temporary (generated)  welcome=zh"
   contains "J transcript: step 9" "$OUT" "write the welcome letter (zh) → $WF (mode 600"

@@ -270,6 +270,7 @@ FLEET_LEDGER_WATCH_LEASE_TTL       knob: internal pacing/limit, safe in-code def
 FLEET_LIVE_DIR                     path: the live install checkout (default ~/.claude/fleet) — fleet-install-version.sh, fleet-doctor.sh, and the hub refresh loop's stable mark (its local refs/tags/stable judges every machine's version, #644)
 FLEET_LIVE_ROOT                    path: state/log location override (fleet-daemon-lib.sh)
 FLEET_LOGIN_HOMES                  seam: an injectable command/path for tests (fleet-login-new.sh)
+FLEET_LOGIN_CREDSEP_WAIT           knob: seconds fleet-login-new.sh step 7b waits for `credsep check` to pass while the new proxy starts (15; #2294)
 FLEET_LOOP_AGENT                   handoff: which agent the /loop spec belongs to
 FLEET_LOOP_SPEC                    handoff: the /loop spec a relaunched agent restores
 FLEET_CLAUDE_RSS_EVERY             knob: min seconds between memguard fat-session checks (fleet-memguard.sh, 30)
