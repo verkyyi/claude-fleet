@@ -386,8 +386,8 @@ BREAK-IT 行 `service-handwritten`。
 **mini2 的两项（2026-10-09）**：
 
     # 短信通知：verkyyi → verky，常驻；Bark 推送密钥进凭据库
-    fleet service cred set BARK_KEY < <(…)            # 值从标准输入
-    fleet service add sms-watch --cred BARK_KEY --path ~/sms-watch -- ~/bin/sms-watch
+    fleet service cred set BARK_KEY                    # 值从标准输入读
+    fleet service add sms-watch --cred BARK_KEY --path <它的状态目录> -- ~/bin/sms-watch
     # 每日推送：run.sh 的「07:00 后开会话、做完看 runs/<日>.done.json、试两次」由定时任务接手
     fleet task add daily-report --at 07:00 --tz Asia/Shanghai --retries 2 \
         --prompt '/daily-brief {date}' --window 'daily-{date}' \
