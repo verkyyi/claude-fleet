@@ -286,7 +286,8 @@ tf kill-window -t "$D1"; tf kill-window -t "$D2"; tf kill-window -t "$D3"; tf ki
 E=$(win plain 140)
 stop "$E"
 got="$(tf show-options -w -t "$E" | grep '^@' | cut -d' ' -f1 | sort | tr '\n' ' ')$(opt "$E" @claude_state)/$(opt "$E" @claude_needs)"
-want="@claude_needs @claude_state @claude_state_ts @issue done/"
+# …plus @claude_state_src (issue #2537): every state write says who made it.
+want="@claude_needs @claude_state @claude_state_src @claude_state_ts @issue done/"
 eq "E: the window carries exactly today's options" "$want" "$got"
 stop "$E" '{"hook_event_name":"Stop","transcript_path":"/nonexistent/x.jsonl"}'
 got="$(tf show-options -w -t "$E" | grep '^@' | cut -d' ' -f1 | sort | tr '\n' ' ')$(opt "$E" @claude_state)/$(opt "$E" @claude_needs)"
