@@ -72,7 +72,7 @@ cs_fixture own
 # groups — alice sits in access_ssh by name and GUID, not in access_screensharing,
 # access_disabled has no member list at all, and staff is not an access group.
 reset_fixture() {
-  rm -rf "${WORK:?}/homes/alice" "${WORK:?}/ds/groups"
+  rm -rf "${WORK:?}/homes/alice" "${WORK:?}/ds/groups" "${WORK:?}/ds/alice.gone"
   mkdir -p "$FLEET_CONF_DIR/fleets/alice-fleet" "$WORK/homes/alice/Library/LaunchAgents" "$FLEET_CONF_DIR/accounts" "$WORK/ds/groups"
   printf 'FLEET_REPO=example/repo\n' > "$FLEET_CONF_DIR/fleets/alice-fleet/conf"
   printf 'alive\n' > "$FLEET_TEST_LIVE"
@@ -145,6 +145,8 @@ cat > "$WORK/shim/sysadminctl" <<'EOF'
 printf 'sysadminctl %s\n' "$*" >> "$FLEET_TEST_LOG"
 case " $* " in *' -keepHome '*) echo "'-keepHome' options is not available on this system" >&2; exit 1 ;; esac
 if [ "$1" = -deleteUser ] && [ "${FAKE_HOME_STAYS:-0}" = 0 ]; then rm -rf "${FLEET_LOGIN_HOMES:?}/${2:?}"; fi
+# FAKE_RECORD_STAYS=1: the home goes, the record does not — exit 0 anyway (#2728)
+if [ "$1" = -deleteUser ] && [ "${FAKE_RECORD_STAYS:-0}" = 0 ]; then : > "$FLEET_TEST_DS/${2:?}.gone"; fi
 exit 0
 EOF
 # dscl over a fixture: `. -list /Groups`, `. -read <path> [attr]` (an absent
@@ -159,7 +161,8 @@ case "$2" in
   -read)
     f="$DS/groups/${3#/Groups/}"
     case "$3" in
-      /Users/alice) [ "${4:-}" != GeneratedUID ] || echo 'GeneratedUID: GUID-ALICE' ;;
+      /Users/alice) [ ! -e "$DS/alice.gone" ] || exit 56
+                    [ "${4:-}" != GeneratedUID ] || echo 'GeneratedUID: GUID-ALICE' ;;
       /Groups/*) [ -f "$f" ] || { echo '<dscl_cmd> DS Error: -14136 (eDSRecordNotFound)' >&2; exit 56; }
                  if [ -n "${4:-}" ]; then grep "^$4: " "$f" || echo "No such key: $4"; else cat "$f"; fi ;;
       *) exit 56 ;;
@@ -167,6 +170,10 @@ case "$2" in
   -delete)
     printf 'dscl %s\n' "$*" >> "$FLEET_TEST_LOG"
     [ "${FAKE_DSCL_FAIL:-0}" = 0 ] || { echo '<dscl_cmd> DS Error: -14120 (eDSPermissionError)' >&2; exit 1; }
+    case "$3" in /Users/*)
+      [ "${FAKE_USER_DELETE_FAILS:-0}" = 0 ] || { echo '<dscl_cmd> DS Error: -14120 (eDSPermissionError)' >&2; exit 1; }
+      : > "$DS/${3#/Users/}.gone"; exit 0 ;;
+    esac
     f="$DS/groups/${3#/Groups/}"
     grep "^$4: " "$f" | tr ' ' '\n' | grep -Fxq -- "$5" || { echo '<dscl_cmd> DS Error: -14009 (eDSUnknownAttribute)' >&2; exit 1; }
     awk -v a="$4:" -v v="$5" '$1 == a {o = $1; for (i = 2; i <= NF; i++) if ($i != v) o = o " " $i; print o; next} {print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;
@@ -339,6 +346,21 @@ reset_fixture
 FAKE_HOME_STAYS=1 run alice --delete-home --apply
 [ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail 'home-stays apply failed'; }
 has "$WORK/out" "WARN home still present after deleteUser: $WORK/homes/alice" 'a leftover home was not reported'
+
+# deleteUser takes the home and leaves the record, exit 0 (drill10092046,
+# #2728): the record is deleted with dscl, and the run still ends done.
+reset_fixture
+FAKE_RECORD_STAYS=1 run alice --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail "record-left apply: exit $RC (want 0 once dscl took it)"; }
+has "$WORK/out" 'record still there after deleteUser' 'a surviving record was not reported'
+has "$FLEET_TEST_LOG" 'dscl . -delete /Users/alice' 'a surviving record was not deleted with dscl'
+[ -e "$WORK/ds/alice.gone" ] || fail 'the record is still there'
+# … and when even dscl cannot: never done — exit 1, the hub asks again.
+reset_fixture
+FAKE_RECORD_STAYS=1 FAKE_USER_DELETE_FAILS=1 run alice --delete-home --apply
+[ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail "record that survives dscl: exit $RC (want 1)"; }
+has "$WORK/out" 'is still on this machine' 'a login left on the machine was not said'
+not_has "$WORK/out" 'fleet-login-remove: done' 'a login left on the machine read done'
 
 # --archive-dir picks the archive location; a login in no access group says so.
 reset_fixture

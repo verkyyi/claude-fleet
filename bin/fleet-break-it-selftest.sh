@@ -77,6 +77,10 @@
 #                                                   (openingStuck, openingETAFor; go test, when a toolchain is here)
 #   drill-login-orphaned                            tokenledger/internal/api fleet_drill.go + bin/fleet-login-remove.sh
 #                                                   (closeDrillLogins, exit 4; go test, when a toolchain is here)
+#   opening-eta-climbs                              tokenledger/internal/api fleet_opening.go (openingETALeft)
+#   login-remove-record-left                        bin/fleet-login-remove.sh (step 6 checks the record is gone)
+#   drill-login-handed-silently                     tokenledger/internal/api fleet_drill.go (closeDrillLogins
+#                                                   handed) + store DeleteDrill (keeps the handed rows)
 #   machine-lane-reissued                           tokenledger/internal/api fleet_login_node.go (deviceNode, machineServing)
 #                                                   + store EndpointByTokenHash (prev_token_hash) + node_machine.go
 #                                                   (staleLoginTokenWhy), internal/agent lane_state.go,
@@ -4382,6 +4386,54 @@ drill_drill_login_orphaned() {
   _drill_go_tests 'TestDrillFailedCreateIsRemovedBeforeItGoes TestDrillFailedRemoveIsRetriedExistingIsLeft' \
     "$ROOT/tokenledger/internal/api/fleet_drill_test.go" \
     '开号失败 / 收号失败的演练登录先收掉才删人，机器上没有这个登录 → 退 4 → removed；撞上已有登录的不碰（go test + 真跑一次 remove）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- opening-eta-climbs (#2728): past the machine's median the ETA switched to
+# the time left until the give-up — a number that jumps UP (313 s, then 858 s).
+# Now one countdown that starts at the median and only goes down.
+drill_opening_eta_climbs() {
+  CAP=120; local t0 f="$ROOT/tokenledger/internal/api/fleet_opening.go"
+  t0=$(now)
+  grep -q 'openingETALeft(s.openingETAFor(opening.Hostname), took)' "$f" \
+    || { WHY="accountStateOf's ETA is no longer the one countdown (openingETALeft)"; return 1; }
+  if grep -q 'eta = int((openingGiveUp - took).Seconds())' "$f"; then
+    WHY="past the median the ETA still jumps to the time until the give-up"; return 1
+  fi
+  _drill_go_tests 'TestOpeningETANeverClimbs' "$ROOT/tokenledger/internal/api/fleet_opening_test.go" \
+    '开号预计剩余从中位数起只减不增，到放弃时限归零（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- login-remove-record-left (#2728): sysadminctl -deleteUser took the home
+# and left the record (drill10092046 on macmini), and the script said done —
+# the hub read removed and the OS login was nobody's. Now step 6 reads the
+# record again: dscl -delete it, and exit 1 if even that leaves it.
+drill_login_remove_record_left() {
+  CAP=60; local t0
+  t0=$(now)
+  grep -q 'record still there after deleteUser' "$ROOT/bin/fleet-login-remove.sh" \
+    || { WHY="fleet-login-remove.sh no longer checks the record is gone after deleteUser"; return 1; }
+  bash "$ROOT/bin/fleet-login-remove-selftest.sh" >/dev/null 2>&1 \
+    || { WHY="fleet-login-remove-selftest.sh is red (its record-left legs)"; return 1; }
+  WHAT='deleteUser 留下账号记录 → dscl -delete 补删；补删不掉 → 退 1，不说 done（真跑 shim 化的 remove）'
+  SECS=$(since "$t0")
+}
+
+# ---- drill-login-handed-silently (#2728): a drill whose login could not be
+# closed (a create nobody answered, a remove an hour stuck, a name already
+# there) was deleted with every account row — the OS login stayed on its
+# machine and the hub forgot it. Now an unanswered create is waited out, and a
+# login handed to the operator keeps its rows and is named in the 200.
+drill_drill_login_handed_silently() {
+  CAP=120; local t0
+  t0=$(now)
+  grep -q 'handed = append(handed, where)' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
+    || { WHY="closeDrillLogins no longer names the logins it hands to the operator"; return 1; }
+  grep -q 'keepHosts' "$ROOT/tokenledger/internal/store/fleet_drill.go" \
+    || { WHY="DeleteDrill no longer keeps the rows of a login left on a machine"; return 1; }
+  _drill_go_tests 'TestDrillUnknownCreateIsWaitedThenHanded' "$ROOT/tokenledger/internal/api/fleet_drill_test.go" \
+    '开号没回音的演练登录先等、一小时后交还运营者：200 带 left_for_operator，账户行留着（go test）' || return 1
   SECS=$(since "$t0")
 }
 

@@ -232,3 +232,37 @@ func TestOpeningHasAnHonestETAAndAnEnd(t *testing.T) {
 		t.Fatalf("a fresh pending create is stuck already: %q", why)
 	}
 }
+
+// The ETA is one countdown (claude-fleet#2728): it starts at the machine's
+// estimate and never goes up — past the estimate it used to jump to the time
+// left until the give-up, so the drill read 313 s and then 858 s.
+func TestOpeningETANeverClimbs(t *testing.T) {
+	for _, est := range []int{60, openingETA, int(openingGiveUp.Seconds()), 5000} {
+		prev := openingETALeft(est, 0)
+		want := est
+		if max := int(openingGiveUp.Seconds()); want > max {
+			want = max
+		}
+		if prev != want {
+			t.Fatalf("est %d: eta at the start = %d; want %d", est, prev, want)
+		}
+		for took := time.Duration(0); took <= openingGiveUp+time.Minute; took += 10 * time.Second {
+			got := openingETALeft(est, took)
+			if got > prev {
+				t.Fatalf("est %d: eta climbed from %d to %d at %s", est, prev, got, took)
+			}
+			if got < 5 {
+				t.Fatalf("est %d: eta %d below the 5 s floor at %s", est, got, took)
+			}
+			prev = got
+		}
+		if prev != 5 {
+			t.Fatalf("est %d: eta at the give-up = %d; want the 5 s floor", est, prev)
+		}
+	}
+	// The drill's own numbers: a machine with no history (8 min), 167 s in,
+	// then 342 s in — the second reading is the smaller one now.
+	if a, b := openingETALeft(openingETA, 167*time.Second), openingETALeft(openingETA, 342*time.Second); b >= a {
+		t.Fatalf("eta at 167 s = %d, at 342 s = %d; want it to go down", a, b)
+	}
+}

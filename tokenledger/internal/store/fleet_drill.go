@@ -53,6 +53,12 @@ type DrillDeleted struct {
 	Devices     int      `json:"devices"`
 	Accounts    int      `json:"accounts"`
 	Nodes       []string `json:"nodes"`
+
+	// LeftForOperator is every login@machine the hub opened for it that is
+	// still on its machine, handed to the operator (claude-fleet#2728): its
+	// account row — and so the person row it points at — is kept, so
+	// `fleet hub accounts` lists it until the operator closes and forgets it.
+	LeftForOperator []string `json:"left_for_operator,omitempty"`
 }
 
 func (s *Store) ensureFleetDrill() error {
@@ -193,7 +199,12 @@ func (s *Store) ExpiredDrills(now time.Time) ([]DrillPerson, error) {
 // agent runs as its login — deleted when it never reported, else retired, and
 // its roster row dropped), its devices, its accounts, the person and the drill
 // row. Only a drill person: anyone else is refused with ErrNoPrincipal.
-func (s *Store) DeleteDrill(pid, actor string, now time.Time) (*DrillDeleted, error) {
+//
+// keepHosts names the machines whose login the hub could not close and hands
+// to the operator (claude-fleet#2728): those account rows stay, marked so in
+// their detail, and with them the person row they reference — the drill row,
+// its devices and nodes go all the same, so it can no longer sign in.
+func (s *Store) DeleteDrill(pid, actor string, now time.Time, keepHosts ...string) (*DrillDeleted, error) {
 	d, err := s.Drill(pid)
 	if err != nil {
 		return nil, err
@@ -249,14 +260,34 @@ func (s *Store) DeleteDrill(pid, actor string, now time.Time) (*DrillDeleted, er
 		}
 	}
 	out.Devices = len(fps)
-	res, err := tx.Exec(`DELETE FROM fleet_accounts WHERE `+s.d.eqNocase("principal_id"), d.PrincipalID)
+	kept := 0
+	for _, host := range keepHosts {
+		res, err := tx.Exec(`UPDATE fleet_accounts SET detail = ? || detail, updated_at = ?
+			WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ?`,
+			"drill person deleted ("+actor+"): left for the operator — close it, then forget it. ", now.UTC().Format(rfc), d.PrincipalID, host)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			kept++
+		}
+	}
+	del := `DELETE FROM fleet_accounts WHERE ` + s.d.eqNocase("principal_id")
+	args := []any{d.PrincipalID}
+	for _, host := range keepHosts {
+		del += ` AND hostname <> ?`
+		args = append(args, host)
+	}
+	res, err := tx.Exec(del, args...)
 	if err != nil {
 		return nil, err
 	}
 	n, _ := res.RowsAffected()
 	out.Accounts = int(n)
-	if _, err := tx.Exec(`DELETE FROM fleet_principals WHERE `+s.d.eqNocase("principal_id"), d.PrincipalID); err != nil {
-		return nil, err
+	if kept == 0 {
+		if _, err := tx.Exec(`DELETE FROM fleet_principals WHERE `+s.d.eqNocase("principal_id"), d.PrincipalID); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := tx.Exec(`DELETE FROM fleet_drill_people WHERE principal_id = ?`, d.PrincipalID); err != nil {
 		return nil, err

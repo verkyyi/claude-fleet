@@ -520,3 +520,45 @@ func TestDrillFailedRemoveIsRetriedExistingIsLeft(t *testing.T) {
 		t.Fatalf("someone else's login was sent %+v", got)
 	}
 }
+
+// A create nobody answered (its link dropped mid-op: unknown) is waited out —
+// the node re-sends its answer when it reconnects — and one still unanswered
+// after drillCloseGiveUp is handed to the operator, never dropped in silence:
+// the person goes, but its account row (and so its person row) stays for
+// `fleet hub accounts`, and the 200 names it (claude-fleet#2728: before, the
+// person went at once with every row, and drill10092046 stayed on macmini
+// with nobody to close it).
+func TestDrillUnknownCreateIsWaitedThenHanded(t *testing.T) {
+	h, nodes, inv := drillOnFleet(t)
+	expectAccountOp(t, nodes["m4"].tnode)
+	a := waitState(t, h, inv.PersonID, "m4", store.AccountCreating)
+	if err := h.srv.Store.LoseAccountOps(a.EndpointID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, h, inv.PersonID, "m4", store.AccountUnknown)
+
+	code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
+	if code != http.StatusAccepted || !strings.Contains(string(body), inv.Login+"@m4") {
+		t.Fatalf("self-delete with a create unanswered: %d %s; want 202 naming %s@m4 (wait for the node)", code, body, inv.Login)
+	}
+	if got, ok := readMsg(nodes["m4"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("an unanswered create was removed on a guess: %+v", got)
+	}
+
+	old := drillCloseGiveUp
+	drillCloseGiveUp = time.Millisecond
+	t.Cleanup(func() { drillCloseGiveUp = old })
+	time.Sleep(5 * time.Millisecond)
+	code, body = drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
+	var out store.DrillDeleted
+	if code != 200 || json.Unmarshal(body, &out) != nil || len(out.LeftForOperator) != 1 || out.LeftForOperator[0] != inv.Login+"@m4" {
+		t.Fatalf("self-delete past the give-up: %d %s; want 200 with left_for_operator [%s@m4]", code, body, inv.Login)
+	}
+	accts, err := h.srv.Store.FleetAccounts(inv.PersonID)
+	if err != nil || len(accts) != 1 || accts[0].Hostname != "m4" || !strings.Contains(accts[0].Detail, "left for the operator") {
+		t.Fatalf("accounts after the person went = %+v, %v; want the m4 row kept for the operator", accts, err)
+	}
+	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != http.StatusUnauthorized {
+		t.Fatalf("the drill person can still delete itself: %d %s; want 401 (gone)", code, body)
+	}
+}
