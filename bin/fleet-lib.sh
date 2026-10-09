@@ -8967,6 +8967,79 @@ fleet_cfg_restart_why() {
   return 0
 }
 
+# fleet_role_renew_why <session> <win> — may the orchestrator / steward window
+# <win> be reopened onto the installed fleet version NOW (issue #2733)? Exit 0 =
+# yes. Else exit 1 and ONE word on stdout: gone · unknown · ok (nothing to renew)
+# · codex · state:<s> · recent · typing · loop-due · bg · tool (renew pending, not
+# a quiet moment). fleet_cfg_restart_why's sibling for the two sessions it never
+# reopens (fleet-migrate.sh skips them: they stay on their machine and come back
+# through their own `ensure`). Pending = fleet_cfg_state stale / renew / broken —
+# the window was launched from an older ~/.claude/fleet than the one installed.
+# A quiet moment, all of: @claude_state done or looping (never needs/blocked: a
+# question pending is the person's) for FLEET_ORCH_RENEW_QUIET (60 s); no client
+# whose current window it is pressed a key in those seconds; its Loop's next round
+# (@loop, else the transcript's) is ≥ FLEET_ORCH_RENEW_LOOP_GAP (120 s) away; no
+# Bash-tool job and no fleet tool call in flight. A Codex window is pending but
+# never reopened here (its recovery page and seed stay, convention 5).
+fleet_role_renew_why() {
+  local sess="${1:-}" win="${2:-}" o ag fp av st ts lp now quiet gap bin sock=''
+  quiet=${FLEET_ORCH_RENEW_QUIET:-60}; gap=${FLEET_ORCH_RENEW_LOOP_GAP:-120}
+  case "$quiet" in ''|*[!0-9]*) quiet=60 ;; esac
+  case "$gap" in ''|*[!0-9]*) gap=120 ;; esac
+  o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
+        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}' 2>/dev/null) \
+    && [ -n "$o" ] || { echo gone; return 1; }
+  ag=${o%%|*}; o=${o#*|}; fp=${o%%|*}; o=${o#*|}; av=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}
+  ts=${o%%|*}; lp=${o#*|}
+  fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state "$ag" "$fp" "$av" "$sess" "$win"
+  case "$FCFG_STATE" in stale|renew|broken) ;; *) echo "$FCFG_STATE"; return 1 ;; esac
+  case "$ag" in codex|codex:*) echo codex; return 1 ;; esac
+  case "$st" in done|looping) ;; *) echo "state:${st:-none}"; return 1 ;; esac
+  now=$(date +%s)
+  case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
+  [ $(( now - ts )) -ge "$quiet" ] || { echo recent; return 1; }
+  if [ "$quiet" -gt 0 ] && _fleet_tmux "$sess" list-clients -F '#{client_activity} #{window_id}' 2>/dev/null \
+       | awk -v w="$win" -v now="$now" -v ds="$quiet" \
+           '$2 == w && $1 ~ /^[0-9]+$/ && (now - $1) < ds { f = 1 } END { exit !f }'; then
+    echo typing; return 1
+  fi
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  if [ -f "$bin/fleet_loop_mark.py" ]; then
+    if [ -z "$lp" ]; then
+      # a ScheduleWakeup the hook never saw lives only in the transcript (#2189)
+      [ -n "${TMUX:-}" ] || sock=$(fleet_socket "$sess")
+      python3 "$bin/fleet_loop_mark.py" backfill "$win" ${sock:+--socket-name "$sock"} >/dev/null 2>&1
+      lp=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@loop}' 2>/dev/null)
+    fi
+    if [ -n "$lp" ] && python3 "$bin/fleet_loop_mark.py" due --value "$lp" --within "$gap" >/dev/null 2>&1; then
+      echo loop-due; return 1
+    fi
+  fi
+  fleet_window_bg_busy "$sess" "$win" 1 && { echo bg; return 1; }
+  fleet_window_tool_busy "$sess" "$win" && { echo tool; return 1; }
+  return 0
+}
+
+# fleet_role_renew_due <session> <win> — the `ensure` half of #2733: judge <win>
+# with fleet_role_renew_why and keep its pending mark. A pending window carries
+# @renew_since (the epoch it was first seen on an older version; the doctor's
+# `orch` row WARNs past FLEET_ORCH_RESTART_WAIT, 2 h — never a forced switch); a
+# current one has it cleared. Exit 0 = reopen it now (the reason on stdout is
+# empty); exit 1 = not now, the word printed.
+fleet_role_renew_due() {
+  local sess="${1:-}" win="${2:-}" why rc
+  why=$(fleet_role_renew_why "$sess" "$win"); rc=$?
+  case "$why" in
+    gone) ;;
+    ok|unknown) [ -z "$(_fleet_tmux "$sess" show-options -wqv -t "$win" @renew_since 2>/dev/null)" ] \
+                  || _fleet_tmux "$sess" set-window-option -u -t "$win" @renew_since 2>/dev/null ;;
+    *) [ -n "$(_fleet_tmux "$sess" show-options -wqv -t "$win" @renew_since 2>/dev/null)" ] \
+         || _fleet_tmux "$sess" set-window-option -t "$win" @renew_since "$(date +%s)" 2>/dev/null ;;
+  esac
+  [ -n "$why" ] && printf '%s\n' "$why"
+  return "$rc"
+}
+
 # fleet_window_bg_busy <session> <win> [quick] — does <win>'s agent still own a
 # Bash-tool job (a run_in_background test, a PR-gate waiter) after its turn ended?
 # fleet_child_busy's `bg` half (issue #864), shared with the Stop hook's and the

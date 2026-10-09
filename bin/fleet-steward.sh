@@ -41,6 +41,9 @@
 # the next tick, on the same Claude conversation while its transcript is on disk
 # ($FLEET_CONF_DIR/fleets/<sess>/steward.sid); one on the wrapper's recovery page
 # past FLEET_STEWARD_REVIVE_SECS (30; `off` keeps the page) is respawned in place.
+# A live one launched from an older ~/.claude/fleet than the one installed is
+# renewed the orchestrator's way (issue #2733): at a quiet moment, in place, on
+# the same conversation; pending meanwhile (@renew_since), never forced.
 # Session caps never count it (only `worker` does); restore / migrate / move read
 # it as `home` — never snapshotted, never moved.
 #
@@ -127,8 +130,19 @@ EOF2
   [ $(( $(date +%s) - ts )) -ge "$grace" ]
 }
 
+# stew_live — rc 0 = leave the open window as it is. On an older fleet version at
+# a quiet moment (issue #2733, fleet_role_renew_why) it is renewed: RENEW=1.
+RENEW=0
+stew_live() {
+  stew_exited "$1" && return 1
+  if [ "${FLEET_ORCH_RENEW:-1}" != 0 ] && fleet_role_renew_due "$SESS" "$1" >/dev/null; then
+    RENEW=1; return 1
+  fi
+  return 0
+}
+
 w=$(stew_find)
-[ -n "$w" ] && ! stew_exited "$w" && { printf '%s\n' "$w"; exit 0; }
+[ -n "$w" ] && stew_live "$w" && { printf '%s\n' "$w"; exit 0; }
 
 LOCK="$DIR/steward.lock"
 mkdir -p "$DIR" 2>/dev/null
@@ -138,8 +152,8 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null || exit 1
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
-w=$(stew_find)
-[ -n "$w" ] && ! stew_exited "$w" && { printf '%s\n' "$w"; exit 0; }
+w=$(stew_find); RENEW=0
+[ -n "$w" ] && stew_live "$w" && { printf '%s\n' "$w"; exit 0; }
 
 AGENT=${FLEET_AGENT:-claude}
 case "$AGENT" in claude|codex) ;; *) AGENT=claude ;; esac
@@ -181,10 +195,17 @@ envs=''
 stamp=$(fleet_win_stamp_cmd @fleet_role steward @norepo 1 ${sid:+@norepo_sid "$sid"})
 launch="$stamp$envs'$BIN/fleet-session-wrap.sh' $args$seed; exec \$SHELL"
 if [ -n "$w" ]; then
+  if [ "$RENEW" = 1 ]; then
+    # nothing to save: its state is never the conversation (the beat rebuilds it)
+    printf '%s %s steward %s renewed %s → %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$SESS" "$w" \
+      "$(T display-message -p -t "$w" '#{@agent_ver}' 2>/dev/null)" "$(fleet_cfg_expected_load; printf '%s' "$FCFG_EXP_VER")" \
+      >> "$DIR/renew.log" 2>/dev/null
+    T set-window-option -u -t "$w" @renew_since 2>/dev/null
+  fi
   T respawn-pane -k -t "$w" -c "$HOME" "$launch" 2>/dev/null || exit 1
   T set-window-option -t "$w" @claude_state '' \; set-window-option -t "$w" @claude_state_ts "$(date +%s)" 2>/dev/null
   [ -n "$sid" ] && T set-window-option -t "$w" @norepo_sid "$sid" 2>/dev/null
-  printf 'revived %s\n' "$w" >&2
+  if [ "$RENEW" = 1 ]; then printf 'renewed %s\n' "$w" >&2; else printf 'revived %s\n' "$w" >&2; fi
   printf '%s\n' "$w"
   exit 0
 fi

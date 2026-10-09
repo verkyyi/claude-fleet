@@ -27,6 +27,8 @@
 #                                                   fleet-diskguard.sh home_watch)
 #   orchestrator-exited                             bin/fleet-orchestrator.sh ensure (revive in place),
 #                                                   fleet-orchestrator-state.py (SessionStart resume)
+#   orchestrator-stale-version                      fleet_role_renew_why (fleet-lib.sh), fleet-orchestrator.sh
+#                                                   ensure (renew in place at a quiet moment)
 #   orchestrator-two                                bin/fleet-orchestrator.sh ensure asks the hub
 #                                                   (/v1/node/orchestrator) which machine holds it
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
@@ -821,6 +823,58 @@ drill_orchestrator_exited() {
   case "$out" in *'<<autonomous-loop-dynamic>>'*'重新 arm 循环'*) ;; *) WHY="back from the kill the Loop is not handed back: [$out]"; return 1 ;; esac
   [ "$(nt list-windows -t ox -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
   WHAT="进程被杀后窗口停在恢复页；下一拍原地续开同一对话并带首轮，注入批次与循环、先重新 arm（节拍 60s 与 30s 宽限另计）"
+}
+
+# orchestrator-stale-version (issue #2733): stable moved and the orchestrator kept
+# running the version it started on — fleet-migrate.sh --cfg-stale never reopens it,
+# so 2026-10-09's ran 11 hours past six releases until it killed itself. Now its
+# own `ensure` renews it at a quiet moment: never mid-turn, never right before its
+# Loop's next round; then in place, on the same conversation, the state saved first
+# (the Loop off its transcript), the role file in its system prompt.
+drill_orchestrator_stale_version() {
+  CAP=120; BREAK_SOCK="$WORK/sock-osv"; local t0 w sid out h="$WORK/osvhome" c="$WORK/osvconf" oa="$WORK/osv-argv" tr ts nw opid
+  mkdir -p "$h" "$c/global"; : > "$oa"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\necho $$ > %s.pid\nexec sleep 600\n' "$oa" "$oa" > "$WORK/osv-agent"; chmod +x "$WORK/osv-agent"
+  nt -f /dev/null new-session -d -s osv -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+  local e; for e in BREAK_SOCK="$BREAK_SOCK" FLEET_WRAP_FAST_FAIL=0 FLEET_MCP=0 FLEET_CRED_PROXY=0 SHELL=/bin/sh; do
+    nt set-environment -g "${e%%=*}" "${e#*=}"; done
+  nt set-option -g default-shell /bin/sh
+  osvens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
+               FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/osv-agent" "$@" \
+               bash "$BIN/fleet-orchestrator.sh" ensure osv 2>/dev/null; }
+  w=$(osvens) || { WHY="ensure did not open it"; return 1; }
+  until_ok 5 test -s "$oa.pid" || { WHY="the orchestrator's agent never started"; return 1; }
+  opid=$(cat "$oa.pid"); sid=$(cat "$c/fleets/osv/orchestrator.sid" 2>/dev/null); : > "$oa"
+  local proj; proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+  mkdir -p "$proj"; tr="$proj/$sid.jsonl"; ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+  printf '%s\n%s\n' \
+    "{\"type\":\"assistant\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"ScheduleWakeup\",\"input\":{\"delaySeconds\":1200,\"prompt\":\"<<autonomous-loop-dynamic>>\"}}]}}" \
+    "{\"type\":\"user\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"content\":\"ok\"}]}}" > "$tr"
+  # it started on version OLD; the break: stable moves, the install is NEW
+  nt set-window-option -t "$w" @agent_cfg fpX \; set-window-option -t "$w" @agent_ver OLD0000000000 \; \
+     set-window-option -t "$w" @cc_session_id "$sid"
+  printf 'claude fpX fleet\nver NEW0000000000\n' > "$c/global/agent-cfg.expected"
+  t0=$(now); nw=$(date +%s)
+  nt set-window-option -t "$w" @claude_state working \; set-window-option -t "$w" @claude_state_ts $((nw - 300)) \; \
+     set-window-option -t "$w" @loop "kind=wakeup next=$((nw + 1200)) ttl=1200"
+  [ "$(osvens)" = "$w" ] && [ ! -s "$oa" ] || { WHY="renewed in the middle of a turn"; return 1; }
+  [ -n "$(o "$w" @renew_since)" ] || { WHY="a pending renew is not marked (@renew_since) — nothing says 待换新"; return 1; }
+  nt set-window-option -t "$w" @claude_state done \; set-window-option -t "$w" @loop "kind=wakeup next=$((nw + 60)) ttl=60"
+  [ "$(osvens)" = "$w" ] && [ ! -s "$oa" ] || { WHY="renewed a minute before its Loop's next round"; return 1; }
+  nt set-window-option -t "$w" @loop "kind=wakeup next=$((nw + 1200)) ttl=1200"
+  out=$(osvens) && [ "$out" = "$w" ] || { WHY="the quiet tick did not answer with the same window: [$out]"; return 1; }
+  until_ok 10 grep -q -- "--resume $sid" "$oa" || { WHY="not renewed onto the same conversation at a quiet moment: [$(cat "$oa")]"; return 1; }
+  SECS=$(since "$t0")
+  grep -q '会话刚被 fleet 接回' "$oa" || { WHY="renewed with no first turn — the Loop waits for the person: $(cat "$oa")"; return 1; }
+  grep -q -- '--append-system-prompt-file .*skills/fleet-orchestrate/role.md' "$oa" \
+    || { WHY="renewed without its role in the system prompt: $(cat "$oa")"; return 1; }
+  kill -0 "$opid" 2>/dev/null && { WHY="the old agent ($opid) still runs beside the new one"; return 1; }
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("reason") == "renew" and d.get("loop") else 1)' \
+    "$c/global/orchestrator.state.json" 2>/dev/null || { WHY="the state was not saved with its Loop before the kill (no SessionEnd runs)"; return 1; }
+  [ -z "$(o "$w" @renew_since)" ] || { WHY="待换新 still marked after the renew"; return 1; }
+  grep -q 'renewed OLD0000000000 → NEW0000000000' "$c/fleets/osv/renew.log" 2>/dev/null || { WHY="the renew left no line in renew.log"; return 1; }
+  [ "$(nt list-windows -t osv -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
+  WHAT="版本旧了：忙时、循环将到时不换；安静的那一拍原地续开同一对话，先存状态与循环、带首轮、角色在系统提示里"
 }
 
 # window-renamed (issue #1844): a name is not an identity. Home renamed, a worker

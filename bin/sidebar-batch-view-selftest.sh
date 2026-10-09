@@ -167,6 +167,17 @@ check('D a tap opens the orchestrator', sb.tap('steward:park', '') == 'jump')
 check('D no other action, no fold', sb.acts('steward:park') == '' and sb.folds('steward:todo') == '')
 check('D not a session', sb.sessions(st) == [])
 check('D the queue column still reads', sb.orch_queue(line) == 0)
+# 待换新 (issue #2733): `renew=1` — the orchestrator runs an older fleet version
+# than its machine has; 「新任务」 says so at its end, and it is no steward row
+rl = ['fleet/abc', 'm5', '1', 'done', '', '', '', 'renew=1']
+check('D renew=1 is no steward row', sb.steward_rows(rl) == [])
+_ol, _st = sb.orch_line, sb.STAGE
+sb.orch_line, sb.STAGE = (lambda s: rl), '1'
+_top = sb.with_portal([], None, 'fleet')[0]
+check('D renew=1: 「新任务」 ends 待换新', _top[0] == sb.PORTAL_KEY and _top[9] == '待换新', _top)
+sb.orch_line = lambda s: rl[:7]
+check('D no renew tag: no word', sb.with_portal([], None, 'fleet')[0][9] == '')
+sb.orch_line, sb.STAGE = _ol, _st
 
 # ── E. a phone's 40 columns ──────────────────────────────────────────────────
 name = '托管节点升级与回滚全流程走通'   # 14 glyphs: wider than the room

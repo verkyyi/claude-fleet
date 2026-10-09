@@ -51,7 +51,18 @@
 # conversation is handed a first turn, ORCH_RESUME_SEED: SessionStart (resume)
 # has just injected the saved state (bin/fleet-orchestrator-state.py, C2) and the
 # seed makes the session act on its next step — re-arm the Loop, say the batch —
-# with nobody typing. Codex keeps its page and its seed (convention 5). Restore, migrate and move treat
+# with nobody typing. Codex keeps its page and its seed (convention 5).
+#
+# And it follows the install (issue #2733). A live Claude orchestrator launched
+# from an older ~/.claude/fleet than the one installed (fleet_cfg_state stale /
+# renew — fleet-migrate.sh never reopens it) is renewed by `ensure` at its next
+# QUIET moment (fleet_role_renew_why: done/looping for a minute, no keypress, its
+# Loop's next round ≥ 2 min away, no tool call or job in flight): the state saved
+# (fleet-orchestrator-state.py save, the Loop off its transcript), then the same
+# in-place respawn on the same conversation with the resume seed. Not quiet ⇒ the
+# next tick asks again; @renew_since marks it pending (the client's 「新任务」 says
+# 待换新, the doctor WARNs past FLEET_ORCH_RESTART_WAIT) and it is never forced.
+# FLEET_ORCH_RENEW=0 leaves it on its version; each renew is a line in renew.log. Restore, migrate and move treat
 # it as a panel: never snapshotted, never moved off its machine — `ensure` is how
 # it comes back.
 #
@@ -186,8 +197,20 @@ EOF2
   [ $(( $(date +%s) - ts )) -ge "$grace" ]
 }
 
+# orch_live <window id> — rc 0 = leave the open window as it is (print its id).
+# A live one on an older fleet version at a quiet moment (issue #2733) is not
+# left: RENEW=1 and the respawn below takes it onto the installed version.
+RENEW=0
+orch_live() {
+  orch_exited "$1" && return 1
+  if [ "${FLEET_ORCH_RENEW:-1}" != 0 ] && fleet_role_renew_due "$SESS" "$1" >/dev/null; then
+    RENEW=1; return 1
+  fi
+  return 0
+}
+
 w=$(orch_find)
-[ -n "$w" ] && ! orch_exited "$w" && { printf '%s\n' "$w"; exit 0; }
+[ -n "$w" ] && orch_live "$w" && { printf '%s\n' "$w"; exit 0; }
 
 # One opener at a time (the tick and fleet-up can meet): a lock dir, taken over
 # when it is older than a minute (an opener that died holding it).
@@ -198,8 +221,8 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   rm -rf "$LOCK"; mkdir "$LOCK" 2>/dev/null || exit 1
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
-w=$(orch_find)
-[ -n "$w" ] && ! orch_exited "$w" && { printf '%s\n' "$w"; exit 0; }
+w=$(orch_find); RENEW=0
+[ -n "$w" ] && orch_live "$w" && { printf '%s\n' "$w"; exit 0; }
 
 AGENT=${FLEET_AGENT:-claude}
 case "$AGENT" in claude|codex) ;; *) AGENT=claude ;; esac
@@ -259,12 +282,23 @@ envs=''
 stamp=$(fleet_win_stamp_cmd @fleet_role orchestrator @norepo 1 ${sid:+@norepo_sid "$sid"})
 launch="$stamp$envs'$BIN/fleet-session-wrap.sh' $args$seed; exec \$SHELL"
 if [ -n "$w" ]; then
+  if [ "$RENEW" = 1 ]; then
+    # renew (issue #2733): the state is saved FIRST — the kill below runs no
+    # SessionEnd — so the resumed conversation's SessionStart hands back the
+    # batches and the Loop it had (the ScheduleWakeup read off its transcript)
+    tr=""; [ -n "$sid" ] && [ -n "${proj:-}" ] && [ -f "$proj/$sid.jsonl" ] && tr="$proj/$sid.jsonl"
+    python3 "$BIN/fleet-orchestrator-state.py" save ${tr:+--transcript "$tr"} --reason renew >/dev/null 2>&1 || :
+    printf '%s %s orchestrator %s renewed %s → %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$SESS" "$w" \
+      "$(T display-message -p -t "$w" '#{@agent_ver}' 2>/dev/null)" "$(fleet_cfg_expected_load; printf '%s' "$FCFG_EXP_VER")" \
+      >> "$DIR/renew.log" 2>/dev/null
+    T set-window-option -u -t "$w" @renew_since 2>/dev/null
+  fi
   # revive in place (issue #2585): the page's wrapper goes, the window and its
   # identity stay; a reader that sees the state cleared sees the new launch
   T respawn-pane -k -t "$w" -c "$HOME" "$launch" 2>/dev/null || exit 1
   T set-window-option -t "$w" @claude_state '' \; set-window-option -t "$w" @claude_state_ts "$(date +%s)" 2>/dev/null
   [ -n "$sid" ] && T set-window-option -t "$w" @norepo_sid "$sid" 2>/dev/null
-  printf 'revived %s\n' "$w" >&2
+  if [ "$RENEW" = 1 ]; then printf 'renewed %s\n' "$w" >&2; else printf 'revived %s\n' "$w" >&2; fi
   printf '%s\n' "$w"
   exit 0
 fi

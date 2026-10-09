@@ -1007,14 +1007,18 @@ for f in local:
     # A `todo=<n>` column after it (issue #2672, EPIC #2668 C4): the steward's
     # 待你动手 rows still open (the node's `orchtodo=`) — fleet-sidebar.py reads the
     # tagged columns past the 7th by name. `park=<n>` (issue #2671, C3): sessions
-    # parked (the node's `orchpark=`), last.
+    # parked (the node's `orchpark=`), last. `renew=1` (issue #2733): it runs an
+    # older fleet version than its machine has installed (the row's cfg stale /
+    # renew) — its machine renews it at a quiet moment; meanwhile 「新任务」 says 待换新.
     # `page=<url>` (issue #2735): the steward's page (the node's `orchpage=`), after
     # every other tag — 「新任务」's menu opens it (fleet-sidebar-menu.sh).
+    renew = lambda r: r["cfg"] in ("stale", "renew")
     line = lambda r: "\x1f".join(clean(v) for v in (r["wid"], r["node"], r["av"], r["state"], r["needs"],
-                                                      r["detail"][:120]) + ((r["queue"],) if r["queue"] or r["decide"] or r["todo"] or r["park"] or r.get("page") else ())
+                                                      r["detail"][:120]) + ((r["queue"],) if r["queue"] or r["decide"] or r["todo"] or r["park"] or renew(r) or r.get("page") else ())
                                  + (("decide=" + r["decide"],) if r["decide"] else ())
                                  + (("todo=" + r["todo"],) if r["todo"] else ())
                                  + (("park=" + r["park"],) if r["park"] else ())
+                                 + (("renew=1",) if renew(r) else ())
                                  + (("page=" + r["page"],) if r.get("page") else ())) + "\n"
     write(os.path.join(gdir, "orch_" + f["sess"]), "".join(line(r) for r in orch[:1]))
     write(os.path.join(gdir, "orch_all_" + f["sess"]), "".join(line(r) for r in orch))
