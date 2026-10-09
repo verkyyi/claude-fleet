@@ -3,14 +3,18 @@
 // change one audit row (hub_settings.go). Public counter and badges, the
 // subscription pool's skip threshold and failover, which machines a new
 // person gets a login on, SPOT machines — and, read-only, what the deploy
-// sets (the admins, the ways in from /v1/access). An admin's.
+// sets (the admins, the ways in from /v1/access) — and the team settings
+// layer (/v1/fleet/team-bundle): publish a file as its next version, restore
+// an older one (claude-fleet#1990; here since #2515 — Config shows it to
+// everyone read-only). An admin's.
 import { Shell } from './app-shell.js';
-import { esc, ic } from './lib/shell.js';
+import { esc, ic, relTime } from './lib/shell.js';
 import { SETTING_GROUPS, settingValue } from './lib/admin.js';
+import { bundleItems, bundleList, parseImport } from './lib/pages.js';
 import { t } from './lib/i18n.js';
 
 Shell.mount('settings', async (ctx) => {
-  const [setR, usR, acR] = await Promise.allSettled([ctx.api('/v1/fleet/settings'), ctx.api('/v1/fleet/users'), ctx.api('/v1/access')]);
+  const [setR, usR, acR, tr] = await Promise.allSettled([ctx.api('/v1/fleet/settings'), ctx.api('/v1/fleet/users'), ctx.api('/v1/access'), ctx.api('/v1/fleet/team-bundle?history=1')]);
   if (setR.status === 'rejected') throw setR.reason;
   const answer = setR.value;
   const row = (it) => {
@@ -34,7 +38,55 @@ Shell.mount('settings', async (ctx) => {
     `<div><div class="l"><b>${esc(t('ui.set.ghApp'))}</b><span>${esc(t('ui.set.ghAppSub'))}</span></div><span class="envlock">${ic('lock')}${esc(ghOn == null ? '—' : t(ghOn ? 'ui.set.configured' : 'ui.set.notConfigured'))}</span></div>` +
     `<div><div class="l"><b>${esc(t('ui.set.secrets'))}</b><span>${esc(t('ui.set.secretsSub'))}</span></div><span class="envlock">${ic('lock')}${esc(t('ui.set.k8s'))}</span></div></div></div>`;
 
-  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.set.lead'))}</p></div></div>${groups}${deploy}`;
+  // The team layer: every machine's defaults under each person's own.
+  let team = '';
+  if (tr.status === 'fulfilled') {
+    const tb = tr.value;
+    const hist = Array.isArray(tb.history) && tb.history.length
+      ? `<div class="panel-b"><div class="timeline">` + tb.history.map((h) => {
+        const v = Number(h.version) || 0;
+        const restore = v && v !== Number(tb.version) ? `<button class="btn sm" style="margin-top:6px" data-restore="${v}">${esc(t('ui.cfg.restore', { v }))}</button>` : '';
+        return `<div><b>v${v}</b>${h.note ? ' · ' + esc(h.note) : ''}<span>${esc(h.actor || '—')} · ${esc(relTime(h.created))}</span>${restore}</div>`;
+      }).join('') + '</div></div>' : '';
+    team = `<div class="panel" id="team"><div class="panel-h"><div><h3>${esc(t('ui.cfg.team'))}</h3><span class="sub">${tb.version ? `v${tb.version} · ` : ''}${esc(t('ui.cfg.teamSub'))}</span></div>` +
+      `<div class="toolbar"><button class="btn sm primary" id="publish">${esc(t('ui.cfg.publish'))}</button><input type="file" id="publishfile" accept="application/json,.json" hidden></div></div>` +
+      bundleList(bundleItems(tb.bundle), 'team') + hist + '</div>';
+  } else if (tr.reason.status !== 404) {
+    team = `<div class="panel" id="team"><div class="panel-h"><h3>${esc(t('ui.cfg.team'))}</h3></div><div class="ghostrow err">${ic('alert')} ${esc(tr.reason.message)}</div></div>`;
+  }
+
+  ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.set.lead'))}</p></div></div>${groups}${team}${deploy}`;
+
+  // Publish a file as the team layer's next version, or restore an older one
+  // as a new version.
+  const base = tr.status === 'fulfilled' ? tr.value.version || 0 : 0;
+  const pub = ctx.el.querySelector('#publish');
+  const pubFile = ctx.el.querySelector('#publishfile');
+  if (pub && pubFile) {
+    pub.onclick = () => pubFile.click();
+    pubFile.onchange = async () => {
+      const f = pubFile.files && pubFile.files[0];
+      if (!f) return;
+      try {
+        const bundle = parseImport(await f.text());
+        const out = await ctx.api('/v1/fleet/team-bundle', { method: 'PUT', json: { bundle, base, note: `Published ${f.name}` } });
+        ctx.toast(t('ui.cfg.published', { v: (out && out.version) || '' }));
+        await ctx.refresh();
+      } catch (e) { ctx.toast(t('ui.cfg.importFail', { e: e.message })); }
+    };
+  }
+  ctx.el.querySelectorAll('[data-restore]').forEach((b) => {
+    b.onclick = () => {
+      const v = Number(b.dataset.restore);
+      ctx.confirm(t('ui.cfg.restoreQ', { v }), esc(t('ui.cfg.restoreBody', { v })), t('ui.cfg.restore', { v }), async () => {
+        try {
+          const out = await ctx.api('/v1/fleet/team-bundle', { method: 'PUT', json: { restore: v, base } });
+          ctx.toast(t('ui.cfg.restored', { v, n: (out && out.version) || '' }));
+          await ctx.refresh();
+        } catch (e) { ctx.toast(t('ui.err.action', { e: e.message })); }
+      });
+    };
+  });
 
   const put = async (key, value) => {
     try {

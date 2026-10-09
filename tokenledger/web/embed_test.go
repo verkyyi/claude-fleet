@@ -27,6 +27,10 @@ var appPages = []struct{ html, script, id string }{
 	{"users.html", "users.js", "people"},
 	{"settings.html", "settings.js", "settings"},
 	{"audit.html", "audit.js", "audit"},
+	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
+	{"admin/sessions.html", "admin/sessions.js", "all-sessions"},
+	{"admin/overview.html", "admin/overview.js", "by-person"},
+	{"admin/devices.html", "admin/devices.js", "all-devices"},
 }
 
 func TestAssets_AppPagesAreEmbedded(t *testing.T) {
@@ -34,7 +38,7 @@ func TestAssets_AppPagesAreEmbedded(t *testing.T) {
 	if assets == nil {
 		t.Fatal("no dashboard embedded: web/dist/index.html is missing from this checkout")
 	}
-	for _, name := range []string{"app.css", "app-shell.js", "lib/shell.js", "lib/pages.js", "lib/admin.js"} {
+	for _, name := range []string{"app.css", "app-shell.js", "lib/shell.js", "lib/pages.js", "lib/admin.js", "lib/sessions-view.js", "lib/devices-view.js"} {
 		if _, err := fs.Stat(assets, name); err != nil {
 			t.Fatalf("%s is not embedded: %v", name, err)
 		}
@@ -47,7 +51,7 @@ func TestAssets_AppPagesAreEmbedded(t *testing.T) {
 			}
 		}
 		js := string(mustRead(t, assets, p.script))
-		if !strings.Contains(js, `from './app-shell.js'`) {
+		if !strings.Contains(js, `from './app-shell.js'`) && !strings.Contains(js, `from '../app-shell.js'`) {
 			t.Errorf("%s does not mount through app-shell.js", p.script)
 		}
 		if !strings.Contains(js, "Shell.mount('"+p.id+"'") {
@@ -66,6 +70,7 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 		"/quota":         "quota.html",
 		"/subscriptions": "subscriptions.html", "/nodes": "nodes.html", "/admin/users": "users.html",
 		"/admin/settings": "settings.html", "/admin/audit": "audit.html",
+		"/admin/sessions": "admin/sessions.html", "/admin/overview": "admin/overview.html", "/admin/devices": "admin/devices.html",
 	}
 	hrefs := regexp.MustCompile(`href: '([^']+)'`).FindAllStringSubmatch(src, -1)
 	if len(hrefs) < 4 {

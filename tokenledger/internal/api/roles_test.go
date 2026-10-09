@@ -203,10 +203,18 @@ func TestRoleScope_UserSeesOwnRows(t *testing.T) {
 	if len(usage.Buckets) != 1 || usage.Buckets[0].Key != aliceLogin {
 		t.Errorf("user /v1/usage by user = %+v; want only %s", usage.Buckets, aliceLogin)
 	}
+	// An admin's Overview is their own too (claude-fleet#2515) — none on
+	// record here; everyone's is the admin area's.
 	_, b = rolesGet(t, h, admin, "/v1/usage?by=user&account=all"+rng)
 	_ = json.Unmarshal(b, &usage)
-	if len(usage.Buckets) != 2 {
-		t.Errorf("admin /v1/usage by user = %+v; want both", usage.Buckets)
+	if len(usage.Buckets) != 0 {
+		t.Errorf("admin /v1/usage by user = %+v; want none of their own", usage.Buckets)
+	}
+	var ov AdminOverview
+	_, b = rolesGet(t, h, admin, AdminOverviewPath+"?since="+rolesSince)
+	_ = json.Unmarshal(b, &ov)
+	if len(ov.People) != 2 {
+		t.Errorf("admin %s = %s; want both logins", AdminOverviewPath, b)
 	}
 	if code, _ := rolesGet(t, h, user, "/v1/usage?by=account"+rng); code != http.StatusForbidden {
 		t.Errorf("user /v1/usage by account = %d; want 403", code)

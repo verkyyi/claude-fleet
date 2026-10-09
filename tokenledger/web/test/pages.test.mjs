@@ -147,24 +147,53 @@ test('import takes an export back, and refuses what is not one', () => {
 // A user's answers are cut by the hub (#1985); the pages must not try to
 // widen them. No page names another person or asks for a by-account / by-team
 // cut, and only an admin's request carries a principal.
+// Since claude-fleet#2515 the four daily pages are the same for an admin:
+// none of them reads the whole hub (by person, /v1/admin/*) or names a
+// principal, and no admin branch picks a wider read — those are the admin
+// area's three pages, which read only /v1/admin/*.
+const DAILY = ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js', 'lib/sessions-view.js', 'lib/devices-view.js'];
 test('no page asks the hub for someone else\'s rows', () => {
-  for (const f of ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js']) {
+  for (const f of DAILY) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8');
-    assert.doesNotMatch(src, /by=(account|team)/, `${f} asks for a by-account/team cut`);
+    assert.doesNotMatch(src, /by=(account|team|user)/, `${f} asks for a by-account/team/person cut`);
     assert.doesNotMatch(src, /[?&]user=/, `${f} filters by another user`);
     assert.doesNotMatch(src, /all=1/, `${f} asks for everyone's layer`);
+    assert.doesNotMatch(src, /[?&]principal=/, `${f} names a principal`);
   }
-  const ov = readFileSync(new URL('../dist/overview.js', import.meta.url), 'utf8');
-  assert.match(ov, /admin \? q\('\/v1\/usage', 'by=user/, 'by person is an admin\'s only');
+  for (const f of ['overview.js', 'sessions-page.js', 'connect.js', 'config.js']) {
+    const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8');
+    assert.doesNotMatch(src, /\/v1\/admin\//, `${f} reads the admin area`);
+    assert.doesNotMatch(src, /admin \? (q|api|ctx\.api)\(/, `${f} widens its read for an admin`);
+  }
+  const want = { 'admin/sessions.js': /sessionsPage\(\{ all: true \}\)/, 'admin/overview.js': /\/v1\/admin\/overview/, 'admin/devices.js': /\/v1\/admin\/devices/ };
+  for (const [f, re] of Object.entries(want)) {
+    assert.match(readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8'), re, `${f} reads the whole hub`);
+  }
+  assert.match(readFileSync(new URL('../dist/lib/sessions-view.js', import.meta.url), 'utf8'), /all \? ctx\.api\('\/v1\/admin\/sessions'\)/);
+});
+
+// The person / subscription and owner columns are the admin area's only.
+test('the daily tables carry no person, subscription or owner column', () => {
+  const ses = readFileSync(new URL('../dist/lib/sessions-view.js', import.meta.url), 'utf8');
+  for (const m of ses.matchAll(/ui\.col\.(person|subscription)/g)) {
+    const before = ses.slice(Math.max(0, m.index - 120), m.index);
+    assert.match(before, /\b(a|S\.all) \?/, 'a person/subscription column outside the all-sessions branch');
+  }
+  const dev = readFileSync(new URL('../dist/lib/devices-view.js', import.meta.url), 'utf8');
+  assert.match(dev, /a \? `<th>\$\{esc\(t\('ui\.col\.owner'\)\)\}<\/th>`/);
+  const con = readFileSync(new URL('../dist/connect.js', import.meta.url), 'utf8');
+  assert.match(con, /devicesPanel\(devs\.value, false\)/, 'Devices & SSH draws the viewer\'s own, no owner column');
   const cfg = readFileSync(new URL('../dist/config.js', import.meta.url), 'utf8');
-  assert.match(cfg, /admin && me\.person \? `\?principal=/, 'principal= only on an admin\'s request');
+  assert.doesNotMatch(cfg, /id="publish"|data-restore/, 'publish and restore are the admin area\'s (Settings)');
+  assert.match(cfg, /id="import"/);
+  assert.doesNotMatch(cfg, /admin \? '' : `<button class="btn sm" id="import"/, 'an admin imports their own settings too');
 });
 
 // Every word on the four pages is a dictionary key (EPIC #1982 convention 11):
 // no English sentence typed into a template, and no t() key the dictionary
 // lacks (the parity test in i18n.test.mjs then holds zh-CN to it).
 test('the app pages print only dictionary words', () => {
-  for (const f of ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js']) {
+  for (const f of ['overview.js', 'sessions-page.js', 'machines.js', 'connect.js', 'config.js', 'quota.js', 'app-shell.js', 'lib/shell.js', 'lib/pages.js', 'lib/sessions-view.js', 'lib/devices-view.js']) {
     const src = readFileSync(new URL('../dist/' + f, import.meta.url), 'utf8').replace(/^\s*(\/\/|\*|\/\*).*$/gm, '');
     const bare = src.match(/>[A-Z][a-z]+[ <.]/g) || [];
     assert.deepEqual(bare.filter((m) => !/>(Claude|Codex|GitHub)/.test(m)), [], `${f} types English into markup`);

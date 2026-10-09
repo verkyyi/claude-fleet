@@ -50,8 +50,9 @@ func principalOf(ctx context.Context) string {
 func (s *Server) FleetScope(r *http.Request) (func(hostname, osUser string) bool, error) {
 	pid := principalOf(r.Context())
 	// An admin (claude-fleet#1984) sees the whole fleet, as the operator's
-	// shared doors always have.
-	if pid == "" || roleOf(r.Context()) == roleAdmin {
+	// shared doors always have — but on a daily page's route only their own
+	// (ownView, claude-fleet#2515).
+	if pid == "" || (roleOf(r.Context()) == roleAdmin && !isOwnView(r.Context())) {
 		return nil, nil
 	}
 	return s.ownScope(pid)
