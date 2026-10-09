@@ -82,10 +82,12 @@ jobs:
           cache: true
           cache-dependency-path: tokenledger/go.sum
       - run: ../bin/fleet-client-pack.sh
+      # claude-fleet#2640: internal/api alone takes 420-600s here, so go
+      # test's default 10m cap turned runner noise into a red run.
       - name: store + api + leader tests on Postgres
         run: |
           set -o pipefail
-          go test -race -count=1 -v ./internal/store/... ./internal/api/... ./internal/leader/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
+          go test -race -count=1 -v -timeout 20m ./internal/store/... ./internal/api/... ./internal/leader/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
       # claude-fleet#2216: `ccquota db migrate` on a million usage_events
       # rows, without -race, each table's and phase's time in the summary.
       - name: db migrate timing (1M rows)
@@ -95,6 +97,13 @@ jobs:
           set -o pipefail
           go test -count=1 -v -run '^TestMoveDatabaseSpeed$' -timeout 15m ./internal/store/ 2>&1 | tee /tmp/move-speed.log | grep -E 'usage_events|indexes|moved|source:|--- |^(ok|FAIL)'
           { echo '### db migrate timing (1M rows)'; echo; echo '```'; grep -E 'usage_events|indexes|moved|source:' /tmp/move-speed.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: upload Postgres test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg-log
+          path: /tmp/pg.log
+          if-no-files-found: ignore
       - name: skip 0
         run: |
           if grep -E '^ *(SKIP-PG|--- SKIP)' /tmp/pg.log; then
@@ -111,6 +120,12 @@ jobs:
             echo
             echo '```'
             grep -E '^(pg leg|  SKIP-PG|ok|FAIL)|leader_test.go:[0-9]+: (handover|job )' /tmp/pg.log || true
+            echo '```'
+            echo
+            echo 'slowest tests:'
+            echo
+            echo '```'
+            sed -nE 's/^--- (PASS|FAIL): ([^ ]+) \(([0-9.]+)s\)$/\3s \2/p' /tmp/pg.log | sort -rn | head -15 || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
