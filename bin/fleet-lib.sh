@@ -7154,9 +7154,17 @@ fleet_desk_repo() {
   esac
   r=$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}")
   [ -n "$r" ] || return 1
-  # a here-string, never a pipe: grep -q leaves early, and under pipefail the
-  # writer's SIGPIPE would fail the test
-  grep -qxF -- "$r" <<<"$(fleet_repos "${1:-}")" || return 1
+  # a whole-line match on the list, never `| grep -q` (it leaves early, and under
+  # pipefail the writer's SIGPIPE fails the test) nor a here-string (fleet-lib.sh
+  # is sourced by plain `sh` too, where `<<<` does not parse)
+  case "
+$(fleet_repos "${1:-}")
+" in
+    *"
+$r
+"*) ;;
+    *) return 1 ;;
+  esac
   printf '%s\n' "$r"
 }
 
