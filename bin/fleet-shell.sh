@@ -1896,14 +1896,19 @@ if [ -n "$node" ] && this_machine "$node" && ! bash "$SHADOW/fleet-remote-view.s
   home=$node; node=''
 fi
 if [ -n "$home" ]; then printf '%s\n' "$home" > "$CACHE/home-machine"; else rm -f "$CACHE/home-machine"; fi
-# The machine's own window (`run --shell <m> -`: its fleet session as it stands)
-# only when it was asked for — `fleet <machine>` — or is THIS computer's fleet (no
-# hub: the client reads this machine). The hub's pick of ANOTHER machine opened
-# it too, and with no live session there it was a bare shell saying so (issue
-# #2739): the first screen is the last session, else 「新任务」 (solo_resume).
-machine_win=''; FIRST_SCREEN=0
-if [ -n "$node" ] && { [ -n "$machine" ] || this_machine "$node"; }; then machine_win=1
-elif [ "${FLEET_CLIENT_LAYOUT:-}" != solo ]; then FIRST_SCREEN=1; fi
+# The machine's own window (`run --shell <m> -`: its fleet session as it stands,
+# or a newcomer's home page there) when it was asked for — `fleet <machine>` —,
+# is THIS computer's fleet (no hub: the client reads this machine), or the client
+# has never shown a session (no history: the newcomer's road, EPIC #2259). A
+# client that has — the switch history names 「新任务」 or a session row — no
+# longer opens the hub's pick's own window, which with no live session of theirs
+# there was a bare shell saying so (issue #2739): its first screen is that last
+# session, else 「新任务」 (solo_resume).
+machine_win=''; FIRST_SCREEN=0; seen=''
+case "$solo_key" in new|wid:?*/?*) seen=1 ;; esac
+if [ -n "$node" ] && { [ -n "$machine" ] || [ -z "$seen" ] || [ "${FLEET_CLIENT_LAYOUT:-}" = solo ] \
+                       || this_machine "$node"; }; then machine_win=1
+elif [ -n "$seen" ] && [ "${FLEET_CLIENT_LAYOUT:-}" != solo ]; then FIRST_SCREEN=1; fi
 if [ -n "$machine_win" ]; then
   title="$node"
   cmd="exec bash $(sq "$SHADOW/fleet-remote-view.sh") run --shell $(sq "$node") -"

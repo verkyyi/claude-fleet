@@ -19,10 +19,11 @@
 #   B. up          — bare `fleet` (tmux present) starts the shell: ONE window,
 #                    `home` (@shell_frame), its right pane a nested client of the
 #                    STAGE server (`<sess>-stage`, issue #1759) whose first window
-#                    is the `wait` note (`@remote=-:`) — never the hub's pick's
-#                    bare shell (issue #2739: no `attach --shell -`, no ssh at
-#                    all); once the loop's first read is in, the first screen is
-#                    「新任务」 (FLEET_FIRST_NEW_CMD); the LIST pane on the left of
+#                    is the `wait` note (`@remote=-:`) — a client with a switch
+#                    history never gets the hub's pick's bare shell (issue #2739:
+#                    no `attach --shell -`, no ssh at all); once the loop's first
+#                    read is in, the first screen is the last one, 「新任务」
+#                    (FLEET_FIRST_NEW_CMD); the LIST pane on the left of
 #                    `home`, the environment set on both servers, the conf-free
 #                    mirror in place
 #   C. data        — the client-mode loop writes remote_<sess> with EVERY row remote
@@ -244,6 +245,10 @@ has 'A: default mode: #me is this host' "$(head -2 "$WORK/degen/.claude-dash/glo
 : > "$WORK/connect.argv"
 : > "$WORK/ssh.log"
 printf '#!/bin/sh\necho "portal $*" >> "%s/first.log"\n' "$WORK" > "$WORK/first-new"; chmod +x "$WORK/first-new"
+# a client that has shown 「新任务」 before (its switch history, fleet-quickopen.py):
+# no history at all is the newcomer's road — the pick's own window (newcomer-e2e.sh)
+mkdir -p "$HOME/.local/state/claude-fleet"
+printf '{"stack": ["new"], "at": 0, "mru": ["new"]}\n' > "$HOME/.local/state/claude-fleet/switch-history.json"
 out=$(FLEET_FIRST_NEW_CMD="$WORK/first-new" "$SB/fleet" 2>"$WORK/up.err"); rc=$?
 eq 'B: bare fleet → the shell started (exit 0)' 0 "$rc"
 eq 'B: it printed its session' "$SESS" "$out"

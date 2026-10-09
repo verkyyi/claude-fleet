@@ -250,9 +250,10 @@ else the row's name. A session in view that is no row — the orchestrator behin
 (`cache_record`, issue #2739); the record lives in `~/.local/state/claude-fleet`,
 or `~/.cache/claude-fleet/state` when that cannot be written, a failed write is a
 line in `logs/topbar.log`, and a line with no record at all says 「顶行无记录」
-rather than pass for a bare shell. The first screen of a plain `fleet` is the last
-session you looked at, else 「新任务」 — never the hub's pick's own window, which
-is opened only for `fleet <machine>` or this computer's fleet; a bare machine
+rather than pass for a bare shell. Once the client has shown a session (its switch
+history), the first screen of a plain `fleet` is the last one you looked at, else
+「新任务」 — not the hub's pick's own window, which stays for `fleet <machine>`,
+this computer's fleet, and a newcomer's first start (no history: their home page); a bare machine
 window an older start left on the stage is cleared at the next start.
 `bin/fleet-client-layout-selftest.sh` pins the layout, the keys, a real tap on
 the line through the nested client, and the widths.
