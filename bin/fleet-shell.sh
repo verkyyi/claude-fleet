@@ -445,7 +445,7 @@ $SHELL_ENV
 EOF
 }
 # mirror — the conf-free bin/ the shell runs from: one symlink per file of the
-# real bin/, refreshed (ln -sf) on every start so a synced install is picked up;
+# real bin/, refreshed on every start so a synced install is picked up;
 # a link to a file that is gone stays dangling and harmless. A real bin/ inside a
 # versions dir (<home>.versions/<key>/bin) whose <home> link points at it is
 # mirrored THROUGH <home> (issue #2692): the links follow the install's next
@@ -467,7 +467,19 @@ mirror() {
       [ -L "$vh" ] && [ "$(cd "$vh/bin" 2>/dev/null && pwd -P)" = "$(cd "$REAL_BIN" && pwd -P)" ] \
         && src="$vh/bin" ;;
   esac
-  for f in "$REAL_BIN"/*; do [ -f "$f" ] && ln -sf "$src/${f##*/}" "$SHADOW/${f##*/}"; done
+  # one `ln` per file is ~800 forks — the biggest part of a start (issue #2743:
+  # ~2 s of 4.5 on a MacBook). So the whole set is linked again only when the
+  # source moved (the stamp beside it); otherwise only a file new since is
+  # linked — a link through <home> already follows every switch.
+  local was='' all=1
+  [ -f "$SHADOW/.mirror-src" ] && read -r was < "$SHADOW/.mirror-src"
+  [ "$was" = "$src" ] && all=''
+  for f in "$REAL_BIN"/*; do
+    [ -f "$f" ] || continue
+    [ -z "$all" ] && [ -L "$SHADOW/${f##*/}" ] && continue
+    ln -sf "$src/${f##*/}" "$SHADOW/${f##*/}"
+  done
+  [ -z "$all" ] || printf '%s\n' "$src" > "$SHADOW/.mirror-src"
   # the colour table (issue #1534): the bar, the rows and the list read it as
   # $BIN/../conf/fleet-palette.conf — a table, not a config, so the mirror has it
   f="$REAL_BIN/../conf/fleet-palette.conf"

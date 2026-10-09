@@ -1027,7 +1027,11 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
         sys.exit(1)
     # the newcomer's view says where, not who chose (claude-fleet#2347)
     said = "连到" if load_login_module().newcomer() else "入口选了"
-    sys.stderr.write("fleet · %s %s（%s）\n" % (said, name, home.get("reason", "")))
+    # the client's start (--pick) on a terminal says nothing here (issue #2743):
+    # its bar names the machine at once, and the line was all that stayed on the
+    # person's terminal after ⌘Q
+    if not (pick_only and sys.stderr.isatty()) or verbose:
+        sys.stderr.write("fleet · %s %s（%s）\n" % (said, name, home.get("reason", "")))
     if verbose:
         print_candidates(home)
     if pick_only:
