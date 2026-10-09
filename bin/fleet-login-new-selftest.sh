@@ -93,8 +93,8 @@ BASH_BIN=/bin/bash; [ -x "$BASH_BIN" ] || BASH_BIN=bash
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/login-new-selftest.XXXXXX")" || exit 2
 WORK=$(cd "$WORK" && pwd -P)
-LPID='' FPID='' SRUN=''
-trap 'kill $LPID $FPID 2>/dev/null; chmod -R u+rwX "$WORK" 2>/dev/null; rm -rf "$WORK" ${SRUN:+"$SRUN"}' EXIT INT TERM HUP
+LPID='' FPID='' HPID='' SRUN=''
+trap 'kill $LPID $FPID $HPID 2>/dev/null; chmod -R u+rwX "$WORK" 2>/dev/null; rm -rf "$WORK" ${SRUN:+"$SRUN"}' EXIT INT TERM HUP
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
@@ -200,6 +200,26 @@ cp "$BIN/fleet-install-apply.sh" "$BIN/fleet-daemon-lib.sh" "$FX/bin/"   # apply
 # 7b's verdict is read AS the login with its own clone's credsep (issue #2294)
 cp "$BIN/fleet-credsep.sh" "$BIN/fleet-credsep.py" "$BIN/fleet-credsep-launch.py" "$BIN/fleet-cred-proxy.py" \
    "$BIN/fleet-cred-proxy.sh" "$FX/bin/"
+# leg O (issue #2652): the login's own join + bring-up, as stubs that log what
+# they were handed — the real ones are fleet-node-join / -bootstrap selftests'
+cat > "$FX/bin/fleet-node-join.sh" <<'NJ'
+#!/bin/bash
+# stub: the pass must be ours to read, the token in it; node.env + runner, nothing started
+printf '%s\n' "$*" >> "${FLEET_SELFTEST_NJ_LOG:-/dev/null}"
+j=''; while [ $# -gt 0 ]; do [ "$1" = --joined ] && j=$2; shift; done
+tok=$(sed -n 's/.*"token": *"\([^"]*\)".*/\1/p' "$j") || exit 1
+[ -n "$tok" ] || { echo "stub node-join: no token in $j"; exit 1; }
+mkdir -p "$FLEET_CONF_DIR" "$HOME/.ccquota" && printf 'CCQUOTA_TOKEN=%s\n' "$tok" > "$FLEET_CONF_DIR/node.env" && chmod 600 "$FLEET_CONF_DIR/node.env"
+printf '#!/bin/sh\n' > "$HOME/.ccquota/run-agent.sh"
+echo "service: skipped (--service none)"
+NJ
+cat > "$FX/bin/fleet-login-bootstrap.sh" <<'BS'
+#!/bin/bash
+echo "as=$HOME conf=$FLEET_CONF_DIR" >> "${FLEET_SELFTEST_BS_LOG:-/dev/null}"
+echo "fleet-login-bootstrap: fleet: ok — up on the starter repo"
+exit "${FLEET_SELFTEST_BS_RC:-0}"
+BS
+chmod +x "$FX/bin/fleet-node-join.sh" "$FX/bin/fleet-login-bootstrap.sh"
 cp "$BIN/../launchd/"com.claude-fleet.*.plist.tmpl "$FX/launchd/" 2>/dev/null
 NTMPL=$(ls "$FX/launchd" | wc -l | tr -d ' ')
 [ "$NTMPL" -gt 0 ] || fail "no launchd/*.plist.tmpl beside bin/ — the fixture needs the real templates"
@@ -836,4 +856,65 @@ contains "B2 DS error stops at 1" "$OUT" "FAILED at step 1"
 not_contains "B2 DS error: password never shown" "$OUT" "hunter2-from-file"
 not_contains "B2 DS error: shell not given back" "$CALLS" "UserShell"
 not_contains "B2 DS error: no home" "$CALLS" "createhomedir"
+# --- O. a login the hub opens joins as its own node, its fleet up (issue #2652) ----
+# The admin agent hands the create's join code in the environment: the script
+# redeems it itself (the code in a file, never an argv), the login runs
+# fleet-node-join.sh --joined as itself, the agent's LaunchDaemon definition is
+# dropped for 7b, and fleet-login-bootstrap.sh runs as the login after step 8.
+cat > "$WORK/hub.py" <<'PY3'
+import json, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+W = sys.argv[1]
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        b = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}")
+        open(W + "/hub.log", "a").write("%s %s %s\n" % (self.path, b.get("code"), b.get("os_user")))
+        ok = b.get("code") == "fj_abcdefghijklmnopqrstuvwxyz"
+        out = json.dumps({"token": "ntok-secret", "endpoint_id": "ep_1", "label": "m-oli"} if ok else {"error": "no"}).encode()
+        self.send_response(200 if ok else 401); self.send_header("content-length", str(len(out))); self.end_headers(); self.wfile.write(out)
+s = ThreadingHTTPServer(("127.0.0.1", 0), H)
+open(W + "/hub.port", "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY3
+python3 "$WORK/hub.py" "$WORK" & HPID=$!
+for _ in $(seq 1 300); do [ -s "$WORK/hub.port" ] && break; sleep 0.1; done
+HUBU="http://127.0.0.1:$(cat "$WORK/hub.port" 2>/dev/null)"
+export FLEET_SELFTEST_NJ_LOG="$WORK/nj.log" FLEET_SELFTEST_BS_LOG="$WORK/bs.log"
+JC=fj_abcdefghijklmnopqrstuvwxyz
+: > "$LOG"; OUT=$(FLEET_LOGIN_JOIN_CODE=$JC FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" oli --full-name Oli --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+unlock_homes
+OH="$FLEET_LOGIN_HOMES/oli"
+eq "O exit" 0 "$RC"
+contains "O the code redeemed for the login" "$(cat "$WORK/hub.log" 2>/dev/null)" "/v1/node/join $JC oli"
+not_contains "O the code never on a shim's argv" "$CALLS" "$JC"
+not_contains "O the code never in the output" "$OUT" "$JC"
+not_contains "O the node token never in the output" "$OUT" "ntok-secret"
+contains "O node-join as the login, --joined, nothing started" "$(cat "$WORK/nj.log" 2>/dev/null)" "--no-fleet --service none --compute 1"
+eq "O the pass is gone" "" "$(ls -a "$OH" | grep fleet-join-pass)"
+contains "O the agent's definition for 7b" "$(cat "$FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.oli.plist" 2>/dev/null)" "<string>$OH/.ccquota/run-agent.sh</string>"
+contains "O ... runs as the login" "$(cat "$FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.oli.plist" 2>/dev/null)" "<key>UserName</key><string>oli</string>"
+[ -L "$OH/.config/claude-fleet/node.env" ] || fail "O 7b did not move node.env into the store (still $(ls -l "$OH/.config/claude-fleet/node.env" 2>&1))"
+eq "O 7b: the token in the store" "CCQUOTA_TOKEN=ntok-secret" "$(cat "$FLEET_CREDSEP_ROOT_BASE/oli/node.env" 2>/dev/null)"
+contains "O the fleet brought up as the login, after 8 (its conf; the sudo shim keeps HOME)" "$(cat "$WORK/bs.log" 2>/dev/null)" "conf=$OH/.config/claude-fleet"
+contains "O the hub's detail says so" "$(printf '%s\n' "$OUT" | tail -n 3)" "fleet: up"
+contains "O ... and that it joined" "$(printf '%s\n' "$OUT" | tail -n 3)" "node: joined $HUBU"
+contains "O credsep stays last" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep:"
+# a code the hub refuses: the login still opens, the line says why
+: > "$WORK/bs.log"; : > "$LOG"; OUT=$(FLEET_LOGIN_JOIN_CODE=fj_zzzzzzzzzzzzzzzzzzzzzzzzzz FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" oda --full-name Oda --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
+unlock_homes
+eq "O refused code: still opened" 0 "$RC"
+contains "O refused code: named" "$OUT" "node: WARN — the hub did not take the join code (HTTP 401)"
+# no join code: neither step, byte for byte as before
+: > "$WORK/nj.log"; : > "$WORK/bs.log"; : > "$LOG"; OUT=$("$BASH_BIN" "$S" lou --full-name Lou --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
+unlock_homes
+eq "O no code: exit" 0 "$RC"
+eq "O no code: no node-join" "" "$(cat "$WORK/nj.log")"
+eq "O no code: no bring-up" "" "$(cat "$WORK/bs.log")"
+not_contains "O no code: no node line" "$OUT" "node:"
+# a malformed code is refused before anything runs
+: > "$LOG"; OUT=$(FLEET_LOGIN_JOIN_CODE='fj_x;rm' FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" kai --full-name Kai --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+eq "O malformed code: usage" 2 "$RC"
+not_contains "O malformed code: nothing ran" "$CALLS" "addUser"
+kill "$HPID" 2>/dev/null; wait "$HPID" 2>/dev/null; HPID=''
 echo "fleet-login-new-selftest PASS ($CHECKS checks, $("$BASH_BIN" -c 'echo $BASH_VERSION'))"
