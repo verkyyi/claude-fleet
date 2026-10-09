@@ -1097,16 +1097,20 @@ try:
     wait_for(lambda: view_on(w1) == [side], 'the view did not come back after `scratch`')
     tm('kill-window', '-t', new)
 
-    # The ▶ row is state · name only (issue #2305): worker-one's issue (`#1`)
+    # The ▶ row is state · name · its issue number (issues #2305, #2545):
+    # worker-one's `#1` ends the row, right-aligned; the rest of the detail
     # rides the bar — @fleet_hint_name on the list's window, `#` doubled — and
     # the old ⌃i `info` verb is gone (a stale tap changes nothing).
     wait_for(lambda: 'worker-one' in row_line('▶'), 'worker-one is not the ▶ row')
-    check(not re.search(r'#1\b|—', row_line('▶')), 'the row carries more than state · name: %r' % row_line('▶'))
+    check(row_line('▶').rstrip().endswith('#1') and '—' not in row_line('▶'),
+          'the row carries more than state · name · #N: %r' % row_line('▶'))
     hint = lambda: tm('show-options', '-wqv', '-t', side, '@fleet_hint_name')
-    wait_for(lambda: hint().startswith('worker-one · ##1'), 'the bar does not carry the ▶ row\'s detail: %r' % hint())
+    # it leads with the issue's full title when the row carries one (#2545), else the name
+    wait_for(lambda: re.match(r'[^#]+ · ##1\b', hint()), 'the bar does not carry the ▶ row\'s detail: %r' % hint())
     park('info')
     time.sleep(0.5)
-    check(not re.search(r'#1\b', row_line('▶')), 'a stale `info` tap opened a column: %r' % row_line('▶'))
+    check(not re.search(r'#1\b.*#1\b', row_line('▶')) and '—' not in row_line('▶'),
+          'a stale `info` tap opened a column: %r' % row_line('▶'))
 
     # `view`: running ⇄ landed, in place — the rows `fleet-history.sh rows` gives
     # the hub's ⌃t (stubbed: the ledger is not this test's subject). `reload`
