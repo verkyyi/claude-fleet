@@ -279,7 +279,9 @@ EOF
 
 case "${1:-}" in
   paths)
-    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
+    # test (issue #2505): this claude-fleet marks the test identity's scratch —
+    # the agent lists CapTestIdentity, and only then does the hub send `test`
+    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
     exit 0 ;;
   env) shift; node_env "$@"; exit $? ;;
   progress) shift; progress_pull "$@"; exit $? ;;

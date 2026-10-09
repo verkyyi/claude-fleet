@@ -381,7 +381,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -472,7 +472,21 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			if noRepo {
 				w.params["no_repo"] = true
 			}
+			// test (claude-fleet#2505): a scratch the TEST identity's client
+			// placed — the node stamps @test_identity, names it test-…, and
+			// the person's list hides it. Only a scratch, only `true`.
+			if v, ok := args["test"]; ok {
+				if b, isBool := v.(bool); !isBool || !b {
+					err = fault("INVALID_ARGUMENT", "test must be true when given")
+					break
+				}
+				w.params["test"] = true
+			}
 		} else {
+			if _, ok := args["test"]; ok {
+				err = fault("INVALID_ARGUMENT", "test belongs to a scratch start (kind=scratch)")
+				break
+			}
 			var issue int
 			if issue, err = argInt(args["issue"], "issue", 1, math.MaxInt32); err != nil {
 				break

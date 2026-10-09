@@ -26,6 +26,10 @@
 #                   same order, same nesting, no heading of their own — the frame is the
 #                   online one line by line but for the `!`; never vanish
 #   N. needs      — a remote row that is asking its person draws the local `!` + detail
+#   X. test identity — issue #2505: a session the TEST identity's client placed
+#                   (@test_identity; the adapter's column 30 `test=1`, the cache's
+#                   field 26) is no row on the sidebar, a remote one or a local
+#                   window alike; FLEET_ROWS_TEST=1 (`fleet ls`) lists it
 #   O. orchestrator — issue #1957: a worker the hub marks `role: orchestrator` keeps
 #                   its line in the cache (fleet-remote-view.sh open finds it there)
 #                   and is named in orch_<sess> (worker_id · machine · online · state ·
@@ -683,6 +687,29 @@ FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-blank.json'" PATH="$SHIMPATH" bash "
 eq   "E: …round after round while it stays unread" "$M4" "$(m4rows)"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-gone.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "E: --refresh (read empty) failed"
 eq   "E: …and a read that stands with no rows takes them away" "" "$(m4rows)"
+# X. the test identity's session (issue #2505): in the cache (field 26), never a
+# sidebar row — but `fleet ls` (FLEET_ROWS_TEST=1) lists it
+python3 - "$WORK/sessions.json" "$WORK/sessions-test.json" "$F" <<'PY'
+import json, sys
+src, dst, f = sys.argv[1:4]
+d = json.load(open(src, encoding="utf-8"))
+tid = "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+w = dict(key=None, identity=tid, state="idle", lifecycle="awake", agent="claude", repo=None, name="test-norepo",
+         reap="done:10m", test=True)
+d["sessions"].append(dict(worker_id=f + "/" + tid, machine_name="mini2.local", os_user=d["sessions"][1]["os_user"],
+                          fleet_id=f, fleet_name="x", availability="online", worker=w,
+                          observed_at="2026-10-04T10:06:00Z"))
+json.dump(d, open(dst, "w"), ensure_ascii=False)
+PY
+TID=7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-test.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "X: --refresh (test identity) failed"
+eq   "X: the cache keeps its line, field 26 = 1 after five empty measurement fields" "test-norepo|done:10m||||||1" \
+     "$(LC_ALL=C awk -F"$US" -v w="wid:$F/$TID" '$1 == w { print $8 "|" $18 "|" $21 "|" $22 "|" $23 "|" $24 "|" $25 "|" $26 }' "$G/remote_$S")"
+hasnt "X: the sidebar draws no row for it" "$(side)" "test-norepo"
+has  "X: …the other rows are all there" "$(side)" "侧边栏"
+hasnt "X: …nor does the hub list" "$(hub)" "test-norepo"
+has  "X: FLEET_ROWS_TEST=1 (fleet ls) lists it" "$(FLEET_ROWS_TEST=1 side)" "test-norepo"
+PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 # O. orchestrator (issue #1957): in the cache and orch_<sess>, never a sidebar row
 python3 - "$WORK/sessions.json" "$WORK/sessions-orch.json" "$F" <<'PY'
 import json, sys
@@ -1052,6 +1079,11 @@ p = ["@5", "", "1", "/w/x", "looping", "claude", "a1", "", "acme/app", "scratch-
 print(h.inventory_row(p + ["backfill=failed"])[1].get("backfill"), h.inventory_row(p + ["backfill="])[1].get("backfill"),
       h.inventory_row(p + ["backfill=junk"])[1].get("backfill"), h.inventory_row(p + ["backfill=failed"])[1].get("title"))' 2>&1)
 eq "T: inventory column 23 (#2235) — backfill=failed kept, empty / junk absent, the columns before it intact" "failed None None t" "$got"
+got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
+p = ["@5", "", "1", "/w/x", "idle", "claude", "a1", "", "", "test-norepo", "", "", "", "busy=", "born=", "cfg=", "title=", "reap=done:10m", "detail=", "role=", "epic=", "epicstale=", "backfill=", "ctxleft=", "ctxband=", "ctxts=", "model=", "effort=", "agentstatus="]
+print(h.inventory_row(p + ["test=1"])[1].get("test"), h.inventory_row(p + ["test="])[1].get("test"),
+      h.inventory_row(p)[1].get("test"), h.inventory_row(p + ["test=1"])[1].get("reap"))' 2>&1)
+eq "X: inventory column 30 (#2505) — test=1 kept, empty / absent none, the columns before it intact" "True None None done:10m" "$got"
 rm -rf "$WORK/conf/fleets/$TS" "$EDIR"
 cp "$WORK/wlist.t" "$WLIST_FILE"
 
@@ -1084,6 +1116,22 @@ d = json.load(sys.stdin); w = [s["worker"] for s in d["sessions"] if s["worker"]
 print(repr(w["name"]) + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]))' 2>&1)
   eq "G: …a row with no parent: no trailing space on its name, origin_wid None" \
      "'侧边栏 x'|None|None" "$got"
+  # X (issue #2505): a test identity's window here — the adapter says test, the
+  # list (on this real server) draws no row for it, FLEET_ROWS_TEST=1 does
+  wt5=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{window_id}' -n 'test-norepo' 'while :; do sleep 300; done')
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wt5" @norepo 1
+  "$REAL_TMUX" -L "$S" set-window-option -t "$wt5" @test_identity 1
+  got=$(cd "$BIN" && python3 -c 'import sys, fleet_control as c
+ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sys.argv[2]][0]
+ws = ctl.workers(f)["workers"]
+print(",".join(sorted("%s:%s" % (x["name"], x.get("test", False)) for x in ws if x["name"] in ("test-norepo", "侧边栏 x"))))' "$FLEET_CONF_DIR" "$S" 2>&1)
+  eq "X: the adapter marks the test window, and only it" "test-norepo:True,侧边栏 x:False" "$got"
+  SP=$("$REAL_TMUX" -L "$S" display-message -p '#{socket_path}')
+  got=$(TMUX="$SP,1,0" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>/dev/null | strip)
+  hasnt "X: the list on this machine draws no row for a test window" "$got" "test-norepo"
+  has  "X: …the other windows are there" "$got" "侧边栏 x"
+  has  "X: FLEET_ROWS_TEST=1 lists it" "$(TMUX="$SP,1,0" FLEET_SESSION=$S FLEET_ROWS_TEST=1 bash "$ROWS" --sidebar 2>/dev/null | strip)" "test-norepo"
+  "$REAL_TMUX" -L "$S" kill-window -t "$wt5" 2>/dev/null
   # The refresher maps a LOCAL row to the window that holds it now (#1480) —
   # through this same adapter on the real server, by the hub's own key rule.
   wl=$("$REAL_TMUX" -L "$S" new-window -d -P -F '#{window_id}' -n 'local-one' 'while :; do sleep 300; done')

@@ -407,6 +407,42 @@ class ReapPolicy(Rig):
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")
+class TestIdentity(Rig):
+    """A no-repo session the TEST identity placed (issue #2505, @test_identity):
+    its own policy closes it — done:10m counted from its last turn, or its birth
+    when it never took one — while any other no-repo session stays (#791)."""
+    def norepo(self, test, **opts):
+        win = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label,
+                      "-c", str(self.root), "sleep 90").strip()
+        fid = "%08x-0000-4000-8000-000000000000" % int(win[1:])
+        for key, value in dict({"@norepo": "1", "@fleet_id": fid, "@reap_policy": "done:10m",
+                                "@born": str(int(time.time()) - 1200)}, **opts).items():
+            self.tm("set-option", "-w", "-t", win, key, value)
+        if test:
+            self.tm("set-option", "-w", "-t", win, "@test_identity", "1")
+        return win
+
+    def alive(self, win):
+        return win in self.tm("list-windows", "-t", self.label, "-F", "#{window_id}").split()
+
+    def test_closes_a_test_session_past_its_policy_and_nothing_else(self):
+        old = self.norepo(True)                                   # never took a turn, born 20 min ago
+        young = self.norepo(True, **{"@born": str(int(time.time()) - 60)})
+        busy = self.norepo(True, **{"@claude_state": "working",
+                                    "@claude_state_ts": str(int(time.time()) - 4000)})
+        mine = self.norepo(False)                                 # the person's own no-repo session
+        out = self.clean()
+        self.assertIn("reaped-test:" + old + " policy=done:10m", out)
+        self.assertFalse(self.alive(old))
+        self.assertTrue(self.alive(young))                        # its 10 minutes are not up
+        self.assertTrue(self.alive(busy))                         # working: never
+        self.assertTrue(self.alive(mine))                         # not a test's: #791 holds
+        self.tm("set-option", "-w", "-t", busy, "@claude_state", "done")
+        self.assertIn("reaped-test:" + busy, self.clean())        # done 4000 s ago
+        self.assertFalse(self.alive(busy))
+
+
+@unittest.skipUnless(shutil.which("tmux"), "tmux absent")
 class DoneNoPr(Rig):
     """A finished session no PR will ever close (issue #1832): closed two hours
     after its last turn, its worktree dropped only when clean with nothing of its

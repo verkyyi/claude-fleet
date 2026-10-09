@@ -19,13 +19,20 @@ import (
 // m4Attach; it returns both enrollment tokens.
 func attachNodes(t *testing.T, m4Attach bool) (*harness, *writeNode, *writeNode, control.Fleet, string, string) {
 	t.Helper()
+	if m4Attach {
+		return capNodes(t, control.CapAttach)
+	}
+	return capNodes(t)
+}
+
+// capNodes is twoNodes with m4 (the idle one) saying m4Caps besides read and
+// write; it returns both enrollment tokens.
+func capNodes(t *testing.T, m4Caps ...string) (*harness, *writeNode, *writeNode, control.Fleet, string, string) {
+	t.Helper()
 	h := newFleetHarness(t)
 	tok5, tok4 := h.enroll(t, "m5"), h.enroll(t, "m4")
 	m5 := connectWriteNodeCaps(t, h, tok5, control.CapRead, control.CapWrite)
-	caps := []string{control.CapRead, control.CapWrite}
-	if m4Attach {
-		caps = append(caps, control.CapAttach)
-	}
+	caps := append([]string{control.CapRead, control.CapWrite}, m4Caps...)
 	m4 := connectWriteNodeCaps(t, h, tok4, caps...)
 	f5 := fakeFleet(t, machineA, "fleet-m5", writeRepo, "/u/verk/claude-fleet", 1)
 	f4 := fakeFleet(t, machineB, "fleet-m4", writeRepo, "/u/verk/claude-fleet", 2)

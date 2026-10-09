@@ -150,6 +150,11 @@ w=$(tmux list-windows -t "=$S" -F '#{window_id}' | tail -1)
 eq "C one window more in the fleet" "$(tmux list-windows -t "=$S" -F '#{window_id}' | wc -l | tr -d ' ')" "$((before + 1))"
 eq "C @norepo" "$(tmux display-message -p -t "$w" '#{@norepo}')" 1
 eq "C no @repo" "$(tmux display-message -p -t "$w" '#{@repo}')" ""
+# the test identity's session (issue #2505): marked, named test-…, done:10m
+eq "C @test_identity (FLEET_CLIENT_IDENTITY=test)" "$(tmux display-message -p -t "$w" '#{@test_identity}')" 1
+eq "C named test-…" "$(tmux display-message -p -t "$w" '#{window_name}')" test-norepo
+eq "C its reap policy done:10m" "$(tmux display-message -p -t "$w" '#{@reap_policy}')" done:10m
+eq "C the seam prints the placement's line" "LOCAL" "$(printf '%s\n' "$out" | grep -o '^LOCAL' | head -1)"
 for _ in $(seq 1 100); do [ -s "$WORK/rec/codex.$w.cwd" ] && break; sleep 0.1; done
 [ -s "$WORK/rec/codex.$w.args" ] && ok "C the agent is codex" || fail "C codex never launched in $w ($(ls "$WORK/rec"))"
 [ -s "$WORK/rec/claude.$w.args" ] && fail "C claude launched in a codex session"

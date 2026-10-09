@@ -214,6 +214,9 @@ case "$mode" in
     # JSON, no tab); inventory_row turns it into the worker's `status_kind` /
     # `status_msg`. Empty on a window whose agent never said anything.
     ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}' 2>/dev/null) || ctxs=''
+    # Column 30 (issue #2505): `test=1` on a session the TEST identity's client
+    # placed (@test_identity, `fleet --test-identity`): the person's list hides
+    # it, `fleet ls` marks it 测试. Empty on every other window.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -225,7 +228,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     estale=''
     while IFS=$'\t' read -r _sr _sn _sa _st; do
@@ -238,7 +241,9 @@ case "$mode" in
       c2=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       c3=${rest%%$'\t'*}; rest=${rest#*$'\t'}
       wt=${rest%%$'\t'*}; rest=${rest#*$'\t'}
-      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11; exit }')
+      wrow=$(printf '%s\n' "$cwds" | awk -F'\t' -v w="$wid" '$1 == w { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9 "\t" $10 "\t" $11 "\t" $12; exit }')
+      wtest=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      [ "$wtest" = 1 ] || wtest=''
       wbf=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       [ "$wbf" = failed ] || wbf=''
       wepic=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
@@ -305,7 +310,7 @@ case "$mode" in
         case "$cm" in *[!-A-Za-z0-9\ ._\(\)+]*) cm='' ;; esac
         case "$ce" in *[!a-z]*) ce='' ;; esac
       fi
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------
@@ -470,6 +475,9 @@ case "$mode" in
         [ -s "$seedf" ] || { rm -f "$seedf"; seedf=''; }
       fi
       nrarg=''; [ "$norepo" = 1 ] && nrarg=--no-repo
+      # $10 = `test` (issue #2505): the TEST identity's client placed it — the
+      # window is marked, named test-… and closed soon (dash-raw-session.sh).
+      tiarg=''; [ "${10:-}" = test ] && tiarg=--test-identity
       # 发出即开 (issue #2234, EPIC #2230 C4): a seeded scratch is first offered a
       # window from the warm pool — the seed submitted into it as its first turn,
       # the receipt the same four fields plus `<t_window> <t_ready> <t_prompt>`.
@@ -482,7 +490,7 @@ case "$mode" in
           wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") && cp "$seedf" "$wseed" || { wseed=''; wok=0; }
         fi
         if [ "$wok" = 1 ]; then
-          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} ${wseed:+"--prompt-file=$wseed"})
+          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${wseed:+"--prompt-file=$wseed"})
           wrc=$?; [ -z "$wseed" ] || rm -f "$wseed"
           if [ "$wrc" != 3 ]; then
             [ -z "$seedf" ] || rm -f "$seedf"
@@ -491,7 +499,7 @@ case "$mode" in
           fi
         fi
       fi
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${seedf:+"--prompt-file=$seedf"}
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${seedf:+"--prompt-file=$seedf"}
     fi
     num="${3:-}"
     if [ "$num" = new ]; then

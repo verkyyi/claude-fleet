@@ -70,6 +70,9 @@ type nodeConn struct {
 	// canAttach is the hello's CapAttach: this node downloads a writing
 	// area's attachments before a start (claude-fleet#2393).
 	canAttach bool
+	// canTest is the hello's CapTestIdentity: this node marks the test
+	// identity's scratch (claude-fleet#2505).
+	canTest bool
 	// workersAt is when the worker map was last pushed (UnixNano).
 	workersAt atomic.Int64
 	// canTeam is the hello's CapTeam (claude-fleet#1899): this node follows
@@ -350,6 +353,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay),
 		canTeam: hp.HasCap(control.CapTeam), canAttach: hp.HasCap(control.CapAttach),
+		canTest:    hp.HasCap(control.CapTestIdentity),
 		canCredsep: hp.HasCap(control.CapCredsep),
 		computeOff: !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine)}

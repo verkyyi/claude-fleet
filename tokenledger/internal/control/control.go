@@ -135,6 +135,13 @@ const CapMove = "move"
 // file did not go.
 const CapAttach = "attach"
 
+// CapTestIdentity is the hello capability a node lists when its claude-fleet
+// takes `test` on a scratch worker_start (claude-fleet#2505): the session the
+// TEST identity's client placed is stamped @test_identity, named test-…, kept
+// off the person's list and closed once done. The hub names `test` only to a
+// node that said it — an older one would refuse the unknown field.
+const CapTestIdentity = "test_identity"
+
 // CapCredsep is the hello capability an admin node lists when every login its
 // create op opens is credential-separated from the start (claude-fleet#2294):
 // no subscription token in the login's home, its sessions only through the

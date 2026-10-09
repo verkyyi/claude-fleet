@@ -83,7 +83,11 @@ R="${E}0m"; US=$'\x1f'
 # After @reap_policy (issue #1958): @epic, `<owner/name>#<N>` on the window that
 # drives a running EPIC (fleet-epic-heartbeat.sh stamps it) — the row is then the
 # EPIC's: its parent issue's number + title, badged landed/members (epic_v).
-WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,#{?#{==:#{@fleet_role},orchestrator},home,#{window_name}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}"
+# A session the TEST identity's client placed (issue #2505, @test_identity) is no
+# row: its name reads empty, which every pass skips — unless FLEET_ROWS_TEST=1
+# (`fleet ls`, which lists and closes them).
+_WTEST='#{?@test_identity,,'; [ "${FLEET_ROWS_TEST:-0}" = 1 ] && _WTEST=''
+WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,#{?#{==:#{@fleet_role},orchestrator},home,${_WTEST}#{window_name}${_WTEST:+\}}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -515,6 +519,9 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   fi
   while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf _r_ctx; do
     case "$_orchw" in *" $r_wid "*) continue ;; esac
+    # field 26 (issue #2505): a test identity's session — after the five
+    # measurement fields, so the sixth of the rest; hidden but for `fleet ls`
+    case "$_r_ctx" in *"$US"*"$US"*"$US"*"$US"*"$US"1) [ "${FLEET_ROWS_TEST:-0}" = 1 ] || continue ;; esac
     case "$r_wid" in
       '#ts'|'#me') continue ;;
       '#node') [ -n "$r_node" ] || continue

@@ -90,7 +90,15 @@ func TestRelaySetupReadsMoveIn(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "fleet-hub-node.sh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if p, ok = relaySetup(context.Background(), home); !ok || p.attach != "/a" {
-		t.Fatalf("relaySetup = %+v %v; want attach /a", p, ok)
+	if p, ok = relaySetup(context.Background(), home); !ok || p.attach != "/a" || p.test {
+		t.Fatalf("relaySetup = %+v %v; want attach /a, no test", p, ok)
+	}
+	// claude-fleet#2505: the test line is what makes the node say CapTestIdentity.
+	script = "#!/bin/bash\nprintf 'outbox\\t%s\\nworkers\\t%s\\nmovein\\t%s\\nattach\\t%s\\ntest\\t1\\n' /o /w.tsv /m /a\n"
+	if err := os.WriteFile(filepath.Join(dir, "fleet-hub-node.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok = relaySetup(context.Background(), home); !ok || !p.test {
+		t.Fatalf("relaySetup = %+v %v; want test", p, ok)
 	}
 }

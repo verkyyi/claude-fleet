@@ -186,6 +186,9 @@ func TestClientPlaceNoRepoScratch(t *testing.T) {
 	if _, ok := params["repo"]; ok {
 		t.Fatalf("m4 was sent a repo for a no-repo scratch: %v", params)
 	}
+	if _, ok := params["test"]; ok {
+		t.Fatalf("the person's scratch was sent test: %v", params)
+	}
 	for _, bad := range []map[string]any{
 		{"no_repo": true, "repo": writeRepo, "kind": "scratch"},
 		{"no_repo": true, "kind": "new", "title": "x"},
@@ -356,6 +359,41 @@ func TestClientPlaceNamedNodeAndAgent(t *testing.T) {
 	}
 }
 
+// The test identity's scratch (claude-fleet#2505) is marked `test` on a node
+// that says CapTestIdentity, keeps a policy it asks for, and the person's
+// scratch is never marked.
+func TestClientPlaceTestIdentityMarked(t *testing.T) {
+	h, _, m4, f4, _, _ := capNodes(t, control.CapTestIdentity)
+	var acq ClientLeaseResponse
+	if st := clientPost(t, h, control.ClientPath, ClientLeaseRequest{Action: "acquire", Device: "m4-drill", Identity: "test"}, &acq); st != 200 {
+		t.Fatalf("test acquire = %d %+v", st, acq)
+	}
+	m4.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@3",
+		"workers": []map[string]any{{"window_id": "@3", "worker_id": f4.FleetID + "/@3"}}}))
+	if st, out := clientPlace(t, h, acq.Lease.ID, acq.ActionKey, map[string]any{"no_repo": true, "kind": "scratch", "node": "auto",
+		"idempotency_key": "tm-1"}); st != 200 || out.State != "done" {
+		t.Fatalf("test-identity home place = %d %+v; want done", st, out)
+	}
+	if params := m4.writes[0]["params"].(map[string]any); params["test"] != true || params["reap"] != "done:10m" {
+		t.Fatalf("test-identity home was sent %v; want test=true reap=done:10m", params)
+	}
+	if st, out := clientPlace(t, h, acq.Lease.ID, acq.ActionKey, map[string]any{"no_repo": true, "kind": "scratch", "node": "auto",
+		"reap": "keep", "idempotency_key": "tm-2"}); st != 200 || out.State != "done" {
+		t.Fatalf("test-identity keep place = %d %+v; want done", st, out)
+	}
+	if params := m4.writes[1]["params"].(map[string]any); params["test"] != true || params["reap"] != "keep" {
+		t.Fatalf("test-identity keep was sent %v; want test=true reap=keep", params)
+	}
+	lease, key := clientLeaseFor(t, h)
+	if st, out := clientPlace(t, h, lease, key, map[string]any{"no_repo": true, "kind": "scratch", "node": "auto",
+		"idempotency_key": "tm-3"}); st != 200 || out.State != "done" {
+		t.Fatalf("person's home place = %d %+v; want done", st, out)
+	}
+	if params := m4.writes[2]["params"].(map[string]any); params["test"] != nil || params["reap"] != nil {
+		t.Fatalf("the person's scratch was sent %v; want no test, no reap", params)
+	}
+}
+
 // The test identity's lease (claude-fleet#2460, #1931) lives in its own slot:
 // place finds it there, as the action poll does, instead of 401 forever.
 func TestClientPlaceTestIdentityLease(t *testing.T) {
@@ -371,6 +409,11 @@ func TestClientPlaceTestIdentityLease(t *testing.T) {
 		"title": "drill", "idempotency_key": "t-1"})
 	if st != 200 || out.State != "done" || out.WorkerID != f4.FleetID+"/scratch-2" {
 		t.Fatalf("test-identity place = %d %+v; want done", st, out)
+	}
+	// claude-fleet#2505: asking no policy, its scratch closes 10 minutes after
+	// it is done; m4 does not say CapTestIdentity, so it is sent no `test`
+	if params := m4.writes[0]["params"].(map[string]any); params["test"] != nil || params["reap"] != "done:10m" {
+		t.Fatalf("test-identity scratch to an older node was sent %v; want no test, reap=done:10m", params)
 	}
 	if st, _ := clientPlace(t, h, acq.Lease.ID, strings.Repeat("0", 64), map[string]any{"repo": writeRepo, "kind": "scratch"}); st != 401 {
 		t.Fatalf("test lease with a wrong key = %d; want 401", st)

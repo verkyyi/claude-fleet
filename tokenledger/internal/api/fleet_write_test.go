@@ -561,3 +561,24 @@ func TestFleetWriteReapPolicy(t *testing.T) {
 		}
 	}
 }
+
+// test on worker_start (claude-fleet#2505): a scratch the test identity
+// placed reaches the node as test=true; only `true`, only on a scratch.
+func TestFleetWriteTestScratch(t *testing.T) {
+	h, _, m4, _, f4 := twoNodes(t)
+	postFleet(t, h, "worker_start", map[string]any{"kind": "scratch", "no_repo": true, "test": true, "fleet_id": f4.FleetID, "idempotency_key": "ts-1"}, 200)
+	if params := m4.writes[0]["params"].(map[string]any); params["test"] != true {
+		t.Fatalf("params = %v; want test=true", params)
+	}
+	for i, bad := range []map[string]any{
+		{"kind": "scratch", "no_repo": true, "test": false},
+		{"kind": "scratch", "no_repo": true, "test": "yes"},
+		{"issue": 7, "test": true},
+	} {
+		bad["fleet_id"], bad["idempotency_key"] = f4.FleetID, "ts-bad-"+strconv.Itoa(i)
+		e := postFleet(t, h, "worker_start", bad, 400)["error"].(map[string]any)
+		if e["code"] != "INVALID_ARGUMENT" || m4.count() != 1 {
+			t.Fatalf("%v: %v (m4 writes %d); want INVALID_ARGUMENT and nothing sent", bad, e, m4.count())
+		}
+	}
+}

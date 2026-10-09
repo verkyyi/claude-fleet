@@ -286,9 +286,15 @@ def inventory_row(parts):
     Column 29 (issue #2536, EPIC #2535 C1): `agentstatus=<json>` — the agent's
     own OSC 7501 report (@agent_status) → `status_kind` (permission | question |
     auth, while it is blocked) and `status_msg` (its words, ≤200 characters);
-    both absent when it said nothing, or nothing but its state."""
+    both absent when it said nothing, or nothing but its state.
+    Column 30 (issue #2505): `test=1` — a session the TEST identity's client
+    placed (@test_identity): the person's list hides it, `fleet ls` marks it 测试.
+    Absent otherwise."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 30 and parts[-1].startswith("test="):
+        if parts.pop()[5:] == "1":
+            extra["test"] = True
     if len(parts) >= 29 and parts[-1].startswith("agentstatus="):
         extra.update(agent_status_cell(parts.pop()[12:]))
     if len(parts) >= 28 and parts[-1].startswith("effort=") and parts[-2].startswith("model=") \
@@ -458,7 +464,7 @@ def validate_gh_read(params):
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "agent", "repo", "no_repo", "origin_wid",
-                            "account_class", "reap", "attachments"))
+                            "account_class", "reap", "attachments", "test"))
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
@@ -477,6 +483,13 @@ def validate_write(action, params):
                 raise Fault("INVALID_ARGUMENT", "no_repo belongs to a scratch start (kind=scratch)")
             if params.get("repo"):
                 raise Fault("INVALID_ARGUMENT", "no_repo names no repo")
+        # test (issue #2505): a scratch the TEST identity's client placed — the
+        # adapter's $10, dash-raw-session.sh --test-identity. Only a scratch, only true.
+        if "test" in params:
+            if params["test"] is not True:
+                raise Fault("INVALID_ARGUMENT", "test must be true when given")
+            if kind != "scratch":
+                raise Fault("INVALID_ARGUMENT", "test belongs to a scratch start (kind=scratch)")
         if kind == "new":
             # issue #1953: the client's writing area — this machine files the
             # issue (a title, an optional body), then opens its worker.

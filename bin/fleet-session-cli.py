@@ -11,6 +11,7 @@
                                          issue #2358 — the key never changes)
     fleet close <会话> [--yes]           reap it (the hub's worker_reap; asks y/n
                                          on a terminal unless --yes)
+    fleet close --test [--yes]           reap every test row at once (issue #2505)
     fleet reap <会话> <方式>             its reap policy — merged[:<dur>] ·
                                          done[:<dur>] · loop-end · at:<time> · keep
                                          (the hub's worker_reap_policy, issue #2368)
@@ -44,6 +45,10 @@ session cache (global/remote_<fleet>, the node's inventory columns 24-28), this
 machine's off its window when the cache has none. 剩余 is coloured on a terminal
 — >50 green, 20–50 amber, <20 or at the handoff line red — and a reading older
 than 5 minutes is grey with 「(N 分钟前)」; a node too old to report it shows —.
+
+A session the TEST identity's client placed (`fleet --test-identity`, issue
+#2505: the node's @test_identity, field 26 of the cache) is no row on the list;
+here it is listed with 「（测试）」 after its name, and `close --test` reaps them all.
 
 Seams (tests): FLEET_SESSION_CLI_ROWS (a switch-rows.tsv to read instead of the
 producer), FLEET_SESSION_CLI_CACHE (a remote_<fleet> cache to read instead of the
@@ -128,8 +133,8 @@ def bus_cache():
         f = line.split("\x1f")
         if not f[0].startswith("wid:"):
             continue
-        f += [""] * (25 - len(f))
-        m = {"agent": f[6]}
+        f += [""] * (26 - len(f))
+        m = {"agent": f[6], "test": f[25] == "1"}
         if any(f[20:25]):
             m.update(left=f[20], band=f[21], ts=f[22], model=f[23], effort=f[24])
         out[f[0]] = m
@@ -145,7 +150,8 @@ def bus_local(keys):
     if not keys or not sess:
         return {}
     fmt = ("#{window_id}\t#{@cc_agent}\t#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}"
-           "\t#{@ctx_band}\t#{@ctx_ts}\t#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t#{@effort}")
+           "\t#{@ctx_band}\t#{@ctx_ts}\t#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t#{@effort}"
+           "\t#{?#{==:#{@test_identity},1},1,}")
     try:
         got = subprocess.run(["tmux", "-u", "-L", sess, "list-windows", "-t", "=" + sess, "-F", fmt],
                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5).stdout
@@ -153,9 +159,9 @@ def bus_local(keys):
         return {}
     out = {}
     for line in got.splitlines():
-        f = (line.split("\t") + [""] * 7)[:7]
+        f = (line.split("\t") + [""] * 8)[:8]
         if f[0] in keys:
-            m = {"agent": f[1]}
+            m = {"agent": f[1], "test": f[7] == "1"}
             if any(f[2:7]):
                 m.update(left=f[2], band=f[3], ts=f[4], model=f[5], effort=f[6])
             out[f[0]] = m
@@ -169,6 +175,7 @@ def attach_bus(rs):
     for r in rs:
         m = bus.get(r["key"], {})
         r["agent"] = agent_say(m.get("agent", ""))
+        r["test"] = bool(m.get("test"))
         for k in ("left", "band", "ts", "model", "effort"):
             r[k] = m.get(k, "")
     return rs
@@ -222,7 +229,7 @@ def epic_link(r):
 
 def fields(r, colour=False):
     """The columns `ls` prints and `show` names, in order."""
-    return [("名称", r["name"]), ("进度", progress(r)), ("单号", "#" + r["issue"] if r["issue"] else ""), ("机器", r["node"]),
+    return [("名称", r["name"] + ("（测试）" if r.get("test") else "")), ("进度", progress(r)), ("单号", "#" + r["issue"] if r["issue"] else ""), ("机器", r["node"]),
             ("Agent", r.get("agent") or "—"), ("剩余", left_cell(r, colour)),
             ("模型", r.get("model") or "—"), ("Effort", r.get("effort") or "—"),
             ("状态", STATE_SAY.get(r["state"], r["state"])), ("PR", r["pr"]), ("回收方式", r["reap"])]
@@ -334,11 +341,11 @@ def cmd_ls(args):
         return usage()
     rs = attach_bus(rows())
     if args == ["--json"]:
-        keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo")
+        keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo", "test")
         derived = (("progress", progress), ("epic_url", epic_link))
         bus = (("agent", "agent"), ("ctx_left", "left"), ("ctx_band", "band"), ("ctx_ts", "ts"),
                ("model", "model"), ("effort", "effort"))
-        print(json.dumps([dict({k: r.get(k, "") for k in keep}, **{k: r.get(v, "") for k, v in bus},
+        print(json.dumps([dict({k: r.get(k, False if k == "test" else "") for k in keep}, **{k: r.get(v, "") for k, v in bus},
                                **{k: f(r) for k, f in derived})
                           for r in rs], ensure_ascii=False))
         return 0
@@ -398,6 +405,8 @@ def cmd_rename(args):
 def cmd_close(args):
     yes = "--yes" in args or "-y" in args
     rest = [a for a in args if a not in ("--yes", "-y")]
+    if rest == ["--test"]:
+        return close_tests(yes)
     if len(rest) != 1:
         return usage()
     row, rc = one(rows(), rest[0])
@@ -412,6 +421,32 @@ def cmd_close(args):
             return 2
         if got.strip().lower() not in ("y", "yes"):
             return 1
+    return reap_row(row)
+
+
+def close_tests(yes):
+    """`fleet close --test` (issue #2505): every test row, one question for all."""
+    rs = [r for r in attach_bus(rows()) if r.get("test")]
+    if not rs:
+        print("没有测试会话")
+        return 0
+    table(rs)
+    if not yes:
+        got = ask("回收这 %d 个测试会话？它们的窗口会关掉 [y/N] " % len(rs))
+        if got is None:
+            say("不在终端里：确认请加 --yes")
+            return 2
+        if got.strip().lower() not in ("y", "yes"):
+            return 1
+    rc = 0
+    for r in rs:
+        if not remote_only(r, "回收") or reap_row(r):
+            rc = 1
+    return rc
+
+
+def reap_row(row):
+    """The hub's worker_reap on one row (fleet_hub_reap) → 0 reaped, 1 not."""
     try:
         out = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh" && fleet_hub_reap "$2" 90', "fleet-close",
                               str(BIN), worker_id(row)], stdin=subprocess.DEVNULL, capture_output=True,
@@ -516,6 +551,8 @@ def main(argv):
     # and runs this again (FLEET_SHELL=1 then) — the seam reads a file instead
     if os.environ.get("FLEET_SHELL") != "1" and not os.environ.get("FLEET_SESSION_CLI_ROWS"):
         os.execv("/bin/bash", ["bash", str(BIN / "fleet-shell.sh"), "cli", verb] + args)
+    # every verb sees the test identity's sessions the list hides (issue #2505)
+    os.environ["FLEET_ROWS_TEST"] = "1"
     return {"ls": cmd_ls, "show": cmd_show, "open": cmd_open, "rename": cmd_rename, "close": cmd_close,
             "reap": cmd_reap, "answer": cmd_answer}[verb](args)
 
