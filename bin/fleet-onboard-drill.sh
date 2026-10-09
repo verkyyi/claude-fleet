@@ -98,7 +98,8 @@
 #       2 bad arguments / preflight · 3 the login (or its home) already exists
 # Env: FLEET_DRILL_TIMEOUT (900 s, the download) · FLEET_DRILL_SCAN_SECS (600,
 #      the QR's life) · FLEET_DRILL_STEP_SECS (120, any other wait) ·
-#      FLEET_DRILL_POLL_SECS (2) · FLEET_DRILL_RETIRE_CMD · FLEET_LOGIN_HOMES (/Users)
+#      FLEET_DRILL_POLL_SECS (2) · FLEET_DRILL_REMOVE_SECS (600, the hub closing
+#      the drill person's login) · FLEET_DRILL_RETIRE_CMD · FLEET_LOGIN_HOMES (/Users)
 set -u
 
 PROG=fleet-onboard-drill
@@ -122,7 +123,7 @@ list_row_named() {
 # could not open, or the person is back at a prompt); wait — anything else.
 # The installer prints 「能力:」 BEFORE its QR (#2255): 能力: alone is no proof
 # that this computer was already known, so it never reads none by itself.
-CLIENT_UP='新任务|New task'
+CLIENT_UP='新任务|[Nn]ew task|⌘N|⌘P'   # the list's portal row, else its bar's keys (run 2: 「⌘N 编排」, no 新任务)
 INSTALL_END='^(能力:|用时 [0-9]+ 秒)'
 qr_state() {
   local p
@@ -191,6 +192,7 @@ DRILL_NS=fleet-drill@claude-fleet
 HOST=127.0.0.1 PORT=22
 TIMEOUT=${FLEET_DRILL_TIMEOUT:-900} SCAN_SECS=${FLEET_DRILL_SCAN_SECS:-600}
 STEP_SECS=${FLEET_DRILL_STEP_SECS:-120} POLL=${FLEET_DRILL_POLL_SECS:-2}
+REMOVE_SECS=${FLEET_DRILL_REMOVE_SECS:-600}   # the hub closing the drill person's login (202 removing)
 while [ $# -gt 0 ]; do
   case "$1" in
     --login)    [ $# -ge 2 ] || usage; LOGIN=$2; shift 2 ;;
@@ -449,7 +451,7 @@ step_install() {
 
 # --- 6 scan -------------------------------------------------------------------------
 step_scan() {
-  local code k
+  local code k deadline
   # SKIP only once the installer has finished with no code: it prints
   # 「能力:」 before the QR, and download stops at whichever comes first (#2255)
   case $(qr_wait "$STEP_SECS") in
@@ -479,14 +481,17 @@ step_scan() {
   # 「已登记到入口」 only: the installer goes on to 「能力:」 after a refused or
   # expired scan too (「not issued (HTTP 410)」), so 能力: is no confirmation
   # A newcomer's install says nothing after the scan (#2347 — no 入口 / 节点
-  # line) and goes straight into the client, whose screen covers the rest: the
-  # client coming up counts once the login holds the certificate the scan
-  # wrote (C9 run 1, 2026-10-09: approved, client up, 600 s of waiting for 「✓」).
-  k=$(wait_for "$SCAN_SECS" '已登记到入口' '✗ |还不能签发|access_denied|已过期|not issued|没登记成|机器登录' "$CLIENT_UP")
-  if [ "$k" = 3 ]; then
-    if as_login test -s "$H/.ssh/fleet-cert-cert.pub" 2>/dev/null; then k=1
-    else k=4; fi
-  fi
+  # line) and goes straight into the client, whose screen covers the rest and
+  # whose labels change (C9 runs 1 and 2, 2026-10-09: approved, client up, 600 s
+  # of waiting): the certificate the scan writes into the login is the proof.
+  deadline=$((SECONDS + SCAN_SECS)) k=''
+  while :; do
+    k=$(wait_for 0 '已登记到入口' '✗ |还不能签发|access_denied|已过期|not issued|没登记成|机器登录')
+    [ -z "$k" ] || break
+    as_login test -s "$H/.ssh/fleet-cert-cert.pub" 2>/dev/null && { k=1; break; }
+    [ "$SECONDS" -lt "$deadline" ] || break
+    sleep "$POLL"
+  done
   EPID=$(pane | grep -Eo '已登记到入口：[^（]*（ep_[0-9]+）' | grep -Eo 'ep_[0-9]+' | tail -n 1)
   shot joined
   case "$k" in
@@ -494,8 +499,6 @@ step_scan() {
        pass scan "confirmed: device ${FPR:-?} · node ${EPID:-none} · $(elapsed)" ;;
     2) row "扫码后：$(pane | grep -E '✗ |还不能签发|access_denied|已过期|not issued|没登记成|机器登录' | head -n 1)" "扫码" "是 — 入口不肯签发"
        failstep scan "the hub did not issue (refused, or the code expired):"; tail_pane; return 1 ;;
-    4) row "扫码后进了客户端，但这台电脑没有拿到登录证书" "扫码" "是 — 扫了码却没登录上"
-       failstep scan "the client came up but $H/.ssh/fleet-cert-cert.pub is missing:"; tail_pane; return 1 ;;
     *) row "二维码 ${SCAN_SECS}s 内没人扫" "—" "本人（没扫）"
        failstep scan "nobody confirmed within ${SCAN_SECS}s"; return 1 ;;
   esac
@@ -768,7 +771,8 @@ hub_self_delete() {
   resp=$(hub_json DELETE /v1/self "$(printf '{"approve_code":"%s"}' "$INVITE")")
   # 202 removing: the hub is closing the login it opened for the drill
   # person's first session (#2549) — the person goes once that is gone.
-  while [ "$(hub_code "$resp")" = 202 ] && [ $((SECONDS - t0)) -lt "$STEP_SECS" ]; do
+  # Closing a login takes minutes (C9 run 2: still 「removing」 after 120 s).
+  while [ "$(hub_code "$resp")" = 202 ] && [ $((SECONDS - t0)) -lt "$REMOVE_SECS" ]; do
     sleep "$POLL"
     resp=$(hub_json DELETE /v1/self "$(printf '{"approve_code":"%s"}' "$INVITE")")
   done
@@ -860,11 +864,18 @@ else: print("gone")' "$FPR" 2>/dev/null)
     # the hub's own word (kept as evidence): a 401 = it knows no such drill
     # person. A 200 means it was still there — deleted now, but a leftover.
     local resp
+    local t0=$SECONDS
     resp=$(hub_json DELETE /v1/self "$(printf '{"approve_code":"%s"}' "$INVITE")")
+    # still 202 removing: the hub is closing its login — wait it out, then read
+    while [ "$(hub_code "$resp")" = 202 ] && [ $((SECONDS - t0)) -lt "$REMOVE_SECS" ]; do
+      keep_sudo; sleep "$POLL"
+      resp=$(hub_json DELETE /v1/self "$(printf '{"approve_code":"%s"}' "$INVITE")")
+    done
     printf 'DELETE %s/v1/self (approve code) → HTTP %s %s\n' "$HUB" "$(hub_code "$resp")" "$(hub_body "$resp")" > "$RUN/hub-residue.txt"
     case "$(hub_code "$resp")" in
       401) note "hub: $(hub_body "$resp" | head -c 120) — the drill person is gone" ;;
       200) left="$left · the drill person was still on the hub (deleted by this check)" ;;
+      202) left="$left · the hub was still closing the drill person's login after ${REMOVE_SECS}s: $(hub_body "$resp" | head -c 160)" ;;
       *)   left="$left · the hub's answer on the drill person: HTTP $(hub_code "$resp")" ;;
     esac
   fi

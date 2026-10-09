@@ -144,6 +144,7 @@ FLEET_DRILL_AGENT_SECS             knob: fleet-onboard-drill.sh's wait for the s
 FLEET_DRILL_NODE_BIN               knob: the session login's fleet bin/ fleet-onboard-drill.sh restarts it with (default ~<login>/.claude/fleet/bin, #2139)
 FLEET_DRILL_OPENING_SECS           knob: fleet-onboard-drill.sh's wait while the hub opens the login (360 s, #2069)
 FLEET_DRILL_POLL_SECS              knob: how often fleet-onboard-drill.sh reads its pane (2 s)
+FLEET_DRILL_REMOVE_SECS            knob: fleet-onboard-drill.sh's wait while the hub closes the drill person's login (600 s, #2139)
 FLEET_DRILL_RETIRE_CMD             seam: the command fleet-onboard-drill.sh retires a drill node with when fleet node leave did not (#1928)
 FLEET_DRILL_SCAN_SECS              knob: how long fleet-onboard-drill.sh waits for the QR scan (600 s, the code's life)
 FLEET_DRILL_STEP_SECS              knob: fleet-onboard-drill.sh's wait for any other step (120 s)
