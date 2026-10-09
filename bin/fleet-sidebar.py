@@ -2218,6 +2218,42 @@ def on_caret(row, x):
     return 0 <= x < width_of(row_left(" ", row[2], row[4], ""))
 
 
+def fold_tap(row, key, x):
+    """Whether a tap at column `x` on list row `row` (key `key`) folds or opens
+    a block rather than doing the row's own action. The 置顶 and 已结束 headings
+    (issue #2723) fold anywhere on the row: they have no other action, and the
+    two-cell caret alone left a mouse (an iPad, a trackpad) unable to open them.
+    A repo heading folds on its ▸ / ▾ only — its name keeps the two-tap
+    「新会话」 grammar (#1032); a session row on its caret; a `solo:` group
+    anywhere."""
+    if row is None or not folds(key):
+        return False
+    return key in FOLD_HEADINGS or key.startswith(SOLO) or on_caret(row, x)
+
+
+def repo_folds(rows):
+    """Whether this list's repo headings fold: only in a fleet drawing 2+ of
+    them (dash-fold-toggle.sh's RMANY) — a one-repo frame writes no fold bit."""
+    return sum(1 for r in rows if r[0] == "hdr" and r[1] and "hdr:" + r[1] not in FOLD_HEADINGS) > 1
+
+
+def heading_text(row, selected, many=True):
+    """A heading as painted (issue #2723): a heading that folds wears its caret
+    in the first two cells, ▸ shut, ▾ open — the cells `on_caret` answers —
+    then the `› ` of a tapped one (#1032), then its name. A bare heading (the
+    `?` one, the empty-state hint) has no caret, nor an open repo heading in a
+    list whose repo headings do not fold (`many`, repo_folds)."""
+    label = row[3]
+    name = label[2:] if label.startswith("▸ ") else label
+    if not fold_open(row):
+        caret = "▸ "
+    elif row[1] and (many or "hdr:" + row[1] in FOLD_HEADINGS):
+        caret = "▾ "
+    else:
+        caret = ""
+    return caret + ("› " if selected else "") + name
+
+
 # A second press on the same caret this soon after the first one folded is the same tap
 # (issue #2167): a double-click reaches the list as two presses or more
 # (DoubleClick1Pane forwards its own), and the second folded straight back.
@@ -3404,15 +3440,16 @@ def ui(screen, session, worker, lock):
                     pass  # a resize may race this paint
 
         screen.erase()
+        many = repo_folds(rows)
         for y, row in enumerate(rows[offset:offset + page]):
             wid, state, glyph, label, tree, badge, _depth, _detail, node = row[:9]
             if wid == "hdr":
                 if key_of((wid, state)) == selected:
                     # a tapped heading (issue #1032): its second tap opens a new
                     # session in that repo
-                    put(y, "› " + label, curses.color_pair(PAIR_SEL) | curses.A_BOLD, fill=True)
+                    put(y, heading_text(row, True, many), curses.color_pair(PAIR_SEL) | curses.A_BOLD, fill=True)
                 else:
-                    put(y, label, dim_attr | curses.A_BOLD)
+                    put(y, heading_text(row, False, many), dim_attr | curses.A_BOLD)
                 continue
             # The text is one colour; the glyph alone says the state (issue #1622).
             raised = wid == current_row or wid == selected
@@ -3634,8 +3671,7 @@ def ui(screen, session, worker, lock):
             elif buttons & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED | MULTI_CLICK):
                 refresh_at = 0
                 armed = None
-                if hit_row is not None and view == "live" and folds(hit) and \
-                        (on_caret(hit_row, x) or hit.startswith(SOLO)):
+                if view == "live" and fold_tap(hit_row, hit, x):
                     # A tap on a row's caret (▸ / ▾ and the tree left of the name,
                     # or a heading's first cells) folds or opens its block (issue
                     # #1950: ←/→ went with the keyboard). Painted at once
@@ -3650,6 +3686,8 @@ def ui(screen, session, worker, lock):
                     # and its double-click's second press is read after that —
                     # and again when the list next listens (#2600)
                     caret_tap = (hit, time.monotonic(), True)
+                    if hit in FOLD_HEADINGS:
+                        selected = hit   # highlighted as it folds (issue #2723)
                     verb = "collapse" if fold_open(hit_row) else "expand"
                     rows, holder = fold_now(rows, hit, verb, window, fold_cache)
                     folding = fold_write(folding, verb, hit, env, holder)
