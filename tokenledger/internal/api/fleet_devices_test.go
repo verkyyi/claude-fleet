@@ -564,3 +564,22 @@ func TestFleetClientMatchesBin(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// 我的设备 is the computers a person signs in FROM (claude-fleet#2680): a
+// `fleet login` run on a machine that runs sessions is marked host, so the
+// page can keep it out of the client list; a laptop never is.
+func TestDevicesMarkHostingMachines(t *testing.T) {
+	h, _, _, _, _ := homeHarness(t)
+	newDevice(t).scan(t, h, pAlice, "alices-mbp")
+	newDevice(t).scan(t, h, pAlice, "m4")
+	waitFor(t, 3*time.Second, "both machines on the roster", func() bool {
+		return len(h.srv.hostingMachines()) == 2
+	})
+	host := map[string]bool{}
+	for _, d := range devicesAs(t, h, pAlice).Devices {
+		host[d.Name] = d.Host
+	}
+	if len(host) != 2 || host["alices-mbp"] || !host["m4"] {
+		t.Fatalf("host marks = %v; want m4 only", host)
+	}
+}
