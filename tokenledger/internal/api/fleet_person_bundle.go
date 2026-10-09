@@ -33,7 +33,8 @@ import (
 //        current version, updated time and item count — a summary, never a
 //        body; reading one stays ?principal=<id>&version=N.
 //   PUT  {bundle, base?, note?} | {restore: N, base?, note?}
-//        the person's own — session, node token or the same signed body.
+//        the person's own — session, node token or the same signed body;
+//        an admin's session on their own layer too (claude-fleet#2515).
 //        Someone else's (?principal= naming another) is 403. The operator
 //        may only {restore: N}: put one of the person's own versions back,
 //        never new content, and the audit names the operator.
@@ -132,6 +133,12 @@ func (s *Server) handleFleetPersonBundle(w http.ResponseWriter, r *http.Request)
 
 	// Whose layer: the caller's own; the operator names one.
 	want := strings.TrimSpace(r.URL.Query().Get("principal"))
+	if id.Admin && (want == "" || strings.EqualFold(want, id.Actor)) {
+		// An admin's own layer is theirs as anyone's is: read it, import into
+		// it (claude-fleet#2515, #2521). Naming another person stays the
+		// operator's restore-only reach.
+		id.Operator, id.Principal, self = false, id.Actor, id.Actor
+	}
 	target := self
 	if id.Operator {
 		if want == "" {

@@ -198,3 +198,31 @@ func ownViewCtx(ctx context.Context) context.Context {
 func withPrincipal(ctx context.Context, p string) context.Context {
 	return context.WithValue(ctx, principalKey{}, p)
 }
+
+// An admin imports into their own settings layer as anyone does (the same
+// line of Config, claude-fleet#2515 / #2521); someone else's stays refused.
+func TestAdminViews_AdminImportsOwnSettings(t *testing.T) {
+	h, admin, _ := adminViewsHarness(t)
+	put := func(query string) int {
+		t.Helper()
+		body, _ := json.Marshal(personV1)
+		req, _ := http.NewRequest(http.MethodPut, h.http.URL+"/v1/fleet/person-bundle"+query, strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(admin)
+		resp, err := noFollow.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := put(""); code != http.StatusOK {
+		t.Errorf("admin PUT their own layer = %d; want 200", code)
+	}
+	if code := put("?principal=" + githubPrincipal(ghAdmin.ID)); code != http.StatusOK {
+		t.Errorf("admin PUT naming themselves = %d; want 200", code)
+	}
+	if code := put("?principal=" + githubPrincipal(ghAlice.ID)); code != http.StatusForbidden {
+		t.Errorf("admin PUT new content into a user's layer = %d; want 403", code)
+	}
+}
