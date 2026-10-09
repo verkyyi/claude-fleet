@@ -85,6 +85,7 @@ jobs:
       # claude-fleet#2640: internal/api alone takes 420-600s here, so go
       # test's default 10m cap turned runner noise into a red run.
       - name: store + api + leader tests on Postgres
+        # claude-fleet#2479: internal/api alone ran 584s of go test's 10m default.
         run: |
           set -o pipefail
           go test -race -count=1 -v -timeout 20m ./internal/store/... ./internal/api/... ./internal/leader/... 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
