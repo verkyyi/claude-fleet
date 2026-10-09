@@ -681,6 +681,7 @@ fleet-quotawatch.sh --status      # off|never|fresh|stale|blind + age (s) + empt
 fleet-quotawatch.sh --dry-run     # what this tick WOULD do per account, no side effects
 fleet-account.sh quota            # what the watch sees: label · 5h% · 7d% · headroom · resets · %/h
 fleet-account.sh quota --refresh  # bypass the FLEET_ACCOUNT_QUOTA_TTL (60s) cache
+                                  # no row ⇒ why on stderr, exit 4 (no pool / no hub) or 3 (unknown now)
 fleet-account.sh list             # …the same numbers, coloured, next to each account,
                                   #    plus each live 5h window's time left (`win 40m left`)
                                   #    or `win idle` — an idle window is capacity bleeding away

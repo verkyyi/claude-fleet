@@ -107,7 +107,11 @@
 #                          (issue #513): label · 5h% · 7d% · headroom% · 5h-reset ·
 #                          7d-reset · %/h, one TSV row each. Cached FLEET_ACCOUNT_QUOTA_TTL s
 #                          (--refresh forces; --cached never fetches). Fail-open: no
-#                          ccquota / no CCQUOTA_HUB_URL / hub unreachable → no rows, exit 0.
+#                          ccquota / no hub / hub unreachable → no rows. No row ⇒ one
+#                          `fleet-account: quota none|unknown — <why>` line on stderr and
+#                          exit 4 (none configured: no pool / no hub) or 3 (unknown: no
+#                          reading right now) — issue #2588. The hub URL is
+#                          CCQUOTA_HUB_URL, else FLEET_HUB_URL, else node.env's.
 #                          An account ccquota says it CANNOT read (available:false) gets
 #                          no row either, and says why on stderr (issue #628) — never a
 #                          row of zeroes, which reads as a brand-new idle subscription.
@@ -693,7 +697,7 @@ quota_empty_streak() {
 # the alarm off a hub that merely blinked.
 quota_fetch() {
   command -v "$CCQUOTA" >/dev/null 2>&1 || return 0
-  [ -n "${CCQUOTA_HUB_URL:-}" ] || return 0
+  [ -n "$(quota_hub_url)" ] || return 0
   local rows raw ra why
   raw=$(quota_budget_json)
   rows=$(printf '%s' "$raw" | quota_parse)
@@ -728,7 +732,16 @@ quota_fetch() {
 # CCQUOTA_TOKEN. The token is read inside THIS subshell (_fleet_hub_env) — never
 # exported to the caller, so no pane inherits a node credential (issue #1491).
 quota_budget_json() {
-  ( _fleet_hub_env; "$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null )
+  ( CCQUOTA_HUB_URL=$(quota_hub_url); export CCQUOTA_HUB_URL
+    _fleet_hub_env; "$CCQUOTA" budget --account all --json --timeout 10s 2>/dev/null )
+}
+# quota_hub_url — the hub this login reads quota from: CCQUOTA_HUB_URL, else the
+# fleet conf's FLEET_HUB_URL, else node.env's (issue #2588). A pane has no
+# CCQUOTA_HUB_URL — `fleet-conf.sh migrate` keeps only FLEET_HUB_URL, the node's
+# URL lives in node.env — so gating on the bare variable made every `quota` run
+# from a session (the EPIC run loop's) a silent no-op while the daemon read fine.
+quota_hub_url() {
+  printf '%s' "${CCQUOTA_HUB_URL:-${FLEET_HUB_URL:-$(_fleet_node_env_val CCQUOTA_HUB_URL 2>/dev/null)}}"
 }
 # quota_why — a ccquota payload that brought no rows (stdin) → one line
 # <refused|unreachable|empty><TAB><detail>: refused = the hub answered 401/403
@@ -905,10 +918,42 @@ cmd_quota() {
   local mode="" json=0 a
   for a in "$@"; do case "$a" in --refresh) mode=refresh;; --cached) mode=cached;; --json) json=1;; esac; done
   if [ "$json" = 1 ]; then
-    command -v "$CCQUOTA" >/dev/null 2>&1 && [ -n "${CCQUOTA_HUB_URL:-}" ] && quota_budget_json
+    command -v "$CCQUOTA" >/dev/null 2>&1 && [ -n "$(quota_hub_url)" ] && quota_budget_json
     return 0
   fi
-  quota_rows "$mode"
+  local rows; rows=$(quota_rows "$mode")
+  if printf '%s' "$rows" | grep -q .; then printf '%s\n' "$rows"; return 0; fi
+  quota_none_why
+}
+# quota_none_why — `quota` printed no row: say why on stderr and pick the exit
+# (issue #2588), so a caller can tell "nothing to read" from "cannot read it":
+#   4 — none configured: no pool account, or no ccquota hub at all
+#   3 — unknown: a pool and a hub, but no reading to show right now
+# No durations in the line: the quota watch logs its stderr only when it changes.
+quota_none_why() {
+  local w detail ra
+  if [ -z "$(acct_labels)" ]; then
+    echo "fleet-account: quota none — no pool account in $ACCT_DIR (nothing to read)" >&2; return 4
+  fi
+  if [ -z "$(quota_hub_url)" ]; then
+    echo "fleet-account: quota none — no ccquota hub configured (CCQUOTA_HUB_URL / FLEET_HUB_URL / node.env)" >&2; return 4
+  fi
+  if ! command -v "$CCQUOTA" >/dev/null 2>&1; then
+    echo "fleet-account: quota unknown — $CCQUOTA is not on PATH" >&2; return 3
+  fi
+  if [ -s "$STATE_QUOTA_WHY" ]; then
+    w=$(cut -f1 "$STATE_QUOTA_WHY"); detail=$(cut -f3- "$STATE_QUOTA_WHY")
+    echo "fleet-account: quota unknown — hub ${w:-unreachable}${detail:+: $detail}" >&2; return 3
+  fi
+  ra=$(quota_read_at)
+  if [ "$ra" -eq 0 ]; then
+    echo "fleet-account: quota unknown — no reading cached yet (\`quota --refresh\` fetches one)" >&2; return 3
+  fi
+  if [ "$QUOTA_STALE_OK" -gt 0 ] && [ $(( $(now) - ra )) -gt "$QUOTA_STALE_OK" ]; then
+    echo "fleet-account: quota unknown — the last reading is older than FLEET_QUOTA_STALE_OK (${QUOTA_STALE_OK}s)" >&2; return 3
+  fi
+  echo "fleet-account: quota unknown — the hub answered but no account maps to a pool label (\`ccquota name\` must equal the label, or set CCQUOTA_ACCOUNT= in <label>.conf)" >&2
+  return 3
 }
 
 # --- the single subscription-limit verdict (issue #874) --------------------------

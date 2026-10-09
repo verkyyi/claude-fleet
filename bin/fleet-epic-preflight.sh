@@ -354,12 +354,14 @@ fi
 # never be the thing that stalls on ccquota. No pool ⇒ no opinion, not a fault.
 ceiling="${FLEET_ACCOUNT_CEILING:-85}"
 case "$ceiling" in ''|*[!0-9]*) ceiling=85 ;; esac
-qrows=$(bash "$BIN/fleet-account.sh" quota --cached 2>/dev/null)
+qrows=$(bash "$BIN/fleet-account.sh" quota --cached 2>/dev/null); qrc=$?
 n_rows=$(printf '%s' "$qrows" | grep -c .)
-if [ -z "${CCQUOTA_HUB_URL:-}" ]; then
+if [ "$qrc" = 4 ]; then
   # No pool and a blind pool both produce zero rows, and for a BATCH they are
   # opposite answers: "nothing to schedule around" vs "I cannot tell you whether
-  # there is room". Split them on the hub URL, the same gate fleet-doctor.sh uses.
+  # there is room". `quota` splits them by its exit (issue #2588): 4 = nothing
+  # configured, 3 = configured but unreadable — a pane has no CCQUOTA_HUB_URL,
+  # so the old split on that variable called every session's pool "none".
   pass quota "no ccquota pool configured for this fleet — sessions run on whatever account they get; nothing to schedule a batch around"
 elif [ "$n_rows" -eq 0 ]; then
   warn quota "a ccquota pool IS configured but its cached reading is empty — nothing here can say whether there is room to start a batch; \`bash $BIN/fleet-quotawatch.sh --status\` says which kind of blind it is (\`stale\` = no tick has run at all, #551; \`blind\` = every tick ran and came back with nothing, #684)"
