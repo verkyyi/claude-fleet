@@ -691,6 +691,16 @@ Do not install from memory: read the doc and work from it.
   logic). The inventory's column 29 `agentstatus=` carries it to the hub as the
   worker's `status_kind` / `status_msg`. `FLEET_STATUS_7501=0` (or no tty, no tmux)
   runs the agent bare, byte for byte as before. `fleet-status-7501-selftest.sh`.
+  **And on the person's own terminal** (issue #2539, C4): tmux drops an OSC it does
+  not know, so the relay splices each report back in as tmux passthrough right after
+  the agent's own, once per depth 1..`FLEET_STATUS_REPLAY_DEPTH` (3: shell → stage →
+  node; exactly one copy arrives bare — nothing on the node can see how deep its
+  client is), and the node's `session-window-changed` / `client-session-changed`
+  [75] hooks run `fleet-status-7501.py replay` — each terminal client's current
+  window's state, or `state=clear`, onto its tty (never a control-mode client),
+  only once a relay set `@agent_replay`. All three confs say `allow-passthrough on`
+  (only a pane on screen passes). Ghostty shows it on the tab; iTerm2 has no OSC
+  7501 and ignores it. `0` keeps it on the machine. `fleet-status-replay-selftest.sh`.
 - **The hub ships the `fleet` client, and `bin/` + `conf/` stay canonical**
   (issues #1470, #1486). `curl -fsSL <hub>/install | sh` serves
   `bin/fleet-install.sh` (hub URL filled in), which fetches `/install/manifest`

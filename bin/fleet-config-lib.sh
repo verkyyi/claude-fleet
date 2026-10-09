@@ -271,6 +271,7 @@ fcfg_label_i18n() {
     FLEET_PRETRUST) printf '启动时预信任 checkout' ;;
     FLEET_MOD) printf '会话内 fleet 扩展' ;;
     FLEET_STATUS_7501) printf '读程序自报的状态（OSC 7501）' ;;
+    FLEET_STATUS_REPLAY_DEPTH) printf '你的终端也看得到：tmux 层数' ;;
     FLEET_AUTOFILL) printf '从带标签 backlog 自动填充空位' ;;
     FLEET_AUTOFILL_MAX_PER_TICK) printf '自动填充批量大小' ;;
     FLEET_CHILD_REPORT) printf '子任务向父任务报告结果' ;;
