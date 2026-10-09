@@ -760,8 +760,8 @@ restore() {
         [ "${wrepo:-}" != - ] \
           && tmux -L "$sock" set-window-option -t "$nw" @worktree "$wpath" 2>/dev/null
         if [ -n "$wstate" ] && [ "$wstate" != "-" ]; then
-          tmux -L "$sock" set-window-option -t "$nw" @claude_state "$wstate" 2>/dev/null
-          tmux -L "$sock" set-window-option -t "$nw" @claude_state_ts "$(date +%s)" 2>/dev/null
+          # Carried, not said (issue #2537): only until the agent's first OSC 7501.
+          fleet_state_carry "$sock" "$nw" "$wstate"
           fleet_hub_nudge   # issue #1481
         fi
         # The outcome (issue #1265) — AFTER the state re-stamp above, so an awaiting

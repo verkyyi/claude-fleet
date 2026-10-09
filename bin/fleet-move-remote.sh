@@ -187,8 +187,8 @@ case "$cmd" in
     [ -n "$origin" ] && TM set-window-option -t "$nw" @origin "$origin" 2>/dev/null
     [ -n "$repo" ] && TM set-window-option -t "$nw" @repo "$repo" 2>/dev/null
     [ -n "$wid" ] && fleet_wid_stamp "$nw" "$SOCK" "$wid" >/dev/null 2>&1
-    TM set-window-option -t "$nw" @claude_state "$state" 2>/dev/null
-    TM set-window-option -t "$nw" @claude_state_ts "$(date +%s)" 2>/dev/null
+    # Carried, not said (issue #2537): only until the new agent's first OSC 7501.
+    fleet_state_carry "$SOCK" "$nw" "$state"
     fleet_hub_nudge   # issue #1481
     ncp=''; i=0
     while [ "$i" -lt "$boot" ]; do

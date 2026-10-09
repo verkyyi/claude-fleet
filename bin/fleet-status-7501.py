@@ -71,6 +71,9 @@ import tty
 BIN = os.path.dirname(os.path.abspath(__file__))
 PREFIX = b"\x1b]7501;"
 PROBE_REPLY = b"\x1b]7501;?\x1b\\"
+# A repeated report re-stamps the window at most this often (issue #2537) — well
+# inside the 120 s FLEET_STATE_PRIMARY_SECS the lower sources wait out.
+REFRESH = int(os.environ.get("FLEET_7501_REFRESH_SECS") or 30)
 CARRY = 8192            # an unterminated OSC longer than this is not one
 MSG_KEEP = 200          # EPIC #2535 risk row: the words are stored cut, never logged
 
@@ -205,6 +208,11 @@ class Writer(threading.Thread):
         tmux(["set-option", "-w", "-t", self.pane, "@agent_status", js, ";",
               "set-option", "-w", "-t", self.pane, "@agent_status_ts", str(rec["ts"])])
         verb = claude_verb(rec) if rec["state"] != "exited" else None
+        # The same verb as last time is written again only when another writer has
+        # taken the window since (issue #2537): a guess made while the agent was
+        # silent past the primary window gives way to its next word.
+        if verb and verb == self.last_verb and window_src(self.pane) != "7501":
+            self.last_verb = None
         if verb and verb != self.last_verb:
             self.last_verb = verb
             env = dict(os.environ, TMUX_PANE=self.pane)
@@ -219,6 +227,16 @@ class Writer(threading.Thread):
     def close(self):
         self.q.put(None)
         self.join(timeout=5)
+
+
+def window_src(pane):
+    """The window's @claude_state_src (who wrote its state), '' when unreadable."""
+    try:
+        return subprocess.run(["tmux", "display-message", "-p", "-t", pane, "#{@claude_state_src}"],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def tmux(args):
@@ -285,6 +303,7 @@ class Reader:
         self.last = None
         self.depth = depth      # outward copies of every report (relay only; 0 = none)
         self.splices = []       # (offset into the last chunk, bytes to put there)
+        self.last_ts = 0
 
     def feed(self, data):
         """→ how many probes the chunk carried (the relay answers each)."""
@@ -302,9 +321,13 @@ class Reader:
             if rec is None or "id" in rec or rec["state"] == "clear":
                 continue    # a sub-task's entry, or clear: the window keeps its state
             key = (rec["state"], rec["kind"], rec["msg"], rec.get("progress"))
-            if key == self.last:
+            # The same word again is no news, but it IS the agent still talking
+            # (issue #2537): at most every REFRESH seconds it re-stamps the report,
+            # so @agent_status_ts stays fresh and the lower sources stay out.
+            if key == self.last and rec["ts"] - self.last_ts < REFRESH:
                 continue
             self.last = key
+            self.last_ts = rec["ts"]
             self.writer.put(rec)
         return probes
 
