@@ -27,6 +27,20 @@ export type ProgressSnapshot = {
   needsKids: string[]
 }
 
+/** The orchestrator's /qd dialog (issue #2618): what it holds while open. */
+export type QdState = {
+  /** The title as typed — kept after a failed dispatch. */
+  title: string
+  /** The repo picked; '' while the list has not landed. */
+  repo: string
+  /** The fleet's hosted repos (`fleet-mcp.py --call repos`). */
+  repos: string[]
+  /** Why the last Enter did not dispatch ('' = nothing to say). */
+  error: string
+  /** A dispatch is running: a second Enter is ignored. */
+  busy: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
     fleet: {
@@ -34,6 +48,8 @@ declare module 'claude-code' {
       progress: ProgressSnapshot | null
       /** Alert keys standing now and already toasted (`kid:issue-12`, `pr:34`). */
       alerts: string[]
+      /** The /qd dialog (issue #2618). */
+      qd: QdState
     }
   }
 }
