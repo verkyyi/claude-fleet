@@ -59,14 +59,15 @@ func (s *Server) scope(w http.ResponseWriter, r *http.Request) (store.Filter, bo
 		Branch: q.Get("branch"), Team: q.Get("team"), Session: q.Get("session"),
 		Source: q.Get("source"),
 	}
-	// A user's rows are their machine login's, across every subscription
-	// (claude-fleet#1985): the query string cannot widen that.
-	login, scoped, ok := s.userScope(w, r)
+	// A user's rows are their own (machine, login) pairs', across every
+	// subscription (claude-fleet#1985, #2514): the query string cannot widen that.
+	who, ok := s.userScope(w, r)
 	if !ok {
 		return store.Filter{}, false
 	}
-	if scoped {
-		f.OSUser, f.Account = login, store.AllAccounts
+	if who != nil {
+		f.Account = store.AllAccounts
+		who.Apply(&f)
 	}
 	return f.AlignHours(), true
 }

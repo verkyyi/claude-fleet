@@ -928,11 +928,15 @@ type UserSummary struct {
 // An unknown login returns a zeroed summary and no error: "this person has no
 // usage in this range" is an ordinary answer, and a 500 would be a lie about
 // what went wrong.
-func (s *Store) UserSummary(osUser string, start, end time.Time) (*UserSummary, error) {
+//
+// owner, when set, replaces the login match with one person's own (endpoint,
+// login) pairs (claude-fleet#2514): osUser then only names the page.
+func (s *Store) UserSummary(osUser string, owner *Owner, start, end time.Time) (*UserSummary, error) {
 	if osUser == "" {
 		return nil, fmt.Errorf("os user is required")
 	}
 	out := &UserSummary{OSUser: osUser}
+	who, whoArgs := userWhere(osUser, owner)
 
 	cs := eventCostSplit.scan()
 	q := fmt.Sprintf(`
@@ -940,19 +944,19 @@ func (s *Store) UserSummary(osUser string, start, end time.Time) (*UserSummary, 
 		       COUNT(DISTINCT cwd), COUNT(DISTINCT endpoint_id),
 		       %s
 		FROM usage_events
-		WHERE os_user = ? AND ts >= ? AND ts < ?`, tokenSumExpr, eventCostSplit.sel)
+		WHERE %s AND ts >= ? AND ts < ?`, tokenSumExpr, eventCostSplit.sel, who)
 	dest := append([]any{&out.Turns, &out.Tokens, &out.Projects, &out.Machines}, cs.dest()...)
-	if err := s.read.QueryRow(q, osUser, fmtTime(start), fmtTime(end)).Scan(dest...); err != nil {
+	if err := s.read.QueryRow(q, append(whoArgs, fmtTime(start), fmtTime(end))...).Scan(dest...); err != nil {
 		return nil, fmt.Errorf("user summary: %w", err)
 	}
 	out.Cost = cs.costs()
 
-	rows, err := s.read.Query(`
+	rows, err := s.read.Query(fmt.Sprintf(`
 		SELECT DISTINCT e.team
-		FROM usage_events u
-		JOIN endpoints e ON e.endpoint_id = u.endpoint_id
-		WHERE u.os_user = ? AND u.ts >= ? AND u.ts < ? AND e.team <> ''
-		ORDER BY e.team`, osUser, fmtTime(start), fmtTime(end))
+		FROM endpoints e
+		WHERE e.team <> '' AND e.endpoint_id IN (
+		  SELECT endpoint_id FROM usage_events WHERE %s AND ts >= ? AND ts < ?)
+		ORDER BY e.team`, who), append(whoArgs, fmtTime(start), fmtTime(end))...)
 	if err != nil {
 		return nil, fmt.Errorf("user teams: %w", err)
 	}
@@ -973,7 +977,9 @@ func (s *Store) UserSummary(osUser string, start, end time.Time) (*UserSummary, 
 // about which plan paid. Tokens are additive across subscriptions, so that
 // total is legitimate -- unlike utilization, which is never summed, and unlike
 // cost ACROSS SOURCES, which is why the cost here stays split.
-func (s *Store) UsageByUser(osUser string, d Dimension, start, end time.Time, limit int) ([]Bucket, error) {
+//
+// owner is UserSummary's: one person's own pairs in place of the login match.
+func (s *Store) UsageByUser(osUser string, owner *Owner, d Dimension, start, end time.Time, limit int) ([]Bucket, error) {
 	if osUser == "" {
 		return nil, fmt.Errorf("os user is required")
 	}
@@ -984,14 +990,15 @@ func (s *Store) UsageByUser(osUser string, d Dimension, start, end time.Time, li
 	if limit <= 0 {
 		limit = 50
 	}
+	who, whoArgs := userWhere(osUser, owner)
 
 	q := fmt.Sprintf(`
 		SELECT %s AS k, COUNT(*), %s, 0, %s
 		FROM usage_events
-		WHERE os_user = ? AND ts >= ? AND ts < ?
-		GROUP BY k ORDER BY 3 DESC LIMIT ?`, col, tokenSumExpr, eventCostSplit.sel)
+		WHERE %s AND ts >= ? AND ts < ?
+		GROUP BY k ORDER BY 3 DESC LIMIT ?`, col, tokenSumExpr, eventCostSplit.sel, who)
 
-	rows, err := s.read.Query(q, osUser, fmtTime(start), fmtTime(end), limit)
+	rows, err := s.read.Query(q, append(whoArgs, fmtTime(start), fmtTime(end), limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("usage by user %s: %w", d, err)
 	}
@@ -1024,4 +1031,13 @@ func (s *Store) UsageByUser(osUser string, d Dimension, start, end time.Time, li
 		labelTeams(out)
 	}
 	return out, nil
+}
+
+// userWhere is the person predicate on usage_events: their own pairs when
+// owner is set, else the login.
+func userWhere(osUser string, owner *Owner) (string, []any) {
+	if owner != nil {
+		return owner.where()
+	}
+	return "os_user = ?", []any{osUser}
 }

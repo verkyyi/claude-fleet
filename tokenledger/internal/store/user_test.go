@@ -39,7 +39,7 @@ func TestUserSummary(t *testing.T) {
 	s := newStore(t)
 	start, end := seedUsers(t, s)
 
-	got, err := s.UserSummary("alice", start, end)
+	got, err := s.UserSummary("alice", nil, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestUserSummary(t *testing.T) {
 func TestUserSummary_UnknownLoginIsEmptyNotAnError(t *testing.T) {
 	s := newStore(t)
 	start, end := seedUsers(t, s)
-	got, err := s.UserSummary("nobody", start, end)
+	got, err := s.UserSummary("nobody", nil, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestUsageByUser_ScopesToOneLogin(t *testing.T) {
 	s := newStore(t)
 	start, end := seedUsers(t, s)
 
-	buckets, err := s.UsageByUser("alice", ByProject, start, end, 50)
+	buckets, err := s.UsageByUser("alice", nil, ByProject, start, end, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,11 +101,11 @@ func TestUserSummary_AgreesWithUsageByUser(t *testing.T) {
 	s := newStore(t)
 	start, end := seedUsers(t, s)
 
-	sum, err := s.UserSummary("alice", start, end)
+	sum, err := s.UserSummary("alice", nil, start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
-	buckets, err := s.UsageByUser("alice", ByProject, start, end, 1000)
+	buckets, err := s.UsageByUser("alice", nil, ByProject, start, end, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
