@@ -1590,7 +1590,7 @@ solo)
   [ -n "${4:-}" ] && { SESS=$4; STAGE="$4-stage"; }
   case "$snode" in ''|*[!A-Za-z0-9._-]*) note 'solo: <machine> <worker id>'; exit 2 ;; esac
   case "$swid" in ''|*[!A-Za-z0-9._/@:-]*) note 'solo: <machine> <worker id>'; exit 2 ;; esac
-  T has-session -t "=$SESS" 2>/dev/null || { note "客户端没在运行（$SESS）"; exit 1; }
+  T has-session -t "=$SESS" 2>/dev/null || { note "客户端没在运行（${SESS}）"; exit 1; }
   [ -f "$CACHE/tmux-stage.conf" ] || { note "缺 $CACHE/tmux-stage.conf"; exit 1; }
   SOLO="$SESS-solo-$$"
   SB=$BIN; [ -x "$CACHE/bin/fleet-remote-view.sh" ] && SB="$CACHE/bin"

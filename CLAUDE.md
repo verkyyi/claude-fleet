@@ -454,7 +454,11 @@ Do not install from memory: read the doc and work from it.
   a deliberate exception marks its line `# bash32-ok: <why>`. Where a bash 3.x
   exists it also `bash -n`s every script, which nets the SYNTAX half of the same
   family — a `case` inside `$(…)` must write its pattern `(pat)`, or 3.2's
-  command-substitution scanner dies on the `;;`.
+  command-substitution scanner dies on the `;;`. Same family, same test (issue #2727): a `$name`
+  glued to a non-ASCII byte (`$x，` `$x）` `$x→`) — bash 3.2 in a UTF-8 locale reads
+  the bytes into the NAME, so `set -u` dies on `x\357: unbound variable` and without
+  it the value is silently empty. Write `${x}，`; the lint reds on any such `$name`
+  in `bin/` (comments and `\$x` skipped, `# bash32-ok:` excepts).
 - **A `local` never takes a zsh special parameter's name** (issue #1633). Claude
   Code's Bash tool runs the login shell — zsh on the operator's Mac — so a skill's
   `source fleet-lib.sh` runs every function IN ZSH, where `path` is tied to

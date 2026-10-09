@@ -258,7 +258,7 @@ before=$(hits routes_hits)
 out=$(FLEET_HUB_TOKEN=tok-1 "$BIN/fleet" connect --hub "$HUB" --verbose --print 2>"$WORK/err3"); rc=$?
 if [ "$rc" = 0 ] && [ "$(hits routes_hits)" = "$before" ] && grep -q '秒前测出的 tailnet' "$WORK/err3" && [[ "$out" != *ProxyCommand* ]]; then
   ok "fresh cache: re-checked tailnet with one handshake, no route-list fetch"
-else bad "cache reuse: rc=$rc hits $before→$(hits routes_hits) $(cat "$WORK/err3")"; fi
+else bad "cache reuse: rc=$rc hits ${before}→$(hits routes_hits) $(cat "$WORK/err3")"; fi
 
 # ── 3b — FLEET_CONNECT_LOGIN (issue #2430): the session's own login, cached or
 #         not, and the route file says which login the master was opened as ─
@@ -283,7 +283,7 @@ echo '{"tailnet_up": true, "relay_ok": true}' > "$WORK/state"
 before=$(hits routes_hits)
 FLEET_CONNECT_CACHE_SECS=0 FLEET_HUB_TOKEN=tok-1 "$BIN/fleet" connect --hub "$HUB" --print >/dev/null 2>"$WORK/err5"; rc=$?
 [ "$rc" = 0 ] && [ "$(hits routes_hits)" = $((before + 1)) ] && ok "expired cache: route list fetched and measured again" \
-  || bad "expiry: rc=$rc hits $before→$(hits routes_hits) $(cat "$WORK/err5")"
+  || bad "expiry: rc=$rc hits ${before}→$(hits routes_hits) $(cat "$WORK/err5")"
 
 # ── 6 — a certificate signs the route-list request; hub.json gives the URL ──
 if command -v ssh-keygen >/dev/null 2>&1; then

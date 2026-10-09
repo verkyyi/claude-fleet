@@ -369,7 +369,7 @@ stage() {
   # the installer: the hub's (stable's own, through it) or stable's on GitHub
   if [ -n "$HUB" ]; then src="$HUB/install"; else src="$RAW/$sha/bin/fleet-install.sh"; fi
   if ! curl -fsSL --max-time 30 "$src" -o "$inst" 2>"$lock/err"; then
-    note "取不到 $src（$(tr -d '\n' <"$lock/err" | cut -c1-80)）"; rm -rf "$lock"; return 1
+    note "取不到 ${src}（$(tr -d '\n' <"$lock/err" | cut -c1-80)）"; rm -rf "$lock"; return 1
   fi
   [ "$(head -c 2 "$inst")" = '#!' ] || { note "$src 返回的不是安装脚本"; rm -rf "$lock"; return 1; }
   # never asks (a stage runs in the background), never 承载, never a node: it

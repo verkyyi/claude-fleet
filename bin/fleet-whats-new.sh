@@ -185,7 +185,7 @@ case "${1:-}" in
       echo "fleet-whats-new: no version to compare (this session's @agent_ver / the expected ver) — pass <old> <new>" >&2
       exit 1
     fi
-    if [ "$old" = "$new" ]; then echo "fleet 是最新的（$new），这个会话启动后没有换过版。"; exit 1; fi
+    if [ "$old" = "$new" ]; then echo "fleet 是最新的（${new}），这个会话启动后没有换过版。"; exit 1; fi
     summarize full "$old" "$new"; exit 0 ;;
   -h|--help|'')
     sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; [ -n "${1:-}" ] && exit 0; exit 2 ;;

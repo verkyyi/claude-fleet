@@ -52,10 +52,10 @@ case "$act" in
     sess=$(tmux display-message -p -t "$t" "$FLEET_SESSION_FMT" 2>/dev/null)
     repo=$(fleet_window_repo "$sess" "$t" 2>/dev/null)
     if [ -z "$repo" ]; then fleet_load_conf "$sess" 2>/dev/null; repo="${FLEET_REPO:-}"; fi
-    [ -n "$repo" ] || { say "#$iss：认不出它属于哪个仓库"; exit 0; }
+    [ -n "$repo" ] || { say "#${iss}：认不出它属于哪个仓库"; exit 0; }
     url="https://github.com/$repo/issues/$iss"
     if bash "$BIN/fleet-open.sh" "$url" >/dev/null 2>&1; then say "已在你的电脑上打开 #$iss"
-    else say "#$iss：$url"; fi ;;
+    else say "#${iss}：$url"; fi ;;
   *) echo "fleet-human-menu.sh: unknown action $act" >&2; exit 2 ;;
 esac
 exit 0

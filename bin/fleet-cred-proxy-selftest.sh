@@ -341,7 +341,7 @@ jerr() { python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("error",{});
 if [ "$(jf "$j" _status)" = 403 ] && [ "$(jf "$jx" _status)" = 403 ] && [ "$n0" = "$n1" ] \
    && case "$(jerr "$j")" in "person_budget_exceeded cred-proxy: 已达个人额度"*) true ;; *) false ;; esac; then
   pass "J over budget → 403 person_budget_exceeded「已达个人额度…」, nothing sent upstream"
-else fail "J over: $j / $jx (fwd $n0→$n1)"; fi
+else fail "J over: $j / $jx (fwd ${n0}→$n1)"; fi
 rm -f "$SB/usage.total"      # the window passes
 bwait '"over": false' || fail "J the proxy never learned the window passed"
 j=$(R /v1/messages "$TJ")

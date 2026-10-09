@@ -94,6 +94,36 @@ $nm
     done
 }
 
+# lint_utf8 <file> — issue #2727: print "<file>:<line>" per `$name` that a non-ASCII
+# byte follows directly (`$x，` `$x）` `$x→`). bash 3.2 in a UTF-8 locale reads those
+# bytes as part of the NAME: under `set -u` it dies (`x\357: unbound variable`),
+# without it the value silently expands to nothing. Write `${x}，`. Comment lines,
+# an escaped `\$x` and a `# bash32-ok:` line are skipped; LC_ALL=C so the bytes
+# are bytes on every host.
+lint_utf8() {
+  LC_ALL=C sed -E \
+    -e '/bash32-ok/s/.*//' \
+    -e 's/^[[:space:]]*#.*$//' \
+    -e 's/\\\$//g' \
+    "$1" 2>/dev/null \
+  | LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~[:space:]]' 2>/dev/null \
+  | LC_ALL=C sed -E "s|^([0-9]+):.*|$1:\\1|"
+}
+
+# bash_scripts — every bash/sh script in bin/: the *.sh files plus an extensionless
+# one whose shebang names a shell (bin/fleet).
+bash_scripts() {
+  local f
+  for f in "$BIN"/*; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in
+      *.sh) printf '%s\n' "$f" ;;
+      *.*) ;;
+      *) head -1 "$f" 2>/dev/null | grep -qE '^#!.*[/ ](ba)?sh([[:space:]]|$)' && printf '%s\n' "$f" ;;
+    esac
+  done
+}
+
 # --- PART 1: the rule holds across bin/ ----------------------------------------
 # This file is excluded from its own scan: PART 3's fixtures are deliberately
 # unsafe shapes, written as heredocs, and a `# bash32-ok` marker inside one would
@@ -103,6 +133,14 @@ hits=$(for f in "$BIN"/*.sh; do
   lint_file "$f"
 done)
 ok; [ -z "$hits" ] || fail "bare expansion of an empty-able array (fatal on bash 3.2) — use \${a[@]+\"\${a[@]}\"}:
+$hits"
+
+# PART 1b — issue #2727: no `$name` glued to a non-ASCII byte anywhere in bin/.
+hits=$(bash_scripts | while read -r f; do
+  [ "${f##*/}" = bash32-array-selftest.sh ] && continue
+  lint_utf8 "$f"
+done)
+ok; [ -z "$hits" ] || fail "\$name followed directly by a non-ASCII byte (bash 3.2 + UTF-8 reads it into the name) — write \${name}:
 $hits"
 
 # --- PART 2: the claim, on a real bash 3.2 -------------------------------------
@@ -121,6 +159,19 @@ if [ -n "$B32" ]; then
   # the safe form must still be faithful when the array is POPULATED, spaces and all
   ok; [ "$("$B32" -c 'set -u; a=(p "q r"); printf "[%s]" ${a[@]+"${a[@]}"}')" = '[p][q r]' ] \
     || fail "\${a[@]+\"\${a[@]}\"} lost the element split/quoting on bash 3.2"
+
+  # issue #2727 — `$x，` under a UTF-8 locale: the full-width comma's bytes join the
+  # name. Only where such a locale exists (a C-only box cannot show it).
+  U8=""
+  for l in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
+    [ "$(LC_ALL=$l "$B32" -c 'printf %s "${#1}"' _ '，' 2>/dev/null)" = 1 ] && { U8=$l; break; }
+  done
+  if [ -n "$U8" ]; then
+    ok; LC_ALL=$U8 "$B32" -c 'set -u; x=1; printf "%s" "$x，"' >/dev/null 2>&1 \
+      && fail "bash 3.2 ($B32, $U8) read \$x， as \$x — the premise of the #2727 lint is gone"
+    ok; [ "$(LC_ALL=$U8 "$B32" -c 'set -u; x=1; printf "%s" "${x}，"')" = '1，' ] \
+      || fail "bash 3.2 ($B32, $U8) mangled \${x}， — the form the #2727 lint asks for"
+  fi
 
   # PART 2b — every script in bin/ must PARSE on 3.2. Cheap (~1s), and it nets the
   # bash-3.2 landmines that are syntax rather than semantics; `bash -n` on the CI's
@@ -169,6 +220,9 @@ a+=(x)
 for x in "${a[@]}"; do :; done   # bash32-ok: a is unconditionally appended to above
 SH
 
+printf '#!/bin/bash\n# a comment: $x，\necho "$y，"\necho "\\$z，"\necho "${w}，"\necho "$v，"  # bash32-ok: fixture\necho "$u ，" "$t→"\n' > "$WORK/utf8.sh"
+ok; [ "$(lint_utf8 "$WORK/utf8.sh" | tr '\n' ' ')" = "$WORK/utf8.sh:3 $WORK/utf8.sh:7 " ] \
+  || fail "lint_utf8 got: $(lint_utf8 "$WORK/utf8.sh" | tr '\n' ' ') (want lines 3 and 7)"
 ok; [ "$(lint_file "$WORK/bad-loop.sh")"   = "$WORK/bad-loop.sh:3: a" ]      || fail "lint missed a bare \${a[@]} loop"
 ok; [ "$(lint_file "$WORK/bad-string.sh")" = "$WORK/bad-string.sh:3: KEYS" ] || fail "lint missed a bare \${KEYS[*]} in a string"
 ok; [ "$(lint_file "$WORK/bad-read.sh")"   = "$WORK/bad-read.sh:3: idxs" ]   || fail "lint missed a bare expansion of a \`read -a\` array"

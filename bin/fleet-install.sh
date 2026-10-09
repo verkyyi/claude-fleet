@@ -650,8 +650,8 @@ vendor_tmux() {
     _vl=$(awk -v p="$_vp" '$1 == p { print $2, $3; exit }' "$ROOT/conf/vendor-tmux.lock" 2>/dev/null)
     [ -n "$_vl" ] || return 1
     _vs=${_vl%% *} _vu=${_vl#* }
-    say "tmux: 下载 tmux 的静态版（$_vp）…"
-    download "$_vu" "$tmp/vendor-tmux.tgz" ' tmux' --max-time 120 || { say "tmux: 静态版没下成（$_vu）"; return 1; }
+    say "tmux: 下载 tmux 的静态版（${_vp}）…"
+    download "$_vu" "$tmp/vendor-tmux.tgz" ' tmux' --max-time 120 || { say "tmux: 静态版没下成（${_vu}）"; return 1; }
     [ "$(sha256 "$tmp/vendor-tmux.tgz")" = "$_vs" ] || { say "tmux: 静态版校验不符，不用它"; return 1; }
     mkdir -p "$tmp/vx"
     tar -xzf "$tmp/vendor-tmux.tgz" -C "$tmp/vx" tmux 2>/dev/null && [ -f "$tmp/vx/tmux" ] || return 1
