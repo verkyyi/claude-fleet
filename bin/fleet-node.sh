@@ -362,7 +362,7 @@ cmd_status() {
   [ -f "$CONF/credsep.json" ] && alog="sudo tail /var/log/fleet-cred/$(id -un)/agent.log（凭据已隔离，日志归 root）"
   case "$st" in
     online) echo "✓ $label/$(id -un) 连着 ${hub}：在线" ;;
-    *) echo "✗ $label/$(id -un) 连着 ${hub}，但入口看到的状态是「${st:-?}」— 看 $alog，或重跑：fleet node join"
+    *) echo "✗ $label/$(id -un) 连着 ${hub}，但入口看到的状态是「${st:-?}」— 看 ${alog}，或重跑：fleet node join"
        return 1 ;;
   esac
 }

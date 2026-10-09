@@ -1023,7 +1023,7 @@ undo_down() {
   m=$(for m in "$FLEET_CONF_DIR/fleets/$sess"/restore.map.down-*; do
          case "$m" in (*.disarmed) ;; (*) [ -f "$m" ] && printf '%s\n' "$m" ;; esac
        done | sort | tail -1)
-  [ -n "$m" ] || { echo "fleet-restore: --undo: fleet「$sess」没有可撤销的 fleet down（fleets/$sess/restore.map.down-*）" >&2; return 1; }
+  [ -n "$m" ] || { echo "fleet-restore: --undo: fleet「${sess}」没有可撤销的 fleet down（fleets/$sess/restore.map.down-*）" >&2; return 1; }
   rm -f "$FLEET_CONF_DIR/fleets/$sess/restore.down"
   if [ -f "$m.disarmed" ]; then mkdir -p "$RDIR"; : > "$ARM"; rm -f "$RDIR/autorestore.off"; fi
   log "undo: fleet down of $sess ← ${m##*/}"

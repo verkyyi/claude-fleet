@@ -226,7 +226,7 @@ fleet_in h1 node join
 if [ "$(cat "$SB/rc")" = 0 ] && [ "$(hubstate starts)" = "$starts" ] && grep -q "^✓ 已登记在 $HUB" "$SB/out" \
    && ! grep -q 用手机扫码 "$SB/out"; then
   ok "B a rerun does not scan again"
-else bad "B rc=$(cat "$SB/rc") starts $starts→$(hubstate starts): $(cat "$SB/out")"; fi
+else bad "B rc=$(cat "$SB/rc") starts ${starts}→$(hubstate starts): $(cat "$SB/out")"; fi
 
 # ── C. resume ────────────────────────────────────────────────────────────
 touch "$SB/badsha"
@@ -240,7 +240,7 @@ starts=$(hubstate starts)
 fleet_in h2 node join
 if [ "$(cat "$SB/rc")" = 0 ] && [ "$(hubstate starts)" = "$starts" ] && grep -q '^✓ 已上线' "$SB/out"; then
   ok "C the same command again finishes it without a new scan"
-else bad "C rerun rc=$(cat "$SB/rc") starts $starts→$(hubstate starts): $(cat "$SB/out")"; fi
+else bad "C rerun rc=$(cat "$SB/rc") starts ${starts}→$(hubstate starts): $(cat "$SB/out")"; fi
 
 # ── D. denied ────────────────────────────────────────────────────────────
 touch "$SB/deny"

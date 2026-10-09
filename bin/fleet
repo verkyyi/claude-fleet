@@ -160,7 +160,7 @@ case $cmd in
   '')
     client ;;
   -*)
-    echo "fleet · 不认识的选项 $cmd；选路调试用 fleet connect $* （fleet --help）" >&2
+    echo "fleet · 不认识的选项 ${cmd}；选路调试用 fleet connect $* （fleet --help）" >&2
     exit 2 ;;
 esac
 # `fleet doctor` with only the client here: no fleet-doctor.sh beside — the

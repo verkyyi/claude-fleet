@@ -2149,7 +2149,7 @@ while IFS= read -r _ep_f; do
   case "$_ep_st" in
     OPEN) warn epic "批次 #$_ep_n 没有人在跑：它的心跳 ${_ep_m} 分钟前就停了（第 ${_ep_tick:--} 拍），EPIC 还开着 — 在 hub 里重新运行 /fleet-epic-run $_ep_n" ;;
     '')   info epic "批次 #${_ep_n:-?} 的心跳 ${_ep_m} 分钟前停了，EPIC 是否还开着读不到" ;;
-    *)    pass epic "批次 #$_ep_n 已结束（EPIC $_ep_st）" ;;
+    *)    pass epic "批次 #$_ep_n 已结束（EPIC ${_ep_st}）" ;;
   esac
 done <<EP_MARKS
 $(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_epic_running_marks' _ "$(dirname "$0")" 2>/dev/null)

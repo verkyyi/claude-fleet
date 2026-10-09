@@ -1371,7 +1371,7 @@ drill_node_menu() {
   hpty "$BREAK_SOCK" hm:issue-1 "$out" '\x1b[<2;20;10M' '\x1b[<2;20;10m'
   grep -aq 'Kill\|Respawn' "$out" && { WHY="the right-click menu still offers Kill / Respawn"; return 1; }
   for item in 复制这一屏 它在哪台 给它发消息 看它的单; do
-    grep -aq "$item" "$out" || { WHY="the right-click menu has no 「$item」 (did it open at all?)"; return 1; }
+    grep -aq "$item" "$out" || { WHY="the right-click menu has no 「${item}」 (did it open at all?)"; return 1; }
   done
   # … and no other right-click (Alt, the status line) deletes either
   nt list-keys -T root | grep -E 'MouseDown3' | grep -Eq 'kill-|respawn-' \
