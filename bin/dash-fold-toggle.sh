@@ -107,7 +107,7 @@ if [ "${target#hdr:}" != "$target" ]; then
   [ "$RMANY" = 1 ] || [ "$hkey" = pin ] || [ "$hkey" = ended ] || exit 0
   case "$hkey" in
     none|pin) slug=$hkey ;;
-    ended) slug=ended:open ;;
+    ended) slug="ended:open" ;;
     *)    slug=$(fleet_slug "$hkey")
           case "$RGRPMAP" in *$'\n'"$slug"$'\t'*) ;; *) exit 0 ;; esac ;;
   esac

@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1010  # `done` here is a state word handed to win(), not the keyword
 # dash-ended-group-selftest.sh — the 已结束 group (issue #2565, EPIC #2563 C2).
 #
 # The row producer (bin/tmux-dashboard-rows.sh — the sidebar AND the hub list)
@@ -74,7 +75,7 @@ opt()   { tmux show-option -t '=alpha:' -qv @repo_fold; }
 fold()  { FLEET_SESSION=alpha TMUX=/fake,1,0 bash "$FOLD" "$@" 2>&1 </dev/null; }
 
 # --- A. folded by default -------------------------------------------------------
-s=$(side); n=$(names)
+n=$(names)
 has   "A: the foot is the folded 已结束 heading with its count" "$n" "▸ 已结束 (2)"
 hasnt "A: the done no-issue row is off the list" "$n" "donehome"
 hasnt "A: …and so is the exited one" "$n" "gone"
