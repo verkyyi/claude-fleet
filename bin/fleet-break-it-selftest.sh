@@ -88,6 +88,8 @@
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
 #   login-browser-silent                            bin/fleet-login.py (scan: open_browser, KeyWatch, nudge, timeout)
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
+#   drill-person-no-machine                         tokenledger/internal/api fleet_opening.go + fleet_drill.go
+#                                                   (accountStateOf, closeDrillLogins; go test, when a toolchain is here)
 #   spare-login-empty                               tokenledger/internal/api fleet_spare.go + fleet_accounts.go
 #                                                   (claimSpare, replenishSpares; go test, when a toolchain is here)
 #   release-tampered                                tokenledger/internal/api fleet_release.go (ReleaseStore) +
@@ -4310,6 +4312,39 @@ FAKE
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("numStartups") == 7 and "/elsewhere" in d["projects"] and len(d["projects"]) == 2 else 1)' "$d/home/.claude.json" \
     || { WHY="trusted node: wrote more than \$HOME, or lost a key: $(cat "$d/home/.claude.json")"; return 1; }
   WHAT="可信节点上 @norepo 会话开在 \$HOME 不再停在信任框（只多写 \$HOME 一项）；不可信节点同样开，~/.claude.json 一字不差"
+}
+
+# ---- drill-person-no-machine (#2549): a drill person (`fleet drill invite
+# --host <m>`) confirms its scan — its own computer is a bare client login, so
+# before it got 「No fleet on any of your machines」. It must be opened a login
+# on another machine (the doors say 「正在开」), and its self-delete / expiry
+# must remove that login before the person goes.
+drill_drill_person_no_machine() {
+  CAP=120; local t0 out rc tests f
+  tests='TestDrillFirstSessionGetsAMachine TestDrillGoesOnlyAfterItsLoginIsRemoved'
+  f="$ROOT/tokenledger/internal/api/fleet_drill_test.go"
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
+  done
+  grep -q 'drill != nil && strings.EqualFold(a.Hostname, drill.Hostname)' "$ROOT/tokenledger/internal/api/fleet_opening.go" \
+    || { WHY="accountStateOf no longer sets a drill's own computer apart"; return 1; }
+  grep -q 'closeDrillLogins(d, now)' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
+    || { WHY="DELETE /v1/self no longer removes the login opened for the drill first"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='演练身份扫码即在另一台最闲的机器开登录、入口说「正在开」、开好后不再开第二个；删自己 / 到期先收掉那个登录（202 removing），收到已移除才删人（go test 两条）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；两条测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：两条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
 }
 
 # ---- spare-login-empty (#2263, EPIC #2259 C4): a newcomer signs in while no

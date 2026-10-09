@@ -752,7 +752,14 @@ hub_self_delete() {
       if [ "$(hub_code "$resp")" = 200 ]; then printf 'by its certificate: %s' "$(hub_body "$resp")"; return 0; fi
     fi
   fi
+  local t0=$SECONDS
   resp=$(hub_json DELETE /v1/self "$(printf '{"approve_code":"%s"}' "$INVITE")")
+  # 202 removing: the hub is closing the login it opened for the drill
+  # person's first session (#2549) — the person goes once that is gone.
+  while [ "$(hub_code "$resp")" = 202 ] && [ $((SECONDS - t0)) -lt "$STEP_SECS" ]; do
+    sleep "$POLL"
+    resp=$(hub_json DELETE /v1/self "$(printf '{"approve_code":"%s"}' "$INVITE")")
+  done
   if [ "$(hub_code "$resp")" = 200 ]; then printf 'by the approve code: %s' "$(hub_body "$resp")"; return 0; fi
   printf 'HTTP %s %s' "$(hub_code "$resp")" "$(hub_body "$resp" | head -c 200)"
   return 1

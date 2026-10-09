@@ -293,6 +293,10 @@ func (s *Server) approveWithCode(r *http.Request, userCode, approveCode string, 
 	}
 	if err == nil {
 		log.Printf("fleet: drill person %s confirmed login %s by approve code", d.PrincipalID, userCode)
+		// Its first session needs a machine of its own (claude-fleet#2549):
+		// the same placement a newcomer's first look runs, started now so
+		// the client meets 「正在为你开机器」, not 「No fleet」.
+		s.accountStateOf(d.PrincipalID, now)
 	}
 	return d.PrincipalID, resp, purpose, err
 }
@@ -350,11 +354,18 @@ func (s *Server) handleSelf(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, "a connection certificate or the drill's approve code is required")
 		return
 	}
-	if d, err := s.Store.Drill(pid); err != nil {
+	d, err := s.Store.Drill(pid)
+	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	} else if d == nil {
 		httpError(w, http.StatusForbidden, "only a drill person can delete itself")
+		return
+	}
+	if left := s.closeDrillLogins(d, now); len(left) > 0 {
+		// The login the hub opened for it is still on a machine: the person
+		// stays until that is removed — ask again (or the sweep finishes it).
+		writeJSON(w, http.StatusAccepted, map[string]any{"status": "removing", "person_id": pid, "logins": left})
 		return
 	}
 	out, err := s.Store.DeleteDrill(pid, pid, now)
@@ -377,6 +388,10 @@ func (s *Server) SweepDrills(now time.Time) {
 		return
 	}
 	for _, d := range gone {
+		if left := s.closeDrillLogins(&d, now); len(left) > 0 {
+			log.Printf("fleet: drill person %s expired — removing %s first", d.PrincipalID, strings.Join(left, ", "))
+			continue
+		}
 		out, err := s.Store.DeleteDrill(d.PrincipalID, "expired", now)
 		if err != nil {
 			log.Printf("fleet: drill sweep: delete %s: %v", d.PrincipalID, err)
@@ -384,4 +399,71 @@ func (s *Server) SweepDrills(now time.Time) {
 		}
 		log.Printf("fleet: drill person %s expired — deleted with %d device(s), node(s) %v", d.PrincipalID, out.Devices, out.Nodes)
 	}
+}
+
+// drillCloseGiveUp is how long a drill waits on the removal of a login the
+// hub opened for it before it is deleted anyway (the machine gone, its admin
+// node never back): the login is then the operator's, and the log says so.
+// A variable so tests can move it.
+var drillCloseGiveUp = time.Hour
+
+// closeDrillLogins removes every login the hub opened for drill person d
+// (claude-fleet#2549: its first session's machine) — a real OS login on a
+// machine, which deleting the person's rows would leave behind with nobody
+// to close it. It queues the removal of each one still there and answers
+// what is still on a machine as login@machine; empty means the person can
+// go. Its own computer (the bare login `fleet drill invite` named) is the
+// drill script's to remove, never the hub's.
+func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) []string {
+	accts, err := s.Store.FleetAccounts(d.PrincipalID)
+	if err != nil {
+		log.Printf("fleet: drill %s: accounts: %v", d.PrincipalID, err)
+		return []string{"(its accounts could not be read)"}
+	}
+	var left []string
+	queued := false
+	for _, a := range accts {
+		if strings.EqualFold(a.Hostname, d.Hostname) && a.Login == d.Login {
+			continue
+		}
+		where := a.Login + "@" + a.Hostname
+		switch a.State {
+		case store.AccountRemoved:
+			continue // gone from the machine: dropped with the person
+		case store.AccountPending:
+			// Never sent: forgotten now, before the dispatcher can send it.
+			// One it sent in between refuses, and is waited on as creating.
+			if err := s.Store.ForgetPrincipal(a.PrincipalID, a.Hostname); err == nil {
+				continue
+			}
+		case store.AccountActive:
+			if err := s.Store.RequestAccountRemoval(a.PrincipalID, a.Hostname, now); err != nil {
+				log.Printf("fleet: drill %s: queue removal of %s: %v", d.PrincipalID, where, err)
+			} else {
+				log.Printf("fleet: drill %s: removing the login opened for it, %s", d.PrincipalID, where)
+				queued = true
+			}
+		case store.AccountCreating, store.AccountRemovePending, store.AccountRemoving, store.AccountUnknown:
+			if a.State == store.AccountUnknown && a.Op != control.AccountRemove {
+				// A create nobody heard back on: the name may be someone
+				// else's login there — never removed on a guess.
+				log.Printf("fleet: drill %s: %s was opened with no answer — left for the operator", d.PrincipalID, where)
+				continue
+			}
+			if now.Sub(a.RequestedAt) > drillCloseGiveUp {
+				log.Printf("fleet: drill %s: %s still %s after %s — left for the operator", d.PrincipalID, where, a.State, drillCloseGiveUp)
+				continue
+			}
+		default:
+			// failed: a create that failed (perhaps on a login that was
+			// already there — someone else's) or a remove that did.
+			log.Printf("fleet: drill %s: %s %s (%s) — left for the operator", d.PrincipalID, where, a.State, a.Detail)
+			continue
+		}
+		left = append(left, where)
+	}
+	if queued {
+		go s.dispatchAccounts()
+	}
+	return left
 }

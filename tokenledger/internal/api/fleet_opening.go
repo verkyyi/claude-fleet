@@ -50,7 +50,14 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 	if err != nil {
 		return nil
 	}
-	if len(accts) == 0 && (s.autoAssignOn() || s.invitedPrincipal(pid)) {
+	// A drill person's own computer (claude-fleet#2549) is the bare login
+	// `fleet drill invite` named: it is where the client runs, never where a
+	// session can open, so it counts for nothing here.
+	drill, _ := s.Store.Drill(pid)
+	own := func(a store.FleetAccount) bool {
+		return drill != nil && strings.EqualFold(a.Hostname, drill.Hostname) && a.Login == drill.Login
+	}
+	if !hasMachine(accts, own) && (s.autoAssignOn() || s.invitedPrincipal(pid)) {
 		// Nothing queued yet — least-busy found no fit machine at the
 		// sign-in, or the setting came on after it: the same idempotent
 		// placement the sign-in runs, once more, so the client's next look
@@ -65,7 +72,7 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 	var opening, failed *store.FleetAccount
 	for i := range accts {
 		a := &accts[i]
-		if !a.Managed() {
+		if !a.Managed() || own(*a) {
 			continue // a computer the person logged in on, not a machine opened for them (#2212)
 		}
 		switch a.State {
@@ -92,4 +99,17 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 		return &AccountState{State: "failed", Machine: failed.Hostname, Login: failed.Login, Ask: ask}
 	}
 	return &AccountState{State: "none", Ask: ask}
+}
+
+// hasMachine says accts holds a row that is a machine for the person: any
+// account but the ones own() names (a drill's own computer). An account in
+// any state counts — one being opened or removed is not a reason to queue
+// another.
+func hasMachine(accts []store.FleetAccount, own func(store.FleetAccount) bool) bool {
+	for _, a := range accts {
+		if !own(a) {
+			return true
+		}
+	}
+	return false
 }
