@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -108,11 +107,7 @@ func newGitHubHarness(t *testing.T, admins ...string) *ghHarness {
 // /mcp) before its routes are mounted.
 func newGitHubHarnessWith(t *testing.T, more func(*Server), admins ...string) *ghHarness {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := openTestStore(t)
 	gh := newFakeGHAuth(t)
 	srv := &Server{Store: st, Pricing: pricing.Default(), ViewerToken: viewerToken, LiveStore: NewLive(),
 		GitHub: &GitHubAuth{ClientID: "Iv1.test", ClientSecret: "shh", Admins: admins,

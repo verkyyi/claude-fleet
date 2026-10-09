@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -336,11 +335,7 @@ func setHubSetting(t *testing.T, s *Server, key, value string) {
 // the defaults, and the start's copy writes nothing for them — the
 // database is the only source.
 func TestMigrateLegacySettings_OnlyTheSpotImageIsLeft(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := openTestStore(t)
 	if err := st.EnsureNodes(); err != nil {
 		t.Fatal(err)
 	}
@@ -364,11 +359,7 @@ func TestMigrateLegacySettings_OnlyTheSpotImageIsLeft(t *testing.T) {
 // A non-GitHub principal's machine login lives in the settings; "none" takes
 // them out, and a login is someone's only while a stored record says so.
 func TestMachineLoginSetting(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := openTestStore(t)
 	if err := st.EnsureNodes(); err != nil {
 		t.Fatal(err)
 	}
