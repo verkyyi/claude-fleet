@@ -688,3 +688,6 @@ FLEET_HUBSESS_GUARD                env handoff: the lock parent's pid — the --
 FLEET_DOCTOR_BASELINE              env handoff: fleet-install-sync.sh runs the NEW version's doctor before the switch with it = 1 (the one-ruler baseline, #2655)
 FLEET_DOCTOR_SINCE                 env handoff: fleet-install-sync.sh's doctor after a switch — the switch epoch; the windowed rows (state's sleep judgments, hub-sessions' cache age) count only samples from then on (#2655)
 FLEET_INSTALL_SETTLE_SECS          knob: internal budget, seconds install-sync waits after a switch for a sleep tick before its doctor runs (90, #2655)
+FLEET_INSTALLS_HOMES               seam: the homes root fleet-installs.sh looks into (default /Users, /home) (#2692)
+FLEET_INSTALLS_STABLE              seam: the stable commit fleet-installs.sh judges against (default the live install's refs/tags/stable) (#2692)
+FLEET_INSTALLS_SUDO                seam: the privilege prefix fleet-installs.sh reads another login's home with (default `sudo -n`; empty = none) (#2692)
