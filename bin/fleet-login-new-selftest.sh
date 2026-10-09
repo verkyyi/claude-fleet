@@ -661,7 +661,8 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   contains "J letter: swap — ssh-copy-id the new key over the temp one" "$W" "ssh-copy-id -i ~/.ssh/box-wen-own.pub -o IdentityFile=~/.ssh/box-wen -p 22022 wen@ssh.example.test"
   contains "J letter: swap — drop the temp line" "$W" "grep -v ' wen-onboard-temp\$' ~/.ssh/authorized_keys"
   contains "J letter: guide" "$W" "fleet guide"
-  contains "J letter: ssh opens the client (#1711)" "$W" "ssh box 后自动打开 fleet"
+  contains "J letter: fleet on your own computer (#2702)" "$W" "fleet 在你自己的电脑上用"
+  not_contains "J letter: ssh no longer opens the client (#2702)" "$W" "后自动打开 fleet"
   # no `cf` word anywhere outside the key material (base64 can spell one)
   not_contains "J letter: no cf left (#1711)" "$(printf '%s\n' "$W" | sed '/BEGIN/,/END/d' | grep -v 'ssh-ed25519\|ssh-rsa' | grep -w cf)" cf
   contains "J letter: codex step" "$W" "ccquota codex login personal --device-auth"
