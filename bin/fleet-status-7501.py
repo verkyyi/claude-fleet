@@ -19,7 +19,12 @@ agent that sees the probe IN the stream and puts the answer on the agent's input
 before tmux's DA1 can reach it — and, since every byte passes it anyway, reads the
 status there too. Nothing is stripped or added on the way to the pane.
 
-    fleet-status-7501.py relay -- <cmd> [args…]   run <cmd> under the relay (the claude launcher)
+    fleet-status-7501.py relay [--replay N] -- <cmd> [args…]
+                                                  run <cmd> under the relay (the claude launcher);
+                                                  --replay N: every report also goes on to the
+                                                  person's terminal, wrapped for 1..N tmux (#2539)
+    fleet-status-7501.py replay [N]               the node's switch / attach hook: each client's
+                                                  current window's state (or clear) to its tty
     fleet-status-7501.py pipe                     stdin = a pane's output (`pipe-pane -O`)
     fleet-status-7501.py decode <payload>         the JSON one payload maps to (debug)
 
@@ -32,6 +37,14 @@ What it writes, on the window of $TMUX_PANE (convention 1 / 2 of EPIC #2535):
                     done/idle→done, error→exited; clear keeps what was there.
 When the agent exits the relay writes state=exited (rc) on @agent_status only —
 the wrapper's own `exited` stamp is the window's.
+
+And outward (issue #2539, EPIC #2535 C4): with --replay N each report also goes
+on to the person's terminal — Ghostty shows it on the tab — as tmux passthrough
+spliced in right after the agent's own OSC, once per depth 1..N (see wrap()); the
+node's window-switch / attach hooks run `replay` so a client arriving on a window
+hears its state and one leaving to a window with no agent hears clear. Only a
+client showing the pane gets it (tmux's `allow-passthrough on`); the agent's exit
+sends clear.
 
 The relay keeps the wrapper's Ctrl+Z rule (issue #1843): the agent runs in the
 pty's session, a process group whose parent is outside it, so its own
@@ -70,10 +83,13 @@ class Scanner:
 
     def __init__(self):
         self.carry = b""
+        self.ends = []      # where each payload of the last feed ended, as offsets into its data
 
     def feed(self, data):
+        base = len(self.carry)
         buf = self.carry + data
         out = []
+        self.ends = []
         pos = 0
         while True:
             i = buf.find(PREFIX, pos)
@@ -96,6 +112,7 @@ class Scanner:
             e = min(ends)
             out.append(buf[j:e].decode("utf-8", "replace"))
             pos = e + (1 if e == bel else 2)
+            self.ends.append(max(0, pos - base))
 
 
 def _b64(v):
@@ -212,23 +229,76 @@ def tmux(args):
         pass
 
 
+def osc(payload):
+    return PREFIX + payload.encode("utf-8", "replace") + b"\x1b\\"
+
+
+def wrap(seq, lo, hi):
+    """seq as tmux passthrough, once for every depth lo..hi (issue #2539).
+
+    A tmux pane's OSC 7501 dies at the first tmux: it is no OSC tmux knows, and
+    tmux forwards an unknown one only inside `ESC P tmux; … ESC \\` (its ESCs
+    doubled), and only with `allow-passthrough on` — which strips ONE wrapping.
+    The person's terminal sits behind as many tmux servers as their way in has
+    (Ghostty → node is 1; the fleet shell → stage → node is 3), and nothing on
+    the node can see how many: so one copy per depth goes out, and exactly one
+    arrives bare. A shallower copy dies at a tmux on the way; a deeper one reaches
+    the terminal as a DCS it ignores, or — a parser that ends the DCS at its
+    doubled ESC — as the same OSC again: the same state, never a stray character.
+    """
+    out = b""
+    cur = seq
+    for d in range(hi + 1):
+        if d >= lo:
+            out += cur
+        cur = b"\x1bPtmux;" + cur.replace(b"\x1b", b"\x1b\x1b") + b"\x1b\\"
+    return out
+
+
+def replay_payload(js):
+    """@agent_status JSON → the window-level OSC 7501 payload it came from (cut msg)."""
+    try:
+        rec = json.loads(js) if js else {}
+    except ValueError:
+        rec = {}
+    state = rec.get("state", "")
+    app = rec.get("app", "") if WORD.fullmatch(rec.get("app", "") or "") else ""
+    if state not in STATES or state == "clear":
+        return "state=clear" + (":app=" + app if app else "")
+    p = "state=" + state + (":app=" + app if app else "")
+    if state == "blocked" and WORD.fullmatch(rec.get("kind", "") or ""):
+        p += ":kind=" + rec["kind"]
+    if isinstance(rec.get("progress"), int):
+        p += ":progress=%d" % rec["progress"]
+    if rec.get("msg"):
+        p += ":msg=" + base64.b64encode(rec["msg"].encode("utf-8")).decode()
+    return p
+
+
 class Reader:
     """Scanner + writer: what both modes do with the agent's output."""
 
-    def __init__(self, pane):
+    def __init__(self, pane, depth=0):
         self.scan = Scanner()
         self.writer = Writer(pane)
         self.writer.start()
         self.last = None
+        self.depth = depth      # outward copies of every report (relay only; 0 = none)
+        self.splices = []       # (offset into the last chunk, bytes to put there)
 
     def feed(self, data):
         """→ how many probes the chunk carried (the relay answers each)."""
         probes = 0
-        for payload in self.scan.feed(data):
+        self.splices = []
+        payloads = self.scan.feed(data)
+        for payload, end in zip(payloads, self.scan.ends):
             if payload.startswith("?"):
                 probes += 1
                 continue
             rec = decode(payload)
+            if rec is not None and self.depth > 0:
+                # what the agent said, on to the person's terminal, right where it said it
+                self.splices.append((end, wrap(osc(payload), 1, self.depth)))
             if rec is None or "id" in rec or rec["state"] == "clear":
                 continue    # a sub-task's entry, or clear: the window keeps its state
             key = (rec["state"], rec["kind"], rec["msg"], rec.get("progress"))
@@ -237,6 +307,16 @@ class Reader:
             self.last = key
             self.writer.put(rec)
         return probes
+
+    def spliced(self, data):
+        """The chunk as it goes on to the pane: each report followed by its copies."""
+        if not self.splices:
+            return data
+        out, at = b"", 0
+        for end, extra in self.splices:
+            out += data[at:end] + extra
+            at = end
+        return out + data[at:]
 
     def exited(self, rc):
         if self.writer.pane:
@@ -303,7 +383,7 @@ def _rc(st):
     return 1
 
 
-def relay(cmd):
+def relay(cmd, depth=0):
     if not cmd:
         sys.stderr.write("usage: fleet-status-7501.py relay -- <cmd> [args…]\n")
         return 2
@@ -321,7 +401,9 @@ def relay(cmd):
     pid, master = pty.fork()
     if pid == 0:
         _guard(cmd, attrs, size)      # never returns
-    rd = Reader(pane())
+    rd = Reader(pane(), depth)
+    if depth > 0 and rd.writer.pane:   # the node's switch / attach hooks replay while this is set
+        tmux(["set-option", "-g", "@agent_replay", str(depth)])
 
     def winch(*_):
         try:
@@ -361,7 +443,7 @@ def relay(cmd):
                         if not data:
                             break
                         rd.feed(data)
-                        to_out += data
+                        to_out += rd.spliced(data)
                     child_open = False
                     continue
             r = []
@@ -394,7 +476,7 @@ def relay(cmd):
                     if probes:   # the answer goes first, ahead of anything typed
                         to_child[:0] = PROBE_REPLY * probes
                         _flush(master, to_child)
-                    to_out += data
+                    to_out += rd.spliced(data)
             if 0 in rr:
                 try:
                     data = os.read(0, 65536)
@@ -432,6 +514,8 @@ def relay(cmd):
         except ChildProcessError:
             st = 0
     rc = _rc(st)
+    if depth > 0:      # the agent is gone: its last word leaves the person's tab too
+        _write(1, wrap(osc("state=clear"), 1, depth))
     rd.exited(rc)
     return rc
 
@@ -464,6 +548,47 @@ def _write(fd, data):
         return -1
 
 
+# ── replay ──────────────────────────────────────────────────────────────────
+
+def replay(depth):
+    """Every terminal client of this server: its current window's state, or clear.
+
+    Run by the node's hooks when a client's window changes or a client arrives
+    (conf/tmux-attention.conf, [75]): what the relay sends goes only to a client
+    that shows the agent's pane, so a client that just moved there has heard
+    nothing yet — and one that moved to a window with no agent still wears the
+    last one's badge. Written to the client's tty, which is one tmux nearer the
+    terminal than a pane: depths 0..depth-1. A control-mode client is never
+    written to (its tty speaks tmux's protocol, not a terminal's).
+    """
+    if depth <= 0:
+        return 0
+    try:
+        out = subprocess.run(
+            ["tmux", "list-clients", "-F",
+             "#{client_tty}\t#{client_control_mode}\t#{@agent_status}"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError):
+        return 1
+    for line in out.splitlines():
+        tty_, ctl, js = (line.split("\t", 2) + ["", ""])[:3]
+        if not tty_.startswith("/dev/") or ctl == "1":
+            continue
+        seq = wrap(osc(replay_payload(js)), 0, depth - 1)
+        try:
+            fd = os.open(tty_, os.O_WRONLY | os.O_NOCTTY | os.O_NONBLOCK)
+        except OSError:
+            continue
+        try:
+            os.write(fd, seq)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+    return 0
+
+
 # ── pipe ────────────────────────────────────────────────────────────────────
 
 def pipe():
@@ -482,15 +607,25 @@ def pipe():
     return 0
 
 
+def _depth(v):
+    return max(0, min(8, int(v))) if str(v).isdigit() else 0
+
+
 def main(argv):
     if not argv:
         sys.stderr.write(__doc__)
         return 2
     if argv[0] == "relay":
         rest = argv[1:]
+        depth = 0
+        if rest[:1] == ["--replay"] and len(rest) > 1:
+            depth = _depth(rest[1])
+            rest = rest[2:]
         if rest[:1] == ["--"]:
             rest = rest[1:]
-        return relay(rest)
+        return relay(rest, depth)
+    if argv[0] == "replay":
+        return replay(_depth(argv[1] if len(argv) > 1 else "3"))
     if argv[0] == "pipe":
         return pipe()
     if argv[0] == "decode" and len(argv) == 2:

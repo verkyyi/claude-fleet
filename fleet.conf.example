@@ -564,6 +564,16 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Agent's own state report (OSC 7501) @group=spawn @tier=internal @scope=global @edit=bool
 #FLEET_STATUS_7501=1
 
+# FLEET_STATUS_REPLAY_DEPTH — the agent's report on the person's own terminal too
+# (issue #2539, EPIC #2535 C4): a terminal that knows OSC 7501 (Ghostty) shows a
+# session's 在跑 / 需要你 + its words on the tab. tmux drops an OSC it does not know,
+# so the relay re-sends each report as tmux passthrough, one copy per depth 1..N —
+# the tmux servers between the agent and the terminal (Ghostty → node is 1; the
+# fleet shell → stage → node is 3). 0 = the report stays on this machine. iTerm2
+# has no OSC 7501 and ignores it. Login-wide; read at launch.
+# @label=Agent state on your terminal: tmux depth @group=spawn @tier=internal @scope=global @edit=int
+#FLEET_STATUS_REPLAY_DEPTH=3
+
 # A session's agent configuration, fixed at launch (issue #1782, EPIC #1776 C6):
 # bin/fleet-claude.sh / fleet-codex.sh compose fleet default < team < local at
 # every launch (bin/fleet-agent-team.py session), hand what the login's files lack

@@ -504,6 +504,8 @@ fi
 _fc_relay=()
 if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && [ "${FLEET_STATUS_7501:-1}" != 0 ] \
    && [ -t 0 ] && [ -t 1 ] && [ -f "$BIN/fleet-status-7501.py" ]; then
-  _fc_relay=(python3 "$BIN/fleet-status-7501.py" relay --)
+  # …and passes each report on to the person's terminal (issue #2539), wrapped for
+  # up to FLEET_STATUS_REPLAY_DEPTH tmux on the way (0 = keep it on this machine).
+  _fc_relay=(python3 "$BIN/fleet-status-7501.py" relay --replay "${FLEET_STATUS_REPLAY_DEPTH:-3}" --)
 fi
 exec ${_fc_relay[@]+"${_fc_relay[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
