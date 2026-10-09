@@ -191,6 +191,9 @@ root 运行；它取代托管账号各自的 `fleet-install-sync.sh`（那个账
   入口所在集群连不上那边的 Google 存储），按 registry 的 `dist.integrity`（sha512）校验，取出 `package/claude`
   放进制品目录，再和别的制品一起签进清单。registry 依次试 `CCQUOTA_FLEET_RELEASE_NPM`（默认 npm → npmmirror）。
   门里这种名字算「入口自取」（`/v1/fleet/release/artifacts?want=` 的 `fetchable`）。Codex / tmux 仍要人放。
+  已经建好、却缺钉住制品的发布包（入口当时取不到 / 旧入口建的）不是死的：下一次有机器取它的清单，入口发现
+  `release.json` 钉的缺了、而且现在补得上，就补取并重建、重签（每版至多 10 分钟试一次；重建失败照旧发老的），
+  所以不必为它再移一次 stable。清单因此不再标 immutable。
 - `fleet-stable.sh move` 拒绝一个带 `bin/fleet-node-update.py` 却没有合法 `release.json` 的目标（`release:`，`--force` 记一行）；
   校验只有一处：`fleet-node-update.py check-release`。
 
