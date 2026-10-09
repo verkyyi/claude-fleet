@@ -30,6 +30,9 @@
 # bin/fleet-sidebar-menu.sh, bin/fleet-keys.sh, bin/fleet-ui-lang.sh,
 # bin/fleet-iterm-profile.py, bin/fleet-shell.sh, bin/dash-keymap.sh.
 set -uo pipefail
+# Every session its own row (issue #2675): the batch view folds a flat list into
+# 「单独的活」 — sidebar-batch-view-selftest.sh pins it; these rows are the old ones.
+export FLEET_SIDEBAR_FOLD=off
 export FLEET_SIDEBAR_NODE=1   # the drawer's selftest seam (fleet-sidebar.sh)
 BIN="$(cd "$(dirname "$0")" && pwd)"
 

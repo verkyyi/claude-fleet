@@ -17,6 +17,9 @@
 #      session. (#1761: nothing here rests on the `active-pane` client flag
 #      tmux 3.8 removes.)
 set -uo pipefail
+# Every session its own row (issue #2675): the batch view folds a flat list into
+# 「单独的活」 — sidebar-batch-view-selftest.sh pins it; these rows are the old ones.
+export FLEET_SIDEBAR_FOLD=off
 export FLEET_SIDEBAR_NODE=1   # the drawer's selftest seam (fleet-sidebar.sh)
 BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v tmux >/dev/null 2>&1 || { echo 'selftest SKIP: tmux missing'; exit 0; }

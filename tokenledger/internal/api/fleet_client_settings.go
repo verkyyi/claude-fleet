@@ -30,6 +30,7 @@ var clientDefaultKeys = map[string]bool{
 	"FLEET_SHELL_PREFIX":               true,
 	"FLEET_SHELL_WIDTH":                true,
 	"FLEET_SIDEBAR_WIDTH_MAX":          true,
+	"FLEET_SIDEBAR_FOLD":               true,
 	"FLEET_SHELL_WARM":                 true,
 	"FLEET_SHELL_WARM_MAX":             true,
 	"FLEET_SHELL_WARM_EVERY":           true,

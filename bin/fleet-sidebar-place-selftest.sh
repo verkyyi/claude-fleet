@@ -39,6 +39,9 @@
 # ver_state off a 13-field line.
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FSP_KEEP=1 keeps the work dir.
 set -uo pipefail
+# Every session its own row (issue #2675): the batch view folds a flat list into
+# 「单独的活」 — sidebar-batch-view-selftest.sh pins it; these rows are the old ones.
+export FLEET_SIDEBAR_FOLD=off
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { printf 'fleet-sidebar-place selftest: tmux absent — SKIP\n'; exit 0; }
 command -v python3 >/dev/null 2>&1 || { printf 'fleet-sidebar-place selftest: python3 absent — SKIP\n'; exit 0; }

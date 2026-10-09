@@ -334,6 +334,12 @@ fleet_ui_t() {
     en:sidebar_ask_fmt)         printf 'asking (%s): %s' "${1:-}" "${2:-}" ;;
     zh:sidebar_backfill_failed) printf '单子没建上' ;;
     en:sidebar_backfill_failed) printf 'issue not filed' ;;
+    zh:sidebar_solo_fmt)        printf '单独的活 · %s' "${1:-}" ;;
+    en:sidebar_solo_fmt)        printf 'on their own · %s' "${1:-}" ;;
+    zh:sidebar_steward_park_fmt) printf '停放 %s' "${1:-}" ;;
+    en:sidebar_steward_park_fmt) printf '%s parked' "${1:-}" ;;
+    zh:sidebar_steward_todo_fmt) printf '待你动手 %s' "${1:-}" ;;
+    en:sidebar_steward_todo_fmt) printf '%s for you to do' "${1:-}" ;;
     zh:sidebar_epic_stale)      printf '没人在跑' ;;
     en:sidebar_epic_stale)      printf 'not driven' ;;
     zh:sidebar_epic_stale_detail_fmt) printf '心跳 %s 分钟前停了 · 再点一下重开驱动会话' "${1:-}" ;;
