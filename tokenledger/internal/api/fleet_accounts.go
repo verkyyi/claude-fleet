@@ -114,6 +114,11 @@ func (s *Server) isFleetAdmin(osUser string) bool {
 //     when there is somewhere to record them on.
 func (s *Server) onPrincipalSignIn(principal, displayName string) {
 	s.placePrincipal(principal, displayName, principal)
+	if s.Fleet {
+		if err := s.Store.NamePrincipal(principal, displayName); err != nil {
+			log.Printf("fleet: sign-in of %s: record name %q: %v", principal, displayName, err)
+		}
+	}
 }
 
 // placePrincipal is onPrincipalSignIn with the actor the audit names (the

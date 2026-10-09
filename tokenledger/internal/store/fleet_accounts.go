@@ -202,6 +202,19 @@ func (s *Store) EnsurePrincipalAs(id, displayName, preferred string, maxLen int,
 	return nil, fmt.Errorf("no free login for principal %q", id)
 }
 
+// NamePrincipal records the name a person's sign-in brought (their GitHub
+// login) on their row when it differs — what a certificate names its holder
+// by (claude-fleet#2577). A row the operator adopted before the first sign-in
+// has none; no row is no error (nothing to name yet).
+func (s *Store) NamePrincipal(id, displayName string) error {
+	if id == "" || displayName == "" {
+		return nil
+	}
+	_, err := s.write.Exec(`UPDATE fleet_principals SET display_name = ?
+		WHERE `+s.d.eqNocase("principal_id")+` AND display_name <> ?`, displayName, id, displayName)
+	return err
+}
+
 // AdoptPrincipal records a person whose login already exists somewhere (a
 // colleague onboarded by hand before the hub knew them). It refuses to change
 // the login of a principal that already has one.

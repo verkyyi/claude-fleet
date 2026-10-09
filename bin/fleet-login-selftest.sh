@@ -138,7 +138,7 @@ class H(BaseHTTPRequestHandler):
             subprocess.run(["ssh-keygen", "-q", "-s", os.path.join(SB, "ca"), "-I", "gh:Alice",
                             "-n", "alice", "-V", "-1m:+12h", "-z", "1", os.path.join(d, "k.pub")], check=True)
             cert = open(os.path.join(d, "k-cert.pub")).read()
-            return self.reply(200, {"certificate": cert, "serial": "1", "key_id": "gh:Alice",
+            return self.reply(200, {"certificate": cert, "serial": "1", "key_id": "gh:Alice", "name": "alice-gh",
                 "principals": ["alice"], "valid_before": "2026-10-04T12:00:00Z", "ssh_config": CONF, "hub": ""})
         self.reply(404, {})
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2]) if len(sys.argv) > 2 else 0), H)
@@ -185,6 +185,9 @@ cmp -s "$HOME/.ssh/fleet-cert.pub" "$SB/sent.pub" && ok "A sent its own public k
 L="$(ssh-keygen -L -f "$HOME/.ssh/fleet-cert-cert.pub" 2>&1)"
 echo "$L" | grep -q 'user certificate' && ok "A user certificate" || bad "A not a user cert: $L"
 echo "$L" | grep -A1 'Principals:' | grep -qx '[[:space:]]*alice' && ok "A principal alice" || bad "A principals: $L"
+# #2577: the hub's name (the GitHub login) kept beside the certificate, by key id
+[ "$(cat "$HOME/.ssh/fleet-cert-who" 2>/dev/null)" = "$(printf 'gh:Alice\talice-gh')" ] && ok "A GitHub login recorded (fleet-cert-who)" \
+  || bad "A who record: $(cat "$HOME/.ssh/fleet-cert-who" 2>&1)"
 echo "$L" | grep -q "Signing CA: ED25519 $(ssh-keygen -lf "$SB/ca.pub" | awk '{print $2}')" && ok "A signed by the CA" || bad "A signing CA: $L"
 grep -q '^Host m4 fleet-m4 fleet-m4-public$' "$HOME/.ssh/fleet-ssh-config" && ok "A ssh config written" || bad "A ssh config"
 grep -qx "export FLEET_HUB_URL=\"http://127.0.0.1:$PORT\"" "$HOME/.config/claude-fleet/fleet.conf" 2>/dev/null && ok "A hub remembered in fleet.conf" || bad "A hub not remembered: $(cat "$HOME/.config/claude-fleet/fleet.conf" 2>&1)"

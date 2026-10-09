@@ -190,7 +190,10 @@ case $cmd in
     shift
     exec bash "$here/fleet-shell.sh" quit "$@" ;;
   status)
-    exec bash "$here/fleet-shell.sh" running --say ;;
+    # whether the client runs, then who is signed in and where (issue #2577)
+    bash "$here/fleet-shell.sh" running --say; rc=$?
+    bash "$here/fleet-client-badge.sh" --who
+    exit $rc ;;
   # the sessions from the command line (issue #2365) — `fleet open <url|:port|file>`
   # and `fleet show <file>` still go to fleet-open.sh / fleet-show.sh from there
   ls|show|open|rename|close|reap|answer)

@@ -168,9 +168,14 @@ func (s *Server) noAccountReason(pid string) error {
 
 // CertResponse is a signed certificate and everything the client writes.
 type CertResponse struct {
-	Certificate string    `json:"certificate"` // the content of FleetCertPath
-	Serial      string    `json:"serial"`
-	KeyID       string    `json:"key_id"`
+	Certificate string `json:"certificate"` // the content of FleetCertPath
+	Serial      string `json:"serial"`
+	KeyID       string `json:"key_id"`
+	// Name is the person's GitHub login (claude-fleet#2577): the key id says
+	// gh:<numeric ID> and the principals are machine logins, neither of which
+	// is who the client's bar should name. Empty for a principal that is not
+	// a GitHub person or never signed in with a name.
+	Name        string    `json:"name,omitempty"`
 	Principals  []string  `json:"principals"`
 	ValidAfter  time.Time `json:"valid_after"`
 	ValidBefore time.Time `json:"valid_before"`
@@ -279,6 +284,7 @@ func (s *Server) issueCert(r *http.Request, pid, keyLine, via string) (*CertResp
 		Certificate: iss.Line + "\n",
 		Serial:      serial,
 		KeyID:       iss.KeyID,
+		Name:        certName(p),
 		Principals:  iss.Principals,
 		ValidAfter:  iss.ValidAfter,
 		ValidBefore: iss.ValidBefore,
@@ -286,6 +292,15 @@ func (s *Server) issueCert(r *http.Request, pid, keyLine, via string) (*CertResp
 		Machines:    s.certMachines(hosts),
 		Hub:         s.hubURL(r),
 	}, nil
+}
+
+// certName is the GitHub login a certificate's holder signed in as — the
+// display name onPrincipalSignIn records for a gh: principal.
+func certName(p *store.Principal) string {
+	if p == nil || !strings.HasPrefix(p.ID, "gh:") {
+		return ""
+	}
+	return strings.TrimSpace(p.DisplayName)
 }
 
 // errCertSelfCheck: the hub signed a certificate its own doors would refuse
