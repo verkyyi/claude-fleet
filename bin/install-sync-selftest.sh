@@ -139,7 +139,7 @@ EOF
 chmod +x "$WORK/shim/tmux"
 export HOME="$H" FLEET_CONF_DIR="$CONF" TMPDIR="$WORK/tmp" FLEET_SKIP_GLOBAL_CONF=1
 export PATH="$WORK/shim:$PATH"
-export FLEET_INSTALL_HOST=1   # this sandbox 承载 (issue #2716: a client follows no node agent)
+export FLEET_INSTALL_SYNC_HOST=1   # this sandbox 承载 (issue #2716: a client follows no node agent)
 STATE="$CONF/global/install-sync.state"
 
 # --- the repo: bare origin + seed clone with stub bin/ ----------------------------
@@ -722,7 +722,7 @@ printf '%s gui\n' "$me" > "$WORK/node-logins"
 echo prod-0000000 > "$WORK/node-ver"; n=$(nodeups)
 OUT=$(FLEET_NODE_FOLLOW=0 FLEET_INSTALL_NODE_UPGRADE="$NU" bash "$IS" --root "$CO" 2>&1)
 eq "Q: FLEET_NODE_FOLLOW=0 → off" off "$(st node)"; eq "Q: off → no call" "$n" "$(nodeups)"
-OUT=$(FLEET_INSTALL_HOST=0 FLEET_INSTALL_NODE_UPGRADE="$NU" bash "$IS" --root "$CO" 2>&1)
+OUT=$(FLEET_INSTALL_SYNC_HOST=0 FLEET_INSTALL_NODE_UPGRADE="$NU" bash "$IS" --root "$CO" 2>&1)
 eq "Q: 承载 off (a client) → off" off "$(st node)"; eq "Q: client → no call" "$n" "$(nodeups)"
 contains "Q: client says why" "$(st node_reason)" "承载 off"
 touch "$WORK/node-none"; qrun; rm -f "$WORK/node-none"

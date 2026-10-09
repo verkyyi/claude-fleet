@@ -387,8 +387,8 @@ node_follow() {
   fi
   # A computer that hosts no sessions (承载 off — a client) runs no node agent of
   # the fleet's to follow (issue #2716): no dry-run, no build, no 「no Go」 in its
-  # log. FLEET_INSTALL_HOST (1|0) is the selftests' seam; else fleet-conf.sh says.
-  local host="${FLEET_INSTALL_HOST:-}"
+  # log. FLEET_INSTALL_SYNC_HOST (1|0) is the selftests' seam; else fleet-conf.sh says.
+  local host="${FLEET_INSTALL_SYNC_HOST:-}"
   [ -n "$host" ] || [ ! -f "$ROOT/bin/fleet-conf.sh" ] || host=$(bash "$ROOT/bin/fleet-conf.sh" host 2>/dev/null </dev/null)
   if [ "$host" = 0 ]; then
     NODE=off; NODE_REASON='承载 off — a client computer does not upgrade the node agent'; return 0
