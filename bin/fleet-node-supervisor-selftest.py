@@ -30,6 +30,11 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      and none is left under the old; it runs as the new login, never both at once;
      a move onto an existing path refuses with nothing changed; `account release`
      of a login with entries left refuses 6 with the move line (--force passes)
+  K  agent tasks (#2529): a fake clock at the slot → ONE spawner call with the
+     session line (--no-repo --origin hub --print --name <window> --prompt …); a
+     spawner failing every time → retried up to the limit, then `failed`, no more
+     tries, an alert file; `service run` / `fleet task run --now` → one run at once;
+     a done file decides ok vs failed; cron + tz slots; bad entries refused
 """
 import importlib.util
 import json
@@ -1199,6 +1204,197 @@ class J_ServiceMove(Sandbox):
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(os.path.exists(self.reg("verky")))
+class K_AgentTasks(Sandbox):
+    DAY = "2026-10-10"
+
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.home = os.path.join(self.d, "Users", "alice")
+        os.makedirs(self.home)
+        with open(os.path.join(self.d, "passwd.json"), "w") as f:
+            json.dump({"alice": {"uid": os.getuid(), "gid": os.getgid(), "home": self.home}}, f)
+        self.clock = os.path.join(self.d, "clock")
+        self.env.update(FLEET_NODE_PASSWD=os.path.join(self.d, "passwd.json"), FLEET_NODE_CLOCK=self.clock)
+        self.table()
+        self.calls = os.path.join(self.d, "calls")
+        # the login's spawner: one line per call (its argv), the receipt on stdout
+        self.spawner = os.path.join(self.d, "spawn.sh")
+        self.spawner_rc(0)
+        self.set_clock("06:59:50")
+
+    def set_clock(self, hms, day=None):
+        import calendar
+        y, m, d = (int(x) for x in (day or self.DAY).split("-"))
+        h, mi, se = (int(x) for x in hms.split(":"))
+        with open(self.clock, "w") as f:
+            f.write("%d\n" % calendar.timegm((y, m, d, h, mi, se)))
+
+    def spawner_rc(self, rc):
+        with open(self.spawner, "w") as f:
+            f.write('#!/bin/bash\nprintf "%%s|" "$@" >> "$CALLS"; echo >> "$CALLS"\n'
+                    '[ -n "${MAKE:-}" ] && : > "$MAKE"\n'
+                    'echo "@7\tdaily\t\tfid"\nexit %d\n' % rc)
+        os.chmod(self.spawner, 0o755)
+
+    def add(self, *extra, **env_):
+        e = ["--env", "FLEET_TASK_SPAWN=%s" % self.spawner, "--env", "CALLS=%s" % self.calls]
+        for k, v in env_.items():
+            e += ["--env", "%s=%s" % (k, v)]
+        return self.run_sup("service", "add", "--kind", "task", "--login", "alice", "--name", "daily",
+                            "--at", "07:00", "--tz", "UTC", "--fleet", "fns-sandbox", "--prompt", "/daily-report {date}",
+                            *(e + list(extra)))
+
+    def ncalls(self):
+        try:
+            return [l for l in open(self.calls).read().splitlines() if l]
+        except IOError:
+            return []
+
+    def row(self):
+        return [r for r in json.loads(self.run_sup("status", "--json").stdout)["services"]
+                if r["name"] == "daily"][0]
+
+    def agent(self):
+        return (self.state().get("agent_tasks") or {}).get("alice/daily") or {}
+
+    def test_slot_fires_once(self):
+        self.spawner_rc(0)
+        r = self.add()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("next run %s 07:00" % self.DAY, r.stdout)
+        ent = json.load(open(os.path.join(self.d, "db", "logins", "alice", "services", "daily.json")))
+        self.assertEqual((ent["kind"], ent["schedule"], ent["retries"]), ("task", {"at": "07:00", "tz": "UTC"}, 2))
+        self.start()
+        time.sleep(1.5)
+        self.assertEqual(self.ncalls(), [], "a run before its slot")
+        self.assertEqual(self.row()["status"], "scheduled")
+        self.set_clock("07:00:05")
+        self.assertTrue(until(10, lambda: self.agent().get("state") == "ok"), self.agent())
+        time.sleep(1.5)
+        calls = self.ncalls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertEqual(calls[0], "--no-repo|--origin|hub|--print|--name|daily-%s|--prompt|/daily-report %s|fns-sandbox|"
+                         % (self.DAY, self.DAY))
+        row = self.row()
+        self.assertEqual((row["status"], row["last_result"], row["last_window"]), ("ok", "ok", "daily-" + self.DAY))
+        self.assertEqual(fns.task_time(row["next_run"], row["schedule"]), "2026-10-11 07:00")
+        self.assertTrue(row["last_run"])
+        log = open(os.path.join(self.d, "log", "logins", "alice", "daily.log")).read()
+        self.assertIn("opened @7 (daily-%s) in fleet fns-sandbox" % self.DAY, log)
+        runs = json.load(open(os.path.join(self.d, "db", "logins", "alice", "runs", "daily.json")))["runs"]
+        self.assertEqual([(x["slot"], x["attempt"], x["rc"]) for x in runs], [(self.DAY, 1, 0)])
+        st = self.run_sup("service", "ls", "--login", "alice", "--kind", "task").stdout
+        self.assertIn("上次 %s 07:00 ok · 下次 2026-10-11 07:00" % self.DAY, st)
+        # the next day's slot: one more, a new window name
+        self.set_clock("07:00:01", "2026-10-11")
+        self.assertTrue(until(10, lambda: len(self.ncalls()) == 2), self.ncalls())
+        self.assertIn("--name|daily-2026-10-11|", self.ncalls()[1])
+
+    def test_failures_exhaust_then_alert(self):
+        self.spawner_rc(2)        # at capacity, every time
+        self.assertEqual(self.add("--retries", "1", "--retry-delay", "0").returncode, 0)
+        self.set_clock("07:00:05")
+        self.start()
+        self.assertTrue(until(15, lambda: self.agent().get("state") == "failed"), self.agent())
+        time.sleep(1.5)
+        calls = self.ncalls()
+        self.assertEqual(len(calls), 2, calls)
+        self.assertIn("--name|daily-%s|" % self.DAY, calls[0])
+        self.assertIn("--name|daily-%s-2|" % self.DAY, calls[1], "a retry reuses the failed window's name")
+        ap = os.path.join(self.d, "db", "logins", "alice", "alerts", "daily.json")
+        self.assertTrue(os.path.exists(ap), "no alert file")
+        al = json.load(open(ap))
+        self.assertEqual((al["attempts"], al["slot"]), (2, self.DAY))
+        self.assertIn("did not open", al["why"])
+        row = self.row()
+        self.assertEqual((row["status"], row["alert"]), ("failed", ap))
+        self.assertIn("task    alice/daily", self.run_sup("status").stdout)
+        # a success later clears the alert
+        self.spawner_rc(0)
+        self.assertEqual(self.run_sup("service", "run", "--login", "alice", "--name", "daily").returncode, 0)
+        self.assertTrue(until(10, lambda: self.agent().get("state") == "ok"), self.agent())
+        self.assertFalse(os.path.exists(ap), "the alert outlived a good run")
+
+    def test_run_now_through_the_front(self):
+        self.spawner_rc(0)
+        self.set_clock("12:00:00")
+        fe = dict(self.env, FLEET_NODE_SUPERVISOR=SUP, FLEET_SERVICE_SUDO="", FLEET_SERVICE_LOGIN="alice")
+        front = os.path.join(BIN, "fleet-task.sh")
+        r = subprocess.run(["bash", front, "add", "daily", "--at", "07:00", "--tz", "UTC", "--fleet", "fns-sandbox",
+                            "--prompt", "hi", "--env", "FLEET_TASK_SPAWN=%s" % self.spawner,
+                            "--env", "CALLS=%s" % self.calls], env=fe, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.start()
+        time.sleep(1.5)
+        self.assertEqual(self.ncalls(), [], "a slot earlier than the entry ran")
+        r = subprocess.run(["bash", front, "run", "daily"], env=fe, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2, "run without --now")
+        r = subprocess.run(["bash", front, "run", "daily", "--now"], env=fe, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(until(10, lambda: len(self.ncalls()) == 1), self.ncalls())
+        self.assertTrue(until(10, lambda: self.agent().get("state") == "ok"))
+        time.sleep(1)
+        self.assertEqual(len(self.ncalls()), 1)
+        ls = subprocess.run(["bash", front, "ls"], env=fe, capture_output=True, text=True).stdout
+        self.assertIn("alice/daily", ls)
+        self.assertIn("下次 %s 07:00" % "2026-10-11", ls)
+        # a service has no run; a stopped task does not run
+        r = subprocess.run(["bash", front, "stop", "daily"], env=fe, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = subprocess.run(["bash", front, "run", "daily", "--now"], env=fe, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        r = subprocess.run(["bash", front, "rm", "daily"], env=fe, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(until(10, lambda: "alice/daily" not in (self.state().get("agent_tasks") or {})))
+
+    def test_done_file_decides(self):
+        self.spawner_rc(0)
+        out = os.path.join(self.home, "out-{date}.md")
+        self.assertEqual(self.add("--done-file", out, "--retries", "0", MAKE=out.replace("{date}", self.DAY))
+                         .returncode, 0)
+        self.set_clock("07:00:05")
+        self.start()
+        self.assertTrue(until(10, lambda: self.agent().get("state") == "ok"), self.agent())
+        # the next slot's file is never made: the session ends without it → failed
+        self.set_clock("07:00:05", "2026-10-11")
+        self.assertTrue(until(10, lambda: self.agent().get("state") == "failed"), self.agent())
+        self.assertIn("without its output", self.agent()["last_error"])
+
+    def test_task_moves_with_its_login(self):
+        with open(os.path.join(self.d, "passwd.json"), "w") as f:
+            json.dump({"alice": {"uid": os.getuid(), "gid": os.getgid(), "home": self.home},
+                       "bob": {"uid": os.getuid(), "gid": os.getgid(),
+                               "home": os.path.join(self.d, "Users", "bob")}}, f)
+        os.makedirs(os.path.join(self.d, "Users", "bob"))
+        self.assertEqual(self.add("--done-file", os.path.join(self.home, "out-{date}.md")).returncode, 0)
+        r = self.run_sup("service", "move", "--login", "alice", "--name", "daily", "--to", "bob")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ent = json.load(open(os.path.join(self.d, "db", "logins", "bob", "services", "daily.json")))
+        self.assertEqual((ent["kind"], ent["exec"]), ("task", None))
+        self.assertEqual(ent["done_when"]["file"], os.path.join(self.d, "Users", "bob", "out-{date}.md"))
+
+    def test_bad_entries_refused(self):
+        base = ["service", "add", "--kind", "task", "--login", "alice", "--name", "t"]
+        self.assertEqual(self.run_sup(*base, "--at", "07:00").returncode, 2, "no prompt")
+        self.assertEqual(self.run_sup(*base, "--prompt", "x").returncode, 2, "no schedule")
+        self.assertEqual(self.run_sup(*base, "--prompt", "x", "--at", "7pm").returncode, 2)
+        self.assertEqual(self.run_sup(*base, "--prompt", "x", "--cron", "* * *").returncode, 2)
+        self.assertEqual(self.run_sup(*base, "--prompt", "x", "--at", "07:00", "--tz", "Mars/Olympus").returncode, 2)
+        self.assertEqual(self.run_sup(*base, "--prompt", "x", "--at", "07:00", "--retries", "99").returncode, 2)
+        self.assertEqual(self.run_sup(*base, "--prompt", "x", "--at", "07:00", "--", "/bin/true").returncode, 2)
+        self.assertEqual(self.run_sup("service", "add", "--login", "alice", "--name", "s", "--", "/bin/sleep",
+                                      "300").returncode, 0)
+        self.assertEqual(self.run_sup("service", "run", "--login", "alice", "--name", "s").returncode, 2,
+                         "run is a task's")
+
+    def test_slots(self):
+        import calendar
+        t = calendar.timegm((2026, 10, 10, 6, 59, 50))       # a Saturday
+        self.assertEqual(fns.task_slot({"cron": "30 6 * * 1-5", "tz": "UTC"}, t, 1)[1], "2026-10-12")
+        self.assertEqual(fns.task_slot({"cron": "30 6 * * 1-5", "tz": "UTC"}, t, -1)[1], "2026-10-09")
+        n = fns.task_slot({"at": "07:00", "tz": "Asia/Shanghai"}, t, 1)[0]
+        self.assertEqual(n, calendar.timegm((2026, 10, 10, 23, 0, 0)))
+        self.assertEqual(fns.task_slot({"cron": "0 9 1 * *", "tz": "UTC"}, t, 1)[1], "2026-11-01")
 
 
 if __name__ == "__main__":

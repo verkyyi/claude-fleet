@@ -274,7 +274,7 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 
 - **一个条目一个 JSON**：`/var/db/fleet-node/logins/<登录>/services/<名>.json`（root 0600）——
   `{name, login, kind: "service", exec, schedule, retries, env, env_keys, creds, paths, state}`（共同约定 2；
-  `schedule` / `retries` 留给 C5 的 `kind: task`）。条目里只有凭据的**名字**；值在
+  `schedule` / `retries` 是 `kind: task` 的，见 §11）。条目里只有凭据的**名字**；值在
   `/var/db/fleet-node/logins/<登录>/creds/<名>`（root 0600），守护起进程时注入成同名环境变量。
 - **写表是 root 的**：`fleet-service.sh` 经 `sudo -n` 跑 root 运行时里的 `fleet-node-supervisor.py service …`；
   没有免密 sudo 时打印一条给管理员跑的命令（exit 3）。`ls` / `logs` 不用 root。
@@ -296,3 +296,30 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 - **退役前必须搬完**：`fleet-login-remove.sh <登录>` 在第 1 步之前（dry run 也一样）、`account release <登录>`
   在动手之前查该登录的登记表，还有条目就拒绝、**退 6**，逐项打印 `service move` 命令；`account release --force`
   照样释放（条目仍由守护以该登录身份跑）。BREAK-IT 行 `service-login-moved`；`fleet-node-supervisor-selftest.py` J。
+
+## 11. 定时 agent 任务（EPIC #2524 C5，#2529）
+
+「每天几点、以谁的身份、开一个会话跑哪条提示」是同一张登记表的第二种条目（`kind: "task"`），不再各写一个 run.sh：
+
+    fleet task add daily-report --at 07:00 --tz Asia/Shanghai --prompt '/daily-report' \
+        --window 'daily-{date}' --done-file '~/daily-report/out/{date}.md' [--retries 2] [--bark BARK_KEY]
+    fleet task ls                       # 状态 · 计划 · 上次 · 下次
+    fleet task run daily-report --now   # 现在跑一次（不占计划）
+    fleet task logs daily-report [-f] / stop / start / rm daily-report
+
+- **条目**：`/var/db/fleet-node/logins/<登录>/services/<名>.json`（root 0600），没有 `exec`，多了
+  `prompt` · `schedule`（`{at: "HH:MM", tz}` 或 `{cron: "分 时 日 月 周", tz}`；无 tz = 本机时区）·
+  `retries`（默认 2 次重试）· `retry_delay`（300 秒）· `window`（会话名，`{date}` = 这一档的日子；默认 `<名>-{date}`）·
+  `done_when.file`（可选）· `timeout`（3600 秒）· `idle`（600 秒）· `fleet`（默认该登录唯一的 fleet）· `notify.bark`（可选，凭据名）。
+- **到点**：守护每轮算出最近一档（`at` / `cron` 按时区）；比条目登记得晚、比上一档新、且没晚过 6 小时
+  （`FLEET_NODE_TASK_CATCHUP`，重启后补跑）就开跑。一次尝试 = 降权成该登录跑 `bin/fleet-task-run.sh`：
+  该登录的 `~/.claude/fleet/bin/dash-raw-session.sh --no-repo --origin hub --print --name <窗口> --prompt <提示> <fleet>`；
+  同名窗口已开（守护重启丢了这次）就认领它，不开第二个。有 `done_when.file` 时等会话结束且文件在：
+  会话不在干活超过 `idle`、或窗口没了而文件不在 = 失败（13）；超过 `timeout` = 失败（12）；会话没开出来 = 失败（11）。
+- **失败**：隔 `retry_delay` 重试（窗口名加 `-<次数>`），重试用完 → `failed`、写
+  `logins/<登录>/alerts/<名>.json`（入口告警读它，C2）、条目带 `--bark` 时再推一条 Bark（密钥从凭据库注入，经 stdin 交给 curl）；
+  下一次成功删掉告警。每次尝试记在 `logins/<登录>/runs/<名>.json`（留最近 60 次），输出在 `/var/log/fleet-node/logins/<登录>/<名>.log`。
+- **看得到**：`status` 每个任务一行 `task <登录>/<名> <状态> · <计划> · last … · next …`；`status --json` 的 `services[]`
+  对任务带 `status`（scheduled · running · retrying · ok · failed · stopped）、`last_run` · `next_run` · `last_result` ·
+  `last_error` · `attempt` · `alert`。`state.json` 的 `agent_tasks` 是守护自己的记账。非 root 的 `ls` 读 `state.json` 里守护写好的那份。
+- BREAK-IT 行 `task-fail-silent`；`fleet-node-supervisor-selftest.py` K。

@@ -12,6 +12,8 @@
 #   service-login-moved   bin/fleet-node-supervisor.py `service move` + `account release`,
 #                         bin/fleet-login-remove.sh (#2528): a login is moved to another
 #                         one / retired while a registered task of it still runs
+#   task-fail-silent      bin/fleet-node-supervisor.py's agent tasks + bin/fleet-task-run.sh
+#                         (#2529): a scheduled agent task's session will not open, every try
 #   account-adopt-stuck   bin/fleet-node-supervisor.py `account adopt|release` (#2332):
 #                         one of a login's services will not unload mid-migration
 #   account-adopt-agent-left  bin/fleet-node-supervisor.py `account adopt|release` (#2387):
@@ -66,6 +68,39 @@ drill_node_supervisor_dead() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_HEARTBEAT_STALE
   WHAT="整机守护 kill -9：空档里 status --check 报 DOWN（体检 node 行报警），KeepAlive 按 ${thr}s 拉起，任务记录还在、子进程被认领不重起"
+}
+
+drill_task_fail_silent() {
+  CAP=30   # the batch's bar is ≤ 1 h from the first failure; with no retry delay it is seconds
+  local sb sup t0 ap
+  sb="$WORK/task"; mkdir -p "$sb/LaunchDaemons" "$sb/Users/alice"
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  # the session never opens (the prompt names no skill / the fleet is full): the spawner refuses every time
+  printf '#!/bin/bash\necho "$*" >> "%s/calls"\necho "dash-raw-session: at capacity" >&2\nexit 2\n' "$sb" > "$sb/spawn.sh"
+  chmod +x "$sb/spawn.sh"
+  python3 -c 'import calendar; print(calendar.timegm((2026, 10, 10, 6, 59, 0)))' > "$sb/clock"
+  export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
+    FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json" \
+    FLEET_NODE_CLOCK="$sb/clock"
+  python3 "$BIN/fleet-node-supervisor.py" service add --kind task --login alice --name daily --at 07:00 --tz UTC \
+    --fleet drill-sandbox --prompt '/no-such-skill' --retries 2 --retry-delay 0 --env FLEET_TASK_SPAWN="$sb/spawn.sh" \
+    >"$sb/add.out" 2>&1 || { WHY="task add failed: $(tail -2 "$sb/add.out" | tr '\n' ' ')"; return 1; }
+  python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
+  python3 -c 'import calendar; print(calendar.timegm((2026, 10, 10, 7, 0, 1)))' > "$sb/clock"
+  until_ok 10 test -s "$sb/calls" || { WHY="the slot never ran: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup" 2>/dev/null; return 1; }
+  t0=$(now); ap="$sb/db/logins/alice/alerts/daily.json"
+  until_ok 30 test -f "$ap" || { WHY="no alert after the last try ($(wc -l < "$sb/calls") calls)"; kill "$sup" 2>/dev/null; return 1; }
+  SECS=$(since "$t0"); sleep 1
+  [ "$(wc -l < "$sb/calls" | tr -d ' ')" = 3 ] || { WHY="$(wc -l < "$sb/calls") tries, not 1 + 2 retries"; kill "$sup" 2>/dev/null; return 1; }
+  python3 "$BIN/fleet-node-supervisor.py" status --json | python3 -c 'import json, sys; r = [x for x in json.load(sys.stdin)["services"] if x["name"] == "daily"][0]; assert r["status"] == "failed" and r["alert"] and "did not open" in r["last_error"], r' 2>"$sb/st.err" \
+    || { WHY="services[] does not say failed: $(tail -1 "$sb/st.err")"; kill "$sup" 2>/dev/null; return 1; }
+  kill "$sup" 2>/dev/null; wait "$sup" 2>/dev/null
+  unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
+    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD FLEET_NODE_CLOCK
+  WHAT="定时 agent 任务的会话一次也开不了：到点开一次、重试 2 次后不再试，状态 failed、告警文件落地，services[] 带 failed 与原因"
 }
 
 drill_service_killed() {

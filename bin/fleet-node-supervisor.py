@@ -47,6 +47,11 @@ machine's work ONCE, however many logins the machine carries:
                 `service move` hands one entry to another login whole — its
                 paths[], log and credentials with it (issue #2528); `account
                 release` refuses (6) while the login still has entries.
+                Its second kind, `kind: task` (issue #2529, C5), is a scheduled agent
+                session: at each slot (`at` / `cron`, a tz) the daemon runs
+                bin/fleet-task-run.sh as the login — the login's own dash-raw-session.sh
+                opens the session — retries a failed run, then marks it failed and
+                writes an alert. `fleet task` (bin/fleet-task.sh) is its command.
   * update    — the machine's one updater (issue #2334, C6): a task like the
                 rest (fleet-node-update.py tick). When it moves `current` it asks
                 this daemon to restart (<state>/update-restart.json): the daemon
@@ -78,7 +83,7 @@ Usage:
                                                (令牌失效 · 需要 relogin, issue #2501)
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
   fleet-node-supervisor.py attic [list | restore <id> | purge]
-  fleet-node-supervisor.py service add|rm|stop|start|restart|move|cred|ls|logs …
+  fleet-node-supervisor.py service add|rm|stop|start|restart|move|run|cred|ls|logs …
                                                the login-level register (#2525; writes as root,
                                                ls / logs as anyone who may read them)
   fleet-node-supervisor.py install | uninstall write / remove the LaunchDaemon (root)
@@ -113,6 +118,7 @@ Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
 """
 from __future__ import print_function
 
+import datetime
 import errno
 import fcntl
 import glob
@@ -535,9 +541,11 @@ def account_runnable(ent):
 SVC_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,47}$")
 LOGIN_RE = re.compile(r"^[a-z0-9_][a-z0-9_.-]{0,31}$")
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
-SVC_KINDS = ("service",)        # `task` (a schedule) is C5's, #2529
+SVC_KINDS = ("service", "task")   # task: an agent session on a schedule (#2529)
 SVC_STATES = ("enabled", "stopped")
-SVC_ENV_DROP = ("HOME", "USER", "LOGNAME", "FLEET_SERVICE", "FLEET_NODE_ACCOUNT")
+SVC_ENV_DROP = ("HOME", "USER", "LOGNAME", "FLEET_SERVICE", "FLEET_NODE_ACCOUNT", "FLEET_TASK_PROMPT",
+                "FLEET_TASK_WINDOW", "FLEET_TASK_DONE_FILE", "FLEET_TASK_TIMEOUT", "FLEET_TASK_IDLE",
+                "FLEET_TASK_FLEET", "FLEET_TASK_ATTEMPT", "FLEET_TASK_SLOT", "FLEET_TASK_BARK_CRED")
 SVC_LINE_MAX = 200
 
 
@@ -567,11 +575,16 @@ def service_check(svc, login=None, name=None):
         return "name %s in %s.json" % (svc["name"], name)
     if svc.get("kind", "service") not in SVC_KINDS:
         return "kind %r — only %s" % (svc.get("kind"), "/".join(SVC_KINDS))
-    ex = svc.get("exec")
-    if not isinstance(ex, list) or not ex or not all(isinstance(a, str) for a in ex):
-        return "exec must be a non-empty list of strings"
-    if not os.path.isabs(ex[0]):
-        return "exec[0] %s is not an absolute path" % ex[0]
+    if svc.get("kind", "service") == "task":
+        why = task_check(svc)
+        if why:
+            return why
+    else:
+        ex = svc.get("exec")
+        if not isinstance(ex, list) or not ex or not all(isinstance(a, str) for a in ex):
+            return "exec must be a non-empty list of strings"
+        if not os.path.isabs(ex[0]):
+            return "exec[0] %s is not an absolute path" % ex[0]
     if svc.get("state", "enabled") not in SVC_STATES:
         return "state %r" % svc.get("state")
     env_ = svc.get("env") or {}
@@ -679,11 +692,18 @@ def services_summary(paths, state, tail=False):
             out.append(row)
             continue
         row.update(kind=svc.get("kind", "service"), state=svc.get("state", "enabled"),
-                   exec=svc["exec"], env_keys=sorted(set(list(svc.get("env_keys") or [])
-                                                         + list((svc.get("env") or {}).keys()))),
+                   env_keys=sorted(set(list(svc.get("env_keys") or []) + list((svc.get("env") or {}).keys()))),
                    creds=list(svc.get("creds") or []), paths=list(svc.get("paths") or []),
-                   added=svc.get("added"), pid=None, started=cs.get("started"),
-                   restarts=cs.get("restarts") or 0, last_exit=cs.get("last_exit"), last_rc=cs.get("last_rc"))
+                   added=svc.get("added"), pid=None)
+        if row["kind"] == "task":
+            row.update(task_summary(paths, svc, (state.get("agent_tasks") or {}).get("%s/%s" % (login, name)) or {}))
+            if tail:
+                t = log_tail(row["log"])
+                row["last_line"] = t[-1] if t else None
+            out.append(row)
+            continue
+        row.update(exec=svc["exec"], started=cs.get("started"), restarts=cs.get("restarts") or 0,
+                   last_exit=cs.get("last_exit"), last_rc=cs.get("last_rc"))
         if row["state"] == "stopped":
             row["status"] = "stopped"
         elif account_ident(login) is None:
@@ -701,6 +721,232 @@ def services_summary(paths, state, tail=False):
     return out
 
 
+# --------------------------------------------------------------- agent tasks ----
+# The register's second kind (issue #2529, EPIC #2524 C5): `kind: task` is "at this
+# time, as this login, open a session that runs this prompt". The entry has no
+# exec: when a slot is due the daemon runs bin/fleet-task-run.sh demoted to the
+# login, which opens the session through the login's own
+# `dash-raw-session.sh --no-repo --origin hub --print --name <window> --prompt <p>`
+# (adopting a window of that name instead when one is already open) and, with
+# `done_when.file`, waits for the session to finish with that file in place. Its
+# exit code is the attempt's verdict; a failed one is tried again after
+# `retry_delay` up to `retries` more times, then the task reads `failed` and an
+# alert lands in <state>/logins/<login>/alerts/<name>.json (+ a Bark push when the
+# entry names one). Every attempt is kept in <state>/logins/<login>/runs/<name>.json;
+# state.json's `agent_tasks` and services[] carry last_run / next_run / status.
+#   schedule: {"at": "07:00", "tz": "Asia/Shanghai"} or {"cron": "m h dom mon dow", "tz": …}
+#   window:   the session's name, `{date}` = the slot's day (default <name>-{date});
+#             a retry adds -<attempt>
+HHMM_RE = re.compile(r"^([01]?[0-9]|2[0-3]):([0-5][0-9])$")
+TASK_RETRIES_MAX = 10
+TASK_RUNS_KEEP = 60
+TASK_RC = {10: "bad setup (no prompt / spawner / fleet)", 11: "the session did not open",
+           12: "timed out waiting for the session", 13: "the session finished without its output"}
+
+
+def task_clock():
+    """The schedule's clock: now, or the selftests' fake clock (FLEET_NODE_CLOCK, a
+    file holding an epoch) — retries and timeouts keep the real one."""
+    f = os.environ.get("FLEET_NODE_CLOCK")
+    if f and env("FLEET_NODE_TEST", "") == "1":
+        try:
+            with open(f) as fh:
+                return float(fh.read().split()[0])
+        except (IOError, OSError, ValueError, IndexError):
+            pass
+    return now()
+
+
+def task_tz(sched):
+    """The schedule's zone: None = this machine's local time, False = unknown."""
+    name = (sched or {}).get("tz")
+    if not name:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(name)
+    except Exception:
+        return False
+
+
+def _cron_field(s, lo, hi):
+    out = set()
+    for part in s.split(","):
+        step = 1
+        if "/" in part:
+            part, st = part.split("/", 1)
+            step = int(st)
+            if step < 1:
+                raise ValueError(st)
+        if part == "*":
+            a, b = lo, hi
+        elif "-" in part:
+            a, b = (int(x) for x in part.split("-", 1))
+        else:
+            a = b = int(part)
+            if step > 1:
+                b = hi
+        if a < lo or b > hi or a > b:
+            raise ValueError(part)
+        out.update(range(a, b + 1, step))
+    return out
+
+
+def task_cron(sched):
+    """(minutes, hours, days, months, weekdays, dom is *, dow is *) of a schedule;
+    ValueError when it is neither a valid `at` nor a valid five-field `cron`."""
+    sched = sched or {}
+    if sched.get("at") is not None:
+        m = HHMM_RE.match(str(sched["at"]))
+        if not m or sched.get("cron"):
+            raise ValueError("at %r is not HH:MM" % sched.get("at"))
+        expr = "%d %d * * *" % (int(m.group(2)), int(m.group(1)))
+    else:
+        expr = str(sched.get("cron") or "")
+    f = expr.split()
+    if len(f) != 5:
+        raise ValueError("cron %r is not five fields" % expr)
+    dow = set(d % 7 for d in _cron_field(f[4], 0, 7))
+    return (_cron_field(f[0], 0, 59), _cron_field(f[1], 0, 23), _cron_field(f[2], 1, 31),
+            _cron_field(f[3], 1, 12), dow, f[2] == "*", f[4] == "*")
+
+
+def task_slot(sched, t, direction):
+    """(epoch, 'YYYY-MM-DD') of the schedule's next slot after t (direction 1) or
+    its latest at or before t (-1), in the schedule's zone; (None, None) if none
+    within 400 days."""
+    mins, hours, dom, mon, dow, dom_any, dow_any = task_cron(sched)
+    tz = task_tz(sched) or None
+    day = datetime.datetime.fromtimestamp(t, tz).date()
+    times = sorted((h, m) for h in hours for m in mins)
+    if direction < 0:
+        times.reverse()
+    for i in range(400):
+        d = day + datetime.timedelta(days=i * direction)
+        if d.month not in mon:
+            continue
+        dm, dw = d.day in dom, (d.isoweekday() % 7) in dow
+        if not ((dm and dw) if (dom_any or dow_any) else (dm or dw)):
+            continue
+        for h, m in times:
+            ts = datetime.datetime(d.year, d.month, d.day, h, m, tzinfo=tz).timestamp()
+            if (direction > 0 and ts > t) or (direction < 0 and ts <= t):
+                return ts, d.isoformat()
+    return None, None
+
+
+def task_when(sched):
+    """The schedule in words: `daily 07:00 Asia/Shanghai` / `cron 0 7 * * 1-5 local`."""
+    sched = sched or {}
+    what = "daily %s" % sched["at"] if sched.get("at") else "cron %s" % sched.get("cron")
+    return "%s %s" % (what, sched.get("tz") or "local")
+
+
+def task_time(t, sched):
+    """An epoch as the schedule's wall clock, `2026-10-09 07:00`."""
+    if not t:
+        return "-"
+    tz = task_tz(sched) or None
+    return datetime.datetime.fromtimestamp(t, tz).strftime("%Y-%m-%d %H:%M")
+
+
+def task_check(svc):
+    """Why a `kind: task` entry is not a valid one, or None."""
+    if not isinstance(svc.get("prompt"), str) or not svc["prompt"].strip():
+        return "a task needs a prompt"
+    sched = svc.get("schedule")
+    if not isinstance(sched, dict):
+        return "a task needs a schedule ({at: HH:MM} or {cron: …})"
+    if task_tz(sched) is False:
+        return "unknown tz %r" % sched.get("tz")
+    try:
+        task_cron(sched)
+    except ValueError as e:
+        return "schedule: %s" % e
+    for f, lo, hi in (("retries", 0, TASK_RETRIES_MAX), ("retry_delay", 0, 86400), ("timeout", 60, 86400),
+                      ("idle", 30, 86400)):
+        v = svc.get(f)
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi):
+            return "%s must be a whole number %d..%d" % (f, lo, hi)
+    win = svc.get("window")
+    if win is not None and not SVC_NAME_RE.match(str(win).replace("{date}", "2026-01-01")):
+        return "window %r (a-z 0-9 . _ -, {date})" % win
+    dw = svc.get("done_when") or {}
+    if not isinstance(dw, dict) or (dw.get("file") is not None
+                                    and not str(dw["file"]).startswith(("/", "~/"))):
+        return "done_when.file must be an absolute or ~/ path"
+    fl = svc.get("fleet")
+    if fl is not None and not SVC_NAME_RE.match(str(fl)):
+        return "fleet %r" % fl
+    bark = (svc.get("notify") or {}).get("bark")
+    if bark is not None and not ENV_KEY_RE.match(str(bark)):
+        return "notify.bark %r is not a credential name" % bark
+    return None
+
+
+def task_fill(s, day):
+    return (s or "").replace("{date}", day)
+
+
+def task_entry(paths, svc, ident, day, attempt):
+    """One attempt of a task as a process of the daemon (service_entry's shape): the
+    runner, demoted to the login, its output appended to the task's log."""
+    uid, gid, home = ident
+    login, name = svc["login"], svc["name"]
+    win = task_fill(svc.get("window") or name + "-{date}", day) + ("-%d" % attempt if attempt > 1 else "")
+    done = task_fill((svc.get("done_when") or {}).get("file"), day)
+    if done.startswith("~/"):
+        done = os.path.join(home, done[2:])
+    e = {"PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8"}
+    e.update((k, v) for k, v in (svc.get("env") or {}).items() if k not in SVC_ENV_DROP)
+    e.update(HOME=home, USER=login, LOGNAME=login, FLEET_SERVICE=name,
+             FLEET_CONF_DIR=os.path.join(home, ".config", "claude-fleet"),
+             FLEET_TASK_PROMPT=task_fill(svc["prompt"], day), FLEET_TASK_WINDOW=win, FLEET_TASK_DONE_FILE=done,
+             FLEET_TASK_TIMEOUT=str(svc.get("timeout") or 3600), FLEET_TASK_IDLE=str(svc.get("idle") or 600),
+             FLEET_TASK_FLEET=svc.get("fleet") or "", FLEET_TASK_ATTEMPT=str(attempt), FLEET_TASK_SLOT=day)
+    lg = service_log(paths, login, name)
+    runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-task-run.sh")
+    return {"name": "task:%s/%s" % (login, name), "account": login, "service": name, "window": win,
+            "uid": uid, "gid": gid, "home": home, "env": e, "creds": list(svc.get("creds") or []),
+            "script": runner, "logdir": os.path.dirname(lg),
+            "cmd": ["/bin/sh", "-c", ACCOUNT_SH, "fleet-task", lg, lg, "/bin/bash", runner]}
+
+
+def task_alert_path(paths, login, name):
+    return os.path.join(paths.logins, login, "alerts", name + ".json")
+
+
+def task_runs_path(paths, login, name):
+    return os.path.join(paths.logins, login, "runs", name + ".json")
+
+
+def task_summary(paths, svc, ts):
+    """A task's half of its services[] row: its schedule and how its runs went —
+    status scheduled | running | retrying | ok | failed | stopped | no such login."""
+    sched = svc.get("schedule") or {}
+    nxt = None
+    if svc.get("state", "enabled") == "enabled":
+        try:
+            nxt = task_slot(sched, task_clock(), 1)[0]
+        except ValueError:
+            pass
+    if svc.get("state", "enabled") == "stopped":
+        st = "stopped"
+    elif account_ident(svc["login"]) is None:
+        st = "no such login"
+    else:
+        st = ts.get("state") or "scheduled"
+        if st == "interrupted":
+            st = "running"
+    return {"status": st, "schedule": sched, "when": task_when(sched), "prompt": svc["prompt"][:SVC_LINE_MAX],
+            "window": svc.get("window") or svc["name"] + "-{date}", "retries": svc.get("retries", 2),
+            "done_when": svc.get("done_when"), "notify": svc.get("notify"),
+            "last_run": ts.get("last_run"), "last_end": ts.get("last_end"), "last_result": ts.get("last_result"),
+            "last_rc": ts.get("last_rc"), "last_error": ts.get("last_error"), "slot": ts.get("slot"),
+            "attempt": ts.get("attempt"), "last_window": ts.get("window"), "next_try": ts.get("next_try"),
+            "next_run": nxt, "alert": ts.get("alert")}
+
+
 # --------------------------------------------------------------- the daemon -----
 class Supervisor(object):
     def __init__(self, paths, table):
@@ -714,6 +960,8 @@ class Supervisor(object):
         self.procs = {}       # child name -> Popen (started by us)
         self.adopted = {}     # child name -> pid (left alive by an earlier run)
         self.running = {}     # task name -> (Popen, lock fd, t0, log fh)
+        self.agent_running = {}  # "login/name" -> (Popen, t0, entry) of an agent task's attempt (#2529)
+        self.notifies = []
         self.dirty = True
         self.stop = False
         self.backoff_max = env_num("FLEET_NODE_BACKOFF_MAX", 60)
@@ -751,7 +999,7 @@ class Supervisor(object):
         this machine has, as a child."""
         out = []
         for login, name, path, svc, why in service_files(self.p):
-            if svc is None or svc.get("state", "enabled") != "enabled":
+            if svc is None or svc.get("state", "enabled") != "enabled" or svc.get("kind") == "task":
                 continue
             ident = account_ident(login)
             if ident is not None:
@@ -1086,6 +1334,177 @@ class Supervisor(object):
                 self.start_task(tk, t)
         self.reap_tasks()
 
+    # -- agent tasks (#2529): a slot due → one attempt → retries → ok | failed + alert
+    def tend_agent_tasks(self):
+        t, clk = now(), task_clock()
+        rows = self.state.setdefault("agent_tasks", {})
+        seen = set()
+        for login, name, path, svc, why in service_files(self.p):
+            if svc is None or svc.get("kind") != "task":
+                continue
+            key = "%s/%s" % (login, name)
+            seen.add(key)
+            ts = rows.setdefault(key, {})
+            if key in self.agent_running:
+                self.reap_agent(key, ts, svc, t)
+                if key in self.agent_running:
+                    continue
+            req = os.path.join(self.p.logins, login, "run", name)
+            want = os.path.exists(req)
+            if want:
+                try:
+                    os.remove(req)
+                except OSError:
+                    pass
+            ident = account_ident(login)
+            if svc.get("state", "enabled") != "enabled" or ident is None:
+                if want:
+                    self.log("task %s: run --now ignored — %s" % (key, "stopped" if ident else "no such login"))
+                continue
+            try:
+                prev, day = task_slot(svc["schedule"], clk, -1)
+            except ValueError:
+                continue
+            catchup = env_num("FLEET_NODE_TASK_CATCHUP", 6 * 3600)
+            if want:
+                # run --now: a slot of its own, today's date in the task's zone
+                tz = task_tz(svc["schedule"]) or None
+                self.new_slot(ts, clk, datetime.datetime.fromtimestamp(clk, tz).date().isoformat(), True)
+            elif prev and prev > (ts.get("slot_t") or 0) and prev >= (svc.get("added") or 0) \
+                    and clk - prev <= catchup:
+                self.new_slot(ts, prev, day, False)
+            elif ts.get("state") == "interrupted":
+                pass                                  # the same attempt again: the runner adopts its window
+            elif ts.get("state") == "retrying" and t >= (ts.get("next_try") or 0):
+                ts["attempt"] = (ts.get("attempt") or 1) + 1
+            else:
+                continue
+            self.start_agent(key, ts, svc, ident, t)
+        for key in [k for k in rows if k not in seen]:
+            # an entry removed from the register: its attempt stops, its row goes
+            run = self.agent_running.pop(key, None)
+            if run:
+                self.kill_agent(run[0])
+            del rows[key]
+            self.dirty = True
+
+    def new_slot(self, ts, slot_t, day, manual):
+        ts.update(slot_t=slot_t, slot=day, attempt=1, manual=manual, next_try=None)
+        self.dirty = True
+
+    def start_agent(self, key, ts, svc, ident, t):
+        ent = task_entry(self.p, svc, ident, ts["slot"], ts["attempt"])
+        why = account_runnable(ent)
+        if not why and ent["creds"]:
+            missing = service_creds(self.p, ent)[1]
+            why = "missing credential %s" % ", ".join(missing) if missing else None
+        ts.update(last_run=task_clock(), window=ent["window"], pid=None)
+        if why:
+            self.end_agent(key, ts, svc, None, t, why)
+            return
+        try:
+            fh = self.logfile(ent["account"], "accounts")
+            p = self.spawn(ent, fh)
+            fh.close()
+        except (OSError, subprocess.SubprocessError) as e:
+            self.end_agent(key, ts, svc, None, t, "spawn: %s" % e)
+            return
+        self.agent_running[key] = (p, t, svc)
+        ts.update(state="running", pid=p.pid)
+        self.dirty = True
+        self.log("task %s: slot %s attempt %d started pid %d (window %s)"
+                 % (key, ts["slot"], ts["attempt"], p.pid, ent["window"]))
+
+    def kill_agent(self, p):
+        try:
+            os.killpg(p.pid, signal.SIGTERM)
+        except OSError:
+            pass
+        try:
+            p.wait(timeout=5)
+        except Exception:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+    def reap_agent(self, key, ts, svc, t, wait=False):
+        p, t0, _ = self.agent_running[key]
+        rc = p.poll()
+        why = None
+        if rc is None and t - t0 > (svc.get("timeout") or 3600) + 300:
+            # the runner keeps its own deadline; this one is for a runner that hangs
+            self.kill_agent(p)
+            rc, why = p.poll(), "killed after %ds" % int(t - t0)
+        elif rc is None:
+            if not wait:
+                return
+            self.kill_agent(p)
+            del self.agent_running[key]
+            ts.update(state="interrupted", pid=None)
+            self.dirty = True
+            return
+        del self.agent_running[key]
+        self.end_agent(key, ts, svc, rc, t, why)
+
+    def end_agent(self, key, ts, svc, rc, t, why=None):
+        login, name = key.split("/", 1)
+        if rc != 0 and not why:
+            why = TASK_RC.get(rc, "exit %s" % rc)
+        rec = {"slot": ts.get("slot"), "attempt": ts.get("attempt"), "manual": ts.get("manual"),
+               "start": ts.get("last_run"), "end": t, "rc": rc, "window": ts.get("window"), "why": why}
+        rp = task_runs_path(self.p, login, name)
+        runs = (read_json(rp, {}) or {}).get("runs") or []
+        try:
+            _svc_mkdir(os.path.dirname(rp))
+            write_json(rp, {"runs": (runs + [rec])[-TASK_RUNS_KEEP:]}, 0o600)
+        except OSError as e:
+            self.log("task %s: runs record: %s" % (key, e))
+        ts.update(last_end=t, last_rc=rc, pid=None)
+        ap = task_alert_path(self.p, login, name)
+        retries = svc.get("retries", 2)
+        if rc == 0:
+            ts.update(state="ok", last_result="ok", last_error=None, next_try=None, alert=None)
+            if os.path.exists(ap):
+                os.remove(ap)
+        elif (ts.get("attempt") or 1) <= retries:
+            ts.update(state="retrying", last_result="failed", last_error=why,
+                      next_try=t + (svc.get("retry_delay") if svc.get("retry_delay") is not None else 300))
+        else:
+            ts.update(state="failed", last_result="failed", last_error=why, next_try=None, alert=ap)
+            alert = {"name": name, "login": login, "kind": "task", "slot": ts.get("slot"),
+                     "attempts": ts.get("attempt"), "why": why, "at": t, "window": ts.get("window"),
+                     "log": service_log(self.p, login, name), "runs": rp}
+            try:
+                _svc_mkdir(os.path.dirname(ap))
+                write_json(ap, alert, 0o600)
+            except OSError as e:
+                self.log("task %s: alert: %s" % (key, e))
+            self.notify_agent(svc, alert)
+        self.dirty = True
+        self.log("task %s: slot %s attempt %s %s" % (key, ts.get("slot"), ts.get("attempt"),
+                                                    "ok" if rc == 0 else "failed — %s → %s" % (why, ts["state"])))
+
+    def notify_agent(self, svc, alert):
+        """The entry's Bark push (decision 2: optional, the hub's alert is the default):
+        the runner's --notify, demoted, the key injected from the login's creds."""
+        bark = (svc.get("notify") or {}).get("bark")
+        ident = account_ident(svc["login"])
+        if not bark or ident is None:
+            return
+        ent = task_entry(self.p, svc, ident, alert.get("slot") or "", 1)
+        ent["creds"] = [bark]
+        ent["env"].update(FLEET_TASK_BARK_CRED=bark,
+                          FLEET_TASK_NOTIFY="%s 失败 %s 次：%s" % (svc["name"], alert["attempts"], alert["why"]))
+        ent["cmd"] = ent["cmd"] + ["--notify"]
+        try:
+            fh = self.logfile(ent["account"], "accounts")
+            self.notifies.append(self.spawn(ent, fh))
+            fh.close()
+        except (OSError, subprocess.SubprocessError) as e:
+            self.log("task %s/%s: bark: %s" % (svc["login"], svc["name"], e))
+        self.notifies = [p for p in self.notifies if p.poll() is None]
+
     # -- lanes (issue #2501)
     def tend_lanes(self):
         """The logins whose lane the hub refuses, from each tenant's lane.json
@@ -1128,6 +1547,9 @@ class Supervisor(object):
         for ts in self.state["tasks"].values():
             if ts.get("result") == "running":
                 ts.update(result="interrupted", pid=None)
+        for ts in (self.state.get("agent_tasks") or {}).values():
+            if ts.get("state") == "running":
+                ts.update(state="interrupted", pid=None)
         self.state["supervisor"]["runtime"] = runtime_sha(self.p)
         self.adopt()
         self.log("supervisor up pid %d (start #%d) on %s" % (os.getpid(), self.state["supervisor"]["starts"],
@@ -1139,6 +1561,10 @@ class Supervisor(object):
                 break
             self.tend_children()
             self.tend_tasks(t)
+            try:
+                self.tend_agent_tasks()
+            except Exception as e:  # one bad entry must never take the daemon down
+                self.log("agent tasks: %s" % e)
             self.tend_lanes()
             if self.sweep_due(t):
                 try:
@@ -1155,6 +1581,8 @@ class Supervisor(object):
             except OSError:
                 pass
         self.reap_tasks(wait=True)
+        for key in list(self.agent_running):
+            self.reap_agent(key, self.state["agent_tasks"][key], self.agent_running[key][2], now(), wait=True)
         self.save(force=True)
         return 0
 
@@ -1863,6 +2291,13 @@ def status_lines(paths, table, state):
         if r["status"] == "invalid":
             out.append("service %-17s INVALID — %s (%s)" % ("%s/%s" % (r["login"], r["name"]), r["why"], r["file"]))
             continue
+        if r["kind"] == "task":
+            out.append("task    %-17s %s · %s · last %s %s · next %s%s"
+                       % ("%s/%s" % (r["login"], r["name"]), r["status"], r["when"],
+                          task_time(r.get("last_run"), r["schedule"]), r.get("last_result") or "-",
+                          task_time(r.get("next_run"), r["schedule"]),
+                          (" · %s" % r["last_error"]) if r["status"] in ("failed", "retrying") else ""))
+            continue
         if r["status"] == "running":
             what = "running pid %s · up %s" % (r["pid"], ago(r.get("started")))
         elif r["status"] == "down":
@@ -1951,13 +2386,61 @@ def uninstall(paths):
     return 0
 
 
+def register_rows(paths, state):
+    """services[] for `service ls`: computed from the register when this process may
+    read it (root), else the copy the daemon keeps in state.json (0644) — the
+    register is root's 0700 — with the reader's own log's last line."""
+    if os.access(paths.logins, os.R_OK | os.X_OK) and (os.geteuid() == 0 or env("FLEET_NODE_TEST", "") == "1"):
+        return services_summary(paths, state, tail=True)
+    rows = [dict(r) for r in state.get("services") or []]
+    for r in rows:
+        t = log_tail(r.get("log") or "")
+        r["last_line"] = t[-1] if t else None
+    return rows
+
+
+def task_opts(opts, one):
+    """The task fields of `service add --kind task`; ValueError on a bad one."""
+    def num(flag):
+        v = one(flag)
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            raise ValueError("%s %r is not a whole number" % (flag, v))
+    sched = {}
+    if one("--at"):
+        sched["at"] = one("--at")
+    if one("--cron"):
+        sched["cron"] = one("--cron")
+    if one("--tz"):
+        sched["tz"] = one("--tz")
+    out = {"kind": "task", "exec": None, "prompt": one("--prompt") or "", "schedule": sched,
+           "retries": 2 if num("--retries") is None else num("--retries"),
+           "window": one("--window") or None}
+    for flag, key in (("--retry-delay", "retry_delay"), ("--timeout", "timeout"), ("--idle", "idle")):
+        if num(flag) is not None:
+            out[key] = num(flag)
+    if one("--done-file"):
+        out["done_when"] = {"file": one("--done-file")}
+    if one("--fleet"):
+        out["fleet"] = one("--fleet")
+    if one("--bark"):
+        out["notify"] = {"bark": one("--bark")}
+    return out
+
+
 # --------------------------------------------------------------- service CLI ----
 SERVICE_USAGE = ("usage: fleet-node-supervisor.py service add --login L --name N [--env K=V]… [--env-key K]… "
                  "[--cred C]… [--path P]… -- <exec> [args…]\n"
-                 "       fleet-node-supervisor.py service rm|stop|start|restart --login L --name N\n"
+                 "       fleet-node-supervisor.py service add --kind task --login L --name N --prompt P "
+                 "(--at HH:MM | --cron 'm h dom mon dow') [--tz Z] [--retries N] [--retry-delay S] [--window W] "
+                 "[--done-file F] [--timeout S] [--idle S] [--fleet F] [--bark C] [--env K=V]… [--cred C]…\n"
+                 "       fleet-node-supervisor.py service rm|stop|start|restart|run --login L --name N\n"
                  "       fleet-node-supervisor.py service move --login L --name N --to L2\n"
                  "       fleet-node-supervisor.py service cred set|rm --login L --name C   (the value on stdin)\n"
-                 "       fleet-node-supervisor.py service ls [--login L] [--json]\n"
+                 "       fleet-node-supervisor.py service ls [--login L] [--kind service|task] [--json]\n"
                  "       fleet-node-supervisor.py service logs --login L --name N [-n LINES]")
 
 
@@ -2016,18 +2499,28 @@ def service_cli(paths, rest):
     one = lambda k: (opts.get(k) or [None])[-1]
     login, name = one("--login"), one("--name")
     if sub == "ls":
-        rows = services_summary(paths, read_json(paths.state_file, {}), tail=True)
+        rows = register_rows(paths, read_json(paths.state_file, {}))
         if login:
             rows = [r for r in rows if r["login"] == login]
+        if one("--kind"):
+            rows = [r for r in rows if r.get("kind", "service") == one("--kind")]
         if "--json" in opts:
             print(json.dumps(rows, indent=1, sort_keys=True))
             return 0
         for r in rows:
+            if r.get("kind") == "task":
+                sc = r.get("schedule") or {}
+                print("%-24s %-9s %s · 上次 %s %s · 下次 %s%s" % (
+                    "%s/%s" % (r["login"], r["name"]), r["status"], r.get("when") or task_when(sc),
+                    task_time(r.get("last_run"), sc), r.get("last_result") or "-", task_time(r.get("next_run"), sc),
+                    ("  · %s" % r["last_error"]) if r.get("last_error") and r["status"] in ("failed", "retrying")
+                    else ""))
+                continue
             print("%-24s %-9s %s%s" % ("%s/%s" % (r["login"], r["name"]), r["status"],
                                        " ".join(r.get("exec") or []) or r.get("why", ""),
                                        ("  · %s" % r["last_line"]) if r.get("last_line") else ""))
         if not rows:
-            print("(no service registered%s)" % (" for %s" % login if login else ""))
+            print("(no %s registered%s)" % (one("--kind") or "service", " for %s" % login if login else ""))
         return 0
     if sub == "logs":
         if not (login and name and SVC_NAME_RE.match(name) and LOGIN_RE.match(login)):
@@ -2073,7 +2566,7 @@ def service_cli(paths, rest):
             print(SERVICE_USAGE, file=sys.stderr)
             return 2
         return service_move(paths, login, name, one("--to"))
-    if sub not in ("add", "rm", "stop", "start", "restart") or not login or not name:
+    if sub not in ("add", "rm", "stop", "start", "restart", "run") or not login or not name:
         print(SERVICE_USAGE, file=sys.stderr)
         return 2
     if not SVC_NAME_RE.match(name):
@@ -2090,6 +2583,24 @@ def service_cli(paths, rest):
         os.remove(f)
         print("removed %s/%s — the daemon stops it on its next pass" % (login, name))
         return 0
+    if sub == "run":
+        svc = read_json(f, None)
+        if svc is None:
+            print("fleet-node-supervisor: %s/%s is not registered" % (login, name), file=sys.stderr)
+            return 1
+        if svc.get("kind") != "task":
+            print("fleet-node-supervisor: %s/%s is a service — run is a task's (restart starts a service again)"
+                  % (login, name), file=sys.stderr)
+            return 2
+        if svc.get("state", "enabled") != "enabled":
+            print("fleet-node-supervisor: %s/%s is stopped — start it first" % (login, name), file=sys.stderr)
+            return 1
+        rq = os.path.join(paths.logins, login, "run")
+        _svc_mkdir(rq)
+        write_json(os.path.join(rq, name), {"at": now()}, 0o600)
+        print("%s/%s: one run now — the daemon starts it on its next pass (after a run in flight); "
+              "fleet task ls shows it" % (login, name))
+        return 0
     if sub in ("stop", "start", "restart"):
         svc = read_json(f, None)
         if svc is None:
@@ -2101,8 +2612,15 @@ def service_cli(paths, rest):
         print("%s/%s %s" % (login, name, {"stop": "stopped", "start": "enabled",
                                            "restart": "restarting"}[sub]))
         return 0
-    if not ex:
+    kind = one("--kind") or "service"
+    if kind not in SVC_KINDS:
+        print("fleet-node-supervisor: --kind %s — service or task" % kind, file=sys.stderr)
+        return 2
+    if kind == "service" and not ex:
         print("fleet-node-supervisor: nothing to run — add … -- <exec> [args…]", file=sys.stderr)
+        return 2
+    if kind == "task" and ex:
+        print("fleet-node-supervisor: a task runs a prompt, not a command — drop the `-- …`", file=sys.stderr)
         return 2
     envs = {}
     for kv in opts.get("--env") or []:
@@ -2117,6 +2635,14 @@ def service_cli(paths, rest):
            "retries": None, "env": envs, "env_keys": sorted(set(keys + list(envs))),
            "creds": list(opts.get("--cred") or []), "paths": list(opts.get("--path") or []),
            "state": "enabled", "added": old.get("added") or now(), "changed": now()}
+    if kind == "task":
+        try:
+            svc.update(task_opts(opts, one))
+        except ValueError as e:
+            print("fleet-node-supervisor: %s" % e, file=sys.stderr)
+            return 2
+        # a slot is never older than the entry (the fake clock in the selftests)
+        svc["added"] = old.get("added") if old.get("kind") == "task" else task_clock()
     why = service_check(svc, login, name)
     if why:
         print("fleet-node-supervisor: %s" % why, file=sys.stderr)
@@ -2125,8 +2651,14 @@ def service_cli(paths, rest):
     _svc_mkdir(d)
     write_json(f, svc, 0o600)
     missing = [c for c in svc["creds"] if not os.path.exists(os.path.join(service_cred_dir(paths, login), c))]
-    print("%s %s/%s — the daemon runs it as %s on its next pass; log %s"
-          % ("updated" if old else "registered", login, name, login, service_log(paths, login, name)))
+    if kind == "task":
+        print("%s task %s/%s — %s, next run %s, as %s; log %s"
+              % ("updated" if old else "registered", login, name, task_when(svc["schedule"]),
+                 task_time(task_slot(svc["schedule"], task_clock(), 1)[0], svc["schedule"]), login,
+                 service_log(paths, login, name)))
+    else:
+        print("%s %s/%s — the daemon runs it as %s on its next pass; log %s"
+              % ("updated" if old else "registered", login, name, login, service_log(paths, login, name)))
     if missing:
         print("note: credential %s not stored yet — it waits until `fleet service cred set` has it"
               % ", ".join(missing))
@@ -2323,10 +2855,12 @@ def service_move(paths, login, name, to):
             os.rename(tmp, dst)
             fresh.append(dst)
         new = dict(svc, login=to, state=old_state, changed=now(),
-                   exec=[_rehome(x, oh, nh) for x in svc["exec"]],
+                   exec=[_rehome(x, oh, nh) for x in svc["exec"]] if svc.get("exec") else svc.get("exec"),
                    env=dict((k, _rehome(v, oh, nh)) for k, v in (svc.get("env") or {}).items()),
                    paths=[_rehome(p, oh, nh) for p in svc.get("paths") or []],
                    moved_from={"login": login, "at": now()})
+        if (svc.get("done_when") or {}).get("file"):    # a task's output (#2529)
+            new["done_when"] = dict(svc["done_when"], file=_rehome(svc["done_when"]["file"], oh, nh))
         why = service_check(new, to, name)
         if why:
             raise ValueError(why)
