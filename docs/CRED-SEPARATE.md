@@ -302,6 +302,25 @@ without it is refused BEFORE a join code is spent or a probe runs (`setenv
 printed `printf 'KEY=value\n' | sudo bash …/fleet-credsep.sh setenv --login <X>`.
 BREAK-IT rows `cred-sep-rejoin-plain`, `cred-sep-compute-unlinks`.
 
+**A plain node.env back in the home** (issue #2649): a writer from before #2316
+(macmini's `fleet host on --shared` on 2026-10-08) replaced the link with a plain
+file. The agent then takes its token from the store (read at its start) but its
+compute / personal switches live from that plain file, the store's copy is the
+older one, and every later `setenv` refuses the home (exit 5, `--check` too —
+before a probe or a join code). The doctor's `credsep` row says so and prints the
+fix, root once:
+
+    sudo bash ~/.claude/fleet/bin/fleet-credsep-reconcile.sh --login <X> [--prefer home|store] [--dry-run]
+
+It folds the home copy into the store (a key both have takes the NEWER copy's
+value, `--prefer` overrides; a key only one has is kept), sets the plain file
+aside in the store's `backup/node.env.home-<UTC>`, puts the link back, rewrites
+`node.pub.env` and restarts the agent through the launcher. On a managed machine
+an adopted login's `/var/db/fleet-node/logins/<X>.env` takes the same `CCQUOTA_`
+lines (the node daemon reloads it); a login not adopted there is only named —
+writing one would start a second agent on the same token. No value is printed;
+a rerun is a no-op. BREAK-IT row `cred-sep-plain-node-env`.
+
 ## Where the proxy's settings come from (issue #2290)
 
 Root starts the proxy, but the login writes its own `fleet.conf` and

@@ -2079,8 +2079,8 @@ def setenv(a):
     ne_store = os.path.join(R, "node.env")
     ne_path = os.path.join(conf, "node.env")
     if os.path.lexists(ne_path) and not os.path.islink(ne_path):
-        die("%s is a plain file in the home (the token readable there) — move it into the store first: "
-            "sudo bash %s/fleet-credsep.sh install --login %s" % (ne_path, HERE, login))
+        die("%s is a plain file in the home (the token readable there) — fold it into the store first: "
+            "sudo bash %s/fleet-credsep-reconcile.sh --login %s" % (ne_path, HERE, login), 5)
     lines = open(ne_store).read().splitlines() if os.path.isfile(ne_store) else \
         ["# claude-fleet node-join (issue #1418) — this login's ccquota agent; in the credsep store (issue #2316)"]
     cur = env_file(ne_store)
@@ -2122,8 +2122,13 @@ def setenv(a):
         say("node.env: unchanged (in %s)" % R)
         return 0
     say("node.env: %s set in %s — %s stays a link" % (", ".join(changed), R, ne_path))
-    # the agent read node.env at its start (the launcher pipes the token, the rest
-    # is its environment) and cannot re-read the store: a change needs a restart
+    agent_reload(login, R)
+    return 0
+
+
+def agent_reload(login, R):
+    """The agent read node.env at its start (the launcher pipes the token, the rest
+    is its environment) and cannot re-read the store: a change needs a restart."""
     try:
         meta = json.load(open(os.path.join(R, "meta.json")))
     except (OSError, ValueError):
@@ -2136,7 +2141,152 @@ def setenv(a):
         say("agent: %s restarted through the launcher" % label)
     else:
         say("agent: none through the launcher yet")
+
+
+# ---- reconcile: a plain node.env back in a separated home (issue #2649) -------------
+# A writer from before #2316 (`fleet host on` on 2026-10-08, macmini) replaced the
+# link with a plain file: the token readable in the home again, and the store's
+# copy left behind. Root folds the home copy into the store — the NEWER file's
+# value wins a key both have (--prefer home|store overrides), a key only one has
+# is kept — sets the plain file aside in the store's backup/, puts the link back,
+# rewrites node.pub.env, restarts the agent; on a managed machine the node daemon's
+# logins/<login>.env (an adopted login's) takes the same CCQUOTA_ lines. Never
+# prints a value. Idempotent: a link already in place = nothing to fold.
+NE_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+
+
+def ne_lines(path):
+    """[(key|None, raw line)] of a node.env, in order — the raw value kept as written."""
+    out = []
+    for line in open(path).read().splitlines():
+        m = NE_LINE.match(line)
+        out.append((m.group(1) if m else None, line))
+    return out
+
+
+def ne_merge(base, top, keep_top_only=True):
+    """base's lines with top's value for every key top has (in base's place), then
+    top's keys base lacks. → (lines, [changed keys])."""
+    tv = {k: l for k, l in top if k}
+    seen, out, changed = set(), [], []
+    for k, l in base:
+        if k and k in tv:
+            if k in seen:
+                continue
+            seen.add(k)
+            if tv[k].strip() != l.strip():
+                changed.append(k)
+            out.append(tv[k].strip())
+        else:
+            out.append(l)
+    for k, l in top:
+        if k and k not in seen and keep_top_only:
+            seen.add(k)
+            changed.append(k)
+            out.append(l.strip())
+    return out, changed
+
+
+def reconcile(a):
+    """→ 0 reconciled (or nothing to do) · 1 refused · 3 not separated."""
+    login, conf = a.login, os.path.abspath(a.conf_dir)
+    rec = record(conf)
+    R = paths(login)[0]
+    if not rec:
+        die("%s is not separated (no %s/credsep.json) — its node.env is its own file, nothing to reconcile"
+            % (login, conf), 3)
+    if not os.path.isfile(os.path.join(R, "meta.json")):
+        die("separated, but %s has no meta.json — rerun: sudo bash %s/fleet-credsep.sh install --login %s"
+            % (R, HERE, login))
+    ne_store = os.path.join(R, "node.env")
+    ne_path = os.path.join(conf, "node.env")
+    plain = os.path.lexists(ne_path) and not os.path.islink(ne_path)
+    if os.path.islink(ne_path) and os.readlink(ne_path) != ne_store:
+        die("%s is a link, but to %s, not the store's %s — look at it by hand" % (ne_path, os.readlink(ne_path), ne_store))
+    if plain and not os.path.isfile(ne_path):
+        die("%s is neither a file nor a link — look at it by hand" % ne_path)
+    have_store = os.path.isfile(ne_store)
+    if not plain and not have_store:
+        die("neither %s nor %s holds a node.env — nothing to reconcile (fleet node join writes one)" % (ne_path, ne_store))
+    if plain:
+        home_l = ne_lines(ne_path)
+        if not any(k == "CCQUOTA_TOKEN" for k, _ in home_l) and not have_store:
+            die("%s carries no CCQUOTA_TOKEN and the store has no node.env — nothing a node runs on" % ne_path)
+        if have_store:
+            store_l = ne_lines(ne_store)
+            newer = "home" if os.stat(ne_path).st_mtime >= os.stat(ne_store).st_mtime else "store"
+            win = a.prefer or newer
+            say("node.env: a plain file in the home (%s) and the store's (%s) — the %s copy is newer%s"
+                % (ne_path, ne_store, newer, "" if win == newer else "; --prefer %s wins" % win))
+            skeys = {k for k, _ in store_l if k}
+            hkeys = {k for k, _ in home_l if k}
+            # the losing copy still gives the keys only it has
+            lines, changed = ne_merge(store_l, home_l if win == "home" else
+                                      [(k, l) for k, l in home_l if k and k not in skeys])
+            own = sorted(skeys - hkeys)
+            say("node.env: %s from the home copy into the store%s" % (
+                ", ".join(changed) if changed else "nothing new",
+                "; kept the store's own %s" % ", ".join(own) if own else ""))
+            st = os.stat(ne_store)
+            mode, owner = st.st_mode & 0o777, pwd.getpwuid(st.st_uid).pw_name
+        else:
+            lines, changed = [l for _, l in home_l], [k for k, _ in home_l if k]
+            mode, owner = 0o600, ROLE
+            say("node.env: the store has none — the home copy (%s) moves in whole" % ne_path)
+        if changed or not have_store:
+            put(ne_store, "\n".join(lines) + "\n", mode, owner)
+        bdir = os.path.join(R, "backup")
+        bak = os.path.join(bdir, "node.env.home-%s" % time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
+        mkdir(bdir, 0o700, ROLE)
+        move(ne_path, bak, ROLE)
+        say("node.env: the home's plain copy set aside in %s (root's to delete)" % bak)
+    else:
+        changed = []
+        say("node.env: %s is already the store's link" % ne_path)
+    if not DRY:
+        if not os.path.lexists(ne_path):
+            tmp = "%s.credsep.%d" % (ne_path, os.getpid())
+            os.symlink(ne_store, tmp)
+            chown(tmp, login, follow=False)
+            os.replace(tmp, ne_path)
+            say("node.env: %s → %s (a link again)" % (ne_path, ne_store))
+        pub_env(conf, R, env_file(ne_store), login)
+    else:
+        say("    would link", ne_path, "→", ne_store, "and rewrite node.pub.env")
+    back = rec.get("back") or {}
+    files = back.get("files") or []
+    if [ne_store, ne_path] not in files:
+        back["files"] = files + [[ne_store, ne_path]]
+        rec["back"] = back
+        put(os.path.join(conf, "credsep.json"), json.dumps(rec, indent=1) + "\n", 0o644, login)
+    managed_env(login, ne_store)
+    if plain or changed:
+        if DRY:
+            say("    would restart the agent through the launcher")
+        else:
+            agent_reload(login, R)
+    say("reconciled %s: node.env is in %s only" % (login, R))
     return 0
+
+
+def managed_env(login, ne_store):
+    """The node daemon's logins/<login>.env (a managed machine, an adopted login):
+    the store's CCQUOTA_ lines over it, its own CCQUOTA_FLEET_CRED_STORE /
+    FLEET_CONF_DIR kept. Not adopted: said, never written (a second agent)."""
+    envp = os.path.join(NODE_STATE, "logins", login + ".env")
+    if not os.path.isfile(os.path.join(NODE_STATE, "machine.env")) and not os.path.isfile(envp):
+        return
+    if not os.path.isfile(envp) or os.path.islink(envp):
+        say("managed: %s is not adopted here (no %s) — its own agent stays the one; "
+            "`sudo fleet-node-supervisor.py account adopt %s` hands it to the node program" % (login, envp, login))
+        return
+    src = [(k, l) for k, l in ne_lines(ne_store) if k and k.startswith("CCQUOTA_") and k != "CCQUOTA_FLEET_CRED_STORE"]
+    lines, changed = ne_merge(ne_lines(envp), src)
+    if not changed:
+        say("managed: %s already carries the store's lines" % envp)
+        return
+    put(envp, "\n".join(lines) + "\n", 0o600, "root" if os.geteuid() == 0 else getpw(login).pw_name)
+    say("managed: %s — %s (the node daemon restarts its node program)" % (envp, ", ".join(changed)))
 
 
 # ---- the login's side -------------------------------------------------------------
@@ -2228,6 +2378,23 @@ def check(a):
     if bad:
         print("credsep: WARN — this login CAN read %s: the store is not separated (owner/mode?)" % ", ".join(bad))
         return 1
+    ne = os.path.join(conf, "node.env")
+    if ne in left:
+        # a writer from before #2316 swapped the link for a plain file (issue #2649).
+        # The store is not this login's to stat; node.pub.env is rewritten with it.
+        me = pwd.getpwuid(os.getuid()).pw_name
+        try:
+            newer = os.stat(ne).st_mtime > os.stat(os.path.join(conf, "node.pub.env")).st_mtime
+        except OSError:
+            newer = True
+        rest = [p for p in left if p != ne]
+        print("credsep: WARN — separated, but %s is a plain file again%s: the agent's token is the store's "
+              "(read at its start), its compute / personal switches are read live from this file — so this copy "
+              "is the one in use for them, and the token sits readable in the home. Fold it into the store "
+              "(root, once; the newer copy wins): sudo bash %s/fleet-credsep-reconcile.sh --login %s%s"
+              % (ne, " and newer than the store's" if newer else "", HERE, me,
+                 "; also back at login paths: %s" % ", ".join(rest[:4]) if rest else ""))
+        return 1
     if left:
         print("credsep: WARN — separated, but credentials are back at login paths: %s" % ", ".join(left[:4]))
         return 1
@@ -2294,6 +2461,12 @@ def main():
     se.add_argument("--login", required=True)
     se.add_argument("--conf-dir", required=True)
     se.add_argument("--install-dir", default="")
+    rc_ = sub.add_parser("reconcile")   # a plain node.env back in a separated home (issue #2649)
+    rc_.add_argument("--login", required=True)
+    rc_.add_argument("--conf-dir", required=True)
+    rc_.add_argument("--install-dir", default="")
+    rc_.add_argument("--prefer", choices=("home", "store"), default="")
+    rc_.add_argument("--dry-run", action="store_true")
     pg = sub.add_parser("purge")    # a login being deleted (fleet-login-remove.sh, #2418)
     pg.add_argument("--login", required=True)
     pg.add_argument("--dry-run", action="store_true")
@@ -2328,6 +2501,13 @@ def main():
         if os.geteuid() != 0 and not TEST:
             die("setenv needs root (bin/fleet-credsep.sh setenv runs it through sudo -n)", 2)
         return setenv(a)
+    if a.cmd == "reconcile":
+        DRY = a.dry_run
+        if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", a.login):
+            die("bad login %r" % a.login, 2)
+        if os.geteuid() != 0 and not TEST:
+            die("reconcile needs root: sudo bash %s/fleet-credsep-reconcile.sh --login %s" % (HERE, a.login), 2)
+        return reconcile(a)
     if a.cmd == "relog":
         DRY = a.dry_run
         if os.geteuid() != 0 and not TEST and not DRY:

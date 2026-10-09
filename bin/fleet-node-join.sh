@@ -269,6 +269,7 @@ if [ "$SEP" = 1 ]; then
   FLEET_CONF_DIR="$CONF" bash "$CREDSEP" setenv --check >"$WORK/credsep.log" 2>&1; rc=$?
   case "$rc" in
     0) ;;
+    5) die "join: $(tail -n 1 "$WORK/credsep.log" | sed 's/^fleet-credsep: //')" ;;
     4) die "join: this login's credentials are separated — its node token goes into the credential store only, which needs root once, and $ME has no password-less sudo. Nothing was spent: once an admin gives $ME password-less sudo, rerun the same command" ;;
     *) die "join: credsep setenv --check failed (exit $rc): $(tail -n 1 "$WORK/credsep.log")" ;;
   esac
