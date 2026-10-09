@@ -222,6 +222,54 @@ func (s *Server) orchestratorPick(host, login string, eligible bool, now time.Ti
 	return out, nil
 }
 
+// orchEnsureTarget is where an orch_ensure with no fleet_id goes
+// (claude-fleet#2616 — ⌘N on a client found no orchestrating session): among
+// the present fleets the caller sees on an online machine, the one on its
+// owner's holder machine (fleet.orchestrator_host.<owner>, read — never moved
+// here), else the one with the most sessions, then by machine name. The node's
+// own `fleet-orchestrator.sh ensure` still asks /v1/node/orchestrator, so a
+// pick that is not the holder opens nothing.
+func (s *Server) orchEnsureTarget(p fleetPrincipal, now time.Time) (store.FleetRow, error) {
+	views, rows, err := s.visibleFleets(p, now)
+	if err != nil {
+		return store.FleetRow{}, err
+	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return store.FleetRow{}, err
+	}
+	best, bestHolder := -1, false
+	for i, r := range rows {
+		if !r.Present || views[i].Availability != "online" {
+			continue
+		}
+		if _, flagged := maintenanceOf(r.Hostname, settings); flagged {
+			continue
+		}
+		owner, _ := s.Store.PrincipalForLogin(r.Hostname, r.OSUser)
+		holder := settings[OrchestratorHostPrefix+orchOwnerKey(owner, r.OSUser)] == orchMachine(r.Hostname)
+		better := best < 0
+		if !better {
+			b := rows[best]
+			switch {
+			case holder != bestHolder:
+				better = holder
+			case r.WorkerCount != b.WorkerCount:
+				better = r.WorkerCount > b.WorkerCount
+			default:
+				better = orchMachine(r.Hostname) < orchMachine(b.Hostname)
+			}
+		}
+		if better {
+			best, bestHolder = i, holder
+		}
+	}
+	if best < 0 {
+		return store.FleetRow{}, fault("NO_ELIGIBLE_NODE", "没有可以开编排会话的在线承载机器")
+	}
+	return rows[best], nil
+}
+
 // handleNodeOrchestrator serves /v1/node/orchestrator — a machine asking, with
 // its own node token, whether it is the one to hold the orchestrator.
 func (s *Server) handleNodeOrchestrator(w http.ResponseWriter, r *http.Request) {

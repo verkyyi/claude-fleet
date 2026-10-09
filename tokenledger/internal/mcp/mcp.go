@@ -1407,6 +1407,15 @@ func fleetToolSpecs() []toolSpec {
 				"idempotency_key": idemProp},
 				"machine", "login", "name", "action", "idempotency_key"),
 		},
+		{
+			Name:  "orch_ensure",
+			Title: "Open your orchestrating session",
+			Description: "Open the person's ONE orchestrating session where it is missing (bin/fleet-orchestrator.sh " +
+				"ensure on the machine): fleet_id names the fleet, omitted = the hub picks — the holder machine, " +
+				"else the online one with most of your sessions. The node still asks who holds it, so a machine " +
+				"that is not the holder opens nothing (result orchestrator=elsewhere). Needs worker:start." + fleetWriteCaveat,
+			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp, "idempotency_key": idemProp}, "idempotency_key"),
+		},
 	}
 }
 

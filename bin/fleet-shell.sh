@@ -458,6 +458,10 @@ stamp_ver() {
   [ -n "$v" ] && T set-option -g @client_version "$v" 2>/dev/null
   v=$(bash "$REAL_BIN/fleet-client-update.sh" digest --root "$REAL_BIN/.." 2>/dev/null)
   [ -n "$v" ] && T set-option -g @client_digest "$v" 2>/dev/null
+  # The writing area's switch (issue #2616) for the bar: ⌘N reads 「编排」 unless
+  # FLEET_COMPOSE=1 brings the writing area back
+  if [ "${FLEET_COMPOSE:-0}" = 1 ]; then T set-option -g @fleet_compose 1 2>/dev/null
+  else T set-option -gu @fleet_compose 2>/dev/null; fi
   return 0
 }
 # portal_ver — the code the writing area runs (issue #2113): fleet-compose.py and
@@ -1003,10 +1007,24 @@ EOF
 # first time, selected every time after: the draft lives in the pane and on disk
 # (fleet-compose.py), so leaving and coming back loses nothing. The list is woken
 # (F12) so its ▶ moves at once rather than on its next tick.
+#
+# ⌘N goes to the orchestrating session itself (issue #2616, EPIC #2615 C1): with
+# FLEET_COMPOSE ([client], default 0) off no portal window is made — the road is
+# fleet-compose.py --orch, carry()'s own jump to orch_<sess>'s window (another
+# machine's `@remote` row as well), and with no orch_<sess> --boot asks the hub
+# to open it (orch_ensure) and goes once it shows, 「正在叫起编排会话…」 on the bar
+# meanwhile, one line saying why when it never came. FLEET_COMPOSE=1: the writing
+# area below, byte for byte. compat-1v: 下一批删 (the writing area, if nobody opened it)
 portal)
   s="${2:-$SESS}"
   SESS=$s; STAGE="$s-stage"; SHADOW=$BIN
   stage_up || exit 1
+  if [ "${FLEET_COMPOSE:-0}" != 1 ]; then
+    # the stage by its socket: this runs on the shell's server, whose $TMUX is not it
+    FLEET_COMPOSE_STAGE_SOCK=$(TS display-message -p '#{socket_path}' 2>/dev/null) \
+      python3 "$BIN/fleet-compose.py" --orch "$s" --boot >/dev/null 2>&1
+    exit 0
+  fi
   # ⌘N again ON the writing area (issue #2146): the orchestrating session, no
   # draft — fleet-compose.py --orch, carry()'s own jump to orch_<sess>'s window.
   # From the orchestrator (or anywhere else) ⌘N is the writing area, as below. No

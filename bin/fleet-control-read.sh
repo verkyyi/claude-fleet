@@ -636,6 +636,13 @@ case "$mode" in
     esac
     exec bash "$BIN/fleet-gh.sh" "$1" "$2" "$n" --repo "$repo" ${fields:+--json "$fields"}
     ;;
+  # --- orch <sess> (issue #2616): the hub's orch_ensure — ⌘N on a client found no
+  # orchestrating session. fleet-orchestrator.sh ensure asks the hub who holds it
+  # first; its exit code passes through (0 opened/here · 3 off · 5 held elsewhere).
+  orch)
+    fleet_load_conf "$sess"
+    exec bash "$BIN/fleet-orchestrator.sh" ensure "$sess"
+    ;;
   stop)
     fleet_load_conf "$sess"
     exec bash "$BIN/fleet-worker-stop.sh" "$sess" "${3:-}"

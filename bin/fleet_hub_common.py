@@ -31,7 +31,10 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             "worker_rename": "worker:message",
             # worker_reap_policy (issue #2368) says WHEN the fleet may close the
             # session on its own: a reap's authority — `done:1m` is a reap soon.
-            "worker_reap_policy": "worker:reap"}
+            "worker_reap_policy": "worker:reap",
+            # orch_ensure (issue #2616) opens the person's orchestrating session
+            # when ⌘N found none: a start's authority.
+            "orch_ensure": "worker:start"}
 # The tools that name a WORKER (a worker_id), not a fleet. worker_answer and
 # worker_reap (issue #1487, EPIC #1479 C8) are what a sidebar on another machine
 # runs on a row here: answer the pane's open prompt (fleet-answer.sh /
@@ -578,6 +581,8 @@ def validate_write(action, params):
             check_text(params.get("text"))
         if action == "worker_answer":
             check_answer(params["answer"])
+    elif action == "orch_ensure":
+        fields(params, (), ())   # issue #2616: nothing to name — the fleet is the session
     elif action == "config_set":
         fields(params, ("key", "value", "expected_revision"))
         key, value = params["key"], params["value"]

@@ -36,6 +36,7 @@
 #   8. The node binds none of them (issue #1714, EPIC #1710 C4): a server that
 #      sources conf/tmux-attention.conf lists EXACTLY tmux's stock keys, and one
 #      that sources the client's conf has every sheet key — on an isolated socket.
+#      Its bar says ⌘N 编排, ⌘N 新任务 only with @fleet_compose (issue #2616).
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged). No network.
 set -uo pipefail
@@ -427,6 +428,16 @@ $sheet_prefix_keys
 EOF
   ktm shell list-keys -T root | awk '$4 == "F9"' | grep -q 'resize-pane' || fail "8: the client does not bind F9"
   ktm shell list-keys -T fleet-sidebar 2>/dev/null | grep -q . && fail "8: the client still has a fleet-sidebar key table — the list takes no keys (#1950)"
+  # ⌘N on the bar (issue #2616): 「⌘N 编排」 — it goes to the orchestrating session —
+  # and 「⌘N 新任务」 only while FLEET_COMPOSE=1 brings the writing area back
+  # (@fleet_compose, fleet-shell.sh stamp_ver); prefix c's hint the same.
+  bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
+  case "$bar" in *"⌘N 编排"*) ;; *) fail "8: the bar does not say ⌘N 编排: $bar" ;; esac
+  case "$(ktm shell display-message -p '#{E:@fleet_hint_prefix}' 2>/dev/null | sed 's/#\[[^]]*\]//g')" in
+    *"c 编排"*) ;; *) fail "8: prefix c's hint does not say 编排" ;; esac
+  ktm shell set-option -g @fleet_compose 1
+  bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
+  case "$bar" in *"⌘N 新任务"*) ;; *) fail "8: with FLEET_COMPOSE=1 the bar does not say ⌘N 新任务: $bar" ;; esac
   ktm stock kill-server; ktm node kill-server; ktm shell kill-server
   rm -rf "$KW"
 fi

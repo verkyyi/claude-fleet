@@ -304,6 +304,16 @@ FLEET_CTX_WINDOW=200000
 # @label=Orchestrator session @group=spawn @tier=internal @scope=fleet @edit=bool
 #FLEET_ORCHESTRATOR=1
 
+# ⌘N on the client (its [client] section — issue #2616): 0 (default) = straight
+# to the orchestrating session's input, woken first through the hub
+# (orch_ensure) when no machine runs it, at most FLEET_ORCH_BOOT_SECS; 1 = the
+# writing area on the right as before (multi-line, attachments, ⇧⇥ hands the
+# draft to the orchestrator). Read at each ⌘N; the bar's word at the shell's start.
+# @label=⌘N opens the writing area @group=status @tier=internal @scope=global @edit=bool
+#FLEET_COMPOSE=0
+# @label=Orchestrator wake wait @group=status @tier=internal @scope=global @edit=int @unit=seconds
+#FLEET_ORCH_BOOT_SECS=75
+
 # The orchestrator runs this login's default agent (FLEET_AGENT) on its strongest
 # model at high effort: Claude --model FLEET_ORCH_MODEL (fable; FLEET_MODEL_FALLBACK
 # while that model is capped on the active account) --effort FLEET_ORCH_EFFORT;

@@ -808,8 +808,9 @@ def jump(session, window, pane, lock, node="", name=""):
 
 
 def open_portal(session):
-    """The writing area on the right (issue #1953): fleet-shell.sh portal — the
-    same door ⌘N and prefix c take."""
+    """「新任务」's tap: fleet-shell.sh portal — the same door ⌘N and prefix c take:
+    the orchestrating session (issue #2616), the writing area on the right
+    (issue #1953) only with the client's FLEET_COMPOSE=1."""
     run(["bash", str(BIN / "fleet-shell.sh"), "portal", session], stdin=subprocess.DEVNULL)
 
 

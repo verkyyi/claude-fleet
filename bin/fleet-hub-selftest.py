@@ -1042,6 +1042,47 @@ class HubTests(HubFixture):
         self.assertFalse((self.node.conf / "spawn.calls").exists())
         self.assertIn("worker_start %s failed EXPIRED" % op_id, (self.node.conf / "control" / "ops.log").read_text())
 
+    def test_orch_ensure_runs_the_orchestrator_ensure(self):
+        # issue #2616: ⌘N on a client found no orchestrating session — the hub's
+        # orch_ensure reaches this node with no params, and the executor runs the
+        # adapter's `orch <sess>` (fleet-orchestrator.sh ensure): rc 0 here,
+        # rc 5 held elsewhere (still a success — that machine's tick opens it).
+        validate_write("orch_ensure", {})
+        with self.assertRaises(Fault):
+            validate_write("orch_ensure", {"session": "x"})
+        real_popen, real_adapter = control.subprocess.Popen, self.node.controller.adapter
+
+        def no_executor(argv, *args, **kwargs):
+            return MagicMock() if "execute" in argv else real_popen(argv, *args, **kwargs)
+
+        def orch_answers(rc, out, err, calls):
+            def adapter(mode, *a, **k):
+                if mode != "orch":
+                    return real_adapter(mode, *a, **k)
+                calls.append((mode, *a))
+                return rc, out, err
+            return adapter
+        for rc, out, want in ((0, b"@7\n", "here"), (5, b"held m5\n", "elsewhere")):
+            op_id = str(uuid.uuid4())
+            with patch.object(control.subprocess, "Popen", side_effect=no_executor):
+                self.node.rpc("submit", {"operation_id": op_id, "fleet_id": self.fleet, "action": "orch_ensure",
+                                         "params": {}, "actor": "operator"})
+            calls = []
+            with patch.object(self.node.controller, "adapter", side_effect=orch_answers(rc, out, b"", calls)):
+                self.node.controller.execute(op_id)
+            got = self.node.rpc("operation_get", {"operation_id": op_id})
+            self.assertEqual((got["status"], got["result"].get("orchestrator")), ("succeeded", want), got)
+            self.assertEqual(calls, [("orch", "demo")])
+        op_id = str(uuid.uuid4())
+        with patch.object(control.subprocess, "Popen", side_effect=no_executor):
+            self.node.rpc("submit", {"operation_id": op_id, "fleet_id": self.fleet, "action": "orch_ensure",
+                                     "params": {}, "actor": "operator"})
+        with patch.object(self.node.controller, "adapter", side_effect=orch_answers(1, b"", b"fleet is not up\n", [])):
+            self.node.controller.execute(op_id)
+        got = self.node.rpc("operation_get", {"operation_id": op_id})
+        self.assertEqual(got["status"], "failed", got)
+        self.assertIn("fleet is not up", got["result"]["error"]["message"])
+
     def test_start_names_the_repo_in_a_multi_repo_fleet(self):
         # issue #984: two repos can both have an issue-123, so the spawn needs --repo.
         with self.assertRaises(Fault):
