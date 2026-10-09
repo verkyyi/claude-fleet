@@ -105,7 +105,9 @@
 #
 #   <target>  @<window-id> / %<pane-id>   (the fleet-peer-send grammar; a `<sess>:<idx>`
 #             position or a window NAME is refused — exit 2, issue #1537)
-#             wid:<worker_id> / wid:<key>  that worker, when it lives on this machine
+#             wid:<worker_id> / wid:<key>  that worker — here, or (--answer only) on
+#                                          another machine through the hub's worker_answer
+#             issue:<N> / issue-<N> / <slug>:issue-<N> / scratch-<N>   the same, as a key
 #   <pick>    an option number from --show; `1,3` toggles several in a multiSelect
 #   opts: -L <label>          tmux socket label (outside a fleet pane)
 #         --session <fleet>   fleet whose socket to use (default: the caller's)
@@ -164,12 +166,66 @@ fi
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 SK() { FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" "$@" 2>/dev/null; }
 
-# --- a worker_id target (issue #1420): resolve it to its window HERE, or refuse --
+# --- a key is a worker_id here (issue #2729): issue:<N> / #<N> / issue-<N> /
+# scratch-<N> / <slug>:issue-<N> → wid:<key>, resolved by the ONE locator below —
+# a bare key in a 2+ repo fleet is refused there, never guessed.
+case "$TARGET" in
+  issue:*|'#'*) TARGET="wid:issue-${TARGET#*[:#]}" ;;
+  issue-*|scratch-*|*:issue-*|*:scratch-*) TARGET="wid:$TARGET" ;;
+esac
+
+# remote_answer <machine> — a worker on ANOTHER machine (issue #2729): its pane is
+# not on this server, so the answer is the hub's worker_answer — that machine's node
+# runs THIS script there (picks verbatim, one per question) and the node's verdict,
+# refusal verbatim, is the outcome. Only --answer travels; --show / --cancel refuse.
+remote_answer() {
+  local node="$1" sp hwid args rec out
+  if [ "$VERB" != answer ]; then
+    echo "fleet-answer: '$TARGET' lives on $node — only --answer reaches another machine (the hub's worker_answer); its question is in \`fleet show\`" >&2
+    exit 1
+  fi
+  [ ${#PICKS[@]} -gt 0 ] || usage
+  case "$node" in
+    *:lost) echo "fleet-answer: '$TARGET' lives on ${node%:lost}, which is offline — nothing sent" >&2; exit 1 ;;
+    "$(hostname -s 2>/dev/null)") # the map says HERE, the window is gone: never bounce back
+      echo "fleet-answer: no live worker for '$TARGET' on this machine" >&2; exit 1 ;;
+  esac
+  sp=$(_fleet_wid_split "$TARGET") && hwid=$(CCQUOTA_FLEET=1 fleet_hub_wid "${sp%%$'\t'*}" "${sp#*$'\t'}") || hwid=''
+  [ -n "$hwid" ] || { echo "fleet-answer: '$TARGET' is on $node, but the hub map names no single worker for it" >&2; exit 1; }
+  args=$(python3 -c 'import json,sys; print(json.dumps({"worker_id": sys.argv[1], "answer": " ".join(sys.argv[2:])}))' "$hwid" ${PICKS[@]+"${PICKS[@]}"})
+  if [ "$DRY" = 1 ]; then echo "dry-run: worker_answer $args (on $node, through the hub)"; exit 0; fi
+  rec=$(bash "$BIN/fleet-hub-write.sh" worker_answer "$args" --wait "${FLEET_ANSWER_HUB_WAIT:-90}" --quiet 2>/dev/null)
+  out=$(printf '%s' "$rec" | python3 -c 'import json,sys
+try:
+    o = json.load(sys.stdin)
+except ValueError:
+    print("failed\tnot sent (no hub write identity, or the hub did not answer)"); sys.exit()
+if "error" in o and not o.get("operation_id"):
+    e = o["error"] if isinstance(o["error"], dict) else {"message": str(o["error"])}
+    print("failed\tthe hub refused — " + ((e.get("code") or "") + ": " + (e.get("message") or "")).strip(": ")); sys.exit()
+st = o.get("status") or "?"
+res = o.get("result") if isinstance(o.get("result"), dict) else {}
+err = res.get("error") if isinstance(res.get("error"), dict) else {}
+why = ((err.get("code") or "") + ": " + (err.get("message") or "")).strip(": ")
+print(st + "\t" + (str(res.get("how") or "confirmed") if st == "succeeded" else why or "op=" + str(o.get("operation_id", "?"))))' 2>/dev/null)
+  case "${out%%$'\t'*}" in
+    succeeded) echo "answered → $hwid on $node: ${out#*$'\t'}"; exit 0 ;;
+    unknown) echo "fleet-answer: sent to $node, but the answer was never confirmed: ${out#*$'\t'}" >&2; exit 4 ;;
+    accepted|running|pending) echo "fleet-answer: sent to $node through the hub, no verdict yet (${out%%$'\t'*})" >&2; exit 4 ;;
+    *) echo "fleet-answer: $node did not take the answer: ${out#*$'\t'}" >&2; exit 1 ;;
+  esac
+}
+
+# --- a worker_id target (issue #1420): resolve it to its window HERE, or the hub --
 case "$TARGET" in wid:*)
-  loc=$(fleet_worker_locate "$TARGET" "${SESS:-$SOCK}"); rc=$?
+  # fleet_hub_on reads the fleet's own conf line (#1539); the map readers read
+  # the environment, so hand them the answer (as dash-reap does).
+  hub=${CCQUOTA_FLEET:-0}
+  fleet_hub_on "${SESS:-$(fleet_current_session 2>/dev/null)}" 2>/dev/null && hub=1
+  loc=$(CCQUOTA_FLEET=$hub fleet_worker_locate "$TARGET" "${SESS:-$SOCK}"); rc=$?
   case "$loc" in
     local\ *) loc=${loc#local }; TARGET=${loc%% *}; SOCK=$(fleet_socket "${loc#* }") ;;
-    remote\ *) echo "fleet-answer: '$TARGET' lives on ${loc#remote } — answering a worker on another machine is not supported yet (EPIC #1419 C2)" >&2; exit 1 ;;
+    remote\ *) remote_answer "${loc#remote }" ;;
     *) [ "$rc" -eq 2 ] && { echo "fleet-answer: bad worker id '$TARGET'" >&2; exit 2; }
        echo "fleet-answer: no live worker for '$TARGET' on this machine" >&2; exit 1 ;;
   esac ;;
@@ -181,7 +237,7 @@ esac
 # digits on a STRANGER's dialog. The dash pins its row to the @id first.
 case "$TARGET" in @*|%*) ;; *) echo "fleet-answer: '$TARGET' is a window position or name, not an address — use @<window-id>, %<pane-id> or wid:<worker_id>" >&2; exit 2 ;; esac
 PANE=$(TM display-message -p -t "$TARGET" '#{pane_id}' 2>/dev/null)
-[ -n "$PANE" ] || { echo "fleet-answer: no live pane for '$TARGET'" >&2; exit 1; }
+[ -n "$PANE" ] || { echo "fleet-answer: no live pane for '$TARGET' on this machine — an @id / %pane is this machine's; a worker elsewhere is wid:<slug>:issue-<N> (answered through the hub)" >&2; exit 1; }
 if [ "$(TM display-message -p -t "$PANE" '#{@cc_agent}')" = codex ]; then
   NATIVE=("$VERB" --pane "$PANE" --socket "$SOCK" --request-token "$REQUEST_TOKEN")
   [ "$AS_JSON" = 0 ] || NATIVE+=(--json)

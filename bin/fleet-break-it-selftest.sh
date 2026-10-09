@@ -85,6 +85,8 @@
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
 #   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
 #   pretrust-norepo                                 bin/fleet-trust.sh (node, grant --home), bin/fleet-claude.sh
+#   cross-send-refused-unseen                       bin/fleet-peer-send.sh (hub_send: identity sender, fleet_hub_refused,
+#                                                   receipt_watch), fleet-lib.sh fleet_hub_refused
 #   status-agent-not-up / status-perm-overwritten / status-migrated-looping / status-question-lost
 #                                                   bin/set-claude-state.sh (the primary-source rule),
 #                                                   fleet-status-7501.py pipe, classify-sessions.sh (skip:7501),
@@ -4793,6 +4795,55 @@ json.dump({"v": 1, "rows": rows, "beat": {"n": 1, "writes": 0}}, open(sys.argv[1
   [ "$(grep -c . "$g/posts")" = 12 ] || { WHY="the next beat did not post the deferred four: $(grep -c . "$g/posts")"; return 1; }
   SECS=$(since "$t0")
   WHAT="一拍想写 12 条（预算 8）：落 8、延后 4，下一拍先补上"
+}
+
+# cross-send-refused-unseen (issue #2729): the orchestrator's message to a worker
+# on another machine went out as `<uuid>/orchestrator`, which the hub's worker_id
+# grammar refuses; the agent moved it to refused/ and the sender, seeing only the
+# file gone, said 「queued · not delivered yet」 for hours. The drill plays the hub
+# as the agent sees it: any relay whose `from` the hub's grammar refuses goes to
+# refused/<file> + .why, any other is "stored" (deleted). The orchestrator's send
+# must be stored; a refusal must come back as exit 1 + FAILED in the book.
+drill_cross_send_refused_unseen() {
+  CAP=10; BREAK_SOCK="$WORK/sock-xs"; local t0 c="$WORK/xs" u po rc ob
+  mkdir -p "$c/conf/fleets/xs" "$c/conf/control"
+  printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$c" > "$c/conf/fleets/xs/conf"
+  "$REAL_TMUX" -S "$BREAK_SOCK" -f /dev/null new-session -d -s xs -n plan 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  po=$("$REAL_TMUX" -S "$BREAK_SOCK" new-window -d -P -F '#{pane_id}' -t xs -n orch 'exec sleep 600')
+  "$REAL_TMUX" -S "$BREAK_SOCK" set-option -w -t "$po" @fleet_role orchestrator
+  xs() { env FLEET_CONF_DIR="$c/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=1 FLEET_PEER_RECEIPT_SECS=0 FLEET_HUB_RECEIPT_WAIT=1 "$@"; }
+  (cd "$BIN" && xs python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$c/conf") >/dev/null 2>&1
+  u=$(xs bash -c '. "$1/fleet-lib.sh"; fleet_uuid xs' _ "$BIN")
+  [ -n "$u" ] || { WHY="no fleet UUID could be minted"; return 1; }
+  printf '11111111-2222-3333-4444-555555555555/issue-42\tm4\t\n' > "$c/conf/control/hub-workers.tsv"
+  ob="$c/conf/control/hub-outbox"; mkdir -p "$ob"
+  # the hub, as the agent sees it: refuse what its grammar refuses ($1=all: everything)
+  hub() { ( for _ in $(seq 1 50); do
+      g=$(ls "$ob"/*.json 2>/dev/null | head -1)
+      if [ -n "$g" ]; then
+        if [ "$1" != all ] && (cd "$BIN" && python3 -c 'import json,sys, fleet_hub_common as h; sys.exit(0 if h.WORKER_ID_RE.fullmatch(json.load(open(sys.argv[1]))["from"]) else 1)' "$g"); then
+          rm -f "$g"
+        else
+          mkdir -p "$ob/refused"; mv "$g" "$ob/refused/"; printf 'INVALID_ARGUMENT: from: worker_id must be …\n' > "$ob/refused/${g##*/}.why"
+        fi
+        exit 0
+      fi
+      sleep 0.1
+    done ) & }
+  t0=$(now)
+  hub grammar
+  xs env TMUX="$BREAK_SOCK,0,0" TMUX_PANE="$po" bash "$BIN/fleet-peer-send.sh" "wid:11111111-2222-3333-4444-555555555555/issue-42" 'hi' >/dev/null 2>&1; rc=$?
+  wait
+  [ ! -e "$ob/refused" ] || { WHY="the hub refused the orchestrator's relay: $(cat "$ob"/refused/*.why 2>/dev/null | head -1)"; return 1; }
+  [ "$rc" = 3 ] || { WHY="the orchestrator's send ended $rc, want 3 (stored, waiting for the receipt)"; return 1; }
+  hub all
+  xs env TMUX="$BREAK_SOCK,0,0" TMUX_PANE="$po" bash "$BIN/fleet-peer-send.sh" "wid:11111111-2222-3333-4444-555555555555/issue-42" 'hi again' >/dev/null 2>&1; rc=$?
+  wait
+  [ "$rc" = 1 ] || { WHY="a refused relay ended $rc, want 1 — the sender still thinks it waits"; return 1; }
+  tail -1 "$c/conf/fleets/xs/delivery.ndjson" 2>/dev/null | grep -q '"state": "FAILED"' \
+    || { WHY="the delivery book does not say FAILED: $(tail -1 "$c/conf/fleets/xs/delivery.ndjson" 2>/dev/null)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="编排用身份发、入口收下；被拒的当场退出 1，账本记 FAILED、原因在 stderr"
 }
 
 # ================================================================ run ===========
