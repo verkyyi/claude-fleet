@@ -114,7 +114,7 @@ eq "E: fleet ls --services is that table" "$(STATE='' HOST=mini2 svc)" "$(cli --
 eq "E: --services --json too" "$(STATE='' HOST=mini2 svc --json)" "$(cli --services --json)"
 eq "E: …in either order" "$(STATE='' HOST=mini2 svc --json)" "$(cli --json --services)"
 cli --services --bogus >/dev/null 2>&1; eq "E: a stray argument is usage" 2 "$?"
-has "E: the usage names --services" "fleet ls --services [--json]" "$(cli --bogus 2>&1)"
+has "E: the usage names --services" "fleet ls --services [--json]" "$(cli --services --bogus 2>&1)"
 e=$(FLEET_SERVICES_CACHE='' FLEET_SERVICES_STATE='' FLEET_SHELL='' python3 "$BIN/fleet-session-cli.py" ls --services 2>&1); rc=$?
 eq "E: nothing registered: exit 0" 0 "$rc"
 has "E: …and says how to register one" "没有登记的后台服务或定时任务" "$e"
