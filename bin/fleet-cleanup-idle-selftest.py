@@ -443,6 +443,53 @@ class TestIdentity(Rig):
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")
+class HomeReap(ReapPolicy):
+    """A no-repo (home) session (issue #2565): `done:2h` closes it two hours after
+    its agent EXITED — never on a finished turn (#2564 resumes that one), never
+    without a policy (#791), never pinned."""
+    def setUp(self):
+        super().setUp()
+        for key in ("@raw", "@worktree"):
+            self.tm("set-option", "-wu", "-t", self.win, key)
+        self.set("@norepo", "1")
+        self.set("@fleet_id", "%08x-0000-4000-8000-000000000000" % int(self.win[1:]))
+
+    def test_exited_two_hours_closes_an_idle_turn_never(self):
+        self.policy("done:2h")
+        self.set("@claude_state_ts", str(int(time.time()) - 9000))
+        self.due()
+        self.assertTrue(self.exists())               # done for hours: still the current session
+        self.set("@claude_state", "exited")
+        self.set("@claude_state_ts", str(int(time.time()) - 4000))
+        self.due()
+        self.assertTrue(self.exists())               # exited 4000 s < 2 h: not yet
+        self.set("@claude_state_ts", str(int(time.time()) - 9000))
+        out = self.due()
+        self.assertIn("reaped-idle:" + self.win + " policy=done:2h norepo", out)
+        self.assertFalse(self.exists())
+
+    def test_no_policy_or_pinned_or_keep_is_never_closed(self):
+        self.set("@claude_state", "exited")
+        self.set("@claude_state_ts", str(int(time.time()) - 900000))
+        self.due()
+        self.assertTrue(self.exists())               # no policy: #791, as before
+        self.policy("keep")
+        self.due()
+        self.assertTrue(self.exists())
+        self.policy("done:2h")
+        self.set("@pin", "1")
+        self.due()
+        self.assertTrue(self.exists())
+
+    # the inherited worktree-session cases do not apply to a home session
+    test_done_waits_its_own_idle_then_reaps_keeping_unpushed_work = None
+    test_keep_and_merged_are_never_this_pass = None
+    test_at_only_once_the_time_has_come_and_never_while_working = None
+    test_loop_end_waits_for_the_loop = None
+    test_sleep_on_considers_only_windows_with_a_policy = None
+
+
+@unittest.skipUnless(shutil.which("tmux"), "tmux absent")
 class DoneNoPr(Rig):
     """A finished session no PR will ever close (issue #1832): closed two hours
     after its last turn, its worktree dropped only when clean with nothing of its

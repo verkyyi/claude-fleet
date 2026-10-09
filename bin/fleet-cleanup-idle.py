@@ -246,10 +246,60 @@ class Cleaner:
         print("reaped-test:" + window + " policy=" + snap["@reap_policy"] + " " + (out or "no answer"))
         return out.startswith("stopped:")
 
+    def norepo(self, window, snap):
+        """A no-repo (home) session with a `done` policy (issue #2565): closed once
+        its agent has EXITED (/exit — @claude_state `exited`, the recovery page) for
+        the policy's grace. A finished turn is not enough: an idle home session is
+        the one `fleet claude` comes back to (#2564). No worktree, no PR and no
+        ledger key — so no history row; @norepo_sid stays fleet-history's resume.
+        Without a policy it is never closed automatically (#791), as before."""
+        pol = self.policy(snap)
+        if (pol is None or pol[0] != "done" or snap["@pin"] == "1"
+                or snap["@worker_lifecycle"] not in ("", "sleeping")
+                or snap["@fleet_role"] not in ("", "worker")
+                or snap["window_name"] in ("dash", "plan", "backlog", "home")
+                or snap["@claude_state"] != "exited"):
+            if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith("idle:"):
+                clear(self.tm, window)
+            return False
+        stamp = snap["@claude_state_ts"]
+        if not stamp.isdigit() or not 0 < int(stamp) <= self.now:
+            return False
+        transfer = snap["@agent_transfer_until"]
+        if transfer and (not transfer.isdigit() or int(transfer) > self.now):
+            return False
+        if os.environ.get("TMUX_PANE") and os.environ.get("TMUX"):
+            if self.tm("display-message", "-p", "-t", os.environ["TMUX_PANE"], "#{window_id}") == window:
+                return False
+        if self.busy(window, snap):
+            return False
+        due = notice(self.tm, window, "idle:norepo", self.deadline(snap, pol),
+                     self.now, self.args.dry_run)
+        if due > self.now:
+            return False
+        print("reap-due:%s policy=%s" % (window, snap["@reap_policy"]), file=__import__("sys").stderr)
+        if self.args.dry_run:
+            print("would-reap-idle:" + window)
+            return False
+        if self.snapshot(window) != snap:
+            return False  # it came back (resumed, renamed, re-stamped) since the read
+        fid = snap["@fleet_id"]
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+            return False
+        # stopped the graceful way, by identity — test_session's road (#2505)
+        self.retire(window)
+        out = subprocess.run(["bash", str(BIN / "fleet-worker-stop.sh"), self.args.session, "fid:" + fid],
+                             env=dict(os.environ, FLEET_SESSION=self.args.session), stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=120).stdout.strip()
+        print("reaped-idle:" + window + " policy=" + snap["@reap_policy"] + " norepo " + (out or "no answer"))
+        return out.startswith("stopped:")
+
     def candidate(self, window):
         snap = self.snapshot(window)
         if snap["@test_identity"] == "1" and snap["@norepo"] == "1":
             return self.test_session(window, snap)
+        if snap["@norepo"] == "1":
+            return self.norepo(window, snap)
         if self.route(snap) == "no-pr":
             return self.no_pr(window, snap)
         if not self.eligible(window, snap):
