@@ -959,6 +959,10 @@ def with_portal(rows, placing, session=""):
     queued = orch_queue(line)
     if queued:
         pad = [tr("orch_queue_row_fmt", str(queued))] + pad[1:]
+    elif orch_counts(line).get("renew"):
+        # on an older fleet version than its machine has (issue #2733): renewed
+        # at its next quiet moment, the word gone with the next frame after
+        pad = [tr("sidebar_cfg_renew")] + pad[1:]
     top = [[PORTAL_KEY, state, glyph, tr("sidebar_portal"), " ", "", "0", "", ""] + pad]
     if placing is not None and placing.get("verb") == "compose" and \
             placing.get("state") in ("placing", "opened", "await"):

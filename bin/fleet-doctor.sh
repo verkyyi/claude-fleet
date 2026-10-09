@@ -2874,6 +2874,28 @@ for _of in "${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash
   warn orch "${_of##*/orch_multi_}: 不止一个编排会话 — $_om (fix: 每台的 \`fleet-orchestrator.sh where <fleet>\` 应只有一台 here；不能问入口的那台补 node token，或去掉它的 FLEET_ORCHESTRATOR=1)"
 done
 
+# --- orch: the orchestrator / steward on an older fleet version (issue #2733) ---
+# Their own `ensure` renews them at a quiet moment (fleet_role_renew_why) and
+# stamps @renew_since while it waits for one; pending is an INFO (待换新), pending
+# past FLEET_ORCH_RESTART_WAIT (2 h) a WARN — the tick never forces the switch.
+_rw=${FLEET_ORCH_RESTART_WAIT:-$(_gconf_val FLEET_ORCH_RESTART_WAIT)}
+case "$_rw" in ''|*[!0-9]*) _rw=7200 ;; esac
+_rl=$(FLEET_CONF_DIR="$conf_dir" bash -c '. "$1"; for s in $(fleet_sockets); do
+        tmux -L "$s" list-windows -t "=$s" -F "$s #{@fleet_role} #{@renew_since} #{window_id}" 2>/dev/null; done' \
+        _ "$(dirname "$0")/fleet-lib.sh" 2>/dev/null \
+      | awk -v now="$(date +%s)" '($2 == "orchestrator" || $2 == "steward") && $3 ~ /^[0-9]+$/ {
+          printf "%s%s:%s %s(%dm)", (n++ ? " " : ""), $1, $2, $4, (now - $3) / 60; if (now - $3 > m) m = now - $3 }
+          END { if (n) printf "|%d\n", m }')
+if [ -n "$_rl" ]; then
+  _rage=${_rl##*|}; _rl=${_rl%|*}
+  if [ "$_rage" -ge "$_rw" ]; then
+    warn orch "待换新 等了 $((_rage / 60)) 分钟仍没换上新版本 — $_rl (fix: 它一直不安静：看它是不是一直在跑或在问；要立刻换就让它 /exit，下一拍 ensure 原地续开同一对话)"
+  else
+    info orch "待换新 — ${_rl}：下一个安静时刻原地续开到装的版本（issue #2733）"
+  fi
+fi
+unset _rw _rl _rage
+
 # --- auto-handoff nudge: does the Stop hook SEE the threshold? (issue #561) ---
 # FLEET_AUTO_HANDOFF_PCT=60 sat in the global fleet.conf for weeks while the Stop
 # hook (bin/set-claude-state.sh) read the knob from its ENVIRONMENT — which nothing
