@@ -445,6 +445,7 @@ FLEET_TMUX_PREFIX                  handoff: the operator's tmux prefix, read by 
 FLEET_TMUX_PREFIX2                 handoff: the operator's second tmux prefix, read by fleet-up into the keymap
 FLEET_TOKEN_PROBE                  seam: a fake token-probe command
 FLEET_TOOL_DIRS                    path: where fleet_find_tool / fleet_path_fill look after PATH (~/.local/bin /opt/homebrew/bin /usr/local/bin)
+FLEET_TRACE                        knob: 1 = fleet-shell.sh portal prints each segment of ⌘N with its ms on stderr (issue #2721)
 FLEET_TRANSFER_BOOT_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRANSFER_EXIT_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)
 FLEET_TRANSFER_IDLE_WAIT           knob: internal pacing/limit, safe in-code default (fleet-transfer.sh)

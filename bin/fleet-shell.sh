@@ -515,26 +515,30 @@ portal_trace() {
 # portal_orch_here <session> — ⌘N's hot path (issue #2721): orch_<session>'s first
 # line (what fleet-compose.py's orchestrator() reads) names `<wid>`·`<node>`; a
 # stage window whose `@remote` is already `<node>:<wid>` is selected here, stamped
-# @fleet_role orchestrator when it has no role, and the list told (`jump=`, as
-# carry() hands it) so its ▶ follows. rc 1 = no such window, or no line: the
-# python road (it retargets a proxy window, or asks the hub to open one).
+# @fleet_role orchestrator when it has no role and @cc_agent as the list's cache
+# row says (fleet-compose.py's stamp_role / orch_agent), and the list told
+# (`jump=`, as carry() hands it) so its ▶ follows. rc 1 = no such window, or no
+# line: the python road (it retargets a proxy window, or asks the hub to open one).
 portal_orch_here() {
-  local g line want w role
+  local g line wid node want w role agent cur lp
   g="${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}"
   line=$(LC_ALL=C awk -F $'\037' 'NF >= 4 && index($1, "/") && $2 != "" { print $1 "\037" $2; exit }' \
          "$g/orch_$1" 2>/dev/null)
   [ -n "$line" ] || return 1
-  want="${line#*$'\037'}:${line%%$'\037'*}"
-  read -r w role <<EOF
-$(TS list-windows -t "=$STAGE" -F "#{window_id}	#{@remote}	#{@fleet_role}" 2>/dev/null \
-  | awk -F '\t' -v r="$want" '$2 == r { print $1, $3; exit }')
+  wid=${line%%$'\037'*}; node=${line#*$'\037'}; want="$node:$wid"
+  IFS=$'\037' read -r w role cur <<EOF
+$(TS list-windows -t "=$STAGE" -F "#{window_id}	#{@remote}	#{@fleet_role}	#{@cc_agent}" 2>/dev/null \
+  | awk -F '\t' -v r="$want" '$2 == r { print $1 "\037" $3 "\037" $4; exit }')
 EOF
   [ -n "$w" ] || return 1
   TS select-window -t "$w" 2>/dev/null || return 1
   [ -n "$role" ] || TS set-window-option -t "$w" @fleet_role orchestrator 2>/dev/null
-  local lp
+  agent=$(LC_ALL=C awk -F $'\037' -v w="wid:$wid" -v n="$node" \
+          '$1 == w && $2 == n && $7 ~ /^[a-z][a-z0-9-]*$/ && length($7) <= 16 { print $7; exit }' \
+          "$g/remote_$1" 2>/dev/null)
+  [ -n "$agent" ] && [ "$agent" != "$cur" ] && TS set-window-option -t "$w" @cc_agent "$agent" 2>/dev/null
   lp=$(T list-panes -a -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }')
-  [ -n "$lp" ] && T set-option -pa -t "$lp" @sidebar_do "jump=wid:${line%%$'\037'*} " \; send-keys -t "$lp" F12 2>/dev/null
+  [ -n "$lp" ] && T set-option -pa -t "$lp" @sidebar_do "jump=wid:$wid " \; send-keys -t "$lp" F12 2>/dev/null
   return 0
 }
 # iterm_keys — the iTerm2 profile `fleet` (issue #1903): its ⌘ chords send the
