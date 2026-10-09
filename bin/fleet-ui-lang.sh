@@ -229,6 +229,47 @@ fleet_ui_t() {
     en:steward_todo_done_fmt) printf 'For you to do · %s: %s (list %s)' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:steward_card_todo_fmt) printf '待你动手 %s 件 · 管家已跑 %s 件' "${1:-}" "${2:-}" ;;
     en:steward_card_todo_fmt) printf 'for you to do %s · run by the steward %s' "${1:-}" "${2:-}" ;;
+    zh:steward_card_park_fmt)   printf '停放 %s 个 · 本拍停下 %s · 接回 %s · 请写交接 %s' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    en:steward_card_park_fmt)   printf 'parked %s · parked now %s · woken %s · asked for a handoff %s' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    # parking a stuck session (issue #2671, EPIC #2668 C3) — bin/fleet_park.py
+    zh:park_why_stuck)          printf '卡住了' ;;
+    en:park_why_stuck)          printf 'stuck' ;;
+    zh:park_why_blocked_fmt)    printf '卡住 %s 分钟' "${1:-}" ;;
+    en:park_why_blocked_fmt)    printf 'blocked for %s min' "${1:-}" ;;
+    zh:park_why_stall_fmt)      printf '%s 分钟没有进展' "${1:-}" ;;
+    en:park_why_stall_fmt)      printf 'no progress for %s min' "${1:-}" ;;
+    zh:park_wait_answer_fmt)    printf '有人答「%s」' "${1:-}" ;;
+    en:park_wait_answer_fmt)    printf 'an answer to "%s"' "${1:-}" ;;
+    zh:park_wait_pr_fmt)        printf '%s 合并' "${1:-}" ;;
+    en:park_wait_pr_fmt)        printf '%s merged' "${1:-}" ;;
+    zh:park_wait_issue_fmt)     printf '%s 关闭' "${1:-}" ;;
+    en:park_wait_issue_fmt)     printf '%s closed' "${1:-}" ;;
+    zh:park_wait_time_fmt)      printf '到 %s' "${1:-}" ;;
+    en:park_wait_time_fmt)      printf 'until %s' "${1:-}" ;;
+    zh:park_wait_reply_fmt)     printf '%s 上有新回复' "${1:-}" ;;
+    en:park_wait_reply_fmt)     printf 'a new reply on %s' "${1:-}" ;;
+    zh:park_request_fmt)        printf '[fleet park] 你%s，fleet 要把你停放、让出位置；等「%s」满足后在同一对话把你叫回来。现在请把交接写到 %s（做到哪、下一步、要注意的；/fleet-handoff 的文件格式），写完就结束这一轮，不要再做别的。' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:park_request_fmt)        printf '[fleet park] You are %s; the fleet will park you to free your place and bring you back in this same conversation once "%s" holds. Write your handoff to %s now (where you are, the next step, what to watch; the /fleet-handoff file format), then end this turn and do nothing else.' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:park_report_fmt)         printf '停放：等 %s；满足后同一对话自动接回' "${1:-}" ;;
+    en:park_report_fmt)         printf 'parked: waiting for %s; it comes back in the same conversation when that holds' "${1:-}" ;;
+    zh:park_comment_head_fmt)   printf '停放：等 %s' "${1:-}" ;;
+    en:park_comment_head_fmt)   printf 'Parked: waiting for %s' "${1:-}" ;;
+    zh:park_comment_handoff_fmt) printf '交接：%s' "${1:-}" ;;
+    en:park_comment_handoff_fmt) printf 'Handoff: %s' "${1:-}" ;;
+    zh:park_comment_nohandoff_fmt) printf '交接：会话没在时限内写，屏幕存档 %s' "${1:-}" ;;
+    en:park_comment_nohandoff_fmt) printf 'Handoff: none written in time; the screen is kept at %s' "${1:-}" ;;
+    zh:park_comment_branch_fmt) printf '分支 %s（%s）· 未提交 %s 个文件留在工作区 %s' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    en:park_comment_branch_fmt) printf 'Branch %s (%s) · %s uncommitted files kept in %s' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    zh:park_pushed)             printf '已推送' ;;
+    en:park_pushed)             printf 'pushed' ;;
+    zh:park_push_failed_fmt)    printf '推送失败：%s' "${1:-}" ;;
+    en:park_push_failed_fmt)    printf 'push failed: %s' "${1:-}" ;;
+    zh:park_comment_back_fmt)   printf '条件满足后在同一对话（%s）自动接回；要提前接回：fleet-park.sh wake <仓库#号>。' "${1:-}" ;;
+    en:park_comment_back_fmt)   printf 'It comes back in the same conversation (%s) when that holds; to bring it back now: fleet-park.sh wake <repo#N>.' "${1:-}" ;;
+    zh:park_seed_fmt)           printf '[fleet park] 你之前被停放过，等的「%s」已经满足。先读交接 %s（没有就看屏幕存档 %s），再读 %s 上停放之后的新评论，从原来的进度接着干，不要从头来。' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    en:park_seed_fmt)           printf '[fleet park] You were parked; what you waited for ("%s") holds now. Read your handoff %s first (none: the screen kept at %s), then the comments on %s since the park, and go on from where you were — never from the start.' "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
+    zh:park_seed_nohandoff)     printf '（没写）' ;;
+    en:park_seed_nohandoff)     printf '(none written)' ;;
     zh:repo_none_tag)           printf '⇢无' ;;
     en:repo_none_tag)           printf '⇢none' ;;
     zh:remote_lost)             printf '失联' ;;
@@ -1208,7 +1249,7 @@ case "$0" in */fleet-ui-lang.sh|fleet-ui-lang.sh)
           for _k in $(sed -n 's/^ *zh:\([A-Za-z0-9_]*\)).*/\1/p' "$0"); do
             for _p in "$@"; do
               [ "$_p" = dump ] && continue
-              case "$_k" in "$_p"*) printf '%s\0%s\0' "$_k" "$(fleet_ui_t "$_k" "$_s" "$_s" "$_s")"; break ;; esac
+              case "$_k" in "$_p"*) printf '%s\0%s\0' "$_k" "$(fleet_ui_t "$_k" "$_s" "$_s" "$_s" "$_s")"; break ;; esac
             done
           done ;;
     *) printf 'usage: fleet-ui-lang.sh [lang|t KEY|toast CLIENT KEY|hint CLIENT KEY|dump PREFIX…]\n' >&2; exit 2 ;;

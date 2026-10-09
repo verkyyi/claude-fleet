@@ -5469,6 +5469,15 @@ fleet_win_retire() {
   return 0
 }
 
+# fleet_parked <owner/name> <N> — rc 0 when that issue's session is PARKED (issue
+# #2671, EPIC #2668 C3): bin/fleet_park.py closed its window to free the place and
+# reopens it itself when what it waits for arrives, so a restore never does.
+# global/park.idx is the book's index, one `<owner/name>#<N> TAB fid` per parked issue.
+fleet_parked() {
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  awk -F'\t' -v r="$1#$2" '$1 == r { f = 1; exit } END { exit !f }' "$FLEET_CONF_DIR/global/park.idx" 2>/dev/null
+}
+
 # fleet_fid_retired <fid> — rc 0 when the fleet closed that session on purpose.
 fleet_fid_retired() {
   fleet_is_fid "${1:-}" && [ -f "$(fleet_retired_dir)/$1" ]

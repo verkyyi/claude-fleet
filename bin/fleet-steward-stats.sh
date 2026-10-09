@@ -13,7 +13,7 @@
 #   fleet-steward-stats.sh followups [--epics owner/name#N,…]
 #                                               finished batches and what they
 #                                               left: run · listed · neither
-#   fleet-steward-stats.sh stuck                not measured here yet (C3)
+#   fleet-steward-stats.sh stuck [--days N]     how long a stuck session held its place
 #
 # attention — $FLEET_CONF_DIR/logs/attention.ndjson, one JSON object a line:
 #   {ts, client, ctl, session, wid, role, key, name}
@@ -34,6 +34,13 @@
 # nothing has been run and nothing is on the steward's 「待你动手」 list. Reads
 # global/steward.state.json `todo`; --epics adds EPICs the steward never met
 # (read through fleet-gh.sh, its cache first) — how the 2026-10-09 baseline reads.
+#
+# stuck (issue #2671, C3) — logs/park.ndjson's `stuck` events, written by
+# bin/fleet_park.py each time it looks (every steward beat; every 10 minutes in
+# `count` mode): one segment per stuck stretch, {since, end, held, how} — from a
+# worker turning blocked (or FLEET_PARK_STALL_SECS without progress) to it being
+# parked, working again or gone. The median of `held` over the segments that ended
+# in the window, plus the ones still open (global/park.json `stuck`).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 exec python3 - "$BIN" "$@" <<'PY'
@@ -210,8 +217,29 @@ if cmd == "asks":
 if cmd == "followups":
     sys.exit(followups())
 if cmd == "stuck":
-    print("stuck: not measured here yet — C3 #2671")
+    days = days_arg(); now = time.time(); cut = now - days * 86400
+    held, how = [], collections.Counter()
+    try:
+        lines = (CONF / "logs" / "park.ndjson").read_text().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("ev") == "stuck" and e.get("end", 0) >= cut:
+            held.append(e.get("held", 0)); how[e.get("how", "ended")] += 1
+    try:
+        open_ = (json.loads((CONF / "global" / "park.json").read_text()).get("stuck") or {})
+    except (OSError, ValueError):
+        open_ = {}
+    longest = max((now - t for t in open_.values()), default=0)
+    med = statistics.median(held) if held else None
+    print("stuck: %d segments in %d days · median %s · parked %d · ended otherwise %d · still stuck %d%s"
+          % (len(held), days, "%dm" % (med // 60) if med is not None else "-", how["parked"], how["ended"],
+             len(open_), " (longest %dm)" % (longest // 60) if open_ else ""))
     sys.exit(0)
-sys.stderr.write("usage: fleet-steward-stats.sh note | attention [--days N] | asks [--days N] | stuck | followups [--epics R#N,…]\n")
+sys.stderr.write("usage: fleet-steward-stats.sh note | attention [--days N] | asks [--days N] | stuck [--days N] | followups [--epics R#N,…]\n")
 sys.exit(2)
 PY

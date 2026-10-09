@@ -148,6 +148,30 @@ grep -q -- '--agent' "$WORK/newwin" && fail "D an unknown --agent must be droppe
 grep -q 'unknown --agent' "$WORK/spawn.err" || fail "D an unknown --agent should be reported on stderr" "$(cat "$WORK/spawn.err")"
 ok "D --agent codex rides the launch command; default/unknown carry none (#547)"
 
+# ===== SEED R: a PARKED session's return (--resume + --seed-file, issue #2671) ===
+# The same conversation (`--resume <sid>` between the launcher and the seed) and
+# the seed file's text as its first turn — only while the transcript is still in
+# the worktree's project dir; without it the plain /fleet-claim, no --resume.
+SID=0f0e0d0c-1111-2222-3333-444455556666
+printf '[fleet park] read the handoff' > "$WORK/park.seed"
+: > "$WORK/newwin"
+CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed"
+[ "$(seed)" = "/fleet-claim" ] || fail "R no transcript: the seed must stay /fleet-claim" "$(seed)"
+grep -q -- '--resume' "$WORK/newwin" && fail "R no transcript: no --resume" "$(cat "$WORK/newwin")"
+WT=$(sed -n 's/.* -c \([^ ]*\) .*/\1/p' "$WORK/newwin" | head -1)
+[ -n "$WT" ] || fail "R the new-window carried no -c <worktree>" "$(cat "$WORK/newwin")"
+mkdir -p "$WORK/projects/$(printf '%s' "$WT" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+: > "$WORK/projects/$(printf '%s' "$WT" | LC_ALL=C tr -c 'A-Za-z0-9' '-')/$SID.jsonl"
+: > "$WORK/newwin"
+CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed"
+[ "$(seed)" = "[fleet park] read the handoff" ] || fail "R the seed file must be the first turn" "$(seed)"
+grep -qF -- "fleet-session-wrap.sh' --resume $SID \"\$(cat '" "$WORK/newwin" \
+  || fail "R --resume <sid> must sit between the launcher and the seed" "$(cat "$WORK/newwin")"
+: > "$WORK/newwin"
+CLAUDE_PROJECTS_DIR="$WORK/projects" run_spawn 234 --resume "$SID" --seed-file "$WORK/park.seed" --agent codex
+grep -q -- '--resume' "$WORK/newwin" && fail "R a Codex return carries no Claude --resume" "$(cat "$WORK/newwin")"
+ok "R a parked session comes back on the same conversation with its own first turn (#2671)"
+
 # ===== BODY: fleet_worker_prompt_body (the per-fleet directive the skill weaves in)
 # The skill (/fleet-claim step 4) now calls this at runtime instead of the spawn
 # baking it into the seed — so its behaviour is tested directly here.
