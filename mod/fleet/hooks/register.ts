@@ -16,6 +16,7 @@
 import type { Register } from 'claude-code'
 
 import { registerCompose } from './compose'
+import { registerExitGuard } from './exit-guard'
 import { registerLifecycle } from './lifecycle'
 import { registerProgress } from './progress'
 import { registerState } from './state'
@@ -29,4 +30,5 @@ export const register: Register = on => {
   registerProgress(on)
   registerCompose(on)
   registerTools(on)
+  registerExitGuard(on)
 }
