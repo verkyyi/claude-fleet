@@ -309,11 +309,20 @@ func parseWorkerSessions(fleetID, repo, workersJSON string) ([]store.LeaseSessio
 }
 
 // FleetAlerts serves the fleet_alerts read: every open alert, then the most
-// recently cleared, newest first.
+// recently cleared, newest first. The operator and an admin get every row; a
+// person gets only the alerts about their own (machine, login)s
+// (claude-fleet#2513) — the same rows, fewer of them.
 func (s *Server) FleetAlerts(req *http.Request) (any, error) {
+	p, err := s.FleetPrincipal(req)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.Store.FleetAlerts(200)
 	if err != nil {
 		return nil, err
+	}
+	if !p.All() {
+		rows = s.alertsSeenBy(p, rows)
 	}
 	type row struct {
 		store.FleetAlert
@@ -333,4 +342,50 @@ func (s *Server) FleetAlerts(req *http.Request) (any, error) {
 		out = append(out, r)
 	}
 	return map[string]any{"open": open, "alerts": out}, nil
+}
+
+// alertsSeenBy keeps the alerts p may see: a node_lost about one of p's
+// (machine, login)s, a lease_conflict with either side on one. A row whose
+// owner cannot be told — an unknown kind, a detail that does not parse, an
+// endpoint the store no longer has — is dropped, never shown.
+func (s *Server) alertsSeenBy(p fleetPrincipal, rows []store.FleetAlert) []store.FleetAlert {
+	endpoints := map[string]bool{}
+	seesEndpoint := func(id string) bool {
+		if id == "" {
+			return false
+		}
+		if v, ok := endpoints[id]; ok {
+			return v
+		}
+		ep, err := s.Store.EndpointByID(id)
+		v := err == nil && ep.OSUser != "" && p.sees(ep.Hostname, ep.OSUser)
+		endpoints[id] = v
+		return v
+	}
+	out := rows[:0:0]
+	for _, a := range rows {
+		mine := false
+		switch a.Kind {
+		case store.AlertNodeLost:
+			var d struct {
+				EndpointID string `json:"endpoint_id"`
+				Hostname   string `json:"hostname"`
+				OSUser     string `json:"os_user"`
+			}
+			if json.Unmarshal([]byte(a.Detail), &d) == nil && d.OSUser != "" {
+				mine = p.sees(d.Hostname, d.OSUser)
+			} else {
+				mine = seesEndpoint(a.Subject)
+			}
+		case store.AlertLeaseConflict:
+			var c leaseConflict
+			if json.Unmarshal([]byte(a.Detail), &c) == nil {
+				mine = seesEndpoint(c.Holder.EndpointID) || seesEndpoint(c.Reporter.EndpointID)
+			}
+		}
+		if mine {
+			out = append(out, a)
+		}
+	}
+	return out
 }
