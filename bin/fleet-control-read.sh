@@ -187,7 +187,8 @@ case "$mode" in
     # Column 20 (issue #1957): `role=orchestrator` on the fleet's one orchestrating
     # session (@fleet_role, bin/fleet-orchestrator.sh) — its key is `orchestrator`
     # (fleet_control.py) and the client wears it on 「新任务」 instead of a row;
-    # empty on every other window.
+    # `role=steward` on its steward (issue #2670, bin/fleet-steward.sh) — no row
+    # at all; empty on every other window.
     # Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` on the
     # window that drives a running EPIC (@epic, stamped by fleet-epic-heartbeat.sh),
     # the counts off THIS machine's mark for that batch (epic-running.d); its
@@ -216,7 +217,7 @@ case "$mode" in
     # own report, @agent_status as bin/fleet-status-7501.py stamped it (one line of
     # JSON, no tab); inventory_row turns it into the worker's `status_kind` /
     # `status_msg`. Empty on a window whose agent never said anything.
-    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}\t=#{@orch_queue}' 2>/dev/null) || ctxs=''
+    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}\t=#{@orch_queue}\t=#{@orch_decide}' 2>/dev/null) || ctxs=''
     # Column 30 (issue #2505): `test=1` on a session the TEST identity's client
     # placed (@test_identity, `fleet --test-identity`): the person's list hides
     # it, `fleet ls` marks it 测试. Empty on every other window.
@@ -225,6 +226,11 @@ case "$mode" in
     # (0 from its start); fleet-hub-sessions.sh carries it as `orch_<sess>`'s 7th
     # column. Empty on every other window, and on an orchestrator that cannot
     # count (Codex, no mod).
+    # Column 32 (issue #2670, EPIC #2668 C2): `orchdec=<n>` — the rows of the
+    # steward's decision sheet still open (@orch_decide, fleet-steward-tick.sh stamps
+    # it on the orchestrator's window); fleet-hub-sessions.sh carries it as
+    # `orch_<sess>`'s `decide=<n>` column. Written ONLY when there is a count, so a
+    # fleet with no steward prints every row byte for byte as before.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -236,7 +242,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{==:#{@fleet_role},orchestrator},orchestrator,}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},#{@fleet_role},}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     estale=''
     while IFS=$'\t' read -r _sr _sn _sa _st; do
@@ -310,13 +316,14 @@ case "$mode" in
       [ -z "$t" ] && [ -z "$c2" ] && [ -z "$wepic" ] && t=$wtl
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      cl='' cb='' cts='' cm='' ce='' cas='' cq=''
+      cl='' cb='' cts='' cm='' ce='' cas='' cq='' cdec=''
       if [ -n "$ctxs" ]; then
         # each field `=`-led, so no field is ever empty: a TAB is IFS whitespace and
         # `read` would collapse an empty one (no \037 here — an older tmux prints it as _)
-        IFS=$'\t' read -r _ cl cb cts cm ce cas cq <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
-        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=} cq=${cq#=}
-        [ "$wrole" = orchestrator ] || cq=''
+        IFS=$'\t' read -r _ cl cb cts cm ce cas cq cdec <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
+        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=} cq=${cq#=} cdec=${cdec#=}
+        [ "$wrole" = orchestrator ] || { cq=''; cdec=''; }
+        case "$cdec" in *[!0-9]*) cdec='' ;; esac
         case "$cq" in *[!0-9]*) cq='' ;; esac
         case "$cas" in '{'*'}') ;; *) cas='' ;; esac
         case "$cl" in *[!0-9]*) cl='' ;; esac
@@ -325,7 +332,8 @@ case "$mode" in
         case "$cm" in *[!-A-Za-z0-9\ ._\(\)+]*) cm='' ;; esac
         case "$ce" in *[!a-z]*) ce='' ;; esac
       fi
-      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torchq=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$cq"
+      od=''; [ -n "$cdec" ] && od=$'\t'"orchdec=$cdec"
+      printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torchq=%s%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$cq" "$od"
     done <<<"$rows"
     ;;
   # --- wstate <sess> <@win> (issue #2238) --------------------------------------

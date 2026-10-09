@@ -384,7 +384,7 @@ class Cleaner:
         only when clean with nothing that is not on the base already — dirty or
         unpushed, it stays on disk (发起人拍板 3: 不干净只关窗口)."""
         if (snap["@pin"] == "1" or snap["@worker_lifecycle"] not in ("", "sleeping")
-                or snap["@fleet_role"] in ("home", "panel", "orchestrator")
+                or snap["@fleet_role"] in ("home", "panel", "orchestrator", "steward")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
                 or (snap["@claude_state"] not in ("done", "exited")
                     and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1")):

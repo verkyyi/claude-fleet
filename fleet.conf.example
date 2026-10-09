@@ -304,11 +304,17 @@ FLEET_CTX_WINDOW=200000
 # @label=Orchestrator session @group=spawn @tier=internal @scope=fleet @edit=bool
 #FLEET_ORCHESTRATOR=1
 
-# The steward (EPIC #2668): the resident session that patrols every batch for you.
-# Default: follows FLEET_ORCHESTRATOR; 0 = no steward, and everything it brings —
-# the desk tickets below included — stays as before.
-# @label=Steward @group=spawn @tier=internal @scope=fleet @edit=bool
-#FLEET_STEWARD=1
+# The steward (EPIC #2668; issue #2670, bin/fleet-steward.sh): the resident
+# session that patrols every batch for you, answers a worker's question when the
+# batch charter already says it, and hands the rest to the orchestrator as ONE
+# decision sheet (skills/fleet-steward/). 0 = no steward, and everything it brings
+# — the desk tickets below included — stays as before; `count` = only the
+# attention count (logs/attention.ndjson), no window — the default where an
+# orchestrator runs, for the batch's three-day baseline; 1 = the window too. Its
+# beat runs on the diskguard tick with no model; only a beat with something new
+# wakes it.
+# @label=Steward @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_STEWARD=count
 
 # Desk tickets (issue #2676): a session the orchestrator or you open with no repo
 # (a design page, research, a release) gets a `desk`-labelled ticket of its own in
@@ -346,6 +352,32 @@ FLEET_CTX_WINDOW=200000
 # in place with a first turn that re-arms its Loop (issue #2585). `off` keeps the page.
 # @label=Orchestrator revive after (s) @group=spawn @tier=internal @scope=fleet @edit=str
 #FLEET_ORCH_REVIVE_SECS=30
+
+# One tier cheaper than the orchestrator (发起人拍板 3): Claude --model
+# FLEET_STEWARD_MODEL --effort FLEET_STEWARD_EFFORT; Codex -m FLEET_STEWARD_CODEX_MODEL.
+# @label=Steward model (Claude) @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_STEWARD_MODEL="opus"
+# @label=Steward model (Codex) @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_STEWARD_CODEX_MODEL=""
+# @label=Steward effort @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_STEWARD_EFFORT="medium"
+# @label=Steward revive after (s) @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_STEWARD_REVIVE_SECS=30
+# Its beat (seconds): every FLEET_STEWARD_EVERY, FLEET_STEWARD_AGAIN after a beat
+# that changed something, FLEET_STEWARD_NIGHT_EVERY from 23:00 to 08:00.
+# @label=Steward beat @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
+#FLEET_STEWARD_EVERY=1200
+# @label=Steward beat after a change @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
+#FLEET_STEWARD_AGAIN=600
+# @label=Steward beat at night @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
+#FLEET_STEWARD_NIGHT_EVERY=3600
+# At most this many GitHub writes a beat (共同约定 7); past it they wait a beat.
+# @label=Steward writes per beat @group=spawn @tier=internal @scope=fleet @edit=int
+#FLEET_STEWARD_WRITES=20
+# C8's desk ticket (`gh:owner/repo#N`) the decision sheet is also posted on; empty =
+# the sheet file + the orchestrator's [decision] only.
+# @label=Steward desk ticket @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_STEWARD_DESK=""
 
 # When an account hits a PER-MODEL cap ("You've hit your Fable 5 limit · resets
 # Sep 6 …" / "You've reached your Fable limit …") while its subscription still

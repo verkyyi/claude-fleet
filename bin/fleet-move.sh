@@ -452,7 +452,7 @@ move_main() {
     [ -n "$name" ] || { say "  ✗ $wid: no such window — refused:not-found"; return 3; }
     # the orchestrating session (issue #1957) reads as the hub: it stays on its
     # machine, whose tick reopens it there (bin/fleet-orchestrator.sh ensure)
-    hub=$(wopt "$wid" '#{?#{==:#{@fleet_role},orchestrator},1,#{@hub}}'); cwd=$(wopt "$wid" '#{pane_current_path}')
+    hub=$(wopt "$wid" '#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},1,#{@hub}}'); cwd=$(wopt "$wid" '#{pane_current_path}')
     state=$(wopt "$wid" '#{@claude_state}'); raw=$(wopt "$wid" '#{@raw}')
     iss=$(wopt "$wid" '#{@issue}'); wt=$(wopt "$wid" '#{@worktree}')
     origin=$(wopt "$wid" '#{@origin}'); norepo=$(wopt "$wid" '#{@norepo}')
@@ -596,7 +596,7 @@ move_main() {
   # everything that can move. Summary: `moved N · skipped M · left K`, where K is
   # the idle sessions still here (skipped + failed + never reached).
   if [ "$REBAL" = 1 ]; then
-    rwins=$(TM list-windows -t "=$SESS" -F '#{@claude_state_ts}|#{window_id}|#{@claude_state}|#{?#{==:#{@fleet_role},orchestrator},1,#{@hub}}|#{window_name}|#{@worker_lifecycle}' 2>/dev/null \
+    rwins=$(TM list-windows -t "=$SESS" -F '#{@claude_state_ts}|#{window_id}|#{@claude_state}|#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},1,#{@hub}}|#{window_name}|#{@worker_lifecycle}' 2>/dev/null \
       | awk -F'|' -v pr="$PANEL_RE" '$3 == "done" && $4 != "1" && $6 == "" && $5 !~ pr { print ($1 == "" ? 0 : $1) "|" $2 }' \
       | sort -t'|' -k1,1n | cut -d'|' -f2)
     skipped=0; ncand=0

@@ -56,6 +56,8 @@
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
 #   decision-never-defaulted                        bin/fleet_decision.py (classify, is_due, apply_due)
+#   steward-exited                                  bin/fleet-steward.sh ensure (same conversation), home_watch
+#   steward-write-storm                             bin/fleet_steward.py (State.budget_left, do_answer, flush_deferred)
 #   breakage-three-filers                           bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
 #                                                   fleet_breakage_find (fleet-lib.sh)
 #   breakage-no-flag                                bin/fleet-issue-file.sh (auto), fleet_breakage_pick /
@@ -4730,6 +4732,66 @@ drill_decision_never_defaulted() {
   dnd render --rows <(dnd parse --repo o/n --issue 2) | grep -q '永不默认：花钱' \
     || { WHY="its row does not say 永不默认：花钱"; return 1; }
   SECS=$(since "$t0"); WHAT="标成 normal 的花钱问题过期三天：一条都没贴，行写「等你（永不默认：花钱）」"
+}
+
+# steward-exited (issue #2670, EPIC #2668 C2): the steward's window is closed (by
+# hand, a crash, a kill). Nobody patrols any more — asks pile up red, no sheet
+# reaches the orchestrator — and a reopen on a NEW conversation would lose what it
+# had been told. The next tick's ensure reopens it on the same conversation with
+# a first turn that sends it to its state file; the beat itself never needed it.
+drill_steward_exited() {
+  CAP=10; BREAK_SOCK="$WORK/sock-sx"; local t0 w sid h="$WORK/sxhome" c="$WORK/sxconf" sa="$WORK/sx-argv" proj
+  mkdir -p "$h" "$c"; : > "$sa"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\nexec sleep 600\n' "$sa" > "$WORK/sx-agent"; chmod +x "$WORK/sx-agent"
+  nt -f /dev/null new-session -d -s sx -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+  sxens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
+              FLEET_STEWARD=1 FLEET_AGENT=claude FLEET_STEWARD_MODEL='' FLEET_WRAP_LAUNCH="$WORK/sx-agent" \
+              bash "$BIN/fleet-steward.sh" ensure sx 2>/dev/null; }
+  w=$(sxens) || { WHY="ensure did not open it"; return 1; }
+  until_ok 5 test -s "$sa" || { WHY="the steward's agent never started"; return 1; }
+  sid=$(cat "$c/fleets/sx/steward.sid" 2>/dev/null)
+  proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+  mkdir -p "$proj"; : > "$proj/$sid.jsonl"; : > "$sa"
+  nt kill-window -t "$w"                          # the break
+  t0=$(now)
+  w=$(sxens) || { WHY="the next tick did not reopen it"; return 1; }
+  until_ok "$CAP" grep -q -- "--resume $sid" "$sa" || { WHY="not reopened on the same conversation: $(cat "$sa")"; return 1; }
+  grep -q '会话刚被 fleet 接回' "$sa" || { WHY="reopened with no first turn: $(cat "$sa")"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(nt list-windows -t sx -F '#{@fleet_role}' | grep -cx steward)" = 1 ] || { WHY="more than one steward"; return 1; }
+  WHAT="管家窗口被关；下一拍原地开回同一对话，首轮让它去读状态文件（节拍 60s 另计）"
+}
+
+# steward-write-storm (issue #2670, EPIC #2668 共同约定 7): one beat wants to write
+# more answers than its budget (a loop answering the same rows, a backlog of
+# questions). Every write goes through the beat's budget (FLEET_STEWARD_WRITES,
+# 20): the rest wait for the next beat, the card says 延后 N — never a flood.
+drill_steward_write_storm() {
+  CAP=30; local t0 g="$WORK/sws" i n st
+  mkdir -p "$g/conf/fleets/sw/repos"
+  printf 'FLEET_REPO="o/r"\n' > "$g/conf/fleets/sw/repos/o-r.conf"
+  printf '#!/bin/sh\nprintf "{\\"comments\\": []}\\n"\n' > "$g/comments"
+  printf '#!/bin/sh\ncat >/dev/null; echo "$1#$2 $3" >> "%s/posts"; echo posted\n' "$g" > "$g/post"
+  printf '#!/bin/sh\n:\n' > "$g/none"
+  chmod +x "$g/comments" "$g/post" "$g/none"
+  st="$g/conf/global/steward.state.json"; mkdir -p "$g/conf/global"
+  python3 -c '
+import json, sys
+rows = {"r%d" % i: {"id": "r%d" % i, "item": "q%d" % i, "src": "gh:o/r#%d" % (i + 10), "state": "open", "kind": "normal",
+                    "default": "yes", "due": "", "url": ""} for i in range(12)}
+json.dump({"v": 1, "rows": rows, "beat": {"n": 1, "writes": 0}}, open(sys.argv[1], "w"))' "$st"
+  sw() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD=1 FLEET_DECISION_COMMENTS_CMD="$g/comments" \
+           FLEET_DECISION_POST_CMD="$g/post" FLEET_STEWARD_WINDOWS_CMD="$g/none" FLEET_STEWARD_CHILDREN_CMD="$g/none" \
+           FLEET_STEWARD_SEND_CMD="$g/none" FLEET_STEWARD_STAMP_CMD="$g/none" python3 "$BIN/fleet_steward.py" "$@" --session sw; }
+  t0=$(now)
+  # the default budget is 20; the drill storms a budget of 8 with 12 answers
+  for i in $(seq 0 11); do FLEET_STEWARD_WRITES=8 sw answer --row "r$i" --text yes >/dev/null 2>&1; done
+  n=$(grep -c . "$g/posts" 2>/dev/null || echo 0)
+  [ "$n" = 8 ] || { WHY="one beat wrote $n comments, budget 8"; return 1; }
+  FLEET_STEWARD_WRITES=8 sw beat --force > "$g/card" 2>&1
+  [ "$(grep -c . "$g/posts")" = 12 ] || { WHY="the next beat did not post the deferred four: $(grep -c . "$g/posts")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="一拍想写 12 条（预算 8）：落 8、延后 4，下一拍先补上"
 }
 
 # ================================================================ run ===========

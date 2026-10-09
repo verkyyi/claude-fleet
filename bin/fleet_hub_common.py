@@ -297,9 +297,16 @@ def inventory_row(parts):
     Column 31 (issue #2617, EPIC #2615 C2): `orchq=<n>` — what waits behind the
     orchestrator's running turn (@orch_queue, the mod's count) → `orch_queue`
     (an int); absent on every other window and on an orchestrator that cannot
-    count (Codex, no mod)."""
+    count (Codex, no mod).
+    Column 32 (issue #2670, EPIC #2668 C2): `orchdec=<n>` — the steward's decision
+    sheet rows still open (@orch_decide on the orchestrator) → `orch_decide` (an
+    int); absent unless the steward stamped one. `role=steward` is its steward."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 32 and parts[-1].startswith("orchdec="):
+        d = parts.pop()[8:]
+        if re.fullmatch(r"[0-9]{1,4}", d):
+            extra["orch_decide"] = int(d)
     if len(parts) >= 31 and parts[-1].startswith("orchq="):
         q = parts.pop()[6:]
         if re.fullmatch(r"[0-9]{1,4}", q):
@@ -336,7 +343,7 @@ def inventory_row(parts):
             extra["epic"] = e
     if len(parts) >= 20 and parts[-1].startswith("role="):
         r = parts.pop()[5:]
-        if r == "orchestrator":
+        if r in ("orchestrator", "steward"):
             extra["role"] = r
     if len(parts) >= 19 and parts[-1].startswith("detail="):
         extra["detail"] = parts.pop()[7:][:120] or None

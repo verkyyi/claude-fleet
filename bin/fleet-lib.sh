@@ -4968,6 +4968,7 @@ fleet_origin_key() {
   # The orchestrating session (issue #2129): no issue, no scratch, no repo — its
   # key is the literal `orchestrator`, the one fleet_win_for_key answers to.
   [ "${o%%|*}" = orchestrator ] && { printf 'orchestrator'; return 0; }
+  [ "${o%%|*}" = steward ] && { printf 'steward'; return 0; }   # issue #2670
   o=${o#*|}
   iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; pth=${o#*|}
   pre=$(_fleet_key_prefix "$(fleet_current_session)" "$TMUX_PANE") || return 0
@@ -5044,7 +5045,7 @@ fleet_origin_gate() {
     return 4
   fi
   case "$o" in
-    issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*|orchestrator) ;;
+    issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*|orchestrator|steward) ;;
     *) return 0 ;;
   esac
   v=$(fleet_worker_locate "wid:$o" "$sess" 2>/dev/null)
@@ -5097,7 +5098,7 @@ fleet_origin_canon() {
   [ -z "$ex" ] && { printf '%s' "$det"; return 0; }
   # `orchestrator` (issue #2129) is a key, the fleet's one orchestrating session —
   # never repo-qualified, never swapped for a detected one.
-  case "$ex" in autofill|bridge|orchestrator) printf '%s' "$ex"; return 0 ;; esac
+  case "$ex" in autofill|bridge|orchestrator|steward) printf '%s' "$ex"; return 0 ;; esac
   # `hub` (issue #896): the caller IS the hub's ⌃s by another road — the worker
   # sidebar's input line runs inside a worker's window, so detection would nest
   # the new session under that worker. Empty ≡ hub, whatever was detected —
@@ -5181,21 +5182,22 @@ fleet_win_for_key() {
   case "$key" in ?*:?*) pre=${key%%:*}; key=${key#*:} ;; esac
   case "$key" in
     issue-*|scratch-*) sn=${key#*-}; case "$sn" in ''|*[!0-9]*) return 1 ;; esac ;;
-    orchestrator)
-      # The fleet's one orchestrating session (issue #1957): its @fleet_role, on
-      # this fleet's server — no number to recycle, no repo to qualify it.
+    orchestrator|steward)
+      # The fleet's one orchestrating session (issue #1957), and its steward (issue
+      # #2670): the @fleet_role, on this fleet's server — no number to recycle, no
+      # repo to qualify it.
       [ -z "$pre" ] || return 1
       if [ -n "$sock" ]; then
-        hits=$(fleet_lw '#{window_id}|#{@fleet_role}' tmux -L "$sock" | awk -F'|' '$2 == "orchestrator" { print $1 }')
+        hits=$(fleet_lw '#{window_id}|#{@fleet_role}' tmux -L "$sock" | awk -F'|' -v r="$key" '$2 == r { print $1 }')
       else
-        hits=$(fleet_lw '#{window_id}|#{@fleet_role}' | awk -F'|' '$2 == "orchestrator" { print $1 }')
+        hits=$(fleet_lw '#{window_id}|#{@fleet_role}' | awk -F'|' -v r="$key" '$2 == r { print $1 }')
       fi
       n=$(printf '%s' "$hits" | grep -c .)
       case "$n" in
         0) return 1 ;;
         1) printf '%s' "$hits"; return 0 ;;
       esac
-      printf 'fleet: orchestrator is ambiguous — %s windows carry @fleet_role orchestrator\n' "$n" >&2
+      printf 'fleet: %s is ambiguous — %s windows carry @fleet_role %s\n' "$key" "$n" "$key" >&2
       return 2 ;;
     *) return 1 ;;
   esac
@@ -5569,7 +5571,7 @@ _fleet_wid_split() {
   if [ -n "$u" ]; then
     fleet_is_fid "$u" || return 1
   fi
-  if ! fleet_is_fid "$k" && [ "$k" != orchestrator ]; then   # orchestrator: issue #2129
+  if ! fleet_is_fid "$k" && [ "$k" != orchestrator ] && [ "$k" != steward ]; then   # #2129 · #2670
     printf '%s' "$k" | grep -Eqx '([A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(issue|scratch)-[1-9][0-9]{0,9}' || return 1
   fi
   printf '%s\t%s' "$u" "$k"
@@ -6134,7 +6136,7 @@ fleet_worker_locate() {
   local t="${1:-}" sess="${2:-}" sp u k home w node rc
   [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
   case "$t" in
-    wid:*|*/*|issue-*|scratch-*|orchestrator) sp=$(_fleet_wid_split "$t") || { echo unknown; return 2; } ;;
+    wid:*|*/*|issue-*|scratch-*|orchestrator|steward) sp=$(_fleet_wid_split "$t") || { echo unknown; return 2; } ;;
     *) sp='' ;;
   esac
   if [ -n "$sp" ]; then
@@ -7149,7 +7151,7 @@ EOF
 fleet_desk_repo() {
   local r
   case "${FLEET_DESK:-${FLEET_STEWARD:-${FLEET_ORCHESTRATOR:-${FLEET_HOST:-0}}}}" in
-    1|on|yes|true) ;;
+    1|on|yes|true|count) ;;   # count: the steward counting its baseline (#2670)
     *) return 1 ;;
   esac
   r=$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}")
@@ -9051,6 +9053,7 @@ fleet_window_okey() {
         '#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
   [ "${o%%|*}" = orchestrator ] && { printf 'orchestrator'; return 0; }   # issue #2129
+  [ "${o%%|*}" = steward ] && { printf 'steward'; return 0; }             # issue #2670
   o=${o#*|}
   iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; pth=${o#*|}
   pre=$(_fleet_key_prefix "$sess" "$t") || return 0
