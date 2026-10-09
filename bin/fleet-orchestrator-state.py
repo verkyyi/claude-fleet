@@ -36,7 +36,10 @@ WHAT IT DOES. ONE file, `$FLEET_CONF_DIR/global/orchestrator.state.json` (EPIC
            当前状态如下」 as additionalContext, ending in the next step: re-arm the Loop
            (ScheduleWakeup with the same prompt and delay). A state older than 2 hours
            is marked 只当参考 — check the children first. Reading it marks the reports
-           read (`seen_seq`).
+           read (`seen_seq`). On `resume` / `startup` (an exit, a killed process, a
+           restart — no SessionEnd may have run) the batches and the Loop are read
+           again first (issue #2585); fleet-orchestrator.sh hands that resumed
+           conversation its first turn, so it re-arms with nobody typing.
            After a MANUAL compaction the REPL sits idle and additionalContext only
            rides a turn something else starts, so it also starts that turn: stamps
            @compact_stage restored + @compact_restored_ts and hands the pane to
@@ -373,6 +376,28 @@ def brief(d, source='compact', now=None):
     return '\n'.join(head + body + tail)
 
 
+def refresh(d, transcript):
+    """Back from an exit, a crash or a restart (issue #2585, EPIC #2581 C4): a killed
+    process ran no SessionEnd, so the saved picture may predate the batch or the Loop.
+    The two local halves are read again — the batch marks, and the Loop off the
+    conversation being resumed (kept when it holds none); the children half (a hub
+    read, seconds) stays as saved, and so does `ts` (stamped now when nothing was
+    ever saved but a batch or a Loop is found)."""
+    now = int(time.time())
+    d['batches'] = batches(now)
+    lp = loop_from_transcript(transcript, now)
+    if lp:
+        d['loop'] = lp
+    if not d.get('ts'):
+        if not d['batches'] and not lp:
+            return                       # nothing was ever saved, nothing to say
+        d.update(v=1, ts=now, reason='refresh', session=_session())
+    try:
+        store(d)
+    except OSError:
+        pass
+
+
 def mark_read(d):
     if d and int(d.get('seq') or 0) > int(d.get('seen_seq') or 0):
         d['seen_seq'] = int(d['seq'])
@@ -435,6 +460,8 @@ def hook():
         if src not in ('compact', 'resume', 'startup'):
             return 0
         d = load()
+        if src in ('resume', 'startup'):
+            refresh(d, tr)
         text = brief(d, src)
         if not text:
             return 0

@@ -17,6 +17,10 @@
 #   E  FLEET_ORCHESTRATOR=0 on the holder: it tells the hub "not here" and closes its own
 #   F  no hub at all (CCQUOTA_FLEET off): opens as before — byte for byte the #1957 path
 #   G  `where` prints the hub's answer
+#   H  it comes back as it was (issue #2585): a closed window reopens on the same
+#      conversation with the resume seed as its first turn; a Claude window on the
+#      recovery page past FLEET_ORCH_REVIVE_SECS is respawned in place (same id) —
+#      within the grace, or a Codex one, it is left alone
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # the real binary — never the fleet's tmux shim, which would find our own tbin/tmux again
@@ -38,7 +42,7 @@ cat > "$WORK/tbin/tmux" <<EOF
 #!/bin/sh
 exec "$REAL_TMUX" -S "\$ST_SOCK" "\$@"
 EOF
-printf '#!/bin/sh\nexec sleep 600\n' > "$WORK/agent"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/args"\nexec sleep 600\n' "$WORK" > "$WORK/agent"
 # The fake hub: mode ok | down | 404; holder sticks, "not here" moves it off.
 cat > "$WORK/curl" <<'EOF'
 #!/bin/bash
@@ -137,6 +141,43 @@ w=$(env PATH="$WORK/tbin:$PATH" HOME="$WORK/m5/home" FLEET_CONF_DIR="$WORK/m5/co
       ST_SOCK="$WORK/m5.sock" ST_ME=m5 ST_HUB="$WORK/hub" FLEET_HUB_CURL="$WORK/curl" CCQUOTA_FLEET=1 CCQUOTA_TOKEN=t \
       CCQUOTA_HUB_URL=http://hub.invalid FLEET_ORCHESTRATOR=1 bash "$BIN/fleet-orchestrator.sh" where or 2>/dev/null)
 [ "$w" = 'elsewhere m4' ] && ok "G: where — elsewhere m4" || bad "G: where = '$w'"
+
+# H — it comes back as it was (issue #2585)
+H4="$REAL_TMUX -S $WORK/m4.sock"
+for x in $($H4 list-windows -t or -F '#{window_id} #{@fleet_role}' | awk '$2 == "orchestrator" { print $1 }'); do
+  $H4 kill-window -t "$x"
+done
+: > "$WORK/args"
+nargs() { wc -l < "$WORK/args" | tr -d ' '; }
+waitargs() { local i=0; while [ "$(nargs)" -lt "$1" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done; }
+o=$(ens m4 CCQUOTA_FLEET=0); wh=${o%%$'\n'*}
+waitargs 1
+sid=$(cat "$WORK/m4/conf/fleets/or/orchestrator.sid" 2>/dev/null)
+case "$(tail -n 1 "$WORK/args")" in *"--session-id $sid"*/fleet-orchestrate*) ok "H: a new conversation starts on /fleet-orchestrate" ;;
+  *) bad "H: new conversation launch = $(tail -n 1 "$WORK/args")" ;; esac
+proj="$WORK/m4/home/.claude/projects/$(printf '%s' "$WORK/m4/home" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+mkdir -p "$proj"; : > "$proj/$sid.jsonl"
+$H4 set-option -wq -t "$wh" @claude_state exited
+$H4 set-option -wq -t "$wh" @claude_state_ts "$(date +%s)"
+o=$(ens m4 CCQUOTA_FLEET=0); sleep 0.3
+[ "${o%%$'\n'*}" = "$wh" ] && [ "$(nargs)" = 1 ] && ok "H: on the page within the grace — left alone" \
+  || bad "H: within the grace: $o / $(nargs) launches"
+$H4 set-option -wq -t "$wh" @claude_state_ts "$(( $(date +%s) - 100 ))"
+$H4 set-option -wq -t "$wh" @cc_agent codex
+o=$(ens m4 CCQUOTA_FLEET=0); sleep 0.3
+[ "${o%%$'\n'*}" = "$wh" ] && [ "$(nargs)" = 1 ] && ok "H: a Codex orchestrator keeps its page" \
+  || bad "H: codex revived: $o / $(nargs) launches"
+$H4 set-option -wqu -t "$wh" @cc_agent
+o=$(ens m4 CCQUOTA_FLEET=0); waitargs 2
+case "$o" in "$wh"*rc=0) ;; *) bad "H: revive did not answer the same window: $o (want $wh)" ;; esac
+case "$(tail -n 1 "$WORK/args")" in *"--resume $sid"*'会话刚被 fleet 接回'*) ok "H: revived in place on the same conversation, with the resume seed" ;;
+  *) bad "H: revive launch = $(tail -n 1 "$WORK/args")" ;; esac
+[ -z "$($H4 display-message -p -t "$wh" '#{@claude_state}')" ] || bad "H: @claude_state still exited after the revive"
+[ "$(count m4)" = 1 ] || bad "H: windows = $(count m4) after the revive"
+$H4 kill-window -t "$wh"
+o=$(ens m4 CCQUOTA_FLEET=0); waitargs 3
+case "$(tail -n 1 "$WORK/args")" in *"--resume $sid"*'会话刚被 fleet 接回'*) ok "H: a closed window reopens on the same conversation, with the resume seed" ;;
+  *) bad "H: reopen launch = $(tail -n 1 "$WORK/args")" ;; esac
 
 [ "$fails" = 0 ] && { echo "fleet-orchestrator-selftest: all passed"; exit 0; }
 echo "fleet-orchestrator-selftest: $fails failed"; exit 1

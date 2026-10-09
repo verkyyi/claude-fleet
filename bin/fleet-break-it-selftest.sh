@@ -27,6 +27,8 @@
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
 #   orchestrator-closed                             bin/fleet-orchestrator.sh ensure (fleet-up.sh,
 #                                                   fleet-diskguard.sh home_watch)
+#   orchestrator-exited                             bin/fleet-orchestrator.sh ensure (revive in place),
+#                                                   fleet-orchestrator-state.py (SessionStart resume)
 #   orchestrator-two                                bin/fleet-orchestrator.sh ensure asks the hub
 #                                                   (/v1/node/orchestrator) which machine holds it
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
@@ -780,6 +782,56 @@ drill_orchestrator_compacted() {
   [ "$(nt display-message -p -t "$p" '#{@compact_stage}')" = restored ] \
     || { WHY="a typed /compact leaves the REPL idle and nothing starts the next turn"; return 1; }
   WHAT="压缩前存下批次、在等谁、未读回报、循环；压缩后注入 ≤40 行并让会话先重新 arm 循环；人敲的 /compact 自动起下一轮"
+}
+
+# orchestrator-exited (issue #2585, EPIC #2581 C4): the orchestrator's process
+# is killed (or it /exits, or the machine restarts). The window stayed on the
+# wrapper's recovery page, so #1957's ensure saw "it is open" and did nothing —
+# and a reopen resumed the conversation with no turn to start it: nobody re-armed
+# the Loop or said the batch until the person typed. Now the next tick's ensure
+# respawns it in place on the same conversation with a first turn, and
+# SessionStart (resume) — no SessionEnd ran — reads the batch and the Loop again
+# and tells it to re-arm. The model's own first answer is the issue's 上线证据.
+drill_orchestrator_exited() {
+  CAP=10; BREAK_SOCK="$WORK/sock-ox"; local t0 w sid p out h="$WORK/oxhome" c="$WORK/oxconf" oa="$WORK/ox-argv" tr ts
+  mkdir -p "$h" "$c/global/epic-running.d"; : > "$oa"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\necho $$ > %s.pid\nexec sleep 600\n' "$oa" "$oa" > "$WORK/ox-agent"; chmod +x "$WORK/ox-agent"
+  nt -f /dev/null new-session -d -s ox -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+  # the wrapper in the pane: its tmux calls reach this server, nothing of the operator's runs
+  local e; for e in BREAK_SOCK="$BREAK_SOCK" FLEET_WRAP_FAST_FAIL=0 FLEET_MCP=0 FLEET_CRED_PROXY=0 SHELL=/bin/sh; do
+    nt set-environment -g "${e%%=*}" "${e#*=}"; done
+  nt set-option -g default-shell /bin/sh
+  oxens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
+              FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/ox-agent" "$@" \
+              bash "$BIN/fleet-orchestrator.sh" ensure ox 2>/dev/null; }
+  w=$(oxens) || { WHY="ensure did not open it"; return 1; }
+  until_ok 5 test -s "$oa.pid" || { WHY="the orchestrator's agent never started"; return 1; }
+  sid=$(cat "$c/fleets/ox/orchestrator.sid" 2>/dev/null)
+  local proj; proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+  mkdir -p "$proj"; tr="$proj/$sid.jsonl"; ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+  printf '%s\n%s\n' \
+    "{\"type\":\"assistant\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"ScheduleWakeup\",\"input\":{\"delaySeconds\":1200,\"prompt\":\"<<autonomous-loop-dynamic>>\"}}]}}" \
+    "{\"type\":\"user\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"content\":\"ok\"}]}}" > "$tr"
+  printf 'epoch: %s\nttl: 2700\nepic: 2581\nrepo: o/n\nsession: ox\ntick: 4\n' "$(date +%s)" > "$c/global/epic-running.d/o-n-2581"
+  : > "$oa"
+  kill -9 "$(cat "$oa.pid")"                      # the break: no SessionEnd, nothing saved
+  oxst() { [ "$(o "$w" @claude_state)" = exited ]; }
+  until_ok 5 oxst || { WHY="the wrapper never put it on the recovery page"; return 1; }
+  t0=$(now)
+  [ "$(oxens)" = "$w" ] && [ ! -s "$oa" ] || { WHY="it was revived inside the grace — the person on the page lost the choice"; return 1; }
+  [ "$(oxens FLEET_ORCH_REVIVE_SECS=0)" = "$w" ] \
+    || { WHY="the next tick left it on the recovery page (or opened a second window)"; return 1; }
+  until_ok "$CAP" grep -q -- "--resume $sid" "$oa" || { WHY="not resumed on the same conversation: $(cat "$oa")"; return 1; }
+  grep -q '会话刚被 fleet 接回' "$oa" || { WHY="resumed with no first turn — nothing re-arms until the person types: $(cat "$oa")"; return 1; }
+  p=$(o "$w" pane_id)
+  out=$(printf '{"hook_event_name":"SessionStart","source":"resume","transcript_path":"%s"}' "$tr" \
+        | env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$c" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
+              TMUX_PANE="$p" CLAUDE_CODE_ENTRYPOINT=cli python3 "$BIN/fleet-orchestrator-state.py" hook 2>/dev/null)
+  SECS=$(since "$t0")
+  case "$out" in *'EPIC #2581'*) ;; *) WHY="back from the kill the session is not told its batch: [$out]"; return 1 ;; esac
+  case "$out" in *'<<autonomous-loop-dynamic>>'*'重新 arm 循环'*) ;; *) WHY="back from the kill the Loop is not handed back: [$out]"; return 1 ;; esac
+  [ "$(nt list-windows -t ox -F '#{@fleet_role}' | grep -cx orchestrator)" = 1 ] || { WHY="more than one orchestrator"; return 1; }
+  WHAT="进程被杀后窗口停在恢复页；下一拍原地续开同一对话并带首轮，注入批次与循环、先重新 arm（节拍 60s 与 30s 宽限另计）"
 }
 
 # window-renamed (issue #1844): a name is not an identity. Home renamed, a worker
