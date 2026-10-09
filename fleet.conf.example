@@ -315,6 +315,11 @@ FLEET_CTX_WINDOW=200000
 #FLEET_ORCH_CODEX_MODEL=""
 # @label=Orchestrator effort @group=spawn @tier=internal @scope=fleet @edit=str
 #FLEET_ORCH_EFFORT="high"
+# A Claude orchestrator that exited (/exit, a crash, a killed process) waits on the
+# recovery page this many seconds, then the next tick resumes the same conversation
+# in place with a first turn that re-arms its Loop (issue #2585). `off` keeps the page.
+# @label=Orchestrator revive after (s) @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_ORCH_REVIVE_SECS=30
 
 # When an account hits a PER-MODEL cap ("You've hit your Fable 5 limit · resets
 # Sep 6 …" / "You've reached your Fable limit …") while its subscription still
