@@ -266,17 +266,19 @@ def tmux_text(text):
 def render(args):
     kv = dict(a.split("=", 1) for a in args if "=" in a)
     cols = int(kv["cw"]) if kv.get("cw", "").isdigit() else 80
-    rec = read_record()
+    path = state_dir() / "switch-bar.json"
+    rec = read_record(path)
     if rec is None:
-        # no session row in view — a machine's bare shell (the client opened
-        # with none picked), the writing area, or a stage started before the
-        # list wrote a record: the window's name. ‹ › and a tap on the name
+        # no session row in view — a machine's bare shell, the writing area (the
+        # list wrote `null`): the window's name. ‹ › and a tap on the name
         # still go round the sessions, so the one-pane layout (a phone in
-        # Termius) never leaves a bare shell with no way to them. No subprocess
-        # here: tmux runs this line on every status redraw.
+        # Termius) never leaves a bare shell with no way to them. No record at
+        # all (issue #2739) is said, not drawn as a bare shell: the list never
+        # wrote one, and logs/topbar.log says why when a write failed.
+        missing = "" if path.is_file() else "#[fg=%s]  %s" % (WARN, tmux_text(say("topbar_no_record") or "顶行无记录"))
         print("#[fg=%s]#[range=user|prev] ‹ #[norange]#[range=user|next]› #[norange] "
-              "#[fg=%s,bold]#[range=user|title]%s#[norange]#[default]"
-              % (DIM, HL, tmux_text(kv.get("wn", ""))))
+              "#[fg=%s,bold]#[range=user|title]%s#[norange]#[nobold]%s#[default]"
+              % (DIM, HL, tmux_text(kv.get("wn", "")), missing))
         return 0
     rec["also"] = also_on(rec)
     parts, bg = layout(rec, cols, kv.get("down", ""), kv.get("rr", ""))

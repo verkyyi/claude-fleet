@@ -305,13 +305,16 @@ def switch_target(verbs, rows, current, live, session=""):
     return target
 
 
-def bar_record(rows, current):
+def bar_record(rows, current, session=""):
     """What the stage's top line says about the row in view (issue #1904), off
     the rows this list paints — so the line and the list never disagree: its
     place among the session rows (‹ i/n ›), state, needs kind, key, title, PR,
     repo (only in a fleet showing more than one), machine and whether it is lost,
-    and how many rows wait on you. None when the row is not on the list — or is
-    the writing area (issue #1953): the top line is then its window's name."""
+    and how many rows wait on you. A session in view that is no row — the
+    orchestrator behind 「新任务」, the steward, a row the batch view folded away
+    (issue #2739) — is read off the refresh loop's cache instead (cache_record).
+    None when it is neither — a machine's bare window — or is the writing area
+    (issue #1953): the top line is then its window's name."""
     if current == PORTAL_KEY:
         return None
     ids = [key for key in selectable(rows) if acts(key) and key != PORTAL_KEY]
@@ -327,7 +330,7 @@ def bar_record(rows, current):
         if row[0] == current:
             hit = (row, repo, slug)
     if hit is None:
-        return None
+        return cache_record(session, current, rows, ids)
     row, repo, slug = hit
     row = list(row) + [""] * (19 - len(row))
     kind = ""
@@ -349,6 +352,37 @@ def bar_record(rows, current):
         # the measurement bus (issue #2717, field 19 — #2431's five): the top
         # line's right side, 剩余 % · model · effort
         **ctx_of(row[18]),
+    }
+
+
+def cache_record(session, current, rows, ids):
+    """bar_record for a session on the refresh loop's cache but not on the list
+    (issue #2739): `remote_<session>` keeps every session's line, the
+    orchestrator's included (fleet-hub-sessions.sh — the rows skip it). Columns:
+    1 wid · 2 node · 3 online|lost · 4 issue · 5 repo · 6 state · 8 name ·
+    10 needs · 17 title · 21-25 the measurement bus. None when it is not there."""
+    if not current.startswith("wid:"):
+        return None
+    try:
+        with open(os.path.join(status_dir(), "remote_" + (session or "")), encoding="utf-8") as f:
+            line = next((p for p in (l.rstrip("\n").split(US) for l in f) if p[0] == current), None)
+    except OSError:
+        line = None
+    if line is None:
+        return None
+    p = line + [""] * (25 - len(line))
+    state = p[5] or "idle"
+    node = p[1].strip()
+    return {
+        "i": 0, "n": len(ids), "state": state,
+        "kind": ("perm" if p[9].startswith("perm") else "ask") if state == "needs" else "",
+        "key": "#" + p[3] if p[3].isdigit() else "",
+        "title": (p[16] or p[7]).strip(), "pr": "", "repo": "", "slug": "",
+        "node": machine_tag(node)[1:] if node else tr("sidebar_here"),
+        "lost": p[2] == "lost", "direct": False,
+        "ask": sum(1 for r in rows if r[0] != "hdr" and r[1] in FOLD_KEEP),
+        "wid": current[4:],
+        **ctx_of("|".join(p[20:25])),
     }
 
 
@@ -376,17 +410,38 @@ def publish_bar(rows, current, last, session=""):
     so tmux runs the line again at once (bin/fleet-topbar.py). The machine it
     names goes on this server too, `@fleet_view_node` — the one-session view's
     bar (issue #2265, conf/tmux-shell.conf) has no top line to read it from."""
-    rec = bar_record(rows, current)
+    rec = bar_record(rows, current, session)
     text = json.dumps(rec, ensure_ascii=False, sort_keys=True)
     if text == last:
         return last
     solo_ended(current, rec, session)
-    if switch_lib().write_atomic(switch_lib().state_dir() / "switch-bar.json", text + "\n"):
+    lib = switch_lib()
+    if lib.write_atomic(lib.state_dir() / "switch-bar.json", text + "\n"):
         run(["tmux", "-L", STAGE, "set-option", "-t", "=" + STAGE, "@fleet_bar_gen",
              str(time.time_ns())])
         tmux("set-option", "-g", "@fleet_view_node", (rec or {}).get("node") or "")
         return text
+    # never silently (issue #2739): the top line reads 「顶行无记录」 and this says why
+    bar_log(lib.WRITE_ERROR[0] or "switch-bar.json: write failed")
     return last
+
+
+_BAR_LOGGED = [""]
+
+
+def bar_log(text):
+    """One line per new reason the top line's record could not be written
+    (issue #2739), beside the stall log: `logs/topbar.log`."""
+    if text == _BAR_LOGGED[0]:
+        return
+    _BAR_LOGGED[0] = text
+    path = Path(os.environ.get("FLEET_SIDEBAR_STALL_LOG") or BIN.parent / "logs" / "sidebar-stall.log")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path.with_name("topbar.log"), "a") as log:
+            log.write("%s · %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), text))
+    except OSError:
+        pass
 
 
 # The one-session view (issue #2265, EPIC #2259 共同约定 3): the file the list
