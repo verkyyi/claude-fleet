@@ -781,6 +781,14 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 		// A lifecycle tool names a worker; its fleet half is what is audited.
 		fleetID, _, _ = fleetid.ParseWorkerID(wid)
 	}
+	if tool == "service_control" {
+		// No fleet: the audit names the entry it acted on (claude-fleet#2527).
+		m, _ := args["machine"].(string)
+		l, _ := args["login"].(string)
+		n, _ := args["name"].(string)
+		a, _ := args["action"].(string)
+		fleetID = "service:" + m + "/" + l + "/" + n + " " + a
+	}
 	opID := ""
 	defer func() {
 		if m, ok := out.(map[string]any); ok && opID == "" {
@@ -844,7 +852,7 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 var FleetTools = []string{"fleet_list", "fleet_sessions", "fleet_status", "config_get", "operation_get",
 	"gh_issue_view", "gh_pr_view", "gh_pr_checks",
 	"worker_start", "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch", "worker_rename", "worker_reap_policy",
-	"config_set", "gh_comment"}
+	"config_set", "gh_comment", "service_control"}
 
 // handleFleet serves /v1/fleet/<tool>: a read as GET with query arguments
 // (?fleet_id=…&operation_id=…&refresh=1&number=…&repo=…&fields=…), or any tool

@@ -333,3 +333,30 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
   对任务带 `status`（scheduled · running · retrying · ok · failed · stopped）、`last_run` · `next_run` · `last_result` ·
   `last_error` · `attempt` · `alert`。`state.json` 的 `agent_tasks` 是守护自己的记账。非 root 的 `ls` 读 `state.json` 里守护写好的那份。
 - BREAK-IT 行 `task-fail-silent`；`fleet-node-supervisor-selftest.py` K。
+
+## 12. 起停、现在跑一次、改计划 —— 从任何一台（EPIC #2524 C3，#2527）
+
+客户端、入口页和机器上的命令行做的是同一件事；客户端那条不用 root、不用登上那台机器：
+
+    fleet task run daily-report --now                         # 现在跑一次
+    fleet task schedule daily-report --at 07:30 [--tz Asia/Shanghai]   # 改计划（或 --cron '0 7 * * 1-5'）
+    fleet task stop|start|restart daily-report
+    fleet service stop|start|restart sms-watch                # 同名在两台/两个登录上时加 --machine / --login
+
+- **一条路**：`bin/fleet` 把这几个动词交给 `fleet-session-cli.py`：它从 `fleet-services.py` 的那张表找出条目在哪台
+  机器、哪个登录，经 `fleet-hub-write.sh`（证书签名或 viewer 令牌两条门都行）发入口写操作
+  `service_control {machine, login, name, action: start|stop|restart|run_now|set_schedule, at?, cron?, tz?}`；
+  入口页「我的机器」里点一行，抽屉底部的按钮（停 · 起 · 重启 · 现在跑一次 · 改计划）发的是同一个。没有入口、
+  请求根本没发出去时，在那台机器上自己跑就退回本机的 `fleet-<service|task>.sh`（sudo）。
+- **入口裁权**：作用域 `service:control`（个人默认就有）；调用者看不到 (机器, 登录) → **403**；那台机器链路最近一拍
+  的登记表里没有这一项 → 404；对常驻服务 `run_now` / `set_schedule` → 400。走的是那个登录自己的通道（不是哪个
+  fleet），记一条操作日志、审计一行（`service:<机器>/<登录>/<名> <动作>`）。
+- **节点执行**：机器的 `ccquota agent --machine` 不把它交给登录的 `fleet-control.py`（登记表是 root 的），而是自己以
+  root 跑 root 运行时里、和 ccquota 同目录的 `fleet-node-supervisor.py`（root 所有、组和其他人不可写，否则拒绝），
+  argv 固定为 `service <stop|start|restart|run|schedule> --login <这条通道自己的登录> --name <名>`——入口说的登录
+  和通道不一致就 `WRONG_LOGIN`。答复即终态（succeeded / failed + 守护的原因），不用再对账。不是机器链路的普通
+  agent 答 `UNAVAILABLE`。
+- **改计划**：`service schedule` 只动 `schedule`（不给 tz 就留原来的），并记 `rescheduled`：改之前已经过去的那一档
+  不补跑；下一档按新计划。`fleet task restart` 是 `start` 的同义（重新启用）。
+- BREAK-IT 行 `task-rerun-root-only`；Go `TestServiceControl`（入口）、`TestServiceControlWrite`（节点）；
+  `fleet-node-supervisor-selftest.py` K（`schedule`）；`fleet-session-cli-selftest.sh` K；`web/test/services.test.mjs`。

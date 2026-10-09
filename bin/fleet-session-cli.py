@@ -24,6 +24,17 @@
     fleet answer [<会话>] [<回答>]        answer a session that asks you — the first
                                          one waiting when none is named; the answer
                                          asked on the terminal when none is given
+    fleet service stop|start|restart <名称>
+    fleet task stop|start|restart <名称>
+    fleet task run <名称> --now
+    fleet task schedule <名称> (--at HH:MM | --cron '…') [--tz Z]
+                                         your background service / scheduled task on
+                                         whichever managed machine holds it (the
+                                         hub's service_control, issue #2527;
+                                         --machine M / --login L when the name is
+                                         on more than one). The rest of fleet
+                                         service|task (add · rm · ls · logs · cred)
+                                         runs on that machine itself
 
 <会话> is a name (a part of it is enough), `#<单号>` / `<单号>`, or the row's key
 (`wid:<fleet>/<name>`). Matching is ONE resolver that refuses rather than guesses
@@ -72,7 +83,7 @@ import unicodedata
 from pathlib import Path
 
 BIN = Path(__file__).absolute().parent
-VERBS = ("ls", "show", "open", "rename", "close", "reap", "answer")
+VERBS = ("ls", "show", "open", "rename", "close", "reap", "answer", "service", "task")
 STATE_SAY = {"needs": "在问你", "failed": "失败", "working": "在干活", "looping": "循环中",
              "done": "完成", "idle": "空闲", "exited": "已退出", "sleeping": "睡着", "landed": "已落地"}
 
@@ -540,6 +551,81 @@ def usage():
     return 2
 
 
+# --- background services and scheduled tasks (issue #2527) ----------------------------
+
+SVC_ACTIONS = {"stop": "stop", "start": "start", "restart": "restart", "run": "run_now", "schedule": "set_schedule"}
+SVC_SAY = {"stop": "停", "start": "起", "restart": "重启", "run": "现在跑一次", "schedule": "改计划"}
+
+
+def cmd_svc(kind, args):
+    """fleet service|task <verb> <名称> …: the entry's (machine, login) off the one
+    services table (fleet-services.py — the hub's, else this machine's daemon),
+    then the hub's service_control down that login's lane. A hub write that never
+    left this computer falls back to this machine's own fleet-<kind>.sh (sudo)."""
+    verbs = ("stop", "start", "restart") + (("run", "schedule") if kind == "task" else ())
+    if len(args) < 2 or args[0] not in verbs:
+        say("用法：fleet %s %s <名称>%s" % (kind, "|".join(verbs),
+                                            "（run 要 --now；schedule 要 --at HH:MM 或 --cron '…'，可加 --tz）"
+                                            if kind == "task" else ""))
+        return 2
+    verb, name, rest = args[0], args[1], args[2:]
+    opts, now_flag, i = {}, False, 0
+    while i < len(rest):
+        a = rest[i]
+        if a == "--now" and verb == "run":
+            now_flag, i = True, i + 1
+        elif a in ("--machine", "--login") or (verb == "schedule" and a in ("--at", "--cron", "--tz")):
+            if i + 1 >= len(rest):
+                say("%s 要一个值" % a)
+                return 2
+            opts[a[2:]], i = rest[i + 1], i + 2
+        else:
+            say("fleet %s %s：不认识 %s" % (kind, verb, a))
+            return 2
+    if verb == "run" and not now_flag:
+        say("fleet task run %s --now —— 不加 --now 就按计划跑" % name)
+        return 2
+    if verb == "schedule" and ("at" in opts) == ("cron" in opts):
+        say("fleet task schedule %s --at HH:MM | --cron 'm h dom mon dow' [--tz Asia/Shanghai]" % name)
+        return 2
+    fs = lib("fleet_services", "fleet-services.py")
+    rows, _, _ = fs.table_rows()
+    hits = [(label, host, r) for label, host, r in rows if r.get("name") == name
+            and (verb in ("stop", "start", "restart") or r.get("kind") == "task")
+            and (not opts.get("machine") or fs.short(opts["machine"]) in (fs.short(host), label))
+            and (not opts.get("login") or r.get("login") == opts["login"])]
+    if not hits:
+        say("没有叫「%s」的%s（fleet ls --services 列出你登记的；客户端刚开时稍等再试）"
+            % (name, "定时任务" if kind == "task" else "后台服务"))
+        return 3
+    if len(hits) > 1:
+        say("「%s」不止一个，用 --machine / --login 指定：" % name)
+        for label, host, r in hits:
+            say("  %s  %s" % (label, r.get("login")))
+        return 4
+    label, host, r = hits[0]
+    req = {"machine": host, "login": r.get("login"), "name": name, "action": SVC_ACTIONS[verb]}
+    req.update((k, v) for k, v in opts.items() if k in ("at", "cron", "tz"))
+    ok, line = hub_write("service_control", req)
+    local = BIN / ("fleet-%s.sh" % kind)
+    if not ok and line.startswith("没发出去") and local.exists():
+        say("%s（%s），改在本机做" % (line, label))
+        os.execv("/bin/bash", ["bash", str(local), verb, name] + local_args(verb, opts, now_flag))
+    print("%s %s/%s/%s：%s" % (SVC_SAY[verb], label, r.get("login"), name, line), file=sys.stdout if ok else sys.stderr)
+    if ok and verb == "run":
+        print("会话稍后出现在 fleet ls（%s-<日期>-now<时分>）" % name)
+    return 0 if ok else 1
+
+
+def local_args(verb, opts, now_flag):
+    """The local fleet-<kind>.sh's options after `<verb> <name>`."""
+    if verb == "run":
+        return ["--now"] if now_flag else []
+    if verb == "schedule":
+        return [x for k in ("at", "cron", "tz") if k in opts for x in ("--" + k, opts[k])]
+    return []
+
+
 def passthrough(verb, args):
     """`fleet open <url|:port|file>` / `fleet show <file>`: the scripts they were."""
     if len(args) != 1:
@@ -566,12 +652,13 @@ def main(argv):
     # and runs this again (FLEET_SHELL=1 then) — the seam reads a file instead
     # (`ls --services` reads a cache file, never the client: no re-run)
     if os.environ.get("FLEET_SHELL") != "1" and not os.environ.get("FLEET_SESSION_CLI_ROWS") \
-            and not (verb == "ls" and "--services" in args):
+            and not (verb == "ls" and "--services" in args) and verb not in ("service", "task"):
         os.execv("/bin/bash", ["bash", str(BIN / "fleet-shell.sh"), "cli", verb] + args)
     # every verb sees the test identity's sessions the list hides (issue #2505)
     os.environ["FLEET_ROWS_TEST"] = "1"
     return {"ls": cmd_ls, "show": cmd_show, "open": cmd_open, "rename": cmd_rename, "close": cmd_close,
-            "reap": cmd_reap, "answer": cmd_answer}[verb](args)
+            "reap": cmd_reap, "answer": cmd_answer,
+            "service": lambda a: cmd_svc("service", a), "task": lambda a: cmd_svc("task", a)}[verb](args)
 
 
 if __name__ == "__main__":

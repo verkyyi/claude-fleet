@@ -308,7 +308,7 @@ var fleetToolTrim = map[string]string{
 	"gh_issue_view": "principal", "gh_pr_view": "principal", "gh_pr_checks": "principal",
 	"worker_start": "write", "worker_message": "write", "worker_stop": "write", "worker_resume": "write",
 	"worker_answer": "write", "worker_reap": "write", "worker_switch": "write", "worker_rename": "write",
-	"worker_reap_policy": "write", "config_set": "write", "gh_comment": "write",
+	"worker_reap_policy": "write", "config_set": "write", "gh_comment": "write", "service_control": "write",
 }
 
 // Every fleet tool, one by one: it has a trim class, a user's cookie gets

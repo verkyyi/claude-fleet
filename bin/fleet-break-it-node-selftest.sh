@@ -16,6 +16,9 @@
 #                         (#2529): a scheduled agent task's session will not open, every try
 #   service-failed-unseen bin/fleet-services.py (#2526): a registered service that
 #                         keeps dying reads red in the doctor + the alert bar
+#   task-rerun-root-only  bin/fleet-session-cli.py `fleet task run --now` → the hub's
+#                         service_control → the node's fixed supervisor argv (#2527):
+#                         a missed daily push is run again from the client, no root
 #   account-adopt-stuck   bin/fleet-node-supervisor.py `account adopt|release` (#2332):
 #                         one of a login's services will not unload mid-migration
 #   account-adopt-agent-left  bin/fleet-node-supervisor.py `account adopt|release` (#2387):
@@ -210,6 +213,52 @@ drill_service_failed_unseen() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
   WHAT="登记的服务一启动就退：几秒内体检 services 行 FAIL、告警栏多一条 ✖ service · failed（入口另有 service_failed），不再是 40 小时没人知道"
+}
+
+drill_task_rerun_root_only() {
+  CAP=60   # the issue's bar: the session is there within a minute of `fleet task run --now`
+  local sb sup t0 out
+  sb="$WORK/rerun"; mkdir -p "$sb/LaunchDaemons" "$sb/Users/alice"
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  printf '#!/bin/bash\necho "$*" >> "%s/calls"\nprintf "@7\\tdaily\\t\\tfid\\n"\n' "$sb" > "$sb/spawn.sh"
+  chmod +x "$sb/spawn.sh"
+  # noon: today's 07:00 slot is long past and was never this entry's — nothing runs on its own
+  python3 -c 'import calendar; print(calendar.timegm((2026, 10, 10, 12, 0, 0)))' > "$sb/clock"
+  export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
+    FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json" \
+    FLEET_NODE_CLOCK="$sb/clock"
+  python3 "$BIN/fleet-node-supervisor.py" service add --kind task --login alice --name daily --at 07:00 --tz UTC \
+    --fleet drill-sandbox --prompt '/daily-report' --env FLEET_TASK_SPAWN="$sb/spawn.sh" \
+    >"$sb/add.out" 2>&1 || { WHY="task add failed: $(tail -2 "$sb/add.out" | tr '\n' ' ')"; return 1; }
+  python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
+  sleep 1
+  [ ! -s "$sb/calls" ] || { WHY="a past slot ran by itself"; kill "$sup" 2>/dev/null; return 1; }
+  # the client's table says where the entry lives; the "hub" stands in for the
+  # node half the agent runs for service_control (node_service_ctl.go): its
+  # fixed supervisor argv, on the lane's own login
+  printf '{"ts": 1, "machines": [{"hostname": "m4.drill", "label": "m4", "services": [{"name": "daily", "kind": "task", "login": "alice", "state": "scheduled"}]}]}\n' > "$sb/hub_services"
+  {
+    printf '#!/bin/bash\n[ "$1" = service_control ] || exit 9\n'
+    printf 'if python3 -I %q service run --login alice --name daily >/dev/null 2>%q; then\n' "$BIN/fleet-node-supervisor.py" "$sb/hub.err"
+    printf '  echo %q\nelse\n  echo %q\nfi\n' '{"operation_id":"op","status":"succeeded","result":{"how":"service run"}}' \
+      '{"operation_id":"op","status":"failed","result":{"error":{"code":"REFUSED","message":"supervisor refused"}}}'
+  } > "$sb/hub.sh"
+  chmod +x "$sb/hub.sh"
+  t0=$(now)
+  out=$(FLEET_SERVICES_CACHE="$sb/hub_services" FLEET_SERVICES_STATE='' FLEET_SESSION_CLI_WRITE="$sb/hub.sh" \
+        python3 "$BIN/fleet-session-cli.py" task run daily --now 2>&1) \
+    || { WHY="fleet task run --now: $out $(cat "$sb/hub.err" 2>/dev/null)"; kill "$sup" 2>/dev/null; return 1; }
+  until_ok 60 test -s "$sb/calls" || { WHY="no session opened: $(tail -2 "$sb/sup.err" | tr '\n' ' ')"; kill "$sup" 2>/dev/null; return 1; }
+  SECS=$(since "$t0")
+  grep -q -- '--name daily-2026-10-10-now1200' "$sb/calls" \
+    || { WHY="the run took the slot's window: $(cat "$sb/calls")"; kill "$sup" 2>/dev/null; return 1; }
+  kill "$sup" 2>/dev/null; wait "$sup" 2>/dev/null
+  unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
+    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD FLEET_NODE_CLOCK
+  WHAT="漏了一次的定时任务从客户端补跑：fleet task run --now → service_control → 节点固定 argv 的 service run，几秒内会话打开（自己的窗口名 …-now<时分>），不再要 root 上机器 kickstart"
 }
 
 drill_account_adopt_stuck() {

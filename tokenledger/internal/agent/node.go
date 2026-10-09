@@ -669,6 +669,9 @@ func (a *Agent) answerRequest(ctx context.Context, conn nodeLink, m control.Mess
 // that is not JSON — may have come after the controller committed the
 // operation, so it goes back as UNKNOWN_OUTCOME and the hub never re-sends it.
 func (a *Agent) answerWrite(ctx context.Context, conn nodeLink, m control.Message) {
+	if a.serviceControlWrite(ctx, conn, m) {
+		return // the register's own write (claude-fleet#2527), never the controller's
+	}
 	a.answerControl(ctx, conn, m, true)
 }
 

@@ -30,7 +30,9 @@ export async function api(url, opts = {}) {
   let body = null;
   try { body = text ? JSON.parse(text) : null; } catch { body = null; }
   if (!r.ok) {
-    const e = new Error((body && (body.error || body.message)) || `${r.status} ${r.statusText}`.trim());
+    // a fleet tool's refusal is {error: {code, message}} (claude-fleet#2527)
+    const why = body && (body.error && typeof body.error === 'object' ? body.error.message : (body.error || body.message));
+    const e = new Error(why || `${r.status} ${r.statusText}`.trim());
     e.status = r.status;
     throw e;
   }

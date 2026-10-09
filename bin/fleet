@@ -199,6 +199,13 @@ case $cmd in
   # and `fleet show <file>` still go to fleet-open.sh / fleet-show.sh from there
   ls|show|open|rename|close|reap|answer)
     exec python3 "$here/fleet-session-cli.py" "$@" ;;
+  # a background service / scheduled task, on whichever machine holds it — the
+  # hub's service_control (issue #2527); add · rm · ls · logs · cred stay the
+  # machine's own fleet-service.sh / fleet-task.sh
+  service|task)
+    case ${2:-} in
+      stop|start|restart|run|schedule) exec python3 "$here/fleet-session-cli.py" "$@" ;;
+    esac ;;
 esac
 for ext in py sh; do
   if [ -x "$here/fleet-$cmd.$ext" ]; then

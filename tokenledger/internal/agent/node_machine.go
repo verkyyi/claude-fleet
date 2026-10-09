@@ -70,6 +70,10 @@ type MachineConfig struct {
 	// ServicesFile is the machine daemon's state.json, whose services[] the
 	// link's beat carries (claude-fleet#2526); "" = none.
 	ServicesFile string
+	// ServiceCtl is the daemon's script every tenant runs for the hub's
+	// service_control (claude-fleet#2527): fleet-node-supervisor.py beside
+	// the ccquota binary in the root runtime; "" = no service control.
+	ServiceCtl string
 	// Tenants is one Config per login served: its own Token (that login's
 	// node token), Home, StateDir and RunAs. Fleet is forced on.
 	Tenants []Config
@@ -415,6 +419,7 @@ func RunMachine(ctx context.Context, mc MachineConfig) error {
 			return fmt.Errorf("machine agent: login %s has no node token", tc.RunAs.Login)
 		}
 		tc.HubURL, tc.Version, tc.Fleet, tc.Once = mc.HubURL, mc.Version, true, false
+		tc.ServiceCtl = mc.ServiceCtl
 		if tc.FleetCreds && tc.FleetCredStore == "" {
 			// Root would otherwise write the login's credential files: in
 			// machine mode they go to the shared proxy or nowhere.
