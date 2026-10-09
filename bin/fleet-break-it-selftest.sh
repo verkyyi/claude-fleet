@@ -807,7 +807,7 @@ drill_orchestrator_exited() {
   printf '%s\n%s\n' \
     "{\"type\":\"assistant\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"ScheduleWakeup\",\"input\":{\"delaySeconds\":1200,\"prompt\":\"<<autonomous-loop-dynamic>>\"}}]}}" \
     "{\"type\":\"user\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"content\":\"ok\"}]}}" > "$tr"
-  printf 'epoch: %s\nttl: 2700\nepic: 2581\nrepo: o/n\nsession: ox\ntick: 4\n' "$(date +%s)" > "$c/global/epic-running.d/o-n-2581"
+  local proj; proj="$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
   : > "$oa"
   kill -9 "$(cat "$oa.pid")"                      # the break: no SessionEnd, nothing saved
   oxst() { [ "$(o "$w" @claude_state)" = exited ]; }
