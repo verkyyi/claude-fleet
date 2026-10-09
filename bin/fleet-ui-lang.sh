@@ -1212,6 +1212,14 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:decision_record_why_fmt) printf 'suggested: %s · due: %s · asked: %s' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:decision_record_undo_fmt) printf '翻案：在 %s 上回一句即可。' "${1:-}" ;;
     en:decision_record_undo_fmt) printf 'To overturn it, reply on %s.' "${1:-}" ;;
+    zh:decision_digest_head_fmt) printf '替你按建议定了什么（%s · %s 条）' "${1:-}" "${2:-}" ;;
+    en:decision_digest_head_fmt) printf 'Decided for you by default (%s · %s)' "${1:-}" "${2:-}" ;;
+    zh:decision_digest_line_fmt) printf '%s「%s」→ 按「%s」' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:decision_digest_line_fmt) printf '%s "%s" → "%s"' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:decision_digest_undo)    printf '翻案' ;;
+    en:decision_digest_undo)    printf 'overturn' ;;
+    zh:decision_digest_none)    printf '这一天没有按建议默认定下的事。' ;;
+    en:decision_digest_none)    printf 'Nothing was decided by default that day.' ;;
     *)                          printf '%s' "$_fleet_ui_key" ;;
   esac
 }

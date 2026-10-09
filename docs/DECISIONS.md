@@ -70,6 +70,7 @@ fleet_decision.py parse  (--repo R --issue N | --comments-json FILE|-)      一�
 fleet_decision.py render [--demo] [--rows FILE|-] [--id UUID]              Markdown 表 + 标记
 fleet_decision.py due    [--rows FILE|- | --repo R --issue N…] [--now ISO] [--apply]
 fleet_decision.py record --row JSON --parent owner/repo#N                  「默认拍板」
+fleet_decision.py decided [--date D] [--epic gh:R#N…] [--repo R…] [--json]   那天的默认拍板，一条一行
 ```
 
 `render` 出的决定单（管家交给编排会话的那张）：
@@ -88,7 +89,18 @@ fleet_decision.py record --row JSON --parent owner/repo#N                  「�
 1. 在执行会话自己的单上 `fleet-comment.sh --to-worker`：「到点没人答，按建议定：…」+
    `<!-- fleet:answer row=<id> by=default -->` —— 它下一轮就收到；
 2. 在那张单的 EPIC parent 上 `--note`：「默认拍板：owner/repo#N「问题」→ 按「默认」」+ 建议、截止、原话链接、
-   怎么翻案 + `<!-- fleet:default-decided row=<id> -->`。没有 parent 就只做第 1 步。
+   怎么翻案 + `<!-- fleet:default-decided row=<id> src=… item=… default=… ask=… -->`（值同 ask 标记一样
+   百分号编码；`row=` 永远在第一个，旧记录只有它）。没有 parent 就只做第 1 步。
+
+## 每天一张「替你按建议定了什么」
+
+`decided --date <那天>`（issue #2679）是日报的这一节：按人的时区（`FLEET_DECISION_TZ`）取那一天
+贴出的每一条 `fleet:default-decided` 记录，一条一行——时间 · 「事项」→ 按「默认」 · [翻案](原单上那条提问的评论链接)；
+没带字段的旧记录用它自己的首行和「原话」链接。单子经 `fleet-ticket.sh`：`--epic` 点名的，否则每个托管仓库
+那天以来更新过的 `epic` 单（`fleet-ticket.sh list --label epic --state all --since`；记录本身会刷新 EPIC 的
+更新时间）加上正在跑的批次标记。同一 row 只算一次，所以条数就是各批次单上的记录数。读不到某张单时照样出其余的，
+stderr 点名、退出码 1。日报（`~/.claude/skills/daily-brief`）把它当「要他做的事」一类来源：
+`python3 ~/.claude/fleet/bin/fleet_decision.py decided --date <昨天>`，输出的 Markdown 小节原样放进页面。
 
 写 GitHub 都经 `fleet-comment.sh`（它走 `fleet_gh_write`）；读经 `fleet-gh.sh`（缓存优先）。
 

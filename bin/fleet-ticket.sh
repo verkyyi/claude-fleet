@@ -4,8 +4,8 @@
 # A ticket is the abstraction; GitHub is its first backend. A ticket id reads
 # `gh:<owner/name>#<N>`; `hub:<N>` is reserved for the hub backend of the next
 # batch and refused here (exit 2). Every verb runs the fleet script that already
-# owns that job — nothing here talks to GitHub on its own but `children`, `state`
-# and `new`'s label check, and those go through the same throttle (fleet_gh_write).
+# owns that job — nothing here talks to GitHub on its own but `children`, `list`,
+# `state` and `new`'s label check; the writes go through the one throttle (fleet_gh_write).
 #
 #   fleet-ticket.sh read     <id> [--json f,g] [--max-age S]   → fleet-gh.sh issue view (cache first)
 #   fleet-ticket.sh comment  <id> [--to-worker|--note] [--close] (--body T | --body-file F)
@@ -14,6 +14,8 @@
 #   fleet-ticket.sh state    <id> open|closed [--reason completed|not_planned]
 #                                                              → gh issue reopen|close via fleet_gh_write
 #   fleet-ticket.sh children <id>                              → one `gh:<repo>#<N>\t<state>` per sub-issue
+#   fleet-ticket.sh list     --repo R [--label L] [--state open|closed|all] [--since YYYY-MM-DD] [--limit N]
+#                                                              → one `gh:<repo>#<N>\t<state>` per ticket
 #   fleet-ticket.sh evidence <id> <before|after|live|post|list|line|dir> [fleet-evidence.sh opts…]
 #                                                              → fleet-evidence.sh --repo --issue
 #   fleet-ticket.sh new      --repo R --title T [--body B] [--origin K] [--label L]
@@ -151,6 +153,31 @@ case "$verb" in
     [ -n "$out" ] || exit 0
     printf '%s\n' "$out" | awk -F'\t' 'NF >= 3 { printf "gh:%s#%s\t%s\n", $1, $2, tolower($3) }' ;;
 
+  list)
+    # Tickets of one repo by label / state / last update (the daily brief's
+    # 默认拍板 reader walks the `epic` ones, issue #2679). A read: plain gh.
+    repo=''; label=''; lstate=open; since=''; limit=100
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --repo)  repo="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+        --label) label="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+        --state) lstate="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+        --since) since="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+        --limit) limit="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+        *) die "list: unknown argument '$1'" 2 ;;
+      esac
+    done
+    repo=$(fleet_norm_repo "$repo")
+    [ -n "$repo" ] || die "list: --repo is required" 2
+    case "$lstate" in open|closed|all) ;; *) die "list: --state is open, closed or all" 2 ;; esac
+    case "$since" in ''|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) die "list: --since is YYYY-MM-DD" 2 ;; esac
+    case "$limit" in ''|*[!0-9]*) die "list: --limit is a number" 2 ;; esac
+    out=$(gh issue list --repo "$repo" --state "$lstate" --limit "$limit" ${label:+--label "$label"} \
+            ${since:+--search "updated:>=$since"} --json number,state -q '.[] | "\(.number)\t\(.state)"') \
+      || die "could not list the tickets of $repo"
+    [ -n "$out" ] || exit 0
+    printf '%s\n' "$out" | awk -F'\t' -v r="$repo" 'NF >= 2 { printf "gh:%s#%s\t%s\n", r, $1, tolower($2) }' ;;
+
   evidence)
     p=$(ticket_parse "${1:-}") || exit 2; shift
     sub="${1:-}"; [ -n "$sub" ] || die "evidence: say before|after|live|post|list|line|dir" 2
@@ -188,5 +215,5 @@ case "$verb" in
     printf '%s\t%s\n' "$id" "$url" ;;
 
   -h|--help|help) usage ;;
-  *) die "unknown verb '$verb' — read|comment|edit|state|children|evidence|new|parse" 2 ;;
+  *) die "unknown verb '$verb' — read|comment|edit|state|children|list|evidence|new|parse" 2 ;;
 esac
