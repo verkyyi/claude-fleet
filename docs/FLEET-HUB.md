@@ -1541,8 +1541,11 @@ line — neither client retries a 403; nobody else's sessions are touched. The
 local proxy's verdict lapses (open) when the hub has not renewed it for
 `FLEET_CRED_BUDGET_STALE` (600 s); the cluster proxy drops a person's cached
 answers as soon as a report says they are over. `GET /v1/fleet/person-usage
-[?principal=]` (operator) lists everyone with a budget or usage this week —
-`fleet config people` prints it as two more columns (`⛔` = over). No budget
+[?principal=]` (operator, admin) lists everyone with a budget or usage this week —
+`fleet config people` prints it as two more columns (`⛔` = over); a user reads
+only their own there, whatever `?principal=` says, and an admin theirs with
+`?mine=1` — one person's answer adds `days` (tokens per UTC day this week), the
+「我的用量」 page `/usage` (issue #2519). No budget
 set ⇒ nothing is ever refused; `FLEET_CRED_PROXY=0` ⇒ nothing is reported.
 
 Adding a NEW subscription is one command on a fleet machine (issue #2084):

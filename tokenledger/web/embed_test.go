@@ -21,6 +21,7 @@ var appPages = []struct{ html, script, id string }{
 	{"machines.html", "machines.js", "mymachines"},
 	{"connect.html", "connect.js", "devices"},
 	{"quota.html", "quota.js", "quota"},
+	{"usage.html", "usage.js", "usage"},
 	{"config.html", "config.js", "config"},
 	{"admin/subscriptions.html", "admin/subscriptions.js", "subscriptions"},
 	{"admin/nodes.html", "admin/nodes.js", "machines"},
@@ -67,7 +68,7 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 	src := string(mustRead(t, assets, "lib/shell.js"))
 	route := map[string]string{
 		"/": "index.html", "/sessions": "sessions.html", "/machines": "machines.html", "/connect": "connect.html", "/config": "config.html",
-		"/quota":         "quota.html",
+		"/quota": "quota.html", "/usage": "usage.html",
 		"/subscriptions": "admin/subscriptions.html", "/nodes": "admin/nodes.html", "/admin/users": "admin/users.html",
 		"/admin/settings": "admin/settings.html", "/admin/audit": "admin/audit.html",
 		"/admin/sessions": "admin/sessions.html", "/admin/overview": "admin/overview.html", "/admin/devices": "admin/devices.html",

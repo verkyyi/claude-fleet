@@ -61,6 +61,8 @@ export const PAGES = Object.freeze([
   { id: 'devices', label: 'ui.nav.devices', icon: 'key', href: '/connect' },
   // 我的额度 (claude-fleet#2517).
   { id: 'quota', label: 'ui.nav.quota', icon: 'card', href: '/quota' },
+  // 我的用量 (claude-fleet#2519).
+  { id: 'usage', label: 'ui.nav.usage', icon: 'scroll', href: '/usage' },
   { id: 'config', label: 'ui.nav.config', icon: 'sliders', href: '/config' },
   // The admin group (claude-fleet#1990): first the whole hub the four pages
   // above used to show an admin (claude-fleet#2515), then the hub's own.
