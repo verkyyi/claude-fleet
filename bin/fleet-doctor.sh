@@ -2961,8 +2961,8 @@ fi
 # carries an `at` timestamp (#838), so the histogram the 2026-09-19 analysis built
 # by hand is a line here: without the number, the next approach to the ceiling is a
 # manual hunt across the whole log (the same reasoning as `over=` in #653). Info
-# only — a distribution is never a pass/fail; the read is tail-bounded and never
-# fails the doctor.
+# only — a distribution is never a pass/fail (one exception: a `wrong fleet`
+# majority, issue #2622); the read is tail-bounded.
 slog="$(dirname "$0")/../logs/sleep.log"
 if [ -f "$slog" ] && command -v python3 >/dev/null 2>&1; then
   sdist=$(tail -n 6000 "$slog" 2>/dev/null | python3 -c '
@@ -2978,9 +2978,14 @@ for line in sys.stdin:
     c[d.get("skip") or ("state:" + d.get("state", "?"))] += 1; n += 1
 if n:
     top = ", ".join("%s x%d" % (k[:44], v) for k, v in c.most_common(5))
-    print("%d judgments/hr across %d reasons; top: %s" % (n, len(c), top))
+    # issue #2622: a majority of `wrong fleet` is the judge refusing the fleet
+    # itself (a view session misread as another fleet), never a distribution.
+    print(("FAIL " if 2 * c["wrong fleet"] > n else "") + "%d judgments/hr across %d reasons; top: %s" % (n, len(c), top))
 ' 2>/dev/null)
-  [ -n "$sdist" ] && pass state "sleep judgments (last hour): $sdist"
+  case "$sdist" in
+    "FAIL "*) fail state "sleep judgments (last hour): ${sdist#FAIL } — most windows judged \`wrong fleet\`: the sleep judge cannot see this fleet's windows, nothing can sleep" ;;
+    ?*) pass state "sleep judgments (last hour): $sdist" ;;
+  esac
 fi
 # Trips back to the hub over the last day, per fleet, with the top two causes
 # (issue #897 — the meter EPIC #894 is judged by). Info only, like the line above:
