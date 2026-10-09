@@ -22,11 +22,11 @@ var appPages = []struct{ html, script, id string }{
 	{"connect.html", "connect.js", "devices"},
 	{"quota.html", "quota.js", "quota"},
 	{"config.html", "config.js", "config"},
-	{"subscriptions.html", "subscriptions.js", "subscriptions"},
-	{"nodes.html", "nodes.js", "machines"},
-	{"users.html", "users.js", "people"},
-	{"settings.html", "settings.js", "settings"},
-	{"audit.html", "audit.js", "audit"},
+	{"admin/subscriptions.html", "admin/subscriptions.js", "subscriptions"},
+	{"admin/nodes.html", "admin/nodes.js", "machines"},
+	{"admin/users.html", "admin/users.js", "people"},
+	{"admin/settings.html", "admin/settings.js", "settings"},
+	{"admin/audit.html", "admin/audit.js", "audit"},
 	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
 	{"admin/sessions.html", "admin/sessions.js", "all-sessions"},
 	{"admin/overview.html", "admin/overview.js", "by-person"},
@@ -68,8 +68,8 @@ func TestAssets_MenuLinksResolve(t *testing.T) {
 	route := map[string]string{
 		"/": "index.html", "/sessions": "sessions.html", "/machines": "machines.html", "/connect": "connect.html", "/config": "config.html",
 		"/quota":         "quota.html",
-		"/subscriptions": "subscriptions.html", "/nodes": "nodes.html", "/admin/users": "users.html",
-		"/admin/settings": "settings.html", "/admin/audit": "audit.html",
+		"/subscriptions": "admin/subscriptions.html", "/nodes": "admin/nodes.html", "/admin/users": "admin/users.html",
+		"/admin/settings": "admin/settings.html", "/admin/audit": "admin/audit.html",
 		"/admin/sessions": "admin/sessions.html", "/admin/overview": "admin/overview.html", "/admin/devices": "admin/devices.html",
 	}
 	hrefs := regexp.MustCompile(`href: '([^']+)'`).FindAllStringSubmatch(src, -1)

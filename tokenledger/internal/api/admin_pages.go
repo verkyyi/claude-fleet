@@ -2,7 +2,7 @@ package api
 
 import (
 	"encoding/csv"
-	"io/fs"
+	"io"
 	"math"
 	"net/http"
 	"sort"
@@ -19,22 +19,32 @@ import (
 // its script into the app shell (web/dist/app-shell.js) under the page id
 // /v1/me lists for an admin (pagesFor).
 //
-// A user is refused the page the same way adminOnly refuses an admin API: one
-// role_denied audit row and a 403. The body is still the page — its shell sees
-// /v1/me leave the id off the menu and draws 「这一页不在你的菜单里」 rather
-// than a bare JSON error in a browser tab.
+// A user is refused the page whole (claude-fleet#2516): one role_denied
+// audit row and a bare 403 that says 「这页不在你的菜单上」 — never the
+// page's skeleton, whose data reads would each fail on their own and look
+// broken. Every admin page's files live under web/dist/admin/, so the file
+// gate is that prefix (adminUIPrefix): a new admin page is refused to a user
+// by where it sits, with nothing to register.
 
 // adminPageRoutes are the admin pages outside the fleet block; Machines is
 // /nodes, mounted with the roster.
 var adminPageRoutes = []struct{ path, id, file string }{
-	{"/subscriptions", "subscriptions", "subscriptions.html"},
-	{"/admin/users", "people", "users.html"},
-	{"/admin/settings", "settings", "settings.html"},
-	{"/admin/audit", "audit", "audit.html"},
+	{"/subscriptions", "subscriptions", "admin/subscriptions.html"},
+	{"/admin/users", "people", "admin/users.html"},
+	{"/admin/settings", "settings", "admin/settings.html"},
+	{"/admin/audit", "audit", "admin/audit.html"},
 	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
 	{"/admin/sessions", "all-sessions", "admin/sessions.html"},
 	{"/admin/overview", "by-person", "admin/overview.html"},
 	{"/admin/devices", "all-devices", "admin/devices.html"},
+}
+
+// adminUIPrefix is where every admin page's files sit in web/dist.
+const adminUIPrefix = "admin/"
+
+// isAdminUIFile says whether a path in the built UI is an admin page's.
+func isAdminUIFile(name string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(name, "/"), adminUIPrefix)
 }
 
 // adminPage serves one admin page, or its 403 to a user.
@@ -44,21 +54,42 @@ func (s *Server) adminPage(id, file string) http.Handler {
 			s.serveStandalonePage(w, r, file)
 			return
 		}
-		s.auditRoleDenied(r)
-		if s.UI == nil {
-			httpError(w, http.StatusForbidden, "只有管理员可以使用这一页（only an admin can use this page）")
-			return
-		}
-		b, err := fs.ReadFile(s.UI, file)
-		if err != nil {
-			httpError(w, http.StatusForbidden, "只有管理员可以使用这一页（only an admin can use this page）")
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write(b)
+		s.denyAdminPage(w, r)
 	})
+}
+
+// adminDeniedPage is the whole answer a user gets for an admin page: one
+// sentence and the way back, no shell, no script.
+const adminDeniedPage = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>403 · claudefleet</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main style="max-width:560px;margin:15vh auto;padding:0 24px">
+<h1>403 · 这页不在你的菜单上</h1>
+<p>This page is not on your menu.</p>
+<p><a href="/">回到概览 · Back to overview</a></p>
+</main>
+</body>
+</html>
+`
+
+// denyAdminPage refuses a user an admin page: audited, then the bare 403
+// page to a browser and the JSON error to anything else.
+func (s *Server) denyAdminPage(w http.ResponseWriter, r *http.Request) {
+	s.auditRoleDenied(r)
+	if !wantsHTML(r) {
+		httpError(w, http.StatusForbidden, "这页不在你的菜单上（this page is not on your menu）")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = io.WriteString(w, adminDeniedPage)
 }
 
 // loadHistory is each machine's load per core, one bucket per five minutes
