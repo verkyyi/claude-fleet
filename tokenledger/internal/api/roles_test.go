@@ -272,3 +272,91 @@ func TestRoleScope_LiveFilteredToLogin(t *testing.T) {
 		t.Errorf("FilterLiveFor with no login = %d sessions; want 2", len(all.Sessions))
 	}
 }
+
+// fleetToolTrim is how each /v1/fleet/<tool> trims a person's answer
+// (claude-fleet#2513): "scope" = rows filtered by FleetScope, "principal" =
+// only what this principal asked for, "write" = journalled and checked
+// against FleetScope before it runs. Every tool CallFleetTool serves has a
+// row, so a new tool cannot arrive answering a user the whole hub.
+var fleetToolTrim = map[string]string{
+	"fleet_list": "scope", "fleet_sessions": "scope", "fleet_status": "scope", "config_get": "scope",
+	"fleet_alerts":  "scope",
+	"operation_get": "principal",
+	"gh_issue_view": "principal", "gh_pr_view": "principal", "gh_pr_checks": "principal",
+	"worker_start": "write", "worker_message": "write", "worker_stop": "write", "worker_resume": "write",
+	"worker_answer": "write", "worker_reap": "write", "worker_switch": "write", "worker_rename": "write",
+	"worker_reap_policy": "write", "config_set": "write", "gh_comment": "write",
+}
+
+// Every fleet tool, one by one: it has a trim class, a user's cookie gets
+// through the role gate to it (the prefix alone was all that was tested), and
+// fleet_alerts answers a user only the alerts about their own logins.
+func TestRoleScope_FleetToolsEachTrimmed(t *testing.T) {
+	h, admin, user := rolesHarness(t)
+	served := append([]string{"fleet_alerts"}, FleetTools...)
+	for _, tool := range served {
+		c, ok := fleetToolTrim[tool]
+		if !ok {
+			t.Errorf("fleet tool %q has no trim class in fleetToolTrim", tool)
+			continue
+		}
+		code, b := rolesGet(t, h, user, "/v1/fleet/"+tool)
+		if code == http.StatusForbidden || code == http.StatusUnauthorized {
+			t.Errorf("user GET /v1/fleet/%s = %d %s; want it past the role gate", tool, code, b)
+		}
+		if c == "write" && code != http.StatusMethodNotAllowed {
+			t.Errorf("user GET /v1/fleet/%s (a write) = %d %s; want 405", tool, code, b)
+		}
+	}
+	for tool := range fleetToolTrim {
+		if !hasString(served, tool) {
+			t.Errorf("fleetToolTrim names %q, which CallFleetTool no longer serves", tool)
+		}
+	}
+
+	// Two people, two machines: verkyyi@mini and alice@alicebox.
+	at := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	raise := func(kind, subject string, detail any) {
+		b, _ := json.Marshal(detail)
+		if _, err := h.srv.Store.RaiseFleetAlert(kind, subject, string(b), at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raise(store.AlertNodeLost, "ep_mini", map[string]any{"endpoint_id": "ep_mini", "hostname": "mini", "os_user": "verkyyi"})
+	raise(store.AlertNodeLost, "ep_alicebox", map[string]any{"endpoint_id": "ep_alicebox", "hostname": "alicebox", "os_user": aliceLogin})
+	raise(store.AlertLeaseConflict, "o/r#1", leaseConflict{Repo: "o/r", Issue: 1,
+		Holder: leaseConflictSide{EndpointID: "ep_mini"}, Reporter: leaseConflictSide{EndpointID: "ep_gone"}})
+	raise(store.AlertLeaseConflict, "o/r#2", leaseConflict{Repo: "o/r", Issue: 2,
+		Holder: leaseConflictSide{EndpointID: "ep_mini"}, Reporter: leaseConflictSide{EndpointID: "ep_alicebox"}})
+	raise("some_future_kind", "x", map[string]any{"hostname": "alicebox", "os_user": aliceLogin})
+
+	alerts := func(who *http.Cookie) []string {
+		t.Helper()
+		code, b := rolesGet(t, h, who, "/v1/fleet/fleet_alerts")
+		var out struct {
+			Open   int `json:"open"`
+			Alerts []struct {
+				Kind    string `json:"kind"`
+				Subject string `json:"subject"`
+			} `json:"alerts"`
+		}
+		if code != http.StatusOK || json.Unmarshal(b, &out) != nil {
+			t.Fatalf("GET fleet_alerts = %d %s", code, b)
+		}
+		if out.Open != len(out.Alerts) {
+			t.Errorf("fleet_alerts open = %d over %d rows; the count must be of the rows shown", out.Open, len(out.Alerts))
+		}
+		var got []string
+		for _, a := range out.Alerts {
+			got = append(got, a.Kind+" "+a.Subject)
+		}
+		sort.Strings(got)
+		return got
+	}
+	if got, want := alerts(user), []string{"lease_conflict o/r#2", "node_lost ep_alicebox"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("user fleet_alerts = %v; want only their own %v", got, want)
+	}
+	if got := alerts(admin); len(got) != 5 {
+		t.Errorf("admin fleet_alerts = %v; want all 5", got)
+	}
+}
