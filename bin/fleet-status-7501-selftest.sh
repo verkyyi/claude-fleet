@@ -112,8 +112,7 @@ PYEOF
 : > "$WORK/say"
 say() { printf '%s\n' "$1" >> "$WORK/say"; }
 waitfor() {  # <what> <cmd…>: poll until the command's output matches $want (5 s)
-  local i
-  for i in $(seq 1 100); do got=$("${@:2}" 2>/dev/null); [ "$got" = "$want" ] && return 0; sleep 0.05; done
+  for _ in $(seq 1 100); do got=$("${@:2}" 2>/dev/null); [ "$got" = "$want" ] && return 0; sleep 0.05; done
   return 1
 }
 st()  { T show -wv -t "=s:a" @agent_status; }
@@ -190,7 +189,7 @@ EOF
 chmod +x "$WORK/fb/claude"
 fc() {  # <out> [env…]: run fleet-claude.sh in a pane of the isolated server
   T new-window -d -t "=s:" -n "f$1" "env -i HOME='$WORK' PATH='$WORK/fb:/usr/bin:/bin:$(dirname "$REAL_TMUX")' TMUX=\"\$TMUX\" TMUX_PANE=\"\$TMUX_PANE\" FLEET_CONF_DIR='$WORK/conf' FLEET_MOD=0 FLEET_AGENT_CFG=0 FLEET_MCP=0 FLEET_CLAUDE_BIN='$WORK/fb/claude' FB_OUT='$WORK/$1' ${2:-} bash '$BIN/fleet-claude.sh' --version; sleep 5"
-  want=x; for _ in $(seq 1 100); do [ -s "$WORK/$1" ] && break; sleep 0.05; done
+  for _ in $(seq 1 100); do [ -s "$WORK/$1" ] && break; sleep 0.05; done
   cat "$WORK/$1" 2>/dev/null
 }
 case "$(fc f-on)" in *fleet-status-7501.py\ relay*) CHECKS=$((CHECKS + 1)) ;; *) fail "F: no relay in a tmux pane" "$(cat "$WORK/f-on" 2>/dev/null)" ;; esac
