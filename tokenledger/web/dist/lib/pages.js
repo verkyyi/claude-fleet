@@ -8,7 +8,7 @@
 // their own machine login (claude-fleet#1985), and these functions only
 // group, sort and label them.
 
-import { esc, ic, fmtTokens, spark } from './shell.js';
+import { esc, ic, fmtTokens, spark, isAdmin } from './shell.js';
 import { t, fmtDate } from './i18n.js';
 
 const DAY = 86400000;
@@ -234,20 +234,53 @@ export function hhmm(sec, now = Date.now()) {
 /** activeDevices are the devices not revoked. */
 export const activeDevices = (devs) => (Array.isArray(devs) ? devs : []).filter((d) => !d.revoked_at);
 
+/** whyNotClient is why a device of /v1/fleet/devices is not one of the
+ *  viewer's client devices (claude-fleet#2680) — 'revoked' · 'host' (a
+ *  `fleet login` on a machine that runs sessions) · 'idle' (past the hub's
+ *  idle_sec: it must scan again) · 'replaced' (an older key of a name a newer
+ *  one carries) — or '' for a client: the computer, phone or tablet a person
+ *  signs in FROM. */
+export function whyNotClient(body, now = Date.now()) {
+  const devs = body && Array.isArray(body.devices) ? body.devices : [];
+  const idle = Number(body && body.idle_sec) || 0;
+  const why = new Map();
+  const newest = new Map();
+  for (const d of devs) {
+    const used = Date.parse(d.last_used_at) || 0;
+    const w = d.revoked_at ? 'revoked' : d.host ? 'host' : idle && now - used > idle * 1000 ? 'idle' : '';
+    why.set(d.fingerprint, w);
+    if (w || !d.name) continue;
+    const prev = newest.get(d.name);
+    if (!prev || used > (Date.parse(prev.last_used_at) || 0)) newest.set(d.name, d);
+  }
+  for (const d of devs) {
+    if (!why.get(d.fingerprint) && d.name && newest.get(d.name) !== d) why.set(d.fingerprint, 'replaced');
+  }
+  return why;
+}
+
+/** clientDevices are the viewer's client devices (whyNotClient is ''). */
+export function clientDevices(body, now = Date.now()) {
+  const why = whyNotClient(body, now);
+  return ((body && body.devices) || []).filter((d) => !why.get(d.fingerprint));
+}
+
 /** DEVICE_EVENTS are the device audit's actions the dictionary names
  *  ('ui.dev.ev.' + action); any other prints as the hub wrote it. */
 export const DEVICE_EVENTS = ['register', 'renew', 'renew_refused', 'revoke', 'home', 'node_pass', 'node_pass_refused'];
 
 /** deviceHistory is the Devices page's history fold (claude-fleet#2520): the
- *  devices no longer usable, and every audit row /v1/fleet/devices returned
+ *  devices that are not the viewer's clients (whyNotClient, each with its
+ *  why — claude-fleet#2680), and every audit row /v1/fleet/devices returned
  *  (newest first, as the hub orders them), each named by its device's own
  *  name while the list still has it. */
-export function deviceHistory(body) {
+export function deviceHistory(body, now = Date.now()) {
   const devs = body && Array.isArray(body.devices) ? body.devices : [];
   const names = new Map(devs.map((d) => [d.fingerprint, d.name]));
   const audit = body && Array.isArray(body.audit) ? body.audit : [];
+  const why = whyNotClient(body, now);
   return {
-    past: devs.filter((d) => d.revoked_at),
+    past: devs.filter((d) => why.get(d.fingerprint)).map((d) => ({ ...d, why: why.get(d.fingerprint) })),
     events: audit.map((a) => ({
       at: a.at, action: String(a.action || ''), fingerprint: a.fingerprint || '',
       device: names.get(a.fingerprint) || '', actor: a.actor || '', detail: a.detail || '',
@@ -332,7 +365,7 @@ export function quotaTable(rows) {
   return `<div class="tw"><table class="t quota"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-// 我的机器 (claude-fleet#2518): one row per login of the viewer's, from
+// 我的机器 (claude-fleet#2518): one row per machine of the viewer's (#2680), from
 // /v1/nodes (already cut to their logins, nodes.go handleNodes) and
 // /v1/me.logins. A machine link is a carrier, not a login, and is left out;
 // so is any (machine, login) /v1/me does not list as theirs. No join code, no
@@ -348,25 +381,59 @@ export function takesOf(n) {
   return 'on';
 }
 
-/** myMachines turns /v1/nodes + /v1/me into the page's rows, the machines
- *  that take sessions first, then by name. */
+/** myMachines turns /v1/nodes + /v1/me into the page's rows — ONE row per
+ *  machine (claude-fleet#2680): two logins of the viewer's on one machine are
+ *  one row naming both, never the machine twice. A machine takes sessions
+ *  when any of its logins does (on · paused · maint · coord · lost, best
+ *  first); its load is the machine's — every login reads the same kernel — so
+ *  a machine that only coordinates for a moment still shows it, and only a
+ *  person's own computer (personal) or a machine nobody hears shows none. The
+ *  machines that take sessions come first, then by name. */
+const TAKES_RANK = { on: 0, paused: 1, maint: 2, coord: 3, lost: 4 };
 export function myMachines(snap, me) {
   const pairs = me && Array.isArray(me.logins) && me.logins.length ? me.logins : null;
   const mine = (n) => !pairs || pairs.some((p) => p.machine === n.hostname && p.login === n.os_user);
   const alias = new Map(((snap && snap.machines) || []).map((m) => [m.hostname, m.alias || '']));
-  const rows = ((snap && snap.nodes) || []).filter((n) => !n.machine_link && mine(n)).map((n) => {
-    const takes = takesOf(n);
+  const by = new Map();
+  for (const n of ((snap && snap.nodes) || []).filter((n) => !n.machine_link && mine(n))) {
+    if (!by.has(n.hostname)) by.set(n.hostname, []);
+    by.get(n.hostname).push(n);
+  }
+  const rows = [...by.entries()].map(([hostname, ns]) => {
+    const takesAll = ns.map(takesOf);
+    const best = ns[takesAll.reduce((b, k, i) => (TAKES_RANK[k] < TAKES_RANK[takesAll[b]] ? i : b), 0)];
+    const takes = takesOf(best);
     const coord = takes === 'coord';
-    const live = takes !== 'lost';
+    // The newest heard reading of a machine that is not a person's own.
+    const heard = ns.filter((n) => n.status !== 'lost' && n.ncpu > 0 && !n.personal)
+      .sort((a, b) => (Date.parse(b.last_heartbeat) || 0) - (Date.parse(a.last_heartbeat) || 0))[0];
+    // Sessions: a coordinating login has none to count (null); one unknown
+    // count makes the machine's unknown (undefined), never a short sum.
+    let sessions = null;
+    ns.forEach((n, i) => {
+      if (takesAll[i] === 'coord' || sessions === undefined) return;
+      sessions = n.sessions == null ? undefined : (sessions || 0) + n.sessions;
+    });
     return {
-      id: n.endpoint_id, hostname: n.hostname, label: alias.get(n.hostname) || n.hostname,
-      login: n.os_user, takes, why: takes === 'paused' ? n.admit_why || '' : coord ? n.compute_why || '' : '',
-      personal: !!n.personal,
-      loadCore: coord || !live || !(n.ncpu > 0) ? null : (Number(n.load1) || 0) / n.ncpu,
-      sessions: coord ? null : n.sessions == null ? undefined : n.sessions,
+      id: best.endpoint_id, hostname, label: alias.get(hostname) || hostname,
+      login: [...new Set(ns.map((n) => n.os_user))].sort().join(' · '),
+      takes, why: takes === 'paused' ? best.admit_why || '' : coord ? best.compute_why || '' : '',
+      personal: ns.some((n) => !!n.personal),
+      loadCore: heard ? (Number(heard.load1) || 0) / heard.ncpu : null,
+      sessions,
     };
   });
   return rows.sort((a, b) => (a.takes === 'coord') - (b.takes === 'coord') || a.label.localeCompare(b.label) || a.login.localeCompare(b.login));
+}
+
+/** scopeOf is the overview's 口径 (claude-fleet#2680): which (machine,
+ *  login) pairs its numbers count — /v1/me.logins, the same pairs the hub cut
+ *  them to (#2514) — so a total that moved can be read against what it
+ *  counts. '' when /v1/me lists none. */
+export function scopeOf(me) {
+  const ls = me && Array.isArray(me.logins) ? me.logins : [];
+  if (!ls.length) return '';
+  return t('ui.ov.scope', { list: ls.map((l) => `${l.machine}·${l.login}`).join('、') }) + (isAdmin(me) ? t('ui.ov.scopeAdmin') : '');
 }
 
 /** kpi is one number tile: a label, the value, a trend line and a delta. */

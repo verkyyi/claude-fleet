@@ -250,8 +250,15 @@ func (s *Server) handleFleetDevices(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	hosts := s.hostingMachines()
 	for i := range devs {
 		devs[i].PublicKey = "" // the fingerprint identifies it; the key line is noise on a page
+		for _, h := range hosts {
+			if s.isMachine(h, devs[i].Name) {
+				devs[i].Host = true
+				break
+			}
+		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, DevicesResponse{Mine: pid != "", IdleSec: int(DeviceIdle.Seconds()), Devices: devs, Audit: audit})
@@ -308,4 +315,30 @@ func (s *Server) handleFleetDeviceRevoke(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{"changed": changed, "fingerprint": req.Fingerprint})
+}
+
+// hostingMachines is every roster hostname that runs sessions — a node that
+// has beaten and is not a person's own computer (claude-fleet#1721) — so the Devices page can
+// tell a client a person signs in FROM from a machine they signed in ON
+// (claude-fleet#2680). Best effort: an unreadable roster names none.
+func (s *Server) hostingMachines() []string {
+	rows, err := s.Store.Nodes()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, n := range rows {
+		if n.Hostname == "" || seen[n.Hostname] {
+			continue
+		}
+		var hb control.Heartbeat
+		_ = json.Unmarshal([]byte(n.StatusJSON), &hb)
+		if hb.ObservedAt.IsZero() || hb.Personal {
+			continue // never heard, or a person's own computer
+		}
+		seen[n.Hostname] = true
+		out = append(out, n.Hostname)
+	}
+	return out
 }

@@ -10,7 +10,7 @@
 import { Shell } from './app-shell.js';
 import { esc, ic, fmtTokens, greeting } from './lib/shell.js';
 import { t } from './lib/i18n.js';
-import { dayKeys, dayTokens, stack, delta, bars, areaChart, sessionRows, running, attention, activeDevices, kpi, hb } from './lib/pages.js';
+import { dayKeys, dayTokens, stack, delta, bars, areaChart, sessionRows, running, attention, clientDevices, scopeOf, kpi, hb } from './lib/pages.js';
 
 const enc = encodeURIComponent;
 
@@ -47,7 +47,7 @@ Shell.mount('overview', async (ctx) => {
   const run = running(rows).length;
   const k3 = kpi(t('ui.ov.mySessions'), fleet.status === 'fulfilled' ? String(run) : '—', [],
     { text: fleet.status === 'fulfilled' ? t('ui.ov.open', { n: rows.length }) : t('ui.unavailable'), muted: true });
-  const n = devs.status === 'fulfilled' ? activeDevices(devs.value.devices).length : null;
+  const n = devs.status === 'fulfilled' ? clientDevices(devs.value).length : null;
   const k4 = kpi(t('ui.ov.myDevices'), n == null ? '—' : String(n), [], { text: n == null ? t('ui.unavailable') : t('ui.ov.certsRenew'), muted: true });
 
   const chart = claude && codex
@@ -63,7 +63,7 @@ Shell.mount('overview', async (ctx) => {
   const name = me.name || me.login || t('ui.me.you');
 
   ctx.el.innerHTML =
-    `<div class="pagehead"><div><h2 style="font:600 1.35rem var(--f-ui)">${esc(greeting(new Date().getHours(), name))}</h2><p>${esc(t('ui.ov.subUser'))}</p></div>` +
+    `<div class="pagehead"><div><h2 style="font:600 1.35rem var(--f-ui)">${esc(greeting(new Date().getHours(), name))}</h2><p>${esc(t('ui.ov.subUser'))}</p>${scopeOf(me) ? `<p class="mono" style="font-size:12px;opacity:.7" id="ovscope">${esc(scopeOf(me))}</p>` : ''}</div>` +
     `<div class="acts"><a class="btn" href="/sessions">${ic('list')}${esc(t('ui.nav.sessions'))}</a></div></div>` +
     `<div class="grid g4">${k1}${k2}${k3}${k4}</div>` +
     `<div class="grid g21"><div class="panel"><div class="panel-h"><h3>${esc(t('ui.ov.perDay'))}</h3><div class="legend"><span><i style="background:var(--brand)"></i>Claude</span><span><i style="background:var(--codex)"></i>Codex</span></div></div><div class="panel-b">${chart}</div></div>` +

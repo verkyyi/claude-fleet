@@ -71,6 +71,10 @@ type FleetDevice struct {
 	Renewals     int        `json:"renewals"`
 	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
 	RevokedBy    string     `json:"revoked_by,omitempty"`
+	// Host is not stored: the hub sets it on GET /v1/fleet/devices when the
+	// device's name is one of the fleet's hosting machines (claude-fleet#2680)
+	// — a `fleet login` run ON a machine that runs sessions, not a client.
+	Host         bool       `json:"host,omitempty"`
 }
 
 // Revoked reports whether the device may no longer renew.

@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import {
   dayKeys, dayTokens, stack, delta, bars, areaChart, niceMax,
   sessionRows, counts, filterRows, running, attention, stateOf,
-  activeDevices, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf, usageDays, usageBudget,
+  activeDevices, clientDevices, whyNotClient, scopeOf, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf, usageDays, usageBudget,
 } from '../dist/lib/pages.js';
 import { askOf, askLine } from '../dist/lib/pages.js';
 import { useLocale } from '../dist/lib/i18n.js';
@@ -159,6 +159,45 @@ test('deviceHistory: past devices and the certificate audit, named', () => {
   assert.match(dev, /<details class="panel fold" id="devhistory">/, 'the history is folded');
 });
 
+// The overview says what it counts (claude-fleet#2680): the viewer's own
+// (machine, login) pairs, and to an admin where the whole hub went (#2515).
+test('overview scope: the pairs counted, and a pointer for an admin', () => {
+  useLocale('zh-CN');
+  try {
+    const logins = [{ machine: 'mini2', login: 'verky' }, { machine: 'macmini', login: 'verky' }];
+    assert.equal(scopeOf({ role: 'user', logins }), '只算你在这些登录上的用量：mini2·verky、macmini·verky。');
+    assert.match(scopeOf({ role: 'admin', logins }), /管理 · 按人概览/);
+    assert.equal(scopeOf({ logins: [] }), '');
+    assert.equal(scopeOf(null), '');
+  } finally { useLocale('en'); }
+});
+
+// 我的设备 is the computers a person signs in FROM (claude-fleet#2680): a
+// login on a machine that runs sessions, a key idle past the hub's limit and
+// an older key of a name a newer one carries are not, and fold into history.
+test('client devices: not a hosting machine, not idle, the newest key per name', () => {
+  const now = Date.parse('2026-10-09T12:00:00Z');
+  const body = {
+    idle_sec: 7 * 86400,
+    devices: [
+      { fingerprint: 'mbp-new', name: 'MacBookPro', last_used_at: '2026-10-09T08:00:00Z' },
+      { fingerprint: 'mbp-old', name: 'MacBookPro', last_used_at: '2026-10-05T08:00:00Z' },
+      { fingerprint: 'ipad', name: 'iPad', last_used_at: '2026-10-08T08:00:00Z' },
+      { fingerprint: 'mini2', name: 'mini2', host: true, last_used_at: '2026-10-09T09:00:00Z' },
+      { fingerprint: 'stale', name: 'old-mbp', last_used_at: '2026-09-01T00:00:00Z' },
+      { fingerprint: 'gone', name: 'x', revoked_at: '2026-09-02T00:00:00Z', last_used_at: '2026-09-01T00:00:00Z' },
+    ],
+  };
+  assert.deepEqual(clientDevices(body, now).map((d) => d.fingerprint), ['mbp-new', 'ipad']);
+  assert.deepEqual([...whyNotClient(body, now).entries()].filter((e) => e[1]),
+    [['mbp-old', 'replaced'], ['mini2', 'host'], ['stale', 'idle'], ['gone', 'revoked']]);
+  assert.deepEqual(deviceHistory(body, now).past.map((d) => [d.fingerprint, d.why]),
+    [['mbp-old', 'replaced'], ['mini2', 'host'], ['stale', 'idle'], ['gone', 'revoked']]);
+  assert.deepEqual(clientDevices(undefined), []);
+  const ov = readFileSync(new URL('../dist/overview.js', import.meta.url), 'utf8');
+  assert.match(ov, /clientDevices\(devs\.value\)\.length/, 'the overview tile counts client devices');
+});
+
 test('a bundle lists one row per server, hook, skill and setting', () => {
   const items = bundleItems({
     mcp: { github: {}, fetch: {} },
@@ -299,6 +338,30 @@ test('my machines: two machines and a coordinating laptop, nobody else', () => {
   assert.equal(rows[0].loadCore, 0.24);
   assert.equal(rows[2].loadCore, null, 'a coordinating laptop has no load to show');
   assert.ok(!rows.some((r) => r.login === 'bob'), 'another login is never a row');
+});
+
+// One machine is one row (claude-fleet#2680): two logins of the viewer's on
+// m4 name both on the one row and add their sessions; a machine whose login
+// only coordinates for the moment still shows the machine's load, read from
+// the newest heard beat — only a person's own computer shows none.
+test('my machines: one row per machine, its load even while it only coordinates', () => {
+  const node = (hostname, os_user, extra) => ({ endpoint_id: hostname + '/' + os_user, hostname, os_user, status: 'online', load1: 2, ncpu: 8, sessions: 1, ...extra });
+  const snap = {
+    machines: [{ hostname: 'macmini', alias: 'm5' }, { hostname: 'mini2', alias: 'm4' }],
+    nodes: [
+      node('mini2', 'verkyyi', { sessions: 3, load1: 4, last_heartbeat: '2026-10-09T10:00:00Z' }),
+      node('mini2', 'verky', { sessions: 5, load1: 6, last_heartbeat: '2026-10-09T10:00:05Z' }),
+      node('macmini', 'verky', { compute_off: true, compute_why: 'CCQUOTA_FLEET_COMPUTE=0', load1: 1, ncpu: 4 }),
+    ],
+  };
+  const me = { logins: [{ machine: 'mini2', login: 'verky' }, { machine: 'mini2', login: 'verkyyi' }, { machine: 'macmini', login: 'verky' }] };
+  const rows = myMachines(snap, me);
+  assert.deepEqual(rows.map((r) => [r.label, r.login, r.takes, r.sessions, r.loadCore]), [
+    ['m4', 'verky · verkyyi', 'on', 8, 0.75],
+    ['m5', 'verky', 'coord', null, 0.25],
+  ]);
+  const [r] = myMachines({ nodes: [node('mini2', 'a', { sessions: null }), node('mini2', 'b', {})] }, {});
+  assert.equal(r.sessions, undefined, 'one unknown count makes the machine unknown');
 });
 
 test('my machines: what takes sessions, and an unknown count stays unknown', () => {
