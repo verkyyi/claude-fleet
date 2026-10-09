@@ -3724,7 +3724,7 @@ drill_release_artifact_missing() {
     printf ']}\n' >> "$d/hub/v1/fleet/release/artifacts"; }
   hub_has ccquota-darwin-arm64 claude-2.1.293-darwin-arm64 codex-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
   t0=$(now)
-  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL= FLEET_HUB_URL="file://$d/hub" \
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
           sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1); rc=$?
   [ "$rc" = 3 ] || { WHY="move onto the bump exited $rc, want 3 (refused): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
   case "$out" in *'REFUSED — artifacts:'*) ;; *) WHY="the refusal is not prefixed artifacts: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
@@ -3732,7 +3732,7 @@ drill_release_artifact_missing() {
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="stable moved onto a release the hub cannot build"; return 1; }
   # the operator drops the file in → the same move goes through
   hub_has ccquota-darwin-arm64 claude-9.9.9-darwin-arm64 codex-0.154.0-darwin-arm64 tmux-3.7c-darwin-arm64
-  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL= FLEET_HUB_URL="file://$d/hub" \
+  out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
           sh "$BIN/fleet-stable.sh" move "$c2" --dir "$d/co" --repo o/r 2>&1) \
     || { WHY="the move after the artifact landed failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
   SECS=$(since "$t0")
