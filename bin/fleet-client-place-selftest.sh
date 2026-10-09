@@ -30,6 +30,10 @@
 #      (base64, name, from, sha256) with a new start — the hub receives exactly the
 #      file; one over 10 MB stays behind and is said (stderr, the line's tail, the
 #      body beside its path); a hub that answers no `attached` (older) is said too
+#   H. back to the last home session (issue #2564): `- home` carries home=true,
+#      `--new` new=true; a RESUME answer is printed as it is, exit 0, and
+#      FLEET_PLACE_RESULT holds {worker_id, machine, resume, also_open}; --new
+#      on anything but home is exit 2
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -105,6 +109,11 @@ class H(BaseHTTPRequestHandler):
             if p.get("title") != "old hub":
                 out["attached"] = len(p.get("attachments") or [])
             return self.answer(200, out)
+        if kind == "scratch" and p.get("home") and not p.get("new") and p.get("agent") == "claude":
+            # leg H: the person's current home session (issue #2564)
+            return self.answer(200, {"line": "RESUME m4 %s/scratch-1\t回到你上一次的会话（m4）" % UUID, "exit": 0, "state": "resume",
+                                     "machine": "m4", "worker_id": "%s/scratch-1" % UUID, "login": "verky",
+                                     "also_open": ["MacBook"]})
         if kind == "scratch":
             # an older hub (no `login`): the chosen candidate's os_user says it (#2430)
             return self.answer(200, {"line": "REMOTE m5 op1 done %s/scratch-3\tm4 excluded: load 1.00/core > 0.8" % UUID, "exit": 0, "state": "done",
@@ -208,6 +217,21 @@ run "$P" - home --agent codex
 eq "A: home exit" 0 "$RC"
 has "A: home payload no_repo" "$(lastreq)" '"no_repo": true'
 has "A: home payload agent" "$(lastreq)" '"agent": "codex"'
+
+# --- H. back to the last home session (issue #2564) -------------------------------------
+has "H: home payload home" "$(lastreq)" '"home": true'
+case "$(lastreq)" in *'"new"'*) fail "H: a plain home carried new" "$(lastreq)" ;; esac
+FLEET_PLACE_RESULT="$WORK/res.json" run "$P" - home --agent claude
+eq "H: RESUME exit" 0 "$RC"
+eq "H: RESUME line" "RESUME m4 $UUID/scratch-1	回到你上一次的会话（m4）" "$OUT"
+eq "H: RESUME result" "{\"machine\": \"m4\", \"worker_id\": \"$UUID/scratch-1\", \"resume\": true, \"also_open\": [\"MacBook\"]}" \
+  "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps({k: d[k] for k in ("machine","worker_id","resume","also_open")}, ensure_ascii=False))' "$WORK/res.json" 2>/dev/null)"
+run "$P" - home --agent claude --new
+eq "H: --new exit (a new one)" 0 "$RC"
+has "H: --new line" "$OUT" "REMOTE m5 op1 done"
+has "H: --new payload" "$(lastreq)" '"new": true'
+run "$P" - scratch --new
+eq "H: --new on a scratch: exit 2" 2 "$RC"
 
 run "$P" verkyyi/claude-fleet 7 --node m5 --agent codex
 eq "A: issue exit (after one status poll)" 0 "$RC"

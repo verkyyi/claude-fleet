@@ -66,17 +66,22 @@ type ClientPlaceEnvelope struct {
 
 // clientPlaceRequest is the signed payload.
 type clientPlaceRequest struct {
-	Action      string `json:"action"` // place | status
-	TS          int64  `json:"ts"`
-	Repo        string `json:"repo"`
-	Kind        string `json:"kind"` // issue | scratch | restore | new
-	Issue       int    `json:"issue"`
-	Key         string `json:"key"`
-	Name        string `json:"name"`
-	Node        string `json:"node"`
-	Title       string `json:"title"`
-	Body        string `json:"body"` // kind=new: the issue's body (claude-fleet#1953); kind=scratch: its seed (#1956)
-	NoRepo      bool   `json:"no_repo"`
+	Action string `json:"action"` // place | status
+	TS     int64  `json:"ts"`
+	Repo   string `json:"repo"`
+	Kind   string `json:"kind"` // issue | scratch | restore | new
+	Issue  int    `json:"issue"`
+	Key    string `json:"key"`
+	Name   string `json:"name"`
+	Node   string `json:"node"`
+	Title  string `json:"title"`
+	Body   string `json:"body"` // kind=new: the issue's body (claude-fleet#1953); kind=scratch: its seed (#1956)
+	NoRepo bool   `json:"no_repo"`
+	// Home / New: a HOME session (`fleet claude`, claude-fleet#2564) — a
+	// no-repo scratch that first goes back to the person's current one
+	// (fleet_home.go); New opens another anyway and makes it the current.
+	Home        bool   `json:"home"`
+	New         bool   `json:"new"`
 	Agent       string `json:"agent"`
 	Reap        string `json:"reap"`
 	Idem        string `json:"idempotency_key"`
@@ -123,6 +128,9 @@ type ClientPlaceResponse struct {
 	// not go.
 	Attached   int    `json:"attached,omitempty"`
 	AttachNote string `json:"attach_note,omitempty"`
+	// AlsoOpen: a RESUME's other devices that have the session open now
+	// (claude-fleet#2564) — the client says so at the top of its view.
+	AlsoOpen []string `json:"also_open,omitempty"`
 }
 
 // placedLogin is the login of the candidate placement chose (its fleet_id).
@@ -238,7 +246,7 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 	case "status":
 		s.clientPlaceStatus(w, r, p, req.OperationID, wait)
 	case "", "place":
-		s.clientPlace(w, r, p, env.Lease, req, wait, now)
+		s.clientPlace(w, r, p, key, env.Lease, req, wait, now)
 	default:
 		httpError(w, http.StatusBadRequest, "action must be place or status")
 	}
@@ -254,7 +262,11 @@ func refusedAnswer(err error, pl *Placement) ClientPlaceResponse {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrincipal, lease string, req clientPlaceRequest, wait time.Duration, now time.Time) {
+func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrincipal, leaseKey, lease string, req clientPlaceRequest, wait time.Duration, now time.Time) {
+	if (req.Home || req.New) && (!req.Home || !req.NoRepo || req.Kind != "scratch") {
+		httpError(w, http.StatusBadRequest, "home is a no_repo scratch; new goes with home")
+		return
+	}
 	if req.NoRepo {
 		// The writing area's 「不关联仓库」 (claude-fleet#1956): a scratch only,
 		// and it names no repo — any of this person's fleets may open it.
@@ -379,6 +391,21 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		return
 	}
 
+	// A home session (claude-fleet#2564): the current one, when there is one —
+	// under the person's lock for this agent, held through the start below so
+	// a second computer's ask resumes this one rather than opening a twin.
+	homeActorID, homeAgent := "", ""
+	if req.Home {
+		homeActorID, homeAgent = homeActor(p, leaseKey), req.Agent
+		if homeAgent == "" {
+			homeAgent = "claude"
+		}
+		defer homeLock(homeActorID, homeAgent)()
+		if !req.New && s.homeResume(w, r, p, leaseKey, lease, homeActorID, homeAgent, wait, now) {
+			return
+		}
+	}
+
 	var held []heldAttachment
 	if len(req.Attachments) > 0 {
 		if req.Kind != "new" && req.Kind != "scratch" {
@@ -445,6 +472,9 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	attempts := []placeAttempt{}
 	attached, attachNote := 0, ""
 	answer := func(out ClientPlaceResponse) {
+		if req.Home {
+			s.homeRecord(homeActorID, homeAgent, lease, s.clientLeases.deviceOf(leaseKey, lease), out, pl, time.Now())
+		}
 		out.Attached, out.AttachNote = attached, attachNote
 		if len(attempts) > 0 {
 			out.Attempts = attempts

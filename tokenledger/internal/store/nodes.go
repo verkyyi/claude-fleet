@@ -108,6 +108,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetSessionBinds(); err != nil {
 		return err
 	}
+	// Each person's current home session (claude-fleet#2564).
+	if err := s.ensureFleetHomeCurrent(); err != nil {
+		return err
+	}
 	// Per-person usage against a person's budget (claude-fleet#1977).
 	if err := s.ensureFleetPersonUsage(); err != nil {
 		return err

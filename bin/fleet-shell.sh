@@ -1218,18 +1218,22 @@ EOF
 # foreground and says what it is waiting for; once it is placed, a background
 # step turns the stage onto it as soon as the list has its row. `--first` also
 # puts the first-screen hint on the client's line.
-#   home-session <claude|codex> [--node <m>] [--body-file <f>] [--first] [--no-stage]
-# Exit: fleet-client-place.sh's code (0 placed); 1 no client here; 2 usage.
+# The person's current one, when they never /exit-ed it (issue #2564): the hub
+# answers `RESUME <m> <worker_id>` and nothing is opened — the stage goes onto
+# that one; `--new` opens another all the same.
+#   home-session <claude|codex> [--node <m>] [--body-file <f>] [--first] [--no-stage] [--new]
+# Exit: fleet-client-place.sh's code (0 placed or resumed); 1 no client here; 2 usage.
 home-session)
   shift
   hagent="${1:-}"; [ $# -gt 0 ] && shift
-  hnode=auto; hbody=''; hfirst=0; hnostage=''
+  hnode=auto; hbody=''; hfirst=0; hnostage=''; hnew=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --node)      [ $# -ge 2 ] || exit 2; hnode="${2:-auto}"; shift 2 ;;
       --body-file) [ $# -ge 2 ] || exit 2; hbody="$2"; shift 2 ;;
       --first)     hfirst=1; shift ;;
       --no-stage)  hnostage=1; shift ;;
+      --new)       hnew=1; shift ;;
       *) note "home-session: unknown $1"; exit 2 ;;
     esac
   done
@@ -1249,7 +1253,7 @@ EOF
   # why THIS computer was not chosen (issue #2480), said after the failure line
   hwhy=$(mktemp "${TMPDIR:-/tmp}/fleet-place-why.XXXXXX" 2>/dev/null) || hwhy=''
   herr=$(mktemp "${TMPDIR:-/tmp}/fleet-place-err.XXXXXX" 2>/dev/null) || herr=/dev/null
-  hout=$(FLEET_PLACE_WHY="$hwhy" bash "$BIN/fleet-client-place.sh" - home --agent "$hagent" --node "$hnode" ${hbody:+--body-file "$hbody"} 2>"$herr"); hrc=$?
+  hout=$(FLEET_PLACE_WHY="$hwhy" bash "$BIN/fleet-client-place.sh" - home --agent "$hagent" --node "$hnode" ${hbody:+--body-file "$hbody"} ${hnew:+--new} 2>"$herr"); hrc=$?
   [ "$herr" = /dev/null ] || cat "$herr" >&2
   hline=$(printf '%s\n' "$hout" | tail -n1)
   if [ "$hrc" != 0 ]; then
@@ -1273,7 +1277,10 @@ EOF
   printf '%s\n' "$hline"
   # where it opened (issue #2339): the client's view machine (「入口选了 …」) and
   # the hub's placement are two choices — say the second, so one never reads as the other
-  case "$hline" in REMOTE\ ?*) note "$(sh "$BIN/fleet-ui-lang.sh" t home_placed_fmt "$(printf '%s' "$hline" | awk '{ print $2 }')" 2>/dev/null)" ;; esac
+  case "$hline" in
+    REMOTE\ ?*) note "$(sh "$BIN/fleet-ui-lang.sh" t home_placed_fmt "$(printf '%s' "$hline" | awk '{ print $2 }')" 2>/dev/null)" ;;
+    RESUME\ ?*) note "$(sh "$BIN/fleet-ui-lang.sh" t home_resumed_fmt "$(printf '%s' "$hline" | awk '{ print $2 }')" 2>/dev/null)" ;;
+  esac
   # a HOME session made: the newcomer's first is no longer owed (below)
   mkdir -p "$CONF_DIR" 2>/dev/null && : > "$CONF_DIR/home-session.first"
   # its row key: `REMOTE <m> <op> done <worker_id>` → wid:<worker_id>; with no hub
@@ -1281,6 +1288,7 @@ EOF
   hkey=''
   case "$hline" in
     REMOTE\ *) hkey=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $5 }'); case "$hkey" in */*) hkey="wid:$hkey" ;; *) hkey='' ;; esac ;;
+    RESUME\ *) hkey=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $3 }'); case "$hkey" in */*) hkey="wid:$hkey" ;; *) hkey='' ;; esac ;;
     LOCAL\ *)  hkey=$(printf '%s' "${hline#*$'\t'}" | awk '{ print $1 }'); case "$hkey" in @[0-9]*) ;; *) hkey='' ;; esac ;;
   esac
   # `fleet claude`'s own view shows it (--no-stage, issue #2349): the client's
@@ -1449,6 +1457,9 @@ solo)
   # ⌃\'s shell (issue #2566): THIS computer, this login, in $HOME, with the
   # fleet's own commands on its PATH (a `'` in it would end the conf's quotes)
   spath="$HOME/.local/bin:$SB:$PATH"; spath=${spath//\'/}
+  # FLEET_SOLO_NOTE (issue #2564): one line the view's bar says beside the
+  # machine — `fleet claude` going back to a session another device has open
+  snote=$(printf '%s' "${FLEET_SOLO_NOTE:-}" | tr -d '#"\n' | cut -c1-80)
   # ONE conf, read at the server's start: the stage's (its environment, its ssh)
   # with this view's bar after it — so not one line of the stage's top line
   # (fleet-topbar.py, the client's record) ever runs on this server
@@ -1460,8 +1471,8 @@ set -g status-interval 0
 set -g status-style "bg=#1a1b26,fg=#565f89"
 set -g status-left-length 200
 set -g status-left " #[range=user|bg]#{?#{@solo_shell},${sbar},${bar}}#[norange]#[default]"
-set -g status-right "#[fg=#565f89]$snode "
-set -g status-right-length 40
+set -g status-right "${snote:+#[fg=#e0af68]$snote  }#[fg=#565f89]$snode "
+set -g status-right-length 120
 set -g pane-border-status off
 bind -n MouseDown1Status if -F '#{==:#{mouse_status_range},bg}' { detach-client }
 bind -n C-d detach-client

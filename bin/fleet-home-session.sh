@@ -2,12 +2,16 @@
 # fleet-home-session.sh — `fleet claude` / `fleet codex`: a new session in one
 # command (issue #2264, EPIC #2259 C5).
 #
-#   fleet claude|codex [--node <m>] [<first sentence>…]
+#   fleet claude|codex [--node <m>] [--new] [<first sentence>…]
 #   fleet claude|codex --here [args…]
 #
 # Without --here: a HOME session — no repo, in your home directory on a fleet
 # machine, with that agent (EPIC #2259 共同约定 2) — and the client attached onto
-# it. Words after the options are its first turn, submitted as it starts. Three
+# it. The LAST one, when you never /exit-ed it (issue #2564, EPIC #2563 C1): the
+# hub answers `RESUME` and this goes back to it — 「回到你上一次的会话」, from any
+# of your computers; ⌃D, a closed terminal or a dropped network leave it running
+# and current. `--new` opens another all the same (it is the current one then);
+# words after the options go to a new session only, never into the resumed one. Words after the options are its first turn, submitted as it starts. Three
 # steps, every one an existing road:
 #   1. the client up WITHOUT attaching (fleet-shell.sh, FLEET_SHELL_NO_ATTACH):
 #      its lease is what signs the ask; FLEET_SHELL_NO_FIRST, so a newcomer's
@@ -35,6 +39,7 @@
 #   after you leave   keeps running           ends with the agent
 #   its /exit         back at the prompt      back at the prompt
 #   another device    can pick it up          no
+#   fleet claude again  back to the same one  a new one
 #   on the list       yes                     no
 #
 # Exit: the view's · the attach's · fleet-client-place.sh's code when nothing was placed ·
@@ -45,11 +50,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 SH="${FLEET_HOME_SHELL:-$BIN/fleet-shell.sh}"   # the selftests' seam
 
 usage() { sed -n '5,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+helpn=$(awk '/^set -uo pipefail/ { print NR - 1; exit }' "$0")
 
 agent="${1:-}"; [ $# -gt 0 ] && shift
 case "$agent" in
   claude|codex) ;;
-  -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n "2,${helpn}p" "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) usage ;;
 esac
 
@@ -62,12 +68,13 @@ for a in "$@"; do
   fi
 done
 
-node=''; words=()
+node=''; words=(); fresh=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)   [ $# -ge 2 ] || usage; node="$2"; shift 2 ;;
     --node=*) node="${1#--node=}"; shift ;;
-    -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --new)    fresh=1; shift ;;
+    -h|--help) sed -n "2,${helpn}p" "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --) shift; words+=("$@"); break ;;
     -*) printf 'fleet %s: 不认识的选项 %s（fleet %s --help）\n' "$agent" "$1" "$agent" >&2; exit 2 ;;
     *) words+=("$1"); shift ;;
@@ -75,6 +82,9 @@ while [ $# -gt 0 ]; do
 done
 case "$node" in ''|auto) node='' ;; *[!A-Za-z0-9._-]*) printf 'fleet %s: 机器名不对：%s\n' "$agent" "$node" >&2; exit 2 ;; esac
 text="${words[*]-}"
+# a first sentence is for a session that starts with it: never typed into the
+# one this would go back to
+[ -z "$text" ] || fresh=1
 
 # A tmux client needs a terminal (bin/fleet's own rule); the seam starts nothing to attach.
 if [ "${FLEET_SHELL_NO_ATTACH:-0}" != 1 ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
@@ -106,8 +116,19 @@ if [ -n "$text" ]; then
   printf '%s' "$text" > "$bodyf"
 fi
 nostage=''; [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] || nostage=--no-stage
-hline=$(bash "$SH" home-session "$agent" ${node:+--node "$node"} ${bodyf:+--body-file "$bodyf"} $nostage | tail -n 1); rc=$?   # pipefail: the ask's code
+# what the hub said of it (fleet-client-place.sh FLEET_PLACE_RESULT): a RESUME's
+# other devices that have it open (issue #2564)
+resf=$(mktemp "${TMPDIR:-/tmp}/fleet-home-result.XXXXXX" 2>/dev/null) || resf=''
+hline=$(FLEET_PLACE_RESULT="$resf" bash "$SH" home-session "$agent" ${node:+--node "$node"} ${bodyf:+--body-file "$bodyf"} ${fresh:+--new} $nostage | tail -n 1); rc=$?   # pipefail: the ask's code
 [ -z "$bodyf" ] || rm -f "$bodyf"
+also=''
+if [ -n "$resf" ]; then
+  also=$(python3 -c 'import json, sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: d = {}
+print("、".join(x.replace("#", "").replace("\x27", "").replace("\"", "") for x in d.get("also_open") or [] if isinstance(x, str)))' "$resf" 2>/dev/null)
+  rm -f "$resf"
+fi
 [ "$rc" = 0 ] || exit "$rc"
 [ "${FLEET_SHELL_NO_ATTACH:-0}" = 1 ] && exit 0
 
@@ -115,13 +136,23 @@ hline=$(bash "$SH" home-session "$agent" ${node:+--node "$node"} ${bodyf:+--body
 #    layout the client keeps — `REMOTE <machine> <op> done <worker id>`. Its /exit
 #    or ⌃D returns to the prompt; a client this command started goes with it.
 #    No hub (a LOCAL row, this computer's own fleet): the client, as before.
+#    A RESUME (`RESUME <machine> <worker id>`, issue #2564) is the same view onto
+#    the current one; another device that has it open is said on the view's bar.
 case "$hline" in
-  REMOTE\ *)
+  REMOTE\ *|RESUME\ *)
     hm=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $2 }')
-    hw=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $5 }')
+    case "$hline" in
+      RESUME\ *) hw=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $3 }') ;;
+      *)         hw=$(printf '%s' "${hline%%$'\t'*}" | awk '{ print $5 }') ;;
+    esac
+    snote=''
+    if [ -n "$also" ]; then
+      snote=$(sh "$BIN/fleet-ui-lang.sh" t home_also_open_fmt "$also" 2>/dev/null)
+      [ -z "$snote" ] || printf '%s\n' "$snote" >&2
+    fi
     case "$hw" in
       */*)
-        bash "$SH" solo "$hm" "$hw"; rc=$?
+        FLEET_SOLO_NOTE="$snote" bash "$SH" solo "$hm" "$hw"; rc=$?
         # a client someone attached meanwhile (`fleet` in another terminal) stays
         [ -n "$was_up" ] || bash "$SH" quit --quiet --if-unattached
         exit "$rc" ;;

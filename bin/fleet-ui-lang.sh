@@ -413,6 +413,10 @@ fleet_ui_t() {
     en:home_opening_solo_fmt)   printf 'opening a %s session (home directory, on a free machine)…' "${1:-}" ;;
     zh:home_placed_fmt)         printf '会话开在 %s' "${1:-}" ;;
     en:home_placed_fmt)         printf 'the session is on %s' "${1:-}" ;;
+    zh:home_resumed_fmt)        printf '回到你上一次的会话（%s）' "${1:-}" ;;
+    en:home_resumed_fmt)        printf 'back to your last session (%s)' "${1:-}" ;;
+    zh:home_also_open_fmt)      printf '另一台也开着：%s' "${1:-}" ;;
+    en:home_also_open_fmt)      printf 'also open on: %s' "${1:-}" ;;
     zh:home_failed_fmt)         printf '开不了会话：%s' "${1:-}" ;;
     en:home_failed_fmt)         printf 'could not open a session: %s' "${1:-}" ;;
     zh:home_first_failed)       printf '你的第一个会话没开出来' ;;
