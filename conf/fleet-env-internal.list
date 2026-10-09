@@ -298,6 +298,8 @@ FLEET_LIVE_DIR                     path: the live install checkout (default ~/.c
 FLEET_LIVE_ROOT                    path: state/log location override (fleet-daemon-lib.sh)
 FLEET_LOGIN_HOMES                  seam: an injectable command/path for tests (fleet-login-new.sh)
 FLEET_LOGIN_CREDSEP_WAIT           knob: seconds fleet-login-new.sh step 7b waits for `credsep check` to pass while the new proxy starts (15; #2294)
+FLEET_LOGIN_HUB                    handoff: the hub the admin agent hands fleet-login-new.sh with a create's join code (#2652)
+FLEET_LOGIN_JOIN_CODE              handoff: a create's one-time join code, admin agent → fleet-login-new.sh, env only (#2652)
 FLEET_LOOP_AGENT                   handoff: which agent the /loop spec belongs to
 FLEET_LOOP_SPEC                    handoff: the /loop spec a relaunched agent restores
 FLEET_CLAUDE_RSS_EVERY             knob: min seconds between memguard fat-session checks (fleet-memguard.sh, 30)
