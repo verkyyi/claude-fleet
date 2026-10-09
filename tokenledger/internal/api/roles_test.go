@@ -111,7 +111,22 @@ func rolesHarness(t *testing.T) (h *ghHarness, admin, user *http.Cookie) {
 	}
 	push("mini", "acct-a", "verkyyi", "s-admin-1", "s-admin-2")
 	push("alicebox", "acct-b", aliceLogin, "s-alice")
+	// alice-mac is hers on alicebox: what adoption records once the
+	// machine's agent runs as her mapped login (claude-fleet#2514).
+	giveAccount(t, h.srv, githubPrincipal(ghAlice.ID), "alicebox")
 	return h, admin, user
+}
+
+// giveAccount records principal's login as theirs on host, as adoption does.
+func giveAccount(t *testing.T, s *Server, principal, host string) {
+	t.Helper()
+	p, err := s.Store.Principal(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store.AdoptAccount(p, host, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func rolesGet(t *testing.T, h *ghHarness, sess *http.Cookie, path string) (int, []byte) {
@@ -263,12 +278,12 @@ func TestRoleScope_LiveFilteredToLogin(t *testing.T) {
 		{SessionID: "a", Account: "acct-a", OSUser: "verkyyi", InputTokens: 5},
 		{SessionID: "b", Account: "acct-b", ProfileID: "p", OSUser: aliceLogin, InputTokens: 7},
 	}}
-	got := s.FilterLiveFor(snap, "all", "", aliceLogin)
+	got := s.FilterLiveFor(snap, "all", "", &UserLogins{Login: aliceLogin})
 	if len(got.Sessions) != 1 || got.Sessions[0].SessionID != "b" || got.Sessions[0].Account != "" ||
 		got.Sessions[0].ProfileID != "" || got.SessionTokens != 7 {
 		t.Errorf("FilterLiveFor = %+v", got)
 	}
-	if all := s.FilterLiveFor(snap, "all", "", ""); len(all.Sessions) != 2 {
+	if all := s.FilterLiveFor(snap, "all", "", nil); len(all.Sessions) != 2 {
 		t.Errorf("FilterLiveFor with no login = %d sessions; want 2", len(all.Sessions))
 	}
 }

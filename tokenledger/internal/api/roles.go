@@ -189,31 +189,124 @@ func (s *Server) machineLoginOf(principal string) (string, error) {
 	return p.Login, nil
 }
 
-// UserScope is the os_user a request's rows are cut to: scoped=false for an
-// admin (everything), else the caller's machine login — noLogin when they
-// have none, so a user never falls through to the whole hub.
-func (s *Server) UserScope(r *http.Request) (login string, scoped bool, err error) {
-	if roleOf(r.Context()) != roleUser {
-		return "", false, nil
+// loginPairsOf is principal's (machine, login) pairs: their ACTIVE
+// fleet_accounts rows (claude-fleet#2514). A login NAME is not a person — the
+// same `ubuntu` on two machines is two people — so this, not machineLoginOf,
+// is who a person is on the machines. A 登录即认人 row (claude-fleet#2212) also
+// carries the computer's own endpoint, so its usage stays theirs when the
+// machine's name drifts: a person's own laptop counts by the device they
+// signed in on, never by the local name it runs as.
+func (s *Server) loginPairsOf(principal string) ([]store.LoginPair, error) {
+	if !s.Fleet || s.Store == nil || principal == "" {
+		return nil, nil
 	}
-	login, err = s.machineLoginOf(principalOf(r.Context()))
+	accts, err := s.Store.FleetAccounts(principal)
 	if err != nil {
-		return "", true, errNoPerson
+		return nil, err
+	}
+	out := []store.LoginPair{}
+	for _, a := range accts {
+		if a.State != store.AccountActive {
+			continue
+		}
+		p := store.LoginPair{Hostname: a.Hostname, Login: a.Login}
+		if !a.Managed() {
+			p.EndpointID = a.EndpointID // a managed row's endpoint is the admin agent the op went to
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// UserLogins is what a user's rows are cut to (claude-fleet#1985,
+// claude-fleet#2514). nil — an admin or the operator's doors — is no cut.
+type UserLogins struct {
+	// Login names the user's page: their machine login, noLogin when they
+	// have none.
+	Login string
+	// Owner is their own (endpoint, login) pairs, resolved from their
+	// (machine, login) accounts. nil on a hub without the fleet module, where
+	// the login name is all the hub knows of anyone and Login is the cut.
+	Owner *store.Owner
+}
+
+// Apply cuts f to the user's rows (the subscription is the caller's).
+func (u *UserLogins) Apply(f *store.Filter) {
+	if u == nil {
+		return
+	}
+	if u.Owner != nil {
+		f.Owner = u.Owner
+		return
+	}
+	f.OSUser = u.Login
+}
+
+// Owns is whether a row reported by endpointID as osUser is the user's.
+func (u *UserLogins) Owns(endpointID, osUser string) bool {
+	if u == nil {
+		return true
+	}
+	if u.Owner != nil {
+		return u.Owner.Owns(endpointID, osUser)
+	}
+	return osUser == u.Login
+}
+
+// OwnerOf is the store cut for the user's own page, nil for none.
+func (u *UserLogins) OwnerOf() *store.Owner {
+	if u == nil {
+		return nil
+	}
+	return u.Owner
+}
+
+func (u *UserLogins) key() string {
+	if u == nil {
+		return ""
+	}
+	if u.Owner != nil {
+		return u.Owner.Key()
+	}
+	return "login\x01" + u.Login
+}
+
+// UserScope is what a request's rows are cut to: nil for an admin
+// (everything), else the caller's own logins — none at all when they have
+// none, so a user never falls through to the whole hub.
+func (s *Server) UserScope(r *http.Request) (*UserLogins, error) {
+	if roleOf(r.Context()) != roleUser {
+		return nil, nil
+	}
+	pid := principalOf(r.Context())
+	login, err := s.machineLoginOf(pid)
+	if err != nil {
+		return nil, errNoPerson
 	}
 	if login == "" {
 		login = noLogin
 	}
-	return login, true, nil
+	u := &UserLogins{Login: login}
+	if s.Fleet {
+		pairs, err := s.loginPairsOf(pid)
+		if err != nil {
+			return nil, errNoPerson
+		}
+		if u.Owner, err = s.Store.OwnerOf(pairs); err != nil {
+			return nil, errNoPerson
+		}
+	}
+	return u, nil
 }
 
 // userScope is UserScope answering the error itself.
-func (s *Server) userScope(w http.ResponseWriter, r *http.Request) (string, bool, bool) {
-	login, scoped, err := s.UserScope(r)
+func (s *Server) userScope(w http.ResponseWriter, r *http.Request) (*UserLogins, bool) {
+	who, err := s.UserScope(r)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
-		return "", false, false
+		return nil, false
 	}
-	return login, scoped, true
+	return who, true
 }
 
 // scopeRows keeps the rows whose os_user is login; every list a user gets

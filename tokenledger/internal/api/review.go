@@ -172,10 +172,11 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	login, scoped, ok := s.userScope(w, r)
+	who, ok := s.userScope(w, r)
 	if !ok {
 		return
 	}
+	scoped := who != nil
 	if scoped {
 		account = store.AllAccounts
 	}
@@ -185,7 +186,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Someone else's session is, to a user, no session at all.
-	if head == nil || (scoped && head.OSUser != login) {
+	if head == nil || !who.Owns(head.EndpointID, head.OSUser) {
 		httpError(w, http.StatusNotFound, "unknown session")
 		return
 	}

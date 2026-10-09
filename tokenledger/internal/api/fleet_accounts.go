@@ -64,16 +64,13 @@ func (s *Server) FleetScope(r *http.Request) (func(hostname, osUser string) bool
 			mine[[2]string{a.Hostname, a.Login}] = true
 		}
 	}
-	// A GitHub user (claude-fleet#1985) has no assigned logins; theirs is the
-	// one machine login an admin set for them, on whichever machine has it.
-	var login string
-	if _, gh := githubIDOf(pid); gh {
-		if login, err = s.machineLoginOf(pid); err != nil {
-			return nil, err
-		}
-	}
+	// A GitHub user's mapped machine login (claude-fleet#1985) is theirs only
+	// where the hub recorded it as theirs — adopted on the machines whose
+	// agent runs as it (adoptMappedLogins). The name alone matched the same
+	// login on every machine, so `ubuntu` on one box saw `ubuntu` on every
+	// other (claude-fleet#2514).
 	return func(hostname, osUser string) bool {
-		return mine[[2]string{hostname, osUser}] || (login != "" && osUser == login)
+		return mine[[2]string{hostname, osUser}]
 	}, nil
 }
 

@@ -148,7 +148,7 @@ func (s *mcpServer) dispatch(hr *http.Request, req *request) *response {
 			tools = append(tools, fleetToolSpecs()...)
 		}
 		// A user is shown only what they may call (claude-fleet#1985).
-		if _, scoped, err := s.api.UserScope(hr); err != nil || scoped {
+		if who, err := s.api.UserScope(hr); err != nil || who != nil {
 			mine := []toolSpec{}
 			for _, t := range tools {
 				if err == nil && api.IsUserTool(t.Name) {
@@ -569,10 +569,10 @@ func (s *mcpServer) callTool(hr *http.Request, raw json.RawMessage) (any, *rpcEr
 		// Scoped to the caller, so it needs the request's identity — which
 		// is why it is not one more case in run.
 		payload, err = s.api.CallFleetTool(hr, p.Name, p.Arguments)
-	} else if login, scoped, serr := s.api.UserScope(hr); serr != nil {
+	} else if who, serr := s.api.UserScope(hr); serr != nil {
 		err = serr
-	} else if scoped {
-		payload, err = s.runUser(login, p.Name, p.Arguments)
+	} else if who != nil {
+		payload, err = s.runUser(who, p.Name, p.Arguments)
 	} else {
 		payload, err = s.run(p.Name, p.Arguments)
 	}
@@ -594,9 +594,9 @@ func (s *mcpServer) callTool(hr *http.Request, raw json.RawMessage) (any, *rpcEr
 }
 
 // runUser is run for a user (claude-fleet#1985): only the tools IsUserTool
-// names, every one cut to their machine login across every subscription, and
-// no subscription named in the answer.
-func (s *mcpServer) runUser(login, name string, args map[string]any) (any, error) {
+// names, every one cut to their own (machine, login) pairs across every
+// subscription (claude-fleet#2514), and no subscription named in the answer.
+func (s *mcpServer) runUser(who *api.UserLogins, name string, args map[string]any) (any, error) {
 	if !api.IsUserTool(name) {
 		return nil, fmt.Errorf("%s is an admin's tool: only an admin can use it", name)
 	}
@@ -604,7 +604,10 @@ func (s *mcpServer) runUser(login, name string, args map[string]any) (any, error
 	for k, v := range args {
 		a[k] = v
 	}
-	a["user"], a["account"] = login, "all"
+	a["account"] = "all"
+	if who.Owner == nil {
+		a["user"] = who.Login // a hub without the fleet module: the name is the cut
+	}
 	if name == "get_live" {
 		if source := str(a, "source"); source != "" && !model.KnownSource(source) {
 			return nil, fmt.Errorf("source must be one of: %s", strings.Join(model.Sources, ", "))
@@ -613,16 +616,16 @@ func (s *mcpServer) runUser(login, name string, args map[string]any) (any, error
 		if l == nil {
 			l = api.NewLive()
 		}
-		return s.api.FilterLiveFor(l.Snapshot(), store.AllAccounts, str(a, "source"), login), nil
+		return s.api.FilterLiveFor(l.Snapshot(), store.AllAccounts, str(a, "source"), who), nil
 	}
-	out, err := s.run(name, a)
+	out, err := s.runAs(who, name, a)
 	if err != nil {
 		return nil, err
 	}
 	m, _ := out.(map[string]any)
 	switch name {
 	case "get_session":
-		if head, _ := m["session"].(*store.SessionRow); head == nil || head.OSUser != login {
+		if head, _ := m["session"].(*store.SessionRow); head == nil || !who.Owns(head.EndpointID, head.OSUser) {
 			return nil, fmt.Errorf("unknown session %q", str(a, "session_id"))
 		} else {
 			head.AccountUUID = ""
@@ -641,6 +644,11 @@ func (s *mcpServer) runUser(login, name string, args map[string]any) (any, error
 }
 
 func (s *mcpServer) run(name string, args map[string]any) (any, error) {
+	return s.runAs(nil, name, args)
+}
+
+// runAs is run with every usage read cut to who's own rows (nil: none).
+func (s *mcpServer) runAs(who *api.UserLogins, name string, args map[string]any) (any, error) {
 	// Validated against the sources this build knows, not a hand-written
 	// list (issue #4). api.querySource keeps the same rule.
 	if source := str(args, "source"); source != "" && !model.KnownSource(source) {
@@ -659,7 +667,7 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		}
 		return s.api.FilterLive(l.Snapshot(), str(args, "account"), str(args, "source")), nil
 	case "quota_history":
-		f, err := s.filter(args)
+		f, err := s.filterAs(who, args)
 		if err != nil {
 			return nil, err
 		}
@@ -730,7 +738,7 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 			all[k] = v
 		}
 		all["account"] = store.AllAccounts
-		return s.usage(all, store.ByAccount)
+		return s.usage(who, all, store.ByAccount)
 
 	case "list_endpoint_accounts":
 		eas, err := s.api.Store.EndpointAccounts(str(args, "account"), intArg(args, "limit"), str(args, "source"))
@@ -744,40 +752,43 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		}, nil
 
 	case "usage_by_endpoint":
-		return s.usage(args, store.ByEndpoint)
+		return s.usage(who, args, store.ByEndpoint)
 	case "usage_by_source":
-		return s.usage(args, store.BySource)
+		return s.usage(who, args, store.BySource)
 	case "usage_by_user":
-		return s.usage(args, store.ByUser)
+		return s.usage(who, args, store.ByUser)
 	case "usage_by_project":
-		return s.usage(args, store.ByProject)
+		return s.usage(who, args, store.ByProject)
 	case "usage_by_session":
-		return s.usage(args, store.BySession)
+		return s.usage(who, args, store.BySession)
 	case "usage_by_model":
-		return s.usage(args, store.ByModel)
+		return s.usage(who, args, store.ByModel)
 	case "usage_by_team":
-		return s.usage(args, store.ByTeam)
+		return s.usage(who, args, store.ByTeam)
 	case "usage_by_branch":
-		return s.usage(args, store.ByBranch)
+		return s.usage(who, args, store.ByBranch)
 	case "usage_by_effort":
-		return s.usage(args, store.ByEffort)
+		return s.usage(who, args, store.ByEffort)
 	case "usage_by_entrypoint":
-		return s.usage(args, store.ByEntrypoint)
+		return s.usage(who, args, store.ByEntrypoint)
 
 	case "get_user":
 		login := str(args, "user")
+		if who != nil {
+			login = who.Login // a user's page is their own, whatever was asked
+		}
 		if login == "" {
 			return nil, fmt.Errorf("user is required: the OS login, as usage_by_user spells it")
 		}
 		start, end := timeRange(args)
-		view, err := s.api.UserPage(login, start, end)
+		view, err := s.api.UserPage(login, who.OwnerOf(), start, end)
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"since": start, "until": end, "user": view}, nil
 
 	case "get_limits_history":
-		f, err := s.filter(args)
+		f, err := s.filterAs(who, args)
 		if err != nil {
 			return nil, err
 		}
@@ -798,7 +809,7 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		return out, nil
 
 	case "usage_history":
-		f, err := s.filter(args)
+		f, err := s.filterAs(who, args)
 		if err != nil {
 			return nil, err
 		}
@@ -837,7 +848,7 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		return hist, nil
 
 	case "usage_summary":
-		f, err := s.filter(args)
+		f, err := s.filterAs(who, args)
 		if err != nil {
 			return nil, err
 		}
@@ -887,7 +898,7 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 		return out, nil
 
 	case "list_sessions":
-		f, err := s.filter(args)
+		f, err := s.filterAs(who, args)
 		if err != nil {
 			return nil, err
 		}
@@ -948,7 +959,7 @@ func (s *mcpServer) run(name string, args map[string]any) (any, error) {
 			}
 			return out, nil
 		}
-		f, err := s.filter(args)
+		f, err := s.filterAs(who, args)
 		if err != nil {
 			return nil, err
 		}
@@ -1011,8 +1022,17 @@ func (s *mcpServer) filter(args map[string]any) (store.Filter, error) {
 	return f.AlignHours(), nil
 }
 
-func (s *mcpServer) usage(args map[string]any, d store.Dimension) (any, error) {
+// filterAs is filter cut to who's own rows (nil: no cut).
+func (s *mcpServer) filterAs(who *api.UserLogins, args map[string]any) (store.Filter, error) {
 	f, err := s.filter(args)
+	if err == nil {
+		who.Apply(&f)
+	}
+	return f, err
+}
+
+func (s *mcpServer) usage(who *api.UserLogins, args map[string]any, d store.Dimension) (any, error) {
+	f, err := s.filterAs(who, args)
 	if err != nil {
 		return nil, err
 	}

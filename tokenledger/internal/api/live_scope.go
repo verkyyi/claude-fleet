@@ -35,17 +35,18 @@ func liveScope(w http.ResponseWriter, r *http.Request) (string, string, bool) {
 // FilterLive recomputes every aggregate after selecting sessions. The ledger
 // counter uses the same account/source scope, never a sum of live heartbeats.
 func (s *Server) FilterLive(in Snapshot, account, source string) Snapshot {
-	return s.FilterLiveFor(in, account, source, "")
+	return s.FilterLiveFor(in, account, source, nil)
 }
 
-// FilterLiveFor is FilterLive cut to one os_user as well — a user's own
-// sessions, with the subscription each draws on left out (claude-fleet#1985).
-// osUser "" is FilterLive.
-func (s *Server) FilterLiveFor(in Snapshot, account, source, osUser string) Snapshot {
+// FilterLiveFor is FilterLive cut to a user's own sessions as well — their
+// (machine, login) pairs', not every login sharing the name (claude-fleet#2514)
+// — with the subscription each draws on left out (claude-fleet#1985). who nil
+// is FilterLive.
+func (s *Server) FilterLiveFor(in Snapshot, account, source string, who *UserLogins) Snapshot {
 	if account == "all" {
 		account = store.AllAccounts
 	}
-	if (account == "" || account == store.AllAccounts) && source == "" && osUser == "" {
+	if (account == "" || account == store.AllAccounts) && source == "" && who == nil {
 		return in
 	}
 	// The three carried fields describe the HUB, not the selection: the active
@@ -68,8 +69,8 @@ func (s *Server) FilterLiveFor(in Snapshot, account, source, osUser string) Snap
 		if account != "" && account != store.AllAccounts && l.Account != account {
 			continue
 		}
-		if osUser != "" {
-			if l.OSUser != osUser {
+		if who != nil {
+			if !who.Owns(l.EndpointID, l.OSUser) {
 				continue
 			}
 			l.Account, l.ProfileID = "", ""
@@ -96,7 +97,7 @@ func (s *Server) FilterLiveFor(in Snapshot, account, source, osUser string) Snap
 	if account == "" {
 		account = store.AllAccounts
 	}
-	key := account + "\x00" + source + "\x00" + osUser
+	key := account + "\x00" + source + "\x00" + who.key()
 	s.sourceCounters.mu.Lock()
 	if s.sourceCounters.values == nil || len(s.sourceCounters.values) > 128 {
 		s.sourceCounters.values = map[string]*Counter{}
@@ -108,7 +109,9 @@ func (s *Server) FilterLiveFor(in Snapshot, account, source, osUser string) Snap
 	}
 	s.sourceCounters.mu.Unlock()
 	turns, tokens, at, err := c.Total(func() (int64, int64, error) {
-		sum, err := s.Store.Summary(store.Filter{Account: account, Source: source, OSUser: osUser, Start: time.Unix(0, 0).UTC(), End: time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)})
+		f := store.Filter{Account: account, Source: source, Start: time.Unix(0, 0).UTC(), End: time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)}
+		who.Apply(&f)
+		sum, err := s.Store.Summary(f)
 		if err != nil {
 			return 0, 0, err
 		}

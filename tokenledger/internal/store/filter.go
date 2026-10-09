@@ -47,6 +47,11 @@ type Filter struct {
 	// the reader can see the size of what the filter dropped. Undeclared is
 	// how that side is asked for directly.
 	Repo string
+
+	// Owner, when set, keeps only one person's rows (claude-fleet#2514): the
+	// (endpoint, login) pairs that report for their (machine, login)
+	// accounts. An Owner with no logins keeps nothing.
+	Owner *Owner
 }
 
 // Prev is the period of the same length that ends where this one starts.
@@ -120,6 +125,11 @@ func (f Filter) where(tsCol string) (string, []any, error) {
 	} else if f.Team != "" {
 		parts = append(parts, "endpoint_id IN (SELECT endpoint_id FROM endpoints WHERE team = ?)")
 		args = append(args, f.Team)
+	}
+	if f.Owner != nil {
+		w, a := f.Owner.where()
+		parts = append(parts, w)
+		args = append(args, a...)
 	}
 	parts = append(parts, tsCol+" >= ?", tsCol+" < ?")
 	args = append(args, fmtTime(f.Start), fmtTime(f.End))

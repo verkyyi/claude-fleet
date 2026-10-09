@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/authz"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // Who is behind a request, for the page header (claude-fleet#1467).
@@ -68,6 +69,12 @@ type Me struct {
 	// theirs: the os_user a user's rows are cut to (claude-fleet#1985).
 	// Empty when none is set.
 	Login string `json:"login,omitempty"`
+	// Logins is who the person is on the machines (claude-fleet#2514): every
+	// (machine, login) pair the hub holds as theirs — what their rows are cut
+	// to. A login name alone is not them; the same name on another machine is
+	// someone else. Absent for the operator's doors and a hub without the
+	// fleet module.
+	Logins []store.LoginPair `json:"logins,omitempty"`
 	// Pages is what the menu shows this role (claude-fleet#1985): a user's
 	// overview, sessions, devices, config; an admin's every page.
 	Pages []string `json:"pages"`
@@ -94,6 +101,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out.Login = login
+		if out.Logins, err = s.loginPairsOf(pid); err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	switch out.Via {
 	case doorGitHub:

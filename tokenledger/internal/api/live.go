@@ -469,11 +469,11 @@ func (s *Server) handleLiveSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	login, _, ok := s.userScope(w, r)
+	who, ok := s.userScope(w, r)
 	if !ok {
 		return
 	}
-	snap := s.FilterLiveFor(s.liveStore().Snapshot(), account, source, login)
+	snap := s.FilterLiveFor(s.liveStore().Snapshot(), account, source, who)
 	snap.Note = liveNoteText.In(localeOf(r))
 	writeJSON(w, http.StatusOK, snap)
 }
@@ -487,7 +487,7 @@ func (s *Server) handleLiveStream(w http.ResponseWriter, r *http.Request) {
 	if !valid {
 		return
 	}
-	login, _, valid := s.userScope(w, r)
+	who, valid := s.userScope(w, r)
 	if !valid {
 		return
 	}
@@ -508,7 +508,7 @@ func (s *Server) handleLiveStream(w http.ResponseWriter, r *http.Request) {
 
 	// Send the current state immediately: a viewer should not wait for the
 	// next agent report to see anything.
-	if b, err := json.Marshal(s.FilterLiveFor(l.Snapshot(), account, source, login)); err == nil {
+	if b, err := json.Marshal(s.FilterLiveFor(l.Snapshot(), account, source, who)); err == nil {
 		fmt.Fprintf(w, "data: %s\n\n", b)
 		flusher.Flush()
 	}
@@ -530,14 +530,14 @@ func (s *Server) handleLiveStream(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(b, &snap) != nil {
 				continue
 			}
-			b, err := json.Marshal(s.FilterLiveFor(snap, account, source, login))
+			b, err := json.Marshal(s.FilterLiveFor(snap, account, source, who))
 			if err != nil {
 				continue
 			}
 			fmt.Fprintf(w, "data: %s\n\n", b)
 			flusher.Flush()
 		case <-beat.C:
-			if b, err := json.Marshal(s.FilterLiveFor(l.Snapshot(), account, source, login)); err == nil {
+			if b, err := json.Marshal(s.FilterLiveFor(l.Snapshot(), account, source, who)); err == nil {
 				fmt.Fprintf(w, "data: %s\n\n", b)
 			}
 			flusher.Flush()

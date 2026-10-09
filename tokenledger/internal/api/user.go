@@ -26,19 +26,19 @@ type UserView struct {
 func (s *Server) handleUserData(w http.ResponseWriter, r *http.Request) {
 	login := r.URL.Query().Get("user")
 	// A user's page is their own (claude-fleet#1985), whatever was asked.
-	own, scoped, ok := s.userScope(w, r)
+	who, ok := s.userScope(w, r)
 	if !ok {
 		return
 	}
-	if scoped {
-		login = own
+	if who != nil {
+		login = who.Login
 	}
 	if login == "" {
 		httpError(w, http.StatusBadRequest, "a user is required: /v1/user?user=<os login>")
 		return
 	}
 	start, end := timeRange(r.URL.Query().Get("since"), r.URL.Query().Get("until"))
-	view, err := s.UserPage(login, start, end)
+	view, err := s.UserPage(login, who.OwnerOf(), start, end)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -56,16 +56,19 @@ func (s *Server) handleUserData(w http.ResponseWriter, r *http.Request) {
 // the second, and building it out of several usage_by_* calls would produce a
 // different answer, because top_projects is scoped to the login rather than
 // filtered from a fleet-wide ranking.
-func (s *Server) UserPage(login string, start, end time.Time) (*UserView, error) {
-	sum, err := s.Store.UserSummary(login, start, end)
+//
+// owner, when set, is the person's own (endpoint, login) pairs: login then only
+// names the page (claude-fleet#2514).
+func (s *Server) UserPage(login string, owner *store.Owner, start, end time.Time) (*UserView, error) {
+	sum, err := s.Store.UserSummary(login, owner, start, end)
 	if err != nil {
 		return nil, err
 	}
-	projects, err := s.Store.UsageByUser(login, store.ByProject, start, end, 12)
+	projects, err := s.Store.UsageByUser(login, owner, store.ByProject, start, end, 12)
 	if err != nil {
 		return nil, err
 	}
-	machines, err := s.Store.UsageByUser(login, store.ByEndpoint, start, end, 20)
+	machines, err := s.Store.UsageByUser(login, owner, store.ByEndpoint, start, end, 20)
 	if err != nil {
 		return nil, err
 	}

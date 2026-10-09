@@ -160,7 +160,7 @@ func (s *Server) handleUserBadge(w http.ResponseWriter, r *http.Request) {
 	d := badgeOptions(r)
 	period, start := badgePeriod(r)
 
-	sum, err := s.Store.UserSummary(login, start, time.Now().UTC())
+	sum, err := s.Store.UserSummary(login, nil, start, time.Now().UTC())
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

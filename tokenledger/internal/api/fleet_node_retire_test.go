@@ -105,6 +105,7 @@ func TestNodeRetire_UserOnlyOwn(t *testing.T) {
 	aliceTok := enroll("alice-new")
 	adminTok := enroll("mini-node")
 	retireNodeRow(t, h.srv, "ep_alice-new", "alicebook.local", aliceLogin)
+	giveAccount(t, h.srv, githubPrincipal(ghAlice.ID), "alicebook.local")
 	retireNodeRow(t, h.srv, "ep_mini-node", "mini.local", "verkyyi")
 
 	for _, id := range []string{"ep_mini-node", "ep_nobody"} {

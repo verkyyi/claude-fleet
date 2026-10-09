@@ -190,13 +190,13 @@ func TestNoCostAggregateCrossesSources(t *testing.T) {
 	checkSplit(t, "HourlyByModel", hourly)
 
 	// The per-user page.
-	us, err := s.UserSummary("verkyyi", f.Start, f.End)
+	us, err := s.UserSummary("verkyyi", nil, f.Start, f.End)
 	if err != nil {
 		t.Fatal(err)
 	}
 	checkSplit(t, "UserSummary", us.Cost)
 
-	ub, err := s.UsageByUser("verkyyi", ByProject, f.Start, f.End, 50)
+	ub, err := s.UsageByUser("verkyyi", nil, ByProject, f.Start, f.End, 50)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,10 +36,10 @@ func TestRunUser_ScopedToLogin(t *testing.T) {
 		}
 	}
 
-	if _, err := s.runUser("alice", "list_accounts", map[string]any{}); err == nil || !strings.Contains(err.Error(), "admin") {
+	if _, err := s.runUser(&api.UserLogins{Login: "alice"}, "list_accounts", map[string]any{}); err == nil || !strings.Contains(err.Error(), "admin") {
 		t.Errorf("list_accounts as a user = %v; want refused", err)
 	}
-	out, err := s.runUser("alice", "list_sessions", map[string]any{"account": "acct-a"})
+	out, err := s.runUser(&api.UserLogins{Login: "alice"}, "list_sessions", map[string]any{"account": "acct-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,13 +47,13 @@ func TestRunUser_ScopedToLogin(t *testing.T) {
 	if len(rows) != 1 || rows[0].OSUser != "alice" || rows[0].AccountUUID != "" {
 		t.Errorf("list_sessions as alice = %+v", rows)
 	}
-	if _, err := s.runUser("alice", "get_session", map[string]any{"session_id": "s-verkyyi"}); err == nil {
+	if _, err := s.runUser(&api.UserLogins{Login: "alice"}, "get_session", map[string]any{"session_id": "s-verkyyi"}); err == nil {
 		t.Error("get_session of someone else's session answered")
 	}
-	if _, err := s.runUser("alice", "get_session", map[string]any{"session_id": "s-alice"}); err != nil {
+	if _, err := s.runUser(&api.UserLogins{Login: "alice"}, "get_session", map[string]any{"session_id": "s-alice"}); err != nil {
 		t.Errorf("get_session of her own: %v", err)
 	}
-	out, err = s.runUser("alice", "usage_summary", map[string]any{})
+	out, err = s.runUser(&api.UserLogins{Login: "alice"}, "usage_summary", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
