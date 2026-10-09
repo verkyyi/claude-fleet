@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -340,5 +341,107 @@ func TestDrillSeesOnlyItsOwn(t *testing.T) {
 	}
 	if h.srv.principalIsAdmin(inv.PersonID) {
 		t.Fatal("a drill person counts as an admin")
+	}
+}
+
+// drillOnFleet (claude-fleet#2549): leastBusyFleet (m4 busy, m5 quiet, m6
+// 维护中, m7 no admin) with a certificate authority, and a drill person whose
+// own computer is the quiet machine m5 — its scan confirmed by its code.
+func drillOnFleet(t *testing.T) (*harness, map[string]*fleetNode, DrillInviteResponse) {
+	t.Helper()
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	nodes := leastBusyFleet(t, h)
+	setHubSetting(t, h.srv, AutoAssignKey, "none")
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	signer, _ := ssh.NewSignerFromKey(priv)
+	h.srv.SSHCA = sshca.New(signer)
+	code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": "m5"})
+	if code != 200 {
+		t.Fatalf("invite: %d %s", code, body)
+	}
+	var inv DrillInviteResponse
+	json.Unmarshal(body, &inv)
+	key, _ := drillKey(t)
+	st := startLogin(t, h, key, nil)
+	if code, body := drillReq(t, h, http.MethodPost, LoginApprovePath, "", approveRequest{Code: st.UserCode, ApproveCode: inv.ApproveCode}); code != 200 {
+		t.Fatalf("approve: %d %s", code, body)
+	}
+	return h, nodes, inv
+}
+
+// A drill person is a newcomer: its own computer is no machine to open a
+// session on, so the scan itself opens its login on the least-busy OTHER
+// machine (never its own — one row per person per machine), the doors say
+// 「正在开」 instead of 「No fleet on any of your machines」, and once it is
+// active the person reads as anyone with a login.
+func TestDrillFirstSessionGetsAMachine(t *testing.T) {
+	h, nodes, inv := drillOnFleet(t)
+	m, op := expectAccountOp(t, nodes["m4"].tnode)
+	if op.Op != control.AccountCreate || op.Login != inv.Login {
+		t.Fatalf("op = %+v; want a create of %s on m4", op, inv.Login)
+	}
+	if got, ok := readMsg(nodes["m5"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("the drill's own computer m5 was sent %+v", got)
+	}
+	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st == nil || st.State != "opening" || st.Machine != "m4" {
+		t.Fatalf("account = %+v; want opening on m4", st)
+	}
+	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
+	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st != nil {
+		t.Fatalf("an active drill still gets account = %+v", st)
+	}
+	// Looking again opens nothing more.
+	if got, ok := readMsg(nodes["m4"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("a second op: %+v", got)
+	}
+}
+
+// The login opened for a drill is a real OS login: the drill does not go
+// before it is removed — DELETE /v1/self answers 202 removing and sends the
+// remove, and only once the machine says removed does the person go. The
+// expiry sweep waits the same way.
+func TestDrillGoesOnlyAfterItsLoginIsRemoved(t *testing.T) {
+	old := drillCloseGiveUp
+	drillCloseGiveUp = 48 * time.Hour // the sweep below runs a day ahead
+	t.Cleanup(func() { drillCloseGiveUp = old })
+	h, nodes, inv := drillOnFleet(t)
+	m, op := expectAccountOp(t, nodes["m4"].tnode)
+	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
+
+	code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
+	if code != http.StatusAccepted || !strings.Contains(string(body), inv.Login+"@m4") {
+		t.Fatalf("self-delete with a login open: %d %s; want 202 naming %s@m4", code, body, inv.Login)
+	}
+	m, op = expectAccountOp(t, nodes["m4"].tnode)
+	if op.Op != control.AccountRemove || op.Login != inv.Login {
+		t.Fatalf("op = %+v; want a remove of %s", op, inv.Login)
+	}
+	h.srv.SweepDrills(time.Now().Add(DrillMaxTTL)) // expired meanwhile: still waits
+	if _, err := h.srv.Store.Principal(inv.PersonID); err != nil {
+		t.Fatal("the drill went before its login was removed")
+	}
+	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "m4", store.AccountRemoved)
+	if code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode}); code != 200 {
+		t.Fatalf("self-delete after the removal: %d %s", code, body)
+	}
+	if _, err := h.srv.Store.Principal(inv.PersonID); err == nil {
+		t.Fatal("still there")
+	}
+}
+
+// No other machine to open one on (a one-machine fleet, the drill's own
+// login hosting its fleet): the doors answer as before — no account at all,
+// never 「nobody gave you a machine」.
+func TestDrillOnlyItsOwnMachineAnswersAsBefore(t *testing.T) {
+	h, inv := drillHarness(t)
+	if st := h.srv.accountStateOf(inv.PersonID, time.Now()); st != nil {
+		t.Fatalf("account = %+v; want none at all", st)
+	}
+	if as, _ := h.srv.Store.FleetAccounts(inv.PersonID); len(as) != 1 {
+		t.Fatalf("accounts = %+v; want only its own", as)
 	}
 }

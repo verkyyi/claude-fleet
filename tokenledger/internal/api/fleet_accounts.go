@@ -139,12 +139,16 @@ func (s *Server) placePrincipal(principal, displayName, actor string) *store.Rek
 		s.adoptMappedLogins(now)
 		return moved
 	}
+	own := s.drillComputer(principal) // never where a drill's login is opened (#2549)
 	hosts := s.autoAssign()
+	for _, h := range own {
+		hosts = dropHost(hosts, h)
+	}
 	if len(hosts) == 0 && s.invitedPrincipal(principal) {
 		// Came in on an invite (claude-fleet#2261): their login is opened
 		// whatever fleet.auto_assign says — on the least-busy machine when
 		// the setting names none.
-		if h := s.leastBusyMachine(now); h != "" {
+		if h := s.leastBusyMachine(now, own...); h != "" {
 			hosts = []string{h}
 		}
 	}
@@ -246,8 +250,8 @@ func (s *Server) preferredLogin(principal, displayName string) string {
 // and a session count it can read — the one with the fewest sessions; a
 // machine whose fleets already host a repo first (a newcomer's first session
 // opens in one), then the lower load per core, then the name. "" when none
-// is fit.
-func (s *Server) leastBusyMachine(now time.Time) string {
+// is fit. A machine skip names is never picked (a drill's own computer).
+func (s *Server) leastBusyMachine(now time.Time, skip ...string) string {
 	snap, err := s.Nodes(now)
 	if err != nil {
 		log.Printf("fleet: least-busy: roster: %v", err)
@@ -262,7 +266,7 @@ func (s *Server) leastBusyMachine(now time.Time) string {
 	var fit []MachineView
 	for _, m := range snap.Machines {
 		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
-			m.Sessions == nil || !admin[strings.ToLower(m.Hostname)] {
+			m.Sessions == nil || !admin[strings.ToLower(m.Hostname)] || hasFold(skip, m.Hostname) {
 			continue
 		}
 		fit = append(fit, m)
@@ -295,6 +299,37 @@ func (s *Server) leastBusyMachine(now time.Time) string {
 		return fa.Hostname < fb.Hostname
 	})
 	return fit[0].Hostname
+}
+
+// drillComputer is the machine a drill person's own computer is on — the
+// bare login `fleet drill invite --host` named (claude-fleet#2549) — while its
+// row still holds that machine: one row per person per machine (PRIMARY KEY
+// (principal_id, hostname)), so the login opened for the drill goes to
+// another. None for anyone else, or once that row is gone.
+func (s *Server) drillComputer(principal string) []string {
+	d, err := s.Store.Drill(principal)
+	if err != nil || d == nil {
+		return nil
+	}
+	accts, err := s.Store.FleetAccounts(principal)
+	if err != nil {
+		return nil
+	}
+	for _, a := range accts {
+		if strings.EqualFold(a.Hostname, d.Hostname) {
+			return []string{d.Hostname}
+		}
+	}
+	return nil
+}
+
+func hasFold(list []string, v string) bool {
+	for _, x := range list {
+		if strings.EqualFold(x, v) {
+			return true
+		}
+	}
+	return false
 }
 
 // takeOverLegacyLogin moves login to the GitHub person principal when the

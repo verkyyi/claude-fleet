@@ -128,10 +128,15 @@ func (s *Server) admitInvite(id int64, login, invite string, now time.Time) (ref
 }
 
 // invitedPrincipal says whether pid came in on an invite: their login is
-// opened whatever fleet.auto_assign says (claude-fleet#2261).
+// opened whatever fleet.auto_assign says (claude-fleet#2261). A drill person
+// is invited too — by `fleet drill invite` (claude-fleet#2549): it walks a
+// newcomer's first time, so its first session needs a machine like theirs.
 func (s *Server) invitedPrincipal(pid string) bool {
 	if s.Store == nil {
 		return false
+	}
+	if d, err := s.Store.Drill(pid); err == nil && d != nil {
+		return true
 	}
 	ok, err := s.Store.InvitedPrincipal(pid)
 	return err == nil && ok

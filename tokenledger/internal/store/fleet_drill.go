@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -84,8 +85,8 @@ func (s *Store) CreateDrill(d DrillPerson) error {
 		return err
 	}
 	if _, err := tx.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, detail, requested_at, updated_at)
-		VALUES (?, ?, ?, ?, 'adopt', 'drill person: the drill''s own login', ?, ?)`,
-		d.PrincipalID, d.Hostname, d.Login, AccountActive, ts, ts); err != nil {
+		VALUES (?, ?, ?, ?, ?, 'drill person: the drill''s own login', ?, ?)`,
+		d.PrincipalID, d.Hostname, d.Login, AccountActive, AccountOpAdopt, ts, ts); err != nil {
 		if isUniqueViolation(err) {
 			return fmt.Errorf("login %q is already someone's on %s", d.Login, d.Hostname)
 		}
@@ -97,6 +98,14 @@ func (s *Store) CreateDrill(d DrillPerson) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// OwnComputer says a is the drill's own computer — the row CreateDrill
+// adopted for the bare login `fleet drill invite` named — never a login the
+// hub opened for it (op create, even on the same machine under the same
+// name; claude-fleet#2549).
+func (d *DrillPerson) OwnComputer(a FleetAccount) bool {
+	return d != nil && a.Op == AccountOpAdopt && strings.EqualFold(a.Hostname, d.Hostname) && a.Login == d.Login
 }
 
 const drillCols = `principal_id, login, hostname, code_hash, created_by, created_at, expires_at, used_at`

@@ -15,7 +15,11 @@
 # --teardown (DELETE /v1/self). It borrows no credential, gets no session pass,
 # sees only its own sessions. Its login is the drill's throwaway OS login on
 # --host (default: this machine), `drill` + up to 11 lowercase letters/digits
-# (default drill<MMDDHHMM>).
+# (default drill<MMDDHHMM>). That login is its COMPUTER, not a machine: like
+# any invited newcomer, its scan has the hub open the same login on the
+# least-busy OTHER machine for its sessions (the client says 「正在为你开机器」),
+# and its self-delete / expiry removes that login before the person goes
+# (claude-fleet#2549).
 #
 # `approve` is the drill's scan (bin/fleet-onboard-drill.sh --invite): it
 # confirms the pending login under USER-CODE (the 验证码 on the QR screen) as

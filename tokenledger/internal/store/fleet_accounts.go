@@ -681,6 +681,10 @@ func (s *Store) LoseAccountOps(endpointID string, at time.Time) error {
 // a connection certificate (the hub's fleetLoginsOf skips it).
 const AccountOpLogin = "login"
 
+// AccountOpAdopt marks a row recorded for a login that already exists on the
+// machine — nothing was run there.
+const AccountOpAdopt = "adopt"
+
 // RecordLoginAccount writes p's system login osUser on hostname as active,
 // bound to the node endpointID its login registered. It never takes a row
 // another person holds (that is an error), never overwrites p's own row there
