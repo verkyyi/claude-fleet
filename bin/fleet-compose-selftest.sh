@@ -87,6 +87,11 @@
 #      the bar says 「正在叫起编排会话…」 meanwhile, and why when it never came
 #      (the write's refusal, else 「等了 N 秒还没出现」); the window's @cc_agent is
 #      the cache row's agent (issue #2619: a Codex orchestrator reads codex)
+#   U. (issue #2721) the orchestrator's window already on the stage: ⌘N
+#      (fleet-shell.sh portal) selects it in bash — no python3 started, under
+#      300 ms (best of 3), `FLEET_TRACE=1` prints each segment; the list's
+#      「新任务」 tap starts portal without waiting on it (it hands its jump back
+#      to that same list, which a wait would hold for the full 3 s)
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass. FCS_KEEP=1 keeps the work dir.
 set -uo pipefail
 # Every session its own row (issue #2675): the batch view folds a flat list into
@@ -706,6 +711,39 @@ has 'T: …on the bar too' "$(tail -1 "$WORK/said")" '编排会话没起来'
 out=$(cd "$SB" && FLEET_ORCH_BOOT_SECS=1 FLEET_HUB_WRITE_CMD="printf '{\"status\": \"accepted\"}\\n'" \
   python3 fleet-compose.py --orch fcs --boot)
 eq 'T: accepted but nothing came → how long it waited' '编排会话没起来：等了 1 秒还没出现' "$out"
+# U. (issue #2721) the hot path: the orchestrator's window is on the stage
+printf 'U/orch%sm4%sonline%sdone%s%s\n' "$US" "$US" "$US" "$US" "$US" > "$FLEET_STATUS_G/orch_fcs"
+ow=$(st_ list-windows -t fcs-stage -F '#{window_id} #{@remote}' | awk '$2 == "m4:U/orch" { print $1; exit }')
+[ -n "$ow" ] || fail 'U: T left the orchestrator'"'"'s window on the stage' "$(st_ list-windows -t fcs-stage -F '#{window_id} #{@remote}')"
+mkdir -p "$WORK/pyshim"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$WORK/py.log" > "$WORK/pyshim/python3"
+chmod +x "$WORK/pyshim/python3"
+: > "$WORK/py.log"; best=99999; trace=''
+for _ in 1 2 3; do
+  st_ select-window -t "$st0"
+  ms=$(python3 -c '
+import subprocess, sys, time
+t = time.monotonic(); p = subprocess.run(sys.argv[1:], capture_output=True, text=True)
+sys.stderr.write(p.stderr); print(int((time.monotonic() - t) * 1000))' \
+    env PATH="$WORK/pyshim:$PATH" FLEET_COMPOSE=0 FLEET_TRACE=1 bash "$SB/fleet-shell.sh" portal fcs 2>"$WORK/trace")
+  [ "$ms" -lt "$best" ] && best=$ms
+  trace=$(cat "$WORK/trace")
+done
+eq 'U: ⌘N → the stage on the orchestrator'"'"'s window' "$ow" "$(st_ display-message -p -t fcs-stage: '#{window_id}')"
+eq 'U: …with no python3 started' '' "$(cat "$WORK/py.log")"
+CHECKS=$((CHECKS + 1)); [ "$best" -lt 300 ] || fail "U: …under 300 ms (best of 3: ${best} ms)" "$trace"
+has 'U: FLEET_TRACE=1 says each segment' "$trace" 'portal: stage_up +'
+has 'U: …and the select' "$trace" 'portal: select +'
+# not on the stage (another orchestrator): python's road, as before
+printf 'U/orch2%sm4%sonline%sdone%s%s\n' "$US" "$US" "$US" "$US" "$US" > "$FLEET_STATUS_G/orch_fcs"
+: > "$WORK/py.log"
+env PATH="$WORK/pyshim:$PATH" FLEET_COMPOSE=0 bash "$SB/fleet-shell.sh" portal fcs >/dev/null 2>&1
+has 'U: no such window → fleet-compose.py --orch' "$(cat "$WORK/py.log")" 'fleet-compose.py --orch fcs --boot'
+rm -f "$FLEET_STATUS_G/orch_fcs"
+# the tap: never waited on (Popen), or the list holds its own jump
+op=$(awk '/^def open_portal/,/^ORCH_SPIN/' "$SB/fleet-sidebar.py")
+has 'U: the 「新任务」 tap starts portal in the background' "$op" 'subprocess.Popen(["bash", str(BIN / "fleet-shell.sh"), "portal"'
+hasnt 'U: …never run() (waited on)' "$op" 'run(["bash"'
 sh_ set-environment -g FLEET_COMPOSE 1
 
 # Q. (pure) the machine and the agent (issue #2232): a sandbox bin/ whose
