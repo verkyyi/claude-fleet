@@ -1679,7 +1679,7 @@ solo)
   SOLO="$SESS-solo-$$"
   SB=$BIN; [ -x "$CACHE/bin/fleet-remote-view.sh" ] && SB="$CACHE/bin"
   OV="$CACHE/tmux-solo.$$.conf"
-  # the bar's two lines — the session's, and the local shell's (⌃\, issue #2566):
+  # the bar's two lines — the session's, and its shell's (⌃\, issues #2566, #2744):
   # each `key words` part with its key bold, as one tmux format (a `\` doubled
   # for the conf's double quotes)
   solo_bar() {
@@ -1693,9 +1693,6 @@ solo)
   }
   bar=$(solo_bar "$(sh "$SB/fleet-ui-lang.sh" t solo_view_bar 2>/dev/null)")
   sbar=$(solo_bar "$(sh "$SB/fleet-ui-lang.sh" t solo_view_bar_shell 2>/dev/null)")
-  # ⌃\'s shell (issue #2566): THIS computer, this login, in $HOME, with the
-  # fleet's own commands on its PATH (a `'` in it would end the conf's quotes)
-  spath="$HOME/.local/bin:$SB:$PATH"; spath=${spath//\'/}
   # FLEET_SOLO_NOTE (issue #2564): one line the view's bar says beside the
   # machine — `fleet claude` going back to a session another device has open
   snote=$(printf '%s' "${FLEET_SOLO_NOTE:-}" | tr -d '#"\n' | cut -c1-80)
@@ -1715,17 +1712,20 @@ set -g status-right-length 120
 set -g pane-border-status off
 bind -n MouseDown1Status if -F '#{==:#{mouse_status_range},bg}' { detach-client }
 bind -n C-d detach-client
-# ⌃\\ (issue #2566, EPIC #2563 共同约定 5): to a shell on THIS computer and back —
-# the view's second window, made on the first press (\`@solo_shell\`), then the
-# two windows in turn; the session's own window and its connection never move.
-# Its \`exit\` closes it, and the next press makes a new one.
-bind -n 'C-\\' if -F '#{W:#{?#{@solo_shell},1,}}' { last-window } { new-window -n 本机shell -c '$HOME' -e 'PATH=$spath' ; set-window-option @solo_shell 1 }
-# the client's prefix, with TWO keys: d, to the background as everywhere, and
-# \\ — ⌃\\ for a keyboard that has no ⌃\\ (an iPad's Blink)
+# ⌃\\ (issue #2566; #2744): to THIS SESSION's shell and back — a login shell of
+# its machine, as its login, in its working directory (fleet-remote-view.sh
+# shell-open: the session window's \`@remote\`), the view's second window
+# (\`@solo_shell\`), then the two in turn; the session's own window and its
+# connection never move. Its \`exit\` closes it, and the next press opens a new one.
+bind -n 'C-\\' if -F '#{@solo_shell}' { last-window } { run-shell -b "bash $(sq "$SB/fleet-remote-view.sh") shell-open $SESS >/dev/null 2>&1 || :" }
+# the client's prefix, with THREE keys: d, to the background as everywhere;
+# \\ — ⌃\\ for a keyboard that has no ⌃\\ (an iPad's Blink); and ! — THIS
+# computer's shell in \$HOME (#2566's ⌃\\)
 set -g prefix $PREFIX
 unbind -a -T prefix
 bind d detach-client
-bind '\\' if -F '#{W:#{?#{@solo_shell},1,}}' { last-window } { new-window -n 本机shell -c '$HOME' -e 'PATH=$spath' ; set-window-option @solo_shell 1 }
+bind '\\' if -F '#{@solo_shell}' { last-window } { run-shell -b "bash $(sq "$SB/fleet-remote-view.sh") shell-open $SESS >/dev/null 2>&1 || :" }
+bind '!' run-shell -b "bash $(sq "$SB/fleet-remote-view.sh") shell-open --local >/dev/null 2>&1 || :"
 EOF
   } > "$OV" || { note "写不了 $OV"; exit 1; }
   sw=$(tmux -L "$SOLO" -f "$OV" new-session -d -P -F '#{window_id}' -s "$SOLO" -n "$snode" -c "$HOME" \

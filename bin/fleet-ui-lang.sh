@@ -733,8 +733,8 @@ fleet_ui_t() {
     zh:solo_resume)             printf 'fleet 可以恢复。' ;;
     en:solo_resume)             printf 'Type fleet to resume it.' ;;
     # `fleet claude` / `fleet codex`'s own one-session view (issue #2349): its bar and its last words
-    zh:solo_view_bar)           printf '⌃\\ 本机 shell · ⌃D 放到后台 · /exit 结束会话' ;;
-    en:solo_view_bar)           printf '⌃\\ local shell · ⌃D to the background · /exit ends the session' ;;
+    zh:solo_view_bar)           printf '⌃\\ 会话 shell · ⌃D 放到后台 · /exit 结束会话' ;;
+    en:solo_view_bar)           printf '⌃\\ session shell · ⌃D to the background · /exit ends the session' ;;
     zh:solo_view_bar_shell)     printf '⌃\\ 回到会话 · ⌃D 放到后台' ;;
     en:solo_view_bar_shell)     printf '⌃\\ back to the session · ⌃D to the background' ;;
     zh:solo_view_left_fmt)      printf '会话在后台继续（%s）。`fleet` 可以找回。' "${1:-}" ;;
@@ -1125,8 +1125,10 @@ stewardpage	j	steward page — the steward page of the day, in your own browser:
     en:keys_prefix_09)         printf %s 'zoom the session pane — the SESSION, never the list' ;;
     zh:keys_prefix_10)         printf %s '查看会话滚屏（tmux copy-mode）' ;;
     en:keys_prefix_10)         printf %s 'scroll back the session (tmux copy-mode)' ;;
-    zh:keys_prefix_solo_shell) printf %s '单会话视图：本机 shell ⇄ 会话（同 ⌃\，给没有 ⌃\ 的键盘）' ;;
-    en:keys_prefix_solo_shell) printf %s 'one-session view: local shell ⇄ the session (as ⌃\, for a keyboard without it)' ;;
+    zh:keys_prefix_solo_shell) printf %s '单会话视图：会话所在机器的 shell（它的工作目录）⇄ 会话（同 ⌃\，给没有 ⌃\ 的键盘）' ;;
+    en:keys_prefix_solo_shell) printf %s 'one-session view: the session'"'"'s machine shell, in its directory ⇄ the session (as ⌃\, for a keyboard without it)' ;;
+    zh:keys_prefix_solo_local) printf %s '单会话视图：本机 shell（家目录）⇄ 会话' ;;
+    en:keys_prefix_solo_local) printf %s 'one-session view: this computer'"'"'s shell, in the home directory ⇄ the session' ;;
     zh:keys_prefix_14)         printf %s '无前缀：缩放右侧会话窗格（本机窗格，按键不会传到远端）' ;;
     en:keys_prefix_14)         printf %s '(no prefix) zoom the session pane on the right — this computer'"'"'s pane; the key never reaches the far end' ;;
     zh:keys_prefix_15)         printf %s '在 shell 叫回上手向导，从上次进度继续' ;;

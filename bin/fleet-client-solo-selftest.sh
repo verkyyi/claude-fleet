@@ -35,10 +35,11 @@
 #      client attached beside it: `fleet claude` → /exit leaves its screen, its
 #      client, its server options (layout, bar), its lease, its where, its
 #      switch history and fleet.conf byte for byte.
-#      D5 ⌃\ (issue #2566) → a shell on this computer, this login in $HOME with
-#      the fleet's commands on its PATH; ⌃\ again → the same session pane, its
-#      proxy never saw the key; prefix \ the same; ⌃D from the shell → the
-#      background. B does the same in the client's `solo` layout.
+#      D5 ⌃\ (issues #2566, #2744) → the SESSION's shell: its machine (ssh →
+#      shell-here), its worktree; ⌃\ again → the same session pane, its proxy
+#      never saw the key; prefix \ the same shell; prefix ! → this computer's,
+#      this login in $HOME with the fleet's commands on its PATH; ⌃D from the
+#      shell → the background. B does the same in the client's `solo` layout.
 #      D6 接回 (issue #2564, EPIC #2563 C1): `fleet claude` with a current home
 #      session — the hub's `RESUME m5 F/w1` (fleet-shell.sh home-session stubbed:
 #      the line, its result file with also_open) — opens THAT session in its own
@@ -234,8 +235,18 @@ try:
     # the list's own state dir: with no rows here it would write an empty record
     # over the one the stage's top line reads (the real list writes the row in view)
     (work / 'liststate').mkdir()
+    # ⌃\'s far end (issue #2744): an `ssh` that lands in the session's worktree
+    # and logs what it was asked to run there
+    far_wt = work / 'far-wt'
+    far_wt.mkdir()
+    far_ssh = work / 'far-ssh'
+    far_ssh.write_text('#!/bin/sh\ncase " $* " in *" -O "*) exit 0 ;; esac\n'
+                       'printf "%%s\\n" "$*" >> %s\ncd %s && printf "cwd=%%s\\n" "$(pwd -P)" >> %s && exec /bin/sh\n'
+                       % (shlex.quote(str(work / 'far-ssh.log')), shlex.quote(str(far_wt)), shlex.quote(str(work / 'far-ssh.log'))))
+    far_ssh.chmod(0o755)
     for k, v in (('FLEET_SHELL', '1'), ('FLEET_SWITCH_STATE', str(work / 'liststate')), ('PATH', env['PATH']),
-                 ('FLEET_SHELL_STAGE', 'fc-stage'), ('TMPDIR', str(work)), ('FLEET_UI_LANG', 'zh')):
+                 ('FLEET_SHELL_STAGE', 'fc-stage'), ('TMPDIR', str(work)), ('FLEET_UI_LANG', 'zh'),
+                 ('FLEET_REMOTE_SSH_CMD', str(far_ssh))):
         tm('set-environment', '-g', k, v)
     tm('set-option', '-w', '-t', 'fc:home', '@shell_frame', '1')
     (work / 's.conf').write_text(fill('tmux-shell.conf'))
@@ -277,33 +288,48 @@ try:
     check(tm('display-message', '-p', '-t', 'fc:home', '#{window_zoomed_flag}') == '1', 'solo: not zoomed')
     print('B: solo — the session and one line:\n    %r' % rows[-1].strip())
 
-    # ⌃\ (issue #2566): to a shell on this computer — a window of the client's
-    # own, as this login in $HOME — and ⌃\ again back to the session: its pane,
-    # its stage window and its `cat` exactly where they were (a ⌃\ reaching it
-    # would SIGQUIT it); prefix \ the same
+    # ⌃\ (issue #2566; #2744): to THIS SESSION's shell — a window of the
+    # client's own, `@solo_shell <node>:<wid>`, whose program reaches the
+    # session's machine (the far-end ssh above) and sits in its worktree — and ⌃\
+    # again back to the session: its pane, its stage window and its `cat` exactly
+    # where they were (a ⌃\ reaching it would SIGQUIT it); prefix \ the same
+    # shell again, never a second; prefix ! this computer's, as this login in $HOME
     stage_at = tm('display-message', '-p', '-t', 'fc-stage:', '#{window_id} #{pane_id} #{pane_pid}', s=stage)
     home_pane = tm('display-message', '-p', '-t', 'fc:home', '#{pane_id}')
 
     def here():
         return tm('display-message', '-p', '-t', 'fc:', '#{window_name}|#{@solo_shell}|#{pane_id}|#{pane_current_path}')
     subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-\\'])
-    check(wait(lambda: here().split('|')[1] == '1'), 'solo ⌃\\: not on a shell window: %r' % here())
+    far_log = work / 'far-ssh.log'
+    in_wt = lambda: far_log.exists() and 'cwd=%s' % os.path.realpath(str(far_wt)) in far_log.read_text()
+    check(wait(lambda: here().split('|')[1] == 'm5:fleet/abc' and in_wt()),
+          'solo ⌃\\: not the session\'s shell in its worktree: %r\n%s' % (here(), tm('capture-pane', '-p', '-t', 'fc:')))
     name, _, sh_pane, cwd = here().split('|')
-    check(name == '本机shell' and os.path.realpath(cwd) == os.path.realpath(str(work)),
-          'solo ⌃\\: the shell is not this login\'s, in $HOME: %r' % here())
+    check(name.startswith('shell · ') and name.endswith(' @m5'), 'solo ⌃\\: the shell window\'s title: %r' % name)
+    check("fleet-remote-view.sh shell-here 'fleet/abc'" in (work / 'far-ssh.log').read_text(),
+          'solo ⌃\\: not shell-here on the session\'s machine: %r' % (work / 'far-ssh.log').read_text())
     check(wait(lambda: '⌃\\ 回到会话' in screen().split('\n')[-1]), 'solo ⌃\\: the bar: %r' % screen().split('\n')[-1])
     subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-\\'])
     check(wait(lambda: here().split('|')[0] == 'home'), 'solo ⌃\\ again: not back on the session: %r' % here())
     check(here().split('|')[2] == home_pane, 'solo ⌃\\: the session pane changed')
-    check(wait(lambda: solo_drawn() and '⌃\\ 本机 shell' in screen().split('\n')[-1]),
+    check(wait(lambda: solo_drawn() and '⌃\\ 会话 shell' in screen().split('\n')[-1]),
           'solo ⌃\\ back: the screen:\n%s' % screen())
     subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-b', '\\'])
     check(wait(lambda: here().split('|')[2] == sh_pane), 'solo prefix \\: not the same shell again: %r' % here())
     subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-b', '\\'])
     check(wait(lambda: here().split('|')[0] == 'home'), 'solo prefix \\ again: not back: %r' % here())
+    check(len([l for l in tm('list-windows', '-F', '#{@solo_shell}').split('\n') if l]) == 1,
+          'solo ⌃\\: a second shell window for the one session')
+    subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-b', '!'])
+    check(wait(lambda: here().split('|')[1] == 'local'), 'solo prefix !: not this computer\'s shell: %r' % here())
+    check(here().split('|')[0] == '本机shell' and os.path.realpath(here().split('|')[3]) == os.path.realpath(str(work)),
+          'solo prefix !: not this login\'s, in $HOME: %r' % here())
+    subprocess.run([real_tmux, '-S', term, 'send-keys', '-t', 'term:', 'C-\\'])
+    check(wait(lambda: here().split('|')[0] == 'home'), 'solo ⌃\\ from prefix !\'s shell: not back: %r' % here())
     check(tm('display-message', '-p', '-t', 'fc-stage:', '#{window_id} #{pane_id} #{pane_pid}', s=stage) == stage_at,
           'solo ⌃\\: the session moved or saw the key')
-    print('B: ⌃\\ → the shell (%s) → ⌃\\ → the session, its pane untouched; prefix \\ the same' % cwd)
+    cwd = os.path.realpath(str(far_wt))
+    print('B: ⌃\\ → the session\'s shell (%s) → ⌃\\ → the session, its pane untouched; prefix \\ the same; prefix ! here' % cwd)
 
     # ⌃D: the client goes, the session stays and never saw it
     before = tm('display-message', '-p', '-t', 'fc-stage:', '#{window_id} #{@remote}', s=stage)
@@ -423,8 +449,12 @@ for source in real_bin.iterdir():
 # the session on its machine: a proxy that says which one it shows, then reads its
 # keys (a ⌃D reaching it would end the `cat` and leave the eof file)
 eof = work / 'eof'
+# — its `run`; every other mode (⌃\'s shell-open / shell, issue #2744) is the real one's
+(cache / 'bin' / 'fleet-remote-view.real.sh').symlink_to(real_bin / 'fleet-remote-view.sh')
 (cache / 'bin' / 'fleet-remote-view.sh').write_text(
-    '#!/bin/bash\nprintf "REMOTE-SESSION %%s %%s\\n" "$3" "$4"\ncat >/dev/null\necho eof > %s\n' % shlex.quote(str(eof)))
+    '#!/bin/bash\n[ "$1" = run ] || exec bash %s "$@"\n'
+    'printf "REMOTE-SESSION %%s %%s\\n" "$3" "$4"\ncat >/dev/null\necho eof > %s\n'
+    % (shlex.quote(str(cache / 'bin' / 'fleet-remote-view.real.sh')), shlex.quote(str(eof))))
 (cache / 'bin' / 'fleet-remote-view.sh').chmod(0o755)
 stage_conf = (real_bin.parent / 'conf' / 'tmux-shell-stage.conf').read_text() \
     .replace('__BIN__', str(cache / 'bin')).replace('__SESS__', 'fc').replace('__STAGE__', 'fc-stage')
@@ -443,8 +473,17 @@ shim.mkdir()
     '#!/bin/sh\nif [ "$1" = -L ]; then l=$2; shift 2; exec %s -S %s/"$l" "$@"; fi\nexec %s "$@"\n'
     % (shlex.quote(real_tmux), shlex.quote(str(socks)), shlex.quote(real_tmux)))
 (shim / 'tmux').chmod(0o755)
+# ⌃\'s far end (issue #2744): an `ssh` that lands in the session's worktree
+far_wt = work / 'far-wt'
+far_wt.mkdir()
+far_ssh = work / 'far-ssh'
+far_ssh.write_text('#!/bin/sh\ncase " $* " in *" -O "*) exit 0 ;; esac\n'
+                   'printf "%%s\\n" "$*" >> %s\ncd %s && printf "cwd=%%s\\n" "$(pwd -P)" >> %s && exec /bin/sh\n'
+                   % (shlex.quote(str(work / 'far-ssh.log')), shlex.quote(str(far_wt)), shlex.quote(str(work / 'far-ssh.log'))))
+far_ssh.chmod(0o755)
 env = dict(os.environ, HOME=str(work), TERM='xterm-256color', FLEET_UI_LANG='zh', FLEET_CONF_DIR=str(conf_dir), SHELL='/bin/sh',
-           FLEET_SHELL_CACHE=str(cache), FLEET_SOLO_WATCH_EVERY='0.2', PATH=str(shim) + os.pathsep + os.environ['PATH'])
+           FLEET_SHELL_CACHE=str(cache), FLEET_SOLO_WATCH_EVERY='0.2', PATH=str(shim) + os.pathsep + os.environ['PATH'],
+           FLEET_REMOTE_SSH_CMD=str(far_ssh))
 for k in ('TMUX', 'TMUX_PANE', 'FLEET_CLIENT_LAYOUT', 'FLEET_SHELL_SESSION'):
     env.pop(k, None)
 checks = 0
@@ -587,15 +626,17 @@ try:
     tm('kill-server', s=reg)
     print('D4: a regular client beside it — screen, client, lease, where, layout, switch history untouched')
 
-    # D5. ⌃\ (issue #2566): to a shell on THIS computer — the view's second
-    # window, this login in $HOME with the fleet's commands on its PATH — and ⌃\
-    # again back: the session's window and pane where they were, its proxy never
-    # saw the key (a ⌃\ reaching it would SIGQUIT the view away); prefix \ the
-    # same; ⌃D from the shell still leaves the view to the background
+    # D5. ⌃\ (issue #2566; #2744): to THIS SESSION's shell — the view's second
+    # window, `@solo_shell m5:F/w1`, its program on the session's machine (the
+    # far-end ssh above) in its worktree — and ⌃\ again back: the session's window
+    # and pane where they were, its proxy never saw the key (a ⌃\ reaching it
+    # would SIGQUIT the view away); prefix \ the same shell; prefix ! this
+    # computer's, this login in $HOME with the fleet's commands on its PATH; ⌃D
+    # from a shell still leaves the view to the background
     rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fworking\n')
     terminal()
     check(wait(drawn, 10), 'D5: not the one-session screen:\n%s' % screen())
-    check('⌃\\ 本机 shell' in screen().split('\n')[-1], 'D5: no ⌃\\ on the bar: %r' % screen().split('\n')[-1])
+    check('⌃\\ 会话 shell' in screen().split('\n')[-1], 'D5: no ⌃\\ on the bar: %r' % screen().split('\n')[-1])
     view = str(solos()[0])
     vname = os.path.basename(view)
 
@@ -604,16 +645,13 @@ try:
                   '#{window_id}|#{@solo_shell}|#{pane_id}|#{pane_current_path}', s=view).stdout.strip()
     sess_win, _, sess_pane, _ = at().split('|')
     tm('send-keys', '-t', 'term:', 'C-\\', s=term)
-    check(wait(lambda: at().split('|')[1] == '1'), 'D5: ⌃\\ did not open the shell: %r' % at())
+    far_log = work / 'far-ssh.log'
+    in_wt = lambda: far_log.exists() and 'cwd=%s' % os.path.realpath(str(far_wt)) in far_log.read_text()
+    check(wait(lambda: at().split('|')[1] == 'm5:F/w1' and in_wt()),
+          'D5: ⌃\\ did not open the session\'s shell in its worktree: %r' % at())
     sh_win, _, sh_pane, cwd = at().split('|')
-    check(os.path.realpath(cwd) == os.path.realpath(str(work)), 'D5: the shell is not in $HOME: %r' % cwd)
-    tm('send-keys', '-t', sh_pane, '-l', 'echo "$PATH" > %s' % shlex.quote(str(work / 'shell-path')), s=view)
-    tm('send-keys', '-t', sh_pane, 'Enter', s=view)
-    check(wait(lambda: (work / 'shell-path').exists() and (work / 'shell-path').read_text().strip() != ''),
-          'D5: the shell did not run a command')
-    spath = (work / 'shell-path').read_text()
-    check(str(work / '.local' / 'bin') in spath and str(cache / 'bin') in spath,
-          'D5: no fleet on the shell\'s PATH: %r' % spath)
+    check("fleet-remote-view.sh shell-here 'F/w1'" in (work / 'far-ssh.log').read_text(),
+          'D5: not shell-here on the session\'s machine: %r' % (work / 'far-ssh.log').read_text())
     check(wait(lambda: '⌃\\ 回到会话' in screen().split('\n')[-1]), 'D5: the shell\'s bar: %r' % screen().split('\n')[-1])
     tm('send-keys', '-t', 'term:', 'C-\\', s=term)
     check(wait(lambda: at().split('|')[0] == sess_win), 'D5: ⌃\\ again did not come back: %r' % at())
@@ -622,13 +660,27 @@ try:
     check(wait(lambda: at().split('|')[2] == sh_pane), 'D5: prefix \\ is not the same shell: %r' % at())
     tm('send-keys', '-t', 'term:', 'C-b', '\\', s=term)
     check(wait(lambda: at().split('|')[2] == sess_pane), 'D5: prefix \\ again did not come back: %r' % at())
+    tm('send-keys', '-t', 'term:', 'C-b', '!', s=term)
+    check(wait(lambda: at().split('|')[1] == 'local'), 'D5: prefix ! did not open this computer\'s shell: %r' % at())
+    loc_pane, loc_cwd = at().split('|')[2], at().split('|')[3]
+    check(os.path.realpath(loc_cwd) == os.path.realpath(str(work)), 'D5: prefix !\'s shell is not in $HOME: %r' % loc_cwd)
+    tm('send-keys', '-t', loc_pane, '-l', 'echo "$PATH" > %s' % shlex.quote(str(work / 'shell-path')), s=view)
+    tm('send-keys', '-t', loc_pane, 'Enter', s=view)
+    check(wait(lambda: (work / 'shell-path').exists() and (work / 'shell-path').read_text().strip() != ''),
+          'D5: the shell did not run a command')
+    spath = (work / 'shell-path').read_text()
+    check(str(work / '.local' / 'bin') in spath and str(cache / 'bin') in spath,
+          'D5: no fleet on the shell\'s PATH: %r' % spath)
+    tm('send-keys', '-t', 'term:', 'C-\\', s=term)
+    check(wait(lambda: at().split('|')[2] == sess_pane), 'D5: ⌃\\ from prefix !\'s shell did not come back: %r' % at())
     check(not eof.exists(), 'D5: ⌃\\ reached the session')
     tm('send-keys', '-t', 'term:', 'C-\\', s=term)
-    check(wait(lambda: at().split('|')[1] == '1'), 'D5: not on the shell for ⌃D')
+    check(wait(lambda: at().split('|')[1] == 'm5:F/w1'), 'D5: not on the shell for ⌃D')
     tm('send-keys', '-t', 'term:', 'C-d', s=term)
     check(wait(lambda: 'PROMPT' in screen()), 'D5: ⌃D from the shell did not leave the view:\n%s' % screen())
     check('会话在后台继续（m5）。`fleet` 可以找回。' in screen() and not eof.exists(), 'D5: the last line: %r' % screen())
-    print('D5: ⌃\\ → a shell in %s → ⌃\\ → the same session pane; prefix \\ the same; ⌃D → the background' % cwd)
+    cwd = os.path.realpath(str(far_wt))
+    print('D5: ⌃\\ → the session\'s shell in %s → ⌃\\ → the same session pane; prefix \\ the same; prefix ! here; ⌃D → the background' % cwd)
 
     # D6. 接回 (issue #2564): the hub says the person's current home session is
     # F/w1 on m5 — `fleet claude` goes back to it in its own view
