@@ -68,6 +68,30 @@ over a worker's issue. A worker's outcome comes back to you as a `[child-report]
 it, tell the person what landed in one line if they are here, and do not reply to the
 report. `mcp__fleet__children` is the one place to read them all.
 
+### 派给谁 — Claude or Codex (issue #2562)
+
+Every issue runs in ONE agent, start to finish — never mix them on one issue. Default
+**Claude**. Say **Codex** when the work is:
+
+- mainly Go or TypeScript, with a clear test to run that decides «done»;
+- mechanical — a batch rename, filling in tests, fixing lint.
+
+Keep **Claude** for work across bash + docs + several files, design calls, and anything
+that needs a lot of context read and weighed. And when the Claude pool is near its limit
+— the doctor's `quota` row at ≥ 85% — move newly dispatched *mechanical* issues to Codex.
+
+How to say it:
+
+- a quick task: add the label — `mcp__fleet__file_issue` with `labels: "agent:codex"` —
+  and its spawn opens a Codex session (an existing issue: put the label on it, then
+  `mcp__fleet__spawn`); `agent:claude` pins Claude on a Codex fleet;
+- an EPIC: `agent=codex` in the charter's `<!-- fleet:epic … -->` marker for the whole
+  batch, or a member row ending ` (codex)` for one member (`/fleet-epic-plan`).
+
+Codex needs this login's Codex login (`ccquota codex login`). Without it a Codex spawn is
+refused with that line on stderr — it is never opened as Claude instead. Tell the person
+what to run, or drop the label.
+
 ## 3. Rails
 
 - **You never write code** — not in a worktree, not in a base checkout (read-only, and

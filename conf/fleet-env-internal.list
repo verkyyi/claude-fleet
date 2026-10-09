@@ -160,6 +160,8 @@ FLEET_CLEANUP_LEASE_TTL            knob: internal pacing/limit, safe in-code def
 FLEET_CODEX_ACCOUNT                handoff: the codex account a launch was assigned
 FLEET_CODEX_MANAGED                handoff: marks a codex launch as fleet-managed
 FLEET_CODEX_PROFILE                handoff: an explicit codex profile for this launch
+FLEET_CODEX_READY_CHECK            knob: 0 skips the Codex-login check before a Codex spawn (fleet-lib.sh fleet_codex_ready, #2562)
+FLEET_CODEX_READY_CMD              seam: prints `ccquota codex list` instead of running it (fleet_codex_ready, #2562)
 FLEET_COLLECT_QUOTAWATCH           knob: auto|never — whether the collector runs the quotawatch phase inline
 FLEET_COMPACT_SEND_GRACE           knob: seconds fleet-compact-send.sh waits for the Stop hook to return before its idle check (2)
 FLEET_COMPACT_RESUME_GRACE         knob: seconds fleet-compact-resume.sh waits after the restore before its idle check (3)

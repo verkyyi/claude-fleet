@@ -95,7 +95,7 @@ run_spawn() { # $@ = args to dash-issue-session.sh
   # covers the dedup.
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
-  FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" \
+  FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CHECK=0 \
     "$SPAWN" "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }
 # The seed is written to $TMPDIR/.claude-dash/fleets/<slug>/task_issue-<N>.txt.
