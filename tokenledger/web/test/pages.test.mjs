@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import {
   dayKeys, dayTokens, stack, delta, bars, areaChart, niceMax,
   sessionRows, counts, filterRows, running, attention, stateOf,
-  activeDevices, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf,
+  activeDevices, deviceHistory, looksLikeKey, bundleItems, parseImport, quotaTable, quotaState, myMachines, takesOf,
 } from '../dist/lib/pages.js';
 import { useLocale } from '../dist/lib/i18n.js';
 import { en } from '../dist/lib/i18n/en.js';
@@ -116,6 +116,26 @@ test('devices: active ones, and the hand-issue key check', () => {
   assert.ok(looksLikeKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc you@laptop'));
   assert.ok(!looksLikeKey('hello'));
   assert.ok(!looksLikeKey(''));
+});
+
+// The Devices page folds the viewer's own history under the table
+// (claude-fleet#2520): /v1/fleet/devices' audit, each row named by its device.
+test('deviceHistory: past devices and the certificate audit, named', () => {
+  const h = deviceHistory({
+    devices: [{ fingerprint: 'SHA256:new', name: 'mbp-2026' }, { fingerprint: 'SHA256:old', name: 'mbp-2023', revoked_at: '2026-09-01T00:00:00Z' }],
+    audit: [
+      { at: '2026-10-01T00:00:00Z', action: 'renew', fingerprint: 'SHA256:new', actor: 'device' },
+      { at: '2026-09-01T00:00:00Z', action: 'revoke', fingerprint: 'SHA256:old', actor: 'gh:1' },
+      { at: '2026-08-01T00:00:00Z', action: 'renew_refused', fingerprint: 'SHA256:gone', detail: 'idle' },
+    ],
+  });
+  assert.deepEqual(h.past.map((d) => d.name), ['mbp-2023']);
+  assert.deepEqual(h.events.map((e) => [e.action, e.device, e.bad]), [['renew', 'mbp-2026', false], ['revoke', 'mbp-2023', true], ['renew_refused', '', true]]);
+  assert.deepEqual(deviceHistory(undefined), { past: [], events: [] });
+  const con = readFileSync(new URL('../dist/connect.js', import.meta.url), 'utf8');
+  assert.match(con, /devicesPanel\(devs\.value, false\) \+ historyPanel\(devs\.value\)/, 'Devices & SSH draws the history fold under its table');
+  const dev = readFileSync(new URL('../dist/lib/devices-view.js', import.meta.url), 'utf8');
+  assert.match(dev, /<details class="panel fold" id="devhistory">/, 'the history is folded');
 });
 
 test('a bundle lists one row per server, hook, skill and setting', () => {

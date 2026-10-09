@@ -2,9 +2,10 @@
 // pages (claude-fleet#2515): Devices & SSH (/connect) lists the viewer's own,
 // an admin's included; All devices (/admin/devices) lists every person's with
 // an Owner column. Revoke is the same button on both: a person revokes their
-// own, an admin any.
+// own, an admin any. Under the table, a folded history (claude-fleet#2520):
+// the devices no longer usable and every registration, renewal and revoke.
 import { esc, ic, relTime } from './shell.js';
-import { activeDevices } from './pages.js';
+import { activeDevices, deviceHistory, DEVICE_EVENTS } from './pages.js';
 import { t, fmtDate } from './i18n.js';
 
 const day = (iso) => fmtDate(iso, undefined, false);
@@ -23,6 +24,24 @@ export function devicesPanel(devs, all) {
     : `<tr><td colspan="${cols}"><div class="empty">${ic('key')}<b>${esc(t('ui.dev.none'))}</b><span>${t('ui.dev.noneSub', { cmd: '<code>fleet login</code>' })}</span></div></td></tr>`;
   return `<div class="panel"><div class="panel-h"><h3>${esc(t(a ? 'ui.dev.all' : 'ui.dev.mine'))}</h3><span class="sub">${esc(t('ui.dev.active', { n: activeDevices(list).length }))}</span></div>` +
     `<div class="tw"><table class="t"><thead><tr><th>${esc(t('ui.col.device'))}</th>${a ? `<th>${esc(t('ui.col.owner'))}</th>` : ''}<th>${esc(t('ui.col.registered'))}</th><th>${esc(t('ui.col.lastUsed'))}</th><th>${esc(t('ui.col.lastMachine'))}</th><th class="r">${esc(t('ui.col.renewals'))}</th><th>${esc(t('ui.col.status'))}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
+/** historyPanel folds the viewer's device history out of /v1/fleet/devices:
+ *  past devices and the certificate audit (issued, renewed, refused,
+ *  revoked). Nothing to show ⇒ nothing drawn. */
+export function historyPanel(devs) {
+  const h = deviceHistory(devs);
+  if (!h.past.length && !h.events.length) return '';
+  const name = (d) => esc(d.name || t('ui.dev.device'));
+  const past = h.past.length
+    ? `<p style="font-size:13px;color:var(--muted);margin:0 0 10px">${esc(t('ui.dev.pastList'))} ${h.past.map((d) => `<b style="font-weight:500">${name(d)}</b> <span class="mono">(${esc(day(d.registered_at))} – ${esc(day(d.revoked_at))})</span>`).join(' · ')}</p>`
+    : '';
+  const rows = h.events.map((e) => `<tr><td class="mono">${esc(fmtDate(e.at))}</td>` +
+    `<td><span class="chip${e.bad ? ' bad' : ''}">${esc(DEVICE_EVENTS.includes(e.action) ? t('ui.dev.ev.' + e.action) : e.action)}</span></td>` +
+    `<td>${esc(e.device || '—')}<br><span class="repo mono">${esc(e.fingerprint)}</span></td><td class="mono">${esc(e.actor || '—')}</td><td>${esc(e.detail || '')}</td></tr>`).join('');
+  return `<details class="panel fold" id="devhistory"><summary class="panel-h"><h3>${esc(t('ui.dev.history'))}</h3><span class="sub">${esc(t('ui.dev.historySub', { d: h.past.length, n: h.events.length }))}</span></summary><div class="panel-b">${past}` +
+    (rows ? `<div class="tw"><table class="t"><thead><tr><th>${esc(t('ui.col.when'))}</th><th>${esc(t('ui.col.event'))}</th><th>${esc(t('ui.col.device'))}</th><th>${esc(t('ui.col.by'))}</th><th>${esc(t('ui.col.detail'))}</th></tr></thead><tbody>${rows}</tbody></table></div>` : '') +
+    '</div></details>';
 }
 
 /** wireRevoke binds the panel's revoke buttons on ctx.el. */

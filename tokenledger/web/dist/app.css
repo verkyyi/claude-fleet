@@ -243,6 +243,11 @@ pre.out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/
 .big-ic.ok { background: var(--ok-soft); color: var(--ok); }
 .big-ic.bad { background: var(--bad-soft); color: var(--bad); }
 .subcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; }
+.fold > summary { cursor: pointer; list-style: none; }
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary h3::before { content: '▸'; display: inline-block; width: 1em; color: var(--muted); }
+.fold[open] > summary h3::before { content: '▾'; }
+.fold:not([open]) > summary { border-bottom: 0; }
 .unmanaged { margin-top: 16px; }
 .unmanaged > summary { cursor: pointer; list-style: revert; }
 .unmanaged[open] > summary { margin-bottom: 8px; }
