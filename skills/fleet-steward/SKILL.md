@@ -26,7 +26,9 @@ the person's clock), reads the fleet with NO model, and only when something need
 | `fleet-steward-tick.sh card` | the last beat's report card |
 | `fleet-steward-tick.sh delta` | read the fleet now (no writes) — JSON |
 | `fleet-steward-tick.sh answer --row <id> --text T --source URL` | answer one row on its worker's issue (`--to-worker`, marker `fleet:answer row=<id> by=steward`) |
-| `fleet-steward-tick.sh sheet` | every open row → C1's table → `decision-YYYY-MM-DD.md` (+ C8's desk ticket when `FLEET_STEWARD_DESK` is set) → ONE `[decision]` to the orchestrator; same rows as last time ⇒ not sent again; a finished batch's sample (issue #2678, `bin/fleet_sample.py`) rides it read-only — the beat posts that sheet itself |
+| `fleet-steward-tick.sh sheet` | every open row → C1's table → `decision-YYYY-MM-DD.md` (+ C8's desk ticket when `FLEET_STEWARD_DESK` is set) → ONE `[decision]` to the orchestrator — the page's plain lines (one a thing, `〔row ids〕` at the end) and its link, never the table; same rows as last time ⇒ not sent again; a finished batch's sample (issue #2678, `bin/fleet_sample.py`) rides it read-only — the beat posts that sheet itself |
+| `fleet-steward-tick.sh say --row <id> --text T` | the row's plain sentence (issue #2735) — what the page and the `[decision]` lines say instead of the worker's words; no numbers, file names or technical words |
+| `fleet-steward-tick.sh page [--print \| --demo]` | the steward page (issue #2735, `bin/fleet_steward_page.py`): the epic-page frame — 今天问了 · 你答了 · 按默认走 · 停放 · 待你动手, then 要你定的事 grouped by what the person does (要扫码 · 要选 · 要授权 · 要钱, the same question merged), 待你动手, 今天已按默认走 with how to overturn each. Every beat re-renders it; one fixed doc-preview link (`state.page.url`), stamped `@orch_page` → 「新任务」's menu 「管家页」 |
 | `fleet-steward-stats.sh attention · asks` | the batch's metrics |
 | `fleet-steward-conflicts.sh --json` | overlaps · CI queue · quota (C5) — tell, never stop |
 
@@ -42,7 +44,8 @@ on the sheet. A wrong self-answer costs more than one more row.
 
 ## The orchestrator's half
 
-It receives `[decision]`, shows the person the table, and writes each decided row back with
+It receives `[decision]`, says its lines to the person in those plain words with the page's
+link (never the table), and writes each decided thing back — every id in its `〔row …〕` — with
 `fleet-steward-tick.sh answer --row <id> --text <决定> --by person`. The 「新任务」 row in the
 sidebar is red while the sheet has an open row (`@orch_decide` → `orch_<sess>` `decide=N`).
 

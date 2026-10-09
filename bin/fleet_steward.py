@@ -82,6 +82,7 @@ import fleet_followup as fu
 import fleet_park
 import fleet_sample as samp
 import fleet_steward_health as health
+import fleet_steward_page as page
 
 BIN = Path(__file__).resolve().parent
 V = 1
@@ -322,6 +323,7 @@ def do_answer(st, row, text, by, source):
     st.spend(1)
     row["state"] = "answered"
     row["by"] = by
+    row["closed_at"] = fd.iso(fd.now_local())
     if row.get("followup"):
         fu.answered(st, row, text, by)
     st.d.setdefault("counts", {})
@@ -433,6 +435,7 @@ def collect(sess, st, now_t, apply=True):
         if res.get("answered"):
             st.spend(2 if res.get("recorded") else 1)
             row["state"] = "defaulted"
+            row["closed_at"] = fd.iso(now_t)
             delta["defaulted"].append({"id": row["id"], "src": row["src"], "default": row.get("default", "")})
         elif res.get("skipped") in ("answered", "defaulted", "gone"):
             row["state"] = res["skipped"] if res["skipped"] != "gone" else "answered"
@@ -525,6 +528,8 @@ def card_lines(st, delta, now_t, nxt):
                         len(pk.get("woken") or []), len(pk.get("requested") or [])))
     if delta["deferred"]:
         lines.append(tr("steward_card_deferred_fmt", delta["deferred"]))
+    if (st.d.get("page") or {}).get("url"):
+        lines.append(page.tr("steward_page_card_fmt", st.d["page"]["url"]))
     lines.append(tr("steward_card_next_fmt", fd.show_time(nxt)[-5:]))
     return lines
 
@@ -606,6 +611,7 @@ def cmd_beat(a):
     n_open = len(sheet_open(st))
     st.d["decide"] = n_open
     stamp_decide(sess, n_open, wins)
+    page_step(sess, st, now_t, wins)
     st.d["card"] = card_lines(st, delta, now_t, nxt)
     if delta.get("samples"):
         # a finished batch's sample reaches the person on this beat, no model turn
@@ -649,10 +655,58 @@ def cmd_answer(a):
     rc = do_answer(st, row, a.text, a.by, a.source)
     if rc == 0:
         st.d["decide"] = len(sheet_open(st))
-        stamp_decide(session(a.session), st.d["decide"], windows(session(a.session)))
+        wins = windows(session(a.session))
+        stamp_decide(session(a.session), st.d["decide"], wins)
+        page_step(session(a.session), st, fd.now_local(), wins)
     st.save()
     print("answered %s" % a.row if rc == 0 else tr("steward_card_deferred_fmt", 1))
     return rc
+
+
+def cmd_say(a):
+    """The steward session's plain line for a row — what the page and the
+    orchestrator's lines say instead of the worker's own words (issue #2735)."""
+    st = State()
+    row = st.d["rows"].get(a.row)
+    if not row:
+        sys.stderr.write("fleet-steward-tick: no row %s (run a beat first)\n" % a.row)
+        return 1
+    row["say"] = " ".join(a.text.split())[:120]
+    url = page_step(session(a.session), st, fd.now_local(a.now), windows(session(a.session)))
+    st.save()
+    print(page.tr("steward_page_card_fmt", url or "—"))
+    return 0
+
+
+def cmd_page(a):
+    """Today's steward page: render + host it now (--print: the HTML on stdout,
+    --demo: the fixed sample rows, nothing kept)."""
+    now_t = fd.now_local(a.now)
+    if a.demo:
+        print(page.render(page.demo_state(now_t), session(a.session), now_t))
+        return 0
+    st = State()
+    if a.print:
+        print(page.render(st, session(a.session), now_t))
+        return 0
+    url = page_step(session(a.session), st, now_t, windows(session(a.session)), force=a.force)
+    st.save()
+    print(url or str(conf_dir() / "fleets" / session(a.session) / "steward" / "page.html"))
+    return 0
+
+
+def page_step(sess, st, now_t, wins, force=False):
+    """Render + host today's steward page (bin/fleet_steward_page.py) and stamp its
+    link as @orch_page on the orchestrator when it changed → the URL ("" none)."""
+    try:
+        url = page.refresh(sess, st, now_t, force)
+    except Exception as e:  # the page never stops a beat or an answer
+        sys.stderr.write("fleet-steward-tick: page: %s\n" % e)
+        return ""
+    if url and url != st.d["page"].get("stamped"):
+        stamp_decide(sess, url, wins, "@orch_page")
+        st.d["page"]["stamped"] = url
+    return url
 
 
 def cmd_sheet(a):
@@ -700,8 +754,16 @@ def post_sheet(sess, st, now_t, force=False):
                 where = desk
         else:
             st.d["deferred_sheet"] = True
-    msg = "\n".join([tr("steward_decision_head_fmt", len(rows), where), "", table, "",
-                     tr("steward_decision_how")])
+    url = page_step(sess, st, now_t, windows(sess))
+    lines = page.brief([r for r in rows if not r.get("followup")], now_t)
+    todo_rows = [r for r in rows if r.get("followup")]
+    body = ["%s　〔row %s〕" % (text, ",".join(ids)) for text, ids in lines]
+    body += ["%s　〔row %s〕" % (page.tr("steward_page_todo_h") + " · " + page.say_of(r), r["id"]) for r in todo_rows]
+    if samples:
+        body += [""] + fd.render_samples(samples)
+    msg = "\n".join([tr("steward_decision_head_fmt", len(rows), where),
+                     page.tr("steward_page_card_fmt", url or str(conf_dir() / "fleets" / sess / "steward" / "page.html")),
+                     ""] + body + ["", tr("steward_decision_how"), "", "<!-- fleet:decision v=%s id=%s -->" % (fd.V, sid)])
     sent = send(sess, "orchestrator", msg)
     st.d["sheet"] = {"id": sid, "rows": ids, "at": fd.iso(now_t), "where": where, "sent": sent}
     st.d["sheets"][day] = st.d["sheets"].get(day, 0) + 1
@@ -748,11 +810,19 @@ def cmd_card(a):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="fleet-steward-tick.sh")
     sub = ap.add_subparsers(dest="cmd")
-    for name in ("beat", "delta", "sheet", "card"):
+    for name in ("beat", "delta", "sheet", "card", "page"):
         p = sub.add_parser(name)
         p.add_argument("--session")
         p.add_argument("--now")
         p.add_argument("--force", action="store_true")
+        if name == "page":
+            p.add_argument("--print", action="store_true")
+            p.add_argument("--demo", action="store_true")
+    p = sub.add_parser("say")
+    p.add_argument("--row", required=True)
+    p.add_argument("--text", required=True)
+    p.add_argument("--session")
+    p.add_argument("--now")
     p = sub.add_parser("answer")
     p.add_argument("--row", required=True)
     p.add_argument("--text", required=True)
@@ -765,7 +835,7 @@ def main(argv=None):
     p.add_argument("--session")
     a = ap.parse_args(argv)
     fn = {"beat": cmd_beat, "delta": cmd_delta, "answer": cmd_answer, "sheet": cmd_sheet, "card": cmd_card,
-          "followups": cmd_followups}.get(a.cmd)
+          "followups": cmd_followups, "page": cmd_page, "say": cmd_say}.get(a.cmd)
     if not fn:
         ap.print_help(sys.stderr)
         return 2

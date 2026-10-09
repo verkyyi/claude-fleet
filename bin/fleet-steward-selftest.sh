@@ -94,7 +94,7 @@ export ST_GH="$WORK/gh" ST_WINS="$WORK/wins.txt" \
   FLEET_DECISION_COMMENTS_CMD="$WORK/bin/gh-comments" FLEET_DECISION_POST_CMD="$WORK/bin/gh-post" \
   FLEET_DECISION_PARENT_CMD="$WORK/bin/gh-parent" FLEET_STEWARD_WINDOWS_CMD="$WORK/bin/wins" \
   FLEET_STEWARD_CHILDREN_CMD="$WORK/bin/children" FLEET_STEWARD_SEND_CMD="$WORK/bin/send" \
-  FLEET_STEWARD_STAMP_CMD="$WORK/bin/stamp" FLEET_STEWARD=1 \
+  FLEET_STEWARD_STAMP_CMD="$WORK/bin/stamp" FLEET_STEWARD=1 FLEET_STEWARD_PAGE_SHARE=0 \
   FLEET_STEWARD_DOCTOR_CMD="$WORK/bin/doctor" FLEET_STEWARD_IDLE_CMD="$WORK/bin/idle" \
   FLEET_STEWARD_SLEEP_LOG="$WORK/sleep.log" FLEET_STEWARD_CLEANUP_LOG="$WORK/cleanup.log" FLEET_SLEEP=observe
 : > "$ST_WINS"
@@ -134,8 +134,11 @@ grep -q "fleet:answer row=$r11 by=steward" "$ST_GH/o-r-11.json" && grep -q 'o/r#
   || bad "B: the self-answer was not posted as expected: $(cat "$ST_GH/posts.log")"
 TICK sheet >"$WORK/out" 2>&1
 n=$(grep -c '^>>> orchestrator' "$ST_GH/sends.log")
-rows=$(awk '/^>>> orchestrator/{f=1;next} /^>>> /{f=0} f' "$ST_GH/sends.log" | grep -c '^| [0-9]')
-[ "$n" = 1 ] && [ "$rows" = 2 ] && [ "$(cat "$ST_GH/decide")" = 2 ] && grep -q '\[decision\]' "$ST_GH/sends.log" \
+# the person's words, one line a thing (issue #2735): no table, the page's link
+msg=$(awk '/^>>> orchestrator/{f=1;next} /^>>> /{f=0} f' "$ST_GH/sends.log")
+rows=$(printf '%s\n' "$msg" | grep -c '〔row [A-Za-z0-9]')
+[ "$n" = 1 ] && [ "$rows" = 2 ] && ! printf '%s\n' "$msg" | grep -q '^| ' \
+  && printf '%s\n' "$msg" | grep -q 'steward/page.html' && [ "$(cat "$ST_GH/decide")" = 2 ] && grep -q '\[decision\]' "$ST_GH/sends.log" \
   && ok "B: sheet → ONE [decision] of 2 rows to the orchestrator, decide=2 stamped" \
   || bad "B: sheet sends=$n rows=$rows decide=$(cat "$ST_GH/decide" 2>/dev/null): $(cat "$WORK/out")"
 ls "$FLEET_CONF_DIR/fleets/st/steward/"decision-*.md >/dev/null 2>&1 && ok "B: the sheet is kept as decision-<date>.md" \

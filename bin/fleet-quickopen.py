@@ -492,6 +492,8 @@ def switch_lines(rows, query, hist, current, layout, say=None):
 # item in fleet-sidebar-menu.sh; nothing else lists it.
 COMMANDS = (
     ("orch", "enter"),       # 进编排会话 — 「新任务」's menu / row-less (issue #2146)
+    ("steward", "enter"),    # 进管家会话 — 「新任务」's menu (issue #2735)
+    ("stewardpage", "enter"),  # 管家页 — the steward's page, in the person's browser
     ("open", "enter"),       # 进入 — the proxy window (a row on another machine)
     ("pr", "enter"),         # 打开 PR
     ("message", "message"),  # 发消息…

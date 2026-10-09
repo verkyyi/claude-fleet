@@ -30,6 +30,11 @@ one box and three options since issue #2231, EPIC #2230 C1).
                                           FLEET_COMPOSE off): with none, ask the
                                           hub to open it (orch_ensure) and go
                                           once it shows — 「正在叫起…」 meanwhile
+    fleet-compose.py --steward <session> [--client C]
+                                          「新任务」's 进管家会话 (issue #2735):
+                                          the same jump onto the steward's
+                                          window (steward_all_<session>'s first
+                                          worker_id); none ⇒ one line, exit 1
     fleet-compose.py payload <text-file> [--repo R | --no-repo] [--node N] [--agent A]
                                           the payload a ↵ on that text would write
                                           ({title, body, attachments, repo, node,
@@ -595,6 +600,25 @@ def to_orch(session, client="", boot=False):
         stamp_role(shell, o, agent=orch_agent(session, o))
         return 0
     msg = tr("compose_orch_nolist") if o else tr("compose_orch_none")
+    shell.run("display-message", *(["-c", client] if client else []), msg)
+    print(msg)
+    return 1
+
+
+def to_steward(session, client=""):
+    """进管家会话 (issue #2735): the list's jump onto the steward's window — the
+    first worker_id of fleet-hub-sessions.sh's steward_all_<session>. The steward
+    draws no row (#2670); this and the menu are its door. 0 switched, 1 not."""
+    shell = Shell(session)
+    wid = ""
+    try:
+        with open(os.path.join(status_dir(), "steward_all_" + (session or "")), encoding="utf-8") as f:
+            wid = next((x.strip() for x in f if "/" in x), "")
+    except OSError:
+        pass
+    if wid and shell.hand("jump=wid:" + wid):
+        return 0
+    msg = tr("compose_orch_nolist") if wid else tr("compose_steward_none")
     shell.run("display-message", *(["-c", client] if client else []), msg)
     print(msg)
     return 1
@@ -1283,6 +1307,8 @@ def main(argv):
         argv = argv[:-1]
     if argv[:1] == ["--orch"] and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--client"):
         return to_orch(argv[1], argv[3] if len(argv) == 4 else "", boot=boot)
+    if argv[:1] == ["--steward"] and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--client"):
+        return to_steward(argv[1], argv[3] if len(argv) == 4 else "")
     session = ""
     if argv[:1] == ["--session"] and len(argv) >= 2:
         session = argv[1]

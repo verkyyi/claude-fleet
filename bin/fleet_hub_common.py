@@ -305,9 +305,16 @@ def inventory_row(parts):
     rows still open (@orch_todo) → `orch_todo` (an int); it follows orchdec= when
     both are written, so it is read first.
     Column 34 (issue #2671, EPIC #2668 C3): `orchpark=<n>` — sessions parked
-    (@orch_park) → `orch_park` (an int); the last tag when written, read first."""
+    (@orch_park) → `orch_park` (an int).
+    Column 35 (issue #2735): `orchpage=<url>` — the steward's page (@orch_page) →
+    `orch_page` (an http(s) link, ≤300 characters); the last tag when written,
+    read first."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 32 and parts[-1].startswith("orchpage="):
+        u = parts.pop()[9:]
+        if re.fullmatch(r"https?://[-A-Za-z0-9._~:/?#@+,=%]{1,292}", u):
+            extra["orch_page"] = u
     if len(parts) >= 32 and parts[-1].startswith("orchpark="):
         k = parts.pop()[9:]
         if re.fullmatch(r"[0-9]{1,4}", k):
