@@ -132,7 +132,7 @@ closed 201 "收尾 $(mk --kind stable --what '挪稳定版到 aaa1111')"
 closed 202 "收尾 $(mk --kind stable --what '挪稳定版到 bbb2222')"
 closed 203 "收尾 $(mk --kind stable --what '挪稳定版到 ccc3333')"
 TICK beat --force >"$WORK/out" 2>&1
-[ "$(items)" = 1 ] && [ "$(cnt "$ST_GH/moves")" = 1 ] && [ "$(item fu-1 state)" = done ] && [ "$(item fu-1 by)" = steward ] \
+[ "$(items)" = 1 ] && [ "$(cnt "$ST_GH/moves")" = 1 ] && [ "$(item fu-1 state)" = "done" ] && [ "$(item fu-1 by)" = steward ] \
   && ok "K: three stable followups → ONE row, move ran ONCE, done by the steward" \
   || bad "K: items=$(items) moves=$(cnt "$ST_GH/moves") state=$(item fu-1 state) / $(cat "$WORK/out")"
 nw=0; for n in 201 202 203; do grep -q 'fleet:followup-done id=fu-1' "$ST_GH/o-r-$n.json" && nw=$((nw + 1)); done
@@ -168,7 +168,7 @@ TICK answer --row "$r" --text 重跑 --by person >/dev/null
 grep -q 'o/r#301 note' "$ST_GH/posts.log" && ok "L: the person's answer is a note on the parent (no worker there)" \
   || bad "L: posts: $(cat "$ST_GH/posts.log")"
 TICK beat --force >/dev/null 2>&1
-[ "$(cnt "$ST_GH/moves")" = 2 ] && [ "$(item fu-1 state)" = done ] && [ "$(frows)" = 0 ] \
+[ "$(cnt "$ST_GH/moves")" = 2 ] && [ "$(item fu-1 state)" = "done" ] && [ "$(frows)" = 0 ] \
   && ok "L: 「重跑」 → the next beat runs it again, done, the row closed" \
   || bad "L: after 重跑 moves=$(cnt "$ST_GH/moves") state=$(item fu-1 state) rows=$(frows)"
 
@@ -187,7 +187,7 @@ k=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([r["kind"
   || bad "M: deploys=$(cnt "$ST_GH/deploys") items=$(items) rows=$(frows) kind=$k state=$(item fu-1 state)"
 TICK answer --row "$(frow)" --text 部署 --by person >/dev/null
 TICK beat --force >/dev/null 2>&1; TICK beat --force >/dev/null 2>&1
-[ "$(cnt "$ST_GH/deploys")" = 1 ] && [ "$(item fu-1 state)" = done ] \
+[ "$(cnt "$ST_GH/deploys")" = 1 ] && [ "$(item fu-1 state)" = "done" ] \
   && ok "M: the person's 「部署」 → FLEET_STEWARD_HUB_DEPLOY_CMD runs once, done" \
   || bad "M: deploys=$(cnt "$ST_GH/deploys") state=$(item fu-1 state)"
 unset FLEET_STEWARD_HUB_DEPLOY_CMD
@@ -211,7 +211,7 @@ TICK beat --force >/dev/null 2>&1
   && ok "O: a batch holds the install — the move waits (等它结束)" || bad "O: moves=$(cnt "$ST_GH/moves") note=$(item fu-1 note)"
 rm -f "$ST_GH/hold"
 TICK beat --force >/dev/null 2>&1
-[ "$(cnt "$ST_GH/moves")" = 1 ] && [ "$(item fu-1 state)" = done ] && ok "O: released — it runs" || bad "O: moves=$(cnt "$ST_GH/moves")"
+[ "$(cnt "$ST_GH/moves")" = 1 ] && [ "$(item fu-1 state)" = "done" ] && ok "O: released — it runs" || bad "O: moves=$(cnt "$ST_GH/moves")"
 
 # P — nothing met
 fresh P
@@ -231,7 +231,7 @@ grep -q '^- \[ \] .*iPad 上真环境走一遍.*截止 2026-10-12.*<!-- fleet:to
   && ok "Q: a human row is listed with its due date; open count 1" || bad "Q: desk: $(cat "$ST_GH/desk.md" 2>/dev/null)"
 sed -i.bak 's/^- \[ \] /- [x] /' "$ST_GH/desk.md"
 TICK beat --force >/dev/null 2>&1
-[ "$(item fu-1 state)" = done ] && [ "$(item fu-1 by)" = person ] && grep -q 'fleet:followup-done id=fu-1' "$ST_GH/o-r-701.json" \
+[ "$(item fu-1 state)" = "done" ] && [ "$(item fu-1 by)" = person ] && grep -q 'fleet:followup-done id=fu-1' "$ST_GH/o-r-701.json" \
   && [ "$(cat "$ST_GH/todo")" = 0 ] \
   && ok "Q: ticked on the ticket → done by the person, written back, open count 0" \
   || bad "Q: state=$(item fu-1 state) by=$(item fu-1 by)"
@@ -241,9 +241,10 @@ FLEET_CONF_DIR="$WORK/K/conf" ST_GH="$WORK/K/gh" bash "$BIN/fleet-steward-stats.
 grep -q '^done-not-live	0' "$WORK/out" && grep -q '^o/r#202	yes	1	1	0' "$WORK/out" \
   && ok "R: followups — the three run batches, done-not-live 0" || bad "R: $(cat "$WORK/out")"
 mkdir -p "$WORK/R/bin"
-printf '#!/bin/sh\nprintf "%%s" "$ST_R"\n' > "$WORK/R/bin/fleet-gh.sh"
-ST_R='{"state":"CLOSED","comments":[{"body":"挪稳定版到 abc：`fleet-stable.sh move abcdef1`","url":"u"}]}'
-export ST_R
+printf '#!/bin/sh\ncat "%s/R/issue.json"\n' "$WORK" > "$WORK/R/bin/fleet-gh.sh"
+cat > "$WORK/R/issue.json" <<'JSON'
+{"state":"CLOSED","comments":[{"body":"挪稳定版到 abc：`fleet-stable.sh move abcdef1`","url":"u"}]}
+JSON
 # the stats script reads fleet-gh.sh beside it: a sandbox bin with the real script + the fake reader
 cp "$BIN/fleet-steward-stats.sh" "$BIN/fleet_followup.py" "$WORK/R/bin/"
 FLEET_CONF_DIR="$WORK/K/conf" bash "$WORK/R/bin/fleet-steward-stats.sh" followups --epics o/r#999 >"$WORK/out" 2>&1
