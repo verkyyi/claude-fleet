@@ -11,13 +11,15 @@
 // (the run and `$` live there: the engine follows `$` only within one file); a
 // window that is not `orchestrator`, or a file that cannot be read, adds nothing;
 // compose.ts adds the section.
-// A worker window never sees this section.
+// A worker window never sees this section. The same read says whether this is
+// the orchestrator's window at all (isOrchestrator), which exit-guard.ts asks.
 
 import type { PromptComposeSection } from 'claude-code'
 
 export const ROLE_SECTION = 'fleet:orchestrator-role'
 
 let role: string | undefined
+let orchestrator = false
 
 /** <install>/skills/fleet-orchestrate/role.md from the plugin root (<install>/mod/fleet). */
 export function rolePath(root: string): string {
@@ -37,16 +39,23 @@ export function roleArgv(pane: string): string[] {
  */
 export function takeRole(windowRole: string, text: string | undefined): void {
   const body = text?.trim() ?? ''
-  role = windowRole.trim() === 'orchestrator' && body !== '' ? body : undefined
+  orchestrator = windowRole.trim() === 'orchestrator'
+  role = orchestrator && body !== '' ? body : undefined
 }
 
 export function currentRole(): string | undefined {
   return role
 }
 
+/** Is this the orchestrator's window — with or without its role file (exit-guard.ts, #2584)? */
+export function isOrchestrator(): boolean {
+  return orchestrator
+}
+
 /** Tests: forget the role. */
 export function resetRole(): void {
   role = undefined
+  orchestrator = false
 }
 
 export function roleSection(text: string): PromptComposeSection {

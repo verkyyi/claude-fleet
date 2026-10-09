@@ -182,6 +182,7 @@ commands/fleet-sync-install.md
 conf/codex-preamble.md
 mod/fleet/.claude-plugin/plugin.json
 mod/fleet/hooks/compose.ts
+mod/fleet/hooks/exit-guard.ts
 mod/fleet/hooks/gate.ts
 mod/fleet/hooks/hooks.json
 mod/fleet/hooks/inbox.ts
