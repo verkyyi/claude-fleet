@@ -1,4 +1,4 @@
-// web/dist/settings.js — Settings, at /admin/settings (claude-fleet#1990):
+// web/dist/admin/settings.js — Settings, at /admin/settings (claude-fleet#1990):
 // the hub's own settings, stored in its database and applied at once, every
 // change one audit row (hub_settings.go). Public counter and badges, the
 // subscription pool's skip threshold and failover, which machines a new
@@ -7,11 +7,11 @@
 // layer (/v1/fleet/team-bundle): publish a file as its next version, restore
 // an older one (claude-fleet#1990; here since #2515 — Config shows it to
 // everyone read-only). An admin's.
-import { Shell } from './app-shell.js';
-import { esc, ic, relTime } from './lib/shell.js';
-import { SETTING_GROUPS, settingValue } from './lib/admin.js';
-import { bundleItems, bundleList, parseImport } from './lib/pages.js';
-import { t } from './lib/i18n.js';
+import { Shell } from '../app-shell.js';
+import { esc, ic, relTime } from '../lib/shell.js';
+import { SETTING_GROUPS, settingValue } from '../lib/admin.js';
+import { bundleItems, bundleList, parseImport } from '../lib/pages.js';
+import { t } from '../lib/i18n.js';
 
 Shell.mount('settings', async (ctx) => {
   const [setR, usR, acR, tr] = await Promise.allSettled([ctx.api('/v1/fleet/settings'), ctx.api('/v1/fleet/users'), ctx.api('/v1/access'), ctx.api('/v1/fleet/team-bundle?history=1')]);

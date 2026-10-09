@@ -1,4 +1,4 @@
-// web/dist/subscriptions.js — Subscriptions, at /subscriptions
+// web/dist/admin/subscriptions.js — Subscriptions, at /subscriptions
 // (claude-fleet#1990): the pool at a glance, one card per subscription (5-hour
 // and weekly use with their resets, live sessions, the credential, pause /
 // remove behind a confirm), the three-step add (provider → run the commands on
@@ -6,13 +6,13 @@
 // switches. Reads /v1/limits, /v1/accounts, /v1/fleet/credentials, /v1/live,
 // /v1/fleet/users and /v1/account-switches; pause is the setting
 // pool.paused.<account>, remove deletes the vault's credential. An admin's.
-import { Shell } from './app-shell.js';
-import { esc, ic, relTime } from './lib/shell.js';
+import { Shell } from '../app-shell.js';
+import { esc, ic, relTime } from '../lib/shell.js';
 import {
   subscriptions, subState, credState, headroom, leaseRows, switchRows, level, fmtIn,
   addSubCommands, arrived, LABEL_RE,
-} from './lib/admin.js';
-import { t } from './lib/i18n.js';
+} from '../lib/admin.js';
+import { t } from '../lib/i18n.js';
 
 const failed = (e) => `<div class="ghostrow err">${ic('alert')} ${esc(e.message)}</div>`;
 const val = (r) => (r.status === 'fulfilled' ? r.value : null);

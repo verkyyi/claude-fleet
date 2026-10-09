@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -219,26 +220,72 @@ func TestAuditKinds(t *testing.T) {
 	}
 }
 
-// A user asking for an admin page gets 403 with the page itself — its shell
-// draws 「不在你的菜单里」 — and one role_denied row; an admin gets the page.
-func TestAdminPages_UserGets403Page(t *testing.T) {
+// A user asking for an admin page is refused it whole (claude-fleet#2516):
+// a 403 that says 「这页不在你的菜单上」 and carries none of the page —
+// by its route and by its files' direct paths alike — plus one role_denied
+// row each; an admin and the operator get the page.
+func TestAdminPages_UserRefusedWhole(t *testing.T) {
 	h, admin, user := rolesHarness(t)
-	h.srv.UI = fstest.MapFS{}
-	for _, p := range append(adminPageRoutes, struct{ path, id, file string }{"/nodes", "machines", "nodes.html"}) {
-		h.srv.UI.(fstest.MapFS)[p.file] = &fstest.MapFile{Data: []byte("<title>" + p.id + "</title>")}
+	ui := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<title>overview</title>")}}
+	routes := append(adminPageRoutes, struct{ path, id, file string }{"/nodes", "machines", "admin/nodes.html"})
+	for _, p := range routes {
+		ui[p.file] = &fstest.MapFile{Data: []byte("<title>" + p.id + "</title> skeleton")}
+		ui[strings.TrimSuffix(p.file, ".html")+".js"] = &fstest.MapFile{Data: []byte("Shell.mount('" + p.id + "') // skeleton")}
 	}
-	for _, p := range []string{"/subscriptions", "/nodes", "/admin/users", "/admin/settings", "/admin/audit"} {
-		code, body := rolesGet(t, h, user, p)
-		if code != http.StatusForbidden || !strings.Contains(string(body), "<title>") {
-			t.Errorf("user GET %s = %d %q; want 403 and the page", p, code, body)
+	h.srv.UI = ui
+	get := func(sess *http.Cookie, bearerTok, path, accept string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+path, nil)
+		req.Header.Set("Accept", accept)
+		if sess != nil {
+			req.AddCookie(sess)
 		}
-		if code, _ := rolesGet(t, h, admin, p); code != http.StatusOK {
-			t.Errorf("admin GET %s = %d; want 200", p, code)
+		if bearerTok != "" {
+			req.Header.Set("Authorization", "Bearer "+bearerTok)
 		}
+		resp, err := noFollow.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	// The six the batch counted (EPIC #2512), and the three C3 added.
+	paths := []string{"/subscriptions", "/nodes", "/admin/users", "/admin/settings", "/admin/audit",
+		"/admin/overview", "/admin/sessions", "/admin/devices",
+		"/admin/subscriptions.html", "/admin/nodes.html", "/admin/users.html", "/admin/audit.js"}
+	refusals := 0
+	for _, p := range paths {
+		for _, accept := range []string{"text/html", "application/json"} {
+			code, body := get(user, "", p, accept)
+			refusals++
+			if code != http.StatusForbidden || !strings.Contains(body, "这页不在你的菜单上") {
+				t.Errorf("user GET %s (%s) = %d %q; want 403 「这页不在你的菜单上」", p, accept, code, body)
+			}
+			if strings.Contains(body, "skeleton") {
+				t.Errorf("user GET %s (%s) carries the page: %q", p, accept, body)
+			}
+		}
+		if code, body := get(admin, "", p, "text/html"); code != http.StatusOK || !strings.Contains(body, "skeleton") {
+			t.Errorf("admin GET %s = %d %q; want 200 and the page", p, code, body)
+		}
+		if code, body := get(nil, viewerToken, p, "text/html"); code != http.StatusOK || !strings.Contains(body, "skeleton") {
+			t.Errorf("operator GET %s = %d %q; want 200 and the page", p, code, body)
+		}
+	}
+	// The daily pages are not refused: only admin/ is.
+	if code, _ := get(user, "", "/", "text/html"); code != http.StatusOK {
+		t.Errorf("user GET / = %d; want 200", code)
+	}
+	// The old flat paths are gone for everyone.
+	if code, _ := get(admin, "", "/subscriptions.html", "text/html"); code != http.StatusNotFound {
+		t.Errorf("admin GET /subscriptions.html = %d; want 404 (moved under admin/)", code)
 	}
 	if code, _ := rolesGet(t, h, user, AuditPath); code != http.StatusForbidden {
 		t.Errorf("user GET %s = %d; want 403", AuditPath, code)
 	}
+	refusals++
 	n := 0
 	for _, e := range h.audit(t) {
 		if e.Action == "role_denied" {
@@ -252,8 +299,22 @@ func TestAdminPages_UserGets403Page(t *testing.T) {
 			}
 		}
 	}
-	if n < 6 {
-		t.Errorf("%d role_denied rows; want one per refusal (6)", n)
+	if n < refusals {
+		t.Errorf("%d role_denied rows; want one per refusal (%d)", n, refusals)
+	}
+}
+
+// Every admin page's files sit under admin/, the prefix the file gate reads.
+func TestAdminPages_FilesUnderAdminPrefix(t *testing.T) {
+	for _, p := range adminPageRoutes {
+		if !isAdminUIFile(p.file) {
+			t.Errorf("%s serves %s, outside %s: a user could open it directly", p.path, p.file, adminUIPrefix)
+		}
+	}
+	for _, name := range []string{"index.html", "sessions.html", "machines.html", "connect.html", "quota.html", "config.html", "app-shell.js", "lib/admin.js"} {
+		if isAdminUIFile(name) {
+			t.Errorf("%s reads as an admin file", name)
+		}
 	}
 }
 

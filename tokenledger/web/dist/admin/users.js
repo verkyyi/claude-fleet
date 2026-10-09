@@ -1,14 +1,14 @@
-// web/dist/users.js — Users, at /admin/users (claude-fleet#1990): the GitHub
+// web/dist/admin/users.js — Users, at /admin/users (claude-fleet#1990): the GitHub
 // accounts that may sign in. Adding a name saves its numeric GitHub ID at once
 // (a freed name taken over later is refused); removing one signs them out on
 // their next request and revokes their devices. Admins come from the deploy
 // (CCQUOTA_GITHUB_ADMINS) and are read-only here. /v1/fleet/users; every
 // change is audited by the hub. 生成邀请命令 mints an invite
 // (/v1/fleet/invites, claude-fleet#2261). An admin's.
-import { Shell } from './app-shell.js';
-import { esc, ic, relTime } from './lib/shell.js';
-import { userRows, cleanLogin, GH_LOGIN_RE } from './lib/admin.js';
-import { t } from './lib/i18n.js';
+import { Shell } from '../app-shell.js';
+import { esc, ic, relTime } from '../lib/shell.js';
+import { userRows, cleanLogin, GH_LOGIN_RE } from '../lib/admin.js';
+import { t } from '../lib/i18n.js';
 
 const avatar = (login) => `<span class="av" style="background:var(--brand)">${esc(String(login || '?').slice(0, 2).toUpperCase())}</span>`;
 

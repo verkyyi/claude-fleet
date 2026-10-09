@@ -2,7 +2,7 @@
 // answers, with no DOM (claude-fleet#1990): Subscriptions' cards, pool
 // headroom and the add-a-subscription wait, Machines' cards and the join-code
 // wait, Users' rows, Settings' switches and Audit's days. The page scripts
-// (subscriptions.js, nodes.js, users.js, settings.js, audit.js) fetch and
+// (admin/subscriptions.js, admin/nodes.js, admin/users.js, admin/settings.js, admin/audit.js) fetch and
 // draw; web/test/admin.test.mjs pins these.
 //
 // Every word goes through t() (lib/i18n.js); stored audit text is shown as

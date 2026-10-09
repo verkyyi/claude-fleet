@@ -1,12 +1,12 @@
-// web/dist/audit.js — Audit, at /admin/audit (claude-fleet#1990): everything
+// web/dist/admin/audit.js — Audit, at /admin/audit (claude-fleet#1990): everything
 // that changed access, money or machines, newest first, grouped by day —
 // the fleet audit, the credential audit, the device audit and the hub's own,
 // merged by the hub (/v1/admin/audit). Filter by kind; export the filter as
 // CSV. Stored audit text is shown as recorded, never translated. An admin's.
-import { Shell } from './app-shell.js';
-import { esc, ic } from './lib/shell.js';
-import { AUDIT_KINDS, auditDays, auditWho } from './lib/admin.js';
-import { t } from './lib/i18n.js';
+import { Shell } from '../app-shell.js';
+import { esc, ic } from '../lib/shell.js';
+import { AUDIT_KINDS, auditDays, auditWho } from '../lib/admin.js';
+import { t } from '../lib/i18n.js';
 
 let kind = 'all';
 try { kind = new URLSearchParams(location.search).get('kind') || 'all'; } catch { /* default */ }

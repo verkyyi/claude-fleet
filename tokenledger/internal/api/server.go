@@ -405,7 +405,7 @@ func (s *Server) routes() *routeMux {
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		// Machines (claude-fleet#1990): an admin's page; a user gets the
 		// shell's 403 (admin_pages.go).
-		mux.Handle("/nodes", s.viewerOnly(s.adminPage("machines", "nodes.html")))
+		mux.Handle("/nodes", s.viewerOnly(s.adminPage("machines", "admin/nodes.html")))
 		// 我的机器 (claude-fleet#2518): a user's own machines, off the same
 		// /v1/nodes cut.
 		mux.Handle("/machines", s.viewerOnly(http.HandlerFunc(s.serveMachinesPage)))
@@ -776,6 +776,12 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if path == "" {
 		path = "index.html"
+	}
+	// An admin page's files are refused a user whole, by where they sit
+	// (claude-fleet#2516) -- the direct path as much as the route.
+	if isAdminUIFile(path) && roleOf(r.Context()) == roleUser {
+		s.denyAdminPage(w, r)
+		return
 	}
 	f, err := s.UI.Open(path)
 	if err != nil {

@@ -1,4 +1,4 @@
-// web/dist/nodes.js — Machines, at /nodes (claude-fleet#1990): one card per
+// web/dist/admin/nodes.js — Machines, at /nodes (claude-fleet#1990): one card per
 // computer that runs sessions (load trend, status, sessions, version), the
 // maintenance switch behind a confirm, «add a machine» (a one-time join code,
 // its command and countdown, waiting for the machine to join), and the SPOT
@@ -9,10 +9,10 @@
 // fleet.node_maintenance.<machine> and fleet.spot, and 「移除」 (claude-fleet#1928)
 // retires every enrollment on the machine through /v1/fleet/nodes/retire — its
 // token stops working and its card leaves the page. An admin's.
-import { Shell } from './app-shell.js';
-import { esc, ic, spark, relTime } from './lib/shell.js';
-import { machineCards, joined, countdown } from './lib/admin.js';
-import { t } from './lib/i18n.js';
+import { Shell } from '../app-shell.js';
+import { esc, ic, spark, relTime } from '../lib/shell.js';
+import { machineCards, joined, countdown } from '../lib/admin.js';
+import { t } from '../lib/i18n.js';
 
 const join = { label: '', expires: 0, timer: 0, tick: 0 };
 

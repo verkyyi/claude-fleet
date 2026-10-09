@@ -231,12 +231,12 @@ test('audit: grouped by day, newest first; actors without their principal', () =
 
 // The pages themselves, read as source: what a DOM test would pin, without a DOM.
 const PAGES = [
-  { file: 'subscriptions.js', id: 'subscriptions', confirms: 2, empty: 'ui.sub.empty' },
-  { file: 'nodes.js', id: 'machines', confirms: 2, empty: 'ui.mach.empty' },
-  { file: 'users.js', id: 'people', confirms: 1, empty: 'ui.usr.empty' },
+  { file: 'admin/subscriptions.js', id: 'subscriptions', confirms: 2, empty: 'ui.sub.empty' },
+  { file: 'admin/nodes.js', id: 'machines', confirms: 2, empty: 'ui.mach.empty' },
+  { file: 'admin/users.js', id: 'people', confirms: 1, empty: 'ui.usr.empty' },
   // Restoring the team layer (moved here from Config by claude-fleet#2515).
-  { file: 'settings.js', id: 'settings', confirms: 1, empty: null },
-  { file: 'audit.js', id: 'audit', confirms: 0, empty: 'ui.aud.empty' },
+  { file: 'admin/settings.js', id: 'settings', confirms: 1, empty: null },
+  { file: 'admin/audit.js', id: 'audit', confirms: 0, empty: 'ui.aud.empty' },
   // The whole hub an admin's daily pages used to show (claude-fleet#2515);
   // the tables and their empty states are lib/sessions-view.js and
   // lib/devices-view.js.
