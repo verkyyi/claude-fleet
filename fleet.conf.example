@@ -304,11 +304,17 @@ FLEET_CTX_WINDOW=200000
 # @label=Orchestrator session @group=spawn @tier=internal @scope=fleet @edit=bool
 #FLEET_ORCHESTRATOR=1
 
-# The steward (EPIC #2668): the resident session that patrols every batch for you.
-# Default: follows FLEET_ORCHESTRATOR; 0 = no steward, and everything it brings —
-# the desk tickets below included — stays as before.
-# @label=Steward @group=spawn @tier=internal @scope=fleet @edit=bool
-#FLEET_STEWARD=1
+# The steward (EPIC #2668; issue #2670, bin/fleet-steward.sh): the resident
+# session that patrols every batch for you, answers a worker's question when the
+# batch charter already says it, and hands the rest to the orchestrator as ONE
+# decision sheet (skills/fleet-steward/). 0 = no steward, and everything it brings
+# — the desk tickets below included — stays as before; `count` = only the
+# attention count (logs/attention.ndjson), no window — the default where an
+# orchestrator runs, for the batch's three-day baseline; 1 = the window too. Its
+# beat runs on the diskguard tick with no model; only a beat with something new
+# wakes it.
+# @label=Steward @group=spawn @tier=internal @scope=fleet @edit=str
+#FLEET_STEWARD=count
 
 # Desk tickets (issue #2676): a session the orchestrator or you open with no repo
 # (a design page, research, a release) gets a `desk`-labelled ticket of its own in
@@ -347,16 +353,6 @@ FLEET_CTX_WINDOW=200000
 # @label=Orchestrator revive after (s) @group=spawn @tier=internal @scope=fleet @edit=str
 #FLEET_ORCH_REVIVE_SECS=30
 
-# The fleet's STEWARD (issue #2670, EPIC #2668 C2, bin/fleet-steward.sh): a
-# no-repo session that patrols every batch, answers a worker's question when the
-# batch charter already says it, and hands the rest to the orchestrator as ONE
-# decision sheet (skills/fleet-steward/). 0 = off (byte for byte as before);
-# `count` = only the attention count (logs/attention.ndjson), no window — the
-# default where an orchestrator runs, for the batch's three-day baseline; 1 = the
-# window too. Its beat runs on the diskguard tick with no model; only a beat
-# with something new wakes it.
-# @label=Steward session @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_STEWARD=count
 # One tier cheaper than the orchestrator (发起人拍板 3): Claude --model
 # FLEET_STEWARD_MODEL --effort FLEET_STEWARD_EFFORT; Codex -m FLEET_STEWARD_CODEX_MODEL.
 # @label=Steward model (Claude) @group=spawn @tier=internal @scope=fleet @edit=str

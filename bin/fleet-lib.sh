@@ -7151,7 +7151,7 @@ EOF
 fleet_desk_repo() {
   local r
   case "${FLEET_DESK:-${FLEET_STEWARD:-${FLEET_ORCHESTRATOR:-${FLEET_HOST:-0}}}}" in
-    1|on|yes|true) ;;
+    1|on|yes|true|count) ;;   # count: the steward counting its baseline (#2670)
     *) return 1 ;;
   esac
   r=$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}")
