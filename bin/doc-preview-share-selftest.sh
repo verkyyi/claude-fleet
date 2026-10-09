@@ -213,15 +213,25 @@ ok [ "$(cat "$ROOT/mode")" = https ]
 has "http://127.0.0.1:$(cat "$ROOT/server.port")" "$(cat "$WORK/serve.argv")" "3: serve must front the loopback server"
 
 # --- 4. start port held by a socket lsof cannot see → next port ------------
+# The holder asks the kernel for a free port and keeps it (issue #2638): holding
+# BASEPORT itself raced whatever the earlier cases left on it, and a holder that
+# never bound made the check below compare BASEPORT with itself.
 reset_state; echo operator > "$WORK/serve.mode"
+rm -f "$WORK/held.port"
 python3 -c 'import socket,sys,time
-s=socket.socket(); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(1); time.sleep(120)' "$BASEPORT" &
+s=socket.socket(); s.bind(("127.0.0.1",0)); s.listen(1)
+open(sys.argv[1]+".tmp","w").write(str(s.getsockname()[1])); __import__("os").rename(sys.argv[1]+".tmp",sys.argv[1])
+time.sleep(120)' "$WORK/held.port" &
 PIDS+=($!)
-for _ in $(seq 1 50); do python3 -c 'import socket,sys;s=socket.socket();sys.exit(s.connect_ex(("127.0.0.1",int(sys.argv[1]))))' "$BASEPORT" && break; sleep 0.1; done
-out="$(share "$WORK/a.md")"; rc=$?
+for _ in $(seq 1 50); do [ -s "$WORK/held.port" ] && break; sleep 0.1; done
+HELD="$(cat "$WORK/held.port" 2>/dev/null)"
+[ -n "$HELD" ] || fail "4: environment: the port holder never bound a port — not a share.sh failure"
+out="$(HOME="$WORK/home" PATH="$WORK/fake:$PATH" DOC_PREVIEW_PORT="$HELD" DOC_PREVIEW_SESSION=t "$SH" "$WORK/a.md" 2>&1)"; rc=$?
 [ "$rc" = 0 ] || fail "4: a held start port must be skipped, not fatal (rc=$rc)" "$out"
 PORT="$(cat "$ROOT/server.port" 2>/dev/null)"
-ok [ "$PORT" != "$BASEPORT" ]
+# share.sh must move OFF the held start port onto another one
+[ -n "$PORT" ] && [ "$PORT" != "$HELD" ] || fail "4: share.sh must bind a port other than the held start port $HELD (bound: ${PORT:-none})"
+CHECKS=$((CHECKS + 1))
 has "READY http://box.tailnet.ts.net:$PORT/d/" "$out" "4: READY must name the port actually bound"
 ok kill -0 "$(cat "$ROOT/server.pid")"
 lacks "Address already in use" "$(cat "$ROOT/server.log" 2>/dev/null)" "4: the server must never have died on EADDRINUSE"
