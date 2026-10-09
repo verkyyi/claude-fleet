@@ -514,6 +514,8 @@ def window_key(row, one_repo, no_repo=False):
     (<one_repo>, fleet_window_repo's fallback), and nothing when that is unknown."""
     if row.get("role") == "orchestrator":
         return "orchestrator"           # the fleet's orchestrating session (issue #2129)
+    if row.get("role") == "steward":
+        return "steward"                # its steward (issue #2670)
     if row["issue"].isdigit():
         key = "issue-" + row["issue"]
     else:
@@ -590,7 +592,7 @@ def list_agents():
 
 def parent_window():
     parent = origin_option()
-    if parent != "orchestrator" and not re.match(r"^([A-Za-z0-9._-]+:)?(issue|scratch)-[0-9]+$", parent or ""):
+    if parent not in ("orchestrator", "steward") and not re.match(r"^([A-Za-z0-9._-]+:)?(issue|scratch)-[0-9]+$", parent or ""):
         raise ToolFault("this session has no live-addressable parent")
     session = current_session()
     # The ONE resolver (fleet_win_for_key, issue #1537): rc 2 = the key is
@@ -618,7 +620,7 @@ def send_message(to, text):
         raise Refused("text is required")
     target = to.strip()
     if target != "parent" and not re.match(
-            r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|orchestrator|[@%][A-Za-z0-9_.:-]+)$", target):
+            r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|orchestrator|steward|[@%][A-Za-z0-9_.:-]+)$", target):
         raise Refused("to must be issue:<N>, scratch-<N>, orchestrator or parent")
     if target == "parent":
         target = parent_window()

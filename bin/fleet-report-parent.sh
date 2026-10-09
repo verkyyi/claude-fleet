@@ -236,7 +236,7 @@ fi
 case "$worigin" in
   issue-*|scratch-*) ;;
   ?*:issue-*|?*:scratch-*) ;;    # repo-qualified (issue #789) — a fleet hosting 2+ repos
-  orchestrator) ;;               # the fleet's orchestrating session (issue #2129)
+  orchestrator|steward) ;;       # the fleet's orchestrating session (#2129), its steward (#2670)
   '') quiet 'hub-spawned (@origin empty)' ;;
   *)  quiet "@origin '$worigin' is not a window key (daemon / cross-fleet parent)" ;;
 esac

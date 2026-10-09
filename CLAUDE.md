@@ -351,6 +351,28 @@ Do not install from memory: read the doc and work from it.
   `orch_multi_<sess>` feeds the doctor's `orch` WARN; no hub / an old hub ⇒
   each machine decides alone. BREAK-IT `orchestrator-two`,
   `fleet-orchestrator-selftest.sh`.
+- **The orchestrator has a STEWARD, and a calm beat calls no model** (issue #2670,
+  EPIC #2668 C2). `bin/fleet-steward.sh ensure` opens it like the orchestrator
+  (`@fleet_role steward`, `@norepo 1`, `$HOME`, `skills/fleet-steward/role.md` in
+  the system prompt, one tier cheaper: `FLEET_STEWARD_MODEL` opus), home_watch
+  reopens it on the same conversation (`steward.sid`); caps never count it, restore /
+  migrate / move read it as `home`, `fleet_win_for_key steward` addresses it, the
+  client draws no row for it (`steward_all_<sess>`). Its beat is
+  `fleet-steward-tick.sh beat` (`bin/fleet_steward.py`) on the same tick, NO model:
+  every `FLEET_STEWARD_EVERY` it reads the orchestrator's and the drivers' children
+  ledgers, the epic marks and C1's ask rows (`fleet_decision.py`), answers due rows
+  by their default, asks the backstop about a driverless batch's PRs, writes
+  `global/steward.{state,delta}.json` — and hands the window one `[steward]` turn only
+  when there is a new question, a BLOCKED/FAILED report or a driverless batch. Every
+  answer (the steward's own, the person's from the orchestrator) goes through
+  `fleet-steward-tick.sh answer`; the open rest becomes ONE `[decision]` to the
+  orchestrator (`sheet`), and its open rows ride `@orch_decide` → the inventory's
+  `orchdec=` (column 32, only when set) → `orch_<sess>`'s `decide=N` → a red
+  「新任务」. GitHub writes ≤ `FLEET_STEWARD_WRITES` (20) a beat, the rest deferred.
+  `FLEET_STEWARD`: `0` byte for byte · `count` (default where an orchestrator runs:
+  only the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
+  `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh`;
+  BREAK-IT `steward-exited`, `steward-write-storm`.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).

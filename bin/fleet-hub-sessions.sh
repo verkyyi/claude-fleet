@@ -775,7 +775,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", role="orchestrator" if w.get("role") == "orchestrator" else "", queue=str(w["orch_queue"]) if type(w.get("orch_queue")) is int and w["orch_queue"] >= 0 else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", role=w.get("role") if w.get("role") in ("orchestrator", "steward") else "", queue=str(w["orch_queue"]) if type(w.get("orch_queue")) is int and w["orch_queue"] >= 0 else "", decide=str(w["orch_decide"]) if type(w.get("orch_decide")) is int and w["orch_decide"] > 0 else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -1001,10 +1001,20 @@ for f in local:
     # running turn (the worker's orch_queue, the node inventory's `orchq=`) — only
     # when the node counted one (0 included), so an orchestrator that cannot count
     # (Codex, no mod, an older node) writes the six columns byte for byte as before.
+    # An 8th column (issue #2670, EPIC #2668 C2): `decide=<n>`, the steward's
+    # decision sheet rows still open (the node's `orchdec=`) — the 7th kept (empty
+    # when not counted) so the two never trade places; none ⇒ byte for byte as before.
     line = lambda r: "\x1f".join(clean(v) for v in (r["wid"], r["node"], r["av"], r["state"], r["needs"],
-                                                      r["detail"][:120]) + ((r["queue"],) if r["queue"] else ())) + "\n"
+                                                      r["detail"][:120]) + ((r["queue"],) if r["queue"] or r["decide"] else ())
+                                 + (("decide=" + r["decide"],) if r["decide"] else ())) + "\n"
     write(os.path.join(gdir, "orch_" + f["sess"]), "".join(line(r) for r in orch[:1]))
     write(os.path.join(gdir, "orch_all_" + f["sess"]), "".join(line(r) for r in orch))
+    # The steward (issue #2670) is no row either: its worker_ids, for the rows
+    # pass to skip (tmux-dashboard-rows.sh); never one ⇒ no file at all.
+    stew = "".join(clean(r["wid"]) + "\n" for r in rows if r["role"] == "steward"
+                   and not (r["local"] and r["local"] != f["sess"]))
+    if stew or os.path.exists(os.path.join(gdir, "steward_all_" + f["sess"])):
+        write(os.path.join(gdir, "steward_all_" + f["sess"]), stew)
     write(os.path.join(gdir, "orch_multi_" + f["sess"]),
           "".join(clean(r["node"]) + "\x1f" + clean(r["av"]) + "\n" for r in orch) if len(orch) > 1 else "")
     # The batches nobody drives (issue #1916): `epicstale_<sess>` beside the cache,

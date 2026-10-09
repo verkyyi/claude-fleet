@@ -80,6 +80,8 @@ R="${E}0m"; US=$'\x1f'
 # (#1921 — a local one is looked up below), then @reap_policy.
 # The orchestrating session (issue #1957, `@fleet_role orchestrator`) reads as
 # `home` in the name field: no row, as a panel — 「新任务」 wears it instead.
+# So does its steward (issue #2670, `@fleet_role steward`): no row, ever — what it
+# finds reaches you only as the orchestrator's decision sheet.
 # After @reap_policy (issue #1958): @epic, `<owner/name>#<N>` on the window that
 # drives a running EPIC (fleet-epic-heartbeat.sh stamps it) — the row is then the
 # EPIC's: its parent issue's number + title, badged landed/members (epic_v).
@@ -89,7 +91,7 @@ R="${E}0m"; US=$'\x1f'
 # bash 3.2 keeps the backslash of a `${v:+\}}` inside double quotes (issue #2601).
 _WTEST='#{?@test_identity,,'; _WTEND='}'
 [ "${FLEET_ROWS_TEST:-0}" = 1 ] && { _WTEST=''; _WTEND=''; }
-WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,#{?#{==:#{@fleet_role},orchestrator},home,${_WTEST}#{window_name}${_WTEND}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?#{||:#{@remote},#{@solo_shell}},,#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},home,${_WTEST}#{window_name}${_WTEND}}}${US}#{pane_current_path}${US}#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}#{?@quota_stuck,stuck:,}#{@quota_failover}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}#{@sleep_since}#{?@sleep_wake_deferred,:#{@sleep_wake_deferred},}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -518,6 +520,10 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   [ -e "$_orchf" ] || _orchf="$G/orch_$FLEET_SESSION"
   if [ -s "$_orchf" ]; then
     while IFS=$US read -r _ow _; do [ -n "$_ow" ] && _orchw+="wid:$_ow "; done < "$_orchf"
+  fi
+  # Nor is its steward (issue #2670): steward_all_<sess>, one worker_id a line.
+  if [ -s "$G/steward_all_$FLEET_SESSION" ]; then
+    while IFS= read -r _ow; do [ -n "$_ow" ] && _orchw+="wid:$_ow "; done < "$G/steward_all_$FLEET_SESSION"
   fi
   while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf _ _ _ _ _ r_test r_akind r_atext _; do
     case "$_orchw" in *" $r_wid "*) continue ;; esac

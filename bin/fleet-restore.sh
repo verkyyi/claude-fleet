@@ -266,7 +266,7 @@ snapshot() {
     # WIN row — bin/fleet-orchestrator.sh ensure reopens it (fleet-up, the tick).
     # Then (issue #1296): @cc_session_id, the pane's own session id as
     # its hooks recorded it — the resolver resumes THAT before guessing by mtime.
-    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?#{==:#{@fleet_role},orchestrator},home,#{window_name}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},home,#{window_name}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
       [ -n "$spath" ] && printf '||||__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap >> "$tmp" 2>/dev/null
     # A desk session (issue #2676) is a no-repo row whose ticket lives in a repo:

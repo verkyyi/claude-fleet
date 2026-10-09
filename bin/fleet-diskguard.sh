@@ -771,6 +771,18 @@ home_watch() {
       mkdir -p "$GDIR" 2>/dev/null
       printf '%s %s orchestrator %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$(printf '%s' "$w" | tr '\n' ' ')" >> "$GDIR/home-heal.log" 2>/dev/null
     fi
+    # The steward (issue #2670, EPIC #2668 C2) comes back the same way, and its
+    # beat runs here — detached, and a no-op until the next one is due: only a
+    # beat with something new wakes its model (fleet-steward-tick.sh).
+    had="$(tmux -L "$s" list-windows -t "=$s" -F '#{@fleet_role}' 2>/dev/null | grep -cx steward)"
+    w="$(bash "$BIN/fleet-steward.sh" ensure "$s" 2>/dev/null)"; rc=$?
+    if [ "$rc" = 0 ]; then
+      if [ "${had:-0}" = 0 ] && [ -n "$w" ]; then
+        mkdir -p "$GDIR" 2>/dev/null
+        printf '%s %s steward reopened %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$s" "$w" >> "$GDIR/home-heal.log" 2>/dev/null
+      fi
+      ( bash "$BIN/fleet-steward-tick.sh" beat --session "$s" >/dev/null 2>&1 & ) 2>/dev/null
+    fi
     out="$(fleet_home_heal "$s" "$s")"
     [ -n "$out" ] || continue
     mkdir -p "$GDIR" 2>/dev/null

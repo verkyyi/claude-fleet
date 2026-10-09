@@ -495,7 +495,7 @@ migrate_one_body() {
   wmain=$( { fleet_repo_mains "$SESS"; printf '%s\n' "${FLEET_MAIN:-}"; } | grep -Fx -- "${cwd%/}" | head -n 1)
   # the orchestrating session (issue #1957) stays on its login, as the hub does:
   # its fleet's tick reopens it there (bin/fleet-orchestrator.sh ensure)
-  if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{?#{==:#{@fleet_role},orchestrator},1,#{@hub}}' 2>/dev/null)" "$raw" "$cwd" "$wmain" "$sid"; then
+  if ! migrate_eligible "$name" "$(TM display-message -p -t "$wid" '#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},1,#{@hub}}' 2>/dev/null)" "$raw" "$cwd" "$wmain" "$sid"; then
     say "  – $name ($wid): not eligible (panel/hub/main-cwd) — skipped"; skipped=$((skipped+1)); return 0
   fi
   # --cfg-stale (issue #1783): the one judge, asked again NOW — the pick was a

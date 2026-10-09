@@ -166,6 +166,8 @@ skills/epic-page/template.html
 skills/fleet-open/SKILL.md
 skills/fleet-orchestrate/SKILL.md
 skills/fleet-orchestrate/role.md
+skills/fleet-steward/SKILL.md
+skills/fleet-steward/role.md
 skills/handoff/SKILL.md
 commands/README.md
 commands/fleet-claim.md

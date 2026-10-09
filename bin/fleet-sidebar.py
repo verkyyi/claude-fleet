@@ -822,7 +822,7 @@ ORCH_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 def orch_line(session):
     """The first line of fleet-hub-sessions.sh's orch_<session> (online first),
-    split on US — `wid·node·av·state·needs·detail[·queue]` — or None when no
+    split on US — `wid·node·av·state·needs·detail[·queue[·decide=N]]` — or None when no
     machine runs one."""
     try:
         with open(os.path.join(status_dir(), "orch_" + (session or "")), encoding="utf-8") as f:
@@ -882,6 +882,16 @@ def steward_rows(line):
             for name, glyph, key in STEWARD_ROWS if counts.get(name, 0) > 0]
 
 
+def orch_decide(p):
+    """The steward's decision sheet rows still open (issue #2670, EPIC #2668 C2):
+    the line's `decide=<n>` column as an int, 0 when it has none — no steward, an
+    older node, or a sheet with nothing left."""
+    for v in (p or [])[6:]:
+        if v.startswith("decide=") and v[7:].strip().isdigit():
+            return int(v[7:])
+    return 0
+
+
 def remote_name(session, wid):
     """A row on another machine's window name, off the refresh loop's cache
     (fleet-hub-sessions.sh remote_<session>: worker key in column 1, name in 8)
@@ -913,7 +923,9 @@ def with_portal(rows, placing, session=""):
     state, glyph = "portal", "+"
     line = orch_line(session) if session else None
     ost = line[3] if line else ""
-    if ost in ("needs", "failed"):
+    # A decision sheet with rows still open (issue #2670) is the one other way it
+    # turns red: the steward found something only you can decide.
+    if ost in ("needs", "failed") or orch_decide(line) > 0:
         state, glyph = "needs", "!"
     elif ost in ORCH_BUSY:
         state, glyph = "working", ORCH_SPIN[int(time.time() * 4) % len(ORCH_SPIN)]
