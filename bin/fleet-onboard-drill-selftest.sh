@@ -125,6 +125,9 @@ r=$(printf '%s' "$LS" | bash "$DRILL" --ls-row 看图)
 r=$(printf '%s' "$LS" | bash "$DRILL" --ls-row first)
 [ "$(printf '%s' "$r" | cut -f3)" = - ] && ok 'restart: a local row has no @fleet_id (-)' || bad "restart: local row got '$r'"
 if printf '%s' "$LS" | bash "$DRILL" --ls-row nope >/dev/null; then bad 'restart: ls_row found a row that is not there'; else ok 'restart: no such row is rc 1'; fi
+# the client's bar alone (C9 run 2: 「⌘N 编排」, no 新任务 row) is the client
+st=$(printf '%s\n' "$P0" '用时 9 秒' '  drill1007c  │ ⌘N 编排 · ⌘P 会话与动作' | qrs)
+[ "$st" = none ] && ok 'qr: the client by its bar keys (no 新任务) reads none' || bad "qr: bar-only client read '$st'"
 # nothing past the preflight ran: no run dir was made
 if ls -d "$T"/fleet-onboard-drill.* >/dev/null 2>&1; then bad 'a refused run left a run dir'; else ok 'no refused run made a run dir'; fi
 
@@ -144,7 +147,9 @@ done
 printf '%s %s %s\n' "$m" "$url" "$body" >> "$CURL_LOG"
 printf 'ARGV %s\n' "$argv" >> "$CURL_LOG"
 n=$(grep -c '^DELETE ' "$CURL_LOG")
-if [ "$m" = DELETE ] && [ "$n" = 1 ]; then
+if [ "$m" = DELETE ] && [ "$n" -le "${CURL_202:-0}" ]; then
+  printf '{"logins":["drillx@m5"],"status":"removing"}' > "$out"; printf 202
+elif [ "$m" = DELETE ] && [ "$n" = $(( ${CURL_202:-0} + 1 )) ]; then
   printf '{"person_id":"drill-1","devices":1,"accounts":1,"nodes":["ep_9"]}' > "$out"; printf 200
 else
   printf '{"error":"approve code unknown or expired"}' > "$out"; printf 401
@@ -171,5 +176,13 @@ if grep -q 'devices/revoke' "$T/curl.log"; then bad 'a drill-person teardown sti
 r=$(ls "$T"/fleet-onboard-drill.drillx.*/hub-residue.txt 2>/dev/null | head -n 1)
 if [ -n "$r" ] && grep -q 'HTTP 401' "$r"; then ok "the hub's 401 is kept as evidence (hub-residue.txt)"; else bad "no hub-residue.txt with the 401 (${r:-none})"; fi
 
+# --- 202 removing (C9 run 2): the hub closes the drill person's login first ---
+mkdir -p "$T/homes/drilly"; : > "$T/curl.log"
+out=$(env PATH="$T/shim:$PATH" FLEET_CONF_DIR="$T/conf" FLEET_LOGIN_HOMES="$T/homes" TMPDIR="$T" \
+      CURL_LOG="$T/curl.log" CURL_202=2 FLEET_DRILL_POLL_SECS=0 FLEET_DRILL_LOGIN_REMOVE="$T/shim/remove" \
+      CCQUOTA_VIEWER_TOKEN='' FLEET_HUB_TOKEN='' bash "$DRILL" --teardown drilly --invite "$CODE" 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ "$(grep -c '^DELETE ' "$T/curl.log")" = 4 ] && printf '%s\n' "$out" | grep -q 'no drill person on the hub'
+then ok 'teardown --invite: 202 removing is waited out, then the person is gone (exit 0)'
+else bad "202 removing: exit $rc, $(grep -c '^DELETE ' "$T/curl.log") DELETEs: $(printf '%s' "$out" | tail -n 4)"; fi
 [ "$FAILS" = 0 ] && { echo 'fleet-onboard-drill-selftest: PASS'; exit 0; }
 echo "fleet-onboard-drill-selftest: FAIL ($FAILS)"; exit 1
