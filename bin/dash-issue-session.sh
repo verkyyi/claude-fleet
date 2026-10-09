@@ -337,7 +337,8 @@ BASE="${FLEET_BASE_BRANCH:-main}"
 # --async tail and a hub-placed start carry the agent this pass resolved.
 # When the pre-spawn gate below will read the issue anyway, that ONE read happens
 # here and the labels come out of it (issue #2638: spawn reads the issue once for
-# dedup, title, snapshot and agent — #459); the gate then reuses it.
+# dedup, title, snapshot and agent — #459); the gate then reuses it. Hub off
+# only: with the hub on, the lease below is checked before GitHub is read at all.
 GATE_CS=''; GATE_AT=0
 _lbl_names='import json,sys
 try: d=json.load(sys.stdin)
@@ -346,7 +347,8 @@ for l in d.get("labels") or []:
     print(l.get("name","") if isinstance(l,dict) else l)'
 if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ -n "$REPO" ]; then
   if [ -n "$WIN_TITLE" ]; then _lbl=$(fleet_cached_labels "$REPO" "$num")
-  elif [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && command -v gh >/dev/null 2>&1; then
+  elif [ "${CCQUOTA_FLEET:-0}" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_FLAG" != 1 ] \
+       && command -v gh >/dev/null 2>&1; then
     GATE_AT=$(date +%s)
     GATE_CS=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
           --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || GATE_CS=''
