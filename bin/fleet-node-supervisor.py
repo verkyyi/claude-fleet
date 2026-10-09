@@ -1846,7 +1846,9 @@ def status_lines(paths, table, state):
             if good:
                 ok += 1
             else:
-                bad.append("%s %s" % (u["name"], x.get("result") or x.get("status") or "never"))
+                # mid-run, a task still carries its last run's rc: name that outcome, not "running"
+                res = "failed" if x.get("result") == "running" and not u.get("keepalive") else x.get("result")
+                bad.append("%s %s" % (u["name"], res or x.get("status") or "never"))
         out.append("account %-17s %d/%d ok · last run %s%s"
                    % (login, ok, len(units), iso(last), (" · " + ", ".join(bad)) if bad else ""))
     for r in services_summary(paths, state):
