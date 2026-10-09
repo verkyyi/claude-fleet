@@ -366,9 +366,13 @@ page_says() { "$REAL_TMUX" -S "$BREAK_SOCK" capture-pane -p -t sx:w 2>/dev/null 
 # login lapsed): the window stays on the page and says why (#1842 ③).
 drill_resume_fails_fast() {
   CAP=6; BREAK_SOCK="$WORK/sock-rf"; local c="$WORK/rf" t0
-  WRAP_FAST=1 wrapped sx w "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
+  # The wrapper times a launch in whole epoch seconds: with a 1 s window the failed
+  # resume had to start and end inside ONE wall-clock second, and a busy macOS
+  # runner crossing the boundary read it as an ordinary exit (#2500). 3 s leaves
+  # the fast fail ≥2 s of room; the first session runs past it (3.2 s).
+  WRAP_FAST=3 wrapped sx w "$c" || { WHY="cannot start the isolated tmux server"; return 1; }
   until_ok 10 grep -q . "$c/argv" || { WHY="the agent never started"; return 1; }
-  sleep 1.2; printf rc0 > "$c/mode"; : > "$c/go"     # a real session: it ran past the window
+  sleep 3.2; printf rc0 > "$c/mode"; : > "$c/go"     # a real session: it ran past the window
   until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page after the first exit"; return 1; }
   : > "$c/resume-fails"
   t0=$(now); nt send-keys -t sx:w Enter
