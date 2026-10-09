@@ -200,9 +200,29 @@ def pad(text, width):
     return text + " " * max(0, width - cells(text))
 
 
+def progress(r):
+    """The row's badge when it is a count (issue #2544): an EPIC driver's core
+    members merged / core members, a parent's sub-tasks done / total; "" else."""
+    b = (r.get("badge") or "").strip()
+    return b if re.fullmatch(r"[0-9]{1,4}/[0-9]{1,4}", b) else ""
+
+
+def epic_link(r):
+    """An EPIC driver's 总单 (issue #2544) — its row is named `<简称>·批次`,
+    titled `EPIC: …`, or a scratch (no issue of its own) wearing an issue cell,
+    which is the parent's — as a GitHub URL."""
+    repo, issue = r.get("repo") or "", r.get("issue") or ""
+    if not issue or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        return ""
+    if not (r["name"].endswith("·批次") or re.search(r"(^|[:/])scratch-[0-9]+$", r["key"])
+            or re.match(r"EPIC\s*[:：]", r.get("title") or "", re.I)):
+        return ""
+    return "https://github.com/%s/issues/%s" % (repo, issue)
+
+
 def fields(r, colour=False):
     """The columns `ls` prints and `show` names, in order."""
-    return [("名称", r["name"]), ("单号", "#" + r["issue"] if r["issue"] else ""), ("机器", r["node"]),
+    return [("名称", r["name"]), ("进度", progress(r)), ("单号", "#" + r["issue"] if r["issue"] else ""), ("机器", r["node"]),
             ("Agent", r.get("agent") or "—"), ("剩余", left_cell(r, colour)),
             ("模型", r.get("model") or "—"), ("Effort", r.get("effort") or "—"),
             ("状态", STATE_SAY.get(r["state"], r["state"])), ("PR", r["pr"]), ("回收方式", r["reap"])]
@@ -244,8 +264,11 @@ def one(all_rows, query):
 
 def table(rs, out=sys.stdout):
     colour = out.isatty() and not os.environ.get("NO_COLOR")
-    cols = [[name for name, _ in fields(rs[0])]] if rs else []
-    body = [[v for _, v in fields(r, colour)] for r in rs]
+    # 进度 (issue #2544) only when some row has a count: a list without one
+    # prints byte for byte as before
+    drop = set() if any(progress(r) for r in rs) else {"进度"}
+    cols = [[name for name, _ in fields(rs[0]) if name not in drop]] if rs else []
+    body = [[v for k, v in fields(r, colour) if k not in drop] for r in rs]
     widths = [max(cells(row[i]) for row in cols + body) for i in range(len(cols[0]))] if rs else []
     for row in cols + body:
         print("  ".join(pad(v, w) for v, w in zip(row, widths)).rstrip(), file=out)
@@ -312,9 +335,11 @@ def cmd_ls(args):
     rs = attach_bus(rows())
     if args == ["--json"]:
         keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo")
+        derived = (("progress", progress), ("epic_url", epic_link))
         bus = (("agent", "agent"), ("ctx_left", "left"), ("ctx_band", "band"), ("ctx_ts", "ts"),
                ("model", "model"), ("effort", "effort"))
-        print(json.dumps([dict({k: r.get(k, "") for k in keep}, **{k: r.get(v, "") for k, v in bus})
+        print(json.dumps([dict({k: r.get(k, "") for k in keep}, **{k: r.get(v, "") for k, v in bus},
+                               **{k: f(r) for k, f in derived})
                           for r in rs], ensure_ascii=False))
         return 0
     if not rs:
@@ -331,7 +356,7 @@ def cmd_show(args):
     if row is None:
         return rc
     attach_bus([row])
-    lines = fields(row, sys.stdout.isatty() and not os.environ.get("NO_COLOR")) + [("标题", row.get("title") or ""), ("仓库", row.get("repo") or ""),
+    lines = fields(row, sys.stdout.isatty() and not os.environ.get("NO_COLOR")) + [("标题", row.get("title") or ""), ("总单", epic_link(row)), ("仓库", row.get("repo") or ""),
                            ("分组", row.get("group") or ""), ("key", row["key"])]
     w = max(cells(k) for k, _ in lines)
     for k, v in lines:

@@ -28,6 +28,10 @@
 #   H  bin/fleet → fleet-shell.sh cli   with no FLEET_SHELL the verb re-runs inside
 #                            the client server's environment (an isolated `-L`
 #                            server); no client → exit 1 with why
+#   I  a batch (issue #2544)  an EPIC driver's row `<简称>·批次` with its badge:
+#                            ls grows a 进度 column (core merged / core) only when
+#                            some row has a count; show names its 总单 URL — a
+#                            renamed driver, or a scratch wearing an issue cell
 #
 # tmux only on isolated sockets. Drives: bin/fleet, bin/fleet-session-cli.py,
 # bin/fleet-shell.sh, bin/fleet-quickopen.py, bin/fleet-hub-write.sh.
@@ -247,6 +251,24 @@ if command -v tmux >/dev/null 2>&1; then
   FLEET_SHELL_SESSION="$L" bash "$BIN/fleet" show 登录页 >/dev/null 2>&1
   eq "H …and its exit code (ambiguous → 4)" 4 "$?"
 fi
+
+# --- I. a batch driver (issue #2544) ---------------------------------------------------
+{
+  printf '%s\n' "wid:F/acme-web:scratch-4${T}looping${T}↻${T}像本地·批次${T}m5${T}acme/web (3)${T}7/9${T}#2482${T}—${T}done:2h${T}${T}acme/web"
+  printf '%s\n' "wid:F/acme-web:scratch-5${T}looping${T}↻${T}#2490${T}m5${T}acme/web (3)${T}0/4${T}#2490${T}—${T}done:2h${T}${T}acme/web"
+  printf '%s\n' "wid:F/issue-12${T}needs${T}!${T}登录页重做${T}m4${T}acme/web (3)${T}${T}#12${T}#75✓${T}merged${T}登录页重做${T}acme/web"
+} > "$W/rows-epic.tsv"
+cbi() { FLEET_SESSION_CLI_ROWS="$W/rows-epic.tsv" FLEET_SESSION_CLI_CACHE="" FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
+out=$(cbi ls)
+has "I ls: a 进度 column once a row has a count" "名称         进度  单号" "$out"
+has "I ls: the batch row — its name, core merged / core" "像本地·批次  7/9   #2482" "$out"
+has "I ls: a row with no count, blank there" "登录页重做         #12" "$out"
+has "I show: the 进度" "进度      7/9" "$(cbi show 像本地)"
+has "I show: the 总单 URL of a renamed driver" "总单      https://github.com/acme/web/issues/2482" "$(cbi show 像本地)"
+has "I show: …of a scratch wearing an issue cell" "总单      https://github.com/acme/web/issues/2490" "$(cbi show '#2490')"
+case "$(cbi show '#12')" in *总单*) eq "I show: an ordinary worker has no 总单" none 总单 ;; *) eq "I show: an ordinary worker has no 总单" none none ;; esac
+eq "I ls --json: progress + epic_url" "7/9|https://github.com/acme/web/issues/2482;0/4|https://github.com/acme/web/issues/2490;|;" \
+  "$(cbi ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["progress"], r["epic_url"]) for r in json.load(sys.stdin)))')"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'fleet-session-cli selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

@@ -1120,7 +1120,14 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # the EPIC title's theme (「EPIC: 托管节点：…」 → 托管节点), else the driver's
     # own name when it says something (`EPIC·托管节点` → 托管节点), else `#N`. The
     # number moves to the issue cell — the bar's detail line under a highlight.
-    epic_theme=''; [ -n "$ettl" ] && fleet_epic_theme_v "$ettl"
+    # A driver the heartbeat renamed `<简称>·批次` (issue #2544) reads as that
+    # name first: the word its members wear, and the one cell that reaches every
+    # machine even when the title does not.
+    epic_theme=''
+    case "${name##*:}" in
+      ?*·批次) epic_theme=${name##*:} ;;
+      *) [ -n "$ettl" ] && fleet_epic_theme_v "$ettl" ;;
+    esac
     if [ -z "$epic_theme" ]; then
       case "$name" in
         scratch-[0-9]*|issue-[0-9]*|*:scratch-[0-9]*|*:issue-[0-9]*|'') ;;
@@ -1213,7 +1220,8 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # `<简称>·` prefix is the parent row's word already — the flat list, the window
   # name and ⌘P keep it. Only a short prefix is one of ours (4 CJK glyphs are
   # 12 bytes where the locale counts bytes, 4 where it counts characters).
-  if [ "$depth" -gt 0 ] && [ "$dname" = "$name" ]; then
+  # A driver's own `<简称>·批次` (issue #2544) is its whole word, never a prefix.
+  if [ "$depth" -gt 0 ] && [ "$dname" = "$name" ] && [ -z "$en" ]; then
     case "$name" in ?*·?*) _np=${name%%·*}
       [ "${#_np}" -le 12 ] && dname=${name#*·} ;; esac
   fi
