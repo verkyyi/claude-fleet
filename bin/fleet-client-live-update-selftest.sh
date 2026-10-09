@@ -54,6 +54,18 @@
 #                  the digest moved, update.state reloaded, the badge 已重新载入新文件;
 #                  nothing adopted or staged; `start` does the same; a MARKED home
 #                  never reloads on the digest alone
+#   L. follow      (issue #2737) a checkout-style home (<home> a link into
+#                  <home>.versions/, no mark) switched under the running client:
+#                  `follow --from <old>` → exit 4 within 30 s: the list a new
+#                  process on the new stamp, the servers / windows / window in view
+#                  / proxy pane the same, the digest moved, `running` in step, the
+#                  tick has nothing left; a version whose reload fails → exit 1,
+#                  the mirror pinned back onto the old version dir, the old conf,
+#                  update.state pending, the bar 「待换新（载入失败，已退回旧版）」,
+#                  `running` WARNs, the tick does not retry; release.json
+#                  `client_reload: restart` → exit 3, nothing reloaded (follow nor
+#                  tick), the bar 下次打开生效, and a start with nobody attached
+#                  closes the old servers
 # tmux / python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -414,6 +426,102 @@ printf '\n# j3\n' >> "$ROOT/conf/tmux-shell.conf"
 FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
 eq 'J: a marked home ignores the digest (exit 0)' 0 "$rc"
 eq 'J: … nothing reloaded' "$D1" "$(dig)"
+
+# --- L. the install switched under the running client (issue #2737) ------------------------
+# install-sync's switch of a checkout-style home (no .client-version, <home> a link
+# into <home>.versions/): `follow --from <old>` takes it in place — same servers,
+# same windows, the same window in view, the proxy untouched — and goes BACK to
+# the old version when the new one cannot load.
+exec 7>&- 2>/dev/null; [ -n "$CLIENT_PID" ] && kill "$CLIENT_PID" 2>/dev/null; CLIENT_PID=''
+"$REAL_TMUX" -L "$SESS" kill-server 2>/dev/null; "$REAL_TMUX" -L "$SESS-stage" kill-server 2>/dev/null
+pkill -f "fleet-shell.sh keeper $SESS" 2>/dev/null
+rm -rf "$ROOT" "$V" "$UST" "$FLEET_SHELL_CACHE/bin"
+# mkplain <key> — a version dir as install-sync checks one out: no mark
+mkplain() { mkver "$V/$1" "$1" "cafe$1"; rm -f "$V/$1/.client-version"; }
+mkplain f1
+ln -s "$V/f1" "$ROOT"
+PATH="$SHIM:$PATH" bash "$ROOT/bin/fleet-shell.sh" >"$WORK/start-l.out" 2>&1 || { cat "$WORK/start-l.out" >&2; fail 'L: the client did not start'; }
+rm -f "$WORK/client.fifo"; mkfifo "$WORK/client.fifo"
+"$REAL_TMUX" -L "$SESS" -C attach-session -t "=$SESS" < "$WORK/client.fifo" >/dev/null 2>&1 &
+CLIENT_PID=$!
+exec 7> "$WORK/client.fifo"
+waitfor 5 attached || fail 'L: no client attached'
+ts resize-window -t "=$SESS:" -x 200 -y 50 2>/dev/null
+ts run-shell -t "=$SESS:" "bash '$FLEET_SHELL_CACHE/bin/fleet-sidebar.sh' sync '#{session_id}' >>'$WORK/sync.err' 2>&1 || :"
+waitfor 10 side_is_any || fail 'L: no list pane' "$(cat "$WORK/sync.err")"
+waitfor 10 proxy_up || fail 'L: no proxy pane'
+has 'L: the mirror follows <home>' "$(readlink "$FLEET_SHELL_CACHE/bin/fleet-shell.sh")" "${ROOT#"$WORK"}/bin/fleet-shell.sh"
+wins() { ts list-windows -a -F '#{window_id}' 2>/dev/null | sort | tr '\n' ' '; tsg list-windows -a -F '#{window_id}' 2>/dev/null | sort | tr '\n' ' '; }
+inview() { ts display-message -p -t "=$SESS:" '#{window_id}' 2>/dev/null; tsg display-message -p -t "=$SESS-stage:" '#{window_id}' 2>/dev/null; }
+SP=$(shell_pid); GP=$(stage_pid); PP=$(proxy_pid); LP=$(side_pid); W0=$(wins); IV=$(inview)
+eq 'L: no client of this install moved → running says in step (exit 0)' 0 "$(upd running --root "$ROOT" >/dev/null; echo $?)"
+# the switch: f2's list differs, nothing else
+mkplain f2
+own "$V/f2" fleet-sidebar.py; printf '\n# f2: the list moved\n' >> "$V/f2/bin/fleet-sidebar.py"
+rm -f "$ROOT"; ln -s "$V/f2" "$ROOT"
+has 'L: the doctor sees the client behind the install' "$(upd running --root "$ROOT")" '客户端进程跑的不是安装的版本'
+t0=$(date +%s)
+PATH="$SHIM:$PATH" upd follow "$SESS" --from "$V/f1"; rc=$?
+eq 'L: follow → reloaded in place (exit 4)' 4 "$rc"
+VSF=$(stamp_of "$V/f2")
+waitfor 30 side_is "$VSF"
+eq 'L: the list runs the new code' "$VSF" "$(side_ver)"
+CHECKS=$((CHECKS + 1)); [ "$(side_pid)" != "$LP" ] || fail 'L: the list process is the old one'
+CHECKS=$((CHECKS + 1)); [ $(( $(date +%s) - t0 )) -le 30 ] || fail 'L: not within 30 s' "$(( $(date +%s) - t0 ))s"
+eq "L: the shell's server: same pid" "$SP" "$(shell_pid)"
+eq "L: the stage's server: same pid" "$GP" "$(stage_pid)"
+eq 'L: the proxy pane untouched (fleet-remote-view.sh unchanged)' "$PP" "$(proxy_pid)"
+eq 'L: the same windows' "$W0" "$(wins)"
+eq 'L: the same window in view' "$IV" "$(inview)"
+eq 'L: @client_digest = the install' "$(upd digest)" "$(dig)"
+has 'L: update.state reloaded' "$(cat "$UST" 2>/dev/null)" '"phase": "reloaded"'
+eq 'L: the doctor: in step again (exit 0)' 0 "$(upd running --root "$ROOT" >/dev/null; echo $?)"
+FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
+eq 'L: the keeper tick has nothing left (exit 0)' 0 "$rc"
+# a new version that cannot load: back on the old one, 「待换新」 on the bar
+cp "$FLEET_SHELL_CACHE/tmux.conf" "$WORK/conf.f2"
+mkplain f3
+rm -f "$V/f3/bin/fleet-shell.sh"
+cat > "$V/f3/bin/fleet-shell.sh" <<EOF
+#!/bin/bash
+# a client whose reload breaks half way: its conf already written
+if [ "\${1:-}" = reload ]; then echo '# broken' > "\$FLEET_SHELL_CACHE/tmux.conf"; echo boom >&2; exit 1; fi
+exec bash "$BIN/fleet-shell.sh" "\$@"
+EOF
+rm -f "$V/f3/conf/tmux-shell.conf"; { cat "$BIN/../conf/tmux-shell.conf"; printf '\n# f3\n'; } > "$V/f3/conf/tmux-shell.conf"
+rm -f "$ROOT"; ln -s "$V/f3" "$ROOT"
+PATH="$SHIM:$PATH" upd follow "$SESS" --from "$V/f2"; rc=$?
+eq 'L: a reload that fails → exit 1' 1 "$rc"
+has 'L: back on the old mirror (pinned to f2)' "$(readlink "$FLEET_SHELL_CACHE/bin/fleet-shell.sh")" "/f2/bin/fleet-shell.sh"
+CHECKS=$((CHECKS + 1)); cmp -s "$WORK/conf.f2" "$FLEET_SHELL_CACHE/tmux.conf" || fail 'L: the conf is not the old one again' "$(head -n 2 "$FLEET_SHELL_CACHE/tmux.conf")"
+eq "L: the shell's server: same pid" "$SP" "$(shell_pid)"
+eq 'L: the same windows' "$W0" "$(wins)"
+st=$(cat "$UST" 2>/dev/null)
+has 'L: update.state pending' "$st" '"phase": "pending"'
+has 'L: the bar says 待换新 and why' "$(FLEET_CLIENT_UPDATE_SHOW=0 badge)" '待换新（载入失败，已退回旧版）'
+has 'L: the doctor WARNs with it' "$(upd running --root "$ROOT")" '载入失败，已退回旧版'
+FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
+eq 'L: the keeper tick does not retry the same switch' 1 "$rc"
+has 'L: … the mirror still the old one' "$(readlink "$FLEET_SHELL_CACHE/bin/fleet-shell.sh")" "/f2/bin/fleet-shell.sh"
+# a release that says client_reload: restart — nothing reloaded, 「下次打开生效」
+mkplain f4
+printf '{"schema": 1, "client_reload": "restart", "components": {}}\n' > "$V/f4/release.json"
+rm -f "$V/f4/conf/tmux-shell.conf"; { cat "$BIN/../conf/tmux-shell.conf"; printf '\n# f4\n'; } > "$V/f4/conf/tmux-shell.conf"
+rm -f "$ROOT"; ln -s "$V/f4" "$ROOT"
+D4=$(dig)
+PATH="$SHIM:$PATH" upd follow "$SESS" --from "$V/f3"; rc=$?
+eq 'L: client_reload restart → later (exit 3)' 3 "$rc"
+eq 'L: … nothing reloaded' "$D4" "$(dig)"
+has 'L: update.state later' "$(cat "$UST" 2>/dev/null)" '"phase": "later"'
+has 'L: the bar says 下次打开生效' "$(FLEET_CLIENT_UPDATE_SHOW=0 badge)" '下次打开生效'
+FLEET_CLIENT_IDLE_SECS=0 upd tick "$SESS"; rc=$?
+eq 'L: the keeper tick does not hot-reload it either (exit 3)' 3 "$rc"
+eq 'L: … still nothing reloaded' "$D4" "$(dig)"
+exec 7>&-; kill "$CLIENT_PID" 2>/dev/null; CLIENT_PID=''
+waitfor 5 not attached
+upd start; rc=$?
+eq 'L: start with nobody attached opens as usual (exit 0)' 0 "$rc"
+CHECKS=$((CHECKS + 1)); ts has-session -t "=$SESS" 2>/dev/null && fail 'L: the old servers were kept for a restart release'
 
 if [ "$FAIL" -eq 0 ]; then printf 'PASS fleet-client-live-update-selftest (%d checks)\n' "$CHECKS"; exit 0; fi
 printf 'FAIL fleet-client-live-update-selftest: %d of %d\n' "$FAIL" "$CHECKS"

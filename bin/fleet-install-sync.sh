@@ -84,7 +84,10 @@
 #              bin/fleet-install-apply.sh --from <old> --to <stable> (C2 #1119:
 #              the one implementation of "sync once" — daemons reloaded, hooks
 #              merged, commands/skills installed) → the NEW version's
-#              bin/fleet-doctor.sh.
+#              bin/fleet-doctor.sh. Kept: the NEW version's
+#              `fleet-client-update.sh follow --from <old>` reloads a client
+#              shell running from this install in place (issue #2737 —
+#              client_follow), in the background.
 #   rolled-back the check failed (nothing switched), or the doctor printed a
 #              FAIL line the pre-update doctor did NOT (a FAIL this login
 #              already had — a stale quota cache, a missing tool — is not the
@@ -762,6 +765,22 @@ SHARED
 vers_retire() { mkdir -p "$VERS/.retired" 2>/dev/null && now > "$VERS/.retired/$1"; }
 vers_unretire() { rm -f "$VERS/.retired/$1"; }
 
+# client_follow <old version dir> — the client shell running from this install
+# takes the switch in place (issue #2737): the NEW version's
+# `fleet-client-update.sh follow`, in the background, so a tmux that does not
+# answer never holds the tick. It reloads the running shell's confs, list and
+# loops (the same servers, windows and views), goes back to <old> if that
+# fails, and keeps its outcome in the client's update.state / update.log. No
+# client shell of this install running: it does nothing.
+# FLEET_INSTALL_SYNC_CLIENT_FOLLOW=0 leaves it to the keeper's drift tick.
+client_follow() {
+  local cu="$ROOT/bin/fleet-client-update.sh"
+  [ "${FLEET_INSTALL_SYNC_CLIENT_FOLLOW:-1}" = 0 ] && return 0
+  [ -f "$cu" ] || return 0
+  ( nohup bash "$cu" follow --from "$1" </dev/null >/dev/null 2>&1 & )
+  return 0
+}
+
 # vers_drop <dir> — one version dir and its branch, gone. Never the checkout
 # that holds the repository (a .git DIRECTORY), never the one in use.
 vers_drop() {
@@ -1022,6 +1041,7 @@ main() {
   new=${new%,}
   if [ -z "$new" ]; then
     vers_prune
+    client_follow "$olddir"
     finish switched "$(short "$HEAD_SHA") -> $(short "$STABLE_SHA") in one link switch (.prev $(short "$oldkey")); apply: ${APPLY_LINE}$([ -n "$post" ] && printf '; doctor FAIL already present before: %s' "$(printf '%s\n' "$pre" | tr '\n' ',' | sed 's/,$//')")$migrated"
   fi
 

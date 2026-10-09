@@ -58,7 +58,7 @@ has "A: link install = its version" "$OUT" "alice          1111111  = stable"
 has "A: plain checkout = its HEAD" "$OUT" "bob            $(printf '%.7s' "$B_HEAD")"
 has "A: plain checkout named" "$OUT" "plain checkout"
 has "A: alice's shell follows" "$OUT" "(follows its login install)"
-has "A: bob's shell pinned" "$OUT" "2222222  ≠ stable  (pinned to one version dir"
+has "A: bob's shell pinned" "$OUT" "2222222  ≠ stable  (pinned to one version dir until the next install switch"
 has "A: client install read" "$OUT" "(client install)"
 case "$OUT" in *carol*) bad "A: a home with no install is not listed" ;; *) ok ;; esac
 eq "B: one behind → exit 1" 1 "$RC"

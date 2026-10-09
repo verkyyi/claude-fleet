@@ -146,7 +146,7 @@ case "$SHOW" in ''|*[!0-9]*) SHOW=60 ;; esac
 # the bar ticks every 2 s: an old state that waits for nothing is no read at all
 m=$(stat -c %Y "$UST" 2>/dev/null || stat -f %m "$UST" 2>/dev/null)   # GNU first, as above
 case "$m" in ''|*[!0-9]*) m=0 ;; esac
-[ $(( $(date +%s) - m )) -lt "$SHOW" ] || grep -q '"phase": "later"' "$UST" 2>/dev/null || exit 0
+[ $(( $(date +%s) - m )) -lt "$SHOW" ] || grep -qE '"phase": "(later|pending)"' "$UST" 2>/dev/null || exit 0
 urow=$(python3 -c '
 import json, sys, time
 try:
@@ -167,6 +167,9 @@ case "$uph" in
   reloaded) [ "$uage" -lt "$SHOW" ] && utext=$(fleet_ui_t badge_reloaded) ;;   # no .client-version (#2145)
   failed) [ "$uage" -lt "$SHOW" ] && { utext=$(fleet_ui_t badge_update_failed_fmt "${uwhy:-?}"); ucol=$WARN; } ;;
   later)  utext=$(fleet_ui_t badge_update_later); ucol=$WARN ;;
+  # a hot reload that failed and went back to the old client (issue #2737):
+  # until the next switch or start reloads it
+  pending) utext=$(fleet_ui_t badge_update_pending_fmt "${uwhy:-?}"); ucol=$WARN ;;
 esac
 [ -n "$utext" ] && printf '%s %s #[default]%s│' "$ucol" "${utext//#/##}" "$DIM"
 exit 0
