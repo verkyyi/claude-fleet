@@ -457,7 +457,7 @@ mkdir -p "$WORK/adm"; U=$(id -u)
 admenv() { env FLEET_ADMIT=1 TMPDIR="$WORK/adm" FLEET_MEM_TOTAL_MB=16000 FLEET_MEM_PROBE_CMD='echo 1 60 0 0' \
   FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' \
   FLEET_MEM_PS_CMD="printf '101 1 $U 409600 01:00 claude\\n'" "$@"; }
-for i in 1 2 3 4 5; do admenv bash "$POOL" ensure tf --repo - >/dev/null 2>&1; done
+for _ in 1 2 3 4 5; do admenv bash "$POOL" ensure tf --repo - >/dev/null 2>&1; done
 [ "$(grep -c "new-session -d -s tf-pool .* -n warm-home" "$STATE/log")" = 5 ] || fail "Y setup: five ticks, five admitted spawns" "$(cat "$STATE/log")"
 left=$(find "$WORK/adm/.claude-dash/global/admit-reserve" -type f 2>/dev/null | wc -l | tr -d ' ')
 [ "$left" = 0 ] || fail "Y a spawn that opened nothing must release its reservation (left: $left)"
