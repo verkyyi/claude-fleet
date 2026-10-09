@@ -176,7 +176,7 @@ T select-pane -t "$PANE"
 eq "E: the keyboard in the session → its keys" " ⌘P 会话与动作  ⌘N 编排  ⌘↑↓ 切换  ⌘Q 退出 fleet" "$(hint)"
 case "$(raw)" in *"range=user|key-User927]"*"⌘P"*"range=user|key-User928]"*"⌘N"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: each key is its own key-<key> range" "$(raw)" ;; esac
 T set-option -g @fleet_layout solo
-eq "E: the one-session view → ⌃\\ 本机 shell, ⌃D 放到后台 in ⌘↑↓'s place (issue #2566)" " ⌘P 会话与动作  ⌘N 编排  ⌃\\ 本机 shell  ⌃D 放到后台  ⌘Q 退出 fleet" "$(hint)"
+eq "E: the one-session view → ⌃\\ 会话 shell, ⌃D 放到后台 in ⌘↑↓'s place (issue #2566)" " ⌘P 会话与动作  ⌘N 编排  ⌃\\ 会话 shell  ⌃D 放到后台  ⌘Q 退出 fleet" "$(hint)"
 case "$(raw)" in *"range=user|key-C-d]"*"⌃D"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: ⌃D is its key range" "$(raw)" ;; esac
 T set-option -gu @fleet_layout
 T switch-client -c "$CL" -T prefix
@@ -211,7 +211,7 @@ T set-option -uw -t "$PANE" @fleet_orch
 sl=$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')
 case "$sl" in "B   ⌘P 会话与动作  ⌘N 编排"*) CHECKS=$((CHECKS+1)) ;; *) fail "E: the status line at 150 columns carries the slot, then the hint, after the badge" "$sl" ;; esac
 T set-option -g @fleet_layout solo
-eq "E: the one-session view's bar is the same three things" "B   ⌘P 会话与动作  ⌘N 编排  ⌃\\ 本机 shell  ⌃D 放到后台  ⌘Q 退出 fleet" \
+eq "E: the one-session view's bar is the same three things" "B   ⌘P 会话与动作  ⌘N 编排  ⌃\\ 会话 shell  ⌃D 放到后台  ⌘Q 退出 fleet" \
   "$(T display-message -p -c "$CL" '#{E:status-left}' | sed 's/#\[[^]]*\]//g')"
 T set-option -gu @fleet_layout
 # The refresh slot (issue #2228): ⟳ lights in a two-cell slot the bar always

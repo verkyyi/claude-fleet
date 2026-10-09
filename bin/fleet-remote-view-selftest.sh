@@ -52,6 +52,8 @@
 #                    panes as they were
 #   F. skipped     — a proxy window is no dash row, no session in either cap
 #                    tally, no fleet-restore row, no sleep candidate
+#   S. ⌃\ shell   — (#2744) the session's shell: one window a session, on its
+#                    machine (ssh → shell-here), in its @worktree, gone with it
 #   L. no ⇄ (lint) — (#1621) a proxy window is known by `@remote`, never by its
 #                    name: no code line in bin/ (fleet-remote-view.sh,
 #                    fleet-shell.sh, fleet-sidebar.py, tmux-status.sh,
@@ -487,6 +489,52 @@ eq "E: no [77] hook" "0" "$(tr_ show-hooks -g | grep -c '\[77\]')"
 eq "E: the legacy hooks never fired once the attach lifted them" "" "$(cat "$WORK/hook77" 2>/dev/null)"
 eq "E: no session-level hook array left behind (it would shadow the fleet's [71]–[73] for good)" "" "$(tr_ show-hooks -t "=$RS:" 2>/dev/null)"
 eq "E: the fleet's own hook is still in place" "1" "$(tr_ show-hooks -g | grep -c '^client-attached\[71\]')"
+
+# ================================================================================
+# S. ⌃\ — the session's own shell (#2744): `shell-open` on the client's window
+#    opens ONE window per session, marked `@solo_shell <node>:<wid>`, titled
+#    「shell · <name> @<node>」, whose program reaches the session's machine and
+#    runs a login shell there, in its `@worktree`, the fleet's bin/ on its PATH,
+#    no worker credential; again → the same window; the session's window gone →
+#    the shell HUPped and its window closed; no session → this computer's, $HOME.
+mkdir -p "$WORK/wt8"
+tr_ set-window-option -t "$RW8" @worktree "$WORK/wt8"
+cat > "$WORK/fakesh" <<'EOF'
+#!/bin/bash
+{ printf 'pwd=%s\n' "$(pwd -P)"; printf 'path=%s\n' "${PATH%%:*}"
+  printf 'cred=%s\n' "${FLEET_WORKER_CRED:-}"; printf 'args=%s\n' "$*"; } > "$FAKESH_OUT"
+trap 'echo hup >> "$FAKESH_OUT"; exit 0' HUP
+while :; do sleep 0.2; done
+EOF
+chmod +x "$WORK/fakesh"
+tl set-environment -g FLEET_SESSION_SHELL_CMD "$WORK/fakesh" \; set-environment -g FAKESH_OUT "$WORK/fakesh.out" \; \
+  set-environment -g FLEET_SESSION_SHELL_WATCH 1 \; set-environment -g FLEET_WORKER_CRED leak
+SW=$(tl new-window -P -F '#{window_id}' -t "$LS:" -n solo 'while :; do sleep 300; done')
+tl set-window-option -t "$SW" @remote "m4:$WID2"
+tl select-window -t "$SW"
+bash "$BIN/fleet-remote-view.sh" shell-open "$LS"
+shwins() { tl list-windows -t "=$LS" -F '#{window_id}|#{@solo_shell}|#{window_name}' | awk -F'|' '$2 != ""'; }
+eq "S: one shell window for the session, its own title" "shell · 另一个 @m4" "$(shwins | grep -F "|m4:$WID2|" | cut -d'|' -f3)"
+SH=$(shwins | grep -F "|m4:$WID2|" | cut -d'|' -f1)
+fakesh_up() { grep -q '^args=' "$WORK/fakesh.out" 2>/dev/null; }
+waitfor 10 fakesh_up || fail "S: no login shell started on the session's machine" "$(tail -n 2 "$WORK/ssh.log"; tl capture-pane -p -t "$SH" | grep -v '^$')"
+eq "S: the shell sits in the session's @worktree" "pwd=$(cd "$WORK/wt8" && pwd -P)" "$(grep '^pwd=' "$WORK/fakesh.out")"
+eq "S: …a login shell, the fleet's bin/ first on its PATH" "args=-l path=$BIN" "$(grep '^args=' "$WORK/fakesh.out") $(grep '^path=' "$WORK/fakesh.out")"
+eq "S: …and no worker credential in its environment" "cred=" "$(grep '^cred=' "$WORK/fakesh.out")"
+has "S: it went over ssh as shell-here <wid>" "$(cat "$WORK/ssh.log")" "fleet-remote-view.sh shell-here '$WID2'"
+tl select-window -t "$SW"
+bash "$BIN/fleet-remote-view.sh" shell-open "$LS"
+eq "S: again — the same window, selected, never a second" "1 $SH" \
+  "$(shwins | grep -cF "|m4:$WID2|") $(tl display-message -p -t "=$LS:" '#{window_id}')"
+tr_ kill-window -t "$RW8"
+shgone() { [ -z "$(shwins | grep -F "|m4:$WID2|")" ]; }
+waitfor 10 shgone || fail "S: the session went, its shell window stayed" "$(shwins)"
+has "S: …the shell was hung up" "$(cat "$WORK/fakesh.out")" "hup"
+tl set-window-option -u -t "$SW" @remote
+tl select-window -t "$SW"
+bash "$BIN/fleet-remote-view.sh" shell-open "$LS"
+eq "S: no session there — this computer's shell, @solo_shell local" "local|本机shell" \
+  "$(shwins | grep -F '|local|' | cut -d'|' -f2,3)"
 
 # ================================================================================
 # L. no ⇄ (#1621): the machine's name alone marks a proxy window and a via row;

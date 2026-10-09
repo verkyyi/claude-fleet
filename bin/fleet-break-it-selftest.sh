@@ -2284,17 +2284,18 @@ drill_cmdn_codex_orch() {
   case "$hint" in *"⌃X 回收"*) ;; *) WHY="⌘P's panel no longer says ⌃X 回收: [$hint]"; orch_down "$s" "$d"; return 1 ;; esac
   orch_type "$d" '\033'
   until_ok 10 sh -c "[ \"\$('$REAL_TMUX' -L '$s' show-options -gqv @popup_open)\" = 0 ]" || { WHY="esc did not close ⌘P's panel"; orch_down "$s" "$d"; return 1; }
-  # the one-session layout: ⌃\ is this computer's shell, ⌃\ again back
+  # the one-session layout: ⌃\ is a shell window (the session's, #2744 — this
+  # computer's when no session is in view), ⌃\ again back
   ( client_env; bash "$WORK/sbin/fleet-shell.sh" layout solo "$s" ) >/dev/null 2>&1
   until_ok 5 sh -c "[ \"\$('$REAL_TMUX' -L '$s' show-options -gqv @fleet_layout)\" = solo ]" || { WHY="layout solo did not take"; orch_down "$s" "$d"; return 1; }
   orch_type "$d" '\034'
-  until_ok 10 sh -c "'$REAL_TMUX' -L '$s' display-message -p '#{@solo_shell}' | grep -qx 1" \
-    || { WHY="solo ⌃\\ did not open this computer's shell"; orch_down "$s" "$d"; return 1; }
+  until_ok 10 sh -c "'$REAL_TMUX' -L '$s' display-message -p '#{@solo_shell}' | grep -q ." \
+    || { WHY="solo ⌃\\ did not open a shell"; orch_down "$s" "$d"; return 1; }
   orch_type "$d" '\034'
-  until_ok 10 sh -c "! '$REAL_TMUX' -L '$s' display-message -p '#{@solo_shell}' | grep -qx 1" \
+  until_ok 10 sh -c "! '$REAL_TMUX' -L '$s' display-message -p '#{@solo_shell}' | grep -q ." \
     || { WHY="solo ⌃\\ again did not go back"; orch_down "$s" "$d"; return 1; }
   orch_down "$s" "$d"
-  WHAT="Codex 编排 ⌘N 聚焦它（${v}）；底栏「编排在忙」；⌘P 面板（⌃X 回收）、solo ⌃\\ 本机 shell 照旧"
+  WHAT="Codex 编排 ⌘N 聚焦它（${v}）；底栏「编排在忙」；⌘P 面板（⌃X 回收）、solo ⌃\\ shell 照旧"
 }
 
 # The proxy pane's `run` loop (fleet-remote-view.sh) against an ssh shim: a

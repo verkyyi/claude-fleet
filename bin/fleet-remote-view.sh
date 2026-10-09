@@ -1120,6 +1120,151 @@ watch)
   ;;
 
 # ---------------------------------------------------------------------------------
+# ⌃\ — THIS SESSION's shell (issue #2744; #2566 had it this computer's): a login
+# shell of the machine the session runs on, as its login, in its working
+# directory — the worker's `@worktree`, else its pane's directory (an
+# orchestrator's $HOME, a no-repo session's own), so its branch, its tests and
+# its logs are one key away; the next ⌃\ is back on the session.
+#
+#   shell-open <client session>   (a key on the client's server: the one-session
+#                           view, or the client's solo layout) — the session is
+#                           the current window's `@remote`, else the stage's
+#                           current window's. Its shell window (`@solo_shell` =
+#                           `<node>:<worker id>`, titled 「shell · <name> @<node>」)
+#                           is selected when one is open — one a session, never
+#                           two — else opened. No session there (a machine row,
+#                           nothing open): this computer's shell in $HOME, as
+#                           `prefix !` always is (`shell-open --local`, one too).
+#   shell <node> <worker id>  that window's program: the warm master when it
+#                           answers, else a master of its own through the same ssh
+#                           program the proxy uses (in the client, `fleet-shell.sh
+#                           ssh`: `fleet connect`, or right here when the machine
+#                           is this computer) — then `shell-here` on the far end.
+#                           A failed connection says why and waits for a key.
+#   shell-here <worker id>  (ON <node>) — cd to the session's directory and exec
+#                           the login's shell (`-l`) with the fleet's bin/ on its
+#                           PATH and no worker credential in its environment; a
+#                           watcher HUPs it when the session's window goes (a
+#                           reaped session takes its shell along). Exit 3 when the
+#                           session is not live here.
+shell-open)
+  if [ "${1:-}" = --local ]; then
+    w=$(tmux list-windows -F '#{window_id} #{@solo_shell}' 2>/dev/null | awk '$2 == "local" { print $1; exit }')
+    [ -n "$w" ] && { tmux select-window -t "$w"; exit 0; }
+    # its PATH set by its own command: a new window's environment takes the
+    # client's PATH over an `-e PATH=`
+    lsh=$(tmux show-options -gv default-shell 2>/dev/null); [ -x "$lsh" ] || lsh=${SHELL:-/bin/sh}
+    tmux new-window -n 本机shell -c "$HOME" \
+      "exec env PATH=$(sq "$HOME/.local/bin:$BIN:$PATH") $(sq "$lsh") -l" \; \
+      set-window-option @solo_shell local 2>/dev/null
+    exit 0
+  fi
+  csess="${1:-}"
+  r=$(tmux display-message -p '#{@remote}' 2>/dev/null)
+  sname=''
+  if [ -z "$r" ] && [ -n "$csess" ]; then
+    r=$(tmux -L "$csess-stage" display-message -p -t "=$csess-stage:" '#{@remote}' 2>/dev/null)
+    sname=$(tmux -L "$csess-stage" display-message -p -t "=$csess-stage:" '#{window_name}' 2>/dev/null)
+  fi
+  snode=${r%%:*}; swid=${r#*:}
+  case "$snode" in ''|*[!A-Za-z0-9._-]*) exec bash "$BIN/fleet-remote-view.sh" shell-open --local ;; esac
+  case "$swid" in ''|-|*[!A-Za-z0-9._/@:-]*) exec bash "$BIN/fleet-remote-view.sh" shell-open --local ;; esac
+  # its own shell already open: there
+  w=$(tmux list-windows -F '#{window_id} #{@solo_shell}' 2>/dev/null \
+        | awk -v r="$r" '$2 == r { print $1; exit }')
+  [ -n "$w" ] && { tmux select-window -t "$w"; exit 0; }
+  # its name: the list's row (field 8), else the stage window's, else the id's tail
+  rf="${TMPDIR:-/tmp}/.claude-dash/global/remote_$csess"
+  n=$(LC_ALL=C awk -F $'\037' -v k="wid:$swid" '$1 == k { print $8; exit }' "$rf" 2>/dev/null)
+  [ -n "$n" ] || n=${sname% · @*}
+  [ -n "$n" ] && [ "$n" != "$snode" ] || n=${swid##*/}
+  n=$(printf '%s' "$n" | tr -d '\000-\037#"' | cut -c1-40)
+  tmux new-window -n "shell · $n @$snode" -c "$HOME" -e "PATH=$HOME/.local/bin:$BIN:$PATH" \
+    "exec bash $(sq "$BIN/fleet-remote-view.sh") shell $(sq "$snode") $(sq "$swid")" \; \
+    set-window-option @solo_shell "$r" \; set-window-option automatic-rename off \; \
+    set-window-option allow-rename off 2>/dev/null
+  exit 0
+  ;;
+shell)
+  node="${1:-}"; wid="${2:-}"
+  [ -n "$node" ] && [ -n "$wid" ] || { note 'usage: shell <node> <worker_id>'; exit 2; }
+  host=$(ssh_host "$node")
+  rbin="${FLEET_REMOTE_BIN:-.claude/fleet/bin}"
+  SSH="${FLEET_REMOTE_SSH_CMD:-ssh}"
+  ctl="${TMPDIR:-/tmp}/frs.$$.$RANDOM"
+  login=$(fleet_fleet_login "$wid" 2>/dev/null) || login=''
+  lopt=(); [ -n "$login" ] && lopt=(-l "$login")
+  export FLEET_CONNECT_LOGIN="$login"
+  wsock="${TMPDIR:-/tmp}/warm/$node.sock"
+  if [ "${FLEET_SHELL_WARM:-1}" != 0 ] && [ -S "$wsock" ] \
+     && { [ -z "$login" ] || [ "$(rv_route_login "$wsock.route")" = "$login" ]; } \
+     && $SSH -S "$wsock" -O check "$host" >/dev/null 2>&1; then
+    opts=(-tt -o ControlMaster=no "${MUXO[@]}" -S "$wsock" ${lopt[@]+"${lopt[@]}"})
+  else
+    # as `run`: a plain-ssh view from a hub node rides a five-minute certificate
+    # (issue #1626); rc 3 = no hub here, plain ssh; anything else = say why
+    peer=()
+    if [ -z "${FLEET_REMOTE_SSH_CMD:-}" ] && [ -f "$BIN/fleet-peer-cert.sh" ]; then
+      peerout=$(bash "$BIN/fleet-peer-cert.sh" "$(hub_node "$node")" view 2>"$ctl.err"); prc=$?
+      peerwhy=$(tail -n 1 "$ctl.err" 2>/dev/null); rm -f "$ctl.err"
+      case "$prc" in
+        0) while IFS= read -r o; do [ -n "$o" ] && peer+=("$o"); done <<EOF_PEER
+$peerout
+EOF_PEER
+           ;;
+        3) ;;
+        *) printf '→ %s 的 shell 开不了：%s\n按任意键关闭。\n' "$node" "${peerwhy#fleet-peer-cert: }"
+           read -r -n 1 -s _; exit 0 ;;
+      esac
+    fi
+    opts=(-tt -o ServerAliveInterval=2 -o ServerAliveCountMax=3 -o ConnectTimeout=8
+          -o ControlMaster=yes -o "ControlPath=$ctl" "${MASTERO[@]}" -o ControlPersist=no
+          ${peer[@]+"${peer[@]}"} ${lopt[@]+"${lopt[@]}"})
+    trap '$SSH -S "$ctl" -O exit "$host" >/dev/null 2>&1; rm -f "$ctl" "$ctl.ssherr"' EXIT
+  fi
+  printf '→ 正在打开 %s 上的 shell …\n' "$node"
+  : > "$ctl.ssherr"
+  # a far end older than shell-here (or with no fleet there) still answers: its
+  # login shell in $HOME — either way one exec, so leaving it leaves the window
+  $SSH ${opts[@]+"${opts[@]}"} "$host" \
+    "if grep -qs '^shell-here)' $rbin/fleet-remote-view.sh; then exec bash $rbin/fleet-remote-view.sh shell-here $(sq "$wid"); fi; exec \"\${SHELL:-/bin/sh}\" -l" \
+    2>"$ctl.ssherr"
+  rc=$?
+  case "$rc" in
+    3)   printf '\n%s 已不在 %s 上（结束或搬走了）。按任意键关闭。\n' "${wid#*/}" "$node"; read -r -n 1 -s _ ;;
+    255) why=$(rv_ssh_why "$ctl.ssherr" | cut -c1-120)
+         printf '\n连不上 %s%s。按任意键关闭。\n' "$node" "${why:+：$why}"; read -r -n 1 -s _ ;;
+  esac
+  rm -f "$ctl.ssherr"
+  exit 0
+  ;;
+shell-here)
+  wid="${1:-}"; dir=''
+  if [ -n "$wid" ] && [ "$wid" != - ]; then
+    loc=$(fleet_worker_locate "wid:${wid#wid:}" 2>/dev/null)
+    case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; exit 3 ;; esac
+    set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
+    dir=$(T display-message -p -t "=$s:$w" '#{@worktree}' 2>/dev/null)
+    [ -n "$dir" ] && [ -d "$dir" ] || dir=$(T display-message -p -t "=$s:$w" '#{pane_current_path}' 2>/dev/null)
+    # the session's window gone (reaped, moved): its shell goes with it
+    shpid=$$
+    ( trap '' HUP
+      while sleep "${FLEET_SESSION_SHELL_WATCH:-5}"; do
+        kill -0 "$shpid" 2>/dev/null || exit 0
+        # (a display-message on a gone window still answers 0: list them)
+        T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null | grep -qxF "$w" \
+          || { kill -HUP "$shpid" 2>/dev/null; exit 0; }
+      done ) </dev/null >/dev/null 2>&1 &
+  fi
+  [ -n "$dir" ] && [ -d "$dir" ] || dir=$HOME
+  cd "$dir" 2>/dev/null || cd "$HOME" 2>/dev/null || :
+  unset TMUX TMUX_PANE FLEET_WORKER_CRED FLEET_WORKER_ASSERT
+  export PATH="$BIN:$HOME/.local/bin:$PATH"
+  sh_=${FLEET_SESSION_SHELL_CMD:-${SHELL:-/bin/bash}}; [ -x "$sh_" ] || sh_=/bin/bash   # _CMD: the selftests
+  exec "$sh_" -l
+  ;;
+
+# ---------------------------------------------------------------------------------
 sessions)
   # ON <node> (issue #1488, EPIC #1479 R3): this machine's sessions, hub-shaped —
   # {"sessions": […], "nodes": […]} as /v1/fleet/fleet_sessions would answer for

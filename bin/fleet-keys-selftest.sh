@@ -449,16 +449,20 @@ EOF
   # User928's new meaning (issue #2619, EPIC #2615 C4): ⌘N, prefix c and the bar's
   # 「⌘N 编排」 cell (a tap on an iPad: range=user|key-User928) all run ONE road —
   # fleet-shell.sh portal, which goes to the orchestrating session (woken first)
-  # unless FLEET_COMPOSE=1 — and the one-session layout's ⌃\ is still this
-  # computer's shell.
+  # unless FLEET_COMPOSE=1 — and the one-session layout's ⌃\ (and prefix \) is
+  # the session's shell, prefix ! this computer's (#2744).
   nk=$(ktm shell list-keys -T root 2>/dev/null | awk '$4 == "User928"')
   case "$nk" in *"fleet-shell.sh portal "*) ;; *) fail "8: ⌘N (User928) does not run fleet-shell.sh portal: $nk" ;; esac
   ck=$(ktm shell list-keys -T prefix 2>/dev/null | awk '$4 == "c"' | sed 's/^.* c  *//')
   [ -n "$ck" ] && [ "$ck" = "$(printf '%s\n' "$nk" | sed 's/^.* User928  *//')" ] || fail "8: prefix c is not ⌘N's road: [$ck] vs [$nk]"
   case "$(ktm shell show-options -gv @fleet_hint_session 2>/dev/null)" in
     *'#[range=user|key-User928]'*'⌘N'*'编排'*) ;; *) fail "8: the bar's ⌘N cell is not a User928 range reading 编排" ;; esac
-  ktm shell list-keys -T root 2>/dev/null | awk '$4 == "C-\\\\"' | grep -q '@fleet_layout},solo}.*@solo_shell' \
-    || fail "8: solo ⌃\\ is no longer this computer's shell: $(ktm shell list-keys -T root | awk '$4 == "C-\\\\"')"
+  ktm shell list-keys -T root 2>/dev/null | awk '$4 == "C-\\\\"' | grep -q '@fleet_layout},solo}.*@solo_shell.*fleet-remote-view.sh shell-open ' \
+    || fail "8: solo ⌃\\ is no longer the session's shell (shell-open, #2744): $(ktm shell list-keys -T root | awk '$4 == "C-\\\\"')"
+  ktm shell list-keys -T prefix 2>/dev/null | awk '$4 == "\\\\"' | grep -q '@fleet_layout},solo}.*fleet-remote-view.sh shell-open ' \
+    || fail "8: solo prefix \\ is not ⌃\\'s road: $(ktm shell list-keys -T prefix | awk '$4 == "\\\\"')"
+  ktm shell list-keys -T prefix 2>/dev/null | awk '$4 == "!"' | grep -q '@fleet_layout},solo}.*fleet-remote-view.sh shell-open --local' \
+    || fail "8: solo prefix ! is not this computer's shell (#2744): $(ktm shell list-keys -T prefix | awk '$4 == "!"')"
   ktm stock kill-server; ktm node kill-server; ktm shell kill-server
   rm -rf "$KW"
 fi
