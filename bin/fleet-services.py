@@ -8,8 +8,10 @@ alert bar's `service · failed` rows.
                                    上次 · 下次 · 最近日志 (a failed row red on a
                                    terminal)
     fleet-services.py --doctor     one line, `<LEVEL> <text>`: FAIL when an
-                                   entry is failed, PASS when all run, INFO when
-                                   nothing is registered
+                                   entry is failed, WARN when this login still
+                                   has a hand-written launchd plist the daemon's
+                                   sweep found (issue #2530), PASS when all run,
+                                   INFO when nothing is registered
     fleet-services.py --alerts     one TSV line per failed entry:
                                    id · subject value · since · detail
 
@@ -133,8 +135,7 @@ def log_line(path, login):
     return lines[-1].encode("utf-8")[:LINE_MAX].decode("utf-8", "ignore") if lines else ""
 
 
-def local_rows():
-    """This machine's daemon register, this login's entries: hub-shaped rows."""
+def local_state():
     path = os.environ.get("FLEET_SERVICES_STATE")
     if path is None:
         path = os.path.join(os.environ.get("FLEET_NODE_STATE") or "/var/db/fleet-node", "state.json")
@@ -142,8 +143,24 @@ def local_rows():
         return None
     try:
         with open(path, encoding="utf-8") as f:
-            st = json.load(f)
+            return json.load(f)
     except (OSError, ValueError):
+        return None
+
+
+def local_handwritten():
+    """This login's hand-written launchd plists the daemon's sweep found
+    (issue #2530): [{label, login, path}]."""
+    st = local_state()
+    sw = st.get("sweep") if isinstance(st, dict) else None
+    hand = sw.get("handwritten") if isinstance(sw, dict) else None
+    return [h for h in hand or [] if isinstance(h, dict) and h.get("login") == me()]
+
+
+def local_rows():
+    """This machine's daemon register, this login's entries: hub-shaped rows."""
+    st = local_state()
+    if st is None:
         return None
     svcs = st.get("services") if isinstance(st, dict) else None
     if not isinstance(svcs, list):
@@ -263,6 +280,12 @@ def cmd_doctor():
     age = ""
     if isinstance(ts, (int, float)) and n - ts > STALE_SECS:
         age = "（入口读数 %s）" % when(ts, n)
+    hand = local_handwritten()
+    if hand and not any(failed(r) for _l, _h, r in rows):
+        print("WARN %d 个手写启动项以本登录跑、不在登记表里: %s — fleet service|task add 登记，新的跑通一次后归档旧 plist"
+              "（docs/MANAGED-NODE.md §13）" % (len(hand), " · ".join("%s (%s)" % (h.get("label"), h.get("path"))
+                                                                    for h in hand)))
+        return 0
     if not rows:
         print("INFO 无登记 — no background service or scheduled task registered (fleet service add)")
         return 0

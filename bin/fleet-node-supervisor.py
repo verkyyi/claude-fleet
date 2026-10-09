@@ -1528,7 +1528,7 @@ class Supervisor(object):
         res = sweep(self.p, dry=dry)
         if not dry:
             sw = self.state["sweep"]
-            sw.update(last=now(), moved=len(res["moved"]), extra=len(res["extra"]),
+            sw.update(last=now(), moved=len(res["moved"]), extra=len(res["extra"]), handwritten=res["handwritten"],
                       purged=res["purged"], total_moved=(sw.get("total_moved") or 0) + len(res["moved"]))
             self.dirty = True
         return res
@@ -1676,8 +1676,40 @@ def sweep(paths, dry=False):
         return _sweep(paths, dry)
 
 
+def _handwritten(paths, d, n, src):
+    """A hand-written plist that runs as a login (issue #2530, EPIC #2524 C6):
+    {label, login, path}, else None. In LaunchDaemons: a `UserName` that is a
+    person's (not root, not a `_` system account). In a login's LaunchAgents:
+    a program under that login's home, outside ~/Library (an app's own agent).
+    Report only — the way out is `fleet service|task add`, then archive it."""
+    if not n.endswith(".plist") or FLEET_PLIST_RE.match(n):
+        return None
+    try:
+        with open(src, "rb") as f:
+            pl = plistlib.load(f)
+    except Exception:
+        return None
+    if not isinstance(pl, dict):
+        return None
+    label = pl.get("Label") or n[:-len(".plist")]
+    if label == LABEL:
+        return None
+    if d == paths.daemon_dir:
+        login = pl.get("UserName") or ""
+        if not isinstance(login, str) or not login or login == "root" or login.startswith("_"):
+            return None
+        return {"label": label, "login": login, "path": src}
+    login = os.path.basename(os.path.dirname(os.path.dirname(d)))
+    home = os.path.join(paths.users, login) + "/"
+    args = [pl.get("Program")] + list(pl.get("ProgramArguments") or [])
+    for a in args:
+        if isinstance(a, str) and home in a and (home + "Library/") not in a:
+            return {"label": label, "login": login, "path": src}
+    return None
+
+
 def _sweep(paths, dry=False):
-    moved, extra = [], []
+    moved, extra, hand = [], [], []
     expected = read_json(paths.expected, None)
     labels = set(expected.get("labels") or []) if isinstance(expected, dict) else None
     index = read_json(paths.attic_index, [])
@@ -1705,10 +1737,14 @@ def _sweep(paths, dry=False):
                 lb = _plist_label(src) or n[:-len(".plist")]
                 if lb not in labels and lb != LABEL:
                     extra.append(src)
+            else:
+                h = _handwritten(paths, d, n, src)
+                if h:
+                    hand.append(h)
     purged = 0 if dry else attic_purge(paths, index)
     if not dry and (moved or purged):
         write_json(paths.attic_index, index, 0o600)
-    return {"moved": moved, "extra": extra, "purged": purged}
+    return {"moved": moved, "extra": extra, "purged": purged, "handwritten": hand}
 
 
 def attic_purge(paths, index):
@@ -2315,6 +2351,9 @@ def status_lines(paths, table, state):
                    "sudo fleet-node-supervisor.py account adopt %s --rejoin" % (login, ln.get("since") or "-",
                                                                                 ln.get("why") or "-", login))
     sw = state.get("sweep") or {}
+    for h in sw.get("handwritten") or []:
+        out.append("handwritten %-12s runs as %s, not in the register — fleet service|task add, then "
+                   "archive %s" % (h.get("label"), h.get("login"), h.get("path")))
     out.append("sweep  %-18s last %s · moved %s (total %s) · extra %s (report only) · attic %d entries"
                % ("leftovers", iso(sw.get("last")), sw.get("moved", 0), sw.get("total_moved", 0),
                   sw.get("extra", 0), len(read_json(paths.attic_index, []))))
@@ -3002,6 +3041,8 @@ def main(argv):
             print("%s %s -> attic %s" % ("would move" if dry else "moved", m["src"], m["id"]))
         for x in res["extra"]:
             print("extra (not in expected.json, left in place): %s" % x)
+        for h in res["handwritten"]:
+            print("handwritten (runs as %s, not in the register, left in place): %s" % (h["login"], h["path"]))
         return 0
     if cmd == "attic":
         sub = rest[0] if rest else "list"

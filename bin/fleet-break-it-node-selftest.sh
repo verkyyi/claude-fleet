@@ -16,6 +16,9 @@
 #                         (#2529): a scheduled agent task's session will not open, every try
 #   service-failed-unseen bin/fleet-services.py (#2526): a registered service that
 #                         keeps dying reads red in the doctor + the alert bar
+#   service-handwritten   bin/fleet-node-supervisor.py's sweep + bin/fleet-services.py --doctor
+#                         (#2530): a hand-written launchd plist runs as a login beside the
+#                         register — the doctor WARNs until it is registered and archived
 #   task-rerun-root-only  bin/fleet-session-cli.py `fleet task run --now` → the hub's
 #                         service_control → the node's fixed supervisor argv (#2527):
 #                         a missed daily push is run again from the client, no root
@@ -213,6 +216,54 @@ drill_service_failed_unseen() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
   WHAT="登记的服务一启动就退：几秒内体检 services 行 FAIL、告警栏多一条 ✖ service · failed（入口另有 service_failed），不再是 40 小时没人知道"
+}
+
+drill_service_handwritten() {
+  CAP=20   # two sweeps + three doctor reads
+  local sb t0 d w
+  sb="$WORK/svchand"; mkdir -p "$sb/LaunchDaemons" "$sb/Users/alice/bin" "$sb/Users/alice/Library/LaunchAgents"
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  printf '#!/bin/bash\nsleep 300\n' > "$sb/Users/alice/bin/sms-watch"; chmod +x "$sb/Users/alice/bin/sms-watch"
+  pl() {   # pl <file> <label> <user or ""> <program>
+    python3 -c 'import plistlib, sys
+d = {"Label": sys.argv[2], "ProgramArguments": [sys.argv[4]], "KeepAlive": True}
+if sys.argv[3]: d["UserName"] = sys.argv[3]
+plistlib.dump(d, open(sys.argv[1], "wb"))' "$@"
+  }
+  # the two hand-written ones (mini2, 2026-10-09: com.verkyyi.sms-watch, com.verky.daily-report) ...
+  pl "$sb/LaunchDaemons/com.alice.sms-watch.plist" com.alice.sms-watch alice "$sb/Users/alice/bin/sms-watch"
+  pl "$sb/Users/alice/Library/LaunchAgents/com.alice.daily-report.plist" com.alice.daily-report "" "$sb/Users/alice/bin/sms-watch"
+  # ... and what is not a person's background task: a root daemon, a system account's, an app's own agent
+  pl "$sb/LaunchDaemons/com.alice.net-tuning.plist" com.alice.net-tuning "" /usr/sbin/sysctl
+  pl "$sb/LaunchDaemons/sh.brew.thing.plist" sh.brew.thing _brew /opt/homebrew/bin/thing
+  pl "$sb/Users/alice/Library/LaunchAgents/com.vendor.updater.plist" com.vendor.updater "" "$sb/Users/alice/Library/Application Support/Vendor/updater"
+  export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
+    FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json"
+  doc() { FLEET_SERVICES_CACHE='' FLEET_SERVICES_STATE="$sb/db/state.json" FLEET_SERVICES_LOGIN=alice python3 "$BIN/fleet-services.py" --doctor; }
+  t0=$(now)
+  python3 "$BIN/fleet-node-supervisor.py" sweep >"$sb/sweep1.out" 2>&1 \
+    || { WHY="sweep failed: $(tail -2 "$sb/sweep1.out" | tr '\n' ' ')"; return 1; }
+  d=$(doc)
+  case "$d" in "WARN 2 个手写启动项"*com.alice.sms-watch*) ;; *) WHY="the two hand-written plists did not read WARN 2: [$d] (sweep: $(tr '\n' ' ' < "$sb/sweep1.out"))"; return 1 ;; esac
+  case "$d" in *net-tuning*|*brew*|*vendor*) WHY="counted what is not a person's task: [$d]"; return 1 ;; esac
+  w=$(python3 "$BIN/fleet-node-supervisor.py" status | grep -c '^handwritten ')
+  [ "$w" = 2 ] || { WHY="status names $w hand-written plists, not 2"; return 1; }
+  # 收编: register it, then archive the plist — the next sweep has nothing left
+  python3 "$BIN/fleet-node-supervisor.py" service add --login alice --name sms-watch -- "$sb/Users/alice/bin/sms-watch" >"$sb/add.out" 2>&1 \
+    || { WHY="service add failed: $(tail -2 "$sb/add.out" | tr '\n' ' ')"; return 1; }
+  d=$(doc)
+  case "$d" in WARN*) ;; *) WHY="registered but the plist still loaded, yet no WARN: [$d]"; return 1 ;; esac
+  mkdir -p "$sb/attic"; mv "$sb/LaunchDaemons/com.alice.sms-watch.plist" "$sb/Users/alice/Library/LaunchAgents/com.alice.daily-report.plist" "$sb/attic/"
+  python3 "$BIN/fleet-node-supervisor.py" sweep >/dev/null 2>&1
+  d=$(doc)
+  case "$d" in WARN*|FAIL*) WHY="still not green once archived: [$d]"; return 1 ;; esac
+  SECS=$(since "$t0")
+  python3 "$BIN/fleet-node-supervisor.py" service rm --login alice --name sms-watch >/dev/null 2>&1
+  unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
+    FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
+  WHAT="手写的 plist 以某个登录跑、登记表里没有：整机守护的清扫点名、体检 services 行 WARN；登记并归档后转绿（root 的、系统账号的、应用自带的不算）"
 }
 
 drill_task_rerun_root_only() {
