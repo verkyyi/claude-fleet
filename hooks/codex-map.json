@@ -34,6 +34,7 @@
   },
   "drop_commands": {
     "handoff-latch-reset-hook.sh": "Claude-only reset hook; the Codex launcher owns the fresh-conversation latch.",
+    "fleet-orchestrator-state.py": "The Codex orchestrator is left as it is (EPIC #2581 convention 5): no state relay; it keeps the sidebar + seed.",
     "session-end-hook.sh": "Codex reason=other is not proof of CLI exit. fleet-codex.sh invokes cleanup after its foreground CLI exits successfully; SessionEnd only emits the lifecycle event."
   }
 }
