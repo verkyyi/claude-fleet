@@ -645,8 +645,11 @@ def main(argv=None):
         out = record(row, (m.group(1), m.group(2)))
         print(out or "already recorded")
     elif o.cmd == "decided":
+        m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", o.date or "")
+        if o.date and not m:
+            ap.error("--date is YYYY-MM-DD")
         try:
-            day = dt.date.fromisoformat(o.date) if o.date else now_local().date()
+            day = dt.date(*map(int, m.groups())) if m else now_local().date()
         except ValueError:
             ap.error("--date is YYYY-MM-DD")
         rows, failed = decided(day, o.epic or day_epics(day, o.repo))
