@@ -702,6 +702,36 @@ class I_Credsep(Sandbox):
         self.assertEqual(c.get("reload"), self.lib, out.stderr)
 
 
+class K_LoginInstall(Sandbox):
+    """issue #2688: a managed login's own ~/.claude/fleet is on the doctor — PASS at
+    the release, WARN (never FAIL: no rollback) behind it or unreadable, no row
+    without one."""
+    def test_login_install_row(self):
+        self.install(V1, claude="2.1.1")
+        self.assertNotRegex(self.cmd("doctor").stdout, r"\binstall\b")
+        vers = os.path.join(self.home, ".claude", "fleet.versions")
+        for sha in (V1, V2):
+            os.makedirs(os.path.join(vers, sha))
+        live = os.path.join(self.home, ".claude", "fleet")
+        os.symlink(os.path.join(vers, V1), live)
+        r = self.cmd("doctor")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertRegex(r.stdout, r"PASS\s+install\s+alice: ~/.claude/fleet at the release " + V1[:12])
+        os.remove(live)
+        os.symlink(os.path.join(vers, V2), live)
+        r = self.cmd("doctor")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertRegex(r.stdout, r"WARN\s+install\s+alice: ~/.claude/fleet at %s \(link\), the release is %s"
+                         % (V2[:12], V1[:12]))
+        self.assertIn("fleet-install-sync.sh' --root " + live, r.stdout)
+        # the plain directory a bootstrap left behind, no git: unreadable, still a WARN
+        os.remove(live)
+        os.makedirs(live)
+        r = self.cmd("doctor")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertRegex(r.stdout, r"WARN\s+install\s+alice: ~/.claude/fleet \(plain directory\) — its version is unreadable")
+
+
 class J_Sessions(Sandbox):
     """issue #2484: every managed account's sessions are pinned before the switch
     (the target release's fleet-sessions-snapshot.sh save, demoted, its own HOME and
@@ -756,4 +786,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-credsep":
         # BREAK-IT credsep-stale-after-switch: the supervised case, switch + rollback
         unittest.main(argv=[sys.argv[0], "I_Credsep.test_supervised_proxy_follows_switch_and_rollback"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-login-install":
+        # BREAK-IT managed-login-install-stale: the doctor half
+        unittest.main(argv=[sys.argv[0], "K_LoginInstall"], verbosity=1)
     unittest.main(verbosity=2)

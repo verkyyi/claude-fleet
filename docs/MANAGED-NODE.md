@@ -214,14 +214,15 @@ root 运行；它取代托管账号各自的 `fleet-install-sync.sh`（那个账
 
 `fleet doctor --machine`（= `fleet-node-update.py doctor`）一行一个部件：`runtime` `ccquota` `claude` `codex` `tmux`
 （各自 `--version` 必须含 `release.json` 的版本，否则 FAIL）、`daemon`（守护在跑且跑的是 `current` 那一版，否则 FAIL）、
-每个子进程、`cache`、`credsep`（机器有共享凭据代理时：副本 ≠ 发布版 FAIL；代理的 `version` ≠ 副本、等 `FLEET_NODE_CREDSEP_WAIT` 15 秒后仍是 FAIL；读不到 WARN）、每个托管账号的链接（WARN），最后一行 `version … — 各部件 = 发布版声明`。
+每个子进程、`cache`、`credsep`（机器有共享凭据代理时：副本 ≠ 发布版 FAIL；代理的 `version` ≠ 副本、等 `FLEET_NODE_CREDSEP_WAIT` 15 秒后仍是 FAIL；读不到 WARN）、每个托管账号的链接（WARN）与它的 `~/.claude/fleet` 版本（`install`，落后 WARN — #2688），最后一行 `version … — 各部件 = 发布版声明`。
 退出码 = FAIL 数。普通 `fleet doctor` 多一行 `update`（最后一轮的结果；失败 / 回退 / 跳过时 WARN）。
 
 ### 新旧并存
 
 - 没有 `update.json` 的机器：体检没有 `update` 行，`--machine` 只说「不是托管机器」。
 - 旧守护没有 `update` 任务、不认 `update-restart.json`：新守护第一次由 C1 / C8 装上后才开始自己更新。
-- 开号缓存的 git 镜像一半（`claude-fleet.git`）仍由开号时的 `refresh --from` 填；托管账号的 `~/.claude/fleet` 指向 root 运行时，不靠它。
+- 开号缓存的 git 镜像一半（`claude-fleet.git`）仍由开号时的 `refresh --from` 填。
+- 托管账号自己的 `~/.claude/fleet`（守护替它跑的每个账号任务都是 `__HOME__/.claude/fleet/bin/…`）**不是**更新器搬的：它的 install-sync 跟的是**本机的发布版**——`<root>/current` 指向的那个 sha——而不是 `stable` 标签，同一次链接切换（#2688；以前这一拍答 `off · managed`，登录就停在开号时那一份上）。`<root>/current` 还没有时才是 `off`。`fleet doctor --machine` 每个托管账号一行 `install`：在发布版 PASS，落后或读不出 WARN（不算 FAIL，不触发整机回退），并给出当场跟上的命令 `sudo -u <login> bash <root>/current/bin/fleet-install-sync.sh --root ~<login>/.claude/fleet`。
 
 ## 8. 一条命令装成托管机器（C1，#2330）
 
