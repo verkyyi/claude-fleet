@@ -499,6 +499,44 @@ portal_fresh() {
   TS set-window-option -t "$w" @portal_ver "$v" 2>/dev/null
   return 0
 }
+# portal_trace <segment> — FLEET_TRACE=1 (issue #2721): one stderr line per
+# segment of ⌘N — `portal: <segment> +<ms> ms (<ms> ms)`, since the last one and
+# since `start`. Off: nothing, not even a clock read.
+portal_trace() {
+  [ "${FLEET_TRACE:-0}" = 1 ] || return 0
+  local now
+  now=${EPOCHREALTIME:-$(perl -MTime::HiRes=time -e 'printf "%.6f", time' 2>/dev/null)}
+  [ -n "$now" ] || return 0
+  [ "$1" = start ] && { PT0=$now; PT1=$now; return 0; }
+  awk -v s="$1" -v a="${PT0:-$now}" -v b="${PT1:-$now}" -v n="$now" \
+    'BEGIN { printf "portal: %s +%d ms (%d ms)\n", s, (n - b) * 1000, (n - a) * 1000 }' >&2
+  PT1=$now
+}
+# portal_orch_here <session> — ⌘N's hot path (issue #2721): orch_<session>'s first
+# line (what fleet-compose.py's orchestrator() reads) names `<wid>`·`<node>`; a
+# stage window whose `@remote` is already `<node>:<wid>` is selected here, stamped
+# @fleet_role orchestrator when it has no role, and the list told (`jump=`, as
+# carry() hands it) so its ▶ follows. rc 1 = no such window, or no line: the
+# python road (it retargets a proxy window, or asks the hub to open one).
+portal_orch_here() {
+  local g line want w role
+  g="${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}"
+  line=$(LC_ALL=C awk -F $'\037' 'NF >= 4 && index($1, "/") && $2 != "" { print $1 "\037" $2; exit }' \
+         "$g/orch_$1" 2>/dev/null)
+  [ -n "$line" ] || return 1
+  want="${line#*$'\037'}:${line%%$'\037'*}"
+  read -r w role <<EOF
+$(TS list-windows -t "=$STAGE" -F "#{window_id}	#{@remote}	#{@fleet_role}" 2>/dev/null \
+  | awk -F '\t' -v r="$want" '$2 == r { print $1, $3; exit }')
+EOF
+  [ -n "$w" ] || return 1
+  TS select-window -t "$w" 2>/dev/null || return 1
+  [ -n "$role" ] || TS set-window-option -t "$w" @fleet_role orchestrator 2>/dev/null
+  local lp
+  lp=$(T list-panes -a -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }')
+  [ -n "$lp" ] && T set-option -pa -t "$lp" @sidebar_do "jump=wid:${line%%$'\037'*} " \; send-keys -t "$lp" F12 2>/dev/null
+  return 0
+}
 # iterm_keys — the iTerm2 profile `fleet` (issue #1903): its ⌘ chords send the
 # switch codes conf/tmux-shell.conf catches. Written (only when it changed) at
 # every start and reload, so the install line and each update leave it current;
@@ -1089,11 +1127,18 @@ EOF
 portal)
   s="${2:-$SESS}"
   SESS=$s; STAGE="$s-stage"; SHADOW=$BIN
+  portal_trace start
   stage_up || exit 1
+  portal_trace stage_up
   if [ "${FLEET_COMPOSE:-0}" != 1 ]; then
+    # The hot path (issue #2721): the orchestrator's window already on the stage —
+    # its `@remote` is orch_<sess>'s `<node>:<wid>` — is selected right here, no
+    # python and no network: as fast as switching to any other session.
+    portal_orch_here "$s" && { portal_trace select; exit 0; }
     # the stage by its socket: this runs on the shell's server, whose $TMUX is not it
     FLEET_COMPOSE_STAGE_SOCK=$(TS display-message -p '#{socket_path}' 2>/dev/null) \
       python3 "$BIN/fleet-compose.py" --orch "$s" --boot >/dev/null 2>&1
+    portal_trace compose
     exit 0
   fi
   # ⌘N again ON the writing area (issue #2146): the orchestrating session, no

@@ -834,8 +834,12 @@ def jump(session, window, pane, lock, node="", name=""):
 def open_portal(session):
     """「新任务」's tap: fleet-shell.sh portal — the same door ⌘N and prefix c take:
     the orchestrating session (issue #2616), the writing area on the right
-    (issue #1953) only with the client's FLEET_COMPOSE=1."""
-    run(["bash", str(BIN / "fleet-shell.sh"), "portal", session], stdin=subprocess.DEVNULL)
+    (issue #1953) only with the client's FLEET_COMPOSE=1.
+    Not waited on (issue #2721): portal hands its jump back to THIS list (F12 +
+    @sidebar_do) and then waits for the window that jump makes — waited on, the
+    list could take neither, and every tap stalled the full 3 s of that wait."""
+    subprocess.Popen(["bash", str(BIN / "fleet-shell.sh"), "portal", session], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 ORCH_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
