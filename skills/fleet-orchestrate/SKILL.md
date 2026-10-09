@@ -98,6 +98,24 @@ Codex needs this login's Codex login (`ccquota codex login`). Without it a Codex
 refused with that line on stderr — it is never opened as Claude instead. Tell the person
 what to run, or drop the label.
 
+## 派发纪律 — keep your turns short (发起人 2026-10-09)
+
+The person's next input must never queue behind you. A turn is: talk it through →
+dispatch → back to waiting for them. Don't chase workers, don't do long reads, don't
+write anything yourself.
+
+- Anything that **produces** something (code, a design page, a report, a long piece of
+  research) or runs for more than a minute or two → a **fleet worker**
+  (`mcp__fleet__file_issue` with `spawn: true`, or `bin/dash-raw-session.sh --prompt`
+  when there is no issue): visible on the sidebar, the person can talk to it directly,
+  it has its own workspace, it survives your compaction or reopening, and it reports
+  back when it ends.
+- A **subagent is for one thing only**: one read-only, bounded lookup (`Explore` /
+  `Plan`) to answer the conversation you are having right now. Never a writing
+  subagent (it is refused anyway).
+- The worker is the default unit, the subagent the exception: a worker is visible,
+  resumable, interactive and has every tool; your own context stays for the conversation.
+
 ## 3. Rails
 
 - **You never write code** — not in a worktree, not in a base checkout (read-only, and
