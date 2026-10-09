@@ -277,6 +277,10 @@ fi
 # cwd is the LAST resort, and only useful in the child's own pane — a reaper runs
 # elsewhere, which is what --key is for.
 [ -n "$selfkey" ] || selfkey=$(fleet_scratch_key "$(pwd -P 2>/dev/null)")
+# A child with neither (a no-repo session — a batch driver, a design-page writer,
+# issue #2623) is booked under its identity, the key fleet_win_for_key answers to
+# and fleet-children.sh lists it by.
+[ -n "$selfkey" ] || ! fleet_is_fid "$selffid" || selfkey=$selffid
 # The label is the name the person sees — never the repo slug the key carries
 # internally (issue #1939).
 case "${selfkey#*:}" in

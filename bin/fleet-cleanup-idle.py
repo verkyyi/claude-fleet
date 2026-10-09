@@ -79,7 +79,8 @@ class Cleaner:
                  "@pin", "@cc_agent", "@cc_launcher_pid", "@codex_identity",
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
                  "@reap_policy", "@loop", "@worker_lifecycle", "@wrap_gone", "pane_dead",
-                 "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id")
+                 "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
+                 "@origin", "@origin_fid")
         return {n: option(self.tm, window, n) for n in names}
 
     def policy(self, snap):
@@ -252,13 +253,20 @@ class Cleaner:
         the policy's grace. A finished turn is not enough: an idle home session is
         the one `fleet claude` comes back to (#2564). No worktree, no PR and no
         ledger key — so no history row; @norepo_sid stays fleet-history's resume.
-        Without a policy it is never closed automatically (#791), as before."""
+        Without a policy it is never closed automatically (#791), as before.
+        A no-repo session another SESSION spawned (@origin / @origin_fid — a batch
+        driver, a design-page writer, issue #2623) is nobody's home session: its
+        done / loop-end / at policy closes it like any other, a finished turn too."""
         pol = self.policy(snap)
-        if (pol is None or pol[0] != "done" or snap["@pin"] == "1"
+        spawned = bool(snap["@origin"] or snap["@origin_fid"])
+        kinds = ("done", "loop-end", "at") if spawned else ("done",)
+        ended = (("done", "exited") if spawned else ("exited",))
+        if (pol is None or pol[0] not in kinds or snap["@pin"] == "1"
                 or snap["@worker_lifecycle"] not in ("", "sleeping")
                 or snap["@fleet_role"] not in ("", "worker")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
-                or snap["@claude_state"] != "exited"):
+                or (snap["@claude_state"] not in ended
+                    and not (spawned and (snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1")))):
             if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith("idle:"):
                 clear(self.tm, window)
             return False

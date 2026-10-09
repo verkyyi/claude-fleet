@@ -441,6 +441,13 @@ survives a context boundary the same way everything else here does:
    the closing sequence is one tick, and a floor that moves while the report is
    still building is the mid-batch bug in miniature. A loop that never reaches
    this line leaves a mark that expires on its own, 45 min after its last tick.
+5. **Report to whoever started this driver** (issue #2623) — one call, the last
+   of the run: `mcp__fleet__report` with `state: merged` and a `summary` that
+   carries the report page's URL and what the batch leaves for the person
+   (`move stable`, a hub redeploy, a member still blocked). The orchestrator that
+   started this driver gets it as a `[child-report]`; with no parent it exits 0
+   silently, so it is unconditional. Then stop: the driver's own `done:2h`
+   closes it — no `/loop` left armed, no handoff.
 
 **Resuming into a `report: pending`.** The stateless rule (step 1) covers this
 with no extra bookkeeping: a tick that re-reads the parent, finds the core empty
