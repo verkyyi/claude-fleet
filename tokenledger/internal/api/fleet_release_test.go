@@ -657,3 +657,68 @@ func TestClaudeNPM(t *testing.T) {
 		}
 	}
 }
+
+// claude-fleet#2631: a release already on disk that lacks a pinned artifact
+// (built by a hub before it could fetch Claude Code — be5a58d on 2026-10-09)
+// is rebuilt once the hub can supply it, on the next manifest request, without
+// a stable move; a whole one is never re-read, and a lacking one the hub cannot
+// help is served as it is.
+func TestReleaseHealsLackingPinned(t *testing.T) {
+	r := newReleaseRig(t)
+	rj := `{"schema":1,"components":{` +
+		`"ccquota":{"artifact":"ccquota-{os}-{arch}"},` +
+		`"claude":{"version":"9.9.9","artifact":"claude-{version}-{os}-{arch}"},` +
+		`"codex":{"version":"0.1.0","artifact":"codex-{version}-{os}-{arch}"},` +
+		`"tmux":{"version":"3.7c","artifact":"tmux-{version}-{os}-{arch}"},` +
+		`"supervisor":{"script":"bin/fleet-node-update.py"}}}`
+	r.g.files[shaA+"/"+release.ReleaseJSON] = rj
+	must(t, os.WriteFile(filepath.Join(r.inst, "codex-0.1.0-darwin-arm64"), []byte("CODEX"), 0o755))
+	must(t, os.WriteFile(filepath.Join(r.inst, "tmux-3.7c-darwin-arm64"), []byte("TMUX"), 0o755))
+	must(t, r.rs.Source.Refresh(context.Background()))
+	// what the old hub left: shaA signed without claude
+	files := map[string][]byte{"bin/fleet": []byte("#!/bin/sh\n"), release.ReleaseJSON: []byte(rj)}
+	must(t, r.rs.publish(shaA, files, r.rs.artifacts(), time.Now().Add(-time.Hour)))
+
+	carries := func() bool {
+		t.Helper()
+		resp, body := getBody(t, r.hub.URL+release.Path+"stable")
+		if resp.StatusCode != 200 {
+			t.Fatalf("GET stable: %d %s", resp.StatusCode, body)
+		}
+		var m release.Manifest
+		must(t, json.Unmarshal([]byte(body), &m))
+		for _, a := range m.Artifacts {
+			if a.Name == "claude-9.9.9-darwin-arm64" {
+				return true
+			}
+		}
+		return false
+	}
+	// npm has no such version: served as it is, and not retried at once
+	if carries() {
+		t.Fatal("claude appeared from nowhere")
+	}
+	r.npm.put(t, "claude-code-darwin-arm64", "9.9.9", []byte("CLAUDE 9.9.9"), false)
+	if carries() {
+		t.Fatal("healed again inside releaseHealEvery")
+	}
+	r.rs.mu.Lock()
+	r.rs.healTried[shaA] = time.Now().Add(-2 * releaseHealEvery)
+	r.rs.mu.Unlock()
+	if !carries() {
+		t.Fatal("a release lacking a fetchable pin was not healed")
+	}
+	if _, err := r.fetch.Fetch(context.Background(), "stable", filepath.Join(t.TempDir(), "rt"), true); err != nil {
+		t.Fatalf("a machine's fetch of the healed release: %v", err)
+	}
+	// whole now: never looked at again
+	r.rs.mu.Lock()
+	r.rs.healTried[shaA] = time.Time{}
+	r.rs.mu.Unlock()
+	before := r.npm.hits["/@anthropic-ai%2fclaude-code-darwin-arm64/9.9.9"]
+	carries()
+	carries()
+	if r.npm.hits["/@anthropic-ai%2fclaude-code-darwin-arm64/9.9.9"] != before {
+		t.Error("a whole release was rebuilt again")
+	}
+}

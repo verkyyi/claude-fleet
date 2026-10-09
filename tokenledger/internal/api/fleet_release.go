@@ -1,6 +1,8 @@
 package api
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -8,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -68,8 +71,10 @@ type ReleaseStore struct {
 	Client        *http.Client       // the fetches' client (tests); nil = one per call
 	Keep          int                // default ReleaseKeep
 
-	mu       sync.Mutex
-	building map[string]*releaseBuild
+	mu        sync.Mutex
+	building  map[string]*releaseBuild
+	whole     map[string]bool      // build dirs found carrying every pin (heal)
+	healTried map[string]time.Time // sha → last heal look
 }
 
 type releaseBuild struct {
@@ -173,10 +178,15 @@ func (rs *ReleaseStore) artifacts() map[string]string {
 
 // Ensure builds <sha> unless it is on disk; concurrent callers share one build.
 func (rs *ReleaseStore) Ensure(ctx context.Context, sha string) error {
+	return rs.ensure(ctx, sha, false)
+}
+
+// ensure builds <sha>; rebuild builds it again even when one is on disk (heal).
+func (rs *ReleaseStore) ensure(ctx context.Context, sha string, rebuild bool) error {
 	if !release.ValidSHA(sha) {
 		return fmt.Errorf("bad sha %q", sha)
 	}
-	if rs.Has(sha) {
+	if !rebuild && rs.Has(sha) {
 		return nil
 	}
 	rs.mu.Lock()
@@ -431,6 +441,8 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusBadGateway, "release "+sha[:7]+": "+err.Error())
 			return
 		}
+	} else if sub == "" && rs.Source != nil && rs.Source.Seen(sha) {
+		rs.heal(r.Context(), sha)
 	}
 	base := rs.dir(sha)
 	if base == "" { // pruned since
@@ -442,7 +454,7 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case sub == "":
 		file, ctype = release.ManifestName, "application/json"
-		immutable = rest != "stable"
+		immutable = false // a healed release re-signs it (claude-fleet#2631)
 		if sig, err := os.ReadFile(filepath.Join(base, release.SigName)); err == nil {
 			w.Header().Set("X-Ccquota-Release-Signature", strings.TrimSpace(string(sig)))
 		}
@@ -475,4 +487,111 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 	}
 	http.ServeContent(w, r, "", st.ModTime(), f)
+}
+
+// releaseHealEvery: how often one release lacking a pinned artifact is retried.
+const releaseHealEvery = 10 * time.Minute
+
+// heal rebuilds a release on disk that lacks an artifact its release.json pins,
+// once the hub can supply it (claude-fleet#2631): a release built before the
+// file landed — or by a hub that could not fetch it — is otherwise kept as it
+// is, and every managed machine sits in backoff on it until stable moves. A
+// build found whole is never looked at again; a lacking one is retried at most
+// every releaseHealEvery. A failed rebuild leaves the old one served.
+func (rs *ReleaseStore) heal(ctx context.Context, sha string) {
+	base := rs.dir(sha)
+	if base == "" {
+		return
+	}
+	rs.mu.Lock()
+	if rs.whole == nil {
+		rs.whole, rs.healTried = map[string]bool{}, map[string]time.Time{}
+	}
+	if rs.whole[base] || time.Since(rs.healTried[sha]) < releaseHealEvery {
+		rs.mu.Unlock()
+		return
+	}
+	rs.healTried[sha] = time.Now()
+	rs.mu.Unlock()
+	lack, err := rs.lacking(base)
+	if err != nil || len(lack) == 0 {
+		if err != nil {
+			log.Printf("fleet: release %s: heal check: %v", sha[:7], err)
+		}
+		rs.mu.Lock()
+		rs.whole[base] = err == nil
+		rs.mu.Unlock()
+		return
+	}
+	have := rs.artifacts()
+	for _, n := range lack {
+		if _, ok := have[n]; ok {
+			continue
+		}
+		if _, _, ok := claudeNPM(n); !ok || rs.ArtifactsDir == "" {
+			return // nothing the hub can do about this one
+		}
+	}
+	log.Printf("fleet: release %s lacks %s — rebuilding", sha[:7], strings.Join(lack, ", "))
+	if err := rs.ensure(ctx, sha, true); err != nil {
+		log.Printf("fleet: release %s: heal: %v", sha[:7], err)
+	}
+}
+
+// lacking: the artifacts the build in base pins (its tree's release.json) but
+// does not carry (its manifest).
+func (rs *ReleaseStore) lacking(base string) ([]string, error) {
+	mb, err := os.ReadFile(filepath.Join(base, release.ManifestName))
+	if err != nil {
+		return nil, err
+	}
+	var m release.Manifest
+	if err := json.Unmarshal(mb, &m); err != nil {
+		return nil, err
+	}
+	rj, err := treeFile(filepath.Join(base, release.TreeName), release.ReleaseJSON)
+	if err != nil || rj == nil {
+		return nil, err
+	}
+	want, err := release.Pinned(rj, rs.platforms())
+	if err != nil {
+		return nil, err
+	}
+	carried := map[string]bool{}
+	for _, a := range m.Artifacts {
+		carried[a.Name] = true
+	}
+	var out []string
+	for _, n := range want {
+		if !carried[n] {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
+// treeFile: one file out of a release's tree.tar.gz (nil when it has none).
+func treeFile(tgz, name string) ([]byte, error) {
+	f, err := os.Open(tgz)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	tr := tar.NewReader(zr)
+	for {
+		hd, err := tr.Next()
+		if err == io.EOF {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if hd.Name == name && hd.Typeflag == tar.TypeReg {
+			return io.ReadAll(io.LimitReader(tr, 1<<20))
+		}
+	}
 }
