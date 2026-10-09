@@ -33,6 +33,8 @@ export FLEET_LOGIN_HOMES="$WORK/homes" FLEET_INSTALL_DAEMON_DIR="$WORK/LaunchDae
 export FLEET_CONF_DIR="$WORK/homes/alice/.config/claude-fleet" FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_TEST_LOG="$WORK/calls.log" FLEET_TEST_LIVE="$WORK/live" FLEET_TEST_DS="$WORK/ds"
 export HOME="$WORK/admin" PATH="$WORK/shim:$PATH"
+# the machine daemon's register (issue #2528): absent unless a leg writes one
+export FLEET_NODE_STATE="$WORK/node" FLEET_NODE_SUPERVISOR="$WORK/rt/fleet-node-supervisor.py"
 export FLEET_TEST_CALLER="$HOME/projects/claude-fleet"   # inside the admin's 0700 home (#1216)
 mkdir -p "$HOME" "$FLEET_TEST_CALLER"
 # credsep's root paths (issue #2418), all under the work dir; no launchctl/systemctl
@@ -461,5 +463,24 @@ FLEET_CREDSEP_TEST=0 run alice --delete-home --apply
 has "$WORK/out" 'stopped before deleting the login' 'refused purge not explained'
 not_has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser' 'login deleted although the credsep purge failed'
 [ -d "$CS/db/alice" ] || fail 'refused purge: store removed anyway'
+
+# A login whose services are still in the machine daemon's register (issue
+# #2528): refused before anything runs — dry run and --apply — exit 6, with the
+# move line for each; moved away, it goes ahead.
+reset_fixture; cs_fixture own
+mkdir -p "$WORK/node/logins/alice/services"; chmod 700 "$WORK/node/logins/alice"
+printf '{}\n' > "$WORK/node/logins/alice/services/daily-report.json"
+run alice
+[ "$RC" = 6 ] || { cat "$WORK/out" >&2; fail "dry run with a registered service exited $RC, not 6"; }
+has "$WORK/out" 'alice still has 1 registered service(s) on this machine: daily-report' 'register refusal does not name the service'
+has "$WORK/out" "service move --login alice --name daily-report --to <新登录>" 'register refusal does not print the move line'
+run alice --delete-home --apply
+[ "$RC" = 6 ] || { cat "$WORK/out" >&2; fail "apply with a registered service exited $RC, not 6"; }
+[ ! -s "$FLEET_TEST_LOG" ] || fail "a refused removal ran a command: $(head -3 "$FLEET_TEST_LOG")"
+[ -f "$FLEET_TEST_LIVE" ] || fail 'a refused removal stopped the fleet'
+rm "$WORK/node/logins/alice/services/daily-report.json"
+run alice --delete-home --apply
+[ "$RC" = 0 ] || { cat "$WORK/out" >&2; fail 'an emptied register still refused'; }
+has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'emptied register: the login was not deleted'
 
 printf 'fleet-login-remove-selftest: PASS\n'

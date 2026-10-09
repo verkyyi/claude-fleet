@@ -44,6 +44,9 @@ machine's work ONCE, however many logins the machine carries:
                 credentials it names injected at start from
                 <state>/logins/<login>/creds/. `fleet service` (bin/fleet-service.sh)
                 is the person's command; `status --json` carries `services[]`.
+                `service move` hands one entry to another login whole — its
+                paths[], log and credentials with it (issue #2528); `account
+                release` refuses (6) while the login still has entries.
   * update    — the machine's one updater (issue #2334, C6): a task like the
                 rest (fleet-node-update.py tick). When it moves `current` it asks
                 this daemon to restart (<state>/update-restart.json): the daemon
@@ -75,13 +78,13 @@ Usage:
                                                (令牌失效 · 需要 relogin, issue #2501)
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
   fleet-node-supervisor.py attic [list | restore <id> | purge]
-  fleet-node-supervisor.py service add|rm|stop|start|restart|cred|ls|logs …
+  fleet-node-supervisor.py service add|rm|stop|start|restart|move|cred|ls|logs …
                                                the login-level register (#2525; writes as root,
                                                ls / logs as anyone who may read them)
   fleet-node-supervisor.py install | uninstall write / remove the LaunchDaemon (root)
   fleet-node-supervisor.py install --check     exit 0 = already installed as install writes it
                                                and loaded (fleet-node-install.sh, #2330)
-  fleet-node-supervisor.py account [list | adopt <login> | release <login> | manages <login>]
+  fleet-node-supervisor.py account [list | adopt <login> | release <login> [--force] | manages <login>]
                                                the account half (#2332); manages: exit 0 = this
                                                daemon runs <login>'s tasks (install-apply, doctor)
   fleet-node-supervisor.py account adopt <login> --rejoin
@@ -1733,12 +1736,17 @@ def _node_agent_stale(paths):
     return bool(cs.get("pid")) and pid_alive(cs["pid"]) and cs.get("reload_sig") != dir_sig(paths.logins)
 
 
-def account_release(paths, login):
+def account_release(paths, login, force=False):
     """The way back, one command: stop running as <login>, put its services back."""
     if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
         print("fleet-node-supervisor: account release loads %s's services back — run it as root (sudo)" % login,
               file=sys.stderr)
         return 1
+    # a login on its way out keeps nothing in the register (#2528): move each
+    # entry to the login that takes over, or rm it; --force releases anyway
+    # (the daemon keeps running them as <login>)
+    if not force and service_refuse_left(paths, login, "account release %s" % login):
+        return SVC_LEFT_RC
     a = accounts_read(paths)
     if not (a.get(login) or {}).get("managed"):
         print("fleet-node-supervisor: %s is not managed" % login, file=sys.stderr)
@@ -1947,6 +1955,7 @@ def uninstall(paths):
 SERVICE_USAGE = ("usage: fleet-node-supervisor.py service add --login L --name N [--env K=V]… [--env-key K]… "
                  "[--cred C]… [--path P]… -- <exec> [args…]\n"
                  "       fleet-node-supervisor.py service rm|stop|start|restart --login L --name N\n"
+                 "       fleet-node-supervisor.py service move --login L --name N --to L2\n"
                  "       fleet-node-supervisor.py service cred set|rm --login L --name C   (the value on stdin)\n"
                  "       fleet-node-supervisor.py service ls [--login L] [--json]\n"
                  "       fleet-node-supervisor.py service logs --login L --name N [-n LINES]")
@@ -2059,6 +2068,11 @@ def service_cli(paths, rest):
         os.rename(tmp, f)
         print("stored credential %s of %s (the value is never printed or logged)" % (name, login))
         return 0
+    if sub == "move":
+        if not login or not name or not one("--to"):
+            print(SERVICE_USAGE, file=sys.stderr)
+            return 2
+        return service_move(paths, login, name, one("--to"))
     if sub not in ("add", "rm", "stop", "start", "restart") or not login or not name:
         print(SERVICE_USAGE, file=sys.stderr)
         return 2
@@ -2119,6 +2133,250 @@ def service_cli(paths, rest):
     return 0
 
 
+# --------------------------------------------------------------- service move ---
+# A login hands its register to another (issue #2528, EPIC #2524 C4): the
+# 2026-10-08 verkyyi → verky move left the daily push under the old name, failing
+# every half hour until it was carried over by hand. `service move` carries ONE
+# entry whole: the daemon stops it first (no two copies ever run), every path the
+# entry declares (`paths[]` — its working directory, its skill directory) moves
+# from the old home to the same place in the new one and is chowned there, its
+# log and the credentials it names move to the new login's, every string of
+# exec / env that named the old home names the new one, and the entry is
+# registered under the new login (its old state kept) — then the old one goes.
+# Every check runs before the first change; a step that fails puts back what it
+# moved. A path outside the old home is shared: left where it is, said so.
+SVC_LEFT_RC = 6     # `account release` / fleet-login-remove.sh: entries not moved yet
+
+
+def service_names(paths, login):
+    """The names a login's register holds (valid or not)."""
+    return sorted(os.path.basename(f)[:-len(".json")]
+                  for f in glob.glob(os.path.join(service_dir(paths, login), "*.json")))
+
+
+def service_refuse_left(paths, login, what):
+    """Print the refusal + the commands that clear it; True when there is one."""
+    left = service_names(paths, login)
+    if not left:
+        return False
+    print("fleet-node-supervisor: refusing %s — %s still has %d registered service(s): %s"
+          % (what, login, len(left), " ".join(left)), file=sys.stderr)
+    print("  move each to the login that takes over (or rm it), then run this again:", file=sys.stderr)
+    for n in left:
+        print("    sudo %s -I %s service move --login %s --name %s --to <新登录>"
+              % (sys.executable, os.path.abspath(__file__), login, n), file=sys.stderr)
+    return True
+
+
+def _rehome(s, old, new):
+    if isinstance(s, str) and (s == old or s.startswith(old.rstrip("/") + "/")):
+        return new.rstrip("/") + s[len(old.rstrip("/")):]
+    return s
+
+
+def _chown_tree(top, uid, gid):
+    """lchown top and everything under it (never follows a link)."""
+    if os.geteuid() != 0:
+        return
+    os.lchown(top, uid, gid)
+    if os.path.isdir(top) and not os.path.islink(top):
+        for d, dirs, files in os.walk(top):
+            for n in dirs + files:
+                os.lchown(os.path.join(d, n), uid, gid)
+
+
+def _makedirs_as(d, stop, uid, gid):
+    """mkdir -p d, each directory it creates below stop owned by uid:gid."""
+    made = []
+    x = d
+    while not os.path.isdir(x) and x.rstrip("/") != stop.rstrip("/") and x != "/":
+        made.append(x)
+        x = os.path.dirname(x)
+    for m in reversed(made):
+        os.mkdir(m, 0o755)
+        if os.geteuid() == 0:
+            os.lchown(m, uid, gid)
+
+
+def _move_tree(src, dst):
+    """rename, or copy + remove across filesystems."""
+    try:
+        os.rename(src, dst)
+    except OSError as e:
+        if e.errno != errno.EXDEV:
+            raise
+        if os.path.isdir(src) and not os.path.islink(src):
+            shutil.copytree(src, dst, symlinks=True)
+            shutil.rmtree(src)
+        else:
+            shutil.copy2(src, dst, follow_symlinks=False)
+            os.remove(src)
+
+
+def _service_wait_stopped(paths, login, name):
+    """True once the daemon no longer runs <login>/<name> (or none is running)."""
+    key = "svc:%s/%s" % (login, name)
+    st = read_json(paths.state_file, {})
+    if not pid_alive((st.get("supervisor") or {}).get("pid")):
+        return not pid_alive(((st.get("children") or {}).get(key) or {}).get("pid"))
+    end = now() + env_num("FLEET_NODE_RELEASE_WAIT", 20)
+    while True:
+        cs = (read_json(paths.state_file, {}).get("children") or {}).get(key) or {}
+        if not pid_alive(cs.get("pid")):
+            return True
+        if now() >= end:
+            return False
+        time.sleep(0.2)
+
+
+def service_move(paths, login, name, to):
+    if not SVC_NAME_RE.match(name):
+        print("fleet-node-supervisor: bad name %r" % name, file=sys.stderr)
+        return 2
+    if not _svc_root("move"):
+        return 1
+    a, b = _svc_ident(login), _svc_ident(to)
+    if a is None or b is None:
+        return 1
+    if login == to:
+        print("fleet-node-supervisor: %s/%s is already %s's" % (login, name, to), file=sys.stderr)
+        return 2
+    f_old = os.path.join(service_dir(paths, login), name + ".json")
+    f_new = os.path.join(service_dir(paths, to), name + ".json")
+    svc = read_json(f_old, None) if os.path.exists(f_old) else None
+    if svc is None:
+        print("fleet-node-supervisor: %s/%s is not registered" % (login, name), file=sys.stderr)
+        return 1
+    why = service_check(svc, login, name)
+    if why:
+        print("fleet-node-supervisor: %s/%s is not a valid entry (%s) — fix or rm it" % (login, name, why),
+              file=sys.stderr)
+        return 1
+    if os.path.exists(f_new):
+        print("fleet-node-supervisor: %s already has a service %s — rm it there first" % (to, name), file=sys.stderr)
+        return 1
+    (_, _, oh), (uid, gid, nh) = a, b
+    # -- every check before the first change
+    moves, notes, problems = [], [], []
+    for p in svc.get("paths") or []:
+        q = _rehome(p, oh, nh)
+        if not os.path.isabs(p) or q == p:
+            notes.append("path %s is outside %s's home — left where it is" % (p, login))
+        elif not os.path.lexists(p):
+            notes.append("path %s does not exist — nothing to move" % p)
+        elif os.path.lexists(q):
+            problems.append("%s already exists in %s's home" % (q, to))
+        else:
+            moves.append((p, q))
+    lg_old, lg_new = service_log(paths, login, name), service_log(paths, to, name)
+    logs = [(x, y) for x, y in ((lg_old, lg_new), (lg_old + ".1", lg_new + ".1")) if os.path.lexists(x)]
+    for x, y in logs:
+        if os.path.lexists(y):
+            problems.append("%s already exists" % y)
+    cd_old, cd_new = service_cred_dir(paths, login), service_cred_dir(paths, to)
+    creds = []
+    for c in svc.get("creds") or []:
+        src, dst = os.path.join(cd_old, c), os.path.join(cd_new, c)
+        if not os.path.exists(src):
+            notes.append("credential %s is not stored for %s — set it for %s (fleet service cred set %s)"
+                         % (c, login, to, c))
+            continue
+        if os.path.exists(dst) and open(dst).read() != open(src).read():
+            problems.append("%s already holds a different credential %s" % (to, c))
+            continue
+        creds.append((c, src, dst))
+    if problems:
+        for x in problems:
+            print("fleet-node-supervisor: refusing move — %s" % x, file=sys.stderr)
+        return 1
+    # -- stop it under the old login: never two copies running
+    old_state = svc.get("state", "enabled")
+    if old_state != "stopped":
+        write_json(f_old, dict(svc, state="stopped", changed=now()), 0o600)
+        if not _service_wait_stopped(paths, login, name):
+            write_json(f_old, svc, 0o600)
+            print("fleet-node-supervisor: %s/%s did not stop — nothing moved" % (login, name), file=sys.stderr)
+            return 1
+    done = []          # (src, dst) moved, undone in reverse on a failure
+    fresh = []         # credentials this move wrote, removed on a failure
+    try:
+        for p, q in moves:
+            _makedirs_as(os.path.dirname(q), nh, uid, gid)
+            _move_tree(p, q)
+            done.append((p, q))
+            _chown_tree(q, uid, gid)
+        for p, q in logs:
+            _svc_logdir_for(os.path.dirname(q), uid, gid)
+            _move_tree(p, q)
+            done.append((p, q))
+            _chown_tree(q, uid, gid)
+        if creds:
+            _svc_mkdir(os.path.dirname(cd_new))
+            _svc_mkdir(cd_new)
+        for c, src, dst in creds:
+            if os.path.exists(dst):
+                continue        # the same value already there
+            tmp = os.path.join(cd_new, ".%s.%d" % (c, os.getpid()))
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh, open(src) as fs:
+                fh.write(fs.read())
+            os.rename(tmp, dst)
+            fresh.append(dst)
+        new = dict(svc, login=to, state=old_state, changed=now(),
+                   exec=[_rehome(x, oh, nh) for x in svc["exec"]],
+                   env=dict((k, _rehome(v, oh, nh)) for k, v in (svc.get("env") or {}).items()),
+                   paths=[_rehome(p, oh, nh) for p in svc.get("paths") or []],
+                   moved_from={"login": login, "at": now()})
+        why = service_check(new, to, name)
+        if why:
+            raise ValueError(why)
+        _svc_mkdir(os.path.dirname(service_dir(paths, to)))
+        _svc_mkdir(service_dir(paths, to))
+        write_json(f_new, new, 0o600)
+    except Exception as e:
+        for p, q in reversed(done):
+            try:
+                _move_tree(q, p)
+                _chown_tree(p, a[0], a[1])
+            except Exception as e2:
+                print("fleet-node-supervisor: could not put %s back to %s: %s" % (q, p, e2), file=sys.stderr)
+        for dst in fresh:
+            os.remove(dst)
+        write_json(f_old, svc, 0o600)
+        print("fleet-node-supervisor: move failed (%s) — put back, %s/%s is as it was" % (e, login, name),
+              file=sys.stderr)
+        return 1
+    os.remove(f_old)
+    # a credential no other entry of the old login names leaves with it
+    still = set(c for x in _register(paths, login) for c in (x.get("creds") or []))
+    for c, src, _ in creds:
+        if c not in still:
+            os.remove(src)
+    print("moved %s/%s → %s/%s%s" % (login, name, to, name,
+                                     " (stopped, as it was)" if old_state == "stopped" else
+                                     " — the daemon starts it as %s on its next pass" % to))
+    for p, q in moves:
+        print("  path %s → %s" % (p, q))
+    for x, y in logs[:1]:
+        print("  log  %s → %s" % (x, y))
+    for c, _, _ in creds:
+        print("  credential %s → %s's" % (c, to))
+    for n in notes:
+        print("  note: %s" % n)
+    return 0
+
+
+def _register(paths, login):
+    return [svc for l, _, _, svc, _ in service_files(paths) if l == login and svc]
+
+
+def _svc_logdir_for(d, uid, gid):
+    if not os.path.isdir(d):
+        os.makedirs(d, 0o755)
+    if os.geteuid() == 0:
+        os.lchown(d, uid, gid)
+
+
 # --------------------------------------------------------------- main -----------
 def main(argv):
     paths = Paths()
@@ -2145,7 +2403,7 @@ def main(argv):
         if sub == "adopt" and len(rest) > 1:
             return account_adopt(paths, rest[1], dry="--dry-run" in rest, rejoin="--rejoin" in rest)
         if sub == "release" and len(rest) > 1:
-            return account_release(paths, rest[1])
+            return account_release(paths, rest[1], force="--force" in rest)
     table = load_table(paths)
     if cmd == "run":
         return Supervisor(paths, table).run()

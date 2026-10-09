@@ -287,3 +287,12 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
   （状态、pid、重启次数、上次退出码、日志末行 ≤ 200 字节；`state.json` 0644 里的同一份不带日志末行）。
 - 一个登录的 `services/` 不是节点程序的租户：节点程序只在 `logins/*.env` 变时重起。
 - BREAK-IT 行 `service-killed`；`fleet-node-supervisor-selftest.py` I。
+- **跟人走**（C4，#2528）：`fleet service move <名> --to <登录>`（root：`fleet-node-supervisor.py service move
+  --login <旧> --name <名> --to <新>`）整项搬到另一个登录——守护先停掉旧的（两份永不同时跑），条目的 `paths[]`
+  （`--path`：工作目录、技能目录）从旧家目录搬到新家目录的同一位置并改归属（家目录外的路径是共用的，原地不动、
+  输出里说明），日志和凭据跟到新登录下（旧登录没有别的条目再用的凭据一并删掉），exec / env 里指向旧家目录的
+  字符串改指新家目录，按原状态（enabled / stopped）登记到新登录，最后才删旧条目。所有检查（新登录已有同名条目、
+  目标路径已存在、同名凭据值不同）先于第一处改动；中途失败把已搬的原样放回。
+- **退役前必须搬完**：`fleet-login-remove.sh <登录>` 在第 1 步之前（dry run 也一样）、`account release <登录>`
+  在动手之前查该登录的登记表，还有条目就拒绝、**退 6**，逐项打印 `service move` 命令；`account release --force`
+  照样释放（条目仍由守护以该登录身份跑）。BREAK-IT 行 `service-login-moved`；`fleet-node-supervisor-selftest.py` J。

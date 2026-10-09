@@ -29,6 +29,11 @@
 # `dseditgroup -d` cannot do that once the user record is gone ("Record was not
 # found"); only `dscl . -delete` on the attribute can — without it the name stays
 # in the SSH allow-list forever.
+# Before step 1, in a dry run too: a login that still has entries in the machine
+# daemon's register (`fleet service` / `fleet task`, /var/db/fleet-node/logins/
+# <login>/services) is refused, exit 6, with the `service move` line for each —
+# left there they fail every run under a login that is gone (issue #2528).
+# Exit: 0 done · 1 a step failed · 2 usage · 3 refused · 6 services not moved yet.
 set -uo pipefail
 
 PROG=fleet-login-remove
@@ -110,6 +115,42 @@ run() { show "$@"; [ "$APPLY" = 1 ] || return 0; "$@" || { printf '%s: failed; s
 LEFT=0
 run_post() { show "$@"; [ "$APPLY" = 1 ] || return 0; "$@" || { printf '%s: failed after the login was deleted; finish by hand:\n' "$PROG" >&2; show "$@" >&2; LEFT=1; }; }
 step() { printf '\n[%s] %s\n' "$1" "$2"; }
+
+# The login's entries in the machine daemon's register (issue #2528, EPIC #2524
+# C4): root's 0700 dirs, read directly where they can be (a sandbox, root), else
+# through sudo — `-n` in a dry run, which only WARNs when it cannot ask.
+NODE_STATE=$(abs_dir "${FLEET_NODE_STATE:-/var/db/fleet-node}")
+NODE_SUP=${FLEET_NODE_SUPERVISOR:-"/Library/Application Support/claude-fleet/current/bin/fleet-node-supervisor.py"}
+SVC_DIR="$NODE_STATE/logins/$LOGIN/services"
+# shellcheck disable=SC2016 # $1 is expanded by the inner sh
+SVC_LS='[ ! -d "$1" ] || ls "$1"'
+svc_root=0
+for x in "$NODE_STATE" "$NODE_STATE/logins" "$NODE_STATE/logins/$LOGIN" "$SVC_DIR"; do
+  [ -e "$x" ] || break          # its parent was searchable: really absent
+  [ -r "$x" ] && [ -x "$x" ] || { svc_root=1; break; }
+done
+SVC_NAMES='' svc_ok=1
+if [ "$svc_root" = 0 ]; then
+  SVC_NAMES=$(sh -c "$SVC_LS" _ "$SVC_DIR" 2>/dev/null) || svc_ok=0
+elif [ "$APPLY" = 1 ]; then
+  SVC_NAMES=$(sudo sh -c "$SVC_LS" _ "$SVC_DIR") || svc_ok=0
+else
+  SVC_NAMES=$(sudo -n sh -c "$SVC_LS" _ "$SVC_DIR" 2>/dev/null) || svc_ok=0
+fi
+if [ "$svc_ok" = 0 ]; then
+  [ "$APPLY" = 1 ] && die "cannot read $LOGIN's service register ($SVC_DIR); nothing changed"
+  printf '%s: WARN cannot read %s without a sudo password — --apply checks it before anything changes\n' "$PROG" "$SVC_DIR" >&2
+fi
+SVC_LEFT=$(printf '%s\n' "$SVC_NAMES" | sed -n 's/\.json$//p')
+if [ -n "$SVC_LEFT" ]; then
+  printf '%s: refusing: %s still has %s registered service(s) on this machine: %s\n' "$PROG" "$LOGIN" \
+    "$(printf '%s\n' "$SVC_LEFT" | grep -c .)" "$(printf '%s\n' "$SVC_LEFT" | tr '\n' ' ' | sed 's/ $//')" >&2
+  printf '  move each to the login that takes over (or rm it), then run this again:\n' >&2
+  printf '%s\n' "$SVC_LEFT" | while IFS= read -r n; do
+    printf '    sudo /usr/bin/python3 -I %q service move --login %s --name %s --to <新登录>\n' "$NODE_SUP" "$LOGIN" "$n" >&2
+  done
+  exit 6
+fi
 
 if [ "$APPLY" = 1 ]; then
   printf '%s: removing login %s (uid %s)\n' "$PROG" "$LOGIN" "$UID_TARGET"

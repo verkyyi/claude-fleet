@@ -12,6 +12,10 @@
 #                               `cred set`) is handed to it as $C at start — the
 #                               entry holds the name only
 #   fleet service rm|stop|start|restart <name>
+#   fleet service move <name> --to <login>
+#                               hand it to another login (a move / a retirement):
+#                               stopped here, its paths[] + log + credentials carried
+#                               to <login>'s home and register, started there (#2528)
 #   fleet service ls [--json]   your services: state · command · last log line
 #   fleet service logs <name> [-n N] [-f]
 #   fleet service cred set <C>  the value on stdin (never an argument)
@@ -31,7 +35,7 @@ PY=/usr/bin/python3
 SUDO=${FLEET_SERVICE_SUDO-sudo -n}
 ME=${FLEET_SERVICE_LOGIN:-$(id -un)}
 
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }
 die() { echo "fleet service · $*" >&2; exit "${2:-1}"; }
 
 [ -f "$SUP" ] || die "this machine has no fleet daemon ($SUP) — fleet service is for a managed machine (sudo fleet node install)"
@@ -83,6 +87,9 @@ case $cmd in
   rm|stop|start|restart)
     [ $# -eq 1 ] || die "usage: fleet service $cmd <name>" 2
     as_root "$cmd" --login "$ME" --name "$1" ;;
+  move)
+    [ $# -eq 3 ] && [ "$2" = --to ] || die "usage: fleet service move <name> --to <login>" 2
+    as_root move --login "$ME" --name "$1" --to "$3" ;;
   cred)
     verb=${1:-}; c=${2:-}
     case $verb in set|rm) ;; *) die "usage: fleet service cred set|rm <name>  (set: the value on stdin)" 2 ;; esac
