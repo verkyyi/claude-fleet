@@ -17,7 +17,10 @@
 #                            worker_answer (no session named = the first waiting;
 #                            y → yes); a refused write → exit 1 with why
 #   E  close                 worker_reap through fleet_hub_reap (FLEET_HUB_WRITE_CMD
-#                            fakes the hub): --yes, and no terminal without it → 2
+#                            fakes the hub): --yes, and no terminal without it → 2;
+#                            E3 door 3 — only a `fleet login` certificate: a fake
+#                            hub on 127.0.0.1 gets a worker_reap whose signature
+#                            checks (issue #2506)
 #   F  open                  `jump=<key>` on the client list's queue (an isolated
 #                            server, TMUX naming it) — the list's own jump
 #   G  the old roads         `fleet open <url|:port|file>` / `fleet show <file>`
@@ -151,6 +154,59 @@ out=$(FLEET_HUB_WRITE_CMD='echo "{\"operation_id\":\"op9\",\"status\":\"failed\"
   cli close 聊聊 --yes 2>&1); rc=$?
 eq "E a reap the node skipped → exit 1" 1 "$rc"
 has "E …and says which" "skip:live" "$out"
+
+# E3: door 3 — no FLEET_HUB_WRITE_CMD, no viewer token, only a fleet login
+# certificate: fleet-hub-write.sh signs the worker_reap itself (issue #2506 — its
+# post_cert read $CERT_KEY that only a $(cert_state) subshell had set, so under
+# set -u every certificate write died «CERT_KEY: unbound variable»). A fake hub on
+# 127.0.0.1 records the request; the signature must check against the message.
+if command -v ssh-keygen >/dev/null 2>&1; then
+  mkdir -p "$W/cert"
+  ssh-keygen -q -t ed25519 -N '' -C ca -f "$W/cert/ca" >/dev/null 2>&1
+  ssh-keygen -q -t ed25519 -N '' -C me -f "$W/cert/key" >/dev/null 2>&1
+  ssh-keygen -q -s "$W/cert/ca" -I me -n me -V -5m:+10m "$W/cert/key.pub" >/dev/null 2>&1
+  python3 - "$W/hub" <<'PY2' &
+import http.server, json, os, signal, sys
+d = sys.argv[1]; os.makedirs(d, exist_ok=True)
+signal.alarm(60)
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        with open(os.path.join(d, "req"), "wb") as f: f.write(body)
+        out = json.dumps({"operation_id": "op3", "status": "succeeded",
+                          "result": {"token": "reaped:full"}}).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.server_address[1]))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+s.serve_forever()
+PY2
+  HUBPID=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$W/hub/port" ] && break; sleep 0.2; done
+  out=$(CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$W/hub/port" 2>/dev/null)" FLEET_CERT="$W/cert/key" \
+    cli close 聊聊 --yes 2>&1); rc=$?
+  kill "$HUBPID" 2>/dev/null; wait "$HUBPID" 2>/dev/null
+  eq "E3 close by certificate exits 0" 0 "$rc"
+  has "E3 …says the token" "已回收 随便聊聊（reaped:full）" "$out"
+  case "$out" in *unbound*) eq "E3 …no unbound variable" "" "$out" ;; esac
+  eq "E3 the hub got a signed worker_reap for that worker" "worker_reap F/scratch-3 cert-ok" "$(python3 - "$W/hub/req" "$W/cert" <<'PY2'
+import hashlib, json, subprocess, sys
+try:
+    r = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    print("no request"); sys.exit(0)
+d = sys.argv[2]
+open(d + "/sig", "w").write(r["sig"])
+msg = "fleet-write %s %s %s" % (r["ts"], r["tool"], hashlib.sha256(r["args_json"].encode()).hexdigest())
+ok = subprocess.run(["ssh-keygen", "-Y", "check-novalidate", "-n", "fleet-write@claude-fleet", "-s", d + "/sig"],
+                    input=msg.encode(), capture_output=True).returncode == 0
+cert = open(d + "/key-cert.pub").readline().strip() == r["cert"].strip()
+print(r["tool"], json.loads(r["args_json"]).get("worker_id"), "cert-ok" if ok and cert else "cert-BAD")
+PY2
+)"
+fi
 
 # --- F. open --------------------------------------------------------------------------
 if command -v tmux >/dev/null 2>&1; then

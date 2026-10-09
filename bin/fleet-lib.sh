@@ -6080,11 +6080,14 @@ fleet_hub_reap() {
   ef=$(mktemp "${TMPDIR:-/tmp}/fleet-hub-reap.XXXXXX" 2>/dev/null) || ef=/dev/null
   rec=$(bash "$_FLEET_LIB_DIR/fleet-hub-write.sh" worker_reap \
         "$(printf '{"worker_id":"%s"}' "$wid")" --wait "$wait" 2>"$ef" </dev/null)
-  out=$(printf '%s' "$rec" | FHR_NOTE="$(tail -n1 "$ef" 2>/dev/null)" FHR_WAIT="$wait" python3 -c '
+  out=$(printf '%s' "$rec" | FHR_NOTE="$(cat "$ef" 2>/dev/null)" FHR_WAIT="$wait" python3 -c '
 import json, os, re, sys
-note = os.environ.get("FHR_NOTE", "").replace("fleet-hub-write: ", "", 1)
+# every line the writer said, not just its last: the reason (a bash error, the
+# refusal of the hub) is often above a summary line (issue #2506)
+note = " · ".join(l.strip().replace("fleet-hub-write: ", "", 1)
+                  for l in os.environ.get("FHR_NOTE", "").splitlines() if l.strip())
 def say(token, rc, why):
-    print("%d\t%s\t%s" % (rc, token, " ".join(str(why or "no detail").split())[:300]))
+    print("%d\t%s\t%s" % (rc, token, " ".join(str(why or "no detail").split())[:500]))
     sys.exit(0)
 try:
     o = json.loads(sys.stdin.read() or "null")

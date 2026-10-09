@@ -392,7 +392,11 @@ def cmd_close(args):
                               str(BIN), worker_id(row)], stdin=subprocess.DEVNULL, capture_output=True,
                              text=True, timeout=150)
         token = (out.stdout.strip().splitlines() or [""])[-1]
-        why = (out.stderr.strip().splitlines() or [""])[-1]
+        # fleet_hub_reap's own `reap: <why>` line carries the writer's reason whole
+        # (issue #2506); anything else on stderr is noise around it
+        errs = [ln.strip() for ln in out.stderr.splitlines() if ln.strip()]
+        reap = [ln[len("reap: "):] for ln in errs if ln.startswith("reap: ")]
+        why = reap[-1] if reap else (errs[-1] if errs else "")
     except (OSError, subprocess.TimeoutExpired) as e:
         token, why = "", str(e)
     if token.startswith("reaped:"):
