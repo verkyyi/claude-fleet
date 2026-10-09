@@ -383,7 +383,7 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 `~/Library/LaunchAgents` 里程序在该登录家目录、又不在 `~/Library` 下的（应用自带的 agent 不算）。
 它们记在 `state.json` 的 `sweep.handwritten`，`status` 每个一行 `handwritten <label> runs as <登录> …`，
 体检 `services` 行对本登录的 WARN「N 个手写启动项」。只报不动：撤哪个、什么时候撤是人的事。
-BREAK-IT 行 `service-handwritten`。机器的**管理员登录**不点名（#2702，见 §14）。
+BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登录>.env`，#2702，见 §14）。
 
 **收编顺序**（「先让新的跑通一次，再撤旧的」，漏一天比多一份更糟）：
 
@@ -431,9 +431,6 @@ BREAK-IT 行 `service-handwritten`。机器的**管理员登录**不点名（#27
 - **清扫点名**：整机守护的清扫把「家目录里还有壳 / `~/.zshrc` 还有钩子」的登录记进 `sweep.clientshell`，`status`
   每个一行 `clientshell <登录> …`（带上面那条命令）；`fleet doctor --machine` 一行 `shell`：都没有 PASS，有就 WARN
   （不算 FAIL，不触发整机回退）。root 当场看每个家目录，别的登录读上一轮清扫的记录。
-- **管理员登录**（例：verkyyi）不是托管登录：不 adopt，它自己的启动项和 dotfiles 不归 fleet 管——清扫的手写启动项和
-  `clientshell` 两半都跳过它。**自动判定**：macOS `admin` 组的成员（`dscl . -read /Groups/admin GroupMembership`，
-  root 和 `_` 系统账号不算）且没被接管（没有 `logins/<登录>.env`）的登录就是管理员。例外才手写：`machine.env` 的
-  `FLEET_NODE_ADMINS`——`名字` 不在 admin 组也跳过，`-名字` 在 admin 组也照常当托管登录（`sudo fleet-node-supervisor.py
-  admins add|rm <登录>`，`admins` 列出每个是 admin 组还是 override；`fleet node install` 重跑保留这一行），以及入口将来在
-  `expected.json` 里发的 `admins`。`fleet doctor --machine` 的 `shell` 行写明「跳过 N 个管理员登录（admin 组 M）」。
+- **只看托管清单**：清扫的手写启动项、`clientshell` 和 doctor 的 `shell` 行只看整机守护接管过的登录
+  （`/var/db/fleet-node/logins/<登录>.env` 里登记的）。管理员（例：verkyyi）、不用 fleet 的本地用户一律不扫、不点名、
+  不判断——机器上有其他管理员或非托管账号是正常状态。`shell` 行写明「看 N 个托管登录」。

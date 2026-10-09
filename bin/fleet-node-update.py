@@ -784,19 +784,20 @@ def doctor_rows(p):
 
 
 def shell_row(p, st):
-    """Does any login still carry the person's client here (issue #2702)? ONE row:
+    """Does any TAKEN-OVER login still carry the person's client here (issue #2702)?
+    Only logins/<login>.env's logins are looked at — anyone else is not the fleet's. ONE row:
     root looks now (fns.client_shell — every home); anyone else reads the last
     sweep's record in state.json (other homes are not theirs to read). WARN, never
     FAIL: a leftover client is not the release's fault."""
-    admins, from_group = fns.admin_logins(p.sup, detail=True)
-    skipped = "跳过 %d 个管理员登录（admin 组 %d）" % (len(admins), from_group)
+    listed = fns.taken_over(p.sup)
+    seen = "看 %d 个托管登录（logins/*.env）" % len(listed)
     if os.geteuid() == 0:
-        found = fns.client_shell(p.sup, admins)
+        found = fns.client_shell(p.sup, listed)
     else:
-        found = [c for c in ((st.get("sweep") or {}).get("clientshell")) or [] if c.get("login") not in admins]
+        found = [c for c in ((st.get("sweep") or {}).get("clientshell")) or [] if c.get("login") in listed]
     if not found:
-        return ("PASS", "shell", "no login carries the client shell or a login hook · " + skipped)
-    return ("WARN", "shell", "; ".join(fns.client_shell_says(c, p.sup) for c in found) + " · " + skipped)
+        return ("PASS", "shell", "no taken-over login carries the client shell or a login hook · " + seen)
+    return ("WARN", "shell", "; ".join(fns.client_shell_says(c, p.sup) for c in found) + " · " + seen)
 
 
 def account_install_sha(login, ident, path):

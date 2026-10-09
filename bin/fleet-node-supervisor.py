@@ -67,12 +67,10 @@ machine's work ONCE, however many logins the machine carries:
                 person's client here (issue #2702): `~/.cache/claude-fleet/shell`
                 or a `~/.zshrc` line that sources shell/fleet-login.zsh / cw.zsh /
                 the old bootstrap block — a managed machine is no one's client;
-                bin/fleet-node-shell-retire.sh --login <login> clears it. The
-                machine's ADMIN logins are skipped by both halves — their own
-                launchd jobs and dotfiles are not the fleet's: a member of the
-                macOS `admin` group not taken over (no logins/<login>.env), with
-                `admins add|rm` (FLEET_NODE_ADMINS in machine.env; expected.json's
-                `admins`) as the exceptions.
+                bin/fleet-node-shell-retire.sh --login <login> clears it. Both
+                halves look ONLY at the logins this daemon took over
+                (logins/<login>.env): an admin, a local user who never used the
+                fleet — not the fleet's, never named.
 
 State survives a restart: `state.json` (0644, so any login's doctor can read it)
 carries every task's last run and every child's pid; a restarted supervisor ADOPTS
@@ -92,8 +90,6 @@ Usage:
                                                3 running, but the hub refuses a login's lane
                                                (令牌失效 · 需要 relogin, issue #2501)
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
-  fleet-node-supervisor.py admins [list|add <login>|rm <login>]
-                                               the admin logins the sweep skips
   fleet-node-supervisor.py attic [list | restore <id> | purge]
   fleet-node-supervisor.py service add|rm|stop|start|restart|move|run|schedule|cred|ls|logs …
                                                the login-level register (#2525; writes as root,
@@ -1721,94 +1717,19 @@ def _handwritten(paths, d, n, src):
     return None
 
 
-ADMINS_KEY = "FLEET_NODE_ADMINS"
-
-
-def admin_group():
-    """The macOS `admin` group's people (dscl; no dscl — Linux, CI — none). Root and
-    `_` system accounts are not people. FLEET_NODE_ADMIN_GROUP (space-separated)
-    stands in for it — a test seam."""
-    seam = os.environ.get("FLEET_NODE_ADMIN_GROUP")
-    if seam is not None:
-        names = seam.split()
-    else:
-        try:
-            out = subprocess.run(["dscl", ".", "-read", "/Groups/admin", "GroupMembership"],
-                                 capture_output=True, text=True, timeout=10).stdout
-        except (OSError, subprocess.SubprocessError):
-            out = ""
-        names = out.partition(":")[2].split()
-    return set(n for n in names if n != "root" and not n.startswith("_"))
-
-
-def _admin_overrides(paths):
-    """(add, drop) — FLEET_NODE_ADMINS (machine.env, or the environment) and
-    expected.json's `admins`: a bare name is an admin all the same, `-name` is NOT
-    one even though the admin group has it (a person's login kept managed)."""
-    add, drop = set(), set()
-    me = _env_file(os.path.join(paths.state, "machine.env"), 0) or {}
-    words = []
-    for v in (env(ADMINS_KEY, ""), me.get(ADMINS_KEY, "")):
-        words += [x for x in re.split(r"[\s,]+", v) if x]
-    ex = read_json(paths.expected, None)
-    if isinstance(ex, dict) and isinstance(ex.get("admins"), list):
-        words += [x for x in ex["admins"] if isinstance(x, str) and x]
-    for w in words:
-        (drop if w.startswith("-") else add).add(w.lstrip("-"))
-    return add, drop
-
-
-def admin_logins(paths, detail=False):
-    """The machine's admin logins (issue #2702): not managed logins — the sweep names
-    none of their launchd jobs or dotfiles. Decided by itself: a member of the macOS
-    `admin` group that the daemon has NOT taken over (no logins/<login>.env) is one.
-    The overrides (_admin_overrides) only make exceptions. detail=True → (set,
-    how many came from the group)."""
-    add, drop = _admin_overrides(paths)
-    group = set(n for n in admin_group()
-                if not os.path.exists(os.path.join(paths.logins, n + ".env")))
-    out = ((group | add) - drop)
-    if detail:
-        return out, len(group - drop)
-    return out
-
-
-def admins_cli(paths, rest):
-    sub = rest[0] if rest else "list"
-    if sub == "list":
-        add, _ = _admin_overrides(paths)
-        for a in sorted(admin_logins(paths)):
-            print("%s  %s" % (a, "override" if a in add else "admin group"))
-        return 0
-    if sub not in ("add", "rm") or len(rest) < 2 or not re.match(r"^[A-Za-z0-9._-]+$", rest[1]):
-        print("usage: fleet-node-supervisor.py admins [list|add <login>|rm <login>]", file=sys.stderr)
-        return 2
-    path = os.path.join(paths.state, "machine.env")
+def taken_over(paths):
+    """The logins this daemon has taken over — the ones registered in
+    logins/<login>.env — and ONLY those (issue #2702): the sweep names no one
+    else. An admin, a local user who never used the fleet: their own launchd jobs
+    and dotfiles are not the fleet's, and their being on the machine is normal."""
+    out = set()
     try:
-        with open(path) as f:
-            lines = f.read().splitlines()
+        for n in os.listdir(paths.logins):
+            if n.endswith(".env") and re.match(r"^[A-Za-z0-9._-]+$", n[:-4]):
+                out.add(n[:-4])
     except OSError:
-        lines = []
-    cur = []
-    for ln in lines:
-        if ln.startswith(ADMINS_KEY + "="):
-            cur += [x for x in re.split(r"[\s,]+", ln.partition("=")[2].strip("\"'")) if x]
-    # add: an admin all the same; rm: not one — `-name` when the admin group has it
-    want = [x for x in cur if x.lstrip("-") != rest[1]]
-    if sub == "add":
-        want.append(rest[1])
-    elif rest[1] in admin_group():
-        want.append("-" + rest[1])
-    keep = [ln for ln in lines if not ln.startswith(ADMINS_KEY + "=")]
-    if want:
-        keep.append("%s=%s" % (ADMINS_KEY, " ".join(sorted(set(want)))))
-    tmp = path + ".tmp.%d" % os.getpid()
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write("\n".join(keep) + ("\n" if keep else ""))
-    os.rename(tmp, path)
-    print("admins: %s" % (" ".join(sorted(set(want))) or "(none)"))
-    return 0
+        pass
+    return out
 
 
 SHELL_HOOK_RE = re.compile(r"shell/fleet-login\.zsh|shell/cw\.zsh")
@@ -1822,21 +1743,14 @@ def _shell_hook(line):
     return s.startswith("# >>> claude-fleet") or (not s.startswith("#") and bool(SHELL_HOOK_RE.search(s)))
 
 
-def client_shell(paths, admins=None):
-    """[{login, cache, zshrc}] — every login (not an admin) whose home still carries
+def client_shell(paths, logins=None):
+    """[{login, cache, zshrc}] — every taken-over login whose home still carries
     the person's client (issue #2702): `cache` = ~/.cache/claude-fleet/shell is
     there, `zshrc` = how many ~/.zshrc lines hook the fleet into a login shell
     (the PATH line is not one). Read only; a home this process cannot read is
     skipped, never guessed."""
-    admins = admin_logins(paths) if admins is None else admins
     out = []
-    try:
-        names = sorted(os.listdir(paths.users))
-    except OSError:
-        return out
-    for login in names:
-        if login.startswith(".") or login in ("Shared", "Guest") or login in admins:
-            continue
+    for login in sorted(taken_over(paths) if logins is None else logins):
         home = os.path.join(paths.users, login)
         cache = os.path.isdir(os.path.join(home, ".cache", "claude-fleet", "shell"))
         hooks = 0
@@ -1863,7 +1777,7 @@ def client_shell_says(c, paths):
 
 def _sweep(paths, dry=False):
     moved, extra, hand = [], [], []
-    admins = admin_logins(paths)
+    listed = taken_over(paths)
     expected = read_json(paths.expected, None)
     labels = set(expected.get("labels") or []) if isinstance(expected, dict) else None
     index = read_json(paths.attic_index, [])
@@ -1893,13 +1807,13 @@ def _sweep(paths, dry=False):
                     extra.append(src)
             else:
                 h = _handwritten(paths, d, n, src)
-                if h and h["login"] not in admins:
+                if h and h["login"] in listed:
                     hand.append(h)
     purged = 0 if dry else attic_purge(paths, index)
     if not dry and (moved or purged):
         write_json(paths.attic_index, index, 0o600)
     return {"moved": moved, "extra": extra, "purged": purged, "handwritten": hand,
-            "clientshell": client_shell(paths, admins)}
+            "clientshell": client_shell(paths, listed)}
 
 
 def attic_purge(paths, index):
@@ -3154,8 +3068,6 @@ def main(argv):
         return uninstall(paths)
     if cmd == "service":
         return service_cli(paths, rest)
-    if cmd == "admins":
-        return admins_cli(paths, rest)
     if cmd == "account":
         sub = rest[0] if rest else "list"
         if sub == "list":
@@ -3221,7 +3133,7 @@ def main(argv):
             print("purged %d" % n)
             return 0
     print("usage: fleet-node-supervisor.py run|tick|status [--json|--check]|sweep [--dry-run]|"
-          "attic [list|restore <id>|purge]|admins [list|add|rm <login>]|account [list|adopt|release|manages <login>]|install|uninstall",
+          "attic [list|restore <id>|purge]|account [list|adopt|release|manages <login>]|install|uninstall",
           file=sys.stderr)
     return 2
 

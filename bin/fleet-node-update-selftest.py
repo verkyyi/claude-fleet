@@ -733,15 +733,16 @@ class K_LoginInstall(Sandbox):
 
 
 class L_ClientShell(Sandbox):
-    """issue #2702: ONE `shell` row — PASS when no login carries the person's client
-    here, WARN (never FAIL: no rollback) naming the login + the retire command; a
+    """issue #2702: ONE `shell` row over the taken-over logins only — PASS when none
+    carries the person's client here, WARN (never FAIL: no rollback) naming the login + the retire command; a
     non-root doctor reads the last sweep's record (other homes are not its to read)."""
     def test_shell_row(self):
         self.install(V1, claude="2.1.1")
-        self.env["FLEET_NODE_ADMIN_GROUP"] = "root verkyyi"
         r = self.cmd("doctor")
-        self.assertRegex(r.stdout, r"PASS\s+shell\s+no login carries the client shell or a login hook · "
-                                   r"跳过 1 个管理员登录（admin 组 1）")
+        self.assertRegex(r.stdout, r"PASS\s+shell\s+no taken-over login carries the client shell or a login hook · "
+                                   r"看 0 个托管登录")
+        os.makedirs(os.path.join(self.d, "db", "logins"), exist_ok=True)
+        open(os.path.join(self.d, "db", "logins", "alice.env"), "w").close()
         sp = os.path.join(self.d, "db", "state.json")
         with open(sp) as f:
             st = json.load(f)
@@ -752,6 +753,10 @@ class L_ClientShell(Sandbox):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertRegex(r.stdout, r"WARN\s+shell\s+alice: ~/.cache/claude-fleet/shell · ~/.zshrc 3 hook line\(s\)")
         self.assertIn("fleet-node-shell-retire.sh' --login alice", r.stdout)
+        self.assertIn("看 1 个托管登录", r.stdout)
+        # a login the record names that is not taken over (an admin) is not the fleet's
+        os.remove(os.path.join(self.d, "db", "logins", "alice.env"))
+        self.assertRegex(self.cmd("doctor").stdout, r"PASS\s+shell\s")
 
 
 class J_Sessions(Sandbox):
