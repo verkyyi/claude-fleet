@@ -108,12 +108,15 @@ exit "${SEED_RC:-0}"
 SEEDFAKE
 
 # --- fake account pool: TSV rows exactly like fleet-account.sh quota --cached ---
-# (label, 5h%, 7d%, headroom, …). QUOTA_ROWS='' ⇒ no pool at all.
+# (label, 5h%, 7d%, headroom, …), and its exit (issue #2588): no row ⇒ 4 when
+# no hub is configured (no pool at all), 3 when one is (configured, unreadable).
 cat > "$WORK/bin/fleet-account.sh" <<'ACCTFAKE'
 #!/bin/bash
 [ "${1:-}" = quota ] || exit 0
 printf '%b' "${QUOTA_ROWS:-}"
-exit 0
+[ -n "${QUOTA_ROWS:-}" ] && exit 0
+[ -n "${CCQUOTA_HUB_URL:-}" ] && exit 3
+exit 4
 ACCTFAKE
 chmod +x "$WORK/bin/fleet-labels-seed.sh" "$WORK/bin/fleet-account.sh"
 

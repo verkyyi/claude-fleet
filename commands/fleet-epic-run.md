@@ -374,6 +374,10 @@ duplicate route (2026-10-07, #2039 #2040 #2041) is what this replaces.
 bash ~/.claude/fleet/bin/fleet-account.sh quota    # label · 5h% · week% · …
 ```
 
+No row is never silent (issue #2588): stderr says why and the exit says which —
+**4** nothing configured (no pool, no hub: write 「no pool」), **3** unknown right
+now (refused · unreachable · no reading cached: write 「unknown — <its words>」).
+
 Quota is a **rate limiter here, not a target.** The goal is the EPIC finishing;
 there is no percentage to hit and no reason to spend quota faster than the work
 needs. So:
