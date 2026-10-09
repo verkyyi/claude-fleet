@@ -90,7 +90,8 @@ sheet_prefix_keys="$(printf '%s\n' "$SHEET" \
 # them and this guard must not demand a sheet row for them.
 # Explicit -T bindings belong to an inner key table (sidebar navigation), not
 # the prefix table; the sidebar selftest exercises that table through a PTY.
-conf_prefix_keys="$(awk '$1=="bind"||$1=="bind-key"{ if ($2!="-n" && $2!="-T" && $3!="next-window" && $3!="refresh-client") print $2 }' "$CONF" | sort -u)"
+# A key the conf quotes (`bind '\' …`, issue #2566) is compared bare.
+conf_prefix_keys="$(awk '$1=="bind"||$1=="bind-key"{ if ($2!="-n" && $2!="-T" && $3!="next-window" && $3!="refresh-client") { k=$2; if (k ~ /^'"'"'.+'"'"'$/) k=substr(k, 2, length(k)-2); print k } }' "$CONF" | sort -u)"
 [ -n "$conf_prefix_keys" ] || fail "no prefix binds parsed from the conf"
 
 # --- 1. every 'prefix X' row in the sheet is bound in the conf -----------------
@@ -415,8 +416,10 @@ $ndiff"; }
   while IFS= read -r k; do
     [ -n "$k" ] || continue
     # the whole table, filtered: `list-keys -T <table> <key>` prints nothing on tmux 3.7
-    sk=$(ktm stock list-keys -T prefix 2>/dev/null | awk -v k="$k" '$4 == k')
-    ck=$(ktm shell list-keys -T prefix 2>/dev/null | awk -v k="$k" '$4 == k')
+    # (escapes dropped on both sides: list-keys prints `prefix \` as `\\`, and an
+    # `awk -v` would eat a lone `\` — issue #2566)
+    sk=$(ktm stock list-keys -T prefix 2>/dev/null | K=$k awk '{ kk = $4; gsub(/\\/, "", kk); k = ENVIRON["K"]; gsub(/\\/, "", k) } kk == k')
+    ck=$(ktm shell list-keys -T prefix 2>/dev/null | K=$k awk '{ kk = $4; gsub(/\\/, "", kk); k = ENVIRON["K"]; gsub(/\\/, "", k) } kk == k')
     [ -n "$ck" ] || fail "8: the client does not bind 'prefix $k'"
     [ "$ck" != "$sk" ] || fail "8: the client's 'prefix $k' is still tmux's stock bind"
   done <<EOF

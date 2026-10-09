@@ -768,6 +768,8 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:keys_prefix_09)         printf %s 'zoom the session pane — the SESSION, never the list' ;;
     zh:keys_prefix_10)         printf %s '查看会话滚屏（tmux copy-mode）' ;;
     en:keys_prefix_10)         printf %s 'scroll back the session (tmux copy-mode)' ;;
+    zh:keys_prefix_solo_shell) printf %s '单会话视图：本机 shell ⇄ 会话（同 ⌃\，给没有 ⌃\ 的键盘）' ;;
+    en:keys_prefix_solo_shell) printf %s 'one-session view: local shell ⇄ the session (as ⌃\, for a keyboard without it)' ;;
     zh:keys_prefix_14)         printf %s '无前缀：缩放右侧会话窗格（本机窗格，按键不会传到远端）' ;;
     en:keys_prefix_14)         printf %s '(no prefix) zoom the session pane on the right — this computer'"'"'s pane; the key never reaches the far end' ;;
     zh:keys_prefix_15)         printf %s '在 shell 叫回上手向导，从上次进度继续' ;;
