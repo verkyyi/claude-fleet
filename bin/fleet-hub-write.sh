@@ -87,6 +87,9 @@ PY
 }
 
 cert_paths() { CERT_KEY="${FLEET_CERT:-$HOME/.ssh/fleet-cert}"; CERT_PUB="$CERT_KEY-cert.pub"; }
+# set once here: cert_state runs in $(…), so its assignment never reaches the
+# caller — post_cert / identity read these in the parent shell (issue #2506)
+cert_paths
 # cert_state → ok <until> / expired <until> / missing (local: ssh-keygen -L's Valid line)
 cert_state() {
   cert_paths
@@ -206,6 +209,9 @@ post_token() {
 # post_cert <url> <tool> <args> → signed by this device's certificate (door 3)
 post_cert() {
   local url="$1" tool="$2" body="$3" ts sig cert digest req out code
+  cert_paths
+  [ -f "$CERT_KEY" ] && [ -f "$CERT_PUB" ] \
+    || { note "no connection certificate at $CERT_KEY (run \`fleet login\`) — nothing sent"; return 1; }
   ts=$(date +%s)
   digest=$(printf '%s' "$body" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
   sig=$(printf 'fleet-write %s %s %s' "$ts" "$tool" "$digest" | ssh-keygen -Y sign -f "$CERT_KEY" -n "$WRITE_NS" 2>/dev/null) \
