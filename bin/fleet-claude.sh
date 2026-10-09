@@ -495,4 +495,15 @@ fi
 if [ -n "${FLEET_LOOP_SPEC:-}" ] && [ "${FLEET_LOOP_AGENT:-}" = claude ]; then
   exec python3 "$BIN/fleet-loop.py" bridge -- "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
 fi
-exec "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"
+# The agent's own report (issue #2536, EPIC #2535 C1): Claude Code ≥ 2.1.295 says
+# working / blocked / done as OSC 7501, but only to a terminal that answers its
+# probe — and inside tmux nobody does. bin/fleet-status-7501.py runs it under a pty
+# relay that answers in the stream and stamps @agent_status (+ @claude_state) off
+# what it says. Only a tmux pane with a terminal on it; FLEET_STATUS_7501=0 runs
+# the agent bare, byte for byte as before.
+_fc_relay=()
+if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && [ "${FLEET_STATUS_7501:-1}" != 0 ] \
+   && [ -t 0 ] && [ -t 1 ] && [ -f "$BIN/fleet-status-7501.py" ]; then
+  _fc_relay=(python3 "$BIN/fleet-status-7501.py" relay --)
+fi
+exec ${_fc_relay[@]+"${_fc_relay[@]}"} "$_fc_claude" ${model_flag[@]+"${model_flag[@]}"} ${mcp_flag[@]+"${mcp_flag[@]}"} ${mod_flag[@]+"${mod_flag[@]}"} ${cfg_flag[@]+"${cfg_flag[@]}"} "$@"

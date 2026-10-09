@@ -161,7 +161,7 @@ root 运行；它取代托管账号各自的 `fleet-install-sync.sh`（那个账
   "schema": 1,
   "components": {
     "ccquota":    {"artifact": "ccquota-{os}-{arch}"},
-    "claude":     {"version": "2.1.293", "artifact": "claude-{version}-{os}-{arch}"},
+    "claude":     {"version": "2.1.295", "artifact": "claude-{version}-{os}-{arch}"},
     "codex":      {"version": "0.154.0", "artifact": "codex-{version}-{os}-{arch}"},
     "tmux":       {"version": "3.7c",    "artifact": "tmux-{version}-{os}-{arch}", "lock": "conf/vendor-tmux.lock"},
     "supervisor": {"script": "bin/fleet-node-supervisor.py"}

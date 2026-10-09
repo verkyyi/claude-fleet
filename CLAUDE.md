@@ -675,6 +675,22 @@ Do not install from memory: read the doc and work from it.
   every Claude window on the login runs mod ≥ 0.2.0: `bin/fleet-statusline.sh
   off` is the only thing that removes it, it refuses while a window would go
   blind, and `/fleet-sync-install` never touches the key.
+- **The agent says its own state: OSC 7501, read by a relay** (issue #2536, EPIC
+  #2535 C1). Claude Code ≥ 2.1.295 reports working / blocked (permission ·
+  question · auth + its words) / done / idle / error as `ESC ] 7501 ; state=…:kind=…:msg=<b64>`,
+  but only to a terminal that answers its `OSC 7501 ; ?` probe before the DA1
+  reply — no env or setting forces it, and inside tmux nobody answers (tmux answers
+  DA1 itself, so a `pipe-pane -IO` responder is always late). So `fleet-claude.sh`
+  runs the agent under `bin/fleet-status-7501.py relay` in a tmux pane with a
+  terminal: a pty that answers the probe IN the stream, passes every byte through
+  untouched, keeps the wrapper's Ctrl+Z rule (a guard in the agent's process group)
+  and stamps `@agent_status` (JSON: state, kind, msg ≤200, app, ts) +
+  `@agent_status_ts`, and `@claude_state` through `set-claude-state.sh --via 7501`
+  (working→working · blocked→needs perm|ask + `@claude_needs_detail` · done/idle→done ·
+  error→exited · clear and a sub-task's `id=` entry keep it; no bell, no Stop
+  logic). The inventory's column 29 `agentstatus=` carries it to the hub as the
+  worker's `status_kind` / `status_msg`. `FLEET_STATUS_7501=0` (or no tty, no tmux)
+  runs the agent bare, byte for byte as before. `fleet-status-7501-selftest.sh`.
 - **The hub ships the `fleet` client, and `bin/` + `conf/` stay canonical**
   (issues #1470, #1486). `curl -fsSL <hub>/install | sh` serves
   `bin/fleet-install.sh` (hub URL filled in), which fetches `/install/manifest`

@@ -1,5 +1,5 @@
 #!/bin/sh
-# set-claude-state.sh [--via mod] <state> [bell]
+# set-claude-state.sh [--via mod|7501] <state> [bell]
 # Stamps the current tmux window's @claude_state (semantic: working|done|needs).
 # <state> is a hook verb (busy|working|done|needs) or the worker's own `blocked`
 # (issue #704) — a red that the hook edges of the same turn do not erase; see below.
@@ -38,6 +38,16 @@ if [ "${1:-}" = --via ]; then
   # …except `ask`, whose stdin is the call in the payload's shape (issue #1951):
   # the question's words, read once by the `ask` branch, never waited on.
   [ "$via" = mod ] && [ "${1:-}" != ask ] && exec </dev/null
+  [ "$via" = 7501 ] && exec </dev/null
+fi
+# `--via 7501` (issue #2536, EPIC #2535 C1): the writer is bin/fleet-status-7501.py,
+# the agent's OWN report (OSC 7501) read off its output. Like the mod it is no
+# hook — no payload, no Stop decision — so it stops right after the state write.
+# Its verbs: working · done · exited (the agent said error) · `needs7501 <sub>
+# <words>` (blocked: perm | ask | '' and what it asks, ≤200 characters). Any other
+# verb from it writes nothing.
+if [ "$via" = 7501 ]; then
+  case "${1:-}" in working|done|exited|needs7501) : ;; *) exit 0 ;; esac
 fi
 
 # The tree is still being checked out (issue #2237): dash-issue-session.sh opened
@@ -46,7 +56,7 @@ fi
 # the first turn's work — the first prompt (UserPromptSubmit) and each tool call
 # (PreToolUse) — waits here until the marker is gone or its filler has died, at
 # most 50 s (under the hook timeout). Afterwards it is one stat; unset, nothing.
-if [ "$via" != mod ] && [ -n "${FLEET_WT_PENDING:-}" ] && [ -f "$FLEET_WT_PENDING" ]; then
+if [ -z "$via" ] && [ -n "${FLEET_WT_PENDING:-}" ] && [ -f "$FLEET_WT_PENDING" ]; then
   _wn=0
   while [ -f "$FLEET_WT_PENDING" ] && [ "$_wn" -lt 500 ]; do
     _wp=$(cat "$FLEET_WT_PENDING" 2>/dev/null)
@@ -226,6 +236,20 @@ case "${1:-}" in
       esac
     fi
     ;;
+  needs7501)
+    # The agent says it is blocked (OSC 7501 state=blocked): its kind is the
+    # subtype (permission → perm, question → ask, anything else → ''), its msg the
+    # question in its own words — the same @claude_needs / _detail pair the hooks
+    # derive from a payload. fleet-status-7501.py is the only caller.
+    sem="needs"; sub=${2:-}
+    case "$sub" in perm|ask) ;; *) sub='' ;; esac
+    detail=$(printf '%s' "${3:-}" | cut -c1-200)
+    ;;
+  exited)
+    # The agent says it hit an error (OSC 7501 state=error): the window reads as
+    # the wrapper's `exited`. Only `--via 7501` may write it.
+    sem="exited"
+    ;;
   ask)
     # An open AskUserQuestion, said by the mod (issue #1336) at the call itself —
     # the same needs/ask the PreToolUse `busy` leg derives from its payload. The
@@ -333,7 +357,8 @@ if [ "$sem" = 'done' ] && [ -n "$(tmux display-message -p -t "$TMUX_PANE" '#{@or
 fi
 
 # The mod's write ends here (issue #1336): the rest belongs to the Stop hook.
-[ "$via" = mod ] && exit 0
+# So does the agent's own report (issue #2536).
+[ -n "$via" ] && exit 0
 
 # ── Auto-handoff nudge (issue #330) ──────────────────────────────────────────
 # At a CLEAN Stop (done), if this session's context has crossed the operator's
