@@ -41,6 +41,9 @@
 #   managed-login-install-stale  bin/fleet-install-sync.sh's managed branch +
 #                         bin/fleet-node-update.py's `install` doctor row (#2688): a
 #                         managed login's own ~/.claude/fleet sat on its bootstrap copy
+#   managed-login-install-predates  bin/fleet-node-update.py follow_installs (#2714):
+#                         a login install from before #2688 never follows — its own
+#                         install-sync still answers off · managed
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -585,6 +588,20 @@ drill_managed_login_install_stale() {
     || { WHY="the machine doctor does not name a stale login install: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="整机在新发布版、托管登录的 ~/.claude/fleet 还在旧提交：一拍 install-sync 跟到本机发布版（不是 off · managed），fleet doctor --machine 的 install 行落后时 WARN、到位 PASS"
+}
+
+# managed-login-install-predates (#2714): the login's own install is older than
+# #2688, so its install-sync — the code that would move it — still answers
+# `off · managed`. The updater (root, always the release's code) runs the
+# RELEASE's install-sync for it after a commit and every tick at the release.
+drill_managed_login_install_predates() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-follow 2>&1) \
+    || { WHY="the updater did not move a login install behind the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="登录安装早于 #2688（自己的 install-sync 仍答 off · managed）：更新器提交新版后、以及每拍在发布版时，降权跑发布版的 install-sync 把它带到同一版；被退回的版本不跟；跟不上的记进 update.json 并在 install 行写明，1 小时后再试；钉在版本目录的客户端壳镜像改走登录链接"
 }
 
 cred_run_drills "$0"

@@ -24,6 +24,11 @@ names — or leaves every part where it was:
              <current>/bin by `fleet-credsep.py machine refresh`, and the proxy
              restarts on it — launchd's, or the daemon's child (its `reload`)
              (issue #2435)
+  logins     every managed login's own ~/.claude/fleet: after a commit and on
+             every tick at the release, one behind it gets the RELEASE's
+             fleet-install-sync.sh run for it, demoted (issue #2714 — its own may
+             predate #2688 and answer `off · managed` forever); a client-shell
+             mirror pinned to one version dir is re-pointed through its link
   supervisor the daemon itself: it runs from `current`, so it is the LAST step —
              the tick asks it to restart (<state>/update-restart.json) and
              launchd's KeepAlive starts the new one
@@ -79,6 +84,8 @@ Usage:
                                             the artifact names it pins, one a line
                                             (default darwin-arm64; fleet-stable.sh gate 7)
   fleet-node-update.py link-account <login> (internal: run demoted to <login>)
+  fleet-node-update.py follow <login>       links + install onto the release now
+                                            (`account adopt` runs it, issue #2714)
 
 Seams (sandbox tests, docs/BREAK-IT.md `node-update-half`): the supervisor's
 FLEET_NODE_STATE / FLEET_NODE_RUNTIME / FLEET_NODE_TEST / FLEET_NODE_PASSWD /
@@ -92,6 +99,8 @@ FLEET_NODE_USERS, plus
   FLEET_NODE_FETCH_TIMEOUT   seconds one tick's fetch may run (1500; 0 = no limit — the
                              installer's tick), a resumable fetch goes on next tick
   FLEET_NODE_UPDATE_LIB      the fleet-lib.sh the EPIC gate sources (default <current>/bin)
+  FLEET_NODE_UPDATE_FOLLOW   0 = never run a login's install-sync (default 1)
+  FLEET_NODE_FOLLOW_TIMEOUT  seconds one login's install-sync may run (1200)
 """
 from __future__ import print_function
 
@@ -576,9 +585,13 @@ class Updater(object):
                     os.chmod(dd, 0o755)
             except OSError as e:
                 notes.append("cache: %s" % e)
+        return notes + self.link_accounts()
+
+    def link_accounts(self, only=None):
+        notes = []
         for login, why in fns.managed_accounts(self.p.sup).items():
             ident = fns.account_ident(login)
-            if why or ident is None:
+            if (only and login != only) or why or ident is None:
                 continue
             uid, gid, home = ident
             if uid == 0 or (os.geteuid() != 0 and uid != os.geteuid()):
@@ -590,6 +603,60 @@ class Updater(object):
                                     "FLEET_NODE_ROOT": self.p.root})
             if rc != 0:
                 notes.append("%s: %s" % (login, (err or out)[:120]))
+        return notes
+
+    # -- every managed login's own install follows `current` (issue #2714)
+    def follow_installs(self, only=None):
+        """A managed login's ~/.claude/fleet behind the release: run the RELEASE's
+        fleet-install-sync.sh for it (demoted, its HOME / TMPDIR / FLEET_CONF_DIR),
+        which follows the machine's release since #2688. The login's own copy
+        cannot: an install from before #2688 answers `off · managed` and never
+        moves (2026-10-09 macmini: runtime d5a6507, verky on bfab983). A login that
+        is already there costs one read; one that did not follow is tried again on
+        the same release only after FLEET_NODE_UPDATE_RETRY. -> notes."""
+        cur = link_sha(self.p.current)
+        sync = os.path.join(self.p.current, "bin", "fleet-install-sync.sh")
+        if not cur or env_num("FLEET_NODE_UPDATE_FOLLOW", 1) == 0 or not os.path.exists(sync):
+            return []
+        tried = self.st.setdefault("follow", {})
+        notes = []
+        tb = os.path.join(self.p.current, "tools", "bin")
+        for login, why in fns.managed_accounts(self.p.sup).items():
+            ident = fns.account_ident(login)
+            if (only and login != only) or why or ident is None:
+                continue
+            uid, gid, home = ident
+            path = os.path.join(home, ".claude", "fleet")
+            if not os.path.lexists(path):
+                tried.pop(login, None)
+                continue
+            if uid == 0 or (os.geteuid() != 0 and uid != os.geteuid()):
+                continue
+            was = account_install_sha(login, ident, path)
+            if was == cur:
+                tried.pop(login, None)
+                continue
+            t = tried.get(login) or {}
+            if not only and t.get("to") == cur and now() - (t.get("at") or 0) < env_num("FLEET_NODE_UPDATE_RETRY", 3600):
+                notes.append("install %s: not at %s (%s)" % (login, cur[:12], t.get("said", "")))
+                continue
+            rc, out, err = run(["/bin/sh", "-c", SESSIONS_SH, "fleet-install-sync",
+                                "/bin/bash", sync, "--root", path],
+                               timeout=env_num("FLEET_NODE_FOLLOW_TIMEOUT", 1200),
+                               preexec_fn=fns.demote(login, uid, gid, home),
+                               env={"HOME": home, "USER": login, "LOGNAME": login, "LANG": "en_US.UTF-8",
+                                    "PATH": "%s:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" % tb,
+                                    "FLEET_CONF_DIR": os.path.join(home, ".config", "claude-fleet"),
+                                    "FLEET_NODE_ROOT": self.p.root, "FLEET_NODE_STATE": self.p.state})
+            said = ((out + "\n" + err).strip().splitlines() or ["rc %d" % rc])[-1][:160]
+            now_at = account_install_sha(login, ident, path)
+            self.log("install %s: %s → %s · rc %d · %s" % (login, (was or "unreadable")[:12],
+                                                          (now_at or "unreadable")[:12], rc, said))
+            if now_at == cur:
+                tried.pop(login, None)
+            else:
+                tried[login] = {"at": now(), "to": cur, "rc": rc, "said": said}
+                notes.append("install %s: not at %s (rc %d %s)" % (login, cur[:12], rc, said))
         return notes
 
     # -- credsep's code copy follows `current` (issue #2435, EPIC #2329 共同约定 3)
@@ -701,6 +768,8 @@ class Updater(object):
         self.record("committed", self.st.get("from"), self.st["to"], "; ".join(new))
         self.st.update(phase="idle", current=self.st["to"])
         self.sessions("restore", self.st["to"])
+        # the logins follow only a committed release (install-sync never moves back)
+        self.follow_installs()
         self.prune()
         return self.end("committed", "%s%s" % (self.st["to"][:12],
                                               (" (no previous version to go back to; FAIL: %s)" % ", ".join(new)) if new else ""))
@@ -749,7 +818,7 @@ class Updater(object):
         if not SHA_RE.match(target):
             return self.end("unknown", "%s is not a commit sha (%s)" % (target, src), current=cur)
         if target == cur:
-            notes = self.sync_outside() + self.sync_credsep()
+            notes = self.sync_outside() + self.sync_credsep() + self.follow_installs()
             self.st.pop("hold", None)
             return self.end("current", "%s (%s)%s" % (cur[:12], src, (" · " + "; ".join(notes)) if notes else ""),
                             current=cur, notes=notes)
@@ -921,8 +990,11 @@ def install_row(p, cur, login, ident):
     sha = account_install_sha(login, ident, path)
     if sha == cur:
         return ("PASS", "install", "%s: ~/.claude/fleet at the release %s" % (login, cur[:12]))
-    fix = "install-sync follows the release on its next tick; now: sudo -u %s bash '%s' --root %s" % (
+    fix = "the updater runs the release's install-sync for it every tick (issue #2714); now: sudo -u %s bash '%s' --root %s" % (
         login, os.path.join(p.current, "bin", "fleet-install-sync.sh"), path)
+    t = ((read_json(p.file, {}) or {}).get("follow") or {}).get(login) or {}
+    if t.get("to") == cur:
+        fix = "the updater's last try %s: rc %s %s; %s" % (iso(t.get("at")), t.get("rc"), t.get("said", ""), fix)
     if not sha:
         return ("WARN", "install", "%s: ~/.claude/fleet (%s) — its version is unreadable, NOT the release's; %s"
                 % (login, shape, fix))
@@ -1017,10 +1089,43 @@ def link_account(login):
             swap_link(dst, want)
         except OSError as e:
             bad.append("%s: %s" % (rel, e))
+    bad += follow_shell_mirror(home)
     if bad:
         print("; ".join(bad), file=sys.stderr)
         return 1
     return 0
+
+
+def follow_shell_mirror(home):
+    """Run AS the login (issue #2714): a client-shell mirror an older fleet-shell.sh
+    pinned to one version dir (~/.cache/claude-fleet/shell/{bin,conf}/<f> →
+    ~/.claude/fleet.versions/<key>/<rel>) is re-pointed THROUGH the login's
+    ~/.claude/fleet link — what fleet-shell.sh's mirror does since #2692 — so it
+    moves with the install instead of sitting on <key> until its next start. Only
+    such links are touched; no mirror, or no versions link, = nothing. -> errors."""
+    live = os.path.join(home, ".claude", "fleet")
+    vers = live + ".versions" + os.sep
+    cache = os.path.join(home, ".cache", "claude-fleet", "shell")
+    if not os.path.islink(live) or not os.path.isdir(cache):
+        return []
+    bad = []
+    for sub in ("bin", "conf"):
+        d = os.path.join(cache, sub)
+        for name in sorted(os.listdir(d)) if os.path.isdir(d) and not os.path.islink(d) else []:
+            f = os.path.join(d, name)
+            if not os.path.islink(f):
+                continue
+            t = os.readlink(f)
+            if not t.startswith(vers):
+                continue
+            rest = t[len(vers):].split(os.sep, 1)
+            if len(rest) != 2 or not rest[1]:
+                continue
+            try:
+                swap_link(f, os.path.join(live, rest[1]))
+            except OSError as e:
+                bad.append("%s: %s" % (f, e))
+    return bad
 
 
 # --------------------------------------------------------------- main -----------
@@ -1053,6 +1158,18 @@ def main(argv):
     if cmd == "link-account" and rest:
         return link_account(rest[0])
     p = P()
+    if cmd == "follow" and rest:
+        # `account adopt` (issue #2714): the login's links and install onto the
+        # release at once, not on the next tick; the tick's state is not written
+        if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
+            print("fleet-node-update: follow runs as the login it names — the machine daemon's root does it",
+                  file=sys.stderr)
+            return 1
+        u = Updater(p)
+        notes = u.link_accounts(only=rest[0]) + u.follow_installs(only=rest[0])
+        for n in notes:
+            print(n, file=sys.stderr)
+        return 1 if notes else 0
     if cmd == "doctor":
         rows = doctor_rows(p)
         for lvl, row, msg in rows:

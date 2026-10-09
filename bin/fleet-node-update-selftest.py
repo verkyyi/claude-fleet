@@ -105,7 +105,7 @@ def wj(path, obj):
 
 
 def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=(), drill_fail=False,
-                 sessions_log=None):
+                 sessions_log=None, sync_log=None, sync_fail=False):
     """A release dir as `ccquota release fetch --artifacts` leaves it, under <rel>/<sha>."""
     d = os.path.join(rel, sha)
     os.makedirs(os.path.join(d, ".release", "artifacts"))
@@ -131,6 +131,20 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
         with open(sc, "w") as f:
             f.write('#!/bin/bash\necho "$1|$HOME|${TMPDIR:+tmp}|%s" >> %s\n'
                     '[ "$1" = restore ] && printf "back\\toc\\tissue-1\\t/w\\n"\nexit 0\n' % (sha, sessions_log))
+        os.chmod(sc, 0o755)
+    if sync_log:
+        # issue #2714: a fleet-install-sync.sh that records who ran it, from which
+        # release, and follows the machine's release the way #2688's does (a
+        # versions link switch) — or, sync_fail, refuses and moves nothing
+        sc = os.path.join(d, "bin", "fleet-install-sync.sh")
+        with open(sc, "w") as f:
+            f.write('#!/bin/bash\necho "$1 $2|$HOME|$USER|${TMPDIR:+tmp}|$FLEET_NODE_ROOT|%s" >> %s\n' % (sha, sync_log))
+            if sync_fail:
+                f.write('echo "fleet-install-sync: refused tracked local changes" >&2\nexit 1\n')
+            else:
+                f.write('t=$(readlink "$FLEET_NODE_ROOT/current"); t=${t##*/}\n'
+                        'mkdir -p "$HOME/.claude/fleet.versions/$t" && ln -sfn "$HOME/.claude/fleet.versions/$t" "$2"'
+                        '\necho "fleet-install-sync: switched to $t"\n')
         os.chmod(sc, 0o755)
     if drill_fail:
         os.makedirs(os.path.join(d, "conf"))
@@ -788,6 +802,102 @@ class L_ClientShell(Sandbox):
         self.assertRegex(self.cmd("doctor").stdout, r"PASS\s+shell\s")
 
 
+class M_FollowInstall(Sandbox):
+    """issue #2714: a managed login's ~/.claude/fleet behind the release is moved by
+    the RELEASE's install-sync (its own may predate #2688 and answer off · managed),
+    run demoted by the updater — after a commit and on every tick at the release,
+    never for a version that is rolled back; one that did not follow waits
+    FLEET_NODE_UPDATE_RETRY before the same release is tried again. A client-shell
+    mirror pinned to a version dir is re-pointed through the login's link."""
+    V0 = "a" * 40
+
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.L = os.path.join(self.d, "sync.log")
+        self.live = os.path.join(self.home, ".claude", "fleet")
+        os.makedirs(os.path.join(self.home, ".claude", "fleet.versions", self.V0, "bin"))
+        os.symlink(os.path.join(self.home, ".claude", "fleet.versions", self.V0), self.live)
+
+    def log(self):
+        return open(self.L).read().splitlines() if os.path.exists(self.L) else []
+
+    def at(self):
+        return os.path.basename(os.readlink(self.live))
+
+    def test_follows_after_commit_then_quiet(self):
+        self.install(V1, sync_log=self.L)
+        self.assertEqual(self.log(), ["--root %s|%s|alice|tmp|%s|%s" % (self.live, self.home, self.root, V1)])
+        self.assertEqual(self.at(), V1)
+        self.assertRegex(open(os.path.join(self.env["FLEET_NODE_LOG"], "update.log")).read(),
+                         r"install alice: %s → %s · rc 0" % (self.V0[:12], V1[:12]))
+        self.assertRegex(self.cmd("doctor").stdout, r"PASS\s+install\s+alice: ~/.claude/fleet at the release")
+        # at the release: a tick costs one read, nothing runs
+        self.assertEqual(self.tick(V1)["result"], "current")
+        self.assertEqual(len(self.log()), 1)
+        # it fell behind again (by hand): the next tick at the release brings it back
+        os.remove(self.live)
+        os.symlink(os.path.join(self.home, ".claude", "fleet.versions", self.V0), self.live)
+        self.tick(V1)
+        self.assertEqual((len(self.log()), self.at()), (2, V1))
+
+    def test_rolled_back_version_not_followed(self):
+        self.install(V1, sync_log=self.L)
+        self.release(V2, claude="2.1.9", broken=("claude-",), sync_log=self.L)
+        self.tick(V2)
+        self.daemon_on(V2)
+        self.assertEqual(self.tick(V2)["result"], "rolled-back")
+        self.assertEqual([l for l in self.log() if l.endswith(V2)], [])
+        self.assertEqual(self.at(), V1)
+
+    def test_refusal_backs_off_and_says_so(self):
+        self.install(V1, sync_log=self.L, sync_fail=True)
+        self.assertEqual(self.at(), self.V0)
+        st = self.state()
+        self.assertEqual((st["follow"]["alice"]["to"], st["follow"]["alice"]["rc"]), (V1, 1))
+        st = self.tick(V1)
+        self.assertEqual(len(self.log()), 1, "tried again inside the retry window")
+        self.assertIn("install alice: not at %s" % V1[:12], st["reason"])
+        r = self.cmd("doctor")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertRegex(r.stdout, r"WARN\s+install\s+alice: .*the updater's last try .*rc 1 fleet-install-sync: refused")
+        self.tick(V1, FLEET_NODE_UPDATE_RETRY="0")
+        self.assertEqual(len(self.log()), 2)
+
+    def test_follow_now_and_off(self):
+        self.release(V1, sync_log=self.L)
+        st = self.tick(V1)
+        self.assertEqual(st["phase"], "switched")
+        self.assertEqual(self.log(), [], "followed before the commit")
+        # `account adopt`'s kick: at once, whatever the tick's retry state
+        r = self.cmd("follow", "alice")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((len(self.log()), self.at()), (1, V1))
+        os.remove(self.live)
+        os.symlink(os.path.join(self.home, ".claude", "fleet.versions", self.V0), self.live)
+        self.daemon_on(V1)
+        self.assertEqual(self.tick(V1, FLEET_NODE_UPDATE_FOLLOW="0")["result"], "committed")
+        self.assertEqual(len(self.log()), 1)
+        # no install at all: nothing to follow
+        os.remove(self.live)
+        self.tick(V1)
+        self.assertEqual(len(self.log()), 1)
+
+    def test_pinned_shell_mirror_follows_the_link(self):
+        sb = os.path.join(self.home, ".cache", "claude-fleet", "shell", "bin")
+        sc = os.path.join(self.home, ".cache", "claude-fleet", "shell", "conf")
+        os.makedirs(sb)
+        os.makedirs(sc)
+        vers = os.path.join(self.home, ".claude", "fleet.versions")
+        os.symlink(os.path.join(vers, self.V0, "bin", "fleet-shell.sh"), os.path.join(sb, "fleet-shell.sh"))
+        os.symlink(os.path.join(vers, self.V0, "conf", "fleet-palette.conf"), os.path.join(sc, "fleet-palette.conf"))
+        os.symlink("/elsewhere/x.sh", os.path.join(sb, "x.sh"))
+        self.install(V1, sync_log=self.L)
+        self.assertEqual(os.readlink(os.path.join(sb, "fleet-shell.sh")), os.path.join(self.live, "bin", "fleet-shell.sh"))
+        self.assertEqual(os.readlink(os.path.join(sc, "fleet-palette.conf")),
+                         os.path.join(self.live, "conf", "fleet-palette.conf"))
+        self.assertEqual(os.readlink(os.path.join(sb, "x.sh")), "/elsewhere/x.sh")
+
+
 class J_Sessions(Sandbox):
     """issue #2484: every managed account's sessions are pinned before the switch
     (the target release's fleet-sessions-snapshot.sh save, demoted, its own HOME and
@@ -901,4 +1011,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-login-install":
         # BREAK-IT managed-login-install-stale: the doctor half
         unittest.main(argv=[sys.argv[0], "K_LoginInstall"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-login-follow":
+        # BREAK-IT managed-login-install-predates: the updater moves a login whose
+        # own install-sync cannot (issue #2714)
+        unittest.main(argv=[sys.argv[0], "M_FollowInstall"], verbosity=1)
     unittest.main(verbosity=2)

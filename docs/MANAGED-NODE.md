@@ -155,6 +155,14 @@ root 运行。托管账号的 `fleet-install-sync.sh` 不再自己追 stable，�
 `current` 指的那个提交，stable 标签够不着就按提交取，走它自己的切换 + apply + 体检门（普通目录的
 `~/.claude/fleet` 在第一次移动时收成链接形态）；节点代理那半仍归更新器；运行时还没有 `current` 时记 `off`。
 所以更新器切完运行时，下一拍（≤30 分钟）每个托管登录跟到同一版；`fleet doctor --machine` 每个托管账号一行 install。
+登录安装若早于 #2688，它自己的 install-sync 还是旧的、答 `off · managed`，永远跟不上——所以**更新器亲自推**（#2714）：
+提交新版之后、以及每拍处于发布版时，对每个 `~/.claude/fleet` 不在发布版的托管登录，降权到该登录（它的 HOME / TMPDIR /
+`FLEET_CONF_DIR`）跑**发布版的** `<root>/current/bin/fleet-install-sync.sh --root ~/.claude/fleet`（被退回的版本不跟；
+跟不上的记进 `update.json` 的 `follow`，`install` 行写明最后一次结果，同一版 `FLEET_NODE_UPDATE_RETRY` 后再试；
+`FLEET_NODE_UPDATE_FOLLOW=0` 关）。`account adopt` 接管那一刻就在后台跑一次 `fleet-node-update.py follow <login>`
+（`FLEET_NODE_ADOPT_FOLLOW=0` 关）。`~/.claude/fleet` 不指向 root 运行时：它的 `logs/`、各版本的 worktree 是登录自己的。
+旧的 fleet-shell.sh 钉在某个版本目录的客户端壳镜像（`~/.cache/claude-fleet/shell/{bin,conf}` → `fleet.versions/<key>/…`）
+每拍改走登录链接（`~/.claude/fleet/…`），随安装一起动。
 `fleet doctor --installs`（#2692）一张表列本机的运行时、每个登录安装、每份客户端壳，各自是否等于 stable。
 非托管机器照旧走 install-sync，一字不差。
 
