@@ -586,6 +586,12 @@ step_scratch() {
          failstep scratch "the list refused a new session: $said"; return 1 ;;
     row) : ;;
     *)   shot scratch-none
+         if [ -n "$opening" ]; then
+           # the hub said it is opening a machine (#2069) and none came up in
+           # FLEET_DRILL_OPENING_SECS: the newcomer is left waiting (C9 run 3)
+           row "提示：$opening，但 ${FLEET_DRILL_OPENING_SECS:-360}s 后左边仍没有机器、开不出会话" "等" "是 — 入口说在开机器，却一直没开好"
+           failstep scratch "the hub said '$opening' but no machine came up and no row $NAME within ${FLEET_DRILL_OPENING_SECS:-360}s:"; tail_pane; return 1
+         fi
          row "敲名字回车后没有问题、没有新行、也没有提示" "prefix c 新任务，敲名字，回车" "是 — 不知道怎么开会话"
          failstep scratch "no question, no row named $NAME and no refusal within ${STEP_SECS}s:"; tail_pane; return 1 ;;
   esac
