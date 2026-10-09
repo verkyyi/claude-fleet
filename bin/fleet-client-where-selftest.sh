@@ -25,6 +25,15 @@
 #                   node.env's token (never another credential)
 #   G2. refused   — (#2112) the hub answers 401: lease where exits 4 and --json
 #                   says hub refused; a hub out of reach stays exit 1, hub down
+#   G3. separated — (#2665) node.env unreadable, credsep on: the broker's fcpn1.
+#                   token is asked at the BROKER's address, never at the hub
+#                   (FLEET_HUB_URL) — the hub has never seen it
+#   G4. fallback  — (#2665) the hub refuses the node token: the other credential
+#                   (here the hub token) is asked next and answers; --json says
+#                   hub up + node_token refused: <the hub's words>, the doctor's
+#                   hub_auth_fail gets a client-where line, a clean read drops it
+#   G5. both refused — exit 4 only when every credential is refused; --json
+#                   carries hub_why (the hub's words)
 #   H. local read — no hub: the fleet-shell client attached on this machine
 #                   (client.where.json); none attached → exit 3
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
@@ -33,6 +42,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v python3 >/dev/null 2>&1 || { printf 'fleet-client-where selftest: python3 absent — SKIP\n'; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fcw-st.XXXXXX")" || exit 2
+export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"   # the doctor's hub_auth_fail lands here, never the live one
 export HOME="$WORK/home"; mkdir -p "$HOME/.config/claude-fleet" "$WORK/fakebin"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" FLEET_CONF_DIR="$HOME/.config/claude-fleet"
 unset TMUX TMUX_PANE FLEET_HUB_URL CCQUOTA_HUB_URL CCQUOTA_TOKEN FLEET_HUB_TOKEN FLEET_CLIENT_DEVICE SSH_CONNECTION
@@ -202,8 +212,18 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
         open(work + "/hub.log", "a").write("%s %s %s\n" % (self.command, self.path, self.headers.get("Authorization")))
-        if self.path != "/v1/node/client" or self.headers.get("Authorization") != "Bearer NODETOK":
-            self.send_response(401); self.end_headers(); return
+        ok = (self.path, self.headers.get("Authorization")) in (("/v1/node/client", "Bearer NODETOK"),
+                                                                 ("/hub/v1/node/client", "Bearer fcpn1.BROKER"))
+        self.answer(ok)
+    def do_POST(self):
+        open(work + "/hub.log", "a").write("%s %s %s\n" % (self.command, self.path, self.headers.get("Authorization")))
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.answer(self.path == "/v1/fleet/client" and self.headers.get("Authorization") == "Bearer CLIENTTOK")
+    def answer(self, ok):
+        if not ok:
+            b = json.dumps({"error": "unrecognised enrollment token"}).encode()
+            self.send_response(401); self.send_header("Content-Type", "application/json"); self.end_headers()
+            self.wfile.write(b); return
         b = json.dumps({"state": "active", "lease": {"id": "L9", "device": "MacBook", "terminal": "iTerm2", "caps": ["open_url"]}}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(b)
 s = http.server.HTTPServer(("127.0.0.1", 0), H)
@@ -235,6 +255,57 @@ printf 'CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=NODETOK\n' > "$FLEET_C
 python3 "$BIN/fleet-client-lease.py" where >/dev/null 2>&1; rc=$?
 eq "G2 out of reach → exit 1" "1" "$rc"
 has "G2 --json hub down" "$(env -u FLEET_CLIENT_WHERE_CMD bash "$BIN/fleet-client-where.sh" --json)" '"hub": "down"'
+# G3 (#2665): separated — node.env is the role account's (unreadable here), the
+# credential proxy hands out a broker URL + fcpn1. token. The pair goes together:
+# the broker's token to the broker, never to FLEET_HUB_URL.
+SB="$WORK/sbin"; mkdir -p "$SB"
+cp "$BIN/fleet-client-lease.py" "$BIN/fleet-connect.py" "$BIN/fleet-client-where.sh" "$SB/"
+[ -f "$BIN/fleet-lib.sh" ] && cp "$BIN/fleet-lib.sh" "$SB/"
+printf '#!/bin/bash\n[ "$1" = node-token ] && printf "http://127.0.0.1:%s/hub\\tfcpn1.BROKER\\n"\n' "$port" > "$SB/fleet-cred-proxy.sh"
+ln -sf "$WORK/nowhere/node.env" "$FLEET_CONF_DIR/node.env"
+printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\n' "$port" > "$FLEET_CONF_DIR/node.pub.env"
+printf '{}\n' > "$FLEET_CONF_DIR/credsep.json"
+: > "$WORK/hub.log"
+w=$(FLEET_HUB_URL="http://127.0.0.1:$port" python3 "$SB/fleet-client-lease.py" where 2>"$WORK/g3.err"); rc=$?
+eq "G3 separated rc" "0" "$rc"
+has "G3 separated: the owner's lease" "$w" '"device": "MacBook"'
+has "G3 asked the broker with its token" "$(cat "$WORK/hub.log")" "GET /hub/v1/node/client Bearer fcpn1.BROKER"
+hasnt "G3 never sent the broker token to the hub" "$(cat "$WORK/hub.log")" "GET /v1/node/client Bearer fcpn1.BROKER"
+hasnt "G3 no node_token refusal" "$w" "node_token"
+rm -f "$FLEET_CONF_DIR/node.env" "$FLEET_CONF_DIR/node.pub.env" "$FLEET_CONF_DIR/credsep.json"
+
+# G4 (#2665): the hub refuses the node token — the read does not stop there: the
+# other credential (the hub token; on a real node the certificate) answers.
+HAF="$TMPDIR/.claude-dash/global/hub_auth_fail"
+printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=WRONGTOK\n' "$port" > "$FLEET_CONF_DIR/node.env"
+: > "$WORK/hub.log"
+w=$(FLEET_HUB_TOKEN=CLIENTTOK python3 "$BIN/fleet-client-lease.py" where 2>"$WORK/g4.err"); rc=$?
+eq "G4 node token refused, the other credential answers → rc 0" "0" "$rc"
+has "G4 the owner's lease" "$w" '"device": "MacBook"'
+has "G4 says the node token was refused" "$w" '"node_token": "refused: unrecognised enrollment token"'
+has "G4 asked with the node token first" "$(cat "$WORK/hub.log")" "GET /v1/node/client Bearer WRONGTOK"
+has "G4 then with the hub token" "$(cat "$WORK/hub.log")" "POST /v1/fleet/client Bearer CLIENTTOK"
+j=$(FLEET_HUB_TOKEN=CLIENTTOK env -u FLEET_CLIENT_WHERE_CMD bash "$BIN/fleet-client-where.sh" --json)
+has "G4 --json hub up" "$j" '"hub": "up"'
+has "G4 --json carries the node token's refusal" "$j" '"node_token": "refused: unrecognised enrollment token"'
+has "G4 --json the client" "$j" '"device": "MacBook"'
+if [ -f "$BIN/fleet-lib.sh" ]; then
+  has "G4 the doctor's hubauth file names client-where" "$(cat "$HAF" 2>/dev/null)" "client-where	"
+  has "G4 … with the hub's words" "$(cat "$HAF" 2>/dev/null)" "node token: unrecognised enrollment token"
+  printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=NODETOK\n' "$port" > "$FLEET_CONF_DIR/node.env"
+  env -u FLEET_CLIENT_WHERE_CMD bash "$BIN/fleet-client-where.sh" >/dev/null
+  hasnt "G4 a clean read drops the line" "$(cat "$HAF" 2>/dev/null)" "client-where"
+fi
+
+# G5: every credential refused → exit 4, the hub's words carried
+printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=WRONGTOK\n' "$port" > "$FLEET_CONF_DIR/node.env"
+w=$(FLEET_HUB_TOKEN=BADCLIENT python3 "$BIN/fleet-client-lease.py" where 2>/dev/null); rc=$?
+eq "G5 both refused → exit 4" "4" "$rc"
+has "G5 the hub's words" "$w" '"why": "unrecognised enrollment token"'
+j=$(FLEET_HUB_TOKEN=BADCLIENT env -u FLEET_CLIENT_WHERE_CMD bash "$BIN/fleet-client-where.sh" --json)
+has "G5 --json hub refused" "$j" '"hub": "refused"'
+has "G5 --json hub_why" "$j" '"hub_why": "unrecognised enrollment token"'
+
 rm -f "$FLEET_CONF_DIR/node.env"
 w=$(python3 "$BIN/fleet-client-lease.py" where); rc=$?
 eq "G no hub anywhere → nohub" '{"state": "nohub"}' "$w"
