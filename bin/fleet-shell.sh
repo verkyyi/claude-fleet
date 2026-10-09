@@ -1463,7 +1463,7 @@ quit)
   [ -n "$qifun" ] && [ -n "$(T list-clients -F '#{client_name}' 2>/dev/null)" ] && exit 0
   # … nor while another terminal still shows a one-session view (issue #2716)
   if [ -n "$qifun" ]; then
-    for l in $(solo_labels); do
+    for l in $(solo_labels 2>/dev/null); do
       [ -n "$(tmux -L "$l" list-clients -F '#{client_name}' 2>/dev/null)" ] && exit 0
     done
   fi
@@ -1486,7 +1486,7 @@ EOF
   [ -n "$id" ] && lease release --lease "$id"
   rm -f "$CL_DIR/client.lease" "$CL_DIR/client.lease.old" "$CL_DIR/client.standby" "$CL_DIR/client.nohub" "$CL_DIR/client.where.json" "$CL_DIR/client.key" "$CL_DIR/client.list.json" "$CL_DIR/client.why" "$CL_DIR/client.rescan"
   # 2. the loops beside it, and the warm lines (closed, not left to ControlPersist)
-  loops_reap
+  loops_reap 2>/dev/null
   for sk in "$CL_DIR"/warm/*.sock; do
     [ -S "$sk" ] && ssh -S "$sk" -O exit fleet >/dev/null 2>&1
     rm -f "$sk" "$sk.pending"
@@ -1494,7 +1494,7 @@ EOF
   # 3. the servers — the client's own, never a fleet's: every one-session view
   #    (issue #2716: a `fleet claude` view open in another terminal, or left by
   #    an older version), then the shell's and the stage's
-  qsolo=$(solo_reap)
+  qsolo=$(solo_reap 2>/dev/null)
   [ "${qsolo:-0}" -gt 0 ] && qrun=1
   T kill-server 2>/dev/null
   TS kill-server 2>/dev/null
@@ -1794,8 +1794,8 @@ fi
 # No client runs, so whatever of one is still here is the LAST client's (issue
 # #2716) — an older version's one-session views and their servers, its loops:
 # closed before this one starts, so `ps` holds only this version's processes.
-solo_reap >/dev/null
-loops_reap
+solo_reap >/dev/null 2>&1
+loops_reap 2>/dev/null
 
 # the one-session view comes back to the row it left (issue #2265): read before
 # the new list writes its first visit
