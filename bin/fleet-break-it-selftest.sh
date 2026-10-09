@@ -165,6 +165,9 @@
 # BREAK_ONLY="<id> <id>" runs only those drills (the lockstep lint always runs);
 # so do ids given as arguments (`fleet-break-it-selftest.sh cmdn-no-orch …`).
 set -uo pipefail
+# Every session its own row (issue #2675): the batch view folds a flat list into
+# 「单独的活」 — sidebar-batch-view-selftest.sh pins it; these rows are the old ones.
+export FLEET_SIDEBAR_FOLD=off
 [ $# -gt 0 ] && BREAK_ONLY="$*"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"

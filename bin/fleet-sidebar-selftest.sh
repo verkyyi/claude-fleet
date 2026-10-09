@@ -5,6 +5,9 @@ set -uo pipefail
 # The list is drawn on a fleet socket here: on a real node it is the client's
 # only (issue #1713), so the drawer's tests take the seam fleet-sidebar.sh offers.
 export FLEET_SIDEBAR_NODE=1
+# Every session its own row (issue #2675): these legs are about layout, input
+# and lifecycle, not the batch view — sidebar-batch-view-selftest.sh pins that.
+export FLEET_SIDEBAR_FOLD=off
 BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v tmux >/dev/null 2>&1 || { echo 'selftest SKIP: tmux missing'; exit 0; }
 python3 - "$BIN" <<'PY'
@@ -95,12 +98,12 @@ shut, holder = sidebar.fold_now(frows, '@3', 'collapse', '@9', fcache)
 assert holder == '@2' and ids(shut) == ['hdr', '@1', '@2', '@4', 'hdr', '@5'] and shut[2][4] == '└▸', shut
 # a root shut in the batch view (issue #2675) takes its needs row in too; with
 # FLEET_SIDEBAR_FOLD=off it stays, as before
-os.environ['FLEET_SIDEBAR_FOLD'] = 'off'
 old_shut, holder = sidebar.fold_now(shut, '@1', 'collapse', '@9', dict(fcache))
 assert holder == '@1' and ids(old_shut) == ['hdr', '@1', '@4', 'hdr', '@5'] and old_shut[1][4] == '▸', old_shut
-del os.environ['FLEET_SIDEBAR_FOLD']
+os.environ['FLEET_SIDEBAR_FOLD'] = 'batch'
 shut, holder = sidebar.fold_now(shut, '@1', 'collapse', '@9', fcache)
 assert holder == '@1' and ids(shut) == ['hdr', '@1', 'hdr', '@5'] and shut[1][4] == '▸', shut
+os.environ['FLEET_SIDEBAR_FOLD'] = 'off'
 opened, holder = sidebar.fold_now(shut, '@1', 'expand', '@9', fcache)
 assert holder == '@1' and ids(opened) == ['hdr', '@1', '@2', '@4', 'hdr', '@5'], opened
 shut, holder = sidebar.fold_now(frows, 'hdr:o/a', 'collapse', '@2', fcache)

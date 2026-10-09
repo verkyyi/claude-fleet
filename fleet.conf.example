@@ -1471,7 +1471,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # batch a `!`, never a red row of its own), each repo's sessions with no batch
 # one 「单独的活 · N」 row, folded until you open it; 停放 / 待你动手 rows when the
 # steward reports them. `off` — every session its own row, as before.
-# @label=Task list folds into batches @group=status @tier=advanced @scope=global @edit=str
+# @label=Task list folds into batches @group=status @tier=internal @scope=global @edit=str
 #FLEET_SIDEBAR_FOLD=batch
 
 # The client's macOS notification when a session newly waits on you (issue
