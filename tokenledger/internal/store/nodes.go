@@ -73,6 +73,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetPeerCerts(); err != nil {
 		return err
 	}
+	// The ticket registry (claude-fleet#2676).
+	if err := s.ensureFleetTicketIndex(); err != nil {
+		return err
+	}
 	// The team configuration layer (claude-fleet#1726).
 	if err := s.ensureFleetTeamBundles(); err != nil {
 		return err

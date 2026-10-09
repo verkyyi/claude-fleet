@@ -383,6 +383,10 @@ func (s *Server) routes() *routeMux {
 		// outage, with its own token; the operator flags any machine through
 		// /v1/fleet/settings.
 		mux.HandleFunc("/v1/node/maintenance", s.handleNodeMaintenance)
+		// The ticket registry (claude-fleet#2676): a node registers a ticket it
+		// opened, with its own token — exact, so the /v1/fleet/ viewer gate is not
+		// in the way.
+		mux.HandleFunc(FleetTicketRegisterPath, s.handleFleetTicketRegister)
 		// The person's one orchestrator (claude-fleet#2117): each machine asks,
 		// with its own token, whether it is the one to hold it.
 		mux.HandleFunc("/v1/node/orchestrator", s.handleNodeOrchestrator)
