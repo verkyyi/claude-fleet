@@ -60,6 +60,8 @@
 #   node-paused-still-placed                        bin/fleet-control-read.sh capacity (admit / admit_why / room),
 #                                                   fleet_machine_admit, fleet_machine_headroom; the hub half is
 #                                                   tokenledger/internal/api judge() (go test, when a toolchain is here)
+#   pool-admit-phantoms                             fleet_session_cap_ok / fleet_admit_reserve / fleet_admit_confirm /
+#                                                   fleet_admit_release / fleet_admit_holders (fleet-lib.sh), scratch-pool.sh
 #   place-declined-not-retried                      fleet_hub_place (fleet-lib.sh: the `after` field, each try's
 #                                                   stderr), fleet-children.py (claim: stale); the hub half is
 #                                                   tokenledger/internal/api fleet_place.go (go test, when here)
@@ -4762,6 +4764,38 @@ print(c.attached_body({"body": "看图 /Users/me/shot.png", "attachments": [{"id
   fi
   SECS=$(since "$t0")
   WHAT="附件随任务到会话机器：写作区交 --attach，节点名下 attachments/<id>/<名>，正文写那台的路径；$gohalf"
+}
+
+# The warm pool locks the machine (issue #2502): every ensure tick was admitted,
+# its spawn opened nothing, and its reservation stayed the full settle time — so
+# three slots kept "room for 0" on a machine half free. For real, on a sandbox
+# state dir with stubbed readings (16000 MB, 50 % free, ~1200 MB a session ⇒ room
+# for 4): five failed pool ticks (admitted, then gone without a window) and a
+# real spawn must still be admitted with its full room; a spawn that IS running
+# counts and the doctor's holders line names it; one that confirmed its window
+# keeps its reservation after it exits.
+drill_pool_admit_phantoms() {
+  CAP=60; local t0 d="$WORK/pa" out sp
+  mkdir -p "$d/tmp"
+  adm() { env FLEET_ADMIT=1 TMPDIR="$d/tmp" HOME="$d" FLEET_MEM_TOTAL_MB=16000 \
+            FLEET_MEM_PS_CMD="printf '101 1 $(id -u) 409600 01:00 claude\n'" \
+            FLEET_MEM_PROBE_CMD='echo 1 50 0 0' FLEET_LOAD_PROBE_CMD='echo 0.5' \
+            FLEET_GLOBAL_MAX_SESSIONS=0 FLEET_MAX_SESSIONS=0 FLEET_MACHINE_MAX_SESSIONS=0 \
+            bash -c "source '$BIN/fleet-lib.sh'; $1" 2>&1; }
+  t0=$(now)
+  for _ in 1 2 3 4 5; do adm 'fleet_session_cap_ok fleet >/dev/null' >/dev/null; done
+  out=$(adm 'fleet_admit_reserved; fleet_machine_headroom')
+  case "$out" in 0$'\n'4\ *) ;; *) WHY="five failed pool ticks left phantoms (reserved; headroom): $out"; return 1 ;; esac
+  sleep 30 & sp=$!
+  : > "$d/tmp/.claude-dash/global/admit-reserve/fleet.$sp.1"
+  out=$(adm 'fleet_admit_reserved; fleet_admit_holders')
+  kill "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+  case "$out" in 1*"pid $sp sleep 30"*) ;; *) WHY="a running spawn's reservation must count and be named: $out"; return 1 ;; esac
+  adm 'fleet_session_cap_ok fleet >/dev/null && fleet_admit_confirm >/dev/null' >/dev/null
+  out=$(adm 'fleet_admit_reserved')
+  [ "$out" = 1 ] || { WHY="a confirmed window's reservation must outlive its spawner (got $out)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="5 拍失败的预热不留预留、真放置照样有 4 个位置；在跑的 spawn 计入并列出 pid+命令；开出窗口的确认后独立计入"
 }
 
 # The node's sessions ride through a tmux restart and a node update (issue #2484):

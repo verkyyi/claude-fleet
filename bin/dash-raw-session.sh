@@ -529,6 +529,9 @@ if [ -n "$claimed" ]; then
   win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}
 fi
 fi
+# A warm window is memory the machine already carries: this spawn's admission
+# holds nothing more (issue #2502).
+[ "${warm:-0}" = 1 ] && fleet_admit_release
 
 # --- allocate a scratch worktree off the base branch (issue #290) -------------
 # The branch `scratch-<N>` + worktree `<repo-parent>/<repo-dir>-scratch-<N>` mirror
@@ -602,6 +605,7 @@ else
          # the hub's DECLINED / UNKNOWN answer as the refusal.
          _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"
          refuse "raw: new-window failed in $SESS$_why"; exit 1; }
+fleet_admit_confirm >/dev/null   # the window is open: its admission holds on its own (#2502)
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
 [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true

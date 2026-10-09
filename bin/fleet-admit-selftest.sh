@@ -22,6 +22,9 @@
 #      the kept-back floor, a RESERVATION per admission so a burst — sequential or
 #      concurrent — admits exactly the room and no more, reservations + in-flight
 #      markers age out, hysteresis after a hold, and the count caps default off.
+#   G. a reservation is ONE spawn's (issue #2502): void once its owner is gone
+#      without confirming a window, one per owner however often it is admitted,
+#      confirm keeps it, release drops it, the doctor names who holds them.
 set -uo pipefail
 unset FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE \
       FLEET_LOADGEN_LOAD_PER_CORE FLEET_MEM_PROBE_CMD FLEET_LOAD_PROBE_CMD \
@@ -160,7 +163,9 @@ ok "F cost (median × growth, floor, pin) and room above the kept-back floor"
 # A burst against room for exactly 3: 10000 MB × 40% = 4000, floor 2048 → 1952 / 600 = 3.
 capf() { env PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/t" FLEET_LOAD_PROBE_CMD='echo 0.5' FLEET_MEM_TOTAL_MB=10000 \
            FLEET_MEM_PROBE_CMD='echo 1 40 0 0' \
-           bash -c 'source "$1/fleet-lib.sh"; out=$(fleet_session_cap_ok testsess); printf "%s|%s" "$?" "$out"' _ "$BIN"; }
+           bash -c 'source "$1/fleet-lib.sh"; out=$(fleet_session_cap_ok testsess); rc=$?
+             [ "$rc" = 0 ] && [ "${NOCONFIRM:-0}" != 1 ] && fleet_admit_confirm >/dev/null   # the spawn opened its window
+             printf "%s|%s" "$rc" "$out"' _ "$BIN"; }
 rm -rf "$WORK/t"; mkdir -p "$WORK/t"; seq_rc=''
 for i in 1 2 3 4 5; do r=$(capf); seq_rc="$seq_rc${r%%|*}"; done
 [ "$seq_rc" = 00011 ] || fail "F a sequential burst admits exactly the room (3), then holds (got $seq_rc)"
@@ -192,6 +197,42 @@ r=$(env TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_session_count(
   FLEET_ADMIT=0 fleet_session_cap_ok s; printf "%s|" "$?"; fleet_cap_full s; printf "%s" "$?"' _ "$BIN")
 [ "$r" = "0|1" ] || fail "F 50 sessions and no cap set: neither cap_ok nor cap_full binds (got '$r')"
 ok "F FLEET_GLOBAL_MAX_SESSIONS defaults to 0: 50 sessions, no count refusal"
+
+# ===== G: a reservation is one spawn's, and dies with a spawn that opened nothing (#2502)
+RD="$WORK/t/.claude-dash/global/admit-reserve"
+rm -rf "$WORK/t"; mkdir -p "$WORK/t"; seq_rc=''
+for i in 1 2 3 4 5; do r=$(NOCONFIRM=1 capf); seq_rc="$seq_rc${r%%|*}"; done
+[ "$seq_rc" = 00000 ] || fail "G admissions whose spawns exited without a window must not fill the room (got $seq_rc)"
+r=$(env TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_admit_reserved' _ "$BIN")
+[ "$r" = 0 ] || fail "G five unconfirmed admissions by gone owners count 0 (got $r)"
+[ -z "$(ls "$RD" 2>/dev/null)" ] || fail "G a void reservation is deleted on sight" "$(ls "$RD")"
+ok "G an admission whose spawn exits without confirming a window is void (5 in a row, room for 3: all admitted)"
+# A LIVE owner's reservation counts; once it is gone unconfirmed, it does not.
+rm -rf "$WORK/t"; mkdir -p "$RD"; sleep 30 & SP=$!
+: > "$RD/x.$SP.1"
+r=$(env TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_admit_reserved; fleet_admit_holders' _ "$BIN")
+case "$r" in 1*"live "*"s pid $SP sleep 30"*) ;; *) fail "G a running spawn's reservation counts, and the holders line names its command (got '$r')" ;; esac
+kill "$SP" 2>/dev/null; wait "$SP" 2>/dev/null
+r=$(env TMPDIR="$WORK/t" bash -c 'source "$1/fleet-lib.sh"; fleet_admit_reserved' _ "$BIN")
+[ "$r" = 0 ] || fail "G the same reservation after its owner died unconfirmed counts 0 (got $r)"
+ok "G a running spawn holds its reservation (holders: pid + command); dead + unconfirmed ⇒ void"
+# One owner, one cost: a second admission in the same process (dash-new-session's
+# exec into dash-issue-session) neither counts its own nor takes a second.
+rm -rf "$WORK/t"; mkdir -p "$WORK/t"
+r=$(env PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/t" FLEET_LOAD_PROBE_CMD='echo 0.5' FLEET_MEM_TOTAL_MB=10000 FLEET_MEM_PROBE_CMD='echo 1 40 0 0' \
+  bash -c 'source "$1/fleet-lib.sh"; a=$(fleet_session_cap_ok s); x=$?; b=$(fleet_session_cap_ok s); y=$?
+    printf "%s%s|%s|" "$x" "$y" "$(ls "$2" | wc -l | tr -d " ")"
+    k=$(fleet_admit_confirm); printf "%s|" "$(ls "$2" | grep -c "\.ok\.")"
+    fleet_admit_release "$k"; ls "$2" | wc -l | tr -d " "' _ "$BIN" "$RD")
+[ "$r" = "00|1|1|0" ] || fail "G same owner: two admissions, one reservation; confirm → .ok; release by path (got '$r')"
+ok "G one owner holds one reservation however often it is admitted; confirm keeps it, release drops it"
+# The doctor lists who holds them (the row named a bare number before #2502).
+grep -q 'fleet_admit_holders' "$BIN/fleet-doctor.sh" || fail "G the doctor's admit row must list the holders"
+# Every spawner confirms the window it opened.
+for f in dash-raw-session.sh dash-issue-session.sh dash-restore-session.sh scratch-pool.sh; do
+  grep -q 'fleet_admit_confirm' "$BIN/$f" || fail "G $f opens windows but never confirms its admission"
+done
+ok "G every spawner confirms its window; the doctor names the holders"
 
 # ===== E: continuation paths do not pass the gate ==============================
 for f in fleet-restore.sh fleet-handoff-cycle.sh; do

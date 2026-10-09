@@ -1966,8 +1966,12 @@ else
   done
   # shellcheck disable=SC2086
   _ad=$(env $_ad_env bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1
-    h=$(fleet_machine_headroom) || h=-; w=$(fleet_machine_admit --short) && w=ok; printf "%s|%s" "$h" "$w"' _ "$(dirname "$0")" 2>/dev/null)
-  _ad_h=${_ad%%|*}; _ad_w=${_ad#*|}
+    h=$(fleet_machine_headroom) || h=-; w=$(fleet_machine_admit --short) && w=ok
+    who=$(fleet_admit_holders | paste -sd ";" - | sed "s/;/; /g"); printf "%s|%s|%s" "$h" "$w" "$who"' _ "$(dirname "$0")" 2>/dev/null)
+  # <headroom>|<verdict>|<who holds a reservation> — each one named (issue #2502):
+  # "admitted not yet counted" was a bare number, and finding the pool's phantoms
+  # behind it took watching the directory by hand.
+  _ad_h=${_ad%%|*}; _ad_w=${_ad#*|}; _ad_who=${_ad_w#*|}; _ad_w=${_ad_w%%|*}
   if [ -z "$_ad" ] || [ "$_ad_h" = - ]; then
     info admit "admission on, but this machine's memory is unreadable here — it admits by load alone"
   else
@@ -1977,7 +1981,7 @@ $_ad_h
 EOF
     _ad_txt="room for ~$_r more session(s) now at ~$_c MB each (median $_md MB × growth over $_ag live agent(s)) — $_a MB available, $_f MB kept back"
     [ "$_hy" -gt 0 ] && _ad_txt="$_ad_txt + $_hy MB until it recovers"
-    [ "$_rs" -gt 0 ] && _ad_txt="$_ad_txt, $_rs admitted not yet counted"
+    [ "$_rs" -gt 0 ] && _ad_txt="$_ad_txt, $_rs admitted not yet counted${_ad_who:+ ($_ad_who)}"
     if [ "$_ad_w" = ok ]; then pass admit "$_ad_txt"
     else warn admit "$_ad_w — $_ad_txt; running sessions are untouched, new ones wait (FLEET_ADMIT=0 overrides)"; fi
   fi

@@ -19,6 +19,7 @@ FLEET_ACCOUNT_PAUSED_CMD           seam: prints the hub client-settings JSON ins
 FLEET_ACCOUNT_PHASE_WINDOW         knob: internal pacing/limit, safe in-code default (fleet-account.sh)
 FLEET_ACCOUNT_SELECTED             handoff: the account pick already ran for this launch
 FLEET_ACCOUNT_TARGET               handoff: the account a migrate/move relaunches on
+FLEET_ADMIT_OWNER                  handoff: whose admission reservation this process holds (default $$; fleet_admit_*, #2502)
 FLEET_ALERTS_ALLCAPPED_SECS        knob: how long an `accounts · all capped` stamp stays an alert (fleet-alerts.sh, 900)
 FLEET_ALERTS_EVENT_DEDUP           knob: same kind + text within this many seconds is one alerts event (fleet-alerts.sh event, 60)
 FLEET_ALERTS_EVENT_KEEP            knob: how long alerts.events keeps a background event (fleet-alerts.sh, 2592000 = 30 days)

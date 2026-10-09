@@ -805,6 +805,7 @@ win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:"
        _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"  # issue #2477
        fleet_socket_wedged "$SOCK" && _why=" — this fleet's tmux server is gone: its socket $(fleet_socket_path "$SOCK") is held by a dying server that drops every client (tmux says \"server exited unexpectedly\"); fleet-up.sh clears it and brings the fleet back"  # issue #1729
        refuse "spawn failed for #$num: new-window$_why"; exit "$RC_INFRA"; }
+fleet_admit_confirm >/dev/null   # the window is open: its admission holds on its own (#2502)
 [ -n "$FILL_PID" ] || CLAIMED_HERE=0   # a window holds the issue now: its claim is the worker's
 # A session is on its way: wake the idle-gated daemons so the dash is fresh on
 # their very next tick, not up to FLEET_DAEMON_IDLE_AFTER later (issue #1077).
