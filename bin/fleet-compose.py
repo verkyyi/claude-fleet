@@ -592,7 +592,7 @@ def to_orch(session, client="", boot=False):
             print(msg)
             return 1
     if o and carry(shell, o, "")[0]:
-        stamp_role(shell, o)
+        stamp_role(shell, o, agent=orch_agent(session, o))
         return 0
     msg = tr("compose_orch_nolist") if o else tr("compose_orch_none")
     shell.run("display-message", *(["-c", client] if client else []), msg)
@@ -636,18 +636,37 @@ def boot_orch(session, shell, client="", secs=None):
     return o, ("" if o else why or tr("orch_boot_waited", int(secs)))
 
 
-def stamp_role(shell, o, wait=3.0):
+def orch_agent(session, o):
+    """The orchestrator's agent (claude · codex) — its row in the list's cache
+    (remote_<session>, field 7: every orchestrator's row stays there), "" when
+    the cache does not say."""
+    try:
+        with open(os.path.join(status_dir(), "remote_" + (session or "")), encoding="utf-8") as f:
+            for line in f:
+                p = line.rstrip("\n").split("\x1f")
+                if len(p) >= 7 and p[0] == "wid:" + o["wid"] and p[1] == o["node"]:
+                    return p[6] if re.fullmatch(r"[a-z][a-z0-9-]{0,15}", p[6]) else ""
+    except OSError:
+        pass
+    return ""
+
+
+def stamp_role(shell, o, wait=3.0, agent=""):
     """The stage window carry() switched to is the orchestrator's (issue #2616):
     `@fleet_role orchestrator` on it, as the node's own window says — so the
-    client tells it by its role, never its name. Only a window with no role."""
+    client tells it by its role, never its name. Only a window with no role.
+    Its agent too (issue #2619 — `@cc_agent`, as the node's window says: a
+    Codex orchestrator reads codex), when the list's cache names one."""
     want = o["node"] + ":" + o["wid"]
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
-        for line in shell.stage("list-windows", "-F", "#{window_id}\t#{@remote}\t#{@fleet_role}").splitlines():
-            w = (line.split("\t") + ["", ""])[:3]
+        for line in shell.stage("list-windows", "-F", "#{window_id}\t#{@remote}\t#{@fleet_role}\t#{@cc_agent}").splitlines():
+            w = (line.split("\t") + ["", "", ""])[:4]
             if w[1] == want:
                 if not w[2]:
                     shell.stage("set-window-option", "-t", w[0], "@fleet_role", "orchestrator")
+                if agent and w[3] != agent:
+                    shell.stage("set-window-option", "-t", w[0], "@cc_agent", agent)
                 return True
         time.sleep(0.1)
     return False

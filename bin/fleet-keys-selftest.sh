@@ -36,7 +36,9 @@
 #   8. The node binds none of them (issue #1714, EPIC #1710 C4): a server that
 #      sources conf/tmux-attention.conf lists EXACTLY tmux's stock keys, and one
 #      that sources the client's conf has every sheet key — on an isolated socket.
-#      Its bar says ⌘N 编排, ⌘N 新任务 only with @fleet_compose (issue #2616).
+#      Its bar says ⌘N 编排, ⌘N 新任务 only with @fleet_compose (issue #2616);
+#      ⌘N, prefix c and the bar's cell are one road (fleet-shell.sh portal), solo
+#      ⌃\ still the local shell (issue #2619).
 #
 # Exit 0 = pass. Non-zero = fail (prints what diverged). No network.
 set -uo pipefail
@@ -444,6 +446,19 @@ EOF
   ktm shell set-option -g @fleet_orch_busy '编排在忙 · 你说的会排到它这一步做完'
   bar=$(ktm shell display-message -p '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
   case "$bar" in *"⌘Q 退出 fleet  编排在忙 · 你说的会排到它这一步做完"*) ;; *) fail "8: @fleet_orch_busy is not on the bar: $bar" ;; esac
+  # User928's new meaning (issue #2619, EPIC #2615 C4): ⌘N, prefix c and the bar's
+  # 「⌘N 编排」 cell (a tap on an iPad: range=user|key-User928) all run ONE road —
+  # fleet-shell.sh portal, which goes to the orchestrating session (woken first)
+  # unless FLEET_COMPOSE=1 — and the one-session layout's ⌃\ is still this
+  # computer's shell.
+  nk=$(ktm shell list-keys -T root 2>/dev/null | awk '$4 == "User928"')
+  case "$nk" in *"fleet-shell.sh portal "*) ;; *) fail "8: ⌘N (User928) does not run fleet-shell.sh portal: $nk" ;; esac
+  ck=$(ktm shell list-keys -T prefix 2>/dev/null | awk '$4 == "c"' | sed 's/^.* c  *//')
+  [ -n "$ck" ] && [ "$ck" = "$(printf '%s\n' "$nk" | sed 's/^.* User928  *//')" ] || fail "8: prefix c is not ⌘N's road: [$ck] vs [$nk]"
+  case "$(ktm shell show-options -gv @fleet_hint_session 2>/dev/null)" in
+    *'#[range=user|key-User928]'*'⌘N'*'编排'*) ;; *) fail "8: the bar's ⌘N cell is not a User928 range reading 编排" ;; esac
+  ktm shell list-keys -T root 2>/dev/null | awk '$4 == "C-\\\\"' | grep -q '@fleet_layout},solo}.*@solo_shell' \
+    || fail "8: solo ⌃\\ is no longer this computer's shell: $(ktm shell list-keys -T root | awk '$4 == "C-\\\\"')"
   ktm stock kill-server; ktm node kill-server; ktm shell kill-server
   rm -rf "$KW"
 fi

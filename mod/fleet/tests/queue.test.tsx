@@ -114,6 +114,19 @@ test('two prompts over a running turn: 「排队 2 条」 and @orch_queue=2; the
   expect(await drawn($)).toBeUndefined()
 })
 
+test('three in a row (issue #2619): the first starts the turn, the two behind it read 「排队 2 条」', async ($, on) => {
+  fresh()
+  const m = engine(on)
+  await $.session.start(START)
+  await $.prompt.submit({ text: '开一个 EPIC', wait: false, origin: HAND })
+  await $.turn.start({ text: '开一个 EPIC', turnId: 't1' })
+  await step($, STEP)
+  await $.prompt.submit({ text: '还有一件', wait: false, origin: HAND, turnId: 't1' })
+  await $.prompt.submit({ text: '再一件', wait: false, origin: HAND, turnId: 't1' })
+  expect(m.stamps).toEqual(['0', '1', '2'])
+  expect(await drawn($)).toContain('排队 2 条')
+})
+
 test('a subagent step folds nothing; the turn ending clears it', async ($, on) => {
   fresh()
   const m = engine(on)
