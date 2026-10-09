@@ -23,7 +23,9 @@
 #   fleet_popup_geom <width> <w> <h> → $FPOP_W $FPOP_H. A client 80 columns or
 #       narrower (the iPad's 54) gets 96% × 90% whatever was asked, so the border
 #       and the title are never the part that is cut; a fixed row count (an S
-#       prompt's 16) is kept.
+#       prompt's 16) is kept, and so is an axis asked for at 100% — a whole-screen
+#       panel (the full switcher a tap on the top line opens) must cover the
+#       screen, or the session behind it shows round its edges.
 #   fleet_fzf_opts                → $FLEET_FZF_OPTS: --color all mapped to PAL_*,
 #       --border=none (the popup's border is the frame), --info=hidden,
 #       --pointer=›. Exported into every popup as FZF_DEFAULT_OPTS, so every fzf
@@ -70,8 +72,8 @@ fleet_popup_geom() {
   FPOP_W=$2; FPOP_H=$3
   case "$1" in ''|*[!0-9]*) return 0 ;; esac
   [ "$1" -le "${FLEET_POPUP_NARROW:-80}" ] || return 0
-  FPOP_W=96%
-  case "$FPOP_H" in *%) FPOP_H=90% ;; esac
+  case "$FPOP_W" in 100%) ;; *) FPOP_W=96% ;; esac
+  case "$FPOP_H" in 100%) ;; *%) FPOP_H=90% ;; esac
 }
 
 # _fleet_fzf_caps → $FLEET_FZF_FOOTER: 1 when this fzf takes --footer, a footer
