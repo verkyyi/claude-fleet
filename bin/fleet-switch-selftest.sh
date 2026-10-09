@@ -387,7 +387,8 @@ fn = src[src.index("attach_client() {"):]
 fn = fn[:fn.index("\n}\n") + 3]
 fake = work / "path"
 fake.mkdir()
-(fake / "tmux").write_text("#!/bin/sh\nprintf 'TMUX:%s\\n' \"$*\"\n")
+# the attach's argv on stderr: its stdout goes to /dev/null (issue #2743)
+(fake / "tmux").write_text("#!/bin/sh\ncase \"$*\" in *attach-session*) printf 'TMUX:%s\\n' \"$*\" >&2 ;; *) printf 'TMUX:%s\\n' \"$*\" ;; esac\n")
 (fake / "tmux").chmod(0o755)
 prof = work / "dyn"
 prof.mkdir()
