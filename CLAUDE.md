@@ -637,7 +637,8 @@ Do not install from memory: read the doc and work from it.
   managed`; `fleet-stable.sh move` refuses an updater tree without a valid
   release.json (`release:`), or one pinning an artifact the hub's
   `/v1/fleet/release/artifacts` lacks (`artifacts:`; the hub never builds such a
-  release either — issue #2631, BREAK-IT `release-artifact-missing`). `docs/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`,
+  release either — issue #2631, BREAK-IT `release-artifact-missing`). The pinned
+  Claude Code is the hub's to fetch (npm, sha512 integrity), never a person's upload. `docs/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`,
   `credsep-stale-after-switch`.
 - **A Mac becomes a managed machine by ONE command, and the same command repairs
   it** (issue #2330, EPIC #2329 C1). `sudo fleet node install --join <码>`

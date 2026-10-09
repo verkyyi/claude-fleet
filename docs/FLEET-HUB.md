@@ -647,7 +647,10 @@ Kept in `CCQUOTA_FLEET_RELEASE_DIR` (the cluster's OSS bucket, mounted), newest
 `GET /v1/fleet/release/key` · `/artifacts` (the names a build now would carry +
 the platforms it must carry `release.json`'s pins for, `CCQUOTA_FLEET_RELEASE_PLATFORMS`,
 default `darwin-arm64` — `fleet-stable.sh move` checks the pins against it, issue
-#2631; a build missing one is refused, never kept) · `/<sha|stable>` (the manifest, `.files`) ·
+#2631; a build missing one is refused, never kept — except Claude Code, which the
+hub fetches itself from npm, `@anthropic-ai/claude-code-<os>-<arch>@<ver>`
+checked against the registry's sha512 integrity, `CCQUOTA_FLEET_RELEASE_NPM`;
+`?want=a,b` names the ones it would fetch as `fetchable`) · `/<sha|stable>` (the manifest, `.files`) ·
 `/<sha>/manifest.sig` · `/<sha>/tree.tar.gz` · `/<sha>/artifacts/<name>` — a sha
 the hub neither holds nor has seen stable at is a 404, never a build. A machine
 runs `ccquota release fetch --hub <hub> --pubkey <pinned> [--artifacts] <sha|stable>

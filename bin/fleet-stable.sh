@@ -63,7 +63,9 @@
 #               pinned claude 2.1.295, nobody put it in the hub's
 #               CCQUOTA_FLEET_RELEASE_ARTIFACTS, and every managed machine sat in
 #               backoff on the old version). A missing one REFUSES (reason
-#               `artifacts:`, naming it); a hub that cannot be read refuses too;
+#               `artifacts:`, naming it) — unless the hub fetches it itself
+#               (Claude Code from npm; /artifacts?want= names it `fetchable`);
+#               a hub that cannot be read refuses too;
 #               --force moves anyway and logs. No hub address here
 #               (CCQUOTA_HUB_URL / FLEET_HUB_URL / fleet.conf / hub.json), or a
 #               hub with no such list (releases off, an older hub): said, passes.
@@ -256,6 +258,17 @@ print(" ".join(n for n in out.split() if n not in have))' "$BIN_DIR/fleet-node-u
     rm -f "$_tmp"
     _why="could not read $_hub/v1/fleet/release/artifacts (curl $_rc, HTTP $_code) — no evidence the hub can build $(short "$2")'s release"
   else
+    # what the hub fetches itself at build time (Claude Code from npm) is not missing
+    if [ -n "$_missing" ] && [ "$(curl -sS -m "$timeout" -o "$_tmp" -w '%{http_code}' \
+         "$_hub/v1/fleet/release/artifacts?want=$(printf '%s' "$_missing" | tr ' ' ',')" 2>/dev/null)" = 200 ]; then
+      _fetch=$(python3 -c 'import json,sys
+print(" ".join(json.load(open(sys.argv[1])).get("fetchable") or []))' "$_tmp" 2>/dev/null)
+      if [ -n "$_fetch" ]; then
+        printf 'artifacts: %s fetches %s itself when it builds the release\n' "$_hub" "$_fetch"
+        _missing=$(for n in $_missing; do case " $_fetch " in (*" $n "*) ;; (*) printf '%s ' "$n" ;; esac; done)
+        _missing=${_missing% }
+      fi
+    fi
     rm -f "$_tmp"
     if [ -z "$_missing" ]; then
       printf 'artifacts: every artifact %s pins is on %s\n' "$(short "$2")" "$_hub"; return 0

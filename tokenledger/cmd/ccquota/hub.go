@@ -272,7 +272,9 @@ func loadFleetCerts(srv *api.Server) error {
 // are kept on (the cluster's OSS bucket, mounted); CCQUOTA_FLEET_RELEASE_ARTIFACTS
 // the pinned Claude Code / Codex installers; CCQUOTA_FLEET_RELEASE_PLATFORMS the
 // <os>-<arch> list a release must carry release.json's pins for (default
-// darwin-arm64 — a build missing one is refused, claude-fleet#2631). No key: no releases. A key that
+// darwin-arm64 — a build missing one is refused, claude-fleet#2631);
+// CCQUOTA_FLEET_RELEASE_NPM the registries a missing Claude Code is fetched
+// from (default npm, then npmmirror). No key: no releases. A key that
 // cannot be read, or one without a dir: the hub refuses to start.
 func loadFleetReleases(srv *api.Server) error {
 	path := os.Getenv("CCQUOTA_FLEET_RELEASE_KEY")
@@ -302,7 +304,8 @@ func loadFleetReleases(srv *api.Server) error {
 	}
 	srv.Releases = &api.ReleaseStore{Dir: dir, Key: key, Repo: repo, Source: srv.Stable,
 		DistDir: srv.FleetDistDir, ArtifactsDir: os.Getenv("CCQUOTA_FLEET_RELEASE_ARTIFACTS"),
-		Platforms: strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_PLATFORMS"))}
+		Platforms:     strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_PLATFORMS")),
+		NPMRegistries: strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_NPM"))}
 	srv.Stable.OnStable = srv.Releases.OnStable
 	log.Printf("fleet: node releases in %s, signed by %s", dir, release.KeyID(key.Public().(ed25519.PublicKey)))
 	return nil

@@ -53,18 +53,20 @@ import (
 const ReleaseKeep = 10
 
 // releaseBuildTime bounds one build (a GitHub tarball + the copies).
-const releaseBuildTime = 3 * time.Minute
+const releaseBuildTime = 8 * time.Minute // room for a Claude Code fetch (claude-fleet#2631)
 
 // ReleaseStore builds, keeps and serves node releases.
 type ReleaseStore struct {
-	Dir          string             // one <sha>/ per release
-	Key          ed25519.PrivateKey // signs every manifest
-	Repo         string             // owner/name, written into the manifest
-	Source       *StableSource      // where a commit's files come from
-	DistDir      string             // ccquota-<os>-<arch> binaries (FleetDistDir)
-	ArtifactsDir string             // pinned installers (Claude Code, Codex …)
-	Platforms    []string           // <os>-<arch> a release must carry release.json's pins for (default release.DefaultPlatforms)
-	Keep         int                // default ReleaseKeep
+	Dir           string             // one <sha>/ per release
+	Key           ed25519.PrivateKey // signs every manifest
+	Repo          string             // owner/name, written into the manifest
+	Source        *StableSource      // where a commit's files come from
+	DistDir       string             // ccquota-<os>-<arch> binaries (FleetDistDir)
+	ArtifactsDir  string             // pinned installers (Claude Code, Codex …)
+	Platforms     []string           // <os>-<arch> a release must carry release.json's pins for (default release.DefaultPlatforms)
+	NPMRegistries []string           // where a missing Claude Code is fetched from (default DefaultNPMRegistries)
+	Client        *http.Client       // the fetches' client (tests); nil = one per call
+	Keep          int                // default ReleaseKeep
 
 	mu       sync.Mutex
 	building map[string]*releaseBuild
@@ -218,9 +220,18 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string) error {
 		return err
 	}
 	arts := rs.artifacts()
-	if missing, err := rs.missingPinned(files, arts); err != nil {
+	missing, err := rs.missingPinned(files, arts)
+	if err != nil {
 		return err
-	} else if len(missing) > 0 {
+	}
+	if len(missing) > 0 && len(rs.fillPinned(ctx, missing)) < len(missing) {
+		// the hub fetched some (claude-fleet#2631): read the dir again
+		arts = rs.artifacts()
+		if missing, err = rs.missingPinned(files, arts); err != nil {
+			return err
+		}
+	}
+	if len(missing) > 0 {
 		// never bake a release a managed machine cannot install: it would be
 		// kept, never rebuilt, and every machine would sit in backoff on it
 		// (claude-fleet#2631). Unbuilt, the next request after the file lands
@@ -383,14 +394,23 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	if rest == "artifacts" {
 		// what a release built now would carry: fleet-stable.sh move checks
 		// release.json's pins against it before stable moves (claude-fleet#2631)
+		// ?want=a,b: which of those a build would fetch (Claude Code from npm)
+		have := rs.artifacts()
 		names := []string{}
-		for n := range rs.artifacts() {
+		for n := range have {
 			names = append(names, n)
 		}
 		sort.Strings(names)
+		var want []string
+		for _, n := range strings.Split(r.URL.Query().Get("want"), ",") {
+			if n != "" && release.ValidArtifact(n) && len(want) < 16 {
+				want = append(want, n)
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(map[string]any{"artifacts": names, "platforms": rs.platforms()})
+		_ = json.NewEncoder(w).Encode(map[string]any{"artifacts": names, "platforms": rs.platforms(),
+			"fetchable": rs.fetchable(r.Context(), have, want)})
 		return
 	}
 	sha, sub, _ := strings.Cut(rest, "/")
