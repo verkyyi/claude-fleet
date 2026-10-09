@@ -1986,6 +1986,58 @@ drill_hub_refused_cert() {
   WHAT="入口回 401「names no one」：where 报 hub refused，状态栏橙色「入口不认这台电脑 · 请重新扫码」，可点"
 }
 
+# A separated node's where (issue #2665): node.env is the role account's, the
+# credential proxy hands out its broker URL + an fcpn1. token — and the read sent
+# that token to FLEET_HUB_URL, the hub itself, which had never seen it: 401
+# 「unrecognised enrollment token」, where said nobody is connected while the
+# person sat at an iTerm2. The pair goes together now (node_pair), and a node
+# token the hub refuses falls back to the other credential.
+drill_node_token_wrong_door() {
+  CAP=10; local t0 sc="$WORK/ntwd" sb port wj conf
+  mkdir -p "$sc/sbin" "$sc/conf"; sb="$sc/sbin"; conf="$sc/conf"
+  cat > "$sc/hub.py" <<'PY'
+import http.server, json, os, sys
+D = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        open(D + "/hub.log", "a").write("%s %s\n" % (self.path, self.headers.get("Authorization")))
+        if (self.path, self.headers.get("Authorization")) == ("/hub/v1/node/client", "Bearer fcpn1.BROKER"):
+            b = json.dumps({"state": "active", "lease": {"id": "L1", "device": "MacBook", "terminal": "iTerm2 3.7",
+                                                         "caps": ["show_file", "iterm2"]}}).encode()
+            self.send_response(200)
+        else:
+            b = json.dumps({"error": "unrecognised enrollment token"}).encode()
+            self.send_response(401)
+        self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(b)
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(D + "/port.tmp", "w").write(str(s.server_address[1])); os.replace(D + "/port.tmp", D + "/port")
+s.serve_forever()
+PY
+  python3 "$sc/hub.py" "$sc" 2>"$sc/hub.err" & local hp=$!
+  for _ in $(seq 1 100); do [ -s "$sc/port" ] && break; sleep 0.1; done
+  port=$(cat "$sc/port" 2>/dev/null); [ -n "$port" ] || { kill "$hp" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$sc/hub.err")"; return 1; }
+  cp "$BIN/fleet-client-lease.py" "$BIN/fleet-connect.py" "$BIN/fleet-client-where.sh" "$sb/"
+  printf '#!/bin/bash\n[ "$1" = node-token ] && printf "http://127.0.0.1:%s/hub\\tfcpn1.BROKER\\n"\n' "$port" > "$sb/fleet-cred-proxy.sh"
+  ln -sf "$sc/role-only/node.env" "$conf/node.env"            # the role account's: unreadable here
+  printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\n' "$port" > "$conf/node.pub.env"
+  printf '{}\n' > "$conf/credsep.json"
+  t0=$(now)
+  wj=$( unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_TOKEN FLEET_CLIENT_WHERE_CMD
+        export FLEET_CONF_DIR="$conf" HOME="$sc" FLEET_HUB_URL="http://127.0.0.1:$port" NO_PROXY='*' no_proxy='*' \
+               FLEET_SHELL_SESSION=nosuch-ntwd
+        bash "$sb/fleet-client-where.sh" --json 2>&1 )
+  SECS=$(since "$t0")
+  kill "$hp" 2>/dev/null; wait "$hp" 2>/dev/null
+  case "$wj" in *'"device": "MacBook"'*) ;; *) WHY="where did not answer the client off the broker: [$wj]"; return 1 ;; esac
+  case "$wj" in *'"hub": "up"'*) ;; *) WHY="where does not say hub up: [$wj]"; return 1 ;; esac
+  grep -q '^/hub/v1/node/client Bearer fcpn1.BROKER$' "$sc/hub.log" 2>/dev/null \
+    || { WHY="the broker was never asked: $(tr '\n' '|' < "$sc/hub.log" 2>/dev/null)"; return 1; }
+  ! grep -v '^/hub/' "$sc/hub.log" | grep -q 'fcpn1\.' \
+    || { WHY="the broker's token still went to the hub: $(tr '\n' '|' < "$sc/hub.log")"; return 1; }
+  WHAT="分离节点的 where 拿 broker 令牌问 broker（不再送去入口被 401）：答出 MacBook · iTerm2，hub up"
+}
+
 # A shell left open past its certificate (issue #2112): 12 hours, and only a new
 # connection (`fleet-connect.py --enter`) renewed it — a client left overnight
 # went 401 at that minute. The real client (bin/fleet → keeper) with a

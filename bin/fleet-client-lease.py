@@ -500,6 +500,37 @@ def node_env(key):
     return ""
 
 
+def node_pair(hub=""):
+    """(url, token) a node-token read goes to — ALWAYS a pair (issue #2665). A
+    token is good only at the address it came with: the credential proxy's
+    fcpn1. token at its loopback broker, never at the hub itself (the hub has
+    never seen it: 401 unrecognised enrollment token). So: CCQUOTA_TOKEN in the
+    environment with CCQUOTA_HUB_URL beside it (else hub); else node.env's token
+    with its own URL (else hub); else, separated, the broker pair whole.
+    ('', '') = no node token here."""
+    tok = os.environ.get("CCQUOTA_TOKEN") or ""
+    if tok:
+        return (os.environ.get("CCQUOTA_HUB_URL") or hub or "").rstrip("/"), tok
+    d = os.environ.get("FLEET_CONF_DIR") or os.path.join(os.path.expanduser("~"), ".config", "claude-fleet")
+    try:
+        vals = {}
+        with open(os.path.join(d, "node.env")) as f:
+            for line in f:
+                k, eq, v = line.partition("=")
+                if eq and k in ("CCQUOTA_TOKEN", "CCQUOTA_HUB_URL"):
+                    vals.setdefault(k, v.strip().strip("\"'"))
+        if vals.get("CCQUOTA_TOKEN"):
+            return (vals.get("CCQUOTA_HUB_URL") or hub or "").rstrip("/"), vals["CCQUOTA_TOKEN"]
+        return "", ""
+    except OSError:
+        pass
+    if os.path.isfile(os.path.join(d, "node.pub.env")):
+        u, t = _node_broker(d)
+        if u and t:
+            return u, t
+    return "", ""
+
+
 _BROKER = []
 
 
@@ -520,23 +551,77 @@ def _node_broker(d):
     return _BROKER[0]
 
 
+def _http_why(e):
+    """The hub's own words for an HTTPError: its JSON "error", else ''."""
+    try:
+        return (json.loads(e.read() or b"{}").get("error") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
 def read_where(fc, hub, token):
     """The person's current client — the primary — as the hub holds it, ONE JSON
     line: {"state": active|none|nohub, "lease": {...}, "clients": [...],
     "primary": id} (an older hub: no clients). A node asks with its own
-    token (GET /v1/node/client — its owner's); a client machine with its
-    connection certificate (or hub token). Exit 1 = the hub could not be asked ·
-    4 = it answered 401: it refused this machine's credential (issue #2112)."""
-    ntok = os.environ.get("CCQUOTA_TOKEN") or node_env("CCQUOTA_TOKEN")
-    hub = hub or os.environ.get("CCQUOTA_HUB_URL") or node_env("CCQUOTA_HUB_URL")
-    if not hub:
+    token (GET /v1/node/client — its owner's) at the address that token belongs
+    to (node_pair, #2665); a client machine with its connection certificate (or
+    hub token). A node token the hub refuses (401) is not the end: the
+    certificate is asked next, and the answer carries "node_token": "refused:
+    <the hub's words>" so the doctor can say the token is wrong (#2665).
+    Exit 1 = the hub could not be asked · 4 = it answered 401 to every
+    credential here (issue #2112) — stdout is then {"state": "refused", "why":
+    <the hub's words>}."""
+    nurl, ntok = node_pair(hub)
+    hub = hub or nurl
+    if not hub and not nurl:
         print(json.dumps({"state": "nohub"}))
         return 0
     tmo = float(os.environ.get("FLEET_CLIENT_LEASE_TIMEOUT") or 5)
-    if ntok:
-        req = urllib.request.Request(hub.rstrip("/") + "/v1/node/client", method="GET",
+    node_refused = ""
+
+    def ask(req):
+        with urllib.request.urlopen(req, timeout=tmo) as r:
+            return json.loads(r.read() or b"{}")
+
+    def failed(e, what):
+        if isinstance(e, urllib.error.HTTPError):
+            if e.code == 404:
+                print(json.dumps({"state": "nohub"}))   # a hub without the lease
+                return 0
+            why = _http_why(e)
+            sys.stderr.write("fleet-client-lease: hub answered HTTP %d%s (%s)\n"
+                             % (e.code, (" — " + why) if why else "", what))
+            if e.code == 401:
+                # the hub is up and REFUSED this machine's credential (an orphaned
+                # key id, an expired certificate) — not out of reach (issue #2112)
+                rec = {"state": "refused", "why": why or "HTTP 401"}
+                if node_refused:
+                    rec["node_token"] = "refused: " + node_refused
+                print(json.dumps(rec, ensure_ascii=False))
+                return 4
+            return 1
+        sys.stderr.write("fleet-client-lease: %s\n" % e)
+        return 1
+
+    d = None
+    if ntok and nurl:
+        req = urllib.request.Request(nurl + "/v1/node/client", method="GET",
                                      headers={"Authorization": "Bearer " + ntok})
-    else:
+        try:
+            d = ask(req)
+        except urllib.error.HTTPError as e:
+            if e.code != 401:
+                return failed(e, "node token")
+            node_refused = _http_why(e) or "HTTP 401"
+            sys.stderr.write("fleet-client-lease: the hub refused the node token (%s) — asking with the "
+                             "certificate\n" % node_refused)
+        except (OSError, ValueError) as e:
+            return failed(e, "node token")
+    if d is None:
+        if not hub:
+            print(json.dumps({"state": "refused", "why": node_refused, "node_token": "refused: " + node_refused},
+                             ensure_ascii=False))
+            return 4
         body = {"action": "get"}
         headers = {"Content-Type": "application/json"}
         if token:
@@ -547,31 +632,23 @@ def read_where(fc, hub, token):
                 cert, sig = fc.ssh_sign("fleet-client %d" % ts, NAMESPACE)
             except fc.Refused as e:
                 sys.stderr.write("fleet-client-lease: %s\n" % e)
+                if node_refused:
+                    print(json.dumps({"state": "refused", "why": node_refused,
+                                      "node_token": "refused: " + node_refused}, ensure_ascii=False))
+                    return 4
                 return 1
             body.update(cert=cert, sig=sig, ts=ts)
         req = urllib.request.Request(hub.rstrip("/") + PATH, data=json.dumps(body).encode(), method="POST",
                                      headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=tmo) as r:
-            d = json.loads(r.read() or b"{}")
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            print(json.dumps({"state": "nohub"}))   # a hub without the lease
-            return 0
-        why = ""
         try:
-            why = (json.loads(e.read() or b"{}").get("error") or "").strip()
-        except (OSError, ValueError, AttributeError):
-            pass
-        sys.stderr.write("fleet-client-lease: hub answered HTTP %d%s\n" % (e.code, (" — " + why) if why else ""))
-        # 401: the hub is up and REFUSED this machine's credential (an orphaned
-        # key id, an expired certificate) — not out of reach (issue #2112)
-        return 4 if e.code == 401 else 1
-    except (OSError, ValueError) as e:
-        sys.stderr.write("fleet-client-lease: %s\n" % e)
-        return 1
-    print(json.dumps({"state": d.get("state") or "none", "lease": d.get("lease") or None,
-                      "clients": d.get("clients") or [], "primary": d.get("primary") or ""}, ensure_ascii=False))
+            d = ask(req)
+        except (urllib.error.HTTPError, OSError, ValueError) as e:
+            return failed(e, "certificate" if not token else "hub token")
+    rec = {"state": d.get("state") or "none", "lease": d.get("lease") or None,
+           "clients": d.get("clients") or [], "primary": d.get("primary") or ""}
+    if node_refused:
+        rec["node_token"] = "refused: " + node_refused
+    print(json.dumps(rec, ensure_ascii=False))
     return 0
 
 

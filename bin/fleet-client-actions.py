@@ -100,10 +100,11 @@ def lease_module():
 
 def send(a):
     fl = lease_module()
-    ntok = os.environ.get("CCQUOTA_TOKEN") or fl.node_env("CCQUOTA_TOKEN")
     fc = fl.connect_module()
-    hub = (os.environ.get("FLEET_HUB_URL") or fc.machine_conf_hub() or fc.load_hub_conf().get("url")
-           or os.environ.get("CCQUOTA_HUB_URL") or fl.node_env("CCQUOTA_HUB_URL") or "")
+    # the node token at the address it belongs to — separated, the credential
+    # proxy's broker, never the hub itself (issue #2665)
+    hub, ntok = fl.node_pair(os.environ.get("FLEET_HUB_URL") or fc.machine_conf_hub()
+                             or fc.load_hub_conf().get("url") or "")
     if not hub or not ntok:
         print(json.dumps({"state": "nohub"}))
         return 0
@@ -146,7 +147,8 @@ def send(a):
         if e.code == 404:
             print(json.dumps({"state": "nohub"}))   # a hub from before #1717
             return 0
-        sys.stderr.write("fleet-client-actions: hub answered HTTP %d\n" % e.code)
+        why = fl._http_why(e)
+        sys.stderr.write("fleet-client-actions: hub answered HTTP %d%s\n" % (e.code, (" — " + why) if why else ""))
         return 1
     except (OSError, ValueError) as e:
         sys.stderr.write("fleet-client-actions: %s\n" % e)

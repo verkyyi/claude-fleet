@@ -8,7 +8,7 @@
 #                                              verkyyi-iphone · iOS · Termius（客户端在 m5 上运行）· 能：给链接
 #                                              MacBook · macOS · iTerm2 3.6 · 能：… · 也开着：verkyyi-iphone
 #   fleet-client-where.sh --json    {"state","device","os","terminal","caps","since","via","host","source","hub",
-#                                    "clients","primary"}
+#                                    "clients","primary"[,"hub_why"][,"node_token"]}
 #
 # A person may hold several clients at once (issue #1932, EPIC #1906 C13): where
 # they are is the PRIMARY — the one typed into or tapped last (a client idle past
@@ -33,6 +33,9 @@
 # an orphaned key id, an expired certificate; issue #2112) — the status bar's
 # 「⌂ … · 入口连不上」 / 「入口不认这台电脑 · 请重新扫码」 (fleet-client-badge.sh,
 # issue #1779) reads it here. A refused hub falls back to local like a down one.
+# `hub_why` (refused only) is the hub's own words for the 401; `node_token`
+# ("refused: <words>") says the node token was refused and the certificate
+# answered instead (issue #2665) — both also land in the doctor's `hubauth` row.
 # Nothing is cached: every call reads the source afresh, so a takeover shows on
 # the very next call.
 #
@@ -62,6 +65,21 @@ HUBREAD=''
 hrc=0
 HUBREAD=$(${FLEET_CLIENT_WHERE_CMD:-python3 "$BIN/fleet-client-lease.py" where} 2>/dev/null) || hrc=$?
 
+# A refused credential is the doctor's `hubauth` row (issue #2665): the node
+# token the hub would not take (the read then asked with the certificate), or a
+# 401 to everything. fleet-lib is sourced only when there is something to note —
+# a refusal, or an older refusal of ours to clear.
+_haw=$(printf '%s' "$HUBREAD" | sed -n 's/.*"node_token": *"refused: \([^"]*\)".*/node token: \1/p')
+[ -n "$_haw" ] || [ "$hrc" != 4 ] || _haw=$(printf '%s' "$HUBREAD" | sed -n 's/.*"why": *"\([^"]*\)".*/\1/p')
+[ -n "$_haw" ] || [ "$hrc" != 4 ] || _haw='HTTP 401'
+if [ -f "$BIN/fleet-lib.sh" ] && [ -z "${FLEET_CLIENT_WHERE_CMD:-}${FLEET_CLIENT_WHERE_NOTE_OFF:-}" ]; then
+  if [ -n "$_haw" ]; then
+    bash -c '. "$1/fleet-lib.sh" && fleet_hub_auth_note client-where fail "$2"' _ "$BIN" "$_haw" >/dev/null 2>&1
+  elif [ "$hrc" = 0 ] && grep -q '^client-where	' "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/hub_auth_fail" 2>/dev/null; then
+    bash -c '. "$1/fleet-lib.sh" && fleet_hub_auth_note client-where ok' _ "$BIN" >/dev/null 2>&1
+  fi
+fi
+
 SESS="${FLEET_SHELL_SESSION:-fleet-shell}"
 case "$SESS" in ''|*[!A-Za-z0-9._-]*) SESS=fleet-shell ;; esac
 CL_DIR="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}/tmp"
@@ -88,7 +106,16 @@ def iso(t):
 
 
 HUB = "up"
+HUB_WHY, NODE_TOKEN = "", ""
 CLIENTS, PRIMARY = [], ""
+try:
+    _d = json.loads(os.environ.get("HUBREAD") or "{}")
+    if isinstance(_d, dict):
+        # the hub's own words for a 401 (#2665): to everything (hub_why), or to
+        # the node token alone while the certificate still answered (node_token)
+        HUB_WHY, NODE_TOKEN = str(_d.get("why") or ""), str(_d.get("node_token") or "")
+except ValueError:
+    pass
 
 
 def from_hub():
@@ -154,6 +181,10 @@ for k in KEYS:
     v = w.get(k)
     out[k] = list(v or []) if k == "caps" else (v or "")
 out["hub"] = HUB
+if HUB == "refused" and HUB_WHY:
+    out["hub_why"] = HUB_WHY
+if NODE_TOKEN:
+    out["node_token"] = NODE_TOKEN
 if state == "active" and not CLIENTS:
     CLIENTS = [dict(w)]   # no hub: the client in use here
 out["clients"], out["primary"] = CLIENTS, PRIMARY
