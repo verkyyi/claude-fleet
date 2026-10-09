@@ -11,6 +11,9 @@
 #   E  the deadline: 4h default, a duration, a night ask / a night deadline → 09:00
 #   F  a human reply / a direct-route 「决定」 answers a row; a worker's own note does not
 #   G  render --demo: the table + the fleet:decision marker
+#   H  `decided` (issue #2679): 3 默认拍板 on the day across two EPICs (one a record
+#      from before the marker had fields) → the section's 3 lines, each a 翻案 link
+#      to the asking comment; yesterday's record and a repeated EPIC add nothing
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
 PY="$BIN/fleet_decision.py"
@@ -163,5 +166,41 @@ grep -q '^| # | 事项 | 建议 | 不答按 | 截止 | 来源 |$' "$WORK/g" || f
 grep -q '永不默认：花钱' "$WORK/g" && grep -q '永不默认：对外发布' "$WORK/g" || fail "G: never rows not marked" "$(cat "$WORK/g")"
 grep -q '^<!-- fleet:decision v=1 id=demo -->$' "$WORK/g" || fail "G: no fleet:decision marker"
 ok "G render --demo: the table, never rows marked, the fleet:decision marker"
+
+# --- H ---------------------------------------------------------------------------
+grep -q 'fleet:default-decided row=[^ ]* src=gh%3Aacme%2Fapp%23501 item=.* ask=https' "$GHDIR/acme_app#500.json" \
+  || fail "H: the record marker carries no src / item / ask" "$(cat "$GHDIR/acme_app#500.json")"
+d record --parent acme/app#500 --row '{"id":"h-2","src":"gh:acme/app#504","item":"先修哪条？","default":"先修 A","suggest":"先修 A","due":"2026-10-09T15:00:00+08:00","url":"https://github.com/acme/app/issues/504#issuecomment-7"}' >/dev/null \
+  || fail "H: record failed"
+python3 - "$GHDIR" <<'P2'
+import json, os, sys
+d = sys.argv[1]
+def add(n, body, at, cid):
+    f = os.path.join(d, "acme_app#%s.json" % n)
+    c = json.load(open(f)) if os.path.exists(f) else []
+    c.append({"body": body, "createdAt": at, "url": "https://github.com/acme/app/issues/%s#issuecomment-%s" % (n, cid)})
+    json.dump(c, open(f, "w"), ensure_ascii=False)
+old = ("默认拍板：acme/app#601「旧格式的问题？」→ 按「好」\n\n建议：好 · 截止：10-09 09:00 · 原话："
+       "https://github.com/acme/app/issues/601#issuecomment-5\n\n<!-- fleet:default-decided row=%s -->")
+add(600, old % "h-3", "2026-10-09T01:30:00Z", 61)     # 09:30 on the 9th, Shanghai
+add(500, old % "h-0", "2026-10-08T03:00:00Z", 62)     # the 8th: not today's
+P2
+printf '#!/bin/sh\nprintf "gh:acme/app#500\\ngh:acme/app#600\\nacme/app#500\\n"\n' > "$WORK/epics"; chmod +x "$WORK/epics"
+FLEET_DECISION_EPICS_CMD="$WORK/epics" d decided --date 2026-10-09 > "$WORK/h" || fail "H: decided failed" "$(cat "$WORK/h")"
+[ "$(grep -c '^- ' "$WORK/h")" = 3 ] || fail "H: want 3 lines for 3 records" "$(cat "$WORK/h")"
+[ "$(grep -c '^- .*· \[翻案\](https://github.com/acme/app/issues/[0-9]*#issuecomment-[0-9]*)$' "$WORK/h")" = 3 ] \
+  || fail "H: every line carries its 翻案 link" "$(cat "$WORK/h")"
+grep -q '（10-09 · 3 条）' "$WORK/h" || fail "H: the head does not count 3" "$(cat "$WORK/h")"
+grep -q '^- 09:30 默认拍板：acme/app#601「旧格式的问题？」.*issues/601#issuecomment-5)$' "$WORK/h" \
+  || fail "H: an old record reads its own first line + its 原话 link" "$(cat "$WORK/h")"
+grep -q '^- 20:00 acme/app#501「试水名单先发 20 家还是 50 家？」→ 按「20 家」 · \[翻案\](https://github.com/acme/app/issues/501#issuecomment-100)$' "$WORK/h" \
+  || fail "H: the B record's line" "$(cat "$WORK/h")"
+[ "$(FLEET_DECISION_EPICS_CMD="$WORK/epics" d decided --date 2026-10-09 --json | wc -l | tr -d ' ')" = 3 ] \
+  || fail "H: --json is not 3 rows"
+[ "$(FLEET_DECISION_EPICS_CMD="$WORK/epics" d decided --date 2026-10-08 | grep -c '^- ')" = 1 ] \
+  || fail "H: the 8th has its one record"
+FLEET_DECISION_EPICS_CMD="$WORK/epics" d decided --date 2026-10-07 | grep -q '这一天没有按建议默认定下的事' \
+  || fail "H: an empty day says so"
+ok "H decided: 3 默认拍板 that day → 3 lines with 翻案 links (an old record too); other days and a repeated EPIC add nothing"
 
 printf 'fleet-decision-selftest: %d passed\n' "$pass"

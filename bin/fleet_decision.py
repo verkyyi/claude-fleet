@@ -20,6 +20,7 @@ is never defaulted; neither is a `never` row, whatever its caller declared.
     fleet_decision.py render [--demo] [--rows FILE|-] [--id UUID]           → Markdown table + marker
     fleet_decision.py due    [--rows FILE|- | --repo R --issue N…] [--now ISO] [--apply]
     fleet_decision.py record --row JSON --parent owner/repo#N               → 「默认拍板」 on the parent
+    fleet_decision.py decided [--date D] [--epic gh:R#N…] [--repo R…] [--json]  → that day's 默认拍板, one line each
 
 `due --apply` answers each due row on its own issue (fleet-comment.sh
 --to-worker, marker `fleet:answer row=<id> by=default`) and records it on the
@@ -28,6 +29,14 @@ once: a row already answered or recorded is skipped. Seams for the selftest:
 FLEET_DECISION_COMMENTS_CMD (prints an issue's comments JSON: argv + repo N),
 FLEET_DECISION_POST_CMD (posts: argv + repo N mode, body on stdin),
 FLEET_DECISION_PARENT_CMD (prints `owner/repo#N` or nothing: argv + repo N).
+
+`decided` (issue #2679, EPIC #2668 R3) is the daily brief's section 「替你按建议定了
+什么」: every `fleet:default-decided` record posted on the person's day (their zone),
+read off the EPIC tickets through fleet-ticket.sh — the ones named with --epic, else
+every `epic` ticket of the hosted repos updated since that day plus the running
+marks. One line per record, its 翻案 link the asking comment on the original ticket;
+so the count is exactly the records on the tickets. Seam: FLEET_DECISION_EPICS_CMD
+(prints one `gh:owner/repo#N` per line: argv + the date).
 """
 import argparse
 import datetime as dt
@@ -49,6 +58,8 @@ ASK_HEAD = {"question": "⛔ blocked: ", "permission": "⛔ blocked — needs au
 ASK_RE = re.compile(r"<!-- fleet:ask v=(\d+) ([^>]*?) ?-->")
 ANSWER_RE = re.compile(r"<!-- fleet:answer row=([A-Za-z0-9-]+)")
 RECORD_RE = re.compile(r"<!-- fleet:default-decided row=([A-Za-z0-9-]+)")
+RECORD_FIELDS_RE = re.compile(r"<!-- fleet:default-decided ([^>]*?) ?-->")
+TICKET_RE = re.compile(r"^(?:gh:)?([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#(\d+)$")
 FROM_MARK = "<!-- fleet:from "
 URL_RE = re.compile(r"https://github\.com/([^/\s]+/[^/\s]+)/issues/(\d+)")
 WAIT = None          # a row whose default is WAIT reads 「等你」 and is never defaulted
@@ -344,7 +355,7 @@ def _seam(name, argv, **kw):
 def fetch_comments(repo, number):
     r = _seam("FLEET_DECISION_COMMENTS_CMD", [repo, str(number)])
     if r is None:
-        r = subprocess.run(["bash", str(BIN / "fleet-gh.sh"), "issue", "view", str(number), "--repo", repo,
+        r = subprocess.run(["bash", str(BIN / "fleet-ticket.sh"), "read", "gh:%s#%s" % (repo, number),
                             "--json", "comments", "--max-age", "60"],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
     if r.returncode != 0:
@@ -401,7 +412,16 @@ def record_body(row):
                       tr("decision_record_why_fmt", row.get("suggest") or "—", show_time(parse_time(row["due"])),
                          row.get("url", "")),
                       tr("decision_record_undo_fmt", "%s#%s" % (repo, n)), "",
-                      "<!-- fleet:default-decided row=%s -->" % row["id"]])
+                      record_marker(row)])
+
+
+def record_marker(row):
+    """`row=` first (RECORD_RE, the once-only check), then what the daily brief
+    prints without re-reading the worker's ticket (issue #2679)."""
+    keys = (("src", row.get("src", "")), ("item", row.get("item", "")), ("default", row.get("default", "")),
+            ("ask", row.get("url", "")))
+    return "<!-- fleet:default-decided row=%s %s -->" % (
+        row["id"], " ".join("%s=%s" % (k, quote(str(v), safe="")) for k, v in keys))
 
 
 def record(row, parent):
@@ -428,6 +448,108 @@ def apply_due(row):
     recorded = record(row, parent) if parent else None
     return {"id": row["id"], "answered": answered, "recorded": recorded,
             "parent": "%s#%s" % parent if parent else None}
+
+
+# ---- the day's 默认拍板 (issue #2679) ---------------------------------------------
+
+def _record_fields(body):
+    m = RECORD_FIELDS_RE.search(body)
+    kv = {}
+    for pair in (m.group(1).split() if m else []):
+        k, _, v = pair.partition("=")
+        kv[k] = unquote(v)
+    return kv
+
+
+def decided_rows(comments, epic, day):
+    """The records on one EPIC posted on `day` (a date in the person's zone)."""
+    out = []
+    for c in comments:
+        body = c.get("body") or ""
+        if not RECORD_RE.search(body) or not c.get("createdAt"):
+            continue
+        at = parse_time(c["createdAt"])
+        if at.date() != day:
+            continue
+        kv = _record_fields(body)
+        first = body.split("\n", 1)[0].strip()
+        if not kv.get("ask"):                      # a record from before the fields: 「原话：<url>」
+            m = re.search(r"https://github\.com/\S+/issues/\d+#issuecomment-\d+", body)
+            kv["ask"] = m.group(0) if m else ""
+        out.append({"id": kv.get("row", ""), "at": iso(at), "epic": epic, "src": kv.get("src", ""),
+                    "item": kv.get("item", ""), "default": kv.get("default", ""), "line": first,
+                    "undo": kv.get("ask") or c.get("url") or "", "record": c.get("url") or ""})
+    return out
+
+
+def _sh_lines(argv):
+    try:
+        r = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+                           timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [x.strip() for x in r.stdout.splitlines() if x.strip()] if r.returncode == 0 else []
+
+
+def day_epics(day, repos):
+    """Every EPIC ticket a record of `day` can sit on: `epic` tickets updated since
+    that day in each hosted repo (a record bumps its EPIC's updatedAt), plus the
+    running marks (global/epic-running.d)."""
+    r = _seam("FLEET_DECISION_EPICS_CMD", [day.isoformat()])
+    if r is not None:
+        return [x.strip() for x in r.stdout.splitlines() if x.strip()]
+    if not repos:
+        repos = _sh_lines(["bash", "-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_repos "${FLEET_SESSION:-fleet}"',
+                           "_", str(BIN)])
+    out = []
+    for repo in repos:
+        for line in _sh_lines(["bash", str(BIN / "fleet-ticket.sh"), "list", "--repo", repo, "--label", "epic",
+                               "--state", "all", "--since", (day - dt.timedelta(days=1)).isoformat()]):
+            out.append(line.split("\t", 1)[0])
+    gd = Path(os.environ.get("FLEET_CONF_DIR") or (Path.home() / ".config" / "claude-fleet")) / "global"
+    for f in sorted((gd / "epic-running.d").glob("*")):
+        try:
+            kv = dict(line.split(": ", 1) for line in f.read_text().splitlines() if ": " in line)
+        except (OSError, ValueError):
+            continue
+        e, rp = kv.get("epic", "").strip(), kv.get("repo", "").strip()
+        if e.isdigit() and "/" in rp:
+            out.append("gh:%s#%s" % (rp, e))
+    return out
+
+
+def decided(day, epics):
+    seen, rows, failed = set(), [], []
+    for e in epics:
+        m = TICKET_RE.match(e)
+        if not m or (m.group(1), m.group(2)) in seen:
+            continue
+        seen.add((m.group(1), m.group(2)))
+        try:
+            got = decided_rows(fetch_comments(m.group(1), m.group(2)), "gh:%s#%s" % (m.group(1), m.group(2)), day)
+        except (RuntimeError, ValueError, subprocess.SubprocessError) as err:
+            failed.append("%s: %s" % (e, err))
+            continue
+        rows += [x for x in got if not x["id"] or x["id"] not in {y["id"] for y in rows}]
+    rows.sort(key=lambda x: x["at"])
+    return rows, failed
+
+
+def decided_md(rows, day):
+    out = ["### " + tr("decision_digest_head_fmt", day.strftime("%m-%d"), len(rows))]
+    if not rows:
+        return "\n".join(out + ["", tr("decision_digest_none")])
+    out.append("")
+    for x in rows:
+        hm = parse_time(x["at"]).strftime("%H:%M")
+        if x["item"]:
+            src = x["src"][3:] if x["src"].startswith("gh:") else x["src"]
+            what = tr("decision_digest_line_fmt", src, x["item"], x["default"])
+        else:
+            what = x["line"]
+        link = " · [%s](%s)" % (tr("decision_digest_undo"), x["undo"]) if x["undo"] else ""
+        out.append("- %s %s%s" % (hm, _cell(what), link))
+    return "\n".join(out)
 
 
 # ---- CLI -----------------------------------------------------------------------
@@ -473,6 +595,11 @@ def main(argv=None):
     c = sub.add_parser("record")
     c.add_argument("--row", required=True)
     c.add_argument("--parent", required=True)
+    k = sub.add_parser("decided")
+    k.add_argument("--date")
+    k.add_argument("--epic", action="append", default=[])
+    k.add_argument("--repo", action="append", default=[])
+    k.add_argument("--json", action="store_true")
     o = ap.parse_args(argv)
 
     if o.cmd == "ask-body":
@@ -517,6 +644,22 @@ def main(argv=None):
             ap.error("--parent is owner/repo#N")
         out = record(row, (m.group(1), m.group(2)))
         print(out or "already recorded")
+    elif o.cmd == "decided":
+        m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", o.date or "")
+        if o.date and not m:
+            ap.error("--date is YYYY-MM-DD")
+        try:
+            day = dt.date(*map(int, m.groups())) if m else now_local().date()
+        except ValueError:
+            ap.error("--date is YYYY-MM-DD")
+        rows, failed = decided(day, o.epic or day_epics(day, o.repo))
+        for f in failed:
+            print("fleet_decision: cannot read %s" % f, file=sys.stderr)
+        if o.json:
+            _emit(rows)
+        else:
+            print(decided_md(rows, day))
+        return 1 if failed else 0
     else:
         ap.print_help(sys.stderr)
         return 2
