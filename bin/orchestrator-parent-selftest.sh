@@ -18,6 +18,10 @@
 #      fleet-children.sh run IN the orchestrator's pane lists it (no key argument).
 #   E  fleet-peer-send.sh accepts `orchestrator` as an address (not a window name).
 #   F  the MCP `send` accepts `to: orchestrator`; `parent_window` accepts it.
+#   G  issue #2623: `--origin hub` from the orchestrator's pane is still its child
+#      (canon → `orchestrator`; elsewhere still empty; the gate never refuses `hub`),
+#      and a NO-REPO child (a batch driver) is booked by its @fleet_id and listed by
+#      fleet-children.sh under its window name.
 # tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -117,6 +121,28 @@ print("ok")
 PY
 )
 ok; [ "$r" = ok ] || fail "F: the MCP send / parent accept orchestrator" "$r"
+
+# --- G: a driver the orchestrator starts with --origin hub (issue #2623) -----------
+r=$(lib '' '' fleet_origin_canon hub orchestrator "$L");       ok; [ "$r" = orchestrator ] || fail "G: hub from the orchestrator's pane → orchestrator" "$r"
+r=$(lib '' '' fleet_origin_canon hub acme-app:issue-7 "$L");   ok; [ -z "$r" ] || fail "G: hub from a worker's pane stays empty (#896)" "$r"
+tf set-window-option -t "$wo" -u @fleet_role
+r=$(lib '' '' fleet_origin_gate "$L" hub orchestrator); rc=$?; ok; [ "$rc" = 0 ] || fail "G: the gate never refuses an explicit hub" "$rc:$r"
+tf set-window-option -t "$wo" @fleet_role orchestrator
+wd=$(tf new-window -d -P -F '#{window_id}' -n '批次·驱动' -c "$WORK" 'while :; do sleep 300; done')
+tf set-window-option -t "$wd" @norepo 1
+tf set-window-option -t "$wd" @origin orchestrator
+tf set-window-option -t "$wd" @claude_state 'done'
+dfid=11111111-2222-4333-8444-555555555555
+tf set-window-option -t "$wd" @fleet_id "$dfid"
+bash "$BIN/fleet-report-parent.sh" -L "$L" --win "$wd" --state merged --summary 'batch closed' >/dev/null 2>&1
+ok; grep -q "\"child\": *\"$dfid\"" "$LEDGER" 2>/dev/null || fail "G: the no-repo child's report is booked under its fleet_id" "$(cat "$LEDGER" 2>/dev/null)"
+r=$(TMUX="$INTMUX" TMUX_PANE="$po" bash "$BIN/fleet-children.sh" -L "$L" --json 2>&1)
+ok; printf '%s' "$r" | python3 -c '
+import json, sys
+kids = {k["child"]: k for k in json.load(sys.stdin)["children"]}
+k = kids[sys.argv[1]]
+assert k["live"] and k["title"] == "批次·驱动" and (k.get("settled") or k["last"])["state"] == "MERGED", k
+' "$dfid" 2>/dev/null || fail "G: fleet-children.sh --json lists the no-repo child by name, merged" "$r"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'orchestrator-parent selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

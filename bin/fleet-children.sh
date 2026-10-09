@@ -116,6 +116,9 @@ rows() {
                    [ -n "$key" ] && key="$pre$key" ;;
       *) key="${pre}issue-$iss" ;;
     esac
+    # A spawned session with no key (no repo — a batch driver, issue #2623) is
+    # listed by its identity, the key its reports are booked under.
+    [ -n "$key" ] || { [ -n "$origin" ] && fleet_is_fid "$fid" && key=$fid; }
     [ -n "$key" ] || continue
     # A `done` child whose @loop still holds a round is between /loop rounds, not
     # finished (issue #1331) — report it as the `looping` it is.
