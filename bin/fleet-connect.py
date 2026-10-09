@@ -1037,6 +1037,9 @@ def enter(want, hub, token, verbose, retest, print_only, ssh_args, ssh_opts=(), 
     return connect(name, hub, token, verbose, retest, print_only, ssh_args, info=home, ssh_opts=ssh_opts)
 
 
+CERT_WARN_UNDER = 3600  # the doctor's cert row WARNs inside the certificate's last hour
+
+
 def cert_check(hub, timeout=6):
     """--cert-check: (verdict, text) for the doctor's `cert` row, or None
     when there is no certificate here."""
@@ -1067,6 +1070,10 @@ def cert_check(hub, timeout=6):
     what = "principal %s · 有效至 %s" % (principals, until)
     if left is not None and left <= 0:
         return "FAIL", "%s（已过期）— 跑 `fleet login renew`" % what
+    # Inside its last hour (claude-fleet#2630): a running client's keeper renews it
+    # by now (#2112); still this close means no client renewed it.
+    if left is not None and left < CERT_WARN_UNDER:
+        return "WARN", "%s（剩 %d 分钟）— 开着的客户端会自动续；没开客户端就跑 `fleet login renew`" % (what, max(1, int(left // 60)))
     if not hub:
         return "PASS", "%s · 没有入口，未探" % what
     try:

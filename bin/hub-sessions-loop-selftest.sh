@@ -17,8 +17,20 @@
 #      a fresh cache; `loop none`, rc 1, with none; `off` with the hub off
 #   E. systemd parity    — claude-fleet-collect.service says KillMode=process, and
 #      fleet-doctor reads --status (the `hub-sessions` row)
-# Drives bin/fleet-hub-sessions.sh, names bin/tmux-dash-collect.sh (its caller) and
-# bin/fleet-doctor.sh.
+#   F. two loops at once — two `--loop` started together (two shells' --ensure
+#      racing past one pid file, issue #2630): ONE stays, it holds
+#      global/hubsess.lock, and --status names it
+#   G. no nohup          — a `nohup` that exits (macOS's, under a LaunchDaemon:
+#      「can't detach from console」) is on PATH: --ensure still starts a loop
+#   H. node token + 401  — against a 127.0.0.1 hub: the node token from node.env
+#      goes out first, as a bearer; refused, the round records
+#      global/hub_auth_fail (`hub-sessions`), and the next round that stands
+#      clears it; the token never appears in curl's argv
+#   I. doctor            — a cache older than FLEET_HUB_SESSIONS_FAIL_SECS is a
+#      `hub-sessions` FAIL; a reader refused past FLEET_HUB_AUTH_FAIL_SECS is a
+#      `hubauth` FAIL (younger: WARN)
+# Drives bin/fleet-hub-sessions.sh, names bin/tmux-dash-collect.sh (its caller),
+# bin/fleet-doctor.sh and bin/fleet-lib.sh (fleet_hub_auth_note).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -29,7 +41,8 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/hubloop-selftest.XXXXXX")" || exit 2
 S="hubl$$"
 G="$WORK/.claude-dash/global"
 killloop() { local p; { read -r p < "$G/hubsess.pid"; } 2>/dev/null && kill "$p" 2>/dev/null; :; }
-cleanup() { killloop; rm -rf "$WORK"; }
+HUBPID=''
+cleanup() { killloop; [ -z "$HUBPID" ] || kill "$HUBPID" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 unset CCQUOTA_FLEET CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_CMD FLEET_NODE_ALIASES \
       FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_STALE FLEET_HUB_SESSIONS_CLIENT TMUX TMUX_PANE \
@@ -111,5 +124,96 @@ CHECKS=$((CHECKS+1)); grep -q 'fleet-hub-sessions.sh" --status' "$BIN/fleet-doct
   || fail "E: fleet-doctor must read fleet-hub-sessions.sh --status"
 CHECKS=$((CHECKS+1)); grep -q 'fleet-hub-sessions.sh" --ensure' "$BIN/tmux-dash-collect.sh" \
   || fail "E: the collector no longer runs --ensure every tick"
+
+# --- F: two loops at once --------------------------------------------------------
+killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || fail "F: could not stop the leg-C loop"
+bash "$HUBS" --loop & bash "$HUBS" --loop &
+sleep 2
+n=$(pgrep -f "^bash $HUBS --loop" | wc -l | tr -d ' ')
+CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || fail "F: two --loop started together — $n stayed, want 1" "$(pgrep -fl "^bash $HUBS --loop")"
+read -r LP < "$G/hubsess.lock"
+CHECKS=$((CHECKS+1)); [ "$LP" = "$(pgrep -f "^bash $HUBS --loop")" ] || fail "F: the lock names $LP, the loop is $(pgrep -f "^bash $HUBS --loop")"
+out=$(bash "$HUBS" --status 2>&1)
+case "$out" in "loop $LP · "*) : ;; *) fail "F: --status does not name the lock holder $LP" "$out" ;; esac
+CHECKS=$((CHECKS+1))
+kill "$LP" 2>/dev/null; wait 2>/dev/null
+wait_for 5 sh -c '! kill -0 "$1" 2>/dev/null' _ "$LP" || fail "F: could not stop the loop"
+out=$(bash "$HUBS" --status 2>&1)
+case "$out" in 'loop none'*) : ;; *) fail "F: a killed holder still reads as the loop (the lock must die with it)" "$out" ;; esac
+CHECKS=$((CHECKS+1))
+
+# --- G: a nohup that cannot detach ---------------------------------------------------
+printf '#!/bin/sh\necho "nohup: can'"'"'t detach from console" >&2\nexit 127\n' > "$WORK/bin/nohup"; chmod +x "$WORK/bin/nohup"
+bash "$HUBS" --ensure
+wait_for 5 sh -c 'pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || fail "G: with a nohup that exits, --ensure started no loop (the LaunchDaemon case)"
+CHECKS=$((CHECKS+1))
+CHECKS=$((CHECKS+1)); sed -n '/^ensure() {/,/^}/p' "$HUBS" | grep -q nohup && fail "G: ensure() must not go through nohup"
+rm -f "$WORK/bin/nohup"
+killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || fail "G: could not stop the loop"
+
+# --- H: the node token first, and a refusal on record --------------------------------
+cat > "$WORK/hub.py" <<'PY'
+import http.server, os, sys
+work = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def answer(self):
+        auth = self.headers.get("Authorization", "")
+        with open(os.path.join(work, "hub.auth"), "a") as f:
+            f.write(self.path + " " + auth + "\n")
+        ok = os.path.exists(os.path.join(work, "hub.open")) and auth == "Bearer node-tok-2630"
+        body = b'{"machines": [], "sessions": [], "nodes": [], "per_account": []}' if ok else b'{"error":"a viewer token is required"}'
+        self.send_response(200 if ok else 401)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    do_GET = answer
+    do_POST = answer
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(work, "hub.port"), "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY
+python3 "$WORK/hub.py" "$WORK" & HUBPID=$!
+wait_for 5 test -s "$WORK/hub.port" || fail "H: the 127.0.0.1 test hub did not start"
+printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=node-tok-2630\n' "$(cat "$WORK/hub.port")" > "$WORK/conf/node.env"
+chmod 600 "$WORK/conf/node.env"
+# curl on PATH that records its argv, then runs the real one
+REALCURL=$(command -v curl)
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/curl.argv"\nexec "%s" "$@"\n' "$WORK" "$REALCURL" > "$WORK/bin/curl"; chmod +x "$WORK/bin/curl"
+out=$(env -u FLEET_HUB_SESSIONS_CMD CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/hub.port")" FLEET_CERT="$WORK/no-cert" HOME="$WORK" \
+      bash "$HUBS" --identity 2>&1)
+case "$out" in "node $WORK/conf/node.env") : ;; *) fail "H: --identity must name the node token first" "$out" ;; esac
+CHECKS=$((CHECKS+1))
+env -u FLEET_HUB_SESSIONS_CMD CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/hub.port")" FLEET_CERT="$WORK/no-cert" HOME="$WORK" \
+  bash "$HUBS" --refresh >/dev/null 2>&1
+CHECKS=$((CHECKS+1)); grep -q '^/v1/fleet/fleet_sessions Bearer node-tok-2630$' "$WORK/hub.auth" \
+  || fail "H: the node token did not go out as the bearer" "$(cat "$WORK/hub.auth" 2>/dev/null)"
+CHECKS=$((CHECKS+1)); grep -q $'^hub-sessions\t[0-9]*\t[0-9]*\tHTTP 401' "$G/hub_auth_fail" 2>/dev/null \
+  || fail "H: a refused round must be recorded in global/hub_auth_fail" "$(cat "$G/hub_auth_fail" 2>/dev/null)"
+CHECKS=$((CHECKS+1)); grep -q 'node-tok-2630' "$WORK/curl.argv" && fail "H: the node token is in curl's argv" "$(cat "$WORK/curl.argv")"
+: > "$WORK/hub.open"
+env -u FLEET_HUB_SESSIONS_CMD CCQUOTA_HUB_URL="http://127.0.0.1:$(cat "$WORK/hub.port")" FLEET_CERT="$WORK/no-cert" HOME="$WORK" \
+  FLEET_HUB_SESSIONS_NODE_REFUSED_TTL=0 bash "$HUBS" --refresh >/dev/null 2>&1
+CHECKS=$((CHECKS+1)); [ ! -s "$G/hub_auth_fail" ] || fail "H: the round that stood must clear hub-sessions from hub_auth_fail" "$(cat "$G/hub_auth_fail")"
+kill "$HUBPID" 2>/dev/null; HUBPID=''
+rm -f "$WORK/bin/curl" "$WORK/conf/node.env"
+
+# --- I: the doctor's rows ----------------------------------------------------------
+docrow() { env HOME="$WORK" CCQUOTA_FLEET=1 bash "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E "^ *(PASS|WARN|FAIL) +$1 "; }
+echo $(( $(date +%s) - 700 )) > "$G/hub_ok"
+out=$(docrow hub-sessions)
+case "$out" in *FAIL*hub-sessions*"loop none"*) : ;; *) fail "I: a 700s cache with no loop must be a hub-sessions FAIL" "$out" ;; esac
+CHECKS=$((CHECKS+1))
+printf 'quota\t%s\t%s\tHTTP 401: a viewer token is required\n' "$(( $(date +%s) - 2000 ))" "$(date +%s)" > "$G/hub_auth_fail"
+out=$(docrow hubauth)
+case "$out" in *FAIL*hubauth*"quota refused 33m"*) : ;; *) fail "I: a reader refused 2000s must be a hubauth FAIL" "$out" ;; esac
+CHECKS=$((CHECKS+1))
+printf 'quota\t%s\t%s\tHTTP 401\n' "$(( $(date +%s) - 100 ))" "$(date +%s)" > "$G/hub_auth_fail"
+out=$(docrow hubauth)
+case "$out" in *WARN*hubauth*) : ;; *) fail "I: a reader refused 100s must be a hubauth WARN" "$out" ;; esac
+CHECKS=$((CHECKS+1))
+rm -f "$G/hub_auth_fail"
+CHECKS=$((CHECKS+1)); [ -z "$(docrow hubauth)" ] || fail "I: nothing refused must print no hubauth row"
 
 printf 'hub-sessions-loop selftest: PASS (%s checks)\n' "$CHECKS"

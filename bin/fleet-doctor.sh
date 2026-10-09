@@ -930,7 +930,8 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
         fi ;;
       stale) fail qwatch "quota cache last refreshed $((qage/60))m ago (> FLEET_ACCOUNT_QUOTA_STALE ${FLEET_ACCOUNT_QUOTA_STALE:-600}s) — pre-emptive rotation is BLIND; is com.claude-fleet.quotawatch loaded? (\`launchctl list | grep quotawatch\`; the collector falls back to running the watch first thing each tick once this unit stops ticking, issue #671 — check its heartbeat below)" ;;
       never) warn qwatch "quota cache never written — no fleet-quotawatch tick has run yet (install/kick com.claude-fleet.quotawatch, or run bin/fleet-quotawatch.sh once)" ;;
-      blind) fail qwatch "$qwhyw — quota cache is FRESH BUT EMPTY — the last $qstreak ccquota reads returned no rows ($qdur, ≥ FLEET_ACCOUNT_QUOTA_BLIND_STREAK ${FLEET_ACCOUNT_QUOTA_BLIND_STREAK:-3}). The watch IS ticking, so nothing here is stale; the 70%/85% pre-emptive rotation simply has nothing to act on, which is the same outage with every dial green (issue #684). Check the hub: \`ccquota budget --account all --json\`, then \`fleet-account.sh quota --refresh\`; the quota line below names any account ccquota cannot read" ;;
+      blind) [ "$qwhy" = refused ] && qwhyw="$qwhyw — $(bash -c '. "$1/fleet-lib.sh" && fleet_hub_auth_fix' _ "$(dirname "$0")" 2>/dev/null)"
+             fail qwatch "$qwhyw — quota cache is FRESH BUT EMPTY — the last $qstreak ccquota reads returned no rows ($qdur, ≥ FLEET_ACCOUNT_QUOTA_BLIND_STREAK ${FLEET_ACCOUNT_QUOTA_BLIND_STREAK:-3}). The watch IS ticking, so nothing here is stale; the 70%/85% pre-emptive rotation simply has nothing to act on, which is the same outage with every dial green (issue #684). Check the hub: \`ccquota budget --account all --json\`, then \`fleet-account.sh quota --refresh\`; the quota line below names any account ccquota cannot read" ;;
       fresh) pass qwatch "quota cache ${qage}s old and non-empty — the pre-emptive watch is ticking AND getting readings (\`fleet-quotawatch.sh --status\`)" ;;
     esac
     # …and whether the ticks that ARE happening finish their work (issue #698).
@@ -3007,19 +3008,52 @@ if [ "$_hub_on" = 1 ] && [ -x "$(dirname "$0")/fleet-hub-sessions.sh" ]; then
   case "$_hid" in
     cert\ *)  pass hub "sidebar asks the hub with your connection certificate (${_hid#cert }) — your own machines, no token" ;;
     token\ *) pass hub "sidebar asks the hub with the viewer token (${_hid#token }) — the operator's view; a colleague runs \`fleet login\` for a certificate of their own" ;;
+    node\ *)  pass hub "sidebar asks the hub with this login's node token (${_hid#node }) — its owner's machines, no certificate to expire (#2630)" ;;
     cmd\ *)   pass hub "sidebar reads the hub through FLEET_HUB_SESSIONS_CMD" ;;
     *)        warn hub "sidebar cannot ask the hub: ${_hid#none } — no other machine's sessions will show (bin/fleet-hub-sessions.sh --identity)" ;;
   esac
   # The refresh loop itself (issue #1596): the collector re-starts it every tick,
   # sidebar or not — a dead loop or an old cache means the other machines' rows
   # stopped while nobody was looking.
+  # A cache past FLEET_HUB_SESSIONS_FAIL_SECS (600) is a FAIL (issue #2630): the
+  # rows on the sidebar, the children's remote state and peer-send's locator are
+  # that old — 5 hours of it once read as a WARN nobody acted on.
   if _hst=$(CCQUOTA_FLEET=1 bash "$(dirname "$0")/fleet-hub-sessions.sh" --status 2>/dev/null </dev/null); then
     pass hub-sessions "$_hst"
   else
-    warn hub-sessions "${_hst:-no answer} — the other machines' sessions are not refreshing (collector runs bin/fleet-hub-sessions.sh --ensure every tick)"
+    _hsfail="${FLEET_HUB_SESSIONS_FAIL_SECS:-600}"; case "$_hsfail" in ''|*[!0-9]*) _hsfail=600 ;; esac
+    _hsage=$(printf '%s' "$_hst" | sed -n 's/.*cache \([0-9][0-9]*\)s.*/\1/p')
+    case "$_hst" in "loop none"*) _hsfix="the loop is not running — \`bash bin/fleet-hub-sessions.sh --ensure\` starts it (the collector does every tick; \`--status\` names the lock holder)" ;;
+                    *) _hsfix="the loop runs but no round stands — see the \`hubauth\` row and \`bash bin/fleet-hub-sessions.sh --refresh\`" ;; esac
+    if [ -n "$_hsage" ] && [ "$_hsage" -gt "$_hsfail" ]; then
+      fail hub-sessions "$_hst — the other machines' sessions are $((_hsage/60))m old (> ${_hsfail}s); $_hsfix"
+    else
+      warn hub-sessions "${_hst:-no answer} — the other machines' sessions are not refreshing; $_hsfix"
+    fi
+    unset _hsfail _hsage _hsfix
   fi
   unset _hid _hst
 fi
+# --- hubauth (issue #2630): every node-side hub READ the hub refused, one line
+# per reader (fleet_hub_auth_note → global/hub_auth_fail). Refused past
+# FLEET_HUB_AUTH_FAIL_SECS (1800) is a FAIL with the fix; younger, a WARN.
+# No file = nothing refused = no row (a one-machine fleet prints nothing).
+_haf="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/hub_auth_fail"
+if [ -s "$_haf" ]; then
+  _hamax="${FLEET_HUB_AUTH_FAIL_SECS:-1800}"; case "$_hamax" in ''|*[!0-9]*) _hamax=1800 ;; esac
+  _hanow=$(date +%s); _haold=0; _halist=''
+  while IFS='	' read -r _har _has _hal _hawhy; do
+    [ -n "$_har" ] || continue
+    case "$_has" in ''|*[!0-9]*) _has=$_hanow ;; esac
+    [ $((_hanow - _has)) -gt "$_hamax" ] && _haold=1
+    _halist="${_halist}${_halist:+; }$_har refused $(( (_hanow - _has) / 60 ))m (${_hawhy:-401})"
+  done < "$_haf"
+  _hafix=$(bash -c '. "$1/fleet-lib.sh" && fleet_hub_auth_fix' _ "$(dirname "$0")" 2>/dev/null)
+  if [ "$_haold" = 1 ]; then fail hubauth "$_halist — ${_hafix:-check node.env / \`fleet login\`}"
+  else warn hubauth "$_halist — ${_hafix:-check node.env / \`fleet login\`}"; fi
+  unset _hamax _hanow _haold _halist _har _has _hal _hawhy _hafix
+fi
+unset _haf
 # The invariant itself, per fleet — FLEET_HANDOFF_IDLE_TIMEOUT takes a per-fleet
 # overlay (FLEET_STUCK_WORKING_SECS is global-only: one spinner serves the machine).
 if [ -x "$inv" ]; then

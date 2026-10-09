@@ -30,6 +30,9 @@ import (
 //     reports usage under, and without endpoint_shares (that split names
 //     other people's endpoints).
 //
+// A node token (claude-fleet#2630, fleetReadIdentity) reads as its login's
+// owner — the same narrowing — so a node's own daemons (the quota watch through
+// `ccquota budget`, the other-machine rows) need no viewer token or certificate.
 // The operator's doors (viewer token) see everything, as on the
 // two viewer routes. A revoked device is refused by verifySSHRelayCert; every
 // answer is one fleet audit row (tool fleet_summary) naming the actor.
@@ -63,7 +66,7 @@ func (s *Server) handleFleetSummary(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "GET or POST")
 		return
 	}
-	id, ok := s.sshRelayHTTPIdentity(r)
+	id, ok := s.fleetReadIdentity(r)
 	now := time.Now()
 	if !ok {
 		var req SummaryRequest

@@ -46,7 +46,8 @@
 #               an immediate 304 or a failure (an older hub ignores `wait`) falls
 #               back to the 2 s cadence. FLEET_HUB_SESSIONS_LONGPOLL=0 turns it
 #               off; nobody looking, it is never sent (the 10 s cadence as before).
-#   --ensure    start a detached --loop unless one is alive. The collector runs this
+#   --ensure    start a detached --loop unless one is alive (one per cache: the
+#               loop holds global/hubsess.lock — issue #2630; never via nohup). The collector runs this
 #               every tick (60s), so the 10s cadence needs no daemon of its own and a
 #               loop can never outlive the collector by more than one round. The loop
 #               gets its own session (setsid), or launchd kills it with the tick
@@ -76,6 +77,13 @@
 #
 # Who asks (issue #1475), in this order — the first that exists is used:
 #   1. FLEET_HUB_SESSIONS_CMD: a seam; it prints the fleet_sessions JSON itself.
+#   1b. on a NODE (not the shell), this login's node token — node.env's
+#      CCQUOTA_TOKEN, as a bearer on curl's stdin config, never its argv (issue
+#      #2630): the hub reads it as the login's owner, the scope a certificate
+#      gets, and it never expires — the collector's loop no longer goes dark when
+#      a certificate lapses or no viewer token exists. A hub older than that door
+#      answers 401: noted for FLEET_HUB_SESSIONS_NODE_REFUSED_TTL (600s) and the
+#      round falls through to 2. FLEET_HUB_SESSIONS_NODE_TOKEN=0 skips it.
 #   2. YOUR connection certificate — ~/.ssh/fleet-cert + fleet-cert-cert.pub, the
 #      pair `fleet login` wrote (FLEET_CERT names another key), while it is valid:
 #      a POST {cert, sig, ts} with `ssh-keygen -Y sign -n fleet-sessions@claude-fleet`
@@ -293,10 +301,29 @@ token_source() {
   printf 'file\n'
 }
 
+# node_token → rc 0 with this login's node token in $NTOK (issue #2630): node mode
+# only (the shell is a person's computer, never a node), node.env readable here
+# (a separated login's broker credential is not an endpoint token), and not
+# refused by this hub within NODE_REFUSED_TTL. It never enters the environment.
+NTOK=''; AUTH_TOK=''
+NODE_REFUSED_TTL="${FLEET_HUB_SESSIONS_NODE_REFUSED_TTL:-600}"
+case "$NODE_REFUSED_TTL" in ''|*[!0-9]*) NODE_REFUSED_TTL=600 ;; esac
+node_token() {
+  local t
+  NTOK=''
+  [ -z "$CLIENT" ] && [ "${FLEET_HUB_SESSIONS_NODE_TOKEN:-1}" != 0 ] || return 1
+  [ -r "$(fleet_node_env_file)" ] || return 1
+  { read -r t < "$G/hubsess.nodetok.refused"; } 2>/dev/null || t=''
+  case "$t" in ''|*[!0-9]*) ;; *) [ $(( $(date +%s) - t )) -ge "$NODE_REFUSED_TTL" ] || return 1 ;; esac
+  NTOK=$(_fleet_node_env_val CCQUOTA_TOKEN 2>/dev/null)
+  [ -n "$NTOK" ]
+}
+
 # identity → one line: cert … / token … / none …; rc 0 / 0 / 1.
 identity() {
   local st src
   if [ -n "${FLEET_HUB_SESSIONS_CMD:-}" ]; then printf 'cmd FLEET_HUB_SESSIONS_CMD\n'; return 0; fi
+  if node_token; then printf 'node %s\n' "$(fleet_node_env_file)"; return 0; fi
   st=$(cert_state)
   case "$st" in
     ok\ *) printf 'cert %s %s\n' "$CERT_PUB" "${st#ok }"; return 0 ;;
@@ -323,7 +350,13 @@ curl_sessions() {
   [ "$LP_SENT" = 1 ] && max=$(( WAIT + 5 ))
   set -- -sS -m "$max" -o "$out" -D "$hdr" -w '%{http_code}' "$@"
   [ -n "$etag" ] && set -- "$@" -H "If-None-Match: $etag"
-  code=$(curl "$@" 2>/dev/null)
+  if [ -n "$AUTH_TOK" ]; then
+    # the bearer rides curl's config on stdin (a builtin printf): never an argv
+    # another login's `ps` can read (issue #2630)
+    code=$(printf 'header = "Authorization: Bearer %s"\n' "$AUTH_TOK" | curl -K - "$@" 2>/dev/null)
+  else
+    code=$(curl "$@" 2>/dev/null)
+  fi
   case "$code" in
     200) etag=$(awk 'tolower($1) == "etag:" { sub(/\r$/, "", $2); print $2; exit }' "$hdr" 2>/dev/null)
          rm -f "$hdr"
@@ -379,6 +412,7 @@ fetch() {
   command -v curl >/dev/null 2>&1 || return 1
   st=$(cert_state)
   case "$st" in ok\ *) ETAG_STAMP=cert ;; *) ETAG_STAMP=token ;; esac
+  node_token && ETAG_STAMP=node
   ETAG_STAMP="map $MAPCODE $ETAG_STAMP ${CLIENT:-node} ${FLEET_HUB_SESSIONS_USER:-}"
   if [ -s "$ETAGF" ] && { read -r etag; IFS= read -r stamp || stamp=''; } < "$ETAGF" && [ -n "$etag" ]; then
     [ "$stamp" = "$ETAG_STAMP" ] || etag=''
@@ -389,6 +423,17 @@ fetch() {
   # the long poll (issue #1526): only with a validator to hold against
   q=''; LP_SENT=0; SCOPED=0
   if [ -n "$WAIT" ] && [ -n "$etag" ]; then LP_SENT=1; q="?wait=$WAIT"; fi
+  if [ -n "$NTOK" ]; then
+    AUTH_TOK=$NTOK
+    curl_sessions "$out" "$etag" "$url/v1/fleet/fleet_sessions$q"; rc=$?; AUTH_TOK=''
+    [ "$rc" = 4 ] || return "$rc"
+    # A hub older than the node-token door (#2630) says 401: remember it for
+    # NODE_REFUSED_TTL, so the 2 s cadence does not ask twice a round.
+    date +%s > "$G/hubsess.nodetok.refused" 2>/dev/null
+    printf 'fleet-hub-sessions: the hub refused this login'"'"'s node token — trying the certificate / viewer token\n' >&2
+    etag=''; q=''; LP_SENT=0
+    case "$st" in ok\ *) ETAG_STAMP=${ETAG_STAMP/ node / cert } ;; *) ETAG_STAMP=${ETAG_STAMP/ node / token } ;; esac
+  fi
   case "$st" in
     ok\ *)
       fetch_cert "$url" "$out" "$etag"; rc=$?
@@ -401,7 +446,8 @@ fetch() {
       etag=''; q=''; LP_SENT=0; ETAG_STAMP=${ETAG_STAMP/ cert / token } ;;
   esac
   if token_source >/dev/null; then
-    curl_sessions "$out" "$etag" -H "Authorization: Bearer $TOK" "$url/v1/fleet/fleet_sessions$q"; rc=$?
+    AUTH_TOK=$TOK
+    curl_sessions "$out" "$etag" "$url/v1/fleet/fleet_sessions$q"; rc=$?; AUTH_TOK=''
     [ "$rc" = 4 ] && rc=1
     return "$rc"
   fi
@@ -428,6 +474,7 @@ local_fetch() {
 hub_ok() {
   printf '%s\n' "$1" > "$G/hub_ok.new" 2>/dev/null && mv -f "$G/hub_ok.new" "$G/hub_ok"
   rm -f "$G/hub_why"
+  fleet_hub_auth_note hub-sessions ok
   return 0
 }
 
@@ -443,6 +490,7 @@ hub_why() {
   { IFS=$'\t' read -r w s _d < "$G/hub_why"; } 2>/dev/null && [ "$w" = "$why" ] && since=$s
   case "$since" in ''|*[!0-9]*) since=$(date +%s) ;; esac
   printf '%s\t%s\t%s\n' "$why" "$since" "$detail" > "$G/hub_why.new" 2>/dev/null && mv -f "$G/hub_why.new" "$G/hub_why"
+  [ "$why" = refused ] && fleet_hub_auth_note hub-sessions fail "$detail"
   return 0
 }
 
@@ -1146,11 +1194,34 @@ fetch_summary_cert() {
   esac
   return "$SUMRC"
 }
+# fetch_summary_node <url> → as fetch_summary_cert, over this login's node token
+# (issue #2630): a GET of the same door, narrowed by the hub to the token's owner.
+fetch_summary_node() {
+  local url="$1" code
+  if [ -n "$SUMRC" ]; then return "$SUMRC"; fi
+  SUMRC=1
+  SUMJ=$(mktemp "$G/hubsummary.json.XXXXXX") || return 1
+  code=$(printf 'header = "Authorization: Bearer %s"\n' "$NTOK" |
+         curl -K - -sS -m 8 -o "$SUMJ" -w '%{http_code}' "$url/v1/fleet/summary" 2>/dev/null)
+  case "$code" in
+    200)         SUMRC=0 ;;
+    401|403|404) SUMRC=4; date +%s > "$G/hubsess.nodetok.refused" 2>/dev/null ;;
+  esac
+  return "$SUMRC"
+}
 fetch_viewer() {   # fetch_viewer <path> → the JSON on stdout; rc 1 when no answer
   local url
   [ -z "${FLEET_HUB_SESSIONS_CMD:-}" ] || return 1
   url=$(hub_url) || return 1
   command -v curl >/dev/null 2>&1 || return 1
+  if node_token; then
+    fetch_summary_node "$url"
+    case $? in
+      0) cat "$SUMJ"; return 0 ;;
+      4) rm -f "$SUMJ"; SUMJ=''; SUMRC='' ;;   # refused: the certificate / token, as before
+      *) return 1 ;;
+    esac
+  fi
   case "$(cert_state)" in
     ok\ *)
       fetch_summary_cert "$url"
@@ -1161,7 +1232,7 @@ fetch_viewer() {   # fetch_viewer <path> → the JSON on stdout; rc 1 when no an
       esac ;;
   esac
   token_source >/dev/null || return 1
-  curl -fsS -m 8 -H "Authorization: Bearer $TOK" "$url$1" 2>/dev/null
+  printf 'header = "Authorization: Bearer %s"\n' "$TOK" | curl -K - -fsS -m 8 "$url$1" 2>/dev/null
 }
 fetch_nodes() {
   if [ -n "${FLEET_HUB_NODES_CMD:-}" ]; then bash -c "$FLEET_HUB_NODES_CMD" </dev/null 2>/dev/null; return; fi
@@ -1381,12 +1452,21 @@ refresh_all() { local rc; refresh; rc=$?; refresh_summaries; return "$rc"; }
 loop() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 1
-  local p end every t0
-  p=$(loop_pid)
-  if [ -n "$p" ] && [ "$p" != "$$" ]; then return 0; fi
+  local end every t0
+  # ONE loop per cache, by a lock its holder keeps for life (issue #2630): the
+  # pid file alone let two shells' --ensure race past each other (two loops on
+  # one cache for hours). Not holding it yet ⇒ re-exec under the lock; someone
+  # else holds it ⇒ exit 0.
+  local guard="${FLEET_HUBSESS_GUARD:-}"
+  if [ -z "${FLEET_HUBSESS_LOCKED:-}" ]; then
+    exec python3 -c "$LOCK_PY" "$LOCKF" 0 bash "$BIN/fleet-hub-sessions.sh" --loop
+  fi
+  unset FLEET_HUBSESS_LOCKED FLEET_HUBSESS_GUARD
   printf '%s\n' "$$" > "$PIDF"
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
+    # the lock's holder is gone (SIGKILLed): the lock went with it — stop
+    if [ -n "$guard" ] && ! kill -0 "$guard" 2>/dev/null; then break; fi
     every=$EVERY; WAIT=''
     if watched; then
       every=$WATCHED_EVERY
@@ -1413,12 +1493,77 @@ loop() {
   return 0
 }
 
-# loop_pid → the live loop's pid on stdout, nothing when none. A pid file alone is
-# not proof (issue #1596): a recycled pid answers `kill -0`, and then no tick
-# would ever start the loop again — so the pid must still BE a --loop of ours.
+# The lock (issue #2630): $G/hubsess.lock, an flock held by a small python
+# parent (LOCK_PY) for exactly as long as the loop it runs: it takes the lock or
+# exits 0 (another loop has it), starts the loop as its child — in a process
+# group of the loop's own, the lock's descriptor NOT inherited, so a curl or a
+# sleep the loop leaves behind can never keep it — writes the loop's pid in it,
+# forwards TERM/INT, and exits with it. A SIGKILLed loop frees the lock at once;
+# a SIGKILLed parent is noticed by the loop at its next round (FLEET_HUBSESS_GUARD).
+# With 1 as its 2nd argument it first leaves the caller's session (setsid) and
+# ignores SIGHUP — what `nohup` was for, minus nohup: macOS's nohup detaches from
+# the console through launchd and exits when it cannot, which is EVERY time under
+# a LaunchDaemon, so the collector's --ensure never started a loop (`loop none`
+# for 5 hours). A lock file it cannot open is no reason to stay dark: the loop
+# runs unlocked.
+LOCKF="$G/hubsess.lock"
+LOCK_PY='import fcntl, os, signal, subprocess, sys
+lock, detach, argv = sys.argv[1], sys.argv[2] == "1", sys.argv[3:]
+if detach:
+    try:
+        os.setsid()
+    except OSError:
+        pass
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+try:
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
+except OSError:
+    fd = -1
+if fd >= 0:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(0)
+os.environ["FLEET_HUBSESS_LOCKED"] = "1"
+os.environ["FLEET_HUBSESS_GUARD"] = str(os.getpid())
+child = subprocess.Popen(argv, preexec_fn=os.setpgrp)
+if fd >= 0:
+    os.ftruncate(fd, 0)
+    os.write(fd, ("%d\n" % child.pid).encode())
+def forward(sig, _frame):
+    try:
+        child.send_signal(sig)
+    except OSError:
+        pass
+for sig in (signal.SIGTERM, signal.SIGINT):
+    signal.signal(sig, forward)
+rc = child.wait()
+sys.exit(rc if rc >= 0 else 128 - rc)'
+
+# lock_holder → the pid holding $LOCKF on stdout, nothing when it is free (or
+# there is no lock file). The test lock is dropped at once.
+lock_holder() {
+  [ -f "$LOCKF" ] || return 0
+  python3 -c 'import fcntl, os, sys
+try:
+    fd = os.open(sys.argv[1], os.O_RDONLY)
+except OSError:
+    sys.exit(0)
+try:
+    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+except OSError:
+    print((os.read(fd, 32).decode(errors="replace").split() or [""])[0])
+' "$LOCKF" 2>/dev/null
+}
+
+# loop_pid → the live loop's pid on stdout, nothing when none: the lock's holder
+# (issue #2630), else — a loop of a version before the lock — the pid file. A pid
+# alone is not proof (issue #1596): a recycled pid answers `kill -0`, and then no
+# tick would ever start the loop again — so the pid must still BE a --loop of ours.
 loop_pid() {
   local p cmd
-  { read -r p < "$PIDF"; } 2>/dev/null || return 0
+  p=$(lock_holder)
+  [ -n "$p" ] || { read -r p < "$PIDF"; } 2>/dev/null || return 0
   case "$p" in ''|*[!0-9]*) return 0 ;; esac
   kill -0 "$p" 2>/dev/null || return 0
   cmd=$(ps -o command= -p "$p" 2>/dev/null) || return 0
@@ -1434,10 +1579,8 @@ loop_pid() {
 ensure() {
   hub_on || return 0
   [ -z "$(loop_pid)" ] || return 0
-  ( cd / && nohup python3 -c 'import os, sys
-try: os.setsid()
-except OSError: pass
-os.execvp(sys.argv[1], sys.argv[1:])' bash "$BIN/fleet-hub-sessions.sh" --loop </dev/null >/dev/null 2>&1 & )
+  mkdir -p "$G" 2>/dev/null || return 0
+  ( cd / && exec python3 -c "$LOCK_PY" "$LOCKF" 1 bash "$BIN/fleet-hub-sessions.sh" --loop </dev/null >/dev/null 2>&1 & )
   return 0
 }
 

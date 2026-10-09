@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -180,5 +181,59 @@ func TestModelCaps_PicksTheBindingClaim(t *testing.T) {
 	}
 	if m, a := modelCaps(nil, now); m != nil || a != nil {
 		t.Error("no claims must be no maps, so the JSON keys are omitted")
+	}
+}
+
+// A node login with no viewer token (claude-fleet#2630): /v1/limits refuses it,
+// so `--account all` reads the summary door with the node token instead — and a
+// hub that is merely down (5xx) is NOT retried there, nor is a viewer token the
+// hub accepted, nor a single-account scope.
+func TestBudget_NodeTokenFallsBackToTheSummaryDoor(t *testing.T) {
+	var paths []string
+	limits := http.StatusUnauthorized
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path+" "+r.Header.Get("Authorization"))
+		switch r.URL.Path {
+		case "/v1/limits":
+			http.Error(w, `{"error":"a viewer token is required"}`, limits)
+		case control.SummaryPath:
+			if r.Header.Get("Authorization") != "Bearer node-tok" {
+				http.Error(w, `{"error":"no"}`, http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"machines":[],"per_account":[
+				{"account_uuid":"u-1","label":"one","limits":{"account_uuid":"u-1","available":true,
+				 "five_hour":{"utilization":20},"seven_day":{"utilization":30}}}]}`))
+		}
+	}))
+	defer srv.Close()
+
+	for name, viewer := range map[string]string{"no viewer token": "", "refused viewer token": "stale"} {
+		paths = nil
+		rep := budgetSourceNode(srv.URL, viewer, "node-tok", "all", "", "claude", "", 90, 2*time.Second)
+		if len(rep.Accounts) != 1 || rep.Accounts[0].AccountUUID != "u-1" || rep.Verdict == verdictUnknown {
+			t.Fatalf("%s: accounts %+v verdict %q (%s), want u-1 read off the summary door", name, rep.Accounts, rep.Verdict, rep.Reason)
+		}
+		if len(paths) != 2 || !strings.HasPrefix(paths[1], control.SummaryPath+" Bearer node-tok") {
+			t.Fatalf("%s: asked %v, want /v1/limits then the summary door with the node token", name, paths)
+		}
+	}
+
+	// Down is not refused: the reason stays the hub's own, no second door.
+	limits = http.StatusBadGateway
+	paths = nil
+	if rep := budgetSourceNode(srv.URL, "v", "node-tok", "all", "", "claude", "", 90, 2*time.Second); rep.Verdict != verdictUnknown || len(paths) != 1 {
+		t.Fatalf("5xx: verdict %q paths %v, want unknown off /v1/limits alone", rep.Verdict, paths)
+	}
+	// A refused node token says both refusals.
+	limits = http.StatusUnauthorized
+	rep := budgetSourceNode(srv.URL, "", "wrong", "all", "", "claude", "", 90, 2*time.Second)
+	if rep.Verdict != verdictUnknown || !strings.Contains(rep.Reason, "HTTP 401") || !strings.Contains(rep.Reason, "node token") {
+		t.Fatalf("refused node token: %q (%s)", rep.Verdict, rep.Reason)
+	}
+	// No node token: exactly as before.
+	paths = nil
+	if rep := budgetSourceNode(srv.URL, "", "", "all", "", "claude", "", 90, 2*time.Second); rep.Verdict != verdictUnknown || len(paths) != 1 {
+		t.Fatalf("no node token: verdict %q paths %v", rep.Verdict, paths)
 	}
 }

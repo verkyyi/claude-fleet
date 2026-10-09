@@ -206,6 +206,35 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 	return sshRelayIdentity{}, false
 }
 
+// fleetReadIdentity is sshRelayHTTPIdentity for the two READ doors a node's
+// own daemons ask every few seconds — SessionsPath and SummaryPath
+// (claude-fleet#2630) — plus one more door: the node token of a login, as a
+// bearer. It reads exactly what that login's owner would read with their
+// connection certificate (the principal its active fleet account belongs to),
+// never the operator's view: before this, a node holding only node.env had no
+// credential these doors accepted, so its quota and its other-machine rows
+// read 401 for as long as nobody noticed. A node token whose login is no
+// active account answers ok=false (the caller's usual 401). Never widened to
+// the relay or the write doors — those keep sshRelayHTTPIdentity.
+func (s *Server) fleetReadIdentity(r *http.Request) (sshRelayIdentity, bool) {
+	if id, ok := s.sshRelayHTTPIdentity(r); ok {
+		return id, true
+	}
+	tok := bearer(r)
+	if tok == "" {
+		return sshRelayIdentity{}, false
+	}
+	ep, err := s.Store.EndpointByTokenHash(HashToken(tok))
+	if err != nil || ep == nil || ep.Hostname == "" || ep.OSUser == "" {
+		return sshRelayIdentity{}, false
+	}
+	p, err := s.Store.PrincipalForLogin(ep.Hostname, ep.OSUser)
+	if err != nil || p == "" {
+		return sshRelayIdentity{}, false
+	}
+	return sshRelayIdentity{Principal: p, Actor: "node:" + ep.Hostname + "/" + ep.OSUser}, true
+}
+
 // sshRelayError is a refusal sent to the client before the stream starts.
 type sshRelayError struct{ code, msg string }
 
