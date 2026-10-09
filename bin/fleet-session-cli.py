@@ -5,6 +5,11 @@
     fleet ls [--json]                    every session: 名称 · 单号 · 机器 · Agent ·
                                          剩余 · 模型 · Effort · 状态 · PR · 回收方式
                                          (the same rows ⌘P lists)
+    fleet ls --services [--json]         every background service and scheduled
+                                         task registered on your machines: 机器 ·
+                                         登录 · 名称 · 类型 · 状态 · 上次 · 下次 ·
+                                         最近日志, a failed one red (fleet-services.py,
+                                         issue #2526)
     fleet show <会话>                    one session, every field
     fleet open <会话>                    the client onto it (as ↵ on its ⌘P line)
     fleet rename <会话> <新名…>          its display name (the hub's worker_rename,
@@ -337,6 +342,11 @@ def ask(prompt):
 # --- the verbs -----------------------------------------------------------------------
 
 def cmd_ls(args):
+    if "--services" in args:
+        rest = [a for a in args if a != "--services"]
+        if rest not in ([], ["--json"]):
+            return usage()
+        return lib("fleet_services", "fleet-services.py").main(rest)
     if args not in ([], ["--json"]):
         return usage()
     rs = attach_bus(rows())
@@ -549,7 +559,9 @@ def main(argv):
         os.execv(str(BIN / old), [str(BIN / old)] + args)
     # outside the client's environment: through fleet-shell.sh, which imports it
     # and runs this again (FLEET_SHELL=1 then) — the seam reads a file instead
-    if os.environ.get("FLEET_SHELL") != "1" and not os.environ.get("FLEET_SESSION_CLI_ROWS"):
+    # (`ls --services` reads a cache file, never the client: no re-run)
+    if os.environ.get("FLEET_SHELL") != "1" and not os.environ.get("FLEET_SESSION_CLI_ROWS") \
+            and not (verb == "ls" and "--services" in args):
         os.execv("/bin/bash", ["bash", str(BIN / "fleet-shell.sh"), "cli", verb] + args)
     # every verb sees the test identity's sessions the list hides (issue #2505)
     os.environ["FLEET_ROWS_TEST"] = "1"

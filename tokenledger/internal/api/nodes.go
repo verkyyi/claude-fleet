@@ -451,14 +451,26 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 				nc.beatSaidOn.Store(false)
 			}
 			s.auditComputeForce(*ep, nc, hb.ComputeForce, hb.Probe, now)
+			payload := string(m.Payload)
+			if hb.Services != nil && !nc.machineLink {
+				// Only the machine link speaks for the register
+				// (claude-fleet#2526): a login's beat cannot add to it.
+				hb.Services = nil
+				if b, err := json.Marshal(hb); err == nil {
+					payload = string(b)
+				}
+			}
 			if err := s.Store.NodeHeartbeat(ep.ID, hb.Hostname, hb.OSUser, hb.MachineID,
-				m.Proto, string(m.Payload), now); err != nil {
+				m.Proto, payload, now); err != nil {
 				log.Printf("node %s: record heartbeat: %v", ep.ID, err)
 			}
 			s.loadHist.add(hb.Hostname, hb.Load1, hb.NCPU, now)
 			// The Fleet Hub registry (claude-fleet#1409): this login's
 			// fleets, re-derived and checked before they are registered.
 			s.nodeBack(*ep, now)
+			if nc.machineLink {
+				s.serviceAlerts(hb.Hostname, hb.Services, now)
+			}
 			s.recordFleets(*ep, hb, nc.canRead, first, now)
 			first = false
 			if s.Spot != nil {
@@ -696,6 +708,11 @@ type MachineView struct {
 	// LoginsRefused is login → why the hub refuses that login's lane on the
 	// machine's node program (claude-fleet#2501): 令牌失效 · 需要 relogin.
 	LoginsRefused map[string]string `json:"logins_refused,omitempty"`
+	// Services is the machine's login-level register (claude-fleet#2526):
+	// the entries of the logins the reader may see, as the machine link's
+	// last beat said at ServicesAt. Absent when it reported none.
+	Services   []control.ServiceStatus `json:"services,omitempty"`
+	ServicesAt *time.Time              `json:"services_at,omitempty"`
 	// Repos is every repo a registered fleet on the machine hosts
 	// (store.FleetRow.HostedRepos, the list placement checks), over the
 	// logins the reader may see (claude-fleet#1927): a newcomer's empty list
@@ -775,7 +792,18 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	aliases := s.staticAliases(settings)
 	machines := map[string]*MachineView{}
 	order := []string{}
+	// The register rides the machine link's beat (claude-fleet#2526), a row
+	// a person never sees — its entries are narrowed one by one below.
+	registers := map[string]machineServices{}
 	for _, n := range rows {
+		var hbs struct {
+			Services []control.ServiceStatus `json:"services"`
+		}
+		if len(n.StatusJSON) > 0 && json.Unmarshal([]byte(n.StatusJSON), &hbs) == nil && len(hbs.Services) > 0 {
+			if old, ok := registers[n.Hostname]; !ok || (n.LastHeartbeat != nil && (old.at == nil || n.LastHeartbeat.After(*old.at))) {
+				registers[n.Hostname] = machineServices{at: n.LastHeartbeat, services: hbs.Services}
+			}
+		}
 		if visible != nil && !visible(n.Hostname, n.OSUser) {
 			continue
 		}
@@ -889,6 +917,11 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	}
 	sort.Strings(order)
 	for _, h := range order {
+		if reg, ok := registers[h]; ok {
+			if svcs := visibleServices(h, reg, visible); len(svcs) > 0 {
+				machines[h].Services, machines[h].ServicesAt = svcs, reg.at
+			}
+		}
 		sort.Strings(machines[h].Repos)
 		machines[h].LoadHist = s.loadHist.series(h, now)
 		out.Machines = append(out.Machines, *machines[h])

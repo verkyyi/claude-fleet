@@ -296,6 +296,16 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 - **退役前必须搬完**：`fleet-login-remove.sh <登录>` 在第 1 步之前（dry run 也一样）、`account release <登录>`
   在动手之前查该登录的登记表，还有条目就拒绝、**退 6**，逐项打印 `service move` 命令；`account release --force`
   照样释放（条目仍由守护以该登录身份跑）。BREAK-IT 行 `service-login-moved`；`fleet-node-supervisor-selftest.py` J。
+- **命令行、体检、入口都看得到**（C2，#2526）：机器链路（`ccquota agent --machine`）每拍读守护的 `state.json`，
+  心跳带 `services[]`（`name, kind, login, state, started_at, last_run, next_run, last_log_line`，日志末行只读该登录
+  自己的、非链接的文件，≤ 200 字节）；入口把它挂在 `/v1/nodes` 的机器行上（`services` / `services_at`），**按
+  (机器, 登录) 裁给本人**；`state` 为 `down · failed · invalid · no_login` 的记 `service_failed` 告警（主题
+  `<机器>/<登录>/<名>`，恢复或删掉即清），`/v1/fleet/summary` 带 `alerts`。登录自己的心跳带的 `services` 入口不收。
+  客户端的刷新循环把它存成 `global/hub_services`，读它的只有一个 `bin/fleet-services.py`：
+  `fleet ls --services [--json]`（机器 · 登录 · 名称 · 类型 · 状态 · 上次 · 下次 · 最近日志，失败的标红）、
+  体检 `services` 行（失败 FAIL，全在跑 PASS，无登记 INFO）、告警栏一条 ✖ `service · failed`（`FLEET_ALERTS_SERVICES=0` 关）。
+  入口没提到的本机，直接读本机守护的 `state.json`（只列自己的登录）。BREAK-IT 行 `service-failed-unseen`；
+  `fleet-services-selftest.sh`。
 
 ## 11. 定时 agent 任务（EPIC #2524 C5，#2529）
 

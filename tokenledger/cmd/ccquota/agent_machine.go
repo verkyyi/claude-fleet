@@ -85,6 +85,9 @@ func runAgentMachine(args []string) error {
 	return agent.RunMachine(ctx, agent.MachineConfig{
 		HubURL: strings.TrimRight(*hub, "/"), Token: *token, Version: Version,
 		LiveInterval: *liveEvery, Tenants: tenants,
+		// The daemon's own state file sits beside the agent's state
+		// directory (/var/db/fleet-node/{agent,state.json}) — claude-fleet#2526.
+		ServicesFile: envOr("CCQUOTA_MACHINE_SERVICES", filepath.Join(filepath.Dir(filepath.Clean(*state)), "state.json")),
 	})
 }
 

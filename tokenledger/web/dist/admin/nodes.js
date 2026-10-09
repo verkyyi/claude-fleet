@@ -8,10 +8,12 @@
 // Reads /v1/nodes, /v1/fleet/join-codes, /v1/fleet/settings; writes
 // fleet.node_maintenance.<machine> and fleet.spot, and 「移除」 (claude-fleet#1928)
 // retires every enrollment on the machine through /v1/fleet/nodes/retire — its
-// token stops working and its card leaves the page. An admin's.
+// token stops working and its card leaves the page. Below the cards, every
+// machine's 服务与定时任务 (claude-fleet#2526, lib/services.js). An admin's.
 import { Shell } from '../app-shell.js';
 import { esc, ic, spark, relTime } from '../lib/shell.js';
 import { machineCards, joined, countdown } from '../lib/admin.js';
+import { serviceRows, servicesSection, svcClick } from '../lib/services.js';
 import { t } from '../lib/i18n.js';
 
 const join = { label: '', expires: 0, timer: 0, tick: 0 };
@@ -117,8 +119,10 @@ Shell.mount('machines', async (ctx) => {
 
   const cards = ms.length ? `<div class="mcards">${ms.map(card).join('')}</div>`
     : `<div class="panel"><div class="empty">${ic('server')}<b>${esc(t('ui.mach.empty'))}</b><span>${esc(t('ui.mach.emptySub'))}</span><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.mach.addBtn'))}</button></div></div>`;
+  // 服务与定时任务 (claude-fleet#2526): every machine's register, when any
+  const svcs = serviceRows(snap);
   ctx.el.innerHTML = `<div class="pagehead"><div><p>${esc(t('ui.mach.lead'))}</p></div><div class="acts"><button class="btn primary" data-act="add">${ic('plus')}${esc(t('ui.mach.addBtn'))}</button></div></div>` +
-    cards +
+    cards + (svcs.length ? servicesSection(svcs) : '') +
     `<div class="panel"><div class="panel-h"><div><h3>${esc(t('ui.mach.spotTitle'))}</h3><span class="sub">${esc(t('ui.mach.spotSub'))}</span></div>` +
     `<button class="switch" role="switch" aria-checked="${spotOn}" data-act="spot" aria-label="${esc(t('ui.mach.spotTitle'))}"${settings ? '' : ' disabled'}></button></div>` +
     `<div class="panel-b" style="font-size:13px;color:var(--muted)">${esc(spotLine)}</div></div>`;
@@ -131,6 +135,7 @@ Shell.mount('machines', async (ctx) => {
     } catch (err) { ctx.toast(t('ui.err.action', { e: err.message })); }
   };
   ctx.el.onclick = async (e) => {
+    if (svcClick(ctx, e, svcs)) return;
     const b = e.target.closest('[data-act]');
     if (!b) return;
     const m = b.dataset.m;

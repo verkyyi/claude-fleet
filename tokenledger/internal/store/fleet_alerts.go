@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,11 @@ CREATE INDEX IF NOT EXISTS fleet_alerts_open ON fleet_alerts (kind, subject, cle
 const (
 	AlertNodeLost      = "node_lost"
 	AlertLeaseConflict = "lease_conflict"
+	// AlertServiceFailed: an entry of a machine's login-level register that
+	// is meant to run and does not (claude-fleet#2526) — subject
+	// "<hostname>/<login>/<name>", raised and cleared off the machine link's
+	// beat.
+	AlertServiceFailed = "service_failed"
 )
 
 // FleetAlert is one row.
@@ -89,6 +95,27 @@ func (s *Store) ClearFleetAlert(kind, subject string, at time.Time) (cleared boo
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// OpenFleetAlertSubjects lists the subjects of kind's open rows that start
+// with prefix.
+func (s *Store) OpenFleetAlertSubjects(kind, prefix string) ([]string, error) {
+	rows, err := s.read.Query(`SELECT subject FROM fleet_alerts WHERE kind = ? AND cleared_at IS NULL`, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var sub string
+		if err := rows.Scan(&sub); err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(sub, prefix) {
+			out = append(out, sub)
+		}
+	}
+	return out, rows.Err()
 }
 
 // FleetAlerts lists alerts newest first: every open one, and the cleared ones

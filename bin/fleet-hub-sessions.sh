@@ -1265,6 +1265,22 @@ fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), prefix=".hubnodes.")
 with os.fdopen(fd, "w", encoding="utf-8") as f:
     f.write("".join(lines))
 os.replace(tmp, out)
+# hub_services (issue #2526): each machine's login-level register as the hub
+# hands it to this person (`machines[].services`, their own logins only) and
+# the open service_failed alerts a summary answer carries — one JSON for
+# `fleet ls --services`, the doctor's services row and the alert bar. A
+# machine with nothing registered is simply not listed.
+svc = {"ts": now, "machines": [], "alerts": [a for a in (data.get("alerts") or [])
+                                             if isinstance(a, dict) and a.get("kind") == "service_failed"]}
+for m in machines:
+    if isinstance(m, dict) and m.get("hostname") and isinstance(m.get("services"), list) and m["services"]:
+        svc["machines"].append({"hostname": m["hostname"], "label": label(m["hostname"]),
+                                "status": m.get("status") or "", "services_at": m.get("services_at"),
+                                "services": [x for x in m["services"] if isinstance(x, dict)]})
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out), prefix=".hubservices.")
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(svc, f, ensure_ascii=False)
+os.replace(tmp, os.path.join(os.path.dirname(out), "hub_services"))
 # hub_repos (issue #1927): every repo a fleet on these machines hosts, the
 # sidebar's repo candidates while its list has no heading yet. A hub older
 # than `repos` sends no key: then no file, and the sidebar says what it did.

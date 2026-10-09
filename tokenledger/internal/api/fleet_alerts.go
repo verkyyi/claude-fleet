@@ -377,6 +377,15 @@ func (s *Server) alertsSeenBy(p fleetPrincipal, rows []store.FleetAlert) []store
 			} else {
 				mine = seesEndpoint(a.Subject)
 			}
+		case store.AlertServiceFailed:
+			// One login's entry on one machine (claude-fleet#2526).
+			var d struct {
+				Hostname string `json:"hostname"`
+				OSUser   string `json:"os_user"`
+			}
+			if json.Unmarshal([]byte(a.Detail), &d) == nil && d.OSUser != "" {
+				mine = p.sees(d.Hostname, d.OSUser)
+			}
 		case store.AlertLeaseConflict:
 			var c leaseConflict
 			if json.Unmarshal([]byte(a.Detail), &c) == nil {

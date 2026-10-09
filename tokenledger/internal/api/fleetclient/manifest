@@ -89,6 +89,8 @@ bin/fleet-client-place.sh
 bin/fleet-home-session.sh
 # `fleet ls | show | open | rename | close | reap | answer` (#2365): the menu as commands
 bin/fleet-session-cli.py
+# `fleet ls --services` (#2526): the registered background services, one table
+bin/fleet-services.py
 bin/fleet-open.sh
 bin/fleet-open-addr.py
 bin/open-url.sh

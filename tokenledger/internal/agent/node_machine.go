@@ -67,6 +67,9 @@ type MachineConfig struct {
 	Version string
 	// LiveInterval is the machine link's own heartbeat.
 	LiveInterval time.Duration
+	// ServicesFile is the machine daemon's state.json, whose services[] the
+	// link's beat carries (claude-fleet#2526); "" = none.
+	ServicesFile string
 	// Tenants is one Config per login served: its own Token (that login's
 	// node token), Home, StateDir and RunAs. Fleet is forced on.
 	Tenants []Config
@@ -292,7 +295,7 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 	}()
 
 	beat := func() error {
-		m, err := control.New(control.TypeHeartbeat, machineHeartbeat(ml.cfg.Version, ml.refusedNow()))
+		m, err := control.New(control.TypeHeartbeat, machineHeartbeat(ml.cfg.Version, ml.refusedNow(), ml.cfg.ServicesFile))
 		if err != nil {
 			return err
 		}
@@ -363,12 +366,14 @@ func (ml *machineLink) demux(ctx context.Context, conn *websocket.Conn, m contro
 }
 
 // machineHeartbeat is the machine link's own beat: liveness and the machine's
-// load, never sessions — its logins report those on their own lanes — and the
-// logins whose hello the hub refused (claude-fleet#2501).
-func machineHeartbeat(version string, refused map[string]string) control.Heartbeat {
+// load, never sessions — its logins report those on their own lanes — the
+// logins whose hello the hub refused (claude-fleet#2501) and the machine
+// daemon's register of login services (claude-fleet#2526).
+func machineHeartbeat(version string, refused map[string]string, servicesFile string) control.Heartbeat {
 	off := false
 	hb := control.Heartbeat{OS: runtime.GOOS, Arch: runtime.GOARCH, NCPU: runtime.NumCPU(),
-		AgentVersion: version, ObservedAt: time.Now().UTC(), Compute: &off, LoginsRefused: refused}
+		AgentVersion: version, ObservedAt: time.Now().UTC(), Compute: &off, LoginsRefused: refused,
+		Services: readServices(servicesFile)}
 	hb.Hostname, _ = os.Hostname()
 	if u, err := user.Current(); err == nil {
 		hb.OSUser = u.Username
