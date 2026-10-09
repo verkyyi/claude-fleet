@@ -7,6 +7,7 @@ C2). Run as bin/fleet-steward-tick.sh; bin/fleet-steward.sh opens the window.
     fleet-steward-tick.sh answer --row ID --text T [--source URL] [--by steward|person] [--session S]
     fleet-steward-tick.sh sheet  [--session S] [--now ISO]
     fleet-steward-tick.sh card   [--session S]
+    fleet-steward-tick.sh followups [--watch owner/name#N …] [--json]
 
 `beat` is the diskguard tick's (home_watch, every minute): it returns at once
 until the next beat is due — FLEET_STEWARD_EVERY (1200 s), 600 s after a beat
@@ -27,6 +28,9 @@ the person's clock (fleet_decision.zone). A due beat:
   5. writes global/steward.delta.json + global/steward.state.json, stamps
      @orch_decide on the orchestrator's window (the open rows of the last sheet —
      fleet-control-read.sh carries it to the client's 「新任务」 row), and
+  5b. gathers what finished batches leave for a person into ONE 「待你动手」 list
+     and runs what it may (bin/fleet_followup.py, issue #2672 — its header is
+     the spec): @orch_todo carries the open count to the client's list;
   6. ONLY when there is something for the model — a new open question, a BLOCKED /
      FAILED report, a batch with no driver — hands the steward window one turn
      (`[steward] …`). A calm beat calls no model (共同约定 · 怎么算成功).
@@ -62,6 +66,7 @@ import uuid
 from pathlib import Path
 
 import fleet_decision as fd
+import fleet_followup as fu
 
 BIN = Path(__file__).resolve().parent
 V = 1
@@ -279,10 +284,13 @@ def do_answer(st, row, text, by, source):
         st.d["deferred"].append({"kind": "answer", "row": row["id"], "text": text, "by": by, "source": source})
         return 3
     repo, n = fd.split_src(row["src"])
-    fd.post(repo, n, answer_body(row, text, by, source), "to-worker")
+    # a followup row (fleet_followup.py) sits on a closed parent: a record, no worker
+    fd.post(repo, n, answer_body(row, text, by, source), "note" if row.get("followup") else "to-worker")
     st.spend(1)
     row["state"] = "answered"
     row["by"] = by
+    if row.get("followup"):
+        fu.answered(st, row, text, by)
     st.d.setdefault("counts", {})
     day = time.strftime("%Y-%m-%d")
     c = st.d["counts"].setdefault(day, {})
@@ -318,7 +326,7 @@ def issue_of_key(key, slugs):
 
 def collect(sess, st, now_t, apply=True):
     delta = {"v": V, "session": sess, "at": fd.iso(now_t), "events": [], "new_asks": [], "closed": [],
-             "defaulted": [], "orphans": [], "deferred": 0}
+             "defaulted": [], "orphans": [], "deferred": 0, "followups": {"new": [], "done": [], "refused": []}}
     wins = windows(sess)
     slugs = repo_of_slug(sess)
     # 1. the ledgers: the orchestrator, its children that keep one, every driver
@@ -358,7 +366,7 @@ def collect(sess, st, now_t, apply=True):
         if (w["role"] in ("", "worker")) and w["state"] == "needs" and w["issue"].isdigit() and w["repo"]:
             waiting.add((w["repo"], w["issue"]))
     for row in st.d["rows"].values():
-        if row.get("state") == "open":
+        if row.get("state") == "open" and not row.get("followup"):
             try:
                 waiting.add(fd.split_src(row["src"]))
             except ValueError:
@@ -396,7 +404,8 @@ def collect(sess, st, now_t, apply=True):
             row["state"] = res["skipped"] if res["skipped"] != "gone" else "answered"
     # 4. batches whose driver is gone: what the backstop says about their open PRs
     orphans = {}
-    for m in epic_marks(int(now_t.timestamp())):
+    marks = epic_marks(int(now_t.timestamp()))
+    for m in marks:
         ref = "%s#%s" % (m["repo"], m["epic"])
         if m["fresh"] or any(w["epic"] in (ref, "#" + m["epic"]) for w in wins):
             continue
@@ -411,6 +420,12 @@ def collect(sess, st, now_t, apply=True):
     if orphans != st.d["orphans"]:
         delta["orphans"] = list(orphans.values())
     st.d["orphans"] = orphans
+    # 5b. what the finished batches leave for a person (issue #2672)
+    if apply:
+        try:
+            fu.beat(sys.modules[__name__], sess, st, int(now_t.timestamp()), delta, wins, marks)
+        except Exception as e:      # never the rest of the beat's work
+            sys.stderr.write("fleet-steward-tick: followups: %s: %s\n" % (type(e).__name__, e))
     delta["deferred"] += len(st.d["deferred"])
     return delta, wins
 
@@ -426,8 +441,9 @@ def wants_model(delta):
 
 
 def empty(delta):
+    f = delta.get("followups") or {}
     return not (delta["events"] or delta["new_asks"] or delta["closed"] or delta["defaulted"]
-                or delta["orphans"] or delta["deferred"])
+                or delta["orphans"] or delta["deferred"] or f.get("new") or f.get("done") or f.get("refused"))
 
 
 # ---- the card --------------------------------------------------------------------
@@ -446,6 +462,9 @@ def card_lines(st, delta, now_t, nxt):
                             sum(1 for e in delta["events"] if e["state"] in WAKE_STATES)))
         for o in delta["orphans"]:
             lines.append(tr("steward_card_orphan_fmt", o["epic"], len(o["members"])))
+    todo_line = fu.card(sys.modules[__name__], st)
+    if todo_line:
+        lines.append(todo_line)
     if delta["deferred"]:
         lines.append(tr("steward_card_deferred_fmt", delta["deferred"]))
     lines.append(tr("steward_card_next_fmt", fd.show_time(nxt)[-5:]))
@@ -533,6 +552,9 @@ def cmd_answer(a):
     if row.get("state") != "open":
         print("already %s" % row.get("state"))
         return 0
+    if a.by == "steward" and row.get("followup"):
+        sys.stderr.write("fleet-steward-tick: %s is a followup row — only a person answers it\n" % a.row)
+        return 1
     if a.by == "steward" and fd.never(row):
         sys.stderr.write("fleet-steward-tick: %s is never-default (%s) — it goes on the sheet\n"
                          % (a.row, row.get("kind")))
@@ -599,6 +621,30 @@ def cmd_sheet(a):
     return 0
 
 
+def cmd_followups(a):
+    """The 「待你动手」 list; --watch adds an EPIC the steward never met (a batch
+    that ended before it ran) — its followups are read on the next beat."""
+    st = State()
+    now = int(time.time())
+    for ref in a.watch or []:
+        r = fu.ref_of(ref)
+        if not r:
+            sys.stderr.write("fleet-steward-tick: %s is not owner/name#N\n" % ref)
+            st.save()
+            return 2
+        fu.watch(st, r, now)
+    if a.watch:
+        st.save()
+    t = st.d.get("todo") or {}
+    if a.json:
+        print(json.dumps(t, ensure_ascii=False, indent=1))
+    elif t.get("items"):
+        print(fu.render(sys.modules[__name__], t))
+    else:
+        print(tr("steward_todo_none"))
+    return 0
+
+
 def cmd_card(a):
     st = State()
     print("\n".join(st.d.get("card") or [tr("steward_card_none")]))
@@ -619,8 +665,13 @@ def main(argv=None):
     p.add_argument("--source")
     p.add_argument("--by", choices=("steward", "person"), default="steward")
     p.add_argument("--session")
+    p = sub.add_parser("followups")
+    p.add_argument("--watch", action="append")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--session")
     a = ap.parse_args(argv)
-    fn = {"beat": cmd_beat, "delta": cmd_delta, "answer": cmd_answer, "sheet": cmd_sheet, "card": cmd_card}.get(a.cmd)
+    fn = {"beat": cmd_beat, "delta": cmd_delta, "answer": cmd_answer, "sheet": cmd_sheet, "card": cmd_card,
+          "followups": cmd_followups}.get(a.cmd)
     if not fn:
         ap.print_help(sys.stderr)
         return 2

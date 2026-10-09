@@ -32,6 +32,10 @@
 #   cmd:     the fleet-stable.sh move command, as the operator would paste it
 #   row:     <还差什么><TAB><建议下一步>   — the two cells, one clause each (#929)
 #   tr:      the same row as a <tr> for the page
+#   mark:    the followup marker for the parent's closing comment (issue #2672,
+#            bin/fleet_followup.py): `kind=stable` when a move is all it takes
+#            (behind / none) — the steward runs it once the gates are green —
+#            `kind=human` when a person must look first (offtrunk / unknown)
 # Exit: 0 row due · 1 no row · 2 usage / could not read (gh, git)
 #
 # Reads only: `fleet-stable.sh show` (a remote-tracking fetch in <main>, nothing
@@ -166,4 +170,7 @@ printf 'row:     %s\t%s\n' "$what" "$next"
 tr_what=$(printf '%s' "$what" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
 tr_next=$(printf '%s' "$next" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/`\([^`]*\)`/<code>\1<\/code>/g')
 printf 'tr:      <tr><td>%s</td><td>%s</td></tr>\n' "$tr_what" "$tr_next"
+case "$kind" in behind|none) mkind=stable mwhat="挪稳定版到 $t_short" ;; *) mkind=human mwhat=$what ;; esac
+mark=$(python3 "$BIN_DIR/fleet_followup.py" mark --kind "$mkind" --what "$mwhat" 2>/dev/null) \
+  && printf 'mark:    %s\n' "$mark"
 exit 0

@@ -110,6 +110,7 @@ contains "C: cmd" "$OUT" "cmd:     "
 contains "C: cmd is fleet-stable.sh move <target>" "$OUT" "fleet-stable.sh move $(sh3 "$C3")"
 contains "C: tr renders the command as <code>" "$OUT" "<tr><td>稳定版还停在"
 contains "C: tr has code" "$OUT" "<code>"
+contains "C: the followup marker for the closing comment (#2672)" "$OUT" "mark:    <!-- fleet:followup kind=stable what=挪稳定版到 $(sh3 "$C3") -->"
 eq "C: the tag did not move" "$C1" "$(tag)"
 
 # --- D. current ------------------------------------------------------------------

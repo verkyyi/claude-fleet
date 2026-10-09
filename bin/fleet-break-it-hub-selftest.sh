@@ -52,6 +52,8 @@
 #   pool-admit-phantoms                             fleet_session_cap_ok / fleet_admit_reserve / fleet_admit_confirm /
 #                                                   fleet_admit_release / fleet_admit_holders (fleet-lib.sh), scratch-pool.sh
 #   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
+#   followup-stable-storm                           bin/fleet_followup.py (merge, execute, holding) on the
+#                                                   steward's beat (bin/fleet_steward.py)
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -961,6 +963,48 @@ drill_hubsess_daemon_nohup() {
   case "$(hsn --status 2>/dev/null)" in "loop $p "*) ;; *) kill "$p" 2>/dev/null; WHY="--status does not name the lock holder $p: [$(hsn --status 2>&1)]"; return 1 ;; esac
   kill "$p" 2>/dev/null
   WHAT="nohup 退出、两次 --ensure 加一个 --loop 同时起：${SECS}s 内恰好一个 loop，持锁，--status 看得见"
+}
+
+# followup-stable-storm (issue #2672, EPIC #2668 C4): four batches end the same
+# day, each closing comment says 「move stable」, and one batch is still running.
+# The drill closes four EPICs with a stable followup while a batch holds the
+# install: two beats move nothing; once the hold lifts ONE move runs, the list
+# has ONE row, and every batch is written back.
+drill_followup_stable_storm() {
+  CAP=30; local t0 g="$WORK/fss" n m w
+  mkdir -p "$g/conf/fleets/fs/repos" "$g/gh"
+  printf 'FLEET_REPO="o/r"\n' > "$g/conf/fleets/fs/repos/o-r.conf"
+  printf '#!/bin/sh\nf="%s/gh/$2.json"; [ -f "$f" ] && cat "$f" || printf "{\\"state\\":\\"OPEN\\",\\"comments\\":[]}\\n"\n' "$g" > "$g/issue"
+  printf '#!/bin/sh\necho run >> "%s/moves"\n' "$g" > "$g/move"
+  printf '#!/bin/sh\n[ -f "%s/held" ]\n' "$g" > "$g/hold"
+  printf '#!/bin/sh\ncat >/dev/null; echo "$1#$2" >> "%s/posts"\n' "$g" > "$g/post"
+  printf '#!/bin/sh\ncase "$1" in new) printf "gh:o/r#9\\turl\\n" ;; esac\n' > "$g/ticket"
+  printf '#!/bin/sh\nprintf "{\\"seq\\": 0, \\"children\\": []}\\n"\n' > "$g/children"
+  printf '#!/bin/sh\n:\n' > "$g/none"
+  chmod +x "$g/issue" "$g/move" "$g/hold" "$g/post" "$g/ticket" "$g/children" "$g/none"
+  fs() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD=1 FLEET_STEWARD_FOLLOWUP_SYNC=1 \
+           FLEET_STEWARD_ISSUE_CMD="$g/issue" FLEET_STEWARD_STABLE_CMD="$g/move" FLEET_STEWARD_HOLD_CMD="$g/hold" \
+           FLEET_STEWARD_TICKET_CMD="$g/ticket" FLEET_DECISION_POST_CMD="$g/post" FLEET_DECISION_COMMENTS_CMD="$g/none" \
+           FLEET_STEWARD_WINDOWS_CMD="$g/none" FLEET_STEWARD_CHILDREN_CMD="$g/children" FLEET_STEWARD_SEND_CMD="$g/none" \
+           FLEET_STEWARD_STAMP_CMD="$g/none" FLEET_STEWARD_STAMP_TODO_CMD="$g/none" \
+           python3 "$BIN/fleet_steward.py" "$@" --session fs; }
+  : > "$g/held"
+  for n in 11 12 13 14; do
+    m=$(python3 "$BIN/fleet_followup.py" mark --kind stable --what "挪稳定版（#${n}）")
+    python3 -c 'import json,sys; json.dump({"state":"CLOSED","comments":[{"body":"后续：move stable\n"+sys.argv[1],"url":"u"}]}, open(sys.argv[2],"w"))' "$m" "$g/gh/$n.json"
+    fs followups --watch "o/r#$n" >/dev/null
+  done
+  t0=$(now)
+  fs beat --force >/dev/null 2>&1; fs beat --force >/dev/null 2>&1
+  [ ! -s "$g/moves" ] || { WHY="stable moved while a batch holds the install"; return 1; }
+  rm -f "$g/held"
+  fs beat --force >/dev/null 2>&1; fs beat --force >/dev/null 2>&1
+  n=$(grep -c . "$g/moves" 2>/dev/null || echo 0)
+  [ "$n" = 1 ] || { WHY="four batches' 「move stable」 ran $n moves (want one)"; return 1; }
+  w=$(grep -c . "$g/posts" 2>/dev/null || echo 0)
+  [ "$w" = 4 ] || { WHY="the run was written back on $w of four batches"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="四个批次各留「move stable」、一个批次还在跑：在跑时一次不挪，放开后只挪一次，四个批次都回写"
 }
 
 cred_run_drills "$0"

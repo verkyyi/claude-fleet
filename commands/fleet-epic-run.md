@@ -427,6 +427,21 @@ survives a context boundary the same way everything else here does:
 1. **Write the closing tick first, carrying `report: pending`** (step 1's
    format). Before running the report, not after: if this session dies between
    the two, `pending` is what tells the next one there is work left.
+   The same comment carries what the batch leaves for a person, **one marker
+   line each** (issue #2672) — the steward reads them, merges every batch's into
+   ONE 「待你动手」 list, and runs what it may:
+
+   ```sh
+   python3 ~/.claude/fleet/bin/fleet_followup.py mark --kind stable     --what '挪稳定版到 <sha>'
+   python3 ~/.claude/fleet/bin/fleet_followup.py mark --kind hub-deploy --what '重部署入口：C8 的 /v1/fleet/tickets'
+   python3 ~/.claude/fleet/bin/fleet_followup.py mark --kind human      --what 'iPad 上真环境走一遍' --due 2026-10-12
+   ```
+
+   `stable` — the steward runs `fleet-stable.sh move` itself once every gate is
+   green and no batch holds the install; `hub-deploy` — it asks the person
+   first, always; `human` — listed, with its due date. No followup, no line.
+   The report's 挪稳定版 row prints its own `mark:` (step 2 of
+   `/fleet-epic-report`); write the others here. Never run the move yourself.
 2. **Run `/fleet-epic-report <N> --repo "$FLEET_REPO"` right here.** Not «hand off to», not «suggest
    the operator run» — execute it, this tick. It gathers, builds the page, hosts
    it via doc-preview, posts the durable comment, and closes the EPIC when every
@@ -448,7 +463,8 @@ survives a context boundary the same way everything else here does:
 5. **Report to whoever started this driver** (issue #2623) — one call, the last
    of the run: `mcp__fleet__report` with `state: merged` and a `summary` that
    carries the report page's URL and what the batch leaves for the person
-   (`move stable`, a hub redeploy, a member still blocked). The orchestrator that
+   (`move stable`, a hub redeploy, a member still blocked — the same things the
+   closing tick's followup markers name). The orchestrator that
    started this driver gets it as a `[child-report]`; with no parent it exits 0
    silently, so it is unconditional. Then stop: the driver's own `done:2h`
    closes it — no `/loop` left armed, no handoff.

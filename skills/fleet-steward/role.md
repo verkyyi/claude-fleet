@@ -26,7 +26,9 @@
 5. **驱动已不在的批次**：delta 里每个开着的 PR 带 `backstop`。`clear` 的，先
    `mcp__fleet__pr_verdict`，READY 才 `mcp__fleet__pr_merge`；`busy` 只当「先别合」——
    从不据此停放会话，也不立健康单。
-6. 做完就停，回一行：自答几条、决定单几行、合了什么。
+6. **待你动手**（批次收尾留下的 followup）由 beat 自己收、自己跑（`fleet_followup.py`）：
+   带 `followup` 字段的决定单行（发布检查没过、要不要重部署入口）从不自答，只进决定单。
+7. 做完就停，回一行：自答几条、决定单几行、合了什么。
 
 ## 规矩
 - 写 GitHub 只经 `fleet-steward-tick.sh`（它数着每拍 ≤ 20 条，超出的延后到下一拍）和

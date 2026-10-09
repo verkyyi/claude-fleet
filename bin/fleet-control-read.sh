@@ -217,7 +217,7 @@ case "$mode" in
     # own report, @agent_status as bin/fleet-status-7501.py stamped it (one line of
     # JSON, no tab); inventory_row turns it into the worker's `status_kind` /
     # `status_msg`. Empty on a window whose agent never said anything.
-    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}\t=#{@orch_queue}\t=#{@orch_decide}' 2>/dev/null) || ctxs=''
+    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}\t=#{@orch_queue}\t=#{@orch_decide}\t=#{@orch_todo}' 2>/dev/null) || ctxs=''
     # Column 30 (issue #2505): `test=1` on a session the TEST identity's client
     # placed (@test_identity, `fleet --test-identity`): the person's list hides
     # it, `fleet ls` marks it 测试. Empty on every other window.
@@ -231,6 +231,10 @@ case "$mode" in
     # it on the orchestrator's window); fleet-hub-sessions.sh carries it as
     # `orch_<sess>`'s `decide=<n>` column. Written ONLY when there is a count, so a
     # fleet with no steward prints every row byte for byte as before.
+    # Column 33 (issue #2672, EPIC #2668 C4): `orchtodo=<n>` — the steward's
+    # 「待你动手」 rows still open (@orch_todo, bin/fleet_followup.py stamps it);
+    # carried as `orch_<sess>`'s `todo=<n>` column. Written ONLY when there is a
+    # count, after orchdec= when both are — never one without the other's order.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -316,14 +320,15 @@ case "$mode" in
       [ -z "$t" ] && [ -z "$c2" ] && [ -z "$wepic" ] && t=$wtl
       row=$wid$'\t'$c2$'\t'$c3$'\t'$wt$'\t'$rest
       b=''; [ -z "$busy" ] || b=$(printf '%s\n' "$busy" | awk -v w="$wid" '$1 == w { print $2; exit }')
-      cl='' cb='' cts='' cm='' ce='' cas='' cq='' cdec=''
+      cl='' cb='' cts='' cm='' ce='' cas='' cq='' cdec='' ctodo=''
       if [ -n "$ctxs" ]; then
         # each field `=`-led, so no field is ever empty: a TAB is IFS whitespace and
         # `read` would collapse an empty one (no \037 here — an older tmux prints it as _)
-        IFS=$'\t' read -r _ cl cb cts cm ce cas cq cdec <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
-        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=} cq=${cq#=} cdec=${cdec#=}
-        [ "$wrole" = orchestrator ] || { cq=''; cdec=''; }
+        IFS=$'\t' read -r _ cl cb cts cm ce cas cq cdec ctodo <<<"$(printf '%s\n' "$ctxs" | awk -F'\t' -v w="$wid" '$1 == w { print; exit }')"
+        cl=${cl#=} cb=${cb#=} cts=${cts#=} cm=${cm#=} ce=${ce#=} cas=${cas#=} cq=${cq#=} cdec=${cdec#=} ctodo=${ctodo#=}
+        [ "$wrole" = orchestrator ] || { cq=''; cdec=''; ctodo=''; }
         case "$cdec" in *[!0-9]*) cdec='' ;; esac
+        case "$ctodo" in *[!0-9]*) ctodo='' ;; esac
         case "$cq" in *[!0-9]*) cq='' ;; esac
         case "$cas" in '{'*'}') ;; *) cas='' ;; esac
         case "$cl" in *[!0-9]*) cl='' ;; esac
@@ -333,6 +338,7 @@ case "$mode" in
         case "$ce" in *[!a-z]*) ce='' ;; esac
       fi
       od=''; [ -n "$cdec" ] && od=$'\t'"orchdec=$cdec"
+      [ -n "$ctodo" ] && od="$od"$'\t'"orchtodo=$ctodo"
       printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torchq=%s%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$wrole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$cq" "$od"
     done <<<"$rows"
     ;;
