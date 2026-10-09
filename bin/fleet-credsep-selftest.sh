@@ -389,6 +389,30 @@ grep -q '^fd3=ccq_NODE_SECRET_0123$' "$HOME/agent.out" && grep -q '^envhits=0$' 
   || fail "F agent: $(cat "$HOME/agent.out" "$SB/agent.err" 2>/dev/null)"
 rm -f "$HOME/agent.out"
 
+# ── F2: one agent per login (issue #2663) — the launcher stops a stray first ─────
+# an agent from before the separation (an orphan at PPID=1) on the same --state;
+# beside it one on another --state and the machine's node program: both stay
+mkdir -p "$SB/oldbin"
+printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$SB/oldbin/ccquota"; chmod +x "$SB/oldbin/ccquota"
+"$SB/oldbin/ccquota" agent --state "$HOME/.ccquota" & STRAY=$!
+"$SB/oldbin/ccquota" agent --state "$SB/other-state" & OTHER=$!
+"$SB/oldbin/ccquota" agent --machine --state "$HOME/.ccquota" & MACH=$!
+sleep 0.3
+out=$(python3 -I "$BIN/fleet-credsep-launch.py" agents "$ME" 2>&1)
+printf '%s\n' "$out" | grep -q "^$STRAY " && printf '%s\n' "$out" | grep -q "^$OTHER " \
+  && ! printf '%s\n' "$out" | grep -q "^$MACH " \
+  && pass "F2 agents: this login's ccquota agents listed, the machine's node program not" \
+  || fail "F2 agents ($STRAY $OTHER, not $MACH): $out"
+python3 -I "$BIN/fleet-credsep-launch.py" agent "$ME" 2>"$SB/agent.err"
+sleep 0.2
+gone() { ! kill -0 "$1" 2>/dev/null || ps -o stat= -p "$1" 2>/dev/null | grep -q '^Z'; }
+if gone "$STRAY" && ! gone "$OTHER" && ! gone "$MACH" && grep -q '^fd3=ccq_NODE_SECRET_0123$' "$HOME/agent.out" \
+   && grep -q "stopped a stray agent pid $STRAY" "$SB/agent.err"; then
+  pass "F2 launcher: the stray agent on the same --state stopped before the new one ran; another state and --machine untouched"
+else fail "F2 launcher: stray=$STRAY $(gone "$STRAY" && echo gone) other=$(gone "$OTHER" && echo gone) mach=$(gone "$MACH" && echo gone) · $(cat "$SB/agent.err")"; fi
+kill "$STRAY" "$OTHER" "$MACH" 2>/dev/null; wait "$STRAY" "$OTHER" "$MACH" 2>/dev/null
+rm -f "$HOME/agent.out"
+
 # ── I: the way back, read by the login that cannot read the store ─────────────
 chmod 000 "$R"
 out=$(FLEET_CREDSEP_SUDO=false bash "$BIN/fleet-credsep.sh" uninstall --dry-run 2>&1); rc=$?

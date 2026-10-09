@@ -20,6 +20,11 @@ bin/fleet-credsep.sh installs; never from a login's own checkout.
         control socket, then drops to the login and execs the agent argv the
         install recorded.
 
+    fleet-credsep-launch.py agents <login>
+        Read-only: one line per running `ccquota agent` of <login> — its uid,
+        its --state — as `<pid> <state>` (the doctor's agentdup row, issue
+        #2663). Needs no root.
+
     fleet-credsep-launch.py shared
         The machine's ONE credential proxy (issue #2217), as the role account:
         every login whose store says `mode: shared` is a tenant — its settings
@@ -34,7 +39,7 @@ bin/fleet-credsep.sh installs; never from a login's own checkout.
 and FLEET_CREDSEP_LOG_BASE). Not root ⇒ nothing is dropped and the run is
 refused unless FLEET_CREDSEP_TEST=1 (a sandbox, where the login is yourself).
 """
-import json, os, pwd, re, shutil, sys
+import json, os, pwd, re, shutil, signal, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROLE = "_fleetcred" if sys.platform == "darwin" else "fleetcred"
@@ -109,6 +114,82 @@ def drop_to(user):
     if os.getuid() == 0 or os.geteuid() == 0:
         die("could not drop root")
     return pw
+
+
+def agent_state(argv, home):
+    """The --state an agent argv names (`ccquota agent`'s default: ~/.ccquota)."""
+    st = ""
+    for i, a in enumerate(argv):
+        if a == "--state" and i + 1 < len(argv):
+            st = argv[i + 1]
+        elif a.startswith("--state="):
+            st = a.split("=", 1)[1]
+    return os.path.realpath(os.path.expanduser(st) if st else os.path.join(home, ".ccquota"))
+
+
+def agent_procs(uid, home, names=("ccquota",)):
+    """[(pid, state)] of every running per-login `ccquota agent` owned by <uid> —
+    the binary by basename (an interpreter in front is skipped over), `agent` its
+    verb, never the machine's root node program (`--machine`). Issue #2663: an
+    agent from before the separation (an old LaunchAgent's, or an orphan at
+    PPID=1) kept running beside the launcher's, both on the one node token."""
+    try:
+        out = subprocess.run(["ps", "axww", "-o", "pid=,uid=,args="], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, universal_newlines=True).stdout
+    except OSError:
+        return []
+    rows = []
+    for line in out.splitlines():
+        f = line.split(None, 2)
+        if len(f) < 3 or not f[0].isdigit() or not f[1].isdigit() or int(f[1]) != uid:
+            continue
+        toks = f[2].split()
+        i = next((k for k, t in enumerate(toks[:3]) if os.path.basename(t) in names), None)
+        if i is None or toks[i + 1:i + 2] != ["agent"] or "--machine" in toks:
+            continue
+        rows.append((int(f[0]), agent_state(toks[i + 2:], home)))
+    return rows
+
+
+def stop_strays(uid, home, argv):
+    """Before the launcher's agent starts: every other agent of this login on the
+    same --state goes (TERM, then KILL after 5 s). Another login's, another
+    state's and the machine's node program are never touched."""
+    want = agent_state(argv[1:], home)
+    names = ("ccquota", os.path.basename(argv[0]))
+    me = {os.getpid(), os.getppid()}
+    strays = [p for p, st in agent_procs(uid, home, names) if st == want and p not in me]
+    for p in strays:
+        try:
+            os.kill(p, signal.SIGTERM)
+            sys.stderr.write("fleet-credsep-launch: stopped a stray agent pid %d (--state %s) — "
+                             "one agent per login (issue #2663)\n" % (p, want))
+        except OSError:
+            pass
+    end = time.time() + 5
+    while strays and time.time() < end:
+        strays = [p for p in strays if alive(p)]
+        time.sleep(0.1)
+    for p in strays:
+        try:
+            os.kill(p, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    try:    # a zombie (our own child in the selftest) has already stopped
+        st = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, universal_newlines=True).stdout.strip()
+    except OSError:
+        return True
+    return bool(st) and not st.startswith("Z")
 
 
 def root_conf(login):
@@ -259,11 +340,17 @@ def shared():
 def main():
     if len(sys.argv) == 2 and sys.argv[1] == "shared":
         return shared()
-    if len(sys.argv) != 3 or sys.argv[1] not in ("proxy", "agent"):
-        die("usage: fleet-credsep-launch.py proxy|agent <login> · shared", 2)
+    if len(sys.argv) != 3 or sys.argv[1] not in ("proxy", "agent", "agents"):
+        die("usage: fleet-credsep-launch.py proxy|agent|agents <login> · shared", 2)
     mode, login = sys.argv[1], sys.argv[2]
     if not LOGIN_RE.match(login):
         die("bad login name %r" % login, 2)
+    if mode == "agents":
+        pw = getpw(login)
+        home = os.environ["HOME"] if TEST else pw.pw_dir
+        for p, st in agent_procs(pw.pw_uid, home):
+            print("%d %s" % (p, st))
+        return 0
     root = os.path.join(base("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred"), login)
     run = os.path.join(base("FLEET_CREDSEP_RUN_BASE", "/var/run/fleet-cred"), login)
     try:
@@ -339,6 +426,7 @@ def main():
         os.dup2(r, 3)
         os.close(r)
     os.set_inheritable(3, True)
+    stop_strays(pw_login.pw_uid, login_home, argv)
     drop_to(login)
     os.chdir(login_home)
     os.execve(argv[0], argv, env)

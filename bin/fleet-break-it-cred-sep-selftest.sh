@@ -23,6 +23,8 @@
 #   cred-sep-compute-unlinks   bin/fleet-node.sh setenv / envval, bin/fleet-host.sh (issue #2316, #2426)
 #   cred-sep-plain-node-env    bin/fleet-credsep-reconcile.sh, fleet-credsep.py reconcile / check,
 #                              fleet-credsep.sh setenv --check (issue #2649)
+#   cred-sep-stale-agent       bin/fleet-credsep-launch.py (stop_strays / agents),
+#                              bin/fleet-doctor.sh agentdup row (issue #2663)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -417,6 +419,52 @@ drill_cred_sep_plain_node_env() {
   out=$(chmod 000 "$R"; env $SEPENV FLEET_CRED_SEPARATE=1 python3 -I "$BIN/fleet-credsep.py" check --conf-dir "$C" 2>&1; chmod 700 "$R")
   case "$out" in *"plain file"*|*"login paths"*) WHY="the doctor still names the home after reconcile: $out"; return 1 ;; esac
   WHAT="隔离登录的 node.env 又成了普通文件：doctor 说清哪份在用和修法；写入方先拒；reconcile 以较新的家目录那份为准合并、保留库里独有键、原件进 backup/、软链复位、重跑无事；之后 compute on 软链仍在"
+}
+
+# 2026-10-09 macmini (#2661 → #2663): the login's agent from before the
+# separation (PPID=1, under no launchd job) kept running beside the one credsep's
+# launcher started — one node token, two hub links replacing each other, each
+# hello with its own compute value: placement flapped. The launcher now stops
+# every other agent of the login on the same --state before it execs its own.
+# sep_agents — the sandbox login's running agents (`<pid> <state>`), as the doctor reads them
+# shellcheck disable=SC2086
+sep_agents() { env $SEPENV python3 -I "$L" agents "$(id -un)" 2>/dev/null; }
+sep_only() { [ "$(sep_agents | grep -c .)" = 1 ] && sep_agents | grep -q "^$1 "; }
+drill_cred_sep_stale_agent() {
+  CAP=30
+  local sb="$WORK/sepstale" me h t0 out rc n new L; me=$(id -un); h="$sb/homes/$me"
+  mkdir -p "$h/.ccquota" "$sb/daemons" "$sb/bin"
+  printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$sb/bin/ccquota"; chmod +x "$sb/bin/ccquota"
+  printf '#!/bin/sh\nexec "%s" agent --state "%s"\n' "$sb/bin/ccquota" "$h/.ccquota" > "$h/.ccquota/run-agent.sh"
+  chmod +x "$h/.ccquota/run-agent.sh"
+  if [ "$(uname)" = Darwin ]; then
+    python3 - "$sb/daemons/com.ccquota.agent.$me.plist" "$h/.ccquota/run-agent.sh" "$me" <<'EOF'
+import plistlib, sys
+plistlib.dump({"Label": "com.ccquota.agent." + sys.argv[3], "ProgramArguments": [sys.argv[2]],
+               "RunAtLoad": True, "KeepAlive": True, "UserName": sys.argv[3]}, open(sys.argv[1], "wb"))
+EOF
+  else
+    printf '[Service]\nUser=%s\nExecStart=%s\n' "$me" "$h/.ccquota/run-agent.sh" > "$sb/daemons/ccquota-agent-$me.service"
+  fi
+  # the agent from before: started by the old definition, left running (an orphan)
+  ( "$sb/bin/ccquota" agent --state "$h/.ccquota" & ) ; sleep 0.3
+  sep_self "$sb" "$(printf 'CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=ccq_STALE_SECRET\nCCQUOTA_FLEET=1\nCCQUOTA_FLEET_COMPUTE=0\n')" || return 1
+  L="$sb/lib/fleet-credsep-launch.py"    # the root copy launchd runs
+  [ -f "$L" ] || { WHY="the rig: no launcher copy at $L"; return 1; }
+  n=$(sep_agents | grep -c .)
+  [ "$n" = 1 ] || { WHY="the rig: $n agents before the switch (wanted the stale one)"; return 1; }
+  # the switch: launchd starts the agent through the launcher
+  t0=$(now)
+  # shellcheck disable=SC2086
+  env $SEPENV python3 -I "$L" agent "$me" 2>"$sb/launch.err" &
+  new=$!
+  until_ok 10 sep_only "$new"; rc=$?
+  SECS=$(since "$t0")
+  out=$(sep_agents 2>&1)
+  kill "$new" 2>/dev/null
+  [ "$rc" = 0 ] || { WHY="after the switch the login runs: $(printf '%s' "$out" | tr '\n' ' ') (the launcher's is $new) · $(cat "$sb/launch.err")"; return 1; }
+  grep -q 'stopped a stray agent pid' "$sb/launch.err" || { WHY="the launcher did not say what it stopped: $(cat "$sb/launch.err")"; return 1; }
+  WHAT="分离时留着一个旧 agent（孤儿）：经启动器起新 agent 前先停掉同登录、同 --state 的旧的，切换后只剩一个"
 }
 
 cred_run_drills "$0"

@@ -1247,6 +1247,27 @@ if [ -f "$_nu" ]; then
   esac
 fi
 
+# --- agentdup: one ccquota agent per login (issue #2663) --------------------------
+# Two agents on one --state share the one node token: the hub's link goes to
+# whichever said hello last, each hello with its own settings — placement flaps.
+# The launcher (fleet-credsep-launch.py) stops the extras at every start; this
+# names one it never saw. One agent (or none) ⇒ no row.
+_ad_l="$(dirname "$0")/fleet-credsep-launch.py"
+if [ -f "$_ad_l" ]; then
+  _ad=$(python3 -I "$_ad_l" agents "$(id -un)" 2>/dev/null | awk '
+    { n[$2]++; p[$2] = p[$2] (p[$2] == "" ? "" : ",") $1 }
+    END { for (s in n) if (n[s] > 1) printf "%s%d on --state %s (pids %s)", (o++ ? "; " : ""), n[s], s, p[s] }')
+  if [ -n "$_ad" ]; then
+    if [ "$(uname)" = Darwin ]; then _ad_fix="sudo launchctl kickstart -k system/com.ccquota.agent.$(id -un)"
+    else _ad_fix="sudo systemctl restart ccquota-agent-$(id -un).service"; fi
+    if [ -f "$conf_dir/credsep.json" ]; then
+      warn agentdup "ccquota agents of this login: $_ad — they replace each other's hub link; \`$_ad_fix\` restarts it through the launcher, which stops the extras"
+    else
+      warn agentdup "ccquota agents of this login: $_ad — they replace each other's hub link; stop all but the one your service runs"
+    fi
+  fi
+fi
+
 # --- autofill dispatcher (optional: auto-spawn `autofill`-labelled backlog, #70/#421) ---
 # OFF unless a fleet's conf sets FLEET_AUTOFILL=1. When ON, the dispatch daemon
 # auto-spawns eligible `autofill`-labelled backlog issues — which spends LLM tokens —
