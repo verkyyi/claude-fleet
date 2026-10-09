@@ -192,7 +192,7 @@ assert set(rows[1]["inputSchema"]["required"]) == {"issue"} and "reap" in rows[1
 ' || fail "E: --spec did not print the three closed schemas" "$spec"
 python3 "$BIN/fleet-mcp.py" --spec status nope >/dev/null 2>&1; rc=$?
 [ "$rc" = 2 ] || fail "E: --spec of an unknown tool exited $rc, want 2"
-for f in Lifecycle Usage State Progress Where Tools; do
+for f in Lifecycle Usage State Progress Compose Tools; do
   grep -q "^  register$f(on)\$" "$MOD/hooks/register.ts" || fail "E: register.ts no longer wires register$f"
 done
 ok "E fallback tools: registered only without the service, from --spec; every call forwarded to --call; no second copy of a schema, a check or a script"

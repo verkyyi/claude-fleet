@@ -311,7 +311,7 @@ wrapped() {
   mkdir -p "$3"; : > "$3/argv"
   local cmd="env CTL='$3' FLEET_WRAP_LAUNCH='$WORK/fake-agent' FLEET_WRAP_FAST_FAIL=${WRAP_FAST:-0} FLEET_UI_LANG=zh"
   [ -n "${PERS_CONF:-}" ] && cmd="$cmd FLEET_CONF_DIR='$PERS_CONF'"
-  cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' --agent claude 'the seed'; exec sleep 600"
+  cmd="$cmd '$WORK/wbin/fleet-session-wrap.sh' --agent claude ${WRAP_ARGS:-}'the seed'; exec sleep 600"
   if nt has-session -t "$1" 2>/dev/null; then nt new-window -d -t "$1:" -n "$2" "$cmd"
   else nt -f /dev/null new-session -d -s "$1" -n "$2" -x 100 -y 30 "$cmd"; fi
 }
@@ -689,6 +689,55 @@ EOC
   SECS=$(since "$t0")
   [ "$(oc m4)+$(oc m5)" = 1+0 ] || { WHY="after the hub named m4: m4+m5 = $(oc m4)+$(oc m5), want 1+0"; return 1; }
   WHAT="入口只认一台：下一拍旧的那台收掉（标记 retired、对话 id 留着），新的那台开出（节拍 60s 另计）"
+}
+
+# orchestrator-cleared (issue #2582, EPIC #2581 C1): a /clear (or a compaction)
+# empties the conversation, and the orchestrator's role was only its first turn,
+# the `/fleet-orchestrate` seed — after it the session no longer knew it was the
+# orchestrator. Its role rides the system prompt now, from ONE file
+# (skills/fleet-orchestrate/role.md): the launcher's --append-system-prompt-file
+# on a new AND a resumed launch, kept by the wrapper's ↵ resume, and the mod's
+# `fleet:orchestrator-role` section on every request. No real Claude here: the
+# drill pins every road that carries the file (the model's answer is the issue's
+# 上线证据).
+drill_orchestrator_cleared() {
+  CAP=10; BREAK_SOCK="$WORK/sock-oq"; local t0 w sid role oa="$WORK/oq-argv" h="$WORK/oqhome" c="$WORK/oq"
+  role="$ROOT/skills/fleet-orchestrate/role.md"
+  [ -s "$role" ] || { WHY="no skills/fleet-orchestrate/role.md — the role has no file to ride the system prompt"; return 1; }
+  [ "$(wc -l < "$role")" -le 60 ] || { WHY="role.md is $(wc -l < "$role" | tr -d ' ') lines, the charter caps it at 60"; return 1; }
+  grep -q '编排会话' "$role" || { WHY="role.md never says 编排会话"; return 1; }
+  grep -q "'fleet:orchestrator-role'" "$ROOT/mod/fleet/hooks/orchestrator.ts" 2>/dev/null \
+    && grep -q 'roleSection' "$ROOT/mod/fleet/hooks/compose.ts" 2>/dev/null \
+    && grep -q '^  registerCompose(on)$' "$ROOT/mod/fleet/hooks/register.ts" \
+    || { WHY="the mod no longer adds the fleet:orchestrator-role section"; return 1; }
+  mkdir -p "$h"; : > "$oa"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> %s\nexec sleep 600\n' "$oa" > "$WORK/oq-agent"; chmod +x "$WORK/oq-agent"
+  nt -f /dev/null new-session -d -s oq -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
+  oqens() { env PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$WORK/oqconf" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
+              FLEET_ORCHESTRATOR=1 FLEET_AGENT=claude FLEET_WRAP_LAUNCH="$WORK/oq-agent" bash "$BIN/fleet-orchestrator.sh" ensure oq 2>/dev/null; }
+  t0=$(now)
+  w=$(oqens) || { WHY="ensure did not open it"; return 1; }
+  until_ok 5 grep -q . "$oa" || { WHY="the orchestrator's agent never started"; return 1; }
+  grep -q -- "--append-system-prompt-file .*skills/fleet-orchestrate/role.md .*/fleet-orchestrate\$" "$oa" \
+    || { WHY="a new orchestrator is not launched with its role in the system prompt: $(cat "$oa")"; return 1; }
+  sid=$(cat "$WORK/oqconf/fleets/oq/orchestrator.sid" 2>/dev/null)
+  mkdir -p "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')"
+  : > "$h/.claude/projects/$(printf '%s' "$h" | LC_ALL=C tr -c 'A-Za-z0-9' '-')/$sid.jsonl"
+  nt kill-window -t "$w"; : > "$oa"
+  oqens >/dev/null || { WHY="ensure did not reopen it"; return 1; }
+  until_ok 5 grep -q . "$oa" || { WHY="the reopened orchestrator never started"; return 1; }
+  grep -q -- "--resume $sid --append-system-prompt-file .*skills/fleet-orchestrate/role.md" "$oa" \
+    || { WHY="a resumed orchestrator lost its role: $(cat "$oa")"; return 1; }
+  # the recovery page's ↵ (the wrapper's own resume) keeps the flag too
+  WRAP_ARGS="--append-system-prompt-file '$role' " wrapped sx w "$c" || { WHY="cannot start the wrapped window"; return 1; }
+  until_ok 10 grep -q . "$c/argv" || { WHY="the wrapped agent never started"; return 1; }
+  printf rc0 > "$c/mode"; : > "$c/go"
+  until_ok 10 page_says '这个窗口不会关' || { WHY="no recovery page"; return 1; }
+  nt send-keys -t sx:w Enter
+  until_ok 10 sh -c "[ \$(grep -c . '$c/argv') = 2 ]" || { WHY="↵ relaunched nothing"; return 1; }
+  [ "$(sed -n 2p "$c/argv")" = "--agent claude --append-system-prompt-file $role --resume SID-1" ] \
+    || { WHY="↵ resumed without the role: [$(sed -n 2p "$c/argv")]"; return 1; }
+  SECS=$(since "$t0"); WHAT="新开、续开、恢复页 ↵ 都带 role.md 进系统提示；mod 每轮加 fleet:orchestrator-role"
 }
 
 # window-renamed (issue #1844): a name is not an identity. Home renamed, a worker

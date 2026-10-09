@@ -15,18 +15,18 @@
 
 import type { Register } from 'claude-code'
 
+import { registerCompose } from './compose'
 import { registerLifecycle } from './lifecycle'
 import { registerProgress } from './progress'
 import { registerState } from './state'
 import { registerTools } from './tools'
 import { registerUsage } from './usage'
-import { registerWhere } from './where'
 
 export const register: Register = on => {
   registerLifecycle(on)
   registerUsage(on)
   registerState(on)
   registerProgress(on)
-  registerWhere(on)
+  registerCompose(on)
   registerTools(on)
 }
