@@ -31,6 +31,10 @@ var adminPageRoutes = []struct{ path, id, file string }{
 	{"/admin/users", "people", "users.html"},
 	{"/admin/settings", "settings", "settings.html"},
 	{"/admin/audit", "audit", "audit.html"},
+	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
+	{"/admin/sessions", "all-sessions", "admin/sessions.html"},
+	{"/admin/overview", "by-person", "admin/overview.html"},
+	{"/admin/devices", "all-devices", "admin/devices.html"},
 }
 
 // adminPage serves one admin page, or its 403 to a user.

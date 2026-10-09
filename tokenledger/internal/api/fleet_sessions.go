@@ -80,7 +80,12 @@ func (s *Server) handleFleetSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ctx := r.Context()
-	if !id.Operator {
+	if id.Admin {
+		// An admin's own session list, as the Sessions page shows it
+		// (claude-fleet#2515); everyone's is AdminSessionsPath.
+		ctx = withRole(context.WithValue(withViewer(ctx, id.Actor), principalKey{}, id.Actor), roleAdmin)
+		ctx = context.WithValue(ctx, ownViewKey{}, true)
+	} else if !id.Operator {
 		// A person: the fleet principal FleetScope and the audit read, as a
 		// GitHub sign-in sets it (viewerOnly's githubAdmit).
 		ctx = context.WithValue(withViewer(ctx, id.Principal), principalKey{}, id.Principal)

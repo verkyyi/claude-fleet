@@ -70,6 +70,9 @@ type sshRelayIdentity struct {
 	Principal string
 	// Actor is the name in the audit: the principal, or the operator door.
 	Actor string
+	// Admin is an Operator that is a GitHub admin's session (Actor is their
+	// principal): the Sessions page cuts them to their own (claude-fleet#2515).
+	Admin bool
 }
 
 // pendingSSHRelay is a relay the hub has asked an agent for and is waiting on.
@@ -195,7 +198,7 @@ func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) 
 		if role, err := s.githubRole(id); err == nil && role == roleAdmin {
 			// An admin sees every machine, as the operator's doors do
 			// (claude-fleet#1985).
-			return sshRelayIdentity{Operator: true, Actor: sess.UID}, true
+			return sshRelayIdentity{Operator: true, Actor: sess.UID, Admin: true}, true
 		} else if err == nil && role != "" {
 			return sshRelayIdentity{Principal: sess.UID, Actor: sess.UID}, true
 		}

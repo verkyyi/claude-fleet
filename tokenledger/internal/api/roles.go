@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -113,6 +114,9 @@ var routeAccess = map[string]string{
 	// The admin pages (claude-fleet#1990) and the one audit they read.
 	"/subscriptions": accessAdmin, "/nodes": accessAdmin, "/admin/users": accessAdmin,
 	"/admin/settings": accessAdmin, "/admin/audit": accessAdmin, AuditPath: accessAdmin,
+	// The whole hub an admin's daily pages used to show (claude-fleet#2515).
+	AdminSessionsPath: accessAdmin, AdminOverviewPath: accessAdmin, AdminDevicesPath: accessAdmin,
+	"/admin/sessions": accessAdmin, "/admin/overview": accessAdmin, "/admin/devices": accessAdmin,
 	"/badge/": accessAdmin, "/embed/": accessAdmin,
 
 	// A user's own: scoped to their machine login, their principal, or
@@ -275,11 +279,13 @@ func (u *UserLogins) key() string {
 	return "login\x01" + u.Login
 }
 
-// UserScope is what a request's rows are cut to: nil for an admin
-// (everything), else the caller's own logins — none at all when they have
-// none, so a user never falls through to the whole hub.
+// UserScope is what a request's rows are cut to: nil for an admin on an
+// admin route and the operator's doors (everything), else the caller's own
+// logins — none at all when they have none, so a user never falls through to
+// the whole hub. An admin on a daily page's route is cut like a user
+// (ownView, claude-fleet#2515).
 func (s *Server) UserScope(r *http.Request) (*UserLogins, error) {
-	if roleOf(r.Context()) != roleUser {
+	if !cutToSelf(r.Context()) {
 		return nil, nil
 	}
 	pid := principalOf(r.Context())
@@ -325,9 +331,46 @@ func scopeRows[T any](rows []T, osUser func(T) string, login string) []T {
 	return out
 }
 
-// seesAll is whether the caller sees every person's rows: an admin or the
-// operator's doors.
-func seesAll(r *http.Request) bool { return roleOf(r.Context()) != roleUser }
+// seesAll is whether the caller sees every person's rows: the operator's
+// doors, or an admin anywhere but a daily page's route (ownView).
+func seesAll(r *http.Request) bool { return !cutToSelf(r.Context()) }
+
+// Admins see their own on the daily pages (claude-fleet#2515, EPIC #2512 C3).
+// Overview, Sessions, Devices and Config show an admin exactly what they show a
+// user — their own (machine, login) pairs, their own devices — and the whole
+// hub moves to the admin routes (/v1/admin/sessions, /v1/admin/overview,
+// /v1/admin/devices). The routes those pages read are mounted through ownView;
+// every other route keeps what it gave an admin. The operator's doors (the
+// viewer token, the sidebar's automation) are never cut.
+
+// ownViewKey marks a request that came in on a daily page's route.
+type ownViewKey struct{}
+
+// ownView mounts a daily page's route: an admin there is cut to their own
+// rows, as a user always is.
+func ownView(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ownViewKey{}, true)))
+	})
+}
+
+// isOwnView is whether r came in on an ownView route.
+func isOwnView(ctx context.Context) bool {
+	v, _ := ctx.Value(ownViewKey{}).(bool)
+	return v
+}
+
+// cutToSelf is whether the caller's rows are cut to their own: always a
+// user's, an admin's on a daily page's route, never the operator's.
+func cutToSelf(ctx context.Context) bool {
+	switch roleOf(ctx) {
+	case roleUser:
+		return true
+	case roleAdmin:
+		return isOwnView(ctx) && principalOf(ctx) != ""
+	}
+	return false
+}
 
 // adminOnly refuses a user: subscriptions, machines, join codes, credentials
 // and the rest are an admin's, not something a colleague can read or widen
@@ -372,12 +415,14 @@ func (s *Server) auditRoleDenied(r *http.Request) {
 }
 
 // Pages, as /v1/me lists them for the menu (C7, C8). A user's own; an
-// admin's every one: the same, then Subscriptions, Machines, Users,
-// Settings and Audit (claude-fleet#1990). mymachines is 我的机器 (#2518),
-// quota is 我的额度 (#2517).
+// admin's every one: the same (their own, claude-fleet#2515), then All
+// sessions, By person and All devices — the whole hub those pages used to
+// show an admin — then Subscriptions, Machines, Users, Settings and Audit
+// (claude-fleet#1990). mymachines is 我的机器 (#2518), quota is 我的额度 (#2517).
 var (
 	userPages  = []string{"overview", "sessions", "mymachines", "devices", "quota", "config"}
 	adminPages = []string{"overview", "sessions", "mymachines", "devices", "quota", "config",
+		"all-sessions", "by-person", "all-devices",
 		"subscriptions", "machines", "people", "settings", "audit"}
 )
 

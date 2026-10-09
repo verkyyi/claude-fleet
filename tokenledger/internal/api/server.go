@@ -477,7 +477,11 @@ func (s *Server) routes() *routeMux {
 		// 登录即登记 (claude-fleet#2212): the same device signature buys the
 		// device's node pass — untrusted, coordinate-only — with no second scan.
 		mux.HandleFunc(control.LoginNodePath, s.handleLoginNode)
-		mux.Handle("/v1/fleet/devices", s.viewerOnly(http.HandlerFunc(s.handleFleetDevices)))
+		// Devices shows an admin their own too (claude-fleet#2515); everyone's
+		// is AdminDevicesPath. Revoke stays where it was: an admin revokes any.
+		mux.Handle("/v1/fleet/devices", s.viewerOnly(ownView(http.HandlerFunc(s.handleFleetDevices))))
+		mux.Handle(AdminDevicesPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetDevices))))
+		mux.Handle(AdminSessionsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminSessions))))
 		mux.Handle("/v1/fleet/devices/revoke", s.viewerOnly(http.HandlerFunc(s.handleFleetDeviceRevoke)))
 		// Which machine to enter (claude-fleet#1470): admits a certificate by a
 		// signed timestamp like the route list, so it authenticates itself.
@@ -570,14 +574,16 @@ func (s *Server) routes() *routeMux {
 	mux.Handle("/v1/account-usage", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccountUsage))))
 	mux.Handle("/v1/limits", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleLimits))))
 	mux.Handle("/v1/endpoints", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleEndpoints))))
-	mux.Handle("/v1/usage", s.viewerOnly(http.HandlerFunc(s.handleUsage)))
-	mux.Handle("/v1/history", s.viewerOnly(http.HandlerFunc(s.handleHistory)))
+	// Overview's reads: an admin's own there too (claude-fleet#2515); the hub
+	// by login is AdminOverviewPath.
+	mux.Handle("/v1/usage", s.viewerOnly(ownView(http.HandlerFunc(s.handleUsage))))
+	mux.Handle("/v1/history", s.viewerOnly(ownView(http.HandlerFunc(s.handleHistory))))
 	mux.Handle("/v1/account-switches", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleSwitches))))
 	mux.Handle("/v1/endpoint-accounts", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleEndpointAccounts))))
 	mux.Handle("/v1/accounts/label", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAccountLabel))))
 	mux.Handle("/v1/live", s.viewerOnly(http.HandlerFunc(s.handleLiveSnapshot)))
 	mux.Handle("/v1/live/stream", s.viewerOnly(http.HandlerFunc(s.handleLiveStream)))
-	mux.Handle("/v1/summary", s.viewerOnly(http.HandlerFunc(s.handleSummary)))
+	mux.Handle("/v1/summary", s.viewerOnly(ownView(http.HandlerFunc(s.handleSummary))))
 	mux.Handle("/v1/sessions", s.viewerOnly(http.HandlerFunc(s.handleSessions)))
 	mux.Handle("/v1/sessions/", s.viewerOnly(http.HandlerFunc(s.handleSession)))
 	mux.Handle("/v1/limits/history", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleLimitsHistory))))
@@ -611,6 +617,7 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(p.path, s.viewerOnly(s.adminPage(p.id, p.file)))
 	}
 	mux.Handle(AuditPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminAudit))))
+	mux.Handle(AdminOverviewPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminOverview))))
 
 	// Badges are the one surface that may be unauthenticated, and only on
 	// purpose. Everything else on this hub stays behind the viewer token.
