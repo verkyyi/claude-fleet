@@ -123,6 +123,9 @@ preview ctrl-p alt-p' ;;
 # are its `>` commands); prefix s elsewhere, tmux's own choose-tree key.
 # `quit` (issue #2349): ⌘Q, 退出 fleet — the client's every process here goes,
 # the sessions run on (fleet-shell.sh quit); prefix Q elsewhere, unbound in tmux.
+# `dispatch` (issue #2753): ⌘T, 派一件事 — a title, a repo, ↵ files it and opens
+# its worker (bin/fleet-quick-dispatch.py, the writing area's own payload and road);
+# prefix t elsewhere (tmux's clock, no use here).
 # `needs` (⌘J / prefix k, code 924) and `help` (⌘/ / prefix ?, code 926) went
 # with issue #2362: the bar's 「! N 等你」 is still a tap to the one waiting, the
 # keys live in docs/CLIENT.md. Their codes stay retired — never reuse 924 / 926:
@@ -136,7 +139,8 @@ quickopen ⌘P 0x70-0x100000 927 /
 new ⌘N 0x6e-0x100000 928 c
 fold ⌘. 0x2e-0x100000 929 .
 switcher ⌘K 0x6b-0x100000 930 s
-quit ⌘Q 0x71-0x100000 931 Q'
+quit ⌘Q 0x71-0x100000 931 Q
+dispatch ⌘T 0x74-0x100000 932 t'
   cmd="${1:-list}"
   case "$cmd" in
     list)    printf '%s\n' "$TABLE" ;;

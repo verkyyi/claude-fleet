@@ -75,7 +75,12 @@ in, not the right-click menu (which stays, unadvertised). Each row carries its
 row's menu item (ROW_KEYS → menu_items), so a key never spells an action twice;
 ⌃A off a waiting row moves onto the first one that waits, and ⌃O on a row with
 no 「打开 PR」 item (another machine's) opens its PR's — else its issue's — page.
-`>` lists the panel's own lines first (panel_cmds: 退出 fleet · 新会话 claude |
+ON TOP, NO `>` NEEDED (issue #2753): 「⚡ 派一件事…」 (the ⌘T popup,
+bin/fleet-quick-dispatch.py, run in this one), + 新会话, the layout flip and 退出 fleet
+are a pinned group above the sessions (top_lines; a query keeps the ones it
+names). An empty ⌘P still lights the session before, so ↵ is «the one before»
+as it was; ↑ reaches the group.
+`>` lists the panel's own lines first (panel_cmds: 派一件事 · 退出 fleet · 新会话 claude |
 codex · 切到多 / 单会话视图 · 改名当前会话 — ⌘K's tail folded in; ⌘K and prefix s
 open this same panel now), then the row menu's. The last line always says the
 keys (the bar's @fleet_hint_palette says the same). An empty query lists the
@@ -412,6 +417,21 @@ def switch_tail(layout, say=None):
             ("quit", say.get("switch_quit") or "退出 fleet")]
 
 
+def top_lines(query, layout, say=None):
+    """⌘P's pinned group (issue #2753): 「⚡ 派一件事…」 first, then + 新会话, the
+    layout flip and 退出 fleet — always on top, no `>` needed — and a rule under
+    them. An empty query shows them all; a query keeps the ones it names (its
+    label or action holds it), with no rule when none does."""
+    say = say or {}
+    acts = [("dispatch", say.get("panel_dispatch") or "⚡ 派一件事…")]
+    acts += [a for a in switch_tail(layout, say) if a[0] != "sep"]
+    q = query.strip().casefold()
+    if q:
+        acts = [a for a in acts if q in a[1].casefold() or q in a[0]]
+    lines = [("act", a) for a in acts]
+    return lines + [("sep", "")] if lines else lines
+
+
 def ago(then, now=None):
     """`then` (epoch) as a short age — 刚刚 / 5m / 3h / 2d; '' for none."""
     if not then:
@@ -442,6 +462,14 @@ def switch_act(action, session=""):
     env = dict(os.environ)
     if session:
         env["FLEET_SHELL_SESSION"] = session
+    if action == "dispatch":
+        # ⌘P's 「⚡ 派一件事…」 (issue #2753) outside the popup (switch-run): the
+        # ⌘T popup, through the one popup door
+        seam = os.environ.get("FLEET_SWITCH_DISPATCH_CMD")
+        detach(seam.split() if seam else
+               ["bash", str(BIN / "dash-popup.sh"), "--no-inline", "--size", "S", "--title", "popup_dispatch", "--",
+                sys.executable, str(BIN / "fleet-quick-dispatch.py")] + (["--session", session] if session else []), env)
+        return True
     if action == "quit":
         seam = os.environ.get("FLEET_SWITCH_QUIT_CMD")
         detach((seam.split() if seam else ["bash", str(BIN / "fleet-shell.sh"), "quit"])
@@ -670,7 +698,8 @@ def panel_cmds(layout, session, current, say=None):
     here goes, the sessions run on) — not prefix d's 放到后台."""
     say = say or {}
     w = lambda k, d: say.get(k) or d
-    out = [("quit", w("panel_quit", "退出 fleet（会话在后台继续）"), "", "!quit")]
+    out = [("dispatch", w("panel_dispatch", "⚡ 派一件事…"), "", "!dispatch"),
+           ("quit", w("panel_quit", "退出 fleet（会话在后台继续）"), "", "!quit")]
     for agent in ("claude", "codex"):
         out.append(("new:" + agent, (say.get("panel_new_fmt") or "新会话 · %s") % agent, "", "!new:" + agent))
     if layout in ONE_PANE:
@@ -805,7 +834,7 @@ def popup(screen, pane, session="", target="", switch=False):
     screen.keypad(True)
     rows, hist = read_rows(), load()
     current = hist["stack"][hist["at"]] if hist["stack"] else ""
-    query, at = "", 0
+    query, at = "", None   # None: the default line (popup's first paint, a new query)
     # the painted rows at once; every session (folded ones too) a moment later —
     # and the screen's words with them
     fetched, say = [], {}
@@ -815,7 +844,7 @@ def popup(screen, pane, session="", target="", switch=False):
         say.update(words("quickopen_keys", "quickopen_cmd_keys", "quickopen_cmd_for_fmt", "quickopen_cmd_none",
                          "quickopen_cmd_loading", "switch_new", "switch_multi", "switch_solo", "panel_quit",
                          "panel_new_fmt", "panel_multi", "panel_solo", "panel_rename_current",
-                         "panel_no_action_fmt", "panel_no_waiting", "switch_quit"))
+                         "panel_no_action_fmt", "panel_no_waiting", "switch_quit", "panel_dispatch"))
         fetched.append(full_rows(session))
     reader = threading.Thread(target=fetch, daemon=True)
     reader.start()
@@ -842,19 +871,26 @@ def popup(screen, pane, session="", target="", switch=False):
         if command:
             title, items = cmds[0] if cmds else ("", None)
             shown = rank_cmds(items, query[1:]) if items is not None else None
-            at = max(0, min(at, len(shown or []) - 1))
+            at = max(0, min(at or 0, len(shown or []) - 1))
             draw_cmds(screen, query, title, shown, at, width, height, say)
         else:
             # ⌘K (issue #2266): the sessions, then its tail — + 新会话, a rule,
             # the layout flip — the tail always on screen, under the last row
+            # ⌘P (issue #2753): the pinned group on top — 「⚡ 派一件事…」 first
             lines = (switch_lines(rows, query, hist, current, layout, say) if switch
-                     else [("row", rm) for rm in rank(rows, query, hist["mru"], current)])
+                     else top_lines(query, layout, say) + [("row", rm) for rm in rank(rows, query, hist["mru"], current)])
             shown = [ln for ln in lines if ln[0] != "sep"]
+            if at is None:
+                # an empty ⌘P still lights the session before (↵ = «the one
+                # before»); ↑ reaches the group above it
+                at = next((i for i, ln in enumerate(shown) if ln[0] == "row"), 0) if not query else 0
             at = max(0, min(at, len(shown) - 1))
             body = height - 4
-            tail = [ln for ln in lines if ln[0] != "row"]
-            nrows = max(0, body - len(tail))
-            drawn = [ln for ln in lines if ln[0] == "row"][:nrows] + tail
+            first = next((i for i, ln in enumerate(lines) if ln[0] == "row"), len(lines))
+            head = lines[:first] if not switch else []
+            tail = [ln for ln in lines[len(head):] if ln[0] != "row"]
+            nrows = max(0, body - len(head) - len(tail))
+            drawn = head + [ln for ln in lines if ln[0] == "row"][:nrows] + tail
             sel_ln = shown[at] if shown else None
             for y, (kind, payload) in enumerate(drawn[:max(0, body)], 2):
                 sel = (kind, payload) == sel_ln if sel_ln else False
@@ -960,8 +996,12 @@ def popup(screen, pane, session="", target="", switch=False):
                 if shown[at][1].startswith("-") or not shown[at][3]:
                     curses.beep()   # greyed: the menu would not run it either
                     continue
+                if shown[at][3] == "!dispatch":
+                    return "dispatch"
                 panel_run(shown[at][3], session or session_of())
             elif shown and shown[at][0] == "act":
+                if shown[at][1][0] == "dispatch":
+                    return "dispatch"   # main() runs the ⌘T popup in this one
                 switch_act(shown[at][1][0], session or session_of())
             elif shown:
                 hand(pane or list_pane(), "jump=" + shown[at][1][0]["key"])
@@ -972,11 +1012,11 @@ def popup(screen, pane, session="", target="", switch=False):
         elif key in (curses.KEY_DOWN, "\x0e", "\t"):
             at += 1
         elif key in (curses.KEY_BACKSPACE, "\x7f", "\x08"):
-            query, at = query[:-1], 0
+            query, at = query[:-1], None
         elif key == "\x15":
-            query, at = "", 0
+            query, at = "", None
         elif isinstance(key, str) and key.isprintable():
-            query, at = query + key, 0
+            query, at = query + key, None
 
 
 NEEDS = ("needs", "failed")
@@ -1182,7 +1222,7 @@ def main(argv):
     if argv[:1] == ["switch-run"] and len(argv) in (2, 3):
         # ↵ on a ⌘K line: a session key jumps (as ↵ on it does), else the action
         session = argv[2] if len(argv) == 3 else os.environ.get("FLEET_SESSION", "")
-        if argv[1] in ("new", "quit") or argv[1].startswith(("new:", "layout:")):
+        if argv[1] in ("new", "quit", "dispatch") or argv[1].startswith(("new:", "layout:")):
             return 0 if switch_act(argv[1], session) else 1
         return 0 if hand(list_pane(), "jump=" + argv[1]) else 1
     if argv[:1] == ["panel-cmds"]:
@@ -1216,7 +1256,14 @@ def main(argv):
     if "--full" in argv:
         return curses.wrapper(full, pane, session)
     target = argv[argv.index("--target") + 1] if "--target" in argv[:-1] else ""
-    return curses.wrapper(popup, pane, session, target, "--switch" in argv)
+    rc = curses.wrapper(popup, pane, session, target, "--switch" in argv)
+    if rc == "dispatch":
+        # 「⚡ 派一件事…」 (issue #2753): the ⌘T popup takes this one's place —
+        # a client holds one overlay at a time — and the bar says its keys
+        tmux("set", "-g", "@popup_title", "popup_dispatch")
+        disp = str(BIN / "fleet-quick-dispatch.py")
+        os.execv(sys.executable, [sys.executable, disp] + (["--session", session] if session else []))
+    return rc
 
 
 if __name__ == "__main__":

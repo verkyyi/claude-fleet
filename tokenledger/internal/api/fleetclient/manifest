@@ -137,6 +137,8 @@ bin/fleet-iterm-profile.py
 bin/fleet-compose.py
 # …and how long each of its sends took, per segment (#2238)
 bin/fleet-compose-latency.sh
+# ⌘T 派一件事 (#2753): the one-line popup, the writing area's payload and road
+bin/fleet-quick-dispatch.py
 conf/tmux-shell.conf
 conf/tmux-shell-stage.conf
 conf/fleet-palette.conf

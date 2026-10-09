@@ -29,7 +29,7 @@ import type { ProgressSnapshot } from '../types'
 import { isOpen } from './gate'
 import { isOrchestrator } from './orchestrator'
 import { QD_COMMAND, t } from './qd'
-import { QUEUE_IDLE, queueText } from './queue'
+import { QUEUE_IDLE, idleText, queueText } from './queue'
 import {
   children, newAlerts, parseLedger, parseTmux, PROGRESS_MS, prFor, segments, selfKey, slug, tmuxArgv,
 } from './progress-model'
@@ -127,8 +127,10 @@ export function registerProgress(on: On): void {
     // The orchestrator's queue (queue.ts, issue #2617) shares this one site:
     // its yellow line on top, the PR segment under it — one tree, never two.
     const waiting = isOrchestrator() ? queueText(q) : ''
+    // …and idle, how to dispatch in one go (issue #2753)
+    const idle = isOrchestrator() && waiting === '' ? idleText(q) : ''
     const kept = snap === null ? [] : segments(snap)
-    if (kept.length === 0 && waiting === '') return next(e)
+    if (kept.length === 0 && waiting === '' && idle === '') return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     return (
       <Box key="fleet-band" flexDirection="column">
@@ -145,6 +147,13 @@ export function registerProgress(on: On): void {
                 void $.command.run({ command: QD_COMMAND }).catch(() => undefined)
               }}
             />
+          </Box>
+        )}
+        {idle !== '' && (
+          <Box key="fleet-idle" flexDirection="row">
+            <Text key="fleet-idle-text" dimColor wrap="truncate-end">
+              {idle}
+            </Text>
           </Box>
         )}
         {kept.length > 0 && (

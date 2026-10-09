@@ -480,9 +480,14 @@ sw_table="$(bash "$KEYMAP" --panel switch list)" || fail "10: dash-keymap.sh --p
 # `switcher` (⌘K / prefix s, issue #2266): ⌘P's panel since #2365 — 930.
 # `needs` (⌘J · 924 · prefix k) and `help` (⌘/ · 926 · prefix ?) went with issue #2362.
 # `quit` (⌘Q / prefix Q, issue #2349): 退出 fleet — 931.
-[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 10 ] || fail "10: the switch table is not #1903's 6 (less needs / help, #2362) + #1953's new + #2167's fold + #2266's switcher + #2349's quit: $sw_table"
-[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd zoom quickopen new fold switcher quit " ] \
-  || fail "10: the switch actions are not next prev back fwd zoom quickopen new fold switcher quit"
+# `dispatch` (⌘T / prefix t, issue #2753): 派一件事 — 932.
+[ "$(printf '%s\n' "$sw_table" | grep -c .)" = 11 ] || fail "10: the switch table is not #1903's 6 (less needs / help, #2362) + #1953's new + #2167's fold + #2266's switcher + #2349's quit + #2753's dispatch: $sw_table"
+[ "$(printf '%s\n' "$sw_table" | awk '{print $1}' | tr '\n' ' ')" = "next prev back fwd zoom quickopen new fold switcher quit dispatch " ] \
+  || fail "10: the switch actions are not next prev back fwd zoom quickopen new fold switcher quit dispatch"
+printf '%s\n' "$sw_table" | awk '$1 == "dispatch" && $2 == "⌘T" && $3 == "0x74-0x100000" && $4 == 932 && $5 == "t"' | grep -q . \
+  || fail "10: dispatch is not ⌘T · 0x74-0x100000 · code 932 · prefix t"
+grep -E '^bind -n User932 ' "$CONF" | grep -q 'fleet-quick-dispatch.py' || fail "10: ⌘T does not open the dispatch popup (fleet-quick-dispatch.py)"
+grep -F '@fleet_hint_session ' "$CONF" | grep -q 'key-User932].*⌘T.*派单' || fail "10: the bar has no ⌘T 派单 cell (User932)"
 printf '%s\n' "$sw_table" | awk '$4 == 924 || $4 == 926 || $2 == "⌘J" || $2 == "⌘/"' | grep -q . \
   && fail "10: a retired code / chord is back in the switch table (924 ⌘J, 926 ⌘/ — issue #2362)"
 printf '%s\n' "$sw_table" | awk '$1 == "quit" && $2 == "⌘Q" && $3 == "0x71-0x100000" && $4 == 931 && $5 == "Q"' | grep -q . \
@@ -539,8 +544,8 @@ PY
 done <<EOF
 $sw_table
 EOF
-# the table's 10 + ⇧↵ → 0x0a (the writing area's newline, issue #1953); no ⌘J / ⌘/
-[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 11 ] \
+# the table's 11 + ⇧↵ → 0x0a (the writing area's newline, issue #1953); no ⌘J / ⌘/
+[ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]))' "$SW_PROF/fleet.json")" = 12 ] \
   || fail "10: the profile maps keys beyond the table + ⇧↵ (no parent map to keep here)"
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"]; assert m["0xd-0x20000"] == {"Action": 11, "Text": "0x0a"}, m' "$SW_PROF/fleet.json" \
   || fail "10: the profile does not send 0x0a for ⇧↵"
