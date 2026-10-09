@@ -79,11 +79,11 @@ var fleetScopeOf = map[string]string{
 	"service_control": "service:control",
 	// The person's orchestrating session opened on its holder machine when ⌘N
 	// found none (claude-fleet#2616): a start's authority.
-	"orch_ensure":     "worker:start",
-	"gh_comment":      "gh:comment",
-	"gh_issue_view":   "gh:read",
-	"gh_pr_view":      "gh:read",
-	"gh_pr_checks":    "gh:read",
+	"orch_ensure":   "worker:start",
+	"gh_comment":    "gh:comment",
+	"gh_issue_view": "gh:read",
+	"gh_pr_view":    "gh:read",
+	"gh_pr_checks":  "gh:read",
 }
 
 // FleetScopes is every scope a grant may hold.
