@@ -423,7 +423,7 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) []string 
 	var left []string
 	queued := false
 	for _, a := range accts {
-		if strings.EqualFold(a.Hostname, d.Hostname) && a.Login == d.Login {
+		if d.OwnComputer(a) {
 			continue
 		}
 		where := a.Login + "@" + a.Hostname

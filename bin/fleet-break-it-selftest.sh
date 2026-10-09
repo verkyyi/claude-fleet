@@ -4327,7 +4327,7 @@ drill_drill_person_no_machine() {
   for out in $tests; do
     grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
   done
-  grep -q 'drill != nil && strings.EqualFold(a.Hostname, drill.Hostname)' "$ROOT/tokenledger/internal/api/fleet_opening.go" \
+  grep -q 'own := drill.OwnComputer' "$ROOT/tokenledger/internal/api/fleet_opening.go" \
     || { WHY="accountStateOf no longer sets a drill's own computer apart"; return 1; }
   grep -q 'closeDrillLogins(d, now)' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
     || { WHY="DELETE /v1/self no longer removes the login opened for the drill first"; return 1; }
