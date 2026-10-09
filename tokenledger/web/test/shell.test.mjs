@@ -3,10 +3,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { useLocale, fmtCompact, fmtDate, fmtAgo } from '../dist/lib/i18n.js';
-import { navFor, pageAllowed, isAdmin, viewer, fmtTokens, spark, ctxBar, liveLine, esc, titleOf, PAGES } from '../dist/lib/shell.js';
+import { navFor, pageAllowed, isAdmin, viewer, fmtTokens, spark, ctxBar, liveLine, esc, titleOf, PAGES, otherView } from '../dist/lib/shell.js';
 
 const USER = ['overview', 'sessions', 'mymachines', 'devices', 'quota', 'config'];
-const ADMIN = [...USER, 'subscriptions', 'machines', 'people', 'settings', 'audit'];
+const ADMIN = [...USER, 'all-sessions', 'by-person', 'all-devices', 'subscriptions', 'machines', 'people', 'settings', 'audit'];
 
 test('a user sees their own pages and no Admin group', () => {
   const nav = navFor(USER);
@@ -15,13 +15,15 @@ test('a user sees their own pages and no Admin group', () => {
   assert.deepEqual(nav.map((x) => x.href), ['/', '/sessions', '/machines', '/connect', '/quota', '/config']);
 });
 
-test('an admin also sees the Admin group: the five admin pages (#1990)', () => {
+test('an admin also sees the Admin group: the whole hub, then the five admin pages (#1990, #2515)', () => {
   const nav = navFor(ADMIN);
   const i = nav.findIndex((x) => x.heading === 'Admin');
   assert.equal(i, USER.length);
+  // An admin's own pages are a user's, same order, same links.
+  assert.deepEqual(nav.slice(0, i), navFor(USER));
   const admin = nav.slice(i + 1);
-  assert.deepEqual(admin.map((x) => x.id), ['subscriptions', 'machines', 'people', 'settings', 'audit']);
-  assert.deepEqual(admin.map((x) => x.href), ['/subscriptions', '/nodes', '/admin/users', '/admin/settings', '/admin/audit']);
+  assert.deepEqual(admin.map((x) => x.id), ['all-sessions', 'by-person', 'all-devices', 'subscriptions', 'machines', 'people', 'settings', 'audit']);
+  assert.deepEqual(admin.map((x) => x.href), ['/admin/sessions', '/admin/overview', '/admin/devices', '/subscriptions', '/nodes', '/admin/users', '/admin/settings', '/admin/audit']);
   // The old admin pages are gone from the menu, not hidden.
   assert.deepEqual(navFor([...ADMIN, 'credentials', 'access']).length, nav.length);
   assert.ok(nav.every((x) => x.heading || x.href), 'every item links somewhere');
@@ -115,4 +117,20 @@ test('the menu and the viewer line speak Chinese too', () => {
     assert.equal(liveLine({ sessions: [{}, {}], nodes: [{ availability: 'online' }, { availability: 'lost' }] }), '实时 · 2 个会话 · 2 台机器 1 台在线');
     assert.equal(titleOf('config'), '配置');
   } finally { useLocale('en'); }
+});
+
+// The top bar's switch (claude-fleet#2515): an admin's daily page links to its
+// whole-hub half and back; a user has none.
+test('an admin switches between their own view and the admin view; a user cannot', () => {
+  const admin = { role: 'admin', pages: ADMIN };
+  assert.deepEqual(['overview', 'sessions', 'devices', 'config'].map((p) => otherView(admin, p).href),
+    ['/admin/overview', '/admin/sessions', '/admin/devices', '/admin/settings']);
+  assert.ok(['overview', 'sessions', 'devices', 'config'].every((p) => otherView(admin, p).admin));
+  assert.deepEqual(['by-person', 'all-sessions', 'all-devices', 'settings'].map((p) => otherView(admin, p).href),
+    ['/', '/sessions', '/connect', '/config']);
+  assert.ok(['by-person', 'all-sessions', 'all-devices'].every((p) => !otherView(admin, p).admin));
+  assert.equal(otherView(admin, 'audit'), null);
+  const user = { role: 'user', pages: USER };
+  for (const p of USER) assert.equal(otherView(user, p), null, p);
+  assert.equal(otherView(null, 'overview'), null);
 });

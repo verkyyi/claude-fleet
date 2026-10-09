@@ -12,7 +12,7 @@
 //
 // Fails closed: no /v1/me, no menu — the page says it could not tell who you
 // are and offers to sign in again, rather than drawing a menu that guesses.
-import { esc, ic, ICONS, navFor, pageAllowed, titleOf, isAdmin, viewer, liveLine } from './lib/shell.js';
+import { esc, ic, ICONS, navFor, pageAllowed, titleOf, isAdmin, viewer, liveLine, otherView } from './lib/shell.js';
 import { t, locale, chooseLocale } from './lib/i18n.js';
 
 /** api fetches a same-origin JSON endpoint; a non-2xx throws an Error whose
@@ -80,6 +80,8 @@ export function copyText(text) {
 
 function frame(me, page) {
   const v = viewer(me);
+  // An admin's daily page and its whole-hub half, one click apart (claude-fleet#2515).
+  const sw = otherView(me, page);
   const nav = navFor(me && me.pages).map((x) => x.heading
     ? `<div class="nav-h">${esc(x.heading)}</div>`
     : `<a class="navi" href="${esc(x.href)}"${x.id === page ? ' aria-current="page"' : ''}>${ic(x.icon)}<span>${esc(x.label)}</span><span class="cnt" data-cnt="${esc(x.id)}"></span></a>`).join('');
@@ -94,7 +96,7 @@ function frame(me, page) {
     <aside class="side" id="side"><a class="logo" href="/"><span class="logo-mark"><svg viewBox="0 0 24 24">${ICONS.fleet}</svg></span>claudefleet</a>
       <div class="fleet-sw"><b>${esc(t('ui.fleet', { name: v ? v.name : '' }))}</b><span>${esc(location.host)}</span></div>
       <nav class="nav" aria-label="${esc(t('ui.nav.label'))}">${nav}</nav>${foot}</aside>
-    <div class="main"><header class="top"><button class="btn ghost sm menu-btn" data-shell="menu" aria-label="${esc(t('ui.nav.menu'))}">${ic('menu')}</button><h1>${esc(titleOf(page))}</h1><span class="spacer"></span><span class="live" id="live" hidden><span class="dot ok pulse"></span><span class="txt"></span></span></header>
+    <div class="main"><header class="top"><button class="btn ghost sm menu-btn" data-shell="menu" aria-label="${esc(t('ui.nav.menu'))}">${ic('menu')}</button><h1>${esc(titleOf(page))}</h1><span class="spacer"></span>${sw ? `<a class="btn sm${sw.admin ? '' : ' ghost'}" id="viewsw" href="${esc(sw.href)}">${ic(sw.admin ? 'shield' : 'home')}${esc(sw.label)}</a>` : ''}<span class="live" id="live" hidden><span class="dot ok pulse"></span><span class="txt"></span></span></header>
       <div class="content" id="content" aria-live="polite"><div class="ghostrow">${esc(t('ui.loading'))}</div></div></div>
     <div class="scrim nav-scrim" data-shell="menu" hidden style="z-index:44"></div>
   </div>`;

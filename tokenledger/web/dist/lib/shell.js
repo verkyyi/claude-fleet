@@ -62,7 +62,11 @@ export const PAGES = Object.freeze([
   // 我的额度 (claude-fleet#2517).
   { id: 'quota', label: 'ui.nav.quota', icon: 'card', href: '/quota' },
   { id: 'config', label: 'ui.nav.config', icon: 'sliders', href: '/config' },
-  // The admin group (claude-fleet#1990).
+  // The admin group (claude-fleet#1990): first the whole hub the four pages
+  // above used to show an admin (claude-fleet#2515), then the hub's own.
+  { id: 'all-sessions', label: 'ui.nav.allSessions', icon: 'list', group: 'admin', href: '/admin/sessions' },
+  { id: 'by-person', label: 'ui.nav.byPerson', icon: 'users', group: 'admin', href: '/admin/overview' },
+  { id: 'all-devices', label: 'ui.nav.allDevices', icon: 'key', group: 'admin', href: '/admin/devices' },
   { id: 'subscriptions', label: 'ui.nav.subscriptions', icon: 'card', group: 'admin', href: '/subscriptions' },
   { id: 'machines', label: 'ui.nav.machines', icon: 'server', group: 'admin', href: '/nodes' },
   { id: 'people', label: 'ui.nav.people', icon: 'users', group: 'admin', href: '/admin/users' },
@@ -79,6 +83,24 @@ export function navFor(pages) {
   const own = shown.filter((p) => !p.group);
   const admin = shown.filter((p) => p.group === 'admin');
   return admin.length ? [...own, { heading: t('ui.nav.admin') }, ...admin] : own;
+}
+
+/** VIEW_PAIRS joins each daily page to the admin page with the whole hub's
+ *  version of it (claude-fleet#2515): an admin's daily pages show their own,
+ *  and the top bar offers the other half. */
+export const VIEW_PAIRS = Object.freeze([['overview', 'by-person'], ['sessions', 'all-sessions'], ['devices', 'all-devices'], ['config', 'settings']]);
+
+/** otherView is the top bar's switch on page `id`: {href, label} to the admin
+ *  view of a daily page or back from one, null when the viewer's menu has no
+ *  other half (a user, or a page with no pair). */
+export function otherView(me, id) {
+  const pair = VIEW_PAIRS.find(([own, all]) => own === id || all === id);
+  if (!pair) return null;
+  const toAdmin = pair[0] === id;
+  const target = toAdmin ? pair[1] : pair[0];
+  if (!pageAllowed(me, pair[0]) || !pageAllowed(me, pair[1])) return null;
+  const p = PAGES.find((x) => x.id === target);
+  return p ? { href: p.href, label: t(toAdmin ? 'ui.view.toAdmin' : 'ui.view.toMine'), admin: toAdmin } : null;
 }
 
 /** pageAllowed is whether the menu lists this page for the viewer. */
