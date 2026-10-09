@@ -24,6 +24,7 @@ python3 - "$BIN" <<'PY'
 import fcntl
 import os
 import pty
+import re
 import shlex
 import shutil
 import signal
@@ -151,7 +152,9 @@ def tap(x, y, settle=.6):
 
 def row_of(side, name):
     lines = tm('capture-pane', '-p', '-t', side).splitlines()
-    return next(i for i, line in enumerate(lines) if line.rstrip().endswith(name))
+    # a row ends in its issue number (`#N`, issue #2545): the name sits before it
+    return next(i for i, line in enumerate(lines)
+                if re.sub(r'\s+#\d+$', '', line.rstrip()).endswith(name))
 
 
 try:
