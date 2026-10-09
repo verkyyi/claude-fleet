@@ -42,6 +42,11 @@
 #                            two machines → the candidates and exit 4, --machine
 #                            picks; none → 3; a service has no run → 3; bin/fleet
 #                            routes the verbs here
+#   L  在问 (issue #2538)     a needs row whose cache row carries what it asks
+#                            (fields 27-28): ls grows a 在问 column (kind · the
+#                            first 40 characters), show prints it whole, ls
+#                            --json carries ask_kind / ask, answer prints it as
+#                            the prompt's 题干; a row that asks nothing, none
 #
 # tmux only on isolated sockets. Drives: bin/fleet, bin/fleet-session-cli.py,
 # bin/fleet-shell.sh, bin/fleet-quickopen.py, bin/fleet-hub-write.sh,
@@ -354,6 +359,27 @@ eq "K a refused write → exit 1" 1 "$rc"
 has "K …with why" "the session is gone" "$err"
 # bin/fleet: the control verbs go to the CLI (nothing else of fleet-task.sh does)
 eq "K bin/fleet routes the control verbs" 1 "$(grep -c 'stop|start|restart|run|schedule) exec python3 "$here/fleet-session-cli.py"' "$BIN/fleet")"
+
+# --- L. 在问 (issue #2538) ------------------------------------------------------------
+Q='Bash(git push origin issue-12 --force-with-lease) — 允许这个命令在 /w 下运行吗？'
+{
+  printf '#ts%s%s\n' "$U" "$NOW"
+  printf '%s\n' "wid:F/issue-12${U}m4${U}online${U}12${U}acme/web${U}needs${U}claude${U}登录页重做${U}${U}perm${U}0${U}${U}hub${U}${U}${U}ok${U}${U}merged${U}${U}${U}${U}${U}${U}${U}${U}${U}permission${U}$Q"
+  printf '%s\n' "wid:F/issue-13${U}m5${U}online${U}13${U}acme/web${U}working${U}codex:7_x${U}登录页样式${U}${U}${U}0${U}${U}hub${U}${U}${U}ok${U}${U}done:2h${U}${U}${U}47${U}watch${U}$((NOW - 485))${U}gpt-6-astra${U}medium${U}${U}question${U}stale words of a turn now over"
+} > "$W/remote-ask"
+cqa() { FLEET_SESSION_CLI_ROWS="$W/rows.tsv" FLEET_SESSION_CLI_WRITE="$W/write" FLEET_SESSION_CLI_CACHE="$W/remote-ask" \
+        FLEET_SESSION_CLI_NOW="$NOW" python3 "$BIN/fleet-session-cli.py" "$@"; }
+out=$(cqa ls)
+has "L ls: a 在问 column once a row asks" "状态    在问" "$out"
+has "L ls: kind word + the first 40 characters" "在问你  权限：${Q:0:40}…" "$out"
+case "$out" in *"stale words"*) eq "L ls: a row not in needs shows no words" none words ;; *) eq "L ls: a row not in needs shows no words" none none ;; esac
+has "L show: the whole question" "在问      权限：$Q" "$(cqa show '#12')"
+eq "L ls --json: ask_kind / ask" "permission|$Q;|;|;" \
+  "$(cqa ls --json | python3 -c 'import json,sys; print("".join("%s|%s;" % (r["ask_kind"], r["ask"]) for r in json.load(sys.stdin)))')"
+out=$(cqa answer '#12' </dev/null 2>&1)
+has "L answer: the question is the prompt's 题干" "登录页重做（m4）在问你（权限）：" "$out"
+has "L answer: …in its own words" "  $Q" "$out"
+has "L ls: nobody asks → no 在问 column" "状态    PR" "$(cli ls)"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'fleet-session-cli selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

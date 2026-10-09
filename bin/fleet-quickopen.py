@@ -244,7 +244,9 @@ def full_rows(session, timeout=8):
         return None
     if out.returncode != 0:
         return None
-    rows = [(line.split(US, 14) + [""] * 15)[:15] for line in out.stdout.split("\n") if line.count(US) >= 4]
+    # every field split: a row's 16th on (backfill #2235, what it asks #2538)
+    # must not ride into its 15th, the reap policy
+    rows = [(line.split(US) + [""] * 15)[:15] for line in out.stdout.split("\n") if line.count(US) >= 4]
     return parse_rows(rows_text(rows))
 
 

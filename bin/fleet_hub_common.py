@@ -289,7 +289,8 @@ def inventory_row(parts):
     both absent when it said nothing, or nothing but its state.
     Column 30 (issue #2505): `test=1` — a session the TEST identity's client
     placed (@test_identity): the person's list hides it, `fleet ls` marks it 测试.
-    Absent otherwise."""
+    Absent otherwise. With no 7501 report, a `needs` row's subtype and `detail`
+    fill status_kind / status_msg (issue #2538)."""
     parts = list(parts)
     extra = {}
     if len(parts) >= 30 and parts[-1].startswith("test="):
@@ -354,7 +355,18 @@ def inventory_row(parts):
     parts = parts[:9]
     if len(parts) != 9 or not re.fullmatch(r"@[0-9]+", parts[0]):
         return None
+    # 「在问你」带原话 (issue #2538): a session the hooks alone saw asking (no
+    # OSC 7501 report — FLEET_STATUS_7501=0, an older agent) still says WHAT it
+    # asks: its @claude_needs subtype and @claude_needs_detail fill the pair.
+    if "status_kind" not in extra and extra.get("needs") in NEEDS_KIND:
+        extra["status_kind"] = NEEDS_KIND[extra["needs"]]
+    if "status_msg" not in extra and extra.get("detail"):
+        extra["status_msg"] = extra["detail"]
     return parts, extra
+
+
+# @claude_needs subtype → the OSC 7501 kind it says (issue #2538)
+NEEDS_KIND = {"perm": "permission", "ask": "question", "auth": "auth"}
 
 
 def fields(value, required, optional=()):

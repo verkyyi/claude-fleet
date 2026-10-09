@@ -3,8 +3,9 @@
 #2365): whatever the row menu and ⌘P can do, a command can do.
 
     fleet ls [--all] [--json]            every live session: 名称 · 单号 · 机器 · Agent ·
-                                         剩余 · 模型 · Effort · 状态 · PR · 回收方式
-                                         (the same rows ⌘P lists); --all adds the
+                                         剩余 · 模型 · Effort · 状态 · 在问 · PR ·
+                                         回收方式 (the same rows ⌘P lists; 在问 only
+                                         when one asks — issue #2538); --all adds the
                                          已结束 ones (done / exited, no issue — #2565)
     fleet ls --services [--json]         every background service and scheduled
                                          task registered on your machines: 机器 ·
@@ -23,7 +24,8 @@
                                          (the hub's worker_reap_policy, issue #2368)
     fleet answer [<会话>] [<回答>]        answer a session that asks you — the first
                                          one waiting when none is named; the answer
-                                         asked on the terminal when none is given
+                                         asked on the terminal when none is given,
+                                         under the question's own words (#2538)
     fleet service stop|start|restart <名称>
     fleet task stop|start|restart <名称>
     fleet task run <名称> --now
@@ -150,10 +152,12 @@ def bus_cache():
         f = line.split("\x1f")
         if not f[0].startswith("wid:"):
             continue
-        f += [""] * (26 - len(f))
+        f += [""] * (28 - len(f))
         m = {"agent": f[6], "test": f[25] == "1"}
         if any(f[20:25]):
             m.update(left=f[20], band=f[21], ts=f[22], model=f[23], effort=f[24])
+        if f[5] == "needs" and (f[26] or f[27]):
+            m.update(ask_kind=f[26], ask=f[27])
         out[f[0]] = m
         if f[10] == "1" and f[11].startswith("@"):
             out[f[11]] = m
@@ -168,7 +172,8 @@ def bus_local(keys):
         return {}
     fmt = ("#{window_id}\t#{@cc_agent}\t#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}"
            "\t#{@ctx_band}\t#{@ctx_ts}\t#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t#{@effort}"
-           "\t#{?#{==:#{@test_identity},1},1,}")
+           "\t#{?#{==:#{@test_identity},1},1,}"
+           "\t#{?#{==:#{@claude_state},needs},#{@claude_needs},}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}")
     try:
         got = subprocess.run(["tmux", "-u", "-L", sess, "list-windows", "-t", "=" + sess, "-F", fmt],
                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5).stdout
@@ -176,17 +181,27 @@ def bus_local(keys):
         return {}
     out = {}
     for line in got.splitlines():
-        f = (line.split("\t") + [""] * 8)[:8]
+        f = (line.split("\t") + [""] * 10)[:10]
         if f[0] in keys:
             m = {"agent": f[1], "test": f[7] == "1"}
             if any(f[2:7]):
                 m.update(left=f[2], band=f[3], ts=f[4], model=f[5], effort=f[6])
+            if f[9].strip():
+                m.update(ask_kind=ASK_KIND.get(f[8], ""), ask=f[9])
             out[f[0]] = m
     return out
 
 
+# @claude_needs subtype → the kind the agent says (issue #2538)
+ASK_KIND = {"perm": "permission", "ask": "question", "auth": "auth"}
+ASK_SAY = {"permission": "权限", "question": "问题", "auth": "登录"}
+ASK_COL = 40
+
+
 def attach_bus(rs):
-    """Every row gets agent · left · band · ts · model · effort ('' = unknown)."""
+    """Every row gets agent · left · band · ts · model · effort ('' = unknown),
+    and — a session that waits on you — ask_kind · ask: what it asks, in its own
+    words (issue #2538)."""
     bus = bus_cache()
     bus.update(bus_local({r["key"] for r in rs if r["key"].startswith("@") and r["key"] not in bus}))
     for r in rs:
@@ -195,7 +210,21 @@ def attach_bus(rs):
         r["test"] = bool(m.get("test"))
         for k in ("left", "band", "ts", "model", "effort"):
             r[k] = m.get(k, "")
+        ask = re.sub(r"[\x00-\x1f\x7f]+", " ", m.get("ask", "")).strip()[:200] if r["state"] == "needs" else ""
+        r["ask"], r["ask_kind"] = ask, (m.get("ask_kind", "") if ask else "")
     return rs
+
+
+def ask_text(r, short=False):
+    """在问: `权限：Bash: git push…` — the kind's word and the words, the first
+    ASK_COL characters when `short` (the ls column); "" when it asks nothing."""
+    text = r.get("ask") or ""
+    if not text:
+        return ""
+    if short and len(text) > ASK_COL:
+        text = text[:ASK_COL] + "…"
+    word = ASK_SAY.get(r.get("ask_kind") or "", "")
+    return (word + "：" if word else "") + text
 
 
 def left_cell(r, colour):
@@ -244,12 +273,14 @@ def epic_link(r):
     return "https://github.com/%s/issues/%s" % (repo, issue)
 
 
-def fields(r, colour=False):
-    """The columns `ls` prints and `show` names, in order."""
+def fields(r, colour=False, short=True):
+    """The columns `ls` prints and `show` names, in order — 在问 (issue #2538)
+    clipped for `ls`, whole for `show` (short=False)."""
     return [("名称", r["name"] + ("（测试）" if r.get("test") else "")), ("进度", progress(r)), ("单号", "#" + r["issue"] if r["issue"] else ""), ("机器", r["node"]),
             ("Agent", r.get("agent") or "—"), ("剩余", left_cell(r, colour)),
             ("模型", r.get("model") or "—"), ("Effort", r.get("effort") or "—"),
-            ("状态", STATE_SAY.get(r["state"], r["state"])), ("PR", r["pr"]), ("回收方式", r["reap"])]
+            ("状态", STATE_SAY.get(r["state"], r["state"])), ("在问", ask_text(r, short)), ("PR", r["pr"]),
+            ("回收方式", r["reap"])]
 
 
 # --- ONE resolver: refuses rather than guesses ---------------------------------------
@@ -291,6 +322,9 @@ def table(rs, out=sys.stdout):
     # 进度 (issue #2544) only when some row has a count: a list without one
     # prints byte for byte as before
     drop = set() if any(progress(r) for r in rs) else {"进度"}
+    # 在问 (issue #2538) likewise only when some row asks you something
+    if not any(r.get("ask") for r in rs):
+        drop.add("在问")
     cols = [[name for name, _ in fields(rs[0]) if name not in drop]] if rs else []
     body = [[v for k, v in fields(r, colour) if k not in drop] for r in rs]
     widths = [max(cells(row[i]) for row in cols + body) for i in range(len(cols[0]))] if rs else []
@@ -370,7 +404,7 @@ def cmd_ls(args):
         keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo", "test")
         derived = (("progress", progress), ("epic_url", epic_link))
         bus = (("agent", "agent"), ("ctx_left", "left"), ("ctx_band", "band"), ("ctx_ts", "ts"),
-               ("model", "model"), ("effort", "effort"))
+               ("model", "model"), ("effort", "effort"), ("ask_kind", "ask_kind"), ("ask", "ask"))
         print(json.dumps([dict({k: r.get(k, False if k == "test" else "") for k in keep}, **{k: r.get(v, "") for k, v in bus},
                                **{k: f(r) for k, f in derived})
                           for r in rs], ensure_ascii=False))
@@ -389,7 +423,7 @@ def cmd_show(args):
     if row is None:
         return rc
     attach_bus([row])
-    lines = fields(row, sys.stdout.isatty() and not os.environ.get("NO_COLOR")) + [("标题", row.get("title") or ""), ("总单", epic_link(row)), ("仓库", row.get("repo") or ""),
+    lines = fields(row, sys.stdout.isatty() and not os.environ.get("NO_COLOR"), short=False) + [("标题", row.get("title") or ""), ("总单", epic_link(row)), ("仓库", row.get("repo") or ""),
                            ("分组", row.get("group") or ""), ("key", row["key"])]
     w = max(cells(k) for k, _ in lines)
     for k, v in lines:
@@ -530,10 +564,18 @@ def cmd_answer(args):
         return 1
     ans = args[1] if len(args) == 2 else None
     if ans is None:
-        print("%s（%s）在问你 — 到它的窗口看问题：fleet open %s" % (row["name"], row["node"] or "?",
-                                                         ("#" + row["issue"]) if row["issue"] else row["key"]),
-              file=sys.stderr)
-        ans = ask("回答（选项的编号，权限问题 y / n）：")
+        attach_bus([row])
+        where = ("#" + row["issue"]) if row["issue"] else row["key"]
+        if row.get("ask"):
+            # the question itself (issue #2538): its words are the prompt's 题干
+            kind = ASK_SAY.get(row.get("ask_kind") or "", "")
+            print("%s（%s）在问你%s：\n\n  %s\n" % (row["name"], row["node"] or "?",
+                                              "（%s）" % kind if kind else "", row["ask"]), file=sys.stderr)
+        else:
+            print("%s（%s）在问你 — 到它的窗口看问题：fleet open %s" % (row["name"], row["node"] or "?", where),
+                  file=sys.stderr)
+        ans = ask({"permission": "回答（y 允许 / n 拒绝）：", "question": "回答（选项的编号或你的话）："}.get(
+            row.get("ask_kind") or "", "回答（选项的编号，权限问题 y / n）："))
         if ans is None:
             say("不在终端里：回答写在命令里 — fleet answer <会话> <回答>")
             return 2

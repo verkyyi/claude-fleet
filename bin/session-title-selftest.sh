@@ -188,6 +188,13 @@ p, x = inventory_row(full + bus + ["agentstatus=nope"])
 assert "status_kind" not in x and x["model"] == "Opus 5.5", x
 p, x = inventory_row(full + bus + ["agentstatus="])
 assert "status_msg" not in x and x["ctx_band"] == "ok", x
+# issue #2538: no report, a needs row's subtype + detail fill the pair; a report wins
+ask = base[:11] + ["perm"] + base[12:]
+p, x = inventory_row(ask + tail + ["title=t", "reap=", "detail=Bash: rm -rf build"])
+assert (x["status_kind"], x["status_msg"]) == ("permission", "Bash: rm -rf build"), x
+p, x = inventory_row(ask + tail + ["title=t", "reap=", "detail=", "role=", "epic=", "epicstale=", "backfill="] + bus
+                     + ['agentstatus={"state":"blocked","kind":"auth","msg":"/login","app":"claude-code","ts":1}'])
+assert (x["status_kind"], x["status_msg"], x["needs"]) == ("auth", "/login", "perm"), x
 print("ok")
 PY
 )

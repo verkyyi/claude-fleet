@@ -43,7 +43,7 @@ r = m.decode("state=blocked:app=claude-code:kind=permission:progress=40:msg=" + 
 assert r == {"state": "blocked", "kind": "permission", "msg": "Bash: git push origin", "app": "claude-code", "ts": 5, "progress": 40}, r
 assert m.claude_verb(r) == ["needs7501", "perm", "Bash: git push origin"]
 assert m.claude_verb(m.decode("state=blocked:app=claude-code:kind=question:msg=" + b("要合并吗？"))) == ["needs7501", "ask", "要合并吗？"]
-assert m.claude_verb(m.decode("state=blocked:app=claude-code:kind=auth")) == ["needs7501", "", ""]
+assert m.claude_verb(m.decode("state=blocked:app=claude-code:kind=auth")) == ["needs7501", "auth", ""]
 assert m.claude_verb(m.decode("state=working:app=claude-code")) == ["working"]
 assert m.claude_verb(m.decode("state=idle:app=claude-code")) == ["done"]
 assert m.claude_verb(m.decode("state=done:app=claude-code")) == ["done"]

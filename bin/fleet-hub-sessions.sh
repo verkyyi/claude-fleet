@@ -693,6 +693,21 @@ def ctx_of(w):
            ef if isinstance(ef, str) and re.fullmatch(r"[a-z]{1,16}", ef) else "")
     return out if any(out) else None
 
+ASK_KIND = {"perm": "permission", "ask": "question", "auth": "auth"}
+
+def ask_of(w, state):
+    """「在问你」带原话 (issue #2538): (kind, words) of a session that waits on
+    you — the agent's own report (status_kind / status_msg, the node's column
+    29), else its needs subtype and detail; None when it is not asking or said
+    nothing. The words are kept to 200 characters, the current question only."""
+    if state != "needs":
+        return None
+    k, m = w.get("status_kind"), w.get("status_msg")
+    k = k if isinstance(k, str) and re.fullmatch(r"[A-Za-z0-9_.+-]{1,32}", k) else ASK_KIND.get(w.get("needs") or "", "")
+    m = m if isinstance(m, str) and m.strip() else (w.get("detail") if isinstance(w.get("detail"), str) else "")
+    m = re.sub(r"[\x00-\x1f\x7f]+", " ", m).strip()[:200]
+    return (k, m) if k or m else None
+
 for s in sessions:
     w = s.get("worker") or {}
     wid = s.get("worker_id")
@@ -712,7 +727,7 @@ for s in sessions:
                      issue=w.get("issue") or "", repo=w.get("repo") or "",
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
-                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", role="orchestrator" if w.get("role") == "orchestrator" else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
+                     owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", role="orchestrator" if w.get("role") == "orchestrator" else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]{0,9}(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
                      local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
@@ -845,15 +860,18 @@ for f in local:
                                               # 17 title, 18 reap (#1902), 19 epic (#1958), 20 backfill
                                               # (#2235): each only when there is one, the empty ones
                                               # before it kept
-                                              + ((r["title"],) if r["title"] or r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] else ())
-                                              + ((r["reap"],) if r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] else ())
-                                              + ((r["epic"],) if r["epic"] or r["backfill"] or r["ctx"] or r["test"] else ())
-                                              + ((r["backfill"],) if r["backfill"] or r["ctx"] or r["test"] else ())
+                                              + ((r["title"],) if r["title"] or r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] else ())
+                                              + ((r["reap"],) if r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] else ())
+                                              + ((r["epic"],) if r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] else ())
+                                              + ((r["backfill"],) if r["backfill"] or r["ctx"] or r["test"] or r["ask"] else ())
                                               # 21-25 (#2431): ctx_left · ctx_band · ctx_ts · model ·
                                               # effort — all five, only when the node measured any
-                                              + (r["ctx"] or (("",) * 5 if r["test"] else ()))
+                                              + (r["ctx"] or (("",) * 5 if r["test"] or r["ask"] else ()))
                                               # 26 (#2505): `1` on a test identity's session
-                                              + (("1",) if r["test"] else ())) + "\n")
+                                              + (("1" if r["test"] else "",) if r["test"] or r["ask"] else ())
+                                              # 27-28 (#2538): what a needs session asks — its
+                                              # kind (permission · question · auth) and its words
+                                              + (r["ask"] or ())) + "\n")
     path = os.path.join(gdir, "remote_" + f["sess"])
     if via == "node" and not (client and os.environ.get("FLEET_HUB_SESSIONS_LOCAL") == "1"):
         # The machines that did not answer over a connection keep their last

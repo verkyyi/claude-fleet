@@ -103,6 +103,8 @@ fleet_ui_t() {
     en:needs_ask)               printf 'asking' ;;
     zh:needs_perm)              printf '等授权' ;;
     en:needs_perm)              printf 'perm' ;;
+    zh:needs_auth)              printf '待登录' ;;
+    en:needs_auth)              printf 'login' ;;
     zh:needs_blocked)           printf '被卡住' ;;
     en:needs_blocked)           printf 'blocked' ;;
     zh:needs_restore)           printf '恢复失败' ;;
@@ -306,6 +308,15 @@ fleet_ui_t() {
     en:sidebar_cfg_renew)       printf 'renew' ;;
     zh:sidebar_cfg_broken)      printf '会坏·需重开' ;;
     en:sidebar_cfg_broken)      printf 'breaks·reopen' ;;
+    # what a needs row asks (issue #2538): its kind's word, and the bar's line
+    zh:sidebar_ask_permission)  printf '权限' ;;
+    en:sidebar_ask_permission)  printf 'permission' ;;
+    zh:sidebar_ask_question)    printf '问题' ;;
+    en:sidebar_ask_question)    printf 'question' ;;
+    zh:sidebar_ask_auth)        printf '登录' ;;
+    en:sidebar_ask_auth)        printf 'login' ;;
+    zh:sidebar_ask_fmt)         printf '在问你（%s）：%s' "${1:-}" "${2:-}" ;;
+    en:sidebar_ask_fmt)         printf 'asking (%s): %s' "${1:-}" "${2:-}" ;;
     zh:sidebar_backfill_failed) printf '单子没建上' ;;
     en:sidebar_backfill_failed) printf 'issue not filed' ;;
     zh:sidebar_epic_stale)      printf '没人在跑' ;;

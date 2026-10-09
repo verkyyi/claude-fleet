@@ -728,6 +728,36 @@ func TestFleetSessionsETag(t *testing.T) {
 	}
 }
 
+// A session that waits on you says what it asks (claude-fleet#2538): the
+// node's status_kind / status_msg ride the worker verbatim into
+// fleet_sessions — the session page and the client read them there.
+func TestFleetSessionsCarryStatusKindMsg(t *testing.T) {
+	h := newFleetHarness(t)
+	a := connectFakeNode(t, h, "m5", false)
+	fa := fakeFleet(t, machineA, "fleet-a", "o/a", "/srv/a", 1, 2)
+	fa.Workers = []byte(`[{"worker_id":"` + fa.FleetID + `/issue-1","key":"issue-1","issue":1,"state":"needs","needs":"perm",` +
+		`"status_kind":"permission","status_msg":"Bash: git push origin issue-1"},` +
+		`{"worker_id":"` + fa.FleetID + `/issue-2","key":"issue-2","issue":2,"state":"working"}]`)
+	fa.Count = 2
+	a.beat("m5", "alice", machineA, fa)
+	var got map[string]any
+	waitFor(t, 3*time.Second, "fleet registered", func() bool {
+		got = getFleet(t, h, "/v1/fleet/fleet_sessions", 200)
+		return got["count"].(float64) == 2
+	})
+	by := map[string]map[string]any{}
+	for _, s := range got["sessions"].([]any) {
+		w := s.(map[string]any)["worker"].(map[string]any)
+		by[w["key"].(string)] = w
+	}
+	if w := by["issue-1"]; w["status_kind"] != "permission" || w["status_msg"] != "Bash: git push origin issue-1" {
+		t.Fatalf("issue-1 worker = %v, want status_kind permission + its words", w)
+	}
+	if w := by["issue-2"]; w["status_kind"] != nil || w["status_msg"] != nil {
+		t.Fatalf("issue-2 worker = %v, want no status_kind / status_msg", w)
+	}
+}
+
 // fleet_sessions long-polls (claude-fleet#1526): with `wait` and a matching
 // If-None-Match the hub holds the request and answers 200 the moment a
 // heartbeat moves the validator; with nothing new it answers 304 at the
