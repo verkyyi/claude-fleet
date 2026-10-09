@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // The status bar's two summaries by connection certificate (claude-fleet#1502).
@@ -49,6 +50,10 @@ type SummaryResponse struct {
 	PerAccount []AccountLimits `json:"per_account"`
 	// Account: as NodesSnapshot.Account (claude-fleet#2069).
 	Account *AccountState `json:"account,omitempty"`
+	// Alerts is every open service_failed the reader may see
+	// (claude-fleet#2526): a registered service down, a task past its
+	// retries — the client's alert bar reads it off the same answer.
+	Alerts []store.FleetAlert `json:"alerts"`
 }
 
 // handleFleetSummary serves control.SummaryPath outside the viewer gate.
@@ -122,7 +127,8 @@ func (s *Server) fleetSummary(r *http.Request, id sshRelayIdentity, now time.Tim
 	if err != nil {
 		return SummaryResponse{}, err
 	}
-	out := SummaryResponse{At: snap.At, Machines: snap.Machines, PerAccount: []AccountLimits{}}
+	out := SummaryResponse{At: snap.At, Machines: snap.Machines, PerAccount: []AccountLimits{},
+		Alerts: s.openServiceAlerts(visible)}
 	if !id.Operator {
 		out.Account = s.accountStateOf(id.Principal, now)
 	}

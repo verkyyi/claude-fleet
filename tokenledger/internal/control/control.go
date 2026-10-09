@@ -461,9 +461,16 @@ type Heartbeat struct {
 	// an endpoint retired). Absent when every lane is up, and from a plain
 	// agent or an older machine agent.
 	LoginsRefused map[string]string `json:"logins_refused,omitempty"`
-	OSUser        string            `json:"os_user,omitempty"`
-	OS            string            `json:"os,omitempty"`
-	Arch          string            `json:"arch,omitempty"`
+	// Services is the machine link's own word too (claude-fleet#2526, EPIC
+	// #2524 C2): every entry of the machine daemon's login-level register
+	// (fleet-node-supervisor.py's state.json `services`), each a summary — a
+	// state, its last and next run, its log's last line. nil from a plain
+	// agent, an older machine agent, a machine with no daemon or an empty
+	// register.
+	Services []ServiceStatus `json:"services,omitempty"`
+	OSUser   string          `json:"os_user,omitempty"`
+	OS       string          `json:"os,omitempty"`
+	Arch     string          `json:"arch,omitempty"`
 
 	// Load1 is the one-minute load average; NCPU the logical core count. Both
 	// zero when the platform would not say.
@@ -555,6 +562,42 @@ type Heartbeat struct {
 
 	AgentVersion string    `json:"agent_version,omitempty"`
 	ObservedAt   time.Time `json:"observed_at"`
+}
+
+// ServiceStatus is one entry of a machine's login-level register
+// (claude-fleet#2526): a program kept running (kind service) or run on a
+// schedule (kind task, #2529) AS one login. Names and a state only — never an
+// env value or a credential; LastLogLine is at most ServiceLineMax bytes.
+type ServiceStatus struct {
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Login string `json:"login"`
+	// State is the daemon's word: running · stopped · down (exited, waiting
+	// to restart) · failed (a task past its retries) · invalid (an entry the
+	// daemon will not run) · no_login (the login is gone).
+	State       string     `json:"state"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	LastRun     *time.Time `json:"last_run,omitempty"`
+	NextRun     *time.Time `json:"next_run,omitempty"`
+	LastLogLine string     `json:"last_log_line,omitempty"`
+	Restarts    int        `json:"restarts,omitempty"`
+	LastRC      *int       `json:"last_rc,omitempty"`
+	// Why says what is wrong with an invalid entry.
+	Why string `json:"why,omitempty"`
+}
+
+// ServiceLineMax bounds ServiceStatus.LastLogLine: the beat carries a
+// summary, the log itself stays on the machine.
+const ServiceLineMax = 200
+
+// Failed reports whether the entry wants a person: it is meant to run and
+// does not (down / failed / invalid / no_login). Running and stopped are fine.
+func (s ServiceStatus) Failed() bool {
+	switch s.State {
+	case "down", "failed", "invalid", "no_login":
+		return true
+	}
+	return false
 }
 
 // DesiredReport is a managed node's word on its desired state: the version it
