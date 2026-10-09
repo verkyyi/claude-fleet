@@ -197,8 +197,8 @@ fleet_ui_t() {
     en:steward_sheet_sent_fmt)  printf 'sheet of %s rows handed to the orchestrator (%s)' "${1:-}" "${2:-}" ;;
     zh:steward_decision_head_fmt) printf '[decision] 有 %s 件事要人定（记录：%s）' "${1:-}" "${2:-}" ;;
     en:steward_decision_head_fmt) printf '[decision] %s things need a person (record: %s)' "${1:-}" "${2:-}" ;;
-    zh:steward_decision_how)    printf '把表摆给人；人每定一行（按建议或翻案），跑 `fleet-steward-tick.sh answer --row <标记里的 id> --text <决定> --by person`。这一轮做完就回去听人说话，不追执行会话。' ;;
-    en:steward_decision_how)    printf 'Show the table to the person; for each row they decide (as suggested or overturned) run `fleet-steward-tick.sh answer --row <id from the marker> --text <decision> --by person`. Then go back to listening — never chase a worker.' ;;
+    zh:steward_decision_how)    printf '照上面几行的大白话转述给人：一件一行，附上管家页链接；不贴表格，不念〔〕里的编号。人每定一件（按建议或翻案；「全部按建议」就是每件都按建议），对那件〔row …〕里的每个 id 跑 `fleet-steward-tick.sh answer --row <id> --text <决定> --by person`。这一轮做完就回去听人说话，不追执行会话。' ;;
+    en:steward_decision_how)    printf 'Say the lines above to the person in these plain words: one thing per line, with the steward page link; never paste a table or read out the 〔row …〕 ids. For each thing they decide (as suggested or overturned; «all as suggested» is every one as suggested), run `fleet-steward-tick.sh answer --row <id> --text <decision> --by person` for every id in its 〔row …〕. Then go back to listening — never chase a worker.' ;;
     zh:steward_notify_never_fmt) printf '决定单上有不能默认的事（共 %s 行），到编排会话里看' "${1:-}" ;;
     en:steward_notify_never_fmt) printf 'The decision sheet has a row that is never defaulted (%s rows) — see the orchestrator' "${1:-}" ;;
     zh:steward_todo_title) printf '待你动手' ;;
@@ -213,6 +213,94 @@ fleet_ui_t() {
     en:steward_todo_kind_hub_deploy) printf 'redeploy the hub' ;;
     zh:steward_todo_kind_human) printf '要你做' ;;
     en:steward_todo_kind_human) printf 'for you' ;;
+    zh:steward_page_lang)       printf 'zh' ;;
+    en:steward_page_lang)       printf 'en' ;;
+    zh:steward_page_title_fmt)  printf '管家页 %s' "${1:-}" ;;
+    en:steward_page_title_fmt)  printf 'Steward page %s' "${1:-}" ;;
+    zh:steward_page_eyebrow_fmt) printf '管家 · %s · 更新于 %s' "${1:-}" "${2:-}" ;;
+    en:steward_page_eyebrow_fmt) printf 'Steward · %s · updated %s' "${1:-}" "${2:-}" ;;
+    zh:steward_page_h1)         printf '今天要你定的事' ;;
+    en:steward_page_h1)         printf 'What needs you today' ;;
+    zh:steward_page_sub_fmt)    printf '要你定 %s 件、待你动手 %s 件；管家每一拍更新这一页，链接不变' "${1:-}" "${2:-}" ;;
+    en:steward_page_sub_fmt)    printf '%s to decide, %s for you to do; the steward updates this page every beat, same link' "${1:-}" "${2:-}" ;;
+    zh:steward_page_k_asked)    printf '今天问了' ;;
+    en:steward_page_k_asked)    printf 'asked today' ;;
+    zh:steward_page_k_person)   printf '你答了' ;;
+    en:steward_page_k_person)   printf 'you answered' ;;
+    zh:steward_page_k_defaulted) printf '按默认走' ;;
+    en:steward_page_k_defaulted) printf 'went by default' ;;
+    zh:steward_page_k_parked)   printf '停放' ;;
+    en:steward_page_k_parked)   printf 'parked' ;;
+    zh:steward_page_k_todo)     printf '待你动手' ;;
+    en:steward_page_k_todo)     printf 'for you to do' ;;
+    zh:steward_page_decide_h)   printf '要你定的事' ;;
+    en:steward_page_decide_h)   printf 'For you to decide' ;;
+    zh:steward_page_decide_none) printf '现在没有要你定的事。' ;;
+    en:steward_page_decide_none) printf 'Nothing to decide right now.' ;;
+    zh:steward_page_nod)        printf '点头即全部按建议：在编排会话说「全部按建议」；要改哪件，说「第 2 件改成 …」。' ;;
+    en:steward_page_nod)        printf 'A nod takes every suggestion: tell the orchestrator “all as suggested”; to change one, say “number 2: …”.' ;;
+    zh:steward_page_act_scan)   printf '要扫码' ;;
+    en:steward_page_act_scan)   printf 'Scan a code' ;;
+    zh:steward_page_act_choose) printf '要选' ;;
+    en:steward_page_act_choose) printf 'Pick one' ;;
+    zh:steward_page_act_grant)  printf '要授权' ;;
+    en:steward_page_act_grant)  printf 'Allow it' ;;
+    zh:steward_page_act_money)  printf '要钱' ;;
+    en:steward_page_act_money)  printf 'Costs money' ;;
+    zh:steward_page_nth_fmt)    printf '第 %s 件' "${1:-}" ;;
+    en:steward_page_nth_fmt)    printf 'No. %s' "${1:-}" ;;
+    zh:steward_page_suggest)    printf '建议：' ;;
+    en:steward_page_suggest)    printf 'suggested: ' ;;
+    zh:steward_page_default)    printf '不答就：' ;;
+    en:steward_page_default)    printf 'if unanswered: ' ;;
+    zh:steward_page_due_fmt)    printf '截止 %s' "${1:-}" ;;
+    en:steward_page_due_fmt)    printf 'by %s' "${1:-}" ;;
+    zh:steward_page_no_suggest) printf '没给建议，等你说' ;;
+    en:steward_page_no_suggest) printf 'none given, your call' ;;
+    zh:steward_page_merged_fmt) printf '%s 处问了同样的事' "${1:-}" ;;
+    en:steward_page_merged_fmt) printf 'asked %s times' "${1:-}" ;;
+    zh:steward_page_untitled)   printf '一件要你定的事（点开看原话）' ;;
+    en:steward_page_untitled)   printf 'one thing to decide (open it for the words)' ;;
+    zh:steward_page_status_word) printf '出错' ;;
+    en:steward_page_status_word) printf 'an error' ;;
+    zh:steward_page_fold)       printf '来源与原话' ;;
+    en:steward_page_fold)       printf 'source and words' ;;
+    zh:steward_page_kv_src)     printf '来源' ;;
+    en:steward_page_kv_src)     printf 'source' ;;
+    zh:steward_page_kv_said)    printf '原话' ;;
+    en:steward_page_kv_said)    printf 'words' ;;
+    zh:steward_page_kv_suggest) printf '原建议' ;;
+    en:steward_page_kv_suggest) printf 'suggestion' ;;
+    zh:steward_page_kv_default) printf '默认' ;;
+    en:steward_page_kv_default) printf 'default' ;;
+    zh:steward_page_kv_kind)    printf '类别' ;;
+    en:steward_page_kv_kind)    printf 'class' ;;
+    zh:steward_page_kv_asked)   printf '问于' ;;
+    en:steward_page_kv_asked)   printf 'asked' ;;
+    zh:steward_page_kv_id)      printf '编号' ;;
+    en:steward_page_kv_id)      printf 'id' ;;
+    zh:steward_page_todo_h)     printf '待你动手' ;;
+    en:steward_page_todo_h)     printf 'For you to do' ;;
+    zh:steward_page_todo_none)  printf '没有待你动手的事。' ;;
+    en:steward_page_todo_none)  printf 'Nothing left for you to do.' ;;
+    zh:steward_page_todo_due_fmt) printf '%s 前' "${1:-}" ;;
+    en:steward_page_todo_due_fmt) printf 'by %s' "${1:-}" ;;
+    zh:steward_page_decided_h)  printf '今天已按默认走' ;;
+    en:steward_page_decided_h)  printf 'Went by default today' ;;
+    zh:steward_page_decided_none) printf '今天还没有按默认走的事。' ;;
+    en:steward_page_decided_none) printf 'Nothing went by default today.' ;;
+    zh:steward_page_decided_line_fmt) printf '%s · %s → 按默认：%s' "${1:-}" "${2:-}" "${3:-}" ;;
+    en:steward_page_decided_line_fmt) printf '%s · %s → by default: %s' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:steward_page_undo_fmt)   printf '要翻案，在编排会话说「%s 不按默认，改成 …」' "${1:-}" ;;
+    en:steward_page_undo_fmt)   printf 'To overturn it, tell the orchestrator “%s: not the default, instead …”' "${1:-}" ;;
+    zh:steward_page_how_h)      printf '数字怎么来的' ;;
+    en:steward_page_how_h)      printf 'Where the numbers come from' ;;
+    zh:steward_page_how)        printf '今天问了 = 执行会话今天提问的次数；你答了 = 你在编排会话里定的；按默认走 = 到截止没人答、按建议执行的；停放 = 卡住后让出位置、等条件满足再接着做的会话；待你动手 = 批次做完留给你的事。' ;;
+    en:steward_page_how)        printf 'asked today = the questions sessions asked today; you answered = the ones you decided through the orchestrator; went by default = past the deadline with no answer, done as suggested; parked = stuck sessions waiting to resume; for you to do = what finished batches left for you.' ;;
+    zh:steward_page_foot_fmt)   printf '管家生成于 %s。这一页只读：要定的事在编排会话里说。' "${1:-}" ;;
+    en:steward_page_foot_fmt)   printf 'Made by the steward at %s. Read-only: decide through the orchestrator.' "${1:-}" ;;
+    zh:steward_page_card_fmt)   printf '管家页：%s' "${1:-}" ;;
+    en:steward_page_card_fmt)   printf 'Steward page: %s' "${1:-}" ;;
     zh:steward_todo_from_fmt) printf '来自 %s' "${1:-}" ;;
     en:steward_todo_from_fmt) printf 'from %s' "${1:-}" ;;
     zh:steward_todo_due_fmt) printf '截止 %s' "${1:-}" ;;
@@ -716,6 +804,8 @@ fleet_ui_t() {
     en:compose_orch_nolist)     printf 'no task list found: cannot switch to the orchestrator' ;;
     zh:compose_orch_none)       printf '这台机器没有编排会话' ;;
     en:compose_orch_none)       printf 'no orchestrating session on this machine' ;;
+    zh:compose_steward_none)    printf '没有管家会话' ;;
+    en:compose_steward_none)    printf 'no steward session' ;;
     # the desk ticket of a no-code session (issue #2676, dash-raw-session.sh)
     zh:desk_body_fmt)           printf '%s\n\n来源会话：%s\n\n没有代码要改的活（设计页、调研、发布……）的单子：会话绑在这张单上，不开工作区。在这里评论会送到会话里。' "${1:-}" "${2:-}" ;;
     en:desk_body_fmt)           printf '%s\n\nOpened by: %s\n\nThe ticket of a task with no code to change (a design page, research, a release): the session is bound to it, with no workspace. A comment here reaches the session.' "${1:-}" "${2:-}" ;;
@@ -834,7 +924,9 @@ stop	q	停 — 只有别机行有：经入口让那台机器上的会话 /exit�
 resume	c	继续 — 只有别机行有：经入口恢复刚停掉的会话（活着的会被拒绝并告诉你）
 clients	d	我的客户端 — 只在客户端：同时开着的每台设备、终端、最后使用时间，可断开某一台
 quit	z	退出 fleet — 只在客户端：关掉这台电脑上客户端的全部进程，远端会话照常在机器上跑（⌘Q · fleet quit）
-orch	b	进编排会话 — 直接切到固定的编排会话（写作区里再按 ⌘N 也是；「新任务」行的右键菜单，⌘P 的 > 也有）' ;;
+orch	b	进编排会话 — 直接切到固定的编排会话（写作区里再按 ⌘N 也是；「新任务」行的右键菜单，⌘P 的 > 也有）
+steward	u	进管家会话 — 切到管家会话（它不占列表的行；「新任务」行的右键菜单，⌘P 的 > 也有）
+stewardpage	j	管家页 — 在你自己的浏览器里打开今天的管家页：要你定的事、待你动手、已按默认走（「新任务」行的右键菜单）' ;;
     en:menu_keys)               printf '%s' 'rename	r	rename — edits on the input line (↵ applies, esc / an empty name cancels)
 pin	t	pin / unpin the row to the top
 pr	p	open its PR (greyed when it has none)
@@ -855,7 +947,9 @@ stop	q	stop — a row on another machine only: /exit there through the hub (resu
 resume	c	resume — a row on another machine only: reopen a just-stopped one through the hub (a live one is refused, and says so)
 clients	d	my clients — in the client only: every device you have open, its terminal and when last used; disconnect one
 quit	z	quit fleet — in the client only: every process of the client on this computer goes, the sessions keep running on their machines (⌘Q · fleet quit)
-orch	b	go to the orchestrator — straight to the orchestrating session of the fleet (⌘N again in the writing area too; also on the right-click menu of the 「New task」 row, and in ⌘P >)' ;;
+orch	b	go to the orchestrator — straight to the orchestrating session of the fleet (⌘N again in the writing area too; also on the right-click menu of the 「New task」 row, and in ⌘P >)
+steward	u	go to the steward — the steward session, which has no row of its own (the right-click menu of the 「New task」 row, and ⌘P >)
+stewardpage	j	steward page — the steward page of the day, in your own browser: what to decide, what to do, what went by default (the right-click menu of the 「New task」 row)' ;;
     zh:menu_open_remote)        printf '进入（代理窗口）…' ;;
     en:menu_open_remote)        printf 'Enter (proxy window)…' ;;
     zh:menu_r_message)          printf '发消息…' ;;
@@ -995,6 +1089,10 @@ orch	b	go to the orchestrator — straight to the orchestrating session of the f
     en:menu_orch)               printf 'Go to the orchestrator' ;;
     zh:menu_orch_none)          printf '进编排会话 · 这台机器没有编排会话' ;;
     en:menu_orch_none)          printf 'Go to the orchestrator · none on this machine' ;;
+    zh:menu_steward)            printf '进管家会话' ;;
+    en:menu_steward)            printf 'Go to the steward' ;;
+    zh:menu_stewardpage)        printf '管家页' ;;
+    en:menu_stewardpage)        printf 'Steward page' ;;
     zh:menu_restore)            printf '恢复已收工…' ;;
     en:menu_restore)            printf 'Restore finished task…' ;;
     zh:menu_repo)               printf '＋ 仓库…' ;;

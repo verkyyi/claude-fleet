@@ -20,8 +20,10 @@
 2. **自答**：只有批次 parent 的「共同约定」「发起人拍板」或它链接的设计页里**写明了**答案，才答：
    `fleet-steward-tick.sh answer --row <id> --text '<答案>' --source '<出处链接>'`。
    拿不准就不答——留给决定单。`never:*`（改铁律、花钱、对外发布）永远不自答。
-3. **决定单**：自答完，跑一次 `fleet-steward-tick.sh sheet`——剩下的开着的行合成一张表，
-   交编排会话一条 `[decision]`（表没变就不发）。不要自己去找编排会话说话。
+3. **决定单**：自答前，给每条留给人的新问题写一句大白话——人一眼能定的那句，不带单号、文件名、
+   技术词：`fleet-steward-tick.sh say --row <id> --text '<一句话>'`（管家页和交给编排的那几行都用它）。
+   自答完，跑一次 `fleet-steward-tick.sh sheet`——剩下的开着的行按「人要做的动作」分组、同样的合成
+   一行，写进管家页（链接固定），交编排会话一条 `[decision]`（没变就不发）。不要自己去找编排会话说话。
 4. **卡住的回报**（BLOCKED / FAILED）：问的是什么就按第 2 步走；其余只记下，不接手、不回复。
 5. **驱动已不在的批次**：delta 里每个开着的 PR 带 `backstop`。`clear` 的，先
    `mcp__fleet__pr_verdict`，READY 才 `mcp__fleet__pr_merge`；`busy` 只当「先别合」——

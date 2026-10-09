@@ -271,8 +271,8 @@ grep -qE '⌃|↑|prefix E|打字' <<< "$SSHEET" && fail "the sidebar sheet stil
 grep -Eq '^(task sidebar|row menu|tmux prefix|dashboard|backlog|config modal) ' <<< "$SSHEET" \
   && fail "the sidebar sheet shows a full-sheet group"
 menu_keys="$(bash "$BIN/fleet-sidebar-menu.sh" --keys)" || fail "fleet-sidebar-menu.sh --keys exited non-zero"
-[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpaswklvxn1-9ogemqcb ] \
-  || fail "the row menu's key table is not r t p a s w k l v x n 1-9 o g e m q c b (i 详情列 left with #2305; b: 进编排会话, #2146): $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
+[ "$(printf '%s\n' "$menu_keys" | cut -f1 | tr -d '\n')" = rtpaswklvxn1-9ogemqcbuj ] \
+  || fail "the row menu's key table is not r t p a s w k l v x n 1-9 o g e m q c b u j (i 详情列 left with #2305; b: 进编排会话, #2146; u j: 进管家会话 · 管家页, #2735): $(printf '%s' "$menu_keys" | cut -f1 | tr '\n' ' ')"
 while IFS='	' read -r mk _; do
   [ -n "$mk" ] || continue
   grep -Eq "^  $mk +" <<< "$SSHEET" && fail "the sidebar sheet lists the row menu letter '$mk'"

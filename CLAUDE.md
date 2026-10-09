@@ -378,6 +378,15 @@ Do not install from memory: read the doc and work from it.
   fleet's repo (`FLEET_STEWARD_HEALTH_REPO`, else the hosted `*/claude-fleet`), a
   recurrence a 「又出现」 comment; a red base stays `--breakage`'s. BREAK-IT
   `health-silent-pass`.
+  **What a person reads is the steward's PAGE, never the table** (issue #2735):
+  `bin/fleet_steward_page.py` renders the epic-page frame on every beat — a band
+  (今天问了 · 你答了 · 按默认走 · 停放 · 待你动手), 要你定的事 one line a thing (a row's
+  `say`, else the worker's words made plain), grouped by what the person does and
+  the same question merged, 待你动手, today's 默认 with how to overturn each — at ONE
+  doc-preview link (`state.page`), stamped `@orch_page` → `orchpage=` (column 35) →
+  `page=<url>` on `orch_<sess>` → 「新任务」's menu 管家页 · 进管家会话; the `[decision]`
+  message carries the same plain lines + `〔row ids〕`. `FLEET_STEWARD_PAGE=0` off;
+  `fleet-steward-page-selftest.sh`.
   `FLEET_STEWARD`: `0` byte for byte · `count` (default where an orchestrator runs:
   only the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
   `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh`;

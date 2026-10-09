@@ -277,11 +277,30 @@ add_orch() {
   fi
 }
 
+# 进管家会话 · 管家页 (issue #2735): the steward has no row (#2670), so 「新任务」's menu
+# is its door — the jump to the window steward_all_<session> names (fleet-compose.py
+# --steward), and its page, the link the steward's beat stamps (orch_<session>'s
+# `page=<url>` column, fleet-hub-sessions.sh), opened in the person's own browser
+# (fleet-open.sh). Each listed only when there is one.
+add_steward() {
+  local G="${FLEET_STATUS_G:-$FLEET_C/global}" url
+  if [ -s "$G/steward_all_$sess" ]; then
+    add "$(t menu_steward)" "$(mk steward)" "run-shell -b $(sq "python3 $(sq "$BIN/fleet-compose.py") --steward $(sq "$sess")${client:+ --client $(sq "$client")} >/dev/null 2>&1 || :")"
+  fi
+  url=$(LC_ALL=C awk -F $'\037' 'NR == 1 { for (i = 8; i <= NF; i++) if ($i ~ /^page=https?:\/\//) { print substr($i, 6); exit } }' \
+        "$G/orch_$sess" 2>/dev/null)
+  case "$url" in *[!-A-Za-z0-9._~:/?#@+,=%]*) url='' ;; esac
+  if [ -n "$url" ]; then
+    add "$(t menu_stewardpage)" "$(mk stewardpage)" "run-shell -b $(sq "bash $(sq "$BIN/fleet-open.sh") $(sq "$url") >/dev/null 2>&1 || :")"
+  fi
+}
+
 if [ -n "$rowless" ]; then
   # No row in view (⌘P's `>` on the writing area, say): the row-less items alone;
   # 「新任务」's own (a right-click on it) is the same menu, titled with its name.
   side=$(tmux list-panes -t "$sess:" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2==1{print $1; exit}')
   add_orch
+  add_steward
   group
   if [ "${FLEET_SHELL:-0}" = 1 ]; then
     add_views view
