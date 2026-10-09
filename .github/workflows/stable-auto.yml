@@ -7,9 +7,10 @@
 # (a hub-deploy still waiting out its quiet window, a late shard), then runs the
 # one mover, `bin/fleet-stable.sh move <sha> --ignore-check "move stable"` —
 # every gate as by hand: on trunk, forward only, CI all green, the old-session
-# replay, the macOS run, release.json. Only its own job is passed over (it runs on
-# the commit it moves to and is never finished yet). No --force, ever: a refusal
-# turns the run red and leaves stable where it was; the operator decides.
+# replay, the macOS run, release.json, its pinned artifacts on the hub. Only its
+# own job is passed over (it runs on the commit it moves to and is never finished
+# yet). No --force, ever: a refusal turns the run red and leaves stable where it
+# was; the operator decides.
 #
 # A newer master than the target is fine — stable just moves less far, and the
 # next green macOS run moves it the rest. Moves are serialised (concurrency) and
@@ -87,6 +88,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.target.outputs.sha }}
+          # gate 7 (issue #2631): release.json's pins must be on the hub
+          FLEET_HUB_URL: https://claudefleet.24haowan.com
         run: |
           set +e
           sh bin/fleet-stable.sh move "$SHA" --dir . --repo "$GITHUB_REPOSITORY" \
