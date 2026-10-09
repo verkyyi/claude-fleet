@@ -407,6 +407,11 @@ func (s *Server) SweepDrills(now time.Time) {
 // A variable so tests can move it.
 var drillCloseGiveUp = time.Hour
 
+// drillRemoveRetry is how long after a failed op on a drill's login the next
+// remove is queued (claude-fleet#2696): the self-delete is asked every few
+// seconds, a failing script must not run back to back.
+var drillRemoveRetry = time.Minute
+
 // closeDrillLogins removes every login the hub opened for drill person d
 // (claude-fleet#2549: its first session's machine) — a real OS login on a
 // machine, which deleting the person's rows would leave behind with nobody
@@ -454,9 +459,31 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) []string 
 				log.Printf("fleet: drill %s: %s still %s after %s — left for the operator", d.PrincipalID, where, a.State, drillCloseGiveUp)
 				continue
 			}
+		case store.AccountFailed:
+			// A create that failed may have left half a login (the user made,
+			// the install not — drill10091238, claude-fleet#2696), and a
+			// failed remove left the whole one: deleting the person now
+			// orphans an OS login nobody closes. Remove it (again) until it is
+			// gone — a login that is not there answers removed — unless the
+			// create met a login that was already there (someone else's).
+			if strings.HasPrefix(a.Detail, existsDetail) {
+				log.Printf("fleet: drill %s: %s met a login already there — left for the operator", d.PrincipalID, where)
+				continue
+			}
+			if now.After(d.ExpiresAt.Add(drillCloseGiveUp)) {
+				log.Printf("fleet: drill %s: %s still failed (%s) past %s — left for the operator",
+					d.PrincipalID, where, truncate(a.Detail, 200), drillCloseGiveUp)
+				continue
+			}
+			if now.Sub(a.UpdatedAt) >= drillRemoveRetry {
+				if err := s.Store.RequestAccountRemoval(a.PrincipalID, a.Hostname, now); err != nil {
+					log.Printf("fleet: drill %s: queue removal of %s: %v", d.PrincipalID, where, err)
+				} else {
+					log.Printf("fleet: drill %s: %s %s failed (%s) — removing it", d.PrincipalID, where, a.Op, truncate(a.Detail, 200))
+					queued = true
+				}
+			}
 		default:
-			// failed: a create that failed (perhaps on a login that was
-			// already there — someone else's) or a remove that did.
 			log.Printf("fleet: drill %s: %s %s (%s) — left for the operator", d.PrincipalID, where, a.State, a.Detail)
 			continue
 		}

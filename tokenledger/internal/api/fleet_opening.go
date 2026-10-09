@@ -1,6 +1,8 @@
 package api
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,9 +21,23 @@ import (
 // or name who to ask. A person with an active login gets no `account` at all:
 // byte for byte the answer before.
 
-// openingETA is the client's "about how long" for a login being opened: a
-// create is one useradd + the fleet's own install, about a minute.
-const openingETA = 60
+// openingETA is the client's "about how long" for a login being opened when
+// its machine has opened none yet. It was 60 s — "one useradd + the fleet's
+// own install" — but a real create on a Mac runs sysadminctl (minutes), the
+// clone, credential separation and the daemons: the drill of 2026-10-09 read
+// 「about 5s」 for six minutes (claude-fleet#2696). A machine that has opened
+// logins answers with its own measured median instead (openingETAFor).
+const openingETA = 8 * 60
+
+// openingGiveUp is how long a create may stay pending / creating / unknown
+// before the doors stop saying opening and say failed — name who to ask: the
+// node gives one op accountOpTimeout (15 min), plus room for a queue of one.
+// openingNoAdmin is how long a create may wait unsent because its machine has
+// no admin node connected to run it. Variables so tests can move them.
+var (
+	openingGiveUp  = 20 * time.Minute
+	openingNoAdmin = 2 * time.Minute
+)
 
 // AccountState is a person's login, when they have no active one yet.
 type AccountState struct {
@@ -37,6 +53,9 @@ type AccountState struct {
 	Login string `json:"login,omitempty"`
 	// Ask is who gives a person a machine: the hub's admin logins.
 	Ask string `json:"ask,omitempty"`
+	// Why is, on failed, what went wrong in one line (claude-fleet#2696): the
+	// create's own failure, no answer in openingGiveUp, or no admin node.
+	Why string `json:"why,omitempty"`
 }
 
 // accountStateOf is pid's AccountState, nil when they hold an active login
@@ -95,14 +114,26 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 		}
 	}
 	if opening != nil {
-		eta := openingETA - int(now.Sub(opening.RequestedAt).Seconds())
+		if why := s.openingStuck(*opening, now); why != "" {
+			// Never 「about 5s」 forever (claude-fleet#2696): an opening
+			// nobody can finish is a failure the person can act on.
+			return &AccountState{State: "failed", Machine: opening.Hostname, Login: opening.Login, Ask: ask, Why: why}
+		}
+		took := now.Sub(opening.RequestedAt)
+		eta := s.openingETAFor(opening.Hostname) - int(took.Seconds())
+		if eta < 30 {
+			// Slower than this machine usually is: the honest bound is
+			// how long until the doors give up and say failed.
+			eta = int((openingGiveUp - took).Seconds())
+		}
 		if eta < 5 {
 			eta = 5
 		}
 		return &AccountState{State: "opening", EtaS: eta, Machine: opening.Hostname, Login: opening.Login, Ask: ask}
 	}
 	if failed != nil {
-		return &AccountState{State: "failed", Machine: failed.Hostname, Login: failed.Login, Ask: ask}
+		return &AccountState{State: "failed", Machine: failed.Hostname, Login: failed.Login, Ask: ask,
+			Why: truncate(lastLine(failed.Detail), 200)}
 	}
 	if ownActive {
 		// No other machine to open one on: the drill's own login is all it
@@ -123,4 +154,55 @@ func hasMachine(accts []store.FleetAccount, own func(store.FleetAccount) bool) b
 		}
 	}
 	return false
+}
+
+// openingStuck says why a create still pending / creating / unknown will not
+// finish on its own (claude-fleet#2696), "" while it still may: unsent for
+// openingNoAdmin with no admin node of its machine connected to run it, or no
+// answer at all in openingGiveUp.
+func (s *Server) openingStuck(a store.FleetAccount, now time.Time) string {
+	took := now.Sub(a.RequestedAt)
+	if took > openingGiveUp {
+		return fmt.Sprintf("no answer from %s in %d min (%s)", a.Hostname, int(openingGiveUp.Minutes()), a.State)
+	}
+	if a.State == store.AccountPending && took > openingNoAdmin {
+		if _, ok := s.nodes.adminFor(a.Hostname); !ok {
+			return "no admin node of " + a.Hostname + " is connected to open it"
+		}
+	}
+	return ""
+}
+
+// openingETAFor is how many seconds opening a login on host takes: the median
+// of the last few it opened (Store.RecentCreates), openingETA when it has
+// opened none yet. Clamped to [60 s, openingGiveUp].
+func (s *Server) openingETAFor(host string) int {
+	recent, err := s.Store.RecentCreates(host, 7)
+	if err != nil || len(recent) == 0 {
+		return openingETA
+	}
+	took := make([]int, 0, len(recent))
+	for _, a := range recent {
+		if d := int(a.UpdatedAt.Sub(a.RequestedAt).Seconds()); d >= 0 {
+			took = append(took, d)
+		}
+	}
+	if len(took) == 0 {
+		return openingETA
+	}
+	sort.Ints(took)
+	eta := took[len(took)/2]
+	if eta < 60 {
+		eta = 60
+	}
+	if max := int(openingGiveUp.Seconds()); eta > max {
+		eta = max
+	}
+	return eta
+}
+
+// lastLine is s's last non-empty line.
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimRight(s, " \t\r\n"), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }

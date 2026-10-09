@@ -343,6 +343,18 @@ func (s *Store) FleetAccountsInState(states ...string) ([]FleetAccount, error) {
 	return scanFleetAccounts(rows)
 }
 
+// RecentCreates is up to n of the latest logins the hub opened on hostname
+// that went active (claude-fleet#2696): op create, newest first — how long
+// opening one takes there is each row's UpdatedAt - RequestedAt.
+func (s *Store) RecentCreates(hostname string, n int) ([]FleetAccount, error) {
+	rows, err := s.read.Query(fleetAccountColumns+` WHERE hostname = ? AND state = ? AND op = 'create'
+		ORDER BY updated_at DESC LIMIT ?`, hostname, AccountActive, n)
+	if err != nil {
+		return nil, err
+	}
+	return scanFleetAccounts(rows)
+}
+
 // RequestAccount queues the creation of p's login on hostname. A row that
 // already exists is left alone unless retry is set and it ended badly
 // (failed / unknown / removed) — so a second assignment never re-runs a

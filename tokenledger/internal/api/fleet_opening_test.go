@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,5 +192,43 @@ func TestAccountStateWithAutoAssignOff(t *testing.T) {
 	}
 	if got, ok := readMsg(nodes["m5"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
 		t.Fatalf("a placement ran with auto-assign off: %+v", got)
+	}
+}
+
+// Opening never reads 「about 5s」 forever (claude-fleet#2696): the ETA is the
+// machine's own measured median (openingETA before it has opened any), and a
+// create nobody can finish — no answer in openingGiveUp, or unsent with no
+// admin node of its machine connected — reads failed, saying why.
+func TestOpeningHasAnHonestETAAndAnEnd(t *testing.T) {
+	h, nodes, inv := drillOnFleet(t)
+	m, op := expectAccountOp(t, nodes["m4"].tnode)
+	if got := h.srv.openingETAFor("m4"); got != openingETA {
+		t.Fatalf("eta with no history = %d; want %d", got, openingETA)
+	}
+	now := time.Now()
+	if st := h.srv.accountStateOf(inv.PersonID, now); st == nil || st.State != "opening" || st.EtaS < openingETA-60 {
+		t.Fatalf("account = %+v; want opening, eta about %d s", st, openingETA)
+	}
+	late := now.Add(openingETA*time.Second + time.Minute)
+	if st := h.srv.accountStateOf(inv.PersonID, late); st == nil || st.State != "opening" || st.EtaS < 60 {
+		t.Fatalf("late account = %+v; want opening with the time left until it gives up, never 5 s", st)
+	}
+	st := h.srv.accountStateOf(inv.PersonID, now.Add(openingGiveUp+time.Minute))
+	if st == nil || st.State != "failed" || !strings.Contains(st.Why, "no answer from m4") || st.Ask == "" {
+		t.Fatalf("stuck account = %+v; want failed: no answer from m4, and who to ask", st)
+	}
+	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
+	if got := h.srv.openingETAFor("m4"); got != 60 {
+		t.Fatalf("eta after a fast create = %d; want the 60 s floor", got)
+	}
+
+	ghost := store.FleetAccount{Hostname: "ghost", State: store.AccountPending, RequestedAt: now.Add(-openingNoAdmin - time.Minute)}
+	if why := h.srv.openingStuck(ghost, now); !strings.Contains(why, "no admin node of ghost") {
+		t.Fatalf("pending with no admin node: why = %q", why)
+	}
+	ghost.RequestedAt = now
+	if why := h.srv.openingStuck(ghost, now); why != "" {
+		t.Fatalf("a fresh pending create is stuck already: %q", why)
 	}
 }

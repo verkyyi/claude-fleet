@@ -602,6 +602,9 @@ func (s *Server) loginJoinCode(a store.FleetAccount, now time.Time) string {
 	return code
 }
 
+// existsDetail opens the detail of a create that met a login already there.
+const existsDetail = "a login with this name already exists on this machine; adopt it only if it is theirs. "
+
 // applyAccountResult records a node's answer to an account op and acks it, so
 // the node stops re-sending it. A result from a node that is not an admin is
 // refused; a duplicate or stale one is acked and changes nothing.
@@ -625,10 +628,16 @@ func (s *Server) applyAccountResult(ctx context.Context, wire nodeWire, epID str
 		state = store.AccountActive
 	case res.OK && res.Op == control.AccountRemove:
 		state = store.AccountRemoved
+	case res.Op == control.AccountRemove && res.Exit == control.RemoveExitNoLogin:
+		// fleet-login-remove.sh found no such login (claude-fleet#2696): a
+		// create that never made it, or one closed by hand — nothing is left
+		// to remove, so it is removed, never a failure that keeps it listed.
+		state = store.AccountRemoved
+		detail = "no such login on this machine: nothing to remove. " + detail
 	case res.Exists:
 		// Never success: the name may be someone else's login. The operator
 		// adopts it if it is this person's.
-		detail = "a login with this name already exists on this machine; adopt it only if it is theirs. " + detail
+		detail = existsDetail + detail
 	}
 	if _, err := s.Store.FinishAccountOp(m.OpID, epID, state, truncate(detail, 4000), time.Now()); err != nil {
 		log.Printf("fleet: record account result %s: %v", m.OpID, err)
