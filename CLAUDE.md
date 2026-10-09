@@ -369,6 +369,15 @@ Do not install from memory: read the doc and work from it.
   orchestrator (`sheet`), and its open rows ride `@orch_decide` → the inventory's
   `orchdec=` (column 32, only when set) → `orch_<sess>`'s `decide=N` → a red
   「新任务」. GitHub writes ≤ `FLEET_STEWARD_WRITES` (20) a beat, the rest deferred.
+  The beat also watches the fleet's OWN health (issue #2674, C6;
+  `bin/fleet_steward_health.py`): `fleet-doctor.sh --json` against the last run (a
+  new WARN/FAIL by row + first-line fingerprint, on 2 runs in a row; the first run is
+  the baseline), idle sessions past `FLEET_STEWARD_IDLE_SECS` (2h) while the sleep
+  scan accepted none, and `done:` ones the idle reaper closed none of (judged
+  apart — a merged cleanup is no idle reap) ⇒ ONE issue per `<!-- fleet:health key=… -->` in the
+  fleet's repo (`FLEET_STEWARD_HEALTH_REPO`, else the hosted `*/claude-fleet`), a
+  recurrence a 「又出现」 comment; a red base stays `--breakage`'s. BREAK-IT
+  `health-silent-pass`.
   `FLEET_STEWARD`: `0` byte for byte · `count` (default where an orchestrator runs:
   only the attention count, the node conf's [76] hooks → `logs/attention.ndjson`,
   `fleet-steward-stats.sh`) · `1` the window too. `fleet-steward-selftest.sh`;
