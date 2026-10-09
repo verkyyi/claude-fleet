@@ -284,8 +284,19 @@ bash -c 'source ~/.claude/fleet/bin/fleet-lib.sh; fleet_machine_admit' || echo '
 ```
 
 ```sh
-bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$MREPO" --origin "<PKEY>" --title "<the issue's own title>"
+AG=$(bash -c 'source ~/.claude/fleet/bin/fleet-lib.sh; fleet_epic_charter_agent "$1" "$2" "$3" "$4"' _ \
+       "$FLEET_REPO" "<the charter body this tick read>" "$MREPO" <N>)
+bash ~/.claude/fleet/bin/dash-issue-session.sh <N> --repo "$MREPO" --origin "<PKEY>" --title "<the issue's own title>" ${AG:+--agent "$AG"}
 ```
+
+**Which agent** (issue #2562): the member's own charter row wins — a row ending
+`(codex)` / `(claude)` (`- [ ] **C3** #N — 标题 (codex)`) — then the charter's
+`<!-- fleet:epic … agent=codex -->`, then nothing: with no `--agent` the spawn
+reads the member's `agent:codex` / `agent:claude` label, else the fleet's
+`FLEET_AGENT`. `fleet_epic_charter_agent` is that rule — never re-spell it here.
+A Codex member on a login with no Codex login is refused (exit 1, `ccquota codex
+login` named on stderr) — never opened as Claude: say so on the parent once and
+stop refilling that member; the operator logs in or edits the row.
 
 `--repo` is not optional, and it is the MEMBER's repo (issue #1942): a member
 filed in repo B opens its session in B even though the parent is A's. A fleet

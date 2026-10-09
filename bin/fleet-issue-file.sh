@@ -164,6 +164,14 @@ if [ "${#labels[@]}" -gt 0 ]; then
     exit 3
   fi
 fi
+# The agent label (issue #2562): both at once says nothing — refused before
+# anything is filed; one rides the --spawn below as --agent, so a brand-new
+# issue's worker never waits for the label to reach a cache.
+spawn_agent=''
+if [ "${#labels[@]}" -gt 0 ]; then
+  spawn_agent=$(fleet_labels_agent "$(printf '%s\n' ${labels[@]+"${labels[@]}"})") \
+    || { printf 'fleet-issue-file: agent:codex and agent:claude together — pick one\n' >&2; exit 2; }
+fi
 
 # --- 1b. one issue per breakage (issue #2078) -----------------------------------
 # With --breakage / --breakage-key, or AUTO (issue #2175): no flag and a red word
@@ -342,7 +350,7 @@ fi
 # that only reads the URL on stdout still learns no worker took it.
 if [ "$spawn" = 1 ] && [ -n "$num" ]; then
   # The spawn always names the repo the issue was filed in (issues #789, #1943).
-  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" --repo "$repo"; _rc=$?
+  bash "$BIN/dash-issue-session.sh" "$num" --title "$title" --repo "$repo" ${spawn_agent:+--agent "$spawn_agent"}; _rc=$?
   if [ "$_rc" -ne 0 ]; then
     printf 'fleet-issue-file: filed #%s but the spawn was refused — it is on the backlog\n' "$num" >&2
     # 4 = no live parent (issue #1355): not a backlog-and-move-on refusal — the

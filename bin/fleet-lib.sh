@@ -7018,6 +7018,8 @@ blocked|b60205|Blocked on other work — claude-fleet skips it when picking what
 autoland|0e8a16|Opt this issue's PR into hands-off auto-land
 autofill|0e8a16|Opt this issue into hands-off auto-start: claude-fleet spawns a worker for it when a slot frees
 epic|8250DF|Tracking parent for a batch of sub-issues planned and run together by claude-fleet
+agent:codex|10A37F|claude-fleet starts this issue's worker in Codex instead of the fleet default
+agent:claude|D97757|claude-fleet starts this issue's worker in Claude Code instead of the fleet default
 EOF
 }
 
@@ -7161,6 +7163,84 @@ fleet_epic_member_ref() {
     */*'#'[0-9]*) case "${ref##*#}" in *[!0-9]*) return 0 ;; esac
                   printf '%s\t%s\n' "${ref%#*}" "${ref##*#}" ;;
   esac
+}
+
+# ---- which agent a worker runs (issue #2562) ---------------------------------
+# A spawn's agent is, highest first: an explicit --agent · the issue's
+# `agent:codex` / `agent:claude` label · (an EPIC member) its charter row's
+# `(codex)` tail · the charter's `<!-- fleet:epic … agent=codex -->` · FLEET_AGENT.
+# Never a guess: an issue carrying both labels is refused, and Codex with no
+# valid login on this login is refused rather than quietly opened as Claude.
+
+# fleet_labels_agent <label names, one a line> → codex | claude | nothing.
+# rc 2 = both agent labels (the issue does not say which).
+fleet_labels_agent() {
+  local l a=''
+  while IFS= read -r l; do
+    case "$l" in
+      agent:codex|agent:claude)
+        [ -n "$a" ] && [ "$a" != "${l#agent:}" ] && return 2
+        a=${l#agent:} ;;
+    esac
+  done <<EOF_LABELS
+${1:-}
+EOF_LABELS
+  [ -n "$a" ] && printf '%s\n' "$a"
+  return 0
+}
+
+# fleet_epic_charter_agent <epic-repo> <charter body> <member-repo> <member N> →
+# codex | claude | nothing: the member's own Core / Reserve row
+# (`- [ ] **C3** #N — 标题 (codex)`) wins over the charter's
+# `<!-- fleet:epic … agent=<a> -->`; neither ⇒ nothing (the fleet default).
+fleet_epic_charter_agent() {
+  local erepo="${1:-}" body="${2:-}" mrepo n line ref got a=''
+  mrepo=$(fleet_norm_repo "${3:-}"); n="${4:-}"
+  case "$n" in ''|*[!0-9]*) return 0 ;; esac
+  while IFS= read -r line; do
+    case "$line" in *'- ['?']'*) ;; *) continue ;; esac
+    ref=$(printf '%s\n' "$line" | grep -oE '([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+' | head -n1)
+    [ -n "$ref" ] || continue
+    got=$(fleet_member_ref "$erepo" "$ref") || continue
+    [ "$got" = "$mrepo"$'\t'"$n" ] || continue
+    line=${line%"${line##*[! ]}"}
+    case "$line" in *'(codex)') a=codex ;; *'(claude)') a=claude ;; esac
+    break
+  done <<EOF_CHARTER
+$body
+EOF_CHARTER
+  if [ -z "$a" ]; then
+    case "$body" in *'fleet:epic '*agent=*)
+      a=$(printf '%s\n' "$body" | sed -n 's/.*<!-- *fleet:epic [^>]*agent=\([a-z]*\).*/\1/p' | head -n1) ;;
+    esac
+  fi
+  case "$a" in codex|claude) printf '%s\n' "$a" ;; esac
+  return 0
+}
+
+# fleet_epic_agent <epic-repo> <EPIC N> <member-repo> <member N> → the agent the
+# charter names for that member (fleet_epic_charter_agent off one parent read), or
+# nothing. rc 1 = the parent could not be read.
+fleet_epic_agent() {
+  local body
+  body=$(gh issue view "${2:-}" --repo "${1:-}" --json body -q .body 2>/dev/null) || return 1
+  fleet_epic_charter_agent "${1:-}" "$body" "${3:-}" "${4:-}"
+}
+
+# fleet_codex_ready → rc 0 when this login can open a Codex session: `ccquota
+# codex list` names a profile whose LOGIN is `valid` (the doctor's onboard row
+# reads the same column); with no ccquota on this login, a plain `codex login`'s
+# non-empty $CODEX_HOME/auth.json. rc 1 = neither — say `ccquota codex login`.
+# FLEET_CODEX_READY_CMD replaces the ccquota read (a test seam).
+fleet_codex_ready() {
+  local rows
+  if [ -n "${FLEET_CODEX_READY_CMD:-}" ]; then rows=$(eval "$FLEET_CODEX_READY_CMD" 2>/dev/null) || return 1
+  elif command -v ccquota >/dev/null 2>&1; then
+    rows=$(ccquota codex list 2>/dev/null) || return 1
+  else
+    [ -s "${CODEX_HOME:-$HOME/.codex}/auth.json" ]; return
+  fi
+  printf '%s\n' "$rows" | awk 'NR > 1 && $5 == "valid" { ok=1 } END { exit !ok }'
 }
 
 # fleet_member_win_name <title> <short> → `<short>·<fleet_win_name title>`,

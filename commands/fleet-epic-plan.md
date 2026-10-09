@@ -477,6 +477,14 @@ the bodies they always did. Only now, and in this order:
    batches running side by side can be told apart; the person may edit it in the
    body. Left out, it is the theme's first 4 letters.
 
+   `agent=` (optional, issue #2562) is which agent the batch's workers run:
+   `<!-- fleet:epic repo=… short=… agent=codex -->` makes every member a Codex
+   session; one member row ending ` (codex)` / ` (claude)` overrides it for that
+   member (`- [ ] **C3** #N — title (codex)`). Left out, members follow their own
+   `agent:*` label, else the fleet's `FLEET_AGENT`. Pick Codex the way the
+   orchestrator does (`/fleet-orchestrate` «派给谁»); never mix agents within one
+   member.
+
    The charter body is load-bearing. `/fleet-epic-run` seeds each worker to read
    the parent before it starts, so a charter edited mid-batch reaches every worker
    still to come without re-dispatching anything.

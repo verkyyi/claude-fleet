@@ -327,6 +327,32 @@ MAIN="${FLEET_MAIN:-}"
 REPO="${FLEET_REPO:-$(git -C "$MAIN" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
 
+# --- Which agent (issue #2562) ------------------------------------------------
+# No --agent: the issue's `agent:codex` / `agent:claude` label picks one (read off
+# the fleet's local copy first, fleet-gh.sh — one gh read only when it is stale);
+# no label ⇒ AGENT stays empty and the launcher takes FLEET_AGENT, byte for byte.
+# Both labels ⇒ refused: the issue does not say which. Foreground only — the
+# --async tail and a hub-placed start carry the agent this pass resolved.
+if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ "${FLEET_AGENT_LABELS:-1}" != 0 ] && [ -n "$REPO" ]; then
+  _lbl=$(bash "$BIN/fleet-gh.sh" issue view "$num" --repo "$REPO" --json labels 2>/dev/null \
+         | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+for l in d.get("labels") or []:
+    print(l.get("name","") if isinstance(l,dict) else l)' 2>/dev/null)
+  AGENT=$(fleet_labels_agent "$_lbl") \
+    || { refuse "#$num carries both agent:codex and agent:claude — remove one, or pass --agent"; exit "$RC_INFRA"; }
+  unset _lbl
+fi
+# Codex needs this login's Codex login (`ccquota codex login`): asked for and not
+# there ⇒ refused, never quietly opened as Claude. A spawn the hub may place on
+# another machine is checked by the machine that opens it.
+if [ "$TAIL_ONLY" != 1 ] && [ "$PLACING" != 1 ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" = codex ] \
+   && [ "${FLEET_CODEX_READY_CHECK:-1}" != 0 ] && ! fleet_codex_ready; then
+  refuse "#$num should run in Codex, but this login has no valid Codex login — run \`ccquota codex login\` first (not opening it as Claude)"
+  exit "$RC_INFRA"
+fi
+
 # --- Hub issue lease (issue #1422, EPIC #1419 C3; only when CCQUOTA_FLEET=1) ---
 # The GitHub claim below is not a mutex (no compare-and-swap on an issue), so two
 # machines that spawn the same issue within a second can both pass it. With the
