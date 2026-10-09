@@ -93,7 +93,7 @@ hook() {   # hook <stdin> <args…> — set-claude-state.sh as a hook edge on ou
 
 # ── A ──
 reset working '' 7501 10
-hook '{"hook_event_name":"Stop"}' done
+hook '{"hook_event_name":"Stop"}' 'done'
 [ "$(st)" = working//7501 ] || fail "A: a Stop during a fresh 7501 working changed the state to [$(st)]"
 hook '{"hook_event_name":"Notification","message":"Claude needs your permission","notification_type":"permission_prompt"}' needs
 [ "$(st)" = working//7501 ] || fail "A: a Notification needs during a fresh 7501 working wrote [$(st)]"
@@ -113,13 +113,13 @@ ok "B  BLOCKED: the declaration and the prompt that clears it are never held"
 
 # ── C ──
 reset working '' 7501 200
-hook '{"hook_event_name":"Stop"}' done
+hook '{"hook_event_name":"Stop"}' 'done'
 [ "$(st)" = done//hook ] || fail "C: 7501 silent 200 s, the hook's done did not land: [$(st)]"
 ok "C  STALE: two minutes of silence and the hook speaks"
 
 # ── D ──
 reset working '' 7501 5 '{"state":"exited","rc":0}'
-hook '{"hook_event_name":"Stop"}' done
+hook '{"hook_event_name":"Stop"}' 'done'
 [ "$(st)" = done//hook ] || fail "D: a fresh relay exited record held the hook: [$(st)]"
 ok "D  EXITED: the relay's exited record holds nothing"
 
@@ -127,7 +127,7 @@ ok "D  EXITED: the relay's exited record holds nothing"
 reset working '' 7501 300
 hook '{"hook_event_name":"PostToolUse"}' working
 [ "$(st)" = working//7501 ] || fail "E: a hook re-saying working relabelled the window: [$(st)]"
-reset done '' classifier -
+reset 'done' '' classifier -
 hook '{"hook_event_name":"UserPromptSubmit"}' working
 [ "$(st)" = working//hook ] || fail "E: a hook changing a classifier's value did not take the label: [$(st)]"
 ok "E  SAME-VALUE: a lower source re-saying the value keeps the higher label"
@@ -161,7 +161,7 @@ ok "G  CLASSIFIER: skip:7501 while fresh; after 120 s the screen decides"
 reset working '' hook -
 { printf '\033]7501;state=working:app=claude-code\033\\'
   sleep 1.5
-  tmux set-option -w -t "$W" @claude_state done \; set-option -w -t "$W" @claude_state_src classifier
+  tmux set-option -w -t "$W" @claude_state 'done' \; set-option -w -t "$W" @claude_state_src classifier
   printf '\033]7501;state=working:app=claude-code\033\\'
   sleep 1.5; } | TMUX_PANE="$P" FLEET_7501_REFRESH_SECS=0 python3 "$BIN/fleet-status-7501.py" pipe
 [ "$(st)" = working//7501 ] || fail "H: the same report after a guess did not put the agent's word back: [$(st)]"
@@ -184,7 +184,7 @@ ok "J  LAUNCH: the wrapper clears the last agent's report before each launch"
 
 # ── K ──
 reset working '' 7501 10
-printf '{}' | TMUX_PANE="$P" FLEET_STATE_PRIMARY_SECS=0 sh "$BIN/set-claude-state.sh" done >/dev/null 2>&1
+printf '{}' | TMUX_PANE="$P" FLEET_STATE_PRIMARY_SECS=0 sh "$BIN/set-claude-state.sh" 'done' >/dev/null 2>&1
 [ "$(st)" = done//hook ] || fail "K: FLEET_STATE_PRIMARY_SECS=0 still held the hook: [$(st)]"
 bash -c '. "$1/fleet-lib.sh"; FLEET_STATE_PRIMARY_SECS=0 fleet_primary_fresh "$2"' _ "$BIN" "$W" \
   && fail "K: fleet_primary_fresh answered fresh with the knob at 0"

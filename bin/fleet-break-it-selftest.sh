@@ -5013,7 +5013,7 @@ drill_status_question_lost() {
   sp_start sq || { WHY="cannot start the isolated tmux server"; return 1; }
   t0=$(now)
   sp_say blocked question "$words"
-  sp_hook '{"hook_event_name":"Stop"}' done
+  sp_hook '{"hook_event_name":"Stop"}' 'done'
   st=$(sp_state)
   [ "$st" = needs/ask/7501 ] || { WHY="the Stop right after the question left [$st] — 在问你 flashed to 完成"; return 1; }
   [ "$(o "$SPW" @claude_needs_detail)" = "$words" ] || { WHY="the question's words are gone: [$(o "$SPW" @claude_needs_detail)]"; return 1; }
