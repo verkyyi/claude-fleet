@@ -5,6 +5,7 @@
 #   fleet-client-place.sh <repo> <issue|scratch|home|restore:<key>|new> [--node <m>|auto]
 #                         [--title <t>] [--name <n>] [--agent claude|codex]
 #                         [--reap <policy>] [--body-file <f>] [--attach <file>]…
+#                         [--new]
 #
 # --attach (issue #2393, EPIC #2482 C1; new or scratch, repeatable): a file the
 # writing area's text names. Its bytes go with the request (≤ 10 MiB each and
@@ -25,6 +26,12 @@
 # / `fleet codex`, a newcomer's first session. The same ask as `- scratch` (the
 # hub's scratch + no_repo; the node takes one from its pool, #2233, or opens one
 # cold): one name for the one primitive, so no caller writes a road of its own.
+# It is also the person's CURRENT one (issue #2564, EPIC #2563 C1): until it is
+# /exit-ed, the next `- home` for the same agent — from any of their computers —
+# opens nothing and answers `RESUME <m> <worker_id>` (exit 0) instead: the hub
+# checks its fleet's last inventory still lists it, not exited. `--new` opens
+# another anyway and makes that the current one. A hub older than #2564 ignores
+# both and opens a new one each time, as before.
 #
 # <issue> is a number (or issue-<N>); restore:<key> resumes a /fleet-history row
 # (issue-<N> / scratch-<N>, a multi-repo fleet's <slug>: prefix allowed). A
@@ -42,6 +49,7 @@
 # Prints ONE line, the one fleet_hub_place prints (machine names the way a client
 # names them), and returns its code:
 #   0  REMOTE <m> <op> done <worker_id>\t<reason>   opened there
+#   0  RESUME <m> <worker_id>\t<message>            `- home`: the current one (#2564)
 #   3  HELD <m>\t<message>                          the issue is leased elsewhere
 #   4  REFUSED <code>\t<message>                    no machine can take it — every
 #                                                   machine's reason, as the hub said it
@@ -84,18 +92,20 @@
 # {worker_id, window, window_id, key, filed, machine}, each only when the hub
 # said it — so the caller switches to it at once instead of waiting for the
 # list to carry its row. A warm start names window_id + key (#2234); an older
-# hub or node, fewer fields (the line's worker_id is still there).
+# hub or node, fewer fields (the line's worker_id is still there). A RESUME
+# writes {worker_id, machine, resume: true, also_open: [<device>…]} — also_open
+# the person's other devices that have it open now (#2564).
 #
 # State: the lease id in $FLEET_CLIENT_DIR/client.lease (default $TMPDIR, the
 # client server's), the key in FLEET_CLIENT_KEY_FILE (default <dir>/client.key).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
-usage() { sed -n '5,7p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '5,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 REPO=$1; WHAT=$2; shift 2
-NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''; ATTACH=()
+NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''; ATTACH=(); NEW=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)  [ $# -ge 2 ] || usage; NODE=$2; shift 2 ;;
@@ -107,6 +117,7 @@ while [ $# -gt 0 ]; do
     --reap)  [ $# -ge 2 ] || usage; REAP=$2; shift 2 ;;
     --body-file) [ $# -ge 2 ] || usage; BODYF=$2; shift 2 ;;
     --attach) [ $# -ge 2 ] || usage; ATTACH+=("$2"); shift 2 ;;
+    --new)   NEW=1; shift ;;
     *) usage ;;
   esac
 done
@@ -116,11 +127,11 @@ case "$AGENT" in ''|claude|codex) ;; *) printf 'fleet-client-place: --agent is c
 if [ -n "$REAP" ]; then
   REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$REAP") || exit 2
 fi
-KIND=''; ISSUE=''; KEY=''
+KIND=''; ISSUE=''; KEY=''; HOME_ASK=''
 case "$WHAT" in
   scratch) KIND=scratch ;;
   home) [ "$REPO" = - ] || { printf 'fleet-client-place: a home session belongs to no repo (-)\n' >&2; exit 2; }
-        KIND=scratch ;;
+        KIND=scratch; HOME_ASK=1 ;;
   new) KIND=new ;;
   restore:?*) KIND=restore; KEY=${WHAT#restore:} ;;
   issue-[1-9]*) KIND=issue; ISSUE=${WHAT#issue-} ;;
@@ -128,6 +139,7 @@ case "$WHAT" in
 esac
 case "$ISSUE" in *[!0-9]*) KIND='' ;; esac
 [ -n "$KIND" ] || { printf 'fleet-client-place: %s is not an issue number, scratch, home, restore:<key> or new\n' "$WHAT" >&2; exit 2; }
+[ -z "$NEW" ] || [ -n "$HOME_ASK" ] || { printf 'fleet-client-place: --new goes with home\n' >&2; exit 2; }
 if [ "$KIND" = new ]; then
   [ -n "$TITLE" ] || { printf 'fleet-client-place: new needs --title\n' >&2; exit 2; }
 fi
@@ -140,11 +152,11 @@ fi
 # ask_hub <retry 0|1> — rc 10 = not applicable here (no hub URL, or no lease / key
 # to sign with); rc 11 (only with retry 1) = 401 not your client.
 ask_hub() {
-python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
+python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" "$HOME_ASK" "$NEW" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
 import base64, hashlib, hmac, importlib.util, json, os, re, sys, time, urllib.error, urllib.request
 
-here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry = sys.argv[1:13]
-files = sys.argv[13:]
+here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry, home, new = sys.argv[1:15]
+files = sys.argv[15:]
 body = ""
 if bodyf:
     with open(bodyf, encoding="utf-8") as f:
@@ -235,6 +247,10 @@ else:
     req["repo"] = repo
 if issue:
     req["issue"] = int(issue)
+if home:
+    req["home"] = True      # issue #2564: back to the current one, unless --new
+    if new:
+        req["new"] = True
 for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap), ("body", body)):
     if v:
         req[k] = v
@@ -311,7 +327,7 @@ def placed_login(o):
                 lg = c["os_user"]
                 break
     return fid, lg
-if out.get("state") == "done":
+if out.get("state") in ("done", "resume"):
     fid, lg = placed_login(out)
     if re.fullmatch(r"[0-9A-Za-z-]{1,64}", fid or "") and re.fullmatch(r"[a-z_][a-z0-9_.-]{0,31}", lg or ""):
         mp = os.path.join(os.environ.get("TMPDIR") or "/tmp", ".claude-dash", "global", "fleet_logins")
@@ -322,9 +338,12 @@ if out.get("state") == "done":
         except OSError:
             pass
 rf = os.environ.get("FLEET_PLACE_RESULT") or ""
-if rf and out.get("state") == "done":
+if rf and out.get("state") in ("done", "resume"):
     said = {k: out[k] for k in ("worker_id", "window", "window_id", "key", "filed", "machine")
             if isinstance(out.get(k), str) and out[k]}
+    if out.get("state") == "resume":
+        said["resume"] = True
+        said["also_open"] = [d for d in out.get("also_open") or [] if isinstance(d, str) and d]
     try:
         with open(rf, "w", encoding="utf-8") as f:
             json.dump(said, f)

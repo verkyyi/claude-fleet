@@ -39,8 +39,14 @@
 #      the fleet's commands on its PATH; ⌃\ again → the same session pane, its
 #      proxy never saw the key; prefix \ the same; ⌃D from the shell → the
 #      background. B does the same in the client's `solo` layout.
+#      D6 接回 (issue #2564, EPIC #2563 C1): `fleet claude` with a current home
+#      session — the hub's `RESUME m5 F/w1` (fleet-shell.sh home-session stubbed:
+#      the line, its result file with also_open) — opens THAT session in its own
+#      view, nothing new asked (no --new), the bar says 「另一台也开着：MacBook」,
+#      and the terminal keeps 「回到你上一次的会话（m5）」 above it; `fleet claude
+#      --new` asks with --new.
 #
-# Drives: bin/fleet-shell.sh, bin/fleet-sidebar.py, bin/fleet-sidebar.sh,
+# Drives: bin/fleet-shell.sh, bin/fleet-home-session.sh, bin/fleet-sidebar.py, bin/fleet-sidebar.sh,
 # bin/fleet-topbar.py, bin/fleet-ui-lang.sh, conf/tmux-shell.conf,
 # conf/tmux-shell-stage.conf.
 set -uo pipefail
@@ -621,6 +627,52 @@ try:
     check(wait(lambda: 'PROMPT' in screen()), 'D5: ⌃D from the shell did not leave the view:\n%s' % screen())
     check('会话在后台继续（m5）。`fleet` 可以找回。' in screen() and not eof.exists(), 'D5: the last line: %r' % screen())
     print('D5: ⌃\\ → a shell in %s → ⌃\\ → the same session pane; prefix \\ the same; ⌃D → the background' % cwd)
+
+    # D6. 接回 (issue #2564): the hub says the person's current home session is
+    # F/w1 on m5 — `fleet claude` goes back to it in its own view
+    calls = work / 'home-calls'
+    stub = work / 'home-shell.sh'
+    stub.write_text('''#!/bin/bash
+printf '%%s\\n' "$*" >> %(calls)s
+case "$1" in
+  running) exit 0 ;;
+  home-session)
+    [ -n "${FLEET_PLACE_RESULT:-}" ] && printf '{"worker_id": "F/w1", "machine": "m5", "resume": true, "also_open": ["MacBook"]}' > "$FLEET_PLACE_RESULT"
+    printf '回到你上一次的会话（m5）\\n' >&2
+    printf 'RESUME m5 F/w1\\t回到你上一次的会话（m5）\\n' ;;
+  solo) exec bash %(shell)s solo "$2" "$3" fc ;;
+esac
+''' % {'calls': shlex.quote(str(calls)), 'shell': shlex.quote(str(bin_dir / 'fleet-shell.sh'))})
+    stub.chmod(0o755)
+    tm('kill-server', s=term)
+    if eof.exists():
+        eof.unlink()
+    rows.write_text('wid:F/w1\x1fm5\x1f\x1f\x1f\x1fidle\n')
+    cmd = 'FLEET_HOME_SHELL=%s bash %s claude; echo PROMPT; exec sleep 600' % (
+        shlex.quote(str(stub)), shlex.quote(str(bin_dir / 'fleet-home-session.sh')))
+    tm('-f', '/dev/null', 'new-session', '-d', '-s', 'term', '-x', '100', '-y', '24', cmd, s=term)
+    tm('set-option', '-g', 'status', 'off', s=term)
+    check(wait(drawn, 10), 'D6: not the one-session screen of F/w1:\n%s' % screen())
+    bar = screen().split('\n')[-1]
+    check('另一台也开着：MacBook' in bar and bar.rstrip().endswith('m5'), 'D6: the bar: %r' % bar)
+    asked = calls.read_text().splitlines()
+    check(any(a.startswith('home-session claude') and '--new' not in a for a in asked), 'D6: the ask: %r' % asked)
+    check(any(a == 'solo m5 F/w1' for a in asked), 'D6: not the view of F/w1: %r' % asked)
+    tm('send-keys', '-t', 'term:', 'C-d', s=term)
+    check(wait(lambda: 'PROMPT' in screen()), 'D6: ⌃D did not leave the view:\n%s' % screen())
+    check('回到你上一次的会话（m5）' in screen(), 'D6: the terminal never said it went back:\n%s' % screen())
+    check(not eof.exists(), 'D6: ⌃D reached the session')
+    calls.write_text('')
+    tm('kill-server', s=term)
+    cmd = 'FLEET_HOME_SHELL=%s bash %s claude --new; echo PROMPT; exec sleep 600' % (
+        shlex.quote(str(stub)), shlex.quote(str(bin_dir / 'fleet-home-session.sh')))
+    tm('-f', '/dev/null', 'new-session', '-d', '-s', 'term', '-x', '100', '-y', '24', cmd, s=term)
+    check(wait(lambda: any(a.startswith('home-session claude') for a in (calls.read_text().splitlines() if calls.exists() else []))),
+          'D6: --new asked nothing')
+    check(any('--new' in a for a in calls.read_text().splitlines() if a.startswith('home-session')), 'D6: --new not passed: %r' % calls.read_text())
+    tm('send-keys', '-t', 'term:', 'C-d', s=term)
+    wait(lambda: 'PROMPT' in screen())
+    print('D6: 接回 — RESUME → the view of F/w1, 「另一台也开着」 on its bar; --new asks for a new one')
     print('D: %d checks' % checks)
 except AssertionError as e:
     print('FAIL D: %s' % e)
