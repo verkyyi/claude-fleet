@@ -61,14 +61,21 @@ func TestLoginNodeEnrollsOnceUntrusted(t *testing.T) {
 		t.Fatalf("/v1/node/self with the pass: %d %v; want untrusted", c, self)
 	}
 
-	// Again (node.env lost): the SAME endpoint, a fresh token, the old one dead.
+	// Again (node.env lost): the SAME endpoint, a fresh token; the old one
+	// lives out its grace (claude-fleet#2501), then is dead.
 	code, out = a.loginNode(t, h, "mbp", "alice")
 	if code != 200 || out["endpoint_id"] != ep || out["token"] == tok {
 		t.Fatalf("second ask: %d %v; want endpoint %s with a new token", code, out, ep)
 	}
 	tok2 := out["token"].(string)
+	if c, self := loginNodeSelf(t, h, tok); c != 200 || self["endpoint_id"] != ep {
+		t.Fatalf("the replaced token inside its grace: %d %v; want 200 as %s", c, self, ep)
+	}
+	if err := h.srv.Store.EndReissueGrace(ep); err != nil {
+		t.Fatal(err)
+	}
 	if c, _ := loginNodeSelf(t, h, tok); c != 401 {
-		t.Fatalf("the replaced token still works: %d", c)
+		t.Fatalf("the replaced token still works past its grace: %d", c)
 	}
 	if c, _ := loginNodeSelf(t, h, tok2); c != 200 {
 		t.Fatalf("the reissued token: %d", c)

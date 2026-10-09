@@ -36,7 +36,7 @@ function card(m) {
   return `<div class="panel mc"><div class="mc-h"><b>${esc(m.label)}</b>${m.label !== m.name ? `<span class="mono" style="opacity:.6">${esc(m.name)}</span>` : ''}${m.kind === 'ephemeral' ? `<span class="chip brand">${esc(t('ui.mach.spot'))}</span>` : ''}${status(m)}</div>${why}` +
     trend +
     `<div class="stats"><div><b>${m.sessions == null ? '?' : m.sessions}</b>${esc(t('ui.mach.sessions'))}</div><div><b>${esc(load)}</b>${esc(t('ui.mach.load'))}</div><div><b>${esc(m.version || '—')}</b>${esc(t('ui.mach.version'))}</div>${m.spare == null ? '' : `<div><b>${m.spare}</b>${esc(t('ui.mach.spare', { used: m.used ?? '?', cap: m.cap ?? '?' }))}</div>`}${desired(m)}</div>` +
-    trustLine(m) + linksLine(m) +
+    trustLine(m) + linksLine(m) + refusedLine(m) +
     `<div class="mc-f"><span>${esc(t('ui.mach.seen', { when: relTime(m.seen) }))}</span><span>${btn}${rm}</span></div></div>`;
 }
 
@@ -55,6 +55,14 @@ function trustLine(m) {
 function linksLine(m) {
   if (m.links == null || m.status === 'lost') return '';
   return `<div style="font-size:12px;color:var(--muted)">${esc(t('ui.mach.links', { n: m.links, logins: m.logins.join(t('ui.mach.loginSep')) || '—' }))}</div>`;
+}
+
+// refusedLine names the logins the hub will not take on the machine's node
+// program (claude-fleet#2501) — a token reissued away: 令牌失效 · 需要 relogin.
+function refusedLine(m) {
+  const ls = Object.keys(m.refused || {}).sort();
+  if (!ls.length) return '';
+  return ls.map((l) => `<div style="font-size:12px;color:var(--bad)" title="${esc(m.refused[l])}">${esc(t('ui.mach.refused', { login: l }))}</div>`).join('');
 }
 
 // desired is the 期望 / 实际 pair of a managed machine; nothing for any other.

@@ -80,6 +80,37 @@ type machineLink struct {
 	conn  *websocket.Conn // nil while down
 	up    chan struct{}   // closed while conn is up
 	lanes map[string]*lane
+	// refused is login → the hub's WRONG_LOGIN for its last hello
+	// (claude-fleet#2501), carried on the link's own heartbeat.
+	refused map[string]string
+}
+
+// setRefused records (why != "") or clears a login's refused hello.
+func (ml *machineLink) setRefused(login, why string) {
+	ml.mu.Lock()
+	defer ml.mu.Unlock()
+	if why == "" {
+		delete(ml.refused, login)
+		return
+	}
+	if ml.refused == nil {
+		ml.refused = map[string]string{}
+	}
+	ml.refused[login] = why
+}
+
+// refusedNow is a copy of refused; nil when no lane is refused.
+func (ml *machineLink) refusedNow() map[string]string {
+	ml.mu.Lock()
+	defer ml.mu.Unlock()
+	if len(ml.refused) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(ml.refused))
+	for k, v := range ml.refused {
+		out[k] = v
+	}
+	return out
 }
 
 // lane is one login on the machine link.
@@ -261,7 +292,7 @@ func (ml *machineLink) session(ctx context.Context) (bool, error) {
 	}()
 
 	beat := func() error {
-		m, err := control.New(control.TypeHeartbeat, machineHeartbeat(ml.cfg.Version))
+		m, err := control.New(control.TypeHeartbeat, machineHeartbeat(ml.cfg.Version, ml.refusedNow()))
 		if err != nil {
 			return err
 		}
@@ -332,11 +363,12 @@ func (ml *machineLink) demux(ctx context.Context, conn *websocket.Conn, m contro
 }
 
 // machineHeartbeat is the machine link's own beat: liveness and the machine's
-// load, never sessions — its logins report those on their own lanes.
-func machineHeartbeat(version string) control.Heartbeat {
+// load, never sessions — its logins report those on their own lanes — and the
+// logins whose hello the hub refused (claude-fleet#2501).
+func machineHeartbeat(version string, refused map[string]string) control.Heartbeat {
 	off := false
 	hb := control.Heartbeat{OS: runtime.GOOS, Arch: runtime.GOARCH, NCPU: runtime.NumCPU(),
-		AgentVersion: version, ObservedAt: time.Now().UTC(), Compute: &off}
+		AgentVersion: version, ObservedAt: time.Now().UTC(), Compute: &off, LoginsRefused: refused}
 	hb.Hostname, _ = os.Hostname()
 	if u, err := user.Current(); err == nil {
 		hb.OSUser = u.Username

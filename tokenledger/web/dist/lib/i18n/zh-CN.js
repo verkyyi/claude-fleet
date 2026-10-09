@@ -307,6 +307,7 @@ export const zhCN = {
   'ui.mach.spare': '备用 · 已用 {used} / 上限 {cap}',
   'ui.mach.version': '版本',
   'ui.mach.links': '{n} 条连接 · 账号：{logins}',
+  'ui.mach.refused': '{login}：令牌失效 · 需要 relogin（本机 sudo fleet-node-supervisor.py account adopt {login} --rejoin）',
   'ui.mach.loginSep': '、',
   'ui.mach.trusted': '可信',
   'ui.mach.untrusted': '不可信',

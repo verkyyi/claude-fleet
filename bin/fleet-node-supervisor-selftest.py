@@ -17,7 +17,9 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
      its account (uid, HOME, USER, FLEET_CONF_DIR, its own log); one account's
      failure never touches another's; `account adopt` boots the old services out
      into the attic and `account release` puts them back, one command each; a
-     service that will not unload puts every one back; expected.json narrows who runs
+     service that will not unload puts every one back; expected.json narrows who runs;
+     a lane the hub refuses is named (status, --check 3) and `adopt --rejoin` renews
+     the login's token (issue #2501)
 """
 import importlib.util
 import json
@@ -789,6 +791,66 @@ class H_Accounts(Sandbox):
         r = self.run_sup("account", "adopt", "alice", env=e)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.login_env("alice")[0]["CCQUOTA_TOKEN"], "tok-alice")
+
+    def test_refused_lane_is_named_and_rejoin_renews_the_token(self):
+        # issue #2501: the hub refused alice's lane (her token was reissued away)
+        conf = os.path.join(self.home("alice"), ".config", "claude-fleet")
+        self.agent_plist("alice", {"CCQUOTA_HUB_URL": "https://hub.invalid", "FLEET_CONF_DIR": conf})
+        self.node_env(os.path.join(conf, "node.env"), "CCQUOTA_TOKEN=tok-alice-1\n")
+        self.acct_table()
+        self.assertEqual(self.run_sup("account", "adopt", "alice").returncode, 0)
+        lane = os.path.join(self.d, "db", "agent", "alice", "lane.json")
+        os.makedirs(os.path.dirname(lane))
+        why = "unrecognised enrollment token for login alice: this login re-registered with the hub"
+        json.dump({"state": "refused", "code": "WRONG_LOGIN", "why": why, "since": "2026-10-08T17:41:12Z"}, open(lane, "w"))
+        r = self.run_sup("status")
+        self.assertTrue(any(l.startswith("lane   alice") and "令牌失效" in l and "account adopt alice --rejoin" in l
+                            and why in l for l in r.stdout.splitlines()), r.stdout)
+        self.start()
+        r = until(10, lambda: (lambda x: x if x.returncode == 3 else None)(self.run_sup("status", "--check")))
+        self.assertTrue(r, "status --check never said 3 for a refused lane")
+        self.assertIn("令牌失效 · 需要 relogin: alice", r.stdout)
+        self.assertEqual(self.state().get("lanes", {}).get("alice", {}).get("why"), why, "state.json has no copy")
+
+        # --rejoin: alice's device key asks the hub (a fake fleet-login.py here)
+        seen = os.path.join(self.d, "seen")
+        fake = os.path.join(self.d, "fake-login.py")
+        with open(fake, "w") as f:
+            f.write("import json, os, sys\n"
+                    "a = sys.argv[1:]\n"
+                    "open(%r, 'w').write(' '.join(a[:3]) + ' HOME=' + os.environ.get('HOME', '') + ' USER=' + os.environ.get('USER', ''))\n"
+                    "if os.path.exists(%r):\n"
+                    "    sys.stderr.write('fleet login: 没拿到节点通行证（HTTP 409）：machine_managed\\n'); sys.exit(1)\n"
+                    "json.dump({'token': 'tok-alice-2', 'endpoint_id': 'ep_a'}, open(a[a.index('--out') + 1], 'w'))\n"
+                    % (seen, seen + ".refuse"))
+        e = {"FLEET_NODE_LOGIN_PY": fake}
+        r = self.run_sup("account", "adopt", "alice", "--rejoin", "--dry-run", env=e)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("would ask https://hub.invalid", r.stdout)
+        self.assertEqual(self.login_env("alice")[0]["CCQUOTA_TOKEN"], "tok-alice-1", "a dry run renewed")
+        open(seen + ".refuse", "w").close()
+        r = self.run_sup("account", "adopt", "alice", "--rejoin", env=e)
+        os.remove(seen + ".refuse")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("machine_managed", r.stderr)
+        self.assertEqual(self.login_env("alice")[0]["CCQUOTA_TOKEN"], "tok-alice-1", "a refused pass wrote a token")
+        r = self.run_sup("account", "adopt", "alice", "--rejoin", env=e)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("tok-alice", r.stdout + r.stderr, "rejoin printed the token")
+        self.assertEqual(open(seen).read(), "node-pass --hub https://hub.invalid HOME=%s USER=alice" % self.home("alice"))
+        kv, mode = self.login_env("alice")
+        self.assertEqual((kv["CCQUOTA_TOKEN"], kv["CCQUOTA_HUB_URL"], mode), ("tok-alice-2", "https://hub.invalid", 0o600))
+
+        # the tenant's next welcome removes lane.json: the line and the 3 go
+        os.remove(lane)
+        self.assertTrue(until(10, lambda: self.run_sup("status", "--check").returncode == 0))
+        self.assertNotIn("lane   alice", self.run_sup("status").stdout)
+
+    def test_rejoin_needs_a_managed_or_separated_login(self):
+        self.acct_table()
+        r = self.run_sup("account", "adopt", "bob", "--rejoin", env={"FLEET_NODE_LOGIN_PY": "/bin/false"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no hub URL", r.stderr)
 
     def test_adopted_before_moves_the_agent_left_behind(self):
         la = os.path.join(self.home("alice"), "Library", "LaunchAgents")

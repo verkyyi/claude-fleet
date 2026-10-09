@@ -216,6 +216,13 @@ func migrate(db *sql.DB) error {
 		// so a later report that borrows a trusted machine's name inherits
 		// nothing. '' = never named yet.
 		{"endpoints", "enrolled_host", "TEXT NOT NULL DEFAULT ''"},
+		// A reissued token's predecessor (claude-fleet#2501): it keeps
+		// resolving until prev_token_until, so a second holder of the same
+		// endpoint (a machine's node program) is not cut off the instant a
+		// login re-registers; token_rotated_at says when, for the refusal.
+		{"endpoints", "prev_token_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"endpoints", "prev_token_until", "TEXT"},
+		{"endpoints", "token_rotated_at", "TEXT"},
 	}
 	for _, a := range adds {
 		has, err := hasColumn(db, a.table, a.column)
@@ -542,10 +549,59 @@ func (s *Store) EnrollmentCounts() (map[string]int, error) {
 // them apart. That is deliberate, the same reasoning as ShareLinkByToken: a
 // machine that was decommissioned and is still running its agent learns only
 // that it is not welcome, not that it once was.
+//
+// A token reissued away (RotateEndpointToken) still resolves until its grace
+// ends (claude-fleet#2501) — the same filter, so every path keeps it alike.
 func (s *Store) EndpointByTokenHash(hash string) (*Endpoint, error) {
 	row := s.read.QueryRow(endpointColumns+
 		` FROM endpoints WHERE token_hash = ? AND retired_at IS NULL`, hash)
+	ep, err := scanEndpoint(row)
+	if !errors.Is(err, sql.ErrNoRows) || hash == "" {
+		return ep, err
+	}
+	rt, rerr := s.ReissuedToken(hash)
+	if rerr != nil || rt.Until.IsZero() || !time.Now().Before(rt.Until) {
+		return nil, err
+	}
+	row = s.read.QueryRow(endpointColumns+
+		` FROM endpoints WHERE endpoint_id = ? AND retired_at IS NULL`, rt.EndpointID)
 	return scanEndpoint(row)
+}
+
+// ReissuedToken is a token some live endpoint was reissued AWAY from
+// (claude-fleet#2501): which endpoint, when, and until when it still resolves.
+type ReissuedToken struct {
+	EndpointID string
+	OSUser     string
+	RotatedAt  time.Time
+	Until      time.Time
+}
+
+// ReissuedToken finds the live endpoint whose PREVIOUS token is hash, grace
+// or no grace — the refusal that names a reissue reads it; ErrNoSuchEndpoint
+// when no endpoint ever held it.
+func (s *Store) ReissuedToken(hash string) (*ReissuedToken, error) {
+	if hash == "" {
+		return nil, ErrNoSuchEndpoint
+	}
+	var rt ReissuedToken
+	var rotated, until sql.NullString
+	err := s.read.QueryRow(`SELECT endpoint_id, os_user, token_rotated_at, prev_token_until FROM endpoints
+		WHERE prev_token_hash = ? AND retired_at IS NULL ORDER BY token_rotated_at DESC LIMIT 1`, hash).
+		Scan(&rt.EndpointID, &rt.OSUser, &rotated, &until)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNoSuchEndpoint
+	}
+	if err != nil {
+		return nil, err
+	}
+	if rotated.Valid {
+		rt.RotatedAt, _ = time.Parse(rfc, rotated.String)
+	}
+	if until.Valid {
+		rt.Until, _ = time.Parse(rfc, until.String)
+	}
+	return &rt, nil
 }
 
 // endpointColumns keeps the SELECT list and scanEndpoint in lockstep; they

@@ -226,8 +226,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	}
 	switch reply.Type {
 	case control.TypeWelcome:
+		a.laneWelcomed()
 	case control.TypeError:
 		if reply.Error != nil {
+			a.laneRefused(reply.Error)
 			return false, fmt.Errorf("hub refused the hello: %s: %s", reply.Error.Code, reply.Error.Message)
 		}
 		return false, errors.New("hub refused the hello")

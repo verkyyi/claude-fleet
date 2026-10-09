@@ -62,7 +62,9 @@ Usage:
   fleet-node-supervisor.py status [--json] [--check]
                                                one line per item: what · last run · result.
                                                --check: exit 0 healthy · 1 installed but not
-                                               running (stale heartbeat) · 2 not installed
+                                               running (stale heartbeat) · 2 not installed ·
+                                               3 running, but the hub refuses a login's lane
+                                               (令牌失效 · 需要 relogin, issue #2501)
   fleet-node-supervisor.py sweep [--dry-run]   the leftover sweep, now
   fleet-node-supervisor.py attic [list | restore <id> | purge]
   fleet-node-supervisor.py install | uninstall write / remove the LaunchDaemon (root)
@@ -71,11 +73,19 @@ Usage:
   fleet-node-supervisor.py account [list | adopt <login> | release <login> | manages <login>]
                                                the account half (#2332); manages: exit 0 = this
                                                daemon runs <login>'s tasks (install-apply, doctor)
+  fleet-node-supervisor.py account adopt <login> --rejoin
+                                               a new node token for <login> (issue #2501): its
+                                               device key asks the hub (`fleet-login.py
+                                               node-pass`, run as <login>), the pass goes into
+                                               the credential store + logins/<login>.env — the
+                                               way back when the hub refuses its lane; no admin
+                                               browser session
 
 Seams (sandbox tests, docs/BREAK-IT.md `node-supervisor-dead`):
   FLEET_NODE_STATE      /var/db/fleet-node          FLEET_NODE_LOG   /var/log/fleet-node
   FLEET_NODE_RUNTIME    /Library/Application Support/claude-fleet/current
   FLEET_NODE_DAEMON_DIR /Library/LaunchDaemons      FLEET_NODE_USERS /Users
+  FLEET_NODE_LOGIN_PY   fleet-login.py --rejoin runs (default <runtime>/bin/fleet-login.py)
   FLEET_NODE_TABLE      a JSON {"children": [...], "tasks": [...]} that REPLACES the
                         built-in table
   FLEET_NODE_TICK (1 s)  FLEET_NODE_BACKOFF_MAX (60)  FLEET_NODE_BACKOFF_RESET (60)
@@ -101,6 +111,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 LABEL = "com.claude-fleet.node"
@@ -842,6 +853,18 @@ class Supervisor(object):
                 self.start_task(tk, t)
         self.reap_tasks()
 
+    # -- lanes (issue #2501)
+    def tend_lanes(self):
+        """The logins whose lane the hub refuses, from each tenant's lane.json
+        (root's to read) into state.json (anyone's): status and the doctor."""
+        cur = lane_refusals(self.p)
+        if cur != (self.state.get("lanes") or {}):
+            for login in sorted(set(cur) - set(self.state.get("lanes") or {})):
+                self.log("login %s: the hub refuses its lane — %s (fix: account adopt %s --rejoin)"
+                         % (login, cur[login]["why"], login))
+            self.state["lanes"] = cur
+            self.dirty = True
+
     # -- sweep
     def sweep_due(self, t):
         return t - (self.state["sweep"].get("last") or 0) >= env_num("FLEET_NODE_SWEEP_EVERY", 3600)
@@ -883,6 +906,7 @@ class Supervisor(object):
                 break
             self.tend_children()
             self.tend_tasks(t)
+            self.tend_lanes()
             if self.sweep_due(t):
                 try:
                     self.do_sweep()
@@ -1206,6 +1230,111 @@ def account_agent(paths, login, uid, home):
     return None
 
 
+def lane_refusals(paths):
+    """login → {why, since}: every tenant of the node program whose hello the hub
+    refused with WRONG_LOGIN (issue #2501) — <state>/agent/<login>/lane.json, which
+    the tenant writes on the refusal and removes on the next welcome."""
+    base = os.path.join(paths.state, "agent")
+    out = {}
+    try:
+        logins = sorted(os.listdir(base))
+    except OSError:
+        return out
+    for login in logins:
+        st = read_json(os.path.join(base, login, "lane.json"), None)
+        if isinstance(st, dict) and st.get("state") == "refused":
+            out[login] = {"why": str(st.get("why") or "")[:400], "since": str(st.get("since") or "")}
+    return out
+
+
+def _login_py(paths):
+    return env("FLEET_NODE_LOGIN_PY", os.path.join(paths.runtime, "bin", "fleet-login.py"))
+
+
+def account_rejoin(paths, login, ident, dry=False):
+    """A fresh node token for login, asked by its own device key (issue #2501):
+    `fleet-login.py node-pass` demoted to the login, the pass's token written into
+    the credential store (a separated login) and logins/<login>.env (a managed one).
+    The token travels by file and stdin only, never argv. → 0 · 1."""
+    uid, gid, home = ident
+    say = lambda m: print("fleet-node-supervisor: rejoin %s: %s" % (login, m), file=sys.stderr)  # noqa: E731
+    lenv = _env_file(login_env_path(paths, login), 0) or {}
+    cbase = env("FLEET_CREDSEP_ROOT_BASE", "/var/db/fleet-cred")
+    meta = read_json(os.path.join(cbase, login, "meta.json"), None)
+    separated = isinstance(meta, dict) and meta.get("login") == login
+    store_env = _env_file(os.path.join(cbase, login, "node.env"), 0, _role_uids()) if separated else None
+    hub = (lenv.get("CCQUOTA_HUB_URL") or (store_env or {}).get("CCQUOTA_HUB_URL")
+           or (_env_file(os.path.join(paths.state, "machine.env"), 0) or {}).get("CCQUOTA_HUB_URL") or "").rstrip("/")
+    if not hub:
+        say("no hub URL (logins/%s.env, the credential store and machine.env name none)" % login)
+        return 1
+    if not lenv and not separated:
+        say("%s is neither managed (no logins/%s.env) nor separated — its token is its own file: "
+            "as %s run `fleet node join --hub %s`" % (login, login, login, hub))
+        return 1
+    lpy = _login_py(paths)
+    if not os.path.isfile(lpy):
+        say("%s is not here" % lpy)
+        return 1
+    if dry:
+        print("would ask %s for a new node token for %s (its device key, as %s) and write it to %s"
+              % (hub, login, login, " + ".join(([os.path.join(cbase, login, "node.env")] if separated else [])
+                                               + ([login_env_path(paths, login)] if lenv else []))))
+        return 0
+    work = tempfile.mkdtemp(prefix="fleet-rejoin-")
+    try:
+        os.chmod(work, 0o700)
+        if os.geteuid() == 0:
+            os.chown(work, uid, gid)
+        out = os.path.join(work, "pass.json")
+        cenv = {"HOME": home, "USER": login, "LOGNAME": login, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
+        if lenv.get("FLEET_CONF_DIR"):
+            cenv["FLEET_CONF_DIR"] = lenv["FLEET_CONF_DIR"]
+        try:
+            r = subprocess.run([sys.executable, "-I", lpy, "node-pass", "--hub", hub, "--out", out],
+                               env=cenv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               preexec_fn=demote(login, uid, gid, home), timeout=120)
+        except (OSError, subprocess.SubprocessError) as e:
+            say("node-pass did not run: %s" % e)
+            return 1
+        if r.returncode != 0:
+            tail = (r.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+            say("the hub gave no node pass (exit %d): %s" % (r.returncode, tail[-1] if tail else "-"))
+            if r.returncode == 3:
+                say("its device key is not registered — as %s run `fleet login` once, then rejoin again" % login)
+            return 1
+        res = read_json(out, None)
+        tok = res.get("token") if isinstance(res, dict) else None
+        if not tok or not re.match(r"^[A-Za-z0-9._~+/=-]+$", tok):
+            say("the node pass carried no usable token")
+            return 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    wrote = []
+    if separated:
+        cpy = os.path.join(os.path.dirname(lpy), "fleet-credsep.py")
+        conf = lenv.get("FLEET_CONF_DIR") or os.path.join(home, ".config", "claude-fleet")
+        r = subprocess.run([sys.executable, "-I", cpy, "setenv", "--login", login, "--conf-dir", conf],
+                           input=("CCQUOTA_TOKEN=%s\n" % tok).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if r.returncode != 0:
+            tail = (r.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+            say("the new token is not in the credential store (credsep setenv exit %d: %s) — "
+                "the hub's grace on the old one is 10 minutes" % (r.returncode, tail[-1] if tail else "-"))
+            return 1
+        wrote.append(os.path.join(cbase, login, "node.env"))
+    if lenv:
+        kv = dict(lenv, CCQUOTA_TOKEN=tok)
+        try:
+            write_login_env(paths, login, kv)
+        except OSError as ex:
+            say("cannot write %s (%s)" % (login_env_path(paths, login), ex.strerror or ex))
+            return 1
+        wrote.append(login_env_path(paths, login))
+    print("rejoined %s with %s: a new node token in %s; the node program reloads logins/ and says %s's hello with it"
+          % (login, hub, " + ".join(wrote), login))
+    return 0
+
+
 def login_env_path(paths, login):
     return os.path.join(paths.logins, login + ".env")
 
@@ -1266,7 +1395,7 @@ def _put_back(paths, e):
         launchctl_bootstrap(e["domain"], e["src"])
 
 
-def account_adopt(paths, login, dry=False):
+def account_adopt(paths, login, dry=False, rejoin=False):
     ident = account_ident(login)
     if ident is None:
         print("fleet-node-supervisor: %s is not a login this daemon may run as" % login, file=sys.stderr)
@@ -1278,6 +1407,12 @@ def account_adopt(paths, login, dry=False):
     uid, gid, home = ident
     a = accounts_read(paths)
     was = a.get(login) if (a.get(login) or {}).get("managed") else None
+    if rejoin:
+        # a new token first (issue #2501): a managed login is done with it, an
+        # unmanaged separated one is then adopted reading the store it renewed
+        rc = account_rejoin(paths, login, ident, dry=dry)
+        if rc or was is not None:
+            return rc
     agent = account_agent(paths, login, uid, home)
     if was is not None and agent is None:
         print("%s already managed since %s" % (login, iso(was.get("since"))))
@@ -1425,6 +1560,12 @@ def health(paths, state):
     return 0, "ok"
 
 
+def lanes_now(paths, state):
+    """The refused lanes: read fresh where this reader may (root), else the
+    daemon's last copy in state.json."""
+    return lane_refusals(paths) or state.get("lanes") or {}
+
+
 def status_lines(paths, table, state):
     code, word = health(paths, state)
     sv = state.get("supervisor") or {}
@@ -1478,6 +1619,10 @@ def status_lines(paths, table, state):
                 bad.append("%s %s" % (u["name"], x.get("result") or x.get("status") or "never"))
         out.append("account %-17s %d/%d ok · last run %s%s"
                    % (login, ok, len(units), iso(last), (" · " + ", ".join(bad)) if bad else ""))
+    for login, ln in sorted(lanes_now(paths, state).items()):
+        out.append("lane   %-18s 令牌失效 · 需要 relogin since %s — the hub: %s — fix: "
+                   "sudo fleet-node-supervisor.py account adopt %s --rejoin" % (login, ln.get("since") or "-",
+                                                                                ln.get("why") or "-", login))
     sw = state.get("sweep") or {}
     out.append("sweep  %-18s last %s · moved %s (total %s) · extra %s (report only) · attic %d entries"
                % ("leftovers", iso(sw.get("last")), sw.get("moved", 0), sw.get("total_moved", 0),
@@ -1575,7 +1720,7 @@ def main(argv):
         if sub == "manages" and len(rest) > 1:
             return 0 if (accounts_read(paths).get(rest[1]) or {}).get("managed") else 1
         if sub == "adopt" and len(rest) > 1:
-            return account_adopt(paths, rest[1], dry="--dry-run" in rest)
+            return account_adopt(paths, rest[1], dry="--dry-run" in rest, rejoin="--rejoin" in rest)
         if sub == "release" and len(rest) > 1:
             return account_release(paths, rest[1])
     table = load_table(paths)
@@ -1589,6 +1734,10 @@ def main(argv):
         if "--json" in rest:
             print(json.dumps({"health": code, "state": state}, indent=1, sort_keys=True))
         elif "--check" in rest:
+            refused = sorted(lanes_now(paths, state)) if code == 0 else []
+            if refused:
+                print("%s · 令牌失效 · 需要 relogin: %s" % (lines[0], " ".join(refused)))
+                return 3
             print(lines[0])
         else:
             print("\n".join(lines))

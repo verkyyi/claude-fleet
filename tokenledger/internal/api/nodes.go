@@ -582,6 +582,9 @@ type NodeView struct {
 	// then names each unreadable fleet and why.
 	Sessions        *int     `json:"sessions"`
 	SessionsUnknown []string `json:"sessions_unknown,omitempty"`
+	// LoginsRefused is a machine link's word (claude-fleet#2501): login →
+	// why the hub refused its lane. Only on a machine link's row.
+	LoginsRefused map[string]string `json:"logins_refused,omitempty"`
 	// MaxSessions is the login's own session cap and CapSessions the count
 	// its gate reads (claude-fleet#1587); absent when the node does not say.
 	MaxSessions int  `json:"max_sessions,omitempty"`
@@ -686,6 +689,9 @@ type MachineView struct {
 	// minutes, oldest first (claude-fleet#1990, the Machines card's trend).
 	// Kept in memory since the hub started: empty after a restart.
 	LoadHist []float64 `json:"load_hist"`
+	// LoginsRefused is login → why the hub refuses that login's lane on the
+	// machine's node program (claude-fleet#2501): 令牌失效 · 需要 relogin.
+	LoginsRefused map[string]string `json:"logins_refused,omitempty"`
 	// Repos is every repo a registered fleet on the machine hosts
 	// (store.FleetRow.HostedRepos, the list placement checks), over the
 	// logins the reader may see (claude-fleet#1927): a newcomer's empty list
@@ -823,7 +829,11 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			m.Links++
 		}
 		if v.MachineLink {
-			// The link, not a login: it carries the logins below it.
+			// The link, not a login: it carries the logins below it — and
+			// says which of them the hub refused.
+			if v.Status != "lost" && len(v.LoginsRefused) > 0 {
+				m.LoginsRefused = v.LoginsRefused
+			}
 			continue
 		}
 		m.Logins++
@@ -903,6 +913,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
 		v.Credsep = hb.Credsep
+		v.LoginsRefused = hb.LoginsRefused
 		for _, f := range hb.Fleets {
 			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count, Error: f.Error})
 		}

@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http/httptest"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -564,4 +566,57 @@ func TestMachineLinkLoginComputeFollowsItsProbe(t *testing.T) {
 			t.Fatalf("alpha's roster row = %+v; want compute_auto, probe carried", v)
 		}
 	}
+}
+
+// A login its machine's node program serves re-registers (claude-fleet#2501):
+// the hub does not hand out a token that would cut the machine's lane off;
+// a reissue that happened anyway leaves the old token a grace, and past it the
+// lane's refusal names the reissue and the fix.
+func TestReissueKeepsTheMachineLane(t *testing.T) {
+	h, n := machineRig(t)
+	const fp = "SHA256:beta-device"
+	code, _ := MintJoinCode()
+	if err := h.srv.Store.LinkDeviceEndpoint(HashToken(code), fp, "ep_beta", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", control.LoginNodePath, nil)
+	_, _, err := h.srv.deviceNode(req, fp, "m4", "beta", time.Now())
+	var mm *machineManagedErr
+	if !errors.As(err, &mm) || !strings.Contains(err.Error(), "account adopt beta --rejoin") || !strings.Contains(err.Error(), "m4") {
+		t.Fatalf("reissue for a machine-served login: %v; want machine_managed naming m4 and the fix", err)
+	}
+	if ep, err := h.srv.Store.EndpointByTokenHash(HashToken(h.tokens["beta"])); err != nil || ep.ID != "ep_beta" {
+		t.Fatalf("the machine's token after a refused reissue: %v %v", ep, err)
+	}
+
+	// Reissued anyway (an old hub, another replica): the lane says its hello
+	// again with the old token and is still let in, inside the grace.
+	tok, _ := MintToken()
+	if err := h.srv.Store.RotateEndpointToken("ep_beta", HashToken(tok), time.Now(), ReissueTokenGrace); err != nil {
+		t.Fatal(err)
+	}
+	if r := n.login("beta", h.tokens["beta"], false, control.CapRead); r.Type != control.TypeWelcome {
+		t.Fatalf("old token inside its grace: %+v; want welcome", r)
+	}
+	if err := h.srv.Store.EndReissueGrace("ep_beta"); err != nil {
+		t.Fatal(err)
+	}
+	r := n.login("beta", h.tokens["beta"], false, control.CapRead)
+	if r.Type != control.TypeError || r.Error == nil || r.Error.Code != control.CodeWrongLogin ||
+		!strings.Contains(r.Error.Message, "unrecognised enrollment token for login beta") ||
+		!strings.Contains(r.Error.Message, "re-registered") || !strings.Contains(r.Error.Message, "account adopt beta --rejoin") {
+		t.Fatalf("old token past its grace: %+v; want WRONG_LOGIN naming the reissue and the fix", r)
+	}
+	// A token nobody ever held stays vague.
+	if r := n.login("beta", "never-a-token", false, control.CapRead); r.Error == nil || strings.Contains(r.Error.Message, "re-registered") {
+		t.Fatalf("unknown token: %+v; want the plain refusal", r)
+	}
+	// The machine link's beat names the refused login; the Machines card
+	// carries it (令牌失效 · 需要 relogin).
+	n.beat("", control.Heartbeat{Hostname: "m4", OSUser: "root", NCPU: 10, ObservedAt: time.Now(),
+		LoginsRefused: map[string]string{"beta": r.Error.Message}})
+	waitFor(t, 3*time.Second, "m4 names beta refused", func() bool {
+		ms := roster(t, h).Machines
+		return len(ms) == 1 && strings.Contains(ms[0].LoginsRefused["beta"], "re-registered")
+	})
 }
