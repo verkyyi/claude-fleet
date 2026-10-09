@@ -4428,7 +4428,7 @@ drill_login_remove_record_left() {
 drill_drill_login_handed_silently() {
   CAP=120; local t0
   t0=$(now)
-  grep -q 'handed = append(handed, where)' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
+  grep -q 'handed = append(handed, a)' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
     || { WHY="closeDrillLogins no longer names the logins it hands to the operator"; return 1; }
   grep -q 'keepHosts' "$ROOT/tokenledger/internal/store/fleet_drill.go" \
     || { WHY="DeleteDrill no longer keeps the rows of a login left on a machine"; return 1; }
