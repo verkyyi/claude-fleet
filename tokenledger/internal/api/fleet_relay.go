@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
@@ -48,15 +49,30 @@ import (
 
 // relayResendAfter is how long a pushed, unanswered relay waits before the
 // hub pushes it again (a lost frame, a node that restarted mid-apply).
-var relayResendAfter = 60 * time.Second
+var relayResendAfter = newDurKnob(60 * time.Second)
 
 // relayTTL is how long a relay may wait for its target node; past it the
 // relay is expired, never delivered late.
-var relayTTL = 7 * 24 * time.Hour
+var relayTTL = newDurKnob(7 * 24 * time.Hour)
 
 // workersPushEvery bounds the worker-map push to one per node per interval:
 // claude-fleet trusts the cache for 30 s, so this keeps it fresh with room.
-var workersPushEvery = 10 * time.Second
+var workersPushEvery = newDurKnob(10 * time.Second)
+
+// durKnob is a duration tests may change while a server's node goroutines
+// read it: atomic, so a test's Cleanup restoring it never races a goroutine
+// still running from that test's server (issue #2612).
+type durKnob struct{ v atomic.Int64 }
+
+func newDurKnob(d time.Duration) *durKnob {
+	k := &durKnob{}
+	k.Set(d)
+	return k
+}
+
+func (k *durKnob) Get() time.Duration { return time.Duration(k.v.Load()) }
+
+func (k *durKnob) Set(d time.Duration) { k.v.Store(int64(d)) }
 
 // relaySuffixRE is the part of a relay id after `<from worker_id>#`.
 var relaySuffixRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
@@ -247,8 +263,8 @@ func (s *Server) dispatchRelays(endpointID string) {
 	now := time.Now()
 	if last := s.relayExpiredAt.Load(); now.UnixNano()-last > int64(time.Minute) &&
 		s.relayExpiredAt.CompareAndSwap(last, now.UnixNano()) {
-		if n, err := s.Store.ExpireFleetRelays(relayTTL, now); err == nil && n > 0 {
-			log.Printf("fleet relay: %d expired undelivered after %s", n, relayTTL)
+		if n, err := s.Store.ExpireFleetRelays(relayTTL.Get(), now); err == nil && n > 0 {
+			log.Printf("fleet relay: %d expired undelivered after %s", n, relayTTL.Get())
 		}
 	}
 	c := s.nodes.get(endpointID)
@@ -278,7 +294,7 @@ func (s *Server) dispatchRelays(endpointID string) {
 		// relay already pushed waits for its RECIPIENT (claude-fleet#1647):
 		// it goes again only once the target fleet's inventory — every
 		// heartbeat — lists that worker live, by key or by identity.
-		if !r.SentAt.IsZero() && (now.Sub(r.SentAt) < relayResendAfter || !s.relayTargetLive(r.ToWID, live)) {
+		if !r.SentAt.IsZero() && (now.Sub(r.SentAt) < relayResendAfter.Get() || !s.relayTargetLive(r.ToWID, live)) {
 			continue
 		}
 		fid := fleetOf(r.FromWID)
@@ -342,7 +358,7 @@ func (s *Server) relayTargetLive(toWID string, cache map[string]map[string]bool)
 // into the sender's book and answers; an unanswered one goes again after
 // relayResendAfter.
 func (s *Server) dispatchReceipts(endpointID string, now time.Time) {
-	due, err := s.Store.DueFleetRelayReceipts(endpointID, relayResendAfter, now)
+	due, err := s.Store.DueFleetRelayReceipts(endpointID, relayResendAfter.Get(), now)
 	if err != nil {
 		log.Printf("fleet relay: read receipts for %s: %v", endpointID, err)
 		return
@@ -470,7 +486,7 @@ func (s *Server) pushWorkers(ep store.Endpoint, nc *nodeConn) {
 	}
 	now := time.Now()
 	last := nc.workersAt.Load()
-	if last != 0 && now.Sub(time.Unix(0, last)) < workersPushEvery {
+	if last != 0 && now.Sub(time.Unix(0, last)) < workersPushEvery.Get() {
 		return
 	}
 	if !nc.workersAt.CompareAndSwap(last, now.UnixNano()) {

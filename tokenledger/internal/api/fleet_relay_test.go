@@ -115,9 +115,9 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bin, "fleet_control.py")); err != nil {
 		t.Skip("no claude-fleet bin/ beside tokenledger/")
 	}
-	oldPush := workersPushEvery
-	workersPushEvery = 100 * time.Millisecond
-	t.Cleanup(func() { workersPushEvery = oldPush })
+	oldPush := workersPushEvery.Get()
+	workersPushEvery.Set(100 * time.Millisecond)
+	t.Cleanup(func() { workersPushEvery.Set(oldPush) })
 
 	h := newFleetHarness(t)
 	const every = 150 * time.Millisecond
@@ -238,9 +238,9 @@ func TestRelayIntegrationTwoAgents(t *testing.T) {
 // again; one it refuses (any other exit) fails for good. Driven by hand on the
 // hub side, so the timing is the test's.
 func TestRelayRetryAndRefusal(t *testing.T) {
-	oldResend := relayResendAfter
-	relayResendAfter = 50 * time.Millisecond
-	t.Cleanup(func() { relayResendAfter = oldResend })
+	oldResend := relayResendAfter.Get()
+	relayResendAfter.Set(50 * time.Millisecond)
+	t.Cleanup(func() { relayResendAfter.Set(oldResend) })
 	h := newFleetHarness(t)
 	parent := fakeFleet(t, machineA, "fleet-a", "verkyyi/claude-fleet", "/a", 1)
 	child := fakeFleet(t, machineB, "fleet-b", "verkyyi/claude-fleet", "/b", 2)
@@ -405,9 +405,12 @@ func TestRelayOwnerBoundary(t *testing.T) {
 // rcpt:<id>), and its answer settles it; a relay nobody takes within the TTL
 // expires and the sender gets an "expired" receipt.
 func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
-	oldResend, oldTTL := relayResendAfter, relayTTL
-	relayResendAfter = 50 * time.Millisecond
-	t.Cleanup(func() { relayResendAfter, relayTTL = oldResend, oldTTL })
+	oldResend, oldTTL := relayResendAfter.Get(), relayTTL.Get()
+	relayResendAfter.Set(50 * time.Millisecond)
+	t.Cleanup(func() {
+		relayResendAfter.Set(oldResend)
+		relayTTL.Set(oldTTL)
+	})
 	h := newFleetHarness(t)
 	const identity = "4b3c2d1e-0f9a-4b8c-9d7e-6f5a4b3c2d1e"
 	parent := fakeFleet(t, machineA, "fleet-a", "verkyyi/claude-fleet", "/a", 1)
@@ -548,7 +551,7 @@ func TestRelayQueuedForRecipientAndReceipts(t *testing.T) {
 	send(id2)
 	answer(pn, next(pushes, "the push of the second"), control.RelayResult{ID: id2, Retry: true})
 	time.Sleep(50 * time.Millisecond)
-	relayTTL = 10 * time.Millisecond
+	relayTTL.Set(10 * time.Millisecond)
 	h.srv.relayExpiredAt.Store(0)
 	cn.beat("m4", "op", machineB, child)
 	rc = next(receipts, "the expiry receipt")
