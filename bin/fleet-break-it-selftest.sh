@@ -37,6 +37,8 @@
 #                                                   fleet_epic_running_fresh, fleet-install-sync.sh (the EPIC gate)
 #   epic-idle-held / epic-hold-uncapped             fleet_epic_holding (live/inflight), fleet-install-sync.sh
 #                                                   (epic_gate: idle never holds, FLEET_EPIC_HOLD_CAP_SECS caps a hold)
+#   doctor-stricter-rollback                        bin/fleet-install-sync.sh (the new doctor joins the
+#                                                   baseline; FLEET_DOCTOR_SINCE), bin/fleet-doctor.sh
 #   personal-tmux-conf                              conf/tmux-fleet-server.conf, fleet_server_new_session,
 #                                                   fleet_tmuxconf_check, reapply-tmux-attention.sh
 #   personal-hook-hangs / personal-hook-errors      bin/fleet-hook-personal.sh (timeout, strikes)
@@ -1127,6 +1129,33 @@ drill_epic_hold_uncapped() {
     || { WHY="the release was not noted once on the EPIC: [$(cat "$d/notes.log" 2>/dev/null)]"; return 1; }
   grep -q ' epic-released ' "$d/install/logs/install-sync.log" 2>/dev/null || { WHY="no epic-released log line"; return 1; }
   SECS=$(since "$t0"); WHAT="有活的批次挡同一 stable 满 2 小时：放行 switched，EPIC 上一条记录型说明，日志 epic-released"
+}
+
+# doctor-stricter-rollback (issue #2655): the new version's doctor has a check the
+# old one lacked (or made stricter), and it FAILs on what the OLD daemons wrote
+# before the switch. Before: the baseline was the old doctor alone, so the FAIL
+# read as the new version's → rolled back, and `skip:` kept the login there until
+# stable moved again — where the same old evidence rolled it back again. Now the
+# new doctor runs once from its own dir before the switch and joins the baseline.
+drill_doctor_stricter_rollback() {
+  CAP=20; local t0 d="$WORK/dstrict"
+  epic_sandbox "$d" || { WHY="sandbox install did not build"; return 1; }
+  (
+    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    c="$d/c"; git clone -q "$d/origin.git" "$c" 2>/dev/null
+    printf '[ -f "$(dirname "$0")/../logs/old-evidence" ] && echo "  FAIL  state    sleep judgments (last hour): wrong fleet x784"\nexit 0\n' > "$c/bin/fleet-doctor.sh"
+    git -C "$c" add -A && git -C "$c" commit -qm three && git -C "$c" push -q origin master
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable master
+  ) >/dev/null 2>&1
+  touch "$d/install/logs/old-evidence"            # the old daemons' last hour
+  t0=$(now)
+  epic_tick "$d" >"$d/tick.out" 2>&1
+  [ "$(epic_st "$d" result)" = switched ] \
+    || { WHY="a check only the new doctor has, failing on the old evidence, decided the switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
+  [ "$(git -C "$d/install" rev-parse HEAD)" = "$(git --git-dir="$d/origin.git" rev-parse stable)" ] \
+    || { WHY="switched but the install is not at stable"; return 1; }
+  SECS=$(since "$t0"); WHAT="新版 doctor 新加的检查读旧守护留下的证据判 FAIL：切换前先用新 doctor 在旧版上跑一次做基线，这条不算新版的错，照常 switched"
 }
 
 # personal-tmux-conf (issue #1845): the person's ~/.tmux.conf has a syntax error

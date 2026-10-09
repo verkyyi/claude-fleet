@@ -55,6 +55,12 @@
 #                    version's apply back; that version is skipped until stable
 #                    moves; the next stable move is followed
 #   G. baseline      a FAIL the login already had is NOT a rollback
+#   S. one ruler     (issue #2655) the NEW doctor, run from its own dir before
+#                    the switch (FLEET_DOCTOR_BASELINE=1), joins the baseline: a
+#                    check it added that fails on the old evidence → switched; a
+#                    FAIL only the live new version has → still rolled back; the
+#                    doctor after gets FLEET_DOCTOR_SINCE; --retry forgets skip:;
+#                    the sleep tick is awaited ≤ FLEET_INSTALL_SETTLE_SECS
 #   H. off           FLEET_INSTALL_SYNC=0 → no fetch, no move, state says off;
 #                    H2: a login the machine daemon manages (#2334) → off too
 #   I. not seen      a failed fetch is fetch-failed (not refused); no tag = none
@@ -147,14 +153,22 @@ echo "apply \$*" >> "$LOG"
 echo 'layout: ok'
 echo 'apply: ok — stub'
 EOF
-doctor_stub() { # $1 = extra line the doctor of THIS version prints ('' = none)
+# The stub's own FAIL ($1) shows only once its version is LIVE — the link points at
+# it, the way a version whose daemons crash shows only after the switch; run from
+# its own dir before the switch (the new-doctor baseline, #2655) it is clean. $2 =
+# a FAIL it prints whenever \$WORK/old-evidence exists, live or not: a check the
+# new version added, reading what the old daemons wrote. Each run is logged as
+# `doctor` (the install's) or `doctor baseline`, and its FLEET_DOCTOR_* to doctor-env.log.
+doctor_stub() { # $1 = live-only FAIL line, $2 = old-evidence FAIL line ('' = none)
   cat > "$SEED/bin/fleet-doctor.sh" <<EOF
 #!/bin/sh
-echo "doctor" >> "$LOG"
+echo "doctor\${FLEET_DOCTOR_BASELINE:+ baseline}" >> "$LOG"
+echo "\${FLEET_DOCTOR_BASELINE:-0} \${FLEET_DOCTOR_SINCE:--}" >> "$WORK/doctor-env.log"
 echo '  PASS  gh       ok'
 echo '  WARN  install  behind (a WARN never counts)'
 [ -f "$WORK/doctor-fail-always" ] && echo '  FAIL  quota    cache stale (pre-existing)'
-${1:+echo '$1'}
+${1:+[ "\$(cd "\$(dirname "\$0")/.." && pwd -P)" = "\$(cd '$CO' && pwd -P)" ] && echo '$1'}
+${2:+[ -f "$WORK/old-evidence" ] && echo '$2'}
 exit 0
 EOF
 }
@@ -754,6 +768,78 @@ eq "W: the pruned branches are gone" 2 "$(git -C "$CO" branch --list 'fleet-live
 eq "W: no stale worktree records" 3 "$(git -C "$CO" worktree list | wc -l | tr -d ' ')"
 contains "W: says what it pruned" "$OUT" "pruned version"
 eq "W: the shared logs survive" old "$(cat "$CO/logs/keep.log")"
+
+# --- S. one ruler, and the switch's own window (issue #2655) ---------------------------------------
+# 2026-10-09: the new doctor's two new FAILs read what the OLD daemons wrote in
+# the last hour, and the old doctor had no such rows to baseline them → rollback,
+# and `skip:` kept the machine on the old version for good.
+OLDEV='  FAIL  state    sleep judgments (last hour): wrong fleet x784 (old evidence)'
+doctor_stub '' "$OLDEV"; S1=$(commit s-stricter)
+doctor_stub '  FAIL  gh       boom (broken once live)' "$OLDEV"; S2=$(commit s-broken)
+doctor_stub ''; S3=$(commit s-fixed); S4=$(commit s-four)
+git -C "$SEED" push -q origin master
+touch "$WORK/old-evidence"; : > "$LOG"; : > "$WORK/doctor-env.log"
+stable "$S1"; run
+eq "S: a new check failing on the old evidence is not a rollback" switched "$(st result)"
+eq "S: HEAD at stable" "$S1" "$(hd)"
+contains "S: says the FAIL predates the switch" "$(st reason)" "doctor FAIL already present before: state"
+eq "S: the new doctor ran once as the baseline" 1 "$(grep -c '^doctor baseline$' "$LOG")"
+eq "S: the install's doctor before and after" 2 "$(doctors)"
+eq "S: the old doctor: no baseline flag, no window" "0 -" "$(sed -n 1p "$WORK/doctor-env.log")"
+eq "S: the baseline: flagged, no window" "1 -" "$(sed -n 2p "$WORK/doctor-env.log")"
+since=$(sed -n 3p "$WORK/doctor-env.log")
+case "$since" in "0 "[0-9]*) ;; *) fail "S: the doctor after the switch got no FLEET_DOCTOR_SINCE epoch: [$since]" ;; esac; CHECKS=$((CHECKS + 1))
+# a real new FAIL (the version breaks once live) still rolls back — and only it is named
+: > "$LOG"; stable "$S2"; run
+eq "S: a FAIL only the live new version has → rolled back" rolled-back "$(st result)"
+contains "S: names only that FAIL" "$(st reason)" "doctor FAIL after the switch: gh —"
+eq "S: the link is back" "$S1" "$(hd)"
+contains "S: the reason names --retry" "$(st reason)" "fleet-install-sync.sh --retry"
+run; eq "S: then skipped" skipped "$(st result)"
+contains "S: skipped names --retry" "$(st reason)" "fleet-install-sync.sh --retry"
+: > "$LOG"; run --retry
+contains "S: --retry forgets the skip" "$OUT" "--retry: forgetting skip: $(short "$S2")"
+eq "S: --retry tries it again" rolled-back "$(st result)"
+eq "S: …the doctor ran again" 2 "$(doctors)"
+rm -f "$WORK/old-evidence"
+# settle: the sleep tick is awaited (≤ the budget) before the doctor after the switch
+mkdir -p "$CO/logs"; touch -t 200001010000 "$CO/logs/sleep.log"
+stable "$S3"; OUT=$(FLEET_INSTALL_SETTLE_SECS=0 bash "$IS" --root "$CO" 2>&1)
+eq "S: settle: switched" switched "$(st result)"
+contains "S: settle: no tick within the budget is said, not judged" "$OUT" "no sleep tick within 0s of the switch"
+touch -t 200001010000 "$CO/logs/sleep.log"
+( sleep 2; touch "$CO/logs/sleep.log" ) &
+stable "$S4"; t0=$(date +%s); OUT=$(FLEET_INSTALL_SETTLE_SECS=30 bash "$IS" --root "$CO" 2>&1); t1=$(date +%s); wait
+eq "S: settle: switched after the tick" switched "$(st result)"
+not_contains "S: settle: the tick came" "$OUT" "no sleep tick within"
+[ $((t1 - t0)) -lt 25 ] || fail "S: settle waited the whole budget ($((t1 - t0))s) though the tick came"; CHECKS=$((CHECKS + 1))
+rm -f "$CO/logs/sleep.log"
+# …and the real doctor's two windowed rows, cut out of bin/fleet-doctor.sh and run
+# on a sandbox: the old hour's `wrong fleet` and a cache older than the switch
+# FAIL without FLEET_DOCTOR_SINCE, and do not with it.
+DD="$WORK/doc"; mkdir -p "$DD/bin" "$DD/logs"
+awk '/^slog=/,0' "$BIN/fleet-doctor.sh" | awk '/^# --- hubauth/ { exit } { print }' \
+  | sed '/^# Trips back to the hub/,/^EOF$/d' > "$DD/bin/rows.sh"
+printf 'fail() { echo "FAIL $*"; }\npass() { echo "PASS $*"; }\nwarn() { echo "WARN $*"; }\n. "$(dirname "$0")/rows.sh"\n' > "$DD/bin/doc.sh"
+cat > "$DD/bin/fleet-hub-sessions.sh" <<'EOS'
+#!/bin/bash
+case "$1" in --identity) echo 'node stub' ;; --status) echo 'loop none · cache 12499s'; exit 1 ;; esac
+EOS
+chmod +x "$DD/bin/fleet-hub-sessions.sh"
+python3 - "$DD/logs/sleep.log" <<'EOP'
+import json, sys, time
+at = lambda ago: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - ago))
+with open(sys.argv[1], "w") as f:
+    for _ in range(9): f.write(json.dumps({"at": at(900), "skip": "wrong fleet"}) + "\n")
+    for _ in range(2): f.write(json.dumps({"at": at(1), "state": "idle"}) + "\n")
+EOP
+dout=$(CCQUOTA_FLEET=1 sh "$DD/bin/doc.sh" 2>&1)
+contains "S: doctor, no window: the old hour's wrong fleet FAILs" "$dout" "FAIL state sleep judgments (last hour): 11 judgments/hr"
+contains "S: doctor, no window: the old cache FAILs" "$dout" "FAIL hub-sessions loop none · cache 12499s"
+dout=$(CCQUOTA_FLEET=1 FLEET_DOCTOR_SINCE=$(( $(date +%s) - 60 )) sh "$DD/bin/doc.sh" 2>&1)
+contains "S: doctor since the switch: only its samples" "$dout" "PASS state sleep judgments (since the switch, last hour): 2 judgments/hr"
+contains "S: doctor since the switch: an older cache is a WARN" "$dout" "WARN hub-sessions loop none · cache 12499s — no round since the switch yet"
+not_contains "S: doctor since the switch: no FAIL" "$dout" "FAIL"
 
 # --- K. registry lockstep ------------------------------------------------------------------------------------
 ROOT="$(cd "$BIN/.." && pwd)"

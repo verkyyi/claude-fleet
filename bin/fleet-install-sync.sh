@@ -1,6 +1,6 @@
 #!/bin/bash
-# fleet-install-sync.sh [--dry-run] [--status] [--root <dir>] [--remote <name>]
-#                       [--timeout <s>] — the INSTALL-SYNC daemon
+# fleet-install-sync.sh [--dry-run] [--status] [--retry] [--root <dir>]
+#                       [--remote <name>] [--timeout <s>] — the INSTALL-SYNC daemon
 # (com.claude-fleet.install-sync, every 30 min; issue #1120, EPIC #1117 C3).
 #
 # Every login on a machine has its own live install (~/.claude/fleet) and its own
@@ -51,6 +51,8 @@
 #   current    HEAD == stable → nothing to do.
 #   skipped    stable == the version the doctor rejected last time (`skip:` in
 #              the state) → not retried until stable moves again. No flapping.
+#              `--retry` (issue #2655) forgets that `skip:` and runs the tick
+#              now — the doctor's install row names it on a rolled-back login.
 #   refused    stable is not a DESCENDANT of HEAD (a backward move, or this
 #              install carries commits trunk does not — a hand sync pushed
 #              HEAD past stable, #1117 risk table) → never moves backward or
@@ -85,7 +87,18 @@
 #              FAIL line the pre-update doctor did NOT (a FAIL this login
 #              already had — a stale quota cache, a missing tool — is not the
 #              new version's fault and must not roll every version back forever;
-#              WARN lines never count) → the link back to the old version (.prev
+#              WARN lines never count). ONE RULER (issue #2655): the baseline is
+#              the old doctor AND the NEW version's doctor, run from its own dir
+#              before the link moves (FLEET_DOCTOR_BASELINE=1) — a check the new
+#              version added or made stricter fails on the old evidence there
+#              too, so it is not the switch's fault (2026-10-09: two new doctor
+#              FAILs read the old daemons' last hour and rolled macmini back).
+#              And the doctor after the switch judges only what happened after
+#              it: the apply's daemons get one sleep tick first (≤
+#              FLEET_INSTALL_SETTLE_SECS, 90; the hub-sessions loop --ensure'd),
+#              and FLEET_DOCTOR_SINCE=<switch epoch> makes the windowed rows
+#              (state's sleep judgments, hub-sessions' cache age) count only
+#              samples from then on → the link back to the old version (.prev
 #              names the rejected one) → the OLD version's apply --from <stable>
 #              --to <old> → `skip: <stable>` recorded, so this version is not
 #              retried until stable moves.
@@ -185,7 +198,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 ROOT="${FLEET_INSTALL_ROOT:-$(cd "$BIN/.." && pwd)}"
 REMOTE=origin TAG=stable TIMEOUT="${FLEET_INSTALL_SYNC_TIMEOUT:-30}"
-DRY=0 STATUS=0
+DRY=0 STATUS=0 RETRY=0
 BUSY_STATES='working|looping|waking'
 # A Loop parked between rounds (issue #1690) is busy only when its next round is
 # this close: an apply + doctor finish well inside it.
@@ -205,11 +218,12 @@ case "$NODE_RETRY" in ''|*[!0-9]*) NODE_RETRY=21600 ;; esac
 LOGIN=$(id -un 2>/dev/null || printf '%s' "${USER:-?}")
 HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '?')
 
-usage() { sed -n '2,154p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,186p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1 ;;
     --status)     STATUS=1 ;;
+    --retry)      RETRY=1 ;;
     --root)       shift; ROOT="${1:-}" ;;
     --remote)     shift; REMOTE="${1:-origin}" ;;
     --timeout)    shift; TIMEOUT="${1:-30}" ;;
@@ -328,7 +342,7 @@ notify_stuck() {
         "EPIC batch running"*) hint="Waited $(( ($(now) - DEFERRED_SINCE) / 3600 ))h so far (since $(iso_of "$DEFERRED_SINCE")) — a batch marked running this long is usually a loop that died without its closing tick: \`fleet-epic-heartbeat.sh --status\` names it; a mark expires 45 min after its last tick, or \`--clear <N>\` it by hand." ;;
         *) hint="Waited $(( ($(now) - DEFERRED_SINCE) / 3600 ))h so far (since $(iso_of "$DEFERRED_SINCE")) — a session busy this long is usually a stuck one: check \`fleet-doctor.sh\`, or its dash." ;;
       esac ;;
-    skipped)  hint="It rolled back after the doctor failed on this version; nothing is retried until stable moves (\`fleet-stable.sh move\`)." ;;
+    skipped)  hint="It rolled back after the doctor failed on this version; nothing is retried until stable moves (\`fleet-stable.sh move\`), or \`fleet-install-sync.sh --retry\` tries it again now." ;;
     *)        hint="The reason above says what to do; \`fleet-install-sync.sh --status\` has the whole record." ;;
   esac
   msg="# install-sync stuck — ${LOGIN}@${HOST}
@@ -583,13 +597,40 @@ finish() {
 
 # The FAIL tags of one doctor run (`  FAIL  <tag>  …`), sorted unique. Colour is
 # off when stdout is not a tty, so the columns are plain. A doctor this version
-# does not ship → nothing (never a FAIL).
+# does not ship → nothing (never a FAIL). $1 = the version dir whose doctor runs
+# (default: the install, through its link); FLEET_DOCTOR_* in the caller's
+# environment reach it (issue #2655).
 doctor_fail_tags() {
-  [ -f "$ROOT/bin/fleet-doctor.sh" ] || return 0
-  local out
-  out=$(sh "$ROOT/bin/fleet-doctor.sh" 2>&1 </dev/null)
-  printf '%s\n' "$out" | sed 's/^/    doctor: /' >&2
+  local d="${1:-$ROOT}" out lbl=doctor
+  [ -f "$d/bin/fleet-doctor.sh" ] || return 0
+  [ "${FLEET_DOCTOR_BASELINE:-0}" = 1 ] && lbl='doctor (new, baseline)'
+  out=$(sh "$d/bin/fleet-doctor.sh" 2>&1 </dev/null)
+  printf '%s\n' "$out" | sed "s/^/    $lbl: /" >&2
   printf '%s\n' "$out" | awk '$1 == "FAIL" && NF >= 2 { print $2 }' | sort -u
+}
+
+# settle <epoch> — before the doctor after a switch, the daemons the apply
+# (re)loaded get to write once (issue #2655): the hub-sessions loop is started if
+# none runs, and the sleep tick (every 60 s) is awaited until logs/sleep.log is
+# newer than the switch, at most FLEET_INSTALL_SETTLE_SECS (90). No sleep.log →
+# no wait. A tick that never comes is not a verdict: the doctor judges what it has.
+settle() {
+  local t0="$1" budget="${FLEET_INSTALL_SETTLE_SECS:-90}" end slog m
+  case "$budget" in ''|*[!0-9]*) budget=90 ;; esac
+  [ -f "$ROOT/bin/fleet-hub-sessions.sh" ] \
+    && bash "$ROOT/bin/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 </dev/null
+  slog="$ROOT/logs/sleep.log"
+  [ -f "$slog" ] || return 0
+  end=$(( t0 + budget ))
+  while :; do
+    m=$(stat -c %Y "$slog" 2>/dev/null || stat -f %m "$slog" 2>/dev/null)  # GNU first: its -f is the filesystem
+    case "$m" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$m" -gt "$t0" ] && return 0
+    [ "$(now)" -lt "$end" ] || break
+    sleep 5
+  done
+  say "no sleep tick within ${budget}s of the switch — the doctor judges what it has"
+  return 0
 }
 
 # Busy windows across every live fleet of THIS login: "<sess>:<n>" per fleet that
@@ -826,6 +867,10 @@ main() {
 
   # A remembered rejection is about ONE version; stable moving on clears it.
   [ -n "$SKIP" ] && [ "$SKIP" != "$STABLE_SHA" ] && SKIP=''
+  # --retry (issue #2655): the operator says try it again now.
+  if [ "$RETRY" = 1 ] && [ -n "$SKIP" ]; then
+    say "--retry: forgetting skip: $(short "$SKIP") — trying stable again"; SKIP=''
+  fi
 
   # --- nothing to do -------------------------------------------------------------
   if [ "$HEAD_SHA" = "$STABLE_SHA" ]; then
@@ -835,7 +880,7 @@ main() {
   FROM="$HEAD_SHA"; TO="$STABLE_SHA"
   if [ -n "$SKIP" ]; then
     DEFERRED_SINCE=''
-    finish skipped "stable $(short "$STABLE_SHA") failed the doctor after the last update and was rolled back — not retried until stable moves (fleet-stable.sh move)"
+    finish skipped "stable $(short "$STABLE_SHA") failed the doctor after the last update and was rolled back — not retried until stable moves (fleet-stable.sh move), or by hand: fleet-install-sync.sh --retry"
   fi
 
   # --- the two refusals --------------------------------------------------------------
@@ -892,7 +937,7 @@ main() {
 
   # --- switch ---------------------------------------------------------------------------------
   # Baseline first: FAIL lines this login already has are not the new version's.
-  local pre post new oldkey olddir newdir newkey bad migrated=''
+  local pre post new oldkey olddir newdir newkey bad migrated='' t_switch
   say "switching $(short "$HEAD_SHA") -> $(short "$STABLE_SHA")"
   pre=$(doctor_fail_tags)
   # A plain-directory install becomes the versions layout first (migration):
@@ -915,13 +960,19 @@ main() {
     finish rolled-back "pre-switch check failed at $(short "$STABLE_SHA"): $bad — nothing switched, still at $(short "$HEAD_SHA"); not retried until stable moves$migrated"
   fi
   vers_shared "$olddir"; vers_shared "$newdir"
+  # One ruler (issue #2655): the NEW doctor on the OLD install's evidence. What it
+  # already fails here — a row the new version added or made stricter, reading
+  # what the old daemons wrote — is not the switch's doing.
+  pre=$(printf '%s\n%s\n' "$pre" "$(FLEET_DOCTOR_BASELINE=1 doctor_fail_tags "$newdir")" | sed '/^$/d' | sort -u)
+  t_switch=$(now)
   if ! fleet_versions_point "$ROOT" "$newdir"; then
     vers_retire "$newkey"
     finish failed "could not switch the link $ROOT -> $newdir — still at $(short "$HEAD_SHA")$migrated"
   fi
   printf '%s\n' "$oldkey" > "$VERS/.prev"; vers_retire "$oldkey"
   run_apply "$HEAD_SHA" "$STABLE_SHA" || :
-  post=$(doctor_fail_tags)
+  settle "$t_switch"
+  post=$(FLEET_DOCTOR_SINCE="$t_switch" doctor_fail_tags)
   new=$(comm -13 <(printf '%s\n' "$pre" | sed '/^$/d') <(printf '%s\n' "$post" | sed '/^$/d') | tr '\n' ',')
   new=${new%,}
   if [ -z "$new" ]; then
@@ -940,7 +991,7 @@ main() {
   run_apply "$STABLE_SHA" "$HEAD_SHA" || :
   SKIP="$STABLE_SHA"
   FROM="$STABLE_SHA"; TO="$HEAD_SHA"
-  finish rolled-back "doctor FAIL after the switch: $new — the link is back at $(short "$HEAD_SHA"); stable $(short "$STABLE_SHA") is not retried until it moves (forward apply: $fwd; rollback apply: $APPLY_LINE)"
+  finish rolled-back "doctor FAIL after the switch: $new — the link is back at $(short "$HEAD_SHA"); stable $(short "$STABLE_SHA") is not retried until it moves or fleet-install-sync.sh --retry (forward apply: $fwd; rollback apply: $APPLY_LINE)"
 }
 
 main "$@"; exit

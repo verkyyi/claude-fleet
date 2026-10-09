@@ -681,3 +681,6 @@ FLEET_HUB_SESSIONS_NODE_REFUSED_TTL knob: internal budget, seconds fleet-hub-ses
 FLEET_HUB_SESSIONS_NODE_TOKEN      knob: internal seam, 0 = fleet-hub-sessions.sh never reads with node.env's token (default 1, #2630)
 FLEET_HUBSESS_LOCKED               env handoff: fleet-hub-sessions.sh's lock parent (LOCK_PY) tells the --loop it runs that global/hubsess.lock is held (#2630)
 FLEET_HUBSESS_GUARD                env handoff: the lock parent's pid — the --loop stops once it is gone (#2630)
+FLEET_DOCTOR_BASELINE              env handoff: fleet-install-sync.sh runs the NEW version's doctor before the switch with it = 1 (the one-ruler baseline, #2655)
+FLEET_DOCTOR_SINCE                 env handoff: fleet-install-sync.sh's doctor after a switch — the switch epoch; the windowed rows (state's sleep judgments, hub-sessions' cache age) count only samples from then on (#2655)
+FLEET_INSTALL_SETTLE_SECS          knob: internal budget, seconds install-sync waits after a switch for a sleep tick before its doctor runs (90, #2655)
