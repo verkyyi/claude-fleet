@@ -16,7 +16,7 @@
 #                       never silent
 #
 # ONE GRAMMAR: `<icon> <subject> · <condition> · <value>`. Subjects are nouns the
-# operator knows (quota, dash, daemon, disk, machine, accounts, model, #<issue>);
+# operator knows (quota, dash, daemon, disk, machine, service, accounts, model, #<issue>);
 # conditions come from a closed list (stale, unreadable, uneven, from banner,
 # low, load high, memory high, capped, all capped, reauth, question, permission,
 # blocked, failed, waiting, stalled).
@@ -25,7 +25,7 @@
 #   {"id":…,"severity":alarm|warning|needs|healed,"subject":…,"condition":…,
 #    "value":…,"since":<epoch>,"action":…,"healed_at":<epoch|0>,
 #    "target":…,"detail":…}
-# action ∈ accounts | relogin | kick-collect | kick-daemons | disk | machine | jump | event  (every
+# action ∈ accounts | relogin | kick-collect | kick-daemons | disk | machine | services | jump | event  (every
 # row has one: an alert with nothing to do about it is demoted or deleted, not shown).
 #
 # EVENTS (issue #1617): a background script never flashes a `display-message`
@@ -468,6 +468,24 @@ fleet_alerts_compute() {
         'used memory is in the red: the box is about to swap'
   fi
 
+  # --- service: a registered background service / scheduled task meant to run
+  # that does not (issue #2526) — the hub's service_failed, read off the same
+  # summary the bar's machine cell comes from (global/hub_services), and this
+  # machine's own daemon for a machine the hub has no word for. One ✖ per entry;
+  # since = when the hub first saw it fail. FLEET_ALERTS_SERVICES=0 off.
+  local sg sid sval ssince sdet
+  sg="${FLEET_STATUS_G:-$(fleet_usage_cache_dir)}"
+  if [ "${FLEET_ALERTS_SERVICES:-1}" != 0 ] && [ -f "$_FA_BIN/fleet-services.py" ] &&
+     { [ -s "$sg/hub_services" ] || [ -s "${FLEET_NODE_STATE:-/var/db/fleet-node}/state.json" ]; }; then
+    while IFS=$'\t' read -r sid sval ssince sdet; do
+      [ -n "$sid" ] || continue
+      case "$ssince" in ''|*[!0-9]*) ssince=0 ;; esac
+      _fa_row "$sid" alarm service failed "$sval" "$ssince" services 0 '' "$(_fa_detail "$sdet")"
+    done <<EOF
+$(FLEET_STATUS_G="$sg" python3 "$_FA_BIN/fleet-services.py" --alerts 2>/dev/null)
+EOF
+  fi
+
   # --- accounts: every subscription at its ceiling (stamped by .fleet-account.py
   # when a launch found nothing to pick; FLEET_ALERTS_ALLCAPPED_SECS old at most).
   af="$(fleet_usage_cache_dir)/account.all-capped"
@@ -775,7 +793,7 @@ fleet_alerts_list() {
     [ "$ac" = event ] && r="$de"                  # an event's row IS its text
     case "$ac" in
       accounts) x='see accounts' ;; relogin) x='↵ re-login' ;; kick-collect|kick-daemons) x='restart daemon' ;;
-      disk) x='see disk' ;; machine) x='see top' ;; jump) x='↵ go to window' ;; event) x='↵ read' ;; *) x='' ;;
+      disk) x='see disk' ;; machine) x='see top' ;; services) x='see services' ;; jump) x='↵ go to window' ;; event) x='↵ read' ;; *) x='' ;;
     esac
     tail=""
     if [ "$sev" = healed ]; then
@@ -955,6 +973,10 @@ fleet_alerts_act() {
       ps -Ao pid=,pcpu=,pmem=,comm= 2>/dev/null | sort -k2,2 -nr | head -n 10
       printf '\n'; bash "$_FA_BIN/fleet-diskguard.sh" --orphans 2>/dev/null
       printf '\n  press any key to close\n'; IFS= read -rsn1 _ 2>/dev/null || true ;;
+    services)
+      # the registered services, a failed one red, then its log: fleet service logs (#2526)
+      python3 "$_FA_BIN/fleet-services.py" 2>&1
+      printf '\n  %s\n  press any key to close\n' "$de"; IFS= read -rsn1 _ 2>/dev/null || true ;;
     jump)
       tmux switch-client -t "$ta" 2>/dev/null
       tmux select-window -t "${ta#*:}" 2>/dev/null ;;

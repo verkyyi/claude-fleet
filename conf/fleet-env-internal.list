@@ -29,6 +29,7 @@ FLEET_ALERTS_HUB_FLASH_SECS        knob: hub unreachable this long before the on
 FLEET_ALERTS_DISK                  seam: 0 skips the alerts producer's own df (a selftest that counts df calls)
 FLEET_ALERTS_LOAD_PCT              knob: load per core ×100 at which `machine · load high` is raised (fleet-alerts.sh, 80, #1616)
 FLEET_ALERTS_MACHINE               knob: 0 turns off the machine load / memory alerts (fleet-alerts.sh, #1616; selftests set it)
+FLEET_ALERTS_SERVICES              knob: 0 turns off the registered-service alerts (fleet-alerts.sh `service · failed`, #2526)
 FLEET_ALERTS_MEM_PCT               knob: used-memory % at which `machine · memory high` is raised (fleet-alerts.sh, 85, #1616)
 FLEET_ALERTS_MUTE_SECS             knob: how long `m` in the alerts popup mutes a row (fleet-alerts.sh, 3600)
 FLEET_ALERTS_REAUTH_SECS           knob: how old the account.reauth stamp may be before the bar refreshes it through `.fleet-account.py logins` (fleet-alerts.sh, 60)

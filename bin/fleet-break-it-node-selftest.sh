@@ -14,6 +14,8 @@
 #                         one / retired while a registered task of it still runs
 #   task-fail-silent      bin/fleet-node-supervisor.py's agent tasks + bin/fleet-task-run.sh
 #                         (#2529): a scheduled agent task's session will not open, every try
+#   service-failed-unseen bin/fleet-services.py (#2526): a registered service that
+#                         keeps dying reads red in the doctor + the alert bar
 #   account-adopt-stuck   bin/fleet-node-supervisor.py `account adopt|release` (#2332):
 #                         one of a login's services will not unload mid-migration
 #   account-adopt-agent-left  bin/fleet-node-supervisor.py `account adopt|release` (#2387):
@@ -177,6 +179,37 @@ drill_service_login_moved() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
     FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
   WHAT="每日推送登记在旧登录下：退役旧登录（account release / fleet-login-remove）因有任务未迁走被拒（退 6，打印 move 命令）；service move 后条目、工作目录、技能目录、日志、凭据都到新登录下，旧登录下一样不剩，守护以新登录身份按时跑起来"
+}
+
+drill_service_failed_unseen() {
+  CAP=30   # the EPIC's bar is ≤ 1 hour from the first failure to a red reading; here, seconds
+  local sb sup t0 d a
+  sb="$WORK/svcfail"; mkdir -p "$sb/LaunchDaemons" "$sb/Users/alice"
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  printf '#!/bin/bash\necho "give up: skill not found"\nexit 1\n' > "$sb/report.sh"; chmod +x "$sb/report.sh"
+  export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
+    FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
+    FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json"
+  python3 "$BIN/fleet-node-supervisor.py" service add --login alice --name daily-report -- "$sb/report.sh" >"$sb/add.out" 2>&1 \
+    || { WHY="service add failed: $(tail -2 "$sb/add.out" | tr '\n' ' ')"; return 1; }
+  # before the daemon runs it: registered, never started — not a failure yet
+  d=$(FLEET_SERVICES_CACHE='' FLEET_SERVICES_STATE="$sb/db/state.json" FLEET_SERVICES_LOGIN=alice python3 "$BIN/fleet-services.py" --doctor)
+  case "$d" in FAIL*) WHY="red before it ever ran: $d"; return 1 ;; esac
+  t0=$(now)
+  python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
+  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
+  until_ok 30 sh -c 'FLEET_SERVICES_CACHE="" FLEET_SERVICES_STATE="$1" FLEET_SERVICES_LOGIN=alice python3 "$2" --doctor | grep -q "^FAIL	1/1 failed: alice/daily-report@"' \
+      _ "$sb/db/state.json" "$BIN/fleet-services.py" \
+    || { WHY="the dying service never read red in the doctor: $(FLEET_SERVICES_CACHE='' FLEET_SERVICES_STATE="$sb/db/state.json" FLEET_SERVICES_LOGIN=alice python3 "$BIN/fleet-services.py" --doctor)"; kill "$sup" 2>/dev/null; return 1; }
+  SECS=$(since "$t0")
+  a=$(FLEET_SERVICES_CACHE='' FLEET_SERVICES_STATE="$sb/db/state.json" FLEET_SERVICES_LOGIN=alice python3 "$BIN/fleet-services.py" --alerts)
+  case "$a" in service-*-alice-daily-report*) ;; *) WHY="no alert line for it: [$a]"; kill "$sup" 2>/dev/null; return 1 ;; esac
+  python3 "$BIN/fleet-node-supervisor.py" service rm --login alice --name daily-report >/dev/null
+  kill "$sup" 2>/dev/null; wait "$sup" 2>/dev/null
+  unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
+    FLEET_NODE_TICK FLEET_NODE_LAUNCHCTL FLEET_NODE_TEST FLEET_NODE_PASSWD
+  WHAT="登记的服务一启动就退：几秒内体检 services 行 FAIL、告警栏多一条 ✖ service · failed（入口另有 service_failed），不再是 40 小时没人知道"
 }
 
 drill_account_adopt_stuck() {

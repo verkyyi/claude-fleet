@@ -1740,6 +1740,20 @@ if [ -f "$_nsup" ] && command -v python3 >/dev/null 2>&1; then
     1) warn node "machine daemon com.claude-fleet.node is installed but not running — $nline. launchd's KeepAlive should bring it back within seconds; if it does not: \`sudo launchctl kickstart -k system/com.claude-fleet.node\`, log /var/log/fleet-node/supervisor.log, \`fleet-node-supervisor.py status\`" ;;
   esac
 fi
+# The registered background services and scheduled tasks (issue #2526, EPIC
+# #2524 C2): the same table `fleet ls --services` prints — the hub's word for
+# every machine of this person's (global/hub_services), this machine's daemon
+# for the rest. A failed one (down · failed · invalid · no_login) is FAIL;
+# nothing registered is INFO.
+_nsvc="$(dirname "$0")/fleet-services.py"
+if [ -f "$_nsvc" ] && command -v python3 >/dev/null 2>&1; then
+  sline=$(python3 "$_nsvc" --doctor 2>/dev/null)
+  case "$sline" in
+    FAIL$'\t'*) fail services "${sline#*$'\t'}" ;;
+    PASS$'\t'*) pass services "${sline#*$'\t'}" ;;
+    INFO$'\t'*) info services "${sline#*$'\t'}" ;;
+  esac
+fi
 # The machine's one updater (issue #2334): where the last tick left it. No
 # update.json (the updater never ran here) ⇒ no row. WARN, never FAIL: the
 # updater's own gate rolls a bad release back; this line only says it happened.
