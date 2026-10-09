@@ -184,5 +184,10 @@ out=$(env PATH="$T/shim:$PATH" FLEET_CONF_DIR="$T/conf" FLEET_LOGIN_HOMES="$T/ho
 if [ "$rc" = 0 ] && [ "$(grep -c '^DELETE ' "$T/curl.log")" = 4 ] && printf '%s\n' "$out" | grep -q 'no drill person on the hub'
 then ok 'teardown --invite: 202 removing is waited out, then the person is gone (exit 0)'
 else bad "202 removing: exit $rc, $(grep -c '^DELETE ' "$T/curl.log") DELETEs: $(printf '%s' "$out" | tail -n 4)"; fi
+# bash 3.2 in a UTF-8 locale reads 「$opening，」's full-width comma as part of
+# the name — under set -u the drill died at scratch (C9 run 4): braces only
+bad_vars=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~[:space:]]' "$DRILL" | grep -vE '^[0-9]+:[[:space:]]*#')
+if [ -z "$bad_vars" ]; then ok 'no $name directly before a non-ASCII byte (write ${name})'
+else bad "a \$name runs into a non-ASCII byte (bash 3.2 reads it as the name): $bad_vars"; fi
 [ "$FAILS" = 0 ] && { echo 'fleet-onboard-drill-selftest: PASS'; exit 0; }
 echo "fleet-onboard-drill-selftest: FAIL ($FAILS)"; exit 1
