@@ -3,22 +3,16 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 func badgeServer(t *testing.T, public bool) *Server {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := openTestStore(t)
 
 	id := model.Identity{AccountUUID: "acct-1", Email: "a@example.com", Hostname: "h1"}
 	if err := st.UpsertAccount(id, "max", "tier"); err != nil {

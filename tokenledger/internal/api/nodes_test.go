@@ -16,7 +16,6 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 
 	"net/http/httptest"
 )
@@ -25,11 +24,7 @@ import (
 // sets it up under CCQUOTA_FLEET=1.
 func newFleetHarness(t *testing.T) *harness {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := openTestStore(t)
 	if err := st.EnsureNodes(); err != nil {
 		t.Fatal(err)
 	}

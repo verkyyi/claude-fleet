@@ -4,13 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
-
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // meterServer is badgeServer's hub (one 4242-token turn) with a dashboard
@@ -213,11 +210,7 @@ func TestOdometer_IsTheBadgeSVG(t *testing.T) {
 
 func TestMeter_EmptyHubServesNoZero(t *testing.T) {
 	s := meterServer(t)
-	st, err := store.Open(filepath.Join(t.TempDir(), "empty.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := openTestStore(t)
 	s.Store = st
 	if rec := meterGet(t, s, "/meter.json", nil); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/meter.json on an empty hub = %d %s, want 503, never a zero", rec.Code, rec.Body.String())

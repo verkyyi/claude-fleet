@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // Two hub replicas over one database (claude-fleet#2124, EPIC #2119 C5).
@@ -27,11 +25,7 @@ const replicaTestToken = "replica-shared-secret"
 // tokens is shared, so an endpoint enrolled through either dials either.
 func newReplicaPair(t *testing.T) (a, b *harness) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := openTestStore(t)
 	if err := st.EnsureNodes(); err != nil {
 		t.Fatal(err)
 	}
