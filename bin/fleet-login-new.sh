@@ -47,11 +47,10 @@
 #      refresh token, so the new login gets its own device-code session instead
 #      (printed as a manual step).
 #   6. ~<login>/.zshrc ← the ~/.local/bin PATH line (Claude Code's native install
-#      dir, issue #1191; skipped when the file has one) and, after it, the
-#      claude-fleet block (fleet-login-bootstrap.sh --print-zshrc, issue #1165),
-#      owned by <login>: its first interactive login clones claude-fleet at
-#      `stable`, installs it and Claude Code, and brings its fleet up on the
-#      starter repo — nobody installs anything by hand.
+#      dir, issue #1191; skipped when the file has one), owned by <login> — and
+#      nothing else (issue #2702): no login banner, no client opened on an SSH
+#      login, no cw.zsh. A fleet machine is no one's client; the person runs
+#      `fleet` on their own device. Step 8b sets the login up instead.
 #   7. ~<login>/.claude/fleet ← claude-fleet cloned at `stable`, AS <login>
 #      (sudo -u), so the daemons of step 8 have their scripts from the moment
 #      they load, and the first-login bootstrap finds its install already there.
@@ -105,10 +104,11 @@
 #      store and starts the agent through its launcher (--no-credsep: loaded
 #      here). Without it the hub never sees this login's fleet: a heartbeat
 #      covers only the login that sends it. A step that fails is a WARN.
-#   8b. (the same logins) the fleet comes up AS the login, right away —
-#      fleet-login-bootstrap.sh, the one its first interactive login would run;
-#      nobody ever logs in to a login the hub opened, and the person's first
-#      session needs a fleet there (a WARN on failure; the next login retries).
+#   8b. (every login, issue #2702 — before it, only the ones the hub opened)
+#      the fleet comes up AS the login, right away — fleet-login-bootstrap.sh:
+#      clone, Claude Code, apply, the starter fleet. No ~/.zshrc block runs it on
+#      a first SSH login any more, and the person's first session needs a fleet
+#      there (a WARN on failure that names the command to re-run).
 #   9. the welcome letter (issue #1195; `--no-welcome` skips it) →
 #      ~/<login>-onboard/welcome.txt in YOUR home, mode 600: how to connect
 #      (`ssh -p <port> <login>@<host>` — host and port from FLEET_SSH_PUBLIC_HOST /
@@ -467,8 +467,7 @@ node_join_step() {
   N=$N0
 }
 fleet_up_step() {
-  [ "$OPENED" = 1 ] || return 0
-  say ""; say "[${N}b] bring $LOGIN's fleet up now, as $LOGIN (fleet-login-bootstrap.sh — no one logs in to a login the hub opened)"
+  say ""; say "[${N}b] bring $LOGIN's fleet up now, as $LOGIN (fleet-login-bootstrap.sh — no login shell sets it up, issue #2702)"
   show sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" bash "$ROOT/bin/fleet-login-bootstrap.sh"
   [ "$APPLY" = 1 ] || return 0
   local out rc
@@ -476,7 +475,7 @@ fleet_up_step() {
     bash "$ROOT/bin/fleet-login-bootstrap.sh" </dev/null 2>&1); rc=$?
   printf '%s\n' "$out" | sed 's/^/    /'
   if [ "$rc" = 0 ]; then FLEET_LINE='fleet: up (fleet-login-bootstrap.sh)'
-  else FLEET_LINE="fleet: WARN — fleet-login-bootstrap.sh exited $rc; its first login retries"; fi
+  else FLEET_LINE="fleet: WARN — fleet-login-bootstrap.sh exited $rc; re-run: sudo -u $LOGIN -H bash $ROOT/bin/fleet-login-bootstrap.sh"; fi
   say "  $FLEET_LINE"
 }
 
@@ -585,13 +584,12 @@ if [ "$DONLY" = 0 ]; then
     run sudo chmod 600 ${DST[@]+"${DST[@]}"}
   fi
 
-  step "set up claude-fleet on first login (~/.zshrc — ~/.local/bin PATH line + fleet-login-bootstrap.sh)"
+  step "$LOGIN's .zshrc — the ~/.local/bin PATH line only (no banner, no client on login: issue #2702)"
   ZRC="$TMPD/zshrc"
   BS="$BIN/fleet-login-bootstrap.sh"
-  # The PATH line first (issue #1191) — unless the file already carries one — then
-  # the block: the block's bootstrap call must already see ~/.local/bin.
-  { grep -qF '.local/bin' "$H/.zshrc" 2>/dev/null || bash "$BS" --print-path-line; bash "$BS" --print-zshrc; } > "$ZRC" \
-    || { printf '%s: fleet-login-bootstrap.sh --print-zshrc failed\n' "$PROG" >&2; exit 1; }
+  # The PATH line (issue #1191) — unless the file already carries one
+  { grep -qF '.local/bin' "$H/.zshrc" 2>/dev/null || bash "$BS" --print-path-line; } > "$ZRC" \
+    || { printf '%s: fleet-login-bootstrap.sh --print-path-line failed\n' "$PROG" >&2; exit 1; }
   append "$ZRC" "$H/.zshrc"
   run sudo chown "$LOGIN:staff" "$H/.zshrc"
   run sudo chmod 644 "$H/.zshrc"
@@ -801,8 +799,8 @@ welcome_zh() {
 
    ssh -p $SSH_PORT $LOGIN@$HOST_SHOWN
 
-   第一次 ssh 登录会自动装好 claude-fleet 和 Claude Code，把你的 fleet 拉起来，然后
-   直接进去——要几分钟，别中断；向导会先开口。
+   开号时已经替你装好 claude-fleet 和 Claude Code、把你的 fleet 拉起来了。ssh 上来是
+   一个普通 shell——这台是托管机器，不在这里开 fleet 客户端（第 5 条）。
 EOF
   [ -n "$SSH_HOST" ] || cat <<EOF
    （开号人还没配这台机器的公网入口：把上面的 <HOST> 换成开号人告诉你的主机名，
@@ -874,11 +872,12 @@ EOF
 
 5. 向导与 fleet
 
-   - ssh $MACHINE 后自动打开 fleet（客户端，底栏写「客户端在 $MACHINE 上运行」）；断开后再 ssh 就回来了。
+   - fleet 在你自己的电脑上用：装一次客户端（curl -fsSL <入口>/install | sh，入口地址问开号人），
+     然后敲 fleet——左边是你的会话，右边接到 $MACHINE 上的那一个。
    - 向导（一个 Claude 会话）会带你走一遍：加自己的仓库 → 提第一个 issue → 看 worker 跑 → 合并 PR。
-   - 向导窗口关了、或想再开：fleet guide
-   - 在 shell 里：fleet 打开客户端；fleet repo add owner/repo 把一个仓库加进来。
-   - 想离开但不关会话：按 tmux 的 prefix 键（默认 Ctrl-b）再按 d；下次 ssh 回来接着用。
+   - 向导窗口关了、或想再开：在 $MACHINE 的 shell 里 fleet guide
+   - 在 $MACHINE 的 shell 里：fleet repo add owner/repo 把一个仓库加进来。
+   - 想离开但不关会话：按 tmux 的 prefix 键（默认 Ctrl-b）再按 d；下次敲 fleet 接着用。
 
 6. 还要你自己做的
 
@@ -900,8 +899,9 @@ fleet-login-new.sh ($date, by ${ADMIN:-unknown}); follow it and you are in.
 
    ssh -p $SSH_PORT $LOGIN@$HOST_SHOWN
 
-   Your first ssh login installs claude-fleet and Claude Code, brings your fleet up
-   and drops you into it — a few minutes, don't interrupt; the guide speaks first.
+   claude-fleet and Claude Code are already installed and your fleet is up. An ssh
+   login there is a plain shell — this is a managed machine, the fleet client runs
+   on your own computer (section 5).
 EOF
   [ -n "$SSH_HOST" ] || cat <<EOF
    (The public entry of this machine is not configured yet: replace <HOST> above
@@ -973,11 +973,12 @@ EOF
 
 5. The guide and fleet
 
-   - ssh $MACHINE opens fleet (the client; its bar says it runs on $MACHINE); disconnect and ssh again to return.
+   - fleet runs on your own computer: install the client once (curl -fsSL <hub>/install | sh — ask the admin for the hub address),
+     then type fleet — your sessions on the left, the one on $MACHINE on the right.
    - The guide (a Claude session) walks you through: add your own repo → file your first issue → watch the worker → merge the PR.
-   - Guide window closed, or want it back: fleet guide
-   - In a shell: fleet opens the client; fleet repo add owner/repo adds a repo to it.
-   - To leave without closing anything: the tmux prefix (Ctrl-b by default), then d; your next ssh picks up where you left.
+   - Guide window closed, or want it back: fleet guide, in a shell on $MACHINE
+   - In a shell on $MACHINE: fleet repo add owner/repo adds a repo to it.
+   - To leave without closing anything: the tmux prefix (Ctrl-b by default), then d; type fleet again to pick up where you left.
 
 6. Still yours to do
 
@@ -1027,9 +1028,9 @@ i=$((i + 1)); say "  $i. as $LOGIN: gh auth login   — their own GitHub identit
 i=$((i + 1)); say "  $i. on the hub: ccquota enroll --name $MACHINE-$LOGIN   — give $LOGIN the token privately"
 say "     (then docs/SHARED-MACHINE.md step 4: the ccquota agent)"
 if [ "$DAEMONS" = 1 ]; then
-  say "  claude-fleet + Claude Code install themselves on $LOGIN's first SSH login — no GUI sign-in, no step here"
+  say "  claude-fleet + Claude Code were installed for $LOGIN above (step 8b) — no GUI sign-in, no step here"
 else
-  say "  claude-fleet + Claude Code install themselves on $LOGIN's first terminal login after step 1 — no step here"
+  say "  claude-fleet + Claude Code were installed for $LOGIN above (step 8b); its daemons wait for step 1"
 fi
 # the hub's detail is the output's tail: a login it opened says whether it is
 # on the hub with its fleet up (issue #2652); credsep stays the last line

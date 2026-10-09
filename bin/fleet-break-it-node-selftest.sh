@@ -248,6 +248,8 @@ plistlib.dump(d, open(sys.argv[1], "wb"))' "$@"
   export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
     FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" \
     FLEET_NODE_LAUNCHCTL='' FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json"
+  # the sweep looks only at the logins the daemon took over (#2702)
+  mkdir -p "$sb/db/logins"; : > "$sb/db/logins/alice.env"
   doc() { FLEET_SERVICES_CACHE='' FLEET_SERVICES_STATE="$sb/db/state.json" FLEET_SERVICES_LOGIN=alice python3 "$BIN/fleet-services.py" --doctor; }
   t0=$(now)
   python3 "$BIN/fleet-node-supervisor.py" sweep >"$sb/sweep1.out" 2>&1 \

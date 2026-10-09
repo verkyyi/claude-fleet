@@ -39,6 +39,7 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
 import importlib.util
 import json
 import os
+import plistlib
 import shutil
 import signal
 import subprocess
@@ -281,6 +282,53 @@ class C_Sweep(Sandbox):
         self.assertIn("old.collect", r.stdout)
         self.assertNotIn("keep.plist", r.stdout)
         self.assertTrue(os.path.exists(os.path.join(self.dd, "com.claude-fleet.old.collect.plist")))
+
+    def test_client_shell_only_taken_over_logins(self):
+        """issue #2702: a TAKEN-OVER login (logins/<login>.env) still carrying the
+        person's client (the shell's cache, a ~/.zshrc hook) is NAMED, never touched;
+        the PATH line and a comment are no hook. Anyone not taken over — an admin, a
+        local user — is not looked at: neither half names them, handwritten plists
+        included."""
+        users = os.path.join(self.d, "Users")
+        for login in ("alice", "bob", "carol", "verkyyi"):
+            os.makedirs(os.path.join(users, login, "Library", "LaunchAgents"), exist_ok=True)
+        os.makedirs(os.path.join(users, "alice", ".cache", "claude-fleet", "shell", "bin"))
+        with open(os.path.join(users, "bob", ".zshrc"), "w") as f:
+            f.write("# >>> claude-fleet (bin/fleet-login-bootstrap.sh, issue #1165) >>>\n"
+                    "[[ -r ~/.claude/fleet/shell/cw.zsh ]] && source ~/.claude/fleet/shell/cw.zsh\n"
+                    "# <<< claude-fleet <<<\n")
+        with open(os.path.join(users, "carol", ".zshrc"), "w") as f:      # no hook
+            f.write('export PATH="$HOME/.local/bin:$PATH"  # claude-fleet: x\n'
+                    "# source ~/.claude/fleet/shell/fleet-login.zsh\n")
+        # verkyyi: an admin, never taken over — a shell, a hook, a hand-written agent
+        os.makedirs(os.path.join(users, "verkyyi", ".cache", "claude-fleet", "shell"))
+        with open(os.path.join(users, "verkyyi", ".zshrc"), "w") as f:
+            f.write("source ~/.claude/fleet/shell/cw.zsh\n")
+        for login in ("verkyyi", "alice"):
+            with open(os.path.join(users, login, "Library", "LaunchAgents", "com.%s.ddns.plist" % login), "wb") as f:
+                plistlib.dump({"Label": "com.%s.ddns" % login,
+                               "ProgramArguments": [os.path.join(users, login, "bin", "ddns")]}, f)
+        # nothing taken over: nobody is named
+        r = self.run_sup("sweep", "--dry-run")
+        self.assertNotIn("clientshell", r.stdout)
+        self.assertNotIn("handwritten", r.stdout)
+        lg = os.path.join(self.d, "db", "logins")
+        os.makedirs(lg, exist_ok=True)
+        for login in ("alice", "bob", "carol"):
+            open(os.path.join(lg, login + ".env"), "w").close()
+        r = self.run_sup("sweep")
+        self.assertIn("clientshell (left in place): alice: ~/.cache/claude-fleet/shell — ", r.stdout)
+        self.assertIn("clientshell (left in place): bob: ~/.zshrc 2 hook line(s)", r.stdout)
+        self.assertIn("fleet-node-shell-retire.sh' --login bob", r.stdout)
+        self.assertIn("runs as alice", r.stdout)
+        self.assertNotIn("carol", r.stdout)
+        self.assertNotIn("verkyyi", r.stdout)
+        self.assertEqual(sorted(c["login"] for c in self.state()["sweep"]["clientshell"]), ["alice", "bob"])
+        self.assertEqual([h["login"] for h in self.state()["sweep"]["handwritten"]], ["alice"])
+        st = self.run_sup("status").stdout
+        self.assertIn("clientshell alice", st)
+        self.assertNotIn("verkyyi", st)
+        self.assertTrue(os.path.isdir(os.path.join(users, "alice", ".cache", "claude-fleet", "shell")))
 
 
 class D_RestartKeepsState(Sandbox):

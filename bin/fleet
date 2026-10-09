@@ -84,9 +84,8 @@
 # The client is the ONLY way in (issue #1628): there is no fallback to ssh-ing
 # into a machine's own list. It needs tmux ≥ 3.2 and a terminal; without either
 # `fleet` says how to get it and exits non-zero, and a client that cannot start
-# says why and exits non-zero. An iPad / iPhone ssh's into any machine with the
-# fleet installed and runs this same `fleet` there — the client then runs on
-# that machine, and its bar says so (客户端在 m5 上运行).
+# says why and exits non-zero. A MANAGED machine (/var/db/fleet-node/machine.env,
+# issue #2702) opens no client at all: it says to run `fleet` on your own device.
 #
 # Each command is its own script beside this one, `fleet-<command>.py` or
 # `fleet-<command>.sh`, so adding one is adding a file, not editing here. A
@@ -98,8 +97,26 @@ here=$(cd "$(dirname "$0")" && pwd -P)
 _fv="${XDG_DATA_HOME:-$HOME/.local/share}/claude-fleet-vendor/bin"
 if [ -x "$_fv/tmux" ]; then case ":$PATH:" in *":$_fv:"*) ;; *) PATH="$_fv:$PATH"; export PATH ;; esac; fi
 unset _fv
+# managed — this is a managed machine (issue #2702): a fleet machine runs sessions
+# and services, never a person's client — the person runs `fleet` on their own
+# device. The client's commands (`fleet`, `fleet <machine>`, `fleet shell`,
+# `fleet claude|codex`) answer one line and exit 3; the rest work as before. A
+# session's test of the client (FLEET_CLIENT_IDENTITY=test) and FLEET_NODE_CLIENT=1
+# (the operator's hatch — a client already running here) still open it.
+managed() {
+  [ -e "${FLEET_NODE_STATE:-/var/db/fleet-node}/machine.env" ] || return 0
+  [ "${FLEET_CLIENT_IDENTITY:-}" = test ] && return 0
+  [ "${FLEET_NODE_CLIENT:-0}" = 1 ] && return 0
+  echo 'fleet · 这是托管机器，请在你自己的设备上运行 fleet（装：curl -fsSL <入口>/install | sh）。' >&2
+  _sc="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"
+  if [ -d "$_sc" ]; then
+    echo "fleet · 这台上还留着客户端（${_sc}）：接回去 FLEET_NODE_CLIENT=1 fleet，不用了 sudo bash $here/fleet-node-shell-retire.sh --login $(id -un) 清掉。" >&2
+  fi
+  exit 3
+}
 # client — the client, or one line on why it cannot open here and a non-zero exit
 client() {
+  managed
   # keep up with the hub (issue #1722): an installed client asks it, at most
   # hourly, for a newer client and the team's defaults; 3 = files switched,
   # so the new `fleet` opens instead (once — FLEET_CLIENT_UPDATED)
@@ -167,7 +184,7 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
   for _of in "${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}"/orch_multi_*; do
     [ -s "$_of" ] || continue
     _om=$(awk -F '\037' '{ printf "%s%s(%s)", (NR > 1 ? " " : ""), $1, $2 }' "$_of")
-    printf '  WARN  %-8s %s\n' orch "${_of##*/orch_multi_}: 不止一个编排会话 — $_om（入口只留一台；持续出现请在那几台跑 fleet doctor）"
+    printf '  WARN  %-8s %s\n' orch "${_of##*/orch_multi_}: 不止一个编排会话 — ${_om}（入口只留一台；持续出现请在那几台跑 fleet doctor）"
     rc=1
   done
   # cert (issue #2457): the certificate's principals, validity, and whether the hub accepts it
@@ -185,7 +202,10 @@ fi
 # the node's own launchers of the same name (fleet-claude.sh / fleet-codex.sh)
 case $cmd in
   claude|codex)
+    case " $* " in *' --here '*) ;; *) managed ;; esac
     exec "$here/fleet-home-session.sh" "$@" ;;
+  shell)
+    managed ;;
   # 退出 fleet / is it running (issue #2349): the client's own script, its modes
   quit)
     shift

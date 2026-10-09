@@ -71,9 +71,10 @@ step ends `installed 14/14`, and a clone with no templates fails the run (exit
 `/Users/alice` already exists, never overwrites, and writes nothing in alice's
 home outside `.ssh/`, `.config/claude-fleet/accounts/`, `.zshrc` and
 `.claude/fleet/`. That `.zshrc` is the `~/.local/bin` PATH line (where Claude
-Code installs, issue #1191) followed by the claude-fleet block (issue #1165):
-alice's first terminal login installs Claude Code and finishes the claude-fleet
-install by itself — step 5 below. It ends by printing the steps left for a
+Code installs, issue #1191) and nothing else — no banner, no client on an SSH
+login, no `cw.zsh` (issue #2702: a fleet machine is no one's client; alice runs
+`fleet` on her own computer). The run then finishes the claude-fleet install AS
+alice (step 8b, `fleet-login-bootstrap.sh`) — step 5 below. It ends by printing the steps left for a
 human — the ones below that it can't do.
 
 **It also writes alice's welcome letter** (issue #1195):
@@ -228,9 +229,9 @@ per-user agent needs no `--home` flag. The equivalent explicit form is
 ## 5. Install claude-fleet for that person
 
 **A login opened with `fleet-login-new.sh` (step 1) needs nothing here** (issue
-#1165). Its `~/.zshrc` carries a one-time block: on alice's first interactive
-login (`ssh alice@mini` is enough — no GUI sign-in, issue #1192)
-`bin/fleet-login-bootstrap.sh` finds the clone step 1 made in `~/.claude/fleet`
+#1165). Its step 8b runs `bin/fleet-login-bootstrap.sh` as alice right away
+(issue #2702 — before it, a one-time `~/.zshrc` block ran it on her first SSH
+login; no GUI sign-in either way, issue #1192). It finds the clone step 1 made in `~/.claude/fleet`
 (and makes one at `refs/tags/stable` if it is missing), installs Claude Code
 when she has none (`~/.local/bin/claude`, the official native installer, run as
 her — issue #1191), runs
@@ -239,7 +240,8 @@ the system LaunchDaemons step 1 installed come out "already current", so
 nothing there needs root), hooks up tmux, and brings her fleet up on the
 starter repo — `fleet-up.sh verkyyi/claude-fleet --seed`, which only looks
 (override with `FLEET_SEED_REPO`) — then prints `fleet-doctor.sh`. A step that
-fails (offline) is retried on her next login, alone; once all pass it writes
+fails (offline) is retried alone when it is re-run
+(`sudo -u alice -H bash ~alice/.claude/fleet/bin/fleet-login-bootstrap.sh`); once all pass it writes
 `~/.config/claude-fleet/global/bootstrapped` and never runs again. Daemons
 that have nowhere to go yet — no system LaunchDaemons for her and no GUI
 session — are **not** a failed step (issue #1214): the apply runs

@@ -387,7 +387,7 @@ sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitH
 `~/Library/LaunchAgents` 里程序在该登录家目录、又不在 `~/Library` 下的（应用自带的 agent 不算）。
 它们记在 `state.json` 的 `sweep.handwritten`，`status` 每个一行 `handwritten <label> runs as <登录> …`，
 体检 `services` 行对本登录的 WARN「N 个手写启动项」。只报不动：撤哪个、什么时候撤是人的事。
-BREAK-IT 行 `service-handwritten`。
+BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登录>.env`，#2702，见 §14）。
 
 **收编顺序**（「先让新的跑通一次，再撤旧的」，漏一天比多一份更糟）：
 
@@ -417,3 +417,24 @@ BREAK-IT 行 `service-handwritten`。
 验收：`ls /Library/LaunchDaemons | grep -c -E 'sms-watch|daily-report'` 为 0；`fleet ls --services` 两行都在跑；
 次日 07:00 的 `daily-<日期>` 会话由守护开出；手机收到一条测试短信推送。`~/daily-report/run.sh --now`
 仍可手动补跑一版。
+
+## 14. 托管机器不是谁的客户端（#2702）
+
+人在自己的设备上跑 `fleet`（客户端壳）；托管机器只跑会话和后台服务。所以在托管机器上
+（有 `/var/db/fleet-node/machine.env`）：
+
+- **`fleet` 不开客户端**：`fleet`、`fleet <机器>`、`fleet shell`、`fleet claude|codex`（`--here` 除外）只答一行
+  「这是托管机器，请在你自己的设备上运行 fleet」，退出码 3；这台上还留着客户端时再说怎么接回
+  （`FLEET_NODE_CLIENT=1 fleet`）或清掉。其余命令照旧；会话里的测试身份（`FLEET_CLIENT_IDENTITY=test`）照开。
+- **SSH 登录是一个普通 shell**：`shell/fleet-login.zsh` 在这里不出横幅、不开客户端；`fleet-login-new.sh` 开号时
+  `~/.zshrc` 只写 `~/.local/bin` 的 PATH 行（没有首登块、没有 cw.zsh），fleet 由它当场以新登录的身份拉起（8b）。
+- **一次性清理**：`sudo fleet-node-shell-retire.sh --login <登录> [--dry-run]`——先 `fleet quit`（把入口租约还回去），
+  再停掉还从 `~/.cache/claude-fleet/shell` 跑的进程（TERM，3 秒后 KILL），删掉这个目录，把 `~/.zshrc` 里的首登块和
+  source `fleet-login.zsh` / `cw.zsh` 的行拿掉（旧文件留作 `~/.zshrc.pre-shell-retire`）；每步先看、没事可做就 `skip`，
+  文件操作都以那个登录的身份做。会话、`~/.claude/fleet`、它的服务都不碰。
+- **清扫点名**：整机守护的清扫把「家目录里还有壳 / `~/.zshrc` 还有钩子」的登录记进 `sweep.clientshell`，`status`
+  每个一行 `clientshell <登录> …`（带上面那条命令）；`fleet doctor --machine` 一行 `shell`：都没有 PASS，有就 WARN
+  （不算 FAIL，不触发整机回退）。root 当场看每个家目录，别的登录读上一轮清扫的记录。
+- **只看托管清单**：清扫的手写启动项、`clientshell` 和 doctor 的 `shell` 行只看整机守护接管过的登录
+  （`/var/db/fleet-node/logins/<登录>.env` 里登记的）。管理员（例：verkyyi）、不用 fleet 的本地用户一律不扫、不点名、
+  不判断——机器上有其他管理员或非托管账号是正常状态。`shell` 行写明「托管登录 N 个，其余账号不在清单内不扫」。

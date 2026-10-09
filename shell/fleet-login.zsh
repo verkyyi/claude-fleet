@@ -19,9 +19,14 @@
 #   touch ~/.hushfleet          no banner, no client
 #   touch ~/.hushfleet-attach   banner only — `fleet` stays yours to type
 #
+# A MANAGED machine (/var/db/fleet-node/machine.env, issue #2702) does neither:
+# the person runs `fleet` on their own device, and an SSH login there is a plain
+# shell. `fleet-node-shell-retire.sh` takes this line out of ~/.zshrc for good.
+#
 # An anonymous function, so nothing is left behind in the login shell.
 () {
   [[ -o interactive ]] && [[ -z "$TMUX" ]] && [[ ! -f ~/.hushfleet ]] || return 0
+  [[ -e ${FLEET_NODE_STATE:-/var/db/fleet-node}/machine.env ]] && return 0
   local here=${1:h}
   [[ -x $here/fleet-intro.sh ]] && $here/fleet-intro.sh
   [[ -n "$SSH_TTY" ]] && [[ ! -f ~/.hushfleet-attach ]] || return 0

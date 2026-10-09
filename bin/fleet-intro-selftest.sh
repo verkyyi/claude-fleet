@@ -196,7 +196,7 @@ hasline "lang=en" "no conf value → hook sees the login locale's en"
 export FLEET_UI_LANG=zh
 rm -f "$FLEET_INTRO_SYS_D"/*
 
-echo "E. fleet-login.zsh — banner + SSH opens the client"
+echo "E. fleet-login.zsh — banner + SSH opens the client (never on a managed machine)"
 if ! command -v zsh >/dev/null 2>&1; then
   echo "  SKIP: zsh not installed"
 else
@@ -217,7 +217,7 @@ else
   login() {
     local i=$1; shift
     : > "$T/calls"; rm -f "$T/home/.hushfleet" "$T/home/.hushfleet-attach"
-    out=$(env -u TMUX -u SSH_TTY HOME="$T/home" "$@" \
+    out=$(env -u TMUX -u SSH_TTY HOME="$T/home" FLEET_NODE_STATE="$T/node-none" "$@" \
           zsh -f $i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
     fn=$(grep -c '^FLEET' "$T/calls"); an=$(grep -c '^ATTACH' "$T/calls")
   }
@@ -235,27 +235,32 @@ else
 AFTER" ] && ok "no SSH_TTY → banner only" || bad "no SSH_TTY out: $out"
   login -i SSH_TTY=/dev/ttys999 TMUX=/tmp/x,1,0
   [ "$fn" = 0 ] && [ "$out" = AFTER ] && ok "inside tmux → nothing" || bad "in tmux: client ${fn}× out=$out"
+  # a managed machine (issue #2702): no banner, no client — a plain shell
+  mkdir -p "$T/node-managed"; : > "$T/node-managed/machine.env"
+  login -i SSH_TTY=/dev/ttys999 FLEET_NODE_STATE="$T/node-managed"
+  [ "$fn" = 0 ] && [ "$out" = AFTER ] && ok "managed machine → no banner, no client" \
+    || bad "managed machine: client ${fn}× out=$out"
   login "" SSH_TTY=/dev/ttys999
   [ "$fn" = 0 ] && [ "$out" = AFTER ] && ok "non-interactive (scp/rsync/ssh cmd) → nothing" \
     || bad "non-interactive: client ${fn}× out=$out"
   : > "$T/calls"; touch "$T/home/.hushfleet"
-  out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
+  out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
   [ ! -s "$T/calls" ] && [ "$out" = AFTER ] && ok "hush file .hushfleet → nothing" || bad "hushfleet: $out"
   rm -f "$T/home/.hushfleet"; : > "$T/calls"; touch "$T/home/.hushfleet-attach"
-  out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
+  out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" SSH_TTY=/dev/ttys999 zsh -f -i -c ". '$T/r/shell/fleet-login.zsh'; echo AFTER" 2>&1)
   [ ! -s "$T/calls" ] && [ "$out" = "INTRO
 AFTER" ] && ok "hush file .hushfleet-attach → banner, nothing run" || bad "hushfleet-attach: $out"
   rm -f "$T/home/.hushfleet-attach"
   # a cf defined earlier in .zshrc is neither called nor needed
   : > "$T/calls"
-  out=$(env -u TMUX HOME="$T/home" SSH_TTY=/dev/ttys999 zsh -f -i -c \
+  out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" SSH_TTY=/dev/ttys999 zsh -f -i -c \
         "cf() { echo MINE; }; . '$T/r/shell/fleet-login.zsh'" 2>&1)
   [ "$(cat "$T/calls")" = "FLEET " ] && [ "$out" = INTRO ] && ok "a defined cf is not called" || bad "defined cf: $out"
   # nothing leaks into the login shell — no helper variable, no cf
-  out=$(env -u TMUX HOME="$T/home" zsh -f -i -c ". '$T/r/shell/fleet-login.zsh' >/dev/null; echo \"\${here-unset} \${+functions[cf]}\"" 2>&1)
+  out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" zsh -f -i -c ". '$T/r/shell/fleet-login.zsh' >/dev/null; echo \"\${here-unset} \${+functions[cf]}\"" 2>&1)
   [ "$out" = "unset 0" ] && ok "no helper variable or cf leaks" || bad "leaked: $out"
   # cf (shell/cw.zsh) is folded into fleet: one line saying so, then bin/fleet
-  cfrun() { : > "$T/calls"; out=$(env -u TMUX HOME="$T/home" zsh -f -c ". '$T/r/shell/cw.zsh'; cf $*" 2>&1); }
+  cfrun() { : > "$T/calls"; out=$(env -u TMUX HOME="$T/home" FLEET_NODE_STATE="$T/node-none" zsh -f -c ". '$T/r/shell/cw.zsh'; cf $*" 2>&1); }
   cfrun
   [ "$(cat "$T/calls")" = "FLEET " ] && ok "cf → bin/fleet" || bad "cf calls: $(cat "$T/calls")"
   case "$out" in *"cf 已并入 fleet"*) ok "cf says it is folded into fleet" ;; *) bad "cf notice: $out" ;; esac
@@ -268,7 +273,7 @@ FLEET " ] && ok "cf o/r → fleet-up --no-attach, then bin/fleet" || bad "cf o/r
   # the real pair: a non-SSH login's banner is fleet-intro.sh's, byte for byte
   mkdir -p "$T/e/fleets"
   want=$(env -u TMUX FLEET_CONF_DIR="$T/e" sh "$INTRO" 2>&1)
-  got=$(env -u TMUX -u SSH_TTY HOME="$T/home" FLEET_CONF_DIR="$T/e" zsh -f -i -c ". '$LOGIN'" 2>&1)
+  got=$(env -u TMUX -u SSH_TTY HOME="$T/home" FLEET_NODE_STATE="$T/node-none" FLEET_CONF_DIR="$T/e" zsh -f -i -c ". '$LOGIN'" 2>&1)
   [ "$got" = "$want" ] && ok "real fleet-login.zsh: non-SSH banner byte-identical to fleet-intro.sh" \
     || { bad "real banner differs"; printf 'got:\n%s\nwant:\n%s\n' "$got" "$want"; }
 fi
