@@ -2567,9 +2567,12 @@ def ui(screen, session, worker, lock):
     # open — no producer starts until the toggle has written, so the next frame
     # is the first one read after it.
     folding, fold_cache = None, {}
-    # The last caret press (row key, when): a second one inside
-    # CARET_REPEAT_SECS is the same tap (issue #2167).
-    caret_tap = (None, NEVER)
+    # The last caret press (row key, when, re-stamp): a second one inside
+    # CARET_REPEAT_SECS is the same tap (issue #2167). `when` is re-stamped the
+    # moment the list next listens (issue #2600): the fold's own work — a paint,
+    # the write's spawn — on a loaded machine outlasted the window, and the
+    # double-click's second press, already queued, folded the block back.
+    caret_tap = (None, NEVER, False)
     # Never blank, never frozen (issue #1536): when the painted rows landed, when
     # the view last became visible (a hidden view's frame does not age), why the
     # last refresh gave nothing, whether one empty frame was held back, the
@@ -3002,6 +3005,8 @@ def ui(screen, session, worker, lock):
             if pressed is not None and read_at >= pressed[2]:
                 pressed = None  # read again since, and still hidden: not ours
             screen.timeout(max(1, min(1000, int((refresh_at - time.monotonic()) * 1000))))
+            if caret_tap[2]:
+                caret_tap = (caret_tap[0], time.monotonic(), False)
             key = screen.getch()
             if key == curses.KEY_F12:
                 # ⌘P's pick lands while its popup still covers this view, and ⌘↓
@@ -3185,6 +3190,8 @@ def ui(screen, session, worker, lock):
             key, mouse, pressed = curses.KEY_MOUSE, pressed, None
         else:
             screen.timeout(max(1, min(1000, int(wait * 1000))))
+            if caret_tap[2]:
+                caret_tap = (caret_tap[0], time.monotonic(), False)
             key = screen.getch()
         if key != -1 and spawning is not None and spawning.poll() is not None and mouse is not None:
             pressed = mouse
@@ -3365,8 +3372,9 @@ def ui(screen, session, worker, lock):
                         continue
                     # from when THIS fold ran, not when its press was read: a
                     # press read stale waits for a fresh tmux read first (#1756),
-                    # and its double-click's second press is read after that
-                    caret_tap = (hit, time.monotonic())
+                    # and its double-click's second press is read after that —
+                    # and again when the list next listens (#2600)
+                    caret_tap = (hit, time.monotonic(), True)
                     verb = "collapse" if fold_open(hit_row) else "expand"
                     rows, holder = fold_now(rows, hit, verb, window, fold_cache)
                     folding = fold_write(folding, verb, hit, env)
