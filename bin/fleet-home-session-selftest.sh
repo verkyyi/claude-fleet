@@ -152,7 +152,7 @@ eq "C @norepo" "$(tmux display-message -p -t "$w" '#{@norepo}')" 1
 eq "C no @repo" "$(tmux display-message -p -t "$w" '#{@repo}')" ""
 # the test identity's session (issue #2505): marked, named test-…, done:10m
 eq "C @test_identity (FLEET_CLIENT_IDENTITY=test)" "$(tmux display-message -p -t "$w" '#{@test_identity}')" 1
-eq "C named test-…" "$(tmux display-message -p -t "$w" '#{window_name}')" test-norepo
+eq "C named test-…" "$(tmux display-message -p -t "$w" '#{window_name}')" test-我的会话   # the no-repo name since #2359
 eq "C its reap policy done:10m" "$(tmux display-message -p -t "$w" '#{@reap_policy}')" done:10m
 eq "C the seam prints the placement's line" "LOCAL" "$(printf '%s\n' "$out" | grep -o '^LOCAL' | head -1)"
 for _ in $(seq 1 100); do [ -s "$WORK/rec/codex.$w.cwd" ] && break; sleep 0.1; done
