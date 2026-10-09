@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""The recovery page a session stops on when its agent exits (issue #1784).
+"""The line a session stops on when its agent exits (issue #1784, #2743).
 
-fleet-session-wrap.sh runs this in the pane the agent just left. It draws one
-screenful — what happened, that the window and the conversation are still here,
-and the three keys — and exits with the operator's choice:
+fleet-session-wrap.sh runs this in the pane the agent just left. Like a local
+`claude` that exits, the conversation's last screen STAYS where it is — nothing
+is cleared — and under it comes ONE line: what happened and the keys,
+
+    会话已结束 · ↵ 重开 · ⌘P 回列表   r 新对话 · q 关窗口
+
+(「会话意外退出」 when the agent did not end on its own — a crash, a kill). The
+exit status, the conversation id and the failed agent's last line are not on the
+screen: the wrapper writes them to logs/session-exit.log. It exits with the
+operator's choice:
 
     10  ↵  resume the same conversation
     11  r  start a new one in this window
@@ -11,21 +18,19 @@ and the three keys — and exits with the operator's choice:
     13  p  the same conversation WITHOUT the personal layer (issue #1862) —
            offered only when this login has one (--personal on)
 
-Two more facts it can carry (issue #1842): commits on the branch that are on no
-remote (「未推送：N 个提交（分支 issue-N）」 — q keeps them, but the operator
-should know they exist), and a relaunch from this page that died within the
-fast-fail window (the conversation is gone, the login lapsed): the headline then
-says what failed and why, instead of the window closing.
+A line goes ABOVE it only for something the person must know before choosing
+(issue #1842): commits on the branch that are on no remote (「未推送：N 个提交
+（分支 issue-N）」 — q keeps them), personal hooks that kept failing and were
+switched off (#1862), a window already running without the personal layer. A
+relaunch from this line that died within the fast-fail window (the conversation
+is gone, the login lapsed) and a launch the launcher refused (#2404) say so IN
+the line, in place of 「会话已结束」 — and the agent's own error stays visible
+above it, since nothing is cleared.
 
-And the personal layer written badly (issue #1862): personal hooks that kept
-failing in the run that just ended and were switched off are named, and `p`
-reopens this window without the layer. No personal layer → not a byte of it.
-
-Every other byte is discarded, so nothing typed here reaches the next agent. It
-is the sleeping page's frame (bin/fleet_sleep_park.py: the same clip / width /
-rules / colours), not a second look: a title line, a rule, the body, a rule, the
-keys. `render` is pure — facts + size in, one screenful out — so the selftest
-checks the page without a terminal.
+Every other byte is discarded, so nothing typed here reaches the next agent. On
+the way out the lines it drew are erased again (and only those). `render` is
+pure — facts + width in, the lines out — so the selftest checks it without a
+terminal.
 """
 import argparse
 import os
@@ -34,6 +39,7 @@ import select
 import signal
 import sys
 import termios
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fleet_sleep_park import BOLD, DIM, RED, RESET, YELLOW, SGR_MOUSE, clip, ui_lang, width  # noqa: E402
@@ -41,91 +47,76 @@ from fleet_sleep_park import BOLD, DIM, RED, RESET, YELLOW, SGR_MOUSE, clip, ui_
 RESUME, NEW, QUIT, PERSONAL = 10, 11, 12, 13
 
 TEXT = {
-    'zh': {'exited': '会话已退出', 'ctrl_c': '（按了 Ctrl+C）', 'signal': '会话被结束（信号 {n}）',
-           'failed': '会话异常退出（退出码 {n}）', 'kept': '这个窗口不会关，原来的对话还在。', 'kept_win': '这个窗口不会关。',
-           'no_sid': '没有记下对话 id：回车接着这个目录里最近的一次对话。',
-           'no_sid_new': '没有记下这个窗口的对话 id：回车新开一次对话（不会接到别的会话上）。',
+    'zh': {'ended': '会话已结束', 'crashed': '会话意外退出',
            'unpushed': '未推送：{n} 个提交（分支 {b}）', 'unpushed_nob': '未推送：{n} 个提交',
            'failed_resume': '续上原对话失败', 'failed_new': '新开会话失败', 'failed_launch': '会话没能启动',
            'why_conversation': '找不到这个对话', 'why_auth': '认证失效，需要重新登录',
            'why_cred': '凭据代理没给出会话凭据', 'why_account': '指定的订阅账号不可用',
-           'retry': '重试启动', 'launch_rc': '（退出码 {n}）',
-           'retry_hint': '会话还没开始过：回车按原样再启动一次（原因修好之后）。',
-           'fail_rc': '（{s} 秒内退出，退出码 {n}）',
            'hooks_off': '个人自动规则 {n} 条这次连续失败、已停用：{w}',
            'personal_off': '这个窗口已不带个人配置（FLEET_PERSONAL=0）；长期退回：fleet config restore N',
-           'resume': '接着原对话', 'new': '新开', 'quit': '回收这个窗口', 'personal': '不带个人配置重开'},
-    'en': {'exited': 'Session exited', 'ctrl_c': ' (Ctrl+C)', 'signal': 'Session ended (signal {n})',
-           'failed': 'Session exited abnormally (code {n})', 'kept': 'This window stays open; the conversation is still here.', 'kept_win': 'This window stays open.',
-           'no_sid': 'No conversation id recorded: Enter resumes the latest one in this directory.',
-           'no_sid_new': 'No conversation id recorded for this window: Enter starts a new one (never another session\'s).',
+           'resume': '重开', 'resume_new': '新开对话', 'retry': '重试启动', 'list': '回列表',
+           'new': '新对话', 'quit': '关窗口', 'personal': '不带个人配置重开'},
+    'en': {'ended': 'Session ended', 'crashed': 'Session exited unexpectedly',
            'unpushed': 'Unpushed: {n} commits (branch {b})', 'unpushed_nob': 'Unpushed: {n} commits',
            'failed_resume': 'Resuming the conversation failed', 'failed_new': 'Starting a new session failed',
            'failed_launch': 'The session could not start',
            'why_conversation': 'conversation not found', 'why_auth': 'authentication expired — log in again',
            'why_cred': 'the credential proxy gave no session credential', 'why_account': 'the pinned subscription is unavailable',
-           'retry': 'retry the launch', 'launch_rc': ' (code {n})',
-           'retry_hint': 'The session never started: Enter launches it again, as it was (once the cause is fixed).',
-           'fail_rc': ' (exited within {s}s, code {n})',
            'hooks_off': '{n} personal hook(s) kept failing and were switched off: {w}',
            'personal_off': 'This window runs without the personal layer (FLEET_PERSONAL=0); to roll it back: fleet config restore N',
-           'resume': 'resume the conversation', 'new': 'new session', 'quit': 'recycle this window',
-           'personal': 'reopen without personal config'},
+           'resume': 'reopen', 'resume_new': 'new conversation', 'retry': 'retry the launch', 'list': 'list',
+           'new': 'new chat', 'quit': 'close window', 'personal': 'reopen without personal config'},
 }
 
 
-def headline(rc, words, failed='', why='', secs=0):
-    """What happened, from the agent's exit status: 0 / 130 are the operator's own
-    exit, >128 a signal (137 = kill -9), anything else a failure. A relaunch from
-    this page that died at once (failed = resume | new) names that instead, and so
-    does a launch the launcher itself refused (failed = launch, issue #2404)."""
+def headline(rc, words, failed='', why=''):
+    """What happened, in a few words: 0 / 130 are the agent ending on its own (the
+    person's /exit, Ctrl+D, Ctrl+C twice), anything else — a failure, a signal
+    (137 = kill -9) — is 「意外退出」. A relaunch from this line that died at once
+    (failed = resume | new) names that instead, and so does a launch the
+    launcher itself refused (failed = launch, issue #2404)."""
     if failed in ('resume', 'new', 'launch'):
         head = words['failed_' + failed]
         if why in ('conversation', 'auth', 'cred', 'account'):
             head += ('：' if words is TEXT['zh'] else ': ') + words['why_' + why]
-        if failed == 'launch': return head + words['launch_rc'].format(n=rc), RED
-        return head + words['fail_rc'].format(s=secs, n=rc), RED
-    if rc == 0: return words['exited'], YELLOW
-    if rc == 130: return words['exited'] + words['ctrl_c'], YELLOW
-    if rc > 128: return words['signal'].format(n=rc - 128), RED
-    return words['failed'].format(n=rc), RED
+        return head, RED
+    if rc in (0, 130): return words['ended'], YELLOW
+    return words['crashed'], RED
 
 
-def keys_line(words, personal='', retry=False):
-    line = (BOLD + '↵' + RESET + ' ' + words['retry' if retry else 'resume'] + '   ' + BOLD + 'r' + RESET + ' ' + words['new']
-            + '   ' + BOLD + 'q' + RESET + ' ' + words['quit'])
-    if personal == 'on': line += '   ' + BOLD + 'p' + RESET + ' ' + words['personal']
-    return line
+def keys_line(words, personal='', retry=False, enter_new=False):
+    """The keys, the two the person needs first: ↵ and ⌘P (the client's switch);
+    r / q / p after them, dimmer."""
+    enter = words['retry' if retry else 'resume_new' if enter_new else 'resume']
+    line = BOLD + '↵' + RESET + ' ' + enter + ' · ' + BOLD + '⌘P' + RESET + ' ' + words['list']
+    tail = 'r ' + words['new'] + ' · q ' + words['quit']
+    if personal == 'on': tail += ' · p ' + words['personal']
+    return line + DIM + '   ' + tail + RESET
 
 
-def render(facts, cols, rows):
-    """One screenful: headline (+ the window's title), a rule, what is kept, a
-    rule, the keys. The keys sit on the LAST row, which a click also presses."""
-    cols, rows = max(int(cols), 10), max(int(rows), 3)
+def render(facts, cols, rows=None):
+    """The lines, top to bottom: anything the person must know first (rare), then
+    the one line — what happened · the keys. Each fits `cols` - 1 cells."""
+    cols = max(int(cols), 10)
     words = TEXT[facts.get('lang') or ui_lang()]
-    fit = lambda text: clip(text, cols - 1)
-    head, color = headline(int(facts.get('rc', 0)), words, facts.get('failed') or '',
-                           facts.get('why') or '', facts.get('secs') or 0)
-    title = facts.get('title') or ''
-    first = color + BOLD + head + RESET + (DIM + ' · ' + title + RESET if title else '')
-    body = [words['kept_win' if facts.get('failed') else 'kept']]
-    sid = facts.get('sid') or ''
-    no_sid = words['no_sid_new' if facts.get('agent') == 'codex' else 'no_sid']
-    if facts.get('retry'): body.append(DIM + words['retry_hint'] + RESET)
-    else: body.append(DIM + (facts.get('agent') or 'claude') + ' ' + sid[:8] + '…' + RESET if sid else DIM + no_sid + RESET)
-    if facts.get('detail'): body.append(DIM + facts['detail'] + RESET)
+    head, color = headline(int(facts.get('rc', 0)), words, facts.get('failed') or '', facts.get('why') or '')
+    above = []
     n = int(facts.get('unpushed') or 0)
     if n > 0:
         b = facts.get('branch') or ''
-        body.append(YELLOW + (words['unpushed'].format(n=n, b=b) if b else words['unpushed_nob'].format(n=n)) + RESET)
+        above.append((YELLOW, words['unpushed'].format(n=n, b=b) if b else words['unpushed_nob'].format(n=n)))
     off = int(facts.get('hooks_off') or 0)
-    if off > 0: body.append(YELLOW + words['hooks_off'].format(n=off, w=facts.get('hooks_off_what') or '') + RESET)
-    if facts.get('personal') == 'off': body.append(DIM + words['personal_off'] + RESET)
-    rule = DIM + '─' * (cols - 1) + RESET
-    lines = [fit(first), rule, ''] + [fit(l) for l in body]
-    lines = lines[:max(rows - 2, 1)]
-    lines += [''] * max(rows - len(lines) - 2, 0) + [rule, fit(keys_line(words, facts.get('personal') or '', facts.get('retry')))]
-    return '\n'.join(lines[:rows])
+    if off > 0: above.append((YELLOW, words['hooks_off'].format(n=off, w=facts.get('hooks_off_what') or '')))
+    if facts.get('personal') == 'off': above.append((DIM, words['personal_off']))
+    lines = [color + clip(text, cols - 1) + RESET for color, text in above]
+    enter_new = facts.get('agent') == 'codex' and not facts.get('sid')
+    keys = keys_line(words, facts.get('personal') or '', bool(facts.get('retry')), enter_new)
+    line = color + BOLD + head + RESET + ' · ' + keys
+    if width(line) > cols - 1:                  # narrow: the dim tail goes first
+        line = color + BOLD + head + RESET + ' · ' + keys.split(DIM)[0]
+    if width(line) > cols - 1:
+        line = color + BOLD + clip(head, cols - 1) + RESET
+    return '\n'.join(lines + [line])
 
 
 def choice(chunk, key_row, personal=False):
@@ -135,7 +126,7 @@ def choice(chunk, key_row, personal=False):
     text = chunk.decode('utf-8', 'replace') if isinstance(chunk, bytes) else chunk
     for m in SGR_MOUSE.finditer(text):
         button, row = int(m.group(1)), int(m.group(3))
-        if m.group(4) == 'M' and button & ~(4 | 8 | 16) == 0 and row == key_row: return RESUME
+        if m.group(4) == 'M' and button & ~(4 | 8 | 16) == 0 and key_row and row == key_row: return RESUME
     text = SGR_MOUSE.sub('', text)
     text = re.sub(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|O.|[@-Z\\-_])', '', text)
     for ch in text:
@@ -146,31 +137,49 @@ def choice(chunk, key_row, personal=False):
     return None
 
 
+CPR = re.compile(r'\x1b\[(\d+);(\d+)R')
+
+
+def cursor(wait=0.3):
+    """The cursor's (row, col), asked of the terminal (DSR 6) — None when it does
+    not answer in time. Bytes that arrive meanwhile are handed back too."""
+    sys.stdout.write('\x1b[6n'); sys.stdout.flush()
+    got, end = b'', time.time() + wait
+    while time.time() < end:
+        if not select.select([0], [], [], max(end - time.time(), 0))[0]: break
+        chunk = os.read(0, 256)
+        if not chunk: break
+        got += chunk
+        m = CPR.search(got.decode('utf-8', 'replace'))
+        if m: return (int(m.group(1)), int(m.group(2))), CPR.sub('', got.decode('utf-8', 'replace'), count=1)
+    return None, got.decode('utf-8', 'replace')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--rc', type=int, default=0)
     p.add_argument('--agent', default='claude')
     p.add_argument('--sid', default='')
-    p.add_argument('--title', default='')
+    p.add_argument('--title', default='', help='the window (kept for callers; not drawn)')
     p.add_argument('--unpushed', type=int, default=0, help='commits on no remote (issue #1842)')
     p.add_argument('--branch', default='')
     p.add_argument('--failed', default='', choices=['', 'resume', 'new', 'launch'],
                    help='a relaunch from this page died at once, or the launcher refused to start (launch)')
     p.add_argument('--why', default='', help='conversation | auth | cred | account | (unknown)')
     p.add_argument('--retry', action='store_true', help='↵ retries the same launch (the agent never ran, #2404)')
-    p.add_argument('--detail', default='', help="the failed agent's last line")
+    p.add_argument('--detail', default='', help="the failed agent's last line (kept for callers; logged by the wrapper)")
     p.add_argument('--secs', type=int, default=0)
     p.add_argument('--personal', default='', choices=['', 'on', 'off'],
                    help='this login has a personal layer: on = offer p, off = this window already runs without it (#1862)')
     p.add_argument('--hooks-off', type=int, default=0, help='personal hooks switched off in the run that ended')
     p.add_argument('--hooks-off-what', default='')
-    p.add_argument('--print', action='store_true', help='draw once at 80x24 and exit 0 (selftest)')
+    p.add_argument('--print', action='store_true', help='draw once at 80 columns and exit 0 (selftest)')
     a = p.parse_args()
-    facts = {'rc': a.rc, 'agent': a.agent, 'sid': a.sid, 'title': a.title, 'unpushed': a.unpushed,
-             'branch': a.branch, 'failed': a.failed, 'why': a.why, 'detail': a.detail, 'secs': a.secs,
+    facts = {'rc': a.rc, 'agent': a.agent, 'sid': a.sid, 'unpushed': a.unpushed,
+             'branch': a.branch, 'failed': a.failed, 'why': a.why,
              'retry': a.retry, 'personal': a.personal, 'hooks_off': a.hooks_off, 'hooks_off_what': a.hooks_off_what}
     if a.print:
-        sys.stdout.write(render(facts, 80, 24) + '\n')
+        sys.stdout.write(render(facts, 80) + '\n')
         return 0
     rd, wr = os.pipe()
     for fd in (rd, wr): os.set_blocking(fd, False)
@@ -186,30 +195,43 @@ def main():
         mode[6][termios.VMIN], mode[6][termios.VTIME] = 1, 0
         termios.tcsetattr(0, termios.TCSANOW, mode)
     mouse = lambda on: sys.stdout.write('\033[?1000' + ('h' if on else 'l') + '\033[?1006' + ('h' if on else 'l'))
+    size = lambda: os.get_terminal_size(sys.stdout.fileno()) if os.isatty(sys.stdout.fileno()) else (80, 24)
+    drawn = 0
     try:
-        mouse(True)
-        redraw = True
+        # under what the agent left, on a line of its own — never over it
+        pos, early = cursor() if saved is not None else (None, '')
+        if pos is None or pos[1] > 1: sys.stdout.write('\r\n')
+        cols = size()[0]
+        text = render(facts, cols)
+        drawn = text.count('\n')
+        sys.stdout.write('\033[?25l' + text.replace('\n', '\r\n')); sys.stdout.flush()
+        key_row = None
+        if saved is not None:
+            pos, more = cursor()
+            early += more
+            if pos: key_row = pos[0]
+        mouse(True); sys.stdout.flush()
+        pick = choice(early, key_row, a.personal == 'on') if early else None
+        if pick: return pick
         while True:
-            if redraw:
-                try: cols, rows = os.get_terminal_size(sys.stdout.fileno())
-                except OSError: cols, rows = 80, 24
-                sys.stdout.write('\033[?25l\033[2J\033[H' + render(facts, cols, rows)); sys.stdout.flush()
-                redraw = False
             try: ready = select.select([rd, 0], [], [])[0]
             except InterruptedError: ready = [rd]
             if rd in ready:
                 try:
                     while os.read(rd, 64): pass
                 except BlockingIOError: pass
-                redraw = True
+                cols = size()[0]               # a resize: the one line again, fitted
+                sys.stdout.write('\r\033[K' + render(facts, cols).split('\n')[-1]); sys.stdout.flush()
             if 0 in ready:
                 chunk = os.read(0, 4096)
                 if not chunk: return 1          # the pane's input went away
-                pick = choice(chunk, rows, a.personal == 'on')
+                pick = choice(chunk, key_row, a.personal == 'on')
                 if pick: return pick
     finally:
         try:
-            mouse(False); sys.stdout.write('\033[?25h\033[2J\033[H'); sys.stdout.flush()
+            mouse(False)
+            # erase what this drew, and only that: the conversation above stays
+            sys.stdout.write('\r' + ('\033[%dA' % drawn if drawn else '') + '\033[J\033[?25h'); sys.stdout.flush()
             if saved is not None: termios.tcsetattr(0, termios.TCSANOW, saved)
         except (OSError, ValueError): pass
 

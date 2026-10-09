@@ -5,7 +5,9 @@
 #
 #   • the operator's own exit (Ctrl+C twice, Ctrl+D, /exit), a crash, a kill:
 #     the window stays, @claude_state becomes `exited` (the list draws ⏏ 已退出)
-#     and the pane shows the recovery page (bin/fleet-session-page.py):
+#     and under the conversation's last screen — kept, as a local `claude` leaves
+#     it — comes ONE line (bin/fleet-session-page.py, issue #2743):
+#     「会话已结束 · ↵ 重开 · ⌘P 回列表」; the rest goes to logs/session-exit.log:
 #       ↵  resume the SAME conversation (@cc_session_id / @codex_session_id)
 #       r  start a new one in this window
 #       q  recycle the window — the close-on-exit the SessionEnd hook used to do
@@ -153,14 +155,14 @@ read_failure() {
   fi
 }
 
-# The page could not run: the same three keys on a plain prompt (10/11/12), so a
-# broken page never closes the window. 1 = the pane's input is gone.
+# The page could not run: the same one line and keys on a plain prompt (10/11/12),
+# so a broken page never closes the window. 1 = the pane's input is gone.
 plain_page() {
   local k
   if [ "${FLEET_UI_LANG:-zh}" = en ]; then
-    printf '\nThe session exited (code %s). This window stays open.\nEnter resume   r new   q recycle\n' "$1"
+    printf '\nSession ended · Enter reopen · ⌘P list   r new chat · q close window'
   else
-    printf '\n会话已退出（退出码 %s）。这个窗口不会关。\n↵ 接着原对话   r 新开   q 回收这个窗口\n' "$1"
+    printf '\n会话已结束 · ↵ 重开 · ⌘P 回列表   r 新对话 · q 关窗口'
   fi
   while IFS= read -rsn1 k; do
     case "$k" in '') return 10 ;; r|R) return 11 ;; q|Q) return 12 ;; p|P) [ "$pers" = on ] && return 13 ;; esac
@@ -215,11 +217,11 @@ while :; do
   PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   rc=$?
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then
-    python3 "$BIN/fleet-mcp.py" --cred revoke 2>/dev/null
+    python3 "$BIN/fleet-mcp.py" --cred revoke >/dev/null 2>&1
     unset FLEET_WORKER_CRED
   fi
   if [ -n "${FLEET_CRED_SID:-}" ]; then
-    bash "$BIN/fleet-session-cred.sh" revoke --sid "$FLEET_CRED_SID" 2>/dev/null
+    bash "$BIN/fleet-session-cred.sh" revoke --sid "$FLEET_CRED_SID" >/dev/null 2>&1
     [ "$intmux" = 1 ] && { wset -u @cred_sid; wset -u @cred_route; }
     unset FLEET_CRED_SID
   fi
@@ -293,6 +295,13 @@ while :; do
     [ "$hoff" -gt 0 ] && pargs+=(--hooks-off "$hoff" --hooks-off-what "$hwhat")
     rm -rf "$hdir"
   fi
+  # what the line under the conversation no longer says (issue #2743) — the exit
+  # status, the id, how long it ran, why a relaunch failed and the agent's last
+  # words — is kept here, one line a stop
+  xlog="$BIN/../logs/session-exit.log"
+  [ -d "${xlog%/*}" ] && printf '%s window=%s pane=%s agent=%s sid=%s rc=%s secs=%s failed=%s why=%s unpushed=%s detail=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(opt window_name | tr ' ' '_')" "$TMUX_PANE" "$agent" "${sid:--}" "$rc" "$dur" \
+    "${failed:--}" "${fail_why:--}" "$unp" "$(printf '%s' "${fail_line:-}" | tr '\n' ' ' | cut -c1-200)" >> "$xlog" 2>/dev/null
   python3 "$BIN/fleet-session-page.py" ${pargs[@]+"${pargs[@]}"}
   act=$?
   case "$act" in 10|11|12|13) ;; *) plain_page "$rc"; act=$? ;; esac

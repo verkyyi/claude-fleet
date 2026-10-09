@@ -132,13 +132,13 @@ win w 0
 waitfor "w: first launch" launches w 1
 eq "w: the first launch carries the spawn's argv" "--agent claude the seed prompt" "$(sed -n 1p "$WORK/w/argv")"
 n=1
-for leg in 'rc0:0:会话已退出' 'rc130:130:会话已退出（按了 Ctrl+C）' 'kill:137:会话被结束（信号 9）'; do
+for leg in 'rc0:0:会话已结束' 'rc130:130:会话已结束' 'kill:137:会话意外退出'; do
   mode=${leg%%:*}; rest=${leg#*:}; rc=${rest%%:*}; head=${rest#*:}
   printf '%s' "$mode" > "$WORK/w/mode"; : > "$WORK/w/go"
   waitfor "w/$mode: state exited" state_is w exited
   eq "w/$mode: the exit status is on the window" "$rc" "$(o w @wrap_exit_rc)"
   waitfor "w/$mode: the recovery page says [$head]" screen_has w "$head"
-  waitfor "w/$mode: the page says the window stays" screen_has w '这个窗口不会关'
+  waitfor "w/$mode: the line says how back to the list" screen_has w '⌘P 回列表'
   CHECKS=$((CHECKS + 1)); tf list-windows -t sw -F '#{window_name}' | grep -qx w || fail "w/$mode: the window closed"
   tf send-keys -t sw:w x                       # a stray key does nothing
   sleep 0.3
@@ -215,7 +215,7 @@ mkdir -p "$WORK/pc"; : > "$WORK/pc/argv"
 tf new-window -d -t sw: -n p "env CTL='$WORK/pc' FLEET_WRAP_LAUNCH='$WORK/fake-launch' FLEET_WRAP_FAST_FAIL=0 FLEET_UI_LANG=zh '$WORK/pbin/fleet-session-wrap.sh' --agent claude; echo WRAP_RC=\$?; exec sleep 600"
 waitfor "p: first launch" launches pc 1
 printf rc0 > "$WORK/pc/mode"; : > "$WORK/pc/go"
-waitfor "p: a broken page falls to the plain prompt" screen_has p '↵ 接着原对话   r 新开'
+waitfor "p: a broken page falls to the plain prompt" screen_has p '会话已结束 · ↵ 重开'
 CHECKS=$((CHECKS + 1)); screen_has p 'WRAP_RC=' && fail "p: a broken page closed the session"
 tf send-keys -t sw:p Enter
 waitfor "p: ↵ on the plain prompt resumes" launches pc 2

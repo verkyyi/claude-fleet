@@ -599,9 +599,12 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 plain = lambda t: __import__("re").sub(r"\x1b\[[0-9;]*m", "", t)
 w = m.TEXT["zh"]
 errs = []
-if plain(m.keys_line(w)) != "↵ 接着原对话   r 新开   q 回收这个窗口": errs.append("no-layer row: %r" % plain(m.keys_line(w)))
+if plain(m.keys_line(w)) != "↵ 重开 · ⌘P 回列表   r 新对话 · q 关窗口": errs.append("no-layer row: %r" % plain(m.keys_line(w)))
 if plain(m.keys_line(w, "off")) != plain(m.keys_line(w)): errs.append("off row differs")
-if plain(m.keys_line(w, "on")) != "↵ 接着原对话   r 新开   q 回收这个窗口   p 不带个人配置重开": errs.append("on row: %r" % plain(m.keys_line(w, "on")))
+if plain(m.keys_line(w, "on")) != "↵ 重开 · ⌘P 回列表   r 新对话 · q 关窗口 · p 不带个人配置重开": errs.append("on row: %r" % plain(m.keys_line(w, "on")))
+# the line under the conversation (issue #2743): one line, two wordings
+if plain(m.render({"rc": 0, "lang": "zh", "sid": "s"}, 80)) != "会话已结束 · ↵ 重开 · ⌘P 回列表   r 新对话 · q 关窗口": errs.append("ended line: %r" % plain(m.render({"rc": 0, "lang": "zh", "sid": "s"}, 80)))
+if not plain(m.render({"rc": 137, "lang": "zh", "sid": "s"}, 80)).startswith("会话意外退出 · "): errs.append("crash line: %r" % plain(m.render({"rc": 137, "lang": "zh"}, 80)))
 for ch, want, pers in (("\r", m.RESUME, False), ("r", m.NEW, False), ("q", m.QUIT, False),
                        ("p", None, False), ("p", m.PERSONAL, True)):
     if m.choice(ch, 24, pers) != want: errs.append("choice(%r, personal=%s) = %r" % (ch, pers, m.choice(ch, 24, pers)))
