@@ -94,6 +94,21 @@
 #      into this run's temp dir and rendered from there; the step prints
 #      `installed N/N`, and 0 templates is a FAILURE (exit 1) that names the
 #      dir and who read it, never a quiet success.
+#   7a. (a login the HUB opens — FLEET_LOGIN_JOIN_CODE + FLEET_LOGIN_HUB in the
+#      environment, set by the admin agent from the create op, issue #2652) the
+#      login joins the hub as its OWN node: this script redeems the one-time
+#      code (POST <hub>/v1/node/join, the code in a file — never an argv), and
+#      the login runs `fleet-node-join.sh --joined <pass> --service none
+#      --no-fleet --compute 1` as itself (node.env + ccquota + its runner,
+#      nothing started); the admin drops its LaunchDaemon definition
+#      (com.ccquota.agent.<login>, not loaded) — so 7b moves the token into the
+#      store and starts the agent through its launcher (--no-credsep: loaded
+#      here). Without it the hub never sees this login's fleet: a heartbeat
+#      covers only the login that sends it. A step that fails is a WARN.
+#   8b. (the same logins) the fleet comes up AS the login, right away —
+#      fleet-login-bootstrap.sh, the one its first interactive login would run;
+#      nobody ever logs in to a login the hub opened, and the person's first
+#      session needs a fleet there (a WARN on failure; the next login retries).
 #   9. the welcome letter (issue #1195; `--no-welcome` skips it) →
 #      ~/<login>-onboard/welcome.txt in YOUR home, mode 600: how to connect
 #      (`ssh -p <port> <login>@<host>` — host and port from FLEET_SSH_PUBLIC_HOST /
@@ -189,6 +204,15 @@ done
 printf '%s' "$LOGIN" | grep -Eq '^[a-z0-9_][a-z0-9_-]{0,31}$' \
   && printf '%s' "$LOGIN" | grep -q '[a-z_-]' \
   || die2 "bad login name '$LOGIN' (lowercase letters, digits, _ and -, not all digits; at most 32)"
+# A login the hub opens (issue #2652): its join code + the hub, from the admin
+# agent's environment — never an argv. Checked before anything is looked at.
+JCODE=${FLEET_LOGIN_JOIN_CODE:-} JHUB=${FLEET_LOGIN_HUB:-}
+unset FLEET_LOGIN_JOIN_CODE
+OPENED=0
+if [ -n "$JCODE" ] && [ -n "$JHUB" ]; then
+  printf '%s' "$JCODE" | grep -Eq '^fj_[a-z2-7]{26}$' || die2 'FLEET_LOGIN_JOIN_CODE is not a join code (fj_…)'
+  JHUB=${JHUB%/}; OPENED=1
+fi
 if [ "$DONLY" = 1 ]; then
   # --daemons-only (issue #1223): step 8 for a login that already exists — the
   # options of steps 1–7 and 9 have nothing to act on, so they are refused, not
@@ -392,6 +416,70 @@ append() {
 }
 step() { N=$((N + 1)); say ""; say "[$N] $*"; }
 
+# ---- a login the hub opens (issue #2652): its own node, its fleet up --------
+# FLEET_LOGIN_JOIN_CODE / FLEET_LOGIN_HUB come from the admin agent (the create
+# op's join code), never an argv. Unset ⇒ both steps skip, byte for byte.
+NODE_LINE='' FLEET_LINE=''
+warn_step() { say "  WARN: $1"; NODE_LINE=${NODE_LINE:-"node: WARN — $1"}; }
+node_join_step() {
+  [ "$OPENED" = 1 ] || return 0
+  N0=$N; N="${N}a"; say ""; say "[$N] join $JHUB as $LOGIN's own node (the hub opened this login: its fleet is seen only through its own agent)"
+  local pass="$H/.fleet-join-pass.json" plist="$DDIR/com.ccquota.agent.$LOGIN.plist"
+  show curl -sS -X POST --data @'<join code, from the environment, never shown>' "$JHUB/v1/node/join"
+  show sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$H/.config/claude-fleet" bash "$ROOT/bin/fleet-node-join.sh" \
+    --hub "$JHUB" --joined "$pass" --no-admin --no-deps --no-fleet --service none --compute 1
+  show sudo install -m 644 '<com.ccquota.agent.'"$LOGIN"'.plist>' "$plist"
+  if [ "$APPLY" != 1 ]; then N=$N0; return 0; fi
+  local body="$TMPD/join.body" got="$TMPD/join.json" code
+  ( umask 077; printf '{"code":"%s","hostname":"%s","os_user":"%s"}' "$JCODE" "$(hostname -s 2>/dev/null)" "$LOGIN" > "$body" )
+  code=$(curl -sS --max-time 30 -o "$got" -w '%{http_code}' -H 'Content-Type: application/json' \
+    -X POST --data @"$body" "$JHUB/v1/node/join" 2>/dev/null) || code=000
+  rm -f "$body"
+  if [ "$code" != 200 ]; then warn_step "the hub did not take the join code (HTTP $code) — the login is open, but not on the hub"; N=$N0; return 0; fi
+  # the pass holds the node token: the login's own, 600, gone once read
+  if ! { sudo install -m 600 "$got" "$pass" && sudo chown "$LOGIN:staff" "$pass"; }; then
+    rm -f "$got"; warn_step "cannot hand $LOGIN its node pass"; N=$N0; return 0
+  fi
+  rm -f "$got"
+  local out rc
+  out=$(sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$H/.config/claude-fleet" PATH="$H/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    bash "$ROOT/bin/fleet-node-join.sh" --hub "$JHUB" --joined "$pass" --no-admin --no-deps --no-fleet --service none --compute 1 2>&1); rc=$?
+  sudo rm -f "$pass"
+  printf '%s\n' "$out" | sed 's/^/    /'
+  if [ "$rc" != 0 ]; then warn_step "fleet-node-join.sh exited $rc as $LOGIN"; N=$N0; return 0; fi
+  # the agent's definition, not loaded: 7b turns it into the launcher's and
+  # starts it; with --no-credsep it is loaded here as it is
+  { printf '<?xml version="1.0" encoding="UTF-8"?>\n<!-- fleet-login-new.sh (issue #2652) -->\n'
+    printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n'
+    printf '  <key>Label</key><string>com.ccquota.agent.%s</string>\n  <key>UserName</key><string>%s</string>\n' "$LOGIN" "$LOGIN"
+    printf '  <key>ProgramArguments</key>\n  <array><string>%s/.ccquota/run-agent.sh</string></array>\n' "$H"
+    printf '  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n'
+    printf '  <key>StandardErrorPath</key><string>%s/.ccquota/agent.log</string>\n  <key>StandardOutPath</key><string>%s/.ccquota/agent.log</string>\n' "$H" "$H"
+    printf '</dict>\n</plist>\n'; } > "$TMPD/agent.plist"
+  if ! sudo install -m 644 "$TMPD/agent.plist" "$plist"; then warn_step "cannot write $plist"; N=$N0; return 0; fi
+  if [ "$CREDSEP" = 0 ]; then
+    sudo launchctl bootstrap system "$plist" || { warn_step "launchctl bootstrap system $plist"; N=$N0; return 0; }
+    NODE_LINE="node: joined $JHUB — its agent runs (com.ccquota.agent.$LOGIN)"
+  else
+    NODE_LINE="node: joined $JHUB — its agent starts through the credential launcher (next step)"
+  fi
+  say "  $NODE_LINE"
+  N=$N0
+}
+fleet_up_step() {
+  [ "$OPENED" = 1 ] || return 0
+  say ""; say "[${N}b] bring $LOGIN's fleet up now, as $LOGIN (fleet-login-bootstrap.sh — no one logs in to a login the hub opened)"
+  show sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" bash "$ROOT/bin/fleet-login-bootstrap.sh"
+  [ "$APPLY" = 1 ] || return 0
+  local out rc
+  out=$(sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" PATH="$H/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    bash "$ROOT/bin/fleet-login-bootstrap.sh" </dev/null 2>&1); rc=$?
+  printf '%s\n' "$out" | sed 's/^/    /'
+  if [ "$rc" = 0 ]; then FLEET_LINE='fleet: up (fleet-login-bootstrap.sh)'
+  else FLEET_LINE="fleet: WARN — fleet-login-bootstrap.sh exited $rc; its first login retries"; fi
+  say "  $FLEET_LINE"
+}
+
 if [ "$DONLY" = 1 ]; then
   if [ "$APPLY" = 1 ]; then
     say "fleet-login-new: installing the background services of existing login '$LOGIN' (step 8 only) — running it:"
@@ -540,6 +628,9 @@ if [ "$DONLY" = 0 ]; then
   fi
   run sudo -u "$LOGIN" -H mkdir -p "$ROOT/logs"
 
+  # 7a. a login the hub opens joins it as its own node (issue #2652) — before
+  # 7b, so the token and the agent are separated with everything else
+  node_join_step
   # 7b. the subscription out of the login's reach (issue #2294) — before its
   # services (8) and its first session: the proxy first, then the credentials
   CD="$H/.config/claude-fleet"
@@ -678,6 +769,8 @@ elif [ "$DONLY" = 0 ] && [ "$APPLY" = 1 ]; then
 elif [ "$DONLY" = 0 ]; then
   CREDSEP_LINE='credsep: (after --apply) separated before its first session'
 fi
+
+[ "$DONLY" = 1 ] || fleet_up_step
 
 if [ "$DONLY" = 1 ]; then
   say ""
@@ -938,6 +1031,10 @@ if [ "$DAEMONS" = 1 ]; then
 else
   say "  claude-fleet + Claude Code install themselves on $LOGIN's first terminal login after step 1 — no step here"
 fi
+# the hub's detail is the output's tail: a login it opened says whether it is
+# on the hub with its fleet up (issue #2652); credsep stays the last line
+[ -z "$NODE_LINE" ] || say "$NODE_LINE"
+[ -z "$FLEET_LINE" ] || say "$FLEET_LINE"
 # last, so the hub's detail (the output's tail) always carries it
 say "$CREDSEP_LINE"
 exit 0

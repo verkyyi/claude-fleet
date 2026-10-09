@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -86,9 +87,23 @@ var accountCommand = exec.CommandContext
 // accountArgv is the ONE place the argv of an account op is decided.
 func accountArgv(home string, op control.AccountOp) (string, []string) {
 	if op.Op == control.AccountRemove {
-		return filepath.Join(home, loginRemoveScript), []string{op.Login, "--keep-home", "--apply"}
+		keep := "--keep-home"
+		if op.DropHome {
+			keep = "--delete-home"
+		}
+		return filepath.Join(home, loginRemoveScript), []string{op.Login, keep, "--apply"}
 	}
 	return filepath.Join(home, loginNewScript), []string{op.Login, "--full-name", op.FullName, "--share-pool", "--apply"}
+}
+
+// accountEnv is the create's join code and this hub's address, handed to
+// fleet-login-new.sh in its environment, never its argv (claude-fleet#2652):
+// a script that predates them ignores both. nil = the agent's own environment.
+func accountEnv(hub string, op control.AccountOp) []string {
+	if op.Op != control.AccountCreate || op.JoinCode == "" || hub == "" {
+		return nil
+	}
+	return append(os.Environ(), "FLEET_LOGIN_JOIN_CODE="+op.JoinCode, "FLEET_LOGIN_HUB="+hub)
 }
 
 // accountOps is the admin agent's state across connections.
@@ -206,6 +221,8 @@ func (a *Agent) handleAccountOp(ctx context.Context, conn nodeLink, m control.Me
 	}()
 }
 
+var joinCodeRE = regexp.MustCompile(`^fj_[a-z2-7]{26}$`)
+
 func validateAccountOp(op control.AccountOp, self string) error {
 	if op.Op != control.AccountCreate && op.Op != control.AccountRemove {
 		return errors.New("op must be create or remove")
@@ -221,6 +238,9 @@ func validateAccountOp(op control.AccountOp, self string) error {
 		// useradd's default NAME_REGEX (and Debian adduser's) wants a
 		// leading letter or _; fleet-login-new.sh is macOS-only anyway.
 		return errors.New("a login starting with a digit can only be opened on macOS, not " + accountGOOS)
+	}
+	if op.JoinCode != "" && (op.Op != control.AccountCreate || !joinCodeRE.MatchString(op.JoinCode)) {
+		return errors.New("join_code must be fj_ + 26 base32 characters, on a create")
 	}
 	if self != "" && self == op.Login {
 		return errors.New("refusing to touch this agent's own login")
@@ -244,6 +264,7 @@ func (a *Agent) runAccountOp(op control.AccountOp) control.AccountResult {
 	// The scripts cd to / themselves; starting there too means a sudo -u in
 	// them never inherits a cwd the new login cannot read.
 	cmd.Dir = "/"
+	cmd.Env = accountEnv(a.cfg.HubURL, op)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := prepCmd(ctx, cmd)

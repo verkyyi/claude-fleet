@@ -4735,6 +4735,43 @@ drill_drill_person_no_machine() {
   SECS=$(since "$t0")
 }
 
+# ---- opened-login-no-fleet (#2652): a login the hub opened for a person (a
+# drill, an invited newcomer, a spare) went active with no node and no fleet —
+# nobody ever logs in to it, and the hub sees a login's fleet only through that
+# login's own agent — so the person's first session found 「No fleet on any of
+# your machines」; and a drill's teardown archived the whole home first. The
+# create now carries a one-time join code (env, never argv) that
+# fleet-login-new.sh spends to join the login as its own node and bring its
+# fleet up; a drill's remove drops the home.
+drill_opened_login_no_fleet() {
+  CAP=120; local t0 out rc s="$ROOT/bin/fleet-login-new.sh"
+  local api='TestDrillGoesOnlyAfterItsLoginIsRemoved' agent='TestAdminAgentHandsJoinCodeInEnv|TestAdminAgentDropHomeDeletesHome'
+  t0=$(now)
+  grep -q 'op.JoinCode = s.loginJoinCode(a' "$ROOT/tokenledger/internal/api/fleet_accounts.go" \
+    || { WHY="the hub's create op no longer carries the login's join code"; return 1; }
+  grep -q 'op.DropHome = true' "$ROOT/tokenledger/internal/api/fleet_accounts.go" \
+    || { WHY="a drill's remove no longer drops the home"; return 1; }
+  grep -q '"FLEET_LOGIN_JOIN_CODE="' "$ROOT/tokenledger/internal/agent/node_accounts.go" \
+    || { WHY="the admin agent no longer hands the join code to fleet-login-new.sh in its environment"; return 1; }
+  grep -q '^  node_join_step$' "$s" && grep -q 'fleet_up_step$' "$s" \
+    || { WHY="fleet-login-new.sh no longer joins an opened login / brings its fleet up"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($api)\$" ./internal/api 2>&1 \
+          && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run "^($agent)\$" ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go half's tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='入口开号带一次性加入码、管理节点只经环境交给 fleet-login-new.sh；演练身份收号 --delete-home（go test 三条；脚本一半是 fleet-login-new-selftest O）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；脚本一半是 fleet-login-new-selftest O' ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：标记按名核对在，Go 门（tokenledger.yml）跑三条测试；脚本一半是 fleet-login-new-selftest O'
+  fi
+  SECS=$(since "$t0")
+}
+
 # ---- spare-login-empty (#2263, EPIC #2259 C4): a newcomer signs in while no
 # spare login is ready (all taken, still being made, or one failed). Only an
 # active spare is ever handed over; otherwise the person's own login is opened

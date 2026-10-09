@@ -408,6 +408,11 @@ func TestDrillGoesOnlyAfterItsLoginIsRemoved(t *testing.T) {
 	t.Cleanup(func() { drillCloseGiveUp = old })
 	h, nodes, inv := drillOnFleet(t)
 	m, op := expectAccountOp(t, nodes["m4"].tnode)
+	// #2652: the create carries the login's own join code, so it can enroll
+	// and bring its fleet up — the hub sees a login's fleet only through it.
+	if !joinCodeRE.MatchString(op.JoinCode) {
+		t.Fatalf("create op join_code = %q; want a fresh fj_ code", op.JoinCode)
+	}
 	sendResult(t, nodes["m4"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
 	waitState(t, h, inv.PersonID, "m4", store.AccountActive)
 
@@ -416,8 +421,8 @@ func TestDrillGoesOnlyAfterItsLoginIsRemoved(t *testing.T) {
 		t.Fatalf("self-delete with a login open: %d %s; want 202 naming %s@m4", code, body, inv.Login)
 	}
 	m, op = expectAccountOp(t, nodes["m4"].tnode)
-	if op.Op != control.AccountRemove || op.Login != inv.Login {
-		t.Fatalf("op = %+v; want a remove of %s", op, inv.Login)
+	if op.Op != control.AccountRemove || op.Login != inv.Login || !op.DropHome {
+		t.Fatalf("op = %+v; want a remove of %s with drop_home (#2652: no archive of a throwaway login)", op, inv.Login)
 	}
 	h.srv.SweepDrills(time.Now().Add(DrillMaxTTL)) // expired meanwhile: still waits
 	if _, err := h.srv.Store.Principal(inv.PersonID); err != nil {

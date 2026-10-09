@@ -538,6 +538,10 @@ func (s *Server) dispatchAccounts() {
 		from, to := store.AccountPending, store.AccountCreating
 		if a.State == store.AccountRemovePending {
 			op.Op, from, to = control.AccountRemove, store.AccountRemovePending, store.AccountRemoving
+			// A drill person's login is throwaway: no archive (#2652).
+			if d, err := s.Store.Drill(a.PrincipalID); err == nil && d != nil && !d.OwnComputer(a) {
+				op.DropHome = true
+			}
 		} else {
 			p, err := s.Store.Principal(a.PrincipalID)
 			if err != nil {
@@ -548,6 +552,7 @@ func (s *Server) dispatchAccounts() {
 			if !control.ValidLogin(a.Login) {
 				op.Existing = s.loginHeldElsewhere(a.PrincipalID, a.Login, a.Hostname)
 			}
+			op.JoinCode = s.loginJoinCode(a, time.Now())
 		}
 		msg, err := control.New(control.TypeAccountOp, op)
 		if err != nil {
@@ -570,6 +575,31 @@ func (s *Server) dispatchAccounts() {
 			_, _ = s.Store.FinishAccountOp(msg.OpID, epID, store.AccountUnknown, "send failed: "+err.Error(), time.Now())
 		}
 	}
+}
+
+// loginJoinCodeTTL is how long the join code of a create stays redeemable: the
+// node runs its account ops one at a time, each up to 15 minutes.
+const loginJoinCodeTTL = time.Hour
+
+// loginJoinCode mints the one-time join code a create carries (claude-fleet
+// #2652): with it the new login enrolls as its own node — the only way the hub
+// sees the fleet it brings up, and so the only way the person's first session
+// finds a machine. "" when it cannot be minted: the create goes without it.
+func (s *Server) loginJoinCode(a store.FleetAccount, now time.Time) string {
+	code, err := MintJoinCode()
+	if err != nil {
+		log.Printf("fleet: join code for %s@%s: %v", a.Login, a.Hostname, err)
+		return ""
+	}
+	label := a.Hostname + "-" + a.Login
+	if err := s.Store.CreateJoinCodeFor(HashToken(code), label, store.NodeKindFixed, "", "", now, loginJoinCodeTTL); err != nil {
+		log.Printf("fleet: join code for %s@%s: %v", a.Login, a.Hostname, err)
+		return ""
+	}
+	if err := s.Store.FleetAudit("hub", "node_join_code", "join:"+label, "MINTED fixed (opened login)", "", now); err != nil {
+		log.Printf("join code audit: %v", err)
+	}
+	return code
 }
 
 // applyAccountResult records a node's answer to an account op and acks it, so

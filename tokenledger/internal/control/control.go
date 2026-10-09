@@ -732,6 +732,17 @@ type AccountOp struct {
 	// ValidLogin to ValidCreateLogin(login, true); an older node ignores it and
 	// keeps refusing a digit-leading login.
 	Existing bool `json:"existing,omitempty"`
+	// DropHome asks a remove to delete the home outright instead of archiving
+	// it first (claude-fleet#2652): a drill person's throwaway login holds
+	// nothing worth keeping, and the archive of its clone + Claude is most of
+	// a drill's teardown time. An older node ignores it and archives.
+	DropHome bool `json:"drop_home,omitempty"`
+	// JoinCode is a one-time join code (fj_…) the hub minted for this create
+	// (claude-fleet#2652): the new login joins the hub with it as its OWN node
+	// and brings its fleet up, so the sessions the hub places for the person
+	// have somewhere to land. Never logged, never in a result; an older node
+	// ignores it and the login waits for its first interactive login as before.
+	JoinCode string `json:"join_code,omitempty"`
 }
 
 // AccountResult is the payload of TypeAccountResult.

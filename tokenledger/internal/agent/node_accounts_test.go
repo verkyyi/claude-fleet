@@ -201,6 +201,46 @@ func TestAdminAgentRunsFixedRemoveArgv(t *testing.T) {
 	}
 }
 
+// A drill's login is removed without the archive (claude-fleet#2652): the
+// hub's drop_home is the one thing that turns --keep-home into --delete-home.
+func TestAdminAgentDropHomeDeletesHome(t *testing.T) {
+	shrinkBackoff(t)
+	hub := newAccountHub(t, control.AccountOp{Op: control.AccountRemove, Login: "drill1009", DropHome: true})
+	a := adminAgent(t, hub.srv.URL, true)
+	_, removeLog := fakeLoginScripts(t, a.cfg.Home, "0")
+	runAgentUntil(t, a, 5*time.Second, func() bool { r, _, _ := hub.snapshot(); return len(r) > 0 })
+	got, _ := os.ReadFile(removeLog)
+	if want := "[drill1009][--delete-home][--apply]\n"; string(got) != want {
+		t.Fatalf("fleet-login-remove.sh argv = %q, want %q", got, want)
+	}
+}
+
+// A create's join code (claude-fleet#2652) reaches fleet-login-new.sh in its
+// environment with this hub's address — never in its argv.
+func TestAdminAgentHandsJoinCodeInEnv(t *testing.T) {
+	shrinkBackoff(t)
+	code := "fj_abcdefghijklmnopqrstuvwxyz"
+	hub := newAccountHub(t, control.AccountOp{Op: control.AccountCreate, Login: "alice", FullName: "Alice", JoinCode: code})
+	a := adminAgent(t, hub.srv.URL, true)
+	newLog, _ := fakeLoginScripts(t, a.cfg.Home, "0")
+	runAgentUntil(t, a, 5*time.Second, func() bool { r, _, _ := hub.snapshot(); return len(r) > 0 })
+	got, _ := os.ReadFile(newLog)
+	if want := "[alice][--full-name][Alice][--share-pool][--apply]\n"; string(got) != want {
+		t.Fatalf("argv = %q, want %q (the code never in it)", got, want)
+	}
+	env := accountEnv(a.cfg.HubURL, control.AccountOp{Op: control.AccountCreate, JoinCode: code})
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "FLEET_LOGIN_JOIN_CODE="+code) || !strings.Contains(joined, "FLEET_LOGIN_HUB="+a.cfg.HubURL) {
+		t.Fatalf("env lacks the join code / hub")
+	}
+	if accountEnv(a.cfg.HubURL, control.AccountOp{Op: control.AccountRemove, JoinCode: code}) != nil {
+		t.Fatal("a remove got the join code")
+	}
+	if err := validateAccountOp(control.AccountOp{Op: control.AccountCreate, Login: "alice", FullName: "A", JoinCode: "fj_x; rm -rf /"}, ""); err == nil {
+		t.Fatal("a malformed join code was accepted")
+	}
+}
+
 // An agent not started as the admin agent refuses every account op, and runs
 // nothing — whatever the hub believes.
 func TestNonAdminAgentRefusesAccountOps(t *testing.T) {
