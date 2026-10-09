@@ -110,7 +110,7 @@ managed() {
   echo 'fleet · 这是托管机器，请在你自己的设备上运行 fleet（装：curl -fsSL <入口>/install | sh）。' >&2
   _sc="${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}"
   if [ -d "$_sc" ]; then
-    echo "fleet · 这台上还留着客户端（$_sc）：接回去 FLEET_NODE_CLIENT=1 fleet，不用了 sudo bash $here/fleet-node-shell-retire.sh --login $(id -un) 清掉。" >&2
+    echo "fleet · 这台上还留着客户端（${_sc}）：接回去 FLEET_NODE_CLIENT=1 fleet，不用了 sudo bash $here/fleet-node-shell-retire.sh --login $(id -un) 清掉。" >&2
   fi
   exit 3
 }
@@ -184,7 +184,7 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
   for _of in "${FLEET_STATUS_G:-${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global}"/orch_multi_*; do
     [ -s "$_of" ] || continue
     _om=$(awk -F '\037' '{ printf "%s%s(%s)", (NR > 1 ? " " : ""), $1, $2 }' "$_of")
-    printf '  WARN  %-8s %s\n' orch "${_of##*/orch_multi_}: 不止一个编排会话 — $_om（入口只留一台；持续出现请在那几台跑 fleet doctor）"
+    printf '  WARN  %-8s %s\n' orch "${_of##*/orch_multi_}: 不止一个编排会话 — ${_om}（入口只留一台；持续出现请在那几台跑 fleet doctor）"
     rc=1
   done
   # cert (issue #2457): the certificate's principals, validity, and whether the hub accepts it

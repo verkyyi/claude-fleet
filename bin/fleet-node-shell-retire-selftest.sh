@@ -51,7 +51,7 @@ done
 [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] && ok "no client cache → no second line" || bad "lines: $out"
 mkdir -p "$T/home/.cache/claude-fleet/shell"
 fl "$T/managed"
-case "$out" in *"FLEET_NODE_CLIENT=1 fleet"*"fleet-node-shell-retire.sh --login $ME"*) ok "a client left here → the way back + the retire line" ;;
+case "$out" in *"留着客户端（$T/home/.cache/claude-fleet/shell）："*"FLEET_NODE_CLIENT=1 fleet"*"fleet-node-shell-retire.sh --login $ME"*) ok "a client left here → the way back + the retire line" ;;
   *) bad "leftover hint: $out" ;; esac
 rm -rf "$T/home/.cache"
 fl "$T/managed" --help
